@@ -390,6 +390,26 @@ entirely at the evaluation level: a real `ns`, then `let`/`loop`/`fn`
 (dropping the unused `&form`/`&env` params, per the plan already
 written up above), then whatever surfaces past that.
 
+**`ns` is built**: `(ns name & _clauses)` switches `*ns*`, creating
+it if new -- `name` is never evaluated (same as `def`'s name
+position; `^{...}` metadata rides along invisibly on it the same
+way). A real, useful primitive on its own merits, not a one-off for
+this file -- core.clj's own single `ns` form has no `:require`/
+`:import` (it IS the root namespace), so clauses after the name are
+silently ignored for now; that's genuinely future work for this
+project's own multi-namespace code, not something this file needs.
+Moved the bootstrap's failure point from `'ns' not found` to `'.'
+not found` -- the next real blocker, `list`'s own `(. clojure.lang.
+PersistentList creator)`, exactly as expected.
+
+The REPL prompt now shows the real current namespace (`user=>`,
+`foo.bar=>`, ...) instead of a hardcoded `user> ` -- matching real
+Clojure's own REPL exactly, and incidentally makes `ns`/`in-ns`
+switches visible while working through this file. Confirmed this
+doesn't break the official mal test harness's prompt-matching regex
+(`[^\s()<>]+> `, generic enough to match either form) before relying
+on it, not assumed.
+
 ## Value representation: cons_value, not class(*)
 
 `cons_value` (`Values.f90`) is a concrete tagged-union type (an integer

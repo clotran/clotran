@@ -5,6 +5,7 @@ module core
   use printer, only: pr_str
   use LispReader, only: read_str
   use Eval, only: eval_top
+  use Namespace, only: ns_current, ns_name_of
   implicit none
 
   integer :: input_unit = 5
@@ -20,7 +21,7 @@ contains
     logical :: ok
     logical :: at_eof
 
-    write(output_unit, "(A)", advance='no') "user> "
+    write(output_unit, "(A)", advance='no') ns_name_of(ns_current()) // "=> "
     call readline(input_unit, exp, at_eof)
     if (at_eof) stop
     if (exp == "quit" .or. exp == "exit" .or. exp == "(quit)" .or. exp == "(exit)") then

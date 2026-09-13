@@ -113,6 +113,12 @@ program eval_test
   call expect_error("15f. ...but user's own bindings are NOT visible from other: ", env, "ns-x")
   call expect_result("15g. back to user: ", env, "(in-ns 'user)", "user", all_ok)
   call expect_result("15g'. ...ns-x is visible again: ", env, "ns-x", "5", all_ok)
+  ! ns: name is never evaluated (unlike in-ns, which expects a quoted
+  ! symbol) -- same as def's name position, and clauses after the
+  ! name (:require/:import, not built) are silently ignored for now.
+  call expect_result("15h. ns switches *ns* too, name never evaluated: ", env, "(ns another.ns)", "another.ns", all_ok)
+  call expect_result("15h'. ...clojure.core still auto-referred: ", env, "(+ 3 4)", "7", all_ok)
+  call expect_result("15h''. back to user: ", env, "(in-ns 'user)", "user", all_ok)
 
   ! 16. Real syntax-quote: unquote/splice-unquote work like mal's, but
   ! plain symbols get namespace-qualified and vectors stay vectors

@@ -356,6 +356,9 @@ contains
           else if (head%str_val == "in-ns") then
              val = eval_in_ns(ast, env)
              return
+          else if (head%str_val == "ns") then
+             val = eval_ns(ast, env)
+             return
           else if (head%str_val == "quasiquote") then
              call gensym_reset()
              val = qq_expand(list_first(list_rest(ast%list_val)), env)
@@ -471,6 +474,26 @@ contains
     call ns_set_current(ns_find_or_create(name%str_val))
     val = name
   end function eval_in_ns
+
+  ! (ns name & _clauses): switches *ns* to name, creating it if new --
+  ! name is never evaluated, same as def's name position (and same as
+  ! how ^{...} metadata already rides along invisibly on it, no
+  ! unwrapping needed). Real Clojure's ns is a macro expanding to
+  ! in-ns + require + import + refer; this only needs the name switch
+  ! so far -- core.clj's own single ns form has no :require/:import
+  ! (it IS the root namespace), so any clauses after the name are
+  ! silently ignored for now. A real, useful primitive on its own
+  ! merits, not a one-off for this file.
+  function eval_ns(ast, env) result(val)
+    type(cons_value), intent(in) :: ast
+    type(env_ref), intent(in) :: env
+    type(cons_value) :: val
+    type(cons_value) :: name
+
+    name = list_first(list_rest(ast%list_val))
+    call ns_set_current(ns_find_or_create(name%str_val))
+    val = name
+  end function eval_ns
 
   ! (try body) or (try body (catch e handler)): real Clojure's own
   ! names (mal's try*/catch* also recognized, same as def!/def). Only
@@ -609,7 +632,7 @@ contains
     logical :: yes
     select case (name)
     case ("def!", "def", "defmacro", "defmacro!", "let*", "fn*", "if", "do", "quote", "quasiquote", &
-         "unquote", "splice-unquote", "eval", "load-file", "in-ns", "try*", "try", "catch*", "catch")
+         "unquote", "splice-unquote", "eval", "load-file", "in-ns", "ns", "try*", "try", "catch*", "catch")
        yes = .true.
     case default
        yes = .false.
