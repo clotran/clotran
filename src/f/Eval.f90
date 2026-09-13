@@ -402,7 +402,7 @@ contains
             call select_clause(args(1), n - 1, params, body)
             if (has_error) return
             env = env_new(args(1)%fn_val%env)
-            call bind_params(params, args(2:n), env)
+            call bind_params(params, args(2:n), env, is_recur=(head%str_val == "recur"))
             ast = body
           end block
           deallocate(args)
@@ -1141,10 +1141,23 @@ contains
   ! Binds params (a list or vector of symbols, optionally ending in
   ! '& rest') to args in child. A missing positional arg binds to nil;
   ! extra args beyond a fixed arity are ignored.
-  subroutine bind_params(params, args, child)
+  !
+  ! is_recur (default false): real Clojure's recur doesn't go through
+  ! ordinary invocation -- it's a direct jump back to the top of the
+  ! loop that rebinds each local one-to-one, so when recur supplies
+  ! exactly one value for a '& rest' slot, that value becomes the rest
+  ! binding AS-IS (already a seq or nil), not re-collected into a new
+  ! one-element list the way a normal call collects trailing args.
+  ! Confirmed against real Clojure: (f 1 2 (list 3 4)) wraps -> xs is
+  ! ((3 4)), but recur-ing with those same 3 values doesn't -> xs is
+  ! (3 4). Without this, recur into any variadic clause loops forever:
+  ! the rest arg keeps getting re-wrapped in a fresh one-element list,
+  ! which is always truthy even once the real payload is nil.
+  subroutine bind_params(params, args, child, is_recur)
     type(cons_value), intent(in) :: params
     type(cons_value), intent(in) :: args(:)
     type(env_ref), intent(in) :: child
+    logical, intent(in), optional :: is_recur
     type(cons_value) :: p, nilv
     integer :: n, i, ai
 
@@ -1155,6 +1168,12 @@ contains
        p = binding_nth(params, i)
        if (p%tag == TAG_SYMBOL .and. p%str_val == "&") then
           p = binding_nth(params, i + 1)
+          if (present(is_recur)) then
+             if (is_recur .and. size(args(ai:)) == 1) then
+                call env_set(child, p, args(ai))
+                return
+             end if
+          end if
           call env_set(child, p, make_list(args(ai:)))
           return
        end if
