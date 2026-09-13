@@ -146,21 +146,44 @@ contains
     call ns_set_current(ns_find_or_create("user"))
   end function repl_env
 
+  ! Real clojure.core lives in src/cljc/core.cljc as an actual file,
+  ! not a string literal -- loaded the ordinary way, through load-file
+  ! itself. Resolved relative to argv[0]'s own directory, not cwd
+  ! (there's no installed-resource concept yet, but this at least
+  ! survives a caller changing directories before invoking us, e.g.
+  ! the regression suite's --rundir).
   subroutine eval_core_bootstrap(env)
     type(env_ref), intent(in) :: env
-    character(len=*), parameter :: src = &
-         "(do " // &
-         "(def not (fn* (a) (if a false true))) " // &
-         "(defmacro cond [& clauses] " // &
-         "(if (empty? clauses) nil " // &
-         "`(if ~(first clauses) ~(first (rest clauses)) (cond ~@(rest (rest clauses)))))) " // &
-         "nil)"
     type(cons_value) :: ast, discard
-    character(len=:), allocatable :: err
+    character(len=:), allocatable :: err, core_path, src
     logical :: ok
+    core_path = exe_relative_path("src/cljc/core.cljc")
+    src = '(load-file "' // core_path // '")'
     ok = read_str(src, ast, err)
     if (ok) discard = eval_form(ast, env)
+    if (has_error) then
+       write(*, '(A)') "warning: core.cljc failed to load: " // pr_str(last_error_value)
+       has_error = .false.
+    end if
   end subroutine eval_core_bootstrap
+
+  ! rel resolved against argv[0]'s own directory (e.g. "../../clotran-bin"
+  ! invoked from elsewhere still finds sibling files correctly) rather
+  ! than the process's cwd.
+  function exe_relative_path(rel) result(full)
+    character(len=*), intent(in) :: rel
+    character(len=:), allocatable :: full, exe_path
+    integer :: n, slash_pos
+    call get_command_argument(0, length=n)
+    allocate(character(len=n) :: exe_path)
+    call get_command_argument(0, exe_path)
+    slash_pos = index(exe_path, "/", back=.true.)
+    if (slash_pos > 0) then
+       full = exe_path(1:slash_pos) // rel
+    else
+       full = rel
+    end if
+  end function exe_relative_path
 
   subroutine eval_error(msg)
     character(len=*), intent(in) :: msg
