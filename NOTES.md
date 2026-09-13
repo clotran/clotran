@@ -349,6 +349,26 @@ does (`?` is an ordinary character so `#?` merges naturally; `{`,
 peeks at the next token instead of relying on the tokenizer to hand
 it a combined one.
 
+**A second real, load-bearing performance bug, found from actually
+noticing the REPL felt hung** (17+ seconds before the first prompt,
+reported directly, not something the existing test sweep caught):
+`read_items`, which reads the contents of any collection literal,
+pre-sized its `items` array as "however many tokens are left in the
+*entire remaining file*" -- a bound that's always safe but almost
+never tight, and `read_items` runs once per collection literal,
+including every nested one (a `defn`'s params vector, a metadata
+map, ...). A file with hundreds of small nested collections spent
+nearly all its time allocating (and mostly discarding) one huge
+array per collection. Confirmed as the actual cause by isolating each
+stage (`slurp` alone: instant; `str`-concatenating the wrapped
+source: instant; tokenizing the whole file to read just its first
+top-level form: instant; only reading the *whole* file wrapped in one
+`(do ...)`, which recurses through hundreds of nested literals, was
+slow) rather than assumed from the tokenizer fix already made.
+Fixed by growing `items` geometrically (doubling, via `move_alloc`,
+not assignment) from a small start instead of one large upfront
+guess -- 17s down to 0.5s end to end.
+
 ## Value representation: cons_value, not class(*)
 
 `cons_value` (`Values.f90`) is a concrete tagged-union type (an integer

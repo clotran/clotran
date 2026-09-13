@@ -419,6 +419,17 @@ contains
   ! plain ALLOCATE statement here, never via "=" -- assigning a whole,
   ! not-yet-allocated array of cons_value (impure elemental
   ! assignment(=)) crashes on both compilers, same as rc_test found.
+  ! Grows items geometrically (doubling) as needed, starting small --
+  ! NOT pre-sized to "every token left in the whole file", which this
+  ! used to do. That bound is only safe, never tight: read_items runs
+  ! once per collection literal, including every nested one (a params
+  ! vector, a metadata map, ...), so a file with many small nested
+  ! collections spent most of its time allocating (and mostly
+  ! discarding) one huge array per collection -- confirmed as the real
+  ! cause of a ~17s startup loading core.clj, not the tokenizer (fixed
+  ! separately) or anything evaluation-side. Growing the array here
+  ! uses move_alloc, not assignment, to sidestep the reallocating-
+  ! assignment fragility already in the gotchas catalog.
   recursive subroutine read_items(tokens, pos, closer, items, n)
     type(token_t), intent(in) :: tokens(:)
     integer, intent(inout) :: pos
@@ -426,9 +437,9 @@ contains
     type(cons_value), allocatable, intent(out) :: items(:)
     integer, intent(out) :: n
     integer :: cap
+    type(cons_value), allocatable :: grown(:)
 
-    ! Tokens left is always a safe upper bound on item count.
-    cap = max(size(tokens) - pos + 1, 1)
+    cap = 8
     allocate(items(cap))
     n = 0
     do
@@ -439,6 +450,12 @@ contains
        if (tokens(pos)%text == closer) then
           pos = pos + 1
           exit
+       end if
+       if (n == cap) then
+          cap = cap * 2
+          allocate(grown(cap))
+          grown(1:n) = items(1:n)
+          call move_alloc(grown, items)
        end if
        n = n + 1
        items(n) = read_form(tokens, pos)
