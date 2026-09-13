@@ -66,6 +66,10 @@ program eval_test
        "((fn* (x) (+ x 1) (+ x 100)) 5)", "105", all_ok)
   call expect_result("10f. ...and earlier forms' side effects (def!) still happen: ", env, &
        "(do (def! g (fn* (x) (def! y (+ x 1)) (* y 2))) (g 5))", "12", all_ok)
+  call expect_result("10g. fn* takes an optional self-reference name: ", env, &
+       "((fn* fact (n) (if (< n 2) 1 (* n (fact (- n 1))))) 5)", "120", all_ok)
+  call expect_result("10h. ...invisible outside the fn (no outer def leaks): ", env, &
+       "(try* fact (catch* e true))", "true", all_ok)
 
   call expect_result("11a. numeric comparisons: ", env, "(list (< 1 2) (>= 2 2) (<= 3 2))", "(true true false)", all_ok)
   call expect_result("11b. = is structural, list and vector cross-compare: ", env, "(= (list 1 2) [1 2])", "true", all_ok)

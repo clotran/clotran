@@ -490,7 +490,7 @@ contains
     val%tag = TAG_FN
     allocate(val%fn_val)
     val%fn_val%params = list_first(list_rest(list_rest(ast%list_val)))
-    val%fn_val%body = list_first(list_rest(list_rest(list_rest(ast%list_val))))
+    val%fn_val%body = wrap_body(list_rest(list_rest(list_rest(ast%list_val))))
     val%fn_val%env = env
     val%fn_val%is_macro = .true.
     call ns_intern(ns_current(), name%str_val, val)
@@ -1453,33 +1453,64 @@ contains
   ! (fn* [params] form1 form2 ...): every form after params is the
   ! body, wrapped in an implicit (do ...) same as real Clojure's fn --
   ! fn* itself only ever holds and evaluates ONE body form.
+  ! (fn* name [params] form1 ...): an optional leading symbol names the
+  ! fn within its own body, for self-recursion without needing an
+  ! outer def -- real Clojure's fn* supports this too. Bound via a
+  ! throwaway env layer between the closure and its lexical parent,
+  ! set to the closure itself only after it's built (env_set mutates
+  ! the shared node in place, so the already-captured env sees it).
   function eval_fn(ast, env) result(val)
     type(cons_value), intent(in) :: ast
     type(env_ref), intent(in) :: env
     type(cons_value) :: val
-    type(cons_ref) :: body_forms
-    type(cons_value), allocatable :: forms(:)
-    type(cons_value) :: do_sym
-    integer :: n, i
+    type(cons_ref) :: rest, body_forms
+    type(cons_value) :: second, name
+    type(env_ref) :: fn_env
+    logical :: named
+
+    rest = list_rest(ast%list_val)
+    second = list_first(rest)
+    named = (second%tag == TAG_SYMBOL)
 
     val%tag = TAG_FN
     allocate(val%fn_val)
-    val%fn_val%params = list_first(list_rest(ast%list_val))
+    if (named) then
+       name = second
+       rest = list_rest(rest)
+       fn_env = env_new(env)
+    else
+       fn_env = env
+    end if
+    val%fn_val%params = list_first(rest)
+    body_forms = list_rest(rest)
+    val%fn_val%body = wrap_body(body_forms)
+    val%fn_val%env = fn_env
+    if (named) call env_set(fn_env, name, val)
+  end function eval_fn
 
-    body_forms = list_rest(list_rest(ast%list_val))
-    n = list_count(body_forms)
-    allocate(forms(n + 1))
+  ! Every form after params is the body, wrapped in an implicit
+  ! (do ...) same as real Clojure's fn -- fn* itself only ever holds
+  ! and evaluates ONE body form.
+  function wrap_body(body_forms) result(wrapped)
+    type(cons_ref), intent(in) :: body_forms
+    type(cons_value) :: wrapped
+    type(cons_ref) :: forms
+    type(cons_value), allocatable :: items(:)
+    type(cons_value) :: do_sym
+    integer :: n, i
+
+    forms = body_forms
+    n = list_count(forms)
+    allocate(items(n + 1))
     do_sym%tag = TAG_SYMBOL
     do_sym%str_val = "do"
-    forms(1) = do_sym
+    items(1) = do_sym
     do i = 1, n
-       forms(i + 1) = list_first(body_forms)
-       body_forms = list_rest(body_forms)
+       items(i + 1) = list_first(forms)
+       forms = list_rest(forms)
     end do
-    val%fn_val%body = make_list(forms)
-
-    val%fn_val%env = env
-  end function eval_fn
+    wrapped = make_list(items)
+  end function wrap_body
 
   ! (def! sym expr): evaluates expr, interns it in *ns* (never the
   ! lexical env, even from inside a let*/fn* body -- matches real
