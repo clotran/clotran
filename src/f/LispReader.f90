@@ -54,13 +54,21 @@ contains
 
   ! ---- tokenizer ----
 
+  ! Builds each token by scanning to find its end first, then slicing
+  ! the source ONCE -- not by growing an allocatable string one
+  ! character at a time (cur = cur // expr(i:i)). That pattern is both
+  ! O(n^2) and a real crash: repeated reallocating assignment on a
+  ! long string (a multi-line docstring, confirmed via a full
+  ! backtrace into the Fortran runtime's own Assign/AssignTicket) hits
+  ! the same reallocating-assignment fragility already catalogued in
+  ! NOTES.md, just for a plain character string instead of a
+  ! cons_value array this time.
   function tokenize(expr) result(tokens)
     character(len=*), intent(in) :: expr
     type(token_t), allocatable :: tokens(:)
     type(token_t), allocatable :: buf(:)
-    integer :: n, i, len_expr
+    integer :: n, i, len_expr, start
     character :: c
-    character(len=:), allocatable :: cur
 
     len_expr = len(expr)
     allocate(buf(max(len_expr, 1)))
@@ -99,34 +107,31 @@ contains
        end if
 
        if (c == '"') then
-          cur = c
+          start = i
           i = i + 1
           do while (i <= len_expr)
-             cur = cur // expr(i:i)
              if (expr(i:i) == '"') then
                 i = i + 1
                 exit
              end if
              if (expr(i:i) == achar(92) .and. i < len_expr) then ! backslash escape
                 i = i + 1
-                cur = cur // expr(i:i)
              end if
              i = i + 1
           end do
           n = n + 1
-          buf(n)%text = cur
+          buf(n)%text = expr(start:i - 1)
           cycle
        end if
 
        ! a run of regular characters: a symbol or a number
-       cur = ""
+       start = i
        do while (i <= len_expr)
           if (.not. is_regular_char(expr(i:i))) exit
-          cur = cur // expr(i:i)
           i = i + 1
        end do
        n = n + 1
-       buf(n)%text = cur
+       buf(n)%text = expr(start:i - 1)
     end do
 
     tokens = buf(1:n)
