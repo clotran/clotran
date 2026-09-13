@@ -917,7 +917,7 @@ contains
        end block
        return
     end if
-    call eval_error("unsupported interop call: (. ...)")
+    call eval_error("unsupported interop call: (." // trim(method_name) // " ...)")
   end function eval_instance_call
 
   ! (try form* (catch ...)?): any number of body forms (an implicit
@@ -1055,7 +1055,7 @@ contains
       if (multi) then
          n_clauses = list_count(rest)
          val%fn_val%params = prepend_form_env_params(list_first(clause%list_val))
-         val%fn_val%body = maybe_pre_expand(wrap_body(list_rest(clause%list_val)), name%str_val)
+         val%fn_val%body = pre_expand(wrap_body(list_rest(clause%list_val)))
          if (n_clauses > 1) then
             allocate(val%fn_val%extra)
             allocate(val%fn_val%extra%ptr)
@@ -1067,13 +1067,13 @@ contains
             do i = 1, n_clauses - 1
                clause = list_first(clauses)
                val%fn_val%extra%ptr%params(i) = prepend_form_env_params(list_first(clause%list_val))
-               val%fn_val%extra%ptr%bodies(i) = maybe_pre_expand(wrap_body(list_rest(clause%list_val)), name%str_val)
+               val%fn_val%extra%ptr%bodies(i) = pre_expand(wrap_body(list_rest(clause%list_val)))
                clauses = list_rest(clauses)
             end do
          end if
       else
          val%fn_val%params = prepend_form_env_params(list_first(rest))
-         val%fn_val%body = maybe_pre_expand(wrap_body(list_rest(rest)), name%str_val)
+         val%fn_val%body = pre_expand(wrap_body(list_rest(rest)))
       end if
     end block
     val%fn_val%env = env
@@ -1111,82 +1111,11 @@ contains
     new_params = make_vector(items)
   end function prepend_form_env_params
 
-  ! Does form contain symbol name anywhere (any tag, any depth)? Used
-  ! to gate pre_expand (see eval_defmacro): pre-expanding EVERY
-  ! defmacro's body is not just wasted work but actively harmful --
-  ! pre_expand's own eval_macro_head calls run nested macro bodies for
-  ! real, with whatever happens to be bound at THIS macro's own define
-  ! time, which is wrong for a nested macro call that isn't part of
-  ! the self-reference problem pre_expand exists for (confirmed: it
-  ! spuriously ran even?'s own throw branch while pre-expanding loop's
-  ! unrelated internal `let` usage). Only a macro whose own body refers
-  ! to itself by name (like assert-args, via its own internal `let`
-  ! reduction step) actually needs freezing -- everything else works
-  ! correctly resolving its nested macro calls dynamically, same as
-  ! before pre_expand existed.
-  recursive function contains_symbol(form, name) result(yes)
-    type(cons_value), intent(in) :: form
-    character(len=*), intent(in) :: name
-    logical :: yes
-    type(cons_ref) :: l
-    integer :: n, i
-
-    yes = .false.
-    select case (form%tag)
-    case (TAG_SYMBOL)
-       yes = (form%str_val == name)
-    case (TAG_LIST)
-       if (.not. allocated(form%list_val)) return
-       n = list_count(form%list_val)
-       l = form%list_val
-       do i = 1, n
-          if (contains_symbol(list_first(l), name)) then
-             yes = .true.
-             return
-          end if
-          l = list_rest(l)
-       end do
-    case (TAG_VECTOR)
-       if (.not. allocated(form%vector_val)) return
-       n = vector_count(form%vector_val)
-       do i = 0, n - 1
-          if (contains_symbol(vector_nth(form%vector_val, i), name)) then
-             yes = .true.
-             return
-          end if
-       end do
-    end select
-  end function contains_symbol
-
-  ! Freezing a macro's own internal use of another macro at ITS OWN
-  ! define time (matching real Clojure's compile-time Var resolution)
-  ! was tried here, specifically for assert-args's own internal `let`
-  ! reduction step (which validates ITS OWN bindings via assert-args
-  ! again once `let` is the real, destructuring macro -- genuine,
-  ! otherwise endless, mutual recursion once `let` stops being the
-  ! simple bootstrap version). Every variant hit the same wall:
-  ! clotran's cons_value/env model has no notion of "this call site
-  ! always means THIS specific Var", only ever "resolve this name
-  ! fresh, right now" -- so freezing the STRUCTURE (let -> let*)
-  ! necessarily also freezes (or loses track of) WHICH ENV the frozen
-  ! pieces' own free variables (assert-args's `pairs`, the caller
-  ! macro's `bindings`) resolve in, and no combination tried got both
-  ! right at once. Pre_expand/contains_symbol above are left in place
-  ! (a real, correctly-scoped tool for anything that doesn't hit this
-  ! specific tension) but nothing currently calls them -- eval_defmacro
-  ! just uses the body as written; eval_macro_head's own
-  ! macro_expand_depth cap is what actually keeps this specific
-  ! mutual recursion from crashing (a real Fortran stack overflow)
-  ! instead of failing cleanly. Fixing this for real needs an actual
-  ! Var-like indirection (a call site that can point at a SPECIFIC
-  ! macro value, not just a name to re-resolve), which is a real
-  ! feature, not a bug fix -- see NOTES.md.
-  function maybe_pre_expand(body, name) result(out)
-    type(cons_value), intent(in) :: body
-    character(len=*), intent(in) :: name
-    type(cons_value) :: out
-    out = body
-  end function maybe_pre_expand
+  ! (an earlier, narrower version of this gated pre_expand to only a
+  ! macro whose own body mentioned its own name, via a contains_symbol
+  ! check, to avoid pre-expanding things unnecessarily -- removed once
+  ! pre_expand itself was applied unconditionally below instead; see
+  ! NOTES.md for why the gate turned out unnecessary.)
 
   ! (defmacro! name expr): mal's own calling convention -- expr is
   ! evaluated (typically a (fn* ...) closure) and the result's is_macro
@@ -1256,6 +1185,7 @@ contains
     type(env_ref) :: child
     type(cons_ref) :: l
     integer :: n, i
+    type(cons_value) :: macro_params, macro_body
 
     n = list_count(ast%list_val) - 1
     allocate(raw_args(n + 2))
@@ -1267,7 +1197,18 @@ contains
        l = list_rest(l)
     end do
     child = env_new(macro_val%fn_val%env)
-    call bind_params(macro_val%fn_val%params, raw_args, child)
+    ! Multi-arity macro dispatch: was missing entirely -- this always
+    ! used macro_val%fn_val%params/%body directly (the PRIMARY clause
+    ! only), the same bug multi-arity fn* calls would have if
+    ! apply_closure didn't call select_clause. A multi-arity defmacro
+    ! (core.clj's own `or`/`and`) silently ran the wrong clause for
+    ! any call whose arg count didn't match the first one -- confirmed:
+    ! (or false true) was binding params for the zero-arg clause and
+    ! evaluating ITS body regardless of the 2 real args actually given.
+    call select_clause(macro_val, size(raw_args), macro_params, macro_body)
+    if (has_error) return
+    call bind_params(macro_params, raw_args, child)
+    if (has_error) return
     ! macro_expand_depth: a hard safety net, not a fix -- some macro
     ! interactions core.clj itself relies on real Clojure's COMPILE-TIME
     ! frozen macro resolution to terminate (assert-args's own internal
@@ -1287,7 +1228,7 @@ contains
        macro_expand_depth = macro_expand_depth - 1
        return
     end if
-    ast = eval_form(macro_val%fn_val%body, child)
+    ast = eval_form(macro_body, child)
     macro_expand_depth = macro_expand_depth - 1
   end subroutine eval_macro_head
 
@@ -1334,18 +1275,35 @@ contains
   ! because its compiler already froze assert-args's own internal
   ! `let` to the simple one at assert-args's OWN definition time.
   !
-  ! Fix: pre_expand walks a fn/macro body ONCE, right after it's built
-  ! (see eval_fn/eval_defmacro/eval_defmacro_bang), expanding every
-  ! macro call it finds in actual code position using *ns* as it
-  ! stands right now -- mirroring real Clojure's compile-time
-  ! semantics without needing a real compiler. Left alone: anything
-  ! quoted (data), and everything inside a quasiquote template except
-  ! its own unquote/splice-unquote positions (which ARE code, run each
-  ! time the template is used) -- pre_expand_qq mirrors qq_expand's own
-  ! traversal for exactly that distinction. A sub-expansion that errors
-  ! (e.g. a forward reference to something not defined yet) is left
-  ! exactly as written and picked up normally at actual call time,
-  ! same as this project's usual per-form tolerance elsewhere.
+  ! Fix: pre_expand walks a macro body ONCE, right after it's built
+  ! (see eval_defmacro), expanding every macro call it finds in actual
+  ! code position using *ns* as it stands right now -- mirroring real
+  ! Clojure's compile-time semantics without needing a real compiler.
+  ! Left alone: anything quoted (data), and everything inside a
+  ! quasiquote template except its own unquote/splice-unquote
+  ! positions (which ARE code, run each time the template is used) --
+  ! pre_expand_qq mirrors qq_expand's own traversal for exactly that
+  ! distinction. A sub-expansion that errors (e.g. a forward reference
+  ! to something not defined yet) is left exactly as written and
+  ! picked up normally at actual call time, same as this project's
+  ! usual per-form tolerance elsewhere. Applied unconditionally to
+  ! every defmacro body, not just ones that look self-referential: an
+  ! earlier, narrower attempt tried to gate this to only assert-args
+  ! (matching by name) to avoid the cost/risk of expanding everything,
+  ! but the risk was never really there -- expanding a nested macro
+  ! call is a purely syntactic substitution (the nested call's own
+  ! free variables ride along in the substituted AST and resolve
+  ! normally wherever that AST ends up actually running later), so
+  ! there's nothing narrower to gain by skipping it. eval_fn (fn*/fn,
+  ! and so every defn) applies the same pre_expand to its own clause
+  ! bodies for exactly this reason: integer?/even? -- ordinary defns,
+  ! not macros -- call `or` internally, and without freezing that
+  ! call at define time (long before `let` becomes real), every later
+  ! call to integer?/even? re-resolves `or`'s own internal `let` fresh
+  ! against *ns* as it stands then -- the real, validating `let` --
+  ! which validates its own bindings via assert-args, which calls
+  ! even?/integer? again to do it: the same mutual recursion as
+  ! assert-args/let directly, just reached through `or` instead.
   recursive function pre_expand(form) result(expanded)
     type(cons_value), intent(in) :: form
     type(cons_value) :: expanded
@@ -1382,13 +1340,29 @@ contains
           block
             type(cons_value) :: ast_copy
             ast_copy = form
+            ! Same cap eval_macro_head uses for its own runtime expansion,
+            ! shared here too: pre_expand's OWN recursion (expanding the
+            ! result again, below) is a second, independent recursion on
+            ! top of eval_macro_head's -- a mutually-recursive macro pair
+            ! (assert-args/let; see NOTES.md) blows the real call stack
+            ! through THIS loop just as easily, and eval_macro_head's own
+            ! internal cap resets before returning here, so it alone
+            ! doesn't see this outer loop repeating.
+            macro_expand_depth = macro_expand_depth + 1
+            if (macro_expand_depth > 60) then
+               macro_expand_depth = macro_expand_depth - 1
+               expanded = form
+               return
+            end if
             call eval_macro_head(ast_copy, macro_val)
             if (has_error) then
                has_error = .false.
+               macro_expand_depth = macro_expand_depth - 1
                expanded = form
                return
             end if
             expanded = pre_expand(ast_copy)
+            macro_expand_depth = macro_expand_depth - 1
           end block
           return
        end if
@@ -2342,6 +2316,14 @@ contains
              val%bool_val = (args(2)%tag == TAG_LIST)
           case ("clojure.lang.IDeref")
              val%bool_val = (args(2)%tag == TAG_ATOM)
+          case ("Integer", "Long", "Short", "Byte", "clojure.lang.BigInt", "BigInteger")
+             ! clotran has one integer type (TAG_INT), not Java's tower
+             ! of Integer/Long/Short/Byte/BigInteger -- every one of
+             ! these pseudo-classes matches it, same simplification as
+             ! Numbers' own add/minus/etc. not distinguishing them.
+             val%bool_val = (args(2)%tag == TAG_INT)
+          case ("Double", "Float", "clojure.lang.BigDecimal", "BigDecimal")
+             val%bool_val = (args(2)%tag == TAG_REAL)
           case default
              call eval_error("instance?: unknown pseudo-class '" // args(1)%str_val // "'")
           end select
@@ -2588,7 +2570,7 @@ contains
     if (multi) then
        n_clauses = list_count(rest)
        val%fn_val%params = list_first(clause%list_val)
-       val%fn_val%body = wrap_body(list_rest(clause%list_val))
+       val%fn_val%body = pre_expand(wrap_body(list_rest(clause%list_val)))
        if (n_clauses > 1) then
           allocate(val%fn_val%extra)
           allocate(val%fn_val%extra%ptr)
@@ -2600,14 +2582,14 @@ contains
           do i = 1, n_clauses - 1
              clause = list_first(clauses)
              val%fn_val%extra%ptr%params(i) = list_first(clause%list_val)
-             val%fn_val%extra%ptr%bodies(i) = wrap_body(list_rest(clause%list_val))
+             val%fn_val%extra%ptr%bodies(i) = pre_expand(wrap_body(list_rest(clause%list_val)))
              clauses = list_rest(clauses)
           end do
        end if
     else
        val%fn_val%params = list_first(rest)
        body_forms = list_rest(rest)
-       val%fn_val%body = wrap_body(body_forms)
+       val%fn_val%body = pre_expand(wrap_body(body_forms))
     end if
 
     val%fn_val%env = fn_env

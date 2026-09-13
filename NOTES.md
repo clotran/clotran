@@ -812,48 +812,84 @@ into core.clj than before rather than by inspection:
   enough to promote. Fixed the same proven way: `copy_slot` copies
   every field explicitly, bucket arrays pre-allocated to size first.
 
-**Known, currently-unresolved limitation: `assert-args` vs `let`.**
-Real core.clj's own `assert-args` (used by `let`, `loop`, `binding`,
-`if-let`, and others to validate their bindings vector) has, in its
-own source, `~(let [more (nnext pairs)] (when more (list* \`assert-args
-more)))` -- a self-recursive reduction that uses `let` internally.
-This is completely inert in real Clojure: the compiler resolves `let`
-to a specific Var *once*, at the time `assert-args` itself is
-compiled (while `let` is still its own simple bootstrap version, long
-before core.clj redefines it), and that resolution is permanent,
-regardless of `let` being redefined later in the same file. clotran
-has no such compile-time Var model -- every macro call is resolved
-fresh, dynamically, by name, every single time it runs (which is
-otherwise exactly correct and is what the rest of this project relies
-on). Once `let` becomes the real, validating, destructuring macro
-(core.clj redefines it partway through the file), `assert-args`'s own
-internal `let` usage starts resolving to *that* `let` -- which
-validates its own bindings via `assert-args` again -- genuine,
-unbounded mutual recursion, confirmed via lldb (a stack that grows
-without ever repeating a shorter cycle, not merely deep).
+**Fixed: `assert-args` vs `let` (was a known limitation, now a real
+fix, not just a mitigation).** Real core.clj's own `assert-args` (used
+by `let`, `loop`, `binding`, `if-let`, and others to validate their
+bindings vector) has, in its own source, `~(let [more (nnext pairs)]
+(when more (list* \`assert-args more)))` -- a self-recursive reduction
+that uses `let` internally. This is completely inert in real Clojure:
+the compiler resolves `let` to a specific Var *once*, at the time
+`assert-args` itself is compiled (while `let` is still its own simple
+bootstrap version, long before core.clj redefines it), and that
+resolution is permanent, regardless of `let` being redefined later in
+the same file. clotran has no such compile-time Var model -- every
+macro call is resolved fresh, dynamically, by name, every single time
+it runs (which is otherwise exactly correct and is what the rest of
+this project relies on). Once `let` becomes the real, validating,
+destructuring macro (core.clj redefines it partway through the file),
+`assert-args`'s own internal `let` usage starts resolving to *that*
+`let` -- which validates its own bindings via `assert-args` again --
+genuine, unbounded mutual recursion, confirmed via lldb (a stack that
+grows without ever repeating a shorter cycle, not merely deep).
 
-Tried and rejected: pre-expanding (freezing) a macro's own body at its
-own `defmacro` time, matching what real Clojure's compiler does --
-implemented (`pre_expand`/`contains_symbol`, still present but
-currently unused, gated so it only ever touched `assert-args`
-specifically) but every variant hit the same wall: freezing the
-*structure* (`let` -> `let*`) necessarily also has to decide which
-ENV the frozen piece's own free variables (`assert-args`'s `pairs`,
-the calling macro's `bindings`) resolve in, and no combination tried
-got both right at once -- one variant fixed `bindings` and broke
-`pairs`, the other fixed `pairs` and broke `bindings`. Fixing this for
-real needs an actual Var-like indirection (a call site that can point
-at a specific, frozen macro *value*, not just a name to re-resolve
-fresh) -- a real feature, not a quick bug fix.
+The real fix: `pre_expand` walks a macro (or, now, a `fn*`/`fn`/`defn`)
+body ONCE, right after it's built, expanding every nested macro call
+it finds in actual code position using `*ns*` as it stands *right
+now* -- mirroring real Clojure's compile-time Var resolution without
+needing a real compiler or a Var object. `assert-args`'s own internal
+`let` usage gets frozen this way at `assert-args`'s own `defmacro`
+time (while `let` is still the simple bootstrap version), so it never
+sees the later, real, validating `let` at all -- the mutual recursion
+never starts. This isn't the "freeze the structure, lose track of
+which env free variables resolve in" approach that was tried and
+rejected earlier (see git history): `pre_expand` only ever substitutes
+in the *unevaluated* expansion of a nested macro call (a purely
+syntactic rewrite -- the nested call's own free variables ride along
+in the substituted AST and resolve normally, later, wherever that AST
+ends up actually running), never evaluates anything early or captures
+an env. Applied unconditionally to every `defmacro` body (an earlier
+attempt gated this to only `assert-args` by name, which worked but
+was strictly narrower for no real benefit, since expanding a nested
+macro call this way is always safe).
 
-**Current mitigation**: `eval_macro_head` caps nested macro-expansion
-depth (currently 60) as a hard safety net -- purely to turn what would
+Fixing `assert-args`/`let` directly surfaced the same problem one step
+removed: `integer?`/`even?` are ordinary `defn`s (not macros) whose
+body calls `or` (a macro) internally; without freezing that too, every
+call to `integer?`/`even?` re-resolves `or`'s own internal `let` fresh
+against `*ns*` as it stands *then* -- the real `let`, once it exists --
+reintroducing the identical mutual recursion one level removed. Fixed
+by applying the same `pre_expand` to `eval_fn`'s own clause bodies
+(`fn*`/`fn`, and so every `defn`), not just `defmacro`'s.
+
+`eval_macro_head`'s own macro-expansion depth cap (see below) turned
+out to guard only ITS OWN internal recursion, not `pre_expand`'s --
+`pre_expand` calls `eval_macro_head` once per nested macro call it
+finds and then recurses on the result itself, a second, independent
+recursion on top of the first, so the same cap now wraps that outer
+loop too (same shared counter, same 60-deep threshold, same "leave it
+unexpanded and let normal per-form tolerance pick it up" fallback
+instead of erroring).
+
+While implementing this, a real, independent, previously-undiscovered
+bug turned up in the same area: `eval_macro_head` never did
+multi-arity dispatch at all -- it always bound params/evaluated the
+body of the PRIMARY (first) clause, regardless of the actual call's
+arity, the same bug ordinary `fn*` calls would have if `apply_closure`
+didn't call `select_clause`. Real core.clj's own `or`/`and` are
+multi-arity `defmacro`s (`([] nil) ([x] x) ([x & next] ...)`), so
+every call to either one that didn't happen to match the 0-arg clause
+silently ran the WRONG body -- this alone made `or`/`and` (and so
+`integer?`/`even?`, both `or`-based) always return `nil`. Fixed by
+having `eval_macro_head` call the existing `select_clause` helper,
+same as `apply_closure` already does.
+
+**Remaining safety net**: `eval_macro_head` (and now `pre_expand`'s
+own outer loop, see above) still caps nested macro-expansion depth
+(currently 60) as a hard safety net -- purely to turn what would
 otherwise be a real Fortran stack overflow (a crash) into a catchable
-`eval_error` ("macro expansion too deep"). This is why arithmetic
-(`-`/`/`, whose own multi-arg reduction goes through `reduce1`, which
-uses `let`) and a few other things that transitively use `let`
-currently fail cleanly with that message rather than working -- a
-real, known gap, not silently swallowed.
+`eval_error` ("macro expansion too deep"), for whatever mutually-
+recursive macro pair turns up next that this project hasn't found and
+frozen yet.
 
 ## Status
 
