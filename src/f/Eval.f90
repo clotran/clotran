@@ -302,6 +302,15 @@ contains
           else if (head%str_val == "quote") then
              val = list_first(list_rest(ast%list_val))
              return
+          else if (head%str_val == "var") then
+             ! (var sym): same simplification as #'sym (see NOTES.md)
+             ! -- no separate Var type here, so this returns the
+             ! symbol itself, unevaluated, same as quote.
+             val = list_first(list_rest(ast%list_val))
+             return
+          else if (head%str_val == ".") then
+             val = eval_dot(ast, env)
+             return
           else if (head%str_val == "fn*") then
              val = eval_fn(ast, env)
              return
@@ -495,6 +504,50 @@ contains
     val = name
   end function eval_ns
 
+  ! (. X (setMacro)): the one Java-interop dot-form this project
+  ! actually evaluates for real, rather than reader-conditioning away
+  ! in literal source -- because defmacro's own macroexpansion
+  ! constructs it PROGRAMMATICALLY (building a fresh (. (var name)
+  ! (setMacro)) list) for every macro defined via defmacro throughout
+  ! the rest of core.clj. No reader conditional can intercept a form
+  ! built at runtime, only literal source text, so this has to be
+  ! real. X (typically (var name), see above) evaluates to a symbol;
+  ! this looks up its current value in *ns*, marks it a macro, and
+  ! re-interns it under the same name -- the same effect real
+  ! Clojure's Var.setMacro() has, without a real Var. Anything else
+  ! calling . is a real gap, not silently mishandled -- a clear error,
+  ! same as the reader's own unsupported-syntax cases.
+  function eval_dot(ast, env) result(val)
+    type(cons_value), intent(in) :: ast
+    type(env_ref), intent(in) :: env
+    type(cons_value) :: val
+    type(cons_value) :: target, method_form, method_name, current
+    character(len=:), allocatable :: owner
+    logical :: found
+
+    target = eval_form(list_first(list_rest(ast%list_val)), env)
+    if (has_error) return
+    method_form = list_first(list_rest(list_rest(ast%list_val)))
+    method_name = list_first(method_form%list_val)
+
+    if (method_name%tag == TAG_SYMBOL) then
+       if (method_name%str_val == "setMacro" .and. target%tag == TAG_SYMBOL) then
+          found = ns_resolve(ns_current(), target%str_val, current, owner)
+          if (.not. found) then
+             call eval_error("var " // target%str_val // " does not exist")
+             return
+          end if
+          if (current%tag == TAG_FN) then
+             if (allocated(current%fn_val)) current%fn_val%is_macro = .true.
+          end if
+          call ns_intern(ns_current(), target%str_val, current)
+          val%tag = TAG_NIL
+          return
+       end if
+    end if
+    call eval_error("unsupported interop call: (. ...)")
+  end function eval_dot
+
   ! (try body) or (try body (catch e handler)): real Clojure's own
   ! names (mal's try*/catch* also recognized, same as def!/def). Only
   ! one catch clause, catching anything -- no exception-class matching
@@ -632,7 +685,8 @@ contains
     logical :: yes
     select case (name)
     case ("def!", "def", "defmacro", "defmacro!", "let*", "fn*", "if", "do", "quote", "quasiquote", &
-         "unquote", "splice-unquote", "eval", "load-file", "in-ns", "ns", "try*", "try", "catch*", "catch")
+         "unquote", "splice-unquote", "eval", "load-file", "in-ns", "ns", "var", ".", &
+         "try*", "try", "catch*", "catch")
        yes = .true.
     case default
        yes = .false.
@@ -1621,12 +1675,26 @@ contains
   ! params vector comes straight after the (optional) name. Dispatched
   ! by argument count at call time (select_clause), not expanded away
   ! here -- one runtime closure shape either way.
+  !
+  ! recur: every fn* (named or not) also binds the symbol "recur" to
+  ! itself in this same throwaway layer -- real Clojure's own recur
+  ! (inside a plain fn, not a loop) means exactly "tail-call the
+  ! enclosing fn again", which is now just an ordinary call to
+  ! whatever recur resolves to. Reuses the exact same self-reference
+  ! machinery a named fn* already needed, arity dispatch and TCO
+  ! included, for free -- no separate special form. Real recur also
+  ! enforces (at compile time) that it's only used in tail position
+  ! and matches its enclosing clause's own arity exactly; this doesn't
+  ! check either, a real but low-risk simplification since a plain
+  ! call already dispatches to whichever arity matches, and no
+  ! correctly-written recur call would ever mismatch on purpose. loop
+  ! (a distinct recur target from a fn) isn't built yet.
   function eval_fn(ast, env) result(val)
     type(cons_value), intent(in) :: ast
     type(env_ref), intent(in) :: env
     type(cons_value) :: val
     type(cons_ref) :: rest, body_forms, clauses
-    type(cons_value) :: second, name, clause
+    type(cons_value) :: second, name, clause, recur_sym
     type(env_ref) :: fn_env
     logical :: named, multi
     integer :: n_clauses, i
@@ -1637,12 +1705,10 @@ contains
 
     val%tag = TAG_FN
     allocate(val%fn_val)
+    fn_env = env_new(env)
     if (named) then
        name = second
        rest = list_rest(rest)
-       fn_env = env_new(env)
-    else
-       fn_env = env
     end if
 
     ! Multi-arity iff this is a list whose OWN first element is itself
@@ -1688,6 +1754,9 @@ contains
 
     val%fn_val%env = fn_env
     if (named) call env_set(fn_env, name, val)
+    recur_sym%tag = TAG_SYMBOL
+    recur_sym%str_val = "recur"
+    call env_set(fn_env, recur_sym, val)
   end function eval_fn
 
   ! Every form after params is the body, wrapped in an implicit
@@ -1726,8 +1795,37 @@ contains
     sym = list_first(list_rest(ast%list_val))
     val = eval_form(list_first(list_rest(list_rest(ast%list_val))), env)
     if (has_error) return
+    call apply_macro_metadata(sym, val)
     call ns_intern(ns_current(), sym%str_val, val)
   end function eval_def
+
+  ! Real Clojure derives macro-ness from the Var's own metadata
+  ! (:macro true) -- real core.clj defines let/loop/fn exactly this
+  ! way, (def ^{:macro true} name (fn* ...)), before defmacro itself
+  ! exists yet to bootstrap with. No separate Var here (see
+  ! Namespace.f90), so this translates :macro metadata straight onto
+  ! the closure itself instead, at def time -- the same simplification
+  ! is_macro already is.
+  subroutine apply_macro_metadata(sym, val)
+    type(cons_value), intent(in) :: sym
+    type(cons_value), intent(inout) :: val
+    type(cons_value) :: macro_key, macro_val
+
+    if (val%tag /= TAG_FN) return
+    if (.not. allocated(val%fn_val)) return
+    if (.not. allocated(sym%meta_val)) return
+    if (.not. associated(sym%meta_val%ptr)) return
+    if (sym%meta_val%ptr%val%tag /= TAG_HASHMAP) return
+    if (.not. allocated(sym%meta_val%ptr%val%map_val)) return
+
+    macro_key%tag = TAG_KEYWORD
+    macro_key%str_val = "macro"
+    if (.not. array_map_contains(sym%meta_val%ptr%val%map_val, macro_key)) return
+    macro_val = rt_get(sym%meta_val%ptr%val, macro_key)
+    if (macro_val%tag == TAG_NIL) return
+    if (macro_val%tag == TAG_BOOL .and. .not. macro_val%bool_val) return
+    val%fn_val%is_macro = .true.
+  end subroutine apply_macro_metadata
 
   ! let*'s bindings may be a list or a vector.
   function binding_count(b) result(n)
