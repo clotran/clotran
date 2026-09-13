@@ -7,7 +7,7 @@ module PersistentVector
   implicit none
   private
 
-  public :: vector_empty, vector_count, vector_nth, vector_conj
+  public :: vector_empty, vector_count, vector_nth, vector_conj, vector_assoc
 
 contains
 
@@ -119,5 +119,24 @@ contains
        new_v%root%ptr => new_root
     end if
   end function vector_conj
+
+  ! Real Clojure's vector assoc: index == count appends (same as
+  ! conj), 0 <= index < count path-copies that one slot (both
+  ! O(log32 n)); an out-of-range index is left unvalidated here, same
+  ! as vector_nth already is -- callers that need an IndexOutOfBounds-
+  ! style error check first.
+  function vector_assoc(v, i, x) result(new_v)
+    type(vec_t), intent(in) :: v
+    integer, intent(in) :: i ! 0-based
+    type(cons_value), intent(in) :: x
+    type(vec_t) :: new_v
+    if (i == v%count) then
+       new_v = vector_conj(v, x)
+    else
+       new_v%count = v%count
+       new_v%shift = v%shift
+       new_v%root = node_assoc(v%root, v%shift, i, x)
+    end if
+  end function vector_assoc
 
 end module PersistentVector

@@ -96,7 +96,12 @@ contains
     type(ns_ref), intent(in) :: ns
     character(len=*), intent(in) :: name
     type(cons_value), intent(in) :: val
-    ns%ptr%bindings = array_map_assoc(ns%ptr%bindings, symbol_key(name), val)
+    type(array_map_t) :: next_bindings
+    ! never ns%ptr%bindings = array_map_assoc(ns%ptr%bindings, ...) --
+    ! see Eval.f90's make_hashmap for why that self-referencing
+    ! assignment silently drops the update.
+    next_bindings = array_map_assoc(ns%ptr%bindings, symbol_key(name), val)
+    ns%ptr%bindings = next_bindings
   end subroutine ns_intern
 
   ! Only this namespace's own bindings -- no clojure.core fallback.

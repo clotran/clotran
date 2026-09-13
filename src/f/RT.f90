@@ -8,9 +8,9 @@ module RT
   use values
   use PersistentList, only: list_empty, list_cons => cons, list_first => first, &
        list_rest => rest, list_count => list_count
-  use PersistentVector, only: vector_empty, vector_count, vector_nth, vector_conj
+  use PersistentVector, only: vector_empty, vector_count, vector_nth, vector_conj, vector_assoc
   use PersistentArrayMap, only: array_map_empty, array_map_count, array_map_get, &
-       array_map_assoc, array_map_nth_key, array_map_nth_val, array_map_contains
+       array_map_assoc, array_map_entries, array_map_contains
   implicit none
   private
 
@@ -30,17 +30,36 @@ contains
     target%list_val = l
   end subroutine wrap_list_value
 
-  ! Vector elements [start, count) as a list, in order.
-  function vector_slice_to_list(vec, start) result(l)
-    type(vec_t), intent(in) :: vec
-    integer, intent(in) :: start
-    type(cons_ref) :: l
+  ! Every element of vec as a list, in order -- one O(n) trie walk
+  ! (each leaf's whole items(:) run cons'd on at once), not n separate
+  ! O(log32 n) vector_nth calls (that was a real, if modest, quadratic-
+  ! ish deviation from real Clojure's O(1)-to-start chunked seq: see
+  ! NOTES.md). Walks right-to-left, consing each leaf's run in reverse,
+  ! so the result comes out in forward order -- same trick vec_node's
+  ! own construction already relies on elsewhere in this codebase.
+  recursive subroutine vector_walk_rev(node, shift, l)
+    type(node_ref), intent(in) :: node
+    integer, intent(in) :: shift
+    type(cons_ref), intent(inout) :: l
     integer :: i
+    if (.not. associated(node%ptr)) return
+    if (shift == 0) then
+       do i = size(node%ptr%items), 1, -1
+          l = list_cons(node%ptr%items(i), l)
+       end do
+    else
+       do i = size(node%ptr%children), 1, -1
+          call vector_walk_rev(node%ptr%children(i), shift - BITS, l)
+       end do
+    end if
+  end subroutine vector_walk_rev
+
+  function vector_to_list(vec) result(l)
+    type(vec_t), intent(in) :: vec
+    type(cons_ref) :: l
     l = list_empty()
-    do i = vector_count(vec) - 1, start, -1
-       l = list_cons(vector_nth(vec, i), l)
-    end do
-  end function vector_slice_to_list
+    call vector_walk_rev(vec%root, vec%shift, l)
+  end function vector_to_list
 
   function first(v) result(val)
     type(cons_value), intent(in) :: v
@@ -66,7 +85,7 @@ contains
        if (allocated(v%list_val)) tail = list_rest(v%list_val)
     case (TAG_VECTOR)
        if (allocated(v%vector_val)) then
-          if (vector_count(v%vector_val) > 1) tail = vector_slice_to_list(v%vector_val, 1)
+          if (vector_count(v%vector_val) > 1) tail = list_rest(vector_to_list(v%vector_val))
        end if
     end select
     call wrap_list_value(new_v, tail)
@@ -91,7 +110,7 @@ contains
     case (TAG_LIST)
        if (allocated(coll%list_val)) coll_list = coll%list_val
     case (TAG_VECTOR)
-       if (allocated(coll%vector_val)) coll_list = vector_slice_to_list(coll%vector_val, 0)
+       if (allocated(coll%vector_val)) coll_list = vector_to_list(coll%vector_val)
     end select
     call wrap_list_value(new_v, list_cons(x, coll_list))
   end function cons
@@ -173,9 +192,20 @@ contains
     end if
   end function get
 
+  ! (assoc coll key val): a real O(log32 n) path-copy for a vector
+  ! (key must be an int index, 0 <= key <= count -- real Clojure's own
+  ! assoc requires the same, throwing on anything else, which this
+  ! doesn't validate either, same as nth above); array-map/hash-trie
+  ! assoc (by value, any key) otherwise.
   function assoc(coll, key, val) result(new_v)
     type(cons_value), intent(in) :: coll, key, val
     type(cons_value) :: new_v
+    if (coll%tag == TAG_VECTOR .and. allocated(coll%vector_val)) then
+       new_v%tag = TAG_VECTOR
+       allocate(new_v%vector_val)
+       new_v%vector_val = vector_assoc(coll%vector_val, key%int_val, val)
+       return
+    end if
     new_v%tag = TAG_HASHMAP
     allocate(new_v%map_val)
     if (coll%tag == TAG_HASHMAP .and. allocated(coll%map_val)) then
@@ -194,7 +224,7 @@ contains
     case (TAG_LIST)
        if (count(v) > 0) new_v = v
     case (TAG_VECTOR)
-       if (count(v) > 0) call wrap_list_value(new_v, vector_slice_to_list(v%vector_val, 0))
+       if (count(v) > 0) call wrap_list_value(new_v, vector_to_list(v%vector_val))
     case (TAG_HASHMAP)
        if (count(v) > 0) call wrap_list_value(new_v, map_to_entry_list(v%map_val))
     case (TAG_SET)
@@ -256,11 +286,11 @@ contains
        if (eq) then
           block
             integer :: i
-            type(cons_value) :: key
-            do i = 0, array_map_count(a%map_val) - 1
-               key = array_map_nth_key(a%map_val, i)
-               eq = array_map_contains(b%map_val, key)
-               if (eq) eq = equiv(array_map_nth_val(a%map_val, i), array_map_get(b%map_val, key))
+            type(cons_value), allocatable :: akeys(:), avals(:)
+            call array_map_entries(a%map_val, akeys, avals)
+            do i = 1, size(akeys)
+               eq = array_map_contains(b%map_val, akeys(i))
+               if (eq) eq = equiv(avals(i), array_map_get(b%map_val, akeys(i)))
                if (.not. eq) exit
             end do
           end block
@@ -270,15 +300,20 @@ contains
     end select
   end function equiv
 
-  ! Map entries as a list of [k v] 2-vectors, in insertion order.
+  ! Map entries as a list of [k v] 2-vectors -- insertion order for a
+  ! small map, hash order once promoted past 8 entries (see
+  ! PersistentArrayMap.f90), matching real Clojure's own ArrayMap vs.
+  ! HashMap iteration order exactly.
   function map_to_entry_list(m) result(l)
     type(array_map_t), intent(in) :: m
     type(cons_ref) :: l
     integer :: i
     type(vec_t) :: entry
+    type(cons_value), allocatable :: keys(:), vals(:)
+    call array_map_entries(m, keys, vals)
     l = list_empty()
-    do i = array_map_count(m) - 1, 0, -1
-       entry = vector_conj(vector_conj(vector_empty(), array_map_nth_key(m, i)), array_map_nth_val(m, i))
+    do i = size(keys), 1, -1
+       entry = vector_conj(vector_conj(vector_empty(), keys(i)), vals(i))
        block
          type(cons_value) :: entry_val
          entry_val%tag = TAG_VECTOR
@@ -289,16 +324,18 @@ contains
     end do
   end function map_to_entry_list
 
-  ! A set's elements, in insertion order -- unlike a map's seq, no
-  ! [k v] entry wrapping, since a set's "value" at each element is
-  ! just that element again.
+  ! A set's elements -- unlike a map's seq, no [k v] entry wrapping,
+  ! since a set's "value" at each element is just that element again.
+  ! Same insertion-order-then-hash-order-once-promoted rule as above.
   function set_to_element_list(m) result(l)
     type(array_map_t), intent(in) :: m
     type(cons_ref) :: l
     integer :: i
+    type(cons_value), allocatable :: keys(:), vals(:)
+    call array_map_entries(m, keys, vals)
     l = list_empty()
-    do i = array_map_count(m) - 1, 0, -1
-       l = list_cons(array_map_nth_key(m, i), l)
+    do i = size(keys), 1, -1
+       l = list_cons(keys(i), l)
     end do
   end function set_to_element_list
 

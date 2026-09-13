@@ -85,9 +85,10 @@ module values
   end type vec_t
 
   ! --- PersistentArrayMap backing: a flat, linear-scan k/v array. Real
-  ! Clojure uses this same representation (not a hash trie) for maps up
-  ! to 8 entries; every map in this project is that small for now, so
-  ! there's no HAMT yet -- see PersistentArrayMap.f90.
+  ! Clojure uses this same representation for maps up to 8 entries,
+  ! promoting to a real hash trie (PersistentHashMap, see hamt_node
+  ! below) beyond that -- confirmed via the real `clojure` CLI: 8
+  ! entries stays a PersistentArrayMap, 9 becomes a PersistentHashMap.
   type, public :: array_map_node
      integer :: refcount = 0
      type(cons_value), allocatable :: keys(:)
@@ -100,9 +101,74 @@ module values
      final :: array_map_ref_finalize
   end type array_map_ref
 
+  ! big: unallocated for a small (<=8 entry) map/set, using root above.
+  ! Once promoted (see PersistentArrayMap.f90's array_map_assoc), big
+  ! holds the real hash trie instead and root goes unused -- one-way,
+  ! same as real Clojure (a HashMap never demotes back to an ArrayMap).
+  ! Allocatable (not a plain component, unlike root above) only because
+  ! hamt_ref is defined below and Fortran can only forward-reference a
+  ! not-yet-defined same-module type through an allocatable/pointer
+  ! component (see this file's header) -- same reason meta_val/extra
+  ! are allocatable elsewhere here.
+  ! big_count: only meaningful once big is allocated -- a HAMT has no
+  ! O(1) way to report its own size (unlike the array tier's size(keys)
+  ! above), so PersistentArrayMap.f90 maintains this directly from
+  ! hamt_assoc/hamt_dissoc's is_new/removed flags instead of walking
+  ! the whole trie on every count.
   type, public :: array_map_t
      type(array_map_ref) :: root
+     type(hamt_ref), allocatable :: big
+     integer :: big_count = 0
+   contains
+     final :: array_map_t_finalize
   end type array_map_t
+
+  ! --- PersistentHashMap backing: a real hash-array-mapped trie (HAMT),
+  ! same algorithm as PersistentVector above but branching on hash bits
+  ! instead of a sequential index, and each node uses a full 32-slot
+  ! array rather than real Clojure's bitmap-compressed sparse array --
+  ! same O(log32 n) (effectively O(1), depth <=7 for a 32-bit hash)
+  ! asymptotic behavior, just a higher constant memory factor per node.
+  ! kind: 0 empty, 1 leaf (key/val meaningful), 2 child (a deeper node,
+  ! for keys whose hash bits collided this far down), 3 bucket (a
+  ! small linear key/val array, for the rare case of two DIFFERENT
+  ! keys sharing every hash bit all the way to depth 7 -- true hash
+  ! collision, not just a shared prefix). See PersistentHashMap.f90.
+  integer, parameter :: HAMT_EMPTY = 0
+  integer, parameter :: HAMT_LEAF = 1
+  integer, parameter :: HAMT_CHILD = 2
+  integer, parameter :: HAMT_BUCKET = 3
+
+  ! hamt_ref defined first (forward-referencing hamt_node, below, via
+  ! its pointer component -- allowed) so hamt_slot can hold a plain,
+  ! already-defined hamt_ref for `child` rather than needing another
+  ! allocatable-for-forward-reference workaround.
+  type, public :: hamt_ref
+     type(hamt_node), pointer :: ptr => null()
+   contains
+     final :: hamt_ref_finalize
+  end type hamt_ref
+
+  type, public :: hamt_slot
+     integer :: kind = HAMT_EMPTY
+     type(cons_value) :: key, val
+     type(hamt_ref) :: child
+     type(cons_value), allocatable :: bucket_keys(:), bucket_vals(:)
+  end type hamt_slot
+
+  ! slots is allocatable, not a fixed-size array, even though every
+  ! node always allocates exactly BRANCH of them (see PersistentHashMap
+  ! .f90's node_assoc/node_dissoc) -- a fixed-size array of hamt_slot
+  ! here crashes only on gfortran (confirmed via the official test
+  ! suite's own cross-check run, flang unaffected): its auto-generated
+  ! finalization of a self-referential struct (hamt_slot embeds a
+  ! hamt_ref pointing back to another hamt_node) mishandles a FIXED
+  ! array the way it doesn't for vec_node's own children(:)/items(:),
+  ! which are allocatable for exactly this reason already.
+  type, public :: hamt_node
+     integer :: refcount = 0
+     type(hamt_slot), allocatable :: slots(:)
+  end type hamt_node
 
   ! --- Env backing: symbol -> value bindings with an outer chain. Lives
   ! here (not in Env.f90, which holds only the operations) because a
@@ -213,6 +279,8 @@ module values
      module procedure atom_ref_assign
      module procedure meta_ref_assign
      module procedure arity_clauses_ref_assign
+     module procedure hamt_ref_assign
+     module procedure hamt_slot_assign
   end interface assignment(=)
 
   ! For test programs to confirm every box is eventually freed.
@@ -230,12 +298,44 @@ module values
   integer, public :: meta_node_total_freed = 0
   integer, public :: arity_clauses_node_total_allocated = 0
   integer, public :: arity_clauses_node_total_freed = 0
+  integer, public :: hamt_node_total_allocated = 0
+  integer, public :: hamt_node_total_freed = 0
 
   public :: assignment(=)
   public :: cons_value_release, cons_ref_release, node_ref_release, array_map_ref_release, env_ref_release, &
-       atom_ref_release, meta_ref_release, arity_clauses_ref_release
+       atom_ref_release, meta_ref_release, arity_clauses_ref_release, hamt_ref_release
+  public :: value_equal
 
 contains
+
+  ! Value equality for map/set keys: same tag and same scalar/text
+  ! content. Lists/vectors/maps as keys aren't compared deeply yet --
+  ! lives here (not in PersistentArrayMap.f90, where it used to be)
+  ! since PersistentHashMap.f90 needs it too, and PersistentArrayMap.f90
+  ! now depends on PersistentHashMap.f90 for promotion -- a module
+  ! cycle either way it stayed put.
+  function value_equal(a, b) result(eq)
+    type(cons_value), intent(in) :: a, b
+    logical :: eq
+    eq = .false.
+    if (a%tag /= b%tag) return
+    select case (a%tag)
+    case (TAG_NIL)
+       eq = .true.
+    case (TAG_BOOL)
+       eq = (a%bool_val .eqv. b%bool_val)
+    case (TAG_INT)
+       eq = (a%int_val == b%int_val)
+    case (TAG_REAL)
+       eq = (a%real_val == b%real_val)
+    case (TAG_STRING, TAG_SYMBOL, TAG_KEYWORD)
+       if (allocated(a%str_val) .and. allocated(b%str_val)) then
+          eq = (a%str_val == b%str_val)
+       else
+          eq = (.not. allocated(a%str_val) .and. .not. allocated(b%str_val))
+       end if
+    end select
+  end function value_equal
 
   ! ---- cons_value ----
 
@@ -251,7 +351,7 @@ contains
        deallocate(v%vector_val)
     end if
     if (allocated(v%map_val)) then
-       call array_map_ref_release(v%map_val%root)
+       call array_map_t_release(v%map_val)
        deallocate(v%map_val)
     end if
     if (allocated(v%fn_val)) deallocate(v%fn_val) ! cascades: releases params/body/env
@@ -407,11 +507,47 @@ contains
 
   ! ---- array_map_t (embeds an array_map_ref, needs its own assignment(=)) ----
 
+  ! Releases both possible backings (root, or big once promoted) --
+  ! shared by cons_value_release and hamt_ref_release (a HAMT bucket is
+  ! itself a full array_map_t, in the vanishingly rare case a bucket
+  ! ever needed to promote too).
+  recursive subroutine array_map_t_release(m)
+    type(array_map_t), intent(inout) :: m
+    call array_map_ref_release(m%root)
+    if (allocated(m%big)) then
+       call hamt_ref_release(m%big)
+       deallocate(m%big)
+    end if
+  end subroutine array_map_t_release
+
   subroutine array_map_t_assign(lhs, rhs)
     type(array_map_t), intent(inout) :: lhs
     type(array_map_t), intent(in) :: rhs
     lhs%root = rhs%root
+    lhs%big_count = rhs%big_count
+    if (allocated(rhs%big)) then
+       if (.not. allocated(lhs%big)) allocate(lhs%big)
+       lhs%big = rhs%big
+    else if (allocated(lhs%big)) then
+       call hamt_ref_release(lhs%big)
+       deallocate(lhs%big)
+    end if
   end subroutine array_map_t_assign
+
+  ! array_map_t didn't need its own FINAL before (a single array_map_ref
+  ! field, relying on Fortran's automatic per-component finalization
+  ! cascading into array_map_ref's own FINAL was apparently enough);
+  ! now that it holds a second, independently-finalizable field (big),
+  ! that automatic cascading stopped reliably running both fields'
+  ! cleanup at the right time on flang -- confirmed by isolated
+  ! debugging where a freshly-assigned array_map_t's root looked
+  ! correct one statement and empty the next, with no intervening
+  ! assignment. Giving the type an explicit FINAL of its own (matching
+  ! every _ref wrapper elsewhere in this file) fixes it.
+  impure elemental subroutine array_map_t_finalize(m)
+    type(array_map_t), intent(inout) :: m
+    call array_map_t_release(m)
+  end subroutine array_map_t_finalize
 
   ! ---- env_ref ----
 
@@ -540,5 +676,78 @@ contains
     type(arity_clauses_ref), intent(inout) :: h
     call arity_clauses_ref_release(h)
   end subroutine arity_clauses_ref_finalize
+
+  ! ---- hamt_ref (PersistentHashMap trie nodes -- same shape as
+  ! node_ref, but each slot is one of three kinds needing its own
+  ! release rather than a uniform children(:) array) ----
+
+  recursive subroutine hamt_ref_release(h)
+    type(hamt_ref), intent(inout) :: h
+    integer :: i, j
+    if (.not. associated(h%ptr)) return
+    h%ptr%refcount = h%ptr%refcount - 1
+    if (h%ptr%refcount <= 0) then
+       do i = 1, BRANCH
+          select case (h%ptr%slots(i)%kind)
+          case (HAMT_LEAF)
+             call cons_value_release(h%ptr%slots(i)%key)
+             call cons_value_release(h%ptr%slots(i)%val)
+          case (HAMT_CHILD)
+             call hamt_ref_release(h%ptr%slots(i)%child)
+          case (HAMT_BUCKET)
+             do j = 1, size(h%ptr%slots(i)%bucket_keys)
+                call cons_value_release(h%ptr%slots(i)%bucket_keys(j))
+                call cons_value_release(h%ptr%slots(i)%bucket_vals(j))
+             end do
+             deallocate(h%ptr%slots(i)%bucket_keys, h%ptr%slots(i)%bucket_vals)
+          end select
+       end do
+       deallocate(h%ptr)
+       hamt_node_total_freed = hamt_node_total_freed + 1
+    end if
+    h%ptr => null()
+  end subroutine hamt_ref_release
+
+  impure elemental subroutine hamt_ref_assign(lhs, rhs)
+    type(hamt_ref), intent(inout) :: lhs
+    type(hamt_ref), intent(in) :: rhs
+    if (associated(lhs%ptr, rhs%ptr)) return
+    call hamt_ref_release(lhs)
+    lhs%ptr => rhs%ptr
+    if (associated(lhs%ptr)) lhs%ptr%refcount = lhs%ptr%refcount + 1
+  end subroutine hamt_ref_assign
+
+  impure elemental subroutine hamt_ref_finalize(h)
+    type(hamt_ref), intent(inout) :: h
+    call hamt_ref_release(h)
+  end subroutine hamt_ref_finalize
+
+  ! ---- hamt_slot (embeds a hamt_ref plus a cons_value pair, needs its
+  ! own assignment(=) -- confirmed, via an isolated repro, that letting
+  ! a bulk array-of-hamt_slot assignment (node_assoc's own path-copy:
+  ! new_node%slots = node_in%ptr%slots) fall back on default structure
+  ! assignment does NOT reliably cascade into the `child` field's own
+  ! defined assignment for a struct this size, on flang -- the same
+  ! reason cons_value/closure_t/array_map_t already spell out their own
+  ! assignment explicitly rather than relying on default cascading.
+  ! Without this, a shared child's refcount silently never gets
+  ! bumped, and it's freed out from under a still-live sibling the
+  ! next time an unrelated part of the trie changes -- corrupting a
+  ! key's tag (cons_value_release's last act) while leaving int_val
+  ! untouched, which is exactly the symptom that led here.)
+  impure elemental subroutine hamt_slot_assign(lhs, rhs)
+    type(hamt_slot), intent(inout) :: lhs
+    type(hamt_slot), intent(in) :: rhs
+    lhs%kind = rhs%kind
+    lhs%key = rhs%key
+    lhs%val = rhs%val
+    lhs%child = rhs%child
+    if (allocated(rhs%bucket_keys)) then
+       lhs%bucket_keys = rhs%bucket_keys
+       lhs%bucket_vals = rhs%bucket_vals
+    else if (allocated(lhs%bucket_keys)) then
+       deallocate(lhs%bucket_keys, lhs%bucket_vals)
+    end if
+  end subroutine hamt_slot_assign
 
 end module values

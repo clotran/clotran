@@ -501,7 +501,7 @@ contains
     integer, intent(inout) :: pos
     type(cons_value) :: val
     type(cons_value), allocatable :: items(:)
-    type(array_map_t) :: m
+    type(array_map_t) :: m, next_m
     integer :: n, i
 
     call read_items(tokens, pos, "}", items, n)
@@ -512,7 +512,9 @@ contains
     end if
     m = array_map_empty()
     do i = 1, n, 2
-       m = array_map_assoc(m, items(i), items(i + 1))
+       ! never m = array_map_assoc(m, ...) -- see Eval.f90's make_hashmap
+       next_m = array_map_assoc(m, items(i), items(i + 1))
+       m = next_m
     end do
     val%tag = TAG_HASHMAP
     allocate(val%map_val)
@@ -528,7 +530,7 @@ contains
     integer, intent(inout) :: pos
     type(cons_value) :: val
     type(cons_value), allocatable :: items(:)
-    type(array_map_t) :: m
+    type(array_map_t) :: m, next_m
     integer :: n, i
 
     ! Both '#' and '{' are already consumed by read_form's dispatch
@@ -538,7 +540,9 @@ contains
     if (has_error) return
     m = array_map_empty()
     do i = 1, n
-       m = array_map_assoc(m, items(i), items(i))
+       ! never m = array_map_assoc(m, ...) -- see Eval.f90's make_hashmap
+       next_m = array_map_assoc(m, items(i), items(i))
+       m = next_m
     end do
     val%tag = TAG_SET
     allocate(val%map_val)

@@ -470,6 +470,69 @@ all of these type definitions together, while every operation on them
 (`PersistentList.f90`, `PersistentVector.f90`, `PersistentArrayMap.f90`,
 `RT.f90`) lives in its own file and just `use`s the types.
 
+## Big-O: matching real Clojure's own guarantees, not just its behavior
+
+Getting the right *answer* isn't the same as getting there the way real
+Clojure does -- Rich Hickey's own data structures are chosen precisely
+for their asymptotic behavior, and silently falling back to a slower
+shape defeats the point of mirroring them. Two real gaps, found by
+deliberately auditing every structure against what real Clojure
+actually guarantees (not just what our own tests happened to cover):
+
+- **Every map/set (and, since they reuse the same backing, every
+  namespace's own bindings and every lexical env frame) was
+  `PersistentArrayMap`-only** -- a flat, linear-scan array, correct for
+  real Clojure's own small-map tier (<=8 entries, confirmed against the
+  real `clojure` CLI) but never promoted beyond it. `clojure.core`
+  alone holds 700+ bindings once `core.clj` finishes loading, so this
+  wasn't a corner case: interning the k-th definition cost O(k) (full
+  array copy-on-write), making the whole load O(n^2) in its own
+  definition count -- the exact shape of bug this project already hit
+  twice before at the reader/tokenizer level, just one layer up.
+  Fixed with a real HAMT (`PersistentHashMap.f90`): same 32-way
+  branching trie algorithm as `PersistentVector.f90`, keyed on hash
+  bits instead of a sequential index, promoting past 8 entries (never
+  demoting back, matching real Clojure exactly) via
+  `PersistentArrayMap.f90`'s `array_map_assoc`/`array_map_dissoc` --
+  every existing caller (`RT.f90`, `Namespace.f90`, `Env.f90`,
+  `Eval.f90`, `printer.f90`) gets the fix for free through the same
+  `array_map_t`/`array_map_*` API, no changes needed on their end.
+  Deliberate simplifications, both real Big-O tradeoffs against
+  upstream, not correctness gaps: every node is a full 32-slot array
+  rather than real Clojure's bitmap-compressed sparse array (same
+  O(log32 n), a higher constant memory factor per node); a promoted
+  map's own iteration order is hash order, not insertion order --
+  which is not a simplification at all, it's what real Clojure's own
+  `PersistentHashMap` actually does (only `PersistentArrayMap`
+  preserves insertion order upstream too).
+- **Vector `rest`/`next`/`seq`/`cons` eagerly rebuilt a fresh list by
+  calling `nth` once per remaining element** -- O(n log32 n) to walk a
+  whole vector instead of real Clojure's O(1)-to-start chunked seq
+  (still bounded, not the unbounded-per-call blowup it might look like
+  at a glance, since every step after the first walks the resulting
+  *list*, not the vector, at real list speed -- but a real, avoidable
+  gap regardless). Fixed by replacing the n-`nth`-calls approach with
+  a single O(n) in-order trie walk (`RT.f90`'s `vector_to_list`,
+  visiting each leaf node's whole `items(:)` run at once). `assoc` on a
+  vector was simply unhandled entirely -- `RT.f90`'s `assoc` unconditionally
+  built a hashmap regardless of `coll`'s actual type -- even though the
+  correct O(log32 n) path-copy machinery (`node_assoc`) already existed
+  in `PersistentVector.f90`, just never wired up as `vector_assoc`.
+  Not fixed (a real, currently-accepted gap, not an oversight): vector
+  `rest`/`next`/`seq` still materialize the whole remaining list
+  eagerly rather than lazily/chunked -- same total work a fully-forced
+  real Clojure lazy seq would do, just performed up front instead of
+  incrementally. Revisit with a real chunked-seq/ISeq abstraction if
+  that eagerness is ever actually observed to matter.
+- Map/set keys still only compare by scalar/text equality
+  (`value_equal` in `Values.f90`) -- a vector, list, or map used as a
+  map/set key doesn't hash or compare the way real Clojure's deep value
+  equality would. Pre-existing (not introduced by the HAMT work above,
+  and not made any worse by it: a compound key still just always
+  collides into the same hash bucket, linear-scanned by the same
+  under-powered `value_equal`). Left alone for now -- a real, scoped
+  gap, tracked here rather than fixed as a side effect of unrelated work.
+
 ## Fortran gotchas catalog (for next time)
 
 - `class(*)` copy semantics: see above. (Historical: this is also why
@@ -523,6 +586,45 @@ all of these type definitions together, while every operation on them
   (`cons_value` -> `closure_t` -> array-of-`cons_value`) and it's an
   array, not a scalar. Same fix, same box-behind-a-pointer pattern
   (`arity_clauses_ref`/`arity_clauses_node`).
+- gfortran-only: a **fixed-size** array component (`type(t) :: x(N)`,
+  not `allocatable`) of a self-referential struct also corrupts
+  finalization, distinct from the allocatable-component bug above --
+  found via `hamt_node`'s `slots(BRANCH)` (each slot embeds a
+  `hamt_ref` pointing back to another `hamt_node`): gfortran's
+  auto-generated finalizer for the whole node crashed inside a nested
+  `cons_value` finalizer, even though every slot had already been
+  released by hand first (flang ran the identical code fine). `vec_node`
+  never hit this because its own self-referential array (`children(:)`)
+  was already `allocatable`, not fixed-size -- making `hamt_node%slots`
+  allocatable too (pre-allocated to exactly `BRANCH` right after
+  creating the node, so nothing about its behavior actually changes)
+  fixed it on both compilers.
+- **Automatic reallocation on array assignment (`x = expr`) cannot be
+  trusted for an array whose element type has `assignment(=)`**
+  (confirmed on flang; unlike the "pre-allocate first" note above,
+  this one silently produces the WRONG SIZE rather than crashing, so
+  it's easy to miss). Confirmed for three distinct shapes, all with
+  `cons_value` (which has its own `assignment(=)`) as the element
+  type: (1) `x = some_pointer%ptr%allocatable_array` -- allocated `x`
+  to size 0 regardless of the source's real size; (2) `x = f(...)`
+  where `f` is an ordinary function returning an allocatable array,
+  assigned into a fresh, entirely unrelated variable -- same silent
+  size-0 result; (3) `x = x(1:n)` (self-slice to shrink a growable
+  buffer) -- silently left `x` at its old, oversized shape instead of
+  shrinking it. All three were found chasing the exact same visible
+  symptom (`(hash-map "a" 1 "b" 2)` printing `{}`), and none of them
+  are about self-assignment or `impure elemental` -- a plain, distinct
+  target variable receiving an ordinary function's result was already
+  enough to trigger it. Fix, applied uniformly: never rely on
+  reallocate-on-assignment for this element type -- `allocate(x(n))`
+  explicitly first (matching the size you're about to write), then
+  assign element-by-element into the already-correctly-sized array
+  (`PersistentArrayMap.f90`'s `array_map_entries`, `PersistentHashMap
+  .f90`'s `node_assoc`/`node_dissoc`/`hamt_entries`). Where the
+  *caller* needs the array back, prefer a subroutine with an
+  `intent(out), allocatable` argument over a function returning one --
+  argument association isn't assignment(=) and isn't affected (the
+  same pattern `LispReader.f90`'s `read_items` already used).
 
 ## Naming: mirrors real Clojure directly
 

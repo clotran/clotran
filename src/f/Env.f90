@@ -45,7 +45,12 @@ contains
   subroutine env_set(e, key, val)
     type(env_ref), intent(in) :: e
     type(cons_value), intent(in) :: key, val
-    e%ptr%bindings = array_map_assoc(e%ptr%bindings, key, val)
+    type(array_map_t) :: next_bindings
+    ! never e%ptr%bindings = array_map_assoc(e%ptr%bindings, ...) -- see
+    ! Eval.f90's make_hashmap for why that self-referencing assignment
+    ! silently drops the update.
+    next_bindings = array_map_assoc(e%ptr%bindings, key, val)
+    e%ptr%bindings = next_bindings
   end subroutine env_set
 
   ! Walks outward through the outer chain. found is .false. if key is

@@ -9,8 +9,8 @@ module Eval
   use Env
   use PersistentList, only: list_first => first, list_rest => rest, list_count, list_of
   use PersistentVector, only: vector_count, vector_nth, vector_conj, vector_empty
-  use PersistentArrayMap, only: array_map_empty, array_map_count, array_map_nth_key, &
-       array_map_nth_val, array_map_assoc, array_map_contains, array_map_dissoc
+  use PersistentArrayMap, only: array_map_empty, array_map_entries, &
+       array_map_assoc, array_map_contains, array_map_dissoc
   use RT, only: rt_get => get, rt_nth => nth, rt_assoc => assoc, rt_count => count, &
        rt_first => first, rt_rest => rest, rt_cons => cons, rt_conj => conj, rt_equiv => equiv, &
        rt_seq => seq, rt_next => next
@@ -881,14 +881,19 @@ contains
           val = make_vector(items(1:item_count))
        end if
     case (TAG_HASHMAP)
-       n = 0
-       if (allocated(form%map_val)) n = array_map_count(form%map_val)
        m = array_map_empty()
-       do i = 0, n - 1
-          m = array_map_assoc(m, qq_expand(array_map_nth_key(form%map_val, i), env), &
-               qq_expand(array_map_nth_val(form%map_val, i), env))
-          if (has_error) return
-       end do
+       if (allocated(form%map_val)) then
+          block
+            type(cons_value), allocatable :: mkeys(:), mvals(:)
+            type(array_map_t) :: next_m
+            call array_map_entries(form%map_val, mkeys, mvals)
+            do i = 1, size(mkeys)
+               next_m = array_map_assoc(m, qq_expand(mkeys(i), env), qq_expand(mvals(i), env)) ! never m = ...(m, ...)
+               m = next_m
+               if (has_error) return
+            end do
+          end block
+       end if
        val%tag = TAG_HASHMAP
        allocate(val%map_val)
        val%map_val = m
@@ -936,17 +941,19 @@ contains
     type(cons_value), intent(in) :: ast
     type(env_ref), intent(in) :: env
     type(cons_value) :: val
-    type(array_map_t) :: m
-    integer :: i, n
+    type(array_map_t) :: m, next_m
+    type(cons_value), allocatable :: keys(:), vals(:)
+    integer :: i
 
-    n = 0
-    if (allocated(ast%map_val)) n = array_map_count(ast%map_val)
     m = array_map_empty()
-    do i = 0, n - 1
-       m = array_map_assoc(m, array_map_nth_key(ast%map_val, i), &
-            eval_form(array_map_nth_val(ast%map_val, i), env))
-       if (has_error) return
-    end do
+    if (allocated(ast%map_val)) then
+       call array_map_entries(ast%map_val, keys, vals)
+       do i = 1, size(keys)
+          next_m = array_map_assoc(m, keys(i), eval_form(vals(i), env)) ! never m = ...(m, ...) -- see make_hashmap
+          m = next_m
+          if (has_error) return
+       end do
+    end if
     val%tag = TAG_HASHMAP
     allocate(val%map_val)
     val%map_val = m
@@ -1229,11 +1236,18 @@ contains
   function make_hashmap(args) result(val)
     type(cons_value), intent(in) :: args(:)
     type(cons_value) :: val
-    type(array_map_t) :: m
+    type(array_map_t) :: m, next_m
     integer :: i
     m = array_map_empty()
     do i = 1, size(args), 2
-       m = array_map_assoc(m, args(i), args(i + 1))
+       ! next_m, never m itself -- m = array_map_assoc(m, ...) (the
+       ! same variable read inside the call and written by the
+       ! assignment) has been confirmed to silently drop the update in
+       ! a build this size, on flang, for a type with defined
+       ! assignment this involved; see PersistentHashMap.f90's
+       ! node_assoc header for the same hazard found there first.
+       next_m = array_map_assoc(m, args(i), args(i + 1))
+       m = next_m
     end do
     val%tag = TAG_HASHMAP
     allocate(val%map_val)
@@ -1244,72 +1258,68 @@ contains
   function make_hashset(args) result(val)
     type(cons_value), intent(in) :: args(:)
     type(cons_value) :: val
-    type(array_map_t) :: m
+    type(array_map_t) :: m, next_m
     integer :: i
     m = array_map_empty()
     do i = 1, size(args)
-       m = array_map_assoc(m, args(i), args(i))
+       next_m = array_map_assoc(m, args(i), args(i)) ! never m = array_map_assoc(m, ...) -- see make_hashmap
+       m = next_m
     end do
     val%tag = TAG_SET
     allocate(val%map_val)
     val%map_val = m
   end function make_hashset
 
-  ! (keys m)/(vals m): every key (or value), as a list, in insertion order.
+  ! (keys m)/(vals m): every key (or value), as a list -- insertion
+  ! order for a small map, hash order once promoted (see
+  ! PersistentArrayMap.f90), matching real Clojure exactly either way.
   function builtin_keys(m) result(val)
     type(cons_value), intent(in) :: m
     type(cons_value) :: val
-    type(cons_value), allocatable :: items(:)
+    type(cons_value), allocatable :: items(:), discard(:)
     type(cons_value) :: no_items(0)
-    integer :: n, i
-    n = 0
-    if (m%tag == TAG_HASHMAP) then
-       if (allocated(m%map_val)) n = array_map_count(m%map_val)
+    if (m%tag == TAG_HASHMAP .and. allocated(m%map_val)) then
+       call array_map_entries(m%map_val, items, discard)
+    else
+       allocate(items(0))
     end if
-    if (n == 0) then
+    if (size(items) == 0) then
        val = make_list(no_items)
-       return
+    else
+       val = make_list(items)
     end if
-    allocate(items(n))
-    do i = 1, n
-       items(i) = array_map_nth_key(m%map_val, i - 1)
-    end do
-    val = make_list(items)
   end function builtin_keys
 
   function builtin_vals(m) result(val)
     type(cons_value), intent(in) :: m
     type(cons_value) :: val
-    type(cons_value), allocatable :: items(:)
+    type(cons_value), allocatable :: items(:), discard(:)
     type(cons_value) :: no_items(0)
-    integer :: n, i
-    n = 0
-    if (m%tag == TAG_HASHMAP) then
-       if (allocated(m%map_val)) n = array_map_count(m%map_val)
+    if (m%tag == TAG_HASHMAP .and. allocated(m%map_val)) then
+       call array_map_entries(m%map_val, discard, items)
+    else
+       allocate(items(0))
     end if
-    if (n == 0) then
+    if (size(items) == 0) then
        val = make_list(no_items)
-       return
+    else
+       val = make_list(items)
     end if
-    allocate(items(n))
-    do i = 1, n
-       items(i) = array_map_nth_val(m%map_val, i - 1)
-    end do
-    val = make_list(items)
   end function builtin_vals
 
   ! (dissoc m k ...): a new map with those keys removed.
   function builtin_dissoc(args) result(val)
     type(cons_value), intent(in) :: args(:)
     type(cons_value) :: val
-    type(array_map_t) :: m
+    type(array_map_t) :: m, next_m
     integer :: i
     m = array_map_empty()
     if (args(1)%tag == TAG_HASHMAP) then
        if (allocated(args(1)%map_val)) m = args(1)%map_val
     end if
     do i = 2, size(args)
-       m = array_map_dissoc(m, args(i))
+       next_m = array_map_dissoc(m, args(i)) ! never m = array_map_dissoc(m, ...) -- see make_hashmap
+       m = next_m
     end do
     val%tag = TAG_HASHMAP
     allocate(val%map_val)
@@ -1322,14 +1332,15 @@ contains
   function builtin_disj(args) result(val)
     type(cons_value), intent(in) :: args(:)
     type(cons_value) :: val
-    type(array_map_t) :: m
+    type(array_map_t) :: m, next_m
     integer :: i
     m = array_map_empty()
     if (args(1)%tag == TAG_SET) then
        if (allocated(args(1)%map_val)) m = args(1)%map_val
     end if
     do i = 2, size(args)
-       m = array_map_dissoc(m, args(i))
+       next_m = array_map_dissoc(m, args(i)) ! never m = array_map_dissoc(m, ...) -- see make_hashmap
+       m = next_m
     end do
     val%tag = TAG_SET
     allocate(val%map_val)

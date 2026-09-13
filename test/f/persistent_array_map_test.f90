@@ -78,6 +78,62 @@ program persistent_array_map_test
     call cons_value_release(copy)
   end block
 
+  ! 7. Promotion: the 9th distinct key (real Clojure's own threshold,
+  ! confirmed against the `clojure` CLI) switches to the HAMT tier --
+  ! transparent to every caller, but exercise it directly here.
+  block
+    type(array_map_t) :: p, next_p
+    type(cons_value), allocatable :: ekeys(:), evals(:)
+    integer :: i
+    character(len=8) :: numbuf
+
+    p = array_map_empty()
+    do i = 1, 8
+       write(numbuf, '(I0)') i
+       next_p = array_map_assoc(p, mkstr(trim(numbuf)), mkint(i * 10))
+       p = next_p
+    end do
+    call expect_eq("7a. still an array map at exactly 8 entries: ", array_map_count(p), 8, all_ok)
+    call expect_eq("7a'. ...not yet promoted: ", merge(1, 0, .not. allocated(p%big)), 1, all_ok)
+
+    next_p = array_map_assoc(p, mkstr("9"), mkint(90))
+    p = next_p
+    call expect_eq("7b. the 9th key promotes to a hash trie: ", array_map_count(p), 9, all_ok)
+    call expect_eq("7b'. ...big is now allocated: ", merge(1, 0, allocated(p%big)), 1, all_ok)
+    call expect_eq("7c. every key survives promotion, found by value: ", &
+         as_int(array_map_get(p, mkstr("1"))), 10, all_ok)
+    call expect_eq("7c'. ...including the one that triggered it: ", &
+         as_int(array_map_get(p, mkstr("9"))), 90, all_ok)
+
+    ! Growing further stays promoted (no demotion, matching real Clojure).
+    do i = 10, 20
+       write(numbuf, '(I0)') i
+       next_p = array_map_assoc(p, mkstr(trim(numbuf)), mkint(i * 10))
+       p = next_p
+    end do
+    call expect_eq("7d. keeps growing correctly once promoted: ", array_map_count(p), 20, all_ok)
+    call expect_eq("7d'. ...a key added post-promotion is findable: ", &
+         as_int(array_map_get(p, mkstr("20"))), 200, all_ok)
+
+    call array_map_entries(p, ekeys, evals)
+    call expect_eq("7e. array_map_entries returns every entry: ", size(ekeys), 20, all_ok)
+    call expect_eq("7e'. ...keys and vals line up: ", size(evals), 20, all_ok)
+
+    ! Dissoc after promotion: real removal, and no demotion even though
+    ! this drops back below the array-map threshold.
+    next_p = array_map_dissoc(p, mkstr("1"))
+    p = next_p
+    call expect_eq("7f. dissoc after promotion drops the count: ", array_map_count(p), 19, all_ok)
+    call expect_eq("7f'. ...the key is really gone: ", merge(1, 0, array_map_contains(p, mkstr("1"))), 0, all_ok)
+    call expect_eq("7f''. ...still promoted, no demotion: ", merge(1, 0, allocated(p%big)), 1, all_ok)
+    next_p = array_map_dissoc(p, mkstr("not-there"))
+    p = next_p
+    call expect_eq("7g. dissoc of a missing key on a promoted map changes nothing: ", &
+         array_map_count(p), 19, all_ok)
+  end block
+  call expect_eq("7h. every hamt node from the promoted map is freed once it's gone: ", &
+       hamt_node_total_freed, hamt_node_total_allocated, all_ok)
+
   freed_before = array_map_node_total_freed
   m0 = array_map_empty()
   m1 = array_map_empty()

@@ -9,7 +9,7 @@
 module printer
   use values
   use RT, only: seq, first, next
-  use PersistentArrayMap, only: array_map_count, array_map_nth_key, array_map_nth_val
+  use PersistentArrayMap, only: array_map_entries
   use Atom, only: atom_deref
   implicit none
   private
@@ -82,18 +82,19 @@ contains
     logical, intent(in) :: readable
     character(len=:), allocatable :: str
     character(len=:), allocatable :: key_str, val_str
-    integer :: i, n
+    type(cons_value), allocatable :: keys(:), vals(:)
+    integer :: i
 
     str = "{"
     if (allocated(v%map_val)) then
-       n = array_map_count(v%map_val)
-       do i = 0, n - 1
-          if (i > 0) str = str // " "
+       call array_map_entries(v%map_val, keys, vals)
+       do i = 1, size(keys)
+          if (i > 1) str = str // " "
           ! Two recursive, deferred-length pr_str calls chained into one
           ! concatenation corrupts memory on gfortran (not flang) --
           ! materializing each result into its own variable first avoids it.
-          key_str = pr_str(array_map_nth_key(v%map_val, i), readable)
-          val_str = pr_str(array_map_nth_val(v%map_val, i), readable)
+          key_str = pr_str(keys(i), readable)
+          val_str = pr_str(vals(i), readable)
           str = str // key_str // " " // val_str
        end do
     end if
@@ -105,14 +106,15 @@ contains
     logical, intent(in) :: readable
     character(len=:), allocatable :: str
     character(len=:), allocatable :: elem_str
-    integer :: i, n
+    type(cons_value), allocatable :: keys(:), discard(:)
+    integer :: i
 
     str = "#{"
     if (allocated(v%map_val)) then
-       n = array_map_count(v%map_val)
-       do i = 0, n - 1
-          if (i > 0) str = str // " "
-          elem_str = pr_str(array_map_nth_key(v%map_val, i), readable)
+       call array_map_entries(v%map_val, keys, discard)
+       do i = 1, size(keys)
+          if (i > 1) str = str // " "
+          elem_str = pr_str(keys(i), readable)
           str = str // elem_str
        end do
     end if
