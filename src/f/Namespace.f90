@@ -45,7 +45,7 @@ module Namespace
   type(ns_ref), save :: current
 
   public :: assignment(=), CORE_NS
-  public :: ns_find_or_create, ns_intern, ns_resolve, ns_get_own
+  public :: ns_find_or_create, ns_exists, ns_intern, ns_resolve, ns_get_own
   public :: ns_set_current, ns_current, ns_name_of
 
 contains
@@ -77,6 +77,24 @@ contains
     ns%ptr => node
     call registry_append(ns)
   end function ns_find_or_create
+
+  ! Like ns_find_or_create, but never creates -- used to tell "this
+  ! symbol names a real namespace" (a (. Class (method args)) static
+  ! call) apart from an ordinary local/value (an instance-position .
+  ! call) without auto-vivifying a namespace for every random symbol
+  ! that happens to appear in class position.
+  function ns_exists(name) result(bool)
+    character(len=*), intent(in) :: name
+    logical :: bool
+    integer :: i
+    bool = .false.
+    do i = 1, registry_count
+       if (registry(i)%ptr%name == name) then
+          bool = .true.
+          return
+       end if
+    end do
+  end function ns_exists
 
   subroutine registry_append(ns)
     type(ns_ref), intent(in) :: ns

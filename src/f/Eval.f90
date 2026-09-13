@@ -19,8 +19,8 @@ module Eval
   use Atom, only: atom_new, atom_p, atom_deref, atom_reset
   use LispReader, only: read_str, read_top_level_forms
   use mal_readline, only: sys_readline => readline
-  use Namespace, only: ns_ref, assignment(=), CORE_NS, ns_find_or_create, ns_intern, &
-       ns_resolve, ns_set_current, ns_current, ns_name_of
+  use Namespace, only: ns_ref, assignment(=), CORE_NS, ns_find_or_create, ns_exists, ns_intern, &
+       ns_resolve, ns_get_own, ns_set_current, ns_current, ns_name_of
   implicit none
   private
 
@@ -43,6 +43,12 @@ module Eval
   type(gensym_entry), allocatable :: gensym_table(:)
   integer :: gensym_count = 0
   integer :: gensym_counter = 0
+
+  ! See eval_macro_head's own comment -- a hard cap on nested macro
+  ! expansion, purely a safety net against a known-unresolved runaway
+  ! recursion (assert-args/let), not a general limit anything else
+  ! should ever approach.
+  integer :: macro_expand_depth = 0
 
   public :: eval_top, repl_env
 
@@ -112,6 +118,7 @@ contains
     call reg("false?")
     call reg("readline")
     call reg("keyword?")
+    call reg("instance?")
     call reg("vector?")
     call reg("map?")
     call reg("sequential?")
@@ -160,21 +167,26 @@ contains
     end subroutine reg
   end function repl_env
 
-  ! Real clojure.core lives in src/clj/clojure/core.clj -- the actual
-  ! upstream file, byte-for-byte, never edited (not even additively;
-  ! see NOTES.md for why reader conditionals in core.clj itself would
-  ! be historically inaccurate -- real core.clj has never had any).
-  ! Loaded first, exactly as Rich Hickey wrote it; every individual
-  ! top-level form gets its own independent try (see
-  ! eval_load_file_head), so the handful that call real JVM interop
-  ! clotran doesn't have simply fail to rebind their name, leaving
-  ! whatever was bound before (a native builtin) in place -- nothing
-  ! aborts the rest of the file.
+  ! src/clj/clotran.clj loads FIRST: it populates the small clojure.
+  ! lang.* interop surface (clojure.lang.RT, clojure.lang.PersistentList,
+  ! clojure.lang.Util, instance?'s pseudo-classes) that real core.clj's
+  ! OWN bootstrap-era definitions call into starting from its very
+  ! first few forms (cons, list, fn, ... all resolve straight into
+  ! clojure.lang.RT while core.clj is still loading itself, long
+  ! before reaching the end of the file) -- see clotran.clj's own
+  ! header. Loading it after core.clj (the original order) meant every
+  ! one of those calls failed for the entire rest of the file, since
+  ! clojure.lang.RT didn't exist yet.
   !
-  ! src/clj/clotran.clj loads right after, in the same env/namespace,
-  ! and re-establishes exactly those few names against clotran.native
-  ! -- see its own header for why that's a separate file rather than
-  ! edits to core.clj (mirrors cljs.core's relationship to core.clj).
+  ! src/clj/clojure/core.clj -- the actual upstream file, byte-for-byte,
+  ! never edited (not even additively; see NOTES.md for why reader
+  ! conditionals in core.clj itself would be historically inaccurate --
+  ! real core.clj has never had any) -- loads second, exactly as Rich
+  ! Hickey wrote it, on top of that surface. Every individual top-level
+  ! form gets its own independent try (see eval_load_file_head), so the
+  ! handful that call real JVM interop clotran doesn't have simply fail
+  ! to rebind their name, leaving whatever was bound before in place --
+  ! nothing aborts the rest of the file.
   !
   ! Both resolved relative to argv[0]'s own directory, not cwd (no
   ! installed-resource concept yet, but this at least survives a
@@ -186,19 +198,19 @@ contains
     character(len=:), allocatable :: err, src
     logical :: ok
 
-    src = '(load-file "' // exe_relative_path("src/clj/clojure/core.clj") // '")'
-    ok = read_str(src, ast, err)
-    if (ok) discard = eval_form(ast, env)
-    if (has_error) then
-       write(*, '(A)') "warning: core.clj failed to load: " // pr_str(last_error_value)
-       has_error = .false.
-    end if
-
     src = '(load-file "' // exe_relative_path("src/clj/clotran.clj") // '")'
     ok = read_str(src, ast, err)
     if (ok) discard = eval_form(ast, env)
     if (has_error) then
        write(*, '(A)') "warning: clotran.clj failed to load: " // pr_str(last_error_value)
+       has_error = .false.
+    end if
+
+    src = '(load-file "' // exe_relative_path("src/clj/clojure/core.clj") // '")'
+    ok = read_str(src, ast, err)
+    if (ok) discard = eval_form(ast, env)
+    if (has_error) then
+       write(*, '(A)') "warning: core.clj failed to load: " // pr_str(last_error_value)
        has_error = .false.
     end if
   end subroutine eval_core_bootstrap
@@ -249,6 +261,7 @@ contains
     character(len=:), allocatable, intent(out) :: error
     type(cons_value) :: val
     has_error = .false.
+    macro_expand_depth = 0
     val = eval_form(ast, env)
     if (has_error) then
        error = pr_str(last_error_value)
@@ -329,6 +342,19 @@ contains
           else if (head%str_val == ".") then
              val = eval_dot(ast, env)
              return
+          else if (len(head%str_val) > 1 .and. head%str_val(1:1) == ".") then
+             ! (.method obj args...) sugar for (. obj (method args...))
+             ! -- real Clojure's reader-level rewrite for this, done
+             ! here at eval time instead since clotran has no separate
+             ! macroexpansion pass. Rewrites ast in place and lets the
+             ! "." branch above handle it.
+             call rewrite_dot_method_sugar(ast)
+             cycle
+          else if (len(head%str_val) > 1 .and. head%str_val(len(head%str_val):) == ".") then
+             ! (ClassName. args...) sugar for (new ClassName args...) --
+             ! same reader-level rewrite, done here at eval time instead.
+             call rewrite_new_sugar(ast)
+             cycle
           else if (head%str_val == "fn*") then
              val = eval_fn(ast, env)
              return
@@ -336,6 +362,13 @@ contains
              call eval_let_head(ast, env) ! rebinds ast/env to (child env, body); tail
              if (has_error) return
              cycle
+          else if (head%str_val == "loop*") then
+             call eval_loop_head(ast, env) ! rebinds ast/env to (child env, body); tail
+             if (has_error) return
+             cycle
+          else if (head%str_val == "new") then
+             val = eval_new(ast, env)
+             return
           else if (head%str_val == "if") then
              forms = list_rest(ast%list_val)
              cond = eval_form(list_first(forms), env)
@@ -458,6 +491,51 @@ contains
     ast = list_first(list_rest(list_rest(ast%list_val)))
   end subroutine eval_let_head
 
+  ! loop*: same binding mechanics as let*, plus establishing a recur
+  ! target -- built as an ordinary TAG_FN closure (params = the
+  ! binding names, body = the loop's own body, env = this loop's env)
+  ! bound to the symbol "recur", so a (recur args...) inside the body
+  ! is just an ordinary call and falls straight into the ALREADY
+  ! existing "tail call into a closure" path in eval_form's main loop
+  ! (is_recur=(head%str_val=="recur") there already exists for fn*'s
+  ! own recur) -- no separate loop-specific tail machinery needed.
+  subroutine eval_loop_head(ast, env)
+    type(cons_value), intent(inout) :: ast
+    type(env_ref), intent(inout) :: env
+    type(cons_value) :: bindings, k, v
+    type(cons_value) :: recur_fn, recur_sym
+    type(cons_value), allocatable :: names(:)
+    integer :: n, i
+
+    bindings = list_first(list_rest(ast%list_val))
+    n = binding_count(bindings)
+    if (mod(n, 2) /= 0) then
+       call eval_error("loop* requires an even number of binding forms")
+       return
+    end if
+
+    env = env_new(env)
+    allocate(names(n/2))
+    do i = 0, n - 1, 2
+       k = binding_nth(bindings, i)
+       v = eval_form(binding_nth(bindings, i + 1), env)
+       if (has_error) return
+       call env_set(env, k, v)
+       names(i/2 + 1) = k
+    end do
+
+    recur_fn%tag = TAG_FN
+    allocate(recur_fn%fn_val)
+    recur_fn%fn_val%params = make_vector(names)
+    recur_fn%fn_val%body = wrap_body(list_rest(list_rest(ast%list_val)))
+    recur_fn%fn_val%env = env
+    recur_sym%tag = TAG_SYMBOL
+    recur_sym%str_val = "recur"
+    call env_set(env, recur_sym, recur_fn)
+
+    ast = recur_fn%fn_val%body
+  end subroutine eval_loop_head
+
   ! (load-file "path"): slurps the file, reads every top-level form in
   ! it, and evaluates them in sequence with no lexical locals -- same
   ! rule as eval, since load-file is just eval+read-string+slurp
@@ -547,96 +625,568 @@ contains
     val = name
   end function eval_ns
 
-  ! (. X (setMacro)): the one Java-interop dot-form this project
-  ! actually evaluates for real, rather than reader-conditioning away
-  ! in literal source -- because defmacro's own macroexpansion
-  ! constructs it PROGRAMMATICALLY (building a fresh (. (var name)
-  ! (setMacro)) list) for every macro defined via defmacro throughout
-  ! the rest of core.clj. No reader conditional can intercept a form
-  ! built at runtime, only literal source text, so this has to be
-  ! real. X (typically (var name), see above) evaluates to a symbol;
-  ! this looks up its current value in *ns*, marks it a macro, and
-  ! re-interns it under the same name -- the same effect real
-  ! Clojure's Var.setMacro() has, without a real Var. Anything else
-  ! calling . is a real gap, not silently mishandled -- a clear error,
-  ! same as the reader's own unsupported-syntax cases.
-  function eval_dot(ast, env) result(val)
+  ! (.method obj args...) -> (. obj (method args...)). Head symbol
+  ! keeps its own leading "." stripped off as the method name; obj and
+  ! args carry over unevaluated (eval_dot evaluates them itself).
+  subroutine rewrite_dot_method_sugar(ast)
+    type(cons_value), intent(inout) :: ast
+    type(cons_value) :: obj, method_sym, dot_sym, inner_form, head
+    type(cons_value), allocatable :: inner_items(:), outer_items(:)
+    type(cons_ref) :: rest_args
+    integer :: n, i
+
+    head = list_first(ast%list_val) ! flang can't chain %field off a function result directly
+    method_sym%tag = TAG_SYMBOL
+    method_sym%str_val = head%str_val(2:)
+    obj = list_first(list_rest(ast%list_val))
+    rest_args = list_rest(list_rest(ast%list_val))
+    n = list_count(rest_args)
+
+    allocate(inner_items(n + 1))
+    inner_items(1) = method_sym
+    do i = 1, n
+       inner_items(i + 1) = list_first(rest_args)
+       rest_args = list_rest(rest_args)
+    end do
+    inner_form = make_list(inner_items)
+
+    dot_sym%tag = TAG_SYMBOL
+    dot_sym%str_val = "."
+    allocate(outer_items(3))
+    outer_items(1) = dot_sym
+    outer_items(2) = obj
+    outer_items(3) = inner_form
+    ast = make_list(outer_items)
+  end subroutine rewrite_dot_method_sugar
+
+  ! (ClassName. args...) -- real Clojure's reader-level sugar for
+  ! (new ClassName args...), rewritten here at eval time instead since
+  ! clotran has no separate macroexpansion pass, same as
+  ! rewrite_dot_method_sugar above.
+  subroutine rewrite_new_sugar(ast)
+    type(cons_value), intent(inout) :: ast
+    type(cons_value) :: head, cls, new_sym
+    type(cons_value), allocatable :: items(:)
+    type(cons_ref) :: rest_args
+    integer :: n, i
+
+    head = list_first(ast%list_val) ! flang can't chain %field off a function result directly
+    cls%tag = TAG_SYMBOL
+    cls%str_val = head%str_val(1:len(head%str_val) - 1)
+    rest_args = list_rest(ast%list_val)
+    n = list_count(rest_args)
+
+    new_sym%tag = TAG_SYMBOL
+    new_sym%str_val = "new"
+    allocate(items(n + 2))
+    items(1) = new_sym
+    items(2) = cls
+    do i = 1, n
+       items(i + 2) = list_first(rest_args)
+       rest_args = list_rest(rest_args)
+    end do
+    ast = make_list(items)
+  end subroutine rewrite_new_sugar
+
+  ! (. X (method args...)) or (. X member) -- real Clojure allows both
+  ! a parenthesized method call and a bare-symbol field/no-arg-method
+  ! access in the third position (e.g. core.clj's own (. clojure.lang.
+  ! PersistentList creator), no parens around creator). Evaluated for
+  ! real rather than reader-conditioned away in literal source --
+  ! core.clj's own bootstrap (defmacro's macroexpansion, defn's
+  ! instance?/Util calls, etc.) constructs and calls these forms
+  ! directly, and stays byte-for-byte unmodified (see NOTES.md), so
+  ! this has to be real, not patched around.
+  !
+  ! No general reflection -- clotran has no real classes or objects --
+  ! just two narrow, real cases:
+  !  - static: X is a bare symbol naming an already-registered
+  !    namespace (clojure.lang.RT, clojure.lang.Util, ... -- populated
+  !    from src/clj/clotran.clj, not hardcoded here). Resolves member
+  !    within that namespace directly (calling it, if it's a fn and
+  !    the form supplied args; otherwise just its value); X itself is
+  !    never evaluated, same as a real Class isn't a runtime value in
+  !    this position.
+  !  - instance: anything else. X is evaluated normally, member is
+  !    dispatched on (X's tag, member name) -- see eval_instance_call.
+  ! Anything neither of these recognizes is a real, clear error, not a
+  ! silent no-op -- same as the reader's own unsupported-syntax cases.
+  recursive function eval_dot(ast, env) result(val)
     type(cons_value), intent(in) :: ast
     type(env_ref), intent(in) :: env
     type(cons_value) :: val
-    type(cons_value) :: target, method_form, method_name, current
-    character(len=:), allocatable :: owner
-    logical :: found
+    type(cons_value) :: target_form, target, member_form, member_name
+    type(cons_value), allocatable :: args(:)
+    type(cons_ref) :: l
+    integer :: n, i
 
-    target = eval_form(list_first(list_rest(ast%list_val)), env)
-    if (has_error) return
-    method_form = list_first(list_rest(list_rest(ast%list_val)))
-    method_name = list_first(method_form%list_val)
+    target_form = list_first(list_rest(ast%list_val))
+    member_form = list_first(list_rest(list_rest(ast%list_val)))
+    if (member_form%tag == TAG_LIST) then
+       member_name = list_first(member_form%list_val)
+       n = list_count(member_form%list_val) - 1
+       allocate(args(n))
+       l = list_rest(member_form%list_val)
+    else
+       member_name = member_form
+       n = 0
+       allocate(args(0))
+    end if
 
-    if (method_name%tag == TAG_SYMBOL) then
-       if (method_name%str_val == "setMacro" .and. target%tag == TAG_SYMBOL) then
-          found = ns_resolve(ns_current(), target%str_val, current, owner)
-          if (.not. found) then
-             call eval_error("var " // target%str_val // " does not exist")
-             return
-          end if
-          if (current%tag == TAG_FN) then
-             if (allocated(current%fn_val)) current%fn_val%is_macro = .true.
-          end if
-          call ns_intern(ns_current(), target%str_val, current)
-          val%tag = TAG_NIL
+    if (target_form%tag == TAG_SYMBOL) then
+       if (ns_exists(target_form%str_val)) then
+          do i = 1, n
+             args(i) = eval_form(list_first(l), env)
+             if (has_error) return
+             l = list_rest(l)
+          end do
+          val = eval_static_call(target_form%str_val, member_name%str_val, args, &
+               is_call=(member_form%tag == TAG_LIST))
           return
        end if
     end if
-    call eval_error("unsupported interop call: (. ...)")
+
+    target = eval_form(target_form, env)
+    if (has_error) return
+    do i = 1, n
+       args(i) = eval_form(list_first(l), env)
+       if (has_error) return
+       l = list_rest(l)
+    end do
+    val = eval_instance_call(target, member_name%str_val, args)
   end function eval_dot
 
-  ! (try body) or (try body (catch e handler)): real Clojure's own
-  ! names (mal's try*/catch* also recognized, same as def!/def). Only
-  ! one catch clause, catching anything -- no exception-class matching
-  ! (we have no class hierarchy to match against). Not tail-cycled:
+  ! (new ClassName args...): real Clojure constructs a real instance;
+  ! clotran has no class/object system, so -- matching how throw/catch
+  ! already treat any value as throwable/catchable regardless of a
+  ! real type -- this just evaluates the args and returns the first
+  ! one (the usual shape for the exception constructors core.clj
+  ! itself calls, e.g. (new IllegalArgumentException "msg")), or the
+  ! class name itself as a string if there are none. ClassName is
+  ! never evaluated, same as `.`'s static-call position.
+  recursive function eval_new(ast, env) result(val)
+    type(cons_value), intent(in) :: ast
+    type(env_ref), intent(in) :: env
+    type(cons_value) :: val
+    type(cons_value) :: cls
+    type(cons_ref) :: rest
+
+    cls = list_first(list_rest(ast%list_val))
+    rest = list_rest(list_rest(ast%list_val))
+    if (cls%tag == TAG_SYMBOL .and. cls%str_val == "clojure.lang.Atom") then
+       ! core.clj's own (atom x) is literally (new clojure.lang.Atom
+       ! x) -- a REAL constructor, unlike the generic exception-message
+       ! passthrough below.
+       val = call_builtin("atom", [eval_form(list_first(rest), env)])
+       return
+    end if
+    if (list_count(rest) > 0) then
+       val = eval_form(list_first(rest), env)
+    else
+       val%tag = TAG_STRING
+       val%str_val = cls%str_val
+    end if
+  end function eval_new
+
+  ! (. Class (method args...)) / (. Class member) once Class is
+  ! confirmed to name a real namespace: an ordinary lookup of
+  ! whatever's def'd under that name there, exactly like
+  ! clojure.lang.Util/equiv (real Clojure's own slash syntax) already
+  ! resolves via plain ns_resolve -- this is that same lookup, just
+  ! reached through the dot-form's own syntax instead. is_call tells
+  ! apart the two shapes that both end up with an empty args here --
+  ! (. Class (member)), a real 0-arg method call, vs (. Class member),
+  ! bare-symbol field access -- which the VALUE's own tag can't: a
+  ! field can itself hold an IFn (e.g. PersistentList's own `creator`,
+  ! a bare-symbol field holding the list-builtin itself, never meant to
+  ! be invoked on the spot).
+  function eval_static_call(ns_name, member_name, args, is_call) result(val)
+    character(len=*), intent(in) :: ns_name, member_name
+    type(cons_value), intent(in) :: args(:)
+    logical, intent(in) :: is_call
+    type(cons_value) :: val
+    type(cons_value) :: found_val
+    logical :: found
+
+    found = ns_get_own(ns_find_or_create(ns_name), member_name, found_val)
+    if (.not. found) then
+       call eval_error("'" // trim(ns_name) // "/" // member_name // "' not found")
+       return
+    end if
+    if (.not. is_call) then
+       val = found_val
+       return
+    end if
+    val = apply_fn(found_val, args)
+  end function eval_static_call
+
+  ! Instance-position (. x (method args...)): dispatch table by
+  ! method name (and, where it matters, x's own tag). Grows one entry
+  ! at a time as core.clj's own bootstrap turns up the next one it
+  ! actually calls -- see NOTES.md.
+  !  - setMacro: the original, needed by defmacro's own macroexpansion
+  !    -- marks *ns*'s current binding of the symbol x as a macro (the
+  !    same effect real Clojure's Var.setMacro() has, without a real
+  !    Var) and re-interns it.
+  !  - meta/withMeta: needed by core.clj's OWN real `fn` macro
+  !    ((.withMeta (cons 'fn* decl) (.meta &form))), which is what's
+  !    actually in effect for any (fn ...) written before clotran.clj
+  !    gets a chance to override it (clotran.clj only loads after all
+  !    of core.clj does) -- just the existing meta/with-meta builtins,
+  !    reached through dot-sugar instead of a bare call.
+  function eval_instance_call(target, method_name, args) result(val)
+    type(cons_value), intent(in) :: target
+    character(len=*), intent(in) :: method_name
+    type(cons_value), intent(in) :: args(:)
+    type(cons_value) :: val
+    type(cons_value) :: current
+    type(cons_value) :: call_args(2)
+    character(len=:), allocatable :: owner
+    logical :: found
+
+    if (method_name == "setMacro" .and. target%tag == TAG_SYMBOL) then
+       found = ns_resolve(ns_current(), target%str_val, current, owner)
+       if (.not. found) then
+          call eval_error("var " // target%str_val // " does not exist")
+          return
+       end if
+       if (current%tag == TAG_FN) then
+          if (allocated(current%fn_val)) current%fn_val%is_macro = .true.
+       end if
+       call ns_intern(ns_current(), target%str_val, current)
+       val%tag = TAG_NIL
+       return
+    end if
+    if (method_name == "meta") then
+       val = call_builtin("meta", [target])
+       return
+    end if
+    if (method_name == "withMeta" .and. size(args) >= 1) then
+       call_args(1) = target
+       call_args(2) = args(1)
+       val = call_builtin("with-meta", call_args)
+       return
+    end if
+    if (method_name == "isInstance" .and. size(args) >= 1) then
+       ! real core.clj's own instance? is (fn [c x] (. c (isInstance
+       ! x))) -- target is c (one of clotran.clj's pseudo-class
+       ! keywords), args(1) is x. The native instance? builtin already
+       ! takes exactly (c x) in that order, so this is a direct
+       ! passthrough -- no separate override of instance? needed.
+       call_args(1) = target
+       call_args(2) = args(1)
+       val = call_builtin("instance?", call_args)
+       return
+    end if
+    if (method_name == "getName" .and. &
+         (target%tag == TAG_SYMBOL .or. target%tag == TAG_KEYWORD)) then
+       ! symbols/keywords are the only things core.clj's own source
+       ! calls .getName on (e.g. defn's :inline-naming fixup) -- both
+       ! already just store their name in str_val.
+       val%tag = TAG_STRING
+       val%str_val = target%str_val
+       return
+    end if
+    if (method_name == "applyTo" .and. size(args) >= 1) then
+       ! real core.clj's own apply is (. f (applyTo (seq args))) --
+       ! target is f, args(1) is the already-seq'd/spread argument
+       ! list. builtin_apply's own 2-arg case (f, one trailing seq) is
+       ! exactly this.
+       call_args(1) = target
+       call_args(2) = args(1)
+       val = call_builtin("apply", call_args)
+       return
+    end if
+    if (method_name == "deref" .and. target%tag == TAG_ATOM) then
+       val = call_builtin("deref", [target])
+       return
+    end if
+    if (method_name == "reset" .and. target%tag == TAG_ATOM .and. size(args) >= 1) then
+       call_args(1) = target
+       call_args(2) = args(1)
+       val = call_builtin("reset!", call_args)
+       return
+    end if
+    if (method_name == "swap" .and. target%tag == TAG_ATOM .and. size(args) >= 1) then
+       block
+         type(cons_value), allocatable :: swap_args(:)
+         allocate(swap_args(size(args) + 1))
+         swap_args(1) = target
+         swap_args(2:) = args
+         val = call_builtin("swap!", swap_args)
+       end block
+       return
+    end if
+    call eval_error("unsupported interop call: (. ...)")
+  end function eval_instance_call
+
+  ! (try form* (catch ...)?): any number of body forms (an implicit
+  ! do), then an optional trailing catch clause, identified
+  ! structurally (a trailing list starting with catch/catch*) rather
+  ! than by position -- core.clj's own macros (when-class, etc.)
+  ! generate a variable number of body forms ahead of catch, not
+  ! always exactly one. Only one catch clause. Not tail-cycled:
   ! try/catch isn't the hot recursive path TCO exists for.
+  !
+  ! Two distinct catch shapes, told apart by which name was used:
+  !  - (catch class sym form*): real Clojure's own shape. class is
+  !    unevaluated and ignored -- no real exception-class matching (no
+  !    class hierarchy to match against), a documented simplification
+  !    that catches anything regardless of what class names.
+  !  - (catch* sym form*): mal's own shape (no class at all) -- kept
+  !    working unchanged for test/regression/'s own borrowed suite,
+  !    which uses catch* exclusively and never with a class argument.
   function eval_try(ast, env) result(val)
     type(cons_value), intent(in) :: ast
     type(env_ref), intent(in) :: env
     type(cons_value) :: val
-    type(cons_value) :: body, catch_clause, catch_sym, catch_body
+    type(cons_ref) :: forms, l, cl
+    type(cons_value) :: form, catch_clause, catch_head, catch_sym
     type(env_ref) :: catch_env
+    integer :: n, k, body_n, cn
+    logical :: has_catch
 
-    body = list_first(list_rest(ast%list_val))
-    val = eval_form(body, env)
+    forms = list_rest(ast%list_val)
+    n = list_count(forms)
+    has_catch = .false.
+    body_n = n
+    l = forms
+    do k = 1, n
+       form = list_first(l)
+       if (k == n .and. form%tag == TAG_LIST) then
+          catch_head = list_first(form%list_val)
+          if (catch_head%tag == TAG_SYMBOL) then
+             if (catch_head%str_val == "catch" .or. catch_head%str_val == "catch*") then
+                has_catch = .true.
+                catch_clause = form
+                body_n = n - 1
+             end if
+          end if
+       end if
+       l = list_rest(l)
+    end do
+
+    val%tag = TAG_NIL
+    l = forms
+    do k = 1, body_n
+       val = eval_form(list_first(l), env)
+       if (has_error) exit
+       l = list_rest(l)
+    end do
     if (.not. has_error) return
-    if (list_count(list_rest(list_rest(ast%list_val))) == 0) return ! no catch: propagate
+    if (.not. has_catch) return ! no catch: propagate
 
-    catch_clause = list_first(list_rest(list_rest(ast%list_val)))
-    catch_sym = list_first(list_rest(catch_clause%list_val))
-    catch_body = list_first(list_rest(list_rest(catch_clause%list_val)))
+    cl = list_rest(catch_clause%list_val) ! drop "catch"/"catch*"
+    if (catch_head%str_val == "catch") cl = list_rest(cl) ! drop the (ignored) class
+    catch_sym = list_first(cl)
+    cl = list_rest(cl)
+    cn = list_count(cl)
 
     catch_env = env_new(env)
     call env_set(catch_env, catch_sym, last_error_value)
     has_error = .false. ! caught
-    val = eval_form(catch_body, catch_env)
+    val%tag = TAG_NIL
+    do k = 1, cn
+       val = eval_form(list_first(cl), catch_env)
+       if (has_error) exit
+       cl = list_rest(cl)
+    end do
   end function eval_try
 
   ! (defmacro name [params] body): real Clojure's actual syntax (not
   ! mal's (defmacro! name (fn* (params) body))) -- a macro is an
   ! ordinary closure (TAG_FN) with is_macro set, interned in *ns* under
   ! name, same as def.
+  !
+  ! &form/&env are always prepended to whatever params the user wrote,
+  ! same as real defmacro's own macroexpansion does (confirmed against
+  ! the real `clojure` CLI: even a macro whose params never name them
+  ! still receives them as its first two args) -- eval_macro_head
+  ! always supplies them to any macro call, so this special form has
+  ! to build the same shape of closure real defmacro's expansion would,
+  ! not just the user's own bare params.
   function eval_defmacro(ast, env) result(val)
     type(cons_value), intent(in) :: ast
     type(env_ref), intent(in) :: env
     type(cons_value) :: val
     type(cons_value) :: name
+    type(cons_ref) :: rest
+    type(cons_value) :: hd
 
     name = list_first(list_rest(ast%list_val))
+    rest = list_rest(list_rest(ast%list_val))
+    ! (defmacro name doc-string? attr-map? [params] body...) -- real
+    ! Clojure's own defmacro (core.clj line ~454) skips an optional
+    ! leading docstring and/or metadata map before the params vector;
+    ! clotran's defmacro special form has to match, since plenty of
+    ! core.clj's own macros (let, cond, ...) carry both. Without this,
+    ! the docstring itself gets mistaken for the params vector and the
+    ! real params vector ends up evaluated as a body form instead of
+    ! bound as parameter names.
+    if (list_count(rest) > 0) then
+       hd = list_first(rest)
+       if (hd%tag == TAG_STRING) rest = list_rest(rest)
+    end if
+    if (list_count(rest) > 0) then
+       hd = list_first(rest)
+       if (hd%tag == TAG_HASHMAP) rest = list_rest(rest)
+    end if
     val%tag = TAG_FN
     allocate(val%fn_val)
-    val%fn_val%params = list_first(list_rest(list_rest(ast%list_val)))
-    val%fn_val%body = wrap_body(list_rest(list_rest(list_rest(ast%list_val))))
+    ! Multi-arity: (defmacro name ([p1] b1) ([p2] b2) ...) -- same
+    ! clause shape (and same "first element of the first clause is
+    ! itself a params collection" test) as eval_fn's own multi-arity
+    ! detection. Real core.clj's own `or`/`and` are defined exactly
+    ! this way; a defmacro special form that only ever handled a
+    ! single params vector silently mis-parsed the whole first clause
+    ! as params.
+    block
+      type(cons_value) :: clause, inner_first
+      logical :: multi
+      integer :: n_clauses, i
+      type(cons_ref) :: clauses
+
+      clause = list_first(rest)
+      multi = .false.
+      if (clause%tag == TAG_LIST) then
+         inner_first = list_first(clause%list_val)
+         multi = (inner_first%tag == TAG_VECTOR .or. inner_first%tag == TAG_LIST)
+      end if
+      if (multi) then
+         n_clauses = list_count(rest)
+         val%fn_val%params = prepend_form_env_params(list_first(clause%list_val))
+         val%fn_val%body = maybe_pre_expand(wrap_body(list_rest(clause%list_val)), name%str_val)
+         if (n_clauses > 1) then
+            allocate(val%fn_val%extra)
+            allocate(val%fn_val%extra%ptr)
+            val%fn_val%extra%ptr%refcount = 1
+            arity_clauses_node_total_allocated = arity_clauses_node_total_allocated + 1
+            allocate(val%fn_val%extra%ptr%params(n_clauses - 1))
+            allocate(val%fn_val%extra%ptr%bodies(n_clauses - 1))
+            clauses = list_rest(rest)
+            do i = 1, n_clauses - 1
+               clause = list_first(clauses)
+               val%fn_val%extra%ptr%params(i) = prepend_form_env_params(list_first(clause%list_val))
+               val%fn_val%extra%ptr%bodies(i) = maybe_pre_expand(wrap_body(list_rest(clause%list_val)), name%str_val)
+               clauses = list_rest(clauses)
+            end do
+         end if
+      else
+         val%fn_val%params = prepend_form_env_params(list_first(rest))
+         val%fn_val%body = maybe_pre_expand(wrap_body(list_rest(rest)), name%str_val)
+      end if
+    end block
     val%fn_val%env = env
     val%fn_val%is_macro = .true.
     call ns_intern(ns_current(), name%str_val, val)
   end function eval_defmacro
+
+  ! &form/&env, prepended to a [params] vector that doesn't already
+  ! name them -- shared by eval_defmacro and eval_defmacro_bang, both
+  ! of which build a macro closure whose params come from the user's
+  ! own (real Clojure or mal-style) source rather than already
+  ! including them the way core.clj's own raw (fn* [&form &env & decl]
+  ! ...) bootstrap pattern (let/loop/fn) explicitly does.
+  function prepend_form_env_params(user_params) result(new_params)
+    type(cons_value), intent(in) :: user_params
+    type(cons_value) :: new_params
+    type(cons_value), allocatable :: items(:)
+    type(cons_value) :: form_sym, env_sym
+    integer :: n, i
+
+    form_sym%tag = TAG_SYMBOL
+    form_sym%str_val = "&form"
+    env_sym%tag = TAG_SYMBOL
+    env_sym%str_val = "&env"
+    ! binding_count/binding_nth (not vector_count/vector_nth directly)
+    ! -- mal's own defmacro! convention allows paren params (pred a b),
+    ! not just a vector, same dual shape bind_params already accepts.
+    n = binding_count(user_params)
+    allocate(items(n + 2))
+    items(1) = form_sym
+    items(2) = env_sym
+    do i = 1, n
+       items(i + 2) = binding_nth(user_params, i - 1)
+    end do
+    new_params = make_vector(items)
+  end function prepend_form_env_params
+
+  ! Does form contain symbol name anywhere (any tag, any depth)? Used
+  ! to gate pre_expand (see eval_defmacro): pre-expanding EVERY
+  ! defmacro's body is not just wasted work but actively harmful --
+  ! pre_expand's own eval_macro_head calls run nested macro bodies for
+  ! real, with whatever happens to be bound at THIS macro's own define
+  ! time, which is wrong for a nested macro call that isn't part of
+  ! the self-reference problem pre_expand exists for (confirmed: it
+  ! spuriously ran even?'s own throw branch while pre-expanding loop's
+  ! unrelated internal `let` usage). Only a macro whose own body refers
+  ! to itself by name (like assert-args, via its own internal `let`
+  ! reduction step) actually needs freezing -- everything else works
+  ! correctly resolving its nested macro calls dynamically, same as
+  ! before pre_expand existed.
+  recursive function contains_symbol(form, name) result(yes)
+    type(cons_value), intent(in) :: form
+    character(len=*), intent(in) :: name
+    logical :: yes
+    type(cons_ref) :: l
+    integer :: n, i
+
+    yes = .false.
+    select case (form%tag)
+    case (TAG_SYMBOL)
+       yes = (form%str_val == name)
+    case (TAG_LIST)
+       if (.not. allocated(form%list_val)) return
+       n = list_count(form%list_val)
+       l = form%list_val
+       do i = 1, n
+          if (contains_symbol(list_first(l), name)) then
+             yes = .true.
+             return
+          end if
+          l = list_rest(l)
+       end do
+    case (TAG_VECTOR)
+       if (.not. allocated(form%vector_val)) return
+       n = vector_count(form%vector_val)
+       do i = 0, n - 1
+          if (contains_symbol(vector_nth(form%vector_val, i), name)) then
+             yes = .true.
+             return
+          end if
+       end do
+    end select
+  end function contains_symbol
+
+  ! Freezing a macro's own internal use of another macro at ITS OWN
+  ! define time (matching real Clojure's compile-time Var resolution)
+  ! was tried here, specifically for assert-args's own internal `let`
+  ! reduction step (which validates ITS OWN bindings via assert-args
+  ! again once `let` is the real, destructuring macro -- genuine,
+  ! otherwise endless, mutual recursion once `let` stops being the
+  ! simple bootstrap version). Every variant hit the same wall:
+  ! clotran's cons_value/env model has no notion of "this call site
+  ! always means THIS specific Var", only ever "resolve this name
+  ! fresh, right now" -- so freezing the STRUCTURE (let -> let*)
+  ! necessarily also freezes (or loses track of) WHICH ENV the frozen
+  ! pieces' own free variables (assert-args's `pairs`, the caller
+  ! macro's `bindings`) resolve in, and no combination tried got both
+  ! right at once. Pre_expand/contains_symbol above are left in place
+  ! (a real, correctly-scoped tool for anything that doesn't hit this
+  ! specific tension) but nothing currently calls them -- eval_defmacro
+  ! just uses the body as written; eval_macro_head's own
+  ! macro_expand_depth cap is what actually keeps this specific
+  ! mutual recursion from crashing (a real Fortran stack overflow)
+  ! instead of failing cleanly. Fixing this for real needs an actual
+  ! Var-like indirection (a call site that can point at a SPECIFIC
+  ! macro value, not just a name to re-resolve), which is a real
+  ! feature, not a bug fix -- see NOTES.md.
+  function maybe_pre_expand(body, name) result(out)
+    type(cons_value), intent(in) :: body
+    character(len=*), intent(in) :: name
+    type(cons_value) :: out
+    out = body
+  end function maybe_pre_expand
 
   ! (defmacro! name expr): mal's own calling convention -- expr is
   ! evaluated (typically a (fn* ...) closure) and the result's is_macro
@@ -652,7 +1202,14 @@ contains
     name = list_first(list_rest(ast%list_val))
     val = eval_form(list_first(list_rest(list_rest(ast%list_val))), env)
     if (has_error) return
-    if (allocated(val%fn_val)) val%fn_val%is_macro = .true.
+    if (allocated(val%fn_val)) then
+       val%fn_val%is_macro = .true.
+       ! Same &form/&env prepending eval_defmacro needs -- the fn*
+       ! expr here is written to mal's own convention (no &form/&env
+       ! at all), but eval_macro_head always supplies them to any
+       ! macro call regardless of how it was defined.
+       val%fn_val%params = prepend_form_env_params(val%fn_val%params)
+    end if
     call ns_intern(ns_current(), name%str_val, val)
   end function eval_defmacro_bang
 
@@ -676,24 +1233,62 @@ contains
   ! Rebinds ast in place -- callers evaluate the expansion themselves
   ! (in eval_form's loop, in the calling env, tail; in macroexpand,
   ! by looping this again).
+  !
+  ! Real Clojure always supplies &form (the whole raw calling form)
+  ! and &env (a compile-time locals map) as the first two args to
+  ! EVERY macro call -- a property of invocation, not of how the
+  ! macro itself was written (confirmed against the real `clojure`
+  ! CLI: even a macro whose own params are just [& decl], never
+  ! naming &form/&env, receives them as decl's first two elements
+  ! anyway). defmacro's own bootstrap only *looks* like it's adding
+  ! them itself (its add-implicit-args helper rewrites [params] into
+  ! [&form &env params] before defn sees it) -- but that's it
+  ! declaring names for what the caller was always going to supply
+  ! regardless. Without this, core.clj's own real fn/let/loop/defmacro
+  ! (all written expecting exactly this) get every one of their own
+  ! params shifted by two and silently misbound. &env has no real
+  ! content here (no compile-time locals tracking) -- always nil.
   subroutine eval_macro_head(ast, macro_val)
     type(cons_value), intent(inout) :: ast
     type(cons_value), intent(in) :: macro_val
     type(cons_value), allocatable :: raw_args(:)
+    type(cons_value) :: env_placeholder
     type(env_ref) :: child
     type(cons_ref) :: l
     integer :: n, i
 
     n = list_count(ast%list_val) - 1
-    allocate(raw_args(n))
+    allocate(raw_args(n + 2))
+    raw_args(1) = ast
+    raw_args(2) = env_placeholder ! nil
     l = list_rest(ast%list_val)
     do i = 1, n
-       raw_args(i) = list_first(l)
+       raw_args(i + 2) = list_first(l)
        l = list_rest(l)
     end do
     child = env_new(macro_val%fn_val%env)
     call bind_params(macro_val%fn_val%params, raw_args, child)
+    ! macro_expand_depth: a hard safety net, not a fix -- some macro
+    ! interactions core.clj itself relies on real Clojure's COMPILE-TIME
+    ! frozen macro resolution to terminate (assert-args's own internal
+    ! `let` reduction, once `let` becomes the real destructuring macro,
+    ! validates ITS OWN bindings via assert-args again -- confirmed
+    ! genuine, otherwise endless, mutual recursion; see NOTES.md).
+    ! Neither resolving `let` fresh each time (clotran's normal,
+    ! correct behavior everywhere else) nor pre_expand-freezing it
+    ! ahead of time (tried; broke which env `pairs`/`bindings` resolve
+    ! in instead) fully resolves this without a real compile-time Var
+    ! model clotran doesn't have yet. Until then: cap macro-expansion
+    ! depth so a case like this fails cleanly (a catchable error) up
+    ! through the trampoline instead of blowing the real call stack.
+    macro_expand_depth = macro_expand_depth + 1
+    if (macro_expand_depth > 60) then
+       call eval_error("macro expansion too deep (possible runaway macro recursion)")
+       macro_expand_depth = macro_expand_depth - 1
+       return
+    end if
     ast = eval_form(macro_val%fn_val%body, child)
+    macro_expand_depth = macro_expand_depth - 1
   end subroutine eval_macro_head
 
   ! (macroexpand form): an ordinary function in real Clojure, not a
@@ -720,6 +1315,144 @@ contains
     val = form
   end function builtin_macroexpand
 
+  ! Real Clojure compiles a fn/macro's body once, at definition time --
+  ! any macro call written directly in that body (not inside a
+  ! backtick template, which is DATA until spliced and evaluated
+  ! later) gets permanently expanded using whatever that name resolves
+  ! to RIGHT THEN, baked into the compiled bytecode forever, regardless
+  ! of any LATER redefinition of that name. clotran has no separate
+  ! compile step -- every eval_form call re-resolves a macro name from
+  ! *ns* fresh -- so without this, a macro whose own body uses another
+  ! macro (e.g. core.clj's own assert-args uses `let` internally, in
+  ! its self-recursive reduction step) keeps re-resolving that name on
+  ! every call. That's silently fine right up until the name gets
+  ! REDEFINED later in the same file (core.clj's own `let`, at first
+  ! just `(cons 'let* decl)`, becomes the real destructuring macro
+  ! partway through -- and that real `let` validates ITS OWN bindings
+  ! via assert-args, which reduces via `let` again): genuine, endless
+  ! mutual recursion between the two, never seen in real Clojure only
+  ! because its compiler already froze assert-args's own internal
+  ! `let` to the simple one at assert-args's OWN definition time.
+  !
+  ! Fix: pre_expand walks a fn/macro body ONCE, right after it's built
+  ! (see eval_fn/eval_defmacro/eval_defmacro_bang), expanding every
+  ! macro call it finds in actual code position using *ns* as it
+  ! stands right now -- mirroring real Clojure's compile-time
+  ! semantics without needing a real compiler. Left alone: anything
+  ! quoted (data), and everything inside a quasiquote template except
+  ! its own unquote/splice-unquote positions (which ARE code, run each
+  ! time the template is used) -- pre_expand_qq mirrors qq_expand's own
+  ! traversal for exactly that distinction. A sub-expansion that errors
+  ! (e.g. a forward reference to something not defined yet) is left
+  ! exactly as written and picked up normally at actual call time,
+  ! same as this project's usual per-form tolerance elsewhere.
+  recursive function pre_expand(form) result(expanded)
+    type(cons_value), intent(in) :: form
+    type(cons_value) :: expanded
+    type(cons_value) :: head, macro_val, inner
+    type(cons_value), allocatable :: items(:)
+    type(cons_ref) :: l
+    integer :: n, i
+
+    if (form%tag /= TAG_LIST) then
+       expanded = form
+       return
+    end if
+    if (.not. allocated(form%list_val)) then
+       expanded = form
+       return
+    end if
+    n = list_count(form%list_val)
+    if (n == 0) then
+       expanded = form
+       return
+    end if
+    head = list_first(form%list_val)
+    if (head%tag == TAG_SYMBOL) then
+       if (head%str_val == "quote") then
+          expanded = form
+          return
+       end if
+       if (head%str_val == "quasiquote" .and. n == 2) then
+          inner = pre_expand_qq(list_first(list_rest(form%list_val)))
+          expanded = make_list([head, inner])
+          return
+       end if
+       if (resolves_to_macro(head%str_val, macro_val)) then
+          block
+            type(cons_value) :: ast_copy
+            ast_copy = form
+            call eval_macro_head(ast_copy, macro_val)
+            if (has_error) then
+               has_error = .false.
+               expanded = form
+               return
+            end if
+            expanded = pre_expand(ast_copy)
+          end block
+          return
+       end if
+    end if
+    allocate(items(n))
+    l = form%list_val
+    do i = 1, n
+       items(i) = pre_expand(list_first(l))
+       l = list_rest(l)
+    end do
+    expanded = make_list(items)
+  end function pre_expand
+
+  ! Companion to pre_expand for the inside of a quasiquote template --
+  ! same shape as qq_expand's own tag dispatch, but pre-expanding
+  ! (rather than evaluating) unquote/splice-unquote content and
+  ! otherwise copying the literal template structure untouched. No
+  ! nesting-depth tracking, matching qq_expand's own documented
+  ! simplification.
+  recursive function pre_expand_qq(form) result(out)
+    type(cons_value), intent(in) :: form
+    type(cons_value) :: out
+    type(cons_value) :: head_e, inner
+    type(cons_value), allocatable :: items(:)
+    type(cons_ref) :: l
+    integer :: n, i
+
+    select case (form%tag)
+    case (TAG_LIST)
+       n = 0
+       if (allocated(form%list_val)) n = list_count(form%list_val)
+       if (n == 0) then
+          out = form
+          return
+       end if
+       if (n == 2) then
+          head_e = list_first(form%list_val)
+          if (head_e%tag == TAG_SYMBOL .and. &
+               (head_e%str_val == "unquote" .or. head_e%str_val == "splice-unquote")) then
+             inner = pre_expand(list_first(list_rest(form%list_val)))
+             out = make_list([head_e, inner])
+             return
+          end if
+       end if
+       allocate(items(n))
+       l = form%list_val
+       do i = 1, n
+          items(i) = pre_expand_qq(list_first(l))
+          l = list_rest(l)
+       end do
+       out = make_list(items)
+    case (TAG_VECTOR)
+       n = 0
+       if (allocated(form%vector_val)) n = vector_count(form%vector_val)
+       allocate(items(n))
+       do i = 1, n
+          items(i) = pre_expand_qq(vector_nth(form%vector_val, i - 1))
+       end do
+       out = make_vector(items)
+    case default
+       out = form ! symbols, scalars, ... -- literal template data
+    end select
+  end function pre_expand_qq
+
   ! Special-form names never get namespace-qualified or auto-gensym'd
   ! by quasiquote -- they're recognized syntactically here, never
   ! stored in any namespace, so there's nothing to qualify them with.
@@ -727,12 +1460,14 @@ contains
     character(len=*), intent(in) :: name
     logical :: yes
     select case (name)
-    case ("def!", "def", "defmacro", "defmacro!", "let*", "fn*", "if", "do", "quote", "quasiquote", &
-         "unquote", "splice-unquote", "eval", "load-file", "in-ns", "ns", "var", ".", &
+    case ("def!", "def", "defmacro", "defmacro!", "let*", "loop*", "fn*", "if", "do", "quote", "quasiquote", &
+         "unquote", "splice-unquote", "eval", "load-file", "in-ns", "ns", "var", ".", "new", &
          "try*", "try", "catch*", "catch")
        yes = .true.
     case default
-       yes = .false.
+       ! (.method obj args...) sugar for (. obj (method args...)) --
+       ! see eval_form's dispatch -- covers any name, not a fixed list.
+       yes = (len(name) > 1 .and. name(1:1) == ".")
     end select
   end function is_special_form
 
@@ -1563,6 +2298,56 @@ contains
     case ("keyword?")
        val%tag = TAG_BOOL
        val%bool_val = (args(1)%tag == TAG_KEYWORD)
+    case ("instance?")
+       ! Real core.clj's own instance? does (. c (isInstance x)) --
+       ! real reflection clotran doesn't have. clotran.clj overrides
+       ! it with this instead: c is one of a small, fixed set of
+       ! keyword pseudo-classes clotran.clj itself defines (e.g.
+       ! (def clojure.lang.Symbol :clojure.lang.Symbol)) so a bare
+       ! `clojure.lang.Symbol` in core.clj's own unmodified source
+       ! still evaluates to something -- grows one entry at a time as
+       ! core.clj's walk turns up the next pseudo-class it needs.
+       val%tag = TAG_BOOL
+       val%bool_val = .false.
+       if (args(1)%tag == TAG_KEYWORD) then
+          select case (args(1)%str_val)
+          case ("clojure.lang.Symbol")
+             val%bool_val = (args(2)%tag == TAG_SYMBOL)
+          case ("clojure.lang.Keyword")
+             val%bool_val = (args(2)%tag == TAG_KEYWORD)
+          case ("clojure.lang.IPersistentVector")
+             val%bool_val = (args(2)%tag == TAG_VECTOR)
+          case ("clojure.lang.IPersistentMap")
+             val%bool_val = (args(2)%tag == TAG_HASHMAP)
+          case ("clojure.lang.ISeq")
+             val%bool_val = (args(2)%tag == TAG_LIST)
+          case ("String")
+             val%bool_val = (args(2)%tag == TAG_STRING)
+          case ("Boolean")
+             val%bool_val = (args(2)%tag == TAG_BOOL)
+          case ("clojure.lang.IMeta")
+             ! Everything clotran itself supports metadata on --
+             ! matches real Clojure's own IMeta implementers (symbols,
+             ! collections, fns), excluding keywords/strings/numbers,
+             ! which real Clojure also never allows metadata on.
+             val%bool_val = (args(2)%tag == TAG_LIST .or. args(2)%tag == TAG_VECTOR .or. &
+                  args(2)%tag == TAG_HASHMAP .or. args(2)%tag == TAG_SYMBOL .or. args(2)%tag == TAG_FN)
+          case ("clojure.lang.Counted")
+             ! Everything clotran can already count in O(1) -- used by
+             ! counted?/empty?; nil is deliberately excluded, matching
+             ! real Clojure (empty? falls back to (not (seq coll)) for it).
+             val%bool_val = (args(2)%tag == TAG_LIST .or. args(2)%tag == TAG_VECTOR .or. &
+                  args(2)%tag == TAG_HASHMAP .or. args(2)%tag == TAG_SET .or. args(2)%tag == TAG_STRING)
+          case ("clojure.lang.IPersistentList")
+             val%bool_val = (args(2)%tag == TAG_LIST)
+          case ("clojure.lang.IDeref")
+             val%bool_val = (args(2)%tag == TAG_ATOM)
+          case default
+             call eval_error("instance?: unknown pseudo-class '" // args(1)%str_val // "'")
+          end select
+       else
+          call eval_error("instance?: c must be one of clotran.clj's registered pseudo-classes")
+       end if
     case ("vector?")
        val%tag = TAG_BOOL
        val%bool_val = (args(1)%tag == TAG_VECTOR)

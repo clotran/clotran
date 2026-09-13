@@ -170,15 +170,15 @@ program eval_test
   ! recognized, same as def!/def). Any value can be thrown, not just a
   ! string -- and internal errors (symbol not found, nth out of
   ! bounds) are catchable the same way, wrapped as a string.
-  call expect_result("20a. try with no error just returns the body: ", env, "(try 123 (catch e 456))", "123", all_ok)
+  call expect_result("20a. try with no error just returns the body: ", env, "(try 123 (catch Exception e 456))", "123", all_ok)
   call expect_result("20b. an internal error is catchable, as a string: ", env, &
-       "(try abc (catch exc exc))", '"'//"'abc' not found"//'"', all_ok)
+       "(try abc (catch Exception exc exc))", '"'//"'abc' not found"//'"', all_ok)
   call expect_result("20c. nth out of bounds errors, catchably: ", env, &
-       "(try (nth (list) 1) (catch exc 99))", "99", all_ok)
+       "(try (nth (list) 1) (catch Exception exc 99))", "99", all_ok)
   call expect_result("20d. (throw x) throws x, caught and bound: ", env, &
-       "(try (throw (list 1 2)) (catch e e))", "(1 2)", all_ok)
+       "(try (throw (list 1 2)) (catch Exception e e))", "(1 2)", all_ok)
   call expect_result("20e. throw is an ordinary function, usable as a value: ", env, &
-       "(try (map throw (list 99)) (catch e e))", "99", all_ok)
+       "(try (map throw (list 99)) (catch Exception e e))", "99", all_ok)
   call expect_result("20f. try*/catch* (mal's names) work too: ", env, "(try* 7 (catch* e 8))", "7", all_ok)
 
   ! 21. apply/map/type predicates.

@@ -82,12 +82,56 @@ contains
 
   ! ---- node-level operations, keyed by (shift, hash) ----
 
-  recursive function node_get(node, shift, h, key, found) result(val)
+  ! hamt_slot has no assignment(=) of its own, so a whole-array copy
+  ! (`new_node%slots(:) = old%slots(:)`, node_assoc/node_dissoc's own
+  ! path-copy) falls back to default derived-type assignment -- which,
+  ! same as NOTES.md's "automatic reallocation on array assignment
+  ! cannot be trusted for an array whose element type has assignment
+  ! (=)" gotcha, silently mishandles bucket_keys/bucket_vals (allocatable
+  ! arrays of cons_value, which DOES have its own assignment(=)) one
+  ! level down. Invisible for the small int/string values the HAMT's
+  ! own unit test uses, but corrupts real closures (cons_value's fn_val
+  ! -> closure_t -> nested cons_value/env_ref chain) once *ns*'s own
+  ! bindings promote to a real HAMT -- confirmed via lldb, a crash deep
+  ! in flang's own runtime copying a value back out of a slot that was
+  ! never actually copied correctly going in. Fix: copy every field
+  ! explicitly, bucket arrays pre-allocated to the right size first
+  ! (same "never rely on reallocate-on-assignment" rule as everywhere
+  ! else this bug has turned up).
+  subroutine copy_slot(dst, src)
+    type(hamt_slot), intent(inout) :: dst
+    type(hamt_slot), intent(in) :: src
+    integer :: i, n
+    dst%kind = src%kind
+    dst%key = src%key
+    dst%val = src%val
+    dst%child = src%child
+    if (allocated(dst%bucket_keys)) deallocate(dst%bucket_keys)
+    if (allocated(dst%bucket_vals)) deallocate(dst%bucket_vals)
+    if (allocated(src%bucket_keys)) then
+       n = size(src%bucket_keys)
+       allocate(dst%bucket_keys(n))
+       allocate(dst%bucket_vals(n))
+       do i = 1, n
+          dst%bucket_keys(i) = src%bucket_keys(i)
+          dst%bucket_vals(i) = src%bucket_vals(i)
+       end do
+    end if
+  end subroutine copy_slot
+
+  ! A subroutine with an intent(out) val, not a function returning
+  ! cons_value -- see NOTES.md's "automatic reallocation on array
+  ! assignment cannot be trusted" gotcha: the same class of flang
+  ! assignment(=) trouble turned up here too, once *ns*'s own bindings
+  ! (real closures, not the small test values hamt_get/hamt_contains's
+  ! own unit test used) grew large enough to promote to a real HAMT --
+  ! argument association isn't assignment(=) and isn't affected.
+  recursive subroutine node_get(node, shift, h, key, val, found)
     type(hamt_ref), intent(in) :: node
     integer, intent(in) :: shift, h
     type(cons_value), intent(in) :: key
+    type(cons_value), intent(out) :: val
     logical, intent(out) :: found
-    type(cons_value) :: val
     integer :: idx, j
 
     found = .false.
@@ -100,7 +144,7 @@ contains
           found = .true.
        end if
     case (HAMT_CHILD)
-       val = node_get(node%ptr%slots(idx)%child, shift + BITS, h, key, found)
+       call node_get(node%ptr%slots(idx)%child, shift + BITS, h, key, val, found)
     case (HAMT_BUCKET)
        do j = 1, size(node%ptr%slots(idx)%bucket_keys)
           if (value_equal(node%ptr%slots(idx)%bucket_keys(j), key)) then
@@ -110,7 +154,7 @@ contains
           end if
        end do
     end select
-  end function node_get
+  end subroutine node_get
 
   ! Path-copies from node_in down to key's slot, sharing every
   ! untouched sibling by reference (same structural-sharing shape as
@@ -124,20 +168,20 @@ contains
     type(hamt_ref) :: new_ref
     type(hamt_node), pointer :: new_node
     type(hamt_ref) :: empty_child
-    integer :: idx, j, n_old
+    integer :: idx, j, n_old, i
     type(cons_value), allocatable :: new_keys(:), new_vals(:)
 
     allocate(new_node)
     new_node%refcount = 1
     hamt_node_total_allocated = hamt_node_total_allocated + 1
-    ! Pre-allocated to exactly BRANCH, then assigned in place -- never
-    ! a bare `new_node%slots = node_in%ptr%slots` relying on automatic
-    ! reallocate-on-assignment, confirmed unreliable for an array of a
-    ! type with defined assignment (see array_map_keys's own fix in
-    ! PersistentArrayMap.f90 for the full story).
+    ! Pre-allocated to exactly BRANCH, then copied slot-by-slot via
+    ! copy_slot -- never a bare `new_node%slots = node_in%ptr%slots`
+    ! (see copy_slot's own header for why that corrupts real closures).
     allocate(new_node%slots(BRANCH))
     if (associated(node_in%ptr)) then
-       new_node%slots(:) = node_in%ptr%slots(:)
+       do i = 1, BRANCH
+          call copy_slot(new_node%slots(i), node_in%ptr%slots(i))
+       end do
     end if
 
     idx = iand(ishft(h, -shift), MASK) + 1
@@ -229,7 +273,7 @@ contains
     logical, intent(out) :: removed
     type(hamt_ref) :: new_ref
     type(hamt_node), pointer :: new_node
-    integer :: idx, j, n_old
+    integer :: idx, j, n_old, i
     type(cons_value), allocatable :: new_keys(:), new_vals(:)
 
     removed = .false.
@@ -238,10 +282,12 @@ contains
     allocate(new_node)
     new_node%refcount = 1
     hamt_node_total_allocated = hamt_node_total_allocated + 1
-    ! Pre-allocated then assigned in place -- see node_assoc's own
-    ! comment on this same pattern.
+    ! Pre-allocated then copied slot-by-slot -- see node_assoc's own
+    ! comment on this same pattern (copy_slot).
     allocate(new_node%slots(BRANCH))
-    new_node%slots(:) = node_in%ptr%slots(:)
+    do i = 1, BRANCH
+       call copy_slot(new_node%slots(i), node_in%ptr%slots(i))
+    end do
 
     idx = iand(ishft(h, -shift), MASK) + 1
     select case (new_node%slots(idx)%kind)
@@ -317,7 +363,7 @@ contains
     type(cons_value), intent(in) :: key
     type(cons_value) :: val
     logical :: found
-    val = node_get(root, 0, hash_of(key), key, found)
+    call node_get(root, 0, hash_of(key), key, val, found)
   end function hamt_get
 
   function hamt_contains(root, key) result(bool)
@@ -325,7 +371,7 @@ contains
     type(cons_value), intent(in) :: key
     logical :: bool
     type(cons_value) :: val
-    val = node_get(root, 0, hash_of(key), key, bool)
+    call node_get(root, 0, hash_of(key), key, val, bool)
   end function hamt_contains
 
   function hamt_assoc(root, key, val, is_new) result(new_root)

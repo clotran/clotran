@@ -190,10 +190,30 @@ no equally well-known bare alternative to point someone at yet.
 
 The plan is to literally load the actual upstream `core.clj` (~8,400
 lines), not hand-write a fresh core library that merely matches real
-Clojure's behavior. That first requires adapting this project's own
-reader/evaluator to handle what real bootstrap Clojure source
-actually looks like -- confirmed empirically against the real file,
-not assumed:
+Clojure's behavior. `src/clj/clojure/core.clj` stays byte-for-byte
+pristine forever -- not even additively patched with reader
+conditionals -- because real core.clj has never had any: `.cljc` and
+its `#?(:clj ...)` reader-conditional convention weren't introduced
+until Clojure 1.7 (2015) and are used by later, independently-written
+cross-host *libraries* (`clojure.spec.alpha` and similar), never by
+the JVM's own `core.clj` or ClojureScript's own `cljs.core` -- those
+two are separately, independently hand-written files that happen to
+mirror each other's API, not one core mechanically deriving the
+other. `src/clj/clotran.clj` is this project's own equivalent of that
+relationship: a small, separate file loaded FIRST (before core.clj,
+not after -- see its own header for why), populating just the
+`clojure.lang.*` interop surface (`clojure.lang.RT`,
+`clojure.lang.PersistentList`, `clojure.lang.Util`, a handful of
+`instance?` pseudo-classes) that real core.clj's own bootstrap-era
+definitions (`cons`, `list`, `fn`, ...) call into from their very
+first few forms -- grown one entry at a time as walking further into
+core.clj turns up the next thing it needs, never by editing core.clj
+itself.
+
+Getting even the earliest lines of core.clj to parse and run at all
+required adapting this project's own reader/evaluator to handle what
+real bootstrap Clojure source actually looks like -- confirmed
+empirically against the real file, not assumed:
 
 - **`fn*` needed an optional self-reference name** (`(fn* name
   [params] body)`), used throughout core.clj's own bootstrap (`(fn*
@@ -202,17 +222,6 @@ not assumed:
   built (`env_set` mutates the shared node in place).
 - **`defmacro` had the same silently-drops-extra-body-forms bug `fn*`
   had before** -- same fix, factored into a shared `wrap_body` helper.
-- **Reader conditionals** (`#?(:cljf a :clj b)`, `:cljf` is this
-  project's own feature key alongside real Clojure's `:clj`/`:cljs`)
-  -- every Java interop call in core.clj becomes `#?(:cljf
-  (native-equivalent ...) :clj (. clojure.lang.RT ...))`.
-- **`clotran.native`**, the direct structural analogue of
-  `clojure.lang.RT`: every builtin is now interned there too,
-  alongside `clojure.core`. Needed because core.clj's own `(def
-  first ...)` etc. will completely overwrite `clojure.core`'s
-  binding once patched -- the reader-conditional native fallback
-  needs somewhere stable to call, since `first` itself won't stay
-  the raw builtin.
 - **`^META FORM` now attaches META directly to FORM's own metadata,
   never evaluated** -- real Clojure's actual reader behavior, not
   mal's (and this project's former) `(with-meta FORM META)`, an
@@ -737,6 +746,114 @@ that hand-writing adapters gets tedious, a small generator reading a
 library's real signatures and emitting the marshaling code (the
 `f2py`/SWIG pattern) is the right next tool -- not a different
 architecture, just less boilerplate per function.
+
+## Getting `defn`/`let`/`loop` to actually work against real core.clj
+
+Getting past `defn`'s own bootstrap (previously it silently failed to
+bind at all) needed several more real fixes, found by walking further
+into core.clj than before rather than by inspection:
+
+- **Load order: `clotran.clj` must load *before* `core.clj`, not
+  after.** core.clj's own bootstrap-era `cons`/`list`/`fn` call
+  straight into `clojure.lang.RT` from their very first few forms,
+  long before the file finishes -- loading it after meant every one of
+  those calls failed for the entire rest of the file (a warning at
+  startup, easy to miss the real cause of).
+- **`(. Class member)` (bare-symbol field access) vs `(. Class
+  (member))` (a real, parenthesized 0-arg method call) look identical
+  once args are both empty** -- `eval_static_call` used to guess by the
+  found value's own tag (assume a builtin/fn value must mean "call
+  it"), which broke `clojure.lang.PersistentList`'s own `creator`
+  field (a bare-symbol field that just *holds* an IFn, never meant to
+  be invoked on the spot -- `list` itself came out `()` instead of the
+  builtin). Fixed by passing the shape (bare symbol vs parenthesized)
+  down as an explicit flag instead of inferring it from the value.
+- **`defmacro`/`defn` both need to skip an optional leading docstring
+  and/or metadata map before the params vector** (`(defmacro name
+  "doc"? {attrs}? [params] body)`) -- confirmed against real
+  `clojure`'s own `defmacro`/`defn` source, which do exactly this
+  before ever binding params. Without it, the docstring itself gets
+  mistaken for the params vector, and the *real* params vector ends up
+  evaluated as an ordinary body form (its own symbols looked up as
+  values) instead of bound as parameter names -- broke `let`, `cond`,
+  and every other core.clj macro that carries a docstring.
+- **Multi-arity `defmacro`** (`(defmacro name ([p1] b1) ([p2] b2)
+  ...)`, same clause shape multi-arity `fn*` already had) -- real
+  core.clj's own `or`/`and` are defined exactly this way; the
+  `defmacro` special form only ever parsed a single params vector,
+  silently misreading the whole first clause as params.
+- **`loop*`/`recur` had never actually been implemented** -- a real,
+  previously-invisible gap (mal's own borrowed test suite never
+  exercises `loop`, only named self-recursive `fn*`). Implemented by
+  reusing the exact tail-call machinery `fn*`'s own `recur` already
+  has: `loop*` builds an ordinary `TAG_FN` closure (params = the
+  binding names, body = the loop body, env = the loop's own env) bound
+  to the symbol `recur`, so `(recur args...)` inside the body is just
+  an ordinary call into that closure -- no separate loop-specific
+  tail-call path needed.
+- **`new`/`(Class. args...)`** -- neither existed. `new` evaluates and
+  returns its first constructor arg (matching how `throw`/`catch`
+  already treat any value as throwable regardless of a real type --
+  covers the common `(new SomeException "msg")` shape), with
+  `clojure.lang.Atom` specifically constructing a real atom.
+  `(Class. args...)` is reader/eval-time sugar for `(new Class
+  args...)`, rewritten the same way `.method` sugar already is.
+- **A real, previously-latent HAMT bug**: `node_assoc`/`node_dissoc`'s
+  own path-copy did `new_node%slots(:) = old%slots(:)`, a bulk array
+  assignment of `hamt_slot` -- a type with no `assignment(=)` of its
+  own, so Fortran falls back to default derived-type assignment, which
+  silently mishandles `bucket_keys`/`bucket_vals` (allocatable arrays
+  of `cons_value`, which *does* have one) one level down -- the same
+  "automatic reallocation on array assignment cannot be trusted"
+  gotcha already catalogued above, just one level deeper than where it
+  was first found. Invisible for the HAMT's own unit test (small
+  int/string values); corrupted real closures once `*ns*` itself
+  (namespaces are backed by this same HAMT past 8 entries) grew large
+  enough to promote. Fixed the same proven way: `copy_slot` copies
+  every field explicitly, bucket arrays pre-allocated to size first.
+
+**Known, currently-unresolved limitation: `assert-args` vs `let`.**
+Real core.clj's own `assert-args` (used by `let`, `loop`, `binding`,
+`if-let`, and others to validate their bindings vector) has, in its
+own source, `~(let [more (nnext pairs)] (when more (list* \`assert-args
+more)))` -- a self-recursive reduction that uses `let` internally.
+This is completely inert in real Clojure: the compiler resolves `let`
+to a specific Var *once*, at the time `assert-args` itself is
+compiled (while `let` is still its own simple bootstrap version, long
+before core.clj redefines it), and that resolution is permanent,
+regardless of `let` being redefined later in the same file. clotran
+has no such compile-time Var model -- every macro call is resolved
+fresh, dynamically, by name, every single time it runs (which is
+otherwise exactly correct and is what the rest of this project relies
+on). Once `let` becomes the real, validating, destructuring macro
+(core.clj redefines it partway through the file), `assert-args`'s own
+internal `let` usage starts resolving to *that* `let` -- which
+validates its own bindings via `assert-args` again -- genuine,
+unbounded mutual recursion, confirmed via lldb (a stack that grows
+without ever repeating a shorter cycle, not merely deep).
+
+Tried and rejected: pre-expanding (freezing) a macro's own body at its
+own `defmacro` time, matching what real Clojure's compiler does --
+implemented (`pre_expand`/`contains_symbol`, still present but
+currently unused, gated so it only ever touched `assert-args`
+specifically) but every variant hit the same wall: freezing the
+*structure* (`let` -> `let*`) necessarily also has to decide which
+ENV the frozen piece's own free variables (`assert-args`'s `pairs`,
+the calling macro's `bindings`) resolve in, and no combination tried
+got both right at once -- one variant fixed `bindings` and broke
+`pairs`, the other fixed `pairs` and broke `bindings`. Fixing this for
+real needs an actual Var-like indirection (a call site that can point
+at a specific, frozen macro *value*, not just a name to re-resolve
+fresh) -- a real feature, not a quick bug fix.
+
+**Current mitigation**: `eval_macro_head` caps nested macro-expansion
+depth (currently 60) as a hard safety net -- purely to turn what would
+otherwise be a real Fortran stack overflow (a crash) into a catchable
+`eval_error` ("macro expansion too deep"). This is why arithmetic
+(`-`/`/`, whose own multi-arg reduction goes through `reduce1`, which
+uses `let`) and a few other things that transitively use `let`
+currently fail cleanly with that message rather than working -- a
+real, known gap, not silently swallowed.
 
 ## Status
 
