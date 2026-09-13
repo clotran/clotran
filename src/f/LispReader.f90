@@ -331,6 +331,55 @@ contains
     val%list_val = list_of(items)
   end function read_wrapped
 
+  ! "#?(:key1 form1 :key2 form2 ...)" reads as whichever form's key
+  ! matches this host's own feature key (:cljf) or :default, first
+  ! match wins -- mirrors real Clojure's reader conditionals (added in
+  ! 1.7 for sharing .cljc source across clj/cljs), just with clotran
+  ! as a third feature alongside :clj/:cljs rather than a real host
+  ! either of those recognize. Splicing conditionals (#?@(...)) aren't
+  ! supported -- nothing this project writes needs them yet.
+  !
+  ! "#?" isn't its own reserved token: '#' has to stay an ordinary
+  ! character (not a dispatch-only special char) so a trailing '#' in
+  ! an auto-gensym symbol (x#) keeps tokenizing as part of that
+  ! symbol, not splitting off. "#?" only means a reader conditional
+  ! when it's the WHOLE token, checked here, not via its own case in
+  ! is_special_char.
+  recursive function read_reader_conditional(tokens, pos) result(val)
+    type(token_t), intent(in) :: tokens(:)
+    integer, intent(inout) :: pos
+    type(cons_value) :: val
+    type(cons_value), allocatable :: items(:)
+    integer :: n, i
+
+    pos = pos + 1 ! consume '#?'
+    if (pos > size(tokens)) then
+       call reader_error("expected '(' after #?")
+       return
+    end if
+    if (tokens(pos)%text /= "(") then
+       call reader_error("expected '(' after #?")
+       return
+    end if
+    pos = pos + 1 ! consume '('
+
+    call read_items(tokens, pos, ")", items, n)
+    if (has_error) return
+    if (mod(n, 2) /= 0) then
+       call reader_error("reader conditional needs an even number of forms")
+       return
+    end if
+    do i = 1, n, 2
+       if (items(i)%tag == TAG_KEYWORD) then
+          if (items(i)%str_val == "cljf" .or. items(i)%str_val == "default") then
+             val = items(i + 1)
+             return
+          end if
+       end if
+    end do
+    call reader_error("reader conditional: no matching :cljf/:default branch")
+  end function read_reader_conditional
+
   ! "^META FORM" reads as (with-meta FORM META).
   recursive function read_meta(tokens, pos) result(val)
     type(token_t), intent(in) :: tokens(:)
@@ -473,6 +522,8 @@ contains
        val = read_wrapped(tokens, pos, "deref")
     case ("^")
        val = read_meta(tokens, pos)
+    case ("#?")
+       val = read_reader_conditional(tokens, pos)
     case default
        val = read_atom(t)
        pos = pos + 1

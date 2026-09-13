@@ -236,6 +236,19 @@ program eval_test
   call expect_result("24i. seq on a string splits into one-char strings: ", env, &
        '(seq "abc")', '("a" "b" "c")', all_ok)
 
+  ! 25. Reader conditionals: #?(:cljf a :clj b) reads as whichever
+  ! branch matches this host's own feature key, first match wins.
+  call expect_result("25a. :cljf branch is picked over :clj: ", env, &
+       "#?(:cljf 1 :clj 2)", "1", all_ok)
+  call expect_result("25b. ...regardless of branch order: ", env, &
+       "#?(:clj 1 :cljf 2)", "2", all_ok)
+  call expect_result("25c. :default matches when there's no :cljf branch: ", env, &
+       "#?(:clj 1 :default 2)", "2", all_ok)
+  call expect_result("25d. reads as one form, nested inside another: ", env, &
+       "(+ 1 #?(:cljf 10 :clj 20))", "11", all_ok)
+  call expect_result("25e. auto-gensym (trailing #) still tokenizes as one symbol: ", env, &
+       "(let* (r `(a# a#)) (= (first r) (first (rest r))))", "true", all_ok)
+
   if (all_ok) then
      print *, ""
      print *, "ALL EVAL CHECKS PASSED"
