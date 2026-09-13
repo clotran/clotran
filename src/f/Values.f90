@@ -119,6 +119,26 @@ module values
      final :: env_ref_finalize
   end type env_ref
 
+  ! --- Extra arity clauses for a multi-arity fn* (see closure_t
+  ! below), boxed behind a pointer for the same reason meta_ref is:
+  ! a derived type can't hold an allocatable ARRAY of a type that
+  ! (transitively, through closure_t) contains itself either --
+  ! same self-referential-allocatable-plus-FINAL gfortran codegen bug
+  ! as cons_value/meta_val, confirmed by hitting it here too (crashed
+  ! only on gfortran; flang was unaffected). Nothing shares one of
+  ! these across closures, so no refcount sharing is actually needed,
+  ! but the ref/node shape is what already exists and is proven safe.
+  type, public :: arity_clauses_node
+     integer :: refcount = 0
+     type(cons_value), allocatable :: params(:), bodies(:)
+  end type arity_clauses_node
+
+  type, public :: arity_clauses_ref
+     type(arity_clauses_node), pointer :: ptr => null()
+   contains
+     final :: arity_clauses_ref_finalize
+  end type arity_clauses_ref
+
   ! --- closure: params/body captured at (fn* ...) time, plus the env
   ! captured lexically. Defined last (not forward-referenced) since it
   ! embeds cons_value and env_ref directly rather than through a
@@ -131,9 +151,16 @@ module values
   ! handled. Still a simplification (real metadata is per-Var, so the
   ! same fn value could in principle be a macro under one name and not
   ! another; not a scenario anything here creates).
+  ! extra: additional arity clauses for a multi-arity fn* (params/body
+  ! above are the first clause). Real Clojure's (fn* ([a] ...) ([a b]
+  ! ...)) syntax -- dispatched by argument count at call time (see
+  ! select_clause in Eval.f90), not rewritten away at parse time, so
+  ! this stays the one runtime closure representation for both single-
+  ! and multi-arity fns.
   type, public :: closure_t
      type(cons_value) :: params
      type(cons_value) :: body
+     type(arity_clauses_ref), allocatable :: extra
      type(env_ref) :: env
      logical :: is_macro = .false.
   end type closure_t
@@ -183,6 +210,7 @@ module values
      module procedure closure_t_assign
      module procedure atom_ref_assign
      module procedure meta_ref_assign
+     module procedure arity_clauses_ref_assign
   end interface assignment(=)
 
   ! For test programs to confirm every box is eventually freed.
@@ -198,10 +226,12 @@ module values
   integer, public :: atom_node_total_freed = 0
   integer, public :: meta_node_total_allocated = 0
   integer, public :: meta_node_total_freed = 0
+  integer, public :: arity_clauses_node_total_allocated = 0
+  integer, public :: arity_clauses_node_total_freed = 0
 
   public :: assignment(=)
   public :: cons_value_release, cons_ref_release, node_ref_release, array_map_ref_release, env_ref_release, &
-       atom_ref_release, meta_ref_release
+       atom_ref_release, meta_ref_release, arity_clauses_ref_release
 
 contains
 
@@ -418,6 +448,12 @@ contains
     type(closure_t), intent(in) :: rhs
     lhs%params = rhs%params
     lhs%body = rhs%body
+    if (allocated(rhs%extra)) then
+       if (.not. allocated(lhs%extra)) allocate(lhs%extra)
+       lhs%extra = rhs%extra
+    else if (allocated(lhs%extra)) then
+       deallocate(lhs%extra)
+    end if
     lhs%env = rhs%env
     lhs%is_macro = rhs%is_macro
   end subroutine closure_t_assign
@@ -475,5 +511,32 @@ contains
     type(meta_ref), intent(inout) :: h
     call meta_ref_release(h)
   end subroutine meta_ref_finalize
+
+  ! ---- arity_clauses_ref (same shape as atom_ref/meta_ref) ----
+
+  subroutine arity_clauses_ref_release(h)
+    type(arity_clauses_ref), intent(inout) :: h
+    if (.not. associated(h%ptr)) return
+    h%ptr%refcount = h%ptr%refcount - 1
+    if (h%ptr%refcount <= 0) then
+       deallocate(h%ptr) ! cascades: releases h%ptr%params/bodies
+       arity_clauses_node_total_freed = arity_clauses_node_total_freed + 1
+    end if
+    h%ptr => null()
+  end subroutine arity_clauses_ref_release
+
+  impure elemental subroutine arity_clauses_ref_assign(lhs, rhs)
+    type(arity_clauses_ref), intent(inout) :: lhs
+    type(arity_clauses_ref), intent(in) :: rhs
+    if (associated(lhs%ptr, rhs%ptr)) return
+    call arity_clauses_ref_release(lhs)
+    lhs%ptr => rhs%ptr
+    if (associated(lhs%ptr)) lhs%ptr%refcount = lhs%ptr%refcount + 1
+  end subroutine arity_clauses_ref_assign
+
+  impure elemental subroutine arity_clauses_ref_finalize(h)
+    type(arity_clauses_ref), intent(inout) :: h
+    call arity_clauses_ref_release(h)
+  end subroutine arity_clauses_ref_finalize
 
 end module values

@@ -240,6 +240,44 @@ not assumed:
   once core.clj's own `fn` is imported and does the same copy-through,
   these two tests should pass again on their own.
 
+Bootstrapping even `first`/`next`/`rest`/`conj` (~line 90 of ~8,400)
+needed one more real feature: **multi-arity `fn*`**
+(`(fn* name? ([p1] b1) ([p2] b2) ...)`), since real `conj`'s own
+bootstrap definition has 4 arity clauses (0, 1, 2, variadic). Dispatch
+is by argument count at *call* time (`select_clause` picks the
+matching clause, checked against both apply paths -- the tail-call
+fast path inside `eval_form`'s trampoline and the non-tail
+`apply_closure`, the same two places every closure-calling fix in
+this project has needed both times), not rewritten into a single
+dispatch body at parse time -- one runtime closure shape either way.
+A fixed-arity clause matching exactly always wins over a variadic one
+that would also accept the same count (confirmed against real
+Clojure's own arity resolution order, not assumed).
+
+Detecting multi-arity syntax needed care: this project (like mal)
+also allows a single arity's params to be written with parens,
+`(fn* (a b) body)`, not just `[a b]` -- so "is the thing after the
+name a list?" isn't enough to mean "multi-arity clauses", since
+`(a b)` is itself a list. The real test: a clause's own first element
+is always a params collection (vector or list), never a bare symbol
+(no destructuring, so every real single-arity param is a symbol) --
+checked one level deeper, not just at the top.
+
+**Not doing yet, deliberately deferred**: `let`/`loop`/`fn`'s real
+bootstrap definitions use the `&form`/`&env` macro-calling convention
+(the compiler auto-supplies the raw calling form and lexical
+compile-env as a macro's first two arguments) -- this project's
+macros don't get these auto-supplied at all. `let`/`loop`'s own
+bootstrap bodies never actually reference `&form`/`&env` (only bind
+them, unused), so dropping those two params entirely is a safe,
+faithful patch, buildable with what already exists (`defmacro`,
+`cons`). Real `fn`'s bootstrap *does* use `&form`'s metadata (for the
+copy-through mentioned above) -- patched `fn` skips that one behavior
+rather than building real `&form`/`&env` support now. Destructuring
+in `let`/`fn` params is also not built -- nothing needed by the file
+so far has required it, but real Clojure code leans on it constantly,
+so it's a near-certain future need, not a one-off skip.
+
 ## Value representation: cons_value, not class(*)
 
 `cons_value` (`Values.f90`) is a concrete tagged-union type (an integer
@@ -346,7 +384,13 @@ all of these type definitions together, while every operation on them
   already uses for every other recursive/shared structure
   (`meta_ref`/`meta_node`, mirroring `atom_ref`/`atom_node`) instead of
   embedding the value directly -- correct and clearer on both
-  compilers regardless.
+  compilers regardless. **Confirmed this isn't specific to direct
+  self-embedding**: `closure_t` holding an allocatable *array* of
+  `cons_value` (for multi-arity `fn*`'s extra clauses) hit the exact
+  same gfortran crash, even though the recursion is indirect
+  (`cons_value` -> `closure_t` -> array-of-`cons_value`) and it's an
+  array, not a scalar. Same fix, same box-behind-a-pointer pattern
+  (`arity_clauses_ref`/`arity_clauses_node`).
 
 ## Naming: mirrors real Clojure directly
 

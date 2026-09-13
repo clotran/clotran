@@ -377,9 +377,14 @@ contains
        end do
        if (args(1)%tag == TAG_FN) then
           ! tail call into a closure: no Fortran recursion here, loop instead
-          env = env_new(args(1)%fn_val%env)
-          call bind_params(args(1)%fn_val%params, args(2:n), env)
-          ast = args(1)%fn_val%body
+          block
+            type(cons_value) :: params, body
+            call select_clause(args(1), n - 1, params, body)
+            if (has_error) return
+            env = env_new(args(1)%fn_val%env)
+            call bind_params(params, args(2:n), env)
+            ast = body
+          end block
           deallocate(args)
           cycle
        else
@@ -971,16 +976,82 @@ contains
 
   ! Applies a closure: a fresh child env (outer = the env captured at
   ! (fn* ...) time, not the caller's env), params bound to args, body
-  ! evaluated in it.
+  ! evaluated in it. Multi-arity (extra_params/extra_bodies) picks the
+  ! matching clause by argument count first.
   function apply_closure(f, args) result(val)
     type(cons_value), intent(in) :: f
     type(cons_value), intent(in) :: args(:)
     type(cons_value) :: val
     type(env_ref) :: child
+    type(cons_value) :: params, body
+    call select_clause(f, size(args), params, body)
+    if (has_error) return
     child = env_new(f%fn_val%env)
-    call bind_params(f%fn_val%params, args, child)
-    val = eval_form(f%fn_val%body, child)
+    call bind_params(params, args, child)
+    val = eval_form(body, child)
   end function apply_closure
+
+  ! Does this one arity clause's params vector accept argc args? Fixed
+  ! arity: argc must match exactly. Variadic ('& rest'): argc must be
+  ! at least the count of params before '&'.
+  function arity_accepts(params, argc) result(bool)
+    type(cons_value), intent(in) :: params
+    integer, intent(in) :: argc
+    logical :: bool
+    type(cons_value) :: p
+    integer :: n, i, required
+    logical :: variadic
+    n = binding_count(params)
+    variadic = .false.
+    required = 0
+    do i = 0, n - 1
+       p = binding_nth(params, i)
+       if (p%tag == TAG_SYMBOL .and. p%str_val == "&") then
+          variadic = .true.
+          exit
+       end if
+       required = required + 1
+    end do
+    if (variadic) then
+       bool = (argc >= required)
+    else
+       bool = (argc == required)
+    end if
+  end function arity_accepts
+
+  ! Picks the (params, body) clause matching argc args: the primary
+  ! one, or one of a multi-arity fn*'s extra clauses. eval_error (real
+  ! Clojure's ArityException) if none match.
+  subroutine select_clause(f, argc, params, body)
+    type(cons_value), intent(in) :: f
+    integer, intent(in) :: argc
+    type(cons_value), intent(out) :: params, body
+    integer :: i
+
+    if (arity_accepts(f%fn_val%params, argc)) then
+       params = f%fn_val%params
+       body = f%fn_val%body
+       return
+    end if
+    if (allocated(f%fn_val%extra)) then
+       do i = 1, size(f%fn_val%extra%ptr%params)
+          if (arity_accepts(f%fn_val%extra%ptr%params(i), argc)) then
+             params = f%fn_val%extra%ptr%params(i)
+             body = f%fn_val%extra%ptr%bodies(i)
+             return
+          end if
+       end do
+    end if
+    call eval_error("wrong number of args (" // stringify_int(argc) // ")")
+  end subroutine select_clause
+
+  function stringify_int(i) result(s)
+    integer, intent(in) :: i
+    character(len=:), allocatable :: s
+    character(len=20) :: buf
+    write(buf, '(I0)') i
+    s = trim(buf)
+  end function stringify_int
 
   ! Binds params (a list or vector of symbols, optionally ending in
   ! '& rest') to args in child. A missing positional arg binds to nil;
@@ -1469,14 +1540,21 @@ contains
   ! throwaway env layer between the closure and its lexical parent,
   ! set to the closure itself only after it's built (env_set mutates
   ! the shared node in place, so the already-captured env sees it).
+  ! (fn* name? [params] body...): single arity, as before. (fn* name?
+  ! ([p1] b1...) ([p2] b2...) ...): multi-arity -- each clause is
+  ! itself a list here, unlike the single-arity shorthand where the
+  ! params vector comes straight after the (optional) name. Dispatched
+  ! by argument count at call time (select_clause), not expanded away
+  ! here -- one runtime closure shape either way.
   function eval_fn(ast, env) result(val)
     type(cons_value), intent(in) :: ast
     type(env_ref), intent(in) :: env
     type(cons_value) :: val
-    type(cons_ref) :: rest, body_forms
-    type(cons_value) :: second, name
+    type(cons_ref) :: rest, body_forms, clauses
+    type(cons_value) :: second, name, clause
     type(env_ref) :: fn_env
-    logical :: named
+    logical :: named, multi
+    integer :: n_clauses, i
 
     rest = list_rest(ast%list_val)
     second = list_first(rest)
@@ -1491,9 +1569,48 @@ contains
     else
        fn_env = env
     end if
-    val%fn_val%params = list_first(rest)
-    body_forms = list_rest(rest)
-    val%fn_val%body = wrap_body(body_forms)
+
+    ! Multi-arity iff this is a list whose OWN first element is itself
+    ! a params collection (vector or list) -- not just any list, since
+    ! this project (like mal) also allows single-arity params written
+    ! with parens, (fn* (a b) body), which is a plain flat list of
+    ! symbols, not a list of clauses. A clause's own first element is
+    ! never a bare symbol (no destructuring, so every real param is
+    ! one), which is what tells the two apart.
+    clause = list_first(rest)
+    multi = .false.
+    if (clause%tag == TAG_LIST) then
+       block
+         type(cons_value) :: inner_first
+         inner_first = list_first(clause%list_val)
+         multi = (inner_first%tag == TAG_VECTOR .or. inner_first%tag == TAG_LIST)
+       end block
+    end if
+    if (multi) then
+       n_clauses = list_count(rest)
+       val%fn_val%params = list_first(clause%list_val)
+       val%fn_val%body = wrap_body(list_rest(clause%list_val))
+       if (n_clauses > 1) then
+          allocate(val%fn_val%extra)
+          allocate(val%fn_val%extra%ptr)
+          val%fn_val%extra%ptr%refcount = 1
+          arity_clauses_node_total_allocated = arity_clauses_node_total_allocated + 1
+          allocate(val%fn_val%extra%ptr%params(n_clauses - 1))
+          allocate(val%fn_val%extra%ptr%bodies(n_clauses - 1))
+          clauses = list_rest(rest)
+          do i = 1, n_clauses - 1
+             clause = list_first(clauses)
+             val%fn_val%extra%ptr%params(i) = list_first(clause%list_val)
+             val%fn_val%extra%ptr%bodies(i) = wrap_body(list_rest(clause%list_val))
+             clauses = list_rest(clauses)
+          end do
+       end if
+    else
+       val%fn_val%params = list_first(rest)
+       body_forms = list_rest(rest)
+       val%fn_val%body = wrap_body(body_forms)
+    end if
+
     val%fn_val%env = fn_env
     if (named) call env_set(fn_env, name, val)
   end function eval_fn

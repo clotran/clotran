@@ -266,6 +266,27 @@ program eval_test
        '(do (def first (fn* [x] "shadowed")) (list (first [1 2 3]) (clotran.native/first [1 2 3])))', &
        '("shadowed" 1)', all_ok)
 
+  ! 26. Multi-arity fn*: (fn* name? ([p1] b1) ([p2] b2) ...), dispatched
+  ! by argument count, same as real Clojure's own fn*/fn.
+  call expect_result("26a. dispatches by argument count: ", env, &
+       "(def multi (fn* ([] :zero) ([a] :one) ([a b] :two)))", "#<fn>", all_ok)
+  call expect_result("26a'. ...zero args: ", env, "(multi)", ":zero", all_ok)
+  call expect_result("26a''. ...one arg: ", env, "(multi 1)", ":one", all_ok)
+  call expect_result("26a'''. ...two args: ", env, "(multi 1 2)", ":two", all_ok)
+  call expect_result("26b. a variadic clause matches anything at or above its minimum: ", env, &
+       "(def variadic-multi (fn* ([a] :one) ([a b & c] (count c))))", "#<fn>", all_ok)
+  call expect_result("26b'. ...exact fixed arity still wins over a variadic clause: ", env, &
+       "(variadic-multi 1)", ":one", all_ok)
+  call expect_result("26b''. ...variadic collects everything past its required params: ", env, &
+       "(variadic-multi 1 2 3 4)", "2", all_ok)
+  call expect_result("26c. an unmatched arity is a catchable error: ", env, &
+       "(try* (multi 1 2 3) (catch* e true))", "true", all_ok)
+  call expect_result("26d. mal-style paren params still work (not mistaken for multi-arity): ", env, &
+       "((fn* (a b) (+ a b)) 3 4)", "7", all_ok)
+  call expect_result("26e. ...named self-reference plus multi-arity together: ", env, &
+       "((fn* countdown ([n] (countdown n 0)) ([n acc] (if (= n 0) acc (countdown (- n 1) (+ acc 1))))) 5)", &
+       "5", all_ok)
+
   if (all_ok) then
      print *, ""
      print *, "ALL EVAL CHECKS PASSED"
