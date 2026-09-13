@@ -18,7 +18,7 @@ module LispReader
   character(len=:), allocatable :: last_error
   logical :: has_error = .false.
 
-  public :: read_str
+  public :: read_str, read_top_level_forms
 
 contains
 
@@ -806,5 +806,50 @@ contains
        error = ""
     end if
   end function read_str
+
+  ! Like read_str, but reads every top-level form in input rather than
+  ! just the first -- load-file's own job (see Eval.f90's
+  ! eval_load_file_head), which needs each one separately so a failure
+  ! evaluating one form doesn't stop the rest of the file from being
+  ! read at all. Parsing itself is still all-or-nothing: a real syntax
+  ! error is a genuine problem, not something to skip past -- only
+  ! *evaluating* a form is meant to tolerate failure, and that's the
+  ! caller's concern, not this reader's.
+  function read_top_level_forms(input, forms, n, error) result(ok)
+    character(len=*), intent(in) :: input
+    type(cons_value), allocatable, intent(out) :: forms(:)
+    integer, intent(out) :: n
+    character(len=:), allocatable, intent(out) :: error
+    logical :: ok
+    type(token_t), allocatable :: tokens(:)
+    type(cons_value), allocatable :: grown(:)
+    integer :: pos, cap
+
+    has_error = .false.
+    last_error = ""
+
+    tokens = tokenize(input)
+    cap = 8
+    allocate(forms(cap))
+    n = 0
+    pos = 1
+    do while (pos <= size(tokens))
+       if (n == cap) then
+          cap = cap * 2
+          allocate(grown(cap))
+          grown(1:n) = forms(1:n)
+          call move_alloc(grown, forms)
+       end if
+       n = n + 1
+       forms(n) = read_form(tokens, pos)
+       if (has_error) then
+          ok = .false.
+          error = last_error
+          return
+       end if
+    end do
+    ok = .true.
+    error = ""
+  end function read_top_level_forms
 
 end module LispReader

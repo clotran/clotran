@@ -17,7 +17,7 @@ module Eval
   use Numbers, only: num_add, num_sub, num_mul, num_div, num_lt, num_gt, num_le, num_ge
   use printer, only: pr_str
   use Atom, only: atom_new, atom_p, atom_deref, atom_reset
-  use LispReader, only: read_str
+  use LispReader, only: read_str, read_top_level_forms
   use mal_readline, only: sys_readline => readline
   use Namespace, only: ns_ref, assignment(=), CORE_NS, ns_find_or_create, ns_intern, &
        ns_resolve, ns_set_current, ns_current, ns_name_of
@@ -161,26 +161,44 @@ contains
   end function repl_env
 
   ! Real clojure.core lives in src/clj/clojure/core.clj -- the actual
-  ! upstream file, edited in place with additive #?(:cljf ...) reader-
-  ! conditional branches as needed (never deleting/rewriting real
-  ! logic). Moves to src/cljc/clojure/core.cljc once it actually has
-  ! any such branches -- that's the real Clojure convention for when a
-  ! file earns the .cljc extension, not before. Loaded the ordinary
-  ! way, through load-file itself, resolved relative to argv[0]'s own
-  ! directory, not cwd (no installed-resource concept yet, but this at
-  ! least survives a caller changing directories before invoking us,
-  ! e.g. the regression suite's --rundir).
+  ! upstream file, byte-for-byte, never edited (not even additively;
+  ! see NOTES.md for why reader conditionals in core.clj itself would
+  ! be historically inaccurate -- real core.clj has never had any).
+  ! Loaded first, exactly as Rich Hickey wrote it; every individual
+  ! top-level form gets its own independent try (see
+  ! eval_load_file_head), so the handful that call real JVM interop
+  ! clotran doesn't have simply fail to rebind their name, leaving
+  ! whatever was bound before (a native builtin) in place -- nothing
+  ! aborts the rest of the file.
+  !
+  ! src/clj/clotran.clj loads right after, in the same env/namespace,
+  ! and re-establishes exactly those few names against clotran.native
+  ! -- see its own header for why that's a separate file rather than
+  ! edits to core.clj (mirrors cljs.core's relationship to core.clj).
+  !
+  ! Both resolved relative to argv[0]'s own directory, not cwd (no
+  ! installed-resource concept yet, but this at least survives a
+  ! caller changing directories before invoking us, e.g. the
+  ! regression suite's --rundir).
   subroutine eval_core_bootstrap(env)
     type(env_ref), intent(in) :: env
     type(cons_value) :: ast, discard
-    character(len=:), allocatable :: err, core_path, src
+    character(len=:), allocatable :: err, src
     logical :: ok
-    core_path = exe_relative_path("src/clj/clojure/core.clj")
-    src = '(load-file "' // core_path // '")'
+
+    src = '(load-file "' // exe_relative_path("src/clj/clojure/core.clj") // '")'
     ok = read_str(src, ast, err)
     if (ok) discard = eval_form(ast, env)
     if (has_error) then
-       write(*, '(A)') "warning: core.cljc failed to load: " // pr_str(last_error_value)
+       write(*, '(A)') "warning: core.clj failed to load: " // pr_str(last_error_value)
+       has_error = .false.
+    end if
+
+    src = '(load-file "' // exe_relative_path("src/clj/clotran.clj") // '")'
+    ok = read_str(src, ast, err)
+    if (ok) discard = eval_form(ast, env)
+    if (has_error) then
+       write(*, '(A)') "warning: clotran.clj failed to load: " // pr_str(last_error_value)
        has_error = .false.
     end if
   end subroutine eval_core_bootstrap
@@ -440,32 +458,57 @@ contains
     ast = list_first(list_rest(list_rest(ast%list_val)))
   end subroutine eval_let_head
 
-  ! (load-file "path"): slurps the file, wraps it in (do ... nil), and
-  ! hands off with no lexical locals -- same rule as eval, since
-  ! load-file is just eval+read-string+slurp composed.
+  ! (load-file "path"): slurps the file, reads every top-level form in
+  ! it, and evaluates them in sequence with no lexical locals -- same
+  ! rule as eval, since load-file is just eval+read-string+slurp
+  ! composed, repeated per form.
+  !
+  ! Each form gets its own independent try: a failure evaluating one
+  ! (real, unsupported interop in an unmodified upstream file, say)
+  ! doesn't stop the rest of the file from loading. Deliberately more
+  ! lenient than real Clojure's own load-file, which stops at the first
+  ! exception -- this project imports real upstream source (core.clj)
+  ! that isn't 100% supported yet, and wants as much of it to load as
+  ! actually can, rather than all-or-nothing. Silent by design (not a
+  ! bug): loading core.clj today fails dozens of individual forms one
+  ! at a time -- see clotran.clj -- and warning on each would be pure
+  ! noise; only a real syntax error (read_top_level_forms itself
+  ! failing) or a failure in the file's own LAST form (left for the
+  ! caller's normal error handling, below) surfaces at all.
   subroutine eval_load_file_head(ast, env)
     type(cons_value), intent(inout) :: ast
     type(env_ref), intent(inout) :: env
-    type(cons_value) :: fname, contents, wrapped
-    character(len=:), allocatable :: src, err
+    type(cons_value) :: fname, contents
+    type(cons_value), allocatable :: forms(:)
+    character(len=:), allocatable :: err
+    integer :: n, i
     logical :: ok
 
     fname = eval_form(list_first(list_rest(ast%list_val)), env)
     if (has_error) return
     contents = builtin_slurp([fname])
     if (has_error) return
-    ! A newline (not a space) before the closing "nil)" -- a file ending
-    ! in a comment line, with no trailing newline of its own, would
-    ! otherwise swallow "nil)" into that comment (real mal's own
-    ! load-file does exactly this for the same reason).
-    src = "(do " // contents%str_val // achar(10) // "nil)"
-    ok = read_str(src, wrapped, err)
+
+    ok = read_top_level_forms(contents%str_val, forms, n, err)
     if (.not. ok) then
        call eval_error("load-file: " // err)
        return
     end if
-    ast = wrapped
+
     env = env_new()
+    if (n == 0) then
+       ast%tag = TAG_NIL
+       return
+    end if
+
+    do i = 1, n - 1
+       block
+         type(cons_value) :: discard
+         discard = eval_form(forms(i), env)
+       end block
+       has_error = .false.
+    end do
+    ast = forms(n) ! tail position: the trampoline evaluates/reports this one normally
   end subroutine eval_load_file_head
 
   ! (in-ns 'name): switches *ns*, creating it (auto-referring
