@@ -118,6 +118,9 @@ contains
     call reg("symbol")
     call reg("keyword")
     call reg("hash-map")
+    call reg("hash-set")
+    call reg("disj")
+    call reg("set?")
     call reg("contains?")
     call reg("keys")
     call reg("vals")
@@ -1141,6 +1144,21 @@ contains
     val%map_val = m
   end function make_hashmap
 
+  ! (hash-set x ...): a set from every arg, deduplicated.
+  function make_hashset(args) result(val)
+    type(cons_value), intent(in) :: args(:)
+    type(cons_value) :: val
+    type(array_map_t) :: m
+    integer :: i
+    m = array_map_empty()
+    do i = 1, size(args)
+       m = array_map_assoc(m, args(i), args(i))
+    end do
+    val%tag = TAG_SET
+    allocate(val%map_val)
+    val%map_val = m
+  end function make_hashset
+
   ! (keys m)/(vals m): every key (or value), as a list, in insertion order.
   function builtin_keys(m) result(val)
     type(cons_value), intent(in) :: m
@@ -1201,6 +1219,26 @@ contains
     allocate(val%map_val)
     val%map_val = m
   end function builtin_dissoc
+
+  ! (disj s x ...): a new set with those elements removed. Mirrors
+  ! dissoc for maps -- same underlying array_map_dissoc, since a set
+  ! is a map from each element to itself.
+  function builtin_disj(args) result(val)
+    type(cons_value), intent(in) :: args(:)
+    type(cons_value) :: val
+    type(array_map_t) :: m
+    integer :: i
+    m = array_map_empty()
+    if (args(1)%tag == TAG_SET) then
+       if (allocated(args(1)%map_val)) m = args(1)%map_val
+    end if
+    do i = 2, size(args)
+       m = array_map_dissoc(m, args(i))
+    end do
+    val%tag = TAG_SET
+    allocate(val%map_val)
+    val%map_val = m
+  end function builtin_disj
 
   ! (str x ...): each arg's non-readable ("display") form, concatenated
   ! with no separator, as one string (not printed).
@@ -1263,7 +1301,7 @@ contains
     type(cons_value) :: val
     logical :: found
 
-    found = (m%tag == TAG_HASHMAP .and. allocated(m%map_val))
+    found = ((m%tag == TAG_HASHMAP .or. m%tag == TAG_SET) .and. allocated(m%map_val))
     if (found) found = array_map_contains(m%map_val, key)
     if (found) then
        val = rt_get(m, key)
@@ -1396,10 +1434,17 @@ contains
        end if
     case ("hash-map")
        val = make_hashmap(args)
+    case ("hash-set")
+       val = make_hashset(args)
+    case ("disj")
+       val = builtin_disj(args)
+    case ("set?")
+       val%tag = TAG_BOOL
+       val%bool_val = (args(1)%tag == TAG_SET)
     case ("contains?")
        val%tag = TAG_BOOL
        val%bool_val = .false.
-       if (args(1)%tag == TAG_HASHMAP) then
+       if (args(1)%tag == TAG_HASHMAP .or. args(1)%tag == TAG_SET) then
           if (allocated(args(1)%map_val)) val%bool_val = array_map_contains(args(1)%map_val, args(2))
        end if
     case ("keys")

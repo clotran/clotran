@@ -27,6 +27,8 @@ module values
   integer, parameter :: TAG_BUILTIN = 10 ! str_val holds the builtin's name; dispatched by Eval
   integer, parameter :: TAG_FN = 11 ! fn_val holds params/body/captured env; a real closure
   integer, parameter :: TAG_ATOM = 12 ! atom_val is a genuinely mutable box, shared by reference
+  integer, parameter :: TAG_SET = 13 ! map_val backs it too -- every element mapped to itself,
+                                      ! exactly like real Clojure's PersistentHashSet wraps a map
 
   integer, parameter :: BITS = 5
   integer, parameter :: BRANCH = 32

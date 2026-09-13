@@ -56,6 +56,8 @@ contains
        str = pr_seq(v, "[", "]", r)
     case (TAG_HASHMAP)
        str = pr_hashmap(v, r)
+    case (TAG_SET)
+       str = pr_hashset(v, r)
     case (TAG_BUILTIN)
        str = "#<builtin " // v%str_val // ">"
     case (TAG_FN)
@@ -97,6 +99,25 @@ contains
     end if
     str = str // "}"
   end function pr_hashmap
+
+  recursive function pr_hashset(v, readable) result(str)
+    type(cons_value), intent(in) :: v
+    logical, intent(in) :: readable
+    character(len=:), allocatable :: str
+    character(len=:), allocatable :: elem_str
+    integer :: i, n
+
+    str = "#{"
+    if (allocated(v%map_val)) then
+       n = array_map_count(v%map_val)
+       do i = 0, n - 1
+          if (i > 0) str = str // " "
+          elem_str = pr_str(array_map_nth_key(v%map_val, i), readable)
+          str = str // elem_str
+       end do
+    end if
+    str = str // "}"
+  end function pr_hashset
 
   recursive function pr_seq(v, open, close, readable) result(str)
     type(cons_value), intent(in) :: v

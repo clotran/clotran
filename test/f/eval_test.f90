@@ -287,6 +287,37 @@ program eval_test
        "((fn* countdown ([n] (countdown n 0)) ([n acc] (if (= n 0) acc (countdown (- n 1) (+ acc 1))))) 5)", &
        "5", all_ok)
 
+  ! 27. Sets: #{...} reader syntax, backed by the same array_map_t as
+  ! hash-maps (each element mapped to itself), same as real Clojure's
+  ! PersistentHashSet wrapping a map.
+  call expect_result("27a. #{...} reads and prints back: ", env, "#{1 2 3}", "#{1 2 3}", all_ok)
+  call expect_result("27b. get finds a present element, nil otherwise: ", env, &
+       "(list (get #{1 2 3} 2) (get #{1 2 3} 5))", "(2 nil)", all_ok)
+  call expect_result("27c. contains?/set?/count: ", env, &
+       "(list (contains? #{1 2} 1) (set? #{1 2}) (set? [1 2]) (count #{1 2 3}))", "(true true false 3)", all_ok)
+  call expect_result("27d. = is unordered: ", env, "(= #{1 2} #{2 1})", "true", all_ok)
+  call expect_result("27e. hash-set dedups, conj adds, disj removes: ", env, &
+       "(list (hash-set 1 2 2 3) (conj #{1 2} 3) (disj #{1 2 3} 2) (disj #{1 2 3} 2 3))", &
+       "(#{1 2 3} #{1 2 3} #{1 3} #{1})", all_ok)
+  call expect_result("27f. seq gives elements directly, not [k v] pairs: ", env, &
+       "(seq #{1 2 3})", "(1 2 3)", all_ok)
+
+  ! 28. #(...) anonymous-fn literals: bare % means %1, a higher %N
+  ! implies the lower ones are params too, %& is the rest-arg -- all
+  ! verified against real Clojure's own macroexpansion, not guessed.
+  call expect_result("28a. bare % is the first (and only) arg: ", env, "(#(+ % 1) 5)", "6", all_ok)
+  call expect_result("28b. %1/%2 address args positionally: ", env, "(#(+ %1 %2) 3 4)", "7", all_ok)
+  call expect_result("28c. ...order in the body doesn't change which arg is which: ", env, &
+       "(#(- %2 %1) 3 10)", "7", all_ok)
+  call expect_result("28d. %& collects the rest: ", env, "(#(apply + %&) 1 2 3)", "6", all_ok)
+  call expect_result("28e. no %-refs at all is a zero-arg fn: ", env, "(#(vector))", "[]", all_ok)
+
+  ! 29. #'sym: real Clojure's (var sym) shorthand. No separate Var
+  ! type here (see NOTES.md), so this reads as (quote sym) instead --
+  ! close enough to keep the reader from choking, not a faithful
+  ! stand-in for what (var sym) actually returns.
+  call expect_result("29a. #'sym reads as the symbol itself: ", env, "#'some-name", "some-name", all_ok)
+
   if (all_ok) then
      print *, ""
      print *, "ALL EVAL CHECKS PASSED"

@@ -115,6 +115,14 @@ contains
        else
           new_v%vector_val = vector_conj(vector_empty(), x)
        end if
+    case (TAG_SET)
+       new_v%tag = TAG_SET
+       allocate(new_v%map_val)
+       if (allocated(coll%map_val)) then
+          new_v%map_val = array_map_assoc(coll%map_val, x, x)
+       else
+          new_v%map_val = array_map_assoc(array_map_empty(), x, x)
+       end if
     case default
        call wrap_list_value(new_v, list_cons(x, list_empty()))
     end select
@@ -152,7 +160,7 @@ contains
        if (allocated(coll%vector_val)) n = vector_count(coll%vector_val)
     case (TAG_STRING)
        if (allocated(coll%str_val)) n = len(coll%str_val)
-    case (TAG_HASHMAP)
+    case (TAG_HASHMAP, TAG_SET)
        if (allocated(coll%map_val)) n = array_map_count(coll%map_val)
     end select
   end function count
@@ -160,7 +168,9 @@ contains
   function get(coll, key) result(val)
     type(cons_value), intent(in) :: coll, key
     type(cons_value) :: val
-    if (coll%tag == TAG_HASHMAP .and. allocated(coll%map_val)) val = array_map_get(coll%map_val, key)
+    if ((coll%tag == TAG_HASHMAP .or. coll%tag == TAG_SET) .and. allocated(coll%map_val)) then
+       val = array_map_get(coll%map_val, key)
+    end if
   end function get
 
   function assoc(coll, key, val) result(new_v)
@@ -187,6 +197,8 @@ contains
        if (count(v) > 0) call wrap_list_value(new_v, vector_slice_to_list(v%vector_val, 0))
     case (TAG_HASHMAP)
        if (count(v) > 0) call wrap_list_value(new_v, map_to_entry_list(v%map_val))
+    case (TAG_SET)
+       if (count(v) > 0) call wrap_list_value(new_v, set_to_element_list(v%map_val))
     case (TAG_STRING)
        if (allocated(v%str_val)) then
           if (len(v%str_val) > 0) call wrap_list_value(new_v, string_to_char_list(v%str_val))
@@ -238,8 +250,8 @@ contains
              sb = next(sb)
           end do
        end if
-    case (TAG_HASHMAP)
-       eq = (b%tag == TAG_HASHMAP) .and. allocated(a%map_val) .and. allocated(b%map_val)
+    case (TAG_HASHMAP, TAG_SET)
+       eq = (b%tag == a%tag) .and. allocated(a%map_val) .and. allocated(b%map_val)
        if (eq) eq = (array_map_count(a%map_val) == array_map_count(b%map_val))
        if (eq) then
           block
@@ -276,5 +288,18 @@ contains
        end block
     end do
   end function map_to_entry_list
+
+  ! A set's elements, in insertion order -- unlike a map's seq, no
+  ! [k v] entry wrapping, since a set's "value" at each element is
+  ! just that element again.
+  function set_to_element_list(m) result(l)
+    type(array_map_t), intent(in) :: m
+    type(cons_ref) :: l
+    integer :: i
+    l = list_empty()
+    do i = array_map_count(m) - 1, 0, -1
+       l = list_cons(array_map_nth_key(m, i), l)
+    end do
+  end function set_to_element_list
 
 end module RT

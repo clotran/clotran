@@ -5,8 +5,8 @@
 ! read_str() resets that state on entry.
 module LispReader
   use values
-  use PersistentList, only: list_of
-  use PersistentVector, only: vector_empty, vector_conj
+  use PersistentList, only: list_of, list_first => first, list_rest => rest, list_count
+  use PersistentVector, only: vector_empty, vector_conj, vector_count, vector_nth
   use PersistentArrayMap, only: array_map_empty, array_map_assoc
   implicit none
   private
@@ -502,6 +502,163 @@ contains
     val%map_val = m
   end function read_hashmap
 
+  ! "#{a b c}" -- each element mapped to itself, same underlying
+  ! storage as a hash-map (see TAG_SET in Values.f90), deduplicating
+  ! same as real Clojure's set literal (a later duplicate silently
+  ! overwrites, not an error).
+  recursive function read_hashset(tokens, pos) result(val)
+    type(token_t), intent(in) :: tokens(:)
+    integer, intent(inout) :: pos
+    type(cons_value) :: val
+    type(cons_value), allocatable :: items(:)
+    type(array_map_t) :: m
+    integer :: n, i
+
+    ! Both '#' and '{' are already consumed by read_form's dispatch
+    ! before calling here -- same convention as read_hashmap, called
+    ! only after its own opening '{' is consumed.
+    call read_items(tokens, pos, "}", items, n)
+    if (has_error) return
+    m = array_map_empty()
+    do i = 1, n
+       m = array_map_assoc(m, items(i), items(i))
+    end do
+    val%tag = TAG_SET
+    allocate(val%map_val)
+    val%map_val = m
+  end function read_hashset
+
+  function itoa(i) result(s)
+    integer, intent(in) :: i
+    character(len=:), allocatable :: s
+    character(len=20) :: buf
+    write(buf, '(I0)') i
+    s = trim(buf)
+  end function itoa
+
+  ! Recursively walks v looking for %, %N, or %& symbols -- real
+  ! Clojure's #(...) anonymous-fn implicit params -- rewriting bare %
+  ! to %1 so the same name bound as a param is what the body
+  ! references. Tracks the highest N seen and whether %& appears, so
+  ! the caller can build the matching params vector. Real Clojure
+  ! gensyms fresh names instead; using the literal %1/%2/%& names
+  ! directly is simpler and just as correct, since nothing outside one
+  ! #(...) body could reference them anyway. Only recurses into lists
+  ! and vectors -- a %-reference inside a nested {}/#{} literal within
+  ! one #(...) body is vanishingly rare and not handled.
+  recursive function rewrite_percent_args(v, max_n, has_amp) result(new_v)
+    type(cons_value), intent(in) :: v
+    integer, intent(inout) :: max_n
+    logical, intent(inout) :: has_amp
+    type(cons_value) :: new_v
+    type(cons_ref) :: walk
+    type(vec_t) :: new_vec
+    integer :: i, n, num, ios
+
+    select case (v%tag)
+    case (TAG_SYMBOL)
+       new_v = v
+       if (allocated(v%str_val)) then
+          if (v%str_val == "%") then
+             new_v%str_val = "%1"
+             max_n = max(max_n, 1)
+          else if (v%str_val == "%&") then
+             has_amp = .true.
+          else if (len(v%str_val) >= 2) then
+             if (v%str_val(1:1) == "%") then
+                read(v%str_val(2:), *, iostat=ios) num
+                if (ios == 0) max_n = max(max_n, num)
+             end if
+          end if
+       end if
+    case (TAG_LIST)
+       new_v = v
+       if (allocated(v%list_val)) then
+          n = list_count(v%list_val)
+          block
+            type(cons_value), allocatable :: items(:)
+            allocate(items(n))
+            walk = v%list_val
+            do i = 1, n
+               items(i) = rewrite_percent_args(list_first(walk), max_n, has_amp)
+               walk = list_rest(walk)
+            end do
+            new_v%list_val = list_of(items)
+          end block
+       end if
+    case (TAG_VECTOR)
+       new_v = v
+       if (allocated(v%vector_val)) then
+          n = vector_count(v%vector_val)
+          new_vec = vector_empty()
+          do i = 0, n - 1
+             new_vec = vector_conj(new_vec, rewrite_percent_args(vector_nth(v%vector_val, i), max_n, has_amp))
+          end do
+          new_v%vector_val = new_vec
+       end if
+    case default
+       new_v = v
+    end select
+  end function rewrite_percent_args
+
+  ! "#(...)" -- (fn* [params] (...)) with implicit numbered params:
+  ! bare % means %1, %2/%3/... explicit positions (a higher one
+  ! implies the lower ones are params too, even if unused, same as
+  ! real Clojure), %& the rest-arg. Nesting (a #(...) inside another)
+  ! isn't checked for or rejected -- real Clojure refuses it; this
+  ! just doesn't handle it correctly rather than erroring, a low-risk
+  ! gap since nothing here writes nested ones.
+  recursive function read_anon_fn(tokens, pos) result(val)
+    type(token_t), intent(in) :: tokens(:)
+    integer, intent(inout) :: pos
+    type(cons_value) :: val
+    type(cons_value), allocatable :: items(:)
+    type(cons_value) :: body, rewritten_body, fn_sym, params, p, amp_sym, rest_sym
+    type(cons_value) :: form_items(3)
+    integer :: n, max_n, i
+    logical :: has_amp
+    type(vec_t) :: params_vec
+
+    ! '#' and '(' are already consumed by read_form's dispatch.
+    call read_items(tokens, pos, ")", items, n)
+    if (has_error) return
+    body%tag = TAG_LIST
+    allocate(body%list_val)
+    body%list_val = list_of(items(1:n))
+
+    max_n = 0
+    has_amp = .false.
+    rewritten_body = rewrite_percent_args(body, max_n, has_amp)
+
+    params_vec = vector_empty()
+    do i = 1, max_n
+       p%tag = TAG_SYMBOL
+       p%str_val = "%" // itoa(i)
+       params_vec = vector_conj(params_vec, p)
+    end do
+    if (has_amp) then
+       amp_sym%tag = TAG_SYMBOL
+       amp_sym%str_val = "&"
+       rest_sym%tag = TAG_SYMBOL
+       rest_sym%str_val = "%&"
+       params_vec = vector_conj(params_vec, amp_sym)
+       params_vec = vector_conj(params_vec, rest_sym)
+    end if
+    params%tag = TAG_VECTOR
+    allocate(params%vector_val)
+    params%vector_val = params_vec
+
+    fn_sym%tag = TAG_SYMBOL
+    fn_sym%str_val = "fn*"
+
+    form_items(1) = fn_sym
+    form_items(2) = params
+    form_items(3) = rewritten_body
+    val%tag = TAG_LIST
+    allocate(val%list_val)
+    val%list_val = list_of(form_items)
+  end function read_anon_fn
+
   recursive function read_form(tokens, pos) result(val)
     type(token_t), intent(in) :: tokens(:)
     integer, intent(inout) :: pos
@@ -540,6 +697,31 @@ contains
        val = read_meta(tokens, pos)
     case ("#?")
        val = read_reader_conditional(tokens, pos)
+    case ("#")
+       ! Neither '#{' nor '#(' merge into one token the way '#?' does
+       ! ('{'/'(' are special chars, breaking the regular-char run) --
+       ! peek ahead.
+       if (pos < size(tokens)) then
+          if (tokens(pos + 1)%text == "{") then
+             pos = pos + 2 ! consume '#' and '{'
+             val = read_hashset(tokens, pos)
+             return
+          else if (tokens(pos + 1)%text == "(") then
+             pos = pos + 2 ! consume '#' and '('
+             val = read_anon_fn(tokens, pos)
+             return
+          else if (tokens(pos + 1)%text == "'") then
+             ! "#'sym" is real Clojure's (var sym) shorthand -- we have
+             ! no separate Var type (see NOTES.md), so this reads as
+             ! (quote sym) instead: the closest sensible reader-level
+             ! behavior without inventing Var semantics, not a faithful
+             ! stand-in for what (var sym) actually does.
+             pos = pos + 1 ! consume '#', leaving pos at the quote token
+             val = read_wrapped(tokens, pos, "quote")
+             return
+          end if
+       end if
+       call reader_error("unsupported '#' syntax")
     case default
        val = read_atom(t)
        pos = pos + 1

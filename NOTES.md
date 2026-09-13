@@ -305,11 +305,49 @@ sufficiently long input could have hit.
 
 Immediately past that, real forms (not truncation artifacts) hit a
 **third substantial gap: no set-literal syntax or set type at all**.
-`#{2}` (here in an inert `:inline-arities` metadata hint) is
+`#{2}` (here in an inert `:inline-arities` metadata hint) was
 misread as bare symbol `#` immediately followed by hash-map `{2}`,
-which then fails on odd element count. A real, standalone feature
-(reader syntax, a `PersistentSet` type, core ops) needed regardless
-of the core.clj effort, not yet built.
+which then failed on odd element count. **Now built**: `TAG_SET`
+reuses the exact same `array_map_t` backing as hash-maps -- every
+element mapped to itself -- the direct structural mirror of how real
+Clojure's own `PersistentHashSet` wraps a map internally, so `count`/
+`get`/`contains?`/`conj`/`seq`/`=` all extend for free by adding one
+more `case` alongside the existing `TAG_HASHMAP` one, wherever one
+already existed, rather than a parallel implementation. New:
+`hash-set`, `set?`, `disj` (mirrors `dissoc`, same underlying
+`array_map_dissoc`). `conj` on a set adds (dedup); `seq` gives
+elements directly, not `[k v]` pairs like a map's seq does.
+
+That in turn exposed a **fourth gap: `#(...)` anonymous-fn literal
+syntax**, also unsupported (`#(str ", " %)` inside a real function
+body, not just metadata this time). Built properly: bare `%` means
+`%1`, an explicit `%2`/`%3`/... implies the lower-numbered ones are
+also params even if unused, `%&` is the rest-arg -- every case
+checked against real Clojure's own macroexpansion first (`clojure -e
+'(macroexpand ...)'`), not guessed. Real Clojure gensyms fresh
+internal names for these; using the literal `%1`/`%2`/`%&` symbols
+directly as both the param names and what the body already
+references is simpler and just as correct here, since nothing
+outside one `#(...)` body could reference them anyway -- but bare `%`
+still needs rewriting to `%1` in the body (a recursive walk over just
+lists and vectors; a `%`-reference nested inside a `{}`/`#{}` literal
+within one `#(...)` body is vanishingly rare and not handled).
+Nesting (`#(...)` inside another) isn't checked for or rejected the
+way real Clojure does -- just not handled correctly, a low-risk gap
+since nothing here writes nested ones.
+
+A **fifth**, smaller one: `#'sym` (real Clojure's `(var sym)`
+shorthand). No separate Var type exists here (macro-ness itself is a
+flag on the closure, not Var metadata, for the same reason -- see
+"Naming" below), so this reads as `(quote sym)` instead: the closest
+sensible reader-level behavior without inventing Var semantics, not
+a faithful stand-in for what `(var sym)` actually returns.
+
+None of `#{`, `#(`, nor `#'` merge into a single token the way `#?`
+does (`?` is an ordinary character so `#?` merges naturally; `{`,
+`(`, `'` are all special characters that break the merge) -- `read_form`
+peeks at the next token instead of relying on the tokenizer to hand
+it a combined one.
 
 ## Value representation: cons_value, not class(*)
 
