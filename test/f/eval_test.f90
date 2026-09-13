@@ -248,6 +248,11 @@ program eval_test
        "(+ 1 #?(:cljf 10 :clj 20))", "11", all_ok)
   call expect_result("25e. auto-gensym (trailing #) still tokenizes as one symbol: ", env, &
        "(let* (r `(a# a#)) (= (first r) (first (rest r))))", "true", all_ok)
+  call expect_result("25f. every builtin is also reachable via clotran.native, unqualified: ", env, &
+       "(clotran.native/first (list 1 2 3))", "1", all_ok)
+  call expect_result("25g. ...surviving even if clojure.core/first gets shadowed: ", env, &
+       '(do (def first (fn* [x] "shadowed")) (list (first [1 2 3]) (clotran.native/first [1 2 3])))', &
+       '("shadowed" 1)', all_ok)
 
   if (all_ok) then
      print *, ""
