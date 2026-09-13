@@ -1,14 +1,7 @@
 # src/cljc
 
-Clotran-language source that's portable in the `.cljc` sense: written
-against standard Clojure semantics, using reader conditionals
-(`#?(...)`) only where a piece of code genuinely needs to branch per
-host. Real Clojure uses `:clj`/`:cljs`/`:cljr`/... feature keys for
-this; clotran will need its own (`:cljf`? undecided) once the reader
-supports reader conditionals at all (see NOTES.md).
-
-This is where the growing `clojure.core`-equivalent library belongs:
-currently `not`/`cond` are still hardcoded as a literal string in
-`Eval.f90`'s `eval_core_bootstrap` -- extracting that into a real
-file here, loaded at startup, is the first thing that should land in
-this directory.
+Empty for now. A file lives here once it's a genuine cross-host port
+-- i.e. once it has at least one `#?(:cljf ...)` reader-conditional
+branch -- and moves here from `src/clj` at that point (`clojure/
+core.clj` is the first candidate; see `src/clj/README.md`). Nothing
+should be authored here directly before that.

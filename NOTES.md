@@ -278,6 +278,39 @@ in `let`/`fn` params is also not built -- nothing needed by the file
 so far has required it, but real Clojure code leans on it constantly,
 so it's a near-certain future need, not a one-off skip.
 
+**The actual file is now vendored in, and the bootstrap points at
+it** (`src/clj/clojure/core.clj`, mirroring the upstream `clojure/
+clojure` repo's own path -- verbatim, no edits yet). This is a
+deliberate, temporary regression, not an oversight: the file can't
+actually load yet (further gaps below), so `not`/`cond` -- and
+everything depending on them -- are broken until enough of it is
+ported. Confirmed exact scope: `eval_test` goes from all-green to 7
+failures (`not`, `cond`, and the two tests that incidentally use
+`cond`), `test/regression/step8_macros.mal` from 1 to 14 failing,
+`step9_try.mal` from 0 to 2. Chosen deliberately over keeping a
+separate always-working placeholder file, so the actual, current
+state of the real import is never obscured by a stand-in.
+
+A real, load-bearing bug surfaced getting even this far: attempting
+to load the file crashed on startup. Root-caused via a full lldb
+backtrace (not guessed at) to `LispReader.f90`'s tokenizer -- `cur =
+cur // expr(i:i)`, growing an allocatable string one character at a
+time to read a string literal or symbol, is both O(n^2) and a real
+crash for long enough input (here, a multi-line docstring), hitting
+the exact reallocating-assignment fragility already in this file's
+gotchas catalog, just for a plain string instead of a `cons_value`
+array. Fixed by scanning for each token's end first and slicing the
+source once -- unrelated to core.clj specifically, a real bug any
+sufficiently long input could have hit.
+
+Immediately past that, real forms (not truncation artifacts) hit a
+**third substantial gap: no set-literal syntax or set type at all**.
+`#{2}` (here in an inert `:inline-arities` metadata hint) is
+misread as bare symbol `#` immediately followed by hash-map `{2}`,
+which then fails on odd element count. A real, standalone feature
+(reader syntax, a `PersistentSet` type, core ops) needed regardless
+of the core.clj effort, not yet built.
+
 ## Value representation: cons_value, not class(*)
 
 `cons_value` (`Values.f90`) is a concrete tagged-union type (an integer

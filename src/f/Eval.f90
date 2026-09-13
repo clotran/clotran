@@ -157,18 +157,22 @@ contains
     end subroutine reg
   end function repl_env
 
-  ! Real clojure.core lives in src/cljc/core.cljc as an actual file,
-  ! not a string literal -- loaded the ordinary way, through load-file
-  ! itself. Resolved relative to argv[0]'s own directory, not cwd
-  ! (there's no installed-resource concept yet, but this at least
-  ! survives a caller changing directories before invoking us, e.g.
-  ! the regression suite's --rundir).
+  ! Real clojure.core lives in src/clj/clojure/core.clj -- the actual
+  ! upstream file, edited in place with additive #?(:cljf ...) reader-
+  ! conditional branches as needed (never deleting/rewriting real
+  ! logic). Moves to src/cljc/clojure/core.cljc once it actually has
+  ! any such branches -- that's the real Clojure convention for when a
+  ! file earns the .cljc extension, not before. Loaded the ordinary
+  ! way, through load-file itself, resolved relative to argv[0]'s own
+  ! directory, not cwd (no installed-resource concept yet, but this at
+  ! least survives a caller changing directories before invoking us,
+  ! e.g. the regression suite's --rundir).
   subroutine eval_core_bootstrap(env)
     type(env_ref), intent(in) :: env
     type(cons_value) :: ast, discard
     character(len=:), allocatable :: err, core_path, src
     logical :: ok
-    core_path = exe_relative_path("src/cljc/core.cljc")
+    core_path = exe_relative_path("src/clj/clojure/core.clj")
     src = '(load-file "' // core_path // '")'
     ok = read_str(src, ast, err)
     if (ok) discard = eval_form(ast, env)
