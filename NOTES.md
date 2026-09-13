@@ -747,6 +747,81 @@ library's real signatures and emitting the marshaling code (the
 `f2py`/SWIG pattern) is the right next tool -- not a different
 architecture, just less boilerplate per function.
 
+## Native interop values: a `TAG_NATIVE` cons_value case, validated
+
+ChemSol's own routines are scalar in, scalar out -- "one canonical
+real + one canonical int, kind conversion per-adapter" (above) covers
+it completely. Not every library will: something like a hypothetical
+`mathblas` (a matrix/vector type) or a solver that hands back a handle
+you're meant to hold and pass into a *later* call needs Clojure code
+to carry an actual Fortran derived-type value as a first-class value
+-- put it in a vector, hold it in a var, pass it to another function,
+maybe even into a *different* library's call -- without clotran ever
+needing to understand its internals. Every value up to now had to be
+one of clotran's own known tags; there was no way to represent "an
+opaque Fortran object" at all. This is the missing case, and it
+belongs on `cons_value` itself (a new tag, e.g. `TAG_NATIVE`), not
+bolted onto Var -- real Clojure's Var is just a mutable box holding an
+ordinary `Object` reference, the same slot every value uses (locals,
+vector elements, map values, ...); nothing about holding an interop
+object is Var-specific there, so it shouldn't be here either.
+
+Validated in isolation first (`test/f/native_test.f90`, both
+compilers), before touching `cons_value`:
+
+- The payload is a `class(*), pointer`, not `type(c_ptr)` --
+  `iso_c_binding` was flagged as a real prior pain point, and it's not
+  actually needed: ChemSol and any other realistic target here are
+  real Fortran, not a C ABI, and a native Fortran pointer already
+  crosses that boundary. Scalars of odd kinds (`real(4)`,
+  `integer(8)`) and a derived-type struct both round-trip exactly
+  through it via `select type`.
+- **Pointer, not allocatable, matters**: intrinsic structure
+  assignment on a `pointer` component does pointer association (copy
+  the reference) and never invokes `assignment(=)`/`FINAL` on the
+  target -- sidesteps the "class(*) allocatable doesn't dispatch
+  defined assignment" gotcha from earlier, and is also the *correct*
+  semantics: Java object references alias on assignment, they never
+  deep-copy, and this matches that exactly.
+- **Confirmed, concretely, a sharper version of the `closure_t_assign`
+  warning** ("default struct assignment doesn't cascade into an
+  embedded type's own defined assignment"): a brand-new host struct
+  embedding a `cons_value`, with no `assignment(=)` of its own,
+  crashed the moment a naive copy went out of scope
+  (`DEALLOCATE of a pointer that is not the whole content of a pointer
+  ALLOCATE` -- both copies thought they owned the only reference to
+  the same cons cells, so both tried to free them). Demonstrated
+  safely afterward the same way `rc_test.f90`'s `holder_naive` does
+  (a leaked, never-dereferenced pointer copy), then fixed the proven
+  way: an explicit `assignment(=)` forwarding field-by-field, same
+  pattern as `closure_t_assign`. **Rule, not a suggestion**: any new
+  host type that embeds a `cons_value` (or any other clotran ref type)
+  needs its own explicit `assignment(=)` -- Fortran's default is not
+  reliable here on this project's compilers, full stop.
+- Arbitrary nesting in both directions works: a clotran value (map/
+  vector, once `TAG_NATIVE` is real) holding a native struct as a
+  leaf, a native struct holding a real clotran string as one of its
+  own fields, and a native struct built from *another* native struct
+  (native-in-native) -- all round-tripped through three levels of
+  `select type` traversal.
+
+**How this shapes the future adapter generator** (the `f2py`/SWIG-
+style tool above): it isn't one marshaling strategy per library, it's
+two, chosen per argument/return value from the library's own real
+signature -- a scalar of some kind (box/unbox + kind convert, no
+`TAG_NATIVE` involved) versus a derived-type value (wrap/unwrap via
+the native pointer). For the latter, the native tag will need to
+carry a type identity alongside the raw pointer (a name/descriptor,
+not just a bare `class(*)`), so `instance?`/`type` can tell a
+`mathblas.matrix` apart from a `chemsol.something` -- otherwise a
+value from one library's adapter could be handed, unchecked, to a
+routine expecting a different library's type. Same idea as the
+existing `Integer`/`Long`/etc. pseudo-classes `instance?` already
+matches against, just for real Fortran-object identity instead of
+clotran's own built-in kinds. Not implemented yet -- `cons_value`
+itself doesn't have the tag yet, this section records the validated
+plan and the concrete gotcha to avoid when it's added.
+
 ## Getting `defn`/`let`/`loop` to actually work against real core.clj
 
 Getting past `defn`'s own bootstrap (previously it silently failed to

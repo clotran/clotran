@@ -16,7 +16,7 @@ S = src/f
 T = test/f
 
 executables = clotran clotran-bin rc_test atom_test persistent_vector_test \
-	persistent_list_test persistent_hash_map_test rt_test persistent_array_map_test env_test namespace_test eval_test
+	persistent_list_test persistent_hash_map_test rt_test persistent_array_map_test env_test namespace_test eval_test native_test
 
 .PHONY: all test clean
 all: $(executables)
@@ -47,6 +47,9 @@ $(S)/PersistentList.o: $(S)/PersistentList.f90 $(S)/Values.o
 
 persistent_list_test: $(S)/PersistentList.o $(T)/persistent_list_test.f90
 	$(FC) $(FCFLAGS) -o $@ $(S)/Values.o $(S)/PersistentList.o $(T)/persistent_list_test.f90
+
+native_test: $(S)/PersistentList.o $(T)/native_test.f90
+	$(FC) $(FCFLAGS) -o $@ $(S)/Values.o $(S)/PersistentList.o $(T)/native_test.f90
 
 $(S)/PersistentHashMap.o: $(S)/PersistentHashMap.f90 $(S)/Values.o
 	$(FC) $(FCFLAGS) -c $< -o $@
@@ -117,7 +120,7 @@ clotran: scripts/clotran clotran-bin
 	chmod +x $@
 
 test: rc_test atom_test persistent_vector_test persistent_list_test persistent_hash_map_test \
-	rt_test persistent_array_map_test env_test namespace_test eval_test
+	rt_test persistent_array_map_test env_test namespace_test eval_test native_test
 	for t in $^; do echo "--- $$t ---"; ./$$t || exit 1; done
 
 clean:
