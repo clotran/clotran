@@ -62,6 +62,10 @@ program eval_test
        "(def! sumdown (fn* (n) (if (> n 0) (+ n (sumdown (- n 1))) 0)))", "#<fn>", all_ok)
   call expect_result("10c'. ...and the recursive call works: ", env, "(sumdown 3)", "6", all_ok)
   call expect_result("10d. & rest args collect into a list: ", env, "((fn* (a & more) (count more)) 1 2 3)", "2", all_ok)
+  call expect_result("10e. multiple body forms run in order, last is returned: ", env, &
+       "((fn* (x) (+ x 1) (+ x 100)) 5)", "105", all_ok)
+  call expect_result("10f. ...and earlier forms' side effects (def!) still happen: ", env, &
+       "(do (def! g (fn* (x) (def! y (+ x 1)) (* y 2))) (g 5))", "12", all_ok)
 
   call expect_result("11a. numeric comparisons: ", env, "(list (< 1 2) (>= 2 2) (<= 3 2))", "(true true false)", all_ok)
   call expect_result("11b. = is structural, list and vector cross-compare: ", env, "(= (list 1 2) [1 2])", "true", all_ok)

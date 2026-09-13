@@ -1427,14 +1427,34 @@ contains
 
   ! (fn* params body): captures env directly -- assignment bumps its
   ! refcount, same closure semantics as real Clojure fns.
+  ! (fn* [params] form1 form2 ...): every form after params is the
+  ! body, wrapped in an implicit (do ...) same as real Clojure's fn --
+  ! fn* itself only ever holds and evaluates ONE body form.
   function eval_fn(ast, env) result(val)
     type(cons_value), intent(in) :: ast
     type(env_ref), intent(in) :: env
     type(cons_value) :: val
+    type(cons_ref) :: body_forms
+    type(cons_value), allocatable :: forms(:)
+    type(cons_value) :: do_sym
+    integer :: n, i
+
     val%tag = TAG_FN
     allocate(val%fn_val)
     val%fn_val%params = list_first(list_rest(ast%list_val))
-    val%fn_val%body = list_first(list_rest(list_rest(ast%list_val)))
+
+    body_forms = list_rest(list_rest(ast%list_val))
+    n = list_count(body_forms)
+    allocate(forms(n + 1))
+    do_sym%tag = TAG_SYMBOL
+    do_sym%str_val = "do"
+    forms(1) = do_sym
+    do i = 1, n
+       forms(i + 1) = list_first(body_forms)
+       body_forms = list_rest(body_forms)
+    end do
+    val%fn_val%body = make_list(forms)
+
     val%fn_val%env = env
   end function eval_fn
 
