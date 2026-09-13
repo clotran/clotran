@@ -318,6 +318,17 @@ program eval_test
   ! stand-in for what (var sym) actually returns.
   call expect_result("29a. #'sym reads as the symbol itself: ", env, "#'some-name", "some-name", all_ok)
 
+  ! 30. #"pattern": real Clojure's regex-literal syntax. No regex
+  ! engine exists here (a real, separate feature) -- read as a plain
+  ! string, taken raw (not unescaped like an ordinary string), since a
+  ! regex's own backslash escapes (\d, \s, ...) must stay literal --
+  ! confirmed against real Clojure (#"\d+" is a 3-character pattern,
+  ! backslash included), not guessed.
+  call expect_result("30a. #""pattern"" keeps backslashes literal, unlike a normal string: ", env, &
+       '(count #"\d+")', "3", all_ok)
+  call expect_result("30a'. ...an already-escaped backslash is 4 characters: ", env, &
+       '(count #"\\d+")', "4", all_ok)
+
   if (all_ok) then
      print *, ""
      print *, "ALL EVAL CHECKS PASSED"

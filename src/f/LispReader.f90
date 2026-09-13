@@ -736,6 +736,32 @@ contains
              pos = pos + 1 ! consume '#', leaving pos at the quote token
              val = read_wrapped(tokens, pos, "quote")
              return
+          else if (len(tokens(pos + 1)%text) >= 1) then
+             if (tokens(pos + 1)%text(1:1) == '"') then
+                ! "#"pattern"" is real Clojure's regex-literal syntax,
+                ! compiling to a java.util.regex.Pattern. No regex
+                ! engine exists here at all (a real, separate feature
+                ! -- re-pattern/re-matches/re-find/re-seq, its own
+                ! type) -- this reads the pattern text as a plain
+                ! string instead, purely so the reader doesn't choke.
+                ! Code that actually calls a regex function on it will
+                ! fail there, honestly, not silently here. Taken RAW
+                ! (not through unescape_string like an ordinary string
+                ! token): a regex's own \d, \s, \., etc. must keep
+                ! their literal backslash, unlike a normal string's
+                ! escapes -- confirmed against real Clojure (#"\d+"
+                ! is a 3-character pattern, backslash included).
+                block
+                  character(len=:), allocatable :: raw
+                  integer :: tlen
+                  tlen = len(tokens(pos + 1)%text)
+                  raw = tokens(pos + 1)%text(2:tlen - 1)
+                  val%tag = TAG_STRING
+                  val%str_val = raw
+                end block
+                pos = pos + 2 ! consume '#' and the string token
+                return
+             end if
           end if
        end if
        call reader_error("unsupported '#' syntax")

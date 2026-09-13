@@ -369,6 +369,27 @@ Fixed by growing `items` geometrically (doubling, via `move_alloc`,
 not assignment) from a small start instead of one large upfront
 guess -- 17s down to 0.5s end to end.
 
+Last reader gap hit: `#"pattern"` (regex literals -- `#(str ", "
+%)`-adjacent, used e.g. in `*clojure-version*`'s own definition). No
+regex engine exists here at all (`re-pattern`/`re-matches`/`re-find`/
+`re-seq`, its own type -- a genuinely separate, substantial feature,
+not attempted). Read as a plain string instead, purely so the reader
+doesn't choke; code that actually calls a regex function on one will
+fail there, honestly, not silently here. Taken **raw**, not through
+the ordinary string escaper: a regex's own `\d`, `\s`, `\.`, etc. must
+keep their literal backslash, unlike a normal string's escapes --
+confirmed against real Clojure first (`#"\d+"` is a 3-character
+pattern, backslash included, not 2), not assumed.
+
+**With that, all 726 top-level forms in the real, complete
+`core.clj` now parse successfully** -- the only remaining error
+loading it is `'ns' not found`, evaluating the very first form.
+Every reader-level gap found this way (`#{`, `#(`, `#'`, `#"`, the
+tokenizer crash, the `read_items` slowness) is fixed; what's left is
+entirely at the evaluation level: a real `ns`, then `let`/`loop`/`fn`
+(dropping the unused `&form`/`&env` params, per the plan already
+written up above), then whatever surfaces past that.
+
 ## Value representation: cons_value, not class(*)
 
 `cons_value` (`Values.f90`) is a concrete tagged-union type (an integer
