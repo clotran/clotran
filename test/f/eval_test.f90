@@ -227,6 +227,18 @@ program eval_test
   call expect_result("24e. ...with-meta on the same fn again doesn't touch the first: ", env, &
        '(list (get (meta (with-meta f {"doc" "new"})) "doc") (get (meta f) "doc"))', &
        '("new" "orig")', all_ok)
+  ! ^META FORM attaches META to FORM itself, never evaluated -- real
+  ! Clojure's actual reader behavior (not mal's own (with-meta FORM
+  ! META), an evaluated call). Needed so `(def ^{...} name val)`'s
+  ! name position reads as a bare symbol, metadata riding along
+  ! invisibly, not an unevaluated list sitting where def expects a
+  ! symbol -- pervasive in real clojure/core.clj's own bootstrap.
+  call expect_result("24j. ^META on a def's name reads as a bare symbol: ", env, &
+       '(def ^{:doc "x"} tagged-name 42)', "42", all_ok)
+  call expect_result("24j'. ...still correctly bound, not lost: ", env, &
+       "tagged-name", "42", all_ok)
+  call expect_result("24k. ^META on a fn*'s self-reference name works too: ", env, &
+       "((fn* ^:static named-self [n] (if (< n 1) 0 (+ n (named-self (- n 1))))) 3)", "6", all_ok)
   call expect_result("24f. time-ms is non-decreasing: ", env, &
        "(let* [t (time-ms)] (>= (time-ms) t))", "true", all_ok)
   call expect_result("24g. fn?/macro? tell functions and macros apart: ", env, &

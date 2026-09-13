@@ -186,6 +186,60 @@ is missing (it assumes you know to use `clojure` directly instead);
 `scripts/clotran` warns and still runs `clotran-bin`, since there's
 no equally well-known bare alternative to point someone at yet.
 
+## Importing real clojure/core.clj, not writing our own
+
+The plan is to literally load the actual upstream `core.clj` (~8,400
+lines), not hand-write a fresh core library that merely matches real
+Clojure's behavior. That first requires adapting this project's own
+reader/evaluator to handle what real bootstrap Clojure source
+actually looks like -- confirmed empirically against the real file,
+not assumed:
+
+- **`fn*` needed an optional self-reference name** (`(fn* name
+  [params] body)`), used throughout core.clj's own bootstrap (`(fn*
+  cons [x seq] ...)`) for self-recursion without an outer `def`.
+  Bound via a throwaway env layer set to the closure only after it's
+  built (`env_set` mutates the shared node in place).
+- **`defmacro` had the same silently-drops-extra-body-forms bug `fn*`
+  had before** -- same fix, factored into a shared `wrap_body` helper.
+- **Reader conditionals** (`#?(:cljf a :clj b)`, `:cljf` is this
+  project's own feature key alongside real Clojure's `:clj`/`:cljs`)
+  -- every Java interop call in core.clj becomes `#?(:cljf
+  (native-equivalent ...) :clj (. clojure.lang.RT ...))`.
+- **`clotran.native`**, the direct structural analogue of
+  `clojure.lang.RT`: every builtin is now interned there too,
+  alongside `clojure.core`. Needed because core.clj's own `(def
+  first ...)` etc. will completely overwrite `clojure.core`'s
+  binding once patched -- the reader-conditional native fallback
+  needs somewhere stable to call, since `first` itself won't stay
+  the raw builtin.
+- **`^META FORM` now attaches META directly to FORM's own metadata,
+  never evaluated** -- real Clojure's actual reader behavior, not
+  mal's (and this project's former) `(with-meta FORM META)`, an
+  evaluated call. This matters because `def`/`fn*`'s name position is
+  never evaluated at all (same as real Clojure): `(def ^{:doc "..."}
+  x 1)` needs `^{:doc "..."} x` to still read as the bare symbol `x`
+  with metadata riding along invisibly, not an unevaluated
+  `(with-meta x {...})` list sitting where `def` expects a symbol --
+  and nearly every def in core.clj carries doc/arglists metadata this
+  way. Confirmed the reader change didn't regress anything by
+  checking it against real Clojure itself first (`clojure -e`), not
+  assumed.
+
+  This one change **temporarily** breaks two `test/regression/
+  stepA_mal.mal` soft-fails (`(meta f-wm2)` where `f-wm2` is `(def!
+  f-wm2 ^{"abc" 1} (fn* [a] (+ 1 a)))`): mal's own convention
+  auto-propagated a value-position `^META` onto the evaluated result
+  because it was really an evaluated `with-meta` call underneath. Real
+  Clojure does NOT do this automatically -- it only works because the
+  real `fn` macro explicitly copies `(.meta &form)` onto the `fn*` it
+  builds (confirmed directly: `(meta ^{"abc" 1} (fn [a] a))` returns
+  the metadata in real Clojure only because `fn` does this itself, not
+  because evaluating a form transfers its reader metadata for free).
+  This project doesn't have a real `fn` macro yet (only bare `fn*`) --
+  once core.clj's own `fn` is imported and does the same copy-through,
+  these two tests should pass again on their own.
+
 ## Value representation: cons_value, not class(*)
 
 `cons_value` (`Values.f90`) is a concrete tagged-union type (an integer

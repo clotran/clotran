@@ -380,22 +380,33 @@ contains
     call reader_error("reader conditional: no matching :cljf/:default branch")
   end function read_reader_conditional
 
-  ! "^META FORM" reads as (with-meta FORM META).
+  ! "^META FORM" attaches META directly to FORM's own metadata --
+  ! real Clojure's actual reader behavior, not a wrapping (with-meta
+  ! FORM META) call to be evaluated later. This matters: def/fn*'s
+  ! name position is never evaluated at all (same as real Clojure), so
+  ! `(def ^{:doc "..."} x 1)` needs `^{:doc "..."} x` to still read as
+  ! the bare symbol x, its metadata riding along invisibly, not as an
+  ! unevaluated (with-meta x {...}) list sitting where a symbol is
+  ! expected. Whatever META reads as is attached as-is, with no
+  ! keyword/symbol shorthand normalizing (real Clojure turns ^:static
+  ! into {:static true} and ^Type into {:tag Type}) -- nothing here
+  ! inspects specific metadata keys yet, so the raw value is enough.
   recursive function read_meta(tokens, pos) result(val)
     type(token_t), intent(in) :: tokens(:)
     integer, intent(inout) :: pos
-    type(cons_value) :: val
-    type(cons_value) :: items(3)
+    type(cons_value) :: val, meta
 
     pos = pos + 1 ! consume '^'
-    items(3) = read_form(tokens, pos)
+    meta = read_form(tokens, pos)
     if (has_error) return
-    items(2) = read_form(tokens, pos)
+    val = read_form(tokens, pos)
     if (has_error) return
-    items(1) = mk_symbol("with-meta")
-    val%tag = TAG_LIST
-    allocate(val%list_val)
-    val%list_val = list_of(items)
+    if (allocated(val%meta_val)) deallocate(val%meta_val)
+    allocate(val%meta_val)
+    allocate(val%meta_val%ptr)
+    val%meta_val%ptr%refcount = 1
+    meta_node_total_allocated = meta_node_total_allocated + 1
+    val%meta_val%ptr%val = meta
   end function read_meta
 
   ! Collects the forms between "pos" and "closer" into items(1:n). A
