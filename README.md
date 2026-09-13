@@ -18,22 +18,36 @@ second, independent cross-check (see `NOTES.md`).
 - `src/clj`, `src/cljc` -- the language itself, written in itself.
   Currently empty; see `src/cljc/README.md`.
 - `test/f` -- unit tests for the Fortran host, one file per module.
+- `scripts/clotran` -- the user-facing launcher (see below).
 
 ## Build
 
 ```
-make            # builds bin/clotran and every test binary (flang)
+make            # builds clotran(-bin) and every test binary (flang)
 make test       # builds and runs every test binary
 make FC=gfortran all test   # cross-check on gfortran
 ```
 
-`test/regression/` also carries the official mal per-step test suites (see
-`NOTES.md`) -- running those needs mal's own `runtest.py`, external
-to this repo (no Python vendored here):
+`clotran-bin` is the raw interpreter, a plain stdin/stdout REPL
+with no line editing of its own. `clotran` is what you actually
+run -- a thin launcher (`scripts/clotran`) that wraps it in `rlwrap`
+when installed, for history and arrow-key editing, exactly the way
+real Clojure's own `clj` wraps `clojure`; falls back to the raw
+binary with a note if `rlwrap` isn't found.
+
+```
+clotran
+```
+
+`test/regression/` also carries the official mal per-step test suites
+(see `NOTES.md`) -- running those needs mal's own `runtest.py`,
+external to this repo (no Python vendored here), against the raw
+binary (not the rlwrap-wrapping launcher, same as testing `clojure`
+rather than `clj`):
 
 ```
 python3 ~/jborden/mal/runtest.py --deferrable --rundir test/regression \
-    step9_try.mal -- ../../bin/clotran
+    step9_try.mal -- ../../clotran-bin
 ```
 
 ## Status

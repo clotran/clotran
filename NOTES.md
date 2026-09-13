@@ -120,12 +120,13 @@ same-directory filenames, since these fixtures now live together in
 one directory of their own.
 
 Running them still means using mal's `runtest.py` (Python), invoked
-from *outside* this repo against `bin/clotran` -- e.g. from this
-repo's root:
+from *outside* this repo against the raw interpreter, `clotran-bin`
+-- not `clotran`, the rlwrap-wrapping launcher (see "A launcher
+script, not a vendored library" below) -- e.g. from this repo's root:
 
 ```
 python3 ~/jborden/mal/runtest.py --deferrable --rundir test/regression \
-    step9_try.mal -- ../../bin/clotran
+    step9_try.mal -- ../../clotran-bin
 ```
 
 Deliberately not vendored into this repo (no Python in a Clojure-on-
@@ -143,6 +144,47 @@ turning each `form` / `;=>expected` pair into `(is (= expected form))`
 or similar -- mechanical per-file, but real work across ~700 cases,
 not a quick pass. Not started; `test/regression/` is the honest
 interim name for what's there until it happens.
+
+## The REPL launcher: mirrors clj, not lein
+
+`clotran` (the thing you actually run) is a thin shell script,
+`scripts/clotran`, wrapping the raw interpreter `clotran-bin` --
+not line-editing code baked into the Fortran binary itself. This
+mirrors real Clojure's own `clj` deliberately, not `lein repl`: `clj`
+is *not* self-contained either -- its installed script (read
+directly, not just described) does exactly this:
+
+```sh
+if type -p rlwrap >/dev/null 2>&1; then
+  exec rlwrap -m -r -q '\"' -b "(){}[],^%#@\";:'" "$bin_dir/clojure" "$@"
+else
+  echo "Please install rlwrap for command editing or use \"clojure\" instead."
+  exit 1
+fi
+```
+
+`lein repl` *does* achieve genuine self-containment, but only because
+it bundles JLine (a Java library) on the classpath -- there's no
+equivalent "just add a jar" move for a native Fortran binary; the
+honest equivalent would be vendoring a small C line-editor (e.g.
+linenoise) via `iso_c_binding`. That's a real, buildable option
+(confirmed: neither flang nor gfortran compiles `.c` directly, but
+`cc`/`clang` -- already a transitive dependency of having either
+Fortran compiler at all -- compiles it to a `.o` that either
+compiler's own link step accepts with no special handling) but it's
+more machinery than real Clojure itself uses, and duplicates what
+`rlwrap` already does. Given the project mirrors real Clojure
+directly wherever the two diverge, matching `clj`'s actual design
+(external `rlwrap`, automated so the user doesn't have to remember to
+type it) was the right call over inventing something heavier.
+
+`scripts/clotran` uses the exact same rlwrap flags `clj` does (`-m`
+multi-line, `-r` remember typed words for completion, `-q`/`-b` tuned
+for Lisp syntax rather than shell syntax) rather than guessed-at
+ones. One deliberate deviation: `clj` exits with an error if `rlwrap`
+is missing (it assumes you know to use `clojure` directly instead);
+`scripts/clotran` warns and still runs `clotran-bin`, since there's
+no equally well-known bare alternative to point someone at yet.
 
 ## Value representation: cons_value, not class(*)
 
