@@ -465,8 +465,40 @@ module values
        atom_ref_release, meta_ref_release, arity_clauses_ref_release, hamt_ref_release, &
        lazy_ref_release
   public :: value_equal
+  public :: array_node, set_array_node
 
 contains
+
+  ! --- payload accessors -----------------------------------------
+  !
+  ! The one place that knows HOW a value stores a payload. Call sites
+  ! go through these so that PLAN.md step 3c-2 can replace an
+  ! allocatable component with a heap handle by rewriting this section
+  ! rather than the ~950 lines that name a component directly.
+  !
+  ! Accessors are added a payload at a time, each migration green on
+  ! its own, so the representation swap is the only step left that is
+  ! genuinely big-bang.
+
+  ! Null when this value holds no array, so `associated(array_node(v))`
+  ! is the whole "is this an array?" test -- one check rather than the
+  ! allocated-then-associated pair every call site used to repeat.
+  function array_node(v) result(node)
+    type(cons_value), intent(in) :: v
+    type(native_array_node), pointer :: node
+    node => null()
+    if (v%tag /= TAG_ARRAY) return
+    if (.not. allocated(v%array_val)) return
+    node => v%array_val%ptr
+  end function array_node
+
+  subroutine set_array_node(v, node)
+    type(cons_value), intent(inout) :: v
+    type(native_array_node), pointer, intent(in) :: node
+    v%tag = TAG_ARRAY
+    if (.not. allocated(v%array_val)) allocate(v%array_val)
+    v%array_val%ptr => node
+  end subroutine set_array_node
 
   ! Value equality for map/set keys: same tag and same scalar/text
   ! content. Lists/vectors/maps as keys aren't compared deeply yet --

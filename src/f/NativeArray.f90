@@ -38,9 +38,7 @@ contains
   function array_is(v) result(yes)
     type(cons_value), intent(in) :: v
     logical :: yes
-    yes = (v%tag == TAG_ARRAY)
-    if (yes) yes = allocated(v%array_val)
-    if (yes) yes = associated(v%array_val%ptr)
+    yes = associated(array_node(v))
   end function array_is
 
   ! The kind name a value would naturally live in, so that
@@ -100,10 +98,7 @@ contains
        return
     end select
     call zero_fill(node)
-
-    val%tag = TAG_ARRAY
-    allocate(val%array_val)
-    val%array_val%ptr => node
+    call set_array_node(val, node)
   end function array_new
 
   ! Fortran leaves a fresh allocation undefined; Clojure's make-array
@@ -122,37 +117,45 @@ contains
 
   function array_rank(v) result(r)
     type(cons_value), intent(in) :: v
+    type(native_array_node), pointer :: nd
     integer :: r
     r = 0
-    if (array_is(v)) r = size(v%array_val%ptr%extents)
+    nd => array_node(v)
+    if (associated(nd)) r = size(nd%extents)
   end function array_rank
 
   function array_kind_name(v) result(kind_name)
     type(cons_value), intent(in) :: v
+    type(native_array_node), pointer :: nd
     character(len=:), allocatable :: kind_name
     kind_name = ""
-    if (array_is(v)) kind_name = v%array_val%ptr%elem_kind
+    nd => array_node(v)
+    if (associated(nd)) kind_name = nd%elem_kind
   end function array_kind_name
 
   ! Total element count, across every dimension -- what alength reports
   ! for a rank-1 array and what `count` means for any of them.
   function array_length(v) result(n)
     type(cons_value), intent(in) :: v
+    type(native_array_node), pointer :: nd
     integer :: n
     integer :: i
     n = 0
-    if (.not. array_is(v)) return
+    nd => array_node(v)
+    if (.not. associated(nd)) return
     n = 1
-    do i = 1, size(v%array_val%ptr%extents)
-       n = n * v%array_val%ptr%extents(i)
+    do i = 1, size(nd%extents)
+       n = n * nd%extents(i)
     end do
   end function array_length
 
   function array_shape_list(v) result(extents)
     type(cons_value), intent(in) :: v
+    type(native_array_node), pointer :: nd
     integer, allocatable :: extents(:)
-    if (array_is(v)) then
-       extents = v%array_val%ptr%extents
+    nd => array_node(v)
+    if (associated(nd)) then
+       extents = nd%extents
     else
        allocate(extents(0))
     end if
@@ -185,19 +188,21 @@ contains
     integer, intent(in) :: idx(:)
     character(len=:), allocatable, intent(out) :: err
     type(cons_value) :: out
+    type(native_array_node), pointer :: nd
     integer :: pos
 
     err = ""
-    if (.not. array_is(v)) then
+    nd => array_node(v)
+    if (.not. associated(nd)) then
        err = "aget: not an array"
        return
     end if
-    pos = linear_index(v%array_val%ptr, idx)
+    pos = linear_index(nd, idx)
     if (pos == 0) then
        err = "aget: index out of bounds"
        return
     end if
-    select type (b => v%array_val%ptr%buf)
+    select type (b => nd%buf)
     type is (real(dp));    out%tag = TAG_REAL; out%real_val = b(pos)
     type is (real(4));     out%tag = TAG_REAL; out%real_val = real(b(pos), dp)
     type is (integer(4));  out%tag = TAG_INT;  out%int_val = int(b(pos))
@@ -217,19 +222,21 @@ contains
     integer, intent(in) :: idx(:)
     type(cons_value), intent(in) :: new_val
     character(len=:), allocatable, intent(out) :: err
+    type(native_array_node), pointer :: nd
     integer :: pos
 
     err = ""
-    if (.not. array_is(v)) then
+    nd => array_node(v)
+    if (.not. associated(nd)) then
        err = "aset: not an array"
        return
     end if
-    pos = linear_index(v%array_val%ptr, idx)
+    pos = linear_index(nd, idx)
     if (pos == 0) then
        err = "aset: index out of bounds"
        return
     end if
-    select type (b => v%array_val%ptr%buf)
+    select type (b => nd%buf)
     type is (real(dp));    b(pos) = as_real(new_val)
     type is (real(4));     b(pos) = real(as_real(new_val), 4)
     type is (integer(4));  b(pos) = int(as_int(new_val), 4)
@@ -266,13 +273,15 @@ contains
     type(cons_value), intent(in) :: v
     character(len=:), allocatable :: s
     character(len=16) :: buf
+    type(native_array_node), pointer :: nd
     integer :: d
     s = ""
-    if (.not. array_is(v)) return
-    s = v%array_val%ptr%elem_kind // "["
-    do d = 1, size(v%array_val%ptr%extents)
+    nd => array_node(v)
+    if (.not. associated(nd)) return
+    s = nd%elem_kind // "["
+    do d = 1, size(nd%extents)
        if (d > 1) s = s // " "
-       write(buf, '(I0)') v%array_val%ptr%extents(d)
+       write(buf, '(I0)') nd%extents(d)
        s = s // trim(buf)
     end do
     s = s // "]"

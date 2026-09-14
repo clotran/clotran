@@ -316,8 +316,33 @@ the text. A cache writer needs to exclude them.
 - [ ] **3c.** Value type: drop the nine allocatable components and
       `FINAL`; keep the inline scalars (`tag`, `int_val`, `real_val`,
       `bool_val`) so `v%tag` and friends keep working, and replace only
-      the allocatable components with one handle. Smaller blast radius
-      than a full rewrite, same win.
+      the allocatable components with one handle.
+
+      **It does not have to be one bang.** 959 sites name a component
+      directly, but a census showed almost all of them pass the bare
+      component to a module function; only ~48 reach through `%ptr%`.
+      So split it:
+
+      - **3c-1.** Add a payload accessor per component in Values.f90
+        and migrate the call sites to it. Behaviour-preserving, the
+        representation *unchanged*, so the full sweep stays green after
+        every component. One commit each, smallest first.
+      - **3c-2.** Swap the representation underneath the accessors.
+        One file, and the only genuinely big-bang part left.
+
+        3c-1 is worth doing whichever way the compiler question lands,
+        so it does not need that decision first -- it makes the
+        decision later and cheaper.
+
+  - [x] **3c-1 `array_val`** (23 sites). Every real use was a
+        `%array_val%ptr%...` chain -- the hardest shape, and it got
+        *shorter*: `nd => array_node(v)` once per routine, then plain
+        `nd%extents`. `array_is` collapsed to
+        `associated(array_node(v))`, one test instead of the
+        allocated-then-associated pair each site repeated. The only
+        `%array_val` left in the tree is inside the accessors and
+        inside the refcounting that 3e deletes, which is the end state
+        every component is aiming at.
 - [ ] **3d.** Evaluator on the value stack.
 - [ ] **3e.** Retire `FINAL`-based refcounting; `rc_test` becomes a GC
       test. Finalizers survive only on the few heap nodes owning
