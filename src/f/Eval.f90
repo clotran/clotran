@@ -4903,12 +4903,7 @@ contains
        val%int_val = time_ms()
     case ("with-meta")
        val = args(1)
-       if (allocated(val%meta_val)) deallocate(val%meta_val)
-       allocate(val%meta_val)
-       allocate(val%meta_val%ptr)
-       val%meta_val%ptr%refcount = 1
-       meta_node_total_allocated = meta_node_total_allocated + 1
-       val%meta_val%ptr%val = args(2)
+       call set_meta(val, args(2))
     case ("meta")
        val%tag = TAG_NIL
        if (args(1)%tag == TAG_VAR) then
@@ -4922,9 +4917,7 @@ contains
             type(cons_value) :: m
             integer :: fl, fc, ff, el, ec
             call form_position(args(1), fl, fc, ff, el, ec)
-            if (allocated(args(1)%meta_val)) then
-               if (associated(args(1)%meta_val%ptr)) m = args(1)%meta_val%ptr%val
-            end if
+            m = get_meta(args(1))
             if (fl /= 0) then
                if (m%tag /= TAG_HASHMAP) m = empty_map()
                m = multifn_assoc(m, mk_keyword("line"), mk_int_val(fl))
@@ -4944,8 +4937,8 @@ contains
             end if
             val = m
           end block
-       else if (allocated(args(1)%meta_val)) then
-          if (associated(args(1)%meta_val%ptr)) val = args(1)%meta_val%ptr%val
+       else
+          val = get_meta(args(1))
        end if
     case default
        call eval_error("unknown builtin: " // name)
@@ -5277,33 +5270,28 @@ contains
     ! it: defn's :arglists/:doc, ^:private, ^:dynamic, and
     ! clojure.test's deftest, which attaches its :test function to the
     ! name symbol and then looks for it on the Var.
-    if (allocated(sym%meta_val)) then
+    if (has_meta(sym)) then
        block
-         type(cons_value) :: the_var
-         character(len=:), allocatable :: owner
-         if (associated(sym%meta_val%ptr)) then
-            if (ns_get_own_var(ns_current(), sym%str_val, the_var)) then
-               ! EVALUATED, not stored raw: real Clojure's compiler
-               ! evaluates a def'd symbol's metadata map. deftest's
-               ! :test value is a syntax-quoted (fn [] ...) form, and
-               ! storing it unevaluated left the Var's :test holding a
-               ! list instead of a function.
-               block
-                 type(cons_value) :: meta_map
-                 meta_map = eval_form(sym%meta_val%ptr%val, env)
-                 if (has_error) then
-                    ! Metadata that won't evaluate must not take the def
-                    ! down with it: core.clj attaches :inline fns and
-                    ! :arglists to definitions made long before the
-                    ! machinery those forms need exists. Keep the raw
-                    ! map and carry on, which is what storing it
-                    ! unevaluated used to do for every def.
-                    has_error = .false.
-                    meta_map = sym%meta_val%ptr%val
-                 end if
-                 call var_meta_set(the_var, meta_map)
-               end block
+         type(cons_value) :: the_var, raw_meta, meta_map
+         raw_meta = get_meta(sym)
+         if (ns_get_own_var(ns_current(), sym%str_val, the_var)) then
+            ! EVALUATED, not stored raw: real Clojure's compiler
+            ! evaluates a def'd symbol's metadata map. deftest's
+            ! :test value is a syntax-quoted (fn [] ...) form, and
+            ! storing it unevaluated left the Var's :test holding a
+            ! list instead of a function.
+            meta_map = eval_form(raw_meta, env)
+            if (has_error) then
+               ! Metadata that won't evaluate must not take the def
+               ! down with it: core.clj attaches :inline fns and
+               ! :arglists to definitions made long before the
+               ! machinery those forms need exists. Keep the raw
+               ! map and carry on, which is what storing it
+               ! unevaluated used to do for every def.
+               has_error = .false.
+               meta_map = raw_meta
             end if
+            call var_meta_set(the_var, meta_map)
          end if
        end block
     end if
@@ -5319,19 +5307,18 @@ contains
   subroutine apply_macro_metadata(sym, val)
     type(cons_value), intent(in) :: sym
     type(cons_value), intent(inout) :: val
-    type(cons_value) :: macro_key, macro_val
+    type(cons_value) :: macro_key, macro_val, m
 
     if (val%tag /= TAG_FN) return
     if (.not. allocated(val%fn_val)) return
-    if (.not. allocated(sym%meta_val)) return
-    if (.not. associated(sym%meta_val%ptr)) return
-    if (sym%meta_val%ptr%val%tag /= TAG_HASHMAP) return
-    if (.not. allocated(sym%meta_val%ptr%val%map_val)) return
+    m = get_meta(sym)
+    if (m%tag /= TAG_HASHMAP) return
+    if (.not. allocated(m%map_val)) return
 
     macro_key%tag = TAG_KEYWORD
     macro_key%str_val = "macro"
-    if (.not. array_map_contains(sym%meta_val%ptr%val%map_val, macro_key)) return
-    macro_val = rt_get(sym%meta_val%ptr%val, macro_key)
+    if (.not. array_map_contains(m%map_val, macro_key)) return
+    macro_val = rt_get(m, macro_key)
     if (macro_val%tag == TAG_NIL) return
     if (macro_val%tag == TAG_BOOL .and. .not. macro_val%bool_val) return
     val%fn_val%is_macro = .true.

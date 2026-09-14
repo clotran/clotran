@@ -466,6 +466,7 @@ module values
        lazy_ref_release
   public :: value_equal
   public :: array_node, set_array_node
+  public :: has_meta, get_meta, set_meta
 
 contains
 
@@ -491,6 +492,35 @@ contains
     if (.not. allocated(v%array_val)) return
     node => v%array_val%ptr
   end function array_node
+
+  ! Metadata is one value on a shared node, so it reads as a value.
+  ! has_meta is separate from "get_meta returned nil" on purpose:
+  ! (with-meta x nil) attaches nil, which is not the same as carrying
+  ! no metadata at all, and eval_def distinguishes them.
+  function has_meta(v) result(yes)
+    type(cons_value), intent(in) :: v
+    logical :: yes
+    yes = allocated(v%meta_val)
+    if (yes) yes = associated(v%meta_val%ptr)
+  end function has_meta
+
+  function get_meta(v) result(m)
+    type(cons_value), intent(in) :: v
+    type(cons_value) :: m
+    m%tag = TAG_NIL
+    if (has_meta(v)) m = v%meta_val%ptr%val
+  end function get_meta
+
+  subroutine set_meta(v, m)
+    type(cons_value), intent(inout) :: v
+    type(cons_value), intent(in) :: m
+    if (allocated(v%meta_val)) deallocate(v%meta_val)
+    allocate(v%meta_val)
+    allocate(v%meta_val%ptr)
+    v%meta_val%ptr%refcount = 1
+    meta_node_total_allocated = meta_node_total_allocated + 1
+    v%meta_val%ptr%val = m
+  end subroutine set_meta
 
   subroutine set_array_node(v, node)
     type(cons_value), intent(inout) :: v

@@ -343,6 +343,23 @@ the text. A cache writer needs to exclude them.
         `%array_val` left in the tree is inside the accessors and
         inside the refcounting that 3e deletes, which is the end state
         every component is aiming at.
+  - [x] **3c-1 `meta_val`** (35 sites). `meta_node` holds one
+        `cons_value`, so the accessors are value-level:
+        `has_meta`/`get_meta`/`set_meta`. Both five-line
+        allocate-and-refcount blocks (`with-meta`, the reader's `^`)
+        became one call, and `eval_def`'s doubly-nested
+        allocated/associated guard flattened by two levels.
+
+        `has_meta` is deliberately separate from "get_meta returned
+        nil": `(with-meta x nil)` attaches nil, which is not the same
+        as carrying no metadata, and `eval_def` branches on the
+        difference. Collapsing them would have been a silent semantic
+        change -- the kind this whole split exists to avoid.
+
+        Metadata is where the unit tests are weakest relative to the
+        risk (`:arglists`, `^:dynamic`, `deftest`'s `:test`), so this
+        one was also checked against the upstream suite on the
+        pre-change tree: 163/16/41, identical per namespace.
 - [ ] **3d.** Evaluator on the value stack.
 - [ ] **3e.** Retire `FINAL`-based refcounting; `rc_test` becomes a GC
       test. Finalizers survive only on the few heap nodes owning

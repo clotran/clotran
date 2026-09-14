@@ -600,12 +600,7 @@ contains
     if (has_error) return
     val = read_form(tokens, pos)
     if (has_error) return
-    if (allocated(val%meta_val)) deallocate(val%meta_val)
-    allocate(val%meta_val)
-    allocate(val%meta_val%ptr)
-    val%meta_val%ptr%refcount = 1
-    meta_node_total_allocated = meta_node_total_allocated + 1
-    val%meta_val%ptr%val = meta
+    call set_meta(val, meta)
   end function read_meta
 
   ! Metadata shorthand, exactly as real Clojure's LispReader expands it:
