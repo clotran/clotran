@@ -1287,6 +1287,120 @@ be. Five are `defprotocol`/`extend-protocol`/`deftype` and the
 `getContextClassLoader`, and `(require 'clojure.java.io)` --
 classloaders and host I/O.
 
+## Loading the OTHER upstream core files: `RT/load` and core_print.clj
+
+core.clj isn't one file. Six lines in the middle of it are `(load
+"core_print")`, `(load "core_deftype")`, `(load "core/protocols")`,
+`(load "gvec")`, `(load "genclass")`, `(load "core_proxy")`, and every
+one was failing -- which is where most of the remaining failures were
+concentrated, since everything those files define (`defprotocol`,
+`deftype`, and all of `print-method`'s methods) went missing with them.
+
+`(load "core_print")` reaches the host as `(clojure.lang.RT/load
+"clojure/core_print")`: core.clj's own `load` builds a classpath-
+relative path out of `root-directory` and strips the leading slash.
+There is no classpath here, so `RT/load` maps that straight to a file
+under `src/clj` (`clotran.native/resource-path` resolves it against the
+executable, the same rule the bootstrap's own loads use).
+
+Getting `root-resource` to produce that path at all needed two fixes,
+both of which had been silently wrong:
+
+- **`..` was being read as a constructor.** `(ClassName. args)`
+  rewrites to `(new ClassName args)`, and the test for it was "the name
+  ends in a dot" -- which `..` does. So `(.. x (m a) (m b))` quietly
+  evaluated to `x` instead of chaining, with no error at all. `..` now
+  escapes both that rewrite and the `.method` sugar.
+- **`.replace` (the char/char overload) didn't exist**, which is what
+  `root-resource` uses to turn `clojure.core` into `clojure/core`.
+
+With those, **core_print.clj is real upstream source, loading and
+running unmodified** -- all ~40 `defmethod`s, the `prefer-method`
+calls, `print-sequential`, `*print-length*`/`*print-level*` -- and it
+replaces the single `:default` method the previous pass installed as a
+stand-in. Reaching it turned up a pile of genuine gaps, each fixed
+where it belonged rather than papered over:
+
+- **`nth` ignored its not-found argument**, and `(nth nil 0)` threw
+  instead of answering nil. Not cosmetic: destructuring compiles to
+  `(nth v 0 nil)` for every position it binds, so `(let [[a b] nil]
+  ...)` threw, and with it every core.clj form that destructures a
+  possibly-nil value. It was also the real cause of the long-standing
+  `for`/`condp` "nth: index out of bounds".
+- **`set!`** was listed as a special form but never implemented. It
+  writes the innermost dynamic binding if one is in effect, else the
+  root (`var_set`). Real Clojure refuses set! on a Var with no thread
+  binding; clotran has no threads, so the root is the honest place for
+  it to land.
+- `vec` (`LazilyPersistentVector/create`), `.charAt`, `String/format`
+  (the `%s %d %x %n %%` subset core.clj actually uses), `hash`
+  (`Util/hasheq`, and `System/identityHashCode`, since there is no
+  object identity separate from value here), `to-array`, `.isNaN`,
+  `.isArray`, `.getClass`, and `Double/POSITIVE_INFINITY` /
+  `NEGATIVE_INFINITY` as real IEEE values via `ieee_arithmetic` rather
+  than a `huge()` stand-in, so a computed infinity really does compare
+  equal.
+
+## Multimethod dispatch over host types: the hierarchy is declared, not reflected
+
+core_print.clj dispatches `print-method` on *interfaces* --
+`clojure.lang.ISeq`, `java.util.Map`, `Object` -- and leans on
+`prefer-method` to break ties. Exact-match dispatch can do none of
+that, so multimethods needed the rest of their semantics.
+
+What the JVM gets from `Class.isAssignableFrom` has to come from
+somewhere else here, and the cheap answer turned out to be the right
+one: **class names are keywords** (`(class [1])` is
+`:clojure.lang.PersistentVector`, and a bare class name in source
+evaluates to the keyword of the same name), so the relationships
+between them can live in the same global hierarchy `derive` already
+maintains. `src/clj/clotran_types.clj` declares that hierarchy -- and
+because it is declared with real `derive`, clojure.core's own `isa?`,
+`parents`, `ancestors` and `prefer-method` work on host types
+unchanged. The host owes only the lookup.
+
+Dispatch now mirrors `MultiFn.findAndCacheBestMethod`: exact match,
+else every method key the dispatch value `isa?`, with `dominates`
+(`prefers` OR `isa?`) picking the winner and a genuine tie being an
+error rather than an arbitrary choice. `dominates` falling back to
+`isa?` is what keeps a catch-all `Object` method from making every
+dispatch ambiguous. `prefers` recurses through `(parents x)` and
+`(parents y)`, same as MultiFn.java: core_print.clj prefers `ISeq` over
+`java.util.Collection` and never mentions `java.util.List`, yet a list
+matches both the `ISeq` method and the `java.util.List` one, and the
+preference only reaches the latter through `List`'s parent
+`Collection`.
+
+Two smaller decisions fell out of this:
+
+- **`java.lang` is the implicit package**, so `Double` and
+  `java.lang.Double` are one class -- and core_print.clj really does
+  use both spellings, sometimes for the same type. As keywords those
+  would be different dispatch values, so one spelling wins: the bare
+  one (`class_keyword_name` strips the prefix), since it is what the
+  source mostly writes and what reads best out of `(class x)`.
+- **Any unresolved class-shaped name evaluates to its own keyword**,
+  not just `clojure.lang.*` as before -- `Object`, `java.util.Map`,
+  `Throwable`. The test is Java's own naming convention (dotted, or
+  leading capital), the same one syntax-quote uses. The cost is that a
+  mistyped capitalized symbol reads as a keyword instead of erroring;
+  the alternative is failing every host-class reference in core.clj.
+  This also retired the hand-written list of `(def clojure.lang.ISeq
+  :clojure.lang.ISeq)` forms clotran.clj used to carry.
+
+`ponytail`: dispatch is linear over the method table on every unmatched
+value, where real Clojure memoizes the winner. A cache cleared by
+addMethod/removeMethod is the upgrade if a hot multimethod shows up.
+
+**Where core.clj's remaining 14 failures are** (`CLOTRAN_DEBUG_LOAD=1
+./clotran-bin` lists them): five are the still-unported sibling files,
+of which `genclass` and `core_proxy` are JVM bytecode generation that
+never will be; five are `defprotocol`/`extend-protocol`/`deftype` and
+the `Eduction` type built on them, all waiting on core_deftype.clj; the
+rest are `clojure.lang.RT/baseLoader`, `Thread`'s context classloader,
+and `(require 'clojure.java.io)` -- classloaders and host I/O.
+
+
 ## Status
 
 Steps 1-6 pass official required tests on both compilers (117/117,

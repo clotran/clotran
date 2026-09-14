@@ -32,7 +32,23 @@
 ;; RT.f90's own generic dispatchers (already reachable under
 ;; clotran.native, since every builtin is registered under both
 ;; namespaces).
+;; java.lang.Double's static fields, as core_print.clj's own Double
+;; method compares against them. Real IEEE values (see the infinity
+;; builtin), so a computed infinity really does match.
+(in-ns 'Double)
+(def POSITIVE_INFINITY (clotran.native/infinity 1))
+(def NEGATIVE_INFINITY (clotran.native/infinity -1))
+(in-ns 'clojure.core)
+
+(in-ns 'clojure.lang.LazilyPersistentVector)
+(def create clotran.native/vec) ; core.clj's own `vec` and variadic `vector` both route through this
 (in-ns 'clojure.lang.RT)
+;; (load "core_print") from clojure.core reaches here as
+;; (clojure.lang.RT/load "clojure/core_print"): core.clj's own `load`
+;; builds that classpath-relative path and strips the leading slash.
+;; There's no classpath here, so the path names a file under src/clj
+;; directly. load-file is a special form, hence a wrapper, not an alias.
+(def load (fn* [path] (load-file (clotran.native/resource-path path))))
 (def first clotran.native/first)
 (def next clotran.native/next)
 (def more clotran.native/rest) ; core.clj's own `rest` calls (. clojure.lang.RT (more x)), not "rest"
@@ -47,10 +63,13 @@
 (def dissoc clotran.native/dissoc)
 (def readString clotran.native/read-string)
 (def subvec clotran.native/subvec)
+(def toArray clotran.native/vec) ; no array type here -- a vector is what an Object[] becomes
 (def keys clotran.native/keys)
 (def vals clotran.native/vals)
 (def nextID clotran.native/next-id)
 (def isReduced clotran.native/reduced?)
+(def longCast (fn* [x] x)) ; one canonical int kind here, so every cast is a no-op
+(def intCast (fn* [x] x))
 (def uncheckedLongCast (fn* [x] x)) ; one canonical int kind here -- a cast is a no-op; fn*
                                      ; (the real special form), not fn (real core.clj's own
                                      ; macro, which doesn't exist yet -- clotran.clj loads
@@ -179,6 +198,10 @@
 ;; properties core.clj reads while setting up *file*/line separators.
 (in-ns 'System)
 (def getProperty (fn* [k] (if (clotran.native/= k "line.separator") "\n" nil)))
+;; No object identity distinct from value here, so the value hash is the
+;; only answer available. core_print.clj uses it to tag an unprintable
+;; object (#object[C 0x... "..."]).
+(def identityHashCode clotran.native/hash)
 (in-ns 'clojure.core)
 
 ;; java.lang.Thread: core.clj only reaches for the context classloader
@@ -348,10 +371,26 @@
 ;; equality clotran already has; real Clojure's own equiv/equals
 ;; differ (numeric tower vs. Object.equals), a distinction clotran
 ;; doesn't make yet.
+;; clojure.lang.Compiler: only the name munging defprotocol needs.
+(in-ns 'clojure.lang.Compiler)
+(def munge clotran.native/munge)
+(in-ns 'clojure.core)
+
 (in-ns 'clojure.lang.Util)
 (def equiv clotran.native/=)
 (def equals clotran.native/=)
 (def identical clotran.native/=) ; nil?/true?/false?/identical? all only ever compare against the nil/true/false singletons here, where = already agrees with real identity
+(def hasheq clotran.native/hash)
+(def hash clotran.native/hash)
+(in-ns 'clojure.core)
+
+;; java.lang.String's statics. format covers only the conversions
+;; core.clj and core_print.clj actually use (%s %d %x %n %%) -- the
+;; full java.util.Formatter grammar (widths, flags, argument indexes)
+;; is not here.
+(in-ns 'String)
+(def format clotran.native/format)
+(def valueOf clotran.native/str)
 (in-ns 'clojure.core)
 
 ;; instance?/isInstance: real core.clj's own instance? is (fn [c x]
@@ -360,35 +399,10 @@
 ;; (Eval.f90) handles "isInstance" as a direct passthrough to the
 ;; native instance? builtin, so core.clj's own definition works as
 ;; literally written, as long as c evaluates to *something*
-;; recognizable rather than a real Class -- these defs give every
-;; pseudo-class core.clj's own (unmodified) source refers to by bare
-;; name a value to evaluate to: a keyword matching its own name, which
-;; the native instance?/isInstance pattern-matches against. Grows one
-;; entry at a time as core.clj's walk turns up the next one it needs.
+;; recognizable rather than a real Class. A bare class name now
+;; evaluates to the keyword of the same name on its own (eval_symbol),
+;; so the long hand-written list of (def clojure.lang.ISeq
+;; :clojure.lang.ISeq) forms that used to live here is gone.
 (in-ns 'clojure.lang.Symbol)
 (def intern clotran.native/symbol) ; (Symbol/intern "name") -- clotran's symbol builtin already does exactly this
 (in-ns 'clojure.core)
-(def clojure.lang.Symbol :clojure.lang.Symbol)
-(def clojure.lang.Keyword :clojure.lang.Keyword)
-(def clojure.lang.IPersistentVector :clojure.lang.IPersistentVector)
-(def clojure.lang.IPersistentMap :clojure.lang.IPersistentMap)
-(def clojure.lang.ISeq :clojure.lang.ISeq)
-(def clojure.lang.IMeta :clojure.lang.IMeta)
-(def clojure.lang.Counted :clojure.lang.Counted)
-(def clojure.lang.IPersistentList :clojure.lang.IPersistentList)
-(def clojure.lang.IDeref :clojure.lang.IDeref)
-(def clojure.lang.Var :clojure.lang.Var)
-(def Number :Number)
-(def Character :Character)
-(def Integer :Integer)
-(def Long :Long)
-(def Short :Short)
-(def Byte :Byte)
-(def clojure.lang.BigInt :clojure.lang.BigInt)
-(def BigInteger :BigInteger)
-(def Double :Double)
-(def Float :Float)
-(def clojure.lang.BigDecimal :clojure.lang.BigDecimal)
-(def BigDecimal :BigDecimal)
-(def String :String)
-(def Boolean :Boolean)

@@ -424,13 +424,59 @@ program eval_test
        '(print-str "x" \y)', '"x y"', all_ok)
   call expect_result("36c. with-out-str captures what's written to *out*: ", env, &
        '(with-out-str (pr :a) (pr :b))', '":a:b"', all_ok)
-  call expect_result("36d. a later defmethod overrides the default for one type: ", env, &
-       '(do (defmethod print-method clojure.lang.Keyword [x w] (. w append "K"))' // &
+  ! core_print.clj already defines a Keyword method, so this saves and
+  ! restores it rather than removing it -- see 25g for what a check
+  ! that leaves the environment changed does to every later one.
+  call expect_result("36d. a later defmethod overrides the method for one type: ", env, &
+       '(do (def saved-km (get-method print-method clojure.lang.Keyword))' // &
+       '    (defmethod print-method clojure.lang.Keyword [x w] (. w append "K"))' // &
        '    (let [out (pr-str :anything)]' // &
-       '      (remove-method print-method clojure.lang.Keyword)' // & ! put it back, see 25g
+       '      (. print-method addMethod clojure.lang.Keyword saved-km)' // &
        '      out))', '"K"', all_ok)
-  call expect_result("36d'. ...and removing it falls back to the default again: ", env, &
+  call expect_result("36d''. ...and putting the original back restores it: ", env, &
        '(pr-str :anything)', '":anything"', all_ok)
+
+  ! 37. Host types are keywords, related by the hierarchy `derive`
+  ! maintains (clotran_types.clj), so isa?/parents/prefer-method and
+  ! multimethod dispatch over them work as they do on the JVM.
+  call expect_result("37a. class names a type: ", env, &
+       '(list (class 1) (class "s") (class :k) (class [1]) (class nil))', &
+       "(:Long :String :clojure.lang.Keyword :clojure.lang.PersistentVector nil)", all_ok)
+  call expect_result("37b. java.lang is the implicit package, so both spellings agree: ", env, &
+       "(list (= Double java.lang.Double) (isa? (class 1.5) Number))", "(true true)", all_ok)
+  call expect_result("37c. a concrete type isa? its interfaces: ", env, &
+       "(list (isa? (class [1]) clojure.lang.IPersistentVector)" // &
+       "      (isa? (class [1]) java.util.List)" // &
+       "      (isa? (class [1]) Object)" // &
+       "      (isa? (class [1]) clojure.lang.ISeq))", "(true true true false)", all_ok)
+  call expect_result("37d. dispatch picks the most specific method, not just any match: ", env, &
+       "(do (defmulti kind class)" // &
+       "    (defmethod kind Object [x] :object)" // &
+       "    (defmethod kind java.util.Collection [x] :coll)" // &
+       "    (defmethod kind clojure.lang.IPersistentVector [x] :vector)" // &
+       "    (list (kind [1]) (kind #{1}) (kind 1)))", "(:vector :coll :object)", all_ok)
+  call expect_result("37e. two equally specific matches are an error until preferred: ", env, &
+       "(do (defmulti tie class)" // &
+       "    (defmethod tie java.util.List [x] :list)" // &
+       "    (defmethod tie java.util.RandomAccess [x] :ra)" // &
+       "    (let [before (try (tie [1]) (catch Throwable e :ambiguous))]" // &
+       "      (prefer-method tie java.util.RandomAccess java.util.List)" // &
+       "      (list before (tie [1]))))", "(:ambiguous :ra)", all_ok)
+
+  ! 38. Odds and ends real core.clj leans on.
+  call expect_result("38a. nth's not-found arity, which destructuring compiles to: ", env, &
+       "(list (nth nil 0) (nth [] 3 :none) (nth [1 2] 0 :none) (let [[a b] nil] [a b]))", &
+       "(nil :none 1 [nil nil])", all_ok)
+  call expect_error("38a'. ...but a bare out-of-bounds nth still throws: ", env, "(nth [1] 5)")
+  call expect_result("38b. set! writes the innermost binding, leaving the root alone: ", env, &
+       "(do (def ^:dynamic *sv* 1)" // &
+       "    (list (binding [*sv* 5] (set! *sv* 9) *sv*) *sv*))", "(9 1)", all_ok)
+  call expect_result("38c. .. chains, and doesn't read as a constructor: ", env, &
+       '(.. "a-b.c" (replace \- \_) (replace \. \/))', '"a_b/c"', all_ok)
+  call expect_result("38d. format, with the conversions core.clj uses: ", env, &
+       '(format "%s|%d|%x|%%" :k 12 255)', '":k|12|ff|%"', all_ok)
+  call expect_result("38e. vec, which LazilyPersistentVector/create backs: ", env, &
+       "(list (vec (list 1 2)) (vec [3]) (vec nil))", "([1 2] [3] [])", all_ok)
 
   if (all_ok) then
      print *, ""

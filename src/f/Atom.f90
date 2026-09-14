@@ -5,7 +5,7 @@ module Atom
   implicit none
   private
 
-  public :: atom_new, atom_p, atom_deref, atom_reset, var_dyn_push, var_dyn_pop
+  public :: atom_new, atom_p, atom_deref, atom_reset, var_dyn_push, var_dyn_pop, var_set
 
 contains
 
@@ -81,6 +81,27 @@ contains
     grown(n + 1) = v
     call move_alloc(grown, a%atom_val%ptr%dyn_stack)
   end subroutine var_dyn_push
+
+  ! (set! *var* v): writes the INNERMOST dynamic binding if one is in
+  ! effect, falling back to the root -- the opposite of atom_reset,
+  ! which always writes the root. Real Clojure refuses set! on a Var
+  ! with no thread binding; clotran has no threads, so the root is the
+  ! honest place for it to land rather than an error.
+  subroutine var_set(a, v)
+    type(cons_value), intent(in) :: a
+    type(cons_value), intent(in) :: v
+    integer :: n
+    if (.not. allocated(a%atom_val)) return
+    if (.not. associated(a%atom_val%ptr)) return
+    if (allocated(a%atom_val%ptr%dyn_stack)) then
+       n = size(a%atom_val%ptr%dyn_stack)
+       if (n > 0) then
+          a%atom_val%ptr%dyn_stack(n) = v
+          return
+       end if
+    end if
+    a%atom_val%ptr%val = v
+  end subroutine var_set
 
   ! pop-thread-bindings' job, per Var: undo the most recent push.
   subroutine var_dyn_pop(a)

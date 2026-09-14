@@ -5,10 +5,13 @@
 ! try/catch (step9) is what actually catches last_error_value; eval_top
 ! resets state on entry and is the last-resort catch at the top level.
 module Eval
+  use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_positive_inf, &
+       ieee_negative_inf, ieee_is_nan
   use values
   use Env
   use PersistentList, only: list_first => first, list_rest => rest, list_count, list_of
   use PersistentVector, only: vector_count, vector_nth, vector_conj, vector_empty
+  use PersistentHashMap, only: hamt_hash_of => hash_of
   use PersistentArrayMap, only: array_map_empty, array_map_entries, &
        array_map_assoc, array_map_contains, array_map_dissoc
   use RT, only: rt_get => get, rt_nth => nth, rt_assoc => assoc, rt_count => count, &
@@ -19,7 +22,7 @@ module Eval
        num_bit_and, num_bit_or, num_bit_xor, num_bit_not, num_bit_and_not, &
        num_quot, num_rem, num_shift_left, num_shift_right, num_ushift_right
   use printer, only: pr_str
-  use Atom, only: atom_new, atom_p, atom_deref, atom_reset, var_dyn_push, var_dyn_pop
+  use Atom, only: atom_new, atom_p, atom_deref, atom_reset, var_dyn_push, var_dyn_pop, var_set
   use LispReader, only: read_str, read_top_level_forms
   use mal_readline, only: sys_readline => readline
   use Namespace, only: ns_ref, assignment(=), CORE_NS, ns_find_or_create, ns_exists, ns_intern, &
@@ -104,6 +107,12 @@ contains
     call reg("assoc")
     call reg("list")
     call reg("vector")
+    call reg("vec")
+    call reg("infinity")
+    call reg("nan?")
+    call reg("hash")
+    call reg("format")
+    call reg("munge")
     call reg("concat")
     call reg("=")
     call reg(">")
@@ -112,6 +121,7 @@ contains
     call reg("<=")
     call reg("list?")
     call reg("class")
+    call reg("resource-path")
     call reg("empty?")
     call reg("prn")
     call reg("read-string")
@@ -248,21 +258,15 @@ contains
        has_error = .false.
     end if
 
-    ! Real Clojure's print-method methods all live in core_print.clj,
-    ! which core.clj (load "core_print")s and which isn't ported here
-    ! yet -- leaving the multimethod with no methods at all, so every
-    ! pr/prn/println/pr-str failed on dispatch. One :default method
-    ! delegating to the native printer covers every type clotran has;
-    ! it goes here rather than in clotran.clj because that file loads
-    ! BEFORE core.clj, where the defmulti itself lives.
-    src = '(defmethod print-method :default [x w]' // &
-         ' (. w append (if *print-readably*' // &
-         '               (clotran.native/pr-str x)' // &
-         '               (clotran.native/str x))) nil)'
+    ! Loaded LAST: everything in it is written in terms of core.clj's
+    ! own definitions (derive, isa?, defmethod), so it can't live in
+    ! clotran.clj, which has to load first. The host type hierarchy
+    ! and print-method's fallback are both there.
+    src = '(load-file "' // exe_relative_path("src/clj/clotran_types.clj") // '")'
     ok = read_str(src, ast, err)
     if (ok) discard = eval_form(ast, env)
     if (has_error) then
-       write(*, '(A)') "warning: print-method default failed to install: " // pr_str(last_error_value)
+       write(*, '(A)') "warning: clotran_types.clj failed to load: " // pr_str(last_error_value)
        has_error = .false.
     end if
   end subroutine eval_core_bootstrap
@@ -426,6 +430,9 @@ contains
                end if
              end block
              return
+          else if (head%str_val == "set!") then
+             val = eval_set_bang(ast, env)
+             return
           else if (head%str_val == ".") then
              val = eval_dot(ast, env)
              return
@@ -438,9 +445,14 @@ contains
              ! "." branch above handle it.
              call rewrite_dot_method_sugar(ast)
              cycle
-          else if (len(head%str_val) > 1 .and. head%str_val(len(head%str_val):) == ".") then
+          else if (len(head%str_val) > 1 .and. head%str_val(len(head%str_val):) == "." &
+               .and. head%str_val /= "..") then
              ! (ClassName. args...) sugar for (new ClassName args...) --
              ! same reader-level rewrite, done here at eval time instead.
+             ! `..` is excluded for the same reason as above: it ends in
+             ! a dot but is core.clj's own chaining macro, and reading it
+             ! as a constructor made (.. x (m a) (m b)) quietly evaluate
+             ! to x.
              call rewrite_new_sugar(ast)
              cycle
           else if (head%str_val == "fn*") then
@@ -824,6 +836,36 @@ contains
   !    dispatched on (X's tag, member name) -- see eval_instance_call.
   ! Anything neither of these recognizes is a real, clear error, not a
   ! silent no-op -- same as the reader's own unsupported-syntax cases.
+  ! (set! *var* v) / (set! (. obj field) v). Only the Var form is real
+  ! here: there are no mutable host objects to assign a field of. Sets
+  ! the innermost dynamic binding if one is in effect, else the root
+  ! (see var_set) -- core.clj's own (set! *warn-on-reflection* true) at
+  ! the top of core_print.clj is the caller that needs it.
+  recursive function eval_set_bang(ast, env) result(val)
+    type(cons_value), intent(in) :: ast
+    type(env_ref), intent(in) :: env
+    type(cons_value) :: val
+    type(cons_value) :: target, v
+    character(len=:), allocatable :: owner
+
+    target = list_first(list_rest(ast%list_val))
+    v = eval_form(nth_form(list_rest(ast%list_val), 2), env)
+    if (has_error) return
+    if (target%tag /= TAG_SYMBOL) then
+       call eval_error("set!: only (set! var value) is supported")
+       return
+    end if
+    block
+      type(cons_value) :: var_val
+      if (.not. ns_resolve_var(ns_current(), target%str_val, var_val, owner)) then
+         call eval_error("Unable to resolve var: " // target%str_val)
+         return
+      end if
+      call var_set(var_val, v)
+    end block
+    val = v
+  end function eval_set_bang
+
   recursive function eval_dot(ast, env) result(val)
     type(cons_value), intent(in) :: ast
     type(env_ref), intent(in) :: env
@@ -1148,6 +1190,13 @@ contains
           val%tag = TAG_INT
           val%int_val = len(target%str_val)
           return
+       case ("charAt")
+          ! Java is 0-based; the result is a Character, not a
+          ! one-character String (core_print.clj's own String method
+          ! feeds it straight to char-escape-string, keyed by char).
+          val%tag = TAG_CHAR
+          val%str_val = target%str_val(args(1)%int_val + 1:args(1)%int_val + 1)
+          return
        case ("substring")
           val%tag = TAG_STRING
           if (size(args) >= 2) then
@@ -1155,6 +1204,26 @@ contains
           else
              val%str_val = target%str_val(args(1)%int_val + 1:)
           end if
+          return
+       case ("replace")
+          ! java.lang.String.replace(char, char) -- what core.clj's own
+          ! root-resource uses to turn a lib name into a path
+          ! ((.. (name lib) (replace \- \_) (replace \. \/))). The
+          ! CharSequence overload isn't here; nothing in core.clj uses it.
+          block
+            integer :: ci
+            val%tag = TAG_STRING
+            val%str_val = target%str_val
+            if (size(args) >= 2) then
+               if (args(1)%tag /= TAG_CHAR .or. args(2)%tag /= TAG_CHAR) then
+                  call eval_error("replace: only the (char, char) overload is supported")
+                  return
+               end if
+               do ci = 1, len(val%str_val)
+                  if (val%str_val(ci:ci) == args(1)%str_val) val%str_val(ci:ci) = args(2)%str_val
+               end do
+            end if
+          end block
           return
        case ("toUpperCase", "toLowerCase")
           block
@@ -1268,8 +1337,27 @@ contains
           if (size(args) >= 1) val = rt_get(multifn_get(target, "methods"), args(1))
           return
        case ("preferMethod")
-          ! No hierarchy here, so nothing to prefer -- see apply_multifn.
+          ! (prefer-method mf x y): x wins over y whenever both match.
+          ! Stored as {x #{y ...}}, read back by `prefers`.
+          if (size(args) >= 2) then
+             block
+               type(cons_value) :: tbl, over
+               tbl = multifn_get(target, "prefers")
+               over = rt_get(tbl, args(1))
+               if (over%tag /= TAG_SET) then
+                  over%tag = TAG_SET
+                  allocate(over%map_val)
+                  over%map_val = array_map_empty()
+               end if
+               over = multifn_assoc(over, args(2), args(2))
+               over%tag = TAG_SET ! multifn_assoc hands back a map; a set is the same storage
+               call multifn_put(target, "prefers", multifn_assoc(tbl, args(1), over))
+             end block
+          end if
           val = target
+          return
+       case ("getPreferTable")
+          val = multifn_get(target, "prefers")
           return
        end select
     end if
@@ -1325,6 +1413,14 @@ contains
     if (method_name == "flush" .and. target%tag == TAG_NIL) then
        flush(6)
        val%tag = TAG_NIL
+       return
+    end if
+    if (method_name == "isNaN") then
+       val = call_builtin("nan?", [target])
+       return
+    end if
+    if (method_name == "isArray") then
+       val%tag = TAG_BOOL ! no array type here, so never
        return
     end if
     if (method_name == "getClass") then
@@ -2181,6 +2277,22 @@ contains
     end if
   end function qq_symbol
 
+  ! java.lang is implicitly imported in every Clojure namespace, so
+  ! `Double` and `java.lang.Double` name the SAME class -- and real
+  ! core_print.clj uses both spellings, sometimes for the same type.
+  ! Class names are keywords here (see eval_symbol), which would make
+  ! those two different dispatch values, so one spelling has to win:
+  ! the bare one, since that is what the source mostly writes and what
+  ! reads best back out of (class x).
+  pure function class_keyword_name(name) result(canon)
+    character(len=*), intent(in) :: name
+    character(len=:), allocatable :: canon
+    canon = name
+    if (len(name) > 10) then
+       if (name(1:10) == "java.lang.") canon = name(11:)
+    end if
+  end function class_keyword_name
+
   pure function names_a_class(name) result(yes)
     character(len=*), intent(in) :: name
     logical :: yes
@@ -2324,16 +2436,19 @@ contains
   ! def! always lands in the namespace, never the lexical env, so it's
   ! visible here regardless of how deeply nested the lookup site is.
   !
-  ! Last resort, for a bare clojure.lang.* name only: it denotes a host
-  ! CLASS in real Clojure's source (`(instance? clojure.lang.ISeq x)`),
-  ! and clotran has no Class objects at all, so it denotes itself --
-  ! the keyword of the same name, which is exactly what instance?
-  ! matches against. clotran.clj had been writing these out by hand,
+  ! Last resort, for a bare class name only: it denotes a host CLASS in
+  ! real Clojure's source (`(instance? clojure.lang.ISeq x)`,
+  ! `(defmethod print-method java.util.Map ...)`), and clotran has no
+  ! Class objects at all, so it denotes itself -- the keyword of the
+  ! same name, which is exactly what instance? matches against and what
+  ! (class x) answers. clotran.clj had been writing these out by hand,
   ! one `(def clojure.lang.ISeq :clojure.lang.ISeq)` at a time, "as
   ! core.clj's walk turns up the next one it needs"; this is that same
-  ! rule, just applied generally instead of by enumeration. Only
-  ! clojure.lang.* gets it -- any other unresolved symbol is still a
-  ! real error, as before.
+  ! rule, applied generally instead of by enumeration. "Class name" is
+  ! Java's own naming convention (dotted, or leading capital) -- the
+  ! same test syntax-quote uses, see names_a_class. The cost is that a
+  ! mistyped capitalized symbol reads as a keyword instead of erroring;
+  ! the alternative is failing every host-class reference in core.clj.
   function eval_symbol(ast, env) result(val)
     type(cons_value), intent(in) :: ast
     type(env_ref), intent(in) :: env
@@ -2343,12 +2458,10 @@ contains
     found = env_find(env, ast, val)
     if (.not. found) found = ns_resolve(ns_current(), ast%str_val, val, owner)
     if (found) return
-    if (len(ast%str_val) > 13) then
-       if (ast%str_val(1:13) == "clojure.lang." .and. index(ast%str_val(14:), "/") == 0) then
-          val%tag = TAG_KEYWORD
-          val%str_val = ast%str_val
-          return
-       end if
+    if (names_a_class(ast%str_val) .and. index(ast%str_val, "/") == 0) then
+       val%tag = TAG_KEYWORD
+       val%str_val = class_keyword_name(ast%str_val)
+       return
     end if
     call eval_error("'" // ast%str_val // "' not found")
   end function eval_symbol
@@ -2937,17 +3050,144 @@ contains
   ! which is what it's actually used for (print-method's own dispatch
   ! function, and error messages). A keyword, not a symbol, so it
   ! can't be mistaken for something resolvable.
+  ! java.lang.String.format(String, Object[]) -- one format string and
+  ! ONE collection of arguments, which is how core.clj's own `format`
+  ! calls it ((String/format fmt (to-array args))). Restricted to the
+  ! conversions core.clj and core_print.clj actually use: %s (any
+  ! value, display form), %d, %x (lower-case hex), %n and %%. Widths,
+  ! flags and argument indexes aren't supported -- an unrecognized
+  ! conversion is an error rather than silently dropped text.
+  function builtin_format(args) result(val)
+    type(cons_value), intent(in) :: args(:)
+    type(cons_value) :: val
+    type(cons_value), allocatable :: fargs(:)
+    type(cons_value) :: s2
+    character(len=:), allocatable :: fmt
+    character(len=64) :: buf
+    integer :: i, argn, k, n2
+
+    val%tag = TAG_STRING
+    val%str_val = ""
+    if (size(args) < 1) return
+    fmt = args(1)%str_val
+    n2 = 0
+    if (size(args) >= 2) n2 = rt_count(args(2))
+    allocate(fargs(n2))
+    if (n2 > 0) then
+       s2 = rt_seq(args(2))
+       do k = 1, n2
+          fargs(k) = rt_first(s2)
+          s2 = rt_next(s2)
+       end do
+    end if
+    argn = 0
+    i = 1
+    do while (i <= len(fmt))
+       if (fmt(i:i) /= "%" .or. i == len(fmt)) then
+          val%str_val = val%str_val // fmt(i:i)
+          i = i + 1
+          cycle
+       end if
+       select case (fmt(i+1:i+1))
+       case ("%")
+          val%str_val = val%str_val // "%"
+       case ("n")
+          val%str_val = val%str_val // achar(10)
+       case ("s")
+          argn = argn + 1
+          if (argn <= n2) val%str_val = val%str_val // pr_str(fargs(argn), .false.)
+       case ("d")
+          argn = argn + 1
+          if (argn <= n2) then
+             write(buf, '(I0)') fargs(argn)%int_val
+             val%str_val = val%str_val // trim(buf)
+          end if
+       case ("x")
+          argn = argn + 1
+          if (argn <= n2) then
+             write(buf, '(Z0)') fargs(argn)%int_val
+             val%str_val = val%str_val // to_lower(trim(buf))
+          end if
+       case default
+          call eval_error("format: unsupported conversion %" // fmt(i+1:i+1))
+          return
+       end select
+       i = i + 2
+    end do
+  end function builtin_format
+
+  ! clojure.lang.Compiler/munge -- the CHAR_MAP from Compiler.java,
+  ! which turns a Clojure name into something legal as a host
+  ! identifier. defprotocol needs it for its on-interface name. There
+  ! are no host identifiers here, but the mapping still has to match:
+  ! it is what protocol/record names are keyed by, so a name munged
+  ! differently would simply not be found.
+  function builtin_munge(v) result(val)
+    type(cons_value), intent(in) :: v
+    type(cons_value) :: val
+    character(len=:), allocatable :: src
+    integer :: i
+
+    src = ""
+    if (allocated(v%str_val)) src = v%str_val
+    val%tag = TAG_STRING
+    val%str_val = ""
+    do i = 1, len(src)
+       select case (src(i:i))
+       case ("-");  val%str_val = val%str_val // "_"
+       case (":");  val%str_val = val%str_val // "_COLON_"
+       case ("+");  val%str_val = val%str_val // "_PLUS_"
+       case (">");  val%str_val = val%str_val // "_GT_"
+       case ("<");  val%str_val = val%str_val // "_LT_"
+       case ("=");  val%str_val = val%str_val // "_EQ_"
+       case ("~");  val%str_val = val%str_val // "_TILDE_"
+       case ("!");  val%str_val = val%str_val // "_BANG_"
+       case ("@");  val%str_val = val%str_val // "_CIRCA_"
+       case ("#");  val%str_val = val%str_val // "_SHARP_"
+       case ("'");  val%str_val = val%str_val // "_SINGLEQUOTE_"
+       case ('"');  val%str_val = val%str_val // "_DOUBLEQUOTE_"
+       case ("%");  val%str_val = val%str_val // "_PERCENT_"
+       case ("^");  val%str_val = val%str_val // "_CARET_"
+       case ("&");  val%str_val = val%str_val // "_AMPERSAND_"
+       case ("*");  val%str_val = val%str_val // "_STAR_"
+       case ("|");  val%str_val = val%str_val // "_BAR_"
+       case ("{");  val%str_val = val%str_val // "_LBRACE_"
+       case ("}");  val%str_val = val%str_val // "_RBRACE_"
+       case ("[");  val%str_val = val%str_val // "_LBRACK_"
+       case ("]");  val%str_val = val%str_val // "_RBRACK_"
+       case ("/");  val%str_val = val%str_val // "_SLASH_"
+       case (achar(92)); val%str_val = val%str_val // "_BSLASH_"
+       case ("?");  val%str_val = val%str_val // "_QMARK_"
+       case default; val%str_val = val%str_val // src(i:i)
+       end select
+    end do
+  end function builtin_munge
+
+  pure function to_lower(s) result(out)
+    character(len=*), intent(in) :: s
+    character(len=len(s)) :: out
+    integer :: i, c
+    do i = 1, len(s)
+       c = iachar(s(i:i))
+       if (c >= 65 .and. c <= 90) then
+          out(i:i) = achar(c + 32)
+       else
+          out(i:i) = s(i:i)
+       end if
+    end do
+  end function to_lower
+
   function builtin_class(v) result(val)
     type(cons_value), intent(in) :: v
     type(cons_value) :: val
     val%tag = TAG_KEYWORD
     select case (v%tag)
     case (TAG_NIL);            val%tag = TAG_NIL ! (class nil) is nil in real Clojure too
-    case (TAG_BOOL);           val%str_val = "java.lang.Boolean"
-    case (TAG_INT);            val%str_val = "java.lang.Long"
-    case (TAG_REAL);           val%str_val = "java.lang.Double"
-    case (TAG_STRING);         val%str_val = "java.lang.String"
-    case (TAG_CHAR);           val%str_val = "java.lang.Character"
+    case (TAG_BOOL);           val%str_val = "Boolean"
+    case (TAG_INT);            val%str_val = "Long"
+    case (TAG_REAL);           val%str_val = "Double"
+    case (TAG_STRING);         val%str_val = "String"
+    case (TAG_CHAR);           val%str_val = "Character"
     case (TAG_SYMBOL);         val%str_val = "clojure.lang.Symbol"
     case (TAG_KEYWORD);        val%str_val = "clojure.lang.Keyword"
     case (TAG_LIST);           val%str_val = "clojure.lang.PersistentList"
@@ -3022,6 +3262,7 @@ contains
     m = multifn_assoc(multifn_assoc(empty_map(), mk_keyword("dispatch"), dispatch_fn), &
          mk_keyword("default"), default_val)
     m = multifn_assoc(m, mk_keyword("methods"), empty_map())
+    m = multifn_assoc(m, mk_keyword("prefers"), empty_map())
     val = atom_new(m)
     val%tag = TAG_MULTIFN
   end function multifn_new
@@ -3074,13 +3315,19 @@ contains
     type(cons_value), intent(in) :: args(:)
     type(cons_value) :: val
     type(cons_value) :: dv, table, method, dflt
+    logical :: found
 
     dv = apply_fn(multifn_get(mf, "dispatch"), args)
     if (has_error) return
     table = multifn_get(mf, "methods")
-    if (array_map_contains(table%map_val, dv)) then
+    found = array_map_contains(table%map_val, dv)
+    if (found) then
        method = rt_get(table, dv)
     else
+       method = best_isa_method(mf, table, dv, found)
+       if (has_error) return
+    end if
+    if (.not. found) then
        dflt = multifn_get(mf, "default")
        if (array_map_contains(table%map_val, dflt)) then
           method = rt_get(table, dflt)
@@ -3091,6 +3338,126 @@ contains
     end if
     val = apply_fn(method, args)
   end function apply_multifn
+
+  ! No exact method: fall back to the hierarchy, same as real Clojure's
+  ! MultiFn.findAndCacheBestMethod -- every key the dispatch value isa?,
+  ! with prefer-method breaking ties and an ambiguity left over being an
+  ! error, not an arbitrary pick.
+  !
+  ! isa? is core.clj's own function, not a reimplementation here: class
+  ! names are keywords in clotran (see eval_symbol), so the relationships
+  ! between them live in the global hierarchy that `derive` maintains --
+  ! which means core.clj's isa?/derive/prefer-method all work on them
+  ! unchanged, and the only thing the host owes is this lookup.
+  !
+  ! ponytail: linear over the method table on every unmatched dispatch
+  ! value, where real Clojure memoizes the winner. Add a cache (cleared
+  ! by addMethod/removeMethod) if a hot multimethod ever shows up.
+  recursive function best_isa_method(mf, table, dv, found) result(method)
+    type(cons_value), intent(in) :: mf, table, dv
+    logical, intent(out) :: found
+    type(cons_value) :: method
+    type(cons_value), allocatable :: keys(:), vals(:)
+    type(cons_value) :: best_key
+    integer :: i
+
+    found = .false.
+    if (.not. allocated(table%map_val)) return
+    call array_map_entries(table%map_val, keys, vals)
+    do i = 1, size(keys)
+       if (.not. call_isa(dv, keys(i))) cycle
+       if (has_error) return
+       if (.not. found) then
+          found = .true.
+          best_key = keys(i)
+          method = vals(i)
+       else if (dominates(mf, keys(i), best_key)) then
+          best_key = keys(i)
+          method = vals(i)
+       else if (.not. dominates(mf, best_key, keys(i))) then
+          call eval_error("Multiple methods in multimethod match dispatch value: " // &
+               pr_str(dv) // " -> " // pr_str(keys(i)) // " and " // pr_str(best_key) // &
+               ", and neither is preferred")
+          return
+       end if
+    end do
+  end function best_isa_method
+
+  recursive function call_isa(child, parent) result(yes)
+    type(cons_value), intent(in) :: child, parent
+    logical :: yes
+    type(cons_value) :: f, r
+    character(len=:), allocatable :: owner
+    yes = .false.
+    if (.not. ns_resolve(ns_current(), "isa?", f, owner)) return
+    r = apply_fn(f, [child, parent])
+    if (has_error) return
+    yes = .not. (r%tag == TAG_NIL .or. (r%tag == TAG_BOOL .and. .not. r%bool_val))
+  end function call_isa
+
+  ! x beats y: either prefer-method says so, or x is simply the more
+  ! specific key (IPersistentVector beats Object because it isa? it) --
+  ! clojure.core's own `dominates`, and the reason a catch-all Object
+  ! method doesn't make every dispatch ambiguous.
+  recursive function dominates(mf, x, y) result(yes)
+    type(cons_value), intent(in) :: mf, x, y
+    logical :: yes
+    yes = prefers(mf, x, y)
+    if (.not. yes) yes = call_isa(x, y)
+  end function dominates
+
+  ! (prefer-method mf x y) says x wins over y. A preference is
+  ! INHERITED, in both directions -- MultiFn.java's own prefers()
+  ! recurses through (parents y), then (parents x). core_print.clj
+  ! depends on it: it prefers ISeq over java.util.Collection and never
+  ! mentions java.util.List, yet a list matches both the ISeq method
+  ! and the java.util.List one, and the preference only reaches the
+  ! latter through List's parent Collection.
+  recursive function prefers(mf, x, y) result(yes)
+    type(cons_value), intent(in) :: mf, x, y
+    logical :: yes
+    type(cons_value) :: table, over, ps
+
+    yes = .false.
+    table = multifn_get(mf, "prefers")
+    if (table%tag == TAG_HASHMAP) then
+       if (array_map_contains(table%map_val, x)) then
+          over = rt_get(table, x)
+          if (over%tag == TAG_SET) then
+             yes = array_map_contains(over%map_val, y)
+             if (yes) return
+          end if
+       end if
+    end if
+    ps = rt_seq(call_parents(y))
+    do while (ps%tag == TAG_LIST .or. ps%tag == TAG_LAZYSEQ)
+       if (prefers(mf, x, rt_first(ps))) then
+          yes = .true.
+          return
+       end if
+       ps = rt_next(ps)
+    end do
+    ps = rt_seq(call_parents(x))
+    do while (ps%tag == TAG_LIST .or. ps%tag == TAG_LAZYSEQ)
+       if (prefers(mf, rt_first(ps), y)) then
+          yes = .true.
+          return
+       end if
+       ps = rt_next(ps)
+    end do
+  end function prefers
+
+  ! clojure.core/parents over the global hierarchy -- immediate parents
+  ! only, same as MultiFn.java calls.
+  recursive function call_parents(tag) result(ps)
+    type(cons_value), intent(in) :: tag
+    type(cons_value) :: ps, f
+    character(len=:), allocatable :: owner
+    ps%tag = TAG_NIL
+    if (.not. ns_resolve(ns_current(), "parents", f, owner)) return
+    ps = apply_fn(f, [tag])
+    if (has_error) ps%tag = TAG_NIL
+  end function call_parents
 
   function map_lookup(m, key, default_arg) result(val)
     type(cons_value), intent(in) :: m, key
@@ -3208,10 +3575,25 @@ contains
     case ("conj")
        val = builtin_conj(args)
     case ("nth")
-       ! Bounds-check without counting the whole collection -- counting
-       ! a lazy seq realizes it, and an infinite one never finishes.
-       if (args(2)%int_val < 0 .or. .not. rt_has_at_least(args(1), args(2)%int_val + 1)) then
-          call eval_error("nth: index out of bounds")
+       ! (nth coll i) / (nth coll i not-found). Bounds-check without
+       ! counting the whole collection -- counting a lazy seq realizes
+       ! it, and an infinite one never finishes.
+       !
+       ! The 3-arity isn't a nicety: destructuring compiles to
+       ! (nth v 0 nil) for every position it binds, so without it
+       ! (let [[a b] nil] ...) -- and every core.clj form that
+       ! destructures a possibly-nil value, print-method's own
+       ! (let [[ns kvs] (lift-ns m)] among them -- threw instead of
+       ! binding nil. nil counts as empty here, same as real Clojure,
+       ! where (nth nil 0) is nil rather than an error.
+       if (args(1)%tag == TAG_NIL) then
+          if (size(args) >= 3) val = args(3)
+       else if (args(2)%int_val < 0 .or. .not. rt_has_at_least(args(1), args(2)%int_val + 1)) then
+          if (size(args) >= 3) then
+             val = args(3)
+          else
+             call eval_error("nth: index out of bounds")
+          end if
        else
           val = rt_nth(args(1), args(2)%int_val)
        end if
@@ -3226,6 +3608,26 @@ contains
        val = make_list(args)
     case ("vector")
        val = make_vector(args)
+    case ("vec")
+       ! (vec coll) -- clojure.lang.LazilyPersistentVector/create, which
+       ! is what core.clj's own `vec` and variadic `vector` call.
+       block
+         type(cons_value) :: s2
+         type(cons_value), allocatable :: items(:)
+         integer :: k, n2
+         if (args(1)%tag == TAG_VECTOR) then
+            val = args(1)
+         else
+            n2 = rt_count(args(1))
+            allocate(items(n2))
+            s2 = rt_seq(args(1))
+            do k = 1, n2
+               items(k) = rt_first(s2)
+               s2 = rt_next(s2)
+            end do
+            val = make_vector(items)
+         end if
+       end block
     case ("concat")
        val = builtin_concat(args)
     case ("=")
@@ -3384,19 +3786,16 @@ contains
           case ("Character")
              val%bool_val = (args(2)%tag == TAG_CHAR)
           case default
-             ! A clojure.lang.* interface clotran genuinely has no
-             ! analogue for (IChunkedSeq, MultiFn, ...): "no, this
-             ! value isn't one of those" is the correct answer, and
-             ! the one core.clj's own guards are written to branch on
-             ! -- erroring instead turned every such guard into a hard
-             ! failure. Anything else (a bare `Foo`) is still a real
-             ! missing entry, so it still errors.
-             if (len(args(1)%str_val) > 13) then
-                if (args(1)%str_val(1:13) == "clojure.lang.") then
-                   val%bool_val = .false.
-                else
-                   call eval_error("instance?: unknown pseudo-class '" // args(1)%str_val // "'")
-                end if
+             ! A host class or interface clotran genuinely has no
+             ! analogue for (IChunkedSeq, Class, java.util.Date, ...):
+             ! "no, this value isn't one of those" is the correct
+             ! answer, and the one core.clj's own guards are written to
+             ! branch on -- erroring instead turned every such guard
+             ! into a hard failure. Anything that doesn't even look
+             ! like a class name is still a real missing entry, so it
+             ! still errors.
+             if (names_a_class(args(1)%str_val)) then
+                val%bool_val = .false.
              else
                 call eval_error("instance?: unknown pseudo-class '" // args(1)%str_val // "'")
              end if
@@ -3468,6 +3867,38 @@ contains
        val = builtin_str(args)
     case ("class")
        val = builtin_class(args(1))
+    case ("infinity")
+       ! Double/POSITIVE_INFINITY and NEGATIVE_INFINITY, which
+       ! core_print.clj's own Double method compares against. Real IEEE
+       ! values via the intrinsic module, not a huge() stand-in, so the
+       ! comparison actually holds for a computed infinity.
+       val%tag = TAG_REAL
+       if (args(1)%int_val < 0) then
+          val%real_val = ieee_value(1.0_dp, ieee_negative_inf)
+       else
+          val%real_val = ieee_value(1.0_dp, ieee_positive_inf)
+       end if
+    case ("hash")
+       ! clojure.core/hash, and what System/identityHashCode stands in
+       ! for: there is no object identity separate from value here, so
+       ! the value hash is the only hash there is.
+       val%tag = TAG_INT
+       val%int_val = hamt_hash_of(args(1))
+    case ("format")
+       val = builtin_format(args)
+    case ("munge")
+       val = builtin_munge(args(1))
+    case ("nan?")
+       val%tag = TAG_BOOL
+       val%bool_val = (args(1)%tag == TAG_REAL)
+       if (val%bool_val) val%bool_val = ieee_is_nan(args(1)%real_val)
+    case ("resource-path")
+       ! "clojure/core_print" -> the src/clj file it names, resolved
+       ! against the executable rather than the cwd (same rule as the
+       ! bootstrap's own loads). clojure.lang.RT/load is defined on top
+       ! of this in clotran.clj.
+       val%tag = TAG_STRING
+       val%str_val = exe_relative_path("src/clj/" // args(1)%str_val // ".clj")
     case ("pr-str")
        val = builtin_pr_str(args)
     case ("println")

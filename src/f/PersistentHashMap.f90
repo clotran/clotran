@@ -17,7 +17,7 @@ module PersistentHashMap
   private
 
   public :: hamt_from_pairs, hamt_get, hamt_contains, hamt_assoc, &
-       hamt_dissoc, hamt_entries
+       hamt_dissoc, hamt_entries, hash_of
 
 contains
 
