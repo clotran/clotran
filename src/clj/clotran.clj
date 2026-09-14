@@ -134,6 +134,7 @@
 (def clojure.lang.Counted :clojure.lang.Counted)
 (def clojure.lang.IPersistentList :clojure.lang.IPersistentList)
 (def clojure.lang.IDeref :clojure.lang.IDeref)
+(def clojure.lang.Var :clojure.lang.Var)
 (def Integer :Integer)
 (def Long :Long)
 (def Short :Short)

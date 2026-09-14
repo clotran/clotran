@@ -76,11 +76,11 @@ $(S)/Env.o: $(S)/Env.f90 $(S)/PersistentArrayMap.o
 env_test: $(S)/Env.o $(T)/env_test.f90
 	$(FC) $(FCFLAGS) -o $@ $(S)/Values.o $(S)/PersistentHashMap.o $(S)/PersistentArrayMap.o $(S)/Env.o $(T)/env_test.f90
 
-$(S)/Namespace.o: $(S)/Namespace.f90 $(S)/PersistentArrayMap.o
+$(S)/Namespace.o: $(S)/Namespace.f90 $(S)/PersistentArrayMap.o $(S)/Atom.o
 	$(FC) $(FCFLAGS) -c $< -o $@
 
 namespace_test: $(S)/Namespace.o $(T)/namespace_test.f90
-	$(FC) $(FCFLAGS) -o $@ $(S)/Values.o $(S)/PersistentHashMap.o $(S)/PersistentArrayMap.o $(S)/Namespace.o $(T)/namespace_test.f90
+	$(FC) $(FCFLAGS) -o $@ $(S)/Values.o $(S)/Atom.o $(S)/PersistentHashMap.o $(S)/PersistentArrayMap.o $(S)/Namespace.o $(T)/namespace_test.f90
 
 $(S)/printer.o: $(S)/printer.f90 $(S)/RT.o $(S)/PersistentArrayMap.o $(S)/Atom.o
 	$(FC) $(FCFLAGS) -c $< -o $@

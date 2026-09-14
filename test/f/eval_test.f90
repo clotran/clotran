@@ -318,11 +318,15 @@ program eval_test
   call expect_result("28d. %& collects the rest: ", env, "(#(apply + %&) 1 2 3)", "6", all_ok)
   call expect_result("28e. no %-refs at all is a zero-arg fn: ", env, "(#(vector))", "[]", all_ok)
 
-  ! 29. #'sym: real Clojure's (var sym) shorthand. No separate Var
-  ! type here (see NOTES.md), so this reads as (quote sym) instead --
-  ! close enough to keep the reader from choking, not a faithful
-  ! stand-in for what (var sym) actually returns.
-  call expect_result("29a. #'sym reads as the symbol itself: ", env, "#'some-name", "some-name", all_ok)
+  ! 29. #'sym: real Clojure's (var sym) shorthand, resolving to a real
+  ! Var (see Namespace.f90) -- prints as #'ns/name, not the bare symbol.
+  call expect_result("29a. def! then #'sym prints the Var, qualified: ", env, &
+       "(do (def! some-name 42) (pr-str #'some-name))", '"#''user/some-name"', all_ok)
+  call expect_result("29b. var-get returns the Var's current value: ", env, &
+       "(var-get #'some-name)", "42", all_ok)
+  call expect_result("29c. redefinition mutates the SAME Var, doesn't replace it: ", env, &
+       "(let* (v (var some-name)) (def! some-name 99) (var-get v))", "99", all_ok)
+  call expect_error("29d. #'sym on a truly unbound symbol is a resolve error: ", env, "#'totally-unbound-name")
 
   ! 30. #"pattern": real Clojure's regex-literal syntax. No regex
   ! engine exists here (a real, separate feature) -- read as a plain

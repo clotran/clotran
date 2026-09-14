@@ -732,13 +732,9 @@ contains
              val = read_anon_fn(tokens, pos)
              return
           else if (tokens(pos + 1)%text == "'") then
-             ! "#'sym" is real Clojure's (var sym) shorthand -- we have
-             ! no separate Var type (see NOTES.md), so this reads as
-             ! (quote sym) instead: the closest sensible reader-level
-             ! behavior without inventing Var semantics, not a faithful
-             ! stand-in for what (var sym) actually does.
+             ! "#'sym" is real Clojure's (var sym) shorthand.
              pos = pos + 1 ! consume '#', leaving pos at the quote token
-             val = read_wrapped(tokens, pos, "quote")
+             val = read_wrapped(tokens, pos, "var")
              return
           else if (len(tokens(pos + 1)%text) >= 1) then
              if (tokens(pos + 1)%text(1:1) == '"') then

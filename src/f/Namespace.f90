@@ -4,14 +4,24 @@
 ! auto-refers clojure.core, same as real Clojure's default -- no
 ! selective refer/exclude/require yet, just the one fallback.
 !
-! Deliberately simplified vs. real Clojure: a namespace's own bindings
-! are stored directly as symbol -> value (an array_map_t, same shape as
-! Env's bindings), not through a separate first-class Var indirection.
-! clojure.lang.Var exists for metadata, #'foo, and thread-local dynamic
-! bindings -- none of which this project needs yet; build it once
-! something does.
+! Real Vars now: a namespace's own bindings are TAG_VAR cons_values
+! (see Values.f90), each wrapping a mutable atom_ref as its root
+! binding -- reused directly from Atom.f90 rather than a parallel
+! type, since a Var's root binding IS "one genuinely mutable slot,
+! shared by reference," exactly atom_ref's own shape. ns_get_own/
+! ns_resolve transparently deref through the Var (a bare symbol use
+! auto-derefs, matching real Clojure); ns_intern mutates an existing
+! Var's root in place rather than replacing it, so identity survives
+! redefinition (`(def x 1) (def x 2)` is the SAME Var throughout --
+! matters once something holds onto a Var reference across a
+! redefinition, e.g. a closure created before a later `(def)`).
+! ns_get_own_var/ns_resolve_var return the Var itself, unresolved, for
+! `(var sym)`/`#'sym`/`var-get`/`var-set`. Still no thread-local
+! dynamic-binding stack (`binding`) -- that's the next piece to add,
+! once it's needed; see NOTES.md.
 module Namespace
   use values
+  use Atom, only: atom_new, atom_deref, atom_reset
   use PersistentArrayMap, only: array_map_empty, array_map_get, array_map_assoc, array_map_contains
   implicit none
   private
@@ -46,6 +56,7 @@ module Namespace
 
   public :: assignment(=), CORE_NS
   public :: ns_find_or_create, ns_exists, ns_intern, ns_resolve, ns_get_own
+  public :: ns_get_own_var, ns_resolve_var
   public :: ns_set_current, ns_current, ns_name_of
 
 contains
@@ -109,21 +120,63 @@ contains
     registry_count = registry_count + 1
   end subroutine registry_append
 
-  ! def!'s job: creates the binding if new, replaces it if not.
+  ! Builds a fresh Var wrapping root, named for printing (#'ns/name).
+  function make_var(ns_name, name, root) result(v)
+    character(len=*), intent(in) :: ns_name, name
+    type(cons_value), intent(in) :: root
+    type(cons_value) :: v
+    v = atom_new(root) ! reuses atom_ref's mutable-box machinery wholesale
+    v%tag = TAG_VAR
+    v%str_val = ns_name // "/" // name
+  end function make_var
+
+  ! def!'s job: creates the Var if new, mutates its root in place if
+  ! not -- redefinition never changes a Var's identity, matching real
+  ! Clojure (anything already holding this Var, once something does,
+  ! sees the update).
   subroutine ns_intern(ns, name, val)
     type(ns_ref), intent(in) :: ns
     character(len=*), intent(in) :: name
     type(cons_value), intent(in) :: val
+    type(cons_value) :: key, existing
     type(array_map_t) :: next_bindings
+    key = symbol_key(name)
+    if (array_map_contains(ns%ptr%bindings, key)) then
+       existing = array_map_get(ns%ptr%bindings, key)
+       if (existing%tag == TAG_VAR) then
+          call atom_reset(existing, val)
+          return
+       end if
+    end if
     ! never ns%ptr%bindings = array_map_assoc(ns%ptr%bindings, ...) --
     ! see Eval.f90's make_hashmap for why that self-referencing
     ! assignment silently drops the update.
-    next_bindings = array_map_assoc(ns%ptr%bindings, symbol_key(name), val)
+    next_bindings = array_map_assoc(ns%ptr%bindings, key, make_var(ns%ptr%name, name, val))
     ns%ptr%bindings = next_bindings
   end subroutine ns_intern
 
   ! Only this namespace's own bindings -- no clojure.core fallback.
+  ! Transparently derefs the Var: a bare symbol use auto-derefs,
+  ! matching real Clojure (unlike an atom, which never does). See
+  ! ns_get_own_var for the Var itself, unresolved.
   function ns_get_own(ns, name, val) result(found)
+    type(ns_ref), intent(in) :: ns
+    character(len=*), intent(in) :: name
+    type(cons_value), intent(out) :: val
+    logical :: found
+    type(cons_value) :: stored
+    found = ns_get_own_var(ns, name, stored)
+    if (.not. found) return
+    if (stored%tag == TAG_VAR) then
+       val = atom_deref(stored)
+    else
+       val = stored
+    end if
+  end function ns_get_own
+
+  ! Same lookup, but returns the raw Var (no deref) -- (var sym)/#'sym/
+  ! var-get/var-set need the Var itself, not its current value.
+  function ns_get_own_var(ns, name, val) result(found)
     type(ns_ref), intent(in) :: ns
     character(len=*), intent(in) :: name
     type(cons_value), intent(out) :: val
@@ -134,7 +187,7 @@ contains
     key = symbol_key(name)
     found = array_map_contains(ns%ptr%bindings, key)
     if (found) val = array_map_get(ns%ptr%bindings, key)
-  end function ns_get_own
+  end function ns_get_own_var
 
   ! Full resolution: this namespace's own bindings, then clojure.core's
   ! (real Clojure's default auto-refer). owner names which namespace the
@@ -171,6 +224,36 @@ contains
        if (found) owner = CORE_NS
     end if
   end function ns_resolve
+
+  ! Same resolution order as ns_resolve, but returns the Var itself
+  ! (no deref) -- (var sym)/#'sym/var-get/var-set.
+  recursive function ns_resolve_var(ns, name, val, owner) result(found)
+    type(ns_ref), intent(in) :: ns
+    character(len=*), intent(in) :: name
+    type(cons_value), intent(out) :: val
+    character(len=:), allocatable, intent(out) :: owner
+    logical :: found
+    integer :: slash
+
+    owner = ""
+    slash = 0
+    if (name /= "/") slash = index(name, "/")
+    if (slash > 0) then
+       found = ns_get_own_var(ns_find_or_create(name(1:slash-1)), name(slash+1:), val)
+       if (found) owner = name(1:slash-1)
+       return
+    end if
+
+    found = ns_get_own_var(ns, name, val)
+    if (found) then
+       owner = ns%ptr%name
+       return
+    end if
+    if (ns%ptr%name /= CORE_NS) then
+       found = ns_get_own_var(ns_find_or_create(CORE_NS), name, val)
+       if (found) owner = CORE_NS
+    end if
+  end function ns_resolve_var
 
   subroutine ns_set_current(ns)
     type(ns_ref), intent(in) :: ns

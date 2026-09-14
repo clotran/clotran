@@ -822,6 +822,61 @@ clotran's own built-in kinds. Not implemented yet -- `cons_value`
 itself doesn't have the tag yet, this section records the validated
 plan and the concrete gotcha to avoid when it's added.
 
+## Real Vars: `TAG_VAR`, reusing `atom_ref` wholesale
+
+A namespace's own bindings used to be plain `symbol -> value`, with a
+comment noting Var (metadata, `#'foo`, thread-local dynamic bindings)
+wasn't built because nothing needed it yet. Something did: `(var sym)`/
+`#'sym` used to read as a bare symbol (or `(quote sym)`), a
+placeholder documented as "not a faithful stand-in for what `(var
+sym)` actually does" -- and real core.clj's own bootstrap turned out
+to already depend on the real thing (`(. (var defn) (setMacro))`,
+right at the start of `defn`'s own definition).
+
+**Deliberately NOT a new Fortran type.** A Var's root binding is
+structurally identical to what `atom_ref`/`atom_node` (Values.f90)
+already is: "one genuinely mutable slot, shared by reference." Rather
+than a parallel `var_ref`/`var_node`, `TAG_VAR` reuses `atom_val`
+(the existing field) outright -- `Atom.f90`'s `atom_new`/`atom_deref`/
+`atom_reset` don't check the tag, only whether `atom_val` is
+allocated, so they work unmodified for a Var's root too. `str_val`
+(also already on `cons_value`) holds the qualified `ns/name` for
+printing (`#'user/foo`). Zero new types, zero new assign/finalize/
+refcount code -- `cons_value_assign`/`cons_value_release` already
+handle `atom_val` generically. The only real difference between
+`TAG_ATOM` and `TAG_VAR` is behavioral, not structural: a symbol
+resolving to a Var auto-derefs transparently (matching real Clojure --
+you don't `@`/`deref` a Var to use it); an atom never does.
+
+`Namespace.f90`: `ns_intern` (def!'s job) now mutates an existing
+Var's root in place (`atom_reset`) rather than replacing the map
+entry, so identity survives redefinition -- `(let [v (var x)] (def! x
+99) (var-get v))` sees `99`, matching real Clojure (anything already
+holding a Var reference sees a later redefinition). `ns_get_own`/
+`ns_resolve` transparently deref, so all 17 existing call sites in
+Eval.f90 needed zero changes. Two new functions, `ns_get_own_var`/
+`ns_resolve_var`, return the Var itself (unresolved) for `(var sym)`/
+`#'sym`/`var-get`/`var-set`.
+
+`Eval.f90`: `(var sym)` resolves a real Var instead of returning a
+bare symbol (errors "Unable to resolve var" on a truly unbound name,
+matching real Clojure); `#'sym`'s reader macro (`LispReader.f90`) now
+expands to `(var sym)` instead of `(quote sym)`; `.get`/`.set` on a
+`TAG_VAR` target (core.clj's own `var-get`/`var-set`) reuse
+`atom_deref`/`atom_reset` directly; `.setMacro` (needed by `defn`/
+`defmacro`'s own bootstrap, see above) gained a `TAG_VAR` case
+mirroring the existing `TAG_SYMBOL` one, now mutating the Var
+directly by identity instead of re-resolving by name.
+
+**Still missing**: the thread-local dynamic-binding stack for
+`binding`/`^:dynamic` -- deliberately deferred, not designed
+speculatively. Single-threaded today, so "thread-local" reduces to "a
+plain stack," and there's more than one reasonable place to put it
+(extend `atom_node` with an optional stack field; a side-table keyed
+by Var identity; a real `var_node` after all, now that there's a
+concrete stack-shape requirement to design around) -- worth deciding
+when `binding` is actually being built, not before.
+
 ## Getting `defn`/`let`/`loop` to actually work against real core.clj
 
 Getting past `defn`'s own bootstrap (previously it silently failed to

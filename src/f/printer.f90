@@ -72,6 +72,8 @@ contains
        end if
     case (TAG_ATOM)
        str = "(atom " // pr_str(atom_deref(v), r) // ")"
+    case (TAG_VAR)
+       str = "#'" // v%str_val
     case default
        str = "nil"
     end select

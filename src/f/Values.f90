@@ -29,6 +29,15 @@ module values
   integer, parameter :: TAG_ATOM = 12 ! atom_val is a genuinely mutable box, shared by reference
   integer, parameter :: TAG_SET = 13 ! map_val backs it too -- every element mapped to itself,
                                       ! exactly like real Clojure's PersistentHashSet wraps a map
+  integer, parameter :: TAG_VAR = 14 ! clojure.lang.Var -- a mutable, identity-preserving box a
+                                      ! namespace interns a name to (see Namespace.f90). Reuses
+                                      ! atom_val for the root binding (a Var's root IS "one
+                                      ! genuinely mutable slot, shared by reference," exactly
+                                      ! atom_ref's own shape) rather than a parallel type; str_val
+                                      ! holds the qualified "ns/name" for printing (#'ns/name).
+                                      ! Differs from TAG_ATOM only in behavior, not storage: a
+                                      ! symbol resolving to a Var auto-derefs transparently
+                                      ! (ns_get_own/ns_resolve do this); an atom never does.
 
   integer, parameter :: BITS = 5
   integer, parameter :: BRANCH = 32
@@ -213,12 +222,12 @@ module values
   ! pointer -- both are already fully defined above by this point.
   ! is_macro: real Clojure hangs macro-ness off the Var's metadata, not
   ! the function value -- a macro-created function is an ordinary IFn.
-  ! We don't have a separate Var (see Namespace.f90), so the closest
-  ! analogue is a flag on the closure itself rather than a whole
-  ! parallel TAG_MACRO duplicating TAG_FN's shape everywhere TAG_FN is
-  ! handled. Still a simplification (real metadata is per-Var, so the
-  ! same fn value could in principle be a macro under one name and not
-  ! another; not a scenario anything here creates).
+  ! There IS a real Var now (TAG_VAR, see Namespace.f90), but is_macro
+  ! still lives here, as a flag on the closure itself, rather than a
+  ! whole parallel TAG_MACRO duplicating TAG_FN's shape everywhere
+  ! TAG_FN is handled. Still a simplification (real metadata is
+  ! per-Var, so the same fn value could in principle be a macro under
+  ! one name and not another; not a scenario anything here creates).
   ! extra: additional arity clauses for a multi-arity fn* (params/body
   ! above are the first clause). Real Clojure's (fn* ([a] ...) ([a b]
   ! ...)) syntax -- dispatched by argument count at call time (see

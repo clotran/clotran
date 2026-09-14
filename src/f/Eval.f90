@@ -20,7 +20,7 @@ module Eval
   use LispReader, only: read_str, read_top_level_forms
   use mal_readline, only: sys_readline => readline
   use Namespace, only: ns_ref, assignment(=), CORE_NS, ns_find_or_create, ns_exists, ns_intern, &
-       ns_resolve, ns_get_own, ns_set_current, ns_current, ns_name_of
+       ns_resolve, ns_get_own, ns_set_current, ns_current, ns_name_of, ns_resolve_var
   implicit none
   private
 
@@ -334,10 +334,18 @@ contains
              val = list_first(list_rest(ast%list_val))
              return
           else if (head%str_val == "var") then
-             ! (var sym): same simplification as #'sym (see NOTES.md)
-             ! -- no separate Var type here, so this returns the
-             ! symbol itself, unevaluated, same as quote.
-             val = list_first(list_rest(ast%list_val))
+             ! (var sym)/#'sym: resolves to the real Var itself (a
+             ! TAG_VAR value, see Namespace.f90), not its current
+             ! value -- matches real Clojure (#'+ is the Var, (+ 1 2)
+             ! calls through it).
+             block
+               type(cons_value) :: sym
+               character(len=:), allocatable :: owner
+               sym = list_first(list_rest(ast%list_val))
+               if (.not. ns_resolve_var(ns_current(), sym%str_val, val, owner)) then
+                  call eval_error("Unable to resolve var: " // sym%str_val)
+               end if
+             end block
              return
           else if (head%str_val == ".") then
              val = eval_dot(ast, env)
@@ -844,6 +852,17 @@ contains
     character(len=:), allocatable :: owner
     logical :: found
 
+    if (method_name == "setMacro" .and. target%tag == TAG_VAR) then
+       ! (var sym) now resolves to the real Var -- mutate its root
+       ! directly, same identity, no need to re-resolve by name.
+       current = atom_deref(target)
+       if (current%tag == TAG_FN) then
+          if (allocated(current%fn_val)) current%fn_val%is_macro = .true.
+       end if
+       call atom_reset(target, current)
+       val%tag = TAG_NIL
+       return
+    end if
     if (method_name == "setMacro" .and. target%tag == TAG_SYMBOL) then
        found = ns_resolve(ns_current(), target%str_val, current, owner)
        if (.not. found) then
@@ -899,6 +918,18 @@ contains
     end if
     if (method_name == "deref" .and. target%tag == TAG_ATOM) then
        val = call_builtin("deref", [target])
+       return
+    end if
+    if ((method_name == "get" .or. method_name == "deref") .and. target%tag == TAG_VAR) then
+       ! var-get/deref on a Var (core.clj's own (defn var-get [x] (. x
+       ! (get)))) -- same underlying atom_ref storage as TAG_ATOM, just
+       ! reused directly rather than through the atom builtins.
+       val = atom_deref(target)
+       return
+    end if
+    if (method_name == "set" .and. target%tag == TAG_VAR .and. size(args) >= 1) then
+       call atom_reset(target, args(1))
+       val = args(1)
        return
     end if
     if (method_name == "reset" .and. target%tag == TAG_ATOM .and. size(args) >= 1) then
@@ -2315,7 +2346,9 @@ contains
           case ("clojure.lang.IPersistentList")
              val%bool_val = (args(2)%tag == TAG_LIST)
           case ("clojure.lang.IDeref")
-             val%bool_val = (args(2)%tag == TAG_ATOM)
+             val%bool_val = (args(2)%tag == TAG_ATOM .or. args(2)%tag == TAG_VAR)
+          case ("clojure.lang.Var")
+             val%bool_val = (args(2)%tag == TAG_VAR)
           case ("Integer", "Long", "Short", "Byte", "clojure.lang.BigInt", "BigInteger")
              ! clotran has one integer type (TAG_INT), not Java's tower
              ! of Integer/Long/Short/Byte/BigInteger -- every one of
