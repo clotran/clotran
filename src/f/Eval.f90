@@ -14,9 +14,11 @@ module Eval
   use RT, only: rt_get => get, rt_nth => nth, rt_assoc => assoc, rt_count => count, &
        rt_first => first, rt_rest => rest, rt_cons => cons, rt_conj => conj, rt_equiv => equiv, &
        rt_seq => seq, rt_next => next
-  use Numbers, only: num_add, num_sub, num_mul, num_div, num_lt, num_gt, num_le, num_ge
+  use Numbers, only: num_add, num_sub, num_mul, num_div, num_lt, num_gt, num_le, num_ge, &
+       num_bit_and, num_bit_or, num_bit_xor, num_bit_not, num_bit_and_not, &
+       num_quot, num_rem, num_shift_left, num_shift_right, num_ushift_right
   use printer, only: pr_str
-  use Atom, only: atom_new, atom_p, atom_deref, atom_reset
+  use Atom, only: atom_new, atom_p, atom_deref, atom_reset, var_dyn_push, var_dyn_pop
   use LispReader, only: read_str, read_top_level_forms
   use mal_readline, only: sys_readline => readline
   use Namespace, only: ns_ref, assignment(=), CORE_NS, ns_find_or_create, ns_exists, ns_intern, &
@@ -49,6 +51,18 @@ module Eval
   ! recursion (assert-args/let), not a general limit anything else
   ! should ever approach.
   integer :: macro_expand_depth = 0
+
+  ! See eval_new's clojure.lang.LazySeq case.
+  integer :: lazy_force_depth = 0
+
+  ! push-thread-bindings/pop-thread-bindings' own stack of stacks: a
+  ! flat run of every Var pushed so far, plus how many the most recent
+  ! push touched, so pop undoes exactly that many and no others (binding
+  ! forms nest and can touch several Vars in one push). ponytail: one
+  ! global stack, not real per-thread storage -- see Atom.f90's
+  ! dyn_stack comment; revisit alongside it.
+  type(cons_value), allocatable :: binding_stack_vars(:)
+  integer, allocatable :: binding_stack_frame_sizes(:)
 
   public :: eval_top, repl_env
 
@@ -108,6 +122,19 @@ contains
     call reg("deref")
     call reg("reset!")
     call reg("swap!")
+    call reg("push-thread-bindings")
+    call reg("pop-thread-bindings")
+    call reg("bit-and")
+    call reg("bit-or")
+    call reg("bit-xor")
+    call reg("bit-not")
+    call reg("bit-and-not")
+    call reg("quot")
+    call reg("rem")
+    call reg("bit-shift-left")
+    call reg("bit-shift-right")
+    call reg("unsigned-bit-shift-right")
+    call reg("next-id")
     call reg("macroexpand")
     call reg("throw")
     call reg("apply")
@@ -262,6 +289,7 @@ contains
     type(cons_value) :: val
     has_error = .false.
     macro_expand_depth = 0
+    lazy_force_depth = 0
     val = eval_form(ast, env)
     if (has_error) then
        error = pr_str(last_error_value)
@@ -300,6 +328,9 @@ contains
           return
        case (TAG_HASHMAP)
           val = eval_hashmap(ast, env)
+          return
+       case (TAG_SET)
+          val = eval_set(ast, env)
           return
        case (TAG_LIST)
           ! handled below
@@ -727,6 +758,7 @@ contains
     type(cons_value), allocatable :: args(:)
     type(cons_ref) :: l
     integer :: n, i
+    logical :: is_method_call
 
     target_form = list_first(list_rest(ast%list_val))
     member_form = list_first(list_rest(list_rest(ast%list_val)))
@@ -735,10 +767,23 @@ contains
        n = list_count(member_form%list_val) - 1
        allocate(args(n))
        l = list_rest(member_form%list_val)
+       is_method_call = .true.
     else
+       ! Flat form: (. target member arg*), real Clojure's own
+       ! documented equivalent of (. target (member arg*)) -- core.clj
+       ! uses it in 59 places, every bit-op among them (bit-and is
+       ! literally `(. clojure.lang.Numbers and x y)`). Treating a
+       ! bare-symbol member as ALWAYS field access silently dropped
+       ! every one of those args and returned the member itself, which
+       ! is what made bit-and return #<builtin bit-and> instead of a
+       ! number -- and so even? always false, and so every
+       ! [bindings]-style macro fail its own assert-args validation.
+       ! With no trailing args it stays field access, as before.
        member_name = member_form
-       n = 0
-       allocate(args(0))
+       l = list_rest(list_rest(list_rest(ast%list_val)))
+       n = list_count(l)
+       allocate(args(n))
+       is_method_call = (n > 0)
     end if
 
     if (target_form%tag == TAG_SYMBOL) then
@@ -749,7 +794,7 @@ contains
              l = list_rest(l)
           end do
           val = eval_static_call(target_form%str_val, member_name%str_val, args, &
-               is_call=(member_form%tag == TAG_LIST))
+               is_call=is_method_call)
           return
        end if
     end if
@@ -788,6 +833,66 @@ contains
        val = call_builtin("atom", [eval_form(list_first(rest), env)])
        return
     end if
+    if (cls%tag == TAG_SYMBOL .and. cls%str_val == "clojure.lang.LazySeq") then
+       ! core.clj's own `lazy-seq` macro is literally
+       ! (new clojure.lang.LazySeq (fn* [] body...)) -- so EVERY lazy
+       ! function (map, filter, concat, ...) built one of these, and
+       ! the generic passthrough below just handed the thunk itself
+       ! back: (map inc [1 2 3]) evaluated to #<fn>.
+       !
+       ! ponytail: forced immediately -- the thunk is called right
+       ! here and its seq returned, so seqs are EAGER, not lazy. Every
+       ! finite use is then correct; an infinite one ((range),
+       ! (repeat x), (iterate f x), cycle) would recurse until the
+       ! stack goes, where real Clojure would stream it. Upgrade path
+       ! is a real TAG_LAZYSEQ (thunk + memoized realization, forced
+       ! by seq/first/rest/count/pr_str in RT.f90) -- a genuine
+       ! feature, not a bug fix, and not needed to get core.clj
+       ! loading.
+       block
+         type(cons_value) :: thunk
+         type(cons_value), allocatable :: no_args(:)
+         thunk = eval_form(list_first(rest), env)
+         if (has_error) return
+         allocate(no_args(0))
+         ! Depth cap, same idea as macro_expand_depth: forcing is
+         ! eager, so an INFINITE lazy seq ((repeatedly f), (iterate f
+         ! x), (range)) would realize forever and take the real
+         ! Fortran stack with it. core.clj does build one in ordinary
+         ! code -- destmap*'s :or handling is
+         ! (zipmap (keys defaults) (repeatedly #(gensym "default__"))),
+         ! finite only because real Clojure stops pulling. Cap it so
+         ! that fails as a catchable error instead of a segfault.
+         lazy_force_depth = lazy_force_depth + 1
+         if (lazy_force_depth > 64) then
+            call eval_error("lazy sequence too deep -- clotran realizes lazy seqs eagerly, " // &
+                 "so an infinite one (repeatedly/iterate/range with no bound) can't be built yet")
+            lazy_force_depth = lazy_force_depth - 1
+            return
+         end if
+         val = apply_fn(thunk, no_args)
+         lazy_force_depth = lazy_force_depth - 1
+       end block
+       return
+    end if
+    if (cls%tag == TAG_SYMBOL .and. cls%str_val == "StringBuilder") then
+       ! core.clj's own multi-arg `str` is (new StringBuilder (str x))
+       ! -- a real, mutable StringBuilder, appended to and read back via
+       ! .append/.toString (see eval_instance_call).
+       block
+         type(cons_value) :: seed
+         seed%tag = TAG_STRING
+         if (list_count(rest) > 0) then
+            seed%str_val = pr_str(eval_form(list_first(rest), env), .false.)
+            if (has_error) return
+         else
+            seed%str_val = ""
+         end if
+         val = atom_new(seed)
+         val%tag = TAG_STRING_BUILDER
+       end block
+       return
+    end if
     if (list_count(rest) > 0) then
        val = eval_form(list_first(rest), env)
     else
@@ -796,18 +901,18 @@ contains
     end if
   end function eval_new
 
-  ! (. Class (method args...)) / (. Class member) once Class is
-  ! confirmed to name a real namespace: an ordinary lookup of
-  ! whatever's def'd under that name there, exactly like
-  ! clojure.lang.Util/equiv (real Clojure's own slash syntax) already
-  ! resolves via plain ns_resolve -- this is that same lookup, just
-  ! reached through the dot-form's own syntax instead. is_call tells
-  ! apart the two shapes that both end up with an empty args here --
-  ! (. Class (member)), a real 0-arg method call, vs (. Class member),
-  ! bare-symbol field access -- which the VALUE's own tag can't: a
-  ! field can itself hold an IFn (e.g. PersistentList's own `creator`,
-  ! a bare-symbol field holding the list-builtin itself, never meant to
-  ! be invoked on the spot).
+  ! (. Class (method args...)) / (. Class method args...) / (. Class
+  ! member) once Class is confirmed to name a real namespace: an
+  ! ordinary lookup of whatever's def'd under that name there, exactly
+  ! like clojure.lang.Util/equiv (real Clojure's own slash syntax)
+  ! already resolves via plain ns_resolve -- this is that same lookup,
+  ! just reached through the dot-form's own syntax instead. is_call
+  ! tells apart the two shapes that both end up with an empty args
+  ! here -- (. Class (member)), a real 0-arg method call, vs
+  ! (. Class member), bare-symbol field access -- which the VALUE's own
+  ! tag can't: a field can itself hold an IFn (e.g. PersistentList's
+  ! own `creator`, a bare-symbol field holding the list-builtin
+  ! itself, never meant to be invoked on the spot).
   function eval_static_call(ns_name, member_name, args, is_call) result(val)
     character(len=*), intent(in) :: ns_name, member_name
     type(cons_value), intent(in) :: args(:)
@@ -897,13 +1002,142 @@ contains
        val = call_builtin("instance?", call_args)
        return
     end if
-    if (method_name == "getName" .and. &
+    if ((method_name == "getName" .or. method_name == "getNamespace") .and. &
          (target%tag == TAG_SYMBOL .or. target%tag == TAG_KEYWORD)) then
-       ! symbols/keywords are the only things core.clj's own source
-       ! calls .getName on (e.g. defn's :inline-naming fixup) -- both
-       ! already just store their name in str_val.
+       ! Symbols/keywords keep their whole "ns/name" text in str_val,
+       ! so these split it: getName is the part after the slash,
+       ! getNamespace the part before (nil when unqualified, matching
+       ! real Clojure -- core.clj's own :keys/:syms destructuring
+       ! branches on exactly that nil).
+       block
+         integer :: slash
+         slash = 0
+         if (target%str_val /= "/") slash = index(target%str_val, "/")
+         if (method_name == "getName") then
+            val%tag = TAG_STRING
+            val%str_val = target%str_val
+         else
+            if (slash > 0) then
+               val%tag = TAG_STRING
+               val%str_val = target%str_val(1:slash - 1)
+            else
+               val%tag = TAG_NIL
+            end if
+         end if
+       end block
+       return
+    end if
+    if (target%tag == TAG_STRING) then
+       ! java.lang.String's own methods, as core.clj calls them
+       ! directly on strings (destructuring's :keys/:syms/:strs
+       ! detection uses .startsWith; defn's inline-tag fixup uses
+       ! .indexOf). Only the handful core.clj actually reaches for --
+       ! same "grows as the walk turns up the next one" rule the rest
+       ! of this interop surface follows.
+       select case (method_name)
+       case ("startsWith")
+          val%tag = TAG_BOOL
+          val%bool_val = (len(args(1)%str_val) <= len(target%str_val))
+          if (val%bool_val) val%bool_val = &
+               (target%str_val(1:len(args(1)%str_val)) == args(1)%str_val)
+          return
+       case ("endsWith")
+          val%tag = TAG_BOOL
+          val%bool_val = (len(args(1)%str_val) <= len(target%str_val))
+          if (val%bool_val) val%bool_val = &
+               (target%str_val(len(target%str_val) - len(args(1)%str_val) + 1:) == args(1)%str_val)
+          return
+       case ("indexOf")
+          val%tag = TAG_INT
+          val%int_val = index(target%str_val, args(1)%str_val) - 1 ! Java is 0-based, -1 when absent
+          return
+       case ("lastIndexOf")
+          val%tag = TAG_INT
+          val%int_val = index(target%str_val, args(1)%str_val, back=.true.) - 1
+          return
+       case ("length")
+          val%tag = TAG_INT
+          val%int_val = len(target%str_val)
+          return
+       case ("substring")
+          val%tag = TAG_STRING
+          if (size(args) >= 2) then
+             val%str_val = target%str_val(args(1)%int_val + 1:args(2)%int_val)
+          else
+             val%str_val = target%str_val(args(1)%int_val + 1:)
+          end if
+          return
+       case ("toUpperCase", "toLowerCase")
+          block
+            integer :: ci, cc
+            val%tag = TAG_STRING
+            val%str_val = target%str_val
+            do ci = 1, len(val%str_val)
+               cc = iachar(val%str_val(ci:ci))
+               if (method_name == "toUpperCase") then
+                  if (cc >= 97 .and. cc <= 122) val%str_val(ci:ci) = achar(cc - 32)
+               else
+                  if (cc >= 65 .and. cc <= 90) val%str_val(ci:ci) = achar(cc + 32)
+               end if
+            end do
+          end block
+          return
+       case ("trim")
+          val%tag = TAG_STRING
+          val%str_val = trim(adjustl(target%str_val))
+          return
+       end select
+    end if
+    if (method_name == "disjoin" .and. target%tag == TAG_SET .and. size(args) >= 1) then
+       ! core.clj's own disj is (. set (disjoin k)).
+       call_args(1) = target
+       call_args(2) = args(1)
+       val = call_builtin("disj", call_args)
+       return
+    end if
+    if ((method_name == "getKey" .or. method_name == "getValue") .and. &
+         target%tag == TAG_VECTOR) then
+       ! core.clj's own key/val are (. e (getKey))/(. e (getValue)) on
+       ! a map entry. clotran has no separate MapEntry type -- seq over
+       ! a map yields plain [k v] vectors -- so these are just nth 0/1.
+       block
+         type(cons_value) :: idx
+         idx%tag = TAG_INT
+         idx%int_val = 0
+         if (method_name == "getValue") idx%int_val = 1
+         call_args(1) = target
+         call_args(2) = idx
+         val = call_builtin("nth", call_args)
+       end block
+       return
+    end if
+    if (method_name == "toString" .and. target%tag == TAG_STRING_BUILDER) then
+       ! The StringBuilder's own current content, not "(atom ...)" --
+       ! pr_str has no special case for TAG_STRING_BUILDER, so this
+       ! reads the mutable payload directly instead of falling through
+       ! to the generic case below.
+       val = atom_deref(target)
+       return
+    end if
+    if (method_name == "append" .and. target%tag == TAG_STRING_BUILDER .and. size(args) >= 1) then
+       ! Mutates in place AND returns the same StringBuilder, matching
+       ! real Java (chained/recurred on, e.g. core.clj's own `str`).
+       block
+         type(cons_value) :: cur
+         cur = atom_deref(target)
+         cur%str_val = cur%str_val // args(1)%str_val
+         call atom_reset(target, cur)
+       end block
+       val = target
+       return
+    end if
+    if (method_name == "toString") then
+       ! Real Clojure's Object.toString(), reached via core.clj's own
+       ! source (assert-args's error-message building, among others) --
+       ! same "display," non-readable rendering as str's own default,
+       ! for any value, not just symbols/keywords (unlike getName above).
        val%tag = TAG_STRING
-       val%str_val = target%str_val
+       val%str_val = pr_str(target, .false.)
        return
     end if
     if (method_name == "applyTo" .and. size(args) >= 1) then
@@ -948,7 +1182,7 @@ contains
        end block
        return
     end if
-    call eval_error("unsupported interop call: (." // trim(method_name) // " ...)")
+    call eval_error("unsupported interop call: (." // trim(method_name) // " " // pr_str(target) // ")")
   end function eval_instance_call
 
   ! (try form* (catch ...)?): any number of body forms (an implicit
@@ -967,35 +1201,53 @@ contains
   !  - (catch* sym form*): mal's own shape (no class at all) -- kept
   !    working unchanged for test/regression/'s own borrowed suite,
   !    which uses catch* exclusively and never with a class argument.
+  ! (try body* (catch/catch* e ...)? (finally ...)?): a trailing
+  ! (finally ...) always runs -- even when the body errors and there's
+  ! no catch, even when catch itself errors -- same as real Clojure.
+  ! `binding`'s own macroexpansion depends on this: pop-thread-bindings
+  ! lives in a finally, so a Var that binding pushed must get unbound
+  ! on the way out regardless of how the body finished (see Atom.f90's
+  ! dyn_stack). Only one catch clause supported (no class matching),
+  ! same simplification as before.
   function eval_try(ast, env) result(val)
     type(cons_value), intent(in) :: ast
     type(env_ref), intent(in) :: env
     type(cons_value) :: val
     type(cons_ref) :: forms, l, cl
-    type(cons_value) :: form, catch_clause, catch_head, catch_sym
+    type(cons_value) :: form, catch_clause, catch_head, catch_sym, finally_clause
     type(env_ref) :: catch_env
     integer :: n, k, body_n, cn
-    logical :: has_catch
+    logical :: has_catch, has_finally
+    logical :: saved_has_error
+    type(cons_value) :: saved_error_value
 
+    ! Peel (finally ...) off the end first if present, then
+    ! (catch/catch* ...) off whatever's now the end -- real Clojure's
+    ! own clause order (body*, then an optional catch, then an
+    ! optional finally) always leaves finally last when both appear.
     forms = list_rest(ast%list_val)
     n = list_count(forms)
     has_catch = .false.
+    has_finally = .false.
     body_n = n
-    l = forms
-    do k = 1, n
-       form = list_first(l)
-       if (k == n .and. form%tag == TAG_LIST) then
-          catch_head = list_first(form%list_val)
-          if (catch_head%tag == TAG_SYMBOL) then
-             if (catch_head%str_val == "catch" .or. catch_head%str_val == "catch*") then
-                has_catch = .true.
-                catch_clause = form
-                body_n = n - 1
-             end if
-          end if
+
+    if (body_n > 0) then
+       form = nth_form(forms, body_n)
+       if (clause_head_is(form, "finally")) then
+          has_finally = .true.
+          finally_clause = form
+          body_n = body_n - 1
        end if
-       l = list_rest(l)
-    end do
+    end if
+    if (body_n > 0) then
+       form = nth_form(forms, body_n)
+       if (clause_head_is(form, "catch") .or. clause_head_is(form, "catch*")) then
+          has_catch = .true.
+          catch_clause = form
+          catch_head = list_first(form%list_val)
+          body_n = body_n - 1
+       end if
+    end if
 
     val%tag = TAG_NIL
     l = forms
@@ -1004,25 +1256,78 @@ contains
        if (has_error) exit
        l = list_rest(l)
     end do
-    if (.not. has_error) return
-    if (.not. has_catch) return ! no catch: propagate
 
-    cl = list_rest(catch_clause%list_val) ! drop "catch"/"catch*"
-    if (catch_head%str_val == "catch") cl = list_rest(cl) ! drop the (ignored) class
-    catch_sym = list_first(cl)
-    cl = list_rest(cl)
-    cn = list_count(cl)
-
-    catch_env = env_new(env)
-    call env_set(catch_env, catch_sym, last_error_value)
-    has_error = .false. ! caught
-    val%tag = TAG_NIL
-    do k = 1, cn
-       val = eval_form(list_first(cl), catch_env)
-       if (has_error) exit
+    if (has_error .and. has_catch) then
+       cl = list_rest(catch_clause%list_val) ! drop "catch"/"catch*"
+       if (catch_head%str_val == "catch") cl = list_rest(cl) ! drop the (ignored) class
+       catch_sym = list_first(cl)
        cl = list_rest(cl)
+       cn = list_count(cl)
+
+       catch_env = env_new(env)
+       call env_set(catch_env, catch_sym, last_error_value)
+       has_error = .false. ! caught
+       val%tag = TAG_NIL
+       do k = 1, cn
+          val = eval_form(list_first(cl), catch_env)
+          if (has_error) exit
+          cl = list_rest(cl)
+       end do
+    end if
+
+    if (.not. has_finally) return
+    ! Run finally with a clean error state, so its own forms evaluate
+    ! normally -- then either finally's own error wins (it masks
+    ! whatever the try/catch above produced, same as Java/Clojure), or
+    ! the try/catch outcome above is restored exactly as it was.
+    saved_has_error = has_error
+    saved_error_value = last_error_value
+    has_error = .false.
+    l = list_rest(finally_clause%list_val)
+    n = list_count(l)
+    do k = 1, n
+       block
+         type(cons_value) :: discard
+         discard = eval_form(list_first(l), env)
+       end block
+       if (has_error) return ! finally's own error propagates instead
+       l = list_rest(l)
     end do
+    has_error = saved_has_error
+    last_error_value = saved_error_value
   end function eval_try
+
+  ! The 1-indexed k-th element of a cons_ref list -- eval_try's own
+  ! clause-peeling needs random access into the (short) top-level forms
+  ! list, which list_first/list_rest alone would need repeated walks
+  ! from the front for.
+  function nth_form(l0, k) result(form)
+    type(cons_ref), intent(in) :: l0
+    integer, intent(in) :: k
+    type(cons_value) :: form
+    type(cons_ref) :: l
+    integer :: i
+    l = l0
+    do i = 2, k
+       l = list_rest(l)
+    end do
+    form = list_first(l)
+  end function nth_form
+
+  ! Is form a list whose head is the symbol name -- (catch ...)/
+  ! (finally ...) clause detection for eval_try.
+  function clause_head_is(form, name) result(yes)
+    type(cons_value), intent(in) :: form
+    character(len=*), intent(in) :: name
+    logical :: yes
+    type(cons_value) :: head
+    yes = .false.
+    if (form%tag /= TAG_LIST) return
+    if (.not. allocated(form%list_val)) return
+    if (list_count(form%list_val) == 0) return
+    head = list_first(form%list_val)
+    yes = (head%tag == TAG_SYMBOL .and. head%str_val == name)
+  end function clause_head_is
 
   ! (defmacro name [params] body): real Clojure's actual syntax (not
   ! mal's (defmacro! name (fn* (params) body))) -- a macro is an
@@ -1343,6 +1648,34 @@ contains
     type(cons_ref) :: l
     integer :: n, i
 
+    if (form%tag == TAG_VECTOR) then
+       ! A vector in code position holds CODE (its elements are
+       ! evaluated), so it has to be walked like a list -- most
+       ! importantly a let*/loop* bindings vector, whose init
+       ! expressions are ordinary code. Returning it untouched (as
+       ! "not a list") left every one of those unfrozen: core.clj's
+       ! own `drop` kept a raw `(fn [n coll] ... (and (pos? n) s) ...)`
+       ! in its `step` binding, so calling drop re-expanded `and` at
+       ! runtime -> `let` -> assert-args -> destructure -> partition ->
+       ! drop, forever. fn*/defn params vectors go through here too and
+       ! are unaffected (bare symbols expand to themselves).
+       block
+         integer :: vn, vi
+         type(cons_value), allocatable :: vitems(:)
+         vn = 0
+         if (allocated(form%vector_val)) vn = vector_count(form%vector_val)
+         allocate(vitems(vn))
+         do vi = 1, vn
+            vitems(vi) = pre_expand(vector_nth(form%vector_val, vi - 1))
+            if (has_error) then
+               has_error = .false.
+               vitems(vi) = vector_nth(form%vector_val, vi - 1)
+            end if
+         end do
+         expanded = make_vector(vitems)
+       end block
+       return
+    end if
     if (form%tag /= TAG_LIST) then
        expanded = form
        return
@@ -1360,6 +1693,26 @@ contains
     if (head%tag == TAG_SYMBOL) then
        if (head%str_val == "quote") then
           expanded = form
+          return
+       end if
+       if (head%str_val == "." .and. n == 3) then
+          ! (. target (method args...)) / (. target member): eval_dot
+          ! never treats the method/member name as code (real
+          ! Clojure's dot-call syntax, not a function call) -- only
+          ! pre_expand's OWN generic recursion below doesn't know
+          ! that, and previously walked straight into a method name
+          ! that happened to match a real macro (e.g. bit-and's own
+          ! `(. clojure.lang.Numbers (and x y))` -- "and" IS a macro
+          ! in clojure.core), corrupting the method-call form entirely.
+          block
+            type(cons_value) :: target_e, member_e
+            target_e = pre_expand(list_first(list_rest(form%list_val)))
+            member_e = list_first(list_rest(list_rest(form%list_val)))
+            if (member_e%tag == TAG_LIST) then
+               member_e = pre_expand_dot_args(member_e)
+            end if
+            expanded = make_list([head, target_e, member_e])
+          end block
           return
        end if
        if (head%str_val == "quasiquote" .and. n == 2) then
@@ -1393,6 +1746,19 @@ contains
                return
             end if
             expanded = pre_expand(ast_copy)
+            if (has_error) then
+               ! The recursive pre_expand above found a FURTHER nested
+               ! macro call and computing ITS expansion genuinely
+               ! failed (not just "not found yet" -- e.g. assert-args
+               ! validating a bindings vector pre_expand doesn't have
+               ! real runtime values for, since it's walking a
+               ! template, not executing it -- a real, if rare, false
+               ! positive). Same tolerance as above: leave THIS form
+               ! unexpanded rather than letting a nested macro's own
+               ! validation abort the whole containing definition.
+               has_error = .false.
+               expanded = form
+            end if
             macro_expand_depth = macro_expand_depth - 1
           end block
           return
@@ -1402,10 +1768,41 @@ contains
     l = form%list_val
     do i = 1, n
        items(i) = pre_expand(list_first(l))
+       if (has_error) then
+          ! Same tolerance as the direct-macro-call branch above --
+          ! this element contains some deeper nested macro call whose
+          ! own expansion genuinely failed; leave it exactly as
+          ! written rather than aborting the whole containing form.
+          has_error = .false.
+          items(i) = list_first(l)
+       end if
        l = list_rest(l)
     end do
     expanded = make_list(items)
   end function pre_expand
+
+  ! Companion to pre_expand for a (. target (method args...)) form's
+  ! own method-call list: pre_expands every arg, but leaves the method
+  ! NAME (the list's own head) untouched -- it's never code, even when
+  ! it happens to match a real macro's name (see pre_expand's own "."
+  ! case).
+  function pre_expand_dot_args(form) result(out)
+    type(cons_value), intent(in) :: form
+    type(cons_value) :: out
+    type(cons_value), allocatable :: items(:)
+    type(cons_ref) :: l
+    integer :: n, i
+    n = list_count(form%list_val)
+    allocate(items(n))
+    l = form%list_val
+    items(1) = list_first(l)
+    l = list_rest(l)
+    do i = 2, n
+       items(i) = pre_expand(list_first(l))
+       l = list_rest(l)
+    end do
+    out = make_list(items)
+  end function pre_expand_dot_args
 
   ! Companion to pre_expand for the inside of a quasiquote template --
   ! same shape as qq_expand's own tag dispatch, but pre-expanding
@@ -1689,6 +2086,17 @@ contains
   ! (this namespace's own bindings, falling back to clojure.core) --
   ! def! always lands in the namespace, never the lexical env, so it's
   ! visible here regardless of how deeply nested the lookup site is.
+  !
+  ! Last resort, for a bare clojure.lang.* name only: it denotes a host
+  ! CLASS in real Clojure's source (`(instance? clojure.lang.ISeq x)`),
+  ! and clotran has no Class objects at all, so it denotes itself --
+  ! the keyword of the same name, which is exactly what instance?
+  ! matches against. clotran.clj had been writing these out by hand,
+  ! one `(def clojure.lang.ISeq :clojure.lang.ISeq)` at a time, "as
+  ! core.clj's walk turns up the next one it needs"; this is that same
+  ! rule, just applied generally instead of by enumeration. Only
+  ! clojure.lang.* gets it -- any other unresolved symbol is still a
+  ! real error, as before.
   function eval_symbol(ast, env) result(val)
     type(cons_value), intent(in) :: ast
     type(env_ref), intent(in) :: env
@@ -1697,7 +2105,15 @@ contains
     character(len=:), allocatable :: owner
     found = env_find(env, ast, val)
     if (.not. found) found = ns_resolve(ns_current(), ast%str_val, val, owner)
-    if (.not. found) call eval_error("'" // ast%str_val // "' not found")
+    if (found) return
+    if (len(ast%str_val) > 13) then
+       if (ast%str_val(1:13) == "clojure.lang." .and. index(ast%str_val(14:), "/") == 0) then
+          val%tag = TAG_KEYWORD
+          val%str_val = ast%str_val
+          return
+       end if
+    end if
+    call eval_error("'" // ast%str_val // "' not found")
   end function eval_symbol
 
   recursive function eval_vector(ast, env) result(val)
@@ -1718,6 +2134,33 @@ contains
     allocate(val%vector_val)
     val%vector_val = vec
   end function eval_vector
+
+  ! A set literal's elements are evaluated, same as a vector literal's
+  ! -- #{'&} has to become a set holding the SYMBOL &, not the form
+  ! (quote &). Missing this made every set literal in core.clj hold
+  ! unevaluated forms, so destvec*'s own `(some #{'&} b)` rest-arg
+  ! check never matched and [params & body] destructuring silently
+  ! dropped its bindings.
+  recursive function eval_set(ast, env) result(val)
+    type(cons_value), intent(in) :: ast
+    type(env_ref), intent(in) :: env
+    type(cons_value) :: val
+    type(cons_value), allocatable :: elems(:), vals(:)
+    type(cons_value), allocatable :: dummy(:)
+    integer :: i, n
+
+    n = 0
+    if (allocated(ast%map_val)) then
+       call array_map_entries(ast%map_val, elems, dummy)
+       n = size(elems)
+    end if
+    allocate(vals(n))
+    do i = 1, n
+       vals(i) = eval_form(elems(i), env)
+       if (has_error) return
+    end do
+    val = make_hashset(vals)
+  end function eval_set
 
   ! Keys stay literal; values are evaluated, same as a vector literal.
   recursive function eval_hashmap(ast, env) result(val)
@@ -1766,6 +2209,16 @@ contains
        else
           val = map_lookup(f, args(1), args(2:))
        end if
+    case (TAG_SET)
+       ! A set is a function of its elements in real Clojure --
+       ! (#{'&} x) is the membership test core.clj's own fn/destructure
+       ! machinery uses. Backed by the same map_val as a hash-map (every
+       ! element mapped to itself), so the lookup is literally the same.
+       if (size(args) < 1) then
+          call eval_error("set invoked with no arguments")
+       else
+          val = map_lookup(f, args(1), args(2:))
+       end if
     case (TAG_VECTOR)
        if (size(args) < 1) then
           call eval_error("vector invoked with no arguments")
@@ -1773,7 +2226,7 @@ contains
           val = rt_nth(f, args(1)%int_val)
        end if
     case default
-       call eval_error("not a function")
+       call eval_error("not a function: " // pr_str(f))
     end select
   end function apply_fn
 
@@ -1964,7 +2417,18 @@ contains
                 return
              end if
           end if
-          call env_set(child, p, make_list(args(ai:)))
+          ! A rest param with nothing left binds NIL, not () -- real
+          ! Clojure's own rule, and core.clj leans on it constantly:
+          ! if-let's `(nil? oldform)` guard, `(if next ...)`, `(when
+          ! more ...)` and friends all nil-pun the rest arg, and an
+          ! empty list is TRUTHY, so binding () made every one of
+          ! those take the wrong branch ("if-let requires 1 or 2 forms
+          ! after binding vector" on a perfectly ordinary if-let).
+          if (size(args(ai:)) == 0) then
+             call env_set(child, p, nilv)
+          else
+             call env_set(child, p, make_list(args(ai:)))
+          end if
           return
        end if
        if (ai <= size(args)) then
@@ -2214,6 +2678,34 @@ contains
        val = num_mul(args)
     case ("/")
        val = num_div(args)
+    case ("bit-and")
+       val = num_bit_and(args)
+    case ("bit-or")
+       val = num_bit_or(args)
+    case ("bit-xor")
+       val = num_bit_xor(args)
+    case ("bit-not")
+       val = num_bit_not(args)
+    case ("bit-and-not")
+       val = num_bit_and_not(args)
+    case ("quot")
+       val = num_quot(args)
+    case ("rem")
+       val = num_rem(args)
+    case ("bit-shift-left")
+       val = num_shift_left(args)
+    case ("bit-shift-right")
+       val = num_shift_right(args)
+    case ("unsigned-bit-shift-right")
+       val = num_ushift_right(args)
+    case ("next-id")
+       ! clojure.lang.RT/nextID -- gensym's own source of uniqueness
+       ! (real core.clj: (symbol (str prefix (. clojure.lang.RT
+       ! (nextID))))). Shares gensym_counter so a machine-generated
+       ! name can never collide with a reader-level x# auto-gensym.
+       gensym_counter = gensym_counter + 1
+       val%tag = TAG_INT
+       val%int_val = gensym_counter
     case ("first")
        val = rt_first(args(1))
     case ("rest")
@@ -2280,6 +2772,10 @@ contains
        val = args(2)
     case ("swap!")
        val = builtin_swap(args)
+    case ("push-thread-bindings")
+       val = builtin_push_thread_bindings(args(1))
+    case ("pop-thread-bindings")
+       val = builtin_pop_thread_bindings()
     case ("macroexpand")
        val = builtin_macroexpand(args(1))
     case ("throw")
@@ -2357,8 +2853,57 @@ contains
              val%bool_val = (args(2)%tag == TAG_INT)
           case ("Double", "Float", "clojure.lang.BigDecimal", "BigDecimal")
              val%bool_val = (args(2)%tag == TAG_REAL)
+          case ("Number", "clojure.lang.Ratio")
+             val%bool_val = (args(2)%tag == TAG_INT .or. args(2)%tag == TAG_REAL)
+          case ("clojure.lang.Sequential")
+             val%bool_val = (args(2)%tag == TAG_LIST .or. args(2)%tag == TAG_VECTOR)
+          case ("clojure.lang.IPersistentSet", "clojure.lang.APersistentSet", &
+               "clojure.lang.PersistentHashSet")
+             val%bool_val = (args(2)%tag == TAG_SET)
+          case ("clojure.lang.Fn", "clojure.lang.AFn")
+             ! A macro's value is a TAG_FN here (is_macro is a flag on
+             ! the closure, see Values.f90) but is NOT a function as
+             ! far as fn? is concerned -- real Clojure can't even name
+             ! a macro in value position.
+             val%bool_val = (args(2)%tag == TAG_BUILTIN)
+             if (args(2)%tag == TAG_FN) then
+                val%bool_val = .true.
+                if (allocated(args(2)%fn_val)) val%bool_val = .not. args(2)%fn_val%is_macro
+             end if
+          case ("clojure.lang.IFn")
+             ! Everything callable, matching real Clojure: fns, and the
+             ! collections/keywords that are functions of their contents.
+             val%bool_val = (args(2)%tag == TAG_FN .or. args(2)%tag == TAG_BUILTIN .or. &
+                  args(2)%tag == TAG_KEYWORD .or. args(2)%tag == TAG_HASHMAP .or. &
+                  args(2)%tag == TAG_SET .or. args(2)%tag == TAG_VECTOR)
+          case ("clojure.lang.IPersistentCollection", "clojure.lang.Seqable")
+             val%bool_val = (args(2)%tag == TAG_LIST .or. args(2)%tag == TAG_VECTOR .or. &
+                  args(2)%tag == TAG_HASHMAP .or. args(2)%tag == TAG_SET)
+          case ("clojure.lang.Associative")
+             val%bool_val = (args(2)%tag == TAG_HASHMAP .or. args(2)%tag == TAG_VECTOR)
+          case ("clojure.lang.Named")
+             val%bool_val = (args(2)%tag == TAG_SYMBOL .or. args(2)%tag == TAG_KEYWORD)
+          case ("Character")
+             ! No char type here -- the reader makes one-character
+             ! strings, and seq over a string yields those.
+             val%bool_val = .false.
           case default
-             call eval_error("instance?: unknown pseudo-class '" // args(1)%str_val // "'")
+             ! A clojure.lang.* interface clotran genuinely has no
+             ! analogue for (IChunkedSeq, MultiFn, ...): "no, this
+             ! value isn't one of those" is the correct answer, and
+             ! the one core.clj's own guards are written to branch on
+             ! -- erroring instead turned every such guard into a hard
+             ! failure. Anything else (a bare `Foo`) is still a real
+             ! missing entry, so it still errors.
+             if (len(args(1)%str_val) > 13) then
+                if (args(1)%str_val(1:13) == "clojure.lang.") then
+                   val%bool_val = .false.
+                else
+                   call eval_error("instance?: unknown pseudo-class '" // args(1)%str_val // "'")
+                end if
+             else
+                call eval_error("instance?: unknown pseudo-class '" // args(1)%str_val // "'")
+             end if
           end select
        else
           call eval_error("instance?: c must be one of clotran.clj's registered pseudo-classes")
@@ -2373,10 +2918,30 @@ contains
        val%tag = TAG_BOOL
        val%bool_val = (args(1)%tag == TAG_LIST .or. args(1)%tag == TAG_VECTOR)
     case ("symbol")
+       ! (symbol name) and (symbol ns name), same as keyword below.
        val%tag = TAG_SYMBOL
-       val%str_val = args(1)%str_val
+       if (size(args) >= 2) then
+          if (args(1)%tag == TAG_NIL) then
+             val%str_val = args(2)%str_val
+          else
+             val%str_val = args(1)%str_val // "/" // args(2)%str_val
+          end if
+       else
+          val%str_val = args(1)%str_val
+       end if
     case ("keyword")
-       if (args(1)%tag == TAG_KEYWORD) then
+       ! (keyword name) and (keyword ns name) -- real Clojure has both,
+       ! and clojure.lang.Keyword/intern (which clotran.clj maps here)
+       ! is called with two args by destructuring's own :keys handling.
+       ! A nil namespace just means unqualified.
+       if (size(args) >= 2) then
+          val%tag = TAG_KEYWORD
+          if (args(1)%tag == TAG_NIL) then
+             val%str_val = args(2)%str_val
+          else
+             val%str_val = args(1)%str_val // "/" // args(2)%str_val
+          end if
+       else if (args(1)%tag == TAG_KEYWORD) then
           val = args(1)
        else
           val%tag = TAG_KEYWORD
@@ -2531,6 +3096,76 @@ contains
     call atom_reset(args(1), val)
   end function builtin_swap
 
+  ! (push-thread-bindings m): m is a map of Var -> new value (real
+  ! core.clj's own `binding` builds it via `(hash-map (var x) v ...)`).
+  ! Pushes a new dynamic value onto every Var in m, and remembers how
+  ! many so the matching pop-thread-bindings undoes exactly this frame
+  ! (bindings nest: an inner `binding` on the same Var must pop back to
+  ! the outer one, not the root). See Atom.f90's var_dyn_push/dyn_stack.
+  function builtin_push_thread_bindings(m) result(val)
+    type(cons_value), intent(in) :: m
+    type(cons_value) :: val
+    type(cons_value), allocatable :: keys(:), vals(:), grown(:)
+    integer, allocatable :: grown_sizes(:)
+    integer :: i, n, old_n
+
+    val%tag = TAG_NIL
+    if (.not. allocated(m%map_val)) return
+    call array_map_entries(m%map_val, keys, vals)
+    n = size(keys)
+    do i = 1, n
+       call var_dyn_push(keys(i), vals(i))
+    end do
+
+    old_n = 0
+    if (allocated(binding_stack_vars)) old_n = size(binding_stack_vars)
+    allocate(grown(old_n + n))
+    if (old_n > 0) grown(1:old_n) = binding_stack_vars(1:old_n)
+    grown(old_n + 1:old_n + n) = keys(1:n)
+    call move_alloc(grown, binding_stack_vars)
+
+    old_n = 0
+    if (allocated(binding_stack_frame_sizes)) old_n = size(binding_stack_frame_sizes)
+    allocate(grown_sizes(old_n + 1))
+    if (old_n > 0) grown_sizes(1:old_n) = binding_stack_frame_sizes(1:old_n)
+    grown_sizes(old_n + 1) = n
+    call move_alloc(grown_sizes, binding_stack_frame_sizes)
+  end function builtin_push_thread_bindings
+
+  ! (pop-thread-bindings): undoes the most recent push-thread-bindings.
+  function builtin_pop_thread_bindings() result(val)
+    type(cons_value) :: val
+    type(cons_value), allocatable :: shrunk(:)
+    integer, allocatable :: shrunk_sizes(:)
+    integer :: i, n, total, frames
+
+    val%tag = TAG_NIL
+    if (.not. allocated(binding_stack_frame_sizes)) return
+    frames = size(binding_stack_frame_sizes)
+    if (frames == 0) return
+    n = binding_stack_frame_sizes(frames)
+    total = size(binding_stack_vars)
+    do i = total - n + 1, total
+       call var_dyn_pop(binding_stack_vars(i))
+    end do
+
+    if (total - n > 0) then
+       allocate(shrunk(total - n))
+       shrunk(:) = binding_stack_vars(1:total - n)
+       call move_alloc(shrunk, binding_stack_vars)
+    else
+       deallocate(binding_stack_vars)
+    end if
+
+    if (frames - 1 > 0) then
+       allocate(shrunk_sizes(frames - 1))
+       shrunk_sizes(:) = binding_stack_frame_sizes(1:frames - 1)
+       call move_alloc(shrunk_sizes, binding_stack_frame_sizes)
+    else
+       deallocate(binding_stack_frame_sizes)
+    end if
+  end function builtin_pop_thread_bindings
+
   ! (fn* params body): captures env directly -- assignment bumps its
   ! refcount, same closure semantics as real Clojure fns.
   ! (fn* [params] form1 form2 ...): every form after params is the
@@ -2603,7 +3238,7 @@ contains
     if (multi) then
        n_clauses = list_count(rest)
        val%fn_val%params = list_first(clause%list_val)
-       val%fn_val%body = pre_expand(wrap_body(list_rest(clause%list_val)))
+       val%fn_val%body = wrap_body(list_rest(clause%list_val))
        if (n_clauses > 1) then
           allocate(val%fn_val%extra)
           allocate(val%fn_val%extra%ptr)
@@ -2615,14 +3250,14 @@ contains
           do i = 1, n_clauses - 1
              clause = list_first(clauses)
              val%fn_val%extra%ptr%params(i) = list_first(clause%list_val)
-             val%fn_val%extra%ptr%bodies(i) = pre_expand(wrap_body(list_rest(clause%list_val)))
+             val%fn_val%extra%ptr%bodies(i) = wrap_body(list_rest(clause%list_val))
              clauses = list_rest(clauses)
           end do
        end if
     else
        val%fn_val%params = list_first(rest)
        body_forms = list_rest(rest)
-       val%fn_val%body = pre_expand(wrap_body(body_forms))
+       val%fn_val%body = wrap_body(body_forms)
     end if
 
     val%fn_val%env = fn_env
@@ -2659,6 +3294,22 @@ contains
   ! (def! sym expr): evaluates expr, interns it in *ns* (never the
   ! lexical env, even from inside a let*/fn* body -- matches real
   ! Clojure), returns the value.
+  !
+  ! pre_expand happens HERE, on the value form, rather than in eval_fn
+  ! on each closure's body: a `def` runs once per definition, but
+  ! eval_fn runs once per closure VALUE constructed -- including every
+  ! throwaway closure a macro builds while expanding (destructure
+  ! alone builds two on every call). Freezing there re-expanded each
+  ! body from scratch every time, and since expanding a macro itself
+  ! builds more closures, the cost compounded until bootstrap simply
+  ! stopped finishing (confirmed: pre_expand -> eval_fn -> pre_expand
+  ! -> eval_macro_head -> eval_fn ... all the way down a sampled
+  ! stack). Once per def is what a real compiler does anyway, and it's
+  ! the same freeze: (def integer? (fn* [n] (or ...))) gets its `or`
+  ! (and the `let` that or expands into) resolved against *ns* as it
+  ! stands at definition time, so calling integer? later never
+  ! re-resolves `let` against the real, validating one -- which would
+  ! call even?, which calls integer?, forever.
   function eval_def(ast, env) result(val)
     type(cons_value), intent(in) :: ast
     type(env_ref), intent(in) :: env
@@ -2666,7 +3317,7 @@ contains
     type(cons_value) :: sym
 
     sym = list_first(list_rest(ast%list_val))
-    val = eval_form(list_first(list_rest(list_rest(ast%list_val))), env)
+    val = eval_form(pre_expand(list_first(list_rest(list_rest(ast%list_val)))), env)
     if (has_error) return
     call apply_macro_metadata(sym, val)
     call ns_intern(ns_current(), sym%str_val, val)

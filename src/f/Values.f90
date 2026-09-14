@@ -38,6 +38,12 @@ module values
                                       ! Differs from TAG_ATOM only in behavior, not storage: a
                                       ! symbol resolving to a Var auto-derefs transparently
                                       ! (ns_get_own/ns_resolve do this); an atom never does.
+  integer, parameter :: TAG_STRING_BUILDER = 15 ! java.lang.StringBuilder -- real core.clj's own
+                                      ! multi-arg `str` builds one (`.append`s each arg's own str
+                                      ! form, then `.toString`s it). Same "reuse atom_val"
+                                      ! pattern as TAG_VAR: the mutable payload is a TAG_STRING
+                                      ! cons_value, mutated in place by .append; .toString reads
+                                      ! it back out directly (see eval_new/eval_instance_call).
 
   integer, parameter :: BITS = 5
   integer, parameter :: BRANCH = 32
@@ -250,6 +256,17 @@ module values
   type, public :: atom_node
      integer :: refcount = 0
      type(cons_value) :: val
+     ! Var dynamic-binding stack (`binding`/^:dynamic) -- unused for a
+     ! plain TAG_ATOM, only ever pushed/popped by Eval.f90's
+     ! push-thread-bindings/pop-thread-bindings for a TAG_VAR. See
+     ! Atom.f90's var_dyn_push/var_dyn_pop/atom_deref.
+     ! ponytail: one global stack, not real per-thread storage --
+     ! clotran is single-threaded today (see NOTES.md/memory: the
+     ! concurrency model is a real, separate feature, likely
+     ! Rust-inspired, not a JVM-style thread port). Revisit this field
+     ! when that lands -- probably keyed by thread/fiber id then,
+     ! rather than one shared stack.
+     type(cons_value), allocatable :: dyn_stack(:)
   end type atom_node
 
   type, public :: atom_ref

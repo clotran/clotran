@@ -61,15 +61,26 @@ contains
     call vector_walk_rev(vec%root, vec%shift, l)
   end function vector_to_list
 
+  ! Real Clojure's RT.first is seq(x).first() -- anything seqable, not
+  ! just lists and vectors. Maps especially: (first {:a 1}) is the
+  ! entry [:a 1], and core.clj's own destructuring walks map entries
+  ! through first/key/val, so returning nil here made (.getKey nil)
+  ! the failure mode for every map destructuring form.
   function first(v) result(val)
     type(cons_value), intent(in) :: v
     type(cons_value) :: val
+    type(cons_value) :: s
     select case (v%tag)
     case (TAG_LIST)
        if (allocated(v%list_val)) val = list_first(v%list_val)
     case (TAG_VECTOR)
        if (allocated(v%vector_val)) then
           if (vector_count(v%vector_val) > 0) val = vector_nth(v%vector_val, 0)
+       end if
+    case (TAG_HASHMAP, TAG_SET, TAG_STRING)
+       s = seq(v)
+       if (s%tag == TAG_LIST) then
+          if (allocated(s%list_val)) val = list_first(s%list_val)
        end if
     end select
   end function first
@@ -87,6 +98,14 @@ contains
        if (allocated(v%vector_val)) then
           if (vector_count(v%vector_val) > 1) tail = list_rest(vector_to_list(v%vector_val))
        end if
+    case (TAG_HASHMAP, TAG_SET, TAG_STRING)
+       block
+         type(cons_value) :: s
+         s = seq(v) ! same "seq it first" rule as first, above
+         if (s%tag == TAG_LIST) then
+            if (allocated(s%list_val)) tail = list_rest(s%list_val)
+         end if
+       end block
     end select
     call wrap_list_value(new_v, tail)
   end function rest

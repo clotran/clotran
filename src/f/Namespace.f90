@@ -255,9 +255,22 @@ contains
     end if
   end function ns_resolve_var
 
+  ! Also keeps *ns* (a real Var, in clojure.core, matching real
+  ! Clojure) pointed at the current namespace's name -- real core.clj
+  ! source references *ns* directly in several places (assert-args's
+  ! own error messages among them). No first-class Namespace value
+  ! type here (see Values.f90's own "not class(*)" design), so this is
+  ! a symbol naming it rather than a real Namespace object -- enough
+  ! for printing/string interpolation, not for real Namespace methods
+  ! (.getMapping, .refer, ...) if something ever calls one on it.
   subroutine ns_set_current(ns)
     type(ns_ref), intent(in) :: ns
+    type(cons_value) :: name_sym
     current = ns
+    if (.not. associated(ns%ptr)) return
+    name_sym%tag = TAG_SYMBOL
+    name_sym%str_val = ns%ptr%name
+    call ns_intern(ns_find_or_create(CORE_NS), "*ns*", name_sym)
   end subroutine ns_set_current
 
   function ns_current() result(ns)

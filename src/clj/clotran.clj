@@ -46,6 +46,14 @@
 (def contains clotran.native/contains?)
 (def dissoc clotran.native/dissoc)
 (def readString clotran.native/read-string)
+(def keys clotran.native/keys)
+(def vals clotran.native/vals)
+(def nextID clotran.native/next-id)
+(def uncheckedLongCast (fn* [x] x)) ; one canonical int kind here -- a cast is a no-op; fn*
+                                     ; (the real special form), not fn (real core.clj's own
+                                     ; macro, which doesn't exist yet -- clotran.clj loads
+                                     ; before core.clj -- and needs even?/uncheckedLongCast
+                                     ; itself once it does, a chicken-and-egg loop)
 (in-ns 'clojure.core)
 
 ;; clojure.lang.Numbers: core.clj's own +/-/*//< etc. all call
@@ -68,19 +76,82 @@
 (def lte clotran.native/<=)
 (def gt clotran.native/>)
 (def gte clotran.native/>=)
-(def inc (fn [x] (clotran.native/+ x 1)))
-(def incP (fn [x] (clotran.native/+ x 1)))
-(def unchecked_inc (fn [x] (clotran.native/+ x 1)))
-(def dec (fn [x] (clotran.native/- x 1)))
-(def decP (fn [x] (clotran.native/- x 1)))
-(def unchecked_dec (fn [x] (clotran.native/- x 1)))
-(def isZero (fn [x] (clotran.native/= x 0)))
+(def inc (fn* [x] (clotran.native/+ x 1))) ; fn*, not fn -- see uncheckedLongCast's own comment
+(def incP (fn* [x] (clotran.native/+ x 1)))
+(def unchecked_inc (fn* [x] (clotran.native/+ x 1)))
+(def dec (fn* [x] (clotran.native/- x 1)))
+(def decP (fn* [x] (clotran.native/- x 1)))
+(def unchecked_dec (fn* [x] (clotran.native/- x 1)))
+(def isZero (fn* [x] (clotran.native/= x 0)))
+(def and clotran.native/bit-and) ; bit-and/bit-or/bit-xor/bit-and-not's real 2-arg definitions
+(def or clotran.native/bit-or)
+(def xor clotran.native/bit-xor)
+(def not clotran.native/bit-not)
+(def andNot clotran.native/bit-and-not)
+(def quotient clotran.native/quot)
+(def remainder clotran.native/rem)
+(def shiftLeft clotran.native/bit-shift-left)
+(def shiftRight clotran.native/bit-shift-right)
+(def unsignedShiftRight clotran.native/unsigned-bit-shift-right)
+(def equiv clotran.native/=)
+(def isPos (fn* [x] (clotran.native/> x 0)))
+(def isNeg (fn* [x] (clotran.native/< x 0)))
+(def num (fn* [x] x)) ; no boxed-number tower here, so nothing to convert
+(def rationalize (fn* [x] x)) ; no ratio type either
+(def abs (fn* [x] (if (clotran.native/< x 0) (clotran.native/- x) x)))
+(def max (fn* [x y] (if (clotran.native/> x y) x y)))
+(def min (fn* [x y] (if (clotran.native/< x y) x y)))
+(def testBit (fn* [x n] (clotran.native/= 1 (clotran.native/bit-and (clotran.native/bit-shift-right x n) 1))))
+(def setBit (fn* [x n] (clotran.native/bit-or x (clotran.native/bit-shift-left 1 n))))
+(def clearBit (fn* [x n] (clotran.native/bit-and-not x (clotran.native/bit-shift-left 1 n))))
+(def flipBit (fn* [x n] (clotran.native/bit-xor x (clotran.native/bit-shift-left 1 n))))
+;; The unchecked_int_* family: one integer kind here, so each is just
+;; its ordinary counterpart (same simplification as unchecked_add etc).
+(def unchecked_int_add clotran.native/+)
+(def unchecked_int_subtract clotran.native/-)
+(def unchecked_int_multiply clotran.native/*)
+(def unchecked_int_divide clotran.native/quot)
+(def unchecked_int_remainder clotran.native/rem)
+(def unchecked_int_negate (fn* [x] (clotran.native/- x)))
+(def unchecked_int_inc (fn* [x] (clotran.native/+ x 1)))
+(def unchecked_int_dec (fn* [x] (clotran.native/- x 1)))
+(def unchecked_divide clotran.native/quot)
+(def unchecked_remainder clotran.native/rem)
+(def unchecked_negate (fn* [x] (clotran.native/- x)))
 (in-ns 'clojure.core)
 
-;; clojure.lang.PersistentHashMap/create: hash-map's own real
-;; definition is (. clojure.lang.PersistentHashMap (create keyvals)).
+;; clojure.lang.PersistentHashMap/create and friends: these take ONE
+;; seq of alternating keys/vals (real Clojure's create(Object...) via
+;; hash-map's own (. clojure.lang.PersistentHashMap (create keyvals))),
+;; not varargs -- pointing them straight at the variadic native made
+;; the whole seq a single KEY, so (hash-map "a" 1) built {("a" 1) nil}.
 (in-ns 'clojure.lang.PersistentHashMap)
-(def create clotran.native/hash-map)
+(def create (fn* [keyvals]
+              (if keyvals
+                (clotran.native/apply clotran.native/hash-map keyvals)
+                (clotran.native/hash-map))))
+(in-ns 'clojure.core)
+
+(in-ns 'clojure.lang.PersistentArrayMap)
+(def createAsIfByAssoc (fn* [keyvals]
+                         (if keyvals
+                           (clotran.native/apply clotran.native/hash-map keyvals)
+                           (clotran.native/hash-map))))
+(def EMPTY (clotran.native/hash-map))
+(in-ns 'clojure.core)
+
+(in-ns 'clojure.lang.PersistentHashSet)
+(def create (fn* [items]
+              (if items
+                (clotran.native/apply clotran.native/hash-set items)
+                (clotran.native/hash-set))))
+(in-ns 'clojure.core)
+
+;; clojure.lang.Compiler/macroexpand1: real macroexpand's own engine.
+;; clotran's native macroexpand already expands to a fixed point, which
+;; macroexpand's own loop then simply confirms.
+(in-ns 'clojure.lang.Compiler)
+(def macroexpand1 clotran.native/macroexpand)
 (in-ns 'clojure.core)
 
 ;; clojure.lang.Keyword/intern: keyword's own real definition.
@@ -135,6 +206,8 @@
 (def clojure.lang.IPersistentList :clojure.lang.IPersistentList)
 (def clojure.lang.IDeref :clojure.lang.IDeref)
 (def clojure.lang.Var :clojure.lang.Var)
+(def Number :Number)
+(def Character :Character)
 (def Integer :Integer)
 (def Long :Long)
 (def Short :Short)

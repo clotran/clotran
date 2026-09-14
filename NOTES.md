@@ -868,14 +868,117 @@ expands to `(var sym)` instead of `(quote sym)`; `.get`/`.set` on a
 mirroring the existing `TAG_SYMBOL` one, now mutating the Var
 directly by identity instead of re-resolving by name.
 
-**Still missing**: the thread-local dynamic-binding stack for
-`binding`/`^:dynamic` -- deliberately deferred, not designed
-speculatively. Single-threaded today, so "thread-local" reduces to "a
-plain stack," and there's more than one reasonable place to put it
-(extend `atom_node` with an optional stack field; a side-table keyed
-by Var identity; a real `var_node` after all, now that there's a
-concrete stack-shape requirement to design around) -- worth deciding
-when `binding` is actually being built, not before.
+**`binding`/`push-thread-bindings`/`pop-thread-bindings`: built, but
+not exercisable end to end yet -- a separate, pre-existing gap blocks
+it, not this work.** `atom_node` gained `dyn_stack` (a plain
+`cons_value` array): `atom_deref` now checks its top before falling
+back to the root, so a Var auto-derefs its dynamic value transparently
+wherever it's already read (ns_get_own, `.get`/`var-get`, plain
+`deref`). `Eval.f90` gained `push-thread-bindings`/
+`pop-thread-bindings` as real builtins, plus a module-level flat stack
+(`binding_stack_vars`/`binding_stack_frame_sizes`) recording exactly
+which Vars each push touched, so pop undoes exactly that frame (nested
+`binding` on the same Var restores correctly). `ponytail`: one global
+stack, not real per-thread storage -- single-threaded today; revisit
+this and `dyn_stack` together once the real (likely Rust-inspired,
+per James -- not a JVM-thread port) concurrency model exists.
+
+Along the way, found and fixed a real, independent bug real `binding`
+needs regardless of any of the above: `eval_try` never actually ran a
+trailing `(finally ...)` clause when the body errored (it wasn't
+recognized as its own clause at all -- just evaluated as an ordinary
+body form, which the error-triggered early exit skipped entirely).
+Real `binding` expands to exactly `(push-thread-bindings ...) (try
+body (finally (pop-thread-bindings)))`, so an unhandled error inside
+`binding`'s own body used to leak the pushed frame forever. Fixed:
+`finally` is now its own recognized trailing clause (after an optional
+`catch`), always runs -- even with no catch, even when the body
+errored -- and its own error (if it has one) masks whatever the
+try/catch above produced, matching real Java/Clojure `finally`
+semantics. Verified directly (`(try (throw ...) (finally (swap! log
+...)))` -- log shows the cleanup ran).
+
+**Getting real `let`/`loop`/`fn`/`binding` working meant clearing a
+chain of independent bugs, each one hidden behind the last.** The
+symptom never changed (`let` "requires an even number of forms"); the
+cause moved every time one was fixed. In order:
+
+1. **The flat dot form.** `(. target member args*)` is legal Clojure,
+   equivalent to `(. target (member args*))`, and core.clj uses it in
+   59 places -- every bit operation among them (`bit-and` is literally
+   `(. clojure.lang.Numbers and x y)`). `eval_dot` treated a
+   bare-symbol member as field access ALWAYS and silently dropped the
+   trailing args, so `(bit-and 4 1)` returned the `and` field itself
+   (`#<builtin bit-and>`) instead of 0. That made `even?` return false
+   unconditionally, which made `assert-args` reject every bindings
+   vector, which broke `let`/`loop`/`binding`/`if-let`/... all of it,
+   from one missing syntax form. (Two days of "corruption" hunting
+   before noticing real core.clj's source simply says what it says.)
+2. **`pre_expand` on `eval_fn` was the wrong hook.** `def` runs once
+   per definition; `eval_fn` runs once per closure VALUE constructed,
+   including every throwaway closure a macro builds mid-expansion
+   (`destructure` alone builds two per call). Freezing there re-did the
+   whole expansion every time, and expanding builds more closures, so
+   it compounded until bootstrap stopped finishing (confirmed on a
+   sampled stack: pre_expand -> eval_fn -> pre_expand -> ...). Moved to
+   `eval_def`, which is once per definition -- what a real compiler
+   does anyway, and the same freeze.
+3. **`pre_expand` skipped vectors entirely.** Anything not a list
+   returned unchanged, so every `let*`/`loop*` BINDINGS VECTOR went
+   unfrozen -- and binding inits are ordinary code. core.clj's own
+   `drop` kept a raw `(fn [n coll] ... (and (pos? n) s) ...)` in its
+   `step` binding, so calling `drop` re-expanded `and` at runtime ->
+   `let` -> assert-args -> destructure -> partition -> `drop`, forever.
+   pre_expand now walks vectors like lists.
+4. **Set literals didn't evaluate their elements.** `#{'&}` held the
+   FORM `(quote &)` rather than the symbol `&`, so `destvec*`'s own
+   `(some #{'&} b)` rest-arg test never matched and `[params & body]`
+   destructuring silently dropped its bindings (a `seq__NNN` bound
+   nowhere). Vectors and maps already evaluated; sets were missed.
+5. **Sets weren't callable.** `(#{'&} x)` is a membership lookup in
+   real Clojure, and core.clj's own destructuring relies on it.
+6. **An empty `& rest` bound `()` instead of nil.** Real Clojure binds
+   nil, and core.clj nil-puns rest args constantly (`(nil? oldform)`,
+   `(when more ...)`) -- an empty list is TRUTHY, so every one of
+   those took the wrong branch.
+7. **`first`/`rest` only handled lists and vectors.** Real `RT.first`
+   is `seq(x).first()`. `(first {:a 1})` returned nil, so map
+   destructuring called `(.getKey nil)`.
+8. **`lazy-seq` did nothing.** It expands to `(new clojure.lang.LazySeq
+   (fn* [] ...))`, and `eval_new`'s generic passthrough handed the
+   thunk straight back -- so `map`, `filter`, and every other lazy
+   function evaluated to `#<fn>`. Now forced (see the ceiling below).
+9. Smaller, same flavour: `.toString`/`.getNamespace`/`.startsWith` and
+   friends; a real `StringBuilder` (core.clj's multi-arg `str` builds
+   one); two-arg `(keyword ns name)`/`(symbol ns name)`; `bit-*`,
+   `quot`/`rem` and the shifts as natives; `RT/nextID` for `gensym`;
+   `*ns*` as a real Var; `PersistentHashMap/create` taking ONE seq of
+   keyvals rather than varargs (it was making the whole seq a single
+   KEY, which is what the long-standing flaky `hash-map` crash
+   actually was -- gone now); and a general rule that a bare
+   `clojure.lang.*` name resolves to the keyword of the same name
+   instead of being enumerated by hand in clotran.clj one at a time.
+
+Result: `let`, `loop`, `fn`, `defn`, sequential destructuring
+(`[a b & c]`), associative destructuring (`{:keys [...]}`, `{x :x}`),
+variadic fns, `map`/`filter`/`reduce` all work, and core.clj loads
+with no warning. `eval_test` went 94/103 -> **154/159 on both
+compilers**, with no crash anywhere (previously it aborted partway).
+
+**The one real ceiling left: lazy seqs are eager.** Forcing a
+`lazy-seq` runs its thunk immediately, so a finite seq is correct but
+an INFINITE one (`(repeatedly f)`, `(iterate f x)`, `(range)`) would
+realize forever. core.clj builds one in ordinary code -- `destmap*`'s
+`:or` handling is `(zipmap (keys defaults) (repeatedly #(gensym
+"default__")))`, finite only because real Clojure stops pulling. A
+depth cap (64) turns that into a catchable error instead of taking the
+process down, which is why `:or` defaults and `iteration` are the two
+things still unsupported. The real fix is a proper lazy seq -- a thunk
+plus memoized realization, forced by seq/first/rest/count/print -- and
+the structural obstacle is that `cons_cell`'s cdr is a `cons_ref` (a
+list), so it cannot hold an unrealized tail; that needs a general
+cons_value cdr or a separate lazy-cons node. That is the next real
+feature, and it is what the remaining core.clj forms are waiting on.
 
 ## Getting `defn`/`let`/`loop` to actually work against real core.clj
 
