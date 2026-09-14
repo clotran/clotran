@@ -26,7 +26,8 @@ module Eval
        array_shape_list, array_rank, array_kind_name, array_is, array_kind_of_value, &
        array_elem_string
   use Atom, only: atom_new, atom_p, atom_deref, atom_reset, var_dyn_push, var_dyn_pop, var_set, var_meta_get, var_meta_set
-  use LispReader, only: read_str, read_top_level_forms
+  use LispReader, only: read_str, read_top_level_forms, src_file_name, form_position, &
+       carry_position
   use mal_readline, only: sys_readline => readline
   use Namespace, only: ns_ref, assignment(=), CORE_NS, ns_find_or_create, ns_exists, ns_intern, &
        ns_resolve, ns_get_own, ns_set_current, ns_current, ns_name_of, ns_resolve_var, ns_all_names, &
@@ -59,7 +60,17 @@ module Eval
   ! expansion, purely a safety net against a known-unresolved runaway
   ! recursion (assert-args/let), not a general limit anything else
   ! should ever approach.
+  ! The source position of the innermost form eval_form has started
+  ! evaluating, so an error can say WHERE. Set only when a form carries
+  ! a position (a macro expansion carries none, and inherits whatever
+  ! the enclosing read form had, which is the useful answer anyway).
+  integer :: here_line = 0, here_col = 0, here_file = 0
+
   integer :: macro_expand_depth = 0
+
+  ! Cumulative time inside pre_expand -- the macroexpansion that IS
+  ! clotran's compile step. Reported by CLOTRAN_DEBUG_LOAD.
+  real, public :: pre_expand_seconds = 0.0
 
   ! push-thread-bindings/pop-thread-bindings' own stack of stacks: a
   ! flat run of every Var pushed so far, plus how many the most recent
@@ -314,9 +325,27 @@ contains
     type(cons_value) :: v
     if (has_error) return
     v%tag = TAG_STRING
-    v%str_val = msg
+    v%str_val = msg // error_location()
     call throw_value(v)
   end subroutine eval_error
+
+  ! " (file:line:col)" for the form being evaluated, or "" if it was
+  ! not read from anywhere. Appended to the message rather than carried
+  ! separately because an error is just a string value here -- catch
+  ! sees it, and the REPL prints it, with no extra plumbing.
+  function error_location() result(loc)
+    character(len=:), allocatable :: loc
+    character(len=24) :: lbuf, cbuf
+    loc = ""
+    if (here_line == 0) return
+    write(lbuf, '(I0)') here_line
+    write(cbuf, '(I0)') here_col
+    if (here_file == 0) then
+       loc = " (line " // trim(lbuf) // ":" // trim(cbuf) // ")"
+    else
+       loc = " (" // src_file_name(here_file) // ":" // trim(lbuf) // ":" // trim(cbuf) // ")"
+    end if
+  end function error_location
 
   ! (throw x): x is already evaluated by the time this runs (throw is
   ! an ordinary builtin, not a special form -- real Clojure's is a
@@ -404,6 +433,20 @@ contains
           val = ast
           return
        end if
+
+       ! Remember where this form was read from, for error messages and
+       ! (later) stack frames. A form built by a macro carries no
+       ! position, so the enclosing read form's stays current -- which
+       ! is the location a user can actually act on.
+       block
+         integer :: fl, fc, ff
+         call form_position(ast, fl, fc, ff)
+         if (fl /= 0) then
+            here_line = fl
+            here_col = fc
+            here_file = ff
+         end if
+       end block
 
        head = list_first(ast%list_val)
        if (head%tag == TAG_SYMBOL) then
@@ -737,7 +780,7 @@ contains
     block
       real :: t0, t1
       call cpu_time(t0)
-      ok = read_top_level_forms(contents%str_val, forms, n, err)
+      ok = read_top_level_forms(contents%str_val, forms, n, err, fname%str_val)
       call cpu_time(t1)
       ! CLOTRAN_DEBUG_LOAD also reports the read/eval split per file:
       ! startup cost is the project's running number now that the
@@ -779,7 +822,8 @@ contains
        block
          real :: t2
          call cpu_time(t2)
-         write(*, '(A,F7.2,A,A)') "[eval] ", t2 - eval_start, "s  ", fname%str_val
+         write(*, '(A,F7.2,A,F7.2,A,A)') "[eval] ", t2 - eval_start, "s  (pre_expand so far ", &
+              pre_expand_seconds, "s)  ", fname%str_val
          flush(6)
        end block
     end if
@@ -2651,6 +2695,7 @@ contains
                return
             end if
             expanded = pre_expand(ast_copy)
+            call carry_position(form, expanded)
             if (has_error) then
                if (debug_load()) then
                   block
@@ -2699,6 +2744,7 @@ contains
        l = list_rest(l)
     end do
     expanded = make_list(items)
+    call carry_position(form, expanded)
   end function pre_expand
 
   ! Companion to pre_expand for a (. target (method args...)) form's
@@ -4848,6 +4894,37 @@ contains
        val%tag = TAG_NIL
        if (args(1)%tag == TAG_VAR) then
           val = var_meta_get(args(1)) ! a Var's metadata lives on the shared node
+       else if (args(1)%tag == TAG_LIST) then
+          ! A read form's position is synthesised on demand rather than
+          ! stored as a map per form (see cons_cell's own comment):
+          ! real Clojure puts :line/:column/:file in form metadata, and
+          ! core.clj reads it back through (meta &form).
+          block
+            type(cons_value) :: m
+            integer :: fl, fc, ff, el, ec
+            call form_position(args(1), fl, fc, ff, el, ec)
+            if (allocated(args(1)%meta_val)) then
+               if (associated(args(1)%meta_val%ptr)) m = args(1)%meta_val%ptr%val
+            end if
+            if (fl /= 0) then
+               if (m%tag /= TAG_HASHMAP) m = empty_map()
+               m = multifn_assoc(m, mk_keyword("line"), mk_int_val(fl))
+               m = multifn_assoc(m, mk_keyword("column"), mk_int_val(fc))
+               if (el /= 0) then
+                  m = multifn_assoc(m, mk_keyword("end-line"), mk_int_val(el))
+                  m = multifn_assoc(m, mk_keyword("end-column"), mk_int_val(ec))
+               end if
+               if (ff /= 0) then
+                  block
+                    type(cons_value) :: fv
+                    fv%tag = TAG_STRING
+                    fv%str_val = src_file_name(ff)
+                    m = multifn_assoc(m, mk_keyword("file"), fv)
+                  end block
+               end if
+            end if
+            val = m
+          end block
        else if (allocated(args(1)%meta_val)) then
           if (associated(args(1)%meta_val%ptr)) val = args(1)%meta_val%ptr%val
        end if
@@ -5164,7 +5241,15 @@ contains
     type(cons_value) :: sym
 
     sym = list_first(list_rest(ast%list_val))
-    val = eval_form(pre_expand(list_first(list_rest(list_rest(ast%list_val)))), env)
+    block
+      type(cons_value) :: frozen
+      real :: t0, t1
+      call cpu_time(t0)
+      frozen = pre_expand(list_first(list_rest(list_rest(ast%list_val))))
+      call cpu_time(t1)
+      pre_expand_seconds = pre_expand_seconds + (t1 - t0)
+      val = eval_form(frozen, env)
+    end block
     if (has_error) return
     call apply_macro_metadata(sym, val)
     call ns_intern(ns_current(), sym%str_val, val)

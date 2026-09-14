@@ -175,7 +175,8 @@ program eval_test
   ! bounds) are catchable the same way, wrapped as a string.
   call expect_result("20a. try with no error just returns the body: ", env, "(try 123 (catch Exception e 456))", "123", all_ok)
   call expect_result("20b. an internal error is catchable, as a string: ", env, &
-       "(try abc (catch Exception exc exc))", '"'//"'abc' not found"//'"', all_ok)
+       "(try abc (catch Exception exc (.startsWith exc " // '"' // "'abc' not found" // '"' // ")))", &
+       "true", all_ok)
   call expect_result("20c. nth out of bounds errors, catchably: ", env, &
        "(try (nth (list) 1) (catch Exception exc 99))", "99", all_ok)
   call expect_result("20d. (throw x) throws x, caught and bound: ", env, &
@@ -411,8 +412,9 @@ program eval_test
        "    (contains? (methods shape-area) :line))", "false", all_ok)
   call expect_result("35e. no matching method and no :default is an error: ", env, &
        "(do (defmulti no-default (fn [x] x))" // &
-       "    (try (no-default 1) (catch Throwable e (str e))))", &
-       '"No method in multimethod for dispatch value: 1"', all_ok)
+       "    (try (no-default 1)" // &
+       '          (catch Throwable e (.startsWith (str e) "No method in multimethod"))))', &
+       "true", all_ok)
 
   ! 36. core.clj's own printing stack, end to end: pr-str goes through
   ! with-out-str -> a StringWriter bound to *out* -> pr -> pr-on ->
@@ -590,6 +592,30 @@ program eval_test
        '(list (isa? (class (into-array [1.0])) :clotran.native/array)' // &
        '      (class (into-array [1.0])))', &
        "(true :clotran.native.real8-array)", all_ok)
+
+  ! 44. Source positions. Every list form records where it was read --
+  ! line, column, and where it ENDS, so a debugger can highlight the
+  ! exact sexp rather than a whole line. Held as three integers on the
+  ! cons cell, not a metadata map per form, and synthesised into
+  ! metadata on demand (see cons_cell in Values.f90).
+  call expect_result("44a. a form knows where it was read: ", env, &
+       '(meta (read-string "(+ 1 2)"))', &
+       "{:line 1 :column 1 :end-line 1 :end-column 7}", all_ok)
+  call expect_result("44b. column is the opening paren, end is the closing one: ", env, &
+       '(let [m (meta (read-string "   (foo bar)"))]' // &
+       "  (list (:column m) (:end-column m)))", "(4 12)", all_ok)
+  call expect_result("44c. line counting survives multi-line strings: ", env, &
+       '(:line (meta (read-string "(a \"x' // achar(10) // 'y\") (b)")))', "1", all_ok)
+  call expect_result("44d. a form built by a macro carries no position of its own: ", env, &
+       "(meta (list 1 2))", "nil", all_ok)
+  call expect_result("44e. an error says where it happened: ", env, &
+       "(try (this-is-not-defined) (catch Throwable e (.endsWith (str e) " // &
+       '"(line 1:6)")))', "true", all_ok)
+  call expect_result("44f. ...and the position survives a frozen defn body: ", env, &
+       "(do (defn pos-inner [] (also-not-defined))" // &
+       "    (try (pos-inner)" // &
+       "         (catch Throwable e (.endsWith (str e) " // '"(line 1:24)"' // "))))", &
+       "true", all_ok)
 
   if (all_ok) then
      print *, ""

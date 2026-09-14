@@ -99,6 +99,25 @@ module values
      type(cons_value) :: car
      type(cons_ref), allocatable :: cdr
      integer :: count = 0
+     ! Where this form was READ from: line and column of its opening
+     ! paren, plus an index into the reader's file-name table (0 = no
+     ! position, e.g. a form built by a macro rather than read).
+     !
+     ! Three integers on the CELL, deliberately, rather than a metadata
+     ! map on every value the way real Clojure does it: a map per form
+     ! is an allocation per form across ~11k lines of bootstrap, and
+     ! only list forms are ever what an error or a stack frame points
+     ! at. (meta form) can synthesise {:line :column :file} from these
+     ! on demand, so core.clj's own (meta &form) still works.
+     integer :: src_line = 0
+     integer :: src_col = 0
+     integer :: src_file = 0
+     ! Where the form ENDS, so an editor can highlight the exact sexp
+     ! rather than a whole line. Line-level positions give a gdb-style
+     ! debugger; start+end give a CIDER-style one, and this is far
+     ! cheaper to record now than to retrofit.
+     integer :: src_end_line = 0
+     integer :: src_end_col = 0
   end type cons_cell
 
   type, public :: cons_ref

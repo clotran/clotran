@@ -1625,6 +1625,53 @@ declared kind), and the binding generator described under protocols is
 what will emit the call.
 
 
+## Source positions: where a form came from
+
+Every list form records the line, column and file it was read from, and
+where it ENDS. Errors now say `(/path/file.clj:6:3)` instead of nothing
+at all, which is the first half of the debugger in PLAN.md and was
+overdue on its own -- an error with no location is painful to chase,
+and we spent real time on exactly that.
+
+Three design choices worth recording:
+
+**Positions live on the `cons_cell`, not as metadata on every value.**
+Real Clojure attaches `:line`/`:column` as form metadata, which means a
+map allocation per form; over ~11k lines of bootstrap that is a lot of
+maps, and only list forms are ever what an error or a stack frame
+points at. Three integers on the cell cost nothing to copy and survive
+the value-representation change planned in PLAN.md, because cons cells
+stay heap nodes either way. `(meta form)` synthesises
+`{:line :column :end-line :end-column :file}` on demand, so core.clj's
+own `(meta &form)` -- which `fn` uses -- still works.
+
+**End positions, not just start.** Line-only positions give a
+gdb-style debugger; start-and-end give sexp-level highlighting, which
+is what makes CIDER's debugger pleasant. The reader already knows where
+the closing paren is, so recording it now is free and retrofitting it
+later would not be.
+
+**Positions are carried through macro expansion.** `pre_expand` and the
+macro machinery rebuild lists constantly (`make_list`), and the first
+version dropped the position every time -- so every form inside a
+frozen `defn` body had none, which is every form that matters.
+`carry_position` copies it onto the rebuilt form. A form genuinely
+built by a macro (rather than rebuilt) still has no position of its
+own, and inherits the enclosing read form's, which is the location a
+user can act on.
+
+Two Fortran gotchas for the catalog:
+
+- `character(len=:), allocatable :: files(:)` -- assigning `""` to a
+  deferred-length allocatable **array** reallocates it to length zero,
+  so every path stored afterwards read back blank. Fixed-length
+  elements instead.
+- The tokenizer has to advance its line counter *through* a string
+  token, not just at whitespace: every docstring in core.clj spans
+  lines, and without that every form after the first docstring reported
+  the wrong line.
+
+
 ## Status
 
 Steps 1-6 pass official required tests on both compilers (117/117,

@@ -13,12 +13,22 @@ module LispReader
 
   type :: token_t
      character(len=:), allocatable :: text
+     integer :: line = 0
+     integer :: col = 0
   end type token_t
+
+  ! Files the reader has seen, so a cons_cell can hold a small integer
+  ! instead of a path. Only ever appended to, so an index is stable.
+  integer, parameter :: MAX_SRC_FILES = 256
+  integer, parameter :: MAX_SRC_PATH = 512
+  character(len=MAX_SRC_PATH), allocatable :: src_files(:)
+  integer :: src_file_count = 0
+  integer :: current_file = 0
 
   character(len=:), allocatable :: last_error
   logical :: has_error = .false.
 
-  public :: read_str, read_top_level_forms
+  public :: read_str, read_top_level_forms, src_file_name, form_position, carry_position
 
 contains
 
@@ -68,19 +78,28 @@ contains
     type(token_t), allocatable :: tokens(:)
     type(token_t), allocatable :: buf(:)
     integer :: n, i, len_expr, start
+    integer :: line, line_start, tok_line, tok_col, k
     character :: c
 
     len_expr = len(expr)
     allocate(buf(max(len_expr, 1)))
     n = 0
     i = 1
+    line = 1
+    line_start = 0 ! index of the character before this line's first
     do while (i <= len_expr)
        c = expr(i:i)
 
        if (is_whitespace(c)) then
+          if (c == achar(10)) then
+             line = line + 1
+             line_start = i
+          end if
           i = i + 1
           cycle
        end if
+       tok_line = line
+       tok_col = i - line_start
 
        if (c == ';') then
           do while (i <= len_expr)
@@ -94,6 +113,8 @@ contains
           if (expr(i+1:i+1) == '@') then
              n = n + 1
              buf(n)%text = "~@"
+             buf(n)%line = tok_line
+             buf(n)%col = tok_col
              i = i + 2
              cycle
           end if
@@ -102,6 +123,8 @@ contains
        if (is_special_char(c)) then
           n = n + 1
           buf(n)%text = c
+          buf(n)%line = tok_line
+          buf(n)%col = tok_col
           i = i + 1
           cycle
        end if
@@ -119,6 +142,8 @@ contains
           end do
           n = n + 1
           buf(n)%text = expr(start:i - 1)
+          buf(n)%line = tok_line
+          buf(n)%col = tok_col
           cycle
        end if
 
@@ -137,6 +162,16 @@ contains
           end do
           n = n + 1
           buf(n)%text = expr(start:i - 1)
+          buf(n)%line = tok_line
+          buf(n)%col = tok_col
+          ! A string may span lines (every core.clj docstring does), so
+          ! the counter has to catch up or every form after it is wrong.
+          do k = start, i - 1
+             if (expr(k:k) == achar(10)) then
+                line = line + 1
+                line_start = k
+             end if
+          end do
           cycle
        end if
 
@@ -153,6 +188,8 @@ contains
        if (i - start > 2 .and. expr(start:min(start + 1, len_expr)) == "#_") i = start + 2
        n = n + 1
        buf(n)%text = expr(start:i - 1)
+       buf(n)%line = tok_line
+       buf(n)%col = tok_col
     end do
 
     tokens = buf(1:n)
@@ -266,6 +303,92 @@ contains
     end do
     s = buf(1:k)
   end function unescape_string
+
+  ! Where a form was read from: line, column and file index, all 0 if
+  ! it carries no position (built by a macro rather than read).
+  subroutine form_position(v, line, col, file_idx, end_line, end_col)
+    type(cons_value), intent(in) :: v
+    integer, intent(out) :: line, col, file_idx
+    integer, intent(out), optional :: end_line, end_col
+    line = 0
+    col = 0
+    file_idx = 0
+    if (present(end_line)) end_line = 0
+    if (present(end_col)) end_col = 0
+    if (v%tag /= TAG_LIST) return
+    if (.not. allocated(v%list_val)) return
+    if (.not. associated(v%list_val%ptr)) return
+    line = v%list_val%ptr%src_line
+    col = v%list_val%ptr%src_col
+    file_idx = v%list_val%ptr%src_file
+    if (present(end_line)) end_line = v%list_val%ptr%src_end_line
+    if (present(end_col)) end_col = v%list_val%ptr%src_end_col
+  end subroutine form_position
+
+  ! Registers a source file and returns its index, so a cons_cell can
+  ! carry a small integer rather than a path. Appended only, so an
+  ! index stays valid for the life of the process.
+  function intern_src_file(name) result(idx)
+    character(len=*), intent(in) :: name
+    integer :: idx
+    character(len=:), allocatable :: grown(:)
+    integer :: i
+    idx = 0
+    if (len(name) == 0) return
+    do i = 1, src_file_count
+       if (trim(src_files(i)) == name) then
+          idx = i
+          return
+       end if
+    end do
+    if (src_file_count >= MAX_SRC_FILES) return
+    ! Fixed-length elements, NOT character(len=:) -- assigning "" to a
+    ! deferred-length allocatable ARRAY reallocates it to length zero,
+    ! so every path stored afterwards read back blank.
+    if (.not. allocated(src_files)) allocate(src_files(MAX_SRC_FILES))
+    src_file_count = src_file_count + 1
+    src_files(src_file_count) = name
+    idx = src_file_count
+  end function intern_src_file
+
+  ! The path a file index names, "" for 0 (a form no reader produced --
+  ! a macro expansion, say).
+  function src_file_name(idx) result(name)
+    integer, intent(in) :: idx
+    character(len=:), allocatable :: name
+    name = ""
+    if (idx >= 1 .and. idx <= src_file_count) name = trim(src_files(idx))
+  end function src_file_name
+
+  ! Copies a form's position onto a rebuilt version of it. pre_expand
+  ! and the macro machinery rebuild lists constantly (make_list), and
+  ! without this every form inside a frozen function body loses its
+  ! position -- which is every form that matters for an error.
+  subroutine carry_position(from, to)
+    type(cons_value), intent(in) :: from
+    type(cons_value), intent(inout) :: to
+    integer :: line, col, file_idx, end_line, end_col
+    call form_position(from, line, col, file_idx, end_line, end_col)
+    if (line == 0) return
+    call stamp_position(to, line, col, end_line, end_col)
+    if (allocated(to%list_val)) then
+       if (associated(to%list_val%ptr)) to%list_val%ptr%src_file = file_idx
+    end if
+  end subroutine carry_position
+
+  ! Records where a form was read, on the list's own head cell.
+  subroutine stamp_position(v, line, col, end_line, end_col)
+    type(cons_value), intent(inout) :: v
+    integer, intent(in) :: line, col
+    integer, intent(in), optional :: end_line, end_col
+    if (.not. allocated(v%list_val)) return
+    if (.not. associated(v%list_val%ptr)) return
+    v%list_val%ptr%src_line = line
+    v%list_val%ptr%src_col = col
+    v%list_val%ptr%src_file = current_file
+    if (present(end_line)) v%list_val%ptr%src_end_line = end_line
+    if (present(end_col)) v%list_val%ptr%src_end_col = end_col
+  end subroutine stamp_position
 
   ! ---- cons_value constructors ----
 
@@ -537,13 +660,27 @@ contains
     integer, intent(inout) :: pos
     type(cons_value) :: val
     type(cons_value), allocatable :: items(:)
-    integer :: n
+    integer :: n, open_line, open_col
 
+    ! pos is already past the '(' -- its position is the form's.
+    open_line = 0
+    open_col = 0
+    if (pos >= 2) then
+       open_line = tokens(pos - 1)%line
+       open_col = tokens(pos - 1)%col
+    end if
     call read_items(tokens, pos, ")", items, n)
     if (has_error) return
     val%tag = TAG_LIST
     allocate(val%list_val)
     val%list_val = list_of(items(1:n))
+    ! read_items leaves pos just past the ')', so that token is the end.
+    if (pos >= 2) then
+       call stamp_position(val, open_line, open_col, tokens(pos - 1)%line, &
+            tokens(pos - 1)%col)
+    else
+       call stamp_position(val, open_line, open_col)
+    end if
   end function read_list
 
   recursive function read_vector(tokens, pos) result(val)
@@ -851,16 +988,19 @@ contains
   ! Reads the first form out of `input`. error == "empty input" means a
   ! blank/comment-only line, not a real syntax error -- callers usually
   ! just reprompt for that instead of reporting it.
-  function read_str(input, ast, error) result(ok)
+  function read_str(input, ast, error, file_name) result(ok)
     character(len=*), intent(in) :: input
     type(cons_value), intent(out) :: ast
     character(len=:), allocatable, intent(out) :: error
+    character(len=*), intent(in), optional :: file_name
     logical :: ok
     type(token_t), allocatable :: tokens(:)
     integer :: pos
 
     has_error = .false.
     last_error = ""
+    current_file = 0
+    if (present(file_name)) current_file = intern_src_file(file_name)
 
     tokens = tokenize(input)
     if (size(tokens) == 0) then
@@ -888,11 +1028,12 @@ contains
   ! error is a genuine problem, not something to skip past -- only
   ! *evaluating* a form is meant to tolerate failure, and that's the
   ! caller's concern, not this reader's.
-  function read_top_level_forms(input, forms, n, error) result(ok)
+  function read_top_level_forms(input, forms, n, error, file_name) result(ok)
     character(len=*), intent(in) :: input
     type(cons_value), allocatable, intent(out) :: forms(:)
     integer, intent(out) :: n
     character(len=:), allocatable, intent(out) :: error
+    character(len=*), intent(in), optional :: file_name
     logical :: ok
     type(token_t), allocatable :: tokens(:)
     type(cons_value), allocatable :: grown(:)
@@ -900,6 +1041,8 @@ contains
 
     has_error = .false.
     last_error = ""
+    current_file = 0
+    if (present(file_name)) current_file = intern_src_file(file_name)
 
     tokens = tokenize(input)
     cap = 8
