@@ -22,12 +22,16 @@ module Eval
        num_bit_and, num_bit_or, num_bit_xor, num_bit_not, num_bit_and_not, &
        num_quot, num_rem, num_shift_left, num_shift_right, num_ushift_right
   use printer, only: pr_str
+  use NativeArray, only: array_new, array_aget, array_aset, array_length, &
+       array_shape_list, array_rank, array_kind_name, array_is, array_kind_of_value, &
+       array_elem_string
   use Atom, only: atom_new, atom_p, atom_deref, atom_reset, var_dyn_push, var_dyn_pop, var_set, var_meta_get, var_meta_set
   use LispReader, only: read_str, read_top_level_forms
   use mal_readline, only: sys_readline => readline
   use Namespace, only: ns_ref, assignment(=), CORE_NS, ns_find_or_create, ns_exists, ns_intern, &
        ns_resolve, ns_get_own, ns_set_current, ns_current, ns_name_of, ns_resolve_var, ns_all_names, &
-       ns_get_own_var, ns_mappings, ns_refer, ns_add_alias, ns_alias_target
+       ns_get_own_var, ns_mappings, ns_refer, ns_add_alias, ns_alias_target, &
+       ns_index_of, ns_at
   implicit none
   private
 
@@ -109,6 +113,16 @@ contains
     call reg("list")
     call reg("vector")
     call reg("vec")
+    call reg("pop")
+    call reg("peek")
+    call reg("array?")
+    call reg("into-array")
+    call reg("array-kind")
+    call reg("array-shape")
+    call reg("alength")
+    call reg("aset")
+    call reg("aget")
+    call reg("make-array")
     call reg("infinity")
     call reg("nan?")
     call reg("hash")
@@ -713,13 +727,26 @@ contains
     character(len=:), allocatable :: err
     integer :: n, i
     logical :: ok
+    real :: eval_start
 
     fname = eval_form(list_first(list_rest(ast%list_val)), env)
     if (has_error) return
     contents = builtin_slurp([fname])
     if (has_error) return
 
-    ok = read_top_level_forms(contents%str_val, forms, n, err)
+    block
+      real :: t0, t1
+      call cpu_time(t0)
+      ok = read_top_level_forms(contents%str_val, forms, n, err)
+      call cpu_time(t1)
+      ! CLOTRAN_DEBUG_LOAD also reports the read/eval split per file:
+      ! startup cost is the project's running number now that the
+      ! upstream test suite pays it once per test file.
+      if (debug_load()) then
+         write(*, '(A,F7.2,A,I0,A,A)') "[read] ", t1 - t0, "s  ", n, " forms  ", fname%str_val
+         flush(6)
+      end if
+    end block
     if (.not. ok) then
        call eval_error("load-file: " // err)
        return
@@ -731,6 +758,7 @@ contains
        return
     end if
 
+    call cpu_time(eval_start)
     do i = 1, n - 1
        block
          type(cons_value) :: discard
@@ -747,6 +775,14 @@ contains
        end block
        has_error = .false.
     end do
+    if (debug_load()) then
+       block
+         real :: t2
+         call cpu_time(t2)
+         write(*, '(A,F7.2,A,A)') "[eval] ", t2 - eval_start, "s  ", fname%str_val
+         flush(6)
+       end block
+    end if
     ast = forms(n) ! tail position: the trampoline evaluates/reports this one normally
   end subroutine eval_load_file_head
 
@@ -2225,7 +2261,7 @@ contains
     block
       type(env_ref) :: macro_env
       macro_env = env_new(env)
-      call env_set_ns(macro_env, defining_ns_name(env))
+      call env_set_ns(macro_env, defining_ns_index(env))
       val%fn_val%env = macro_env
     end block
     val%fn_val%is_macro = .true.
@@ -2305,20 +2341,23 @@ contains
   ! clojure.core.protocols calling its own seq-reduce could not find
   ! it once called from user -- every multi-namespace library, the
   ! upstream test suite included, depends on getting this right.
-  function defining_ns_name(env) result(name)
+  ! The registry index eval_fn should stamp on a new closure's frame:
+  ! the enclosing function's, if there is one, and only otherwise
+  ! whatever namespace is current.
+  function defining_ns_index(env) result(idx)
     type(env_ref), intent(in) :: env
-    character(len=:), allocatable :: name
-    name = env_defining_ns(env)
-    if (len(name) == 0) name = ns_name_of(ns_current())
-  end function defining_ns_name
+    integer :: idx
+    idx = env_defining_ns(env)
+    if (idx == 0) idx = ns_index_of(ns_name_of(ns_current()))
+  end function defining_ns_index
 
   function resolution_ns(env) result(ns)
     type(env_ref), intent(in) :: env
     type(ns_ref) :: ns
-    character(len=:), allocatable :: defining
-    defining = env_defining_ns(env)
-    if (len(defining) > 0) then
-       ns = ns_find_or_create(defining)
+    integer :: idx
+    idx = env_defining_ns(env)
+    if (idx /= 0) then
+       ns = ns_at(idx)
     else
        ns = ns_current()
     end if
@@ -2520,6 +2559,17 @@ contains
        end block
        return
     end if
+    if (form%tag == TAG_LAZYSEQ) then
+       ! A macro that builds its output with map/for hands back LAZY
+       ! SEQS, not lists -- real core.clj's own `fn` assembles its
+       ! clause list that way. Treating "not a TAG_LIST" as "not code"
+       ! meant every such form was returned unexpanded, so the body of
+       ! every defn in core.clj kept its macro calls raw and paid to
+       ! re-expand them on EVERY call: a `let` inside a defn cost 21ms
+       ! instead of the 0.9ms its let* costs.
+       expanded = pre_expand(realize_to_list(form))
+       return
+    end if
     if (form%tag /= TAG_LIST) then
        expanded = form
        return
@@ -2586,6 +2636,15 @@ contains
             end if
             call eval_macro_head(ast_copy, macro_val)
             if (has_error) then
+               if (debug_load()) then
+                  block
+                    character(len=:), allocatable :: shown
+                    shown = pr_str(form)
+                    write(*, '(A,A,A,A)') "[pre_expand/head] ", pr_str(last_error_value), " | ", &
+                         shown(1:min(len(shown), 90))
+                    flush(6)
+                  end block
+               end if
                has_error = .false.
                macro_expand_depth = macro_expand_depth - 1
                expanded = form
@@ -2593,6 +2652,15 @@ contains
             end if
             expanded = pre_expand(ast_copy)
             if (has_error) then
+               if (debug_load()) then
+                  block
+                    character(len=:), allocatable :: shown
+                    shown = pr_str(ast_copy)
+                    write(*, '(A,A,A,A)') "[pre_expand] ", pr_str(last_error_value), " | ", &
+                         shown(1:min(len(shown), 90))
+                    flush(6)
+                  end block
+               end if
                ! The recursive pre_expand above found a FURTHER nested
                ! macro call and computing ITS expansion genuinely
                ! failed (not just "not found yet" -- e.g. assert-args
@@ -2602,8 +2670,14 @@ contains
                ! positive). Same tolerance as above: leave THIS form
                ! unexpanded rather than letting a nested macro's own
                ! validation abort the whole containing definition.
+               ! Keep the expansion we DID get. Falling back to the raw
+               ! form threw away a successful outer expansion because
+               ! something deeper failed, which left every macro in the
+               ! body unfrozen -- a `let` inside a defn was then
+               ! re-expanded on every single call, 25x slower than the
+               ! let* it should have become.
                has_error = .false.
-               expanded = form
+               expanded = ast_copy
             end if
             macro_expand_depth = macro_expand_depth - 1
           end block
@@ -3780,6 +3854,7 @@ contains
     case (TAG_ATOM);           val%str_val = "clojure.lang.Atom"
     case (TAG_REDUCED);        val%str_val = "clojure.lang.Reduced"
     case (TAG_MULTIFN);        val%str_val = "clojure.lang.MultiFn"
+    case (TAG_ARRAY);          val%str_val = "clotran.native." // array_kind_name(v) // "-array"
     case (TAG_STRING_BUILDER); val%str_val = "java.io.StringWriter"
     case default;              val%str_val = "clojure.lang.AFn"
     end select
@@ -3847,6 +3922,64 @@ contains
     val = atom_new(m)
     val%tag = TAG_MULTIFN
   end function multifn_new
+
+  recursive function builtin_into_array(args) result(val)
+    type(cons_value), intent(in) :: args(:)
+    type(cons_value) :: val
+    type(cons_value) :: coll, s2, elem
+    character(len=:), allocatable :: kname, aerr
+    integer, allocatable :: ext(:), lows(:), idx(:)
+    integer :: n, k
+
+    if (size(args) >= 2) then
+       kname = pr_str(args(1), .false.)
+       coll = args(2)
+    else
+       coll = args(1)
+       kname = ""
+    end if
+    n = rt_count(coll)
+    if (len(kname) == 0) then
+       kname = "int4"
+       s2 = rt_seq(coll)
+       do k = 1, n
+          elem = rt_first(s2)
+          if (elem%tag == TAG_REAL) then
+             kname = "real8"
+          else if (elem%tag /= TAG_INT) then
+             kname = "value"
+             exit
+          end if
+          s2 = rt_next(s2)
+       end do
+       if (n == 0) kname = "value"
+    end if
+    allocate(ext(1), lows(1), idx(1))
+    ext(1) = n
+    lows(1) = 0
+    val = array_new(kname, ext, lows, aerr)
+    if (len(aerr) > 0) then
+       call eval_error(aerr)
+       return
+    end if
+    s2 = rt_seq(coll)
+    do k = 1, n
+       idx(1) = k - 1
+       call array_aset(val, idx, rt_first(s2), aerr)
+       if (len(aerr) > 0) then
+          call eval_error(aerr)
+          return
+       end if
+       s2 = rt_next(s2)
+    end do
+  end function builtin_into_array
+
+  function mk_int_val(i) result(v)
+    integer, intent(in) :: i
+    type(cons_value) :: v
+    v%tag = TAG_INT
+    v%int_val = i
+  end function mk_int_val
 
   function empty_map() result(v)
     type(cons_value) :: v
@@ -4055,7 +4188,7 @@ contains
     end if
   end function map_lookup
 
-  function call_builtin(name, args) result(val)
+  recursive function call_builtin(name, args) result(val)
     character(len=*), intent(in) :: name
     type(cons_value), intent(in) :: args(:)
     type(cons_value) :: val
@@ -4189,6 +4322,122 @@ contains
        val = make_list(args)
     case ("vector")
        val = make_vector(args)
+    case ("make-array")
+       ! (make-array kind extent...) -- a real Fortran array of that
+       ! kind and shape, zero-filled, indexed from 0. Every rank works:
+       ! the extents are just the shape (see NativeArray.f90).
+       block
+         integer, allocatable :: ext(:), lows(:)
+         character(len=:), allocatable :: kname, aerr
+         integer :: d
+         kname = pr_str(args(1), .false.)
+         allocate(ext(size(args) - 1), lows(size(args) - 1))
+         do d = 2, size(args)
+            ext(d - 1) = args(d)%int_val
+            lows(d - 1) = 0
+         end do
+         val = array_new(kname, ext, lows, aerr)
+         if (len(aerr) > 0) call eval_error(aerr)
+       end block
+    case ("aget")
+       block
+         integer, allocatable :: idx(:)
+         character(len=:), allocatable :: aerr
+         integer :: d
+         allocate(idx(size(args) - 1))
+         do d = 2, size(args)
+            idx(d - 1) = args(d)%int_val
+         end do
+         val = array_aget(args(1), idx, aerr)
+         if (len(aerr) > 0) call eval_error(aerr)
+       end block
+    case ("aset")
+       ! (aset a i... v) -- the value is LAST, as in Clojure. Mutates
+       ! in place and answers the value, again as Clojure does.
+       block
+         integer, allocatable :: idx(:)
+         character(len=:), allocatable :: aerr
+         integer :: d
+         allocate(idx(size(args) - 2))
+         do d = 2, size(args) - 1
+            idx(d - 1) = args(d)%int_val
+         end do
+         call array_aset(args(1), idx, args(size(args)), aerr)
+         if (len(aerr) > 0) then
+            call eval_error(aerr)
+         else
+            val = args(size(args))
+         end if
+       end block
+    case ("alength")
+       val%tag = TAG_INT
+       val%int_val = array_length(args(1))
+    case ("array-shape")
+       block
+         integer, allocatable :: ext(:)
+         type(cons_value), allocatable :: items(:)
+         integer :: d
+         ext = array_shape_list(args(1))
+         allocate(items(size(ext)))
+         do d = 1, size(ext)
+            items(d) = mk_int_val(ext(d))
+         end do
+         val = make_vector(items)
+       end block
+    case ("array-kind")
+       val%tag = TAG_KEYWORD
+       val%str_val = array_kind_name(args(1))
+    case ("array?")
+       val%tag = TAG_BOOL
+       val%bool_val = array_is(args(1))
+    case ("into-array")
+       ! (into-array coll) / (into-array kind coll). Without a kind,
+       ! the elements pick one: all integers give an integer array, any
+       ! real gives real(8), anything else an array of clotran values.
+       ! That is what makes (into-array [1.0 2.0]) something dgemm can
+       ! take without the caller saying so.
+       val = builtin_into_array(args)
+    case ("peek")
+       ! clojure.lang.RT/peek: the end pop would remove -- a vector's
+       ! last element, a seq's first.
+       if (args(1)%tag == TAG_VECTOR) then
+          block
+            integer :: cnt
+            cnt = rt_count(args(1))
+            if (cnt > 0) val = rt_nth(args(1), cnt - 1)
+          end block
+       else
+          val = rt_first(args(1))
+       end if
+    case ("pop")
+       ! clojure.lang.RT/pop: a vector loses its LAST element, a seq its
+       ! first -- each the cheap end for that structure, which is why
+       ! real Clojure makes them differ. for's :when/:while use it.
+       if (args(1)%tag == TAG_VECTOR) then
+          block
+            integer :: cnt, k
+            type(cons_value), allocatable :: kept(:)
+            cnt = rt_count(args(1))
+            if (cnt == 0) then
+               call eval_error("pop: can't pop an empty vector")
+            else
+               ! Built element by element rather than by delegating to
+               ! subvec through call_builtin: passing an inline
+               ! [cons_value, ...] array constructor is the
+               ! not-yet-allocated-array-of-cons_value hazard in the
+               ! gotchas catalog, and gfortran (not flang) returned nil.
+               allocate(kept(cnt - 1))
+               do k = 1, cnt - 1
+                  kept(k) = rt_nth(args(1), k - 1)
+               end do
+               val = make_vector(kept)
+            end if
+          end block
+       else if (args(1)%tag == TAG_NIL) then
+          call eval_error("pop: can't pop nil")
+       else
+          val = rt_rest(args(1))
+       end if
     case ("vec")
        ! (vec coll) -- clojure.lang.LazilyPersistentVector/create, which
        ! is what core.clj's own `vec` and variadic `vector` call.
@@ -4858,7 +5107,7 @@ contains
     ! current. A fn created while another namespace's function is
     ! running (clojure.test/test-vars builds several) belongs to the
     ! namespace whose source it was written in, not to the caller's.
-    call env_set_ns(fn_env, defining_ns_name(env))
+    call env_set_ns(fn_env, defining_ns_index(env))
     if (named) call env_set(fn_env, name, val)
     recur_sym%tag = TAG_SYMBOL
     recur_sym%str_val = "recur"

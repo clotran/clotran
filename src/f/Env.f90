@@ -76,27 +76,34 @@ contains
     end do
   end subroutine env_rebind_fns
 
-  ! Marks this frame as a closure's own frame, defined in namespace
-  ! name. Only eval_fn calls this.
-  subroutine env_set_ns(e, name)
+  ! Marks this frame as a closure's own frame, defined in the namespace
+  ! at registry index idx. Only eval_fn/eval_defmacro call this.
+  subroutine env_set_ns(e, idx)
     type(env_ref), intent(in) :: e
-    character(len=*), intent(in) :: name
-    if (associated(e%ptr)) e%ptr%ns_name = name
+    integer, intent(in) :: idx
+    if (associated(e%ptr)) e%ptr%ns_index = idx
   end subroutine env_set_ns
 
-  ! The innermost enclosing closure's defining namespace, or "" at top
-  ! level. A plain field check per frame, deliberately not a binding
-  ! lookup: this runs for every free symbol that isn't a local.
-  recursive function env_defining_ns(e) result(name)
+  ! The innermost enclosing closure's defining namespace, as a registry
+  ! index, or 0 at top level. Iterative and allocation-free: this runs
+  ! for every free symbol in the program, so it walks pointers and
+  ! compares one integer per frame, nothing more.
+  function env_defining_ns(e) result(idx)
     type(env_ref), intent(in) :: e
-    character(len=:), allocatable :: name
-    name = ""
+    integer :: idx
+    type(env_node), pointer :: node
+    idx = 0
     if (.not. associated(e%ptr)) return
-    if (allocated(e%ptr%ns_name)) then
-       name = e%ptr%ns_name
-       return
-    end if
-    if (allocated(e%ptr%outer)) name = env_defining_ns(e%ptr%outer)
+    node => e%ptr
+    do
+       if (node%ns_index /= 0) then
+          idx = node%ns_index
+          return
+       end if
+       if (.not. allocated(node%outer)) return
+       if (.not. associated(node%outer%ptr)) return
+       node => node%outer%ptr
+    end do
   end function env_defining_ns
 
   ! Walks outward through the outer chain. found is .false. if key is

@@ -11,6 +11,7 @@ module printer
   use RT, only: seq, first, next
   use PersistentArrayMap, only: array_map_entries
   use Atom, only: atom_deref
+  use NativeArray, only: array_elem_string
   implicit none
   private
 
@@ -82,6 +83,10 @@ contains
        str = "#'" // v%str_val
     case (TAG_MULTIFN)
        str = "#<multifn>"
+    case (TAG_ARRAY)
+       ! Kind and shape, which is what identifies a Fortran array --
+       ! contents come out through seq/vec like any other collection.
+       str = "#<" // array_elem_string(v) // ">"
     case (TAG_STRING_BUILDER)
        ! What (str sb) has to give back -- with-out-str reads its
        ! StringWriter that way, and a builder's "value" is its text.
@@ -177,12 +182,22 @@ contains
     str = trim(adjustl(temp))
   end function stringify_int
 
+  ! F0.2 drops the leading zero on a value below 1 (".50", "-.50"),
+  ! which is not how Clojure -- or Fortran source -- writes a number.
+  ! Put it back.
   function stringify_real(r) result(str)
     real(dp), intent(in) :: r
     character(len=:), allocatable :: str
     character(20) :: temp
     write(temp, '(F0.2)') r
     str = trim(adjustl(temp))
+    if (len(str) > 0) then
+       if (str(1:1) == ".") then
+          str = "0" // str
+       else if (len(str) > 1 .and. str(1:1) == "-") then
+          if (str(2:2) == ".") str = "-0" // str(2:)
+       end if
+    end if
   end function stringify_real
 
   ! The inverse of the reader's read_char_literal: the named forms

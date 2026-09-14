@@ -59,6 +59,11 @@ module values
                                       ! (= \a "a") is false. The character itself lives in
                                       ! str_val (length 1), so equality and hashing fall out
                                       ! of the existing string handling for free.
+  integer, parameter :: TAG_ARRAY = 20 ! a REAL Fortran array -- see native_array_node. Not
+                                      ! java.lang.Object[]: emulating the JVM's array here
+                                      ! would throw away the one thing this host has that
+                                      ! the JVM doesn't, which is that the bytes can be
+                                      ! handed straight to a Fortran library.
   integer, parameter :: TAG_MULTIFN = 19 ! clojure.lang.MultiFn -- what defmulti constructs and
                                       ! defmethod mutates. Same "reuse atom_val as the mutable
                                       ! box" pattern as TAG_VAR; the box holds a map of
@@ -82,6 +87,7 @@ module values
      type(closure_t), allocatable :: fn_val
      type(atom_ref), allocatable :: atom_val
      type(lazy_ref), allocatable :: lazy_val
+     type(native_array_ref), allocatable :: array_val
      type(meta_ref), allocatable :: meta_val ! (with-meta x m)/(meta x) -- any value, any type
    contains
      final :: cons_value_finalize
@@ -222,7 +228,14 @@ module values
      ! namespace. Carried on the env (not on closure_t) so that a tail
      ! call, which reuses the trampoline instead of returning through
      ! apply_closure, still sees it. See env_defining_ns.
-     character(len=:), allocatable :: ns_name
+     !
+     ! An INDEX into Namespace.f90's registry, not a name: this is read
+     ! on every symbol resolution in the program, and looking a
+     ! namespace up by name means a linear scan of the registry doing
+     ! string comparisons, while allocating a deferred-length string
+     ! per env frame walked. Both showed up directly in the bootstrap
+     ! profile. 0 means "not a closure frame".
+     integer :: ns_index = 0
   end type env_node
 
   type, public :: env_ref
@@ -336,6 +349,41 @@ module values
      final :: lazy_ref_finalize
   end type lazy_ref
 
+  ! A real Fortran array, of any kind and any rank.
+  !
+  ! Storage is ONE rank-1 contiguous buffer plus a shape, not a
+  ! rank-N component, because rank is part of a Fortran type
+  ! declaration -- a derived type cannot have a component that is
+  ! "any rank". Indexing is done here, column-major, which is
+  ! Fortran's own layout: the buffer is therefore bit-identical to
+  ! what a Fortran routine expects, and passing this to dgemm (or to
+  ! ChemSol) is a plain by-reference pass with no copy or marshalling.
+  ! That is the entire point.
+  !
+  ! buf is unlimited polymorphic, so a single type covers real(8),
+  ! real(4), integer(4), integer(8), complex, logical, a derived type
+  ! -- allocated with an explicit type-spec (allocate(real(8) :: buf(n)))
+  ! and read back through select type. Same mechanism native_test
+  ! already validates for scalars and structs, just with extents.
+  !
+  ! lows holds each dimension's LOWER BOUND. Fortran arrays can start
+  ! at any index, so a Clojure-facing array simply starts at 0 and an
+  ! imported Fortran one keeps whatever bounds it was declared with --
+  ! no translation layer, no off-by-one convention to remember.
+  type, public :: native_array_node
+     integer :: refcount = 0
+     character(len=:), allocatable :: elem_kind ! "real8", "int4", ... for printing and dispatch
+     integer, allocatable :: extents(:)
+     integer, allocatable :: lows(:)
+     class(*), allocatable :: buf(:)
+  end type native_array_node
+
+  type, public :: native_array_ref
+     type(native_array_node), pointer :: ptr => null()
+   contains
+     final :: native_array_ref_finalize
+  end type native_array_ref
+
   ! --- Metadata backing: (with-meta x m)/(meta x). Same shape as atom
   ! (a refcounted box holding one cons_value) even though nothing here
   ! mutates it -- a cons_value can't hold another cons_value directly as
@@ -365,6 +413,7 @@ module values
      module procedure closure_t_assign
      module procedure atom_ref_assign
      module procedure lazy_ref_assign
+     module procedure native_array_ref_assign
      module procedure meta_ref_assign
      module procedure arity_clauses_ref_assign
      module procedure hamt_ref_assign
@@ -382,6 +431,8 @@ module values
   integer, public :: env_total_freed = 0
   integer, public :: atom_node_total_allocated = 0
   integer, public :: atom_node_total_freed = 0
+  integer, public :: native_array_node_total_allocated = 0
+  integer, public :: native_array_node_total_freed = 0
   integer, public :: lazy_node_total_allocated = 0
   integer, public :: lazy_node_total_freed = 0
   integer, public :: meta_node_total_allocated = 0
@@ -450,6 +501,10 @@ contains
        call atom_ref_release(v%atom_val)
        deallocate(v%atom_val)
     end if
+    if (allocated(v%array_val)) then
+       call native_array_ref_release(v%array_val)
+       deallocate(v%array_val)
+    end if
     if (allocated(v%lazy_val)) then
        call lazy_ref_release(v%lazy_val)
        deallocate(v%lazy_val)
@@ -493,6 +548,10 @@ contains
     if (allocated(rhs%lazy_val)) then
        allocate(lhs%lazy_val)
        lhs%lazy_val = rhs%lazy_val
+    end if
+    if (allocated(rhs%array_val)) then
+       allocate(lhs%array_val)
+       lhs%array_val = rhs%array_val
     end if
     if (allocated(rhs%meta_val)) then
        allocate(lhs%meta_val)
@@ -748,6 +807,33 @@ contains
     type(lazy_ref), intent(inout) :: h
     call lazy_ref_release(h)
   end subroutine lazy_ref_finalize
+
+  ! ---- native_array_ref (same shape as atom_ref) ----
+
+  recursive subroutine native_array_ref_release(h)
+    type(native_array_ref), intent(inout) :: h
+    if (.not. associated(h%ptr)) return
+    h%ptr%refcount = h%ptr%refcount - 1
+    if (h%ptr%refcount <= 0) then
+       deallocate(h%ptr) ! cascades: releases buf/extents/lows
+       native_array_node_total_freed = native_array_node_total_freed + 1
+    end if
+    h%ptr => null()
+  end subroutine native_array_ref_release
+
+  impure elemental subroutine native_array_ref_assign(lhs, rhs)
+    type(native_array_ref), intent(inout) :: lhs
+    type(native_array_ref), intent(in) :: rhs
+    if (associated(lhs%ptr, rhs%ptr)) return
+    call native_array_ref_release(lhs)
+    lhs%ptr => rhs%ptr
+    if (associated(lhs%ptr)) lhs%ptr%refcount = lhs%ptr%refcount + 1
+  end subroutine native_array_ref_assign
+
+  impure elemental subroutine native_array_ref_finalize(h)
+    type(native_array_ref), intent(inout) :: h
+    call native_array_ref_release(h)
+  end subroutine native_array_ref_finalize
 
   ! ---- meta_ref (same shape as atom_ref, nothing here mutates it) ----
 

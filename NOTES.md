@@ -1526,6 +1526,105 @@ a watchdog. Java array interop (`into-array`, `RT/seqToTypedArray`) is
 the largest single source of remaining errors in the upstream files.
 
 
+## Startup: a macro expanded at every call, not once
+
+Startup had drifted to 46s, and the per-file split (`CLOTRAN_DEBUG_LOAD=1`
+now reports read and eval time per file) put it somewhere surprising:
+reading all ~11,000 lines of Clojure costs 0.2s, while
+`clojure/core/protocols.clj` -- sixteen forms -- cost 16 seconds, and
+`clotran_types.clj`'s ninety `derive` calls cost nine.
+
+The cause was one line in `pre_expand`. A macro that builds its
+expansion with `map` or `for` hands back **lazy seqs, not lists**, and
+real core.clj's own `fn` assembles its clause list exactly that way.
+`pre_expand` treated "not a `TAG_LIST`" as "not code" and returned such
+forms untouched, so:
+
+    (def g (fn* ([] (let [a 1] a))))   ; typed literally -> frozen
+    (defn g []      (let [a 1] a))     ; via the fn macro -> NOT frozen
+
+Every `defn` in core.clj kept the macro calls in its body raw, and
+re-expanded them on **every single call**. A `let` inside a function
+cost 21ms instead of the 0.9ms its `let*` costs -- macroexpansion, with
+`destructure` and everything under it, re-run per invocation. Teaching
+`pre_expand` to realize a lazy seq and walk it fixed all of it:
+
+| | before | after |
+| --- | --- | --- |
+| bootstrap | 46s | 28s |
+| bootstrap + `clojure.test` | 53s | 33s |
+| `(let [a 1 b 2] (+ a b))` in a defn, per call | 21ms | 0.9ms |
+| `clojure/core/protocols.clj` | 16.0s | 2.5s |
+| `clotran_types.clj` | 9.2s | 0.9s |
+
+It also fixed `clojure.test-clojure.for`, which had been written off as
+an infinite loop in the evaluator. It was never looping -- it was
+re-expanding `for`'s own machinery on every iteration. With the fix it
+runs: 17 tests, 47 assertions passing. (`:when`/`:while` additionally
+needed `peek`/`pop`.)
+
+What remains is the real compile step: ~19s of core.clj's own
+macroexpansion, done once per launch. Caching the frozen forms is the
+next move if this needs to get faster, and it is not free -- `pr_str`
+does not round-trip metadata, so a naive text cache would silently drop
+`^:dynamic`.
+
+## Arrays are real Fortran arrays
+
+`into-array`/`aget`/`aset`/`alength` are the largest single source of
+errors in the upstream test files, and the JVM answer -- an
+`Object[]`, or a nest of them for more than one dimension -- is the
+wrong thing to copy here twice over: it is a foreign abstraction, and
+it discards the one capability this host has that the JVM does not.
+
+A clotran array (`TAG_ARRAY`, `NativeArray.f90`) is a genuine Fortran
+array. `(into-array [1.0 2.0 3.0])` produces a contiguous `real(8)`
+buffer that a Fortran library can be handed **by reference, with no
+copy and no marshalling** -- which is the whole point of the project.
+
+Generic over kind and over rank, each for its own reason:
+
+- **Kind**: the payload is `class(*), allocatable :: buf(:)`, allocated
+  with an explicit type-spec (`allocate(real(8) :: buf(n))`) and read
+  back through `select type`. One type covers real(8), real(4),
+  integer(4), integer(8), complex(8), logical -- the same mechanism
+  `native_test` already validates for scalars and structs. `"value"` is
+  the escape hatch for an array of clotran values, which is what plain
+  `(into-array [:a "b"])` needs.
+- **Rank**: one rank-1 contiguous buffer plus a shape vector, with the
+  index arithmetic done in `linear_index`. Rank is part of a Fortran
+  *type declaration*, so a derived-type component cannot be declared
+  "any rank" -- doing the arithmetic here is what makes every rank work
+  instead of a hand-written case per rank. The order is column-major,
+  Fortran's own, so the buffer is bit-identical to what a Fortran
+  routine expects and `(vec a)` reads in memory order.
+
+Lower bounds are stored per dimension. Fortran arrays may start at any
+index, so there is no translation layer and no off-by-one convention:
+a Clojure-facing array is simply allocated from 0 (what `aget`
+promises), and an imported Fortran array can keep whatever bounds it
+was declared with.
+
+One visible difference from the JVM, and `clotran_types.clj` is where
+it shows. On the JVM a multi-dimensional array is an array of arrays,
+so core.clj's `aget` recurses (`(apply aget (aget a i) idxs)`). A
+Fortran array is genuinely rank-N, one block, so the indices apply
+together: `(aget m 1 2)` is a single indexed read rather than two.
+`aget`/`aset`/`alength`/`make-array`/`into-array` are redefined there
+for that reason.
+
+Arrays are ordinary values otherwise: `seq`, `count`, `first`, `vec`
+and `map` all work, `(class a)` answers `:clotran.native.real8-array`,
+and every element kind is `derive`d under `:clotran.native/array` so a
+multimethod or protocol can dispatch on it. `aset` mutates in place --
+an array is a mutable slot shared by reference, as it is in Clojure.
+
+Not yet: passing one of these to an actual Fortran procedure. The
+storage is deliberately ready for it (contiguous, column-major, of a
+declared kind), and the binding generator described under protocols is
+what will emit the call.
+
+
 ## Status
 
 Steps 1-6 pass official required tests on both compilers (117/117,

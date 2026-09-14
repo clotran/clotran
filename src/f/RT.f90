@@ -5,6 +5,7 @@
 ! conversion (a vector isn't itself a seq, same as real Clojure -- (seq
 ! v) builds a list view of it; nil in, nil out for an empty collection).
 module RT
+  use NativeArray, only: array_is, array_length, array_aget
   use values
   use PersistentList, only: list_empty, list_cons => cons, list_first => first, &
        list_rest => rest, list_count => list_count
@@ -141,7 +142,7 @@ contains
        if (allocated(v%vector_val)) then
           if (vector_count(v%vector_val) > 0) val = vector_nth(v%vector_val, 0)
        end if
-    case (TAG_HASHMAP, TAG_SET, TAG_STRING)
+    case (TAG_HASHMAP, TAG_SET, TAG_STRING, TAG_ARRAY)
        s = seq(v)
        if (s%tag == TAG_LIST) then
           if (allocated(s%list_val)) val = list_first(s%list_val)
@@ -169,7 +170,7 @@ contains
        if (allocated(v%vector_val)) then
           if (vector_count(v%vector_val) > 1) tail = list_rest(vector_to_list(v%vector_val))
        end if
-    case (TAG_HASHMAP, TAG_SET, TAG_STRING)
+    case (TAG_HASHMAP, TAG_SET, TAG_STRING, TAG_ARRAY)
        block
          type(cons_value) :: s
          s = seq(v) ! same "seq it first" rule as first, above
@@ -229,7 +230,7 @@ contains
        if (allocated(coll%list_val)) coll_list = coll%list_val
     case (TAG_VECTOR)
        if (allocated(coll%vector_val)) coll_list = vector_to_list(coll%vector_val)
-    case (TAG_HASHMAP, TAG_SET, TAG_STRING)
+    case (TAG_HASHMAP, TAG_SET, TAG_STRING, TAG_ARRAY)
        block
          type(cons_value) :: s
          s = seq(coll)
@@ -379,6 +380,8 @@ contains
        if (allocated(coll%vector_val)) n = vector_count(coll%vector_val)
     case (TAG_STRING)
        if (allocated(coll%str_val)) n = len(coll%str_val)
+    case (TAG_ARRAY)
+       n = array_length(coll)
     case (TAG_HASHMAP, TAG_SET)
        if (allocated(coll%map_val)) n = array_map_count(coll%map_val)
     case (TAG_LAZYSEQ)
@@ -445,6 +448,10 @@ contains
        if (allocated(v%str_val)) then
           if (len(v%str_val) > 0) call wrap_list_value(new_v, string_to_char_list(v%str_val))
        end if
+    case (TAG_ARRAY)
+       ! In element order, which for a rank-N array is column-major --
+       ! Fortran's own, so (vec a) reads the way the memory is laid out.
+       if (count(v) > 0) call wrap_list_value(new_v, array_to_list(v))
     case (TAG_LAZYSEQ)
        ! Realizes ONE cell to answer "is there anything here?", then
        ! hands back the seq itself -- nil only when it's genuinely
@@ -457,6 +464,20 @@ contains
        end if
     end select
   end function seq
+
+  function array_to_list(v) result(l)
+    type(cons_value), intent(in) :: v
+    type(cons_ref) :: l
+    type(cons_value) :: elem
+    character(len=:), allocatable :: aerr
+    integer :: i, idx(1)
+    l = list_empty()
+    do i = array_length(v), 1, -1
+       idx(1) = i - 1
+       elem = array_aget(v, idx, aerr)
+       l = list_cons(elem, l)
+    end do
+  end function array_to_list
 
   ! "abc" -> (\a \b \c), same as real Clojure's seq over a string.
   function string_to_char_list(s) result(l)

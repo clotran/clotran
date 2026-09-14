@@ -52,6 +52,17 @@
 (def NEGATIVE_INFINITY (clotran.native/infinity -1))
 (in-ns 'clojure.core)
 
+;; java.lang.reflect.Array, as core.clj's aget/aset/make-array reach
+;; for it. There is no reflection here and no Java array -- these are
+;; real Fortran arrays (see NativeArray.f90), so `type` is a kind name
+;; ("real8", "int4", ...) rather than a Class.
+(in-ns 'Array)
+(def get clotran.native/aget)
+(def set clotran.native/aset)
+(def newInstance clotran.native/make-array)
+(def getLength clotran.native/alength)
+(in-ns 'clojure.core)
+
 (in-ns 'clojure.lang.LazilyPersistentVector)
 (def create clotran.native/vec) ; core.clj's own `vec` and variadic `vector` both route through this
 (in-ns 'clojure.lang.RT)
@@ -84,6 +95,10 @@
 (def dissoc clotran.native/dissoc)
 (def readString clotran.native/read-string)
 (def subvec clotran.native/subvec)
+(def pop clotran.native/pop)
+(def peek clotran.native/peek)
+(def alength clotran.native/alength)
+(def seqToTypedArray clotran.native/into-array)
 (def find clotran.native/find-entry)
 (def toArray clotran.native/vec) ; no array type here -- a vector is what an Object[] becomes
 (def keys clotran.native/keys)

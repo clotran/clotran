@@ -535,6 +535,62 @@ program eval_test
        "(do (def helper (fn [] :from-user)) (list (helper) (lib41/caller)))", &
        "(:from-user :from-lib)", all_ok)
 
+  ! 42. A macro that builds its expansion with map/for hands back lazy
+  ! seqs, not lists -- real core.clj's own `fn` assembles its clause
+  ! list that way. pre_expand used to treat "not a list" as "not code"
+  ! and return those unexpanded, so the body of every defn kept its
+  ! macro calls raw and re-expanded them on every single call.
+  call expect_result("42a. a macro inside a defn body is frozen, not re-expanded: ", env, &
+       "(do (defn frozen-body [] (let [a 1 b 2] (+ a b)))" // &
+       "    (let [t (time-ms)]" // &
+       "      (dotimes [i 200] (frozen-body))" // &
+       "      (< (- (time-ms) t) 1000)))", "true", all_ok)
+  call expect_result("42b. for works, including :when and :while: ", env, &
+       "(list (for [x (range 3)] (* x x))" // &
+       "      (for [x (range 6) :when (even? x)] x)" // &
+       "      (for [x (range 4) :while (< x 2)] x)" // &
+       "      (count (for [x (range 4) y (range 3)] [x y])))", &
+       "((0 1 4) (0 2 4) (0 1) 12)", all_ok)
+  call expect_result("42c. peek/pop take the cheap end of each structure: ", env, &
+       "(list (peek [1 2 3]) (pop [1 2 3]) (peek (list 1 2 3)) (pop (list 1 2 3)))", &
+       "(3 [1 2] 1 (2 3))", all_ok)
+
+  ! 43. Arrays are REAL Fortran arrays -- any kind, any rank, laid out
+  ! column-major so the buffer can be handed to a Fortran library
+  ! directly. Not java.lang.Object[]: emulating the JVM's array would
+  ! throw away the only thing this host has that the JVM does not.
+  call expect_result("43a. make-array/aset/aget/alength, rank 1: ", env, &
+       '(let [a (make-array "real8" 3)]' // &
+       '  (aset a 0 1.5)' // &
+       '  (list (aget a 0) (aget a 2) (alength a)))', "(1.50 0.00 3)", all_ok)
+  call expect_result("43b. every rank works, indices applied together: ", env, &
+       '(let [m (make-array "int4" 2 3)]' // &
+       '  (aset m 1 2 7)' // &
+       '  (list (aget m 1 2) (aget m 0 0) (alength m) (clotran.native/array-shape m)))', &
+       "(7 0 6 [2 3])", all_ok)
+  call expect_result("43c. indices start at 0, and out of bounds is an error: ", env, &
+       '(let [a (make-array "int4" 2)]' // &
+       '  (list (aget a 0) (try (aget a 2) (catch Throwable e :oob))))', "(0 :oob)", all_ok)
+  call expect_result("43d. into-array picks a Fortran kind from the elements: ", env, &
+       "(list (clotran.native/array-kind (into-array [1 2 3]))" // &
+       "      (clotran.native/array-kind (into-array [1.0 2.0]))" // &
+       "      (clotran.native/array-kind (into-array [:a])))", &
+       "(:int4 :real8 :value)", all_ok)
+  call expect_result("43e. ...and the kind can be named outright: ", env, &
+       '(clotran.native/array-kind (into-array "real4" [1 2]))', ":real4", all_ok)
+  call expect_result("43f. an array seqs, counts and maps like any collection: ", env, &
+       "(let [a (into-array [1 2 3])]" // &
+       "  (list (vec a) (count a) (map inc a) (first a)))", &
+       "([1 2 3] 3 (2 3 4) 1)", all_ok)
+  call expect_result("43g. aset mutates in place -- an array is shared by reference: ", env, &
+       '(let [a (make-array "int4" 2) b a]' // &
+       '  (aset b 0 9)' // &
+       '  (aget a 0))', "9", all_ok)
+  call expect_result("43h. the element kind is in the hierarchy, so it can dispatch: ", env, &
+       '(list (isa? (class (into-array [1.0])) :clotran.native/array)' // &
+       '      (class (into-array [1.0])))', &
+       "(true :clotran.native.real8-array)", all_ok)
+
   if (all_ok) then
      print *, ""
      print *, "ALL EVAL CHECKS PASSED"

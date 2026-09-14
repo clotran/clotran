@@ -81,6 +81,40 @@
 (derive-all :Class                    [:Object])
 
 ;; ---------------------------------------------------------------------
+;; Arrays.
+;;
+;; A clotran array is a REAL Fortran array -- any kind, any rank, laid
+;; out column-major so the buffer can go straight to a Fortran library
+;; (see NativeArray.f90). That differs from the JVM in one visible way,
+;; and these three definitions are where it shows:
+;;
+;; On the JVM a multi-dimensional array is an array OF arrays, so
+;; core.clj's aget recurses: (apply aget (aget a i) idxs). A Fortran
+;; array is genuinely rank-N, one contiguous block, so the indices are
+;; applied together instead. (aget m 1 2) is a single indexed read
+;; rather than two.
+;;
+;; Indices start at 0, which is what aget promises -- Fortran arrays
+;; may start at any bound, so nothing is translated, the array is
+;; simply allocated from 0.
+(def aget clotran.native/aget)
+(def aset clotran.native/aset)
+(def alength clotran.native/alength)
+(def make-array clotran.native/make-array)
+(def into-array clotran.native/into-array)
+
+;; Kinds are keywords in the hierarchy, so a multimethod or protocol
+;; can dispatch on the element type of an array.
+(derive-all :clotran.native.real8-array   [:clotran.native/array])
+(derive-all :clotran.native.real4-array   [:clotran.native/array])
+(derive-all :clotran.native.int4-array    [:clotran.native/array])
+(derive-all :clotran.native.int8-array    [:clotran.native/array])
+(derive-all :clotran.native.logical-array [:clotran.native/array])
+(derive-all :clotran.native.complex8-array [:clotran.native/array])
+(derive-all :clotran.native.value-array   [:clotran.native/array])
+(derive-all :clotran.native/array         [:Object])
+
+;; ---------------------------------------------------------------------
 ;; print-method's fallback.
 ;;
 ;; Real Clojure's print-method methods live in core_print.clj, which

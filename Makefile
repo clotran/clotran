@@ -30,6 +30,9 @@ rc_test: $(S)/rc.o $(T)/rc_test.f90
 $(S)/Values.o: $(S)/Values.f90
 	$(FC) $(FCFLAGS) -c $< -o $@
 
+$(S)/NativeArray.o: $(S)/NativeArray.f90 $(S)/Values.o
+	$(FC) $(FCFLAGS) -c $< -o $@
+
 $(S)/Atom.o: $(S)/Atom.f90 $(S)/Values.o
 	$(FC) $(FCFLAGS) -c $< -o $@
 
@@ -63,11 +66,12 @@ $(S)/PersistentArrayMap.o: $(S)/PersistentArrayMap.f90 $(S)/Values.o $(S)/Persis
 persistent_array_map_test: $(S)/PersistentArrayMap.o $(T)/persistent_array_map_test.f90
 	$(FC) $(FCFLAGS) -o $@ $(S)/Values.o $(S)/PersistentHashMap.o $(S)/PersistentArrayMap.o $(T)/persistent_array_map_test.f90
 
-$(S)/RT.o: $(S)/RT.f90 $(S)/PersistentList.o $(S)/PersistentVector.o $(S)/PersistentArrayMap.o
+$(S)/RT.o: $(S)/RT.f90 $(S)/PersistentList.o $(S)/PersistentVector.o $(S)/PersistentArrayMap.o \
+	$(S)/NativeArray.o
 	$(FC) $(FCFLAGS) -c $< -o $@
 
 rt_test: $(S)/RT.o $(T)/rt_test.f90
-	$(FC) $(FCFLAGS) -o $@ $(S)/Values.o $(S)/PersistentList.o $(S)/PersistentVector.o \
+	$(FC) $(FCFLAGS) -o $@ $(S)/Values.o $(S)/NativeArray.o $(S)/PersistentList.o $(S)/PersistentVector.o \
 		$(S)/PersistentHashMap.o $(S)/PersistentArrayMap.o $(S)/RT.o $(T)/rt_test.f90
 
 $(S)/Env.o: $(S)/Env.f90 $(S)/PersistentArrayMap.o
@@ -82,7 +86,7 @@ $(S)/Namespace.o: $(S)/Namespace.f90 $(S)/PersistentArrayMap.o $(S)/Atom.o
 namespace_test: $(S)/Namespace.o $(T)/namespace_test.f90
 	$(FC) $(FCFLAGS) -o $@ $(S)/Values.o $(S)/Atom.o $(S)/PersistentHashMap.o $(S)/PersistentArrayMap.o $(S)/Namespace.o $(T)/namespace_test.f90
 
-$(S)/printer.o: $(S)/printer.f90 $(S)/RT.o $(S)/PersistentArrayMap.o $(S)/Atom.o
+$(S)/printer.o: $(S)/printer.f90 $(S)/RT.o $(S)/PersistentArrayMap.o $(S)/Atom.o $(S)/NativeArray.o
 	$(FC) $(FCFLAGS) -c $< -o $@
 
 $(S)/LispReader.o: $(S)/LispReader.f90 $(S)/PersistentList.o $(S)/PersistentVector.o $(S)/PersistentArrayMap.o
@@ -94,12 +98,12 @@ $(S)/Numbers.o: $(S)/Numbers.f90 $(S)/Values.o
 $(S)/readline.o: $(S)/readline.f90
 	$(FC) $(FCFLAGS) -c $< -o $@
 
-eval-objects = $(S)/Values.o $(S)/Atom.o $(S)/PersistentList.o $(S)/PersistentVector.o \
+eval-objects = $(S)/Values.o $(S)/Atom.o $(S)/NativeArray.o $(S)/PersistentList.o $(S)/PersistentVector.o \
 	$(S)/PersistentHashMap.o $(S)/PersistentArrayMap.o $(S)/Env.o $(S)/Namespace.o $(S)/Numbers.o $(S)/Eval.o \
 	$(S)/RT.o $(S)/printer.o $(S)/LispReader.o $(S)/readline.o
 
 $(S)/Eval.o: $(S)/Eval.f90 $(S)/Env.o $(S)/Namespace.o $(S)/PersistentList.o $(S)/PersistentVector.o \
-	$(S)/Numbers.o $(S)/printer.o $(S)/Atom.o $(S)/LispReader.o $(S)/readline.o
+	$(S)/Numbers.o $(S)/printer.o $(S)/Atom.o $(S)/NativeArray.o $(S)/LispReader.o $(S)/readline.o
 	$(FC) $(FCFLAGS) -c $< -o $@
 
 eval_test: $(eval-objects) $(T)/eval_test.f90

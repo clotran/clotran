@@ -62,7 +62,7 @@ module Namespace
   public :: assignment(=), CORE_NS
   public :: ns_find_or_create, ns_exists, ns_intern, ns_resolve, ns_get_own
   public :: ns_get_own_var, ns_resolve_var
-  public :: ns_set_current, ns_current, ns_name_of, ns_all_names, ns_mappings, ns_refer, ns_add_alias, ns_alias_target
+  public :: ns_set_current, ns_current, ns_name_of, ns_all_names, ns_mappings, ns_refer, ns_add_alias, ns_alias_target, ns_index_of, ns_at
 
 contains
 
@@ -72,6 +72,27 @@ contains
     k%tag = TAG_SYMBOL
     k%str_val = name
   end function symbol_key
+
+  ! The registry index of a namespace, creating it if new. Indexes are
+  ! stable (the registry only ever grows), which is what lets an env
+  ! frame hold one instead of a name -- see env_node%ns_index.
+  function ns_index_of(name) result(idx)
+    character(len=*), intent(in) :: name
+    integer :: idx
+    type(ns_ref) :: ns
+    do idx = 1, registry_count
+       if (registry(idx)%ptr%name == name) return
+    end do
+    ns = ns_find_or_create(name)
+    idx = registry_count
+  end function ns_index_of
+
+  ! O(1) counterpart to ns_index_of, for the hot path.
+  function ns_at(idx) result(ns)
+    integer, intent(in) :: idx
+    type(ns_ref) :: ns
+    if (idx >= 1 .and. idx <= registry_count) ns = registry(idx)
+  end function ns_at
 
   recursive function ns_find_or_create(name) result(ns)
     character(len=*), intent(in) :: name
