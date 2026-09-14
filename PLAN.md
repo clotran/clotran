@@ -78,6 +78,14 @@ this frame" is nearly free), and the AST node *is* the source form (so
 "where am I" needs no bytecode->source map). Most of the VM's dispatch
 win is available without it -- see the opcode item below.
 
+Writing it in clotran is also the only way it works at all. gdb cannot
+reliably inspect a modern Fortran object because bounds, allocation
+status, deferred length and dynamic type live in a compiler-private
+descriptor that DWARF only learned to describe indirectly in v5 --
+the same missing ABI that stops C calling modern Fortran (README).
+A debugger written in the language, over a value representation this
+host defines, has no descriptor to decode.
+
 **The debugger is a protocol, not a UI.** The evaluator's breakpoint
 calls a handler Var (`*break-handler*`) with the paused state as data
 and gets a command back -- the same dependency inversion
