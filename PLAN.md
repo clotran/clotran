@@ -232,8 +232,56 @@ the text. A cache writer needs to exclude them.
       audits itself, and corruption is caught where it happens rather
       than when a wild pointer is next dereferenced.
 
-      Still to add before 3c: pools for native array buffers
-      (`class(*)`, needs care) and namespaces.
+- [x] **3a''.** Native array buffers: INVESTIGATED, design settled.
+      See "Native buffers in a GC pool" in NOTES.md for the probes.
+      The rules the port must follow:
+
+      1. A buffer is a `class(*), pointer, contiguous` component,
+         **never `allocatable`**. Measured on both compilers: an
+         allocatable component is *copied* when the pool grows, so the
+         buffer's address changes -- which would defeat the entire
+         point of a non-moving collector. A pointer component shares
+         its target and the address survives.
+      2. Hand a library the **whole buffer, never a slice**. A
+         contiguous whole buffer is passed by reference with no copy
+         (verified through an old-style `a(*)` dummy, the shape BLAS
+         uses). A strided slice is silently copied -- correct by
+         copy-in/copy-out, but a library that retained the pointer
+         would hold a dangling temporary.
+      3. A native node holds **only** pointer and small components. Any
+         allocatable component is reallocated on pool growth, which is
+         harmless for metadata but must never be where the buffer is.
+      4. The wrapper roots the array for the duration of a call, so a
+         collection mid-call cannot sweep the buffer out from under a
+         library that is still writing to it.
+      5. **Generated bindings must be module procedures.** flang
+         segfaults passing an internal, host-associated procedure as a
+         callback on macOS/ARM64 -- see the gotcha in NOTES.md.
+      6. **A native buffer holds only Fortran scalar kinds, never
+         clotran values.** The collector cannot see inside a native
+         buffer -- it is a leaf, holding real(8)s and integer(2)s, not
+         anything traceable. NativeArray's current `:value` kind stores
+         cons_value elements, which under the GC would be a hole:
+         values the array still holds would look unreachable and be
+         swept. `:value` arrays move to the **vec pool** (a run of
+         gc_value), which is traced for free and loses nothing, since
+         a `:value` array is clotran data that never goes to a Fortran
+         library and so does not need a stable address. That makes
+         "a native buffer is a leaf" an invariant rather than a thing
+         to remember.
+
+      Note what is NOT changing: clotran references stay integer
+      handles into pools, and the collector follows those. The Fortran
+      `pointer` appears in exactly one place -- the buffer of a native
+      array -- purely so its address is stable for foreign code.
+
+      Confirmed on both compilers end to end: buffer survives three
+      pool growths, a library sees our memory rather than a copy, its
+      writes are visible through the heap, and `c_loc` works for a
+      future C-level hand-off. Arbitrary kinds (`integer(2)` tested)
+      and zero-length buffers are fine.
+
+      Still to add before 3c: the namespace pool.
 - [ ] **3c.** Value type: drop the nine allocatable components and
       `FINAL`; keep the inline scalars (`tag`, `int_val`, `real_val`,
       `bool_val`) so `v%tag` and friends keep working, and replace only

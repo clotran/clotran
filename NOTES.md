@@ -1770,6 +1770,71 @@ reported at whatever line of core.clj happened to be evaluated last --
 worse than no location at all. Reader errors now raise without one.
 
 
+## Native buffers in a GC pool
+
+Everything about the interop story depends on one property: a buffer
+handed to a Fortran library must not move, and the library must write
+into OUR memory rather than a copy. Before committing the value
+representation to the collector, that was probed directly on both
+compilers rather than assumed.
+
+**A buffer must be a POINTER component, never allocatable.** This is
+the finding that matters. A `class(*), allocatable` component of a
+pool node is *copied* when the pool grows -- the collector's own
+`grow_*` does an element-wise copy into a larger array, and copying a
+node with an allocatable component reallocates it. Measured on flang
+and gfortran alike: the address changes. That would mean an unrelated
+allocation, anywhere, silently invalidating a pointer a Fortran library
+is holding -- exactly what choosing a non-moving collector was meant to
+prevent. With `class(*), pointer, contiguous` the node copy shares the
+target and the address survives (verified across three pool growths).
+
+**A library must be handed the whole buffer, never a slice.** Passing
+a contiguous whole buffer through an old-style `a(*)` dummy -- the
+shape BLAS and legacy scientific code declare -- makes no copy on
+either compiler: the callee's address equals ours and its writes are
+visible through the heap afterwards. A *strided slice* is copied.
+Correctness survives (copy-in/copy-out), but the copy is silent, and a
+library that retained the pointer would be left holding a temporary.
+So the rule is a rule, not a preference.
+
+Also verified: `c_loc` works on the buffer, for a future C-level
+hand-off from the binding generator; arbitrary kinds work
+(`integer(2)` as well as `real(8)`); zero-length buffers are fine; and
+deallocating once through the pointer after several growths is clean,
+because Fortran does not auto-deallocate pointer components, so
+discarding the old pool array cannot double-free.
+
+One consequence worth naming, because it is a hole rather than a
+detail: a native buffer is a LEAF to the collector -- it holds Fortran
+scalars, and there is nothing in it to trace. NativeArray's `:value`
+kind currently stores `cons_value` elements, which under a tracing
+collector would mean values an array still holds looking unreachable
+and being swept. Those arrays belong in the value-run pool instead,
+where they are traced for free; they never go to a Fortran library, so
+they never needed a stable address. Native buffers then hold only
+Fortran scalar kinds, which makes the leaf property an invariant.
+
+### Gotcha: flang cannot pass an internal procedure as a callback
+
+Found while testing the above, and it is a landmine well beyond arrays.
+Passing a *module* procedure as an actual argument to a dummy procedure
+works on both compilers. Passing an **internal** procedure -- one
+contained in a program or subroutine, using host association --
+**segfaults under flang** on macOS/ARM64 (Homebrew flang 23.1.1),
+executing from a stack address, which is a trampoline that the
+platform's W^X rules will not run. gfortran handles it.
+
+    call take_callback(module_proc)     ! fine on both
+    call take_callback(internal_proc)   ! flang: SIGSEGV
+
+Consequences: any callback in clotran must be a module procedure. The
+existing `rt_set_lazy_forcer` already is. The binding generator's
+"hand the typed buffer to a routine" pattern is viable *because*
+generated code lives in a module -- but the constraint has to be
+written into the generator, not discovered later.
+
+
 ## Status
 
 Steps 1-6 pass official required tests on both compilers (117/117,
