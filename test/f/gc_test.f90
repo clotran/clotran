@@ -22,6 +22,10 @@ program gc_test
   call check_string_release()
   call check_torture_keeps_live_data()
   call check_argument_is_rooted()
+  call check_object_shapes()
+  call check_value_runs()
+  call check_deep_structure()
+  call check_heap_self_check()
 
   if (all_ok) then
      print *, ""
@@ -119,11 +123,11 @@ contains
        c = gc_cons(gc_int(i), gc_nil(), roots)
     end do
     call gc_collect(no_roots)
-    cap_before = gc_capacity()
+    cap_before = gc_obj_capacity()
     do i = 1, 50
        c = gc_cons(gc_int(i), gc_nil(), roots)
     end do
-    call ok_int("5a. freed slots are reused, not grown past: ", gc_capacity(), cap_before)
+    call ok_int("5a. freed slots are reused, not grown past: ", gc_obj_capacity(), cap_before)
     call ok_int("5b. ...and the live count is right again: ", gc_live_count(), 50)
   end subroutine check_free_list_reuse
 
@@ -156,7 +160,7 @@ contains
        head = gc_cons(gc_int(i), head, roots)
     end do
     roots(1) = head
-    call ok("7a. the pool grew past its initial size: ", gc_capacity() >= 300)
+    call ok("7a. the pool grew past its initial size: ", gc_obj_capacity() >= 300)
     call ok_int("7b. ...and the chain survived growth intact: ", chain_length(head), 300)
     call gc_collect(roots)
     call ok_int("7c. ...and still does after a collection: ", chain_length(head), 300)
@@ -209,6 +213,92 @@ contains
     gc_torture = .false.
   end subroutine check_argument_is_rooted
 
+  ! The object pool is general: a cons cell, a closure, a lazy seq and
+  ! an environment are all "some slots plus a couple of integers", so
+  ! they share one pool, one allocator and one trace routine. `kind`
+  ! is what distinguishes them.
+  subroutine check_object_shapes()
+    type(gc_value) :: clo, roots(1), body
+    call gc_init(32)
+    body = gc_sym("body", no_roots)
+    roots(1) = body
+    clo = gc_obj(OBJ_CLOSURE, [gc_sym("params", roots), body, gc_nil(), gc_nil()], roots)
+    call gc_set_i1(clo, 1) ! is-a-macro
+    roots(1) = clo
+    call gc_collect(roots)
+    call ok_int("11a. an object reports its kind: ", gc_kind(clo), OBJ_CLOSURE)
+    call ok("11b. ...its slots survive collection: ", gc_text(gc_slot(clo, 1)) == "params")
+    call ok("11c. ...all of them: ", gc_text(gc_slot(clo, 2)) == "body")
+    call ok_int("11d. ...and its inline integer: ", gc_i1(clo), 1)
+    call ok_int("11e. an unset slot is nil: ", slot_tag(clo, 4), GCT_NIL)
+  end subroutine check_object_shapes
+
+  ! The other shape: a variable-length run of values, which is what
+  ! backs a vector's trie node, a map's keys and vals, and a Var's
+  ! dynamic binding stack.
+  subroutine check_value_runs()
+    type(gc_value) :: keys, vals, m, roots(1)
+    integer :: i
+    call gc_init(32)
+    keys = gc_vec(3, no_roots)
+    roots(1) = keys
+    vals = gc_vec(3, roots)
+    do i = 1, 3
+       call gc_vec_set(keys, i, gc_key("k", roots))
+       call gc_vec_set(vals, i, gc_int(i * 10))
+    end do
+    m = gc_obj(OBJ_MAP, [keys, vals], roots)
+    call gc_set_i1(m, 3)
+    roots(1) = m
+    call gc_collect(roots)
+    call ok_int("12a. a value run keeps its length: ", gc_vec_len(gc_slot(m, 1)), 3)
+    call ok_int("12b. ...and its contents: ", vec_int(gc_slot(m, 2), 2), 20)
+    call ok("12c. ...including heap values inside it: ", &
+         gc_text(gc_vec_get(gc_slot(m, 1), 1)) == "k")
+    call gc_collect(no_roots)
+    call ok_int("12d. the whole map is collected when unreachable: ", gc_live_count(), 0)
+  end subroutine check_value_runs
+
+  ! Tracing has to reach through BOTH shapes to find everything: an
+  ! object holding a run holding objects holding text.
+  subroutine check_deep_structure()
+    type(gc_value) :: run, outer, roots(1)
+    integer :: i
+    call gc_init(16)
+    run = gc_vec(20, no_roots)
+    roots(1) = run
+    do i = 1, 20
+       call gc_vec_set(run, i, gc_cons(gc_str("deep", roots), gc_int(i), roots))
+    end do
+    outer = gc_obj(OBJ_VECTOR, [run], roots)
+    roots(1) = outer
+    call gc_collect(roots)
+    ! 1 run + 20 cons cells + 20 strings + 1 outer object.
+    call ok_int("13a. object -> run -> object -> text all survive: ", gc_live_count(), 42)
+    call ok("13b. ...and the text is intact: ", &
+         gc_text(gc_car(gc_vec_get(gc_slot(outer, 1), 7))) == "deep")
+    call ok_int("13c. ...as are the immediates beside it: ", &
+         cdr_int(gc_vec_get(gc_slot(outer, 1), 7)), 7)
+  end subroutine check_deep_structure
+
+  ! The payoff of handles over pointers: the heap can audit itself.
+  ! Under torture, every allocation collects, so this is the strongest
+  ! statement available -- no live object ever points at a freed slot.
+  subroutine check_heap_self_check()
+    type(gc_value) :: head, roots(1)
+    integer :: i
+    call gc_init(8)
+    gc_torture = .true.
+    head = gc_nil()
+    do i = 1, 100
+       roots(1) = head
+       head = gc_cons(gc_str("x", roots), head, roots)
+    end do
+    call ok("14a. the heap passes its own audit under torture: ", gc_check_heap() == "")
+    call ok_int("14b. ...with the structure still whole: ", chain_length(head), 100)
+    gc_torture = .false.
+  end subroutine check_heap_self_check
+
   ! --- helpers ---
 
   function car_int(c) result(i)
@@ -227,13 +317,33 @@ contains
     i = v%ival
   end function cdr_int
 
+  ! Not gc_slot(v, i)%tag -- flang cannot take a component off a
+  ! function result. See NOTES.md's gotchas catalog.
+  function slot_tag(v, i) result(t)
+    type(gc_value), intent(in) :: v
+    integer, intent(in) :: i
+    type(gc_value) :: x
+    integer :: t
+    x = gc_slot(v, i)
+    t = x%tag
+  end function slot_tag
+
+  function vec_int(v, i) result(n)
+    type(gc_value), intent(in) :: v
+    integer, intent(in) :: i
+    type(gc_value) :: x
+    integer :: n
+    x = gc_vec_get(v, i)
+    n = x%ival
+  end function vec_int
+
   function chain_length(head) result(n)
     type(gc_value), intent(in) :: head
     type(gc_value) :: p
     integer :: n
     n = 0
     p = head
-    do while (p%tag == GCT_CONS)
+    do while (gc_kind(p) == OBJ_CONS)
        n = n + 1
        p = gc_cdr(p)
     end do

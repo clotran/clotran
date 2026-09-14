@@ -23,14 +23,11 @@
 !                a local that the collector would have to rewrite.
 !
 !   handles      A reference is an INDEX into a pool, not a pointer. It
-!                can be bounds-checked, dumped, and printed; a corrupt
-!                reference is a bad index rather than a wild pointer.
-!                We will be debugging this collector, and that matters.
-!
-!   pool/kind    Fortran cannot cast, so each node kind gets its own
-!                typed array. One untyped blob would mean class(*)
-!                everywhere, buying back the dispatch cost being
-!                removed.
+!                can be bounds-checked, dumped and printed -- see
+!                gc_check_heap, which walks the whole heap asserting no
+!                live object points at a freed slot. A corrupt
+!                reference is a bad index rather than a wild pointer,
+!                and we will be debugging this collector.
 !
 !   roots passed The root set is an ARGUMENT, never a module global.
 !                Per PLAN.md, concurrency comes after this, and a
@@ -38,25 +35,72 @@
 !                roots. Making the root set global here would mean
 !                rewriting the collector later.
 !
+! THREE POOLS, NOT FIFTEEN. Fortran cannot cast, so each node kind
+! needs its own typed array -- and clotran has about fifteen of them
+! (cons cells, trie nodes, array maps, HAMT nodes, closures, atoms,
+! lazy seqs, metadata boxes, arity clauses, environments, namespaces,
+! ...). One pool per kind is fifteen near-identical allocators, free
+! lists, mark arrays and trace routines.
+!
+! Underneath, nearly all of them are one of two shapes:
+!
+!   obj   a FIXED, small number of value slots plus a couple of small
+!         integers. A cons cell is two slots; a closure is params,
+!         body, env, clauses; a lazy seq is a state integer plus thunk,
+!         head and tail; an environment is bindings plus outer.
+!   vec   a VARIABLE-length run of values. A vector trie node's
+!         children, an array map's keys and vals, a multi-arity fn's
+!         clauses, a Var's dynamic binding stack.
+!
+! plus raw character data for text. So: three pools, three trace
+! routines, and an object's own `kind` says which shape it means.
+! Adding a clotran type is then a new OBJ_ constant, not a new pool.
+!
 ! `gc_value` deliberately has no allocatable components and no FINAL,
-! which is the entire point: copying one is a flat 16-byte move.
+! which is the entire point: copying one is a flat move.
 module GC
   implicit none
   private
 
   integer, parameter, public :: gc_dp = kind(1.0d0)
 
-  ! Tags double as the pool selector: a tag says both what a value IS
-  ! and, for heap-backed tags, which pool `ref` indexes into.
+  ! Tags say what a value IS, and which pool `ref` indexes into.
   !
   ! GCT_, not GC_: Fortran is case-insensitive, so a parameter GC_CONS
   ! and a function gc_cons are the SAME name and collide. Same trap as
   ! LAZY_CONS/lazy_cons in the gotchas catalog.
+  !
+  ! An immediate holds its whole value inline and never touches the
+  ! heap, which matters because most values in a running program are
+  ! one of these. A character is its code point, not a one-char string.
   integer, parameter, public :: GCT_NIL  = 0
-  integer, parameter, public :: GCT_INT  = 1
-  integer, parameter, public :: GCT_REAL = 2
-  integer, parameter, public :: GCT_CONS = 3
-  integer, parameter, public :: GCT_STR  = 4
+  integer, parameter, public :: GCT_BOOL = 1
+  integer, parameter, public :: GCT_INT  = 2
+  integer, parameter, public :: GCT_REAL = 3
+  integer, parameter, public :: GCT_CHAR = 4
+  ! Text in the string pool. Three tags because a string, a symbol and
+  ! a keyword differ in behaviour, not in storage.
+  integer, parameter, public :: GCT_STR  = 5
+  integer, parameter, public :: GCT_SYM  = 6
+  integer, parameter, public :: GCT_KEY  = 7
+  ! Anything in the object pool. What it MEANS is the object's own kind
+  ! (OBJ_* below); the tag only says "this lives in the object pool".
+  integer, parameter, public :: GCT_OBJ  = 8
+  ! A run of values. Internal -- reached from objects, not normally
+  ! held by user code directly.
+  integer, parameter, public :: GCT_VEC  = 9
+
+  ! Object kinds. Each comment says what that kind's slots hold.
+  integer, parameter, public :: OBJ_CONS    = 1  ! 1=car 2=cdr
+  integer, parameter, public :: OBJ_VECTOR  = 2  ! 1=root vec; i1=count i2=shift
+  integer, parameter, public :: OBJ_MAP     = 3  ! 1=keys vec 2=vals vec; i1=count
+  integer, parameter, public :: OBJ_CLOSURE = 4  ! 1=params 2=body 3=env 4=clauses; i1=macro?
+  integer, parameter, public :: OBJ_ATOM    = 5  ! 1=value 2=meta 3=dynamic stack
+  integer, parameter, public :: OBJ_LAZY    = 6  ! 1=thunk 2=head 3=tail; i1=state
+  integer, parameter, public :: OBJ_ENV     = 7  ! 1=bindings 2=outer; i1=defining ns
+  integer, parameter, public :: OBJ_META    = 8  ! 1=the metadata map
+
+  integer, parameter, public :: OBJ_SLOTS = 4
 
   type, public :: gc_value
      integer :: tag = GCT_NIL
@@ -65,51 +109,64 @@ module GC
      integer :: ref = 0 ! index into this tag's pool; 0 for immediates
   end type gc_value
 
-  ! --- cons pool -------------------------------------------------
-  type :: cons_node
-     type(gc_value) :: car
-     type(gc_value) :: cdr
-  end type cons_node
+  ! --- object pool -----------------------------------------------
+  type :: obj_node
+     integer :: kind = 0
+     integer :: i1 = 0, i2 = 0 ! inline payload (count, shift, state, ...)
+     type(gc_value) :: slot(OBJ_SLOTS)
+  end type obj_node
 
-  type(cons_node), allocatable :: cons_pool(:)
-  logical, allocatable :: cons_mark(:)
-  integer, allocatable :: cons_free_next(:) ! free-list links, 0 = end
-  integer :: cons_free_head = 0
-  integer :: cons_used = 0 ! high-water mark of pool slots handed out
+  type(obj_node), allocatable :: obj_pool(:)
+  logical, allocatable :: obj_mark(:), obj_free(:)
+  integer, allocatable :: obj_free_next(:)
+  integer :: obj_free_head = 0, obj_used = 0
+
+  ! --- value-run pool --------------------------------------------
+  type :: vec_node
+     type(gc_value), allocatable :: items(:)
+  end type vec_node
+
+  type(vec_node), allocatable :: vec_pool(:)
+  logical, allocatable :: vec_mark(:), vec_free(:)
+  integer, allocatable :: vec_free_next(:)
+  integer :: vec_free_head = 0, vec_used = 0
 
   ! --- string pool -----------------------------------------------
-  ! Strings are heap objects too: a value must stay copyable by memcpy,
+  ! Text is a heap object too: a value stays copyable by a flat move,
   ! so it cannot own a deferred-length character of its own.
   type :: str_node
      character(len=:), allocatable :: text
   end type str_node
 
   type(str_node), allocatable :: str_pool(:)
-  logical, allocatable :: str_mark(:)
+  logical, allocatable :: str_mark(:), str_free(:)
   integer, allocatable :: str_free_next(:)
-  integer :: str_free_head = 0
-  integer :: str_used = 0
+  integer :: str_free_head = 0, str_used = 0
 
   ! --- marking work list -----------------------------------------
-  ! An explicit stack, not recursion: a long list is a chain thousands
-  ! of nodes deep, and recursive marking would overflow the real stack
-  ! on exactly the structures this language builds most.
+  ! An explicit stack, not recursion: a list is a chain thousands of
+  ! nodes deep, and recursive marking would overflow the real stack on
+  ! exactly the structure this language builds most.
   type(gc_value), allocatable :: mark_stack(:)
   integer :: mark_sp = 0
 
-  ! --- statistics, for tests and for the debugger ----------------
   integer, public :: gc_allocs = 0
   integer, public :: gc_frees = 0
   integer, public :: gc_collections = 0
 
-  ! Collect at EVERY allocation. Catches a missing root immediately and
-  ! deterministically rather than once a month; the test suite runs
-  ! under it.
+  ! Collect at EVERY allocation. Turns a missing root from a rare,
+  ! timing-dependent corruption into an immediate, deterministic
+  ! failure; the test suite runs under it.
   logical, public :: gc_torture = .false.
 
-  public :: gc_init, gc_cons, gc_str, gc_int, gc_real, gc_nil
-  public :: gc_car, gc_cdr, gc_text, gc_set_car, gc_set_cdr
-  public :: gc_collect, gc_live_count, gc_capacity
+  public :: gc_init, gc_collect
+  public :: gc_nil, gc_bool, gc_int, gc_real, gc_char, gc_str, gc_sym, gc_key
+  public :: gc_obj, gc_vec, gc_cons
+  public :: gc_text, gc_slot, gc_set_slot, gc_kind
+  public :: gc_i1, gc_i2, gc_set_i1, gc_set_i2
+  public :: gc_vec_len, gc_vec_get, gc_vec_set
+  public :: gc_car, gc_cdr, gc_set_car, gc_set_cdr
+  public :: gc_live_count, gc_obj_capacity, gc_check_heap
 
 contains
 
@@ -118,39 +175,27 @@ contains
     integer :: n
     n = 256
     if (present(initial)) n = max(initial, 8)
-    call reset_cons(n)
-    call reset_str(n)
+
+    if (allocated(obj_pool)) deallocate(obj_pool, obj_mark, obj_free, obj_free_next)
+    allocate(obj_pool(n), obj_mark(n), obj_free(n), obj_free_next(n))
+    obj_mark = .false.; obj_free = .false.; obj_free_next = 0
+    obj_free_head = 0; obj_used = 0
+
+    if (allocated(vec_pool)) deallocate(vec_pool, vec_mark, vec_free, vec_free_next)
+    allocate(vec_pool(n), vec_mark(n), vec_free(n), vec_free_next(n))
+    vec_mark = .false.; vec_free = .false.; vec_free_next = 0
+    vec_free_head = 0; vec_used = 0
+
+    if (allocated(str_pool)) deallocate(str_pool, str_mark, str_free, str_free_next)
+    allocate(str_pool(n), str_mark(n), str_free(n), str_free_next(n))
+    str_mark = .false.; str_free = .false.; str_free_next = 0
+    str_free_head = 0; str_used = 0
+
     if (allocated(mark_stack)) deallocate(mark_stack)
     allocate(mark_stack(n))
     mark_sp = 0
-    gc_allocs = 0
-    gc_frees = 0
-    gc_collections = 0
+    gc_allocs = 0; gc_frees = 0; gc_collections = 0
   end subroutine gc_init
-
-  subroutine reset_cons(n)
-    integer, intent(in) :: n
-    if (allocated(cons_pool)) deallocate(cons_pool)
-    if (allocated(cons_mark)) deallocate(cons_mark)
-    if (allocated(cons_free_next)) deallocate(cons_free_next)
-    allocate(cons_pool(n), cons_mark(n), cons_free_next(n))
-    cons_mark = .false.
-    cons_free_next = 0
-    cons_free_head = 0
-    cons_used = 0
-  end subroutine reset_cons
-
-  subroutine reset_str(n)
-    integer, intent(in) :: n
-    if (allocated(str_pool)) deallocate(str_pool)
-    if (allocated(str_mark)) deallocate(str_mark)
-    if (allocated(str_free_next)) deallocate(str_free_next)
-    allocate(str_pool(n), str_mark(n), str_free_next(n))
-    str_mark = .false.
-    str_free_next = 0
-    str_free_head = 0
-    str_used = 0
-  end subroutine reset_str
 
   ! --- immediates: no heap involved at all -----------------------
 
@@ -158,6 +203,13 @@ contains
     type(gc_value) :: v
     v%tag = GCT_NIL
   end function gc_nil
+
+  function gc_bool(b) result(v)
+    logical, intent(in) :: b
+    type(gc_value) :: v
+    v%tag = GCT_BOOL
+    if (b) v%ival = 1
+  end function gc_bool
 
   function gc_int(i) result(v)
     integer, intent(in) :: i
@@ -173,76 +225,46 @@ contains
     v%rval = r
   end function gc_real
 
+  function gc_char(c) result(v)
+    character, intent(in) :: c
+    type(gc_value) :: v
+    v%tag = GCT_CHAR
+    v%ival = iachar(c)
+  end function gc_char
+
   ! --- allocation ------------------------------------------------
   !
-  ! Takes the caller's roots so that torture mode can collect here
-  ! without losing anything: under torture the collection happens
-  ! BEFORE the new object exists, so the roots passed in are exactly
-  ! what must survive.
-
-  function gc_cons(car, cdr, roots) result(v)
-    type(gc_value), intent(in) :: car, cdr
-    type(gc_value), intent(in) :: roots(:)
-    type(gc_value) :: v
-    integer :: idx
-
-    ! car and cdr are roots for any collection that happens HERE, and
-    ! the caller cannot have added them: they are freshly built and not
-    ! reachable from anything yet -- the cell that will hold them does
-    ! not exist. (gc_cons (gc_str ...) ...) would otherwise free the
-    ! string between the two calls, and only under torture or at an
-    ! unlucky heap size, which is the worst way to find a bug.
-    idx = take_cons_slot(roots, car, cdr)
-    cons_pool(idx)%car = car
-    cons_pool(idx)%cdr = cdr
-    v%tag = GCT_CONS
-    v%ref = idx
-    gc_allocs = gc_allocs + 1
-  end function gc_cons
+  ! Every allocator takes the caller's roots AND roots whatever it was
+  ! handed. A freshly built value passed as an ARGUMENT is live but
+  ! cannot be in the caller's root list, because nothing references it
+  ! yet -- see gc_test check 10a, which fails without this.
 
   function gc_str(text, roots) result(v)
     character(len=*), intent(in) :: text
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: v
-    integer :: idx
-
-    idx = take_str_slot(roots)
-    str_pool(idx)%text = text
-    v%tag = GCT_STR
-    v%ref = idx
-    gc_allocs = gc_allocs + 1
+    v = new_text(text, roots, GCT_STR)
   end function gc_str
 
-  ! A free slot, collecting or growing if there is none. car/cdr are
-  ! passed so they can be treated as roots during that collection --
-  ! they are live by definition, and are not reachable from `roots`
-  ! yet because the cell that will hold them does not exist.
-  function take_cons_slot(roots, car, cdr) result(idx)
-    type(gc_value), intent(in) :: roots(:), car, cdr
-    integer :: idx
-    type(gc_value), allocatable :: all_roots(:)
-    logical :: need_space
-
-    need_space = (cons_free_head == 0 .and. cons_used >= size(cons_pool))
-    if (gc_torture .or. need_space) then
-       allocate(all_roots(size(roots) + 2))
-       all_roots(1:size(roots)) = roots
-       all_roots(size(roots) + 1) = car
-       all_roots(size(roots) + 2) = cdr
-       call gc_collect(all_roots)
-       if (cons_free_head == 0 .and. cons_used >= size(cons_pool)) call grow_cons()
-    end if
-    if (cons_free_head /= 0) then
-       idx = cons_free_head
-       cons_free_head = cons_free_next(idx)
-    else
-       cons_used = cons_used + 1
-       idx = cons_used
-    end if
-  end function take_cons_slot
-
-  function take_str_slot(roots) result(idx)
+  function gc_sym(text, roots) result(v)
+    character(len=*), intent(in) :: text
     type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: v
+    v = new_text(text, roots, GCT_SYM)
+  end function gc_sym
+
+  function gc_key(text, roots) result(v)
+    character(len=*), intent(in) :: text
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: v
+    v = new_text(text, roots, GCT_KEY)
+  end function gc_key
+
+  function new_text(text, roots, tag) result(v)
+    character(len=*), intent(in) :: text
+    type(gc_value), intent(in) :: roots(:)
+    integer, intent(in) :: tag
+    type(gc_value) :: v
     integer :: idx
     if (gc_torture .or. (str_free_head == 0 .and. str_used >= size(str_pool))) then
        call gc_collect(roots)
@@ -255,79 +277,255 @@ contains
        str_used = str_used + 1
        idx = str_used
     end if
-  end function take_str_slot
+    str_free(idx) = .false.
+    str_pool(idx)%text = text
+    v%tag = tag
+    v%ref = idx
+    gc_allocs = gc_allocs + 1
+  end function new_text
 
+  ! An object of the given kind, with up to OBJ_SLOTS initial slots.
+  function gc_obj(kind, slots, roots) result(v)
+    integer, intent(in) :: kind
+    type(gc_value), intent(in) :: slots(:), roots(:)
+    type(gc_value) :: v
+    type(gc_value), allocatable :: all_roots(:)
+    integer :: idx, i
+
+    if (gc_torture .or. (obj_free_head == 0 .and. obj_used >= size(obj_pool))) then
+       allocate(all_roots(size(roots) + size(slots)))
+       all_roots(1:size(roots)) = roots
+       all_roots(size(roots) + 1:) = slots
+       call gc_collect(all_roots)
+       if (obj_free_head == 0 .and. obj_used >= size(obj_pool)) call grow_obj()
+    end if
+    if (obj_free_head /= 0) then
+       idx = obj_free_head
+       obj_free_head = obj_free_next(idx)
+    else
+       obj_used = obj_used + 1
+       idx = obj_used
+    end if
+    obj_free(idx) = .false.
+    obj_pool(idx)%kind = kind
+    obj_pool(idx)%i1 = 0
+    obj_pool(idx)%i2 = 0
+    do i = 1, OBJ_SLOTS
+       obj_pool(idx)%slot(i) = gc_nil()
+    end do
+    do i = 1, min(size(slots), OBJ_SLOTS)
+       obj_pool(idx)%slot(i) = slots(i)
+    end do
+    v%tag = GCT_OBJ
+    v%ref = idx
+    gc_allocs = gc_allocs + 1
+  end function gc_obj
+
+  ! A run of n values, all nil.
+  function gc_vec(n, roots) result(v)
+    integer, intent(in) :: n
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: v
+    integer :: idx, i
+
+    if (gc_torture .or. (vec_free_head == 0 .and. vec_used >= size(vec_pool))) then
+       call gc_collect(roots)
+       if (vec_free_head == 0 .and. vec_used >= size(vec_pool)) call grow_vec()
+    end if
+    if (vec_free_head /= 0) then
+       idx = vec_free_head
+       vec_free_head = vec_free_next(idx)
+    else
+       vec_used = vec_used + 1
+       idx = vec_used
+    end if
+    vec_free(idx) = .false.
+    if (allocated(vec_pool(idx)%items)) deallocate(vec_pool(idx)%items)
+    allocate(vec_pool(idx)%items(max(n, 0)))
+    do i = 1, n
+       vec_pool(idx)%items(i) = gc_nil()
+    end do
+    v%tag = GCT_VEC
+    v%ref = idx
+    gc_allocs = gc_allocs + 1
+  end function gc_vec
+
+  ! A cons cell is an object of two slots, allocated often enough to
+  ! deserve its own name.
+  function gc_cons(car, cdr, roots) result(v)
+    type(gc_value), intent(in) :: car, cdr, roots(:)
+    type(gc_value) :: v
+    type(gc_value) :: pair(2)
+    pair(1) = car
+    pair(2) = cdr
+    v = gc_obj(OBJ_CONS, pair, roots)
+  end function gc_cons
+
+  ! --- growth ----------------------------------------------------
   ! Doubling, with move_alloc rather than array assignment -- see the
   ! reallocating-assignment entries in NOTES.md's gotchas catalog.
-  subroutine grow_cons()
-    type(cons_node), allocatable :: bigger(:)
-    logical, allocatable :: bigger_mark(:)
-    integer, allocatable :: bigger_free(:)
+
+  subroutine grow_obj()
+    type(obj_node), allocatable :: bigger(:)
+    logical, allocatable :: bmark(:), bfree(:)
+    integer, allocatable :: bnext(:)
     integer :: n, i
-    n = size(cons_pool)
-    allocate(bigger(2 * n), bigger_mark(2 * n), bigger_free(2 * n))
+    n = size(obj_pool)
+    allocate(bigger(2 * n), bmark(2 * n), bfree(2 * n), bnext(2 * n))
     do i = 1, n
-       bigger(i) = cons_pool(i)
+       bigger(i) = obj_pool(i)
     end do
-    bigger_mark = .false.
-    bigger_free = 0
-    bigger_free(1:n) = cons_free_next(1:n)
-    call move_alloc(bigger, cons_pool)
-    call move_alloc(bigger_mark, cons_mark)
-    call move_alloc(bigger_free, cons_free_next)
-  end subroutine grow_cons
+    bmark = .false.; bfree = .false.; bnext = 0
+    bfree(1:n) = obj_free(1:n)
+    bnext(1:n) = obj_free_next(1:n)
+    call move_alloc(bigger, obj_pool)
+    call move_alloc(bmark, obj_mark)
+    call move_alloc(bfree, obj_free)
+    call move_alloc(bnext, obj_free_next)
+  end subroutine grow_obj
+
+  subroutine grow_vec()
+    type(vec_node), allocatable :: bigger(:)
+    logical, allocatable :: bmark(:), bfree(:)
+    integer, allocatable :: bnext(:)
+    integer :: n, i
+    n = size(vec_pool)
+    allocate(bigger(2 * n), bmark(2 * n), bfree(2 * n), bnext(2 * n))
+    do i = 1, n
+       if (allocated(vec_pool(i)%items)) bigger(i)%items = vec_pool(i)%items
+    end do
+    bmark = .false.; bfree = .false.; bnext = 0
+    bfree(1:n) = vec_free(1:n)
+    bnext(1:n) = vec_free_next(1:n)
+    call move_alloc(bigger, vec_pool)
+    call move_alloc(bmark, vec_mark)
+    call move_alloc(bfree, vec_free)
+    call move_alloc(bnext, vec_free_next)
+  end subroutine grow_vec
 
   subroutine grow_str()
     type(str_node), allocatable :: bigger(:)
-    logical, allocatable :: bigger_mark(:)
-    integer, allocatable :: bigger_free(:)
+    logical, allocatable :: bmark(:), bfree(:)
+    integer, allocatable :: bnext(:)
     integer :: n, i
     n = size(str_pool)
-    allocate(bigger(2 * n), bigger_mark(2 * n), bigger_free(2 * n))
+    allocate(bigger(2 * n), bmark(2 * n), bfree(2 * n), bnext(2 * n))
     do i = 1, n
        if (allocated(str_pool(i)%text)) bigger(i)%text = str_pool(i)%text
     end do
-    bigger_mark = .false.
-    bigger_free = 0
-    bigger_free(1:n) = str_free_next(1:n)
+    bmark = .false.; bfree = .false.; bnext = 0
+    bfree(1:n) = str_free(1:n)
+    bnext(1:n) = str_free_next(1:n)
     call move_alloc(bigger, str_pool)
-    call move_alloc(bigger_mark, str_mark)
-    call move_alloc(bigger_free, str_free_next)
+    call move_alloc(bmark, str_mark)
+    call move_alloc(bfree, str_free)
+    call move_alloc(bnext, str_free_next)
   end subroutine grow_str
 
   ! --- accessors -------------------------------------------------
-
-  function gc_car(v) result(out)
-    type(gc_value), intent(in) :: v
-    type(gc_value) :: out
-    if (v%tag == GCT_CONS) out = cons_pool(v%ref)%car
-  end function gc_car
-
-  function gc_cdr(v) result(out)
-    type(gc_value), intent(in) :: v
-    type(gc_value) :: out
-    if (v%tag == GCT_CONS) out = cons_pool(v%ref)%cdr
-  end function gc_cdr
-
-  subroutine gc_set_car(v, x)
-    type(gc_value), intent(in) :: v, x
-    if (v%tag == GCT_CONS) cons_pool(v%ref)%car = x
-  end subroutine gc_set_car
-
-  ! Mutation is what makes CYCLES possible, which is the case
-  ! refcounting structurally cannot reclaim and this collector can.
-  subroutine gc_set_cdr(v, x)
-    type(gc_value), intent(in) :: v, x
-    if (v%tag == GCT_CONS) cons_pool(v%ref)%cdr = x
-  end subroutine gc_set_cdr
 
   function gc_text(v) result(s)
     type(gc_value), intent(in) :: v
     character(len=:), allocatable :: s
     s = ""
-    if (v%tag /= GCT_STR) return
+    if (v%tag /= GCT_STR .and. v%tag /= GCT_SYM .and. v%tag /= GCT_KEY) return
     if (allocated(str_pool(v%ref)%text)) s = str_pool(v%ref)%text
   end function gc_text
+
+  function gc_kind(v) result(k)
+    type(gc_value), intent(in) :: v
+    integer :: k
+    k = 0
+    if (v%tag == GCT_OBJ) k = obj_pool(v%ref)%kind
+  end function gc_kind
+
+  function gc_slot(v, i) result(out)
+    type(gc_value), intent(in) :: v
+    integer, intent(in) :: i
+    type(gc_value) :: out
+    if (v%tag == GCT_OBJ .and. i >= 1 .and. i <= OBJ_SLOTS) out = obj_pool(v%ref)%slot(i)
+  end function gc_slot
+
+  ! Mutation is what makes CYCLES possible, which is the case
+  ! refcounting structurally cannot reclaim and this collector can.
+  subroutine gc_set_slot(v, i, x)
+    type(gc_value), intent(in) :: v, x
+    integer, intent(in) :: i
+    if (v%tag == GCT_OBJ .and. i >= 1 .and. i <= OBJ_SLOTS) obj_pool(v%ref)%slot(i) = x
+  end subroutine gc_set_slot
+
+  function gc_i1(v) result(i)
+    type(gc_value), intent(in) :: v
+    integer :: i
+    i = 0
+    if (v%tag == GCT_OBJ) i = obj_pool(v%ref)%i1
+  end function gc_i1
+
+  function gc_i2(v) result(i)
+    type(gc_value), intent(in) :: v
+    integer :: i
+    i = 0
+    if (v%tag == GCT_OBJ) i = obj_pool(v%ref)%i2
+  end function gc_i2
+
+  subroutine gc_set_i1(v, i)
+    type(gc_value), intent(in) :: v
+    integer, intent(in) :: i
+    if (v%tag == GCT_OBJ) obj_pool(v%ref)%i1 = i
+  end subroutine gc_set_i1
+
+  subroutine gc_set_i2(v, i)
+    type(gc_value), intent(in) :: v
+    integer, intent(in) :: i
+    if (v%tag == GCT_OBJ) obj_pool(v%ref)%i2 = i
+  end subroutine gc_set_i2
+
+  function gc_vec_len(v) result(n)
+    type(gc_value), intent(in) :: v
+    integer :: n
+    n = 0
+    if (v%tag /= GCT_VEC) return
+    if (allocated(vec_pool(v%ref)%items)) n = size(vec_pool(v%ref)%items)
+  end function gc_vec_len
+
+  function gc_vec_get(v, i) result(out)
+    type(gc_value), intent(in) :: v
+    integer, intent(in) :: i
+    type(gc_value) :: out
+    if (v%tag /= GCT_VEC) return
+    if (i < 1 .or. i > gc_vec_len(v)) return
+    out = vec_pool(v%ref)%items(i)
+  end function gc_vec_get
+
+  subroutine gc_vec_set(v, i, x)
+    type(gc_value), intent(in) :: v, x
+    integer, intent(in) :: i
+    if (v%tag /= GCT_VEC) return
+    if (i < 1 .or. i > gc_vec_len(v)) return
+    vec_pool(v%ref)%items(i) = x
+  end subroutine gc_vec_set
+
+  function gc_car(v) result(out)
+    type(gc_value), intent(in) :: v
+    type(gc_value) :: out
+    out = gc_slot(v, 1)
+  end function gc_car
+
+  function gc_cdr(v) result(out)
+    type(gc_value), intent(in) :: v
+    type(gc_value) :: out
+    out = gc_slot(v, 2)
+  end function gc_cdr
+
+  subroutine gc_set_car(v, x)
+    type(gc_value), intent(in) :: v, x
+    call gc_set_slot(v, 1, x)
+  end subroutine gc_set_car
+
+  subroutine gc_set_cdr(v, x)
+    type(gc_value), intent(in) :: v, x
+    call gc_set_slot(v, 2, x)
+  end subroutine gc_set_cdr
 
   ! --- collection ------------------------------------------------
 
@@ -336,7 +534,8 @@ contains
     integer :: i
 
     gc_collections = gc_collections + 1
-    cons_mark = .false.
+    obj_mark = .false.
+    vec_mark = .false.
     str_mark = .false.
     mark_sp = 0
 
@@ -344,16 +543,20 @@ contains
        call push_mark(roots(i))
     end do
     call drain_mark_stack()
-    call sweep_cons()
-    call sweep_str()
+    call sweep()
   end subroutine gc_collect
 
   subroutine push_mark(v)
     type(gc_value), intent(in) :: v
     type(gc_value), allocatable :: bigger(:)
     integer :: n
-    if (v%tag /= GCT_CONS .and. v%tag /= GCT_STR) return ! immediates hold nothing
     if (v%ref == 0) return
+    select case (v%tag)
+    case (GCT_OBJ, GCT_VEC, GCT_STR, GCT_SYM, GCT_KEY)
+       continue
+    case default
+       return ! an immediate holds nothing
+    end select
     if (mark_sp >= size(mark_stack)) then
        n = size(mark_stack)
        allocate(bigger(2 * n))
@@ -366,85 +569,141 @@ contains
 
   subroutine drain_mark_stack()
     type(gc_value) :: v
+    integer :: i, n
     do while (mark_sp > 0)
        v = mark_stack(mark_sp)
        mark_sp = mark_sp - 1
        select case (v%tag)
-       case (GCT_CONS)
+       case (GCT_OBJ)
           ! Already-marked stops the walk, which is what makes a cycle
           ! terminate instead of looping forever.
-          if (cons_mark(v%ref)) cycle
-          cons_mark(v%ref) = .true.
-          call push_mark(cons_pool(v%ref)%car)
-          call push_mark(cons_pool(v%ref)%cdr)
-       case (GCT_STR)
+          if (obj_mark(v%ref)) cycle
+          obj_mark(v%ref) = .true.
+          do i = 1, OBJ_SLOTS
+             call push_mark(obj_pool(v%ref)%slot(i))
+          end do
+       case (GCT_VEC)
+          if (vec_mark(v%ref)) cycle
+          vec_mark(v%ref) = .true.
+          n = 0
+          if (allocated(vec_pool(v%ref)%items)) n = size(vec_pool(v%ref)%items)
+          do i = 1, n
+             call push_mark(vec_pool(v%ref)%items(i))
+          end do
+       case (GCT_STR, GCT_SYM, GCT_KEY)
           str_mark(v%ref) = .true. ! a leaf: holds no references
        end select
     end do
   end subroutine drain_mark_stack
 
-  subroutine sweep_cons()
-    integer :: i
-    do i = 1, cons_used
-       if (cons_mark(i)) cycle
-       if (on_free_list(cons_free_next, cons_free_head, i)) cycle
-       cons_pool(i)%car = gc_nil()
-       cons_pool(i)%cdr = gc_nil()
-       cons_free_next(i) = cons_free_head
-       cons_free_head = i
+  ! A per-slot free FLAG, not a scan of the free list: scanning made
+  ! sweep O(free^2), quadratic in exactly the case that matters -- a
+  ! heap that is mostly garbage.
+  subroutine sweep()
+    integer :: i, j
+    do i = 1, obj_used
+       if (obj_mark(i) .or. obj_free(i)) cycle
+       do j = 1, OBJ_SLOTS
+          obj_pool(i)%slot(j) = gc_nil()
+       end do
+       obj_pool(i)%kind = 0
+       obj_free(i) = .true.
+       obj_free_next(i) = obj_free_head
+       obj_free_head = i
        gc_frees = gc_frees + 1
     end do
-  end subroutine sweep_cons
-
-  subroutine sweep_str()
-    integer :: i
+    do i = 1, vec_used
+       if (vec_mark(i) .or. vec_free(i)) cycle
+       if (allocated(vec_pool(i)%items)) deallocate(vec_pool(i)%items)
+       vec_free(i) = .true.
+       vec_free_next(i) = vec_free_head
+       vec_free_head = i
+       gc_frees = gc_frees + 1
+    end do
     do i = 1, str_used
-       if (str_mark(i)) cycle
-       if (on_free_list(str_free_next, str_free_head, i)) cycle
-       ! Release the character data now rather than at process exit:
-       ! this is the one place a finalizer genuinely belongs, run once
-       ! per object by sweep instead of once per copy.
+       if (str_mark(i) .or. str_free(i)) cycle
+       ! Released here rather than at process exit: this is the one
+       ! place a finalizer genuinely belongs, run once per object by
+       ! sweep instead of once per copy.
        if (allocated(str_pool(i)%text)) deallocate(str_pool(i)%text)
+       str_free(i) = .true.
        str_free_next(i) = str_free_head
        str_free_head = i
        gc_frees = gc_frees + 1
     end do
-  end subroutine sweep_str
-
-  ! A slot already on the free list must not be freed twice, or the
-  ! list develops a loop and the same slot is handed out repeatedly.
-  ! ponytail: linear in the free list, so sweep is O(free^2) in the
-  ! worst case. A per-slot "is free" flag is the fix if it shows up.
-  function on_free_list(links, head, idx) result(found)
-    integer, intent(in) :: links(:), head, idx
-    logical :: found
-    integer :: p
-    found = .false.
-    p = head
-    do while (p /= 0)
-       if (p == idx) then
-          found = .true.
-          return
-       end if
-       p = links(p)
-    end do
-  end function on_free_list
+  end subroutine sweep
 
   function gc_live_count() result(n)
     integer :: n
     integer :: i
     n = 0
-    do i = 1, cons_used
-       if (.not. on_free_list(cons_free_next, cons_free_head, i)) n = n + 1
+    do i = 1, obj_used
+       if (.not. obj_free(i)) n = n + 1
+    end do
+    do i = 1, vec_used
+       if (.not. vec_free(i)) n = n + 1
     end do
     do i = 1, str_used
-       if (.not. on_free_list(str_free_next, str_free_head, i)) n = n + 1
+       if (.not. str_free(i)) n = n + 1
     end do
   end function gc_live_count
 
-  function gc_capacity() result(n)
+  function gc_obj_capacity() result(n)
     integer :: n
-    n = size(cons_pool)
-  end function gc_capacity
+    n = size(obj_pool)
+  end function gc_obj_capacity
+
+  ! Walks the whole heap asserting its invariants: every reference in
+  ! every live object is in range and points at something still live.
+  ! This is the payoff of handles over pointers -- the heap can check
+  ! itself, and a corruption is caught where it happened rather than
+  ! whenever the wild pointer is next dereferenced. "" means healthy.
+  function gc_check_heap() result(problem)
+    character(len=:), allocatable :: problem
+    integer :: i, j, n
+    problem = ""
+    do i = 1, obj_used
+       if (obj_free(i)) cycle
+       do j = 1, OBJ_SLOTS
+          problem = bad_ref(obj_pool(i)%slot(j))
+          if (len(problem) > 0) return
+       end do
+    end do
+    do i = 1, vec_used
+       if (vec_free(i)) cycle
+       n = 0
+       if (allocated(vec_pool(i)%items)) n = size(vec_pool(i)%items)
+       do j = 1, n
+          problem = bad_ref(vec_pool(i)%items(j))
+          if (len(problem) > 0) return
+       end do
+    end do
+  end function gc_check_heap
+
+  function bad_ref(v) result(problem)
+    type(gc_value), intent(in) :: v
+    character(len=:), allocatable :: problem
+    problem = ""
+    select case (v%tag)
+    case (GCT_OBJ)
+       if (v%ref < 1 .or. v%ref > obj_used) then
+          problem = "object reference out of range"
+       else if (obj_free(v%ref)) then
+          problem = "live object references a freed object"
+       end if
+    case (GCT_VEC)
+       if (v%ref < 1 .or. v%ref > vec_used) then
+          problem = "vec reference out of range"
+       else if (vec_free(v%ref)) then
+          problem = "live object references a freed vec"
+       end if
+    case (GCT_STR, GCT_SYM, GCT_KEY)
+       if (v%ref < 1 .or. v%ref > str_used) then
+          problem = "text reference out of range"
+       else if (str_free(v%ref)) then
+          problem = "live object references freed text"
+       end if
+    end select
+  end function bad_ref
 
 end module GC

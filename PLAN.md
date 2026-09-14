@@ -213,6 +213,27 @@ the text. A cache writer needs to exclude them.
       freed the string otherwise, and only under torture or at an
       unlucky heap size. Check 10a covers it and was confirmed to fail
       without the fix.
+- [x] **3a'.** Generalised to hold clotran's data: 38 checks. clotran
+      has ~15 node kinds (cons cells, trie nodes, array maps, HAMT
+      nodes, closures, atoms, lazy seqs, metadata boxes, arity clauses,
+      environments, namespaces), and one pool per kind would be fifteen
+      near-identical allocators, free lists, mark arrays and trace
+      routines. Underneath they are two shapes: a FIXED few value slots
+      plus small integers (cons, closure, lazy, env, map, vector), or a
+      VARIABLE-length run of values (trie children, map keys/vals,
+      arity clauses, a Var's binding stack). So three pools -- object,
+      value-run, text -- and an object's own `kind` says which it
+      means. Adding a clotran type is a new `OBJ_` constant, not a new
+      pool.
+
+      `gc_check_heap` walks the whole heap asserting no live object
+      references a freed or out-of-range slot; check 14a runs it under
+      torture. That is the payoff of handles over pointers -- the heap
+      audits itself, and corruption is caught where it happens rather
+      than when a wild pointer is next dereferenced.
+
+      Still to add before 3c: pools for native array buffers
+      (`class(*)`, needs care) and namespaces.
 - [ ] **3c.** Value type: drop the nine allocatable components and
       `FINAL`; keep the inline scalars (`tag`, `int_val`, `real_val`,
       `bool_val`) so `v%tag` and friends keep working, and replace only
