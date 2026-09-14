@@ -44,12 +44,26 @@ module values
                                       ! pattern as TAG_VAR: the mutable payload is a TAG_STRING
                                       ! cons_value, mutated in place by .append; .toString reads
                                       ! it back out directly (see eval_new/eval_instance_call).
+  integer, parameter :: TAG_REDUCED = 17 ! clojure.lang.Reduced -- reduce's early-exit wrapper
+                                      ! ((reduced x) says "stop, the answer is x"). Same
+                                      ! "reuse atom_val as the box" pattern as TAG_VAR; its
+                                      ! whole job is to be distinguishable from a plain
+                                      ! value, which is exactly what a tag gives us.
   integer, parameter :: TAG_LAZYSEQ = 16 ! clojure.lang.LazySeq -- a seq whose rest isn't computed
                                       ! until asked for. lazy_val holds the node; see
                                       ! RT.f90's force-then-delegate seq/first/rest and
                                       ! Eval.f90's force_lazy (the thunk has to be CALLED,
                                       ! which only Eval can do -- RT reaches it through a
                                       ! procedure pointer, see rt_set_lazy_forcer).
+  integer, parameter :: TAG_CHAR = 18 ! java.lang.Character -- its own type in Clojure, so
+                                      ! (= \a "a") is false. The character itself lives in
+                                      ! str_val (length 1), so equality and hashing fall out
+                                      ! of the existing string handling for free.
+  integer, parameter :: TAG_MULTIFN = 19 ! clojure.lang.MultiFn -- what defmulti constructs and
+                                      ! defmethod mutates. Same "reuse atom_val as the mutable
+                                      ! box" pattern as TAG_VAR; the box holds a map of
+                                      ! {:dispatch fn :default dv :methods {dv -> fn}}, since a
+                                      ! multimethod IS a value plus one genuinely mutable table.
 
   integer, parameter :: BITS = 5
   integer, parameter :: BRANCH = 32
@@ -391,7 +405,7 @@ contains
        eq = (a%int_val == b%int_val)
     case (TAG_REAL)
        eq = (a%real_val == b%real_val)
-    case (TAG_STRING, TAG_SYMBOL, TAG_KEYWORD)
+    case (TAG_STRING, TAG_SYMBOL, TAG_KEYWORD, TAG_CHAR)
        if (allocated(a%str_val) .and. allocated(b%str_val)) then
           eq = (a%str_val == b%str_val)
        else

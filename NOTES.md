@@ -1191,6 +1191,102 @@ otherwise be a real Fortran stack overflow (a crash) into a catchable
 recursive macro pair turns up next that this project hasn't found and
 frozen yet.
 
+## Characters, `#_`, multimethods, and the printing stack
+
+Four more pieces core.clj genuinely needs, found the same way as the
+rest -- by walking further into the file, not by inspection. Together
+with `reduce` they took core.clj's own load from 57 failing forms
+to 16.
+
+**`TAG_CHAR`** is a real type, not a one-character string. Real
+Clojure's `\a` is a `java.lang.Character` and `(= \a "a")` is false,
+so a tag of its own is the only faithful representation; reusing
+`str_val` (length 1) means equality and hashing fall straight out of
+the existing string handling, with no new code beyond adding
+`TAG_CHAR` to a case list in three places. `seq` over a string now
+yields characters, matching real Clojure. The reader takes the
+character after `\` unconditionally (so `\(`, `\"` and `\/` all read)
+and then keeps any regular characters after it, which is what makes
+the named forms (`\newline`, `\space`, `\tab`, `\return`, `\formfeed`,
+`\backspace`) stay one token. `\uNNNN`/`\oNNN` aren't supported --
+nothing in core.clj uses them, and an honest reader error beats a
+half-decoded character.
+
+**`#_`** (discard) reads the next form, throws it away, and returns
+whatever follows -- so it works mid-collection, mid-arglist and at top
+level alike. The one wrinkle is tokenizing: `#` has to stay an
+ordinary character so an auto-gensym's trailing `#` (`x#`) doesn't
+split off, which means `#_2` would otherwise lex as a single symbol.
+The regular-character run cuts `#_` back off explicitly -- the only
+place `#` leads rather than trails.
+
+**`TAG_MULTIFN`** is `clojure.lang.MultiFn`: what `defmulti`
+constructs and `defmethod` mutates. Same "reuse `atom_val` as the one
+mutable box" pattern as `TAG_VAR`, holding a map of `{:dispatch fn
+:default dv :methods {dv -> fn}}` -- a multimethod really is a value
+plus one genuinely mutable table, and every holder of the multifn has
+to see a later `defmethod`, which is exactly what mutating the shared
+box gives. Dispatch is exact match, then `:default`. Real Clojure also
+walks the global hierarchy (`isa?`) and consults `prefer-method`;
+neither is here yet, so a derived dispatch value won't find its
+parent's method.
+
+Two syntax-quote bugs surfaced only once multimethods existed, both
+about qualifying symbols that shouldn't be qualified:
+
+- **A member name never carries a namespace.** `defmethod` is
+  `` `(. ~multifn addMethod ...) ``, and syntax-quote qualifies every
+  bare symbol it sees -- including `addMethod`, which arrived here as
+  `user/addMethod`. Real Clojure's compiler ignores that namespace for
+  exactly this reason (`HostExpr` only ever munges the name part), so
+  `eval_dot` strips it too now. That is why real Clojure's own
+  `defmethod` works at all.
+- **A class name survives syntax-quote untouched.** `defmulti`'s
+  template contains `` `(new clojure.lang.MultiFn ...) ``; real
+  Clojure resolves that symbol through the compiler, where it names a
+  class, not a var in the current namespace. Without an import table
+  the reachable approximation is Java's own naming convention (dotted,
+  or leading capital), which is what core.clj's templates rely on.
+  Before this, that form fell through `eval_new`'s generic passthrough
+  and every multimethod evaluated to the *string* of its own name.
+
+Also fixed alongside: `..` was being caught by the `.method` interop
+sugar (any symbol starting with `.`), so `root-resource`'s
+`(.. (name lib) (replace \- \_) ...)` never reached core.clj's own
+`..` macro.
+
+**The printing stack** (`pr`/`prn`/`println`/`pr-str`/`with-out-str`)
+now works end to end. It bottoms out in `(. *out* (append s))`, so:
+`*out*`'s default binding stays nil, meaning the console itself, and
+`.append`/`.write`/`.flush` on nil write straight to stdout;
+`java.io.StringWriter` is the same object as `StringBuilder`
+(`TAG_STRING_BUILDER`), which is what lets `with-out-str` bind `*out*`
+to one and read it back with `(str s#)`. `(class x)` answers the
+keyword naming the type rather than a `java.lang.Class` -- what it's
+actually used for here is `print-method`'s own dispatch function and
+error messages.
+
+The last link is that real Clojure's `print-method` methods all live
+in `core_print.clj`, which core.clj `(load "core_print")`s and which
+isn't ported -- leaving the multimethod with no methods at all, so
+every print call failed on dispatch. `eval_core_bootstrap` installs
+one `:default` method delegating to the native printer. It goes there,
+not in `clotran.clj`, because that file loads *before* core.clj, where
+the `defmulti` itself lives.
+
+**Where core.clj's remaining 16 failures are.** `CLOTRAN_DEBUG_LOAD=1
+./clotran-bin` lists them -- that's the project's running coverage
+number, so it's an environment variable rather than a patch applied by
+hand each time. Seven are `(load "...")` of the other upstream core
+source files (`core_print`, `core_deftype`, `core/protocols`, `gvec`,
+`genclass`, `core_proxy`, `uuid`): none ported yet, and
+`genclass`/`core_proxy` are JVM bytecode generation that never will
+be. Five are `defprotocol`/`extend-protocol`/`deftype` and the
+`Eduction` type that depends on them. The rest are
+`clojure.lang.RT/baseLoader`, `Thread/currentThread` reached through
+`getContextClassLoader`, and `(require 'clojure.java.io)` --
+classloaders and host I/O.
+
 ## Status
 
 Steps 1-6 pass official required tests on both compilers (117/117,

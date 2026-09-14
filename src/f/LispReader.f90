@@ -106,6 +106,22 @@ contains
           cycle
        end if
 
+       ! A character literal: '\' takes the very next character
+       ! unconditionally (so \( and \" are fine, even though neither
+       ! is a regular char), then keeps any regular chars after it so
+       ! the named forms (\newline, \space, A) stay one token.
+       if (c == achar(92) .and. i < len_expr) then
+          start = i
+          i = i + 2
+          do while (i <= len_expr)
+             if (.not. is_regular_char(expr(i:i))) exit
+             i = i + 1
+          end do
+          n = n + 1
+          buf(n)%text = expr(start:i - 1)
+          cycle
+       end if
+
        if (c == '"') then
           start = i
           i = i + 1
@@ -130,6 +146,11 @@ contains
           if (.not. is_regular_char(expr(i:i))) exit
           i = i + 1
        end do
+       ! '#' has to stay a regular char so an auto-gensym's trailing
+       ! '#' (x#) doesn't split off, which means the discard macro
+       ! "#_" gets swallowed into whatever follows it (#_2). Cut it
+       ! back off here -- the only place '#' leads rather than trails.
+       if (i - start > 2 .and. expr(start:min(start + 1, len_expr)) == "#_") i = start + 2
        n = n + 1
        buf(n)%text = expr(start:i - 1)
     end do
@@ -277,6 +298,39 @@ contains
     v%bool_val = b
   end function mk_bool
 
+  ! "\x" -> the character x. The named forms are real Clojure's own
+  ! (LispReader.java's CharacterReader); \uNNNN and \oNNN aren't here
+  ! yet -- nothing in core.clj uses them, and the honest error beats a
+  ! half-decoded character.
+  function read_char_literal(tok) result(val)
+    character(len=*), intent(in) :: tok
+    type(cons_value) :: val
+    character(len=:), allocatable :: body
+
+    body = tok(2:len(tok))
+    val%tag = TAG_CHAR
+    select case (body)
+    case ("newline")
+       val%str_val = achar(10)
+    case ("space")
+       val%str_val = " "
+    case ("tab")
+       val%str_val = achar(9)
+    case ("return")
+       val%str_val = achar(13)
+    case ("formfeed")
+       val%str_val = achar(12)
+    case ("backspace")
+       val%str_val = achar(8)
+    case default
+       if (len(body) /= 1) then
+          call reader_error("unsupported character literal: " // tok)
+          return
+       end if
+       val%str_val = body
+    end select
+  end function read_char_literal
+
   function read_atom(tok) result(val)
     character(len=*), intent(in) :: tok
     type(cons_value) :: val
@@ -294,7 +348,9 @@ contains
     else if (tok == "false") then
        val = mk_bool(.false.)
     else if (n >= 1) then
-       if (tok(1:1) == ':') then
+       if (tok(1:1) == achar(92) .and. n >= 2) then
+          val = read_char_literal(tok)
+       else if (tok(1:1) == ':') then
           val = mk_keyword(tok(2:n))
        else if (tok(1:1) == '"') then
           if (.not. is_terminated_string(tok)) then
@@ -718,6 +774,14 @@ contains
        val = read_meta(tokens, pos)
     case ("#?")
        val = read_reader_conditional(tokens, pos)
+    case ("#_")
+       ! The discard macro: read the next form, throw it away, and
+       ! return whatever follows it -- so a discarded form vanishes
+       ! wherever it sits, including mid-collection.
+       pos = pos + 1
+       val = read_form(tokens, pos)
+       if (has_error) return
+       val = read_form(tokens, pos)
     case ("#")
        ! Neither '#{' nor '#(' merge into one token the way '#?' does
        ! ('{'/'(' are special chars, breaking the regular-char run) --

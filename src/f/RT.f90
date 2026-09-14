@@ -419,7 +419,7 @@ contains
     end select
   end function seq
 
-  ! "abc" -> ("a" "b" "c"), each a one-character string.
+  ! "abc" -> (\a \b \c), same as real Clojure's seq over a string.
   function string_to_char_list(s) result(l)
     character(len=*), intent(in) :: s
     type(cons_ref) :: l
@@ -427,7 +427,7 @@ contains
     type(cons_value) :: ch
     l = list_empty()
     do i = len(s), 1, -1
-       ch%tag = TAG_STRING
+       ch%tag = TAG_CHAR
        ch%str_val = s(i:i)
        l = list_cons(ch, l)
     end do
@@ -449,7 +449,7 @@ contains
        eq = (b%tag == TAG_INT) .and. (a%int_val == b%int_val)
     case (TAG_REAL)
        eq = (b%tag == TAG_REAL) .and. (a%real_val == b%real_val)
-    case (TAG_STRING, TAG_SYMBOL, TAG_KEYWORD)
+    case (TAG_STRING, TAG_SYMBOL, TAG_KEYWORD, TAG_CHAR)
        eq = (b%tag == a%tag)
        if (eq) eq = (a%str_val == b%str_val)
     case (TAG_LIST, TAG_VECTOR)

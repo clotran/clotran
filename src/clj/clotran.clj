@@ -46,9 +46,11 @@
 (def contains clotran.native/contains?)
 (def dissoc clotran.native/dissoc)
 (def readString clotran.native/read-string)
+(def subvec clotran.native/subvec)
 (def keys clotran.native/keys)
 (def vals clotran.native/vals)
 (def nextID clotran.native/next-id)
+(def isReduced clotran.native/reduced?)
 (def uncheckedLongCast (fn* [x] x)) ; one canonical int kind here -- a cast is a no-op; fn*
                                      ; (the real special form), not fn (real core.clj's own
                                      ; macro, which doesn't exist yet -- clotran.clj loads
@@ -119,6 +121,104 @@
 (def unchecked_remainder clotran.native/rem)
 (def unchecked_negate (fn* [x] (clotran.native/- x)))
 (in-ns 'clojure.core)
+
+;; clojure.core.protocols/coll-reduce: what real core.clj's `reduce`
+;; dispatches to for anything that isn't an IReduce. Real Clojure makes
+;; this a protocol with per-collection implementations (partly for
+;; chunked-seq speed); there are no protocols here, so this is the one
+;; generic seq walk they all reduce to anyway -- same O(n), same
+;; semantics, `reduced` early exit included.
+;;
+;; fn*/let*/if only: clotran.clj loads before core.clj, so `fn`, `let`,
+;; `when` and friends don't exist yet (see uncheckedLongCast's comment).
+(in-ns 'clojure.core.protocols)
+(def coll-reduce
+  (fn* coll-reduce
+    ([coll f]
+     (let* [s (clotran.native/seq coll)]
+       (if s
+         (coll-reduce (clotran.native/rest s) f (clotran.native/first s))
+         (f))))
+    ([coll f init]
+     ((fn* step [acc s]
+        (if s
+          (let* [acc2 (f acc (clotran.native/first s))]
+            (if (clotran.native/reduced? acc2)
+              (clotran.native/deref acc2)
+              (step acc2 (clotran.native/next s))))
+          acc))
+      init
+      (clotran.native/seq coll)))))
+;; IKVReduce, for reduce-kv: same walk over a map's [k v] entries.
+(def kv-reduce
+  (fn* [amap f init]
+    ((fn* step [acc s]
+       (if s
+         (let* [e (clotran.native/first s)
+                acc2 (f acc (clotran.native/nth e 0) (clotran.native/nth e 1))]
+           (if (clotran.native/reduced? acc2)
+             (clotran.native/deref acc2)
+             (step acc2 (clotran.native/next s))))
+         acc))
+     init
+     (clotran.native/seq amap))))
+(in-ns 'clojure.core)
+
+;; clojure.lang.Namespace's statics. A namespace is represented by its
+;; own name symbol here -- there's no first-class Namespace value (and
+;; *ns* is a symbol for the same reason), so ns-name is just .getName
+;; on that symbol, which already works.
+(in-ns 'clojure.lang.Namespace)
+(def find clotran.native/find-ns-sym)
+(def findOrCreate clotran.native/create-ns-sym)
+(def all clotran.native/all-ns-syms)
+(def remove (fn* [n] nil)) ; nothing here ever unloads a namespace
+(in-ns 'clojure.core)
+
+;; java.lang.System: only getProperty, and only for the handful of
+;; properties core.clj reads while setting up *file*/line separators.
+(in-ns 'System)
+(def getProperty (fn* [k] (if (clotran.native/= k "line.separator") "\n" nil)))
+(in-ns 'clojure.core)
+
+;; java.lang.Thread: core.clj only reaches for the context classloader
+;; and (much later) agent threads. Neither exists here.
+(in-ns 'Thread)
+(def currentThread (fn* [] nil))
+(in-ns 'clojure.core)
+
+;; The dynamic vars real Clojure's RUNTIME (RT.java) creates before
+;; core.clj is even read -- core.clj only ever attaches docstrings to
+;; them (add-doc-and-meta), so without these every one of those forms
+;; failed with "Unable to resolve var". Values match RT's defaults;
+;; the stream ones are placeholders, since there's no writer object
+;; here yet (see *out* in NOTES.md).
+(def ^:dynamic *out* nil)
+(def ^:dynamic *err* nil)
+(def ^:dynamic *in* nil)
+(def ^:dynamic *command-line-args* nil)
+(def ^:dynamic *assert* true)
+(def ^:dynamic *read-eval* true)
+(def ^:dynamic *print-meta* false)
+(def ^:dynamic *print-dup* false)
+(def ^:dynamic *print-readably* true)
+(def ^:dynamic *flush-on-newline* true)
+(def ^:dynamic *file* "NO_SOURCE_PATH")
+(def ^:dynamic *compile-path* nil)
+(def ^:dynamic *compile-files* false)
+(def ^:dynamic *warn-on-reflection* false)
+(def ^:dynamic *unchecked-math* false)
+(def ^:dynamic *compiler-options* nil)
+(def ^:dynamic *agent* nil)
+(def *clojure-version* {:major 1 :minor 12 :incremental 0 :qualifier nil})
+(def *data-readers* {})
+;; in-ns/load-file are special forms in Eval.f90, not functions, but
+;; core.clj still hangs a docstring on each via (var in-ns) -- so the
+;; vars have to exist. The special-form dispatch runs first, so these
+;; placeholders never actually get called.
+(def in-ns nil)
+(def load-file nil)
+(def *default-data-reader-fn* nil)
 
 ;; clojure.lang.Var/pushThreadBindings and popThreadBindings: what
 ;; core.clj's own push-thread-bindings/pop-thread-bindings (and so
@@ -201,6 +301,15 @@
                            (clotran.native/apply clotran.native/hash-map keyvals)
                            (clotran.native/hash-map))))
 (def EMPTY (clotran.native/hash-map))
+(in-ns 'clojure.core)
+
+;; PersistentTreeSet: clotran has no sorted collections, so sorted-set
+;; is an ordinary hash set -- correct membership, NOT sorted order.
+(in-ns 'clojure.lang.PersistentTreeSet)
+(def create (fn* [items]
+              (if items
+                (clotran.native/apply clotran.native/hash-set items)
+                (clotran.native/hash-set))))
 (in-ns 'clojure.core)
 
 (in-ns 'clojure.lang.PersistentHashSet)

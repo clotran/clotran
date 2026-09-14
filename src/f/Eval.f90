@@ -23,7 +23,7 @@ module Eval
   use LispReader, only: read_str, read_top_level_forms
   use mal_readline, only: sys_readline => readline
   use Namespace, only: ns_ref, assignment(=), CORE_NS, ns_find_or_create, ns_exists, ns_intern, &
-       ns_resolve, ns_get_own, ns_set_current, ns_current, ns_name_of, ns_resolve_var
+       ns_resolve, ns_get_own, ns_set_current, ns_current, ns_name_of, ns_resolve_var, ns_all_names
   implicit none
   private
 
@@ -111,6 +111,7 @@ contains
     call reg("<")
     call reg("<=")
     call reg("list?")
+    call reg("class")
     call reg("empty?")
     call reg("prn")
     call reg("read-string")
@@ -133,6 +134,11 @@ contains
     call reg("bit-shift-right")
     call reg("unsigned-bit-shift-right")
     call reg("next-id")
+    call reg("reduced?")
+    call reg("find-ns-sym")
+    call reg("create-ns-sym")
+    call reg("all-ns-syms")
+    call reg("subvec")
     call reg("macroexpand")
     call reg("throw")
     call reg("apply")
@@ -239,6 +245,24 @@ contains
     if (ok) discard = eval_form(ast, env)
     if (has_error) then
        write(*, '(A)') "warning: core.clj failed to load: " // pr_str(last_error_value)
+       has_error = .false.
+    end if
+
+    ! Real Clojure's print-method methods all live in core_print.clj,
+    ! which core.clj (load "core_print")s and which isn't ported here
+    ! yet -- leaving the multimethod with no methods at all, so every
+    ! pr/prn/println/pr-str failed on dispatch. One :default method
+    ! delegating to the native printer covers every type clotran has;
+    ! it goes here rather than in clotran.clj because that file loads
+    ! BEFORE core.clj, where the defmulti itself lives.
+    src = '(defmethod print-method :default [x w]' // &
+         ' (. w append (if *print-readably*' // &
+         '               (clotran.native/pr-str x)' // &
+         '               (clotran.native/str x))) nil)'
+    ok = read_str(src, ast, err)
+    if (ok) discard = eval_form(ast, env)
+    if (has_error) then
+       write(*, '(A)') "warning: print-method default failed to install: " // pr_str(last_error_value)
        has_error = .false.
     end if
   end subroutine eval_core_bootstrap
@@ -361,6 +385,19 @@ contains
        if (head%tag == TAG_SYMBOL) then
           if (head%str_val == "def!" .or. head%str_val == "def") then
              val = eval_def(ast, env)
+             ! Real Clojure's `def` evaluates to the VAR, not the value
+             ! -- defmulti leans on it directly ((let [v (def name)]
+             ! (when-not (.hasRoot v) ...))), which is why every
+             ! defmulti was failing with ".hasRoot nil". mal's def!
+             ! keeps returning the value, as its own tests expect.
+             if (.not. has_error .and. head%str_val == "def") then
+                block
+                  type(cons_value) :: sym, var_val
+                  character(len=:), allocatable :: owner
+                  sym = list_first(list_rest(ast%list_val))
+                  if (ns_resolve_var(ns_current(), sym%str_val, var_val, owner)) val = var_val
+                end block
+             end if
              return
           else if (head%str_val == "defmacro") then
              val = eval_defmacro(ast, env)
@@ -392,7 +429,8 @@ contains
           else if (head%str_val == ".") then
              val = eval_dot(ast, env)
              return
-          else if (len(head%str_val) > 1 .and. head%str_val(1:1) == ".") then
+          else if (len(head%str_val) > 1 .and. head%str_val(1:1) == "." &
+               .and. head%str_val /= "..") then
              ! (.method obj args...) sugar for (. obj (method args...))
              ! -- real Clojure's reader-level rewrite for this, done
              ! here at eval time instead since clotran has no separate
@@ -640,12 +678,29 @@ contains
     do i = 1, n - 1
        block
          type(cons_value) :: discard
+         character(len=:), allocatable :: s
          discard = eval_form(forms(i), env)
+         ! Which forms of core.clj still fail is the project's running
+         ! coverage number, so CLOTRAN_DEBUG_LOAD=1 reports each one
+         ! rather than making this a hand-applied patch every time.
+         if (has_error .and. debug_load()) then
+            s = pr_str(forms(i))
+            print '(A,I0,A,A,A,A)', "[ERR] ", i, " | ", pr_str(last_error_value), " | ", s(1:min(len(s),70))
+            flush(6)
+         end if
        end block
        has_error = .false.
     end do
     ast = forms(n) ! tail position: the trampoline evaluates/reports this one normally
   end subroutine eval_load_file_head
+
+  function debug_load() result(on)
+    logical :: on
+    character(len=8) :: flag
+    integer :: n
+    call get_environment_variable("CLOTRAN_DEBUG_LOAD", flag, n)
+    on = (n > 0 .and. flag /= "0")
+  end function debug_load
 
   ! (in-ns 'name): switches *ns*, creating it (auto-referring
   ! clojure.core) if it doesn't exist yet. Real Clojure's `ns` macro
@@ -805,6 +860,17 @@ contains
        is_method_call = (n > 0)
     end if
 
+    ! A member name never carries a namespace: syntax-quote qualifies
+    ! every bare symbol it sees, member names included (defmethod's own
+    ! `(. ~multifn addMethod ...) arrives here as user/addMethod), and
+    ! real Clojure's compiler ignores that namespace for exactly this
+    ! reason -- HostExpr only ever munges the name part.
+    if (member_name%tag == TAG_SYMBOL) then
+       if (index(member_name%str_val, "/") > 0) then
+          member_name%str_val = member_name%str_val(index(member_name%str_val, "/", back=.true.) + 1:)
+       end if
+    end if
+
     if (target_form%tag == TAG_SYMBOL) then
        if (ns_exists(target_form%str_val)) then
           do i = 1, n
@@ -852,6 +918,19 @@ contains
        val = call_builtin("atom", [eval_form(list_first(rest), env)])
        return
     end if
+    if (cls%tag == TAG_SYMBOL .and. cls%str_val == "clojure.lang.Reduced") then
+       ! (reduced x) is (clojure.lang.Reduced. x) -- a box reduce
+       ! recognises as "stop here". Reuses atom_val, so deref already
+       ! reads it back out.
+       block
+         type(cons_value) :: inner
+         inner = eval_form(list_first(rest), env)
+         if (has_error) return
+         val = atom_new(inner)
+         val%tag = TAG_REDUCED
+       end block
+       return
+    end if
     if (cls%tag == TAG_SYMBOL .and. cls%str_val == "clojure.lang.LazySeq") then
        ! core.clj's own `lazy-seq` macro is literally
        ! (new clojure.lang.LazySeq (fn* [] body...)). Build the real
@@ -869,7 +948,23 @@ contains
        end block
        return
     end if
-    if (cls%tag == TAG_SYMBOL .and. cls%str_val == "StringBuilder") then
+    if (cls%tag == TAG_SYMBOL .and. cls%str_val == "clojure.lang.MultiFn") then
+       ! core.clj's defmulti expands to (new clojure.lang.MultiFn name
+       ! dispatch-fn default hierarchy). The name is only for printing
+       ! and the hierarchy isn't supported (see apply_multifn), so only
+       ! the dispatch fn and the default dispatch value are kept.
+       block
+         type(cons_value) :: dispatch_fn, default_val
+         dispatch_fn = eval_form(nth_form(rest, 2), env)
+         if (has_error) return
+         default_val = eval_form(nth_form(rest, 3), env)
+         if (has_error) return
+         val = multifn_new(dispatch_fn, default_val)
+       end block
+       return
+    end if
+    if (cls%tag == TAG_SYMBOL .and. &
+         (cls%str_val == "StringBuilder" .or. cls%str_val == "java.io.StringWriter")) then
        ! core.clj's own multi-arg `str` is (new StringBuilder (str x))
        ! -- a real, mutable StringBuilder, appended to and read back via
        ! .append/.toString (see eval_instance_call).
@@ -1082,6 +1177,111 @@ contains
           return
        end select
     end if
+    if (target%tag == TAG_VAR) then
+       ! clojure.lang.Var's own methods, as core.clj calls them: defmulti
+       ! checks .hasRoot, alter-var-root is .alterRoot, and the
+       ! metadata ones back alter-meta!/reset-meta!. Var metadata isn't
+       ! tracked here (see Namespace.f90), so those answer nil rather
+       ! than pretending -- enough for core.clj's own uses, which only
+       ! ever set docstrings.
+       select case (method_name)
+       case ("hasRoot", "isBound")
+          block
+            type(cons_value) :: root
+            root = atom_deref(target)
+            val%tag = TAG_BOOL
+            val%bool_val = (root%tag /= TAG_NIL)
+          end block
+          return
+       case ("alterMeta", "setMeta", "resetMeta", "setDynamic")
+          val%tag = TAG_NIL
+          return
+       case ("toSymbol")
+          val%tag = TAG_SYMBOL
+          val%str_val = target%str_val
+          return
+       case ("bindRoot")
+          if (size(args) >= 1) then
+             call atom_reset(target, args(1))
+             val = args(1)
+          end if
+          return
+       case ("alterRoot")
+          ! (.alterRoot v f args) -- root becomes (apply f root args).
+          if (size(args) >= 1) then
+             block
+               type(cons_value), allocatable :: call_args2(:)
+               type(cons_value) :: extra, newv
+               integer :: k, extra_n
+               extra = nilv_const()
+               extra_n = 0
+               if (size(args) >= 2) extra_n = rt_count(args(2))
+               allocate(call_args2(1 + extra_n))
+               call_args2(1) = atom_deref(target)
+               if (extra_n > 0) then
+                  extra = rt_seq(args(2))
+                  do k = 1, extra_n
+                     call_args2(k + 1) = rt_first(extra)
+                     extra = rt_next(extra)
+                  end do
+               end if
+               newv = apply_fn(args(1), call_args2)
+               if (has_error) return
+               call atom_reset(target, newv)
+               val = newv
+             end block
+          end if
+          return
+       end select
+    end if
+    if (target%tag == TAG_MULTIFN) then
+       ! clojure.lang.MultiFn's own methods, as core.clj calls them:
+       ! defmethod is .addMethod, remove-method/remove-all-methods are
+       ! .removeMethod/.reset, methods/get-method read the table.
+       select case (method_name)
+       case ("addMethod")
+          if (size(args) >= 2) then
+             call multifn_put(target, "methods", &
+                  multifn_assoc(multifn_get(target, "methods"), args(1), args(2)))
+          end if
+          val = target
+          return
+       case ("removeMethod")
+          if (size(args) >= 1) then
+             block
+               type(cons_value) :: table
+               table = multifn_get(target, "methods")
+               table%map_val = array_map_dissoc(table%map_val, args(1))
+               call multifn_put(target, "methods", table)
+             end block
+          end if
+          val = target
+          return
+       case ("reset")
+          call multifn_put(target, "methods", empty_map())
+          val = target
+          return
+       case ("getMethodTable")
+          val = multifn_get(target, "methods")
+          return
+       case ("getMethod")
+          if (size(args) >= 1) val = rt_get(multifn_get(target, "methods"), args(1))
+          return
+       case ("preferMethod")
+          ! No hierarchy here, so nothing to prefer -- see apply_multifn.
+          val = target
+          return
+       end select
+    end if
+    if (method_name == "alterMeta" .or. method_name == "resetMeta" .or. &
+         method_name == "setMeta") then
+       val%tag = TAG_NIL ! namespace/var metadata isn't tracked; core.clj only sets docstrings
+       return
+    end if
+    if (method_name == "printStackTrace") then
+       val%tag = TAG_NIL ! no stack traces here; core.clj only calls it while reporting
+       return
+    end if
     if (method_name == "disjoin" .and. target%tag == TAG_SET .and. size(args) >= 1) then
        ! core.clj's own disj is (. set (disjoin k)).
        call_args(1) = target
@@ -1113,13 +1313,34 @@ contains
        val = atom_deref(target)
        return
     end if
-    if (method_name == "append" .and. target%tag == TAG_STRING_BUILDER .and. size(args) >= 1) then
+    if ((method_name == "append" .or. method_name == "write") .and. target%tag == TAG_NIL) then
+       ! *out*'s default binding is nil, meaning the console itself --
+       ! there's no real Writer object here (see clotran.clj). Every
+       ! print path in core.clj bottoms out in (. *out* (append s)), so
+       ! this is what actually puts characters on the screen.
+       if (size(args) >= 1) write(*, '(A)', advance='no') pr_str(args(1), .false.)
+       val%tag = TAG_NIL
+       return
+    end if
+    if (method_name == "flush" .and. target%tag == TAG_NIL) then
+       flush(6)
+       val%tag = TAG_NIL
+       return
+    end if
+    if (method_name == "getClass") then
+       val = builtin_class(target)
+       return
+    end if
+    if ((method_name == "append" .or. method_name == "write") .and. &
+         target%tag == TAG_STRING_BUILDER .and. size(args) >= 1) then
        ! Mutates in place AND returns the same StringBuilder, matching
        ! real Java (chained/recurred on, e.g. core.clj's own `str`).
+       ! java.io.StringWriter is the same object here -- with-out-str
+       ! binds *out* to one and reads it back with (str s#).
        block
          type(cons_value) :: cur
          cur = atom_deref(target)
-         cur%str_val = cur%str_val // args(1)%str_val
+         cur%str_val = cur%str_val // pr_str(args(1), .false.)
          call atom_reset(target, cur)
        end block
        val = target
@@ -1865,6 +2086,7 @@ contains
        ! (.method obj args...) sugar for (. obj (method args...)) --
        ! see eval_form's dispatch -- covers any name, not a fixed list.
        yes = (len(name) > 1 .and. name(1:1) == ".")
+       if (name == "..") yes = .false. ! core.clj's own chaining macro, not interop sugar
     end select
   end function is_special_form
 
@@ -1939,6 +2161,18 @@ contains
        v = sym ! already qualified
        return
     end if
+    ! A class name survives untouched: real Clojure's syntax quote
+    ! resolves symbols through the compiler, and a symbol naming a
+    ! class (imported, or dotted and fully qualified) resolves to the
+    ! class itself, not to a var in the current namespace. Without an
+    ! import table the reachable approximation is Java's own naming
+    ! convention -- dotted, or leading capital -- which is what
+    ! core.clj's own templates rely on (`(new clojure.lang.MultiFn ...)
+    ! inside defmulti, `(throw (Exception. ...)) elsewhere).
+    if (names_a_class(name)) then
+       v = sym
+       return
+    end if
     found = ns_resolve(ns_current(), name, resolved, owner)
     if (found) then
        v = mk_symbol(owner // "/" // name)
@@ -1946,6 +2180,14 @@ contains
        v = mk_symbol(ns_name_of(ns_current()) // "/" // name)
     end if
   end function qq_symbol
+
+  pure function names_a_class(name) result(yes)
+    character(len=*), intent(in) :: name
+    logical :: yes
+    yes = .false.
+    if (len(name) == 0) return
+    yes = (index(name, ".") > 0) .or. (name(1:1) >= "A" .and. name(1:1) <= "Z")
+  end function names_a_class
 
   function is_splice_unquote(e) result(yes)
     type(cons_value), intent(in) :: e
@@ -2220,6 +2462,8 @@ contains
        else
           val = rt_nth(f, args(1)%int_val)
        end if
+    case (TAG_MULTIFN)
+       val = apply_multifn(f, args)
     case default
        call eval_error("not a function: " // pr_str(f))
     end select
@@ -2302,6 +2546,10 @@ contains
     end do
     out = make_list(items)
   end function realize_to_list
+
+  function nilv_const() result(v)
+    type(cons_value) :: v
+  end function nilv_const
 
   function make_list(items) result(val)
     type(cons_value), intent(in) :: items(:)
@@ -2684,6 +2932,38 @@ contains
 
   ! (pr-str x ...): each arg's readable form, space-separated, as one
   ! string (not printed).
+  ! (class x) -- real Clojure hands back a java.lang.Class; there are
+  ! no classes here, so the answer is the keyword naming the type,
+  ! which is what it's actually used for (print-method's own dispatch
+  ! function, and error messages). A keyword, not a symbol, so it
+  ! can't be mistaken for something resolvable.
+  function builtin_class(v) result(val)
+    type(cons_value), intent(in) :: v
+    type(cons_value) :: val
+    val%tag = TAG_KEYWORD
+    select case (v%tag)
+    case (TAG_NIL);            val%tag = TAG_NIL ! (class nil) is nil in real Clojure too
+    case (TAG_BOOL);           val%str_val = "java.lang.Boolean"
+    case (TAG_INT);            val%str_val = "java.lang.Long"
+    case (TAG_REAL);           val%str_val = "java.lang.Double"
+    case (TAG_STRING);         val%str_val = "java.lang.String"
+    case (TAG_CHAR);           val%str_val = "java.lang.Character"
+    case (TAG_SYMBOL);         val%str_val = "clojure.lang.Symbol"
+    case (TAG_KEYWORD);        val%str_val = "clojure.lang.Keyword"
+    case (TAG_LIST);           val%str_val = "clojure.lang.PersistentList"
+    case (TAG_VECTOR);         val%str_val = "clojure.lang.PersistentVector"
+    case (TAG_HASHMAP);        val%str_val = "clojure.lang.PersistentHashMap"
+    case (TAG_SET);            val%str_val = "clojure.lang.PersistentHashSet"
+    case (TAG_LAZYSEQ);        val%str_val = "clojure.lang.LazySeq"
+    case (TAG_VAR);            val%str_val = "clojure.lang.Var"
+    case (TAG_ATOM);           val%str_val = "clojure.lang.Atom"
+    case (TAG_REDUCED);        val%str_val = "clojure.lang.Reduced"
+    case (TAG_MULTIFN);        val%str_val = "clojure.lang.MultiFn"
+    case (TAG_STRING_BUILDER); val%str_val = "java.io.StringWriter"
+    case default;              val%str_val = "clojure.lang.AFn"
+    end select
+  end function builtin_class
+
   function builtin_pr_str(args) result(val)
     type(cons_value), intent(in) :: args(:)
     type(cons_value) :: val
@@ -2722,6 +3002,96 @@ contains
   end function time_ms
 
   ! (get m key), falling back to an optional not-found default.
+  ! --- clojure.lang.MultiFn ---
+  !
+  ! A multimethod is a dispatch function plus one mutable table of
+  ! {dispatch-value -> method}. Both live in a plain hash-map inside
+  ! the TAG_MULTIFN's atom box, so defmethod mutates the box the same
+  ! way (reset! a) mutates an atom -- every holder of the multifn sees
+  ! the new method, which is exactly what defmethod has to do.
+  !
+  ! Dispatch is exact-match, then :default. Real Clojure also walks
+  ! the global hierarchy (isa?) and consults prefer-method; neither is
+  ! here yet, so a derived dispatch value won't find its parent's
+  ! method.
+  function multifn_new(dispatch_fn, default_val) result(val)
+    type(cons_value), intent(in) :: dispatch_fn, default_val
+    type(cons_value) :: val
+    type(cons_value) :: m
+
+    m = multifn_assoc(multifn_assoc(empty_map(), mk_keyword("dispatch"), dispatch_fn), &
+         mk_keyword("default"), default_val)
+    m = multifn_assoc(m, mk_keyword("methods"), empty_map())
+    val = atom_new(m)
+    val%tag = TAG_MULTIFN
+  end function multifn_new
+
+  function empty_map() result(v)
+    type(cons_value) :: v
+    v%tag = TAG_HASHMAP
+    allocate(v%map_val)
+    v%map_val = array_map_empty()
+  end function empty_map
+
+  function mk_keyword(name) result(v)
+    character(len=*), intent(in) :: name
+    type(cons_value) :: v
+    v%tag = TAG_KEYWORD
+    v%str_val = name
+  end function mk_keyword
+
+  ! Never m = array_map_assoc(m, ...) in place -- see make_hashmap.
+  function multifn_assoc(m, k, v) result(out)
+    type(cons_value), intent(in) :: m, k, v
+    type(cons_value) :: out
+    type(array_map_t) :: next_m
+    next_m = array_map_assoc(m%map_val, k, v)
+    out%tag = TAG_HASHMAP
+    allocate(out%map_val)
+    out%map_val = next_m
+  end function multifn_assoc
+
+  function multifn_get(mf, field) result(val)
+    type(cons_value), intent(in) :: mf
+    character(len=*), intent(in) :: field
+    type(cons_value) :: val
+    type(cons_value) :: box
+    box = atom_deref(mf)
+    val = rt_get(box, mk_keyword(field))
+  end function multifn_get
+
+  subroutine multifn_put(mf, field, val)
+    type(cons_value), intent(in) :: mf
+    character(len=*), intent(in) :: field
+    type(cons_value), intent(in) :: val
+    type(cons_value) :: box
+    box = atom_deref(mf)
+    call atom_reset(mf, multifn_assoc(box, mk_keyword(field), val))
+  end subroutine multifn_put
+
+  recursive function apply_multifn(mf, args) result(val)
+    type(cons_value), intent(in) :: mf
+    type(cons_value), intent(in) :: args(:)
+    type(cons_value) :: val
+    type(cons_value) :: dv, table, method, dflt
+
+    dv = apply_fn(multifn_get(mf, "dispatch"), args)
+    if (has_error) return
+    table = multifn_get(mf, "methods")
+    if (array_map_contains(table%map_val, dv)) then
+       method = rt_get(table, dv)
+    else
+       dflt = multifn_get(mf, "default")
+       if (array_map_contains(table%map_val, dflt)) then
+          method = rt_get(table, dflt)
+       else
+          call eval_error("No method in multimethod for dispatch value: " // pr_str(dv))
+          return
+       end if
+    end if
+    val = apply_fn(method, args)
+  end function apply_multifn
+
   function map_lookup(m, key, default_arg) result(val)
     type(cons_value), intent(in) :: m, key
     type(cons_value), intent(in) :: default_arg(:)
@@ -2771,6 +3141,54 @@ contains
        val = num_shift_right(args)
     case ("unsigned-bit-shift-right")
        val = num_ushift_right(args)
+    case ("subvec")
+       ! (subvec v start end), end exclusive -- clojure.lang.RT/subvec.
+       block
+         type(cons_value), allocatable :: items(:)
+         integer :: k, lo, hi
+         lo = args(2)%int_val
+         hi = rt_count(args(1))
+         if (size(args) >= 3) hi = args(3)%int_val
+         if (hi < lo) hi = lo
+         allocate(items(hi - lo))
+         do k = 1, hi - lo
+            items(k) = rt_nth(args(1), lo + k - 1)
+         end do
+         val = make_vector(items)
+       end block
+    case ("find-ns-sym")
+       ! clojure.lang.Namespace/find -- a namespace is represented by
+       ! its own name symbol here (there's no first-class Namespace
+       ! value; *ns* is a symbol too, see Namespace.f90).
+       if (ns_exists(args(1)%str_val)) then
+          val%tag = TAG_SYMBOL
+          val%str_val = args(1)%str_val
+       else
+          val%tag = TAG_NIL
+       end if
+    case ("create-ns-sym")
+       block
+         type(ns_ref) :: made
+         made = ns_find_or_create(args(1)%str_val)
+         val%tag = TAG_SYMBOL
+         val%str_val = args(1)%str_val
+       end block
+    case ("all-ns-syms")
+       block
+         character(len=:), allocatable :: names(:)
+         type(cons_value), allocatable :: syms(:)
+         integer :: k
+         call ns_all_names(names)
+         allocate(syms(size(names)))
+         do k = 1, size(names)
+            syms(k)%tag = TAG_SYMBOL
+            syms(k)%str_val = trim(names(k))
+         end do
+         val = make_list(syms)
+       end block
+    case ("reduced?")
+       val%tag = TAG_BOOL
+       val%bool_val = (args(1)%tag == TAG_REDUCED)
     case ("next-id")
        ! clojure.lang.RT/nextID -- gensym's own source of uniqueness
        ! (real core.clj: (symbol (str prefix (. clojure.lang.RT
@@ -2950,18 +3368,21 @@ contains
              ! collections/keywords that are functions of their contents.
              val%bool_val = (args(2)%tag == TAG_FN .or. args(2)%tag == TAG_BUILTIN .or. &
                   args(2)%tag == TAG_KEYWORD .or. args(2)%tag == TAG_HASHMAP .or. &
-                  args(2)%tag == TAG_SET .or. args(2)%tag == TAG_VECTOR)
+                  args(2)%tag == TAG_SET .or. args(2)%tag == TAG_VECTOR .or. &
+                  args(2)%tag == TAG_MULTIFN)
+          case ("clojure.lang.MultiFn")
+             val%bool_val = (args(2)%tag == TAG_MULTIFN)
           case ("clojure.lang.IPersistentCollection", "clojure.lang.Seqable")
              val%bool_val = (args(2)%tag == TAG_LIST .or. args(2)%tag == TAG_VECTOR .or. &
                   args(2)%tag == TAG_HASHMAP .or. args(2)%tag == TAG_SET)
           case ("clojure.lang.Associative")
              val%bool_val = (args(2)%tag == TAG_HASHMAP .or. args(2)%tag == TAG_VECTOR)
+          case ("clojure.lang.Reduced")
+             val%bool_val = (args(2)%tag == TAG_REDUCED)
           case ("clojure.lang.Named")
              val%bool_val = (args(2)%tag == TAG_SYMBOL .or. args(2)%tag == TAG_KEYWORD)
           case ("Character")
-             ! No char type here -- the reader makes one-character
-             ! strings, and seq over a string yields those.
-             val%bool_val = .false.
+             val%bool_val = (args(2)%tag == TAG_CHAR)
           case default
              ! A clojure.lang.* interface clotran genuinely has no
              ! analogue for (IChunkedSeq, MultiFn, ...): "no, this
@@ -3045,6 +3466,8 @@ contains
        val = builtin_dissoc(args)
     case ("str")
        val = builtin_str(args)
+    case ("class")
+       val = builtin_class(args(1))
     case ("pr-str")
        val = builtin_pr_str(args)
     case ("println")

@@ -245,7 +245,7 @@ program eval_test
   ! invisibly, not an unevaluated list sitting where def expects a
   ! symbol -- pervasive in real clojure/core.clj's own bootstrap.
   call expect_result("24j. ^META on a def's name reads as a bare symbol: ", env, &
-       '(def ^{:doc "x"} tagged-name 42)', "42", all_ok)
+       '(def ^{:doc "x"} tagged-name 42)', "#'user/tagged-name", all_ok)
   call expect_result("24j'. ...still correctly bound, not lost: ", env, &
        "tagged-name", "42", all_ok)
   call expect_result("24k. ^META on a fn*'s self-reference name works too: ", env, &
@@ -256,8 +256,8 @@ program eval_test
        "(list (fn? +) (fn? cond) (macro? cond) (macro? +))", "(true false true false)", all_ok)
   call expect_result("24h. conj is variadic, left to right: ", env, &
        "(list (conj (list 2 3) 4 5 6) (conj [2 3] 4 5 6))", "((6 5 4 2 3) [2 3 4 5 6])", all_ok)
-  call expect_result("24i. seq on a string splits into one-char strings: ", env, &
-       '(seq "abc")', '("a" "b" "c")', all_ok)
+  call expect_result("24i. seq on a string splits into characters: ", env, &
+       '(seq "abc")', '(\a \b \c)', all_ok)
 
   ! 25. Reader conditionals: #?(:cljf a :clj b) reads as whichever
   ! branch matches this host's own feature key, first match wins.
@@ -283,12 +283,12 @@ program eval_test
   ! 26. Multi-arity fn*: (fn* name? ([p1] b1) ([p2] b2) ...), dispatched
   ! by argument count, same as real Clojure's own fn*/fn.
   call expect_result("26a. dispatches by argument count: ", env, &
-       "(def multi (fn* ([] :zero) ([a] :one) ([a b] :two)))", "#<fn>", all_ok)
+       "(def multi (fn* ([] :zero) ([a] :one) ([a b] :two)))", "#'user/multi", all_ok)
   call expect_result("26a'. ...zero args: ", env, "(multi)", ":zero", all_ok)
   call expect_result("26a''. ...one arg: ", env, "(multi 1)", ":one", all_ok)
   call expect_result("26a'''. ...two args: ", env, "(multi 1 2)", ":two", all_ok)
   call expect_result("26b. a variadic clause matches anything at or above its minimum: ", env, &
-       "(def variadic-multi (fn* ([a] :one) ([a b & c] (count c))))", "#<fn>", all_ok)
+       "(def variadic-multi (fn* ([a] :one) ([a b & c] (count c))))", "#'user/variadic-multi", all_ok)
   call expect_result("26b'. ...exact fixed arity still wins over a variadic clause: ", env, &
        "(variadic-multi 1)", ":one", all_ok)
   call expect_result("26b''. ...variadic collects everything past its required params: ", env, &
@@ -373,6 +373,64 @@ program eval_test
        "(do (defn dv-read [] *dv*) (list (binding [*dv* 7] (dv-read)) (dv-read)))", "(7 1)", all_ok)
   call expect_result("32d. nested bindings restore one level at a time: ", env, &
        "(binding [*dv* 1] (list (binding [*dv* 2] *dv*) *dv*))", "(2 1)", all_ok)
+
+  ! 33. Character literals: a real type of their own, not a
+  ! one-character string -- so (= \a "a") is false, same as Clojure.
+  call expect_result("33a. a bare character literal: ", env, "\a", "\a", all_ok)
+  call expect_result("33b. the named characters: ", env, &
+       "[\space \newline \tab]", "[\space \newline \tab]", all_ok)
+  call expect_result("33c. ...including ones that aren't regular symbol characters: ", env, &
+       "[\/ \( \]]", "[\/ \( \]]", all_ok)
+  call expect_result("33d. a character is not the one-character string: ", env, &
+       '(list (= \a \a) (= \a "a") (char? \a) (string? \a))', "(true false true false)", all_ok)
+  call expect_result("33e. ...and str still renders it as its own text: ", env, &
+       "(str \a \b)", '"ab"', all_ok)
+  call expect_result("33f. characters work as map keys: ", env, &
+       "(get {\a 1 \b 2} \b)", "2", all_ok)
+
+  ! 34. #_ discards exactly the next form, wherever it appears.
+  call expect_result("34a. mid-collection: ", env, "[1 #_2 3]", "[1 3]", all_ok)
+  call expect_result("34b. ...even when the discarded form is a whole list: ", env, &
+       "(+ 1 #_(/ 1 0) 2)", "3", all_ok)
+  call expect_result("34c. ...and it doesn't need whitespace after it: ", env, &
+       "#_x :kept", ":kept", all_ok)
+
+  ! 35. Multimethods: defmulti builds a real clojure.lang.MultiFn,
+  ! defmethod mutates its table in place, dispatch falls back to
+  ! :default. No hierarchy (isa?) dispatch yet -- see apply_multifn.
+  call expect_result("35a. dispatches on the dispatch fn's value: ", env, &
+       "(do (defmulti shape-area :shape)" // &
+       "    (defmethod shape-area :square [s] (* (:side s) (:side s)))" // &
+       "    (shape-area {:shape :square :side 4}))", "16", all_ok)
+  call expect_result("35b. a later defmethod is seen by the same multifn: ", env, &
+       "(do (defmethod shape-area :line [s] 0) (shape-area {:shape :line}))", "0", all_ok)
+  call expect_result("35c. :default catches everything unmatched: ", env, &
+       "(do (defmethod shape-area :default [s] :dunno) (shape-area {:shape :blob}))", ":dunno", all_ok)
+  call expect_result("35d. methods exposes the table, remove-method prunes it: ", env, &
+       "(do (remove-method shape-area :line)" // &
+       "    (contains? (methods shape-area) :line))", "false", all_ok)
+  call expect_result("35e. no matching method and no :default is an error: ", env, &
+       "(do (defmulti no-default (fn [x] x))" // &
+       "    (try (no-default 1) (catch Throwable e (str e))))", &
+       '"No method in multimethod for dispatch value: 1"', all_ok)
+
+  ! 36. core.clj's own printing stack, end to end: pr-str goes through
+  ! with-out-str -> a StringWriter bound to *out* -> pr -> pr-on ->
+  ! the print-method multimethod. Every link has to work for any of it
+  ! to (see eval_core_bootstrap's :default method).
+  call expect_result("36a. pr-str is readable, space-separated: ", env, &
+       '(pr-str [1 "x" :k])', '"[1 \"x\" :k]"', all_ok)
+  call expect_result("36b. print-str is the display form instead: ", env, &
+       '(print-str "x" \y)', '"x y"', all_ok)
+  call expect_result("36c. with-out-str captures what's written to *out*: ", env, &
+       '(with-out-str (pr :a) (pr :b))', '":a:b"', all_ok)
+  call expect_result("36d. a later defmethod overrides the default for one type: ", env, &
+       '(do (defmethod print-method clojure.lang.Keyword [x w] (. w append "K"))' // &
+       '    (let [out (pr-str :anything)]' // &
+       '      (remove-method print-method clojure.lang.Keyword)' // & ! put it back, see 25g
+       '      out))', '"K"', all_ok)
+  call expect_result("36d'. ...and removing it falls back to the default again: ", env, &
+       '(pr-str :anything)', '":anything"', all_ok)
 
   if (all_ok) then
      print *, ""

@@ -46,6 +46,12 @@ contains
        else
           str = v%str_val
        end if
+    case (TAG_CHAR)
+       if (r) then
+          str = stringify_char(v%str_val)
+       else
+          str = v%str_val
+       end if
     case (TAG_SYMBOL)
        str = v%str_val
     case (TAG_KEYWORD)
@@ -74,6 +80,19 @@ contains
        str = "(atom " // pr_str(atom_deref(v), r) // ")"
     case (TAG_VAR)
        str = "#'" // v%str_val
+    case (TAG_MULTIFN)
+       str = "#<multifn>"
+    case (TAG_STRING_BUILDER)
+       ! What (str sb) has to give back -- with-out-str reads its
+       ! StringWriter that way, and a builder's "value" is its text.
+       block
+         type(cons_value) :: held ! not atom_deref(v)%str_val -- see NOTES.md
+         held = atom_deref(v)
+         str = ""
+         if (allocated(held%str_val)) str = held%str_val
+       end block
+    case (TAG_REDUCED)
+       str = "#<reduced " // pr_str(atom_deref(v), r) // ">"
     case (TAG_LAZYSEQ)
        ! Printing realizes the whole seq, same as real Clojure without
        ! *print-length* -- printing an infinite one doesn't terminate
@@ -165,6 +184,36 @@ contains
     write(temp, '(F0.2)') r
     str = trim(adjustl(temp))
   end function stringify_real
+
+  ! The inverse of the reader's read_char_literal: the named forms
+  ! print by name, everything else as the bare character after a '\'.
+  function stringify_char(c) result(str)
+    character(len=:), allocatable, intent(in) :: c
+    character(len=:), allocatable :: str
+    character :: ch
+
+    if (.not. allocated(c)) then
+       str = achar(92) // "space"
+       return
+    end if
+    ch = c(1:1)
+    select case (ch)
+    case (achar(10))
+       str = achar(92) // "newline"
+    case (" ")
+       str = achar(92) // "space"
+    case (achar(9))
+       str = achar(92) // "tab"
+    case (achar(13))
+       str = achar(92) // "return"
+    case (achar(12))
+       str = achar(92) // "formfeed"
+    case (achar(8))
+       str = achar(92) // "backspace"
+    case default
+       str = achar(92) // ch
+    end select
+  end function stringify_char
 
   function stringify_string(c) result(str)
     character(len=:), allocatable, intent(in) :: c

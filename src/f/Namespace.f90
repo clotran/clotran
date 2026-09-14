@@ -57,7 +57,7 @@ module Namespace
   public :: assignment(=), CORE_NS
   public :: ns_find_or_create, ns_exists, ns_intern, ns_resolve, ns_get_own
   public :: ns_get_own_var, ns_resolve_var
-  public :: ns_set_current, ns_current, ns_name_of
+  public :: ns_set_current, ns_current, ns_name_of, ns_all_names
 
 contains
 
@@ -277,6 +277,20 @@ contains
     type(ns_ref) :: ns
     ns = current
   end function ns_current
+
+  ! Every namespace's name, for clojure.lang.Namespace/all.
+  subroutine ns_all_names(names)
+    character(len=:), allocatable, intent(out) :: names(:)
+    integer :: i, w
+    w = 1
+    do i = 1, registry_count
+       if (len(registry(i)%ptr%name) > w) w = len(registry(i)%ptr%name)
+    end do
+    allocate(character(len=w) :: names(registry_count))
+    do i = 1, registry_count
+       names(i) = registry(i)%ptr%name
+    end do
+  end subroutine ns_all_names
 
   function ns_name_of(ns) result(name)
     type(ns_ref), intent(in) :: ns
