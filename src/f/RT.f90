@@ -243,7 +243,7 @@ contains
 
   ! (conj coll x): prepend for a list, append for a vector, list-of-one
   ! for nil (or anything else, for now).
-  function conj(coll, x) result(new_v)
+  recursive function conj(coll, x) result(new_v)
     type(cons_value), intent(in) :: coll, x
     type(cons_value) :: new_v
     type(cons_ref) :: base
@@ -268,6 +268,45 @@ contains
        else
           new_v%map_val = array_map_assoc(array_map_empty(), x, x)
        end if
+    case (TAG_HASHMAP)
+       ! (conj m e): e is an entry (a 2-element vector or map entry),
+       ! another map (all of its entries), or nil (no change) -- real
+       ! Clojure's own three cases. This used to fall through to the
+       ! list-cons default, which quietly turned (conj {} {:a 1}) into
+       ! ({:a 1}) and so broke merge, into, and everything built on
+       ! them.
+       new_v = coll
+       if (.not. allocated(new_v%map_val)) then
+          allocate(new_v%map_val)
+          new_v%map_val = array_map_empty()
+       end if
+       select case (x%tag)
+       case (TAG_NIL)
+          continue
+       case (TAG_HASHMAP)
+          if (allocated(x%map_val)) then
+             block
+               type(cons_value), allocatable :: ks(:), vs(:)
+               type(array_map_t) :: acc
+               integer :: i
+               call array_map_entries(x%map_val, ks, vs)
+               acc = new_v%map_val
+               do i = 1, size(ks)
+                  acc = array_map_assoc(acc, ks(i), vs(i))
+               end do
+               new_v%map_val = acc
+             end block
+          end if
+       case default
+          block
+            type(array_map_t) :: acc
+            acc = array_map_assoc(new_v%map_val, nth(x, 0), nth(x, 1))
+            new_v%map_val = acc
+          end block
+       end select
+    case (TAG_NIL)
+       ! (conj nil x) is (x), a list -- same as the default below.
+       call wrap_list_value(new_v, list_cons(x, list_empty()))
     case default
        call wrap_list_value(new_v, list_cons(x, list_empty()))
     end select
@@ -452,12 +491,16 @@ contains
     case (TAG_STRING, TAG_SYMBOL, TAG_KEYWORD, TAG_CHAR)
        eq = (b%tag == a%tag)
        if (eq) eq = (a%str_val == b%str_val)
-    case (TAG_LIST, TAG_VECTOR)
-       eq = (b%tag == TAG_LIST .or. b%tag == TAG_VECTOR) .and. (count(a) == count(b))
+    case (TAG_LIST, TAG_VECTOR, TAG_LAZYSEQ)
+       ! A lazy seq is sequential too, so it compares equal to a list or
+       ! vector with the same elements -- and stays a lazy seq as it's
+       ! walked, hence both tags in the loop.
+       eq = (b%tag == TAG_LIST .or. b%tag == TAG_VECTOR .or. b%tag == TAG_LAZYSEQ) &
+            .and. (count(a) == count(b))
        if (eq) then
           sa = seq(a)
           sb = seq(b)
-          do while (eq .and. sa%tag == TAG_LIST)
+          do while (eq .and. (sa%tag == TAG_LIST .or. sa%tag == TAG_LAZYSEQ))
              eq = equiv(first(sa), first(sb))
              sa = next(sa)
              sb = next(sb)

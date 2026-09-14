@@ -5,7 +5,7 @@ module Atom
   implicit none
   private
 
-  public :: atom_new, atom_p, atom_deref, atom_reset, var_dyn_push, var_dyn_pop, var_set
+  public :: atom_new, atom_p, atom_deref, atom_reset, var_dyn_push, var_dyn_pop, var_set, var_meta_get, var_meta_set
 
 contains
 
@@ -102,6 +102,25 @@ contains
     end if
     a%atom_val%ptr%val = v
   end subroutine var_set
+
+  ! A Var's metadata, shared by reference through the same node the
+  ! root lives in -- see var_meta in Values.f90.
+  function var_meta_get(a) result(m)
+    type(cons_value), intent(in) :: a
+    type(cons_value) :: m
+    if (.not. allocated(a%atom_val)) return
+    if (.not. associated(a%atom_val%ptr)) return
+    if (allocated(a%atom_val%ptr%var_meta)) m = a%atom_val%ptr%var_meta
+  end function var_meta_get
+
+  subroutine var_meta_set(a, m)
+    type(cons_value), intent(in) :: a
+    type(cons_value), intent(in) :: m
+    if (.not. allocated(a%atom_val)) return
+    if (.not. associated(a%atom_val%ptr)) return
+    if (.not. allocated(a%atom_val%ptr%var_meta)) allocate(a%atom_val%ptr%var_meta)
+    a%atom_val%ptr%var_meta = m
+  end subroutine var_meta_set
 
   ! pop-thread-bindings' job, per Var: undo the most recent push.
   subroutine var_dyn_pop(a)

@@ -22,7 +22,8 @@
 module Namespace
   use values
   use Atom, only: atom_new, atom_deref, atom_reset
-  use PersistentArrayMap, only: array_map_empty, array_map_get, array_map_assoc, array_map_contains
+  use PersistentArrayMap, only: array_map_empty, array_map_get, array_map_assoc, array_map_contains, &
+       array_map_entries
   implicit none
   private
 
@@ -32,6 +33,10 @@ module Namespace
      integer :: refcount = 0
      character(len=:), allocatable :: name
      type(array_map_t) :: bindings
+     ! (require '[clojure.template :as temp]) -- alias symbol to the
+     ! namespace it stands for, per namespace. A qualified symbol whose
+     ! own prefix names no namespace is looked up here before failing.
+     type(array_map_t) :: aliases
   end type ns_node
 
   type, public :: ns_ref
@@ -57,7 +62,7 @@ module Namespace
   public :: assignment(=), CORE_NS
   public :: ns_find_or_create, ns_exists, ns_intern, ns_resolve, ns_get_own
   public :: ns_get_own_var, ns_resolve_var
-  public :: ns_set_current, ns_current, ns_name_of, ns_all_names
+  public :: ns_set_current, ns_current, ns_name_of, ns_all_names, ns_mappings, ns_refer, ns_add_alias, ns_alias_target
 
 contains
 
@@ -155,6 +160,48 @@ contains
     ns%ptr%bindings = next_bindings
   end subroutine ns_intern
 
+  ! (. *ns* (addAlias sym target-ns)) -- what `alias`, and so
+  ! (:require ... :as x), bottoms out in.
+  subroutine ns_add_alias(ns, alias_name, target)
+    type(ns_ref), intent(in) :: ns
+    character(len=*), intent(in) :: alias_name, target
+    type(array_map_t) :: next_aliases
+    type(cons_value) :: target_val
+    if (.not. associated(ns%ptr)) return
+    target_val%tag = TAG_SYMBOL
+    target_val%str_val = target
+    next_aliases = array_map_assoc(ns%ptr%aliases, symbol_key(alias_name), target_val)
+    ns%ptr%aliases = next_aliases
+  end subroutine ns_add_alias
+
+  ! The namespace an alias stands for in ns, or "" if it is not one.
+  function ns_alias_target(ns, alias_name) result(target)
+    type(ns_ref), intent(in) :: ns
+    character(len=*), intent(in) :: alias_name
+    character(len=:), allocatable :: target
+    type(cons_value) :: key, hit
+    target = ""
+    if (.not. associated(ns%ptr)) return
+    key = symbol_key(alias_name)
+    if (.not. array_map_contains(ns%ptr%aliases, key)) return
+    hit = array_map_get(ns%ptr%aliases, key)
+    if (hit%tag == TAG_SYMBOL) target = hit%str_val
+  end function ns_alias_target
+
+  ! (. *ns* (refer sym var)): binds name to an EXISTING Var from
+  ! another namespace -- the same Var object, not a copy of its value,
+  ! so a later redefinition there is seen here too. That is what makes
+  ! `refer`/`use` an alias rather than a snapshot.
+  subroutine ns_refer(ns, name, the_var)
+    type(ns_ref), intent(in) :: ns
+    character(len=*), intent(in) :: name
+    type(cons_value), intent(in) :: the_var
+    type(array_map_t) :: next_bindings
+    if (.not. associated(ns%ptr)) return
+    next_bindings = array_map_assoc(ns%ptr%bindings, symbol_key(name), the_var)
+    ns%ptr%bindings = next_bindings
+  end subroutine ns_refer
+
   ! Only this namespace's own bindings -- no clojure.core fallback.
   ! Transparently derefs the Var: a bare symbol use auto-derefs,
   ! matching real Clojure (unlike an atom, which never does). See
@@ -209,8 +256,16 @@ contains
     slash = 0
     if (name /= "/") slash = index(name, "/")
     if (slash > 0) then
-       found = ns_get_own(ns_find_or_create(name(1:slash-1)), name(slash+1:), val)
-       if (found) owner = name(1:slash-1)
+       block
+         character(len=:), allocatable :: prefix
+         prefix = name(1:slash-1)
+         ! An alias stands in for a namespace name (see ns_add_alias).
+         if (.not. ns_exists(prefix)) then
+            if (len(ns_alias_target(ns, prefix)) > 0) prefix = ns_alias_target(ns, prefix)
+         end if
+         found = ns_get_own(ns_find_or_create(prefix), name(slash+1:), val)
+         if (found) owner = prefix
+       end block
        return
     end if
 
@@ -277,6 +332,19 @@ contains
     type(ns_ref) :: ns
     ns = current
   end function ns_current
+
+  ! A namespace's own bindings as symbol/Var pairs, for
+  ! clojure.lang.Namespace.getMappings (ns-interns/ns-publics, which
+  ! clojure.test walks to find the tests in a namespace).
+  subroutine ns_mappings(ns, names, vars)
+    type(ns_ref), intent(in) :: ns
+    type(cons_value), allocatable, intent(out) :: names(:), vars(:)
+    if (.not. associated(ns%ptr)) then
+       allocate(names(0), vars(0))
+       return
+    end if
+    call array_map_entries(ns%ptr%bindings, names, vars)
+  end subroutine ns_mappings
 
   ! Every namespace's name, for clojure.lang.Namespace/all.
   subroutine ns_all_names(names)

@@ -478,6 +478,63 @@ program eval_test
   call expect_result("38e. vec, which LazilyPersistentVector/create backs: ", env, &
        "(list (vec (list 1 2)) (vec [3]) (vec nil))", "([1 2] [3] [])", all_ok)
 
+  ! 39. Protocols, running real upstream core_deftype.clj.
+  call expect_result("39a. defprotocol interns its methods and names itself: ", env, &
+       "(defprotocol Greet (greet [x]) (greet2 [x y]))", "Greet", all_ok)
+  call expect_result("39b. extend-protocol dispatches on the first argument's type: ", env, &
+       '(do (extend-protocol Greet' // &
+       '      String (greet [x] (str "hi " x)) (greet2 [x y] [x y])' // &
+       '      Long   (greet [x] (* x 2))       (greet2 [x y] :long))' // &
+       '    (list (greet "bob") (greet 21) (greet2 "a" "b") (greet2 1 2)))', &
+       '("hi bob" 42 ["a" "b"] :long)', all_ok)
+  call expect_result("39c. satisfies? asks whether a type was extended: ", env, &
+       '(list (satisfies? Greet "x") (satisfies? Greet 1) (satisfies? Greet :kw))', &
+       "(true true false)", all_ok)
+  call expect_result("39d. extending Object is the catch-all: ", env, &
+       "(do (extend-protocol Greet Object (greet [x] :fallback)) (greet :kw))", ":fallback", all_ok)
+  call expect_result("39e. ...and a specific type still wins over it: ", env, &
+       "(greet 21)", "42", all_ok)
+  call expect_error("39f. an unextended protocol method is a clear error: ", env, &
+       "(do (defprotocol Unimpl (nope [x])) (nope 1))")
+  call expect_result("39g. extenders lists what was extended: ", env, &
+       "(count (extenders Greet))", "3", all_ok)
+
+  ! 40. More things real core.clj leans on, each found by a form of
+  ! core.clj or core_deftype.clj failing on it.
+  call expect_result("40a. conj on a map takes an entry, a map, or nil: ", env, &
+       "(list (conj {} {:a 1}) (conj {:x 0} [:a 1]) (conj {:x 0} nil) (merge {:x 0} {:a 1}))", &
+       "({:a 1} {:x 0 :a 1} {:x 0} {:x 0 :a 1})", all_ok)
+  call expect_result("40b. apply walks a lazy seq, not just a list: ", env, &
+       "(list (apply + (map inc [1 2 3])) (mapcat list [1 2]))", "(9 (1 2))", all_ok)
+  call expect_result("40c. = spans lazy seqs, lists and vectors: ", env, &
+       "(list (= (map inc [1 2]) [2 3]) (= (map inc [1 2]) '(2 3)))", "(true true)", all_ok)
+  call expect_result("40d. a map literal evaluates its keys as well as its values: ", env, &
+       "{(+ 1 1) (+ 1 2)}", "{2 3}", all_ok)
+  call expect_result("40e. transients build the same value: ", env, &
+       "(list (into {} [[:a 1]]) (into [] (list 1 2)) (set (list 1 2 1)))", &
+       "({:a 1} [1 2] #{1 2})", all_ok)
+  call expect_result("40f. auto-gensym is scoped per syntax-quote, not per expansion: ", env, &
+       "(let [outer `(let [x# 1] ~`(inc x#))]" // &
+       "  (= (first (second outer)) (second (nth outer 2))))", "false", all_ok)
+  call expect_result("40g. a Var is callable, forwarding to its root: ", env, &
+       "(do (def vf (fn [a] (* a 3))) ((var vf) 4))", "12", all_ok)
+
+  ! 41. A function's free symbols resolve in the namespace it was
+  ! DEFINED in, not whichever one happens to be current when it runs.
+  ! Real Clojure resolves symbols at compile time; without this, every
+  ! multi-namespace library breaks the moment it is called from
+  ! elsewhere -- clojure/core/protocols.clj could not find its own
+  ! seq-reduce, so reduce and into stopped working.
+  call expect_result("41a. a helper in another namespace still sees its own names: ", env, &
+       "(do (in-ns 'lib41)" // &
+       "    (def helper (fn [] :from-lib))" // &
+       "    (def caller (fn [] (helper)))" // &
+       "    (in-ns 'user)" // &
+       "    (lib41/caller))", ":from-lib", all_ok)
+  call expect_result("41b. ...even when the CALLING namespace shadows that name: ", env, &
+       "(do (def helper (fn [] :from-user)) (list (helper) (lib41/caller)))", &
+       "(:from-user :from-lib)", all_ok)
+
   if (all_ok) then
      print *, ""
      print *, "ALL EVAL CHECKS PASSED"

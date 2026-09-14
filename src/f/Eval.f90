@@ -22,11 +22,12 @@ module Eval
        num_bit_and, num_bit_or, num_bit_xor, num_bit_not, num_bit_and_not, &
        num_quot, num_rem, num_shift_left, num_shift_right, num_ushift_right
   use printer, only: pr_str
-  use Atom, only: atom_new, atom_p, atom_deref, atom_reset, var_dyn_push, var_dyn_pop, var_set
+  use Atom, only: atom_new, atom_p, atom_deref, atom_reset, var_dyn_push, var_dyn_pop, var_set, var_meta_get, var_meta_set
   use LispReader, only: read_str, read_top_level_forms
   use mal_readline, only: sys_readline => readline
   use Namespace, only: ns_ref, assignment(=), CORE_NS, ns_find_or_create, ns_exists, ns_intern, &
-       ns_resolve, ns_get_own, ns_set_current, ns_current, ns_name_of, ns_resolve_var, ns_all_names
+       ns_resolve, ns_get_own, ns_set_current, ns_current, ns_name_of, ns_resolve_var, ns_all_names, &
+       ns_get_own_var, ns_mappings, ns_refer, ns_add_alias, ns_alias_target
   implicit none
   private
 
@@ -113,6 +114,11 @@ contains
     call reg("hash")
     call reg("format")
     call reg("munge")
+    call reg("resolve-var-in")
+    call reg("find-entry")
+    call reg("intern-var")
+    call reg("find-var")
+    call reg("ns-mappings")
     call reg("concat")
     call reg("=")
     call reg(">")
@@ -425,10 +431,30 @@ contains
                type(cons_value) :: sym
                character(len=:), allocatable :: owner
                sym = list_first(list_rest(ast%list_val))
-               if (.not. ns_resolve_var(ns_current(), sym%str_val, val, owner)) then
+               if (.not. ns_resolve_var(resolution_ns(env), sym%str_val, val, owner)) then
                   call eval_error("Unable to resolve var: " // sym%str_val)
                end if
              end block
+             return
+          else if (head%str_val == "case*" .or. head%str_val == "clojure.core/case*") then
+             ! (case* expr shift mask default imap switch-type test-type
+             !  skip-check?) -- what core.clj's `case` compiles to. On
+             ! the JVM this becomes a tableswitch keyed by hash; here it
+             ! is a scan of imap, whose entries are
+             ! {hash [test-constant then-expr]}. A special form, not a
+             ! call, because imap's then-exprs must NOT be evaluated to
+             ! find the matching branch -- only the one that matches is.
+             ! O(number of clauses) instead of O(1); `case` stays
+             ! correct, just not faster than `cond` (see NOTES.md).
+             call eval_case_head(ast, env) ! rebinds ast to the chosen branch; tail
+             if (has_error) return
+             cycle
+          else if (head%str_val == "import*" .or. head%str_val == "clojure.core/import*") then
+             ! (import* "java.util.Date") -- on the JVM this adds a
+             ! class to the namespace's import table. A bare class name
+             ! already evaluates to the keyword naming it here (see
+             ! eval_symbol), so there is no table to add to.
+             val%tag = TAG_NIL
              return
           else if (head%str_val == "set!") then
              val = eval_set_bang(ast, env)
@@ -520,13 +546,31 @@ contains
              val = eval_ns(ast, env)
              return
           else if (head%str_val == "quasiquote") then
-             call gensym_reset()
-             val = qq_expand(list_first(list_rest(ast%list_val)), env)
+             ! Each syntax-quote FORM gets its own auto-gensym scope,
+             ! saved and restored around the expansion. A nested
+             ! syntax-quote (reached through an unquote, e.g.
+             ! core_deftype.clj's emit-method-builder, which maps a
+             ! template over arglists inside an outer template) is a
+             ! separate scope in real Clojure -- sharing one table let
+             ! the inner `f#` overwrite the outer's, so the outer
+             ! template's last reference to f# silently pointed at the
+             ! inner fn instead.
+             block
+               type(gensym_entry), allocatable :: saved(:)
+               integer :: saved_count
+               if (allocated(gensym_table)) call move_alloc(gensym_table, saved)
+               saved_count = gensym_count
+               gensym_count = 0
+               val = qq_expand(list_first(list_rest(ast%list_val)), env)
+               if (allocated(gensym_table)) deallocate(gensym_table)
+               if (allocated(saved)) call move_alloc(saved, gensym_table)
+               gensym_count = saved_count
+             end block
              return
           else if (head%str_val == "try*" .or. head%str_val == "try") then
              val = eval_try(ast, env)
              return
-          else if (resolves_to_macro(head%str_val, macro_val)) then
+          else if (resolves_to_macro(head%str_val, macro_val, env)) then
              ! Macros are namespace-level only, never lexically bound
              ! (real Clojure: macro-ness is Var metadata, never a local),
              ! so this checks *ns* directly, not env. Unevaluated arg
@@ -739,16 +783,68 @@ contains
   ! (it IS the root namespace), so any clauses after the name are
   ! silently ignored for now. A real, useful primitive on its own
   ! merits, not a one-off for this file.
-  function eval_ns(ast, env) result(val)
+  ! (ns name clause*): switches *ns*, then runs the library clauses.
+  !
+  ! Real Clojure's `ns` is a macro in core.clj, and delegating to it
+  ! once it exists was tried and reverted: core.clj loads its own
+  ! sibling files through (ns ...) forms, and the real macro's
+  ! expansion depends on machinery that is not up yet at that point.
+  ! This stays native, and handles the clauses by calling the very
+  ! functions the real macro would -- require/use/import/refer-clojure
+  ! -- each skipped if it is not defined yet, which is exactly the
+  ! bootstrap window.
+  recursive function eval_ns(ast, env) result(val)
     type(cons_value), intent(in) :: ast
     type(env_ref), intent(in) :: env
     type(cons_value) :: val
-    type(cons_value) :: name
+    type(cons_value) :: name, clause, kw
+    type(cons_ref) :: clauses
 
     name = list_first(list_rest(ast%list_val))
     call ns_set_current(ns_find_or_create(name%str_val))
     val = name
+
+    clauses = list_rest(list_rest(ast%list_val))
+    do while (list_count(clauses) > 0)
+       clause = list_first(clauses)
+       clauses = list_rest(clauses)
+       if (clause%tag /= TAG_LIST) cycle
+       if (list_count(clause%list_val) == 0) cycle
+       kw = list_first(clause%list_val)
+       if (kw%tag /= TAG_KEYWORD) cycle
+       select case (kw%str_val)
+       case ("require", "use", "import", "refer-clojure", "load")
+          call run_ns_clause(kw%str_val, list_rest(clause%list_val), env)
+          if (has_error) return
+       case default
+          continue ! :gen-class, :refer, metadata, docstrings -- nothing to do here
+       end select
+    end do
   end function eval_ns
+
+  ! Calls (clojure.core/<fname> 'arg ...) for one (:require ...)-style
+  ! clause. Every argument is quoted: these are specs, not expressions.
+  recursive subroutine run_ns_clause(fname, args_list, env)
+    character(len=*), intent(in) :: fname
+    type(cons_ref), intent(in) :: args_list
+    type(env_ref), intent(in) :: env
+    type(cons_value) :: f, quoted
+    type(cons_value), allocatable :: call_args(:)
+    type(cons_ref) :: l
+    character(len=:), allocatable :: owner
+    integer :: n, i
+
+    if (.not. ns_resolve(ns_find_or_create(CORE_NS), fname, f, owner)) return ! not defined yet: bootstrap
+    n = list_count(args_list)
+    allocate(call_args(n))
+    l = args_list
+    do i = 1, n
+       quoted = list_first(l)
+       call_args(i) = quoted ! already a literal spec, never evaluated
+       l = list_rest(l)
+    end do
+    quoted = apply_fn(f, call_args)
+  end subroutine run_ns_clause
 
   ! (.method obj args...) -> (. obj (method args...)). Head symbol
   ! keeps its own leading "." stripped off as the method name; obj and
@@ -841,6 +937,37 @@ contains
   ! the innermost dynamic binding if one is in effect, else the root
   ! (see var_set) -- core.clj's own (set! *warn-on-reflection* true) at
   ! the top of core_print.clj is the caller that needs it.
+  recursive subroutine eval_case_head(ast, env)
+    type(cons_value), intent(inout) :: ast
+    type(env_ref), intent(in) :: env
+    type(cons_value) :: tested, imap, default_form, entry
+    type(cons_value), allocatable :: keys(:), vals(:)
+    type(cons_ref) :: args
+    integer :: i
+
+    args = list_rest(ast%list_val)
+    tested = eval_form(list_first(args), env)
+    if (has_error) return
+    default_form = nth_form(args, 4)
+    imap = nth_form(args, 5)
+    if (imap%tag == TAG_HASHMAP) then
+       if (allocated(imap%map_val)) then
+          call array_map_entries(imap%map_val, keys, vals)
+          do i = 1, size(vals)
+             entry = vals(i)
+             if (entry%tag /= TAG_VECTOR) cycle
+             ! entry is [test-constant then-expr], both unevaluated;
+             ! a test constant is a literal, so it IS its own value.
+             if (rt_equiv(rt_nth(entry, 0), tested)) then
+                ast = rt_nth(entry, 1)
+                return
+             end if
+          end do
+       end if
+    end if
+    ast = default_form
+  end subroutine eval_case_head
+
   recursive function eval_set_bang(ast, env) result(val)
     type(cons_value), intent(in) :: ast
     type(env_ref), intent(in) :: env
@@ -851,13 +978,24 @@ contains
     target = list_first(list_rest(ast%list_val))
     v = eval_form(nth_form(list_rest(ast%list_val), 2), env)
     if (has_error) return
+    ! (set! (.field obj) v) / (set! (. obj field) v). The only mutable
+    ! host field clotran has is a function's own protocol method cache
+    ! (core_deftype.clj's (set! (.__methodImplCache f#) cache#)), and a
+    ! function carries it in the same atom_ref box a Var uses -- shared
+    ! by reference, so every copy of the fn sees it. obj has to be a
+    ! local: the box is attached by rebinding that binding, since a
+    ! cons_value is otherwise copied by value.
+    if (target%tag == TAG_LIST) then
+       val = eval_set_field(target, v, env)
+       return
+    end if
     if (target%tag /= TAG_SYMBOL) then
-       call eval_error("set!: only (set! var value) is supported")
+       call eval_error("set!: only (set! var value) and (set! (.field obj) value) are supported")
        return
     end if
     block
       type(cons_value) :: var_val
-      if (.not. ns_resolve_var(ns_current(), target%str_val, var_val, owner)) then
+      if (.not. ns_resolve_var(resolution_ns(env), target%str_val, var_val, owner)) then
          call eval_error("Unable to resolve var: " // target%str_val)
          return
       end if
@@ -865,6 +1003,63 @@ contains
     end block
     val = v
   end function eval_set_bang
+
+  recursive function eval_set_field(target, v, env) result(val)
+    type(cons_value), intent(in) :: target, v
+    type(env_ref), intent(in) :: env
+    type(cons_value) :: val
+    type(cons_value) :: head, obj_form, obj
+    character(len=:), allocatable :: field
+
+    val = v
+    head = list_first(target%list_val)
+    if (head%tag /= TAG_SYMBOL) then
+       call eval_error("set!: unsupported assignment target")
+       return
+    end if
+    if (head%str_val == ".") then
+       obj_form = nth_form(list_rest(target%list_val), 1)
+       block
+         type(cons_value) :: fld ! not nth_form(...)%str_val -- see NOTES.md
+         fld = nth_form(list_rest(target%list_val), 2)
+         field = fld%str_val
+       end block
+    else if (len(head%str_val) > 1 .and. head%str_val(1:1) == ".") then
+       obj_form = nth_form(list_rest(target%list_val), 1)
+       field = head%str_val(2:)
+    else
+       call eval_error("set!: unsupported assignment target")
+       return
+    end if
+    if (field /= "__methodImplCache") then
+       call eval_error("set!: no settable field '" // field // "'")
+       return
+    end if
+    if (obj_form%tag /= TAG_SYMBOL) then
+       call eval_error("set!: (set! (." // field // " obj) ...) needs obj to be a local")
+       return
+    end if
+    if (.not. env_find(env, obj_form, obj)) then
+       call eval_error("'" // obj_form%str_val // "' not found")
+       return
+    end if
+    block
+      type(cons_value) :: boxed
+      boxed = atom_new(v)
+      ! The component has to EXIST (ptr => null()) before assignment(=)
+      ! runs on it: atom_ref_assign releases the old target first, and
+      ! releasing an unallocated component reads uninitialized memory.
+      if (.not. allocated(obj%atom_val)) allocate(obj%atom_val)
+      obj%atom_val = boxed%atom_val
+    end block
+    call env_set(env, obj_form, obj)
+    ! A named fn also refers to itself from inside its own body. On the
+    ! JVM that self-reference and the local being assigned here are one
+    ! object, so the field has to land on both: core_deftype.clj sets
+    ! the cache on the outer local and reads it back through the
+    ! self-reference.
+    if (obj%tag == TAG_FN .and. allocated(obj%fn_val)) call env_rebind_fns(obj%fn_val%env, obj)
+  end function eval_set_field
 
   recursive function eval_dot(ast, env) result(val)
     type(cons_value), intent(in) :: ast
@@ -909,7 +1104,11 @@ contains
     ! reason -- HostExpr only ever munges the name part.
     if (member_name%tag == TAG_SYMBOL) then
        if (index(member_name%str_val, "/") > 0) then
-          member_name%str_val = member_name%str_val(index(member_name%str_val, "/", back=.true.) + 1:)
+          block
+            character(len=:), allocatable :: qualified ! never str = str(i:) in place -- see NOTES.md
+            qualified = member_name%str_val
+            member_name%str_val = qualified(index(qualified, "/", back=.true.) + 1:)
+          end block
        end if
     end if
 
@@ -960,6 +1159,16 @@ contains
        val = call_builtin("atom", [eval_form(list_first(rest), env)])
        return
     end if
+    if (cls%tag == TAG_SYMBOL .and. cls%str_val == "clojure.lang.Ref") then
+       ! A Ref is an Atom here. Refs exist for coordinated, transactional
+       ! change across several of them; clotran is single-threaded with
+       ! no STM, so a ref IS just a mutable box and dosync is "run the
+       ! body" (see LockingTransaction/runInTransaction in clotran.clj).
+       ! Real coordination has to come back when the concurrency model
+       ! does -- see NOTES.md.
+       val = call_builtin("atom", [eval_form(list_first(rest), env)])
+       return
+    end if
     if (cls%tag == TAG_SYMBOL .and. cls%str_val == "clojure.lang.Reduced") then
        ! (reduced x) is (clojure.lang.Reduced. x) -- a box reduce
        ! recognises as "stop here". Reuses atom_val, so deref already
@@ -987,6 +1196,34 @@ contains
          thunk = eval_form(list_first(rest), env)
          if (has_error) return
          val = rt_lazy_new(thunk)
+       end block
+       return
+    end if
+    if (cls%tag == TAG_SYMBOL .and. cls%str_val == "clojure.lang.MethodImplCache") then
+       block
+         type(cons_value) :: m, mp
+         m = multifn_assoc(empty_map(), mk_keyword("sym"), eval_form(nth_form(rest, 1), env))
+         if (has_error) return
+         m = multifn_assoc(m, mk_keyword("protocol"), eval_form(nth_form(rest, 2), env))
+         if (has_error) return
+         m = multifn_assoc(m, mk_keyword("methodk"), eval_form(nth_form(rest, 3), env))
+         if (has_error) return
+         if (list_count(rest) >= 4) then
+            mp = eval_form(nth_form(rest, 4), env)
+            if (has_error) return
+         else
+            mp = empty_map()
+         end if
+         val = multifn_assoc(m, mk_keyword("map"), mp)
+       end block
+       return
+    end if
+    if (cls%tag == TAG_SYMBOL .and. cls%str_val == "clojure.lang.MethodImplCache$Entry") then
+       block
+         type(cons_value) :: m
+         m = multifn_assoc(empty_map(), mk_keyword("c"), eval_form(nth_form(rest, 1), env))
+         if (has_error) return
+         val = multifn_assoc(m, mk_keyword("fn"), eval_form(nth_form(rest, 2), env))
        end block
        return
     end if
@@ -1078,7 +1315,7 @@ contains
   !    gets a chance to override it (clotran.clj only loads after all
   !    of core.clj does) -- just the existing meta/with-meta builtins,
   !    reached through dot-sugar instead of a bare call.
-  function eval_instance_call(target, method_name, args) result(val)
+  recursive function eval_instance_call(target, method_name, args) result(val)
     type(cons_value), intent(in) :: target
     character(len=*), intent(in) :: method_name
     type(cons_value), intent(in) :: args(:)
@@ -1190,6 +1427,11 @@ contains
           val%tag = TAG_INT
           val%int_val = len(target%str_val)
           return
+       case ("concat")
+          val%tag = TAG_STRING
+          val%str_val = target%str_val
+          if (size(args) >= 1) val%str_val = val%str_val // args(1)%str_val
+          return
        case ("charAt")
           ! Java is 0-based; the result is a Character, not a
           ! one-character String (core_print.clj's own String method
@@ -1246,7 +1488,10 @@ contains
           return
        end select
     end if
-    if (target%tag == TAG_VAR) then
+    ! Var's and Ref's methods together: both are the same mutable box
+    ! here (a Ref is an Atom, see eval_new), and alter/commute/set are
+    ! alterRoot/bindRoot under different names.
+    if (target%tag == TAG_VAR .or. target%tag == TAG_ATOM) then
        ! clojure.lang.Var's own methods, as core.clj calls them: defmulti
        ! checks .hasRoot, alter-var-root is .alterRoot, and the
        ! metadata ones back alter-meta!/reset-meta!. Var metadata isn't
@@ -1254,6 +1499,36 @@ contains
        ! than pretending -- enough for core.clj's own uses, which only
        ! ever set docstrings.
        select case (method_name)
+       case ("get", "deref", "getRawRoot")
+          val = atom_deref(target)
+          return
+       case ("isPublic")
+          ! A Var is public unless its own metadata says :private.
+          block
+            type(cons_value) :: m
+            m = var_meta_get(target)
+            val%tag = TAG_BOOL
+            val%bool_val = .true.
+            if (m%tag == TAG_HASHMAP) then
+               block
+                 type(cons_value) :: p
+                 p = rt_get(m, mk_keyword("private"))
+                 val%bool_val = (p%tag == TAG_NIL .or. (p%tag == TAG_BOOL .and. .not. p%bool_val))
+               end block
+            end if
+          end block
+          return
+       case ("isMacro")
+          val%tag = TAG_BOOL
+          val%bool_val = .false.
+          block
+            type(cons_value) :: root
+            root = atom_deref(target)
+            if (root%tag == TAG_FN) then
+               if (allocated(root%fn_val)) val%bool_val = root%fn_val%is_macro
+            end if
+          end block
+          return
        case ("hasRoot", "isBound")
           block
             type(cons_value) :: root
@@ -1262,17 +1537,97 @@ contains
             val%bool_val = (root%tag /= TAG_NIL)
           end block
           return
-       case ("alterMeta", "setMeta", "resetMeta", "setDynamic")
-          val%tag = TAG_NIL
+       case ("meta")
+          val = var_meta_get(target)
+          return
+       case ("setMeta", "resetMeta")
+          if (size(args) >= 1) call var_meta_set(target, args(1))
+          val = var_meta_get(target)
+          return
+       case ("alterMeta")
+          ! (.alterMeta v f args): meta becomes (apply f meta args).
+          ! Real Var metadata, shared by reference -- defn's
+          ! :arglists/:doc, ^:private and clojure.test's own :test all
+          ! ride on this, and clojure.test literally cannot find a
+          ! deftest without it.
+          if (size(args) >= 1) then
+             block
+               type(cons_value), allocatable :: meta_args(:)
+               type(cons_value) :: extra
+               integer :: k, extra_n
+               extra_n = 0
+               if (size(args) >= 2) extra_n = rt_count(args(2))
+               allocate(meta_args(1 + extra_n))
+               meta_args(1) = var_meta_get(target)
+               if (extra_n > 0) then
+                  extra = rt_seq(args(2))
+                  do k = 1, extra_n
+                     meta_args(k + 1) = rt_first(extra)
+                     extra = rt_next(extra)
+                  end do
+               end if
+               call var_meta_set(target, apply_fn(args(1), meta_args))
+               if (has_error) return
+             end block
+          end if
+          val = var_meta_get(target)
+          return
+       case ("setDynamic")
+          val = target
           return
        case ("toSymbol")
           val%tag = TAG_SYMBOL
           val%str_val = target%str_val
           return
+       case ("ns")
+          ! Var.ns -- the namespace the Var lives in, which here is
+          ! just its name symbol (see clotran.clj's Namespace block).
+          val%tag = TAG_SYMBOL
+          block
+            character(len=:), allocatable :: qualified ! never str = str(:i) in place -- see NOTES.md
+            qualified = target%str_val
+            if (index(qualified, "/") > 0) then
+               val%str_val = qualified(1:index(qualified, "/", back=.true.) - 1)
+            else
+               val%str_val = qualified
+            end if
+          end block
+          return
+       case ("sym")
+          ! Var.sym is the SIMPLE name (toSymbol is the qualified one).
+          ! -reset-methods keys a protocol's method cache by
+          ! (keyword (.sym v)), which has to match (keyword (:name s)).
+          val%tag = TAG_SYMBOL
+          block
+            character(len=:), allocatable :: qualified ! never str = str(i:) in place -- see NOTES.md
+            qualified = target%str_val
+            if (index(qualified, "/") > 0) then
+               val%str_val = qualified(index(qualified, "/", back=.true.) + 1:)
+            else
+               val%str_val = qualified
+            end if
+          end block
+          return
        case ("bindRoot")
           if (size(args) >= 1) then
              call atom_reset(target, args(1))
              val = args(1)
+          end if
+          return
+       case ("alter", "commute")
+          ! (. ref (alter fun args)) -- the ref's value becomes
+          ! (apply fun value args), exactly alterRoot's shape.
+          val = eval_instance_call(target, "alterRoot", args)
+          return
+       case ("touch")
+          val = atom_deref(target)
+          return
+       case ("set")
+          if (size(args) >= 1) then
+             call atom_reset(target, args(1))
+             val = args(1)
+          else
+             val = atom_deref(target)
           end if
           return
        case ("alterRoot")
@@ -1366,6 +1721,21 @@ contains
        val%tag = TAG_NIL ! namespace/var metadata isn't tracked; core.clj only sets docstrings
        return
     end if
+    if (method_name == "getStackTrace") then
+       ! No stack traces here: an error is a value (see eval_error), not
+       ! an object with frames. clojure.test asks every failure for one.
+       val = make_vector([cons_value ::])
+       return
+    end if
+    if (method_name == "getMessage" .or. method_name == "getLocalizedMessage") then
+       val%tag = TAG_STRING
+       val%str_val = pr_str(target, .false.)
+       return
+    end if
+    if (method_name == "getCause") then
+       val%tag = TAG_NIL
+       return
+    end if
     if (method_name == "printStackTrace") then
        val%tag = TAG_NIL ! no stack traces here; core.clj only calls it while reporting
        return
@@ -1415,12 +1785,136 @@ contains
        val%tag = TAG_NIL
        return
     end if
+    ! java.lang.Class's own reflection, over the declared hierarchy
+    ! (clotran_types.clj) instead of a real class graph. bases/supers
+    ! in core.clj, and find-protocol-impl in core_deftype.clj, are
+    ! written against exactly these three and work unmodified.
+    if (target%tag == TAG_KEYWORD .and. names_a_class(target%str_val)) then
+       select case (method_name)
+       case ("getInterfaces")
+          ! Every relationship here is a parent link; there is no
+          ! single-superclass chain to separate out, so all of them
+          ! answer as interfaces and getSuperclass answers nil.
+          val = call_parents(target)
+          return
+       case ("getSuperclass")
+          val%tag = TAG_NIL
+          return
+       case ("isAssignableFrom")
+          ! (.isAssignableFrom a b) is "b is an a", i.e. (isa? b a).
+          val%tag = TAG_BOOL
+          val%bool_val = .false.
+          if (size(args) >= 1) val%bool_val = call_isa(args(1), target)
+          return
+       end select
+    end if
+    if (method_name == "__methodImplCache") then
+       val%tag = TAG_NIL
+       if (allocated(target%atom_val)) val = atom_deref(target)
+       return
+    end if
+    ! clojure.lang.MethodImplCache and its Entry: a protocol method's
+    ! per-call-site cache. Represented as a plain map -- the fields
+    ! core_deftype.clj reads are exactly :sym/:protocol/:methodk/:map,
+    ! and keeping :map non-nil keeps expand-method-impl-cache on its
+    ! map branch, away from the perfect-hash/array branch (there are no
+    ! arrays here, and a map is what that branch builds anyway).
+    if (target%tag == TAG_HASHMAP) then
+       select case (method_name)
+       case ("sym", "protocol", "methodk", "map", "table")
+          if (array_map_contains(target%map_val, mk_keyword(method_name))) then
+             val = rt_get(target, mk_keyword(method_name))
+             return
+          end if
+       case ("fnFor")
+          if (array_map_contains(target%map_val, mk_keyword("methodk"))) then
+             val%tag = TAG_NIL
+             if (size(args) >= 1) then
+                block
+                  type(cons_value) :: tbl, entry
+                  tbl = rt_get(target, mk_keyword("map"))
+                  if (tbl%tag == TAG_HASHMAP) then
+                     entry = rt_get(tbl, args(1))
+                     if (entry%tag == TAG_HASHMAP) val = rt_get(entry, mk_keyword("fn"))
+                  end if
+                end block
+             end if
+             return
+          end if
+       end select
+    end if
+    ! Transients. Real Clojure's are a mutable, single-threaded fast
+    ! path for building a collection; they exist purely for speed, and
+    ! the contract (always use the returned value, never the argument
+    ! again) is exactly what makes a persistent collection a legal
+    ! stand-in. So a transient here IS the persistent collection, and
+    ! conj!/assoc!/dissoc!/disj!/persistent! are their ordinary
+    ! counterparts. core.clj routes into/set/frequencies/group-by and
+    ! most of the transducer machinery through these.
+    select case (method_name)
+    case ("asTransient", "persistent")
+       val = target
+       return
+    case ("conj")
+       if (size(args) >= 1) then
+          val = rt_conj(target, args(1))
+       else
+          val = target
+       end if
+       return
+    case ("assoc")
+       if (size(args) >= 2) then
+          val = rt_assoc(target, args(1), args(2))
+       else
+          val = target
+       end if
+       return
+    case ("get")
+       ! (.get coll k) on a collection. The no-argument form is a
+       ! different method entirely -- Var.get/Atom.get, i.e. deref --
+       ! so it is left to whatever handles the box types (doing so
+       ! here made var-get answer the Var itself).
+       if (size(args) >= 1) then
+          val = rt_get(target, args(1))
+          return
+       else if (.not. allocated(target%atom_val)) then
+          val = target
+          return
+       end if
+    case ("without")
+       if (size(args) >= 1) then
+          val = call_builtin("dissoc", [target, args(1)])
+       else
+          val = target
+       end if
+       return
+    end select
     if (method_name == "isNaN") then
        val = call_builtin("nan?", [target])
        return
     end if
     if (method_name == "isArray") then
        val%tag = TAG_BOOL ! no array type here, so never
+       return
+    end if
+    if (method_name == "addAlias" .and. target%tag == TAG_SYMBOL .and. size(args) >= 2) then
+       ! (. *ns* (addAlias sym target-ns)) -- clojure.core/alias, and so
+       ! (:require [lib :as x]).
+       call ns_add_alias(ns_find_or_create(target%str_val), args(1)%str_val, &
+            pr_str(args(2), .false.))
+       val%tag = TAG_NIL
+       return
+    end if
+    if (method_name == "refer" .and. target%tag == TAG_SYMBOL .and. size(args) >= 2) then
+       ! (. *ns* (refer sym var)) -- what refer/use bottom out in.
+       call ns_refer(ns_find_or_create(target%str_val), args(1)%str_val, args(2))
+       val = args(2)
+       return
+    end if
+    if (method_name == "getMappings" .and. target%tag == TAG_SYMBOL) then
+       ! A namespace is its own name symbol here (see clotran.clj), so
+       ! ns-map/ns-interns reach the bindings through this.
+       val = call_builtin("ns-mappings", [target])
        return
     end if
     if (method_name == "getClass") then
@@ -1723,7 +2217,17 @@ contains
          val%fn_val%body = pre_expand(wrap_body(list_rest(rest)))
       end if
     end block
-    val%fn_val%env = env
+    ! A frame of its own, purely to record the defining namespace: a
+    ! macro's BODY runs at expansion time, wherever the macro is
+    ! called from, and its free symbols have to resolve here (
+    ! clojure.test's deftest reads *load-tests*, which only exists in
+    ! clojure.test). See env_defining_ns.
+    block
+      type(env_ref) :: macro_env
+      macro_env = env_new(env)
+      call env_set_ns(macro_env, defining_ns_name(env))
+      val%fn_val%env = macro_env
+    end block
     val%fn_val%is_macro = .true.
     call ns_intern(ns_current(), name%str_val, val)
   end function eval_defmacro
@@ -1792,12 +2296,41 @@ contains
   ! Macros are namespace-level constructs only in real Clojure (Var
   ! metadata), never lexically bound -- so this checks *ns* directly,
   ! not the lexical env, unlike ordinary symbol resolution.
-  function resolves_to_macro(name, macro_val) result(is_macro)
+  ! Which namespace a free symbol resolves in: the innermost enclosing
+  ! function's DEFINING namespace, falling back to the current one at
+  ! top level. Real Clojure resolves symbols when a form is compiled,
+  ! in the namespace it was compiled in; clotran has no compile step,
+  ! so the defining namespace rides along on the closure's own env
+  ! frame instead (see env_defining_ns). Without this, a function in
+  ! clojure.core.protocols calling its own seq-reduce could not find
+  ! it once called from user -- every multi-namespace library, the
+  ! upstream test suite included, depends on getting this right.
+  function defining_ns_name(env) result(name)
+    type(env_ref), intent(in) :: env
+    character(len=:), allocatable :: name
+    name = env_defining_ns(env)
+    if (len(name) == 0) name = ns_name_of(ns_current())
+  end function defining_ns_name
+
+  function resolution_ns(env) result(ns)
+    type(env_ref), intent(in) :: env
+    type(ns_ref) :: ns
+    character(len=:), allocatable :: defining
+    defining = env_defining_ns(env)
+    if (len(defining) > 0) then
+       ns = ns_find_or_create(defining)
+    else
+       ns = ns_current()
+    end if
+  end function resolution_ns
+
+  function resolves_to_macro(name, macro_val, env) result(is_macro)
     character(len=*), intent(in) :: name
     type(cons_value), intent(out) :: macro_val
+    type(env_ref), intent(in) :: env
     logical :: is_macro
     character(len=:), allocatable :: owner
-    is_macro = ns_resolve(ns_current(), name, macro_val, owner)
+    is_macro = ns_resolve(resolution_ns(env), name, macro_val, owner)
     if (is_macro) is_macro = (macro_val%tag == TAG_FN)
     if (is_macro) is_macro = allocated(macro_val%fn_val)
     if (is_macro) is_macro = macro_val%fn_val%is_macro
@@ -1896,7 +2429,7 @@ contains
        if (list_count(form%list_val) == 0) exit
        head2 = list_first(form%list_val)
        if (head2%tag /= TAG_SYMBOL) exit
-       if (.not. resolves_to_macro(head2%str_val, macro_val)) exit
+       if (.not. resolves_to_macro(head2%str_val, macro_val, env_new())) exit
        call eval_macro_head(form, macro_val)
        if (has_error) exit
     end do
@@ -2031,7 +2564,9 @@ contains
           expanded = make_list([head, inner])
           return
        end if
-       if (resolves_to_macro(head%str_val, macro_val)) then
+       ! pre_expand runs at def time, when the current namespace IS the
+       ! defining one, so an empty env (falling back to it) is right.
+       if (resolves_to_macro(head%str_val, macro_val, env_new())) then
           block
             type(cons_value) :: ast_copy
             ast_copy = form
@@ -2175,7 +2710,8 @@ contains
     select case (name)
     case ("def!", "def", "defmacro", "defmacro!", "let*", "loop*", "fn*", "if", "do", "quote", "quasiquote", &
          "unquote", "splice-unquote", "eval", "load-file", "in-ns", "ns", "var", ".", "new", &
-         "try*", "try", "catch*", "catch", "finally", "recur", "throw", "set!", "monitor-enter", &
+         "try*", "try", "catch*", "catch", "finally", "recur", "throw", "set!", "import*", &
+         "clojure.core/import*", "case*", "clojure.core/case*", "monitor-enter", &
          "monitor-exit")
        yes = .true.
     case default
@@ -2235,8 +2771,9 @@ contains
   ! A bare symbol inside quasiquote: auto-gensym if it ends in '#',
   ! otherwise namespace-qualify it -- using ns_resolve's owner so `+`
   ! from within `user` qualifies as clojure.core/+, not user/+.
-  function qq_symbol(sym) result(v)
+  function qq_symbol(sym, env) result(v)
     type(cons_value), intent(in) :: sym
+    type(env_ref), intent(in) :: env
     type(cons_value) :: v
     character(len=:), allocatable :: name, owner
     type(cons_value) :: resolved
@@ -2254,7 +2791,25 @@ contains
        end if
     end if
     if (index(name, "/") > 0) then
-       v = sym ! already qualified
+       ! Already qualified -- but an ALIAS prefix has to be expanded to
+       ! the real namespace here, because the expansion is evaluated in
+       ! whatever namespace called the macro, where that alias does not
+       ! exist. clojure.test's `are` emits `temp/do-template, and temp
+       ! is an alias private to clojure.test.
+       block
+         character(len=:), allocatable :: prefix, target
+         integer :: slash
+         slash = index(name, "/")
+         prefix = name(1:slash-1)
+         if (.not. ns_exists(prefix)) then
+            target = ns_alias_target(resolution_ns(env), prefix)
+            if (len(target) > 0) then
+               v = mk_symbol(target // "/" // name(slash+1:))
+               return
+            end if
+         end if
+       end block
+       v = sym
        return
     end if
     ! A class name survives untouched: real Clojure's syntax quote
@@ -2269,11 +2824,15 @@ contains
        v = sym
        return
     end if
-    found = ns_resolve(ns_current(), name, resolved, owner)
+    ! Qualified against the namespace this syntax-quote is being
+    ! EXPANDED in -- for a macro that is the namespace the macro was
+    ! defined in, not the caller's. A macro in clojure.core emitting
+    ! `(case* ...) has to produce clojure.core/case*, whoever calls it.
+    found = ns_resolve(resolution_ns(env), name, resolved, owner)
     if (found) then
        v = mk_symbol(owner // "/" // name)
     else
-       v = mk_symbol(ns_name_of(ns_current()) // "/" // name)
+       v = mk_symbol(ns_name_of(resolution_ns(env)) // "/" // name)
     end if
   end function qq_symbol
 
@@ -2337,7 +2896,12 @@ contains
     type(cons_value), intent(in) :: coll
     type(cons_value) :: s
     s = rt_seq(coll)
-    do while (s%tag == TAG_LIST)
+    ! A lazy seq stays lazy as it's walked (next realizes one cell at a
+    ! time), so the loop has to accept both shapes -- accepting only
+    ! TAG_LIST made this silently produce NOTHING for a lazy argument,
+    ! which is what made (apply + (map inc xs)) return 0 and every
+    ! `~@lazy-seq` splice vanish.
+    do while (s%tag == TAG_LIST .or. s%tag == TAG_LAZYSEQ)
        call qq_push(items, n, rt_first(s))
        s = rt_next(s)
     end do
@@ -2363,7 +2927,7 @@ contains
 
     select case (form%tag)
     case (TAG_SYMBOL)
-       val = qq_symbol(form)
+       val = qq_symbol(form, env)
     case (TAG_LIST)
        n = 0
        if (allocated(form%list_val)) n = list_count(form%list_val)
@@ -2456,7 +3020,7 @@ contains
     logical :: found
     character(len=:), allocatable :: owner
     found = env_find(env, ast, val)
-    if (.not. found) found = ns_resolve(ns_current(), ast%str_val, val, owner)
+    if (.not. found) found = ns_resolve(resolution_ns(env), ast%str_val, val, owner)
     if (found) return
     if (names_a_class(ast%str_val) .and. index(ast%str_val, "/") == 0) then
        val%tag = TAG_KEYWORD
@@ -2525,9 +3089,20 @@ contains
     if (allocated(ast%map_val)) then
        call array_map_entries(ast%map_val, keys, vals)
        do i = 1, size(keys)
-          next_m = array_map_assoc(m, keys(i), eval_form(vals(i), env)) ! never m = ...(m, ...) -- see make_hashmap
-          m = next_m
-          if (has_error) return
+          ! Both halves are evaluated. A map literal's KEY is an
+          ! ordinary expression in real Clojure ({(f x) 1} calls f) --
+          ! leaving it unevaluated quietly stored the raw form, which
+          ! is how core_deftype.clj's own {(intern ...) builder} table
+          ! ended up keyed by a list instead of by the Var.
+          block
+            type(cons_value) :: k, v
+            k = eval_form(keys(i), env)
+            if (has_error) return
+            v = eval_form(vals(i), env)
+            if (has_error) return
+            next_m = array_map_assoc(m, k, v) ! never m = ...(m, ...) -- see make_hashmap
+            m = next_m
+          end block
        end do
     end if
     val%tag = TAG_HASHMAP
@@ -2577,6 +3152,12 @@ contains
        end if
     case (TAG_MULTIFN)
        val = apply_multifn(f, args)
+    case (TAG_VAR)
+       ! A Var is callable in real Clojure -- it forwards to its root.
+       ! core_deftype.clj calls one directly ((#'assert-same-protocol
+       ! ...)), which is how a private fn gets used across a macro
+       ! expansion.
+       val = apply_fn(atom_deref(f), args)
     case default
        call eval_error("not a function: " // pr_str(f))
     end select
@@ -2723,7 +3304,7 @@ contains
 
     item_count = 0
     s = rt_seq(args(2))
-    do while (s%tag == TAG_LIST)
+    do while (s%tag == TAG_LIST .or. s%tag == TAG_LAZYSEQ)
        one_arg(1) = rt_first(s)
        call qq_push(items, item_count, apply_fn(args(1), one_arg))
        if (has_error) return
@@ -3721,13 +4302,14 @@ contains
              val%bool_val = (args(2)%tag == TAG_STRING)
           case ("Boolean")
              val%bool_val = (args(2)%tag == TAG_BOOL)
-          case ("clojure.lang.IMeta")
+          case ("clojure.lang.IMeta", "clojure.lang.IReference")
              ! Everything clotran itself supports metadata on --
              ! matches real Clojure's own IMeta implementers (symbols,
              ! collections, fns), excluding keywords/strings/numbers,
              ! which real Clojure also never allows metadata on.
              val%bool_val = (args(2)%tag == TAG_LIST .or. args(2)%tag == TAG_VECTOR .or. &
-                  args(2)%tag == TAG_HASHMAP .or. args(2)%tag == TAG_SYMBOL .or. args(2)%tag == TAG_FN)
+                  args(2)%tag == TAG_HASHMAP .or. args(2)%tag == TAG_SYMBOL .or. &
+                  args(2)%tag == TAG_FN .or. args(2)%tag == TAG_VAR)
           case ("clojure.lang.Counted")
              ! Everything clotran can already count in O(1) -- used by
              ! counted?/empty?; nil is deliberately excluded, matching
@@ -3888,6 +4470,85 @@ contains
        val = builtin_format(args)
     case ("munge")
        val = builtin_munge(args(1))
+    case ("ns-mappings")
+       ! clojure.lang.Namespace.getMappings: {symbol Var} for a
+       ! namespace's own bindings. clojure.test walks this to find the
+       ! deftest vars in a namespace.
+       block
+         type(cons_value), allocatable :: names(:), vars(:)
+         type(array_map_t) :: m2, next2
+         integer :: k
+         call ns_mappings(ns_find_or_create(pr_str(args(1), .false.)), names, vars)
+         m2 = array_map_empty()
+         do k = 1, size(names)
+            next2 = array_map_assoc(m2, names(k), vars(k))
+            m2 = next2
+         end do
+         val%tag = TAG_HASHMAP
+         allocate(val%map_val)
+         val%map_val = m2
+       end block
+    case ("find-var")
+       ! clojure.lang.Var/find: the Var a FULLY QUALIFIED symbol names,
+       ! or nil. What clojure.test's own test-var lookup goes through.
+       block
+         type(cons_value) :: found_var
+         character(len=:), allocatable :: qualified, owner3
+         integer :: slash
+         val%tag = TAG_NIL
+         qualified = args(1)%str_val
+         slash = index(qualified, "/", back=.true.)
+         if (slash > 1) then
+            if (ns_resolve_var(ns_find_or_create(qualified(1:slash - 1)), &
+                 qualified(slash + 1:), found_var, owner3)) val = found_var
+         end if
+       end block
+    case ("intern-var")
+       ! clojure.lang.Var/intern: the Var a name has in a namespace,
+       ! created (unbound) if it is not there yet. Identity-preserving,
+       ! same as def -- core_deftype.clj interns a protocol's method
+       ! names this way and then bindRoots each one to its dispatcher.
+       block
+         type(cons_value) :: existing
+         character(len=:), allocatable :: nsname, vname
+         nsname = pr_str(args(1), .false.)
+         vname = args(2)%str_val
+         if (.not. ns_get_own_var(ns_find_or_create(nsname), vname, existing)) then
+            call ns_intern(ns_find_or_create(nsname), vname, nilv_const())
+            if (.not. ns_get_own_var(ns_find_or_create(nsname), vname, existing)) then
+               call eval_error("intern: could not create " // nsname // "/" // vname)
+               return
+            end if
+         end if
+         val = existing
+       end block
+    case ("find-entry")
+       ! clojure.lang.RT/find, which clojure.core/find is: the map entry
+       ! for a key, or nil -- distinguishing "absent" from "present and
+       ! nil", which get alone cannot.
+       val%tag = TAG_NIL
+       if (size(args) >= 2) then
+          if (args(1)%tag == TAG_HASHMAP .or. args(1)%tag == TAG_SET) then
+             if (allocated(args(1)%map_val)) then
+                if (array_map_contains(args(1)%map_val, args(2))) &
+                     val = make_vector([args(2), rt_get(args(1), args(2))])
+             end if
+          end if
+       end if
+    case ("resolve-var-in")
+       ! clojure.lang.Compiler/maybeResolveIn, which ns-resolve/resolve
+       ! are written on top of: the Var a symbol names in a namespace,
+       ! or nil. "Maybe" is the whole point -- an unresolvable symbol is
+       ! nil here, not an error.
+       block
+         type(cons_value) :: found_var
+         character(len=:), allocatable :: owner2
+         val%tag = TAG_NIL
+         if (size(args) >= 2) then
+            if (ns_resolve_var(ns_find_or_create(pr_str(args(1), .false.)), &
+                 args(2)%str_val, found_var, owner2)) val = found_var
+         end if
+       end block
     case ("nan?")
        val%tag = TAG_BOOL
        val%bool_val = (args(1)%tag == TAG_REAL)
@@ -3936,7 +4597,9 @@ contains
        val%meta_val%ptr%val = args(2)
     case ("meta")
        val%tag = TAG_NIL
-       if (allocated(args(1)%meta_val)) then
+       if (args(1)%tag == TAG_VAR) then
+          val = var_meta_get(args(1)) ! a Var's metadata lives on the shared node
+       else if (allocated(args(1)%meta_val)) then
           if (associated(args(1)%meta_val%ptr)) val = args(1)%meta_val%ptr%val
        end if
     case default
@@ -4190,6 +4853,12 @@ contains
     end if
 
     val%fn_val%env = fn_env
+    ! The namespace this fn is being DEFINED in: the enclosing
+    ! function's, if there is one, and only otherwise whatever is
+    ! current. A fn created while another namespace's function is
+    ! running (clojure.test/test-vars builds several) belongs to the
+    ! namespace whose source it was written in, not to the caller's.
+    call env_set_ns(fn_env, defining_ns_name(env))
     if (named) call env_set(fn_env, name, val)
     recur_sym%tag = TAG_SYMBOL
     recur_sym%str_val = "recur"
@@ -4250,6 +4919,41 @@ contains
     if (has_error) return
     call apply_macro_metadata(sym, val)
     call ns_intern(ns_current(), sym%str_val, val)
+    ! The name symbol's metadata becomes the VAR's metadata -- real
+    ! Clojure's def does exactly this, and a surprising amount rides on
+    ! it: defn's :arglists/:doc, ^:private, ^:dynamic, and
+    ! clojure.test's deftest, which attaches its :test function to the
+    ! name symbol and then looks for it on the Var.
+    if (allocated(sym%meta_val)) then
+       block
+         type(cons_value) :: the_var
+         character(len=:), allocatable :: owner
+         if (associated(sym%meta_val%ptr)) then
+            if (ns_get_own_var(ns_current(), sym%str_val, the_var)) then
+               ! EVALUATED, not stored raw: real Clojure's compiler
+               ! evaluates a def'd symbol's metadata map. deftest's
+               ! :test value is a syntax-quoted (fn [] ...) form, and
+               ! storing it unevaluated left the Var's :test holding a
+               ! list instead of a function.
+               block
+                 type(cons_value) :: meta_map
+                 meta_map = eval_form(sym%meta_val%ptr%val, env)
+                 if (has_error) then
+                    ! Metadata that won't evaluate must not take the def
+                    ! down with it: core.clj attaches :inline fns and
+                    ! :arglists to definitions made long before the
+                    ! machinery those forms need exists. Keep the raw
+                    ! map and carry on, which is what storing it
+                    ! unevaluated used to do for every def.
+                    has_error = .false.
+                    meta_map = sym%meta_val%ptr%val
+                 end if
+                 call var_meta_set(the_var, meta_map)
+               end block
+            end if
+         end if
+       end block
+    end if
   end function eval_def
 
   ! Real Clojure derives macro-ness from the Var's own metadata

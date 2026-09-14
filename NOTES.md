@@ -1401,6 +1401,131 @@ rest are `clojure.lang.RT/baseLoader`, `Thread`'s context classloader,
 and `(require 'clojure.java.io)` -- classloaders and host I/O.
 
 
+## Protocols, and resolving symbols in the namespace they were written in
+
+`core_deftype.clj` is vendored and runs: `defprotocol`,
+`extend`/`extend-type`/`extend-protocol`, `satisfies?`, `extenders`.
+Dispatch goes through upstream's own `emit-method-builder`, including
+its `MethodImplCache` call-site cache -- no rewriting, because a
+protocol is already the shape clotran has: a table keyed by type, which
+is exactly what the multimethod work built. `deftype`/`defrecord`/
+`reify` still need the `deftype*` compiler special form and are not
+here yet.
+
+**Why protocols are the right seam for Fortran interop.** Fortran's own
+polymorphism (an abstract derived type with deferred type-bound
+procedures, dispatched through `class(t), pointer`) is *closed*: the set
+of implementors is fixed when the program is compiled, and there is no
+runtime reflection to ask an object what it implements. A protocol is
+*open* -- `extend-protocol` on a type you do not own, after the fact, is
+the whole point. So the two are opposite ends of one bridge rather than
+alternatives:
+
+| Fortran | clotran |
+| --- | --- |
+| abstract type + deferred TBP | a protocol -- the natural import target |
+| each concrete extending type | one `extend` registration |
+| `class(t), pointer` dispatch | inside the generated shim; clotran just calls it |
+| `generic ::` | a generated argument-dispatching fn, NOT a protocol |
+| `interface` block | input to the generator (argument kinds, for marshalling) |
+
+The protocol works as the seam precisely because it is open: a table in
+clotran can hold entries that call into Fortran vtables, where a Fortran
+vtable can never hold an entry that calls back into clotran. Traffic is
+one-way by design -- a Fortran object rides in clotran as a
+`class(*), pointer` (see the native interop section), and a clotran
+`deftype` is deliberately NOT passable to Fortran, since a Fortran
+derived type is a compile-time thing. Doing that in reverse would mean
+generating and compiling Fortran at runtime, i.e. a JIT.
+
+### Free symbols resolve in the DEFINING namespace
+
+Vendoring `core/protocols.clj` immediately broke `reduce`, and the
+reason turned out to be the biggest single correctness gap left in the
+evaluator: a function's free symbols were resolved against whatever
+namespace happened to be *current when it ran*, not the one its source
+was written in. `clojure.core.protocols/seq-reduce` could not find its
+own `internal-reduce` once called from `user`. Real Clojure resolves
+symbols when a form is compiled, in the namespace being compiled.
+
+clotran has no compile step, so the defining namespace rides on the
+closure's own env frame (`env_node%ns_name`, set by `eval_fn` and
+`eval_defmacro`, read by `env_defining_ns`). On the env rather than on
+`closure_t` deliberately: a tail call reuses the trampoline instead of
+returning through `apply_closure`, so a call stack of namespaces would
+be wrong, while the env chain is already exactly right. `eval_fn`
+inherits the *enclosing* frame's namespace rather than reading
+`*ns*` -- a fn built while another namespace's function is running
+(`clojure.test/test-vars` builds several) belongs to the namespace whose
+source it was written in.
+
+Three more things had to follow the same rule: `(var x)`, `set!`, and
+syntax-quote's own qualification. That last one has a second part --
+`` `temp/do-template `` has to expand its ALIAS to the real namespace at
+read time, because the expansion is evaluated wherever the macro was
+called from, where that alias does not exist. `clojure.test`'s `are`
+emits exactly that.
+
+This also silently fixed a mystery: several `eval_test` checks passed in
+the REPL but failed inside the suite, because an earlier check
+(deliberately) shadows `first` in `user`, and core.clj's own functions
+were picking up the shadow.
+
+## Running real Clojure's own test suite
+
+`test/clj/clojure/test_clojure/` holds test files vendored from
+clojure/clojure, run by `scripts/run-clojure-tests`. This is the
+conformance number that matters: the hand-written checks in
+`test/f/*_test.f90` belong to the *host* -- refcounting, native interop,
+the Fortran gotchas catalog -- which upstream cannot test, and language
+semantics are much better judged by Clojure's own assertions than by
+ours. Expect `test/f/eval_test.f90` to shrink as upstream coverage grows.
+
+Getting there needed `clojure.test` itself (vendored, with
+`clojure.template`/`walk`/`string`/`stacktrace`), and:
+
+- **`unescape_string` was O(n^2) and crashed on a long string** -- the
+  same reallocating-assignment fragility the tokenizer was already
+  rewritten for, just in the reader's other half. clojure/test.clj's ns
+  docstring is ~7KB and hit it exactly. It now sizes a buffer once and
+  slices.
+- **Real Var metadata** (`atom_node%var_meta`, shared by reference like
+  the root), and `def` transferring the name symbol's metadata onto the
+  Var -- *evaluated*, as real Clojure's compiler does, since `deftest`
+  attaches its `:test` function as a syntax-quoted form. Without this
+  `run-tests` found zero tests. Metadata that will not evaluate is kept
+  raw rather than failing the `def`: core.clj attaches `:inline` fns to
+  definitions made long before the machinery those forms need exists.
+- **`ns` handles its library clauses** (`:require`/`:use`/`:import`/
+  `:refer-clojure`) by calling the functions the real macro would.
+  Delegating to core.clj's own `ns` macro was tried and reverted --
+  core.clj loads its sibling files through `ns` forms at a point where
+  that macro's expansion needs machinery that is not up yet.
+- **Namespace aliases** (`ns_node%aliases`, `.addAlias`), `refer`
+  binding the *same* Var rather than a copy of its value, `ns-map` via
+  `.getMappings`, and `Var`'s `.ns`/`.sym`/`.isPublic`/`.isMacro`.
+- **`case*`**, the special form `case` compiles to. Implemented as a
+  scan of its `{hash [test-constant then-expr]}` table rather than a
+  jump table: `case` is correct, just not faster than `cond`. It has to
+  be a special form, not a function, because only the branch that
+  matches may be evaluated.
+- Refs and `dosync` as an Atom and "just run the body" -- there is no
+  STM and nothing to coordinate with yet. This is the second placeholder
+  waiting on the concurrency model (`binding`'s thread-local stack is
+  the first); both should be revisited together.
+
+**A Fortran gotcha worth its own line**: `.and.` does not short-circuit.
+Writing `head == "ns" .and. .not. resolves_to_macro("ns", macro_val, env)`
+called `resolves_to_macro` for *every list form in the program*, and its
+`intent(out)` argument clobbered the macro being expanded. Nested `if`s,
+not compound conditions, whenever an operand has a side effect.
+
+**Known open**: `clojure.test-clojure.for` sends the evaluator into an
+infinite loop, so `scripts/run-clojure-tests` runs each namespace under
+a watchdog. Java array interop (`into-array`, `RT/seqToTypedArray`) is
+the largest single source of remaining errors in the upstream files.
+
+
 ## Status
 
 Steps 1-6 pass official required tests on both compilers (117/117,

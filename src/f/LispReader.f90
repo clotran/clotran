@@ -231,27 +231,40 @@ contains
     ok = (mod(bs, 2) == 0)
   end function is_terminated_string
 
+  ! Writes into a buffer sized once, then slices -- NOT s = s // c per
+  ! character. That pattern is O(n^2) and, on a long string, a real
+  ! crash: the same reallocating-assignment fragility the tokenizer was
+  ! already rewritten for (see tokenize's own comment and NOTES.md).
+  ! clojure/test.clj's ns docstring is ~7KB and hit it exactly.
   function unescape_string(tok) result(s)
     character(len=*), intent(in) :: tok
     character(len=:), allocatable :: s
-    integer :: i, n
+    character(len=:), allocatable :: buf
+    integer :: i, n, k
     n = len(tok)
-    s = ""
+    allocate(character(len=max(n, 1)) :: buf)
+    k = 0
     i = 2 ! skip opening quote; stop before the closing quote at n
     do while (i <= n - 1)
+       k = k + 1
        if (tok(i:i) == achar(92)) then
           select case (tok(i+1:i+1))
           case ('n')
-             s = s // achar(10)
+             buf(k:k) = achar(10)
+          case ('t')
+             buf(k:k) = achar(9)
+          case ('r')
+             buf(k:k) = achar(13)
           case default
-             s = s // tok(i+1:i+1)
+             buf(k:k) = tok(i+1:i+1)
           end select
           i = i + 2
        else
-          s = s // tok(i:i)
+          buf(k:k) = tok(i:i)
           i = i + 1
        end if
     end do
+    s = buf(1:k)
   end function unescape_string
 
   ! ---- cons_value constructors ----

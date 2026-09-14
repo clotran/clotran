@@ -32,6 +32,18 @@
 ;; RT.f90's own generic dispatchers (already reachable under
 ;; clotran.native, since every builtin is registered under both
 ;; namespaces).
+;; java.lang.Integer/Long's static fields, as case's int-range check
+;; reads them. One integer kind here (see uncheckedLongCast), so both
+;; report the same bounds.
+(in-ns 'Integer)
+(def MIN_VALUE -2147483648)
+(def MAX_VALUE 2147483647)
+(in-ns 'clojure.core)
+(in-ns 'Long)
+(def MIN_VALUE -2147483648)
+(def MAX_VALUE 2147483647)
+(in-ns 'clojure.core)
+
 ;; java.lang.Double's static fields, as core_print.clj's own Double
 ;; method compares against them. Real IEEE values (see the infinity
 ;; builtin), so a computed infinity really does match.
@@ -48,7 +60,16 @@
 ;; builds that classpath-relative path and strips the leading slash.
 ;; There's no classpath here, so the path names a file under src/clj
 ;; directly. load-file is a special form, hence a wrapper, not an alias.
-(def load (fn* [path] (load-file (clotran.native/resource-path path))))
+(def load
+  (fn* [path]
+    ;; *ns* must not leak: a loaded file starts with its own (ns ...)
+    ;; or (in-ns ...), and core.clj carries on in clojure.core right
+    ;; after the (load "core/protocols") that switched it. Real
+    ;; RT.load pushes a thread binding of *ns* for exactly this.
+    (let* [prev *ns*
+           result (load-file (clotran.native/resource-path path))]
+      (in-ns prev)
+      result)))
 (def first clotran.native/first)
 (def next clotran.native/next)
 (def more clotran.native/rest) ; core.clj's own `rest` calls (. clojure.lang.RT (more x)), not "rest"
@@ -63,11 +84,13 @@
 (def dissoc clotran.native/dissoc)
 (def readString clotran.native/read-string)
 (def subvec clotran.native/subvec)
+(def find clotran.native/find-entry)
 (def toArray clotran.native/vec) ; no array type here -- a vector is what an Object[] becomes
 (def keys clotran.native/keys)
 (def vals clotran.native/vals)
 (def nextID clotran.native/next-id)
 (def isReduced clotran.native/reduced?)
+(def booleanCast (fn* [x] (if x true false))) ; nil and false are the only falsey values
 (def longCast (fn* [x] x)) ; one canonical int kind here, so every cast is a no-op
 (def intCast (fn* [x] x))
 (def uncheckedLongCast (fn* [x] x)) ; one canonical int kind here -- a cast is a no-op; fn*
@@ -141,48 +164,6 @@
 (def unchecked_negate (fn* [x] (clotran.native/- x)))
 (in-ns 'clojure.core)
 
-;; clojure.core.protocols/coll-reduce: what real core.clj's `reduce`
-;; dispatches to for anything that isn't an IReduce. Real Clojure makes
-;; this a protocol with per-collection implementations (partly for
-;; chunked-seq speed); there are no protocols here, so this is the one
-;; generic seq walk they all reduce to anyway -- same O(n), same
-;; semantics, `reduced` early exit included.
-;;
-;; fn*/let*/if only: clotran.clj loads before core.clj, so `fn`, `let`,
-;; `when` and friends don't exist yet (see uncheckedLongCast's comment).
-(in-ns 'clojure.core.protocols)
-(def coll-reduce
-  (fn* coll-reduce
-    ([coll f]
-     (let* [s (clotran.native/seq coll)]
-       (if s
-         (coll-reduce (clotran.native/rest s) f (clotran.native/first s))
-         (f))))
-    ([coll f init]
-     ((fn* step [acc s]
-        (if s
-          (let* [acc2 (f acc (clotran.native/first s))]
-            (if (clotran.native/reduced? acc2)
-              (clotran.native/deref acc2)
-              (step acc2 (clotran.native/next s))))
-          acc))
-      init
-      (clotran.native/seq coll)))))
-;; IKVReduce, for reduce-kv: same walk over a map's [k v] entries.
-(def kv-reduce
-  (fn* [amap f init]
-    ((fn* step [acc s]
-       (if s
-         (let* [e (clotran.native/first s)
-                acc2 (f acc (clotran.native/nth e 0) (clotran.native/nth e 1))]
-           (if (clotran.native/reduced? acc2)
-             (clotran.native/deref acc2)
-             (step acc2 (clotran.native/next s))))
-         acc))
-     init
-     (clotran.native/seq amap))))
-(in-ns 'clojure.core)
-
 ;; clojure.lang.Namespace's statics. A namespace is represented by its
 ;; own name symbol here -- there's no first-class Namespace value (and
 ;; *ns* is a symbol for the same reason), so ns-name is just .getName
@@ -247,6 +228,8 @@
 ;; core.clj's own push-thread-bindings/pop-thread-bindings (and so
 ;; `binding`) call into. See Eval.f90 for the stack itself.
 (in-ns 'clojure.lang.Var)
+(def intern clotran.native/intern-var)
+(def find clotran.native/find-var)
 (def pushThreadBindings clotran.native/push-thread-bindings)
 (def popThreadBindings clotran.native/pop-thread-bindings)
 (in-ns 'clojure.core)
@@ -326,6 +309,17 @@
 (def EMPTY (clotran.native/hash-map))
 (in-ns 'clojure.core)
 
+;; PersistentTreeMap: same story as PersistentTreeSet below --
+;; sorted-map is an ordinary hash map here, so lookups are right but
+;; ORDER IS NOT SORTED. clojure.test's report counters go through it.
+(in-ns 'clojure.lang.PersistentTreeMap)
+(def create (fn* [keyvals]
+              (if keyvals
+                (clotran.native/apply clotran.native/hash-map keyvals)
+                (clotran.native/hash-map))))
+(def EMPTY (clotran.native/hash-map))
+(in-ns 'clojure.core)
+
 ;; PersistentTreeSet: clotran has no sorted collections, so sorted-set
 ;; is an ordinary hash set -- correct membership, NOT sorted order.
 (in-ns 'clojure.lang.PersistentTreeSet)
@@ -371,9 +365,31 @@
 ;; equality clotran already has; real Clojure's own equiv/equals
 ;; differ (numeric tower vs. Object.equals), a distinction clotran
 ;; doesn't make yet.
+;; gen-interface: on the JVM defprotocol emits a real interface for
+;; each protocol, which a deftype can then implement directly. There
+;; are no host interfaces here, so nothing is emitted -- a protocol's
+;; :on-interface never matches anything, and find-protocol-impl falls
+;; through to the :impls table, which is the only place an
+;; implementation can live anyway. genclass.clj (where this really
+;; lives) is JVM bytecode generation and is not ported.
+;; A macro, as genclass.clj's own is -- its :methods argument is a
+;; literal vector of munged method names, which would fail to
+;; resolve if it were evaluated.
+(defmacro gen-interface [& opts] nil)
+
+;; clojure.lang.LockingTransaction: dosync/sync. There is no STM here
+;; and nothing to coordinate with -- a Ref is an Atom (see eval_new) --
+;; so a transaction is just "run the body". This has to come back for
+;; real when the concurrency model does; see NOTES.md.
+(in-ns 'clojure.lang.LockingTransaction)
+(def runInTransaction (fn* [f] (f)))
+(def isRunning (fn* [] false))
+(in-ns 'clojure.core)
+
 ;; clojure.lang.Compiler: only the name munging defprotocol needs.
 (in-ns 'clojure.lang.Compiler)
 (def munge clotran.native/munge)
+(def maybeResolveIn clotran.native/resolve-var-in) ; what ns-resolve/resolve bottom out in
 (in-ns 'clojure.core)
 
 (in-ns 'clojure.lang.Util)
@@ -381,6 +397,7 @@
 (def equals clotran.native/=)
 (def identical clotran.native/=) ; nil?/true?/false?/identical? all only ever compare against the nil/true/false singletons here, where = already agrees with real identity
 (def hasheq clotran.native/hash)
+(def classOf clotran.native/class)
 (def hash clotran.native/hash)
 (in-ns 'clojure.core)
 

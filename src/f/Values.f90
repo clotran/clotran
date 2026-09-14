@@ -215,6 +215,14 @@ module values
      integer :: refcount = 0
      type(array_map_t) :: bindings
      type(env_ref), allocatable :: outer
+     ! The namespace a fn* was DEFINED in, set only on a closure's own
+     ! frame. A free symbol in a function body resolves there, not in
+     ! whatever namespace happens to be current when it is called --
+     ! real Clojure resolves symbols at compile time, in the defining
+     ! namespace. Carried on the env (not on closure_t) so that a tail
+     ! call, which reuses the trampoline instead of returning through
+     ! apply_closure, still sees it. See env_defining_ns.
+     character(len=:), allocatable :: ns_name
   end type env_node
 
   type, public :: env_ref
@@ -288,6 +296,12 @@ module values
      ! when that lands -- probably keyed by thread/fiber id then,
      ! rather than one shared stack.
      type(cons_value), allocatable :: dyn_stack(:)
+     ! A Var's metadata, held HERE rather than on the cons_value's own
+     ! meta_val so that it is shared by reference like the root: every
+     ! copy of a Var must see an alter-meta! through any other copy.
+     ! defn's :arglists/:doc, ^:private, ^:dynamic and clojure.test's
+     ! :test all live here.
+     type(cons_value), allocatable :: var_meta
   end type atom_node
 
   type, public :: atom_ref
