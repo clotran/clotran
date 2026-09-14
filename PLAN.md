@@ -195,16 +195,24 @@ Still open for the cache in step 6: `(meta form)` synthesises
 `:line`/`:column`, so printing with `*print-meta*` bakes positions into
 the text. A cache writer needs to exclude them.
 
-### 3. The GC -- nothing built yet
+### 3. The GC -- collector built, not yet wired in
 
-- [ ] **3a.** Heap module: typed node arrays (one per node kind) with
-      free lists, a handle type, an allocator. One array per kind
-      because Fortran cannot cast -- a single untyped blob would mean
-      `class(*)` everywhere and buy back the dispatch cost we are
-      removing.
-- [ ] **3b.** Mark-sweep collector + torture mode (collect at every
-      allocation) + `gc_test.f90`, standalone. Working and tested
-      before anything else depends on it.
+- [x] **3a/3b.** `src/f/GC.f90` + `test/f/gc_test.f90`: typed pools
+      with free lists, a value type with no allocatable components and
+      no `FINAL`, non-moving mark-sweep with an explicit mark stack
+      (not recursion -- a long list is a chain thousands deep), pool
+      growth, torture mode, 24 checks. Nothing in clotran uses it yet.
+
+      Two results worth keeping: a **cycle is collected** (6a/6b),
+      which is what refcounting structurally cannot do and is why
+      clotran leaks closures today; and building the test surfaced a
+      real hole in the allocator's own API -- a freshly built value
+      passed as an ARGUMENT is live but cannot have been listed as a
+      root by the caller, since nothing references it yet, so
+      allocation has to root its own arguments. `(cons (str ...) ...)`
+      freed the string otherwise, and only under torture or at an
+      unlucky heap size. Check 10a covers it and was confirmed to fail
+      without the fix.
 - [ ] **3c.** Value type: drop the nine allocatable components and
       `FINAL`; keep the inline scalars (`tag`, `int_val`, `real_val`,
       `bool_val`) so `v%tag` and friends keep working, and replace only

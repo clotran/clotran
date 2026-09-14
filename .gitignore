@@ -18,3 +18,4 @@
 /namespace_test
 /eval_test
 /native_test
+/gc_test

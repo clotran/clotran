@@ -16,7 +16,7 @@ S = src/f
 T = test/f
 
 executables = clotran clotran-bin rc_test atom_test persistent_vector_test \
-	persistent_list_test persistent_hash_map_test rt_test persistent_array_map_test env_test namespace_test eval_test native_test
+	persistent_list_test persistent_hash_map_test rt_test persistent_array_map_test env_test namespace_test eval_test native_test gc_test
 
 .PHONY: all test clean
 all: $(executables)
@@ -29,6 +29,12 @@ rc_test: $(S)/rc.o $(T)/rc_test.f90
 
 $(S)/Values.o: $(S)/Values.f90
 	$(FC) $(FCFLAGS) -c $< -o $@
+
+$(S)/GC.o: $(S)/GC.f90
+	$(FC) $(FCFLAGS) -c $< -o $@
+
+gc_test: $(S)/GC.o $(T)/gc_test.f90
+	$(FC) $(FCFLAGS) -o $@ $(S)/GC.o $(T)/gc_test.f90
 
 $(S)/NativeArray.o: $(S)/NativeArray.f90 $(S)/Values.o
 	$(FC) $(FCFLAGS) -c $< -o $@
@@ -124,7 +130,7 @@ clotran: scripts/clotran clotran-bin
 	chmod +x $@
 
 test: rc_test atom_test persistent_vector_test persistent_list_test persistent_hash_map_test \
-	rt_test persistent_array_map_test env_test namespace_test eval_test native_test
+	rt_test persistent_array_map_test env_test namespace_test eval_test native_test gc_test
 	for t in $^; do echo "--- $$t ---"; ./$$t || exit 1; done
 
 clean:
