@@ -98,6 +98,33 @@ and swappable at runtime. The contract:
 
 Nothing in the evaluator may assume a terminal.
 
+**Concurrency is Clojure's model, and it comes after the GC.** Earlier
+notes recorded a "Rust-inspired" model; the decision is now Clojure's
+own -- immutable values, explicit mutable references (atoms, refs,
+agents), STM for coordinated change -- because it is built on
+persistent immutable structures, which clotran already has. Ordering is
+not a preference:
+
+- Refcounting across threads means *atomic* increments on every copy.
+  That makes the 497 ns worse and is then thrown away.
+- STM sits directly on the value representation (a ref holds a value; a
+  transaction snapshots and compare-and-swaps it). Built before the
+  representation changes, it is built twice.
+- A collector written context-parameterized takes a second thread
+  nearly for free. One written single-threaded and later retrofitted
+  with safepoints and per-thread roots is a redesign.
+
+So the GC work must put per-thread state in a `context` type rather
+than module globals -- cheap now, a rewrite later. What is implicitly
+single-threaded today:
+
+| file | state |
+| --- | --- |
+| `Eval.f90` | `has_error`, `last_error_value`, `gensym_table`/`_count`/`_counter`, `here_line`/`_col`/`_file`, `macro_expand_depth` |
+| `LispReader.f90` | `has_error`, `last_error`, `current_file` |
+| `Namespace.f90` | `current` -- this is `*ns*`, thread-local in real Clojure |
+| `Atom.f90` | a Var's `dyn_stack` and the `binding` frame stack -- thread-local in real Clojure |
+
 **Sockets are not what make debugging non-blocking.** clotran is
 single-threaded, so a socket would not let it serve a request while
 paused. Pausing into a nested REPL at the breakpoint is the correct
@@ -206,9 +233,31 @@ expansion depends on the evaluator.
 
 ## Deferred, deliberately
 
-- **Concurrency.** A Rust-inspired model, not a JVM thread port.
-  `binding`'s thread-local stack and `dosync`/refs are both placeholders
-  waiting on it, and should be revisited together.
+- **Concurrency**, until after the GC -- see the decision above.
+  `binding`'s stack and `dosync`/refs are placeholders waiting on it and
+  should be revisited together. Three things to settle when we get
+  there:
+  - **The substrate is unanswered.** OpenMP (both compilers support it,
+    gives locks and atomics, but fork-join around parallel regions
+    rather than long-lived workers), pthreads via `iso_c_binding`
+    (general, but Fortran runtime thread-safety is compiler-dependent,
+    and flang's runtime is already the dominant cost -- assuming it is
+    reentrant from a raw pthread is a large assumption), or coarrays
+    (wrong model: images have separate memory, SPMD rather than
+    shared). Settled by a spike -- *can two OpenMP threads each run an
+    independent clotran evaluation without corrupting flang's
+    runtime?* -- not from the armchair.
+  - **core.async is not free.** `go` is a CPS/state-machine transform
+    depending on `tools.analyzer`, and the impl namespaces use Java
+    executors and locks. The blocking ops (`chan`, `>!!`, `<!!`,
+    `thread`) are the attainable target; `go` is not.
+  - **Interop thread-safety.** Many Fortran libraries are not
+    thread-safe (module `save` variables, COMMON blocks, shared
+    workspace). The binding generator needs a per-library declaration
+    and must serialize calls into unsafe ones. And a `native_array` is
+    shared *mutable* memory that STM does not cover -- a ref protects
+    the reference, never the array's contents. That gap needs a
+    decision before agents exist.
 - **`deftype`/`defrecord`/`reify`** -- need the `deftype*` special form.
   `defprotocol`/`extend-protocol` already work.
 - **`genclass.clj`, `core_proxy.clj`** -- JVM bytecode generation.

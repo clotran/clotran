@@ -322,11 +322,10 @@ module values
      ! push-thread-bindings/pop-thread-bindings for a TAG_VAR. See
      ! Atom.f90's var_dyn_push/var_dyn_pop/atom_deref.
      ! ponytail: one global stack, not real per-thread storage --
-     ! clotran is single-threaded today (see NOTES.md/memory: the
-     ! concurrency model is a real, separate feature, likely
-     ! Rust-inspired, not a JVM-style thread port). Revisit this field
-     ! when that lands -- probably keyed by thread/fiber id then,
-     ! rather than one shared stack.
+     ! clotran is single-threaded today. Real Clojure's bindings are
+     ! THREAD-LOCAL, so this becomes per-context when concurrency
+     ! lands (Clojure's own STM model -- see PLAN.md, which supersedes
+     ! the earlier "Rust-inspired" intent recorded here).
      type(cons_value), allocatable :: dyn_stack(:)
      ! A Var's metadata, held HERE rather than on the cons_value's own
      ! meta_val so that it is shared by reference like the root: every

@@ -879,9 +879,11 @@ wherever it's already read (ns_get_own, `.get`/`var-get`, plain
 (`binding_stack_vars`/`binding_stack_frame_sizes`) recording exactly
 which Vars each push touched, so pop undoes exactly that frame (nested
 `binding` on the same Var restores correctly). `ponytail`: one global
-stack, not real per-thread storage -- single-threaded today; revisit
-this and `dyn_stack` together once the real (likely Rust-inspired,
-per James -- not a JVM-thread port) concurrency model exists.
+stack, not real per-thread storage -- single-threaded today. Real
+Clojure's bindings are thread-local, so this and `dyn_stack` both
+become per-context when concurrency lands; see PLAN.md, which now
+records Clojure's own STM model rather than the Rust-inspired one
+originally sketched here.
 
 Along the way, found and fixed a real, independent bug real `binding`
 needs regardless of any of the above: `eval_try` never actually ran a
@@ -1670,6 +1672,70 @@ Two Fortran gotchas for the catalog:
   token, not just at whitespace: every docstring in core.clj spans
   lines, and without that every form after the first docstring reported
   the wrong line.
+
+
+## Concurrency: the direction, and what already blocks it
+
+Recorded here because the intent changed. Earlier notes said the
+concurrency model would be "Rust-inspired, not a JVM-thread port";
+the decision is now **Clojure's own model** -- immutable values,
+explicit mutable references (atoms, refs, agents), and STM for
+coordinated change. The reason is that Clojure's model is built on
+persistent immutable data structures, which clotran already has, so it
+fits what exists rather than fighting it. PLAN.md carries the
+sequencing; this section records the constraints that are already
+visible in the code.
+
+**Ordering: the GC comes first.** Refcounting across threads means
+atomic increments on every value copy, which makes the 497ns copy cost
+worse and is then thrown away. STM is built directly on the value
+representation (a ref holds a value; a transaction snapshots and
+compare-and-swaps it), so building it before the representation
+changes means building it twice. And a collector written
+context-parameterized takes a second thread almost for free, where one
+written single-threaded and retrofitted with safepoints is a redesign.
+
+**What is implicitly single-threaded today.** These are module-level
+globals that are really "the current thread's state", and they need to
+become fields of one context type -- cheap now, a rewrite later:
+
+- `Eval.f90`: `has_error`, `last_error_value`, `gensym_table`/
+  `gensym_count`/`gensym_counter`, `here_line`/`here_col`/`here_file`,
+  `macro_expand_depth`
+- `LispReader.f90`: `has_error`, `last_error`, `current_file`
+- `Namespace.f90`: `current` -- this is `*ns*`, which real Clojure
+  makes thread-local
+- `Atom.f90`: a Var's `dyn_stack`, and the `binding` frame stack --
+  thread-local in real Clojure, one shared stack here
+
+**The substrate is an open question, not a decision.** Fortran's
+options are OpenMP (supported by both compilers, gives locks and
+atomics, but fork-join around parallel regions rather than long-lived
+workers), pthreads through `iso_c_binding` (fully general, but Fortran
+runtime thread-safety is compiler-dependent -- and flang's runtime is
+already measured as the dominant cost, so assuming it is reentrant
+from a raw pthread is a large assumption), or coarrays (the wrong
+model: images have separate memory, SPMD rather than shared). This
+gets settled by a spike -- can two OpenMP threads each run an
+independent clotran evaluation without corrupting flang's runtime --
+not from the armchair, and not until the GC is done.
+
+**Two things that will not come free:**
+
+- **core.async.** The `go` macro is a CPS/state-machine transform that
+  depends on `tools.analyzer`, and the impl namespaces use Java
+  executors and locks. The macro layer is portable in principle, the
+  runtime under it is not, and `go` is among the hairiest macros in the
+  ecosystem. The blocking operations (`chan`, `>!!`, `<!!`, `thread`)
+  are the attainable target; `go` is not.
+- **Interop thread-safety.** Many Fortran libraries are not thread-safe
+  -- module-level `save` variables, COMMON blocks, shared workspace
+  arrays. BLAS is usually fine; legacy scientific code frequently is
+  not. The binding generator will need a per-library thread-safety
+  declaration and to serialize calls into the unsafe ones. Separately,
+  a `native_array` is shared MUTABLE memory, which STM does not cover
+  at all: a ref protects the reference, never the array's contents.
+  That semantic gap needs a decision before agents exist.
 
 
 ## Status
