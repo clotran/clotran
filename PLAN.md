@@ -289,7 +289,30 @@ the text. A cache writer needs to exclude them.
       future C-level hand-off. Arbitrary kinds (`integer(2)` tested)
       and zero-length buffers are fine.
 
-      Still to add before 3c: the namespace pool.
+- [x] **3a'''.** Namespaces. Not a pool: tracing walks every slot
+      regardless of kind, so `OBJ_NS` (name, bindings, aliases) and
+      `OBJ_VAR` (root, meta, dynamic stack, name) are two constants and
+      no new code. What namespaces genuinely needed is what they are
+      the first case of -- a **global root**.
+
+      Every other root so far is a root because a caller passed it. The
+      namespace registry is a root because of where it lives: shared by
+      every thread, so there is no context to thread it through, and
+      alive until exit. So `gc_global_new/set/get` -- a slot, not a
+      handle handed over once, since the registry's own handle changes
+      each time it grows. The collector scans globals alongside the
+      argument roots, and the split survives threading: global means
+      shared by all threads, argument means owned by one.
+
+      Checks 15a-15i, both compilers, the last two under torture with
+      *nothing* on the stack -- 50 Vars kept alive across 50
+      collections by registry -> namespace -> bindings alone. Verified
+      to fail: with global scanning removed, 7 of the 9 fail.
+
+      15d is the one that matters for semantics: `(def x 42)` after
+      `(def x 41)` mutates slot 1 of the same `OBJ_VAR` and the handle
+      is unchanged, which is what makes a closure built before a later
+      `def` see the new value.
 - [ ] **3c.** Value type: drop the nine allocatable components and
       `FINAL`; keep the inline scalars (`tag`, `int_val`, `real_val`,
       `bool_val`) so `v%tag` and friends keep working, and replace only
@@ -305,16 +328,69 @@ Gate: `rc_test`, 226 `eval_test` checks and the upstream suite all pass
 under torture mode. This is a branch, and it is genuinely big-bang at
 step 3c.
 
-### 4. Integer opcodes
+### 4. Load clean, load fast
 
-`eval_form` dispatches special forms by a cascade of string
-comparisons: 5.26 ns for ten of them, against 0.09 ns for an integer
-`select case`, and there are ~30. Invisible under 497 ns copies, very
-visible after. `pre_expand` already walks every form at definition
-time, so it can stamp an integer id on each list node -- most of a VM's
-dispatch win without becoming one.
+Everything after this step is paid for by the edit-test loop, so make
+the loop cheap before starting on the expensive steps.
 
-### 5. Debugger
+- [ ] **4a.** The 9 remaining `core.clj` failures, and the upstream
+      suite green. Independent of the GC, but the baseline has to be
+      *stable* before 3c or a new failure can't be attributed.
+- [ ] **4b. Integer opcodes.** `eval_form` dispatches special forms by
+      a cascade of string comparisons: 5.26 ns for ten of them, against
+      0.09 ns for an integer `select case`, and there are ~30.
+      Invisible under 497 ns copies, very visible after. `pre_expand`
+      already walks every form at definition time, so it can stamp an
+      integer id on each list node -- most of a VM's dispatch win
+      without becoming one.
+- [ ] **4c. Bootstrap cache.** After the GC, with an index-based heap,
+      the heap serialises almost for free -- which is most of a cache.
+      Until then: caching expanded forms as text saves the 15.6 s of
+      macroexpansion but not the ~13 s of evaluation, and needs step 2
+      first or it silently drops metadata. Key must include every
+      `.clj` loaded *and* the `clotran-bin` binary, since expansion
+      depends on the evaluator.
+
+### 5. Concurrency -- STM, agents
+
+Before the debugger, not after. The debugger's central object is the
+CallInfo frame array plus the `*break-handler*` Var, and under threads
+both are per-thread: a frame stack belongs to a thread, and "which
+thread is stopped" is part of every command. Building the debugger
+first means building it twice.
+
+The same argument applies backwards to step 3, which is why the
+collector needs **safepoints** designed in now even though nothing is
+threaded yet -- a stop-the-world mark-sweep is fine with threads, but
+only if every thread can be brought to a known point. Cheaper to leave
+the hook in during 3c than to retrofit it.
+
+`binding`'s stack and `dosync`/refs are placeholders waiting on this
+and should be revisited together. Three things to settle:
+
+- **The substrate is unanswered.** OpenMP (both compilers support it,
+  gives locks and atomics, but fork-join around parallel regions
+  rather than long-lived workers), pthreads via `iso_c_binding`
+  (general, but Fortran runtime thread-safety is compiler-dependent,
+  and flang's runtime is already the dominant cost -- assuming it is
+  reentrant from a raw pthread is a large assumption), or coarrays
+  (wrong model: images have separate memory, SPMD rather than
+  shared). Settled by a spike -- *can two OpenMP threads each run an
+  independent clotran evaluation without corrupting flang's
+  runtime?* -- not from the armchair.
+- **core.async is not free.** `go` is a CPS/state-machine transform
+  depending on `tools.analyzer`, and the impl namespaces use Java
+  executors and locks. The blocking ops (`chan`, `>!!`, `<!!`,
+  `thread`) are the attainable target; `go` is not.
+- **Interop thread-safety.** Many Fortran libraries are not
+  thread-safe (module `save` variables, COMMON blocks, shared
+  workspace). The binding generator needs a per-library declaration
+  and must serialize calls into unsafe ones. And a `native_array` is
+  shared *mutable* memory that STM does not cover -- a ref protects
+  the reference, never the array's contents. That gap needs a
+  decision before agents exist.
+
+### 6. Debugger
 
 - [ ] CallInfo frame array, populated from the positions in step 1,
       pushed at apply. Must record frames elided by tail calls: the
@@ -326,48 +402,14 @@ dispatch win without becoming one.
 - [ ] terminal nested-REPL handler, written in clotran
 - [ ] framed stdio wire + an editor-facing handler, written in clotran
 
-### 6. Bootstrap cache
-
-After the GC, with an index-based heap, the heap serialises almost for
-free -- which is most of a cache. Until then: caching expanded forms as
-text saves the 15.6 s of macroexpansion but not the ~13 s of
-evaluation, and needs step 2 first or it silently drops metadata. Key
-must include every `.clj` loaded *and* the `clotran-bin` binary, since
-expansion depends on the evaluator.
-
 ## Deferred, deliberately
 
-- **Concurrency**, until after the GC -- see the decision above.
-  `binding`'s stack and `dosync`/refs are placeholders waiting on it and
-  should be revisited together. Three things to settle when we get
-  there:
-  - **The substrate is unanswered.** OpenMP (both compilers support it,
-    gives locks and atomics, but fork-join around parallel regions
-    rather than long-lived workers), pthreads via `iso_c_binding`
-    (general, but Fortran runtime thread-safety is compiler-dependent,
-    and flang's runtime is already the dominant cost -- assuming it is
-    reentrant from a raw pthread is a large assumption), or coarrays
-    (wrong model: images have separate memory, SPMD rather than
-    shared). Settled by a spike -- *can two OpenMP threads each run an
-    independent clotran evaluation without corrupting flang's
-    runtime?* -- not from the armchair.
-  - **core.async is not free.** `go` is a CPS/state-machine transform
-    depending on `tools.analyzer`, and the impl namespaces use Java
-    executors and locks. The blocking ops (`chan`, `>!!`, `<!!`,
-    `thread`) are the attainable target; `go` is not.
-  - **Interop thread-safety.** Many Fortran libraries are not
-    thread-safe (module `save` variables, COMMON blocks, shared
-    workspace). The binding generator needs a per-library declaration
-    and must serialize calls into unsafe ones. And a `native_array` is
-    shared *mutable* memory that STM does not cover -- a ref protects
-    the reference, never the array's contents. That gap needs a
-    decision before agents exist.
 - **`deftype`/`defrecord`/`reify`** -- need the `deftype*` special form.
   `defprotocol`/`extend-protocol` already work.
 - **`genclass.clj`, `core_proxy.clj`** -- JVM bytecode generation.
   Never.
 - **CIDER/nREPL wire compatibility** -- bencode framing and a protocol
-  contract. A separate decision, not constrained by step 5.
+  contract. A separate decision, not constrained by step 6.
 - **Passing a clotran array to a real Fortran procedure.** Storage is
   deliberately ready (contiguous, column-major, declared kind); the
   binding generator is the missing half.

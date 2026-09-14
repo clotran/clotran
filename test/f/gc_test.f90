@@ -26,6 +26,7 @@ program gc_test
   call check_value_runs()
   call check_deep_structure()
   call check_heap_self_check()
+  call check_namespaces()
 
   if (all_ok) then
      print *, ""
@@ -299,6 +300,81 @@ contains
     gc_torture = .false.
   end subroutine check_heap_self_check
 
+  ! Namespaces are the first thing that is a root because of WHERE IT
+  ! LIVES rather than because some caller happened to pass it: the
+  ! registry is process-wide and outlives every call. So every check
+  ! below collects with NO local roots -- if the global root does not
+  ! hold, all of it is swept.
+  subroutine check_namespaces()
+    type(gc_value) :: reg, bigger, ns, var, binds, roots(2)
+    integer :: g, i, var_ref
+
+    call gc_init(64)
+
+    reg = gc_vec(4, no_roots)
+    g = gc_global_new(reg)
+
+    ! (in-ns 'user) (def x 41), with the Var as the namespace's binding
+    ns = gc_obj(OBJ_NS, [gc_str("user", no_roots), gc_nil(), gc_nil()], no_roots)
+    roots(1) = ns
+    var = gc_obj(OBJ_VAR, [gc_int(41), gc_nil(), gc_nil(), gc_sym("x", roots)], roots)
+    call gc_set_slot(ns, 2, var)
+    call gc_vec_set(reg, 1, ns)
+
+    call gc_collect(no_roots)
+    reg = gc_global_get(g)
+    ns = gc_vec_get(reg, 1)
+    var = gc_slot(ns, 2)
+    call ok("15a. a namespace survives on the global root alone: ", &
+         gc_text(gc_slot(ns, 1)) == "user")
+    call ok_int("15b. ...with its Var still reachable through it: ", gc_kind(var), OBJ_VAR)
+    call ok_int("15c. ...and the Var's root binding intact: ", slot_int(var, 1), 41)
+
+    ! (def x 42) mutates the SAME Var rather than replacing it. That is
+    ! what makes a closure built before a later def see the new value,
+    ! so the handle must not change.
+    var_ref = var%ref
+    call gc_set_slot(var, 1, gc_int(42))
+    call gc_collect(no_roots)
+    ns = gc_vec_get(gc_global_get(g), 1)
+    var = gc_slot(ns, 2)
+    call ok("15d. redefinition keeps Var identity: ", var%ref == var_ref)
+    call ok_int("15e. ...with the new value: ", slot_int(var, 1), 42)
+
+    ! The registry grows, so the global is a SLOT, not a handle handed
+    ! over once: the old run becomes garbage and the new one must root.
+    bigger = gc_vec(8, no_roots)
+    do i = 1, 4
+       call gc_vec_set(bigger, i, gc_vec_get(gc_global_get(g), i))
+    end do
+    call gc_global_set(g, bigger)
+    call gc_collect(no_roots)
+    ns = gc_vec_get(gc_global_get(g), 1)
+    call ok("15f. a grown registry still roots its namespaces: ", &
+         gc_text(gc_slot(ns, 1)) == "user")
+
+    ! And it is a root, not a leak: drop the namespace and it goes.
+    call gc_vec_set(gc_global_get(g), 1, gc_nil())
+    call gc_collect(no_roots)
+    call ok_int("15g. ...and drops them when unbound: ", gc_live_count(), 1)
+
+    ! Under torture every allocation collects, so the only thing
+    ! keeping 50 Vars alive across 50 collections is the chain
+    ! registry -> namespace -> bindings, with nothing on the stack.
+    gc_torture = .true.
+    ns = gc_obj(OBJ_NS, [gc_str("user", no_roots), gc_nil(), gc_nil()], no_roots)
+    call gc_vec_set(gc_global_get(g), 1, ns)
+    binds = gc_vec(50, no_roots)
+    call gc_set_slot(ns, 2, binds)
+    do i = 1, 50
+       call gc_vec_set(binds, i, &
+            gc_obj(OBJ_VAR, [gc_int(i), gc_nil(), gc_nil(), gc_sym("v", no_roots)], no_roots))
+    end do
+    call ok("15h. the heap audits clean rooted only by a global: ", gc_check_heap() == "")
+    call ok_int("15i. ...and every Var survived every collection: ", var_sum(binds), 1275)
+    gc_torture = .false.
+  end subroutine check_namespaces
+
   ! --- helpers ---
 
   function car_int(c) result(i)
@@ -327,6 +403,26 @@ contains
     x = gc_slot(v, i)
     t = x%tag
   end function slot_tag
+
+  function slot_int(v, i) result(n)
+    type(gc_value), intent(in) :: v
+    integer, intent(in) :: i
+    type(gc_value) :: x
+    integer :: n
+    x = gc_slot(v, i)
+    n = x%ival
+  end function slot_int
+
+  function var_sum(run) result(s)
+    type(gc_value), intent(in) :: run
+    type(gc_value) :: v
+    integer :: i, s
+    s = 0
+    do i = 1, gc_vec_len(run)
+       v = gc_vec_get(run, i)
+       s = s + slot_int(v, 1)
+    end do
+  end function var_sum
 
   function vec_int(v, i) result(n)
     type(gc_value), intent(in) :: v

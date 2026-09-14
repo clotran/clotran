@@ -29,11 +29,19 @@
 !                reference is a bad index rather than a wild pointer,
 !                and we will be debugging this collector.
 !
-!   roots passed The root set is an ARGUMENT, never a module global.
-!                Per PLAN.md, concurrency comes after this, and a
-!                thread is then just another context with its own
-!                roots. Making the root set global here would mean
-!                rewriting the collector later.
+!   roots passed A thread's root set is an ARGUMENT, never a module
+!                global. Per PLAN.md, concurrency comes after this, and
+!                a thread is then just another context with its own
+!                roots. Making the whole root set global here would
+!                mean rewriting the collector later.
+!
+!                The exception is a genuinely PROCESS-wide root, and
+!                the namespace registry is one: it is shared by every
+!                thread, so there is no context to pass it through, and
+!                it lives until exit. Those register once via
+!                gc_global_new and the collector scans them alongside
+!                the caller's. The split is the point -- global means
+!                shared by all threads, argument means owned by one.
 !
 ! THREE POOLS, NOT FIFTEEN. Fortran cannot cast, so each node kind
 ! needs its own typed array -- and clotran has about fifteen of them
@@ -99,6 +107,15 @@ module GC
   integer, parameter, public :: OBJ_LAZY    = 6  ! 1=thunk 2=head 3=tail; i1=state
   integer, parameter, public :: OBJ_ENV     = 7  ! 1=bindings 2=outer; i1=defining ns
   integer, parameter, public :: OBJ_META    = 8  ! 1=the metadata map
+  ! A namespace is an ordinary object, not a pool of its own: name plus
+  ! two maps. Reached only from the registry (a global root), so a
+  ! namespace is never collected -- which is the semantics anyway,
+  ! Clojure drops one only on remove-ns.
+  integer, parameter, public :: OBJ_NS      = 9  ! 1=name 2=bindings 3=aliases
+  ! Same shape as OBJ_ATOM plus a name, and deliberately a distinct
+  ! kind: the box is identical, the behaviour is not (a Var derefs
+  ! through its dynamic stack and prints as #'ns/name).
+  integer, parameter, public :: OBJ_VAR     = 10 ! 1=root 2=meta 3=dyn stack 4=name
 
   integer, parameter, public :: OBJ_SLOTS = 4
 
@@ -143,6 +160,15 @@ module GC
   integer, allocatable :: str_free_next(:)
   integer :: str_free_head = 0, str_used = 0
 
+  ! --- global roots ----------------------------------------------
+  ! Process-wide and mutable: the registry handle changes whenever the
+  ! registry grows, so a global is a SLOT, not a value handed over once.
+  ! ponytail: fixed 8 slots -- the registry, *ns*, and room to spare;
+  ! make it growable if something ever needs a ninth.
+  integer, parameter :: GC_MAX_GLOBALS = 8
+  type(gc_value) :: global_root(GC_MAX_GLOBALS)
+  integer :: global_count = 0
+
   ! --- marking work list -----------------------------------------
   ! An explicit stack, not recursion: a list is a chain thousands of
   ! nodes deep, and recursive marking would overflow the real stack on
@@ -167,6 +193,7 @@ module GC
   public :: gc_vec_len, gc_vec_get, gc_vec_set
   public :: gc_car, gc_cdr, gc_set_car, gc_set_cdr
   public :: gc_live_count, gc_obj_capacity, gc_check_heap
+  public :: gc_global_new, gc_global_set, gc_global_get, gc_global_count
 
 contains
 
@@ -194,6 +221,9 @@ contains
     if (allocated(mark_stack)) deallocate(mark_stack)
     allocate(mark_stack(n))
     mark_sp = 0
+
+    global_root = gc_nil()
+    global_count = 0
     gc_allocs = 0; gc_frees = 0; gc_collections = 0
   end subroutine gc_init
 
@@ -539,12 +569,48 @@ contains
     str_mark = .false.
     mark_sp = 0
 
+    do i = 1, global_count
+       call push_mark(global_root(i))
+    end do
     do i = 1, size(roots)
        call push_mark(roots(i))
     end do
     call drain_mark_stack()
     call sweep()
   end subroutine gc_collect
+
+  ! --- global roots ----------------------------------------------
+
+  ! Claims a slot and returns its index. Registration is permanent:
+  ! there is no unregister, because the only things that belong here
+  ! live until the process exits.
+  function gc_global_new(v) result(idx)
+    type(gc_value), intent(in) :: v
+    integer :: idx
+    idx = 0
+    if (global_count >= GC_MAX_GLOBALS) return
+    global_count = global_count + 1
+    global_root(global_count) = v
+    idx = global_count
+  end function gc_global_new
+
+  subroutine gc_global_set(idx, v)
+    integer, intent(in) :: idx
+    type(gc_value), intent(in) :: v
+    if (idx >= 1 .and. idx <= global_count) global_root(idx) = v
+  end subroutine gc_global_set
+
+  function gc_global_get(idx) result(v)
+    integer, intent(in) :: idx
+    type(gc_value) :: v
+    v = gc_nil()
+    if (idx >= 1 .and. idx <= global_count) v = global_root(idx)
+  end function gc_global_get
+
+  function gc_global_count() result(n)
+    integer :: n
+    n = global_count
+  end function gc_global_count
 
   subroutine push_mark(v)
     type(gc_value), intent(in) :: v
