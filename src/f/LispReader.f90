@@ -596,6 +596,8 @@ contains
     pos = pos + 1 ! consume '^'
     meta = read_form(tokens, pos)
     if (has_error) return
+    meta = normalize_meta(meta)
+    if (has_error) return
     val = read_form(tokens, pos)
     if (has_error) return
     if (allocated(val%meta_val)) deallocate(val%meta_val)
@@ -605,6 +607,46 @@ contains
     meta_node_total_allocated = meta_node_total_allocated + 1
     val%meta_val%ptr%val = meta
   end function read_meta
+
+  ! Metadata shorthand, exactly as real Clojure's LispReader expands it:
+  !
+  !   ^:kw form    -> {:kw true}
+  !   ^Type form   -> {:tag Type}
+  !   ^"str" form  -> {:tag "str"}
+  !   ^{...} form  -> as written
+  !
+  ! Storing the shorthand raw (the bare keyword, the bare symbol) is
+  ! not a cosmetic difference: every (:private (meta v)) and
+  ! (:dynamic (meta v)) test in core.clj looks the key up IN A MAP, and
+  ! core_print.clj's print-meta calls (count m) on it. A bare keyword
+  ! answers neither.
+  function normalize_meta(meta) result(out)
+    type(cons_value), intent(in) :: meta
+    type(cons_value) :: out
+    type(cons_value) :: key, val_true
+    type(array_map_t) :: m
+
+    select case (meta%tag)
+    case (TAG_HASHMAP)
+       out = meta
+    case (TAG_KEYWORD)
+       val_true%tag = TAG_BOOL
+       val_true%bool_val = .true.
+       m = array_map_assoc(array_map_empty(), meta, val_true)
+       out%tag = TAG_HASHMAP
+       allocate(out%map_val)
+       out%map_val = m
+    case (TAG_SYMBOL, TAG_STRING)
+       key%tag = TAG_KEYWORD
+       key%str_val = "tag"
+       m = array_map_assoc(array_map_empty(), key, meta)
+       out%tag = TAG_HASHMAP
+       allocate(out%map_val)
+       out%map_val = m
+    case default
+       call reader_error("Metadata must be Symbol, Keyword, String or Map")
+    end select
+  end function normalize_meta
 
   ! Collects the forms between "pos" and "closer" into items(1:n). A
   ! subroutine with intent(out), not a function: items is allocated by a

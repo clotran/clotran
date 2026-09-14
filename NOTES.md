@@ -1738,6 +1738,38 @@ not from the armchair, and not until the GC is done.
   That semantic gap needs a decision before agents exist.
 
 
+## Metadata: the reader was the broken half
+
+`pr-str` under `*print-meta*` already worked -- core_print.clj's own
+`print-meta` does it. The real gap was that the READER never normalised
+metadata shorthand, which real Clojure's LispReader does:
+
+    ^:kw form    -> {:kw true}
+    ^Type form   -> {:tag Type}
+    ^"str" form  -> {:tag "str"}
+    ^{...} form  -> as written
+
+Storing the shorthand raw is not a cosmetic difference. `^:private foo`
+produced the bare keyword `:private`, so every `(:private (meta v))`
+and `(:dynamic (meta v))` test in core.clj was looking a key up in
+something that is not a map, and `print-meta` skipped it because
+`(count m)` on a keyword answers nothing. `defn-`'s own
+`(assoc (meta name) :private true)` was assoc-ing onto a keyword.
+
+Normalising it immediately woke up code that had never run: `defn`'s
+`resolve-tag` (core.clj:243) inspects `(:tag m)` and, finding one for
+the first time, called `clojure.lang.Compiler$HostExpr/maybeSpecialTag`
+and `maybeClass`. Both are shimmed in clotran.clj to answer nil --
+there are no classes here, so `defn` leaves the tag exactly as written,
+which is right, since a type hint is advisory. Bootstrap failures went
+9 -> 25 on the change and back to 9 with the shims.
+
+Also fixed while here: a READER error was being tagged with the
+EVALUATOR's current position, so a malformed form typed at the REPL got
+reported at whatever line of core.clj happened to be evaluated last --
+worse than no location at all. Reader errors now raise without one.
+
+
 ## Status
 
 Steps 1-6 pass official required tests on both compilers (117/117,

@@ -401,6 +401,17 @@
 (def isRunning (fn* [] false))
 (in-ns 'clojure.core)
 
+;; clojure.lang.Compiler$HostExpr: how defn's own resolve-tag asks
+;; whether a ^Type hint names a primitive or a real class. There are no
+;; classes here, so both answer nil, and defn leaves the tag exactly as
+;; written -- which is what we want, since a type hint is advisory.
+;; (Reached only once the reader started normalising ^Type into
+;; {:tag Type}, as real Clojure's reader does.)
+(in-ns 'clojure.lang.Compiler$HostExpr)
+(def maybeSpecialTag (fn* [tag] nil))
+(def maybeClass (fn* [tag string-ok] nil))
+(in-ns 'clojure.core)
+
 ;; clojure.lang.Compiler: only the name munging defprotocol needs.
 (in-ns 'clojure.lang.Compiler)
 (def munge clotran.native/munge)

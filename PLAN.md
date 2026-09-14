@@ -12,7 +12,7 @@ Measured, not estimated:
 | | |
 | --- | --- |
 | core.clj load | 9 failing forms of 728 |
-| `eval_test` | 232/232, flang and gfortran |
+| `eval_test` | 239/239, flang and gfortran |
 | Clojure's own suite (`scripts/run-clojure-tests`) | 163 assertions passing, 6 namespaces |
 | startup (bootstrap) | ~28s, of which ~15.6s is macroexpansion |
 | one `cons_value` copy | **497 ns** |
@@ -170,11 +170,30 @@ can point at real source.
 
 Next up is step 2.
 
-### 2. Metadata in `pr_str`
+### 2. Metadata round-tripping -- DONE
 
-The printer does not emit metadata, so anything that round-trips a form
-through text silently drops `^:dynamic`, `:arglists`, `:test`. Needed
-for correctness on its own, and a prerequisite for any form cache.
+Turned out `core_print.clj` already emitted metadata correctly under
+`*print-meta*`; the real gap was in the READER, which did not normalise
+the shorthand. `^:private foo` produced the bare keyword `:private`
+rather than `{:private true}`, and `^String foo` the bare symbol rather
+than `{:tag String}` -- so every `(:private (meta v))` and
+`(:dynamic (meta v))` test in core.clj looked a key up in something
+that was not a map, and `print-meta` skipped it because `(count m)` on
+a keyword answers nothing.
+
+- [x] reader normalises `^:kw` / `^Type` / `^"str"` / `^{...}`
+- [x] `Compiler$HostExpr/maybeSpecialTag` + `maybeClass` shims --
+      `defn`'s own `resolve-tag` had never run before, because we never
+      produced a `:tag` for it to resolve
+- [x] reader errors no longer carry the evaluator's position (a bad
+      form at the REPL was being reported at whatever line of core.clj
+      ran last)
+- [x] verified round-trip: `^:dynamic` survives print -> read
+- [x] tests (`eval_test` section 45)
+
+Still open for the cache in step 6: `(meta form)` synthesises
+`:line`/`:column`, so printing with `*print-meta*` bakes positions into
+the text. A cache writer needs to exclude them.
 
 ### 3. The GC -- nothing built yet
 

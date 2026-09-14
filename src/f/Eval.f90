@@ -322,12 +322,31 @@ contains
 
   subroutine eval_error(msg)
     character(len=*), intent(in) :: msg
+    call raise_error(msg, .true.)
+  end subroutine eval_error
+
+  ! A READER error already knows (or cannot know) its own position, so
+  ! it must not be tagged with the evaluator's -- otherwise a bad form
+  ! typed at the REPL is reported at whatever line of core.clj happened
+  ! to be evaluated last, which is worse than no location at all.
+  subroutine reader_raised_error(msg)
+    character(len=*), intent(in) :: msg
+    call raise_error(msg, .false.)
+  end subroutine reader_raised_error
+
+  subroutine raise_error(msg, locate)
+    character(len=*), intent(in) :: msg
+    logical, intent(in) :: locate
     type(cons_value) :: v
     if (has_error) return
     v%tag = TAG_STRING
-    v%str_val = msg // error_location()
+    if (locate) then
+       v%str_val = msg // error_location()
+    else
+       v%str_val = msg
+    end if
     call throw_value(v)
-  end subroutine eval_error
+  end subroutine raise_error
 
   ! " (file:line:col)" for the form being evaluated, or "" if it was
   ! not read from anywhere. Appended to the message rather than carried
@@ -791,7 +810,7 @@ contains
       end if
     end block
     if (.not. ok) then
-       call eval_error("load-file: " // err)
+       call reader_raised_error("load-file: " // err)
        return
     end if
 
@@ -4957,7 +4976,7 @@ contains
     character(len=:), allocatable :: err
     logical :: ok
     ok = read_str(args(1)%str_val, val, err)
-    if (.not. ok .and. err /= "empty input") call eval_error(err)
+    if (.not. ok .and. err /= "empty input") call reader_raised_error(err)
   end function builtin_read_string
 
   ! (slurp path): the whole file as one string, read as raw bytes so

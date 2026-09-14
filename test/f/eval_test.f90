@@ -617,6 +617,28 @@ program eval_test
        "         (catch Throwable e (.endsWith (str e) " // '"(line 1:24)"' // "))))", &
        "true", all_ok)
 
+  ! 45. Metadata shorthand is normalised by the READER, exactly as real
+  ! Clojure's does: ^:kw -> {:kw true}, ^Type -> {:tag Type}. Storing
+  ! the shorthand raw is not cosmetic -- every (:private (meta v)) and
+  ! (:dynamic (meta v)) test in core.clj looks the key up in a MAP, and
+  ! a bare keyword answers none of them.
+  call expect_result("45a. ^:kw becomes {:kw true}: ", env, &
+       '(meta (read-string "^:private foo"))', "{:private true}", all_ok)
+  call expect_result("45b. ^Type becomes {:tag Type}: ", env, &
+       '(meta (read-string "^String foo"))', "{:tag String}", all_ok)
+  call expect_result("45c. a map is left as written: ", env, &
+       '(meta (read-string "^{:a 1} foo"))', "{:a 1}", all_ok)
+  call expect_result("45d. ...including inside a form: ", env, &
+       '(meta (second (read-string "(def ^:dynamic *x* 1)")))', "{:dynamic true}", all_ok)
+  call expect_error("45e. anything else is a reader error: ", env, &
+       '(read-string "^42 foo")')
+  call expect_result("45f. metadata round-trips through print and read: ", env, &
+       '(let [printed (binding [*print-meta* true]' // &
+       '                (pr-str (read-string "(def ^:dynamic *x* 1)")))]' // &
+       "  (meta (second (read-string printed))))", "{:dynamic true}", all_ok)
+  call expect_result("45g. ...and *print-meta* is off by default, as in Clojure: ", env, &
+       "(pr-str (with-meta [1 2] {:a 1}))", '"[1 2]"', all_ok)
+
   if (all_ok) then
      print *, ""
      print *, "ALL EVAL CHECKS PASSED"
