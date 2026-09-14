@@ -120,6 +120,69 @@
 (def unchecked_negate (fn* [x] (clotran.native/- x)))
 (in-ns 'clojure.core)
 
+;; clojure.lang.Var/pushThreadBindings and popThreadBindings: what
+;; core.clj's own push-thread-bindings/pop-thread-bindings (and so
+;; `binding`) call into. See Eval.f90 for the stack itself.
+(in-ns 'clojure.lang.Var)
+(def pushThreadBindings clotran.native/push-thread-bindings)
+(def popThreadBindings clotran.native/pop-thread-bindings)
+(in-ns 'clojure.core)
+
+;; The java.lang seq "classes" real core.clj builds its infinite and
+;; ranged sequences from -- range/iterate/repeat/cycle are each just a
+;; call to one of these. Each is written here with the SAME lazy-seq
+;; primitive core.clj itself uses, (new clojure.lang.LazySeq (fn* []
+;; ...)), spelled out longhand because clotran.clj loads before
+;; core.clj defines the `lazy-seq` macro. Nothing is realized until
+;; something asks, so (range) and (iterate f x) are genuinely infinite
+;; and (take 5 ...) of one costs 5 steps.
+(in-ns 'clojure.lang.Iterate)
+(def create (fn* create [f x]
+              (clotran.native/cons x (new clojure.lang.LazySeq (fn* [] (create f (f x)))))))
+(in-ns 'clojure.core)
+
+(in-ns 'clojure.lang.Repeat)
+(def create (fn* create
+              ([x] (clotran.native/cons x (new clojure.lang.LazySeq (fn* [] (create x)))))
+              ([n x] (if (clotran.native/> n 0)
+                       (clotran.native/cons
+                        x
+                        (new clojure.lang.LazySeq (fn* [] (create (clotran.native/- n 1) x))))
+                       nil))))
+(in-ns 'clojure.core)
+
+(in-ns 'clojure.lang.Cycle)
+(def create (fn* [coll]
+              ((fn* step [remaining]
+                 (if (clotran.native/seq remaining)
+                   (clotran.native/cons
+                    (clotran.native/first remaining)
+                    (new clojure.lang.LazySeq (fn* [] (step (clotran.native/rest remaining)))))
+                   (if (clotran.native/seq coll)
+                     (step coll)
+                     nil)))
+               coll)))
+(in-ns 'clojure.core)
+
+(in-ns 'clojure.lang.LongRange)
+(def create (fn* create
+              ([end] (create 0 end 1))
+              ([start end] (create start end 1))
+              ([start end step]
+               (if (if (clotran.native/> step 0)
+                     (clotran.native/< start end)
+                     (clotran.native/> start end))
+                 (clotran.native/cons
+                  start
+                  (new clojure.lang.LazySeq
+                       (fn* [] (create (clotran.native/+ start step) end step))))
+                 nil))))
+(in-ns 'clojure.core)
+
+(in-ns 'clojure.lang.Range)
+(def create clojure.lang.LongRange/create)
+(in-ns 'clojure.core)
+
 ;; clojure.lang.PersistentHashMap/create and friends: these take ONE
 ;; seq of alternating keys/vals (real Clojure's create(Object...) via
 ;; hash-map's own (. clojure.lang.PersistentHashMap (create keyvals))),

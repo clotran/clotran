@@ -44,6 +44,12 @@ module values
                                       ! pattern as TAG_VAR: the mutable payload is a TAG_STRING
                                       ! cons_value, mutated in place by .append; .toString reads
                                       ! it back out directly (see eval_new/eval_instance_call).
+  integer, parameter :: TAG_LAZYSEQ = 16 ! clojure.lang.LazySeq -- a seq whose rest isn't computed
+                                      ! until asked for. lazy_val holds the node; see
+                                      ! RT.f90's force-then-delegate seq/first/rest and
+                                      ! Eval.f90's force_lazy (the thunk has to be CALLED,
+                                      ! which only Eval can do -- RT reaches it through a
+                                      ! procedure pointer, see rt_set_lazy_forcer).
 
   integer, parameter :: BITS = 5
   integer, parameter :: BRANCH = 32
@@ -61,6 +67,7 @@ module values
      type(array_map_t), allocatable :: map_val
      type(closure_t), allocatable :: fn_val
      type(atom_ref), allocatable :: atom_val
+     type(lazy_ref), allocatable :: lazy_val
      type(meta_ref), allocatable :: meta_val ! (with-meta x m)/(meta x) -- any value, any type
    contains
      final :: cons_value_finalize
@@ -275,6 +282,32 @@ module values
      final :: atom_ref_finalize
   end type atom_ref
 
+  ! --- LazySeq backing. Three states, exactly clojure.lang.LazySeq's
+  ! own: not yet run (thunk), run and produced a first/rest pair, or
+  ! run and produced nothing. Realizing flips the state ONCE and keeps
+  ! the result -- that memoization is what makes walking a lazy seq
+  ! O(1) per element instead of re-running the generator each step.
+  ! tail is a full cons_value (not a cons_ref) so it can itself be
+  ! another unrealized LazySeq -- which is the whole point, and the
+  ! reason a plain cons_cell can't host a lazy rest.
+  integer, parameter, public :: LAZY_ST_PENDING = 0
+  integer, parameter, public :: LAZY_ST_CONS = 1
+  integer, parameter, public :: LAZY_ST_EMPTY = 2
+
+  type, public :: lazy_node
+     integer :: refcount = 0
+     integer :: state = LAZY_ST_PENDING
+     type(cons_value) :: thunk ! (fn* [] body...) while pending; released once realized
+     type(cons_value) :: head
+     type(cons_value) :: tail
+  end type lazy_node
+
+  type, public :: lazy_ref
+     type(lazy_node), pointer :: ptr => null()
+   contains
+     final :: lazy_ref_finalize
+  end type lazy_ref
+
   ! --- Metadata backing: (with-meta x m)/(meta x). Same shape as atom
   ! (a refcounted box holding one cons_value) even though nothing here
   ! mutates it -- a cons_value can't hold another cons_value directly as
@@ -303,6 +336,7 @@ module values
      module procedure env_ref_assign
      module procedure closure_t_assign
      module procedure atom_ref_assign
+     module procedure lazy_ref_assign
      module procedure meta_ref_assign
      module procedure arity_clauses_ref_assign
      module procedure hamt_ref_assign
@@ -320,6 +354,8 @@ module values
   integer, public :: env_total_freed = 0
   integer, public :: atom_node_total_allocated = 0
   integer, public :: atom_node_total_freed = 0
+  integer, public :: lazy_node_total_allocated = 0
+  integer, public :: lazy_node_total_freed = 0
   integer, public :: meta_node_total_allocated = 0
   integer, public :: meta_node_total_freed = 0
   integer, public :: arity_clauses_node_total_allocated = 0
@@ -329,7 +365,8 @@ module values
 
   public :: assignment(=)
   public :: cons_value_release, cons_ref_release, node_ref_release, array_map_ref_release, env_ref_release, &
-       atom_ref_release, meta_ref_release, arity_clauses_ref_release, hamt_ref_release
+       atom_ref_release, meta_ref_release, arity_clauses_ref_release, hamt_ref_release, &
+       lazy_ref_release
   public :: value_equal
 
 contains
@@ -385,6 +422,10 @@ contains
        call atom_ref_release(v%atom_val)
        deallocate(v%atom_val)
     end if
+    if (allocated(v%lazy_val)) then
+       call lazy_ref_release(v%lazy_val)
+       deallocate(v%lazy_val)
+    end if
     if (allocated(v%meta_val)) then
        call meta_ref_release(v%meta_val)
        deallocate(v%meta_val)
@@ -420,6 +461,10 @@ contains
     if (allocated(rhs%atom_val)) then
        allocate(lhs%atom_val)
        lhs%atom_val = rhs%atom_val
+    end if
+    if (allocated(rhs%lazy_val)) then
+       allocate(lhs%lazy_val)
+       lhs%lazy_val = rhs%lazy_val
     end if
     if (allocated(rhs%meta_val)) then
        allocate(lhs%meta_val)
@@ -648,6 +693,33 @@ contains
     type(atom_ref), intent(inout) :: h
     call atom_ref_release(h)
   end subroutine atom_ref_finalize
+
+  ! ---- lazy_ref (same shape as atom_ref) ----
+
+  recursive subroutine lazy_ref_release(h)
+    type(lazy_ref), intent(inout) :: h
+    if (.not. associated(h%ptr)) return
+    h%ptr%refcount = h%ptr%refcount - 1
+    if (h%ptr%refcount <= 0) then
+       deallocate(h%ptr) ! cascades: releases thunk/head/tail
+       lazy_node_total_freed = lazy_node_total_freed + 1
+    end if
+    h%ptr => null()
+  end subroutine lazy_ref_release
+
+  impure elemental subroutine lazy_ref_assign(lhs, rhs)
+    type(lazy_ref), intent(inout) :: lhs
+    type(lazy_ref), intent(in) :: rhs
+    if (associated(lhs%ptr, rhs%ptr)) return
+    call lazy_ref_release(lhs)
+    lhs%ptr => rhs%ptr
+    if (associated(lhs%ptr)) lhs%ptr%refcount = lhs%ptr%refcount + 1
+  end subroutine lazy_ref_assign
+
+  impure elemental subroutine lazy_ref_finalize(h)
+    type(lazy_ref), intent(inout) :: h
+    call lazy_ref_release(h)
+  end subroutine lazy_ref_finalize
 
   ! ---- meta_ref (same shape as atom_ref, nothing here mutates it) ----
 

@@ -162,8 +162,11 @@ program eval_test
   ! 19. Explicitly namespace-qualified symbols resolve directly in the
   ! named namespace -- what makes cond's own self-reference (quasiquote
   ! qualifies it to clojure.core/cond) actually work when invoked.
+  ! #<fn>, not #<builtin +>: real core.clj defines its own + over
+  ! clojure.lang.Numbers and that's what clojure.core/+ now holds --
+  ! the native one is still there as clotran.native/+ (see 25g).
   call expect_result("19a. an explicitly qualified symbol resolves in that namespace: ", env, &
-       "clojure.core/+", "#<builtin +>", all_ok)
+       "clojure.core/+", "#<fn>", all_ok)
   call expect_result("19b. ...and is callable as such: ", env, "(clojure.core/+ 1 2)", "3", all_ok)
 
   ! 20. throw/try/catch: real Clojure's own names (try*/catch* also
@@ -177,8 +180,10 @@ program eval_test
        "(try (nth (list) 1) (catch Exception exc 99))", "99", all_ok)
   call expect_result("20d. (throw x) throws x, caught and bound: ", env, &
        "(try (throw (list 1 2)) (catch Exception e e))", "(1 2)", all_ok)
+  ! doall, because map is genuinely lazy now (see NOTES.md): real
+  ! Clojure wouldn't throw here either until the seq is realized.
   call expect_result("20e. throw is an ordinary function, usable as a value: ", env, &
-       "(try (map throw (list 99)) (catch Exception e e))", "99", all_ok)
+       "(try (doall (map throw (list 99))) (catch Exception e e))", "99", all_ok)
   call expect_result("20f. try*/catch* (mal's names) work too: ", env, "(try* 7 (catch* e 8))", "7", all_ok)
 
   ! 21. apply/map/type predicates.
@@ -269,7 +274,10 @@ program eval_test
   call expect_result("25f. every builtin is also reachable via clotran.native, unqualified: ", env, &
        "(clotran.native/first (list 1 2 3))", "1", all_ok)
   call expect_result("25g. ...surviving even if clojure.core/first gets shadowed: ", env, &
-       '(do (def first (fn* [x] "shadowed")) (list (first [1 2 3]) (clotran.native/first [1 2 3])))', &
+       '(do (def first (fn* [x] "shadowed"))' // &
+       '    (def shadow-result (list (first [1 2 3]) (clotran.native/first [1 2 3])))' // &
+       '    (def first clotran.native/first)' // & ! put it back: every later check needs a working first
+       '    shadow-result)', &
        '("shadowed" 1)', all_ok)
 
   ! 26. Multi-arity fn*: (fn* name? ([p1] b1) ([p2] b2) ...), dispatched
@@ -338,6 +346,33 @@ program eval_test
        '(count #"\d+")', "3", all_ok)
   call expect_result("30a'. ...an already-escaped backslash is 4 characters: ", env, &
        '(count #"\\d+")', "4", all_ok)
+
+  ! 31. Real lazy seqs (TAG_LAZYSEQ, see NOTES.md). The point of each
+  ! check is a big-O property, not just the value: nothing realizes
+  ! until asked, first costs one cell, an infinite seq is finite to
+  ! take/nth, and a realized cell is never recomputed.
+  call expect_result("31a. nothing is realized at definition time: ", env, &
+       "(do (def lz-c (atom 0)) (def lz (map (fn [x] (swap! lz-c inc) x) (range 50))) (deref lz-c))", &
+       "0", all_ok)
+  call expect_result("31b. first realizes exactly one cell: ", env, &
+       "(do (first lz) (deref lz-c))", "1", all_ok)
+  call expect_result("31c. count realizes the rest, once: ", env, &
+       "(do (count lz) (count lz) (deref lz-c))", "50", all_ok)
+  call expect_result("31d. an infinite seq is fine as long as you take from it: ", env, &
+       "(take 5 (iterate inc 0))", "(0 1 2 3 4)", all_ok)
+  call expect_result("31e. ...including (range) with no bound: ", env, "(nth (range) 7)", "7", all_ok)
+  call expect_result("31f. repeat/cycle are infinite too: ", env, &
+       "(list (take 3 (repeat :x)) (take 4 (cycle [1 2])))", "((:x :x :x) (1 2 1 2))", all_ok)
+
+  ! 32. binding: real dynamic scope over a real Var, pushed and popped
+  ! around the body (the pop lives in binding's own finally).
+  call expect_result("32a. binding shadows the root inside its body: ", env, &
+       "(do (def ^:dynamic *dv* 1) (binding [*dv* 99] *dv*))", "99", all_ok)
+  call expect_result("32b. ...and the root is restored after: ", env, "*dv*", "1", all_ok)
+  call expect_result("32c. a function called inside sees the bound value: ", env, &
+       "(do (defn dv-read [] *dv*) (list (binding [*dv* 7] (dv-read)) (dv-read)))", "(7 1)", all_ok)
+  call expect_result("32d. nested bindings restore one level at a time: ", env, &
+       "(binding [*dv* 1] (list (binding [*dv* 2] *dv*) *dv*))", "(2 1)", all_ok)
 
   if (all_ok) then
      print *, ""

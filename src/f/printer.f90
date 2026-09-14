@@ -74,6 +74,11 @@ contains
        str = "(atom " // pr_str(atom_deref(v), r) // ")"
     case (TAG_VAR)
        str = "#'" // v%str_val
+    case (TAG_LAZYSEQ)
+       ! Printing realizes the whole seq, same as real Clojure without
+       ! *print-length* -- printing an infinite one doesn't terminate
+       ! there either.
+       str = pr_seq(v, "(", ")", r)
     case default
        str = "nil"
     end select
@@ -134,7 +139,9 @@ contains
     str = open
     is_first = .true.
     s = seq(v)
-    do while (s%tag == TAG_LIST)
+    ! A lazy seq stays a lazy seq as it's walked (next realizes one
+    ! cell at a time), so the loop has to accept both shapes.
+    do while (s%tag == TAG_LIST .or. s%tag == TAG_LAZYSEQ)
        if (.not. is_first) str = str // " "
        str = str // pr_str(first(s), readable)
        is_first = .false.

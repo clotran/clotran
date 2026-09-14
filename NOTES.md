@@ -962,23 +962,90 @@ cause moved every time one was fixed. In order:
 Result: `let`, `loop`, `fn`, `defn`, sequential destructuring
 (`[a b & c]`), associative destructuring (`{:keys [...]}`, `{x :x}`),
 variadic fns, `map`/`filter`/`reduce` all work, and core.clj loads
-with no warning. `eval_test` went 94/103 -> **154/159 on both
+with no warning. `eval_test` went 94/103 -> **167/169 on both
 compilers**, with no crash anywhere (previously it aborted partway).
+The two that remain both need `*out*` (`with-out-str`/`pr-str`), which
+is real output redirection and hasn't been built.
 
-**The one real ceiling left: lazy seqs are eager.** Forcing a
-`lazy-seq` runs its thunk immediately, so a finite seq is correct but
-an INFINITE one (`(repeatedly f)`, `(iterate f x)`, `(range)`) would
-realize forever. core.clj builds one in ordinary code -- `destmap*`'s
-`:or` handling is `(zipmap (keys defaults) (repeatedly #(gensym
-"default__")))`, finite only because real Clojure stops pulling. A
-depth cap (64) turns that into a catchable error instead of taking the
-process down, which is why `:or` defaults and `iteration` are the two
-things still unsupported. The real fix is a proper lazy seq -- a thunk
-plus memoized realization, forced by seq/first/rest/count/print -- and
-the structural obstacle is that `cons_cell`'s cdr is a `cons_ref` (a
-list), so it cannot hold an unrealized tail; that needs a general
-cons_value cdr or a separate lazy-cons node. That is the next real
-feature, and it is what the remaining core.clj forms are waiting on.
+One test-hygiene bug worth noting, since it hid several others: check
+25g deliberately shadows `clojure.core/first` and never put it back,
+so every later check ran against a broken `first` -- which is what
+made `disj`, `%&` and the Var printing checks "fail". It restores it
+now.
+
+## Real lazy seqs: TAG_LAZYSEQ
+
+Fortran has no notion of a deferred value, so this is built the same
+way clojure.lang.LazySeq is: a node with three states -- not yet run
+(holding the thunk), run and produced a first/rest pair, or run and
+produced nothing. `lazy-seq` expands to `(new clojure.lang.LazySeq
+(fn* [] body...))`, so eval_new just builds one of these and runs
+NOTHING.
+
+**Realization is memoized, and that is where the big-O lives.** A cell
+flips state exactly once and keeps the result, so:
+
+| operation | cost |
+|---|---|
+| `(lazy-seq ...)` | O(1), nothing runs |
+| `first` / `rest` / `next` | O(1) -- realizes that one cell |
+| `nth s i` | O(i), realizes i+1 cells -- never the whole seq |
+| `count` | O(n), realizes all of it (same as real Clojure) |
+| walking the same seq again | free -- already realized |
+
+Without the memoization, a nested lazy seq (`map` over `map` over
+`filter`...) would re-run each generator per step and go exponential;
+with it, a full walk is O(n) and `(take 5 (iterate inc 0))` costs five
+steps no matter how infinite the underlying seq is.
+
+Three pieces made it fit:
+
+- **RT can't call a closure** (it sits below Eval), so Eval hands its
+  forcer down at startup: `rt_set_lazy_forcer(force_lazy)`. RT's
+  seq/first/rest/next/count/nth force through that pointer.
+- **`cons` onto a lazy seq must not realize it.** A `cons_cell`'s cdr
+  is a `cons_ref`, so it simply cannot hold an unrealized rest -- and
+  `repeatedly` is literally `(lazy-seq (cons (f) (repeatedly f)))`, so
+  a cons that forced its tail would never terminate. `cons` onto a
+  lazy seq therefore builds an already-realized lazy node (head + any
+  tail) instead, which is exactly real Clojure's `Cons` over an ISeq.
+- **A seq in code position is a form.** `list*`/`concat` are lazy, so
+  macro expansions now routinely come back as lazy seqs; eval_form
+  realizes those into a list and evaluates them, the way real
+  Clojure's compiler analyses any ISeq.
+
+`range`/`iterate`/`repeat`/`cycle` are each a Java class in real
+core.clj (`clojure.lang.LongRange/create` and friends). They're
+written out in clotran.clj over the same `(new clojure.lang.LazySeq
+(fn* [] ...))` primitive -- longhand, because clotran.clj loads before
+core.clj defines the `lazy-seq` macro. All of them are genuinely
+infinite: `(nth (range) 7)`, `(take 3 (repeat :x))`, `(take 4 (cycle
+[1 2]))` all terminate.
+
+Realizing a cell drops its thunk (`node%thunk = nilv`), so a realized
+seq doesn't retain the closure that generated it -- the same "don't
+hold onto the head" hygiene real Clojure needs.
+
+**Two more real bugs fell out of getting `binding` to work on top of
+this**, both of which had been quietly wrong for a long time:
+
+- `let*` took only its FIRST body form. Real Clojure's `let*` has an
+  implicit `do`; mal's takes exactly one form, and that's what this
+  had inherited. So `(let [] (side-effect) x)` evaluated to the side
+  effect, not `x` -- which is precisely how `binding` lost its body
+  value, since `binding` expands to `(let [] (push-thread-bindings
+  ...) (try body (finally (pop-thread-bindings))))`.
+- Syntax-quote was namespace-qualifying `finally` (and `recur`,
+  `throw`, `set!`), so `binding`'s expansion carried a
+  `(user/finally ...)` clause that eval_try didn't recognize as a
+  finally at all -- the pop never ran and the binding leaked.
+
+With both fixed, `binding` is real: the body sees the bound value,
+functions called from inside see it, the root is restored on the way
+out, and nested bindings unwind one level at a time. Still one global
+stack rather than per-thread -- there are no threads yet; see the
+concurrency note.
+
 
 ## Getting `defn`/`let`/`loop` to actually work against real core.clj
 

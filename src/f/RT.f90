@@ -15,8 +15,72 @@ module RT
   private
 
   public :: nil_value, first, rest, next, cons, conj, nth, count, seq, get, assoc, equiv
+  public :: has_at_least
+  public :: rt_set_lazy_forcer, lazy_force, lazy_new, lazy_cons
+
+  ! Realizing a LazySeq means CALLING its thunk, and only Eval can call
+  ! anything -- but Eval sits above RT, so RT can't call back into it
+  ! directly. Eval hands its forcer down at startup instead
+  ! (rt_set_lazy_forcer), and everything here forces through this.
+  abstract interface
+     subroutine lazy_forcer_i(node)
+       import :: lazy_node
+       type(lazy_node), pointer, intent(inout) :: node
+     end subroutine lazy_forcer_i
+  end interface
+  procedure(lazy_forcer_i), pointer, save :: lazy_forcer => null()
 
 contains
+
+  subroutine rt_set_lazy_forcer(f)
+    procedure(lazy_forcer_i) :: f
+    lazy_forcer => f
+  end subroutine rt_set_lazy_forcer
+
+  ! Realize v's node if it hasn't been already. Idempotent and
+  ! memoized: the node's state flips once and the result is kept, so
+  ! walking a lazy seq costs O(1) per element, not O(n) re-generation
+  ! per step (and nested lazy seqs stay linear instead of exploding).
+  subroutine lazy_force(v)
+    type(cons_value), intent(in) :: v
+    type(lazy_node), pointer :: node
+    if (v%tag /= TAG_LAZYSEQ) return
+    if (.not. allocated(v%lazy_val)) return
+    node => v%lazy_val%ptr
+    if (.not. associated(node)) return
+    if (node%state /= LAZY_ST_PENDING) return
+    if (.not. associated(lazy_forcer)) return
+    call lazy_forcer(node)
+  end subroutine lazy_force
+
+  ! A fresh, unrealized LazySeq over thunk -- O(1), nothing runs yet.
+  function lazy_new(thunk) result(v)
+    type(cons_value), intent(in) :: thunk
+    type(cons_value) :: v
+    v%tag = TAG_LAZYSEQ
+    allocate(v%lazy_val)
+    allocate(v%lazy_val%ptr)
+    v%lazy_val%ptr%refcount = 1
+    lazy_node_total_allocated = lazy_node_total_allocated + 1
+    v%lazy_val%ptr%state = LAZY_ST_PENDING
+    v%lazy_val%ptr%thunk = thunk
+  end function lazy_new
+
+  ! An already-realized cons cell whose tail can be any seq, lazy
+  ! included -- what (cons x <lazy>) has to build, since a plain
+  ! cons_cell's cdr is a cons_ref and can't hold an unrealized rest.
+  function lazy_cons(head, tail) result(v)
+    type(cons_value), intent(in) :: head, tail
+    type(cons_value) :: v
+    v%tag = TAG_LAZYSEQ
+    allocate(v%lazy_val)
+    allocate(v%lazy_val%ptr)
+    v%lazy_val%ptr%refcount = 1
+    lazy_node_total_allocated = lazy_node_total_allocated + 1
+    v%lazy_val%ptr%state = LAZY_ST_CONS
+    v%lazy_val%ptr%head = head
+    v%lazy_val%ptr%tail = tail
+  end function lazy_cons
 
   function nil_value() result(v)
     type(cons_value) :: v
@@ -82,6 +146,13 @@ contains
        if (s%tag == TAG_LIST) then
           if (allocated(s%list_val)) val = list_first(s%list_val)
        end if
+    case (TAG_LAZYSEQ)
+       call lazy_force(v) ! O(1): realizes this cell only, never the whole seq
+       if (allocated(v%lazy_val)) then
+          if (associated(v%lazy_val%ptr)) then
+             if (v%lazy_val%ptr%state == LAZY_ST_CONS) val = v%lazy_val%ptr%head
+          end if
+       end if
     end select
   end function first
 
@@ -106,17 +177,37 @@ contains
             if (allocated(s%list_val)) tail = list_rest(s%list_val)
          end if
        end block
+    case (TAG_LAZYSEQ)
+       ! The rest of a lazy seq is whatever the realized cell points at
+       ! -- itself very often another unrealized LazySeq, handed back
+       ! as-is so nothing further is computed. O(1).
+       call lazy_force(v)
+       if (allocated(v%lazy_val)) then
+          if (associated(v%lazy_val%ptr)) then
+             if (v%lazy_val%ptr%state == LAZY_ST_CONS) then
+                new_v = v%lazy_val%ptr%tail
+                if (new_v%tag == TAG_NIL) call wrap_list_value(new_v, tail)
+                return
+             end if
+          end if
+       end if
     end select
     call wrap_list_value(new_v, tail)
   end function rest
 
   ! Like rest, but nil once there's nothing left.
-  function next(v) result(new_v)
+  recursive function next(v) result(new_v)
     type(cons_value), intent(in) :: v
     type(cons_value) :: new_v
     type(cons_value) :: r
     r = rest(v)
-    if (list_count(r%list_val) > 0) new_v = r
+    if (r%tag == TAG_LAZYSEQ) then
+       new_v = seq(r) ! nil when the lazy rest turns out to be empty
+       return
+    end if
+    if (allocated(r%list_val)) then
+       if (list_count(r%list_val) > 0) new_v = r
+    end if
   end function next
 
   ! (cons x coll) always returns a list, regardless of coll's type.
@@ -125,11 +216,27 @@ contains
     type(cons_value) :: new_v
     type(cons_ref) :: coll_list
 
+    ! Consing onto a lazy seq must NOT realize it -- that would defeat
+    ! the whole thing (and make (cons x (lazy-seq ...)) infinite for a
+    ! self-referential generator like repeatedly). Build a realized
+    ! lazy cons instead, keeping the tail untouched. O(1) either way.
+    if (coll%tag == TAG_LAZYSEQ) then
+       new_v = lazy_cons(x, coll)
+       return
+    end if
     select case (coll%tag)
     case (TAG_LIST)
        if (allocated(coll%list_val)) coll_list = coll%list_val
     case (TAG_VECTOR)
        if (allocated(coll%vector_val)) coll_list = vector_to_list(coll%vector_val)
+    case (TAG_HASHMAP, TAG_SET, TAG_STRING)
+       block
+         type(cons_value) :: s
+         s = seq(coll)
+         if (s%tag == TAG_LIST) then
+            if (allocated(s%list_val)) coll_list = s%list_val
+         end if
+       end block
     end select
     call wrap_list_value(new_v, list_cons(x, coll_list))
   end function cons
@@ -166,7 +273,7 @@ contains
     end select
   end function conj
 
-  function nth(coll, i) result(val)
+  recursive function nth(coll, i) result(val)
     type(cons_value), intent(in) :: coll
     integer, intent(in) :: i ! 0-based
     type(cons_value) :: val
@@ -184,8 +291,43 @@ contains
           end do
           val = list_first(l)
        end if
+    case (TAG_LAZYSEQ)
+       ! Walk i steps, realizing exactly i+1 cells -- never the whole
+       ! seq, so (nth (range) 5) is 5 steps and terminates.
+       block
+         type(cons_value) :: c
+         c = seq(coll)
+         do k = 1, i
+            if (c%tag == TAG_NIL) exit
+            c = next(c)
+         end do
+         if (c%tag /= TAG_NIL) val = first(c)
+       end block
     end select
   end function nth
+
+  ! Does coll have at least n elements? For a lazy seq this realizes
+  ! at most n cells instead of the whole thing, which is what lets
+  ! nth/bounds-checks work on an infinite seq at all.
+  recursive function has_at_least(coll, n) result(yes)
+    type(cons_value), intent(in) :: coll
+    integer, intent(in) :: n
+    logical :: yes
+    type(cons_value) :: c
+    integer :: k
+    if (coll%tag /= TAG_LAZYSEQ) then
+       yes = (count(coll) >= n)
+       return
+    end if
+    c = seq(coll)
+    k = 0
+    do while (k < n)
+       if (c%tag == TAG_NIL) exit
+       k = k + 1
+       c = next(c)
+    end do
+    yes = (k >= n)
+  end function has_at_least
 
   function count(coll) result(n)
     type(cons_value), intent(in) :: coll
@@ -200,6 +342,18 @@ contains
        if (allocated(coll%str_val)) n = len(coll%str_val)
     case (TAG_HASHMAP, TAG_SET)
        if (allocated(coll%map_val)) n = array_map_count(coll%map_val)
+    case (TAG_LAZYSEQ)
+       ! O(n), and it realizes the whole seq -- same as real Clojure
+       ! (counting a lazy seq is exactly walking it). Everything else
+       ! above stays O(1).
+       block
+         type(cons_value) :: c
+         c = seq(coll)
+         do while (c%tag /= TAG_NIL)
+            n = n + 1
+            c = next(c)
+         end do
+       end block
     end select
   end function count
 
@@ -251,6 +405,16 @@ contains
     case (TAG_STRING)
        if (allocated(v%str_val)) then
           if (len(v%str_val) > 0) call wrap_list_value(new_v, string_to_char_list(v%str_val))
+       end if
+    case (TAG_LAZYSEQ)
+       ! Realizes ONE cell to answer "is there anything here?", then
+       ! hands back the seq itself -- nil only when it's genuinely
+       ! empty, exactly clojure.lang.LazySeq.seq().
+       call lazy_force(v)
+       if (allocated(v%lazy_val)) then
+          if (associated(v%lazy_val%ptr)) then
+             if (v%lazy_val%ptr%state == LAZY_ST_CONS) new_v = v
+          end if
        end if
     end select
   end function seq

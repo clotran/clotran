@@ -13,7 +13,8 @@ module Eval
        array_map_assoc, array_map_contains, array_map_dissoc
   use RT, only: rt_get => get, rt_nth => nth, rt_assoc => assoc, rt_count => count, &
        rt_first => first, rt_rest => rest, rt_cons => cons, rt_conj => conj, rt_equiv => equiv, &
-       rt_seq => seq, rt_next => next
+       rt_seq => seq, rt_next => next, rt_set_lazy_forcer, rt_lazy_new => lazy_new, &
+       rt_lazy_force => lazy_force, rt_has_at_least => has_at_least
   use Numbers, only: num_add, num_sub, num_mul, num_div, num_lt, num_gt, num_le, num_ge, &
        num_bit_and, num_bit_or, num_bit_xor, num_bit_not, num_bit_and_not, &
        num_quot, num_rem, num_shift_left, num_shift_right, num_ushift_right
@@ -51,9 +52,6 @@ module Eval
   ! recursion (assert-args/let), not a general limit anything else
   ! should ever approach.
   integer :: macro_expand_depth = 0
-
-  ! See eval_new's clojure.lang.LazySeq case.
-  integer :: lazy_force_depth = 0
 
   ! push-thread-bindings/pop-thread-bindings' own stack of stacks: a
   ! flat run of every Var pushed so far, plus how many the most recent
@@ -183,6 +181,9 @@ contains
     ! Fortran, exactly like real clojure.core's own cond. Evaluated
     ! into clojure.core directly, matching where the native builtins
     ! above live.
+    ! RT can't call a closure itself (it sits below Eval), so hand it
+    ! the LazySeq forcer here, before anything can build one.
+    call rt_set_lazy_forcer(force_lazy)
     call ns_set_current(core)
     call eval_core_bootstrap(env)
     call ns_set_current(ns_find_or_create("user"))
@@ -289,7 +290,6 @@ contains
     type(cons_value) :: val
     has_error = .false.
     macro_expand_depth = 0
-    lazy_force_depth = 0
     val = eval_form(ast, env)
     if (has_error) then
        error = pr_str(last_error_value)
@@ -332,6 +332,17 @@ contains
        case (TAG_SET)
           val = eval_set(ast, env)
           return
+       case (TAG_LAZYSEQ)
+          ! A seq in CODE position is a form. Macro expansions reach
+          ! here as lazy seqs routinely now that list*/concat are lazy
+          ! (real Clojure's compiler analyses any ISeq the same way),
+          ! so realize it into a list and evaluate that. Expansions are
+          ! finite by construction.
+          ast = realize_to_list(ast)
+          if (ast%tag /= TAG_LIST) then
+             val = ast
+             return
+          end if
        case (TAG_LIST)
           ! handled below
        case default
@@ -527,7 +538,15 @@ contains
        if (has_error) return
        call env_set(env, k, v)
     end do
-    ast = list_first(list_rest(list_rest(ast%list_val)))
+    ! Every form after the bindings is the body, wrapped in an implicit
+    ! (do ...) -- real Clojure's let*, and the same rule fn* already
+    ! goes through wrap_body for. Taking only the FIRST body form (what
+    ! this did, matching mal's single-form let*) silently returned the
+    ! wrong value for every multi-form let: (let [] (side-effect) x)
+    ! evaluated to the side effect, not x -- which is exactly how
+    ! `binding` lost its body value, since binding expands to
+    ! (let [] (push-thread-bindings ...) (try ...)).
+    ast = wrap_body(list_rest(list_rest(ast%list_val)))
   end subroutine eval_let_head
 
   ! loop*: same binding mechanics as let*, plus establishing a recur
@@ -835,43 +854,18 @@ contains
     end if
     if (cls%tag == TAG_SYMBOL .and. cls%str_val == "clojure.lang.LazySeq") then
        ! core.clj's own `lazy-seq` macro is literally
-       ! (new clojure.lang.LazySeq (fn* [] body...)) -- so EVERY lazy
-       ! function (map, filter, concat, ...) built one of these, and
-       ! the generic passthrough below just handed the thunk itself
-       ! back: (map inc [1 2 3]) evaluated to #<fn>.
-       !
-       ! ponytail: forced immediately -- the thunk is called right
-       ! here and its seq returned, so seqs are EAGER, not lazy. Every
-       ! finite use is then correct; an infinite one ((range),
-       ! (repeat x), (iterate f x), cycle) would recurse until the
-       ! stack goes, where real Clojure would stream it. Upgrade path
-       ! is a real TAG_LAZYSEQ (thunk + memoized realization, forced
-       ! by seq/first/rest/count/pr_str in RT.f90) -- a genuine
-       ! feature, not a bug fix, and not needed to get core.clj
-       ! loading.
+       ! (new clojure.lang.LazySeq (fn* [] body...)). Build the real
+       ! thing and run NOTHING: the thunk is kept, and the body only
+       ! ever runs when something actually asks for a first/rest (see
+       ! force_lazy below, and RT's seq/first/rest). That is what
+       ! makes (repeatedly f), (iterate f x) and (range) terminate --
+       ! and what keeps map/filter/take O(1) per element consumed
+       ! rather than O(n) up front.
        block
          type(cons_value) :: thunk
-         type(cons_value), allocatable :: no_args(:)
          thunk = eval_form(list_first(rest), env)
          if (has_error) return
-         allocate(no_args(0))
-         ! Depth cap, same idea as macro_expand_depth: forcing is
-         ! eager, so an INFINITE lazy seq ((repeatedly f), (iterate f
-         ! x), (range)) would realize forever and take the real
-         ! Fortran stack with it. core.clj does build one in ordinary
-         ! code -- destmap*'s :or handling is
-         ! (zipmap (keys defaults) (repeatedly #(gensym "default__"))),
-         ! finite only because real Clojure stops pulling. Cap it so
-         ! that fails as a catchable error instead of a segfault.
-         lazy_force_depth = lazy_force_depth + 1
-         if (lazy_force_depth > 64) then
-            call eval_error("lazy sequence too deep -- clotran realizes lazy seqs eagerly, " // &
-                 "so an infinite one (repeatedly/iterate/range with no bound) can't be built yet")
-            lazy_force_depth = lazy_force_depth - 1
-            return
-         end if
-         val = apply_fn(thunk, no_args)
-         lazy_force_depth = lazy_force_depth - 1
+         val = rt_lazy_new(thunk)
        end block
        return
     end if
@@ -1864,7 +1858,8 @@ contains
     select case (name)
     case ("def!", "def", "defmacro", "defmacro!", "let*", "loop*", "fn*", "if", "do", "quote", "quasiquote", &
          "unquote", "splice-unquote", "eval", "load-file", "in-ns", "ns", "var", ".", "new", &
-         "try*", "try", "catch*", "catch")
+         "try*", "try", "catch*", "catch", "finally", "recur", "throw", "set!", "monitor-enter", &
+         "monitor-exit")
        yes = .true.
     case default
        ! (.method obj args...) sugar for (. obj (method args...)) --
@@ -2229,6 +2224,84 @@ contains
        call eval_error("not a function: " // pr_str(f))
     end select
   end function apply_fn
+
+
+  ! Realize one LazySeq cell: run its thunk, normalize the result to a
+  ! seq, and record first/rest -- then drop the thunk so it can never
+  ! run twice. This is clojure.lang.LazySeq.sval/seq, and the
+  ! memoization is what gives lazy seqs their big-O: each cell costs
+  ! its generator step exactly once, so a full walk is O(n) and any
+  ! re-walk is free. Installed into RT at startup (rt_set_lazy_forcer)
+  ! because RT sits below Eval and can't call a closure itself.
+  recursive subroutine force_lazy(node)
+    type(lazy_node), pointer, intent(inout) :: node
+    type(cons_value) :: r, s, nilv
+    type(cons_value), allocatable :: no_args(:)
+
+    if (.not. associated(node)) return
+    if (node%state /= LAZY_ST_PENDING) return
+    allocate(no_args(0))
+    r = apply_fn(node%thunk, no_args)
+    if (has_error) then
+       ! Leave the cell PENDING and let the error out: realizing threw,
+       ! so this cell has no value -- marking it empty would swallow
+       ! the throw and quietly turn the seq into ().
+       return
+    end if
+    ! A body may itself hand back another LazySeq ((lazy-seq (lazy-seq
+    ! ...)), and more usefully whatever `when`/`if` returned). Walk
+    ! down to a concrete seq, realizing each -- each is memoized in its
+    ! own node, so this never repeats work.
+    do while (r%tag == TAG_LAZYSEQ)
+       call rt_lazy_force(r)
+       if (.not. allocated(r%lazy_val)) exit
+       if (.not. associated(r%lazy_val%ptr)) exit
+       if (r%lazy_val%ptr%state == LAZY_ST_CONS) then
+          node%state = LAZY_ST_CONS
+          node%head = r%lazy_val%ptr%head
+          node%tail = r%lazy_val%ptr%tail
+          node%thunk = nilv
+          return
+       else
+          node%state = LAZY_ST_EMPTY
+          node%thunk = nilv
+          return
+       end if
+    end do
+    s = rt_seq(r) ! nil for an empty collection, a list view for a vector/map/string
+    if (s%tag == TAG_NIL) then
+       node%state = LAZY_ST_EMPTY
+    else
+       node%state = LAZY_ST_CONS
+       node%head = rt_first(s)
+       node%tail = rt_rest(s)
+    end if
+    node%thunk = nilv
+  end subroutine force_lazy
+
+
+  ! A seq (lazy or not) as a real list -- used where a seq turns up in
+  ! code position, and by builtins that need random access. O(n), and
+  ! it realizes what it walks.
+  function realize_to_list(v) result(out)
+    type(cons_value), intent(in) :: v
+    type(cons_value) :: out
+    type(cons_value), allocatable :: items(:), grown(:)
+    type(cons_value) :: c
+    integer :: n
+    allocate(items(0))
+    n = 0
+    c = rt_seq(v)
+    do while (c%tag /= TAG_NIL)
+       allocate(grown(n + 1))
+       if (n > 0) grown(1:n) = items(1:n)
+       grown(n + 1) = rt_first(c)
+       call move_alloc(grown, items)
+       n = n + 1
+       c = rt_next(c)
+    end do
+    out = make_list(items)
+  end function realize_to_list
 
   function make_list(items) result(val)
     type(cons_value), intent(in) :: items(:)
@@ -2717,7 +2790,9 @@ contains
     case ("conj")
        val = builtin_conj(args)
     case ("nth")
-       if (args(2)%int_val < 0 .or. args(2)%int_val >= rt_count(args(1))) then
+       ! Bounds-check without counting the whole collection -- counting
+       ! a lazy seq realizes it, and an infinite one never finishes.
+       if (args(2)%int_val < 0 .or. .not. rt_has_at_least(args(1), args(2)%int_val + 1)) then
           call eval_error("nth: index out of bounds")
        else
           val = rt_nth(args(1), args(2)%int_val)
