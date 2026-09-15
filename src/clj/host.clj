@@ -19,14 +19,19 @@
 ;; written without them. They are scaffolding, and they go the moment
 ;; the evaluator can load the real core.clj, which is the actual goal.
 
+;; Interned in clojure.core, not in user: this is bootstrap, and
+;; RT.doInit puts its natives in clojure.core for the same reason --
+;; core.clj is loaded with clojure.core current and must see them.
+(in-ns (quote clojure.core))
+
 ;; --- scaffolding: the minimum needed to write a defn at all -------
 
 (defmacro* defn
-  (fn* [name params & body]
+  (fn* [&form &env name params & body]
     `(def ~name (fn* ~params ~@body))))
 
-(defmacro* fn  (fn* [params & body] `(fn* ~params ~@body)))
-(defmacro* let (fn* [bindings & body] `(let* ~bindings ~@body)))
+(defmacro* fn  (fn* [&form &env params & body] `(fn* ~params ~@body)))
+(defmacro* let (fn* [&form &env bindings & body] `(let* ~bindings ~@body)))
 
 ;; --- the shim proper ---------------------------------------------
 ;;

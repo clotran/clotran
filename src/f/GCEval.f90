@@ -65,6 +65,8 @@ module GCEval
   integer, parameter :: B_NAME = 29, B_KEYWORD = 30, B_SYMBOL = 31
   integer, parameter :: B_SUBS = 32, B_TYPE = 33, B_SECOND = 34
   integer, parameter :: B_META = 35, B_WITHMETA = 36
+  integer, parameter :: B_NS = 37, B_INNS = 38
+  integer, parameter :: B_NEXT = 39
 
   character(len=:), allocatable :: last_error
   logical :: has_error = .false.
@@ -127,71 +129,107 @@ contains
   ! caught.
   function gce_base_env(roots) result(env)
     type(gc_value), intent(in) :: roots(:)
-    type(gc_value) :: env
+    type(gc_value) :: env, core
     integer :: base
 
     call gcp_set_forcer(gce_force)
     call gcn_reset(roots)
-    base = vs_enter(1)
+    base = vs_enter(2)
     env = gce_new(gc_nil(), roots)
     call vs_set(base + 1, env)
-    call bind_builtin(env, "+", B_ADD)
-    call bind_builtin(env, "-", B_SUB)
-    call bind_builtin(env, "*", B_MUL)
-    call bind_builtin(env, "=", B_EQ)
-    call bind_builtin(env, "<", B_LT)
-    call bind_builtin(env, "list", B_LIST)
-    call bind_builtin(env, "vector", B_VECTOR)
-    call bind_builtin(env, "count", B_COUNT)
-    call bind_builtin(env, "first", B_FIRST)
-    call bind_builtin(env, "rest", B_REST)
-    call bind_builtin(env, "cons", B_CONS)
-    call bind_builtin(env, "concat", B_CONCAT)
-    call bind_builtin(env, "str", B_STR)
-    call bind_builtin(env, "not", B_NOT)
-    call bind_builtin(env, "nth", B_NTH)
-    call bind_builtin(env, "get", B_GET)
-    call bind_builtin(env, "conj", B_CONJ)
-    call bind_builtin(env, "empty?", B_EMPTY)
-    call bind_builtin(env, "nil?", B_NILP)
-    call bind_builtin(env, "apply", B_APPLY)
-    call bind_builtin(env, "assoc", B_ASSOC)
-    call bind_builtin(env, "keys", B_KEYS)
-    call bind_builtin(env, "vals", B_VALS)
-    call bind_builtin(env, "prn", B_PRN)
-    call bind_builtin(env, "quot", B_QUOT)
-    call bind_builtin(env, "rem", B_REM)
-    call bind_builtin(env, "seq", B_SEQ)
-    call bind_builtin(env, "dissoc", B_DISSOC)
-    call bind_builtin(env, "name", B_NAME)
-    call bind_builtin(env, "keyword", B_KEYWORD)
-    call bind_builtin(env, "symbol", B_SYMBOL)
-    call bind_builtin(env, "subs", B_SUBS)
-    call bind_builtin(env, "clotran-type", B_TYPE)
-    call bind_builtin(env, "second", B_SECOND)
-    call bind_builtin(env, "meta", B_META)
-    call bind_builtin(env, "with-meta", B_WITHMETA)
+    core = gcn_find_or_create("clojure.core", [vs_get(base + 1)])
+    call vs_set(base + 2, core)
+    call bind_builtin(core, "+", B_ADD)
+    call bind_builtin(core, "-", B_SUB)
+    call bind_builtin(core, "*", B_MUL)
+    call bind_builtin(core, "=", B_EQ)
+    call bind_builtin(core, "<", B_LT)
+    call bind_builtin(core, "list", B_LIST)
+    call bind_builtin(core, "vector", B_VECTOR)
+    call bind_builtin(core, "count", B_COUNT)
+    call bind_builtin(core, "first", B_FIRST)
+    call bind_builtin(core, "rest", B_REST)
+    call bind_builtin(core, "next", B_NEXT)
+    call bind_builtin(core, "cons", B_CONS)
+    call bind_builtin(core, "concat", B_CONCAT)
+    call bind_builtin(core, "str", B_STR)
+    call bind_builtin(core, "not", B_NOT)
+    call bind_builtin(core, "nth", B_NTH)
+    call bind_builtin(core, "get", B_GET)
+    call bind_builtin(core, "conj", B_CONJ)
+    call bind_builtin(core, "empty?", B_EMPTY)
+    call bind_builtin(core, "nil?", B_NILP)
+    call bind_builtin(core, "apply", B_APPLY)
+    call bind_builtin(core, "assoc", B_ASSOC)
+    call bind_builtin(core, "keys", B_KEYS)
+    call bind_builtin(core, "vals", B_VALS)
+    call bind_builtin(core, "prn", B_PRN)
+    call bind_builtin(core, "quot", B_QUOT)
+    call bind_builtin(core, "rem", B_REM)
+    call bind_builtin(core, "seq", B_SEQ)
+    call bind_builtin(core, "dissoc", B_DISSOC)
+    call bind_builtin(core, "name", B_NAME)
+    call bind_builtin(core, "keyword", B_KEYWORD)
+    call bind_builtin(core, "symbol", B_SYMBOL)
+    call bind_builtin(core, "subs", B_SUBS)
+    call bind_builtin(core, "clotran-type", B_TYPE)
+    call bind_builtin(core, "second", B_SECOND)
+    call bind_builtin(core, "meta", B_META)
+    call bind_builtin(core, "with-meta", B_WITHMETA)
+    call bind_builtin(core, "ns", B_NS, .true.)
+    call bind_builtin(core, "in-ns", B_INNS)
     env = vs_get(base + 1)
     call vs_leave(base)
   end function gce_base_env
 
-  subroutine bind_builtin(env, name, id)
-    type(gc_value), intent(in) :: env
+  ! Interns a native as a VAR IN clojure.core -- not as a binding in
+  ! the environment. That is where RT.doInit puts them, and the
+  ! difference is not cosmetic: a Var is what lets core.clj REDEFINE a
+  ! primitive, because gcn_intern mutates the Var already there rather
+  ! than adding a second binding that the first would shadow forever.
+  !
+  ! `is_macro` is Var.setMacro, which RT.java calls on exactly one of
+  ! these -- `ns` -- before load("clojure/core").
+  ! A native as a VALUE. Host members need this rather than a Var
+  ! lookup: core.clj is in the middle of REDEFINING first, next, rest,
+  ! seq and cons in terms of the host when it asks for them, so
+  ! resolving .RT/first through the Var `first` would be a loop.
+  function native(id, name, roots) result(fn)
+    integer, intent(in) :: id
+    character(len=*), intent(in) :: name
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: fn, sym
+    integer :: base
+    base = vs_enter(1)
+    sym = gc_sym(name, roots)
+    call vs_set(base + 1, sym)
+    fn = gc_obj(OBJ_BUILTIN, [vs_get(base + 1)], roots)
+    call gc_set_i1(fn, id)
+    call vs_leave(base)
+  end function native
+
+  subroutine bind_builtin(ns, name, id, is_macro)
+    type(gc_value), intent(in) :: ns
     character(len=*), intent(in) :: name
     integer, intent(in) :: id
-    type(gc_value) :: sym, fn
+    logical, intent(in), optional :: is_macro
+    type(gc_value) :: sym, fn, var
     type(gc_value) :: r(2)
     integer :: base
 
-    base = vs_enter(2)
-    call vs_set(base + 1, env)
+    base = vs_enter(3)
+    call vs_set(base + 1, ns)
     sym = gc_sym(name, [vs_get(base + 1)])
     call vs_set(base + 2, sym)
     r(1) = vs_get(base + 1)
     r(2) = vs_get(base + 2)
     fn = gc_obj(OBJ_BUILTIN, [sym], r)
     call gc_set_i1(fn, id)
-    call gce_set(env, vs_get(base + 2), fn, r)
+    call vs_set(base + 3, fn)
+    var = gcn_intern(vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), r)
+    if (present(is_macro)) then
+       if (is_macro) call var_set_macro(var, gc_nil())
+    end if
     call vs_leave(base)
   end subroutine bind_builtin
 
@@ -220,7 +258,7 @@ contains
        ! legal rather than a redefinition of clojure.core/map.
        found = gce_find(env, form, out)
        if (.not. found) then
-          head = gcn_lookup(gcn_current([vs_get(base + 1)]), form)
+          head = resolve_var(form, vs_get(base + 1))
           if (gcn_is_var(head)) then
              ! A bare symbol auto-derefs its Var, matching Clojure --
              ! #'x is how you ask for the Var itself.
@@ -236,7 +274,9 @@ contains
              out = form
           else
              head = gcl_first(form)
-             if (head%tag == GCT_SYM .and. is_special(head)) then
+             if (head%tag == GCT_SYM .and. is_member_sym(head)) then
+                out = eval_member(form, env)
+             else if (head%tag == GCT_SYM .and. is_special(head)) then
                 out = eval_special(form, env)
              else
                 out = eval_call(form, env)
@@ -261,6 +301,20 @@ contains
     call vs_leave(base)
   end function gce_eval
 
+  ! `ns` and `in-ns` are macros in real Clojure, defined in core.clj
+  ! -- `ns` at line 5976. But core.clj's OWN first form, at line 9,
+  ! is (ns clojure.core): the file needs the thing it has not
+  ! defined yet. Clojure resolves that outside the .clj entirely --
+  ! the namespace exists Java-side before the file loads, and the
+  ! shipped core is AOT-compiled. clotran has no Java side, so
+  ! something must bridge that window.
+  !
+  ! It bridges it as a FALLBACK, not a special form. A definition
+  ! in the namespace always wins, so the moment core.clj defines
+  ! its own `ns` macro, that is what runs -- which is the rule
+  ! everywhere here: do what Clojure does unless the bootstrap
+  ! makes it impossible, and hand control back as soon as it does
+  ! not.
   function is_special(sym) result(yes)
     type(gc_value), intent(in) :: sym
     logical :: yes
@@ -270,7 +324,7 @@ contains
           gc_ref_is(sym%ref, "loop*") .or. gc_ref_is(sym%ref, "recur") .or. &
           gc_ref_is(sym%ref, "defmacro*") .or. gc_ref_is(sym%ref, "quasiquote") .or. &
           gc_ref_is(sym%ref, "try*") .or. gc_ref_is(sym%ref, "throw") .or. &
-          gc_ref_is(sym%ref, "lazy-seq*") .or. gc_ref_is(sym%ref, "in-ns*") .or. &
+          gc_ref_is(sym%ref, "lazy-seq*") .or. gc_ref_is(sym%ref, ".") .or. &
           gc_ref_is(sym%ref, "var")
   end function is_special
 
@@ -338,16 +392,11 @@ contains
             call vs_set(base + 4, nm)
             var = gcn_intern(gcn_current([vs_get(base + 1)]), &
                  vs_get(base + 4), b, [vs_get(base + 1), vs_get(base + 4)])
-            if (md%tag /= GCT_NIL) then
-               call gc_set_slot(var, 2, md)
-               ! :macro true is HOW a macro is declared before defmacro
-               ! exists -- core.clj defines let, loop and fn exactly
-               ! this way at line 32. Macro-ness lives on the closure
-               ! here, as clotran's own is_macro does.
-               if (truthy(gca_get(md, gc_key("macro", [vs_get(base + 1)])))) then
-                  if (gc_kind(b) == OBJ_CLOSURE) call gc_set_i1(b, 1)
-               end if
-            end if
+            ! Nothing more to do for (def ^{:macro true} let ...):
+            ! putting the metadata on the Var IS declaring the macro,
+            ! because that is where macro-ness is read from. core.clj
+            ! defines let, loop and fn exactly this way, at its line 32.
+            if (md%tag /= GCT_NIL) call gc_set_slot(var, 2, md)
             out = gcn_var_value(var)
           end block
        end if
@@ -363,13 +412,6 @@ contains
 
     else if (gc_ref_is(head%ref, "recur")) then
        out = eval_recur(vs_get(base + 3), vs_get(base + 2))
-
-    else if (gc_ref_is(head%ref, "in-ns*")) then
-       a = gce_eval(gcl_first(vs_get(base + 3)), vs_get(base + 2), [vs_get(base + 1)])
-       if (.not. has_error) then
-          out = gcn_find_or_create(gc_ref_text(a%ref), [vs_get(base + 1)])
-          call gcn_set_current(out)
-       end if
 
     else if (gc_ref_is(head%ref, "var")) then
        ! The Var itself, undereferenced -- what #'x means, and what a
@@ -408,6 +450,9 @@ contains
        a = qq_expand(gcl_first(vs_get(base + 3)), vs_get(base + 2))
        if (.not. has_error) out = gce_eval(a, vs_get(base + 2), [vs_get(base + 1)])
 
+    else if (gc_ref_is(head%ref, ".")) then
+       out = eval_dot(vs_get(base + 3), vs_get(base + 2))
+
     else if (gc_ref_is(head%ref, "defmacro*")) then
        a = gcl_first(vs_get(base + 3))
        call vs_set(base + 4, a)
@@ -418,12 +463,15 @@ contains
           if (gc_kind(b) /= OBJ_CLOSURE) then
              call fail("defmacro* needs a function")
           else
-             ! Macro-ness lives on the closure, exactly as clotran's
-             ! own is_macro does: real Clojure keeps it in Var
-             ! metadata, but there are no Vars in this evaluator.
-             call gc_set_i1(b, 1)
-             call gce_set(vs_get(base + 2), vs_get(base + 4), b, [vs_get(base + 1)])
-             out = b
+             ! def plus setMacro, which is all defmacro is in core.clj
+             ! too -- it just cannot say so until it exists.
+             block
+               type(gc_value) :: var
+               var = gcn_intern(gcn_current([vs_get(base + 1)]), vs_get(base + 4), &
+                    b, [vs_get(base + 1), vs_get(base + 4)])
+               call var_set_macro(var, vs_get(base + 2))
+               out = b
+             end block
           end if
        end if
     end if
@@ -696,16 +744,50 @@ contains
   ! Multi-arity keeps its clauses in slot 4 -- the slot GC.f90's
   ! OBJ_CLOSURE comment already reserved for them -- and leaves slot 1
   ! nil, so "is this multi-arity" is one test rather than a flag.
-  function make_closure(rest, env) result(out)
+  recursive function make_closure(rest, env) result(out)
     type(gc_value), intent(in) :: rest, env
     type(gc_value) :: out, params, body, head
     type(gc_value) :: r(3)
     integer :: base
 
-    base = vs_enter(3)
+    base = vs_enter(4)
     call vs_set(base + 1, rest)
     call vs_set(base + 2, env)
     head = gcl_first(rest)
+    ! The name carries metadata in core.clj -- (fn ^:static first ...)
+    ! -- so it arrives wrapped.
+    if (gc_kind(head) == OBJ_META) then
+       block
+         type(gc_value) :: inner
+         inner = gc_slot(head, 1)
+         if (inner%tag == GCT_SYM) head = inner
+       end block
+    end if
+
+    ! (fn* name [params] body) -- the optional SELF-NAME. core.clj
+    ! writes almost every primitive that way, and not just for the
+    ! stack trace: the name is bound inside the body so the function
+    ! can call itself without going through its Var.
+    !
+    ! The knot is tied after the fact: build the closure over env,
+    ! then give it a frame that binds the name to the closure itself
+    ! and point it at that. Nothing can observe the intermediate state.
+    if (head%tag == GCT_SYM) then
+       call vs_set(base + 4, head)
+       out = make_closure(gcl_rest(vs_get(base + 1), [vs_get(base + 1)]), &
+            vs_get(base + 2))
+       block
+         type(gc_value) :: frame
+         call vs_set(base + 3, out)
+         frame = gce_new(vs_get(base + 2), [vs_get(base + 3), vs_get(base + 4)])
+         call gce_set(frame, vs_get(base + 4), vs_get(base + 3), &
+              [vs_get(base + 3), vs_get(base + 4)])
+         call gc_set_slot(vs_get(base + 3), 3, frame)
+         out = vs_get(base + 3)
+       end block
+       call vs_leave(base)
+       return
+    end if
 
     if (gcl_is(head)) then
        ! Multi-arity: `rest` is already the list of clauses.
@@ -789,6 +871,316 @@ contains
     call vs_leave(base)
   end function eval_vector
 
+  ! (. target member) and (. target (member args...)) -- host interop.
+  !
+  ! Clojure's host is the JVM, so `.` there reaches arbitrary Java.
+  ! Ours is Fortran, and the only classes that exist are clotran's own
+  ! runtime types -- so this is not a subset of Java interop, it is the
+  ! same door onto a different house.
+  !
+  ! core.clj reaches through it exactly three times while bootstrapping
+  ! (its lines 20, 338, 493) and those three are what is here. Anything
+  ! else fails by MEMBER NAME, so a load report says what is missing
+  ! rather than blaming `.` for all of it.
+  recursive function eval_dot(args, env) result(out)
+    type(gc_value), intent(in) :: args, env
+    type(gc_value) :: out, target, member, rest, margs
+    character(len=:), allocatable :: mname
+    integer :: base
+
+    out = gc_nil()
+    base = vs_enter(4)
+    call vs_set(base + 1, args)
+    call vs_set(base + 2, env)
+
+    target = gcl_first(vs_get(base + 1))
+    rest = gcl_rest(vs_get(base + 1), [vs_get(base + 1)])
+    member = gcl_first(rest)
+
+    ! (. x m) names a member; (. x (m a b)) and (. x m a b) both
+    ! call it -- Clojure accepts either spelling, so the arguments
+    ! come from inside the parens when there are parens and from the
+    ! rest of the form when there are not.
+    if (gcl_is(member)) then
+       margs = gcl_rest(member, [vs_get(base + 1)])
+       member = gcl_first(member)
+    else
+       margs = gcl_rest(rest, [vs_get(base + 1)])
+    end if
+    if (member%tag /= GCT_SYM) then
+       call fail(". needs a member name")
+       call vs_leave(base)
+       return
+    end if
+    mname = gc_ref_text(member%ref)
+    call vs_set(base + 4, margs)
+
+    ! A class name is NOT evaluated -- clojure.lang.RT is not a
+    ! binding. Everything else is: (. (var defmacro) ...) has to run
+    ! to produce the Var.
+    if (target%tag == GCT_SYM) then
+       if (is_host_class(target)) then
+          out = static_member(gc_ref_text(target%ref), mname, vs_get(base + 1))
+          if (.not. has_error .and. gcl_count(vs_get(base + 4)) > 0) &
+               out = apply_forms(out, vs_get(base + 4), vs_get(base + 2))
+          call vs_leave(base)
+          return
+       end if
+    end if
+
+    target = gce_eval(target, vs_get(base + 2), [vs_get(base + 1)])
+    if (has_error) then
+       call vs_leave(base)
+       return
+    end if
+    call vs_set(base + 3, target)
+
+    out = instance_member(mname, vs_get(base + 1))
+    if (.not. has_error) then
+       ! The target is the first argument, which is all an instance
+       ! method is: (.withMeta x m) calls with-meta on x and m.
+       margs = gcl_cons(vs_get(base + 3), vs_get(base + 4), &
+            [vs_get(base + 3), vs_get(base + 4), out])
+       call vs_set(base + 4, margs)
+       out = apply_forms_pre(out, vs_get(base + 3), vs_get(base + 4), vs_get(base + 2))
+       call vs_leave(base)
+       return
+    end if
+    call gce_clear_error()
+
+    if (mname == "setMacro" .and. gcn_is_var(vs_get(base + 3))) then
+       ! Var.setMacro is alterMeta(assoc, {:macro true}) -- macro-ness
+       ! is METADATA ON THE VAR, not a flag on the function. That is
+       ! what makes (:macro (meta (var when))) true, and what makes
+       ! (def foo some-macro) bind a plain function rather than a macro.
+       call var_set_macro(vs_get(base + 3), vs_get(base + 2))
+       out = gc_nil()
+    else
+       call fail("no such member: " // mname)
+    end if
+    call vs_leave(base)
+  end function eval_dot
+
+  ! Evaluates each form and applies fn to the results.
+  recursive function apply_forms(fn, forms, env) result(out)
+    type(gc_value), intent(in) :: fn, forms, env
+    type(gc_value) :: out, args, walk, item
+    integer :: base
+
+    out = gc_nil()
+    base = vs_enter(4)
+    call vs_set(base + 1, fn)
+    call vs_set(base + 2, env)
+    args = gcv_empty([vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 3, args)
+    walk = forms
+    call vs_set(base + 4, walk)
+    do while (gcl_count(vs_get(base + 4)) > 0)
+       item = gce_eval(gcl_first(vs_get(base + 4)), vs_get(base + 2), &
+            [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)])
+       if (has_error) then
+          call vs_leave(base); return
+       end if
+       args = gcv_conj(vs_get(base + 3), item, &
+            [vs_get(base + 1), vs_get(base + 4)])
+       call vs_set(base + 3, args)
+       walk = gcl_rest(vs_get(base + 4), [vs_get(base + 2)])
+       call vs_set(base + 4, walk)
+    end do
+    out = apply(vs_get(base + 1), vs_get(base + 3))
+    call vs_leave(base)
+  end function apply_forms
+
+  ! Instance members, as natives. Same rule as the static ones:
+  ! these are clotran's own primitives under the names the JVM host
+  ! gives them, not adapters written to look like them.
+  function instance_member(mname, roots) result(out)
+    character(len=*), intent(in) :: mname
+    type(gc_value), intent(in) :: roots
+    type(gc_value) :: out
+    out = gc_nil()
+    select case (mname)
+    case ("meta");     out = native(B_META, "meta", [roots])
+    case ("withMeta"); out = native(B_WITHMETA, "with-meta", [roots])
+    case ("count");    out = native(B_COUNT, "count", [roots])
+    case ("seq");      out = native(B_SEQ, "seq", [roots])
+    case ("first");    out = native(B_FIRST, "first", [roots])
+    case ("next");     out = native(B_NEXT, "next", [roots])
+    case ("more");     out = native(B_REST, "rest", [roots])
+    case ("cons");     out = native(B_CONS, "cons", [roots])
+    case ("equiv");    out = native(B_EQ, "=", [roots])
+    case default;       call fail("no such member: " // mname)
+    end select
+  end function instance_member
+
+  ! (.member target args...) is (. target member args...), which is
+  ! where macroexpand1 turns it into too -- the sugar is a rewrite, not
+  ! a second kind of call.
+  logical function is_member_sym(sym)
+    type(gc_value), intent(in) :: sym
+    character(len=:), allocatable :: t
+    is_member_sym = .false.
+    if (sym%tag /= GCT_SYM) return
+    t = gc_ref_text(sym%ref)
+    if (len(t) < 2) return
+    is_member_sym = (t(1:1) == ".")
+  end function is_member_sym
+
+  recursive function eval_member(form, env) result(out)
+    type(gc_value), intent(in) :: form, env
+    type(gc_value) :: out, head, rest, args
+    character(len=:), allocatable :: hname
+    integer :: base
+
+    out = gc_nil()
+    base = vs_enter(3)
+    call vs_set(base + 1, form)
+    call vs_set(base + 2, env)
+    head = gcl_first(vs_get(base + 1))
+    hname = gc_ref_text(head%ref)
+    rest = gcl_rest(vs_get(base + 1), [vs_get(base + 1)])
+    call vs_set(base + 3, rest)
+    if (gcl_count(vs_get(base + 3)) < 1) then
+       call fail("Malformed member expression, expecting (.member target ...)")
+       call vs_leave(base)
+       return
+    end if
+    ! (target member . rest) -- the shape eval_dot reads.
+    args = gcl_cons(gc_sym(hname(2:), [vs_get(base + 3)]), &
+         gcl_rest(vs_get(base + 3), [vs_get(base + 3)]), [vs_get(base + 3)])
+    args = gcl_cons(gcl_first(vs_get(base + 3)), args, [vs_get(base + 3), args])
+    out = eval_dot(args, vs_get(base + 2))
+    call vs_leave(base)
+  end function eval_member
+
+  ! apply fn to already-evaluated first argument plus evaluated rest.
+  recursive function apply_forms_pre(fn, first_arg, all_forms, env) result(out)
+    type(gc_value), intent(in) :: fn, first_arg, all_forms, env
+    type(gc_value) :: out, args, walk, item
+    integer :: base
+
+    out = gc_nil()
+    base = vs_enter(4)
+    call vs_set(base + 1, fn)
+    call vs_set(base + 2, env)
+    args = gcv_empty([vs_get(base + 1), vs_get(base + 2)])
+    args = gcv_conj(args, first_arg, [vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 3, args)
+    walk = gcl_rest(all_forms, [vs_get(base + 2)])
+    call vs_set(base + 4, walk)
+    do while (gcl_count(vs_get(base + 4)) > 0)
+       item = gce_eval(gcl_first(vs_get(base + 4)), vs_get(base + 2), &
+            [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)])
+       if (has_error) then
+          call vs_leave(base); return
+       end if
+       args = gcv_conj(vs_get(base + 3), item, &
+            [vs_get(base + 1), vs_get(base + 4)])
+       call vs_set(base + 3, args)
+       walk = gcl_rest(vs_get(base + 4), [vs_get(base + 2)])
+       call vs_set(base + 4, walk)
+    end do
+    out = apply(vs_get(base + 1), vs_get(base + 3))
+    call vs_leave(base)
+  end function apply_forms_pre
+
+  logical function is_host_class(sym)
+    type(gc_value), intent(in) :: sym
+    is_host_class = gc_ref_is(sym%ref, "clojure.lang.PersistentList") .or. &
+         gc_ref_is(sym%ref, "clojure.lang.RT")
+  end function is_host_class
+
+  ! A static member, as a VALUE -- (. C m) hands it back, (. C (m a))
+  ! calls it, and both go through here.
+  !
+  ! These are the primitives core.clj bootstraps on. They are OUR
+  ! natives under the names the JVM host gives them, not adapters:
+  ! RT.more is what clotran already means by `rest`, and RT.next is
+  ! that put through seq.
+  function static_member(cls, mname, roots) result(out)
+    character(len=*), intent(in) :: cls, mname
+    type(gc_value), intent(in) :: roots
+    type(gc_value) :: out
+
+    out = gc_nil()
+    if (cls == "clojure.lang.PersistentList") then
+       ! PersistentList.creator is a static IFn (a Primordial) that
+       ! builds a list from its arguments -- our `list`.
+       if (mname == "creator") then
+          out = native(B_LIST, "list", [roots])
+          return
+       end if
+    else if (cls == "clojure.lang.RT") then
+       select case (mname)
+       case ("first");  out = native(B_FIRST, "first", [roots]); return
+       case ("next");   out = native(B_NEXT, "next", [roots]);   return
+       case ("more");   out = native(B_REST, "rest", [roots]);   return
+       case ("seq");    out = native(B_SEQ, "seq", [roots]);     return
+       case ("cons");   out = native(B_CONS, "cons", [roots]);   return
+       case ("count");  out = native(B_COUNT, "count", [roots]); return
+       case ("get");    out = native(B_GET, "get", [roots]);     return
+       case ("nth");    out = native(B_NTH, "nth", [roots]);     return
+       case ("conj");   out = native(B_CONJ, "conj", [roots]);   return
+       case ("assoc");  out = native(B_ASSOC, "assoc", [roots]); return
+       case ("keys");   out = native(B_KEYS, "keys", [roots]);   return
+       case ("vals");   out = native(B_VALS, "vals", [roots]);   return
+       end select
+    end if
+    call fail("no such member: " // cls // "/" // mname)
+  end function static_member
+
+  ! Sets :macro true in the Var's metadata, creating the map if the Var
+  ! has none. Var metadata is slot 2.
+  subroutine var_set_macro(var, env)
+    type(gc_value), intent(in) :: var, env
+    type(gc_value) :: md
+    integer :: base
+    base = vs_enter(2)
+    call vs_set(base + 1, var)
+    md = gc_slot(vs_get(base + 1), 2)
+    if (.not. gca_is(md)) md = gca_empty([vs_get(base + 1)])
+    call vs_set(base + 2, md)
+    md = gca_assoc(vs_get(base + 2), gc_key("macro", [vs_get(base + 1)]), &
+         gc_bool(.true.), [vs_get(base + 1), vs_get(base + 2)])
+    call gc_set_slot(vs_get(base + 1), 2, md)
+    call vs_leave(base)
+  end subroutine var_set_macro
+
+  ! The Var a macro call's head names, or nil. This is Compiler.isMacro:
+  ! the head is looked at UNEVALUATED, a local binding shadows it
+  ! ("no local macros for now"), and macro-ness is read from the Var's
+  ! metadata rather than from whatever the Var happens to hold.
+  function macro_var(head, env) result(var)
+    type(gc_value), intent(in) :: head, env
+    type(gc_value) :: var, md
+    var = gc_nil()
+    if (head%tag /= GCT_SYM) return
+    if (gce_find(env, head, md)) return
+    var = resolve_var(head, env)
+    if (.not. gcn_is_var(var)) then
+       var = gc_nil()
+       return
+    end if
+    md = gc_slot(var, 2)
+    if (.not. truthy(gca_get(md, gc_key("macro", [env])))) var = gc_nil()
+  end function macro_var
+
+  ! The Var a symbol names: the current namespace first, then
+  ! clojure.core.
+  !
+  ! DEVIATION, recorded as #4. Clojure has no such fallback -- every
+  ! namespace gets clojure.core through refer, which (ns ...) performs
+  ! via refer-clojure. This is that referral hard-wired, and it differs
+  ! wherever refer is selective: (refer-clojure :exclude [map]) cannot
+  ! be honoured by a rule that has no map of what was referred.
+  function resolve_var(sym, roots) result(var)
+    type(gc_value), intent(in) :: sym, roots
+    type(gc_value) :: var
+    var = gcn_lookup(gcn_current([roots]), sym)
+    if (gcn_is_var(var)) return
+    var = gcn_lookup(gcn_find_or_create("clojure.core", [roots]), sym)
+  end function resolve_var
+
   ! Evaluates the head and every argument, then applies. Arguments
   ! accumulate in a GC vector rather than a Fortran array for the same
   ! reason the reader does it: the collector cannot see a local array.
@@ -802,22 +1194,28 @@ contains
     call vs_set(base + 1, form)
     call vs_set(base + 2, env)
 
+    ! A macro receives its arguments UNEVALUATED and its result is
+    ! evaluated in the caller's environment, so the question has to be
+    ! asked before anything is touched -- including the head itself.
+    !
+    ! Asked of the VAR, not of the function it holds, which is
+    ! Compiler.isMacro. Two consequences worth naming: a local shadows
+    ! a macro ("no local macros for now"), and (def foo when) binds a
+    ! plain function, because the new Var carries no :macro.
+    fn = macro_var(gcl_first(form), env)
+    if (gcn_is_var(fn)) then
+       call vs_set(base + 3, gcn_var_value(fn))
+       out = expand_macro(vs_get(base + 3), vs_get(base + 1), vs_get(base + 2))
+       if (.not. has_error) out = gce_eval(out, vs_get(base + 2), [vs_get(base + 1)])
+       call vs_leave(base)
+       return
+    end if
+
     fn = gce_eval(gcl_first(form), env, [vs_get(base + 1)])
     if (has_error) then
        call vs_leave(base); return
     end if
     call vs_set(base + 3, fn)
-
-    ! A macro receives its arguments UNEVALUATED and its result is
-    ! evaluated in the caller's environment. That is the whole
-    ! difference between a macro and a function, and it is why the
-    ! check has to happen here, before the arguments are touched.
-    if (gc_kind(fn) == OBJ_CLOSURE .and. gc_i1(fn) == 1) then
-       out = expand_macro(vs_get(base + 3), vs_get(base + 1))
-       if (.not. has_error) out = gce_eval(out, vs_get(base + 2), [vs_get(base + 1)])
-       call vs_leave(base)
-       return
-    end if
 
     args = gcv_empty([vs_get(base + 1), vs_get(base + 3)])
     call vs_set(base + 4, args)
@@ -1000,15 +1398,22 @@ contains
   end function as_list_rest
 
   ! Applies a macro to the unevaluated argument forms.
-  recursive function expand_macro(fn, form) result(out)
-    type(gc_value), intent(in) :: fn, form
+  recursive function expand_macro(fn, form, env) result(out)
+    type(gc_value), intent(in) :: fn, form, env
     type(gc_value) :: out, args, walk
     integer :: base
 
-    base = vs_enter(4)
+    base = vs_enter(5)
     call vs_set(base + 1, fn)
     call vs_set(base + 2, form)
+    call vs_set(base + 5, env)
+    ! The two HIDDEN PARAMETERS every macro takes: the whole form and
+    ! the local environment. macroexpand1 builds the same call --
+    ! RT.cons(form, RT.cons(LOCAL_ENV.get(), form.next())) -- and
+    ! core.clj's macros name them &form and &env.
     args = gcv_empty([vs_get(base + 1), vs_get(base + 2)])
+    args = gcv_conj(args, vs_get(base + 2), [vs_get(base + 1), vs_get(base + 2)])
+    args = gcv_conj(args, vs_get(base + 5), [vs_get(base + 1), vs_get(base + 2)])
     call vs_set(base + 3, args)
     walk = gcl_rest(vs_get(base + 2), [vs_get(base + 2)])
     call vs_set(base + 4, walk)
@@ -1243,6 +1648,12 @@ contains
        out = sq_first(gcv_nth(vs_get(base + 1), 0), [vs_get(base + 1)])
     case (B_REST)
        out = sq_rest(gcv_nth(vs_get(base + 1), 0), [vs_get(base + 1)])
+    case (B_NEXT)
+       ! RT.next is RT.more put through seq: the two differ only in
+       ! what an exhausted sequence gives back, nil versus (). Every
+       ! `if (next x)` in core.clj rests on that difference.
+       out = to_seq(sq_rest(gcv_nth(vs_get(base + 1), 0), [vs_get(base + 1)]), &
+            [vs_get(base + 1)])
     case (B_CONS)
        ! (cons x anything-seqable) is a SEQ, so the tail is seq'd
        ! rather than type-tested: (cons 1 "ab") is (1 \a \b).
@@ -1381,6 +1792,37 @@ contains
        end do
        write(*, '(A)') ""
        out = gc_nil()
+    case (B_NS)
+       ! The bootstrap ns, and a deliberate near-copy of RT.java's
+       ! bootNamespace: find-or-create the namespace and switch to it,
+       ! nothing else. core.clj's own ns macro (its line 5976) replaces
+       ! this by ordinary definition once it exists.
+       !
+       ! A macro, so the name arrives UNEVALUATED, at index 2 -- every
+       ! macro is called with &form and &env ahead of its own
+       ! arguments. RT.java writes the same signature out longhand:
+       ! invoke(Object __form, Object __env, Object arg1).
+       !
+       ! It also arrives WRAPPED, since core.clj's own first form is
+       ! (ns ^{:doc ...} clojure.core).
+       a = gcv_nth(vs_get(base + 1), 2)
+       if (gc_kind(a) == OBJ_META) a = gc_slot(a, 1)
+       if (a%tag /= GCT_SYM) then
+          call fail("ns needs a symbol name")
+       else
+          out = gcn_find_or_create(gc_ref_text(a%ref), [vs_get(base + 1)])
+          call gcn_set_current(out)
+       end if
+    case (B_INNS)
+       ! A FUNCTION, not a macro -- RT.java interns inNamespace without
+       ! setMacro, so (in-ns 'user) evaluates its argument.
+       a = gcv_nth(vs_get(base + 1), 0)
+       if (a%tag /= GCT_SYM) then
+          call fail("in-ns needs a symbol")
+       else
+          out = gcn_find_or_create(gc_ref_text(a%ref), [vs_get(base + 1)])
+          call gcn_set_current(out)
+       end if
     case (B_META)
        ! A Var keeps its metadata in slot 2; anything else carries it
        ! in a wrapper. nil when there is none, as Clojure's meta does.

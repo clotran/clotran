@@ -254,18 +254,18 @@ contains
   ! from a function: a function would evaluate the unbound symbol.
   subroutine check_macros()
     call ev("13a. ", &
-         "(do (defmacro* m (fn* [a] a)) (m 1))", "1")
+         "(do (defmacro* m (fn* [&form &env a] a)) (m 1))", "1")
     call ev("13b. ", &
-         "(do (defmacro* unless (fn* [c t] `(if ~c nil ~t))) (unless false :yes))", &
+         "(do (defmacro* unless (fn* [&form &env c t] `(if ~c nil ~t))) (unless false :yes))", &
          ":yes")
     call ev("13c. ", &
-         "(do (defmacro* ig (fn* [a] 7)) (ig undefined-symbol))", "7")
+         "(do (defmacro* ig (fn* [&form &env a] 7)) (ig undefined-symbol))", "7")
     ! A macro building a form from its unevaluated argument.
     call ev("13d. ", &
-         "(do (defmacro* twice (fn* [f] `(+ ~f ~f))) (twice 5))", "10")
+         "(do (defmacro* twice (fn* [&form &env f] `(+ ~f ~f))) (twice 5))", "10")
     ! Variadic macro, which needs & and ~@ working together.
     call ev("13e. ", &
-         "(do (defmacro* my-list (fn* [& xs] `(list ~@xs))) (my-list 1 2 3))", &
+         "(do (defmacro* my-list (fn* [&form &env & xs] `(list ~@xs))) (my-list 1 2 3))", &
          "(1 2 3)")
   end subroutine check_macros
 
@@ -371,7 +371,7 @@ contains
     call ev("17h. ", "(try* (var nosuch) (catch* e :unresolved))", ":unresolved")
     ! A second namespace has its own bindings.
     call ev("17i. ", &
-         "(do (def a 1) (in-ns* (quote other)) (def a 2) a)", "2")
+         "(do (def a 1) (in-ns (quote other)) (def a 2) a)", "2")
   end subroutine check_namespaces
 
   ! `=` is STRUCTURAL in Clojure: two vectors of equal elements are

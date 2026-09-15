@@ -33,6 +33,9 @@ program gc_repl
   ! library: everything else Clojure programs use must come from
   ! the real core.clj, which is the point of the project.
   call load_file("src/clj/host.clj", vs_get(base + 1))
+  ! host.clj leaves clojure.core current, being part of its bootstrap.
+  ! The REPL starts in user, as Clojure's does.
+  call gcn_set_current(gcn_find_or_create("user", none))
 
   ! Any files named on the command line load next, in order, so
   ! that `clotran-gc some.clj` is how a file gets tried against
@@ -71,16 +74,25 @@ program gc_repl
 
 contains
 
-  ! Reads a whole file and evaluates every form in it. Errors are
-  ! reported with the form that caused them and loading STOPS --
-  ! continuing past a broken definition just produces a second,
-  ! more confusing error somewhere else.
+  ! Reads a whole file and evaluates every form in it.
+  !
+  ! TWO DELIBERATE DEVIATIONS from Compiler.load, both temporary and
+  ! both only because bootstrapping is incomplete. See DEVIATIONS.md.
+  !
+  !   1. Clojure interleaves read and eval, one form at a time. We read
+  !      the whole file first. That is wrong in general -- the reader
+  !      consults *ns* (for ::kw) and a macro cannot affect how later
+  !      forms READ -- but it is what lets a single reader error be
+  !      reported once instead of aborting at form one.
+  !   2. Clojure lets an exception out of the loop, ending the load.
+  !      We report each failing form and continue, because the number
+  !      that matters right now is how much of core.clj works.
   subroutine load_file(path, env)
     character(len=*), intent(in) :: path
     type(gc_value), intent(in) :: env
     character(len=:), allocatable :: text
     type(gc_value) :: forms, r
-    integer :: u, st, lb, i, fsize
+    integer :: u, st, lb, i, fsize, nfail
 
     ! Read in ONE allocation, via stream access, rather than
     ! appending line by line. Appending is O(n^2) -- each // builds a
@@ -107,19 +119,39 @@ contains
        return
     end if
     call vs_set(lb + 2, forms)
+    nfail = 0
     do i = 0, gcv_count(vs_get(lb + 2)) - 1
        call gce_clear_error()
        r = gce_eval(gcv_nth(vs_get(lb + 2), i), vs_get(lb + 1), no_roots())
        call vs_set(lb + 3, r)
        if (gce_has_error()) then
-          print '(A,A,A,A)', "load ", path, ": ", gce_error()
-          print '(A,A)',   "  in form: ", &
-               gcp_str(gcv_nth(vs_get(lb + 2), i), .true.)
-          exit
+          ! Report and CONTINUE -- deviation 2 above.
+          nfail = nfail + 1
+          if (nfail <= 5) then
+             print '(A,A)', "  ", gce_error()
+             print '(A,A)', "    in: ", &
+                  first_line(gcp_str(gcv_nth(vs_get(lb + 2), i), .true.))
+          end if
        end if
     end do
+    if (nfail > 0) then
+       print '(A,A,A,I0,A,I0,A)', "load ", path, ": ", &
+            gcv_count(vs_get(lb + 2)) - nfail, " of ", &
+            gcv_count(vs_get(lb + 2)), " forms loaded"
+    end if
     call vs_leave(lb)
   end subroutine load_file
+
+  ! Just enough of a form to identify it in a report.
+  function first_line(t) result(out)
+    character(len=*), intent(in) :: t
+    character(len=:), allocatable :: out
+    integer :: k
+    out = t
+    k = index(t, achar(10))
+    if (k > 0) out = t(1:k-1)
+    if (len(out) > 72) out = out(1:72) // "..."
+  end function first_line
 
   function no_roots() result(r)
     type(gc_value) :: r(0)
