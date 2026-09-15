@@ -9,19 +9,28 @@ scratch.
 
 Measured, not estimated:
 
-| | |
-| --- | --- |
-| core.clj load | 9 failing forms of 728 |
-| `eval_test` | 239/239, flang and gfortran |
-| Clojure's own suite (`scripts/run-clojure-tests`) | 163 assertions passing, 6 namespaces |
-| startup (bootstrap) | ~28s, of which ~15.6s is macroexpansion |
-| one `cons_value` copy | **497 ns** |
-| share of runtime in flang's derived-type machinery | **94.7%** |
+There are TWO evaluators in the tree right now, and the numbers differ
+by which one is being measured. `clotran-gc` is the GC-backed one and
+the one being built on; `clotran-bin` is the original, still the target
+of the upstream suite until step 4a moves it.
 
-That last row is the headline. It is not allocation cost and not
-garbage collection cost -- it is the cost of *copying a value*, paid on
-every assignment, because `cons_value` has a `FINAL` binding and nine
-allocatable components. Measured on identical data:
+| | `clotran-gc` | `clotran-bin` |
+| --- | --- | --- |
+| core.clj | 615 of 724 forms, stopping at its first `(load ...)` | 9 failing forms |
+| startup | **1.68s** | **5.43s** |
+| unit tests | green, both compilers | green, both compilers |
+| Clojure's own suite | not yet pointed at it | 163/16/41 |
+| source | 8,342 lines | 9,319 lines |
+
+core.clj stops where it does because of the HOST, not a defect: its last
+forms `(load ...)` five sibling libs that generate JVM bytecode or wrap
+`java.*` types. See `src/clj/clojure/PROVENANCE.md`.
+
+The original headline measurement, which is why the GC exists at all. It
+is not allocation cost and not garbage collection cost -- it is the cost
+of *copying a value*, paid on every assignment, because `cons_value` has
+a `FINAL` binding and nine allocatable components. Measured on identical
+data:
 
 | type shape | ns per copy |
 | --- | --- |
@@ -30,7 +39,9 @@ allocatable components. Measured on identical data:
 | + pointer component, **with `FINAL`** | 133.8 |
 | `cons_value` (9 allocatable components + `FINAL`) | 497 |
 
-Everything below follows from that.
+Everything below follows from that. `gc_value` -- four scalars, no
+allocatable components, no `FINAL` -- is the answer, and `clotran-gc` is
+that answer carried all the way up through the reader and evaluator.
 
 ## Decisions taken
 
@@ -203,7 +214,7 @@ Still open for the cache in step 6: `(meta form)` synthesises
 `:line`/`:column`, so printing with `*print-meta*` bakes positions into
 the text. A cache writer needs to exclude them.
 
-### 3. The GC -- collector built, not yet wired in
+### 3. The GC -- built, wired in, running real core.clj
 
 - [x] **3a/3b.** `src/f/GC.f90` + `test/f/gc_test.f90`: typed pools
       with free lists, a value type with no allocatable components and
@@ -1384,9 +1395,23 @@ step 3c.
 Everything after this step is paid for by the edit-test loop, so make
 the loop cheap before starting on the expensive steps.
 
-- [ ] **4a.** The 9 remaining `core.clj` failures, and the upstream
-      suite green. Independent of the GC, but the baseline has to be
-      *stable* before 3c or a new failure can't be attributed.
+- [ ] **4a.** Point `scripts/run-clojure-tests` at `clotran-gc` and get
+      it green. This is now the step that matters most: the suite is
+      Clojure's own assertions over the real core.clj functions, where
+      `scripts/gc-oracle` is 107 cases someone wrote by hand. Expect it
+      to drop hard at first -- that is the signal being asked for.
+
+      Two things it will force, both wanted:
+
+      - **Retire `clotran-bin`.** ~9,300 lines of the original
+        evaluator go once the suite passes on the GC one. That deletion
+        is what the whole GC effort was for, and keeping two evaluators
+        means every fix has to be considered twice.
+      - **Startup cost becomes the bottleneck.** The runner launches a
+        process per namespace, so ~40 namespaces x 1.68s is around a
+        minute of pure loading per run. Annoying, not blocking -- but it
+        is what finally makes 4c worth doing.
+
 - [x] **4a'. The gfortran-only crashes.** Three real bugs, none of them
       a gfortran defect. Found with `-fcheck=all -fbacktrace`, which is
       worth reaching for first every time: the raw crash was SIGTRAP
@@ -1598,13 +1623,18 @@ the loop cheap before starting on the expensive steps.
       already walks every form at definition time, so it can stamp an
       integer id on each list node -- most of a VM's dispatch win
       without becoming one.
-- [ ] **4c. Bootstrap cache.** After the GC, with an index-based heap,
-      the heap serialises almost for free -- which is most of a cache.
-      Until then: caching expanded forms as text saves the 15.6 s of
-      macroexpansion but not the ~13 s of evaluation, and needs step 2
-      first or it silently drops metadata. Key must include every
-      `.clj` loaded *and* the `clotran-bin` binary, since expansion
-      depends on the evaluator.
+- [ ] **4c. Bootstrap cache.** UNBLOCKED: the GC exists and its heap is
+      index-based, so it serialises almost for free -- which is most of
+      a cache. Snapshot after core.clj and start from that.
+
+      The old fallback -- caching expanded forms as text -- is moot now:
+      it saved macroexpansion but not evaluation, and on `clotran-gc`
+      analysis is only ~4% of the 1.68s startup anyway (profiled: 218
+      samples in `mx_walk` against 3603 in `gce_eval`). The cost is
+      RUNNING core.clj, which only a heap snapshot avoids.
+
+      Key must include every `.clj` loaded *and* the binary, since both
+      expansion and evaluation depend on the evaluator.
 
 ### 5. Concurrency -- STM, agents
 

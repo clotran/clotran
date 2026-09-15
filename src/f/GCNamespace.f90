@@ -192,7 +192,8 @@ contains
        return
     end if
 
-    var = gc_obj(OBJ_VAR, [vs_get(base + 3), gc_nil(), gc_nil(), vs_get(base + 2)], &
+    var = gc_obj(OBJ_VAR, [vs_get(base + 3), gc_nil(), vs_get(base + 1), &
+         vs_get(base + 2)], &
          [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
     call vs_set(base + 4, var)
     binds = gca_assoc(gc_slot(vs_get(base + 1), 2), vs_get(base + 2), &

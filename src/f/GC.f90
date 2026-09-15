@@ -184,7 +184,12 @@ module GC
   integer, parameter, public :: OBJ_ERR       = 19 ! 1=class 2=message 3=data
   integer, parameter, public :: OBJ_HAMT      = 11 ! 1=root run; i1=count
   integer, parameter, public :: OBJ_HAMT_LEAF = 12 ! 1=key 2=val
-  integer, parameter, public :: OBJ_VAR     = 10 ! 1=root 2=meta 3=dyn stack 4=name
+  ! Slot 3 was reserved for a per-Var dynamic stack; the dynamic
+  ! bindings ended up in one global frame stack instead (GCEval), so the
+  ! slot holds the Var's OWN NAMESPACE -- which Var.ns is in Clojure, and
+  ! which ns-publics needs to tell a Var defined here from one referred
+  ! in from somewhere else.
+  integer, parameter, public :: OBJ_VAR     = 10 ! 1=root 2=meta 3=ns 4=name
 
   integer, parameter, public :: OBJ_SLOTS = 4
 
@@ -773,9 +778,23 @@ contains
   ! deeply -- which is what value_equal does today too, and what map
   ! keys currently rely on. Deep equality for collection keys is a
   ! separate decision, not one to make silently here.
-  function gc_equal(a, b) result(eq)
-    type(gc_value), intent(in) :: a, b
+  ! METADATA IS INVISIBLE TO EQUALITY, as it is in Clojure:
+  ! (= (with-meta 'a {:m 1}) 'a) is true, and so a hinted symbol has to
+  ! find the same entry in a map that a bare one does. core.clj leans on
+  ! it -- destructuring looks its :or defaults up by a local name that
+  ! carries a hint. DEVIATIONS.md 5.
+  recursive function gc_equal(a0, b0) result(eq)
+    type(gc_value), intent(in) :: a0, b0
+    type(gc_value) :: a, b
     logical :: eq
+    a = a0
+    b = b0
+    do while (gc_kind(a) == OBJ_META)
+       a = gc_slot(a, 1)
+    end do
+    do while (gc_kind(b) == OBJ_META)
+       b = gc_slot(b, 1)
+    end do
     eq = .false.
     if (a%tag /= b%tag) return
     select case (a%tag)
@@ -804,10 +823,17 @@ contains
   ! hash equal, or a trie will store the same key twice and lookups
   ! will find whichever arm they walk into. That is why text hashes
   ! over its CONTENT here, exactly as gc_equal compares content.
-  function gc_hash(v) result(h)
-    type(gc_value), intent(in) :: v
+  ! Metadata is invisible here for the same reason it is in gc_equal:
+  ! two values that are equal must hash equal, or a map loses entries.
+  recursive function gc_hash(v0) result(h)
+    type(gc_value), intent(in) :: v0
+    type(gc_value) :: v
     integer :: h
     integer(kind=8) :: bits8
+    v = v0
+    do while (gc_kind(v) == OBJ_META)
+       v = gc_slot(v, 1)
+    end do
     select case (v%tag)
     case (GCT_NIL)
        h = 0

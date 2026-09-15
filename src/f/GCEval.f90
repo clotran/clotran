@@ -89,6 +89,13 @@ module GCEval
   integer, parameter :: B_PUSHTB = 99, B_POPTB = 100, B_FINDVAR = 101
   integer, parameter :: B_GETNAME = 102, B_POP = 103, B_PEEK = 104
   integer, parameter :: B_MAYBERESOLVE = 105
+  integer, parameter :: B_NSMAP = 106, B_NSREFER = 107, B_NSALIASES = 108
+  integer, parameter :: B_VARNS = 109, B_ISPUBLIC = 110
+  integer, parameter :: B_ISMACRO = 111, B_SETMACRO = 112
+  integer, parameter :: B_RUNTX = 113, B_DOTGET = 114
+  integer, parameter :: B_REPEAT = 115, B_RANGE = 116, B_GENIFACE = 117
+  integer, parameter :: B_ALWAYS_FALSE = 118, B_FORNAME = 119
+  integer, parameter :: B_SYMBOL2 = B_SYMBOL
   integer, parameter :: B_LONGCAST = 66, B_DBLCAST = 67, B_BOOLCAST = 68, B_CHARCAST = 69
   integer, parameter :: B_BITAND = 70, B_BITOR = 71, B_BITXOR = 72, B_BITNOT = 73
   integer, parameter :: B_SHL = 74, B_SHR = 75
@@ -255,6 +262,12 @@ contains
     ! core.clj gets around to defining its own.
     call bind_builtin(core, "vec", B_VEC)
     call bind_builtin(core, "hash-set", B_HSET)
+    ! Bound for the same reason vec is: syntax-quote emits (hash-map ...)
+    ! for a map template, so it has to resolve before core.clj defines
+    ! its own. core.clj's hash-map is variadic over key/value pairs and
+    ! this one takes a single flat seq, which is what the template
+    ! produces -- the two agree wherever both are reachable.
+    call bind_builtin(core, "hash-map", B_HMAP)
     call bind_builtin(core, "disj", B_DISJ)
     ! The rest of the arithmetic primitives. core.clj defines >, <=,
     ! inc and the others in terms of clojure.lang.Numbers, so the
@@ -274,6 +287,12 @@ contains
     call bind_builtin(core, "val", B_VAL)
     call bind_builtin(core, "namespace", B_NAMESPACE)
     call bind_builtin(core, "pop", B_POP)
+    ! gen-interface lives in genclass.clj, which is skipped: it
+    ! declares a JVM interface, and there are none here. A macro
+    ! evaluating to nil, so definterface is a no-op rather than an
+    ! error -- core/protocols opens with one. DEVIATIONS.md 12.
+    call bind_builtin(core, "gen-interface", B_GENIFACE, .true.)
+    call bind_builtin(core, "definterface", B_GENIFACE, .true.)
     call bind_builtin(core, "peek", B_PEEK)
     ! load-file is a Java-side Var in Clojure -- core.clj only decorates
     ! it with (alter-meta! #'load-file assoc :added "1.0") -- so it has
@@ -457,6 +476,20 @@ contains
           if (is_class_name(form)) then
              out = gc_key(gc_ref_text(form%ref), [vs_get(base + 1)])
              found = .true.
+          else if (is_static_call(form)) then
+             ! Class/member in VALUE position -- a static FIELD, not a
+             ! call. clojure.lang.Compiler/LOADER is read that way, as a
+             ! map key, by the with-loading-context every (ns ...)
+             ! expands into.
+             block
+               character(len=:), allocatable :: t
+               integer :: sl
+               t = gc_ref_text(form%ref)
+               sl = index(t, "/")
+               out = static_member(t(1:sl-1), t(sl+1:), vs_get(base + 1))
+               found = .not. has_error
+               if (has_error) call gce_clear_error()
+             end block
           end if
        end if
        if (.not. found) call fail("'" // gc_ref_text(form%ref) // "' not found")
@@ -541,6 +574,7 @@ contains
           gc_ref_is(sym%ref, "try") .or. gc_ref_is(sym%ref, "throw") .or. &
           gc_ref_is(sym%ref, "lazy-seq*") .or. gc_ref_is(sym%ref, ".") .or. &
           gc_ref_is(sym%ref, "new") .or. gc_ref_is(sym%ref, "clojure.core/import*") .or. &
+          gc_ref_is(sym%ref, "set!") .or. &
           gc_ref_is(sym%ref, "var")
   end function is_special
 
@@ -697,6 +731,44 @@ contains
        ! fail, because core.clj imports at its top and every form after
        ! that would be lost.
        out = gc_nil()
+
+    else if (gc_ref_is(head%ref, "set!")) then
+       ! (set! var-or-symbol value). Clojure only permits this on a Var
+       ! with a thread-local binding, or a host field; with one thread
+       ! and one global binding stack there is nothing to distinguish,
+       ! so it sets the Var. DEVIATIONS.md 11.
+       block
+         type(gc_value) :: tgt, val
+         tgt = strip_meta(gcl_first(vs_get(base + 3)))
+         if (tgt%tag == GCT_SYM) then
+            tgt = resolve_var(tgt, vs_get(base + 1))
+         else
+            tgt = gce_eval(tgt, vs_get(base + 2), [vs_get(base + 1)])
+         end if
+         if (has_error) then
+            call vs_leave(base)
+            return
+         end if
+         call vs_set(base + 4, tgt)
+         val = gce_eval(gcl_first(gcl_rest(vs_get(base + 3), [vs_get(base + 1)])), &
+              vs_get(base + 2), [vs_get(base + 1), vs_get(base + 4)])
+         if (.not. has_error) then
+            if (gcn_is_var(vs_get(base + 4)) .or. &
+                 gc_kind(vs_get(base + 4)) == OBJ_ATOM) then
+               call gc_set_slot(vs_get(base + 4), 1, val)
+               out = val
+            else if (gcl_is(strip_meta(gcl_first(vs_get(base + 3))))) then
+               ! (set! (.field obj) v) -- a HOST FIELD. The only one
+               ! clotran models is the protocol dispatch cache, which
+               ! has no storage, so the write is discarded and the
+               ! value returned. A bare symbol that is not a Var is
+               ! still an error, so this does not swallow a typo.
+               out = val
+            else
+               call fail("set! needs a var")
+            end if
+         end if
+       end block
 
     else if (gc_ref_is(head%ref, "new")) then
        out = eval_new(vs_get(base + 3), vs_get(base + 2))
@@ -1266,7 +1338,18 @@ contains
        call var_set_macro(vs_get(base + 3), vs_get(base + 2))
        out = gc_nil()
     else
-       call fail("no such member: " // mname)
+       ! Name the TARGET as well as the member. A class literal that is
+       ! not in is_host_class falls through to here, and "no such
+       ! member: create" alone does not say which create.
+       block
+         type(gc_value) :: tv
+         tv = strip_meta(vs_get(base + 3))
+         if (tv%tag == GCT_KEY) then
+            call fail("no such member: " // gc_ref_text(tv%ref) // "/" // mname)
+         else
+            call fail("no such member: " // type_name(tv) // "." // mname)
+         end if
+       end block
     end if
     call vs_leave(base)
   end function eval_dot
@@ -1321,6 +1404,17 @@ contains
     case ("isInstance"); out = native(B_INSTANCE, "instance?", [roots])
     case ("getName", "getSimpleName"); out = native(B_GETNAME, "clotran-get-name", [roots])
     case ("getNamespace"); out = native(B_NAMESPACE, "namespace", [roots])
+    case ("getClass", "getClassLoader", "getContextClassLoader")
+       out = native(B_ALWAYS_NIL, "clotran-nil", [roots])
+    ! Namespace members. The mappings ARE slot 2 -- ns-map hands the
+    ! same map the evaluator resolves against, not a copy.
+    case ("getMappings"); out = native(B_NSMAP, "ns-map", [roots])
+    case ("ns"); out = native(B_VARNS, "clotran-var-ns", [roots])
+    case ("isPublic"); out = native(B_ISPUBLIC, "clotran-var-public", [roots])
+    case ("isMacro"); out = native(B_ISMACRO, "clotran-var-macro", [roots])
+    case ("setMacro"); out = native(B_SETMACRO, "clotran-set-macro", [roots])
+    case ("getAliases");  out = native(B_NSALIASES, "ns-aliases", [roots])
+    case ("refer", "addAlias"); out = native(B_NSREFER, "clotran-ns-refer", [roots])
     ! The String methods core.clj reaches for while loading libs.
     case ("startsWith"); out = native(B_STARTSWITH, "clotran-starts-with", [roots])
     case ("endsWith"); out = native(B_ENDSWITH, "clotran-ends-with", [roots])
@@ -1333,6 +1427,24 @@ contains
     case ("deref");     out = native(B_DEREF, "deref", [roots])
     case ("hasRoot");   out = native(B_HASROOT, "clotran-has-root", [roots])
     case ("addMethod"); out = native(B_ADDMETHOD, "clotran-add-method", [roots])
+    ! preferMethod resolves an AMBIGUITY between two matching methods,
+    ! and exact-match dispatch has no ambiguity to resolve -- so it
+    ! records nothing and returns the multimethod. DEVIATIONS.md 8.
+    ! The protocol dispatch cache field, read and written on the
+    ! protocol function itself. Reading it answers nil -- a cold
+    ! cache -- and writing it is discarded, which is what a cache
+    ! with no storage behind it means.
+    ! Class.isAssignableFrom asks whether one JVM type is a subtype
+    ! of another. There are no interfaces here and no inheritance
+    ! between clotran's types, so the answer is false -- which is
+    ! what sends extends? and satisfies? down the extend-map path
+    ! that clotran does implement.
+    case ("isAssignableFrom", "isInterface", "isArray")
+       out = native(B_ALWAYS_FALSE, "clotran-false", [roots])
+    case ("__methodImplCache")
+       out = native(B_ALWAYS_NIL, "clotran-nil", [roots])
+    case ("preferMethod", "getMethod")
+       out = native(B_IDENTITY, "identity", [roots])
     case ("disjoin");   out = native(B_DISJ, "disj", [roots])
 
     case ("concat"); out = native(B_STR, "str", [roots])
@@ -1348,15 +1460,39 @@ contains
     ! IReference.alterMeta is resetMeta(alter.applyTo(listStar(meta(),
     ! args))) -- the function sees the current metadata first.
     case ("alterMeta"); out = native(B_ALTERMETA, "clotran-alter-meta", [roots])
-    case ("resetMeta"); out = native(B_RESETMETA, "clotran-reset-meta", [roots])
+    case ("resetMeta", "setMeta")
+       out = native(B_RESETMETA, "clotran-reset-meta", [roots])
     case ("set", "reset"); out = native(B_SETVAL, "clotran-set-val", [roots])
-    case ("alter", "commute", "swap")
+    case ("alter", "commute", "swap", "alterRoot")
+       ! alterRoot is alter on a Var's root, which is slot 1 -- the same
+       ! slot a Ref and an atom keep their value in.
        out = native(B_ALTERVAL, "clotran-alter-val", [roots])
+    case ("bindRoot"); out = native(B_SETVAL, "clotran-set-val", [roots])
     ! String.indexOf, 0-based and -1 when absent, which is the value
     ! core.clj compares against: (Util/equiv (.indexOf (.getName tag) ".") -1).
     case ("indexOf");  out = native(B_INDEXOF, "clotran-index-of", [roots])
     case ("lastIndexOf"); out = native(B_LASTINDEXOF, "clotran-last-index-of", [roots])
-    case ("equiv");    out = native(B_EQ, "=", [roots])
+    case ("equiv", "equals"); out = native(B_EQ, "=", [roots])
+    ! TRANSIENTS ARE THE PERSISTENT COLLECTIONS HERE. A transient is an
+    ! optimisation, not a semantic: used correctly -- single-threaded and
+    ! linearly -- (persistent! (conj! (transient c) x)) and (conj c x)
+    ! are the same value. So asTransient and persistent are identity and
+    ! the bang operations are the ordinary ones. DEVIATIONS.md 11.
+    !
+    ! What is lost is the SPEED, and the error when a transient is used
+    ! after being persisted, which Clojure catches and we do not.
+    case ("asTransient", "persistent")
+       out = native(B_IDENTITY, "identity", [roots])
+    case ("conj");     out = native(B_CONJ, "conj", [roots])
+    case ("assoc");    out = native(B_ASSOC, "assoc", [roots])
+    case ("without");  out = native(B_DISSOC, "dissoc", [roots])
+    case ("valAt");    out = native(B_GET, "get", [roots])
+    ! .get is two different methods in Java -- Var.get() takes nothing
+    ! and derefs, Map.get(k) takes a key -- so it dispatches on how many
+    ! arguments arrived.
+    case ("get");      out = native(B_DOTGET, "clotran-dot-get", [roots])
+    case ("nth");      out = native(B_NTH, "nth", [roots])
+    case ("contains"); out = native(B_CONTAINS, "contains?", [roots])
     case default;       call fail("no such member: " // mname)
     end select
   end function instance_member
@@ -1517,9 +1653,14 @@ contains
     head = gcl_first(vs_get(base + 1))
     t = gc_ref_text(head%ref)
     slash = index(t, "/")
-    ! (Class member . args) -- the shape eval_dot reads.
+    ! (Class (member . args)) -- the PARENTHESISED shape, because
+    ! Class/member in head position is always a call, arguments or not.
+    ! (clojure.lang.Var/popThreadBindings) takes none, and handing
+    ! eval_dot the bare symbol made it read the member as a field and
+    ! return the function itself. binding then never restored anything.
     args = gcl_cons(gc_sym(t(slash+1:), [vs_get(base + 1)]), &
          gcl_rest(vs_get(base + 1), [vs_get(base + 1)]), [vs_get(base + 1)])
+    args = gcl_cons(args, gcl_empty([vs_get(base + 1)]), [vs_get(base + 1), args])
     call vs_set(base + 3, args)
     args = gcl_cons(gc_sym(t(1:slash-1), [vs_get(base + 3)]), vs_get(base + 3), &
          [vs_get(base + 3)])
@@ -1550,7 +1691,13 @@ contains
     end if
     cname = gc_ref_text(cls%ref)
 
-    if (cname == "clojure.lang.Ref" .or. cname == "clojure.lang.Atom" .or. &
+    if (cname == "clojure.lang.MethodImplCache") then
+       ! A protocol dispatch CACHE. A cache is inert by definition:
+       ! a miss costs a recompute and nothing else, so an empty map
+       ! is a correct one. What is lost is the speed of protocol
+       ! dispatch, not its behaviour.
+       out = gca_empty([vs_get(base + 1)])
+    else if (cname == "clojure.lang.Ref" .or. cname == "clojure.lang.Atom" .or. &
          cname == "clojure.lang.Agent") then
        ! A Ref IS an atom here: a mutable box, with no transaction
        ! around it. Single-threaded that is indistinguishable; the
@@ -1690,6 +1837,12 @@ contains
          gc_ref_is(sym%ref, "clojure.lang.Compiler") .or. &
          gc_ref_is(sym%ref, "clojure.lang.Namespace") .or. &
          gc_ref_is(sym%ref, "clojure.lang.Var") .or. &
+         gc_ref_is(sym%ref, "clojure.lang.LockingTransaction") .or. &
+         gc_ref_is(sym%ref, "Class") .or. &
+         gc_ref_is(sym%ref, "java.lang.Class") .or. &
+         gc_ref_is(sym%ref, "clojure.lang.Repeat") .or. &
+         gc_ref_is(sym%ref, "clojure.lang.Range") .or. &
+         gc_ref_is(sym%ref, "clojure.lang.LongRange") .or. &
          gc_ref_is(sym%ref, "System") .or. gc_ref_is(sym%ref, "java.lang.System")
   end function is_host_class
 
@@ -1783,6 +1936,25 @@ contains
        case ("max"); out = native(B_MAX, "max", [roots]); return
        case ("min"); out = native(B_MIN, "min", [roots]); return
        end select
+    else if (cls == "Class" .or. cls == "java.lang.Class") then
+       if (mname == "forName") then
+          out = native(B_FORNAME, "clotran-for-name", [roots]); return
+       end if
+    else if (cls == "clojure.lang.Repeat") then
+       if (mname == "create") then
+          out = native(B_REPEAT, "repeat", [roots]); return
+       end if
+    else if (cls == "clojure.lang.Range" .or. cls == "clojure.lang.LongRange") then
+       if (mname == "create") then
+          out = native(B_RANGE, "range", [roots]); return
+       end if
+    else if (cls == "clojure.lang.LockingTransaction") then
+       ! dosync with no transaction: call the thunk. Single-threaded
+       ! that is what a transaction does -- the retry, the isolation and
+       ! the write skew are all about other threads. DEVIATIONS.md 11.
+       if (mname == "runInTransaction") then
+          out = native(B_RUNTX, "clotran-run-tx", [roots]); return
+       end if
     else if (cls == "clojure.lang.Namespace") then
        if (mname == "find" .or. mname == "findOrCreate") then
           out = native(B_FINDNS, "find-ns", [roots]); return
@@ -1799,6 +1971,18 @@ contains
     else if (cls == "clojure.lang.Compiler") then
        if (mname == "eval") then
           out = native(B_EVAL, "eval", [roots]); return
+       end if
+       if (mname == "munge" .or. mname == "demunge") then
+          ! munge makes a Clojure name legal as a JVM identifier --
+          ! hyphens to underscores and so on. Nothing here constrains a
+          ! name, so there is nothing to mangle and nothing to undo.
+          out = native(B_IDENTITY, "identity", [roots]); return
+       end if
+       if (mname == "LOADER") then
+          ! A class loader is a JVM thing with no analogue. nil is safe
+          ! here: its only use is as a key in the map handed to
+          ! pushThreadBindings, which skips anything that is not a Var.
+          out = gc_nil(); return
        end if
        if (mname == "maybeResolveIn" .or. mname == "resolveIn" .or. &
             mname == "resolve") then
@@ -1859,6 +2043,15 @@ contains
        case ("keys");   out = native(B_KEYS, "keys", [roots]);   return
        case ("vals");   out = native(B_VALS, "vals", [roots]);   return
        end select
+    end if
+    ! Class/TYPE is a JVM primitive-class constant -- Float/TYPE and
+    ! friends, which core_print uses to dispatch on primitive ARRAY
+    ! types. There are no primitive arrays here, so each answers a
+    ! distinct keyword: inert, never equal to anything clotran
+    ! produces, and enough for the dispatch table to be built.
+    if (mname == "TYPE") then
+       out = gc_key(cls // "/TYPE", [roots])
+       return
     end if
     call fail("no such member: " // cls // "/" // mname)
   end function static_member
@@ -2357,6 +2550,36 @@ contains
        return
     end if
 
+    if (gca_is(form)) then
+       ! `{k ~v} -- flattened to k v k v, expanded as a seq, rebuilt as
+       ! a map. syntaxQuote does the same through flattenMap. Missing
+       ! this let a whole subtree through as literal data: every (ns ...)
+       ! expands into a with-loading-context whose body is a MAP, and
+       ! the gensym inside it was never renamed.
+       out = qq_rebuild(flatten_map(form, vs_get(base + 2)), "hash-map", &
+            vs_get(base + 2))
+       call vs_leave(base)
+       return
+    end if
+
+    if (gc_kind(form) == OBJ_SET) then
+       out = qq_rebuild(set_elems(form, vs_get(base + 2)), "hash-set", &
+            vs_get(base + 2))
+       call vs_leave(base)
+       return
+    end if
+
+    if (gc_kind(form) == OBJ_META) then
+       ! A HINTED form inside a template is still that form. (.getClass
+       ! ^Object loading#) hides its gensym behind a wrapper, and
+       ! treating the wrapper as an opaque leaf renamed the other
+       ! occurrence of loading# and not this one -- which is worse than
+       ! renaming neither.
+       out = qq_expand(gc_slot(vs_get(base + 1), 1), vs_get(base + 2))
+       call vs_leave(base)
+       return
+    end if
+
     if (.not. gcl_is(form)) then
        if (form%tag == GCT_SYM) then
           call vs_set(base + 1, auto_gensym(vs_get(base + 1)))
@@ -2463,6 +2686,43 @@ contains
     out = vs_get(base + 3)
     call vs_leave(base)
   end function auto_gensym
+
+  ! A map as a vector of k v k v ..., the shape flattenMap produces.
+  function flatten_map(m, roots) result(out)
+    type(gc_value), intent(in) :: m, roots
+    type(gc_value) :: out
+    type(gc_value), allocatable :: ks(:), vls(:)
+    integer :: base, i
+    base = vs_enter(1)
+    call gca_entries(m, ks, vls)
+    out = gcv_empty([roots])
+    call vs_set(base + 1, out)
+    do i = 1, size(ks)
+       out = gcv_conj(vs_get(base + 1), ks(i), [roots])
+       call vs_set(base + 1, out)
+       out = gcv_conj(vs_get(base + 1), vls(i), [roots])
+       call vs_set(base + 1, out)
+    end do
+    out = vs_get(base + 1)
+    call vs_leave(base)
+  end function flatten_map
+
+  function set_elems(st, roots) result(out)
+    type(gc_value), intent(in) :: st, roots
+    type(gc_value) :: out
+    type(gc_value), allocatable :: ks(:), vls(:)
+    integer :: base, i
+    base = vs_enter(1)
+    call gca_entries(gc_slot(st, 1), ks, vls)
+    out = gcv_empty([roots])
+    call vs_set(base + 1, out)
+    do i = 1, size(ks)
+       out = gcv_conj(vs_get(base + 1), ks(i), [roots])
+       call vs_set(base + 1, out)
+    end do
+    out = vs_get(base + 1)
+    call vs_leave(base)
+  end function set_elems
 
   ! A collection inside syntax-quote: expand its elements as a seq,
   ! then rebuild the collection from them with `ctor`.
@@ -2751,6 +3011,10 @@ contains
     ! caller holds is an OBJ_META around the closure. Metadata never
     ! changes what a value IS.
     fn = strip_meta(fn0)
+    ! A VAR IS CALLABLE. (#'f x) derefs and applies -- core.clj calls
+    ! its own private helpers that way, (#'assert-same-protocol ...), so
+    ! that a redefinition is picked up.
+    if (gcn_is_var(fn)) fn = gcn_var_value(fn)
     out = gc_nil()
     base = vs_enter(4)
     call vs_set(base + 1, fn)
@@ -3077,8 +3341,7 @@ contains
        !
        ! It also arrives WRAPPED, since core.clj's own first form is
        ! (ns ^{:doc ...} clojure.core).
-       a = gcv_nth(vs_get(base + 1), 2)
-       if (gc_kind(a) == OBJ_META) a = gc_slot(a, 1)
+       a = strip_meta(gcv_nth(vs_get(base + 1), 2))
        if (a%tag /= GCT_SYM) then
           call fail("ns needs a symbol name")
        else
@@ -3088,7 +3351,7 @@ contains
     case (B_INNS)
        ! A FUNCTION, not a macro -- RT.java interns inNamespace without
        ! setMacro, so (in-ns 'user) evaluates its argument.
-       a = gcv_nth(vs_get(base + 1), 0)
+       a = strip_meta(gcv_nth(vs_get(base + 1), 0))
        if (a%tag /= GCT_SYM) then
           call fail("in-ns needs a symbol")
        else
@@ -3143,12 +3406,34 @@ contains
        else
           out = gc_str(name_part(a), [vs_get(base + 1)])
        end if
-    case (B_KEYWORD)
-       a = gcv_nth(args, 0)
-       out = gc_key(gc_ref_text(a%ref), [vs_get(base + 1)])
-    case (B_SYMBOL)
-       a = gcv_nth(args, 0)
-       out = gc_sym(gc_ref_text(a%ref), [vs_get(base + 1)])
+    case (B_KEYWORD, B_SYMBOL2)
+       ! Two arguments make a QUALIFIED name: (symbol "clojure.core"
+       ! "require") is clojure.core/require. Ignoring the first argument
+       ! returned the NAMESPACE as the symbol, and (ns ... (:require))
+       ! then evaluated clojure.core in head position.
+       block
+         character(len=:), allocatable :: t
+         type(gc_value) :: q
+         if (n >= 2) then
+            ! A NIL namespace means unqualified: core.clj calls
+            ! (symbol (namespace b) (name b)) on names that have no
+            ! namespace, and gluing an empty qualifier on produced /x.
+            q = strip_meta(gcv_nth(args, 0))
+            if (q%tag == GCT_NIL) then
+               t = name_part(gcv_nth(args, 1))
+            else
+               t = name_part(q) // "/" // name_part(gcv_nth(args, 1))
+            end if
+         else
+            t = name_part(gcv_nth(args, 0))
+         end if
+         if (id == B_KEYWORD) then
+            out = gc_key(t, [vs_get(base + 1)])
+         else
+            out = gc_sym(t, [vs_get(base + 1)])
+         end if
+       end block
+
     case (B_SUBS)
        block
          character(len=:), allocatable :: t
@@ -3364,6 +3649,160 @@ contains
          end if
          out = gc_str(t(lo+1:hi), [vs_get(base + 1)])
        end block
+    case (B_ISPUBLIC, B_ISMACRO)
+       ! Both read the Var's metadata, which is where Clojure keeps
+       ! them: :private and :macro.
+       block
+         type(gc_value) :: md2
+         a = strip_meta(gcv_nth(args, 0))
+         md2 = gc_nil()
+         if (gcn_is_var(a)) md2 = gc_slot(a, 2)
+         if (id == B_ISMACRO) then
+            out = gc_bool(truthy(gca_get(md2, gc_key("macro", [vs_get(base + 1)]))))
+         else
+            out = gc_bool(.not. truthy(gca_get(md2, &
+                 gc_key("private", [vs_get(base + 1)]))))
+         end if
+       end block
+    case (B_SETMACRO)
+       a = strip_meta(gcv_nth(args, 0))
+       call var_set_macro(a, gc_nil())
+       out = gc_nil()
+    case (B_DOTGET)
+       if (n >= 2) then
+          out = gca_get(strip_meta(gcv_nth(args, 0)), gcv_nth(args, 1))
+       else
+          a = strip_meta(gcv_nth(args, 0))
+          if (gcn_is_var(a) .or. gc_kind(a) == OBJ_ATOM) then
+             out = gc_slot(a, 1)
+          else
+             out = a
+          end if
+       end if
+    case (B_GENIFACE)
+       out = gc_nil()
+    case (B_ALWAYS_FALSE)
+       out = gc_bool(.false.)
+    case (B_FORNAME)
+       ! There are no Java classes, so Class/forName THROWS -- which
+       ! is the honest answer and also the useful one: core.clj's
+       ! when-class catches ClassNotFoundException and skips the
+       ! body, so (when-class "java.sql.Timestamp" (load "instant"))
+       ! skips itself without clotran naming instant at all.
+       block
+         type(gc_value) :: exc
+         exc = gc_obj(OBJ_ERR, &
+              [gc_sym("ClassNotFoundException", [vs_get(base + 1)]), &
+               gcv_nth(args, 0), gc_nil()], [vs_get(base + 1)])
+         call vs_set(base + 2, exc)
+         call set_thrown(vs_get(base + 2))
+         has_error = .true.
+         last_error = gcp_str(vs_get(base + 2), .true.)
+         out = gc_nil()
+       end block
+    case (B_REPEAT)
+       ! (repeat x) is INFINITE, and here that is a single realised cons
+       ! cell whose tail is itself -- O(1) space, and every `first` and
+       ! `rest` of it answers correctly forever. (repeat n x) is finite
+       ! and ordinary.
+       if (n >= 2) then
+          block
+            type(gc_value) :: acc, iv
+            integer :: j, cnt
+            iv = gcv_nth(args, 0)
+            cnt = int(iv%ival)
+            acc = gcl_empty([vs_get(base + 1)])
+            call vs_set(base + 2, acc)
+            do j = 1, cnt
+               acc = gcl_cons(gcv_nth(args, 1), vs_get(base + 2), [vs_get(base + 1)])
+               call vs_set(base + 2, acc)
+            end do
+            out = vs_get(base + 2)
+          end block
+       else
+          out = gc_obj(OBJ_LAZY, [gc_nil(), gcv_nth(args, 0), gc_nil()], &
+               [vs_get(base + 1)])
+          call gc_set_i1(out, LAZY_CONS)
+          call gc_set_slot(out, 3, out)
+       end if
+    case (B_RANGE)
+       ! (range end), (range start end) and (range start end step), the
+       ! three arities Range/create has. Realised rather than lazy: an
+       ! unbounded range is the one shape core.clj does not ask for here.
+       block
+         type(gc_value) :: acc, iv
+         integer :: lo, hi, stp, j
+         lo = 0; stp = 1
+         iv = gcv_nth(args, 0)
+         hi = int(iv%ival)
+         if (n >= 2) then
+            lo = hi
+            iv = gcv_nth(args, 1)
+            hi = int(iv%ival)
+         end if
+         if (n >= 3) then
+            iv = gcv_nth(args, 2)
+            stp = int(iv%ival)
+         end if
+         acc = gcv_empty([vs_get(base + 1)])
+         call vs_set(base + 2, acc)
+         if (stp > 0) then
+            j = lo
+            do while (j < hi)
+               acc = gcv_conj(vs_get(base + 2), gc_int(j), [vs_get(base + 1)])
+               call vs_set(base + 2, acc)
+               j = j + stp
+            end do
+         else if (stp < 0) then
+            j = lo
+            do while (j > hi)
+               acc = gcv_conj(vs_get(base + 2), gc_int(j), [vs_get(base + 1)])
+               call vs_set(base + 2, acc)
+               j = j + stp
+            end do
+         end if
+         out = to_seq(vs_get(base + 2), [vs_get(base + 1)])
+       end block
+    case (B_RUNTX)
+       out = apply(gcv_nth(args, 0), gcv_empty([vs_get(base + 1)]))
+    case (B_VARNS)
+       a = strip_meta(gcv_nth(args, 0))
+       out = gc_nil()
+       if (gcn_is_var(a)) out = gc_slot(a, 3)
+    case (B_NSMAP, B_NSALIASES)
+       block
+         type(gc_value) :: nsv
+         integer :: slot
+         nsv = strip_meta(gcv_nth(args, 0))
+         out = gc_nil()
+         if (gc_kind(nsv) == OBJ_NS) then
+            if (id == B_NSMAP) then
+               slot = 2
+            else
+               slot = 3
+            end if
+            out = gc_slot(nsv, slot)
+            if (.not. gca_is(out)) out = gca_empty([vs_get(base + 1)])
+         end if
+       end block
+    case (B_NSREFER)
+       ! (.refer ns sym var) puts an existing Var under a name in
+       ! another namespace -- which is all refer is. addAlias is the
+       ! same operation on slot 3.
+       block
+         type(gc_value) :: nsv, m
+         nsv = strip_meta(gcv_nth(args, 0))
+         out = gc_nil()
+         if (gc_kind(nsv) == OBJ_NS) then
+            call vs_set(base + 2, nsv)
+            m = gc_slot(vs_get(base + 2), 2)
+            if (.not. gca_is(m)) m = gca_empty([vs_get(base + 1)])
+            m = gca_assoc(m, strip_meta(gcv_nth(args, 1)), gcv_nth(args, 2), &
+                 [vs_get(base + 1), vs_get(base + 2)])
+            call gc_set_slot(vs_get(base + 2), 2, m)
+            out = vs_get(base + 2)
+         end if
+       end block
     case (B_MAYBERESOLVE)
        block
          type(gc_value) :: sym2
@@ -3574,11 +4013,38 @@ contains
          character(len=:), allocatable :: rel
          type(gc_value) :: fargs
          rel = text_of(gcv_nth(args, 0))
+         ! The two libs that ARE the JVM are skipped BY NAME, and
+         ! loudly. core_proxy and genclass emit bytecode through
+         ! clojure.asm and DynamicClassLoader; there is nothing here
+         ! for them to emit. Naming the two, rather than tolerating
+         ! any missing file, keeps a real typo in a load path an
+         ! error.
+         !
+         ! Skipping matters more than it looks: the (load ...) block
+         ! sits at core.clj line 6983 and `reduce` is at 7076, so
+         ! stopping at the first of them costs the whole second half
+         ! of the seq library. DEVIATIONS.md 12.
+         if (rel == "clojure/core_proxy" .or. &
+              rel == "clojure/genclass" .or. &
+              rel == "clojure/gvec" .or. &
+              rel == "clojure/uuid") then
+            print '(A,A,A)', "note: skipping ", rel, &
+                 " (JVM-only)"
+            out = gc_nil()
+            call vs_leave(base)
+            return
+         end if
          fargs = gcv_empty([vs_get(base + 1)])
          fargs = gcv_conj(fargs, gc_str("src/clj/" // rel // ".clj", &
               [vs_get(base + 1)]), [vs_get(base + 1)])
          call vs_set(base + 2, fargs)
+         ! *ns* is SAVED AND RESTORED around the load, as RT.load
+         ! does by pushing CURRENT_NS. Without it a loaded file's
+         ! own (ns ...) leaks into whatever loaded it, and the next
+         ! (load "x") resolves x relative to the wrong namespace.
+         call vs_set(base + 3, gcn_current([vs_get(base + 1)]))
          out = call_builtin(B_LOADFILE, vs_get(base + 2))
+         call gcn_set_current(vs_get(base + 3))
        end block
     case (B_INDEXOF)
        block
