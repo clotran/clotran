@@ -185,6 +185,14 @@ module GC
   ! failure; the test suite runs under it.
   logical, public :: gc_torture = .false.
 
+  ! MIGRATION SCAFFOLDING -- PLAN.md 3c-2. Payloads move into this heap
+  ! one at a time, and until 3d makes the evaluator root properly there
+  ! is nothing to trace from: a collection would sweep everything that
+  ! is actually live. In this mode the pools only ever grow, never
+  ! collect. It is a leak by construction, and temporary; 3d turns it
+  ! off, and gc_check_heap plus torture mode are what replace it.
+  logical, public :: gc_no_collect = .false.
+
   public :: gc_init, gc_collect
   public :: gc_nil, gc_bool, gc_int, gc_real, gc_char, gc_str, gc_sym, gc_key
   public :: gc_obj, gc_vec, gc_cons
@@ -194,8 +202,67 @@ module GC
   public :: gc_car, gc_cdr, gc_set_car, gc_set_cdr
   public :: gc_live_count, gc_obj_capacity, gc_check_heap
   public :: gc_global_new, gc_global_set, gc_global_get, gc_global_count
+  public :: gc_ensure_init, gc_str_ref, gc_ref_text, gc_ref_is, gc_ref_len
 
 contains
+
+  ! Self-initialising, so the nine test drivers and main.f90 do not
+  ! each need a gc_init call while payloads are being migrated. Starts
+  ! in grow-only mode deliberately -- see gc_no_collect.
+  subroutine gc_ensure_init()
+    if (allocated(obj_pool)) return
+    call gc_init()
+    gc_no_collect = .true.
+  end subroutine gc_ensure_init
+
+  ! ---- ref-level text API (PLAN.md 3c-2) --------------------------
+  !
+  ! A migrating cons_value holds a bare handle, not a gc_value, so text
+  ! is reached by ref. Split the same way Values' own accessors are:
+  ! gc_ref_is and gc_ref_len touch the pool WITHOUT copying, because
+  ! comparing a symbol against a literal is the hottest read in the
+  ! interpreter. gc_ref_text is the one that copies.
+
+  function gc_str_ref(text) result(ref)
+    character(len=*), intent(in) :: text
+    integer :: ref
+    type(gc_value) :: v
+    type(gc_value) :: none(0)
+    call gc_ensure_init()
+    v = new_text(text, none, GCT_STR)
+    ref = v%ref
+  end function gc_str_ref
+
+  logical function ref_ok(ref)
+    integer, intent(in) :: ref
+    ref_ok = .false.
+    if (ref <= 0) return
+    if (.not. allocated(str_pool)) return
+    if (ref > str_used) return
+    ref_ok = allocated(str_pool(ref)%text)
+  end function ref_ok
+
+  function gc_ref_text(ref) result(s)
+    integer, intent(in) :: ref
+    character(len=:), allocatable :: s
+    s = ""
+    if (ref_ok(ref)) s = str_pool(ref)%text
+  end function gc_ref_text
+
+  function gc_ref_is(ref, s) result(yes)
+    integer, intent(in) :: ref
+    character(len=*), intent(in) :: s
+    logical :: yes
+    yes = .false.
+    if (ref_ok(ref)) yes = (str_pool(ref)%text == s)
+  end function gc_ref_is
+
+  function gc_ref_len(ref) result(n)
+    integer, intent(in) :: ref
+    integer :: n
+    n = 0
+    if (ref_ok(ref)) n = len(str_pool(ref)%text)
+  end function gc_ref_len
 
   subroutine gc_init(initial)
     integer, intent(in), optional :: initial
@@ -225,6 +292,7 @@ contains
     global_root = gc_nil()
     global_count = 0
     gc_allocs = 0; gc_frees = 0; gc_collections = 0
+    gc_no_collect = .false.
   end subroutine gc_init
 
   ! --- immediates: no heap involved at all -----------------------
@@ -296,7 +364,9 @@ contains
     integer, intent(in) :: tag
     type(gc_value) :: v
     integer :: idx
-    if (gc_torture .or. (str_free_head == 0 .and. str_used >= size(str_pool))) then
+    if (gc_no_collect) then
+       if (str_free_head == 0 .and. str_used >= size(str_pool)) call grow_str()
+    else if (gc_torture .or. (str_free_head == 0 .and. str_used >= size(str_pool))) then
        call gc_collect(roots)
        if (str_free_head == 0 .and. str_used >= size(str_pool)) call grow_str()
     end if
@@ -322,7 +392,9 @@ contains
     type(gc_value), allocatable :: all_roots(:)
     integer :: idx, i
 
-    if (gc_torture .or. (obj_free_head == 0 .and. obj_used >= size(obj_pool))) then
+    if (gc_no_collect) then
+       if (obj_free_head == 0 .and. obj_used >= size(obj_pool)) call grow_obj()
+    else if (gc_torture .or. (obj_free_head == 0 .and. obj_used >= size(obj_pool))) then
        allocate(all_roots(size(roots) + size(slots)))
        all_roots(1:size(roots)) = roots
        all_roots(size(roots) + 1:) = slots
@@ -358,7 +430,9 @@ contains
     type(gc_value) :: v
     integer :: idx, i
 
-    if (gc_torture .or. (vec_free_head == 0 .and. vec_used >= size(vec_pool))) then
+    if (gc_no_collect) then
+       if (vec_free_head == 0 .and. vec_used >= size(vec_pool)) call grow_vec()
+    else if (gc_torture .or. (vec_free_head == 0 .and. vec_used >= size(vec_pool))) then
        call gc_collect(roots)
        if (vec_free_head == 0 .and. vec_used >= size(vec_pool)) call grow_vec()
     end if

@@ -163,7 +163,7 @@ contains
     character(len=*), intent(in) :: s
     type(cons_value) :: v
     v%tag = TAG_STRING
-    v%str_val = s
+    call set_str(v, s)
   end function mkstr
 
   function as_int(v) result(i)

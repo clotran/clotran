@@ -73,7 +73,7 @@ contains
     character(len=*), intent(in) :: s
     type(cons_value) :: v
     v%tag = TAG_SYMBOL
-    v%str_val = s
+    call set_str(v, s)
   end function mksym
 
   function mkint(i) result(v)

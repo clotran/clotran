@@ -6,6 +6,7 @@
 ! here together. Operations live in their own files: PersistentList.f90,
 ! PersistentVector.f90, RT.f90.
 module values
+  use GC, only: gc_str_ref, gc_ref_text, gc_ref_is, gc_ref_len
   implicit none
 
   ! Double precision, not the bare default `real`: every real scientific
@@ -80,7 +81,11 @@ module values
      integer :: int_val = 0
      real(dp) :: real_val = 0.0_dp
      logical :: bool_val = .false.
-     character(len=:), allocatable :: str_val   ! string/symbol/keyword text
+     ! PLAN.md 3c-2: the first payload moved into the GC heap. A bare
+     ! handle into the string pool, so copying a cons_value no longer
+     ! copies (or reallocates) the text. Reached only through the
+     ! accessors below -- nothing else in the tree names it.
+     integer :: str_ref = 0                     ! string/symbol/keyword text
      type(cons_ref), allocatable :: list_val
      type(vec_t), allocatable :: vector_val
      type(array_map_t), allocatable :: map_val
@@ -596,7 +601,7 @@ contains
   function has_str(v) result(yes)
     type(cons_value), intent(in) :: v
     logical :: yes
-    yes = allocated(v%str_val)
+    yes = (v%str_ref /= 0)
   end function has_str
 
   function str_is(v, s) result(yes)
@@ -604,24 +609,20 @@ contains
     character(len=*), intent(in) :: s
     logical :: yes
     yes = .false.
-    if (allocated(v%str_val)) yes = (v%str_val == s)
+    yes = gc_ref_is(v%str_ref, s)
   end function str_is
 
   function str_len(v) result(n)
     type(cons_value), intent(in) :: v
     integer :: n
     n = 0
-    if (allocated(v%str_val)) n = len(v%str_val)
+    n = gc_ref_len(v%str_ref)
   end function str_len
 
   function val_str(v) result(s)
     type(cons_value), intent(in) :: v
     character(len=:), allocatable :: s
-    if (allocated(v%str_val)) then
-       s = v%str_val
-    else
-       s = ""
-    end if
+    s = gc_ref_text(v%str_ref)
   end function val_str
 
   ! A substring, bounds-checked. `hi` defaults to the end, so
@@ -635,17 +636,21 @@ contains
     character(len=:), allocatable :: s
     integer :: h
     s = ""
-    if (.not. allocated(v%str_val)) return
-    h = len(v%str_val)
-    if (present(hi)) h = hi
-    if (lo < 1 .or. h > len(v%str_val) .or. lo > h) return
-    s = v%str_val(lo:h)
+    block
+      character(len=:), allocatable :: t
+      t = gc_ref_text(v%str_ref)
+      if (len(t) == 0) return
+      h = len(t)
+      if (present(hi)) h = hi
+      if (lo < 1 .or. h > len(t) .or. lo > h) return
+      s = t(lo:h)
+    end block
   end function str_sub
 
   subroutine set_str(v, s)
     type(cons_value), intent(inout) :: v
     character(len=*), intent(in) :: s
-    v%str_val = s
+    v%str_ref = gc_str_ref(s)
   end subroutine set_str
 
   ! Unlike array_node and lazy_ptr, this deliberately does NOT check
@@ -768,10 +773,10 @@ contains
     case (TAG_REAL)
        eq = (a%real_val == b%real_val)
     case (TAG_STRING, TAG_SYMBOL, TAG_KEYWORD, TAG_CHAR)
-       if (allocated(a%str_val) .and. allocated(b%str_val)) then
-          eq = (a%str_val == b%str_val)
+       if (a%str_ref /= 0 .and. b%str_ref /= 0) then
+          eq = gc_ref_is(a%str_ref, gc_ref_text(b%str_ref))
        else
-          eq = (.not. allocated(a%str_val) .and. .not. allocated(b%str_val))
+          eq = (a%str_ref == 0 .and. b%str_ref == 0)
        end if
     end select
   end function value_equal
@@ -780,7 +785,7 @@ contains
 
   recursive subroutine cons_value_release(v)
     type(cons_value), intent(inout) :: v
-    if (allocated(v%str_val)) deallocate(v%str_val)
+    v%str_ref = 0 ! a handle: the string pool owns the text
     if (allocated(v%list_val)) then
        call cons_ref_release(v%list_val)
        deallocate(v%list_val)
@@ -821,7 +826,7 @@ contains
     lhs%int_val = rhs%int_val
     lhs%real_val = rhs%real_val
     lhs%bool_val = rhs%bool_val
-    if (allocated(rhs%str_val)) lhs%str_val = rhs%str_val
+    lhs%str_ref = rhs%str_ref ! a flat copy, no text copied
     if (allocated(rhs%list_val)) then
        allocate(lhs%list_val)
        lhs%list_val = rhs%list_val

@@ -224,10 +224,10 @@ program native_test
     logical :: got
     h1%id = 7
     h1%label%tag = TAG_STRING
-    h1%label%str_val = "hello"
+    call set_str(h1%label, "hello")
     h2 = h1
-    h1%label%str_val = "clobbered" ! h2 must NOT see this -- str_val copies by value
-    got = (h2%id == 7 .and. h2%label%str_val == "hello")
+    call set_str(h1%label, "clobbered") ! h2 must NOT see this -- str_val copies by value
+    got = (h2%id == 7 .and. str_is(h2%label, "hello"))
     call expect_true("5a. struct-embedded cons_value string copies correctly, by value", got, all_ok)
   end block
 
@@ -295,7 +295,7 @@ program native_test
       type(cons_value), pointer :: e_str
       allocate(e_str)
       e_str%tag = TAG_STRING
-      e_str%str_val = "leaf-e"
+      call set_str(e_str, "leaf-e")
       e_leaf%payload => e_str
     end block
 
@@ -308,7 +308,7 @@ program native_test
     allocate(asm)
     asm%part => mol ! native-in-native: assembly points at the SAME molecule
     asm%label%tag = TAG_STRING
-    asm%label%str_val = "assembly-g"
+    call set_str(asm%label, "assembly-g")
     g_leaf%payload => asm
 
     ! :c { :d r4_leaf :e e_leaf }, boxed as its own native container.
@@ -356,7 +356,7 @@ program native_test
               end select
               select type (p => cb%items(2)%payload) ! :e
               type is (cons_value)
-                 e_ok = (p%tag == TAG_STRING .and. p%str_val == "leaf-e")
+                 e_ok = (p%tag == TAG_STRING .and. str_is(p, "leaf-e"))
               end select
               c_ok = d_ok .and. e_ok
             end block
@@ -376,7 +376,7 @@ program native_test
               type is (molecule)
                  part_ok = (trim(q%name) == "co2")
               end select
-              g_ok = part_ok .and. p%label%tag == TAG_STRING .and. p%label%str_val == "assembly-g"
+              g_ok = part_ok .and. p%label%tag == TAG_STRING .and. str_is(p%label, "assembly-g")
             end block
          end select
 

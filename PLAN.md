@@ -481,6 +481,53 @@ the text. A cache writer needs to exclude them.
         PersistentVector.f90, PersistentList.f90,
         PersistentArrayMap.f90, and ~29 residue sites in RT.f90 and
         Eval.f90 -- against 959 before.
+- [ ] **3c-2.** Swap the representation underneath the accessors.
+
+  **It does not have to be one bang either.** 3c-1 put every payload
+  behind accessors, so a payload can move into the GC heap on its own
+  while the other eight stay refcounted. Two pieces of scaffolding make
+  that possible:
+
+  - **`gc_no_collect` -- grow-only mode.** Nothing roots anything until
+    3d, so a collection would sweep everything live. In this mode the
+    pools only ever grow. A leak by construction, and temporary: 3d
+    turns it off. Check 16 covers it -- 200 completely unrooted
+    allocations survive, `gc_collections` stays 0, and the heap still
+    passes its own audit.
+  - **`gc_ensure_init`** -- the heap initialises on first use, so nine
+    test drivers and `main.f90` do not each need a `gc_init` call
+    during the migration.
+
+  - [x] **3c-2 `str_val`** (the first payload in the heap).
+        `character(len=:), allocatable` becomes a bare `integer ::
+        str_ref` into the string pool, so copying a `cons_value` no
+        longer copies or reallocates text.
+
+        The ref-level API deliberately mirrors the accessor split:
+        `gc_ref_is` and `gc_ref_len` read the pool WITHOUT copying,
+        because comparing a symbol to a literal is the hottest read in
+        the interpreter; only `gc_ref_text` copies. Routing everything
+        through one text-returning function would have undone the
+        reason 3c-1 split them in the first place.
+
+        `cons_value_release` and `_assign` stop touching text entirely:
+        a handle is copied flat and the pool owns the bytes. The test
+        files were migrated too -- `native_test`'s "must copy by value"
+        check still holds, because `set_str` installs a NEW handle
+        rather than mutating the old text.
+
+        **Measured, and it is not a win yet.** gfortran bootstrap 4.5s
+        -> 5.3s, RSS 93 MB -> 145 MB; flang 30s -> 33s. Both compilers
+        stay green at 163/16/41 with every unit suite passing. That is
+        expected rather than disappointing: the cost is `FINAL` plus
+        the remaining eight allocatable components, and PLAN said from
+        the start that nothing moves the number until they all go. The
+        incremental path pays a little at each step and collects at the
+        end -- which is the price of not doing this as one bang.
+
+        The added memory is grow-only mode, not the representation: it
+        is what 3d reclaims by making collection safe.
+
 - [ ] **3d.** Evaluator on the value stack.
 - [ ] **3e.** Retire `FINAL`-based refcounting; `rc_test` becomes a GC
       test. Finalizers survive only on the few heap nodes owning

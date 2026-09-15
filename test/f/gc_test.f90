@@ -27,6 +27,7 @@ program gc_test
   call check_deep_structure()
   call check_heap_self_check()
   call check_namespaces()
+  call check_grow_only()
 
   if (all_ok) then
      print *, ""
@@ -374,6 +375,29 @@ contains
     call ok_int("15i. ...and every Var survived every collection: ", var_sum(binds), 1275)
     gc_torture = .false.
   end subroutine check_namespaces
+
+  ! Migration scaffolding (PLAN.md 3c-2): while payloads move into the
+  ! heap one at a time there is nothing rooting them yet, so the pools
+  ! must only grow. Nothing here is rooted at all -- under the normal
+  ! policy the first collection would sweep every one of these.
+  subroutine check_grow_only()
+    type(gc_value) :: kept(200)
+    integer :: i, bad
+    call gc_init(8)
+    gc_no_collect = .true.
+    do i = 1, 200
+       kept(i) = gc_cons(gc_str("keep", no_roots), gc_int(i), no_roots)
+    end do
+    bad = 0
+    do i = 1, 200
+       if (gc_text(gc_car(kept(i))) /= "keep") bad = bad + 1
+       if (cdr_int(kept(i)) /= i) bad = bad + 1
+    end do
+    call ok_int("16a. grow-only keeps every unrooted allocation: ", bad, 0)
+    call ok_int("16b. ...and never collected: ", gc_collections, 0)
+    call ok("16c. ...with the heap still sound: ", gc_check_heap() == "")
+    gc_no_collect = .false.
+  end subroutine check_grow_only
 
   ! --- helpers ---
 
