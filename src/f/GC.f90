@@ -105,6 +105,12 @@ module GC
   integer, parameter, public :: OBJ_CLOSURE = 4  ! 1=params 2=body 3=env 4=clauses; i1=macro?
   integer, parameter, public :: OBJ_ATOM    = 5  ! 1=value 2=meta 3=dynamic stack
   integer, parameter, public :: OBJ_LAZY    = 6  ! 1=thunk 2=head 3=tail; i1=state
+  ! A lazy seq's three states. PENDING means the thunk has not run;
+  ! the other two are what it turned out to be, cached on the node so
+  ! walking a seq costs O(1) per cell rather than re-running the thunk.
+  integer, parameter, public :: LAZY_PENDING = 0
+  integer, parameter, public :: LAZY_CONS    = 1
+  integer, parameter, public :: LAZY_EMPTY   = 2
   integer, parameter, public :: OBJ_ENV     = 7  ! 1=bindings 2=outer; i1=defining ns
   integer, parameter, public :: OBJ_META    = 8  ! 1=the metadata map
   ! A namespace is an ordinary object, not a pool of its own: name plus

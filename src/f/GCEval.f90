@@ -127,6 +127,7 @@ contains
     type(gc_value) :: env
     integer :: base
 
+    call gcp_set_forcer(gce_force)
     base = vs_enter(1)
     env = gce_new(gc_nil(), roots)
     call vs_set(base + 1, env)
@@ -221,7 +222,8 @@ contains
           gc_ref_is(sym%ref, "let*") .or. gc_ref_is(sym%ref, "fn*") .or. &
           gc_ref_is(sym%ref, "loop*") .or. gc_ref_is(sym%ref, "recur") .or. &
           gc_ref_is(sym%ref, "defmacro*") .or. gc_ref_is(sym%ref, "quasiquote") .or. &
-          gc_ref_is(sym%ref, "try*") .or. gc_ref_is(sym%ref, "throw")
+          gc_ref_is(sym%ref, "try*") .or. gc_ref_is(sym%ref, "throw") .or. &
+          gc_ref_is(sym%ref, "lazy-seq*")
   end function is_special
 
   recursive function eval_special(form, env) result(out)
@@ -287,6 +289,17 @@ contains
 
     else if (gc_ref_is(head%ref, "recur")) then
        out = eval_recur(vs_get(base + 3), vs_get(base + 2))
+
+    else if (gc_ref_is(head%ref, "lazy-seq*")) then
+       ! (lazy-seq* body) captures the body in a no-argument closure
+       ! and hands back an unrealised node. Nothing of the body runs
+       ! until something asks for the seq's first element, which is
+       ! the entire point: (iterate inc 0) is a finite object.
+       a = gc_obj(OBJ_CLOSURE, &
+            [gcv_empty([vs_get(base + 1)]), vs_get(base + 3), vs_get(base + 2), gc_nil()], &
+            [vs_get(base + 1), vs_get(base + 2)])
+       out = gc_obj(OBJ_LAZY, [a, gc_nil(), gc_nil()], [vs_get(base + 1), a])
+       call gc_set_i1(out, LAZY_PENDING)
 
     else if (gc_ref_is(head%ref, "throw")) then
        a = gce_eval(gcl_first(vs_get(base + 3)), vs_get(base + 2), [vs_get(base + 1)])
@@ -812,6 +825,91 @@ contains
     call vs_leave(base)
   end function error_value
 
+  ! Realises ONE cell of a lazy seq, memoised on the node so walking
+  ! costs O(1) per element rather than re-running the thunk each time.
+  ! A MODULE procedure, so it can be handed to the printer as a
+  ! callback (flang will not take an internal one -- NOTES.md).
+  !
+  ! The thunk may itself hand back another lazy seq -- (lazy-seq
+  ! (lazy-seq ...)), and more usefully whatever a `when` returned --
+  ! so walk down to something concrete, realising as it goes. Each is
+  ! memoised in its own node, so this never repeats work.
+  recursive subroutine gce_force(v)
+    type(gc_value), intent(in) :: v
+    type(gc_value) :: r, args
+    integer :: base
+
+    if (gc_kind(v) /= OBJ_LAZY) return
+    if (gc_i1(v) /= LAZY_PENDING) return
+
+    base = vs_enter(2)
+    call vs_set(base + 1, v)
+    args = gcv_empty([vs_get(base + 1)])
+    r = apply(gc_slot(vs_get(base + 1), 1), args)
+    call vs_set(base + 2, r)
+    if (has_error) then
+       call gc_set_i1(vs_get(base + 1), LAZY_EMPTY)
+       call vs_leave(base)
+       return
+    end if
+
+    do while (gc_kind(vs_get(base + 2)) == OBJ_LAZY)
+       call gce_force(vs_get(base + 2))
+       if (gc_i1(vs_get(base + 2)) == LAZY_CONS) then
+          call gc_set_slot(vs_get(base + 1), 2, gc_slot(vs_get(base + 2), 2))
+          call gc_set_slot(vs_get(base + 1), 3, gc_slot(vs_get(base + 2), 3))
+          call gc_set_i1(vs_get(base + 1), LAZY_CONS)
+          call vs_leave(base)
+          return
+       end if
+       call gc_set_i1(vs_get(base + 1), LAZY_EMPTY)
+       call vs_leave(base)
+       return
+    end do
+
+    r = vs_get(base + 2)
+    if (gcl_is(r)) then
+       if (gcl_count(r) == 0) then
+          call gc_set_i1(vs_get(base + 1), LAZY_EMPTY)
+       else
+          call gc_set_slot(vs_get(base + 1), 2, gcl_first(r))
+          call gc_set_slot(vs_get(base + 1), 3, gcl_rest(r, [vs_get(base + 1)]))
+          call gc_set_i1(vs_get(base + 1), LAZY_CONS)
+       end if
+    else if (gcv_is(r)) then
+       if (gcv_count(r) == 0) then
+          call gc_set_i1(vs_get(base + 1), LAZY_EMPTY)
+       else
+          call gc_set_slot(vs_get(base + 1), 2, gcv_nth(r, 0))
+          call gc_set_slot(vs_get(base + 1), 3, &
+               as_list_rest(r, [vs_get(base + 1)]))
+          call gc_set_i1(vs_get(base + 1), LAZY_CONS)
+       end if
+    else
+       call gc_set_i1(vs_get(base + 1), LAZY_EMPTY)
+    end if
+    call vs_leave(base)
+  end subroutine gce_force
+
+  ! Everything but the first element of a vector, as a list.
+  function as_list_rest(v, roots) result(out)
+    type(gc_value), intent(in) :: v
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out
+    integer :: base, i
+    base = vs_enter(2)
+    call vs_set(base + 1, v)
+    out = gcl_empty(roots)
+    call vs_set(base + 2, out)
+    do i = gcv_count(vs_get(base + 1)) - 1, 1, -1
+       out = gcl_cons(gcv_nth(vs_get(base + 1), i), vs_get(base + 2), &
+            [vs_get(base + 1)])
+       call vs_set(base + 2, out)
+    end do
+    out = vs_get(base + 2)
+    call vs_leave(base)
+  end function as_list_rest
+
   ! Applies a macro to the unevaluated argument forms.
   recursive function expand_macro(fn, form) result(out)
     type(gc_value), intent(in) :: fn, form
@@ -1033,7 +1131,12 @@ contains
        out = vs_get(base + 1)
     case (B_COUNT)
        a = gcv_nth(args, 0)
-       if (gcl_is(a)) then
+       if (gc_kind(a) == OBJ_LAZY) then
+          ! Counting a lazy seq realises all of it, which is exactly
+          ! what (count) means and why it does not terminate on an
+          ! infinite one -- same as real Clojure.
+          out = gc_int(lazy_len(a))
+       else if (gcl_is(a)) then
           out = gc_int(gcl_count(a))
        else if (gcv_is(a)) then
           out = gc_int(gcv_count(a))
@@ -1044,17 +1147,42 @@ contains
        end if
     case (B_FIRST)
        a = gcv_nth(args, 0)
-       if (gcl_is(a)) then
+       if (gc_kind(a) == OBJ_LAZY) then
+          call gce_force(a)
+          if (gc_i1(a) == LAZY_CONS) out = gc_slot(a, 2)
+       else if (gcl_is(a)) then
           out = gcl_first(a)
        else if (gcv_is(a)) then
           if (gcv_count(a) > 0) out = gcv_nth(a, 0)
        end if
     case (B_REST)
        a = gcv_nth(args, 0)
-       if (gcl_is(a)) out = gcl_rest(a, [vs_get(base + 1)])
+       if (gc_kind(a) == OBJ_LAZY) then
+          call gce_force(a)
+          if (gc_i1(a) == LAZY_CONS) then
+             out = gc_slot(a, 3)
+          else
+             out = gcl_empty([vs_get(base + 1)])
+          end if
+       else if (gcl_is(a)) then
+          out = gcl_rest(a, [vs_get(base + 1)])
+       end if
     case (B_CONS)
-       out = gcl_cons(gcv_nth(args, 0), as_list(gcv_nth(args, 1), &
-            [vs_get(base + 1)]), [vs_get(base + 1)])
+       ! (cons x <lazy>) cannot build a plain cons cell: its tail
+       ! would have to be a realised list, and forcing here would
+       ! defeat the whole point -- (cons n (from (+ n 1))) is how an
+       ! infinite seq is written. So it builds an ALREADY-REALISED
+       ! lazy cell instead, head and tail in place, nothing forced.
+       ! clotran's RT.f90 has the same lazy_cons for the same reason.
+       a = gcv_nth(args, 1)
+       if (gc_kind(a) == OBJ_LAZY) then
+          out = gc_obj(OBJ_LAZY, [gc_nil(), gcv_nth(args, 0), a], &
+               [vs_get(base + 1)])
+          call gc_set_i1(out, LAZY_CONS)
+       else
+          out = gcl_cons(gcv_nth(args, 0), as_list(a, [vs_get(base + 1)]), &
+               [vs_get(base + 1)])
+       end if
     case (B_CONCAT)
        ! Right to left, so the result comes out in order without a
        ! reverse. Every argument is seq'd to a list first, which is
@@ -1123,6 +1251,32 @@ contains
     out = gcl_first(vs_get(base + 2))
     call vs_leave(base)
   end function nth_of
+
+  ! Realises a whole lazy seq to count it. Does not terminate on an
+  ! infinite one, which is correct: (count (range)) does not either.
+  function lazy_len(v) result(n)
+    type(gc_value), intent(in) :: v
+    type(gc_value) :: p
+    integer :: base, n
+    n = 0
+    base = vs_enter(1)
+    p = v
+    call vs_set(base + 1, p)
+    do
+       if (gc_kind(vs_get(base + 1)) == OBJ_LAZY) then
+          call gce_force(vs_get(base + 1))
+          if (gc_i1(vs_get(base + 1)) /= LAZY_CONS) exit
+          n = n + 1
+          call vs_set(base + 1, gc_slot(vs_get(base + 1), 3))
+       else if (gcl_is(vs_get(base + 1))) then
+          n = n + gcl_count(vs_get(base + 1))
+          exit
+       else
+          exit
+       end if
+    end do
+    call vs_leave(base)
+  end function lazy_len
 
   ! Clojure's truthiness: everything except nil and false.
   function truthy(v) result(yes)

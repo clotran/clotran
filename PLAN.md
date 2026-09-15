@@ -803,8 +803,42 @@ the text. A cache writer needs to exclude them.
       quote/if/do/def/let*/fn*/loop*/recur/defmacro*/quasiquote/try*/
       throw, twelve primitives, closures, varargs, multi-arity.
       Missing and listed rather than silent: destructuring (a macro in
-      core.clj, not evaluator work), namespaces, laziness, protocols,
-      metadata.
+      core.clj, not evaluator work), namespaces, protocols, metadata.
+
+      **Laziness**, which `map`/`filter`/`range` are all built on.
+      `(lazy-seq* body)` captures the body in a no-argument closure and
+      hands back an unrealised node; nothing runs until something asks
+      for an element. Check 16e proves that directly -- a body that
+      would `throw` constructs fine, and 16f shows asking does run it.
+
+      Realisation is memoised on the node, so walking a seq costs O(1)
+      per cell rather than re-running the thunk, and 16g takes the
+      third element of an **infinite** seq, which without laziness
+      does not terminate at all.
+
+      Two structural notes:
+
+      - **Printing forces.** A lazy seq has to be realised to print,
+        but the printer sits below the evaluator, so the evaluator
+        hands its forcer down -- the same dependency inversion
+        clotran's `rt_set_lazy_forcer` already uses, and a MODULE
+        procedure because flang will not take an internal one as a
+        callback.
+      - **`(cons x <lazy>)` cannot build a plain cons cell.** Its tail
+        would have to be a realised list, and forcing there defeats the
+        point, since `(cons n (from (+ n 1)))` is exactly how an
+        infinite seq is written. It builds an already-realised lazy
+        cell instead, head and tail in place, nothing forced. clotran's
+        `RT.f90` has `lazy_cons` for precisely this reason; the tests
+        found it the hard way (16g returned nil, 16h `(1 nil nil nil)`)
+        before it was put back.
+
+      One divergence worth recording: `def` here binds in the CURRENT
+      frame, where real Clojure's `def` always binds at namespace
+      level however deeply nested it is. That is a consequence of
+      there being no namespaces in this evaluator yet, not a decision,
+      and it is why a counter incremented inside a lazy body does not
+      update an outer binding.
 
       **`try*`/`catch*`/`throw`, and a rooting point worth keeping.**
       `throw` carries a VALUE, not a message, and that value is held

@@ -55,6 +55,7 @@ contains
     call check_macros()
     call check_try_catch()
     call check_multi_arity()
+    call check_laziness()
     call check_errors()
     call check_heap_sound()
   end subroutine run_all
@@ -309,6 +310,38 @@ contains
          "(do (def f (fn* ([n] (f n 0)) ([n acc] (if (< n 1) acc (recur (- n 1) (+ acc n)))))) (f 100 ))", &
          "5050")
   end subroutine check_multi_arity
+
+  ! Laziness is what map/filter/range are built on, and the property
+  ! that matters is that the body does NOT run until something asks.
+  subroutine check_laziness()
+    call ev("16a. ", "(first (lazy-seq* (list 1 2 3)))", "1")
+    call ev("16b. ", "(count (lazy-seq* (list 1 2 3)))", "3")
+    call ev("16c. ", "(lazy-seq* (list 1 2 3))", "(1 2 3)")
+    call ev("16d. ", "(lazy-seq* nil)", "()")
+    ! Nothing is evaluated at construction: the body throws, and this
+    ! still returns a value because nobody asked for an element.
+    call ev("16e. ", "(do (def s (lazy-seq* (throw :boom))) :made-it)", ":made-it")
+    ! ...and asking DOES run it.
+    call ev("16f. ", &
+         "(try* (first (lazy-seq* (throw :boom))) (catch* e e))", ":boom")
+    ! An INFINITE seq, taken finitely. Without laziness this does not
+    ! terminate; with it, only three cells are ever realised.
+    call ev("16g. ", &
+         "(do (def from (fn* [n] (lazy-seq* (cons n (from (+ n 1))))))" // &
+         " (first (rest (rest (from 10)))))", "12")
+    ! A lazy seq built on another lazy seq, realised through both.
+    call ev("16h. ", &
+         "(do (def from (fn* [n] (lazy-seq* (cons n (from (+ n 1))))))" // &
+         " (def taking (fn* [k s] (if (< k 1) (list)" // &
+         " (cons (first s) (taking (- k 1) (rest s))))))" // &
+         " (taking 4 (from 1)))", "(1 2 3 4)")
+    ! Realisation is memoised on the node, so walking a seq twice
+    ! costs O(1) per cell rather than re-running the thunk. Forcing
+    ! the same cell repeatedly must keep giving the same answer.
+    call ev("16i. ", &
+         "(do (def from (fn* [n] (lazy-seq* (cons n (from (+ n 1))))))" // &
+         " (def s (from 1)) (+ (first s) (first s) (first (rest s))))", "4")
+  end subroutine check_laziness
 
   subroutine check_errors()
     type(gc_value) :: form, env, result

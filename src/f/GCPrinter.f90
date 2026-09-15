@@ -26,9 +26,32 @@ module GCPrinter
   implicit none
   private
 
-  public :: gcp_str
+  ! Realising a lazy seq means CALLING its thunk, and only the
+  ! evaluator can call anything -- but the evaluator sits above this
+  ! module, so it cannot be called from here directly. The evaluator
+  ! hands its forcer down at startup instead, exactly the dependency
+  ! inversion clotran's own rt_set_lazy_forcer already uses.
+  !
+  ! It must be a MODULE procedure, not an internal one: flang
+  ! segfaults passing a host-associated internal procedure as a
+  ! callback on macOS/ARM64 (NOTES.md), which is also rule 5 of the
+  ! native-buffer rules in PLAN.md.
+  abstract interface
+     subroutine forcer_i(v)
+       import :: gc_value
+       type(gc_value), intent(in) :: v
+     end subroutine forcer_i
+  end interface
+  procedure(forcer_i), pointer, save :: lazy_forcer => null()
+
+  public :: gcp_str, gcp_set_forcer
 
 contains
+
+  subroutine gcp_set_forcer(f)
+    procedure(forcer_i) :: f
+    lazy_forcer => f
+  end subroutine gcp_set_forcer
 
   recursive function gcp_str(v, readable) result(s)
     type(gc_value), intent(in) :: v
@@ -112,6 +135,38 @@ contains
           s = s // gcp_str(keys(i), readable) // " " // gcp_str(vals(i), readable)
        end do
        s = s // "}"
+    case (OBJ_LAZY)
+       ! Printing a lazy seq realises it, one cell at a time, which is
+       ! what real Clojure does too -- printing is a use, and a use
+       ! forces. An unrealised seq with no forcer registered prints as
+       ! a marker rather than lying about being empty.
+       if (.not. associated(lazy_forcer)) then
+          s = "#<lazy>"
+          return
+       end if
+       s = "("
+       p = v
+       i = 0
+       do
+          call lazy_forcer(p)
+          if (gc_i1(p) /= LAZY_CONS) exit
+          if (i > 0) s = s // " "
+          s = s // gcp_str(gc_slot(p, 2), readable)
+          p = gc_slot(p, 3)
+          i = i + 1
+          if (.not. (gc_kind(p) == OBJ_LAZY)) then
+             ! The tail became a concrete seq: print the rest of it
+             ! inside these same parens rather than nesting.
+             if (gc_kind(p) == OBJ_CONS) then
+                do while (gcl_count(p) > 0)
+                   s = s // " " // gcp_str(gcl_first(p), readable)
+                   p = gcl_rest(p, none)
+                end do
+             end if
+             exit
+          end if
+       end do
+       s = s // ")"
     case (OBJ_CLOSURE)
        s = "#<fn>"
     case (OBJ_ATOM)
