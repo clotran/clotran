@@ -600,6 +600,38 @@ actually guarantees (not just what our own tests happened to cover):
   true to be safe to evaluate at all. (This is a purely lexical/
   compile-time nesting question, not runtime recursion depth --
   unrelated to the TCO/stack-depth concerns elsewhere in this file.)
+
+  Third instance, found much later in `eval_instance_call`:
+  `target%tag == TAG_KEYWORD .and. names_a_class(target%str_val)`
+  passed an **unallocated** `str_val` as an actual argument for every
+  non-keyword target. flang read whatever was there and carried on;
+  gfortran's `-fcheck=all` named it exactly. Three occurrences now, all
+  the same shape -- a tag test guarding a use of the payload that only
+  that tag allocates. Treat any `%tag == ... .and. <uses payload>` as a
+  bug on sight.
+- **gfortran defaults to Fortran 2008, where a procedure not marked
+  `RECURSIVE` may keep its locals in STATIC storage.** F2018 made every
+  procedure recursive by default and flang follows it, so this source
+  is written against semantics gfortran does not have by default.
+  Re-entering such a procedure silently overwrites the outer
+  invocation's variables.
+
+  It hides well: gfortran rejects *direct* recursion at compile time,
+  so only INDIRECT recursion slips through -- and an evaluator is
+  mutually recursive everywhere (`eval_form` -> `eval_let_head` ->
+  `eval_form`), as is refcounting (`release` -> `deallocate` -> `final`
+  -> `release`). The corruption surfaced far away, as SIGTRAP inside
+  `malloc` at an unrelated `allocate`.
+
+  Fix: `-frecursive` (in the Makefile, gfortran only), which forces
+  locals onto the stack. `-std=f2018` does **not** enable it, checked
+  on gfortran 16. Marking procedures by hand was rejected: it is one
+  build-level property, not ~200 annotations, and a half-annotated
+  codebase is worse than none.
+
+  **`-fcheck=all -fbacktrace` is the first thing to reach for** on any
+  memory-shaped crash here. It named all of this; the raw crash named
+  nothing.
 - gfortran-only: a derived type with an allocatable component of *its
   own type*, once a `FINAL` procedure is involved, corrupts a type
   descriptor -- crashes with a null function-pointer call inside

@@ -388,16 +388,52 @@ the loop cheap before starting on the expensive steps.
 - [ ] **4a.** The 9 remaining `core.clj` failures, and the upstream
       suite green. Independent of the GC, but the baseline has to be
       *stable* before 3c or a new failure can't be attributed.
-- [ ] **4a'. The gfortran-only crashes.** A gfortran build crashes
-      `test-clojure.multimethods` every run and `test-clojure.logic`
-      intermittently (51 or 161 assertions depending on the run);
-      flang gives 163 every time. Intermittent under one compiler and
-      not another means undefined behaviour in *this* code that flang's
-      codegen masks -- a real latent bug, not a gfortran defect, and
-      the most valuable thing the second compiler has found. Worth
-      doing before 3c: 3c-2 rewrites the value representation, and
-      hunting a live memory bug through that change is much harder
-      than hunting it now.
+- [x] **4a'. The gfortran-only crashes.** Three real bugs, none of them
+      a gfortran defect. Found with `-fcheck=all -fbacktrace`, which is
+      worth reaching for first every time: the raw crash was SIGTRAP
+      inside `malloc` at an unrelated `allocate`, and named nothing.
+
+      1. **Missing Fortran 2018 recursion semantics.** F2018 makes every
+         procedure recursive by default; flang follows it, gfortran
+         still defaults to F2008, where a procedure not marked
+         `RECURSIVE` may keep its locals in *static* storage. Re-enter
+         it and the outer invocation's variables are overwritten.
+         gfortran rejects *direct* recursion at compile time, which is
+         why this hid for so long -- but an evaluator is mutually
+         recursive everywhere (`eval_form` -> `eval_let_head` ->
+         `eval_form`), and so is refcounting (`release` -> `deallocate`
+         -> `final` -> `release`). Fixed with `-frecursive` in the
+         Makefile, which is exactly flang's semantics. `-std=f2018`
+         does **not** do it (checked on gfortran 16). Rejected marking
+         ~200 procedures by hand: this is one build-level property, not
+         an annotation per procedure.
+      2. **Non-short-circuiting `.and.`** at `Eval.f90`'s
+         `eval_instance_call`: `target%tag == TAG_KEYWORD .and.
+         names_a_class(target%str_val)` evaluated the right operand for
+         every target, passing an *unallocated* `str_val` as an actual
+         argument whenever the target was not a keyword. Same trap as
+         `resolves_to_macro`; fixed the same way, by nesting. flang read
+         whatever was there and carried on.
+
+      Those two fix `multimethods` permanently -- gfortran now matches
+      flang exactly on it, and a clean run of the whole suite is
+      163/16/41 on both.
+
+- [ ] **4a''. `logic` still crashes intermittently (~1 run in 6).**
+      Not the same class as the two above, and not fixed:
+
+      ```
+      node_ref_release -> cons_value_release -> cons_value_finalize
+      Index '1' of dimension 1 of 'h...%children' above upper bound of 0
+      ```
+
+      `h%ptr` is freed *during* its own child loop, so the descriptor
+      reads size 0 partway through. That is refcounting re-entering
+      itself -- a node reachable twice, or a cycle, being released
+      twice. Deliberately NOT patched blind: refcounting structurally
+      cannot handle a cycle, so the honest fix may simply be step 3,
+      and a speculative reordering of `node_ref_release` would hide
+      whichever it is. Diagnose before touching it.
 - [ ] **4b. Integer opcodes.** `eval_form` dispatches special forms by
       a cascade of string comparisons: 5.26 ns for ten of them, against
       0.09 ns for an integer `select case`, and there are ~30.

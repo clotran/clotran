@@ -11,7 +11,24 @@
 # is both compilers before every commit -- `make crosscheck`. See
 # NOTES.md.
 FC = gfortran
-FCFLAGS = -g -Isrc/f -Jsrc/f
+FCFLAGS = -g -Isrc/f -Jsrc/f $(FCFLAGS_$(notdir $(FC)))
+
+# Fortran 2018 made every procedure recursive by default. flang follows
+# it; gfortran still defaults to F2008, where a procedure not marked
+# RECURSIVE may keep its locals in STATIC storage -- so re-entering one
+# silently overwrites the outer invocation's variables.
+#
+# gfortran rejects DIRECT recursion at compile time, which is why this
+# was invisible for so long. Indirect recursion it cannot see: an
+# evaluator is mutually recursive everywhere (eval_form -> eval_let_head
+# -> eval_form), and so is refcounting (release -> deallocate -> final
+# -> release). Those corrupted memory quietly, then died later at an
+# unrelated `allocate` with SIGTRAP from libmalloc.
+#
+# -frecursive forces locals onto the stack, which IS the F2018/flang
+# semantics this source is written against. -std=f2018 does NOT do it
+# (checked on gfortran 16).
+FCFLAGS_gfortran = -frecursive
 
 # Pinned, not just "whatever's on PATH": subtle compiler-specific
 # behaviour (FINAL, defined assignment, unlimited polymorphic) means a

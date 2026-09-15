@@ -1888,7 +1888,13 @@ contains
     ! (clotran_types.clj) instead of a real class graph. bases/supers
     ! in core.clj, and find-protocol-impl in core_deftype.clj, are
     ! written against exactly these three and work unmodified.
-    if (target%tag == TAG_KEYWORD .and. names_a_class(target%str_val)) then
+    ! NESTED, not `tag == TAG_KEYWORD .and. names_a_class(...)`:
+    ! Fortran does not short-circuit .and., so the right operand ran for
+    ! every target and passed an UNALLOCATED str_val as an actual
+    ! argument whenever the target was not a keyword. gfortran's
+    ! -fcheck traps it; flang read whatever was there and carried on.
+    if (target%tag == TAG_KEYWORD) then
+    if (names_a_class(target%str_val)) then
        select case (method_name)
        case ("getInterfaces")
           ! Every relationship here is a parent link; there is no
@@ -1906,6 +1912,7 @@ contains
           if (size(args) >= 1) val%bool_val = call_isa(args(1), target)
           return
        end select
+    end if
     end if
     if (method_name == "__methodImplCache") then
        val%tag = TAG_NIL
