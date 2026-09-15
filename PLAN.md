@@ -639,12 +639,35 @@ the loop cheap before starting on the expensive steps.
       `vec_t` between two `cons_value`s, and it does not need another
       compiler experiment.
 
-      Next concrete step for whoever picks this up: the poison
-      instrument is four lines (set `refcount = -424242` instead of
-      `deallocate`, check for it on entry to `node_ref_release`) and
-      fires on the first `logic` run. Add the node's address to the
-      message and record which call site first freed it; with a
-      deterministic repro that identifies the sharing path directly.
+      **There is now a minimal repro: `test/clj/uaf_repro.clj`.** It
+      runs in seconds instead of a 30-second suite sweep, crashes ~6
+      runs in 8 on gfortran, and is deterministic under the poison
+      instrument its header describes. It was reduced from
+      `multimethods`' `methods-test`, and **it crashes identically on a
+      tree with the 3c-1 accessors stashed** -- which is the proof that
+      3c-1 exposed this rather than caused it.
+
+      Two facts the reduction handed over:
+
+      - **The bare forms do not crash.** `defmulti`/`defmethod`/
+        `remove-method`/`methods`/`into #{}` at the top level are fine.
+        It needs `deftest`/`testing`/`is` around them -- i.e.
+        clojure.test's *dynamic bindings* and its report machinery.
+        That points at the `binding` stack (`atom_node%dyn_stack`, an
+        allocatable array of `cons_value` grown and shrunk with
+        `move_alloc`) rather than at vectors, even though a `vec_node`
+        is what dies.
+      - **The corruption and the crash are in different places.** The
+        fault is a stale `node_ref`; the SIGTRAP lands later at an
+        unrelated `allocate` in `node_assoc`. Reading the backtrace
+        alone was never going to find this, which is why the poison
+        instrument matters.
+
+      Next step: run the repro under the poison instrument, add the
+      node's address to the message, and record which call site first
+      freed it. With a fast deterministic repro that identifies the
+      sharing path directly -- and the search is now narrowed to code
+      reachable from clojure.test's dynamic bindings.
 - [ ] **4b. Integer opcodes.** `eval_form` dispatches special forms by
       a cascade of string comparisons: 5.26 ns for ten of them, against
       0.09 ns for an integer `select case`, and there are ~30.
