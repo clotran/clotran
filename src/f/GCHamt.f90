@@ -33,7 +33,7 @@ module GCHamt
   integer, parameter :: HMASK = 31
   integer, parameter :: HMAX_SHIFT = 30 ! 6 levels of 5 bits, then buckets
 
-  public :: gch_empty, gch_count, gch_is, gch_get, gch_contains, gch_assoc
+  public :: gch_empty, gch_count, gch_is, gch_get, gch_contains, gch_assoc, gch_dissoc
 
 contains
 
@@ -234,6 +234,75 @@ contains
     ignored = .false.
     out = node_assoc(out, h, shift + HBITS, k, v, ignored, with(r2, out))
   end function split
+
+  ! Removes k. Nodes are NOT collapsed when they empty out: an empty
+  ! child stays an empty child rather than reverting to nil, and a
+  ! one-entry bucket stays a bucket. That is correct but slightly
+  ! wasteful -- real Clojure collapses -- and it is deliberate: the
+  ! collapse is where trie deletion gets subtle, and nothing here needs
+  ! the space yet. Lookups are unaffected; an empty node simply has no
+  ! matching slot.
+  function gch_dissoc(t, k, roots) result(out)
+    type(gc_value), intent(in) :: t, k
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, new_root
+    type(gc_value), allocatable :: r2(:)
+    logical :: removed
+
+    out = t
+    if (.not. gch_is(t)) return
+    if (.not. gch_contains(t, k)) return
+
+    r2 = with(with(roots, t), k)
+    removed = .false.
+    new_root = node_dissoc(gc_slot(t, 1), gc_hash(k), 0, k, removed, r2)
+    if (.not. removed) return
+
+    block
+      type(gc_value), allocatable :: r3(:)
+      r3 = with(r2, new_root)
+      out = gc_obj(OBJ_HAMT, [new_root], r3)
+    end block
+    call gc_set_i1(out, gc_i1(t) - 1)
+  end function gch_dissoc
+
+  recursive function node_dissoc(node, h, shift, k, removed, roots) result(out)
+    type(gc_value), intent(in) :: node, k
+    integer, intent(in) :: h, shift
+    logical, intent(inout) :: removed
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, slot, sub
+    type(gc_value), allocatable :: r2(:)
+    integer :: idx, i
+
+    r2 = with(with(roots, node), k)
+    out = gc_vec(HBRANCH, r2)
+    do i = 1, HBRANCH
+       call gc_vec_set(out, i, gc_vec_get(node, i))
+    end do
+    r2 = with(r2, out)
+
+    idx = iand(ishft(h, -shift), HMASK) + 1
+    slot = gc_vec_get(out, idx)
+
+    select case (gc_kind(slot))
+    case (OBJ_HAMT_LEAF)
+       if (gc_equal(gc_slot(slot, 1), k)) then
+          call gc_vec_set(out, idx, gc_nil())
+          removed = .true.
+       end if
+    case (OBJ_MAP)
+       if (gcm_contains(slot, k)) then
+          call gc_vec_set(out, idx, gcm_dissoc(slot, k, r2))
+          removed = .true.
+       end if
+    case default
+       if (slot%tag == GCT_VEC) then
+          sub = node_dissoc(slot, h, shift + HBITS, k, removed, r2)
+          call gc_vec_set(out, idx, sub)
+       end if
+    end select
+  end function node_dissoc
 
   ! --- helpers ---
 

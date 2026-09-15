@@ -49,9 +49,9 @@ S = src/f
 T = test/f
 
 executables = clotran clotran-bin rc_test atom_test persistent_vector_test \
-	persistent_list_test persistent_hash_map_test rt_test persistent_array_map_test env_test namespace_test eval_test native_test gc_test gc_vector_test gc_list_test gc_map_test gc_hamt_test gc_env_test
+	persistent_list_test persistent_hash_map_test rt_test persistent_array_map_test env_test namespace_test eval_test native_test gc_test gc_vector_test gc_list_test gc_map_test gc_hamt_test gc_env_test gc_assoc_test
 
-unit-tests = rc_test atom_test gc_vector_test gc_list_test gc_map_test gc_hamt_test gc_env_test persistent_vector_test persistent_list_test \
+unit-tests = rc_test atom_test gc_vector_test gc_list_test gc_map_test gc_hamt_test gc_env_test gc_assoc_test persistent_vector_test persistent_list_test \
 	persistent_hash_map_test rt_test persistent_array_map_test env_test \
 	namespace_test eval_test native_test gc_test
 
@@ -72,6 +72,12 @@ $(S)/GC.o: $(S)/GC.f90
 
 gc_test: $(S)/GC.o $(T)/gc_test.f90
 	$(FC) $(FCFLAGS) -o $@ $(S)/GC.o $(T)/gc_test.f90
+
+$(S)/GCAssoc.o: $(S)/GCAssoc.f90 $(S)/GC.o $(S)/GCMap.o $(S)/GCHamt.o
+	$(FC) $(FCFLAGS) -c $< -o $@
+
+gc_assoc_test: $(S)/GC.o $(S)/GCMap.o $(S)/GCHamt.o $(S)/GCAssoc.o $(T)/gc_assoc_test.f90
+	$(FC) $(FCFLAGS) -o $@ $(S)/GC.o $(S)/GCMap.o $(S)/GCHamt.o $(S)/GCAssoc.o $(T)/gc_assoc_test.f90
 
 $(S)/GCEnv.o: $(S)/GCEnv.f90 $(S)/GC.o $(S)/GCMap.o
 	$(FC) $(FCFLAGS) -c $< -o $@

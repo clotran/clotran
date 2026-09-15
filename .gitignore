@@ -24,3 +24,4 @@
 /gc_map_test
 /gc_hamt_test
 /gc_env_test
+/gc_assoc_test

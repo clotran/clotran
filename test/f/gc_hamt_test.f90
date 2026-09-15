@@ -18,6 +18,7 @@ program gc_hamt_test
   call check_replace_vs_add()
   call check_real_collisions()
   call check_many_keys()
+  call check_dissoc()
   call check_torture()
 
   if (all_ok) then
@@ -153,6 +154,30 @@ contains
     call gc_collect(roots)
     call ok_int("5c. ...and all of it survives collection: ", gch_count(t), n)
   end subroutine check_many_keys
+
+  subroutine check_dissoc()
+    type(gc_value) :: t, roots(1)
+    integer :: i, bad
+    call gc_init(256)
+    t = gch_empty(no_roots)
+    do i = 1, 200
+       roots(1) = t
+       t = gch_assoc(t, gc_int(i), gc_int(i), roots)
+    end do
+    roots(1) = t
+    t = gch_dissoc(t, gc_int(77), roots)
+    roots(1) = t
+    call ok_int("7a. dissoc drops the count: ", gch_count(t), 199)
+    call ok("7b. ...removes that key: ", .not. gch_contains(t, gc_int(77)))
+    bad = 0
+    do i = 1, 200
+       if (i == 77) cycle
+       if (get_int(t, gc_int(i)) /= i) bad = bad + 1
+    end do
+    call ok_int("7c. ...and leaves every other key findable: ", bad, 0)
+    call ok_int("7d. dissoc of a missing key is a no-op: ", &
+         gch_count(gch_dissoc(t, gc_int(77), roots)), 199)
+  end subroutine check_dissoc
 
   subroutine check_torture()
     type(gc_value) :: t, roots(1)

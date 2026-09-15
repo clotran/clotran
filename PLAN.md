@@ -684,9 +684,45 @@ the text. A cache writer needs to exclude them.
       beyond `gc_obj`/`gc_slot`, which `gc_test` check 11 already
       covers and GCEnv check 5 exercises.
 
-      Still to join up: the promotion rule handing a GCMap over to a
-      GCHamt past 8 entries. That is the one piece needing both, and
-      it is the last of the data layer.
+      **`src/f/GCAssoc.f90`** -- the map clotran actually uses: array
+      map to 8 entries, hash trie beyond, one-way, matching Clojure.
+      It is a THIRD module rather than logic inside GCMap, and that is
+      forced rather than stylistic -- GCHamt already uses GCMap for
+      collision buckets, so GCMap using GCHamt would be a module cycle
+      Fortran rejects. The arrangement is better anyway: neither
+      representation knows the other exists.
+
+      Two subtleties the checks pin:
+
+      - **Promotion copies entries POSITIONALLY, not via `get`.** A key
+        bound to nil would be silently dropped by a copy that read
+        values back, because `get` cannot tell "absent" from "present
+        and nil". Check 4 is that key.
+      - **Replacing a key in a full array map must not promote.** The
+        count does not change, so the representation should not either
+        (check 5).
+
+      Writing this also exposed a **vacuous test of my own**, which is
+      worth recording as the failure mode to watch for. `gca_dissoc`
+      on a trie was a no-op because `gch_dissoc` did not exist, so the
+      "stays a trie however small it gets" check passed by never
+      shrinking the map at all. Fixed both ways: `gch_dissoc` is now
+      implemented (with its own checks, 7a-7d), and the assoc check now
+      asserts the count actually dropped, so it cannot pass vacuously
+      again. A test that cannot fail is worse than no test, because it
+      is counted as coverage.
+
+      `gch_dissoc` deliberately does NOT collapse emptied nodes -- an
+      empty child stays a child, a one-entry bucket stays a bucket.
+      Correct but slightly wasteful; the collapse is where trie
+      deletion gets subtle and nothing needs the space yet.
+
+      **The data layer is now built and tested end to end:** vector,
+      list, array map, hash trie, promotion, environment -- 18 suites
+      green on both compilers. Closure and atom need no module of their
+      own. What remains for 3c-2/3d is the switch itself: `cons_value`
+      becomes a handle, the evaluator moves onto the value stack, and
+      `Values.f90`'s old backing types go.
 - [ ] **3e.** Retire `FINAL`-based refcounting; `rc_test` becomes a GC
       test. Finalizers survive only on the few heap nodes owning
       foreign resources, run once per object by sweep rather than once
