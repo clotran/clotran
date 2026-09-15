@@ -19,3 +19,4 @@
 /eval_test
 /native_test
 /gc_test
+/gc_vector_test

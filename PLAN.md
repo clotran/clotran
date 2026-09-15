@@ -548,6 +548,37 @@ the text. A cache writer needs to exclude them.
       survive torture mode with the heap still passing its own audit.
       Verified non-vacuous -- with stack scanning removed, 5 of the 10
       fail.
+
+- [x] **The data layer, built beside the old one.** Since the remaining
+      payloads cannot move one at a time, the safe decomposition is not
+      slicing the change but the pattern that has now worked three
+      times here: build the new thing standalone, test it, wire it in
+      last. `GC.f90` was built that way, so was the value stack, and so
+      is this.
+
+      **`src/f/GCVector.f90`** -- the same 32-way trie as
+      `PersistentVector.f90`, with every reference a GC handle instead
+      of a refcounted pointer. `gcv_empty/count/nth/conj/assoc`, path
+      copying unchanged, sharing untouched children exactly as before.
+      Nothing uses it yet.
+
+      The vector went first on purpose: it is the most intricate
+      structure in the layer, and it is where 4a'' lives. Check 6a is
+      the point of the whole exercise -- a vector built with a
+      collection at EVERY allocation, heap audit clean, every element
+      intact. A premature free is not expressible under tracing:
+      nothing decrements, so nothing can decrement too often, and a
+      node is either reachable or it is not.
+
+      Checks 1-6 (18 in all), both compilers: growth past one trie
+      level (the push-down a 32-way trie gets wrong if mis-shifted),
+      assoc leaving the original untouched, shared structure surviving
+      collection, a vector rooted ONLY through the value stack
+      surviving and then being collected when the frame is left, and
+      the torture case above.
+
+      Still to build the same way before the switch: list, array map,
+      HAMT, env, closure, atom.
 - [ ] **3e.** Retire `FINAL`-based refcounting; `rc_test` becomes a GC
       test. Finalizers survive only on the few heap nodes owning
       foreign resources, run once per object by sweep rather than once
