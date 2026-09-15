@@ -388,6 +388,16 @@ the loop cheap before starting on the expensive steps.
 - [ ] **4a.** The 9 remaining `core.clj` failures, and the upstream
       suite green. Independent of the GC, but the baseline has to be
       *stable* before 3c or a new failure can't be attributed.
+- [ ] **4a'. The gfortran-only crashes.** A gfortran build crashes
+      `test-clojure.multimethods` every run and `test-clojure.logic`
+      intermittently (51 or 161 assertions depending on the run);
+      flang gives 163 every time. Intermittent under one compiler and
+      not another means undefined behaviour in *this* code that flang's
+      codegen masks -- a real latent bug, not a gfortran defect, and
+      the most valuable thing the second compiler has found. Worth
+      doing before 3c: 3c-2 rewrites the value representation, and
+      hunting a live memory bug through that change is much harder
+      than hunting it now.
 - [ ] **4b. Integer opcodes.** `eval_form` dispatches special forms by
       a cascade of string comparisons: 5.26 ns for ten of them, against
       0.09 ns for an integer `select case`, and there are ~30.
