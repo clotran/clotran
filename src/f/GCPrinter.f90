@@ -156,12 +156,16 @@ contains
           i = i + 1
           if (.not. (gc_kind(p) == OBJ_LAZY)) then
              ! The tail became a concrete seq: print the rest of it
-             ! inside these same parens rather than nesting.
+             ! inside these same parens rather than nesting. Both shapes
+             ! a tail can take -- a list, or a VIEW over an indexable --
+             ! because (cons 1 "ab") leaves a string view as the tail.
              if (gc_kind(p) == OBJ_CONS) then
                 do while (gcl_count(p) > 0)
                    s = s // " " // gcp_str(gcl_first(p), readable)
                    p = gcl_rest(p, none)
                 end do
+             else if (gc_kind(p) == OBJ_SEQ) then
+                s = s // " " // inner_of(gcp_str(p, readable))
              end if
              exit
           end if
@@ -217,6 +221,18 @@ contains
        s = "#<object>"
     end select
   end function obj_str
+
+  ! The elements of a printed seq, without its parentheses, so a
+  ! tail can be spliced into the parens already open rather than
+  ! nested inside a second pair.
+  function inner_of(t) result(out)
+    character(len=*), intent(in) :: t
+    character(len=:), allocatable :: out
+    out = t
+    if (len(t) >= 2) then
+       if (t(1:1) == "(" .and. t(len(t):len(t)) == ")") out = t(2:len(t)-1)
+    end if
+  end function inner_of
 
   ! Trailing zeros trimmed but always at least one decimal, so a
   ! double prints as 2.0 rather than 2 -- otherwise it reads back as an

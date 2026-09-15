@@ -1212,21 +1212,37 @@ contains
     case (B_REST)
        out = sq_rest(gcv_nth(vs_get(base + 1), 0), [vs_get(base + 1)])
     case (B_CONS)
-       ! (cons x <lazy>) cannot build a plain cons cell: its tail
-       ! would have to be a realised list, and forcing here would
-       ! defeat the whole point -- (cons n (from (+ n 1))) is how an
-       ! infinite seq is written. So it builds an ALREADY-REALISED
-       ! lazy cell instead, head and tail in place, nothing forced.
-       ! clotran's RT.f90 has the same lazy_cons for the same reason.
-       a = gcv_nth(args, 1)
-       if (gc_kind(a) == OBJ_LAZY) then
-          out = gc_obj(OBJ_LAZY, [gc_nil(), gcv_nth(args, 0), a], &
-               [vs_get(base + 1)])
-          call gc_set_i1(out, LAZY_CONS)
-       else
-          out = gcl_cons(gcv_nth(args, 0), as_list(a, [vs_get(base + 1)]), &
-               [vs_get(base + 1)])
-       end if
+       ! (cons x anything-seqable) is a SEQ, so the tail is seq'd
+       ! rather than type-tested: (cons 1 "ab") is (1 \a \b).
+       !
+       ! A list tail stays a list, which keeps count O(1) on the common
+       ! case. Anything else becomes an already-realised lazy cell --
+       ! head and tail in place, nothing forced -- because a plain cons
+       ! cell cannot hold an unrealised or viewed rest, and forcing
+       ! here would defeat (cons n (from (+ n 1))).
+       block
+         type(gc_value) :: tl
+         ! A LAZY tail is taken as-is and never seq'd: to_seq
+         ! forces, and forcing here is not a slowdown but an
+         ! infinite loop -- (cons n (from (+ n 1))) would realise
+         ! the whole infinite seq to build one cell.
+         tl = gcv_nth(vs_get(base + 1), 1)
+         if (gc_kind(tl) /= OBJ_LAZY) &
+              tl = to_seq(tl, [vs_get(base + 1)])
+         ! An EMPTY tail seq's is to nil, and (cons 1 ()) must still be
+         ! the LIST (1), not a lazy cell. Macro expansions are lists,
+         ! and the evaluator only recognises a list as a form -- get
+         ! this wrong and a macro returns its own expansion unevaluated.
+         if (tl%tag == GCT_NIL) tl = gcl_empty([vs_get(base + 1)])
+         if (gcl_is(tl)) then
+            out = gcl_cons(gcv_nth(vs_get(base + 1), 0), tl, [vs_get(base + 1), tl])
+         else
+            out = gc_obj(OBJ_LAZY, &
+                 [gc_nil(), gcv_nth(vs_get(base + 1), 0), tl], &
+                 [vs_get(base + 1), tl])
+            call gc_set_i1(out, LAZY_CONS)
+         end if
+       end block
     case (B_STR)
        block
          character(len=:), allocatable :: acc2
@@ -1242,15 +1258,29 @@ contains
        a = gcv_nth(args, 0)
        out = gc_bool(a%tag == GCT_NIL)
     case (B_NTH)
-       a = gcv_nth(args, 0)
-       b = gcv_nth(args, 1)
-       out = gc_nil()
-       if (gcv_is(a)) then
-          out = gcv_nth(a, b%ival)
-       else if (gcl_is(a)) then
-          if (b%ival >= 0 .and. b%ival < gcl_count(a)) out = nth_of(a, b%ival)
-       end if
-       if (out%tag == GCT_NIL .and. n >= 3) out = gcv_nth(args, 2)
+       ! Indexed where the collection is indexable, a seq walk where it
+       ! is not -- (nth (range 5) 2) has to work, and a range has no
+       ! index. Same fallback Clojure has.
+       block
+         type(gc_value) :: coll, idx, walk
+         integer :: want, k
+         coll = gcv_nth(vs_get(base + 1), 0)
+         idx = gcv_nth(vs_get(base + 1), 1)
+         want = idx%ival
+         out = gc_nil()
+         if (gcv_is(coll) .or. coll%tag == GCT_STR) then
+            if (want >= 0 .and. want < seq_len(coll)) &
+                 out = seq_elem(coll, want, [vs_get(base + 1)])
+         else if (want >= 0) then
+            walk = to_seq(coll, [vs_get(base + 1)])
+            do k = 1, want
+               walk = sq_rest(walk, [vs_get(base + 1)])
+               walk = to_seq(walk, [vs_get(base + 1)])
+            end do
+            if (walk%tag /= GCT_NIL) out = sq_first(walk, [vs_get(base + 1)])
+         end if
+         if (out%tag == GCT_NIL .and. n >= 3) out = gcv_nth(vs_get(base + 1), 2)
+       end block
     case (B_GET)
        out = gca_get(gcv_nth(args, 0), gcv_nth(args, 1))
        if (out%tag == GCT_NIL .and. n >= 3) then
@@ -1274,14 +1304,21 @@ contains
          end do
        end block
     case (B_CONJ)
+       ! Collection-polymorphic ON PURPOSE, and the one place that
+       ! should NOT go through seq: (conj [1] 2) appends, (conj (list 1)
+       ! 2) prepends, (conj {:a 1} [:b 2]) assocs. That difference is
+       ! the feature, not an inconsistency.
        a = gcv_nth(vs_get(base + 1), 0)
        b = gcv_nth(vs_get(base + 1), 1)
        if (gcv_is(a)) then
           out = gcv_conj(a, b, [vs_get(base + 1)])
-       else if (gcl_is(a)) then
-          out = gcl_cons(b, a, [vs_get(base + 1)])
+       else if (gca_is(a)) then
+          out = gca_assoc(a, seq_elem(b, 0, [vs_get(base + 1)]), &
+               seq_elem(b, 1, [vs_get(base + 1)]), [vs_get(base + 1)])
+       else if (a%tag == GCT_NIL) then
+          out = gcl_cons(b, gcl_empty([vs_get(base + 1)]), [vs_get(base + 1)])
        else
-          out = a
+          out = gcl_cons(b, to_seq(a, [vs_get(base + 1)]), [vs_get(base + 1)])
        end if
     case (B_EMPTY)
        block

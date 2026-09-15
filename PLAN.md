@@ -1193,6 +1193,46 @@ the text. A cache writer needs to exclude them.
       being replaced -- but it is worth knowing the bug class existed
       in both.
 
+      ### Should everything be built on seq? No -- Clojure does not
+
+      Clojure keeps two layers, and conflating them would be wrong:
+
+      - **collections** -- conj, assoc, get, nth, count: type-specific
+        ON PURPOSE. `(conj [1] 2)` appends, `(conj (list 1) 2)`
+        prepends, `(conj {:a 1} [:b 2])` assocs. That difference is
+        the feature.
+      - **sequences** -- first, rest, next, cons: uniform, over seqs.
+
+      Only the second layer routes through `to_seq`. Measured rather
+      than assumed: after the seq work, **3 of 32 builtins** still
+      dispatched on concrete type -- conj, cons and nth -- so this was
+      a three-function fix, not a refactor.
+
+      `conj` stays type-specific (and gained the map case it was
+      missing). `cons` and `nth` now go through seq, which is what
+      real Clojure does: `(cons 1 "ab")` is `(1 \a \b)` and
+      `(nth (range 5) 2)` is 2, neither of which has an index.
+
+      **Two bugs this introduced, both instructive.**
+
+      `(cons x ())` broke macro expansion. An empty tail seq's to nil,
+      so cons took the not-a-list branch and built a lazy cell rather
+      than a list -- and the evaluator only recognises a LIST as a
+      form, so every macro returned its own expansion unevaluated.
+      Three checks caught it immediately.
+
+      `(cons n (from (+ n 1)))` then hung, because `to_seq` FORCES a
+      lazy seq. Forcing there is not a slowdown, it is an infinite
+      loop: building one cell realises the whole infinite seq. A lazy
+      tail is now taken as-is and never seq'd.
+
+      **And a flaw in how I was verifying.** That second bug showed up
+      as a SEGFAULT under flang while gfortran looked clean -- because
+      I was counting `FAIL` lines, and a crash prints none. The test
+      had died, not passed. Check the **exit status**; a grep count
+      cannot tell a clean run from a dead one. flang caught it purely
+      because its stack gave out first.
+
       ### Metadata: not lost, unported
 
       `clotran-bin` supports metadata fully -- `^`, `with-meta`,
