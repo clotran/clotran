@@ -9,12 +9,14 @@ module Eval
        ieee_negative_inf, ieee_is_nan
   use values
   use Env
-  use PersistentList, only: list_first => first, list_rest => rest, list_count, list_of
+  use PersistentList, only: list_first => first, list_rest => rest, list_count, list_of, &
+       has_list, val_lst, val_lst_first, val_lst_rest, val_lst_count, set_list
   use PersistentVector, only: vector_count, vector_nth, vector_conj, vector_empty, &
        has_vector, val_vec_count, val_vec_nth, set_vector, val_vec_conj, val_vec_assoc
   use PersistentHashMap, only: hamt_hash_of => hash_of
   use PersistentArrayMap, only: array_map_empty, array_map_entries, &
-       array_map_assoc, array_map_contains, array_map_dissoc
+       array_map_assoc, array_map_contains, array_map_dissoc, &
+       has_map, val_map, set_map, val_map_count, val_map_get, val_map_contains, val_map_entries
   use RT, only: rt_get => get, rt_nth => nth, rt_assoc => assoc, rt_count => count, &
        rt_first => first, rt_rest => rest, rt_cons => cons, rt_conj => conj, rt_equiv => equiv, &
        rt_seq => seq, rt_next => next, rt_set_lazy_forcer, rt_lazy_new => lazy_new, &
@@ -90,7 +92,7 @@ contains
     character(len=*), intent(in) :: name
     type(cons_value) :: v
     v%tag = TAG_BUILTIN
-    v%str_val = name
+    call set_str(v, name)
   end function builtin
 
   ! clotran.native holds every builtin under its own name, alongside
@@ -220,7 +222,7 @@ contains
     block
       type(cons_value) :: host_lang
       host_lang%tag = TAG_STRING
-      host_lang%str_val = "Fortran"
+      call set_str(host_lang, "Fortran")
       call ns_intern(core, "*host-language*", host_lang)
     end block
 
@@ -342,9 +344,9 @@ contains
     if (has_error) return
     v%tag = TAG_STRING
     if (locate) then
-       v%str_val = msg // error_location()
+       call set_str(v, msg // error_location())
     else
-       v%str_val = msg
+       call set_str(v, msg)
     end if
     call throw_value(v)
   end subroutine raise_error
@@ -448,7 +450,7 @@ contains
        end select
 
        n = 0
-       if (allocated(ast%list_val)) n = list_count(ast%list_val)
+       if (has_list(ast)) n = val_lst_count(ast)
        if (n == 0) then
           val = ast
           return
@@ -468,38 +470,38 @@ contains
          end if
        end block
 
-       head = list_first(ast%list_val)
+       head = val_lst_first(ast)
        if (head%tag == TAG_SYMBOL) then
-          if (head%str_val == "def!" .or. head%str_val == "def") then
+          if (str_is(head, "def!") .or. str_is(head, "def")) then
              val = eval_def(ast, env)
              ! Real Clojure's `def` evaluates to the VAR, not the value
              ! -- defmulti leans on it directly ((let [v (def name)]
              ! (when-not (.hasRoot v) ...))), which is why every
              ! defmulti was failing with ".hasRoot nil". mal's def!
              ! keeps returning the value, as its own tests expect.
-             if (.not. has_error .and. head%str_val == "def") then
+             if (.not. has_error .and. str_is(head, "def")) then
                 block
                   type(cons_value) :: sym, var_val
                   character(len=:), allocatable :: owner
-                  sym = list_first(list_rest(ast%list_val))
-                  if (ns_resolve_var(ns_current(), sym%str_val, var_val, owner)) val = var_val
+                  sym = list_first(val_lst_rest(ast))
+                  if (ns_resolve_var(ns_current(), val_str(sym), var_val, owner)) val = var_val
                 end block
              end if
              return
-          else if (head%str_val == "defmacro") then
+          else if (str_is(head, "defmacro")) then
              val = eval_defmacro(ast, env)
              return
-          else if (head%str_val == "defmacro!") then
+          else if (str_is(head, "defmacro!")) then
              ! Purely a mal-test-suite compatibility shim: mal's own
              ! spec writes (defmacro! name (fn* (params) body)) instead
              ! of real Clojure's (defmacro name [params] body). Not
              ! meaningful Clojure -- just an artifact of the tests.
              val = eval_defmacro_bang(ast, env)
              return
-          else if (head%str_val == "quote") then
-             val = list_first(list_rest(ast%list_val))
+          else if (str_is(head, "quote")) then
+             val = list_first(val_lst_rest(ast))
              return
-          else if (head%str_val == "var") then
+          else if (str_is(head, "var")) then
              ! (var sym)/#'sym: resolves to the real Var itself (a
              ! TAG_VAR value, see Namespace.f90), not its current
              ! value -- matches real Clojure (#'+ is the Var, (+ 1 2)
@@ -507,13 +509,13 @@ contains
              block
                type(cons_value) :: sym
                character(len=:), allocatable :: owner
-               sym = list_first(list_rest(ast%list_val))
-               if (.not. ns_resolve_var(resolution_ns(env), sym%str_val, val, owner)) then
-                  call eval_error("Unable to resolve var: " // sym%str_val)
+               sym = list_first(val_lst_rest(ast))
+               if (.not. ns_resolve_var(resolution_ns(env), val_str(sym), val, owner)) then
+                  call eval_error("Unable to resolve var: " // val_str(sym))
                end if
              end block
              return
-          else if (head%str_val == "case*" .or. head%str_val == "clojure.core/case*") then
+          else if (str_is(head, "case*") .or. str_is(head, "clojure.core/case*")) then
              ! (case* expr shift mask default imap switch-type test-type
              !  skip-check?) -- what core.clj's `case` compiles to. On
              ! the JVM this becomes a tableswitch keyed by hash; here it
@@ -526,21 +528,21 @@ contains
              call eval_case_head(ast, env) ! rebinds ast to the chosen branch; tail
              if (has_error) return
              cycle
-          else if (head%str_val == "import*" .or. head%str_val == "clojure.core/import*") then
+          else if (str_is(head, "import*") .or. str_is(head, "clojure.core/import*")) then
              ! (import* "java.util.Date") -- on the JVM this adds a
              ! class to the namespace's import table. A bare class name
              ! already evaluates to the keyword naming it here (see
              ! eval_symbol), so there is no table to add to.
              val%tag = TAG_NIL
              return
-          else if (head%str_val == "set!") then
+          else if (str_is(head, "set!")) then
              val = eval_set_bang(ast, env)
              return
-          else if (head%str_val == ".") then
+          else if (str_is(head, ".")) then
              val = eval_dot(ast, env)
              return
-          else if (len(head%str_val) > 1 .and. head%str_val(1:1) == "." &
-               .and. head%str_val /= "..") then
+          else if (str_len(head) > 1 .and. str_sub(head, 1, 1) == "." &
+               .and. .not. str_is(head, "..")) then
              ! (.method obj args...) sugar for (. obj (method args...))
              ! -- real Clojure's reader-level rewrite for this, done
              ! here at eval time instead since clotran has no separate
@@ -548,8 +550,8 @@ contains
              ! "." branch above handle it.
              call rewrite_dot_method_sugar(ast)
              cycle
-          else if (len(head%str_val) > 1 .and. head%str_val(len(head%str_val):) == "." &
-               .and. head%str_val /= "..") then
+          else if (str_len(head) > 1 .and. str_sub(head, str_len(head)) == "." &
+               .and. .not. str_is(head, "..")) then
              ! (ClassName. args...) sugar for (new ClassName args...) --
              ! same reader-level rewrite, done here at eval time instead.
              ! `..` is excluded for the same reason as above: it ends in
@@ -558,22 +560,22 @@ contains
              ! to x.
              call rewrite_new_sugar(ast)
              cycle
-          else if (head%str_val == "fn*") then
+          else if (str_is(head, "fn*")) then
              val = eval_fn(ast, env)
              return
-          else if (head%str_val == "let*") then
+          else if (str_is(head, "let*")) then
              call eval_let_head(ast, env) ! rebinds ast/env to (child env, body); tail
              if (has_error) return
              cycle
-          else if (head%str_val == "loop*") then
+          else if (str_is(head, "loop*")) then
              call eval_loop_head(ast, env) ! rebinds ast/env to (child env, body); tail
              if (has_error) return
              cycle
-          else if (head%str_val == "new") then
+          else if (str_is(head, "new")) then
              val = eval_new(ast, env)
              return
-          else if (head%str_val == "if") then
-             forms = list_rest(ast%list_val)
+          else if (str_is(head, "if")) then
+             forms = val_lst_rest(ast)
              cond = eval_form(list_first(forms), env)
              if (has_error) return
              forms = list_rest(forms)
@@ -589,8 +591,8 @@ contains
                 end if
              end if
              cycle
-          else if (head%str_val == "do") then
-             forms = list_rest(ast%list_val)
+          else if (str_is(head, "do")) then
+             forms = val_lst_rest(ast)
              n = list_count(forms)
              if (n == 0) then
                 val = nilv
@@ -603,26 +605,26 @@ contains
              end do
              ast = list_first(forms)
              cycle
-          else if (head%str_val == "eval") then
+          else if (str_is(head, "eval")) then
              ! No lexical locals -- eval always resolves symbols purely
              ! through *ns*, ignoring whatever let*/fn* frame this call
              ! happened in. *ns* itself is already global, not part of
              ! env, so there's nothing to "reset" beyond dropping locals.
-             ast = eval_form(list_first(list_rest(ast%list_val)), env)
+             ast = eval_form(list_first(val_lst_rest(ast)), env)
              if (has_error) return
              env = env_new()
              cycle
-          else if (head%str_val == "load-file") then
+          else if (str_is(head, "load-file")) then
              call eval_load_file_head(ast, env)
              if (has_error) return
              cycle
-          else if (head%str_val == "in-ns") then
+          else if (str_is(head, "in-ns")) then
              val = eval_in_ns(ast, env)
              return
-          else if (head%str_val == "ns") then
+          else if (str_is(head, "ns")) then
              val = eval_ns(ast, env)
              return
-          else if (head%str_val == "quasiquote") then
+          else if (str_is(head, "quasiquote")) then
              ! Each syntax-quote FORM gets its own auto-gensym scope,
              ! saved and restored around the expansion. A nested
              ! syntax-quote (reached through an unquote, e.g.
@@ -638,16 +640,16 @@ contains
                if (allocated(gensym_table)) call move_alloc(gensym_table, saved)
                saved_count = gensym_count
                gensym_count = 0
-               val = qq_expand(list_first(list_rest(ast%list_val)), env)
+               val = qq_expand(list_first(val_lst_rest(ast)), env)
                if (allocated(gensym_table)) deallocate(gensym_table)
                if (allocated(saved)) call move_alloc(saved, gensym_table)
                gensym_count = saved_count
              end block
              return
-          else if (head%str_val == "try*" .or. head%str_val == "try") then
+          else if (str_is(head, "try*") .or. str_is(head, "try")) then
              val = eval_try(ast, env)
              return
-          else if (resolves_to_macro(head%str_val, macro_val, env)) then
+          else if (resolves_to_macro(val_str(head), macro_val, env)) then
              ! Macros are namespace-level only, never lexically bound
              ! (real Clojure: macro-ness is Var metadata, never a local),
              ! so this checks *ns* directly, not env. Unevaluated arg
@@ -661,7 +663,7 @@ contains
 
        if (allocated(args)) deallocate(args)
        allocate(args(n))
-       l = ast%list_val
+       l = val_lst(ast)
        do i = 1, n
           args(i) = eval_form(list_first(l), env)
           if (has_error) return
@@ -674,7 +676,7 @@ contains
             call select_clause(args(1), n - 1, params, body)
             if (has_error) return
             env = env_new(args(1)%fn_val%env)
-            call bind_params(params, args(2:n), env, is_recur=(head%str_val == "recur"))
+            call bind_params(params, args(2:n), env, is_recur=(str_is(head, "recur")))
             ast = body
           end block
           deallocate(args)
@@ -695,7 +697,7 @@ contains
     type(cons_value) :: bindings, k, v
     integer :: n, i
 
-    bindings = list_first(list_rest(ast%list_val))
+    bindings = list_first(val_lst_rest(ast))
     n = binding_count(bindings)
     if (mod(n, 2) /= 0) then
        call eval_error("let* requires an even number of binding forms")
@@ -717,7 +719,7 @@ contains
     ! evaluated to the side effect, not x -- which is exactly how
     ! `binding` lost its body value, since binding expands to
     ! (let [] (push-thread-bindings ...) (try ...)).
-    ast = wrap_body(list_rest(list_rest(ast%list_val)))
+    ast = wrap_body(list_rest(val_lst_rest(ast)))
   end subroutine eval_let_head
 
   ! loop*: same binding mechanics as let*, plus establishing a recur
@@ -726,7 +728,7 @@ contains
   ! bound to the symbol "recur", so a (recur args...) inside the body
   ! is just an ordinary call and falls straight into the ALREADY
   ! existing "tail call into a closure" path in eval_form's main loop
-  ! (is_recur=(head%str_val=="recur") there already exists for fn*'s
+  ! (is_recur=(str_is(head, "recur")) there already exists for fn*'s
   ! own recur) -- no separate loop-specific tail machinery needed.
   subroutine eval_loop_head(ast, env)
     type(cons_value), intent(inout) :: ast
@@ -736,7 +738,7 @@ contains
     type(cons_value), allocatable :: names(:)
     integer :: n, i
 
-    bindings = list_first(list_rest(ast%list_val))
+    bindings = list_first(val_lst_rest(ast))
     n = binding_count(bindings)
     if (mod(n, 2) /= 0) then
        call eval_error("loop* requires an even number of binding forms")
@@ -754,15 +756,15 @@ contains
     end do
 
     recur_fn%tag = TAG_FN
-    allocate(recur_fn%fn_val)
-    recur_fn%fn_val%params = make_vector(names)
-    recur_fn%fn_val%body = wrap_body(list_rest(list_rest(ast%list_val)))
+    call new_fn(recur_fn)
+    call set_fn_params(recur_fn, make_vector(names))
+    call set_fn_body(recur_fn, wrap_body(list_rest(val_lst_rest(ast))))
     recur_fn%fn_val%env = env
     recur_sym%tag = TAG_SYMBOL
-    recur_sym%str_val = "recur"
+    call set_str(recur_sym, "recur")
     call env_set(env, recur_sym, recur_fn)
 
-    ast = recur_fn%fn_val%body
+    ast = fn_body(recur_fn)
   end subroutine eval_loop_head
 
   ! (load-file "path"): slurps the file, reads every top-level form in
@@ -792,7 +794,7 @@ contains
     logical :: ok
     real :: eval_start
 
-    fname = eval_form(list_first(list_rest(ast%list_val)), env)
+    fname = eval_form(list_first(val_lst_rest(ast)), env)
     if (has_error) return
     contents = builtin_slurp([fname])
     if (has_error) return
@@ -800,13 +802,13 @@ contains
     block
       real :: t0, t1
       call cpu_time(t0)
-      ok = read_top_level_forms(contents%str_val, forms, n, err, fname%str_val)
+      ok = read_top_level_forms(val_str(contents), forms, n, err, val_str(fname))
       call cpu_time(t1)
       ! CLOTRAN_DEBUG_LOAD also reports the read/eval split per file:
       ! startup cost is the project's running number now that the
       ! upstream test suite pays it once per test file.
       if (debug_load()) then
-         write(*, '(A,F7.2,A,I0,A,A)') "[read] ", t1 - t0, "s  ", n, " forms  ", fname%str_val
+         write(*, '(A,F7.2,A,I0,A,A)') "[read] ", t1 - t0, "s  ", n, " forms  ", val_str(fname)
          flush(6)
       end if
     end block
@@ -843,7 +845,7 @@ contains
          real :: t2
          call cpu_time(t2)
          write(*, '(A,F7.2,A,F7.2,A,A)') "[eval] ", t2 - eval_start, "s  (pre_expand so far ", &
-              pre_expand_seconds, "s)  ", fname%str_val
+              pre_expand_seconds, "s)  ", val_str(fname)
          flush(6)
        end block
     end if
@@ -868,9 +870,9 @@ contains
     type(cons_value) :: val
     type(cons_value) :: name
 
-    name = eval_form(list_first(list_rest(ast%list_val)), env)
+    name = eval_form(list_first(val_lst_rest(ast)), env)
     if (has_error) return
-    call ns_set_current(ns_find_or_create(name%str_val))
+    call ns_set_current(ns_find_or_create(val_str(name)))
     val = name
   end function eval_in_ns
 
@@ -900,21 +902,21 @@ contains
     type(cons_value) :: name, clause, kw
     type(cons_ref) :: clauses
 
-    name = list_first(list_rest(ast%list_val))
-    call ns_set_current(ns_find_or_create(name%str_val))
+    name = list_first(val_lst_rest(ast))
+    call ns_set_current(ns_find_or_create(val_str(name)))
     val = name
 
-    clauses = list_rest(list_rest(ast%list_val))
+    clauses = list_rest(val_lst_rest(ast))
     do while (list_count(clauses) > 0)
        clause = list_first(clauses)
        clauses = list_rest(clauses)
        if (clause%tag /= TAG_LIST) cycle
-       if (list_count(clause%list_val) == 0) cycle
-       kw = list_first(clause%list_val)
+       if (val_lst_count(clause) == 0) cycle
+       kw = val_lst_first(clause)
        if (kw%tag /= TAG_KEYWORD) cycle
-       select case (kw%str_val)
+       select case (val_str(kw))
        case ("require", "use", "import", "refer-clojure", "load")
-          call run_ns_clause(kw%str_val, list_rest(clause%list_val), env)
+          call run_ns_clause(val_str(kw), val_lst_rest(clause), env)
           if (has_error) return
        case default
           continue ! :gen-class, :refer, metadata, docstrings -- nothing to do here
@@ -956,11 +958,11 @@ contains
     type(cons_ref) :: rest_args
     integer :: n, i
 
-    head = list_first(ast%list_val) ! flang can't chain %field off a function result directly
+    head = val_lst_first(ast) ! flang can't chain %field off a function result directly
     method_sym%tag = TAG_SYMBOL
-    method_sym%str_val = head%str_val(2:)
-    obj = list_first(list_rest(ast%list_val))
-    rest_args = list_rest(list_rest(ast%list_val))
+    call set_str(method_sym, str_sub(head, 2))
+    obj = list_first(val_lst_rest(ast))
+    rest_args = list_rest(val_lst_rest(ast))
     n = list_count(rest_args)
 
     allocate(inner_items(n + 1))
@@ -972,7 +974,7 @@ contains
     inner_form = make_list(inner_items)
 
     dot_sym%tag = TAG_SYMBOL
-    dot_sym%str_val = "."
+    call set_str(dot_sym, ".")
     allocate(outer_items(3))
     outer_items(1) = dot_sym
     outer_items(2) = obj
@@ -991,14 +993,14 @@ contains
     type(cons_ref) :: rest_args
     integer :: n, i
 
-    head = list_first(ast%list_val) ! flang can't chain %field off a function result directly
+    head = val_lst_first(ast) ! flang can't chain %field off a function result directly
     cls%tag = TAG_SYMBOL
-    cls%str_val = head%str_val(1:len(head%str_val) - 1)
-    rest_args = list_rest(ast%list_val)
+    call set_str(cls, str_sub(head, 1, str_len(head) - 1))
+    rest_args = val_lst_rest(ast)
     n = list_count(rest_args)
 
     new_sym%tag = TAG_SYMBOL
-    new_sym%str_val = "new"
+    call set_str(new_sym, "new")
     allocate(items(n + 2))
     items(1) = new_sym
     items(2) = cls
@@ -1045,14 +1047,14 @@ contains
     type(cons_ref) :: args
     integer :: i
 
-    args = list_rest(ast%list_val)
+    args = val_lst_rest(ast)
     tested = eval_form(list_first(args), env)
     if (has_error) return
     default_form = nth_form(args, 4)
     imap = nth_form(args, 5)
     if (imap%tag == TAG_HASHMAP) then
-       if (allocated(imap%map_val)) then
-          call array_map_entries(imap%map_val, keys, vals)
+       if (has_map(imap)) then
+          call val_map_entries(imap, keys, vals)
           do i = 1, size(vals)
              entry = vals(i)
              if (entry%tag /= TAG_VECTOR) cycle
@@ -1075,8 +1077,8 @@ contains
     type(cons_value) :: target, v
     character(len=:), allocatable :: owner
 
-    target = list_first(list_rest(ast%list_val))
-    v = eval_form(nth_form(list_rest(ast%list_val), 2), env)
+    target = list_first(val_lst_rest(ast))
+    v = eval_form(nth_form(val_lst_rest(ast), 2), env)
     if (has_error) return
     ! (set! (.field obj) v) / (set! (. obj field) v). The only mutable
     ! host field clotran has is a function's own protocol method cache
@@ -1095,8 +1097,8 @@ contains
     end if
     block
       type(cons_value) :: var_val
-      if (.not. ns_resolve_var(resolution_ns(env), target%str_val, var_val, owner)) then
-         call eval_error("Unable to resolve var: " // target%str_val)
+      if (.not. ns_resolve_var(resolution_ns(env), val_str(target), var_val, owner)) then
+         call eval_error("Unable to resolve var: " // val_str(target))
          return
       end if
       call var_set(var_val, v)
@@ -1112,21 +1114,21 @@ contains
     character(len=:), allocatable :: field
 
     val = v
-    head = list_first(target%list_val)
+    head = val_lst_first(target)
     if (head%tag /= TAG_SYMBOL) then
        call eval_error("set!: unsupported assignment target")
        return
     end if
-    if (head%str_val == ".") then
-       obj_form = nth_form(list_rest(target%list_val), 1)
+    if (str_is(head, ".")) then
+       obj_form = nth_form(val_lst_rest(target), 1)
        block
-         type(cons_value) :: fld ! not nth_form(...)%str_val -- see NOTES.md
-         fld = nth_form(list_rest(target%list_val), 2)
-         field = fld%str_val
+         type(cons_value) :: fld ! not val_str(nth_form(...)) -- see NOTES.md
+         fld = nth_form(val_lst_rest(target), 2)
+         field = val_str(fld)
        end block
-    else if (len(head%str_val) > 1 .and. head%str_val(1:1) == ".") then
-       obj_form = nth_form(list_rest(target%list_val), 1)
-       field = head%str_val(2:)
+    else if (str_len(head) > 1 .and. str_sub(head, 1, 1) == ".") then
+       obj_form = nth_form(val_lst_rest(target), 1)
+       field = str_sub(head, 2)
     else
        call eval_error("set!: unsupported assignment target")
        return
@@ -1140,7 +1142,7 @@ contains
        return
     end if
     if (.not. env_find(env, obj_form, obj)) then
-       call eval_error("'" // obj_form%str_val // "' not found")
+       call eval_error("'" // val_str(obj_form) // "' not found")
        return
     end if
     block
@@ -1154,7 +1156,7 @@ contains
     ! object, so the field has to land on both: core_deftype.clj sets
     ! the cache on the outer local and reads it back through the
     ! self-reference.
-    if (obj%tag == TAG_FN .and. allocated(obj%fn_val)) call env_rebind_fns(obj%fn_val%env, obj)
+    if (obj%tag == TAG_FN .and. has_fn(obj)) call env_rebind_fns(obj%fn_val%env, obj)
   end function eval_set_field
 
   recursive function eval_dot(ast, env) result(val)
@@ -1167,13 +1169,13 @@ contains
     integer :: n, i
     logical :: is_method_call
 
-    target_form = list_first(list_rest(ast%list_val))
-    member_form = list_first(list_rest(list_rest(ast%list_val)))
+    target_form = list_first(val_lst_rest(ast))
+    member_form = list_first(list_rest(val_lst_rest(ast)))
     if (member_form%tag == TAG_LIST) then
-       member_name = list_first(member_form%list_val)
-       n = list_count(member_form%list_val) - 1
+       member_name = val_lst_first(member_form)
+       n = val_lst_count(member_form) - 1
        allocate(args(n))
-       l = list_rest(member_form%list_val)
+       l = val_lst_rest(member_form)
        is_method_call = .true.
     else
        ! Flat form: (. target member arg*), real Clojure's own
@@ -1187,7 +1189,7 @@ contains
        ! [bindings]-style macro fail its own assert-args validation.
        ! With no trailing args it stays field access, as before.
        member_name = member_form
-       l = list_rest(list_rest(list_rest(ast%list_val)))
+       l = list_rest(list_rest(val_lst_rest(ast)))
        n = list_count(l)
        allocate(args(n))
        is_method_call = (n > 0)
@@ -1199,23 +1201,23 @@ contains
     ! real Clojure's compiler ignores that namespace for exactly this
     ! reason -- HostExpr only ever munges the name part.
     if (member_name%tag == TAG_SYMBOL) then
-       if (index(member_name%str_val, "/") > 0) then
+       if (index(val_str(member_name), "/") > 0) then
           block
             character(len=:), allocatable :: qualified ! never str = str(i:) in place -- see NOTES.md
-            qualified = member_name%str_val
-            member_name%str_val = qualified(index(qualified, "/", back=.true.) + 1:)
+            qualified = val_str(member_name)
+            call set_str(member_name, qualified(index(qualified, "/", back=.true.) + 1:))
           end block
        end if
     end if
 
     if (target_form%tag == TAG_SYMBOL) then
-       if (ns_exists(target_form%str_val)) then
+       if (ns_exists(val_str(target_form))) then
           do i = 1, n
              args(i) = eval_form(list_first(l), env)
              if (has_error) return
              l = list_rest(l)
           end do
-          val = eval_static_call(target_form%str_val, member_name%str_val, args, &
+          val = eval_static_call(val_str(target_form), val_str(member_name), args, &
                is_call=is_method_call)
           return
        end if
@@ -1228,7 +1230,7 @@ contains
        if (has_error) return
        l = list_rest(l)
     end do
-    val = eval_instance_call(target, member_name%str_val, args)
+    val = eval_instance_call(target, val_str(member_name), args)
   end function eval_dot
 
   ! (new ClassName args...): real Clojure constructs a real instance;
@@ -1246,16 +1248,16 @@ contains
     type(cons_value) :: cls
     type(cons_ref) :: rest
 
-    cls = list_first(list_rest(ast%list_val))
-    rest = list_rest(list_rest(ast%list_val))
-    if (cls%tag == TAG_SYMBOL .and. cls%str_val == "clojure.lang.Atom") then
+    cls = list_first(val_lst_rest(ast))
+    rest = list_rest(val_lst_rest(ast))
+    if (cls%tag == TAG_SYMBOL .and. str_is(cls, "clojure.lang.Atom")) then
        ! core.clj's own (atom x) is literally (new clojure.lang.Atom
        ! x) -- a REAL constructor, unlike the generic exception-message
        ! passthrough below.
        val = call_builtin("atom", [eval_form(list_first(rest), env)])
        return
     end if
-    if (cls%tag == TAG_SYMBOL .and. cls%str_val == "clojure.lang.Ref") then
+    if (cls%tag == TAG_SYMBOL .and. str_is(cls, "clojure.lang.Ref")) then
        ! A Ref is an Atom here. Refs exist for coordinated, transactional
        ! change across several of them; clotran is single-threaded with
        ! no STM, so a ref IS just a mutable box and dosync is "run the
@@ -1265,7 +1267,7 @@ contains
        val = call_builtin("atom", [eval_form(list_first(rest), env)])
        return
     end if
-    if (cls%tag == TAG_SYMBOL .and. cls%str_val == "clojure.lang.Reduced") then
+    if (cls%tag == TAG_SYMBOL .and. str_is(cls, "clojure.lang.Reduced")) then
        ! (reduced x) is (clojure.lang.Reduced. x) -- a box reduce
        ! recognises as "stop here". Reuses atom_val, so deref already
        ! reads it back out.
@@ -1278,7 +1280,7 @@ contains
        end block
        return
     end if
-    if (cls%tag == TAG_SYMBOL .and. cls%str_val == "clojure.lang.LazySeq") then
+    if (cls%tag == TAG_SYMBOL .and. str_is(cls, "clojure.lang.LazySeq")) then
        ! core.clj's own `lazy-seq` macro is literally
        ! (new clojure.lang.LazySeq (fn* [] body...)). Build the real
        ! thing and run NOTHING: the thunk is kept, and the body only
@@ -1295,7 +1297,7 @@ contains
        end block
        return
     end if
-    if (cls%tag == TAG_SYMBOL .and. cls%str_val == "clojure.lang.MethodImplCache") then
+    if (cls%tag == TAG_SYMBOL .and. str_is(cls, "clojure.lang.MethodImplCache")) then
        block
          type(cons_value) :: m, mp
          m = multifn_assoc(empty_map(), mk_keyword("sym"), eval_form(nth_form(rest, 1), env))
@@ -1314,7 +1316,7 @@ contains
        end block
        return
     end if
-    if (cls%tag == TAG_SYMBOL .and. cls%str_val == "clojure.lang.MethodImplCache$Entry") then
+    if (cls%tag == TAG_SYMBOL .and. str_is(cls, "clojure.lang.MethodImplCache$Entry")) then
        block
          type(cons_value) :: m
          m = multifn_assoc(empty_map(), mk_keyword("c"), eval_form(nth_form(rest, 1), env))
@@ -1323,7 +1325,7 @@ contains
        end block
        return
     end if
-    if (cls%tag == TAG_SYMBOL .and. cls%str_val == "clojure.lang.MultiFn") then
+    if (cls%tag == TAG_SYMBOL .and. str_is(cls, "clojure.lang.MultiFn")) then
        ! core.clj's defmulti expands to (new clojure.lang.MultiFn name
        ! dispatch-fn default hierarchy). The name is only for printing
        ! and the hierarchy isn't supported (see apply_multifn), so only
@@ -1339,7 +1341,7 @@ contains
        return
     end if
     if (cls%tag == TAG_SYMBOL .and. &
-         (cls%str_val == "StringBuilder" .or. cls%str_val == "java.io.StringWriter")) then
+         (str_is(cls, "StringBuilder") .or. str_is(cls, "java.io.StringWriter"))) then
        ! core.clj's own multi-arg `str` is (new StringBuilder (str x))
        ! -- a real, mutable StringBuilder, appended to and read back via
        ! .append/.toString (see eval_instance_call).
@@ -1347,10 +1349,10 @@ contains
          type(cons_value) :: seed
          seed%tag = TAG_STRING
          if (list_count(rest) > 0) then
-            seed%str_val = pr_str(eval_form(list_first(rest), env), .false.)
+            call set_str(seed, pr_str(eval_form(list_first(rest), env), .false.))
             if (has_error) return
          else
-            seed%str_val = ""
+            call set_str(seed, "")
          end if
          val = atom_new(seed)
          val%tag = TAG_STRING_BUILDER
@@ -1361,7 +1363,7 @@ contains
        val = eval_form(list_first(rest), env)
     else
        val%tag = TAG_STRING
-       val%str_val = cls%str_val
+       call set_str(val, val_str(cls))
     end if
   end function eval_new
 
@@ -1426,22 +1428,22 @@ contains
        ! directly, same identity, no need to re-resolve by name.
        current = atom_deref(target)
        if (current%tag == TAG_FN) then
-          if (allocated(current%fn_val)) current%fn_val%is_macro = .true.
+          if (has_fn(current)) call set_fn_macro(current, .true.)
        end if
        call atom_reset(target, current)
        val%tag = TAG_NIL
        return
     end if
     if (method_name == "setMacro" .and. target%tag == TAG_SYMBOL) then
-       found = ns_resolve(ns_current(), target%str_val, current, owner)
+       found = ns_resolve(ns_current(), val_str(target), current, owner)
        if (.not. found) then
-          call eval_error("var " // target%str_val // " does not exist")
+          call eval_error("var " // val_str(target) // " does not exist")
           return
        end if
        if (current%tag == TAG_FN) then
-          if (allocated(current%fn_val)) current%fn_val%is_macro = .true.
+          if (has_fn(current)) call set_fn_macro(current, .true.)
        end if
-       call ns_intern(ns_current(), target%str_val, current)
+       call ns_intern(ns_current(), val_str(target), current)
        val%tag = TAG_NIL
        return
     end if
@@ -1476,14 +1478,14 @@ contains
        block
          integer :: slash
          slash = 0
-         if (target%str_val /= "/") slash = index(target%str_val, "/")
+         if (.not. str_is(target, "/")) slash = index(val_str(target), "/")
          if (method_name == "getName") then
             val%tag = TAG_STRING
-            val%str_val = target%str_val
+            call set_str(val, val_str(target))
          else
             if (slash > 0) then
                val%tag = TAG_STRING
-               val%str_val = target%str_val(1:slash - 1)
+               call set_str(val, str_sub(target, 1, slash - 1))
             else
                val%tag = TAG_NIL
             end if
@@ -1501,46 +1503,46 @@ contains
        select case (method_name)
        case ("startsWith")
           val%tag = TAG_BOOL
-          val%bool_val = (len(args(1)%str_val) <= len(target%str_val))
+          val%bool_val = (str_len(args(1)) <= str_len(target))
           if (val%bool_val) val%bool_val = &
-               (target%str_val(1:len(args(1)%str_val)) == args(1)%str_val)
+               (str_sub(target, 1, str_len(args(1))) == val_str(args(1)))
           return
        case ("endsWith")
           val%tag = TAG_BOOL
-          val%bool_val = (len(args(1)%str_val) <= len(target%str_val))
+          val%bool_val = (str_len(args(1)) <= str_len(target))
           if (val%bool_val) val%bool_val = &
-               (target%str_val(len(target%str_val) - len(args(1)%str_val) + 1:) == args(1)%str_val)
+               (str_sub(target, str_len(target) - str_len(args(1)) + 1) == val_str(args(1)))
           return
        case ("indexOf")
           val%tag = TAG_INT
-          val%int_val = index(target%str_val, args(1)%str_val) - 1 ! Java is 0-based, -1 when absent
+          val%int_val = index(val_str(target), val_str(args(1))) - 1 ! Java is 0-based, -1 when absent
           return
        case ("lastIndexOf")
           val%tag = TAG_INT
-          val%int_val = index(target%str_val, args(1)%str_val, back=.true.) - 1
+          val%int_val = index(val_str(target), val_str(args(1)), back=.true.) - 1
           return
        case ("length")
           val%tag = TAG_INT
-          val%int_val = len(target%str_val)
+          val%int_val = str_len(target)
           return
        case ("concat")
           val%tag = TAG_STRING
-          val%str_val = target%str_val
-          if (size(args) >= 1) val%str_val = val%str_val // args(1)%str_val
+          call set_str(val, val_str(target))
+          if (size(args) >= 1) call set_str(val, val_str(val) // val_str(args(1)))
           return
        case ("charAt")
           ! Java is 0-based; the result is a Character, not a
           ! one-character String (core_print.clj's own String method
           ! feeds it straight to char-escape-string, keyed by char).
           val%tag = TAG_CHAR
-          val%str_val = target%str_val(args(1)%int_val + 1:args(1)%int_val + 1)
+          call set_str(val, str_sub(target, args(1)%int_val + 1, args(1)%int_val + 1))
           return
        case ("substring")
           val%tag = TAG_STRING
           if (size(args) >= 2) then
-             val%str_val = target%str_val(args(1)%int_val + 1:args(2)%int_val)
+             call set_str(val, str_sub(target, args(1)%int_val + 1, args(2)%int_val))
           else
-             val%str_val = target%str_val(args(1)%int_val + 1:)
+             call set_str(val, str_sub(target, args(1)%int_val + 1))
           end if
           return
        case ("replace")
@@ -1550,37 +1552,41 @@ contains
           ! CharSequence overload isn't here; nothing in core.clj uses it.
           block
             integer :: ci
+            character(len=:), allocatable :: buf
             val%tag = TAG_STRING
-            val%str_val = target%str_val
+            buf = val_str(target)
             if (size(args) >= 2) then
                if (args(1)%tag /= TAG_CHAR .or. args(2)%tag /= TAG_CHAR) then
                   call eval_error("replace: only the (char, char) overload is supported")
                   return
                end if
-               do ci = 1, len(val%str_val)
-                  if (val%str_val(ci:ci) == args(1)%str_val) val%str_val(ci:ci) = args(2)%str_val
+               do ci = 1, len(buf)
+                  if (buf(ci:ci) == val_str(args(1))) buf(ci:ci) = val_str(args(2))
                end do
             end if
+            call set_str(val, buf)
           end block
           return
        case ("toUpperCase", "toLowerCase")
           block
             integer :: ci, cc
+            character(len=:), allocatable :: buf
             val%tag = TAG_STRING
-            val%str_val = target%str_val
-            do ci = 1, len(val%str_val)
-               cc = iachar(val%str_val(ci:ci))
+            buf = val_str(target)
+            do ci = 1, len(buf)
+               cc = iachar(buf(ci:ci))
                if (method_name == "toUpperCase") then
-                  if (cc >= 97 .and. cc <= 122) val%str_val(ci:ci) = achar(cc - 32)
+                  if (cc >= 97 .and. cc <= 122) buf(ci:ci) = achar(cc - 32)
                else
-                  if (cc >= 65 .and. cc <= 90) val%str_val(ci:ci) = achar(cc + 32)
+                  if (cc >= 65 .and. cc <= 90) buf(ci:ci) = achar(cc + 32)
                end if
             end do
+            call set_str(val, buf)
           end block
           return
        case ("trim")
           val%tag = TAG_STRING
-          val%str_val = trim(adjustl(target%str_val))
+          call set_str(val, trim(adjustl(val_str(target))))
           return
        end select
     end if
@@ -1621,7 +1627,7 @@ contains
             type(cons_value) :: root
             root = atom_deref(target)
             if (root%tag == TAG_FN) then
-               if (allocated(root%fn_val)) val%bool_val = root%fn_val%is_macro
+               if (has_fn(root)) val%bool_val = fn_is_macro(root)
             end if
           end block
           return
@@ -1673,7 +1679,7 @@ contains
           return
        case ("toSymbol")
           val%tag = TAG_SYMBOL
-          val%str_val = target%str_val
+          call set_str(val, val_str(target))
           return
        case ("ns")
           ! Var.ns -- the namespace the Var lives in, which here is
@@ -1681,11 +1687,11 @@ contains
           val%tag = TAG_SYMBOL
           block
             character(len=:), allocatable :: qualified ! never str = str(:i) in place -- see NOTES.md
-            qualified = target%str_val
+            qualified = val_str(target)
             if (index(qualified, "/") > 0) then
-               val%str_val = qualified(1:index(qualified, "/", back=.true.) - 1)
+               call set_str(val, qualified(1:index(qualified, "/", back=.true.) - 1))
             else
-               val%str_val = qualified
+               call set_str(val, qualified)
             end if
           end block
           return
@@ -1696,11 +1702,11 @@ contains
           val%tag = TAG_SYMBOL
           block
             character(len=:), allocatable :: qualified ! never str = str(i:) in place -- see NOTES.md
-            qualified = target%str_val
+            qualified = val_str(target)
             if (index(qualified, "/") > 0) then
-               val%str_val = qualified(index(qualified, "/", back=.true.) + 1:)
+               call set_str(val, qualified(index(qualified, "/", back=.true.) + 1:))
             else
-               val%str_val = qualified
+               call set_str(val, qualified)
             end if
           end block
           return
@@ -1771,7 +1777,7 @@ contains
              block
                type(cons_value) :: table
                table = multifn_get(target, "methods")
-               table%map_val = array_map_dissoc(table%map_val, args(1))
+               call set_map(table, array_map_dissoc(val_map(table), args(1)))
                call multifn_put(target, "methods", table)
              end block
           end if
@@ -1797,8 +1803,7 @@ contains
                over = rt_get(tbl, args(1))
                if (over%tag /= TAG_SET) then
                   over%tag = TAG_SET
-                  allocate(over%map_val)
-                  over%map_val = array_map_empty()
+                  call set_map(over, array_map_empty())
                end if
                over = multifn_assoc(over, args(2), args(2))
                over%tag = TAG_SET ! multifn_assoc hands back a map; a set is the same storage
@@ -1825,7 +1830,7 @@ contains
     end if
     if (method_name == "getMessage" .or. method_name == "getLocalizedMessage") then
        val%tag = TAG_STRING
-       val%str_val = pr_str(target, .false.)
+       call set_str(val, pr_str(target, .false.))
        return
     end if
     if (method_name == "getCause") then
@@ -1891,7 +1896,7 @@ contains
     ! argument whenever the target was not a keyword. gfortran's
     ! -fcheck traps it; flang read whatever was there and carried on.
     if (target%tag == TAG_KEYWORD) then
-    if (names_a_class(target%str_val)) then
+    if (names_a_class(val_str(target))) then
        select case (method_name)
        case ("getInterfaces")
           ! Every relationship here is a parent link; there is no
@@ -1925,12 +1930,12 @@ contains
     if (target%tag == TAG_HASHMAP) then
        select case (method_name)
        case ("sym", "protocol", "methodk", "map", "table")
-          if (array_map_contains(target%map_val, mk_keyword(method_name))) then
+          if (val_map_contains(target, mk_keyword(method_name))) then
              val = rt_get(target, mk_keyword(method_name))
              return
           end if
        case ("fnFor")
-          if (array_map_contains(target%map_val, mk_keyword("methodk"))) then
+          if (val_map_contains(target, mk_keyword("methodk"))) then
              val%tag = TAG_NIL
              if (size(args) >= 1) then
                 block
@@ -2003,14 +2008,14 @@ contains
     if (method_name == "addAlias" .and. target%tag == TAG_SYMBOL .and. size(args) >= 2) then
        ! (. *ns* (addAlias sym target-ns)) -- clojure.core/alias, and so
        ! (:require [lib :as x]).
-       call ns_add_alias(ns_find_or_create(target%str_val), args(1)%str_val, &
+       call ns_add_alias(ns_find_or_create(val_str(target)), val_str(args(1)), &
             pr_str(args(2), .false.))
        val%tag = TAG_NIL
        return
     end if
     if (method_name == "refer" .and. target%tag == TAG_SYMBOL .and. size(args) >= 2) then
        ! (. *ns* (refer sym var)) -- what refer/use bottom out in.
-       call ns_refer(ns_find_or_create(target%str_val), args(1)%str_val, args(2))
+       call ns_refer(ns_find_or_create(val_str(target)), val_str(args(1)), args(2))
        val = args(2)
        return
     end if
@@ -2033,7 +2038,7 @@ contains
        block
          type(cons_value) :: cur
          cur = atom_deref(target)
-         cur%str_val = cur%str_val // pr_str(args(1), .false.)
+         call set_str(cur, val_str(cur) // pr_str(args(1), .false.))
          call atom_reset(target, cur)
        end block
        val = target
@@ -2045,7 +2050,7 @@ contains
        ! same "display," non-readable rendering as str's own default,
        ! for any value, not just symbols/keywords (unlike getName above).
        val%tag = TAG_STRING
-       val%str_val = pr_str(target, .false.)
+       call set_str(val, pr_str(target, .false.))
        return
     end if
     if (method_name == "applyTo" .and. size(args) >= 1) then
@@ -2133,7 +2138,7 @@ contains
     ! (catch/catch* ...) off whatever's now the end -- real Clojure's
     ! own clause order (body*, then an optional catch, then an
     ! optional finally) always leaves finally last when both appear.
-    forms = list_rest(ast%list_val)
+    forms = val_lst_rest(ast)
     n = list_count(forms)
     has_catch = .false.
     has_finally = .false.
@@ -2152,7 +2157,7 @@ contains
        if (clause_head_is(form, "catch") .or. clause_head_is(form, "catch*")) then
           has_catch = .true.
           catch_clause = form
-          catch_head = list_first(form%list_val)
+          catch_head = val_lst_first(form)
           body_n = body_n - 1
        end if
     end if
@@ -2166,8 +2171,8 @@ contains
     end do
 
     if (has_error .and. has_catch) then
-       cl = list_rest(catch_clause%list_val) ! drop "catch"/"catch*"
-       if (catch_head%str_val == "catch") cl = list_rest(cl) ! drop the (ignored) class
+       cl = val_lst_rest(catch_clause) ! drop "catch"/"catch*"
+       if (str_is(catch_head, "catch")) cl = list_rest(cl) ! drop the (ignored) class
        catch_sym = list_first(cl)
        cl = list_rest(cl)
        cn = list_count(cl)
@@ -2191,7 +2196,7 @@ contains
     saved_has_error = has_error
     saved_error_value = last_error_value
     has_error = .false.
-    l = list_rest(finally_clause%list_val)
+    l = val_lst_rest(finally_clause)
     n = list_count(l)
     do k = 1, n
        block
@@ -2231,10 +2236,10 @@ contains
     type(cons_value) :: head
     yes = .false.
     if (form%tag /= TAG_LIST) return
-    if (.not. allocated(form%list_val)) return
-    if (list_count(form%list_val) == 0) return
-    head = list_first(form%list_val)
-    yes = (head%tag == TAG_SYMBOL .and. head%str_val == name)
+    if (.not. has_list(form)) return
+    if (val_lst_count(form) == 0) return
+    head = val_lst_first(form)
+    yes = (head%tag == TAG_SYMBOL .and. val_str(head) == name)
   end function clause_head_is
 
   ! (defmacro name [params] body): real Clojure's actual syntax (not
@@ -2257,8 +2262,8 @@ contains
     type(cons_ref) :: rest
     type(cons_value) :: hd
 
-    name = list_first(list_rest(ast%list_val))
-    rest = list_rest(list_rest(ast%list_val))
+    name = list_first(val_lst_rest(ast))
+    rest = list_rest(val_lst_rest(ast))
     ! (defmacro name doc-string? attr-map? [params] body...) -- real
     ! Clojure's own defmacro (core.clj line ~454) skips an optional
     ! leading docstring and/or metadata map before the params vector;
@@ -2276,7 +2281,7 @@ contains
        if (hd%tag == TAG_HASHMAP) rest = list_rest(rest)
     end if
     val%tag = TAG_FN
-    allocate(val%fn_val)
+    call new_fn(val)
     ! Multi-arity: (defmacro name ([p1] b1) ([p2] b2) ...) -- same
     ! clause shape (and same "first element of the first clause is
     ! itself a params collection" test) as eval_fn's own multi-arity
@@ -2293,13 +2298,13 @@ contains
       clause = list_first(rest)
       multi = .false.
       if (clause%tag == TAG_LIST) then
-         inner_first = list_first(clause%list_val)
+         inner_first = val_lst_first(clause)
          multi = (inner_first%tag == TAG_VECTOR .or. inner_first%tag == TAG_LIST)
       end if
       if (multi) then
          n_clauses = list_count(rest)
-         val%fn_val%params = prepend_form_env_params(list_first(clause%list_val))
-         val%fn_val%body = pre_expand(wrap_body(list_rest(clause%list_val)))
+         call set_fn_params(val, prepend_form_env_params(val_lst_first(clause)))
+         call set_fn_body(val, pre_expand(wrap_body(val_lst_rest(clause))))
          if (n_clauses > 1) then
             allocate(val%fn_val%extra)
             allocate(val%fn_val%extra%ptr)
@@ -2310,14 +2315,14 @@ contains
             clauses = list_rest(rest)
             do i = 1, n_clauses - 1
                clause = list_first(clauses)
-               val%fn_val%extra%ptr%params(i) = prepend_form_env_params(list_first(clause%list_val))
-               val%fn_val%extra%ptr%bodies(i) = pre_expand(wrap_body(list_rest(clause%list_val)))
+               val%fn_val%extra%ptr%params(i) = prepend_form_env_params(val_lst_first(clause))
+               val%fn_val%extra%ptr%bodies(i) = pre_expand(wrap_body(val_lst_rest(clause)))
                clauses = list_rest(clauses)
             end do
          end if
       else
-         val%fn_val%params = prepend_form_env_params(list_first(rest))
-         val%fn_val%body = pre_expand(wrap_body(list_rest(rest)))
+         call set_fn_params(val, prepend_form_env_params(list_first(rest)))
+         call set_fn_body(val, pre_expand(wrap_body(list_rest(rest))))
       end if
     end block
     ! A frame of its own, purely to record the defining namespace: a
@@ -2331,8 +2336,8 @@ contains
       call env_set_ns(macro_env, defining_ns_index(env))
       val%fn_val%env = macro_env
     end block
-    val%fn_val%is_macro = .true.
-    call ns_intern(ns_current(), name%str_val, val)
+    call set_fn_macro(val, .true.)
+    call ns_intern(ns_current(), val_str(name), val)
   end function eval_defmacro
 
   ! &form/&env, prepended to a [params] vector that doesn't already
@@ -2349,9 +2354,9 @@ contains
     integer :: n, i
 
     form_sym%tag = TAG_SYMBOL
-    form_sym%str_val = "&form"
+    call set_str(form_sym, "&form")
     env_sym%tag = TAG_SYMBOL
-    env_sym%str_val = "&env"
+    call set_str(env_sym, "&env")
     ! binding_count/binding_nth (not vector_count/vector_nth directly)
     ! -- mal's own defmacro! convention allows paren params (pred a b),
     ! not just a vector, same dual shape bind_params already accepts.
@@ -2382,18 +2387,18 @@ contains
     type(cons_value) :: val
     type(cons_value) :: name
 
-    name = list_first(list_rest(ast%list_val))
-    val = eval_form(list_first(list_rest(list_rest(ast%list_val))), env)
+    name = list_first(val_lst_rest(ast))
+    val = eval_form(list_first(list_rest(val_lst_rest(ast))), env)
     if (has_error) return
-    if (allocated(val%fn_val)) then
-       val%fn_val%is_macro = .true.
+    if (has_fn(val)) then
+       call set_fn_macro(val, .true.)
        ! Same &form/&env prepending eval_defmacro needs -- the fn*
        ! expr here is written to mal's own convention (no &form/&env
        ! at all), but eval_macro_head always supplies them to any
        ! macro call regardless of how it was defined.
-       val%fn_val%params = prepend_form_env_params(val%fn_val%params)
+       call set_fn_params(val, prepend_form_env_params(fn_params(val)))
     end if
-    call ns_intern(ns_current(), name%str_val, val)
+    call ns_intern(ns_current(), val_str(name), val)
   end function eval_defmacro_bang
 
   ! Macros are namespace-level constructs only in real Clojure (Var
@@ -2438,8 +2443,8 @@ contains
     character(len=:), allocatable :: owner
     is_macro = ns_resolve(resolution_ns(env), name, macro_val, owner)
     if (is_macro) is_macro = (macro_val%tag == TAG_FN)
-    if (is_macro) is_macro = allocated(macro_val%fn_val)
-    if (is_macro) is_macro = macro_val%fn_val%is_macro
+    if (is_macro) is_macro = has_fn(macro_val)
+    if (is_macro) is_macro = fn_is_macro(macro_val)
   end function resolves_to_macro
 
   ! Expands one macro call: binds its params to the call's raw,
@@ -2473,18 +2478,18 @@ contains
     integer :: n, i
     type(cons_value) :: macro_params, macro_body
 
-    n = list_count(ast%list_val) - 1
+    n = val_lst_count(ast) - 1
     allocate(raw_args(n + 2))
     raw_args(1) = ast
     raw_args(2) = env_placeholder ! nil
-    l = list_rest(ast%list_val)
+    l = val_lst_rest(ast)
     do i = 1, n
        raw_args(i + 2) = list_first(l)
        l = list_rest(l)
     end do
     child = env_new(macro_val%fn_val%env)
     ! Multi-arity macro dispatch: was missing entirely -- this always
-    ! used macro_val%fn_val%params/%body directly (the PRIMARY clause
+    ! used fn_params(macro_val)/%body directly (the PRIMARY clause
     ! only), the same bug multi-arity fn* calls would have if
     ! apply_closure didn't call select_clause. A multi-arity defmacro
     ! (core.clj's own `or`/`and`) silently ran the wrong clause for
@@ -2531,11 +2536,11 @@ contains
     form = form0
     do
        if (form%tag /= TAG_LIST) exit
-       if (.not. allocated(form%list_val)) exit
-       if (list_count(form%list_val) == 0) exit
-       head2 = list_first(form%list_val)
+       if (.not. has_list(form)) exit
+       if (val_lst_count(form) == 0) exit
+       head2 = val_lst_first(form)
        if (head2%tag /= TAG_SYMBOL) exit
-       if (.not. resolves_to_macro(head2%str_val, macro_val, env_new())) exit
+       if (.not. resolves_to_macro(val_str(head2), macro_val, env_new())) exit
        call eval_macro_head(form, macro_val)
        if (has_error) exit
     end do
@@ -2641,22 +2646,22 @@ contains
        expanded = form
        return
     end if
-    if (.not. allocated(form%list_val)) then
+    if (.not. has_list(form)) then
        expanded = form
        return
     end if
-    n = list_count(form%list_val)
+    n = val_lst_count(form)
     if (n == 0) then
        expanded = form
        return
     end if
-    head = list_first(form%list_val)
+    head = val_lst_first(form)
     if (head%tag == TAG_SYMBOL) then
-       if (head%str_val == "quote") then
+       if (str_is(head, "quote")) then
           expanded = form
           return
        end if
-       if (head%str_val == "." .and. n == 3) then
+       if (str_is(head, ".") .and. n == 3) then
           ! (. target (method args...)) / (. target member): eval_dot
           ! never treats the method/member name as code (real
           ! Clojure's dot-call syntax, not a function call) -- only
@@ -2667,8 +2672,8 @@ contains
           ! in clojure.core), corrupting the method-call form entirely.
           block
             type(cons_value) :: target_e, member_e
-            target_e = pre_expand(list_first(list_rest(form%list_val)))
-            member_e = list_first(list_rest(list_rest(form%list_val)))
+            target_e = pre_expand(list_first(val_lst_rest(form)))
+            member_e = list_first(list_rest(val_lst_rest(form)))
             if (member_e%tag == TAG_LIST) then
                member_e = pre_expand_dot_args(member_e)
             end if
@@ -2676,14 +2681,14 @@ contains
           end block
           return
        end if
-       if (head%str_val == "quasiquote" .and. n == 2) then
-          inner = pre_expand_qq(list_first(list_rest(form%list_val)))
+       if (str_is(head, "quasiquote") .and. n == 2) then
+          inner = pre_expand_qq(list_first(val_lst_rest(form)))
           expanded = make_list([head, inner])
           return
        end if
        ! pre_expand runs at def time, when the current namespace IS the
        ! defining one, so an empty env (falling back to it) is right.
-       if (resolves_to_macro(head%str_val, macro_val, env_new())) then
+       if (resolves_to_macro(val_str(head), macro_val, env_new())) then
           block
             type(cons_value) :: ast_copy
             ast_copy = form
@@ -2753,7 +2758,7 @@ contains
        end if
     end if
     allocate(items(n))
-    l = form%list_val
+    l = val_lst(form)
     do i = 1, n
        items(i) = pre_expand(list_first(l))
        if (has_error) then
@@ -2781,9 +2786,9 @@ contains
     type(cons_value), allocatable :: items(:)
     type(cons_ref) :: l
     integer :: n, i
-    n = list_count(form%list_val)
+    n = val_lst_count(form)
     allocate(items(n))
-    l = form%list_val
+    l = val_lst(form)
     items(1) = list_first(l)
     l = list_rest(l)
     do i = 2, n
@@ -2810,22 +2815,22 @@ contains
     select case (form%tag)
     case (TAG_LIST)
        n = 0
-       if (allocated(form%list_val)) n = list_count(form%list_val)
+       if (has_list(form)) n = val_lst_count(form)
        if (n == 0) then
           out = form
           return
        end if
        if (n == 2) then
-          head_e = list_first(form%list_val)
+          head_e = val_lst_first(form)
           if (head_e%tag == TAG_SYMBOL .and. &
-               (head_e%str_val == "unquote" .or. head_e%str_val == "splice-unquote")) then
-             inner = pre_expand(list_first(list_rest(form%list_val)))
+               (str_is(head_e, "unquote") .or. str_is(head_e, "splice-unquote"))) then
+             inner = pre_expand(list_first(val_lst_rest(form)))
              out = make_list([head_e, inner])
              return
           end if
        end if
        allocate(items(n))
-       l = form%list_val
+       l = val_lst(form)
        do i = 1, n
           items(i) = pre_expand_qq(list_first(l))
           l = list_rest(l)
@@ -2869,7 +2874,7 @@ contains
     character(len=*), intent(in) :: name
     type(cons_value) :: v
     v%tag = TAG_SYMBOL
-    v%str_val = name
+    call set_str(v, name)
   end function mk_symbol
 
   subroutine gensym_reset()
@@ -2922,7 +2927,7 @@ contains
     type(cons_value) :: resolved
     logical :: found
 
-    name = sym%str_val
+    name = val_str(sym)
     if (is_special_form(name)) then
        v = sym
        return
@@ -3009,10 +3014,10 @@ contains
     type(cons_value) :: h
     yes = .false.
     if (e%tag /= TAG_LIST) return
-    if (.not. allocated(e%list_val)) return
-    if (list_count(e%list_val) /= 2) return
-    h = list_first(e%list_val)
-    yes = (h%tag == TAG_SYMBOL .and. h%str_val == "splice-unquote")
+    if (.not. has_list(e)) return
+    if (val_lst_count(e) /= 2) return
+    h = val_lst_first(e)
+    yes = (h%tag == TAG_SYMBOL .and. str_is(h, "splice-unquote"))
   end function is_splice_unquote
 
   ! Grows items by one, pre-allocating the new array before assigning
@@ -3073,20 +3078,20 @@ contains
        val = qq_symbol(form, env)
     case (TAG_LIST)
        n = 0
-       if (allocated(form%list_val)) n = list_count(form%list_val)
+       if (has_list(form)) n = val_lst_count(form)
        if (n == 2) then
-          head_e = list_first(form%list_val)
-          if (head_e%tag == TAG_SYMBOL .and. head_e%str_val == "unquote") then
-             val = eval_form(list_first(list_rest(form%list_val)), env)
+          head_e = val_lst_first(form)
+          if (head_e%tag == TAG_SYMBOL .and. str_is(head_e, "unquote")) then
+             val = eval_form(list_first(val_lst_rest(form)), env)
              return
           end if
        end if
        item_count = 0
-       l = form%list_val
+       l = val_lst(form)
        do i = 1, n
           e = list_first(l)
           if (is_splice_unquote(e)) then
-             call qq_append_all(items, item_count, eval_form(list_first(list_rest(e%list_val)), env))
+             call qq_append_all(items, item_count, eval_form(list_first(val_lst_rest(e)), env))
           else
              call qq_push(items, item_count, qq_expand(e, env))
           end if
@@ -3105,7 +3110,7 @@ contains
        do i = 0, n - 1
           e = val_vec_nth(form, i)
           if (is_splice_unquote(e)) then
-             call qq_append_all(items, item_count, eval_form(list_first(list_rest(e%list_val)), env))
+             call qq_append_all(items, item_count, eval_form(list_first(val_lst_rest(e)), env))
           else
              call qq_push(items, item_count, qq_expand(e, env))
           end if
@@ -3118,11 +3123,11 @@ contains
        end if
     case (TAG_HASHMAP)
        m = array_map_empty()
-       if (allocated(form%map_val)) then
+       if (has_map(form)) then
           block
             type(cons_value), allocatable :: mkeys(:), mvals(:)
             type(array_map_t) :: next_m
-            call array_map_entries(form%map_val, mkeys, mvals)
+            call val_map_entries(form, mkeys, mvals)
             do i = 1, size(mkeys)
                next_m = array_map_assoc(m, qq_expand(mkeys(i), env), qq_expand(mvals(i), env)) ! never m = ...(m, ...)
                m = next_m
@@ -3131,8 +3136,7 @@ contains
           end block
        end if
        val%tag = TAG_HASHMAP
-       allocate(val%map_val)
-       val%map_val = m
+       call set_map(val, m)
     case default
        val = form ! self-evaluating
     end select
@@ -3163,14 +3167,14 @@ contains
     logical :: found
     character(len=:), allocatable :: owner
     found = env_find(env, ast, val)
-    if (.not. found) found = ns_resolve(resolution_ns(env), ast%str_val, val, owner)
+    if (.not. found) found = ns_resolve(resolution_ns(env), val_str(ast), val, owner)
     if (found) return
-    if (names_a_class(ast%str_val) .and. index(ast%str_val, "/") == 0) then
+    if (names_a_class(val_str(ast)) .and. index(val_str(ast), "/") == 0) then
        val%tag = TAG_KEYWORD
-       val%str_val = class_keyword_name(ast%str_val)
+       call set_str(val, class_keyword_name(val_str(ast)))
        return
     end if
-    call eval_error("'" // ast%str_val // "' not found")
+    call eval_error("'" // val_str(ast) // "' not found")
   end function eval_symbol
 
   recursive function eval_vector(ast, env) result(val)
@@ -3206,8 +3210,8 @@ contains
     integer :: i, n
 
     n = 0
-    if (allocated(ast%map_val)) then
-       call array_map_entries(ast%map_val, elems, dummy)
+    if (has_map(ast)) then
+       call val_map_entries(ast, elems, dummy)
        n = size(elems)
     end if
     allocate(vals(n))
@@ -3228,8 +3232,8 @@ contains
     integer :: i
 
     m = array_map_empty()
-    if (allocated(ast%map_val)) then
-       call array_map_entries(ast%map_val, keys, vals)
+    if (has_map(ast)) then
+       call val_map_entries(ast, keys, vals)
        do i = 1, size(keys)
           ! Both halves are evaluated. A map literal's KEY is an
           ! ordinary expression in real Clojure ({(f x) 1} calls f) --
@@ -3248,8 +3252,7 @@ contains
        end do
     end if
     val%tag = TAG_HASHMAP
-    allocate(val%map_val)
-    val%map_val = m
+    call set_map(val, m)
   end function eval_hashmap
 
   ! Keywords, maps, and vectors are callable, same as real Clojure:
@@ -3261,7 +3264,7 @@ contains
 
     select case (f%tag)
     case (TAG_BUILTIN)
-       val = call_builtin(f%str_val, args)
+       val = call_builtin(val_str(f), args)
     case (TAG_FN)
        val = apply_closure(f, args)
     case (TAG_KEYWORD)
@@ -3392,8 +3395,7 @@ contains
     type(cons_value), intent(in) :: items(:)
     type(cons_value) :: val
     val%tag = TAG_LIST
-    allocate(val%list_val)
-    val%list_val = list_of(items)
+    call set_list(val, list_of(items))
   end function make_list
 
   ! (concat a b ...): every arg's elements, in order, as one list.
@@ -3492,7 +3494,7 @@ contains
     required = 0
     do i = 0, n - 1
        p = binding_nth(params, i)
-       if (p%tag == TAG_SYMBOL .and. p%str_val == "&") then
+       if (p%tag == TAG_SYMBOL .and. str_is(p, "&")) then
           variadic = .true.
           exit
        end if
@@ -3514,9 +3516,9 @@ contains
     type(cons_value), intent(out) :: params, body
     integer :: i
 
-    if (arity_accepts(f%fn_val%params, argc)) then
-       params = f%fn_val%params
-       body = f%fn_val%body
+    if (arity_accepts(fn_params(f), argc)) then
+       params = fn_params(f)
+       body = fn_body(f)
        return
     end if
     if (allocated(f%fn_val%extra)) then
@@ -3567,7 +3569,7 @@ contains
     i = 0
     do while (i < n)
        p = binding_nth(params, i)
-       if (p%tag == TAG_SYMBOL .and. p%str_val == "&") then
+       if (p%tag == TAG_SYMBOL .and. str_is(p, "&")) then
           p = binding_nth(params, i + 1)
           if (present(is_recur)) then
              if (is_recur .and. size(args(ai:)) == 1) then
@@ -3654,8 +3656,7 @@ contains
        m = next_m
     end do
     val%tag = TAG_HASHMAP
-    allocate(val%map_val)
-    val%map_val = m
+    call set_map(val, m)
   end function make_hashmap
 
   ! (hash-set x ...): a set from every arg, deduplicated.
@@ -3670,8 +3671,7 @@ contains
        m = next_m
     end do
     val%tag = TAG_SET
-    allocate(val%map_val)
-    val%map_val = m
+    call set_map(val, m)
   end function make_hashset
 
   ! (keys m)/(vals m): every key (or value), as a list -- insertion
@@ -3682,8 +3682,8 @@ contains
     type(cons_value) :: val
     type(cons_value), allocatable :: items(:), discard(:)
     type(cons_value) :: no_items(0)
-    if (m%tag == TAG_HASHMAP .and. allocated(m%map_val)) then
-       call array_map_entries(m%map_val, items, discard)
+    if (m%tag == TAG_HASHMAP .and. has_map(m)) then
+       call val_map_entries(m, items, discard)
     else
        allocate(items(0))
     end if
@@ -3699,8 +3699,8 @@ contains
     type(cons_value) :: val
     type(cons_value), allocatable :: items(:), discard(:)
     type(cons_value) :: no_items(0)
-    if (m%tag == TAG_HASHMAP .and. allocated(m%map_val)) then
-       call array_map_entries(m%map_val, discard, items)
+    if (m%tag == TAG_HASHMAP .and. has_map(m)) then
+       call val_map_entries(m, discard, items)
     else
        allocate(items(0))
     end if
@@ -3719,15 +3719,14 @@ contains
     integer :: i
     m = array_map_empty()
     if (args(1)%tag == TAG_HASHMAP) then
-       if (allocated(args(1)%map_val)) m = args(1)%map_val
+       if (has_map(args(1))) m = val_map(args(1))
     end if
     do i = 2, size(args)
        next_m = array_map_dissoc(m, args(i)) ! never m = array_map_dissoc(m, ...) -- see make_hashmap
        m = next_m
     end do
     val%tag = TAG_HASHMAP
-    allocate(val%map_val)
-    val%map_val = m
+    call set_map(val, m)
   end function builtin_dissoc
 
   ! (disj s x ...): a new set with those elements removed. Mirrors
@@ -3740,15 +3739,14 @@ contains
     integer :: i
     m = array_map_empty()
     if (args(1)%tag == TAG_SET) then
-       if (allocated(args(1)%map_val)) m = args(1)%map_val
+       if (has_map(args(1))) m = val_map(args(1))
     end if
     do i = 2, size(args)
        next_m = array_map_dissoc(m, args(i)) ! never m = array_map_dissoc(m, ...) -- see make_hashmap
        m = next_m
     end do
     val%tag = TAG_SET
-    allocate(val%map_val)
-    val%map_val = m
+    call set_map(val, m)
   end function builtin_disj
 
   ! (str x ...): each arg's non-readable ("display") form, concatenated
@@ -3763,7 +3761,7 @@ contains
        line = line // pr_str(args(i), .false.)
     end do
     val%tag = TAG_STRING
-    val%str_val = line
+    call set_str(val, line)
   end function builtin_str
 
   ! (pr-str x ...): each arg's readable form, space-separated, as one
@@ -3790,9 +3788,9 @@ contains
     integer :: i, argn, k, n2
 
     val%tag = TAG_STRING
-    val%str_val = ""
+    call set_str(val, "")
     if (size(args) < 1) return
-    fmt = args(1)%str_val
+    fmt = val_str(args(1))
     n2 = 0
     if (size(args) >= 2) n2 = rt_count(args(2))
     allocate(fargs(n2))
@@ -3807,29 +3805,29 @@ contains
     i = 1
     do while (i <= len(fmt))
        if (fmt(i:i) /= "%" .or. i == len(fmt)) then
-          val%str_val = val%str_val // fmt(i:i)
+          call set_str(val, val_str(val) // fmt(i:i))
           i = i + 1
           cycle
        end if
        select case (fmt(i+1:i+1))
        case ("%")
-          val%str_val = val%str_val // "%"
+          call set_str(val, val_str(val) // "%")
        case ("n")
-          val%str_val = val%str_val // achar(10)
+          call set_str(val, val_str(val) // achar(10))
        case ("s")
           argn = argn + 1
-          if (argn <= n2) val%str_val = val%str_val // pr_str(fargs(argn), .false.)
+          if (argn <= n2) call set_str(val, val_str(val) // pr_str(fargs(argn), .false.))
        case ("d")
           argn = argn + 1
           if (argn <= n2) then
              write(buf, '(I0)') fargs(argn)%int_val
-             val%str_val = val%str_val // trim(buf)
+             call set_str(val, val_str(val) // trim(buf))
           end if
        case ("x")
           argn = argn + 1
           if (argn <= n2) then
              write(buf, '(Z0)') fargs(argn)%int_val
-             val%str_val = val%str_val // to_lower(trim(buf))
+             call set_str(val, val_str(val) // to_lower(trim(buf)))
           end if
        case default
           call eval_error("format: unsupported conversion %" // fmt(i+1:i+1))
@@ -3852,36 +3850,36 @@ contains
     integer :: i
 
     src = ""
-    if (allocated(v%str_val)) src = v%str_val
+    if (has_str(v)) src = val_str(v)
     val%tag = TAG_STRING
-    val%str_val = ""
+    call set_str(val, "")
     do i = 1, len(src)
        select case (src(i:i))
-       case ("-");  val%str_val = val%str_val // "_"
-       case (":");  val%str_val = val%str_val // "_COLON_"
-       case ("+");  val%str_val = val%str_val // "_PLUS_"
-       case (">");  val%str_val = val%str_val // "_GT_"
-       case ("<");  val%str_val = val%str_val // "_LT_"
-       case ("=");  val%str_val = val%str_val // "_EQ_"
-       case ("~");  val%str_val = val%str_val // "_TILDE_"
-       case ("!");  val%str_val = val%str_val // "_BANG_"
-       case ("@");  val%str_val = val%str_val // "_CIRCA_"
-       case ("#");  val%str_val = val%str_val // "_SHARP_"
-       case ("'");  val%str_val = val%str_val // "_SINGLEQUOTE_"
-       case ('"');  val%str_val = val%str_val // "_DOUBLEQUOTE_"
-       case ("%");  val%str_val = val%str_val // "_PERCENT_"
-       case ("^");  val%str_val = val%str_val // "_CARET_"
-       case ("&");  val%str_val = val%str_val // "_AMPERSAND_"
-       case ("*");  val%str_val = val%str_val // "_STAR_"
-       case ("|");  val%str_val = val%str_val // "_BAR_"
-       case ("{");  val%str_val = val%str_val // "_LBRACE_"
-       case ("}");  val%str_val = val%str_val // "_RBRACE_"
-       case ("[");  val%str_val = val%str_val // "_LBRACK_"
-       case ("]");  val%str_val = val%str_val // "_RBRACK_"
-       case ("/");  val%str_val = val%str_val // "_SLASH_"
-       case (achar(92)); val%str_val = val%str_val // "_BSLASH_"
-       case ("?");  val%str_val = val%str_val // "_QMARK_"
-       case default; val%str_val = val%str_val // src(i:i)
+       case ("-");  call set_str(val, val_str(val) // "_")
+       case (":");  call set_str(val, val_str(val) // "_COLON_")
+       case ("+");  call set_str(val, val_str(val) // "_PLUS_")
+       case (">");  call set_str(val, val_str(val) // "_GT_")
+       case ("<");  call set_str(val, val_str(val) // "_LT_")
+       case ("=");  call set_str(val, val_str(val) // "_EQ_")
+       case ("~");  call set_str(val, val_str(val) // "_TILDE_")
+       case ("!");  call set_str(val, val_str(val) // "_BANG_")
+       case ("@");  call set_str(val, val_str(val) // "_CIRCA_")
+       case ("#");  call set_str(val, val_str(val) // "_SHARP_")
+       case ("'");  call set_str(val, val_str(val) // "_SINGLEQUOTE_")
+       case ('"');  call set_str(val, val_str(val) // "_DOUBLEQUOTE_")
+       case ("%");  call set_str(val, val_str(val) // "_PERCENT_")
+       case ("^");  call set_str(val, val_str(val) // "_CARET_")
+       case ("&");  call set_str(val, val_str(val) // "_AMPERSAND_")
+       case ("*");  call set_str(val, val_str(val) // "_STAR_")
+       case ("|");  call set_str(val, val_str(val) // "_BAR_")
+       case ("{");  call set_str(val, val_str(val) // "_LBRACE_")
+       case ("}");  call set_str(val, val_str(val) // "_RBRACE_")
+       case ("[");  call set_str(val, val_str(val) // "_LBRACK_")
+       case ("]");  call set_str(val, val_str(val) // "_RBRACK_")
+       case ("/");  call set_str(val, val_str(val) // "_SLASH_")
+       case (achar(92)); call set_str(val, val_str(val) // "_BSLASH_")
+       case ("?");  call set_str(val, val_str(val) // "_QMARK_")
+       case default; call set_str(val, val_str(val) // src(i:i))
        end select
     end do
   end function builtin_munge
@@ -3906,25 +3904,25 @@ contains
     val%tag = TAG_KEYWORD
     select case (v%tag)
     case (TAG_NIL);            val%tag = TAG_NIL ! (class nil) is nil in real Clojure too
-    case (TAG_BOOL);           val%str_val = "Boolean"
-    case (TAG_INT);            val%str_val = "Long"
-    case (TAG_REAL);           val%str_val = "Double"
-    case (TAG_STRING);         val%str_val = "String"
-    case (TAG_CHAR);           val%str_val = "Character"
-    case (TAG_SYMBOL);         val%str_val = "clojure.lang.Symbol"
-    case (TAG_KEYWORD);        val%str_val = "clojure.lang.Keyword"
-    case (TAG_LIST);           val%str_val = "clojure.lang.PersistentList"
-    case (TAG_VECTOR);         val%str_val = "clojure.lang.PersistentVector"
-    case (TAG_HASHMAP);        val%str_val = "clojure.lang.PersistentHashMap"
-    case (TAG_SET);            val%str_val = "clojure.lang.PersistentHashSet"
-    case (TAG_LAZYSEQ);        val%str_val = "clojure.lang.LazySeq"
-    case (TAG_VAR);            val%str_val = "clojure.lang.Var"
-    case (TAG_ATOM);           val%str_val = "clojure.lang.Atom"
-    case (TAG_REDUCED);        val%str_val = "clojure.lang.Reduced"
-    case (TAG_MULTIFN);        val%str_val = "clojure.lang.MultiFn"
-    case (TAG_ARRAY);          val%str_val = "clotran.native." // array_kind_name(v) // "-array"
-    case (TAG_STRING_BUILDER); val%str_val = "java.io.StringWriter"
-    case default;              val%str_val = "clojure.lang.AFn"
+    case (TAG_BOOL);           call set_str(val, "Boolean")
+    case (TAG_INT);            call set_str(val, "Long")
+    case (TAG_REAL);           call set_str(val, "Double")
+    case (TAG_STRING);         call set_str(val, "String")
+    case (TAG_CHAR);           call set_str(val, "Character")
+    case (TAG_SYMBOL);         call set_str(val, "clojure.lang.Symbol")
+    case (TAG_KEYWORD);        call set_str(val, "clojure.lang.Keyword")
+    case (TAG_LIST);           call set_str(val, "clojure.lang.PersistentList")
+    case (TAG_VECTOR);         call set_str(val, "clojure.lang.PersistentVector")
+    case (TAG_HASHMAP);        call set_str(val, "clojure.lang.PersistentHashMap")
+    case (TAG_SET);            call set_str(val, "clojure.lang.PersistentHashSet")
+    case (TAG_LAZYSEQ);        call set_str(val, "clojure.lang.LazySeq")
+    case (TAG_VAR);            call set_str(val, "clojure.lang.Var")
+    case (TAG_ATOM);           call set_str(val, "clojure.lang.Atom")
+    case (TAG_REDUCED);        call set_str(val, "clojure.lang.Reduced")
+    case (TAG_MULTIFN);        call set_str(val, "clojure.lang.MultiFn")
+    case (TAG_ARRAY);          call set_str(val, "clotran.native." // array_kind_name(v) // "-array")
+    case (TAG_STRING_BUILDER); call set_str(val, "java.io.StringWriter")
+    case default;              call set_str(val, "clojure.lang.AFn")
     end select
   end function builtin_class
 
@@ -3939,7 +3937,7 @@ contains
        line = line // pr_str(args(i), .true.)
     end do
     val%tag = TAG_STRING
-    val%str_val = line
+    call set_str(val, line)
   end function builtin_pr_str
 
   ! (println x ...): like prn, but non-readable ("display") form.
@@ -4052,15 +4050,14 @@ contains
   function empty_map() result(v)
     type(cons_value) :: v
     v%tag = TAG_HASHMAP
-    allocate(v%map_val)
-    v%map_val = array_map_empty()
+    call set_map(v, array_map_empty())
   end function empty_map
 
   function mk_keyword(name) result(v)
     character(len=*), intent(in) :: name
     type(cons_value) :: v
     v%tag = TAG_KEYWORD
-    v%str_val = name
+    call set_str(v, name)
   end function mk_keyword
 
   ! Never m = array_map_assoc(m, ...) in place -- see make_hashmap.
@@ -4068,10 +4065,9 @@ contains
     type(cons_value), intent(in) :: m, k, v
     type(cons_value) :: out
     type(array_map_t) :: next_m
-    next_m = array_map_assoc(m%map_val, k, v)
+    next_m = array_map_assoc(val_map(m), k, v)
     out%tag = TAG_HASHMAP
-    allocate(out%map_val)
-    out%map_val = next_m
+    call set_map(out, next_m)
   end function multifn_assoc
 
   function multifn_get(mf, field) result(val)
@@ -4102,7 +4098,7 @@ contains
     dv = apply_fn(multifn_get(mf, "dispatch"), args)
     if (has_error) return
     table = multifn_get(mf, "methods")
-    found = array_map_contains(table%map_val, dv)
+    found = val_map_contains(table, dv)
     if (found) then
        method = rt_get(table, dv)
     else
@@ -4111,7 +4107,7 @@ contains
     end if
     if (.not. found) then
        dflt = multifn_get(mf, "default")
-       if (array_map_contains(table%map_val, dflt)) then
+       if (val_map_contains(table, dflt)) then
           method = rt_get(table, dflt)
        else
           call eval_error("No method in multimethod for dispatch value: " // pr_str(dv))
@@ -4144,8 +4140,8 @@ contains
     integer :: i
 
     found = .false.
-    if (.not. allocated(table%map_val)) return
-    call array_map_entries(table%map_val, keys, vals)
+    if (.not. has_map(table)) return
+    call val_map_entries(table, keys, vals)
     do i = 1, size(keys)
        if (.not. call_isa(dv, keys(i))) cycle
        if (has_error) return
@@ -4203,10 +4199,10 @@ contains
     yes = .false.
     table = multifn_get(mf, "prefers")
     if (table%tag == TAG_HASHMAP) then
-       if (array_map_contains(table%map_val, x)) then
+       if (val_map_contains(table, x)) then
           over = rt_get(table, x)
           if (over%tag == TAG_SET) then
-             yes = array_map_contains(over%map_val, y)
+             yes = val_map_contains(over, y)
              if (yes) return
           end if
        end if
@@ -4247,8 +4243,8 @@ contains
     type(cons_value) :: val
     logical :: found
 
-    found = ((m%tag == TAG_HASHMAP .or. m%tag == TAG_SET) .and. allocated(m%map_val))
-    if (found) found = array_map_contains(m%map_val, key)
+    found = ((m%tag == TAG_HASHMAP .or. m%tag == TAG_SET) .and. has_map(m))
+    if (found) found = val_map_contains(m, key)
     if (found) then
        val = rt_get(m, key)
     else if (size(default_arg) >= 1) then
@@ -4309,18 +4305,18 @@ contains
        ! clojure.lang.Namespace/find -- a namespace is represented by
        ! its own name symbol here (there's no first-class Namespace
        ! value; *ns* is a symbol too, see Namespace.f90).
-       if (ns_exists(args(1)%str_val)) then
+       if (ns_exists(val_str(args(1)))) then
           val%tag = TAG_SYMBOL
-          val%str_val = args(1)%str_val
+          call set_str(val, val_str(args(1)))
        else
           val%tag = TAG_NIL
        end if
     case ("create-ns-sym")
        block
          type(ns_ref) :: made
-         made = ns_find_or_create(args(1)%str_val)
+         made = ns_find_or_create(val_str(args(1)))
          val%tag = TAG_SYMBOL
-         val%str_val = args(1)%str_val
+         call set_str(val, val_str(args(1)))
        end block
     case ("all-ns-syms")
        block
@@ -4331,7 +4327,7 @@ contains
          allocate(syms(size(names)))
          do k = 1, size(names)
             syms(k)%tag = TAG_SYMBOL
-            syms(k)%str_val = trim(names(k))
+            call set_str(syms(k), trim(names(k)))
          end do
          val = make_list(syms)
        end block
@@ -4454,7 +4450,7 @@ contains
        end block
     case ("array-kind")
        val%tag = TAG_KEYWORD
-       val%str_val = array_kind_name(args(1))
+       call set_str(val, array_kind_name(args(1)))
     case ("array?")
        val%tag = TAG_BOOL
        val%bool_val = array_is(args(1))
@@ -4604,7 +4600,7 @@ contains
        val%tag = TAG_BOOL
        val%bool_val = .false.
        if (args(1)%tag == TAG_KEYWORD) then
-          select case (args(1)%str_val)
+          select case (val_str(args(1)))
           case ("clojure.lang.Symbol")
              val%bool_val = (args(2)%tag == TAG_SYMBOL)
           case ("clojure.lang.Keyword")
@@ -4662,7 +4658,7 @@ contains
              val%bool_val = (args(2)%tag == TAG_BUILTIN)
              if (args(2)%tag == TAG_FN) then
                 val%bool_val = .true.
-                if (allocated(args(2)%fn_val)) val%bool_val = .not. args(2)%fn_val%is_macro
+                if (has_fn(args(2))) val%bool_val = .not. fn_is_macro(args(2))
              end if
           case ("clojure.lang.IFn")
              ! Everything callable, matching real Clojure: fns, and the
@@ -4693,10 +4689,10 @@ contains
              ! into a hard failure. Anything that doesn't even look
              ! like a class name is still a real missing entry, so it
              ! still errors.
-             if (names_a_class(args(1)%str_val)) then
+             if (names_a_class(val_str(args(1)))) then
                 val%bool_val = .false.
              else
-                call eval_error("instance?: unknown pseudo-class '" // args(1)%str_val // "'")
+                call eval_error("instance?: unknown pseudo-class '" // val_str(args(1)) // "'")
              end if
           end select
        else
@@ -4716,12 +4712,12 @@ contains
        val%tag = TAG_SYMBOL
        if (size(args) >= 2) then
           if (args(1)%tag == TAG_NIL) then
-             val%str_val = args(2)%str_val
+             call set_str(val, val_str(args(2)))
           else
-             val%str_val = args(1)%str_val // "/" // args(2)%str_val
+             call set_str(val, val_str(args(1)) // "/" // val_str(args(2)))
           end if
        else
-          val%str_val = args(1)%str_val
+          call set_str(val, val_str(args(1)))
        end if
     case ("keyword")
        ! (keyword name) and (keyword ns name) -- real Clojure has both,
@@ -4731,15 +4727,15 @@ contains
        if (size(args) >= 2) then
           val%tag = TAG_KEYWORD
           if (args(1)%tag == TAG_NIL) then
-             val%str_val = args(2)%str_val
+             call set_str(val, val_str(args(2)))
           else
-             val%str_val = args(1)%str_val // "/" // args(2)%str_val
+             call set_str(val, val_str(args(1)) // "/" // val_str(args(2)))
           end if
        else if (args(1)%tag == TAG_KEYWORD) then
           val = args(1)
        else
           val%tag = TAG_KEYWORD
-          val%str_val = args(1)%str_val
+          call set_str(val, val_str(args(1)))
        end if
     case ("hash-map")
        val = make_hashmap(args)
@@ -4754,7 +4750,7 @@ contains
        val%tag = TAG_BOOL
        val%bool_val = .false.
        if (args(1)%tag == TAG_HASHMAP .or. args(1)%tag == TAG_SET) then
-          if (allocated(args(1)%map_val)) val%bool_val = array_map_contains(args(1)%map_val, args(2))
+          if (has_map(args(1))) val%bool_val = val_map_contains(args(1), args(2))
        end if
     case ("keys")
        val = builtin_keys(args(1))
@@ -4802,8 +4798,7 @@ contains
             m2 = next2
          end do
          val%tag = TAG_HASHMAP
-         allocate(val%map_val)
-         val%map_val = m2
+         call set_map(val, m2)
        end block
     case ("find-var")
        ! clojure.lang.Var/find: the Var a FULLY QUALIFIED symbol names,
@@ -4813,7 +4808,7 @@ contains
          character(len=:), allocatable :: qualified, owner3
          integer :: slash
          val%tag = TAG_NIL
-         qualified = args(1)%str_val
+         qualified = val_str(args(1))
          slash = index(qualified, "/", back=.true.)
          if (slash > 1) then
             if (ns_resolve_var(ns_find_or_create(qualified(1:slash - 1)), &
@@ -4829,7 +4824,7 @@ contains
          type(cons_value) :: existing
          character(len=:), allocatable :: nsname, vname
          nsname = pr_str(args(1), .false.)
-         vname = args(2)%str_val
+         vname = val_str(args(2))
          if (.not. ns_get_own_var(ns_find_or_create(nsname), vname, existing)) then
             call ns_intern(ns_find_or_create(nsname), vname, nilv_const())
             if (.not. ns_get_own_var(ns_find_or_create(nsname), vname, existing)) then
@@ -4846,8 +4841,8 @@ contains
        val%tag = TAG_NIL
        if (size(args) >= 2) then
           if (args(1)%tag == TAG_HASHMAP .or. args(1)%tag == TAG_SET) then
-             if (allocated(args(1)%map_val)) then
-                if (array_map_contains(args(1)%map_val, args(2))) &
+             if (has_map(args(1))) then
+                if (val_map_contains(args(1), args(2))) &
                      val = make_vector([args(2), rt_get(args(1), args(2))])
              end if
           end if
@@ -4863,7 +4858,7 @@ contains
          val%tag = TAG_NIL
          if (size(args) >= 2) then
             if (ns_resolve_var(ns_find_or_create(pr_str(args(1), .false.)), &
-                 args(2)%str_val, found_var, owner2)) val = found_var
+                 val_str(args(2)), found_var, owner2)) val = found_var
          end if
        end block
     case ("nan?")
@@ -4876,7 +4871,7 @@ contains
        ! bootstrap's own loads). clojure.lang.RT/load is defined on top
        ! of this in clotran.clj.
        val%tag = TAG_STRING
-       val%str_val = exe_relative_path("src/clj/" // args(1)%str_val // ".clj")
+       call set_str(val, exe_relative_path("src/clj/" // val_str(args(1)) // ".clj"))
     case ("pr-str")
        val = builtin_pr_str(args)
     case ("println")
@@ -4891,13 +4886,13 @@ contains
        val%tag = TAG_BOOL
        val%bool_val = (args(1)%tag == TAG_BUILTIN)
        if (args(1)%tag == TAG_FN) then
-          if (allocated(args(1)%fn_val)) val%bool_val = .not. args(1)%fn_val%is_macro
+          if (has_fn(args(1))) val%bool_val = .not. fn_is_macro(args(1))
        end if
     case ("macro?")
        val%tag = TAG_BOOL
        val%bool_val = .false.
        if (args(1)%tag == TAG_FN) then
-          if (allocated(args(1)%fn_val)) val%bool_val = args(1)%fn_val%is_macro
+          if (has_fn(args(1))) val%bool_val = fn_is_macro(args(1))
        end if
     case ("seq")
        val = rt_seq(args(1))
@@ -4933,7 +4928,7 @@ contains
                   block
                     type(cons_value) :: fv
                     fv%tag = TAG_STRING
-                    fv%str_val = src_file_name(ff)
+                    call set_str(fv, src_file_name(ff))
                     m = multifn_assoc(m, mk_keyword("file"), fv)
                   end block
                end if
@@ -4971,7 +4966,7 @@ contains
     type(cons_value) :: val
     character(len=:), allocatable :: err
     logical :: ok
-    ok = read_str(args(1)%str_val, val, err)
+    ok = read_str(val_str(args(1)), val, err)
     if (.not. ok .and. err /= "empty input") call reader_raised_error(err)
   end function builtin_read_string
 
@@ -4984,10 +4979,10 @@ contains
     integer(kind=8) :: fsize
     character(len=:), allocatable :: contents
 
-    open(newunit=unit, file=args(1)%str_val, access='stream', form='unformatted', &
+    open(newunit=unit, file=val_str(args(1)), access='stream', form='unformatted', &
          status='old', action='read', iostat=ios)
     if (ios /= 0) then
-       call eval_error("slurp: cannot open " // args(1)%str_val)
+       call eval_error("slurp: cannot open " // val_str(args(1)))
        return
     end if
     inquire(unit=unit, size=fsize)
@@ -4995,7 +4990,7 @@ contains
     if (fsize > 0) read(unit) contents
     close(unit)
     val%tag = TAG_STRING
-    val%str_val = contents
+    call set_str(val, contents)
   end function builtin_slurp
 
   ! (readline prompt): writes prompt (no newline), reads one line from
@@ -5009,11 +5004,11 @@ contains
     character(len=:), allocatable :: line
     logical :: at_eof
 
-    write(*, "(A)", advance='no') args(1)%str_val
+    write(*, "(A)", advance='no') val_str(args(1))
     call sys_readline(5, line, at_eof)
     if (at_eof) return ! nil
     val%tag = TAG_STRING
-    val%str_val = line
+    call set_str(val, line)
   end function builtin_readline
 
   ! (swap! a f & args): resets a to (f @a & args), returns the new value.
@@ -5043,8 +5038,8 @@ contains
     integer :: i, n, old_n
 
     val%tag = TAG_NIL
-    if (.not. allocated(m%map_val)) return
-    call array_map_entries(m%map_val, keys, vals)
+    if (.not. has_map(m)) return
+    call val_map_entries(m, keys, vals)
     n = size(keys)
     do i = 1, n
        call var_dyn_push(keys(i), vals(i))
@@ -5140,12 +5135,12 @@ contains
     logical :: named, multi
     integer :: n_clauses, i
 
-    rest = list_rest(ast%list_val)
+    rest = val_lst_rest(ast)
     second = list_first(rest)
     named = (second%tag == TAG_SYMBOL)
 
     val%tag = TAG_FN
-    allocate(val%fn_val)
+    call new_fn(val)
     fn_env = env_new(env)
     if (named) then
        name = second
@@ -5164,14 +5159,14 @@ contains
     if (clause%tag == TAG_LIST) then
        block
          type(cons_value) :: inner_first
-         inner_first = list_first(clause%list_val)
+         inner_first = val_lst_first(clause)
          multi = (inner_first%tag == TAG_VECTOR .or. inner_first%tag == TAG_LIST)
        end block
     end if
     if (multi) then
        n_clauses = list_count(rest)
-       val%fn_val%params = list_first(clause%list_val)
-       val%fn_val%body = wrap_body(list_rest(clause%list_val))
+       call set_fn_params(val, val_lst_first(clause))
+       call set_fn_body(val, wrap_body(val_lst_rest(clause)))
        if (n_clauses > 1) then
           allocate(val%fn_val%extra)
           allocate(val%fn_val%extra%ptr)
@@ -5182,15 +5177,15 @@ contains
           clauses = list_rest(rest)
           do i = 1, n_clauses - 1
              clause = list_first(clauses)
-             val%fn_val%extra%ptr%params(i) = list_first(clause%list_val)
-             val%fn_val%extra%ptr%bodies(i) = wrap_body(list_rest(clause%list_val))
+             val%fn_val%extra%ptr%params(i) = val_lst_first(clause)
+             val%fn_val%extra%ptr%bodies(i) = wrap_body(val_lst_rest(clause))
              clauses = list_rest(clauses)
           end do
        end if
     else
-       val%fn_val%params = list_first(rest)
+       call set_fn_params(val, list_first(rest))
        body_forms = list_rest(rest)
-       val%fn_val%body = wrap_body(body_forms)
+       call set_fn_body(val, wrap_body(body_forms))
     end if
 
     val%fn_val%env = fn_env
@@ -5202,7 +5197,7 @@ contains
     call env_set_ns(fn_env, defining_ns_index(env))
     if (named) call env_set(fn_env, name, val)
     recur_sym%tag = TAG_SYMBOL
-    recur_sym%str_val = "recur"
+    call set_str(recur_sym, "recur")
     call env_set(fn_env, recur_sym, val)
   end function eval_fn
 
@@ -5221,7 +5216,7 @@ contains
     n = list_count(forms)
     allocate(items(n + 1))
     do_sym%tag = TAG_SYMBOL
-    do_sym%str_val = "do"
+    call set_str(do_sym, "do")
     items(1) = do_sym
     do i = 1, n
        items(i + 1) = list_first(forms)
@@ -5255,19 +5250,19 @@ contains
     type(cons_value) :: val
     type(cons_value) :: sym
 
-    sym = list_first(list_rest(ast%list_val))
+    sym = list_first(val_lst_rest(ast))
     block
       type(cons_value) :: frozen
       real :: t0, t1
       call cpu_time(t0)
-      frozen = pre_expand(list_first(list_rest(list_rest(ast%list_val))))
+      frozen = pre_expand(list_first(list_rest(val_lst_rest(ast))))
       call cpu_time(t1)
       pre_expand_seconds = pre_expand_seconds + (t1 - t0)
       val = eval_form(frozen, env)
     end block
     if (has_error) return
     call apply_macro_metadata(sym, val)
-    call ns_intern(ns_current(), sym%str_val, val)
+    call ns_intern(ns_current(), val_str(sym), val)
     ! The name symbol's metadata becomes the VAR's metadata -- real
     ! Clojure's def does exactly this, and a surprising amount rides on
     ! it: defn's :arglists/:doc, ^:private, ^:dynamic, and
@@ -5277,7 +5272,7 @@ contains
        block
          type(cons_value) :: the_var, raw_meta, meta_map
          raw_meta = get_meta(sym)
-         if (ns_get_own_var(ns_current(), sym%str_val, the_var)) then
+         if (ns_get_own_var(ns_current(), val_str(sym), the_var)) then
             ! EVALUATED, not stored raw: real Clojure's compiler
             ! evaluates a def'd symbol's metadata map. deftest's
             ! :test value is a syntax-quoted (fn [] ...) form, and
@@ -5313,18 +5308,18 @@ contains
     type(cons_value) :: macro_key, macro_val, m
 
     if (val%tag /= TAG_FN) return
-    if (.not. allocated(val%fn_val)) return
+    if (.not. has_fn(val)) return
     m = get_meta(sym)
     if (m%tag /= TAG_HASHMAP) return
-    if (.not. allocated(m%map_val)) return
+    if (.not. has_map(m)) return
 
     macro_key%tag = TAG_KEYWORD
-    macro_key%str_val = "macro"
-    if (.not. array_map_contains(m%map_val, macro_key)) return
+    call set_str(macro_key, "macro")
+    if (.not. val_map_contains(m, macro_key)) return
     macro_val = rt_get(m, macro_key)
     if (macro_val%tag == TAG_NIL) return
     if (macro_val%tag == TAG_BOOL .and. .not. macro_val%bool_val) return
-    val%fn_val%is_macro = .true.
+    call set_fn_macro(val, .true.)
   end subroutine apply_macro_metadata
 
   ! let*'s bindings may be a list or a vector.
@@ -5333,7 +5328,7 @@ contains
     integer :: n
     n = 0
     if (b%tag == TAG_LIST) then
-       if (allocated(b%list_val)) n = list_count(b%list_val)
+       if (has_list(b)) n = val_lst_count(b)
     else if (b%tag == TAG_VECTOR) then
        n = val_vec_count(b)
     end if
@@ -5348,7 +5343,7 @@ contains
     if (b%tag == TAG_VECTOR) then
        val = val_vec_nth(b, i)
     else
-       l = b%list_val
+       l = val_lst(b)
        do k = 1, i
           l = list_rest(l)
        end do

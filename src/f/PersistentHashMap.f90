@@ -70,8 +70,8 @@ contains
        bits8 = transfer(v%real_val, bits8)
        h = mix32(int(ieor(bits8, ishft(bits8, -32)), kind=4))
     case (TAG_STRING, TAG_SYMBOL, TAG_KEYWORD, TAG_CHAR)
-       if (allocated(v%str_val)) then
-          h = mix32(ieor(fnv1a(v%str_val), v%tag))
+       if (has_str(v)) then
+          h = mix32(ieor(fnv1a(val_str(v)), v%tag))
        else
           h = mix32(v%tag)
        end if

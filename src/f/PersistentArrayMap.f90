@@ -23,6 +23,8 @@ module PersistentArrayMap
 
   public :: array_map_empty, array_map_count, array_map_get, array_map_assoc
   public :: array_map_contains, array_map_dissoc, array_map_entries
+  public :: has_map, val_map, set_map, val_map_count, val_map_get, &
+       val_map_contains, val_map_entries
 
 contains
 
@@ -229,5 +231,62 @@ contains
        allocate(keys(0), vals(0))
     end if
   end subroutine array_map_entries
+
+  ! ---- cons_value-level accessors --------------------------------
+  ! Same arrangement as PersistentVector's and PersistentList's: here
+  ! rather than Values.f90, because Values cannot use this module --
+  ! the dependency runs one way. Each absorbs the allocated() guard its
+  ! callers repeated, so a value holding no map counts 0, contains
+  ! nothing, and yields no entries.
+
+  function has_map(v) result(yes)
+    type(cons_value), intent(in) :: v
+    logical :: yes
+    yes = allocated(v%map_val)
+  end function has_map
+
+  function val_map(v) result(m)
+    type(cons_value), intent(in) :: v
+    type(array_map_t) :: m
+    m = array_map_empty()
+    if (allocated(v%map_val)) m = v%map_val
+  end function val_map
+
+  subroutine set_map(v, m)
+    type(cons_value), intent(inout) :: v
+    type(array_map_t), intent(in) :: m
+    if (.not. allocated(v%map_val)) allocate(v%map_val)
+    v%map_val = m
+  end subroutine set_map
+
+  function val_map_count(v) result(n)
+    type(cons_value), intent(in) :: v
+    integer :: n
+    n = 0
+    if (allocated(v%map_val)) n = array_map_count(v%map_val)
+  end function val_map_count
+
+  function val_map_get(v, k) result(x)
+    type(cons_value), intent(in) :: v, k
+    type(cons_value) :: x
+    if (allocated(v%map_val)) x = array_map_get(v%map_val, k)
+  end function val_map_get
+
+  function val_map_contains(v, k) result(yes)
+    type(cons_value), intent(in) :: v, k
+    logical :: yes
+    yes = .false.
+    if (allocated(v%map_val)) yes = array_map_contains(v%map_val, k)
+  end function val_map_contains
+
+  subroutine val_map_entries(v, keys, vals)
+    type(cons_value), intent(in) :: v
+    type(cons_value), allocatable, intent(out) :: keys(:), vals(:)
+    if (allocated(v%map_val)) then
+       call array_map_entries(v%map_val, keys, vals)
+    else
+       allocate(keys(0), vals(0))
+    end if
+  end subroutine val_map_entries
 
 end module PersistentArrayMap

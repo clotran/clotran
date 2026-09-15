@@ -5,10 +5,12 @@
 ! read_str() resets that state on entry.
 module LispReader
   use values
-  use PersistentList, only: list_of, list_first => first, list_rest => rest, list_count
+  use PersistentList, only: list_of, list_first => first, list_rest => rest, list_count, &
+       has_list, val_lst, val_lst_first, val_lst_rest, val_lst_count, set_list
   use PersistentVector, only: vector_empty, vector_conj, vector_count, vector_nth, &
        has_vector, val_vec_count, val_vec_nth, set_vector, val_vec_conj, val_vec_assoc
-  use PersistentArrayMap, only: array_map_empty, array_map_assoc
+  use PersistentArrayMap, only: array_map_empty, array_map_assoc, &
+       has_map, val_map, set_map, val_map_count, val_map_get, val_map_contains, val_map_entries
   implicit none
   private
 
@@ -311,19 +313,20 @@ contains
     type(cons_value), intent(in) :: v
     integer, intent(out) :: line, col, file_idx
     integer, intent(out), optional :: end_line, end_col
+    type(cons_cell), pointer :: cell
     line = 0
     col = 0
     file_idx = 0
     if (present(end_line)) end_line = 0
     if (present(end_col)) end_col = 0
     if (v%tag /= TAG_LIST) return
-    if (.not. allocated(v%list_val)) return
-    if (.not. associated(v%list_val%ptr)) return
-    line = v%list_val%ptr%src_line
-    col = v%list_val%ptr%src_col
-    file_idx = v%list_val%ptr%src_file
-    if (present(end_line)) end_line = v%list_val%ptr%src_end_line
-    if (present(end_col)) end_col = v%list_val%ptr%src_end_col
+    cell => list_cell(v)
+    if (.not. associated(cell)) return
+    line = cell%src_line
+    col = cell%src_col
+    file_idx = cell%src_file
+    if (present(end_line)) end_line = cell%src_end_line
+    if (present(end_col)) end_col = cell%src_end_col
   end subroutine form_position
 
   ! Registers a source file and returns its index, so a cons_cell can
@@ -369,12 +372,12 @@ contains
     type(cons_value), intent(in) :: from
     type(cons_value), intent(inout) :: to
     integer :: line, col, file_idx, end_line, end_col
+    type(cons_cell), pointer :: cell
     call form_position(from, line, col, file_idx, end_line, end_col)
     if (line == 0) return
     call stamp_position(to, line, col, end_line, end_col)
-    if (allocated(to%list_val)) then
-       if (associated(to%list_val%ptr)) to%list_val%ptr%src_file = file_idx
-    end if
+    cell => list_cell(to)
+    if (associated(cell)) cell%src_file = file_idx
   end subroutine carry_position
 
   ! Records where a form was read, on the list's own head cell.
@@ -382,13 +385,14 @@ contains
     type(cons_value), intent(inout) :: v
     integer, intent(in) :: line, col
     integer, intent(in), optional :: end_line, end_col
-    if (.not. allocated(v%list_val)) return
-    if (.not. associated(v%list_val%ptr)) return
-    v%list_val%ptr%src_line = line
-    v%list_val%ptr%src_col = col
-    v%list_val%ptr%src_file = current_file
-    if (present(end_line)) v%list_val%ptr%src_end_line = end_line
-    if (present(end_col)) v%list_val%ptr%src_end_col = end_col
+    type(cons_cell), pointer :: cell
+    cell => list_cell(v)
+    if (.not. associated(cell)) return
+    cell%src_line = line
+    cell%src_col = col
+    cell%src_file = current_file
+    if (present(end_line)) cell%src_end_line = end_line
+    if (present(end_col)) cell%src_end_col = end_col
   end subroutine stamp_position
 
   ! ---- cons_value constructors ----
@@ -397,21 +401,21 @@ contains
     character(len=*), intent(in) :: name
     type(cons_value) :: v
     v%tag = TAG_SYMBOL
-    v%str_val = name
+    call set_str(v, name)
   end function mk_symbol
 
   function mk_keyword(name) result(v)
     character(len=*), intent(in) :: name
     type(cons_value) :: v
     v%tag = TAG_KEYWORD
-    v%str_val = name
+    call set_str(v, name)
   end function mk_keyword
 
   function mk_string(text) result(v)
     character(len=*), intent(in) :: text
     type(cons_value) :: v
     v%tag = TAG_STRING
-    v%str_val = text
+    call set_str(v, text)
   end function mk_string
 
   function mk_int(i) result(v)
@@ -448,23 +452,23 @@ contains
     val%tag = TAG_CHAR
     select case (body)
     case ("newline")
-       val%str_val = achar(10)
+       call set_str(val, achar(10))
     case ("space")
-       val%str_val = " "
+       call set_str(val, " ")
     case ("tab")
-       val%str_val = achar(9)
+       call set_str(val, achar(9))
     case ("return")
-       val%str_val = achar(13)
+       call set_str(val, achar(13))
     case ("formfeed")
-       val%str_val = achar(12)
+       call set_str(val, achar(12))
     case ("backspace")
-       val%str_val = achar(8)
+       call set_str(val, achar(8))
     case default
        if (len(body) /= 1) then
           call reader_error("unsupported character literal: " // tok)
           return
        end if
-       val%str_val = body
+       call set_str(val, body)
     end select
   end function read_char_literal
 
@@ -525,8 +529,7 @@ contains
     if (has_error) return
     items(1) = mk_symbol(sym_name)
     val%tag = TAG_LIST
-    allocate(val%list_val)
-    val%list_val = list_of(items)
+    call set_list(val, list_of(items))
   end function read_wrapped
 
   ! "#?(:key1 form1 :key2 form2 ...)" reads as whichever form's key
@@ -569,7 +572,7 @@ contains
     end if
     do i = 1, n, 2
        if (items(i)%tag == TAG_KEYWORD) then
-          if (items(i)%str_val == "cljf" .or. items(i)%str_val == "default") then
+          if (str_is(items(i), "cljf") .or. str_is(items(i), "default")) then
              val = items(i + 1)
              return
           end if
@@ -630,15 +633,13 @@ contains
        val_true%bool_val = .true.
        m = array_map_assoc(array_map_empty(), meta, val_true)
        out%tag = TAG_HASHMAP
-       allocate(out%map_val)
-       out%map_val = m
+       call set_map(out, m)
     case (TAG_SYMBOL, TAG_STRING)
        key%tag = TAG_KEYWORD
-       key%str_val = "tag"
+       call set_str(key, "tag")
        m = array_map_assoc(array_map_empty(), key, meta)
        out%tag = TAG_HASHMAP
-       allocate(out%map_val)
-       out%map_val = m
+       call set_map(out, m)
     case default
        call reader_error("Metadata must be Symbol, Keyword, String or Map")
     end select
@@ -710,8 +711,7 @@ contains
     call read_items(tokens, pos, ")", items, n)
     if (has_error) return
     val%tag = TAG_LIST
-    allocate(val%list_val)
-    val%list_val = list_of(items(1:n))
+    call set_list(val, list_of(items(1:n)))
     ! read_items leaves pos just past the ')', so that token is the end.
     if (pos >= 2) then
        call stamp_position(val, open_line, open_col, tokens(pos - 1)%line, &
@@ -760,8 +760,7 @@ contains
        m = next_m
     end do
     val%tag = TAG_HASHMAP
-    allocate(val%map_val)
-    val%map_val = m
+    call set_map(val, m)
   end function read_hashmap
 
   ! "#{a b c}" -- each element mapped to itself, same underlying
@@ -788,8 +787,7 @@ contains
        m = next_m
     end do
     val%tag = TAG_SET
-    allocate(val%map_val)
-    val%map_val = m
+    call set_map(val, m)
   end function read_hashset
 
   function itoa(i) result(s)
@@ -822,32 +820,38 @@ contains
     select case (v%tag)
     case (TAG_SYMBOL)
        new_v = v
-       if (allocated(v%str_val)) then
-          if (v%str_val == "%") then
-             new_v%str_val = "%1"
+       if (has_str(v)) then
+          if (str_is(v, "%")) then
+             call set_str(new_v, "%1")
              max_n = max(max_n, 1)
-          else if (v%str_val == "%&") then
+          else if (str_is(v, "%&")) then
              has_amp = .true.
-          else if (len(v%str_val) >= 2) then
-             if (v%str_val(1:1) == "%") then
-                read(v%str_val(2:), *, iostat=ios) num
-                if (ios == 0) max_n = max(max_n, num)
+          else if (str_len(v) >= 2) then
+             if (str_sub(v, 1, 1) == "%") then
+                block
+                  ! An internal READ needs a character VARIABLE, not an
+                  ! expression, so the digits land in a local first.
+                  character(len=:), allocatable :: digits
+                  digits = str_sub(v, 2)
+                  read(digits, *, iostat=ios) num
+                  if (ios == 0) max_n = max(max_n, num)
+                end block
              end if
           end if
        end if
     case (TAG_LIST)
        new_v = v
-       if (allocated(v%list_val)) then
-          n = list_count(v%list_val)
+       if (has_list(v)) then
+          n = val_lst_count(v)
           block
             type(cons_value), allocatable :: items(:)
             allocate(items(n))
-            walk = v%list_val
+            walk = val_lst(v)
             do i = 1, n
                items(i) = rewrite_percent_args(list_first(walk), max_n, has_amp)
                walk = list_rest(walk)
             end do
-            new_v%list_val = list_of(items)
+            call set_list(new_v, list_of(items))
           end block
        end if
     case (TAG_VECTOR)
@@ -887,8 +891,7 @@ contains
     call read_items(tokens, pos, ")", items, n)
     if (has_error) return
     body%tag = TAG_LIST
-    allocate(body%list_val)
-    body%list_val = list_of(items(1:n))
+    call set_list(body, list_of(items(1:n)))
 
     max_n = 0
     has_amp = .false.
@@ -897,14 +900,14 @@ contains
     params_vec = vector_empty()
     do i = 1, max_n
        p%tag = TAG_SYMBOL
-       p%str_val = "%" // itoa(i)
+       call set_str(p, "%" // itoa(i))
        params_vec = vector_conj(params_vec, p)
     end do
     if (has_amp) then
        amp_sym%tag = TAG_SYMBOL
-       amp_sym%str_val = "&"
+       call set_str(amp_sym, "&")
        rest_sym%tag = TAG_SYMBOL
-       rest_sym%str_val = "%&"
+       call set_str(rest_sym, "%&")
        params_vec = vector_conj(params_vec, amp_sym)
        params_vec = vector_conj(params_vec, rest_sym)
     end if
@@ -912,14 +915,13 @@ contains
     call set_vector(params, params_vec)
 
     fn_sym%tag = TAG_SYMBOL
-    fn_sym%str_val = "fn*"
+    call set_str(fn_sym, "fn*")
 
     form_items(1) = fn_sym
     form_items(2) = params
     form_items(3) = rewritten_body
     val%tag = TAG_LIST
-    allocate(val%list_val)
-    val%list_val = list_of(form_items)
+    call set_list(val, list_of(form_items))
   end function read_anon_fn
 
   recursive function read_form(tokens, pos) result(val)
@@ -1007,7 +1009,7 @@ contains
                   tlen = len(tokens(pos + 1)%text)
                   raw = tokens(pos + 1)%text(2:tlen - 1)
                   val%tag = TAG_STRING
-                  val%str_val = raw
+                  call set_str(val, raw)
                 end block
                 pos = pos + 2 ! consume '#' and the string token
                 return

@@ -417,6 +417,70 @@ the text. A cache writer needs to exclude them.
         moving it into PersistentVector would need PersistentList,
         which PersistentVector does not use. Left deliberately, and
         small enough for 3c-2 to edit in place.
+  - [x] **3c-1 `str_val`** (375 sites). Three read accessors, not one,
+        because one would be slow: the commonest read is a comparison
+        against a literal in `eval_form`'s dispatch, and routing those
+        through a function returning `character(len=:), allocatable`
+        would allocate and copy a string on the hottest path in the
+        interpreter. So `str_is` compares in place, `str_len` measures,
+        and `val_str` (a copy) is only for callers that genuinely need
+        the text, where a copy was happening anyway. Plus `has_str`,
+        `str_sub`, `set_str`.
+
+        The real prize is not the refactor. Every text accessor treats
+        an unallocated payload as empty instead of reading it, which
+        makes 4a' bug 2 -- a non-short-circuiting `.and.` handing an
+        unallocated `str_val` to a procedure -- **unrepresentable**
+        rather than merely fixed.
+
+        Two Fortran facts worth keeping: neither compiler accepts a
+        substring of a function result (`val_str(v)(1:1)`), hence
+        `str_sub`; and an internal `READ` needs a character *variable*,
+        not an expression, so one call site keeps a local. Also
+        `printer.f90`'s two helpers took `character(len=:),
+        allocatable` purely to cope with an unallocated payload; they
+        are plain `len=*` now.
+  - [x] **3c-1 `list_val`** (158 sites). `has_list`, `val_lst`,
+        `val_lst_first`, `val_lst_rest`, `val_lst_count`, `set_list` in
+        PersistentList.f90 (the one-way dependency again), plus
+        `list_cell` in Values.f90 for the reader's source positions --
+        that one can live in Values because a `cons_cell` is declared
+        there and no list walking is involved.
+
+        **This migration changed 4a'' from intermittent to
+        deterministic**, which is the most useful thing to come out of
+        it. See 4a'' below.
+  - [x] **3c-1 `map_val`** (108 sites). `has_map`, `val_map`,
+        `set_map`, `val_map_count`, `val_map_get`, `val_map_contains`,
+        `val_map_entries` in PersistentArrayMap.f90. The most regular
+        of the six: `allocate`+assign pairs collapse to `set_map`, and
+        `conj`/`assoc` lose their empty-map branches the way the
+        vector ones did.
+  - [x] **3c-1 `fn_val`** (74 sites, ~48 migrated). `has_fn`,
+        `new_fn`, `fn_is_macro`, `set_fn_macro`, `fn_params`,
+        `fn_body`, `set_fn_params`, `set_fn_body` -- field at a time,
+        in Values.f90.
+
+        Field accessors rather than a pointer to the `closure_t`
+        because `fn_val` is ALLOCATABLE, not a pointer: returning a
+        pointer would mean giving the dummy `TARGET` and relying on
+        every actual argument being a target too. They are not, and a
+        pointer to a non-target actual is undefined on return -- which
+        is exactly the bug class 4a'' is about. Not while hunting it.
+
+        **`%env` and the arity clauses (`%extra`) deliberately still
+        name the component.** `env_new(f%fn_val%env)` is in
+        `apply_closure`, the hottest path in the interpreter, and an
+        accessor returning `env_ref` by value would add a refcount bump
+        and a finalize per function call. `list_val` had just
+        demonstrated what extra temporaries do to 4a''; paying that on
+        every call for tidiness is not a trade worth making. 26 sites,
+        all in Eval.f90, for 3c-2 to edit directly.
+
+        **3c-1 is done.** What 3c-2 now has to touch: Values.f90,
+        PersistentVector.f90, PersistentList.f90,
+        PersistentArrayMap.f90, and ~29 residue sites in RT.f90 and
+        Eval.f90 -- against 959 before.
 - [ ] **3d.** Evaluator on the value stack.
 - [ ] **3e.** Retire `FINAL`-based refcounting; `rc_test` becomes a GC
       test. Finalizers survive only on the few heap nodes owning
@@ -519,6 +583,68 @@ the loop cheap before starting on the expensive steps.
       It does not block 3c-1, which is a mechanical refactor with the
       representation unchanged. It is an argument for getting to 3c-2
       and 3e promptly rather than lingering in 4a.
+
+      **Update, after 3c-1.** The migration made this fire much harder
+      on gfortran. Measured over six runs after all six payloads:
+      `multimethods` crashes **every** run, `logic` 2 of 6. gfortran
+      never reaches 163 any more; its best is 161 and its worst 51.
+      flang is unaffected at 163/16/41 every run, and both compilers
+      pass all twelve unit suites.
+
+      So the accessors are correct -- each is assign-then-return,
+      refcount balanced, and the oracle agrees. What changed is that
+      value-level accessors create more temporaries, so more refcount
+      traffic goes through the broken path. A latent bug that fires
+      reliably is more useful than one that fires sometimes, but be
+      clear about the cost: on gfortran this went from unreliable to
+      unusable on `multimethods`.
+
+      With the deterministic repro, two more things are now known.
+      Poisoning a `vec_node` instead of freeing it and checking for the
+      poison on entry proves it exactly:
+
+      - **A `vec_node` is released after it has already been freed**,
+        and the second release arrives through `cons_value_release`'s
+        explicit call, not through finalization. So two `cons_value`s
+        hold a `vec_t` pointing at the same node with only one
+        increment between them: a missing increment, confirmed, not an
+        extra decrement.
+      - **It is not the copy-in/copy-out hazard.** The obvious suspect
+        was `call node_ref_release(v%vector_val%root)` -- an
+        `intent(inout)` actual whose type has a `FINAL` -- nulling a
+        copy while the original stayed pointing at freed memory.
+        Dropping the explicit release and relying on `deallocate`'s
+        cascade changes nothing. Disproved.
+
+      Also ruled out: AddressSanitizer. The gfortran build runs `logic`
+      to completion under ASan with no report at all, because its
+      allocator does not recycle the freed node into the path that
+      trips it. `-fcheck=all` says nothing either -- a dangling pointer
+      is invisible to bounds and recursion checks.
+
+      **Every compiler-mechanism hypothesis is now eliminated.** Each
+      was checked with an isolated probe on BOTH compilers, and all
+      four behave correctly:
+
+      | suspected mechanism | verdict |
+      | --- | --- |
+      | bulk slice assign skipping defined assignment | correct, 4 calls for 4 elements |
+      | array constructor copying a ref without a bump | correct, refcounts balance |
+      | function result of a type whose *component* has the FINAL (`vec_t`'s exact shape) | correct, one finalize of the temp |
+      | copy-in/copy-out on `intent(inout)` with a FINAL | not it -- removing the explicit release changes nothing |
+
+      That matters more than any single one of them: **the bug is in
+      this codebase's own logic, not in a compiler behaviour we
+      misunderstood.** It is findable by reading the code that shares a
+      `vec_t` between two `cons_value`s, and it does not need another
+      compiler experiment.
+
+      Next concrete step for whoever picks this up: the poison
+      instrument is four lines (set `refcount = -424242` instead of
+      `deallocate`, check for it on entry to `node_ref_release`) and
+      fires on the first `logic` run. Add the node's address to the
+      message and record which call site first freed it; with a
+      deterministic repro that identifies the sharing path directly.
 - [ ] **4b. Integer opcodes.** `eval_form` dispatches special forms by
       a cascade of string comparisons: 5.26 ns for ten of them, against
       0.09 ns for an integer `select case`, and there are ~30.

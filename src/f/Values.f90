@@ -467,6 +467,10 @@ module values
   public :: value_equal
   public :: array_node, set_array_node
   public :: has_meta, get_meta, set_meta
+  public :: has_str, str_is, str_len, val_str, str_sub, set_str
+  public :: list_cell
+  public :: has_fn, new_fn, fn_is_macro, set_fn_macro, fn_params, fn_body, &
+       set_fn_params, set_fn_body
   public :: lazy_ptr, new_lazy_node
   public :: atom_ptr, new_atom_node, share_atom
 
@@ -494,6 +498,155 @@ contains
     if (.not. allocated(v%array_val)) return
     node => v%array_val%ptr
   end function array_node
+
+  ! ---- closures ---------------------------------------------------
+  !
+  ! Field-at-a-time rather than a pointer to the closure_t: fn_val is
+  ! ALLOCATABLE, not a pointer, so handing back a pointer to it would
+  ! mean giving the dummy the TARGET attribute and relying on every
+  ! actual argument being a target too. It is not, and a pointer to a
+  ! non-target actual is undefined on return -- exactly the class of
+  ! bug PLAN.md 4a'' is currently about. Not here.
+  !
+  ! %env and the arity clauses (%extra) are deliberately NOT wrapped.
+  ! env_new(f%fn_val%env) is in apply_closure, the hottest path in the
+  ! interpreter, and an accessor returning env_ref by value would add a
+  ! refcount bump and a finalize per call. See PLAN.md 3c-1.
+
+  function has_fn(v) result(yes)
+    type(cons_value), intent(in) :: v
+    logical :: yes
+    yes = allocated(v%fn_val)
+  end function has_fn
+
+  subroutine new_fn(v)
+    type(cons_value), intent(inout) :: v
+    if (.not. allocated(v%fn_val)) allocate(v%fn_val)
+  end subroutine new_fn
+
+  function fn_is_macro(v) result(yes)
+    type(cons_value), intent(in) :: v
+    logical :: yes
+    yes = .false.
+    if (allocated(v%fn_val)) yes = v%fn_val%is_macro
+  end function fn_is_macro
+
+  subroutine set_fn_macro(v, flag)
+    type(cons_value), intent(inout) :: v
+    logical, intent(in) :: flag
+    if (allocated(v%fn_val)) v%fn_val%is_macro = flag
+  end subroutine set_fn_macro
+
+  function fn_params(v) result(p)
+    type(cons_value), intent(in) :: v
+    type(cons_value) :: p
+    if (allocated(v%fn_val)) p = v%fn_val%params
+  end function fn_params
+
+  function fn_body(v) result(b)
+    type(cons_value), intent(in) :: v
+    type(cons_value) :: b
+    if (allocated(v%fn_val)) b = v%fn_val%body
+  end function fn_body
+
+  subroutine set_fn_params(v, p)
+    type(cons_value), intent(inout) :: v
+    type(cons_value), intent(in) :: p
+    call new_fn(v)
+    v%fn_val%params = p
+  end subroutine set_fn_params
+
+  subroutine set_fn_body(v, b)
+    type(cons_value), intent(inout) :: v
+    type(cons_value), intent(in) :: b
+    call new_fn(v)
+    v%fn_val%body = b
+  end subroutine set_fn_body
+
+  ! The cons CELL behind a list value -- null when there is none. Only
+  ! the reader needs this, for the source positions stored on the cell
+  ! (see cons_cell's own comment on why they live there rather than in
+  ! a metadata map). Lives here and not in PersistentList because a
+  ! cons_cell is declared here and no list walking is involved.
+  function list_cell(v) result(cell)
+    type(cons_value), intent(in) :: v
+    type(cons_cell), pointer :: cell
+    cell => null()
+    if (.not. allocated(v%list_val)) return
+    cell => v%list_val%ptr
+  end function list_cell
+
+  ! ---- text ------------------------------------------------------
+  !
+  ! Three accessors rather than one, because one would be slow. The
+  ! commonest read by far is a comparison against a literal
+  ! (`head%str_val == "def"`, ~55 sites, most of them in eval_form's
+  ! dispatch), and routing those through a function returning
+  ! `character(len=:), allocatable` would allocate and copy a string
+  ! on the hottest path in the interpreter. str_is compares in place.
+  ! val_str is for the cases that genuinely need the text -- passing it
+  ! on, concatenating it -- where a copy was happening anyway.
+  !
+  ! All of them treat an unallocated payload as empty rather than
+  ! reading it. That is not a convenience: referencing an unallocated
+  ! allocatable is undefined behaviour, and doing it through a
+  ! non-short-circuiting .and. was a real bug (PLAN.md 4a', bug 2).
+  ! Going through these makes that mistake unrepresentable.
+
+  function has_str(v) result(yes)
+    type(cons_value), intent(in) :: v
+    logical :: yes
+    yes = allocated(v%str_val)
+  end function has_str
+
+  function str_is(v, s) result(yes)
+    type(cons_value), intent(in) :: v
+    character(len=*), intent(in) :: s
+    logical :: yes
+    yes = .false.
+    if (allocated(v%str_val)) yes = (v%str_val == s)
+  end function str_is
+
+  function str_len(v) result(n)
+    type(cons_value), intent(in) :: v
+    integer :: n
+    n = 0
+    if (allocated(v%str_val)) n = len(v%str_val)
+  end function str_len
+
+  function val_str(v) result(s)
+    type(cons_value), intent(in) :: v
+    character(len=:), allocatable :: s
+    if (allocated(v%str_val)) then
+       s = v%str_val
+    else
+       s = ""
+    end if
+  end function val_str
+
+  ! A substring, bounds-checked. `hi` defaults to the end, so
+  ! str_sub(v, 2) is the old str_val(2:). Out of range gives "" rather
+  ! than a runtime error: a substring of text that is not there is
+  ! empty, which is what every call site here already assumed.
+  function str_sub(v, lo, hi) result(s)
+    type(cons_value), intent(in) :: v
+    integer, intent(in) :: lo
+    integer, intent(in), optional :: hi
+    character(len=:), allocatable :: s
+    integer :: h
+    s = ""
+    if (.not. allocated(v%str_val)) return
+    h = len(v%str_val)
+    if (present(hi)) h = hi
+    if (lo < 1 .or. h > len(v%str_val) .or. lo > h) return
+    s = v%str_val(lo:h)
+  end function str_sub
+
+  subroutine set_str(v, s)
+    type(cons_value), intent(inout) :: v
+    character(len=*), intent(in) :: s
+    v%str_val = s
+  end subroutine set_str
 
   ! Unlike array_node and lazy_ptr, this deliberately does NOT check
   ! the tag: the atom box is shared by five of them -- TAG_ATOM,

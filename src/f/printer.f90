@@ -9,7 +9,8 @@
 module printer
   use values
   use RT, only: seq, first, next
-  use PersistentArrayMap, only: array_map_entries
+  use PersistentArrayMap, only: array_map_entries, &
+       has_map, val_map, set_map, val_map_count, val_map_get, val_map_contains, val_map_entries
   use Atom, only: atom_deref
   use NativeArray, only: array_elem_string
   implicit none
@@ -43,20 +44,20 @@ contains
        str = stringify_real(v%real_val)
     case (TAG_STRING)
        if (r) then
-          str = stringify_string(v%str_val)
+          str = stringify_string(val_str(v))
        else
-          str = v%str_val
+          str = val_str(v)
        end if
     case (TAG_CHAR)
        if (r) then
-          str = stringify_char(v%str_val)
+          str = stringify_char(val_str(v))
        else
-          str = v%str_val
+          str = val_str(v)
        end if
     case (TAG_SYMBOL)
-       str = v%str_val
+       str = val_str(v)
     case (TAG_KEYWORD)
-       str = ':' // v%str_val
+       str = ':' // val_str(v)
     case (TAG_LIST)
        str = pr_seq(v, "(", ")", r)
     case (TAG_VECTOR)
@@ -66,10 +67,10 @@ contains
     case (TAG_SET)
        str = pr_hashset(v, r)
     case (TAG_BUILTIN)
-       str = "#<builtin " // v%str_val // ">"
+       str = "#<builtin " // val_str(v) // ">"
     case (TAG_FN)
-       if (allocated(v%fn_val)) then
-          if (v%fn_val%is_macro) then
+       if (has_fn(v)) then
+          if (fn_is_macro(v)) then
              str = "#<macro>"
           else
              str = "#<fn>"
@@ -80,7 +81,7 @@ contains
     case (TAG_ATOM)
        str = "(atom " // pr_str(atom_deref(v), r) // ")"
     case (TAG_VAR)
-       str = "#'" // v%str_val
+       str = "#'" // val_str(v)
     case (TAG_MULTIFN)
        str = "#<multifn>"
     case (TAG_ARRAY)
@@ -91,10 +92,10 @@ contains
        ! What (str sb) has to give back -- with-out-str reads its
        ! StringWriter that way, and a builder's "value" is its text.
        block
-         type(cons_value) :: held ! not atom_deref(v)%str_val -- see NOTES.md
+         type(cons_value) :: held ! not val_str(atom_deref(v)) -- see NOTES.md
          held = atom_deref(v)
          str = ""
-         if (allocated(held%str_val)) str = held%str_val
+         if (has_str(held)) str = val_str(held)
        end block
     case (TAG_REDUCED)
        str = "#<reduced " // pr_str(atom_deref(v), r) // ">"
@@ -117,8 +118,8 @@ contains
     integer :: i
 
     str = "{"
-    if (allocated(v%map_val)) then
-       call array_map_entries(v%map_val, keys, vals)
+    if (has_map(v)) then
+       call val_map_entries(v, keys, vals)
        do i = 1, size(keys)
           if (i > 1) str = str // " "
           ! Two recursive, deferred-length pr_str calls chained into one
@@ -141,8 +142,8 @@ contains
     integer :: i
 
     str = "#{"
-    if (allocated(v%map_val)) then
-       call array_map_entries(v%map_val, keys, discard)
+    if (has_map(v)) then
+       call val_map_entries(v, keys, discard)
        do i = 1, size(keys)
           if (i > 1) str = str // " "
           elem_str = pr_str(keys(i), readable)
@@ -203,11 +204,11 @@ contains
   ! The inverse of the reader's read_char_literal: the named forms
   ! print by name, everything else as the bare character after a '\'.
   function stringify_char(c) result(str)
-    character(len=:), allocatable, intent(in) :: c
+    character(len=*), intent(in) :: c
     character(len=:), allocatable :: str
     character :: ch
 
-    if (.not. allocated(c)) then
+    if (len(c) == 0) then
        str = achar(92) // "space"
        return
     end if
@@ -231,11 +232,10 @@ contains
   end function stringify_char
 
   function stringify_string(c) result(str)
-    character(len=:), allocatable, intent(in) :: c
+    character(len=*), intent(in) :: c
     character(len=:), allocatable :: str
     integer :: i, n
-    n = 0
-    if (allocated(c)) n = len(c)
+    n = len(c)
     str = '"'
     do i = 1, n
        select case (c(i:i))

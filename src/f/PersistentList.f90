@@ -8,6 +8,7 @@ module PersistentList
   private
 
   public :: list_empty, cons, first, rest, list_count, list_of
+  public :: has_list, val_lst, val_lst_first, val_lst_rest, val_lst_count, set_list
 
 contains
 
@@ -74,5 +75,55 @@ contains
        l = cons(items(i), l)
     end do
   end function list_of
+
+  ! ---- cons_value-level accessors --------------------------------
+  ! Same arrangement as PersistentVector's: these live here rather than
+  ! in Values.f90 because Values cannot use this module -- the
+  ! dependency runs one way. Each absorbs the allocated() guard its
+  ! callers repeated, so an absent list is simply empty.
+
+  function has_list(v) result(yes)
+    type(cons_value), intent(in) :: v
+    logical :: yes
+    yes = allocated(v%list_val)
+  end function has_list
+
+  function val_lst_first(v) result(x)
+    type(cons_value), intent(in) :: v
+    type(cons_value) :: x
+    if (allocated(v%list_val)) x = first(v%list_val)
+  end function val_lst_first
+
+  function val_lst_rest(v) result(l)
+    type(cons_value), intent(in) :: v
+    type(cons_ref) :: l
+    l = list_empty()
+    if (allocated(v%list_val)) l = rest(v%list_val)
+  end function val_lst_rest
+
+  ! The backing ref itself, for callers that walk the cells directly.
+  ! Copies a cons_ref exactly as `l = v%list_val` always did -- the
+  ! defined assignment bumps the refcount either way.
+  function val_lst(v) result(l)
+    type(cons_value), intent(in) :: v
+    type(cons_ref) :: l
+    l = list_empty()
+    if (allocated(v%list_val)) l = v%list_val
+  end function val_lst
+
+  function val_lst_count(v) result(n)
+    type(cons_value), intent(in) :: v
+    integer :: n
+    n = 0
+    if (allocated(v%list_val)) n = list_count(v%list_val)
+  end function val_lst_count
+
+  subroutine set_list(v, l)
+    type(cons_value), intent(inout) :: v
+    type(cons_ref), intent(in) :: l
+    v%tag = TAG_LIST
+    if (.not. allocated(v%list_val)) allocate(v%list_val)
+    v%list_val = l
+  end subroutine set_list
 
 end module PersistentList

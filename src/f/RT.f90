@@ -8,11 +8,13 @@ module RT
   use NativeArray, only: array_is, array_length, array_aget
   use values
   use PersistentList, only: list_empty, list_cons => cons, list_first => first, &
-       list_rest => rest, list_count => list_count
+       list_rest => rest, list_count => list_count, &
+       has_list, val_lst, val_lst_first, val_lst_rest, val_lst_count, set_list
   use PersistentVector, only: vector_empty, vector_count, vector_nth, vector_conj, vector_assoc, &
        has_vector, val_vec_count, val_vec_nth, set_vector, val_vec_conj, val_vec_assoc
   use PersistentArrayMap, only: array_map_empty, array_map_count, array_map_get, &
-       array_map_assoc, array_map_entries, array_map_contains
+       array_map_assoc, array_map_entries, array_map_contains, &
+       has_map, val_map, set_map, val_map_count, val_map_get, val_map_contains, val_map_entries
   implicit none
   private
 
@@ -84,8 +86,7 @@ contains
     type(cons_value), intent(inout) :: target
     type(cons_ref), intent(in) :: l
     target%tag = TAG_LIST
-    allocate(target%list_val)
-    target%list_val = l
+    call set_list(target, l)
   end subroutine wrap_list_value
 
   ! Every element of vec as a list, in order -- one O(n) trie walk
@@ -131,13 +132,13 @@ contains
     type(lazy_node), pointer :: nd
     select case (v%tag)
     case (TAG_LIST)
-       if (allocated(v%list_val)) val = list_first(v%list_val)
+       if (has_list(v)) val = val_lst_first(v)
     case (TAG_VECTOR)
        if (val_vec_count(v) > 0) val = val_vec_nth(v, 0)
     case (TAG_HASHMAP, TAG_SET, TAG_STRING, TAG_ARRAY)
        s = seq(v)
        if (s%tag == TAG_LIST) then
-          if (allocated(s%list_val)) val = list_first(s%list_val)
+          if (has_list(s)) val = val_lst_first(s)
        end if
     case (TAG_LAZYSEQ)
        call lazy_force(v) ! O(1): realizes this cell only, never the whole seq
@@ -157,7 +158,7 @@ contains
     type(lazy_node), pointer :: nd
     select case (v%tag)
     case (TAG_LIST)
-       if (allocated(v%list_val)) tail = list_rest(v%list_val)
+       if (has_list(v)) tail = val_lst_rest(v)
     case (TAG_VECTOR)
        if (val_vec_count(v) > 1) tail = list_rest(vector_to_list(v%vector_val))
     case (TAG_HASHMAP, TAG_SET, TAG_STRING, TAG_ARRAY)
@@ -165,7 +166,7 @@ contains
          type(cons_value) :: s
          s = seq(v) ! same "seq it first" rule as first, above
          if (s%tag == TAG_LIST) then
-            if (allocated(s%list_val)) tail = list_rest(s%list_val)
+            if (has_list(s)) tail = val_lst_rest(s)
          end if
        end block
     case (TAG_LAZYSEQ)
@@ -195,8 +196,8 @@ contains
        new_v = seq(r) ! nil when the lazy rest turns out to be empty
        return
     end if
-    if (allocated(r%list_val)) then
-       if (list_count(r%list_val) > 0) new_v = r
+    if (has_list(r)) then
+       if (val_lst_count(r) > 0) new_v = r
     end if
   end function next
 
@@ -216,7 +217,7 @@ contains
     end if
     select case (coll%tag)
     case (TAG_LIST)
-       if (allocated(coll%list_val)) coll_list = coll%list_val
+       if (has_list(coll)) coll_list = val_lst(coll)
     case (TAG_VECTOR)
        if (has_vector(coll)) coll_list = vector_to_list(coll%vector_val)
     case (TAG_HASHMAP, TAG_SET, TAG_STRING, TAG_ARRAY)
@@ -224,7 +225,7 @@ contains
          type(cons_value) :: s
          s = seq(coll)
          if (s%tag == TAG_LIST) then
-            if (allocated(s%list_val)) coll_list = s%list_val
+            if (has_list(s)) coll_list = val_lst(s)
          end if
        end block
     end select
@@ -240,18 +241,17 @@ contains
 
     select case (coll%tag)
     case (TAG_LIST)
-       if (allocated(coll%list_val)) base = coll%list_val
+       if (has_list(coll)) base = val_lst(coll)
        call wrap_list_value(new_v, list_cons(x, base))
     case (TAG_VECTOR)
        new_v%tag = TAG_VECTOR
        new_v = val_vec_conj(coll, x)
     case (TAG_SET)
        new_v%tag = TAG_SET
-       allocate(new_v%map_val)
-       if (allocated(coll%map_val)) then
-          new_v%map_val = array_map_assoc(coll%map_val, x, x)
+       if (has_map(coll)) then
+          call set_map(new_v, array_map_assoc(val_map(coll), x, x))
        else
-          new_v%map_val = array_map_assoc(array_map_empty(), x, x)
+          call set_map(new_v, array_map_assoc(array_map_empty(), x, x))
        end if
     case (TAG_HASHMAP)
        ! (conj m e): e is an entry (a 2-element vector or map entry),
@@ -261,32 +261,31 @@ contains
        ! ({:a 1}) and so broke merge, into, and everything built on
        ! them.
        new_v = coll
-       if (.not. allocated(new_v%map_val)) then
-          allocate(new_v%map_val)
-          new_v%map_val = array_map_empty()
+       if (.not. has_map(new_v)) then
+          call set_map(new_v, array_map_empty())
        end if
        select case (x%tag)
        case (TAG_NIL)
           continue
        case (TAG_HASHMAP)
-          if (allocated(x%map_val)) then
+          if (has_map(x)) then
              block
                type(cons_value), allocatable :: ks(:), vs(:)
                type(array_map_t) :: acc
                integer :: i
-               call array_map_entries(x%map_val, ks, vs)
-               acc = new_v%map_val
+               call val_map_entries(x, ks, vs)
+               acc = val_map(new_v)
                do i = 1, size(ks)
                   acc = array_map_assoc(acc, ks(i), vs(i))
                end do
-               new_v%map_val = acc
+               call set_map(new_v, acc)
              end block
           end if
        case default
           block
             type(array_map_t) :: acc
-            acc = array_map_assoc(new_v%map_val, nth(x, 0), nth(x, 1))
-            new_v%map_val = acc
+            acc = array_map_assoc(val_map(new_v), nth(x, 0), nth(x, 1))
+            call set_map(new_v, acc)
           end block
        end select
     case (TAG_NIL)
@@ -308,8 +307,8 @@ contains
     case (TAG_VECTOR)
        val = val_vec_nth(coll, i)
     case (TAG_LIST)
-       if (allocated(coll%list_val)) then
-          l = coll%list_val
+       if (has_list(coll)) then
+          l = val_lst(coll)
           do k = 1, i
              l = list_rest(l)
           end do
@@ -359,15 +358,15 @@ contains
     n = 0
     select case (coll%tag)
     case (TAG_LIST)
-       if (allocated(coll%list_val)) n = list_count(coll%list_val)
+       if (has_list(coll)) n = val_lst_count(coll)
     case (TAG_VECTOR)
        n = val_vec_count(coll)
     case (TAG_STRING)
-       if (allocated(coll%str_val)) n = len(coll%str_val)
+       if (has_str(coll)) n = str_len(coll)
     case (TAG_ARRAY)
        n = array_length(coll)
     case (TAG_HASHMAP, TAG_SET)
-       if (allocated(coll%map_val)) n = array_map_count(coll%map_val)
+       if (has_map(coll)) n = val_map_count(coll)
     case (TAG_LAZYSEQ)
        ! O(n), and it realizes the whole seq -- same as real Clojure
        ! (counting a lazy seq is exactly walking it). Everything else
@@ -386,8 +385,8 @@ contains
   function get(coll, key) result(val)
     type(cons_value), intent(in) :: coll, key
     type(cons_value) :: val
-    if ((coll%tag == TAG_HASHMAP .or. coll%tag == TAG_SET) .and. allocated(coll%map_val)) then
-       val = array_map_get(coll%map_val, key)
+    if ((coll%tag == TAG_HASHMAP .or. coll%tag == TAG_SET) .and. has_map(coll)) then
+       val = val_map_get(coll, key)
     end if
   end function get
 
@@ -405,11 +404,10 @@ contains
        return
     end if
     new_v%tag = TAG_HASHMAP
-    allocate(new_v%map_val)
-    if (coll%tag == TAG_HASHMAP .and. allocated(coll%map_val)) then
-       new_v%map_val = array_map_assoc(coll%map_val, key, val)
+    if (coll%tag == TAG_HASHMAP .and. has_map(coll)) then
+       call set_map(new_v, array_map_assoc(val_map(coll), key, val))
     else
-       new_v%map_val = array_map_assoc(array_map_empty(), key, val)
+       call set_map(new_v, array_map_assoc(array_map_empty(), key, val))
     end if
   end function assoc
 
@@ -425,12 +423,12 @@ contains
     case (TAG_VECTOR)
        if (count(v) > 0) call wrap_list_value(new_v, vector_to_list(v%vector_val))
     case (TAG_HASHMAP)
-       if (count(v) > 0) call wrap_list_value(new_v, map_to_entry_list(v%map_val))
+       if (count(v) > 0) call wrap_list_value(new_v, map_to_entry_list(val_map(v)))
     case (TAG_SET)
-       if (count(v) > 0) call wrap_list_value(new_v, set_to_element_list(v%map_val))
+       if (count(v) > 0) call wrap_list_value(new_v, set_to_element_list(val_map(v)))
     case (TAG_STRING)
-       if (allocated(v%str_val)) then
-          if (len(v%str_val) > 0) call wrap_list_value(new_v, string_to_char_list(v%str_val))
+       if (has_str(v)) then
+          if (str_len(v) > 0) call wrap_list_value(new_v, string_to_char_list(val_str(v)))
        end if
     case (TAG_ARRAY)
        ! In element order, which for a rank-N array is column-major --
@@ -471,7 +469,7 @@ contains
     l = list_empty()
     do i = len(s), 1, -1
        ch%tag = TAG_CHAR
-       ch%str_val = s(i:i)
+       call set_str(ch, s(i:i))
        l = list_cons(ch, l)
     end do
   end function string_to_char_list
@@ -494,7 +492,7 @@ contains
        eq = (b%tag == TAG_REAL) .and. (a%real_val == b%real_val)
     case (TAG_STRING, TAG_SYMBOL, TAG_KEYWORD, TAG_CHAR)
        eq = (b%tag == a%tag)
-       if (eq) eq = (a%str_val == b%str_val)
+       if (eq) eq = (val_str(a) == val_str(b))
     case (TAG_LIST, TAG_VECTOR, TAG_LAZYSEQ)
        ! A lazy seq is sequential too, so it compares equal to a list or
        ! vector with the same elements -- and stays a lazy seq as it's
@@ -511,16 +509,16 @@ contains
           end do
        end if
     case (TAG_HASHMAP, TAG_SET)
-       eq = (b%tag == a%tag) .and. allocated(a%map_val) .and. allocated(b%map_val)
-       if (eq) eq = (array_map_count(a%map_val) == array_map_count(b%map_val))
+       eq = (b%tag == a%tag) .and. has_map(a) .and. has_map(b)
+       if (eq) eq = (val_map_count(a) == val_map_count(b))
        if (eq) then
           block
             integer :: i
             type(cons_value), allocatable :: akeys(:), avals(:)
-            call array_map_entries(a%map_val, akeys, avals)
+            call val_map_entries(a, akeys, avals)
             do i = 1, size(akeys)
-               eq = array_map_contains(b%map_val, akeys(i))
-               if (eq) eq = equiv(avals(i), array_map_get(b%map_val, akeys(i)))
+               eq = val_map_contains(b, akeys(i))
+               if (eq) eq = equiv(avals(i), val_map_get(b, akeys(i)))
                if (.not. eq) exit
             end do
           end block

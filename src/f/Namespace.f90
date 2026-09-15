@@ -23,7 +23,8 @@ module Namespace
   use values
   use Atom, only: atom_new, atom_deref, atom_reset
   use PersistentArrayMap, only: array_map_empty, array_map_get, array_map_assoc, array_map_contains, &
-       array_map_entries
+       array_map_entries, &
+       has_map, val_map, set_map, val_map_count, val_map_get, val_map_contains, val_map_entries
   implicit none
   private
 
@@ -70,7 +71,7 @@ contains
     character(len=*), intent(in) :: name
     type(cons_value) :: k
     k%tag = TAG_SYMBOL
-    k%str_val = name
+    call set_str(k, name)
   end function symbol_key
 
   ! The registry index of a namespace, creating it if new. Indexes are
@@ -153,7 +154,7 @@ contains
     type(cons_value) :: v
     v = atom_new(root) ! reuses atom_ref's mutable-box machinery wholesale
     v%tag = TAG_VAR
-    v%str_val = ns_name // "/" // name
+    call set_str(v, ns_name // "/" // name)
   end function make_var
 
   ! def!'s job: creates the Var if new, mutates its root in place if
@@ -190,7 +191,7 @@ contains
     type(cons_value) :: target_val
     if (.not. associated(ns%ptr)) return
     target_val%tag = TAG_SYMBOL
-    target_val%str_val = target
+    call set_str(target_val, target)
     next_aliases = array_map_assoc(ns%ptr%aliases, symbol_key(alias_name), target_val)
     ns%ptr%aliases = next_aliases
   end subroutine ns_add_alias
@@ -206,7 +207,7 @@ contains
     key = symbol_key(alias_name)
     if (.not. array_map_contains(ns%ptr%aliases, key)) return
     hit = array_map_get(ns%ptr%aliases, key)
-    if (hit%tag == TAG_SYMBOL) target = hit%str_val
+    if (hit%tag == TAG_SYMBOL) target = val_str(hit)
   end function ns_alias_target
 
   ! (. *ns* (refer sym var)): binds name to an EXISTING Var from
@@ -345,7 +346,7 @@ contains
     current = ns
     if (.not. associated(ns%ptr)) return
     name_sym%tag = TAG_SYMBOL
-    name_sym%str_val = ns%ptr%name
+    call set_str(name_sym, ns%ptr%name)
     call ns_intern(ns_find_or_create(CORE_NS), "*ns*", name_sym)
   end subroutine ns_set_current
 
