@@ -28,6 +28,7 @@ program gc_test
   call check_heap_self_check()
   call check_namespaces()
   call check_grow_only()
+  call check_value_stack()
 
   if (all_ok) then
      print *, ""
@@ -398,6 +399,72 @@ contains
     call ok("16c. ...with the heap still sound: ", gc_check_heap() == "")
     gc_no_collect = .false.
   end subroutine check_grow_only
+
+  ! The value stack (PLAN.md 3d, Design B). These are the checks that
+  ! decide whether rooting-by-construction actually holds: every one
+  ! collects with NO argument roots at all, so if the stack is not
+  ! scanned, the data is gone.
+  subroutine check_value_stack()
+    type(gc_value) :: v
+    integer :: base, b2, i, bad
+
+    call gc_init(8)
+
+    ! A frame's slots are roots.
+    base = vs_enter(3)
+    call vs_set(base + 1, gc_str("alpha", no_roots))
+    call vs_set(base + 2, gc_cons(gc_int(1), gc_int(2), no_roots))
+    call gc_collect(no_roots)
+    call ok("17a. a frame's slots survive collection: ", &
+         gc_text(vs_get(base + 1)) == "alpha")
+    call ok_int("17b. ...including structure: ", car_int(vs_get(base + 2)), 1)
+    call ok_int("17c. an unset slot is nil: ", vs_tag(base + 3), GCT_NIL)
+
+    ! Leaving releases them -- the part a stack collector gets wrong by
+    ! leaving stale values above the top, which keeps dead data alive.
+    call vs_leave(base)
+    call gc_collect(no_roots)
+    call ok_int("17d. leaving a frame makes its values collectable: ", gc_live_count(), 0)
+    call ok_int("17e. ...and the stack is back to empty: ", vs_depth(), 0)
+
+    ! Nesting, and growth past the initial stack size.
+    base = vs_enter(2)
+    call vs_set(base + 1, gc_str("outer", no_roots))
+    b2 = vs_enter(300)
+    do i = 1, 300
+       call vs_set(b2 + i, gc_cons(gc_str("deep", no_roots), gc_int(i), no_roots))
+    end do
+    call gc_collect(no_roots)
+    bad = 0
+    do i = 1, 300
+       if (cdr_int(vs_get(b2 + i)) /= i) bad = bad + 1
+    end do
+    call ok_int("17f. the stack grows and keeps every slot: ", bad, 0)
+    call ok("17g. ...and the outer frame is untouched: ", &
+         gc_text(vs_get(base + 1)) == "outer")
+
+    ! Torture: collect at every allocation, rooted only by the stack.
+    gc_torture = .true.
+    do i = 1, 100
+       call vs_set(b2 + i, gc_cons(gc_str("x", no_roots), gc_int(i * 2), no_roots))
+    end do
+    call ok("17h. rooted only by the stack, under torture: ", gc_check_heap() == "")
+    call ok_int("17i. ...with values intact: ", cdr_int(vs_get(b2 + 50)), 100)
+    gc_torture = .false.
+
+    call vs_leave(b2)
+    call vs_leave(base)
+    call gc_collect(no_roots)
+    call ok_int("17j. unwinding everything collects everything: ", gc_live_count(), 0)
+  end subroutine check_value_stack
+
+  function vs_tag(slot) result(t)
+    integer, intent(in) :: slot
+    type(gc_value) :: x
+    integer :: t
+    x = vs_get(slot)
+    t = x%tag
+  end function vs_tag
 
   ! --- helpers ---
 

@@ -481,54 +481,73 @@ the text. A cache writer needs to exclude them.
         PersistentVector.f90, PersistentList.f90,
         PersistentArrayMap.f90, and ~29 residue sites in RT.f90 and
         Eval.f90 -- against 959 before.
-- [ ] **3c-2.** Swap the representation underneath the accessors.
 
-  **It does not have to be one bang either.** 3c-1 put every payload
-  behind accessors, so a payload can move into the GC heap on its own
-  while the other eight stay refcounted. Two pieces of scaffolding make
-  that possible:
+- [x] **3c-2, first slice: `str_val` is in the heap.** Two pieces of
+      scaffolding made a single payload movable on its own:
+      `gc_no_collect` (grow-only, because nothing roots anything until
+      3d, so a collection would sweep live data -- check 16) and
+      `gc_ensure_init` (so nine drivers need no `gc_init` call
+      meanwhile). `str_val` became a bare handle into the string pool;
+      the ref-level API keeps the is/len/text split so comparing a
+      symbol to a literal still does not allocate.
 
-  - **`gc_no_collect` -- grow-only mode.** Nothing roots anything until
-    3d, so a collection would sweep everything live. In this mode the
-    pools only ever grow. A leak by construction, and temporary: 3d
-    turns it off. Check 16 covers it -- 200 completely unrooted
-    allocations survive, `gc_collections` stays 0, and the heap still
-    passes its own audit.
-  - **`gc_ensure_init`** -- the heap initialises on first use, so nine
-    test drivers and `main.f90` do not each need a `gc_init` call
-    during the migration.
+      Not a win yet and expected not to be: gfortran 4.5s -> 5.3s,
+      flang 30s -> 33s, RSS 93 -> 145 MB. The cost is `FINAL` plus the
+      other eight components. Both compilers stay at 163/16/41.
 
-  - [x] **3c-2 `str_val`** (the first payload in the heap).
-        `character(len=:), allocatable` becomes a bare `integer ::
-        str_ref` into the string pool, so copying a `cons_value` no
-        longer copies or reallocates text.
+- [ ] **3c-2, the rest -- and it is the same change as 3d.** A GC
+      object's slots are `gc_value`. A `cons_value` cannot go in one
+      while `cons_value` still has allocatable components, so a payload
+      moves alone only if its backing node holds no clotran values.
+      Checked, not assumed:
 
-        The ref-level API deliberately mirrors the accessor split:
-        `gc_ref_is` and `gc_ref_len` read the pool WITHOUT copying,
-        because comparing a symbol to a literal is the hottest read in
-        the interpreter; only `gc_ref_text` copies. Routing everything
-        through one text-returning function would have undone the
-        reason 3c-1 split them in the first place.
+      | backing node | cons_value components |
+      | --- | --- |
+      | `cons_cell` | 1 (`car`) |
+      | `vec_node` | 1 (`items`) |
+      | `array_map_node` | 2 (`keys`, `vals`) |
+      | `hamt_node` | via `hamt_slot`: key, val, buckets |
+      | `closure_t` | 2 (`params`, `body`) |
+      | `atom_node` | 4 |
+      | `lazy_node` | 3 (`thunk`, `head`, `tail`) |
+      | `meta_node` | 1 |
+      | `native_array_node` | 0 -- except the `:value` kind |
 
-        `cons_value_release` and `_assign` stop touching text entirely:
-        a handle is copied flat and the pool owns the bytes. The test
-        files were migrated too -- `native_test`'s "must copy by value"
-        check still holds, because `set_str` installs a NEW handle
-        rather than mutating the old text.
-
-        **Measured, and it is not a win yet.** gfortran bootstrap 4.5s
-        -> 5.3s, RSS 93 MB -> 145 MB; flang 30s -> 33s. Both compilers
-        stay green at 163/16/41 with every unit suite passing. That is
-        expected rather than disappointing: the cost is `FINAL` plus
-        the remaining eight allocatable components, and PLAN said from
-        the start that nothing moves the number until they all go. The
-        incremental path pays a little at each step and collects at the
-        end -- which is the price of not doing this as one bang.
-
-        The added memory is grow-only mode, not the representation: it
-        is what 3d reclaims by making collection safe.
+      Text was migratable *because it is a leaf*: bytes, nothing
+      traceable. The other eight are coupled to each other and to the
+      value type, and the moment `cons_value` becomes a handle
+      everything must be rooted or the first collection sweeps live
+      data. So the remainder of 3c-2 and 3d are **one change**, which
+      is the big bang this plan always said it was. `native_array` is
+      the near-miss: a leaf apart from `:value` arrays, which 3a''
+      rule 6 already moves to the vec pool.
 
 - [ ] **3d.** Evaluator on the value stack.
+
+- [x] **3d, groundwork: the value stack exists and is tested.** Built
+      standalone against the collector, the same way the collector
+      itself was built before anything used it. `vs_enter(n)` reserves
+      a frame and returns its base, `vs_set`/`vs_get` address slots,
+      `vs_leave(base)` pops; `gc_collect` scans every live slot
+      alongside the globals.
+
+      It lives in GC.f90, not beside the evaluator, because the
+      collector must scan it and nothing else may -- which is what
+      makes rooting by CONSTRUCTION rather than discipline: there is
+      nowhere else to put a value.
+
+      `vs_leave` clears on the way out, and that is not tidiness. A
+      stale value left above the stack top is still traced and keeps
+      dead data alive -- the characteristic leak of a stack collector.
+      Check 17d is what pins it.
+
+      Checks 17a-17j, both compilers: a frame's slots survive
+      collection with no argument roots at all; leaving a frame makes
+      its values collectable; the stack grows past its initial size
+      without losing a slot; and 300 values rooted ONLY by the stack
+      survive torture mode with the heap still passing its own audit.
+      Verified non-vacuous -- with stack scanning removed, 5 of the 10
+      fail.
 - [ ] **3e.** Retire `FINAL`-based refcounting; `rc_test` becomes a GC
       test. Finalizers survive only on the few heap nodes owning
       foreign resources, run once per object by sweep rather than once

@@ -169,6 +169,25 @@ module GC
   type(gc_value) :: global_root(GC_MAX_GLOBALS)
   integer :: global_count = 0
 
+  ! --- the value stack (PLAN.md 3d, Design B) ----------------------
+  !
+  ! The evaluator's roots, and the reason rooting is by CONSTRUCTION
+  ! rather than by discipline: a value the evaluator is working on
+  ! lives in a stack slot, and the collector scans every live slot. A
+  ! missed root is not a bug you can write, because there is nowhere
+  ! else to put the value.
+  !
+  ! Frames are a base index, not a linked structure: vs_enter reserves
+  ! n slots and returns the base, vs_leave pops back to it. Leaving is
+  ! what makes a frame's values collectable, so it must be paired --
+  ! and because the base is returned and passed back, an unbalanced
+  ! leave is visible rather than silent.
+  !
+  ! Lives in this module, not beside the evaluator, because the
+  ! collector has to scan it directly and nothing else may.
+  type(gc_value), allocatable :: vstack(:)
+  integer :: vs_top = 0
+
   ! --- marking work list -----------------------------------------
   ! An explicit stack, not recursion: a list is a chain thousands of
   ! nodes deep, and recursive marking would overflow the real stack on
@@ -203,6 +222,7 @@ module GC
   public :: gc_live_count, gc_obj_capacity, gc_check_heap
   public :: gc_global_new, gc_global_set, gc_global_get, gc_global_count
   public :: gc_ensure_init, gc_str_ref, gc_ref_text, gc_ref_is, gc_ref_len
+  public :: vs_enter, vs_leave, vs_set, vs_get, vs_depth
 
 contains
 
@@ -284,6 +304,11 @@ contains
     allocate(str_pool(n), str_mark(n), str_free(n), str_free_next(n))
     str_mark = .false.; str_free = .false.; str_free_next = 0
     str_free_head = 0; str_used = 0
+
+    if (allocated(vstack)) deallocate(vstack)
+    allocate(vstack(max(n, 64)))
+    vstack = gc_nil()
+    vs_top = 0
 
     if (allocated(mark_stack)) deallocate(mark_stack)
     allocate(mark_stack(n))
@@ -646,12 +671,68 @@ contains
     do i = 1, global_count
        call push_mark(global_root(i))
     end do
+    do i = 1, vs_top
+       call push_mark(vstack(i))
+    end do
     do i = 1, size(roots)
        call push_mark(roots(i))
     end do
     call drain_mark_stack()
     call sweep()
   end subroutine gc_collect
+
+  ! --- the value stack -------------------------------------------
+
+  ! Reserves n slots, cleared to nil, and returns the frame's base.
+  ! Pass that base back to vs_leave; slots are addressed base+1 .. base+n.
+  function vs_enter(n) result(base)
+    integer, intent(in) :: n
+    integer :: base, i
+    type(gc_value), allocatable :: bigger(:)
+    call gc_ensure_init()
+    do while (vs_top + n > size(vstack))
+       allocate(bigger(2 * size(vstack)))
+       bigger = gc_nil()
+       bigger(1:vs_top) = vstack(1:vs_top)
+       call move_alloc(bigger, vstack)
+    end do
+    base = vs_top
+    do i = base + 1, base + n
+       vstack(i) = gc_nil()
+    end do
+    vs_top = base + n
+  end function vs_enter
+
+  ! Pops back to base. Clearing on the way out is not tidiness: a stale
+  ! value above the top would be traced on the next collection and keep
+  ! dead data alive, which is the leak a stack collector is prone to.
+  subroutine vs_leave(base)
+    integer, intent(in) :: base
+    integer :: i
+    if (base < 0 .or. base > vs_top) return
+    do i = base + 1, vs_top
+       vstack(i) = gc_nil()
+    end do
+    vs_top = base
+  end subroutine vs_leave
+
+  subroutine vs_set(slot, v)
+    integer, intent(in) :: slot
+    type(gc_value), intent(in) :: v
+    if (slot >= 1 .and. slot <= vs_top) vstack(slot) = v
+  end subroutine vs_set
+
+  function vs_get(slot) result(v)
+    integer, intent(in) :: slot
+    type(gc_value) :: v
+    v = gc_nil()
+    if (slot >= 1 .and. slot <= vs_top) v = vstack(slot)
+  end function vs_get
+
+  function vs_depth() result(n)
+    integer :: n
+    n = vs_top
+  end function vs_depth
 
   ! --- global roots ----------------------------------------------
 
