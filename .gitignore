@@ -21,3 +21,4 @@
 /gc_test
 /gc_vector_test
 /gc_list_test
+/gc_map_test

@@ -607,7 +607,31 @@ the text. A cache writer needs to exclude them.
       widening `obj_node`, or accepting the allocation are all live;
       settle it before porting the reader.
 
-      Still to build the same way: array map, HAMT, env, closure, atom.
+      **`src/f/GCMap.f90`** -- the array map, and `gc_equal` in the
+      collector to go with it, mirroring `value_equal` so the two
+      representations agree during the migration: same tag and same
+      scalar or text content, collections by identity. Deep equality
+      for collection keys stays a separate decision rather than one
+      made silently here.
+
+      Text keys compare by CONTENT, not by pool slot, and check 4
+      pins it: the same string allocated twice is two slots but one
+      key. A map that got that wrong would quietly hold duplicates --
+      the single most likely way to break a map on a pooled string
+      representation.
+
+      `dissoc` moves the LAST entry into the hole rather than shifting
+      the tail, which is what Clojure's own array map does and is
+      correct because a map is unordered; check 5c walks every other
+      key afterwards, including the moved one.
+
+      25 checks, both compilers. **Promotion to a hash trie past 8
+      entries is not here** -- it arrives with the HAMT module, and
+      until then this stays linear at any size. That is a performance
+      gap, not a behavioural one: a linear map answers the same
+      questions, slower.
+
+      Still to build the same way: HAMT, env, closure, atom.
 - [ ] **3e.** Retire `FINAL`-based refcounting; `rc_test` becomes a GC
       test. Finalizers survive only on the few heap nodes owning
       foreign resources, run once per object by sweep rather than once

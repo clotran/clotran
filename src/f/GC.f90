@@ -223,6 +223,7 @@ module GC
   public :: gc_global_new, gc_global_set, gc_global_get, gc_global_count
   public :: gc_ensure_init, gc_str_ref, gc_ref_text, gc_ref_is, gc_ref_len
   public :: vs_enter, vs_leave, vs_set, vs_get, vs_depth
+  public :: gc_equal
 
 contains
 
@@ -680,6 +681,34 @@ contains
     call drain_mark_stack()
     call sweep()
   end subroutine gc_collect
+
+  ! Value equality, mirroring Values.f90's value_equal so the two
+  ! representations agree during the migration: same tag, and same
+  ! scalar or text content. Collections compare by IDENTITY, not
+  ! deeply -- which is what value_equal does today too, and what map
+  ! keys currently rely on. Deep equality for collection keys is a
+  ! separate decision, not one to make silently here.
+  function gc_equal(a, b) result(eq)
+    type(gc_value), intent(in) :: a, b
+    logical :: eq
+    eq = .false.
+    if (a%tag /= b%tag) return
+    select case (a%tag)
+    case (GCT_NIL)
+       eq = .true.
+    case (GCT_BOOL, GCT_INT, GCT_CHAR)
+       eq = (a%ival == b%ival)
+    case (GCT_REAL)
+       eq = (a%rval == b%rval)
+    case (GCT_STR, GCT_SYM, GCT_KEY)
+       ! Compared by CONTENT, not by pool slot: the same text
+       ! allocated twice is two slots but one value.
+       eq = (gc_ref_len(a%ref) == gc_ref_len(b%ref))
+       if (eq) eq = gc_ref_is(a%ref, gc_ref_text(b%ref))
+    case default
+       eq = (a%ref == b%ref)
+    end select
+  end function gc_equal
 
   ! --- the value stack -------------------------------------------
 
