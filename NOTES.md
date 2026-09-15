@@ -88,21 +88,43 @@ worth being honest about):
    exception handling, `apply`, the higher-order seq functions. Very
    few real files are self-contained enough to dodge all of that.
 
-## Toolchain: flang is primary, gfortran is a cross-check oracle only
+## Toolchain: gfortran builds it, flang is the correctness oracle
 
-Pinned to flang 23.1 (`Makefile`), not gfortran. On every actual
-compiler bug this project has hit, flang came out ahead, and its
-diagnostics have twice caught real mistakes in this code that gfortran
-missed silently even at `-Wall -Wextra`.
+Both are pinned (`Makefile`: gfortran 16, flang 23.1) and both run
+before every commit -- `make crosscheck`. The roles differ.
 
-gfortran stays installed for cross-checking: when something looks like
-a compiler quirk rather than a bug in this code, building with both and
-comparing tells them apart. **This does not make gfortran a second
-target.** If a gfortran-only bug ever needs uglier or more convoluted
-code to route around, the right call is to document it here and move
-on -- not contort the source for a compiler this project deliberately
-didn't pin to. Only take a fix if it's free (the same or clearer code
-regardless of the bug); don't chase gfortran quirks as a default habit.
+**gfortran is the default build, for speed.** Measured on the identical
+`cons_value`: a scalar copy is 13.7 ns under gfortran and 488 ns under
+flang; a symbol 26.4 vs 576; a list 66.4 vs 740. End to end that is a
+**4.5 s bootstrap against 30 s**, same source and the same results.
+That 6.7x is paid on every edit-test cycle, so it is the daily driver.
+
+Note what this says about PLAN.md step 3's premise. The GC exists
+partly because "one `cons_value` copy costs 497 ns" -- and that number
+is *flang*, not Fortran. The compiler-independent reason stands on its
+own and is the real one: **refcounting cannot collect cycles**, which
+is why clotran leaks closures today.
+
+**flang is the oracle, and is not optional.** On every actual compiler
+bug this project has hit, flang came out ahead, and its diagnostics
+have twice caught real mistakes here that gfortran accepted silently at
+`-Wall -Wextra` (two missing `RECURSIVE` markers among them).
+
+**And gfortran currently fails things flang passes.** On the upstream
+Clojure suite, a gfortran build crashes `clojure.test-clojure.
+multimethods` every time and `clojure.test-clojure.logic`
+*intermittently* -- 163 assertions under flang against 51 or 161 under
+gfortran depending on the run. An intermittent crash under one compiler
+and not another is the signature of undefined behaviour in *this* code
+that flang's codegen happens to mask, not of a gfortran defect. So it
+is a clotran bug, it is tracked in PLAN.md step 4a, and until it is
+found gfortran is the fast build rather than a trustworthy one.
+
+When something looks like a compiler quirk rather than a bug here,
+building with both and comparing tells them apart -- that is what the
+second compiler is for, and the split above is a live example of it
+working. Don't contort the source to route around a quirk in either
+one: document it here and move on, unless the fix is free.
 
 ## Testing: unit tests are ours, test/regression/ is borrowed
 

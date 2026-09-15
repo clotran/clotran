@@ -8,8 +8,8 @@ namespaces) is written in Fortran (`src/f`); the language itself --
 as actual Clojure source (`src/clj`, `src/cljc`), loaded at startup,
 not hardcoded into the host.
 
-flang is the pinned target compiler; gfortran is used only as a
-second, independent cross-check (see `NOTES.md`).
+gfortran is the default build; flang is the correctness oracle. Both
+are run before every commit (`make crosscheck`) -- see `NOTES.md`.
 
 ## Layout
 
@@ -23,9 +23,10 @@ second, independent cross-check (see `NOTES.md`).
 ## Build
 
 ```
-make            # builds clotran(-bin) and every test binary (flang)
+make            # builds clotran(-bin) and every test binary
 make test       # builds and runs every test binary
-make FC=gfortran all test   # cross-check on gfortran
+make crosscheck # the same on flang and gfortran -- run before committing
+make FC=flang all test      # just the flang side
 ```
 
 `clotran-bin` is the raw interpreter, a plain stdin/stdout REPL

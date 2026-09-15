@@ -1,15 +1,31 @@
-FC = flang
+# gfortran is the default build; flang is the correctness oracle.
+#
+# Same source, same results, but flang's derived-type copy is 11-36x
+# slower on this value type (13.7 ns vs 488 ns scalar, measured), which
+# is a 4.5 s bootstrap against 30 s. That tax is paid on every single
+# edit-test cycle, so the daily driver is gfortran.
+#
+# flang is NOT dropped: it has twice caught real mistakes in this code
+# that gfortran accepted silently at -Wall -Wextra, and on every actual
+# compiler bug this project has hit, flang came out ahead. So the rule
+# is both compilers before every commit -- `make crosscheck`. See
+# NOTES.md.
+FC = gfortran
 FCFLAGS = -g -Isrc/f -Jsrc/f
 
-# Pinned, not just "whatever's on PATH": subtle compiler-specific behavior
-# (FINAL, defined assignment, unlimited polymorphic) means a different
-# major.minor could behave differently. See NOTES.md for why flang, not
-# gfortran (gfortran stays a cross-check oracle only). Bump deliberately,
-# after re-running the test suite on both.
-REQUIRED_FLANG = 23.1
-ACTUAL_FLANG := $(shell $(FC) -dumpversion 2>/dev/null | cut -d. -f1,2)
-ifneq ($(ACTUAL_FLANG),$(REQUIRED_FLANG))
-$(warning flang version is $(ACTUAL_FLANG), this project is pinned to $(REQUIRED_FLANG) -- `brew upgrade flang`)
+# Pinned, not just "whatever's on PATH": subtle compiler-specific
+# behaviour (FINAL, defined assignment, unlimited polymorphic) means a
+# different major.minor can behave differently. Bump deliberately,
+# after re-running the suite on both.
+REQUIRED_gfortran = 16
+REQUIRED_flang = 23.1
+FCNAME := $(notdir $(FC))
+REQUIRED := $(REQUIRED_$(FCNAME))
+ACTUAL := $(shell $(FC) -dumpversion 2>/dev/null | cut -d. -f1,2)
+ifneq ($(REQUIRED),)
+ifneq ($(ACTUAL),$(REQUIRED))
+$(warning $(FCNAME) version is $(ACTUAL), this project is pinned to $(REQUIRED) -- `brew upgrade $(FCNAME)`)
+endif
 endif
 
 S = src/f
@@ -18,7 +34,11 @@ T = test/f
 executables = clotran clotran-bin rc_test atom_test persistent_vector_test \
 	persistent_list_test persistent_hash_map_test rt_test persistent_array_map_test env_test namespace_test eval_test native_test gc_test
 
-.PHONY: all test clean
+unit-tests = rc_test atom_test persistent_vector_test persistent_list_test \
+	persistent_hash_map_test rt_test persistent_array_map_test env_test \
+	namespace_test eval_test native_test gc_test
+
+.PHONY: all test crosscheck clean
 all: $(executables)
 
 $(S)/rc.o: $(S)/rc.f90
@@ -129,9 +149,18 @@ clotran: scripts/clotran clotran-bin
 	cp scripts/clotran $@
 	chmod +x $@
 
-test: rc_test atom_test persistent_vector_test persistent_list_test persistent_hash_map_test \
-	rt_test persistent_array_map_test env_test namespace_test eval_test native_test gc_test
-	for t in $^; do echo "--- $$t ---"; ./$$t || exit 1; done
+# clotran-bin is a prerequisite but NOT run here: scripts/run-clojure-tests
+# drives it. It is listed because `make clean && make test` used to leave
+# no binary at all, and that script then reported every namespace as
+# CRASHED -- a missing binary looking exactly like a real regression.
+test: $(unit-tests) clotran-bin
+	for t in $(unit-tests); do echo "--- $$t ---"; ./$$t || exit 1; done
+
+# What runs before every commit. Ends on the default compiler so the
+# tree is left with the build you actually use.
+crosscheck:
+	$(MAKE) clean && $(MAKE) FC=flang test
+	$(MAKE) clean && $(MAKE) test
 
 clean:
 	rm -rf $(S)/*.o $(S)/*.mod $(executables) *.dSYM
