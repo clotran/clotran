@@ -278,29 +278,29 @@ contains
   ! guaranteed collection, which is why the thrown value is a GC
   ! global root rather than a plain module variable.
   subroutine check_try_catch()
-    call ev("14a. ", "(try* 1 (catch* e 2))", "1")
-    call ev("14b. ", "(try* (throw 7) (catch* e e))", "7")
-    call ev("14c. ", "(try* (throw :boom) (catch* e e))", ":boom")
+    call ev("14a. ", "(try 1 (catch Throwable e 2))", "1")
+    call ev("14b. ", "(try (throw 7) (catch Throwable e e))", "7")
+    call ev("14c. ", "(try (throw :boom) (catch Throwable e e))", ":boom")
     ! A thrown collection: the value has to be traced, not just copied.
-    call ev("14d. ", "(try* (throw (list 1 2 3)) (catch* e (count e)))", "3")
+    call ev("14d. ", "(try (throw (list 1 2 3)) (catch Throwable e (count e)))", "3")
     ! An internal error is catchable too, and arrives as a MAP rather
     ! than a bare string -- so a handler can tell it from a value the
     ! program itself threw. 14i is that distinction.
-    call ev("14e. ", "(try* undefined-thing (catch* e :caught))", ":caught")
+    call ev("14e. ", "(try undefined-thing (catch Throwable e :caught))", ":caught")
     ! The handler runs in a scope where e is bound, and the outer
     ! environment is still visible.
-    call ev("14f. ", "(do (def x 10) (try* (throw 5) (catch* e (+ e x))))", "15")
+    call ev("14f. ", "(do (def x 10) (try (throw 5) (catch Throwable e (+ e x))))", "15")
     ! Nothing thrown: the catch clause must not run.
-    call ev("14g. ", "(try* (+ 1 1) (catch* e :no))", "2")
+    call ev("14g. ", "(try (+ 1 1) (catch Throwable e :no))", "2")
     ! Nested: the inner catch handles it, the outer does not fire.
     call ev("14h. ", &
-         "(try* (try* (throw 1) (catch* e (+ e 10))) (catch* e :outer))", "11")
+         "(try (try (throw 1) (catch Throwable e (+ e 10))) (catch Throwable e :outer))", "11")
     ! A thrown string stays a string; an internal error is a map. If
     ! internal errors were strings too, these two would be
     ! indistinguishable to a handler that wants to re-raise what it
     ! does not recognise.
-    call ev("14i. ", '(try* (throw "x") (catch* e e))', '"x"')
-    call ev("14j. ", "(try* nope (catch* e (count e)))", "1")
+    call ev("14i. ", '(try (throw "x") (catch Throwable e e))', '"x"')
+    call ev("14j. ", "(try nope (catch Throwable e (count e)))", "1")
   end subroutine check_try_catch
 
   subroutine check_multi_arity()
@@ -330,7 +330,7 @@ contains
     call ev("16e. ", "(do (def s (lazy-seq* (throw :boom))) :made-it)", ":made-it")
     ! ...and asking DOES run it.
     call ev("16f. ", &
-         "(try* (first (lazy-seq* (throw :boom))) (catch* e e))", ":boom")
+         "(try (first (lazy-seq* (throw :boom))) (catch Throwable e e))", ":boom")
     ! An INFINITE seq, taken finitely. Without laziness this does not
     ! terminate; with it, only three cells are ever realised.
     call ev("16g. ", &
@@ -371,7 +371,7 @@ contains
          " (def target (fn* [] :new)) (caller))", ":new")
     ! #'x is the Var itself, not its value.
     call ev("17g. ", "(do (def q 3) (var q))", "#'q")
-    call ev("17h. ", "(try* (var nosuch) (catch* e :unresolved))", ":unresolved")
+    call ev("17h. ", "(try (var nosuch) (catch Throwable e :unresolved))", ":unresolved")
     ! A second namespace has its own bindings.
     call ev("17i. ", &
          "(do (def a 1) (in-ns (quote other)) (def a 2) a)", "2")

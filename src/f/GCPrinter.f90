@@ -240,6 +240,12 @@ contains
          if (dat%tag /= GCT_NIL) s = s // ", :data " // gcp_str(dat, .true.)
          s = s // "}"
        end block
+    case (OBJ_META)
+       ! Metadata is not printed by default -- *print-meta* is false --
+       ! so a wrapped value prints as the value. Without this every
+       ! hinted form in core.clj printed as #<object>, which made the
+       ! load report name forms nobody could identify.
+       s = gcp_str(gc_slot(v, 1), readable)
     case (OBJ_SB)
        s = gcp_str(gc_slot(v, 1), readable)
     case (OBJ_MULTIFN)

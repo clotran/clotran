@@ -4,7 +4,8 @@ Every place clotran does something real Clojure does not, why, and what it
 would take to remove it. A deviation with no entry here is a bug.
 
 **Reference**: `~/jborden/clojure` -- a clone of `clojure/clojure` at
-`07adae6`. Paths below are relative to it. Cite the file and the method;
+`71b4623d` -- the SAME commit as the vendored core.clj (see
+src/clj/clojure/PROVENANCE.md). Paths below are relative to it. Cite the file and the method;
 do not cite memory. That is the whole point of having the clone.
 
 Categories:

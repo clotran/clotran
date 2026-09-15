@@ -50,6 +50,7 @@ module GCEval
   use GCEnv
   use GCNamespace
   use GCPrinter
+  use GCReader
   implicit none
   private
 
@@ -78,7 +79,16 @@ module GCEval
   integer, parameter :: B_ZERO = 59, B_POS = 60, B_NEG = 61
   integer, parameter :: B_MAX = 62, B_MIN = 63
   integer, parameter :: B_EXMSG = 64, B_EXDATA = 65
-  integer, parameter :: B_NEXTID = 76
+  integer, parameter :: B_NEXTID = 76, B_SUBVEC = 77, B_INDEXOF = 78, B_ALWAYS_NIL = 79
+  integer, parameter :: B_EVAL = 80, B_ALTERMETA = 81, B_RESETMETA = 82
+  integer, parameter :: B_SETVAL = 83, B_ALTERVAL = 84, B_CONTAINS = 85, B_FIND = 86
+  integer, parameter :: B_KEY = 87, B_VAL = 88, B_NAMESPACE = 89
+  integer, parameter :: B_STARTSWITH = 90, B_STRLEN = 91, B_SUBSTRING = 92
+  integer, parameter :: B_ENDSWITH = 93, B_REPLACE = 94, B_LOADFILE = 95
+  integer, parameter :: B_FINDNS = 96, B_LASTINDEXOF = 97, B_RTLOAD = 98
+  integer, parameter :: B_PUSHTB = 99, B_POPTB = 100, B_FINDVAR = 101
+  integer, parameter :: B_GETNAME = 102, B_POP = 103, B_PEEK = 104
+  integer, parameter :: B_MAYBERESOLVE = 105
   integer, parameter :: B_LONGCAST = 66, B_DBLCAST = 67, B_BOOLCAST = 68, B_CHARCAST = 69
   integer, parameter :: B_BITAND = 70, B_BITOR = 71, B_BITXOR = 72, B_BITNOT = 73
   integer, parameter :: B_SHL = 74, B_SHR = 75
@@ -116,6 +126,19 @@ module GCEval
   ! rather than a bigger number.
   !
   ! CLOTRAN_MAX_DEPTH overrides it, which is what -Xss is for.
+  ! The environment `eval` uses. Clojure's eval has no lexical
+  ! environment either -- Compiler.eval analyses against an empty local
+  ! env -- so this is the bottom frame and nothing else.
+  ! The stack of dynamic binding frames. Each frame is a map from Var
+  ! to the value that Var held before the frame was pushed, so popping
+  ! restores it.
+  !
+  ! Clojure's is THREAD-LOCAL -- Var.dvals is a ThreadLocal, which is
+  ! the whole point of a dynamic Var -- and this one is global. With one
+  ! thread the two are indistinguishable; with more they are not.
+  ! DEVIATIONS.md 10.
+  type(gc_root), save :: binding_stack_root
+  type(gc_root), save :: global_env_root
   integer, save :: ev_depth = 0
   integer, save :: ev_limit = 0
 
@@ -189,6 +212,7 @@ contains
     base = vs_enter(2)
     env = gce_new(gc_nil(), roots)
     call vs_set(base + 1, env)
+    call gc_global_keep(global_env_root, vs_get(base + 1))
     core = gcn_find_or_create("clojure.core", [vs_get(base + 1)])
     call vs_set(base + 2, core)
     call bind_builtin(core, "+", B_ADD)
@@ -243,6 +267,18 @@ contains
     call bind_builtin(core, "dec", B_DEC)
     call bind_builtin(core, "compare", B_COMPARE)
     call bind_builtin(core, "deref", B_DEREF)
+    call bind_builtin(core, "subvec", B_SUBVEC)
+    call bind_builtin(core, "contains?", B_CONTAINS)
+    call bind_builtin(core, "find", B_FIND)
+    call bind_builtin(core, "key", B_KEY)
+    call bind_builtin(core, "val", B_VAL)
+    call bind_builtin(core, "namespace", B_NAMESPACE)
+    call bind_builtin(core, "pop", B_POP)
+    call bind_builtin(core, "peek", B_PEEK)
+    ! load-file is a Java-side Var in Clojure -- core.clj only decorates
+    ! it with (alter-meta! #'load-file assoc :added "1.0") -- so it has
+    ! to exist before core.clj loads, like *ns* and *out*.
+    call bind_builtin(core, "load-file", B_LOADFILE)
     call bind_builtin(core, "zero?", B_ZERO)
     call bind_builtin(core, "pos?", B_POS)
     call bind_builtin(core, "neg?", B_NEG)
@@ -279,6 +315,16 @@ contains
     call bind_var(core, "*compile-files*", gc_bool(.false.))
     call bind_var(core, "*file*", gc_nil())
     call bind_var(core, "*source-path*", gc_nil())
+    call bind_var(core, "*compile-path*", gc_str("classes", [vs_get(base + 1)]))
+    call bind_var(core, "*warn-on-reflection*", gc_bool(.false.))
+    call bind_var(core, "*clojure-version*", gca_empty([vs_get(base + 1)]))
+    call bind_var(core, "*fn-loader*", gc_nil())
+    call bind_var(core, "*verbose-defrecords*", gc_bool(.false.))
+    call bind_var(core, "*print-namespace-maps*", gc_bool(.false.))
+    call bind_var(core, "*repl*", gc_bool(.false.))
+    call bind_var(core, "*compiler-options*", gca_empty([vs_get(base + 1)]))
+    call bind_var(core, "*suppress-read*", gc_nil())
+    call bind_var(core, "*use-context-classloader*", gc_bool(.true.))
     call bind_builtin(core, "second", B_SECOND)
     call bind_builtin(core, "meta", B_META)
     call bind_builtin(core, "with-meta", B_WITHMETA)
@@ -455,8 +501,12 @@ contains
           out = gce_eval(gc_slot(form, 1), env, [vs_get(base + 1)])
        case (OBJ_VECTOR)
           out = eval_vector(form, env)
+       case (OBJ_MAP, OBJ_HAMT)
+          out = eval_map(form, env)
+       case (OBJ_SET)
+          out = eval_set(form, env)
        case default
-          out = form ! maps, closures, builtins: self-evaluating here
+          out = form ! closures, builtins, vars: self-evaluating
        end select
     case default
        out = form ! nil, bool, int, real, char, string, keyword
@@ -488,7 +538,7 @@ contains
           gc_ref_is(sym%ref, "let*") .or. gc_ref_is(sym%ref, "fn*") .or. &
           gc_ref_is(sym%ref, "loop*") .or. gc_ref_is(sym%ref, "recur") .or. &
           gc_ref_is(sym%ref, "defmacro*") .or. gc_ref_is(sym%ref, "quasiquote") .or. &
-          gc_ref_is(sym%ref, "try*") .or. gc_ref_is(sym%ref, "throw") .or. &
+          gc_ref_is(sym%ref, "try") .or. gc_ref_is(sym%ref, "throw") .or. &
           gc_ref_is(sym%ref, "lazy-seq*") .or. gc_ref_is(sym%ref, ".") .or. &
           gc_ref_is(sym%ref, "new") .or. gc_ref_is(sym%ref, "clojure.core/import*") .or. &
           gc_ref_is(sym%ref, "var")
@@ -620,7 +670,7 @@ contains
           last_error = gcp_str(a, .true.)
        end if
 
-    else if (gc_ref_is(head%ref, "try*")) then
+    else if (gc_ref_is(head%ref, "try")) then
        out = eval_try(vs_get(base + 3), vs_get(base + 2))
 
     else if (gc_ref_is(head%ref, "quasiquote")) then
@@ -703,7 +753,11 @@ contains
        return
     end if
     do i = 0, n - 2, 2
-       k = gcv_nth(vs_get(base + 3), i)
+       ! The NAME can carry a type hint -- core.clj writes
+       ! (let [^clojure.lang.Symbol tag (:tag m)] ...) -- so the wrapper
+       ! comes off, exactly as it does for a parameter. Binding the
+       ! wrapper makes the local invisible in its own body.
+       k = strip_meta(gcv_nth(vs_get(base + 3), i))
        v = gce_eval(gcv_nth(vs_get(base + 3), i + 1), vs_get(base + 4), &
             [vs_get(base + 1), vs_get(base + 3)])
        if (has_error) then
@@ -751,7 +805,7 @@ contains
     names = gcv_empty([vs_get(base + 1), vs_get(base + 3)])
     call vs_set(base + 4, names)
     do i = 0, n - 2, 2
-       names = gcv_conj(vs_get(base + 4), gcv_nth(vs_get(base + 3), i), &
+       names = gcv_conj(vs_get(base + 4), strip_meta(gcv_nth(vs_get(base + 3), i)), &
             [vs_get(base + 1), vs_get(base + 3)])
        call vs_set(base + 4, names)
     end do
@@ -1135,6 +1189,7 @@ contains
     type(gc_value), intent(in) :: args, env
     type(gc_value) :: out, target, member, rest, margs
     character(len=:), allocatable :: mname
+    logical :: is_call
     integer :: base
 
     out = gc_nil()
@@ -1150,11 +1205,17 @@ contains
     ! call it -- Clojure accepts either spelling, so the arguments
     ! come from inside the parens when there are parens and from the
     ! rest of the form when there are not.
+    ! PARENS MEAN A CALL, arguments or not. (. RT (nextID)) takes none
+    ! and must still be invoked; returning the method itself is how a
+    ! gensym ended up named seq__#<object>. Without parens it is a field
+    ! read, which is what PersistentList/creator is.
     if (gcl_is(member)) then
+       is_call = .true.
        margs = gcl_rest(member, [vs_get(base + 1)])
        member = gcl_first(member)
     else
        margs = gcl_rest(rest, [vs_get(base + 1)])
+       is_call = (gcl_count(margs) > 0)
     end if
     if (member%tag /= GCT_SYM) then
        call fail(". needs a member name")
@@ -1170,7 +1231,7 @@ contains
     if (target%tag == GCT_SYM) then
        if (is_host_class(target)) then
           out = static_member(gc_ref_text(target%ref), mname, vs_get(base + 1))
-          if (.not. has_error .and. gcl_count(vs_get(base + 4)) > 0) &
+          if (.not. has_error .and. is_call) &
                out = apply_forms(out, vs_get(base + 4), vs_get(base + 2))
           call vs_leave(base)
           return
@@ -1258,7 +1319,14 @@ contains
     case ("more");     out = native(B_REST, "rest", [roots])
     case ("cons");     out = native(B_CONS, "cons", [roots])
     case ("isInstance"); out = native(B_INSTANCE, "instance?", [roots])
-    case ("getName", "getSimpleName"); out = native(B_NAME, "name", [roots])
+    case ("getName", "getSimpleName"); out = native(B_GETNAME, "clotran-get-name", [roots])
+    case ("getNamespace"); out = native(B_NAMESPACE, "namespace", [roots])
+    ! The String methods core.clj reaches for while loading libs.
+    case ("startsWith"); out = native(B_STARTSWITH, "clotran-starts-with", [roots])
+    case ("endsWith"); out = native(B_ENDSWITH, "clotran-ends-with", [roots])
+    case ("replace"); out = native(B_REPLACE, "clotran-replace", [roots])
+    case ("length"); out = native(B_STRLEN, "clotran-length", [roots])
+    case ("substring"); out = native(B_SUBSTRING, "subs", [roots])
     ! (. f (applyTo (seq args))) is core.clj's own apply, and the
     ! target becoming the first argument makes it exactly (apply f seq).
     case ("applyTo");   out = native(B_APPLY, "apply", [roots])
@@ -1273,6 +1341,21 @@ contains
     case ("getMessage", "getLocalizedMessage")
        out = native(B_EXMSG, "ex-message", [roots])
     case ("getData");   out = native(B_EXDATA, "ex-data", [roots])
+    ! A map entry is a two-element vector here, so key and val are the
+    ! two nths -- which is what Clojure's MapEntry is too.
+    case ("getKey");   out = native(B_KEY, "key", [roots])
+    case ("getValue"); out = native(B_VAL, "val", [roots])
+    ! IReference.alterMeta is resetMeta(alter.applyTo(listStar(meta(),
+    ! args))) -- the function sees the current metadata first.
+    case ("alterMeta"); out = native(B_ALTERMETA, "clotran-alter-meta", [roots])
+    case ("resetMeta"); out = native(B_RESETMETA, "clotran-reset-meta", [roots])
+    case ("set", "reset"); out = native(B_SETVAL, "clotran-set-val", [roots])
+    case ("alter", "commute", "swap")
+       out = native(B_ALTERVAL, "clotran-alter-val", [roots])
+    ! String.indexOf, 0-based and -1 when absent, which is the value
+    ! core.clj compares against: (Util/equiv (.indexOf (.getName tag) ".") -1).
+    case ("indexOf");  out = native(B_INDEXOF, "clotran-index-of", [roots])
+    case ("lastIndexOf"); out = native(B_LASTINDEXOF, "clotran-last-index-of", [roots])
     case ("equiv");    out = native(B_EQ, "=", [roots])
     case default;       call fail("no such member: " // mname)
     end select
@@ -1467,7 +1550,20 @@ contains
     end if
     cname = gc_ref_text(cls%ref)
 
-    if (cname == "StringBuilder" .or. cname == "java.lang.StringBuilder") then
+    if (cname == "clojure.lang.Ref" .or. cname == "clojure.lang.Atom" .or. &
+         cname == "clojure.lang.Agent") then
+       ! A Ref IS an atom here: a mutable box, with no transaction
+       ! around it. Single-threaded that is indistinguishable; the
+       ! moment threads arrive it is not. DEVIATIONS.md 9.
+       thunk = gce_eval(gcl_first(gcl_rest(vs_get(base + 1), [vs_get(base + 1)])), &
+            vs_get(base + 2), [vs_get(base + 1)])
+       if (has_error) then
+          call vs_leave(base)
+          return
+       end if
+       call vs_set(base + 3, thunk)
+       out = gc_obj(OBJ_ATOM, [vs_get(base + 3), gc_nil()], [vs_get(base + 3)])
+    else if (cname == "StringBuilder" .or. cname == "java.lang.StringBuilder") then
        thunk = gc_str("", [vs_get(base + 1)])
        if (gcl_count(vs_get(base + 1)) > 1) then
           thunk = gce_eval(gcl_first(gcl_rest(vs_get(base + 1), [vs_get(base + 1)])), &
@@ -1585,9 +1681,15 @@ contains
          gc_ref_is(sym%ref, "clojure.lang.PersistentHashMap") .or. &
          gc_ref_is(sym%ref, "clojure.lang.PersistentArrayMap") .or. &
          gc_ref_is(sym%ref, "clojure.lang.PersistentHashSet") .or. &
+         gc_ref_is(sym%ref, "clojure.lang.PersistentTreeSet") .or. &
+         gc_ref_is(sym%ref, "clojure.lang.PersistentTreeMap") .or. &
          gc_ref_is(sym%ref, "clojure.lang.Symbol") .or. &
          gc_ref_is(sym%ref, "clojure.lang.Keyword") .or. &
          gc_ref_is(sym%ref, "clojure.lang.Numbers") .or. &
+         gc_ref_is(sym%ref, "clojure.lang.Compiler$HostExpr") .or. &
+         gc_ref_is(sym%ref, "clojure.lang.Compiler") .or. &
+         gc_ref_is(sym%ref, "clojure.lang.Namespace") .or. &
+         gc_ref_is(sym%ref, "clojure.lang.Var") .or. &
          gc_ref_is(sym%ref, "System") .or. gc_ref_is(sym%ref, "java.lang.System")
   end function is_host_class
 
@@ -1625,9 +1727,17 @@ contains
            mname == "createAsIfByAssoc") then
           out = native(B_HMAP, "hash-map", [roots]); return
        end if
-    else if (cls == "clojure.lang.PersistentHashSet") then
+    else if (cls == "clojure.lang.PersistentHashSet" .or. &
+             cls == "clojure.lang.PersistentTreeSet") then
+       ! A sorted set is an ORDINARY set here -- no ordering. core.clj
+       ! reaches for one first to hold *loaded-libs*, which only ever
+       ! asks about membership. DEVIATIONS.md 9.
        if (mname == "create" .or. mname == "createWithCheck") then
           out = native(B_HSET, "hash-set", [roots]); return
+       end if
+    else if (cls == "clojure.lang.PersistentTreeMap") then
+       if (mname == "create" .or. mname == "createWithCheck") then
+          out = native(B_HMAP, "hash-map", [roots]); return
        end if
     else if (cls == "System" .or. cls == "java.lang.System") then
        if (mname == "getProperty") then
@@ -1673,6 +1783,38 @@ contains
        case ("max"); out = native(B_MAX, "max", [roots]); return
        case ("min"); out = native(B_MIN, "min", [roots]); return
        end select
+    else if (cls == "clojure.lang.Namespace") then
+       if (mname == "find" .or. mname == "findOrCreate") then
+          out = native(B_FINDNS, "find-ns", [roots]); return
+       end if
+    else if (cls == "clojure.lang.Var") then
+       select case (mname)
+       case ("pushThreadBindings")
+          out = native(B_PUSHTB, "push-thread-bindings", [roots]); return
+       case ("popThreadBindings")
+          out = native(B_POPTB, "pop-thread-bindings", [roots]); return
+       case ("find", "intern")
+          out = native(B_FINDVAR, "clotran-find-var", [roots]); return
+       end select
+    else if (cls == "clojure.lang.Compiler") then
+       if (mname == "eval") then
+          out = native(B_EVAL, "eval", [roots]); return
+       end if
+       if (mname == "maybeResolveIn" .or. mname == "resolveIn" .or. &
+            mname == "resolve") then
+          ! Resolve a symbol to its Var, or nil. The namespace argument
+          ! is ignored -- resolution here is current-ns then
+          ! clojure.core, which is DEVIATIONS.md 3.
+          out = native(B_MAYBERESOLVE, "clotran-maybe-resolve", [roots]); return
+       end if
+    else if (cls == "clojure.lang.Compiler$HostExpr") then
+       ! The compiler internals sigs consults to normalise a :tag. Both
+       ! answer nil here, which is the honest answer: there are no
+       ! primitive tags and no classes to resolve a hint to, so
+       ! resolve-tag leaves the parameter vector as written.
+       if (mname == "maybeSpecialTag" .or. mname == "maybeClass") then
+          out = native(B_ALWAYS_NIL, "clotran-nil", [roots]); return
+       end if
     else if (cls == "clojure.lang.Symbol") then
        if (mname == "intern" .or. mname == "create") then
           out = native(B_SYMBOL, "symbol", [roots]); return
@@ -1697,6 +1839,8 @@ contains
        ! RT.nextID is the counter gensym counts on. Shared with the
        ! auto-gensym counter, so a gensym and an x# can never collide.
        case ("nextID"); out = native(B_NEXTID, "clotran-next-id", [roots]); return
+       case ("load"); out = native(B_RTLOAD, "clotran-rt-load", [roots]); return
+       case ("subvec"); out = native(B_SUBVEC, "subvec", [roots]); return
        case ("first");  out = native(B_FIRST, "first", [roots]); return
        case ("next");   out = native(B_NEXT, "next", [roots]);   return
        case ("more");   out = native(B_REST, "rest", [roots]);   return
@@ -1707,6 +1851,11 @@ contains
        case ("nth");    out = native(B_NTH, "nth", [roots]);     return
        case ("conj");   out = native(B_CONJ, "conj", [roots]);   return
        case ("assoc");  out = native(B_ASSOC, "assoc", [roots]); return
+       case ("dissoc"); out = native(B_DISSOC, "dissoc", [roots]); return
+       case ("pop"); out = native(B_POP, "pop", [roots]); return
+       case ("peek"); out = native(B_PEEK, "peek", [roots]); return
+       case ("contains"); out = native(B_CONTAINS, "contains?", [roots]); return
+       case ("find"); out = native(B_FIND, "find", [roots]); return
        case ("keys");   out = native(B_KEYS, "keys", [roots]);   return
        case ("vals");   out = native(B_VALS, "vals", [roots]);   return
        end select
@@ -1786,6 +1935,66 @@ contains
     var = gcn_lookup(gcn_find_or_create("clojure.core", [roots]), sym)
   end function resolve_var
 
+  ! A MAP LITERAL EVALUATES ITS ENTRIES, and a set literal its members.
+  ! {:k (+ 1 2)} is {:k 3}, not a map holding a form.
+  !
+  ! Vectors already did this; maps and sets did not, and the cost was
+  ! not cosmetic. #{'&} held the form (quote &) rather than the symbol,
+  ! so destructure's (some #{'&} b) never found the rest marker and
+  ! every (let [[a & b] ...]) produced a binding for b with nothing
+  ! bound to it.
+  recursive function eval_map(form, env) result(out)
+    type(gc_value), intent(in) :: form, env
+    type(gc_value) :: out, k, v
+    type(gc_value), allocatable :: ks(:), vls(:)
+    integer :: base, i
+
+    base = vs_enter(3)
+    call vs_set(base + 1, form)
+    call vs_set(base + 2, env)
+    call gca_entries(form, ks, vls)
+    out = gca_empty([vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 3, out)
+    do i = 1, size(ks)
+       k = gce_eval(ks(i), vs_get(base + 2), [vs_get(base + 1), vs_get(base + 3)])
+       if (has_error) then
+          call vs_leave(base); return
+       end if
+       v = gce_eval(vls(i), vs_get(base + 2), [vs_get(base + 1), vs_get(base + 3), k])
+       if (has_error) then
+          call vs_leave(base); return
+       end if
+       out = gca_assoc(vs_get(base + 3), k, v, [vs_get(base + 1), vs_get(base + 3)])
+       call vs_set(base + 3, out)
+    end do
+    out = vs_get(base + 3)
+    call vs_leave(base)
+  end function eval_map
+
+  recursive function eval_set(form, env) result(out)
+    type(gc_value), intent(in) :: form, env
+    type(gc_value) :: out, item, mp
+    type(gc_value), allocatable :: ks(:), vls(:)
+    integer :: base, i
+
+    base = vs_enter(3)
+    call vs_set(base + 1, form)
+    call vs_set(base + 2, env)
+    call gca_entries(gc_slot(form, 1), ks, vls)
+    mp = gca_empty([vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 3, mp)
+    do i = 1, size(ks)
+       item = gce_eval(ks(i), vs_get(base + 2), [vs_get(base + 1), vs_get(base + 3)])
+       if (has_error) then
+          call vs_leave(base); return
+       end if
+       mp = gca_assoc(vs_get(base + 3), item, item, [vs_get(base + 1), vs_get(base + 3)])
+       call vs_set(base + 3, mp)
+    end do
+    out = gc_obj(OBJ_SET, [vs_get(base + 3)], [vs_get(base + 3)])
+    call vs_leave(base)
+  end function eval_set
+
   ! Evaluates the head and every argument, then applies. Arguments
   ! accumulate in a GC vector rather than a Fortran array for the same
   ! reason the reader does it: the collector cannot see a local array.
@@ -1853,48 +2062,126 @@ contains
   ! not recognise has no way to tell them apart. Clotran's older
   ! evaluator uses a string here; this is a deliberate improvement on
   ! it, not an accident of the port.
+  ! (try body* (catch Class name body*)* (finally body*)?)
+  !
+  ! The real shape, not the two-form try*/catch* this used to be:
+  ! several body forms, several catch clauses each naming a class to
+  ! match, and an optional finally that runs either way.
   recursive function eval_try(rest, env) result(out)
     type(gc_value), intent(in) :: rest, env
-    type(gc_value) :: out, body, clause, name, handler, child, exc
-    integer :: base
+    type(gc_value) :: out, item, head2, exc, child, fin
+    logical :: caught
+    integer :: base, i, n
 
     out = gc_nil()
-    base = vs_enter(6)
+    base = vs_enter(7)
     call vs_set(base + 1, rest)
     call vs_set(base + 2, env)
-    body = gcl_first(rest)
-    call vs_set(base + 3, body)
-    clause = gcl_first(gcl_rest(vs_get(base + 1), [vs_get(base + 1)]))
-    call vs_set(base + 4, clause)
+    n = gcl_count(rest)
+    fin = gc_nil()
 
-    out = gce_eval(vs_get(base + 3), vs_get(base + 2), [vs_get(base + 1)])
-    if (.not. has_error) then
-       call vs_leave(base); return
-    end if
-    if (.not. gcl_is(vs_get(base + 4))) then
-       call vs_leave(base); return   ! no catch clause: propagate
-    end if
-    if (gcl_count(vs_get(base + 4)) /= 3) then
-       call vs_leave(base); return
+    ! Body first: everything up to the first catch or finally.
+    do i = 0, n - 1
+       item = nth_of(vs_get(base + 1), i)
+       if (is_clause(item, "catch") .or. is_clause(item, "finally")) exit
+       call vs_set(base + 3, item)
+       out = gce_eval(vs_get(base + 3), vs_get(base + 2), [vs_get(base + 1)])
+       if (has_error) exit
+    end do
+
+    if (has_error) then
+       ! Capture the thrown value BEFORE clearing: clearing resets it.
+       exc = thrown_value()
+       if (exc%tag == GCT_NIL) exc = error_value(gce_error(), [vs_get(base + 1)])
+       call vs_set(base + 5, exc)
+       caught = .false.
+       do i = 0, n - 1
+          item = nth_of(vs_get(base + 1), i)
+          if (.not. is_clause(item, "catch")) cycle
+          if (gcl_count(item) < 3) cycle
+          call vs_set(base + 4, item)
+          if (.not. catch_matches(nth_of(vs_get(base + 4), 1), vs_get(base + 5), &
+               vs_get(base + 2))) cycle
+          call gce_clear_error()
+          child = gce_new(vs_get(base + 2), &
+               [vs_get(base + 1), vs_get(base + 4), vs_get(base + 5)])
+          call vs_set(base + 6, child)
+          call gce_set(vs_get(base + 6), strip_meta(nth_of(vs_get(base + 4), 2)), &
+               vs_get(base + 5), [vs_get(base + 1), vs_get(base + 4)])
+          out = eval_body(gcl_rest(gcl_rest(gcl_rest(vs_get(base + 4), &
+               [vs_get(base + 1)]), [vs_get(base + 1)]), [vs_get(base + 1)]), &
+               vs_get(base + 6))
+          caught = .true.
+          exit
+       end do
     end if
 
-    ! Capture the exception BEFORE clearing, since clearing resets the
-    ! thrown value too.
-    exc = thrown_value()
-    if (exc%tag == GCT_NIL) exc = error_value(gce_error(), [vs_get(base + 1)])
-    call vs_set(base + 5, exc)
-    call gce_clear_error()
+    ! finally runs whether or not anything was caught, and its value is
+    ! discarded -- but an error inside it wins.
+    do i = 0, n - 1
+       item = nth_of(vs_get(base + 1), i)
+       if (.not. is_clause(item, "finally")) cycle
+       call vs_set(base + 7, item)
+       block
+         logical :: had
+         type(gc_value) :: saved_exc
+         character(len=:), allocatable :: saved_msg
+         had = has_error
+         saved_msg = last_error
+         saved_exc = thrown_value()
+         call gce_clear_error()
+         fin = eval_body(gcl_rest(vs_get(base + 7), [vs_get(base + 1)]), &
+              vs_get(base + 2))
+         if (.not. has_error .and. had) then
+            has_error = .true.
+            last_error = saved_msg
+            call set_thrown(saved_exc)
+         end if
+       end block
+       exit
+    end do
 
-    name = nth_of(vs_get(base + 4), 1)
-    handler = nth_of(vs_get(base + 4), 2)
-    call vs_set(base + 6, handler)
-    child = gce_new(vs_get(base + 2), &
-         [vs_get(base + 1), vs_get(base + 5), vs_get(base + 6)])
-    call gce_set(child, name, vs_get(base + 5), &
-         [vs_get(base + 1), vs_get(base + 6)])
-    out = gce_eval(vs_get(base + 6), child, [vs_get(base + 1)])
     call vs_leave(base)
   end function eval_try
+
+  ! Whether a form is a (catch ...) or (finally ...) clause.
+  logical function is_clause(v, want)
+    type(gc_value), intent(in) :: v
+    character(len=*), intent(in) :: want
+    type(gc_value) :: h
+    is_clause = .false.
+    if (.not. gcl_is(v)) return
+    if (gcl_count(v) == 0) return
+    h = strip_meta(gcl_first(v))
+    if (h%tag /= GCT_SYM) return
+    is_clause = gc_ref_is(h%ref, want)
+  end function is_clause
+
+  ! Whether a catch clause'\''s class matches the thrown value. Throwable
+  ! and Exception catch everything, which is what core.clj relies on;
+  ! a named class matches what the value was constructed with.
+  recursive function catch_matches(cls, exc, env) result(yes)
+    type(gc_value), intent(in) :: cls, exc, env
+    logical :: yes
+    character(len=:), allocatable :: want
+    type(gc_value) :: got
+
+    yes = .true.
+    if (cls%tag /= GCT_SYM) return
+    want = gc_ref_text(cls%ref)
+    if (want == "Throwable" .or. want == "java.lang.Throwable" .or. &
+         want == "Exception" .or. want == "java.lang.Exception") return
+    if (gc_kind(exc) /= OBJ_ERR) then
+       yes = .false.
+       return
+    end if
+    got = gc_slot(exc, 1)
+    if (got%tag /= GCT_SYM) then
+       yes = .false.
+       return
+    end if
+    yes = (gc_ref_text(got%ref) == want)
+  end function catch_matches
 
   ! {:error "message"} -- an internal failure as an ordinary clotran
   ! map, so it prints, can be destructured, and is distinguishable
@@ -2454,11 +2741,16 @@ contains
     call vs_leave(base)
   end function mx_walk
 
-  recursive function apply(fn, args) result(out)
-    type(gc_value), intent(in) :: fn, args
-    type(gc_value) :: out, child, body, params
+  recursive function apply(fn0, args) result(out)
+    type(gc_value), intent(in) :: fn0, args
+    type(gc_value) :: out, child, body, params, fn
     integer :: base, i, n
 
+    ! A function can arrive wrapped: core.clj's fn macro returns
+    ! (with-meta (cons (quote fn*) decl) (meta &form)), so the value a
+    ! caller holds is an OBJ_META around the closure. Metadata never
+    ! changes what a value IS.
+    fn = strip_meta(fn0)
     out = gc_nil()
     base = vs_enter(4)
     call vs_set(base + 1, fn)
@@ -2695,18 +2987,19 @@ contains
          if (out%tag == GCT_NIL .and. n >= 3) out = gcv_nth(vs_get(base + 1), 2)
        end block
     case (B_GET)
-       out = gca_get(gcv_nth(args, 0), gcv_nth(args, 1))
+       a = strip_meta(gcv_nth(args, 0))
+       out = gca_get(a, gcv_nth(args, 1))
        if (out%tag == GCT_NIL .and. n >= 3) then
-          if (.not. gca_contains(gcv_nth(args, 0), gcv_nth(args, 1))) &
-               out = gcv_nth(args, 2)
+          if (.not. gca_contains(a, gcv_nth(args, 1))) out = gcv_nth(args, 2)
        end if
     case (B_ASSOC)
-       out = gca_assoc(gcv_nth(vs_get(base + 1), 0), gcv_nth(vs_get(base + 1), 1), &
+       out = gca_assoc(strip_meta(gcv_nth(vs_get(base + 1), 0)), &
+            gcv_nth(vs_get(base + 1), 1), &
             gcv_nth(vs_get(base + 1), 2), [vs_get(base + 1)])
     case (B_KEYS, B_VALS)
        block
          type(gc_value), allocatable :: ks(:), vls(:)
-         call gca_entries(gcv_nth(vs_get(base + 1), 0), ks, vls)
+         call gca_entries(strip_meta(gcv_nth(vs_get(base + 1), 0)), ks, vls)
          out = gcl_empty([vs_get(base + 1)])
          do i = size(ks), 1, -1
             if (id == B_KEYS) then
@@ -2721,39 +3014,15 @@ contains
        ! should NOT go through seq: (conj [1] 2) appends, (conj (list 1)
        ! 2) prepends, (conj {:a 1} [:b 2]) assocs. That difference is
        ! the feature, not an inconsistency.
-       a = gcv_nth(vs_get(base + 1), 0)
-       b = gcv_nth(vs_get(base + 1), 1)
-       if (gcv_is(a)) then
-          out = gcv_conj(a, b, [vs_get(base + 1)])
-       else if (gca_is(a)) then
-          ! A pair assocs; a MAP MERGES. APersistentMap.cons walks the
-          ! seq of the argument and assocs each entry, so (conj m1 m2)
-          ! is a merge -- which is how defn accumulates a Var's
-          ! metadata out of the doc string and the attr map.
-          if (gca_is(b)) then
-             block
-               type(gc_value) :: ks(0), vls(0), mm
-               type(gc_value), allocatable :: kk(:), vv(:)
-               integer :: j
-               call gca_entries(b, kk, vv)
-               mm = a
-               call vs_set(base + 2, mm)
-               do j = 1, size(kk)
-                  mm = gca_assoc(vs_get(base + 2), kk(j), vv(j), &
-                       [vs_get(base + 1), vs_get(base + 2)])
-                  call vs_set(base + 2, mm)
-               end do
-               out = vs_get(base + 2)
-             end block
-          else
-             out = gca_assoc(a, seq_elem(b, 0, [vs_get(base + 1)]), &
-                  seq_elem(b, 1, [vs_get(base + 1)]), [vs_get(base + 1)])
-          end if
-       else if (a%tag == GCT_NIL) then
-          out = gcl_cons(b, gcl_empty([vs_get(base + 1)]), [vs_get(base + 1)])
-       else
-          out = gcl_cons(b, to_seq(a, [vs_get(base + 1)]), [vs_get(base + 1)])
-       end if
+       ! VARIADIC: (conj [] 1 2) is [1 2]. Taking only the first item
+       ! silently dropped the rest, which is how maybe-destructured
+       ! built a one-element parameter vector.
+       a = strip_meta(gcv_nth(vs_get(base + 1), 0))
+       do i = 1, n - 1
+          a = conj1(a, gcv_nth(vs_get(base + 1), i), [vs_get(base + 1)])
+          call vs_set(base + 2, a)
+       end do
+       out = a
     case (B_EMPTY)
        block
          type(gc_value) :: sv
@@ -2770,10 +3039,22 @@ contains
          do j = 1, n - 2
             fargs = gcv_conj(fargs, gcv_nth(vs_get(base + 1), j), [vs_get(base + 1), fargs])
          end do
-         last = gcv_nth(vs_get(base + 1), n - 1)
-         do j = 0, seq_count(last) - 1
-            fargs = gcv_conj(fargs, seq_at(last, j), [vs_get(base + 1), fargs])
+         ! Through coll_to_vector, not a two-case count: the last
+         ! argument is whatever `seq` produced, which is a VIEW over a
+         ! vector as often as it is a list, and counting only lists and
+         ! vectors made (apply f (seq xs)) call f with no arguments at
+         ! all.
+         call vs_set(base + 2, fargs)
+         last = coll_to_vector(gcv_nth(vs_get(base + 1), n - 1), &
+              [vs_get(base + 1), vs_get(base + 2)])
+         call vs_set(base + 3, last)
+         fargs = vs_get(base + 2)
+         do j = 0, gcv_count(vs_get(base + 3)) - 1
+            fargs = gcv_conj(fargs, gcv_nth(vs_get(base + 3), j), &
+                 [vs_get(base + 1), vs_get(base + 3)])
+            call vs_set(base + 2, fargs)
          end do
+         fargs = vs_get(base + 2)
          out = apply(gcv_nth(vs_get(base + 1), 0), fargs)
        end block
     case (B_PRN)
@@ -2819,8 +3100,8 @@ contains
        ! in a wrapper. nil when there is none, as Clojure's meta does.
        a = gcv_nth(vs_get(base + 1), 0)
        out = gc_nil()
-       if (gcn_is_var(a)) then
-          out = gc_slot(a, 2)
+       if (gcn_is_var(a) .or. gc_kind(a) == OBJ_NS) then
+          out = gc_slot(a, meta_slot(a))
        else if (gc_kind(a) == OBJ_META) then
           out = gc_slot(a, 2)
        end if
@@ -2848,8 +3129,20 @@ contains
        out = gca_dissoc(gcv_nth(vs_get(base + 1), 0), gcv_nth(vs_get(base + 1), 1), &
             [vs_get(base + 1)])
     case (B_NAME)
-       a = gcv_nth(args, 0)
-       out = gc_str(gc_ref_text(a%ref), [vs_get(base + 1)])
+       ! The NAME PART, without the namespace: (name (quote a/b)) is
+       ! "b". Returning the whole text made every qualified symbol
+       ! answer with its qualifier still attached.
+       out = gc_str(name_part(gcv_nth(args, 0)), [vs_get(base + 1)])
+    case (B_GETNAME)
+       ! .getName answers in the type the host uses: a Namespace gives
+       ! back a SYMBOL (which is what ns-name returns), everything else
+       ! a string.
+       a = strip_meta(gcv_nth(args, 0))
+       if (gc_kind(a) == OBJ_NS) then
+          out = gc_sym(gcn_name(a), [vs_get(base + 1)])
+       else
+          out = gc_str(name_part(a), [vs_get(base + 1)])
+       end if
     case (B_KEYWORD)
        a = gcv_nth(args, 0)
        out = gc_key(gc_ref_text(a%ref), [vs_get(base + 1)])
@@ -2943,6 +3236,380 @@ contains
        else
           out = gc_char(achar(a%ival))
        end if
+    case (B_ALTERMETA)
+       block
+         type(gc_value) :: ref, fargs, extra
+         integer :: j
+         ref = gcv_nth(args, 0)
+         call vs_set(base + 2, ref)
+         fargs = gcv_empty([vs_get(base + 1), vs_get(base + 2)])
+         fargs = gcv_conj(fargs, gc_slot(vs_get(base + 2), meta_slot(vs_get(base + 2))), &
+              [vs_get(base + 1), vs_get(base + 2)])
+         call vs_set(base + 3, fargs)
+         extra = coll_to_vector(gcv_nth(args, 2), [vs_get(base + 1), vs_get(base + 3)])
+         fargs = vs_get(base + 3)
+         do j = 0, gcv_count(extra) - 1
+            fargs = gcv_conj(fargs, gcv_nth(extra, j), [vs_get(base + 1), extra])
+            call vs_set(base + 3, fargs)
+         end do
+         out = apply(gcv_nth(args, 1), vs_get(base + 3))
+         if (.not. has_error) then
+            call gc_set_slot(vs_get(base + 2), meta_slot(vs_get(base + 2)), out)
+         end if
+       end block
+    case (B_FINDNS)
+       a = strip_meta(gcv_nth(args, 0))
+       out = gcn_find_or_create(gc_ref_text(a%ref), [vs_get(base + 1)])
+    case (B_LOADFILE)
+       ! Read the whole file, then analyse and evaluate each form. The
+       ! first error ends it, as Compiler.load does.
+       block
+         character(len=:), allocatable :: path, text
+         type(gc_value) :: forms, genv, f
+         integer :: u, st, fsize, j
+         out = gc_nil()
+         path = text_of(gcv_nth(args, 0))
+         open(newunit=u, file=path, access="stream", form="unformatted", &
+              status="old", action="read", iostat=st)
+         if (st /= 0) then
+            call fail("load-file: cannot open " // path)
+         else
+            inquire(unit=u, size=fsize)
+            allocate(character(len=fsize) :: text)
+            read(u, iostat=st) text
+            close(u)
+            if (gc_root_live(global_env_root)) then
+               genv = gc_root_get(global_env_root)
+            else
+               genv = gc_nil()
+            end if
+            call vs_set(base + 2, genv)
+            forms = gcr_read_all(text, [vs_get(base + 1), vs_get(base + 2)])
+            if (gcr_has_error()) then
+               call fail("load-file " // path // ": " // gcr_error())
+            else
+               call vs_set(base + 3, forms)
+               do j = 0, gcv_count(vs_get(base + 3)) - 1
+                  f = gce_analyze(gcv_nth(vs_get(base + 3), j), vs_get(base + 2))
+                  if (has_error) exit
+                  out = gce_eval(f, vs_get(base + 2), &
+                       [vs_get(base + 1), vs_get(base + 3)])
+                  if (has_error) exit
+               end do
+            end if
+         end if
+       end block
+    case (B_ENDSWITH)
+       block
+         character(len=:), allocatable :: hay, ned
+         hay = text_of(gcv_nth(args, 0))
+         ned = text_of(gcv_nth(args, 1))
+         if (len(ned) > len(hay)) then
+            out = gc_bool(.false.)
+         else
+            out = gc_bool(hay(len(hay)-len(ned)+1:) == ned)
+         end if
+       end block
+    case (B_REPLACE)
+       ! String.replace with char or string arguments, every occurrence.
+       block
+         character(len=:), allocatable :: t, frm, too, acc
+         integer :: at
+         t = text_of(gcv_nth(args, 0))
+         frm = text_of(gcv_nth(args, 1))
+         too = text_of(gcv_nth(args, 2))
+         acc = ""
+         do
+            if (len(frm) == 0) exit
+            at = index(t, frm)
+            if (at == 0) exit
+            acc = acc // t(1:at-1) // too
+            t = t(at+len(frm):)
+         end do
+         out = gc_str(acc // t, [vs_get(base + 1)])
+       end block
+    case (B_STARTSWITH)
+       block
+         character(len=:), allocatable :: hay, ned
+         hay = text_of(gcv_nth(args, 0))
+         ned = text_of(gcv_nth(args, 1))
+         if (len(ned) > len(hay)) then
+            out = gc_bool(.false.)
+         else
+            out = gc_bool(hay(1:len(ned)) == ned)
+         end if
+       end block
+    case (B_STRLEN)
+       block
+         type(gc_value) :: cv
+         cv = strip_meta(gcv_nth(args, 0))
+         if (cv%tag == GCT_STR) then
+            out = gc_int(len(gc_ref_text(cv%ref)))
+         else
+            out = gc_int(sq_count(cv, [vs_get(base + 1)]))
+         end if
+       end block
+    case (B_SUBSTRING)
+       block
+         character(len=:), allocatable :: t
+         type(gc_value) :: iv
+         integer :: lo, hi
+         t = text_of(gcv_nth(args, 0))
+         iv = gcv_nth(args, 1)
+         lo = int(iv%ival)
+         hi = len(t)
+         if (n >= 3) then
+            iv = gcv_nth(args, 2)
+            hi = int(iv%ival)
+         end if
+         out = gc_str(t(lo+1:hi), [vs_get(base + 1)])
+       end block
+    case (B_MAYBERESOLVE)
+       block
+         type(gc_value) :: sym2
+         sym2 = strip_meta(gcv_nth(args, n - 1))
+         out = gc_nil()
+         if (sym2%tag == GCT_SYM) out = resolve_var(sym2, vs_get(base + 1))
+       end block
+    case (B_POP, B_PEEK)
+       ! Both work at the END of a vector and the FRONT of a list --
+       ! the end a conj would touch, which is what makes a vector a
+       ! stack and a list a stack too, at opposite ends.
+       block
+         type(gc_value) :: coll, acc
+         integer :: j, cn
+         coll = strip_meta(gcv_nth(args, 0))
+         out = gc_nil()
+         if (gcv_is(coll)) then
+            cn = gcv_count(coll)
+            if (id == B_PEEK) then
+               if (cn > 0) out = gcv_nth(coll, cn - 1)
+            else
+               acc = gcv_empty([vs_get(base + 1)])
+               call vs_set(base + 2, acc)
+               do j = 0, cn - 2
+                  acc = gcv_conj(vs_get(base + 2), gcv_nth(coll, j), &
+                       [vs_get(base + 1), vs_get(base + 2)])
+                  call vs_set(base + 2, acc)
+               end do
+               out = vs_get(base + 2)
+            end if
+         else if (coll%tag /= GCT_NIL) then
+            if (id == B_PEEK) then
+               out = sq_first(coll, [vs_get(base + 1)])
+            else
+               out = sq_rest(coll, [vs_get(base + 1)])
+            end if
+         end if
+       end block
+    case (B_NAMESPACE)
+       ! The qualifier of a qualified symbol or keyword, nil otherwise.
+       block
+         character(len=:), allocatable :: t
+         integer :: sl
+         out = gc_nil()
+         a = strip_meta(gcv_nth(args, 0))
+         if (a%tag == GCT_SYM .or. a%tag == GCT_KEY) then
+            t = gc_ref_text(a%ref)
+            sl = index(t, "/")
+            if (sl > 1) out = gc_str(t(1:sl-1), [vs_get(base + 1)])
+         end if
+       end block
+    case (B_KEY, B_VAL)
+       block
+         type(gc_value) :: e
+         e = strip_meta(gcv_nth(args, 0))
+         if (id == B_KEY) then
+            out = seq_elem(e, 0, [vs_get(base + 1)])
+         else
+            out = seq_elem(e, 1, [vs_get(base + 1)])
+         end if
+       end block
+    case (B_CONTAINS)
+       block
+         type(gc_value) :: coll
+         coll = strip_meta(gcv_nth(args, 0))
+         if (gc_kind(coll) == OBJ_SET) coll = gc_slot(coll, 1)
+         out = gc_bool(gca_contains(coll, gcv_nth(args, 1)))
+       end block
+    case (B_FIND)
+       ! A map entry is a two-element vector, which is what makes
+       ! (key e) and (val e) plain nth calls.
+       block
+         type(gc_value) :: coll, pair
+         coll = strip_meta(gcv_nth(args, 0))
+         out = gc_nil()
+         if (gca_contains(coll, gcv_nth(args, 1))) then
+            pair = gcv_empty([vs_get(base + 1)])
+            pair = gcv_conj(pair, gcv_nth(args, 1), [vs_get(base + 1)])
+            call vs_set(base + 2, pair)
+            pair = gcv_conj(vs_get(base + 2), gca_get(coll, gcv_nth(args, 1)), &
+                 [vs_get(base + 1), vs_get(base + 2)])
+            out = pair
+         end if
+       end block
+    case (B_SETVAL)
+       a = gcv_nth(args, 0)
+       out = gcv_nth(args, 1)
+       call gc_set_slot(a, 1, out)
+    case (B_ALTERVAL)
+       ! (.alter ref f args) is (apply f @ref args), stored back.
+       block
+         type(gc_value) :: ref, fargs, extra
+         integer :: j
+         ref = gcv_nth(args, 0)
+         call vs_set(base + 2, ref)
+         fargs = gcv_empty([vs_get(base + 1), vs_get(base + 2)])
+         fargs = gcv_conj(fargs, gc_slot(vs_get(base + 2), 1), &
+              [vs_get(base + 1), vs_get(base + 2)])
+         call vs_set(base + 3, fargs)
+         if (n >= 3) then
+            extra = coll_to_vector(gcv_nth(args, 2), [vs_get(base + 1), vs_get(base + 3)])
+            fargs = vs_get(base + 3)
+            do j = 0, gcv_count(extra) - 1
+               fargs = gcv_conj(fargs, gcv_nth(extra, j), [vs_get(base + 1), extra])
+               call vs_set(base + 3, fargs)
+            end do
+         end if
+         out = apply(gcv_nth(args, 1), vs_get(base + 3))
+         if (.not. has_error) call gc_set_slot(vs_get(base + 2), 1, out)
+       end block
+    case (B_RESETMETA)
+       a = gcv_nth(args, 0)
+       out = gcv_nth(args, 1)
+       call gc_set_slot(a, meta_slot(a), out)
+    case (B_EVAL)
+       ! Analyse then evaluate, the same two halves load does. definline
+       ! calls this at macroexpansion time to fold its body.
+       block
+         type(gc_value) :: genv, form
+         if (gc_root_live(global_env_root)) then
+            genv = gc_root_get(global_env_root)
+         else
+            genv = gc_nil()
+         end if
+         call vs_set(base + 2, genv)
+         form = gce_analyze(gcv_nth(args, 0), vs_get(base + 2))
+         call vs_set(base + 3, form)
+         if (.not. has_error) &
+              out = gce_eval(vs_get(base + 3), vs_get(base + 2), [vs_get(base + 1)])
+       end block
+    case (B_ALWAYS_NIL)
+       out = gc_nil()
+    case (B_PUSHTB)
+       ! Save each Var's current root, then install the new value. The
+       ! saved map goes on the stack for popThreadBindings.
+       block
+         type(gc_value) :: m, saved, stack
+         type(gc_value), allocatable :: kk(:), vv(:)
+         integer :: j
+         m = strip_meta(gcv_nth(args, 0))
+         call vs_set(base + 2, m)
+         call gca_entries(vs_get(base + 2), kk, vv)
+         saved = gca_empty([vs_get(base + 1), vs_get(base + 2)])
+         call vs_set(base + 3, saved)
+         do j = 1, size(kk)
+            if (gcn_is_var(kk(j))) then
+               saved = gca_assoc(vs_get(base + 3), kk(j), gc_slot(kk(j), 1), &
+                    [vs_get(base + 1), vs_get(base + 3)])
+               call vs_set(base + 3, saved)
+               call gc_set_slot(kk(j), 1, vv(j))
+            end if
+         end do
+         if (gc_root_live(binding_stack_root)) then
+            stack = gc_root_get(binding_stack_root)
+         else
+            stack = gcl_empty([vs_get(base + 3)])
+         end if
+         stack = gcl_cons(vs_get(base + 3), stack, [vs_get(base + 3), stack])
+         call gc_global_keep(binding_stack_root, stack)
+         out = gc_nil()
+       end block
+    case (B_POPTB)
+       block
+         type(gc_value) :: stack, frame
+         type(gc_value), allocatable :: kk(:), vv(:)
+         integer :: j
+         out = gc_nil()
+         if (gc_root_live(binding_stack_root)) then
+            stack = gc_root_get(binding_stack_root)
+            call vs_set(base + 2, stack)
+            if (gcl_count(vs_get(base + 2)) > 0) then
+               frame = gcl_first(vs_get(base + 2))
+               call vs_set(base + 3, frame)
+               call gca_entries(vs_get(base + 3), kk, vv)
+               do j = 1, size(kk)
+                  if (gcn_is_var(kk(j))) call gc_set_slot(kk(j), 1, vv(j))
+               end do
+               call gc_global_keep(binding_stack_root, &
+                    gcl_rest(vs_get(base + 2), [vs_get(base + 2)]))
+            end if
+         end if
+       end block
+    case (B_FINDVAR)
+       block
+         type(gc_value) :: sym2
+         sym2 = strip_meta(gcv_nth(args, 0))
+         out = resolve_var(sym2, vs_get(base + 1))
+       end block
+    case (B_LASTINDEXOF)
+       block
+         character(len=:), allocatable :: hay, ned
+         integer :: j, hit
+         hay = text_of(gcv_nth(args, 0))
+         ned = text_of(gcv_nth(args, 1))
+         hit = 0
+         if (len(ned) > 0 .and. len(ned) <= len(hay)) then
+            do j = 1, len(hay) - len(ned) + 1
+               if (hay(j:j+len(ned)-1) == ned) hit = j
+            end do
+         end if
+         out = gc_int(hit - 1)
+       end block
+    case (B_RTLOAD)
+       ! RT.load takes a CLASSPATH-relative name without its extension:
+       ! (load "core_proxy") reaches here as "clojure/core_proxy". There
+       ! is no classpath, so src/clj is it. DEVIATIONS.md 10.
+       block
+         character(len=:), allocatable :: rel
+         type(gc_value) :: fargs
+         rel = text_of(gcv_nth(args, 0))
+         fargs = gcv_empty([vs_get(base + 1)])
+         fargs = gcv_conj(fargs, gc_str("src/clj/" // rel // ".clj", &
+              [vs_get(base + 1)]), [vs_get(base + 1)])
+         call vs_set(base + 2, fargs)
+         out = call_builtin(B_LOADFILE, vs_get(base + 2))
+       end block
+    case (B_INDEXOF)
+       block
+         character(len=:), allocatable :: hay, ned
+         hay = text_of(gcv_nth(args, 0))
+         ned = text_of(gcv_nth(args, 1))
+         out = gc_int(index(hay, ned) - 1)
+       end block
+    case (B_SUBVEC)
+       ! (subvec v start) and (subvec v start end). A copy rather than a
+       ! view: Clojure's APersistentVector$SubVector shares the source,
+       ! which matters for a big vector and not at all yet.
+       block
+         type(gc_value) :: src, acc, ix
+         integer :: lo, hi, j
+         src = strip_meta(gcv_nth(args, 0))
+         ix = gcv_nth(args, 1)
+         lo = int(ix%ival)
+         hi = gcv_count(src)
+         if (n >= 3) then
+            ix = gcv_nth(args, 2)
+            hi = int(ix%ival)
+         end if
+         acc = gcv_empty([vs_get(base + 1)])
+         call vs_set(base + 2, acc)
+         do j = lo, hi - 1
+            acc = gcv_conj(vs_get(base + 2), gcv_nth(src, j), [vs_get(base + 1), vs_get(base + 2)])
+            call vs_set(base + 2, acc)
+         end do
+         out = vs_get(base + 2)
+       end block
     case (B_NEXTID)
        gensym_id = gensym_id + 1
        out = gc_int(gensym_id)
@@ -3306,12 +3973,18 @@ contains
   !
   ! nil for an EMPTY collection, which is what makes (if (seq c) ...)
   ! the idiomatic emptiness test rather than a special case.
-  recursive function to_seq(v, roots) result(out)
-    type(gc_value), intent(in) :: v
+  ! Metadata is transparent here, as it is everywhere that RECOGNISES
+  ! a value. Clojure keeps metadata on the collection, so a vector with
+  ! metadata is still a vector; ours wraps it, and a funnel that did not
+  ! unwrap made (count (with-meta [1 2] m)) zero and (first ...) nil.
+  ! DEVIATIONS.md 5.
+  recursive function to_seq(v0, roots) result(out)
+    type(gc_value), intent(in) :: v0
     type(gc_value), intent(in) :: roots(:)
-    type(gc_value) :: out
+    type(gc_value) :: out, v
     integer :: base
 
+    v = strip_meta(v0)
     out = gc_nil()
     if (v%tag == GCT_NIL) return
 
@@ -3400,12 +4073,13 @@ contains
   end function seq_elem
 
   ! first/rest work on SEQS only. Anything else is seq'd first.
-  recursive function sq_first(v, roots) result(out)
-    type(gc_value), intent(in) :: v
+  recursive function sq_first(v0, roots) result(out)
+    type(gc_value), intent(in) :: v0
     type(gc_value), intent(in) :: roots(:)
-    type(gc_value) :: out, s
+    type(gc_value) :: out, s, v
     integer :: base
 
+    v = strip_meta(v0)
     out = gc_nil()
     base = vs_enter(1)
     s = to_seq(v, roots)
@@ -3423,12 +4097,13 @@ contains
   ! Always a seq, never nil -- Clojure's `rest`, as opposed to `next`.
   ! For a view this bumps the index and shares the source, so walking
   ! a vector is O(1) per step rather than copying the tail each time.
-  recursive function sq_rest(v, roots) result(out)
-    type(gc_value), intent(in) :: v
+  recursive function sq_rest(v0, roots) result(out)
+    type(gc_value), intent(in) :: v0
     type(gc_value), intent(in) :: roots(:)
-    type(gc_value) :: out, s
+    type(gc_value) :: out, s, v
     integer :: base
 
+    v = strip_meta(v0)
     base = vs_enter(2)
     s = to_seq(v, roots)
     call vs_set(base + 1, s)
@@ -3447,12 +4122,13 @@ contains
 
   ! How many elements a seq yields. Realises a lazy seq, as (count)
   ! must.
-  recursive function sq_count(v, roots) result(n)
-    type(gc_value), intent(in) :: v
+  recursive function sq_count(v0, roots) result(n)
+    type(gc_value), intent(in) :: v0
     type(gc_value), intent(in) :: roots(:)
-    type(gc_value) :: s
+    type(gc_value) :: s, v
     integer :: base, n
 
+    v = strip_meta(v0)
     n = 0
     if (v%tag == GCT_NIL) return
     if (gcl_is(v)) then
@@ -3658,6 +4334,89 @@ contains
        s = gcp_str(v, .false.)
     end if
   end function text_of
+
+  ! conj of ONE item. Collection-polymorphic on purpose, and the one
+  ! place that should NOT go through seq: (conj [1] 2) appends,
+  ! (conj (list 1) 2) prepends, (conj {:a 1} [:b 2]) assocs, and
+  ! (conj {:a 1} {:b 2}) merges. That difference is the feature.
+  recursive function conj1(coll0, x, roots) result(out)
+    type(gc_value), intent(in) :: coll0, x
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, coll
+    integer :: base
+
+    coll = strip_meta(coll0)
+    base = vs_enter(2)
+    call vs_set(base + 1, coll)
+    call vs_set(base + 2, x)
+
+    if (gcv_is(coll)) then
+       out = gcv_conj(vs_get(base + 1), vs_get(base + 2), roots)
+    else if (gc_kind(coll) == OBJ_SET) then
+       out = gc_obj(OBJ_SET, [gca_assoc(gc_slot(vs_get(base + 1), 1), &
+            vs_get(base + 2), vs_get(base + 2), roots)], roots)
+    else if (gca_is(coll)) then
+       if (gca_is(vs_get(base + 2))) then
+          block
+            type(gc_value), allocatable :: kk(:), vv(:)
+            type(gc_value) :: mm
+            integer :: j
+            call gca_entries(vs_get(base + 2), kk, vv)
+            mm = vs_get(base + 1)
+            do j = 1, size(kk)
+               mm = gca_assoc(mm, kk(j), vv(j), roots)
+            end do
+            out = mm
+          end block
+       else
+          out = gca_assoc(vs_get(base + 1), &
+               seq_elem(vs_get(base + 2), 0, roots), &
+               seq_elem(vs_get(base + 2), 1, roots), roots)
+       end if
+    else if (coll%tag == GCT_NIL) then
+       out = gcl_cons(vs_get(base + 2), gcl_empty(roots), roots)
+    else
+       out = gcl_cons(vs_get(base + 2), to_seq(vs_get(base + 1), roots), roots)
+    end if
+    call vs_leave(base)
+  end function conj1
+
+  ! Which slot holds metadata. A Var keeps it in slot 2, but a
+  ! namespace uses slot 2 for its bindings -- writing metadata there
+  ! would empty the namespace -- so OBJ_NS keeps it in slot 4.
+  integer function meta_slot(v)
+    type(gc_value), intent(in) :: v
+    if (gc_kind(v) == OBJ_NS) then
+       meta_slot = 4
+    else
+       meta_slot = 2
+    end if
+  end function meta_slot
+
+  ! A symbol or keyword's name, with any namespace qualifier removed;
+  ! a string is already its own name.
+  function name_part(v0) result(s)
+    type(gc_value), intent(in) :: v0
+    character(len=:), allocatable :: s, t
+    type(gc_value) :: v
+    integer :: sl
+    v = strip_meta(v0)
+    if (gc_kind(v) == OBJ_NS) then
+       s = gcn_name(v)
+       return
+    end if
+    if (gcn_is_var(v)) then
+       s = name_part(gc_slot(v, 4))
+       return
+    end if
+    t = gc_ref_text(v%ref)
+    sl = index(t, "/")
+    if (sl > 1 .and. sl < len(t)) then
+       s = t(sl+1:)
+    else
+       s = t
+    end if
+  end function name_part
 
   function truthy(v) result(yes)
     type(gc_value), intent(in) :: v
