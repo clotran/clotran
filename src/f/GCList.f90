@@ -24,7 +24,7 @@ module GCList
 
   ! Index of the global-root slot holding the empty-list singleton.
   ! Zero until first use; see gcl_empty.
-  integer, save :: empty_root = 0
+  type(gc_root), save :: empty_root
 
   public :: gcl_empty, gcl_cons, gcl_first, gcl_rest, gcl_count, gcl_is
 
@@ -39,13 +39,13 @@ contains
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: v
     type(gc_value) :: none(0)
-    if (empty_root /= 0) then
-       v = gc_global_get(empty_root)
+    if (gc_root_live(empty_root)) then
+       v = gc_root_get(empty_root)
        if (gc_kind(v) == OBJ_CONS) return
     end if
     v = gc_obj(OBJ_CONS, none, roots)
     call gc_set_i1(v, 0)
-    empty_root = gc_global_new(v)
+    call gc_global_keep(empty_root, v)
   end function gcl_empty
 
   function gcl_is(v) result(yes)

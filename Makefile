@@ -76,12 +76,15 @@ gc_test: $(S)/GC.o $(T)/gc_test.f90
 gcp-objects = $(S)/GC.o $(S)/GCMap.o $(S)/GCHamt.o $(S)/GCAssoc.o $(S)/GCList.o \
 	$(S)/GCVector.o $(S)/GCPrinter.o
 
-$(S)/GCEval.o: $(S)/GCEval.f90 $(S)/GC.o $(S)/GCList.o $(S)/GCVector.o \
-	$(S)/GCAssoc.o $(S)/GCEnv.o $(S)/GCPrinter.o
+$(S)/GCNamespace.o: $(S)/GCNamespace.f90 $(S)/GC.o $(S)/GCAssoc.o
 	$(FC) $(FCFLAGS) -c $< -o $@
 
-gc_eval_test: $(gcp-objects) $(S)/GCEnv.o $(S)/GCReader.o $(S)/GCEval.o $(T)/gc_eval_test.f90
-	$(FC) $(FCFLAGS) -o $@ $(gcp-objects) $(S)/GCEnv.o $(S)/GCReader.o $(S)/GCEval.o \
+$(S)/GCEval.o: $(S)/GCEval.f90 $(S)/GC.o $(S)/GCList.o $(S)/GCVector.o \
+	$(S)/GCAssoc.o $(S)/GCEnv.o $(S)/GCNamespace.o $(S)/GCPrinter.o
+	$(FC) $(FCFLAGS) -c $< -o $@
+
+gc_eval_test: $(gcp-objects) $(S)/GCEnv.o $(S)/GCNamespace.o $(S)/GCReader.o $(S)/GCEval.o $(T)/gc_eval_test.f90
+	$(FC) $(FCFLAGS) -o $@ $(gcp-objects) $(S)/GCEnv.o $(S)/GCNamespace.o $(S)/GCReader.o $(S)/GCEval.o \
 		$(T)/gc_eval_test.f90
 
 $(S)/GCReader.o: $(S)/GCReader.f90 $(S)/GC.o $(S)/GCList.o $(S)/GCVector.o $(S)/GCAssoc.o

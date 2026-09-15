@@ -141,6 +141,14 @@ module GC
 
   integer, parameter, public :: OBJ_SLOTS = 4
 
+  ! A claim on a global root slot. Two fields rather than one integer
+  ! because an index alone is ambiguous across a gc_init -- see
+  ! global_gen. Modules keep one of these instead of a bare index.
+  type, public :: gc_root
+     integer :: idx = 0
+     integer :: gen = -1
+  end type gc_root
+
   type, public :: gc_value
      integer :: tag = GCT_NIL
      integer :: ival = 0
@@ -190,6 +198,12 @@ module GC
   integer, parameter :: GC_MAX_GLOBALS = 8
   type(gc_value) :: global_root(GC_MAX_GLOBALS)
   integer :: global_count = 0
+  ! Bumped by gc_init. A module holding a slot index across a reset
+  ! cannot tell "my slot" from "someone else's slot that now has my
+  ! number" -- and a stale index that lands back IN range silently
+  ! overwrites another module's root. The generation is what makes
+  ! that distinguishable; see gc_root and gc_global_keep.
+  integer :: global_gen = 0
 
   ! --- the value stack (PLAN.md 3d, Design B) ----------------------
   !
@@ -243,6 +257,7 @@ module GC
   public :: gc_car, gc_cdr, gc_set_car, gc_set_cdr
   public :: gc_live_count, gc_obj_capacity, gc_check_heap
   public :: gc_global_new, gc_global_set, gc_global_get, gc_global_count
+  public :: gc_global_keep, gc_root_get, gc_root_live
   public :: gc_ensure_init, gc_str_ref, gc_ref_text, gc_ref_is, gc_ref_len
   public :: vs_enter, vs_leave, vs_set, vs_get, vs_depth
   public :: gc_equal, gc_hash
@@ -339,6 +354,7 @@ contains
 
     global_root = gc_nil()
     global_count = 0
+    global_gen = global_gen + 1
     gc_allocs = 0; gc_frees = 0; gc_collections = 0
     gc_no_collect = .false.
   end subroutine gc_init
@@ -855,6 +871,44 @@ contains
     global_root(global_count) = v
     idx = global_count
   end function gc_global_new
+
+  ! Register-or-update, for a caller holding its slot index in a
+  ! module variable across a gc_init.
+  !
+  ! This exists because getting it wrong is silent and has now bitten
+  ! three separate modules. gc_init clears the global-root table, but a
+  ! module's saved index survives it -- so gc_global_set on that stale
+  ! index does NOTHING (it is out of range), and the root is quietly
+  ! never registered again. Everything then works until the first
+  ! collection, which sweeps data that is genuinely live.
+  !
+  ! Callers should use this rather than new/set, and keep the index it
+  ! returns.
+  subroutine gc_global_keep(h, v)
+    type(gc_root), intent(inout) :: h
+    type(gc_value), intent(in) :: v
+    if (h%gen == global_gen .and. h%idx >= 1 .and. h%idx <= global_count) then
+       global_root(h%idx) = v
+    else
+       h%idx = gc_global_new(v)
+       h%gen = global_gen
+    end if
+  end subroutine gc_global_keep
+
+  ! The value in a claimed slot, or nil if the claim is stale.
+  function gc_root_get(h) result(v)
+    type(gc_root), intent(in) :: h
+    type(gc_value) :: v
+    v = gc_nil()
+    if (h%gen /= global_gen) return
+    v = gc_global_get(h%idx)
+  end function gc_root_get
+
+  function gc_root_live(h) result(yes)
+    type(gc_root), intent(in) :: h
+    logical :: yes
+    yes = (h%gen == global_gen .and. h%idx >= 1 .and. h%idx <= global_count)
+  end function gc_root_live
 
   subroutine gc_global_set(idx, v)
     integer, intent(in) :: idx

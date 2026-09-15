@@ -56,6 +56,7 @@ contains
     call check_try_catch()
     call check_multi_arity()
     call check_laziness()
+    call check_namespaces()
     call check_errors()
     call check_heap_sound()
   end subroutine run_all
@@ -342,6 +343,33 @@ contains
          "(do (def from (fn* [n] (lazy-seq* (cons n (from (+ n 1))))))" // &
          " (def s (from 1)) (+ (first s) (first s) (first (rest s))))", "4")
   end subroutine check_laziness
+
+  ! def binds in the NAMESPACE, not the enclosing frame -- which is
+  ! the divergence this evaluator had before namespaces existed.
+  subroutine check_namespaces()
+    call ev("17a. ", "(do (def x 5) x)", "5")
+    ! The one that was wrong before: a def inside a let still defines
+    ! at the top level, exactly as Clojure does.
+    call ev("17b. ", "(do (let* [y 1] (def z 9)) z)", "9")
+    ! A local SHADOWS a var of the same name rather than redefining it.
+    call ev("17c. ", "(do (def w 1) (let* [w 2] w))", "2")
+    call ev("17d. ", "(do (def w 1) (let* [w 2] w) w)", "1")
+    ! A function body sees namespace vars, not just its own frame.
+    call ev("17e. ", "(do (def g 7) ((fn* [] g)))", "7")
+    ! VAR IDENTITY: a closure built before a redefinition sees the new
+    ! value, because def mutates the same Var rather than replacing
+    ! it. This is the whole reason Vars exist, and it is what makes
+    ! redefining a function at a REPL work.
+    call ev("17f. ", &
+         "(do (def target (fn* [] :old)) (def caller (fn* [] (target)))" // &
+         " (def target (fn* [] :new)) (caller))", ":new")
+    ! #'x is the Var itself, not its value.
+    call ev("17g. ", "(do (def q 3) (var q))", "#'q")
+    call ev("17h. ", "(try* (var nosuch) (catch* e :unresolved))", ":unresolved")
+    ! A second namespace has its own bindings.
+    call ev("17i. ", &
+         "(do (def a 1) (in-ns* (quote other)) (def a 2) a)", "2")
+  end subroutine check_namespaces
 
   subroutine check_errors()
     type(gc_value) :: form, env, result

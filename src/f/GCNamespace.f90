@@ -1,0 +1,199 @@
+! GCNamespace: namespaces and Vars, over the GC heap.
+!
+! Standalone like the rest of the new layer; GCEval uses it. See
+! PLAN.md 3c-2/3d.
+!
+! Shape, matching GC.f90's comments on OBJ_NS and OBJ_VAR:
+!
+!   namespace  an object: slot 1 = name, slot 2 = bindings map
+!   var        an object: slot 1 = root value, slot 4 = name
+!
+! WHY VARS EXIST AT ALL, rather than a namespace just mapping a name
+! to a value. A Var is a stable box with IDENTITY: `(def x 1)` then
+! `(def x 2)` mutates the same Var rather than replacing it, so
+! anything holding a reference to it -- a closure created before the
+! second def -- sees the new value. That is what makes redefining a
+! function at the REPL work while everything that already called it
+! keeps working. gc_test check 15d pins the same property one layer
+! down.
+!
+! The registry and the current namespace are GC GLOBAL ROOTS. They
+! have to be: they are reachable from nothing else, and everything a
+! program has defined hangs off them. That is also the semantics --
+! Clojure's namespaces live as long as the process and are dropped
+! only by remove-ns.
+module GCNamespace
+  use GC
+  use GCAssoc
+  implicit none
+  private
+
+  type(gc_root), save :: registry_root   ! a map of name -> namespace
+  type(gc_root), save :: current_root    ! the namespace *ns* names
+
+  public :: gcn_reset, gcn_current, gcn_set_current, gcn_find_or_create
+  public :: gcn_intern, gcn_lookup, gcn_var_value, gcn_set_var, gcn_is_var
+  public :: gcn_name
+
+contains
+
+  ! Re-checks the slot rather than trusting the cached index: gc_init
+  ! clears the global-root registry but these module variables survive
+  ! it, which is the stale-singleton bug GCList's check 4c caught.
+  logical function roots_live()
+    roots_live = .false.
+    if (.not. gc_root_live(registry_root)) return
+    roots_live = gca_is(gc_root_get(registry_root))
+  end function roots_live
+
+  ! Starts (or restarts) with a single namespace, `user`, current.
+  subroutine gcn_reset(roots)
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: reg, ns
+    integer :: base
+
+    base = vs_enter(2)
+    reg = gca_empty(roots)
+    call vs_set(base + 1, reg)
+    call gc_global_keep(registry_root, vs_get(base + 1))
+    ns = make_ns("user", [vs_get(base + 1)])
+    call vs_set(base + 2, ns)
+    call register(ns)
+    call gc_global_keep(current_root, vs_get(base + 2))
+    call vs_leave(base)
+  end subroutine gcn_reset
+
+  function make_ns(name, roots) result(ns)
+    character(len=*), intent(in) :: name
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: ns, nm, binds
+    integer :: base
+    base = vs_enter(2)
+    nm = gc_str(name, roots)
+    call vs_set(base + 1, nm)
+    binds = gca_empty([vs_get(base + 1)])
+    call vs_set(base + 2, binds)
+    ns = gc_obj(OBJ_NS, [vs_get(base + 1), vs_get(base + 2), gc_nil()], &
+         [vs_get(base + 1), vs_get(base + 2)])
+    call vs_leave(base)
+  end function make_ns
+
+  subroutine register(ns)
+    type(gc_value), intent(in) :: ns
+    type(gc_value) :: reg
+    integer :: base
+    base = vs_enter(1)
+    call vs_set(base + 1, ns)
+    reg = gc_root_get(registry_root)
+    reg = gca_assoc(reg, gc_slot(vs_get(base + 1), 1), vs_get(base + 1), &
+         [vs_get(base + 1), reg])
+    call gc_global_keep(registry_root, reg)
+    call vs_leave(base)
+  end subroutine register
+
+  function gcn_current(roots) result(ns)
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: ns
+    if (.not. roots_live()) call gcn_reset(roots)
+    ns = gc_root_get(current_root)
+  end function gcn_current
+
+  subroutine gcn_set_current(ns)
+    type(gc_value), intent(in) :: ns
+    call gc_global_keep(current_root, ns)
+  end subroutine gcn_set_current
+
+  function gcn_name(ns) result(s)
+    type(gc_value), intent(in) :: ns
+    character(len=:), allocatable :: s
+    type(gc_value) :: nm
+    s = ""
+    if (gc_kind(ns) /= OBJ_NS) return
+    nm = gc_slot(ns, 1)
+    s = gc_ref_text(nm%ref)
+  end function gcn_name
+
+  function gcn_find_or_create(name, roots) result(ns)
+    character(len=*), intent(in) :: name
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: ns, key, reg
+    integer :: base
+
+    base = vs_enter(2)
+    if (.not. roots_live()) call gcn_reset(roots)
+    key = gc_str(name, roots)
+    call vs_set(base + 1, key)
+    reg = gc_root_get(registry_root)
+    call vs_set(base + 2, reg)
+    ns = gca_get(vs_get(base + 2), vs_get(base + 1))
+    if (gc_kind(ns) /= OBJ_NS) then
+       ns = make_ns(name, [vs_get(base + 1), vs_get(base + 2)])
+       call register(ns)
+    end if
+    call vs_leave(base)
+  end function gcn_find_or_create
+
+  function gcn_is_var(v) result(yes)
+    type(gc_value), intent(in) :: v
+    logical :: yes
+    yes = (gc_kind(v) == OBJ_VAR)
+  end function gcn_is_var
+
+  function gcn_var_value(v) result(out)
+    type(gc_value), intent(in) :: v
+    type(gc_value) :: out
+    out = gc_nil()
+    if (gcn_is_var(v)) out = gc_slot(v, 1)
+  end function gcn_var_value
+
+  subroutine gcn_set_var(v, val)
+    type(gc_value), intent(in) :: v, val
+    if (gcn_is_var(v)) call gc_set_slot(v, 1, val)
+  end subroutine gcn_set_var
+
+  ! Interns `sym` in `ns`. An existing Var is MUTATED rather than
+  ! replaced -- that is the whole reason Vars exist, and it is what
+  ! lets a closure built before a redefinition see the new value.
+  function gcn_intern(ns, sym, val, roots) result(var)
+    type(gc_value), intent(in) :: ns, sym, val
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: var, binds
+    integer :: base
+
+    var = gc_nil()
+    if (gc_kind(ns) /= OBJ_NS) return
+    base = vs_enter(4)
+    call vs_set(base + 1, ns)
+    call vs_set(base + 2, sym)
+    call vs_set(base + 3, val)
+
+    binds = gc_slot(vs_get(base + 1), 2)
+    var = gca_get(binds, sym)
+    if (gcn_is_var(var)) then
+       call gc_set_slot(var, 1, vs_get(base + 3))
+       call vs_leave(base)
+       return
+    end if
+
+    var = gc_obj(OBJ_VAR, [vs_get(base + 3), gc_nil(), gc_nil(), vs_get(base + 2)], &
+         [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+    call vs_set(base + 4, var)
+    binds = gca_assoc(gc_slot(vs_get(base + 1), 2), vs_get(base + 2), &
+         vs_get(base + 4), [vs_get(base + 1), vs_get(base + 2), vs_get(base + 4)])
+    call gc_set_slot(vs_get(base + 1), 2, binds)
+    var = vs_get(base + 4)
+    call vs_leave(base)
+  end function gcn_intern
+
+  ! The Var `sym` names in `ns`, or nil. Returns the VAR, not its
+  ! value, because a caller that wants the var itself (#'x) and one
+  ! that wants the value need different things from the same lookup.
+  function gcn_lookup(ns, sym) result(var)
+    type(gc_value), intent(in) :: ns, sym
+    type(gc_value) :: var
+    var = gc_nil()
+    if (gc_kind(ns) /= OBJ_NS) return
+    var = gca_get(gc_slot(ns, 2), sym)
+  end function gcn_lookup
+
+end module GCNamespace

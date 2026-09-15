@@ -171,6 +171,10 @@ contains
        s = "#<fn>"
     case (OBJ_ATOM)
        s = "#<atom " // gcp_str(gc_slot(v, 1), readable) // ">"
+    case (OBJ_VAR)
+       s = "#'" // gcp_str(gc_slot(v, 4), .false.)
+    case (OBJ_NS)
+       s = "#<ns " // gcp_str(gc_slot(v, 1), .false.) // ">"
     case (OBJ_ENV)
        s = "#<env>"
     case default

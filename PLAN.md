@@ -833,12 +833,46 @@ the text. A cache writer needs to exclude them.
         found it the hard way (16g returned nil, 16h `(1 nil nil nil)`)
         before it was put back.
 
-      One divergence worth recording: `def` here binds in the CURRENT
-      frame, where real Clojure's `def` always binds at namespace
-      level however deeply nested it is. That is a consequence of
-      there being no namespaces in this evaluator yet, not a decision,
-      and it is why a counter incremented inside a lazy body does not
-      update an outer binding.
+      **Namespaces and Vars** (`src/f/GCNamespace.f90`), which closes
+      the `def` divergence: `def` now interns in the CURRENT NAMESPACE,
+      so `(let [] (def x 1))` defines at the top level exactly as
+      Clojure does (check 17b). Symbol resolution is lexical scope
+      first, then the namespace, so a local shadows a Var rather than
+      redefining it -- which is what makes `(let [map ...])` legal.
+
+      The point of Vars, and check 17f: a Var is a stable box with
+      IDENTITY, so `(def x 2)` after `(def x 1)` MUTATES the same Var
+      rather than replacing it. A closure built before the
+      redefinition therefore sees the new value -- which is what makes
+      redefining a function at a REPL work while everything that
+      already called it keeps working. `(var x)` returns the Var
+      itself, undereferenced.
+
+      ### A trap that bit three modules, now closed
+
+      `gc_init` clears the global-root table, but a module's saved slot
+      index survives it. Three separate modules hit this:
+
+      1. GCList's empty-list singleton -- caught by check 4c, fixed by
+         re-checking the slot.
+      2. GCNamespace's registry -- `gc_global_set` on a stale index is
+         silently a NO-OP (out of range), so the registry was never
+         re-registered and every namespace lookup failed.
+      3. GCEval's thrown value -- worse: a stale index that lands back
+         IN range **overwrites another module's root**. `thrown_root`
+         was clobbering the empty-list singleton.
+
+      A bare integer cannot distinguish "my slot" from "someone else's
+      slot that now has my number", so the fix is a `gc_root` handle
+      carrying an index AND a generation, with the generation bumped by
+      `gc_init`. `gc_global_keep` re-registers whenever the claim is
+      stale. Every module holding a global root now uses it.
+
+      Worth noting how this was found: not by reasoning, but because
+      (2) made eight checks fail at once and (3) left exactly one
+      failing that the isolated probe could not reproduce. The second
+      one only appears when many `gc_init`s run in sequence, which is
+      what a test suite does and a single program never would.
 
       **`try*`/`catch*`/`throw`, and a rooting point worth keeping.**
       `throw` carries a VALUE, not a message, and that value is held

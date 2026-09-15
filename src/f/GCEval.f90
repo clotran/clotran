@@ -48,6 +48,7 @@ module GCEval
   use GCVector
   use GCAssoc
   use GCEnv
+  use GCNamespace
   use GCPrinter
   implicit none
   private
@@ -67,7 +68,7 @@ module GCEval
   ! are unwinding -- so an ordinary variable would be a value the
   ! collector cannot see, and a collection in that window would free
   ! the exception before its handler ever ran.
-  integer, save :: thrown_root = 0
+  type(gc_root), save :: thrown_root
 
   public :: gce_eval, gce_base_env, gce_has_error, gce_error, gce_clear_error
 
@@ -88,17 +89,12 @@ contains
   ! global-root registry but this module variable survives it.
   subroutine set_thrown(v)
     type(gc_value), intent(in) :: v
-    if (thrown_root == 0) then
-       thrown_root = gc_global_new(v)
-    else
-       call gc_global_set(thrown_root, v)
-    end if
+    call gc_global_keep(thrown_root, v)
   end subroutine set_thrown
 
   function thrown_value() result(v)
     type(gc_value) :: v
-    v = gc_nil()
-    if (thrown_root /= 0) v = gc_global_get(thrown_root)
+    v = gc_root_get(thrown_root)
   end function thrown_value
 
   function gce_has_error() result(yes)
@@ -128,6 +124,7 @@ contains
     integer :: base
 
     call gcp_set_forcer(gce_force)
+    call gcn_reset(roots)
     base = vs_enter(1)
     env = gce_new(gc_nil(), roots)
     call vs_set(base + 1, env)
@@ -187,7 +184,19 @@ contains
 
     select case (form%tag)
     case (GCT_SYM)
+       ! Lexical scope first, then the namespace. A local shadows a
+       ! Var of the same name, which is what makes (let [map ...])
+       ! legal rather than a redefinition of clojure.core/map.
        found = gce_find(env, form, out)
+       if (.not. found) then
+          head = gcn_lookup(gcn_current([vs_get(base + 1)]), form)
+          if (gcn_is_var(head)) then
+             ! A bare symbol auto-derefs its Var, matching Clojure --
+             ! #'x is how you ask for the Var itself.
+             out = gcn_var_value(head)
+             found = .true.
+          end if
+       end if
        if (.not. found) call fail("'" // gc_ref_text(form%ref) // "' not found")
     case (GCT_OBJ)
        select case (gc_kind(form))
@@ -223,7 +232,8 @@ contains
           gc_ref_is(sym%ref, "loop*") .or. gc_ref_is(sym%ref, "recur") .or. &
           gc_ref_is(sym%ref, "defmacro*") .or. gc_ref_is(sym%ref, "quasiquote") .or. &
           gc_ref_is(sym%ref, "try*") .or. gc_ref_is(sym%ref, "throw") .or. &
-          gc_ref_is(sym%ref, "lazy-seq*")
+          gc_ref_is(sym%ref, "lazy-seq*") .or. gc_ref_is(sym%ref, "in-ns*") .or. &
+          gc_ref_is(sym%ref, "var")
   end function is_special
 
   recursive function eval_special(form, env) result(out)
@@ -268,14 +278,18 @@ contains
        end do
 
     else if (gc_ref_is(head%ref, "def")) then
+       ! Interns in the CURRENT NAMESPACE, not the enclosing frame --
+       ! (let [] (def x 1)) really does define x at the top level,
+       ! which is Clojure's behaviour and was the one divergence this
+       ! evaluator had before namespaces existed.
        a = gcl_first(vs_get(base + 3))
        call vs_set(base + 4, a)
        rest = gcl_rest(vs_get(base + 3), [vs_get(base + 1)])
        call vs_set(base + 3, rest)
        b = gce_eval(gcl_first(vs_get(base + 3)), vs_get(base + 2), [vs_get(base + 1)])
        if (.not. has_error) then
-          call gce_set(vs_get(base + 2), vs_get(base + 4), b, [vs_get(base + 1)])
-          out = b
+          out = gcn_var_value(gcn_intern(gcn_current([vs_get(base + 1)]), &
+               vs_get(base + 4), b, [vs_get(base + 1), vs_get(base + 4)]))
        end if
 
     else if (gc_ref_is(head%ref, "let*")) then
@@ -289,6 +303,21 @@ contains
 
     else if (gc_ref_is(head%ref, "recur")) then
        out = eval_recur(vs_get(base + 3), vs_get(base + 2))
+
+    else if (gc_ref_is(head%ref, "in-ns*")) then
+       a = gce_eval(gcl_first(vs_get(base + 3)), vs_get(base + 2), [vs_get(base + 1)])
+       if (.not. has_error) then
+          out = gcn_find_or_create(gc_ref_text(a%ref), [vs_get(base + 1)])
+          call gcn_set_current(out)
+       end if
+
+    else if (gc_ref_is(head%ref, "var")) then
+       ! The Var itself, undereferenced -- what #'x means, and what a
+       ! caller needs to hold a stable reference across redefinition.
+       out = gcn_lookup(gcn_current([vs_get(base + 1)]), gcl_first(vs_get(base + 3)))
+       if (.not. gcn_is_var(out)) &
+            call fail("Unable to resolve var: " // &
+            gc_ref_text(nth_sym_ref(vs_get(base + 3))))
 
     else if (gc_ref_is(head%ref, "lazy-seq*")) then
        ! (lazy-seq* body) captures the body in a no-argument closure
@@ -1277,6 +1306,14 @@ contains
     end do
     call vs_leave(base)
   end function lazy_len
+
+  function nth_sym_ref(l) result(r)
+    type(gc_value), intent(in) :: l
+    type(gc_value) :: x
+    integer :: r
+    x = gcl_first(l)
+    r = x%ref
+  end function nth_sym_ref
 
   ! Clojure's truthiness: everything except nil and false.
   function truthy(v) result(yes)
