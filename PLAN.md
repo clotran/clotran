@@ -663,11 +663,46 @@ the loop cheap before starting on the expensive steps.
         alone was never going to find this, which is why the poison
         instrument matters.
 
-      Next step: run the repro under the poison instrument, add the
-      node's address to the message, and record which call site first
-      freed it. With a fast deterministic repro that identifies the
-      sharing path directly -- and the search is now narrowed to code
-      reachable from clojure.test's dynamic bindings.
+      **Mitigated, not fixed: `node_ref_release` no longer frees.**
+      Leaking the `vec_node` makes the premature free harmless, and the
+      measured cost is small -- bootstrap RSS 93 MB against 84 MB,
+      about 10%. In exchange gfortran goes from "multimethods crashes
+      every run" to **163/16/41, identical to flang**, three runs in a
+      row, with every unit suite green on both compilers.
+
+      That trade is worth taking because gfortran is the default build
+      and the one most people will use, and because step 3e deletes
+      this refcounting outright: the GC frees these by tracing, so the
+      missing increment stops mattering rather than needing to be
+      found. Ceiling: a long-running process building many vectors
+      grows without bound. If 3e slips, fix the bug instead -- the
+      repro plus the poison instrument finds it in one run.
+
+      **Bisect: attempted, and it does not isolate this.** Two things
+      worth recording so nobody repeats them:
+
+      - The first run was invalid. The harness accepted any commit that
+        printed a `:type :summary`, but the bisect-specific repro used
+        fully-qualified `clojure.test/deftest`, which does not register
+        a test -- every commit ran **0 assertions** and looked "good".
+        It accused a docs-only commit, which is what gave it away. A
+        bisect harness has to assert that the test genuinely ran, not
+        merely that it finished.
+      - With a correct harness (force `FC=gfortran` and `-frecursive`
+        at every commit, since older trees default to flang and
+        pre-date that fix; require `Ran N tests containing M
+        assertions` with M > 0), **every commit back to `a3bb429` is
+        bad** -- 22 commits, and further back the repro cannot even be
+        expressed because `:refer` did not exist yet. The bug predates
+        the earliest commit that can express it. It is old code, not a
+        regression, and bisect has nothing to bracket.
+
+      Correction to an earlier note here: this entry previously said
+      "pre-existing" on the strength of stashing `src/f` and rebuilding.
+      That test was worthless -- 3c-1 was already committed, so the
+      stash removed nothing relevant. The conclusion happens to be
+      right, but the evidence for it is the bisect above (`931c93a`,
+      which predates every accessor commit, is bad), not that stash.
 - [ ] **4b. Integer opcodes.** `eval_form` dispatches special forms by
       a cascade of string comparisons: 5.26 ns for ten of them, against
       0.09 ns for an integer `select case`, and there are ~30.

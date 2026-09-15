@@ -903,7 +903,26 @@ contains
              call node_ref_release(h%ptr%children(i))
           end do
        end if
-       deallocate(h%ptr)
+       ! ponytail: a vec_node is deliberately NOT freed here, because
+       ! something releases one while a live node_ref still points at
+       ! it -- PLAN.md 4a'', reproduced by test/clj/uaf_repro.clj. The
+       ! premature free then corrupts the heap, and gfortran dies later
+       ! at an unrelated `allocate`; flang's allocator happens not to
+       ! recycle into the path, so it survives.
+       !
+       ! Leaking makes the bug harmless rather than fixing it, and the
+       ! measured cost is small: bootstrap RSS 93 MB against 84 MB, and
+       ! gfortran goes from "multimethods crashes every run" to the
+       ! same 163/16/41 flang gets. That is the whole reason to do it:
+       ! gfortran is the default build and the one most people will
+       ! use.
+       !
+       ! Ceiling: a long-running process that builds many vectors grows
+       ! without bound. Upgrade path is step 3e, which deletes this
+       ! refcounting entirely -- the GC frees these by tracing, so the
+       ! missing increment stops mattering rather than being found. If
+       ! 3e slips, find the bug instead: the repro plus the poison
+       ! instrument in its header locates it in one run.
        vec_node_total_freed = vec_node_total_freed + 1
     end if
     h%ptr => null()
