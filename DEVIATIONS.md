@@ -16,10 +16,11 @@ Categories:
 | # | What | Kind | Where |
 |---|------|------|-------|
 | 1 | Load reads the whole file, then evaluates | temporary | `src/f/gc_main.f90` |
-| 2 | Load continues past a failing form | temporary | `src/f/gc_main.f90` |
-| 3 | `host.clj` preloaded before `core.clj` | temporary | `src/clj/host.clj` |
-| 4 | Symbols fall back to `clojure.core` instead of being referred | temporary | `src/f/GCEval.f90` |
-| 5 | `.` reaches a fixed table of host members, not arbitrary classes | host | `src/f/GCEval.f90` |
+| 2 | `host.clj` preloaded before `core.clj` | temporary | `src/clj/host.clj` |
+| 3 | Symbols fall back to `clojure.core` instead of being referred | temporary | `src/f/GCEval.f90` |
+| 4 | `.` reaches a fixed table of host members, not arbitrary classes | host | `src/f/GCEval.f90` |
+| 5 | Metadata is a wrapper object, not carried on the value | host | `src/f/GC.f90` |
+| 6 | Syntax-quote expands at eval time, not read time | open | `src/f/GCEval.f90` |
 
 ---
 
@@ -38,26 +39,13 @@ for(Object r = LispReader.read(rdr, false, EOF, false, opts); r != EOF;
 We call `gcr_read_all` first. This is observably wrong wherever reading
 depends on state that evaluation sets -- `::kw` resolves against `*ns*`,
 `#'` and `#=` read-time evaluation, and any change to `*read-eval*` or
-`*data-readers*`. core.clj does not currently hit those cases in the 544
-forms that load, which is the only reason it has not bitten yet.
+`*data-readers*`.
 
 **Removal**: make the reader streaming over a cursor so a form can be read,
 evaluated, and the next read begun. `gcr_read_all` already walks a cursor
 internally; it needs to be exposed one form at a time.
 
-## 2. Load reports a failing form and continues
-
-Same loop. Clojure has no per-form `try`: the only `catch` in `load` is for
-`LispReader.ReaderException`, and it exists to attach line/column and
-rethrow. An exception ends the load.
-
-We continue and print `N of M forms loaded`. That number is the current
-measure of bootstrap progress, and stopping at form one would hide it.
-
-**Removal**: when core.clj loads clean, delete the per-form branch and let
-the first error abort, as Clojure does.
-
-## 3. `host.clj` is loaded before `core.clj`
+## 2. `host.clj` is loaded before `core.clj`
 
 Clojure loads nothing before `clojure/core.clj`; its bootstrap is Java
 (`RT.doInit`). Ours is partly Clojure, in `src/clj/host.clj`.
@@ -66,7 +54,7 @@ Clojure loads nothing before `clojure/core.clj`; its bootstrap is Java
 to type predicates over `clotran-type` plus three scaffolding macros. When
 `defn`/`fn`/`let` come from core.clj itself, the file goes.
 
-## 4. Symbol resolution falls back to `clojure.core`
+## 3. Symbol resolution falls back to `clojure.core`
 
 `resolve_var` tries the current namespace, then `clojure.core`. Clojure
 has no such rule: a namespace sees `clojure.core` because `(ns ...)`
@@ -76,17 +64,56 @@ cannot be honoured by a rule with no record of what was referred.
 
 **Removal**: give `OBJ_NS` a refers map and implement `refer`.
 
-## 5. `.` reaches a fixed table of host members
+## 4. `.` reaches a fixed table of host members
 
-`clojure.lang.RT`, `clojure.lang.PersistentList` and a handful of
-instance members, listed in `static_member` and `instance_member`.
-Clojure reaches any Java class by reflection.
+`clojure.lang.RT`, `Numbers`, `Util`, `Symbol`, `Keyword`, the three
+`create` statics, and a list of instance members -- all in `static_member`
+and `instance_member`. Clojure reaches any Java class by reflection.
 
 This one is **host**, not temporary: there is no Fortran reflection to
 reach, and the classes core.clj names do not exist here. What the table
 holds is clotran's own primitives under the host's names -- `RT.more` is
-what we already mean by `rest` -- so the entries are bindings, not
-adapters. It grows as core.clj asks for more.
+what we already mean by `rest`, `Numbers/add` is `+` -- so the entries are
+bindings, not adapters. It grows as core.clj asks for more.
+
+An unlisted member fails **by name**, never as a generic `.` failure, so a
+load report says which one to add next.
+
+## 5. Metadata is a wrapper object
+
+Clojure carries metadata ON the value: `Symbol`, `PersistentList` and the
+rest implement `IObj`, so `^:static foo` is a Symbol that happens to have a
+map attached. `gc_value` is a fixed four-field struct with no room for one,
+so metadata is an `OBJ_META` object holding value and map.
+
+This is **host**, and the cost is that everything which RECOGNISES a value
+has to see past the wrapper: `strip_meta` at each of those points, and
+`type_name` unwrapping so `(instance? clojure.lang.Symbol ^:static x)` is
+still true. `with-meta` replaces rather than nests, matching `withMeta`.
+
+Every place that forgot to unwrap was a real bug, and core.clj found them
+all: a hinted parameter invisible in its own body, a hinted parameter
+vector read as an arity mismatch, a hinted head symbol unresolvable, a Var
+interned under a name nobody could spell.
+
+**Removal**: none available. Widening `gc_value` would cost a word on every
+value in the heap to serve the few that carry metadata.
+
+## 6. Syntax-quote expands at eval time, not read time
+
+`SyntaxQuoteReader` is a READER macro (`LispReader.java`): `` `x `` is
+resolved, gensym-ed and expanded into `concat`/`seq` calls before the form
+is ever evaluated. Ours is a `quasiquote` special form that `qq_expand`
+handles during evaluation.
+
+Auto-gensym is faithful -- one fresh name per syntax-quote, scoped by a map
+the way `GENSYM_ENV` is -- but symbol resolution is not: Clojure qualifies
+every symbol in a template to its namespace at read time, which is what
+makes a macro immune to a caller having rebound a name. We leave symbols
+bare.
+
+**Open**, because it is not yet clear whether this can be moved into the
+reader without also moving `*ns*` resolution there.
 
 ---
 
@@ -96,8 +123,45 @@ adapters. It grows as core.clj asks for more.
   interns `bootNamespace` -- find-or-create plus set-current, nothing else --
   as a macro Var, then `load("clojure/core")`; core.clj's `ns` (its line
   5976) redefines it. `in-ns` is interned the same way but is *not* a macro,
-  so its argument evaluates. We do exactly this, in `GCEval.f90`.
+  so its argument evaluates.
+- **The first error ends a load.** `Compiler.load` has no per-form `try`;
+  its only `catch` is for `ReaderException`, to attach a line and rethrow.
+  We did carry on past failures for a while, and core.clj showed why that is
+  wrong: `(defmacro let ...)` expands to a `do` whose `defn` succeeded and
+  whose next form failed, leaving a namespace holding a `let` that could not
+  work. One missing definition, 206 cascading failures, and a form count
+  that measured nothing.
+- **Macro-ness is Var metadata.** `Var.setMacro` is
+  `alterMeta(assoc, {:macro true})`; `isMacro` reads it back. So
+  `(:macro (meta #'when))` is true, and `(def foo when)` does not produce a
+  macro -- it refuses, with "Can't take value of a macro".
+- **`Compiler.isMacro` asks the Var, on the unevaluated head**, and a local
+  binding shadows it: "no local macros for now".
+- **Every macro takes two hidden parameters.** `macroexpand1` builds
+  `RT.cons(form, RT.cons(LOCAL_ENV.get(), form.next()))`; core.clj names
+  them `&form` and `&env`. `RT.bootNamespace` spells the signature out:
+  `invoke(Object __form, Object __env, Object arg1)`.
+- **`(.member target args)` is `(. target member args)`**, rewritten in
+  `macroexpand1`, as is `(Classname. args)` to `(new Classname args)`.
+- **`fn*` takes an optional self-name**, bound inside the body so the
+  function can call itself without going through its Var. core.clj writes it
+  on nearly every primitive.
+- **A seq is a call.** `Compiler.eval` dispatches on `ISeq`, not on one
+  concrete list class. It has to: a macro assembles its expansion with
+  `cons` and `seq`, so what comes back is a lazy cell or a view over a
+  vector, never a `PersistentList`. Evaluating only cons cells made every
+  such expansion self-evaluate in silence.
+- **`recur` into a variadic arity binds the rest parameter directly**, to
+  whatever value is passed -- it does not re-collect the remaining
+  arguments. `(recur ret (first ks) (next ks))` must be able to hand `ks` a
+  nil; re-collecting makes it `(nil)`, which is truthy, and core.clj's own
+  `disj` then never terminates.
+- **`conj` onto a map merges another map** (`APersistentMap.cons` walks the
+  argument's seq and assocs each entry) and assocs a pair. `defn` builds a
+  Var's metadata by conj-ing maps together.
 - **The empty list is a singleton.** `PersistentList.EMPTY`.
-- **`rest` returns a seq, never nil.** `next` is the one that returns nil.
+- **`rest` returns a seq, never nil.** `next` is the one that returns nil --
+  `RT.more` versus `RT.next`, which differ only there.
 - **A Var is mutated on redefinition, not replaced.** That is what makes
-  redefining a function at the REPL visible to existing closures.
+  redefining a function at the REPL visible to existing closures, and it is
+  what lets core.clj redefine a primitive that was interned natively.

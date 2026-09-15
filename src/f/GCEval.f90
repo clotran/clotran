@@ -66,7 +66,20 @@ module GCEval
   integer, parameter :: B_SUBS = 32, B_TYPE = 33, B_SECOND = 34
   integer, parameter :: B_META = 35, B_WITHMETA = 36
   integer, parameter :: B_NS = 37, B_INNS = 38
-  integer, parameter :: B_NEXT = 39
+  integer, parameter :: B_NEXT = 39, B_INSTANCE = 40
+  integer, parameter :: B_VEC = 41, B_HMAP = 42, B_HSET = 43
+  integer, parameter :: B_DISJ = 44
+  integer, parameter :: B_GT = 45, B_LTE = 46, B_GTE = 47, B_DIV = 48
+  integer, parameter :: B_INC = 49, B_DEC = 50, B_COMPARE = 51
+  integer, parameter :: B_IDENTITY = 52
+
+  ! The auto-gensym map for the syntax-quote currently being expanded,
+  ! and the counter that makes each name unique. GENSYM_ENV in
+  ! LispReader is a dynamic Var bound around one syntax-quote; a
+  ! module variable plus a depth count is the same scoping here.
+  type(gc_root), save :: gensym_root
+  integer, save :: gensym_id = 0
+  integer, save :: qq_depth = 0
 
   character(len=:), allocatable :: last_error
   logical :: has_error = .false.
@@ -173,6 +186,23 @@ contains
     call bind_builtin(core, "symbol", B_SYMBOL)
     call bind_builtin(core, "subs", B_SUBS)
     call bind_builtin(core, "clotran-type", B_TYPE)
+    call bind_builtin(core, "instance?", B_INSTANCE)
+    ! Bound as names too, not only as host members: syntax-quote emits
+    ! (vec ...) for a vector template, so it has to resolve before
+    ! core.clj gets around to defining its own.
+    call bind_builtin(core, "vec", B_VEC)
+    call bind_builtin(core, "hash-set", B_HSET)
+    call bind_builtin(core, "disj", B_DISJ)
+    ! The rest of the arithmetic primitives. core.clj defines >, <=,
+    ! inc and the others in terms of clojure.lang.Numbers, so the
+    ! natives have to exist whether or not anything names them yet.
+    call bind_builtin(core, ">", B_GT)
+    call bind_builtin(core, "<=", B_LTE)
+    call bind_builtin(core, ">=", B_GTE)
+    call bind_builtin(core, "/", B_DIV)
+    call bind_builtin(core, "inc", B_INC)
+    call bind_builtin(core, "dec", B_DEC)
+    call bind_builtin(core, "compare", B_COMPARE)
     call bind_builtin(core, "second", B_SECOND)
     call bind_builtin(core, "meta", B_META)
     call bind_builtin(core, "with-meta", B_WITHMETA)
@@ -266,16 +296,43 @@ contains
              found = .true.
           end if
        end if
+       if (.not. found) then
+          ! A CLASS LITERAL, tried last, exactly where maybeClass sits:
+          ! after locals and Vars have both missed. clotran's classes
+          ! are its own type tags, so the literal evaluates to the
+          ! keyword that names one -- (instance? clojure.lang.Symbol x)
+          ! and (= :symbol (clotran-type x)) are then the same question
+          ! asked twice.
+          if (is_class_name(form)) then
+             out = gc_key(gc_ref_text(form%ref), [vs_get(base + 1)])
+             found = .true.
+          end if
+       end if
        if (.not. found) call fail("'" // gc_ref_text(form%ref) // "' not found")
     case (GCT_OBJ)
        select case (gc_kind(form))
+       case (OBJ_LAZY, OBJ_SEQ)
+          ! A SEQ IS A CALL. Compiler.eval dispatches on ISeq, not on
+          ! one concrete list class, and it has to: a macro assembles
+          ! its expansion with cons and seq, so what comes back is a
+          ! lazy cell or a view over a vector, never a PersistentList.
+          ! Evaluating only OBJ_CONS made every such expansion
+          ! self-evaluate silently -- defmacro built the right form and
+          ! nothing ran it.
+          !
+          ! Realised into a list rather than teaching eval_call to walk
+          ! any seq: it happens once per expansion, off the hot path.
+          out = gce_eval(seq_to_list(form, [vs_get(base + 1)]), env, &
+               [vs_get(base + 1)])
        case (OBJ_CONS)
           if (gcl_count(form) == 0) then
              out = form
           else
-             head = gcl_first(form)
+             head = strip_meta(gcl_first(form))
              if (head%tag == GCT_SYM .and. is_member_sym(head)) then
                 out = eval_member(form, env)
+             else if (head%tag == GCT_SYM .and. is_static_call(head)) then
+                out = eval_static(form, env)
              else if (head%tag == GCT_SYM .and. is_special(head)) then
                 out = eval_special(form, env)
              else
@@ -325,6 +382,7 @@ contains
           gc_ref_is(sym%ref, "defmacro*") .or. gc_ref_is(sym%ref, "quasiquote") .or. &
           gc_ref_is(sym%ref, "try*") .or. gc_ref_is(sym%ref, "throw") .or. &
           gc_ref_is(sym%ref, "lazy-seq*") .or. gc_ref_is(sym%ref, ".") .or. &
+          gc_ref_is(sym%ref, "new") .or. &
           gc_ref_is(sym%ref, "var")
   end function is_special
 
@@ -334,7 +392,7 @@ contains
     integer :: base
 
     out = gc_nil()
-    head = gcl_first(form)
+    head = strip_meta(gcl_first(form))
     base = vs_enter(4)
     call vs_set(base + 1, form)
     call vs_set(base + 2, env)
@@ -387,7 +445,7 @@ contains
             md = gc_nil()
             if (gc_kind(nm) == OBJ_META) then
                md = gc_slot(nm, 2)
-               nm = gc_slot(nm, 1)
+               nm = strip_meta(nm)
             end if
             call vs_set(base + 4, nm)
             var = gcn_intern(gcn_current([vs_get(base + 1)]), &
@@ -416,7 +474,9 @@ contains
     else if (gc_ref_is(head%ref, "var")) then
        ! The Var itself, undereferenced -- what #'x means, and what a
        ! caller needs to hold a stable reference across redefinition.
-       out = gcn_lookup(gcn_current([vs_get(base + 1)]), gcl_first(vs_get(base + 3)))
+       ! The name can arrive hinted -- (. (var ^{:private true} x)
+       ! (setMacro)) is what defmacro expands to for a private macro.
+       out = resolve_var(strip_meta(gcl_first(vs_get(base + 3))), vs_get(base + 1))
        if (.not. gcn_is_var(out)) &
             call fail("Unable to resolve var: " // &
             gc_ref_text(nth_sym_ref(vs_get(base + 3))))
@@ -447,8 +507,15 @@ contains
        ! Expand to ordinary cons/concat calls, then evaluate those.
        ! Syntax-quote is a source transformation, not a runtime thing,
        ! which is why it becomes a form rather than a value here.
+       if (qq_depth == 0) call gc_global_keep(gensym_root, &
+            gca_empty([vs_get(base + 1), vs_get(base + 2)]))
+       qq_depth = qq_depth + 1
        a = qq_expand(gcl_first(vs_get(base + 3)), vs_get(base + 2))
+       qq_depth = qq_depth - 1
        if (.not. has_error) out = gce_eval(a, vs_get(base + 2), [vs_get(base + 1)])
+
+    else if (gc_ref_is(head%ref, "new")) then
+       out = eval_new(vs_get(base + 3), vs_get(base + 2))
 
     else if (gc_ref_is(head%ref, ".")) then
        out = eval_dot(vs_get(base + 3), vs_get(base + 2))
@@ -621,10 +688,37 @@ contains
   !
   ! One routine for both fn* application and recur, so a variadic
   ! function can recur without the two disagreeing about arity.
-  function bind_params(params, args, outer) result(child)
+  ! A value with any metadata wrapper taken off. core.clj hints
+  ! constantly -- (fn instance? [^Class c x] ...), (list* ^{:once true}
+  ! fn* ...) -- and everything that has to RECOGNISE a form has to see
+  ! past the wrapper: a hinted parameter name, a hinted parameter
+  ! vector, a hinted head symbol. Only `meta` looks at the wrapper
+  ! itself.
+  function strip_meta(v) result(out)
+    type(gc_value), intent(in) :: v
+    type(gc_value) :: out
+    out = v
+    do while (gc_kind(out) == OBJ_META)
+       out = gc_slot(out, 1)
+    end do
+  end function strip_meta
+
+  ! `recur_mode` changes ONE thing, and it is a real Clojure rule:
+  ! recur into a variadic arity binds the rest parameter DIRECTLY to
+  ! the value given, instead of collecting the remaining arguments into
+  ! a fresh seq. (recur ret (first ks) (next ks)) has to be able to
+  ! hand ks a nil; re-collecting turns that nil into (nil), which is
+  ! truthy, and (if ks ...) then never ends. core.clj's own disj is
+  ! written exactly that way.
+  function bind_params(params, args, outer, recur_mode) result(child)
     type(gc_value), intent(in) :: params, args, outer
+    logical, intent(in), optional :: recur_mode
     type(gc_value) :: child, rest, name
+    logical :: rec
     integer :: base, i, n, amp
+
+    rec = .false.
+    if (present(recur_mode)) rec = recur_mode
 
     base = vs_enter(5)
     call vs_set(base + 1, params)
@@ -634,7 +728,7 @@ contains
     n = gcv_count(params)
     amp = -1
     do i = 0, n - 1
-       name = gcv_nth(params, i)
+       name = strip_meta(gcv_nth(params, i))
        if (name%tag == GCT_SYM) then
           if (gc_ref_is(name%ref, "&")) then
              amp = i
@@ -646,6 +740,12 @@ contains
     if (amp < 0) then
        if (n /= gcv_count(args)) then
           call fail("wrong number of arguments")
+          child = gc_nil()
+          call vs_leave(base); return
+       end if
+    else if (rec) then
+       if (gcv_count(args) /= amp + 1) then
+          call fail("wrong number of arguments to recur")
           child = gc_nil()
           call vs_leave(base); return
        end if
@@ -664,12 +764,19 @@ contains
 
     if (amp < 0) then
        do i = 0, n - 1
-          call gce_set(vs_get(base + 4), gcv_nth(vs_get(base + 1), i), &
+          call gce_set(vs_get(base + 4), strip_meta(gcv_nth(vs_get(base + 1), i)), &
                gcv_nth(vs_get(base + 2), i), [vs_get(base + 1), vs_get(base + 2)])
        end do
+    else if (rec) then
+       do i = 0, amp - 1
+          call gce_set(vs_get(base + 4), strip_meta(gcv_nth(vs_get(base + 1), i)), &
+               gcv_nth(vs_get(base + 2), i), [vs_get(base + 1), vs_get(base + 2)])
+       end do
+       call gce_set(vs_get(base + 4), strip_meta(gcv_nth(vs_get(base + 1), amp + 1)), &
+            gcv_nth(vs_get(base + 2), amp), [vs_get(base + 1), vs_get(base + 2)])
     else
        do i = 0, amp - 1
-          call gce_set(vs_get(base + 4), gcv_nth(vs_get(base + 1), i), &
+          call gce_set(vs_get(base + 4), strip_meta(gcv_nth(vs_get(base + 1), i)), &
                gcv_nth(vs_get(base + 2), i), [vs_get(base + 1), vs_get(base + 2)])
        end do
        rest = gcl_empty([vs_get(base + 1), vs_get(base + 2), vs_get(base + 4)])
@@ -679,7 +786,7 @@ contains
                [vs_get(base + 1), vs_get(base + 2), vs_get(base + 4)])
           call vs_set(base + 5, rest)
        end do
-       call gce_set(vs_get(base + 4), gcv_nth(vs_get(base + 1), amp + 1), &
+       call gce_set(vs_get(base + 4), strip_meta(gcv_nth(vs_get(base + 1), amp + 1)), &
             vs_get(base + 5), [vs_get(base + 1), vs_get(base + 2)])
     end if
 
@@ -754,15 +861,11 @@ contains
     call vs_set(base + 1, rest)
     call vs_set(base + 2, env)
     head = gcl_first(rest)
-    ! The name carries metadata in core.clj -- (fn ^:static first ...)
-    ! -- so it arrives wrapped.
-    if (gc_kind(head) == OBJ_META) then
-       block
-         type(gc_value) :: inner
-         inner = gc_slot(head, 1)
-         if (inner%tag == GCT_SYM) head = inner
-       end block
-    end if
+    ! core.clj hints both halves of a fn head: (fn ^:static seq
+    ! ^clojure.lang.ISeq [coll] ...) wraps the NAME and the PARAMETER
+    ! VECTOR. Either arriving wrapped makes it unrecognisable, so the
+    ! wrapper comes off before anything is decided about it.
+    head = strip_meta(head)
 
     ! (fn* name [params] body) -- the optional SELF-NAME. core.clj
     ! writes almost every primitive that way, and not just for the
@@ -823,13 +926,13 @@ contains
     call vs_set(base + 1, clauses)
     n = gcl_count(clauses)
     do i = 0, n - 1
-       clause = nth_of(vs_get(base + 1), i)
+       clause = strip_meta(nth_of(vs_get(base + 1), i))
        call vs_set(base + 2, clause)
-       p = gcl_first(clause)
+       p = strip_meta(gcl_first(clause))
        if (.not. gcv_is(p)) cycle
        amp = -1
        do j = 0, gcv_count(p) - 1
-          name = gcv_nth(p, j)
+          name = strip_meta(gcv_nth(p, j))
           if (name%tag == GCT_SYM) then
              if (gc_ref_is(name%ref, "&")) then
                 amp = j
@@ -1008,6 +1111,14 @@ contains
     case ("next");     out = native(B_NEXT, "next", [roots])
     case ("more");     out = native(B_REST, "rest", [roots])
     case ("cons");     out = native(B_CONS, "cons", [roots])
+    case ("isInstance"); out = native(B_INSTANCE, "instance?", [roots])
+    case ("getName", "getSimpleName"); out = native(B_NAME, "name", [roots])
+    ! (. f (applyTo (seq args))) is core.clj's own apply, and the
+    ! target becoming the first argument makes it exactly (apply f seq).
+    case ("applyTo");   out = native(B_APPLY, "apply", [roots])
+    case ("disjoin");   out = native(B_DISJ, "disj", [roots])
+
+    case ("concat", "toString"); out = native(B_STR, "str", [roots])
     case ("equiv");    out = native(B_EQ, "=", [roots])
     case default;       call fail("no such member: " // mname)
     end select
@@ -1084,10 +1195,122 @@ contains
     call vs_leave(base)
   end function apply_forms_pre
 
+  ! Whether a symbol names a host class. Compiler.maybeClass asks the
+  ! classloader; there is nothing to ask here, so the shape of the name
+  ! has to answer: a dotted name, or a bare capitalised one, which is
+  ! what java.lang.* being imported into every namespace amounts to.
+  !
+  ! Only ever reached once a symbol has failed to resolve as a local
+  ! and as a Var, so it shadows nothing.
+  logical function is_class_name(sym)
+    type(gc_value), intent(in) :: sym
+    character(len=:), allocatable :: t
+    integer :: i, last_dot
+    is_class_name = .false.
+    if (sym%tag /= GCT_SYM) return
+    t = gc_ref_text(sym%ref)
+    if (len(t) < 1) return
+    if (index(t, "/") > 0) return
+    last_dot = 0
+    do i = 1, len(t)
+       if (t(i:i) == ".") last_dot = i
+    end do
+    if (last_dot == len(t)) return
+    is_class_name = (t(last_dot+1:last_dot+1) >= "A" .and. &
+         t(last_dot+1:last_dot+1) <= "Z")
+  end function is_class_name
+
+  ! (Classname/member args) -- namesStaticMember, which Clojure decides
+  ! by the qualifier not being a known namespace. Same rule here.
+  logical function is_static_call(sym)
+    type(gc_value), intent(in) :: sym
+    character(len=:), allocatable :: t
+    integer :: slash
+    type(gc_value) :: qual
+    is_static_call = .false.
+    if (sym%tag /= GCT_SYM) return
+    t = gc_ref_text(sym%ref)
+    slash = index(t, "/")
+    if (slash <= 1 .or. slash >= len(t)) return
+    qual = gc_sym(t(1:slash-1), [sym])
+    is_static_call = is_class_name(qual)
+  end function is_static_call
+
+  recursive function eval_static(form, env) result(out)
+    type(gc_value), intent(in) :: form, env
+    type(gc_value) :: out, head, args
+    character(len=:), allocatable :: t
+    integer :: base, slash
+
+    out = gc_nil()
+    base = vs_enter(3)
+    call vs_set(base + 1, form)
+    call vs_set(base + 2, env)
+    head = gcl_first(vs_get(base + 1))
+    t = gc_ref_text(head%ref)
+    slash = index(t, "/")
+    ! (Class member . args) -- the shape eval_dot reads.
+    args = gcl_cons(gc_sym(t(slash+1:), [vs_get(base + 1)]), &
+         gcl_rest(vs_get(base + 1), [vs_get(base + 1)]), [vs_get(base + 1)])
+    call vs_set(base + 3, args)
+    args = gcl_cons(gc_sym(t(1:slash-1), [vs_get(base + 3)]), vs_get(base + 3), &
+         [vs_get(base + 3)])
+    out = eval_dot(args, vs_get(base + 2))
+    call vs_leave(base)
+  end function eval_static
+
+  ! (new Class args...). The one class core.clj constructs during the
+  ! bootstrap is LazySeq, which `lazy-seq` expands into -- and a
+  ! LazySeq is exactly an unrealised node over a no-argument thunk,
+  ! which is what lazy-seq* already builds. Everything else is named
+  ! in the error, so a load report says which class is missing.
+  recursive function eval_new(args, env) result(out)
+    type(gc_value), intent(in) :: args, env
+    type(gc_value) :: out, cls, thunk
+    character(len=:), allocatable :: cname
+    integer :: base
+
+    out = gc_nil()
+    base = vs_enter(3)
+    call vs_set(base + 1, args)
+    call vs_set(base + 2, env)
+    cls = gcl_first(vs_get(base + 1))
+    if (cls%tag /= GCT_SYM) then
+       call fail("new needs a class name")
+       call vs_leave(base)
+       return
+    end if
+    cname = gc_ref_text(cls%ref)
+
+    if (cname == "clojure.lang.LazySeq") then
+       thunk = gce_eval(gcl_first(gcl_rest(vs_get(base + 1), [vs_get(base + 1)])), &
+            vs_get(base + 2), [vs_get(base + 1)])
+       if (has_error) then
+          call vs_leave(base)
+          return
+       end if
+       call vs_set(base + 3, thunk)
+       out = gc_obj(OBJ_LAZY, [vs_get(base + 3), gc_nil(), gc_nil()], &
+            [vs_get(base + 3)])
+       call gc_set_i1(out, LAZY_PENDING)
+    else
+       call fail("no such class: " // cname)
+    end if
+    call vs_leave(base)
+  end function eval_new
+
   logical function is_host_class(sym)
     type(gc_value), intent(in) :: sym
     is_host_class = gc_ref_is(sym%ref, "clojure.lang.PersistentList") .or. &
-         gc_ref_is(sym%ref, "clojure.lang.RT")
+         gc_ref_is(sym%ref, "clojure.lang.RT") .or. &
+         gc_ref_is(sym%ref, "clojure.lang.Util") .or. &
+         gc_ref_is(sym%ref, "clojure.lang.LazilyPersistentVector") .or. &
+         gc_ref_is(sym%ref, "clojure.lang.PersistentHashMap") .or. &
+         gc_ref_is(sym%ref, "clojure.lang.PersistentArrayMap") .or. &
+         gc_ref_is(sym%ref, "clojure.lang.PersistentHashSet") .or. &
+         gc_ref_is(sym%ref, "clojure.lang.Symbol") .or. &
+         gc_ref_is(sym%ref, "clojure.lang.Keyword") .or. &
+         gc_ref_is(sym%ref, "clojure.lang.Numbers")
   end function is_host_class
 
   ! A static member, as a VALUE -- (. C m) hands it back, (. C (m a))
@@ -1109,6 +1332,57 @@ contains
        if (mname == "creator") then
           out = native(B_LIST, "list", [roots])
           return
+       end if
+    else if (cls == "clojure.lang.Util") then
+       select case (mname)
+       case ("equiv", "equals", "identical"); out = native(B_EQ, "=", [roots]); return
+       end select
+    else if (cls == "clojure.lang.LazilyPersistentVector") then
+       if (mname == "create" .or. mname == "createOwning") then
+          out = native(B_VEC, "vec", [roots]); return
+       end if
+    else if (cls == "clojure.lang.PersistentHashMap" .or. &
+             cls == "clojure.lang.PersistentArrayMap") then
+       if (mname == "create" .or. mname == "createWithCheck" .or. &
+           mname == "createAsIfByAssoc") then
+          out = native(B_HMAP, "hash-map", [roots]); return
+       end if
+    else if (cls == "clojure.lang.PersistentHashSet") then
+       if (mname == "create" .or. mname == "createWithCheck") then
+          out = native(B_HSET, "hash-set", [roots]); return
+       end if
+    else if (cls == "clojure.lang.Numbers") then
+       select case (mname)
+       case ("add", "addP", "unchecked_add", "unchecked_int_add")
+          out = native(B_ADD, "+", [roots]); return
+       case ("minus", "minusP", "unchecked_minus", "unchecked_int_subtract")
+          out = native(B_SUB, "-", [roots]); return
+       case ("multiply", "multiplyP", "unchecked_multiply")
+          out = native(B_MUL, "*", [roots]); return
+       case ("divide", "unchecked_divide", "unchecked_int_divide")
+          out = native(B_DIV, "/", [roots]); return
+       case ("lt"); out = native(B_LT, "<", [roots]); return
+       case ("gt"); out = native(B_GT, ">", [roots]); return
+       case ("lte"); out = native(B_LTE, "<=", [roots]); return
+       case ("gte"); out = native(B_GTE, ">=", [roots]); return
+       case ("equiv", "equal"); out = native(B_EQ, "=", [roots]); return
+       case ("compare"); out = native(B_COMPARE, "compare", [roots]); return
+       case ("inc", "incP", "unchecked_inc", "unchecked_int_inc")
+          out = native(B_INC, "inc", [roots]); return
+       case ("dec", "decP", "unchecked_dec", "unchecked_int_dec")
+          out = native(B_DEC, "dec", [roots]); return
+       case ("remainder", "unchecked_int_remainder")
+          out = native(B_REM, "rem", [roots]); return
+       case ("quotient"); out = native(B_QUOT, "quot", [roots]); return
+       case ("num"); out = native(B_IDENTITY, "identity", [roots]); return
+       end select
+    else if (cls == "clojure.lang.Symbol") then
+       if (mname == "intern" .or. mname == "create") then
+          out = native(B_SYMBOL, "symbol", [roots]); return
+       end if
+    else if (cls == "clojure.lang.Keyword") then
+       if (mname == "intern" .or. mname == "find") then
+          out = native(B_KEYWORD, "keyword", [roots]); return
        end if
     else if (cls == "clojure.lang.RT") then
        select case (mname)
@@ -1175,9 +1449,29 @@ contains
   ! be honoured by a rule that has no map of what was referred.
   function resolve_var(sym, roots) result(var)
     type(gc_value), intent(in) :: sym, roots
-    type(gc_value) :: var
+    type(gc_value) :: var, bare
+    character(len=:), allocatable :: t
+    integer :: slash
+
     var = gcn_lookup(gcn_current([roots]), sym)
     if (gcn_is_var(var)) return
+
+    ! A QUALIFIED symbol names its own namespace. Syntax-quote produces
+    ! these constantly -- every `when in core.clj reads as
+    ! clojure.core/when -- so this is not an edge case, it is most of
+    ! what a macro expands into.
+    if (sym%tag == GCT_SYM) then
+       t = gc_ref_text(sym%ref)
+       slash = index(t, "/")
+       if (slash > 1 .and. slash < len(t)) then
+          bare = gc_sym(t(slash+1:), [roots])
+          var = gcn_lookup(gcn_find_or_create(t(1:slash-1), [roots, bare]), bare)
+          if (gcn_is_var(var)) return
+          var = gc_nil()
+          return
+       end if
+    end if
+
     var = gcn_lookup(gcn_find_or_create("clojure.core", [roots]), sym)
   end function resolve_var
 
@@ -1454,8 +1748,20 @@ contains
     call vs_set(base + 1, form)
     call vs_set(base + 2, env)
 
+    if (gcv_is(form)) then
+       ! `[a ~b] -- a vector inside syntax-quote. Expanded as a seq and
+       ! rebuilt, which is what LispReader does: (apply vector (seq
+       ! (concat ...))). Without this a vector passed straight through
+       ! and every unquote inside it stayed literal, which is most of
+       ! what a (let [...]) template is.
+       out = qq_rebuild(form, "vec", vs_get(base + 2))
+       call vs_leave(base)
+       return
+    end if
+
     if (.not. gcl_is(form)) then
        if (form%tag == GCT_SYM) then
+          call vs_set(base + 1, auto_gensym(vs_get(base + 1)))
           sym = gc_sym("quote", [vs_get(base + 1)])
           call vs_set(base + 3, sym)
           out = gcl_empty([vs_get(base + 1), vs_get(base + 3)])
@@ -1518,6 +1824,80 @@ contains
     call vs_leave(base)
   end function qq_expand
 
+  ! x# inside a syntax-quote becomes one fresh name, the SAME fresh
+  ! name everywhere it appears in that syntax-quote and a different one
+  ! in the next. That is what makes a template able to bind a local
+  ! without capturing the caller's -- (or x y) expands to a let over
+  ! or__17__auto__, which no caller can have written.
+  function auto_gensym(sym) result(out)
+    type(gc_value), intent(in) :: sym
+    type(gc_value) :: out, gmap, hit
+    character(len=:), allocatable :: t
+    character(len=24) :: buf
+    integer :: base
+
+    out = sym
+    if (sym%tag /= GCT_SYM) return
+    t = gc_ref_text(sym%ref)
+    if (len(t) < 2) return
+    if (t(len(t):len(t)) /= "#") return
+    if (index(t, "/") > 0) return
+    if (.not. gc_root_live(gensym_root)) return
+
+    base = vs_enter(3)
+    call vs_set(base + 1, sym)
+    gmap = gc_root_get(gensym_root)
+    call vs_set(base + 2, gmap)
+    hit = gca_get(vs_get(base + 2), vs_get(base + 1))
+    if (hit%tag == GCT_SYM) then
+       out = hit
+       call vs_leave(base)
+       return
+    end if
+    gensym_id = gensym_id + 1
+    write(buf, '(I0)') gensym_id
+    out = gc_sym(t(1:len(t)-1) // "__" // trim(buf) // "__auto__", &
+         [vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 3, out)
+    gmap = gca_assoc(vs_get(base + 2), vs_get(base + 1), vs_get(base + 3), &
+         [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+    call gc_global_keep(gensym_root, gmap)
+    out = vs_get(base + 3)
+    call vs_leave(base)
+  end function auto_gensym
+
+  ! A collection inside syntax-quote: expand its elements as a seq,
+  ! then rebuild the collection from them with `ctor`.
+  recursive function qq_rebuild(form, ctor, env) result(out)
+    type(gc_value), intent(in) :: form, env
+    character(len=*), intent(in) :: ctor
+    type(gc_value) :: out, lst, inner
+    integer :: base, i
+
+    base = vs_enter(3)
+    call vs_set(base + 1, form)
+    call vs_set(base + 2, env)
+    ! The elements as a list, so the existing list path expands them.
+    lst = gcl_empty([vs_get(base + 1)])
+    call vs_set(base + 3, lst)
+    do i = gcv_count(vs_get(base + 1)) - 1, 0, -1
+       lst = gcl_cons(gcv_nth(vs_get(base + 1), i), vs_get(base + 3), &
+            [vs_get(base + 1), vs_get(base + 3)])
+       call vs_set(base + 3, lst)
+    end do
+    inner = qq_expand(vs_get(base + 3), vs_get(base + 2))
+    if (has_error) then
+       out = gc_nil()
+       call vs_leave(base)
+       return
+    end if
+    call vs_set(base + 3, inner)
+    out = gcl_empty([vs_get(base + 3)])
+    out = gcl_cons(vs_get(base + 3), out, [vs_get(base + 3), out])
+    out = gcl_cons(gc_sym(ctor, [vs_get(base + 3), out]), out, [out])
+    call vs_leave(base)
+  end function qq_rebuild
+
   recursive function apply(fn, args) result(out)
     type(gc_value), intent(in) :: fn, args
     type(gc_value) :: out, child, body, params
@@ -1554,7 +1934,7 @@ contains
           out = eval_body(vs_get(base + 4), vs_get(base + 3))
           if (has_error) exit
           if (gc_kind(out) /= OBJ_RECUR) exit
-          child = bind_params(params, gc_slot(out, 1), gc_slot(vs_get(base + 1), 3))
+          child = bind_params(params, gc_slot(out, 1), gc_slot(vs_get(base + 1), 3), .true.)
           if (has_error) exit
           call vs_set(base + 3, child)
        end do
@@ -1592,7 +1972,11 @@ contains
 
     out = gc_nil()
     n = gcv_count(args)
-    base = vs_enter(1)
+    ! Three slots: args, plus two scratch for the builtins that
+    ! accumulate a collection (conj onto a map, the host create
+    ! statics). Writing base + 2 out of a one-slot frame is a write
+    ! past the stack top, which reads back as nil.
+    base = vs_enter(3)
     call vs_set(base + 1, args)
 
     select case (id)
@@ -1630,7 +2014,7 @@ contains
        do i = 1, n - 1
           a = gcv_nth(args, i - 1)
           b = gcv_nth(args, i)
-          if (.not. (a%ival < b%ival)) then
+          if (.not. num_lt(a, b)) then
              out = gc_bool(.false.)
              exit
           end if
@@ -1756,8 +2140,29 @@ contains
        if (gcv_is(a)) then
           out = gcv_conj(a, b, [vs_get(base + 1)])
        else if (gca_is(a)) then
-          out = gca_assoc(a, seq_elem(b, 0, [vs_get(base + 1)]), &
-               seq_elem(b, 1, [vs_get(base + 1)]), [vs_get(base + 1)])
+          ! A pair assocs; a MAP MERGES. APersistentMap.cons walks the
+          ! seq of the argument and assocs each entry, so (conj m1 m2)
+          ! is a merge -- which is how defn accumulates a Var's
+          ! metadata out of the doc string and the attr map.
+          if (gca_is(b)) then
+             block
+               type(gc_value) :: ks(0), vls(0), mm
+               type(gc_value), allocatable :: kk(:), vv(:)
+               integer :: j
+               call gca_entries(b, kk, vv)
+               mm = a
+               call vs_set(base + 2, mm)
+               do j = 1, size(kk)
+                  mm = gca_assoc(vs_get(base + 2), kk(j), vv(j), &
+                       [vs_get(base + 1), vs_get(base + 2)])
+                  call vs_set(base + 2, mm)
+               end do
+               out = vs_get(base + 2)
+             end block
+          else
+             out = gca_assoc(a, seq_elem(b, 0, [vs_get(base + 1)]), &
+                  seq_elem(b, 1, [vs_get(base + 1)]), [vs_get(base + 1)])
+          end if
        else if (a%tag == GCT_NIL) then
           out = gcl_cons(b, gcl_empty([vs_get(base + 1)]), [vs_get(base + 1)])
        else
@@ -1834,8 +2239,13 @@ contains
           out = gc_slot(a, 2)
        end if
     case (B_WITHMETA)
+       ! REPLACES metadata, never nests it. IObj.withMeta returns a new
+       ! object carrying the new map, not an object wrapping the old
+       ! one -- and defn calls (with-meta name m) on a name the reader
+       ! already wrapped, so nesting buried the symbol two deep and the
+       ! Var got interned under a wrapper nobody could name.
        out = gc_obj(OBJ_META, &
-            [gcv_nth(vs_get(base + 1), 0), gcv_nth(vs_get(base + 1), 1)], &
+            [strip_meta(gcv_nth(vs_get(base + 1), 0)), gcv_nth(vs_get(base + 1), 1)], &
             [vs_get(base + 1)])
     case (B_QUOT)
        a = gcv_nth(args, 0); b = gcv_nth(args, 1)
@@ -1879,6 +2289,120 @@ contains
             out = gc_str(t(lo:hi), [vs_get(base + 1)])
          end if
        end block
+    case (B_VEC)
+       out = coll_to_vector(gcv_nth(args, 0), [vs_get(base + 1)])
+    case (B_HMAP)
+       ! A flat seq of alternating keys and values, which is the shape
+       ! PersistentHashMap.create takes.
+       block
+         type(gc_value) :: items, mp
+         integer :: i2
+         items = coll_to_vector(gcv_nth(args, 0), [vs_get(base + 1)])
+         call vs_set(base + 2, items)
+         mp = gca_empty([vs_get(base + 1), vs_get(base + 2)])
+         call vs_set(base + 3, mp)
+         do i2 = 0, gcv_count(vs_get(base + 2)) - 2, 2
+            mp = gca_assoc(vs_get(base + 3), gcv_nth(vs_get(base + 2), i2), &
+                 gcv_nth(vs_get(base + 2), i2 + 1), &
+                 [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+            call vs_set(base + 3, mp)
+         end do
+         out = vs_get(base + 3)
+       end block
+    case (B_HSET)
+       block
+         type(gc_value) :: items, mp
+         integer :: i2
+         items = coll_to_vector(gcv_nth(args, 0), [vs_get(base + 1)])
+         call vs_set(base + 2, items)
+         mp = gca_empty([vs_get(base + 1), vs_get(base + 2)])
+         call vs_set(base + 3, mp)
+         do i2 = 0, gcv_count(vs_get(base + 2)) - 1
+            mp = gca_assoc(vs_get(base + 3), gcv_nth(vs_get(base + 2), i2), &
+                 gcv_nth(vs_get(base + 2), i2), &
+                 [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+            call vs_set(base + 3, mp)
+         end do
+         out = gc_obj(OBJ_SET, [vs_get(base + 3)], [vs_get(base + 3)])
+       end block
+    case (B_IDENTITY)
+       out = gcv_nth(args, 0)
+    case (B_GT, B_LTE, B_GTE)
+       ! Chained, like <: (< 1 2 3) is true, and Clojure'\''s > is the
+       ! same shape. Written against num_lt so int/double mixing is
+       ! decided in exactly one place.
+       block
+         logical :: ok
+         integer :: j
+         ok = .true.
+         do j = 0, n - 2
+            a = gcv_nth(args, j)
+            b = gcv_nth(args, j + 1)
+            select case (id)
+            case (B_GT);  ok = ok .and. num_lt(b, a)
+            case (B_LTE); ok = ok .and. (.not. num_lt(b, a))
+            case (B_GTE); ok = ok .and. (.not. num_lt(a, b))
+            end select
+         end do
+         out = gc_bool(ok)
+       end block
+    case (B_DIV)
+       a = gcv_nth(args, 0); b = gcv_nth(args, 1)
+       if (a%tag == GCT_INT .and. b%tag == GCT_INT) then
+          ! Integer division only when it divides exactly; Clojure
+          ! gives a Ratio otherwise, and a silent truncation here would
+          ! be worse than a double.
+          if (b%ival /= 0) then
+             if (mod(a%ival, b%ival) == 0) then
+                out = gc_int(a%ival / b%ival)
+             else
+                out = gc_real(real(a%ival, gc_dp) / real(b%ival, gc_dp))
+             end if
+          else
+             call fail("Divide by zero")
+          end if
+       else
+          out = gc_real(num_dbl(a) / num_dbl(b))
+       end if
+    case (B_INC, B_DEC)
+       a = gcv_nth(args, 0)
+       if (a%tag == GCT_INT) then
+          if (id == B_INC) then
+             out = gc_int(a%ival + 1)
+          else
+             out = gc_int(a%ival - 1)
+          end if
+       else
+          if (id == B_INC) then
+             out = gc_real(num_dbl(a) + 1.0_gc_dp)
+          else
+             out = gc_real(num_dbl(a) - 1.0_gc_dp)
+          end if
+       end if
+    case (B_COMPARE)
+       a = gcv_nth(args, 0); b = gcv_nth(args, 1)
+       if (num_lt(a, b)) then
+          out = gc_int(-1)
+       else if (num_lt(b, a)) then
+          out = gc_int(1)
+       else
+          out = gc_int(0)
+       end if
+    case (B_DISJ)
+       ! A set is a map to itself, so disj is dissoc on the backing map.
+       block
+         type(gc_value) :: st
+         st = gcv_nth(args, 0)
+         if (gc_kind(st) == OBJ_SET) then
+            out = gc_obj(OBJ_SET, &
+                 [gca_dissoc(gc_slot(st, 1), gcv_nth(args, 1), [vs_get(base + 1)])], &
+                 [vs_get(base + 1)])
+         else
+            out = st
+         end if
+       end block
+    case (B_INSTANCE)
+       out = gc_bool(is_instance(gcv_nth(args, 0), gcv_nth(args, 1)))
     case (B_TYPE)
        ! One host primitive instead of a dozen predicates: core is
        ! written in Clojure on top of this, which is how real Clojure
@@ -2262,9 +2786,18 @@ contains
   ! The type of a value, as a keyword. Everything else that asks
   ! what a value IS gets written in Clojure on top of this, which
   ! is how real Clojure does it too (instance? plus defns).
-  function type_name(v) result(s)
+  recursive function type_name(v) result(s)
     type(gc_value), intent(in) :: v
     character(len=:), allocatable :: s
+    ! METADATA DOES NOT CHANGE A TYPE. Clojure carries it on the object
+    ! -- Symbol implements IObj -- so ^:static x is still a Symbol.
+    ! Ours is a wrapper, which would otherwise make every hinted name
+    ! in core.clj answer :object and fail (instance? Symbol name).
+    ! Transparent here; only `meta` looks at the wrapper.
+    if (gc_kind(v) == OBJ_META) then
+       s = type_name(gc_slot(v, 1))
+       return
+    end if
     select case (v%tag)
     case (GCT_NIL);  s = "nil"
     case (GCT_BOOL); s = "boolean"
@@ -2288,6 +2821,122 @@ contains
        end select
     end select
   end function type_name
+
+  ! (instance? Class x). The class arrives as the keyword a class
+  ! literal evaluates to, so this is a name-to-type-tag table.
+  !
+  ! An unlisted class is FALSE, not an error, and that is the honest
+  ! answer rather than a shortcut: clotran has no BigInteger, so
+  ! nothing is an instance of one. The interfaces are the interesting
+  ! entries -- Sequential and Named cover several tags each, which is
+  ! exactly what an interface is.
+  function is_instance(cls, v) result(yes)
+    type(gc_value), intent(in) :: cls, v
+    logical :: yes
+    character(len=:), allocatable :: c, t
+    yes = .false.
+    if (cls%tag /= GCT_KEY) return
+    c = gc_ref_text(cls%ref)
+    t = type_name(v)
+    select case (c)
+    case ("clojure.lang.Symbol");   yes = (t == "symbol")
+    case ("clojure.lang.Keyword");  yes = (t == "keyword")
+    case ("clojure.lang.Var");      yes = (t == "var")
+    case ("clojure.lang.Namespace"); yes = (t == "ns")
+    case ("clojure.lang.IFn", "clojure.lang.Fn"); yes = (t == "fn")
+    case ("clojure.lang.ISeq");     yes = (t == "list" .or. t == "lazy-seq" .or. t == "seq")
+    case ("clojure.lang.IPersistentList"); yes = (t == "list")
+    case ("clojure.lang.IPersistentVector", "clojure.lang.Indexed"); yes = (t == "vector")
+    case ("clojure.lang.IPersistentMap", "java.util.Map"); yes = (t == "map")
+    case ("clojure.lang.IPersistentSet"); yes = (t == "set")
+    case ("clojure.lang.Associative"); yes = (t == "map" .or. t == "vector")
+    case ("clojure.lang.Counted"); &
+         yes = (t == "list" .or. t == "vector" .or. t == "map" .or. &
+                t == "set" .or. t == "string")
+    case ("clojure.lang.Sequential"); &
+         yes = (t == "list" .or. t == "vector" .or. t == "lazy-seq" .or. t == "seq")
+    case ("clojure.lang.IPersistentCollection", "clojure.lang.Seqable"); &
+         yes = (t == "list" .or. t == "vector" .or. t == "map" .or. &
+                t == "set" .or. t == "lazy-seq" .or. t == "seq")
+    case ("clojure.lang.Named"); yes = (t == "symbol" .or. t == "keyword")
+    case ("clojure.lang.IObj", "clojure.lang.IMeta"); &
+         yes = (t == "symbol" .or. t == "list" .or. t == "vector" .or. &
+                t == "map" .or. t == "set" .or. t == "fn" .or. t == "var")
+    case ("String", "java.lang.String", "CharSequence"); yes = (t == "string")
+    case ("Character", "java.lang.Character"); yes = (t == "char")
+    case ("Boolean", "java.lang.Boolean"); yes = (t == "boolean")
+    case ("Long", "java.lang.Long", "Integer", "java.lang.Integer"); yes = (t == "int")
+    case ("Double", "java.lang.Double", "Float"); yes = (t == "double")
+    case ("Number", "java.lang.Number"); yes = (t == "int" .or. t == "double")
+    end select
+  end function is_instance
+
+  ! Every element of a seqable, as a vector. The three host `create`
+  ! statics all take a collection, so they all start here.
+  recursive function coll_to_vector(coll, roots) result(out)
+    type(gc_value), intent(in) :: coll
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, walk, item
+    integer :: base
+
+    base = vs_enter(2)
+    out = gcv_empty(roots)
+    call vs_set(base + 1, out)
+    walk = to_seq(coll, roots)
+    call vs_set(base + 2, walk)
+    do while (walk%tag /= GCT_NIL)
+       item = sq_first(vs_get(base + 2), [vs_get(base + 1)])
+       out = gcv_conj(vs_get(base + 1), item, [vs_get(base + 1), vs_get(base + 2)])
+       call vs_set(base + 1, out)
+       walk = to_seq(sq_rest(vs_get(base + 2), [vs_get(base + 1)]), [vs_get(base + 1)])
+       call vs_set(base + 2, walk)
+    end do
+    out = vs_get(base + 1)
+    call vs_leave(base)
+  end function coll_to_vector
+
+  ! Every element of a seq, as a proper list.
+  recursive function seq_to_list(v, roots) result(out)
+    type(gc_value), intent(in) :: v
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, items
+    integer :: base, i
+
+    base = vs_enter(2)
+    items = coll_to_vector(v, roots)
+    call vs_set(base + 1, items)
+    out = gcl_empty([vs_get(base + 1)])
+    call vs_set(base + 2, out)
+    do i = gcv_count(vs_get(base + 1)) - 1, 0, -1
+       out = gcl_cons(gcv_nth(vs_get(base + 1), i), vs_get(base + 2), &
+            [vs_get(base + 1), vs_get(base + 2)])
+       call vs_set(base + 2, out)
+    end do
+    out = vs_get(base + 2)
+    call vs_leave(base)
+  end function seq_to_list
+
+  ! Numeric comparison across int and double. Comparing %ival alone
+  ! made (< 1.5 2.0) read two garbage integers; one place to decide it
+  ! means < > <= >= and compare cannot disagree.
+  logical function num_lt(a, b)
+    type(gc_value), intent(in) :: a, b
+    if (a%tag == GCT_INT .and. b%tag == GCT_INT) then
+       num_lt = (a%ival < b%ival)
+    else
+       num_lt = (num_dbl(a) < num_dbl(b))
+    end if
+  end function num_lt
+
+  function num_dbl(v) result(d)
+    type(gc_value), intent(in) :: v
+    real(gc_dp) :: d
+    if (v%tag == GCT_REAL) then
+       d = v%rval
+    else
+       d = real(v%ival, gc_dp)
+    end if
+  end function num_dbl
 
   function truthy(v) result(yes)
     type(gc_value), intent(in) :: v

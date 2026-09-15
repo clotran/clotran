@@ -76,23 +76,31 @@ contains
 
   ! Reads a whole file and evaluates every form in it.
   !
-  ! TWO DELIBERATE DEVIATIONS from Compiler.load, both temporary and
-  ! both only because bootstrapping is incomplete. See DEVIATIONS.md.
+  ! The first error ENDS THE LOAD, as Compiler.load does -- its only
+  ! catch is for ReaderException, to attach a line and rethrow.
   !
-  !   1. Clojure interleaves read and eval, one form at a time. We read
-  !      the whole file first. That is wrong in general -- the reader
-  !      consults *ns* (for ::kw) and a macro cannot affect how later
-  !      forms READ -- but it is what lets a single reader error be
-  !      reported once instead of aborting at form one.
-  !   2. Clojure lets an exception out of the loop, ending the load.
-  !      We report each failing form and continue, because the number
-  !      that matters right now is how much of core.clj works.
+  ! This started out the other way, reporting each failure and carrying
+  ! on, on the theory that the useful number was how much of core.clj
+  ! works. It is not, and core.clj demonstrated why. (defmacro let ...)
+  ! expands to a `do`: the defn inside it SUCCEEDED and replaced the
+  ! working bootstrap `let` with the destructuring one, and only the
+  ! form after it failed. Carrying on left a namespace holding a `let`
+  ! whose own dependencies had never loaded -- one missing definition,
+  ! 206 cascading failures, and a count that measured nothing.
+  !
+  ! Stopping is not caution, it is the only way the count means
+  ! anything: N forms in, this is the first thing missing.
+  !
+  ! One deviation remains, recorded as #1: Clojure interleaves read and
+  ! eval, one form at a time, and we read the whole file first.
   subroutine load_file(path, env)
     character(len=*), intent(in) :: path
     type(gc_value), intent(in) :: env
     character(len=:), allocatable :: text
     type(gc_value) :: forms, r
     integer :: u, st, lb, i, fsize, nfail
+    character(len=8) :: envbuf
+    logical :: trace
 
     ! Read in ONE allocation, via stream access, rather than
     ! appending line by line. Appending is O(n^2) -- each // builds a
@@ -119,26 +127,32 @@ contains
        return
     end if
     call vs_set(lb + 2, forms)
+    ! CLOTRAN_LOAD_TRACE=1 names each form before evaluating it. An
+    ! error names its own form; a HANG does not, and this is the only
+    ! way to see which form never came back.
+    call get_environment_variable("CLOTRAN_LOAD_TRACE", envbuf)
+    trace = (trim(envbuf) == "1")
+
     nfail = 0
     do i = 0, gcv_count(vs_get(lb + 2)) - 1
+       if (trace) then
+          print '(A,I0,A,A)', "[", i + 1, "] ", &
+               first_line(gcp_str(gcv_nth(vs_get(lb + 2), i), .true.))
+          flush(6)
+       end if
        call gce_clear_error()
        r = gce_eval(gcv_nth(vs_get(lb + 2), i), vs_get(lb + 1), no_roots())
        call vs_set(lb + 3, r)
        if (gce_has_error()) then
-          ! Report and CONTINUE -- deviation 2 above.
-          nfail = nfail + 1
-          if (nfail <= 5) then
-             print '(A,A)', "  ", gce_error()
-             print '(A,A)', "    in: ", &
-                  first_line(gcp_str(gcv_nth(vs_get(lb + 2), i), .true.))
-          end if
+          nfail = 1
+          print '(A,A)', "  ", gce_error()
+          print '(A,A)', "    in: ", &
+               first_line(gcp_str(gcv_nth(vs_get(lb + 2), i), .true.))
+          print '(A,A,A,I0,A,I0,A)', "load ", path, ": stopped at form ", &
+               i + 1, " of ", gcv_count(vs_get(lb + 2)), ""
+          exit
        end if
     end do
-    if (nfail > 0) then
-       print '(A,A,A,I0,A,I0,A)', "load ", path, ": ", &
-            gcv_count(vs_get(lb + 2)) - nfail, " of ", &
-            gcv_count(vs_get(lb + 2)), " forms loaded"
-    end if
     call vs_leave(lb)
   end subroutine load_file
 
