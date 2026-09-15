@@ -653,8 +653,40 @@ the text. A cache writer needs to exclude them.
       22 checks, both compilers, including 3000 keys across several
       levels of splitting and the torture case.
 
-      Still to build the same way: env, closure, atom. Then the
-      promotion rule joining GCMap and GCHamt at 8 entries.
+      **`src/f/GCEnv.f90`** -- the lexical environment: a chain of
+      frames, each a name -> value map, searched outward. Structure
+      unchanged from Env.f90, including that `gce_set` MUTATES the
+      frame rather than returning a new one (`def` and `let*` add to a
+      frame a closure may already hold, and everything sharing it must
+      see the binding). The walk is iterative rather than recursive:
+      an env chain is as deep as the program's nesting and this is the
+      hottest path in the interpreter.
+
+      Check 5 is the one that matters, and it is the correctness half
+      of why the GC exists at all. A named `fn` binds its own closure
+      into its own frame so `recur` can find it -- closure -> env ->
+      closure, a cycle. Refcounting never sees either side reach zero,
+      so **clotran leaks one of these per named fn for the life of the
+      process**. The check builds that cycle, confirms it really is
+      one (5b follows the closure's env slot back to the frame), drops
+      every reference, and 5d collects it. That is not a speed win; it
+      is a class of leak disappearing.
+
+      22 checks, both compilers, also covering shadowing across three
+      frames, bound-to-nil counting as bound (which the evaluator needs
+      to tell "no such local" from "a local holding nil"), inner
+      bindings not leaking outward, defining-namespace inheritance, and
+      torture.
+
+      **Closure and atom need no module of their own.** Both are plain
+      slot objects -- `OBJ_CLOSURE` (params, body, env, clauses; i1 =
+      macro?) and `OBJ_ATOM` (value, meta, dyn stack) -- with no logic
+      beyond `gc_obj`/`gc_slot`, which `gc_test` check 11 already
+      covers and GCEnv check 5 exercises.
+
+      Still to join up: the promotion rule handing a GCMap over to a
+      GCHamt past 8 entries. That is the one piece needing both, and
+      it is the last of the data layer.
 - [ ] **3e.** Retire `FINAL`-based refcounting; `rc_test` becomes a GC
       test. Finalizers survive only on the few heap nodes owning
       foreign resources, run once per object by sweep rather than once
