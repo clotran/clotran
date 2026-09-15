@@ -800,10 +800,153 @@ the text. A cache writer needs to exclude them.
       before leaving.
 
       Scope is the core, deliberately, not the ~5400 lines of Eval.f90:
-      quote/if/do/def/let*/fn*/loop*/recur/defmacro*/quasiquote, twelve
-      primitives, closures, varargs. Missing and listed rather than
-      silent: try/catch, destructuring (a macro in core.clj, not
-      evaluator work), namespaces, laziness, multi-arity fns.
+      quote/if/do/def/let*/fn*/loop*/recur/defmacro*/quasiquote/try*/
+      throw, twelve primitives, closures, varargs, multi-arity.
+      Missing and listed rather than silent: destructuring (a macro in
+      core.clj, not evaluator work), namespaces, laziness, protocols,
+      metadata.
+
+      **`try*`/`catch*`/`throw`, and a rooting point worth keeping.**
+      `throw` carries a VALUE, not a message, and that value is held
+      as a **GC global root** rather than a plain module variable. It
+      has to be: between the throw and the catch, nothing else refers
+      to it -- the frames that held it are unwinding -- so an ordinary
+      variable would be a live value the collector cannot see, and a
+      collection in that window would free the exception before its
+      handler ran. Under torture that window is a guaranteed
+      collection, and check 14d (throwing a list and counting it in
+      the handler) is what proves it.
+
+      An internal error is catchable too, and arrives as a **map**,
+      `{:error "message"}`, not a bare string. A string would be
+      indistinguishable from `(throw "x")`, so a handler that wants to
+      re-raise anything it does not recognise would have no way to
+      tell them apart. clotran's older evaluator uses a string here;
+      this is a deliberate improvement on it rather than an accident
+      of the port. Checks 14i/14j are that distinction.
+
+      **What `catch` cannot catch: a Fortran runtime error.** Fortran
+      has no exceptions and no stack unwinding, so a segfault, a failed
+      `allocate`, an `error stop` or a trap inside a called library
+      ends the process. There is no `try` around it, and that is not a
+      gap in this evaluator -- it is the host.
+
+      It matters beyond the REPL. The point of the project is handing
+      arrays to real Fortran libraries, and a crash inside one of those
+      takes the whole session with it, including whatever the user was
+      computing. For the live-monitoring goal that is the difference
+      between "the simulation blew up" and "everything you had is
+      gone".
+
+      Three things ARE catchable and should be, rather than being left
+      to crash:
+
+      - `allocate(..., stat=)` -- out of memory becomes a clotran error
+      - `read(..., iostat=)` -- already used by the reader for numbers
+      - IEEE flags via `ieee_arithmetic` -- overflow, divide by zero
+
+      Anything else would need a C signal handler plus `longjmp`
+      through `iso_c_binding`, which is exactly the fragile territory
+      the README's ABI section is about, and is not worth it for a
+      crash that has already corrupted the heap.
+
+      ### Surviving a crash inside a called library
+
+      This is the sharp end of it: if ChemSol segfaults, does the whole
+      REPL go down, and everything the user had computed with it?
+
+      **Threads do not help.** A segfault is delivered to the PROCESS,
+      and threads share one address space -- a wild write in the
+      library's thread lands in our heap. Even catching SIGSEGV on that
+      thread leaves the damage done and possibly `malloc`'s lock held
+      forever. Threads buy concurrency, not isolation. Worth stating
+      plainly because it is an easy thing to assume otherwise.
+
+      **A separate process does, and it is measured, not assumed.** A
+      probe (`fork` + anonymous `MAP_SHARED` mmap, both through
+      `iso_c_binding`) has the child write results into a shared buffer
+      and then segfault. The parent survives, `waitpid` reports status
+      11, and **the results written before the crash are readable**.
+      So the REPL can report "the library died" as an ordinary clotran
+      error and keep everything else.
+
+      What makes this a good fit rather than a bolt-on: the collector
+      is **non-moving** and native buffers are **contiguous with stable
+      addresses** -- decisions already taken for zero-copy interop. An
+      array can therefore live in shared memory and be handed to the
+      child by offset, with no marshalling. The property that makes
+      `dgemm` cheap is the same one that makes isolation cheap.
+
+      Costs, honestly:
+
+      - **`fork` and threads do not mix.** Only async-signal-safe calls
+        are legal in the child, so this must happen before OpenMP
+        starts, or through a persistent worker spawned early. That is a
+        genuine tension with the concurrency step and needs settling
+        there, not here.
+      - **`fork` does not exist on Windows** -- which is the reason
+        not to build on `fork` at all. See below.
+      - A fork per call costs on the order of a millisecond -- nothing
+        against a large `dgemm`, ruinous in a tight loop of small
+        calls. So a **persistent worker** rather than fork-per-call.
+      - Partial results are visible, which cuts both ways: you can see
+        how far it got, and you can also read half-written garbage.
+        The worker protocol has to say which.
+
+      Shape to aim for: isolation is **opt-in per library** in the
+      binding generator -- trusted libraries called directly, unknown
+      or crash-prone ones through a worker. That is the same
+      per-library declaration thread-safety already needs, so it is one
+      annotation rather than two.
+
+      ### Windows, without fork
+
+      clotran must not require Linux or macOS, so nothing may depend
+      on `fork`. It does not have to: we already wanted a **persistent
+      worker** rather than fork-per-call for performance, and a worker
+      needs SPAWN, not fork. Spawn exists everywhere.
+
+      **The portable floor is standard Fortran, and it is measured.**
+      `execute_command_line` is Fortran 2008 and exists on Windows.
+      A probe runs a child that writes results to a file and then
+      segfaults: the parent gets `exitstat = 11`, survives, and reads
+      back everything the child managed to write. No C, no platform
+      branches, nothing POSIX. Whether `exitstat` carries the signal
+      or a Windows exception code is processor-dependent, but non-zero
+      means "it died", which is the only thing that has to be portable.
+
+      **The fast path is a small shim, not a different design.** The
+      floor copies through a file; mapping that same file instead
+      removes the copy. The two platform calls are direct analogues:
+
+      | | POSIX | Windows |
+      | --- | --- | --- |
+      | map a file | `mmap` | `CreateFileMapping` + `MapViewOfFile` |
+      | spawn | `posix_spawn` | `CreateProcess` |
+      | crash status | `waitpid` / `WIFSIGNALED` | `GetExitCodeProcess` |
+
+      Four functions behind one shim, and the design degrades: if the
+      shim is missing on some platform, the standard-Fortran floor
+      still works, just with a copy. On Linux the mapped file goes in
+      `/dev/shm`, so it is RAM anyway.
+
+      **And the interpreter is already portable.** Checked, not
+      assumed: there is **no `bind(c)` or `iso_c_binding` anywhere in
+      `src/f`**, and all eleven new GC-layer modules compile clean
+      under `gfortran -std=f2018`. The only POSIX thing in the repo is
+      `scripts/clotran`, a shell wrapper around `rlwrap` -- a
+      convenience, not the interpreter. So Windows support is a
+      packaging question rather than a porting one, and this decision
+      must not be what breaks it.
+
+      **Multi-arity.** The two shapes real Clojure has, told apart by
+      whether the form after `fn*` is a vector or a list, which is
+      exactly how the reader leaves them. Clauses live in slot 4 --
+      the slot `OBJ_CLOSURE`'s comment already reserved -- with slot 1
+      left nil, so "is this multi-arity" is one test rather than a
+      flag. Clause selection prefers an exact arity and otherwise
+      takes the first variadic one that fits; check 15g runs a
+      two-clause function that `recur`s within one clause to sum 1..100.
 
       **Varargs** are one routine, `bind_params`, used by BOTH fn*
       application and recur -- so a variadic function can recur without
