@@ -48,7 +48,7 @@ endif
 S = src/f
 T = test/f
 
-executables = clotran clotran-bin rc_test atom_test persistent_vector_test \
+executables = clotran clotran-bin clotran-gc rc_test atom_test persistent_vector_test \
 	persistent_list_test persistent_hash_map_test rt_test persistent_array_map_test env_test namespace_test eval_test native_test gc_test gc_vector_test gc_list_test gc_map_test gc_hamt_test gc_env_test gc_assoc_test gc_printer_test gc_reader_test gc_eval_test
 
 unit-tests = rc_test atom_test gc_vector_test gc_list_test gc_map_test gc_hamt_test gc_env_test gc_assoc_test gc_printer_test gc_reader_test gc_eval_test persistent_vector_test persistent_list_test \
@@ -82,6 +82,10 @@ $(S)/GCNamespace.o: $(S)/GCNamespace.f90 $(S)/GC.o $(S)/GCAssoc.o
 $(S)/GCEval.o: $(S)/GCEval.f90 $(S)/GC.o $(S)/GCList.o $(S)/GCVector.o \
 	$(S)/GCAssoc.o $(S)/GCEnv.o $(S)/GCNamespace.o $(S)/GCPrinter.o
 	$(FC) $(FCFLAGS) -c $< -o $@
+
+clotran-gc: $(gcp-objects) $(S)/GCEnv.o $(S)/GCNamespace.o $(S)/GCReader.o $(S)/GCEval.o $(S)/gc_main.f90
+	$(FC) $(FCFLAGS) -o $@ $(gcp-objects) $(S)/GCEnv.o $(S)/GCNamespace.o $(S)/GCReader.o \
+		$(S)/GCEval.o $(S)/gc_main.f90
 
 gc_eval_test: $(gcp-objects) $(S)/GCEnv.o $(S)/GCNamespace.o $(S)/GCReader.o $(S)/GCEval.o $(T)/gc_eval_test.f90
 	$(FC) $(FCFLAGS) -o $@ $(gcp-objects) $(S)/GCEnv.o $(S)/GCNamespace.o $(S)/GCReader.o $(S)/GCEval.o \

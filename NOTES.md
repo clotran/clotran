@@ -126,6 +126,33 @@ second compiler is for, and the split above is a live example of it
 working. Don't contort the source to route around a quirk in either
 one: document it here and move on, unless the fix is free.
 
+## Oracles: gfortran for the compiler, babashka for the language
+
+Two independent oracles, for two different kinds of "is this right?".
+
+**gfortran cross-checks flang** -- see the toolchain section above.
+
+**babashka cross-checks the LANGUAGE.** `scripts/gc-oracle` evaluates
+each expression in `test/clj/gc_oracle.clj` with both `bb` and
+`clotran-gc` and diffs the printed result. Memory is not a
+specification: several semantics that felt obvious are not, and the
+oracle settles them without argument --
+
+- `(= (list 1 2) [1 2])` is **true**; a list and a vector of the same
+  elements are equal, because both are sequential.
+- `(str)` is `""`, not nil.
+- `(conj (list 2) 1)` is `(1 2)` -- conj prepends to a list and
+  appends to a vector.
+- a map prints with commas: `{:a 1, :b 2}`.
+
+A difference is not automatically a bug: usually it is a feature the
+GC evaluator does not have yet, which makes the diff a todo list
+rather than a failure. Currently 40/40 agree.
+
+For clotran-bin itself the equivalent oracle is Clojure's own test
+suite (below), which is stronger; `gc-oracle` exists because the new
+stack cannot run that suite yet.
+
 ## Testing: unit tests are ours, test/regression/ is borrowed
 
 `test/f/*.f90` are this project's own unit tests, one file per

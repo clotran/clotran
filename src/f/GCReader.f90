@@ -34,7 +34,7 @@ module GCReader
   character(len=:), allocatable :: last_error
   logical :: has_error = .false.
 
-  public :: gcr_read, gcr_error, gcr_has_error
+  public :: gcr_read, gcr_read_all, gcr_error, gcr_has_error
 
 contains
 
@@ -67,6 +67,34 @@ contains
     pos = 1
     v = read_form(text, pos, roots)
   end function gcr_read
+
+  ! Every form in the text, as a vector. What a file needs, as
+  ! opposed to gcr_read's single form: the position carries across
+  ! calls instead of restarting, so `(def a 1) (def b 2)` is two forms
+  ! rather than one form and some ignored text.
+  function gcr_read_all(text, roots) result(v)
+    character(len=*), intent(in) :: text
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: v, form
+    integer :: pos, base
+
+    has_error = .false.
+    last_error = ""
+    pos = 1
+    base = vs_enter(1)
+    v = gcv_empty(roots)
+    call vs_set(base + 1, v)
+    do
+       call skip_space(text, pos)
+       if (pos > len(text)) exit
+       form = read_form(text, pos, [vs_get(base + 1)])
+       if (has_error) exit
+       v = gcv_conj(vs_get(base + 1), form, roots)
+       call vs_set(base + 1, v)
+    end do
+    v = vs_get(base + 1)
+    call vs_leave(base)
+  end function gcr_read_all
 
   ! ---- character classification (mirrors LispReader's) ----
 

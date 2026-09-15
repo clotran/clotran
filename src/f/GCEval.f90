@@ -58,6 +58,9 @@ module GCEval
   integer, parameter :: B_LIST = 6, B_VECTOR = 7, B_COUNT = 8
   integer, parameter :: B_FIRST = 9, B_REST = 10
   integer, parameter :: B_CONS = 11, B_CONCAT = 12
+  integer, parameter :: B_STR = 13, B_NOT = 14, B_NTH = 15, B_GET = 16
+  integer, parameter :: B_CONJ = 17, B_EMPTY = 18, B_NILP = 19, B_APPLY = 20
+  integer, parameter :: B_ASSOC = 21, B_KEYS = 22, B_VALS = 23, B_PRN = 24
 
   character(len=:), allocatable :: last_error
   logical :: has_error = .false.
@@ -140,6 +143,18 @@ contains
     call bind_builtin(env, "rest", B_REST)
     call bind_builtin(env, "cons", B_CONS)
     call bind_builtin(env, "concat", B_CONCAT)
+    call bind_builtin(env, "str", B_STR)
+    call bind_builtin(env, "not", B_NOT)
+    call bind_builtin(env, "nth", B_NTH)
+    call bind_builtin(env, "get", B_GET)
+    call bind_builtin(env, "conj", B_CONJ)
+    call bind_builtin(env, "empty?", B_EMPTY)
+    call bind_builtin(env, "nil?", B_NILP)
+    call bind_builtin(env, "apply", B_APPLY)
+    call bind_builtin(env, "assoc", B_ASSOC)
+    call bind_builtin(env, "keys", B_KEYS)
+    call bind_builtin(env, "vals", B_VALS)
+    call bind_builtin(env, "prn", B_PRN)
     env = vs_get(base + 1)
     call vs_leave(base)
   end function gce_base_env
@@ -1094,7 +1109,26 @@ contains
           call vs_set(base + 3, child)
        end do
     case default
-       call fail("not a function: " // gcp_str(fn, .true.))
+       ! A keyword and a map are both callable in Clojure, and neither
+       ! is a closure: (:k m) looks itself up IN m, and (m :k) looks up
+       ! its argument. Same lookup from opposite sides, which is why
+       ! both live here rather than as builtins.
+       if (fn%tag == GCT_KEY) then
+          if (gcv_count(args) >= 1) out = gca_get(gcv_nth(args, 0), fn)
+       else if (gca_is(fn)) then
+          if (gcv_count(args) >= 1) out = gca_get(fn, gcv_nth(args, 0))
+       else if (gcv_is(fn)) then
+          ! A vector is callable on an index, as in ([:a :b] 1).
+          if (gcv_count(args) >= 1) then
+             block
+               type(gc_value) :: ix
+               ix = gcv_nth(args, 0)
+               if (ix%tag == GCT_INT) out = gcv_nth(fn, ix%ival)
+             end block
+          end if
+       else
+          call fail("not a function: " // gcp_str(fn, .true.))
+       end if
     end select
 
     call vs_leave(base)
@@ -1136,7 +1170,7 @@ contains
     case (B_EQ)
        out = gc_bool(.true.)
        do i = 1, n - 1
-          if (.not. gc_equal(gcv_nth(args, i - 1), gcv_nth(args, i))) then
+          if (.not. deep_equal(gcv_nth(args, i - 1), gcv_nth(args, i))) then
              out = gc_bool(.false.)
              exit
           end if
@@ -1212,6 +1246,93 @@ contains
           out = gcl_cons(gcv_nth(args, 0), as_list(a, [vs_get(base + 1)]), &
                [vs_get(base + 1)])
        end if
+    case (B_STR)
+       block
+         character(len=:), allocatable :: acc2
+         acc2 = ""
+         do i = 0, n - 1
+            acc2 = acc2 // gcp_str(gcv_nth(vs_get(base + 1), i), .false.)
+         end do
+         out = gc_str(acc2, [vs_get(base + 1)])
+       end block
+    case (B_NOT)
+       out = gc_bool(.not. truthy(gcv_nth(args, 0)))
+    case (B_NILP)
+       a = gcv_nth(args, 0)
+       out = gc_bool(a%tag == GCT_NIL)
+    case (B_NTH)
+       a = gcv_nth(args, 0)
+       b = gcv_nth(args, 1)
+       out = gc_nil()
+       if (gcv_is(a)) then
+          out = gcv_nth(a, b%ival)
+       else if (gcl_is(a)) then
+          if (b%ival >= 0 .and. b%ival < gcl_count(a)) out = nth_of(a, b%ival)
+       end if
+       if (out%tag == GCT_NIL .and. n >= 3) out = gcv_nth(args, 2)
+    case (B_GET)
+       out = gca_get(gcv_nth(args, 0), gcv_nth(args, 1))
+       if (out%tag == GCT_NIL .and. n >= 3) then
+          if (.not. gca_contains(gcv_nth(args, 0), gcv_nth(args, 1))) &
+               out = gcv_nth(args, 2)
+       end if
+    case (B_ASSOC)
+       out = gca_assoc(gcv_nth(vs_get(base + 1), 0), gcv_nth(vs_get(base + 1), 1), &
+            gcv_nth(vs_get(base + 1), 2), [vs_get(base + 1)])
+    case (B_KEYS, B_VALS)
+       block
+         type(gc_value), allocatable :: ks(:), vls(:)
+         call gca_entries(gcv_nth(vs_get(base + 1), 0), ks, vls)
+         out = gcl_empty([vs_get(base + 1)])
+         do i = size(ks), 1, -1
+            if (id == B_KEYS) then
+               out = gcl_cons(ks(i), out, [vs_get(base + 1), out])
+            else
+               out = gcl_cons(vls(i), out, [vs_get(base + 1), out])
+            end if
+         end do
+       end block
+    case (B_CONJ)
+       a = gcv_nth(vs_get(base + 1), 0)
+       b = gcv_nth(vs_get(base + 1), 1)
+       if (gcv_is(a)) then
+          out = gcv_conj(a, b, [vs_get(base + 1)])
+       else if (gcl_is(a)) then
+          out = gcl_cons(b, a, [vs_get(base + 1)])
+       else
+          out = a
+       end if
+    case (B_EMPTY)
+       a = gcv_nth(args, 0)
+       if (gc_kind(a) == OBJ_LAZY) then
+          call gce_force(a)
+          out = gc_bool(gc_i1(a) /= LAZY_CONS)
+       else
+          out = gc_bool(seq_count(a) == 0 .and. gca_count(a) == 0)
+       end if
+    case (B_APPLY)
+       ! (apply f a b args) -- the last argument is a SEQUENCE spread
+       ! into the call, which is what makes variadic forwarding work.
+       block
+         type(gc_value) :: fargs, last
+         integer :: j
+         fargs = gcv_empty([vs_get(base + 1)])
+         do j = 1, n - 2
+            fargs = gcv_conj(fargs, gcv_nth(vs_get(base + 1), j), [vs_get(base + 1), fargs])
+         end do
+         last = gcv_nth(vs_get(base + 1), n - 1)
+         do j = 0, seq_count(last) - 1
+            fargs = gcv_conj(fargs, seq_at(last, j), [vs_get(base + 1), fargs])
+         end do
+         out = apply(gcv_nth(vs_get(base + 1), 0), fargs)
+       end block
+    case (B_PRN)
+       do i = 0, n - 1
+          if (i > 0) write(*, '(A)', advance='no') " "
+          write(*, '(A)', advance='no') gcp_str(gcv_nth(vs_get(base + 1), i), .true.)
+       end do
+       write(*, '(A)') ""
+       out = gc_nil()
     case (B_CONCAT)
        ! Right to left, so the result comes out in order without a
        ! reverse. Every argument is seq'd to a list first, which is
@@ -1314,6 +1435,86 @@ contains
     x = gcl_first(l)
     r = x%ref
   end function nth_sym_ref
+
+  ! Structural equality, which is what `=` means in Clojure: two
+  ! vectors of equal elements ARE equal, however they were built.
+  !
+  ! Deliberately NOT gc_equal, and the split is worth keeping. gc_equal
+  ! compares collections by identity and is what map KEYS use -- making
+  ! key comparison deep would mean hashing deeply too, and gc_hash
+  ! lives in GC.f90 which cannot see the collection modules. The older
+  ! evaluator draws the same line ("lists/vectors/maps as keys aren't
+  ! compared deeply yet"), so this matches rather than diverges.
+  recursive function deep_equal(a, b) result(eq)
+    type(gc_value), intent(in) :: a, b
+    logical :: eq
+    type(gc_value), allocatable :: ka(:), va(:), kb(:), vb(:)
+    integer :: i, n
+
+    ! A list and a vector of the same elements are equal in Clojure --
+    ! both are sequential -- so this compares seq-ness, not kind.
+    if (seqable(a) .and. seqable(b)) then
+       n = seq_count(a)
+       eq = (n == seq_count(b))
+       if (.not. eq) return
+       do i = 0, n - 1
+          if (.not. deep_equal(seq_at(a, i), seq_at(b, i))) then
+             eq = .false.
+             return
+          end if
+       end do
+       return
+    end if
+
+    if (gca_is(a) .and. gca_is(b)) then
+       eq = (gca_count(a) == gca_count(b))
+       if (.not. eq) return
+       call gca_entries(a, ka, va)
+       call gca_entries(b, kb, vb)
+       do i = 1, size(ka)
+          if (.not. gca_contains(b, ka(i))) then
+             eq = .false.
+             return
+          end if
+          if (.not. deep_equal(va(i), gca_get(b, ka(i)))) then
+             eq = .false.
+             return
+          end if
+       end do
+       return
+    end if
+
+    eq = gc_equal(a, b)
+  end function deep_equal
+
+  function seqable(v) result(yes)
+    type(gc_value), intent(in) :: v
+    logical :: yes
+    yes = gcl_is(v) .or. gcv_is(v)
+  end function seqable
+
+  function seq_count(v) result(n)
+    type(gc_value), intent(in) :: v
+    integer :: n
+    n = 0
+    if (gcl_is(v)) then
+       n = gcl_count(v)
+    else if (gcv_is(v)) then
+       n = gcv_count(v)
+    end if
+  end function seq_count
+
+  function seq_at(v, i) result(out)
+    type(gc_value), intent(in) :: v
+    integer, intent(in) :: i
+    type(gc_value) :: out
+    out = gc_nil()
+    if (gcl_is(v)) then
+       out = nth_of(v, i)
+    else if (gcv_is(v)) then
+       out = gcv_nth(v, i)
+    end if
+  end function seq_at
 
   ! Clojure's truthiness: everything except nil and false.
   function truthy(v) result(yes)

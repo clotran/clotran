@@ -57,6 +57,9 @@ contains
     call check_multi_arity()
     call check_laziness()
     call check_namespaces()
+    call check_equality()
+    call check_callables()
+    call check_core_builtins()
     call check_errors()
     call check_heap_sound()
   end subroutine run_all
@@ -370,6 +373,51 @@ contains
     call ev("17i. ", &
          "(do (def a 1) (in-ns* (quote other)) (def a 2) a)", "2")
   end subroutine check_namespaces
+
+  ! `=` is STRUCTURAL in Clojure: two vectors of equal elements are
+  ! equal however they were built, and a list equals a vector of the
+  ! same elements because both are sequential.
+  subroutine check_equality()
+    call ev("18a. ", "(= [1 2] [1 2])", "true")
+    call ev("18b. ", "(= [1 2] [1 3])", "false")
+    call ev("18c. ", "(= (list 1 2) [1 2])", "true")
+    call ev("18d. ", "(= [1 [2 3]] [1 [2 3]])", "true")
+    call ev("18e. ", "(= [1 [2 3]] [1 [2 4]])", "false")
+    call ev("18f. ", "(= {:a 1} {:a 1})", "true")
+    call ev("18g. ", "(= {:a 1} {:a 2})", "false")
+    call ev("18h. ", "(= {:a [1 2]} {:a [1 2]})", "true")
+    ! Built by different routes, still equal.
+    call ev("18i. ", "(= (conj [1] 2) [1 2])", "true")
+  end subroutine check_equality
+
+  ! Keywords, maps and vectors are callable in Clojure, and none of
+  ! them is a function -- (:k m) and (m :k) are the same lookup from
+  ! opposite sides.
+  subroutine check_callables()
+    call ev("19a. ", "(:a {:a 1})", "1")
+    call ev("19b. ", "({:a 1} :a)", "1")
+    call ev("19c. ", "(:missing {:a 1})", "nil")
+    call ev("19d. ", "([:x :y :z] 1)", ":y")
+    call ev("19e. ", "(let* [m {:k 7}] (:k m))", "7")
+  end subroutine check_callables
+
+  subroutine check_core_builtins()
+    call ev("20a. ", "(str)", '""')
+    call ev("20b. ", '(str "n=" 42)', '"n=42"')
+    call ev("20c. ", "(not nil)", "true")
+    call ev("20d. ", "(nth [1 2 3] 1)", "2")
+    call ev("20e. ", "(get {:a 1} :b :fallback)", ":fallback")
+    call ev("20f. ", "(conj [1] 2)", "[1 2]")
+    call ev("20g. ", "(conj (list 2) 1)", "(1 2)")
+    call ev("20h. ", "(empty? [])", "true")
+    call ev("20i. ", "(empty? [1])", "false")
+    ! apply spreads its last argument, which is what makes variadic
+    ! forwarding work at all.
+    call ev("20j. ", "(apply + [1 2 3])", "6")
+    call ev("20k. ", "(apply + 1 [2 3])", "6")
+    call ev("20l. ", "(assoc {:a 1} :b 2)", "{:a 1, :b 2}")
+    call ev("20m. ", "(nil? nil)", "true")
+  end subroutine check_core_builtins
 
   subroutine check_errors()
     type(gc_value) :: form, env, result
