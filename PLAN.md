@@ -577,8 +577,37 @@ the text. A cache writer needs to exclude them.
       surviving and then being collected when the frame is left, and
       the torture case above.
 
-      Still to build the same way before the switch: list, array map,
-      HAMT, env, closure, atom.
+      **`src/f/GCList.f90`** -- the persistent list, same treatment.
+      Count cached on the cell (i1) exactly as `cons_cell` does, so
+      `count` stays O(1); the evaluator calls it constantly on argument
+      lists. The empty list is a **singleton** registered as a GC
+      global root, matching `PersistentList.EMPTY`: `()` must be
+      identical to `()` everywhere, and `()` is a list rather than nil.
+
+      Its test found a real bug in that singleton, which is the reason
+      to write these checks rather than assume. `gc_init` clears the
+      global-root registry, but the module's cached slot index survives
+      it -- so after a re-init the "singleton" silently handed back nil
+      and every `()` became a fresh object. `gcl_empty` now re-checks
+      the slot instead of trusting the index (check 4c).
+
+      Checks 1-5 (17 in all), both compilers: a 2000-cell chain rooted
+      only through the value stack (which is also what proves the
+      collector's explicit mark stack does not recurse into the real
+      one), two lists sharing one tail object across a collection, and
+      the torture case.
+
+      **Open, and deliberately not invented at this stage: source
+      positions.** `cons_cell` carries `count` plus five position
+      integers; a GC object has `i1` and `i2`. Count took `i1`. The
+      five remaining have to go somewhere before the switch, and the
+      choice matters -- slots 3/4 of the cons object would mean an
+      allocation per form, which is the exact cost the current design
+      avoided on purpose (see `cons_cell`'s own comment). Packing them,
+      widening `obj_node`, or accepting the allocation are all live;
+      settle it before porting the reader.
+
+      Still to build the same way: array map, HAMT, env, closure, atom.
 - [ ] **3e.** Retire `FINAL`-based refcounting; `rc_test` becomes a GC
       test. Finalizers survive only on the few heap nodes owning
       foreign resources, run once per object by sweep rather than once
