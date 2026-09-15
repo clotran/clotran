@@ -61,6 +61,14 @@ module GCEval
   character(len=:), allocatable :: last_error
   logical :: has_error = .false.
 
+  ! The value a `throw` is carrying, as a GC GLOBAL ROOT rather than a
+  ! plain module variable. It has to be: between the throw and the
+  ! catch, nothing else refers to it -- the stack frames that held it
+  ! are unwinding -- so an ordinary variable would be a value the
+  ! collector cannot see, and a collection in that window would free
+  ! the exception before its handler ever ran.
+  integer, save :: thrown_root = 0
+
   public :: gce_eval, gce_base_env, gce_has_error, gce_error, gce_clear_error
 
 contains
@@ -72,7 +80,26 @@ contains
   subroutine gce_clear_error()
     has_error = .false.
     last_error = ""
+    call set_thrown(gc_nil())
   end subroutine gce_clear_error
+
+  ! Re-checks the slot rather than trusting the index, for the same
+  ! reason GCList's empty-list singleton does: gc_init clears the
+  ! global-root registry but this module variable survives it.
+  subroutine set_thrown(v)
+    type(gc_value), intent(in) :: v
+    if (thrown_root == 0) then
+       thrown_root = gc_global_new(v)
+    else
+       call gc_global_set(thrown_root, v)
+    end if
+  end subroutine set_thrown
+
+  function thrown_value() result(v)
+    type(gc_value) :: v
+    v = gc_nil()
+    if (thrown_root /= 0) v = gc_global_get(thrown_root)
+  end function thrown_value
 
   function gce_has_error() result(yes)
     logical :: yes
@@ -193,7 +220,8 @@ contains
           gc_ref_is(sym%ref, "do") .or. gc_ref_is(sym%ref, "def") .or. &
           gc_ref_is(sym%ref, "let*") .or. gc_ref_is(sym%ref, "fn*") .or. &
           gc_ref_is(sym%ref, "loop*") .or. gc_ref_is(sym%ref, "recur") .or. &
-          gc_ref_is(sym%ref, "defmacro*") .or. gc_ref_is(sym%ref, "quasiquote")
+          gc_ref_is(sym%ref, "defmacro*") .or. gc_ref_is(sym%ref, "quasiquote") .or. &
+          gc_ref_is(sym%ref, "try*") .or. gc_ref_is(sym%ref, "throw")
   end function is_special
 
   recursive function eval_special(form, env) result(out)
@@ -259,6 +287,17 @@ contains
 
     else if (gc_ref_is(head%ref, "recur")) then
        out = eval_recur(vs_get(base + 3), vs_get(base + 2))
+
+    else if (gc_ref_is(head%ref, "throw")) then
+       a = gce_eval(gcl_first(vs_get(base + 3)), vs_get(base + 2), [vs_get(base + 1)])
+       if (.not. has_error) then
+          call set_thrown(a)
+          has_error = .true.
+          last_error = "thrown"
+       end if
+
+    else if (gc_ref_is(head%ref, "try*")) then
+       out = eval_try(vs_get(base + 3), vs_get(base + 2))
 
     else if (gc_ref_is(head%ref, "quasiquote")) then
        ! Expand to ordinary cons/concat calls, then evaluate those.
@@ -545,22 +584,87 @@ contains
     call vs_leave(base)
   end function eval_body
 
+  ! Two shapes, the same two real Clojure has:
+  !
+  !   (fn* [a b] body...)              one arity
+  !   (fn* ([a] body) ([a b] body))    several
+  !
+  ! They are told apart by whether the first thing after fn* is a
+  ! vector or a list, which is exactly how the reader leaves them.
+  ! Multi-arity keeps its clauses in slot 4 -- the slot GC.f90's
+  ! OBJ_CLOSURE comment already reserved for them -- and leaves slot 1
+  ! nil, so "is this multi-arity" is one test rather than a flag.
   function make_closure(rest, env) result(out)
     type(gc_value), intent(in) :: rest, env
-    type(gc_value) :: out, params, body
+    type(gc_value) :: out, params, body, head
     type(gc_value) :: r(3)
     integer :: base
 
     base = vs_enter(3)
     call vs_set(base + 1, rest)
     call vs_set(base + 2, env)
-    params = gcl_first(rest)
-    call vs_set(base + 3, params)
-    body = gcl_rest(vs_get(base + 1), [vs_get(base + 1)])
-    r(1) = vs_get(base + 1); r(2) = vs_get(base + 2); r(3) = vs_get(base + 3)
-    out = gc_obj(OBJ_CLOSURE, [vs_get(base + 3), body, vs_get(base + 2), gc_nil()], r)
+    head = gcl_first(rest)
+
+    if (gcl_is(head)) then
+       ! Multi-arity: `rest` is already the list of clauses.
+       r(1) = vs_get(base + 1); r(2) = vs_get(base + 2); r(3) = gc_nil()
+       out = gc_obj(OBJ_CLOSURE, &
+            [gc_nil(), gc_nil(), vs_get(base + 2), vs_get(base + 1)], r)
+    else
+       call vs_set(base + 3, head)
+       body = gcl_rest(vs_get(base + 1), [vs_get(base + 1)])
+       r(1) = vs_get(base + 1); r(2) = vs_get(base + 2); r(3) = vs_get(base + 3)
+       out = gc_obj(OBJ_CLOSURE, &
+            [vs_get(base + 3), body, vs_get(base + 2), gc_nil()], r)
+    end if
     call vs_leave(base)
   end function make_closure
+
+  ! Picks the clause matching argc: an exact arity wins, otherwise the
+  ! first variadic one that can take this many. Real Clojure resolves
+  ! this at compile time; here it is a short linear scan, which is
+  ! fine for the handful of clauses a fn ever has.
+  function select_clause(clauses, argc, params, body) result(found)
+    type(gc_value), intent(in) :: clauses
+    integer, intent(in) :: argc
+    type(gc_value), intent(out) :: params, body
+    logical :: found
+    type(gc_value) :: clause, p, name
+    integer :: base, i, n, j, amp
+
+    found = .false.
+    params = gc_nil()
+    body = gc_nil()
+    base = vs_enter(2)
+    call vs_set(base + 1, clauses)
+    n = gcl_count(clauses)
+    do i = 0, n - 1
+       clause = nth_of(vs_get(base + 1), i)
+       call vs_set(base + 2, clause)
+       p = gcl_first(clause)
+       if (.not. gcv_is(p)) cycle
+       amp = -1
+       do j = 0, gcv_count(p) - 1
+          name = gcv_nth(p, j)
+          if (name%tag == GCT_SYM) then
+             if (gc_ref_is(name%ref, "&")) then
+                amp = j
+                exit
+             end if
+          end if
+       end do
+       if (amp < 0) then
+          if (gcv_count(p) /= argc) cycle
+       else
+          if (argc < amp) cycle
+       end if
+       params = p
+       body = gcl_rest(vs_get(base + 2), [vs_get(base + 1)])
+       found = .true.
+       exit
+    end do
+    call vs_leave(base)
+  end function select_clause
 
   recursive function eval_vector(form, env) result(out)
     type(gc_value), intent(in) :: form, env
@@ -633,6 +737,80 @@ contains
     out = apply(vs_get(base + 3), vs_get(base + 4))
     call vs_leave(base)
   end function eval_call
+
+  ! (try* body (catch* e handler)). The catch clause is optional; with
+  ! none, an error simply propagates.
+  !
+  ! `e` is bound to the THROWN VALUE for a throw. For an internal
+  ! error it is bound to a MAP, {:error "message"}, not to a bare
+  ! string -- because a bare string is indistinguishable from
+  ! (throw "x"), and a handler that wants to re-raise anything it does
+  ! not recognise has no way to tell them apart. Clotran's older
+  ! evaluator uses a string here; this is a deliberate improvement on
+  ! it, not an accident of the port.
+  recursive function eval_try(rest, env) result(out)
+    type(gc_value), intent(in) :: rest, env
+    type(gc_value) :: out, body, clause, name, handler, child, exc
+    integer :: base
+
+    out = gc_nil()
+    base = vs_enter(6)
+    call vs_set(base + 1, rest)
+    call vs_set(base + 2, env)
+    body = gcl_first(rest)
+    call vs_set(base + 3, body)
+    clause = gcl_first(gcl_rest(vs_get(base + 1), [vs_get(base + 1)]))
+    call vs_set(base + 4, clause)
+
+    out = gce_eval(vs_get(base + 3), vs_get(base + 2), [vs_get(base + 1)])
+    if (.not. has_error) then
+       call vs_leave(base); return
+    end if
+    if (.not. gcl_is(vs_get(base + 4))) then
+       call vs_leave(base); return   ! no catch clause: propagate
+    end if
+    if (gcl_count(vs_get(base + 4)) /= 3) then
+       call vs_leave(base); return
+    end if
+
+    ! Capture the exception BEFORE clearing, since clearing resets the
+    ! thrown value too.
+    exc = thrown_value()
+    if (exc%tag == GCT_NIL) exc = error_value(gce_error(), [vs_get(base + 1)])
+    call vs_set(base + 5, exc)
+    call gce_clear_error()
+
+    name = nth_of(vs_get(base + 4), 1)
+    handler = nth_of(vs_get(base + 4), 2)
+    call vs_set(base + 6, handler)
+    child = gce_new(vs_get(base + 2), &
+         [vs_get(base + 1), vs_get(base + 5), vs_get(base + 6)])
+    call gce_set(child, name, vs_get(base + 5), &
+         [vs_get(base + 1), vs_get(base + 6)])
+    out = gce_eval(vs_get(base + 6), child, [vs_get(base + 1)])
+    call vs_leave(base)
+  end function eval_try
+
+  ! {:error "message"} -- an internal failure as an ordinary clotran
+  ! map, so it prints, can be destructured, and is distinguishable
+  ! from any value a program might itself throw.
+  function error_value(msg, roots) result(v)
+    character(len=*), intent(in) :: msg
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: v, k, text
+    integer :: base
+
+    base = vs_enter(3)
+    v = gca_empty(roots)
+    call vs_set(base + 1, v)
+    k = gc_key("error", [vs_get(base + 1)])
+    call vs_set(base + 2, k)
+    text = gc_str(msg, [vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 3, text)
+    v = gca_assoc(vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), &
+         [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+    call vs_leave(base)
+  end function error_value
 
   ! Applies a macro to the unevaluated argument forms.
   recursive function expand_macro(fn, form) result(out)
@@ -763,13 +941,19 @@ contains
        out = call_builtin(gc_i1(fn), args)
     case (OBJ_CLOSURE)
        params = gc_slot(fn, 1)
+       body = gc_slot(fn, 2)
+       if (gcl_is(gc_slot(fn, 4))) then
+          if (.not. select_clause(gc_slot(fn, 4), gcv_count(args), params, body)) then
+             call fail("no matching arity")
+             call vs_leave(base); return
+          end if
+       end if
+       call vs_set(base + 4, body)
        child = bind_params(params, args, gc_slot(fn, 3))
        if (has_error) then
           call vs_leave(base); return
        end if
        call vs_set(base + 3, child)
-       body = gc_slot(vs_get(base + 1), 2)
-       call vs_set(base + 4, body)
        ! A fn* body is a recur point, exactly like loop*: recur rebinds
        ! the parameters and re-enters the body rather than growing the
        ! stack, which is what makes a self-recursive function with

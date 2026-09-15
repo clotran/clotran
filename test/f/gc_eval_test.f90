@@ -53,6 +53,8 @@ contains
     call check_varargs()
     call check_quasiquote()
     call check_macros()
+    call check_try_catch()
+    call check_multi_arity()
     call check_errors()
     call check_heap_sound()
   end subroutine run_all
@@ -261,6 +263,52 @@ contains
          "(do (defmacro* my-list (fn* [& xs] `(list ~@xs))) (my-list 1 2 3))", &
          "(1 2 3)")
   end subroutine check_macros
+
+  ! throw carries a VALUE, not just a message, and that value has to
+  ! survive between the throw and the catch -- when nothing on the
+  ! stack refers to it any more. Under torture that window is a
+  ! guaranteed collection, which is why the thrown value is a GC
+  ! global root rather than a plain module variable.
+  subroutine check_try_catch()
+    call ev("14a. ", "(try* 1 (catch* e 2))", "1")
+    call ev("14b. ", "(try* (throw 7) (catch* e e))", "7")
+    call ev("14c. ", "(try* (throw :boom) (catch* e e))", ":boom")
+    ! A thrown collection: the value has to be traced, not just copied.
+    call ev("14d. ", "(try* (throw (list 1 2 3)) (catch* e (count e)))", "3")
+    ! An internal error is catchable too, and arrives as a MAP rather
+    ! than a bare string -- so a handler can tell it from a value the
+    ! program itself threw. 14i is that distinction.
+    call ev("14e. ", "(try* undefined-thing (catch* e :caught))", ":caught")
+    ! The handler runs in a scope where e is bound, and the outer
+    ! environment is still visible.
+    call ev("14f. ", "(do (def x 10) (try* (throw 5) (catch* e (+ e x))))", "15")
+    ! Nothing thrown: the catch clause must not run.
+    call ev("14g. ", "(try* (+ 1 1) (catch* e :no))", "2")
+    ! Nested: the inner catch handles it, the outer does not fire.
+    call ev("14h. ", &
+         "(try* (try* (throw 1) (catch* e (+ e 10))) (catch* e :outer))", "11")
+    ! A thrown string stays a string; an internal error is a map. If
+    ! internal errors were strings too, these two would be
+    ! indistinguishable to a handler that wants to re-raise what it
+    ! does not recognise.
+    call ev("14i. ", '(try* (throw "x") (catch* e e))', '"x"')
+    call ev("14j. ", "(try* nope (catch* e (count e)))", "1")
+  end subroutine check_try_catch
+
+  subroutine check_multi_arity()
+    call ev("15a. ", "((fn* ([] 0) ([x] x)) )", "0")
+    call ev("15b. ", "((fn* ([] 0) ([x] x)) 5)", "5")
+    call ev("15c. ", "((fn* ([x] :one) ([x y] :two)) 1 2)", ":two")
+    ! A variadic clause alongside fixed ones.
+    call ev("15d. ", "((fn* ([x] :one) ([x & r] :many)) 1 2 3)", ":many")
+    call ev("15e. ", "((fn* ([x] :one) ([x & r] :many)) 1)", ":one")
+    ! Single-arity fns must keep working unchanged.
+    call ev("15f. ", "((fn* [x] x) 3)", "3")
+    ! recur inside a multi-arity clause rebinds that clause's params.
+    call ev("15g. ", &
+         "(do (def f (fn* ([n] (f n 0)) ([n acc] (if (< n 1) acc (recur (- n 1) (+ acc n)))))) (f 100 ))", &
+         "5050")
+  end subroutine check_multi_arity
 
   subroutine check_errors()
     type(gc_value) :: form, env, result
