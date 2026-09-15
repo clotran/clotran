@@ -717,9 +717,66 @@ the text. A cache writer needs to exclude them.
       Correct but slightly wasteful; the collapse is where trie
       deletion gets subtle and nothing needs the space yet.
 
+      **`src/f/GCPrinter.f90`** -- values back to text, written before
+      the switch rather than after, for two reasons beyond eventually
+      needing it. It is the first thing that walks EVERY structure in
+      the new layer at once, so a representation mistake each module's
+      own tests miss shows up here; and debugging the switch without
+      being able to print a value would be miserable.
+
+      It needed entry iteration, so `gch_entries` and `gca_entries`
+      came with it -- filling caller-allocated arrays rather than
+      taking a callback, because flang segfaults passing an internal
+      procedure as one (NOTES.md).
+
+      Check 5 is the one worth having: the SAME single entry is built
+      first in an array map and then, by promoting and dissoc'ing
+      everything else, in a trie -- and must print identically. A map
+      that printed differently past 8 entries would be the
+      implementation leaking into the language. Check 1f is the other:
+      a double prints as `2.0`, not `2`, or it reads back as an
+      integer, which is a round-trip failure rather than a cosmetic
+      one.
+
+      24 checks, both compilers, including a value rooted only by the
+      value stack printing correctly after a collection (printing
+      allocates as it walks, so the subject has to stay rooted).
+
+      **`src/f/GCReader.f90`** -- text into the heap, and with the
+      printer a genuine **round trip**: read a form, print it, get the
+      input back. That is the strongest test this layer has. A reader
+      and a printer can only agree if the thing between them actually
+      holds what it was given, and it exercises every structure against
+      real Clojure text rather than against values built by hand.
+
+      41 checks, both compilers. The two that matter most:
+
+      - **6a: a 60-element list round-trips under torture.** Reading
+        allocates constantly, so a collection lands between two
+        elements of a list far more often than it ever would in
+        practice, and every partially built form has to stay rooted
+        through it. Elements accumulate in a GC VECTOR rather than a
+        Fortran array for exactly this reason -- a plain array of
+        gc_value is invisible to the collector.
+      - **Group 5: bad input is an error, not a half-built value.**
+        Unclosed list, unclosed vector, odd map literal, stray closer,
+        unterminated string -- and a good form afterwards clears the
+        flag.
+
+      Recursive descent straight over the buffer, with no token array:
+      LispReader has one to record a line and column per token, and
+      source positions are still the open question above, so this does
+      not pretend to solve it.
+
+      Deferred and listed rather than silently missing: metadata `^`,
+      the discard macro `#_`, sets `#{}`, regex literals, syntax-quote
+      expansion and auto-gensym. Those are reader macros layered on the
+      core shapes, and the shapes are what needed proving.
+
       **The data layer is now built and tested end to end:** vector,
-      list, array map, hash trie, promotion, environment -- 18 suites
-      green on both compilers. Closure and atom need no module of their
+      list, array map, hash trie, promotion, environment, printer,
+      reader -- 20 suites green on both compilers, and text round-trips
+      through the new representation unchanged. Closure and atom need no module of their
       own. What remains for 3c-2/3d is the switch itself: `cons_value`
       becomes a handle, the evaluator moves onto the value stack, and
       `Values.f90`'s old backing types go.

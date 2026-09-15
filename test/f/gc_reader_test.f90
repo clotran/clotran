@@ -1,0 +1,187 @@
+! Reader and printer together: read a form, print it, and check the
+! input comes back. That is the strongest test the new data layer has
+! -- a reader and a printer can only agree if the thing between them
+! actually holds what it was given, and every structure is exercised
+! against real Clojure text rather than hand-built in a test.
+program gc_reader_test
+  use GC
+  use GCReader
+  use GCPrinter
+  implicit none
+
+  logical :: all_ok
+  type(gc_value) :: no_roots(0)
+
+  all_ok = .true.
+
+  call check_atoms()
+  call check_collections()
+  call check_reader_macros()
+  call check_whitespace_and_comments()
+  call check_errors()
+  call check_big_form_under_torture()
+
+  if (all_ok) then
+     print *, ""
+     print *, "ALL GCREADER CHECKS PASSED"
+  else
+     print *, ""
+     print *, "GCREADER CHECKS FAILED"
+     stop 1
+  end if
+
+contains
+
+  subroutine ok(label, condition)
+    character(len=*), intent(in) :: label
+    logical, intent(in) :: condition
+    if (condition) then
+       print '(A,A)', "ok   - ", label
+    else
+       print '(A,A)', "FAIL - ", label
+       all_ok = .false.
+    end if
+    flush(6)
+  end subroutine ok
+
+  ! The round trip itself: text in, text out, must match.
+  subroutine trip(label, text)
+    character(len=*), intent(in) :: label, text
+    type(gc_value) :: v
+    integer :: base
+    character(len=:), allocatable :: got
+    base = vs_enter(1)
+    v = gcr_read(text, no_roots)
+    call vs_set(base + 1, v)
+    if (gcr_has_error()) then
+       print '(A,A,A,A)', "FAIL - ", label, "read error: ", gcr_error()
+       all_ok = .false.
+       call vs_leave(base)
+       return
+    end if
+    got = gcp_str(vs_get(base + 1), .true.)
+    call vs_leave(base)
+    if (got == text) then
+       print '(A,A,A)', "ok   - ", label, got
+    else
+       print '(A,A,A,A,A)', "FAIL - ", label, got, "  (expected ", text // ")"
+       all_ok = .false.
+    end if
+    flush(6)
+  end subroutine trip
+
+  subroutine check_atoms()
+    call gc_init(512)
+    call trip("1a. ", "nil")
+    call trip("1b. ", "true")
+    call trip("1c. ", "false")
+    call trip("1d. ", "42")
+    call trip("1e. ", "-17")
+    call trip("1f. ", "3.5")
+    call trip("1g. ", "a-symbol")
+    call trip("1h. ", ":a-keyword")
+    call trip("1i. ", """a string""")
+    call trip("1j. ", "\a")
+    call trip("1k. ", "\newline")
+    ! A string whose contents would themselves confuse the reader.
+    call trip("1l. ", """with \""quotes\"" in""")
+    call trip("1m. ", """with a \nnewline""")
+  end subroutine check_atoms
+
+  subroutine check_collections()
+    call gc_init(512)
+    call trip("2a. ", "()")
+    call trip("2b. ", "(1 2 3)")
+    call trip("2c. ", "[]")
+    call trip("2d. ", "[1 2 3]")
+    call trip("2e. ", "{}")
+    call trip("2f. ", "{:a 1}")
+    call trip("2g. ", "(1 [2 3] {:k :v})")
+    call trip("2h. ", "((1) ((2)))")
+    call trip("2i. ", "[[[1]]]")
+    ! Mixed types in one collection, which is where a tag mix-up shows.
+    call trip("2j. ", "(nil true 1 2.5 :k sym ""s"")")
+  end subroutine check_collections
+
+  subroutine check_reader_macros()
+    call gc_init(512)
+    ! These read as ordinary forms, so they print as what they expand
+    ! to rather than as the shorthand -- same as clotran's reader.
+    call trip("3a. ", "(quote x)")
+    call trip("3b. ", "(deref a)")
+    call trip("3c. ", "(quasiquote (a (unquote b)))")
+    call round("3d. '@x reads as nested forms: ", "'@x", "(quote (deref x))")
+    call round("3e. ~@x is splice-unquote: ", "~@x", "(splice-unquote x)")
+  end subroutine check_reader_macros
+
+  subroutine check_whitespace_and_comments()
+    call gc_init(512)
+    call round("4a. leading space is skipped: ", "   42", "42")
+    call round("4b. commas are whitespace: ", "{:a 1, :b 2}", "{:a 1, :b 2}")
+    call round("4c. comments are skipped: ", "; a comment" // achar(10) // "7", "7")
+    call round("4d. ...inside a form too: ", &
+         "(1 ; here" // achar(10) // " 2)", "(1 2)")
+    call round("4e. newlines separate: ", "(1" // achar(10) // "2)", "(1 2)")
+  end subroutine check_whitespace_and_comments
+
+  ! A reader that returns a half-built value on bad input is worse
+  ! than one that says so.
+  subroutine check_errors()
+    type(gc_value) :: v
+    call gc_init(512)
+    v = gcr_read("(1 2", no_roots)
+    call ok("5a. an unclosed list is an error: ", gcr_has_error())
+    v = gcr_read("[1 2", no_roots)
+    call ok("5b. an unclosed vector is an error: ", gcr_has_error())
+    v = gcr_read("{:a", no_roots)
+    call ok("5c. an odd map literal is an error: ", gcr_has_error())
+    v = gcr_read(")", no_roots)
+    call ok("5d. a stray closer is an error: ", gcr_has_error())
+    v = gcr_read("""unterminated", no_roots)
+    call ok("5e. an unterminated string is an error: ", gcr_has_error())
+    v = gcr_read("(1 2 3)", no_roots)
+    call ok("5f. ...and a good form clears the error: ", .not. gcr_has_error())
+  end subroutine check_errors
+
+  ! Reading allocates constantly, so under torture every partially
+  ! built form has to stay rooted -- a collection lands between two
+  ! elements of a list far more often than it ever would in practice.
+  subroutine check_big_form_under_torture()
+    character(len=:), allocatable :: text
+    character(len=16) :: buf
+    integer :: i
+    call gc_init(8)
+    text = "("
+    do i = 1, 60
+       write(buf, '(I0)') i
+       if (i > 1) text = text // " "
+       text = text // trim(buf)
+    end do
+    text = text // ")"
+    gc_torture = .true.
+    call trip("6a. a 60-element list under torture: ", text)
+    call ok("6b. ...and the heap audits clean: ", gc_check_heap() == "")
+    gc_torture = .false.
+  end subroutine check_big_form_under_torture
+
+  ! For cases where input and output deliberately differ.
+  subroutine round(label, text, expected)
+    character(len=*), intent(in) :: label, text, expected
+    type(gc_value) :: v
+    integer :: base
+    character(len=:), allocatable :: got
+    base = vs_enter(1)
+    v = gcr_read(text, no_roots)
+    call vs_set(base + 1, v)
+    got = gcp_str(vs_get(base + 1), .true.)
+    call vs_leave(base)
+    if (got == expected) then
+       print '(A,A,A)', "ok   - ", label, got
+    else
+       print '(A,A,A,A,A)', "FAIL - ", label, got, "  (expected ", expected // ")"
+       all_ok = .false.
+    end if
+    flush(6)
+  end subroutine round
+
+end program gc_reader_test

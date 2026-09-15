@@ -25,3 +25,5 @@
 /gc_hamt_test
 /gc_env_test
 /gc_assoc_test
+/gc_printer_test
+/gc_reader_test

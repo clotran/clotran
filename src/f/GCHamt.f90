@@ -34,6 +34,7 @@ module GCHamt
   integer, parameter :: HMAX_SHIFT = 30 ! 6 levels of 5 bits, then buckets
 
   public :: gch_empty, gch_count, gch_is, gch_get, gch_contains, gch_assoc, gch_dissoc
+  public :: gch_entries
 
 contains
 
@@ -303,6 +304,51 @@ contains
        end if
     end select
   end function node_dissoc
+
+  ! Every key/value pair, in trie order (which is hash order, i.e.
+  ! arbitrary -- a hash map is unordered and this does not pretend
+  ! otherwise). Fills caller-allocated arrays rather than taking a
+  ! callback: flang segfaults passing an internal procedure as a
+  ! callback on macOS/ARM64 (see NOTES.md), so the whole codebase
+  ! avoids that shape.
+  subroutine gch_entries(t, keys, vals)
+    type(gc_value), intent(in) :: t
+    type(gc_value), allocatable, intent(out) :: keys(:), vals(:)
+    integer :: n
+    allocate(keys(gch_count(t)), vals(gch_count(t)))
+    n = 0
+    if (gch_is(t)) call walk(gc_slot(t, 1), keys, vals, n)
+  end subroutine gch_entries
+
+  recursive subroutine walk(node, keys, vals, n)
+    type(gc_value), intent(in) :: node
+    type(gc_value), intent(inout) :: keys(:), vals(:)
+    integer, intent(inout) :: n
+    type(gc_value) :: slot
+    integer :: i, j
+    if (node%tag /= GCT_VEC) return
+    do i = 1, HBRANCH
+       slot = gc_vec_get(node, i)
+       select case (gc_kind(slot))
+       case (OBJ_HAMT_LEAF)
+          if (n < size(keys)) then
+             n = n + 1
+             keys(n) = gc_slot(slot, 1)
+             vals(n) = gc_slot(slot, 2)
+          end if
+       case (OBJ_MAP)
+          do j = 1, gcm_count(slot)
+             if (n < size(keys)) then
+                n = n + 1
+                keys(n) = gcm_key_at(slot, j)
+                vals(n) = gcm_val_at(slot, j)
+             end if
+          end do
+       case default
+          if (slot%tag == GCT_VEC) call walk(slot, keys, vals, n)
+       end select
+    end do
+  end subroutine walk
 
   ! --- helpers ---
 

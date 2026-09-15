@@ -34,7 +34,7 @@ module GCAssoc
   integer, parameter, public :: GCA_ARRAY_MAX = 8
 
   public :: gca_empty, gca_is, gca_count, gca_get, gca_contains, &
-       gca_assoc, gca_dissoc, gca_is_array_map
+       gca_assoc, gca_dissoc, gca_is_array_map, gca_entries
 
 contains
 
@@ -131,6 +131,24 @@ contains
        out = gch_dissoc(m, k, roots)
     end if
   end function gca_dissoc
+
+  ! Every entry, whichever representation the map is in.
+  subroutine gca_entries(m, keys, vals)
+    type(gc_value), intent(in) :: m
+    type(gc_value), allocatable, intent(out) :: keys(:), vals(:)
+    integer :: i
+    if (gch_is(m)) then
+       call gch_entries(m, keys, vals)
+    else if (gcm_is(m)) then
+       allocate(keys(gcm_count(m)), vals(gcm_count(m)))
+       do i = 1, gcm_count(m)
+          keys(i) = gcm_key_at(m, i)
+          vals(i) = gcm_val_at(m, i)
+       end do
+    else
+       allocate(keys(0), vals(0))
+    end if
+  end subroutine gca_entries
 
   ! Copies every entry of an array map into a fresh trie. The entries
   ! are read positionally rather than through get, so a key bound to
