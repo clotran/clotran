@@ -24,6 +24,12 @@ Categories:
 | 6 | Syntax-quote expands at eval time, not read time | open | `src/f/GCEval.f90` |
 | 7 | Recursion depth is ~600 frames, against Clojure's ~11,200 | host | `src/f/GCEval.f90` |
 | 8 | Multimethods dispatch on equality, with no hierarchy | temporary | `src/f/GCEval.f90` |
+| 9 | Sorted collections are unsorted | temporary | `src/f/GCEval.f90` |
+| 10 | Refs are mutable boxes; dynamic bindings are global | temporary | `src/f/GCEval.f90` |
+| 11 | Transients are the persistent collections | host | `src/f/GCEval.f90` |
+| 12 | Four JVM-only libs are skipped by name | host | `src/f/GCEval.f90` |
+| 13 | Protocol dispatch is uncached | host | `src/f/GC.f90` |
+| 14 | No regex | temporary | `src/f/GCReader.f90` |
 
 ---
 
@@ -169,6 +175,68 @@ dispatch value, falls back to the default, and has no hierarchy, no
 
 **Removal**: implement `isa?` over the hierarchy Var and widen
 `findAndCacheBestMethod`. Not needed until `derive` is used.
+
+## 9. Sorted collections are unsorted
+
+`PersistentTreeSet/create` and `PersistentTreeMap/create` build ordinary
+hash collections. core.clj reaches for a sorted set first to hold
+`*loaded-libs*`, which only ever asks about membership.
+
+**Removal**: a flag on the object plus a sort at `seq` time, or a real
+balanced tree if the ordering has to be cheap.
+
+## 10. Refs are mutable boxes, and dynamic bindings are global
+
+`(ref x)` builds an atom: no transaction, no retry, no isolation.
+`dosync` calls its thunk. `push`/`popThreadBindings` keep one global
+stack where `Var.dvals` is a `ThreadLocal`.
+
+Single-threaded all three are indistinguishable from the real thing.
+With threads none of them is, which is why this is **temporary** and why
+PLAN.md step 5 is concurrency.
+
+## 11. Transients are the persistent collections
+
+`asTransient` and `persistent` are identity; `conj!` and `assoc!` are
+`conj` and `assoc`. A transient is an optimisation, not a semantic: used
+correctly -- single-threaded and linearly -- the two give the same value.
+
+What is lost is the speed, and the error Clojure raises when a transient
+is used after being persisted.
+
+## 12. Four JVM-only libs are skipped by name
+
+`core_proxy`, `genclass`, `gvec` and `uuid`, plus `clojure.java.io`.
+The first two import `clojure.asm`, `ClassWriter` and
+`DynamicClassLoader` to emit bytecode; the rest want `java.util`.
+
+Named individually rather than tolerating any missing file, so a real
+typo in a load path is still an error. `instant` needs no entry: it is
+guarded by `when-class`, and since `Class/forName` throws
+`ClassNotFoundException` here, core.clj declines to load it on its own.
+
+## 13. Protocol dispatch is uncached
+
+`MethodImplCache` is a map with the right fields, and `fnFor` always
+answers nil -- a permanently cold cache. Every protocol call therefore
+goes through `-cache-protocol-fn` and `find-protocol-method`, which is
+the CORRECT path and not the fast one.
+
+The cache is stored on the function object itself, which is why
+`OBJ_SLOTS` is 5 rather than 4: a closure's four slots are params, body,
+env and arity clauses, and a protocol method has one clause per
+signature, so none was free. The fifth slot costs one `gc_value` on
+every object in the heap.
+
+## 14. No regex
+
+`#"..."` reads as a plain string; there is no `Pattern`, so `re-matches`,
+`re-find`, `re-seq` and most of `clojure.string` do not work. It is the
+first thing core.clj cannot get past: computing `*clojure-version*` parses
+the version string with a regex.
+
+**Removal**: a regex engine. A real subsystem rather than a gap, and the
+one piece of Java that has no clotran analogue at all to borrow from.
 
 ---
 

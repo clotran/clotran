@@ -101,7 +101,8 @@ module GCEval
   integer, parameter :: B_FLD_SYM = 121, B_FLD_PROTOCOL = 122
   integer, parameter :: B_FLD_METHODK = 123, B_FLD_MAP = 124
   integer, parameter :: B_VARSYM = 125, B_FLD_CACHE = 126, B_EMPTYVEC = 127
-  integer, parameter :: B_ISREDUCED = 128
+  integer, parameter :: B_ISREDUCED = 128, B_ITERATE = 129, B_CYCLE = 130
+  integer, parameter :: B_TOARRAY = 131
   integer, parameter :: B_SYMBOL2 = B_SYMBOL
   integer, parameter :: B_LONGCAST = 66, B_DBLCAST = 67, B_BOOLCAST = 68, B_CHARCAST = 69
   integer, parameter :: B_BITAND = 70, B_BITOR = 71, B_BITXOR = 72, B_BITNOT = 73
@@ -1998,6 +1999,8 @@ contains
          gc_ref_is(sym%ref, "Class") .or. &
          gc_ref_is(sym%ref, "java.lang.Class") .or. &
          gc_ref_is(sym%ref, "clojure.lang.Repeat") .or. &
+         gc_ref_is(sym%ref, "clojure.lang.Iterate") .or. &
+         gc_ref_is(sym%ref, "clojure.lang.Cycle") .or. &
          gc_ref_is(sym%ref, "clojure.lang.Range") .or. &
          gc_ref_is(sym%ref, "clojure.lang.LongRange") .or. &
          gc_ref_is(sym%ref, "System") .or. gc_ref_is(sym%ref, "java.lang.System")
@@ -2105,6 +2108,14 @@ contains
        if (mname == "forName") then
           out = native(B_FORNAME, "clotran-for-name", [roots]); return
        end if
+    else if (cls == "clojure.lang.Iterate") then
+       if (mname == "create") then
+          out = native(B_ITERATE, "iterate", [roots]); return
+       end if
+    else if (cls == "clojure.lang.Cycle") then
+       if (mname == "create") then
+          out = native(B_CYCLE, "cycle", [roots]); return
+       end if
     else if (cls == "clojure.lang.Repeat") then
        if (mname == "create") then
           out = native(B_REPEAT, "repeat", [roots]); return
@@ -2194,6 +2205,7 @@ contains
        ! RT.nextID is the counter gensym counts on. Shared with the
        ! auto-gensym counter, so a gensym and an x# can never collide.
        case ("isReduced"); out = native(B_ISREDUCED, "reduced?", [roots]); return
+       case ("toArray"); out = native(B_TOARRAY, "to-array", [roots]); return
        case ("nextID"); out = native(B_NEXTID, "clotran-next-id", [roots]); return
        case ("load"); out = native(B_RTLOAD, "clotran-rt-load", [roots]); return
        case ("subvec"); out = native(B_SUBVEC, "subvec", [roots]); return
@@ -2638,7 +2650,25 @@ contains
           call gc_set_i1(vs_get(base + 1), LAZY_CONS)
        end if
     else
-       call gc_set_i1(vs_get(base + 1), LAZY_EMPTY)
+       ! ANYTHING ELSE SEQABLE, through seq. A thunk may return a view
+       ! over a vector, a set, a map or a string -- (drop 2 [1 2 3 4])
+       ! returns a view -- and treating those as EMPTY was silent: drop
+       ! worked on a list and gave () on a vector, and take-nth built on
+       ! drop then truncated every destructuring loop binding.
+       block
+         type(gc_value) :: sv
+         sv = to_seq(vs_get(base + 2), [vs_get(base + 1)])
+         if (sv%tag == GCT_NIL) then
+            call gc_set_i1(vs_get(base + 1), LAZY_EMPTY)
+         else
+            call vs_set(base + 2, sv)
+            call gc_set_slot(vs_get(base + 1), 2, &
+                 sq_first(vs_get(base + 2), [vs_get(base + 1)]))
+            call gc_set_slot(vs_get(base + 1), 3, &
+                 sq_rest(vs_get(base + 2), [vs_get(base + 1)]))
+            call gc_set_i1(vs_get(base + 1), LAZY_CONS)
+         end if
+       end block
     end if
     call vs_leave(base)
   end subroutine gce_force
@@ -3180,6 +3210,61 @@ contains
     out = vs_get(base + 3)
     call vs_leave(base)
   end function mx_walk
+
+  ! One cell of (iterate f x): a realised head and an unrealised
+  ! tail. The tail'"s thunk is an ordinary closure over a frame
+  ! binding f and x, whose body is the form
+  ! (clojure.lang.Iterate/create __f (__f __x)) -- so the next cell
+  ! is built by the evaluator, the same way a lazy-seq body is,
+  ! rather than by anything special-cased in the collector.
+  recursive function iterate_cell(f, x, roots) result(out)
+    type(gc_value), intent(in) :: f, x
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, frame, body, callf, nextf, thunk, tail
+    integer :: base
+
+    base = vs_enter(6)
+    call vs_set(base + 1, f)
+    call vs_set(base + 2, x)
+    frame = gce_new(gc_nil(), [vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 3, frame)
+    call gce_set(vs_get(base + 3), gc_sym("__f", [vs_get(base + 3)]), &
+         vs_get(base + 1), [vs_get(base + 1), vs_get(base + 3)])
+    call gce_set(vs_get(base + 3), gc_sym("__x", [vs_get(base + 3)]), &
+         vs_get(base + 2), [vs_get(base + 2), vs_get(base + 3)])
+
+    ! (__f __x)
+    callf = gcl_empty([vs_get(base + 3)])
+    callf = gcl_cons(gc_sym("__x", [vs_get(base + 3)]), callf, &
+         [vs_get(base + 3), callf])
+    callf = gcl_cons(gc_sym("__f", [vs_get(base + 3)]), callf, &
+         [vs_get(base + 3), callf])
+    call vs_set(base + 4, callf)
+
+    ! (clojure.lang.Iterate/create __f (__f __x))
+    nextf = gcl_empty([vs_get(base + 4)])
+    nextf = gcl_cons(vs_get(base + 4), nextf, [vs_get(base + 4), nextf])
+    nextf = gcl_cons(gc_sym("__f", [vs_get(base + 4)]), nextf, &
+         [vs_get(base + 4), nextf])
+    nextf = gcl_cons(gc_sym("clojure.lang.Iterate/create", &
+         [vs_get(base + 4)]), nextf, [vs_get(base + 4), nextf])
+    body = gcl_cons(nextf, gcl_empty([vs_get(base + 4)]), &
+         [vs_get(base + 4), nextf])
+    call vs_set(base + 5, body)
+
+    thunk = gc_obj(OBJ_CLOSURE, [gcv_empty([vs_get(base + 5)]), &
+         vs_get(base + 5), vs_get(base + 3), gc_nil()], &
+         [vs_get(base + 3), vs_get(base + 5)])
+    call vs_set(base + 6, thunk)
+    tail = gc_obj(OBJ_LAZY, [vs_get(base + 6), gc_nil(), gc_nil()], &
+         [vs_get(base + 6)])
+    call gc_set_i1(tail, LAZY_PENDING)
+    call vs_set(base + 6, tail)
+    out = gc_obj(OBJ_LAZY, [gc_nil(), vs_get(base + 2), vs_get(base + 6)], &
+         [vs_get(base + 2), vs_get(base + 6)])
+    call gc_set_i1(out, LAZY_CONS)
+    call vs_leave(base)
+  end function iterate_cell
 
   recursive function apply(fn0, args) result(out)
     type(gc_value), intent(in) :: fn0, args
@@ -3953,6 +4038,48 @@ contains
          has_error = .true.
          last_error = gcp_str(vs_get(base + 2), .true.)
          out = gc_nil()
+       end block
+    case (B_TOARRAY)
+       ! A Java array is a VECTOR here -- there is no other kind of
+       ! indexable, and every use core.clj makes of to-array feeds
+       ! it straight back into a seq.
+       out = coll_to_vector(gcv_nth(args, 0), [vs_get(base + 1)])
+    case (B_ITERATE)
+       ! (iterate f x) -- x, (f x), (f (f x)) ... unbounded, so a
+       ! LAZY cell whose thunk is built by the evaluator. Realised
+       ! head, unrealised tail: exactly what lazy-seq produces.
+       out = iterate_cell(gcv_nth(args, 0), gcv_nth(args, 1), &
+            [vs_get(base + 1)])
+    case (B_CYCLE)
+       ! (cycle coll) repeats it forever. Built by hand as a ring:
+       ! the last cell'"s tail is the first cell, so the whole thing
+       ! is O(n) in the collection and infinite to walk.
+       block
+         type(gc_value) :: items, cell, prev, firstc
+         integer :: j, cn
+         items = coll_to_vector(gcv_nth(args, 0), [vs_get(base + 1)])
+         call vs_set(base + 2, items)
+         cn = gcv_count(vs_get(base + 2))
+         out = gc_nil()
+         if (cn > 0) then
+            firstc = gc_nil()
+            prev = gc_nil()
+            do j = 0, cn - 1
+               cell = gc_obj(OBJ_LAZY, [gc_nil(), &
+                    gcv_nth(vs_get(base + 2), j), gc_nil()], &
+                    [vs_get(base + 1), vs_get(base + 2)])
+               call gc_set_i1(cell, LAZY_CONS)
+               if (j == 0) then
+                  firstc = cell
+                  call vs_set(base + 3, firstc)
+               else
+                  call gc_set_slot(prev, 3, cell)
+               end if
+               prev = cell
+            end do
+            call gc_set_slot(prev, 3, vs_get(base + 3))
+            out = vs_get(base + 3)
+         end if
        end block
     case (B_REPEAT)
        ! (repeat x) is INFINITE, and here that is a single realised cons
