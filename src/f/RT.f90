@@ -9,7 +9,8 @@ module RT
   use values
   use PersistentList, only: list_empty, list_cons => cons, list_first => first, &
        list_rest => rest, list_count => list_count
-  use PersistentVector, only: vector_empty, vector_count, vector_nth, vector_conj, vector_assoc
+  use PersistentVector, only: vector_empty, vector_count, vector_nth, vector_conj, vector_assoc, &
+       has_vector, val_vec_count, val_vec_nth, set_vector, val_vec_conj, val_vec_assoc
   use PersistentArrayMap, only: array_map_empty, array_map_count, array_map_get, &
        array_map_assoc, array_map_entries, array_map_contains
   implicit none
@@ -132,9 +133,7 @@ contains
     case (TAG_LIST)
        if (allocated(v%list_val)) val = list_first(v%list_val)
     case (TAG_VECTOR)
-       if (allocated(v%vector_val)) then
-          if (vector_count(v%vector_val) > 0) val = vector_nth(v%vector_val, 0)
-       end if
+       if (val_vec_count(v) > 0) val = val_vec_nth(v, 0)
     case (TAG_HASHMAP, TAG_SET, TAG_STRING, TAG_ARRAY)
        s = seq(v)
        if (s%tag == TAG_LIST) then
@@ -160,9 +159,7 @@ contains
     case (TAG_LIST)
        if (allocated(v%list_val)) tail = list_rest(v%list_val)
     case (TAG_VECTOR)
-       if (allocated(v%vector_val)) then
-          if (vector_count(v%vector_val) > 1) tail = list_rest(vector_to_list(v%vector_val))
-       end if
+       if (val_vec_count(v) > 1) tail = list_rest(vector_to_list(v%vector_val))
     case (TAG_HASHMAP, TAG_SET, TAG_STRING, TAG_ARRAY)
        block
          type(cons_value) :: s
@@ -221,7 +218,7 @@ contains
     case (TAG_LIST)
        if (allocated(coll%list_val)) coll_list = coll%list_val
     case (TAG_VECTOR)
-       if (allocated(coll%vector_val)) coll_list = vector_to_list(coll%vector_val)
+       if (has_vector(coll)) coll_list = vector_to_list(coll%vector_val)
     case (TAG_HASHMAP, TAG_SET, TAG_STRING, TAG_ARRAY)
        block
          type(cons_value) :: s
@@ -247,12 +244,7 @@ contains
        call wrap_list_value(new_v, list_cons(x, base))
     case (TAG_VECTOR)
        new_v%tag = TAG_VECTOR
-       allocate(new_v%vector_val)
-       if (allocated(coll%vector_val)) then
-          new_v%vector_val = vector_conj(coll%vector_val, x)
-       else
-          new_v%vector_val = vector_conj(vector_empty(), x)
-       end if
+       new_v = val_vec_conj(coll, x)
     case (TAG_SET)
        new_v%tag = TAG_SET
        allocate(new_v%map_val)
@@ -314,7 +306,7 @@ contains
 
     select case (coll%tag)
     case (TAG_VECTOR)
-       if (allocated(coll%vector_val)) val = vector_nth(coll%vector_val, i)
+       val = val_vec_nth(coll, i)
     case (TAG_LIST)
        if (allocated(coll%list_val)) then
           l = coll%list_val
@@ -369,7 +361,7 @@ contains
     case (TAG_LIST)
        if (allocated(coll%list_val)) n = list_count(coll%list_val)
     case (TAG_VECTOR)
-       if (allocated(coll%vector_val)) n = vector_count(coll%vector_val)
+       n = val_vec_count(coll)
     case (TAG_STRING)
        if (allocated(coll%str_val)) n = len(coll%str_val)
     case (TAG_ARRAY)
@@ -407,10 +399,9 @@ contains
   function assoc(coll, key, val) result(new_v)
     type(cons_value), intent(in) :: coll, key, val
     type(cons_value) :: new_v
-    if (coll%tag == TAG_VECTOR .and. allocated(coll%vector_val)) then
+    if (coll%tag == TAG_VECTOR .and. has_vector(coll)) then
        new_v%tag = TAG_VECTOR
-       allocate(new_v%vector_val)
-       new_v%vector_val = vector_assoc(coll%vector_val, key%int_val, val)
+       new_v = val_vec_assoc(coll, key%int_val, val)
        return
     end if
     new_v%tag = TAG_HASHMAP
@@ -556,8 +547,7 @@ contains
        block
          type(cons_value) :: entry_val
          entry_val%tag = TAG_VECTOR
-         allocate(entry_val%vector_val)
-         entry_val%vector_val = entry
+         call set_vector(entry_val, entry)
          l = list_cons(entry_val, l)
        end block
     end do

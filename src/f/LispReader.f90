@@ -6,7 +6,8 @@
 module LispReader
   use values
   use PersistentList, only: list_of, list_first => first, list_rest => rest, list_count
-  use PersistentVector, only: vector_empty, vector_conj, vector_count, vector_nth
+  use PersistentVector, only: vector_empty, vector_conj, vector_count, vector_nth, &
+       has_vector, val_vec_count, val_vec_nth, set_vector, val_vec_conj, val_vec_assoc
   use PersistentArrayMap, only: array_map_empty, array_map_assoc
   implicit none
   private
@@ -735,8 +736,7 @@ contains
        vec = vector_conj(vec, items(i))
     end do
     val%tag = TAG_VECTOR
-    allocate(val%vector_val)
-    val%vector_val = vec
+    call set_vector(val, vec)
   end function read_vector
 
   recursive function read_hashmap(tokens, pos) result(val)
@@ -852,13 +852,13 @@ contains
        end if
     case (TAG_VECTOR)
        new_v = v
-       if (allocated(v%vector_val)) then
-          n = vector_count(v%vector_val)
+       if (has_vector(v)) then
+          n = val_vec_count(v)
           new_vec = vector_empty()
           do i = 0, n - 1
-             new_vec = vector_conj(new_vec, rewrite_percent_args(vector_nth(v%vector_val, i), max_n, has_amp))
+             new_vec = vector_conj(new_vec, rewrite_percent_args(val_vec_nth(v, i), max_n, has_amp))
           end do
-          new_v%vector_val = new_vec
+          call set_vector(new_v, new_vec)
        end if
     case default
        new_v = v
@@ -909,8 +909,7 @@ contains
        params_vec = vector_conj(params_vec, rest_sym)
     end if
     params%tag = TAG_VECTOR
-    allocate(params%vector_val)
-    params%vector_val = params_vec
+    call set_vector(params, params_vec)
 
     fn_sym%tag = TAG_SYMBOL
     fn_sym%str_val = "fn*"

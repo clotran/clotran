@@ -8,6 +8,7 @@ module PersistentVector
   private
 
   public :: vector_empty, vector_count, vector_nth, vector_conj, vector_assoc
+  public :: has_vector, val_vec_count, val_vec_nth, set_vector, val_vec_conj, val_vec_assoc
 
 contains
 
@@ -138,5 +139,68 @@ contains
        new_v%root = node_assoc(v%root, v%shift, i, x)
     end if
   end function vector_assoc
+
+  ! ---- cons_value-level accessors --------------------------------
+  !
+  ! These live HERE and not in Values.f90 because reaching an element
+  ! means walking the trie, and Values cannot use this module -- the
+  ! dependency runs one way only (PersistentVector uses values). So for
+  ! vectors, "the one place that knows the representation" is this
+  ! section plus the type declaration in Values. See PLAN.md 3c.
+  !
+  ! Each absorbs the allocated() guard its callers used to repeat: a
+  ! value holding no vector counts 0 and nths to nil, which is what
+  ! every call site did by hand.
+
+  function has_vector(v) result(yes)
+    type(cons_value), intent(in) :: v
+    logical :: yes
+    yes = allocated(v%vector_val)
+  end function has_vector
+
+  function val_vec_count(v) result(n)
+    type(cons_value), intent(in) :: v
+    integer :: n
+    n = 0
+    if (allocated(v%vector_val)) n = vector_count(v%vector_val)
+  end function val_vec_count
+
+  function val_vec_nth(v, i) result(x)
+    type(cons_value), intent(in) :: v
+    integer, intent(in) :: i ! 0-based
+    type(cons_value) :: x
+    if (.not. allocated(v%vector_val)) return
+    if (i < 0 .or. i >= vector_count(v%vector_val)) return
+    x = vector_nth(v%vector_val, i)
+  end function val_vec_nth
+
+  subroutine set_vector(v, vec)
+    type(cons_value), intent(inout) :: v
+    type(vec_t), intent(in) :: vec
+    v%tag = TAG_VECTOR
+    if (.not. allocated(v%vector_val)) allocate(v%vector_val)
+    v%vector_val = vec
+  end subroutine set_vector
+
+  ! conj/assoc on a VALUE rather than a vec_t, so a caller never has to
+  ! unwrap one. An absent vector conjes onto the empty vector, which is
+  ! what (conj nil x) means anyway.
+  function val_vec_conj(v, x) result(out)
+    type(cons_value), intent(in) :: v, x
+    type(cons_value) :: out
+    if (allocated(v%vector_val)) then
+       call set_vector(out, vector_conj(v%vector_val, x))
+    else
+       call set_vector(out, vector_conj(vector_empty(), x))
+    end if
+  end function val_vec_conj
+
+  function val_vec_assoc(v, i, x) result(out)
+    type(cons_value), intent(in) :: v, x
+    integer, intent(in) :: i
+    type(cons_value) :: out
+    if (.not. allocated(v%vector_val)) return
+    call set_vector(out, vector_assoc(v%vector_val, i, x))
+  end function val_vec_assoc
 
 end module PersistentVector

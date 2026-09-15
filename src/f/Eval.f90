@@ -10,7 +10,8 @@ module Eval
   use values
   use Env
   use PersistentList, only: list_first => first, list_rest => rest, list_count, list_of
-  use PersistentVector, only: vector_count, vector_nth, vector_conj, vector_empty
+  use PersistentVector, only: vector_count, vector_nth, vector_conj, vector_empty, &
+       has_vector, val_vec_count, val_vec_nth, set_vector, val_vec_conj, val_vec_assoc
   use PersistentHashMap, only: hamt_hash_of => hash_of
   use PersistentArrayMap, only: array_map_empty, array_map_entries, &
        array_map_assoc, array_map_contains, array_map_dissoc
@@ -2612,13 +2613,13 @@ contains
          integer :: vn, vi
          type(cons_value), allocatable :: vitems(:)
          vn = 0
-         if (allocated(form%vector_val)) vn = vector_count(form%vector_val)
+         vn = val_vec_count(form)
          allocate(vitems(vn))
          do vi = 1, vn
-            vitems(vi) = pre_expand(vector_nth(form%vector_val, vi - 1))
+            vitems(vi) = pre_expand(val_vec_nth(form, vi - 1))
             if (has_error) then
                has_error = .false.
-               vitems(vi) = vector_nth(form%vector_val, vi - 1)
+               vitems(vi) = val_vec_nth(form, vi - 1)
             end if
          end do
          expanded = make_vector(vitems)
@@ -2832,10 +2833,10 @@ contains
        out = make_list(items)
     case (TAG_VECTOR)
        n = 0
-       if (allocated(form%vector_val)) n = vector_count(form%vector_val)
+       n = val_vec_count(form)
        allocate(items(n))
        do i = 1, n
-          items(i) = pre_expand_qq(vector_nth(form%vector_val, i - 1))
+          items(i) = pre_expand_qq(val_vec_nth(form, i - 1))
        end do
        out = make_vector(items)
     case default
@@ -3099,10 +3100,10 @@ contains
        end if
     case (TAG_VECTOR)
        n = 0
-       if (allocated(form%vector_val)) n = vector_count(form%vector_val)
+       n = val_vec_count(form)
        item_count = 0
        do i = 0, n - 1
-          e = vector_nth(form%vector_val, i)
+          e = val_vec_nth(form, i)
           if (is_splice_unquote(e)) then
              call qq_append_all(items, item_count, eval_form(list_first(list_rest(e%list_val)), env))
           else
@@ -3180,15 +3181,14 @@ contains
     integer :: i, n
 
     n = 0
-    if (allocated(ast%vector_val)) n = vector_count(ast%vector_val)
+    n = val_vec_count(ast)
     vec = vector_empty()
     do i = 0, n - 1
-       vec = vector_conj(vec, eval_form(vector_nth(ast%vector_val, i), env))
+       vec = vector_conj(vec, eval_form(val_vec_nth(ast, i), env))
        if (has_error) return
     end do
     val%tag = TAG_VECTOR
-    allocate(val%vector_val)
-    val%vector_val = vec
+    call set_vector(val, vec)
   end function eval_vector
 
   ! A set literal's elements are evaluated, same as a vector literal's
@@ -3609,8 +3609,7 @@ contains
        vec = vector_conj(vec, items(i))
     end do
     val%tag = TAG_VECTOR
-    allocate(val%vector_val)
-    val%vector_val = vec
+    call set_vector(val, vec)
   end function make_vector
 
   ! (hash-map k v ...): a map from alternating key/value args.
@@ -5336,7 +5335,7 @@ contains
     if (b%tag == TAG_LIST) then
        if (allocated(b%list_val)) n = list_count(b%list_val)
     else if (b%tag == TAG_VECTOR) then
-       if (allocated(b%vector_val)) n = vector_count(b%vector_val)
+       n = val_vec_count(b)
     end if
   end function binding_count
 
@@ -5347,7 +5346,7 @@ contains
     type(cons_ref) :: l
     integer :: k
     if (b%tag == TAG_VECTOR) then
-       val = vector_nth(b%vector_val, i)
+       val = val_vec_nth(b, i)
     else
        l = b%list_val
        do k = 1, i

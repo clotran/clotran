@@ -389,6 +389,34 @@ the text. A cache writer needs to exclude them.
         `assignment(=)` runs on it, since `atom_ref_assign` releases
         the old target first and releasing an unallocated component
         reads uninitialized memory.
+  - [x] **3c-1 `vector_val`** (59 sites). The first payload that could
+        *not* follow the pattern: the accessors live in
+        **PersistentVector.f90**, not Values.f90, because reaching an
+        element means walking the trie and Values cannot use that
+        module -- the dependency runs one way only. So for vectors "the
+        one place that knows the representation" is that file plus the
+        type declaration in Values. Fine, and arguably the right home;
+        worth knowing before 3c-2 assumes one file.
+
+        `has_vector`, `val_vec_count`, `val_vec_nth`, `set_vector`,
+        `val_vec_conj`, `val_vec_assoc`. Each absorbs the `allocated()`
+        guard its callers repeated, so the common shape
+
+        ```fortran
+        if (allocated(v%vector_val)) then
+           if (vector_count(v%vector_val) > 0) val = vector_nth(v%vector_val, 0)
+        end if
+        ```
+
+        is now one line. `conj` and `assoc` lost their
+        allocated/else/empty branches entirely -- an absent vector
+        conjes onto the empty one, which is what `(conj nil x)` means.
+
+        Residue: three `vector_to_list(...)` calls in RT.f90. That
+        function is RT-private and walks `%root`/`%shift` directly;
+        moving it into PersistentVector would need PersistentList,
+        which PersistentVector does not use. Left deliberately, and
+        small enough for 3c-2 to edit in place.
 - [ ] **3d.** Evaluator on the value stack.
 - [ ] **3e.** Retire `FINAL`-based refcounting; `rc_test` becomes a GC
       test. Finalizers survive only on the few heap nodes owning
