@@ -631,7 +631,30 @@ the text. A cache writer needs to exclude them.
       gap, not a behavioural one: a linear map answers the same
       questions, slower.
 
-      Still to build the same way: HAMT, env, closure, atom.
+      **`src/f/GCHamt.f90`** -- the hash trie the map promotes into,
+      plus `gc_hash` in the collector, mirroring `PersistentHashMap`'s
+      `hash_of`: same mix32, same FNV-1a over the text, same tag mixed
+      in so `"a"` and `\a` do not collide. It has to agree with
+      `gc_equal` or a trie stores one key twice, so text hashes over
+      CONTENT exactly as gc_equal compares content.
+
+      Collision buckets **reuse GCMap**: a set of keys sharing a
+      32-bit hash is a small linear map, and a second linear scan here
+      would be the same code twice.
+
+      The collision path is forced with a REAL pair, not hoped for.
+      Integers cannot collide -- mix32 is the Murmur finaliser, which
+      is bijective -- so the test searches short strings for a genuine
+      FNV-1a collision (open addressing, ~0.2s) and then checks both
+      keys are stored, both read back, and replacing inside a bucket
+      does not grow the count. A trie that drops one of a colliding
+      pair looks perfectly healthy until the day it does not.
+
+      22 checks, both compilers, including 3000 keys across several
+      levels of splitting and the torture case.
+
+      Still to build the same way: env, closure, atom. Then the
+      promotion rule joining GCMap and GCHamt at 8 entries.
 - [ ] **3e.** Retire `FINAL`-based refcounting; `rc_test` becomes a GC
       test. Finalizers survive only on the few heap nodes owning
       foreign resources, run once per object by sweep rather than once

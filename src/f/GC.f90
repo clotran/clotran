@@ -115,6 +115,12 @@ module GC
   ! Same shape as OBJ_ATOM plus a name, and deliberately a distinct
   ! kind: the box is identical, the behaviour is not (a Var derefs
   ! through its dynamic stack and prints as #'ns/name).
+  ! HAMT (GCHamt.f90): a node is a VEC run of 32 slots, each holding
+  ! nil (empty), an OBJ_HAMT_LEAF, another run (a child node), or an
+  ! OBJ_MAP (a hash-collision bucket -- a collision set IS a small
+  ! linear map, so it reuses the one that already exists).
+  integer, parameter, public :: OBJ_HAMT      = 11 ! 1=root run; i1=count
+  integer, parameter, public :: OBJ_HAMT_LEAF = 12 ! 1=key 2=val
   integer, parameter, public :: OBJ_VAR     = 10 ! 1=root 2=meta 3=dyn stack 4=name
 
   integer, parameter, public :: OBJ_SLOTS = 4
@@ -223,7 +229,7 @@ module GC
   public :: gc_global_new, gc_global_set, gc_global_get, gc_global_count
   public :: gc_ensure_init, gc_str_ref, gc_ref_text, gc_ref_is, gc_ref_len
   public :: vs_enter, vs_leave, vs_set, vs_get, vs_depth
-  public :: gc_equal
+  public :: gc_equal, gc_hash
 
 contains
 
@@ -709,6 +715,62 @@ contains
        eq = (a%ref == b%ref)
     end select
   end function gc_equal
+
+  ! Hash, mirroring PersistentHashMap's hash_of so the two
+  ! representations agree during the migration -- same mix32, same
+  ! FNV-1a over the text, same tag mixed in so "a" the string and \a
+  ! the character do not collide.
+  !
+  ! It MUST agree with gc_equal: two values that compare equal have to
+  ! hash equal, or a trie will store the same key twice and lookups
+  ! will find whichever arm they walk into. That is why text hashes
+  ! over its CONTENT here, exactly as gc_equal compares content.
+  function gc_hash(v) result(h)
+    type(gc_value), intent(in) :: v
+    integer :: h
+    integer(kind=8) :: bits8
+    select case (v%tag)
+    case (GCT_NIL)
+       h = 0
+    case (GCT_BOOL)
+       if (v%ival /= 0) then
+          h = 1231
+       else
+          h = 1237
+       end if
+    case (GCT_INT, GCT_CHAR)
+       h = mix32(ieor(v%ival, v%tag))
+    case (GCT_REAL)
+       bits8 = transfer(v%rval, bits8)
+       h = mix32(int(ieor(bits8, ishft(bits8, -32)), kind=4))
+    case (GCT_STR, GCT_SYM, GCT_KEY)
+       h = mix32(ieor(fnv1a(gc_ref_text(v%ref)), v%tag))
+    case default
+       ! Collections hash by identity, matching gc_equal's default.
+       h = mix32(ieor(v%ref, v%tag))
+    end select
+  end function gc_hash
+
+  function mix32(x) result(h)
+    integer, intent(in) :: x
+    integer :: h
+    h = x
+    h = ieor(h, ishft(h, -16))
+    h = h * (-2048144789) ! 0x85ebca6b as signed 32-bit
+    h = ieor(h, ishft(h, -13))
+    h = h * (-1028477387) ! 0xc2b2ae35 as signed 32-bit
+    h = ieor(h, ishft(h, -16))
+  end function mix32
+
+  function fnv1a(s) result(h)
+    character(len=*), intent(in) :: s
+    integer :: h, i
+    h = -2128831035 ! FNV offset basis, 0x811c9dc5, as signed 32-bit
+    do i = 1, len(s)
+       h = ieor(h, iachar(s(i:i)))
+       h = h * 16777619 ! FNV prime
+    end do
+  end function fnv1a
 
   ! --- the value stack -------------------------------------------
 
