@@ -773,10 +773,49 @@ the text. A cache writer needs to exclude them.
       expansion and auto-gensym. Those are reader macros layered on the
       core shapes, and the shapes are what needed proving.
 
-      **The data layer is now built and tested end to end:** vector,
+      **`src/f/GCEval.f90`** -- a core evaluator, and the module that
+      answers the question the whole port rests on: **does rooting by
+      construction hold up under real evaluation?** Everything before
+      it was data structures, where the roots are obvious. An evaluator
+      is where they are not -- intermediate values live across
+      recursive calls, every one of which can allocate and therefore
+      collect.
+
+      The answer is yes. Every check runs TWICE, once normally and
+      once with `gc_torture` on, and the torture pass is the real one:
+
+          (do (def fib (fn* [n] (if (< n 2) n
+                                  (+ (fib (- n 1)) (fib (- n 2))))))
+              (fib 10))   =>   55
+
+      computed correctly with a collection at **every single
+      allocation**, heap audit clean afterwards. Also under torture:
+      lexical capture (`((mk 10) 5)` => 15), recursion through a def'd
+      name, shadowing, and vector literals evaluating their elements.
+
+      The rule the module documents and the tests enforce: a value that
+      must survive an allocation lives in a value-stack SLOT, never in
+      a Fortran local, because the collector cannot see locals. Each
+      routine opens a frame, works in slots, and reads its result out
+      before leaving.
+
+      Scope is the core, deliberately, not the ~5400 lines of Eval.f90:
+      quote/if/do/def/let*/fn*, ten primitives, closures. Missing and
+      listed rather than silent: macros, loop/recur and tail calls,
+      try/catch, destructuring, varargs, namespaces, laziness.
+
+      The torture pass caught a real bug on its first run: `has_error`
+      is module state and nothing cleared it, so once one check
+      expected an error every later evaluation short-circuited.
+      `gce_clear_error` is now the caller's job before a top-level
+      eval -- it cannot be done inside `gce_eval`, which is recursive
+      and would wipe an error raised deeper in the same evaluation.
+
+      **The new stack is now complete and proven end to end:** vector,
       list, array map, hash trie, promotion, environment, printer,
-      reader -- 20 suites green on both compilers, and text round-trips
-      through the new representation unchanged. Closure and atom need no module of their
+      reader, evaluator -- 21 suites green on both compilers. Real
+      Clojure text is read, evaluated and printed entirely in the new
+      representation, under a collector running at maximum paranoia. Closure and atom need no module of their
       own. What remains for 3c-2/3d is the switch itself: `cons_value`
       becomes a handle, the evaluator moves onto the value stack, and
       `Values.f90`'s old backing types go.

@@ -27,3 +27,4 @@
 /gc_assoc_test
 /gc_printer_test
 /gc_reader_test
+/gc_eval_test

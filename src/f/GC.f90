@@ -119,6 +119,11 @@ module GC
   ! nil (empty), an OBJ_HAMT_LEAF, another run (a child node), or an
   ! OBJ_MAP (a hash-collision bucket -- a collision set IS a small
   ! linear map, so it reuses the one that already exists).
+  ! A primitive implemented in Fortran: slot 1 = its name (for
+  ! printing and errors), i1 = which one. Distinct from OBJ_CLOSURE so
+  ! that "is this callable" and "does this have a body to evaluate"
+  ! stay separate questions.
+  integer, parameter, public :: OBJ_BUILTIN   = 13 ! 1=name; i1=id
   integer, parameter, public :: OBJ_HAMT      = 11 ! 1=root run; i1=count
   integer, parameter, public :: OBJ_HAMT_LEAF = 12 ! 1=key 2=val
   integer, parameter, public :: OBJ_VAR     = 10 ! 1=root 2=meta 3=dyn stack 4=name
