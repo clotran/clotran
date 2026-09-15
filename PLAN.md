@@ -427,13 +427,44 @@ the loop cheap before starting on the expensive steps.
       Index '1' of dimension 1 of 'h...%children' above upper bound of 0
       ```
 
-      `h%ptr` is freed *during* its own child loop, so the descriptor
-      reads size 0 partway through. That is refcounting re-entering
-      itself -- a node reachable twice, or a cycle, being released
-      twice. Deliberately NOT patched blind: refcounting structurally
-      cannot handle a cycle, so the honest fix may simply be step 3,
-      and a speculative reordering of `node_ref_release` would hide
-      whichever it is. Diagnose before touching it.
+      What is established, by instrumenting `node_ref_release` to report
+      any entry on a non-positive refcount:
+
+      - The refcount read is **-675019966** -- garbage, not `0` or `-1`.
+        So this is not a double-release of a live node; `h%ptr` points
+        at memory that is no longer a `vec_node` at all. A `node_ref`
+        outlived the node it referenced: a **missing increment**, not an
+        extra decrement.
+      - It is **not** a defined-assignment dispatch failure. The
+        suspicion was `node_assoc`'s bulk slice copy
+        (`new_node%children(1:n) = node_in%ptr%children(1:n)`) silently
+        falling back to intrinsic assignment and skipping the refcount
+        bump -- the same shape as the `hamt_slot` problem already in
+        NOTES. Disproved with an isolated probe: both compilers
+        dispatch to the elemental defined assignment, 4 calls for 4
+        elements, slice and whole-array alike.
+      - Every `_assign` *is* in the `assignment(=)` interface, and
+        `cons_value_assign` does release the LHS before copying.
+      - It is reached from `cons_value_finalize`, i.e. the compiler's
+        own finalization, not from an explicit release.
+
+      So the remaining candidates are the paths where a `node_ref` is
+      copied WITHOUT defined assignment: function results, `intent(out)`
+      dummies, and component finalization of the types that have no
+      `FINAL` of their own (`vec_t`, `closure_t`) and rely on the
+      standard cascading into their components.
+
+      **Recommendation: do not root-cause this further.** Every routine
+      in the failing path -- `node_ref_release`, `cons_value_release`,
+      `cons_value_finalize` -- is deleted by 3e. Refcounting is the
+      subsystem being replaced, and this is a bug *in the thing being
+      thrown away*. The GC finds this class of fault deterministically
+      (`gc_check_heap` under torture) where this takes six runs to
+      reproduce once.
+
+      It does not block 3c-1, which is a mechanical refactor with the
+      representation unchanged. It is an argument for getting to 3c-2
+      and 3e promptly rather than lingering in 4a.
 - [ ] **4b. Integer opcodes.** `eval_form` dispatches special forms by
       a cascade of string comparisons: 5.26 ns for ten of them, against
       0.09 ns for an integer `select case`, and there are ~30.
