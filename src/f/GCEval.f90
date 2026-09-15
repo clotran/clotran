@@ -61,6 +61,9 @@ module GCEval
   integer, parameter :: B_STR = 13, B_NOT = 14, B_NTH = 15, B_GET = 16
   integer, parameter :: B_CONJ = 17, B_EMPTY = 18, B_NILP = 19, B_APPLY = 20
   integer, parameter :: B_ASSOC = 21, B_KEYS = 22, B_VALS = 23, B_PRN = 24
+  integer, parameter :: B_QUOT = 25, B_REM = 26, B_SEQ = 27, B_DISSOC = 28
+  integer, parameter :: B_NAME = 29, B_KEYWORD = 30, B_SYMBOL = 31
+  integer, parameter :: B_SUBS = 32, B_TYPE = 33, B_SECOND = 34
 
   character(len=:), allocatable :: last_error
   logical :: has_error = .false.
@@ -155,6 +158,16 @@ contains
     call bind_builtin(env, "keys", B_KEYS)
     call bind_builtin(env, "vals", B_VALS)
     call bind_builtin(env, "prn", B_PRN)
+    call bind_builtin(env, "quot", B_QUOT)
+    call bind_builtin(env, "rem", B_REM)
+    call bind_builtin(env, "seq", B_SEQ)
+    call bind_builtin(env, "dissoc", B_DISSOC)
+    call bind_builtin(env, "name", B_NAME)
+    call bind_builtin(env, "keyword", B_KEYWORD)
+    call bind_builtin(env, "symbol", B_SYMBOL)
+    call bind_builtin(env, "subs", B_SUBS)
+    call bind_builtin(env, "clotran-type", B_TYPE)
+    call bind_builtin(env, "second", B_SECOND)
     env = vs_get(base + 1)
     call vs_leave(base)
   end function gce_base_env
@@ -1194,7 +1207,12 @@ contains
        out = vs_get(base + 1)
     case (B_COUNT)
        a = gcv_nth(args, 0)
-       if (gc_kind(a) == OBJ_LAZY) then
+       if (a%tag == GCT_STR) then
+          ! A string is countable in Clojure, and only the host can
+          ! see its length -- so this is a primitive, not something
+          ! core can be written to do.
+          out = gc_int(gc_ref_len(a%ref))
+       else if (gc_kind(a) == OBJ_LAZY) then
           ! Counting a lazy seq realises all of it, which is exactly
           ! what (count) means and why it does not terminate on an
           ! infinite one -- same as real Clojure.
@@ -1229,6 +1247,12 @@ contains
           end if
        else if (gcl_is(a)) then
           out = gcl_rest(a, [vs_get(base + 1)])
+       else if (gcv_is(a)) then
+          ! rest of a VECTOR is a seq of the remainder, not nil. Missing
+          ! this made reduce and last quietly wrong rather than failing:
+          ! (rest [1 2 3]) was nil, so every seq walk over a vector
+          ! stopped after one element.
+          out = as_list_rest(a, [vs_get(base + 1)])
        end if
     case (B_CONS)
        ! (cons x <lazy>) cannot build a plain cons cell: its tail
@@ -1333,6 +1357,73 @@ contains
        end do
        write(*, '(A)') ""
        out = gc_nil()
+    case (B_QUOT)
+       a = gcv_nth(args, 0); b = gcv_nth(args, 1)
+       out = gc_int(a%ival / b%ival)
+    case (B_REM)
+       a = gcv_nth(args, 0); b = gcv_nth(args, 1)
+       out = gc_int(mod(a%ival, b%ival))
+    case (B_SECOND)
+       a = gcv_nth(args, 0)
+       out = gc_nil()
+       if (gcv_is(a)) then
+          if (gcv_count(a) > 1) out = gcv_nth(a, 1)
+       else if (gcl_is(a)) then
+          if (gcl_count(a) > 1) out = nth_of(a, 1)
+       end if
+    case (B_SEQ)
+       ! nil for an EMPTY collection, which is what makes (if (seq c)
+       ! ...) the idiomatic emptiness test rather than a special case.
+       a = gcv_nth(vs_get(base + 1), 0)
+       if (gc_kind(a) == OBJ_LAZY) then
+          call gce_force(a)
+          if (gc_i1(a) == LAZY_CONS) then
+             out = a
+          else
+             out = gc_nil()
+          end if
+       else if (seq_count(a) == 0 .and. gca_count(a) == 0) then
+          out = gc_nil()
+       else
+          out = as_list(a, [vs_get(base + 1)])
+       end if
+    case (B_DISSOC)
+       out = gca_dissoc(gcv_nth(vs_get(base + 1), 0), gcv_nth(vs_get(base + 1), 1), &
+            [vs_get(base + 1)])
+    case (B_NAME)
+       a = gcv_nth(args, 0)
+       out = gc_str(gc_ref_text(a%ref), [vs_get(base + 1)])
+    case (B_KEYWORD)
+       a = gcv_nth(args, 0)
+       out = gc_key(gc_ref_text(a%ref), [vs_get(base + 1)])
+    case (B_SYMBOL)
+       a = gcv_nth(args, 0)
+       out = gc_sym(gc_ref_text(a%ref), [vs_get(base + 1)])
+    case (B_SUBS)
+       block
+         character(len=:), allocatable :: t
+         integer :: lo, hi
+         a = gcv_nth(args, 0)
+         t = gc_ref_text(a%ref)
+         b = gcv_nth(args, 1)
+         lo = b%ival + 1
+         hi = len(t)
+         if (n >= 3) then
+            b = gcv_nth(args, 2)
+            hi = b%ival
+         end if
+         if (lo < 1 .or. hi > len(t) .or. lo > hi + 1) then
+            call fail("subs: index out of range")
+         else
+            out = gc_str(t(lo:hi), [vs_get(base + 1)])
+         end if
+       end block
+    case (B_TYPE)
+       ! One host primitive instead of a dozen predicates: core is
+       ! written in Clojure on top of this, which is how real Clojure
+       ! does it too (instance? plus defns).
+       a = gcv_nth(args, 0)
+       out = gc_key(type_name(a), [vs_get(base + 1)])
     case (B_CONCAT)
        ! Right to left, so the result comes out in order without a
        ! reverse. Every argument is seq'd to a list first, which is
@@ -1517,6 +1608,35 @@ contains
   end function seq_at
 
   ! Clojure's truthiness: everything except nil and false.
+  ! The type of a value, as a keyword. Everything else that asks
+  ! what a value IS gets written in Clojure on top of this, which
+  ! is how real Clojure does it too (instance? plus defns).
+  function type_name(v) result(s)
+    type(gc_value), intent(in) :: v
+    character(len=:), allocatable :: s
+    select case (v%tag)
+    case (GCT_NIL);  s = "nil"
+    case (GCT_BOOL); s = "boolean"
+    case (GCT_INT);  s = "int"
+    case (GCT_REAL); s = "double"
+    case (GCT_CHAR); s = "char"
+    case (GCT_STR);  s = "string"
+    case (GCT_SYM);  s = "symbol"
+    case (GCT_KEY);  s = "keyword"
+    case default
+       select case (gc_kind(v))
+       case (OBJ_CONS);    s = "list"
+       case (OBJ_VECTOR);  s = "vector"
+       case (OBJ_MAP, OBJ_HAMT); s = "map"
+       case (OBJ_CLOSURE, OBJ_BUILTIN); s = "fn"
+       case (OBJ_LAZY);    s = "lazy-seq"
+       case (OBJ_VAR);     s = "var"
+       case (OBJ_NS);      s = "ns"
+       case default;       s = "object"
+       end select
+    end select
+  end function type_name
+
   function truthy(v) result(yes)
     type(gc_value), intent(in) :: v
     logical :: yes

@@ -1086,6 +1086,65 @@ the text. A cache writer needs to exclude them.
       eval -- it cannot be done inside `gce_eval`, which is recursive
       and would wipe an error raised deeper in the same evaluation.
 
+      ### A host shim, NOT a core library
+
+      `clotran-gc` (`src/f/gc_main.f90`) is a REPL over the new stack,
+      and it loads `src/clj/host.clj` at startup.
+
+      That file was briefly a small core -- map, filter, reduce, take,
+      range, sort, merge, into, all written in Clojure -- and that was
+      a mistake, caught in review. The argument against Fortran
+      builtins was that real core.clj defines those in Clojure and the
+      thesis is running that actual file. Writing our own versions is
+      the same duplication one layer up: a second, different
+      implementation that the real file replaces, and a confusing bug
+      in the meantime wherever the two differ.
+
+      So host.clj holds ONLY what core.clj cannot supply: the type
+      predicates. Real Clojure asks `instance?` about
+      `java.lang.String` and `clojure.lang.PersistentVector`; clotran
+      has neither, so the host answers with `clotran-type` and the
+      predicates are written over it. Three macros (`defn`, `fn`,
+      `let`) come with them only because the predicates cannot be
+      written without them -- scaffolding, and gone the moment the
+      real core.clj loads.
+
+      Its name was wrong too: `gc_core.clj` reads as part of the
+      collector, when it targets the GC-backed evaluator and is not a
+      core at all.
+
+      **What the oracle measures, after the correction.** 59 of 86
+      expressions agree; the 27 that differ name exactly what real
+      core.clj must supply:
+
+          <= > >= contains? dec distinct drop even? filter inc
+          interpose into last map max merge min neg? odd? pos? range
+          reduce reverse sort take vec zero?
+
+      That is a better number than the 86/86 it replaced, because it
+      measures the right thing: **how much of real core.clj the
+      evaluator can already carry.** It closes by growing the
+      evaluator, never by growing host.clj.
+
+      Three bugs the bootstrap found that 266 unit tests had not:
+
+      - **`rest` did not handle vectors**, so `(rest [1 2 3])` was nil
+        and every seq walk over a vector stopped after one element.
+        `reduce` returned its first element and `last` returned its
+        first -- both looking like arithmetic bugs rather than a seq
+        bug.
+      - **A non-advancing `read` reports end-of-RECORD as a negative
+        iostat**, exactly as end-of-file does, so the file loader
+        stopped after line one and silently loaded nothing. Standard
+        Fortran, easy to write, invisible without a diagnostic.
+      - Auto-gensym (`sym#` in a syntax-quote) is missing from the
+        reader.
+
+      34 host primitives, and the split stays a dial rather than a
+      wall: a primitive can move into Fortran when measurement says
+      so. What must NOT happen is re-implementing core.clj in either
+      language.
+
       **The new stack is now complete and proven end to end:** vector,
       list, array map, hash trie, promotion, environment, printer,
       reader, evaluator -- 21 suites green on both compilers. Real

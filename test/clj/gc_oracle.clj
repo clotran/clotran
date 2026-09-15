@@ -1,7 +1,20 @@
 ; Expressions checked against real Clojure (babashka) by
-; scripts/gc-oracle. One per line, no blank continuation.
-; A difference is not necessarily a bug -- it is usually a feature the
-; GC evaluator does not have yet, and the list is the todo.
+; scripts/gc-oracle.
+;
+; A difference is NOT a bug to fix by writing the function here.
+; Nearly everything listed below is a defn in Rich Hickey's
+; core.clj, and the project's thesis is that clotran runs that
+; actual file -- so re-implementing map or reduce in src/clj would
+; be a second, different version that the real one replaces.
+;
+; The diff therefore measures ONE thing: how much of real core.clj
+; the GC-backed evaluator can already carry. Closing it means
+; growing the evaluator until core.clj loads, not growing
+; src/clj/host.clj.
+;
+; src/clj/host.clj holds only what core.clj cannot supply: the
+; type predicates, because core.clj asks instance? about Java
+; classes and there are none here.
 (+ 1 2 3)
 (- 10 3)
 (* 2 3 4)
@@ -42,3 +55,49 @@
 (if true 1 2)
 (if nil 1 2)
 (if 0 1 2)
+(inc 1)
+(dec 5)
+(max 1 5 3)
+(min 1 5 3)
+(quot 7 2)
+(rem 7 2)
+(zero? 0)
+(pos? 1)
+(neg? -1)
+(even? 2)
+(odd? 3)
+(> 3 2 1)
+(<= 1 1 2)
+(>= 3 3)
+(list? (list 1))
+(vector? [1])
+(map? {})
+(keyword? :a)
+(symbol? (quote a))
+(string? "s")
+(number? 1)
+(fn? +)
+(second [1 2 3])
+(last [1 2 3])
+(reverse [1 2 3])
+(seq [1 2])
+(seq [])
+(vec (list 1 2))
+(contains? {:a 1} :a)
+(dissoc {:a 1 :b 2} :a)
+(merge {:a 1} {:b 2})
+(range 3)
+(take 2 [1 2 3])
+(drop 1 [1 2 3])
+(map inc [1 2])
+(filter even? [1 2 3 4])
+(reduce + [1 2 3])
+(into [] (list 1 2))
+(subs "hello" 1 3)
+(count "abc")
+(name :kw)
+(keyword "x")
+(symbol "y")
+(sort [3 1 2])
+(distinct [1 1 2])
+(interpose 0 [1 2])
