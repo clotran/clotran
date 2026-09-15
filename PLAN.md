@@ -370,6 +370,25 @@ the text. A cache writer needs to exclude them.
         `lazy_node` and Fortran is case-insensitive, so a function of
         that name would be the same name -- the `GCT_`/`gc_cons` trap
         again.
+  - [x] **3c-1 `atom_val`** (50 sites, 40 of them in `Atom.f90`).
+        `atom_ptr` + `new_atom_node` + `share_atom`. Every routine in
+        `Atom.f90` opened with the same `allocated`/`associated` pair;
+        all of them now start `nd => atom_ptr(a)`, and the file no
+        longer names the component at all.
+
+        `atom_ptr` deliberately does **not** check the tag, unlike
+        `array_node` and `lazy_ptr`. Five tags share this box --
+        `TAG_ATOM`, `TAG_VAR`, `TAG_MULTIFN`, `TAG_REDUCED`,
+        `TAG_STRING_BUILDER` -- because "one genuinely mutable slot,
+        shared by reference" is the same storage for all of them and
+        only the behaviour differs.
+
+        `share_atom` exists because one call site must *share* the box
+        rather than copy it, and the comment there recorded a real
+        hazard worth keeping: the component has to exist before
+        `assignment(=)` runs on it, since `atom_ref_assign` releases
+        the old target first and releasing an unallocated component
+        reads uninitialized memory.
 - [ ] **3d.** Evaluator on the value stack.
 - [ ] **3e.** Retire `FINAL`-based refcounting; `rc_test` becomes a GC
       test. Finalizers survive only on the few heap nodes owning
@@ -415,12 +434,19 @@ the loop cheap before starting on the expensive steps.
          `resolves_to_macro`; fixed the same way, by nesting. flang read
          whatever was there and carried on.
 
-      Those two fix `multimethods` permanently -- gfortran now matches
-      flang exactly on it, and a clean run of the whole suite is
-      163/16/41 on both.
+      Those two fix the *deterministic* `multimethods` crash, and a
+      clean run of the whole suite is 163/16/41 on both compilers.
 
-- [ ] **4a''. `logic` still crashes intermittently (~1 run in 6).**
-      Not the same class as the two above, and not fixed:
+      Correction: an earlier note here said they fixed `multimethods`
+      "permanently". That was claimed on two sampled runs and is wrong.
+      `multimethods` now fails the same way `logic` does -- sometimes,
+      with the 4a'' signature below. Two samples are not evidence of
+      absence for a 1-in-6 bug; take ten.
+
+- [ ] **4a''. An intermittent use-after-free (~1 run in 6).** Hits
+      whichever namespace happens to trip it -- `logic` and
+      `multimethods` both do. Not the same class as the two above, and
+      not fixed:
 
       ```
       node_ref_release -> cons_value_release -> cons_value_finalize

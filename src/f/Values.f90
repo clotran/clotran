@@ -468,6 +468,7 @@ module values
   public :: array_node, set_array_node
   public :: has_meta, get_meta, set_meta
   public :: lazy_ptr, new_lazy_node
+  public :: atom_ptr, new_atom_node, share_atom
 
 contains
 
@@ -493,6 +494,41 @@ contains
     if (.not. allocated(v%array_val)) return
     node => v%array_val%ptr
   end function array_node
+
+  ! Unlike array_node and lazy_ptr, this deliberately does NOT check
+  ! the tag: the atom box is shared by five of them -- TAG_ATOM,
+  ! TAG_VAR, TAG_MULTIFN, TAG_REDUCED, TAG_STRING_BUILDER -- because
+  ! "one genuinely mutable slot, shared by reference" is the same
+  ! storage for all of them and only the behaviour differs. Anything
+  ! that needs to tell them apart already tests the tag itself.
+  function atom_ptr(v) result(node)
+    type(cons_value), intent(in) :: v
+    type(atom_node), pointer :: node
+    node => null()
+    if (.not. allocated(v%atom_val)) return
+    node => v%atom_val%ptr
+  end function atom_ptr
+
+  function new_atom_node(v) result(node)
+    type(cons_value), intent(inout) :: v
+    type(atom_node), pointer :: node
+    if (allocated(v%atom_val)) deallocate(v%atom_val)
+    allocate(v%atom_val)
+    allocate(v%atom_val%ptr)
+    node => v%atom_val%ptr
+    node%refcount = 1
+    atom_node_total_allocated = atom_node_total_allocated + 1
+  end function new_atom_node
+
+  ! Point `v` at the SAME box `src` holds, refcount bumped -- sharing,
+  ! not copying, which is the whole point of a mutable box.
+  subroutine share_atom(v, src)
+    type(cons_value), intent(inout) :: v
+    type(cons_value), intent(in) :: src
+    if (.not. allocated(src%atom_val)) return
+    if (.not. allocated(v%atom_val)) allocate(v%atom_val)
+    v%atom_val = src%atom_val
+  end subroutine share_atom
 
   ! lazy_ptr, not lazy_node: the TYPE is already called lazy_node, and
   ! Fortran is case-insensitive, so a function of that name would be

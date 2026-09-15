@@ -1145,11 +1145,7 @@ contains
     block
       type(cons_value) :: boxed
       boxed = atom_new(v)
-      ! The component has to EXIST (ptr => null()) before assignment(=)
-      ! runs on it: atom_ref_assign releases the old target first, and
-      ! releasing an unallocated component reads uninitialized memory.
-      if (.not. allocated(obj%atom_val)) allocate(obj%atom_val)
-      obj%atom_val = boxed%atom_val
+      call share_atom(obj, boxed)
     end block
     call env_set(env, obj_form, obj)
     ! A named fn also refers to itself from inside its own body. On the
@@ -1916,7 +1912,7 @@ contains
     end if
     if (method_name == "__methodImplCache") then
        val%tag = TAG_NIL
-       if (allocated(target%atom_val)) val = atom_deref(target)
+       if (associated(atom_ptr(target))) val = atom_deref(target)
        return
     end if
     ! clojure.lang.MethodImplCache and its Entry: a protocol method's
@@ -1983,7 +1979,7 @@ contains
        if (size(args) >= 1) then
           val = rt_get(target, args(1))
           return
-       else if (.not. allocated(target%atom_val)) then
+       else if (.not. associated(atom_ptr(target))) then
           val = target
           return
        end if
