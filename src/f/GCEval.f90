@@ -95,6 +95,13 @@ module GCEval
   integer, parameter :: B_RUNTX = 113, B_DOTGET = 114
   integer, parameter :: B_REPEAT = 115, B_RANGE = 116, B_GENIFACE = 117
   integer, parameter :: B_ALWAYS_FALSE = 118, B_FORNAME = 119
+  integer, parameter :: B_VARINTERN = 120
+  ! One id per named field: call_builtin sees only the arguments,
+  ! never which native was called, so the field has to be in the id.
+  integer, parameter :: B_FLD_SYM = 121, B_FLD_PROTOCOL = 122
+  integer, parameter :: B_FLD_METHODK = 123, B_FLD_MAP = 124
+  integer, parameter :: B_VARSYM = 125, B_FLD_CACHE = 126, B_EMPTYVEC = 127
+  integer, parameter :: B_ISREDUCED = 128
   integer, parameter :: B_SYMBOL2 = B_SYMBOL
   integer, parameter :: B_LONGCAST = 66, B_DBLCAST = 67, B_BOOLCAST = 68, B_CHARCAST = 69
   integer, parameter :: B_BITAND = 70, B_BITOR = 71, B_BITXOR = 72, B_BITNOT = 73
@@ -458,7 +465,9 @@ contains
        ! legal rather than a redefinition of clojure.core/map.
        found = gce_find(env, form, out)
        if (.not. found) then
-          head = resolve_var(form, vs_get(base + 1))
+          ! The ENV, not the form: resolve_var consults the namespace
+          ! the enclosing closure was defined in, which lives in a frame.
+          head = resolve_var(form, vs_get(base + 2))
           if (gcn_is_var(head)) then
              ! A bare symbol auto-derefs its Var, matching Clojure --
              ! #'x is how you ask for the Var itself.
@@ -474,7 +483,15 @@ contains
           ! and (= :symbol (clotran-type x)) are then the same question
           ! asked twice.
           if (is_class_name(form)) then
-             out = gc_key(gc_ref_text(form%ref), [vs_get(base + 1)])
+             ! java.lang is implicitly imported, so Object and
+             ! java.lang.Object are the SAME class -- and must be the
+             ! same keyword, or a protocol extended to one is invisible
+             ! to a lookup for the other. core/protocols extends
+             ! CollReduce to Object and InternalReduce to
+             ! java.lang.Object, and find-protocol-impl falls back to
+             ! (impl Object) for both.
+             out = gc_key(short_class_name(gc_ref_text(form%ref)), &
+                  [vs_get(base + 1)])
              found = .true.
           else if (is_static_call(form)) then
              ! Class/member in VALUE position -- a static FIELD, not a
@@ -757,6 +774,19 @@ contains
                  gc_kind(vs_get(base + 4)) == OBJ_ATOM) then
                call gc_set_slot(vs_get(base + 4), 1, val)
                out = val
+            else if (is_cache_field(gcl_first(vs_get(base + 3)))) then
+               ! (set! (.__methodImplCache f) cache) -- the one host
+               ! field with real storage behind it, in the closure
+               ! slot a single-arity fn does not use.
+               block
+                 type(gc_value) :: tf
+                 tf = strip_meta(gce_eval(gcl_first(gcl_rest( &
+                      strip_meta(gcl_first(vs_get(base + 3))), &
+                      [vs_get(base + 1)])), vs_get(base + 2), &
+                      [vs_get(base + 1)]))
+                 if (gc_kind(tf) == OBJ_CLOSURE) call gc_set_slot(tf, 5, val)
+                 out = val
+               end block
             else if (gcl_is(strip_meta(gcl_first(vs_get(base + 3))))) then
                ! (set! (.field obj) v) -- a HOST FIELD. The only one
                ! clotran models is the protocol dispatch cache, which
@@ -1164,6 +1194,31 @@ contains
        return
     end if
 
+    ! A closure REMEMBERS THE NAMESPACE IT WAS DEFINED IN, by way
+    ! of one extra frame binding a reserved name. Clojure resolves a
+    ! symbol at compile time against the namespace the form was
+    ! written in; resolving at call time against whatever namespace
+    ! happens to be current is DEVIATIONS.md 3, and it shows the
+    ! moment a function in one namespace calls a private helper in
+    ! its own -- clojure.core.protocols/seq-reduce, called from a
+    ! reduce running in clojure.core.
+    !
+    ! Only when that namespace is not clojure.core: everything
+    ! already falls back there, so tagging core's own closures
+    ! would cost a frame each for nothing.
+    block
+      type(gc_value) :: dns
+      dns = gcn_current([vs_get(base + 1), vs_get(base + 2)])
+      if (gcn_name(dns) /= "clojure.core") then
+        call vs_set(base + 4, dns)
+        call vs_set(base + 2, gce_new(vs_get(base + 2), &
+             [vs_get(base + 1), vs_get(base + 4)]))
+        call gce_set(vs_get(base + 2), &
+             gc_sym("__defining-ns__", [vs_get(base + 2)]), &
+             vs_get(base + 4), [vs_get(base + 1), vs_get(base + 4)])
+      end if
+    end block
+
     if (gcl_is(head)) then
        ! Multi-arity: `rest` is already the list of clauses.
        r(1) = vs_get(base + 1); r(2) = vs_get(base + 2); r(3) = gc_nil()
@@ -1404,12 +1459,21 @@ contains
     case ("isInstance"); out = native(B_INSTANCE, "instance?", [roots])
     case ("getName", "getSimpleName"); out = native(B_GETNAME, "clotran-get-name", [roots])
     case ("getNamespace"); out = native(B_NAMESPACE, "namespace", [roots])
-    case ("getClass", "getClassLoader", "getContextClassLoader")
+    case ("getClass")
+       ! clotran's classes are its type tags, so .getClass is
+       ! clotran-type -- which is what makes (class x) answer something
+       ! protocol dispatch can key on. It answered nil for a while,
+       ! which silently emptied every protocol's impl lookup.
+       out = native(B_TYPE, "clotran-type", [roots])
+    case ("getClassLoader", "getContextClassLoader")
        out = native(B_ALWAYS_NIL, "clotran-nil", [roots])
     ! Namespace members. The mappings ARE slot 2 -- ns-map hands the
     ! same map the evaluator resolves against, not a copy.
     case ("getMappings"); out = native(B_NSMAP, "ns-map", [roots])
     case ("ns"); out = native(B_VARNS, "clotran-var-ns", [roots])
+    ! Var.toSymbol is the ns-qualified name, which is how a protocol
+    ! names the method it is dispatching.
+    case ("toSymbol"); out = native(B_VARSYM, "clotran-var-symbol", [roots])
     case ("isPublic"); out = native(B_ISPUBLIC, "clotran-var-public", [roots])
     case ("isMacro"); out = native(B_ISMACRO, "clotran-var-macro", [roots])
     case ("setMacro"); out = native(B_SETMACRO, "clotran-set-macro", [roots])
@@ -1439,10 +1503,24 @@ contains
     ! between clotran's types, so the answer is false -- which is
     ! what sends extends? and satisfies? down the extend-map path
     ! that clotran does implement.
+    case ("getSuperclass")
+       ! clotran's types form no hierarchy: :vector has no superclass.
+       ! nil here is what sends find-protocol-impl to its (impl Object)
+       ! fallback, which is the branch that actually resolves.
+       out = native(B_ALWAYS_NIL, "clotran-nil", [roots])
+    case ("getInterfaces")
+       out = native(B_EMPTYVEC, "clotran-empty", [roots])
     case ("isAssignableFrom", "isInterface", "isArray")
        out = native(B_ALWAYS_FALSE, "clotran-false", [roots])
-    case ("__methodImplCache")
+    ! The cache's named fields, read off the map it is.
+    case ("sym");      out = native(B_FLD_SYM, "clotran-sym", [roots])
+    case ("protocol"); out = native(B_FLD_PROTOCOL, "clotran-protocol", [roots])
+    case ("methodk");  out = native(B_FLD_METHODK, "clotran-methodk", [roots])
+    case ("map", "table"); out = native(B_FLD_MAP, "clotran-map", [roots])
+    case ("fnFor")
        out = native(B_ALWAYS_NIL, "clotran-nil", [roots])
+    case ("__methodImplCache")
+       out = native(B_FLD_CACHE, "clotran-cache", [roots])
     case ("preferMethod", "getMethod")
        out = native(B_IDENTITY, "identity", [roots])
     case ("disjoin");   out = native(B_DISJ, "disj", [roots])
@@ -1500,6 +1578,19 @@ contains
   ! (.member target args...) is (. target member args...), which is
   ! where macroexpand1 turns it into too -- the sugar is a rewrite, not
   ! a second kind of call.
+  ! Whether a set! target is (.__methodImplCache f).
+  logical function is_cache_field(form)
+    type(gc_value), intent(in) :: form
+    type(gc_value) :: f2, h2
+    is_cache_field = .false.
+    f2 = strip_meta(form)
+    if (.not. gcl_is(f2)) return
+    if (gcl_count(f2) < 2) return
+    h2 = strip_meta(gcl_first(f2))
+    if (h2%tag /= GCT_SYM) return
+    is_cache_field = gc_ref_is(h2%ref, ".__methodImplCache")
+  end function is_cache_field
+
   logical function is_member_sym(sym)
     type(gc_value), intent(in) :: sym
     character(len=:), allocatable :: t
@@ -1575,6 +1666,18 @@ contains
   !
   ! Only ever reached once a symbol has failed to resolve as a local
   ! and as a Var, so it shadows nothing.
+  ! A class name with an implicit java.lang qualifier removed.
+  function short_class_name(t) result(s)
+    character(len=*), intent(in) :: t
+    character(len=:), allocatable :: s
+    s = t
+    if (len(t) > 10) then
+       if (t(1:10) == "java.lang.") then
+          if (index(t(11:), ".") == 0) s = t(11:)
+       end if
+    end if
+  end function short_class_name
+
   logical function is_class_name(sym)
     type(gc_value), intent(in) :: sym
     character(len=:), allocatable :: t
@@ -1691,12 +1794,66 @@ contains
     end if
     cname = gc_ref_text(cls%ref)
 
-    if (cname == "clojure.lang.MethodImplCache") then
-       ! A protocol dispatch CACHE. A cache is inert by definition:
-       ! a miss costs a recompute and nothing else, so an empty map
-       ! is a correct one. What is lost is the speed of protocol
-       ! dispatch, not its behaviour.
-       out = gca_empty([vs_get(base + 1)])
+    if (cname == "clojure.lang.Reduced") then
+       ! (reduced x) wraps a value to say "stop reducing". A
+       ! one-key map is enough to carry the mark and the value,
+       ! and the key is one no Clojure program can write.
+       thunk = gce_eval(gcl_first(gcl_rest(vs_get(base + 1), &
+            [vs_get(base + 1)])), vs_get(base + 2), [vs_get(base + 1)])
+       if (has_error) then
+          call vs_leave(base)
+          return
+       end if
+       call vs_set(base + 3, thunk)
+       out = gca_assoc(gca_empty([vs_get(base + 3)]), &
+            gc_key("clotran/reduced", [vs_get(base + 3)]), &
+            vs_get(base + 3), [vs_get(base + 3)])
+    else if (cname == "clojure.lang.MethodImplCache" .or. &
+         cname == "clojure.lang.MethodImplCache$Entry") then
+       ! The protocol dispatch cache, as a MAP with named fields:
+       ! (MethodImplCache. sym protocol methodk) and its 4-argument
+       ! form, read back through .sym .protocol .methodk .map.
+       !
+       ! .fnFor always answers nil -- a permanently cold cache --
+       ! which sends every protocol call down -cache-protocol-fn and
+       ! find-protocol-method. That is the CORRECT path, just not
+       ! the fast one, and it is what makes protocol dispatch work
+       ! at all without a class to key on. DEVIATIONS.md 13.
+       block
+         type(gc_value) :: mp, w2, item2
+         integer :: fi
+         character(len=12) :: fname
+         mp = gca_empty([vs_get(base + 1)])
+         call vs_set(base + 3, mp)
+         w2 = gcl_rest(vs_get(base + 1), [vs_get(base + 1)])
+         fi = 0
+         do while (gcl_count(w2) > 0)
+            item2 = gce_eval(gcl_first(w2), vs_get(base + 2), &
+                 [vs_get(base + 1), vs_get(base + 3)])
+            if (has_error) then
+               call vs_leave(base)
+               return
+            end if
+            select case (fi)
+            case (0); fname = "sym"
+            case (1); fname = "protocol"
+            case (2); fname = "methodk"
+            case default; fname = "map"
+            end select
+            mp = gca_assoc(vs_get(base + 3), &
+                 gc_key(trim(fname), [vs_get(base + 3)]), item2, &
+                 [vs_get(base + 1), vs_get(base + 3)])
+            call vs_set(base + 3, mp)
+            fi = fi + 1
+            w2 = gcl_rest(w2, [vs_get(base + 1), vs_get(base + 3)])
+         end do
+         if (fi < 4) then
+            mp = gca_assoc(vs_get(base + 3), gc_key("map", [vs_get(base + 3)]), &
+                 gca_empty([vs_get(base + 3)]), [vs_get(base + 3)])
+            call vs_set(base + 3, mp)
+         end if
+         out = vs_get(base + 3)
+       end block
     else if (cname == "clojure.lang.Ref" .or. cname == "clojure.lang.Atom" .or. &
          cname == "clojure.lang.Agent") then
        ! A Ref IS an atom here: a mutable box, with no transaction
@@ -1869,6 +2026,14 @@ contains
     else if (cls == "clojure.lang.Util") then
        select case (mname)
        case ("equiv", "equals", "identical"); out = native(B_EQ, "=", [roots]); return
+       case ("isReduced")
+          out = native(B_ISREDUCED, "reduced?", [roots]); return
+       case ("classOf")
+          ! clotran's classes ARE its type tags, so classOf is
+          ! clotran-type. Protocol dispatch then keys on :vector, :map
+          ! and so on, and Object -- the catch-all every protocol
+          ! extends -- is the keyword :Object.
+          out = native(B_TYPE, "clotran-type", [roots]); return
        end select
     else if (cls == "clojure.lang.LazilyPersistentVector") then
        if (mname == "create" .or. mname == "createOwning") then
@@ -1965,8 +2130,14 @@ contains
           out = native(B_PUSHTB, "push-thread-bindings", [roots]); return
        case ("popThreadBindings")
           out = native(B_POPTB, "pop-thread-bindings", [roots]); return
-       case ("find", "intern")
+       case ("find")
           out = native(B_FINDVAR, "clotran-find-var", [roots]); return
+       case ("intern")
+          ! Var.intern CREATES the Var in the namespace given, with
+          ! the value given. Mapping it to a lookup meant defprotocol
+          ! interned its protocol map and none of its METHODS -- so
+          ! coll-reduce did not exist and reduce could not resolve.
+          out = native(B_VARINTERN, "clotran-var-intern", [roots]); return
        end select
     else if (cls == "clojure.lang.Compiler") then
        if (mname == "eval") then
@@ -2022,6 +2193,7 @@ contains
           out = native(B_CHARCAST, "char", [roots]); return
        ! RT.nextID is the counter gensym counts on. Shared with the
        ! auto-gensym counter, so a gensym and an x# can never collide.
+       case ("isReduced"); out = native(B_ISREDUCED, "reduced?", [roots]); return
        case ("nextID"); out = native(B_NEXTID, "clotran-next-id", [roots]); return
        case ("load"); out = native(B_RTLOAD, "clotran-rt-load", [roots]); return
        case ("subvec"); out = native(B_SUBVEC, "subvec", [roots]); return
@@ -2102,12 +2274,20 @@ contains
   ! be honoured by a rule that has no map of what was referred.
   function resolve_var(sym, roots) result(var)
     type(gc_value), intent(in) :: sym, roots
-    type(gc_value) :: var, bare
+    type(gc_value) :: var, bare, dns
     character(len=:), allocatable :: t
     integer :: slash
 
     var = gcn_lookup(gcn_current([roots]), sym)
     if (gcn_is_var(var)) return
+
+    ! Then the namespace the enclosing function was DEFINED in.
+    if (gce_is(roots)) then
+       if (gce_find(roots, gc_sym("__defining-ns__", [roots]), dns)) then
+          var = gcn_lookup(dns, sym)
+          if (gcn_is_var(var)) return
+       end if
+    end if
 
     ! A QUALIFIED symbol names its own namespace. Syntax-quote produces
     ! these constantly -- every `when in core.clj reads as
@@ -3257,7 +3437,13 @@ contains
           if (.not. gca_contains(a, gcv_nth(args, 1))) out = gcv_nth(args, 2)
        end if
     case (B_ASSOC)
-       out = gca_assoc(strip_meta(gcv_nth(vs_get(base + 1), 0)), &
+       ! (assoc nil k v) CREATES a map -- which is what makes assoc-in
+       ! able to build a path that does not exist yet. Returning nil
+       ! made (assoc-in {} [:impls t] m) produce {:impls nil}, so every
+       ! protocol extension was silently discarded.
+       a = strip_meta(gcv_nth(vs_get(base + 1), 0))
+       if (a%tag == GCT_NIL) a = gca_empty([vs_get(base + 1)])
+       out = gca_assoc(a, &
             gcv_nth(vs_get(base + 1), 1), &
             gcv_nth(vs_get(base + 1), 2), [vs_get(base + 1)])
     case (B_KEYS, B_VALS)
@@ -3683,6 +3869,74 @@ contains
        out = gc_nil()
     case (B_ALWAYS_FALSE)
        out = gc_bool(.false.)
+    case (B_EMPTYVEC)
+       out = gcv_empty([vs_get(base + 1)])
+    case (B_ISREDUCED)
+       out = gc_bool(gca_contains(strip_meta(gcv_nth(args, 0)), &
+            gc_key("clotran/reduced", [vs_get(base + 1)])))
+    case (B_FLD_SYM, B_FLD_PROTOCOL, B_FLD_METHODK, B_FLD_MAP)
+       ! (.field x) on a map-shaped host object: the field name IS
+       ! a keyword in the map.
+       block
+         character(len=10) :: fk
+         select case (id)
+         case (B_FLD_SYM)
+            ! .sym on a VAR is its name, not a map field -- and that is
+            ! how a protocol names its method: (keyword (.sym v)).
+            block
+              type(gc_value) :: tv2
+              tv2 = strip_meta(gcv_nth(args, 0))
+              if (gcn_is_var(tv2)) then
+                 out = gc_slot(tv2, 4)
+                 call vs_leave(base)
+                 return
+              end if
+            end block
+            fk = "sym"
+         case (B_FLD_PROTOCOL); fk = "protocol"
+         case (B_FLD_METHODK);  fk = "methodk"
+         case default;          fk = "map"
+         end select
+         out = gca_get(strip_meta(gcv_nth(args, 0)), &
+              gc_key(trim(fk), [vs_get(base + 1)]))
+       end block
+    case (B_FLD_CACHE)
+       ! A protocol function carries its dispatch cache on ITSELF --
+       ! (set! (.__methodImplCache f) cache) in emit-method-builder --
+       ! and slot 5 is where it goes. See OBJ_SLOTS in GC.f90.
+       block
+         type(gc_value) :: fv
+         fv = strip_meta(gcv_nth(args, 0))
+         out = gc_nil()
+         if (gc_kind(fv) == OBJ_CLOSURE) out = gc_slot(fv, 5)
+       end block
+    case (B_VARSYM)
+       block
+         type(gc_value) :: vv, nm2
+         vv = strip_meta(gcv_nth(args, 0))
+         out = gc_nil()
+         if (gcn_is_var(vv)) then
+            nm2 = gc_slot(vv, 4)
+            out = gc_sym(gcn_name(gc_slot(vv, 3)) // "/" // name_part(nm2), &
+                 [vs_get(base + 1)])
+         end if
+       end block
+    case (B_VARINTERN)
+       ! (Var/intern ns sym) leaves the Var unbound; with a third
+       ! argument it binds the root, which is the hasRoot flag too.
+       block
+         type(gc_value) :: nsv, sym2, val2, var2
+         nsv = strip_meta(gcv_nth(args, 0))
+         sym2 = strip_meta(gcv_nth(args, 1))
+         val2 = gc_nil()
+         if (n >= 3) val2 = gcv_nth(args, 2)
+         call vs_set(base + 2, nsv)
+         call vs_set(base + 3, sym2)
+         var2 = gcn_intern(vs_get(base + 2), vs_get(base + 3), val2, &
+              [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+         if (n >= 3) call gc_set_i1(var2, 1)
+         out = var2
+       end block
     case (B_FORNAME)
        ! There are no Java classes, so Class/forName THROWS -- which
        ! is the honest answer and also the useful one: core.clj's
@@ -4027,7 +4281,8 @@ contains
          if (rel == "clojure/core_proxy" .or. &
               rel == "clojure/genclass" .or. &
               rel == "clojure/gvec" .or. &
-              rel == "clojure/uuid") then
+              rel == "clojure/uuid" .or. &
+              rel == "clojure/java/io") then
             print '(A,A,A)', "note: skipping ", rel, &
                  " (JVM-only)"
             out = gc_nil()
@@ -4140,9 +4395,13 @@ contains
     case (B_DEREF)
        ! A Var, an atom and a delay all deref the same way here: the
        ! thing in slot 1.
-       a = gcv_nth(args, 0)
+       a = strip_meta(gcv_nth(args, 0))
        if (gcn_is_var(a) .or. gc_kind(a) == OBJ_ATOM) then
           out = gc_slot(a, 1)
+       else if (gca_contains(a, gc_key("clotran/reduced", &
+            [vs_get(base + 1)]))) then
+          ! Unwrapping a (reduced x) is a deref in Clojure too.
+          out = gca_get(a, gc_key("clotran/reduced", [vs_get(base + 1)]))
        else
           out = a
        end if
@@ -4690,6 +4949,11 @@ contains
     case ("clojure.lang.Namespace"); yes = (t == "ns")
     case ("clojure.lang.IFn", "clojure.lang.Fn"); yes = (t == "fn" .or. t == "multifn")
     case ("clojure.lang.MultiFn"); yes = (t == "multifn")
+    case ("clojure.lang.Reduced")
+       ! A Reduced is the one-key map (reduced x) builds, so instance?
+       ! asks for the key. Without this reduce returned the WRAPPER
+       ! instead of unwrapping it on an early exit.
+       yes = gca_contains(strip_meta(v), gc_key("clotran/reduced", [v]))
     case ("Throwable", "java.lang.Throwable", "Exception", "java.lang.Exception", &
           "Error", "IExceptionInfo", "clojure.lang.IExceptionInfo")
        yes = (t == "error")

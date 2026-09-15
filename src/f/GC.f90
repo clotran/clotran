@@ -191,7 +191,16 @@ module GC
   ! in from somewhere else.
   integer, parameter, public :: OBJ_VAR     = 10 ! 1=root 2=meta 3=ns 4=name
 
-  integer, parameter, public :: OBJ_SLOTS = 4
+  ! FIVE, not four. A protocol function carries its dispatch cache
+  ! on itself -- (set! (.__methodImplCache f) cache) in
+  ! emit-method-builder, read back on every call -- and a closure's
+  ! four slots are all spoken for: params, body, env, clauses. The
+  ! clause slot looked free for single-arity fns, but a protocol
+  ! method has one arity per signature, so it is not.
+  !
+  ! The fifth slot costs one gc_value on every object in the heap,
+  ! which is the honest price of not having a place to put it.
+  integer, parameter, public :: OBJ_SLOTS = 5
 
   ! A claim on a global root slot. Two fields rather than one integer
   ! because an index alone is ambiguous across a gc_init -- see
