@@ -98,9 +98,26 @@ contains
     ns = gc_root_get(current_root)
   end function gcn_current
 
+  ! Sets the current namespace AND the Var that names it. In Clojure
+  ! they are the same thing -- CURRENT_NS *is* the Var #'clojure.core/*ns*
+  ! and in-ns sets it -- so keeping them in step here is not
+  ! bookkeeping, it is the one place that could drift.
   subroutine gcn_set_current(ns)
     type(gc_value), intent(in) :: ns
+    type(gc_value) :: core, sym
+    integer :: base
     call gc_global_keep(current_root, ns)
+    ! Only once the registry exists: gcn_reset calls this on its way up,
+    ! and find-or-create would call gcn_reset straight back.
+    if (.not. roots_live()) return
+    base = vs_enter(2)
+    call vs_set(base + 1, ns)
+    core = gcn_find_or_create("clojure.core", [vs_get(base + 1)])
+    call vs_set(base + 2, core)
+    sym = gc_sym("*ns*", [vs_get(base + 1), vs_get(base + 2)])
+    core = gcn_intern(vs_get(base + 2), sym, vs_get(base + 1), &
+         [vs_get(base + 1), vs_get(base + 2), sym])
+    call vs_leave(base)
   end subroutine gcn_set_current
 
   function gcn_name(ns) result(s)

@@ -159,6 +159,29 @@ module GC
   ! distinct kind rather than a bare map so that it prints as #{...}
   ! and answers set? rather than map?.
   integer, parameter, public :: OBJ_SET       = 16 ! 1=backing map
+  ! A multimethod: a dispatch function plus a table from dispatch value
+  ! to method. MUTABLE, as MultiFn is in Clojure -- addMethod alters the
+  ! object rather than returning a new one, which is what lets defmethod
+  ! extend a multimethod defined in another file.
+  integer, parameter, public :: OBJ_MULTIFN   = 17 ! 1=name 2=dispatch 3=default 4=methods
+  ! A StringBuilder: slot 1 holds the text so far. The one MUTABLE
+  ! sequence-ish object here, and it exists because core.clj's own `str`
+  ! is written around one.
+  !
+  ! Appending rebuilds the string, so building a string of length n out
+  ! of n pieces is O(n^2) -- a real StringBuilder amortises it. Fine for
+  ! (str a b c); a growable text buffer in GC.f90 is what to write if
+  ! anything ever appends in a loop.
+  integer, parameter, public :: OBJ_SB        = 18 ! 1=text
+  ! A THROWN THING: slot 1 = the class name it was constructed with,
+  ! slot 2 = its message, slot 3 = its data (what ex-info carries).
+  !
+  ! Clojure throws Java objects and clotran has none, so this is what
+  ! (IllegalArgumentException. "...") and (ex-info msg m) both build.
+  ! A real kind rather than a map with a :type key, so that
+  ! (instance? Throwable x) is an exact answer and not a guess about
+  ! what a map might mean.
+  integer, parameter, public :: OBJ_ERR       = 19 ! 1=class 2=message 3=data
   integer, parameter, public :: OBJ_HAMT      = 11 ! 1=root run; i1=count
   integer, parameter, public :: OBJ_HAMT_LEAF = 12 ! 1=key 2=val
   integer, parameter, public :: OBJ_VAR     = 10 ! 1=root 2=meta 3=dyn stack 4=name

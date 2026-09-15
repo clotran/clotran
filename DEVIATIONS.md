@@ -21,6 +21,8 @@ Categories:
 | 4 | `.` reaches a fixed table of host members, not arbitrary classes | host | `src/f/GCEval.f90` |
 | 5 | Metadata is a wrapper object, not carried on the value | host | `src/f/GC.f90` |
 | 6 | Syntax-quote expands at eval time, not read time | open | `src/f/GCEval.f90` |
+| 7 | Recursion depth is ~600 frames, against Clojure's ~11,200 | host | `src/f/GCEval.f90` |
+| 8 | Multimethods dispatch on equality, with no hierarchy | temporary | `src/f/GCEval.f90` |
 
 ---
 
@@ -114,6 +116,58 @@ bare.
 
 **Open**, because it is not yet clear whether this can be moved into the
 reader without also moving `*ns*` resolution there.
+
+## 7. Recursion runs out of stack about twenty times sooner
+
+Both runtimes stop somewhere; the JVM raises `StackOverflowError` and we
+report `stack overflow near (f ...)`. What differs is how soon.
+
+There is no depth to copy from Clojure, because the JVM's limit is a
+**byte budget, not a frame count**: `-XX:ThreadStackSize`, 2048 KB by
+default on this platform (`java -XX:+PrintFlagsFinal -version`), divided
+by whatever each frame needs. Measured on real Clojure 1.12 here, a
+non-tail-recursive function reaches:
+
+| `-Xss` | frames |
+|--------|--------|
+| 512k   | 1,635  |
+| 1m     | 5,528  |
+| 2m (default) | 11,211 |
+| 4m     | 24,731 |
+
+Ours is measured the same way. On macOS's 8 MB default stack clotran
+segfaults between 700 and 800 Clojure-level calls, and 2200 `gce_eval`
+entries is the highest limit that still reports rather than crashing --
+about 600 usable frames, from four times the stack. Roughly twenty times
+shallower per megabyte.
+
+The cause is structural, not a tuning mistake: one Clojure call costs a
+whole chain of interpreter frames -- `gce_eval`, `eval_call`, `apply`,
+`eval_body`, `gce_eval` again for each argument -- where the JVM has a
+single JIT-compiled frame. `-frecursive`, which gfortran needs for
+correctness here, puts every local on that stack.
+
+`CLOTRAN_MAX_DEPTH` overrides the limit, which is what `-Xss` is for.
+
+**Removal**: a bigger number is not the fix -- the limit exists because
+the Fortran call stack *is* our control stack. The fix is to give the
+evaluator an explicit continuation in the heap, which also happens to be
+what a step debugger needs (PLAN.md step 4) and what makes tail calls
+free beyond `recur`. CHICKEN Scheme reaches the same conclusion from the
+other direction with Cheney on the M.T.A.: it treats the C stack as a
+nursery and unwinds it periodically, which needs `longjmp` and a compiler
+to C -- neither available here, and no `bind(c)` anywhere in `src/f` by
+design. The transferable part is the principle, not the mechanism.
+
+## 8. Multimethods dispatch on equality only
+
+`MultiFn.getFn` picks the best method with `isA` over a hierarchy, and
+raises when two methods match and neither is preferred. Ours looks up the
+dispatch value, falls back to the default, and has no hierarchy, no
+`prefer-method`, and no ambiguity check.
+
+**Removal**: implement `isa?` over the hierarchy Var and widen
+`findAndCacheBestMethod`. Not needed until `derive` is used.
 
 ---
 

@@ -229,6 +229,21 @@ contains
        end block
     case (OBJ_CLOSURE)
        s = "#<fn>"
+    case (OBJ_ERR)
+       ! The shape Clojure prints a thrown thing in, minus the trace
+       ! there is nothing to fill in with.
+       block
+         type(gc_value) :: dat
+         s = "#error {:class " // gcp_str(gc_slot(v, 1), .false.) // &
+              ", :message " // gcp_str(gc_slot(v, 2), .true.)
+         dat = gc_slot(v, 3)
+         if (dat%tag /= GCT_NIL) s = s // ", :data " // gcp_str(dat, .true.)
+         s = s // "}"
+       end block
+    case (OBJ_SB)
+       s = gcp_str(gc_slot(v, 1), readable)
+    case (OBJ_MULTIFN)
+       s = "#<multifn " // gcp_str(gc_slot(v, 1), .false.) // ">"
     case (OBJ_ATOM)
        s = "#<atom " // gcp_str(gc_slot(v, 1), readable) // ">"
     case (OBJ_VAR)

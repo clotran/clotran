@@ -62,7 +62,9 @@ program gc_repl
      call vs_set(base + 2, form)
 
      call gce_clear_error()
-     result = gce_eval(vs_get(base + 2), vs_get(base + 1), no_roots())
+     result = gce_analyze(vs_get(base + 2), vs_get(base + 1))
+     if (.not. gce_has_error()) &
+          result = gce_eval(result, vs_get(base + 1), no_roots())
      call vs_set(base + 3, result)
      if (gce_has_error()) then
         print '(A,A)', "error: ", gce_error()
@@ -141,7 +143,10 @@ contains
           flush(6)
        end if
        call gce_clear_error()
-       r = gce_eval(gcv_nth(vs_get(lb + 2), i), vs_get(lb + 1), no_roots())
+       ! Analysed, then evaluated -- the two halves Compiler.load does
+       ! per form. Analysis here is macroexpansion and nothing else.
+       r = gce_analyze(gcv_nth(vs_get(lb + 2), i), vs_get(lb + 1))
+       if (.not. gce_has_error()) r = gce_eval(r, vs_get(lb + 1), no_roots())
        call vs_set(lb + 3, r)
        if (gce_has_error()) then
           nfail = 1

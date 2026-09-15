@@ -223,15 +223,18 @@ contains
          "(loop* [i 0 f nil] (if (< i 2) (recur (+ i 1) (fn* [] i)) (f)))", "1")
   end subroutine check_loop_recur
 
-  ! & collects the remaining arguments into a LIST -- empty rather
-  ! than nil when there are none, which is what lets variadic core
-  ! functions work without special-casing the zero case.
+  ! & collects the remaining arguments into a seq, or NIL when there
+  ! are none. This comment used to claim the opposite -- an empty list
+  ! -- and 11d asserted it. babashka says otherwise, and so does
+  ! core.clj: if-let rejects a third form by asserting (nil? oldform),
+  ! and an empty list is truthy, so that assertion fired on every
+  ! correct call.
   subroutine check_varargs()
     call ev("11a. ", "((fn* [& xs] xs) 1 2 3)", "(1 2 3)")
     call ev("11b. ", "((fn* [a & xs] xs) 1 2 3)", "(2 3)")
     call ev("11c. ", "((fn* [a & xs] a) 1 2 3)", "1")
-    call ev("11d. ", "((fn* [a & xs] xs) 1)", "()")
-    call ev("11e. ", "((fn* [& xs] (count xs)))", "0")
+    call ev("11d. ", "((fn* [a & xs] xs) 1)", "nil")
+    call ev("11e. ", "((fn* [& xs] (count xs)))", "0")   ! (count nil) is 0
     call ev("11f. ", "(do (def f (fn* [a & r] (cons a r))) (f 1 2 3))", "(1 2 3)")
   end subroutine check_varargs
 
