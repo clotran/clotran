@@ -1233,6 +1233,60 @@ the text. A cache writer needs to exclude them.
       cannot tell a clean run from a dead one. flang caught it purely
       because its stack gave out first.
 
+      ### Metadata, and the reader now parses all of core.clj
+
+      `OBJ_META` became a WRAPPER -- slot 1 the value, slot 2 the
+      metadata -- rather than a field, because `gc_value` has no spare
+      component (the point of it) and because symbol text is INTERNED,
+      so metadata hung off a string-pool slot would apply to every
+      `foo` in the program.
+
+      The wrapper's cost is that consumers must see through it. That
+      is contained by unwrapping in exactly one place: `gce_eval`
+      evaluates the value inside, so metadata is invisible to every
+      form that does not specifically ask. Only `def` and `meta` look.
+
+      The payoff is the core.clj bootstrap working:
+
+          (def ^{:macro true} m (fn* [a] (quote :expanded)))
+          (m ignored)   =>   :expanded
+
+      which is how let, loop and fn become macros at core.clj line 32,
+      before defmacro exists.
+
+      **Reader dispatch.** `#` is a dispatch character, not a symbol
+      character, and treating it as the latter is not harmless:
+      `#{1 2 3}` read as the symbol `#` followed by a three-element
+      map, and the error was "map literal has an odd number of forms"
+      -- nowhere near the cause. Added: `#_` discard (of the next
+      FORM, not token), `#'` var, `#{}` sets, `#()` anonymous fns,
+      `#""` regex literals.
+
+      Sets are `OBJ_SET`, backed by a map from each element to itself
+      -- what PersistentHashSet does -- but a distinct kind, so they
+      print as `#{...}`, answer `:set`, count elements rather than
+      pairs, and seq as elements rather than entries. The backing map
+      is representation and stays hidden.
+
+      `#()` takes its arity from the HIGHEST %n used, not the count:
+      `#(+ %2 %2)` is a two-argument function. Parameter names are
+      fixed rather than gensymed, so a body binding `p1` would shadow
+      -- noted where it is written, and waiting on auto-gensym.
+
+      **The reader now parses all 8371 lines of real core.clj.** It
+      fails in evaluation instead:
+
+          load src/clj/clojure/core.clj: 'ns' not found
+            in form: (ns #<object>)
+
+      which is the right kind of failure: a missing function rather
+      than a syntax the reader cannot represent.
+
+      One oracle case had to be dropped rather than fixed: set PRINT
+      ORDER differs from Clojure's, and both are unordered, so the
+      comparison was meaningless. Order-independent set facts are
+      checked instead.
+
       ### Metadata: not lost, unported
 
       `clotran-bin` supports metadata fully -- `^`, `with-meta`,

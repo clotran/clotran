@@ -117,3 +117,10 @@
 (nth (list 1 2 3) 1)
 (conj {:a 1} [:b 2])
 (conj nil 1)
+; set PRINT order differs from Clojure (both unordered), so only
+; order-independent set facts are compared here.
+(count #{1 2 3})
+(contains? #{1 2} 1)
+(#(+ % 1) 5)
+(#(+ %1 %2) 3 4)
+(meta (with-meta [1] {:a 1}))

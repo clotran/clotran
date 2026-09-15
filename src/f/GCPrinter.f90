@@ -198,6 +198,12 @@ contains
                s = s // "[" // gcp_str(ks(k+1), readable) // " " // &
                     gcp_str(vls(k+1), readable) // "]"
             end do
+         else if (gc_kind(src) == OBJ_SET) then
+            call gca_entries(gc_slot(src, 1), ks, vls)
+            do k = at, size(ks) - 1
+               if (k > at) s = s // " "
+               s = s // gcp_str(ks(k+1), readable)
+            end do
          else if (src%tag == GCT_STR) then
             t = gc_ref_text(src%ref)
             do k = at, len(t) - 1
@@ -206,6 +212,20 @@ contains
             end do
          end if
          s = s // ")"
+       end block
+    case (OBJ_SET)
+       ! #{...}, not the backing map's {k v} pairs -- a set that
+       ! printed as a map would be the representation leaking out.
+       block
+         type(gc_value), allocatable :: ks(:), vls(:)
+         integer :: k
+         call gca_entries(gc_slot(v, 1), ks, vls)
+         s = "#{"
+         do k = 1, size(ks)
+            if (k > 1) s = s // " "
+            s = s // gcp_str(ks(k), readable)
+         end do
+         s = s // "}"
        end block
     case (OBJ_CLOSURE)
        s = "#<fn>"

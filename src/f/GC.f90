@@ -112,7 +112,17 @@ module GC
   integer, parameter, public :: LAZY_CONS    = 1
   integer, parameter, public :: LAZY_EMPTY   = 2
   integer, parameter, public :: OBJ_ENV     = 7  ! 1=bindings 2=outer; i1=defining ns
-  integer, parameter, public :: OBJ_META    = 8  ! 1=the metadata map
+  ! A value CARRYING metadata: slot 1 = the value, slot 2 = the
+  ! metadata map. A wrapper rather than a field, because gc_value
+  ! has no spare component -- that is the point of it -- and
+  ! because symbol text is INTERNED, so metadata hung off a
+  ! string-pool slot would apply to every `foo` in the program.
+  !
+  ! Everything that consumes a value must see through this, which
+  ! is the cost. It is contained by unwrapping in one place:
+  ! gce_eval evaluates the value inside, so metadata is invisible
+  ! to every form that does not specifically ask for it.
+  integer, parameter, public :: OBJ_META    = 8  ! 1=value 2=meta
   ! A namespace is an ordinary object, not a pool of its own: name plus
   ! two maps. Reached only from the registry (a global root), so a
   ! namespace is never collected -- which is the semantics anyway,
@@ -144,6 +154,11 @@ module GC
   ! the same split real Clojure makes (PersistentList implements ISeq;
   ! PersistentVector does not, and hands out a ChunkedSeq).
   integer, parameter, public :: OBJ_SEQ       = 15 ! 1=source; i1=index
+  ! A set, backed by a map from each element to itself -- which is
+  ! how real Clojure does it (PersistentHashSet wraps a map). A
+  ! distinct kind rather than a bare map so that it prints as #{...}
+  ! and answers set? rather than map?.
+  integer, parameter, public :: OBJ_SET       = 16 ! 1=backing map
   integer, parameter, public :: OBJ_HAMT      = 11 ! 1=root run; i1=count
   integer, parameter, public :: OBJ_HAMT_LEAF = 12 ! 1=key 2=val
   integer, parameter, public :: OBJ_VAR     = 10 ! 1=root 2=meta 3=dyn stack 4=name

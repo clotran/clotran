@@ -19,9 +19,8 @@
 ! Fortran has no exceptions, so every routine checks has_error after a
 ! call that could set it and bails early.
 !
-! DEFERRED, and listed rather than silently missing: metadata (^),
-! the discard macro (#_), sets (#{}), regex literals, syntax-quote
-! expansion and auto-gensym. Those are reader MACROS layered on the
+! DEFERRED, and listed rather than silently missing: the discard macro
+! (#_), sets (#{}), regex literals and auto-gensym. Those are reader MACROS layered on the
 ! core shapes; the shapes are what the data layer needs proving.
 module GCReader
   use GC
@@ -162,6 +161,11 @@ contains
        call fail("unexpected '" // c // "'")
     case ('"')
        v = read_string(text, pos, roots)
+    case ("^")
+       pos = pos + 1
+       v = read_meta(text, pos, roots)
+    case ("#")
+       v = read_dispatch(text, pos, roots)
     case ("'")
        pos = pos + 1
        v = wrap("quote", text, pos, roots)
@@ -189,6 +193,343 @@ contains
        end if
     end select
   end function read_form
+
+  ! Like a string, but backslashes stay literal: a pattern writes
+  ! \\d meaning the two characters, not an escape.
+  function read_regex(text, pos, roots) result(v)
+    character(len=*), intent(in) :: text
+    integer, intent(inout) :: pos
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: v
+    integer :: start
+
+    v = gc_nil()
+    pos = pos + 1
+    start = pos
+    do
+       if (pos > len(text)) then
+          call fail("EOF while reading a regex literal")
+          return
+       end if
+       if (text(pos:pos) == achar(34)) exit
+       if (text(pos:pos) == achar(92)) pos = pos + 1
+       pos = pos + 1
+    end do
+    v = gc_str(text(start:pos - 1), roots)
+    pos = pos + 1
+  end function read_regex
+
+  ! #(...) -- the anonymous-function shorthand, expanded exactly as
+  ! real Clojure's reader does:
+  !
+  !   #(+ % 1)      -> (fn* [p1] (+ p1 1))
+  !   #(+ %1 %2)    -> (fn* [p1 p2] (+ p1 p2))
+  !   #(apply f %&) -> (fn* [& pr] (apply f pr))
+  !
+  ! The arity comes from the HIGHEST %n used, not from how many
+  ! appear: #(+ %2 %2) takes two arguments and ignores the first,
+  ! which is what Clojure does.
+  !
+  ! Parameter names are fixed rather than gensymed, so a body that
+  ! itself binds p1 would shadow. Real Clojure gensyms here; this
+  ! waits on auto-gensym in the reader, and the collision is noted
+  ! rather than hidden.
+  recursive function read_anon_fn(text, pos, roots) result(v)
+    character(len=*), intent(in) :: text
+    integer, intent(inout) :: pos
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: v, body, params, sym
+    integer :: base, maxn, i
+    logical :: has_rest
+    character(len=16) :: nm
+
+    v = gc_nil()
+    base = vs_enter(4)
+    body = read_seq(text, pos, ")", .false., roots)
+    if (has_error) then
+       call vs_leave(base); return
+    end if
+    call vs_set(base + 1, body)
+
+    maxn = 0
+    has_rest = .false.
+    call scan_percent(vs_get(base + 1), maxn, has_rest)
+
+    params = gcv_empty([vs_get(base + 1)])
+    call vs_set(base + 2, params)
+    do i = 1, maxn
+       write(nm, '(A,I0)') "p", i
+       sym = gc_sym(trim(nm), [vs_get(base + 1), vs_get(base + 2)])
+       call vs_set(base + 3, sym)
+       params = gcv_conj(vs_get(base + 2), vs_get(base + 3), &
+            [vs_get(base + 1), vs_get(base + 3)])
+       call vs_set(base + 2, params)
+    end do
+    if (has_rest) then
+       sym = gc_sym("&", [vs_get(base + 1), vs_get(base + 2)])
+       call vs_set(base + 3, sym)
+       params = gcv_conj(vs_get(base + 2), vs_get(base + 3), &
+            [vs_get(base + 1), vs_get(base + 3)])
+       call vs_set(base + 2, params)
+       sym = gc_sym("pr", [vs_get(base + 1), vs_get(base + 2)])
+       call vs_set(base + 3, sym)
+       params = gcv_conj(vs_get(base + 2), vs_get(base + 3), &
+            [vs_get(base + 1), vs_get(base + 3)])
+       call vs_set(base + 2, params)
+    end if
+
+    body = rewrite_percent(vs_get(base + 1), [vs_get(base + 2)])
+    call vs_set(base + 1, body)
+    sym = gc_sym("fn*", [vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 3, sym)
+    v = gcl_empty([vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+    call vs_set(base + 4, v)
+    v = gcl_cons(vs_get(base + 1), vs_get(base + 4), [vs_get(base + 2), vs_get(base + 3)])
+    call vs_set(base + 4, v)
+    v = gcl_cons(vs_get(base + 2), vs_get(base + 4), [vs_get(base + 3)])
+    call vs_set(base + 4, v)
+    v = gcl_cons(vs_get(base + 3), vs_get(base + 4), [vs_get(base + 4)])
+    call vs_leave(base)
+  end function read_anon_fn
+
+  ! Highest %n used anywhere in the form, and whether %& appears.
+  recursive subroutine scan_percent(form, maxn, has_rest)
+    type(gc_value), intent(in) :: form
+    integer, intent(inout) :: maxn
+    logical, intent(inout) :: has_rest
+    type(gc_value) :: walk
+    character(len=:), allocatable :: t
+    integer :: i, num, ios
+
+    if (form%tag == GCT_SYM) then
+       t = gc_ref_text(form%ref)
+       if (len(t) >= 1) then
+          if (t(1:1) == "%") then
+             if (t == "%") then
+                maxn = max(maxn, 1)
+             else if (t == "%&") then
+                has_rest = .true.
+             else
+                read(t(2:), *, iostat=ios) num
+                if (ios == 0) maxn = max(maxn, num)
+             end if
+          end if
+       end if
+       return
+    end if
+    if (gcl_is(form)) then
+       walk = form
+       do while (gcl_count(walk) > 0)
+          call scan_percent(gcl_first(walk), maxn, has_rest)
+          walk = gcl_rest(walk, [form])
+       end do
+    else if (gcv_is(form)) then
+       do i = 0, gcv_count(form) - 1
+          call scan_percent(gcv_nth(form, i), maxn, has_rest)
+       end do
+    end if
+  end subroutine scan_percent
+
+  ! Replaces %, %n and %& with the parameter names chosen above.
+  recursive function rewrite_percent(form, roots) result(out)
+    type(gc_value), intent(in) :: form
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, acc, walk, item
+    character(len=:), allocatable :: t
+    character(len=16) :: nm
+    integer :: base, i, num, ios
+
+    out = form
+    if (form%tag == GCT_SYM) then
+       t = gc_ref_text(form%ref)
+       if (len(t) < 1) return
+       if (t(1:1) /= "%") return
+       if (t == "%") then
+          out = gc_sym("p1", roots)
+       else if (t == "%&") then
+          out = gc_sym("pr", roots)
+       else
+          read(t(2:), *, iostat=ios) num
+          if (ios == 0) then
+             write(nm, '(A,I0)') "p", num
+             out = gc_sym(trim(nm), roots)
+          end if
+       end if
+       return
+    end if
+
+    base = vs_enter(3)
+    call vs_set(base + 1, form)
+    if (gcl_is(form)) then
+       acc = gcv_empty(roots)
+       call vs_set(base + 2, acc)
+       walk = vs_get(base + 1)
+       call vs_set(base + 3, walk)
+       do while (gcl_count(vs_get(base + 3)) > 0)
+          item = rewrite_percent(gcl_first(vs_get(base + 3)), &
+               [vs_get(base + 2), vs_get(base + 3)])
+          acc = gcv_conj(vs_get(base + 2), item, [vs_get(base + 3)])
+          call vs_set(base + 2, acc)
+          walk = gcl_rest(vs_get(base + 3), [vs_get(base + 2)])
+          call vs_set(base + 3, walk)
+       end do
+       out = gcl_empty([vs_get(base + 2)])
+       do i = gcv_count(vs_get(base + 2)) - 1, 0, -1
+          out = gcl_cons(gcv_nth(vs_get(base + 2), i), out, [vs_get(base + 2), out])
+       end do
+    else if (gcv_is(form)) then
+       acc = gcv_empty(roots)
+       call vs_set(base + 2, acc)
+       do i = 0, gcv_count(vs_get(base + 1)) - 1
+          item = rewrite_percent(gcv_nth(vs_get(base + 1), i), [vs_get(base + 2)])
+          acc = gcv_conj(vs_get(base + 2), item, [vs_get(base + 1)])
+          call vs_set(base + 2, acc)
+       end do
+       out = vs_get(base + 2)
+    end if
+    call vs_leave(base)
+  end function rewrite_percent
+
+  ! #{...} -- elements read like a vector's, then each maps to
+  ! itself. Duplicates collapse, as they must.
+  recursive function read_set(text, pos, roots) result(v)
+    character(len=*), intent(in) :: text
+    integer, intent(inout) :: pos
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: v, items, m, item
+    integer :: base, i
+
+    v = gc_nil()
+    base = vs_enter(3)
+    items = read_seq(text, pos, "}", .true., roots)
+    if (has_error) then
+       call vs_leave(base); return
+    end if
+    call vs_set(base + 1, items)
+    m = gca_empty([vs_get(base + 1)])
+    call vs_set(base + 2, m)
+    do i = 0, gcv_count(vs_get(base + 1)) - 1
+       item = gcv_nth(vs_get(base + 1), i)
+       call vs_set(base + 3, item)
+       m = gca_assoc(vs_get(base + 2), vs_get(base + 3), vs_get(base + 3), &
+            [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+       call vs_set(base + 2, m)
+    end do
+    v = gc_obj(OBJ_SET, [vs_get(base + 2)], [vs_get(base + 2)])
+    call vs_leave(base)
+  end function read_set
+
+  ! # is a DISPATCH character, not part of a symbol: what follows it
+  ! decides the form. Treating it as an ordinary symbol character
+  ! is not harmless -- #{1 2 3} then reads as the symbol # followed
+  ! by a three-element map literal, and the error you get is
+  ! "map literal has an odd number of forms", nowhere near the
+  ! cause.
+  !
+  ! Note the ordering hazard: an auto-gensym (x#) ends with #, so #
+  ! must stay a regular character in the MIDDLE of a token and only
+  ! dispatch at the start of one.
+  recursive function read_dispatch(text, pos, roots) result(v)
+    character(len=*), intent(in) :: text
+    integer, intent(inout) :: pos
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: v, ignored
+    character :: c
+
+    v = gc_nil()
+    if (pos + 1 > len(text)) then
+       call fail("EOF after #")
+       return
+    end if
+    c = text(pos + 1:pos + 1)
+    select case (c)
+    case ("_")
+       ! #_ discards the NEXT FORM, not the next token -- so
+       ! #_(a b c) skips the whole list.
+       pos = pos + 2
+       ignored = read_form(text, pos, roots)
+       if (has_error) return
+       v = read_form(text, pos, roots)
+    case ("'")
+       pos = pos + 2
+       v = wrap("var", text, pos, roots)
+    case ("{")
+       pos = pos + 2
+       v = read_set(text, pos, roots)
+    case (achar(34))
+       ! #"..." -- read so the file PARSES, with backslashes kept
+       ! literal as a pattern needs. There is no regex engine here,
+       ! so the result is a plain string and anything that actually
+       ! matches with it will be wrong. core.clj uses one regex
+       ! literal; recognising it is the difference between loading
+       ! the file and not.
+       pos = pos + 1
+       v = read_regex(text, pos, roots)
+    case ("(")
+       pos = pos + 2
+       v = read_anon_fn(text, pos, roots)
+    case default
+       call fail("reader: no dispatch for #" // c)
+    end select
+  end function read_dispatch
+
+  ! ^meta form -- the metadata shorthands, normalised exactly as real
+  ! Clojure's reader does:
+  !
+  !   ^:kw form    -> {:kw true}
+  !   ^Type form   -> {:tag Type}
+  !   ^"str" form  -> {:tag "str"}
+  !   ^{...} form  -> the map itself
+  !
+  ! The result WRAPS the form rather than annotating it, because
+  ! symbol text is interned and a shared pool slot cannot carry
+  ! per-occurrence metadata. See OBJ_META in GC.f90.
+  recursive function read_meta(text, pos, roots) result(v)
+    character(len=*), intent(in) :: text
+    integer, intent(inout) :: pos
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: v, m, form, key
+    integer :: base
+
+    v = gc_nil()
+    base = vs_enter(3)
+    m = read_form(text, pos, roots)
+    if (has_error) then
+       call vs_leave(base); return
+    end if
+    call vs_set(base + 1, m)
+
+    ! Normalise the shorthands into a map.
+    if (gca_is(vs_get(base + 1))) then
+       continue
+    else if (m%tag == GCT_KEY) then
+       v = gca_empty([vs_get(base + 1)])
+       call vs_set(base + 2, v)
+       m = gca_assoc(vs_get(base + 2), vs_get(base + 1), gc_bool(.true.), &
+            [vs_get(base + 1), vs_get(base + 2)])
+       call vs_set(base + 1, m)
+    else if (m%tag == GCT_SYM .or. m%tag == GCT_STR) then
+       v = gca_empty([vs_get(base + 1)])
+       call vs_set(base + 2, v)
+       key = gc_key("tag", [vs_get(base + 1), vs_get(base + 2)])
+       call vs_set(base + 3, key)
+       m = gca_assoc(vs_get(base + 2), vs_get(base + 3), vs_get(base + 1), &
+            [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+       call vs_set(base + 1, m)
+    else
+       call fail("Metadata must be Symbol, Keyword, String or Map")
+       call vs_leave(base); return
+    end if
+
+    form = read_form(text, pos, [vs_get(base + 1)])
+    if (has_error) then
+       call vs_leave(base); return
+    end if
+    call vs_set(base + 2, form)
+    v = gc_obj(OBJ_META, [vs_get(base + 2), vs_get(base + 1)], &
+         [vs_get(base + 1), vs_get(base + 2)])
+    call vs_leave(base)
+  end function read_meta
 
   ! (sym form) -- what ', `, @ and ~ expand to.
   recursive function wrap(name, text, pos, roots) result(v)

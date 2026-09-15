@@ -64,6 +64,7 @@ module GCEval
   integer, parameter :: B_QUOT = 25, B_REM = 26, B_SEQ = 27, B_DISSOC = 28
   integer, parameter :: B_NAME = 29, B_KEYWORD = 30, B_SYMBOL = 31
   integer, parameter :: B_SUBS = 32, B_TYPE = 33, B_SECOND = 34
+  integer, parameter :: B_META = 35, B_WITHMETA = 36
 
   character(len=:), allocatable :: last_error
   logical :: has_error = .false.
@@ -168,6 +169,8 @@ contains
     call bind_builtin(env, "subs", B_SUBS)
     call bind_builtin(env, "clotran-type", B_TYPE)
     call bind_builtin(env, "second", B_SECOND)
+    call bind_builtin(env, "meta", B_META)
+    call bind_builtin(env, "with-meta", B_WITHMETA)
     env = vs_get(base + 1)
     call vs_leave(base)
   end function gce_base_env
@@ -239,6 +242,13 @@ contains
                 out = eval_call(form, env)
              end if
           end if
+       case (OBJ_META)
+          ! Metadata is information ABOUT a form, not part of what it
+          ! evaluates to, so evaluation sees straight through the
+          ! wrapper. Only def (and `meta`) look at it. Keeping the
+          ! unwrap here is what stops OBJ_META leaking into every
+          ! special form and builtin.
+          out = gce_eval(gc_slot(form, 1), env, [vs_get(base + 1)])
        case (OBJ_VECTOR)
           out = eval_vector(form, env)
        case default
@@ -316,8 +326,30 @@ contains
        call vs_set(base + 3, rest)
        b = gce_eval(gcl_first(vs_get(base + 3)), vs_get(base + 2), [vs_get(base + 1)])
        if (.not. has_error) then
-          out = gcn_var_value(gcn_intern(gcn_current([vs_get(base + 1)]), &
-               vs_get(base + 4), b, [vs_get(base + 1), vs_get(base + 4)]))
+          block
+            type(gc_value) :: nm, md, var
+            ! The name may arrive wrapped: (def ^{:macro true} let ...).
+            nm = vs_get(base + 4)
+            md = gc_nil()
+            if (gc_kind(nm) == OBJ_META) then
+               md = gc_slot(nm, 2)
+               nm = gc_slot(nm, 1)
+            end if
+            call vs_set(base + 4, nm)
+            var = gcn_intern(gcn_current([vs_get(base + 1)]), &
+                 vs_get(base + 4), b, [vs_get(base + 1), vs_get(base + 4)])
+            if (md%tag /= GCT_NIL) then
+               call gc_set_slot(var, 2, md)
+               ! :macro true is HOW a macro is declared before defmacro
+               ! exists -- core.clj defines let, loop and fn exactly
+               ! this way at line 32. Macro-ness lives on the closure
+               ! here, as clotran's own is_macro does.
+               if (truthy(gca_get(md, gc_key("macro", [vs_get(base + 1)])))) then
+                  if (gc_kind(b) == OBJ_CLOSURE) call gc_set_i1(b, 1)
+               end if
+            end if
+            out = gcn_var_value(var)
+          end block
        end if
 
     else if (gc_ref_is(head%ref, "let*")) then
@@ -1349,6 +1381,20 @@ contains
        end do
        write(*, '(A)') ""
        out = gc_nil()
+    case (B_META)
+       ! A Var keeps its metadata in slot 2; anything else carries it
+       ! in a wrapper. nil when there is none, as Clojure's meta does.
+       a = gcv_nth(vs_get(base + 1), 0)
+       out = gc_nil()
+       if (gcn_is_var(a)) then
+          out = gc_slot(a, 2)
+       else if (gc_kind(a) == OBJ_META) then
+          out = gc_slot(a, 2)
+       end if
+    case (B_WITHMETA)
+       out = gc_obj(OBJ_META, &
+            [gcv_nth(vs_get(base + 1), 0), gcv_nth(vs_get(base + 1), 1)], &
+            [vs_get(base + 1)])
     case (B_QUOT)
        a = gcv_nth(args, 0); b = gcv_nth(args, 1)
        out = gc_int(a%ival / b%ival)
@@ -1636,6 +1682,10 @@ contains
     n = 0
     if (gcv_is(v)) then
        n = gcv_count(v)
+    else if (gc_kind(v) == OBJ_SET) then
+       ! A set counts and seqs as its ELEMENTS, not as the {k v}
+       ! pairs of the map backing it.
+       n = gca_count(gc_slot(v, 1))
     else if (gca_is(v)) then
        n = gca_count(v)
     else if (v%tag == GCT_STR) then
@@ -1657,6 +1707,12 @@ contains
     out = gc_nil()
     if (gcv_is(v)) then
        out = gcv_nth(v, i)
+    else if (gc_kind(v) == OBJ_SET) then
+       block
+         type(gc_value), allocatable :: sks(:), svs(:)
+         call gca_entries(gc_slot(v, 1), sks, svs)
+         if (i >= 0 .and. i < size(sks)) out = sks(i+1)
+       end block
     else if (v%tag == GCT_STR) then
        block
          character(len=:), allocatable :: t
@@ -1781,6 +1837,7 @@ contains
        case (OBJ_CONS);    s = "list"
        case (OBJ_VECTOR);  s = "vector"
        case (OBJ_MAP, OBJ_HAMT); s = "map"
+       case (OBJ_SET);     s = "set"
        case (OBJ_CLOSURE, OBJ_BUILTIN); s = "fn"
        case (OBJ_LAZY);    s = "lazy-seq"
        case (OBJ_VAR);     s = "var"
