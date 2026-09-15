@@ -1149,6 +1149,73 @@ the text. A cache writer needs to exclude them.
           load src/clj/clojure/core.clj: reader error:
             reader: no dispatch for '^'
 
+      ### seq is the abstraction, and it was missing
+
+      Caught in review, and correctly: the evaluator had no seq
+      abstraction. Every operation dispatched on concrete type at its
+      own call site --
+
+          if (lazy) ... else if (list) ... else if (vector) ...
+
+      repeated in first, rest, count, empty?, seq and second. That is
+      not a style complaint: each chain was an independent chance to
+      forget a branch, and one of them did. `rest` silently omitted
+      vectors, which made `reduce` return its first element and `last`
+      return its first -- both looking like arithmetic bugs.
+
+      Two more consequences that had not been noticed:
+
+      - `rest` on a vector COPIED the tail, so walking a vector was
+        O(n^2) where Clojure's is O(1).
+      - Strings and maps were not seqable at all. `(first "abc")` and
+        `(first {:a 1})` both returned nil.
+
+      **`OBJ_SEQ` is now a seq VIEW over an indexable collection** --
+      slot 1 the source, i1 the index. `rest` bumps the index and
+      shares the source, so it is O(1) and allocates one small object
+      rather than copying. Lists and lazy seqs need no view because
+      they ARE seqs, which is the same split real Clojure makes:
+      PersistentList implements ISeq, PersistentVector does not and
+      hands out a ChunkedSeq.
+
+      **`to_seq` is now the only place that knows concrete types.**
+      Adding a seqable type means teaching it and nothing else. first,
+      rest, second, count, empty? and seq all go through it.
+
+      Strings and maps came for free: `(first "abc")` is `\a`,
+      `(first {:a 1})` is `[:a 1]` -- an entry, which is what lets
+      destructuring walk a map. Nine new oracle cases, all agreeing
+      with real Clojure; 68 of 95 now.
+
+      One thing this does NOT change: the old evaluator (RT.f90) has
+      the same per-type dispatch, which is where the shape was
+      inherited from. It is not worth fixing there -- that code is
+      being replaced -- but it is worth knowing the bug class existed
+      in both.
+
+      ### Metadata: not lost, unported
+
+      `clotran-bin` supports metadata fully -- `^`, `with-meta`,
+      `meta`, Var metadata. `clotran-gc` does not yet. Checked:
+      `(meta (with-meta [1] {:a 1}))` is `{:a 1}` on the old
+      evaluator and `with-meta not found` on the new one.
+
+      It is load-bearing rather than decorative, and core.clj proves
+      it at line 32 with Rich Hickey's own comment:
+
+          ;during bootstrap we don't have destructuring let, loop or fn
+          (def ^{:macro true} let (fn* let [&form &env & decl]
+                                    (cons 'let* decl)))
+
+      Macro-ness IS `:macro true` in a Var's metadata; `defmacro` only
+      sets it for you. So a reader that parses `^` and discards it
+      produces a core.clj where nothing is a macro.
+
+      That also narrows the design question below: what needs metadata
+      first is the **Var**, and `OBJ_VAR` slot 2 is already reserved
+      for it. `(def ^{...} name val)` may be reachable without solving
+      metadata-on-any-value at all.
+
       ### The next blocker, and it is a real design question
 
       **Metadata cannot simply be dropped.** core.clj defines `let`,

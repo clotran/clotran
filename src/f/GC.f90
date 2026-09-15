@@ -135,6 +135,15 @@ module GC
   ! the recur point (a loop* or a fn* body) is the only thing that
   ! knows how to rebind, and it is the one that catches this.
   integer, parameter, public :: OBJ_RECUR     = 14 ! 1=args vector
+  ! A SEQ VIEW over an indexable collection: slot 1 = the source,
+  ! i1 = the current index. Vectors, strings and maps become seqable
+  ! through this without being copied, so `rest` is O(1) -- it is a
+  ! new view, not a new collection.
+  !
+  ! Lists and lazy seqs need no view: they ARE seqs already, which is
+  ! the same split real Clojure makes (PersistentList implements ISeq;
+  ! PersistentVector does not, and hands out a ChunkedSeq).
+  integer, parameter, public :: OBJ_SEQ       = 15 ! 1=source; i1=index
   integer, parameter, public :: OBJ_HAMT      = 11 ! 1=root run; i1=count
   integer, parameter, public :: OBJ_HAMT_LEAF = 12 ! 1=key 2=val
   integer, parameter, public :: OBJ_VAR     = 10 ! 1=root 2=meta 3=dyn stack 4=name

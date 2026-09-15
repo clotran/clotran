@@ -167,6 +167,42 @@ contains
           end if
        end do
        s = s // ")"
+    case (OBJ_SEQ)
+       ! A seq VIEW prints as the sequence it denotes, not as the
+       ! collection it borrows from: (seq [1 2 3]) is (1 2 3), and
+       ! (rest [1 2 3]) is (2 3) rather than [2 3]. Walking it here
+       ! directly rather than through the evaluator keeps the printer
+       ! below it, which is what lets the printer be built first.
+       block
+         type(gc_value) :: src
+         type(gc_value), allocatable :: ks(:), vls(:)
+         integer :: at, total, k
+         character(len=:), allocatable :: t
+         src = gc_slot(v, 1)
+         at = gc_i1(v)
+         s = "("
+         if (gcv_is(src)) then
+            total = gcv_count(src)
+            do k = at, total - 1
+               if (k > at) s = s // " "
+               s = s // gcp_str(gcv_nth(src, k), readable)
+            end do
+         else if (gca_is(src)) then
+            call gca_entries(src, ks, vls)
+            do k = at, size(ks) - 1
+               if (k > at) s = s // " "
+               s = s // "[" // gcp_str(ks(k+1), readable) // " " // &
+                    gcp_str(vls(k+1), readable) // "]"
+            end do
+         else if (src%tag == GCT_STR) then
+            t = gc_ref_text(src%ref)
+            do k = at, len(t) - 1
+               if (k > at) s = s // " "
+               s = s // gcp_str(gc_char(t(k+1:k+1)), readable)
+            end do
+         end if
+         s = s // ")"
+       end block
     case (OBJ_CLOSURE)
        s = "#<fn>"
     case (OBJ_ATOM)

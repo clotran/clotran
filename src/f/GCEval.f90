@@ -1206,54 +1206,11 @@ contains
     case (B_VECTOR)
        out = vs_get(base + 1)
     case (B_COUNT)
-       a = gcv_nth(args, 0)
-       if (a%tag == GCT_STR) then
-          ! A string is countable in Clojure, and only the host can
-          ! see its length -- so this is a primitive, not something
-          ! core can be written to do.
-          out = gc_int(gc_ref_len(a%ref))
-       else if (gc_kind(a) == OBJ_LAZY) then
-          ! Counting a lazy seq realises all of it, which is exactly
-          ! what (count) means and why it does not terminate on an
-          ! infinite one -- same as real Clojure.
-          out = gc_int(lazy_len(a))
-       else if (gcl_is(a)) then
-          out = gc_int(gcl_count(a))
-       else if (gcv_is(a)) then
-          out = gc_int(gcv_count(a))
-       else if (gca_is(a)) then
-          out = gc_int(gca_count(a))
-       else
-          out = gc_int(0)
-       end if
+       out = gc_int(sq_count(gcv_nth(vs_get(base + 1), 0), [vs_get(base + 1)]))
     case (B_FIRST)
-       a = gcv_nth(args, 0)
-       if (gc_kind(a) == OBJ_LAZY) then
-          call gce_force(a)
-          if (gc_i1(a) == LAZY_CONS) out = gc_slot(a, 2)
-       else if (gcl_is(a)) then
-          out = gcl_first(a)
-       else if (gcv_is(a)) then
-          if (gcv_count(a) > 0) out = gcv_nth(a, 0)
-       end if
+       out = sq_first(gcv_nth(vs_get(base + 1), 0), [vs_get(base + 1)])
     case (B_REST)
-       a = gcv_nth(args, 0)
-       if (gc_kind(a) == OBJ_LAZY) then
-          call gce_force(a)
-          if (gc_i1(a) == LAZY_CONS) then
-             out = gc_slot(a, 3)
-          else
-             out = gcl_empty([vs_get(base + 1)])
-          end if
-       else if (gcl_is(a)) then
-          out = gcl_rest(a, [vs_get(base + 1)])
-       else if (gcv_is(a)) then
-          ! rest of a VECTOR is a seq of the remainder, not nil. Missing
-          ! this made reduce and last quietly wrong rather than failing:
-          ! (rest [1 2 3]) was nil, so every seq walk over a vector
-          ! stopped after one element.
-          out = as_list_rest(a, [vs_get(base + 1)])
-       end if
+       out = sq_rest(gcv_nth(vs_get(base + 1), 0), [vs_get(base + 1)])
     case (B_CONS)
        ! (cons x <lazy>) cannot build a plain cons cell: its tail
        ! would have to be a realised list, and forcing here would
@@ -1327,13 +1284,11 @@ contains
           out = a
        end if
     case (B_EMPTY)
-       a = gcv_nth(args, 0)
-       if (gc_kind(a) == OBJ_LAZY) then
-          call gce_force(a)
-          out = gc_bool(gc_i1(a) /= LAZY_CONS)
-       else
-          out = gc_bool(seq_count(a) == 0 .and. gca_count(a) == 0)
-       end if
+       block
+         type(gc_value) :: sv
+         sv = to_seq(gcv_nth(vs_get(base + 1), 0), [vs_get(base + 1)])
+         out = gc_bool(sv%tag == GCT_NIL)
+       end block
     case (B_APPLY)
        ! (apply f a b args) -- the last argument is a SEQUENCE spread
        ! into the call, which is what makes variadic forwarding work.
@@ -1364,29 +1319,10 @@ contains
        a = gcv_nth(args, 0); b = gcv_nth(args, 1)
        out = gc_int(mod(a%ival, b%ival))
     case (B_SECOND)
-       a = gcv_nth(args, 0)
-       out = gc_nil()
-       if (gcv_is(a)) then
-          if (gcv_count(a) > 1) out = gcv_nth(a, 1)
-       else if (gcl_is(a)) then
-          if (gcl_count(a) > 1) out = nth_of(a, 1)
-       end if
+       out = sq_first(sq_rest(gcv_nth(vs_get(base + 1), 0), [vs_get(base + 1)]), &
+            [vs_get(base + 1)])
     case (B_SEQ)
-       ! nil for an EMPTY collection, which is what makes (if (seq c)
-       ! ...) the idiomatic emptiness test rather than a special case.
-       a = gcv_nth(vs_get(base + 1), 0)
-       if (gc_kind(a) == OBJ_LAZY) then
-          call gce_force(a)
-          if (gc_i1(a) == LAZY_CONS) then
-             out = a
-          else
-             out = gc_nil()
-          end if
-       else if (seq_count(a) == 0 .and. gca_count(a) == 0) then
-          out = gc_nil()
-       else
-          out = as_list(a, [vs_get(base + 1)])
-       end if
+       out = to_seq(gcv_nth(vs_get(base + 1), 0), [vs_get(base + 1)])
     case (B_DISSOC)
        out = gca_dissoc(gcv_nth(vs_get(base + 1), 0), gcv_nth(vs_get(base + 1), 1), &
             [vs_get(base + 1)])
@@ -1606,6 +1542,186 @@ contains
        out = gcv_nth(v, i)
     end if
   end function seq_at
+
+  ! ---- the seq abstraction -------------------------------------
+  !
+  ! ONE place knows about concrete collection types: to_seq. Every
+  ! other seq operation works on seqs alone, so adding a seqable type
+  ! means teaching to_seq about it and nothing else.
+  !
+  ! This replaces a chain of `if list ... else if vector ... else if
+  ! lazy` repeated at every call site, which is not a style point:
+  ! each chain was an independent chance to forget a branch, and one
+  ! of them did -- rest silently missed vectors, which made reduce
+  ! return its first element and last return its first.
+  !
+  ! nil for an EMPTY collection, which is what makes (if (seq c) ...)
+  ! the idiomatic emptiness test rather than a special case.
+  recursive function to_seq(v, roots) result(out)
+    type(gc_value), intent(in) :: v
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out
+    integer :: base
+
+    out = gc_nil()
+    if (v%tag == GCT_NIL) return
+
+    ! Already a seq: lists and lazy seqs implement it directly.
+    if (gcl_is(v)) then
+       if (gcl_count(v) > 0) out = v
+       return
+    end if
+    if (gc_kind(v) == OBJ_LAZY) then
+       call gce_force(v)
+       if (gc_i1(v) == LAZY_CONS) out = v
+       return
+    end if
+    if (gc_kind(v) == OBJ_SEQ) then
+       if (seq_len(gc_slot(v, 1)) > gc_i1(v)) out = v
+       return
+    end if
+
+    ! Indexable: a VIEW, not a copy. rest is then O(1).
+    if (seq_len(v) == 0) return
+    base = vs_enter(1)
+    call vs_set(base + 1, v)
+    out = gc_obj(OBJ_SEQ, [vs_get(base + 1)], roots)
+    call gc_set_i1(out, 0)
+    call vs_leave(base)
+  end function to_seq
+
+  ! How many elements an indexable value has. The only other place
+  ! that needs to know concrete types, and deliberately next to
+  ! to_seq so the two stay in step.
+  function seq_len(v) result(n)
+    type(gc_value), intent(in) :: v
+    integer :: n
+    n = 0
+    if (gcv_is(v)) then
+       n = gcv_count(v)
+    else if (gca_is(v)) then
+       n = gca_count(v)
+    else if (v%tag == GCT_STR) then
+       n = gc_ref_len(v%ref)
+    end if
+  end function seq_len
+
+  ! The i-th element of an indexable value (0-based). A map yields
+  ! its entries as two-element vectors, which is what makes
+  ! (first {:a 1}) an entry and lets destructuring walk a map.
+  function seq_elem(v, i, roots) result(out)
+    type(gc_value), intent(in) :: v
+    integer, intent(in) :: i
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out
+    type(gc_value), allocatable :: ks(:), vls(:)
+    integer :: base
+
+    out = gc_nil()
+    if (gcv_is(v)) then
+       out = gcv_nth(v, i)
+    else if (v%tag == GCT_STR) then
+       block
+         character(len=:), allocatable :: t
+         t = gc_ref_text(v%ref)
+         if (i >= 0 .and. i < len(t)) out = gc_char(t(i+1:i+1))
+       end block
+    else if (gca_is(v)) then
+       call gca_entries(v, ks, vls)
+       if (i >= 0 .and. i < size(ks)) then
+          base = vs_enter(1)
+          out = gcv_empty(roots)
+          call vs_set(base + 1, out)
+          out = gcv_conj(vs_get(base + 1), ks(i+1), roots)
+          call vs_set(base + 1, out)
+          out = gcv_conj(vs_get(base + 1), vls(i+1), roots)
+          call vs_leave(base)
+       end if
+    end if
+  end function seq_elem
+
+  ! first/rest work on SEQS only. Anything else is seq'd first.
+  recursive function sq_first(v, roots) result(out)
+    type(gc_value), intent(in) :: v
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, s
+    integer :: base
+
+    out = gc_nil()
+    base = vs_enter(1)
+    s = to_seq(v, roots)
+    call vs_set(base + 1, s)
+    if (gcl_is(vs_get(base + 1))) then
+       out = gcl_first(vs_get(base + 1))
+    else if (gc_kind(vs_get(base + 1)) == OBJ_LAZY) then
+       out = gc_slot(vs_get(base + 1), 2)
+    else if (gc_kind(vs_get(base + 1)) == OBJ_SEQ) then
+       out = seq_elem(gc_slot(vs_get(base + 1), 1), gc_i1(vs_get(base + 1)), roots)
+    end if
+    call vs_leave(base)
+  end function sq_first
+
+  ! Always a seq, never nil -- Clojure's `rest`, as opposed to `next`.
+  ! For a view this bumps the index and shares the source, so walking
+  ! a vector is O(1) per step rather than copying the tail each time.
+  recursive function sq_rest(v, roots) result(out)
+    type(gc_value), intent(in) :: v
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, s
+    integer :: base
+
+    base = vs_enter(2)
+    s = to_seq(v, roots)
+    call vs_set(base + 1, s)
+    out = gcl_empty(roots)
+    if (gcl_is(vs_get(base + 1))) then
+       out = gcl_rest(vs_get(base + 1), roots)
+    else if (gc_kind(vs_get(base + 1)) == OBJ_LAZY) then
+       out = gc_slot(vs_get(base + 1), 3)
+    else if (gc_kind(vs_get(base + 1)) == OBJ_SEQ) then
+       out = gc_obj(OBJ_SEQ, [gc_slot(vs_get(base + 1), 1)], &
+            [vs_get(base + 1)])
+       call gc_set_i1(out, gc_i1(vs_get(base + 1)) + 1)
+    end if
+    call vs_leave(base)
+  end function sq_rest
+
+  ! How many elements a seq yields. Realises a lazy seq, as (count)
+  ! must.
+  recursive function sq_count(v, roots) result(n)
+    type(gc_value), intent(in) :: v
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: s
+    integer :: base, n
+
+    n = 0
+    if (v%tag == GCT_NIL) return
+    if (gcl_is(v)) then
+       n = gcl_count(v)
+       return
+    end if
+    if (gc_kind(v) == OBJ_SEQ) then
+       n = seq_len(gc_slot(v, 1)) - gc_i1(v)
+       return
+    end if
+    if (gc_kind(v) /= OBJ_LAZY) then
+       n = seq_len(v)
+       return
+    end if
+    base = vs_enter(1)
+    call vs_set(base + 1, v)
+    do
+       s = to_seq(vs_get(base + 1), roots)
+       call vs_set(base + 1, s)
+       ! s, not vs_get(...)%tag: neither compiler will take a
+       ! component off a function result (NOTES.md gotcha).
+       if (s%tag == GCT_NIL) exit
+       n = n + 1
+       s = sq_rest(vs_get(base + 1), roots)
+       call vs_set(base + 1, s)
+    end do
+    call vs_leave(base)
+  end function sq_count
 
   ! Clojure's truthiness: everything except nil and false.
   ! The type of a value, as a keyword. Everything else that asks
