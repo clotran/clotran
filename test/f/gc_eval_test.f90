@@ -49,6 +49,7 @@ contains
     call check_let()
     call check_fn()
     call check_collections()
+    call check_loop_recur()
     call check_errors()
     call check_heap_sound()
   end subroutine run_all
@@ -188,6 +189,30 @@ contains
     call ev("7h. ", "(let* [v [1 2]] (count v))", "2")
   end subroutine check_collections
 
+  ! recur is the whole reason Clojure needs no general TCO: it is an
+  ! explicit jump to the nearest loop* or fn*, and must run in
+  ! CONSTANT stack however many times it goes round.
+  subroutine check_loop_recur()
+    call ev("8a. ", "(loop* [i 0] i)", "0")
+    call ev("8b. ", "(loop* [i 0] (if (< i 3) (recur (+ i 1)) i))", "3")
+    call ev("8c. ", "(loop* [i 0 acc 0] (if (< i 5) (recur (+ i 1) (+ acc i)) acc))", "10")
+    ! recur inside a fn*, rebinding the parameters.
+    call ev("8d. ", &
+         "(do (def cd (fn* [n] (if (< n 1) :done (recur (- n 1))))) (cd 5))", ":done")
+    ! The one that matters: 100000 iterations. Without recur rebinding
+    ! in place this is a stack overflow, not a wrong answer.
+    call ev("8e. ", "(loop* [i 0] (if (< i 100000) (recur (+ i 1)) i))", "100000")
+    call ev("8f. ", &
+         "(do (def sum (fn* [n acc] (if (< n 1) acc (recur (- n 1) (+ acc n))))) (sum 10000 0))", &
+         "50005000")
+    ! A closure made during one iteration keeps THAT iteration's value.
+    ! The fn* here is built when i is 1, so calling it must give 1 --
+    ! not the loop's final 2. If recur mutated the frame in place
+    ! instead of rebinding into a fresh one, this would return 2.
+    call ev("8g. ", &
+         "(loop* [i 0 f nil] (if (< i 2) (recur (+ i 1) (fn* [] i)) (f)))", "1")
+  end subroutine check_loop_recur
+
   subroutine check_errors()
     type(gc_value) :: form, env, result
     integer :: base
@@ -199,7 +224,7 @@ contains
     call vs_set(base + 2, form)
     call gce_clear_error()
     result = gce_eval(vs_get(base + 2), vs_get(base + 1), no_roots)
-    call ok("8a. an unbound symbol is an error: ", gce_has_error())
+    call ok("9a. an unbound symbol is an error: ", gce_has_error())
     ! Leave the flag clear, or every evaluation after this one
     ! short-circuits -- which is exactly what the torture pass caught.
     call gce_clear_error()
@@ -210,7 +235,7 @@ contains
   ! consistent: no live object referring to a freed or out-of-range
   ! slot.
   subroutine check_heap_sound()
-    call ok("9a. the heap passes its own audit: ", gc_check_heap() == "")
+    call ok("10a. the heap passes its own audit: ", gc_check_heap() == "")
   end subroutine check_heap_sound
 
 end program gc_eval_test

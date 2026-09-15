@@ -12,12 +12,22 @@
 ! and prove the mechanism, deliberately not the ~5400 lines of the
 ! full evaluator. What it has:
 !
-!   special forms   quote, if, do, def, let*, fn*
+!   special forms   quote, if, do, def, let*, fn*, loop*, recur
 !   primitives      + - * = < list vector count first rest
 !   closures        with lexical capture and recursion
 !
+! RECUR, AND WHY THERE IS NO GENERAL TRAMPOLINE. Clojure does not
+! promise tail-call elimination; it promises `recur`, which is an
+! explicit jump to the nearest enclosing loop* or fn*. So iteration
+! lives in exactly those two places: each evaluates its body and, if
+! the result is an OBJ_RECUR, rebinds its parameters from the recur's
+! arguments and goes round again. Recursion depth is then bounded by
+! the program's NESTING rather than by its iteration count, which is
+! the guarantee Clojure actually makes. A general trampoline would be
+! more machinery for a promise the language never made.
+!
 ! What it does NOT have, listed rather than silently missing: macros,
-! loop/recur and tail calls, try/catch, destructuring, varargs,
+! general tail calls (see recur below), try/catch, destructuring, varargs,
 ! namespaces, laziness. Each is a feature of the full evaluator, not
 ! of the representation being proved here.
 !
@@ -178,7 +188,8 @@ contains
     logical :: yes
     yes = gc_ref_is(sym%ref, "quote") .or. gc_ref_is(sym%ref, "if") .or. &
           gc_ref_is(sym%ref, "do") .or. gc_ref_is(sym%ref, "def") .or. &
-          gc_ref_is(sym%ref, "let*") .or. gc_ref_is(sym%ref, "fn*")
+          gc_ref_is(sym%ref, "let*") .or. gc_ref_is(sym%ref, "fn*") .or. &
+          gc_ref_is(sym%ref, "loop*") .or. gc_ref_is(sym%ref, "recur")
   end function is_special
 
   recursive function eval_special(form, env) result(out)
@@ -238,6 +249,12 @@ contains
 
     else if (gc_ref_is(head%ref, "fn*")) then
        out = make_closure(vs_get(base + 3), vs_get(base + 2))
+
+    else if (gc_ref_is(head%ref, "loop*")) then
+       out = eval_loop(vs_get(base + 3), vs_get(base + 2))
+
+    else if (gc_ref_is(head%ref, "recur")) then
+       out = eval_recur(vs_get(base + 3), vs_get(base + 2))
     end if
 
     call vs_leave(base)
@@ -286,6 +303,144 @@ contains
     end do
     call vs_leave(base)
   end function eval_let
+
+  ! loop* binds like let*, then iterates: evaluate the body, and if it
+  ! hands back a recur, rebind the same names from the recur's
+  ! arguments and go again. The bindings are rebound in a FRESH frame
+  ! each time rather than mutated, so a closure made during one
+  ! iteration keeps the values it captured.
+  recursive function eval_loop(rest, env) result(out)
+    type(gc_value), intent(in) :: rest, env
+    type(gc_value) :: out, binds, names, child, body, v
+    integer :: base, i, n
+
+    out = gc_nil()
+    base = vs_enter(6)
+    call vs_set(base + 1, rest)
+    call vs_set(base + 2, env)
+    binds = gcl_first(rest)
+    call vs_set(base + 3, binds)
+
+    n = gcv_count(vs_get(base + 3))
+    if (mod(n, 2) /= 0) then
+       call fail("loop* needs an even number of binding forms")
+       call vs_leave(base); return
+    end if
+
+    ! The names, kept so recur can rebind them by position.
+    names = gcv_empty([vs_get(base + 1), vs_get(base + 3)])
+    call vs_set(base + 4, names)
+    do i = 0, n - 2, 2
+       names = gcv_conj(vs_get(base + 4), gcv_nth(vs_get(base + 3), i), &
+            [vs_get(base + 1), vs_get(base + 3)])
+       call vs_set(base + 4, names)
+    end do
+
+    ! Initial bindings, sequential like let*.
+    child = gce_new(vs_get(base + 2), [vs_get(base + 1), vs_get(base + 4)])
+    call vs_set(base + 5, child)
+    do i = 0, n - 2, 2
+       v = gce_eval(gcv_nth(vs_get(base + 3), i + 1), vs_get(base + 5), &
+            [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)])
+       if (has_error) then
+          call vs_leave(base); return
+       end if
+       call gce_set(vs_get(base + 5), gcv_nth(vs_get(base + 3), i), v, &
+            [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)])
+    end do
+
+    body = gcl_rest(vs_get(base + 1), [vs_get(base + 1)])
+    call vs_set(base + 6, body)
+
+    do
+       out = eval_body(vs_get(base + 6), vs_get(base + 5))
+       if (has_error) exit
+       if (gc_kind(out) /= OBJ_RECUR) exit
+       child = rebind(vs_get(base + 4), gc_slot(out, 1), vs_get(base + 2))
+       if (has_error) exit
+       call vs_set(base + 5, child)
+    end do
+    call vs_leave(base)
+  end function eval_loop
+
+  ! (recur a b) evaluates its arguments and hands back a marker. The
+  ! nearest loop* or fn* catches it; anywhere else it simply escapes,
+  ! which is a recur outside a recur point and would be a compile
+  ! error in real Clojure. Left as a value here rather than diagnosed,
+  ! since this evaluator has no compile pass to diagnose it in.
+  recursive function eval_recur(rest, env) result(out)
+    type(gc_value), intent(in) :: rest, env
+    type(gc_value) :: out, args, item, walk
+    integer :: base
+
+    base = vs_enter(4)
+    call vs_set(base + 1, rest)
+    call vs_set(base + 2, env)
+    args = gcv_empty([vs_get(base + 1)])
+    call vs_set(base + 3, args)
+    walk = vs_get(base + 1)
+    call vs_set(base + 4, walk)
+    do while (gcl_count(vs_get(base + 4)) > 0)
+       item = gce_eval(gcl_first(vs_get(base + 4)), vs_get(base + 2), &
+            [vs_get(base + 1), vs_get(base + 3)])
+       if (has_error) then
+          call vs_leave(base); return
+       end if
+       args = gcv_conj(vs_get(base + 3), item, [vs_get(base + 1), vs_get(base + 4)])
+       call vs_set(base + 3, args)
+       walk = gcl_rest(vs_get(base + 4), [vs_get(base + 1)])
+       call vs_set(base + 4, walk)
+    end do
+    out = gc_obj(OBJ_RECUR, [vs_get(base + 3)], [vs_get(base + 1)])
+    call vs_leave(base)
+  end function eval_recur
+
+  ! A fresh frame binding names(i) to vals(i), for a recur.
+  function rebind(names, vals, outer) result(child)
+    type(gc_value), intent(in) :: names, vals, outer
+    type(gc_value) :: child
+    integer :: base, i
+
+    base = vs_enter(4)
+    call vs_set(base + 1, names)
+    call vs_set(base + 2, vals)
+    call vs_set(base + 3, outer)
+    if (gcv_count(names) /= gcv_count(vals)) then
+       call fail("recur has the wrong number of arguments")
+       child = gc_nil()
+       call vs_leave(base); return
+    end if
+    child = gce_new(vs_get(base + 3), [vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 4, child)
+    do i = 0, gcv_count(names) - 1
+       call gce_set(vs_get(base + 4), gcv_nth(vs_get(base + 1), i), &
+            gcv_nth(vs_get(base + 2), i), [vs_get(base + 1), vs_get(base + 2)])
+    end do
+    child = vs_get(base + 4)
+    call vs_leave(base)
+  end function rebind
+
+  ! Every form in a body, last value wins.
+  recursive function eval_body(body, env) result(out)
+    type(gc_value), intent(in) :: body, env
+    type(gc_value) :: out, walk
+    integer :: base
+
+    out = gc_nil()
+    base = vs_enter(3)
+    call vs_set(base + 1, body)
+    call vs_set(base + 2, env)
+    walk = body
+    call vs_set(base + 3, walk)
+    do while (gcl_count(vs_get(base + 3)) > 0)
+       out = gce_eval(gcl_first(vs_get(base + 3)), vs_get(base + 2), &
+            [vs_get(base + 1)])
+       if (has_error) exit
+       walk = gcl_rest(vs_get(base + 3), [vs_get(base + 1)])
+       call vs_set(base + 3, walk)
+    end do
+    call vs_leave(base)
+  end function eval_body
 
   function make_closure(rest, env) result(out)
     type(gc_value), intent(in) :: rest, env
@@ -393,12 +548,17 @@ contains
        end do
        body = gc_slot(vs_get(base + 1), 2)
        call vs_set(base + 4, body)
-       do while (gcl_count(vs_get(base + 4)) > 0)
-          out = gce_eval(gcl_first(vs_get(base + 4)), vs_get(base + 3), &
-               [vs_get(base + 1), vs_get(base + 2)])
+       ! A fn* body is a recur point, exactly like loop*: recur rebinds
+       ! the parameters and re-enters the body rather than growing the
+       ! stack, which is what makes a self-recursive function with
+       ! recur run in constant space.
+       do
+          out = eval_body(vs_get(base + 4), vs_get(base + 3))
           if (has_error) exit
-          body = gcl_rest(vs_get(base + 4), [vs_get(base + 1)])
-          call vs_set(base + 4, body)
+          if (gc_kind(out) /= OBJ_RECUR) exit
+          child = rebind(params, gc_slot(out, 1), gc_slot(vs_get(base + 1), 3))
+          if (has_error) exit
+          call vs_set(base + 3, child)
        end do
     case default
        call fail("not a function: " // gcp_str(fn, .true.))

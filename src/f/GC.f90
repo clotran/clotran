@@ -124,6 +124,11 @@ module GC
   ! that "is this callable" and "does this have a body to evaluate"
   ! stay separate questions.
   integer, parameter, public :: OBJ_BUILTIN   = 13 ! 1=name; i1=id
+  ! What `recur` evaluates to: slot 1 = a vector of its arguments.
+  ! A VALUE rather than a control-flow mechanism in the host, because
+  ! the recur point (a loop* or a fn* body) is the only thing that
+  ! knows how to rebind, and it is the one that catches this.
+  integer, parameter, public :: OBJ_RECUR     = 14 ! 1=args vector
   integer, parameter, public :: OBJ_HAMT      = 11 ! 1=root run; i1=count
   integer, parameter, public :: OBJ_HAMT_LEAF = 12 ! 1=key 2=val
   integer, parameter, public :: OBJ_VAR     = 10 ! 1=root 2=meta 3=dyn stack 4=name

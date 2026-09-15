@@ -800,9 +800,34 @@ the text. A cache writer needs to exclude them.
       before leaving.
 
       Scope is the core, deliberately, not the ~5400 lines of Eval.f90:
-      quote/if/do/def/let*/fn*, ten primitives, closures. Missing and
-      listed rather than silent: macros, loop/recur and tail calls,
-      try/catch, destructuring, varargs, namespaces, laziness.
+      quote/if/do/def/let*/fn*/loop*/recur, ten primitives, closures.
+      Missing and listed rather than silent: macros, try/catch,
+      destructuring, varargs, namespaces, laziness.
+
+      **`loop*`/`recur`, and why there is no general trampoline.**
+      Clojure does not promise tail-call elimination; it promises
+      `recur`, an explicit jump to the nearest enclosing `loop*` or
+      `fn*`. So iteration lives in exactly those two places: each
+      evaluates its body and, if the result is an `OBJ_RECUR`, rebinds
+      its parameters and goes round again. Recursion depth is then
+      bounded by the program's NESTING rather than its iteration count
+      -- which is the guarantee the language actually makes. A general
+      trampoline would be more machinery for a promise Clojure never
+      made.
+
+      `recur` is a VALUE (`OBJ_RECUR`, holding its evaluated arguments)
+      rather than host control flow, because only the recur point
+      knows how to rebind, and it is the thing that catches it.
+
+      Check 8e is the one that matters: **100000 iterations**, which
+      without rebinding in place is a stack overflow rather than a
+      wrong answer. 8f sums to 50005000 the same way.
+
+      Check 8g caught a mistake in my own expectation, and is the
+      better test for it: a closure built during the iteration where
+      `i` is 1 must return **1**, not the loop's final 2. If `recur`
+      mutated the frame in place instead of rebinding into a fresh
+      one, it would return 2. Rebinding is what makes that right.
 
       The torture pass caught a real bug on its first run: `has_error`
       is module state and nothing cleared it, so once one check
