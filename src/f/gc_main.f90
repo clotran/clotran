@@ -20,7 +20,8 @@ program gc_repl
   character(len=4096) :: buf
   type(gc_value) :: env, form, result
   type(gc_value) :: none(0)
-  integer :: base, ios, size_read
+  integer :: base, ios, size_read, i, arglen
+  character(len=1024) :: argbuf
 
   call gc_init(65536)
   base = vs_enter(3)
@@ -32,6 +33,15 @@ program gc_repl
   ! library: everything else Clojure programs use must come from
   ! the real core.clj, which is the point of the project.
   call load_file("src/clj/host.clj", vs_get(base + 1))
+
+  ! Any files named on the command line load next, in order, so
+  ! that `clotran-gc some.clj` is how a file gets tried against
+  ! this evaluator. Loading real core.clj is the point: the first
+  ! error it reports IS the next thing to build.
+  do i = 1, command_argument_count()
+     call get_command_argument(i, argbuf, arglen)
+     call load_file(argbuf(1:arglen), vs_get(base + 1))
+  end do
 
   do
      write(*, '(A)', advance='no') gcn_name(gcn_current(none)) // "=> "
@@ -69,25 +79,23 @@ contains
     character(len=*), intent(in) :: path
     type(gc_value), intent(in) :: env
     character(len=:), allocatable :: text
-    character(len=8192) :: chunk
     type(gc_value) :: forms, r
-    integer :: u, st, nread, lb, i
+    integer :: u, st, lb, i, fsize
 
-    open(newunit=u, file=path, status="old", action="read", iostat=st)
+    ! Read in ONE allocation, via stream access, rather than
+    ! appending line by line. Appending is O(n^2) -- each // builds a
+    ! whole new string -- and on an 8000-line file that is not slow,
+    ! it is indistinguishable from a hang. LispReader.f90 carries the
+    ! same warning for the same reason; this repeated the mistake.
+    open(newunit=u, file=path, access="stream", form="unformatted", &
+         status="old", action="read", iostat=st)
     if (st /= 0) then
        print '(A,A)', "load: cannot open ", path
        return
     end if
-    text = ""
-    ! Line at a time, advancing. The non-advancing form is a trap
-    ! here: end-of-RECORD reports a negative iostat just as
-    ! end-of-file does, so a loop testing `st < 0` stops after the
-    ! first line and silently loads nothing.
-    do
-       read(u, '(A)', iostat=st) chunk
-       if (st /= 0) exit
-       text = text // trim(chunk) // achar(10)
-    end do
+    inquire(unit=u, size=fsize)
+    allocate(character(len=fsize) :: text)
+    read(u, iostat=st) text
     close(u)
 
     lb = vs_enter(3)

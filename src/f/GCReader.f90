@@ -386,6 +386,18 @@ contains
     end do
     tok = text(start:pos - 1)
 
+    ! A token can only be empty if pos did not move, which means
+    ! the character here is one read_form has no case for -- ^ and
+    ! # today. Without this the reader spins forever instead of
+    ! failing: a hang is a far worse failure than an error, and it
+    ! is what loading real core.clj (which opens with ^{...})
+    ! actually did.
+    if (len(tok) == 0) then
+       call fail("reader: no dispatch for '" // text(pos:pos) // "'")
+       v = gc_nil()
+       return
+    end if
+
     if (tok == "nil") then
        v = gc_nil()
     else if (tok == "true") then

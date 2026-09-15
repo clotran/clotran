@@ -1125,6 +1125,62 @@ the text. A cache writer needs to exclude them.
       measures the right thing: **how much of real core.clj the
       evaluator can already carry.** It closes by growing the
       evaluator, never by growing host.clj.
+      ### Pointing it at the real core.clj
+
+      `clotran-gc some.clj` now loads files named on the command line,
+      so the real core.clj can be tried against this evaluator and the
+      first error it reports IS the next thing to build. Two bugs of
+      mine had to go first:
+
+      - **The file loader was O(n^2).** It appended line by line, and
+        each `//` builds a whole new string. On an 8371-line file that
+        is not slow, it is indistinguishable from a hang. Now one
+        `inquire(size=)` and one stream read. LispReader.f90 carries
+        the same warning in two places; I repeated the mistake anyway.
+      - **The reader could fail to advance.** core.clj opens with
+        `^{...}`, the reader has no case for `^`, so it fell through to
+        read_atom, produced an EMPTY token, and never moved `pos` --
+        an infinite loop. A reader that can hang is far worse than one
+        that errors, so an empty token is now an error naming the
+        character it could not dispatch.
+
+      With both fixed it fails in a second, usefully:
+
+          load src/clj/clojure/core.clj: reader error:
+            reader: no dispatch for '^'
+
+      ### The next blocker, and it is a real design question
+
+      **Metadata cannot simply be dropped.** core.clj defines `let`,
+      `loop` and `fn` as `(def ^{:macro true} name (fn* ...))` before
+      `defmacro` itself exists -- so a reader that parses `^` and
+      discards it produces a core.clj where nothing is a macro.
+
+      But there is nowhere to put it. `gc_value` is {tag, ival, rval,
+      ref} and deliberately has no spare component -- that is the
+      entire point of the new representation. Worse for symbols: text
+      is INTERNED, so two `foo` symbols share one string-pool slot,
+      and metadata hung off that slot would apply to every `foo` in
+      the program. Real Clojure has no such problem: a Symbol is an
+      object with its own metadata, equal to but distinct from another
+      `foo`.
+
+      Options, none obviously right:
+
+      1. **Wrap**: a metadata-bearing value becomes an `OBJ_META`
+         holding {value, metadata}. Contained if unwrapping lives in
+         one accessor, invasive if it does not -- every consumer must
+         see through it.
+      2. **Un-intern symbols**: give each its own object with a meta
+         slot. Costs an allocation per symbol and makes symbol
+         comparison a text compare rather than a slot compare, on the
+         hottest path in the interpreter.
+      3. **A side table** keyed by value identity -- which does not
+         exist for interned text, so this reduces to (2).
+
+      Settle before writing any of it. The old representation dodged
+      this by giving every `cons_value` a `meta_val` component, which
+      is exactly the nine-allocatable-component design being removed.
 
       Three bugs the bootstrap found that 266 unit tests had not:
 
