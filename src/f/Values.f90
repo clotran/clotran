@@ -467,6 +467,7 @@ module values
   public :: value_equal
   public :: array_node, set_array_node
   public :: has_meta, get_meta, set_meta
+  public :: lazy_ptr, new_lazy_node
 
 contains
 
@@ -492,6 +493,33 @@ contains
     if (.not. allocated(v%array_val)) return
     node => v%array_val%ptr
   end function array_node
+
+  ! lazy_ptr, not lazy_node: the TYPE is already called lazy_node, and
+  ! Fortran is case-insensitive, so a function of that name would be
+  ! the same name. (Same trap as GCT_/gc_cons in the gotchas catalog.)
+  function lazy_ptr(v) result(node)
+    type(cons_value), intent(in) :: v
+    type(lazy_node), pointer :: node
+    node => null()
+    if (v%tag /= TAG_LAZYSEQ) return
+    if (.not. allocated(v%lazy_val)) return
+    node => v%lazy_val%ptr
+  end function lazy_ptr
+
+  ! Attaches a fresh node and hands it back for the caller to fill in.
+  ! The allocate/refcount/counter triple is exactly what 3c-2 replaces,
+  ! so it is written once here rather than at each constructor.
+  function new_lazy_node(v) result(node)
+    type(cons_value), intent(inout) :: v
+    type(lazy_node), pointer :: node
+    if (allocated(v%lazy_val)) deallocate(v%lazy_val)
+    v%tag = TAG_LAZYSEQ
+    allocate(v%lazy_val)
+    allocate(v%lazy_val%ptr)
+    node => v%lazy_val%ptr
+    node%refcount = 1
+    lazy_node_total_allocated = lazy_node_total_allocated + 1
+  end function new_lazy_node
 
   ! Metadata is one value on a shared node, so it reads as a value.
   ! has_meta is separate from "get_meta returned nil" on purpose:

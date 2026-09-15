@@ -45,9 +45,7 @@ contains
   subroutine lazy_force(v)
     type(cons_value), intent(in) :: v
     type(lazy_node), pointer :: node
-    if (v%tag /= TAG_LAZYSEQ) return
-    if (.not. allocated(v%lazy_val)) return
-    node => v%lazy_val%ptr
+    node => lazy_ptr(v)
     if (.not. associated(node)) return
     if (node%state /= LAZY_ST_PENDING) return
     if (.not. associated(lazy_forcer)) return
@@ -58,13 +56,10 @@ contains
   function lazy_new(thunk) result(v)
     type(cons_value), intent(in) :: thunk
     type(cons_value) :: v
-    v%tag = TAG_LAZYSEQ
-    allocate(v%lazy_val)
-    allocate(v%lazy_val%ptr)
-    v%lazy_val%ptr%refcount = 1
-    lazy_node_total_allocated = lazy_node_total_allocated + 1
-    v%lazy_val%ptr%state = LAZY_ST_PENDING
-    v%lazy_val%ptr%thunk = thunk
+    type(lazy_node), pointer :: node
+    node => new_lazy_node(v)
+    node%state = LAZY_ST_PENDING
+    node%thunk = thunk
   end function lazy_new
 
   ! An already-realized cons cell whose tail can be any seq, lazy
@@ -73,14 +68,11 @@ contains
   function lazy_cons(head, tail) result(v)
     type(cons_value), intent(in) :: head, tail
     type(cons_value) :: v
-    v%tag = TAG_LAZYSEQ
-    allocate(v%lazy_val)
-    allocate(v%lazy_val%ptr)
-    v%lazy_val%ptr%refcount = 1
-    lazy_node_total_allocated = lazy_node_total_allocated + 1
-    v%lazy_val%ptr%state = LAZY_ST_CONS
-    v%lazy_val%ptr%head = head
-    v%lazy_val%ptr%tail = tail
+    type(lazy_node), pointer :: node
+    node => new_lazy_node(v)
+    node%state = LAZY_ST_CONS
+    node%head = head
+    node%tail = tail
   end function lazy_cons
 
   function nil_value() result(v)
@@ -135,6 +127,7 @@ contains
     type(cons_value), intent(in) :: v
     type(cons_value) :: val
     type(cons_value) :: s
+    type(lazy_node), pointer :: nd
     select case (v%tag)
     case (TAG_LIST)
        if (allocated(v%list_val)) val = list_first(v%list_val)
@@ -149,10 +142,9 @@ contains
        end if
     case (TAG_LAZYSEQ)
        call lazy_force(v) ! O(1): realizes this cell only, never the whole seq
-       if (allocated(v%lazy_val)) then
-          if (associated(v%lazy_val%ptr)) then
-             if (v%lazy_val%ptr%state == LAZY_ST_CONS) val = v%lazy_val%ptr%head
-          end if
+       nd => lazy_ptr(v)
+       if (associated(nd)) then
+          if (nd%state == LAZY_ST_CONS) val = nd%head
        end if
     end select
   end function first
@@ -163,6 +155,7 @@ contains
     type(cons_value), intent(in) :: v
     type(cons_value) :: new_v
     type(cons_ref) :: tail
+    type(lazy_node), pointer :: nd
     select case (v%tag)
     case (TAG_LIST)
        if (allocated(v%list_val)) tail = list_rest(v%list_val)
@@ -183,13 +176,12 @@ contains
        ! -- itself very often another unrealized LazySeq, handed back
        ! as-is so nothing further is computed. O(1).
        call lazy_force(v)
-       if (allocated(v%lazy_val)) then
-          if (associated(v%lazy_val%ptr)) then
-             if (v%lazy_val%ptr%state == LAZY_ST_CONS) then
-                new_v = v%lazy_val%ptr%tail
-                if (new_v%tag == TAG_NIL) call wrap_list_value(new_v, tail)
-                return
-             end if
+       nd => lazy_ptr(v)
+       if (associated(nd)) then
+          if (nd%state == LAZY_ST_CONS) then
+             new_v = nd%tail
+             if (new_v%tag == TAG_NIL) call wrap_list_value(new_v, tail)
+             return
           end if
        end if
     end select
@@ -435,6 +427,7 @@ contains
   function seq(v) result(new_v)
     type(cons_value), intent(in) :: v
     type(cons_value) :: new_v
+    type(lazy_node), pointer :: nd
     select case (v%tag)
     case (TAG_LIST)
        if (count(v) > 0) new_v = v
@@ -457,10 +450,9 @@ contains
        ! hands back the seq itself -- nil only when it's genuinely
        ! empty, exactly clojure.lang.LazySeq.seq().
        call lazy_force(v)
-       if (allocated(v%lazy_val)) then
-          if (associated(v%lazy_val%ptr)) then
-             if (v%lazy_val%ptr%state == LAZY_ST_CONS) new_v = v
-          end if
+       nd => lazy_ptr(v)
+       if (associated(nd)) then
+          if (nd%state == LAZY_ST_CONS) new_v = v
        end if
     end select
   end function seq

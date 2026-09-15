@@ -3312,6 +3312,7 @@ contains
   ! because RT sits below Eval and can't call a closure itself.
   recursive subroutine force_lazy(node)
     type(lazy_node), pointer, intent(inout) :: node
+    type(lazy_node), pointer :: inner
     type(cons_value) :: r, s, nilv
     type(cons_value), allocatable :: no_args(:)
 
@@ -3331,12 +3332,12 @@ contains
     ! own node, so this never repeats work.
     do while (r%tag == TAG_LAZYSEQ)
        call rt_lazy_force(r)
-       if (.not. allocated(r%lazy_val)) exit
-       if (.not. associated(r%lazy_val%ptr)) exit
-       if (r%lazy_val%ptr%state == LAZY_ST_CONS) then
+       inner => lazy_ptr(r)
+       if (.not. associated(inner)) exit
+       if (inner%state == LAZY_ST_CONS) then
           node%state = LAZY_ST_CONS
-          node%head = r%lazy_val%ptr%head
-          node%tail = r%lazy_val%ptr%tail
+          node%head = inner%head
+          node%tail = inner%tail
           node%thunk = nilv
           return
        else

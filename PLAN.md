@@ -360,6 +360,16 @@ the text. A cache writer needs to exclude them.
         risk (`:arglists`, `^:dynamic`, `deftest`'s `:test`), so this
         one was also checked against the upstream suite on the
         pre-change tree: 163/16/41, identical per namespace.
+  - [x] **3c-1 `lazy_val`** (36 sites). `lazy_ptr` plus
+        `new_lazy_node`. Every read site repeated the same three-level
+        `allocated`/`associated`/`state` nest; each lost a level, and
+        both constructors went from six lines of allocate-and-refcount
+        to three.
+
+        `lazy_ptr`, not `lazy_node`: the type is already called
+        `lazy_node` and Fortran is case-insensitive, so a function of
+        that name would be the same name -- the `GCT_`/`gc_cons` trap
+        again.
 - [ ] **3d.** Evaluator on the value stack.
 - [ ] **3e.** Retire `FINAL`-based refcounting; `rc_test` becomes a GC
       test. Finalizers survive only on the few heap nodes owning
