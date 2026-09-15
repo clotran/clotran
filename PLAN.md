@@ -800,9 +800,28 @@ the text. A cache writer needs to exclude them.
       before leaving.
 
       Scope is the core, deliberately, not the ~5400 lines of Eval.f90:
-      quote/if/do/def/let*/fn*/loop*/recur, ten primitives, closures.
-      Missing and listed rather than silent: macros, try/catch,
-      destructuring, varargs, namespaces, laziness.
+      quote/if/do/def/let*/fn*/loop*/recur/defmacro*/quasiquote, twelve
+      primitives, closures, varargs. Missing and listed rather than
+      silent: try/catch, destructuring (a macro in core.clj, not
+      evaluator work), namespaces, laziness, multi-arity fns.
+
+      **Varargs** are one routine, `bind_params`, used by BOTH fn*
+      application and recur -- so a variadic function can recur without
+      the two disagreeing about arity. `&` collects the rest into a
+      list, empty rather than nil when there is nothing left, which is
+      what lets variadic core functions work without special-casing
+      zero.
+
+      **Macros and syntax-quote.** A macro gets its arguments
+      unevaluated and its result is evaluated in the caller's
+      environment; the check happens before the arguments are touched,
+      which is the entire difference from a function (check 13c: a
+      macro ignoring an unbound symbol, where a function would fail).
+      Macro-ness lives on the closure, as clotran's own `is_macro`
+      does -- real Clojure keeps it in Var metadata, and there are no
+      Vars here. `quasiquote` expands to ordinary `cons`/`concat`
+      calls, the same shape as clotran's `qq_expand`, which is why
+      those two arrived as primitives with it.
 
       **`loop*`/`recur`, and why there is no general trampoline.**
       Clojure does not promise tail-call elimination; it promises
@@ -822,6 +841,26 @@ the text. A cache writer needs to exclude them.
       Check 8e is the one that matters: **100000 iterations**, which
       without rebinding in place is a stack overflow rather than a
       wrong answer. 8f sums to 50005000 the same way.
+
+      **The torture pass then caught a real rooting bug in my own
+      `qq_expand`**, and it is the exact mistake this design is meant
+      to prevent, made anyway:
+
+          sym = gc_sym("concat", ...)   ! a Fortran LOCAL
+          inner = nth_of(...)           ! allocates -- can collect
+          call vs_set(base + 3, sym)    ! too late
+
+      The symbol was computed into a Fortran local, then something
+      that allocates ran before it reached a slot. Under torture it was
+      collected in that window and the accumulated tail went with it --
+      every quasiquote returned just its head. The plain pass was
+      perfectly green throughout. Fixed by storing each intermediate
+      into its slot BEFORE anything that can allocate runs, which is
+      the rule the module header already stated.
+
+      That is the argument for torture mode in one example: rooting by
+      construction makes the mistake *findable*, not impossible, and
+      what makes it findable is collecting at every allocation.
 
       Check 8g caught a mistake in my own expectation, and is the
       better test for it: a closure built during the iteration where

@@ -56,6 +56,7 @@ module GCEval
   integer, parameter :: B_ADD = 1, B_SUB = 2, B_MUL = 3, B_EQ = 4, B_LT = 5
   integer, parameter :: B_LIST = 6, B_VECTOR = 7, B_COUNT = 8
   integer, parameter :: B_FIRST = 9, B_REST = 10
+  integer, parameter :: B_CONS = 11, B_CONCAT = 12
 
   character(len=:), allocatable :: last_error
   logical :: has_error = .false.
@@ -112,6 +113,8 @@ contains
     call bind_builtin(env, "count", B_COUNT)
     call bind_builtin(env, "first", B_FIRST)
     call bind_builtin(env, "rest", B_REST)
+    call bind_builtin(env, "cons", B_CONS)
+    call bind_builtin(env, "concat", B_CONCAT)
     env = vs_get(base + 1)
     call vs_leave(base)
   end function gce_base_env
@@ -189,7 +192,8 @@ contains
     yes = gc_ref_is(sym%ref, "quote") .or. gc_ref_is(sym%ref, "if") .or. &
           gc_ref_is(sym%ref, "do") .or. gc_ref_is(sym%ref, "def") .or. &
           gc_ref_is(sym%ref, "let*") .or. gc_ref_is(sym%ref, "fn*") .or. &
-          gc_ref_is(sym%ref, "loop*") .or. gc_ref_is(sym%ref, "recur")
+          gc_ref_is(sym%ref, "loop*") .or. gc_ref_is(sym%ref, "recur") .or. &
+          gc_ref_is(sym%ref, "defmacro*") .or. gc_ref_is(sym%ref, "quasiquote")
   end function is_special
 
   recursive function eval_special(form, env) result(out)
@@ -255,6 +259,32 @@ contains
 
     else if (gc_ref_is(head%ref, "recur")) then
        out = eval_recur(vs_get(base + 3), vs_get(base + 2))
+
+    else if (gc_ref_is(head%ref, "quasiquote")) then
+       ! Expand to ordinary cons/concat calls, then evaluate those.
+       ! Syntax-quote is a source transformation, not a runtime thing,
+       ! which is why it becomes a form rather than a value here.
+       a = qq_expand(gcl_first(vs_get(base + 3)), vs_get(base + 2))
+       if (.not. has_error) out = gce_eval(a, vs_get(base + 2), [vs_get(base + 1)])
+
+    else if (gc_ref_is(head%ref, "defmacro*")) then
+       a = gcl_first(vs_get(base + 3))
+       call vs_set(base + 4, a)
+       rest = gcl_rest(vs_get(base + 3), [vs_get(base + 1)])
+       call vs_set(base + 3, rest)
+       b = gce_eval(gcl_first(vs_get(base + 3)), vs_get(base + 2), [vs_get(base + 1)])
+       if (.not. has_error) then
+          if (gc_kind(b) /= OBJ_CLOSURE) then
+             call fail("defmacro* needs a function")
+          else
+             ! Macro-ness lives on the closure, exactly as clotran's
+             ! own is_macro does: real Clojure keeps it in Var
+             ! metadata, but there are no Vars in this evaluator.
+             call gc_set_i1(b, 1)
+             call gce_set(vs_get(base + 2), vs_get(base + 4), b, [vs_get(base + 1)])
+             out = b
+          end if
+       end if
     end if
 
     call vs_leave(base)
@@ -395,6 +425,79 @@ contains
     call vs_leave(base)
   end function eval_recur
 
+  ! Binds a parameter vector to arguments in a fresh frame, handling
+  ! `&`: (fn* [a & more] ...) binds `more` to a LIST of whatever is
+  ! left, empty rather than nil when nothing is -- which is what lets
+  ! (apply f args) and variadic core functions work at all.
+  !
+  ! One routine for both fn* application and recur, so a variadic
+  ! function can recur without the two disagreeing about arity.
+  function bind_params(params, args, outer) result(child)
+    type(gc_value), intent(in) :: params, args, outer
+    type(gc_value) :: child, rest, name
+    integer :: base, i, n, amp
+
+    base = vs_enter(5)
+    call vs_set(base + 1, params)
+    call vs_set(base + 2, args)
+    call vs_set(base + 3, outer)
+
+    n = gcv_count(params)
+    amp = -1
+    do i = 0, n - 1
+       name = gcv_nth(params, i)
+       if (name%tag == GCT_SYM) then
+          if (gc_ref_is(name%ref, "&")) then
+             amp = i
+             exit
+          end if
+       end if
+    end do
+
+    if (amp < 0) then
+       if (n /= gcv_count(args)) then
+          call fail("wrong number of arguments")
+          child = gc_nil()
+          call vs_leave(base); return
+       end if
+    else if (gcv_count(args) < amp) then
+       call fail("too few arguments")
+       child = gc_nil()
+       call vs_leave(base); return
+    else if (amp + 2 /= n) then
+       call fail("& must be followed by exactly one name")
+       child = gc_nil()
+       call vs_leave(base); return
+    end if
+
+    child = gce_new(vs_get(base + 3), [vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 4, child)
+
+    if (amp < 0) then
+       do i = 0, n - 1
+          call gce_set(vs_get(base + 4), gcv_nth(vs_get(base + 1), i), &
+               gcv_nth(vs_get(base + 2), i), [vs_get(base + 1), vs_get(base + 2)])
+       end do
+    else
+       do i = 0, amp - 1
+          call gce_set(vs_get(base + 4), gcv_nth(vs_get(base + 1), i), &
+               gcv_nth(vs_get(base + 2), i), [vs_get(base + 1), vs_get(base + 2)])
+       end do
+       rest = gcl_empty([vs_get(base + 1), vs_get(base + 2), vs_get(base + 4)])
+       call vs_set(base + 5, rest)
+       do i = gcv_count(vs_get(base + 2)) - 1, amp, -1
+          rest = gcl_cons(gcv_nth(vs_get(base + 2), i), vs_get(base + 5), &
+               [vs_get(base + 1), vs_get(base + 2), vs_get(base + 4)])
+          call vs_set(base + 5, rest)
+       end do
+       call gce_set(vs_get(base + 4), gcv_nth(vs_get(base + 1), amp + 1), &
+            vs_get(base + 5), [vs_get(base + 1), vs_get(base + 2)])
+    end if
+
+    child = vs_get(base + 4)
+    call vs_leave(base)
+  end function bind_params
+
   ! A fresh frame binding names(i) to vals(i), for a recur.
   function rebind(names, vals, outer) result(child)
     type(gc_value), intent(in) :: names, vals, outer
@@ -499,6 +602,17 @@ contains
     end if
     call vs_set(base + 3, fn)
 
+    ! A macro receives its arguments UNEVALUATED and its result is
+    ! evaluated in the caller's environment. That is the whole
+    ! difference between a macro and a function, and it is why the
+    ! check has to happen here, before the arguments are touched.
+    if (gc_kind(fn) == OBJ_CLOSURE .and. gc_i1(fn) == 1) then
+       out = expand_macro(vs_get(base + 3), vs_get(base + 1))
+       if (.not. has_error) out = gce_eval(out, vs_get(base + 2), [vs_get(base + 1)])
+       call vs_leave(base)
+       return
+    end if
+
     args = gcv_empty([vs_get(base + 1), vs_get(base + 3)])
     call vs_set(base + 4, args)
     rest = gcl_rest(vs_get(base + 1), [vs_get(base + 1)])
@@ -520,6 +634,120 @@ contains
     call vs_leave(base)
   end function eval_call
 
+  ! Applies a macro to the unevaluated argument forms.
+  recursive function expand_macro(fn, form) result(out)
+    type(gc_value), intent(in) :: fn, form
+    type(gc_value) :: out, args, walk
+    integer :: base
+
+    base = vs_enter(4)
+    call vs_set(base + 1, fn)
+    call vs_set(base + 2, form)
+    args = gcv_empty([vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 3, args)
+    walk = gcl_rest(vs_get(base + 2), [vs_get(base + 2)])
+    call vs_set(base + 4, walk)
+    do while (gcl_count(vs_get(base + 4)) > 0)
+       args = gcv_conj(vs_get(base + 3), gcl_first(vs_get(base + 4)), &
+            [vs_get(base + 1), vs_get(base + 2), vs_get(base + 4)])
+       call vs_set(base + 3, args)
+       walk = gcl_rest(vs_get(base + 4), [vs_get(base + 2)])
+       call vs_set(base + 4, walk)
+    end do
+    out = apply(vs_get(base + 1), vs_get(base + 3))
+    call vs_leave(base)
+  end function expand_macro
+
+  ! Syntax-quote, expanded into cons/concat calls exactly as mal and
+  ! clotran's own qq_expand do:
+  !
+  !   (unquote x)              -> x
+  !   ((splice-unquote x) ...) -> (concat x <rest>)
+  !   (a ...)                  -> (cons <qq a> <rest>)
+  !   a symbol                 -> (quote a)
+  !   anything else            -> itself
+  !
+  ! Built right to left so the result comes out in order.
+  recursive function qq_expand(form, env) result(out)
+    type(gc_value), intent(in) :: form, env
+    type(gc_value) :: out, head, elt, inner, sym
+    integer :: base, i, n
+    logical :: spliced
+
+    ! Six slots, and every intermediate goes into one BEFORE anything
+    ! that can allocate runs. The first version computed `sym` into a
+    ! Fortran local and then called nth_of/qq_expand, both of which
+    ! allocate -- so under torture the symbol was collected before it
+    ! was ever stored, and the accumulated tail went with it. Only the
+    ! torture pass showed it; the plain pass was perfectly green.
+    base = vs_enter(6)
+    call vs_set(base + 1, form)
+    call vs_set(base + 2, env)
+
+    if (.not. gcl_is(form)) then
+       if (form%tag == GCT_SYM) then
+          sym = gc_sym("quote", [vs_get(base + 1)])
+          call vs_set(base + 3, sym)
+          out = gcl_empty([vs_get(base + 1), vs_get(base + 3)])
+          out = gcl_cons(vs_get(base + 1), out, [vs_get(base + 3), out])
+          out = gcl_cons(vs_get(base + 3), out, [vs_get(base + 1), out])
+       else
+          out = form
+       end if
+       call vs_leave(base)
+       return
+    end if
+
+    ! (unquote x) -> x
+    if (gcl_count(form) == 2) then
+       head = gcl_first(form)
+       if (head%tag == GCT_SYM) then
+          if (gc_ref_is(head%ref, "unquote")) then
+             out = nth_of(vs_get(base + 1), 1)
+             call vs_leave(base)
+             return
+          end if
+       end if
+    end if
+
+    n = gcl_count(vs_get(base + 1))
+    out = gcl_empty([vs_get(base + 1)])
+    call vs_set(base + 4, out)
+    do i = n - 1, 0, -1
+       elt = nth_of(vs_get(base + 1), i)
+       call vs_set(base + 5, elt)
+       spliced = .false.
+       if (gcl_is(elt)) then
+          if (gcl_count(elt) == 2) then
+             head = gcl_first(elt)
+             if (head%tag == GCT_SYM) spliced = gc_ref_is(head%ref, "splice-unquote")
+          end if
+       end if
+       if (spliced) then
+          sym = gc_sym("concat", [vs_get(base + 1), vs_get(base + 4), vs_get(base + 5)])
+          call vs_set(base + 3, sym)
+          inner = nth_of(vs_get(base + 5), 1)
+       else
+          sym = gc_sym("cons", [vs_get(base + 1), vs_get(base + 4), vs_get(base + 5)])
+          call vs_set(base + 3, sym)
+          inner = qq_expand(vs_get(base + 5), vs_get(base + 2))
+          if (has_error) then
+             call vs_leave(base); return
+          end if
+       end if
+       call vs_set(base + 6, inner)
+       ! (sym inner <acc>), built back to front.
+       out = gcl_empty([vs_get(base + 3), vs_get(base + 4), vs_get(base + 6)])
+       out = gcl_cons(vs_get(base + 4), out, &
+            [vs_get(base + 3), vs_get(base + 6), out])
+       out = gcl_cons(vs_get(base + 6), out, [vs_get(base + 3), out])
+       out = gcl_cons(vs_get(base + 3), out, [out])
+       call vs_set(base + 4, out)
+    end do
+    out = vs_get(base + 4)
+    call vs_leave(base)
+  end function qq_expand
+
   recursive function apply(fn, args) result(out)
     type(gc_value), intent(in) :: fn, args
     type(gc_value) :: out, child, body, params
@@ -535,17 +763,11 @@ contains
        out = call_builtin(gc_i1(fn), args)
     case (OBJ_CLOSURE)
        params = gc_slot(fn, 1)
-       n = gcv_count(params)
-       if (n /= gcv_count(args)) then
-          call fail("wrong number of arguments")
+       child = bind_params(params, args, gc_slot(fn, 3))
+       if (has_error) then
           call vs_leave(base); return
        end if
-       child = gce_new(gc_slot(fn, 3), [vs_get(base + 1), vs_get(base + 2)])
        call vs_set(base + 3, child)
-       do i = 0, n - 1
-          call gce_set(vs_get(base + 3), gcv_nth(params, i), gcv_nth(args, i), &
-               [vs_get(base + 1), vs_get(base + 2)])
-       end do
        body = gc_slot(vs_get(base + 1), 2)
        call vs_set(base + 4, body)
        ! A fn* body is a recur point, exactly like loop*: recur rebinds
@@ -556,7 +778,7 @@ contains
           out = eval_body(vs_get(base + 4), vs_get(base + 3))
           if (has_error) exit
           if (gc_kind(out) /= OBJ_RECUR) exit
-          child = rebind(params, gc_slot(out, 1), gc_slot(vs_get(base + 1), 3))
+          child = bind_params(params, gc_slot(out, 1), gc_slot(vs_get(base + 1), 3))
           if (has_error) exit
           call vs_set(base + 3, child)
        end do
@@ -646,10 +868,77 @@ contains
     case (B_REST)
        a = gcv_nth(args, 0)
        if (gcl_is(a)) out = gcl_rest(a, [vs_get(base + 1)])
+    case (B_CONS)
+       out = gcl_cons(gcv_nth(args, 0), as_list(gcv_nth(args, 1), &
+            [vs_get(base + 1)]), [vs_get(base + 1)])
+    case (B_CONCAT)
+       ! Right to left, so the result comes out in order without a
+       ! reverse. Every argument is seq'd to a list first, which is
+       ! what lets (concat [1 2] (list 3)) work.
+       out = gcl_empty([vs_get(base + 1)])
+       do i = n - 1, 0, -1
+          block
+            type(gc_value) :: piece
+            integer :: j
+            piece = as_list(gcv_nth(vs_get(base + 1), i), [vs_get(base + 1), out])
+            do j = gcl_count(piece) - 1, 0, -1
+               out = gcl_cons(nth_of(piece, j), out, [vs_get(base + 1), piece])
+            end do
+          end block
+       end do
     end select
 
     call vs_leave(base)
   end function call_builtin
+
+  ! A list view of a value: lists pass through, vectors are copied
+  ! into one, nil is the empty list. Enough for cons/concat and for
+  ! quasiquote's splicing; a real seq abstraction is a later feature.
+  function as_list(v, roots) result(out)
+    type(gc_value), intent(in) :: v
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out
+    integer :: base, i
+
+    base = vs_enter(2)
+    call vs_set(base + 1, v)
+    if (gcl_is(v)) then
+       out = v
+       call vs_leave(base)
+       return
+    end if
+    out = gcl_empty(roots)
+    call vs_set(base + 2, out)
+    if (gcv_is(v)) then
+       do i = gcv_count(vs_get(base + 1)) - 1, 0, -1
+          out = gcl_cons(gcv_nth(vs_get(base + 1), i), vs_get(base + 2), &
+               [vs_get(base + 1)])
+          call vs_set(base + 2, out)
+       end do
+    end if
+    out = vs_get(base + 2)
+    call vs_leave(base)
+  end function as_list
+
+  ! The nth element of a list, by walking. Only used where the list is
+  ! already in hand and short.
+  function nth_of(l, i) result(out)
+    type(gc_value), intent(in) :: l
+    integer, intent(in) :: i
+    type(gc_value) :: out, walk
+    integer :: base, k
+
+    base = vs_enter(2)
+    call vs_set(base + 1, l)
+    walk = l
+    call vs_set(base + 2, walk)
+    do k = 1, i
+       walk = gcl_rest(vs_get(base + 2), [vs_get(base + 1)])
+       call vs_set(base + 2, walk)
+    end do
+    out = gcl_first(vs_get(base + 2))
+    call vs_leave(base)
+  end function nth_of
 
   ! Clojure's truthiness: everything except nil and false.
   function truthy(v) result(yes)

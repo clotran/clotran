@@ -50,6 +50,9 @@ contains
     call check_fn()
     call check_collections()
     call check_loop_recur()
+    call check_varargs()
+    call check_quasiquote()
+    call check_macros()
     call check_errors()
     call check_heap_sound()
   end subroutine run_all
@@ -212,6 +215,52 @@ contains
     call ev("8g. ", &
          "(loop* [i 0 f nil] (if (< i 2) (recur (+ i 1) (fn* [] i)) (f)))", "1")
   end subroutine check_loop_recur
+
+  ! & collects the remaining arguments into a LIST -- empty rather
+  ! than nil when there are none, which is what lets variadic core
+  ! functions work without special-casing the zero case.
+  subroutine check_varargs()
+    call ev("11a. ", "((fn* [& xs] xs) 1 2 3)", "(1 2 3)")
+    call ev("11b. ", "((fn* [a & xs] xs) 1 2 3)", "(2 3)")
+    call ev("11c. ", "((fn* [a & xs] a) 1 2 3)", "1")
+    call ev("11d. ", "((fn* [a & xs] xs) 1)", "()")
+    call ev("11e. ", "((fn* [& xs] (count xs)))", "0")
+    call ev("11f. ", "(do (def f (fn* [a & r] (cons a r))) (f 1 2 3))", "(1 2 3)")
+  end subroutine check_varargs
+
+  subroutine check_quasiquote()
+    call ev("12a. ", "(quasiquote 1)", "1")
+    ! A bare symbol is quoted, not evaluated.
+    call ev("12b. ", "(do (def x 9) (quasiquote x))", "x")
+    ! ~x evaluates; the reader turns it into (unquote x).
+    call ev("12c. ", "(do (def x 9) `~x)", "9")
+    call ev("12d. ", "(do (def x 9) `(a ~x))", "(a 9)")
+    call ev("12e. ", "`(1 2 3)", "(1 2 3)")
+    ! ~@ splices a list in rather than nesting it.
+    call ev("12f. ", "(do (def xs (list 2 3)) `(1 ~@xs 4))", "(1 2 3 4)")
+    call ev("12g. ", "(do (def xs (list 2 3)) `(1 ~xs))", "(1 (2 3))")
+    call ev("12h. ", "`(a (b ~(+ 1 2)))", "(a (b 3))")
+  end subroutine check_quasiquote
+
+  ! A macro gets its arguments UNEVALUATED and its result is evaluated
+  ! in the caller's environment. 13c is the test that tells a macro
+  ! from a function: a function would evaluate the unbound symbol.
+  subroutine check_macros()
+    call ev("13a. ", &
+         "(do (defmacro* m (fn* [a] a)) (m 1))", "1")
+    call ev("13b. ", &
+         "(do (defmacro* unless (fn* [c t] `(if ~c nil ~t))) (unless false :yes))", &
+         ":yes")
+    call ev("13c. ", &
+         "(do (defmacro* ig (fn* [a] 7)) (ig undefined-symbol))", "7")
+    ! A macro building a form from its unevaluated argument.
+    call ev("13d. ", &
+         "(do (defmacro* twice (fn* [f] `(+ ~f ~f))) (twice 5))", "10")
+    ! Variadic macro, which needs & and ~@ working together.
+    call ev("13e. ", &
+         "(do (defmacro* my-list (fn* [& xs] `(list ~@xs))) (my-list 1 2 3))", &
+         "(1 2 3)")
+  end subroutine check_macros
 
   subroutine check_errors()
     type(gc_value) :: form, env, result
