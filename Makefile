@@ -293,11 +293,20 @@ clotran: scripts/clotran clotran-gc
 	cp scripts/clotran $@
 	chmod +x $@
 
-# clotran-bin is a prerequisite but NOT run here: scripts/run-clojure-tests
-# drives it. It is listed because `make clean && make test` used to leave
-# no binary at all, and that script then reported every namespace as
-# CRASHED -- a missing binary looking exactly like a real regression.
-test: $(unit-tests) clotran-bin
+# Both interpreters are prerequisites but NOT run here:
+# scripts/run-clojure-tests drives them. They are listed because
+# `make clean && make test` used to leave no binary at all, and that
+# script then reported every namespace as CRASHED -- a missing binary
+# looking exactly like a real regression.
+#
+# clotran-gc was missing from this list, which cost twice over. The
+# visible cost is that `make crosscheck` ends by deleting the binary
+# you actually use, so the first thing after a green gate is a rebuild.
+# The real one is that nothing here ever compiled `gc_main.f90` or
+# LINKED clotran-gc under flang: gc_eval_test covers the modules, but
+# the program's own main and its link line were outside the gate
+# entirely, which is the one thing crosscheck exists to prevent.
+test: $(unit-tests) clotran-bin clotran-gc
 	for t in $(unit-tests); do echo "--- $$t ---"; ./$$t || exit 1; done
 
 # What runs before every commit. Ends on the default compiler so the

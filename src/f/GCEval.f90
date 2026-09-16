@@ -4469,7 +4469,7 @@ contains
          character(len=:), allocatable :: acc2
          acc2 = ""
          do i = 0, n - 1
-            acc2 = acc2 // gcp_str(gcv_nth(vs_get(base + 1), i), .false.)
+            acc2 = acc2 // to_string_text(gcv_nth(vs_get(base + 1), i))
          end do
          out = gc_str(acc2, [vs_get(base + 1)])
        end block
@@ -5825,12 +5825,7 @@ contains
           write(gc_i1(a), '(A)', advance='no') text_of(gcv_nth(args, 1))
        end if
     case (B_TOSTRING)
-       a = gcv_nth(args, 0)
-       if (gc_kind(a) == OBJ_SB .or. gc_kind(a) == OBJ_REGEX) then
-          out = gc_slot(a, 1)
-       else
-          out = gc_str(gcp_str(a, .false.), [vs_get(base + 1)])
-       end if
+       out = gc_str(to_string_text(gcv_nth(args, 0)), [vs_get(base + 1)])
     case (B_GETPROP)
        ! The host describing itself. Only the properties core.clj
        ! actually reads; anything else is nil, which is what
@@ -6390,6 +6385,37 @@ contains
   ! nothing is an instance of one. The interfaces are the interesting
   ! entries -- Sequential and Named cover several tags each, which is
   ! exactly what an interface is.
+  ! What `.toString` answers, which is what `str` is: core.clj's str is
+  ! (. x (toString)), so this is the one path both the builtin str and
+  ! the host member take.
+  !
+  ! For almost everything that IS the print form -- clotran renders a
+  ! host object as #<atom 1>, #<multifn f>, and .toString hands back
+  ! the same text. Three kinds separate the two, each because the host
+  ! object has real text of its own: a StringBuilder and a Pattern hold
+  ! theirs in slot 1, and a NAMESPACE'S toString is its NAME.
+  !
+  ! That last one is not cosmetic. namespace-munge is literally
+  ! (.replace (str ns) \- \_), so (str *ns*) is what deftype builds its
+  ! class name out of -- printing the wrapper made it
+  ! "#<ns clojure.core>.Point". Clojure separates the two the same way:
+  ! Namespace.toString is "user", while print-method shows
+  ! #object[clojure.lang.Namespace ...]. Doing it in the PRINTER on
+  ! *print-readably* instead got (str *ns*) right and (str [*ns*])
+  ! wrong, because a collection's toString prints its elements.
+  function to_string_text(v) result(s)
+    type(gc_value), intent(in) :: v
+    character(len=:), allocatable :: s
+    type(gc_value) :: inner
+    if (gc_kind(v) == OBJ_SB .or. gc_kind(v) == OBJ_REGEX .or. &
+         gc_kind(v) == OBJ_NS) then
+       inner = gc_slot(v, 1)
+       s = gcp_str(inner, .false.)
+    else
+       s = gcp_str(v, .false.)
+    end if
+  end function to_string_text
+
   ! The class name of a type object, or of an instance's type.
   ! A function result cannot be the left of a %, so the slot walk
   ! lands in a local first.

@@ -49,7 +49,7 @@ several of the 67 -- `proxy`, `genclass`, annotations, AOT -- can never
 pass here. 17 of 67 namespaces produce a passing assertion today.
 
 Four oracles keep it honest: gfortran and flang must agree
-(`make crosscheck`, 1004 assertions each), `clj` -- real JVM Clojure --
+(`make crosscheck`, 1006 assertions each), `clj` -- real JVM Clojure --
 answers what Clojure actually does rather than what anyone remembers,
 and pinned clones of Clojure and ClojureScript are cited rather than
 recalled. See `CLAUDE.md`.

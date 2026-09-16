@@ -286,16 +286,17 @@ contains
     case (OBJ_VAR)
        s = "#'" // gcp_str(gc_slot(v, 4), .false.)
     case (OBJ_NS)
-       ! Namespace.toString is its NAME -- (str *ns*) is "clojure.core"
-       ! -- and only pr's #object[...] form names the class. Printing
-       ! the wrapper for both made namespace-munge, which is
-       ! (.replace (str ns) \- \_), hand deftype the class name
-       ! "#<ns clojure.core>.Point".
-       if (readable) then
-          s = "#<ns " // gcp_str(gc_slot(v, 1), .false.) // ">"
-       else
-          s = gcp_str(gc_slot(v, 1), .false.)
-       end if
+       ! The PRINT form, for pr, print, prn and any namespace nested in
+       ! a collection -- Clojure shows #object[clojure.lang.Namespace
+       ! 0x.. user] for all of those, including under `str`, because a
+       ! collection's toString goes through the print path.
+       !
+       ! `str` on a namespace DIRECTLY is the exception, and it is not
+       ! this function's business: core.clj's str is (. x (toString)),
+       ! so it is handled in B_TOSTRING. Doing it here on *print-readably*
+       ! instead made (str *ns*) right and (pr-str *ns*), (print-str *ns*)
+       ! and (str [*ns*]) all wrong.
+       s = "#<ns " // gcp_str(gc_slot(v, 1), .false.) // ">"
     case (OBJ_ENV)
        s = "#<env>"
     case default

@@ -3694,10 +3694,10 @@ the loop cheap before starting on the expensive steps.
       right, but the evidence for it is the bisect above (`931c93a`,
       which predates every accessor commit, is bad), not that stash.
 
-## `deftype*`: three bugs behind one special form
+## `deftype*`: four bugs behind one special form
 
-The special form itself was the easy half. Of the four things that had
-to change to make `(deftype Point [x y] ...)` work, three were bugs that
+The special form itself was the easy half. Of the five things that had
+to change to make `(deftype Point [x y] ...)` work, four were bugs that
 had been in the tree the whole time, invisible because nothing had ever
 asked the question.
 
@@ -3756,6 +3756,37 @@ grow path preserves slot INDICES rather than addresses, because that is
 what modules hold across calls -- a copy landing at a different offset
 would silently swap two modules roots, which `gc_test` 18c checks by
 claiming 200 and reading every one of them back after a collection.
+
+**`(str *ns*)` printed the wrapper.** `namespace-munge` is literally
+`(.replace (str ns) \- \_)`, so what `deftype` built its class name
+out of was `#<ns clojure.core>.Point`. `Namespace.toString` is the
+NAME -- `clj` confirms `(str *ns*)` is `"user"`.
+
+The first fix keyed the PRINTER on `*print-readably*`: bare name for
+print, `#<ns ...>` for pr. That got the one case that was asked about
+right and three others wrong, because that is not the axis Clojure
+splits on. Measured against `clj`:
+
+    (str *ns*)        "user"                       <- toString
+    (print-str *ns*)  "#object[...Namespace... user]"  <- still the object form
+    (str [*ns*])      "[#object[...Namespace...]]"     <- and nested too
+
+So `print` is NOT the bare name, and a namespace inside a collection
+is not either -- a collection's `toString` prints its elements rather
+than calling `toString` on each. The split is `toString` against
+everything else, not readable against not.
+
+It belongs in `.toString`, which is where `str` actually goes:
+core.clj's `str` is `(. x (toString))`. `to_string_text` is that one
+place, shared by the host member and the base-env `str` builtin so
+the two cannot drift, and it already had the same shape for a
+StringBuilder and a Pattern -- host objects whose text is their own
+rather than their print form. A namespace is the third.
+
+What is still wrong is `pr` of a bare namespace, and DEVIATIONS 21
+says why it cannot be reached from here: Clojure gets `#object[...]`
+from `print-method Object`, which needs `String/format` and an
+identity hash clotran has no stable answer for.
 
 **A macro's expansion is a lazy seq, not a list.** `eval_dot` decided
 "is this `(. x (m a))` or `(. x m)`" with `gcl_is`, which is true only

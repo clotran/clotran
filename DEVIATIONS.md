@@ -472,3 +472,39 @@ vendored tree uses a mutable field, so this blocks nothing today.
 It goes away when a field is a writable slot rather than a let binding
 -- the representation already allows it, since an instance holds its
 fields in a run `gc_set_slot` can write.
+
+## 21. `pr` of a namespace shows its name, not an `#object[...]` form
+
+Clojure separates two things about a Namespace, and clotran can only
+reproduce one of them:
+
+| | Clojure | clotran |
+|---|---|---|
+| `(str *ns*)` | `"user"` | `"user"` |
+| `(str [*ns*])` | `"[#object[clojure.lang.Namespace 0x.. \"user\"]]"` | `"[#<ns user>]"` |
+| `(pr-str *ns*)` | `"#object[clojure.lang.Namespace 0x.. \"user\"]"` | `"user"` |
+
+`Namespace.toString` is the NAME -- that is the row that matters, since
+`namespace-munge` is `(.replace (str ns) \- \_)` and `deftype` builds
+its class name out of it. clotran answers that correctly, and answers
+the nested case correctly too, because a collection's `toString` prints
+its elements rather than calling `toString` on each.
+
+`pr` is the row it cannot reach. `core_print.clj` registers only
+`print-dup` for `Namespace`, never `print-method`, so Clojure falls
+through to `print-method Object` -> `print-object` ->
+`print-tagged-object`, which writes `#object[` plus
+`(format "0x%x " (System/identityHashCode o))`. clotran has neither
+piece: `String/format` is not implemented, and there is no identity hash
+to print for the reason in deviation 18 -- the heap is index-based, so a
+slot index is not a stable identity. Dispatch therefore lands on
+`print-method :default` -> `print-simple`, which is `(.write w (str o))`,
+and `str` is the name.
+
+Nothing in the vendored tree prints a namespace this way; the cost is
+that `(pr-str *ns*)` does not round-trip through `read`, which the
+`#object[...]` form does not either.
+
+It goes away with `String/format` and an identity for host objects --
+the same two pieces deviation 18 needs, and worth doing once for both
+rather than twice.

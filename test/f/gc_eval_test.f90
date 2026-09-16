@@ -417,6 +417,12 @@ contains
     ! deftype the class name "#<ns other>.Point".
     call ev("17j. ", &
          "(str (in-ns (quote other)))", """other""")
+    ! ...but NESTED it keeps the print form, because a
+    ! collection's toString prints its elements rather than
+    ! calling toString on each. Clojure shows
+    ! "[#object[clojure.lang.Namespace ...]]" here, not "[user]".
+    call ev("17k. ", &
+         "(str [(in-ns (quote other))])", """[#<ns other>]""")
   end subroutine check_namespaces
 
   ! `=` is STRUCTURAL in Clojure: two vectors of equal elements are

@@ -19,7 +19,7 @@ it; retiring it is step 3.
 | --- | --- | --- |
 | core.clj | **707 of 724 forms**, wall at data readers | 9 failing forms |
 | startup | **6.5s** | 5.4s |
-| our tests | 1004/1004, both compilers | green, both compilers |
+| our tests | 1006/1006, both compilers | green, both compilers |
 | Clojure's own suite | **655 pass / 199 fail / 231 error** over 190 tests | not run against it |
 | Clojure's libraries | **14 of 21 load** | not measured |
 | source | 11,200 lines | 10,929 lines |
