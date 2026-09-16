@@ -1,0 +1,53 @@
+#!/usr/bin/env bb
+;; Splits a Clojure file into one file per top-level form, so the whole
+;; remaining list of failures can be seen at once instead of only the
+;; first one.
+;;
+;; load_file aborts on its first error, as Compiler.load does -- which
+;; is right, because a half-evaluated form leaves the namespace broken.
+;; But it means `clotran-gc core.clj` answers exactly one question: what
+;; stops it NOW. Everything behind that form is invisible, including
+;; whether it is one wall or fifty.
+;;
+;; The argument list does not abort, so:
+;;
+;;   scripts/split-forms src/clj/clojure/core.clj /tmp/forms 655
+;;   ./clotran-gc src/clj/clojure/core.clj /tmp/forms/*.clj
+;;
+;; evaluates each remaining form on its own and reports every failure in
+;; one pass. That is how "the wall is form 656" became "5 forms fail,
+;; and 63 behind them already work".
+;;
+;; Forms are copied VERBATIM by line span rather than printed back from
+;; the reader, so #"..." patterns, metadata and comments survive intact.
+
+(require '[clojure.string :as str])
+
+(let [[src outdir from] *command-line-args*]
+  (when-not src
+    (println "usage: split-forms <file.clj> [outdir] [start-form]")
+    (System/exit 1))
+  (let [outdir (or outdir "/tmp/forms")
+        from (if from (parse-long from) 0)
+        lines (vec (str/split-lines (slurp src)))
+        rdr (clojure.lang.LineNumberingPushbackReader.
+             (java.io.StringReader. (str/join "\n" lines)))
+        spans (binding [*read-eval* false]
+                (loop [acc [] start 0]
+                  (let [f (try (read {:eof ::eof :read-cond :allow} rdr)
+                               (catch Exception _ ::eof))]
+                    (if (= f ::eof)
+                      acc
+                      (recur (conj acc [start (.getLineNumber rdr) (first f) (second f)])
+                             (.getLineNumber rdr))))))]
+    (.mkdirs (java.io.File. outdir))
+    ;; Stale files from an earlier run would be evaluated again and
+    ;; reported as live failures, so clear them.
+    (run! #(.delete %) (.listFiles (java.io.File. outdir)))
+    (doseq [[i [s e h n]] (map-indexed vector (drop from spans))]
+      (spit (format "%s/%04d-%s-%s.clj" outdir (+ from i 1)
+                    (str/replace (str h) #"[^A-Za-z0-9*?!<>=+-]" "_")
+                    (apply str (take 30 (str/replace (str n) #"[^A-Za-z0-9*?!<>=+-]" "_"))))
+            (str/join "\n" (subvec lines s e))))
+    (println (format "%d forms in %s; wrote %d from form %d into %s"
+                     (count spans) src (- (count spans) from) (inc from) outdir))))
