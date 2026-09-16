@@ -110,7 +110,7 @@ module GCEval
   integer, parameter :: B_PROPLOAD = 141, B_PROPGET = 142, B_CLOSE = 143
   integer, parameter :: B_INTVALUE = 144, B_STRCONTAINS = 145
   integer, parameter :: B_WRITE = 146, B_FLUSH = 147, B_CHARAT = 148
-  integer, parameter :: B_NSADDALIAS = 149
+  integer, parameter :: B_NSADDALIAS = 149, B_SWAPVAL = 150
   integer, parameter :: B_SYMBOL2 = B_SYMBOL
   integer, parameter :: B_LONGCAST = 66, B_DBLCAST = 67, B_BOOLCAST = 68, B_CHARCAST = 69
   integer, parameter :: B_BITAND = 70, B_BITOR = 71, B_BITXOR = 72, B_BITNOT = 73
@@ -1601,7 +1601,9 @@ contains
     case ("resetMeta", "setMeta")
        out = native(B_RESETMETA, "clotran-reset-meta", [roots])
     case ("set", "reset"); out = native(B_SETVAL, "clotran-set-val", [roots])
-    case ("alter", "commute", "swap", "alterRoot")
+    case ("swap")
+       out = native(B_SWAPVAL, "clotran-swap-val", [roots])
+    case ("alter", "commute", "alterRoot")
        ! alterRoot is alter on a Var's root, which is slot 1 -- the same
        ! slot a Ref and an atom keep their value in.
        out = native(B_ALTERVAL, "clotran-alter-val", [roots])
@@ -2084,6 +2086,8 @@ contains
          gc_ref_is(sym%ref, "clojure.lang.LongRange") .or. &
          gc_ref_is(sym%ref, "Integer") .or. gc_ref_is(sym%ref, "java.lang.Integer") .or. &
          gc_ref_is(sym%ref, "Long") .or. gc_ref_is(sym%ref, "java.lang.Long") .or. &
+         gc_ref_is(sym%ref, "Thread") .or. gc_ref_is(sym%ref, "java.lang.Thread") .or. &
+         gc_ref_is(sym%ref, "Math") .or. gc_ref_is(sym%ref, "java.lang.Math") .or. &
          gc_ref_is(sym%ref, "System") .or. gc_ref_is(sym%ref, "java.lang.System")
   end function is_host_class
 
@@ -2316,6 +2320,17 @@ contains
        case ("keys");   out = native(B_KEYS, "keys", [roots]);   return
        case ("vals");   out = native(B_VALS, "vals", [roots]);   return
        end select
+    end if
+    ! Thread.currentThread is asked for ONE thing here: a stack trace
+    ! to put a file and line on a test failure. clojure.test's do-report
+    ! calls it on every :fail, so without it a failing assertion threw
+    ! while being reported and came out as an ERROR instead -- which is
+    ! why the whole suite read fail=0. There is one thread and there are
+    ! no traces, so it answers itself and .getStackTrace answers empty.
+    if (cls == "Thread" .or. cls == "java.lang.Thread") then
+       if (mname == "currentThread") then
+          out = native(B_BASELOADER, "clotran-current-thread", [roots]); return
+       end if
     end if
     if (cls == "Integer" .or. cls == "java.lang.Integer") then
        select case (mname)
@@ -3512,6 +3527,69 @@ contains
   ! (clojure.lang.Iterate/create __f (__f __x)) -- so the next cell
   ! is built by the evaluator, the same way a lazy-seq body is,
   ! rather than by anything special-cased in the collector.
+  ! (range start end step) as a LAZY cell: realised head, unrealised
+  ! tail, exactly the shape iterate_cell builds.
+  !
+  ! It used to realise the whole range into a vector, which is fine
+  ! right up until someone writes (take 100 (range 100000000)) -- which
+  ! clojure.test-clojure.for does, copied straight out of for's own
+  ! docstring, and which hung the entire test suite. Laziness here is
+  ! not an optimisation, it is the difference between terminating and
+  ! not, and everything downstream (take, map, drop) was only eager
+  ! because range handed it a realised vector to be eager about.
+  !
+  ! A zero step is deliberately not special-cased: neither guard fires,
+  ! so it yields its start forever, which is what Clojure does.
+  recursive function range_cell(lo, hi, stp, roots) result(out)
+    integer, intent(in) :: lo, hi, stp
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, frame, body, callf, thunk, tail
+    integer :: base
+
+    out = gcl_empty(roots)
+    if (stp > 0 .and. lo >= hi) return
+    if (stp < 0 .and. lo <= hi) return
+
+    base = vs_enter(3)
+    frame = gce_new(gc_nil(), roots)
+    call vs_set(base + 1, frame)
+    ! The head is lo; the frame carries where the TAIL starts.
+    call gce_set(vs_get(base + 1), gc_sym("__lo", [vs_get(base + 1)]), &
+         gc_int(lo + stp), [vs_get(base + 1)])
+    call gce_set(vs_get(base + 1), gc_sym("__hi", [vs_get(base + 1)]), &
+         gc_int(hi), [vs_get(base + 1)])
+    call gce_set(vs_get(base + 1), gc_sym("__st", [vs_get(base + 1)]), &
+         gc_int(stp), [vs_get(base + 1)])
+
+    ! (clojure.lang.Range/create __lo __hi __st)
+    callf = gcl_empty([vs_get(base + 1)])
+    callf = gcl_cons(gc_sym("__st", [vs_get(base + 1)]), callf, &
+         [vs_get(base + 1), callf])
+    callf = gcl_cons(gc_sym("__hi", [vs_get(base + 1)]), callf, &
+         [vs_get(base + 1), callf])
+    callf = gcl_cons(gc_sym("__lo", [vs_get(base + 1)]), callf, &
+         [vs_get(base + 1), callf])
+    callf = gcl_cons(gc_sym("clojure.lang.Range/create", [vs_get(base + 1)]), &
+         callf, [vs_get(base + 1), callf])
+    call vs_set(base + 2, callf)
+    body = gcl_cons(vs_get(base + 2), gcl_empty([vs_get(base + 2)]), &
+         [vs_get(base + 2)])
+    call vs_set(base + 2, body)
+
+    thunk = gc_obj(OBJ_CLOSURE, [gcv_empty([vs_get(base + 2)]), &
+         vs_get(base + 2), vs_get(base + 1), gc_nil()], &
+         [vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 3, thunk)
+    tail = gc_obj(OBJ_LAZY, [vs_get(base + 3), gc_nil(), gc_nil()], &
+         [vs_get(base + 3)])
+    call gc_set_i1(tail, LAZY_PENDING)
+    call vs_set(base + 3, tail)
+    out = gc_obj(OBJ_LAZY, [gc_nil(), gc_int(lo), vs_get(base + 3)], &
+         [vs_get(base + 3)])
+    call gc_set_i1(out, LAZY_CONS)
+    call vs_leave(base)
+  end function range_cell
+
   recursive function iterate_cell(f, x, roots) result(out)
     type(gc_value), intent(in) :: f, x
     type(gc_value), intent(in) :: roots(:)
@@ -4662,41 +4740,23 @@ contains
        end if
     case (B_RANGE)
        ! (range end), (range start end) and (range start end step), the
-       ! three arities Range/create has. Realised rather than lazy: an
-       ! unbounded range is the one shape core.clj does not ask for here.
+       ! three arities Range/create has. LAZY -- see range_cell.
        block
-         type(gc_value) :: acc, iv
-         integer :: lo, hi, stp, j
+         type(gc_value) :: iv
+         integer :: lo, hi, stp
          lo = 0; stp = 1
-         iv = gcv_nth(args, 0)
+         iv = strip_meta(gcv_nth(args, 0))
          hi = int(iv%ival)
          if (n >= 2) then
             lo = hi
-            iv = gcv_nth(args, 1)
+            iv = strip_meta(gcv_nth(args, 1))
             hi = int(iv%ival)
          end if
          if (n >= 3) then
-            iv = gcv_nth(args, 2)
+            iv = strip_meta(gcv_nth(args, 2))
             stp = int(iv%ival)
          end if
-         acc = gcv_empty([vs_get(base + 1)])
-         call vs_set(base + 2, acc)
-         if (stp > 0) then
-            j = lo
-            do while (j < hi)
-               acc = gcv_conj(vs_get(base + 2), gc_int(j), [vs_get(base + 1)])
-               call vs_set(base + 2, acc)
-               j = j + stp
-            end do
-         else if (stp < 0) then
-            j = lo
-            do while (j > hi)
-               acc = gcv_conj(vs_get(base + 2), gc_int(j), [vs_get(base + 1)])
-               call vs_set(base + 2, acc)
-               j = j + stp
-            end do
-         end if
-         out = to_seq(vs_get(base + 2), [vs_get(base + 1)])
+         out = range_cell(lo, hi, stp, [vs_get(base + 1)])
        end block
     case (B_RUNTX)
        out = apply(gcv_nth(args, 0), gcv_empty([vs_get(base + 1)]))
@@ -4847,6 +4907,42 @@ contains
        a = gcv_nth(args, 0)
        out = gcv_nth(args, 1)
        call gc_set_slot(a, 1, out)
+    case (B_SWAPVAL)
+       ! IAtom has FOUR swap arities: (f), (f x), (f x y) and
+       ! (f x y argseq). Only the last passes a seq; the middle two pass
+       ! plain values. This used to share alter's builtin, whose shape is
+       ! (.alter ref f argseq) with the seq at index 2 -- so
+       ! (swap! a conj 1) called (conj @a) with no 1 at all, and
+       ! answered the unchanged value instead of erroring. Every
+       ! (swap! acc conj x) in the tree silently did nothing.
+       block
+         type(gc_value) :: fargs
+         integer :: lb, j
+         lb = vs_enter(3)
+         call vs_set(lb + 1, strip_meta(gcv_nth(args, 0)))
+         fargs = gcv_empty([vs_get(lb + 1)])
+         fargs = gcv_conj(fargs, gc_slot(vs_get(lb + 1), 1), [vs_get(lb + 1)])
+         call vs_set(lb + 2, fargs)
+         ! indices 2 and 3 are values
+         do j = 2, min(n, 4) - 1
+            fargs = gcv_conj(vs_get(lb + 2), gcv_nth(args, j), &
+                 [vs_get(lb + 1), vs_get(lb + 2)])
+            call vs_set(lb + 2, fargs)
+         end do
+         ! index 4, when present, is a seq to splice
+         if (n >= 5) then
+            call vs_set(lb + 3, coll_to_vector(gcv_nth(args, 4), &
+                 [vs_get(lb + 1), vs_get(lb + 2)]))
+            do j = 0, gcv_count(vs_get(lb + 3)) - 1
+               fargs = gcv_conj(vs_get(lb + 2), gcv_nth(vs_get(lb + 3), j), &
+                    [vs_get(lb + 1), vs_get(lb + 2), vs_get(lb + 3)])
+               call vs_set(lb + 2, fargs)
+            end do
+         end if
+         out = apply(gcv_nth(args, 1), vs_get(lb + 2))
+         if (.not. has_error) call gc_set_slot(vs_get(lb + 1), 1, out)
+         call vs_leave(lb)
+       end block
     case (B_ALTERVAL)
        ! (.alter ref f args) is (apply f @ref args), stored back.
        block
