@@ -28,6 +28,7 @@ module GCReader
   use GCVector
   use GCAssoc
   use Regex
+  use, intrinsic :: ieee_arithmetic
   implicit none
   private
 
@@ -470,21 +471,54 @@ contains
        pos = pos + 2
        v = read_set(text, pos, roots)
     case (achar(34))
-       ! #"..." -- read so the file PARSES, with backslashes kept
-       ! literal as a pattern needs. There is no regex engine here,
-       ! so the result is a plain string and anything that actually
-       ! matches with it will be wrong. core.clj uses one regex
-       ! literal; recognising it is the difference between loading
-       ! the file and not.
+       ! #"..." -- compiled to a real ICU pattern HERE, at read
+       ! time, as Clojure does: a bad pattern is a reader error, not a
+       ! runtime one. Backslashes stay literal, the pattern needing
+       ! them; the source text is kept alongside the handle so the
+       ! literal prints as itself.
        pos = pos + 1
        v = read_regex(text, pos, roots)
     case ("(")
        pos = pos + 2
        v = read_anon_fn(text, pos, roots)
+    case ("#")
+       pos = pos + 2
+       v = read_symbolic(text, pos, roots)
     case default
        call fail("reader: no dispatch for #" // c)
     end select
   end function read_dispatch
+
+  ! ##Inf, ##-Inf and ##NaN -- the symbolic values. They have no
+  ! literal spelling of their own, which is the whole reason the reader
+  ! macro exists; LispReader.java maps exactly these three and rejects
+  ! anything else.
+  function read_symbolic(text, pos, roots) result(v)
+    character(len=*), intent(in) :: text
+    integer, intent(inout) :: pos
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: v
+    character(len=:), allocatable :: tok
+    integer :: start
+
+    v = gc_nil()
+    start = pos
+    do while (pos <= len(text))
+       if (is_space(text(pos:pos)) .or. is_delim(text(pos:pos))) exit
+       pos = pos + 1
+    end do
+    tok = text(start:pos - 1)
+    select case (tok)
+    case ("Inf")
+       v = gc_real(ieee_value(1.0d0, ieee_positive_inf))
+    case ("-Inf")
+       v = gc_real(ieee_value(1.0d0, ieee_negative_inf))
+    case ("NaN")
+       v = gc_real(ieee_value(1.0d0, ieee_quiet_nan))
+    case default
+       call fail("Invalid token: ##" // tok)
+    end select
+  end function read_symbolic
 
   ! ^meta form -- the metadata shorthands, normalised exactly as real
   ! Clojure's reader does:

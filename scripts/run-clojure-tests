@@ -1,7 +1,11 @@
 #!/bin/sh
 # Runs real Clojure's OWN test suite (test/clj/clojure/test_clojure/*.clj,
 # vendored from clojure/clojure) against clotran, one namespace per run so
-# that a hard failure in one file can't hide the others. Prints each
+# that a hard failure in one file can't hide the others.
+#
+# Drives clotran-gc with core.clj loaded -- the real interpreter. A
+# namespace that reports 0 tests did not pass: its file failed to load
+# partway, and the line above it says why. Prints each
 # namespace's summary and a total.
 #
 # These are the conformance number that matters: test/f/*_test.f90 covers
@@ -19,7 +23,7 @@ for f in test/clj/clojure/test_clojure/*.clj; do
   # does exactly that today -- see NOTES.md). No portable `timeout` on
   # macOS, hence the background-and-kill.
   printf "(require 'clojure.test)\n(load-file \"test/clj/clojure/test_helper.clj\")\n(load-file \"%s\")\n(clojure.test/run-tests '%s)\n" "$f" "$ns" > /tmp/clotran-run.clj
-  ./clotran-bin < /tmp/clotran-run.clj > /tmp/clotran-run.out 2>&1 &
+  ./clotran-gc src/clj/clojure/core.clj < /tmp/clotran-run.clj > /tmp/clotran-run.out 2>&1 &
   pid=$!
   waited=0
   while kill -0 $pid 2>/dev/null && [ $waited -lt ${CLOTRAN_TEST_TIMEOUT:-240} ]; do
@@ -32,7 +36,7 @@ for f in test/clj/clojure/test_clojure/*.clj; do
   fi
   wait $pid 2>/dev/null || true
   out=$(tail -40 /tmp/clotran-run.out)
-  sum=$(echo "$out" | sed -n 's/.*{:test \([0-9]*\) :pass \([0-9]*\) :fail \([0-9]*\) :error \([0-9]*\).*/\1 \2 \3 \4/p' | tail -1)
+  sum=$(echo "$out" | sed -n 's/.*{:test \([0-9]*\),* :pass \([0-9]*\),* :fail \([0-9]*\),* :error \([0-9]*\).*/\1 \2 \3 \4/p' | tail -1)
   if [ -z "$sum" ]; then
     printf "%-44s CRASHED\n" "$ns"
     continue

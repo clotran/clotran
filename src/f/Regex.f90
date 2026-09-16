@@ -125,7 +125,16 @@ contains
     integer :: i
 
     idx = 0
-    h = cre_compile_c(pattern // c_null_char, len(pattern), errbuf, 256_c_int32_t)
+    ! ICU rejects a zero-length pattern outright, but #"" is a legal
+    ! Clojure regex that matches the empty string at every position.
+    ! (?:) is that same pattern spelled in a way ICU accepts. The
+    ! SOURCE text is kept separately by the caller, so #"" still
+    ! prints as itself.
+    if (len(pattern) == 0) then
+       h = cre_compile_c("(?:)" // c_null_char, 4, errbuf, 256_c_int32_t)
+    else
+       h = cre_compile_c(pattern // c_null_char, len(pattern), errbuf, 256_c_int32_t)
+    end if
     if (.not. c_associated(h)) then
        last_error = ""
        do i = 1, 256

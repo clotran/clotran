@@ -1471,6 +1471,7 @@ contains
     case ("cons");     out = native(B_CONS, "cons", [roots])
     case ("isInstance"); out = native(B_INSTANCE, "instance?", [roots])
     case ("getName", "getSimpleName"); out = native(B_GETNAME, "clotran-get-name", [roots])
+    case ("getStackTrace"); out = native(B_EMPTYVEC, "clotran-empty-vector", [roots])
     case ("getNamespace"); out = native(B_NAMESPACE, "namespace", [roots])
     case ("getClass")
        ! clotran's classes are its type tags, so .getClass is
@@ -1543,6 +1544,7 @@ contains
     case ("append");   out = native(B_APPEND, "clotran-append", [roots])
     ! Writer methods. core_print reaches for all three.
     case ("charAt");   out = native(B_CHARAT, "clotran-char-at", [roots])
+    case ("pattern");  out = native(B_TOSTRING, "clotran-to-string", [roots])
     case ("write");    out = native(B_WRITE, "clotran-write", [roots])
     case ("flush");    out = native(B_FLUSH, "clotran-flush", [roots])
     case ("getMessage", "getLocalizedMessage")
@@ -4915,7 +4917,7 @@ contains
        end if
     case (B_TOSTRING)
        a = gcv_nth(args, 0)
-       if (gc_kind(a) == OBJ_SB) then
+       if (gc_kind(a) == OBJ_SB .or. gc_kind(a) == OBJ_REGEX) then
           out = gc_slot(a, 1)
        else
           out = gc_str(gcp_str(a, .false.), [vs_get(base + 1)])

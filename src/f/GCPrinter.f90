@@ -23,6 +23,7 @@ module GCPrinter
   use GCList
   use GCVector
   use GCAssoc
+  use, intrinsic :: ieee_arithmetic
   implicit none
   private
 
@@ -72,7 +73,20 @@ contains
        write(buf, '(I0)') v%ival
        s = trim(buf)
     case (GCT_REAL)
-       s = real_str(v%rval)
+       ! The symbolic values print as the reader macro that makes
+       ! them, since they have no literal spelling otherwise --
+       ! anything else would not read back.
+       if (ieee_is_nan(v%rval)) then
+          s = "##NaN"
+       else if (.not. ieee_is_finite(v%rval)) then
+          if (v%rval > 0.0d0) then
+             s = "##Inf"
+          else
+             s = "##-Inf"
+          end if
+       else
+          s = real_str(v%rval)
+       end if
     case (GCT_CHAR)
        if (readable) then
           s = char_readable(v%ival)
