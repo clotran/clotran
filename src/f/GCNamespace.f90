@@ -29,7 +29,12 @@ module GCNamespace
   private
 
   type(gc_root), save :: registry_root   ! a map of name -> namespace
-  type(gc_root), save :: current_root    ! the namespace *ns* names
+  ! THE current namespace is the Var, not this. current_root is the
+  ! bootstrap value only -- what gcn_current answers before
+  ! clojure.core and #'*ns* exist. Once the Var is interned it is the
+  ! single source of truth, and this stops being read.
+  type(gc_root), save :: current_root    ! bootstrap only
+  type(gc_root), save :: ns_var_root     ! #'clojure.core/*ns*
 
   public :: gcn_reset, gcn_current, gcn_set_current, gcn_find_or_create
   public :: gcn_intern, gcn_lookup, gcn_var_value, gcn_set_var, gcn_is_var
@@ -95,13 +100,25 @@ contains
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: ns
     if (.not. roots_live()) call gcn_reset(roots)
+    ! Deref the Var. Compiler.CURRENT_NS IS #'clojure.core/*ns* and
+    ! in-ns sets it, so the current namespace is a Var value and
+    ! nothing else. That is what makes (binding [*ns* *ns*] (in-ns
+    ! ...)) restore on the way out for free: binding swaps the Var,
+    ! and there is no second copy to fall out of step with it.
+    !
+    ! There used to be a second copy. It drifted exactly once and
+    ! exactly as predicted -- the REPL prompt said G__2281 while *ns*
+    ! said user, because binding writes the Var and knows nothing
+    ! about namespaces.
+    if (gc_root_live(ns_var_root)) then
+       ns = gcn_var_value(gc_root_get(ns_var_root))
+       if (gc_kind(ns) == OBJ_NS) return
+    end if
     ns = gc_root_get(current_root)
   end function gcn_current
 
-  ! Sets the current namespace AND the Var that names it. In Clojure
-  ! they are the same thing -- CURRENT_NS *is* the Var #'clojure.core/*ns*
-  ! and in-ns sets it -- so keeping them in step here is not
-  ! bookkeeping, it is the one place that could drift.
+  ! Sets the Var, which IS the current namespace. The bootstrap copy
+  ! is written too, for the window before clojure.core exists.
   subroutine gcn_set_current(ns)
     type(gc_value), intent(in) :: ns
     type(gc_value) :: core, sym
@@ -117,6 +134,9 @@ contains
     sym = gc_sym("*ns*", [vs_get(base + 1), vs_get(base + 2)])
     core = gcn_intern(vs_get(base + 2), sym, vs_get(base + 1), &
          [vs_get(base + 1), vs_get(base + 2), sym])
+    ! Cache the VAR, not its value: gcn_current then derefs it with no
+    ! lookup and no allocation, on a path that runs constantly.
+    call gc_global_keep(ns_var_root, core)
     call vs_leave(base)
   end subroutine gcn_set_current
 

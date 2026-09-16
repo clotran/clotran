@@ -2980,13 +2980,13 @@ contains
        ! expands into a with-loading-context whose body is a MAP, and
        ! the gensym inside it was never renamed.
        out = qq_rebuild(flatten_map(form, vs_get(base + 2)), "hash-map", &
-            vs_get(base + 2))
+            vs_get(base + 2), .true.)
        call vs_leave(base)
        return
     end if
 
     if (gc_kind(form) == OBJ_SET) then
-       out = qq_rebuild(set_elems(form, vs_get(base + 2)), "hash-set", &
+       out = qq_rebuild(set_elems(form, vs_get(base + 2)), "set", &
             vs_get(base + 2))
        call vs_leave(base)
        return
@@ -3155,6 +3155,22 @@ contains
     ! core name is still left alone -- exactly the symbols that have no
     ! Var in the writing namespace, and exactly the ones the fallback
     ! already handles.
+    ! NOT for clojure.core. Its names already resolve by fallback
+    ! (deviation 3), so qualifying them buys nothing -- and it produced
+    ! clojure.core/<, clojure.core/chunked-seq? and friends, which
+    ! resolve at a REPL but not from inside every evaluation context,
+    ! turning a whole test file into one 'not found'. The case this is
+    ! for is a LIBRARY referring to its own Var: `apply-template inside
+    ! clojure.template.
+    if (gcn_name(nsv) == "clojure.core") return
+    ! NOT for clojure.core. Its names already resolve by fallback
+    ! (deviation 3), so qualifying them buys nothing -- and it produced
+    ! clojure.core/<, clojure.core/chunked-seq? and friends, which
+    ! resolve at a REPL but not from inside every evaluation context,
+    ! turning a whole test file into one "not found". The case this is
+    ! for is a LIBRARY referring to its own Var, as clojure.template
+    ! does with apply-template.
+    if (gcn_name(nsv) == "clojure.core") return
     if (.not. gcn_is_var(gcn_lookup(nsv, sym))) return
     out = gc_sym(gcn_name(nsv) // "/" // t, [sym])
   end function qq_alias
@@ -3198,11 +3214,27 @@ contains
 
   ! A collection inside syntax-quote: expand its elements as a seq,
   ! then rebuild the collection from them with `ctor`.
-  recursive function qq_rebuild(form, ctor, env) result(out)
+  ! Rebuilds a vector, map or set literal from the expanded seq of
+  ! its elements.
+  !
+  ! use_apply matters and is not cosmetic. hash-map takes k v k v as
+  ! SEPARATE arguments, so handing it one seq gave (hash-map '(:a 1))
+  ! -- which answered {} rather than erroring, so every syntax-quoted
+  ! map literal in the tree silently became empty. clojure.test builds
+  ! every assertion result that way, which is why 156 tests reported
+  ! zero passes. Clojure emits (apply hash-map (seq (concat ...))).
+  !
+  ! `vec` and `set` both take a collection, so only the map needs it.
+  recursive function qq_rebuild(form, ctor, env, use_apply) result(out)
     type(gc_value), intent(in) :: form, env
     character(len=*), intent(in) :: ctor
+    logical, intent(in), optional :: use_apply
     type(gc_value) :: out, lst, inner
+    logical :: ap
     integer :: base, i
+
+    ap = .false.
+    if (present(use_apply)) ap = use_apply
 
     base = vs_enter(3)
     call vs_set(base + 1, form)
@@ -3225,6 +3257,7 @@ contains
     out = gcl_empty([vs_get(base + 3)])
     out = gcl_cons(vs_get(base + 3), out, [vs_get(base + 3), out])
     out = gcl_cons(gc_sym(ctor, [vs_get(base + 3), out]), out, [out])
+    if (ap) out = gcl_cons(gc_sym("apply", [out]), out, [out])
     call vs_leave(base)
   end function qq_rebuild
 
