@@ -30,18 +30,33 @@ destructuring, the macro system, protocols, multimethods, lazy seqs,
 transducers, metadata, `case`, regex literals, and most of the seq
 library -- because clotran does not implement those, core.clj does.
 
-Two independent oracles check it: gfortran and flang must agree
-(`make crosscheck`, ~1,950 assertions), and babashka is used to
-confirm what real Clojure actually does rather than trusting memory.
+**11 of Clojure's own libraries load** -- `set`, `data`, `edn`,
+`datafy`, `walk`, `string`, `template`, `uuid`, `zip`, `stacktrace` and
+`test`. `clojure.test` running means Clojure's own test suite runs:
+**653 passing assertions** across 190 of its tests, from the 67
+namespaces vendored verbatim in `test/clj`.
+
+That number is over assertions that EXECUTED. 13 namespaces still crash
+before reporting anything and contribute zero to both halves of it, and
+several of the 67 -- `proxy`, `genclass`, annotations, AOT -- can never
+pass here. 16 of 67 namespaces produce a passing assertion today.
+
+Four oracles keep it honest: gfortran and flang must agree
+(`make crosscheck`, 976 assertions each), `clj` -- real JVM Clojure --
+answers what Clojure actually does rather than what anyone remembers,
+and pinned clones of Clojure and ClojureScript are cited rather than
+recalled. See `CLAUDE.md`.
 
 ## What does not
 
 | | |
 |---|---|
 | `deftype*` / `defrecord` | the wall at form 692, and the next thing to build |
-| `letfn*` | so `map-indexed` fails |
+| `letfn*` | so `letfn` and `map-indexed` fail |
+| ratio and BigDecimal literals | `2/3`, `1M` do not read |
+| `clojure.string/split` | needs `Pattern.split` |
 | the five JVM-only sibling libs | bytecode generation; see `src/clj/clojure/PROVENANCE.md` |
-| `tap>`, `promise`, `shuffle`, `format` | need threads, queues, or `String/format` |
+| `tap>`, `promise`, `shuffle`, `format` | need threads, queues, `ArrayList`, or `String/format` |
 | startup | core.clj is re-read every launch; there is no image yet |
 | regex | ICU, with ASCII/Latin-1 offsets only |
 
@@ -59,6 +74,8 @@ native, using ClojureScript as the control group.
   no system library, no runtime dependency.
 - `src/clj` -- Clojure's own source, vendored and unmodified.
 - `test/f` -- unit tests for the Fortran host, one file per module.
+- `test/clj` -- Clojure's own test suite, vendored verbatim. The
+  conformance measure; `scripts/run-clojure-tests` drives it.
 - `scripts/clotran` -- the user-facing launcher (see below).
 
 ## Build

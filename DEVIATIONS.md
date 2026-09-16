@@ -27,11 +27,11 @@ Categories:
 | 5 | Metadata is a wrapper object, not carried on the value | host | `src/f/GC.f90` |
 | 6 | Syntax-quote expands at eval time, not read time | open | `src/f/GCEval.f90` |
 | 7 | Recursion depth is ~600 frames, against Clojure's ~11,200 | host | `src/f/GCEval.f90` |
-| 8 | Multimethods dispatch on equality, with no hierarchy | temporary | `src/f/GCEval.f90` |
+| 8 | Multimethods dispatch on equality, plus a fixed host hierarchy | temporary | `src/f/GCEval.f90` |
 | 9 | Sorted collections are unsorted | temporary | `src/f/GCEval.f90` |
 | 10 | Refs are mutable boxes; dynamic bindings are global | temporary | `src/f/GCEval.f90` |
 | 11 | Transients are the persistent collections | host | `src/f/GCEval.f90` |
-| 12 | Four JVM-only libs are skipped by name | host | `src/f/GCEval.f90` |
+| 12 | Five JVM-only libs are skipped by name, and not vendored | host | `src/f/GCEval.f90` |
 | 13 | Protocol dispatch is uncached | host | `src/f/GC.f90` |
 | 14 | Regex is ICU under java.util.regex's names, ASCII-offset only | host | `src/f/Regex.f90` |
 | 15 | `hash` values are gc_hash's, not the JVM's murmur3 | host | `src/f/GC.f90` |
@@ -322,9 +322,26 @@ every other host member in this file did.
 - **The empty list is a singleton.** `PersistentList.EMPTY`.
 - **`rest` returns a seq, never nil.** `next` is the one that returns nil --
   `RT.more` versus `RT.next`, which differ only there.
-- **A Var is mutated on redefinition, not replaced.** That is what makes
-  redefining a function at the REPL visible to existing closures, and it is
-  what lets core.clj redefine a primitive that was interned natively.
+- **A Var is mutated on redefinition, not replaced** -- but ONLY by the
+  namespace that owns it. That is what makes redefining a function at the
+  REPL visible to existing closures, and what lets core.clj redefine a
+  primitive that was interned natively. `Namespace.intern` gates it on
+  `isInternedMapping`, and skipping that gate was a real bug: a namespace's
+  mappings hold the Vars it REFERS as well as the ones it interned, so
+  `(defn first [x] :s)` in any namespace found clojure.core's referred
+  `first` and mutated THAT, redefining `clojure.core/first` for the whole
+  program. Replacing a referred name now interns a new Var and prints
+  `Namespace.checkReplacement`'s warning verbatim:
+
+      WARNING: first already refers to: #'clojure.core/first in namespace: w1, being replaced by: #'w1/first
+
+  A namespace that declares the shadowing up front --
+  `(:refer-clojure :exclude (next))`, as `clojure.zip` does -- has nothing
+  left to replace and so says nothing, which is also what Clojure does.
+  `clj` prints this; babashka does not, being a reimplementation that
+  omits it. That is why `clj` is the language oracle and bb is only the
+  scripting language -- bb agreed with the old broken behaviour and with
+  the new correct one, and so told us nothing either time.
 
 ---
 

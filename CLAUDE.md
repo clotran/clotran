@@ -1,0 +1,175 @@
+# Working on clotran
+
+Clojure, hosted on Fortran. It runs Rich Hickey's actual `clojure/core.clj`
+-- the file, unmodified. The Fortran is the HOST, standing where the JVM
+stands; the language comes from Clojure's own source.
+
+That premise decides most arguments. When clotran and Clojure disagree,
+clotran is wrong until proven otherwise.
+
+## Do not trust memory. Use the oracles.
+
+Claims get cited to these rather than recalled. The rule exists because a
+deviation once traced back to a misremembered Java detail, and because "I
+think Clojure does X" has been wrong here more than once.
+
+Note which tool answers which question: `clj` decides language behaviour,
+`bb` writes the scripts, and the two clones are read for internals. bb is
+not an oracle.
+
+**gfortran and flang.** gfortran is the default build; flang is the
+correctness oracle. `make crosscheck` builds and tests under both and
+they must agree. This is the gate: it runs before every commit, and a
+red crosscheck means nothing gets staged.
+
+**`clj` -- the LANGUAGE oracle.** Real JVM Clojure, and startup is ~0.7s,
+so there is no excuse for not running it. To find out what Clojure does
+with a form, run it:
+
+    clj -M -e '(pr-str `x)'
+
+This is the authority. It IS the implementation `~/jborden/clojure` is
+the source of, so it cannot disagree with the Java the way a
+reimplementation can.
+
+**babashka (`bb`) -- the SCRIPTING language.** All file rewriting, source
+analysis and counting is bb. **No Python.** The friction is literal
+backslashes in Fortran/regex payloads, where bb's reader needs care --
+escape them properly, or write the replacement text to a file and splice
+it, rather than switching languages.
+
+bb is `sci`, a reimplementation, and is NOT authoritative for language
+questions. It silently does not implement `Namespace.checkReplacement`'s
+warning, which meant it agreed with clotran's wrong behaviour and then
+with clotran's right behaviour, telling us nothing either time. `clj`
+prints it; bb does not. Use bb to script, `clj` to decide.
+
+Small-map print ORDER differs between them and neither is wrong; compare
+values, not printed text, when order could vary.
+
+**`~/jborden/clojure`** -- a clone of `clojure/clojure` pinned to
+`71b4623d`, the SAME commit as the vendored `core.clj`. Cite file and
+method. Reading the Java of one version while running the core.clj of
+another is the same mistake as citing memory, and it nearly happened:
+the clone was first taken three hunks newer than what we run.
+
+**`~/jborden/clojurescript`** -- pinned to `b45dff9f`. A second
+implementation of the same language on a completely different host. Not
+a porting source: it is how we tell which parts of `clojure.lang.*` are
+the LANGUAGE and which are JVM artifacts. If ClojureScript writes
+something in Clojure, it is not host-bound and our putting it in Fortran
+is a choice we should be able to justify. If ClojureScript cannot write
+it in Clojure either, it is a real seam. And if ClojureScript does not
+have it at all -- `re-matcher`, `re-groups` -- it was never Clojure, it
+was Java showing through. `SEAMS.md` carries the argument.
+
+## Never edit vendored source
+
+`src/clj/clojure/**` is Clojure's, `src/c/icu/**` is ICU's,
+`test/clj/clojure/**` is Clojure's test suite. All verbatim. If clotran
+cannot load one, that is clotran's bug -- the whole point is that these
+files run as written.
+
+Each vendored tree has a `PROVENANCE.md` saying where it came from, at
+what commit, and what is deliberately absent. Read it before touching
+the tree.
+
+**Adding a vendored file can be a breaking change.** core.clj says
+`(load "core_proxy")`. `clotran-gc` skips that by name; the older
+`clotran-bin` relies on the file simply not being there. Vendoring it
+turned a silent skip into a real load and broke `defprotocol`,
+`extend-protocol`, `satisfies?` and `into` -- a red crosscheck from
+adding files and changing no code.
+
+## Report scorecards, not bug counts
+
+Three measures, each named with its denominator:
+
+| scorecard | what it is |
+|---|---|
+| **our tests** | `test/f/*_test.f90`, the Fortran host -- GC, reader, printer, evaluator. A GATE, not a grade: 100% or do not commit. |
+| **Clojure's tests** | `test/clj/clojure/test_clojure`, 67 namespaces verbatim. `scripts/run-clojure-tests` drives them. |
+| **libraries loading** | how many of Clojure's own libs `(require ...)` succeeds on. |
+
+State what the denominator excludes. A namespace that crashes before
+reporting contributes zero assertions, so a pass rate is over assertions
+that EXECUTED, not assertions that exist -- say so rather than letting
+the number flatter. "Bugs fixed" is not a measure; it says nothing about
+how close the thing is.
+
+Not every good change moves a scorecard. A bug that corrupts
+`clojure.core` globally is worth fixing whether or not the suite can see
+it -- but say plainly that the number did not move, rather than dressing
+it up.
+
+## Tools that exist
+
+- `scripts/split-forms <file.clj> [outdir] [start]` -- splits a Clojure
+  file into one file per top-level form. `load_file` aborts on its first
+  error, so `clotran-gc core.clj` answers exactly one question; the
+  ARGUMENT LIST does not abort, so
+  `./clotran-gc core.clj forms/*.clj` reports every failure in one pass.
+  This is how "the wall is form 656" became "5 forms fail and 63 behind
+  them already work".
+- `scripts/run-clojure-tests` -- Clojure's own suite, one namespace per
+  run so a hard failure cannot hide the others.
+- `make crosscheck` -- the gate.
+
+## Gotchas that have cost real time
+
+- **Do not build while `make crosscheck` runs.** It does `make clean` and
+  compiles from source; an edit mid-run lands in the second compiler's
+  pass, and a rebuild deletes the binary another job is using.
+- **Instrument before theorising.** An hour went into an elaborate
+  name-resolution theory that one `print` statement disproved in a
+  single run. If there is a testable claim, test it.
+- **A silent wrong answer is worse than a crash.** `(swap! a conj x)`
+  returned the unchanged value instead of erroring; syntax-quoted map
+  literals answered `{}` instead of failing. Both survived a long time
+  because they looked plausible. Prefer the check that would catch a
+  wrong answer, not just an exception.
+- **Torture mode catches what the plain pass cannot.** `test/f` runs
+  both; a GC rooting bug shows up only under stress. Two allocations
+  passed as arguments to one call means the second can collect the
+  first -- put each on the shadow stack first.
+
+## Committing -- the stopping-point workflow
+
+**At every stopping point:**
+
+1. Make sure `make crosscheck` is green. It is the gate. A red
+   crosscheck means nothing gets staged, and "my change works" is not a
+   substitute -- that mistake has been made here, reporting success from
+   targeted tests while the gate was failing.
+2. `git add` exactly the files that belong in this commit.
+3. Show `git status --short` so the scope is visible.
+4. Give a **one-line** commit message.
+5. **Stop and wait for review.** Do not run `git commit`, do not push,
+   do not start the next task.
+
+James runs `git commit`. He may change the message, unstage something,
+or say no -- which is the point of stopping.
+
+Commits are atomic. Two unrelated changes get staged and described
+separately, one after the other, not bundled because they happened to
+land in the same session.
+
+Say plainly what a change does NOT do. If the scorecard did not move,
+say so rather than dressing it up; a bug that corrupts `clojure.core`
+globally is worth landing whether or not the suite can see it, but the
+claim has to match the evidence.
+
+## The documents
+
+- `README.md` -- what clotran is, what works, what does not. Its examples
+  are verified output, not aspiration. Keep it that way.
+- `DEVIATIONS.md` -- every place clotran does something real Clojure does
+  not, why, and what removing it would take. **A deviation with no entry
+  here is a bug.**
+- `SEAMS.md` -- the other question: what must be native versus what we
+  merely chose to make native, with ClojureScript as the control group.
+  Not the same ledger as DEVIATIONS; do not mix them.
+- `PLAN.md` -- what we are about to build, what we decided not to, and
+  why, so decisions are not re-argued from scratch. Contains the
+  "Should we JIT?" decision record.
+- `NOTES.md` -- design history and why things work the way they do.

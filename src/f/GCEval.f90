@@ -111,6 +111,9 @@ module GCEval
   integer, parameter :: B_INTVALUE = 144, B_STRCONTAINS = 145
   integer, parameter :: B_WRITE = 146, B_FLUSH = 147, B_CHARAT = 148
   integer, parameter :: B_NSADDALIAS = 149, B_SWAPVAL = 150
+  integer, parameter :: B_ISWS = 151, B_ISUPPER = 152, B_ISLOWER = 153
+  integer, parameter :: B_ISDIGIT = 154, B_ISLETTER = 155, B_ISALNUM = 156
+  integer, parameter :: B_UPCASE = 157, B_DOWNCASE = 158
   integer, parameter :: B_SYMBOL2 = B_SYMBOL
   integer, parameter :: B_LONGCAST = 66, B_DBLCAST = 67, B_BOOLCAST = 68, B_CHARCAST = 69
   integer, parameter :: B_BITAND = 70, B_BITOR = 71, B_BITXOR = 72, B_BITNOT = 73
@@ -1551,7 +1554,7 @@ contains
     case ("endsWith"); out = native(B_ENDSWITH, "clotran-ends-with", [roots])
     case ("replace"); out = native(B_REPLACE, "clotran-replace", [roots])
     case ("length"); out = native(B_STRLEN, "clotran-length", [roots])
-    case ("substring"); out = native(B_SUBSTRING, "subs", [roots])
+    case ("substring", "subSequence"); out = native(B_SUBSTRING, "subs", [roots])
     ! (. f (applyTo (seq args))) is core.clj's own apply, and the
     ! target becoming the first argument makes it exactly (apply f seq).
     case ("applyTo");   out = native(B_APPLY, "apply", [roots])
@@ -1594,6 +1597,11 @@ contains
 
     case ("concat"); out = native(B_STR, "str", [roots])
     case ("toString"); out = native(B_TOSTRING, "clotran-to-string", [roots])
+    case ("toUpperCase"); out = native(B_UPCASE, "clotran-upcase", [roots])
+    case ("toLowerCase"); out = native(B_DOWNCASE, "clotran-downcase", [roots])
+    ! Throwable.getCause is nil when nothing wrapped it, which is every
+    ! error here: clotran has no cause chain to walk.
+    case ("getCause"); out = native(B_ALWAYS_NIL, "clotran-nil", [roots])
     case ("append");   out = native(B_APPEND, "clotran-append", [roots])
     ! Writer methods. core_print reaches for all three.
     case ("charAt");   out = native(B_CHARAT, "clotran-char-at", [roots])
@@ -1960,6 +1968,7 @@ contains
        call vs_set(base + 3, thunk)
        out = gc_obj(OBJ_ATOM, [vs_get(base + 3), gc_nil()], [vs_get(base + 3)])
     else if (cname == "StringBuilder" .or. cname == "java.lang.StringBuilder" .or. &
+         cname == "StringBuffer" .or. cname == "java.lang.StringBuffer" .or. &
          cname == "java.io.StringWriter" .or. cname == "StringWriter") then
        thunk = gc_str("", [vs_get(base + 1)])
        if (gcl_count(vs_get(base + 1)) > 1) then
@@ -2075,6 +2084,7 @@ contains
          gc_ref_is(sym%ref, "clojure.lang.RT") .or. &
          gc_ref_is(sym%ref, "clojure.lang.Util") .or. &
          gc_ref_is(sym%ref, "clojure.lang.LazilyPersistentVector") .or. &
+         gc_ref_is(sym%ref, "LazilyPersistentVector") .or. &
          gc_ref_is(sym%ref, "clojure.lang.PersistentHashMap") .or. &
          gc_ref_is(sym%ref, "clojure.lang.PersistentArrayMap") .or. &
          gc_ref_is(sym%ref, "clojure.lang.PersistentHashSet") .or. &
@@ -2099,6 +2109,7 @@ contains
          gc_ref_is(sym%ref, "Integer") .or. gc_ref_is(sym%ref, "java.lang.Integer") .or. &
          gc_ref_is(sym%ref, "Long") .or. gc_ref_is(sym%ref, "java.lang.Long") .or. &
          gc_ref_is(sym%ref, "Thread") .or. gc_ref_is(sym%ref, "java.lang.Thread") .or. &
+         gc_ref_is(sym%ref, "Character") .or. gc_ref_is(sym%ref, "java.lang.Character") .or. &
          gc_ref_is(sym%ref, "Math") .or. gc_ref_is(sym%ref, "java.lang.Math") .or. &
          gc_ref_is(sym%ref, "System") .or. gc_ref_is(sym%ref, "java.lang.System")
   end function is_host_class
@@ -2137,7 +2148,8 @@ contains
           ! extends -- is the keyword :Object.
           out = native(B_TYPE, "clotran-type", [roots]); return
        end select
-    else if (cls == "clojure.lang.LazilyPersistentVector") then
+    else if (cls == "clojure.lang.LazilyPersistentVector" .or. &
+             cls == "LazilyPersistentVector") then
        if (mname == "create" .or. mname == "createOwning") then
           out = native(B_VEC, "vec", [roots]); return
        end if
@@ -2339,6 +2351,22 @@ contains
     ! while being reported and came out as an ERROR instead -- which is
     ! why the whole suite read fail=0. There is one thread and there are
     ! no traces, so it answers itself and .getStackTrace answers empty.
+    ! Character's static predicates. clojure.string leans on these,
+    ! and so does anything classifying input a character at a time.
+    ! One builtin id each: call_builtin dispatches on the id alone and
+    ! cannot see which name the member table matched.
+    if (cls == "Character" .or. cls == "java.lang.Character") then
+       select case (mname)
+       case ("isWhitespace");    out = native(B_ISWS, "clotran-ws?", [roots]); return
+       case ("isUpperCase");     out = native(B_ISUPPER, "clotran-upper?", [roots]); return
+       case ("isLowerCase");     out = native(B_ISLOWER, "clotran-lower?", [roots]); return
+       case ("isDigit");         out = native(B_ISDIGIT, "clotran-digit?", [roots]); return
+       case ("isLetter");        out = native(B_ISLETTER, "clotran-letter?", [roots]); return
+       case ("isLetterOrDigit"); out = native(B_ISALNUM, "clotran-alnum?", [roots]); return
+       case ("toUpperCase");     out = native(B_UPCASE, "clotran-upcase", [roots]); return
+       case ("toLowerCase");     out = native(B_DOWNCASE, "clotran-downcase", [roots]); return
+       end select
+    end if
     if (cls == "Thread" .or. cls == "java.lang.Thread") then
        if (mname == "currentThread") then
           out = native(B_BASELOADER, "clotran-current-thread", [roots]); return
@@ -4431,6 +4459,53 @@ contains
                r = regex_matches(mh)
             end if
             out = gc_bool(r == 1)
+         end if
+       end block
+    case (B_ISWS, B_ISUPPER, B_ISLOWER, B_ISDIGIT, B_ISLETTER, B_ISALNUM)
+       block
+         type(gc_value) :: cv
+         character :: c
+         cv = strip_meta(gcv_nth(args, 0))
+         c = achar(max(0, min(255, cv%ival)))
+         select case (id)
+         case (B_ISWS)
+            out = gc_bool(c == " " .or. c == achar(9) .or. c == achar(10) &
+                 .or. c == achar(13) .or. c == achar(12))
+         case (B_ISUPPER); out = gc_bool(c >= "A" .and. c <= "Z")
+         case (B_ISLOWER); out = gc_bool(c >= "a" .and. c <= "z")
+         case (B_ISDIGIT); out = gc_bool(c >= "0" .and. c <= "9")
+         case (B_ISLETTER)
+            out = gc_bool((c >= "A" .and. c <= "Z") .or. (c >= "a" .and. c <= "z"))
+         case (B_ISALNUM)
+            out = gc_bool((c >= "A" .and. c <= "Z") .or. (c >= "a" .and. c <= "z") &
+                 .or. (c >= "0" .and. c <= "9"))
+         end select
+       end block
+    case (B_UPCASE, B_DOWNCASE)
+       ! A character or a whole string: Character/toUpperCase and
+       ! String.toUpperCase are the same fold either way. ASCII only,
+       ! as everything else here is -- DEVIATIONS 14.
+       block
+         type(gc_value) :: v
+         character(len=:), allocatable :: t
+         integer :: j, d
+         logical :: up
+         up = (id == B_UPCASE)
+         v = strip_meta(gcv_nth(args, 0))
+         if (v%tag == GCT_CHAR) then
+            t = achar(max(0, min(255, v%ival)))
+         else
+            t = text_of(v)
+         end if
+         do j = 1, len(t)
+            d = iachar(t(j:j))
+            if (up .and. d >= 97 .and. d <= 122) t(j:j) = achar(d - 32)
+            if (.not. up .and. d >= 65 .and. d <= 90) t(j:j) = achar(d + 32)
+         end do
+         if (v%tag == GCT_CHAR) then
+            out = gc_char(t(1:1))
+         else
+            out = gc_str(t, [vs_get(base + 1)])
          end if
        end block
     case (B_CHARAT)

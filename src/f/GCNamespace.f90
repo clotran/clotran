@@ -236,6 +236,18 @@ contains
             call vs_leave(base)
             return
          end if
+         ! Replacing a name this namespace only REFERRED is legal and
+         ! occasionally meant, but it is worth saying out loud --
+         ! Namespace.checkReplacement prints exactly this, to stderr,
+         ! and it is how you find out you have shadowed something you
+         ! did not mean to. A namespace that declares the shadowing up
+         ! front, (:refer-clojure :exclude (next)), has nothing left to
+         ! replace and so says nothing.
+         write(0, '(A)') "WARNING: " // gc_ref_text(sym%ref) // &
+              " already refers to: #'" // gcn_name(owner) // "/" // &
+              gc_ref_text(sym%ref) // " in namespace: " // &
+              gcn_name(vs_get(base + 1)) // ", being replaced by: #'" // &
+              gcn_name(vs_get(base + 1)) // "/" // gc_ref_text(sym%ref)
        end block
     end if
 
