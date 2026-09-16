@@ -1687,6 +1687,78 @@ and should be revisited together. Three things to settle:
 - [ ] terminal nested-REPL handler, written in clotran
 - [ ] framed stdio wire + an editor-facing handler, written in clotran
 
+## Should we JIT?
+
+Recorded so it does not get re-argued. Short answer: not now, and when
+the reasons to do it arrive, most of them will have better answers.
+
+### The thing that prompted it
+
+Clojure is NOT interpreted. Every form, REPL-typed included, goes read ->
+`Compiler.analyze` -> JVM bytecode -> load -> invoke. ClojureScript is a
+compiler too. clotran is a tree-walking interpreter, so it is the odd one
+out, and a run of Clojure's own test suite surfaced the cost as a cluster
+of name-resolution bugs: an alias resolved at call time against the wrong
+namespace, an unqualified symbol falling back to `clojure.core`,
+`__defining-ns__` read from `*ns*` instead of inherited. SEAMS.md has the
+argument; DEVIATIONS 16 is the ledger entry.
+
+The tempting conclusion is "so we should compile." It does not follow.
+
+### Compiling to Fortran and growing a binary -- no
+
+An executable cannot be appended to, and Fortran has no `eval` and no
+runtime linking in the standard. The workable version is: emit `.f90`,
+shell out to gfortran, build a SHARED LIBRARY, `dlopen` it. Real
+technique -- Fortran auto-tuners do it -- but here:
+
+- gfortran costs ~100ms-1s per invocation, so it loses to interpreting
+  for everything except a genuinely hot loop.
+- Generated code still has to cooperate with `gc_value`, the shadow
+  stack and the collector. Every compiled function roots its own
+  temporaries or the GC eats them.
+- `dlopen` is POSIX, not Fortran, so it needs a C shim. We have
+  precedent in `src/c`, but it is not free.
+
+### LLVM, the way jank does it -- coherent, but a different project
+
+jank (https://jank-lang.org) compiles Clojure to LLVM IR and JITs it in
+process, with C++ interop. That is the right shape for a compiled native
+Clojure, and the clotran analogue is real: the analyser emits LLVM IR
+directly, ORC JITs it, and the Fortran becomes the RUNTIME LIBRARY the
+compiled code calls -- exactly what `clojure.lang` is to the JVM.
+
+Note what that is not: **flang does not help.** flang is a Fortran
+frontend; it turns Fortran source into LLVM IR. clotran's special forms
+are not Fortran source, so "clotran + flang" collapses back into
+generating Fortran text and invoking a compiler on it -- the slow shared
+library path again.
+
+Note also what it costs conceptually. It is not a JIT for Fortran. It is
+a JIT for Clojure in which Fortran stops being the host and becomes the
+runtime. The premise of this project is that Fortran IS the host. That is
+a fine thing to change one's mind about, but it should be changed
+deliberately and not arrived at sideways while chasing a startup time.
+
+### What to do instead, in order
+
+1. **Resolve names in `gce_analyze`.** It already runs once per
+   top-level form, deliberately mirroring `Compiler.analyze`, and its
+   entire body today is `macroexpand_all`. Doing resolution there,
+   lexically, with the namespace known, retires the whole bug class
+   above. No new technology, no codegen, and it is what an interpreter
+   is supposed to do.
+2. **Cache the analysed core.clj** (step 4c). Startup is the cost anyone
+   actually notices, and an image fixes it without machine code.
+3. **Closure-compile the analysed tree.** Have the analyser emit nested
+   closures instead of re-walking S-expressions on every call. The
+   classic interpreter 5-10x, still no toolchain.
+4. **Only then** measure, and if the profile still demands it, do it
+   jank's way -- LLVM IR and ORC -- rather than generated Fortran.
+
+Steps 1-3 are each smaller than the JIT and each removes one of the
+reasons to want it.
+
 ## Deferred, deliberately
 
 - **`deftype`/`defrecord`/`reify`** -- need the `deftype*` special form.

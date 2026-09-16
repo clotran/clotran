@@ -110,6 +110,7 @@ module GCEval
   integer, parameter :: B_PROPLOAD = 141, B_PROPGET = 142, B_CLOSE = 143
   integer, parameter :: B_INTVALUE = 144, B_STRCONTAINS = 145
   integer, parameter :: B_WRITE = 146, B_FLUSH = 147, B_CHARAT = 148
+  integer, parameter :: B_NSADDALIAS = 149
   integer, parameter :: B_SYMBOL2 = B_SYMBOL
   integer, parameter :: B_LONGCAST = 66, B_DBLCAST = 67, B_BOOLCAST = 68, B_CHARCAST = 69
   integer, parameter :: B_BITAND = 70, B_BITOR = 71, B_BITXOR = 72, B_BITNOT = 73
@@ -661,6 +662,7 @@ contains
        if (.not. has_error) then
           block
             type(gc_value) :: nm, md, var
+            integer :: db
             ! The name may arrive wrapped: (def ^{:macro true} let ...).
             nm = vs_get(base + 4)
             md = gc_nil()
@@ -669,8 +671,31 @@ contains
                nm = strip_meta(nm)
             end if
             call vs_set(base + 4, nm)
+            ! Var metadata is EVALUATED. Compiler.DefExpr analyses the
+            ! meta map as an expression, and core.clj is written for
+            ! that: defn quotes its :arglists -- (list 'quote (sigs
+            ! fdecl)) -- precisely because the list would otherwise be
+            ! CALLED. Storing it raw made (:test (meta #'t)) a list
+            ! rather than a function, which is every clojure.test
+            ! deftest, since deftest puts (fn [] body) there.
+            db = vs_enter(2)
+            call vs_set(db + 1, b)
+            call vs_set(db + 2, md)
+            if (md%tag /= GCT_NIL) then
+               md = gce_eval(vs_get(db + 2), vs_get(base + 2), &
+                    [vs_get(base + 1), vs_get(db + 1)])
+               call vs_set(db + 2, md)
+            end if
+            if (has_error) then
+               call vs_leave(db)
+               call vs_leave(base)
+               return
+            end if
             var = gcn_intern(gcn_current([vs_get(base + 1)]), &
-                 vs_get(base + 4), b, [vs_get(base + 1), vs_get(base + 4)])
+                 vs_get(base + 4), vs_get(db + 1), &
+                 [vs_get(base + 1), vs_get(base + 4), vs_get(db + 2)])
+            md = vs_get(db + 2)
+            call vs_leave(db)
             ! Nothing more to do for (def ^{:macro true} let ...):
             ! putting the metadata on the Var IS declaring the macro,
             ! because that is where macro-ness is read from. core.clj
@@ -1220,9 +1245,24 @@ contains
     ! already falls back there, so tagging core's own closures
     ! would cost a frame each for nothing.
     block
-      type(gc_value) :: dns
+      type(gc_value) :: dns, inherited
+      logical :: has_dns
+      ! INHERITED if the enclosing env already carries one. Clojure
+      ! binds the namespace while COMPILING, so every nested fn in a
+      ! form belongs to the namespace that form was written in. Taking
+      ! *ns* afresh here instead meant an inner (fn ...) created while
+      ! a macro RAN was stamped with the caller's namespace, which
+      ! shadowed the writer's -- clojure.template/do-template calls
+      ! apply-template from inside exactly such a nested fn, and so
+      ! could not find it.
+      has_dns = .false.
+      if (gce_is(vs_get(base + 2))) then
+         if (gce_find(vs_get(base + 2), &
+              gc_sym("__defining-ns__", [vs_get(base + 2)]), inherited)) &
+              has_dns = (gc_kind(inherited) == OBJ_NS)
+      end if
       dns = gcn_current([vs_get(base + 1), vs_get(base + 2)])
-      if (gcn_name(dns) /= "clojure.core") then
+      if (.not. has_dns .and. gcn_name(dns) /= "clojure.core") then
         call vs_set(base + 4, dns)
         call vs_set(base + 2, gce_new(vs_get(base + 2), &
              [vs_get(base + 1), vs_get(base + 4)]))
@@ -1492,7 +1532,8 @@ contains
     case ("isMacro"); out = native(B_ISMACRO, "clotran-var-macro", [roots])
     case ("setMacro"); out = native(B_SETMACRO, "clotran-set-macro", [roots])
     case ("getAliases");  out = native(B_NSALIASES, "ns-aliases", [roots])
-    case ("refer", "addAlias"); out = native(B_NSREFER, "clotran-ns-refer", [roots])
+    case ("refer"); out = native(B_NSREFER, "clotran-ns-refer", [roots])
+    case ("addAlias"); out = native(B_NSADDALIAS, "clotran-ns-add-alias", [roots])
     ! The String methods core.clj reaches for while loading libs.
     case ("startsWith"); out = native(B_STARTSWITH, "clotran-starts-with", [roots])
     case ("endsWith"); out = native(B_ENDSWITH, "clotran-ends-with", [roots])
@@ -2347,7 +2388,7 @@ contains
   ! be honoured by a rule that has no map of what was referred.
   function resolve_var(sym, roots) result(var)
     type(gc_value), intent(in) :: sym, roots
-    type(gc_value) :: var, bare, dns
+    type(gc_value) :: var, bare, dns, ans
     character(len=:), allocatable :: t
     integer :: slash
 
@@ -2371,6 +2412,27 @@ contains
        slash = index(t, "/")
        if (slash > 1 .and. slash < len(t)) then
           bare = gc_sym(t(slash+1:), [roots])
+          ! An ALIAS first. Without this the prefix was taken as a
+          ! namespace name, find-or-create made an empty one, and the
+          ! lookup could only miss -- which is every :as in every ns
+          ! form Clojure's own test suite writes.
+          ! In the DEFINING namespace first. Clojure resolves a
+          ! symbol while compiling the form, in the namespace being
+          ! compiled; clotran resolves at call time, when *ns* is
+          ! wherever the caller happens to be. A deftest body invoked
+          ! by run-tests is exactly that case -- the alias is real, it
+          ! is just not in the namespace doing the calling.
+          ans = gc_nil()
+          if (gce_is(roots)) then
+             if (gce_find(roots, gc_sym("__defining-ns__", [roots]), dns)) &
+                  ans = alias_in(dns, t(1:slash-1), [roots, bare])
+          end if
+          if (gc_kind(ans) /= OBJ_NS) &
+               ans = alias_target(t(1:slash-1), [roots, bare])
+          if (gc_kind(ans) == OBJ_NS) then
+             var = gcn_lookup(ans, bare)
+             if (gcn_is_var(var)) return
+          end if
           var = gcn_lookup(gcn_find_or_create(t(1:slash-1), [roots, bare]), bare)
           if (gcn_is_var(var)) return
           var = gc_nil()
@@ -2944,6 +3006,7 @@ contains
     if (.not. gcl_is(form)) then
        if (form%tag == GCT_SYM) then
           call vs_set(base + 1, auto_gensym(vs_get(base + 1)))
+          call vs_set(base + 1, qq_alias(vs_get(base + 1), vs_get(base + 2)))
           sym = gc_sym("quote", [vs_get(base + 1)])
           call vs_set(base + 3, sym)
           out = gcl_empty([vs_get(base + 1), vs_get(base + 3)])
@@ -3047,6 +3110,54 @@ contains
     out = vs_get(base + 3)
     call vs_leave(base)
   end function auto_gensym
+
+  ! `temp/do-template -- syntax-quote RESOLVES an alias, so what the
+  ! expansion carries is clojure.template/do-template and the reader of
+  ! that expansion needs to know nothing about temp. Compiler's
+  ! resolveSymbol does it while READING; clotran expands at eval time,
+  ! so the namespace to ask is the one the quote was WRITTEN in -- which
+  ! the closure carries as __defining-ns__ -- and NOT *ns*, which by
+  ! then is whoever called the macro.
+  !
+  ! clojure.test's `are` is the case that forced this: it aliases
+  ! clojure.template as temp, and every (are ...) in Clojure's own test
+  ! suite expands through it.
+  function qq_alias(sym, env) result(out)
+    type(gc_value), intent(in) :: sym, env
+    type(gc_value) :: out, nsv, tgt, dns
+    character(len=:), allocatable :: t
+    integer :: slash
+
+    out = sym
+    if (sym%tag /= GCT_SYM) return
+    t = gc_ref_text(sym%ref)
+    nsv = gc_nil()
+    if (gce_is(env)) then
+       if (gce_find(env, gc_sym("__defining-ns__", [sym]), dns)) nsv = dns
+    end if
+    if (gc_kind(nsv) /= OBJ_NS) nsv = gcn_current([sym])
+
+    slash = index(t, "/")
+    if (slash > 1 .and. slash < len(t)) then
+       tgt = alias_in(nsv, t(1:slash-1), [sym])
+       if (gc_kind(tgt) /= OBJ_NS) return
+       out = gc_sym(gcn_name(tgt) // "/" // t(slash+1:), [sym])
+       return
+    end if
+
+    ! An UNQUALIFIED symbol resolves against the writing namespace too:
+    ! `apply-template inside clojure.template means that namespace's
+    ! Var, not clojure.core's. clotran used to leave it bare and let
+    ! resolution fall back to clojure.core, which is right for core.clj
+    ! and wrong for every other library.
+    !
+    ! Guarded on the lookup SUCCEEDING there, so a special form or a
+    ! core name is still left alone -- exactly the symbols that have no
+    ! Var in the writing namespace, and exactly the ones the fallback
+    ! already handles.
+    if (.not. gcn_is_var(gcn_lookup(nsv, sym))) return
+    out = gc_sym(gcn_name(nsv) // "/" // t, [sym])
+  end function qq_alias
 
   ! A map as a vector of k v k v ..., the shape flattenMap produces.
   function flatten_map(m, roots) result(out)
@@ -4576,6 +4687,27 @@ contains
             if (.not. gca_is(out)) out = gca_empty([vs_get(base + 1)])
          end if
        end block
+    case (B_NSADDALIAS)
+       ! (.addAlias ns sym other-ns) -- slot 3, the alias map, which
+       ! resolve_var consults before treating a prefix as a namespace
+       ! name of its own. refer, which shared this case, writes slot 2:
+       ! a Var under a name, not a NAMESPACE under a name. Sharing them
+       ! put every :as alias into the bindings map, where nothing looks.
+       block
+         type(gc_value) :: nsv, m
+         nsv = strip_meta(gcv_nth(args, 0))
+         out = gc_nil()
+         if (gc_kind(nsv) == OBJ_NS) then
+            call vs_set(base + 2, nsv)
+            m = gc_slot(vs_get(base + 2), 3)
+            if (.not. gca_is(m)) m = gca_empty([vs_get(base + 1)])
+            call vs_set(base + 3, m)
+            m = gca_assoc(vs_get(base + 3), strip_meta(gcv_nth(args, 1)), &
+                 gcv_nth(args, 2), &
+                 [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+            call gc_set_slot(vs_get(base + 2), 3, m)
+         end if
+       end block
     case (B_NSREFER)
        ! (.refer ns sym var) puts an existing Var under a name in
        ! another namespace -- which is all refer is. addAlias is the
@@ -4798,8 +4930,8 @@ contains
        end block
     case (B_RTLOAD)
        ! RT.load takes a CLASSPATH-relative name without its extension:
-       ! (load "core_proxy") reaches here as "clojure/core_proxy". There
-       ! is no classpath, so src/clj is it. DEVIATIONS.md 10.
+       ! (load "core_proxy") reaches here as "clojure/core_proxy",
+       ! and classpath_find turns that into a file.
        block
          character(len=:), allocatable :: rel
          type(gc_value) :: fargs
@@ -4827,7 +4959,7 @@ contains
             return
          end if
          fargs = gcv_empty([vs_get(base + 1)])
-         fargs = gcv_conj(fargs, gc_str("src/clj/" // rel // ".clj", &
+         fargs = gcv_conj(fargs, gc_str(classpath_find(rel), &
               [vs_get(base + 1)]), [vs_get(base + 1)])
          call vs_set(base + 2, fargs)
          ! *ns* is SAVED AND RESTORED around the load, as RT.load
@@ -5672,6 +5804,57 @@ contains
     ! print-method is registered.
     if (k%tag == GCT_NIL .and. i == 4) k = gc_key("Object", [roots])
   end function host_super
+
+  ! The classpath. One root was enough while only core.clj was being
+  ! loaded, but Clojure's own test suite lives under test/clj and
+  ! requires clojure.test-helper from there. First root holding the
+  ! file wins, which is what a classpath means.
+  function classpath_find(rel) result(path)
+    character(len=*), intent(in) :: rel
+    character(len=:), allocatable :: path, cand
+    character(len=8) :: roots(3)
+    logical :: there
+    integer :: i
+
+    roots(1) = "src/clj"
+    roots(2) = "test/clj"
+    roots(3) = "."
+    ! The src/clj spelling is the fallback too, so a genuinely missing
+    ! file still reports the path a reader would expect to see.
+    path = "src/clj/" // rel // ".clj"
+    do i = 1, 3
+       cand = trim(roots(i)) // "/" // rel // ".clj"
+       inquire(file=cand, exist=there)
+       if (there) then
+          path = cand
+          return
+       end if
+    end do
+  end function classpath_find
+
+  ! The namespace an alias names in the CURRENT namespace, or nil.
+  ! (require '[clojure.template :as temp]) records temp -> that
+  ! namespace in slot 3, and this is the lookup that makes
+  ! temp/do-template mean something.
+  function alias_target(name, roots) result(nsv)
+    character(len=*), intent(in) :: name
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: nsv
+    nsv = alias_in(gcn_current(roots), name, roots)
+  end function alias_target
+
+  ! The same lookup in a NAMED namespace.
+  function alias_in(nsv0, name, roots) result(nsv)
+    type(gc_value), intent(in) :: nsv0
+    character(len=*), intent(in) :: name
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: nsv, al
+    nsv = gc_nil()
+    if (gc_kind(nsv0) /= OBJ_NS) return
+    al = gc_slot(nsv0, 3)
+    if (.not. gca_is(al)) return
+    nsv = gca_get(al, gc_sym(name, roots))
+  end function alias_in
 
   function make_writer(unit, roots) result(w)
     integer, intent(in) :: unit

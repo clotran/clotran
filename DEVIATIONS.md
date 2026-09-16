@@ -35,6 +35,7 @@ Categories:
 | 13 | Protocol dispatch is uncached | host | `src/f/GC.f90` |
 | 14 | Regex is ICU under java.util.regex's names, ASCII-offset only | host | `src/f/Regex.f90` |
 | 15 | `hash` values are gc_hash's, not the JVM's murmur3 | host | `src/f/GC.f90` |
+| 16 | Names resolve at call time, not while analysing | host | `src/f/GCEval.f90` |
 
 ---
 
@@ -345,3 +346,34 @@ default.
 It would go away by implementing murmur3 in `gc_hash`, which is worth
 doing only if a program ever needs a hash to match the JVM's across the
 wire.
+
+---
+
+## 16. Names resolve at call time, not while analysing
+
+Clojure resolves every symbol in `Compiler.analyze`, lexically, in the
+namespace being compiled, before any bytecode exists. ClojureScript does
+the same in `cljs.analyzer/resolve-var`, against an `env` carrying `:ns`
+and `:requires`. clotran resolves in `gce_eval`, when the form runs,
+against whatever `*ns*` is at that moment. SEAMS.md has the full
+argument; this is the ledger entry.
+
+Two patches stand in for the missing lexical information:
+
+- **`__defining-ns__`**, an environment binding `make_closure` puts on
+  every closure outside `clojure.core`, naming the namespace the closure
+  was written in. `resolve_var` and syntax-quote both consult it before
+  `*ns*`. It is INHERITED from the enclosing environment rather than read
+  fresh from `*ns*`: a nested `fn` created while a macro is running
+  belongs to the namespace that wrote it, not the one that called it.
+- **Syntax-quote resolves aliases and Vars at expansion time** rather
+  than read time (deviation 6), using that same binding, so
+  `` `temp/do-template `` becomes `clojure.template/do-template`.
+
+An unqualified symbol is only qualified when it actually resolves in the
+writing namespace. Clojure qualifies unconditionally; doing that here
+would break the bootstrap, where core.clj's own names must still fall
+back to `clojure.core` (deviation 3).
+
+It goes away by resolving names in `gce_analyze`, which already runs once
+per top-level form and today only macroexpands.

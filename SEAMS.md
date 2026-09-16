@@ -151,3 +151,64 @@ Not a porting source. Three uses:
   Which ones does clotran fail to present?
 - Is anything currently in Fortran actually bucket C -- already free in
   core.clj, and we wrote it anyway?
+
+---
+
+## The big one: Clojure compiles, clotran interprets
+
+Worth stating plainly because it is easy to get backwards: **Clojure is not
+an interpreted language.** There is no interpreter in Clojure-on-JVM. Every
+form, including one typed at a REPL prompt, goes
+
+    read -> Compiler.analyze -> emit JVM bytecode -> load class -> invoke
+
+`Compiler.eval` does exactly that and nothing else. ClojureScript is a
+compiler too, to JavaScript, and `cljs.analyzer` is 5,185 lines of Clojure
+doing the same job.
+
+clotran is a tree-walking interpreter. It is the odd one out, and that is
+the deepest seam in the project -- deeper than Fortran-versus-JVM, because
+it changes *when* things are known, not just what they are written in.
+
+### What that costs, concretely
+
+Both real implementations resolve names **lexically, at analysis time**:
+
+| | resolves a symbol | against |
+|---|---|---|
+| Clojure | `Compiler.analyze` | the namespace being compiled |
+| ClojureScript | `cljs.analyzer/resolve-var` | `env`, carrying `:ns` and `:requires` |
+| clotran | `gce_eval`, at call time | whatever `*ns*` happens to be |
+
+So `` `(temp/do-template ...) `` inside `clojure.test` is, on the JVM,
+already `clojure.template/do-template` by the time anything runs -- the
+alias was consumed while reading, in the namespace that wrote it. clotran
+still has the bare `temp/` at call time, in a namespace that never heard of
+`temp`.
+
+Every name-resolution bug found by running Clojure's own test suite was this
+one bug wearing a different hat:
+
+- `temp/do-template` -- an alias, unresolved
+- `apply-template` -- an unqualified symbol, unresolved
+- `__defining-ns__` being taken from `*ns*` at closure creation rather than
+  inherited, so a nested `fn` created while a macro RAN got stamped with the
+  caller's namespace
+
+`__defining-ns__` is the giveaway. It is a runtime reconstruction of
+something Clojure simply has: the namespace a form was written in. We carry
+it in the environment, at a frame's cost, because we threw away the compile
+step that would have known it for free.
+
+### We are not stuck with this
+
+clotran already has an analysis pass. `gce_analyze` runs once per top-level
+form, deliberately mirroring `Compiler.analyze` -- and today its entire body
+is `macroexpand_all`. Name resolution *could* happen there, lexically, with
+the namespace known, and the interpreter could then walk a tree whose
+symbols are already resolved. That is not compilation; it is the analysis
+half that both real implementations do and we skipped.
+
+Until then, treat it as the standing explanation: **when a bug is about
+which namespace a name means, the cause is almost certainly that we are
+asking at the wrong time.**

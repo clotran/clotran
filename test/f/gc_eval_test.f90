@@ -243,8 +243,12 @@ contains
 
   subroutine check_quasiquote()
     call ev("12a. ", "(quasiquote 1)", "1")
-    ! A bare symbol is quoted, not evaluated.
-    call ev("12b. ", "(do (def x 9) (quasiquote x))", "x")
+    ! A bare symbol is quoted, not evaluated -- and QUALIFIED with
+    ! the namespace it resolves in, which is what makes a macro's
+    ! expansion mean the same thing wherever it lands. Real Clojure
+    ! answers user/x here too; this asserted bare x while syntax-quote
+    ! qualified nothing.
+    call ev("12b. ", "(do (def x 9) (quasiquote x))", "user/x")
     ! ~x evaluates; the reader turns it into (unquote x).
     call ev("12c. ", "(do (def x 9) `~x)", "9")
     call ev("12d. ", "(do (def x 9) `(a ~x))", "(a 9)")
