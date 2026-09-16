@@ -1,0 +1,38 @@
+clotran
+Copyright (c) James Borden
+
+This program and the accompanying materials are made available under
+the terms of the Eclipse Public License 2.0, which accompanies this
+distribution in the file LICENSE.
+
+SPDX-License-Identifier: EPL-2.0
+
+---
+
+clotran redistributes third-party source. Those files keep their own
+licenses, which are NOT changed by the license above.
+
+## Clojure -- src/clj/clojure/
+
+Copyright (c) Rich Hickey and contributors. Distributed under the
+Eclipse Public License 1.0 (https://opensource.org/license/epl-1-0),
+which accompanies Clojure itself. Vendored unmodified from
+github.com/clojure/clojure at commit 71b4623d; see
+src/clj/clojure/PROVENANCE.md for what is and is not included, and for
+the single file there that is ours rather than upstream's.
+
+EPL-1.0 and EPL-2.0 are separate licenses. Clojure's files stay under
+EPL-1.0 here because that is how they were received; nothing in this
+repository relicenses them.
+
+## ICU4C -- src/c/icu/
+
+Copyright (c) 1991-2025 Unicode, Inc. Distributed under the Unicode
+License v3, which is reproduced in src/c/icu/LICENSE. Vendored
+unmodified; see src/c/icu/PROVENANCE.md.
+
+## mal -- test/regression/
+
+The per-step test suites originate from github.com/kanaka/mal
+(Joel Martin), MIT licensed. clotran began as a mal implementation;
+see NOTES.md.
