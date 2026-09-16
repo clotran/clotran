@@ -194,6 +194,7 @@ module GC
   ! cloned handle -- independent of the Pattern's, so two matchers over
   ! one Pattern never share search position (see Regex.f90).
   integer, parameter, public :: OBJ_MATCHER   = 21 ! 1=pattern 2=subject; i1=handle
+  integer, parameter, public :: OBJ_WRITER    = 22 ! i1=Fortran unit
   integer, parameter, public :: OBJ_HAMT      = 11 ! 1=root run; i1=count
   integer, parameter, public :: OBJ_HAMT_LEAF = 12 ! 1=key 2=val
   ! Slot 3 was reserved for a per-Var dynamic stack; the dynamic

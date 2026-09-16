@@ -2,49 +2,97 @@
 
 Clojure, hosted on Fortran.
 
-The interpreter core (reader, evaluator, persistent data structures,
-namespaces) is written in Fortran (`src/f`); the language itself --
-`clojure.core` and everything built on top of it -- is meant to grow
-as actual Clojure source (`src/clj`, `src/cljc`), loaded at startup,
-not hardcoded into the host.
+It runs Rich Hickey's actual `clojure/core.clj` -- the file, unmodified,
+vendored from `clojure/clojure` at `71b4623d`. Not a Clojure-like
+language implemented in Fortran: the Fortran is the *host*, standing
+where the JVM stands, and the language comes from Clojure's own source.
 
-gfortran is the default build; flang is the correctness oracle. Both
-are run before every commit (`make crosscheck`) -- see `NOTES.md`.
+```
+$ make && ./clotran
+user=> (defn greet [who]
+  #_=>   (str "hello, " who))
+#'greet
+user=> (greet "world")
+"hello, world"
+user=> (->> (range 20) (filter odd?) (partition-all 3) (map vec))
+([1 3 5] [7 9 11] [13 15 17] [19])
+user=> (clojure-version)
+"1.13.0-master-SNAPSHOT"
+```
+
+That version string is real: core.clj reads it off the classloader and
+parses it with a regex, and both of those had to exist for it to answer.
+
+## What works
+
+**691 of core.clj's 724 top-level forms load.** That includes
+destructuring, the macro system, protocols, multimethods, lazy seqs,
+transducers, metadata, `case`, regex literals, and most of the seq
+library -- because clotran does not implement those, core.clj does.
+
+Two independent oracles check it: gfortran and flang must agree
+(`make crosscheck`, ~1,950 assertions), and babashka is used to
+confirm what real Clojure actually does rather than trusting memory.
+
+## What does not
+
+| | |
+|---|---|
+| `deftype*` / `defrecord` | the wall at form 692, and the next thing to build |
+| `letfn*` | so `map-indexed` fails |
+| the five JVM-only sibling libs | bytecode generation; see `src/clj/clojure/PROVENANCE.md` |
+| `tap>`, `promise`, `shuffle`, `format` | need threads, queues, or `String/format` |
+| startup | core.clj is re-read every launch; there is no image yet |
+| regex | ICU, with ASCII/Latin-1 offsets only |
+
+`DEVIATIONS.md` is the full ledger: every place clotran does something
+real Clojure does not, why, and what removing it would take. A
+deviation with no entry there is a bug. `SEAMS.md` covers the other
+question -- what must be native versus what we merely chose to make
+native, using ClojureScript as the control group.
 
 ## Layout
 
-- `src/f` -- the Fortran host: value representation, persistent
-  list/vector/map, namespaces, reader, evaluator.
-- `src/clj`, `src/cljc` -- the language itself, written in itself.
-  Currently empty; see `src/cljc/README.md`.
+- `src/f` -- the Fortran host: value representation, a tracing GC,
+  persistent list/vector/map, namespaces, reader, evaluator.
+- `src/c` -- vendored ICU, built from source for regex. No Homebrew,
+  no system library, no runtime dependency.
+- `src/clj` -- Clojure's own source, vendored and unmodified.
 - `test/f` -- unit tests for the Fortran host, one file per module.
 - `scripts/clotran` -- the user-facing launcher (see below).
 
 ## Build
 
 ```
-make            # builds clotran(-bin) and every test binary
+make            # builds clotran and every test binary
 make test       # builds and runs every test binary
 make crosscheck # the same on flang and gfortran -- run before committing
 make FC=flang all test      # just the flang side
 ```
 
-`clotran-bin` is the raw interpreter, a plain stdin/stdout REPL
-with no line editing of its own. `clotran` is what you actually
-run -- a thin launcher (`scripts/clotran`) that wraps it in `rlwrap`
-when installed, for history and arrow-key editing, exactly the way
-real Clojure's own `clj` wraps `clojure`; falls back to the raw
+The first build also compiles vendored ICU from source, which takes a
+few minutes once; after that it is cached.
+
+`clotran-gc` is the raw interpreter, a plain stdin/stdout REPL with no
+line editing of its own. `clotran` is what you actually run -- a thin
+launcher (`scripts/clotran`) that loads core.clj and wraps the binary
+in `rlwrap` when installed, for history and arrow-key editing, exactly
+the way real Clojure's own `clj` wraps `clojure`; falls back to the raw
 binary with a note if `rlwrap` isn't found.
 
 ```
-clotran
+./clotran
 ```
 
-`test/regression/` also carries the official mal per-step test suites
-(see `NOTES.md`) -- running those needs mal's own `runtest.py`,
-external to this repo (no Python vendored here), against the raw
-binary (not the rlwrap-wrapping launcher, same as testing `clojure`
-rather than `clj`):
+There is a second, older evaluator in the tree: `clotran-bin`, built
+from `src/f/Eval.f90`. It predates the GC and is kept only because the
+mal regression suites below still drive it. It is not the interpreter
+this project is about, and it is on its way out.
+
+`test/regression/` carries the official mal per-step test suites (see
+`NOTES.md`) -- running those needs mal's own `runtest.py`, external to
+this repo (no Python vendored here), against the raw binary (not the
+rlwrap-wrapping launcher, same as testing `clojure` rather than `clj`):
 
 ```
 python3 ~/jborden/mal/runtest.py --deferrable --rundir test/regression \
@@ -200,3 +248,12 @@ implementation -- mal was bootstrap/validation scaffolding to get a
 real interpreter working against a real test suite, not the identity
 of this project. See `NOTES.md` for the actual design history,
 decisions, and what's ahead.
+
+
+## License
+
+clotran is EPL-2.0 (`LICENSE`).
+
+It redistributes Clojure (EPL-1.0), ICU4C (Unicode License v3) and mal
+test suites (MIT), each under its own license. `NOTICE` says which is
+which; none of them is relicensed by this repository.

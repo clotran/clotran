@@ -285,11 +285,11 @@ eval_test: $(eval-objects) $(T)/eval_test.f90
 clotran-bin: $(eval-objects) $(S)/main.f90
 	$(FC) $(FCFLAGS) -o $@ $(eval-objects) $(S)/main.f90
 
-# The user-facing entry point: scripts/clotran wraps clotran-bin in
+# The user-facing entry point: scripts/clotran wraps clotran-gc in
 # rlwrap when it's installed, exactly like real Clojure's own clj
 # wraps clojure (see NOTES.md) -- not a build product itself, just
 # installed alongside the binary it wraps.
-clotran: scripts/clotran clotran-bin
+clotran: scripts/clotran clotran-gc
 	cp scripts/clotran $@
 	chmod +x $@
 

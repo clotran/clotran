@@ -236,6 +236,8 @@ contains
        s = '#"' // gcp_str(gc_slot(v, 1), .false.) // '"'
     case (OBJ_MATCHER)
        s = "#<matcher>"
+    case (OBJ_WRITER)
+       s = "#<writer>"
     case (OBJ_ERR)
        ! The shape Clojure prints a thrown thing in, minus the trace
        ! there is nothing to fill in with.

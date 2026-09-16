@@ -16,7 +16,7 @@ program gc_repl
   use GCVector
   implicit none
 
-  character(len=:), allocatable :: line
+  character(len=:), allocatable :: line, pending
   character(len=4096) :: buf
   type(gc_value) :: env, form, result
   type(gc_value) :: none(0)
@@ -34,8 +34,6 @@ program gc_repl
   ! the real core.clj, which is the point of the project.
   call load_file("src/clj/host.clj", vs_get(base + 1))
   ! host.clj leaves clojure.core current, being part of its bootstrap.
-  ! The REPL starts in user, as Clojure's does.
-  call gcn_set_current(gcn_find_or_create("user", none))
 
   ! Any files named on the command line load next, in order, so
   ! that `clotran-gc some.clj` is how a file gets tried against
@@ -46,19 +44,46 @@ program gc_repl
      call load_file(argbuf(1:arglen), vs_get(base + 1))
   end do
 
+  ! The REPL starts in user, as Clojure's does -- AFTER the files on the
+  ! command line, because core.clj's own (ns clojure.core) leaves that
+  ! namespace current and anything typed at the prompt would otherwise
+  ! be defined into clojure.core.
+  call gcn_set_current(gcn_find_or_create("user", none))
+
+  ! The REPL reads FORMS, not lines. A line that does not close what it
+  ! opened is not an error, it is a request for more input -- without
+  ! this, (defn f [x] <enter> was unusable and every definition had to
+  ! be typed on one line.
+  pending = ""
   do
-     write(*, '(A)', advance='no') gcn_name(gcn_current(none)) // "=> "
+     if (len(pending) == 0) then
+        write(*, '(A)', advance='no') gcn_name(gcn_current(none)) // "=> "
+     else
+        write(*, '(A)', advance='no') "#_=> "
+     end if
      flush(6)
      read(*, '(A)', iostat=ios, size=size_read, advance='no') buf
      if (ios < 0 .and. size_read == 0) exit   ! EOF
      line = trim(buf(1:max(size_read, 0)))
-     if (len(line) == 0) cycle
+     if (len(pending) == 0 .and. len(line) == 0) cycle
+     if (len(pending) == 0) then
+        pending = line
+     else
+        ! Newline, not a space: a ; comment must still end at its line.
+        pending = pending // new_line('a') // line
+     end if
 
-     form = gcr_read(line, [vs_get(base + 1)])
+     form = gcr_read(pending, [vs_get(base + 1)])
      if (gcr_has_error()) then
+        ! Every unclosed-form message the reader produces begins this
+        ! way -- an unclosed list, vector, map, string or regex. Any
+        ! other reader error is real.
+        if (index(gcr_error(), "EOF while reading") == 1) cycle
         print '(A,A)', "reader error: ", gcr_error()
+        pending = ""
         cycle
      end if
+     pending = ""
      call vs_set(base + 2, form)
 
      call gce_clear_error()

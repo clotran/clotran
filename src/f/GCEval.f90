@@ -109,6 +109,7 @@ module GCEval
   integer, parameter :: B_HASH = 138, B_BASELOADER = 139, B_RESOURCE = 140
   integer, parameter :: B_PROPLOAD = 141, B_PROPGET = 142, B_CLOSE = 143
   integer, parameter :: B_INTVALUE = 144, B_STRCONTAINS = 145
+  integer, parameter :: B_WRITE = 146, B_FLUSH = 147, B_CHARAT = 148
   integer, parameter :: B_SYMBOL2 = B_SYMBOL
   integer, parameter :: B_LONGCAST = 66, B_DBLCAST = 67, B_BOOLCAST = 68, B_CHARCAST = 69
   integer, parameter :: B_BITAND = 70, B_BITOR = 71, B_BITXOR = 72, B_BITNOT = 73
@@ -322,12 +323,13 @@ contains
     ! loading -- assert-args puts *ns* in its message -- so they cannot
     ! wait for core.clj to define them.
     !
-    ! *out*, *in* and *err* are nil rather than writers: clotran prints
-    ! through natives, and a writer object with .write on it is what to
-    ! build when core.clj's own pr is wanted instead.
-    call bind_var(core, "*out*", gc_nil())
+    ! *out* and *err* ARE writers -- core.clj's pr, prn, print and
+    ! println all end in (.write *out* s) or (.append *out* c), and a nil
+    ! there is what made every one of them fail on nil.write. *in* stays
+    ! nil: nothing reads through it yet.
+    call bind_var(core, "*out*", make_writer(6, core))
     call bind_var(core, "*in*", gc_nil())
-    call bind_var(core, "*err*", gc_nil())
+    call bind_var(core, "*err*", make_writer(0, core))
     call bind_var(core, "*agent*", gc_nil())
     call bind_var(core, "*read-eval*", gc_bool(.true.))
     call bind_var(core, "*data-readers*", gca_empty([vs_get(base + 1)]))
@@ -1539,6 +1541,10 @@ contains
     case ("concat"); out = native(B_STR, "str", [roots])
     case ("toString"); out = native(B_TOSTRING, "clotran-to-string", [roots])
     case ("append");   out = native(B_APPEND, "clotran-append", [roots])
+    ! Writer methods. core_print reaches for all three.
+    case ("charAt");   out = native(B_CHARAT, "clotran-char-at", [roots])
+    case ("write");    out = native(B_WRITE, "clotran-write", [roots])
+    case ("flush");    out = native(B_FLUSH, "clotran-flush", [roots])
     case ("getMessage", "getLocalizedMessage")
        out = native(B_EXMSG, "ex-message", [roots])
     case ("getData");   out = native(B_EXDATA, "ex-data", [roots])
@@ -1896,7 +1902,8 @@ contains
        thunk = gca_empty([vs_get(base + 1)])
        call vs_set(base + 3, thunk)
        out = gc_obj(OBJ_ATOM, [vs_get(base + 3), gc_nil()], [vs_get(base + 3)])
-    else if (cname == "StringBuilder" .or. cname == "java.lang.StringBuilder") then
+    else if (cname == "StringBuilder" .or. cname == "java.lang.StringBuilder" .or. &
+         cname == "java.io.StringWriter" .or. cname == "StringWriter") then
        thunk = gc_str("", [vs_get(base + 1)])
        if (gcl_count(vs_get(base + 1)) > 1) then
           thunk = gce_eval(gcl_first(gcl_rest(vs_get(base + 1), [vs_get(base + 1)])), &
@@ -3470,6 +3477,19 @@ contains
          end if
          call vs_set(base + 3, dv)
          meth = gca_get(gc_slot(vs_get(base + 1), 4), vs_get(base + 3))
+         ! Then the host supertypes, then :default. See host_super.
+         if (meth%tag == GCT_NIL) then
+            block
+              integer :: si
+              type(gc_value) :: sk
+              do si = 1, 4
+                 sk = host_super(vs_get(base + 3), si, vs_get(base + 1))
+                 if (sk%tag == GCT_NIL) exit
+                 meth = gca_get(gc_slot(vs_get(base + 1), 4), sk)
+                 if (meth%tag /= GCT_NIL) exit
+              end do
+            end block
+         end if
          if (meth%tag == GCT_NIL) &
               meth = gca_get(gc_slot(vs_get(base + 1), 4), &
                              gc_slot(vs_get(base + 1), 3))
@@ -4168,6 +4188,42 @@ contains
             out = gc_bool(r == 1)
          end if
        end block
+    case (B_CHARAT)
+       ! core_print escapes a string one character at a time, which is
+       ! the only reason pr quotes anything.
+       block
+         type(gc_value) :: sv, iv
+         character(len=:), allocatable :: t
+         sv = strip_meta(gcv_nth(args, 0))
+         iv = strip_meta(gcv_nth(args, 1))
+         out = gc_nil()
+         t = text_of(sv)
+         if (iv%tag == GCT_INT) then
+            if (iv%ival >= 0 .and. iv%ival < len(t)) out = gc_char(t(iv%ival + 1:iv%ival + 1))
+         end if
+       end block
+    case (B_WRITE)
+       ! (.write w s). A char writes as itself; anything else goes
+       ! through str, as Writer.write(int) does for a code point.
+       block
+         type(gc_value) :: w
+         w = strip_meta(gcv_nth(args, 0))
+         if (gc_kind(w) == OBJ_WRITER) then
+            write(gc_i1(w), '(A)', advance='no') text_of(gcv_nth(args, 1))
+         else if (gc_kind(w) == OBJ_SB) then
+            call gc_set_slot(w, 1, gc_str( &
+                 text_of(gc_slot(w, 1)) // text_of(gcv_nth(args, 1)), &
+                 [vs_get(base + 1)]))
+         end if
+         out = gc_nil()
+       end block
+    case (B_FLUSH)
+       block
+         type(gc_value) :: w
+         w = strip_meta(gcv_nth(args, 0))
+         if (gc_kind(w) == OBJ_WRITER) flush(gc_i1(w))
+         out = gc_nil()
+       end block
     case (B_BASELOADER)
        out = gc_str("src/clj", [vs_get(base + 1)])
     case (B_RESOURCE)
@@ -4846,7 +4902,7 @@ contains
        end do
     case (B_APPEND)
        ! MUTATES and returns the builder, as StringBuilder.append does:
-       ! (recur (. sb (append ...)) ...) in core.clj'\''s str relies on
+       ! (recur (. sb (append ...)) ...) in core.clj's str relies on
        ! getting the same object back.
        a = gcv_nth(args, 0)
        out = a
@@ -4854,6 +4910,8 @@ contains
           call gc_set_slot(a, 1, gc_str( &
                text_of(gc_slot(a, 1)) // text_of(gcv_nth(args, 1)), &
                [vs_get(base + 1)]))
+       else if (gc_kind(a) == OBJ_WRITER) then
+          write(gc_i1(a), '(A)', advance='no') text_of(gcv_nth(args, 1))
        end if
     case (B_TOSTRING)
        a = gcv_nth(args, 0)
@@ -5397,6 +5455,7 @@ contains
        case (OBJ_MULTIFN); s = "multifn"
        case (OBJ_REGEX);   s = "regex"
        case (OBJ_MATCHER); s = "matcher"
+       case (OBJ_WRITER); s = "writer"
        case (OBJ_SB); s = "string-builder"
        case (OBJ_ERR); s = "error"
        case (OBJ_LAZY);    s = "lazy-seq"
@@ -5536,6 +5595,90 @@ contains
 
   ! A value as plain text: a string'\''s own characters, anything else
   ! printed the way `str` prints it.
+  ! A writer is nothing but the Fortran unit it writes to. No buffer:
+  ! the host already has one, and giving it a second would mean every
+  ! print needed an explicit flush to be seen.
+  ! clotran's classes ARE its type tags, but core.clj registers its
+  ! print-method methods on the JVM INTERFACES -- IPersistentVector,
+  ! ISeq, Number. With no hierarchy, (class [1 2]) answered :vector,
+  ! matched no method, and fell to :default -- whose IObj branch calls
+  ! print-method on that same vector again. Unbounded recursion, and
+  ! the segfault that made (pr [1 2]) kill the process.
+  !
+  ! This is DEVIATIONS 8's missing hierarchy, cut down to the fixed
+  ! host part of it: what each clotran type would implement on the JVM,
+  ! most specific first. Consulted only AFTER an exact miss and only
+  ! BEFORE :default, so no dispatch that resolves today can change.
+  function host_super(dv, i, roots) result(k)
+    type(gc_value), intent(in) :: dv, roots
+    integer, intent(in) :: i
+    type(gc_value) :: k
+    character(len=:), allocatable :: t
+
+    k = gc_nil()
+    if (dv%tag /= GCT_KEY) return
+    t = gc_ref_text(dv%ref)
+    select case (t)
+    case ("vector")
+       select case (i)
+       case (1); k = gc_key("clojure.lang.IPersistentVector", [roots])
+       case (2); k = gc_key("java.util.List", [roots])
+       case (3); k = gc_key("java.util.RandomAccess", [roots])
+       end select
+    case ("map")
+       select case (i)
+       case (1); k = gc_key("clojure.lang.IPersistentMap", [roots])
+       case (2); k = gc_key("java.util.Map", [roots])
+       end select
+    case ("set")
+       select case (i)
+       case (1); k = gc_key("clojure.lang.IPersistentSet", [roots])
+       case (2); k = gc_key("java.util.Set", [roots])
+       end select
+    case ("list", "seq", "lazy", "cons")
+       select case (i)
+       case (1); k = gc_key("clojure.lang.ISeq", [roots])
+       case (2); k = gc_key("java.util.List", [roots])
+       end select
+    case ("keyword")
+       if (i == 1) k = gc_key("clojure.lang.Keyword", [roots])
+    case ("symbol")
+       if (i == 1) k = gc_key("clojure.lang.Symbol", [roots])
+    case ("var")
+       if (i == 1) k = gc_key("clojure.lang.Var", [roots])
+    case ("atom")
+       if (i == 1) k = gc_key("clojure.lang.IDeref", [roots])
+    case ("regex")
+       if (i == 1) k = gc_key("java.util.regex.Pattern", [roots])
+    case ("string")
+       if (i == 1) k = gc_key("String", [roots])
+    case ("char")
+       if (i == 1) k = gc_key("java.lang.Character", [roots])
+    case ("bool")
+       if (i == 1) k = gc_key("Boolean", [roots])
+    case ("error")
+       if (i == 1) k = gc_key("Throwable", [roots])
+    case ("int")
+       if (i == 1) k = gc_key("Number", [roots])
+    case ("float")
+       select case (i)
+       case (1); k = gc_key("Double", [roots])
+       case (2); k = gc_key("Number", [roots])
+       end select
+    end select
+    ! Everything is an Object, which is where core.clj's catch-all
+    ! print-method is registered.
+    if (k%tag == GCT_NIL .and. i == 4) k = gc_key("Object", [roots])
+  end function host_super
+
+  function make_writer(unit, roots) result(w)
+    integer, intent(in) :: unit
+    type(gc_value), intent(in) :: roots
+    type(gc_value) :: w
+    w = gc_obj(OBJ_WRITER, [gc_nil()], [roots])
+    call gc_set_i1(w, unit)
+  end function make_writer
+
   function text_of(v) result(s)
     type(gc_value), intent(in) :: v
     character(len=:), allocatable :: s
