@@ -29,6 +29,7 @@ program gc_test
   call check_namespaces()
   call check_grow_only()
   call check_value_stack()
+  call check_global_root_growth()
 
   if (all_ok) then
      print *, ""
@@ -535,5 +536,42 @@ contains
        p = gc_cdr(p)
     end do
   end function chain_length
+
+  ! The global root table GROWS rather than capping. It started
+  ! life as a fixed eight, which was exactly the number of roots
+  ! the tree claimed, so the ninth was dropped silently and swept
+  ! on the next collection. Nine against an initial eight only
+  ! exercises one doubling, so this claims far more than that and
+  ! checks two things the grow path could get wrong: that every
+  ! slot INDEX still names the value it was given (modules hold
+  ! those indices, so a copy landing at a different offset would
+  ! silently swap two modules roots), and that a collection after
+  ! the move keeps all of them alive.
+  subroutine check_global_root_growth()
+    integer, parameter :: many = 200
+    integer :: handle(many), i
+    logical :: indices_ok, values_ok
+
+    call gc_init(64)
+    do i = 1, many
+       handle(i) = gc_global_new(gc_obj(OBJ_CONS, [gc_int(i), gc_nil()], no_roots))
+    end do
+
+    indices_ok = .true.
+    do i = 1, many
+       if (handle(i) /= i) indices_ok = .false.
+    end do
+    call ok("18a. every claim gets its own slot, in order: ", indices_ok)
+    call ok_int("18b. ...and the count is all of them: ", gc_global_count(), many)
+
+    call gc_collect(no_roots)
+
+    values_ok = .true.
+    do i = 1, many
+       if (slot_int(gc_global_get(handle(i)), 1) /= i) values_ok = .false.
+    end do
+    call ok("18c. a root survives the table growing under it: ", values_ok)
+    call ok("18d. ...and the heap is still sound: ", gc_check_heap() == "")
+  end subroutine check_global_root_growth
 
 end program gc_test

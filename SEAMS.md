@@ -26,10 +26,17 @@ Two implementations of one language, counted:
 | host references          |      578 `clojure.lang.*` + 115 `java.*` | 208 `js/` |
 | ...of which are throws   |        - | 131 `js/Error` |
 | distinct host classes    |       81 |       ~20 |
-| `deftype`                |        0 |        86 |
-| `defprotocol`            |        0 |        59 |
+| `deftype`                |        1 |        87 |
+| `defprotocol`            |        1 |        60 |
 
 core.cljs is 58% larger while touching its host roughly three times less.
+
+(The `deftype` and `defprotocol` rows read 1, not 0: `(deftype Eduction
+...)` at core.clj:8016 -- the form that was the wall -- and
+`(defprotocol Inst)` at core.clj:7038 are both real. The point the rows
+make is unchanged, two against 147, but see bucket A-bis below for why
+the ratio does not mean what it looks like.)
+
 The extra five thousand lines are `PersistentVector`, `PersistentHashMap`,
 `BitmapIndexedNode`, `Subvec`, `ChunkedSeq`, `LazySeq`, `MultiFn`, `Atom`,
 `Var`, `Namespace`, `Range` -- written *in Clojure*, as deftypes. On the JVM
@@ -104,6 +111,34 @@ where core.cljs has deftypes. Also `OBJ_LAZY`, `OBJ_ATOM`, `OBJ_MULTIFN`,
 These are performance decisions, they are reversible in principle, and they
 are **not deviations**. They do not belong in DEVIATIONS.md. What they do owe
 is the right *shape*: see the protocol list below.
+
+### A-bis. `deftype*` and `reify*` -- native, and ClojureScript agrees
+
+The table above says `deftype` appears **once in core.clj and 87 times in
+core.cljs**, which reads like the clearest bucket-B case in the project:
+ClojureScript writes in Clojure what we write in Fortran.
+
+It is not. Those 87 are `deftype` the MACRO, and the macro expands to
+`deftype*` the SPECIAL FORM, which neither implementation writes in
+Clojure. Clojure interns it as a special form -- `Compiler.java:67`,
+`Symbol.intern("deftype*")`, parsed at `Compiler.java:8516` under the
+comment `(deftype* tagname classname [fields] :implements [interfaces]
+:tag tagname methods*)`. ClojureScript lists it among its specials at
+`analyzer.cljc:1509` and parses it at `analyzer.cljc:3678`,
+`(defmethod parse 'deftype*)`. Both host compilers have a case
+for it, which is the definition of bucket A.
+
+So the count in the table measures something real but answers a different
+question: it says core.cljs BUILDS ITS COLLECTIONS out of deftype where we
+build ours out of Fortran modules (bucket B, and unchanged). It does not
+say deftype itself is host-free.
+
+What clotran makes native is the smallest thing that satisfies both:
+a type is a name, its fields, a method table and a list of the class
+names it claims. No class is generated, because `instance?` is the only
+question anything asks and a list answers it. Everything above --
+`deftype`, `reify`, `defrecord`, `extend-type`, `satisfies?` -- stays in
+vendored `core_deftype.clj`, which is bucket C.
 
 ### C. Free -- comes from vendored core.clj
 

@@ -126,6 +126,17 @@ module GCEval
   type(gc_root), save :: gensym_root
   integer, save :: gensym_id = 0
   integer, save :: qq_depth = 0
+  ! Every type `deftype*` has created, keyed by the class keyword a
+  ! class literal evaluates to. Clojure puts the class in a
+  ! classloader and imports the short name into the namespace;
+  ! clotran's `import` is a no-op (classes are recognised by the
+  ! SHAPE of their name), so there is nowhere namespace-local to put
+  ! it and one global table is what `new` and `instance?` both read.
+  !
+  ! Global, and therefore on the list in PLAN.md of what has to move
+  ! into a per-thread context before threads exist.
+  type(gc_root), save :: types_root
+  integer, save :: reify_id = 0
   ! EVALUATION DEPTH, and the limit that turns a stack overflow into a
   ! reportable error instead of a segfault. The JVM does the same thing
   ! -- StackOverflowError -- and Clojure inherits it.
@@ -606,6 +617,7 @@ contains
           gc_ref_is(sym%ref, "new") .or. gc_ref_is(sym%ref, "clojure.core/import*") .or. &
           gc_ref_is(sym%ref, "set!") .or. &
           gc_ref_is(sym%ref, "case*") .or. &
+          gc_ref_is(sym%ref, "deftype*") .or. gc_ref_is(sym%ref, "reify*") .or. &
           gc_ref_is(sym%ref, "var")
   end function is_special
 
@@ -765,6 +777,12 @@ contains
     else if (gc_ref_is(head%ref, "case*")) then
        out = eval_case(vs_get(base + 3), vs_get(base + 2))
 
+    else if (gc_ref_is(head%ref, "deftype*")) then
+       out = eval_deftype(vs_get(base + 3), vs_get(base + 2))
+
+    else if (gc_ref_is(head%ref, "reify*")) then
+       out = eval_reify(vs_get(base + 3), vs_get(base + 2))
+
     else if (gc_ref_is(head%ref, "quasiquote")) then
        ! Expand to ordinary cons/concat calls, then evaluate those.
        ! Syntax-quote is a source transformation, not a runtime thing,
@@ -872,6 +890,472 @@ contains
 
     call vs_leave(base)
   end function eval_special
+
+  ! (deftype* user/Name user.Name [fields]
+  !    :implements [ifaces] opt val ...
+  !    (methodName [this args*] body)*)
+  !
+  ! The shape emit-deftype* builds. Nothing here generates a class --
+  ! there is no classloader to put one in, and clotran recognises a
+  ! class by the SHAPE of its name rather than by looking one up. So
+  ! the type is an object in a global table, keyed by the same keyword
+  ! a class literal evaluates to, which is what makes `new`,
+  ! `instance?` and a protocol's :impls lookup all agree about what
+  ! user.Name means without a hierarchy to walk.
+  recursive function eval_deftype(rest, env) result(out)
+    type(gc_value), intent(in) :: rest, env
+    type(gc_value) :: out, w, cname, k, ty
+    integer :: base
+
+    out = gc_nil()
+    base = vs_enter(6)
+    call vs_set(base + 1, rest)
+    call vs_set(base + 2, env)
+
+    ! Past the tagname (user/Name): it names the VAR core_deftype
+    ! builds around this, and the CLASSNAME is what everything here
+    ! keys on.
+    w = gcl_rest(vs_get(base + 1), [vs_get(base + 1)])
+    call vs_set(base + 3, w)
+    cname = strip_meta(gcl_first(vs_get(base + 3)))
+    if (cname%tag /= GCT_SYM) then
+       call fail("deftype* needs a class name")
+       call vs_leave(base)
+       return
+    end if
+    call vs_set(base + 4, cname)
+
+    w = gcl_rest(vs_get(base + 3), [vs_get(base + 1), vs_get(base + 4)])
+    call vs_set(base + 3, w)
+    call vs_set(base + 5, strip_meta(gcl_first(vs_get(base + 3))))
+    w = gcl_rest(vs_get(base + 3), &
+         [vs_get(base + 1), vs_get(base + 4), vs_get(base + 5)])
+    call vs_set(base + 3, w)
+
+    ! The options arrive as keyword/value pairs spliced in ahead of
+    ! the methods, :implements among them. Only :implements is read;
+    ! :load-ns and :no-print have nothing to correspond to here, and
+    ! are skipped rather than rejected so a form using them still
+    ! loads.
+    w = gcv_empty([vs_get(base + 1)])
+    call vs_set(base + 6, w)
+    do while (gcl_count(vs_get(base + 3)) > 0)
+       k = strip_meta(gcl_first(vs_get(base + 3)))
+       if (k%tag /= GCT_KEY) exit
+       w = gcl_rest(vs_get(base + 3), [vs_get(base + 1), vs_get(base + 6)])
+       call vs_set(base + 3, w)
+       if (gc_ref_is(k%ref, "implements")) &
+            call vs_set(base + 6, strip_meta(gcl_first(vs_get(base + 3))))
+       w = gcl_rest(vs_get(base + 3), [vs_get(base + 1), vs_get(base + 6)])
+       call vs_set(base + 3, w)
+    end do
+
+    ty = build_type(class_of_text(vs_get(base + 4)), vs_get(base + 5), &
+         vs_get(base + 6), vs_get(base + 3), vs_get(base + 2))
+    if (.not. has_error) then
+       call vs_set(base + 4, ty)
+       call register_type(vs_get(base + 4))
+       out = vs_get(base + 4)
+    end if
+    call vs_leave(base)
+  end function eval_deftype
+
+  ! (reify* [ifaces] (methodName [this args*] body)*)
+  !
+  ! The same machinery with no fields and no name anyone can write, so
+  ! the type is built and instantiated in one step and never
+  ! registered -- nothing can ask for it by name, and registering one
+  ! per evaluation would be a leak. The method bodies ARE closures
+  ! over the surrounding scope, which reify's docstring requires and
+  ! deftype's forbids; here they are closures either way, and the
+  ! difference is invisible because a deftype method body is written
+  ! at the top level.
+  recursive function eval_reify(rest, env) result(out)
+    type(gc_value), intent(in) :: rest, env
+    type(gc_value) :: out, ty
+    character(len=24) :: buf
+    integer :: base
+
+    out = gc_nil()
+    base = vs_enter(4)
+    call vs_set(base + 1, rest)
+    call vs_set(base + 2, env)
+    call vs_set(base + 3, strip_meta(gcl_first(vs_get(base + 1))))
+    reify_id = reify_id + 1
+    write(buf, '(I0)') reify_id
+    ty = build_type("clotran.reify__" // trim(buf), &
+         gcv_empty([vs_get(base + 1), vs_get(base + 3)]), vs_get(base + 3), &
+         gcl_rest(vs_get(base + 1), [vs_get(base + 1), vs_get(base + 3)]), &
+         vs_get(base + 2))
+    if (.not. has_error) then
+       call vs_set(base + 4, ty)
+       out = gc_obj(OBJ_INST, &
+            [vs_get(base + 4), gcv_empty([vs_get(base + 4)]), gc_nil()], &
+            [vs_get(base + 4)])
+    end if
+    call vs_leave(base)
+  end function eval_reify
+
+  ! A type object from its parts, with each method form compiled to a
+  ! closure. Methods sharing a NAME become clauses of ONE closure: an
+  ! interface method overloaded by arity arrives as several forms, and
+  ! select_clause is already how a multi-arity fn picks between them.
+  !
+  ! Grouped by re-scanning the method list once per distinct name,
+  ! which is quadratic in the number of methods. A type has a handful,
+  ! and this runs once per deftype rather than once per call.
+  recursive function build_type(cname, fields, ifaces, methods, env) result(out)
+    character(len=*), intent(in) :: cname
+    type(gc_value), intent(in) :: fields, ifaces, methods, env
+    type(gc_value) :: out, w, m, mname, tmp
+    integer :: base
+
+    out = gc_nil()
+    base = vs_enter(9)
+    call vs_set(base + 1, fields)
+    call vs_set(base + 2, ifaces)
+    call vs_set(base + 3, methods)
+    call vs_set(base + 4, env)
+    tmp = gca_empty([vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)])
+    call vs_set(base + 5, tmp)
+    call vs_set(base + 6, vs_get(base + 3))
+
+    do while (gcl_count(vs_get(base + 6)) > 0)
+       m = strip_meta(gcl_first(vs_get(base + 6)))
+       mname = strip_meta(gcl_first(m))
+       if (mname%tag == GCT_SYM) then
+          tmp = gc_key(gc_ref_text(mname%ref), &
+               [vs_get(base + 5), vs_get(base + 6)])
+          call vs_set(base + 7, tmp)
+          if (.not. gca_contains(vs_get(base + 5), vs_get(base + 7))) then
+             tmp = method_clauses(gc_ref_text(mname%ref), vs_get(base + 3), &
+                  vs_get(base + 1))
+             call vs_set(base + 8, tmp)
+             ! Closure FIRST, then assoc. Two allocations as arguments
+             ! to one call lets the second collect the first.
+             tmp = make_closure(vs_get(base + 8), vs_get(base + 4))
+             call vs_set(base + 9, tmp)
+             tmp = gca_assoc(vs_get(base + 5), vs_get(base + 7), &
+                  vs_get(base + 9), [vs_get(base + 5), vs_get(base + 7), &
+                  vs_get(base + 9)])
+             call vs_set(base + 5, tmp)
+          end if
+       end if
+       tmp = gcl_rest(vs_get(base + 6), [vs_get(base + 5), vs_get(base + 6)])
+       call vs_set(base + 6, tmp)
+    end do
+
+    ! The interfaces, normalised to the keyword a class literal
+    ! evaluates to, so instance? is a string compare and not a second
+    ! naming convention.
+    tmp = iface_keys(vs_get(base + 2))
+    call vs_set(base + 6, tmp)
+    tmp = gc_str(cname, [vs_get(base + 5), vs_get(base + 6)])
+    call vs_set(base + 7, tmp)
+    out = gc_obj(OBJ_TYPE, [vs_get(base + 7), vs_get(base + 1), &
+         vs_get(base + 5), vs_get(base + 6)], &
+         [vs_get(base + 1), vs_get(base + 5), vs_get(base + 6), vs_get(base + 7)])
+    call vs_leave(base)
+  end function build_type
+
+  ! Each interface symbol as its class keyword. java.lang is
+  ! implicitly imported, so short_class_name is what makes Object and
+  ! java.lang.Object the same entry -- the same rule a class literal
+  ! in value position follows.
+  recursive function iface_keys(ifaces) result(out)
+    type(gc_value), intent(in) :: ifaces
+    type(gc_value) :: out, s, tmp
+    integer :: base, i
+
+    base = vs_enter(2)
+    call vs_set(base + 1, ifaces)
+    tmp = gcv_empty([vs_get(base + 1)])
+    call vs_set(base + 2, tmp)
+    if (gcv_is(vs_get(base + 1))) then
+       do i = 0, gcv_count(vs_get(base + 1)) - 1
+          s = strip_meta(gcv_nth(vs_get(base + 1), i))
+          if (s%tag /= GCT_SYM) cycle
+          tmp = gc_key(short_class_name(gc_ref_text(s%ref)), &
+               [vs_get(base + 1), vs_get(base + 2)])
+          call vs_set(base + 2, gcv_conj(vs_get(base + 2), tmp, &
+               [vs_get(base + 1), vs_get(base + 2), tmp]))
+       end do
+    end if
+    out = vs_get(base + 2)
+    call vs_leave(base)
+  end function iface_keys
+
+  ! Every clause for one method name, in order, each with the type's
+  ! fields bound around its body.
+  recursive function method_clauses(name, methods, fields) result(out)
+    character(len=*), intent(in) :: name
+    type(gc_value), intent(in) :: methods, fields
+    type(gc_value) :: out, m, mname, tmp
+    integer :: base
+
+    base = vs_enter(5)
+    call vs_set(base + 1, methods)
+    call vs_set(base + 2, fields)
+    tmp = gcv_empty([vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 3, tmp)
+    call vs_set(base + 4, vs_get(base + 1))
+
+    do while (gcl_count(vs_get(base + 4)) > 0)
+       m = strip_meta(gcl_first(vs_get(base + 4)))
+       mname = strip_meta(gcl_first(m))
+       if (mname%tag == GCT_SYM) then
+          if (gc_ref_is(mname%ref, name)) then
+             tmp = bind_fields(gcl_rest(m, [vs_get(base + 2), vs_get(base + 3)]), &
+                  vs_get(base + 2))
+             call vs_set(base + 5, tmp)
+             tmp = gcv_conj(vs_get(base + 3), vs_get(base + 5), &
+                  [vs_get(base + 3), vs_get(base + 5)])
+             call vs_set(base + 3, tmp)
+          end if
+       end if
+       tmp = gcl_rest(vs_get(base + 4), [vs_get(base + 3), vs_get(base + 4)])
+       call vs_set(base + 4, tmp)
+    end do
+
+    out = seq_to_list(vs_get(base + 3), [vs_get(base + 3)])
+    call vs_leave(base)
+  end function method_clauses
+
+  ! One clause -- (params body...) -- with the type's fields bound
+  ! around the body, because a method body sees its fields as PLAIN
+  ! NAMES and not through `this`. On the JVM they are real fields on a
+  ! real class; here the body is wrapped in a let* that reads each one
+  ! off the instance.
+  !
+  ! A field whose name a PARAMETER also uses is left out: the
+  ! parameter is bound outside this let*, so binding the field too
+  ! would shadow the argument the caller passed. Clojure resolves that
+  ! the other way round, the parameter winning, and skipping is how
+  ! this gets the same answer.
+  recursive function bind_fields(clause, fields) result(out)
+    type(gc_value), intent(in) :: clause, fields
+    type(gc_value) :: out, params, this, f, tmp
+    integer :: base, i
+
+    out = clause
+    if (.not. gcv_is(fields)) return
+    if (gcv_count(fields) == 0) return
+    params = strip_meta(gcl_first(clause))
+    if (.not. gcv_is(params)) return
+    if (gcv_count(params) == 0) return
+    this = strip_meta(gcv_nth(params, 0))
+    if (this%tag /= GCT_SYM) return
+
+    base = vs_enter(6)
+    call vs_set(base + 1, clause)
+    call vs_set(base + 2, fields)
+    call vs_set(base + 3, params)
+    call vs_set(base + 4, this)
+    tmp = gcv_empty([vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 5, tmp)
+
+    do i = 0, gcv_count(vs_get(base + 2)) - 1
+       f = strip_meta(gcv_nth(vs_get(base + 2), i))
+       if (f%tag /= GCT_SYM) cycle
+       if (params_bind(vs_get(base + 3), gc_ref_text(f%ref))) cycle
+       tmp = gcv_conj(vs_get(base + 5), f, [vs_get(base + 5), f])
+       call vs_set(base + 5, tmp)
+       tmp = field_read(vs_get(base + 4), gc_ref_text(f%ref), &
+            [vs_get(base + 4), vs_get(base + 5)])
+       call vs_set(base + 6, tmp)
+       tmp = gcv_conj(vs_get(base + 5), vs_get(base + 6), &
+            [vs_get(base + 5), vs_get(base + 6)])
+       call vs_set(base + 5, tmp)
+    end do
+
+    if (gcv_count(vs_get(base + 5)) > 0) then
+       ! (params (let* [f (. this -f) ...] body...))
+       tmp = gcl_cons(vs_get(base + 5), &
+            gcl_rest(vs_get(base + 1), [vs_get(base + 1), vs_get(base + 5)]), &
+            [vs_get(base + 1), vs_get(base + 5)])
+       call vs_set(base + 6, tmp)
+       tmp = gcl_cons(gc_sym("let*", [vs_get(base + 6)]), vs_get(base + 6), &
+            [vs_get(base + 1), vs_get(base + 6)])
+       call vs_set(base + 6, tmp)
+       tmp = gcl_cons(vs_get(base + 6), gcl_empty([vs_get(base + 6)]), &
+            [vs_get(base + 6)])
+       call vs_set(base + 6, tmp)
+       out = gcl_cons(vs_get(base + 3), vs_get(base + 6), &
+            [vs_get(base + 3), vs_get(base + 6)])
+    end if
+    call vs_leave(base)
+  end function bind_fields
+
+  ! Whether a parameter vector already binds this name. Destructuring
+  ! forms are not looked inside: maybe-destructured has already turned
+  ! those into gensyms plus a let, so what arrives here is a flat
+  ! vector of plain names.
+  logical function params_bind(params, name)
+    type(gc_value), intent(in) :: params
+    character(len=*), intent(in) :: name
+    type(gc_value) :: p
+    integer :: i
+    params_bind = .false.
+    do i = 0, gcv_count(params) - 1
+       p = strip_meta(gcv_nth(params, i))
+       if (p%tag /= GCT_SYM) cycle
+       if (gc_ref_is(p%ref, name)) then
+          params_bind = .true.
+          return
+       end if
+    end do
+  end function params_bind
+
+  ! The form (. this -name) -- a field read, spelled the way eval_dot
+  ! reads one.
+  function field_read(this, name, roots) result(out)
+    type(gc_value), intent(in) :: this
+    character(len=*), intent(in) :: name
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, tmp
+    integer :: base
+
+    base = vs_enter(2)
+    call vs_set(base + 1, this)
+    tmp = gcl_empty(roots)
+    call vs_set(base + 2, tmp)
+    tmp = gc_sym("-" // name, [vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 2, gcl_cons(tmp, vs_get(base + 2), &
+         [vs_get(base + 1), vs_get(base + 2), tmp]))
+    call vs_set(base + 2, gcl_cons(vs_get(base + 1), vs_get(base + 2), &
+         [vs_get(base + 1), vs_get(base + 2)]))
+    tmp = gc_sym(".", [vs_get(base + 1), vs_get(base + 2)])
+    out = gcl_cons(tmp, vs_get(base + 2), [vs_get(base + 2), tmp])
+    call vs_leave(base)
+  end function field_read
+
+  ! The type table. Keyed by the class keyword rather than the raw
+  ! name so that a lookup here and an instance? test cannot disagree
+  ! about java.lang.
+  subroutine register_type(ty)
+    type(gc_value), intent(in) :: ty
+    type(gc_value) :: tbl, k
+    integer :: base
+
+    base = vs_enter(3)
+    call vs_set(base + 1, ty)
+    if (gc_root_live(types_root)) then
+       call vs_set(base + 2, gc_root_get(types_root))
+    else
+       call vs_set(base + 2, gca_empty([vs_get(base + 1)]))
+    end if
+    k = gc_key(short_class_name(class_text(vs_get(base + 1))), &
+         [vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 3, k)
+    tbl = gca_assoc(vs_get(base + 2), vs_get(base + 3), vs_get(base + 1), &
+         [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+    call vs_set(base + 2, tbl)
+    ! Under the BARE name too, which is the (import clojure.core.Point)
+    ! that deftype emits and that clotran has nowhere to record. It is
+    ! what makes (Point. 3 4) and (new Point 3 4) find the type; see
+    ! class_matches for what it costs.
+    block
+      character(len=:), allocatable :: full
+      integer :: i, last_dot
+      full = class_text(vs_get(base + 1))
+      last_dot = 0
+      do i = 1, len(full)
+         if (full(i:i) == ".") last_dot = i
+      end do
+      if (last_dot > 0 .and. last_dot < len(full)) then
+         k = gc_key(full(last_dot+1:), [vs_get(base + 1), vs_get(base + 2)])
+         call vs_set(base + 3, k)
+         tbl = gca_assoc(vs_get(base + 2), vs_get(base + 3), vs_get(base + 1), &
+              [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+         call vs_set(base + 2, tbl)
+      end if
+    end block
+    call gc_global_keep(types_root, vs_get(base + 2))
+    call vs_leave(base)
+  end subroutine register_type
+
+  ! The type registered under a class name, or nil.
+  function find_type(cname) result(out)
+    character(len=*), intent(in) :: cname
+    type(gc_value) :: out, tbl
+    integer :: base
+
+    out = gc_nil()
+    if (.not. gc_root_live(types_root)) return
+    base = vs_enter(1)
+    tbl = gc_root_get(types_root)
+    call vs_set(base + 1, tbl)
+    out = gca_get(vs_get(base + 1), &
+         gc_key(short_class_name(cname), [vs_get(base + 1)]))
+    call vs_leave(base)
+  end function find_type
+
+  ! (new user.Name f1 f2) for a type deftype* created: the fields in
+  ! declaration order, which is the one constructor deftype defines.
+  recursive function construct_type(ty, argforms, env) result(out)
+    type(gc_value), intent(in) :: ty, argforms, env
+    type(gc_value) :: out, item, tmp
+    character(len=24) :: want, got
+    integer :: base
+
+    out = gc_nil()
+    base = vs_enter(5)
+    call vs_set(base + 1, ty)
+    call vs_set(base + 2, argforms)
+    call vs_set(base + 3, env)
+    tmp = gcv_empty([vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 4, tmp)
+    call vs_set(base + 5, vs_get(base + 2))
+
+    do while (gcl_count(vs_get(base + 5)) > 0)
+       item = gce_eval(gcl_first(vs_get(base + 5)), vs_get(base + 3), &
+            [vs_get(base + 1), vs_get(base + 4), vs_get(base + 5)])
+       if (has_error) then
+          call vs_leave(base)
+          return
+       end if
+       tmp = gcv_conj(vs_get(base + 4), item, &
+            [vs_get(base + 1), vs_get(base + 4), vs_get(base + 5), item])
+       call vs_set(base + 4, tmp)
+       tmp = gcl_rest(vs_get(base + 5), [vs_get(base + 4), vs_get(base + 5)])
+       call vs_set(base + 5, tmp)
+    end do
+
+    if (gcv_count(vs_get(base + 4)) /= gcv_count(gc_slot(vs_get(base + 1), 2))) then
+       write(want, '(I0)') gcv_count(gc_slot(vs_get(base + 1), 2))
+       write(got, '(I0)') gcv_count(vs_get(base + 4))
+       call fail(class_text(vs_get(base + 1)) // &
+            " takes " // trim(want) // " fields, given " // trim(got))
+       call vs_leave(base)
+       return
+    end if
+
+    out = gc_obj(OBJ_INST, [vs_get(base + 1), vs_get(base + 4), gc_nil()], &
+         [vs_get(base + 1), vs_get(base + 4)])
+    call vs_leave(base)
+  end function construct_type
+
+  ! A field of an instance by name, and whether there was one.
+  function inst_field(inst, name, found) result(out)
+    type(gc_value), intent(in) :: inst
+    character(len=*), intent(in) :: name
+    logical, intent(out) :: found
+    type(gc_value) :: out, fields, f
+    integer :: i
+
+    out = gc_nil()
+    found = .false.
+    fields = gc_slot(gc_slot(inst, 1), 2)
+    do i = 0, gcv_count(fields) - 1
+       f = strip_meta(gcv_nth(fields, i))
+       if (f%tag /= GCT_SYM) cycle
+       if (gc_ref_is(f%ref, name)) then
+          out = gcv_nth(gc_slot(inst, 2), i)
+          found = .true.
+          return
+       end if
+    end do
+  end function inst_field
 
   ! let* binds sequentially in a fresh child frame, so later bindings
   ! can see earlier ones -- which is what Clojure's let does.
@@ -1388,13 +1872,25 @@ contains
     integer :: base
 
     out = gc_nil()
-    base = vs_enter(4)
+    base = vs_enter(6)
     call vs_set(base + 1, args)
     call vs_set(base + 2, env)
 
     target = gcl_first(vs_get(base + 1))
     rest = gcl_rest(vs_get(base + 1), [vs_get(base + 1)])
-    member = gcl_first(rest)
+    member = strip_meta(gcl_first(rest))
+
+    ! A macro assembles its expansion with cons and concat, so the
+    ! (method args) half of a dot form arrives as a LAZY SEQ rather
+    ! than a list -- the same reason gce_eval realises a seq before
+    ! treating it as a call. emit-method-builder builds exactly that
+    ! shape, so every protocol method dispatched through its interface
+    ! read the seq as a bare member name and failed on it.
+    if (gc_kind(member) == OBJ_LAZY .or. gc_kind(member) == OBJ_SEQ) then
+       call vs_set(base + 5, member)
+       member = seq_to_list(vs_get(base + 5), [vs_get(base + 1), vs_get(base + 5)])
+       call vs_set(base + 5, member)
+    end if
 
     ! (. x m) names a member; (. x (m a b)) and (. x m a b) both
     ! call it -- Clojure accepts either spelling, so the arguments
@@ -1407,7 +1903,10 @@ contains
     if (gcl_is(member)) then
        is_call = .true.
        margs = gcl_rest(member, [vs_get(base + 1)])
-       member = gcl_first(member)
+       ! The method NAME can be hinted -- a sig in a protocol keeps
+       ! its metadata through defprotocol, and emit-method-builder
+       ! splices that symbol in verbatim.
+       member = strip_meta(gcl_first(member))
     else
        margs = gcl_rest(rest, [vs_get(base + 1)])
        is_call = (gcl_count(margs) > 0)
@@ -1439,6 +1938,46 @@ contains
        return
     end if
     call vs_set(base + 3, target)
+
+    ! A deftype/reify instance answers its own methods and fields
+    ! FIRST. They are what the type declares, and a host member of the
+    ! same name would otherwise shadow the implementation the program
+    ! actually wrote.
+    if (gc_kind(strip_meta(vs_get(base + 3))) == OBJ_INST .and. len(mname) > 0) then
+       block
+         logical :: found
+         call vs_set(base + 5, strip_meta(vs_get(base + 3)))
+         ! (.-name x) is a field read and never a call; a bare name is
+         ! a method if the type has one and a field otherwise, which
+         ! is the order Compiler's HostExpr resolves them in.
+         if (mname(1:1) == "-") then
+            out = inst_field(vs_get(base + 5), mname(2:), found)
+            if (.not. found) call fail("no such field: " // &
+                 class_text(vs_get(base + 5)) // &
+                 "." // mname(2:))
+            call vs_leave(base)
+            return
+         end if
+         call vs_set(base + 6, gca_get(gc_slot(gc_slot(vs_get(base + 5), 1), 3), &
+              gc_key(mname, [vs_get(base + 1), vs_get(base + 5)])))
+         if (gc_kind(vs_get(base + 6)) == OBJ_CLOSURE) then
+            ! `this` is an explicit first parameter of the method, so
+            ! the target is prepended exactly as for a host member.
+            call vs_set(base + 4, gcl_cons(vs_get(base + 5), vs_get(base + 4), &
+                 [vs_get(base + 1), vs_get(base + 4), vs_get(base + 5), &
+                  vs_get(base + 6)]))
+            out = apply_forms_pre(vs_get(base + 6), vs_get(base + 5), &
+                 vs_get(base + 4), vs_get(base + 2))
+            call vs_leave(base)
+            return
+         end if
+         out = inst_field(vs_get(base + 5), mname, found)
+         if (found) then
+            call vs_leave(base)
+            return
+         end if
+       end block
+    end if
 
     out = instance_member(mname, vs_get(base + 1))
     if (.not. has_error) then
@@ -2047,7 +2586,20 @@ contains
               [vs_get(base + 3)])
        end block
     else
-       call fail("no such class: " // cname)
+       ! A type deftype* created. Last, so nothing above is shadowed
+       ! by a deftype that happens to pick one of those names.
+       block
+         type(gc_value) :: ty
+         ty = find_type(cname)
+         if (gc_kind(ty) == OBJ_TYPE) then
+            call vs_set(base + 3, ty)
+            out = construct_type(vs_get(base + 3), &
+                 gcl_rest(vs_get(base + 1), [vs_get(base + 1), vs_get(base + 3)]), &
+                 vs_get(base + 2))
+         else
+            call fail("no such class: " // cname)
+         end if
+       end block
     end if
     call vs_leave(base)
   end function eval_new
@@ -5820,6 +6372,11 @@ contains
        case (OBJ_LAZY);    s = "lazy-seq"
        case (OBJ_VAR);     s = "var"
        case (OBJ_NS);      s = "ns"
+       ! A deftype instance answers with its OWN class name, so
+       ! (class x) is the keyword a protocol's :impls map is keyed by
+       ! and extend-type on the type reaches it.
+       case (OBJ_INST);    s = class_text(v)
+       case (OBJ_TYPE);    s = "class"
        case default;       s = "object"
        end select
     end select
@@ -5833,6 +6390,72 @@ contains
   ! nothing is an instance of one. The interfaces are the interesting
   ! entries -- Sequential and Named cover several tags each, which is
   ! exactly what an interface is.
+  ! The class name of a type object, or of an instance's type.
+  ! A function result cannot be the left of a %, so the slot walk
+  ! lands in a local first.
+  function class_text(v) result(s)
+    type(gc_value), intent(in) :: v
+    character(len=:), allocatable :: s
+    type(gc_value) :: t
+    t = v
+    if (gc_kind(t) == OBJ_INST) t = gc_slot(t, 1)
+    t = gc_slot(t, 1)
+    s = gc_ref_text(t%ref)
+  end function class_text
+
+  ! The text of an interned symbol, string or keyword. Same reason.
+  function class_of_text(v) result(s)
+    type(gc_value), intent(in) :: v
+    character(len=:), allocatable :: s
+    type(gc_value) :: t
+    t = v
+    s = gc_ref_text(t%ref)
+  end function class_of_text
+
+  ! Whether a class DECLARED under one name answers to another.
+  !
+  ! Exact, or the asked-for name is unqualified and matches the last
+  ! segment of the declared one. That second case is what `import`
+  ! buys in Clojure -- (deftype Point ...) expands to (import
+  ! clojure.core.Point), which makes the bare `Point` name the class
+  ! in that namespace. clotran's import is a no-op (there is no class
+  ! table to bind into; a class is recognised by the shape of its
+  ! name), so the short name has to be accepted here instead.
+  !
+  ! The cost is that it is accepted EVERYWHERE, not only where the
+  ! import ran: two namespaces each defining a Point make `Point`
+  ! ambiguous, and the last one defined wins. DEVIATIONS.md.
+  logical function class_matches(declared, asked)
+    character(len=*), intent(in) :: declared, asked
+    integer :: i, last_dot
+    class_matches = (declared == asked)
+    if (class_matches) return
+    if (index(asked, ".") > 0) return
+    last_dot = 0
+    do i = 1, len(declared)
+       if (declared(i:i) == ".") last_dot = i
+    end do
+    if (last_dot == 0) return
+    class_matches = (declared(last_dot+1:) == asked)
+  end function class_matches
+
+  ! Whether a vector of class keywords names this class.
+  logical function key_in_vector(vec, name)
+    type(gc_value), intent(in) :: vec
+    character(len=*), intent(in) :: name
+    type(gc_value) :: k
+    integer :: i
+    key_in_vector = .false.
+    do i = 0, gcv_count(vec) - 1
+       k = gcv_nth(vec, i)
+       if (k%tag /= GCT_KEY) cycle
+       if (class_matches(gc_ref_text(k%ref), name)) then
+          key_in_vector = .true.
+          return
+       end if
+    end do
+  end function key_in_vector
+
   function is_instance(cls, v) result(yes)
     type(gc_value), intent(in) :: cls, v
     logical :: yes
@@ -5841,6 +6464,15 @@ contains
     if (cls%tag /= GCT_KEY) return
     c = gc_ref_text(cls%ref)
     t = type_name(v)
+    ! A deftype/reify instance is an instance of its own class and of
+    ! everything its :implements list names -- which is the whole
+    ! hierarchy there is, and enough for find-protocol-impl, whose
+    ! first question is (instance? (:on-interface protocol) x).
+    if (gc_kind(strip_meta(v)) == OBJ_INST) then
+       yes = class_matches(t, c) .or. (c == "Object") .or. &
+            key_in_vector(gc_slot(gc_slot(strip_meta(v), 1), 4), c)
+       return
+    end if
     select case (c)
     case ("clojure.lang.Symbol");   yes = (t == "symbol")
     case ("clojure.lang.Keyword");  yes = (t == "keyword")

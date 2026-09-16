@@ -271,6 +271,14 @@ contains
        s = gcp_str(gc_slot(v, 1), readable)
     case (OBJ_SB)
        s = gcp_str(gc_slot(v, 1), readable)
+    case (OBJ_TYPE)
+       s = gcp_str(gc_slot(v, 1), .false.)
+    case (OBJ_INST)
+       ! Clojure prints #object[user.Foo 0x1f2e3d "user.Foo@1f2e3d"].
+       ! The identity hash is left out: there is no address to print
+       ! -- the GC is index-based -- and inventing one would make two
+       ! runs of the same program print differently for no reason.
+       s = "#object[" // gcp_str(gc_slot(gc_slot(v, 1), 1), .false.) // "]"
     case (OBJ_MULTIFN)
        s = "#<multifn " // gcp_str(gc_slot(v, 1), .false.) // ">"
     case (OBJ_ATOM)
@@ -278,7 +286,16 @@ contains
     case (OBJ_VAR)
        s = "#'" // gcp_str(gc_slot(v, 4), .false.)
     case (OBJ_NS)
-       s = "#<ns " // gcp_str(gc_slot(v, 1), .false.) // ">"
+       ! Namespace.toString is its NAME -- (str *ns*) is "clojure.core"
+       ! -- and only pr's #object[...] form names the class. Printing
+       ! the wrapper for both made namespace-munge, which is
+       ! (.replace (str ns) \- \_), hand deftype the class name
+       ! "#<ns clojure.core>.Point".
+       if (readable) then
+          s = "#<ns " // gcp_str(gc_slot(v, 1), .false.) // ">"
+       else
+          s = gcp_str(gc_slot(v, 1), .false.)
+       end if
     case (OBJ_ENV)
        s = "#<env>"
     case default

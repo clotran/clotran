@@ -3693,3 +3693,87 @@ the loop cheap before starting on the expensive steps.
       stash removed nothing relevant. The conclusion happens to be
       right, but the evidence for it is the bisect above (`931c93a`,
       which predates every accessor commit, is bad), not that stash.
+
+## `deftype*`: three bugs behind one special form
+
+The special form itself was the easy half. Of the four things that had
+to change to make `(deftype Point [x y] ...)` work, three were bugs that
+had been in the tree the whole time, invisible because nothing had ever
+asked the question.
+
+**A type is not a class.** Clojure generates a JVM class; ClojureScript
+generates a JavaScript constructor; both host compilers have a case for
+`deftype*` (cited in SEAMS.md). clotran generates nothing. A type is an
+object holding a name, its field names, a map from method-name keyword
+to closure, and a vector of the class keywords it claims to implement.
+That is enough because `instance?` is the only question anything asks of
+a type, and `find-protocol-impl` asks it first:
+
+    (defn find-protocol-impl [protocol x]
+      (if (instance? (:on-interface protocol) x)
+        x
+        ...))
+
+A list of names answers that. A hierarchy would let us answer it for
+names nobody declared, and nothing needs that yet.
+
+**Method bodies see fields as plain names.** On the JVM they are real
+fields on a real class, so `(area [this] (* w h))` compiles to field
+loads. Here the clause is rewritten at definition time to
+
+    ([this] (let* [w (. this -w) h (. this -h)] (* w h)))
+
+which needs no evaluator support beyond field reads. The one subtlety:
+a field whose name a PARAMETER also uses is left out of that `let*`,
+because the parameter is bound outside it and binding the field too
+would shadow the argument the caller passed. Clojure resolves that the
+other way round, the parameter winning; skipping is how this gets the
+same answer with the bindings in the wrong order.
+
+**The global root table was exactly full.** Eight slots, and eight
+claimed: `thrown`, `global_env`, `gensym` and `binding_stack` in
+GCEval, `registry`, `current` and `ns_var` in GCNamespace, and
+GCList's `empty`. The type table was the ninth, and `gc_global_new`
+answered by returning index 0 and shrugging. `gc_global_keep` then
+stored nothing, `gc_root_live` stayed false, and the table was swept on
+the next collection -- so a type defined one moment was "no such class"
+the next.
+
+The comment above `gc_global_keep` already warned about the *stale
+index* version of this failure, having bitten three modules.
+
+The first fix was to raise the constant and make exhaustion an
+`error stop`. That was the wrong shape: it kept a limit in `GC.f90`
+that has to be maintained in step with `type(gc_root), save ::`
+declarations in other files, and 32 is no more principled than 8, only
+further away. The table is now GROWABLE and there is no number at all.
+
+It stays small on its own. Every root is a module-level singleton --
+nine today -- and nothing claims one per object: a million deftypes
+live inside the one `types_root` map, a million namespaces inside
+`registry_root`. So it doubles once, at startup, and never again. The
+grow path preserves slot INDICES rather than addresses, because that is
+what modules hold across calls -- a copy landing at a different offset
+would silently swap two modules roots, which `gc_test` 18c checks by
+claiming 200 and reading every one of them back after a collection.
+
+**A macro's expansion is a lazy seq, not a list.** `eval_dot` decided
+"is this `(. x (m a))` or `(. x m)`" with `gcl_is`, which is true only
+for `OBJ_CONS`. `emit-method-builder` assembles its dot form with
+syntax-quote, so what arrives is a lazy cell, `gcl_is` was false, and
+the `(area)` list was read as a member NAME -- "`.` needs a member
+name", on every protocol method dispatched through its interface.
+`gce_eval` already realises a seq before treating it as a call, for
+exactly this reason and with a comment saying so; `eval_dot` had never
+learned it. The member name also needed `strip_meta`: a protocol sig
+keeps its metadata through `defprotocol`, and `emit-method-builder`
+splices that symbol in verbatim.
+
+**What it did not move.** Neither scorecard. Clojure's own suite went
+653 -> 655 passing assertions, and the 14 libraries that load are the
+same 14: the three vendored libs that use `deftype` or `reify`
+(`core/reducers`, `reflect/java`, `pprint/pretty_writer`) each fail on
+something else first -- `clojure.lang.Delay`, a `0x0001` literal, and
+`PersistentStructMap`. What moved is core.clj, 691 -> 707 forms, and
+the fact that `deftype` and `reify` exist at all. `defrecord` still does
+not: it expands through `letfn`, so it waits on `letfn*`.

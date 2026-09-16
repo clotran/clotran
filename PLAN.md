@@ -17,15 +17,15 @@ it; retiring it is step 3.
 
 | | `clotran-gc` | `clotran-bin` |
 | --- | --- | --- |
-| core.clj | **691 of 724 forms**, wall at `deftype*` | 9 failing forms |
-| startup | **5.8s** | 5.4s |
-| our tests | 976/976, both compilers | green, both compilers |
-| Clojure's own suite | **653 pass / 199 fail / 232 error** over 190 tests | not run against it |
-| Clojure's libraries | **11 of 16 load** | not measured |
-| source | 10,528 lines | 10,929 lines |
+| core.clj | **707 of 724 forms**, wall at data readers | 9 failing forms |
+| startup | **6.5s** | 5.4s |
+| our tests | 1004/1004, both compilers | green, both compilers |
+| Clojure's own suite | **655 pass / 199 fail / 231 error** over 190 tests | not run against it |
+| Clojure's libraries | **14 of 21 load** | not measured |
+| source | 11,200 lines | 10,929 lines |
 
 Startup went UP, from 1.68s, and that is not a regression to chase: we
-load 691 forms now rather than 615, and far more of them do real work.
+load 707 forms now rather than 615, and far more of them do real work.
 core.clj is re-read and re-analysed on every launch. An image (step 4c)
 is the fix; nothing else will move it much.
 
@@ -34,19 +34,28 @@ The three scorecards, and what their denominators exclude:
 - **our tests** (`test/f`) are a GATE, not a grade. 100% or do not commit.
 - **Clojure's suite** is 67 vendored namespaces. 13 still crash before
   reporting anything, so they contribute ZERO assertions to both halves
-  of the pass rate: 653/1084 is over assertions that EXECUTED, not
-  assertions that exist. Only 16 of 67 namespaces produce a single
-  passing assertion, and that 24% is the more honest headline.
+  of the pass rate: 655/1085 is over assertions that EXECUTED, not
+  assertions that exist. Only 17 of 67 namespaces produce a single
+  passing assertion, and that 25% is the more honest headline.
   Several of the 67 can never pass here -- `proxy`, `genclass`,
   annotations, AOT -- and they have not been subtracted, deliberately.
 - **libraries loading** is the measure that moves when a host member
   lands. `set`, `data`, `edn`, `datafy`, `walk`, `string`, `template`,
-  `uuid`, `zip`, `stacktrace` and `test` load today.
+  `zip`, `stacktrace`, `test`, `inspector`, `reflect`, `parallel` and
+  `core.protocols` load today.
 
-core.clj stops at 692 on `deftype*`. The three forms behind it --
-data readers, `ArrayBlockingQueue`, `Delay`+`Thread` -- are worth much
-less. `scripts/split-forms` is how that list was obtained, and is how to
-re-obtain it when the wall moves.
+  LOADED means a var of theirs RESOLVES afterwards, not that `require`
+  returned without complaint. `clojure.uuid` is skipped by name, so
+  requiring it succeeds and defines nothing; counting that as a load is
+  how this number was once too high. Re-measure with a resolve, not an
+  absence of errors.
+
+core.clj now stops at 708, on the `load-data-readers` form -- whose
+catch clause calls `.printStackTrace`, so the reported error names the
+handler rather than the cause. The other blockers behind it are
+`ArrayBlockingQueue` and `Delay`+`Thread`. `scripts/split-forms` is how
+that list was obtained, and is how to re-obtain it when the wall moves;
+it has NOT been re-run since `deftype*` landed.
 
 The original headline measurement, which is why the GC exists at all. It
 is not allocation cost and not garbage collection cost -- it is the cost
@@ -74,11 +83,16 @@ things are built the way they are.
 
 The work is ranked. Each item says what moves and how it is measured.
 
-**1. `deftype*`.** core.clj stops at form 692 on it. It is the last wall
-that matters -- behind it are the final 33 forms, and it is also
-`deftype`, `defrecord` and `reify`, which people expect to exist. The
-other three blockers behind it (data readers, `ArrayBlockingQueue`,
-`Delay`+`Thread`) are worth much less. Moves: core.clj 691 -> ~720.
+**1. `deftype*` -- DONE.** It was the wall at form 692; core.clj now
+reaches 707. `deftype` and `reify` work, including a method body seeing
+its fields as plain names and a reify body closing over its scope.
+`defrecord` does NOT: it expands through `letfn`, so it is blocked on
+item 5 below and not on anything about types. A type is an object in a
+global table -- a name, its fields, a method table, and the class names
+it claims -- and no class is generated, because `instance?` is the only
+question anything asks of one. SEAMS.md has why this is a real host
+seam rather than something we chose to make native; DEVIATIONS 17-20
+are what it costs.
 
 **2. The 13 namespaces that crash before reporting.** Each is usually ONE
 missing host member taking out a whole file, so the work is small and the
@@ -104,7 +118,9 @@ Re-cluster before working -- the list changes under you:
 **4. `Pattern.split`,** which is all that blocks `clojure.string/split`.
 The regex machinery (find_next, group spans) is already there.
 
-**5. `letfn*`.** Blocks `letfn` and `map-indexed`.
+**5. `letfn*`.** Blocks `letfn`, `map-indexed` and -- newly, now that
+`deftype*` exists -- `defrecord`, which is the half of item 1 that did
+not land. Worth more than its position here suggests.
 
 **6. Retire `clotran-bin`.** ~10,900 lines of pre-GC evaluator, kept only
 because the mal regression suites drive it. Retiring it DELETES the rest
@@ -245,10 +261,25 @@ first, because they make the port itself debuggable. Things entangled
 with the value representation come after it, so they are not built
 twice.
 
-### 1. Source positions and error locations -- DONE
+### 1. Source positions and error locations -- DONE IN `clotran-bin`, NOT IN `clotran-gc`
 
 Line, column and file on every form, so errors and later stack frames
 can point at real source.
+
+**Read this before trusting the boxes below.** Every one of them was
+ticked against `Eval.f90`/`LispReader.f90` -- the ORIGINAL evaluator,
+the one being retired. `GCReader.f90` has no positions at all and says
+so in its own header, pointing back at this file: "source positions are
+an open question for the new representation (PLAN.md: a GC object has
+i1/i2 and count already took i1), so this deliberately does not pretend
+to solve it."
+
+So `./clotran` reports no `file:line:col` on anything, and the
+`in: (form)` line names the top-level form rather than the failing
+subform. That is why the `(+1 1)` note at the bottom of this file has
+no position to be wrong about. Redoing step 1 on `gc_value` is real,
+unscheduled work, and step 6 (the debugger) is blocked on it -- its
+CallInfo frames have nothing to record.
 
 - [x] `line`/`col` on reader tokens; tokenizer tracks them across
       newlines, including inside multi-line strings

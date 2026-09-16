@@ -62,6 +62,7 @@ contains
     call check_core_builtins()
     call check_regex()
     call check_case()
+    call check_deftype()
     call check_resources()
     call check_errors()
     call check_heap_sound()
@@ -112,6 +113,34 @@ contains
     end if
     flush(6)
   end subroutine ev
+
+  ! The same, for a form that MUST fail. A wrong answer that looks
+  ! plausible is worse than a crash, so the cases where clotran should
+  ! refuse are worth asserting as directly as the ones where it
+  ! should answer.
+  subroutine ev_err(label, text)
+    character(len=*), intent(in) :: label, text
+    type(gc_value) :: form, env, result
+    integer :: base
+    logical :: errored
+
+    call gc_init(64)
+    gc_torture = .false.
+    base = vs_enter(3)
+    env = gce_base_env(no_roots)
+    call vs_set(base + 1, env)
+    form = gcr_read(text, [vs_get(base + 1)])
+    call vs_set(base + 2, form)
+    gc_torture = torturing
+    call gce_clear_error()
+    result = gce_eval(vs_get(base + 2), vs_get(base + 1), no_roots)
+    call vs_set(base + 3, result)
+    errored = gce_has_error()
+    gc_torture = .false.
+    call gce_clear_error()
+    call vs_leave(base)
+    call ok(label, errored)
+  end subroutine ev_err
 
   subroutine ok(label, condition)
     character(len=*), intent(in) :: label
@@ -382,6 +411,12 @@ contains
     ! A second namespace has its own bindings.
     call ev("17i. ", &
          "(do (def a 1) (in-ns (quote other)) (def a 2) a)", "2")
+    ! Namespace.toString is its NAME. (str *ns*) is "other", not
+    ! "#<ns other>" -- clj agrees, and namespace-munge is literally
+    ! (.replace (str ns) \- \_), so printing the wrapper here handed
+    ! deftype the class name "#<ns other>.Point".
+    call ev("17j. ", &
+         "(str (in-ns (quote other)))", """other""")
   end subroutine check_namespaces
 
   ! `=` is STRUCTURAL in Clojure: two vectors of equal elements are
@@ -537,6 +572,65 @@ contains
          '"1.13.0-master-SNAPSHOT"')
   end subroutine check_resources
 
+
+  ! deftype* and reify* below the deftype/reify macros, so these test
+  ! OUR special forms rather than core_deftype.clj's expansion of
+  ! them -- the same split check_case makes between case* and case.
+  !
+  ! The shape emit-deftype* produces:
+  !   (deftype* ns/Name pkg.Name [fields] :implements [ifaces]
+  !             (method [this args*] body)*)
+  subroutine check_deftype()
+    ! A field is readable through .-name, and (new pkg.Name ...) takes
+    ! the fields in declaration order.
+    call ev('24a. ', &
+         '(do (deftype* t/P t.P [x y] :implements []) (.-y (new t.P 1 2)))', '2')
+    ! The bare name works too, because deftype emits (import pkg.Name)
+    ! and clotran has nowhere to record that.
+    call ev('24b. ', &
+         '(do (deftype* t/Q t.Q [x] :implements []) (.-x (new Q 7)))', '7')
+    ! A method body sees the fields as PLAIN NAMES, which is the whole
+    ! reason bind_fields exists.
+    call ev('24c. ', &
+         '(do (deftype* t/R t.R [w h] :implements [] (area [this] (* w h)))' // &
+         ' (. (new t.R 3 4) (area)))', '12')
+    ! A PARAMETER of the same name wins over the field -- the field is
+    ! skipped rather than shadowing the argument the caller passed.
+    call ev('24d. ', &
+         '(do (deftype* t/S t.S [w] :implements [] (get [this w] w))' // &
+         ' (. (new t.S 1) (get 99)))', '99')
+    ! Several bodies under one name become one multi-arity closure.
+    call ev('24e. ', &
+         '(do (deftype* t/T t.T [n] :implements []' // &
+         ' (go [this] n) (go [this k] (+ n k)))' // &
+         ' (+ (. (new t.T 5) (go)) (. (new t.T 5) (go 1))))', '11')
+    ! instance? answers for the type's own name and for everything
+    ! :implements lists, which is the whole hierarchy there is.
+    call ev('24f. ', &
+         '(do (deftype* t/U t.U [] :implements [some.IFace])' // &
+         ' [(instance? t.U (new t.U)) (instance? some.IFace (new t.U))' // &
+         '  (instance? other.Thing (new t.U))])', '[true true false]')
+    ! type/class answer with the full class name, which is the key a
+    ! protocol's :impls map is keyed by.
+    call ev('24g. ', &
+         '(do (deftype* t/V t.V [] :implements []) (clotran-type (new t.V)))', ':t.V')
+    ! The wrong number of fields is an error, not a silently short
+    ! instance.
+    call ev_err('24h. ', &
+         '(do (deftype* t/W t.W [a b] :implements []) (new t.W 1))')
+    ! reify* builds and instantiates in one step, and its bodies ARE
+    ! closures over the surrounding scope -- the example in reify''s
+    ! own docstring.
+    call ev('24i. ', &
+         '(let* [f "foo"] (. (reify* [] (toString [this] f)) (toString)))', &
+         '"foo"')
+    call ev('24j. ', &
+         '(let* [n 7] (. (reify* [] (twice [this] (* 2 n))) (twice)))', '14')
+    ! An unknown member on an instance still fails rather than
+    ! answering nil, which is what makes a typo findable.
+    call ev_err('24k. ', &
+         '(do (deftype* t/X t.X [a] :implements []) (.-nope (new t.X 1)))')
+  end subroutine check_deftype
 
   subroutine check_errors()
     type(gc_value) :: form, env, result

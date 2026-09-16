@@ -195,6 +195,19 @@ module GC
   ! one Pattern never share search position (see Regex.f90).
   integer, parameter, public :: OBJ_MATCHER   = 21 ! 1=pattern 2=subject; i1=handle
   integer, parameter, public :: OBJ_WRITER    = 22 ! i1=Fortran unit
+  ! What `deftype*` and `reify*` create, and what an instance of one
+  ! is. A TYPE is a name, the field names in declaration order, a map
+  ! from method-name keyword to the closure implementing it, and the
+  ! class keywords it claims to implement -- which is all `instance?`
+  ! has to consult, since there is no class hierarchy to walk.
+  !
+  ! A real kind rather than a map with a hidden key (the trick
+  ! (reduced x) uses), because an instance that answered `map?` and
+  ! seq'd like a map would be a SILENT wrong answer everywhere a
+  ! deftype is not map-like -- which, for deftype as opposed to
+  ! defrecord, is everywhere.
+  integer, parameter, public :: OBJ_TYPE      = 23 ! 1=name 2=fields 3=methods 4=implements
+  integer, parameter, public :: OBJ_INST      = 24 ! 1=type 2=field values 3=meta
   integer, parameter, public :: OBJ_HAMT      = 11 ! 1=root run; i1=count
   integer, parameter, public :: OBJ_HAMT_LEAF = 12 ! 1=key 2=val
   ! Slot 3 was reserved for a per-Var dynamic stack; the dynamic
@@ -267,10 +280,23 @@ module GC
   ! --- global roots ----------------------------------------------
   ! Process-wide and mutable: the registry handle changes whenever the
   ! registry grows, so a global is a SLOT, not a value handed over once.
-  ! ponytail: fixed 8 slots -- the registry, *ns*, and room to spare;
-  ! make it growable if something ever needs a ninth.
-  integer, parameter :: GC_MAX_GLOBALS = 8
-  type(gc_value) :: global_root(GC_MAX_GLOBALS)
+  ! GROWABLE, and with no maximum to maintain. It was a fixed array of
+  ! eight, which was exactly the number claimed, so the ninth (GCEval's
+  ! type table) was dropped SILENTLY -- registered nowhere, collected
+  ! on the next sweep, and visible only as "no such class" for a type
+  ! that had just been defined.
+  !
+  ! Raising the constant would have fixed that instance and kept the
+  ! shape that caused it: a limit in THIS file that has to be
+  ! maintained in step with `type(gc_root), save ::` declarations in
+  ! other ones. There is no number here now, so there is nothing to
+  ! keep in step and nothing to exhaust.
+  !
+  ! It does not grow large. Every root is a module-level singleton --
+  ! nine today -- and nothing claims one per object: a million deftypes
+  ! live inside the one types_root map, a million namespaces inside
+  ! registry_root. So this doubles once, at startup, and never again.
+  type(gc_value), allocatable :: global_root(:)
   integer :: global_count = 0
   ! Bumped by gc_init. A module holding a slot index across a reset
   ! cannot tell "my slot" from "someone else's slot that now has my
@@ -426,6 +452,8 @@ contains
     allocate(mark_stack(n))
     mark_sp = 0
 
+    if (allocated(global_root)) deallocate(global_root)
+    allocate(global_root(8))
     global_root = gc_nil()
     global_count = 0
     global_gen = global_gen + 1
@@ -960,12 +988,33 @@ contains
   function gc_global_new(v) result(idx)
     type(gc_value), intent(in) :: v
     integer :: idx
-    idx = 0
-    if (global_count >= GC_MAX_GLOBALS) return
+    ! Grows rather than refusing. Returning 0 here used to leave the
+    ! caller holding an UNREGISTERED root: everything worked until the
+    ! first collection, which then swept something genuinely live.
+    ! There was never a recovery a caller could write.
+    if (.not. allocated(global_root)) then
+       allocate(global_root(8))
+       global_root = gc_nil()
+    end if
+    if (global_count >= size(global_root)) call grow_global_roots()
     global_count = global_count + 1
     global_root(global_count) = v
     idx = global_count
   end function gc_global_new
+
+  ! Doubles the root table, preserving every claimed slot INDEX --
+  ! modules hold those indices across calls, so the copy has to land
+  ! at the same positions or every held handle would point at someone
+  ! else's root. Growing is what makes that safe; the addresses do not
+  ! matter, only the indices, and nothing outside this module ever
+  ! sees a pointer to the array.
+  subroutine grow_global_roots()
+    type(gc_value), allocatable :: bigger(:)
+    allocate(bigger(max(8, 2 * size(global_root))))
+    bigger = gc_nil()
+    bigger(1:global_count) = global_root(1:global_count)
+    call move_alloc(bigger, global_root)
+  end subroutine grow_global_roots
 
   ! Register-or-update, for a caller holding its slot index in a
   ! module variable across a gc_init.

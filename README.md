@@ -25,24 +25,31 @@ parses it with a regex, and both of those had to exist for it to answer.
 
 ## What works
 
-**691 of core.clj's 724 top-level forms load.** That includes
+**707 of core.clj's 724 top-level forms load.** That includes
 destructuring, the macro system, protocols, multimethods, lazy seqs,
-transducers, metadata, `case`, regex literals, and most of the seq
-library -- because clotran does not implement those, core.clj does.
+transducers, metadata, `case`, regex literals, `deftype`, `reify`, and
+most of the seq library -- because clotran does not implement those,
+core.clj does.
 
-**11 of Clojure's own libraries load** -- `set`, `data`, `edn`,
-`datafy`, `walk`, `string`, `template`, `uuid`, `zip`, `stacktrace` and
-`test`. `clojure.test` running means Clojure's own test suite runs:
-**653 passing assertions** across 190 of its tests, from the 67
+**14 of Clojure's own 21 libraries load** -- `set`, `data`, `edn`,
+`datafy`, `walk`, `string`, `template`, `zip`, `stacktrace`, `test`,
+`inspector`, `reflect`, `parallel` and `core.protocols`. Loaded means a
+var of theirs RESOLVES afterwards, not merely that `require` returned
+without complaint: `clojure.uuid` is skipped by name, so requiring it
+succeeds and defines nothing, and counting that as a load is how this
+number was once too high.
+
+`clojure.test` running means Clojure's own test suite runs:
+**655 passing assertions** across 190 of its tests, from the 67
 namespaces vendored verbatim in `test/clj`.
 
 That number is over assertions that EXECUTED. 13 namespaces still crash
 before reporting anything and contribute zero to both halves of it, and
 several of the 67 -- `proxy`, `genclass`, annotations, AOT -- can never
-pass here. 16 of 67 namespaces produce a passing assertion today.
+pass here. 17 of 67 namespaces produce a passing assertion today.
 
 Four oracles keep it honest: gfortran and flang must agree
-(`make crosscheck`, 976 assertions each), `clj` -- real JVM Clojure --
+(`make crosscheck`, 1004 assertions each), `clj` -- real JVM Clojure --
 answers what Clojure actually does rather than what anyone remembers,
 and pinned clones of Clojure and ClojureScript are cited rather than
 recalled. See `CLAUDE.md`.
@@ -51,8 +58,10 @@ recalled. See `CLAUDE.md`.
 
 | | |
 |---|---|
-| `deftype*` / `defrecord` | the wall at form 692, and the next thing to build |
-| `letfn*` | so `letfn` and `map-indexed` fail |
+| `defrecord` | expands through `letfn`, so it waits on `letfn*` -- `deftype` and `reify` work |
+| `letfn*` | so `letfn`, `map-indexed` and `defrecord` fail |
+| mutable deftype fields | `(set! afield v)` is refused, loudly; DEVIATIONS 20 |
+| source positions | the GC evaluator has none, so no error reports `file:line:col` |
 | ratio and BigDecimal literals | `2/3`, `1M` do not read |
 | `clojure.string/split` | needs `Pattern.split` |
 | the five JVM-only sibling libs | bytecode generation; see `src/clj/clojure/PROVENANCE.md` |

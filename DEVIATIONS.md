@@ -394,3 +394,81 @@ back to `clojure.core` (deviation 3).
 
 It goes away by resolving names in `gce_analyze`, which already runs once
 per top-level form and today only macroexpands.
+
+## 17. A deftype's short name is global, not imported per namespace
+
+`(deftype Point [x y])` expands to `(deftype* clojure.core/Point
+clojure.core.Point ...)` followed by `(import clojure.core.Point)`, and
+on the JVM that import is what makes the bare name `Point` mean that
+class *in that namespace and nowhere else*. clotran's `import` is a
+no-op (deviation 12's neighbour: a class is recognised by the SHAPE of
+its name, so there is no class table to bind into), so there is nowhere
+namespace-local to record it.
+
+Instead `deftype*` registers the type under BOTH its full name and its
+last segment, and `instance?` accepts an unqualified name that matches
+the last segment of the declared one. `(Point. 3 4)`, `(new Point 3 4)`
+and `(instance? Point p)` therefore work -- but they work *everywhere*,
+not only where the import ran. Two namespaces each defining a `Point`
+make the bare `Point` ambiguous, and the last one defined wins. The
+fully-qualified name is never ambiguous. Measured:
+
+    (ns aa) (deftype Point [x])
+    (ns bb) (deftype Point [x y])
+    (ns cc)
+    (.-x (aa.Point. 1))     ;=> 1
+    (.-y (bb.Point. 1 2))   ;=> 2
+    (Point. 1)              ;=> arity error -- the bare name is bb.Point
+
+It goes away when namespaces carry an import table, which is the same
+place `clojure.core/import` would have to write.
+
+## 18. A deftype instance prints without an identity
+
+Clojure prints one as `#object[user.Point 0x4a2e1f "user.Point@4a2e1f"]`.
+clotran prints `#object[user.Point]`. There is no address to report --
+the heap is index-based and a slot index is not stable across a
+collection -- and inventing a number would make two runs of the same
+program print differently for no reason. Nothing reads the identity
+back, so the only loss is that two distinct instances of one type print
+identically.
+
+## 19. `recur` in a deftype method must pass `this`
+
+Clojure supplies the target object automatically, so a `recur` in a
+method body passes one fewer argument than the method head declares:
+"recur calls to the method head should *not* pass the target object, it
+will be supplied automatically and can not be substituted." That is a
+JVM artifact -- `this` is not a parameter there, it is the receiver.
+
+Here a method is an ordinary closure whose first parameter is `this`, so
+the recur point has the arity the head is written with and `recur` takes
+all of them. A method body ported verbatim from Clojure that recurs will
+get an arity error, which is at least loud.
+
+It goes away by making the method's recur point exclude its first
+parameter, which is a change to `select_clause`'s partner in
+`eval_recur`, not to `deftype*`.
+
+## 20. Mutable deftype fields are refused, not honoured
+
+`^:volatile-mutable` and `^:unsynchronized-mutable` on a field are read
+and discarded, and `(set! afield aval)` in a method body fails with
+"set! needs a var". A method body sees its fields as let-bound locals
+(that is how `bind_fields` gives them plain names), and a local is not
+an assignable place, so the write has nowhere to go.
+
+Measured, both ways:
+
+    ;; clotran
+    (set! v (inc v))   ;=> error: set! needs a var
+    ;; clj, same deftype
+    (set! v (inc v))   ;=> 2, and (str b) is then "2"
+
+A LOUD failure rather than a silent discard, which is the one thing
+that matters here: nothing quietly keeps the old value. Nothing in the
+vendored tree uses a mutable field, so this blocks nothing today.
+
+It goes away when a field is a writable slot rather than a let binding
+-- the representation already allows it, since an instance holds its
+fields in a run `gc_set_slot` can write.
