@@ -34,6 +34,7 @@ Categories:
 | 12 | Four JVM-only libs are skipped by name | host | `src/f/GCEval.f90` |
 | 13 | Protocol dispatch is uncached | host | `src/f/GC.f90` |
 | 14 | Regex is ICU under java.util.regex's names, ASCII-offset only | host | `src/f/Regex.f90` |
+| 15 | `hash` values are gc_hash's, not the JVM's murmur3 | host | `src/f/GC.f90` |
 
 ---
 
@@ -323,3 +324,24 @@ every other host member in this file did.
 - **A Var is mutated on redefinition, not replaced.** That is what makes
   redefining a function at the REPL visible to existing closures, and it is
   what lets core.clj redefine a primitive that was interned natively.
+
+---
+
+## 15. `hash` answers different numbers than the JVM does
+
+Clojure specifies `hash` as `Util.hasheq`, a murmur3 mix, and exposes the
+algorithm through `hash-ordered-coll` and `hash-unordered-coll`. clotran
+answers `gc_hash` instead: `(hash \a)` is 1915844612 here and 97 there.
+
+This is a host difference rather than a defect -- ClojureScript's hashes
+disagree with the JVM's too -- and the only property anything in core.clj
+relies on holds: equal values hash equal. `case` is the load-bearing
+caller. Its macroexpansion buckets the test constants by
+`clojure.lang.Util/hash`, and `case*` re-derives the same case-int from
+the runtime value, so both sides must be the SAME hash. Pointing either
+at murmur3 without the other would silently send every `case` to its
+default.
+
+It would go away by implementing murmur3 in `gc_hash`, which is worth
+doing only if a program ever needs a hash to match the JVM's across the
+wire.

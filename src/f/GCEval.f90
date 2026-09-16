@@ -106,6 +106,7 @@ module GCEval
   integer, parameter :: B_TOARRAY = 131
   integer, parameter :: B_RE_COMPILE = 132, B_RE_MATCHER = 133, B_RE_FIND = 134
   integer, parameter :: B_RE_MATCHES = 135, B_RE_GROUPCOUNT = 136, B_RE_GROUP = 137
+  integer, parameter :: B_HASH = 138
   integer, parameter :: B_SYMBOL2 = B_SYMBOL
   integer, parameter :: B_LONGCAST = 66, B_DBLCAST = 67, B_BOOLCAST = 68, B_CHARCAST = 69
   integer, parameter :: B_BITAND = 70, B_BITOR = 71, B_BITXOR = 72, B_BITNOT = 73
@@ -596,6 +597,7 @@ contains
           gc_ref_is(sym%ref, "lazy-seq*") .or. gc_ref_is(sym%ref, ".") .or. &
           gc_ref_is(sym%ref, "new") .or. gc_ref_is(sym%ref, "clojure.core/import*") .or. &
           gc_ref_is(sym%ref, "set!") .or. &
+          gc_ref_is(sym%ref, "case*") .or. &
           gc_ref_is(sym%ref, "var")
   end function is_special
 
@@ -727,6 +729,9 @@ contains
 
     else if (gc_ref_is(head%ref, "try")) then
        out = eval_try(vs_get(base + 3), vs_get(base + 2))
+
+    else if (gc_ref_is(head%ref, "case*")) then
+       out = eval_case(vs_get(base + 3), vs_get(base + 2))
 
     else if (gc_ref_is(head%ref, "quasiquote")) then
        ! Expand to ordinary cons/concat calls, then evaluate those.
@@ -2039,6 +2044,8 @@ contains
     else if (cls == "clojure.lang.Util") then
        select case (mname)
        case ("equiv", "equals", "identical"); out = native(B_EQ, "=", [roots]); return
+       case ("hash", "hasheq")
+          out = native(B_HASH, "hash", [roots]); return
        case ("isReduced")
           out = native(B_ISREDUCED, "reduced?", [roots]); return
        case ("classOf")
@@ -2240,6 +2247,12 @@ contains
        case ("find"); out = native(B_FIND, "find", [roots]); return
        case ("keys");   out = native(B_KEYS, "keys", [roots]);   return
        case ("vals");   out = native(B_VALS, "vals", [roots]);   return
+       end select
+    end if
+    if (cls == "Integer" .or. cls == "java.lang.Integer") then
+       select case (mname)
+       case ("MAX_VALUE"); out = gc_int(huge(0)); return
+       case ("MIN_VALUE"); out = gc_int(-huge(0) - 1); return
        end select
     end if
     ! Class/TYPE is a JVM primitive-class constant -- Float/TYPE and
@@ -2543,6 +2556,96 @@ contains
     call vs_leave(base)
   end function eval_try
 
+  ! (case* expr shift mask default map<case-int [test then]> table-type
+  !  test-type skip-check?)
+  !
+  ! On the JVM this compiles to a tableswitch, which is the whole point
+  ! of the shift/mask apparatus core.clj builds around it. Here it is a
+  ! lookup in that same map, keyed on the case-int recomputed from the
+  ! runtime value -- so clojure.lang.Util/hash MUST be gc_hash, because
+  ! these keys were built with it at macroexpansion time. Constant time
+  ! either way; only the constant differs.
+  recursive function eval_case(rest, env) result(out)
+    type(gc_value), intent(in) :: rest, env
+    type(gc_value) :: out, val, entry, tt
+    integer :: base, shift, mask, h, n
+    logical :: hit
+
+    out = gc_nil()
+    base = vs_enter(5)
+    call vs_set(base + 1, rest)
+    call vs_set(base + 2, env)
+    n = gcl_count(rest)
+
+    val = gce_eval(nth_of(vs_get(base + 1), 0), vs_get(base + 2), &
+         [vs_get(base + 1)])
+    if (has_error) then
+       call vs_leave(base); return
+    end if
+    call vs_set(base + 3, val)
+
+    shift = ival_of(nth_of(vs_get(base + 1), 1))
+    mask = ival_of(nth_of(vs_get(base + 1), 2))
+    call vs_set(base + 4, strip_meta(nth_of(vs_get(base + 1), 4)))
+
+    ! :int keys on the integer itself; the two hash modes on gc_hash.
+    tt = strip_meta(nth_of(vs_get(base + 1), 6))
+    if (tt%tag == GCT_KEY .and. gc_ref_is(tt%ref, "int")) then
+       h = ival_of(vs_get(base + 3))
+    else
+       h = gc_hash(vs_get(base + 3))
+    end if
+    ! A zero mask means the map was keyed on the raw hash, unshifted --
+    ! prep-hashes only shifts when it had to squeeze the ints together.
+    if (mask /= 0) h = iand(ishft(h, -shift), mask)
+
+    entry = gca_get(vs_get(base + 4), gc_int(h))
+    call vs_set(base + 5, strip_meta(entry))
+
+    hit = .false.
+    if (gc_kind(vs_get(base + 5)) == OBJ_VECTOR) then
+       if (gcv_count(vs_get(base + 5)) == 2) then
+          ! A case-int in skip-check holds a condp that re-tests for
+          ! itself. It is there BECAUSE two constants hashed alike, so
+          ! comparing against the stored test would ask the wrong
+          ! question -- the stored test is the hash, not a constant.
+          if (n >= 8 .and. in_skip(nth_of(vs_get(base + 1), 7), h)) then
+             hit = .true.
+          else
+             hit = deep_equal(vs_get(base + 3), gcv_nth(vs_get(base + 5), 0))
+          end if
+       end if
+    end if
+
+    if (hit) then
+       out = gce_eval(gcv_nth(vs_get(base + 5), 1), vs_get(base + 2), &
+            [vs_get(base + 1)])
+    else
+       out = gce_eval(nth_of(vs_get(base + 1), 3), vs_get(base + 2), &
+            [vs_get(base + 1)])
+    end if
+    call vs_leave(base)
+  end function eval_case
+
+  ! Whether a case-int is in case*'s skip-check set.
+  logical function in_skip(s, h)
+    type(gc_value), intent(in) :: s
+    integer, intent(in) :: h
+    type(gc_value) :: st
+    in_skip = .false.
+    st = strip_meta(s)
+    if (gc_kind(st) /= OBJ_SET) return
+    in_skip = gca_contains(gc_slot(st, 1), gc_int(h))
+  end function in_skip
+
+  ! An integer out of a possibly metadata-wrapped value.
+  integer function ival_of(v)
+    type(gc_value), intent(in) :: v
+    type(gc_value) :: t
+    t = strip_meta(v)
+    ival_of = t%ival
+  end function ival_of
+
   ! Whether a form is a (catch ...) or (finally ...) clause.
   logical function is_clause(v, want)
     type(gc_value), intent(in) :: v
@@ -2556,7 +2659,7 @@ contains
     is_clause = gc_ref_is(h%ref, want)
   end function is_clause
 
-  ! Whether a catch clause'\''s class matches the thrown value. Throwable
+  ! Whether a catch clause's class matches the thrown value. Throwable
   ! and Exception catch everything, which is what core.clj relies on;
   ! a named class matches what the value was constructed with.
   recursive function catch_matches(cls, exc, env) result(yes)
@@ -4040,6 +4143,8 @@ contains
             out = gc_bool(r == 1)
          end if
        end block
+    case (B_HASH)
+       out = gc_int(gc_hash(gcv_nth(args, 0)))
     case (B_RE_GROUPCOUNT)
        block
          type(gc_value) :: mt

@@ -61,6 +61,7 @@ contains
     call check_callables()
     call check_core_builtins()
     call check_regex()
+    call check_case()
     call check_errors()
     call check_heap_sound()
   end subroutine run_all
@@ -464,6 +465,41 @@ contains
     call ev('21j. ', '(.matches (.matcher #"\d+" "12"))', 'true')
     call ev('21k. ', '(.matches (.matcher #"\d+" "a12"))', 'false')
   end subroutine check_regex
+
+  subroutine check_case()
+    ! hash is gc_hash under the JVM's name. Its VALUES are ours, so
+    ! what is checked is the only property case* relies on: equal
+    ! things hash equal, unequal things generally do not.
+    call ev('22a. ', '(= (clojure.lang.Util/hash "ab") (clojure.lang.Util/hash "ab"))', &
+         'true')
+    call ev('22b. ', '(= (clojure.lang.Util/hash :a) (clojure.lang.Util/hash :b))', &
+         'false')
+    ! The bounds `case` reads to decide whether its tests fit an int
+    ! dispatch. clotran ints ARE Fortran default integers.
+    call ev('22c. ', 'Integer/MAX_VALUE', '2147483647')
+    call ev('22d. ', 'Integer/MIN_VALUE', '-2147483648')
+
+    ! case* below the `case` macro, so these test OUR dispatch rather
+    ! than core.clj's expansion of it. The shape is
+    !   (case* expr shift mask default map<case-int [test then]>
+    !          table-type test-type skip-check?)
+    call ev('22e. ', &
+         '(case* 2 0 0 :other {1 [1 :one] 2 [2 :two]} :compact :int)', ':two')
+    call ev('22f. ', &
+         '(case* 9 0 0 :other {1 [1 :one] 2 [2 :two]} :compact :int)', ':other')
+    ! The post-switch equivalence check: landing on a case-int is not
+    ! enough, the value must still equal that entry's test constant.
+    call ev('22g. ', &
+         '(case* 2 0 0 :other {2 [99 :wrong]} :compact :int)', ':other')
+    ! ...unless the case-int is in skip-check, where the entry holds a
+    ! condp that re-tests for itself because two constants collided.
+    call ev('22h. ', &
+         '(case* 2 0 0 :other {2 [99 :wrong]} :compact :int #{2})', ':wrong')
+    ! A non-zero mask means the keys were shifted down to pack them:
+    ! (8 >> 1) & 3 == 0, which is the key this map was built with.
+    call ev('22i. ', &
+         '(case* 8 1 3 :other {0 [8 :hit]} :compact :int)', ':hit')
+  end subroutine check_case
 
   subroutine check_errors()
     type(gc_value) :: form, env, result
