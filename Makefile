@@ -308,6 +308,9 @@ clotran: scripts/clotran clotran-gc
 # entirely, which is the one thing crosscheck exists to prevent.
 test: $(unit-tests) clotran-bin clotran-gc
 	for t in $(unit-tests); do echo "--- $$t ---"; ./$$t || exit 1; done
+	@echo "--- language_test (with core.clj) ---"
+	./clotran-gc src/clj/clojure/core.clj test/clj/language_test.clj </dev/null \
+	  | tee /dev/stderr | grep -q "^LANGUAGE TESTS PASSED"
 
 # What runs before every commit. Ends on the default compiler so the
 # tree is left with the build you actually use.

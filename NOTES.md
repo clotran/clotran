@@ -3808,3 +3808,92 @@ something else first -- `clojure.lang.Delay`, a `0x0001` literal, and
 `PersistentStructMap`. What moved is core.clj, 691 -> 707 forms, and
 the fact that `deftype` and `reify` exist at all. `defrecord` still does
 not: it expands through `letfn`, so it waits on `letfn*`.
+
+## `letfn*`, and the four bugs that stood between a record and working
+
+`letfn*` itself is `let*` with one difference: every name is in scope in
+every init, so the functions can call each other. Compiler.java's
+LetFnExpr calls that "pre-seed env (like Lisp labels)" -- it registers
+all the locals before analysing any init. Here that is one frame, seeded
+with every name bound to nil, and each init evaluated in that same frame
+so a closure built by an earlier init captures the frame a later one is
+about to fill. Twenty lines.
+
+What it cost was the rest of this entry, and none of it was about
+`letfn`. `defrecord` expands through `letfn`, so landing the special
+form turned `defrecord`'s loud failure into a working definition with
+SILENT wrong answers behind it:
+
+    (:a p)                  ;=> nil   (want 1)
+    (count p)               ;=> 0     (want 2)
+    (= (->P 1 2) (->P 1 2)) ;=> false (want true)
+
+Which is the trade this project refuses to make. `(.valAt p :a)` already
+answered 1 -- core_deftype.clj's methods were there and correct -- so
+nothing needed reimplementing; the generic operations simply never
+asked.
+
+**The operations now offer an instance its own method first.** `get`,
+`count`, `seq`, `assoc`, `keys`, `vals`, `contains?`, `dissoc` and `=`
+each check for a declared method before falling through to the map
+layer. That is what an interface IS here: there is no class to test, so
+"implements ILookup" means "declares valAt", and records work through
+Clojure's own vendored code rather than a second implementation in
+Fortran. A plain deftype declares none of them and still reaches the old
+path.
+
+**`identical?` was wired to `=`.** `Util/identical`, `Util/equiv` and
+`Util/equals` all mapped to the `=` builtin, so `(identical? [1] [1])`
+was true where Clojure says false. Wrong on its own, and fatal once a
+record's `equiv` could be reached: that method opens with
+`(identical? this other)`, so `=` called `equiv`, which called `=`.
+Printing a record segfaulted, and `lldb -b -o run -o bt` named
+`gc_equal` in one line after several wrong guesses -- the lesson from
+the gotchas list, learned again.
+
+The replacement compares by TEXT for strings, symbols and keywords
+rather than by pool slot, because clotran does not intern text while the
+JVM interns those three. Ref equality made `(identical? :a :a)` false,
+and a record's equiv compares `(identical? (class this) (class other))`
+-- exactly two keywords of the same name.
+
+**`(symbol "a.b.C/create")` dropped the qualifier,** answering `create`.
+It used `name_part`, which is what `name` wants and the opposite of what
+`Symbol.intern(String)` does: that splits on the slash and sets both
+halves. Every form built as `(~(symbol (str classname "/create")) ...)`
+therefore lost the class it was calling, which is how defrecord's
+`map->Name` factory came out as `(create m)`.
+
+**Multimethod dispatch did not know a deftype's declared interfaces.**
+`print-method` has a method on `clojure.lang.IRecord`; a record
+dispatches as `:clojure.core.P`; nothing connected the two. So dispatch
+fell to `:default`, which asks `(instance? clojure.lang.IObj o)` -- which
+a record IS, since IObj is in its `:implements` -- and re-entered
+`print-method` on the same object. `host_super` now reads a type's own
+interface list, and the walk is 24 deep rather than 4, because a record
+declares a dozen where a built-in type declares two.
+
+**Record constructors have three arities,** and the rule is stated
+exactly in Compiler.java: trailing fields named `__meta`, `__extmap`,
+`__hash` or `__hasheq` are counted into `altCtorDrops`, and when that is
+non-zero the class gets one ctor dropping all of them and one dropping
+the last two. The omitted fields are filled ACONST_NULL, ACONST_NULL,
+ICONST_0, ICONST_0 -- and the zeros matter, because core_deftype reads
+them back as `(if (zero? __hasheq) ...recompute... __hasheq)`, which a
+nil would not survive. A plain deftype has no such fields, so its arity
+check stays exact.
+
+**What this exposed that is NOT fixed: DEVIATIONS 22.** `=` between a
+lazy seq and a vector is false, because `seqable` covers lists and
+vectors only. The obvious fix is wrong -- counting an infinite seq does
+not return -- so it wants an element-at-a-time walk, which allocates,
+which means `deep_equal` needs a root set it does not take. Its own
+commit.
+
+**And a gap this closed.** `test/f` runs against the BASE environment,
+with no core.clj, so none of the above could be tested there: records
+were verified by hand against `clj` and nothing would have caught a
+regression. `test/clj/language_test.clj` is a language-level suite `make
+test` now runs, greping for a final PASSED marker so that a crash
+part-way through fails the gate too. Checked by breaking an assertion
+and confirming `make test` stops.

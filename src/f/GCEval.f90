@@ -118,6 +118,7 @@ module GCEval
   integer, parameter :: B_LONGCAST = 66, B_DBLCAST = 67, B_BOOLCAST = 68, B_CHARCAST = 69
   integer, parameter :: B_BITAND = 70, B_BITOR = 71, B_BITXOR = 72, B_BITNOT = 73
   integer, parameter :: B_SHL = 74, B_SHR = 75
+  integer, parameter :: B_IDENTICAL = 159
 
   ! The auto-gensym map for the syntax-quote currently being expanded,
   ! and the counter that makes each name unique. GENSYM_ENV in
@@ -610,6 +611,7 @@ contains
     yes = gc_ref_is(sym%ref, "quote") .or. gc_ref_is(sym%ref, "if") .or. &
           gc_ref_is(sym%ref, "do") .or. gc_ref_is(sym%ref, "def") .or. &
           gc_ref_is(sym%ref, "let*") .or. gc_ref_is(sym%ref, "fn*") .or. &
+          gc_ref_is(sym%ref, "letfn*") .or. &
           gc_ref_is(sym%ref, "loop*") .or. gc_ref_is(sym%ref, "recur") .or. &
           gc_ref_is(sym%ref, "defmacro*") .or. gc_ref_is(sym%ref, "quasiquote") .or. &
           gc_ref_is(sym%ref, "try") .or. gc_ref_is(sym%ref, "throw") .or. &
@@ -729,6 +731,9 @@ contains
 
     else if (gc_ref_is(head%ref, "let*")) then
        out = eval_let(vs_get(base + 3), vs_get(base + 2))
+
+    else if (gc_ref_is(head%ref, "letfn*")) then
+       out = eval_letfn(vs_get(base + 3), vs_get(base + 2))
 
     else if (gc_ref_is(head%ref, "fn*")) then
        out = make_closure(vs_get(base + 3), vs_get(base + 2))
@@ -1321,19 +1326,336 @@ contains
        call vs_set(base + 5, tmp)
     end do
 
-    if (gcv_count(vs_get(base + 4)) /= gcv_count(gc_slot(vs_get(base + 1), 2))) then
-       write(want, '(I0)') gcv_count(gc_slot(vs_get(base + 1), 2))
-       write(got, '(I0)') gcv_count(vs_get(base + 4))
-       call fail(class_text(vs_get(base + 1)) // &
-            " takes " // trim(want) // " fields, given " // trim(got))
-       call vs_leave(base)
-       return
-    end if
+    ! A RECORD TAKES THREE ARITIES. defrecord conjes __meta,
+    ! __extmap, __hash and __hasheq onto the declared fields, but
+    ! ->Person calls (new Person name age) with only the declared
+    ! ones, and .assoc calls it with those plus two. On the JVM those
+    ! are extra CONSTRUCTORS: Compiler.java counts trailing fields
+    ! named __meta/__extmap/__hash/__hasheq into altCtorDrops and, when
+    ! that is non-zero, emits one ctor dropping all of them and one
+    ! dropping the last two. Same rule here, by the same names.
+    !
+    ! The missing fields are filled the way those ctors fill them:
+    ! ACONST_NULL for __meta and __extmap, ICONST_0 for the two
+    ! hashes -- and the 0 matters, because core_deftype reads them
+    ! back as (if (zero? __hasheq) ...recompute... __hasheq), which a
+    ! nil would not survive.
+    !
+    ! A plain deftype has no such trailing fields, so drops is 0 and
+    ! the arity stays exact: (Point. 1) on a two-field type is still
+    ! an error rather than a silently half-built instance.
+    block
+      integer :: nf, na, drops
+      nf = gcv_count(gc_slot(vs_get(base + 1), 2))
+      na = gcv_count(vs_get(base + 4))
+      drops = alt_ctor_drops(gc_slot(vs_get(base + 1), 2))
+      if (na /= nf) then
+         if (drops > 0 .and. (na == nf - drops .or. na == nf - 2)) then
+            tmp = pad_record_fields(vs_get(base + 4), &
+                 gc_slot(vs_get(base + 1), 2))
+            call vs_set(base + 4, tmp)
+         else
+            write(want, '(I0)') nf
+            write(got, '(I0)') na
+            call fail(class_text(vs_get(base + 1)) // &
+                 " takes " // trim(want) // " fields, given " // trim(got))
+            call vs_leave(base)
+            return
+         end if
+      end if
+    end block
 
     out = gc_obj(OBJ_INST, [vs_get(base + 1), vs_get(base + 4), gc_nil()], &
          [vs_get(base + 1), vs_get(base + 4)])
     call vs_leave(base)
   end function construct_type
+
+  ! How many TRAILING fields are defrecord's bookkeeping, counted by
+  ! name exactly as Compiler.java counts altCtorDrops. Zero for a plain
+  ! deftype, which is what keeps its arity check exact.
+  integer function alt_ctor_drops(fields)
+    type(gc_value), intent(in) :: fields
+    type(gc_value) :: f
+    integer :: i
+    alt_ctor_drops = 0
+    do i = gcv_count(fields) - 1, 0, -1
+       f = strip_meta(gcv_nth(fields, i))
+       if (f%tag /= GCT_SYM) exit
+       if (.not. (gc_ref_is(f%ref, "__meta") .or. gc_ref_is(f%ref, "__extmap") &
+            .or. gc_ref_is(f%ref, "__hash") .or. gc_ref_is(f%ref, "__hasheq"))) exit
+       alt_ctor_drops = alt_ctor_drops + 1
+    end do
+  end function alt_ctor_drops
+
+  ! The values a record's short constructors supply for the fields the
+  ! caller left off: nil for __meta and __extmap, 0 for the two hash
+  ! caches. By NAME rather than by position, so dropping four and
+  ! dropping two both land the right value in the right field.
+  function pad_record_fields(given, fields) result(out)
+    type(gc_value), intent(in) :: given, fields
+    type(gc_value) :: out, f, fill, tmp
+    integer :: base, i
+
+    base = vs_enter(3)
+    call vs_set(base + 1, given)
+    call vs_set(base + 2, fields)
+    call vs_set(base + 3, vs_get(base + 1))
+    do i = gcv_count(vs_get(base + 1)), gcv_count(vs_get(base + 2)) - 1
+       f = strip_meta(gcv_nth(vs_get(base + 2), i))
+       fill = gc_nil()
+       if (f%tag == GCT_SYM) then
+          if (gc_ref_is(f%ref, "__hash") .or. gc_ref_is(f%ref, "__hasheq")) &
+               fill = gc_int(0)
+       end if
+       tmp = gcv_conj(vs_get(base + 3), fill, [vs_get(base + 2), vs_get(base + 3)])
+       call vs_set(base + 3, tmp)
+    end do
+    out = vs_get(base + 3)
+    call vs_leave(base)
+  end function pad_record_fields
+
+  ! --- deftype instances in the generic operations -----------------
+  !
+  ! A record defines valAt, assoc, count, seq, cons, equiv and the rest
+  ! as ordinary methods, in vendored core_deftype.clj, and they are
+  ! correct -- (.valAt p :a) answered 1 before any of this existed. What
+  ! was missing was that `get`, `count`, `seq`, `assoc` and `=` never
+  ! asked. They went straight to the map layer, which does not know what
+  ! an instance is, and every one of them answered nil, 0 or false
+  ! instead of failing: (:a p) was nil, (count p) was 0,
+  ! (= (->P 1 2) (->P 1 2)) was false.
+  !
+  ! So each of those builtins now offers the instance its own method
+  ! first. That is what an interface IS here -- clotran has no class to
+  ! check, so "implements ILookup" means "declares valAt" -- and it
+  ! means records work through Clojure's own code rather than through a
+  ! second implementation of records written in Fortran.
+  !
+  ! `found` is reported rather than guessed at, so a caller falls back
+  ! to the map layer only when the type really declares nothing. A
+  ! plain deftype declares none of these, so (count some-point) still
+  ! reaches the old path and is still wrong in the old way -- it is not
+  ! a collection, and making it answer 0 quietly is the bug this
+  ! comment is about.
+
+  ! The closure an instance's type declares under a method name, or nil.
+  function inst_method(inst, name) result(out)
+    type(gc_value), intent(in) :: inst
+    character(len=*), intent(in) :: name
+    type(gc_value) :: out, tbl
+    out = gc_nil()
+    if (gc_kind(inst) /= OBJ_INST) return
+    tbl = gc_slot(gc_slot(inst, 1), 3)
+    out = gca_get(tbl, gc_key(name, [inst, tbl]))
+  end function inst_method
+
+  ! Applies one, with `this` as the first argument -- a method's own
+  ! parameter list names it, exactly as eval_dot passes it.
+  recursive function inst_invoke(inst, name, rest_args, found) result(out)
+    type(gc_value), intent(in) :: inst, rest_args
+    character(len=*), intent(in) :: name
+    logical, intent(out) :: found
+    type(gc_value) :: out, m, tmp
+    integer :: base, i
+
+    out = gc_nil()
+    found = .false.
+    m = inst_method(inst, name)
+    if (gc_kind(m) /= OBJ_CLOSURE) return
+    found = .true.
+
+    base = vs_enter(4)
+    call vs_set(base + 1, inst)
+    call vs_set(base + 2, m)
+    call vs_set(base + 3, rest_args)
+    tmp = gcv_empty([vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+    call vs_set(base + 4, tmp)
+    tmp = gcv_conj(vs_get(base + 4), vs_get(base + 1), &
+         [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 4)])
+    call vs_set(base + 4, tmp)
+    do i = 0, gcv_count(vs_get(base + 3)) - 1
+       tmp = gcv_conj(vs_get(base + 4), gcv_nth(vs_get(base + 3), i), &
+            [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 4)])
+       call vs_set(base + 4, tmp)
+    end do
+    out = apply(vs_get(base + 2), vs_get(base + 4))
+    call vs_leave(base)
+  end function inst_invoke
+
+  ! The same, for the common no-extra-argument case.
+  recursive function inst_invoke0(inst, name, found) result(out)
+    type(gc_value), intent(in) :: inst
+    character(len=*), intent(in) :: name
+    logical, intent(out) :: found
+    type(gc_value) :: out, empty
+    integer :: base
+    base = vs_enter(1)
+    call vs_set(base + 1, inst)
+    empty = gcv_empty([vs_get(base + 1)])
+    out = inst_invoke(vs_get(base + 1), name, empty, found)
+    call vs_leave(base)
+  end function inst_invoke0
+
+  ! The arguments from `from` onward, as a vector -- what a builtin
+  ! has to hand inst_invoke once it has peeled off the target.
+  function rest_args(args, from) result(out)
+    type(gc_value), intent(in) :: args
+    integer, intent(in) :: from
+    type(gc_value) :: out, tmp
+    integer :: base, i
+    base = vs_enter(2)
+    call vs_set(base + 1, args)
+    tmp = gcv_empty([vs_get(base + 1)])
+    call vs_set(base + 2, tmp)
+    do i = from, gcv_count(vs_get(base + 1)) - 1
+       tmp = gcv_conj(vs_get(base + 2), gcv_nth(vs_get(base + 1), i), &
+            [vs_get(base + 1), vs_get(base + 2)])
+       call vs_set(base + 2, tmp)
+    end do
+    out = vs_get(base + 2)
+    call vs_leave(base)
+  end function rest_args
+
+  ! (get inst k) and (get inst k not-found) through the instance's own
+  ! valAt. Both arities are real -- core_deftype defines valAt for each
+  ! -- and the three-argument one is what makes a record distinguish a
+  ! key bound to nil from a key that is absent.
+  recursive function inst_lookup(inst, k, has_default, dflt, found) result(out)
+    type(gc_value), intent(in) :: inst, k, dflt
+    logical, intent(in) :: has_default
+    logical, intent(out) :: found
+    type(gc_value) :: out, argv, tmp
+    integer :: base
+
+    base = vs_enter(4)
+    call vs_set(base + 1, inst)
+    call vs_set(base + 2, k)
+    call vs_set(base + 3, dflt)
+    tmp = gcv_empty([vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+    call vs_set(base + 4, tmp)
+    tmp = gcv_conj(vs_get(base + 4), vs_get(base + 2), &
+         [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)])
+    call vs_set(base + 4, tmp)
+    if (has_default) then
+       tmp = gcv_conj(vs_get(base + 4), vs_get(base + 3), &
+            [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)])
+       call vs_set(base + 4, tmp)
+    end if
+    argv = vs_get(base + 4)
+    out = inst_invoke(vs_get(base + 1), "valAt", argv, found)
+    call vs_leave(base)
+  end function inst_lookup
+
+  ! (= inst other) through the instance's own equiv.
+  recursive function inst_equiv(inst, other, found) result(out)
+    type(gc_value), intent(in) :: inst, other
+    logical, intent(out) :: found
+    type(gc_value) :: out, tmp
+    integer :: base
+    base = vs_enter(3)
+    call vs_set(base + 1, inst)
+    call vs_set(base + 2, other)
+    tmp = gcv_empty([vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 3, tmp)
+    tmp = gcv_conj(vs_get(base + 3), vs_get(base + 2), &
+         [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+    call vs_set(base + 3, tmp)
+    out = inst_invoke(vs_get(base + 1), "equiv", vs_get(base + 3), found)
+    call vs_leave(base)
+  end function inst_equiv
+
+  ! (keys inst) / (vals inst), built from the instance's own seq --
+  ! which hands back map entries, so the key is each entry's first and
+  ! the value its second. Going through seq rather than reading the
+  ! field vector directly is what makes a record's __extmap show up:
+  ! an assoc'd key is not a field, but it IS in the seq.
+  recursive function inst_entries(inst, want_keys, found) result(out)
+    type(gc_value), intent(in) :: inst
+    logical, intent(in) :: want_keys
+    logical, intent(out) :: found
+    type(gc_value) :: out, sq, items, e
+    integer :: base, i
+
+    out = gc_nil()
+    base = vs_enter(3)
+    call vs_set(base + 1, inst)
+    sq = inst_invoke0(vs_get(base + 1), "seq", found)
+    if (.not. found) then
+       call vs_leave(base)
+       return
+    end if
+    call vs_set(base + 2, sq)
+    items = coll_to_vector(vs_get(base + 2), [vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 2, items)
+    out = gcl_empty([vs_get(base + 2)])
+    call vs_set(base + 3, out)
+    do i = gcv_count(vs_get(base + 2)) - 1, 0, -1
+       e = gcv_nth(vs_get(base + 2), i)
+       if (want_keys) then
+          e = sq_first(e, [vs_get(base + 2), vs_get(base + 3)])
+       else
+          e = sq_first(sq_rest(e, [vs_get(base + 2), vs_get(base + 3)]), &
+               [vs_get(base + 2), vs_get(base + 3)])
+       end if
+       out = gcl_cons(e, vs_get(base + 3), [vs_get(base + 2), vs_get(base + 3), e])
+       call vs_set(base + 3, out)
+    end do
+    out = vs_get(base + 3)
+    call vs_leave(base)
+  end function inst_entries
+
+  ! The static `create` every record class gets: (Person/create m),
+  ! which is all map->Person is. Compiler.java emits it exactly when
+  ! there are bookkeeping fields (`fields.count() > hintedFields.count()`,
+  ! the same condition as altCtorDrops), so a plain deftype has none and
+  ! asking for one still fails.
+  !
+  ! It reads each declared field out of the map by keyword and hands
+  ! whatever is LEFT to __extmap -- that is what lets a record carry
+  ! keys it never declared -- with nil for an empty remainder, as the
+  ! emitted bytecode does.
+  recursive function record_create(ty, m, roots) result(out)
+    type(gc_value), intent(in) :: ty, m
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, fields, f, k, rest, vals, tmp
+    integer :: base, i, declared
+
+    base = vs_enter(5)
+    call vs_set(base + 1, ty)
+    call vs_set(base + 2, m)
+    fields = gc_slot(vs_get(base + 1), 2)
+    call vs_set(base + 3, fields)
+    declared = gcv_count(vs_get(base + 3)) - alt_ctor_drops(vs_get(base + 3))
+
+    vals = gcv_empty(roots)
+    call vs_set(base + 4, vals)
+    call vs_set(base + 5, vs_get(base + 2))
+    do i = 0, declared - 1
+       f = strip_meta(gcv_nth(vs_get(base + 3), i))
+       k = gc_key(gc_ref_text(f%ref), [vs_get(base + 3), vs_get(base + 4), vs_get(base + 5)])
+       tmp = gcv_conj(vs_get(base + 4), gca_get(vs_get(base + 2), k), &
+            [vs_get(base + 3), vs_get(base + 4), vs_get(base + 5), k])
+       call vs_set(base + 4, tmp)
+       rest = gca_dissoc(vs_get(base + 5), k, &
+            [vs_get(base + 3), vs_get(base + 4), vs_get(base + 5), k])
+       call vs_set(base + 5, rest)
+    end do
+
+    ! __meta, then __extmap -- nil when nothing is left over, which is
+    ! what (not-empty ...) gives everywhere else a record builds one.
+    tmp = gcv_conj(vs_get(base + 4), gc_nil(), [vs_get(base + 4), vs_get(base + 5)])
+    call vs_set(base + 4, tmp)
+    rest = vs_get(base + 5)
+    if (gca_count(rest) == 0) rest = gc_nil()
+    tmp = gcv_conj(vs_get(base + 4), rest, [vs_get(base + 4), vs_get(base + 5)])
+    call vs_set(base + 4, tmp)
+
+    tmp = pad_record_fields(vs_get(base + 4), vs_get(base + 3))
+    call vs_set(base + 4, tmp)
+    out = gc_obj(OBJ_INST, [vs_get(base + 1), vs_get(base + 4), gc_nil()], &
+         [vs_get(base + 1), vs_get(base + 4)])
+    call vs_leave(base)
+  end function record_create
 
   ! A field of an instance by name, and whether there was one.
   function inst_field(inst, name, found) result(out)
@@ -1404,6 +1726,85 @@ contains
     end do
     call vs_leave(base)
   end function eval_let
+
+  ! (letfn* [name (fn ...) name (fn ...)] body...)
+  !
+  ! let* with one difference, and it is the whole point: EVERY name is
+  ! in scope in EVERY init, so the functions can call each other.
+  ! Compiler.java's LetFnExpr calls that "pre-seed env (like Lisp
+  ! labels)" -- it registers all the locals before analysing any init.
+  !
+  ! Here that is one frame, seeded with every name bound to nil before
+  ! the first init runs. Each init is then evaluated in that same frame
+  ! and overwrites its own seed, so a closure built by an earlier init
+  ! captures the frame a later init is about to fill in. Nothing can
+  ! observe the nil unless an init CALLS a later name while defining
+  ! itself rather than closing over it -- which is why Clojure's letfn
+  ! only ever emits (fn ...) inits.
+  !
+  ! The frame is mutated rather than rebuilt per binding, unlike loop*,
+  ! which rebinds into a fresh frame each iteration so a closure keeps
+  ! what it captured. Here sharing one frame IS the requirement.
+  recursive function eval_letfn(rest, env) result(out)
+    type(gc_value), intent(in) :: rest, env
+    type(gc_value) :: out, binds, child, k, v
+    integer :: base, i, n
+
+    out = gc_nil()
+    base = vs_enter(4)
+    call vs_set(base + 1, rest)
+    call vs_set(base + 2, env)
+    binds = gcl_first(rest)
+    call vs_set(base + 3, binds)
+    child = gce_new(env, [vs_get(base + 1), vs_get(base + 3)])
+    call vs_set(base + 4, child)
+
+    n = gcv_count(vs_get(base + 3))
+    if (.not. gcv_is(vs_get(base + 3))) then
+       call fail("letfn* needs a vector of bindings")
+       call vs_leave(base)
+       return
+    end if
+    if (mod(n, 2) /= 0) then
+       call fail("letfn* needs an even number of binding forms")
+       call vs_leave(base)
+       return
+    end if
+
+    ! Pass one: seed every name.
+    do i = 0, n - 2, 2
+       k = strip_meta(gcv_nth(vs_get(base + 3), i))
+       if (k%tag /= GCT_SYM) then
+          call fail("letfn* needs a symbol to bind")
+          call vs_leave(base)
+          return
+       end if
+       call gce_set(vs_get(base + 4), k, gc_nil(), &
+            [vs_get(base + 1), vs_get(base + 3)])
+    end do
+
+    ! Pass two: evaluate each init in the frame that already holds all
+    ! of the names.
+    do i = 0, n - 2, 2
+       k = strip_meta(gcv_nth(vs_get(base + 3), i))
+       v = gce_eval(gcv_nth(vs_get(base + 3), i + 1), vs_get(base + 4), &
+            [vs_get(base + 1), vs_get(base + 3)])
+       if (has_error) then
+          call vs_leave(base); return
+       end if
+       call gce_set(vs_get(base + 4), k, v, [vs_get(base + 1), vs_get(base + 3)])
+    end do
+
+    binds = gcl_rest(vs_get(base + 1), [vs_get(base + 1)])
+    call vs_set(base + 3, binds)
+    do while (gcl_count(vs_get(base + 3)) > 0)
+       out = gce_eval(gcl_first(vs_get(base + 3)), vs_get(base + 4), [vs_get(base + 1)])
+       if (has_error) exit
+       binds = gcl_rest(vs_get(base + 3), [vs_get(base + 1)])
+       call vs_set(base + 3, binds)
+    end do
+    call vs_leave(base)
+  end function eval_letfn
 
   ! loop* binds like let*, then iterates: evaluate the body, and if it
   ! hands back a recur, rebind the same names from the recur's
@@ -1923,6 +2324,26 @@ contains
     ! binding. Everything else is: (. (var defmacro) ...) has to run
     ! to produce the Var.
     if (target%tag == GCT_SYM) then
+       ! A DEFTYPE CLASS in member position. The only static one has
+       ! is a record's `create`, which is what map->Name calls.
+       block
+         type(gc_value) :: dty, marg
+         dty = find_type(gc_ref_text(target%ref))
+         if (gc_kind(dty) == OBJ_TYPE .and. mname == "create") then
+            call vs_set(base + 5, dty)
+            marg = gce_eval(gcl_first(vs_get(base + 4)), vs_get(base + 2), &
+                 [vs_get(base + 1), vs_get(base + 5)])
+            if (has_error) then
+               call vs_leave(base)
+               return
+            end if
+            call vs_set(base + 6, marg)
+            out = record_create(vs_get(base + 5), vs_get(base + 6), &
+                 [vs_get(base + 5), vs_get(base + 6)])
+            call vs_leave(base)
+            return
+         end if
+       end block
        if (is_host_class(target)) then
           out = static_member(gc_ref_text(target%ref), mname, vs_get(base + 1))
           if (.not. has_error .and. is_call) &
@@ -2635,6 +3056,7 @@ contains
     is_host_class = gc_ref_is(sym%ref, "clojure.lang.PersistentList") .or. &
          gc_ref_is(sym%ref, "clojure.lang.RT") .or. &
          gc_ref_is(sym%ref, "clojure.lang.Util") .or. &
+         gc_ref_is(sym%ref, "clojure.lang.MapEntry") .or. &
          gc_ref_is(sym%ref, "clojure.lang.LazilyPersistentVector") .or. &
          gc_ref_is(sym%ref, "LazilyPersistentVector") .or. &
          gc_ref_is(sym%ref, "clojure.lang.PersistentHashMap") .or. &
@@ -2686,9 +3108,29 @@ contains
           out = native(B_LIST, "list", [roots])
           return
        end if
+    else if (cls == "clojure.lang.MapEntry") then
+       ! A MAP ENTRY IS A TWO-ELEMENT VECTOR here, which is what
+       ! (key e) and (val e) already read and what Clojure's MapEntry
+       ! is too -- it implements IPersistentVector and answers to two
+       ! nths. So MapEntry/create is `vector`, and needs to exist
+       ! because a record's own seq builds its entries with it.
+       if (mname == "create") then
+          out = native(B_VECTOR, "vector", [roots])
+          return
+       end if
     else if (cls == "clojure.lang.Util") then
        select case (mname)
-       case ("equiv", "equals", "identical"); out = native(B_EQ, "=", [roots]); return
+       case ("equiv", "equals"); out = native(B_EQ, "=", [roots]); return
+       case ("identical")
+          ! REFERENCE IDENTITY, not =. Util.identical is
+          ! (x == y) on the JVM, so (identical? [1] [1]) is false
+          ! while (= [1] [1]) is true. Sharing the = builtin made
+          ! it answer true, which was wrong on its own and became
+          ! fatal once a record's equiv could be reached: that
+          ! method opens with (identical? this other), so = on two
+          ! records called equiv, which called = , until the stack
+          ! ran out. Printing a record segfaulted in gc_equal.
+          out = native(B_IDENTICAL, "identical?", [roots]); return
        case ("hash", "hasheq")
           out = native(B_HASH, "hash", [roots]); return
        case ("isReduced")
@@ -4307,7 +4749,13 @@ contains
             block
               integer :: si
               type(gc_value) :: sk
-              do si = 1, 4
+              ! A built-in type declares at most a handful of
+              ! supertypes; a RECORD declares a dozen -- IRecord,
+              ! IHashEq, IObj, ILookup, IPersistentMap, java.util.Map
+              ! and more -- so the walk has to be long enough to
+              ! reach the one a method was registered on. It stops at
+              ! the first nil, so this costs nothing for the others.
+              do si = 1, 24
                  sk = host_super(vs_get(base + 3), si, vs_get(base + 1))
                  if (sk%tag == GCT_NIL) exit
                  meth = gca_get(gc_slot(vs_get(base + 1), 4), sk)
@@ -4332,7 +4780,24 @@ contains
        ! its argument. Same lookup from opposite sides, which is why
        ! both live here rather than as builtins.
        if (fn%tag == GCT_KEY) then
-          if (gcv_count(args) >= 1) out = gca_get(gcv_nth(args, 0), fn)
+          ! (:a record) is the same lookup `get` does, so it has to
+          ! ask the instance the same way -- this is the form people
+          ! actually write to read a record field.
+          if (gcv_count(args) >= 1) then
+             block
+               type(gc_value) :: tgt
+               logical :: khit
+               tgt = strip_meta(gcv_nth(args, 0))
+               if (gc_kind(tgt) == OBJ_INST) then
+                  out = inst_lookup(tgt, fn, .false., gc_nil(), khit)
+                  if (khit) then
+                     call vs_leave(base)
+                     return
+                  end if
+               end if
+             end block
+             out = gca_get(gcv_nth(args, 0), fn)
+          end if
        else if (gca_is(fn)) then
           if (gcv_count(args) >= 1) out = gca_get(fn, gcv_nth(args, 0))
        else if (gc_kind(fn) == OBJ_SET) then
@@ -4363,8 +4828,10 @@ contains
     type(gc_value), intent(in) :: args
     type(gc_value) :: out, a, b
     integer :: base, i, n, acc
+    logical :: hit
 
     out = gc_nil()
+    hit = .false.
     n = gcv_count(args)
     ! Three slots: args, plus two scratch for the builtins that
     ! accumulate a collection (conj onto a map, the host create
@@ -4395,6 +4862,38 @@ contains
           end do
           out = gc_int(acc)
        end if
+    case (B_IDENTICAL)
+       ! Same tag and the same thing: one heap slot for a reference,
+       ! one value for an immediate. Text is interned here, so two
+       ! spellings of :a really are one slot -- which is what makes
+       ! (identical? :a :a) true in Clojure too.
+       !
+       ! The metadata wrapper is NOT seen through: it is a distinct
+       ! object, and Clojure agrees that (identical? (with-meta v m) v)
+       ! is false.
+       a = gcv_nth(args, 0)
+       b = gcv_nth(args, 1)
+       if (a%tag /= b%tag) then
+          out = gc_bool(.false.)
+       else
+          select case (a%tag)
+          case (GCT_NIL); out = gc_bool(.true.)
+          case (GCT_BOOL, GCT_INT, GCT_CHAR); out = gc_bool(a%ival == b%ival)
+          case (GCT_REAL); out = gc_bool(a%rval == b%rval)
+          case (GCT_STR, GCT_SYM, GCT_KEY)
+             ! By TEXT, not by pool slot. clotran does not intern
+             ! text -- gc_equal says so: the same text allocated
+             ! twice is two slots but one value -- while the JVM
+             ! interns keywords, symbols and literal strings, so
+             ! (identical? :a :a) is true there. Comparing slots
+             ! here would answer false, and a record's equiv opens
+             ! with (identical? (class this) (class other)), which
+             ! is exactly two keywords of the same name.
+             out = gc_bool(gc_ref_len(a%ref) == gc_ref_len(b%ref))
+             if (truthy(out)) out = gc_bool(gc_ref_is(a%ref, gc_ref_text(b%ref)))
+          case default; out = gc_bool(a%ref == b%ref)
+          end select
+       end if
     case (B_EQ)
        out = gc_bool(.true.)
        do i = 1, n - 1
@@ -4421,6 +4920,14 @@ contains
     case (B_VECTOR)
        out = vs_get(base + 1)
     case (B_COUNT)
+       a = strip_meta(gcv_nth(vs_get(base + 1), 0))
+       if (gc_kind(a) == OBJ_INST) then
+          out = inst_invoke0(a, "count", hit)
+          if (hit) then
+             call vs_leave(base)
+             return
+          end if
+       end if
        out = gc_int(sq_count(gcv_nth(vs_get(base + 1), 0), [vs_get(base + 1)]))
     case (B_FIRST)
        out = sq_first(gcv_nth(vs_get(base + 1), 0), [vs_get(base + 1)])
@@ -4504,6 +5011,13 @@ contains
        end block
     case (B_GET)
        a = strip_meta(gcv_nth(args, 0))
+       if (gc_kind(a) == OBJ_INST) then
+          out = inst_lookup(a, gcv_nth(args, 1), n >= 3, gcv_nth(args, 2), hit)
+          if (hit) then
+             call vs_leave(base)
+             return
+          end if
+       end if
        out = gca_get(a, gcv_nth(args, 1))
        if (out%tag == GCT_NIL .and. n >= 3) then
           if (.not. gca_contains(a, gcv_nth(args, 1))) out = gcv_nth(args, 2)
@@ -4514,11 +5028,26 @@ contains
        ! made (assoc-in {} [:impls t] m) produce {:impls nil}, so every
        ! protocol extension was silently discarded.
        a = strip_meta(gcv_nth(vs_get(base + 1), 0))
+       if (gc_kind(a) == OBJ_INST) then
+          out = inst_invoke(a, "assoc", rest_args(vs_get(base + 1), 1), hit)
+          if (hit) then
+             call vs_leave(base)
+             return
+          end if
+       end if
        if (a%tag == GCT_NIL) a = gca_empty([vs_get(base + 1)])
        out = gca_assoc(a, &
             gcv_nth(vs_get(base + 1), 1), &
             gcv_nth(vs_get(base + 1), 2), [vs_get(base + 1)])
     case (B_KEYS, B_VALS)
+       a = strip_meta(gcv_nth(vs_get(base + 1), 0))
+       if (gc_kind(a) == OBJ_INST) then
+          out = inst_entries(a, id == B_KEYS, hit)
+          if (hit) then
+             call vs_leave(base)
+             return
+          end if
+       end if
        block
          type(gc_value), allocatable :: ks(:), vls(:)
          call gca_entries(strip_meta(gcv_nth(vs_get(base + 1), 0)), ks, vls)
@@ -4645,8 +5174,24 @@ contains
        out = sq_first(sq_rest(gcv_nth(vs_get(base + 1), 0), [vs_get(base + 1)]), &
             [vs_get(base + 1)])
     case (B_SEQ)
+       a = strip_meta(gcv_nth(vs_get(base + 1), 0))
+       if (gc_kind(a) == OBJ_INST) then
+          out = inst_invoke0(a, "seq", hit)
+          if (hit) then
+             call vs_leave(base)
+             return
+          end if
+       end if
        out = to_seq(gcv_nth(vs_get(base + 1), 0), [vs_get(base + 1)])
     case (B_DISSOC)
+       a = strip_meta(gcv_nth(vs_get(base + 1), 0))
+       if (gc_kind(a) == OBJ_INST) then
+          out = inst_invoke(a, "without", rest_args(vs_get(base + 1), 1), hit)
+          if (hit) then
+             call vs_leave(base)
+             return
+          end if
+       end if
        out = gca_dissoc(gcv_nth(vs_get(base + 1), 0), gcv_nth(vs_get(base + 1), 1), &
             [vs_get(base + 1)])
     case (B_NAME)
@@ -4683,7 +5228,25 @@ contains
                t = name_part(q) // "/" // name_part(gcv_nth(args, 1))
             end if
          else
-            t = name_part(gcv_nth(args, 0))
+            ! ONE argument keeps the WHOLE name, qualifier and all:
+            ! Symbol.intern(String) splits on the slash and sets both
+            ! halves, so (symbol "a.b.C/create") is a.b.C/create and
+            ! its namespace is "a.b.C". name_part STRIPS the
+            ! qualifier, which is right for `name` and wrong here: it
+            ! made that symbol just `create`, so every form built as
+            ! (~(symbol (str classname "/create")) ...) lost the
+            ! class it was calling -- which is how defrecord's
+            ! map->Name factory came out as (create m).
+            block
+              type(gc_value) :: a0
+              a0 = strip_meta(gcv_nth(args, 0))
+              if (a0%tag == GCT_STR .or. a0%tag == GCT_SYM .or. &
+                   a0%tag == GCT_KEY) then
+                 t = class_of_text(a0)
+              else
+                 t = name_part(a0)
+              end if
+            end block
          end if
          if (id == B_KEYWORD) then
             out = gc_key(t, [vs_get(base + 1)])
@@ -5195,6 +5758,12 @@ contains
          coll = strip_meta(gcv_nth(args, 0))
          if (coll%tag == GCT_STR) then
             out = gc_bool(index(text_of(coll), text_of(gcv_nth(args, 1))) > 0)
+         else if (gc_kind(coll) == OBJ_INST) then
+            ! THE path contains? takes: core.clj's contains? is
+            ! (. clojure.lang.RT (contains coll key)), which lands
+            ! here rather than on the contains? builtin.
+            out = inst_invoke(coll, "containsKey", rest_args(args, 1), hit)
+            if (.not. hit) out = gc_bool(gca_contains(coll, gcv_nth(args, 1)))
          else
             if (gc_kind(coll) == OBJ_SET) coll = gc_slot(coll, 1)
             out = gc_bool(gca_contains(coll, gcv_nth(args, 1)))
@@ -5532,6 +6101,13 @@ contains
        block
          type(gc_value) :: coll
          coll = strip_meta(gcv_nth(args, 0))
+         if (gc_kind(coll) == OBJ_INST) then
+            out = inst_invoke(coll, "containsKey", rest_args(args, 1), hit)
+            if (hit) then
+             call vs_leave(base)
+             return
+          end if
+         end if
          if (gc_kind(coll) == OBJ_SET) coll = gc_slot(coll, 1)
          out = gc_bool(gca_contains(coll, gcv_nth(args, 1)))
        end block
@@ -6061,6 +6637,22 @@ contains
     logical :: eq
     type(gc_value), allocatable :: ka(:), va(:), kb(:), vb(:)
     integer :: i, n
+    logical :: hit
+    type(gc_value) :: r
+
+    ! An INSTANCE decides its own equality, through the equiv its
+    ! type declares. Two records with the same fields are equal in
+    ! Clojure and two deftypes never are, and that difference is not
+    ! something this function can see -- it is written in
+    ! core_deftype.clj, per type. Falling through to identity made
+    ! (= (->P 1 2) (->P 1 2)) false.
+    if (gc_kind(a) == OBJ_INST) then
+       r = inst_equiv(a, b, hit)
+       if (hit) then
+          eq = truthy(r)
+          return
+       end if
+    end if
 
     ! A list and a vector of the same elements are equal in Clojure --
     ! both are sequential -- so this compares seq-ness, not kind.
@@ -6635,6 +7227,29 @@ contains
     k = gc_nil()
     if (dv%tag /= GCT_KEY) return
     t = gc_ref_text(dv%ref)
+
+    ! A DEFTYPE'S SUPERTYPES ARE THE INTERFACES IT DECLARED. The
+    ! table below is fixed because clotran's built-in types are, but
+    ! a deftype names its own, so they are read from the type rather
+    ! than listed here.
+    !
+    ! Without this, a multimethod registered on an interface never
+    ! fires for a record: print-method has a method on
+    ! clojure.lang.IRecord, a record dispatches as :clojure.core.P,
+    ! and nothing connected the two -- so dispatch fell to :default,
+    ! which asks (instance? clojure.lang.IObj o), which a record IS,
+    ! and re-entered print-method on the same object. Printing one
+    ! segfaulted on a stack that never unwound.
+    block
+      type(gc_value) :: ty, ifaces
+      ty = find_type(t)
+      if (gc_kind(ty) == OBJ_TYPE) then
+         ifaces = gc_slot(ty, 4)
+         if (i >= 1 .and. i <= gcv_count(ifaces)) k = gcv_nth(ifaces, i - 1)
+         return
+      end if
+    end block
+
     select case (t)
     case ("vector")
        select case (i)

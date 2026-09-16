@@ -508,3 +508,34 @@ that `(pr-str *ns*)` does not round-trip through `read`, which the
 It goes away with `String/format` and an identity for host objects --
 the same two pieces deviation 18 needs, and worth doing once for both
 rather than twice.
+
+## 22. `=` is false between a LAZY seq and a vector
+
+A list and a vector of the same elements are equal in Clojure -- both
+are sequential -- and clotran agrees. A LAZY seq and a vector are not:
+
+    (= (list 1 2) [1 2])          ;=> true,  and clj agrees
+    (= (map inc [0 1]) [1 2])     ;=> FALSE, clj says true
+    (= (map-indexed vector [:a])  [[0 :a]])  ;=> FALSE, clj says true
+
+`seqable`, which is what `deep_equal` asks before comparing element by
+element, is `gcl_is(v) .or. gcv_is(v)` -- lists and vectors only. A lazy
+seq and a seq VIEW answer false to both, so the comparison falls through
+to identity and two structurally equal sequences come back unequal.
+
+It is a silent wrong answer, and a common one: anything built with
+`map`, `filter`, `range` or `map-indexed` is a lazy seq, so comparing
+one against a literal vector -- which is what a test usually does --
+answers false.
+
+Not fixed here because the obvious fix is wrong. Adding the two kinds to
+`seqable` makes `deep_equal` call `seq_count` first, and counting an
+INFINITE seq does not return: `(= (range) [1 2])` terminates in Clojure,
+which walks both and stops as soon as one ends. So it wants an
+element-at-a-time walk that forces one cell per step, and forcing
+allocates, which means `deep_equal` needs a root set it does not
+currently take. That is a change to equality's signature, not a
+one-liner, and it belongs in its own commit.
+
+Worked around in `test/clj/language_test.clj` by putting `vec` on both
+sides where a lazy seq would otherwise be compared to a vector.

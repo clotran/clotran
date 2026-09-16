@@ -19,7 +19,7 @@ it; retiring it is step 3.
 | --- | --- | --- |
 | core.clj | **707 of 724 forms**, wall at data readers | 9 failing forms |
 | startup | **6.5s** | 5.4s |
-| our tests | 1006/1006, both compilers | green, both compilers |
+| our tests | 1067/1067, both compilers | green, both compilers |
 | Clojure's own suite | **655 pass / 199 fail / 231 error** over 190 tests | not run against it |
 | Clojure's libraries | **14 of 21 load** | not measured |
 | source | 11,200 lines | 10,929 lines |
@@ -31,7 +31,14 @@ is the fix; nothing else will move it much.
 
 The three scorecards, and what their denominators exclude:
 
-- **our tests** (`test/f`) are a GATE, not a grade. 100% or do not commit.
+- **our tests** are a GATE, not a grade. 100% or do not commit. Two
+  suites now: `test/f` (1030) runs against the BASE environment, with
+  no core.clj, which is the right place for a special form and cannot
+  reach anything built on one; `test/clj/language_test.clj` (37) runs
+  with core.clj loaded, and covers deftype, defrecord, reify,
+  protocols and letfn -- none of which test/f can see. `make test`
+  greps it for a final PASSED marker, so a crash part-way through
+  fails too.
 - **Clojure's suite** is 67 vendored namespaces. 13 still crash before
   reporting anything, so they contribute ZERO assertions to both halves
   of the pass rate: 655/1085 is over assertions that EXECUTED, not
@@ -118,9 +125,14 @@ Re-cluster before working -- the list changes under you:
 **4. `Pattern.split`,** which is all that blocks `clojure.string/split`.
 The regex machinery (find_next, group spans) is already there.
 
-**5. `letfn*`.** Blocks `letfn`, `map-indexed` and -- newly, now that
-`deftype*` exists -- `defrecord`, which is the half of item 1 that did
-not land. Worth more than its position here suggests.
+**5. `letfn*` -- DONE.** `letfn`, `map-indexed` and `defrecord` all
+work. Landing it also meant teaching the generic operations
+(`get`, `count`, `seq`, `assoc`, `keys`, `=`, `contains?`) to ask an
+instance for its own method, because without that a record answered
+nil, 0 and false rather than failing. DEVIATIONS 22 is what is left:
+`=` between a LAZY seq and a vector is false, which wants an
+element-at-a-time walk in `deep_equal` and is the next honest piece
+of correctness work in this area.
 
 **6. Retire `clotran-bin`.** ~10,900 lines of pre-GC evaluator, kept only
 because the mal regression suites drive it. Retiring it DELETES the rest

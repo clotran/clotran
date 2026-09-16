@@ -63,6 +63,8 @@ contains
     call check_regex()
     call check_case()
     call check_deftype()
+    call check_letfn()
+    call check_symbol_names()
     call check_resources()
     call check_errors()
     call check_heap_sound()
@@ -637,6 +639,47 @@ contains
     call ev_err('24k. ', &
          '(do (deftype* t/X t.X [a] :implements []) (.-nope (new t.X 1)))')
   end subroutine check_deftype
+
+  ! letfn* is let* with one difference that is the whole point:
+  ! every name is in scope in every init, so the functions can call
+  ! each other. Compiler.java's LetFnExpr calls that pre-seeding the
+  ! env, like Lisp labels.
+  subroutine check_letfn()
+    ! MUTUAL recursion -- ev? is written before od? exists.
+    call ev('25a. ', &
+         '(letfn* [ev? (fn* [n] (if (= n 0) true (od? (- n 1))))' // &
+         '          od? (fn* [n] (if (= n 0) false (ev? (- n 1))))]' // &
+         '   (ev? 10))', 'true')
+    call ev('25b. ', &
+         '(letfn* [ev? (fn* [n] (if (= n 0) true (od? (- n 1))))' // &
+         '          od? (fn* [n] (if (= n 0) false (ev? (- n 1))))]' // &
+         '   (od? 10))', 'false')
+    ! SELF recursion, which let* could not do either.
+    call ev('25c. ', &
+         '(letfn* [f (fn* [n] (if (< n 2) 1 (* n (f (- n 1)))))] (f 5))', &
+         '120')
+    ! The body sees the names too, not just the inits.
+    call ev('25d. ', '(letfn* [g (fn* [] :g)] (g))', ':g')
+    ! An init CLOSES OVER the shared frame, so a later binding is
+    ! visible to an earlier closure -- the seeded nil must have been
+    ! overwritten in the same frame, not in a copy of it.
+    call ev('25e. ', &
+         '(letfn* [a (fn* [] (b)) b (fn* [] 7)] (a))', '7')
+    call ev_err('25f. ', '(letfn* [x] x)')
+  end subroutine check_letfn
+
+  ! `symbol` and `keyword` with ONE argument keep the whole name.
+  ! Symbol.intern(String) splits on the slash and sets both halves,
+  ! so the qualifier survives -- stripping it is what `name` does.
+  subroutine check_symbol_names()
+    call ev('26a. ', '(symbol "a.b.C/create")', 'a.b.C/create')
+    call ev('26b. ', '(namespace (symbol "a.b.C/create"))', '"a.b.C"')
+    call ev('26c. ', '(name (symbol "a.b.C/create"))', '"create"')
+    ! Two arguments still glue, and an unqualified name is untouched.
+    call ev('26d. ', '(symbol "a.b.C" "create")', 'a.b.C/create')
+    call ev('26e. ', '(symbol "plain")', 'plain')
+    call ev('26f. ', '(keyword "a/b")', ':a/b')
+  end subroutine check_symbol_names
 
   subroutine check_errors()
     type(gc_value) :: form, env, result

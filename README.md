@@ -27,8 +27,8 @@ parses it with a regex, and both of those had to exist for it to answer.
 
 **707 of core.clj's 724 top-level forms load.** That includes
 destructuring, the macro system, protocols, multimethods, lazy seqs,
-transducers, metadata, `case`, regex literals, `deftype`, `reify`, and
-most of the seq library -- because clotran does not implement those,
+transducers, metadata, `case`, regex literals, `deftype`, `reify`,
+`defrecord`, `letfn` and most of the seq library -- because clotran does not implement those,
 core.clj does.
 
 **14 of Clojure's own 21 libraries load** -- `set`, `data`, `edn`,
@@ -49,7 +49,7 @@ several of the 67 -- `proxy`, `genclass`, annotations, AOT -- can never
 pass here. 17 of 67 namespaces produce a passing assertion today.
 
 Four oracles keep it honest: gfortran and flang must agree
-(`make crosscheck`, 1006 assertions each), `clj` -- real JVM Clojure --
+(`make crosscheck`, 1067 assertions each), `clj` -- real JVM Clojure --
 answers what Clojure actually does rather than what anyone remembers,
 and pinned clones of Clojure and ClojureScript are cited rather than
 recalled. See `CLAUDE.md`.
@@ -58,8 +58,7 @@ recalled. See `CLAUDE.md`.
 
 | | |
 |---|---|
-| `defrecord` | expands through `letfn`, so it waits on `letfn*` -- `deftype` and `reify` work |
-| `letfn*` | so `letfn`, `map-indexed` and `defrecord` fail |
+| `=` on a lazy seq vs a vector | answers false; DEVIATIONS 22 |
 | mutable deftype fields | `(set! afield v)` is refused, loudly; DEVIATIONS 20 |
 | source positions | the GC evaluator has none, so no error reports `file:line:col` |
 | ratio and BigDecimal literals | `2/3`, `1M` do not read |
