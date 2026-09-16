@@ -19,8 +19,8 @@ it; retiring it is step 3.
 | --- | --- | --- |
 | core.clj | **707 of 724 forms**, wall at data readers | 9 failing forms |
 | startup | **6.5s** | 5.4s |
-| our tests | 1067/1067, both compilers | green, both compilers |
-| Clojure's own suite | **655 pass / 199 fail / 231 error** over 190 tests | not run against it |
+| our tests | 1082/1082, both compilers | green, both compilers |
+| Clojure's own suite | **681 pass / 175 fail / 237 error** over 193 tests | not run against it |
 | Clojure's libraries | **14 of 21 load** | not measured |
 | source | 11,200 lines | 10,929 lines |
 
@@ -41,9 +41,9 @@ The three scorecards, and what their denominators exclude:
   fails too.
 - **Clojure's suite** is 67 vendored namespaces. 13 still crash before
   reporting anything, so they contribute ZERO assertions to both halves
-  of the pass rate: 655/1085 is over assertions that EXECUTED, not
-  assertions that exist. Only 17 of 67 namespaces produce a single
-  passing assertion, and that 25% is the more honest headline.
+  of the pass rate: 681/1093 is over assertions that EXECUTED, not
+  assertions that exist. Only 18 of 67 namespaces produce a single
+  passing assertion, and that 27% is the more honest headline.
   Several of the 67 can never pass here -- `proxy`, `genclass`,
   annotations, AOT -- and they have not been subtracted, deliberately.
 - **libraries loading** is the measure that moves when a host member
@@ -129,10 +129,9 @@ The regex machinery (find_next, group spans) is already there.
 work. Landing it also meant teaching the generic operations
 (`get`, `count`, `seq`, `assoc`, `keys`, `=`, `contains?`) to ask an
 instance for its own method, because without that a record answered
-nil, 0 and false rather than failing. DEVIATIONS 22 is what is left:
-`=` between a LAZY seq and a vector is false, which wants an
-element-at-a-time walk in `deep_equal` and is the next honest piece
-of correctness work in this area.
+nil, 0 and false rather than failing -- and then rewriting sequential
+equality, which the new language suite caught answering false for
+(= (map inc [0 1]) [1 2]).
 
 **6. Retire `clotran-bin`.** ~10,900 lines of pre-GC evaluator, kept only
 because the mal regression suites drive it. Retiring it DELETES the rest

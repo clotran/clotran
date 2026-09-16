@@ -3883,12 +3883,61 @@ them back as `(if (zero? __hasheq) ...recompute... __hasheq)`, which a
 nil would not survive. A plain deftype has no such fields, so its arity
 check stays exact.
 
-**What this exposed that is NOT fixed: DEVIATIONS 22.** `=` between a
-lazy seq and a vector is false, because `seqable` covers lists and
-vectors only. The obvious fix is wrong -- counting an infinite seq does
-not return -- so it wants an element-at-a-time walk, which allocates,
-which means `deep_equal` needs a root set it does not take. Its own
-commit.
+**What this exposed, and what it took to fix: sequential equality.**
+The new suite's first run answered false for
+`(= (map inc [0 1]) [1 2])`. `seqable` was `gcl_is(v) .or. gcv_is(v)`
+-- list or vector -- so a LAZY SEQ was not sequential and fell through
+to identity. Anything built by `map`, `filter`, `range` or
+`map-indexed` is a lazy seq, so comparing one against a literal vector
+was silently wrong, which is most of what a test does.
+
+Both references ask a different question and use a different method:
+
+    ASeq.equiv        obj instanceof Sequential || obj instanceof List
+                      this instanceof Counted && obj instanceof Counted
+                        && count() != count()        -> false
+                      then walk with RT.seq / .next()
+
+    equiv-sequential  (sequential? y)
+                      (and (counted? x) (counted? y)
+                           (not (== (count x) (count y))))  -> false
+                      then (loop [xs (seq x) ys (seq y)] ...)
+
+Two things fall out of that. The test is SEQUENTIAL, not
+list-or-vector -- which is why a set and a bare string stay unequal to
+a vector while `(seq "ab")` does not. And the count is a SHORTCUT
+taken only when BOTH sides are counted, because counting a lazy seq
+realises it and an infinite one never finishes. Counting first, which
+is what this did, cannot be repaired by adding lazy seqs to the
+predicate: `(= (range) [1 2])` has to return, and in Clojure it does
+precisely because nothing asks for a count.
+
+So `deep_equal` now walks, and takes a `roots` argument because
+walking allocates where indexing did not -- forcing a lazy cell, and
+taking the rest of a vector view. Stripping metadata at entry came
+with it: the wrapper used to reach the sequential test and answer
+false, so `(= (with-meta [1 2] {:a 1}) [1 2])` was false where Clojure
+says true.
+
+ClojureScript writes all of this in Clojure, so it is bucket B and
+not a seam: ours being in Fortran is a choice.
+
+This is the change that moved the suite. `=` is in every assertion
+Clojure's tests make, so getting it wrong for lazy seqs suppressed
+passes everywhere:
+
+| | before | after |
+| --- | ---: | ---: |
+| passing assertions | 655 | 681 |
+| failures | 199 | 175 |
+| errors | 231 | 237 |
+| tests reporting | 190 | 193 |
+| namespaces with a pass | 17 | 18 |
+
+The errors went UP by six, which is the honest shape of it: an
+assertion that used to compare false and stop now gets further and
+hits the next missing thing. Thirteen namespaces still crash before
+reporting, unchanged.
 
 **And a gap this closed.** `test/f` runs against the BASE environment,
 with no core.clj, so none of the above could be tested there: records

@@ -73,9 +73,7 @@
 (check "letfn self recursion"
        (letfn [(f [n] (if (< n 2) 1 (* n (f (dec n)))))] (f 5))
        120)
-;; `vec` on both sides deliberately: (= lazy-seq vector) is false here,
-;; which is DEVIATIONS 22 and not what this line is testing.
-(check "map-indexed" (vec (map-indexed vector [:a :b :c])) [[0 :a] [1 :b] [2 :c]])
+(check "map-indexed" (map-indexed vector [:a :b :c]) [[0 :a] [1 :b] [2 :c]])
 
 ;;; ---- defrecord --------------------------------------------------
 ;;
@@ -90,7 +88,7 @@
 (check "record get"                 (get rec :a) 1)
 (check "record get not-found"       (get rec :nope :none) :none)
 (check "record count"               (count rec) 2)
-(check "record seq"                 (vec (seq rec)) [[:a 1] [:b 2]])
+(check "record seq"                 (seq rec) [[:a 1] [:b 2]])
 (check "record keys"                (keys rec) [:a :b])
 (check "record vals"                (vals rec) [1 2])
 (check "record equality by value"   (= (->P 1 2) (->P 1 2)) true)
@@ -130,6 +128,34 @@
 (check "str of a namespace" (str (the-ns 'clojure.core)) "clojure.core")
 (check "str of a namespace nested" (str [(the-ns 'clojure.core)])
        "[#<ns clojure.core>]")
+
+;;; ---- sequential equality ----------------------------------------
+;;
+;; A lazy seq is Sequential, so it is equal to a vector of the same
+;; elements. This walks element at a time rather than counting
+;; first, which is what both Clojure (ASeq.equiv) and ClojureScript
+;; (equiv-sequential) do, and is why the infinite cases below
+;; terminate instead of realising forever.
+
+(check "lazy seq = vector"     (= (map inc [0 1]) [1 2]) true)
+(check "vector = lazy seq"     (= [1 2] (map inc [0 1])) true)
+(check "lazy seq = lazy seq"   (= (map inc [0 1]) (map inc [0 1])) true)
+(check "list = vector"         (= (list 1 2) [1 2]) true)
+(check "seq of a string"       (= (seq "ab") [\a \b]) true)
+(check "seq of a map"          (= (seq {:a 1}) [[:a 1]]) true)
+(check "nested lazy"           (= (map vector [1] [2]) [[1 2]]) true)
+(check "shorter lazy seq"      (= (map inc [0]) [1 2]) false)
+(check "longer lazy seq"       (= (map inc [0 1 2]) [1 2]) false)
+;; Not Sequential, so not equal however the elements line up.
+(check "a set is not sequential"    (= #{1 2} [1 2]) false)
+(check "a string is not sequential" (= "ab" [\a \b]) false)
+(check "nil is not an empty vector" (= nil []) false)
+;; Metadata is invisible to equality, as it is in Clojure.
+(check "metadata does not change =" (= (with-meta [1 2] {:a 1}) [1 2]) true)
+;; INFINITE on one side, and these must RETURN. They do because the
+;; count shortcut is taken only when both sides are counted.
+(check "infinite vs vector"    (= (range) [1 2]) false)
+(check "infinite sharing a prefix" (= (iterate inc 1) [1 2]) false)
 
 ;;; ---- report -----------------------------------------------------
 

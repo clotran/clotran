@@ -3766,7 +3766,8 @@ contains
           if (n >= 8 .and. in_skip(nth_of(vs_get(base + 1), 7), h)) then
              hit = .true.
           else
-             hit = deep_equal(vs_get(base + 3), gcv_nth(vs_get(base + 5), 0))
+             hit = deep_equal(vs_get(base + 3), gcv_nth(vs_get(base + 5), 0), &
+                  [vs_get(base + 3), vs_get(base + 5)])
           end if
        end if
     end if
@@ -4897,7 +4898,8 @@ contains
     case (B_EQ)
        out = gc_bool(.true.)
        do i = 1, n - 1
-          if (.not. deep_equal(gcv_nth(args, i - 1), gcv_nth(args, i))) then
+          if (.not. deep_equal(gcv_nth(args, i - 1), gcv_nth(args, i), &
+               [vs_get(base + 1)])) then
              out = gc_bool(.false.)
              exit
           end if
@@ -6632,13 +6634,27 @@ contains
   ! lives in GC.f90 which cannot see the collection modules. The older
   ! evaluator draws the same line ("lists/vectors/maps as keys aren't
   ! compared deeply yet"), so this matches rather than diverges.
-  recursive function deep_equal(a, b) result(eq)
-    type(gc_value), intent(in) :: a, b
+  ! `roots` because this now WALKS: forcing a lazy seq allocates,
+  ! and so does taking the rest of a vector view, so the two sides
+  ! have to be reachable across those allocations. Indexing never
+  ! allocated, which is why it used to take none.
+  recursive function deep_equal(a0, b0, roots) result(eq)
+    type(gc_value), intent(in) :: a0, b0
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: a, b
     logical :: eq
     type(gc_value), allocatable :: ka(:), va(:), kb(:), vb(:)
-    integer :: i, n
+    integer :: i
     logical :: hit
     type(gc_value) :: r
+
+    ! METADATA IS INVISIBLE TO EQUALITY, as gc_equal already says
+    ! and as Clojure agrees: (= (with-meta [1 2] {:a 1}) [1 2]) is
+    ! true. The wrapper used to reach the sequential test, which
+    ! answered false for it, so a hinted collection compared by
+    ! identity.
+    a = strip_meta(a0)
+    b = strip_meta(b0)
 
     ! An INSTANCE decides its own equality, through the equiv its
     ! type declares. Two records with the same fields are equal in
@@ -6654,18 +6670,82 @@ contains
        end if
     end if
 
-    ! A list and a vector of the same elements are equal in Clojure --
-    ! both are sequential -- so this compares seq-ness, not kind.
-    if (seqable(a) .and. seqable(b)) then
-       n = seq_count(a)
-       eq = (n == seq_count(b))
-       if (.not. eq) return
-       do i = 0, n - 1
-          if (.not. deep_equal(seq_at(a, i), seq_at(b, i))) then
+    ! SEQUENTIAL EQUALITY, element at a time. Both references do it the
+    ! same way and neither indexes:
+    !
+    !   ASeq.equiv          ISeq ms = RT.seq(obj);
+    !                       for(ISeq s = seq(); s != null;
+    !                           s = s.next(), ms = ms.next())
+    !                         if(ms == null || !Util.equiv(...)) false;
+    !                       return ms == null;
+    !
+    !   equiv-sequential    (loop [xs (seq x) ys (seq y)]
+    !                         (cond (nil? xs) (nil? ys)
+    !                               (nil? ys) false
+    !                               (= (first xs) (first ys))
+    !                                 (recur (next xs) (next ys))
+    !                               :else false))
+    !
+    ! The count is a SHORTCUT, not the method, and is taken only when
+    ! both sides are counted -- see counted_p. Counting first
+    ! unconditionally, which is what this did, cannot work for a lazy
+    ! seq: it realises the whole thing, and an infinite one never
+    ! returns. Walking stops at the first difference or the first end.
+    !
+    ! ClojureScript writes this in Clojure, so it is not host-bound and
+    ! being in Fortran here is a choice, not a seam. SEAMS.md bucket B.
+    if (sequential_p(a) .and. sequential_p(b)) then
+       if (counted_p(a) .and. counted_p(b)) then
+          if (seq_count(a) /= seq_count(b)) then
              eq = .false.
              return
           end if
-       end do
+       end if
+       block
+         type(gc_value) :: sa, sb, tmp
+         integer :: base
+         base = vs_enter(6)
+         call vs_set(base + 1, a)
+         call vs_set(base + 2, b)
+         tmp = to_seq(vs_get(base + 1), [vs_get(base + 1), vs_get(base + 2)])
+         call vs_set(base + 3, tmp)
+         tmp = to_seq(vs_get(base + 2), [vs_get(base + 2), vs_get(base + 3)])
+         call vs_set(base + 4, tmp)
+         eq = .false.
+         do
+            sa = vs_get(base + 3)
+            sb = vs_get(base + 4)
+            ! to_seq answers nil for an exhausted seq, which is
+            ! RT.seq returning null and (seq x) returning nil. Both
+            ! ending together is the only way to be equal.
+            if (sa%tag == GCT_NIL) then
+               eq = (sb%tag == GCT_NIL)
+               exit
+            end if
+            if (sb%tag == GCT_NIL) exit
+
+            ! Each element onto the stack BEFORE the other is taken:
+            ! two allocations as arguments to one call means the
+            ! second can collect the first.
+            tmp = sq_first(vs_get(base + 3), [vs_get(base + 3), vs_get(base + 4)])
+            call vs_set(base + 5, tmp)
+            tmp = sq_first(vs_get(base + 4), &
+                 [vs_get(base + 3), vs_get(base + 4), vs_get(base + 5)])
+            call vs_set(base + 6, tmp)
+            if (.not. deep_equal(vs_get(base + 5), vs_get(base + 6), &
+                 [vs_get(base + 3), vs_get(base + 4)])) exit
+
+            tmp = sq_rest(vs_get(base + 3), [vs_get(base + 3), vs_get(base + 4)])
+            call vs_set(base + 5, tmp)
+            tmp = to_seq(vs_get(base + 5), [vs_get(base + 4), vs_get(base + 5)])
+            call vs_set(base + 3, tmp)
+            tmp = sq_rest(vs_get(base + 4), [vs_get(base + 3), vs_get(base + 4)])
+            call vs_set(base + 6, tmp)
+            tmp = to_seq(vs_get(base + 6), [vs_get(base + 3), vs_get(base + 6)])
+            call vs_set(base + 4, tmp)
+         end do
+         call vs_leave(base)
+       end block
        return
     end if
 
@@ -6679,7 +6759,7 @@ contains
              eq = .false.
              return
           end if
-          if (.not. deep_equal(va(i), gca_get(b, ka(i)))) then
+          if (.not. deep_equal(va(i), gca_get(b, ka(i)), roots)) then
              eq = .false.
              return
           end if
@@ -6690,11 +6770,48 @@ contains
     eq = gc_equal(a, b)
   end function deep_equal
 
-  function seqable(v) result(yes)
-    type(gc_value), intent(in) :: v
+  ! SEQUENTIAL, which is what decides sequential equality. Clojure asks
+  ! `obj instanceof Sequential || obj instanceof List` (ASeq.equiv) and
+  ! ClojureScript asks `(sequential? y)` (equiv-sequential) -- the same
+  ! question, and neither is asking "is this a list or a vector".
+  !
+  ! This used to answer list-or-vector ONLY, so a LAZY SEQ was not
+  ! sequential: (= (map inc [0 1]) [1 2]) fell through to identity and
+  ! came back false. Anything built by map, filter, range or map-indexed
+  ! is a lazy seq, so comparing one against a literal vector -- which is
+  ! what a test usually does -- was silently wrong.
+  !
+  ! A SET and a bare STRING are deliberately absent: neither is
+  ! Sequential, and clj agrees that (= #{1 2} [1 2]) and
+  ! (= "ab" [\a \b]) are both false. (seq "ab") IS sequential, and that
+  ! is the OBJ_SEQ case rather than the string case.
+  function sequential_p(v0) result(yes)
+    type(gc_value), intent(in) :: v0
+    type(gc_value) :: v
     logical :: yes
+    v = strip_meta(v0)
+    yes = gcl_is(v) .or. gcv_is(v) .or. &
+         gc_kind(v) == OBJ_LAZY .or. gc_kind(v) == OBJ_SEQ
+  end function sequential_p
+
+  ! COUNTED: the count is known without walking. Both references use a
+  ! count as a shortcut and BOTH gate it on the two sides being counted
+  ! -- `this instanceof Counted && obj instanceof Counted` in
+  ! ASeq.equiv, `(and (counted? x) (counted? y))` in equiv-sequential --
+  ! because counting a lazy seq realises it, and an infinite one never
+  ! finishes. (= (range) [1 2]) terminates in Clojure precisely because
+  ! nothing asks it for a count.
+  !
+  ! A seq VIEW over a vector could answer its count, but the JVM's
+  ! ChunkedSeq is not Counted either, and being conservative here only
+  ! ever costs a shortcut.
+  function counted_p(v0) result(yes)
+    type(gc_value), intent(in) :: v0
+    type(gc_value) :: v
+    logical :: yes
+    v = strip_meta(v0)
     yes = gcl_is(v) .or. gcv_is(v)
-  end function seqable
+  end function counted_p
 
   function seq_count(v) result(n)
     type(gc_value), intent(in) :: v
