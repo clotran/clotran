@@ -33,8 +33,19 @@ the reason is not effort, it is that they are the JVM:
 | `uuid.clj`       | `java.util.UUID` |
 
 `proxy` and `gen-class` generate classes; there is nothing for them to
-generate here. So clotran loads core.clj proper and stops at its first
-`(load ...)`, which is the honest place to stop.
+generate here.
+
+Those five, plus `java/`, are the only files from upstream's `src/clj`
+that are NOT here. Everything else is, whether or not it currently
+loads -- `set`, `data`, `edn`, `datafy`, `walk`, `uuid` and `template`
+already do.
+
+Their absence is load-bearing for the OLD evaluator, which is worth
+writing down because it cost a red crosscheck to learn. core.clj says
+`(load "core_proxy")`; clotran-gc skips that by name, but clotran-bin
+relies on the file simply not being there. Vendoring it turned a silent
+skip into a real load and broke `defprotocol`, `extend-protocol`,
+`satisfies?` and `into`. Adding a file can be a breaking change.
 
 That boundary is also the useful one: everything a Clojure program
 normally reaches for -- the seq library, destructuring, the macros -- is

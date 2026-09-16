@@ -1222,7 +1222,15 @@ contains
        block
          type(gc_value) :: frame
          call vs_set(base + 3, out)
-         frame = gce_new(vs_get(base + 2), [vs_get(base + 3), vs_get(base + 4)])
+         ! Over the env the recursive call BUILT, not the one passed in.
+         ! That call tagged the closure with its defining namespace;
+         ! building this frame over the original env and storing it back
+         ! threw the tag away -- and core.clj writes almost every
+         ! primitive with a self-name, so almost every primitive lost it.
+         ! (clojure.core/last [1 2 3]) then answered :shadow in a
+         ! namespace that had defined its own first.
+         frame = gce_new(gc_slot(vs_get(base + 3), 3), &
+              [vs_get(base + 3), vs_get(base + 4)])
          call gce_set(frame, vs_get(base + 4), vs_get(base + 3), &
               [vs_get(base + 3), vs_get(base + 4)])
          call gc_set_slot(vs_get(base + 3), 3, frame)
@@ -1241,9 +1249,13 @@ contains
     ! its own -- clojure.core.protocols/seq-reduce, called from a
     ! reduce running in clojure.core.
     !
-    ! Only when that namespace is not clojure.core: everything
-    ! already falls back there, so tagging core's own closures
-    ! would cost a frame each for nothing.
+    ! EVERY closure, clojure.core's included. Skipping core used to
+    ! look free -- everything falls back to core anyway -- but the
+    ! fallback is consulted LAST and the current namespace FIRST, so an
+    ! untagged core function resolved its own free symbols against
+    ! whatever namespace happened to be calling it. clojure.zip defines
+    ! its own next, and from that form on every defn in the file
+    ! expanded into core code that called the ZIPPER next. It hung.
     block
       type(gc_value) :: dns, inherited
       logical :: has_dns
@@ -1262,7 +1274,7 @@ contains
               has_dns = (gc_kind(inherited) == OBJ_NS)
       end if
       dns = gcn_current([vs_get(base + 1), vs_get(base + 2)])
-      if (.not. has_dns .and. gcn_name(dns) /= "clojure.core") then
+      if (.not. has_dns) then
         call vs_set(base + 4, dns)
         call vs_set(base + 2, gce_new(vs_get(base + 2), &
              [vs_get(base + 1), vs_get(base + 4)]))
@@ -2407,16 +2419,25 @@ contains
     character(len=:), allocatable :: t
     integer :: slash
 
-    var = gcn_lookup(gcn_current([roots]), sym)
-    if (gcn_is_var(var)) return
-
-    ! Then the namespace the enclosing function was DEFINED in.
+    ! The namespace the enclosing function was DEFINED in comes
+    ! FIRST. Clojure resolves a free symbol while compiling the form
+    ! that contains it, in the namespace being compiled -- the caller's
+    ! namespace never enters into it. Asking the current namespace
+    ! first meant a function's meaning depended on who called it, which
+    ! is the whole shadowing bug: see make_closure above.
+    !
+    ! With no enclosing closure -- a form typed at the REPL, or a
+    ! top-level form being loaded -- there is no defining namespace and
+    ! the current one is the right and only answer.
     if (gce_is(roots)) then
        if (gce_find(roots, gc_sym("__defining-ns__", [roots]), dns)) then
           var = gcn_lookup(dns, sym)
           if (gcn_is_var(var)) return
        end if
     end if
+
+    var = gcn_lookup(gcn_current([roots]), sym)
+    if (gcn_is_var(var)) return
 
     ! A QUALIFIED symbol names its own namespace. Syntax-quote produces
     ! these constantly -- every `when in core.clj reads as

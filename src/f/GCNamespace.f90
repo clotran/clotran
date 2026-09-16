@@ -207,9 +207,36 @@ contains
     binds = gc_slot(vs_get(base + 1), 2)
     var = gca_get(binds, sym)
     if (gcn_is_var(var)) then
-       call gc_set_slot(var, 1, vs_get(base + 3))
-       call vs_leave(base)
-       return
+       ! Mutate it only if THIS namespace owns it. Redefining a Var in
+       ! place is deliberate -- it is what lets a REPL redefinition
+       ! reach closures that already captured it -- but a namespace's
+       ! bindings map holds the Vars it REFERS as well as the ones it
+       ! interned, so finding the name here is not proof of ownership.
+       !
+       ! Without the check, (defn first [x] :s) in any namespace found
+       ! clojure.core's referred first and mutated THAT, redefining
+       ! clojure.core/first for the whole program. Shadowing `next`
+       ! did not shadow it, it destroyed it, and core's own loops --
+       ! sigs, last, butlast -- then spun forever. clojure.zip hung on
+       ! exactly this. Clojure interns a NEW Var in the current
+       ! namespace and leaves the referred one alone.
+       block
+         type(gc_value) :: owner
+         logical :: ours
+         owner = gc_slot(var, 3)
+         if (gc_kind(owner) == OBJ_NS) then
+            ours = (gcn_name(owner) == gcn_name(vs_get(base + 1)))
+         else
+            ! No owner recorded: a Var from before namespaces carried
+            ! one. Treat it as ours, which is what it always was.
+            ours = .true.
+         end if
+         if (ours) then
+            call gc_set_slot(var, 1, vs_get(base + 3))
+            call vs_leave(base)
+            return
+         end if
+       end block
     end if
 
     var = gc_obj(OBJ_VAR, [vs_get(base + 3), gc_nil(), vs_get(base + 1), &
