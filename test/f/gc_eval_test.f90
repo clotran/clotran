@@ -60,6 +60,7 @@ contains
     call check_equality()
     call check_callables()
     call check_core_builtins()
+    call check_regex()
     call check_errors()
     call check_heap_sound()
   end subroutine run_all
@@ -421,6 +422,48 @@ contains
     call ev("20l. ", "(assoc {:a 1} :b 2)", "{:a 1, :b 2}")
     call ev("20m. ", "(nil? nil)", "true")
   end subroutine check_core_builtins
+
+  ! #"..." compiles to a real ICU Pattern at READ time (GCReader's
+  ! read_regex), so these exercise the reader, the printer, and the six
+  ! interop points GCEval hangs off Pattern/Matcher -- Pattern/compile,
+  ! .matcher, .find, .matches, .groupCount, .group. Real core.clj's own
+  ! re-pattern/re-matcher/re-find/re-matches/re-groups/re-seq are
+  ! defined in terms of exactly these six (src/clj/clojure/core.clj,
+  ! lines 5061-5133) -- nothing here is invented. See Regex.f90 and
+  ! DEVIATIONS.md 14.
+  subroutine check_regex()
+    ! A pattern prints as its own source text, same as real Clojure's
+    ! Pattern.toString -- this is also the read/print round trip.
+    call ev('21a. ', '#"a(b)c"', '#"a(b)c"')
+    call ev('21b. ', '(instance? java.util.regex.Pattern #"x")', 'true')
+    call ev('21c. ', '(instance? java.util.regex.Matcher (.matcher #"x" "y"))', &
+         'true')
+    ! .find advances the SAME matcher's search position -- two calls in
+    ! one let* body, both against the one Matcher object.
+    call ev('21d. ', &
+         '(let* [m (.matcher #"\d+" "a 12 b 34")] (.find m) (.group m))', &
+         '"12"')
+    call ev('21e. ', &
+         '(let* [m (.matcher #"\d+" "a 12 b 34")] (.find m) (.find m) (.group m))', &
+         '"34"')
+    ! No more matches: false, not an error.
+    call ev('21f. ', &
+         '(let* [m (.matcher #"\d+" "none here")] (.find m))', 'false')
+    ! Capturing groups, numbered from 1; group 0 is the whole match.
+    call ev('21g. ', &
+         '(let* [m (.matcher #"(\d+)\.(\d+)" "v1.13 ")] (.find m) (.group m 1))', &
+         '"1"')
+    call ev('21h. ', &
+         '(let* [m (.matcher #"(\d+)\.(\d+)" "v1.13 ")] (.find m) (.group m 2))', &
+         '"13"')
+    call ev('21i. ', &
+         '(let* [m (.matcher #"(\d+)\.(\d+)" "v1.13 ")] (.find m) (.groupCount m))', &
+         '2')
+    ! matches() anchors both ends -- a partial match is false, unlike
+    ! find().
+    call ev('21j. ', '(.matches (.matcher #"\d+" "12"))', 'true')
+    call ev('21k. ', '(.matches (.matcher #"\d+" "a12"))', 'false')
+  end subroutine check_regex
 
   subroutine check_errors()
     type(gc_value) :: form, env, result

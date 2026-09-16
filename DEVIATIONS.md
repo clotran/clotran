@@ -3,6 +3,10 @@
 Every place clotran does something real Clojure does not, why, and what it
 would take to remove it. A deviation with no entry here is a bug.
 
+Not everything native is a deviation. Where we merely *chose* Fortran over
+pure Clojure for something Clojure could express, that is a seam, and it
+belongs in SEAMS.md instead.
+
 **Reference**: `~/jborden/clojure` -- a clone of `clojure/clojure` at
 `71b4623d` -- the SAME commit as the vendored core.clj (see
 src/clj/clojure/PROVENANCE.md). Paths below are relative to it. Cite the file and the method;
