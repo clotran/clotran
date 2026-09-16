@@ -106,7 +106,9 @@ module GCEval
   integer, parameter :: B_TOARRAY = 131
   integer, parameter :: B_RE_COMPILE = 132, B_RE_MATCHER = 133, B_RE_FIND = 134
   integer, parameter :: B_RE_MATCHES = 135, B_RE_GROUPCOUNT = 136, B_RE_GROUP = 137
-  integer, parameter :: B_HASH = 138
+  integer, parameter :: B_HASH = 138, B_BASELOADER = 139, B_RESOURCE = 140
+  integer, parameter :: B_PROPLOAD = 141, B_PROPGET = 142, B_CLOSE = 143
+  integer, parameter :: B_INTVALUE = 144, B_STRCONTAINS = 145
   integer, parameter :: B_SYMBOL2 = B_SYMBOL
   integer, parameter :: B_LONGCAST = 66, B_DBLCAST = 67, B_BOOLCAST = 68, B_CHARCAST = 69
   integer, parameter :: B_BITAND = 70, B_BITOR = 71, B_BITXOR = 72, B_BITNOT = 73
@@ -1577,9 +1579,17 @@ contains
     ! .get is two different methods in Java -- Var.get() takes nothing
     ! and derefs, Map.get(k) takes a key -- so it dispatches on how many
     ! arguments arrived.
+    ! Resource loading, which is all core.clj asks a ClassLoader for.
+    case ("getResourceAsStream")
+       out = native(B_RESOURCE, "clotran-resource", [roots])
+    case ("load");        out = native(B_PROPLOAD, "clotran-props-load", [roots])
+    case ("getProperty"); out = native(B_PROPGET, "clotran-props-get", [roots])
+    ! with-open closes what it opened. Our streams are strings; there is
+    ! nothing to release, but the call must succeed.
+    case ("close");       out = native(B_CLOSE, "clotran-close", [roots])
     case ("get");      out = native(B_DOTGET, "clotran-dot-get", [roots])
     case ("nth");      out = native(B_NTH, "nth", [roots])
-    case ("contains"); out = native(B_CONTAINS, "contains?", [roots])
+    case ("contains"); out = native(B_STRCONTAINS, "clotran-dot-contains", [roots])
     ! java.util.regex.Pattern/Matcher instance methods -- see Regex.f90.
     case ("matcher");    out = native(B_RE_MATCHER, "re-matcher", [roots])
     case ("find");       out = native(B_RE_FIND, "re-find*", [roots])
@@ -1882,6 +1892,10 @@ contains
        end if
        call vs_set(base + 3, thunk)
        out = gc_obj(OBJ_ATOM, [vs_get(base + 3), gc_nil()], [vs_get(base + 3)])
+    else if (cname == "java.util.Properties" .or. cname == "Properties") then
+       thunk = gca_empty([vs_get(base + 1)])
+       call vs_set(base + 3, thunk)
+       out = gc_obj(OBJ_ATOM, [vs_get(base + 3), gc_nil()], [vs_get(base + 3)])
     else if (cname == "StringBuilder" .or. cname == "java.lang.StringBuilder") then
        thunk = gc_str("", [vs_get(base + 1)])
        if (gcl_count(vs_get(base + 1)) > 1) then
@@ -2018,6 +2032,8 @@ contains
          gc_ref_is(sym%ref, "clojure.lang.Cycle") .or. &
          gc_ref_is(sym%ref, "clojure.lang.Range") .or. &
          gc_ref_is(sym%ref, "clojure.lang.LongRange") .or. &
+         gc_ref_is(sym%ref, "Integer") .or. gc_ref_is(sym%ref, "java.lang.Integer") .or. &
+         gc_ref_is(sym%ref, "Long") .or. gc_ref_is(sym%ref, "java.lang.Long") .or. &
          gc_ref_is(sym%ref, "System") .or. gc_ref_is(sym%ref, "java.lang.System")
   end function is_host_class
 
@@ -2212,6 +2228,8 @@ contains
        end if
     else if (cls == "clojure.lang.RT") then
        select case (mname)
+       case ("baseLoader")
+          out = native(B_BASELOADER, "clotran-base-loader", [roots]); return
        ! The primitive casts. Fortran has its own integer and real
        ! kinds and clotran has one of each, so the width-named casts
        ! all land on the same two conversions.
@@ -2243,7 +2261,7 @@ contains
        case ("dissoc"); out = native(B_DISSOC, "dissoc", [roots]); return
        case ("pop"); out = native(B_POP, "pop", [roots]); return
        case ("peek"); out = native(B_PEEK, "peek", [roots]); return
-       case ("contains"); out = native(B_CONTAINS, "contains?", [roots]); return
+       case ("contains"); out = native(B_STRCONTAINS, "clotran-dot-contains", [roots]); return
        case ("find"); out = native(B_FIND, "find", [roots]); return
        case ("keys");   out = native(B_KEYS, "keys", [roots]);   return
        case ("vals");   out = native(B_VALS, "vals", [roots]);   return
@@ -2253,6 +2271,13 @@ contains
        select case (mname)
        case ("MAX_VALUE"); out = gc_int(huge(0)); return
        case ("MIN_VALUE"); out = gc_int(-huge(0) - 1); return
+       end select
+    end if
+    if (cls == "Integer" .or. cls == "java.lang.Integer" .or. &
+         cls == "Long" .or. cls == "java.lang.Long") then
+       select case (mname)
+       case ("valueOf", "parseInt", "parseLong")
+          out = native(B_INTVALUE, "clotran-int-value", [roots]); return
        end select
     end if
     ! Class/TYPE is a JVM primitive-class constant -- Float/TYPE and
@@ -4141,6 +4166,110 @@ contains
                r = regex_matches(mh)
             end if
             out = gc_bool(r == 1)
+         end if
+       end block
+    case (B_BASELOADER)
+       out = gc_str("src/clj", [vs_get(base + 1)])
+    case (B_RESOURCE)
+       ! Java answers null for a resource that is not there, and
+       ! with-open then fails on the nil -- same shape either way.
+       block
+         character(len=:), allocatable :: path, text
+         integer :: u, st, fsize
+         out = gc_nil()
+         path = text_of(gcv_nth(args, 0)) // "/" // text_of(gcv_nth(args, 1))
+         open(newunit=u, file=path, access="stream", form="unformatted", &
+              status="old", action="read", iostat=st)
+         if (st == 0) then
+            inquire(unit=u, size=fsize)
+            allocate(character(len=fsize) :: text)
+            read(u, iostat=st) text
+            close(u)
+            out = gc_str(text, [vs_get(base + 1)])
+         end if
+       end block
+    case (B_PROPLOAD)
+       ! java.util.Properties.load: key=value a line, # and ! comment.
+       !
+       ! Its own frame, because the key and the value are two separate
+       ! allocations and BOTH must be on the shadow stack before the
+       ! assoc: passing them straight as arguments lets the second
+       ! allocation collect the first. Torture mode caught exactly that.
+       block
+         character(len=:), allocatable :: txt, ln
+         type(gc_value) :: m, kk, vv
+         integer :: lb, p0, p1, eq
+         lb = vs_enter(4)
+         call vs_set(lb + 1, strip_meta(gcv_nth(args, 0)))
+         txt = text_of(gcv_nth(args, 1))
+         m = gca_empty([vs_get(lb + 1)])
+         call vs_set(lb + 2, m)
+         p0 = 1
+         do while (p0 <= len(txt))
+            p1 = index(txt(p0:), new_line('a'))
+            if (p1 == 0) then
+               p1 = len(txt) + 1
+            else
+               p1 = p0 + p1 - 1
+            end if
+            ln = trim(adjustl(txt(p0:p1 - 1)))
+            if (len(ln) > 0) then
+               if (ln(1:1) /= "#" .and. ln(1:1) /= "!") then
+                  eq = index(ln, "=")
+                  if (eq > 1) then
+                     kk = gc_str(trim(ln(1:eq - 1)), &
+                          [vs_get(lb + 1), vs_get(lb + 2)])
+                     call vs_set(lb + 3, kk)
+                     vv = gc_str(trim(adjustl(ln(eq + 1:))), &
+                          [vs_get(lb + 1), vs_get(lb + 2), vs_get(lb + 3)])
+                     call vs_set(lb + 4, vv)
+                     m = gca_assoc(vs_get(lb + 2), vs_get(lb + 3), vs_get(lb + 4), &
+                          [vs_get(lb + 1), vs_get(lb + 2), vs_get(lb + 3), vs_get(lb + 4)])
+                     call vs_set(lb + 2, m)
+                  end if
+               end if
+            end if
+            p0 = p1 + 1
+         end do
+         call gc_set_slot(vs_get(lb + 1), 1, vs_get(lb + 2))
+         call vs_leave(lb)
+         out = gc_nil()
+       end block
+    case (B_PROPGET)
+       block
+         type(gc_value) :: props
+         props = strip_meta(gcv_nth(args, 0))
+         out = gca_get(gc_slot(props, 1), gcv_nth(args, 1))
+       end block
+    case (B_CLOSE)
+       out = gc_nil()
+    case (B_INTVALUE)
+       block
+         type(gc_value) :: a0
+         character(len=:), allocatable :: t
+         integer :: iv, st
+         a0 = strip_meta(gcv_nth(args, 0))
+         if (a0%tag == GCT_INT) then
+            out = a0
+         else
+            t = trim(adjustl(text_of(a0)))
+            read(t, *, iostat=st) iv
+            if (st /= 0) then
+               call fail("valueOf: not a number: " // t)
+            else
+               out = gc_int(iv)
+            end if
+         end if
+       end block
+    case (B_STRCONTAINS)
+       block
+         type(gc_value) :: coll
+         coll = strip_meta(gcv_nth(args, 0))
+         if (coll%tag == GCT_STR) then
+            out = gc_bool(index(text_of(coll), text_of(gcv_nth(args, 1))) > 0)
+         else
+            if (gc_kind(coll) == OBJ_SET) coll = gc_slot(coll, 1)
+            out = gc_bool(gca_contains(coll, gcv_nth(args, 1)))
          end if
        end block
     case (B_HASH)

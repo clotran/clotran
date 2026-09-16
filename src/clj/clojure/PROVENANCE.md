@@ -39,3 +39,24 @@ generate here. So clotran loads core.clj proper and stops at its first
 That boundary is also the useful one: everything a Clojure program
 normally reaches for -- the seq library, destructuring, the macros -- is
 in core.clj itself, above that line.
+
+## The one file that is not upstream's
+
+`version.properties` is ours. Upstream keeps it at
+`src/resources/clojure/version.properties` and it reads:
+
+    version=${version}
+
+-- a Maven template, filled in at build time from `pom.xml`, which at
+`71b4623d` says `1.13.0-master-SNAPSHOT`. There is no Maven here, so the
+filled-in value is committed instead:
+
+    version=1.13.0-master-SNAPSHOT
+
+core.clj's form 656 reads it off the classloader and parses it with
+`re-matches` into `*clojure-version*`. Bump it whenever the vendored
+core.clj is re-vendored from a different tag, or `(clojure-version)`
+starts lying about what is actually running.
+
+Note this makes `diff -r ~/jborden/clojure/src/clj/clojure src/clj/clojure`
+report it as an extra file. That is the only expected difference.

@@ -62,6 +62,7 @@ contains
     call check_core_builtins()
     call check_regex()
     call check_case()
+    call check_resources()
     call check_errors()
     call check_heap_sound()
   end subroutine run_all
@@ -500,6 +501,38 @@ contains
     call ev('22i. ', &
          '(case* 8 1 3 :other {0 [8 :hit]} :compact :int)', ':hit')
   end subroutine check_case
+
+  subroutine check_resources()
+    ! String.contains is a SUBSTRING test. It used to be wired to
+    ! contains?, which asks whether a KEY is present -- so it answered
+    ! false for every (.contains s sub) in the tree, core.clj's own
+    ! (.contains version-string "SNAPSHOT") included.
+    call ev('23a. ', '(.contains "abc" "b")', 'true')
+    call ev('23b. ', '(.contains "abc" "z")', 'false')
+    call ev('23c. ', '(Integer/valueOf "12")', '12')
+    ! with-open closes what it opened; our streams are strings.
+    call ev('23d. ', '(.close "anything")', 'nil')
+    ! A missing resource is nil, as ClassLoader.getResourceAsStream
+    ! answers null rather than throwing.
+    call ev('23e. ', &
+         '(.getResourceAsStream (clojure.lang.RT/baseLoader) "clojure/nope")', &
+         'nil')
+    ! java.util.Properties is an atom over a map, because .load fills
+    ! it in place.
+    call ev('23f. ', &
+         '(let* [p (new java.util.Properties)] (.load p "version=9") ' // &
+         '(.getProperty p "version"))', &
+         '"9"')
+    ! The whole of core.clj form 656 on one line: a ClassLoader that is
+    ! a directory, a resource read off it, and Properties parsing what
+    ! came back. Pinned by the vendored version.properties.
+    call ev('23g. ', &
+         '(let* [p (new java.util.Properties)] ' // &
+         '(.load p (.getResourceAsStream (clojure.lang.RT/baseLoader) ' // &
+         '"clojure/version.properties")) (.getProperty p "version"))', &
+         '"1.13.0-master-SNAPSHOT"')
+  end subroutine check_resources
+
 
   subroutine check_errors()
     type(gc_value) :: form, env, result
