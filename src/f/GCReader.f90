@@ -27,6 +27,7 @@ module GCReader
   use GCList
   use GCVector
   use GCAssoc
+  use Regex
   implicit none
   private
 
@@ -196,12 +197,17 @@ contains
 
   ! Like a string, but backslashes stay literal: a pattern writes
   ! \\d meaning the two characters, not an escape.
+  ! #"..." COMPILES AT READ TIME, matching real Clojure: LispReader's
+  ! own regex literal calls Pattern.compile immediately, so #"..." is
+  ! already a Pattern object by the time anything evaluates it, not a
+  ! string that becomes one later. See Regex.f90 and DEVIATIONS.md on
+  ! why ICU is vendored for this rather than written from scratch.
   function read_regex(text, pos, roots) result(v)
     character(len=*), intent(in) :: text
     integer, intent(inout) :: pos
     type(gc_value), intent(in) :: roots(:)
-    type(gc_value) :: v
-    integer :: start
+    type(gc_value) :: v, src
+    integer :: start, handle
 
     v = gc_nil()
     pos = pos + 1
@@ -215,7 +221,14 @@ contains
        if (text(pos:pos) == achar(92)) pos = pos + 1
        pos = pos + 1
     end do
-    v = gc_str(text(start:pos - 1), roots)
+    handle = regex_compile(text(start:pos - 1))
+    if (handle == 0) then
+       call fail("regex: " // regex_last_error())
+       return
+    end if
+    src = gc_str(text(start:pos - 1), roots)
+    v = gc_obj(OBJ_REGEX, [src], [src])
+    call gc_set_i1(v, handle)
     pos = pos + 1
   end function read_regex
 

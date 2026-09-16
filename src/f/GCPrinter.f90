@@ -229,6 +229,13 @@ contains
        end block
     case (OBJ_CLOSURE)
        s = "#<fn>"
+    case (OBJ_REGEX)
+       ! A Pattern prints as its own source text, readable or not --
+       ! (str #"a.b") and (pr-str #"a.b") both give #"a.b", which is
+       ! what real Clojure's Pattern.toString does too.
+       s = '#"' // gcp_str(gc_slot(v, 1), .false.) // '"'
+    case (OBJ_MATCHER)
+       s = "#<matcher>"
     case (OBJ_ERR)
        ! The shape Clojure prints a thrown thing in, minus the trace
        ! there is nothing to fill in with.

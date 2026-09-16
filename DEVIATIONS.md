@@ -29,7 +29,7 @@ Categories:
 | 11 | Transients are the persistent collections | host | `src/f/GCEval.f90` |
 | 12 | Four JVM-only libs are skipped by name | host | `src/f/GCEval.f90` |
 | 13 | Protocol dispatch is uncached | host | `src/f/GC.f90` |
-| 14 | No regex | temporary | `src/f/GCReader.f90` |
+| 14 | Regex is ICU under java.util.regex's names, ASCII-offset only | host | `src/f/Regex.f90` |
 
 ---
 
@@ -228,15 +228,46 @@ env and arity clauses, and a protocol method has one clause per
 signature, so none was free. The fifth slot costs one `gc_value` on
 every object in the heap.
 
-## 14. No regex
+## 14. Regex is ICU, wearing java.util.regex's names
 
-`#"..."` reads as a plain string; there is no `Pattern`, so `re-matches`,
-`re-find`, `re-seq` and most of `clojure.string` do not work. It is the
-first thing core.clj cannot get past: computing `*clojure-version*` parses
-the version string with a regex.
+`#"..."` compiles at READ time via ICU's `uregex_*` C API (vendored
+source, `src/c/icu`, built to static libraries -- see its own
+PROVENANCE.md), reached through six operations: `Pattern/compile`,
+`.matcher`, `.find`, `.matches`, `.groupCount`, `.group`. Those are
+exactly what core.clj's own `re-pattern`/`re-matcher`/`re-find`/
+`re-matches`/`re-groups`/`re-seq` compile down to, so nothing about
+regex is a builtin above that -- the real functions ARE the ones
+loaded from core.clj.
 
-**Removal**: a regex engine. A real subsystem rather than a gap, and the
-one piece of Java that has no clotran analogue at all to borrow from.
+This is **host**, and it is the one place C exists in this codebase at
+all (see `src/f/Regex.f90`'s own header comment on why that trade was
+made). Three real gaps come with it:
+
+- **ASCII/Latin-1 only.** Every byte is widened to a UTF-16 `UChar`
+  with the high byte zero, never decoded as UTF-8, so `\d`, `\w`,
+  case-insensitive matching and every offset are only correct for
+  single-byte text -- which is what clotran's strings already are
+  throughout `GC.f90`. A real multibyte string would need a real
+  decoder in `regex_shim.c`, matching whatever this codebase decides
+  UTF-8 support looks like everywhere else, not just here.
+- **A Matcher's subject-text buffer leaks**, once, on `.matcher`. ICU
+  keeps only a shallow reference to it (`uregex_setText`'s own
+  contract), so it must outlive every `.find`/`.matches` call on that
+  handle, and this project has no destructor to free it when the
+  Matcher itself is collected -- `regex_shim.c`'s own comment calls
+  this the same trade-off `gc_value` already makes by having no
+  `FINAL`. Bounded per Matcher, not unbounded.
+- **No `region()`, `lookingAt()`, `replaceAll`/`replaceFirst`, or
+  named groups.** Only the six operations core.clj's own regex
+  functions need exist; `clojure.string`'s regex-based functions
+  (`replace`, `split` and friends) will need whichever of these they
+  actually call, added the same way, when something needs them.
+
+**Removal of the ASCII limit**: real UTF-8 decoding in the shim. The
+leak: a destructor path, which nothing else in the GC heap has either.
+The missing operations: add them to `regex_shim.h`/`.c` and the
+`instance_member` table in `GCEval.f90` as they come up, the same way
+every other host member in this file did.
 
 ---
 

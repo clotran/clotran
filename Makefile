@@ -48,6 +48,62 @@ endif
 S = src/f
 T = test/f
 
+# --- ICU (regex) -----------------------------------------------------
+#
+# Vendored, not a system dependency: src/c/icu is the OFFICIAL ICU
+# source release, unmodified (src/c/icu/LICENSE), built into four
+# static libraries the first time anything needs them. No brew, no
+# apt, no system ICU install anywhere -- see Regex.f90 for why a
+# regex engine is the one piece of this bridge that gets vendored
+# rather than ported, in a project whose whole point is not needing
+# a C toolchain for anything else.
+#
+# Platform-detected rather than hardcoded to macOS, since the goal is
+# to build the same way on Linux -- ICU's own runConfigureICU already
+# has a profile for each. Windows is NOT wired here: that build goes
+# through ICU's own MSVC solution files (src/c/icu/source/allinone),
+# vendored but not invoked by this POSIX-shaped Makefile.
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+ICU_PLATFORM = macOS
+LIBCXX = -lc++
+else
+ICU_PLATFORM = Linux
+LIBCXX = -lstdc++
+endif
+
+CC ?= cc
+ICU_SRC = src/c/icu/source
+ICU_STAMP = $(ICU_SRC)/.built
+ICU_LIBS = $(ICU_SRC)/lib/libicui18n.a $(ICU_SRC)/lib/libicuuc.a $(ICU_SRC)/lib/libicudata.a
+ICU_INC = -I$(ICU_SRC)/common -I$(ICU_SRC)/i18n
+
+# One recipe, several output files -- old GNU Make (3.81, macOS's
+# default) has no grouped-target syntax for that, hence the stamp file
+# every .a depends on instead. The five `make -C` calls are ICU's own
+# required build order (source/Makefile.in's SUBDIRS), stopping short
+# of layoutex/icuio/extra/samples/test: none of it is reachable from
+# uregex_*, and test/samples alone are most of the wall-clock cost.
+#
+# --with-data-packaging=static bakes ICU's PREBUILT Unicode data
+# (source/data/in/icudt78l.dat, already compiled -- no genrb/CLDR
+# build needed) directly into libicudata.a, so the built binary needs
+# no data file and no locale directory at runtime, anywhere.
+$(ICU_STAMP):
+	cd $(ICU_SRC) && ./runConfigureICU $(ICU_PLATFORM) --enable-static --disable-shared \
+		--disable-extras --disable-icuio --with-data-packaging=static
+	mkdir -p $(ICU_SRC)/bin $(ICU_SRC)/lib
+	for d in stubdata common i18n tools data; do $(MAKE) -C $(ICU_SRC)/$$d || exit 1; done
+	touch $(ICU_STAMP)
+
+$(ICU_LIBS): $(ICU_STAMP)
+
+src/c/regex_shim.o: src/c/regex_shim.c src/c/regex_shim.h
+	$(CC) -c $(ICU_INC) $< -o $@
+
+$(S)/Regex.o: $(S)/Regex.f90
+	$(FC) $(FCFLAGS) -c $< -o $@
+
 executables = clotran clotran-bin clotran-gc rc_test atom_test persistent_vector_test \
 	persistent_list_test persistent_hash_map_test rt_test persistent_array_map_test env_test namespace_test eval_test native_test gc_test gc_vector_test gc_list_test gc_map_test gc_hamt_test gc_env_test gc_assoc_test gc_printer_test gc_reader_test gc_eval_test
 
@@ -80,22 +136,27 @@ $(S)/GCNamespace.o: $(S)/GCNamespace.f90 $(S)/GC.o $(S)/GCAssoc.o
 	$(FC) $(FCFLAGS) -c $< -o $@
 
 $(S)/GCEval.o: $(S)/GCEval.f90 $(S)/GC.o $(S)/GCList.o $(S)/GCVector.o \
-	$(S)/GCAssoc.o $(S)/GCEnv.o $(S)/GCNamespace.o $(S)/GCPrinter.o
+	$(S)/GCAssoc.o $(S)/GCEnv.o $(S)/GCNamespace.o $(S)/GCPrinter.o $(S)/Regex.o
 	$(FC) $(FCFLAGS) -c $< -o $@
 
-clotran-gc: $(gcp-objects) $(S)/GCEnv.o $(S)/GCNamespace.o $(S)/GCReader.o $(S)/GCEval.o $(S)/gc_main.f90
-	$(FC) $(FCFLAGS) -o $@ $(gcp-objects) $(S)/GCEnv.o $(S)/GCNamespace.o $(S)/GCReader.o \
-		$(S)/GCEval.o $(S)/gc_main.f90
+# GCReader depends on Regex now: #"..." compiles a pattern at READ
+# time, matching real Clojure's own regex literal (LispReader compiles
+# straight to a Pattern, not to a string). See Regex.f90.
+gc-reader-objects = $(S)/GCReader.o $(S)/Regex.o src/c/regex_shim.o
 
-gc_eval_test: $(gcp-objects) $(S)/GCEnv.o $(S)/GCNamespace.o $(S)/GCReader.o $(S)/GCEval.o $(T)/gc_eval_test.f90
-	$(FC) $(FCFLAGS) -o $@ $(gcp-objects) $(S)/GCEnv.o $(S)/GCNamespace.o $(S)/GCReader.o $(S)/GCEval.o \
-		$(T)/gc_eval_test.f90
+clotran-gc: $(gcp-objects) $(S)/GCEnv.o $(S)/GCNamespace.o $(gc-reader-objects) $(S)/GCEval.o $(S)/gc_main.f90 $(ICU_LIBS)
+	$(FC) $(FCFLAGS) -o $@ $(gcp-objects) $(S)/GCEnv.o $(S)/GCNamespace.o $(gc-reader-objects) \
+		$(S)/GCEval.o $(S)/gc_main.f90 $(ICU_LIBS) $(LIBCXX) -lpthread
 
-$(S)/GCReader.o: $(S)/GCReader.f90 $(S)/GC.o $(S)/GCList.o $(S)/GCVector.o $(S)/GCAssoc.o
+gc_eval_test: $(gcp-objects) $(S)/GCEnv.o $(S)/GCNamespace.o $(gc-reader-objects) $(S)/GCEval.o $(T)/gc_eval_test.f90 $(ICU_LIBS)
+	$(FC) $(FCFLAGS) -o $@ $(gcp-objects) $(S)/GCEnv.o $(S)/GCNamespace.o $(gc-reader-objects) $(S)/GCEval.o \
+		$(T)/gc_eval_test.f90 $(ICU_LIBS) $(LIBCXX) -lpthread
+
+$(S)/GCReader.o: $(S)/GCReader.f90 $(S)/GC.o $(S)/GCList.o $(S)/GCVector.o $(S)/GCAssoc.o $(S)/Regex.o
 	$(FC) $(FCFLAGS) -c $< -o $@
 
-gc_reader_test: $(gcp-objects) $(S)/GCReader.o $(T)/gc_reader_test.f90
-	$(FC) $(FCFLAGS) -o $@ $(gcp-objects) $(S)/GCReader.o $(T)/gc_reader_test.f90
+gc_reader_test: $(gcp-objects) $(gc-reader-objects) $(T)/gc_reader_test.f90 $(ICU_LIBS)
+	$(FC) $(FCFLAGS) -o $@ $(gcp-objects) $(gc-reader-objects) $(T)/gc_reader_test.f90 $(ICU_LIBS) $(LIBCXX) -lpthread
 
 $(S)/GCPrinter.o: $(S)/GCPrinter.f90 $(S)/GC.o $(S)/GCList.o $(S)/GCVector.o $(S)/GCAssoc.o
 	$(FC) $(FCFLAGS) -c $< -o $@

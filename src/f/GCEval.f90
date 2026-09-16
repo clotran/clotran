@@ -50,6 +50,7 @@ module GCEval
   use GCEnv
   use GCNamespace
   use GCPrinter
+  use Regex
   use GCReader
   implicit none
   private
@@ -103,6 +104,8 @@ module GCEval
   integer, parameter :: B_VARSYM = 125, B_FLD_CACHE = 126, B_EMPTYVEC = 127
   integer, parameter :: B_ISREDUCED = 128, B_ITERATE = 129, B_CYCLE = 130
   integer, parameter :: B_TOARRAY = 131
+  integer, parameter :: B_RE_COMPILE = 132, B_RE_MATCHER = 133, B_RE_FIND = 134
+  integer, parameter :: B_RE_MATCHES = 135, B_RE_GROUPCOUNT = 136, B_RE_GROUP = 137
   integer, parameter :: B_SYMBOL2 = B_SYMBOL
   integer, parameter :: B_LONGCAST = 66, B_DBLCAST = 67, B_BOOLCAST = 68, B_CHARCAST = 69
   integer, parameter :: B_BITAND = 70, B_BITOR = 71, B_BITXOR = 72, B_BITNOT = 73
@@ -1572,6 +1575,12 @@ contains
     case ("get");      out = native(B_DOTGET, "clotran-dot-get", [roots])
     case ("nth");      out = native(B_NTH, "nth", [roots])
     case ("contains"); out = native(B_CONTAINS, "contains?", [roots])
+    ! java.util.regex.Pattern/Matcher instance methods -- see Regex.f90.
+    case ("matcher");    out = native(B_RE_MATCHER, "re-matcher", [roots])
+    case ("find");       out = native(B_RE_FIND, "re-find*", [roots])
+    case ("matches");    out = native(B_RE_MATCHES, "re-matches*", [roots])
+    case ("groupCount"); out = native(B_RE_GROUPCOUNT, "re-group-count", [roots])
+    case ("group");      out = native(B_RE_GROUP, "re-group", [roots])
     case default;       call fail("no such member: " // mname)
     end select
   end function instance_member
@@ -1988,6 +1997,7 @@ contains
          gc_ref_is(sym%ref, "clojure.lang.PersistentHashSet") .or. &
          gc_ref_is(sym%ref, "clojure.lang.PersistentTreeSet") .or. &
          gc_ref_is(sym%ref, "clojure.lang.PersistentTreeMap") .or. &
+         gc_ref_is(sym%ref, "java.util.regex.Pattern") .or. &
          gc_ref_is(sym%ref, "clojure.lang.Symbol") .or. &
          gc_ref_is(sym%ref, "clojure.lang.Keyword") .or. &
          gc_ref_is(sym%ref, "clojure.lang.Numbers") .or. &
@@ -2123,6 +2133,10 @@ contains
     else if (cls == "clojure.lang.Range" .or. cls == "clojure.lang.LongRange") then
        if (mname == "create") then
           out = native(B_RANGE, "range", [roots]); return
+       end if
+    else if (cls == "java.util.regex.Pattern") then
+       if (mname == "compile") then
+          out = native(B_RE_COMPILE, "re-pattern", [roots]); return
        end if
     else if (cls == "clojure.lang.LockingTransaction") then
        ! dosync with no transaction: call the thunk. Single-threaded
@@ -3956,6 +3970,110 @@ contains
        out = gc_bool(.false.)
     case (B_EMPTYVEC)
        out = gcv_empty([vs_get(base + 1)])
+    case (B_RE_COMPILE)
+       ! re-pattern's own definition already guards against re-compiling
+       ! a Pattern (instance? checks first), so by the time this runs
+       ! args(0) is always a plain string.
+       block
+         type(gc_value) :: src, pv
+         character(len=:), allocatable :: ptext
+         integer :: h
+         src = strip_meta(gcv_nth(args, 0))
+         ptext = text_of(src)
+         h = regex_compile(ptext)
+         if (h == 0) then
+            call fail("regex: " // regex_last_error())
+         else
+            pv = gc_obj(OBJ_REGEX, [gc_str(ptext, [vs_get(base + 1)])], [vs_get(base + 1)])
+            call gc_set_i1(pv, h)
+            out = pv
+         end if
+       end block
+    case (B_RE_MATCHER)
+       ! Pattern.matcher(s) -- an INDEPENDENT clone of the pattern's own
+       ! handle, so this matcher's search position never collides with
+       ! another matcher built from the same Pattern. See Regex.f90.
+       block
+         type(gc_value) :: pat, subj, mv
+         character(len=:), allocatable :: stext
+         integer :: ph, mh
+         pat = strip_meta(gcv_nth(args, 0))
+         subj = strip_meta(gcv_nth(args, 1))
+         out = gc_nil()
+         if (gc_kind(pat) /= OBJ_REGEX) then
+            call fail("matcher needs a Pattern")
+         else
+            ph = gc_i1(pat)
+            mh = regex_clone(ph)
+            if (mh == 0) then
+               call fail("regex: " // regex_last_error())
+            else
+               stext = text_of(subj)
+               if (.not. regex_set_text(mh, stext)) then
+                  call fail("regex: " // regex_last_error())
+               else
+                  mv = gc_obj(OBJ_MATCHER, [pat, gc_str(stext, [vs_get(base + 1), pat])], &
+                       [vs_get(base + 1), pat])
+                  call gc_set_i1(mv, mh)
+                  out = mv
+               end if
+            end if
+         end if
+       end block
+    case (B_RE_FIND, B_RE_MATCHES)
+       ! Matcher.find() / Matcher.matches() -- both boolean, both
+       ! advancing/consulting the SAME ICU handle's internal state,
+       ! which is exactly what uregex_findNext and uregex_matches
+       ! already track (see regex_shim.h). Neither takes an argument.
+       block
+         type(gc_value) :: mt
+         integer :: mh, r
+         mt = strip_meta(gcv_nth(args, 0))
+         out = gc_bool(.false.)
+         if (gc_kind(mt) == OBJ_MATCHER) then
+            mh = gc_i1(mt)
+            if (id == B_RE_FIND) then
+               r = regex_find_next(mh)
+            else
+               r = regex_matches(mh)
+            end if
+            out = gc_bool(r == 1)
+         end if
+       end block
+    case (B_RE_GROUPCOUNT)
+       block
+         type(gc_value) :: mt
+         mt = strip_meta(gcv_nth(args, 0))
+         out = gc_int(0)
+         if (gc_kind(mt) == OBJ_MATCHER) out = gc_int(max(0, regex_group_count(gc_i1(mt))))
+       end block
+    case (B_RE_GROUP)
+       ! (.group) is group 0 (the whole match); (.group n) is group n.
+       ! A group that exists but did not participate answers nil, same
+       ! as Java's Matcher.group(n) returning null -- an optional group
+       ! inside an alternation that did not fire.
+       block
+         type(gc_value) :: mt, iv, subj
+         character(len=:), allocatable :: stext
+         integer :: mh, gnum, gstart, gend
+         logical :: participated
+         mt = strip_meta(gcv_nth(args, 0))
+         out = gc_nil()
+         if (gc_kind(mt) == OBJ_MATCHER) then
+            mh = gc_i1(mt)
+            gnum = 0
+            if (n >= 2) then
+               iv = gcv_nth(args, 1)
+               gnum = int(iv%ival)
+            end if
+            participated = regex_group_span(mh, gnum, gstart, gend)
+            if (participated) then
+               subj = gc_slot(mt, 2)
+               stext = text_of(subj)
+               out = gc_str(stext(gstart+1:gend), [vs_get(base + 1)])
+            end if
+         end if
+       end block
     case (B_ISREDUCED)
        out = gc_bool(gca_contains(strip_meta(gcv_nth(args, 0)), &
             gc_key("clotran/reduced", [vs_get(base + 1)])))
@@ -5043,6 +5161,8 @@ contains
        case (OBJ_SET);     s = "set"
        case (OBJ_CLOSURE, OBJ_BUILTIN); s = "fn"
        case (OBJ_MULTIFN); s = "multifn"
+       case (OBJ_REGEX);   s = "regex"
+       case (OBJ_MATCHER); s = "matcher"
        case (OBJ_SB); s = "string-builder"
        case (OBJ_ERR); s = "error"
        case (OBJ_LAZY);    s = "lazy-seq"
@@ -5076,6 +5196,8 @@ contains
     case ("clojure.lang.Namespace"); yes = (t == "ns")
     case ("clojure.lang.IFn", "clojure.lang.Fn"); yes = (t == "fn" .or. t == "multifn")
     case ("clojure.lang.MultiFn"); yes = (t == "multifn")
+    case ("java.util.regex.Pattern"); yes = (t == "regex")
+    case ("java.util.regex.Matcher"); yes = (t == "matcher")
     case ("clojure.lang.Reduced")
        ! A Reduced is the one-key map (reduced x) builds, so instance?
        ! asks for the key. Without this reduce returned the WRAPPER

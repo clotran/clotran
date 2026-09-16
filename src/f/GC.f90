@@ -182,6 +182,18 @@ module GC
   ! (instance? Throwable x) is an exact answer and not a guess about
   ! what a map might mean.
   integer, parameter, public :: OBJ_ERR       = 19 ! 1=class 2=message 3=data
+  ! A compiled regex (Regex.f90). Slot 1 = the original source text (so
+  ! it prints back as #"..." and (str pattern) round-trips), i1 = a
+  ! handle index into Regex.f90's own registry -- a handle is an opaque
+  ! C pointer, and gc_value keeps no pointer fields, so it is looked up
+  ! by index exactly the way a namespace or a Var is.
+  integer, parameter, public :: OBJ_REGEX     = 20 ! 1=source text; i1=handle
+  ! (.matcher) on a Pattern: slot 1 = the Pattern object (keeps it, and
+  ! the ICU handle beneath it, alive), slot 2 = the subject text (for
+  ! Fortran to slice group spans out of), i1 = this matcher's OWN
+  ! cloned handle -- independent of the Pattern's, so two matchers over
+  ! one Pattern never share search position (see Regex.f90).
+  integer, parameter, public :: OBJ_MATCHER   = 21 ! 1=pattern 2=subject; i1=handle
   integer, parameter, public :: OBJ_HAMT      = 11 ! 1=root run; i1=count
   integer, parameter, public :: OBJ_HAMT_LEAF = 12 ! 1=key 2=val
   ! Slot 3 was reserved for a per-Var dynamic stack; the dynamic

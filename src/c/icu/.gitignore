@@ -1,0 +1,26 @@
+# Everything below is a BUILD PRODUCT of ./configure and make, never
+# vendored -- the vendored tree is source only, same rule as core.clj:
+# nothing generated lives in git, only what was actually downloaded.
+config.status
+config.log
+config.cache
+icudefs.mk
+Makefile
+*.o
+*.ao
+*.d
+*.1
+lib/
+bin/
+data/out/
+data/build-local
+data/packagedata
+data/icupkg.inc
+data/rules.mk
+data/tmp/
+test/testdata/rules.mk
+
+# Per-directory build outputs (stubdata/libicudata.a,
+# tools/ctestfw/libicutest.a and similar) -- *.a anywhere in this tree
+# is always a build product, never vendored source.
+*.a
