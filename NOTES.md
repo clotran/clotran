@@ -3946,3 +3946,55 @@ regression. `test/clj/language_test.clj` is a language-level suite `make
 test` now runs, greping for a final PASSED marker so that a crash
 part-way through fails the gate too. Checked by breaking an assertion
 and confirming `make test` stops.
+
+## `require` lost its `:refer` to a metadata wrapper
+
+`(:require [clojure.test :refer :all])` interned nothing, so whole test
+files died on their first `(deftest ...)`. `refer` itself was fine --
+`(refer 'clojure.string :only '[join])` worked -- and so were
+`select-keys`, `mapcat` and `apply`. The break was one expression:
+
+    (:refer filter-opts)   ;=> nil, even though filter-opts is {:refer [join]}
+
+`load-lib` guards the whole thing with
+`(when (or use (:refer filter-opts)) ... (apply refer lib ...))`, so a
+nil there means `refer` is never called at all. And `filter-opts` comes
+from `select-keys`, which ends `(with-meta ret (meta map))`.
+
+`apply` strips metadata from the thing being CALLED, so
+`((with-meta {:a 1} m) :a)` was 1 and `get` was 1 -- only a keyword
+applied to a wrapped map was wrong, because the ARGUMENT was never
+stripped and the lookup happened in the wrapper. One `strip_meta`.
+
+**Sets were never equal to each other either.** `(= #{1 2} #{1 2})` was
+false: `deep_equal` handled instances, sequentials and maps, and a set
+fell past all three to `gc_equal`, which compares pool slots. Both
+references spell it the same way -- other must be a set, counts must
+match, every element contained -- `APersistentSet.equiv` and
+`PersistentHashSet`'s `-equiv`.
+
+**What each was worth, measured.** These landed together and pull in
+opposite directions, which is worth recording because the crash count is
+the more tempting number to quote:
+
+| | crashes | tests | pass | fail | error |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| before | 13 | 193 | 681 | 175 | 237 |
+| after `:refer` | 8 | 196 | 681 | 175 | 269 |
+| after set `=` | 8 | 196 | 756 | 100 | 269 |
+
+The `:refer` fix freed five namespaces from crashing and moved the pass
+count by ZERO -- they went straight to erroring on the next missing
+thing, which is why the errors rose by 32. Set equality touched no
+namespace's ability to load and converted 75 failures into passes on its
+own. A namespace leaving the CRASHED column is not the same as a
+namespace passing anything, and the two are worth reporting separately.
+
+**And one deviation this wrote down rather than fixed.** A collection
+used as a map KEY or a set ELEMENT matches by identity, so
+`(get {[1] 2} [1])` is nil and `(= #{[1]} #{[1]})` is false while
+`(= {:a [1]} {:a [1]})` is true. Values go through `deep_equal`; finding
+the key goes through `gca_get`, which is `gc_equal` on pool slots.
+`gc_equal` already called this a separate decision -- DEVIATIONS 22 is
+that decision written down, and fixing it means hashing collections
+structurally so equal vectors reach the same HAMT bucket at all.

@@ -19,8 +19,8 @@ it; retiring it is step 3.
 | --- | --- | --- |
 | core.clj | **707 of 724 forms**, wall at data readers | 9 failing forms |
 | startup | **6.5s** | 5.4s |
-| our tests | 1082/1082, both compilers | green, both compilers |
-| Clojure's own suite | **681 pass / 175 fail / 237 error** over 193 tests | not run against it |
+| our tests | 1103/1103, both compilers | green, both compilers |
+| Clojure's own suite | **756 pass / 100 fail / 269 error** over 196 tests | not run against it |
 | Clojure's libraries | **14 of 21 load** | not measured |
 | source | 11,200 lines | 10,929 lines |
 
@@ -39,9 +39,9 @@ The three scorecards, and what their denominators exclude:
   protocols and letfn -- none of which test/f can see. `make test`
   greps it for a final PASSED marker, so a crash part-way through
   fails too.
-- **Clojure's suite** is 67 vendored namespaces. 13 still crash before
+- **Clojure's suite** is 67 vendored namespaces. 8 still crash before
   reporting anything, so they contribute ZERO assertions to both halves
-  of the pass rate: 681/1093 is over assertions that EXECUTED, not
+  of the pass rate: 756/1125 is over assertions that EXECUTED, not
   assertions that exist. Only 18 of 67 namespaces produce a single
   passing assertion, and that 27% is the more honest headline.
   Several of the 67 can never pass here -- `proxy`, `genclass`,
@@ -101,13 +101,40 @@ question anything asks of one. SEAMS.md has why this is a real host
 seam rather than something we chose to make native; DEVIATIONS 17-20
 are what it costs.
 
-**2. The 13 namespaces that crash before reporting.** Each is usually ONE
-missing host member taking out a whole file, so the work is small and the
-unlock is large -- this is what the 24% (namespaces with any passing
-assertion) is gated on. Find them with:
+**2. The 8 namespaces that crash before reporting.** Was 13; five were
+freed by `require` learning `:refer` again. Find them with:
 
     CLOTRAN_TEST_TIMEOUT=45 ./scripts/run-clojure-tests
     # then, per namespace, load the file alone and read the first error
+
+This item used to say "each is usually ONE missing host member taking
+out a whole file". That is NOT true of most of what is left. Measured,
+the eight split into two groups:
+
+| namespace | first error |
+| --- | --- |
+| `api`, `edn` | needs `clojure.test.generative` |
+| `generators` | needs `clojure.data.generators` |
+| `pprint` | `clojure.lang.PersistentStructMap/createSlotMap` |
+| `reflect` | `'0x0001' not found` -- no hex literals in the reader |
+| `multimethods` | not yet diagnosed |
+| `ns-libs-load-later` | not yet diagnosed |
+| `run-single-test` | not yet diagnosed |
+
+The first three want THIRD-PARTY LIBRARIES that are not in
+`clojure/clojure` at all -- separate artifacts (`test.generative`,
+`data.generators`, and `test.check` and `spec.alpha` behind two more).
+They belong with `proxy`, `genclass` and AOT: not reachable without
+vendoring someone else's tree, and not a host member anyone can add.
+
+So the small-work-large-unlock framing applies to at most four of them,
+and `0x0001` (a reader gap) is the cheapest.
+
+Worth knowing before starting: a namespace leaving the CRASHED column
+does not mean it passes. All five freed by the `:refer` fix went
+straight to reporting errors instead -- crashes 13 -> 8, passes
+unchanged at 681. The number that moved that day was sequential and set
+equality, not the crash count.
 
 **3. The error clusters.** 232 errors, but not 232 causes. Last count, by
 frequency: `java.math.MathContext` (10), BigDecimal literals `1M` (8),

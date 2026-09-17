@@ -4797,7 +4797,19 @@ contains
                   end if
                end if
              end block
-             out = gca_get(gcv_nth(args, 0), fn)
+             ! strip_meta on the ARGUMENT. `fn` is stripped at the
+             ! top of apply, so a metadata-carrying map works when
+             ! it is the thing being CALLED -- ((with-meta {:a 1} m)
+             ! :a) is 1 -- but (:a (with-meta {:a 1} m)) looked the
+             ! keyword up in the WRAPPER and answered nil.
+             !
+             ! That is how `require` lost its :refer. select-keys
+             ! ends (with-meta ret (meta map)), so load-lib asks
+             ! (:refer filter-opts) of a wrapped map, got nil, and
+             ! never called refer at all -- which is why
+             ! (:require [clojure.test :refer [deftest]]) interned
+             ! nothing and whole test files died on (deftest ...).
+             out = gca_get(strip_meta(gcv_nth(args, 0)), fn)
           end if
        else if (gca_is(fn)) then
           if (gcv_count(args) >= 1) out = gca_get(fn, gcv_nth(args, 0))
@@ -6746,6 +6758,39 @@ contains
          end do
          call vs_leave(base)
        end block
+       return
+    end if
+
+    ! A SET equals a set with the same members, and both references say
+    ! it the same way: other must be a set, the counts must match, and
+    ! every element of one must be in the other.
+    !
+    !   APersistentSet.equiv   if(!(obj instanceof Set)) return false;
+    !                          if(m.size() != size()) return false;
+    !                          for(Object aM : m) if(!contains(aM)) false;
+    !
+    !   PersistentHashSet      (and (set? other)
+    !                               (== (count coll) (count other))
+    !                               every element contains?)
+    !
+    ! A set fell past this to gc_equal, which compares references, so
+    ! (= #{1 2} #{1 2}) was false -- two literals spelled the same way
+    ! were not equal.
+    !
+    ! Membership goes through gca_contains, so an element that is itself
+    ! a COLLECTION is matched by identity rather than by value, which is
+    ! the standing decision gc_equal records for map keys. Scalars,
+    ! which is what a set almost always holds, are exact.
+    if (gc_kind(a) == OBJ_SET .and. gc_kind(b) == OBJ_SET) then
+       eq = (gca_count(gc_slot(a, 1)) == gca_count(gc_slot(b, 1)))
+       if (.not. eq) return
+       call gca_entries(gc_slot(a, 1), ka, va)
+       do i = 1, size(ka)
+          if (.not. gca_contains(gc_slot(b, 1), ka(i))) then
+             eq = .false.
+             return
+          end if
+       end do
        return
     end if
 

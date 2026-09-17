@@ -157,6 +157,38 @@
 (check "infinite vs vector"    (= (range) [1 2]) false)
 (check "infinite sharing a prefix" (= (iterate inc 1) [1 2]) false)
 
+;;; ---- require :refer ----------------------------------------------
+;;
+;; `require` silently ignored :refer. load-lib guards the call with
+;; (when (or use (:refer filter-opts)) ...), and filter-opts comes
+;; from select-keys, which ends (with-meta ret (meta map)) -- so the
+;; keyword was looked up in the metadata WRAPPER and answered nil.
+;; Whole test files then died on (deftest ...) having interned
+;; nothing.
+
+(require (quote [clojure.string :refer [join]]))
+(check "require :refer [sym]" (join "-" [1 2]) "1-2")
+(require (quote [clojure.string :refer :all]))
+(check "require :refer :all" (capitalize "ab") "Ab")
+(require (quote [clojure.set :as st]))
+(check "require :as still works" (st/union #{1} #{2}) #{1 2})
+
+;; Set equality: other must be a set, same count, every element
+;; contained. A set used to fall past that to reference equality, so
+;; two literals spelled the same way were not equal.
+(check "set = set"          (= #{1 2} #{1 2}) true)
+(check "set built vs literal" (= (conj #{1} 2) #{1 2}) true)
+(check "sets differing"     (= #{1} #{2}) false)
+(check "sets sized apart"   (= #{1} #{1 2}) false)
+(check "empty sets"         (= #{} #{}) true)
+;; A collection as an ELEMENT still matches by identity -- the same
+;; limitation map keys have. DEVIATIONS 22.
+(check "collection in a set (DEVIATIONS 22)" (= #{[1]} #{[1]}) false)
+;; The underlying bug, directly.
+(check "keyword on a map with meta" (:a (with-meta {:a 1} {:x 9})) 1)
+(check "select-keys result is looked up"
+       (:refer (select-keys {:refer [1] :as 2} (quote (:refer)))) [1])
+
 ;;; ---- report -----------------------------------------------------
 
 (println "")

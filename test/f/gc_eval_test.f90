@@ -65,6 +65,7 @@ contains
     call check_deftype()
     call check_letfn()
     call check_symbol_names()
+    call check_meta_lookup()
     call check_resources()
     call check_errors()
     call check_heap_sound()
@@ -680,6 +681,24 @@ contains
     call ev('26e. ', '(symbol "plain")', 'plain')
     call ev('26f. ', '(keyword "a/b")', ':a/b')
   end subroutine check_symbol_names
+
+  ! METADATA IS INVISIBLE TO LOOKUP as well as to equality. `apply`
+  ! strips it from the thing being CALLED, so a wrapped map worked as
+  ! a function; the ARGUMENT was not stripped, so a keyword applied
+  ! to a wrapped map looked itself up in the wrapper and answered nil.
+  !
+  ! That is how `require` lost its :refer -- select-keys ends
+  ! (with-meta ret (meta map)), so load-lib asked (:refer filter-opts)
+  ! of a wrapped map and never called refer at all.
+  subroutine check_meta_lookup()
+    call ev('27a. ', '(:a (with-meta {:a 1} {:x 9}))', '1')
+    call ev('27b. ', '(get (with-meta {:a 1} {:x 9}) :a)', '1')
+    ! The other direction already worked, and must keep working.
+    call ev('27c. ', '((with-meta {:a 1} {:x 9}) :a)', '1')
+    call ev('27d. ', '(:a {:a 1})', '1')
+    ! A missing key is still nil, wrapper or not.
+    call ev('27e. ', '(:zz (with-meta {:a 1} {:x 9}))', 'nil')
+  end subroutine check_meta_lookup
 
   subroutine check_errors()
     type(gc_value) :: form, env, result

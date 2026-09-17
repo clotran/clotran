@@ -508,3 +508,34 @@ that `(pr-str *ns*)` does not round-trip through `read`, which the
 It goes away with `String/format` and an identity for host objects --
 the same two pieces deviation 18 needs, and worth doing once for both
 rather than twice.
+
+## 22. A collection used as a map key or set element matches by identity
+
+Values compare deeply. KEYS do not:
+
+    (= {:a [1]} {:a [1]})   ;=> true,  and clj agrees -- a value
+    (= {[1] 2} {[1] 2})     ;=> FALSE, clj says true -- a key
+    (get {[1] 2} [1])       ;=> nil,   clj says 2
+    (= #{[1]} #{[1]})       ;=> FALSE, clj says true
+
+`deep_equal` compares a map's values with itself, so a collection VALUE
+is structural. Finding the key to compare is `gca_get`/`gca_contains`,
+which use `gc_equal` -- same tag, same scalar or text, and for anything
+in the object pool the same POOL SLOT. Two structurally equal vectors
+are two slots, so neither is found under the other.
+
+`gc_equal` says so in its own comment and calls it a separate decision;
+this is that decision written down rather than left implicit. It is the
+same root cause for maps and for sets, because a set is a map from each
+element to itself.
+
+Scalars -- keywords, symbols, strings, numbers -- are exact, and that is
+what a map key almost always is. Nothing in the vendored tree keys a map
+by a collection.
+
+Removing it is bigger than it looks: `gca_get` would need deep equality,
+and the HAMT path would need `gc_hash` to hash a collection
+STRUCTURALLY, so that two equal vectors land in the same bucket before
+equality is ever consulted. That is a change to hashing semantics --
+see deviation 15, which is the other half of the same subject -- and
+wants its own commit.
