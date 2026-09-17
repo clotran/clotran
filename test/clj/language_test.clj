@@ -262,6 +262,44 @@
 (do (f/aset va 0 :hello))
 (check "value array" [(f/aget va 0) (f/aget va 1)] [:hello nil])
 
+;;; ---- numeric literals --------------------------------------------
+;;
+;; Clojure's reader has three patterns (LispReader.java 70-74) and
+;; clotran had only "all digits" and "digits with a dot". Every value
+;; below is what `clj` printed for the same literal. The two that were
+;; SILENTLY WRONG rather than merely unsupported are 077, which read as
+;; 77, and .5, which read as 0.5 instead of interning a symbol.
+;;
+;; The literals that must be REFUSED live in test/f/gc_reader_test.f90:
+;; a reader error aborts this whole file, so they cannot be asserted
+;; here.
+
+(check "hex"            [0x1F 0X1f -0x1f] [31 31 -31])
+(check "octal"          [077 +077 0] [63 63 0])
+(check "radix"          [2r1011 -2r1011 36rZ 2R1011] [11 -11 35 11])
+(check "exponent"       [1e3 1.5e-3 1E3] [1000.0 0.0015 1000.0])
+(check "exponent forms" [1.e3 10e3 0e3] [1000.0 10000.0 0.0])
+(check "plain"          [42 -42 5. 1.5] [42 -42 5.0 1.5])
+;; floatPat needs a digit BEFORE the dot, so this is a name.
+(check ".5 is a symbol" (symbol? (quote .5)) true)
+
+;; A number Clojure reads and clotran has no TYPE for must NOT be a
+;; reader error. It was, briefly, and the cost was out of all
+;; proportion: clotran aborts a whole file on a reader error, so one
+;; 2/3 took every form after it down, across the 12 of Clojure's 67
+;; test namespaces that contain a ratio literal -- 766 passing
+;; assertions became 223, control.clj alone losing 153.
+;;
+;; These four lines are the falsification: each is a literal that
+;; Clojure reads as a number, so if the reader ever raises on one
+;; again this whole file stops loading and the gate goes red -- which
+;; is exactly what failed to happen last time, because no test
+;; anywhere contained one.
+(check "a ratio is a symbol, not an error"  (symbol? (quote 2/3)) true)
+(check "...and a negative one"              (symbol? (quote -2/3)) true)
+(check "an N suffix is a symbol"            (symbol? (quote 42N)) true)
+(check "an M suffix is a symbol"            (symbol? (quote 1.5M)) true)
+
 ;;; ---- Clojure's OWN array API ------------------------------------
 ;;
 ;; Not f/make-array: clojure.core's make-array/aget/aset/alength,

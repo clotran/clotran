@@ -771,7 +771,8 @@ contains
     integer, intent(inout) :: pos
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: v
-    integer :: start
+    integer :: start, ival
+    logical :: iok, iclaim
     character(len=:), allocatable :: tok
 
     start = pos
@@ -799,10 +800,22 @@ contains
        v = gc_bool(.true.)
     else if (tok == "false") then
        v = gc_bool(.false.)
-    else if (looks_int(tok)) then
-       v = gc_int(to_int(tok))
-    else if (looks_real(tok)) then
-       v = gc_real(to_real(tok))
+    else if (starts_numeric(tok)) then
+       ! A digit-initial token is a NUMBER or an error -- never a
+       ! name. LispReader.read hands it to readNumber and there is no
+       ! path from there back to interpretToken, so `08` and `1e`
+       ! raise rather than interning.
+       call parse_int(tok, ival, iok, iclaim)
+       if (iok) then
+          v = gc_int(ival)
+       else if (.not. iclaim .and. looks_real(tok)) then
+          v = gc_real(to_real(tok))
+       else if (unsupported_number(tok)) then
+          v = gc_sym(tok, roots)
+       else
+          call fail("Invalid number: " // tok)
+          v = gc_nil()
+       end if
     else if (len(tok) > 1 .and. tok(1:1) == ":") then
        v = gc_key(tok(2:), roots)
     else
@@ -811,53 +824,301 @@ contains
   end function read_atom
 
   ! ---- number recognition ----
+  !
+  ! Clojure's reader decides this with three regexes -- LispReader.java
+  ! lines 70-74 at 71b4623d, the commit the vendored core.clj comes
+  ! from:
+  !
+  !   intPat   ([-+]?)(?:(0)|([1-9][0-9]*)|0[xX]([0-9A-Fa-f]+)
+  !              |0([0-7]+)|([1-9][0-9]?)[rR]([0-9A-Za-z]+)|0[0-9]+)(N)?
+  !   floatPat ([-+]?[0-9]+(\.[0-9]*)?([eE][-+]?[0-9]+)?)(M)?
+  !   ratioPat ([-+]?[0-9]+)/([0-9]+)
+  !
+  ! and matchNumber tries them IN THAT ORDER, so a token that matches
+  ! intPat never reaches floatPat. Three consequences worth stating,
+  ! because clotran got all three wrong by treating "all digits" as
+  ! the whole story:
+  !
+  !   077   is 63, not 77   -- a leading zero means octal
+  !   .5    is a SYMBOL     -- floatPat needs a digit BEFORE the dot
+  !   08    is an ERROR     -- it matches intPat's last alternative,
+  !                            which captures nothing, and Clojure
+  !                            raises "Invalid number" rather than
+  !                            falling through to read it as 8.0
+  !
+  ! And the reason the third one is an error rather than a symbol is
+  ! structural: LispReader.read (line 278, and 294 for a leading sign)
+  ! sends EVERY digit-initial token to readNumber, which throws when
+  ! none of the three patterns match. There is no path back to
+  ! interpretToken, so a token starting with a digit is a number or
+  ! it is an error -- it is never a name. `1e` is the case that
+  ! caught this: it matches no pattern, and Clojure raises rather
+  ! than interning it.
+  !
+  ! Not implemented: the `N` (BigInt) and `M` (BigDecimal) suffixes and
+  ! ratios, all of which need a numeric tower clotran does not have.
+  ! They stay unreadable rather than being silently truncated into a
+  ! fixed-width answer -- see DEVIATIONS.
 
-  pure function looks_int(s) result(yes)
+  ! A number Clojure reads happily and clotran has no TYPE for: a ratio
+  ! (`2/3`), or the `N` and `M` suffixes (`42N`, `1.5M`).
+  !
+  ! These must not raise. The digit-initial rule above says such a token
+  ! is a number or an error, and that is right ONLY where clotran can
+  ! read every number Clojure can -- which it cannot. Raising instead
+  ! costs far more than it explains: clotran's load aborts the whole
+  ! file on a reader error (DEVIATIONS 1), so one `2/3` deep in a file
+  ! takes every form after it down with it. Twelve of Clojure's 67 test
+  ! namespaces contain a ratio literal; making them errors turned 766
+  ! passing assertions into 223, and `control.clj` alone lost 153.
+  !
+  ! So they fall back to what they were before the number patterns went
+  ! in: an ordinary symbol, which resolves to nothing and fails at USE
+  ! rather than at read. That is still wrong -- `(+ 1 2/3)` says
+  ! "unable to resolve symbol" where Clojure says 5/3 -- but it is
+  ! wrong in one form instead of wrong in every form after it.
+  !
+  ! Both better fixes are real work rather than a reader tweak: a Ratio
+  ! type and a numeric tower (DEVIATIONS 26), or per-form reader
+  ! recovery so that one bad form does not abort a load.
+  pure function unsupported_number(s) result(yes)
     character(len=*), intent(in) :: s
     logical :: yes
-    integer :: i, start
+    integer :: n, start, k, slash
     yes = .false.
-    if (len(s) == 0) return
+    n = len(s)
+    if (n == 0) return
     start = 1
     if (s(1:1) == "-" .or. s(1:1) == "+") start = 2
-    if (start > len(s)) return
-    do i = start, len(s)
-       if (s(i:i) < "0" .or. s(i:i) > "9") return
+    if (start > n) return
+
+    ! ratioPat: ([-+]?[0-9]+)/([0-9]+)
+    slash = 0
+    do k = start, n
+       if (s(k:k) == "/") then
+          slash = k
+          exit
+       end if
     end do
-    yes = .true.
-  end function looks_int
+    if (slash > start .and. slash < n) then
+       if (all_decimal(s(start:slash - 1)) .and. all_decimal(s(slash + 1:n))) then
+          yes = .true.
+          return
+       end if
+    end if
 
-  ! A '.' with digits on at least one side -- so 1.5, 1. and .5 read
-  ! as reals but a bare '.' or a symbol like `foo.bar` does not.
-  pure function looks_real(s) result(yes)
+    ! The N and M suffixes, on a token that is otherwise a number.
+    if (n > start) then
+       if (s(n:n) == "N") then
+          yes = all_decimal(s(start:n - 1))
+          if (yes) return
+       else if (s(n:n) == "M") then
+          yes = looks_real(s(1:n - 1))
+          if (yes) return
+       end if
+    end if
+  end function unsupported_number
+
+  ! What LispReader.read tests before calling readNumber: a digit, or
+  ! a sign with a digit right after it (lines 278 and 294). Every such
+  ! token is a number or an error.
+  pure function starts_numeric(s) result(yes)
     character(len=*), intent(in) :: s
     logical :: yes
-    integer :: i, start, dots, digits
+    integer :: i
     yes = .false.
     if (len(s) == 0) return
-    start = 1
-    if (s(1:1) == "-" .or. s(1:1) == "+") start = 2
-    if (start > len(s)) return
-    dots = 0
-    digits = 0
-    do i = start, len(s)
-       if (s(i:i) == ".") then
-          dots = dots + 1
-       else if (s(i:i) >= "0" .and. s(i:i) <= "9") then
-          digits = digits + 1
+    i = 1
+    if (s(1:1) == "-" .or. s(1:1) == "+") i = 2
+    if (i > len(s)) return
+    yes = (s(i:i) >= "0" .and. s(i:i) <= "9")
+  end function starts_numeric
+
+  ! Digits of `s` in `radix`, most significant first. ok is false for
+  ! an empty string or any character that is not a digit of that radix
+  ! -- which is how the callers tell `0xZ` from `0x1F`.
+  pure subroutine digits_radix(s, radix, val, ok)
+    character(len=*), intent(in) :: s
+    integer, intent(in) :: radix
+    integer, intent(out) :: val
+    logical, intent(out) :: ok
+    integer :: i, d
+    character :: c
+    ok = .false.
+    val = 0
+    if (len(s) == 0) return
+    do i = 1, len(s)
+       c = s(i:i)
+       if (c >= "0" .and. c <= "9") then
+          d = iachar(c) - iachar("0")
+       else if (c >= "a" .and. c <= "z") then
+          d = iachar(c) - iachar("a") + 10
+       else if (c >= "A" .and. c <= "Z") then
+          d = iachar(c) - iachar("A") + 10
        else
           return
        end if
+       if (d >= radix) return
+       val = val * radix + d
     end do
-    yes = (dots == 1 .and. digits > 0)
-  end function looks_real
+    ok = .true.
+  end subroutine digits_radix
 
-  function to_int(s) result(n)
+  pure function all_decimal(s) result(yes)
     character(len=*), intent(in) :: s
-    integer :: n, ios
-    read(s, *, iostat=ios) n
-    if (ios /= 0) n = 0
-  end function to_int
+    logical :: yes
+    integer :: i
+    yes = .false.
+    if (len(s) == 0) return
+    do i = 1, len(s)
+       if (s(i:i) < "0" .or. s(i:i) > "9") return
+    end do
+    yes = .true.
+  end function all_decimal
+
+  ! An integer literal in any of Clojure's four radix spellings.
+  !
+  ! Two separate answers, because intPat's match is EXCLUSIVE: a token
+  ! it matches never reaches floatPat, even when the match captures
+  ! nothing and the number turns out to be invalid. `08` is the case
+  ! that proves it -- intPat's last alternative, bare `0[0-9]+`,
+  ! matches it, so Clojure raises rather than reading 8.0. Collapsing
+  ! these two into one logical silently made `08` a double here.
+  !
+  !   ok    -- a valid integer, its value in `val`
+  !   claim -- intPat matched the SHAPE, so the float reader must not
+  !            be tried; ok false with claim true is "Invalid number"
+  pure subroutine parse_int(s, val, ok, claim)
+    character(len=*), intent(in) :: s
+    integer, intent(out) :: val
+    logical, intent(out) :: ok, claim
+    integer :: n, start, rp, radix, k
+    logical :: neg, dok
+    ok = .false.
+    claim = .false.
+    val = 0
+    n = len(s)
+    if (n == 0) return
+    start = 1
+    neg = .false.
+    if (s(1:1) == "-" .or. s(1:1) == "+") then
+       neg = (s(1:1) == "-")
+       start = 2
+    end if
+    if (start > n) return
+    if (s(start:start) < "0" .or. s(start:start) > "9") return
+
+    ! Zero on its own -- intPat's first alternative.
+    if (start == n .and. s(start:start) == "0") then
+       ok = .true.
+       claim = .true.
+       return
+    end if
+
+    ! 0x / 0X, hexadecimal. The `0x` prefix is the claim; whether the
+    ! digits after it are hex decides only validity.
+    if (s(start:start) == "0" .and. n > start) then
+       if (s(start+1:start+1) == "x" .or. s(start+1:start+1) == "X") then
+          claim = .true.
+          if (n < start + 2) return
+          call digits_radix(s(start+2:n), 16, val, dok)
+          if (dok) then
+             if (neg) val = -val
+             ok = .true.
+          end if
+          return
+       end if
+    end if
+
+    ! A leading zero on a run of DIGITS is octal -- and is claimed even
+    ! when a digit is 8 or 9, which is exactly `08`. `0.5` and `0e3`
+    ! are not that shape at all, so they are left to the float reader.
+    if (s(start:start) == "0") then
+       if (.not. all_decimal(s(start+1:n))) return
+       claim = .true.
+       call digits_radix(s(start+1:n), 8, val, dok)
+       if (dok) then
+          if (neg) val = -val
+          ok = .true.
+       end if
+       return
+    end if
+
+    ! NNrDIGITS -- an explicit radix, 2 through 36.
+    rp = 0
+    do k = start, n
+       if (s(k:k) == "r" .or. s(k:k) == "R") then
+          rp = k
+          exit
+       end if
+    end do
+    if (rp > 0) then
+       claim = .true.
+       call digits_radix(s(start:rp - 1), 10, radix, dok)
+       if (.not. dok .or. radix < 2 .or. radix > 36 .or. rp == n) return
+       call digits_radix(s(rp + 1:n), radix, val, dok)
+       if (dok) then
+          if (neg) val = -val
+          ok = .true.
+       end if
+       return
+    end if
+
+    ! Plain decimal. A dot or an exponent is not an integer and is not
+    ! claimed, so `1.5` and `1e3` go on to the float reader.
+    call digits_radix(s(start:n), 10, val, dok)
+    if (dok) then
+       if (neg) val = -val
+       ok = .true.
+       claim = .true.
+    end if
+  end subroutine parse_int
+
+  ! floatPat, minus the M suffix: [-+]?[0-9]+(\.[0-9]*)?([eE][-+]?[0-9]+)?
+  ! The leading run of digits is REQUIRED, which is what makes `.5` a
+  ! symbol and `5.` a double.
+  pure function looks_real(s) result(yes)
+    character(len=*), intent(in) :: s
+    logical :: yes
+    integer :: i, n, ndig
+    yes = .false.
+    n = len(s)
+    if (n == 0) return
+    i = 1
+    if (s(1:1) == "-" .or. s(1:1) == "+") i = 2
+    ndig = 0
+    do while (i <= n)
+       if (s(i:i) < "0" .or. s(i:i) > "9") exit
+       ndig = ndig + 1
+       i = i + 1
+    end do
+    if (ndig == 0) return
+    if (i <= n) then
+       if (s(i:i) == ".") then
+          i = i + 1
+          do while (i <= n)
+             if (s(i:i) < "0" .or. s(i:i) > "9") exit
+             i = i + 1
+          end do
+       end if
+    end if
+    if (i <= n) then
+       if (s(i:i) == "e" .or. s(i:i) == "E") then
+          i = i + 1
+          if (i <= n) then
+             if (s(i:i) == "-" .or. s(i:i) == "+") i = i + 1
+          end if
+          ndig = 0
+          do while (i <= n)
+             if (s(i:i) < "0" .or. s(i:i) > "9") exit
+             ndig = ndig + 1
+             i = i + 1
+          end do
+          if (ndig == 0) return    ! `1e` -- an exponent with no digits
+       end if
+    end if
+    yes = (i > n)
+  end function looks_real
 
   function to_real(s) result(r)
     character(len=*), intent(in) :: s

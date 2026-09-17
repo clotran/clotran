@@ -19,6 +19,7 @@ program gc_reader_test
   call check_reader_macros()
   call check_whitespace_and_comments()
   call check_errors()
+  call check_invalid_numbers()
   call check_big_form_under_torture()
   call check_nested_literals_under_torture()
 
@@ -127,6 +128,45 @@ contains
 
   ! A reader that returns a half-built value on bad input is worse
   ! than one that says so.
+  ! Clojure's intPat match is EXCLUSIVE -- a token it matches never
+  ! reaches floatPat, even when the match captures nothing. So `08`
+  ! is an ERROR, not 8.0, and `1e` is an error rather than a symbol,
+  ! because LispReader.read sends every digit-initial token to
+  ! readNumber and there is no way back. These cannot be checked from
+  ! a .clj file: a reader error aborts the whole load, so the
+  ! assertion after it would never run.
+  subroutine check_invalid_numbers()
+    type(gc_value) :: v
+    call gc_init(512)
+    v = gcr_read("08", no_roots)
+    call ok("7a. a leading zero with an 8 is not 8.0: ", gcr_has_error())
+    v = gcr_read("09", no_roots)
+    call ok("7b. ...nor with a 9: ", gcr_has_error())
+    v = gcr_read("0x", no_roots)
+    call ok("7c. 0x with no digits is an error: ", gcr_has_error())
+    v = gcr_read("0xZ", no_roots)
+    call ok("7d. ...and with a non-hex digit: ", gcr_has_error())
+    v = gcr_read("2r9", no_roots)
+    call ok("7e. a digit outside the radix is an error: ", gcr_has_error())
+    v = gcr_read("1r1", no_roots)
+    call ok("7f. radix 1 is out of range: ", gcr_has_error())
+    v = gcr_read("37r1", no_roots)
+    call ok("7g. ...and so is radix 37: ", gcr_has_error())
+    v = gcr_read("2r", no_roots)
+    call ok("7h. a radix with no digits is an error: ", gcr_has_error())
+    v = gcr_read("1e", no_roots)
+    call ok("7i. an exponent with no digits is an error, not a symbol: ", &
+         gcr_has_error())
+    ! The other half of the rule: a token that does NOT begin with a
+    ! digit is a name, however numeric it looks. floatPat requires a
+    ! digit before the dot, so .5 is a symbol in Clojure too.
+    v = gcr_read(".5", no_roots)
+    call ok("7j. .5 is a symbol, not 0.5: ", &
+         .not. gcr_has_error() .and. gcp_str(v, .true.) == ".5")
+    v = gcr_read("42", no_roots)
+    call ok("7k. ...and a good number clears the error: ", .not. gcr_has_error())
+  end subroutine check_invalid_numbers
+
   subroutine check_errors()
     type(gc_value) :: v
     call gc_init(512)
