@@ -15,7 +15,8 @@ think Clojure does X" has been wrong here more than once.
 
 Note which tool answers which question: `clj` decides language behaviour,
 `bb` writes the scripts, and the two clones are read for internals. bb is
-not an oracle.
+not an oracle, and neither is clojuredocs -- both are read for ideas and
+then checked.
 
 **gfortran and flang.** gfortran is the default build; flang is the
 correctness oracle. `make crosscheck` builds and tests under both and
@@ -46,6 +47,28 @@ prints it; bb does not. Use bb to script, `clj` to decide.
 
 Small-map print ORDER differs between them and neither is wrong; compare
 values, not printed text, when order could vary.
+
+**clojuredocs.org -- EXAMPLES, never authority.** Every function has a
+page with community examples, and they are worth reading before
+implementing one: people write down the edge cases a docstring omits,
+and the shapes real code actually uses. `make-array` is the kind of
+thing to look up there before guessing.
+
+It is NOT an oracle. The examples are user-contributed and some were
+written a decade ago against an older Clojure. Anything taken from it
+gets re-run through `clj` before it becomes a test or a decision --
+same rule as bb: read it for ideas, ask `clj` what is true.
+
+The page can also be thin where it matters. `make-array`'s arglists are
+there, but the examples were not, and nothing on the page says whether
+`(make-array Integer/TYPE 2 3)` is one flat buffer or an array of
+arrays. Two lines of `clj` did:
+
+    (class (make-array Integer/TYPE 2 3))   ;=> [[I  -- nested
+    (alength (make-array Integer/TYPE 2 3)) ;=> 2   -- the OUTER length
+
+So the order is: clojuredocs to find out what to ask, `clj` to find out
+the answer.
 
 **`~/jborden/clojure`** -- a clone of `clojure/clojure` pinned to
 `71b4623d`, the SAME commit as the vendored `core.clj`. Cite file and

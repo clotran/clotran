@@ -260,6 +260,63 @@ that are worth fixing now rather than arguing then:
   and keep the vendored tree loadable afterwards -- once our tests are
   renamed too, it is the only thing left that can catch a drift.
 
+**9. Arrays, as close to Clojure's as a better representation allows.**
+`fortran/make-array` exists and works, but it is a parallel vocabulary
+where Clojure already has one. The decision is to move to Clojure's
+names and semantics -- `make-array`, `aget`, `aset`, `alength`, with
+Clojure's type spellings -- keeping the Fortran representation
+underneath.
+
+Nothing has to be given up to do that, which was not obvious and is
+worth writing down. A Fortran rank-2 array gives `a(i,j)` access AND
+one contiguous column-major block, measured:
+
+    a(2,3) = 23.0
+    flat   = 11 21 31  12 22 32  13 23 33  14 24 34
+    is_contiguous(a) = T
+    flat(i + (j-1)*3) == a(i,j)   for every cell
+    passed to a callee taking buf(*) -- the BLAS shape
+
+Java's `[[I` is nested and cannot be handed to a BLAS routine at all.
+Ours can. So this is a case where matching Clojure's SPELLING and
+beating its representation are compatible.
+
+The route is NOT to shadow core.clj's functions. They are written as
+`(. Array (newInstance type len))`, `(. clojure.lang.RT (alength a))`,
+`(clojure.lang.Reflector/prepRet ... (. Array (get array idx)))` -- so
+implementing those host members makes Clojure's own definitions work,
+and every piece of Clojure code that touches an array works with them.
+That is also the 23 errors in Clojure's suite: `RT/alength` (14) and
+`RT/seqToTypedArray` (9).
+
+**The piece that needs real design: slices.** Clojure's multi-dimensional
+`aget` is
+
+    ([array idx & idxs] (apply aget (aget array idx) idxs))
+
+so `(aget m 1 2)` is `(aget (aget m 1) 2)` and `(aget m 1)` must return
+an inner array. In column-major, fixing the FIRST index gives a STRIDED
+view, not a contiguous one -- so an array object needs an offset and a
+stride, and the slice must borrow its parent's buffer rather than own
+it (the finalizer must not free a borrowed one, and the parent must be
+kept alive by the slice).
+
+`alength` of a multi-dimensional array is the FIRST EXTENT, which is
+what Clojure answers for the outer dimension of a nested array, and for
+rank 1 is the same as the total. That one matches for free.
+
+**Ragged arrays are not supported and will not be** -- see DEVIATIONS.
+`[[I` rows may differ in length; a Fortran rank-2 cannot, and the
+contiguity that buys is the entire point. This one is NOT a JVM artifact
+(JavaScript arrays are nested too, so ClojureScript would not help), it
+is a capability deliberately traded away.
+
+**Where this is going: core.matrix on Fortran.** `core.matrix` has a
+BLAS-backed implementation in clatrix (github.com/tel/clatrix) that
+reaches BLAS through the JVM. clotran would not need to reach anywhere
+-- the array IS the thing BLAS wants. Not now, but it is the reason to
+keep the array representation honest rather than convenient.
+
 Not on the list, deliberately: analyse-time name resolution. It is the
 right architecture (`SEAMS.md`), and `gce_analyze` already exists to hold
 it, but the bugs that seemed to demand it turned out to be a Var

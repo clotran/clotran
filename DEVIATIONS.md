@@ -590,3 +590,32 @@ It goes away with `String/format`. That makes `print-object` run, which
 makes `print-method Object` a reachable last resort for every type, at
 which point `fn` can answer IObj truthfully. Deviations 18 and 21 want
 the same thing, which is three reasons to do it once.
+
+## 24. Arrays are never ragged
+
+`(make-array Integer/TYPE 2 3)` in Clojure is `[[I` -- an array of two
+references to separate `[I` arrays -- and nothing stops those rows
+being different lengths, because each row is its own object.
+
+clotran's is one rank-2 Fortran array: `a(2,3)`, a single contiguous
+column-major block. Every row is the same length because there are no
+rows, only a shape. A ragged array cannot be represented and will not
+be.
+
+This is a deliberate trade, not an omission. Contiguity is the entire
+reason the representation is worth having -- the block can be handed to
+a BLAS routine as a flat `buf(*)` argument, which `[[I` cannot be at any
+price. Measured on the same memory:
+
+    a(2,3) = 23.0                  ! a(i,j) access
+    flat   = 11 21 31 12 22 32 ... ! the same bytes, column-major
+    is_contiguous(a) = T
+    flat(i + (j-1)*3) == a(i,j)    ! every cell
+
+Note this one is NOT a JVM artifact, so SEAMS' usual test does not
+apply: JavaScript arrays are nested too, and ClojureScript inherits the
+same raggedness. It is a capability real Clojure has, given up on
+purpose, in exchange for one real Clojure cannot offer.
+
+It goes away only by representing arrays as arrays-of-arrays, which
+would mean giving up the thing the project exists for.
