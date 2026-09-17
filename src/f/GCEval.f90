@@ -7713,9 +7713,41 @@ contains
          yes = (t == "list" .or. t == "vector" .or. t == "map" .or. &
                 t == "set" .or. t == "lazy-seq" .or. t == "seq")
     case ("clojure.lang.Named"); yes = (t == "symbol" .or. t == "keyword")
-    case ("clojure.lang.IObj", "clojure.lang.IMeta"); &
-         yes = (t == "symbol" .or. t == "list" .or. t == "vector" .or. &
-                t == "map" .or. t == "set" .or. t == "fn" .or. t == "var")
+    case ("clojure.lang.IMeta")
+       ! IMeta is "can report its metadata", and a function can:
+       ! core.clj:210 makes `meta` itself
+       !   (if (instance? clojure.lang.IMeta x) (.meta x))
+       ! so answering false here makes (meta (with-meta (fn [] 1) {:a 1}))
+       ! nil. Split from IObj below, which a function must NOT claim.
+       yes = (t == "symbol" .or. t == "list" .or. t == "vector" .or. &
+              t == "map" .or. t == "set" .or. t == "var" .or. t == "fn")
+    case ("clojure.lang.IObj")
+       ! NOT "fn", and that is a deviation with a reason. print-method's
+       ! :default is
+       !   (if (instance? IObj o) (print-method (vary-meta o ...) w)
+       !                          (print-simple o w))
+       ! so anything answering IObj here must have a print-method that
+       ! dispatch can actually REACH, or :default calls itself on the
+       ! same object forever. A closure had none: host_super has no
+       ! entry for fn, core_print registers nothing on IFn, and
+       ! print-method Object is unreachable because print-object needs
+       ! String/format. So (prn (fn [x] x)) segfaulted.
+       !
+       ! Answering false sends a closure to print-simple, which is
+       ! (.write w (str o)) -- #<fn>, the shape every other host object
+       ! here prints in.
+       !
+       ! IMeta is answered separately, just above, and a function DOES
+       ! claim it: `meta` is (if (instance? clojure.lang.IMeta x) ...)
+       ! at core.clj:210, so collapsing the two made
+       ! (meta (with-meta (fn [] 1) {:a 1})) nil. They were one case
+       ! here and had to stop being one.
+       !
+       ! The real fix is String/format: it lets print-object run, which
+       ! lets every type fall back to Object. DEVIATIONS 18 and 21 want
+       ! it too.
+       yes = (t == "symbol" .or. t == "list" .or. t == "vector" .or. &
+              t == "map" .or. t == "set" .or. t == "var")
     case ("String", "java.lang.String", "CharSequence"); yes = (t == "string")
     case ("Character", "java.lang.Character"); yes = (t == "char")
     case ("Boolean", "java.lang.Boolean"); yes = (t == "boolean")

@@ -554,3 +554,39 @@ STRUCTURALLY, so that two equal vectors land in the same bucket before
 equality is ever consulted. That is a change to hashing semantics --
 see deviation 15, which is the other half of the same subject -- and
 wants its own commit.
+
+## 23. `(instance? clojure.lang.IObj f)` is false for a function
+
+A function answers `IMeta` but not `IObj`. Clojure says both.
+
+The reason is `print-method`'s `:default`:
+
+    (if (instance? clojure.lang.IObj o)
+      (print-method (vary-meta o #(dissoc % :type)) w)
+      (print-simple o w))
+
+Anything answering IObj there must have a `print-method` that DISPATCH
+CAN REACH, or `:default` calls itself on the same object forever. A
+closure had none: `host_super` has no entry for `fn`, `core_print`
+registers nothing on `IFn`, and `print-method Object` is unreachable
+because `print-object` needs `String/format`. So `(prn (fn [x] x))`
+recursed until the stack ran out and the process died -- the same shape
+as the vector segfault `host_super` was written to fix.
+
+Answering false sends a closure to `print-simple`, which is
+`(.write w (str o))` -- `#<fn>`, the shape every other host object here
+prints in.
+
+IMeta is answered SEPARATELY and a function does claim it. `meta` is
+`(if (instance? clojure.lang.IMeta x) (.meta x))` at core.clj:210, so
+the two being one case made `(meta (with-meta (fn [] 1) {:a 1}))` nil.
+They are two cases now, and both behaviours are right:
+
+    (meta (with-meta (fn [] 1) {:a 1}))   ;=> {:a 1}
+    (pr-str (fn [x] x))                   ;=> "#<fn>"
+    (instance? clojure.lang.IObj (fn []))  ;=> false, and clj says true
+
+It goes away with `String/format`. That makes `print-object` run, which
+makes `print-method Object` a reachable last resort for every type, at
+which point `fn` can answer IObj truthfully. Deviations 18 and 21 want
+the same thing, which is three reasons to do it once.

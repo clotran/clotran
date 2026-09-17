@@ -258,6 +258,28 @@
 (do (f/aset va 0 :hello))
 (check "value array" [(f/aget va 0) (f/aget va 1)] [:hello nil])
 
+;;; ---- printing a function -----------------------------------------
+;;
+;; (prn (fn [x] x)) used to SEGFAULT. print-method's :default is
+;;   (if (instance? IObj o) (print-method (vary-meta o ...) w)
+;;                          (print-simple o w))
+;; and clotran claimed a closure was IObj while having no
+;; print-method dispatch could reach -- so :default called itself on
+;; the same object until the stack ran out. DEVIATIONS 23.
+
+(check "print a function"        (pr-str (fn [x] x)) "#<fn>")
+(check "a function in a vector"  (pr-str [1 (fn [x] x) 2]) "[1 #<fn> 2]")
+(check "str of a function"       (str (fn [x] x)) "#<fn>")
+;; A vector really does hold anything, which is the thing that
+;; turned this up.
+(check "heterogeneous vector"
+       (let [v [1 2 3 "a" (fn [x] x) :kw {:m 1} #{9} [0]]]
+         [(count v) (nth v 3) ((nth v 4) 42)])
+       [9 "a" 42])
+;; with-meta on a function still works -- it does not consult the
+;; instance? answer that changed.
+(check "meta on a function" (meta (with-meta (fn [] 1) {:a 1})) {:a 1})
+
 ;;; ---- report -----------------------------------------------------
 
 
