@@ -71,6 +71,13 @@ module GC
   private
 
   integer, parameter, public :: gc_dp = kind(1.0d0)
+  ! The integer kind, and it is 8 for the same reason gc_dp is double:
+  ! Clojure's default integer is `long`, and a narrower one here
+  ! truncates a perfectly ordinary literal without saying so --
+  ! 9999999999 read back as 1410065407. The real was widened early on
+  ! with exactly this argument and the integer beside it was left at
+  ! the default kind; this is the other half of that change.
+  integer, parameter, public :: gc_ip = 8
 
   ! Tags say what a value IS, and which pool `ref` indexes into.
   !
@@ -275,7 +282,7 @@ module GC
 
   type, public :: gc_value
      integer :: tag = GCT_NIL
-     integer :: ival = 0
+     integer(gc_ip) :: ival = 0
      real(gc_dp) :: rval = 0.0_gc_dp
      integer :: ref = 0 ! index into this tag's pool; 0 for immediates
   end type gc_value
@@ -413,6 +420,10 @@ module GC
 
   public :: gc_init, gc_collect
   public :: gc_nil, gc_bool, gc_int, gc_real, gc_char, gc_str, gc_sym, gc_key
+
+  interface gc_int
+     module procedure gc_int4, gc_int8
+  end interface gc_int
   public :: gc_ratio, gc_numerator, gc_denominator, gc_gcd
   public :: gc_obj, gc_vec, gc_cons
   public :: gc_text, gc_slot, gc_set_slot, gc_kind
@@ -540,18 +551,29 @@ contains
     if (b) v%ival = 1
   end function gc_bool
 
-  function gc_int(i) result(v)
-    integer, intent(in) :: i
+  ! Two specifics behind one name. Most callers hand this a plain
+  ! `integer` -- a count, an index, a character code -- and widening
+  ! the dummy instead would have broken every one of them, because
+  ! Fortran matches arguments by KIND and will not promote silently.
+  function gc_int4(i) result(v)
+    integer(kind=4), intent(in) :: i
+    type(gc_value) :: v
+    v%tag = GCT_INT
+    v%ival = int(i, gc_ip)
+  end function gc_int4
+
+  function gc_int8(i) result(v)
+    integer(kind=8), intent(in) :: i
     type(gc_value) :: v
     v%tag = GCT_INT
     v%ival = i
-  end function gc_int
+  end function gc_int8
 
   ! The greatest common divisor, by Euclid. Both arguments are taken
   ! as magnitudes; sign is the caller's business.
   pure function gc_gcd(a0, b0) result(g)
-    integer, intent(in) :: a0, b0
-    integer :: g, a, b, t
+    integer(gc_ip), intent(in) :: a0, b0
+    integer(gc_ip) :: g, a, b, t
     a = abs(a0)
     b = abs(b0)
     do while (b /= 0)
@@ -572,10 +594,14 @@ contains
   ! 1 -- that is Clojure's rule, verified: (/ 4 2) is 2 and
   ! (/ 0 5) is 0. A zero denominator is the caller's to reject; this
   ! returns nil rather than dividing.
+  ! The NUMERATOR is 64-bit, like any other integer here. The
+  ! DENOMINATOR lives in `ref`, which is 32-bit, so a denominator
+  ! past 2^31 wraps -- the same overflow every other integer
+  ! operation has, reached sooner. DEVIATIONS 26.
   function gc_ratio(num0, den0) result(v)
-    integer, intent(in) :: num0, den0
+    integer(gc_ip), intent(in) :: num0, den0
     type(gc_value) :: v
-    integer :: num, den, g
+    integer(gc_ip) :: num, den, g
     if (den0 == 0) then
        v = gc_nil()
        return
@@ -595,21 +621,21 @@ contains
     else
        v%tag = GCT_RATIO
        v%ival = num
-       v%ref = den
+       v%ref = int(den, kind=4)
     end if
   end function gc_ratio
 
   pure function gc_numerator(v) result(n)
     type(gc_value), intent(in) :: v
-    integer :: n
+    integer(gc_ip) :: n
     n = v%ival
   end function gc_numerator
 
   pure function gc_denominator(v) result(d)
     type(gc_value), intent(in) :: v
-    integer :: d
+    integer(gc_ip) :: d
     if (v%tag == GCT_RATIO) then
-       d = v%ref
+       d = int(v%ref, gc_ip)
     else
        d = 1
     end if
@@ -1032,12 +1058,19 @@ contains
           h = 1237
        end if
     case (GCT_INT, GCT_CHAR)
-       h = mix32(ieor(v%ival, v%tag))
+       ! The integer is 64 bits and the hash is 32, so fold the high
+       ! half onto the low one before mixing -- the same shape as the
+       ! real case below, and as Long.hashCode. Truncating instead
+       ! would collide every pair differing only above bit 32.
+       bits8 = v%ival
+       h = mix32(ieor(int(ieor(bits8, ishft(bits8, -32)), kind=4), v%tag))
     case (GCT_REAL)
        bits8 = transfer(v%rval, bits8)
        h = mix32(int(ieor(bits8, ishft(bits8, -32)), kind=4))
     case (GCT_RATIO)
-       h = mix32(ieor(ieor(v%ival, ishft(v%ref, 16)), v%tag))
+       bits8 = v%ival
+       h = mix32(ieor(ieor(int(ieor(bits8, ishft(bits8, -32)), kind=4), &
+            ishft(v%ref, 16)), v%tag))
     case (GCT_STR, GCT_SYM, GCT_KEY)
        h = mix32(ieor(fnv1a(gc_ref_text(v%ref)), v%tag))
     case default

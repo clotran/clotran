@@ -98,7 +98,10 @@ contains
        end if
     case (GCT_CHAR)
        if (readable) then
-          s = char_readable(v%ival)
+          ! A character is a CODE POINT, which is 32-bit however wide
+          ! the integer field is -- narrowing here is exact, not a
+          ! truncation.
+          s = char_readable(int(v%ival, kind=4))
        else
           s = achar(v%ival)
        end if

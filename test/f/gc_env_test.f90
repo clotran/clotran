@@ -80,7 +80,7 @@ contains
     call gce_set(e, k, gc_int(42), roots)
     found = gce_find(e, k, v)
     call ok("2a. a binding is found: ", found)
-    call ok_int("2b. ...with its value: ", v%ival, 42)
+    call ok_int("2b. ...with its value: ", int(v%ival, kind=4), 42)
     ! Bound-to-nil must still count as FOUND -- the evaluator needs to
     ! tell "no such local" from "a local holding nil".
     call gce_set(e, k, gc_nil(), roots)
@@ -102,11 +102,11 @@ contains
     roots(3) = inner
     found = gce_find(inner, k, v)
     call ok("3a. an inner frame sees an outer binding: ", found)
-    call ok_int("3b. ...with the outer value: ", v%ival, 7)
+    call ok_int("3b. ...with the outer value: ", int(v%ival, kind=4), 7)
     ! Setting in the inner frame must NOT reach back out.
     call gce_set(inner, k, gc_int(8), roots)
     found = gce_find(outer, k, v)
-    call ok_int("3c. an inner binding does not leak outward: ", v%ival, 7)
+    call ok_int("3c. an inner binding does not leak outward: ", int(v%ival, kind=4), 7)
   end subroutine check_chain
 
   subroutine check_shadowing()
@@ -124,9 +124,9 @@ contains
     e3 = gce_new(e2, roots)
     roots(4) = e3
     found = gce_find(e3, k, v)
-    call ok_int("4a. the nearest frame wins: ", v%ival, 2)
+    call ok_int("4a. the nearest frame wins: ", int(v%ival, kind=4), 2)
     found = gce_find(e1, k, v)
-    call ok_int("4b. ...and the outermost is untouched: ", v%ival, 1)
+    call ok_int("4b. ...and the outermost is untouched: ", int(v%ival, kind=4), 1)
   end subroutine check_shadowing
 
   ! THE case refcounting cannot do. A named fn binds its own closure

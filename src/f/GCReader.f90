@@ -771,7 +771,8 @@ contains
     integer, intent(inout) :: pos
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: v
-    integer :: start, ival
+    integer :: start
+    integer(gc_ip) :: ival
     logical :: iok, iclaim
     logical :: rok, rclaim
     type(gc_value) :: rval
@@ -920,7 +921,8 @@ contains
     character(len=*), intent(in) :: s
     type(gc_value), intent(out) :: val
     logical, intent(out) :: ok, claim
-    integer :: n, start, k, slash, num, den
+    integer :: n, start, k, slash
+    integer(gc_ip) :: num, den
     logical :: nok, dok
     logical :: neg
     ok = .false.
@@ -975,7 +977,7 @@ contains
   pure subroutine digits_radix(s, radix, val, ok)
     character(len=*), intent(in) :: s
     integer, intent(in) :: radix
-    integer, intent(out) :: val
+    integer(gc_ip), intent(out) :: val
     logical, intent(out) :: ok
     integer :: i, d
     character :: c
@@ -1025,9 +1027,10 @@ contains
   !            be tried; ok false with claim true is "Invalid number"
   pure subroutine parse_int(s, val, ok, claim)
     character(len=*), intent(in) :: s
-    integer, intent(out) :: val
+    integer(gc_ip), intent(out) :: val
     logical, intent(out) :: ok, claim
-    integer :: n, start, rp, radix, k
+    integer :: n, start, rp, k
+    integer(gc_ip) :: radix
     logical :: neg, dok
     ok = .false.
     claim = .false.
@@ -1091,7 +1094,8 @@ contains
        claim = .true.
        call digits_radix(s(start:rp - 1), 10, radix, dok)
        if (.not. dok .or. radix < 2 .or. radix > 36 .or. rp == n) return
-       call digits_radix(s(rp + 1:n), radix, val, dok)
+       ! radix is 2..36, checked just above, so this narrowing is exact.
+       call digits_radix(s(rp + 1:n), int(radix, kind=4), val, dok)
        if (dok) then
           if (neg) val = -val
           ok = .true.

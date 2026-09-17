@@ -339,6 +339,41 @@
 (check "min max abs"   [(min 1 2.5) (max 1 2.5) (abs -3) (abs -3.5)] [1 2.5 3 3.5])
 (check "inc dec"       [(inc 1) (inc 1.5) (dec 1) (dec 1.5)] [2 2.5 0 0.5])
 
+;;; ---- 64-bit integers -----------------------------------------------
+;;
+;; Clojure's default integer is `long`, and clotran's was Fortran's
+;; default `integer` -- 32 bits. A literal past 2^31 was truncated on
+;; the way in and nothing said so: 9999999999 read back as 1410065407,
+;; and 2147483648 as -2147483648. The real beside it in gc_value had
+;; been widened to real(8) years earlier on exactly this argument.
+;;
+;; Width has to hold all the way through: the literal is accumulated
+;; digit by digit in the reader, stored in the value, and summed in
+;; the accumulator. A 32-bit link anywhere truncates, so each of these
+;; exercises a different one.
+
+(check "large literals"  [9999999999 2147483648 -9999999999]
+                         [9999999999 2147483648 -9999999999])
+(check "very large"      123456789012345 123456789012345)
+(check "large arith"     [(+ 9999999999 1) (* 3000000000 3) (- 0 9999999999)]
+                         [10000000000 9000000000 -9999999999])
+;; The radix forms share the reader's accumulator.
+(check "large hex"       0xFFFFFFFFF 68719476735)
+(check "large compare"   [(= 9999999999 9999999999) (< 2147483647 2147483648)]
+                         [true true])
+;; Equal values must still hash equal now that the hash folds 64 bits
+;; into 32 -- a map keyed on a large integer finds it again.
+(check "large as a key"  (get {9999999999 :found} 9999999999) :found)
+(check "large in a set"  (contains? #{9999999999} 9999999999) true)
+;; case* buckets integer keys by a 32-bit hash, and ival_of still
+;; narrows to build it. That is safe only because the bucket is
+;; followed by a real equality check -- these pair each value with the
+;; 32-bit truncation it used to collapse to, so a narrowing that
+;; reached the comparison would pick the wrong branch.
+(check "case on a large int" (case 9999999999 9999999999 :yes 1410065407 :collided :no) :yes)
+(check "...and its old truncation" (case 1410065407 9999999999 :wrong 1410065407 :right :no) :right)
+(check "...across the sign flip" (case 2147483648 2147483648 :big -2147483648 :collided :no) :big)
+
 ;;; ---- ratios --------------------------------------------------------
 ;;
 ;; Exact rational arithmetic -- the thing (/ 1 3) needs to stop being

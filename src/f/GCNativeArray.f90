@@ -258,7 +258,7 @@ contains
 
   subroutine gcna_get_int(handle, at, val, ok)
     integer, intent(in) :: handle, at
-    integer, intent(out) :: val
+    integer(8), intent(out) :: val
     logical, intent(out) :: ok
     val = 0
     ok = .false.
@@ -266,8 +266,8 @@ contains
     if (.not. allocated(reg(handle)%buf)) return
     if (at < 1 .or. at > size(reg(handle)%buf)) return
     select type (b => reg(handle)%buf)
-    type is (integer(4));  val = int(b(at)); ok = .true.
-    type is (integer(8));  val = int(b(at)); ok = .true.
+    type is (integer(4));  val = int(b(at), 8); ok = .true.
+    type is (integer(8));  val = b(at); ok = .true.
     end select
   end subroutine gcna_get_int
 
@@ -301,8 +301,12 @@ contains
     end select
   end subroutine gcna_set_real
 
+  ! `val` is 64-bit so that an int8 array can actually hold a 64-bit
+  ! value. It was a default integer, which quietly narrowed every
+  ! element of one on the way in and out.
   subroutine gcna_set_int(handle, at, val, ok)
-    integer, intent(in) :: handle, at, val
+    integer, intent(in) :: handle, at
+    integer(8), intent(in) :: val
     logical, intent(out) :: ok
     ok = .false.
     if (.not. gcna_is(handle)) return

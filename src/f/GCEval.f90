@@ -5093,7 +5093,8 @@ contains
              block
                type(gc_value) :: ix
                ix = gcv_nth(args, 0)
-               if (ix%tag == GCT_INT) out = gcv_nth(fn, ix%ival)
+               ! A vector index, narrow by nature.
+               if (ix%tag == GCT_INT) out = gcv_nth(fn, int(ix%ival, kind=4))
              end block
           end if
        else
@@ -5108,7 +5109,9 @@ contains
     integer, intent(in) :: id
     type(gc_value), intent(in) :: args
     type(gc_value) :: out, a, b
-    integer :: base, i, n, acc
+    integer :: base, i, n
+    ! 64-bit, or every sum would truncate on the way out of %ival.
+    integer(gc_ip) :: acc
     logical :: hit
 
     out = gc_nil()
@@ -5145,7 +5148,7 @@ contains
           block
             logical :: any_real, any_ratio
             real(gc_dp) :: racc
-            integer :: qn, qd, bn, bd, g
+            integer(gc_ip) :: qn, qd, bn, bd, g
             any_real = .false.
             any_ratio = .false.
             do i = 0, n - 1
@@ -5532,7 +5535,7 @@ contains
           ! a/b is (an*bd)/(ad*bn), and quot truncates that toward
           ! zero -- which is what Fortran's integer division does.
           block
-            integer :: an, ad, bn, bd, qi
+            integer(gc_ip) :: an, ad, bn, bd, qi
             an = gc_numerator(a); ad = gc_denominator(a)
             bn = gc_numerator(b); bd = gc_denominator(b)
             if (bn == 0) then
@@ -5955,7 +5958,8 @@ contains
        block
          type(gc_value) :: a0, val, tmp2
          integer, allocatable :: subs(:)
-         integer :: k, h, at, nsub, iv, own_rank, foff, fstr
+         integer :: k, h, at, nsub, own_rank, foff, fstr
+         integer(8) :: iv   ! an element of an int8 array is 64-bit
          real(gc_dp) :: rv
          logical :: ok
          character(len=:), allocatable :: kn
@@ -7277,7 +7281,7 @@ contains
           ! a/b is (an*bd)/(ad*bn), and quot truncates that toward
           ! zero -- which is what Fortran's integer division does.
           block
-            integer :: an, ad, bn, bd, qi
+            integer(gc_ip) :: an, ad, bn, bd, qi
             an = gc_numerator(a); ad = gc_denominator(a)
             bn = gc_numerator(b); bd = gc_denominator(b)
             if (bn == 0) then
@@ -8274,7 +8278,8 @@ contains
     integer, intent(in) :: at
     type(gc_value) :: out
     character(len=:), allocatable :: kn
-    integer :: h, iv, real_at
+    integer :: h, real_at
+    integer(8) :: iv
     real(gc_dp) :: rv
     logical :: lv, ok
     out = gc_nil()
