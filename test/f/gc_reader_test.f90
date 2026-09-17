@@ -20,6 +20,7 @@ program gc_reader_test
   call check_whitespace_and_comments()
   call check_errors()
   call check_big_form_under_torture()
+  call check_nested_literals_under_torture()
 
   if (all_ok) then
      print *, ""
@@ -163,6 +164,37 @@ contains
     call ok("6b. ...and the heap audits clean: ", gc_check_heap() == "")
     gc_torture = .false.
   end subroutine check_big_form_under_torture
+
+  ! The COLLECTION LITERALS under torture, which the flat list above
+  ! does not reach -- and that gap is exactly why the bug below lived
+  ! here undisturbed.
+  !
+  ! Reading #{...}, #(...) or ^meta allocates while an enclosing form
+  ! is still being built. Those three each dropped the caller's `roots`
+  ! on their own allocations: their own values sit on the value stack,
+  ! which the collector scans, but the CALLER'S are plain Fortran
+  ! locals reachable only through the array it passed in. So a
+  ! collection at the wrong moment freed the form being built around
+  ! them and the reader answered () -- with no error, which is the
+  ! worst shape this project has a rule about.
+  !
+  ! read_map threaded roots correctly throughout and is the shape the
+  ! other three now copy.
+  subroutine check_nested_literals_under_torture()
+    call gc_init(8)
+    gc_torture = .true.
+    call trip("6c. a set inside a list: ", "(a #{1} b)")
+    call trip("6d. a map inside a list: ", "(a {1 2} b)")
+    call trip("6e. a vector inside a list: ", "(a [1 2] b)")
+    ! Metadata is not printed by default, so the form comes back
+    ! without it -- what matters here is that it comes back at all.
+    call round("6f. metadata inside a list: ", "(a ^:m b c)", "(a b c)")
+    call round("6g. an anonymous fn inside a list: ", "(a #(+ % 1) b)", &
+         "(a (fn* [p1] (+ p1 1)) b)")
+    call ok("6h. ...and the heap audits clean: ", gc_check_heap() == "")
+    gc_torture = .false.
+  end subroutine check_nested_literals_under_torture
+
 
   ! For cases where input and output deliberately differ.
   subroutine round(label, text, expected)

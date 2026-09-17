@@ -4064,3 +4064,61 @@ missing member, and it fails loudly.
 then fail. Namespaces with a passing assertion, 18 -> 19. The number
 that moved is core.clj itself, 707 -> 724, and the seven functions that
 now exist.
+
+## The reader collected the form it was building
+
+`(case* 2 0 0 :other {2 [99 :wrong]} :compact :int #{2})` read back as
+`()`. No error, no warning -- the reader returned an empty list for a
+valid form and the evaluator dutifully evaluated it.
+
+It surfaced while porting native arrays, which added about seven objects
+to the bootstrap and pushed one `gc_init(64)` test over a heap-growth
+threshold during a read. Nothing about arrays was wrong. The bug had
+been there the whole time, waiting for the heap to fill at the wrong
+moment.
+
+**The defect.** Three of the reader's collection literals dropped the
+caller's `roots` on their own allocations:
+
+    items = read_seq(text, pos, "}", .true., roots)   ! forwarded
+    m = gca_empty([vs_get(base + 1)])                  ! lost
+
+Each of those functions keeps its OWN values on the value stack, which
+the collector scans, so they look correctly rooted in isolation. The
+caller's values are plain Fortran locals, reachable only through the
+array it passed in. Drop it and a collection frees the form being built
+around you.
+
+Seven sites across three readers:
+
+| form | reader | was |
+| --- | --- | --- |
+| `#{...}` | `read_set` | broken |
+| `^meta` | `read_meta`, including its nested `read_form` | broken |
+| `#(...)` | `read_anon_fn` and `rewrite_percent` | broken |
+| `{...}` | `read_map` | already correct |
+| `[...]`, `(...)` | `read_seq` | already correct |
+
+`read_map` threads `roots` through every allocation and is the shape the
+other three now copy.
+
+**Why it survived.** `gc_reader_test` already had a torture read test --
+and it reads a flat list of sixty integers, which reaches none of the
+collection literals. `gc_eval_test`'s `ev` turns torture OFF during the
+read on purpose ("reading and setup are not the subject"). So the one
+place that would have caught this had a hole exactly its shape.
+
+`check_nested_literals_under_torture` closes it: a set, a map, a vector,
+a metadata form and an anonymous fn, each read under torture inside an
+enclosing list. Against the unfixed reader it fails on exactly set,
+metadata and anonymous fn and passes on map and vector -- which is the
+independent confirmation that the diagnosis was right and that
+`read_map` was never part of the problem.
+
+**The lesson worth keeping.** Two rooting disciplines coexist here: the
+value stack, which the collector scans, and explicit roots arrays, which
+it only sees if you pass them. A function that uses the first and
+forgets the second is correct about itself and wrong about everyone who
+called it. That is invisible until the heap fills at the wrong moment,
+which is what torture mode is FOR -- so a code path that torture never
+reaches is a code path with no rooting test at all.

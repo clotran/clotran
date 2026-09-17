@@ -269,40 +269,41 @@ contains
     has_rest = .false.
     call scan_percent(vs_get(base + 1), maxn, has_rest)
 
-    params = gcv_empty([vs_get(base + 1)])
+    ! `roots` in every allocation -- the caller's values are plain
+    ! locals reachable only through it, and reading #(...) inside a
+    ! larger form must not collect the form being built around it.
+    ! Same defect read_set had.
+    params = gcv_empty(roots)
     call vs_set(base + 2, params)
     do i = 1, maxn
        write(nm, '(A,I0)') "p", i
-       sym = gc_sym(trim(nm), [vs_get(base + 1), vs_get(base + 2)])
+       sym = gc_sym(trim(nm), roots)
        call vs_set(base + 3, sym)
-       params = gcv_conj(vs_get(base + 2), vs_get(base + 3), &
-            [vs_get(base + 1), vs_get(base + 3)])
+       params = gcv_conj(vs_get(base + 2), vs_get(base + 3), roots)
        call vs_set(base + 2, params)
     end do
     if (has_rest) then
-       sym = gc_sym("&", [vs_get(base + 1), vs_get(base + 2)])
+       sym = gc_sym("&", roots)
        call vs_set(base + 3, sym)
-       params = gcv_conj(vs_get(base + 2), vs_get(base + 3), &
-            [vs_get(base + 1), vs_get(base + 3)])
+       params = gcv_conj(vs_get(base + 2), vs_get(base + 3), roots)
        call vs_set(base + 2, params)
-       sym = gc_sym("pr", [vs_get(base + 1), vs_get(base + 2)])
+       sym = gc_sym("pr", roots)
        call vs_set(base + 3, sym)
-       params = gcv_conj(vs_get(base + 2), vs_get(base + 3), &
-            [vs_get(base + 1), vs_get(base + 3)])
+       params = gcv_conj(vs_get(base + 2), vs_get(base + 3), roots)
        call vs_set(base + 2, params)
     end if
 
-    body = rewrite_percent(vs_get(base + 1), [vs_get(base + 2)])
+    body = rewrite_percent(vs_get(base + 1), roots)
     call vs_set(base + 1, body)
-    sym = gc_sym("fn*", [vs_get(base + 1), vs_get(base + 2)])
+    sym = gc_sym("fn*", roots)
     call vs_set(base + 3, sym)
-    v = gcl_empty([vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+    v = gcl_empty(roots)
     call vs_set(base + 4, v)
-    v = gcl_cons(vs_get(base + 1), vs_get(base + 4), [vs_get(base + 2), vs_get(base + 3)])
+    v = gcl_cons(vs_get(base + 1), vs_get(base + 4), roots)
     call vs_set(base + 4, v)
-    v = gcl_cons(vs_get(base + 2), vs_get(base + 4), [vs_get(base + 3)])
+    v = gcl_cons(vs_get(base + 2), vs_get(base + 4), roots)
     call vs_set(base + 4, v)
-    v = gcl_cons(vs_get(base + 3), vs_get(base + 4), [vs_get(base + 4)])
+    v = gcl_cons(vs_get(base + 3), vs_get(base + 4), roots)
     call vs_leave(base)
   end function read_anon_fn
 
@@ -380,23 +381,24 @@ contains
        walk = vs_get(base + 1)
        call vs_set(base + 3, walk)
        do while (gcl_count(vs_get(base + 3)) > 0)
-          item = rewrite_percent(gcl_first(vs_get(base + 3)), &
-               [vs_get(base + 2), vs_get(base + 3)])
-          acc = gcv_conj(vs_get(base + 2), item, [vs_get(base + 3)])
+          item = rewrite_percent(gcl_first(vs_get(base + 3)), roots)
+          acc = gcv_conj(vs_get(base + 2), item, roots)
           call vs_set(base + 2, acc)
-          walk = gcl_rest(vs_get(base + 3), [vs_get(base + 2)])
+          walk = gcl_rest(vs_get(base + 3), roots)
           call vs_set(base + 3, walk)
        end do
-       out = gcl_empty([vs_get(base + 2)])
+       out = gcl_empty(roots)
        do i = gcv_count(vs_get(base + 2)) - 1, 0, -1
-          out = gcl_cons(gcv_nth(vs_get(base + 2), i), out, [vs_get(base + 2), out])
+          ! `out` is a plain local, so it has to stay in the root set
+          ! by name -- the value stack cannot see it.
+          out = gcl_cons(gcv_nth(vs_get(base + 2), i), out, with(roots, out))
        end do
     else if (gcv_is(form)) then
        acc = gcv_empty(roots)
        call vs_set(base + 2, acc)
        do i = 0, gcv_count(vs_get(base + 1)) - 1
-          item = rewrite_percent(gcv_nth(vs_get(base + 1), i), [vs_get(base + 2)])
-          acc = gcv_conj(vs_get(base + 2), item, [vs_get(base + 1)])
+          item = rewrite_percent(gcv_nth(vs_get(base + 1), i), roots)
+          acc = gcv_conj(vs_get(base + 2), item, roots)
           call vs_set(base + 2, acc)
        end do
        out = vs_get(base + 2)
@@ -420,16 +422,23 @@ contains
        call vs_leave(base); return
     end if
     call vs_set(base + 1, items)
-    m = gca_empty([vs_get(base + 1)])
+    ! `roots` IN EVERY ALLOCATION. This function keeps its own values
+    ! on the value stack, which the collector scans -- but the CALLER'S
+    ! values are plain Fortran locals reachable only through the roots
+    ! array it passed in. Dropping it here meant that reading a set
+    ! INSIDE another form could collect the form being built around
+    ! it: (case* ... #{2}) read back as (), silently, with no error.
+    !
+    ! read_map threads roots correctly and is the shape to copy.
+    m = gca_empty(roots)
     call vs_set(base + 2, m)
     do i = 0, gcv_count(vs_get(base + 1)) - 1
        item = gcv_nth(vs_get(base + 1), i)
        call vs_set(base + 3, item)
-       m = gca_assoc(vs_get(base + 2), vs_get(base + 3), vs_get(base + 3), &
-            [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+       m = gca_assoc(vs_get(base + 2), vs_get(base + 3), vs_get(base + 3), roots)
        call vs_set(base + 2, m)
     end do
-    v = gc_obj(OBJ_SET, [vs_get(base + 2)], [vs_get(base + 2)])
+    v = gc_obj(OBJ_SET, [vs_get(base + 2)], roots)
     call vs_leave(base)
   end function read_set
 
@@ -550,31 +559,29 @@ contains
     if (gca_is(vs_get(base + 1))) then
        continue
     else if (m%tag == GCT_KEY) then
-       v = gca_empty([vs_get(base + 1)])
+       ! `roots` again: ^:kw on a form inside another form.
+       v = gca_empty(roots)
        call vs_set(base + 2, v)
-       m = gca_assoc(vs_get(base + 2), vs_get(base + 1), gc_bool(.true.), &
-            [vs_get(base + 1), vs_get(base + 2)])
+       m = gca_assoc(vs_get(base + 2), vs_get(base + 1), gc_bool(.true.), roots)
        call vs_set(base + 1, m)
     else if (m%tag == GCT_SYM .or. m%tag == GCT_STR) then
-       v = gca_empty([vs_get(base + 1)])
+       v = gca_empty(roots)
        call vs_set(base + 2, v)
-       key = gc_key("tag", [vs_get(base + 1), vs_get(base + 2)])
+       key = gc_key("tag", roots)
        call vs_set(base + 3, key)
-       m = gca_assoc(vs_get(base + 2), vs_get(base + 3), vs_get(base + 1), &
-            [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+       m = gca_assoc(vs_get(base + 2), vs_get(base + 3), vs_get(base + 1), roots)
        call vs_set(base + 1, m)
     else
        call fail("Metadata must be Symbol, Keyword, String or Map")
        call vs_leave(base); return
     end if
 
-    form = read_form(text, pos, [vs_get(base + 1)])
+    form = read_form(text, pos, roots)
     if (has_error) then
        call vs_leave(base); return
     end if
     call vs_set(base + 2, form)
-    v = gc_obj(OBJ_META, [vs_get(base + 2), vs_get(base + 1)], &
-         [vs_get(base + 1), vs_get(base + 2)])
+    v = gc_obj(OBJ_META, [vs_get(base + 2), vs_get(base + 1)], roots)
     call vs_leave(base)
   end function read_meta
 
