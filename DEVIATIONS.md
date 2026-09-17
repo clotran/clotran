@@ -533,6 +533,19 @@ Values compare deeply. KEYS do not:
     (get {[1] 2} [1])       ;=> nil,   clj says 2
     (= #{[1]} #{[1]})       ;=> FALSE, clj says true
 
+`case` is the same bug wearing a different hat, because `case*`
+buckets its keys by hash: `(case {:a 1 :b 2} {:b 2 :a 1} :map :default)`
+answers `:default`, and eight assertions in Clojure's `control` suite
+fail for that reason alone.
+
+Two of those eight were PASSING until integers were widened to 64 bits,
+and the way they passed is worth recording: their identity hash happened
+to land in the bucket holding the right key, and `=` -- which compares
+collections structurally -- then agreed. Changing the integer hash moved
+every bucket and the coincidence ended. So a scorecard can move by two
+assertions here with nothing in the collection code having changed at
+all, and neither number was ever measuring correct behaviour.
+
 `deep_equal` compares a map's values with itself, so a collection VALUE
 is structural. Finding the key to compare is `gca_get`/`gca_contains`,
 which use `gc_equal` -- same tag, same scalar or text, and for anything
@@ -650,23 +663,30 @@ Closing it would mean tracking a declared element type per call site
 and rejecting a value whose Clojure type is not exactly it, which is
 re-creating boxing in order to reproduce its error message.
 
-## 26. Integers are 32-bit, and there is no arbitrary precision
+## 26. Integer overflow wraps where Clojure throws
 
 The reader agrees with Clojure on every number SHAPE (hex, octal,
-explicit radix, exponents -- see 25's neighbours in
-`test/clj/language_test.clj`), and ratios are exact. What is missing is
-the WIDTH underneath, and it shows up three ways. Measured, clotran
-first, `clj` second:
+explicit radix, exponents), ratios are exact, and integers are 64-bit
+like Clojure's `long`. What is left is the top of that range. Measured,
+clotran first, `clj` second:
 
-    9999999999                 1410065407        9999999999
-    2147483648                 -2147483648       2147483648
-    (* 9999999999 9999999999)  -1158137855       throws "long overflow"
+    (* 9999999999 9999999999)  7766279611452241921   throws "long overflow"
 
-The first two are the bad ones: a literal too large for a Fortran
-`integer` is silently truncated, and nothing says so. That is the
-failure mode CLAUDE.md singles out -- a wrong answer that looks
-plausible -- and it is worse than the other two, which are merely a
-different type and a missing exception.
+Clojure checks and raises `ArithmeticException: long overflow`; Fortran
+wraps, and clotran does not check. So this is a wrong answer that looks
+plausible -- the failure mode CLAUDE.md singles out -- but it is now
+confined to values above 2^63 rather than above 2^31.
+
+What it replaced is worth recording, because it stood for a long time
+and showed on no scorecard: `ival` was Fortran's default `integer`, 32
+bits, so `9999999999` read back as `1410065407` and `2147483648` as
+`-2147483648`. The `real` beside it in `gc_value` had been widened to
+`real(8)` early on with precisely this argument, and the integer was
+left behind.
+
+Closing the remainder means checking each operation for overflow and
+raising, and then arbitrary precision behind `+'`, `*'` and friends,
+which promote instead of throwing.
 
 `42N` and `1.5M` read as SYMBOLS, so they resolve to nothing and fail
 where they are used rather than where they are read. They are not read
@@ -700,15 +720,9 @@ The two real fixes are a Ratio type, or per-form reader recovery so
 that one unreadable form does not abort a load. Both are larger than
 the reader.
 
-The rational type is done. What is left is width: 64-bit integers
-first -- which alone would fix the truncation, since Clojure's own
-default is `long` -- and then arbitrary precision with its promotion
-rules. Widening to 64 bits is much the smaller half and is worth doing
-on its own: it is the difference between a wrong answer and a merely
-limited one.
-
-A ratio narrows on the same edge, and sooner: its numerator and
-denominator are both `integer`, and the intermediate of a sum is the
-product of the denominators. Reducing at every step rather than once
-at the end keeps that as small as it can be, but it does not remove
-the ceiling.
+A ratio narrows on the same edge, and sooner. Its numerator is 64-bit
+like any other integer, but the DENOMINATOR lives in the field a heap
+reference would use, which is 32-bit -- so a denominator past 2^31
+wraps. The intermediate of a sum is the product of the denominators,
+and reducing at every step rather than once at the end keeps that as
+small as it can be without removing the ceiling.
