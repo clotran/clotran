@@ -256,28 +256,36 @@ made). Three real gaps come with it:
   throughout `GC.f90`. A real multibyte string would need a real
   decoder in `regex_shim.c`, matching whatever this codebase decides
   UTF-8 support looks like everywhere else, not just here.
-- **A Matcher's subject-text buffer leaks**, once, on `.matcher`. ICU
-  keeps only a shallow reference to it (`uregex_setText`'s own
-  contract), so it must outlive every `.find`/`.matches` call on that
-  handle, and nothing frees it when the Matcher itself is collected.
-  Bounded per Matcher, not unbounded.
+- **~~A Matcher's subject-text buffer leaks~~ -- FIXED, and it was worse
+  than this entry said.** It described the text buffer only. In fact
+  `cre_close` was declared in `Regex.f90`'s interface block and called
+  from nowhere, so every compiled Pattern and every cloned Matcher
+  leaked its whole ICU object for the life of the process. The registry
+  was a fixed 4096 slots handed out by a wrapping counter, on the
+  reasoning that handles are never freed -- so on wrap it would have
+  handed out a slot still in use, which is a live Pattern silently
+  pointing at someone else's compiled regex.
 
-  NO LONGER STRUCTURAL. `regex_shim.c`'s comment calls this the same
-  trade-off `gc_value` makes by having no `FINAL` -- true when it was
-  written, and no longer: the sweep now calls a FINALIZER for objects
-  owning storage outside the heap, added for native arrays, which own a
-  Fortran buffer for exactly the same reason. A Matcher is the other
-  kind that qualifies. Give `OBJ_MATCHER` a case in `gce_finalize_obj`
-  and free the subject text there.
+  The sweep now calls a finalizer for objects owning storage outside
+  the heap -- added for native arrays, which own a Fortran buffer for
+  the same reason -- and `OBJ_REGEX` and `OBJ_MATCHER` both take it.
+  `regex_release` closes the ICU handle and empties the slot, and
+  `alloc_slot` reuses emptied slots instead of wrapping.
+
+  The subject text is freed alongside it, but NOT by asking ICU for the
+  pointer back: `uregex_getText` on a handle that never had text set
+  answers with something ICU owns, and freeing that aborts. The
+  buffer's address is kept in the Fortran registry beside the handle,
+  because the caller is the only thing that knows which pointers are
+  its own.
+
 - **No `region()`, `lookingAt()`, `replaceAll`/`replaceFirst`, or
   named groups.** Only the six operations core.clj's own regex
   functions need exist; `clojure.string`'s regex-based functions
   (`replace`, `split` and friends) will need whichever of these they
   actually call, added the same way, when something needs them.
 
-**Removal of the ASCII limit**: real UTF-8 decoding in the shim. The
-leak: a case in `gce_finalize_obj`, now that the sweep has a finalizer
-hook -- it did not when this was written.
+**Removal of the ASCII limit**: real UTF-8 decoding in the shim.
 The missing operations: add them to `regex_shim.h`/`.c` and the
 `instance_member` table in `GCEval.f90` as they come up, the same way
 every other host member in this file did.

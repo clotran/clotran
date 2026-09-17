@@ -1734,6 +1734,13 @@ contains
     select case (kind)
     case (OBJ_ARRAY)
        call gcna_release(handle)
+    case (OBJ_REGEX, OBJ_MATCHER)
+       ! Both hold an ICU object, and a Matcher holds a subject-text
+       ! buffer as well -- ICU keeps only a shallow reference to that,
+       ! so nothing else can free it. cre_close was declared and never
+       ! called, so every compiled pattern and every matcher leaked its
+       ! whole ICU handle. DEVIATIONS 14.
+       call regex_release(handle)
     end select
   end subroutine gce_finalize_obj
 

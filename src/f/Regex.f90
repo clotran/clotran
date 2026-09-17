@@ -41,14 +41,20 @@ module Regex
        type(c_ptr), value :: handle
      end subroutine cre_close_c
 
-     function cre_set_text_c(handle, text, text_len) result(r) &
+     function cre_set_text_c(handle, text, text_len, out_buf) result(r) &
           bind(C, name="cre_set_text")
        import :: c_ptr, c_char, c_int32_t
        type(c_ptr), value :: handle
        character(kind=c_char), dimension(*), intent(in) :: text
        integer(c_int32_t), value :: text_len
+       type(c_ptr), intent(out) :: out_buf
        integer(c_int32_t) :: r
      end function cre_set_text_c
+
+     subroutine cre_free_text_c(buf) bind(C, name="cre_free_text")
+       import :: c_ptr
+       type(c_ptr), value :: buf
+     end subroutine cre_free_text_c
 
      function cre_matches_c(handle) result(r) bind(C, name="cre_matches")
        import :: c_ptr, c_int32_t
@@ -86,29 +92,83 @@ module Regex
   ! this project keeps outside the heap.
   integer, parameter :: MAX_HANDLES = 4096
   type(c_ptr), save :: registry(MAX_HANDLES) = c_null_ptr
+  ! The subject-text buffer each handle was given, if any. OURS to free
+  ! -- ICU keeps only a shallow reference and never copies it -- and
+  ! kept here rather than asked back from ICU, because a handle that
+  ! never had text set answers that question with a pointer we must not
+  ! free. A Matcher has one; a compiled Pattern has none.
+  type(c_ptr), save :: subject(MAX_HANDLES) = c_null_ptr
   integer, save :: next_slot = 1
 
   character(len=256), save :: last_error = ""
 
   public :: regex_compile, regex_clone, regex_set_text, regex_matches, &
+       regex_release, regex_live_count, &
        regex_find_next, regex_group_count, regex_group_span, &
        regex_last_error
 
 contains
 
+  ! A free slot, preferring one a collection has released.
+  !
+  ! This used to hand out next_slot and WRAP when it ran off the end,
+  ! on the reasoning that handles are never freed so reuse could only
+  ! happen after thousands of distinct regexes. That was two problems:
+  ! every handle leaked its ICU object, and on wrapping it would hand
+  ! out a slot still in use -- silently, as a live Pattern suddenly
+  ! pointing at someone else's compiled regex.
+  !
+  ! Handles ARE freed now: regex_release, driven by the collector's
+  ! finalizer hook. So this scans for an empty slot and only fails
+  ! when the table is genuinely full.
   function alloc_slot(h) result(idx)
     type(c_ptr), intent(in) :: h
-    integer :: idx
-    ! A linear scan for a free slot, not a stack pointer: handles are
-    ! never explicitly freed (see regex_shim.h's own leak note), so
-    ! reuse only ever happens if MAX_HANDLES is exhausted and this
-    ! wraps -- which would require thousands of distinct regex literals
-    ! and matchers in one process. Good enough until that is untrue.
-    idx = next_slot
-    registry(idx) = h
-    next_slot = next_slot + 1
-    if (next_slot > MAX_HANDLES) next_slot = 1
+    integer :: idx, i
+    idx = 0
+    do i = 1, MAX_HANDLES
+       if (.not. c_associated(registry(i))) then
+          registry(i) = h
+          idx = i
+          return
+       end if
+    end do
+    ! Full. Close the handle rather than dropping it on the floor: the
+    ! caller reads 0 as failure and will never see it again, so this is
+    ! the last place that can.
+    call cre_close_c(h)
   end function alloc_slot
+
+  ! Closes one handle and empties its slot. Called by the sweep, via
+  ! the finalizer hook, when the Pattern or Matcher holding it is
+  ! collected -- which is the only thing that knows the handle is
+  ! unreachable.
+  !
+  ! cre_close frees the subject text too: ICU keeps only a shallow
+  ! reference to it, so nothing else can. A clone does NOT share that
+  ! text -- uregex_clone's own contract says the input string is not
+  ! cloned -- so each handle owns its own and freeing here is safe.
+  ! How many handles are open. For the tests: a collection that frees
+  ! the Pattern or Matcher must close the ICU object too, and a leak
+  ! there is invisible from Clojure -- which is how it went unnoticed.
+  integer function regex_live_count()
+    integer :: i
+    regex_live_count = 0
+    do i = 1, MAX_HANDLES
+       if (c_associated(registry(i))) regex_live_count = regex_live_count + 1
+    end do
+  end function regex_live_count
+
+  subroutine regex_release(idx)
+    integer, intent(in) :: idx
+    if (idx < 1 .or. idx > MAX_HANDLES) return
+    if (.not. c_associated(registry(idx))) return
+    if (c_associated(subject(idx))) then
+       call cre_free_text_c(subject(idx))
+       subject(idx) = c_null_ptr
+    end if
+    call cre_close_c(registry(idx))
+    registry(idx) = c_null_ptr
+  end subroutine regex_release
 
   function regex_last_error() result(s)
     character(len=:), allocatable :: s
@@ -164,10 +224,18 @@ contains
     character(len=*), intent(in) :: text
     logical :: ok
     integer(c_int32_t) :: r
+    type(c_ptr) :: buf
     ok = .false.
     if (idx < 1 .or. idx > MAX_HANDLES) return
-    r = cre_set_text_c(registry(idx), text // c_null_char, len(text))
+    ! Free whatever this handle was holding before: setting text twice
+    ! would otherwise strand the first buffer.
+    if (c_associated(subject(idx))) then
+       call cre_free_text_c(subject(idx))
+       subject(idx) = c_null_ptr
+    end if
+    r = cre_set_text_c(registry(idx), text // c_null_char, len(text), buf)
     ok = (r == 0)
+    if (ok) subject(idx) = buf
   end function regex_set_text
 
   function regex_matches(idx) result(r)

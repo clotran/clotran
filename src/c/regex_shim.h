@@ -38,7 +38,14 @@ void cre_close(void *handle);
 
 /* Sets the subject text on a (cloned) handle, resetting its search
  * position to the start. Returns 0 on success, -1 on error. */
-int32_t cre_set_text(void *handle, const char *text, int32_t text_len);
+int32_t cre_set_text(void *handle, const char *text, int32_t text_len,
+                     void **out_buf);
+
+/* Frees a buffer cre_set_text handed back. The caller owns it: ICU
+ * keeps only a shallow reference, so nothing else can free it, and
+ * asking ICU for the pointer back is not safe on a handle that never
+ * had text set. */
+void cre_free_text(void *buf);
 
 /* Matcher.matches(): the WHOLE subject must match, anchored both ends.
  * Returns 1, 0, or -1 on error. */

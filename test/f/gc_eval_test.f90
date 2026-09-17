@@ -16,6 +16,7 @@ program gc_eval_test
   use GCPrinter
   use GCEval
   use GCNativeArray
+  use Regex
   implicit none
 
   logical :: all_ok
@@ -68,6 +69,7 @@ contains
     call check_symbol_names()
     call check_meta_lookup()
     call check_native_arrays()
+    call check_regex_release()
     call check_resources()
     call check_errors()
     call check_heap_sound()
@@ -749,6 +751,52 @@ contains
 
     call vs_leave(base)
   end subroutine check_native_arrays
+
+  ! A Pattern and a Matcher each hold an ICU object, and a Matcher holds
+  ! a subject-text buffer as well -- ICU keeps only a shallow reference
+  ! to that, so nothing else can free it.
+  !
+  ! `cre_close` was declared in the interface and never called from
+  ! anywhere, so every compiled pattern and every matcher leaked its
+  ! whole handle for the life of the process. DEVIATIONS 14 recorded
+  ! only the text half of that, and called it structural -- "a
+  ! destructor path, which nothing else in the GC heap has either" --
+  ! which stopped being true when native arrays gave the sweep a
+  ! finalizer hook.
+  !
+  ! Checked against the registry's own count, because the leak is
+  ! invisible from Clojure. That is exactly why it survived this long.
+  subroutine check_regex_release()
+    type(gc_value) :: form, env, result
+    integer :: base, before
+
+    call gc_init(64)
+    gc_torture = .false.
+    base = vs_enter(3)
+    env = gce_base_env(no_roots)
+    call vs_set(base + 1, env)
+    before = regex_live_count()
+
+    form = gcr_read('(. #"a+" (matcher "aaa"))', [vs_get(base + 1)])
+    call vs_set(base + 2, form)
+    call gce_clear_error()
+    result = gce_eval(vs_get(base + 2), vs_get(base + 1), no_roots)
+    call vs_set(base + 3, result)
+    ! The pattern and the matcher's own clone are two distinct handles.
+    call ok("29a. a matcher opens handles: ", regex_live_count() - before >= 2)
+
+    call gc_collect(no_roots)
+    call ok("29b. a collection keeps them while rooted: ", &
+         regex_live_count() - before >= 2)
+
+    call vs_set(base + 3, gc_nil())
+    call vs_set(base + 2, gc_nil())
+    call gc_collect(no_roots)
+    call ok("29c. ...and closes them once unreachable: ", &
+         regex_live_count() - before == 0)
+
+    call vs_leave(base)
+  end subroutine check_regex_release
 
   subroutine check_errors()
     type(gc_value) :: form, env, result

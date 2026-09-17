@@ -64,11 +64,32 @@ void *cre_clone(void *handle) {
   return re;
 }
 
+/* Frees the subject text this handle is holding, if any.
+ *
+ * ICU keeps only a shallow reference to the buffer we passed to
+ * uregex_setText, so uregex_getText hands back OUR pointer and nothing
+ * else can free it. Casting away const is the point: this memory is
+ * ours, not ICU's.
+ *
+ * A clone does not share it -- uregex_clone's contract says the input
+ * string is not cloned -- so no handle can free another's text. */
+/* Frees one subject-text buffer that cre_set_text handed out.
+ *
+ * The CALLER owns it, not this file and not ICU. An earlier attempt
+ * asked uregex_getText for the pointer instead -- which aborts, because
+ * a handle that never had setText called on it answers with something
+ * ICU owns, and a compiled pattern is exactly that. Guessing whether a
+ * pointer is ours is not something malloc forgives. */
+void cre_free_text(void *buf) {
+  if (buf) free(buf);
+}
+
 void cre_close(void *handle) {
   if (handle) uregex_close((URegularExpression *)handle);
 }
 
-int32_t cre_set_text(void *handle, const char *text, int32_t text_len) {
+int32_t cre_set_text(void *handle, const char *text, int32_t text_len,
+                     void **out_buf) {
   UErrorCode status = U_ZERO_ERROR;
   UChar *utext;
   if (!handle) return -1;
@@ -87,6 +108,9 @@ int32_t cre_set_text(void *handle, const char *text, int32_t text_len) {
     free(utext);
     return -1;
   }
+  /* Handed to the caller, which keeps it alongside the handle and frees
+   * it through cre_free_text when the Matcher is collected. */
+  if (out_buf) *out_buf = utext;
   return 0;
 }
 
