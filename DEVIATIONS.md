@@ -259,10 +259,16 @@ made). Three real gaps come with it:
 - **A Matcher's subject-text buffer leaks**, once, on `.matcher`. ICU
   keeps only a shallow reference to it (`uregex_setText`'s own
   contract), so it must outlive every `.find`/`.matches` call on that
-  handle, and this project has no destructor to free it when the
-  Matcher itself is collected -- `regex_shim.c`'s own comment calls
-  this the same trade-off `gc_value` already makes by having no
-  `FINAL`. Bounded per Matcher, not unbounded.
+  handle, and nothing frees it when the Matcher itself is collected.
+  Bounded per Matcher, not unbounded.
+
+  NO LONGER STRUCTURAL. `regex_shim.c`'s comment calls this the same
+  trade-off `gc_value` makes by having no `FINAL` -- true when it was
+  written, and no longer: the sweep now calls a FINALIZER for objects
+  owning storage outside the heap, added for native arrays, which own a
+  Fortran buffer for exactly the same reason. A Matcher is the other
+  kind that qualifies. Give `OBJ_MATCHER` a case in `gce_finalize_obj`
+  and free the subject text there.
 - **No `region()`, `lookingAt()`, `replaceAll`/`replaceFirst`, or
   named groups.** Only the six operations core.clj's own regex
   functions need exist; `clojure.string`'s regex-based functions
@@ -270,7 +276,8 @@ made). Three real gaps come with it:
   actually call, added the same way, when something needs them.
 
 **Removal of the ASCII limit**: real UTF-8 decoding in the shim. The
-leak: a destructor path, which nothing else in the GC heap has either.
+leak: a case in `gce_finalize_obj`, now that the sweep has a finalizer
+hook -- it did not when this was written.
 The missing operations: add them to `regex_shim.h`/`.c` and the
 `instance_member` table in `GCEval.f90` as they come up, the same way
 every other host member in this file did.

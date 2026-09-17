@@ -217,7 +217,49 @@
 (check "force"          (force (delay 7)) 7)
 (check "force a non-delay" (force 7) 7)
 
+;;; ---- native arrays ------------------------------------------------
+;;
+;; A REAL Fortran array: contiguous, column-major, declared kind, at an
+;; address the collector never moves -- the one thing this host has
+;; that the JVM does not, and the reason the collector is non-moving.
+;;
+;; In a `fortran` namespace rather than clojure.core, because these are
+;; not Clojure's array functions with a different implementation: they
+;; take a Fortran KIND NAME rather than a class. SEAMS.md asked for
+;; fortran.* to mean exactly this.
+
+(alias 'f 'fortran)
+
+(def arr (f/make-array "real8" 3))
+(check "array kind"    (f/array-kind arr) "real8")
+(check "array length"  (f/alength arr) 3)
+(check "array shape"   (f/array-shape arr) [3])
+;; Zero-filled, not whatever the allocator left behind.
+(check "fresh array is zeroed" (f/aget arr 1) 0.0)
+(do (f/aset arr 0 1.5) (f/aset arr 2 3.25))
+(check "aset then aget" [(f/aget arr 0) (f/aget arr 2)] [1.5 3.25])
+
+;; Rank is not special-cased: subscripts are per DIMENSION and the
+;; flattening is column-major, done in one place.
+(def m2 (f/make-array "int4" 2 3))
+(check "rank-2 shape"  (f/array-shape m2) [2 3])
+(check "rank-2 length" (f/alength m2) 6)
+(do (f/aset m2 1 2 7))
+(check "rank-2 aset/aget" [(f/aget m2 1 2) (f/aget m2 0 0)] [7 0])
+
+;; Loud, not silent, on the two ways to get it wrong.
+(check "out of bounds" (try (f/aget arr 9) (catch Throwable e :err)) :err)
+(check "unknown kind"  (try (f/make-array "nope" 2) (catch Throwable e :err)) :err)
+
+;; A `value` array holds clotran values, so its storage is a GC run
+;; rather than a raw buffer -- otherwise the collector would free its
+;; elements out from under it.
+(def va (f/make-array "value" 2))
+(do (f/aset va 0 :hello))
+(check "value array" [(f/aget va 0) (f/aget va 1)] [:hello nil])
+
 ;;; ---- report -----------------------------------------------------
+
 
 (println "")
 (if (zero? @*failures*)

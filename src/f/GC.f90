@@ -216,6 +216,21 @@ module GC
   ! Distinct from OBJ_LAZY, which caches a first and a rest and whose
   ! forcing expects a seq. A delay holds one value of any kind.
   integer, parameter, public :: OBJ_DELAY     = 25 ! 1=thunk 2=value; i1=forced?
+  ! A REAL FORTRAN ARRAY. i1 = a handle into GCNativeArray's registry,
+  ! which owns the buffer; slot 1 is a GC run for the `value` element
+  ! kind and nil for every numeric one.
+  !
+  ! The buffer CANNOT live in a pool. The whole point of a native
+  ! array is that its bytes are a contiguous, column-major Fortran
+  ! array at a stable address, so dgemm can be handed a pointer to
+  ! them -- which is also why the collector is non-moving (PLAN.md).
+  ! A pool of gc_value could not hold real(8) anyway.
+  !
+  ! Values are the exception and go in a RUN, in slot 1, because the
+  ! collector must trace them: an array of clotran values holding heap
+  ! references outside the heap is how those references become
+  ! dangling. push_mark already traces GCT_VEC, so this costs nothing.
+  integer, parameter, public :: OBJ_ARRAY     = 26 ! 1=value run; i1=buffer handle
   integer, parameter, public :: OBJ_HAMT      = 11 ! 1=root run; i1=count
   integer, parameter, public :: OBJ_HAMT_LEAF = 12 ! 1=key 2=val
   ! Slot 3 was reserved for a per-Var dynamic stack; the dynamic
@@ -313,6 +328,32 @@ module GC
   ! that distinguishable; see gc_root and gc_global_keep.
   integer :: global_gen = 0
 
+  ! --- finalizers for storage the heap does not own ----------------
+  !
+  ! Almost every object here holds only gc_values, and sweeping one is
+  ! just returning its slot. Two kinds do not: a native array owns a
+  ! real Fortran buffer, and a regex owns an ICU handle. Neither can
+  ! live in a pool -- that is the POINT of a native array, whose bytes
+  ! have to be a contiguous Fortran array at a stable address so a
+  ! Fortran library can be handed a pointer to them.
+  !
+  ! So the owning module keeps a registry, the object holds an integer
+  ! handle, and the sweep tells that module when a handle dies. Without
+  ! this, collecting an array leaks its buffer -- which is what
+  ! DEVIATIONS 14 already records for Matcher, discovered the same way.
+  !
+  ! A procedure POINTER rather than a call, because GC.f90 sits at the
+  ! bottom: NativeArray uses GC, so GC cannot use NativeArray. Same
+  ! dependency inversion gcp_set_forcer already uses for lazy seqs, and
+  ! a MODULE procedure for the same reason -- flang segfaults passing a
+  ! host-associated internal procedure as a callback on macOS/ARM64.
+  abstract interface
+     subroutine finalizer_i(kind, handle)
+       integer, intent(in) :: kind, handle
+     end subroutine finalizer_i
+  end interface
+  procedure(finalizer_i), pointer, save :: obj_finalizer => null()
+
   ! --- the value stack (PLAN.md 3d, Design B) ----------------------
   !
   ! The evaluator's roots, and the reason rooting is by CONSTRUCTION
@@ -366,6 +407,7 @@ module GC
   public :: gc_live_count, gc_obj_capacity, gc_check_heap
   public :: gc_global_new, gc_global_set, gc_global_get, gc_global_count
   public :: gc_global_keep, gc_root_get, gc_root_live
+  public :: gc_set_finalizer
   public :: gc_ensure_init, gc_str_ref, gc_ref_text, gc_ref_is, gc_ref_len
   public :: vs_enter, vs_leave, vs_set, vs_get, vs_depth
   public :: gc_equal, gc_hash
@@ -1036,6 +1078,13 @@ contains
   !
   ! Callers should use this rather than new/set, and keep the index it
   ! returns.
+  ! Registered once at startup by the module that owns out-of-heap
+  ! storage. See the finalizer_i interface above.
+  subroutine gc_set_finalizer(f)
+    procedure(finalizer_i) :: f
+    obj_finalizer => f
+  end subroutine gc_set_finalizer
+
   subroutine gc_global_keep(h, v)
     type(gc_root), intent(inout) :: h
     type(gc_value), intent(in) :: v
@@ -1137,6 +1186,11 @@ contains
     integer :: i, j
     do i = 1, obj_used
        if (obj_mark(i) .or. obj_free(i)) cycle
+       ! Tell the owner before the slot is reused, so a buffer or a
+       ! host handle is released exactly once, here, rather than
+       ! leaking for the life of the process.
+       if (associated(obj_finalizer) .and. obj_pool(i)%kind /= 0) &
+            call obj_finalizer(obj_pool(i)%kind, obj_pool(i)%i1)
        do j = 1, OBJ_SLOTS
           obj_pool(i)%slot(j) = gc_nil()
        end do

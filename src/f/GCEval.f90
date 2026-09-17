@@ -50,6 +50,7 @@ module GCEval
   use GCEnv
   use GCNamespace
   use GCPrinter
+  use GCNativeArray
   use Regex
   use GCReader
   implicit none
@@ -121,6 +122,8 @@ module GCEval
   integer, parameter :: B_IDENTICAL = 159
   integer, parameter :: B_DBLVALUE = 160, B_ISNAN = 161, B_ISINF = 162
   integer, parameter :: B_ISREALIZED = 163
+  integer, parameter :: B_MAKE_ARRAY = 164, B_AGET = 165, B_ASET = 166
+  integer, parameter :: B_ALENGTH = 167, B_ARRAY_KIND = 168, B_ARRAY_SHAPE = 169
 
   ! The auto-gensym map for the syntax-quote currently being expanded,
   ! and the counter that makes each name unique. GENSYM_ENV in
@@ -247,9 +250,19 @@ contains
     type(gc_value) :: env, core
     integer :: base
 
+    ! A fresh heap means every array handle from a previous one is
+    ! orphaned; this is the one place that always follows gc_init.
+    call gcna_reset()
     call gcp_set_forcer(gce_force)
+    ! The sweep tells us when an object owning out-of-heap storage
+    ! dies, so a native array's buffer is freed exactly once rather
+    ! than leaking for the life of the process.
+    call gc_set_finalizer(gce_finalize_obj)
     call gcn_reset(roots)
-    base = vs_enter(2)
+    ! Three slots: env, clojure.core, and the fortran namespace. The
+    ! third is NOT optional -- core lives in slot 2 for the whole of
+    ! this routine.
+    base = vs_enter(3)
     env = gce_new(gc_nil(), roots)
     call vs_set(base + 1, env)
     call gc_global_keep(global_env_root, vs_get(base + 1))
@@ -262,6 +275,33 @@ contains
     call bind_builtin(core, "<", B_LT)
     call bind_builtin(core, "list", B_LIST)
     call bind_builtin(core, "vector", B_VECTOR)
+    ! Native arrays go in a `fortran` NAMESPACE, not in clojure.core.
+    !
+    ! Two reasons, and the first is practical: core.clj defines its
+    ! own make-array, aget, aset and alength, so anything bound under
+    ! those names here is shadowed the moment core.clj loads. The
+    ! second is the one that matters -- these are not Clojure's array
+    ! functions wearing a different implementation. They take a
+    ! Fortran KIND NAME rather than a class, they are column-major,
+    ! and the buffer they make can be handed to dgemm. That is a
+    ! different thing and it should not borrow the name.
+    !
+    ! SEAMS.md asks for exactly this: `fortran.*` for a real Fortran
+    ! object crossing a real boundary. This is the first thing in it.
+    block
+      type(gc_value) :: fns
+      ! base + 3, NOT base + 2: that slot holds clojure.core for the
+      ! whole of this routine, and clobbering it sent every builtin bound
+      ! after this block into the wrong namespace.
+      fns = gcn_find_or_create("fortran", [core])
+      call vs_set(base + 3, fns)
+      call bind_builtin(vs_get(base + 3), "make-array", B_MAKE_ARRAY)
+      call bind_builtin(vs_get(base + 3), "aget", B_AGET)
+      call bind_builtin(vs_get(base + 3), "aset", B_ASET)
+      call bind_builtin(vs_get(base + 3), "alength", B_ALENGTH)
+      call bind_builtin(vs_get(base + 3), "array-kind", B_ARRAY_KIND)
+      call bind_builtin(vs_get(base + 3), "array-shape", B_ARRAY_SHAPE)
+    end block
     call bind_builtin(core, "count", B_COUNT)
     call bind_builtin(core, "first", B_FIRST)
     call bind_builtin(core, "rest", B_REST)
@@ -1680,6 +1720,22 @@ contains
        end if
     end do
   end function inst_field
+
+  ! Called by the collector for every object it is about to reuse.
+  ! A MODULE procedure, not an internal one: flang segfaults passing
+  ! a host-associated internal procedure as a callback on
+  ! macOS/ARM64 (NOTES.md), the same rule gce_force follows.
+  !
+  ! Only kinds that own something outside the heap need a case here.
+  ! Everything else is pure gc_value and the sweep has already done
+  ! the whole job by returning the slot.
+  subroutine gce_finalize_obj(kind, handle)
+    integer, intent(in) :: kind, handle
+    select case (kind)
+    case (OBJ_ARRAY)
+       call gcna_release(handle)
+    end select
+  end subroutine gce_finalize_obj
 
   ! let* binds sequentially in a fresh child frame, so later bindings
   ! can see earlier ones -- which is what Clojure's let does.
@@ -5457,6 +5513,167 @@ contains
        else
           out = a
        end if
+    case (B_MAKE_ARRAY)
+       ! (make-array kind extent ...) -- (make-array "real8" 3 4) is a
+       ! 3x4 real(8), zero-filled, lower bound 0 on every dimension.
+       ! Clojure's own make-array takes a class; clotran takes a kind
+       ! NAME, because a Fortran kind is what the buffer actually is
+       ! and there is no class to name.
+       block
+         character(len=:), allocatable :: kname, err
+         integer, allocatable :: ext(:), lows(:)
+         integer :: k, h, nd
+         type(gc_value) :: a0, run, tmp
+         a0 = strip_meta(gcv_nth(args, 0))
+         nd = n - 1
+         if (nd < 1) then
+            call fail("make-array: needs a kind and at least one extent")
+            call vs_leave(base)
+            return
+         end if
+         kname = text_of(a0)
+         allocate(ext(nd), lows(nd))
+         do k = 1, nd
+            tmp = gcv_nth(args, k)
+            ext(k) = tmp%ival
+            lows(k) = 0
+         end do
+         h = gcna_new(kname, ext, lows, err)
+         if (h == 0) then
+            call fail(err)
+            call vs_leave(base)
+            return
+         end if
+         ! A `value` array keeps its elements in a GC RUN so the
+         ! collector traces them; every numeric kind has its buffer in
+         ! the registry and leaves slot 1 nil.
+         run = gc_nil()
+         if (kname == "value") run = gc_vec(max(1, gcna_total(h)), [vs_get(base + 1)])
+         out = gc_obj(OBJ_ARRAY, [run], [vs_get(base + 1), run])
+         call gc_set_i1(out, h)
+       end block
+
+    case (B_ALENGTH)
+       block
+         type(gc_value) :: a0
+         a0 = strip_meta(gcv_nth(args, 0))
+         if (gc_kind(a0) /= OBJ_ARRAY) then
+            call fail("alength: not an array")
+         else
+            out = gc_int(gcna_total(gc_i1(a0)))
+         end if
+       end block
+
+    case (B_ARRAY_KIND)
+       block
+         type(gc_value) :: a0
+         a0 = strip_meta(gcv_nth(args, 0))
+         if (gc_kind(a0) /= OBJ_ARRAY) then
+            call fail("array-kind: not an array")
+         else
+            out = gc_str(gcna_kind(gc_i1(a0)), [vs_get(base + 1)])
+         end if
+       end block
+
+    case (B_ARRAY_SHAPE)
+       block
+         type(gc_value) :: a0, acc
+         integer, allocatable :: ext(:)
+         integer :: k
+         a0 = strip_meta(gcv_nth(args, 0))
+         if (gc_kind(a0) /= OBJ_ARRAY) then
+            call fail("array-shape: not an array")
+         else
+            ext = gcna_extents(gc_i1(a0))
+            acc = gcv_empty([vs_get(base + 1)])
+            call vs_set(base + 2, acc)
+            do k = 1, size(ext)
+               acc = gcv_conj(vs_get(base + 2), gc_int(ext(k)), [vs_get(base + 2)])
+               call vs_set(base + 2, acc)
+            end do
+            out = vs_get(base + 2)
+         end if
+       end block
+
+    case (B_AGET, B_ASET)
+       ! (aget a i j ...) and (aset a i j ... v). Subscripts are per
+       ! DIMENSION, so a rank-2 array is (aget a 1 2) rather than a
+       ! flattened index -- the flattening is column-major and belongs
+       ! in one place, which is gcna_index.
+       block
+         type(gc_value) :: a0, val, tmp2
+         integer, allocatable :: subs(:)
+         integer :: k, h, at, nsub, iv
+         real(gc_dp) :: rv
+         logical :: ok
+         character(len=:), allocatable :: kn
+         a0 = strip_meta(gcv_nth(args, 0))
+         if (gc_kind(a0) /= OBJ_ARRAY) then
+            call fail("aget/aset: not an array")
+            call vs_leave(base)
+            return
+         end if
+         h = gc_i1(a0)
+         nsub = n - 1
+         if (id == B_ASET) nsub = n - 2
+         if (nsub < 1) then
+            call fail("aget/aset: needs at least one index")
+            call vs_leave(base)
+            return
+         end if
+         allocate(subs(nsub))
+         do k = 1, nsub
+            tmp2 = gcv_nth(args, k)
+            subs(k) = tmp2%ival
+         end do
+         at = gcna_index(h, subs)
+         if (at == 0) then
+            call fail("aget/aset: index out of bounds")
+            call vs_leave(base)
+            return
+         end if
+         kn = gcna_kind(h)
+         if (kn == "value") then
+            ! The run is the storage. gc_vec_set is O(1) and the
+            ! collector already traces what goes in.
+            if (id == B_AGET) then
+               out = gc_vec_get(gc_slot(a0, 1), at)
+            else
+               val = gcv_nth(args, n - 1)
+               call gc_vec_set(gc_slot(a0, 1), at, val)
+               out = val
+            end if
+         else if (id == B_AGET) then
+            if (kn == "logical") then
+               block
+                 logical :: lv
+                 call gcna_get_logical(h, at, lv, ok)
+                 out = gc_bool(lv)
+               end block
+            else if (kn == "int4" .or. kn == "int8") then
+               call gcna_get_int(h, at, iv, ok)
+               out = gc_int(iv)
+            else
+               call gcna_get_real(h, at, rv, ok)
+               out = gc_real(rv)
+            end if
+            if (.not. ok) call fail("aget: unreadable element kind '" // kn // "'")
+         else
+            val = strip_meta(gcv_nth(args, n - 1))
+            if (kn == "logical") then
+               call gcna_set_logical(h, at, truthy(val), ok)
+            else if (val%tag == GCT_INT) then
+               call gcna_set_int(h, at, val%ival, ok)
+            else
+               call gcna_set_real(h, at, num_dbl(val), ok)
+            end if
+            if (.not. ok) then
+               call fail("aset: cannot store that in a '" // kn // "' array")
+            else
+               out = val
+            end if
+         end if
+       end block
     case (B_ISREALIZED)
        ! realized? is (.isRealized x) on an IPending. The two pending
        ! things here are a delay and a lazy seq; anything else has

@@ -130,13 +130,17 @@ gc_test: $(S)/GC.o $(T)/gc_test.f90
 	$(FC) $(FCFLAGS) -o $@ $(S)/GC.o $(T)/gc_test.f90
 
 gcp-objects = $(S)/GC.o $(S)/GCMap.o $(S)/GCHamt.o $(S)/GCAssoc.o $(S)/GCList.o \
-	$(S)/GCVector.o $(S)/GCPrinter.o
+	$(S)/GCVector.o $(S)/GCPrinter.o $(S)/GCNativeArray.o
 
 $(S)/GCNamespace.o: $(S)/GCNamespace.f90 $(S)/GC.o $(S)/GCAssoc.o
 	$(FC) $(FCFLAGS) -c $< -o $@
 
+$(S)/GCNativeArray.o: $(S)/GCNativeArray.f90 $(S)/GC.o
+	$(FC) $(FCFLAGS) -c $< -o $@
+
 $(S)/GCEval.o: $(S)/GCEval.f90 $(S)/GC.o $(S)/GCList.o $(S)/GCVector.o \
-	$(S)/GCAssoc.o $(S)/GCEnv.o $(S)/GCNamespace.o $(S)/GCPrinter.o $(S)/Regex.o
+	$(S)/GCAssoc.o $(S)/GCEnv.o $(S)/GCNamespace.o $(S)/GCPrinter.o $(S)/Regex.o \
+	$(S)/GCNativeArray.o
 	$(FC) $(FCFLAGS) -c $< -o $@
 
 # GCReader depends on Regex now: #"..." compiles a pattern at READ

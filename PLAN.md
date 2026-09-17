@@ -19,7 +19,7 @@ it; retiring it is step 3.
 | --- | --- | --- |
 | core.clj | **724 of 724 forms**, loads completely | 9 failing forms |
 | startup | **6.8s** | 5.4s |
-| our tests | 1118/1118, both compilers | green, both compilers |
+| our tests | 1145/1145, both compilers | green, both compilers |
 | Clojure's own suite | **766 pass / 111 fail / 267 error** over 196 tests | not run against it |
 | Clojure's libraries | **15 of 21 load** | not measured |
 | source | 11,200 lines | 10,929 lines |
@@ -638,21 +638,29 @@ reasons to want it.
   Never.
 - **CIDER/nREPL wire compatibility** -- bencode framing and a protocol
   contract. A separate decision, not constrained by step 6.
-- **Passing a clotran array to a real Fortran procedure.** This entry
-  used to say "storage is deliberately ready (contiguous,
-  column-major, declared kind); the binding generator is the missing
-  half". That is true of `clotran-bin` and FALSE of `clotran-gc`.
-  `NativeArray.f90` is referenced by `Eval.f90` and by nothing else;
-  `aget`, `aset`, `make-array` and `alength` appear eight times in the
-  old evaluator and ZERO times in the shipping one. Native arrays did
-  not survive the GC port, and retiring `clotran-bin` (item 6) would
-  delete the only copy.
+- **Passing a clotran array to a real Fortran procedure.** The storage
+  half is DONE, in the shipping evaluator this time:
+  `GCNativeArray.f90`, reached through a `fortran` namespace. The
+  binding generator is what is left, and it is now genuinely the only
+  missing half rather than one of two.
 
-  So the missing half is now both halves, and this is the one place
-  the project's own purpose -- handing a buffer to dgemm -- regressed
-  without anyone writing it down. It is worth 23 errors in Clojure's
-  suite too: `clojure.lang.RT/alength` (14) and
-  `clojure.lang.RT/seqToTypedArray` (9).
+  Worth remembering how it got lost, because the same shape could
+  happen again. `NativeArray.f90` was referenced by `Eval.f90` and by
+  nothing else; `aget`, `aset`, `make-array` and `alength` appeared
+  eight times in the old evaluator and ZERO times in the shipping one.
+  The capability did not survive the GC port, nobody wrote that down,
+  and retiring `clotran-bin` (item 6) would have deleted the only copy
+  of it. A feature living only in the evaluator being retired is
+  invisible to every scorecard here -- our tests are per-module,
+  Clojure's suite does not reach it, and core.clj never calls it.
+
+  The port is not a copy. The buffer cannot live in a gc pool -- four
+  scalars and no pointer, which is the point of `gc_value` -- so it
+  lives in a registry and the object holds a handle, exactly what
+  `Regex.f90` does with ICU. That needed a FINALIZER in the sweep,
+  which the collector did not have: it zeroed the kind and moved on,
+  so anything owning storage outside the heap leaked. Deviation 14
+  records the same leak for Matcher and is now fixable the same way.
 
 ## Open questions
 

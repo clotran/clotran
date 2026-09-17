@@ -327,31 +327,45 @@ one that describes THIS host.
 Seams are fine. Seams that call themselves by another host's names are
 not, because the name is the documentation.
 
-### `fortran.*` has nothing in it, and that is the real finding
+### `fortran.*` now has exactly one thing in it
 
-The one genuine Fortran interop surface -- native arrays, contiguous,
-column-major, declared kind, the thing the whole project is FOR --
-lives in `NativeArray.f90`, which is referenced by `Eval.f90` and by
-nothing else. `GCEval.f90` mentions it zero times, and `aget`, `aset`,
-`make-array` and `alength` appear **eight times in the old evaluator and
-zero times in the shipping one**.
+When this section was written it had none, which was the finding that
+prompted it: the one genuine Fortran interop surface -- native arrays,
+contiguous, column-major, declared kind, the thing the whole project is
+FOR -- lived in `NativeArray.f90`, referenced by `Eval.f90` and by
+nothing else. `GCEval.f90` mentioned it zero times. It had not survived
+the GC port, and `clotran-bin` was scheduled for deletion.
 
-So it did not survive the GC port. PLAN's deferred list still says
-"Storage is deliberately ready (contiguous, column-major, declared
-kind); the binding generator is the missing half" -- that is true of
-`clotran-bin`, which is being retired, and false of `clotran-gc`, which
-is what `./clotran` runs.
+It is ported now, and it went into a `fortran` namespace rather than
+`clojure.core` -- which is this section's argument made concrete rather
+than an illustration of it:
 
-It is also worth 23 errors in Clojure's own suite on its own:
-`clojure.lang.RT/alength` (14) and `clojure.lang.RT/seqToTypedArray`
-(9) are the second and eighth largest error clusters.
+    (fortran/make-array "real8" 3 4)
+    (fortran/aget m 1 2)
+    (fortran/array-kind a)   ;=> "real8"
+
+Two reasons, and the weaker one is practical: core.clj defines its own
+`make-array`, `aget`, `aset` and `alength`, so those names are shadowed
+the moment it loads. The real reason is that these are not Clojure's
+array functions with a different implementation underneath. They take a
+Fortran KIND NAME rather than a class, they are column-major, their
+lower bounds are per dimension, and the buffer they produce can be
+handed to `dgemm`. Borrowing Clojure's names would have said they were
+the same thing.
+
+Clojure's own `aget`/`alength` remain unimplemented over these, which is
+a separate decision: those route through `clojure.lang.RT/alength` and
+`Reflector/prepRet`, and making them work is compatibility, not
+interop. Worth 23 errors in Clojure's suite -- `RT/alength` (14) and
+`RT/seqToTypedArray` (9) -- and not the same job as this.
 
 ### The rule this suggests
 
 Java names are a vocabulary clotran must READ, never one it should
 WRITE. A test, an error message, a dispatch table or a type answer
 that says `java.lang.Double` is describing a host we are not -- and
-`fortran.*` is the prefix that describes the one we ARE, which is why
-it is embarrassing that nothing currently carries it.
+`fortran.*` is the prefix that describes the one we ARE, which now has
+native arrays in it and should collect everything else that genuinely
+crosses into Fortran.
 
 PLAN.md carries the work.

@@ -4122,3 +4122,61 @@ forgets the second is correct about itself and wrong about everyone who
 called it. That is invisible until the heap fills at the wrong moment,
 which is what torture mode is FOR -- so a code path that torture never
 reaches is a code path with no rooting test at all.
+
+## Native arrays, ported to the GC heap and named for what they are
+
+`NativeArray.f90` was referenced by `Eval.f90` and by nothing else. The
+shipping evaluator had no `aget`, no `aset`, no `make-array`, no
+`alength` -- eight occurrences in the evaluator being RETIRED, zero in
+the one `./clotran` runs. The capability the whole project is for did
+not survive the GC port, and nothing recorded that.
+
+Worth noting how it stayed invisible: our tests are per-module and
+GCNativeArray did not exist to have one, Clojure's suite never reaches
+a Fortran array, and core.clj never calls one. A feature living only in
+the evaluator scheduled for deletion is outside every scorecard here.
+
+**The port is not a copy.** The buffer cannot live in a gc pool -- four
+scalars and no pointer is the whole reason copying a `gc_value` is
+cheap, a pool of them cannot hold `real(8)`, and a pooled buffer could
+not be handed to `dgemm` anyway. So the buffer lives in a registry, the
+object holds an integer handle, and the collector never touches it.
+That is exactly what `Regex.f90` does with an ICU pattern, and it is
+the reason PLAN insists the collector be non-moving.
+
+**Two things that needed deciding.**
+
+A `value` array does NOT go in the registry. Its elements are clotran
+values holding heap references; outside the heap they would be untraced
+and freed out from under the array. They go in a GC run in slot 1,
+which `push_mark` already walks, so tracing costs nothing and the
+registry owns only buffers the collector has no opinion about.
+
+The sweep had no finalizer. It zeroed the kind and moved on, so
+anything owning storage outside the heap leaked -- which DEVIATIONS 14
+already recorded for Matcher without anyone connecting the two. There
+is now a hook, registered by procedure pointer because `GC.f90` sits
+below everything (the `gcp_set_forcer` inversion, and a MODULE
+procedure because flang segfaults on host-associated callbacks). The
+Matcher leak is fixable the same way now, and DEVIATIONS 14 says so.
+
+**They are `fortran/make-array`, not `make-array`.** core.clj defines
+its own, so a `clojure.core` binding is shadowed the moment it loads --
+but that is the weaker reason. These take a Fortran KIND NAME rather
+than a class, they are column-major, their lower bounds are per
+dimension, and the buffer can go to `dgemm`. Borrowing Clojure's names
+would have claimed they were the same thing. SEAMS asked for
+`fortran.*` to mean a real Fortran object crossing a real boundary;
+this is the first thing in it.
+
+Clojure's own `aget`/`alength` over these are deliberately NOT done:
+they route through `clojure.lang.RT/alength` and `Reflector/prepRet`,
+which is compatibility rather than interop, and a different job.
+
+**The check that matters** is `28e` in `gc_eval_test`: allocate an
+array, collect while it is rooted and confirm the buffer survives, drop
+every reference, collect again and confirm the registry slot is freed.
+A leak here is invisible from Clojure, so it is checked against the
+registry's own count rather than through any value. `28d` is the half
+people forget -- a finalizer that frees too eagerly looks identical to
+a working one until something reads a freed buffer.

@@ -15,6 +15,7 @@ program gc_eval_test
   use GCReader
   use GCPrinter
   use GCEval
+  use GCNativeArray
   implicit none
 
   logical :: all_ok
@@ -66,6 +67,7 @@ contains
     call check_letfn()
     call check_symbol_names()
     call check_meta_lookup()
+    call check_native_arrays()
     call check_resources()
     call check_errors()
     call check_heap_sound()
@@ -699,6 +701,54 @@ contains
     ! A missing key is still nil, wrapper or not.
     call ev('27e. ', '(:zz (with-meta {:a 1} {:x 9}))', 'nil')
   end subroutine check_meta_lookup
+
+  ! A native array's buffer lives OUTSIDE the heap -- it has to, since
+  ! the point is a contiguous Fortran array at a stable address. So the
+  ! collector freeing the object is not enough; the sweep has to tell
+  ! GCNativeArray that the handle died, or the buffer is held for the
+  ! life of the process.
+  !
+  ! That leak is invisible from Clojure, which is why it is checked
+  ! here against the registry's own count rather than through any
+  ! value. DEVIATIONS 14 records the same leak for Matcher, found the
+  ! same way and still open.
+  subroutine check_native_arrays()
+    type(gc_value) :: form, env, result
+    integer :: base, before
+
+    call gc_init(64)
+    gc_torture = .false.
+    base = vs_enter(3)
+    env = gce_base_env(no_roots)
+    call vs_set(base + 1, env)
+    before = gcna_live_count()
+
+    form = gcr_read('(fortran/make-array "real8" 4)', [vs_get(base + 1)])
+    call vs_set(base + 2, form)
+    call gce_clear_error()
+    result = gce_eval(vs_get(base + 2), vs_get(base + 1), no_roots)
+    call vs_set(base + 3, result)
+    call ok("28a. an array claims a buffer: ", gcna_live_count() - before == 1)
+    call ok("28b. ...of the kind asked for: ", gcna_kind(gc_i1(vs_get(base + 3))) == "real8")
+    call ok("28c. ...with the extent asked for: ", &
+         gcna_total(gc_i1(vs_get(base + 3))) == 4)
+
+    ! Still rooted on the value stack, so a collection must NOT free it.
+    ! Getting this backwards is the failure that looks like a working
+    ! finalizer right up until something reads a freed buffer.
+    call gc_collect(no_roots)
+    call ok("28d. a collection keeps it while rooted: ", &
+         gcna_live_count() - before == 1)
+
+    ! Drop every reference and collect again.
+    call vs_set(base + 3, gc_nil())
+    call vs_set(base + 2, gc_nil())
+    call gc_collect(no_roots)
+    call ok("28e. ...and frees the buffer once unreachable: ", &
+         gcna_live_count() - before == 0)
+
+    call vs_leave(base)
+  end subroutine check_native_arrays
 
   subroutine check_errors()
     type(gc_value) :: form, env, result

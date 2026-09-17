@@ -49,8 +49,25 @@ before reporting anything and contribute zero to both halves of it, and
 several of the 67 -- `proxy`, `genclass`, annotations, AOT -- can never
 pass here. 19 of 67 namespaces produce a passing assertion today.
 
+**Real Fortran arrays**, which is the one thing this host has that the
+JVM does not:
+
+```clojure
+(alias (quote f) (quote fortran))
+(def m (f/make-array "real8" 2 3))   ; contiguous, column-major, zero-filled
+(f/aset m 1 2 3.5)
+(f/aget m 1 2)                        ;=> 3.5
+(f/array-kind m)                      ;=> "real8"
+```
+
+The bytes ARE a Fortran array at an address the collector never moves,
+which is what a Fortran library expects to be handed. They live in a
+`fortran` namespace rather than `clojure.core` because they take a
+Fortran kind name rather than a class -- see `SEAMS.md`. The binding
+generator that would pass one to `dgemm` is not written yet.
+
 Four oracles keep it honest: gfortran and flang must agree
-(`make crosscheck`, 1118 assertions each), `clj` -- real JVM Clojure --
+(`make crosscheck`, 1145 assertions each), `clj` -- real JVM Clojure --
 answers what Clojure actually does rather than what anyone remembers,
 and pinned clones of Clojure and ClojureScript are cited rather than
 recalled. See `CLAUDE.md`.
