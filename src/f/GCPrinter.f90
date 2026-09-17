@@ -72,6 +72,15 @@ contains
     case (GCT_INT)
        write(buf, '(I0)') v%ival
        s = trim(buf)
+    case (GCT_RATIO)
+       ! n/d, the same spelling the reader takes. Always in normal
+       ! form, so there is nothing to reduce here.
+       block
+         character(len=32) :: dbuf
+         write(buf, '(I0)') gc_numerator(v)
+         write(dbuf, '(I0)') gc_denominator(v)
+         s = trim(buf) // "/" // trim(dbuf)
+       end block
     case (GCT_REAL)
        ! The symbolic values print as the reader macro that makes
        ! them, since they have no literal spelling otherwise --

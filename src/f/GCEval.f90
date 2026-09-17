@@ -126,6 +126,7 @@ module GCEval
   integer, parameter :: B_ALENGTH = 167, B_ARRAY_KIND = 168, B_ARRAY_SHAPE = 169
   integer, parameter :: B_ANEWINST = 170, B_ACLONE = 171, B_PREPRET = 172
   integer, parameter :: B_NUMCAST = 173, B_NUMEQ = 174, B_ABS = 175
+  integer, parameter :: B_NUMER = 176, B_DENOM = 177
   integer, parameter :: B_COMPTYPE = 173
 
   ! The auto-gensym map for the syntax-quote currently being expanded,
@@ -2723,6 +2724,11 @@ contains
     ! nothing to release, but the call must succeed.
     case ("close");       out = native(B_CLOSE, "clotran-close", [roots])
     case ("get");      out = native(B_DOTGET, "clotran-dot-get", [roots])
+    ! Ratio's two accessors. core.clj reads them as instance
+    ! members -- (.numerator ^Ratio r) -- so they belong here
+    ! rather than with the class statics.
+    case ("numerator");   out = native(B_NUMER, "numerator", [roots])
+    case ("denominator"); out = native(B_DENOM, "denominator", [roots])
     case ("nth");      out = native(B_NTH, "nth", [roots])
     case ("contains"); out = native(B_STRCONTAINS, "clotran-dot-contains", [roots])
     ! java.util.regex.Pattern/Matcher instance methods -- see Regex.f90.
@@ -3206,6 +3212,8 @@ contains
          gc_ref_is(sym%ref, "clojure.lang.Keyword") .or. &
          gc_ref_is(sym%ref, "clojure.lang.Numbers") .or. &
          gc_ref_is(sym%ref, "Number") .or. &
+         gc_ref_is(sym%ref, "Ratio") .or. &
+         gc_ref_is(sym%ref, "clojure.lang.Ratio") .or. &
          gc_ref_is(sym%ref, "java.lang.Number") .or. &
          gc_ref_is(sym%ref, "clojure.lang.Compiler$HostExpr") .or. &
          gc_ref_is(sym%ref, "clojure.lang.Compiler") .or. &
@@ -3305,6 +3313,7 @@ contains
     else if (cls == "clojure.lang.Util") then
        select case (mname)
        case ("equiv", "equals"); out = native(B_EQ, "=", [roots]); return
+       case ("compare"); out = native(B_COMPARE, "compare", [roots]); return
        case ("identical")
           ! REFERENCE IDENTITY, not =. Util.identical is
           ! (x == y) on the JVM, so (identical? [1] [1]) is false
@@ -5134,15 +5143,53 @@ contains
           end if
        else
           block
-            logical :: any_real
+            logical :: any_real, any_ratio
             real(gc_dp) :: racc
+            integer :: qn, qd, bn, bd, g
             any_real = .false.
+            any_ratio = .false.
             do i = 0, n - 1
-               b = gcv_nth(args, i)
+               b = strip_meta(gcv_nth(args, i))
                if (b%tag == GCT_REAL) any_real = .true.
+               if (b%tag == GCT_RATIO) any_ratio = .true.
             end do
             a = gcv_nth(args, 0)
-            if (any_real) then
+            if (any_ratio .and. .not. any_real) then
+               ! Exact rational arithmetic, kept exact. The
+               ! contagion order is double > ratio > integer, so
+               ! this arm runs only when no double is present --
+               ! (+ 1/2 1) is 3/2 but (+ 1/2 0.5) is 1.0.
+               !
+               ! Reducing at every step, rather than once at the
+               ! end, is what keeps the intermediate numerator from
+               ! overflowing a 32-bit integer sooner than it must:
+               ! summing halves would otherwise square the
+               ! denominator on each term.
+               b = strip_meta(a)
+               qn = gc_numerator(b)
+               qd = gc_denominator(b)
+               if (n == 1 .and. id == B_SUB) qn = -qn
+               do i = 1, n - 1
+                  b = strip_meta(gcv_nth(args, i))
+                  bn = gc_numerator(b)
+                  bd = gc_denominator(b)
+                  select case (id)
+                  case (B_ADD)
+                     qn = qn * bd + bn * qd
+                     qd = qd * bd
+                  case (B_SUB)
+                     qn = qn * bd - bn * qd
+                     qd = qd * bd
+                  case (B_MUL)
+                     qn = qn * bn
+                     qd = qd * bd
+                  end select
+                  g = gc_gcd(qn, qd)
+                  qn = qn / g
+                  qd = qd / g
+               end do
+               out = gc_ratio(qn, qd)
+            else if (any_real) then
                racc = num_dbl(a)
                if (n == 1 .and. id == B_SUB) racc = -racc
                do i = 1, n - 1
@@ -5158,7 +5205,7 @@ contains
                acc = a%ival
                if (n == 1 .and. id == B_SUB) acc = -acc
                do i = 1, n - 1
-                  b = gcv_nth(args, i)
+                  b = strip_meta(gcv_nth(args, i))
                   select case (id)
                   case (B_ADD); acc = acc + b%ival
                   case (B_SUB); acc = acc - b%ival
@@ -5479,7 +5526,28 @@ contains
        ! "Divide by zero" here for doubles as well as integers,
        ! unlike `/`, where (/ 1.0 0) is ##Inf.
        a = strip_meta(gcv_nth(args, 0)); b = strip_meta(gcv_nth(args, 1))
-       if (a%tag == GCT_REAL .or. b%tag == GCT_REAL) then
+       if (is_ratio(a) .or. is_ratio(b)) then
+          ! Exact, and the integer arm below would have read a ratio
+          ! as its numerator: (quot 7/2 1) would answer 7, not 3.
+          ! a/b is (an*bd)/(ad*bn), and quot truncates that toward
+          ! zero -- which is what Fortran's integer division does.
+          block
+            integer :: an, ad, bn, bd, qi
+            an = gc_numerator(a); ad = gc_denominator(a)
+            bn = gc_numerator(b); bd = gc_denominator(b)
+            if (bn == 0) then
+               call fail("Divide by zero")
+            else
+               qi = (an * bd) / (ad * bn)
+               if (id == B_QUOT) then
+                  out = gc_int(qi)
+               else
+                  ! rem is a - b*quot, kept exact.
+                  out = gc_ratio(an * bd - qi * bn * ad, ad * bd)
+               end if
+            end if
+          end block
+       else if (a%tag == GCT_REAL .or. b%tag == GCT_REAL) then
           if (num_dbl(b) == 0.0_gc_dp) then
              call fail("Divide by zero")
           else if (id == B_QUOT) then
@@ -5647,9 +5715,14 @@ contains
        a = gcv_nth(args, 0)
        out = gc_int(not(a%ival))
     case (B_LONGCAST)
-       a = gcv_nth(args, 0)
+       a = strip_meta(gcv_nth(args, 0))
        if (a%tag == GCT_REAL) then
           out = gc_int(int(a%rval))
+       else if (is_ratio(a)) then
+          ! (int 1/2) is 0 -- truncation toward zero, the same as for
+          ! a double. The else branch would have handed the ratio
+          ! straight back, unconverted.
+          out = gc_int(gc_numerator(a) / gc_denominator(a))
        else if (a%tag == GCT_CHAR) then
           out = gc_int(a%ival)
        else
@@ -5666,7 +5739,7 @@ contains
        block
          type(gc_value) :: v
          v = strip_meta(gcv_nth(args, 0))
-         if (v%tag == GCT_INT .or. v%tag == GCT_REAL) then
+         if (is_number(v)) then
             out = gcv_nth(args, 0)
          else
             call fail("Cannot cast " // type_name(v) // " to java.lang.Number")
@@ -5683,12 +5756,12 @@ contains
          type(gc_value) :: x, y
          same = .true.
          x = strip_meta(gcv_nth(args, 0))
-         if (x%tag /= GCT_INT .and. x%tag /= GCT_REAL) then
+         if (.not. is_number(x)) then
             call fail("== : not a number")
          else
             do k = 1, n - 1
                y = strip_meta(gcv_nth(args, k))
-               if (y%tag /= GCT_INT .and. y%tag /= GCT_REAL) then
+               if (.not. is_number(y)) then
                   call fail("== : not a number")
                   same = .false.
                   exit
@@ -5705,8 +5778,27 @@ contains
          x = strip_meta(gcv_nth(args, 0))
          if (x%tag == GCT_REAL) then
             out = gc_real(abs(x%rval))
+         else if (is_ratio(x)) then
+            out = gc_ratio(abs(gc_numerator(x)), gc_denominator(x))
          else
             out = gc_int(abs(x%ival))
+         end if
+       end block
+
+    case (B_NUMER, B_DENOM)
+       ! core.clj reads these as INSTANCE members -- (.numerator r) --
+       ! so they arrive with the ratio as the first argument. An
+       ! integer answers itself over 1, which is what Clojure does for
+       ! a value that normalized out of ratio form.
+       block
+         type(gc_value) :: x
+         x = strip_meta(gcv_nth(args, 0))
+         if (.not. is_number(x)) then
+            call fail("numerator/denominator: not a number")
+         else if (id == B_NUMER) then
+            out = gc_int(gc_numerator(x))
+         else
+            out = gc_int(gc_denominator(x))
          end if
        end block
 
@@ -7172,26 +7264,56 @@ contains
          out = gc_bool(ok)
        end block
     case (B_DIV)
-       a = gcv_nth(args, 0); b = gcv_nth(args, 1)
-       if (a%tag == GCT_INT .and. b%tag == GCT_INT) then
-          ! Integer division only when it divides exactly; Clojure
-          ! gives a Ratio otherwise, and a silent truncation here would
-          ! be worse than a double.
-          if (b%ival /= 0) then
-             if (mod(a%ival, b%ival) == 0) then
-                out = gc_int(a%ival / b%ival)
-             else
-                out = gc_real(real(a%ival, gc_dp) / real(b%ival, gc_dp))
-             end if
-          else
-             call fail("Divide by zero")
-          end if
-       else
+       ! There IS a Ratio now, so an inexact integer division is no
+       ! longer approximated with a double: (/ 1 3) is 1/3.
+       !
+       ! Contagion again -- a double anywhere makes the answer a
+       ! double, and otherwise the result stays exact. Dividing by a
+       ! ratio multiplies by its reciprocal.
+       a = strip_meta(gcv_nth(args, 0)); b = strip_meta(gcv_nth(args, 1))
+       if (is_ratio(a) .or. is_ratio(b)) then
+          ! Exact, and the integer arm below would have read a ratio
+          ! as its numerator: (quot 7/2 1) would answer 7, not 3.
+          ! a/b is (an*bd)/(ad*bn), and quot truncates that toward
+          ! zero -- which is what Fortran's integer division does.
+          block
+            integer :: an, ad, bn, bd, qi
+            an = gc_numerator(a); ad = gc_denominator(a)
+            bn = gc_numerator(b); bd = gc_denominator(b)
+            if (bn == 0) then
+               call fail("Divide by zero")
+            else
+               qi = (an * bd) / (ad * bn)
+               if (id == B_QUOT) then
+                  out = gc_int(qi)
+               else
+                  ! rem is a - b*quot, kept exact.
+                  out = gc_ratio(an * bd - qi * bn * ad, ad * bd)
+               end if
+            end if
+          end block
+       else if (a%tag == GCT_REAL .or. b%tag == GCT_REAL) then
+          ! (/ 1.0 0) is ##Inf, NOT an error -- only the exact path
+          ! raises. Verified against clj.
           out = gc_real(num_dbl(a) / num_dbl(b))
+       else if (gc_numerator(b) == 0) then
+          call fail("Divide by zero")
+       else
+          out = gc_ratio(gc_numerator(a) * gc_denominator(b), &
+                         gc_denominator(a) * gc_numerator(b))
        end if
     case (B_INC, B_DEC)
-       a = gcv_nth(args, 0)
-       if (a%tag == GCT_INT) then
+       a = strip_meta(gcv_nth(args, 0))
+       if (is_ratio(a)) then
+          ! (inc 1/2) is 3/2, not 1.5 -- the else branch below sends
+          ! everything that is not an integer through num_dbl, which
+          ! would silently drop a ratio to a double.
+          if (id == B_INC) then
+             out = gc_ratio(gc_numerator(a) + gc_denominator(a), gc_denominator(a))
+          else
+             out = gc_ratio(gc_numerator(a) - gc_denominator(a), gc_denominator(a))
+          end if
+       else if (a%tag == GCT_INT) then
           if (id == B_INC) then
              out = gc_int(a%ival + 1)
           else
@@ -7801,6 +7923,7 @@ contains
     case (GCT_BOOL); s = "boolean"
     case (GCT_INT);  s = "int"
     case (GCT_REAL); s = "double"
+    case (GCT_RATIO); s = "ratio"
     case (GCT_CHAR); s = "char"
     case (GCT_STR);  s = "string"
     case (GCT_SYM);  s = "symbol"
@@ -8335,7 +8458,10 @@ contains
     case ("Boolean", "java.lang.Boolean"); yes = (t == "boolean")
     case ("Long", "java.lang.Long", "Integer", "java.lang.Integer"); yes = (t == "int")
     case ("Double", "java.lang.Double", "Float"); yes = (t == "double")
-    case ("Number", "java.lang.Number"); yes = (t == "int" .or. t == "double")
+    case ("Ratio", "clojure.lang.Ratio"); yes = (t == "ratio")
+    case ("Number", "java.lang.Number")
+       ! A Ratio is a Number on the JVM too, so (number? 1/2) is true.
+       yes = (t == "int" .or. t == "double" .or. t == "ratio")
     end select
   end function is_instance
 
@@ -8401,10 +8527,25 @@ contains
     real(gc_dp) :: d
     if (v%tag == GCT_REAL) then
        d = v%rval
+    else if (v%tag == GCT_RATIO) then
+       ! Every comparison goes through here, so without this a ratio
+       ! would compare as its NUMERATOR: (< 1/3 1/2) would be 1 < 1.
+       d = real(gc_numerator(v), gc_dp) / real(gc_denominator(v), gc_dp)
     else
        d = real(v%ival, gc_dp)
     end if
   end function num_dbl
+
+  logical function is_ratio(v)
+    type(gc_value), intent(in) :: v
+    is_ratio = (v%tag == GCT_RATIO)
+  end function is_ratio
+
+  ! Whether a value is any of clotran's numbers.
+  logical function is_number(v)
+    type(gc_value), intent(in) :: v
+    is_number = (v%tag == GCT_INT .or. v%tag == GCT_REAL .or. v%tag == GCT_RATIO)
+  end function is_number
 
   ! A value as plain text: a string'\''s own characters, anything else
   ! printed the way `str` prints it.

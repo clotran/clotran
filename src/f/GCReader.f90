@@ -773,6 +773,8 @@ contains
     type(gc_value) :: v
     integer :: start, ival
     logical :: iok, iclaim
+    logical :: rok, rclaim
+    type(gc_value) :: rval
     character(len=:), allocatable :: tok
 
     start = pos
@@ -805,10 +807,15 @@ contains
        ! name. LispReader.read hands it to readNumber and there is no
        ! path from there back to interpretToken, so `08` and `1e`
        ! raise rather than interning.
+       rok = .false.
+       rclaim = .false.
        call parse_int(tok, ival, iok, iclaim)
+       if (.not. iclaim) call parse_ratio(tok, rval, rok, rclaim)
        if (iok) then
           v = gc_int(ival)
-       else if (.not. iclaim .and. looks_real(tok)) then
+       else if (.not. iclaim .and. rok) then
+          v = rval
+       else if (.not. iclaim .and. .not. rclaim .and. looks_real(tok)) then
           v = gc_real(to_real(tok))
        else if (unsupported_number(tok)) then
           v = gc_sym(tok, roots)
@@ -860,8 +867,10 @@ contains
   ! They stay unreadable rather than being silently truncated into a
   ! fixed-width answer -- see DEVIATIONS.
 
-  ! A number Clojure reads happily and clotran has no TYPE for: a ratio
-  ! (`2/3`), or the `N` and `M` suffixes (`42N`, `1.5M`).
+  ! A number Clojure reads happily and clotran has no TYPE for: the
+  ! `N` and `M` suffixes (`42N`, `1.5M`). Ratios USED to be here and
+  ! are not any more -- there is a GCT_RATIO now, so `2/3` reads as
+  ! the number it is.
   !
   ! These must not raise. The digit-initial rule above says such a token
   ! is a number or an error, and that is right ONLY where clotran can
@@ -892,21 +901,6 @@ contains
     if (s(1:1) == "-" .or. s(1:1) == "+") start = 2
     if (start > n) return
 
-    ! ratioPat: ([-+]?[0-9]+)/([0-9]+)
-    slash = 0
-    do k = start, n
-       if (s(k:k) == "/") then
-          slash = k
-          exit
-       end if
-    end do
-    if (slash > start .and. slash < n) then
-       if (all_decimal(s(start:slash - 1)) .and. all_decimal(s(slash + 1:n))) then
-          yes = .true.
-          return
-       end if
-    end if
-
     ! The N and M suffixes, on a token that is otherwise a number.
     if (n > start) then
        if (s(n:n) == "N") then
@@ -918,6 +912,47 @@ contains
        end if
     end if
   end function unsupported_number
+
+  ! ratioPat: ([-+]?[0-9]+)/([0-9]+). A denominator of zero is an
+  ! error, the same as (/ 1 0) -- Clojure raises rather than reading
+  ! it, and gc_ratio would answer nil.
+  subroutine parse_ratio(s, val, ok, claim)
+    character(len=*), intent(in) :: s
+    type(gc_value), intent(out) :: val
+    logical, intent(out) :: ok, claim
+    integer :: n, start, k, slash, num, den
+    logical :: nok, dok
+    logical :: neg
+    ok = .false.
+    claim = .false.
+    val = gc_nil()
+    n = len(s)
+    if (n == 0) return
+    start = 1
+    neg = .false.
+    if (s(1:1) == "-" .or. s(1:1) == "+") then
+       neg = (s(1:1) == "-")
+       start = 2
+    end if
+    if (start > n) return
+    slash = 0
+    do k = start, n
+       if (s(k:k) == "/") then
+          slash = k
+          exit
+       end if
+    end do
+    if (slash <= start .or. slash >= n) return
+    if (.not. all_decimal(s(start:slash - 1))) return
+    if (.not. all_decimal(s(slash + 1:n))) return
+    claim = .true.
+    call digits_radix(s(start:slash - 1), 10, num, nok)
+    call digits_radix(s(slash + 1:n), 10, den, dok)
+    if (.not. nok .or. .not. dok .or. den == 0) return
+    if (neg) num = -num
+    val = gc_ratio(num, den)
+    ok = .true.
+  end subroutine parse_ratio
 
   ! What LispReader.read tests before calling readNumber: a digit, or
   ! a sign with a digit right after it (lines 278 and 294). Every such

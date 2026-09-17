@@ -94,6 +94,20 @@ module GC
   ! Anything in the object pool. What it MEANS is the object's own kind
   ! (OBJ_* below); the tag only says "this lives in the object pool".
   integer, parameter, public :: GCT_OBJ  = 8
+  ! An exact rational. Numerator in ival, denominator in REF -- ref is
+  ! otherwise "index into this tag's pool", and a ratio has no pool
+  ! entry, so the field is free. That keeps a ratio an immediate, like
+  ! the int and the real it sits between, with no allocation and
+  ! nothing for the collector to trace: push_mark switches on the tag
+  ! and treats anything that is not a heap kind as holding nothing.
+  !
+  ! ALWAYS NORMALIZED by gc_ratio -- reduced by their gcd, sign on the
+  ! numerator, and never with a denominator of 1, because Clojure
+  ! collapses that to an integer: (/ 4 2) is 2, not 2/1, and
+  ! (= 2/1 2) is true only because 2/1 never exists. Nothing else
+  ! should construct one.
+  integer, parameter, public :: GCT_RATIO = 10
+
   ! A run of values. Internal -- reached from objects, not normally
   ! held by user code directly.
   integer, parameter, public :: GCT_VEC  = 9
@@ -399,6 +413,7 @@ module GC
 
   public :: gc_init, gc_collect
   public :: gc_nil, gc_bool, gc_int, gc_real, gc_char, gc_str, gc_sym, gc_key
+  public :: gc_ratio, gc_numerator, gc_denominator, gc_gcd
   public :: gc_obj, gc_vec, gc_cons
   public :: gc_text, gc_slot, gc_set_slot, gc_kind
   public :: gc_i1, gc_i2, gc_set_i1, gc_set_i2
@@ -531,6 +546,74 @@ contains
     v%tag = GCT_INT
     v%ival = i
   end function gc_int
+
+  ! The greatest common divisor, by Euclid. Both arguments are taken
+  ! as magnitudes; sign is the caller's business.
+  pure function gc_gcd(a0, b0) result(g)
+    integer, intent(in) :: a0, b0
+    integer :: g, a, b, t
+    a = abs(a0)
+    b = abs(b0)
+    do while (b /= 0)
+       t = b
+       b = mod(a, b)
+       a = t
+    end do
+    g = a
+    if (g == 0) g = 1
+  end function gc_gcd
+
+  ! The ONLY way to make a ratio, because a ratio that is not in
+  ! normal form breaks equality: 2/4 and 1/2 must be the same value,
+  ! and gc_equal compares the two fields directly rather than
+  ! cross-multiplying.
+  !
+  ! Returns an INTEGER, not a ratio, when the denominator reduces to
+  ! 1 -- that is Clojure's rule, verified: (/ 4 2) is 2 and
+  ! (/ 0 5) is 0. A zero denominator is the caller's to reject; this
+  ! returns nil rather than dividing.
+  function gc_ratio(num0, den0) result(v)
+    integer, intent(in) :: num0, den0
+    type(gc_value) :: v
+    integer :: num, den, g
+    if (den0 == 0) then
+       v = gc_nil()
+       return
+    end if
+    num = num0
+    den = den0
+    ! The sign lives on the numerator: (/ 1 -3) is -1/3, never 1/-3.
+    if (den < 0) then
+       num = -num
+       den = -den
+    end if
+    g = gc_gcd(num, den)
+    num = num / g
+    den = den / g
+    if (den == 1) then
+       v = gc_int(num)
+    else
+       v%tag = GCT_RATIO
+       v%ival = num
+       v%ref = den
+    end if
+  end function gc_ratio
+
+  pure function gc_numerator(v) result(n)
+    type(gc_value), intent(in) :: v
+    integer :: n
+    n = v%ival
+  end function gc_numerator
+
+  pure function gc_denominator(v) result(d)
+    type(gc_value), intent(in) :: v
+    integer :: d
+    if (v%tag == GCT_RATIO) then
+       d = v%ref
+    else
+       d = 1
+    end if
+  end function gc_denominator
 
   function gc_real(r) result(v)
     real(gc_dp), intent(in) :: r
@@ -904,6 +987,11 @@ contains
        eq = (a%ival == b%ival)
     case (GCT_REAL)
        eq = (a%rval == b%rval)
+    case (GCT_RATIO)
+       ! Both fields. Normal form is what makes this correct without
+       ! cross-multiplying, and the default branch below would have
+       ! compared the denominators alone.
+       eq = (a%ival == b%ival .and. a%ref == b%ref)
     case (GCT_STR, GCT_SYM, GCT_KEY)
        ! Compared by CONTENT, not by pool slot: the same text
        ! allocated twice is two slots but one value.
@@ -948,6 +1036,8 @@ contains
     case (GCT_REAL)
        bits8 = transfer(v%rval, bits8)
        h = mix32(int(ieor(bits8, ishft(bits8, -32)), kind=4))
+    case (GCT_RATIO)
+       h = mix32(ieor(ieor(v%ival, ishft(v%ref, 16)), v%tag))
     case (GCT_STR, GCT_SYM, GCT_KEY)
        h = mix32(ieor(fnv1a(gc_ref_text(v%ref)), v%tag))
     case default

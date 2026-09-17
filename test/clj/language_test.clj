@@ -283,20 +283,19 @@
 ;; floatPat needs a digit BEFORE the dot, so this is a name.
 (check ".5 is a symbol" (symbol? (quote .5)) true)
 
-;; A number Clojure reads and clotran has no TYPE for must NOT be a
+;; A number Clojure reads that clotran has no TYPE for must NOT be a
 ;; reader error. It was, briefly, and the cost was out of all
 ;; proportion: clotran aborts a whole file on a reader error, so one
 ;; 2/3 took every form after it down, across the 12 of Clojure's 67
 ;; test namespaces that contain a ratio literal -- 766 passing
 ;; assertions became 223, control.clj alone losing 153.
 ;;
-;; These four lines are the falsification: each is a literal that
-;; Clojure reads as a number, so if the reader ever raises on one
-;; again this whole file stops loading and the gate goes red -- which
-;; is exactly what failed to happen last time, because no test
-;; anywhere contained one.
-(check "a ratio is a symbol, not an error"  (symbol? (quote 2/3)) true)
-(check "...and a negative one"              (symbol? (quote -2/3)) true)
+;; 2/3 is a real number here now, so only the suffixes are left to
+;; stand as the falsification: a literal Clojure reads as a number
+;; that clotran cannot type. If the reader ever raises on one again
+;; this whole file stops loading and the gate goes red -- which is
+;; exactly what failed to happen last time, because no test anywhere
+;; contained one.
 (check "an N suffix is a symbol"            (symbol? (quote 42N)) true)
 (check "an M suffix is a symbol"            (symbol? (quote 1.5M)) true)
 
@@ -339,6 +338,52 @@
 (check "comparisons"   [(< 1 2.0) (> 3 2.5) (<= 2 2.0)] [true true true])
 (check "min max abs"   [(min 1 2.5) (max 1 2.5) (abs -3) (abs -3.5)] [1 2.5 3 3.5])
 (check "inc dec"       [(inc 1) (inc 1.5) (dec 1) (dec 1.5)] [2 2.5 0 0.5])
+
+;;; ---- ratios --------------------------------------------------------
+;;
+;; Exact rational arithmetic -- the thing (/ 1 3) needs to stop being
+;; 0.3333333333. Every value below is what `clj` printed.
+;;
+;; A ratio is an IMMEDIATE here: numerator in the int field,
+;; denominator in the field a heap reference would use, so it costs no
+;; allocation and the collector never sees one. It is always in normal
+;; form, which is what lets equality compare the two fields directly.
+
+;; Normalized on construction: reduced, sign on the numerator, and
+;; never denominator 1 -- Clojure collapses that to an integer.
+(check "reduced"      [(/ 2 4) 2/4 -2/6] [1/2 1/2 -1/3])
+(check "collapses"    [(/ 4 2) (/ 6 3) (/ 0 5)] [2 2 0])
+(check "sign"         [(/ -1 3) (/ 1 -3)] [-1/3 -1/3])
+(check "reciprocal"   (/ 2) 1/2)
+(check "inexact div"  (/ 1 3) 1/3)
+(check "div by zero"  (try (/ 1 0) (catch Throwable e :err)) :err)
+
+;; Contagion is double > ratio > integer.
+(check "ratio arith"  [(+ 1/2 1/3) (- 1/2 1/3) (* 2/3 3/4)] [5/6 1/6 1/2])
+(check "with integer" (+ 1/2 1) 3/2)
+(check "a double wins" (+ 1/2 0.5) 1.0)
+
+;; = is by type, == is by value -- and 2/1 never exists to be compared.
+(check "ratio ="      [(= 1/2 1/2) (= 1/2 0.5)] [true false])
+(check "ratio =="     [(== 1/2 0.5) (= 2/1 2)] [true true])
+(check "ratio order"  (< 1/3 1/2) true)
+
+(check "ratio parts"  [(numerator 3/4) (denominator 3/4)] [3 4])
+(check "ratio?"       [(ratio? 3/4) (ratio? 2) (ratio? 0.5)] [true false false])
+(check "a ratio is a number" (number? 1/2) true)
+(check "prints as n/d" (pr-str 3/4) "3/4")
+
+;; Everything else that takes a number has to know about the third
+;; kind too. Each of these was wrong once: inc/dec dropped a ratio to
+;; a double, quot/rem read it as its numerator alone, and int handed
+;; it straight back unconverted.
+(check "ratio inc dec"  [(inc 1/2) (dec 1/2)] [3/2 -1/2])
+(check "ratio abs"      (abs -1/2) 1/2)
+(check "ratio min max"  [(min 1/2 1/3) (max 1/2 1/3)] [1/3 1/2])
+(check "ratio quot rem" [(quot 7/2 1) (rem 7/2 1) (mod 7/2 1)] [3 1/2 1/2])
+(check "ratio coerce"   [(int 1/2) (double 1/2)] [0 0.5])
+(check "ratio compare"  [(compare 1/3 1/2) (compare 1/2 1/2)] [-1 0])
+(check "ratio signs"    [(pos? 1/2) (neg? -1/2)] [true true])
 
 ;;; ---- Clojure's OWN array API ------------------------------------
 ;;
