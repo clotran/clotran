@@ -131,7 +131,7 @@ the eight split into two groups:
 | `api`, `edn` | needs `clojure.test.generative` |
 | `generators` | needs `clojure.data.generators` |
 | `pprint` | `clojure.lang.PersistentStructMap/createSlotMap` |
-| `reflect` | `'0x0001' not found` -- no hex literals in the reader |
+| `reflect` | `'0x0001' not found` -- reader gap, now FIXED; re-measure |
 | `multimethods` | not yet diagnosed |
 | `ns-libs-load-later` | not yet diagnosed |
 | `run-single-test` | not yet diagnosed |
@@ -143,7 +143,16 @@ They belong with `proxy`, `genclass` and AOT: not reachable without
 vendoring someone else's tree, and not a host member anyone can add.
 
 So the small-work-large-unlock framing applies to at most four of them,
-and `0x0001` (a reader gap) is the cheapest.
+and `0x0001` (a reader gap) was the cheapest -- done: the reader now
+implements Clojure's three number patterns, so hex, octal, explicit
+radix and exponents all read. Whether `reflect` actually leaves the
+CRASHED column is unmeasured; the paragraph below is the reason not to
+assume it does.
+
+Two SILENT wrong answers fell out of the same gap and are the better
+reason the work was worth doing: `077` read as 77 rather than 63, and
+`.5` read as 0.5 rather than interning a symbol. Neither shows on any
+scorecard.
 
 Worth knowing before starting: a namespace leaving the CRASHED column
 does not mean it passes. All five freed by the `:refer` fix went
@@ -260,12 +269,16 @@ that are worth fixing now rather than arguing then:
   and keep the vendored tree loadable afterwards -- once our tests are
   renamed too, it is the only thing left that can catch a drift.
 
-**9. Arrays, as close to Clojure's as a better representation allows.**
+**9. Arrays, as close to Clojure's as a better representation allows -- DONE.**
 `fortran/make-array` exists and works, but it is a parallel vocabulary
-where Clojure already has one. The decision is to move to Clojure's
+where Clojure already has one. The decision was to move to Clojure's
 names and semantics -- `make-array`, `aget`, `aset`, `alength`, with
 Clojure's type spellings -- keeping the Fortran representation
-underneath.
+underneath. core.clj's own definitions now run: `make-array`, `aget`,
+`aset`, the `aset-int`/`aset-double` family, `alength` and `aclone`,
+each verified against `clj` on the same script and agreeing line for
+line, slices included. What is left is `into-array`/`to-array`
+(`RT/seqToTypedArray`), which is item 3's cluster, not this one.
 
 Nothing has to be given up to do that, which was not obvious and is
 worth writing down. A Fortran rank-2 array gives `a(i,j)` access AND
@@ -303,7 +316,12 @@ kept alive by the slice).
 
 `alength` of a multi-dimensional array is the FIRST EXTENT, which is
 what Clojure answers for the outer dimension of a nested array, and for
-rank 1 is the same as the total. That one matches for free.
+rank 1 is the same as the total. That one matches for free -- though it
+cost an existing test, which had asserted the total.
+
+`aclone` is the other place the view matters: it must clone the SHAPE
+OF THE VIEW, not of the buffer behind it, or `(aclone (aget m 0))` on a
+2x3 hands back a 2x3 instead of a length-3 row.
 
 **Ragged arrays are not supported and will not be** -- see DEVIATIONS.
 `[[I` rows may differ in length; a Fortran rank-2 cannot, and the

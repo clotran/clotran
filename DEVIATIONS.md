@@ -619,3 +619,77 @@ purpose, in exchange for one real Clojure cannot offer.
 
 It goes away only by representing arrays as arrays-of-arrays, which
 would mean giving up the thing the project exists for.
+
+## 25. `aset` on a primitive array accepts any number
+
+Real Clojure:
+
+    (aset (make-array Integer/TYPE 3) 0 10)
+    ;; IllegalArgumentException: argument type mismatch
+    ;;   java.lang.reflect.Array/set
+
+`Array/set` takes an `Object`, so `10` arrives as a boxed `Long` and
+the JVM refuses to store it in an `int[]`. Getting it in requires the
+type to be exact -- `(aset-int a 0 10)` or `(aset a 0 (int 10))` --
+and `aset-int` exists precisely because the plain one cannot do it.
+
+clotran stores it. There is no boxing here, so there is no boxed type
+to mismatch: an int array is `integer(4)` and the value is a clotran
+integer, which goes in. The typed family -- `aset-int`, `aset-double`,
+`aset-boolean` -- all reach the same builtin, because on the JVM they
+differ only in the boxing they avoid.
+
+So clotran is strictly more PERMISSIVE: every program real Clojure
+accepts, clotran accepts and agrees with. What differs is that a
+program relying on the exception -- catching it to detect a wrong
+element type -- sees no exception. The tests in `language_test.clj`
+use `aset-int`/`aset-double` anyway, so they mean the same thing under
+both.
+
+Closing it would mean tracking a declared element type per call site
+and rejecting a value whose Clojure type is not exactly it, which is
+re-creating boxing in order to reproduce its error message.
+
+## 26. Integers are 32-bit, and there is no numeric tower
+
+The reader now agrees with Clojure on every number SHAPE (hex, octal,
+explicit radix, exponents -- see 25's neighbours in
+`test/clj/language_test.clj`). What is missing is the tower underneath,
+and it shows up four ways. Measured, clotran first, `clj` second:
+
+    9999999999                 1410065407        9999999999
+    2147483648                 -2147483648       2147483648
+    (/ 1 3)                    0.3333333333      1/3
+    (* 9999999999 9999999999)  -1158137855       throws "long overflow"
+
+The first two are the bad ones: a literal too large for a Fortran
+`integer` is silently truncated, and nothing says so. That is the
+failure mode CLAUDE.md singles out -- a wrong answer that looks
+plausible -- and it is worse than the other two, which are merely a
+different type and a missing exception.
+
+`42N`, `1.5M` and `3/4` read as SYMBOLS, so they resolve to nothing and
+fail where they are used rather than where they are read. They are not
+read as 42, 1.5 and 0.75: answering with a near-miss of a different
+type would be the same silent-wrong-answer mistake as the truncation
+above.
+
+Raising at READ time was tried and reverted, and the reason is worth
+keeping. These are valid Clojure, so a reader error is not merely
+pedantic -- and clotran aborts a whole file on one (deviation 1), so a
+single `2/3` takes every form after it down. Twelve of Clojure's 67
+test namespaces contain a ratio literal; erroring on them took the
+suite from 766 passing assertions to 223, `control.clj` alone losing
+153. A symbol is wrong in one form; an error was wrong in every form
+after it.
+
+The two real fixes are a Ratio type, or per-form reader recovery so
+that one unreadable form does not abort a load. Both are larger than
+the reader.
+
+Closing this is a numeric-tower project -- 64-bit integers first (which
+alone would fix the truncation, since Clojure's own default is `long`),
+then arbitrary precision, a rational type, and promotion rules in
+`Numbers`. Widening to 64 bits is much the smaller half and is worth
+doing on its own: it is the difference between a wrong answer and a
+merely limited one.

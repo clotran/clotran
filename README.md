@@ -41,13 +41,17 @@ succeeds and defines nothing, and counting that as a load is how this
 number was once too high.
 
 `clojure.test` running means Clojure's own test suite runs:
-**766 passing assertions** across 196 of its tests, from the 67
+**771 passing assertions** across 196 of its tests, from the 67
 namespaces vendored verbatim in `test/clj`.
 
-That number is over assertions that EXECUTED. 8 namespaces still crash
+That number is over assertions that EXECUTED. 7 namespaces still crash
 before reporting anything and contribute zero to both halves of it, and
 several of the 67 -- `proxy`, `genclass`, annotations, AOT -- can never
-pass here. 19 of 67 namespaces produce a passing assertion today.
+pass here. 18 of 67 namespaces produce a passing assertion today.
+
+Leaving the crashed column is not the same as passing. `reflect` left
+it when the reader learned hex literals, and went straight to reporting
+nothing: `tests=0`. It is counted in the 8 becoming 7, not in the 771.
 
 **Real Fortran arrays**, which is the one thing this host has that the
 JVM does not:
@@ -61,10 +65,29 @@ JVM does not:
 ```
 
 The bytes ARE a Fortran array at an address the collector never moves,
-which is what a Fortran library expects to be handed. They live in a
-`fortran` namespace rather than `clojure.core` because they take a
-Fortran kind name rather than a class -- see `SEAMS.md`. The binding
-generator that would pass one to `dgemm` is not written yet.
+which is what a Fortran library expects to be handed. The `fortran`
+namespace is the version that names a Fortran KIND rather than a class
+-- see `SEAMS.md`. The binding generator that would pass one to `dgemm`
+is not written yet.
+
+Clojure's OWN array functions run over the same representation -- not
+reimplemented, the definitions in `core.clj`, which are written against
+`java.lang.reflect.Array` and `clojure.lang.RT`:
+
+```clojure
+(def m (make-array Integer/TYPE 2 3))
+(aset-int m 1 2 22)
+(aget m 1 2)                          ;=> 22
+(alength m)                           ;=> 2   ; the OUTER length
+(alength (aget m 1))                  ;=> 3   ; a row is an array
+```
+
+A Java `[[I` is two separate row objects; ours is one rank-2 block, so
+`(aget m 1)` hands back a strided VIEW over the same buffer -- writing
+through it is visible in the parent, as it is on the JVM. The cost is
+that rows cannot differ in length; the gain is that the whole thing is
+one contiguous column-major block a BLAS routine can take, which `[[I`
+cannot be at any price. `DEVIATIONS.md` 24 and 25 carry both.
 
 Four oracles keep it honest: gfortran and flang must agree
 (`make crosscheck`, 1145 assertions each), `clj` -- real JVM Clojure --

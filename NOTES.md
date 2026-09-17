@@ -801,6 +801,32 @@ after. The reader also gained actual real-literal parsing
 only has integers, but native interop needs real literals to exist at
 all.
 
+## ...but integers are still the default kind, and that is a bug
+
+The section above widened the real to `real(8)` on the argument that
+silently truncating at the value-type boundary would be "a real, if
+quiet, correctness bug". The same argument applies to the integer
+beside it, and was never followed through. In `gc_value` (GC.f90:264)
+the two fields sit on adjacent lines:
+
+    integer :: ival = 0
+    real(gc_dp) :: rval = 0.0_gc_dp
+
+-- one deliberately widened, one left at the default kind. So clotran's
+integers are 32-bit while Clojure's default is `long`, and the
+consequence is exactly the quiet bug the real was widened to avoid:
+
+    9999999999   reads as 1410065407
+    2147483648   reads as -2147483648
+
+Found while implementing Clojure's number patterns in the reader; the
+reader is not at fault, it parses the digits correctly and then stores
+them somewhere too narrow. DEVIATIONS 26 has the measurements.
+
+Worth separating from the numeric tower it gets filed with. BigInt,
+Ratio and BigDecimal are a project; `integer(8)` is a kind parameter,
+and it moves these from wrong answers to merely limited ones.
+
 ## ChemSol interop: confirmed feasible, deliberately not built yet
 
 Spiked as a proof of concept mid-session: a `ChemsolAdapter.f90`
