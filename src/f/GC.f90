@@ -208,6 +208,14 @@ module GC
   ! defrecord, is everywhere.
   integer, parameter, public :: OBJ_TYPE      = 23 ! 1=name 2=fields 3=methods 4=implements
   integer, parameter, public :: OBJ_INST      = 24 ! 1=type 2=field values 3=meta
+  ! A DELAY: slot 1 = the no-argument thunk, slot 2 = what it
+  ! produced, i1 = whether it has run. `delay` is literally
+  ! (new clojure.lang.Delay (fn [] ...)) in core.clj, and deref runs
+  ! it ONCE and caches -- which is the whole contract.
+  !
+  ! Distinct from OBJ_LAZY, which caches a first and a rest and whose
+  ! forcing expects a seq. A delay holds one value of any kind.
+  integer, parameter, public :: OBJ_DELAY     = 25 ! 1=thunk 2=value; i1=forced?
   integer, parameter, public :: OBJ_HAMT      = 11 ! 1=root run; i1=count
   integer, parameter, public :: OBJ_HAMT_LEAF = 12 ! 1=key 2=val
   ! Slot 3 was reserved for a per-Var dynamic stack; the dynamic

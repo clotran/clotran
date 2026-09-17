@@ -119,6 +119,8 @@ module GCEval
   integer, parameter :: B_BITAND = 70, B_BITOR = 71, B_BITXOR = 72, B_BITNOT = 73
   integer, parameter :: B_SHL = 74, B_SHR = 75
   integer, parameter :: B_IDENTICAL = 159
+  integer, parameter :: B_DBLVALUE = 160, B_ISNAN = 161, B_ISINF = 162
+  integer, parameter :: B_ISREALIZED = 163
 
   ! The auto-gensym map for the syntax-quote currently being expanded,
   ! and the counter that makes each name unique. GENSYM_ENV in
@@ -2496,6 +2498,20 @@ contains
        out = native(B_TYPE, "clotran-type", [roots])
     case ("getClassLoader", "getContextClassLoader")
        out = native(B_ALWAYS_NIL, "clotran-nil", [roots])
+    case ("isRealized"); out = native(B_ISREALIZED, "clotran-is-realized", [roots])
+    case ("getResources")
+       ! NOTHING, and honestly so. getResources enumerates a
+       ! CLASSPATH for a named file, and clotran has no classpath --
+       ! getContextClassLoader above already answers nil for the
+       ! same reason. So there are no data_readers.clj files to find
+       ! and the true answer is the empty enumeration.
+       !
+       ! This is the wall at core.clj form 708: (data-reader-urls)
+       ! threw on nil.getResources, load-data-readers threw with it,
+       ! and the catch clause re-throws -- so the form failed and the
+       ! last sixteen forms of core.clj never loaded, update-keys and
+       ! update-vals among them.
+       out = native(B_ALWAYS_NIL, "clotran-nil", [roots])
     ! Namespace members. The mappings ARE slot 2 -- ns-map hands the
     ! same map the evaluator resolves against, not a copy.
     case ("getMappings"); out = native(B_NSMAP, "ns-map", [roots])
@@ -2966,6 +2982,34 @@ contains
                gcv_nth(vs_get(base + 3), 2), gca_empty([vs_get(base + 3)])], &
               [vs_get(base + 3)])
        end block
+    else if (cname == "clojure.lang.Delay") then
+       ! (delay body) is (new clojure.lang.Delay (fn [] body)) in
+       ! core.clj, so the argument is already a no-argument closure and
+       ! nothing here needs to know about the body.
+       thunk = gce_eval(gcl_first(gcl_rest(vs_get(base + 1), [vs_get(base + 1)])), &
+            vs_get(base + 2), [vs_get(base + 1)])
+       if (has_error) then
+          call vs_leave(base)
+          return
+       end if
+       call vs_set(base + 3, thunk)
+       out = gc_obj(OBJ_DELAY, [vs_get(base + 3), gc_nil()], [vs_get(base + 3)])
+       call gc_set_i1(out, 0)
+    else if (cname == "java.util.concurrent.ArrayBlockingQueue" .or. &
+         cname == "java.util.concurrent.LinkedBlockingQueue" .or. &
+         cname == "ArrayBlockingQueue") then
+       ! A MUTABLE BOX HOLDING A VECTOR, which is what a queue is once
+       ! the blocking is gone -- and with one thread there is nothing to
+       ! block on. The capacity argument is accepted and ignored: a
+       ! bound exists to make a producer wait, and nothing here waits.
+       !
+       ! core.clj builds exactly one, for tap>, and its consumer is a
+       ! Thread that clotran never starts. So .offer accumulates and
+       ! .take is the operation that cannot be honoured -- see
+       ! instance_member, where it fails rather than inventing a value.
+       thunk = gcv_empty([vs_get(base + 1)])
+       call vs_set(base + 3, thunk)
+       out = gc_obj(OBJ_ATOM, [vs_get(base + 3), gc_nil()], [vs_get(base + 3)])
     else if (cname == "clojure.lang.LazySeq") then
        thunk = gce_eval(gcl_first(gcl_rest(vs_get(base + 1), [vs_get(base + 1)])), &
             vs_get(base + 2), [vs_get(base + 1)])
@@ -3057,6 +3101,8 @@ contains
          gc_ref_is(sym%ref, "clojure.lang.RT") .or. &
          gc_ref_is(sym%ref, "clojure.lang.Util") .or. &
          gc_ref_is(sym%ref, "clojure.lang.MapEntry") .or. &
+         gc_ref_is(sym%ref, "clojure.lang.EnumerationSeq") .or. &
+         gc_ref_is(sym%ref, "clojure.lang.Delay") .or. &
          gc_ref_is(sym%ref, "clojure.lang.LazilyPersistentVector") .or. &
          gc_ref_is(sym%ref, "LazilyPersistentVector") .or. &
          gc_ref_is(sym%ref, "clojure.lang.PersistentHashMap") .or. &
@@ -3081,6 +3127,7 @@ contains
          gc_ref_is(sym%ref, "clojure.lang.Range") .or. &
          gc_ref_is(sym%ref, "clojure.lang.LongRange") .or. &
          gc_ref_is(sym%ref, "Integer") .or. gc_ref_is(sym%ref, "java.lang.Integer") .or. &
+         gc_ref_is(sym%ref, "Double") .or. gc_ref_is(sym%ref, "java.lang.Double") .or. &
          gc_ref_is(sym%ref, "Long") .or. gc_ref_is(sym%ref, "java.lang.Long") .or. &
          gc_ref_is(sym%ref, "Thread") .or. gc_ref_is(sym%ref, "java.lang.Thread") .or. &
          gc_ref_is(sym%ref, "Character") .or. gc_ref_is(sym%ref, "java.lang.Character") .or. &
@@ -3106,6 +3153,22 @@ contains
        ! builds a list from its arguments -- our `list`.
        if (mname == "creator") then
           out = native(B_LIST, "list", [roots])
+          return
+       end if
+    else if (cls == "clojure.lang.Delay") then
+       ! (force x) is Delay/force, which derefs a delay and hands
+       ! anything else straight back -- which is what deref already
+       ! does for a value that is not a reference type.
+       if (mname == "force") then
+          out = native(B_DEREF, "deref", [roots])
+          return
+       end if
+    else if (cls == "clojure.lang.EnumerationSeq") then
+       ! (enumeration-seq e) is EnumerationSeq/create, and a seq over
+       ! an enumeration that does not exist is a seq over nothing --
+       ! which `seq` already answers for nil.
+       if (mname == "create") then
+          out = native(B_SEQ, "seq", [roots])
           return
        end if
     else if (cls == "clojure.lang.MapEntry") then
@@ -3377,6 +3440,20 @@ contains
        select case (mname)
        case ("valueOf", "parseInt", "parseLong")
           out = native(B_INTVALUE, "clotran-int-value", [roots]); return
+       end select
+    end if
+    if (cls == "Double" .or. cls == "java.lang.Double" .or. &
+         cls == "Float" .or. cls == "java.lang.Float") then
+       ! parse-double is (Double/valueOf s), and it is only reached
+       ! after core.clj has already matched the string against its own
+       ! regex -- so this converts, it does not validate.
+       select case (mname)
+       case ("valueOf", "parseDouble", "parseFloat")
+          out = native(B_DBLVALUE, "clotran-double-value", [roots]); return
+       case ("isNaN")
+          out = native(B_ISNAN, "clotran-is-nan", [roots]); return
+       case ("isInfinite")
+          out = native(B_ISINF, "clotran-is-infinite", [roots]); return
        end select
     end if
     ! Class/TYPE is a JVM primitive-class constant -- Float/TYPE and
@@ -3817,6 +3894,41 @@ contains
   ! Whether a catch clause's class matches the thrown value. Throwable
   ! and Exception catch everything, which is what core.clj relies on;
   ! a named class matches what the value was constructed with.
+  ! Throw a value a NAMED catch clause can match.
+  !
+  ! `fail` produces {:error "..."}, which is an ordinary map, and
+  ! catch_matches only lets Throwable and Exception catch one of those.
+  ! That is right for an internal failure nobody declared -- but some of
+  ! core.clj's own functions are written AROUND a specific exception and
+  ! read its absence as an answer:
+  !
+  !   (defn parse-long [s]
+  !     (if (string? s)
+  !       (try (Long/valueOf s) (catch NumberFormatException _ nil))
+  !       ...))
+  !
+  ! so (parse-long "x") is nil in Clojure and was an ERROR here -- the
+  ! catch could not match, and the failure escaped the function that
+  ! existed to contain it.
+  subroutine fail_as(class_name, msg, roots)
+    character(len=*), intent(in) :: class_name, msg
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: e, cls, txt
+    integer :: base
+
+    base = vs_enter(2)
+    cls = gc_sym(class_name, roots)
+    call vs_set(base + 1, cls)
+    txt = gc_str(msg, [vs_get(base + 1)])
+    call vs_set(base + 2, txt)
+    e = gc_obj(OBJ_ERR, [vs_get(base + 1), vs_get(base + 2), gc_nil()], &
+         [vs_get(base + 1), vs_get(base + 2)])
+    call set_thrown(e)
+    has_error = .true.
+    last_error = gcp_str(e, .true.)
+    call vs_leave(base)
+  end subroutine fail_as
+
   recursive function catch_matches(cls, exc, env) result(yes)
     type(gc_value), intent(in) :: cls, exc, env
     logical :: yes
@@ -5345,6 +5457,72 @@ contains
        else
           out = a
        end if
+    case (B_ISREALIZED)
+       ! realized? is (.isRealized x) on an IPending. The two pending
+       ! things here are a delay and a lazy seq; anything else has
+       ! nothing left to do and is realized by definition.
+       block
+         type(gc_value) :: a0
+         a0 = strip_meta(gcv_nth(args, 0))
+         if (gc_kind(a0) == OBJ_DELAY) then
+            out = gc_bool(gc_i1(a0) /= 0)
+         else if (gc_kind(a0) == OBJ_LAZY) then
+            out = gc_bool(gc_i1(a0) /= LAZY_PENDING)
+         else
+            out = gc_bool(.true.)
+         end if
+       end block
+    case (B_DBLVALUE)
+       ! Double/valueOf PARSES, it does not cast. Pointing it at the
+       ! `double` cast made (parse-double "1.5") answer 0.0 -- a silent
+       ! wrong answer, and worse than the missing member it replaced,
+       ! because num_dbl of a string is zero rather than an error.
+       !
+       ! core.clj has already matched the string against its own regex
+       ! by the time parse-double gets here, so a failure to read it is
+       ! a real error rather than a "not a number, return nil".
+       block
+         type(gc_value) :: a0
+         character(len=:), allocatable :: t
+         real(gc_dp) :: dv
+         integer :: st
+         a0 = strip_meta(gcv_nth(args, 0))
+         if (a0%tag == GCT_REAL) then
+            out = a0
+         else if (a0%tag == GCT_INT) then
+            out = gc_real(real(a0%ival, gc_dp))
+         else
+            t = trim(adjustl(text_of(a0)))
+            read(t, *, iostat=st) dv
+            if (st /= 0) then
+               call fail_as("NumberFormatException", "valueOf: not a number: " // t, &
+                    [vs_get(base + 1)])
+            else
+               out = gc_real(dv)
+            end if
+         end if
+       end block
+    case (B_ISNAN)
+       ! NaN is the one value not equal to itself, which is the test
+       ! that needs no ieee_arithmetic import to be right.
+       block
+         type(gc_value) :: a0
+         real(gc_dp) :: dv
+         a0 = strip_meta(gcv_nth(args, 0))
+         dv = num_dbl(a0)
+         out = gc_bool(a0%tag == GCT_REAL .and. dv /= dv)
+       end block
+    case (B_ISINF)
+       block
+         type(gc_value) :: a0
+         real(gc_dp) :: dv
+         a0 = strip_meta(gcv_nth(args, 0))
+         dv = num_dbl(a0)
+         ! Ordered comparison excludes NaN, which is neither infinite
+         ! nor finite and must answer false here.
+         out = gc_bool(a0%tag == GCT_REAL .and. dv == dv .and. &
+              abs(dv) > huge(1.0_gc_dp))
+       end block
     case (B_DBLCAST)
        out = gc_real(num_dbl(gcv_nth(args, 0)))
     case (B_BOOLCAST)
@@ -5760,7 +5938,8 @@ contains
             t = trim(adjustl(text_of(a0)))
             read(t, *, iostat=st) iv
             if (st /= 0) then
-               call fail("valueOf: not a number: " // t)
+               call fail_as("NumberFormatException", "valueOf: not a number: " // t, &
+                    [vs_get(base + 1)])
             else
                out = gc_int(iv)
             end if
@@ -6429,7 +6608,24 @@ contains
        ! A Var, an atom and a delay all deref the same way here: the
        ! thing in slot 1.
        a = strip_meta(gcv_nth(args, 0))
-       if (gcn_is_var(a) .or. gc_kind(a) == OBJ_ATOM) then
+       if (gc_kind(a) == OBJ_DELAY) then
+          ! ONCE. The thunk runs on the first deref and the answer is
+          ! cached in slot 2; i1 says which state it is in. Running it
+          ! again would be observable whenever the body has an effect.
+          if (gc_i1(a) == 0) then
+             call vs_set(base + 2, a)
+             b = apply(gc_slot(vs_get(base + 2), 1), &
+                  gcv_empty([vs_get(base + 1), vs_get(base + 2)]))
+             if (has_error) then
+                call vs_leave(base)
+                return
+             end if
+             call gc_set_slot(vs_get(base + 2), 2, b)
+             call gc_set_i1(vs_get(base + 2), 1)
+             a = vs_get(base + 2)
+          end if
+          out = gc_slot(a, 2)
+       else if (gcn_is_var(a) .or. gc_kind(a) == OBJ_ATOM) then
           out = gc_slot(a, 1)
        else if (gca_contains(a, gc_key("clotran/reduced", &
             [vs_get(base + 1)]))) then
@@ -7124,6 +7320,7 @@ contains
        ! A deftype instance answers with its OWN class name, so
        ! (class x) is the keyword a protocol's :impls map is keyed by
        ! and extend-type on the type reaches it.
+       case (OBJ_DELAY);   s = "delay"
        case (OBJ_INST);    s = class_text(v)
        case (OBJ_TYPE);    s = "class"
        case default;       s = "object"
@@ -7260,6 +7457,13 @@ contains
     case ("clojure.lang.Namespace"); yes = (t == "ns")
     case ("clojure.lang.IFn", "clojure.lang.Fn"); yes = (t == "fn" .or. t == "multifn")
     case ("clojure.lang.MultiFn"); yes = (t == "multifn")
+    case ("clojure.lang.IDeref", "clojure.lang.IPending")
+       ! core.clj's deref is (if (instance? clojure.lang.IDeref ref)
+       ! (.deref ref) (deref-future ref)), so a thing that derefs has
+       ! to ANSWER to IDeref or it silently takes the future path --
+       ! which is how @(delay 1) came back as the delay itself.
+       yes = (t == "atom" .or. t == "delay" .or. t == "var")
+    case ("clojure.lang.Delay"); yes = (t == "delay")
     case ("java.util.regex.Pattern"); yes = (t == "regex")
     case ("java.util.regex.Matcher"); yes = (t == "matcher")
     case ("clojure.lang.Reduced")

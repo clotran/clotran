@@ -271,6 +271,14 @@ contains
        s = gcp_str(gc_slot(v, 1), readable)
     case (OBJ_SB)
        s = gcp_str(gc_slot(v, 1), readable)
+    case (OBJ_DELAY)
+       ! Clojure shows #object[clojure.lang.Delay 0x.. {:status :pending,
+       ! :val nil}]. Same two facts, in clotran's own #<...> shape.
+       if (gc_i1(v) /= 0) then
+          s = "#<delay " // gcp_str(gc_slot(v, 2), readable) // ">"
+       else
+          s = "#<delay pending>"
+       end if
     case (OBJ_TYPE)
        s = gcp_str(gc_slot(v, 1), .false.)
     case (OBJ_INST)

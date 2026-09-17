@@ -3998,3 +3998,69 @@ the key goes through `gca_get`, which is `gc_equal` on pool slots.
 `gc_equal` already called this a separate decision -- DEVIATIONS 22 is
 that decision written down, and fixing it means hashing collections
 structurally so equal vectors reach the same HAMT bucket at all.
+
+## The last sixteen forms: core.clj loads completely
+
+`core.clj` had stopped somewhere for the whole life of this project.
+It no longer does -- 724 of 724 -- and the two remaining walls are worth
+recording because the first one lied about where it was.
+
+**Form 708 named the wrong thing.**
+
+    (try (load-data-readers) (catch Throwable t (.printStackTrace t) (throw t)))
+
+The reported error was `no such member: map.printStackTrace`, so the
+obvious move is to implement `.printStackTrace`. That would have changed
+NOTHING: the handler re-throws, so the form fails either way. The error
+named the HANDLER because the handler is what failed second;
+`load-data-readers` is what failed first.
+
+It failed on `(.. Thread currentThread getContextClassLoader)` answering
+nil -- correctly, clotran has no classloader -- and then `.getResources`
+on that nil, plus `enumeration-seq`. Both now answer EMPTY rather than
+failing, which is not a stub: a host with no classpath genuinely has no
+`data_readers.clj` files to find, so the empty enumeration IS the right
+answer. `reduce` over nothing leaves the mappings alone, nothing throws,
+and the form succeeds.
+
+**Form 711 was `ArrayBlockingQueue`, and `Delay` behind it.** A delay is
+a new object kind -- thunk, cached value, forced flag -- because
+`delay` in core.clj is literally
+`(new clojure.lang.Delay (fn [] body))`, and OBJ_LAZY could not stand in
+for it: that caches a first and a rest and its forcing expects a seq.
+The queue is a mutable box holding a vector, capacity accepted and
+ignored, because a bound exists to make a producer wait and nothing here
+waits.
+
+**What the tail was worth.** `update-vals`, `update-keys`, `parse-long`,
+`parse-double`, `parse-boolean`, `NaN?`, `infinite?`, and `delay` /
+`force` / `realized?`. `clojure.core.reducers` also loads now, which
+had been waiting on `Delay` -- libraries 14 -> 15.
+
+**Two things this nearly got wrong.**
+
+`Double/valueOf` pointed at the `double` CAST made `(parse-double "1.5")`
+answer `0.0`, because `num_dbl` of a string is zero rather than an
+error. A silent wrong answer, and worse than the missing member it
+replaced. It needs a string PARSE, which is what `B_DBLVALUE` is.
+
+And `parse-long` is written around a TYPED exception:
+
+    (try (Long/valueOf s) (catch NumberFormatException _ nil))
+
+`fail` produces `{:error "..."}`, an ordinary map, and `catch_matches`
+only lets `Throwable` and `Exception` catch one of those -- so the
+failure escaped the function whose entire purpose was to contain it, and
+`(parse-long "x")` was an error instead of nil. `fail_as` throws a named
+class for the handful of places core.clj reads an exception TYPE as an
+answer.
+
+**`tap>` is the one thing in the tail that still does not run.** It
+forces a delay that constructs a `Thread`. That is a real seam, not a
+missing member, and it fails loudly.
+
+**What it did NOT move much.** The suite went 756 -> 766 passing, and
+111 failing against 100 -- more tests reach further and some of them
+then fail. Namespaces with a passing assertion, 18 -> 19. The number
+that moved is core.clj itself, 707 -> 724, and the seven functions that
+now exist.

@@ -189,6 +189,34 @@
 (check "select-keys result is looked up"
        (:refer (select-keys {:refer [1] :as 2} (quote (:refer)))) [1])
 
+;;; ---- the core.clj tail -------------------------------------------
+;;
+;; None of these existed while core.clj stopped at form 708. They are
+;; the last sixteen forms, and the nil-on-bad-input cases matter:
+;; parse-long is written as (try (Long/valueOf s) (catch
+;; NumberFormatException _ nil)), so it depends on the exception
+;; having a TYPE a catch clause can name.
+
+(check "update-vals"    (update-vals {:a 1 :b 2} inc) {:a 2 :b 3})
+(check "update-keys"    (update-keys {:a 1} name) {"a" 1})
+(check "parse-long"     (parse-long "42") 42)
+(check "parse-long nil" (parse-long "x") nil)
+(check "parse-double"   (parse-double "1.5") 1.5)
+(check "parse-double nil" (parse-double "x") nil)
+(check "parse-boolean"  (parse-boolean "true") true)
+(check "parse-boolean nil" (parse-boolean "x") nil)
+(check "NaN?"           (NaN? (/ 0.0 0.0)) true)
+(check "NaN? on a number" (NaN? 1.0) false)
+(check "infinite?"      (infinite? (/ 1.0 0.0)) true)
+(check "infinite? on a number" (infinite? 1.0) false)
+;; A delay runs its body ONCE, on the first deref.
+(check "delay" (let [n (atom 0)
+                     d (delay (swap! n inc))]
+                 [(realized? d) @d @d (realized? d) @n])
+       [false 1 1 true 1])
+(check "force"          (force (delay 7)) 7)
+(check "force a non-delay" (force 7) 7)
+
 ;;; ---- report -----------------------------------------------------
 
 (println "")

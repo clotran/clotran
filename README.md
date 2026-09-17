@@ -25,31 +25,32 @@ parses it with a regex, and both of those had to exist for it to answer.
 
 ## What works
 
-**707 of core.clj's 724 top-level forms load.** That includes
+**All 724 of core.clj's top-level forms load.** That includes
 destructuring, the macro system, protocols, multimethods, lazy seqs,
 transducers, metadata, `case`, regex literals, `deftype`, `reify`,
-`defrecord`, `letfn` and most of the seq library -- because clotran does not implement those,
-core.clj does.
+`defrecord`, `letfn`, `delay` and the whole seq library -- because
+clotran does not implement those, core.clj does.
 
-**14 of Clojure's own 21 libraries load** -- `set`, `data`, `edn`,
+**15 of Clojure's own 21 libraries load** -- `set`, `data`, `edn`,
 `datafy`, `walk`, `string`, `template`, `zip`, `stacktrace`, `test`,
-`inspector`, `reflect`, `parallel` and `core.protocols`. Loaded means a
+`inspector`, `reflect`, `parallel`, `core.protocols` and
+`core.reducers`. Loaded means a
 var of theirs RESOLVES afterwards, not merely that `require` returned
 without complaint: `clojure.uuid` is skipped by name, so requiring it
 succeeds and defines nothing, and counting that as a load is how this
 number was once too high.
 
 `clojure.test` running means Clojure's own test suite runs:
-**756 passing assertions** across 196 of its tests, from the 67
+**766 passing assertions** across 196 of its tests, from the 67
 namespaces vendored verbatim in `test/clj`.
 
 That number is over assertions that EXECUTED. 8 namespaces still crash
 before reporting anything and contribute zero to both halves of it, and
 several of the 67 -- `proxy`, `genclass`, annotations, AOT -- can never
-pass here. 18 of 67 namespaces produce a passing assertion today.
+pass here. 19 of 67 namespaces produce a passing assertion today.
 
 Four oracles keep it honest: gfortran and flang must agree
-(`make crosscheck`, 1103 assertions each), `clj` -- real JVM Clojure --
+(`make crosscheck`, 1118 assertions each), `clj` -- real JVM Clojure --
 answers what Clojure actually does rather than what anyone remembers,
 and pinned clones of Clojure and ClojureScript are cited rather than
 recalled. See `CLAUDE.md`.

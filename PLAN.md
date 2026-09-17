@@ -17,15 +17,15 @@ it; retiring it is step 3.
 
 | | `clotran-gc` | `clotran-bin` |
 | --- | --- | --- |
-| core.clj | **707 of 724 forms**, wall at data readers | 9 failing forms |
-| startup | **6.5s** | 5.4s |
-| our tests | 1103/1103, both compilers | green, both compilers |
-| Clojure's own suite | **756 pass / 100 fail / 269 error** over 196 tests | not run against it |
-| Clojure's libraries | **14 of 21 load** | not measured |
+| core.clj | **724 of 724 forms**, loads completely | 9 failing forms |
+| startup | **6.8s** | 5.4s |
+| our tests | 1118/1118, both compilers | green, both compilers |
+| Clojure's own suite | **766 pass / 111 fail / 267 error** over 196 tests | not run against it |
+| Clojure's libraries | **15 of 21 load** | not measured |
 | source | 11,200 lines | 10,929 lines |
 
 Startup went UP, from 1.68s, and that is not a regression to chase: we
-load 707 forms now rather than 615, and far more of them do real work.
+load all 724 forms now rather than 615, and far more of them do real work.
 core.clj is re-read and re-analysed on every launch. An image (step 4c)
 is the fix; nothing else will move it much.
 
@@ -41,15 +41,16 @@ The three scorecards, and what their denominators exclude:
   fails too.
 - **Clojure's suite** is 67 vendored namespaces. 8 still crash before
   reporting anything, so they contribute ZERO assertions to both halves
-  of the pass rate: 756/1125 is over assertions that EXECUTED, not
-  assertions that exist. Only 18 of 67 namespaces produce a single
-  passing assertion, and that 27% is the more honest headline.
+  of the pass rate: 766/1144 is over assertions that EXECUTED, not
+  assertions that exist. Only 19 of 67 namespaces produce a single
+  passing assertion, and that 28% is the more honest headline.
   Several of the 67 can never pass here -- `proxy`, `genclass`,
   annotations, AOT -- and they have not been subtracted, deliberately.
 - **libraries loading** is the measure that moves when a host member
   lands. `set`, `data`, `edn`, `datafy`, `walk`, `string`, `template`,
-  `zip`, `stacktrace`, `test`, `inspector`, `reflect`, `parallel` and
-  `core.protocols` load today.
+  `zip`, `stacktrace`, `test`, `inspector`, `reflect`, `parallel`,
+  `core.protocols` and `core.reducers` load today -- the last of those
+  needed `clojure.lang.Delay`, which arrived with the core.clj tail.
 
   LOADED means a var of theirs RESOLVES afterwards, not that `require`
   returned without complaint. `clojure.uuid` is skipped by name, so
@@ -57,12 +58,26 @@ The three scorecards, and what their denominators exclude:
   how this number was once too high. Re-measure with a resolve, not an
   absence of errors.
 
-core.clj now stops at 708, on the `load-data-readers` form -- whose
-catch clause calls `.printStackTrace`, so the reported error names the
-handler rather than the cause. The other blockers behind it are
-`ArrayBlockingQueue` and `Delay`+`Thread`. `scripts/split-forms` is how
-that list was obtained, and is how to re-obtain it when the wall moves;
-it has NOT been re-run since `deftype*` landed.
+**core.clj loads completely: 724 of 724 forms.** There is no wall left
+in it, which has not been true before, so the measurement that used to
+lead this section is now just a number rather than a target.
+
+What the last two were, since the shape is worth knowing:
+
+- **708** was `(try (load-data-readers) (catch Throwable t
+  (.printStackTrace t) (throw t)))`. The reported error named
+  `.printStackTrace` -- the HANDLER -- and implementing it would have
+  changed nothing, because the handler re-throws. `load-data-readers`
+  itself had to succeed. It could not, because `getResources` and
+  `enumeration-seq` were missing; both now answer EMPTY, which is the
+  honest answer for a host with no classpath to enumerate.
+- **711** was `ArrayBlockingQueue`, and `clojure.lang.Delay` behind it.
+
+`tap>` is the one thing in the tail that still does not run: it forces a
+delay that constructs a `Thread`, and that is a real seam rather than a
+missing member. It fails loudly.
+
+`scripts/split-forms` is how a wall gets located when one appears again.
 
 The original headline measurement, which is why the GC exists at all. It
 is not allocation cost and not garbage collection cost -- it is the cost
@@ -166,7 +181,7 @@ of step 3 below, which is otherwise dead weight in this document. Its
 absence is also load-bearing in a way worth knowing: see
 `src/clj/clojure/PROVENANCE.md` on why adding a vendored file broke it.
 
-**7. Startup (step 4c).** 5.8s, all of it re-reading and re-analysing
+**7. Startup (step 4c).** 6.8s, all of it re-reading and re-analysing
 core.clj on every launch. An image fixes it; nothing else will. This is
 the first thing any new user notices, and the last thing that blocks
 anyone.
