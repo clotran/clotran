@@ -125,6 +125,7 @@ module GCEval
   integer, parameter :: B_MAKE_ARRAY = 164, B_AGET = 165, B_ASET = 166
   integer, parameter :: B_ALENGTH = 167, B_ARRAY_KIND = 168, B_ARRAY_SHAPE = 169
   integer, parameter :: B_ANEWINST = 170, B_ACLONE = 171, B_PREPRET = 172
+  integer, parameter :: B_NUMCAST = 173, B_NUMEQ = 174, B_ABS = 175
   integer, parameter :: B_COMPTYPE = 173
 
   ! The auto-gensym map for the syntax-quote currently being expanded,
@@ -2501,7 +2502,16 @@ contains
          type(gc_value) :: tv
          tv = strip_meta(vs_get(base + 3))
          if (tv%tag == GCT_KEY) then
-            call fail("no such member: " // gc_ref_text(tv%ref) // "/" // mname)
+            ! A class reached through a VARIABLE, not written as a
+            ! literal. core.clj's `cast` is (. c (cast x)) with c a
+            ! parameter, so is_host_class -- which tests the symbol
+            ! before evaluation -- cannot see it; by here the target
+            ! has been evaluated and IS the class. Retrying it as a
+            ! static member is what makes (cast Number 1.5) work, and
+            ! any other class held in a variable with it.
+            out = static_member(gc_ref_text(tv%ref), mname, vs_get(base + 1))
+            if (.not. has_error .and. is_call) &
+                 out = apply_forms(out, vs_get(base + 4), vs_get(base + 2))
          else
             call fail("no such member: " // type_name(tv) // "." // mname)
          end if
@@ -3195,6 +3205,8 @@ contains
          gc_ref_is(sym%ref, "clojure.lang.Symbol") .or. &
          gc_ref_is(sym%ref, "clojure.lang.Keyword") .or. &
          gc_ref_is(sym%ref, "clojure.lang.Numbers") .or. &
+         gc_ref_is(sym%ref, "Number") .or. &
+         gc_ref_is(sym%ref, "java.lang.Number") .or. &
          gc_ref_is(sym%ref, "clojure.lang.Compiler$HostExpr") .or. &
          gc_ref_is(sym%ref, "clojure.lang.Compiler") .or. &
          gc_ref_is(sym%ref, "clojure.lang.Namespace") .or. &
@@ -3355,7 +3367,15 @@ contains
        case ("gt"); out = native(B_GT, ">", [roots]); return
        case ("lte"); out = native(B_LTE, "<=", [roots]); return
        case ("gte"); out = native(B_GTE, ">=", [roots]); return
-       case ("equiv", "equal"); out = native(B_EQ, "=", [roots]); return
+       case ("equiv", "equal")
+          ! Numbers/equiv is ==, NOT =. They disagree across types:
+          ! (= 1 1.0) is false and (== 1 1.0) is true, because = is
+          ! Object.equals -- a Long is never equal to a Double -- and
+          ! == compares numeric VALUE. Routing this to B_EQ made
+          ! (== 1 1.0) answer false.
+          out = native(B_NUMEQ, "==", [roots]); return
+       case ("abs")
+          out = native(B_ABS, "abs", [roots]); return
        case ("compare"); out = native(B_COMPARE, "compare", [roots]); return
        case ("inc", "incP", "unchecked_inc", "unchecked_int_inc")
           out = native(B_INC, "inc", [roots]); return
@@ -3381,6 +3401,13 @@ contains
        case ("max"); out = native(B_MAX, "max", [roots]); return
        case ("min"); out = native(B_MIN, "min", [roots]); return
        end select
+    else if (cls == "Number" .or. cls == "java.lang.Number") then
+       ! core.clj's one-argument arithmetic is ([x] (cast Number x)),
+       ! and `cast` is (. c (cast x)) -- so without this, (+ 1.5),
+       ! (- 1.5) and (* 2.0) all failed with "no such member".
+       if (mname == "cast") then
+          out = native(B_NUMCAST, "clotran-num-cast", [roots]); return
+       end if
     else if (cls == "Class" .or. cls == "java.lang.Class") then
        if (mname == "forName") then
           out = native(B_FORNAME, "clotran-for-name", [roots]); return
@@ -5087,6 +5114,18 @@ contains
 
     select case (id)
     case (B_ADD, B_SUB, B_MUL)
+       ! Reals used to be IGNORED here. The accumulator read %ival,
+       ! which is 0 for a GCT_REAL, so (+ 1.5 2) answered 2 and
+       ! (* 2.0 3) answered 0 -- a wrong answer with no error, in the
+       ! three most-used functions in the language. `/` and inc/dec
+       ! were already right, via num_dbl; these three never were.
+       !
+       ! Clojure's rule is CONTAGION: a double anywhere in the
+       ! expression makes the whole result a double, and otherwise it
+       ! stays integral. That needs knowing before accumulating, not
+       ! during, so this looks once and then picks an accumulator --
+       ! which is also where a Ratio would slot in, as a third case
+       ! between the two.
        if (n == 0) then
           if (id == B_MUL) then
              out = gc_int(1)
@@ -5094,18 +5133,41 @@ contains
              out = gc_int(0)
           end if
        else
-          a = gcv_nth(args, 0)
-          acc = a%ival
-          if (n == 1 .and. id == B_SUB) acc = -acc
-          do i = 1, n - 1
-             b = gcv_nth(args, i)
-             select case (id)
-             case (B_ADD); acc = acc + b%ival
-             case (B_SUB); acc = acc - b%ival
-             case (B_MUL); acc = acc * b%ival
-             end select
-          end do
-          out = gc_int(acc)
+          block
+            logical :: any_real
+            real(gc_dp) :: racc
+            any_real = .false.
+            do i = 0, n - 1
+               b = gcv_nth(args, i)
+               if (b%tag == GCT_REAL) any_real = .true.
+            end do
+            a = gcv_nth(args, 0)
+            if (any_real) then
+               racc = num_dbl(a)
+               if (n == 1 .and. id == B_SUB) racc = -racc
+               do i = 1, n - 1
+                  b = gcv_nth(args, i)
+                  select case (id)
+                  case (B_ADD); racc = racc + num_dbl(b)
+                  case (B_SUB); racc = racc - num_dbl(b)
+                  case (B_MUL); racc = racc * num_dbl(b)
+                  end select
+               end do
+               out = gc_real(racc)
+            else
+               acc = a%ival
+               if (n == 1 .and. id == B_SUB) acc = -acc
+               do i = 1, n - 1
+                  b = gcv_nth(args, i)
+                  select case (id)
+                  case (B_ADD); acc = acc + b%ival
+                  case (B_SUB); acc = acc - b%ival
+                  case (B_MUL); acc = acc * b%ival
+                  end select
+               end do
+               out = gc_int(acc)
+            end if
+          end block
        end if
     case (B_IDENTICAL)
        ! Same tag and the same thing: one heap slot for a reference,
@@ -5410,12 +5472,28 @@ contains
        out = gc_obj(OBJ_META, &
             [strip_meta(gcv_nth(vs_get(base + 1), 0)), gcv_nth(vs_get(base + 1), 1)], &
             [vs_get(base + 1)])
-    case (B_QUOT)
-       a = gcv_nth(args, 0); b = gcv_nth(args, 1)
-       out = gc_int(a%ival / b%ival)
-    case (B_REM)
-       a = gcv_nth(args, 0); b = gcv_nth(args, 1)
-       out = gc_int(mod(a%ival, b%ival))
+    case (B_QUOT, B_REM)
+       ! Both used to read %ival only, so (quot 7.0 2) answered 0
+       ! rather than 3.0 -- the same silent discard that + - * had.
+       ! A zero divisor was not checked either: Clojure raises
+       ! "Divide by zero" here for doubles as well as integers,
+       ! unlike `/`, where (/ 1.0 0) is ##Inf.
+       a = strip_meta(gcv_nth(args, 0)); b = strip_meta(gcv_nth(args, 1))
+       if (a%tag == GCT_REAL .or. b%tag == GCT_REAL) then
+          if (num_dbl(b) == 0.0_gc_dp) then
+             call fail("Divide by zero")
+          else if (id == B_QUOT) then
+             out = gc_real(aint(num_dbl(a) / num_dbl(b)))
+          else
+             out = gc_real(mod(num_dbl(a), num_dbl(b)))
+          end if
+       else if (b%ival == 0) then
+          call fail("Divide by zero")
+       else if (id == B_QUOT) then
+          out = gc_int(a%ival / b%ival)
+       else
+          out = gc_int(mod(a%ival, b%ival))
+       end if
     case (B_SECOND)
        out = sq_first(sq_rest(gcv_nth(vs_get(base + 1), 0), [vs_get(base + 1)]), &
             [vs_get(base + 1)])
@@ -5579,6 +5657,58 @@ contains
        end if
     case (B_ANEWINST)
        out = array_new_instance(vs_get(base + 1), [vs_get(base + 1)])
+
+    case (B_NUMCAST)
+       ! Class.cast: the value unchanged, or a ClassCastException.
+       ! The check is the whole point -- Clojure's `cast` exists to
+       ! THROW on the wrong type, so returning x regardless would
+       ! make (cast Number "a") answer "a" instead of failing.
+       block
+         type(gc_value) :: v
+         v = strip_meta(gcv_nth(args, 0))
+         if (v%tag == GCT_INT .or. v%tag == GCT_REAL) then
+            out = gcv_nth(args, 0)
+         else
+            call fail("Cannot cast " // type_name(v) // " to java.lang.Number")
+         end if
+       end block
+
+    case (B_NUMEQ)
+       ! == : equal as NUMBERS, across int and real. Non-numeric
+       ! arguments are an error in Clojure rather than false, which
+       ! is the difference from =.
+       block
+         integer :: k
+         logical :: same
+         type(gc_value) :: x, y
+         same = .true.
+         x = strip_meta(gcv_nth(args, 0))
+         if (x%tag /= GCT_INT .and. x%tag /= GCT_REAL) then
+            call fail("== : not a number")
+         else
+            do k = 1, n - 1
+               y = strip_meta(gcv_nth(args, k))
+               if (y%tag /= GCT_INT .and. y%tag /= GCT_REAL) then
+                  call fail("== : not a number")
+                  same = .false.
+                  exit
+               end if
+               if (num_dbl(x) /= num_dbl(y)) same = .false.
+            end do
+            if (.not. has_error) out = gc_bool(same)
+         end if
+       end block
+
+    case (B_ABS)
+       block
+         type(gc_value) :: x
+         x = strip_meta(gcv_nth(args, 0))
+         if (x%tag == GCT_REAL) then
+            out = gc_real(abs(x%rval))
+         else
+            out = gc_int(abs(x%ival))
+         end if
+       end block
 
     case (B_PREPRET)
        ! (prepRet component-type value) -- the value, unchanged.

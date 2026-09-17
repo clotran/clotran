@@ -300,6 +300,46 @@
 (check "an N suffix is a symbol"            (symbol? (quote 42N)) true)
 (check "an M suffix is a symbol"            (symbol? (quote 1.5M)) true)
 
+;;; ---- arithmetic ---------------------------------------------------
+;;
+;; Every expected value here is what `clj` printed for the same form.
+;; The bugs these caught were not subtle: +, -, * and quot/rem all read
+;; the integer field only, so a real operand contributed ZERO --
+;; (* 2.0 3) answered 0, (quot 7.0 2) answered 0. `/` and inc/dec were
+;; always right, which is what made it look fine in passing.
+;;
+;; The lesson for the next function: test VALUES against clj, not just
+;; that a form is accepted. The reader work before this checked 29
+;; literals and never once checked that arithmetic on them was right.
+
+(check "identities"    [(+) (*) (+ 5) (* 5) (- 5)] [0 1 5 5 -5])
+(check "integer"       [(+ 1 2) (- 5 2) (* 3 4) (+ 1 2 3 4) (- 10 1 2) (* 2 3 4)]
+                       [3 3 12 10 7 24])
+;; Contagion: one double makes the whole result a double.
+(check "mixed"         [(+ 1.5 2) (* 2.0 3) (- 5.5 1)] [3.5 6.0 4.5])
+(check "mixed varargs" [(+ 1 2.5 3) (* 2 3 0.5) (- 10 1.5 2)] [6.5 3.0 6.5])
+;; One argument goes through (cast Number x), a host member that was
+;; missing entirely -- (+ 1.5) failed with "no such member".
+(check "one argument"  [(+ 1.5) (- 1.5) (* 2.0)] [1.5 -1.5 2.0])
+
+;; / is the one that already handled reals. (/ 1 0) throws but
+;; (/ 1.0 0) is ##Inf -- they are not the same rule.
+(check "division"      [(/ 4 2) (/ 100 5 2) (/ 4.0 2)] [2 10 2.0])
+;; quot and rem DO throw on a zero divisor, doubles included.
+(check "quot rem mod"  [(quot 7 2) (rem 7 2) (mod 7 2)] [3 1 1])
+(check "...negative"   [(quot -7 2) (rem -7 2) (mod -7 2)] [-3 -1 1])
+(check "...on reals"   [(quot 7.0 2) (rem 7.0 2) (mod 7.0 2)] [3.0 1.0 1.0])
+(check "quot by zero"  (try (quot 1 0) (catch Throwable e :err)) :err)
+
+;; = is Object.equals, == is numeric VALUE. They disagree here, and
+;; clotran answered = for both.
+(check "= across types"  (= 1 1.0) false)
+(check "== across types" (== 1 1.0) true)
+(check "== varargs"      [(== 1 1.0 1) (== 1 2)] [true false])
+(check "comparisons"   [(< 1 2.0) (> 3 2.5) (<= 2 2.0)] [true true true])
+(check "min max abs"   [(min 1 2.5) (max 1 2.5) (abs -3) (abs -3.5)] [1 2.5 3 3.5])
+(check "inc dec"       [(inc 1) (inc 1.5) (dec 1) (dec 1.5)] [2 2.5 0 0.5])
+
 ;;; ---- Clojure's OWN array API ------------------------------------
 ;;
 ;; Not f/make-array: clojure.core's make-array/aget/aset/alength,
