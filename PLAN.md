@@ -186,6 +186,80 @@ core.clj on every launch. An image fixes it; nothing else will. This is
 the first thing any new user notices, and the last thing that blocks
 anyone.
 
+**8. Stop writing Java names. Our own vocabulary, in our own tests.**
+`src/f` carries **59 distinct `clojure.lang.*` and 29 distinct `java.*`**
+string literals, and `test/f` asserts Java names **27 times**. clotran
+is Fortran; ClojureScript names `js/Error` and `js/Number` and never
+names Java at all. SEAMS.md has the argument -- this is the work.
+
+The split decides the work, so do not treat the 88 as one pile:
+
+- **READ-only, and keep.** `core.clj` writes `(Double/valueOf s)` and
+  `(clojure.lang.Util/hash x)`, and running it unmodified is the whole
+  premise. Recognising those strings is forced. The change here is to
+  put them in ONE translation table instead of scattered across
+  `is_host_class`, `static_member`, `instance_member`, `is_instance` and
+  `host_super` -- five places that must currently agree by hand, and
+  `Double` already proved they do not: `static_member` grew a `Double`
+  branch that nothing reached, because `is_host_class` had never heard
+  of it.
+- **Our tests, and fix.** `(instance? java.util.regex.Pattern p)` and
+  `(clojure.lang.Util/hash x)` in `test/f` assert that a JVM-shaped shim
+  exists, not that clotran matches or hashes. Rewrite them against
+  clotran's own vocabulary so they would survive renaming every Java
+  name in the tree. This is the part with no downside and no
+  compatibility cost.
+- **`instance?` should accept our names too.** `clotran-type` answers
+  `:regex`, `:vector`, `:delay`; `(instance? Regex p)` is unwritable.
+  Additive, not a replacement -- the Java names keep working because
+  core.clj needs them.
+
+The scheme is a PREFIX PER BUCKET, so the name says which seam it is:
+`clotran.*` for our own types, `fortran.*` for a real Fortran object
+crossing a real boundary, `java.*`/`clojure.lang.*` for read-only
+compatibility. Today nothing distinguishes an obligation from a habit
+by sight. SEAMS.md has the table.
+
+MIGRATION HAZARD, so it is not attempted casually: `(class x)` is
+observable and is the key a protocol's `:impls` map is built on.
+Renaming `:vector` to `:clotran.vector` changes every dispatch key at
+once, and `host_super` is what keeps a method registered on
+`clojure.lang.IPersistentVector` still reachable. Change the tables
+and the tests first; change what `class` ANSWERS last, behind the
+language suite.
+
+Already correct, and worth not breaking: `type_name` is clotran's own
+vocabulary throughout -- `vector`, `map`, `symbol`, `int`, `regex`,
+`delay` -- so what clotran ANSWERS is already ours. It is the tables and
+the tests underneath that speak Java.
+
+Moves no scorecard. It is a correctness-of-description change: the
+project's claim is that Fortran is the host, and a host that answers
+to `java.lang.Double` is not describing itself.
+
+This item is about CLOTRAN'S OWN source -- the Fortran, our tests,
+our namespaces -- and needs no change to core.clj. We are BOOTSTRAPPING
+off Clojure's core.clj for now, and it keeps its Java names because it
+is Rich's file describing the JVM it was written for.
+
+Later, once the port is done and the suite is green, that file gets
+forked to `core.cljf` and renamed the same way -- `.cljf` so the two
+are never confusable, the way `.cljs` is not `.clj`. Three things about
+that are worth fixing now rather than arguing then:
+
+- **Derive it, do not hand-edit it.** 693 call sites across 122 names.
+  A rename map plus a generator means the next Clojure release is a
+  diff to read; 693 hand edits means a manual merge forever.
+- **Rename is not the same as drop.** `re-matcher` and `re-groups`
+  occur ZERO times in all of ClojureScript, which is SEAMS' own test
+  for "this was never Clojure". Those go, rather than getting a
+  clotran name for a JVM shape.
+- **Green cannot mean 67 of 67.** Some namespaces need third-party
+  artifacts and some test the JVM. Write the excluded list into
+  `scripts/run-clojure-tests` before anyone claims the gate is met,
+  and keep the vendored tree loadable afterwards -- once our tests are
+  renamed too, it is the only thing left that can catch a drift.
+
 Not on the list, deliberately: analyse-time name resolution. It is the
 right architecture (`SEAMS.md`), and `gce_analyze` already exists to hold
 it, but the bugs that seemed to demand it turned out to be a Var
@@ -564,9 +638,21 @@ reasons to want it.
   Never.
 - **CIDER/nREPL wire compatibility** -- bencode framing and a protocol
   contract. A separate decision, not constrained by step 6.
-- **Passing a clotran array to a real Fortran procedure.** Storage is
-  deliberately ready (contiguous, column-major, declared kind); the
-  binding generator is the missing half.
+- **Passing a clotran array to a real Fortran procedure.** This entry
+  used to say "storage is deliberately ready (contiguous,
+  column-major, declared kind); the binding generator is the missing
+  half". That is true of `clotran-bin` and FALSE of `clotran-gc`.
+  `NativeArray.f90` is referenced by `Eval.f90` and by nothing else;
+  `aget`, `aset`, `make-array` and `alength` appear eight times in the
+  old evaluator and ZERO times in the shipping one. Native arrays did
+  not survive the GC port, and retiring `clotran-bin` (item 6) would
+  delete the only copy.
+
+  So the missing half is now both halves, and this is the one place
+  the project's own purpose -- handing a buffer to dgemm -- regressed
+  without anyone writing it down. It is worth 23 errors in Clojure's
+  suite too: `clojure.lang.RT/alength` (14) and
+  `clojure.lang.RT/seqToTypedArray` (9).
 
 ## Open questions
 

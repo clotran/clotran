@@ -247,3 +247,111 @@ half that both real implementations do and we skipped.
 Until then, treat it as the standing explanation: **when a bug is about
 which namespace a name means, the cause is almost certainly that we are
 asking at the wrong time.**
+
+---
+
+## The vocabulary problem: we speak Java, and we are not the JVM
+
+Counted in `src/f`: **59 distinct `clojure.lang.*` names and 29 distinct
+`java.*` names**, as string literals in Fortran. `is_host_class` is a
+list of them. `static_member` dispatches on them. `is_instance` is a
+table keyed by them. `host_super` maps clotran's own type keywords TO
+them.
+
+ClojureScript is the control group, and it is unambiguous. core.cljs
+names its host types **131 times as `js/Error`, 8 as `js/Number`, 7 as
+`js/Date`, 6 as `js/RegExp`** -- its own host. It contains
+`clojure.lang.` exactly three times: twice in a COMMENT ("a la
+clojure.lang.APersistentMap") and once in `(.type js/Java
+"java.lang.System")`, which is a GraalVM call explicitly reaching into
+Java as a FOREIGN host.
+
+So naming your host's types is not the problem -- every implementation
+does it. Naming *somebody else's* host is. clotran is Fortran, and it
+answers to `java.lang.Double`.
+
+### The distinction that keeps this honest
+
+Not all 88 are the same thing, and the fix is different for each:
+
+**Names we must READ.** `core.clj` literally contains
+`(Double/valueOf s)`, `(clojure.lang.Util/hash x)`,
+`(clojure.lang.RT/seq coll)`. Running that file unmodified is the
+premise of the project, so recognising those strings is FORCED. This is
+not a wart; it is the interop surface, and it is the same surface
+`(.type js/Java "java.lang.System")` is for ClojureScript. Keep it, and
+keep it in ONE place rather than scattered across a dozen `select case`
+blocks.
+
+**Names we WRITE.** Everything else, and this is the part that is a
+choice we got wrong:
+
+- `test/f` asserts them **27 times** -- `(instance? java.util.regex.Pattern p)`,
+  `(clojure.lang.Util/hash x)`. Those tests are asserting that a
+  JVM-shaped shim exists, not that clotran hashes or matches correctly.
+  They should assert clotran's own vocabulary and would then keep
+  passing if every Java name were renamed tomorrow.
+- `host_super` translates `:vector` into `clojure.lang.IPersistentVector`
+  so a multimethod registered on the Java name dispatches. Necessary at
+  the boundary, but it means clotran's INTERNAL dispatch graph is spelled
+  in Java.
+- `instance?` accepts only Java names. `(instance? Regex p)` is not a
+  thing anyone can write, even though `regex` is exactly what
+  `clotran-type` answers.
+
+### What is already right
+
+`type_name` is clotran's own vocabulary and always has been: `vector`,
+`map`, `set`, `symbol`, `keyword`, `int`, `double`, `string`, `regex`,
+`matcher`, `delay`, `ns`, `var`. `(clotran-type x)` answers those, and
+a deftype answers its own class name. So the outward-facing answer is
+already ours -- it is the tables and the tests underneath that are not.
+
+### The naming scheme: say which seam you are
+
+A prefix per bucket, so the NAME says what kind of thing it is and no
+one has to look it up:
+
+| prefix | means | example |
+| --- | --- | --- |
+| `clotran.*` | our own type, our own vocabulary | `clotran.vector`, `clotran.regex`, `clotran.delay` |
+| `fortran.*` | a REAL host thing -- an actual Fortran object crossing an actual boundary | `fortran.array`, a `dgemm` binding |
+| `java.*`, `clojure.lang.*` | READ-ONLY compatibility, present only because `core.clj` writes it | `java.lang.Double`, `clojure.lang.Util` |
+
+The point is not tidiness. Today a reader cannot tell, from
+`clojure.lang.PersistentVector` appearing in `GCEval.f90`, whether that
+is a seam we are obliged to have or a habit we picked up. Under this
+scheme they are distinguishable by sight, and `fortran.*` is the only
+one that describes THIS host.
+
+Seams are fine. Seams that call themselves by another host's names are
+not, because the name is the documentation.
+
+### `fortran.*` has nothing in it, and that is the real finding
+
+The one genuine Fortran interop surface -- native arrays, contiguous,
+column-major, declared kind, the thing the whole project is FOR --
+lives in `NativeArray.f90`, which is referenced by `Eval.f90` and by
+nothing else. `GCEval.f90` mentions it zero times, and `aget`, `aset`,
+`make-array` and `alength` appear **eight times in the old evaluator and
+zero times in the shipping one**.
+
+So it did not survive the GC port. PLAN's deferred list still says
+"Storage is deliberately ready (contiguous, column-major, declared
+kind); the binding generator is the missing half" -- that is true of
+`clotran-bin`, which is being retired, and false of `clotran-gc`, which
+is what `./clotran` runs.
+
+It is also worth 23 errors in Clojure's own suite on its own:
+`clojure.lang.RT/alength` (14) and `clojure.lang.RT/seqToTypedArray`
+(9) are the second and eighth largest error clusters.
+
+### The rule this suggests
+
+Java names are a vocabulary clotran must READ, never one it should
+WRITE. A test, an error message, a dispatch table or a type answer
+that says `java.lang.Double` is describing a host we are not -- and
+`fortran.*` is the prefix that describes the one we ARE, which is why
+it is embarrassing that nothing currently carries it.
+
+PLAN.md carries the work.
