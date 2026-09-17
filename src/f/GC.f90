@@ -348,8 +348,8 @@ module GC
   ! a MODULE procedure for the same reason -- flang segfaults passing a
   ! host-associated internal procedure as a callback on macOS/ARM64.
   abstract interface
-     subroutine finalizer_i(kind, handle)
-       integer, intent(in) :: kind, handle
+     subroutine finalizer_i(kind, handle, extra)
+       integer, intent(in) :: kind, handle, extra
      end subroutine finalizer_i
   end interface
   procedure(finalizer_i), pointer, save :: obj_finalizer => null()
@@ -1189,8 +1189,11 @@ contains
        ! Tell the owner before the slot is reused, so a buffer or a
        ! host handle is released exactly once, here, rather than
        ! leaking for the life of the process.
+       ! `i2` too: a native array SLICE shares its parent's buffer
+       ! handle rather than owning one, and only the owner may release
+       ! it. i2 is how GCEval tells the two apart -- see OBJ_ARRAY there.
        if (associated(obj_finalizer) .and. obj_pool(i)%kind /= 0) &
-            call obj_finalizer(obj_pool(i)%kind, obj_pool(i)%i1)
+            call obj_finalizer(obj_pool(i)%kind, obj_pool(i)%i1, obj_pool(i)%i2)
        do j = 1, OBJ_SLOTS
           obj_pool(i)%slot(j) = gc_nil()
        end do

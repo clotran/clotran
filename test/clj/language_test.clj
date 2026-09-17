@@ -243,7 +243,11 @@
 ;; flattening is column-major, done in one place.
 (def m2 (f/make-array "int4" 2 3))
 (check "rank-2 shape"  (f/array-shape m2) [2 3])
-(check "rank-2 length" (f/alength m2) 6)
+;; alength is the OUTER length, not the element count: clj says
+;; (alength (make-array Integer/TYPE 2 3)) is 2, because a Java [[I
+;; is an array of 2 rows. Ours is one rank-2 block, so the same
+;; answer comes from the first extent.
+(check "rank-2 length" (f/alength m2) 2)
 (do (f/aset m2 1 2 7))
 (check "rank-2 aset/aget" [(f/aget m2 1 2) (f/aget m2 0 0)] [7 0])
 
@@ -257,6 +261,54 @@
 (def va (f/make-array "value" 2))
 (do (f/aset va 0 :hello))
 (check "value array" [(f/aget va 0) (f/aget va 1)] [:hello nil])
+
+;;; ---- Clojure's OWN array API ------------------------------------
+;;
+;; Not f/make-array: clojure.core's make-array/aget/aset/alength,
+;; running unmodified over the Fortran backing. They are written
+;; against java.lang.reflect.Array and clojure.lang.RT, so making
+;; those work is what lets core.clj's array code run rather than be
+;; shadowed. Every expected value below is what `clj` printed for
+;; the same forms.
+;;
+;; aset-int, not aset: on a primitive array the JVM's Array/set
+;; refuses a boxed Long, so real Clojure throws here too.
+
+(def cm (make-array Integer/TYPE 2 3))
+(do (aset-int cm 0 0 10) (aset-int cm 0 1 11) (aset-int cm 0 2 12)
+    (aset-int cm 1 0 20) (aset-int cm 1 1 21) (aset-int cm 1 2 22))
+;; The OUTER length -- 2 rows -- not 6 elements.
+(check "core alength"   (alength cm) 2)
+(check "core aget full" [(aget cm 1 2) (aget cm 0 0)] [22 10])
+
+;; core.clj's aget is ([array idx & idxs] (apply aget (aget array idx) idxs)),
+;; so (aget cm 0) MUST hand back something that is itself an array.
+(def crow (aget cm 0))
+(check "a row is an array" [(alength crow) (aget crow 0) (aget crow 2)] [3 10 12])
+(check "row then index"    (aget (aget cm 1) 2) 22)
+;; and it is a VIEW, not a copy -- writing through it is visible in
+;; the parent. This is the assertion that fails if slices ever start
+;; copying.
+(do (aset-int crow 1 999))
+(check "a row is a view" (aget cm 0 1) 999)
+
+;; aclone takes the shape of the VIEW, not of the buffer behind it,
+;; and shares nothing with it afterwards.
+(def cclone (aclone crow))
+(do (aset-int cclone 0 -1))
+(check "aclone of a row"
+       [(alength cclone) (aget cclone 0) (aget crow 0) (aget cclone 1)]
+       [3 -1 10 999])
+
+;; An Object array is the `value` kind: it holds clotran values, so
+;; plain aset works and a fresh slot reads nil, not 0.
+(def cobj (make-array Object 2))
+(do (aset cobj 0 :hello))
+(check "object array" [(aget cobj 0) (aget cobj 1) (alength cobj)] [:hello nil 2])
+
+(def cdbl (make-array Double/TYPE 2))
+(do (aset-double cdbl 1 2.5))
+(check "double array" [(aget cdbl 0) (aget cdbl 1)] [0.0 2.5])
 
 ;;; ---- printing a function -----------------------------------------
 ;;

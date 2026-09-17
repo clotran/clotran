@@ -124,6 +124,8 @@ module GCEval
   integer, parameter :: B_ISREALIZED = 163
   integer, parameter :: B_MAKE_ARRAY = 164, B_AGET = 165, B_ASET = 166
   integer, parameter :: B_ALENGTH = 167, B_ARRAY_KIND = 168, B_ARRAY_SHAPE = 169
+  integer, parameter :: B_ANEWINST = 170, B_ACLONE = 171, B_PREPRET = 172
+  integer, parameter :: B_COMPTYPE = 173
 
   ! The auto-gensym map for the syntax-quote currently being expanded,
   ! and the counter that makes each name unique. GENSYM_ENV in
@@ -1729,11 +1731,17 @@ contains
   ! Only kinds that own something outside the heap need a case here.
   ! Everything else is pure gc_value and the sweep has already done
   ! the whole job by returning the slot.
-  subroutine gce_finalize_obj(kind, handle)
-    integer, intent(in) :: kind, handle
+  subroutine gce_finalize_obj(kind, handle, extra)
+    integer, intent(in) :: kind, handle, extra
     select case (kind)
     case (OBJ_ARRAY)
-       call gcna_release(handle)
+       ! extra is i2, the base_offset -- and -1 is the sentinel a
+       ! SLICE can never carry, since its own base_offset is always
+       ! >= 0. Only the array that set i2=-1 at construction owns the
+       ! handle; a slice shares it and must not release what it does
+       ! not own, or a still-live parent's buffer is freed out from
+       ! under it.
+       if (extra < 0) call gcna_release(handle)
     case (OBJ_REGEX, OBJ_MATCHER)
        ! Both hold an ICU object, and a Matcher holds a subject-text
        ! buffer as well -- ICU keeps only a shallow reference to that,
@@ -2559,6 +2567,13 @@ contains
        ! protocol dispatch can key on. It answered nil for a while,
        ! which silently emptied every protocol's impl lookup.
        out = native(B_TYPE, "clotran-type", [roots])
+    case ("getComponentType")
+       ! The element type of an array CLASS. clotran has one class
+       ! keyword for every array -- :array, not [I versus [D -- so
+       ! there is nothing to answer, and the only caller is aget's
+       ! (Reflector/prepRet (.getComponentType (class array)) ...),
+       ! which ignores it because nothing here is boxed.
+       out = native(B_ALWAYS_NIL, "clotran-nil", [roots])
     case ("getClassLoader", "getContextClassLoader")
        out = native(B_ALWAYS_NIL, "clotran-nil", [roots])
     case ("isRealized"); out = native(B_ISREALIZED, "clotran-is-realized", [roots])
@@ -3166,6 +3181,9 @@ contains
          gc_ref_is(sym%ref, "clojure.lang.MapEntry") .or. &
          gc_ref_is(sym%ref, "clojure.lang.EnumerationSeq") .or. &
          gc_ref_is(sym%ref, "clojure.lang.Delay") .or. &
+         gc_ref_is(sym%ref, "java.lang.reflect.Array") .or. &
+         gc_ref_is(sym%ref, "Array") .or. &
+         gc_ref_is(sym%ref, "clojure.lang.Reflector") .or. &
          gc_ref_is(sym%ref, "clojure.lang.LazilyPersistentVector") .or. &
          gc_ref_is(sym%ref, "LazilyPersistentVector") .or. &
          gc_ref_is(sym%ref, "clojure.lang.PersistentHashMap") .or. &
@@ -3217,6 +3235,34 @@ contains
        if (mname == "creator") then
           out = native(B_LIST, "list", [roots])
           return
+       end if
+    else if (cls == "java.lang.reflect.Array" .or. cls == "Array") then
+       ! core.clj's own make-array, aget, aset and the aset-int family
+       ! are written against these, so implementing them is what makes
+       ! Clojure's array code work rather than shadowing it.
+       !
+       ! Every typed variant -- getInt, setDouble, getBoolean -- shares
+       ! one implementation, because those exist on the JVM to avoid
+       ! boxing and clotran has no boxing to avoid. The element's kind
+       ! is the array's, not the accessor's name.
+       select case (mname)
+       case ("newInstance")
+          out = native(B_ANEWINST, "clotran-array-new", [roots]); return
+       case ("get", "getInt", "getLong", "getDouble", "getFloat", &
+             "getBoolean", "getChar", "getByte", "getShort")
+          out = native(B_AGET, "aget", [roots]); return
+       case ("set", "setInt", "setLong", "setDouble", "setFloat", &
+             "setBoolean", "setChar", "setByte", "setShort")
+          out = native(B_ASET, "aset", [roots]); return
+       case ("getLength")
+          out = native(B_ALENGTH, "alength", [roots]); return
+       end select
+    else if (cls == "clojure.lang.Reflector") then
+       ! prepRet UNBOXES on the JVM -- it turns a boxed Integer back
+       ! into a primitive for a known component type. There is nothing
+       ! boxed here, so the value it is handed is already the answer.
+       if (mname == "prepRet") then
+          out = native(B_PREPRET, "clotran-prep-ret", [roots]); return
        end if
     else if (cls == "clojure.lang.Delay") then
        ! (force x) is Delay/force, which derefs a delay and hands
@@ -3428,6 +3474,17 @@ contains
        select case (mname)
        case ("baseLoader")
           out = native(B_BASELOADER, "clotran-base-loader", [roots]); return
+       ! The array accessors alength, aget, aset and aclone inline to
+       ! RT/... rather than to Array/..., so both spellings have to
+       ! reach the same place.
+       case ("alength")
+          out = native(B_ALENGTH, "alength", [roots]); return
+       case ("aget")
+          out = native(B_AGET, "aget", [roots]); return
+       case ("aset")
+          out = native(B_ASET, "aset", [roots]); return
+       case ("aclone")
+          out = native(B_ACLONE, "aclone", [roots]); return
        ! The primitive casts. Fortran has its own integer and real
        ! kinds and clotran has one of each, so the width-named casts
        ! all land on the same two conversions.
@@ -5520,6 +5577,60 @@ contains
        else
           out = a
        end if
+    case (B_ANEWINST)
+       out = array_new_instance(vs_get(base + 1), [vs_get(base + 1)])
+
+    case (B_PREPRET)
+       ! (prepRet component-type value) -- the value, unchanged.
+       out = gcv_nth(args, 1)
+
+    case (B_ACLONE)
+       ! A COPY, sharing nothing. Clojure's aclone is shallow, which
+       ! for a value array means the elements are shared and the
+       ! storage is not -- the same thing this does.
+       block
+         type(gc_value) :: a0, run, e
+         character(len=:), allocatable :: kn, err
+         integer, allocatable :: ext(:), lows(:)
+         integer :: h, h2, k, n2
+         a0 = strip_meta(gcv_nth(args, 0))
+         if (gc_kind(a0) /= OBJ_ARRAY) then
+            call fail("aclone: not an array")
+            call vs_leave(base)
+            return
+         end if
+         call vs_set(base + 2, a0)
+         h = gc_i1(vs_get(base + 2))
+         kn = gcna_kind(h)
+         ! The clone has the shape of the VIEW, not of the buffer
+         ! behind it: (aclone (aget m 0)) on a 2x3 is a fresh length-3
+         ! array, the way Java's aclone of one row of a [[I is. Taking
+         ! gcna_extents(h) here cloned the whole 2x3 instead. Every
+         ! dimension of a fresh array is 0-based, so lows is zeros
+         ! rather than the source's.
+         ext = array_own_extents(vs_get(base + 2))
+         allocate(lows(size(ext)))
+         lows = 0
+         h2 = gcna_new(kn, ext, lows, err)
+         if (h2 == 0) then
+            call fail(err)
+            call vs_leave(base)
+            return
+         end if
+         n2 = gcna_total(h2)
+         run = gc_nil()
+         if (kn == "value") run = gc_vec(max(1, n2), [vs_get(base + 2)])
+         call vs_set(base + 3, run)
+         out = gc_obj(OBJ_ARRAY, [vs_get(base + 3)], &
+              [vs_get(base + 2), vs_get(base + 3)])
+         call gc_set_i1(out, h2)
+         call gc_set_i2(out, -1) ! owns the handle -- not a slice
+         do k = 1, n2
+            e = array_elem(vs_get(base + 2), k)
+            call array_put(out, k, e)
+         end do
+       end block
+
     case (B_MAKE_ARRAY)
        ! (make-array kind extent ...) -- (make-array "real8" 3 4) is a
        ! 3x4 real(8), zero-filled, lower bound 0 on every dimension.
@@ -5558,16 +5669,24 @@ contains
          if (kname == "value") run = gc_vec(max(1, gcna_total(h)), [vs_get(base + 1)])
          out = gc_obj(OBJ_ARRAY, [run], [vs_get(base + 1), run])
          call gc_set_i1(out, h)
+         call gc_set_i2(out, -1) ! owns the handle -- not a slice
        end block
 
     case (B_ALENGTH)
+       ! Clojure's alength on a multi-dimensional array is the
+       ! OUTER length -- (alength (make-array Integer/TYPE 2 3)) is
+       ! 2, not 6, verified against clj. That is the array's own
+       ! FIRST extent, which for rank 1 is also the total -- the
+       ! two only look like the same rule by coincidence at rank 1.
        block
          type(gc_value) :: a0
+         integer, allocatable :: ext(:)
          a0 = strip_meta(gcv_nth(args, 0))
          if (gc_kind(a0) /= OBJ_ARRAY) then
             call fail("alength: not an array")
          else
-            out = gc_int(gcna_total(gc_i1(a0)))
+            ext = array_own_extents(a0)
+            out = gc_int(ext(1))
          end if
        end block
 
@@ -5591,7 +5710,7 @@ contains
          if (gc_kind(a0) /= OBJ_ARRAY) then
             call fail("array-shape: not an array")
          else
-            ext = gcna_extents(gc_i1(a0))
+            ext = array_own_extents(a0)
             acc = gcv_empty([vs_get(base + 1)])
             call vs_set(base + 2, acc)
             do k = 1, size(ext)
@@ -5603,14 +5722,18 @@ contains
        end block
 
     case (B_AGET, B_ASET)
-       ! (aget a i j ...) and (aset a i j ... v). Subscripts are per
-       ! DIMENSION, so a rank-2 array is (aget a 1 2) rather than a
-       ! flattened index -- the flattening is column-major and belongs
-       ! in one place, which is gcna_index.
+       ! (aget a i j ...) and (aset a i j ... v). FEWER subscripts than
+       ! the array's own rank is not an error: Clojure's own aget/aset
+       ! always pass exactly one index and recur --
+       !   ([array idx & idxs] (apply aget (aget array idx) idxs))
+       ! -- so (aget m 1) on a rank-2 array must hand back something
+       ! that is ITSELF an array. That is array_make_slice: a VIEW
+       ! sharing the same buffer, not a copy. See its header comment
+       ! for the column-major arithmetic.
        block
          type(gc_value) :: a0, val, tmp2
          integer, allocatable :: subs(:)
-         integer :: k, h, at, nsub, iv
+         integer :: k, h, at, nsub, iv, own_rank, foff, fstr
          real(gc_dp) :: rv
          logical :: ok
          character(len=:), allocatable :: kn
@@ -5633,12 +5756,39 @@ contains
             tmp2 = gcv_nth(args, k)
             subs(k) = tmp2%ival
          end do
-         at = gcna_index(h, subs)
-         if (at == 0) then
+
+         own_rank = array_own_rank(a0)
+         if (nsub > own_rank) then
+            call fail("aget/aset: too many indices")
+            call vs_leave(base)
+            return
+         end if
+
+         if (nsub < own_rank) then
+            ! A SLICE over the remaining dimensions. aset never
+            ! assigns a whole sub-array at once -- core.clj's own
+            ! multi-arg aset always slices down to a full index before
+            ! writing -- so this path is aget-only.
+            if (id == B_ASET) then
+               call fail("aset: not enough indices")
+               call vs_leave(base)
+               return
+            end if
+            out = array_make_slice(a0, subs, [vs_get(base + 1)])
+            call vs_leave(base)
+            return
+         end if
+
+         ! Every own dimension is specified: fold to the REAL buffer
+         ! position, whether a0 is a base array or already a slice.
+         call array_fold(a0, subs, foff, fstr, ok)
+         if (.not. ok) then
             call fail("aget/aset: index out of bounds")
             call vs_leave(base)
             return
          end if
+         at = foff + 1
+
          kn = gcna_kind(h)
          if (kn == "value") then
             ! The run is the storage. gc_vec_set is O(1) and the
@@ -7545,6 +7695,7 @@ contains
        ! (class x) is the keyword a protocol's :impls map is keyed by
        ! and extend-type on the type reaches it.
        case (OBJ_DELAY);   s = "delay"
+       case (OBJ_ARRAY);   s = "array"
        case (OBJ_INST);    s = class_text(v)
        case (OBJ_TYPE);    s = "class"
        case default;       s = "object"
@@ -7590,6 +7741,307 @@ contains
        s = gcp_str(v, .false.)
     end if
   end function to_string_text
+
+  ! The Fortran element kind a Clojure type argument asks for.
+  !
+  ! `make-array` takes a CLASS -- (make-array Integer/TYPE 3) -- and a
+  ! class literal evaluates to a keyword here, so this is a keyword to
+  ! kind-name table. The primitive types map onto real Fortran kinds,
+  ! which is the whole point: an int array IS integer(4), contiguous,
+  ! and can be handed to a Fortran routine.
+  !
+  ! Everything else -- Object, String, a deftype's own class -- becomes
+  ! "value", whose storage is a GC run rather than a typed buffer,
+  ! because its elements are clotran values holding heap references.
+  ! Clojure's Object[] is that case.
+  function array_kind_for(tv) result(kind)
+    type(gc_value), intent(in) :: tv
+    character(len=:), allocatable :: kind
+    character(len=:), allocatable :: t
+    type(gc_value) :: v
+    v = strip_meta(tv)
+    kind = "value"
+    if (v%tag /= GCT_KEY) return
+    t = gc_ref_text(v%ref)
+    select case (t)
+    case ("Integer/TYPE", "int");      kind = "int4"
+    case ("Long/TYPE", "long");        kind = "int8"
+    case ("Double/TYPE", "double");    kind = "real8"
+    case ("Float/TYPE", "float");      kind = "real4"
+    case ("Boolean/TYPE", "boolean");  kind = "logical"
+    case ("Short/TYPE", "Byte/TYPE");  kind = "int4"
+    end select
+  end function array_kind_for
+
+  ! (java.lang.reflect.Array/newInstance type n) and the N-dimensional
+  ! form, whose second argument is itself an int ARRAY -- core.clj's own
+  ! make-array builds one with aset-int and passes it, so this has to
+  ! accept both shapes.
+  !
+  ! Clojure's N-dimensional array is an array OF ARRAYS; ours is one
+  ! rank-N Fortran array. DEVIATIONS 24 is what that costs (no ragged
+  ! rows) and PLAN item 9 is what it buys (one contiguous column-major
+  ! block, which is what a BLAS routine takes).
+  recursive function array_new_instance(args, roots) result(out)
+    type(gc_value), intent(in) :: args
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, dimv, e
+    character(len=:), allocatable :: kind, err
+    integer, allocatable :: ext(:), lows(:)
+    integer :: nd, k, h
+    type(gc_value) :: run
+
+    out = gc_nil()
+    kind = array_kind_for(gcv_nth(args, 0))
+    dimv = strip_meta(gcv_nth(args, 1))
+
+    if (gc_kind(dimv) == OBJ_ARRAY) then
+       nd = gcna_total(gc_i1(dimv))
+       allocate(ext(nd), lows(nd))
+       do k = 1, nd
+          e = array_elem(dimv, k)
+          ext(k) = e%ival
+          lows(k) = 0
+       end do
+    else
+       allocate(ext(1), lows(1))
+       ext(1) = dimv%ival
+       lows(1) = 0
+    end if
+
+    h = gcna_new(kind, ext, lows, err)
+    if (h == 0) then
+       call fail(err)
+       return
+    end if
+    run = gc_nil()
+    if (kind == "value") run = gc_vec(max(1, gcna_total(h)), roots)
+    out = gc_obj(OBJ_ARRAY, [run], [roots, [run]])
+    call gc_set_i1(out, h)
+    call gc_set_i2(out, -1) ! owns the handle -- not a slice
+  end function array_new_instance
+
+  ! --- array views: a base array, or a SLICE sharing its buffer -----
+  !
+  ! Clojure's own aget/aset always pass exactly ONE index per call and
+  ! recur: core.clj's aget is
+  !   ([array idx & idxs] (apply aget (aget array idx) idxs))
+  ! so (aget m 1 2) on a rank-2 array is (aget (aget m 1) 2), and
+  ! (aget m 1) has to hand back something that is itself an array --
+  ! Clojure's own [[I is exactly that, one real object per row.
+  !
+  ! Ours is one Fortran buffer, so "the row at index 1" cannot be a
+  ! second buffer -- it has to be a VIEW over the same one. In
+  ! column-major, fixing the FIRST index of a(d1,d2,...,dR) gives
+  ! elements at flat positions {i1 + k*d1 : k=0..(d2*...*dR - 1)} --
+  ! a uniformly STRIDED sequence, not a contiguous block. Measured in
+  ! NOTES.md's Fortran experiment and folded here in general form:
+  ! every array view is (handle, offset, stride, extents), where a
+  ! BASE array is the degenerate view (0, 1, its own full extents).
+  !
+  ! WHO OWNS THE HANDLE. A slice shares its parent's handle rather
+  ! than claiming one of its own, so only ONE of them may release it
+  ! when collected -- releasing on the wrong one frees a live parent's
+  ! buffer or double-frees an already-dead one. i2 is the marker:
+  ! -1 means "I own this handle" (a base array's own base_offset would
+  ! otherwise be a plain 0, so -1 is never mistaken for one); any
+  ! offset >= 0 means "I am a view, I do not own it." See
+  ! gce_finalize_obj.
+
+  ! Whether `arr` is a slice (has its own offset/stride/extents in
+  ! slot 2) rather than a base array (whose shape lives in the
+  ! registry under its handle).
+  logical function array_is_slice(arr)
+    type(gc_value), intent(in) :: arr
+    array_is_slice = gcv_is(gc_slot(arr, 2))
+  end function array_is_slice
+
+  integer function array_own_offset(arr)
+    type(gc_value), intent(in) :: arr
+    if (array_is_slice(arr)) then
+       array_own_offset = gc_i2(arr)
+    else
+       array_own_offset = 0
+    end if
+  end function array_own_offset
+
+  integer function array_own_stride(arr)
+    type(gc_value), intent(in) :: arr
+    type(gc_value) :: sl
+    type(gc_value) :: elt
+    if (array_is_slice(arr)) then
+       sl = gc_slot(arr, 2)
+       elt = gcv_nth(sl, 0)
+       array_own_stride = elt%ival
+    else
+       array_own_stride = 1
+    end if
+  end function array_own_stride
+
+  integer function array_own_rank(arr)
+    type(gc_value), intent(in) :: arr
+    type(gc_value) :: sl
+    if (array_is_slice(arr)) then
+       sl = gc_slot(arr, 2)
+       array_own_rank = gcv_count(sl) - 1
+    else
+       array_own_rank = gcna_rank(gc_i1(arr))
+    end if
+  end function array_own_rank
+
+  function array_own_extents(arr) result(e)
+    type(gc_value), intent(in) :: arr
+    integer, allocatable :: e(:)
+    type(gc_value) :: sl, elt
+    integer :: i
+    if (array_is_slice(arr)) then
+       sl = gc_slot(arr, 2)
+       allocate(e(gcv_count(sl) - 1))
+       do i = 1, size(e)
+          elt = gcv_nth(sl, i)
+          e(i) = elt%ival
+       end do
+    else
+       e = gcna_extents(gc_i1(arr))
+    end if
+  end function array_own_extents
+
+  ! Consumes the leading `size(subs)` dimensions of arr's OWN shape,
+  ! folding them into a single (offset, stride) pair -- the arithmetic
+  ! verified in the Fortran experiment: consuming one more dimension
+  ! multiplies the running stride by that dimension's extent and adds
+  ! subs(k)*stride to the running offset. `ok` is false on an
+  ! out-of-range subscript or a wrong number of them.
+  subroutine array_fold(arr, subs, out_offset, out_stride, ok)
+    type(gc_value), intent(in) :: arr
+    integer, intent(in) :: subs(:)
+    integer, intent(out) :: out_offset, out_stride
+    logical, intent(out) :: ok
+    integer, allocatable :: extents(:)
+    integer :: k, own_rank
+    ok = .false.
+    own_rank = array_own_rank(arr)
+    if (size(subs) > own_rank) return
+    extents = array_own_extents(arr)
+    out_offset = array_own_offset(arr)
+    out_stride = array_own_stride(arr)
+    do k = 1, size(subs)
+       if (subs(k) < 0 .or. subs(k) >= extents(k)) return
+       out_offset = out_offset + subs(k) * out_stride
+       out_stride = out_stride * extents(k)
+    end do
+    ok = .true.
+  end subroutine array_fold
+
+  ! A SLICE consuming the leading `size(subs)` dimensions of `arr`,
+  ! sharing its handle (and its value-run, for a `value` array) rather
+  ! than copying anything. `size(subs)` must be less than arr's own
+  ! rank -- a full set of subscripts is an ELEMENT, not a slice, and
+  ! callers check that first.
+  function array_make_slice(arr, subs, roots) result(out)
+    type(gc_value), intent(in) :: arr
+    integer, intent(in) :: subs(:)
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, shapevec, tmp
+    integer, allocatable :: extents(:)
+    integer :: new_offset, new_stride, k, own_rank
+    logical :: ok
+    integer :: base
+
+    out = gc_nil()
+    call array_fold(arr, subs, new_offset, new_stride, ok)
+    if (.not. ok) return
+
+    base = vs_enter(3)
+    call vs_set(base + 1, arr)
+    own_rank = array_own_rank(vs_get(base + 1))
+    extents = array_own_extents(vs_get(base + 1))
+
+    tmp = gcv_empty([vs_get(base + 1), roots])
+    call vs_set(base + 2, tmp)
+    tmp = gcv_conj(vs_get(base + 2), gc_int(new_stride), &
+         [vs_get(base + 1), vs_get(base + 2), roots])
+    call vs_set(base + 2, tmp)
+    do k = size(subs) + 1, own_rank
+       tmp = gcv_conj(vs_get(base + 2), gc_int(extents(k)), &
+            [vs_get(base + 1), vs_get(base + 2), roots])
+       call vs_set(base + 2, tmp)
+    end do
+    shapevec = vs_get(base + 2)
+    call vs_set(base + 3, shapevec)
+
+    ! Slot 1 (the value-run, for a `value`-kind array) is SHARED with
+    ! the parent, unchanged -- the run holds every element of the
+    ! whole base array, and this view's offset/stride already say
+    ! which of them are ours.
+    out = gc_obj(OBJ_ARRAY, [gc_slot(vs_get(base + 1), 1), vs_get(base + 3)], &
+         [vs_get(base + 1), vs_get(base + 3), roots])
+    call gc_set_i1(out, gc_i1(vs_get(base + 1)))
+    call gc_set_i2(out, new_offset)
+    call vs_leave(base)
+  end function array_make_slice
+
+  ! Writes one element, by a 1-based index into the array's OWN
+  ! (possibly sliced) column-major shape. Translated to the real
+  ! buffer/run position via array_own_offset/array_own_stride, which
+  ! is what makes this correct whether `arr` is a base array or a
+  ! view: the array's own elements, in its own column-major order,
+  ! sit at real position = own_offset + own_stride*(k-1) + 1 -- a
+  ! single linear map, not a per-dimension decomposition, because
+  ! that is what folding a column-major layout through a fixed prefix
+  ! of indices reduces to. Verified in the Fortran experiment this
+  ! module's header cites.
+  subroutine array_put(arr, at, val)
+    type(gc_value), intent(in) :: arr, val
+    integer, intent(in) :: at
+    character(len=:), allocatable :: kn
+    type(gc_value) :: v
+    integer :: h, real_at
+    logical :: ok
+    if (gc_kind(arr) /= OBJ_ARRAY) return
+    h = gc_i1(arr)
+    real_at = array_own_offset(arr) + array_own_stride(arr) * (at - 1) + 1
+    kn = gcna_kind(h)
+    v = strip_meta(val)
+    if (kn == "value") then
+       call gc_vec_set(gc_slot(arr, 1), real_at, v)
+    else if (kn == "logical") then
+       call gcna_set_logical(h, real_at, truthy(v), ok)
+    else if (v%tag == GCT_INT) then
+       call gcna_set_int(h, real_at, v%ival, ok)
+    else
+       call gcna_set_real(h, real_at, num_dbl(v), ok)
+    end if
+  end subroutine array_put
+
+  ! One element, by a 1-based index into the array's OWN shape -- see
+  ! array_put, its partner.
+  function array_elem(arr, at) result(out)
+    type(gc_value), intent(in) :: arr
+    integer, intent(in) :: at
+    type(gc_value) :: out
+    character(len=:), allocatable :: kn
+    integer :: h, iv, real_at
+    real(gc_dp) :: rv
+    logical :: lv, ok
+    out = gc_nil()
+    if (gc_kind(arr) /= OBJ_ARRAY) return
+    h = gc_i1(arr)
+    real_at = array_own_offset(arr) + array_own_stride(arr) * (at - 1) + 1
+    kn = gcna_kind(h)
+    if (kn == "value") then
+       out = gc_vec_get(gc_slot(arr, 1), real_at)
+    else if (kn == "logical") then
+       call gcna_get_logical(h, real_at, lv, ok)
+       if (ok) out = gc_bool(lv)
+    else if (kn == "int4" .or. kn == "int8") then
+       call gcna_get_int(h, real_at, iv, ok)
+       if (ok) out = gc_int(iv)
+    else
+       call gcna_get_real(h, real_at, rv, ok)
+       if (ok) out = gc_real(rv)
+    end if
+  end function array_elem
 
   ! The class name of a type object, or of an instance's type.
   ! A function result cannot be the left of a %, so the slot walk
