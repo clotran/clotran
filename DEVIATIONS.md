@@ -650,16 +650,16 @@ Closing it would mean tracking a declared element type per call site
 and rejecting a value whose Clojure type is not exactly it, which is
 re-creating boxing in order to reproduce its error message.
 
-## 26. Integers are 32-bit, and there is no numeric tower
+## 26. Integers are 32-bit, and there is no arbitrary precision
 
-The reader now agrees with Clojure on every number SHAPE (hex, octal,
+The reader agrees with Clojure on every number SHAPE (hex, octal,
 explicit radix, exponents -- see 25's neighbours in
-`test/clj/language_test.clj`). What is missing is the tower underneath,
-and it shows up four ways. Measured, clotran first, `clj` second:
+`test/clj/language_test.clj`), and ratios are exact. What is missing is
+the WIDTH underneath, and it shows up three ways. Measured, clotran
+first, `clj` second:
 
     9999999999                 1410065407        9999999999
     2147483648                 -2147483648       2147483648
-    (/ 1 3)                    0.3333333333      1/3
     (* 9999999999 9999999999)  -1158137855       throws "long overflow"
 
 The first two are the bad ones: a literal too large for a Fortran
@@ -668,11 +668,24 @@ failure mode CLAUDE.md singles out -- a wrong answer that looks
 plausible -- and it is worse than the other two, which are merely a
 different type and a missing exception.
 
-`42N`, `1.5M` and `3/4` read as SYMBOLS, so they resolve to nothing and
-fail where they are used rather than where they are read. They are not
-read as 42, 1.5 and 0.75: answering with a near-miss of a different
-type would be the same silent-wrong-answer mistake as the truncation
-above.
+`42N` and `1.5M` read as SYMBOLS, so they resolve to nothing and fail
+where they are used rather than where they are read. They are not read
+as 42 and 1.5: answering with a near-miss of a different type would be
+the same silent-wrong-answer mistake as the truncation above.
+
+`3/4` used to be in that list and is not any more -- there is a real
+Ratio now, exact and normalized, and `(/ 1 3)` is `1/3` rather than
+`0.3333333333`. What remains is one difference of TYPE, not of value:
+when ratio arithmetic collapses to a whole number Clojure answers a
+BigInt and clotran answers an integer.
+
+    (+ 1/2 1/2)   clotran 1    clj 1N
+    (/ 1/2 1/4)   clotran 2    clj 2N
+
+That is Clojure's Ratio arithmetic running through BigInteger, so the
+result carries BigInt's type out with it. Both agree the value is one
+and two, and `(= 1 1N)` is true, so it shows only in `type` and in
+printing. It goes away with BigInt and not before.
 
 Raising at READ time was tried and reverted, and the reason is worth
 keeping. These are valid Clojure, so a reader error is not merely
@@ -687,9 +700,15 @@ The two real fixes are a Ratio type, or per-form reader recovery so
 that one unreadable form does not abort a load. Both are larger than
 the reader.
 
-Closing this is a numeric-tower project -- 64-bit integers first (which
-alone would fix the truncation, since Clojure's own default is `long`),
-then arbitrary precision, a rational type, and promotion rules in
-`Numbers`. Widening to 64 bits is much the smaller half and is worth
-doing on its own: it is the difference between a wrong answer and a
-merely limited one.
+The rational type is done. What is left is width: 64-bit integers
+first -- which alone would fix the truncation, since Clojure's own
+default is `long` -- and then arbitrary precision with its promotion
+rules. Widening to 64 bits is much the smaller half and is worth doing
+on its own: it is the difference between a wrong answer and a merely
+limited one.
+
+A ratio narrows on the same edge, and sooner: its numerator and
+denominator are both `integer`, and the intermediate of a sum is the
+product of the denominators. Reducing at every step rather than once
+at the end keeps that as small as it can be, but it does not remove
+the ceiling.

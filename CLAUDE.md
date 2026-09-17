@@ -70,6 +70,23 @@ arrays. Two lines of `clj` did:
 So the order is: clojuredocs to find out what to ask, `clj` to find out
 the answer.
 
+**Do this per FUNCTION, before implementing it, and test VALUES.**
+The reader's number patterns went in having checked 29 literals
+against `clj` -- every shape, no values -- and `(* 2.0 3)` was
+answering 0 the whole time, because `+`, `-`, `*`, `quot` and `rem`
+read the integer field and ignored a real operand entirely. A form
+being ACCEPTED is not the check; the answer being right is.
+
+Reading the page first is what turns up the cases you would not
+invent. Two came straight from the docstrings: `(/ x)` with one
+argument is `1/numerator`, not identity, and `*` THROWS on overflow
+rather than wrapping. Neither was on any list of mine.
+
+One practical limit: the community examples render with JavaScript,
+so a plain fetch returns the docstring and signatures and not the
+examples. The docstring is still worth the fetch, and `clj` supplies
+the values either way.
+
 **`~/jborden/clojure`** -- a clone of `clojure/clojure` pinned to
 `71b4623d`, the SAME commit as the vendored `core.clj`. Cite file and
 method. Reading the Java of one version while running the core.clj of
