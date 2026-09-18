@@ -5648,26 +5648,36 @@ contains
   !
   ! A zero step is deliberately not special-cased: neither guard fires,
   ! so it yields its start forever, which is what Clojure does.
+  ! lo, hi and stp are VALUES, not Fortran integers. Clojure has
+  ! two range classes -- LongRange and Range -- and core.clj picks
+  ! between them on (int? x); reading %ival regardless meant
+  ! (range 0.0 360.0 5.0) read every bound as 0 and yielded zeros
+  ! forever. Carrying the values through means the arithmetic
+  ! decides the type, so a double range counts in doubles and a
+  ! ratio step stays exact.
   recursive function range_cell(lo, hi, stp, roots) result(out)
-    integer, intent(in) :: lo, hi, stp
+    type(gc_value), intent(in) :: lo, hi, stp
     type(gc_value), intent(in) :: roots(:)
-    type(gc_value) :: out, frame, body, callf, thunk, tail
+    type(gc_value) :: out, frame, body, callf, thunk, tail, nxt
     integer :: base
+    real(gc_dp) :: sd
 
     out = gcl_empty(roots)
-    if (stp > 0 .and. lo >= hi) return
-    if (stp < 0 .and. lo <= hi) return
+    sd = num_dbl(stp)
+    if (sd > 0.0_gc_dp .and. .not. num_lt(lo, hi)) return
+    if (sd < 0.0_gc_dp .and. .not. num_lt(hi, lo)) return
 
     base = vs_enter(3)
     frame = gce_new(gc_nil(), roots)
     call vs_set(base + 1, frame)
     ! The head is lo; the frame carries where the TAIL starts.
+    nxt = num_add2(lo, stp, [vs_get(base + 1)])
     call gce_set(vs_get(base + 1), gc_sym("__lo", [vs_get(base + 1)]), &
-         gc_int(lo + stp), [vs_get(base + 1)])
+         nxt, [vs_get(base + 1)])
     call gce_set(vs_get(base + 1), gc_sym("__hi", [vs_get(base + 1)]), &
-         gc_int(hi), [vs_get(base + 1)])
+         hi, [vs_get(base + 1)])
     call gce_set(vs_get(base + 1), gc_sym("__st", [vs_get(base + 1)]), &
-         gc_int(stp), [vs_get(base + 1)])
+         stp, [vs_get(base + 1)])
 
     ! (clojure.lang.Range/create __lo __hi __st)
     callf = gcl_empty([vs_get(base + 1)])
@@ -5692,11 +5702,30 @@ contains
          [vs_get(base + 3)])
     call gc_set_i1(tail, LAZY_PENDING)
     call vs_set(base + 3, tail)
-    out = gc_obj(OBJ_LAZY, [gc_nil(), gc_int(lo), vs_get(base + 3)], &
+    out = gc_obj(OBJ_LAZY, [gc_nil(), lo, vs_get(base + 3)], &
          [vs_get(base + 3)])
     call gc_set_i1(out, LAZY_CONS)
     call vs_leave(base)
   end function range_cell
+
+  ! a + b with Clojure's contagion: double beats ratio beats
+  ! integer. `range` is the only caller; everything else adds
+  ! through B_ADD.
+  function num_add2(a, b, roots) result(out)
+    type(gc_value), intent(in) :: a, b
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out
+
+    if (a%tag == GCT_REAL .or. b%tag == GCT_REAL) then
+       out = gc_real(num_dbl(a) + num_dbl(b))
+    else if (a%tag == GCT_RATIO .or. b%tag == GCT_RATIO) then
+       out = gc_ratio(gc_numerator(a) * gc_denominator(b) + &
+            gc_numerator(b) * gc_denominator(a), &
+            gc_denominator(a) * gc_denominator(b))
+    else
+       out = gc_int(a%ival + b%ival)
+    end if
+  end function num_add2
 
   recursive function iterate_cell(f, x, roots) result(out)
     type(gc_value), intent(in) :: f, x
@@ -7605,21 +7634,20 @@ contains
        ! (range end), (range start end) and (range start end step), the
        ! three arities Range/create has. LAZY -- see range_cell.
        block
-         type(gc_value) :: iv
-         integer :: lo, hi, stp
-         lo = 0; stp = 1
-         iv = strip_meta(gcv_nth(args, 0))
-         hi = int(iv%ival)
+         type(gc_value) :: lo, hi, stp
+         lo = gc_int(0)
+         stp = gc_int(1)
+         hi = strip_meta(gcv_nth(args, 0))
          if (n >= 2) then
             lo = hi
-            iv = strip_meta(gcv_nth(args, 1))
-            hi = int(iv%ival)
+            hi = strip_meta(gcv_nth(args, 1))
          end if
-         if (n >= 3) then
-            iv = strip_meta(gcv_nth(args, 2))
-            stp = int(iv%ival)
+         if (n >= 3) stp = strip_meta(gcv_nth(args, 2))
+         if (.not. (is_number(lo) .and. is_number(hi) .and. is_number(stp))) then
+            call fail("range: not a number")
+         else
+            out = range_cell(lo, hi, stp, [vs_get(base + 1)])
          end if
-         out = range_cell(lo, hi, stp, [vs_get(base + 1)])
        end block
     case (B_RUNTX)
        out = apply(gcv_nth(args, 0), gcv_empty([vs_get(base + 1)]))

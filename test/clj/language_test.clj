@@ -844,6 +844,26 @@
 ;; core_print's own use of it.
 (check "format like core_print" (format "0x%x " 255) "0xff ")
 
+
+;;; ---- range over more than longs ---------------------------------
+;; core.clj picks between LongRange/create and Range/create on
+;; (int? x); clotran has one builtin behind both, and it used to read
+;; the integer field regardless -- so every bound of a double range
+;; read as 0 and it yielded zeros forever. Values from `clj`.
+
+(check "double range"       (count (range 0.0 360.0 5.0)) 72)
+(check "double range head"  (take 5 (range 0.0 360.0 5.0)) '(0.0 5.0 10.0 15.0 20.0))
+(check "fractional step"    (range 0.0 1.0 0.25) '(0.0 0.25 0.5 0.75))
+(check "double end only"    (range 2.5) '(0 1 2))
+;; A ratio step stays exact rather than becoming a double.
+(check "ratio step"         (range 0 1 1/4) '(0 1/4 1/2 3/4))
+(check "ratio end"          (range 0 5/2) '(0 1 2))
+(check "negative step"      (range 10 0 -2) '(10 8 6 4 2))
+(check "negative double step" (range 10.0 0.0 -2.5) '(10.0 7.5 5.0 2.5))
+(check "integer range"      (range 0 10 2) '(0 2 4 6 8))
+(check "empty range"        (range 0 0) '())
+(check "infinite range"     (take 3 (range)) '(0 1 2))
+
 ;;; ---- report -----------------------------------------------------
 
 
