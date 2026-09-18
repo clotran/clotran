@@ -1167,6 +1167,37 @@
 (check "diff nested"         (ltdata/diff {:a {:b 1 :c 2}} {:a {:b 1 :c 3}})
                              [{:a {:c 2}} {:a {:c 3}} {:a {:b 1}}])
 
+
+;;; ---- a bad arity is an ArityException -----------------------------
+;; clotran said "no matching arity" through its internal error map,
+;; which no (catch SomeClass e) could match and which did not say how
+;; many arguments arrived or to whom. Clojure's wording, class and
+;; catchability, all checked against `clj`.
+
+(defn ltf0 [] 0)
+(defn ltf1 [a] a)
+(defn ltfm ([a] 1) ([a b] 2))
+
+(check "the message says how many"
+       (try (ltf0 1) (catch Throwable e (boolean (re-find #"Wrong number of args \(1\) passed to" (.getMessage e)))))
+       true)
+(check "and which function"
+       (try (ltf0 1) (catch Throwable e (boolean (re-find #"ltf0" (.getMessage e)))))
+       true)
+(check "too few"
+       (try (ltf1) (catch Throwable e (boolean (re-find #"Wrong number of args \(0\)" (.getMessage e)))))
+       true)
+(check "a multi-arity fn"
+       (try (ltfm 1 2 3) (catch Throwable e (boolean (re-find #"Wrong number of args \(3\)" (.getMessage e)))))
+       true)
+(check "catchable as ArityException"
+       (try (ltf0 1) :no (catch clojure.lang.ArityException e :arity)) :arity)
+;; ArityException extends IllegalArgumentException, which Clojure's own
+;; suite relies on.
+(check "and as IllegalArgumentException"
+       (try (ltf0 1) :no (catch IllegalArgumentException e :iae)) :iae)
+(check "the right arities still work" [(ltfm 1) (ltfm 1 2)] [1 2])
+
 ;;; ---- report -----------------------------------------------------
 
 

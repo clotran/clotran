@@ -794,6 +794,27 @@ contains
             ! root to an Unbound -- and defmulti turns on exactly that:
             ! (let [v# (def name)] (when-not (.hasRoot v#) ...)).
             if (has_value) call gc_set_i1(var, 1)
+            ! THE FUNCTION REMEMBERS ITS NAME, in the closure's
+            ! spare slot. Nothing dispatches on it; it exists so an
+            ! arity error can say WHICH function was called wrong,
+            ! the way Clojure's ArityException does -- "Wrong
+            ! number of args (1) passed to: user/f0" rather than
+            ! naming no one. Set here because `def` is the only
+            ! place a function acquires a name at all.
+            block
+              type(gc_value) :: fnv, slot5, nmsym
+              character(len=:), allocatable :: qual
+              fnv = strip_meta(gcn_var_value(var))
+              if (gc_kind(fnv) == OBJ_CLOSURE) then
+                 slot5 = gc_slot(fnv, 5)
+                 if (slot5%tag == GCT_NIL) then
+                    nmsym = vs_get(base + 4)
+                    qual = gcn_name(gcn_current([vs_get(base + 1)])) // "/" // &
+                         gc_ref_text(nmsym%ref)
+                    call gc_set_slot(fnv, 5, gc_sym(qual, [vs_get(base + 1), fnv]))
+                 end if
+              end if
+            end block
             ! def evaluates to the VAR, not to the value. defmulti is
             ! written around it.
             out = var
@@ -2220,7 +2241,7 @@ contains
 
     if (amp < 0) then
        if (n /= gcv_count(args)) then
-          call fail("wrong number of arguments")
+          call raise_arity(gcv_count(args), gc_nil(), [vs_get(base + 1)])
           child = gc_nil()
           call vs_leave(base); return
        end if
@@ -4580,6 +4601,15 @@ contains
     ! but only in one direction, so it is asked both ways.
     yes = class_matches(gc_ref_text(got%ref), want) .or. &
          class_matches(want, gc_ref_text(got%ref))
+    ! ONE FACT OF HIERARCHY, because Clojure's own suite relies
+    ! on it: ArityException extends IllegalArgumentException, so
+    ! (thrown? IllegalArgumentException (f)) catches a bad-arity
+    ! call. clotran's classes form no hierarchy (DEVIATIONS 4);
+    ! this is the single edge that matters.
+    if (.not. yes) then
+       if (gc_ref_is(got%ref, "ArityException")) &
+            yes = class_matches("IllegalArgumentException", want)
+    end if
   end function catch_matches
 
   ! {:error "message"} -- an internal failure as an ordinary clotran
@@ -4602,6 +4632,48 @@ contains
          [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
     call vs_leave(base)
   end function error_value
+
+  ! Raise a CLASSED exception, the way a (throw (Foo. msg)) in
+  ! Clojure source would. `fail` alone produces clotran's
+  ! internal {:error "..."} map, which no (catch SomeClass e)
+  ! can match -- so an error clotran raises itself was
+  ! uncatchable by name however well the message read.
+  subroutine raise_class(cls, msg, roots)
+    character(len=*), intent(in) :: cls, msg
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: e
+    integer :: base
+
+    base = vs_enter(2)
+    call vs_set(base + 1, gc_sym(cls, roots))
+    call vs_set(base + 2, gc_str(msg, [roots, vs_get(base + 1)]))
+    e = gc_obj(OBJ_ERR, [vs_get(base + 1), vs_get(base + 2), gc_nil()], &
+         [roots, vs_get(base + 1), vs_get(base + 2)])
+    call set_thrown(e)
+    has_error = .true.
+    last_error = msg
+    call vs_leave(base)
+  end subroutine raise_class
+
+  ! Clojure's own wording, from ArityException: "Wrong number of
+  ! args (2) passed to: user/f". The count is what a reader of
+  ! the message needs and "no matching arity" did not carry it.
+  subroutine raise_arity(got, fn, roots)
+    integer, intent(in) :: got
+    type(gc_value), intent(in) :: fn
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: nm
+    character(len=16) :: buf
+    character(len=:), allocatable :: who
+    write(buf, '(I0)') got
+    who = "fn"
+    if (gc_kind(fn) == OBJ_CLOSURE) then
+       nm = gc_slot(fn, 5)
+       if (nm%tag == GCT_SYM) who = gc_ref_text(nm%ref)
+    end if
+    call raise_class("ArityException", &
+         "Wrong number of args (" // trim(buf) // ") passed to: " // who, roots)
+  end subroutine raise_arity
 
   ! Realises ONE cell of a lazy seq, memoised on the node so walking
   ! costs O(1) per element rather than re-running the thunk each time.
@@ -6419,7 +6491,8 @@ contains
        body = gc_slot(fn, 2)
        if (gcl_is(gc_slot(fn, 4))) then
           if (.not. select_clause(gc_slot(fn, 4), gcv_count(args), params, body)) then
-             call fail("no matching arity")
+             call raise_arity(gcv_count(args), vs_get(base + 1), &
+                  [vs_get(base + 1), vs_get(base + 2)])
              call vs_leave(base); return
           end if
        end if
