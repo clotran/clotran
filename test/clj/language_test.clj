@@ -1198,6 +1198,67 @@
        (try (ltf0 1) :no (catch IllegalArgumentException e :iae)) :iae)
 (check "the right arities still work" [(ltfm 1) (ltfm 1 2)] [1 2])
 
+
+;;; ---- agents, validators and latches ------------------------------
+;; core.clj's `agent` sets an error mode on its very first line, so
+;; nothing about agents worked at all. Dispatch here is SYNCHRONOUS --
+;; the action runs before send returns -- which is DEVIATIONS 29; the
+;; error bookkeeping around it is Clojure's. Values from `clj`.
+
+(let [a (agent 1)]
+  (check "a new agent fails by default" (error-mode a) :fail)
+  (send a inc) (await a)
+  (check "send"                @a 2)
+  (send a + 10) (await a)
+  (check "send with arguments" @a 12)
+  (send a (fn [x & ys] (apply + x ys)) 1 2 3) (await a)
+  (check "send with several"   @a 18))
+
+(let [b (agent 1)]
+  (send b (fn [x] (throw (Exception. "boom"))))
+  (check "a failed agent keeps its value" @b 1)
+  (check "and records the error"          (.getMessage (agent-error b)) "boom")
+  (check "and refuses more work"
+         (try (send b inc) :no (catch Throwable e :refused)) :refused)
+  (restart-agent b 5)
+  (check "restart clears it"   [@b (agent-error b)] [5 nil])
+  (send b inc) (await b)
+  (check "and it works again"  @b 6))
+
+;; An error handler makes the default mode :continue, so the agent
+;; carries on as if nothing happened.
+(let [c (agent 1 :error-handler (fn [ag e] nil))]
+  (check "a handler means continue" (error-mode c) :continue)
+  (send c (fn [x] (throw (Exception. "oops"))))
+  (check "a continuing agent is not failed" [@c (agent-error c)] [1 nil])
+  (send c inc) (await c)
+  (check "and takes more work"      @c 2))
+
+(check "an explicit mode"    (error-mode (agent 1 :error-mode :continue)) :continue)
+(check "a validator does not change the mode" (error-mode (agent 1 :validator pos?)) :fail)
+
+;; A latch is a counter when there is one thread.
+(check "a countdown latch"
+       (let [l (java.util.concurrent.CountDownLatch. 2)] (.countDown l) (.getCount l))
+       1)
+
+;;; ---- set-validator! ----------------------------------------------
+;; Every reference type takes one, and a refusal leaves the reference
+;; alone rather than writing a bad value.
+
+(let [v (atom 1)]
+  (set-validator! v pos?)
+  (check "the validator is remembered" (nil? (get-validator v)) false)
+  (check "reset! is refused"  (try (reset! v -1) :no (catch IllegalStateException e :invalid)) :invalid)
+  (check "and the value stands" @v 1)
+  (check "swap! is refused"   (try (swap! v - 5) :no (catch IllegalStateException e :invalid)) :invalid)
+  (check "still stands"       @v 1)
+  (check "a good value goes through" (do (reset! v 7) @v) 7))
+;; Clojure validates the CURRENT value on the way in.
+(check "a validator the state already fails is refused"
+       (try (set-validator! (atom -1) pos?) :no (catch IllegalStateException e :refused))
+       :refused)
+
 ;;; ---- report -----------------------------------------------------
 
 

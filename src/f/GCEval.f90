@@ -148,6 +148,15 @@ module GCEval
   integer, parameter :: B_RE_START = 254, B_RE_END = 255
   integer, parameter :: B_INTOARRAY = 256, B_EMPTYARRAY = 257
   integer, parameter :: B_GETIFACES = 258
+  ! An agent's error bookkeeping. The agent IS an atom here, and
+  ! these live in the atom's spare slots: 3 the error mode, 4 the
+  ! handler, 5 the error itself.
+  integer, parameter :: B_SETERRMODE = 259, B_GETERRMODE = 260
+  integer, parameter :: B_SETERRHANDLER = 261, B_GETERRHANDLER = 262
+  integer, parameter :: B_AGENTERROR = 263, B_AGENTRESTART = 264
+  integer, parameter :: B_AGENTDISPATCH = 265
+  integer, parameter :: B_LATCHDOWN = 266, B_LATCHCOUNT = 267
+  integer, parameter :: B_SETVALIDATOR = 268, B_GETVALIDATOR = 269
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -2933,6 +2942,40 @@ contains
     ! swap-vals! and reset-vals! answer [old new]. Same write as
     ! .swap and .reset -- the pair is the only difference, and on
     ! the JVM it is what makes the compare-and-set observable.
+    ! AGENTS. An agent is an atom with a mailbox of one, run
+    ! synchronously -- see DEVIATIONS.md. What it still has to
+    ! carry is the ERROR BOOKKEEPING, because core.clj's `agent`
+    ! sets the mode on the very first line and nothing worked
+    ! without it.
+    case ("countDown")
+       out = native(B_LATCHDOWN, "clotran-latch-down", [roots])
+    case ("getCount")
+       out = native(B_LATCHCOUNT, "clotran-latch-count", [roots])
+    ! .await on a latch that is already at zero returns at once,
+    ! which is every latch here.
+    case ("await");      out = native(B_ALWAYS_NIL, "clotran-nil", [roots])
+    case ("setErrorMode")
+       out = native(B_SETERRMODE, "set-error-mode!", [roots])
+    case ("getErrorMode")
+       out = native(B_GETERRMODE, "error-mode", [roots])
+    case ("setErrorHandler")
+       out = native(B_SETERRHANDLER, "set-error-handler!", [roots])
+    ! A VALIDATOR belongs to every reference type, not just an
+    ! agent -- atoms, refs and vars all take one. It shares slot 4
+    ! with the error handler, as a two-key map, because an object
+    ! has five slots and the other four are spoken for.
+    case ("setValidator")
+       out = native(B_SETVALIDATOR, "set-validator!", [roots])
+    case ("getValidator")
+       out = native(B_GETVALIDATOR, "get-validator", [roots])
+    case ("getErrorHandler")
+       out = native(B_GETERRHANDLER, "error-handler", [roots])
+    case ("getError")
+       out = native(B_AGENTERROR, "agent-error", [roots])
+    case ("restart")
+       out = native(B_AGENTRESTART, "restart-agent", [roots])
+    case ("dispatch")
+       out = native(B_AGENTDISPATCH, "clotran-agent-dispatch", [roots])
     case ("swapVals")
        out = native(B_SWAPVALS, "clotran-swap-vals", [roots])
     case ("resetVals")
@@ -3357,6 +3400,22 @@ contains
          end if
          out = vs_get(base + 3)
        end block
+    else if (cname == "CountDownLatch" .or. &
+         cname == "java.util.concurrent.CountDownLatch") then
+       ! A LATCH IS A COUNTER when there is one thread. `await`
+       ! sends a count-down action to each agent and then waits
+       ! on the latch -- and since dispatch here runs the action
+       ! before it returns, the count is already zero by the time
+       ! anything waits. So: an atom holding the count, .countDown
+       ! decrements it, and .await has nothing to wait for.
+       thunk = gce_eval(gcl_first(gcl_rest(vs_get(base + 1), [vs_get(base + 1)])), &
+            vs_get(base + 2), [vs_get(base + 1)])
+       if (has_error) then
+          call vs_leave(base)
+          return
+       end if
+       call vs_set(base + 3, thunk)
+       out = gc_obj(OBJ_ATOM, [vs_get(base + 3), gc_nil()], [vs_get(base + 3)])
     else if (cname == "clojure.lang.Ref" .or. cname == "clojure.lang.Atom" .or. &
          cname == "clojure.lang.Agent") then
        ! A Ref IS an atom here: a mutable box, with no transaction
@@ -3834,6 +3893,12 @@ contains
        if (mname == "runInTransaction") then
           out = native(B_RUNTX, "clotran-run-tx", [roots]); return
        end if
+       ! Nothing is ever running one: there are no other threads
+       ! to be isolated from, so io! never has a transaction to
+       ! complain about. `await` is written inside io!.
+       if (mname == "isRunning") then
+          out = native(B_ALWAYS_FALSE, "clotran-false", [roots]); return
+       end if
     else if (cls == "clojure.lang.Namespace") then
        if (mname == "find" .or. mname == "findOrCreate") then
           out = native(B_FINDNS, "find-ns", [roots]); return
@@ -3846,6 +3911,18 @@ contains
           out = native(B_POPTB, "pop-thread-bindings", [roots]); return
        case ("find")
           out = native(B_FINDVAR, "clotran-find-var", [roots]); return
+       case ("cloneThreadBindingFrame", "getThreadBindingFrame")
+          ! There is ONE binding stack here and one thread, so a
+          ! frame has nothing to clone -- DEVIATIONS.md 10. nil is
+          ! the honest token: binding-conveyor-fn takes it, hands
+          ! it back to resetThreadBindingFrame, and the bindings
+          ! it was meant to carry are already visible.
+          ! A CALL, not a field read: core.clj writes
+          ! (clojure.lang.Var/cloneThreadBindingFrame) with parens, so
+          ! this has to be a function that answers nil, not nil.
+          out = native(B_ALWAYS_NIL, "clotran-nil", [roots]); return
+       case ("resetThreadBindingFrame")
+          out = native(B_ALWAYS_NIL, "clotran-nil", [roots]); return
        case ("intern")
           ! Var.intern CREATES the Var in the namespace given, with
           ! the value given. Mapping it to a lookup meant defprotocol
@@ -3871,6 +3948,16 @@ contains
             out = native(B_MATH0 + mk, "clotran-math-" // mname, [roots]); return
          end if
        end block
+    else if (cls == "clojure.lang.Agent") then
+       ! The two thread pools send and send-off name. They are
+       ! handed straight to .dispatch, which runs the action on
+       ! the spot, so there is nothing for them to be.
+       if (mname == "pooledExecutor" .or. mname == "soloExecutor") then
+          out = gc_nil(); return
+       end if
+       if (mname == "shutdown") then
+          out = native(B_ALWAYS_NIL, "clotran-nil", [roots]); return
+       end if
     else if (cls == "clojure.lang.Compiler") then
        if (mname == "specials") then
           out = specials_map([roots]); return
@@ -4674,6 +4761,69 @@ contains
     call raise_class("ArityException", &
          "Wrong number of args (" // trim(buf) // ") passed to: " // who, roots)
   end subroutine raise_arity
+
+  ! A reference's functions -- its validator and its error
+  ! handler -- as a small map in slot 4. An object has five
+  ! slots; the value, the metadata, the error mode and the error
+  ! itself take the others.
+  function ref_fn_get(r, name, roots) result(out)
+    type(gc_value), intent(in) :: r
+    character(len=*), intent(in) :: name
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out
+    out = gc_nil()
+    if (r%tag /= GCT_OBJ) return
+    out = gca_get(gc_slot(r, 4), gc_key(name, roots))
+  end function ref_fn_get
+
+  subroutine ref_fn_put(r, name, v, roots)
+    type(gc_value), intent(in) :: r, v
+    character(len=*), intent(in) :: name
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: m
+    integer :: base
+    if (r%tag /= GCT_OBJ) return
+    base = vs_enter(3)
+    call vs_set(base + 1, r)
+    call vs_set(base + 2, v)
+    m = gc_slot(vs_get(base + 1), 4)
+    if (.not. gca_is(m)) m = gca_empty([roots, vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 3, m)
+    call vs_set(base + 3, gca_assoc(vs_get(base + 3), &
+         gc_key(name, [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)]), &
+         vs_get(base + 2), [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)]))
+    call gc_set_slot(vs_get(base + 1), 4, vs_get(base + 3))
+    call vs_leave(base)
+  end subroutine ref_fn_put
+
+  ! Whether `v` passes `f`. A nil validator passes everything;
+  ! anything else must answer truthy, and a false answer is an
+  ! IllegalStateException with Clojure's own wording.
+  function validate_ref(r, f, v, roots) result(ok)
+    type(gc_value), intent(in) :: r, f, v
+    type(gc_value), intent(in) :: roots(:)
+    logical :: ok
+    type(gc_value) :: fargs, res
+    integer :: base
+    ok = .true.
+    if (f%tag == GCT_NIL) return
+    base = vs_enter(2)
+    call vs_set(base + 1, f)
+    call vs_set(base + 2, v)
+    fargs = gcv_empty([roots, vs_get(base + 1), vs_get(base + 2)])
+    fargs = gcv_conj(fargs, vs_get(base + 2), &
+         [roots, vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 2, fargs)
+    res = apply(vs_get(base + 1), vs_get(base + 2))
+    if (has_error) then
+       ok = .false.
+    else if (.not. truthy(res)) then
+       ok = .false.
+       call raise_class("IllegalStateException", "Invalid reference state", roots)
+    end if
+    call vs_leave(base)
+    if (r%tag == GCT_NIL) return
+  end function validate_ref
 
   ! Realises ONE cell of a lazy seq, memoised on the node so walking
   ! costs O(1) per element rather than re-running the thunk each time.
@@ -6631,11 +6781,14 @@ contains
     out = gc_nil()
     hit = .false.
     n = gcv_count(args)
-    ! Three slots: args, plus two scratch for the builtins that
+    ! Four slots: args, plus three scratch for the builtins that
     ! accumulate a collection (conj onto a map, the host create
-    ! statics). Writing base + 2 out of a one-slot frame is a write
-    ! past the stack top, which reads back as nil.
-    base = vs_enter(3)
+    ! statics, an agent dispatch splicing its extra arguments).
+    ! Writing past the frame is a write past the stack top, which
+    ! reads back as NIL rather than failing -- so an agent send
+    ! with arguments silently dropped them and (send a + 10) left
+    ! the agent alone. Widen this before using another slot.
+    base = vs_enter(4)
     call vs_set(base + 1, args)
 
     select case (id)
@@ -8524,6 +8677,14 @@ contains
        out = gcv_nth(args, 1)
        block
          type(gc_value) :: prev
+         ! THE VALIDATOR RUNS BEFORE THE WRITE, and a refusal
+         ! leaves the reference alone -- which is the whole point
+         ! of set-validator!.
+         if (.not. validate_ref(a, ref_fn_get(a, "validator", [vs_get(base + 1)]), &
+              out, [vs_get(base + 1)])) then
+            call vs_leave(base)
+            return
+         end if
          prev = gc_slot(a, 1)
          call gc_set_slot(a, 1, out)
          if (id == B_RESETVALS) out = value_pair(prev, out, [a, args])
@@ -8562,6 +8723,13 @@ contains
          end if
          out = apply(gcv_nth(args, 1), vs_get(lb + 2))
          if (.not. has_error) then
+            if (.not. validate_ref(vs_get(lb + 1), &
+                 ref_fn_get(vs_get(lb + 1), "validator", [vs_get(lb + 1)]), &
+                 out, [vs_get(lb + 1)])) then
+               call vs_leave(lb)
+               call vs_leave(base)
+               return
+            end if
             if (id == B_SWAPVALS) then
                out = value_pair(gc_slot(vs_get(lb + 1), 1), out, &
                     [vs_get(lb + 1), vs_get(lb + 2)])
@@ -8926,6 +9094,134 @@ contains
             call vs_set(base + 2, av)
             out = gc_str(java_format(gc_ref_text(fv%ref), vs_get(base + 2)), &
                  [vs_get(base + 1), vs_get(base + 2)])
+         end if
+       end block
+    case (B_SETVALIDATOR, B_GETVALIDATOR)
+       a = strip_meta(gcv_nth(args, 0))
+       out = gc_nil()
+       if (id == B_GETVALIDATOR) then
+          out = ref_fn_get(a, "validator", [vs_get(base + 1)])
+       else
+          ! Clojure VALIDATES THE CURRENT VALUE on the way in and
+          ! refuses a validator the state already fails.
+          if (validate_ref(a, gcv_nth(args, 1), gc_slot(a, 1), &
+               [vs_get(base + 1)])) call ref_fn_put(a, "validator", &
+               gcv_nth(args, 1), [vs_get(base + 1)])
+       end if
+    case (B_LATCHDOWN, B_LATCHCOUNT)
+       a = strip_meta(gcv_nth(args, 0))
+       out = gc_nil()
+       if (gc_kind(a) == OBJ_ATOM) then
+          if (id == B_LATCHDOWN) then
+             block
+               type(gc_value) :: cur
+               cur = gc_slot(a, 1)
+               if (cur%tag == GCT_INT) call gc_set_slot(a, 1, gc_int(max(0_gc_ip, cur%ival - 1)))
+             end block
+          else
+             out = gc_slot(a, 1)
+          end if
+       end if
+    case (B_SETERRMODE, B_SETERRHANDLER)
+       ! Both answer the AGENT, since core.clj threads it on.
+       a = strip_meta(gcv_nth(args, 0))
+       out = a
+       if (gc_kind(a) == OBJ_ATOM) then
+          if (id == B_SETERRMODE) then
+             call gc_set_slot(a, 3, gcv_nth(args, 1))
+          else
+             call ref_fn_put(a, "error-handler", gcv_nth(args, 1), [vs_get(base + 1)])
+          end if
+       end if
+    case (B_GETERRMODE, B_GETERRHANDLER, B_AGENTERROR)
+       a = strip_meta(gcv_nth(args, 0))
+       out = gc_nil()
+       if (gc_kind(a) == OBJ_ATOM) then
+          select case (id)
+          case (B_GETERRMODE);    out = gc_slot(a, 3)
+          case (B_GETERRHANDLER); out = ref_fn_get(a, "error-handler", [vs_get(base + 1)])
+          case default;           out = gc_slot(a, 5)
+          end select
+       end if
+    case (B_AGENTRESTART)
+       ! (restart-agent a new-state) clears the failure and takes
+       ! the state given, which is what Agent.restart does.
+       a = strip_meta(gcv_nth(args, 0))
+       out = gc_nil()
+       if (gc_kind(a) == OBJ_ATOM) then
+          call gc_set_slot(a, 5, gc_nil())
+          if (n >= 2) call gc_set_slot(a, 1, gcv_nth(args, 1))
+          out = gc_slot(a, 1)
+       end if
+    case (B_AGENTDISPATCH)
+       ! (.dispatch a f args executor) -- SYNCHRONOUS here, so the
+       ! action runs before dispatch returns. A failed agent
+       ! refuses the action; an action that throws records the
+       ! error, calls the handler if there is one, and under
+       ! :fail leaves the agent failed with its old value.
+       block
+         type(gc_value) :: ag, fargs, res, hnd, prior
+         integer :: j
+         ag = strip_meta(gcv_nth(args, 0))
+         out = ag
+         prior = gc_slot(ag, 5)
+         if (gc_kind(ag) /= OBJ_ATOM) then
+            call fail("dispatch: not an agent")
+         else if (prior%tag /= GCT_NIL) then
+            call raise_class("RuntimeException", &
+                 "Agent is failed, needs restart", [vs_get(base + 1)])
+         else
+            call vs_set(base + 2, ag)
+            fargs = gcv_empty([vs_get(base + 1), vs_get(base + 2)])
+            fargs = gcv_conj(fargs, gc_slot(vs_get(base + 2), 1), &
+                 [vs_get(base + 1), vs_get(base + 2)])
+            call vs_set(base + 3, fargs)
+            block
+              type(gc_value) :: extra
+              extra = coll_to_vector(gcv_nth(args, 2), &
+                   [vs_get(base + 1), vs_get(base + 3)])
+              call vs_set(base + 4, extra)
+              do j = 0, gcv_count(vs_get(base + 4)) - 1
+                 fargs = gcv_conj(vs_get(base + 3), gcv_nth(vs_get(base + 4), j), &
+                      [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)])
+                 call vs_set(base + 3, fargs)
+              end do
+            end block
+            res = apply(gcv_nth(args, 1), vs_get(base + 3))
+            if (has_error) then
+               call gc_set_slot(vs_get(base + 2), 5, thrown_value())
+               hnd = ref_fn_get(vs_get(base + 2), "error-handler", [vs_get(base + 1)])
+               call gce_clear_error()
+               if (hnd%tag /= GCT_NIL) then
+                  fargs = gcv_empty([vs_get(base + 1), vs_get(base + 2)])
+                  fargs = gcv_conj(fargs, vs_get(base + 2), &
+                       [vs_get(base + 1), vs_get(base + 2)])
+                  call vs_set(base + 3, fargs)
+                  fargs = gcv_conj(vs_get(base + 3), &
+                       gc_slot(vs_get(base + 2), 5), &
+                       [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+                  call vs_set(base + 3, fargs)
+                  res = apply(hnd, vs_get(base + 3))
+                  call gce_clear_error()
+               end if
+               ! :continue forgets the failure; :fail keeps it.
+               if (.not. gc_equal(gc_slot(vs_get(base + 2), 3), &
+                    gc_key("fail", [vs_get(base + 1)]))) &
+                    call gc_set_slot(vs_get(base + 2), 5, gc_nil())
+            else if (.not. validate_ref(vs_get(base + 2), &
+                 ref_fn_get(vs_get(base + 2), "validator", [vs_get(base + 1)]), &
+                 res, [vs_get(base + 1)])) then
+               ! A REJECTED STATE IS AN AGENT ERROR, handled the
+               ! same way a thrown action is.
+               call gc_set_slot(vs_get(base + 2), 5, thrown_value())
+               call gce_clear_error()
+               if (.not. gc_equal(gc_slot(vs_get(base + 2), 3), &
+                    gc_key("fail", [vs_get(base + 1)]))) &
+                    call gc_set_slot(vs_get(base + 2), 5, gc_nil())
+            else
+               call gc_set_slot(vs_get(base + 2), 1, res)
+            end if
+            out = vs_get(base + 2)
          end if
        end block
     case (B_GETIFACES)
