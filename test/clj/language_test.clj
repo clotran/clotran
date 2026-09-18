@@ -641,6 +641,28 @@
 ;; instance? answer that changed.
 (check "meta on a function" (meta (with-meta (fn [] 1) {:a 1})) {:a 1})
 
+
+;;; ---- macroexpand-1 and special-symbol? ---------------------------
+;; Compiler.macroexpand1 is ONE step and does not descend, which is
+;; what makes it different from the analysis pass clotran already
+;; had. Every expectation below was run through `clj` first.
+
+(check "macroexpand-1 a macro"   (macroexpand-1 '(when a b)) '(if a (do b)))
+(check "macroexpand-1 not a macro" (macroexpand-1 '(inc 1)) '(inc 1))
+(check "macroexpand-1 a symbol"  (macroexpand-1 'foo) 'foo)
+(check "macroexpand-1 .member"   (macroexpand-1 '(.foo x 1 2)) '(. x foo 1 2))
+(check "macroexpand-1 ctor"      (macroexpand-1 '(String. "a")) '(new String "a"))
+;; macroexpand loops to a fixed point but still does not descend --
+;; the inner `when` survives.
+(check "macroexpand stops at the top"
+       (macroexpand '(when a (when b c))) '(if a (do (when b c))))
+
+(check "special-symbol? if"      (special-symbol? 'if) true)
+(check "special-symbol? amp"     (special-symbol? '&) true)
+(check "special-symbol? a name"  (special-symbol? 'foo) false)
+;; Clojure's list, 24 entries -- not clotran's own special forms.
+(check "specials count"          (count (. clojure.lang.Compiler specials)) 24)
+
 ;;; ---- report -----------------------------------------------------
 
 

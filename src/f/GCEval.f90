@@ -130,6 +130,7 @@ module GCEval
   integer, parameter :: B_SBASIS = 180, B_SCREATE = 181
   integer, parameter :: B_SCONSTRUCT = 182, B_SACCESSOR = 183
   integer, parameter :: B_ASIFASSOC = 184
+  integer, parameter :: B_MACROEXP1 = 185
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -3507,6 +3508,12 @@ contains
           out = native(B_VARINTERN, "clotran-var-intern", [roots]); return
        end select
     else if (cls == "clojure.lang.Compiler") then
+       if (mname == "specials") then
+          out = specials_map([roots]); return
+       end if
+       if (mname == "macroexpand1") then
+          out = native(B_MACROEXP1, "clotran-macroexpand-1", [roots]); return
+       end if
        if (mname == "eval") then
           out = native(B_EVAL, "eval", [roots]); return
        end if
@@ -4872,6 +4879,119 @@ contains
     call vs_leave(base)
   end function mx_walk
 
+  ! Compiler.macroexpand1 -- ONE step, and no walk into subforms.
+  ! core.clj's macroexpand-1 is this and nothing else; macroexpand is
+  ! the loop around it, written in Clojure. So the only piece that has
+  ! to be native is the single step, and mx_walk -- which expands to a
+  ! fixed point AND descends -- is the wrong thing to reuse.
+  !
+  ! The local environment is empty. Compiler.macroexpand1 reads
+  ! LOCAL_ENV, which is bound only while the compiler is analysing a
+  ! body, and a call from user code is not inside that.
+  recursive function macroexpand_1step(form0) result(out)
+    type(gc_value), intent(in) :: form0
+    type(gc_value) :: out, form, head, mvar, item
+    character(len=:), allocatable :: t
+    integer :: base, i, n
+
+    base = vs_enter(3)
+    call vs_set(base + 1, form0)
+    out = vs_get(base + 1)
+
+    form = strip_meta(vs_get(base + 1))
+    if (gc_kind(form) == OBJ_LAZY .or. gc_kind(form) == OBJ_SEQ) &
+         form = seq_to_list(form, [vs_get(base + 1)])
+    call vs_set(base + 2, form)
+    if (.not. gcl_is(vs_get(base + 2))) then
+       call vs_leave(base); return
+    end if
+    n = gcl_count(vs_get(base + 2))
+    if (n == 0) then
+       call vs_leave(base); return
+    end if
+
+    head = strip_meta(gcl_first(vs_get(base + 2)))
+    if (head%tag /= GCT_SYM) then
+       call vs_leave(base); return
+    end if
+
+    mvar = macro_var(head, gc_nil())
+    if (gcn_is_var(mvar)) then
+       out = expand_macro(gcn_var_value(mvar), vs_get(base + 2), gc_nil())
+       call vs_leave(base); return
+    end if
+
+    ! The two SUGARS macroexpand1 rewrites before it gives up. clotran
+    ! evaluates both shapes directly, so this is not how they run -- it
+    ! is so that macroexpand-1 REPORTS the rewrite, which is what a
+    ! code walker like pprint's is looking at.
+    t = gc_ref_text(head%ref)
+    if (is_member_sym(head) .and. n >= 2) then
+       ! (.foo target args...) -> (. target foo args...)
+       out = gcl_empty([vs_get(base + 2)])
+       call vs_set(base + 3, out)
+       do i = n - 1, 2, -1
+          item = nth_of(vs_get(base + 2), i)
+          out = gcl_cons(item, vs_get(base + 3), [vs_get(base + 2), item])
+          call vs_set(base + 3, out)
+       end do
+       item = gc_sym(t(2:), [vs_get(base + 2), vs_get(base + 3)])
+       out = gcl_cons(item, vs_get(base + 3), [vs_get(base + 2), item])
+       call vs_set(base + 3, out)
+       item = nth_of(vs_get(base + 2), 1)
+       out = gcl_cons(item, vs_get(base + 3), [vs_get(base + 2), item])
+       call vs_set(base + 3, out)
+       item = gc_sym(".", [vs_get(base + 2), vs_get(base + 3)])
+       out = gcl_cons(item, vs_get(base + 3), [vs_get(base + 2), item])
+    else if (is_ctor_sym(head)) then
+       ! (Classname. args...) -> (new Classname args...)
+       out = gcl_empty([vs_get(base + 2)])
+       call vs_set(base + 3, out)
+       do i = n - 1, 1, -1
+          item = nth_of(vs_get(base + 2), i)
+          out = gcl_cons(item, vs_get(base + 3), [vs_get(base + 2), item])
+          call vs_set(base + 3, out)
+       end do
+       item = gc_sym(t(:len(t) - 1), [vs_get(base + 2), vs_get(base + 3)])
+       out = gcl_cons(item, vs_get(base + 3), [vs_get(base + 2), item])
+       call vs_set(base + 3, out)
+       item = gc_sym("new", [vs_get(base + 2), vs_get(base + 3)])
+       out = gcl_cons(item, vs_get(base + 3), [vs_get(base + 2), item])
+    end if
+    call vs_leave(base)
+  end function macroexpand_1step
+
+  ! Compiler.specials -- the map special-symbol? asks. Its VALUES are
+  ! parser objects on the JVM and nothing reads them through this Var,
+  ! so nil will do; the KEYS are the answer.
+  !
+  ! Clojure's list, not is_special's. The two differ: clotran has
+  ! quasiquote, defmacro* and lazy-seq* as special forms where Clojure
+  ! reaches them another way (DEVIATIONS.md 6), and answering true for
+  ! those would make special-symbol? report on our host rather than on
+  ! the language.
+  function specials_map(roots) result(out)
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, k
+    integer :: base, i
+    character(len=24), parameter :: names(24) = [character(len=24) :: &
+         "def", "loop*", "recur", "if", "case*", "let*", "letfn*", "do", &
+         "fn*", "quote", "var", "clojure.core/import*", ".", "set!", &
+         "deftype*", "reify*", "try", "throw", "monitor-enter", &
+         "monitor-exit", "catch", "finally", "new", "&"]
+
+    base = vs_enter(1)
+    out = gca_empty([roots])
+    call vs_set(base + 1, out)
+    do i = 1, size(names)
+       k = gc_sym(trim(names(i)), [roots, vs_get(base + 1)])
+       out = gca_assoc(vs_get(base + 1), k, gc_nil(), [roots, vs_get(base + 1), k])
+       call vs_set(base + 1, out)
+    end do
+    out = vs_get(base + 1)
+    call vs_leave(base)
+  end function specials_map
+
   ! One cell of (iterate f x): a realised head and an unrealised
   ! tail. The tail'"s thunk is an ordinary closure over a frame
   ! binding f and x, whose body is the form
@@ -5873,6 +5993,9 @@ contains
        out = struct_construct(args, [vs_get(base + 1)])
     case (B_SACCESSOR)
        out = struct_accessor(args, [vs_get(base + 1)])
+
+    case (B_MACROEXP1)
+       out = macroexpand_1step(gcv_nth(args, 0))
 
     case (B_ASIFASSOC)
        ! One collection, alternating k v, as if by repeated assoc.
