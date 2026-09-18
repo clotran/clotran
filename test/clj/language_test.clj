@@ -677,6 +677,16 @@
 (check "discard in a set"        #{1 #_2 3} #{1 3})
 (check "two discards in a row"   (list #_#_1 2 3) '(3))
 
+
+;;; ---- the quote is not a delimiter --------------------------------
+;; isTerminatingMacro excludes #, % and ' -- so a prime suffix is part
+;; of the name, the way ss' and x' are written in Clojure's own suite.
+
+(check "prime-suffixed symbol"  (let [ss' 1 x'y 2] [ss' x'y]) [1 2])
+(check "quote still quotes"     '(a 'b) '(a (quote b)))
+(check "prime in a quoted name" (str 'foo') "foo'")
+(check "the quote character"    \' \')
+
 ;;; ---- report -----------------------------------------------------
 
 

@@ -107,12 +107,18 @@ contains
            c == achar(13) .or. c == achar(12) .or. c == ",")
   end function is_space
 
+  ! LispReader.isTerminatingMacro: a macro character ENDS a token,
+  ! except for #, % and the quote -- which is why ss' and x' are single
+  ! symbols in Clojure rather than a symbol followed by a quote form.
+  ! Treating the quote as a delimiter here made every prime-suffixed
+  ! name a reader error, and one reader error aborts the whole file
+  ! (DEVIATIONS.md 1).
   pure function is_delim(c) result(yes)
     character, intent(in) :: c
     logical :: yes
     yes = (c == "(" .or. c == ")" .or. c == "[" .or. c == "]" .or. &
            c == "{" .or. c == "}" .or. c == '"' .or. c == ";" .or. &
-           c == "'" .or. c == "`" .or. c == "~" .or. c == "@" .or. c == "^")
+           c == "`" .or. c == "~" .or. c == "@" .or. c == "^")
   end function is_delim
 
   subroutine skip_space(text, pos)
