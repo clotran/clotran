@@ -802,3 +802,37 @@ superclass method to call through to.
 `Class/forName`, `.getDeclaredMethods` and a class loader. Removing
 this means giving clotran real classes, which is the same work
 deviation 4 names.
+
+## 29. An agent's action runs on the calling thread, before `send` returns
+
+Clojure's `send` queues an action onto a thread pool and returns
+immediately; the agent's value changes some time later, and `await`
+blocks until the queue drains. clotran has one thread, so `.dispatch`
+runs the action on the spot and `send` returns an agent whose value has
+already changed.
+
+Everything built on that is real: the error mode (`:fail` or
+`:continue`), the error handler, `agent-error`, `restart-agent` and
+validators all behave as Clojure describes them. What differs is *when*:
+
+    (send a slow-fn)
+    @a          ;; clj      the OLD value, for a while
+                ;; clotran  the new one, always
+
+    (await a)   ;; clj      blocks
+                ;; clotran  returns at once, there is nothing in flight
+
+`await` is written around a `CountDownLatch`, which is here a plain
+counter for the same reason: the count is already zero by the time
+anything waits on it.
+
+The difference is visible in exactly one place a single-threaded program
+can see it -- an action that throws surfaces its exception at the `send`
+call rather than on the agent's own thread. `send` still returns the
+agent rather than rethrowing, so the failure is observed through
+`agent-error` as Clojure intends.
+
+**Removal**: threads. This is the same seam as deviation 10 (refs are
+mutable boxes) and 11 (transients are the persistent collections) --
+every one of them is single-threadedness showing through, and none of
+them can go until Fortran here has somewhere to put a second thread.
