@@ -1041,15 +1041,18 @@ contains
     integer :: base
 
     out = gc_nil()
-    base = vs_enter(4)
+    base = vs_enter(5)
     call vs_set(base + 1, rest)
     call vs_set(base + 2, env)
     call vs_set(base + 3, strip_meta(gcl_first(vs_get(base + 1))))
     reify_id = reify_id + 1
     write(buf, '(I0)') reify_id
+    ! Two allocations in one argument list -- see range_cell.
+    call vs_set(base + 4, gcv_empty([vs_get(base + 1), vs_get(base + 3)]))
+    call vs_set(base + 5, gcl_rest(vs_get(base + 1), &
+         [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)]))
     ty = build_type("clotran.reify__" // trim(buf), &
-         gcv_empty([vs_get(base + 1), vs_get(base + 3)]), vs_get(base + 3), &
-         gcl_rest(vs_get(base + 1), [vs_get(base + 1), vs_get(base + 3)]), &
+         vs_get(base + 4), vs_get(base + 3), vs_get(base + 5), &
          vs_get(base + 2))
     if (.not. has_error) then
        call vs_set(base + 4, ty)
@@ -2813,7 +2816,7 @@ contains
     integer :: base
 
     out = gc_nil()
-    base = vs_enter(3)
+    base = vs_enter(5)
     call vs_set(base + 1, form)
     call vs_set(base + 2, env)
     head = gcl_first(vs_get(base + 1))
@@ -2826,8 +2829,19 @@ contains
        return
     end if
     ! (target member . rest) -- the shape eval_dot reads.
-    args = gcl_cons(gc_sym(hname(2:), [vs_get(base + 3)]), &
-         gcl_rest(vs_get(base + 3), [vs_get(base + 3)]), [vs_get(base + 3)])
+    ! TWO ALLOCATIONS IN ONE ARGUMENT LIST is the hazard
+    ! CLAUDE.md names: Fortran fixes no evaluation order, so
+    ! whichever of these runs first is unrooted while the other
+    ! allocates, and a collection there drops it. This one cost
+    ! a day: (count (range 200000)) answered a number that was
+    ! simply wrong, because the argument list of the recursive
+    ! (Range/create __lo __hi __st) was collected and the call
+    ! arrived with no arguments at all. Each part goes on the
+    ! shadow stack before the next allocation runs.
+    call vs_set(base + 4, gc_sym(hname(2:), [vs_get(base + 3)]))
+    call vs_set(base + 5, gcl_rest(vs_get(base + 3), [vs_get(base + 3), vs_get(base + 4)]))
+    args = gcl_cons(vs_get(base + 4), vs_get(base + 5), &
+         [vs_get(base + 3), vs_get(base + 4), vs_get(base + 5)])
     args = gcl_cons(gcl_first(vs_get(base + 3)), args, [vs_get(base + 3), args])
     out = eval_dot(args, vs_get(base + 2))
     call vs_leave(base)
@@ -2923,13 +2937,24 @@ contains
     character(len=:), allocatable :: t
     integer :: base
 
-    base = vs_enter(2)
+    base = vs_enter(4)
     call vs_set(base + 1, form)
     call vs_set(base + 2, env)
     head = gcl_first(vs_get(base + 1))
     t = gc_ref_text(head%ref)
-    args = gcl_cons(gc_sym(t(1:len(t)-1), [vs_get(base + 1)]), &
-         gcl_rest(vs_get(base + 1), [vs_get(base + 1)]), [vs_get(base + 1)])
+    ! TWO ALLOCATIONS IN ONE ARGUMENT LIST is the hazard
+    ! CLAUDE.md names: Fortran fixes no evaluation order, so
+    ! whichever of these runs first is unrooted while the other
+    ! allocates, and a collection there drops it. This one cost
+    ! a day: (count (range 200000)) answered a number that was
+    ! simply wrong, because the argument list of the recursive
+    ! (Range/create __lo __hi __st) was collected and the call
+    ! arrived with no arguments at all. Each part goes on the
+    ! shadow stack before the next allocation runs.
+    call vs_set(base + 3, gc_sym(t(1:len(t)-1), [vs_get(base + 1)]))
+    call vs_set(base + 4, gcl_rest(vs_get(base + 1), [vs_get(base + 1), vs_get(base + 3)]))
+    args = gcl_cons(vs_get(base + 3), vs_get(base + 4), &
+         [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)])
     out = eval_new(args, vs_get(base + 2))
     call vs_leave(base)
   end function eval_ctor
@@ -2955,7 +2980,7 @@ contains
     integer :: base, slash
 
     out = gc_nil()
-    base = vs_enter(3)
+    base = vs_enter(5)
     call vs_set(base + 1, form)
     call vs_set(base + 2, env)
     head = gcl_first(vs_get(base + 1))
@@ -2966,12 +2991,27 @@ contains
     ! (clojure.lang.Var/popThreadBindings) takes none, and handing
     ! eval_dot the bare symbol made it read the member as a field and
     ! return the function itself. binding then never restored anything.
-    args = gcl_cons(gc_sym(t(slash+1:), [vs_get(base + 1)]), &
-         gcl_rest(vs_get(base + 1), [vs_get(base + 1)]), [vs_get(base + 1)])
-    args = gcl_cons(args, gcl_empty([vs_get(base + 1)]), [vs_get(base + 1), args])
+    ! TWO ALLOCATIONS IN ONE ARGUMENT LIST is the hazard
+    ! CLAUDE.md names: Fortran fixes no evaluation order, so
+    ! whichever of these runs first is unrooted while the other
+    ! allocates, and a collection there drops it. This one cost
+    ! a day: (count (range 200000)) answered a number that was
+    ! simply wrong, because the argument list of the recursive
+    ! (Range/create __lo __hi __st) was collected and the call
+    ! arrived with no arguments at all. Each part goes on the
+    ! shadow stack before the next allocation runs.
+    call vs_set(base + 4, gc_sym(t(slash+1:), [vs_get(base + 1)]))
+    call vs_set(base + 5, gcl_rest(vs_get(base + 1), [vs_get(base + 1), vs_get(base + 4)]))
+    args = gcl_cons(vs_get(base + 4), vs_get(base + 5), &
+         [vs_get(base + 1), vs_get(base + 4), vs_get(base + 5)])
     call vs_set(base + 3, args)
-    args = gcl_cons(gc_sym(t(1:slash-1), [vs_get(base + 3)]), vs_get(base + 3), &
-         [vs_get(base + 3)])
+    call vs_set(base + 4, gcl_empty([vs_get(base + 3)]))
+    args = gcl_cons(vs_get(base + 3), vs_get(base + 4), &
+         [vs_get(base + 3), vs_get(base + 4)])
+    call vs_set(base + 3, args)
+    call vs_set(base + 4, gc_sym(t(1:slash-1), [vs_get(base + 3)]))
+    args = gcl_cons(vs_get(base + 4), vs_get(base + 3), &
+         [vs_get(base + 3), vs_get(base + 4)])
     out = eval_dot(args, vs_get(base + 2))
     call vs_leave(base)
   end function eval_static
@@ -2988,7 +3028,7 @@ contains
     integer :: base
 
     out = gc_nil()
-    base = vs_enter(3)
+    base = vs_enter(5)
     call vs_set(base + 1, args)
     call vs_set(base + 2, env)
     cls = gcl_first(vs_get(base + 1))
@@ -3010,9 +3050,12 @@ contains
           return
        end if
        call vs_set(base + 3, thunk)
-       out = gca_assoc(gca_empty([vs_get(base + 3)]), &
-            gc_key("clotran/reduced", [vs_get(base + 3)]), &
-            vs_get(base + 3), [vs_get(base + 3)])
+       ! Two allocations in one argument list -- see range_cell.
+       call vs_set(base + 4, gca_empty([vs_get(base + 3)]))
+       call vs_set(base + 5, gc_key("clotran/reduced", &
+            [vs_get(base + 3), vs_get(base + 4)]))
+       out = gca_assoc(vs_get(base + 4), vs_get(base + 5), &
+            vs_get(base + 3), [vs_get(base + 3), vs_get(base + 4), vs_get(base + 5)])
     else if (cname == "clojure.lang.MethodImplCache" .or. &
          cname == "clojure.lang.MethodImplCache$Entry") then
        ! The protocol dispatch cache, as a MAP with named fields:
@@ -3053,8 +3096,16 @@ contains
             w2 = gcl_rest(w2, [vs_get(base + 1), vs_get(base + 3)])
          end do
          if (fi < 4) then
-            mp = gca_assoc(vs_get(base + 3), gc_key("map", [vs_get(base + 3)]), &
-                 gca_empty([vs_get(base + 3)]), [vs_get(base + 3)])
+            ! Two allocations in one argument list -- see range_cell.
+            block
+              type(gc_value) :: mk, mv
+              mk = gc_key("map", [vs_get(base + 3)])
+              call vs_set(base + 4, mk)
+              mv = gca_empty([vs_get(base + 3), vs_get(base + 4)])
+              call vs_set(base + 5, mv)
+              mp = gca_assoc(vs_get(base + 3), vs_get(base + 4), vs_get(base + 5), &
+                   [vs_get(base + 3), vs_get(base + 4), vs_get(base + 5)])
+            end block
             call vs_set(base + 3, mp)
          end if
          out = vs_get(base + 3)
@@ -5667,7 +5718,7 @@ contains
     if (sd > 0.0_gc_dp .and. .not. num_lt(lo, hi)) return
     if (sd < 0.0_gc_dp .and. .not. num_lt(hi, lo)) return
 
-    base = vs_enter(3)
+    base = vs_enter(4)
     frame = gce_new(gc_nil(), roots)
     call vs_set(base + 1, frame)
     ! The head is lo; the frame carries where the TAIL starts.
@@ -5680,19 +5731,31 @@ contains
          stp, [vs_get(base + 1)])
 
     ! (clojure.lang.Range/create __lo __hi __st)
-    callf = gcl_empty([vs_get(base + 1)])
-    callf = gcl_cons(gc_sym("__st", [vs_get(base + 1)]), callf, &
-         [vs_get(base + 1), callf])
-    callf = gcl_cons(gc_sym("__hi", [vs_get(base + 1)]), callf, &
-         [vs_get(base + 1), callf])
-    callf = gcl_cons(gc_sym("__lo", [vs_get(base + 1)]), callf, &
-         [vs_get(base + 1), callf])
-    callf = gcl_cons(gc_sym("clojure.lang.Range/create", [vs_get(base + 1)]), &
-         callf, [vs_get(base + 1), callf])
-    call vs_set(base + 2, callf)
-    body = gcl_cons(vs_get(base + 2), gcl_empty([vs_get(base + 2)]), &
-         [vs_get(base + 2)])
-    call vs_set(base + 2, body)
+    ! THE ACCUMULATOR LIVES ON THE SHADOW STACK, not in a bare
+    ! local. Passing it in the `roots` array is not enough: the
+    ! array constructor is just another actual argument, so it is
+    ! built either side of gc_sym's allocation and protects
+    ! nothing while that allocation runs. This is the bug behind
+    ! (count (range 200000)) answering 5845 -- the call form the
+    ! tail thunk evaluates lost its arguments, and
+    ! (clojure.lang.Range/create) with none yields nothing.
+    call vs_set(base + 2, gcl_empty([vs_get(base + 1)]))
+    call vs_set(base + 4, gc_sym("__st", [vs_get(base + 1), vs_get(base + 2)]))
+    call vs_set(base + 2, gcl_cons(vs_get(base + 4), vs_get(base + 2), &
+         [vs_get(base + 1), vs_get(base + 2), vs_get(base + 4)]))
+    call vs_set(base + 4, gc_sym("__hi", [vs_get(base + 1), vs_get(base + 2)]))
+    call vs_set(base + 2, gcl_cons(vs_get(base + 4), vs_get(base + 2), &
+         [vs_get(base + 1), vs_get(base + 2), vs_get(base + 4)]))
+    call vs_set(base + 4, gc_sym("__lo", [vs_get(base + 1), vs_get(base + 2)]))
+    call vs_set(base + 2, gcl_cons(vs_get(base + 4), vs_get(base + 2), &
+         [vs_get(base + 1), vs_get(base + 2), vs_get(base + 4)]))
+    call vs_set(base + 4, gc_sym("clojure.lang.Range/create", &
+         [vs_get(base + 1), vs_get(base + 2)]))
+    call vs_set(base + 2, gcl_cons(vs_get(base + 4), vs_get(base + 2), &
+         [vs_get(base + 1), vs_get(base + 2), vs_get(base + 4)]))
+    call vs_set(base + 4, gcl_empty([vs_get(base + 2)]))
+    call vs_set(base + 2, gcl_cons(vs_get(base + 2), vs_get(base + 4), &
+         [vs_get(base + 2), vs_get(base + 4)]))
 
     thunk = gc_obj(OBJ_CLOSURE, [gcv_empty([vs_get(base + 2)]), &
          vs_get(base + 2), vs_get(base + 1), gc_nil()], &
@@ -5733,7 +5796,7 @@ contains
     type(gc_value) :: out, frame, body, callf, nextf, thunk, tail
     integer :: base
 
-    base = vs_enter(6)
+    base = vs_enter(7)
     call vs_set(base + 1, f)
     call vs_set(base + 2, x)
     frame = gce_new(gc_nil(), [vs_get(base + 1), vs_get(base + 2)])
@@ -5744,23 +5807,36 @@ contains
          vs_get(base + 2), [vs_get(base + 2), vs_get(base + 3)])
 
     ! (__f __x)
-    callf = gcl_empty([vs_get(base + 3)])
-    callf = gcl_cons(gc_sym("__x", [vs_get(base + 3)]), callf, &
-         [vs_get(base + 3), callf])
-    callf = gcl_cons(gc_sym("__f", [vs_get(base + 3)]), callf, &
-         [vs_get(base + 3), callf])
-    call vs_set(base + 4, callf)
+    ! THE ACCUMULATOR LIVES ON THE SHADOW STACK, not in a bare
+    ! local. Passing it in the `roots` array is not enough: the
+    ! array constructor is just another actual argument, so it is
+    ! built either side of gc_sym's allocation and protects
+    ! nothing while that allocation runs. This is the bug behind
+    ! (count (range 200000)) answering 5845 -- the call form the
+    ! tail thunk evaluates lost its arguments, and
+    ! (clojure.lang.Range/create) with none yields nothing.
+    call vs_set(base + 4, gcl_empty([vs_get(base + 3)]))
+    call vs_set(base + 7, gc_sym("__x", [vs_get(base + 3), vs_get(base + 4)]))
+    call vs_set(base + 4, gcl_cons(vs_get(base + 7), vs_get(base + 4), &
+         [vs_get(base + 3), vs_get(base + 4), vs_get(base + 7)]))
+    call vs_set(base + 7, gc_sym("__f", [vs_get(base + 3), vs_get(base + 4)]))
+    call vs_set(base + 4, gcl_cons(vs_get(base + 7), vs_get(base + 4), &
+         [vs_get(base + 3), vs_get(base + 4), vs_get(base + 7)]))
 
     ! (clojure.lang.Iterate/create __f (__f __x))
-    nextf = gcl_empty([vs_get(base + 4)])
-    nextf = gcl_cons(vs_get(base + 4), nextf, [vs_get(base + 4), nextf])
-    nextf = gcl_cons(gc_sym("__f", [vs_get(base + 4)]), nextf, &
-         [vs_get(base + 4), nextf])
-    nextf = gcl_cons(gc_sym("clojure.lang.Iterate/create", &
-         [vs_get(base + 4)]), nextf, [vs_get(base + 4), nextf])
-    body = gcl_cons(nextf, gcl_empty([vs_get(base + 4)]), &
-         [vs_get(base + 4), nextf])
-    call vs_set(base + 5, body)
+    call vs_set(base + 5, gcl_empty([vs_get(base + 4)]))
+    call vs_set(base + 5, gcl_cons(vs_get(base + 4), vs_get(base + 5), &
+         [vs_get(base + 4), vs_get(base + 5)]))
+    call vs_set(base + 7, gc_sym("__f", [vs_get(base + 4), vs_get(base + 5)]))
+    call vs_set(base + 5, gcl_cons(vs_get(base + 7), vs_get(base + 5), &
+         [vs_get(base + 4), vs_get(base + 5), vs_get(base + 7)]))
+    call vs_set(base + 7, gc_sym("clojure.lang.Iterate/create", &
+         [vs_get(base + 4), vs_get(base + 5)]))
+    call vs_set(base + 5, gcl_cons(vs_get(base + 7), vs_get(base + 5), &
+         [vs_get(base + 4), vs_get(base + 5), vs_get(base + 7)]))
+    call vs_set(base + 7, gcl_empty([vs_get(base + 5)]))
+    call vs_set(base + 5, gcl_cons(vs_get(base + 5), vs_get(base + 7), &
+         [vs_get(base + 5), vs_get(base + 7)]))
 
     thunk = gc_obj(OBJ_CLOSURE, [gcv_empty([vs_get(base + 5)]), &
          vs_get(base + 5), vs_get(base + 3), gc_nil()], &
@@ -7644,7 +7720,7 @@ contains
          end if
          if (n >= 3) stp = strip_meta(gcv_nth(args, 2))
          if (.not. (is_number(lo) .and. is_number(hi) .and. is_number(stp))) then
-            call fail("range: not a number")
+                 call fail("range: not a number")
          else
             out = range_cell(lo, hi, stp, [vs_get(base + 1)])
          end if

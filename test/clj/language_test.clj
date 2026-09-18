@@ -864,6 +864,27 @@
 (check "empty range"        (range 0 0) '())
 (check "infinite range"     (take 3 (range)) '(0 1 2))
 
+
+;;; ---- long lazy sequences ----------------------------------------
+;; These are GC tests wearing Clojure clothes. Each of them realises
+;; far more cells than the heap holds at once, so the collector runs
+;; many times mid-walk; every one of them answered a SMALLER, WRONG
+;; number before the roots in range_cell, iterate_cell and the static
+;; call path were fixed.
+;;
+;; 8000 is chosen, not more: it is past the point where the first
+;; failure appeared (about 5800), and these are a GATE -- the whole
+;; file runs under both compilers on every commit, and clotran walks
+;; a lazy cell in milliseconds, not microseconds. A bigger number
+;; would buy no more confidence and cost minutes.
+
+(check "count a long range"    (count (range 8000)) 8000)
+(check "count a long take"     (count (take 8000 (range 50000))) 8000)
+(check "count a long map"      (count (take 8000 (map inc (range 50000)))) 8000)
+(check "count a long iterate"  (count (take 8000 (iterate inc 0))) 8000)
+(check "walk a long range"     (do (dorun (range 8000)) :ok) :ok)
+(check "the last of a long range" (last (range 8000)) 7999)
+
 ;;; ---- report -----------------------------------------------------
 
 
