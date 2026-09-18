@@ -146,6 +146,7 @@ module GCEval
   integer, parameter :: B_RE_REPLACEALL = 250, B_RE_REPLACEFIRST = 251
   integer, parameter :: B_RE_APPENDREPL = 252, B_RE_APPENDTAIL = 253
   integer, parameter :: B_RE_START = 254, B_RE_END = 255
+  integer, parameter :: B_INTOARRAY = 256, B_EMPTYARRAY = 257
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -2605,7 +2606,18 @@ contains
     case ("cons");     out = native(B_CONS, "cons", [roots])
     case ("isInstance"); out = native(B_INSTANCE, "instance?", [roots])
     case ("getName", "getSimpleName"); out = native(B_GETNAME, "clotran-get-name", [roots])
-    case ("getStackTrace"); out = native(B_EMPTYVEC, "clotran-empty-vector", [roots])
+    ! An ARRAY, not a vector. Throwable->map asks (alength st)
+    ! straight after, and an empty vector is not an array -- so
+    ! every path through it, which is every printed exception and
+    ! every thrown-with-cause-msg? in Clojure's suite, died on
+    ! "alength: not an array" rather than on anything real.
+    case ("getStackTrace"); out = native(B_EMPTYARRAY, "clotran-empty-array", [roots])
+    ! setStackTrace is a no-op: there is nothing to set. ex-info
+    ! elides its own top frames through it, and the elision is
+    ! meaningless when the trace is always empty -- but the call
+    ! has to succeed, because it is (doto ex (.setStackTrace ...))
+    ! and the exception itself is the value.
+    case ("setStackTrace"); out = native(B_IDENTITY, "identity", [roots])
     case ("getNamespace"); out = native(B_NAMESPACE, "namespace", [roots])
     case ("getClass")
        ! clotran's classes are its type tags, so .getClass is
@@ -3322,6 +3334,13 @@ contains
     end if
     if (cname == "Throwable" .or. cname == "java.lang.Throwable") &
          is_throwable_class = .true.
+    ! ExceptionInfo does not end in "Exception", and core.clj
+    ! constructs one directly -- ex-info is
+    ! (ExceptionInfo. msg map cause), imported under its short
+    ! name. Both spellings, for the same reason Pattern needs
+    ! both.
+    if (cname == "ExceptionInfo" .or. &
+         cname == "clojure.lang.ExceptionInfo") is_throwable_class = .true.
   end function is_throwable_class
 
   function nth_or_nil(v, i) result(out)
@@ -3741,6 +3760,10 @@ contains
        ! auto-gensym counter, so a gensym and an x# can never collide.
        case ("isReduced"); out = native(B_ISREDUCED, "reduced?", [roots]); return
        case ("toArray"); out = native(B_TOARRAY, "to-array", [roots]); return
+       ! into-array. The component type, when given, is the FIRST
+       ! argument and the sequence is always the last.
+       case ("seqToTypedArray")
+          out = native(B_INTOARRAY, "into-array", [roots]); return
        case ("nextID"); out = native(B_NEXTID, "clotran-next-id", [roots]); return
        case ("load"); out = native(B_RTLOAD, "clotran-rt-load", [roots]); return
        case ("subvec"); out = native(B_SUBVEC, "subvec", [roots]); return
@@ -4379,7 +4402,14 @@ contains
        yes = .false.
        return
     end if
-    yes = (gc_ref_text(got%ref) == want)
+    ! Either spelling. The class name is kept as the THROWING
+    ! code wrote it, and the catch names it however the catching
+    ! code wrote it -- ex-info constructs an ExceptionInfo under
+    ! its short imported name, and Clojure's own suite catches
+    ! clojure.lang.ExceptionInfo. class_matches knows the rule
+    ! but only in one direction, so it is asked both ways.
+    yes = class_matches(gc_ref_text(got%ref), want) .or. &
+         class_matches(want, gc_ref_text(got%ref))
   end function catch_matches
 
   ! {:error "message"} -- an internal failure as an ordinary clotran
@@ -5691,6 +5721,44 @@ contains
     end if
     call vs_leave(base)
   end function regex_split
+
+  ! A `value` array holding the elements of a collection, which is what
+  ! into-array is: (RT/seqToTypedArray (seq aseq)), optionally with a
+  ! component type first. There are no primitive component types here
+  ! -- every array of objects is a `value` array -- so the type is read
+  ! and discarded, which is DEVIATIONS.md 24's territory rather than a
+  ! new one.
+  function value_array(items, roots) result(out)
+    type(gc_value), intent(in) :: items
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, vec, run
+    character(len=:), allocatable :: err
+    integer :: base, h, k, cnt
+
+    out = gc_nil()
+    base = vs_enter(3)
+    vec = coll_to_vector(items, roots)
+    call vs_set(base + 1, vec)
+    cnt = gcv_count(vs_get(base + 1))
+    h = gcna_new("value", [cnt], [0], err)
+    if (h == 0) then
+       call fail(err)
+       call vs_leave(base)
+       return
+    end if
+    run = gc_vec(max(1, cnt), [roots, vs_get(base + 1)])
+    call vs_set(base + 2, run)
+    out = gc_obj(OBJ_ARRAY, [vs_get(base + 2)], [roots, vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 3, out)
+    call gc_set_i1(vs_get(base + 3), h)
+    call gc_set_i2(vs_get(base + 3), -1) ! owns the handle
+    do k = 0, cnt - 1
+       call gc_vec_set(gc_slot(vs_get(base + 3), 1), k + 1, &
+            gcv_nth(vs_get(base + 1), k))
+    end do
+    out = vs_get(base + 3)
+    call vs_leave(base)
+  end function value_array
 
   ! Matcher.quoteReplacement: \ and $ are the only two characters a
   ! replacement string treats specially, so escaping those makes it
@@ -8588,6 +8656,10 @@ contains
                  [vs_get(base + 1), vs_get(base + 2)])
          end if
        end block
+    case (B_EMPTYARRAY)
+       out = value_array(gcv_empty([vs_get(base + 1)]), [vs_get(base + 1)])
+    case (B_INTOARRAY)
+       out = value_array(gcv_nth(args, n - 1), [vs_get(base + 1)])
     case (B_RE_START, B_RE_END)
        block
          type(gc_value) :: mt, iv
@@ -10461,7 +10533,8 @@ contains
        ! instead of unwrapping it on an early exit.
        yes = gca_contains(strip_meta(v), gc_key("clotran/reduced", [v]))
     case ("Throwable", "java.lang.Throwable", "Exception", "java.lang.Exception", &
-          "Error", "IExceptionInfo", "clojure.lang.IExceptionInfo")
+          "Error", "IExceptionInfo", "clojure.lang.IExceptionInfo", &
+          "ExceptionInfo", "clojure.lang.ExceptionInfo")
        yes = (t == "error")
     case ("clojure.lang.ISeq");     yes = (t == "list" .or. t == "lazy-seq" .or. t == "seq")
     case ("clojure.lang.IPersistentList"); yes = (t == "list")

@@ -1046,6 +1046,37 @@
                            (clojure.string/last-index-of "hello" \l)]
                           [2 3 3])
 
+
+;;; ---- arrays, and the exceptions that ask for one -----------------
+;; .getStackTrace answered an empty VECTOR, and Throwable->map asks
+;; (alength st) straight after -- so every printed exception, and every
+;; thrown-with-cause-msg? in Clojure's suite, died on "alength: not an
+;; array" rather than on anything real. There is no stack trace to
+;; report here; there is an empty array.
+
+(check "into-array length"   (alength (into-array [1 2 3])) 3)
+(check "into-array element"  (aget (into-array [1 2 3]) 1) 2)
+(check "into-array seq"      (seq (into-array [:x :y])) '(:x :y))
+(check "an empty into-array" (alength (into-array [])) 0)
+;; The component type is read and discarded -- there are no primitive
+;; component types here (DEVIATIONS 24).
+(check "into-array with a type" (vec (into-array String ["a" "b"])) ["a" "b"])
+(check "an empty stack trace" (alength (.getStackTrace (Exception. "x"))) 0)
+(check "Throwable->map"      (:cause (Throwable->map (Exception. "boom"))) "boom")
+
+;;; ---- ExceptionInfo -----------------------------------------------
+;; It does not end in "Exception", so it was not recognised as a
+;; throwable class at all -- and a catch naming it in full could not
+;; match a throw that named it short.
+
+(check "ex-data"    (ex-data (ex-info "m" {:a 1})) {:a 1})
+(check "ex-message" (ex-message (ex-info "m" {:a 1})) "m")
+(check "instance?"  (instance? clojure.lang.ExceptionInfo (ex-info "m" {})) true)
+(check "catch it by its full name"
+       (try (throw (ex-info "m" {:a 1})) (catch clojure.lang.ExceptionInfo e (ex-data e)))
+       {:a 1})
+(check "a plain exception has no data" (ex-data (Exception. "plain")) nil)
+
 ;;; ---- report -----------------------------------------------------
 
 
