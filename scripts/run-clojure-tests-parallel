@@ -1,0 +1,111 @@
+#!/usr/bin/env bb
+;; Clojure's own test suite against clotran, N namespaces at a time.
+;;
+;; Same work as scripts/run-clojure-tests and the same report -- one
+;; clotran process per namespace, so a hard failure in one file cannot
+;; hide the others -- but the processes run at once instead of in a
+;; queue. Measured on a 10-core machine at 8 jobs:
+;;
+;;   sequential   ~16 min      (948 CPU-seconds, one at a time)
+;;   parallel     2m17s        (the same 948, at 697% CPU)
+;;
+;; The TOTAL line is identical to the sequential runner's. That is the
+;; requirement, not a nicety: a faster suite that reports different
+;; numbers is worth nothing.
+;;
+;; BATCHING WAS TRIED AND REJECTED, which is worth recording because
+;; the arithmetic for it looks compelling. Each process re-reads and
+;; re-evaluates core.clj first -- 7.1 seconds, measured twice -- so 67
+;; of them spend 476 of the suite's 948 CPU-seconds doing the same
+;; work. Loading it once per worker and running several namespaces in
+;; that one process should have halved the run. It did not:
+;;
+;;   - 19 of the 67 print no summary at all, because a file that aborts
+;;     partway defines no tests. That is indistinguishable from a
+;;     worker that died, so all 19 had to be re-run alone -- 27 loads
+;;     rather than 8, and a long serial tail. It came out SLOWER than
+;;     plain parallelism: 4m14s at 169% CPU.
+;;
+;;   - worse, the numbers moved. clojure.test-clojure.reflect reports
+;;     tests=0 on its own and tests=5 error=7 in a batch: it gets
+;;     further when another namespace has been loaded first. Loading is
+;;     not self-contained here, so a batched score would depend on
+;;     which namespaces happened to share a process.
+;;
+;; The second point is a clotran fact rather than a runner fact. If
+;; namespace loading ever becomes self-contained this is worth
+;; revisiting, because those 476 seconds are still there.
+;;
+;;   CLOTRAN_TEST_JOBS      processes at once (default 4)
+;;   CLOTRAN_TEST_TIMEOUT   seconds per namespace (default 240)
+
+(require '[babashka.process :as p]
+         '[clojure.string :as str]
+         '[clojure.java.io :as io])
+
+(def repo (-> *file* io/file .getCanonicalFile .getParentFile .getParentFile))
+(def jobs (parse-long (or (System/getenv "CLOTRAN_TEST_JOBS") "4")))
+(def timeout-ms (* 1000 (parse-long (or (System/getenv "CLOTRAN_TEST_TIMEOUT") "240"))))
+
+(defn note [& xs]
+  (binding [*out* *err*] (apply println xs) (flush)))
+
+(defn test-files []
+  (->> (io/file repo "test/clj/clojure/test_clojure")
+       .listFiles
+       (filter #(str/ends-with? (.getName %) ".clj"))
+       (sort-by #(.getName %))))
+
+(defn ns-of
+  "The namespace a test file declares, or nil. The reader is closed --
+   this runs 67 times before anything else happens."
+  [f]
+  (with-open [r (io/reader f)]
+    (some #(second (re-find #"^\(ns ([a-zA-Z0-9._-]+)" %)) (line-seq r))))
+
+(defn run-one
+  "One namespace in its own clotran. Its clojure.test summary, or nil
+   if it never got far enough to print one -- the CRASHED line in the
+   report, which is 38 of the 67 today."
+  [f]
+  (let [n    (ns-of f)
+        path (str "test/clj/clojure/test_clojure/" (.getName f))
+        prog (str "(require 'clojure.test)\n"
+                  "(load-file \"test/clj/clojure/test_helper.clj\")\n"
+                  "(load-file \"" path "\")\n"
+                  "(clojure.test/run-tests '" n ")\n")
+        proc (p/process {:dir repo :in prog :out :string :err :string}
+                        "./clotran-gc" "src/clj/clojure/core.clj")
+        res  (deref proc timeout-ms ::timeout)]
+    (when (= res ::timeout)
+      (note "TIMED OUT after" (quot timeout-ms 1000) "s:" n)
+      (p/destroy-tree proc))
+    (let [out (:out (if (= res ::timeout) (deref proc 5000 nil) res))]
+      ;; The LAST summary in the output: loading the helper can print
+      ;; one of its own, and the namespace's own result comes after it.
+      (when-let [m (last (re-seq #"\{:test (\d+),? :pass (\d+),? :fail (\d+),? :error (\d+)"
+                                 (or out "")))]
+        (zipmap [:test :pass :fail :error] (map parse-long (rest m)))))))
+
+(let [files   (filter ns-of (test-files))
+      _       (note (count files) "namespaces," jobs "at a time")
+      results (->> files
+                   (partition-all (max 1 (int (Math/ceil (/ (count files) (double jobs))))))
+                   ;; Each worker takes a share and runs them one after
+                   ;; another -- still one process per namespace, just
+                   ;; `jobs` of them in flight at a time.
+                   (map (fn [share]
+                          (future (doall (map (fn [f] [(ns-of f) (run-one f)]) share)))))
+                   doall
+                   (mapcat deref)
+                   (into {}))]
+  (doseq [f files :let [n (ns-of f)]]
+    (if-let [s (results n)]
+      (println (format "%-44s tests=%-4d pass=%-5d fail=%-4d error=%-4d"
+                       n (:test s) (:pass s) (:fail s) (:error s)))
+      (println (format "%-44s CRASHED" n))))
+  (println "---")
+  (let [t (remove nil? (vals results))]
+    (println (format "TOTAL  tests=%d  pass=%d  fail=%d  error=%d"
+                     (reduce + (map :test t)) (reduce + (map :pass t))
+                     (reduce + (map :fail t)) (reduce + (map :error t))))))
