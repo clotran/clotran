@@ -43,6 +43,8 @@
 ! torture tests are what prove it: with a collection at every single
 ! allocation, the evaluator still computes the right answers.
 module GCEval
+  use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_copy_sign, &
+       ieee_positive_inf, ieee_negative_inf, ieee_quiet_nan
   use GC
   use GCList
   use GCVector
@@ -137,7 +139,8 @@ module GCEval
   integer, parameter :: B_EMPTYMAP = 191, B_REMOVEMETHOD = 192
   ! java.lang.Math occupies a BLOCK: B_MATH0 + math_index(name).
   integer, parameter :: B_MATH0 = 200, B_MATHN = 45
-  integer, parameter :: B_FORMAT = 193
+  integer, parameter :: B_FORMAT = 193, B_NUMCOMPARE = 194
+  integer, parameter :: B_READSTRING = 195
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -3651,6 +3654,11 @@ contains
        end if
     else if (cls == "clojure.lang.RT") then
        select case (mname)
+       ! read-string is (RT/readString s): ONE form, and trailing
+       ! text is ignored -- which is gcr_read rather than
+       ! gcr_read_all.
+       case ("readString")
+          out = native(B_READSTRING, "read-string", [roots]); return
        case ("baseLoader")
           out = native(B_BASELOADER, "clotran-base-loader", [roots]); return
        ! The array accessors alength, aget, aset and aclone inline to
@@ -3732,6 +3740,75 @@ contains
        select case (mname)
        case ("MAX_VALUE"); out = gc_int(huge(0)); return
        case ("MIN_VALUE"); out = gc_int(-huge(0) - 1); return
+       end select
+    end if
+    ! Long's bounds are clotran's own integer bounds: an integer
+    ! here IS a 64-bit one (gc_ip), which is what makes
+    ! (inc Long/MAX_VALUE) the same question in both.
+    if (cls == "Long" .or. cls == "java.lang.Long") then
+       select case (mname)
+       case ("MAX_VALUE"); out = gc_int(huge(0_gc_ip)); return
+       case ("MIN_VALUE"); out = gc_int(-huge(0_gc_ip) - 1_gc_ip); return
+       case ("SIZE");      out = gc_int(64); return
+       case ("BYTES");     out = gc_int(8); return
+       end select
+    end if
+    if (cls == "Short" .or. cls == "java.lang.Short") then
+       select case (mname)
+       case ("MAX_VALUE"); out = gc_int(32767); return
+       case ("MIN_VALUE"); out = gc_int(-32768); return
+       end select
+    end if
+    if (cls == "Byte" .or. cls == "java.lang.Byte") then
+       select case (mname)
+       case ("MAX_VALUE"); out = gc_int(127); return
+       case ("MIN_VALUE"); out = gc_int(-128); return
+       end select
+    end if
+    ! Double's constants, as IEEE doubles. MIN_VALUE is the
+    ! smallest POSITIVE value -- a denormal -- not the most
+    ! negative one, which is the trap Java sets here and which
+    ! Clojure's own math tests check.
+    if (cls == "Double" .or. cls == "java.lang.Double") then
+       select case (mname)
+       case ("MAX_VALUE");    out = gc_real(huge(1.0_gc_dp)); return
+       case ("MIN_VALUE");    out = gc_real(tiny(1.0_gc_dp) * epsilon(1.0_gc_dp)); return
+       case ("MIN_NORMAL");   out = gc_real(tiny(1.0_gc_dp)); return
+       case ("MAX_EXPONENT"); out = gc_int(1023); return
+       case ("MIN_EXPONENT"); out = gc_int(-1022); return
+       case ("SIZE");         out = gc_int(64); return
+       case ("BYTES");        out = gc_int(8); return
+       end select
+    end if
+    if (cls == "Float" .or. cls == "java.lang.Float") then
+       select case (mname)
+       case ("MAX_VALUE");    out = gc_real(real(huge(1.0_4), gc_dp)); return
+       case ("MIN_VALUE");    out = gc_real(1.4012984643248171e-45_gc_dp); return
+       case ("MAX_EXPONENT"); out = gc_int(127); return
+       case ("MIN_EXPONENT"); out = gc_int(-126); return
+       end select
+    end if
+    ! The three non-finite constants, shared by Double and Float.
+    if (cls == "Double" .or. cls == "java.lang.Double" .or. &
+         cls == "Float" .or. cls == "java.lang.Float") then
+       select case (mname)
+       case ("POSITIVE_INFINITY")
+          out = gc_real(ieee_value(1.0_gc_dp, ieee_positive_inf)); return
+       case ("NEGATIVE_INFINITY")
+          out = gc_real(ieee_value(1.0_gc_dp, ieee_negative_inf)); return
+       case ("NaN")
+          out = gc_real(ieee_value(1.0_gc_dp, ieee_quiet_nan)); return
+       end select
+    end if
+    ! Number.compare -- the TOTAL order Java puts on doubles, which
+    ! is not <: it ranks -0.0 below 0.0 and NaN above everything.
+    ! clojure.test-clojure.math tests signed zero through it.
+    if (mname == "compare") then
+       select case (cls)
+       case ("Double", "java.lang.Double", "Float", "java.lang.Float", &
+            "Long", "java.lang.Long", "Integer", "java.lang.Integer", &
+            "Short", "java.lang.Short", "Byte", "java.lang.Byte")
+          out = native(B_NUMCOMPARE, "clotran-num-compare", [roots]); return
        end select
     end if
     if (cls == "Integer" .or. cls == "java.lang.Integer" .or. &
@@ -5380,6 +5457,15 @@ contains
        call fail("Math: no such member")
     end select
   end function math_call
+
+  ! Whether a double is NEGATIVE zero. (x < 0.0) is false for it
+  ! and (x == 0.0) is true, so the sign bit is the only witness;
+  ! ieee_copy_sign carries it onto a value that can be compared.
+  logical function is_neg_zero(x)
+    real(gc_dp), intent(in) :: x
+    is_neg_zero = (x == 0.0_gc_dp .and. &
+         ieee_copy_sign(1.0_gc_dp, x) < 0.0_gc_dp)
+  end function is_neg_zero
 
   ! ---- String.format ----------------------------------------------
   !
@@ -8245,6 +8331,53 @@ contains
             out = gc_str(java_format(gc_ref_text(fv%ref), vs_get(base + 2)), &
                  [vs_get(base + 1), vs_get(base + 2)])
          end if
+       end block
+    case (B_READSTRING)
+       block
+         type(gc_value) :: sv
+         sv = strip_meta(gcv_nth(args, 0))
+         if (sv%tag /= GCT_STR) then
+            call fail("read-string wants a string")
+         else
+            out = gcr_read(gc_ref_text(sv%ref), [vs_get(base + 1)])
+            if (gcr_has_error()) call fail(gcr_error())
+         end if
+       end block
+    case (B_NUMCOMPARE)
+       ! Double.compare's total order. -0.0 < 0.0, and NaN is
+       ! greater than every other value including +Inf -- neither
+       ! of which plain < can say.
+       block
+         real(gc_dp) :: dx, dy
+         type(gc_value) :: cx, cy
+         integer :: cres
+         cx = strip_meta(gcv_nth(args, 0))
+         cy = strip_meta(gcv_nth(args, 1))
+         if (cx%tag == GCT_INT .and. cy%tag == GCT_INT) then
+            cres = 0
+            if (cx%ival < cy%ival) cres = -1
+            if (cx%ival > cy%ival) cres = 1
+         else
+            dx = num_dbl(cx)
+            dy = num_dbl(cy)
+            if (dx < dy) then
+               cres = -1
+            else if (dx > dy) then
+               cres = 1
+            else if (dx /= dx .or. dy /= dy) then
+               ! At least one is NaN, and they did not compare
+               ! equal: NaN sorts last, and two NaNs are equal.
+               cres = 0
+               if (dy /= dy .and. dx == dx) cres = -1
+               if (dx /= dx .and. dy == dy) cres = 1
+            else
+               ! Equal as numbers -- so only signed zero is left.
+               cres = 0
+               if (is_neg_zero(dx) .and. .not. is_neg_zero(dy)) cres = -1
+               if (is_neg_zero(dy) .and. .not. is_neg_zero(dx)) cres = 1
+            end if
+         end if
+         out = gc_int(cres)
        end block
     case (B_EMPTYMAP)
        out = gca_empty([vs_get(base + 1)])

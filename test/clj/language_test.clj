@@ -910,6 +910,45 @@
 (check "a subnormal"        (pr-str 2.2250738585072014E-308) "2.2250738585072014E-308")
 (check "reads back"         (= (read-string (pr-str 0.479425538604203)) 0.479425538604203) true)
 
+;;; ---- read-string ------------------------------------------------
+;; (RT/readString s) reads ONE form and ignores what follows.
+
+(check "read a list"     (read-string "(1 2 3)") '(1 2 3))
+(check "read a map"      (read-string "{:a 1}") {:a 1})
+(check "read one form"   (read-string "1 2 3") 1)
+(check "read a keyword"  (read-string ":kw") :kw)
+(check "a bad form throws" (try (read-string "(1") :no (catch Throwable e :threw)) :threw)
+
+;;; ---- the boxed number classes -----------------------------------
+;; Long/MAX_VALUE and its neighbours, and Double.compare -- the TOTAL
+;; order, which ranks -0.0 below 0.0 and NaN above everything, neither
+;; of which < can say. Values from `clj`.
+
+(check "Long bounds"    [Long/MAX_VALUE Long/MIN_VALUE] [9223372036854775807 -9223372036854775808])
+(check "Long size"      [Long/SIZE Long/BYTES] [64 8])
+(check "Integer bounds" [Integer/MAX_VALUE Integer/MIN_VALUE] [2147483647 -2147483648])
+(check "Short bounds"   [Short/MAX_VALUE Short/MIN_VALUE] [32767 -32768])
+(check "Byte bounds"    [Byte/MAX_VALUE Byte/MIN_VALUE] [127 -128])
+(check "Double bounds"  [Double/MAX_VALUE Double/MIN_VALUE]
+                        [1.7976931348623157E308 4.9E-324])
+(check "Double exponents" [Double/MAX_EXPONENT Double/MIN_EXPONENT] [1023 -1022])
+(check "the non-finite constants"
+       [(pr-str Double/POSITIVE_INFINITY) (pr-str Double/NEGATIVE_INFINITY)
+        (pr-str Double/NaN)]
+       ["##Inf" "##-Inf" "##NaN"])
+(check "compare"        [(Double/compare 1.0 2.0) (Double/compare 2.0 1.0)
+                         (Double/compare 1.0 1.0)] [-1 1 0])
+(check "compare signed zero"
+       [(Double/compare -0.0 0.0) (Double/compare 0.0 -0.0) (Double/compare -0.0 -0.0)]
+       [-1 1 0])
+;; NaN is greater than everything, and equal to itself.
+(check "compare NaN"
+       [(Double/compare Double/NaN 1.0) (Double/compare 1.0 Double/NaN)
+        (Double/compare Double/NaN Double/NaN)
+        (Double/compare Double/NaN Double/POSITIVE_INFINITY)]
+       [1 -1 0 1])
+(check "Long compare"   [(Long/compare 1 2) (Long/compare 2 1) (Long/compare 1 1)] [-1 1 0])
+
 ;;; ---- report -----------------------------------------------------
 
 
