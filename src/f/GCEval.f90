@@ -127,6 +127,9 @@ module GCEval
   integer, parameter :: B_ANEWINST = 170, B_ACLONE = 171, B_PREPRET = 172
   integer, parameter :: B_NUMCAST = 173, B_NUMEQ = 174, B_ABS = 175
   integer, parameter :: B_NUMER = 176, B_DENOM = 177
+  integer, parameter :: B_SBASIS = 180, B_SCREATE = 181
+  integer, parameter :: B_SCONSTRUCT = 182, B_SACCESSOR = 183
+  integer, parameter :: B_ASIFASSOC = 184
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -3218,6 +3221,7 @@ contains
          gc_ref_is(sym%ref, "clojure.lang.Symbol") .or. &
          gc_ref_is(sym%ref, "clojure.lang.Keyword") .or. &
          gc_ref_is(sym%ref, "clojure.lang.Numbers") .or. &
+         gc_ref_is(sym%ref, "clojure.lang.PersistentStructMap") .or. &
          gc_ref_is(sym%ref, "Number") .or. &
          gc_ref_is(sym%ref, "Ratio") .or. &
          gc_ref_is(sym%ref, "java.util.Arrays") .or. &
@@ -3319,6 +3323,15 @@ contains
           out = native(B_VECTOR, "vector", [roots])
           return
        end if
+    else if (cls == "clojure.lang.PersistentStructMap") then
+       ! defstruct/struct/struct-map/accessor, which core.clj
+       ! writes entirely in terms of these four.
+       select case (mname)
+       case ("createSlotMap"); out = native(B_SBASIS, "clotran-struct-basis", [roots]); return
+       case ("create");        out = native(B_SCREATE, "clotran-struct-map", [roots]); return
+       case ("construct");     out = native(B_SCONSTRUCT, "clotran-struct", [roots]); return
+       case ("getAccessor");   out = native(B_SACCESSOR, "clotran-struct-accessor", [roots]); return
+       end select
     else if (cls == "clojure.lang.Util") then
        select case (mname)
        case ("equiv", "equals"); out = native(B_EQ, "=", [roots]); return
@@ -3351,8 +3364,20 @@ contains
        end if
     else if (cls == "clojure.lang.PersistentHashMap" .or. &
              cls == "clojure.lang.PersistentArrayMap") then
-       if (mname == "create" .or. mname == "createWithCheck" .or. &
-           mname == "createAsIfByAssoc") then
+       ! EMPTY is a FIELD, not a call: core.clj's keyword-argument
+       ! destructuring names it directly, which is how pprint
+       ! reached it -- (defn f [& {:keys [...]}]) expands to it.
+       if (mname == "EMPTY") then
+          out = gca_empty([roots]); return
+       end if
+       ! createAsIfByAssoc takes ONE collection of alternating
+       ! keys and values, where hash-map takes them as separate
+       ! arguments -- so sharing hash-map's builtin made a map of
+       ! the collection itself rather than of its contents.
+       if (mname == "createAsIfByAssoc") then
+          out = native(B_ASIFASSOC, "clotran-map-from-pairs", [roots]); return
+       end if
+       if (mname == "create" .or. mname == "createWithCheck") then
           out = native(B_HMAP, "hash-map", [roots]); return
        end if
     else if (cls == "clojure.lang.PersistentHashSet" .or. &
@@ -5840,6 +5865,34 @@ contains
        ! predicate like > works here too.
        out = gc_int(comparator_call(gcv_nth(args, 0), gcv_nth(args, 1), gcv_nth(args, 2)))
 
+    case (B_SBASIS)
+       out = struct_basis(args, [vs_get(base + 1)])
+    case (B_SCREATE)
+       out = struct_create(args, [vs_get(base + 1)])
+    case (B_SCONSTRUCT)
+       out = struct_construct(args, [vs_get(base + 1)])
+    case (B_SACCESSOR)
+       out = struct_accessor(args, [vs_get(base + 1)])
+
+    case (B_ASIFASSOC)
+       ! One collection, alternating k v, as if by repeated assoc.
+       block
+         type(gc_value) :: kvv, acc
+         integer :: i, n2
+         kvv = coll_to_vector(gcv_nth(args, 0), [vs_get(base + 1)])
+         call vs_set(base + 2, kvv)
+         n2 = gcv_count(vs_get(base + 2))
+         acc = gca_empty([vs_get(base + 1), vs_get(base + 2)])
+         call vs_set(base + 3, acc)
+         do i = 0, n2 - 2, 2
+            acc = gca_assoc(vs_get(base + 3), gcv_nth(vs_get(base + 2), i), &
+                 gcv_nth(vs_get(base + 2), i + 1), &
+                 [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+            call vs_set(base + 3, acc)
+         end do
+         out = vs_get(base + 3)
+       end block
+
     case (B_PREPRET)
        ! (prepRet component-type value) -- the value, unchanged.
        out = gcv_nth(args, 1)
@@ -7887,6 +7940,149 @@ contains
        k = k + 1
     end do
   end subroutine merge_run
+
+  ! --- struct maps --------------------------------------------------
+  !
+  ! A struct map IS a map. PersistentStructMap on the JVM is a storage
+  ! optimisation -- a shared key basis plus a flat value array, so N
+  ! instances of the same struct do not each carry their keys -- and
+  ! nothing about its BEHAVIOUR differs from a map. Verified against
+  ! clj:
+  !
+  !   (defstruct point :x :y)
+  !   (struct point 1 2)         => {:x 1, :y 2}
+  !   (struct point 1)           => {:x 1, :y nil}  basis keys are
+  !   (struct-map point :x 1)    => {:x 1, :y nil}  always present
+  !   (struct-map point :x 1 :z 9) => {:x 1, :y nil, :z 9}  extras ok
+  !   (map? (struct point 1 2))  => true
+  !
+  ! So clotran's structs are its maps, and the basis is a VECTOR of the
+  ! keys -- which is all createSlotMap's Def is, minus the key->slot
+  ! index that only matters when the values live in an array.
+  !
+  ! This is here because clojure/pprint.clj uses defstruct, so without
+  ! it pprint does not load -- and clojure.test-clojure.reflect does
+  ! (:use clojure.pprint), so reflect does not load either.
+
+  ! createSlotMap: the basis, as a vector of the keys.
+  function struct_basis(args, roots) result(out)
+    type(gc_value), intent(in) :: args
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, keys
+    keys = strip_meta(gcv_nth(args, 0))
+    if (keys%tag == GCT_NIL) then
+       call fail("Must supply keys")
+       out = gc_nil()
+       return
+    end if
+    out = coll_to_vector(keys, roots)
+  end function struct_basis
+
+  ! A map holding every basis key, each nil. Both constructors start
+  ! here, because an unsupplied basis key is PRESENT and nil rather
+  ! than absent -- that is what makes (struct point 1) answer
+  ! {:x 1, :y nil} rather than {:x 1}.
+  function struct_blank(basis, roots) result(out)
+    type(gc_value), intent(in) :: basis
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, tmp
+    integer :: i, base
+    base = vs_enter(2)
+    call vs_set(base + 1, basis)
+    tmp = gca_empty([roots, [basis]])
+    call vs_set(base + 2, tmp)
+    do i = 0, gcv_count(vs_get(base + 1)) - 1
+       tmp = gca_assoc(vs_get(base + 2), gcv_nth(vs_get(base + 1), i), gc_nil(), &
+            [roots, [vs_get(base + 1), vs_get(base + 2)]])
+       call vs_set(base + 2, tmp)
+    end do
+    out = vs_get(base + 2)
+    call vs_leave(base)
+  end function struct_blank
+
+  ! construct: the values positionally against the basis.
+  function struct_construct(args, roots) result(out)
+    type(gc_value), intent(in) :: args
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, basis, vals, tmp
+    integer :: i, n, base
+    base = vs_enter(3)
+    basis = strip_meta(gcv_nth(args, 0))
+    call vs_set(base + 1, basis)
+    vals = coll_to_vector(gcv_nth(args, 1), [roots, [basis]])
+    call vs_set(base + 2, vals)
+    n = gcv_count(vs_get(base + 2))
+    if (n > gcv_count(vs_get(base + 1))) then
+       call fail("Too many arguments to struct constructor")
+       call vs_leave(base)
+       out = gc_nil()
+       return
+    end if
+    tmp = struct_blank(vs_get(base + 1), [roots, [vs_get(base + 2)]])
+    call vs_set(base + 3, tmp)
+    do i = 0, n - 1
+       tmp = gca_assoc(vs_get(base + 3), gcv_nth(vs_get(base + 1), i), &
+            gcv_nth(vs_get(base + 2), i), &
+            [roots, [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)]])
+       call vs_set(base + 3, tmp)
+    end do
+    out = vs_get(base + 3)
+    call vs_leave(base)
+  end function struct_construct
+
+  ! create: key/value pairs, which may name keys outside the basis.
+  function struct_create(args, roots) result(out)
+    type(gc_value), intent(in) :: args
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, basis, kvs, tmp
+    integer :: i, n, base
+    base = vs_enter(3)
+    basis = strip_meta(gcv_nth(args, 0))
+    call vs_set(base + 1, basis)
+    kvs = coll_to_vector(gcv_nth(args, 1), [roots, [basis]])
+    call vs_set(base + 2, kvs)
+    n = gcv_count(vs_get(base + 2))
+    if (mod(n, 2) /= 0) then
+       call fail("No value supplied for key: " // &
+            gcp_str(gcv_nth(vs_get(base + 2), n - 1), .true.))
+       call vs_leave(base)
+       out = gc_nil()
+       return
+    end if
+    tmp = struct_blank(vs_get(base + 1), [roots, [vs_get(base + 2)]])
+    call vs_set(base + 3, tmp)
+    do i = 0, n - 2, 2
+       tmp = gca_assoc(vs_get(base + 3), gcv_nth(vs_get(base + 2), i), &
+            gcv_nth(vs_get(base + 2), i + 1), &
+            [roots, [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)]])
+       call vs_set(base + 3, tmp)
+    end do
+    out = vs_get(base + 3)
+    call vs_leave(base)
+  end function struct_create
+
+  ! getAccessor: the KEY itself. Clojure returns a closure over the
+  ! value slot, which is faster than a lookup on the JVM; here the
+  ! values are in a map and a keyword already looks itself up, so
+  ! ((accessor point :x) p) is (:x p). What is lost is the
+  ! "Accessor/struct mismatch" error for applying one struct's
+  ! accessor to another -- see DEVIATIONS.
+  function struct_accessor(args, roots) result(out)
+    type(gc_value), intent(in) :: args
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, basis, k
+    integer :: i
+    basis = strip_meta(gcv_nth(args, 0))
+    k = gcv_nth(args, 1)
+    out = gc_nil()
+    do i = 0, gcv_count(basis) - 1
+       if (gc_equal(gcv_nth(basis, i), strip_meta(k))) then
+          out = k
+          return
+       end if
+    end do
+    call fail("Not a key of struct")
+  end function struct_accessor
 
   recursive function deep_equal(a0, b0, roots) result(eq)
     type(gc_value), intent(in) :: a0, b0

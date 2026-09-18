@@ -340,6 +340,41 @@
 (check "min max abs"   [(min 1 2.5) (max 1 2.5) (abs -3) (abs -3.5)] [1 2.5 3 3.5])
 (check "inc dec"       [(inc 1) (inc 1.5) (dec 1) (dec 1.5)] [2 2.5 0 0.5])
 
+;;; ---- struct maps ---------------------------------------------------
+;;
+;; A struct map IS a map. PersistentStructMap on the JVM is a storage
+;; optimisation -- one shared key basis plus a flat value array, so N
+;; instances do not each carry their keys -- and nothing about its
+;; behaviour differs. So clotran's structs are its maps, and the basis
+;; is a vector of the keys.
+;;
+;; This is not a curiosity: clojure/pprint.clj uses defstruct, and
+;; clojure.test-clojure.reflect does (:use clojure.pprint), so without
+;; it neither loads. Every value below is what `clj` printed.
+
+(defstruct point :x :y)
+(check "struct"          (struct point 1 2) {:x 1 :y 2})
+;; An unsupplied basis key is PRESENT and nil, not absent.
+(check "struct partial"  (struct point 1) {:x 1 :y nil})
+(check "struct-map"      (struct-map point :x 1) {:x 1 :y nil})
+;; ...and a key outside the basis is allowed.
+(check "struct extra"    (struct-map point :x 1 :z 9) {:x 1 :y nil :z 9})
+(check "struct keys"     (vec (keys (struct point 1 2))) [:x :y])
+(check "struct is a map" (map? (struct point 1 2)) true)
+(check "struct assoc"    (assoc (struct point 1 2) :z 3) {:x 1 :y 2 :z 3})
+(check "accessor"        ((accessor point :x) (struct point 1 2)) 1)
+(check "too many vals"   (try (struct point 1 2 3) (catch Throwable e :err)) :err)
+(check "not a basis key" (try (accessor point :q) (catch Throwable e :err)) :err)
+
+;; Keyword-argument destructuring reaches two host members nothing else
+;; did -- PersistentArrayMap/EMPTY and createAsIfByAssoc. EMPTY was
+;; missing outright; createAsIfByAssoc was wired to hash-map, which
+;; takes its keys and values as separate arguments where this takes one
+;; collection of them, so it made a map OF the collection.
+(check "kwargs"      ((fn [& {:keys [a b]}] [a b]) :a 1 :b 2) [1 2])
+(check "kwargs map"  ((fn [& {:keys [a b]}] [a b]) {:a 1 :b 2}) [1 2])
+(check "empty map"   (= {} (apply hash-map [])) true)
+
 ;;; ---- print-method finds its host type ------------------------------
 ;;
 ;; Three tables have to spell a type the same way: type_name, which
