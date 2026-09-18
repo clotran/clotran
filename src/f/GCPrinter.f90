@@ -23,6 +23,7 @@ module GCPrinter
   use GCList
   use GCVector
   use GCAssoc
+  use GCNativeArray
   use, intrinsic :: ieee_arithmetic
   implicit none
   private
@@ -217,6 +218,16 @@ contains
                if (k > at) s = s // " "
                s = s // gcp_str(gcv_nth(src, k), readable)
             end do
+         else if (gc_kind(src) == OBJ_ARRAY) then
+            ! (seq some-array). Without this the walk found no branch
+            ! and printed (), while first and nth on the same seq
+            ! answered correctly -- a disagreement between reading a
+            ! value and showing it.
+            total = array_len_for_print(src)
+            do k = at, total - 1
+               if (k > at) s = s // " "
+               s = s // gcp_str(array_elem_for_print(src, k + 1), readable)
+            end do
          else if (gca_is(src)) then
             call gca_entries(src, ks, vls)
             do k = at, size(ks) - 1
@@ -375,6 +386,69 @@ contains
 
   ! The named characters, matching real Clojure's reader so what is
   ! printed can be read back.
+  ! An array's own shape, for printing a seq over one. The offset,
+  ! stride and extents of a SLICE live in slot 2; a base array has
+  ! none and is the degenerate view (0, 1, its own extents). The
+  ! evaluator has the same arithmetic against its own helpers -- this
+  ! module sits below it and cannot call them.
+  function array_len_for_print(v) result(n)
+    type(gc_value), intent(in) :: v
+    integer :: n
+    type(gc_value) :: sl, e
+    integer, allocatable :: ext(:)
+    n = 0
+    sl = gc_slot(v, 2)
+    if (gcv_is(sl)) then
+       ! Through a local: a function result cannot be the leftmost
+       ! part of a data-ref in Fortran.
+       if (gcv_count(sl) > 1) then
+          e = gcv_nth(sl, 1)
+          n = int(e%ival, kind=4)
+       end if
+    else
+       ext = gcna_extents(gc_i1(v))
+       if (size(ext) > 0) n = ext(1)
+    end if
+  end function array_len_for_print
+
+  ! The k-th element (1-based) of an array's own shape.
+  function array_elem_for_print(v, k) result(out)
+    type(gc_value), intent(in) :: v
+    integer, intent(in) :: k
+    type(gc_value) :: out, sl, e
+    integer :: h, at, off, stride
+    integer(8) :: iv
+    real(gc_dp) :: rv
+    logical :: lv, ok
+    character(len=:), allocatable :: kn
+    out = gc_nil()
+    h = gc_i1(v)
+    off = 0
+    stride = 1
+    sl = gc_slot(v, 2)
+    if (gcv_is(sl)) then
+       off = gc_i2(v)
+       if (gcv_count(sl) > 0) then
+          e = gcv_nth(sl, 0)
+          stride = int(e%ival, kind=4)
+       end if
+    end if
+    at = off + stride * (k - 1) + 1
+    kn = gcna_kind(h)
+    if (kn == "value") then
+       out = gc_vec_get(gc_slot(v, 1), at)
+    else if (kn == "logical") then
+       call gcna_get_logical(h, at, lv, ok)
+       if (ok) out = gc_bool(lv)
+    else if (kn == "int4" .or. kn == "int8") then
+       call gcna_get_int(h, at, iv, ok)
+       if (ok) out = gc_int(iv)
+    else
+       call gcna_get_real(h, at, rv, ok)
+       if (ok) out = gc_real(rv)
+    end if
+  end function array_elem_for_print
+
   function char_readable(code) result(s)
     integer, intent(in) :: code
     character(len=:), allocatable :: s

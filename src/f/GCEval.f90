@@ -127,6 +127,7 @@ module GCEval
   integer, parameter :: B_ANEWINST = 170, B_ACLONE = 171, B_PREPRET = 172
   integer, parameter :: B_NUMCAST = 173, B_NUMEQ = 174, B_ABS = 175
   integer, parameter :: B_NUMER = 176, B_DENOM = 177
+  integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
   ! The auto-gensym map for the syntax-quote currently being expanded,
@@ -2728,6 +2729,11 @@ contains
     ! Ratio's two accessors. core.clj reads them as instance
     ! members -- (.numerator ^Ratio r) -- so they belong here
     ! rather than with the class statics.
+    ! (. comp (compare x y)) -- core.clj's sort-by calls the
+    ! comparator as a java.util.Comparator, which every Clojure
+    ! function is (AFunction implements it). The target is the
+    ! function itself, so this is an INSTANCE member.
+    case ("compare");     out = native(B_CMPCALL, "clotran-comparator-call", [roots])
     case ("numerator");   out = native(B_NUMER, "numerator", [roots])
     case ("denominator"); out = native(B_DENOM, "denominator", [roots])
     case ("nth");      out = native(B_NTH, "nth", [roots])
@@ -3214,6 +3220,8 @@ contains
          gc_ref_is(sym%ref, "clojure.lang.Numbers") .or. &
          gc_ref_is(sym%ref, "Number") .or. &
          gc_ref_is(sym%ref, "Ratio") .or. &
+         gc_ref_is(sym%ref, "java.util.Arrays") .or. &
+         gc_ref_is(sym%ref, "Arrays") .or. &
          gc_ref_is(sym%ref, "clojure.lang.Ratio") .or. &
          gc_ref_is(sym%ref, "java.lang.Number") .or. &
          gc_ref_is(sym%ref, "clojure.lang.Compiler$HostExpr") .or. &
@@ -3411,6 +3419,11 @@ contains
        case ("max"); out = native(B_MAX, "max", [roots]); return
        case ("min"); out = native(B_MIN, "min", [roots]); return
        end select
+    else if (cls == "java.util.Arrays" .or. cls == "Arrays") then
+       ! Only sort: it is the one thing core.clj asks Arrays for.
+       if (mname == "sort") then
+          out = native(B_ARRSORT, "clotran-array-sort", [roots]); return
+       end if
     else if (cls == "Number" .or. cls == "java.lang.Number") then
        ! core.clj's one-argument arithmetic is ([x] (cast Number x)),
        ! and `cast` is (. c (cast x)) -- so without this, (+ 1.5),
@@ -5806,6 +5819,27 @@ contains
          end if
        end block
 
+    case (B_ARRSORT)
+       ! (. java.util.Arrays (sort a cmp)) -- in place, and the
+       ! return value is ignored by core.clj's sort, which reads the
+       ! array back with (seq a).
+       block
+         type(gc_value) :: arr0
+         arr0 = strip_meta(gcv_nth(args, 0))
+         if (gc_kind(arr0) /= OBJ_ARRAY) then
+            call fail("Arrays/sort: not an array")
+         else
+            call array_sort(arr0, gcv_nth(args, 1))
+            out = gc_nil()
+         end if
+       end block
+
+    case (B_CMPCALL)
+       ! Arrives as (comparator x y): an instance member prepends its
+       ! target. Same AFunction.compare rule the sort uses, so a
+       ! predicate like > works here too.
+       out = gc_int(comparator_call(gcv_nth(args, 0), gcv_nth(args, 1), gcv_nth(args, 2)))
+
     case (B_PREPRET)
        ! (prepRet component-type value) -- the value, unchanged.
        out = gcv_nth(args, 1)
@@ -6683,10 +6717,12 @@ contains
          out = gc_nil()
        end block
     case (B_TOARRAY)
-       ! A Java array is a VECTOR here -- there is no other kind of
-       ! indexable, and every use core.clj makes of to-array feeds
-       ! it straight back into a seq.
-       out = coll_to_vector(gcv_nth(args, 0), [vs_get(base + 1)])
+       ! A REAL array, not a vector. That comment used to say every
+       ! use fed straight back into a seq, which was true until
+       ! `sort`: it is (let [a (to-array coll)] (. Arrays (sort a cmp))
+       ! (seq a)) -- the array is sorted IN PLACE and then read back,
+       ! and a persistent vector cannot be mutated.
+       out = value_array_of(gcv_nth(args, 0), [vs_get(base + 1)])
     case (B_ITERATE)
        ! (iterate f x) -- x, (f x), (f (f x)) ... unbounded, so a
        ! LAZY cell whose thunk is built by the evaluator. Realised
@@ -7332,14 +7368,18 @@ contains
           end if
        end if
     case (B_COMPARE)
-       a = gcv_nth(args, 0); b = gcv_nth(args, 1)
-       if (num_lt(a, b)) then
-          out = gc_int(-1)
-       else if (num_lt(b, a)) then
-          out = gc_int(1)
-       else
-          out = gc_int(0)
-       end if
+       block
+         logical :: cok
+         integer :: cv
+         cv = compare_values(gcv_nth(args, 0), gcv_nth(args, 1), cok)
+         if (cok) then
+            out = gc_int(cv)
+         else
+            call fail("compare: cannot compare " // &
+                 type_name(strip_meta(gcv_nth(args, 0))) // " with " // &
+                 type_name(strip_meta(gcv_nth(args, 1))))
+         end if
+       end block
     case (B_DISJ)
        ! A set is a map to itself, so disj is dissoc on the backing map.
        block
@@ -7579,6 +7619,275 @@ contains
     end select
   end function gce_coll_hash
 
+  ! Clojure's `compare`, which is Comparable and NOT just numbers. It
+  ! answered 0 for anything non-numeric, so (compare "a" "b") was 0 and
+  ! (sort ["b" "a"]) would have come back in its original order without
+  ! erroring -- a wrong answer, not a missing feature. Verified against
+  ! clj:
+  !
+  !   nil is less than everything     (compare nil 1)     => -1
+  !   false is less than true         (compare false true)=> -1
+  !   text is lexicographic           (compare "a" "b")   => -1
+  !   a vector is by COUNT first      (compare [1 2] [1]) =>  1
+  !   ...then element by element      (compare [1] [2])   => -1
+  !   mixed types throw               (compare 1 "a")     => ClassCastException
+  !
+  ! Only the sign matters to a caller, but Clojure answers -1/0/1 for
+  ! these cases and so does this.
+  recursive function compare_values(a0, b0, ok) result(c)
+    type(gc_value), intent(in) :: a0, b0
+    logical, intent(out) :: ok
+    integer :: c
+    type(gc_value) :: a, b
+    character(len=:), allocatable :: sa, sb
+    integer :: i, na, nb
+    a = strip_meta(a0)
+    b = strip_meta(b0)
+    ok = .true.
+    c = 0
+
+    ! nil sorts before everything, and is equal only to itself.
+    if (a%tag == GCT_NIL .and. b%tag == GCT_NIL) return
+    if (a%tag == GCT_NIL) then
+       c = -1
+       return
+    end if
+    if (b%tag == GCT_NIL) then
+       c = 1
+       return
+    end if
+
+    if (a%tag == GCT_BOOL .and. b%tag == GCT_BOOL) then
+       if (a%ival == b%ival) then
+          c = 0
+       else if (a%ival == 0) then
+          c = -1
+       else
+          c = 1
+       end if
+       return
+    end if
+
+    if (is_number(a) .and. is_number(b)) then
+       if (num_lt(a, b)) then
+          c = -1
+       else if (num_lt(b, a)) then
+          c = 1
+       end if
+       return
+    end if
+
+    if (a%tag == GCT_CHAR .and. b%tag == GCT_CHAR) then
+       if (a%ival < b%ival) then
+          c = -1
+       else if (a%ival > b%ival) then
+          c = 1
+       end if
+       return
+    end if
+
+    ! Strings, symbols and keywords compare by their text, and only
+    ! against their own kind -- a string is not a keyword.
+    if (a%tag == b%tag .and. &
+         (a%tag == GCT_STR .or. a%tag == GCT_SYM .or. a%tag == GCT_KEY)) then
+       sa = gc_ref_text(a%ref)
+       sb = gc_ref_text(b%ref)
+       if (sa < sb) then
+          c = -1
+       else if (sa > sb) then
+          c = 1
+       end if
+       return
+    end if
+
+    ! A vector is Comparable; a list is not, and clj throws for one.
+    if (gc_kind(a) == OBJ_VECTOR .and. gc_kind(b) == OBJ_VECTOR) then
+       na = gcv_count(a)
+       nb = gcv_count(b)
+       if (na < nb) then
+          c = -1
+          return
+       else if (na > nb) then
+          c = 1
+          return
+       end if
+       do i = 0, na - 1
+          c = compare_values(gcv_nth(a, i), gcv_nth(b, i), ok)
+          if (.not. ok) return
+          if (c /= 0) return
+       end do
+       return
+    end if
+
+    ok = .false.
+  end function compare_values
+
+  ! A `value`-kind array holding a collection's elements. This is what
+  ! to-array answers, because `sort` mutates the array it gets.
+  function value_array_of(coll, roots) result(out)
+    type(gc_value), intent(in) :: coll
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, vecd, run
+    integer, allocatable :: ext(:), lows(:)
+    character(len=:), allocatable :: err
+    integer :: n, h, i, base
+    base = vs_enter(2)
+    vecd = coll_to_vector(coll, roots)
+    call vs_set(base + 1, vecd)
+    n = gcv_count(vs_get(base + 1))
+    allocate(ext(1), lows(1))
+    ext(1) = n
+    lows(1) = 0
+    h = gcna_new("value", ext, lows, err)
+    if (h == 0) then
+       call fail(err)
+       call vs_leave(base)
+       out = gc_nil()
+       return
+    end if
+    run = gc_vec(max(1, n), [roots, [vs_get(base + 1)]])
+    call vs_set(base + 2, run)
+    out = gc_obj(OBJ_ARRAY, [vs_get(base + 2)], [roots, [vs_get(base + 1), vs_get(base + 2)]])
+    call gc_set_i1(out, h)
+    call gc_set_i2(out, -1)   ! owns its handle; not a slice
+    do i = 1, n
+       call array_put(out, i, gcv_nth(vs_get(base + 1), i - 1))
+    end do
+    call vs_leave(base)
+  end function value_array_of
+
+  ! One comparator call, following AFunction.compare (AFunction.java):
+  ! a function that answers a BOOLEAN is a predicate, so (sort > coll)
+  ! works -- true means "less", and false asks the reverse question to
+  ! tell 0 from 1. Anything else is a number and its sign is the answer.
+  recursive function comparator_call(cmp, x, y) result(c)
+    type(gc_value), intent(in) :: cmp, x, y
+    integer :: c
+    type(gc_value) :: r, args2, rev
+    integer :: base
+    base = vs_enter(4)
+    call vs_set(base + 1, cmp)
+    ! A VECTOR, not a list: apply counts its arguments with
+    ! gcv_count to pick an arity, and a list counts as zero --
+    ! which is how a two-argument comparator produced
+    ! "no matching arity".
+    !
+    ! Each conj is rooted before the next allocation: two
+    ! allocations as arguments to one call means the second can
+    ! collect the first.
+    args2 = gcv_empty([vs_get(base + 1)])
+    call vs_set(base + 2, args2)
+    args2 = gcv_conj(vs_get(base + 2), x, [vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 2, args2)
+    args2 = gcv_conj(vs_get(base + 2), y, [vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 2, args2)
+    r = apply(vs_get(base + 1), vs_get(base + 2))
+    call vs_set(base + 3, r)
+    c = 0
+    if (has_error) then
+       call vs_leave(base)
+       return
+    end if
+    if (r%tag == GCT_BOOL) then
+       if (truthy(r)) then
+          c = -1
+       else
+          rev = gcv_empty([vs_get(base + 1)])
+          call vs_set(base + 2, rev)
+          rev = gcv_conj(vs_get(base + 2), y, [vs_get(base + 1), vs_get(base + 2)])
+          call vs_set(base + 2, rev)
+          rev = gcv_conj(vs_get(base + 2), x, [vs_get(base + 1), vs_get(base + 2)])
+          call vs_set(base + 2, rev)
+          r = apply(vs_get(base + 1), vs_get(base + 2))
+          if (.not. has_error) then
+             if (truthy(r)) c = 1
+          end if
+       end if
+    else if (is_number(r)) then
+       if (num_lt(r, gc_int(0))) then
+          c = -1
+       else if (num_lt(gc_int(0), r)) then
+          c = 1
+       end if
+    end if
+    call vs_leave(base)
+  end function comparator_call
+
+  ! java.util.Arrays/sort -- IN PLACE, and STABLE, which Clojure's sort
+  ! docstring promises: "equal elements will not be reordered". A
+  ! merge sort rather than a quicksort for exactly that reason; the
+  ! extra array is the price of the guarantee.
+  recursive subroutine array_sort(arr, cmp)
+    type(gc_value), intent(in) :: arr, cmp
+    integer :: n, width, i, lo, mid, hi
+    type(gc_value), allocatable :: buf(:), src(:)
+    integer :: base
+    n = seq_len(arr)
+    if (n < 2) return
+    base = vs_enter(2)
+    call vs_set(base + 1, arr)
+    call vs_set(base + 2, cmp)
+    allocate(src(n), buf(n))
+    do i = 1, n
+       src(i) = array_elem(vs_get(base + 1), i)
+    end do
+    ! Bottom-up: merge runs of 1, then 2, then 4... Taking from the
+    ! left run on a tie is what keeps it stable.
+    width = 1
+    do while (width < n)
+       lo = 1
+       do while (lo <= n)
+          mid = min(lo + width - 1, n)
+          hi = min(lo + 2 * width - 1, n)
+          call merge_run(src, buf, lo, mid, hi, vs_get(base + 2))
+          if (has_error) then
+             call vs_leave(base)
+             return
+          end if
+          lo = hi + 1
+       end do
+       src = buf
+       width = 2 * width
+    end do
+    do i = 1, n
+       call array_put(vs_get(base + 1), i, src(i))
+    end do
+    call vs_leave(base)
+  end subroutine array_sort
+
+  recursive subroutine merge_run(src, buf, lo, mid, hi, cmp)
+    type(gc_value), intent(in) :: src(:)
+    type(gc_value), intent(inout) :: buf(:)
+    integer, intent(in) :: lo, mid, hi
+    type(gc_value), intent(in) :: cmp
+    integer :: i, j, k
+    i = lo
+    j = mid + 1
+    k = lo
+    do while (i <= mid .and. j <= hi)
+       ! <= 0 keeps the LEFT element first on a tie: stability.
+       if (comparator_call(cmp, src(j), src(i)) < 0) then
+          buf(k) = src(j)
+          j = j + 1
+       else
+          buf(k) = src(i)
+          i = i + 1
+       end if
+       if (has_error) return
+       k = k + 1
+    end do
+    do while (i <= mid)
+       buf(k) = src(i)
+       i = i + 1
+       k = k + 1
+    end do
+    do while (j <= hi)
+       buf(k) = src(j)
+       j = j + 1
+       k = k + 1
+    end do
+  end subroutine merge_run
+
   recursive function deep_equal(a0, b0, roots) result(eq)
     type(gc_value), intent(in) :: a0, b0
     type(gc_value), intent(in) :: roots(:)
@@ -7798,17 +8107,6 @@ contains
     end if
   end function seq_count
 
-  function seq_at(v, i) result(out)
-    type(gc_value), intent(in) :: v
-    integer, intent(in) :: i
-    type(gc_value) :: out
-    out = gc_nil()
-    if (gcl_is(v)) then
-       out = nth_of(v, i)
-    else if (gcv_is(v)) then
-       out = gcv_nth(v, i)
-    end if
-  end function seq_at
 
   ! ---- the seq abstraction -------------------------------------
   !
@@ -7880,6 +8178,15 @@ contains
        n = gca_count(v)
     else if (v%tag == GCT_STR) then
        n = gc_ref_len(v%ref)
+    else if (gc_kind(v) == OBJ_ARRAY) then
+       ! An array seqs as its elements, so `sort` can hand the array
+       ! it just sorted back to `seq`. The length is the FIRST extent,
+       ! matching alength: a rank-2 array is 2 rows, not 6 numbers.
+       block
+         integer, allocatable :: ext(:)
+         ext = array_own_extents(v)
+         if (size(ext) > 0) n = ext(1)
+       end block
     end if
   end function seq_len
 
@@ -7897,6 +8204,15 @@ contains
     out = gc_nil()
     if (gcv_is(v)) then
        out = gcv_nth(v, i)
+    else if (gc_kind(v) == OBJ_ARRAY) then
+       ! Rank 1 yields an element, deeper yields a row -- the same
+       ! split (aget a i) makes. This is what lets `sort` read back
+       ! the array it just sorted with (seq a).
+       if (array_own_rank(v) <= 1) then
+          out = array_elem(v, i + 1)
+       else
+          out = array_make_slice(v, [i], roots)
+       end if
     else if (gc_kind(v) == OBJ_SET) then
        block
          type(gc_value), allocatable :: sks(:), svs(:)

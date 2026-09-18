@@ -130,7 +130,7 @@ gc_test: $(S)/GC.o $(T)/gc_test.f90
 	$(FC) $(FCFLAGS) -o $@ $(S)/GC.o $(T)/gc_test.f90
 
 gcp-objects = $(S)/GC.o $(S)/GCMap.o $(S)/GCHamt.o $(S)/GCAssoc.o $(S)/GCList.o \
-	$(S)/GCVector.o $(S)/GCPrinter.o $(S)/GCNativeArray.o
+	$(S)/GCVector.o $(S)/GCNativeArray.o $(S)/GCPrinter.o
 
 $(S)/GCNamespace.o: $(S)/GCNamespace.f90 $(S)/GC.o $(S)/GCAssoc.o
 	$(FC) $(FCFLAGS) -c $< -o $@
@@ -162,7 +162,7 @@ $(S)/GCReader.o: $(S)/GCReader.f90 $(S)/GC.o $(S)/GCList.o $(S)/GCVector.o $(S)/
 gc_reader_test: $(gcp-objects) $(gc-reader-objects) $(T)/gc_reader_test.f90 $(ICU_LIBS)
 	$(FC) $(FCFLAGS) -o $@ $(gcp-objects) $(gc-reader-objects) $(T)/gc_reader_test.f90 $(ICU_LIBS) $(LIBCXX) -lpthread
 
-$(S)/GCPrinter.o: $(S)/GCPrinter.f90 $(S)/GC.o $(S)/GCList.o $(S)/GCVector.o $(S)/GCAssoc.o
+$(S)/GCPrinter.o: $(S)/GCPrinter.f90 $(S)/GC.o $(S)/GCList.o $(S)/GCVector.o $(S)/GCAssoc.o $(S)/GCNativeArray.o
 	$(FC) $(FCFLAGS) -c $< -o $@
 
 gc_printer_test: $(gcp-objects) $(T)/gc_printer_test.f90

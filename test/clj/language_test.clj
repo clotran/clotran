@@ -340,6 +340,53 @@
 (check "min max abs"   [(min 1 2.5) (max 1 2.5) (abs -3) (abs -3.5)] [1 2.5 3 3.5])
 (check "inc dec"       [(inc 1) (inc 1.5) (dec 1) (dec 1.5)] [2 2.5 0 0.5])
 
+;;; ---- sort, and compare underneath it ------------------------------
+;;
+;; `sort` is (let [a (to-array coll)] (. java.util.Arrays (sort a cmp))
+;; (seq a)) -- so it needed four things clotran did not have: a real
+;; mutable array from to-array, arrays that seq, Arrays/sort itself,
+;; and a `compare` that works on more than numbers.
+;;
+;; That last one mattered most: compare answered 0 for anything
+;; non-numeric, so (sort ["b" "a"]) would have come back in its
+;; original order and reported no error at all.
+;;
+;; Compared as VALUES rather than printed text: a seq of strings still
+;; prints unreadably, which is a separate print-method bug.
+
+(check "compare numbers" [(compare 1 2) (compare 2 1) (compare 1 1)] [-1 1 0])
+(check "compare text"    [(compare "a" "b") (compare :a :b) (compare \a \b)] [-1 -1 -1])
+(check "compare nil"     [(compare nil 1) (compare 1 nil) (compare nil nil)] [-1 1 0])
+(check "compare bool"    [(compare false true) (compare true false)] [-1 1])
+;; A vector compares by COUNT first, then element by element.
+(check "compare vectors" [(compare [1] [2]) (compare [1 2] [1]) (compare [1 2] [1 2])] [-1 1 0])
+(check "compare refuses" (try (compare 1 "a") (catch Throwable e :err)) :err)
+
+(check "sort numbers"    (vec (sort [3 1 2])) [1 2 3])
+(check "sort empty"      (vec (sort [])) [])
+(check "sort a list"     (vec (sort (quote (3 1 2)))) [1 2 3])
+(check "sort strings"    (vec (sort ["b" "a" "c"])) ["a" "b" "c"])
+(check "sort keywords"   (vec (sort [:b :a])) [:a :b])
+(check "sort vectors"    (vec (sort [[2] [1]])) [[1] [2]])
+;; A comparator that answers a BOOLEAN is a predicate -- AFunction
+;; treats true as "less" -- which is what makes (sort > coll) work.
+(check "sort with >"     (vec (sort > [1 3 2])) [3 2 1])
+(check "sort-by"         (vec (sort-by - [1 3 2])) [3 2 1])
+;; Clojure promises stability: equal elements keep their order.
+(check "sort is stable"  (vec (sort-by first [[1 :a] [0 :x] [1 :b] [0 :y]]))
+                         [[0 :x] [0 :y] [1 :a] [1 :b]])
+;; Big enough to exercise the merge rather than the base case.
+;; Built with (range) descending rather than (reverse ...): an
+;; earlier test in this file does (require [clojure.string :refer
+;; :all]), which shadows core reverse with the StringBuilder one.
+(check "sort 50"         (= (sort (range 49 -1 -1)) (range 50)) true)
+
+;; to-array now answers a REAL array, and an array seqs as its
+;; elements -- both needed by sort, and both wrong before.
+(check "to-array is an array" (let [a (to-array [3 1 2])] [(alength a) (aget a 0)]) [3 3])
+(check "an array seqs"        (vec (to-array [3 1 2])) [3 1 2])
+(check "first of an array"    (first (to-array [3 1 2])) 3)
+
 ;;; ---- collections as keys -------------------------------------------
 ;;
 ;; A collection used to hash and compare by its POOL SLOT, so an equal
