@@ -663,6 +663,20 @@
 ;; Clojure's list, 24 entries -- not clotran's own special forms.
 (check "specials count"          (count (. clojure.lang.Compiler specials)) 24)
 
+
+;;; ---- #_ discard ------------------------------------------------
+;; #_ is a kind of WHITESPACE, not a form that reads as nothing --
+;; which only shows at the end of a collection, where there is no
+;; following form to pair it with. Values checked against `clj`.
+
+(check "discard in a vector"     [1 #_2 3] [1 3])
+(check "discard an argument"     (+ 1 #_(inc 9) 2) 3)
+(check "discard at the end"      (and true #_(= 1 1)) true)
+(check "discard last in vector"  [1 2 #_3] [1 2])
+(check "discard a map pair"      {:a 1 #_:b #_2 :c 3} {:a 1 :c 3})
+(check "discard in a set"        #{1 #_2 3} #{1 3})
+(check "two discards in a row"   (list #_#_1 2 3) '(3))
+
 ;;; ---- report -----------------------------------------------------
 
 

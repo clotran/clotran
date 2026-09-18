@@ -86,7 +86,7 @@ contains
     v = gcv_empty(roots)
     call vs_set(base + 1, v)
     do
-       call skip_space(text, pos)
+       call skip_ignorables(text, pos, [vs_get(base + 1)])
        if (pos > len(text)) exit
        form = read_form(text, pos, [vs_get(base + 1)])
        if (has_error) exit
@@ -132,6 +132,34 @@ contains
     end do
   end subroutine skip_space
 
+  ! Whitespace, commas, comments -- AND discards. #_ is not a form that
+  ! evaluates to nothing; LispReader's CommentReader returns the reader
+  ! itself as a sentinel and every collection loop skips it, so what #_
+  ! really is, is another kind of space.
+  !
+  ! Reading it as "discard one form, then read the next" is what this
+  ! replaces, and it worked everywhere except the place that matters:
+  ! at the END of a collection there IS no next form, so
+  ! (and true #_(= 1 1)) died on "unexpected ')'". That shape is in
+  ! Clojure's own suite -- test-empty in sequences.clj carries a
+  ! commented-out assertion exactly that way -- and one reader error
+  ! aborts the whole file, so the namespace defined no tests at all.
+  recursive subroutine skip_ignorables(text, pos, roots)
+    character(len=*), intent(in) :: text
+    integer, intent(inout) :: pos
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: ignored
+
+    do
+       call skip_space(text, pos)
+       if (pos + 1 > len(text)) return
+       if (text(pos:pos + 1) /= "#_") return
+       pos = pos + 2
+       ignored = read_form(text, pos, roots)
+       if (has_error) return
+    end do
+  end subroutine skip_ignorables
+
   ! ---- forms ----
 
   recursive function read_form(text, pos, roots) result(v)
@@ -142,7 +170,7 @@ contains
     character :: c
 
     v = gc_nil()
-    call skip_space(text, pos)
+    call skip_ignorables(text, pos, roots)
     if (pos > len(text)) then
        call fail("EOF while reading")
        return
@@ -456,7 +484,7 @@ contains
     character(len=*), intent(in) :: text
     integer, intent(inout) :: pos
     type(gc_value), intent(in) :: roots(:)
-    type(gc_value) :: v, ignored
+    type(gc_value) :: v
     character :: c
 
     v = gc_nil()
@@ -466,13 +494,6 @@ contains
     end if
     c = text(pos + 1:pos + 1)
     select case (c)
-    case ("_")
-       ! #_ discards the NEXT FORM, not the next token -- so
-       ! #_(a b c) skips the whole list.
-       pos = pos + 2
-       ignored = read_form(text, pos, roots)
-       if (has_error) return
-       v = read_form(text, pos, roots)
     case ("'")
        pos = pos + 2
        v = wrap("var", text, pos, roots)
@@ -623,7 +644,7 @@ contains
     acc = gcv_empty(roots)
     do
        r2 = with(roots, acc)
-       call skip_space(text, pos)
+       call skip_ignorables(text, pos, r2)
        if (pos > len(text)) then
           call fail("EOF while reading, expected '" // closer // "'")
           return
@@ -659,7 +680,7 @@ contains
     v = gca_empty(roots)
     do
        r2 = with(roots, v)
-       call skip_space(text, pos)
+       call skip_ignorables(text, pos, r2)
        if (pos > len(text)) then
           call fail("EOF while reading, expected '}'")
           return
@@ -670,7 +691,7 @@ contains
        end if
        k = read_form(text, pos, r2)
        if (has_error) return
-       call skip_space(text, pos)
+       call skip_ignorables(text, pos, r2)
        if (pos > len(text)) then
           call fail("map literal has an odd number of forms")
           return
