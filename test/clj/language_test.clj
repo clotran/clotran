@@ -745,6 +745,77 @@
 (check "remove-method"     (do (remove-method ltest-area :circle)
                                (count (methods ltest-area))) 2)
 
+
+;;; ---- java.lang.Math ---------------------------------------------
+;; clojure/math.clj is a thin wrapper over java.lang.Math, so the whole
+;; namespace rests on these. Every expectation below is `clj`'s answer,
+;; bit for bit -- the awkward ones (ulp, next-up, IEEE-remainder,
+;; get-exponent) come out of Fortran's spacing/nearest/exponent
+;; intrinsics rather than a libm binding.
+;;
+;; Math permits up to 1 ulp of error, and exp is where clotran and the
+;; JVM use it: (m/exp 1) differs in the last bit. Nothing here asserts
+;; on that one.
+
+(require (quote clojure.math))
+
+(check "Math/E"  (= Math/E clojure.math/E) true)
+(check "Math/PI" (= Math/PI clojure.math/PI) true)
+
+(check "sin"        (clojure.math/sin 0.5) 0.479425538604203)
+(check "sqrt"       (clojure.math/sqrt 2) 1.4142135623730951)
+(check "cbrt of -8" (clojure.math/cbrt -8) -2.0)
+(check "log10"      (clojure.math/log10 1000) 3.0)
+(check "hypot"      (clojure.math/hypot 3 4) 5.0)
+(check "pow"        (clojure.math/pow 2 10) 1024.0)
+(check "tanh"       (clojure.math/tanh 1) 0.7615941559557649)
+
+;; rint rounds HALF TO EVEN, which neither truncation nor
+;; round-half-away gives.
+(check "rint"       [(clojure.math/rint 2.5) (clojure.math/rint 3.5) (clojure.math/rint -2.5)]
+                    [2.0 4.0 -2.0])
+(check "round"      [(clojure.math/round 2.5) (clojure.math/round -2.5) (clojure.math/round 2.4)]
+                    [3 -2 2])
+(check "signum"     [(clojure.math/signum -3.0) (clojure.math/signum 0.0) (clojure.math/signum 4.0)]
+                    [-1.0 0.0 1.0])
+(check "ceil/floor" [(clojure.math/ceil 1.2) (clojure.math/floor -1.2)] [2.0 -2.0])
+
+(check "ulp"        (clojure.math/ulp 1.0) 2.220446049250313E-16)
+(check "next-up"    (clojure.math/next-up 1.0) 1.0000000000000002)
+(check "next-down"  (clojure.math/next-down 1.0) 0.9999999999999999)
+(check "next-after" (clojure.math/next-after 1.0 2.0) 1.0000000000000002)
+(check "get-exponent"
+       [(clojure.math/get-exponent 1.0) (clojure.math/get-exponent 8.0)
+        (clojure.math/get-exponent 0.5)]
+       [0 3 -1])
+(check "scalb"      (clojure.math/scalb 3.0 4) 48.0)
+(check "copy-sign"  (clojure.math/copy-sign 3.0 -1.0) -3.0)
+(check "IEEE-remainder" (clojure.math/IEEE-remainder 5.0 3.0) -1.0)
+;; expm1 and log1p keep their digits near zero, where exp(x)-1 would
+;; lose all of them.
+(check "expm1"      (clojure.math/expm1 1e-9) 1.0000000005000001E-9)
+(check "log1p"      (clojure.math/log1p 1e-9) 9.999999995E-10)
+(check "to-radians" (clojure.math/to-radians 180.0) Math/PI)
+(check "to-degrees" (clojure.math/to-degrees Math/PI) 180.0)
+
+;; The *Exact family throws where ordinary arithmetic wraps.
+(check "exact arithmetic"
+       [(clojure.math/add-exact 1 2) (clojure.math/subtract-exact 5 9)
+        (clojure.math/multiply-exact 6 7) (clojure.math/increment-exact 1)
+        (clojure.math/decrement-exact 1) (clojure.math/negate-exact 5)]
+       [3 -4 42 2 0 -5])
+(check "add-exact overflows"
+       (try (clojure.math/add-exact Long/MAX_VALUE 1) :no (catch Throwable e :threw))
+       :threw)
+(check "multiply-exact overflows"
+       (try (clojure.math/multiply-exact Long/MAX_VALUE 2) :no (catch Throwable e :threw))
+       :threw)
+;; Floor division, not truncation.
+(check "floor-div/mod" [(clojure.math/floor-div -7 2) (clojure.math/floor-mod -7 2)] [-4 1])
+
+;; Math/abs is overloaded on the JVM: a long stays a long.
+(check "Math/abs"   [(Math/abs -3) (Math/abs -3.5)] [3 3.5])
+
 ;;; ---- report -----------------------------------------------------
 
 

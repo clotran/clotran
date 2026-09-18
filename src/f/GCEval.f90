@@ -135,6 +135,8 @@ module GCEval
   integer, parameter :: B_SWAPVALS = 187, B_RESETVALS = 188
   integer, parameter :: B_METHODTABLE = 189, B_GETMETHOD = 190
   integer, parameter :: B_EMPTYMAP = 191, B_REMOVEMETHOD = 192
+  ! java.lang.Math occupies a BLOCK: B_MATH0 + math_index(name).
+  integer, parameter :: B_MATH0 = 200, B_MATHN = 45
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -3532,6 +3534,20 @@ contains
           ! coll-reduce did not exist and reduce could not resolve.
           out = native(B_VARINTERN, "clotran-var-intern", [roots]); return
        end select
+    else if (cls == "Math" .or. cls == "java.lang.Math") then
+       if (mname == "E") then
+          out = gc_real(exp(1.0_gc_dp)); return
+       end if
+       if (mname == "PI") then
+          out = gc_real(acos(-1.0_gc_dp)); return
+       end if
+       block
+         integer :: mk
+         mk = math_index(mname)
+         if (mk > 0) then
+            out = native(B_MATH0 + mk, "clotran-math-" // mname, [roots]); return
+         end if
+       end block
     else if (cls == "clojure.lang.Compiler") then
        if (mname == "specials") then
           out = specials_map([roots]); return
@@ -5017,6 +5033,311 @@ contains
     if (gcl_is(vs_get(base + 1))) out = gcl_empty([roots, vs_get(base + 1)])
     call vs_leave(base)
   end function coll_empty
+
+  ! ---- java.lang.Math ---------------------------------------------
+  !
+  ! clojure/math.clj is a THIN WRAPPER: every one of its functions is
+  ! (Math/foo (double x)) and nothing else, so the whole namespace
+  ! lands here. It is vendored and unmodified like the rest, which
+  ! makes these the host members it needs.
+  !
+  ! No libm binding. Fortran's own intrinsics cover the awkward ones
+  ! exactly -- nearest() is nextafter, spacing() is ulp, scale() is
+  ! scalb, exponent() is ilogb+1, ieee_rem() is IEEEremainder -- so
+  ! this stays inside the premise that src/c holds only the regex
+  ! shim.
+
+  ! Which Math member a name is, or 0. The index is the offset from
+  ! B_MATH0 and nothing else depends on the order.
+  integer function math_index(mname) result(k)
+    character(len=*), intent(in) :: mname
+    select case (mname)
+    case ("sin");            k = 1
+    case ("cos");            k = 2
+    case ("tan");            k = 3
+    case ("asin");           k = 4
+    case ("acos");           k = 5
+    case ("atan");           k = 6
+    case ("toRadians");      k = 7
+    case ("toDegrees");      k = 8
+    case ("exp");            k = 9
+    case ("log");            k = 10
+    case ("log10");          k = 11
+    case ("sqrt");           k = 12
+    case ("cbrt");           k = 13
+    case ("ceil");           k = 14
+    case ("floor");          k = 15
+    case ("rint");           k = 16
+    case ("signum");         k = 17
+    case ("sinh");           k = 18
+    case ("cosh");           k = 19
+    case ("tanh");           k = 20
+    case ("expm1");          k = 21
+    case ("log1p");          k = 22
+    case ("ulp");            k = 23
+    case ("nextUp");         k = 24
+    case ("nextDown");       k = 25
+    case ("abs");            k = 26
+    case ("IEEEremainder");  k = 27
+    case ("atan2");          k = 28
+    case ("pow");            k = 29
+    case ("hypot");          k = 30
+    case ("copySign");       k = 31
+    case ("nextAfter");      k = 32
+    case ("round");          k = 33
+    case ("getExponent");    k = 34
+    case ("scalb");          k = 35
+    case ("random");         k = 36
+    case ("addExact");       k = 37
+    case ("subtractExact");  k = 38
+    case ("multiplyExact");  k = 39
+    case ("incrementExact"); k = 40
+    case ("decrementExact"); k = 41
+    case ("negateExact");    k = 42
+    case ("floorDiv");       k = 43
+    case ("floorMod");       k = 44
+    case ("toIntExact");     k = 45
+    case default;            k = 0
+    end select
+  end function math_index
+
+  ! Round half to EVEN, which is what Math.rint does and what neither
+  ! anint (half away from zero) nor int truncation gives.
+  real(gc_dp) function math_rint(x) result(r)
+    real(gc_dp), intent(in) :: x
+    real(gc_dp) :: f, lo
+    lo = aint(x)
+    f = x - lo
+    if (abs(f) < 0.5_gc_dp) then
+       r = lo
+    else if (abs(f) > 0.5_gc_dp) then
+       r = lo + sign(1.0_gc_dp, x)
+    else
+       ! Exactly halfway: take the neighbour that is even.
+       if (mod(lo, 2.0_gc_dp) == 0.0_gc_dp) then
+          r = lo
+       else
+          r = lo + sign(1.0_gc_dp, x)
+       end if
+    end if
+  end function math_rint
+
+  ! The *Exact family throws where ordinary arithmetic wraps. Detected
+  ! by dividing back out rather than by the wrapped sign, which is
+  ! undefined behaviour to rely on.
+  logical function mul_overflows(a, b) result(bad)
+    integer(gc_ip), intent(in) :: a, b
+    integer(gc_ip) :: p
+    bad = .false.
+    if (a == 0_gc_ip .or. b == 0_gc_ip) return
+    p = a * b
+    bad = (p / b /= a)
+    if (a == -1_gc_ip .and. b == -huge(b) - 1_gc_ip) bad = .true.
+    if (b == -1_gc_ip .and. a == -huge(a) - 1_gc_ip) bad = .true.
+  end function mul_overflows
+
+  ! One Math call. `k` is math_index's answer.
+  function math_call(k, args, roots) result(out)
+    integer, intent(in) :: k
+    type(gc_value), intent(in) :: args
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out
+    real(gc_dp) :: x, y, r
+    integer(gc_ip) :: ia, ib, ir
+    integer :: n
+    type(gc_value) :: a0, a1
+
+    out = gc_nil()
+    n = gcv_count(args)
+
+    ! random takes nothing.
+    if (k == 36) then
+       call random_number(r)
+       out = gc_real(r)
+       return
+    end if
+
+    if (n < 1) then
+       call fail("Math: no argument")
+       return
+    end if
+    a0 = strip_meta(gcv_nth(args, 0))
+    if (.not. is_number(a0)) then
+       call fail("Math: not a number")
+       return
+    end if
+    x = num_dbl(a0)
+    ia = 0_gc_ip
+    if (a0%tag == GCT_INT) ia = a0%ival
+    y = 0.0_gc_dp
+    ib = 0_gc_ip
+    if (n >= 2) then
+       a1 = strip_meta(gcv_nth(args, 1))
+       if (.not. is_number(a1)) then
+          call fail("Math: not a number")
+          return
+       end if
+       y = num_dbl(a1)
+       if (a1%tag == GCT_INT) ib = a1%ival
+    end if
+
+    select case (k)
+    case (1);  out = gc_real(sin(x))
+    case (2);  out = gc_real(cos(x))
+    case (3);  out = gc_real(tan(x))
+    case (4);  out = gc_real(asin(x))
+    case (5);  out = gc_real(acos(x))
+    case (6);  out = gc_real(atan(x))
+    case (7);  out = gc_real(x * (acos(-1.0_gc_dp) / 180.0_gc_dp))
+    case (8);  out = gc_real(x * (180.0_gc_dp / acos(-1.0_gc_dp)))
+    case (9);  out = gc_real(exp(x))
+    case (10); out = gc_real(log(x))
+    case (11); out = gc_real(log10(x))
+    case (12); out = gc_real(sqrt(x))
+    case (13)
+       ! No cbrt intrinsic; the sign has to come back out by hand so
+       ! that (cbrt -8.0) is -2.0 rather than NaN.
+       if (x == 0.0_gc_dp) then
+          out = gc_real(x)
+       else
+          out = gc_real(sign(abs(x) ** (1.0_gc_dp / 3.0_gc_dp), x))
+       end if
+    case (14); out = gc_real(ceiling_dbl(x))
+    case (15); out = gc_real(floor_dbl(x))
+    case (16); out = gc_real(math_rint(x))
+    case (17)
+       if (x /= x) then
+          out = gc_real(x)
+       else if (x == 0.0_gc_dp) then
+          out = gc_real(x)
+       else
+          out = gc_real(sign(1.0_gc_dp, x))
+       end if
+    case (18); out = gc_real(sinh(x))
+    case (19); out = gc_real(cosh(x))
+    case (20); out = gc_real(tanh(x))
+    case (21)
+       ! exp(x)-1 loses every significant digit near zero, so the
+       ! series takes over where it would.
+       if (abs(x) < 1.0e-5_gc_dp) then
+          out = gc_real(x * (1.0_gc_dp + x * (0.5_gc_dp + x / 6.0_gc_dp)))
+       else
+          out = gc_real(exp(x) - 1.0_gc_dp)
+       end if
+    case (22)
+       if (abs(x) < 1.0e-5_gc_dp) then
+          out = gc_real(x * (1.0_gc_dp - x * (0.5_gc_dp - x / 3.0_gc_dp)))
+       else
+          out = gc_real(log(1.0_gc_dp + x))
+       end if
+    case (23); out = gc_real(spacing(x))
+    case (24); out = gc_real(nearest(x, 1.0_gc_dp))
+    case (25); out = gc_real(nearest(x, -1.0_gc_dp))
+    case (26)
+       ! Math.abs is overloaded: a long stays a long.
+       if (a0%tag == GCT_INT) then
+          out = gc_int(abs(ia))
+       else
+          out = gc_real(abs(x))
+       end if
+    case (27)
+       ! IEEE remainder: x - y*rint(x/y), which is what ieee_rem is.
+       if (y == 0.0_gc_dp) then
+          out = gc_real(x / y)
+       else
+          out = gc_real(x - y * math_rint(x / y))
+       end if
+    case (28); out = gc_real(atan2(x, y))
+    case (29); out = gc_real(x ** y)
+    case (30); out = gc_real(hypot(x, y))
+    case (31); out = gc_real(sign(abs(x), y))
+    case (32)
+       if (x == y) then
+          out = gc_real(y)
+       else
+          out = gc_real(nearest(x, y - x))
+       end if
+    case (33)
+       ! Math.round(double) is floor(x + 0.5) and answers a long.
+       out = gc_int(int(floor_dbl(x + 0.5_gc_dp), gc_ip))
+    case (34)
+       ! Java's unbiased exponent has the mantissa in [1,2);
+       ! Fortran's has it in [0.5,1).
+       out = gc_int(int(exponent(x) - 1, 8))
+    case (35); out = gc_real(scale(x, int(y)))
+    case (37)
+       ir = ia + ib
+       if ((ia > 0 .and. ib > 0 .and. ir < 0) .or. &
+            (ia < 0 .and. ib < 0 .and. ir >= 0)) then
+          call fail("integer overflow")
+       else
+          out = gc_int(ir)
+       end if
+    case (38)
+       ir = ia - ib
+       if ((ia >= 0 .and. ib < 0 .and. ir < 0) .or. &
+            (ia < 0 .and. ib > 0 .and. ir >= 0)) then
+          call fail("integer overflow")
+       else
+          out = gc_int(ir)
+       end if
+    case (39)
+       if (mul_overflows(ia, ib)) then
+          call fail("integer overflow")
+       else
+          out = gc_int(ia * ib)
+       end if
+    case (40)
+       if (ia == huge(ia)) then
+          call fail("integer overflow")
+       else
+          out = gc_int(ia + 1_gc_ip)
+       end if
+    case (41)
+       if (ia == -huge(ia) - 1_gc_ip) then
+          call fail("integer overflow")
+       else
+          out = gc_int(ia - 1_gc_ip)
+       end if
+    case (42)
+       if (ia == -huge(ia) - 1_gc_ip) then
+          call fail("integer overflow")
+       else
+          out = gc_int(-ia)
+       end if
+    case (43)
+       ! Floor division, not truncation: (floorDiv -7 2) is -4.
+       if (ib == 0_gc_ip) then
+          call fail("Divide by zero")
+       else
+          out = gc_int(int(floor(real(ia, gc_dp) / real(ib, gc_dp)), gc_ip))
+       end if
+    case (44)
+       if (ib == 0_gc_ip) then
+          call fail("Divide by zero")
+       else
+          out = gc_int(modulo(ia, ib))
+       end if
+    case (45)
+       out = gc_int(ia)
+    case default
+       call fail("Math: no such member")
+    end select
+  end function math_call
+
+  ! ceiling/floor as DOUBLES. The intrinsics answer integers, which
+  ! would cap a big double at huge(int) and lose the infinities.
+  real(gc_dp) function ceiling_dbl(x) result(r)
+    real(gc_dp), intent(in) :: x
+    r = aint(x)
+    if (r < x) r = r + 1.0_gc_dp
+  end function ceiling_dbl
+
+  real(gc_dp) function floor_dbl(x) result(r)
+    real(gc_dp), intent(in) :: x
+    r = aint(x)
+    if (r > x) r = r - 1.0_gc_dp
+  end function floor_dbl
 
   ! [old new], the vector swap-vals! and reset-vals! answer.
   function value_pair(a0, b0, roots) result(out)
@@ -7564,6 +7885,8 @@ contains
        if (gc_kind(a) == OBJ_MULTIFN) &
             call gc_set_slot(a, 4, gca_dissoc(gc_slot(a, 4), gcv_nth(args, 1), &
                  [vs_get(base + 1)]))
+    case (B_MATH0 + 1 : B_MATH0 + B_MATHN)
+       out = math_call(id - B_MATH0, args, [vs_get(base + 1)])
     case (B_EMPTYMAP)
        out = gca_empty([vs_get(base + 1)])
     case (B_GETMETHOD)
