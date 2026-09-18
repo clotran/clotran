@@ -37,7 +37,7 @@
 ;; revisiting, because those 476 seconds are still there.
 ;;
 ;;   CLOTRAN_TEST_JOBS      processes at once (default 4)
-;;   CLOTRAN_TEST_TIMEOUT   seconds per namespace (default 240)
+;;   CLOTRAN_TEST_TIMEOUT   seconds per namespace (default 600)
 
 (require '[babashka.process :as p]
          '[clojure.string :as str]
@@ -45,7 +45,9 @@
 
 (def repo (-> *file* io/file .getCanonicalFile .getParentFile .getParentFile))
 (def jobs (parse-long (or (System/getenv "CLOTRAN_TEST_JOBS") "4")))
-(def timeout-ms (* 1000 (parse-long (or (System/getenv "CLOTRAN_TEST_TIMEOUT") "240"))))
+(def timeout-ms (* 1000 (parse-long (or (System/getenv "CLOTRAN_TEST_TIMEOUT") "600"))))
+
+(def timed-out-names (atom #{}))
 
 (defn note [& xs]
   (binding [*out* *err*] (apply println xs) (flush)))
@@ -79,8 +81,14 @@
         res  (deref proc timeout-ms ::timeout)]
     (when (= res ::timeout)
       (note "TIMED OUT after" (quot timeout-ms 1000) "s:" n)
+      (swap! timed-out-names conj n)
       (p/destroy-tree proc))
     (let [out (:out (if (= res ::timeout) (deref proc 5000 nil) res))]
+      ;; A TIMEOUT IS NOT A CRASH, and reporting it as one
+      ;; UNDERSTATES the score. clojure.test-clojure.pprint passes
+      ;; 273 assertions and takes longer than four minutes to do
+      ;; it; at the old limit it was killed mid-run and read as a
+      ;; namespace that had never reported at all.
       ;; The LAST summary in the output: loading the helper can print
       ;; one of its own, and the namespace's own result comes after it.
       (when-let [m (last (re-seq #"\{:test (\d+),? :pass (\d+),? :fail (\d+),? :error (\d+)"
@@ -99,11 +107,11 @@
                    doall
                    (mapcat deref)
                    (into {}))]
-  (doseq [f files :let [n (ns-of f)]]
+  (doseq [f files :let [n (ns-of f) timed-out @timed-out-names]]
     (if-let [s (results n)]
       (println (format "%-44s tests=%-4d pass=%-5d fail=%-4d error=%-4d"
                        n (:test s) (:pass s) (:fail s) (:error s)))
-      (println (format "%-44s CRASHED" n))))
+      (println (format "%-44s %s" n (if (timed-out n) "TIMED OUT" "CRASHED")))))
   (println "---")
   (let [t (remove nil? (vals results))]
     (println (format "TOTAL  tests=%d  pass=%d  fail=%d  error=%d"
