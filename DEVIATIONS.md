@@ -761,3 +761,44 @@ positive doubles there are.
 Removing it means reproducing `Double.toString`'s exact digit choice
 rather than the shortest round trip -- worth doing only if something
 starts comparing printed doubles as strings.
+
+## 28. `proxy` is a special form, and accepts methods no superclass declares
+
+Clojure's `proxy` is a macro in `core_proxy.clj`, which is not vendored:
+it is written against the class loader, generating a class at runtime
+and installing a method map on it. There is no class loader here, so
+the macro cannot run.
+
+clotran makes `proxy` a special form instead, built on the machinery
+`reify` already uses -- a type object whose methods are closures, and
+one instance of it. The two shapes `proxy` has that `reify` does not
+are handled by rewriting the forms before that machinery sees them:
+`this` is prepended to every parameter vector, and nested arities
+(`(f ([] 0) ([a] a))`) are flattened into the one-arity-per-form list
+`reify` writes by hand.
+
+Three differences remain, all of them consequences of clotran having no
+class hierarchy (deviation 4):
+
+**Any method name is accepted.** Real Clojure checks each method
+against the superclass and interfaces given, and refuses one they do
+not declare:
+
+    (.f (proxy [Object] [] (f [] 1)))
+    ;; clj     No matching field found: f
+    ;; clotran 1
+
+There is nothing to check against: `[Object]` is a keyword, not a class
+with a method table. So a typo'd method name is silently a new method
+rather than an error.
+
+**The constructor arguments are read and discarded.** `(proxy [C] [a b]
+...)` has no superclass to construct.
+
+**`proxy-super` does not exist**, for the same reason -- there is no
+superclass method to call through to.
+
+**Removal**: vendoring `core_proxy.clj` does not help; it needs
+`Class/forName`, `.getDeclaredMethods` and a class loader. Removing
+this means giving clotran real classes, which is the same work
+deviation 4 names.
