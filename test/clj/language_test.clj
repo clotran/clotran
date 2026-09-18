@@ -999,6 +999,24 @@
 (let [ok (delay 42)]
   (check "an ordinary delay"  [@ok @ok (realized? ok)] [42 42 true]))
 
+
+;;; ---- (var x) resolves where the code was written -----------------
+;; resolve_var reads the defining namespace out of the enclosing
+;; frame, and the `var` special form was handing it the FORM instead --
+;; so a (binding [x ...]) inside one namespace, called from another,
+;; looked x up in the CALLER's namespace and failed. clojure.test's own
+;; (binding [*report-counters* ...]) is exactly that, which is why
+;; run-tests reported nothing from a foreign namespace.
+
+(ns lt.other)
+(def ^:dynamic *lt-counter* :unbound)
+(defn lt-with [f] (binding [*lt-counter* 7] (f)))
+(defn lt-peek [] *lt-counter*)
+(in-ns 'user)
+
+(check "binding across namespaces" (lt.other/lt-with lt.other/lt-peek) 7)
+(check "and it unwinds"            (lt.other/lt-peek) :unbound)
+
 ;;; ---- report -----------------------------------------------------
 
 

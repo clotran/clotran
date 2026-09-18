@@ -815,7 +815,17 @@ contains
        ! caller needs to hold a stable reference across redefinition.
        ! The name can arrive hinted -- (. (var ^{:private true} x)
        ! (setMacro)) is what defmacro expands to for a private macro.
-       out = resolve_var(strip_meta(gcl_first(vs_get(base + 3))), vs_get(base + 1))
+       ! THE ENV, not the form. resolve_var reads the namespace
+       ! the enclosing closure was defined in out of a frame, and
+       ! a form is not a frame -- so this fell straight through
+       ! to the CURRENT namespace, which is whoever happened to
+       ! be calling. clojure.test's own (binding
+       ! [*report-counters* ...]) is exactly that shape: the
+       ! binding form expands to (var *report-counters*), and
+       ! run-tests is called from the namespace under test, where
+       ! that name does not exist. Every deftest namespace
+       ! reported nothing because of it.
+       out = resolve_var(strip_meta(gcl_first(vs_get(base + 3))), vs_get(base + 2))
        if (.not. gcn_is_var(out)) &
             call fail("Unable to resolve var: " // &
             gc_ref_text(nth_sym_ref(vs_get(base + 3))))
@@ -888,7 +898,8 @@ contains
          type(gc_value) :: tgt, val
          tgt = strip_meta(gcl_first(vs_get(base + 3)))
          if (tgt%tag == GCT_SYM) then
-            tgt = resolve_var(tgt, vs_get(base + 1))
+            ! The env, for the same reason (var ...) needs it.
+            tgt = resolve_var(tgt, vs_get(base + 2))
          else
             tgt = gce_eval(tgt, vs_get(base + 2), [vs_get(base + 1)])
          end if
