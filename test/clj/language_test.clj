@@ -181,9 +181,10 @@
 (check "sets differing"     (= #{1} #{2}) false)
 (check "sets sized apart"   (= #{1} #{1 2}) false)
 (check "empty sets"         (= #{} #{}) true)
-;; A collection as an ELEMENT still matches by identity -- the same
-;; limitation map keys have. DEVIATIONS 22.
-(check "collection in a set (DEVIATIONS 22)" (= #{[1]} #{[1]}) false)
+;; A collection as an ELEMENT used to match by identity, so this was
+;; false. It is structural now -- see the collections-as-keys section
+;; below, which is where the rest of that case lives.
+(check "collection in a set" (= #{[1]} #{[1]}) true)
 ;; The underlying bug, directly.
 (check "keyword on a map with meta" (:a (with-meta {:a 1} {:x 9})) 1)
 (check "select-keys result is looked up"
@@ -338,6 +339,36 @@
 (check "comparisons"   [(< 1 2.0) (> 3 2.5) (<= 2 2.0)] [true true true])
 (check "min max abs"   [(min 1 2.5) (max 1 2.5) (abs -3) (abs -3.5)] [1 2.5 3 3.5])
 (check "inc dec"       [(inc 1) (inc 1.5) (dec 1) (dec 1.5)] [2 2.5 0 0.5])
+
+;;; ---- collections as keys -------------------------------------------
+;;
+;; A collection used to hash and compare by its POOL SLOT, so an equal
+;; key built somewhere else missed. `=` was structural all along, which
+;; is what made it confusing: the value compared equal and the lookup
+;; still failed.
+;;
+;; Hash and equality have to agree exactly -- a structural hash with an
+;; identity equality puts one key in a trie twice -- so both are
+;; installed together through gc_set_coll_ops, against deep_equal,
+;; which is the equality `=` already used.
+
+(check "vector as a key"   (get {[1] 2} [1]) 2)
+(check "map with a key"    (= {[1] 2} {[1] 2}) true)
+(check "set of a vector"   (= #{[1]} #{[1]}) true)
+(check "map as a key"      [(get {{:a 1} :v} {:a 1}) (contains? #{{:a 1}} {:a 1})] [:v true])
+;; Entry order must not matter: two equal maps may hand back their
+;; entries differently, so their hash is a sum rather than a fold.
+(check "order of entries"  (get {{:b 2 :a 1} :m} {:a 1 :b 2}) :m)
+;; A list and a vector of the same elements are equal, so they must
+;; hash alike and be interchangeable as keys.
+(check "list and vector"   [(= [1 2] (list 1 2)) (get {[1 2] :v} (list 1 2)) (get {(list 1 2) :v} [1 2])]
+                           [true :v :v])
+;; case* buckets by hash, so it was failing for the same reason.
+(check "case on a map"     (case {:a 1 :b 2} {:b 2 :a 1} :map :default) :map)
+(check "case on a vector"  (case [1 2] [1 2] :vec :default) :vec)
+(check "case on a set"     (case #{1 2} #{2 1} :set :default) :set)
+;; ...and things that are NOT equal must still miss.
+(check "still not equal"   [(= #{1} [1]) (get {[1] :v} [2])] [false nil])
 
 ;;; ---- 64-bit integers -----------------------------------------------
 ;;

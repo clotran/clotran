@@ -375,6 +375,32 @@ module GC
   end interface
   procedure(finalizer_i), pointer, save :: obj_finalizer => null()
 
+  ! Hashing and comparing a COLLECTION means walking it, and a
+  ! persistent vector is a 32-way trie whose walking logic lives in a
+  ! module above this one. Same dependency inversion as the finalizer:
+  ! this module declares the hook, the module that can walk installs
+  ! it, and gc_hash/gc_equal call it for the kinds that need it.
+  !
+  ! The two MUST agree. A structural hash with an identity equality
+  ! (or the reverse) puts the same key in a trie twice and loses
+  ! lookups down whichever arm they walk into, so they are installed
+  ! together and neither is used without the other.
+  abstract interface
+     recursive function coll_hash_i(v) result(h)
+       import :: gc_value
+       type(gc_value), intent(in) :: v
+       integer :: h
+     end function coll_hash_i
+
+     recursive function coll_equal_i(a, b) result(eq)
+       import :: gc_value
+       type(gc_value), intent(in) :: a, b
+       logical :: eq
+     end function coll_equal_i
+  end interface
+  procedure(coll_hash_i), pointer, save :: obj_coll_hash => null()
+  procedure(coll_equal_i), pointer, save :: obj_coll_equal => null()
+
   ! --- the value stack (PLAN.md 3d, Design B) ----------------------
   !
   ! The evaluator's roots, and the reason rooting is by CONSTRUCTION
@@ -425,6 +451,10 @@ module GC
      module procedure gc_int4, gc_int8
   end interface gc_int
   public :: gc_ratio, gc_numerator, gc_denominator, gc_gcd
+  public :: gc_set_coll_ops
+  ! The hash mixer, so the collection walkers installed through
+  ! gc_set_coll_ops finish with the same one every other hash uses.
+  public :: mix32
   public :: gc_obj, gc_vec, gc_cons
   public :: gc_text, gc_slot, gc_set_slot, gc_kind
   public :: gc_i1, gc_i2, gc_set_i1, gc_set_i2
@@ -1024,7 +1054,17 @@ contains
        eq = (gc_ref_len(a%ref) == gc_ref_len(b%ref))
        if (eq) eq = gc_ref_is(a%ref, gc_ref_text(b%ref))
     case default
-       eq = (a%ref == b%ref)
+       ! A collection is its CONTENTS, when something above this
+       ! module has said how to walk one. Identity was the old answer
+       ! and it made (get {[1] 2} [1]) nil: the lookup key is a
+       ! different object from the stored one, however equal.
+       if (associated(obj_coll_equal) .and. &
+            is_structural_kind(gc_kind(a)) .and. &
+            is_structural_kind(gc_kind(b))) then
+          eq = obj_coll_equal(a, b)
+       else
+          eq = (a%ref == b%ref)
+       end if
     end select
   end function gc_equal
 
@@ -1074,8 +1114,13 @@ contains
     case (GCT_STR, GCT_SYM, GCT_KEY)
        h = mix32(ieor(fnv1a(gc_ref_text(v%ref)), v%tag))
     case default
-       ! Collections hash by identity, matching gc_equal's default.
-       h = mix32(ieor(v%ref, v%tag))
+       ! ...and hashing has to follow equality exactly, or a trie
+       ! stores the same key twice and loses lookups.
+       if (associated(obj_coll_hash) .and. is_structural_kind(gc_kind(v))) then
+          h = obj_coll_hash(v)
+       else
+          h = mix32(ieor(v%ref, v%tag))
+       end if
     end select
   end function gc_hash
 
@@ -1207,6 +1252,28 @@ contains
     procedure(finalizer_i) :: f
     obj_finalizer => f
   end subroutine gc_set_finalizer
+
+  ! Both at once, deliberately: see the note on the interfaces.
+  subroutine gc_set_coll_ops(h, e)
+    procedure(coll_hash_i) :: h
+    procedure(coll_equal_i) :: e
+    obj_coll_hash => h
+    obj_coll_equal => e
+  end subroutine gc_set_coll_ops
+
+  ! Whether a kind is one the hooks handle -- the collections whose
+  ! identity is their CONTENTS.
+  pure logical function is_structural_kind(k)
+    integer, intent(in) :: k
+    ! OBJ_LAZY is deliberately absent. Hashing one means REALIZING
+    ! it, and gc_hash runs inside map inserts and lookups, where an
+    ! allocation can collect the very structure being built. A lazy
+    ! seq used as a key keeps the old identity behaviour; equality
+    ! only consults the hook when BOTH sides are structural, so the
+    ! two stay in step.
+    is_structural_kind = (k == OBJ_CONS .or. k == OBJ_VECTOR .or. &
+         k == OBJ_MAP .or. k == OBJ_SET)
+  end function is_structural_kind
 
   subroutine gc_global_keep(h, v)
     type(gc_root), intent(inout) :: h

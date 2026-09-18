@@ -262,6 +262,7 @@ contains
     ! dies, so a native array's buffer is freed exactly once rather
     ! than leaking for the life of the process.
     call gc_set_finalizer(gce_finalize_obj)
+    call gc_set_coll_ops(gce_coll_hash, gce_coll_equal)
     call gcn_reset(roots)
     ! Three slots: env, clojure.core, and the fortran namespace. The
     ! third is NOT optional -- core lives in slot 2 for the whole of
@@ -7476,6 +7477,108 @@ contains
   ! and so does taking the rest of a vector view, so the two sides
   ! have to be reachable across those allocations. Indexing never
   ! allocated, which is why it used to take none.
+  ! --- structural hashing and equality for collections --------------
+  !
+  ! Installed into GC.f90 through gc_set_coll_ops. Until they were,
+  ! a collection hashed and compared by its POOL SLOT, so a map keyed
+  ! on one answered nil for an equal key built elsewhere:
+  !
+  !     (get {[1] 2} [1])   ;=> nil, clj says 2
+  !     (= #{[1]} #{[1]})   ;=> false
+  !     (case {:a 1 :b 2} {:b 2 :a 1} :map :default)  ;=> :default
+  !
+  ! The two must agree exactly: equal values have to hash equal, or a
+  ! trie stores one key twice and finds whichever arm a lookup walks
+  ! into. So both are written here, together, against the same notion
+  ! of what equality means -- deep_equal, which is what `=` already
+  ! used.
+
+  ! Equality for the kinds is_structural_kind admits.
+  !
+  ! The kind pairing is checked HERE rather than left to deep_equal,
+  ! which ends by delegating to gc_equal for anything it does not
+  ! recognise. gc_equal now calls this function, so a pair deep_equal
+  ! declined -- a set against a vector, say -- would bounce between
+  ! the two forever. Mismatched kinds are simply not equal.
+  recursive function gce_coll_equal(a, b) result(eq)
+    type(gc_value), intent(in) :: a, b
+    logical :: eq
+    integer :: ka, kb
+    ka = gc_kind(a)
+    kb = gc_kind(b)
+    eq = .false.
+    if (ka == OBJ_SET .and. kb == OBJ_SET) then
+       eq = deep_equal(a, b, [a, b])
+    else if (ka == OBJ_MAP .and. kb == OBJ_MAP) then
+       eq = deep_equal(a, b, [a, b])
+    else if (is_seq_kind(ka) .and. is_seq_kind(kb)) then
+       ! A list and a vector of the same elements ARE equal in
+       ! Clojure, so these share one branch and one hash scheme.
+       eq = deep_equal(a, b, [a, b])
+    end if
+  end function gce_coll_equal
+
+  pure logical function is_seq_kind(k)
+    integer, intent(in) :: k
+    is_seq_kind = (k == OBJ_CONS .or. k == OBJ_VECTOR)
+  end function is_seq_kind
+
+  ! Hash for the same kinds, and it must NOT allocate: gc_hash runs in
+  ! the middle of a map insert, where a collection could take the
+  ! half-built structure with it.
+  !
+  !   sequential  ordered, 31*h + hash(element) -- and the SAME scheme
+  !               for a list and a vector, because they can be equal.
+  !   map         unordered, a sum of hash(k) xor hash(v)
+  !   set         unordered, a sum of hash(element)
+  !
+  ! Unordered for the last two because two equal maps may hand back
+  ! their entries in different orders; a fold that cared about order
+  ! would hash them differently and break the invariant. Sums wrap on
+  ! overflow, which is fine -- a hash may collide, it may not disagree
+  ! with equality.
+  recursive function gce_coll_hash(v) result(h)
+    type(gc_value), intent(in) :: v
+    integer :: h
+    integer :: i, n, k
+    type(gc_value), allocatable :: ks(:), vs_(:)
+    type(gc_value) :: cur, item
+    k = gc_kind(v)
+    h = 0
+    select case (k)
+    case (OBJ_VECTOR)
+       n = gcv_count(v)
+       do i = 0, n - 1
+          h = 31 * h + gc_hash(gcv_nth(v, i))
+       end do
+       h = mix32(h)
+    case (OBJ_CONS)
+       ! Walked through the slots rather than the seq interface: car
+       ! and cdr are already there, and sq_first/sq_rest can allocate.
+       cur = v
+       do while (gc_kind(cur) == OBJ_CONS)
+          item = gc_slot(cur, 1)
+          h = 31 * h + gc_hash(item)
+          cur = gc_slot(cur, 2)
+       end do
+       h = mix32(h)
+    case (OBJ_MAP)
+       call gca_entries(v, ks, vs_)
+       do i = 1, size(ks)
+          h = h + ieor(gc_hash(ks(i)), gc_hash(vs_(i)))
+       end do
+       h = mix32(ieor(h, OBJ_MAP))
+    case (OBJ_SET)
+       call gca_entries(gc_slot(v, 1), ks, vs_)
+       do i = 1, size(ks)
+          h = h + gc_hash(ks(i))
+       end do
+       h = mix32(ieor(h, OBJ_SET))
+    case default
+       h = mix32(ieor(v%ref, v%tag))
+    end select
+  end function gce_coll_hash
+
   recursive function deep_equal(a0, b0, roots) result(eq)
     type(gc_value), intent(in) :: a0, b0
     type(gc_value), intent(in) :: roots(:)
