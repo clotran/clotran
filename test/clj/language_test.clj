@@ -698,6 +698,26 @@
 ;; A VECTOR is metadata too -- ^[long] is 1.12's param-tags.
 (check "^[long] is param-tags"  (:param-tags (meta (quote ^[long] (x)))) '[long])
 
+
+;;; ---- empty ------------------------------------------------------
+;; core.clj's `empty` is (.empty coll) behind an instance? guard, so
+;; the answer keeps the collection's CATEGORY and a non-collection
+;; answers nil rather than erroring. All checked against `clj`.
+
+(check "empty a vector"   (empty [1 2]) [])
+(check "empty a map"      (empty {:a 1}) {})
+(check "empty a set"      (empty #{1}) #{})
+(check "empty a list"     (empty '(1 2)) '())
+(check "empty a seq"      (empty (seq [1 2])) '())
+(check "empty a lazy seq" (empty (lazy-seq [1 2])) '())
+(check "empty nil"        (empty nil) nil)
+(check "empty a number"   (empty 1) nil)
+(check "empty a string"   (empty "ab") nil)
+(check "empty keeps type"
+       [(vector? (empty [1])) (map? (empty {:a 1}))
+        (set? (empty #{1})) (list? (empty '(1)))]
+       [true true true true])
+
 ;;; ---- report -----------------------------------------------------
 
 

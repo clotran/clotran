@@ -131,6 +131,7 @@ module GCEval
   integer, parameter :: B_SCONSTRUCT = 182, B_SACCESSOR = 183
   integer, parameter :: B_ASIFASSOC = 184
   integer, parameter :: B_MACROEXP1 = 185
+  integer, parameter :: B_COLLEMPTY = 186
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -2714,6 +2715,8 @@ contains
     ! after being persisted, which Clojure catches and we do not.
     case ("asTransient", "persistent")
        out = native(B_IDENTITY, "identity", [roots])
+    case ("empty")
+       out = native(B_COLLEMPTY, "clotran-coll-empty", [roots])
     case ("conj");     out = native(B_CONJ, "conj", [roots])
     case ("assoc");    out = native(B_ASSOC, "assoc", [roots])
     case ("without");  out = native(B_DISSOC, "dissoc", [roots])
@@ -4961,6 +4964,38 @@ contains
     call vs_leave(base)
   end function macroexpand_1step
 
+  ! IPersistentCollection.empty -- what core.clj's `empty` is, in full:
+  ! (when (instance? IPersistentCollection coll) (.empty coll)). The
+  ! answer keeps the CATEGORY, so a vector empties to [] and a map to
+  ! {}; anything that is not a collection answers nil, which is the
+  ! `when`'s else branch rather than an error.
+  function coll_empty(v, roots) result(out)
+    type(gc_value), intent(in) :: v
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, inner
+    integer :: base
+
+    out = gc_nil()
+    base = vs_enter(2)
+    call vs_set(base + 1, v)
+    select case (gc_kind(vs_get(base + 1)))
+    case (OBJ_VECTOR)
+       out = gcv_empty([roots, vs_get(base + 1)])
+    case (OBJ_MAP)
+       out = gca_empty([roots, vs_get(base + 1)])
+    case (OBJ_SET)
+       inner = gca_empty([roots, vs_get(base + 1)])
+       call vs_set(base + 2, inner)
+       out = gc_obj(OBJ_SET, [vs_get(base + 2)], [roots, vs_get(base + 2)])
+    case (OBJ_CONS, OBJ_SEQ, OBJ_LAZY)
+       ! Every seq empties to (), the way PersistentList.EMPTY is what
+       ! ASeq.empty answers.
+       out = gcl_empty([roots, vs_get(base + 1)])
+    end select
+    if (gcl_is(vs_get(base + 1))) out = gcl_empty([roots, vs_get(base + 1)])
+    call vs_leave(base)
+  end function coll_empty
+
   ! Compiler.specials -- the map special-symbol? asks. Its VALUES are
   ! parser objects on the JVM and nothing reads them through this Var,
   ! so nil will do; the KEYS are the answer.
@@ -5993,6 +6028,9 @@ contains
        out = struct_construct(args, [vs_get(base + 1)])
     case (B_SACCESSOR)
        out = struct_accessor(args, [vs_get(base + 1)])
+
+    case (B_COLLEMPTY)
+       out = coll_empty(gcv_nth(args, 0), [vs_get(base + 1)])
 
     case (B_MACROEXP1)
        out = macroexpand_1step(gcv_nth(args, 0))
