@@ -145,6 +145,7 @@ module GCEval
   ! Past the Math block, which occupies B_MATH0+1 .. B_MATH0+45.
   integer, parameter :: B_RE_REPLACEALL = 250, B_RE_REPLACEFIRST = 251
   integer, parameter :: B_RE_APPENDREPL = 252, B_RE_APPENDTAIL = 253
+  integer, parameter :: B_RE_START = 254, B_RE_END = 255
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -2815,6 +2816,11 @@ contains
        out = native(B_RE_APPENDREPL, "clotran-re-append-replacement", [roots])
     case ("appendTail")
        out = native(B_RE_APPENDTAIL, "clotran-re-append-tail", [roots])
+    ! Matcher.start and .end -- where the last match sits. Both
+    ! take an optional group number, and both are -1 when that
+    ! group did not participate.
+    case ("start");      out = native(B_RE_START, "clotran-re-start", [roots])
+    case ("end");        out = native(B_RE_END, "clotran-re-end", [roots])
     case ("groupCount"); out = native(B_RE_GROUPCOUNT, "re-group-count", [roots])
     case ("group");      out = native(B_RE_GROUP, "re-group", [roots])
     case default;       call fail("no such member: " // mname)
@@ -6274,7 +6280,7 @@ contains
              ! never called refer at all -- which is why
              ! (:require [clojure.test :refer [deftest]]) interned
              ! nothing and whole test files died on (deftest ...).
-             out = gca_get(strip_meta(gcv_nth(args, 0)), fn)
+             out = coll_get(gcv_nth(args, 0), fn)
           end if
        else if (gca_is(fn)) then
           if (gcv_count(args) >= 1) out = gca_get(fn, gcv_nth(args, 0))
@@ -6573,9 +6579,9 @@ contains
              return
           end if
        end if
-       out = gca_get(a, gcv_nth(args, 1))
+       out = coll_get(a, gcv_nth(args, 1))
        if (out%tag == GCT_NIL .and. n >= 3) then
-          if (.not. gca_contains(a, gcv_nth(args, 1))) out = gcv_nth(args, 2)
+          if (.not. coll_has(a, gcv_nth(args, 1))) out = gcv_nth(args, 2)
        end if
     case (B_ASSOC)
        ! (assoc nil k v) CREATES a map -- which is what makes assoc-in
@@ -8331,11 +8337,16 @@ contains
          character(len=:), allocatable :: hay, ned
          integer :: j, hit
          hay = text_of(gcv_nth(args, 0))
-         ned = text_of(gcv_nth(args, 1))
+         ned = needle_text(gcv_nth(args, 1))
          hit = 0
          if (len(ned) > 0 .and. len(ned) <= len(hay)) then
             do j = 1, len(hay) - len(ned) + 1
-               if (hay(j:j+len(ned)-1) == ned) hit = j
+               if (hay(j:j+len(ned)-1) == ned) then
+                  if (n >= 3) then
+                     if (j - 1 > int(strip_int(gcv_nth(args, 2)))) exit
+                  end if
+                  hit = j
+               end if
             end do
          end if
          out = gc_int(hit - 1)
@@ -8383,11 +8394,28 @@ contains
          call gcn_set_current(vs_get(base + 3))
        end block
     case (B_INDEXOF)
+       ! String.indexOf is overloaded on (int ch) as well as
+       ! (String). An INTEGER is a character CODE, not the text
+       ! of that integer -- cl_format.clj writes
+       ! (.indexOf s (int \~)) to find its directives, and
+       ! searching for "126" never found one, so every format
+       ! string compiled to itself as literal text and cl-format
+       ! returned the format unchanged.
        block
          character(len=:), allocatable :: hay, ned
+         integer :: from1, hit1
          hay = text_of(gcv_nth(args, 0))
-         ned = text_of(gcv_nth(args, 1))
-         out = gc_int(index(hay, ned) - 1)
+         ned = needle_text(gcv_nth(args, 1))
+         from1 = 0
+         if (n >= 3) from1 = max(0, int(strip_int(gcv_nth(args, 2))))
+         hit1 = 0
+         if (from1 < len(hay) .or. len(ned) == 0) &
+              hit1 = index(hay(from1+1:), ned)
+         if (hit1 > 0) then
+            out = gc_int(hit1 + from1 - 1)
+         else
+            out = gc_int(-1)
+         end if
        end block
     case (B_SUBVEC)
        ! (subvec v start) and (subvec v start end). A copy rather than a
@@ -8558,6 +8586,28 @@ contains
             call vs_set(base + 2, av)
             out = gc_str(java_format(gc_ref_text(fv%ref), vs_get(base + 2)), &
                  [vs_get(base + 1), vs_get(base + 2)])
+         end if
+       end block
+    case (B_RE_START, B_RE_END)
+       block
+         type(gc_value) :: mt, iv
+         integer :: mh3, gnum3, gs3, ge3
+         mt = strip_meta(gcv_nth(args, 0))
+         out = gc_int(-1)
+         if (gc_kind(mt) == OBJ_MATCHER) then
+            mh3 = gc_i1(mt)
+            gnum3 = 0
+            if (n >= 2) then
+               iv = strip_meta(gcv_nth(args, 1))
+               gnum3 = int(iv%ival)
+            end if
+            if (regex_group_span(mh3, gnum3, gs3, ge3)) then
+               if (id == B_RE_START) then
+                  out = gc_int(gs3)
+               else
+                  out = gc_int(ge3)
+               end if
+            end if
          end if
        end block
     case (B_RE_REPLACEALL, B_RE_REPLACEFIRST)
@@ -10740,6 +10790,63 @@ contains
        s = gcp_str(v, .false.)
     end if
   end function text_of
+
+  ! A LOOKUP, for the three collections that answer one: a map by
+  ! key, an instance by field, and a SET BY MEMBERSHIP. That last
+  ! is the one that was missing -- (get #{:at} :at) and
+  ! (:at #{:at}) both answered nil, where Clojure answers :at,
+  ! because a set's contents live one slot down and nothing
+  ! unwrapped them. cl_format.clj asks exactly that of its
+  ! allowed-flags set for every directive it compiles, so every
+  ! flag looked illegal and clojure.pprint would not load.
+  function coll_get(coll0, k) result(out)
+    type(gc_value), intent(in) :: coll0, k
+    type(gc_value) :: out, coll
+    coll = strip_meta(coll0)
+    if (gc_kind(coll) == OBJ_SET) then
+       out = gca_get(gc_slot(coll, 1), k)
+    else
+       out = gca_get(coll, k)
+    end if
+  end function coll_get
+
+  ! Whether that lookup would find anything.
+  function coll_has(coll0, k) result(yes)
+    type(gc_value), intent(in) :: coll0, k
+    type(gc_value) :: coll
+    logical :: yes
+    coll = strip_meta(coll0)
+    if (gc_kind(coll) == OBJ_SET) then
+       yes = gca_contains(gc_slot(coll, 1), k)
+    else
+       yes = gca_contains(coll, k)
+    end if
+  end function coll_has
+
+  ! What a String.indexOf needle MEANS. A string is itself, and a
+  ! character -- or an integer, which is how Java spells one
+  ! here -- is the single character it names.
+  function needle_text(v0) result(s)
+    type(gc_value), intent(in) :: v0
+    character(len=:), allocatable :: s
+    type(gc_value) :: v
+    v = strip_meta(v0)
+    if (v%tag == GCT_INT .or. v%tag == GCT_CHAR) then
+       s = achar(int(max(0_gc_ip, min(255_gc_ip, v%ival)), kind=4))
+    else
+       s = text_of(v)
+    end if
+  end function needle_text
+
+  ! The integer a value carries, or zero.
+  function strip_int(v0) result(i)
+    type(gc_value), intent(in) :: v0
+    integer(gc_ip) :: i
+    type(gc_value) :: v
+    v = strip_meta(v0)
+    i = 0
+    if (v%tag == GCT_INT .or. v%tag == GCT_CHAR) i = v%ival
+  end function strip_int
 
   ! conj of ONE item. Collection-polymorphic on purpose, and the one
   ! place that should NOT go through seq: (conj [1] 2) appends,

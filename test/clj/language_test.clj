@@ -1017,6 +1017,35 @@
 (check "binding across namespaces" (lt.other/lt-with lt.other/lt-peek) 7)
 (check "and it unwinds"            (lt.other/lt-peek) :unbound)
 
+
+;;; ---- a set answers a lookup --------------------------------------
+;; A set's contents live one slot down, and get/keyword lookup never
+;; unwrapped them -- so (get #{:at} :at) and (:at #{:at}) both answered
+;; nil where Clojure answers :at. cl_format.clj asks exactly that of
+;; its allowed-flags set for every directive it compiles, so every flag
+;; looked illegal and clojure.pprint would not load at all.
+
+(check "keyword on a set"    (:at #{:colon :at}) :at)
+(check "get on a set"        (get #{:at} :at) :at)
+(check "get on a set misses" (:zz #{:at}) nil)
+(check "get with not-found"  (get #{:at} :zz :d) :d)
+(check "maps still work"     [(get {:a 1} :a) (:a {:a 1})] [1 1])
+
+;;; ---- indexOf takes a character CODE ------------------------------
+;; String.indexOf is overloaded on (int ch) as well as (String), and
+;; cl_format.clj writes (.indexOf s (int \~)) to find its directives.
+;; Searching for the TEXT "126" never found one, so every format string
+;; compiled to itself and cl-format returned the format unchanged.
+
+(check "indexOf a code"   (.indexOf "abcabc" (int \b)) 1)
+(check "indexOf a string" (.indexOf "abcabc" "b") 1)
+(check "indexOf from"     (.indexOf "abcabc" "b" 2) 4)
+(check "indexOf misses"   (.indexOf "abc" "z") -1)
+(check "index-of a char"  [(clojure.string/index-of "hello" \l)
+                           (clojure.string/index-of "hello" "l" 3)
+                           (clojure.string/last-index-of "hello" \l)]
+                          [2 3 3])
+
 ;;; ---- report -----------------------------------------------------
 
 
