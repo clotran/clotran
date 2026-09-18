@@ -140,7 +140,11 @@ module GCEval
   ! java.lang.Math occupies a BLOCK: B_MATH0 + math_index(name).
   integer, parameter :: B_MATH0 = 200, B_MATHN = 45
   integer, parameter :: B_FORMAT = 193, B_NUMCOMPARE = 194
-  integer, parameter :: B_READSTRING = 195
+  integer, parameter :: B_READSTRING = 195, B_RE_SPLIT = 196
+  integer, parameter :: B_QUOTEREPL = 197, B_SBREVERSE = 198
+  ! Past the Math block, which occupies B_MATH0+1 .. B_MATH0+45.
+  integer, parameter :: B_RE_REPLACEALL = 250, B_RE_REPLACEFIRST = 251
+  integer, parameter :: B_RE_APPENDREPL = 252, B_RE_APPENDTAIL = 253
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -2777,9 +2781,29 @@ contains
     case ("nth");      out = native(B_NTH, "nth", [roots])
     case ("contains"); out = native(B_STRCONTAINS, "clotran-dot-contains", [roots])
     ! java.util.regex.Pattern/Matcher instance methods -- see Regex.f90.
+    ! Pattern.split is clojure.string/split.
+    case ("split");      out = native(B_RE_SPLIT, "clotran-re-split", [roots])
+    ! Character.charValue hands back the char itself. Its callers
+    ! hint the result ^int, but everything that consumes it here
+    ! reads a character as its text, so the unwrapping is a no-op.
+    case ("charValue"); out = native(B_IDENTITY, "identity", [roots])
+    ! StringBuilder.reverse, which clojure.string/reverse is.
+    case ("reverse");   out = native(B_SBREVERSE, "clotran-sb-reverse", [roots])
+    ! Vector's stack end. RT has these as statics already; a
+    ! transient reaches them as instance members instead.
+    case ("pop");       out = native(B_POP, "pop", [roots])
+    case ("peek");      out = native(B_PEEK, "peek", [roots])
     case ("matcher");    out = native(B_RE_MATCHER, "re-matcher", [roots])
     case ("find");       out = native(B_RE_FIND, "re-find*", [roots])
     case ("matches");    out = native(B_RE_MATCHES, "re-matches*", [roots])
+    case ("replaceAll")
+       out = native(B_RE_REPLACEALL, "clotran-re-replace-all", [roots])
+    case ("replaceFirst")
+       out = native(B_RE_REPLACEFIRST, "clotran-re-replace-first", [roots])
+    case ("appendReplacement")
+       out = native(B_RE_APPENDREPL, "clotran-re-append-replacement", [roots])
+    case ("appendTail")
+       out = native(B_RE_APPENDTAIL, "clotran-re-append-tail", [roots])
     case ("groupCount"); out = native(B_RE_GROUPCOUNT, "re-group-count", [roots])
     case ("group");      out = native(B_RE_GROUP, "re-group", [roots])
     case default;       call fail("no such member: " // mname)
@@ -3141,6 +3165,15 @@ contains
              call vs_leave(base)
              return
           end if
+          ! (StringBuffer. n) is a CAPACITY, not content -- the buffer
+          ! starts empty. clojure.string/replace writes
+          ! (StringBuffer. (.length s)) and every replacement it built
+          ! came out with the length stuck on the front.
+          block
+            type(gc_value) :: capv
+            capv = strip_meta(thunk)
+            if (capv%tag == GCT_INT) thunk = gc_str("", [vs_get(base + 1)])
+          end block
        end if
        call vs_set(base + 3, thunk)
        out = gc_obj(OBJ_SB, [vs_get(base + 3)], [vs_get(base + 3)])
@@ -3558,6 +3591,10 @@ contains
     else if (cls == "clojure.lang.Range" .or. cls == "clojure.lang.LongRange") then
        if (mname == "create") then
           out = native(B_RANGE, "range", [roots]); return
+       end if
+    else if (cls == "Matcher" .or. cls == "java.util.regex.Matcher") then
+       if (mname == "quoteReplacement") then
+          out = native(B_QUOTEREPL, "re-quote-replacement", [roots]); return
        end if
     else if (cls == "java.util.regex.Pattern") then
        if (mname == "compile") then
@@ -5556,6 +5593,168 @@ contains
             index(flags, "0") > 0)
     end do
   end function java_format
+
+  ! Pattern.split -- what clojure.string/split is, and the one regex
+  ! operation the matcher API cannot already express: it walks the
+  ! subject finding matches and returns the text BETWEEN them.
+  !
+  ! Java's limit rule, which is not obvious: a positive limit caps the
+  ! number of parts and the last part keeps the rest of the string
+  ! unsplit; zero or absent means no cap AND trailing empty parts are
+  ! dropped; a negative limit means no cap and keep them.
+  function regex_split(pat, subj, limit, roots) result(out)
+    type(gc_value), intent(in) :: pat, subj
+    integer, intent(in) :: limit
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, piece
+    character(len=:), allocatable :: s
+    integer :: mh, base, from, gs, ge, nparts, last
+    logical :: ok
+
+    out = gc_nil()
+    s = text_of(subj)
+    mh = regex_clone(gc_i1(pat))
+    if (mh == 0) then
+       call fail("regex: " // regex_last_error())
+       return
+    end if
+    if (.not. regex_set_text(mh, s)) then
+       call fail("regex: " // regex_last_error())
+       call regex_release(mh)
+       return
+    end if
+
+    base = vs_enter(2)
+    out = gcv_empty(roots)
+    call vs_set(base + 1, out)
+    from = 0
+    nparts = 0
+    do
+       if (limit > 0 .and. nparts == limit - 1) exit
+       if (regex_find_next(mh) /= 1) exit
+       ok = regex_group_span(mh, 0, gs, ge)
+       if (.not. ok) exit
+       ! A zero-width match at the position we are already at would
+       ! loop forever and produce nothing; Java skips it too.
+       if (ge == gs .and. gs == from .and. from == 0) cycle
+       piece = gc_str(s(from+1:gs), [roots, vs_get(base + 1)])
+       call vs_set(base + 2, piece)
+       out = gcv_conj(vs_get(base + 1), vs_get(base + 2), &
+            [roots, vs_get(base + 1), vs_get(base + 2)])
+       call vs_set(base + 1, out)
+       nparts = nparts + 1
+       from = ge
+       if (ge == gs) from = ge
+    end do
+    call regex_release(mh)
+
+    piece = gc_str(s(from+1:), [roots, vs_get(base + 1)])
+    call vs_set(base + 2, piece)
+    out = gcv_conj(vs_get(base + 1), vs_get(base + 2), &
+         [roots, vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 1, out)
+
+    if (limit == 0) then
+       ! Drop trailing empties.
+       last = gcv_count(vs_get(base + 1))
+       do while (last > 0)
+          if (len(text_of(gcv_nth(vs_get(base + 1), last - 1))) > 0) exit
+          last = last - 1
+       end do
+       out = gcv_empty([roots, vs_get(base + 1)])
+       call vs_set(base + 2, out)
+       do nparts = 0, last - 1
+          out = gcv_conj(vs_get(base + 2), gcv_nth(vs_get(base + 1), nparts), &
+               [roots, vs_get(base + 1), vs_get(base + 2)])
+          call vs_set(base + 2, out)
+       end do
+       out = vs_get(base + 2)
+    else
+       out = vs_get(base + 1)
+    end if
+    call vs_leave(base)
+  end function regex_split
+
+  ! Matcher.quoteReplacement: \ and $ are the only two characters a
+  ! replacement string treats specially, so escaping those makes it
+  ! literal.
+  function quote_replacement(t) result(s)
+    character(len=*), intent(in) :: t
+    character(len=:), allocatable :: s
+    integer :: i
+    s = ""
+    do i = 1, len(t)
+       if (t(i:i) == achar(92) .or. t(i:i) == "$") s = s // achar(92)
+       s = s // t(i:i)
+    end do
+  end function quote_replacement
+
+  ! Matcher's replacement half: appendReplacement, appendTail,
+  ! replaceAll and replaceFirst. clojure.string/replace is written
+  ! entirely in terms of these, so `replace` and `replace-first` do not
+  ! work without them however good the matching is.
+  !
+  ! The APPEND POSITION lives in the Matcher's i2 -- where the last
+  ! appendReplacement left off, which is what makes a sequence of them
+  ! stitch a string together. i1 is the ICU handle; i2 was free.
+
+  ! $1..$9 name groups; a backslash escapes the next character. This is
+  ! the one place a replacement string is not literal, which is why
+  ! Matcher/quoteReplacement exists at all.
+  function expand_replacement(repl, mh, subj) result(s)
+    character(len=*), intent(in) :: repl, subj
+    integer, intent(in) :: mh
+    character(len=:), allocatable :: s
+    integer :: i, gnum, gs, ge
+
+    s = ""
+    i = 1
+    do while (i <= len(repl))
+       if (repl(i:i) == achar(92) .and. i < len(repl)) then
+          s = s // repl(i+1:i+1)
+          i = i + 2
+       else if (repl(i:i) == "$" .and. i < len(repl) .and. &
+            repl(min(i+1, len(repl)):min(i+1, len(repl))) >= "0" .and. &
+            repl(min(i+1, len(repl)):min(i+1, len(repl))) <= "9") then
+          gnum = iachar(repl(i+1:i+1)) - iachar("0")
+          if (regex_group_span(mh, gnum, gs, ge)) s = s // subj(gs+1:ge)
+          i = i + 2
+       else
+          s = s // repl(i:i)
+          i = i + 1
+       end if
+    end do
+  end function expand_replacement
+
+  ! Every match replaced, or just the first. Same walk either way.
+  function regex_replace(mv, repl, only_first, roots) result(out)
+    type(gc_value), intent(in) :: mv
+    character(len=*), intent(in) :: repl
+    logical, intent(in) :: only_first
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out
+    character(len=:), allocatable :: subj, acc
+    integer :: mh, from, gs, ge
+
+    subj = text_of(gc_slot(mv, 2))
+    mh = gc_i1(mv)
+    acc = ""
+    from = 0
+    do
+       if (regex_find_next(mh) /= 1) exit
+       if (.not. regex_group_span(mh, 0, gs, ge)) exit
+       acc = acc // subj(from+1:gs) // expand_replacement(repl, mh, subj)
+       from = ge
+       if (only_first) exit
+       ! A zero-width match cannot advance on its own.
+       if (ge == gs) then
+          if (ge >= len(subj)) exit
+          acc = acc // subj(ge+1:ge+1)
+          from = ge + 1
+       end if
+    end do
+    out = gc_str(acc // subj(from+1:), roots)
+  end function regex_replace
 
   ! One conversion, before padding.
   function format_one(conv, a0, prec, has_prec) result(p)
@@ -8332,6 +8531,87 @@ contains
                  [vs_get(base + 1), vs_get(base + 2)])
          end if
        end block
+    case (B_RE_REPLACEALL, B_RE_REPLACEFIRST)
+       block
+         type(gc_value) :: mt
+         mt = strip_meta(gcv_nth(args, 0))
+         if (gc_kind(mt) /= OBJ_MATCHER) then
+            call fail("replaceAll needs a Matcher")
+         else
+            out = regex_replace(mt, text_of(gcv_nth(args, 1)), &
+                 id == B_RE_REPLACEFIRST, [vs_get(base + 1)])
+         end if
+       end block
+    case (B_RE_APPENDREPL, B_RE_APPENDTAIL)
+       ! (.appendReplacement m buffer repl) and (.appendTail m
+       ! buffer): the buffer is the SECOND argument and is
+       ! mutated, and the answer is the matcher.
+       block
+         type(gc_value) :: mt, bufv
+         character(len=:), allocatable :: subj, piece
+         integer :: mh2, gs2, ge2, apos
+         mt = strip_meta(gcv_nth(args, 0))
+         bufv = strip_meta(gcv_nth(args, 1))
+         out = mt
+         if (gc_kind(mt) /= OBJ_MATCHER) then
+            call fail("appendReplacement needs a Matcher")
+         else
+            subj = text_of(gc_slot(mt, 2))
+            mh2 = gc_i1(mt)
+            apos = gc_i2(mt)
+            if (id == B_RE_APPENDTAIL) then
+               piece = subj(apos+1:)
+            else if (regex_group_span(mh2, 0, gs2, ge2)) then
+               piece = subj(apos+1:gs2) // &
+                    expand_replacement(text_of(gcv_nth(args, 2)), mh2, subj)
+               call gc_set_i2(mt, ge2)
+            else
+               piece = ""
+            end if
+            if (gc_kind(bufv) == OBJ_SB) then
+               call gc_set_slot(bufv, 1, gc_str( &
+                    text_of(gc_slot(bufv, 1)) // piece, [vs_get(base + 1)]))
+            end if
+         end if
+       end block
+    case (B_RE_SPLIT)
+       block
+         type(gc_value) :: pv, sv, lv
+         integer :: lim
+         pv = strip_meta(gcv_nth(args, 0))
+         sv = strip_meta(gcv_nth(args, 1))
+         lim = 0
+         if (n >= 3) then
+            lv = strip_meta(gcv_nth(args, 2))
+            lim = int(lv%ival)
+         end if
+         if (gc_kind(pv) /= OBJ_REGEX) then
+            call fail("split needs a Pattern")
+         else
+            out = regex_split(pv, sv, lim, [vs_get(base + 1)])
+         end if
+       end block
+    case (B_QUOTEREPL)
+       out = gc_str(quote_replacement(text_of(gcv_nth(args, 0))), &
+            [vs_get(base + 1)])
+    case (B_SBREVERSE)
+       ! Mutates and returns the builder, like append.
+       block
+         character(len=:), allocatable :: bt, rt
+         integer :: bi
+         a = gcv_nth(args, 0)
+         out = a
+         bt = text_of(a)
+         rt = bt
+         do bi = 1, len(bt)
+            rt(bi:bi) = bt(len(bt) - bi + 1:len(bt) - bi + 1)
+         end do
+         if (gc_kind(a) == OBJ_SB) then
+            call gc_set_slot(a, 1, gc_str(rt, [vs_get(base + 1)]))
+         else
+            out = gc_str(rt, [vs_get(base + 1)])
+         end if
+       end block
     case (B_READSTRING)
        block
          type(gc_value) :: sv
@@ -10088,8 +10368,14 @@ contains
        ! which is how @(delay 1) came back as the delay itself.
        yes = (t == "atom" .or. t == "delay" .or. t == "var")
     case ("clojure.lang.Delay"); yes = (t == "delay")
-    case ("java.util.regex.Pattern"); yes = (t == "regex")
-    case ("java.util.regex.Matcher"); yes = (t == "matcher")
+    ! Both spellings. clojure.string imports these -- (:import
+    ! (java.util.regex Pattern Matcher)) -- and then writes the
+    ! SHORT name, so (instance? Pattern re) has to answer the same
+    ! as the qualified form. Without it clojure.string/replace
+    ! fell through every branch of its cond and threw
+    ! "Invalid match arg" on a perfectly good pattern.
+    case ("java.util.regex.Pattern", "Pattern"); yes = (t == "regex")
+    case ("java.util.regex.Matcher", "Matcher"); yes = (t == "matcher")
     case ("clojure.lang.Reduced")
        ! A Reduced is the one-key map (reduced x) builds, so instance?
        ! asks for the key. Without this reduce returned the WRAPPER

@@ -949,6 +949,38 @@
        [1 -1 0 1])
 (check "Long compare"   [(Long/compare 1 2) (Long/compare 2 1) (Long/compare 1 1)] [-1 1 0])
 
+
+;;; ---- clojure.string's host members -------------------------------
+;; clojure.string is written entirely against java.util.regex's
+;; Pattern and Matcher plus StringBuilder, so none of split, replace
+;; or reverse worked without them. Every expectation is `clj`'s.
+
+(require (quote [clojure.string :as ltstr]))
+
+(check "split"           (ltstr/split "a,b,c" #",") ["a" "b" "c"])
+;; A positive limit caps the parts and the last keeps the rest unsplit.
+(check "split with a limit" (ltstr/split "a,b,c" #"," 2) ["a" "b,c"])
+;; No limit drops trailing empties; -1 keeps them.
+(check "split drops trailing empties" (ltstr/split "a,b,c," #",") ["a" "b" "c"])
+(check "split -1 keeps them"          (ltstr/split "a,b,c," #"," -1) ["a" "b" "c" ""])
+(check "split on empty pattern"       (ltstr/split "abc" #"") ["a" "b" "c"])
+(check "split-lines"     (ltstr/split-lines "a\nb\r\nc") ["a" "b" "c"])
+
+(check "reverse"         (ltstr/reverse "abc") "cba")
+(check "re-quote-replacement" (ltstr/re-quote-replacement "a$b\\c") "a\\$b\\\\c")
+(check "index-of a char" [(ltstr/index-of "hello" \l) (ltstr/last-index-of "hello" \l)] [2 3])
+
+(check "replace a pattern"   (ltstr/replace "abc" #"b" "X") "aXc")
+(check "replace with a fn"   (ltstr/replace "abc" #"b" (fn [m] (ltstr/upper-case m))) "aBc")
+;; $1 and $2 name groups -- the one place a replacement is not literal.
+(check "replace with groups"
+       (ltstr/replace "Almost Pig Latin" #"\b(\w)(\w+)\b" "$2$1ay")
+       "lmostAay igPay atinLay")
+(check "replace-first"       (ltstr/replace-first "aaa" #"a" "X") "Xaa")
+(check "replace a char"      (ltstr/replace "abc" \b \X) "aXc")
+(check "replace a string"    (ltstr/replace "abcabc" "bc" "X") "aXaX")
+(check "replace an empty pattern" (ltstr/replace "abc" #"" "-") "-a-b-c-")
+
 ;;; ---- report -----------------------------------------------------
 
 
