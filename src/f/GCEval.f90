@@ -3015,6 +3015,14 @@ contains
     if (sym%tag /= GCT_SYM) return
     t = gc_ref_text(sym%ref)
     if (len(t) < 2) return
+    ! `..` IS NOT A MEMBER ACCESS, it is core.clj's threading
+    ! macro. Clojure never has to say so: Compiler.macroexpand1
+    ! asks isMacro BEFORE it reaches the dot sugar, and `..` is
+    ! a macro. clotran asks the other way round, which is
+    ! equivalent for every other name -- .foo is never a macro --
+    ! and wrong for exactly this one, where (.. a getClass
+    ! isArray) read as the member "." on a.
+    if (t(2:2) == ".") return
     is_member_sym = (t(1:1) == ".")
   end function is_member_sym
 

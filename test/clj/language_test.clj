@@ -1106,6 +1106,19 @@
                            [0 7 7])
 ;; `this` is bound without being named.
 (check "this is implicit"  (let [s (proxy [Object] [] (me [] this))] (identical? s (.me s))) true)
+
+;;; ---- `..` is a macro, not a member access ------------------------
+;; Clojure never has to say so: Compiler.macroexpand1 asks isMacro
+;; before it reaches the dot sugar, and `..` is a macro. clotran asks
+;; the other way round -- equivalent for every other name, since .foo
+;; is never a macro, and wrong for exactly this one, where
+;; (.. a getClass isArray) read as the member "." on a.
+
+(check "threading"       (.. "abc" toString toString) "abc")
+(check "with arguments"  (.. "hello" (substring 1) (substring 1)) "llo")
+(check "a plain member still works" (.toString "x") "x")
+(check ".. expands to ." (macroexpand-1 '(.. a b)) '(. a b))
+
 ;;; ---- report -----------------------------------------------------
 
 
