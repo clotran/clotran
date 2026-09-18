@@ -137,6 +137,7 @@ module GCEval
   integer, parameter :: B_EMPTYMAP = 191, B_REMOVEMETHOD = 192
   ! java.lang.Math occupies a BLOCK: B_MATH0 + math_index(name).
   integer, parameter :: B_MATH0 = 200, B_MATHN = 45
+  integer, parameter :: B_FORMAT = 193
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -3534,6 +3535,10 @@ contains
           ! coll-reduce did not exist and reduce could not resolve.
           out = native(B_VARINTERN, "clotran-var-intern", [roots]); return
        end select
+    else if (cls == "String" .or. cls == "java.lang.String") then
+       if (mname == "format") then
+          out = native(B_FORMAT, "format", [roots]); return
+       end if
     else if (cls == "Math" .or. cls == "java.lang.Math") then
        if (mname == "E") then
           out = gc_real(exp(1.0_gc_dp)); return
@@ -5324,6 +5329,240 @@ contains
        call fail("Math: no such member")
     end select
   end function math_call
+
+  ! ---- String.format ----------------------------------------------
+  !
+  ! core.clj's `format` is (String/format fmt (to-array args)) and
+  ! nothing more, so this is the whole of it. A SUBSET of
+  ! java.util.Formatter: the conversions that appear in Clojure's own
+  ! source and suite -- s S d x X o f e E g b B c n %% -- with the
+  ! '-', '0' and '+' flags, a width and a precision. Argument-index
+  ! syntax (%1$s) is not here; nothing in the tree writes it.
+  !
+  ! An unknown conversion is an ERROR rather than a passthrough: a
+  ! format string that silently keeps its own text is the kind of
+  ! plausible wrong answer that survives for a long time.
+  function java_format(fmt, argv) result(s)
+    character(len=*), intent(in) :: fmt
+    type(gc_value), intent(in) :: argv
+    character(len=:), allocatable :: s, flags, conv, piece
+    integer :: i, w, prec, ai, nargs
+    logical :: has_w, has_prec
+    type(gc_value) :: a
+
+    s = ""
+    i = 1
+    ai = 0
+    nargs = gcv_count(argv)
+    do while (i <= len(fmt))
+       if (fmt(i:i) /= "%") then
+          s = s // fmt(i:i)
+          i = i + 1
+          cycle
+       end if
+       i = i + 1
+       if (i > len(fmt)) then
+          call fail("format: trailing %")
+          return
+       end if
+       flags = ""
+       do while (i <= len(fmt))
+          if (index("-+ 0,#", fmt(i:i)) == 0) exit
+          flags = flags // fmt(i:i)
+          i = i + 1
+       end do
+       w = 0
+       has_w = .false.
+       do while (i <= len(fmt))
+          if (fmt(i:i) < "0" .or. fmt(i:i) > "9") exit
+          w = w * 10 + (iachar(fmt(i:i)) - iachar("0"))
+          has_w = .true.
+          i = i + 1
+       end do
+       prec = 0
+       has_prec = .false.
+       if (i <= len(fmt)) then
+          if (fmt(i:i) == ".") then
+             i = i + 1
+             has_prec = .true.
+             do while (i <= len(fmt))
+                if (fmt(i:i) < "0" .or. fmt(i:i) > "9") exit
+                prec = prec * 10 + (iachar(fmt(i:i)) - iachar("0"))
+                i = i + 1
+             end do
+          end if
+       end if
+       if (i > len(fmt)) then
+          call fail("format: unterminated conversion")
+          return
+       end if
+       conv = fmt(i:i)
+       i = i + 1
+
+       if (conv == "%") then
+          s = s // "%"
+          cycle
+       end if
+       if (conv == "n") then
+          s = s // achar(10)
+          cycle
+       end if
+       if (ai >= nargs) then
+          call fail("format: not enough arguments")
+          return
+       end if
+       a = gcv_nth(argv, ai)
+       ai = ai + 1
+       piece = format_one(conv, a, prec, has_prec)
+       if (has_error) return
+       s = s // pad(piece, w, has_w, index(flags, "-") > 0, &
+            index(flags, "0") > 0)
+    end do
+  end function java_format
+
+  ! One conversion, before padding.
+  function format_one(conv, a0, prec, has_prec) result(p)
+    character(len=*), intent(in) :: conv
+    type(gc_value), intent(in) :: a0
+    integer, intent(in) :: prec
+    logical, intent(in) :: has_prec
+    character(len=:), allocatable :: p
+    character(len=64) :: buf
+    type(gc_value) :: a
+
+    a = strip_meta(a0)
+    p = ""
+    select case (conv)
+    case ("s")
+       ! String.valueOf(null) is "null", not "nil" -- Formatter
+       ! never sees Clojure's printer for a bare nil argument.
+       if (a%tag == GCT_NIL) then
+          p = "null"
+       else
+          p = gcp_str(a, .false.)
+       end if
+       if (has_prec) then
+          if (prec < len(p)) p = p(1:prec)
+       end if
+    case ("S")
+       if (a%tag == GCT_NIL) then
+          p = "null"
+       else
+          p = gcp_str(a, .false.)
+       end if
+       call upcase_in_place(p)
+    case ("b", "B")
+       ! Java's %b is false for nil and false, true for EVERYTHING
+       ! else -- including 0 and "".
+       if (truthy(a)) then
+          p = "true"
+       else
+          p = "false"
+       end if
+       if (conv == "B") call upcase_in_place(p)
+    case ("c")
+       if (a%tag == GCT_CHAR) then
+          p = achar(int(a%ival, kind=4))
+       else if (a%tag == GCT_INT) then
+          p = achar(int(a%ival, kind=4))
+       else
+          call fail("format: %c wants a character")
+       end if
+    case ("d")
+       if (a%tag /= GCT_INT) then
+          call fail("format: %d wants an integer")
+          return
+       end if
+       write(buf, '(I0)') a%ival
+       p = trim(buf)
+    case ("x", "X", "o")
+       if (a%tag /= GCT_INT) then
+          call fail("format: " // conv // " wants an integer")
+          return
+       end if
+       if (conv == "o") then
+          write(buf, '(O0)') a%ival
+       else
+          write(buf, '(Z0)') a%ival
+       end if
+       p = trim(buf)
+       if (conv == "x") call downcase_in_place(p)
+    case ("f", "e", "E", "g")
+       if (.not. is_number(a)) then
+          call fail("format: " // conv // " wants a number")
+          return
+       end if
+       block
+         integer :: dp
+         character(len=16) :: spec
+         dp = 6
+         if (has_prec) dp = prec
+         select case (conv)
+         case ("f"); write(spec, '(A,I0,A)') "(F0.", dp, ")"
+         case ("g"); write(spec, '(A,I0,A)') "(G0.", dp, ")"
+         case default; write(spec, '(A,I0,A,I0,A)') "(ES", dp + 8, ".", dp, "E2)"
+         end select
+         write(buf, spec) num_dbl(a)
+         p = trim(adjustl(buf))
+         ! Fortran writes .5 where Java writes 0.5.
+         if (len(p) > 0) then
+            if (p(1:1) == ".") p = "0" // p
+            if (len(p) > 1) then
+               if (p(1:2) == "-.") p = "-0" // p(2:)
+            end if
+         end if
+         if (conv == "e") call downcase_in_place(p)
+       end block
+    case default
+       call fail("format: no conversion %" // conv)
+    end select
+  end function format_one
+
+  ! Width padding. '-' left-justifies, '0' pads a number on the left
+  ! with zeros; neither ever TRUNCATES, which is Formatter's rule.
+  function pad(p0, w, has_w, left, zero) result(p)
+    character(len=*), intent(in) :: p0
+    integer, intent(in) :: w
+    logical, intent(in) :: has_w, left, zero
+    character(len=:), allocatable :: p
+    integer :: k
+
+    p = p0
+    if (.not. has_w) return
+    k = w - len(p)
+    if (k <= 0) return
+    if (left) then
+       p = p // repeat(" ", k)
+    else if (zero) then
+       if (len(p) > 0) then
+          if (p(1:1) == "-") then
+             p = "-" // repeat("0", k) // p(2:)
+             return
+          end if
+       end if
+       p = repeat("0", k) // p
+    else
+       p = repeat(" ", k) // p
+    end if
+  end function pad
+
+  subroutine upcase_in_place(s)
+    character(len=:), allocatable, intent(inout) :: s
+    integer :: j
+    do j = 1, len(s)
+       if (s(j:j) >= "a" .and. s(j:j) <= "z") &
+            s(j:j) = achar(iachar(s(j:j)) - 32)
+    end do
+  end subroutine upcase_in_place
+
+  subroutine downcase_in_place(s)
+    character(len=:), allocatable, intent(inout) :: s
+    integer :: j
+    do j = 1, len(s)
+       if (s(j:j) >= "A" .and. s(j:j) <= "Z") &
+            s(j:j) = achar(iachar(s(j:j)) + 32)
+    end do
+  end subroutine downcase_in_place
 
   ! ceiling/floor as DOUBLES. The intrinsics answer integers, which
   ! would cap a big double at huge(int) and lose the infinities.
@@ -7887,6 +8126,22 @@ contains
                  [vs_get(base + 1)]))
     case (B_MATH0 + 1 : B_MATH0 + B_MATHN)
        out = math_call(id - B_MATH0, args, [vs_get(base + 1)])
+    case (B_FORMAT)
+       ! (String/format fmt (to-array args)) -- the arguments
+       ! arrive as one ARRAY, not spread.
+       block
+         type(gc_value) :: fv, av
+         fv = strip_meta(gcv_nth(args, 0))
+         if (fv%tag /= GCT_STR) then
+            call fail("format: first argument must be a string")
+         else
+            av = gcv_empty([vs_get(base + 1)])
+            if (n >= 2) av = coll_to_vector(gcv_nth(args, 1), [vs_get(base + 1)])
+            call vs_set(base + 2, av)
+            out = gc_str(java_format(gc_ref_text(fv%ref), vs_get(base + 2)), &
+                 [vs_get(base + 1), vs_get(base + 2)])
+         end if
+       end block
     case (B_EMPTYMAP)
        out = gca_empty([vs_get(base + 1)])
     case (B_GETMETHOD)

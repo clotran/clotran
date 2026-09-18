@@ -816,6 +816,34 @@
 ;; Math/abs is overloaded on the JVM: a long stays a long.
 (check "Math/abs"   [(Math/abs -3) (Math/abs -3.5)] [3 3.5])
 
+
+;;; ---- format -----------------------------------------------------
+;; core.clj's `format` is (String/format fmt (to-array args)), so this
+;; is java.util.Formatter -- the subset Clojure's own source and suite
+;; actually write. Every line checked against `clj`.
+
+(check "format %s"      (format "%s" "a") "a")
+(check "format two"     (format "%s-%s" :a 1) ":a-1")
+(check "format %d"      (format "%d" 42) "42")
+(check "width and flags" (format "%5d|%-5d|%05d" 42 42 42) "   42|42   |00042")
+(check "format %x %X %o" (format "%x %X %o" 255 255 8) "ff FF 10")
+(check "format %f"      (format "%f" 1.5) "1.500000")
+(check "format precision" (format "%.2f" 3.14159) "3.14")
+(check "float width"    (format "%10.3f|%-10.3f|" 3.14159 3.14159) "     3.142|3.142     |")
+(check "format %e"      (format "%e" 1234.5) "1.234500e+03")
+;; %b is false only for nil and false -- 0 is true.
+(check "format %b"      (format "%b %b %b %b" true false nil 0) "true false false true")
+(check "format %c"      (format "%c" \a) "a")
+(check "format %%"      (format "100%%") "100%")
+(check "format %n"      (format "a%nb") "a\nb")
+(check "format %S"      (format "%S" "ab") "AB")
+(check "string precision" (format "%.2s" "abcdef") "ab")
+;; String.valueOf(null) is "null", not Clojure's nil.
+(check "format nil"     (format "%s" nil) "null")
+(check "format a vector" (format "%s" [1 2]) "[1 2]")
+;; core_print's own use of it.
+(check "format like core_print" (format "0x%x " 255) "0xff ")
+
 ;;; ---- report -----------------------------------------------------
 
 
