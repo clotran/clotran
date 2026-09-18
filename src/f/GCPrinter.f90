@@ -347,24 +347,83 @@ contains
     end if
   end function inner_of
 
-  ! Trailing zeros trimmed but always at least one decimal, so a
-  ! double prints as 2.0 rather than 2 -- otherwise it reads back as an
-  ! integer, which is a round-trip failure rather than a cosmetic one.
+  ! Double.toString: the SHORTEST decimal that reads back as this same
+  ! double, laid out the way Java lays it out.
+  !
+  ! The old version wrote (F0.10) into a 32-character buffer, which was
+  ! wrong twice over. It TRUNCATED -- 0.479425538604203 printed as
+  ! 0.4794255386, which reads back as a different double, so pr-str no
+  ! longer round-tripped -- and it overflowed the buffer outright on
+  ! Double/MAX_VALUE, whose fixed-point form is 309 digits long.
+  !
+  ! Shortest-round-trip is found by asking: write the value with p
+  ! significant digits, read it back, and take the first p that gives
+  ! the same bits. Seventeen always suffices for a double, so the loop
+  ! terminates; most values stop at two or three.
+  !
+  ! Java's layout rule, which is not the same as Fortran's: plain
+  ! decimal while 1e-3 <= |d| < 1e7, scientific outside that, and
+  ! always at least one digit after the point.
   function real_str(r) result(s)
     real(gc_dp), intent(in) :: r
-    character(len=:), allocatable :: s
-    character(len=32) :: buf
-    integer :: i
-    write(buf, '(F0.10)') r
-    s = trim(buf)
-    i = len(s)
+    character(len=:), allocatable :: s, digits
+    character(len=40) :: buf
+    character(len=16) :: fmt
+    real(gc_dp) :: back
+    integer :: p, st, e10, i, dp_at
+    logical :: neg
+
+    if (r == 0.0_gc_dp) then
+       s = "0.0"
+       if (ieee_copy_sign(1.0_gc_dp, r) < 0.0_gc_dp) s = "-0.0"
+       return
+    end if
+
+    do p = 1, 17
+       write(fmt, '(A,I0,A)') "(ES0.", p - 1, "E3)"
+       write(buf, fmt) r
+       read(buf, *, iostat=st) back
+       if (st == 0 .and. back == r) exit
+    end do
+    if (p > 17) p = 17
+
+    ! buf is now [-]d.ddddE[+-]nnn -- split it into the digit string
+    ! and the power of ten the first digit carries.
+    s = trim(adjustl(buf))
+    neg = (s(1:1) == "-")
+    if (neg) s = s(2:)
+    i = index(s, "E")
+    read(s(i+1:), *) e10
+    digits = s(1:1) // s(3:i-1)
+    ! Trailing zeros carry no information once the value round-trips.
+    i = len(digits)
     do while (i > 1)
-       if (s(i:i) /= "0") exit
-       if (s(i-1:i-1) == ".") exit
+       if (digits(i:i) /= "0") exit
        i = i - 1
     end do
-    s = s(1:i)
-    if (s(1:1) == ".") s = "0" // s
+    digits = digits(1:i)
+
+    if (e10 >= -3 .and. e10 < 7) then
+       ! Plain decimal: the point goes after e10+1 digits.
+       dp_at = e10 + 1
+       if (dp_at <= 0) then
+          s = "0." // repeat("0", -dp_at) // digits
+       else if (dp_at >= len(digits)) then
+          s = digits // repeat("0", dp_at - len(digits)) // ".0"
+       else
+          s = digits(1:dp_at) // "." // digits(dp_at+1:)
+       end if
+    else
+       ! Scientific, one digit before the point.
+       if (len(digits) == 1) then
+          s = digits // ".0"
+       else
+          s = digits(1:1) // "." // digits(2:)
+       end if
+       write(buf, '(I0)') e10
+       s = s // "E" // trim(buf)
+    end if
+    if (neg) s = "-" // s
   end function real_str
 
   function quoted(t) result(s)

@@ -885,6 +885,31 @@
 (check "walk a long range"     (do (dorun (range 8000)) :ok) :ok)
 (check "the last of a long range" (last (range 8000)) 7999)
 
+
+;;; ---- printing doubles -------------------------------------------
+;; Double.toString: the SHORTEST decimal that reads back as the same
+;; double, plain while 1e-3 <= |d| < 1e7 and scientific outside that.
+;; The old printer wrote ten fixed decimals, so 0.479425538604203 came
+;; out as 0.4794255386 -- a different double -- and Double/MAX_VALUE
+;; overran the buffer outright. Every line below is `clj`'s output.
+
+(check "a whole double"     (pr-str 2.0) "2.0")
+(check "a negative double"  (pr-str -3.5) "-3.5")
+(check "negative zero"      (pr-str -0.0) "-0.0")
+(check "zero"               (pr-str 0.0) "0.0")
+;; The round trip is the point: these need all their digits.
+(check "seventeen digits"   (pr-str 0.479425538604203) "0.479425538604203")
+(check "a third"            (pr-str (/ 1.0 3.0)) "0.3333333333333333")
+(check "pi"                 (pr-str 3.141592653589793) "3.141592653589793")
+(check "one tenth"          (pr-str 0.1) "0.1")
+;; The plain/scientific boundary is 1e-3 and 1e7, not Fortran's.
+(check "just inside"        [(pr-str 0.001) (pr-str 1000000.0)] ["0.001" "1000000.0"])
+(check "just outside"       [(pr-str 1.0E-4) (pr-str 1.0E7)] ["1.0E-4" "1.0E7"])
+(check "large"              (pr-str 1.0E20) "1.0E20")
+(check "the largest double" (pr-str Double/MAX_VALUE) "1.7976931348623157E308")
+(check "a subnormal"        (pr-str 2.2250738585072014E-308) "2.2250738585072014E-308")
+(check "reads back"         (= (read-string (pr-str 0.479425538604203)) 0.479425538604203) true)
+
 ;;; ---- report -----------------------------------------------------
 
 
