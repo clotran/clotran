@@ -687,6 +687,17 @@
 (check "prime in a quoted name" (str 'foo') "foo'")
 (check "the quote character"    \' \')
 
+
+;;; ---- reader metadata --------------------------------------------
+;; Checked against `clj` by KEY, not by whole map: Clojure's reader
+;; also attaches :line and :column, which clotran does not track.
+
+(check "#^ is the old ^"        (:a (meta (quote #^{:a 1} (x)))) 1)
+(check "#^Tag"                  (:tag (meta (quote #^Integer (x)))) 'Integer)
+(check "#^:kw"                  (:dynamic (meta (quote #^:dynamic (x)))) true)
+;; A VECTOR is metadata too -- ^[long] is 1.12's param-tags.
+(check "^[long] is param-tags"  (:param-tags (meta (quote ^[long] (x)))) '[long])
+
 ;;; ---- report -----------------------------------------------------
 
 

@@ -500,6 +500,11 @@ contains
     end if
     c = text(pos + 1:pos + 1)
     select case (c)
+    case ("^")
+       ! #^ is the OLD spelling of ^. Deprecated in Clojure and
+       ! still read, and Clojure's own suite still writes it.
+       pos = pos + 2
+       v = read_meta(text, pos, roots)
     case ("'")
        pos = pos + 2
        v = wrap("var", text, pos, roots)
@@ -591,6 +596,16 @@ contains
        call vs_set(base + 2, v)
        m = gca_assoc(vs_get(base + 2), vs_get(base + 1), gc_bool(.true.), roots)
        call vs_set(base + 1, m)
+    else if (gcv_is(vs_get(base + 1))) then
+       ! A VECTOR is param-tags -- Clojure 1.12's ^[long] on a
+       ! method reference. MetaReader maps it to :param-tags the
+       ! same way it maps a symbol to :tag.
+       v = gca_empty(roots)
+       call vs_set(base + 2, v)
+       key = gc_key("param-tags", roots)
+       call vs_set(base + 3, key)
+       m = gca_assoc(vs_get(base + 2), vs_get(base + 3), vs_get(base + 1), roots)
+       call vs_set(base + 1, m)
     else if (m%tag == GCT_SYM .or. m%tag == GCT_STR) then
        v = gca_empty(roots)
        call vs_set(base + 2, v)
@@ -599,7 +614,7 @@ contains
        m = gca_assoc(vs_get(base + 2), vs_get(base + 3), vs_get(base + 1), roots)
        call vs_set(base + 1, m)
     else
-       call fail("Metadata must be Symbol, Keyword, String or Map")
+       call fail("Metadata must be Symbol,Keyword,String,Vector or Map")
        call vs_leave(base); return
     end if
 
