@@ -340,6 +340,44 @@
 (check "min max abs"   [(min 1 2.5) (max 1 2.5) (abs -3) (abs -3.5)] [1 2.5 3 3.5])
 (check "inc dec"       [(inc 1) (inc 1.5) (dec 1) (dec 1.5)] [2 2.5 0 0.5])
 
+;;; ---- print-method finds its host type ------------------------------
+;;
+;; Three tables have to spell a type the same way: type_name, which
+;; names the value; host_super, which maps that name to the host
+;; classes a method may be registered on; and the class literal in
+;; (defmethod print-method C ...), which is the key the method lands
+;; under. Where they disagreed, print-method found nothing, fell to
+;; :default, and reached print-simple -- which does not quote.
+;;
+;; Two disagreements, both one word:
+;;   OBJ_SEQ had NO name at all and answered "object"
+;;   host_super said "lazy" where type_name says "lazy-seq"
+;;   host_super said "java.lang.Character" but a class literal
+;;     strips that prefix, so the method key is :Character
+;;
+;; Nothing about the printer itself was wrong, which is why the values
+;; were right the whole time and only the display was not.
+
+(check "seq of strings"   (pr-str (seq ["b" "a"])) "(\"b\" \"a\")")
+(check "rest of strings"  (pr-str (rest ["a" "b"])) "(\"b\")")
+(check "seq nests"        (pr-str (seq [["a"]])) "([\"a\"])")
+(check "a lazy seq"       (pr-str (map identity ["a"])) "(\"a\")")
+;; A seq view now has a type at all. The NAME is clotran's own --
+;; clj answers clojure.lang.PersistentVector$ChunkedSeq here, since
+;; clotran's classes are its tags -- but it has to be the name
+;; is_instance already expected, or the two disagree about one value.
+(check "a seq has a type" (type (seq ["a"])) :seq)
+
+;; Characters: the method that knows \\newline never ran, so a
+;; newline character printed as an actual newline.
+(check "char readably"    (pr-str \a) "\\a")
+(check "char in a vector" (pr-str [\a \b]) "[\\a \\b]")
+(check "char in a seq"    (pr-str (seq [\a])) "(\\a)")
+(check "named chars"      [(pr-str \newline) (pr-str \space) (pr-str \tab)]
+                          ["\\newline" "\\space" "\\tab"])
+;; str is the unreadable one, and still is.
+(check "str of a char"    (str \a) "a")
+
 ;;; ---- sort, and compare underneath it ------------------------------
 ;;
 ;; `sort` is (let [a (to-array coll)] (. java.util.Arrays (sort a cmp))

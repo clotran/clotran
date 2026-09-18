@@ -8365,6 +8365,13 @@ contains
        case (OBJ_SB); s = "string-builder"
        case (OBJ_ERR); s = "error"
        case (OBJ_LAZY);    s = "lazy-seq"
+       ! A seq VIEW over an indexable. Without this it fell to
+       ! "object", which matched no print-method and no host
+       ! supertype, so (prn (seq ["a"])) printed (a) rather than
+       ! ("a") -- print-method's :default reaches print-simple,
+       ! which does not quote. is_instance already expected the
+       ! name "seq" here.
+       case (OBJ_SEQ);     s = "seq"
        case (OBJ_VAR);     s = "var"
        case (OBJ_NS);      s = "ns"
        ! A deftype instance answers with its OWN class name, so
@@ -9036,7 +9043,11 @@ contains
        case (1); k = gc_key("clojure.lang.IPersistentSet", [roots])
        case (2); k = gc_key("java.util.Set", [roots])
        end select
-    case ("list", "seq", "lazy", "cons")
+    ! These are type_name's spellings, and they have to be exactly
+    ! that: the entry read "lazy" while type_name says "lazy-seq",
+    ! so a lazy seq matched no supertype and print-method never
+    ! found ISeq for one.
+    case ("list", "seq", "lazy-seq", "cons")
        select case (i)
        case (1); k = gc_key("clojure.lang.ISeq", [roots])
        case (2); k = gc_key("java.util.List", [roots])
@@ -9054,7 +9065,15 @@ contains
     case ("string")
        if (i == 1) k = gc_key("String", [roots])
     case ("char")
-       if (i == 1) k = gc_key("java.lang.Character", [roots])
+       ! "Character", not "java.lang.Character": a class literal in
+       ! dispatch position evaluates to a keyword with the java.lang
+       ! prefix STRIPPED -- java.lang.Character is :Character, while
+       ! java.util.List and clojure.lang.ISeq keep theirs. core_print
+       ! registers this method as java.lang.Character, so the key it
+       ! lands under is :Character and the full name matched nothing.
+       ! That is why (pr-str \\newline) was a raw newline rather than
+       ! \\newline: print-method never found the Character method.
+       if (i == 1) k = gc_key("Character", [roots])
     case ("bool")
        if (i == 1) k = gc_key("Boolean", [roots])
     case ("error")
