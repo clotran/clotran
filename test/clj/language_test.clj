@@ -981,6 +981,24 @@
 (check "replace a string"    (ltstr/replace "abcabc" "bc" "X") "aXaX")
 (check "replace an empty pattern" (ltstr/replace "abc" #"" "-") "-a-b-c-")
 
+
+;;; ---- a delay that threw -----------------------------------------
+;; Delay.deref catches the throwable, drops the thunk and rethrows the
+;; SAME object on every later deref -- so the body runs once whether it
+;; returned or threw. Values from `clj`.
+
+(let [n (atom 0)
+      d (delay (swap! n inc) (throw (Exception. "broken")))
+      tc (fn [] (try @d (catch Exception e e)))
+      r1 (tc)]
+  (check "a delay's exception is an exception" (instance? Exception r1) true)
+  (check "the same exception comes back"       (identical? r1 (tc)) true)
+  (check "the body ran once"                   @n 1)
+  (check "the message survives"                (.getMessage r1) "broken")
+  (check "a thrown delay is realized"          (realized? d) true))
+(let [ok (delay 42)]
+  (check "an ordinary delay"  [@ok @ok (realized? ok)] [42 42 true]))
+
 ;;; ---- report -----------------------------------------------------
 
 

@@ -8472,12 +8472,30 @@ contains
              b = apply(gc_slot(vs_get(base + 2), 1), &
                   gcv_empty([vs_get(base + 1), vs_get(base + 2)]))
              if (has_error) then
+                ! A DELAY THAT THREW STAYS THROWN, with the SAME
+                ! exception object every time -- Delay.deref
+                ! catches the throwable, drops the thunk and
+                ! rethrows what it caught on every later deref.
+                ! Letting the error escape without recording it
+                ! meant the body RAN AGAIN, which is observable
+                ! whenever it has an effect, and made
+                ! (identical? r (deref-again)) false.
+                call gc_set_slot(vs_get(base + 2), 2, thrown_value())
+                call gc_set_slot(vs_get(base + 2), 3, &
+                     gc_str(gce_error(), [vs_get(base + 1), vs_get(base + 2)]))
+                call gc_set_i1(vs_get(base + 2), 2)
                 call vs_leave(base)
                 return
              end if
              call gc_set_slot(vs_get(base + 2), 2, b)
              call gc_set_i1(vs_get(base + 2), 1)
              a = vs_get(base + 2)
+          end if
+          if (gc_i1(a) == 2) then
+             call set_thrown(gc_slot(a, 2))
+             call fail(text_of(gc_slot(a, 3)))
+             call vs_leave(base)
+             return
           end if
           out = gc_slot(a, 2)
        else if (gcn_is_var(a) .or. gc_kind(a) == OBJ_ATOM) then
