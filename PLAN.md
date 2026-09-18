@@ -746,6 +746,66 @@ reasons to want it.
 - Where does the Fortran binding generator read type information from
   -- parsing `interface` blocks, or a declaration written in clotran?
 
+## Should `class` answer a class, or a type tag? -- OPEN, and it blocks `pprint`
+
+`clojure.pprint` loads, and `cl-format` works (273 of its 279 suite
+assertions pass). What does not work is `pprint` itself, and the reason
+is one question we have not answered.
+
+clotran has two names for every type and they do not agree:
+
+    (class "a")   ;=> :string     -- the TYPE TAG
+    String        ;=> :String     -- what a CLASS LITERAL evaluates to
+
+Clojure's own writers are written against the second:
+
+    ;; clojure/pprint/column_writer.clj
+    (condp = (class x)
+      String  (...)
+      Integer (...))
+
+`(= :string :String)` is false, so every branch misses and the writer
+throws "No matching clause". Every proxy-based writer in `pprint` goes
+through that `condp`, which is why the pretty printer cannot run even
+though everything under it does.
+
+**Why we cannot just change `class`.** Multimethod dispatch consumes
+its answer. `print-method` dispatches on `(class x)`, and when no
+method matches exactly, `host_super` walks the supertypes -- and
+`host_super`'s table is keyed on the TYPE TAG:
+
+    case ("vector")
+       case (1); k = gc_key("clojure.lang.IPersistentVector", ...)
+
+Make `class` answer `:clojure.lang.PersistentVector` and every one of
+those cases misses, taking all of `print-method` with it. The two
+naming schemes are load-bearing in opposite directions: `instance?` and
+`host_super` read the tag, Clojure's own source reads the class.
+
+**The three ways out:**
+
+1. **`class` answers the concrete class, and `host_super` is re-keyed
+   to match.** The faithful answer -- `(class [])` becomes
+   `clojure.lang.PersistentVector` as it is in Clojure. It means a
+   second table (tag -> concrete class) and rewriting `host_super`'s
+   input side, and it will move the printing tests in both directions
+   until it settles.
+
+2. **Class literals evaluate to the tag instead.** `String` becomes
+   `:string`, so the comparison holds from the other side. Smaller, but
+   it makes `(class [])` answer `:vector` forever and the
+   `clojure.lang.*` names in Clojure's source have to map onto tags one
+   by one -- `instance?` already does exactly that, so this is mostly
+   moving an existing table rather than writing a new one.
+
+3. **Leave it.** `cl-format` is most of what `pprint` is used for, and
+   the writers stay broken.
+
+This is a decision about how clotran names types, not a bug to fix in
+passing, so it is recorded here rather than taken. It is also the
+largest single thing standing between clotran and a working
+`clojure.pprint`.
+
 # bugs
 
 user=> (+1 1)
