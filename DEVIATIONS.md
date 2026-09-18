@@ -733,3 +733,31 @@ reference would use, which is 32-bit -- so a denominator past 2^31
 wraps. The intermediate of a sum is the product of the denominators,
 and reducing at every step rather than once at the end keeps that as
 small as it can be without removing the ceiling.
+
+## 27. The two smallest subnormal doubles print with one digit too few
+
+`Double.toString` is specified as the shortest decimal that reads back
+as the same double, and clotran's printer finds exactly that -- by
+writing the value with one significant digit, then two, then three,
+reading each back and stopping at the first that returns the same bits.
+It agrees with Clojure on every value tried except two, at the very
+bottom of the subnormal range:
+
+| | clotran | clj |
+|---|---|---|
+| `(pr-str Double/MIN_VALUE)` | `5.0E-324` | `4.9E-324` |
+| `(pr-str 9.9E-324)` | `1.0E-323` | `9.9E-324` |
+
+Both of clotran's answers read back as the same double -- `5E-324` and
+`1E-323` are unambiguous, because at that magnitude the neighbouring
+representable values are a factor of two apart. They are genuinely
+shorter than the JDK's, so this is not a rounding error; the JDK emits
+a second digit here that its own specification does not require.
+
+`(= (read-string (pr-str x)) x)` holds for both, which is the property
+that matters. What differs is the text, and only for the two smallest
+positive doubles there are.
+
+Removing it means reproducing `Double.toString`'s exact digit choice
+rather than the shortest round trip -- worth doing only if something
+starts comparing printed doubles as strings.
