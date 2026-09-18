@@ -1077,6 +1077,35 @@
        {:a 1})
 (check "a plain exception has no data" (ex-data (Exception. "plain")) nil)
 
+
+;;; ---- proxy -------------------------------------------------------
+;; `proxy` is a MACRO in Clojure, in core_proxy.clj, which is not
+;; vendored -- it is written against the class loader. clojure.pprint's
+;; writers are proxies, so without it the pretty printer cannot exist.
+;; Here it is a special form built on reify's machinery, with the two
+;; differences proxy has: `this` is implicit, and arities nest inside
+;; one method form.
+;;
+;; Only the first three are `clj`'s answers. The rest declare methods
+;; the superclass does not, which real Clojure REJECTS -- there is no
+;; class to check against here, so clotran accepts them. DEVIATIONS 28.
+
+(check "a proxy method"    (.toString (proxy [Object] [] (toString [] "hello"))) "hello")
+(check "str goes through it" (str (proxy [Object] [] (toString [] "world"))) "world")
+(check "a closure"         (let [n 5] (.toString (proxy [Object] [] (toString [] (str n))))) "5")
+
+(check "arguments"         (let [q (proxy [Object] []
+                                     (greet [n] (str "hi " n))
+                                     (two [a b] (+ a b)))]
+                             [(.greet q "x") (.two q 1 2)])
+                           ["hi x" 3])
+;; Several arities inside ONE method form, which reify writes as
+;; several forms.
+(check "nested arities"    (let [m (proxy [Object] [] (f ([] 0) ([a] a) ([a b] (+ a b))))]
+                             [(.f m) (.f m 7) (.f m 3 4)])
+                           [0 7 7])
+;; `this` is bound without being named.
+(check "this is implicit"  (let [s (proxy [Object] [] (me [] this))] (identical? s (.me s))) true)
 ;;; ---- report -----------------------------------------------------
 
 

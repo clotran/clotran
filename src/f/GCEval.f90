@@ -168,6 +168,7 @@ module GCEval
   ! into a per-thread context before threads exist.
   type(gc_root), save :: types_root
   integer, save :: reify_id = 0
+  integer, save :: proxy_id = 0
   ! EVALUATION DEPTH, and the limit that turns a stack overflow into a
   ! reportable error instead of a segfault. The JVM does the same thing
   ! -- StackOverflowError -- and Clojure inherits it.
@@ -688,6 +689,7 @@ contains
           gc_ref_is(sym%ref, "set!") .or. &
           gc_ref_is(sym%ref, "case*") .or. &
           gc_ref_is(sym%ref, "deftype*") .or. gc_ref_is(sym%ref, "reify*") .or. &
+          gc_ref_is(sym%ref, "proxy") .or. &
           gc_ref_is(sym%ref, "var")
   end function is_special
 
@@ -862,6 +864,9 @@ contains
 
     else if (gc_ref_is(head%ref, "deftype*")) then
        out = eval_deftype(vs_get(base + 3), vs_get(base + 2))
+
+    else if (gc_ref_is(head%ref, "proxy")) then
+       out = eval_proxy(vs_get(base + 3), vs_get(base + 2))
 
     else if (gc_ref_is(head%ref, "reify*")) then
        out = eval_reify(vs_get(base + 3), vs_get(base + 2))
@@ -1082,6 +1087,154 @@ contains
     end if
     call vs_leave(base)
   end function eval_reify
+
+  ! (proxy [supers] [ctor-args] (name [args*] body*)*)
+  !
+  ! REIFY WITH TWO DIFFERENCES, which is why it is built on the same
+  ! machinery rather than beside it:
+  !
+  !   - `this` is IMPLICIT. A reify method names it as its first
+  !     parameter; a proxy method does not, and the body says `this`
+  !     anyway. So each parameter vector gets one prepended.
+  !
+  !   - arities nest. reify writes one form per arity and lets
+  !     build_type group them by name; proxy writes
+  !     (write ([x] ...) ([b o l] ...)) as ONE form. That is flattened
+  !     back into build_type's shape here.
+  !
+  ! The CONSTRUCTOR ARGUMENTS are read and discarded. There is no
+  ! superclass to construct -- clotran's classes are its type tags and
+  ! form no hierarchy (DEVIATIONS.md 4) -- so a proxy overrides
+  ! everything it answers to or answers to nothing, and proxy-super has
+  ! nothing to call. Recorded in DEVIATIONS.md.
+  !
+  ! `proxy` is a MACRO in Clojure, in core_proxy.clj, which is not
+  ! vendored (src/clj/clojure/PROVENANCE.md) because it is written
+  ! against the class loader. clojure.pprint's writers are proxies, so
+  ! without this the pretty printer cannot exist at all.
+  recursive function eval_proxy(rest, env) result(out)
+    type(gc_value), intent(in) :: rest, env
+    type(gc_value) :: out, ty, methods
+    character(len=24) :: buf
+    integer :: base
+
+    out = gc_nil()
+    base = vs_enter(6)
+    call vs_set(base + 1, rest)
+    call vs_set(base + 2, env)
+    call vs_set(base + 3, strip_meta(gcl_first(vs_get(base + 1))))
+    if (.not. gcv_is(vs_get(base + 3))) then
+       call fail("proxy needs a vector of superclasses")
+       call vs_leave(base)
+       return
+    end if
+    ! Past the superclasses and the constructor arguments.
+    methods = gcl_rest(vs_get(base + 1), [vs_get(base + 1), vs_get(base + 3)])
+    call vs_set(base + 4, methods)
+    methods = gcl_rest(vs_get(base + 4), [vs_get(base + 3), vs_get(base + 4)])
+    call vs_set(base + 4, methods)
+    methods = proxy_methods(vs_get(base + 4), [vs_get(base + 3)])
+    if (has_error) then
+       call vs_leave(base)
+       return
+    end if
+    call vs_set(base + 4, methods)
+
+    proxy_id = proxy_id + 1
+    write(buf, '(I0)') proxy_id
+    call vs_set(base + 5, gcv_empty([vs_get(base + 3), vs_get(base + 4)]))
+    ty = build_type("clotran.proxy__" // trim(buf), &
+         vs_get(base + 5), vs_get(base + 3), vs_get(base + 4), vs_get(base + 2))
+    if (.not. has_error) then
+       call vs_set(base + 6, ty)
+       out = gc_obj(OBJ_INST, &
+            [vs_get(base + 6), gcv_empty([vs_get(base + 6)]), gc_nil()], &
+            [vs_get(base + 6)])
+    end if
+    call vs_leave(base)
+  end function eval_proxy
+
+  ! Proxy method forms, rewritten into the one-arity-per-form shape
+  ! build_type reads, with `this` prepended to every parameter vector.
+  recursive function proxy_methods(forms, roots) result(out)
+    type(gc_value), intent(in) :: forms
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, m, mname, second, acc, w, clauses
+    integer :: base, i
+
+    base = vs_enter(6)
+    call vs_set(base + 1, forms)
+    acc = gcv_empty([roots, vs_get(base + 1)])
+    call vs_set(base + 2, acc)
+    call vs_set(base + 3, vs_get(base + 1))
+
+    do while (gcl_count(vs_get(base + 3)) > 0)
+       m = strip_meta(gcl_first(vs_get(base + 3)))
+       call vs_set(base + 4, m)
+       mname = strip_meta(gcl_first(vs_get(base + 4)))
+       if (mname%tag /= GCT_SYM) then
+          call fail("proxy: a method needs a name")
+          call vs_leave(base)
+          return
+       end if
+       call vs_set(base + 5, mname)
+       second = strip_meta(gcl_first(gcl_rest(vs_get(base + 4), [vs_get(base + 4)])))
+       call vs_set(base + 6, second)
+       if (gcv_is(vs_get(base + 6))) then
+          ! One arity, written flat.
+          acc = gcv_conj(vs_get(base + 2), &
+               proxy_clause(vs_get(base + 5), vs_get(base + 6), &
+                    gcl_rest(gcl_rest(vs_get(base + 4), [vs_get(base + 4)]), &
+                         [vs_get(base + 4)]), [roots, vs_get(base + 2)]), &
+               [roots, vs_get(base + 2)])
+          call vs_set(base + 2, acc)
+       else
+          ! Several arities, each its own list.
+          clauses = gcl_rest(vs_get(base + 4), [vs_get(base + 4)])
+          call vs_set(base + 6, clauses)
+          do i = 1, gcl_count(vs_get(base + 6))
+             w = strip_meta(nth_of(vs_get(base + 6), i - 1))
+             acc = gcv_conj(vs_get(base + 2), &
+                  proxy_clause(vs_get(base + 5), strip_meta(gcl_first(w)), &
+                       gcl_rest(w, [vs_get(base + 2)]), [roots, vs_get(base + 2)]), &
+                  [roots, vs_get(base + 2)])
+             call vs_set(base + 2, acc)
+          end do
+       end if
+       call vs_set(base + 3, gcl_rest(vs_get(base + 3), [roots, vs_get(base + 2)]))
+    end do
+
+    out = seq_to_list(vs_get(base + 2), [roots, vs_get(base + 2)])
+    call vs_leave(base)
+  end function proxy_methods
+
+  ! (name [this params*] body*) -- one method form in build_type's shape.
+  recursive function proxy_clause(mname, params, body, roots) result(out)
+    type(gc_value), intent(in) :: mname, params, body
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, ps
+    integer :: base, i
+
+    base = vs_enter(4)
+    call vs_set(base + 1, mname)
+    call vs_set(base + 2, params)
+    call vs_set(base + 3, body)
+    ! [this ~@params]
+    ps = gcv_empty([roots, vs_get(base + 2), vs_get(base + 3)])
+    call vs_set(base + 4, ps)
+    call vs_set(base + 4, gcv_conj(vs_get(base + 4), &
+         gc_sym("this", [roots, vs_get(base + 4)]), [roots, vs_get(base + 4)]))
+    do i = 0, gcv_count(vs_get(base + 2)) - 1
+       call vs_set(base + 4, gcv_conj(vs_get(base + 4), gcv_nth(vs_get(base + 2), i), &
+            [roots, vs_get(base + 2), vs_get(base + 4)]))
+    end do
+    out = gcl_cons(vs_get(base + 4), vs_get(base + 3), &
+         [roots, vs_get(base + 3), vs_get(base + 4)])
+    call vs_set(base + 4, out)
+    out = gcl_cons(vs_get(base + 1), vs_get(base + 4), &
+         [roots, vs_get(base + 1), vs_get(base + 4)])
+    call vs_leave(base)
+  end function proxy_clause
 
   ! A type object from its parts, with each method form compiled to a
   ! closure. Methods sharing a NAME become clauses of ONE closure: an
