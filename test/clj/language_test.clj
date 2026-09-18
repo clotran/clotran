@@ -718,6 +718,33 @@
         (set? (empty #{1})) (list? (empty '(1)))]
        [true true true true])
 
+
+;;; ---- swap-vals!, reset-vals!, and the multimethod table ----------
+;; All of these are core.clj reaching for a host member it declares in
+;; its own type hints. Values from `clj`.
+
+(check "swap-vals!"        (let [a (atom 1)] [(swap-vals! a inc) @a]) [[1 2] 2])
+(check "swap-vals! args"   (let [a (atom 1)] [(swap-vals! a + 1 2 3 4) @a]) [[1 11] 11])
+(check "swap-vals! conj"   (let [a (atom [])] [(swap-vals! a conj :x) @a]) [[[] [:x]] [:x]])
+(check "reset-vals!"       (let [a (atom 1)] [(reset-vals! a 9) @a]) [[1 9] 9])
+
+(defmulti ltest-area :shape)
+(defmethod ltest-area :square [s] (* (:side s) (:side s)))
+(defmethod ltest-area :circle [s] 3)
+(defmethod ltest-area :default [s] :none)
+
+(check "methods"           (count (methods ltest-area)) 3)
+(check "methods keys"      (sort-by str (keys (methods ltest-area))) '(:circle :default :square))
+(check "get-method"        ((get-method ltest-area :square) {:side 4}) 16)
+;; get-method answers what WOULD apply, so an unregistered value finds
+;; the default rather than nil.
+(check "get-method default" ((get-method ltest-area :hexagon) {}) :none)
+;; preferMethod records nothing here (DEVIATIONS 8), so the table is
+;; empty rather than absent.
+(check "prefers"           (prefers ltest-area) {})
+(check "remove-method"     (do (remove-method ltest-area :circle)
+                               (count (methods ltest-area))) 2)
+
 ;;; ---- report -----------------------------------------------------
 
 

@@ -132,6 +132,9 @@ module GCEval
   integer, parameter :: B_ASIFASSOC = 184
   integer, parameter :: B_MACROEXP1 = 185
   integer, parameter :: B_COLLEMPTY = 186
+  integer, parameter :: B_SWAPVALS = 187, B_RESETVALS = 188
+  integer, parameter :: B_METHODTABLE = 189, B_GETMETHOD = 190
+  integer, parameter :: B_EMPTYMAP = 191, B_REMOVEMETHOD = 192
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -2633,6 +2636,8 @@ contains
     case ("deref");     out = native(B_DEREF, "deref", [roots])
     case ("hasRoot");   out = native(B_HASROOT, "clotran-has-root", [roots])
     case ("addMethod"); out = native(B_ADDMETHOD, "clotran-add-method", [roots])
+    case ("removeMethod")
+       out = native(B_REMOVEMETHOD, "clotran-remove-method", [roots])
     ! preferMethod resolves an AMBIGUITY between two matching methods,
     ! and exact-match dispatch has no ambiguity to resolve -- so it
     ! records nothing and returns the multimethod. DEVIATIONS.md 8.
@@ -2663,8 +2668,18 @@ contains
        out = native(B_ALWAYS_NIL, "clotran-nil", [roots])
     case ("__methodImplCache")
        out = native(B_FLD_CACHE, "clotran-cache", [roots])
-    case ("preferMethod", "getMethod")
+    case ("preferMethod")
        out = native(B_IDENTITY, "identity", [roots])
+    ! `methods` and `get-method` read the SAME table addMethod
+    ! writes, which is slot 4. getPreferTable is empty because
+    ! preferMethod records nothing -- DEVIATIONS.md 8 -- and an
+    ! empty map is the honest report of that, not a guess.
+    case ("getMethodTable")
+       out = native(B_METHODTABLE, "clotran-method-table", [roots])
+    case ("getPreferTable")
+       out = native(B_EMPTYMAP, "clotran-empty-map", [roots])
+    case ("getMethod")
+       out = native(B_GETMETHOD, "clotran-get-method", [roots])
     case ("disjoin");   out = native(B_DISJ, "disj", [roots])
 
     case ("concat"); out = native(B_STR, "str", [roots])
@@ -2695,6 +2710,13 @@ contains
     case ("set", "reset"); out = native(B_SETVAL, "clotran-set-val", [roots])
     case ("swap")
        out = native(B_SWAPVAL, "clotran-swap-val", [roots])
+    ! swap-vals! and reset-vals! answer [old new]. Same write as
+    ! .swap and .reset -- the pair is the only difference, and on
+    ! the JVM it is what makes the compare-and-set observable.
+    case ("swapVals")
+       out = native(B_SWAPVALS, "clotran-swap-vals", [roots])
+    case ("resetVals")
+       out = native(B_RESETVALS, "clotran-reset-vals", [roots])
     case ("alter", "commute", "alterRoot")
        ! alterRoot is alter on a Var's root, which is slot 1 -- the same
        ! slot a Ref and an atom keep their value in.
@@ -4996,6 +5018,26 @@ contains
     call vs_leave(base)
   end function coll_empty
 
+  ! [old new], the vector swap-vals! and reset-vals! answer.
+  function value_pair(a0, b0, roots) result(out)
+    type(gc_value), intent(in) :: a0, b0
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out
+    integer :: base
+
+    base = vs_enter(3)
+    call vs_set(base + 1, a0)
+    call vs_set(base + 2, b0)
+    out = gcv_empty([roots, vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 3, out)
+    out = gcv_conj(vs_get(base + 3), vs_get(base + 1), &
+         [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+    call vs_set(base + 3, out)
+    out = gcv_conj(vs_get(base + 3), vs_get(base + 2), &
+         [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+    call vs_leave(base)
+  end function value_pair
+
   ! Compiler.specials -- the map special-symbol? asks. Its VALUES are
   ! parser objects on the JVM and nothing reads them through this Var,
   ! so nil will do; the KEYS are the answer.
@@ -7171,11 +7213,16 @@ contains
             out = pair
          end if
        end block
-    case (B_SETVAL)
+    case (B_SETVAL, B_RESETVALS)
        a = gcv_nth(args, 0)
        out = gcv_nth(args, 1)
-       call gc_set_slot(a, 1, out)
-    case (B_SWAPVAL)
+       block
+         type(gc_value) :: prev
+         prev = gc_slot(a, 1)
+         call gc_set_slot(a, 1, out)
+         if (id == B_RESETVALS) out = value_pair(prev, out, [a, args])
+       end block
+    case (B_SWAPVAL, B_SWAPVALS)
        ! IAtom has FOUR swap arities: (f), (f x), (f x y) and
        ! (f x y argseq). Only the last passes a seq; the middle two pass
        ! plain values. This used to share alter's builtin, whose shape is
@@ -7208,7 +7255,15 @@ contains
             end do
          end if
          out = apply(gcv_nth(args, 1), vs_get(lb + 2))
-         if (.not. has_error) call gc_set_slot(vs_get(lb + 1), 1, out)
+         if (.not. has_error) then
+            if (id == B_SWAPVALS) then
+               out = value_pair(gc_slot(vs_get(lb + 1), 1), out, &
+                    [vs_get(lb + 1), vs_get(lb + 2)])
+               call gc_set_slot(vs_get(lb + 1), 1, gcv_nth(out, 1))
+            else
+               call gc_set_slot(vs_get(lb + 1), 1, out)
+            end if
+         end if
          call vs_leave(lb)
        end block
     case (B_ALTERVAL)
@@ -7496,6 +7551,43 @@ contains
        if (gc_kind(a) == OBJ_MULTIFN) then
           call gc_set_slot(a, 4, gca_assoc(gc_slot(a, 4), gcv_nth(args, 1), &
                gcv_nth(args, 2), [vs_get(base + 1)]))
+       end if
+    case (B_METHODTABLE)
+       a = gcv_nth(args, 0)
+       out = gca_empty([vs_get(base + 1)])
+       if (gc_kind(a) == OBJ_MULTIFN) out = gc_slot(a, 4)
+    case (B_REMOVEMETHOD)
+       ! Mutates and answers the multimethod, the mirror of
+       ! addMethod.
+       a = gcv_nth(args, 0)
+       out = a
+       if (gc_kind(a) == OBJ_MULTIFN) &
+            call gc_set_slot(a, 4, gca_dissoc(gc_slot(a, 4), gcv_nth(args, 1), &
+                 [vs_get(base + 1)]))
+    case (B_EMPTYMAP)
+       out = gca_empty([vs_get(base + 1)])
+    case (B_GETMETHOD)
+       ! The method a dispatch value WOULD reach. Same three steps
+       ! the multimethod call itself takes -- exact, host
+       ! supertypes, then the default dispatch value -- because
+       ! get-method is documented as answering what WOULD apply.
+       a = gcv_nth(args, 0)
+       out = gc_nil()
+       if (gc_kind(a) == OBJ_MULTIFN) then
+          block
+            integer :: si
+            type(gc_value) :: sk
+            out = gca_get(gc_slot(a, 4), gcv_nth(args, 1))
+            if (out%tag == GCT_NIL) then
+               do si = 1, 24
+                  sk = host_super(gcv_nth(args, 1), si, a)
+                  if (sk%tag == GCT_NIL) exit
+                  out = gca_get(gc_slot(a, 4), sk)
+                  if (out%tag /= GCT_NIL) exit
+               end do
+            end if
+            if (out%tag == GCT_NIL) out = gca_get(gc_slot(a, 4), gc_slot(a, 3))
+          end block
        end if
     case (B_IDENTITY)
        out = gcv_nth(args, 0)
