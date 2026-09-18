@@ -524,49 +524,56 @@ It goes away with `String/format` and an identity for host objects --
 the same two pieces deviation 18 needs, and worth doing once for both
 rather than twice.
 
-## 22. A collection used as a map key or set element matches by identity
+## 22. RESOLVED -- collections as keys hash and compare structurally
 
-Values compare deeply. KEYS do not:
+Kept as a record because the fix changed hashing semantics, and
+because the way it was measured is worth remembering.
 
-    (= {:a [1]} {:a [1]})   ;=> true,  and clj agrees -- a value
-    (= {[1] 2} {[1] 2})     ;=> FALSE, clj says true -- a key
-    (get {[1] 2} [1])       ;=> nil,   clj says 2
-    (= #{[1]} #{[1]})       ;=> FALSE, clj says true
+A collection used to hash and compare by its POOL SLOT, so an equal key
+built anywhere else missed:
 
-`case` is the same bug wearing a different hat, because `case*`
-buckets its keys by hash: `(case {:a 1 :b 2} {:b 2 :a 1} :map :default)`
-answers `:default`, and eight assertions in Clojure's `control` suite
-fail for that reason alone.
+    (get {[1] 2} [1])                             ;=> nil,      clj 2
+    (= #{[1]} #{[1]})                             ;=> false,    clj true
+    (case {:a 1 :b 2} {:b 2 :a 1} :map :default)  ;=> :default, clj :map
 
-Two of those eight were PASSING until integers were widened to 64 bits,
-and the way they passed is worth recording: their identity hash happened
-to land in the bucket holding the right key, and `=` -- which compares
-collections structurally -- then agreed. Changing the integer hash moved
-every bucket and the coincidence ended. So a scorecard can move by two
-assertions here with nothing in the collection code having changed at
-all, and neither number was ever measuring correct behaviour.
+All three now answer as Clojure does. `=` had been structural all
+along, which is what made it confusing: the value compared equal and
+the lookup still failed, because finding the key goes through
+`gca_get`/`gca_contains` and those use `gc_equal`.
 
-`deep_equal` compares a map's values with itself, so a collection VALUE
-is structural. Finding the key to compare is `gca_get`/`gca_contains`,
-which use `gc_equal` -- same tag, same scalar or text, and for anything
-in the object pool the same POOL SLOT. Two structurally equal vectors
-are two slots, so neither is found under the other.
+Hash and equality are installed TOGETHER, through `gc_set_coll_ops`,
+and against the same notion of equality -- `deep_equal`, the one `=`
+already used. A structural hash with an identity equality (or the
+reverse) is worse than either alone: it puts one key in a trie twice
+and finds whichever arm a lookup walks into.
 
-`gc_equal` says so in its own comment and calls it a separate decision;
-this is that decision written down rather than left implicit. It is the
-same root cause for maps and for sets, because a set is a map from each
-element to itself.
+Walking a collection needs logic that lives above `GC.f90` -- a
+persistent vector is a 32-way trie -- so both are procedure-pointer
+hooks, the same dependency inversion the finalizer uses.
 
-Scalars -- keywords, symbols, strings, numbers -- are exact, and that is
-what a map key almost always is. Nothing in the vendored tree keys a map
-by a collection.
+Two details the invariant forced:
 
-Removing it is bigger than it looks: `gca_get` would need deep equality,
-and the HAMT path would need `gc_hash` to hash a collection
-STRUCTURALLY, so that two equal vectors land in the same bucket before
-equality is ever consulted. That is a change to hashing semantics --
-see deviation 15, which is the other half of the same subject -- and
-wants its own commit.
+- Maps and sets hash UNORDERED, as a sum. Two equal maps may hand back
+  their entries in different orders, and a fold that cared would hash
+  them differently.
+- A list and a vector of the same elements are equal in Clojure, so
+  they share one hash scheme rather than mixing their kind in.
+
+**What is left.** A LAZY SEQ as a key still hashes by identity.
+Hashing one means realizing it, and `gc_hash` runs inside map inserts
+and lookups, where an allocation can collect the half-built structure.
+Equality only consults the hook when both sides are structural kinds,
+so the two stay in step rather than disagreeing.
+
+**How this was found**, which is the part worth keeping: two
+assertions in Clojure's `control` suite were PASSING under the old
+identity hashing, because a slot hash happened to land in the bucket
+holding the right key and `=` then agreed. Widening integers to 64 bits
+moved every bucket and the coincidence ended, so the scorecard fell by
+two with nothing in the collection code having changed. Neither number
+was measuring correct behaviour. Fixing it properly moved Clojure's
+suite from 778 passing assertions to 797, all of it in two namespaces:
+`control` 156 -> 164 and `clojure-set` 99 -> 110.
 
 ## 23. `(instance? clojure.lang.IObj f)` is false for a function
 
