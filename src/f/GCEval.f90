@@ -147,6 +147,7 @@ module GCEval
   integer, parameter :: B_RE_APPENDREPL = 252, B_RE_APPENDTAIL = 253
   integer, parameter :: B_RE_START = 254, B_RE_END = 255
   integer, parameter :: B_INTOARRAY = 256, B_EMPTYARRAY = 257
+  integer, parameter :: B_GETIFACES = 258
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -2846,7 +2847,15 @@ contains
        ! fallback, which is the branch that actually resolves.
        out = native(B_ALWAYS_NIL, "clotran-nil", [roots])
     case ("getInterfaces")
-       out = native(B_EMPTYVEC, "clotran-empty", [roots])
+       ! THE HOST SUPERTYPES, which is what clotran has instead of
+       ! interfaces. core.clj's `supers` is (set (.getInterfaces
+       ! class)) walked up .getSuperclass, and find-protocol-impl
+       ! searches that set before falling back to Object. Answering
+       ! an empty one meant EVERY protocol dispatch landed on
+       ! (impl Object) -- so clojure.data's equality-partition
+       ! called a map an :atom, even though the impls map had
+       ! java.util.Map in it all along.
+       out = native(B_GETIFACES, "clotran-get-interfaces", [roots])
     case ("isAssignableFrom", "isInterface", "isArray")
        out = native(B_ALWAYS_FALSE, "clotran-false", [roots])
     ! The cache's named fields, read off the map it is.
@@ -6826,9 +6835,32 @@ contains
           end if
        end if
        if (a%tag == GCT_NIL) a = gca_empty([vs_get(base + 1)])
-       out = gca_assoc(a, &
-            gcv_nth(vs_get(base + 1), 1), &
-            gcv_nth(vs_get(base + 1), 2), [vs_get(base + 1)])
+       if (gcv_is(a)) then
+          ! A VECTOR IS ASSOCIATIVE BY INDEX, and assoc on one
+          ! answered nil -- gca_assoc only knows maps. An index
+          ! equal to the count APPENDS, which is the one place
+          ! assoc grows a vector; past that it throws, as
+          ! PersistentVector.assocN does. clojure.data/vectorize
+          ! is built entirely out of this.
+          block
+            type(gc_value) :: ix
+            ix = strip_meta(gcv_nth(vs_get(base + 1), 1))
+            if (ix%tag /= GCT_INT) then
+               call fail("assoc: a vector takes an integer key")
+            else if (ix%ival == int(gcv_count(a), gc_ip)) then
+               out = gcv_conj(a, gcv_nth(vs_get(base + 1), 2), [vs_get(base + 1)])
+            else if (ix%ival >= 0 .and. ix%ival < int(gcv_count(a), gc_ip)) then
+               out = gcv_assoc(a, int(ix%ival), &
+                    gcv_nth(vs_get(base + 1), 2), [vs_get(base + 1)])
+            else
+               call fail("Index out of bounds")
+            end if
+          end block
+       else
+          out = gca_assoc(a, &
+               gcv_nth(vs_get(base + 1), 1), &
+               gcv_nth(vs_get(base + 1), 2), [vs_get(base + 1)])
+       end if
     case (B_KEYS, B_VALS)
        a = strip_meta(gcv_nth(vs_get(base + 1), 0))
        if (gc_kind(a) == OBJ_INST) then
@@ -8034,19 +8066,26 @@ contains
        end block
     case (B_STRCONTAINS)
        block
-         type(gc_value) :: coll
+         type(gc_value) :: coll, ckey
          coll = strip_meta(gcv_nth(args, 0))
-         if (coll%tag == GCT_STR) then
+         ! TWO METHODS SHARE THIS NAME and they ask different
+         ! questions. String.contains(s) is substring containment;
+         ! RT.contains(coll, key) is whether the KEY is present,
+         ! which for a string means the index is in range. The
+         ! argument tells them apart -- a string key is the
+         ! substring question, an integer key the index one --
+         ! and conflating them made (contains? "ab" 0) false.
+         ckey = strip_meta(gcv_nth(args, 1))
+         if (coll%tag == GCT_STR .and. ckey%tag /= GCT_INT) then
             out = gc_bool(index(text_of(coll), text_of(gcv_nth(args, 1))) > 0)
          else if (gc_kind(coll) == OBJ_INST) then
             ! THE path contains? takes: core.clj's contains? is
             ! (. clojure.lang.RT (contains coll key)), which lands
             ! here rather than on the contains? builtin.
             out = inst_invoke(coll, "containsKey", rest_args(args, 1), hit)
-            if (.not. hit) out = gc_bool(gca_contains(coll, gcv_nth(args, 1)))
+            if (.not. hit) out = gc_bool(coll_has(coll, gcv_nth(args, 1)))
          else
-            if (gc_kind(coll) == OBJ_SET) coll = gc_slot(coll, 1)
-            out = gc_bool(gca_contains(coll, gcv_nth(args, 1)))
+            out = gc_bool(coll_has(coll, gcv_nth(args, 1)))
          end if
        end block
     case (B_HASH)
@@ -8389,8 +8428,7 @@ contains
              return
           end if
          end if
-         if (gc_kind(coll) == OBJ_SET) coll = gc_slot(coll, 1)
-         out = gc_bool(gca_contains(coll, gcv_nth(args, 1)))
+         out = gc_bool(coll_has(coll, gcv_nth(args, 1)))
        end block
     case (B_FIND)
        ! A map entry is a two-element vector, which is what makes
@@ -8816,6 +8854,22 @@ contains
             out = gc_str(java_format(gc_ref_text(fv%ref), vs_get(base + 2)), &
                  [vs_get(base + 1), vs_get(base + 2)])
          end if
+       end block
+    case (B_GETIFACES)
+       block
+         type(gc_value) :: cv, acc, sk
+         integer :: si2
+         cv = strip_meta(gcv_nth(args, 0))
+         acc = gcv_empty([vs_get(base + 1)])
+         call vs_set(base + 2, acc)
+         do si2 = 1, 24
+            sk = host_super(cv, si2, vs_get(base + 1))
+            if (sk%tag == GCT_NIL) exit
+            acc = gcv_conj(vs_get(base + 2), sk, &
+                 [vs_get(base + 1), vs_get(base + 2), sk])
+            call vs_set(base + 2, acc)
+         end do
+         out = vs_get(base + 2)
        end block
     case (B_EMPTYARRAY)
        out = value_array(gcv_empty([vs_get(base + 1)]), [vs_get(base + 1)])
@@ -11035,10 +11089,26 @@ contains
   ! flag looked illegal and clojure.pprint would not load.
   function coll_get(coll0, k) result(out)
     type(gc_value), intent(in) :: coll0, k
-    type(gc_value) :: out, coll
+    type(gc_value) :: out, coll, kk
+    character(len=:), allocatable :: t
     coll = strip_meta(coll0)
+    kk = strip_meta(k)
     if (gc_kind(coll) == OBJ_SET) then
        out = gca_get(gc_slot(coll, 1), k)
+    else if (gcv_is(coll) .and. kk%tag == GCT_INT) then
+       ! A VECTOR IS ASSOCIATIVE BY INDEX. (get v 0) is its first
+       ! element, not nil -- Associative is what Indexed answers
+       ! to -- and clojure.data's diff-associative walks a vector
+       ! with (range (count v)) as its keys, so without this every
+       ! sequential diff came back all-nil.
+       out = gc_nil()
+       if (kk%ival >= 0 .and. kk%ival < int(gcv_count(coll), gc_ip)) &
+            out = gcv_nth(coll, int(kk%ival))
+    else if (coll%tag == GCT_STR .and. kk%tag == GCT_INT) then
+       out = gc_nil()
+       t = gc_ref_text(coll%ref)
+       if (kk%ival >= 0 .and. kk%ival < int(len(t), gc_ip)) &
+            out = gc_char(t(int(kk%ival) + 1:int(kk%ival) + 1))
     else
        out = gca_get(coll, k)
     end if
@@ -11047,11 +11117,21 @@ contains
   ! Whether that lookup would find anything.
   function coll_has(coll0, k) result(yes)
     type(gc_value), intent(in) :: coll0, k
-    type(gc_value) :: coll
+    type(gc_value) :: coll, kk
     logical :: yes
     coll = strip_meta(coll0)
+    kk = strip_meta(k)
     if (gc_kind(coll) == OBJ_SET) then
        yes = gca_contains(gc_slot(coll, 1), k)
+    else if (gcv_is(coll)) then
+       ! contains? on a vector asks whether the INDEX is in
+       ! range, which is the question its keys answer.
+       yes = (kk%tag == GCT_INT)
+       if (yes) yes = (kk%ival >= 0 .and. kk%ival < int(gcv_count(coll), gc_ip))
+    else if (coll%tag == GCT_STR) then
+       yes = (kk%tag == GCT_INT)
+       if (yes) yes = (kk%ival >= 0 .and. &
+            kk%ival < int(gc_ref_len(coll%ref), gc_ip))
     else
        yes = gca_contains(coll, k)
     end if
@@ -11103,7 +11183,16 @@ contains
        out = gc_obj(OBJ_SET, [gca_assoc(gc_slot(vs_get(base + 1), 1), &
             vs_get(base + 2), vs_get(base + 2), roots)], roots)
     else if (gca_is(coll)) then
-       if (gca_is(vs_get(base + 2))) then
+       if (x%tag == GCT_NIL) then
+          ! CONJ OF NIL ONTO A MAP IS A NO-OP. APersistentMap.cons
+          ! walks (RT/seq o), and the seq of nil is nil, so the
+          ! loop never runs and the map comes back unchanged.
+          ! Treating nil as a pair assoc'd nil to nil instead, and
+          ! (merge m nil) is (conj m nil) -- so every map that
+          ! passed through merge grew a spurious nil entry.
+          ! clojure.data/diff folds with merge over [nil nil nil].
+          out = vs_get(base + 1)
+       else if (gca_is(vs_get(base + 2))) then
           block
             type(gc_value), allocatable :: kk(:), vv(:)
             type(gc_value) :: mm

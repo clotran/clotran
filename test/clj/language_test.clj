@@ -1119,6 +1119,54 @@
 (check "a plain member still works" (.toString "x") "x")
 (check ".. expands to ." (macroexpand-1 '(.. a b)) '(. a b))
 
+
+;;; ---- a vector is associative by index ----------------------------
+;; All four of these came out of one namespace, clojure.data, which is
+;; written entirely against them: assoc on a vector answered NIL,
+;; get and contains? by index answered nothing, and conj of nil onto a
+;; map added a nil entry. Values from `clj`.
+
+(check "assoc a vector"      (assoc [1 2] 0 9) [9 2])
+;; An index equal to the count APPENDS -- the one place assoc grows a
+;; vector. Past that it throws.
+(check "assoc appends at the end" (assoc [nil] 1 2) [nil 2])
+(check "assoc into an empty vector" (assoc [] 0 :x) [:x])
+(check "assoc past the end throws" (try (assoc [1] 5 :x) (catch Throwable e :threw)) :threw)
+(check "assoc-in through a vector" (assoc-in [[1]] [0 0] 9) [[9]])
+(check "update a vector"      (update [1 2] 0 inc) [2 2])
+
+(check "contains? an index"  [(contains? [1 2] 0) (contains? [1 2] 1)
+                              (contains? [1 2] 5) (contains? [1 2] -1)]
+                             [true true false false])
+(check "get by index"        [(get [1 2] 0) (get [1 2] 5) (get [1 2] 5 :d) (get [1 2] :k)]
+                             [1 nil :d nil])
+(check "a string too"        [(contains? "ab" 0) (contains? "ab" 9) (get "ab" 0) (get "ab" 9)]
+                             [true false \a nil])
+;; .contains on a String is still substring containment -- the two
+;; methods share a name and the argument tells them apart.
+(check "String.contains"     [(.contains "abc" "b") (.contains "abc" "z")] [true false])
+
+;; APersistentMap.cons walks (seq o), and the seq of nil is nil, so a
+;; map comes back unchanged. (merge m nil) is (conj m nil).
+(check "conj nil onto a map"  (conj {:a 1} nil) {:a 1})
+(check "merge with nil"       [(merge {:a 1} nil) (merge nil nil)] [{:a 1} nil])
+
+;;; ---- protocols see the host supertypes ---------------------------
+;; core.clj's `supers` is built from .getInterfaces, and answering an
+;; empty one sent EVERY protocol dispatch to its (impl Object)
+;; fallback. clojure.data's equality-partition called a map an :atom
+;; even though java.util.Map was in the impls map all along.
+
+(require (quote [clojure.data :as ltdata]))
+
+(check "diff of maps"        (ltdata/diff {:a 1} {:a 1 :b 2}) [nil {:b 2} {:a 1}])
+(check "diff of vectors"     (ltdata/diff [1 2] [1 3]) [[nil 2] [nil 3] [1]])
+(check "diff of sets"        (ltdata/diff #{1 2} #{2 3}) [#{1} #{3} #{2}])
+(check "diff of unlike things" (ltdata/diff {:a 1} :b) [{:a 1} :b nil])
+(check "diff of equals"      (ltdata/diff 1 1) [nil nil 1])
+(check "diff nested"         (ltdata/diff {:a {:b 1 :c 2}} {:a {:b 1 :c 3}})
+                             [{:a {:c 2}} {:a {:c 3}} {:a {:b 1}}])
+
 ;;; ---- report -----------------------------------------------------
 
 
