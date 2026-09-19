@@ -224,9 +224,9 @@ that snapshots into an image (startup).
 Staged so each step is checkable:
 
 1. DONE -- analyser resolves and classifies; the executor consumes
-   nodes over frames. Still to do in this stage: delete the old
-   walker (`gce_eval`'s form paths, `eval_let`, `make_closure`,
-   `bind_params` and the rest), port `eval_dot`/`eval_new` to take
+   nodes over frames. The old walker is deleted: `gce_eval` is now
+   "analyse if it is a form, then execute", and Eval.f90 lost 1,700
+   lines. Still to do in this stage: port `eval_dot`/`eval_new` to take
    values so the `(quote v)` bridge goes, and read one form at a time
    (DEVIATIONS 1).
 2. intermediates move to the operand stack; `roots(:)` leaves every

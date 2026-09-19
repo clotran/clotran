@@ -2228,8 +2228,12 @@ every arity. `invoke_closure` picks the arity, fills parameters,
 captures and the self name, and loops on the body while it recurs.
 
 **What still bridges.** `eval_dot` and `eval_new` take forms; the
-executor evaluates their parts and hands them `(quote v)` forms, which
-is why `gce_eval`'s walker is still compiled. A static call on a host
+executor evaluates their parts and hands them `(quote v)` forms, and
+`gce_eval` -- which is now "analyse, then execute" -- turns each
+back into its value. The old walker itself is gone: every `eval_*`
+routine that took a form and an environment, `make_closure`,
+`bind_params`, `select_clause`, `mx_walk`, and the `__defining-ns__`
+lookups in `resolve_var`. A static call on a host
 class, which is most of what core.clj does, is resolved to its native
 at analysis and never touches the bridge. `range` and `iterate` cells
 no longer close over an environment either: a pending tail carries
