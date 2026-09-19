@@ -860,8 +860,8 @@ contains
           v = rval
        else if (.not. iclaim .and. .not. rclaim .and. looks_real(tok)) then
           v = gc_real(to_real(tok))
-       else if (unsupported_number(tok)) then
-          v = gc_sym(tok, roots)
+       else if (suffixed_number(tok, v, roots)) then
+          continue
        else
           call fail("Invalid number: " // tok)
           v = gc_nil()
@@ -933,28 +933,54 @@ contains
   ! Both better fixes are real work rather than a reader tweak: a Ratio
   ! type and a numeric tower (DEVIATIONS 26), or per-form reader
   ! recovery so that one bad form does not abort a load.
-  pure function unsupported_number(s) result(yes)
+  ! The N and M SUFFIXES, on a token that is otherwise a number.
+  ! Clojure reads 1N as a BigInt and 1M as a BigDecimal; clotran
+  ! has neither, and used to read both as SYMBOLS -- so (cond 0M
+  ! :a true :b) was "unable to resolve symbol" rather than :a.
+  !
+  ! Each suffix drops to the nearest thing clotran does have, and
+  ! the choice is made by what `=` then says, not by what looks
+  ! closest:
+  !
+  !   1N -> an INTEGER, because (= 1N 1) is true in Clojure and
+  !         stays true here.
+  !   1M -> a DOUBLE, because (= 1M 1) is FALSE in Clojure -- a
+  !         BigDecimal is its own equality category -- and
+  !         (= 1.0 1) is false here for the same reason. Reading
+  !         45M as the integer 45 would have made it true.
+  !
+  ! What is lost is arbitrary precision and the type: 1N is not a
+  ! BigInt, 1M is not exact decimal, and both print without their
+  ! suffix. DEVIATIONS.md 30.
+  function suffixed_number(s, val, roots) result(yes)
     character(len=*), intent(in) :: s
-    logical :: yes
-    integer :: n, start, k, slash
+    type(gc_value), intent(out) :: val
+    type(gc_value), intent(in) :: roots(:)
+    logical :: yes, iok, iclaim
+    integer :: n, start
+    integer(gc_ip) :: iv
     yes = .false.
+    val = gc_nil()
     n = len(s)
     if (n == 0) return
     start = 1
     if (s(1:1) == "-" .or. s(1:1) == "+") start = 2
     if (start > n) return
-
-    ! The N and M suffixes, on a token that is otherwise a number.
-    if (n > start) then
-       if (s(n:n) == "N") then
-          yes = all_decimal(s(start:n - 1))
-          if (yes) return
-       else if (s(n:n) == "M") then
-          yes = looks_real(s(1:n - 1))
-          if (yes) return
+    if (n <= start) return
+    if (s(n:n) == "N") then
+       call parse_int(s(1:n - 1), iv, iok, iclaim)
+       if (iok) then
+          val = gc_int(iv)
+          yes = .true.
+       end if
+    else if (s(n:n) == "M") then
+       if (looks_real(s(1:n - 1))) then
+          val = gc_real(to_real(s(1:n - 1)))
+          yes = .true.
        end if
     end if
-  end function unsupported_number
+    if (.false.) val = gc_sym(s, roots)
+  end function suffixed_number
 
   ! ratioPat: ([-+]?[0-9]+)/([0-9]+). A denominator of zero is an
   ! error, the same as (/ 1 0) -- Clojure raises rather than reading

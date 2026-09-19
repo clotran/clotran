@@ -291,14 +291,14 @@
 ;; test namespaces that contain a ratio literal -- 766 passing
 ;; assertions became 223, control.clj alone losing 153.
 ;;
-;; 2/3 is a real number here now, so only the suffixes are left to
-;; stand as the falsification: a literal Clojure reads as a number
-;; that clotran cannot type. If the reader ever raises on one again
-;; this whole file stops loading and the gate goes red -- which is
-;; exactly what failed to happen last time, because no test anywhere
-;; contained one.
-(check "an N suffix is a symbol"            (symbol? (quote 42N)) true)
-(check "an M suffix is a symbol"            (symbol? (quote 1.5M)) true)
+;; These two used to assert that 42N and 1.5M read as SYMBOLS,
+;; which is what clotran did and what stood as the falsification.
+;; They are numbers now -- see the N and M suffixes further down --
+;; so what is left to guard is only that neither RAISES, since a
+;; reader error here stops this whole file loading and takes the
+;; gate red.
+(check "an N suffix reads"                  (number? (quote 42N)) true)
+(check "an M suffix reads"                  (number? (quote 1.5M)) true)
 
 ;;; ---- arithmetic ---------------------------------------------------
 ;;
@@ -1297,6 +1297,29 @@
 (check "require it"      (require (quote clojure.core)) nil)
 (check "use it"          (use (quote clojure.core)) nil)
 (check "and core still works" (+ 1 2) 3)
+
+
+;;; ---- the N and M suffixes ----------------------------------------
+;; Clojure reads 1N as a BigInt and 1M as a BigDecimal. clotran has
+;; neither and used to read both as SYMBOLS, so (cond 0M :a true :b)
+;; was "unable to resolve symbol" rather than :a.
+;;
+;; Each drops to the nearest thing clotran has, chosen by what `=` then
+;; says: 1N is an integer because (= 1N 1) is true in Clojure, and 1M is
+;; a DOUBLE because (= 1M 1) is false there -- reading 45M as the
+;; integer 45 would have made it true. DEVIATIONS 30.
+
+(check "N equals the plain integer"  (= 1N 1) true)
+(check "M does not"                  (= 1M 1) false)
+(check "M equals itself"             [(= 45M 45M) (= 1.5M 1.5M)] [true true])
+(check "a decimal is truthy"         (cond 0M :a true :b) :a)
+(check "arithmetic"                  [(+ 1N 1) (* 2M 3M)] [2 6.0])
+(check "comparison"                  [(= 1N 1N) (< 1N 2N) (zero? 0M)] [true true true])
+(check "negatives"                   [(- 0 2N) -3.5M] [-2 -3.5])
+(check "read-string too"             (read-string "1N") 1)
+;; A letter that is not a suffix still makes a symbol, and a token that
+;; is neither is still a reader error.
+(check "not every N is a suffix"     (map str ['aN 'Nx 'x1N]) '("aN" "Nx" "x1N"))
 
 ;;; ---- report -----------------------------------------------------
 
