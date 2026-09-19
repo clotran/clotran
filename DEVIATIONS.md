@@ -910,7 +910,7 @@ and, with it, everything `with-precision` is for. A literal past
 the same work deviation 26 ends on, and the suffixes are its most
 visible symptom rather than a separate problem.
 
-## 31. Stack traces are empty
+## 31. RESOLVED -- stack traces
 
 `(.getStackTrace e)` answers an empty array; Clojure answers one
 `StackTraceElement` per frame, and `clojure.stacktrace` and
@@ -922,12 +922,18 @@ frames -- there is nothing to report. It is honest rather than wrong:
 with source positions on nodes, a trace is a walk up that stack, and
 this entry closes together with the debugger it unblocks.
 
-**Half closed 2026-09-19.** The evaluator keeps a call stack (one entry
-per closure invocation: the closure and where it was called from), and
-an error prints it after the message, innermost first. What is still
-missing is the object: `.getStackTrace` answers an empty array because
-`clojure.stacktrace` and `clojure.test` read `StackTraceElement`
-methods off each element, and there is no such element here yet.
+**RESOLVED 2026-09-19.** The evaluator keeps a call stack (one entry
+per closure invocation: the closure and where it was called from). A
+Throwable is given the stack at construction, as Java's is, or at the
+throw if it has none; `.getStackTrace` answers it as an array of
+elements, and each element answers `getClassName` (the function's
+qualified name), `getMethodName` (always `invoke`), `getFileName` and
+`getLineNumber` (the call site's). The elements are maps rather than a
+class, which shows only under `class`. The top frame of an `ex-info`
+trace is `clojure.core/ex-info`, as it is on the JVM.
+
+What differs from the JVM: no `invokeStatic`/`doInvoke` pairs, no
+frames for builtins, and a `recur` loop is one frame.
 
 ## 32. A qualified symbol that does not resolve is a run-time error
 
