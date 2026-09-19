@@ -38,3 +38,9 @@ copyright the University of Tennessee, the University of California
 Berkeley and the University of Colorado Denver, distributed under the
 modified BSD license reproduced in src/f/blas/LICENSE. Vendored
 unmodified; see src/f/blas/PROVENANCE.md.
+
+## ChemSol -- src/f/chemsol/
+
+chemsol.f90 and push_array.f90 are ChemSol 2.1 (Arieh Warshel, Jan
+Florian, James Borden), vendored unmodified from ~/jborden/chemsol;
+see src/f/chemsol/PROVENANCE.md.
