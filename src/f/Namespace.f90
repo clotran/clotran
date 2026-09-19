@@ -1,4 +1,4 @@
-! GCNamespace: namespaces and Vars, over the GC heap.
+! Namespace: namespaces and Vars, over the GC heap.
 !
 ! Shape, matching GC.f90's comments on OBJ_NS and OBJ_VAR:
 !
@@ -19,9 +19,9 @@
 ! program has defined hangs off them. That is also the semantics --
 ! Clojure's namespaces live as long as the process and are dropped
 ! only by remove-ns.
-module GCNamespace
+module Namespace
   use GC
-  use GCAssoc
+  use Assoc
   implicit none
   private
 
@@ -41,7 +41,7 @@ contains
 
   ! Re-checks the slot rather than trusting the cached index: gc_init
   ! clears the global-root registry but these module variables survive
-  ! it, which is the stale-singleton bug GCList's check 4c caught.
+  ! it, which is the stale-singleton bug PersistentList's check 4c caught.
   logical function roots_live()
     roots_live = .false.
     if (.not. gc_root_live(registry_root)) return
@@ -270,4 +270,4 @@ contains
     var = gca_get(gc_slot(ns, 2), sym)
   end function gcn_lookup
 
-end module GCNamespace
+end module Namespace

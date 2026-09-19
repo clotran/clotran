@@ -1,4 +1,4 @@
-! GCNativeArray: a REAL Fortran array as a clotran value, on the GC heap.
+! NativeArray: a REAL Fortran array as a clotran value, on the GC heap.
 !
 ! Deliberately not a port of java.lang.Object[]. Emulating the JVM's
 ! array would throw away the one thing this host has that the JVM does
@@ -38,7 +38,7 @@
 ! in a GC run in the object's slot 1, which push_mark already walks.
 ! This registry then owns only buffers the collector has no opinion
 ! about.
-module GCNativeArray
+module NativeArray
   use GC
   implicit none
   private
@@ -400,4 +400,4 @@ contains
     end select
   end subroutine zero_fill
 
-end module GCNativeArray
+end module NativeArray

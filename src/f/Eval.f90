@@ -1,4 +1,4 @@
-! GCEval: a core evaluator over the GC heap.
+! Eval: a core evaluator over the GC heap.
 !
 ! The last of the standalone modules, and the one that answers the
 ! question the whole port rests on: does rooting BY CONSTRUCTION
@@ -42,19 +42,19 @@
 ! That is rooting by construction rather than discipline, and the
 ! torture tests are what prove it: with a collection at every single
 ! allocation, the evaluator still computes the right answers.
-module GCEval
+module Eval
   use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_copy_sign, &
        ieee_positive_inf, ieee_negative_inf, ieee_quiet_nan
   use GC
-  use GCList
-  use GCVector
-  use GCAssoc
-  use GCEnv
-  use GCNamespace
-  use GCPrinter
-  use GCNativeArray
+  use PersistentList
+  use PersistentVector
+  use Assoc
+  use Env
+  use Namespace
+  use Printer
+  use NativeArray
   use Regex
-  use GCReader
+  use LispReader
   implicit none
   private
 
@@ -249,7 +249,7 @@ contains
   end subroutine gce_clear_error
 
   ! Re-checks the slot rather than trusting the index, for the same
-  ! reason GCList's empty-list singleton does: gc_init clears the
+  ! reason PersistentList's empty-list singleton does: gc_init clears the
   ! global-root registry but this module variable survives it.
   subroutine set_thrown(v)
     type(gc_value), intent(in) :: v
@@ -280,7 +280,7 @@ contains
 
   ! An environment with the primitives bound. Built fresh rather than
   ! cached in a module variable: a cached handle would go stale across
-  ! gc_init, which is exactly the singleton bug GCList's check 4c
+  ! gc_init, which is exactly the singleton bug PersistentList's check 4c
   ! caught.
   function gce_base_env(roots) result(env)
     type(gc_value), intent(in) :: roots(:)
@@ -11883,4 +11883,4 @@ contains
     if (v%tag == GCT_BOOL .and. v%ival == 0) yes = .false.
   end function truthy
 
-end module GCEval
+end module Eval

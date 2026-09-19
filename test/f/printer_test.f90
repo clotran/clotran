@@ -2,12 +2,12 @@
 ! walks every structure in the new data layer at once, so it doubles
 ! as an end-to-end check that list, vector, both map representations
 ! and text all actually hold what they were given.
-program gc_printer_test
+program printer_test
   use GC
-  use GCList
-  use GCVector
-  use GCAssoc
-  use GCPrinter
+  use PersistentList
+  use PersistentVector
+  use Assoc
+  use Printer
   implicit none
 
   logical :: all_ok
@@ -184,4 +184,4 @@ contains
     flush(6)
   end subroutine ok
 
-end program gc_printer_test
+end program printer_test

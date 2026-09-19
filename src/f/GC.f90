@@ -151,7 +151,7 @@ module GC
   ! Same shape as OBJ_ATOM plus a name, and deliberately a distinct
   ! kind: the box is identical, the behaviour is not (a Var derefs
   ! through its dynamic stack and prints as #'ns/name).
-  ! HAMT (GCHamt.f90): a node is a VEC run of 32 slots, each holding
+  ! HAMT (PersistentHashMap.f90): a node is a VEC run of 32 slots, each holding
   ! nil (empty), an OBJ_HAMT_LEAF, another run (a child node), or an
   ! OBJ_MAP (a hash-collision bucket -- a collision set IS a small
   ! linear map, so it reuses the one that already exists).
@@ -236,7 +236,7 @@ module GC
   ! Distinct from OBJ_LAZY, which caches a first and a rest and whose
   ! forcing expects a seq. A delay holds one value of any kind.
   integer, parameter, public :: OBJ_DELAY     = 25 ! 1=thunk 2=value; i1=forced?
-  ! A REAL FORTRAN ARRAY. i1 = a handle into GCNativeArray's registry,
+  ! A REAL FORTRAN ARRAY. i1 = a handle into NativeArray's registry,
   ! which owns the buffer; slot 1 is a GC run for the `value` element
   ! kind and nil for every numeric one.
   !
@@ -254,7 +254,7 @@ module GC
   integer, parameter, public :: OBJ_HAMT      = 11 ! 1=root run; i1=count
   integer, parameter, public :: OBJ_HAMT_LEAF = 12 ! 1=key 2=val
   ! Slot 3 was reserved for a per-Var dynamic stack; the dynamic
-  ! bindings ended up in one global frame stack instead (GCEval), so the
+  ! bindings ended up in one global frame stack instead (Eval), so the
   ! slot holds the Var's OWN NAMESPACE -- which Var.ns is in Clojure, and
   ! which ns-publics needs to tell a Var defined here from one referred
   ! in from somewhere else.
@@ -324,7 +324,7 @@ module GC
   ! Process-wide and mutable: the registry handle changes whenever the
   ! registry grows, so a global is a SLOT, not a value handed over once.
   ! GROWABLE, and with no maximum to maintain. It was a fixed array of
-  ! eight, which was exactly the number claimed, so the ninth (GCEval's
+  ! eight, which was exactly the number claimed, so the ninth (Eval's
   ! type table) was dropped SILENTLY -- registered nowhere, collected
   ! on the next sweep, and visible only as "no such class" for a type
   ! that had just been defined.
@@ -1395,7 +1395,7 @@ contains
        ! leaking for the life of the process.
        ! `i2` too: a native array SLICE shares its parent's buffer
        ! handle rather than owning one, and only the owner may release
-       ! it. i2 is how GCEval tells the two apart -- see OBJ_ARRAY there.
+       ! it. i2 is how Eval tells the two apart -- see OBJ_ARRAY there.
        if (associated(obj_finalizer) .and. obj_pool(i)%kind /= 0) &
             call obj_finalizer(obj_pool(i)%kind, obj_pool(i)%i1, obj_pool(i)%i2)
        do j = 1, OBJ_SLOTS

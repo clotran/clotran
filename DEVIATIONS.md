@@ -20,22 +20,22 @@ Categories:
 
 | # | What | Kind | Where |
 |---|------|------|-------|
-| 1 | Load reads the whole file, then evaluates | temporary | `src/f/gc_main.f90` |
+| 1 | Load reads the whole file, then evaluates | temporary | `src/f/main.f90` |
 | 2 | `host.clj` preloaded before `core.clj` | temporary | `src/clj/host.clj` |
-| 3 | Symbols fall back to `clojure.core` instead of being referred | temporary | `src/f/GCEval.f90` |
-| 4 | `.` reaches a fixed table of host members, not arbitrary classes | host | `src/f/GCEval.f90` |
+| 3 | Symbols fall back to `clojure.core` instead of being referred | temporary | `src/f/Eval.f90` |
+| 4 | `.` reaches a fixed table of host members, not arbitrary classes | host | `src/f/Eval.f90` |
 | 5 | Metadata is a wrapper object, not carried on the value | host | `src/f/GC.f90` |
-| 6 | Syntax-quote expands at eval time, not read time | open | `src/f/GCEval.f90` |
-| 7 | Recursion depth is ~600 frames, against Clojure's ~11,200 | host | `src/f/GCEval.f90` |
-| 8 | Multimethods dispatch on equality, plus a fixed host hierarchy | temporary | `src/f/GCEval.f90` |
-| 9 | Sorted collections are unsorted | temporary | `src/f/GCEval.f90` |
-| 10 | Refs are mutable boxes; dynamic bindings are global | temporary | `src/f/GCEval.f90` |
-| 11 | Transients are the persistent collections | host | `src/f/GCEval.f90` |
-| 12 | Five JVM-only libs are skipped by name, and not vendored | host | `src/f/GCEval.f90` |
+| 6 | Syntax-quote expands at eval time, not read time | open | `src/f/Eval.f90` |
+| 7 | Recursion depth is ~600 frames, against Clojure's ~11,200 | host | `src/f/Eval.f90` |
+| 8 | Multimethods dispatch on equality, plus a fixed host hierarchy | temporary | `src/f/Eval.f90` |
+| 9 | Sorted collections are unsorted | temporary | `src/f/Eval.f90` |
+| 10 | Refs are mutable boxes; dynamic bindings are global | temporary | `src/f/Eval.f90` |
+| 11 | Transients are the persistent collections | host | `src/f/Eval.f90` |
+| 12 | Five JVM-only libs are skipped by name, and not vendored | host | `src/f/Eval.f90` |
 | 13 | Protocol dispatch is uncached | host | `src/f/GC.f90` |
 | 14 | Regex is ICU under java.util.regex's names, ASCII-offset only | host | `src/f/Regex.f90` |
 | 15 | `hash` values are gc_hash's, not the JVM's murmur3 | host | `src/f/GC.f90` |
-| 16 | Names resolve at call time, not while analysing | host | `src/f/GCEval.f90` |
+| 16 | Names resolve at call time, not while analysing | host | `src/f/Eval.f90` |
 
 ---
 
@@ -287,7 +287,7 @@ made). Three real gaps come with it:
 
 **Removal of the ASCII limit**: real UTF-8 decoding in the shim.
 The missing operations: add them to `regex_shim.h`/`.c` and the
-`instance_member` table in `GCEval.f90` as they come up, the same way
+`instance_member` table in `Eval.f90` as they come up, the same way
 every other host member in this file did.
 
 ---

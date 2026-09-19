@@ -115,7 +115,7 @@ what commit, and what is deliberately absent. Read it before touching
 the tree.
 
 **Adding a vendored file can be a breaking change.** core.clj says
-`(load "core_proxy")` and `clotran-gc` skips that by name. An
+`(load "core_proxy")` and `clotran` skips that by name. An
 evaluator that instead relied on the file simply not being there broke
 `defprotocol`, `extend-protocol`, `satisfies?` and `into` the day it
 was vendored -- a red crosscheck from adding files and changing no
@@ -146,9 +146,9 @@ it up.
 
 - `scripts/split-forms <file.clj> [outdir] [start]` -- splits a Clojure
   file into one file per top-level form. `load_file` aborts on its first
-  error, so `clotran-gc core.clj` answers exactly one question; the
+  error, so `clotran core.clj` answers exactly one question; the
   ARGUMENT LIST does not abort, so
-  `./clotran-gc core.clj forms/*.clj` reports every failure in one pass.
+  `./clotran core.clj forms/*.clj` reports every failure in one pass.
   This is how "the wall is form 656" became "5 forms fail and 63 behind
   them already work".
 - `scripts/run-clojure-tests` -- Clojure's own suite, one namespace per

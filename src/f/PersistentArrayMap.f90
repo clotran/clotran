@@ -1,4 +1,4 @@
-! GCMap: the array map, over the GC heap.
+! PersistentArrayMap: the array map, over the GC heap.
 !
 ! Shape, matching GC.f90's comment on OBJ_MAP:
 !
@@ -6,7 +6,7 @@
 !
 ! A flat, linear-scan key/value pair, which is what real Clojure uses
 ! up to 8 entries before promoting to a hash trie. The promotion is
-! GCAssoc's job, over this module and GCHamt; on its own this stays
+! Assoc's job, over this module and PersistentHashMap; on its own this stays
 ! linear at any size, which is correctness-preserving: a linear map
 ! answers exactly the same questions,
 ! just more slowly past 8 entries.
@@ -15,7 +15,7 @@
 ! leave the original untouched. Unlike the refcounted version there is
 ! no per-entry bookkeeping to get right -- the old runs simply become
 ! unreachable when nothing refers to them.
-module GCMap
+module PersistentArrayMap
   use GC
   implicit none
   private
@@ -218,4 +218,4 @@ contains
     out(size(roots) + 1) = v
   end function append_root
 
-end module GCMap
+end module PersistentArrayMap

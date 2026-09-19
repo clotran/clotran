@@ -1,6 +1,6 @@
-! GCReader: text into the GC heap.
+! LispReader: text into the GC heap.
 !
-! The counterpart to GCPrinter.f90.
+! The counterpart to Printer.f90.
 !
 ! Together the two give a ROUND TRIP -- read a form, print it, get the
 ! input back -- which tests the whole layer against real Clojure text
@@ -21,11 +21,11 @@
 ! DEFERRED, and listed rather than silently missing: the discard macro
 ! (#_), sets (#{}), regex literals and auto-gensym. Those are reader MACROS layered on the
 ! core shapes; the shapes are what the data layer needs proving.
-module GCReader
+module LispReader
   use GC
-  use GCList
-  use GCVector
-  use GCAssoc
+  use PersistentList
+  use PersistentVector
+  use Assoc
   use Regex
   use, intrinsic :: ieee_arithmetic
   implicit none
@@ -1242,4 +1242,4 @@ contains
     out(size(roots) + 1) = v
   end function with
 
-end module GCReader
+end module LispReader

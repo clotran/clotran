@@ -3,9 +3,9 @@
 ! version got wrong or could not do: structural sharing surviving
 ! collection, and a vector that stays correct when every allocation
 ! collects (torture), rooted only by the value stack.
-program gc_vector_test
+program persistent_vector_test
   use GC
-  use GCVector
+  use PersistentVector
   implicit none
 
   logical :: all_ok
@@ -194,4 +194,4 @@ contains
     t = x%tag
   end function nth_tag
 
-end program gc_vector_test
+end program persistent_vector_test

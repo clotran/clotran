@@ -58,7 +58,7 @@ each of which has been treated as its own bug:
   call allocates a frame and a map;
 - intermediates live in Fortran locals, so rooting is manual, and it is
   done twice: 1,844 `vs_set`/`vs_get` calls plus `roots(:)` arrays
-  threaded through 49 signatures in GCEval alone. Design B promised
+  threaded through 49 signatures in Eval alone. Design B promised
   rooting by construction. Values escaping into locals is why it did
   not deliver;
 - there are no source positions (they existed only in the evaluator
@@ -85,12 +85,14 @@ of them in the documents. Roughly 11,000 lines of Fortran and half of
 every crosscheck. Moves no scorecard. Removes the "load-bearing
 absence" trap recorded in `src/clj/clojure/PROVENANCE.md`.
 
-Then the `GC` prefix goes. With one evaluator there is nothing to
-distinguish it from: `GCEval.f90` becomes `Eval.f90`, `GCReader`
-becomes `LispReader`, `GCVector` becomes `PersistentVector`, and so on
--- Clojure's own names, as the deleted modules were called. Only the
-collector itself keeps the name, because it IS the GC. The binary is
-`clotran`; `scripts/clotran` wraps it in rlwrap.
+Then the `GC` prefix went (DONE). With one evaluator there is nothing
+to distinguish it from: `GCEval.f90` is `Eval.f90`, `GCReader` is
+`LispReader`, `GCVector` is `PersistentVector`, and so on -- Clojure's
+own names, as the deleted modules were called. Only the collector
+itself keeps the name, because it IS the GC. The binary is `clotran`
+and `scripts/clotran` wraps it in rlwrap. Procedure prefixes (`gce_`,
+`gcv_`, `gcl_`, ...) stay: they are short namespaces, and renaming a
+few thousand call sites buys nothing until step 5 rewrites them anyway.
 
 ### 2. Decide what our test suite is, then derive it
 

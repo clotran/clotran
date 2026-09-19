@@ -3,9 +3,9 @@
 ! what survives crossing it -- a promotion that loses an entry, or
 ! loses a key bound to nil, is the kind of bug that shows up much
 ! later and nowhere near its cause.
-program gc_assoc_test
+program assoc_test
   use GC
-  use GCAssoc
+  use Assoc
   implicit none
 
   logical :: all_ok
@@ -202,4 +202,4 @@ contains
     t = x%tag
   end function get_tag
 
-end program gc_assoc_test
+end program assoc_test

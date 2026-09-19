@@ -103,8 +103,8 @@ points too, which is the confirmation that they are real.
 
 ### B. Native by choice -- cljs writes these in Clojure, we write them in Fortran
 
-`src/f/GCList.f90` (117), `GCVector.f90` (201), `GCMap.f90` (224),
-`GCHamt.f90` (363), `GCAssoc.f90` (178) -- about 1,100 lines standing exactly
+`src/f/PersistentList.f90` (117), `PersistentVector.f90` (201), `PersistentArrayMap.f90` (224),
+`PersistentHashMap.f90` (363), `Assoc.f90` (178) -- about 1,100 lines standing exactly
 where core.cljs has deftypes. Also `OBJ_LAZY`, `OBJ_ATOM`, `OBJ_MULTIFN`,
 `OBJ_NS`, `OBJ_VAR`.
 
@@ -319,7 +319,7 @@ one has to look it up:
 | `java.*`, `clojure.lang.*` | READ-ONLY compatibility, present only because `core.clj` writes it | `java.lang.Double`, `clojure.lang.Util` |
 
 The point is not tidiness. Today a reader cannot tell, from
-`clojure.lang.PersistentVector` appearing in `GCEval.f90`, whether that
+`clojure.lang.PersistentVector` appearing in `Eval.f90`, whether that
 is a seam we are obliged to have or a habit we picked up. Under this
 scheme they are distinguishable by sight, and `fortran.*` is the only
 one that describes THIS host.
@@ -332,7 +332,7 @@ not, because the name is the documentation.
 When this section was written it had none, which was the finding that
 prompted it: the one genuine Fortran interop surface -- native arrays,
 contiguous, column-major, declared kind, the thing the whole project is
-FOR -- lived only in the pre-GC evaluator, since deleted. `GCEval.f90`
+FOR -- lived only in the pre-GC evaluator, since deleted. `Eval.f90`
 mentioned it zero times. It had not survived the GC port, and the only
 copy was in code scheduled for deletion.
 

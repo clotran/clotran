@@ -4,10 +4,10 @@
 ! is a CYCLE, which refcounting structurally cannot collect and which
 ! clotran leaks today for every named fn. Building that cycle and then
 ! watching it go is the correctness half of why the GC exists.
-program gc_env_test
+program env_test
   use GC
-  use GCMap
-  use GCEnv
+  use PersistentArrayMap
+  use Env
   implicit none
 
   logical :: all_ok
@@ -224,4 +224,4 @@ contains
     t = x%tag
   end function outer_tag
 
-end program gc_env_test
+end program env_test

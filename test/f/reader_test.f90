@@ -3,10 +3,10 @@
 ! -- a reader and a printer can only agree if the thing between them
 ! actually holds what it was given, and every structure is exercised
 ! against real Clojure text rather than hand-built in a test.
-program gc_reader_test
+program reader_test
   use GC
-  use GCReader
-  use GCPrinter
+  use LispReader
+  use Printer
   implicit none
 
   logical :: all_ok
@@ -256,4 +256,4 @@ contains
     flush(6)
   end subroutine round
 
-end program gc_reader_test
+end program reader_test

@@ -8,7 +8,7 @@ language implemented in Fortran: the Fortran is the *host*, standing
 where the JVM stands, and the language comes from Clojure's own source.
 
 ```
-$ make && ./clotran
+$ make && scripts/clotran
 user=> (defn greet [who]
   #_=>   (str "hello, " who))
 #'greet
@@ -145,15 +145,16 @@ make FC=flang all test      # just the flang side
 The first build also compiles vendored ICU from source, which takes a
 few minutes once; after that it is cached.
 
-`clotran-gc` is the raw interpreter, a plain stdin/stdout REPL with no
-line editing of its own. `clotran` is what you actually run -- a thin
-launcher (`scripts/clotran`) that loads core.clj and wraps the binary
-in `rlwrap` when installed, for history and arrow-key editing, exactly
-the way real Clojure's own `clj` wraps `clojure`; falls back to the raw
-binary with a note if `rlwrap` isn't found.
+`./clotran` is the interpreter, a plain stdin/stdout REPL with no line
+editing of its own; it loads the files named on its command line first,
+so `./clotran src/clj/clojure/core.clj` is Clojure. `scripts/clotran`
+is the launcher: it hands the binary core.clj and wraps it in `rlwrap`
+when installed, for history and arrow-key editing, exactly the way real
+Clojure's own `clj` wraps `clojure`, and falls back to the raw binary
+with a note if `rlwrap` isn't found.
 
 ```
-./clotran
+scripts/clotran
 ```
 
 ## Why host it on Fortran rather than bridge to it

@@ -77,7 +77,7 @@
                   "(load-file \"" path "\")\n"
                   "(clojure.test/run-tests '" n ")\n")
         proc (p/process {:dir repo :in prog :out :string :err :string}
-                        "./clotran-gc" "src/clj/clojure/core.clj")
+                        "./clotran" "src/clj/clojure/core.clj")
         res  (deref proc timeout-ms ::timeout)]
     (when (= res ::timeout)
       (note "TIMED OUT after" (quot timeout-ms 1000) "s:" n)

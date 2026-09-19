@@ -2,9 +2,9 @@
 ! are persistence (assoc must not disturb the original), dissoc's
 ! swap-with-last, key equality by CONTENT for text, and a map that
 ! stays correct while every allocation collects.
-program gc_map_test
+program persistent_array_map_test
   use GC
-  use GCMap
+  use PersistentArrayMap
   implicit none
 
   logical :: all_ok
@@ -210,4 +210,4 @@ contains
     t = x%tag
   end function get_tag
 
-end program gc_map_test
+end program persistent_array_map_test

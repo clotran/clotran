@@ -3,13 +3,13 @@
 !
 ! Reads a form per line, evaluates, prints. No line editing of its own
 ! -- scripts/clotran's rlwrap trick applies here too if wanted.
-program gc_repl
+program clotran
   use GC
-  use GCReader
-  use GCPrinter
-  use GCEval
-  use GCNamespace
-  use GCVector
+  use LispReader
+  use Printer
+  use Eval
+  use Namespace
+  use PersistentVector
   implicit none
 
   character(len=:), allocatable :: line, pending
@@ -32,7 +32,7 @@ program gc_repl
   ! host.clj leaves clojure.core current, being part of its bootstrap.
 
   ! Any files named on the command line load next, in order, so
-  ! that `clotran-gc some.clj` is how a file gets tried against
+  ! that `clotran some.clj` is how a file gets tried against
   ! this evaluator. Loading real core.clj is the point: the first
   ! error it reports IS the next thing to build.
   do i = 1, command_argument_count()
@@ -197,4 +197,4 @@ contains
     type(gc_value) :: r(0)
   end function no_roots
 
-end program gc_repl
+end program clotran

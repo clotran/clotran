@@ -1,4 +1,4 @@
-! GCHamt: the hash array mapped trie, over the GC heap.
+! PersistentHashMap: the hash array mapped trie, over the GC heap.
 !
 ! What a real Clojure map promotes into past 8 entries. Five bits of
 ! the hash per level, so a node is 32 slots wide and a lookup is at
@@ -13,15 +13,15 @@
 !            a vec run      a child node, one level deeper
 !            OBJ_MAP        a hash-collision bucket
 !
-! Collision buckets reuse GCMap deliberately: a set of keys with the
+! Collision buckets reuse PersistentArrayMap deliberately: a set of keys with the
 ! same 32-bit hash IS a small linear map, and writing a second linear
 ! scan here would be the same code twice. Collisions are rare enough
 ! that the linear cost never matters; correctness under them is what
 ! matters, and check 4 forces the case with deliberately colliding
 ! keys rather than hoping to stumble on one.
-module GCHamt
+module PersistentHashMap
   use GC
-  use GCMap
+  use PersistentArrayMap
   implicit none
   private
 
@@ -357,4 +357,4 @@ contains
     out(size(roots) + 1) = v
   end function with
 
-end module GCHamt
+end module PersistentHashMap

@@ -2,7 +2,7 @@
 ! core.clj's own re-pattern/re-matcher/re-find/re-matches/re-groups/
 ! re-seq compile down to -- Pattern/compile, .matcher, .find, .matches,
 ! .groupCount, .group. See src/c/regex_shim.h for the C side and why it
-! is that shape; GCEval.f90's B_RE_* cases are the only caller.
+! is that shape; Eval.f90's B_RE_* cases are the only caller.
 !
 ! WHY C AT ALL, in a project whose whole rationale is running without
 ! one (README's rationale section, and no bind(c) anywhere else in
@@ -86,7 +86,7 @@ module Regex
 
   ! Handles are OPAQUE C POINTERS, and gc_value has no room for one --
   ! by design, the same reason a namespace or a Var is looked up by
-  ! index rather than held by pointer (GCNamespace.f90). So a handle
+  ! index rather than held by pointer (Namespace.f90). So a handle
   ! lives in this module's own registry, addressed from gc_value by a
   ! plain integer index in i1, exactly like every other native resource
   ! this project keeps outside the heap.

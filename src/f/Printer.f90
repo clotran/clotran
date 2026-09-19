@@ -1,4 +1,4 @@
-! GCPrinter: values in the GC heap, back to text.
+! Printer: values in the GC heap, back to text.
 !
 ! Built and tested standalone before the evaluator, for two reasons
 ! beyond eventually needing it:
@@ -15,12 +15,12 @@
 ! not-readable writes their contents raw. That distinction is real
 ! Clojure's, and getting it wrong is how (println "a\nb") starts
 ! printing quotes.
-module GCPrinter
+module Printer
   use GC
-  use GCList
-  use GCVector
-  use GCAssoc
-  use GCNativeArray
+  use PersistentList
+  use PersistentVector
+  use Assoc
+  use NativeArray
   use, intrinsic :: ieee_arithmetic
   implicit none
   private
@@ -519,4 +519,4 @@ contains
     end select
   end function char_readable
 
-end module GCPrinter
+end module Printer

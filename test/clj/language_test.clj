@@ -271,7 +271,7 @@
 ;; SILENTLY WRONG rather than merely unsupported are 077, which read as
 ;; 77, and .5, which read as 0.5 instead of interning a symbol.
 ;;
-;; The literals that must be REFUSED live in test/f/gc_reader_test.f90:
+;; The literals that must be REFUSED live in test/f/reader_test.f90:
 ;; a reader error aborts this whole file, so they cannot be asserted
 ;; here.
 

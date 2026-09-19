@@ -10,12 +10,12 @@
 ! Every group is run TWICE -- once normally, once with a collection at
 ! every single allocation. The torture pass is the real test; the
 ! normal pass only tells you the answer is right when nothing moves.
-program gc_eval_test
+program eval_test
   use GC
-  use GCReader
-  use GCPrinter
-  use GCEval
-  use GCNativeArray
+  use LispReader
+  use Printer
+  use Eval
+  use NativeArray
   use Regex
   implicit none
 
@@ -477,9 +477,9 @@ contains
     call ev("20m. ", "(nil? nil)", "true")
   end subroutine check_core_builtins
 
-  ! #"..." compiles to a real ICU Pattern at READ time (GCReader's
+  ! #"..." compiles to a real ICU Pattern at READ time (LispReader's
   ! read_regex), so these exercise the reader, the printer, and the six
-  ! interop points GCEval hangs off Pattern/Matcher -- Pattern/compile,
+  ! interop points Eval hangs off Pattern/Matcher -- Pattern/compile,
   ! .matcher, .find, .matches, .groupCount, .group. Real core.clj's own
   ! re-pattern/re-matcher/re-find/re-matches/re-groups/re-seq are
   ! defined in terms of exactly these six (src/clj/clojure/core.clj,
@@ -707,7 +707,7 @@ contains
   ! A native array's buffer lives OUTSIDE the heap -- it has to, since
   ! the point is a contiguous Fortran array at a stable address. So the
   ! collector freeing the object is not enough; the sweep has to tell
-  ! GCNativeArray that the handle died, or the buffer is held for the
+  ! NativeArray that the handle died, or the buffer is held for the
   ! life of the process.
   !
   ! That leak is invisible from Clojure, which is why it is checked
@@ -823,4 +823,4 @@ contains
     call ok("10a. the heap passes its own audit: ", gc_check_heap() == "")
   end subroutine check_heap_sound
 
-end program gc_eval_test
+end program eval_test

@@ -1,4 +1,4 @@
-! GCList: the persistent list, over the GC heap.
+! PersistentList: the persistent list, over the GC heap.
 !
 ! Shape, matching GC.f90's comment on OBJ_CONS:
 !
@@ -14,7 +14,7 @@
 ! more than allocation: `()` must be identical to `()` everywhere, and
 ! an empty list is not nil -- (seq ()) is nil but () itself is a list,
 ! which is why this is a real object and not GCT_NIL.
-module GCList
+module PersistentList
   use GC
   implicit none
   private
@@ -111,4 +111,4 @@ contains
     out = gc_slot(v, 2)
   end function gcl_rest
 
-end module GCList
+end module PersistentList

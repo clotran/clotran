@@ -1,4 +1,4 @@
-! GCVector: the persistent vector, over the GC heap.
+! PersistentVector: the persistent vector, over the GC heap.
 !
 ! Clojure's 32-way branching trie, with every reference a GC handle.
 ! Built and tested on its own first, the way GC.f90 and the value
@@ -21,7 +21,7 @@
 ! the nodes along one path and SHARES every untouched child. That is
 ! what makes a persistent vector cheap, and sharing is exactly what a
 ! tracing collector handles without any bookkeeping at the call site.
-module GCVector
+module PersistentVector
   use GC
   implicit none
   private
@@ -197,4 +197,4 @@ contains
     call gc_set_i2(out, gc_i2(v))
   end function gcv_assoc
 
-end module GCVector
+end module PersistentVector

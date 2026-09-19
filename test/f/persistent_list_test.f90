@@ -2,9 +2,9 @@
 ! cases are the ones a refcounted list makes expensive or unsafe:
 ! two lists sharing a tail, and a long chain rooted only from its head
 ! while every allocation collects.
-program gc_list_test
+program persistent_list_test
   use GC
-  use GCList
+  use PersistentList
   implicit none
 
   logical :: all_ok
@@ -198,4 +198,4 @@ contains
     t = x%tag
   end function first_tag
 
-end program gc_list_test
+end program persistent_list_test

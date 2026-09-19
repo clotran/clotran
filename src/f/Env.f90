@@ -1,4 +1,4 @@
-! GCEnv: the lexical environment, over the GC heap.
+! Env: the lexical environment, over the GC heap.
 !
 ! Shape, matching GC.f90's comment on OBJ_ENV:
 !
@@ -19,9 +19,9 @@
 ! That is deliberate: `def` and `let*` add to the
 ! frame a closure may already be holding, and everything sharing that
 ! frame must see the binding.
-module GCEnv
+module Env
   use GC
-  use GCMap
+  use PersistentArrayMap
   implicit none
   private
 
@@ -135,4 +135,4 @@ contains
     out(size(roots) + 1) = v
   end function with
 
-end module GCEnv
+end module Env

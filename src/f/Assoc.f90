@@ -1,4 +1,4 @@
-! GCAssoc: the map clotran actually uses, over the GC heap.
+! Assoc: the map clotran actually uses, over the GC heap.
 !
 ! A map is an array map up to 8 entries and a hash trie beyond, which
 ! is exactly what real Clojure does (confirmed against the `clojure`
@@ -7,9 +7,9 @@
 ! -- a destructuring form, a metadata map, an options map -- and a
 ! linear scan over 8 pairs beats hashing.
 !
-! This lives in a THIRD module rather than inside GCMap, and that is
-! forced rather than stylistic: GCHamt already uses GCMap for its
-! collision buckets, so GCMap using GCHamt would be a module cycle.
+! This lives in a THIRD module rather than inside PersistentArrayMap, and that is
+! forced rather than stylistic: PersistentHashMap already uses PersistentArrayMap for its
+! collision buckets, so PersistentArrayMap using PersistentHashMap would be a module cycle.
 ! Fortran would reject it, and the arrangement is better anyway --
 ! neither representation knows the other exists, and the promotion
 ! rule is in one readable place.
@@ -19,10 +19,10 @@
 ! that assumed "small implies array map" would be wrong, which is why
 ! every operation here dispatches on the object's kind rather than on
 ! its count.
-module GCAssoc
+module Assoc
   use GC
-  use GCMap
-  use GCHamt
+  use PersistentArrayMap
+  use PersistentHashMap
   implicit none
   private
 
@@ -172,4 +172,4 @@ contains
     out(size(roots) + 1) = v
   end function with
 
-end module GCAssoc
+end module Assoc

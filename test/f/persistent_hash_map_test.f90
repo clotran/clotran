@@ -3,9 +3,9 @@
 ! drift), splitting a leaf when two keys want the same slot, and true
 ! hash collisions, which are forced here with a real colliding pair
 ! rather than hoped for.
-program gc_hamt_test
+program persistent_hash_map_test
   use GC
-  use GCHamt
+  use PersistentHashMap
   implicit none
 
   logical :: all_ok
@@ -255,4 +255,4 @@ contains
     n = x%ival
   end function get_int
 
-end program gc_hamt_test
+end program persistent_hash_map_test

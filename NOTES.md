@@ -347,7 +347,7 @@ evaluates to the keyword of the same name), so the relationships
 between them can live in the same global hierarchy `derive` already
 maintains, and clojure.core's own `isa?`, `parents`, `ancestors` and
 `prefer-method` work on host types unchanged. The host owes only the
-lookup -- today `host_super` in GCEval.f90, which PLAN.md step 3 folds
+lookup -- today `host_super` in Eval.f90, which PLAN.md step 3 folds
 into the one host table.
 
 Dispatch now mirrors `MultiFn.findAndCacheBestMethod`: exact match,
@@ -472,7 +472,7 @@ not compound conditions, whenever an operand has a side effect.
 
 ## Source positions: where a form came from
 
-Built in the pre-GC evaluator and NOT carried into `clotran-gc`, whose
+Built in the pre-GC evaluator and NOT carried into `clotran`, whose
 reader has no positions at all. Kept because PLAN.md step 5 reproduces
 this design on the analysed tree, and the three choices below were
 made once already and should not be re-argued.
@@ -542,13 +542,13 @@ written single-threaded and retrofitted with safepoints is a redesign.
 globals that are really "the current thread's state", and they need to
 become fields of one context type -- cheap now, a rewrite later:
 
-- `GCEval.f90`: `has_error`, `last_error`, `ev_depth`/`ev_limit`,
+- `Eval.f90`: `has_error`, `last_error`, `ev_depth`/`ev_limit`,
   `gensym_id`, `qq_depth`, `reify_id`, `proxy_id`, the type table
   (`types_root`), the `binding` frame stack (`binding_stack_root`),
   the thrown value
 - `GC.f90`: the value stack (`vstack`/`vs_top`) and the mark stack
-- `GCReader.f90`: its error state
-- `GCNamespace.f90`: the current namespace -- this is `*ns*`, which
+- `LispReader.f90`: its error state
+- `Namespace.f90`: the current namespace -- this is `*ns*`, which
   real Clojure makes thread-local
 
 None of this was moved into a context type when the GC evaluator was
@@ -829,7 +829,7 @@ absence for a 1-in-6 bug.
       last. `GC.f90` was built that way, so was the value stack, and so
       is this.
 
-      **`src/f/GCVector.f90`** -- the same 32-way trie as
+      **`src/f/PersistentVector.f90`** -- the same 32-way trie as
       `PersistentVector.f90`, with every reference a GC handle instead
       of a refcounted pointer. `gcv_empty/count/nth/conj/assoc`, path
       copying unchanged, sharing untouched children exactly as before.
@@ -851,7 +851,7 @@ absence for a 1-in-6 bug.
       surviving and then being collected when the frame is left, and
       the torture case above.
 
-      **`src/f/GCList.f90`** -- the persistent list, same treatment.
+      **`src/f/PersistentList.f90`** -- the persistent list, same treatment.
       Count cached on the cell (i1) exactly as `cons_cell` does, so
       `count` stays O(1); the evaluator calls it constantly on argument
       lists. The empty list is a **singleton** registered as a GC
@@ -881,7 +881,7 @@ absence for a 1-in-6 bug.
       widening `obj_node`, or accepting the allocation are all live;
       settle it before porting the reader.
 
-      **`src/f/GCMap.f90`** -- the array map, and `gc_equal` in the
+      **`src/f/PersistentArrayMap.f90`** -- the array map, and `gc_equal` in the
       collector to go with it, mirroring `value_equal` so the two
       representations agree during the migration: same tag and same
       scalar or text content, collections by identity. Deep equality
@@ -905,14 +905,14 @@ absence for a 1-in-6 bug.
       gap, not a behavioural one: a linear map answers the same
       questions, slower.
 
-      **`src/f/GCHamt.f90`** -- the hash trie the map promotes into,
+      **`src/f/PersistentHashMap.f90`** -- the hash trie the map promotes into,
       plus `gc_hash` in the collector, mirroring `PersistentHashMap`'s
       `hash_of`: same mix32, same FNV-1a over the text, same tag mixed
       in so `"a"` and `\a` do not collide. It has to agree with
       `gc_equal` or a trie stores one key twice, so text hashes over
       CONTENT exactly as gc_equal compares content.
 
-      Collision buckets **reuse GCMap**: a set of keys sharing a
+      Collision buckets **reuse PersistentArrayMap**: a set of keys sharing a
       32-bit hash is a small linear map, and a second linear scan here
       would be the same code twice.
 
@@ -927,7 +927,7 @@ absence for a 1-in-6 bug.
       22 checks, both compilers, including 3000 keys across several
       levels of splitting and the torture case.
 
-      **`src/f/GCEnv.f90`** -- the lexical environment: a chain of
+      **`src/f/Env.f90`** -- the lexical environment: a chain of
       frames, each a name -> value map, searched outward. Structure
       unchanged from Env.f90, including that `gce_set` MUTATES the
       frame rather than returning a new one (`def` and `let*` add to a
@@ -956,13 +956,13 @@ absence for a 1-in-6 bug.
       slot objects -- `OBJ_CLOSURE` (params, body, env, clauses; i1 =
       macro?) and `OBJ_ATOM` (value, meta, dyn stack) -- with no logic
       beyond `gc_obj`/`gc_slot`, which `gc_test` check 11 already
-      covers and GCEnv check 5 exercises.
+      covers and Env check 5 exercises.
 
-      **`src/f/GCAssoc.f90`** -- the map clotran actually uses: array
+      **`src/f/Assoc.f90`** -- the map clotran actually uses: array
       map to 8 entries, hash trie beyond, one-way, matching Clojure.
-      It is a THIRD module rather than logic inside GCMap, and that is
-      forced rather than stylistic -- GCHamt already uses GCMap for
-      collision buckets, so GCMap using GCHamt would be a module cycle
+      It is a THIRD module rather than logic inside PersistentArrayMap, and that is
+      forced rather than stylistic -- PersistentHashMap already uses PersistentArrayMap for
+      collision buckets, so PersistentArrayMap using PersistentHashMap would be a module cycle
       Fortran rejects. The arrangement is better anyway: neither
       representation knows the other exists.
 
@@ -991,7 +991,7 @@ absence for a 1-in-6 bug.
       Correct but slightly wasteful; the collapse is where trie
       deletion gets subtle and nothing needs the space yet.
 
-      **`src/f/GCPrinter.f90`** -- values back to text, written before
+      **`src/f/Printer.f90`** -- values back to text, written before
       the switch rather than after, for two reasons beyond eventually
       needing it. It is the first thing that walks EVERY structure in
       the new layer at once, so a representation mistake each module's
@@ -1016,7 +1016,7 @@ absence for a 1-in-6 bug.
       value stack printing correctly after a collection (printing
       allocates as it walks, so the subject has to stay rooted).
 
-      **`src/f/GCReader.f90`** -- text into the heap, and with the
+      **`src/f/LispReader.f90`** -- text into the heap, and with the
       printer a genuine **round trip**: read a form, print it, get the
       input back. That is the strongest test this layer has. A reader
       and a printer can only agree if the thing between them actually
@@ -1047,7 +1047,7 @@ absence for a 1-in-6 bug.
       expansion and auto-gensym. Those are reader macros layered on the
       core shapes, and the shapes are what needed proving.
 
-      **`src/f/GCEval.f90`** -- a core evaluator, and the module that
+      **`src/f/Eval.f90`** -- a core evaluator, and the module that
       answers the question the whole port rests on: **does rooting by
       construction hold up under real evaluation?** Everything before
       it was data structures, where the roots are obvious. An evaluator
@@ -1106,7 +1106,7 @@ absence for a 1-in-6 bug.
         found it the hard way (16g returned nil, 16h `(1 nil nil nil)`)
         before it was put back.
 
-      **Namespaces and Vars** (`src/f/GCNamespace.f90`), which closes
+      **Namespaces and Vars** (`src/f/Namespace.f90`), which closes
       the `def` divergence: `def` now interns in the CURRENT NAMESPACE,
       so `(let [] (def x 1))` defines at the top level exactly as
       Clojure does (check 17b). Symbol resolution is lexical scope
@@ -1126,12 +1126,12 @@ absence for a 1-in-6 bug.
       `gc_init` clears the global-root table, but a module's saved slot
       index survives it. Three separate modules hit this:
 
-      1. GCList's empty-list singleton -- caught by check 4c, fixed by
+      1. PersistentList's empty-list singleton -- caught by check 4c, fixed by
          re-checking the slot.
-      2. GCNamespace's registry -- `gc_global_set` on a stale index is
+      2. Namespace's registry -- `gc_global_set` on a stale index is
          silently a NO-OP (out of range), so the registry was never
          re-registered and every namespace lookup failed.
-      3. GCEval's thrown value -- worse: a stale index that lands back
+      3. Eval's thrown value -- worse: a stale index that lands back
          IN range **overwrites another module's root**. `thrown_root`
          was clobbering the empty-list singleton.
 
@@ -1361,7 +1361,7 @@ absence for a 1-in-6 bug.
 
       ### A host shim, NOT a core library
 
-      `clotran-gc` (`src/f/gc_main.f90`) is a REPL over the new stack,
+      `clotran` (`src/f/main.f90`) is a REPL over the new stack,
       and it loads `src/clj/host.clj` at startup.
 
       That file was briefly a small core -- map, filter, reduce, take,
@@ -1400,7 +1400,7 @@ absence for a 1-in-6 bug.
       evaluator, never by growing host.clj.
       ### Pointing it at the real core.clj
 
-      `clotran-gc some.clj` now loads files named on the command line,
+      `clotran some.clj` now loads files named on the command line,
       so the real core.clj can be tried against this evaluator and the
       first error it reports IS the next thing to build. Two bugs of
       mine had to go first:
@@ -1627,7 +1627,7 @@ absence for a 1-in-6 bug.
 Everything after this step is paid for by the edit-test loop, so make
 the loop cheap before starting on the expensive steps.
 
-- [x] **4a -- DONE.** `scripts/run-clojure-tests` drives `clotran-gc`
+- [x] **4a -- DONE.** `scripts/run-clojure-tests` drives `clotran`
       with core.clj loaded. It did drop hard at first, which was the
       signal being asked for; see "Where we are" for the current numbers.
       Its summary-line parser also had to learn that maps print with
@@ -1682,8 +1682,8 @@ same answer with the bindings in the wrong order.
 
 **The global root table was exactly full.** Eight slots, and eight
 claimed: `thrown`, `global_env`, `gensym` and `binding_stack` in
-GCEval, `registry`, `current` and `ns_var` in GCNamespace, and
-GCList's `empty`. The type table was the ninth, and `gc_global_new`
+Eval, `registry`, `current` and `ns_var` in Namespace, and
+PersistentList's `empty`. The type table was the ninth, and `gc_global_new`
 answered by returning index 0 and shrugging. `gc_global_keep` then
 stored nothing, `gc_root_live` stayed false, and the table was swept on
 the next collection -- so a type defined one moment was "no such class"
@@ -2052,9 +2052,9 @@ Seven sites across three readers:
 `read_map` threads `roots` through every allocation and is the shape the
 other three now copy.
 
-**Why it survived.** `gc_reader_test` already had a torture read test --
+**Why it survived.** `reader_test` already had a torture read test --
 and it reads a flat list of sixty integers, which reaches none of the
-collection literals. `gc_eval_test`'s `ev` turns torture OFF during the
+collection literals. `eval_test`'s `ev` turns torture OFF during the
 read on purpose ("reading and setup are not the subject"). So the one
 place that would have caught this had a hole exactly its shape.
 
@@ -2082,7 +2082,7 @@ the one `./clotran` runs. The capability the whole project is for did
 not survive the GC port, and nothing recorded that.
 
 Worth noting how it stayed invisible: our tests are per-module and
-GCNativeArray did not exist to have one, Clojure's suite never reaches
+NativeArray did not exist to have one, Clojure's suite never reaches
 a Fortran array, and core.clj never calls one. A feature living only in
 the evaluator scheduled for deletion is outside every scorecard here.
 
@@ -2123,7 +2123,7 @@ Clojure's own `aget`/`alength` over these are deliberately NOT done:
 they route through `clojure.lang.RT/alength` and `Reflector/prepRet`,
 which is compatibility rather than interop, and a different job.
 
-**The check that matters** is `28e` in `gc_eval_test`: allocate an
+**The check that matters** is `28e` in `eval_test`: allocate an
 array, collect while it is rooted and confirm the buffer survives, drop
 every reference, collect again and confirm the registry slot is freed.
 A leak here is invisible from Clojure, so it is checked against the

@@ -41,7 +41,7 @@ loads -- `set`, `data`, `edn`, `datafy`, `walk`, `uuid` and `template`
 already do.
 
 Skip them BY NAME, never by absence. core.clj says `(load
-"core_proxy")` and clotran-gc skips that by name. An earlier evaluator
+"core_proxy")` and clotran skips that by name. An earlier evaluator
 relied on the file simply not being there, and vendoring it turned a
 silent skip into a real load that broke `defprotocol`,
 `extend-protocol`, `satisfies?` and `into` -- a red crosscheck from
