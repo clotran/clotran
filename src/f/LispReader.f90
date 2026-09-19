@@ -35,6 +35,23 @@ module LispReader
   logical :: has_error = .false.
 
   public :: gcr_read, gcr_read_all, gcr_error, gcr_has_error
+  public :: gcr_begin_file, gcr_read_next, gcr_position
+
+  ! SOURCE POSITIONS. A list form records where it was read from:
+  ! OBJ_CONS's i2 (free: i1 is the count) holds file-id * 2^26 + the
+  ! 1-based character offset of its opening paren. The analyser copies
+  ! it onto the node, and an error names it. Line and column are
+  ! recovered from the offset by a binary search over line_starts,
+  ! computed once per file by gcr_begin_file -- cheaper than counting
+  ! newlines per form and simpler than threading a line counter
+  ! through every read_* routine. Files are named once, in a small
+  ! table; id 0 is "no file" (the REPL).
+  integer, parameter :: POS_SHIFT = 2**26
+  integer, parameter :: MAX_FILES = 64
+  character(len=512), save :: file_names(MAX_FILES)
+  integer, save :: n_files = 0
+  integer, save :: cur_file = 0
+  integer, allocatable, save :: line_starts(:)
 
 contains
 
@@ -54,6 +71,91 @@ contains
     has_error = .true.
     last_error = msg
   end subroutine fail
+
+  ! Names the file the next gcr_read_next calls read from, and indexes
+  ! its lines. Call once per file, before the first form.
+  subroutine gcr_begin_file(text, name)
+    character(len=*), intent(in) :: text, name
+    integer :: i, n, k
+    cur_file = 0
+    do i = 1, n_files
+       if (trim(file_names(i)) == name) cur_file = i
+    end do
+    if (cur_file == 0 .and. n_files < MAX_FILES) then
+       n_files = n_files + 1
+       file_names(n_files) = name
+       cur_file = n_files
+    end if
+    n = 1
+    do i = 1, len(text)
+       if (text(i:i) == achar(10)) n = n + 1
+    end do
+    if (allocated(line_starts)) deallocate(line_starts)
+    allocate(line_starts(n))
+    line_starts(1) = 1
+    k = 1
+    do i = 1, len(text)
+       if (text(i:i) == achar(10)) then
+          k = k + 1
+          line_starts(k) = i + 1
+       end if
+    end do
+  end subroutine gcr_begin_file
+
+  ! The next form after pos, advancing pos past it; eof when only
+  ! whitespace and comments remain. What Compiler.load does per form:
+  ! read, then evaluate, then read again -- so a form can depend on
+  ! what the one before it changed (DEVIATIONS 1, closed).
+  function gcr_read_next(text, pos, roots, eof) result(v)
+    character(len=*), intent(in) :: text
+    integer, intent(inout) :: pos
+    type(gc_value), intent(in) :: roots(:)
+    logical, intent(out) :: eof
+    type(gc_value) :: v
+    has_error = .false.
+    last_error = ""
+    eof = .false.
+    v = gc_nil()
+    call skip_ignorables(text, pos, roots)
+    if (pos > len(text)) then
+       eof = .true.
+       return
+    end if
+    v = read_form(text, pos, roots)
+  end function gcr_read_next
+
+  ! "file:line:col" for a packed position, or "line:col" with no file.
+  function gcr_position(packed) result(s)
+    integer, intent(in) :: packed
+    character(len=:), allocatable :: s
+    character(len=24) :: lb, cb
+    integer :: fid, off, lo, hi, mid, line, col
+    fid = packed / POS_SHIFT
+    off = mod(packed, POS_SHIFT)
+    line = 1
+    col = off
+    if (allocated(line_starts)) then
+       lo = 1
+       hi = size(line_starts)
+       do while (lo < hi)
+          mid = (lo + hi + 1) / 2
+          if (line_starts(mid) <= off) then
+             lo = mid
+          else
+             hi = mid - 1
+          end if
+       end do
+       line = lo
+       col = off - line_starts(lo) + 1
+    end if
+    write(lb, '(I0)') line
+    write(cb, '(I0)') col
+    if (fid >= 1 .and. fid <= n_files) then
+       s = trim(file_names(fid)) // ":" // trim(lb) // ":" // trim(cb)
+    else
+       s = trim(lb) // ":" // trim(cb)
+    end if
+  end function gcr_position
 
   ! Reads ONE form from text. Trailing text is ignored, which is what
   ! a REPL line wants; a whole-file reader would loop on the position.
@@ -184,8 +286,19 @@ contains
     c = text(pos:pos)
     select case (c)
     case ("(")
-       pos = pos + 1
-       v = read_seq(text, pos, ")", .false., roots)
+       block
+         integer :: start
+         start = pos
+         pos = pos + 1
+         v = read_seq(text, pos, ")", .false., roots)
+         ! the position, on the head cell of a non-empty list only:
+         ! the empty list may be shared
+         if (.not. has_error) then
+            if (gcl_is(v)) then
+               if (gcl_count(v) > 0) call gc_set_i2(v, cur_file * POS_SHIFT + start)
+            end if
+         end if
+       end block
     case ("[")
        pos = pos + 1
        v = read_seq(text, pos, "]", .true., roots)

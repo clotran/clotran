@@ -394,9 +394,22 @@
        call fail("exec: unknown node kind")
     end select
 
+    if (has_error) call note_position(vs_get(base + 1))
     call vs_leave(base)
     ev_depth = ev_depth - 1
   end function exec
+
+  ! Appends "  at file:line:col" to the error once, from the innermost
+  ! node that has a position -- the error propagates outward through
+  ! every enclosing node, and only the first appends.
+  subroutine note_position(nd)
+    type(gc_value), intent(in) :: nd
+    type(gc_value) :: p
+    p = gc_slot(nd, 4)
+    if (p%tag /= GCT_INT) return
+    if (index(last_error, "  at ") > 0) return
+    last_error = last_error // "  at " // gcr_position(int(p%ival, kind=4))
+  end subroutine note_position
 
   recursive function exec_map(kids, frame) result(out)
     type(gc_value), intent(in) :: kids, frame

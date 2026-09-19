@@ -127,7 +127,8 @@ contains
     type(gc_value), intent(in) :: env
     character(len=:), allocatable :: text
     type(gc_value) :: forms, r
-    integer :: u, st, lb, i, fsize, nfail
+    integer :: u, st, lb, i, fsize, pos
+    logical :: eof
     character(len=8) :: envbuf
     logical :: trace
 
@@ -149,39 +150,39 @@ contains
 
     lb = vs_enter(3)
     call vs_set(lb + 1, env)
-    forms = gcr_read_all(text, [vs_get(lb + 1)])
-    if (gcr_has_error()) then
-       print '(A,A,A,A)', "load ", path, ": reader error: ", gcr_error()
-       call vs_leave(lb)
-       return
-    end if
-    call vs_set(lb + 2, forms)
     ! CLOTRAN_LOAD_TRACE=1 names each form before evaluating it. An
     ! error names its own form; a HANG does not, and this is the only
     ! way to see which form never came back.
     call get_environment_variable("CLOTRAN_LOAD_TRACE", envbuf)
     trace = (trim(envbuf) == "1")
 
-    nfail = 0
-    do i = 0, gcv_count(vs_get(lb + 2)) - 1
+    ! One form at a time: read, analyse, evaluate, read the next -- as
+    ! Compiler.load does, so a form sees what the one before it did
+    ! to *ns*, *data-readers* or a ::keyword's namespace.
+    call gcr_begin_file(text, path)
+    pos = 1
+    i = 0
+    do
+       forms = gcr_read_next(text, pos, [vs_get(lb + 1)], eof)
+       if (gcr_has_error()) then
+          print '(A,A,A,A)', "load ", path, ": reader error: ", gcr_error()
+          exit
+       end if
+       if (eof) exit
+       i = i + 1
+       call vs_set(lb + 2, forms)
        if (trace) then
-          print '(A,I0,A,A)', "[", i + 1, "] ", &
-               first_line(gcp_str(gcv_nth(vs_get(lb + 2), i), .true.))
+          print '(A,I0,A,A)', "[", i, "] ", first_line(gcp_str(vs_get(lb + 2), .true.))
           flush(6)
        end if
        call gce_clear_error()
-       ! Analysed, then evaluated -- the two halves Compiler.load does
-       ! per form. Analysis here is macroexpansion and nothing else.
-       r = gce_analyze(gcv_nth(vs_get(lb + 2), i), vs_get(lb + 1))
+       r = gce_analyze(vs_get(lb + 2), vs_get(lb + 1))
        if (.not. gce_has_error()) r = gce_eval(r, vs_get(lb + 1), no_roots())
        call vs_set(lb + 3, r)
        if (gce_has_error()) then
-          nfail = 1
           print '(A,A)', "  ", gce_error()
-          print '(A,A)', "    in: ", &
-               first_line(gcp_str(gcv_nth(vs_get(lb + 2), i), .true.))
-          print '(A,A,A,I0,A,I0,A)', "load ", path, ": stopped at form ", &
-               i + 1, " of ", gcv_count(vs_get(lb + 2)), ""
+          print '(A,A)', "    in: ", first_line(gcp_str(vs_get(lb + 2), .true.))
+          print '(A,A,A,I0)', "load ", path, ": stopped at form ", i
           exit
        end if
     end do

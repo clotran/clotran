@@ -6362,6 +6362,7 @@ contains
          character(len=:), allocatable :: path, text
          type(gc_value) :: forms, genv, f
          integer :: u, st, fsize, j
+         logical :: eof
          out = gc_nil()
          path = text_of(gcv_nth(args, 0))
          open(newunit=u, file=path, access="stream", form="unformatted", &
@@ -6379,19 +6380,22 @@ contains
                genv = gc_nil()
             end if
             call vs_set(base + 2, genv)
-            forms = gcr_read_all(text, [vs_get(base + 1), vs_get(base + 2)])
-            if (gcr_has_error()) then
-               call fail("load-file " // path // ": " // gcr_error())
-            else
+            ! one form at a time, as main.f90's load_file and Compiler.load
+            call gcr_begin_file(text, path)
+            j = 1
+            do
+               forms = gcr_read_next(text, j, [vs_get(base + 1), vs_get(base + 2)], eof)
+               if (gcr_has_error()) then
+                  call fail("load-file " // path // ": " // gcr_error())
+                  exit
+               end if
+               if (eof) exit
                call vs_set(base + 3, forms)
-               do j = 0, gcv_count(vs_get(base + 3)) - 1
-                  f = gce_analyze(gcv_nth(vs_get(base + 3), j), vs_get(base + 2))
-                  if (has_error) exit
-                  out = gce_eval(f, vs_get(base + 2), &
-                       [vs_get(base + 1), vs_get(base + 3)])
-                  if (has_error) exit
-               end do
-            end if
+               f = gce_analyze(vs_get(base + 3), vs_get(base + 2))
+               if (has_error) exit
+               out = gce_eval(f, vs_get(base + 2), [vs_get(base + 1), vs_get(base + 3)])
+               if (has_error) exit
+            end do
          end if
        end block
     case (B_ENDSWITH)

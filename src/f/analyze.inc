@@ -294,7 +294,19 @@
              nd = const_node(vs_get(base + 1), [vs_get(base + 2)])
           else
              nd = analyze_seq(vs_get(base + 1), vs_get(base + 2))
-             if (has_error) call trace_analysis_failure(vs_get(base + 1))
+             if (has_error) then
+                call trace_analysis_failure(vs_get(base + 1))
+                ! an analysis error names the innermost positioned form
+                if (gc_i2(vs_get(base + 1)) /= 0 .and. index(last_error, "  at ") == 0) &
+                     last_error = last_error // "  at " // gcr_position(gc_i2(vs_get(base + 1)))
+             end if
+             ! the source position, if the reader recorded one and the
+             ! node has none of its own yet (a macro's expansion keeps
+             ! the position of the form that was written)
+             if (.not. has_error .and. gc_kind(nd) == OBJ_AST) then
+                if (gc_i2(vs_get(base + 1)) /= 0 .and. tag_of(gc_slot(nd, 4)) == GCT_NIL) &
+                     call gc_set_slot(nd, 4, gc_int(gc_i2(vs_get(base + 1))))
+             end if
           end if
        case (OBJ_VECTOR)
           kids = analyze_all(vs_get(base + 1), vs_get(base + 2), [vs_get(base + 1)])
