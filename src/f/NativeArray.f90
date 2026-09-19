@@ -55,16 +55,53 @@ module NativeArray
      class(*), allocatable :: buf(:)
   end type na_node
 
-  type(na_node), allocatable, save :: reg(:)
+  ! target: a binding takes a POINTER into a buffer for the length of
+  ! one call (gcna_real8_ptr); claim() must not reallocate `reg` while
+  ! such a pointer is live, and it cannot, since the routine on the
+  ! other end allocates no clotran arrays.
+  type(na_node), allocatable, save, target :: reg(:)
   integer, save :: reg_used = 0
 
   public :: gcna_new, gcna_release, gcna_reset, gcna_is, gcna_kind, gcna_rank, &
        gcna_extents, gcna_lows, gcna_total, gcna_index, &
        gcna_get_real, gcna_get_int, gcna_get_logical, &
        gcna_set_real, gcna_set_int, gcna_set_logical, gcna_elem_string, &
-       gcna_live_count, gcna_dgemm
+       gcna_live_count, gcna_dgemm, gcna_real8_ptr, gcna_int4_ptr
 
 contains
+
+  ! A contiguous pointer to a real8 buffer, or ok = false. This is how
+  ! a binding hands a clotran array to a routine declared over `x(*)`
+  ! or `x(3,*)`: sequence association over the pointer, no copy.
+  subroutine gcna_real8_ptr(handle, p, ok)
+    integer, intent(in) :: handle
+    real(dp), pointer, contiguous, intent(out) :: p(:)
+    logical, intent(out) :: ok
+    ok = .false.
+    p => null()
+    if (.not. gcna_is(handle)) return
+    if (.not. allocated(reg(handle)%buf)) return
+    select type (b => reg(handle)%buf)
+    type is (real(dp))
+       p => b
+       ok = .true.
+    end select
+  end subroutine gcna_real8_ptr
+
+  subroutine gcna_int4_ptr(handle, p, ok)
+    integer, intent(in) :: handle
+    integer, pointer, contiguous, intent(out) :: p(:)
+    logical, intent(out) :: ok
+    ok = .false.
+    p => null()
+    if (.not. gcna_is(handle)) return
+    if (.not. allocated(reg(handle)%buf)) return
+    select type (b => reg(handle)%buf)
+    type is (integer(4))
+       p => b
+       ok = .true.
+    end select
+  end subroutine gcna_int4_ptr
 
   ! C = A x B through the reference BLAS, the first Fortran routine
   ! clotran calls. The three buffers are `real(dp)` here and go to

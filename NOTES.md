@@ -2360,3 +2360,47 @@ and the next root, which is the one condition that makes this safe.
 
 Both cases now stay at the 152 MB the loaded core.clj occupies. That
 baseline is stage 3's business.
+## ChemSol: main.f90 as a pipeline
+
+The goal NOTES opened with -- `(-> mol readopt dg-ld solvout)` calling
+real ChemSol code -- runs, and its output is the original program's
+byte for byte on the three reference inputs (`scripts/chemsol-check`).
+`examples/chemsol.clj` is `main.f90` rewritten; the library is vendored
+untouched.
+
+**The binding.** `ChemSolBind.f90` holds one record, `cs_args`, with a
+field per argument of `readopt`, `dg_ld` and `solvout`, named as the
+routines name them. `Eval.f90` fills it from a map (`cs_from_map`),
+calls the routine, and assoc's the written scalars back (`cs_to_map`).
+Arrays never leave the registry: `gcna_real8_ptr` hands the binding a
+contiguous pointer into the buffer and the routine's `x(*)` or
+`x(3,*)` dummy takes it by sequence association, so what `readopt`
+writes into `rpi` is what `dg_ld` reads a call later, and what the
+driver can `aget` afterwards. Nothing is copied at any point.
+
+**What the library dictated.** Three things a generator will have to be
+told per routine, found by running rather than reading:
+
+1. `readopt` reads from TWO units, and one of them is the .cs input
+   itself -- the optional `rp` block at its end -- at whatever position
+   main.f90's own reads had left it. The binding opens unit 45 on the
+   input and skips the lines the driver consumed (`:input-skip`).
+   Without that the first run died with an EOF on `fort.45`.
+2. `dg_ld` has 400 MB of fixed-size locals. `size build/chemsol.o` went
+   from 53 KB of data to 411 MB the moment `-frecursive` came off, and
+   the SIGILL (exit 132) on the first call went with it. The original
+   program never had the flag; the Makefile rule for `chemsol.f90`
+   filters it out, and only there.
+3. `ran2` keeps its seed in module variables. A second calculation in
+   one process gets the continuation of the sequence, not a fresh one.
+   The check runs one process per input.
+
+**What the driver had to reproduce.** Formatted I/O is most of it:
+`(a13)` for the name, `(17x,f10.4)` for the pcm charges, `(f9.2)` in
+the header, and the blank lines Fortran's `/` edit descriptors emit.
+`format` with `%9.2f` matches; the rest is `subs` and padding. The
+charge-consistency and atom-type checks are two small functions.
+
+**What did not need doing.** No clotran bug was hit. The one addition
+to the host is `clotran-slurp`, since core.clj's `slurp` is written
+over `java.io`.

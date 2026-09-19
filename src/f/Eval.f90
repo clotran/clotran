@@ -53,6 +53,7 @@ module Eval
   use Namespace
   use Printer
   use NativeArray
+  use ChemSolBind
   use Regex
   use LispReader
   implicit none
@@ -162,6 +163,7 @@ module Eval
   integer, parameter :: B_DGEMM = 273
   integer, parameter :: B_STACKTRACE = 274, B_STE_CLASS = 275, B_STE_METHOD = 276, &
        B_STE_FILE = 277, B_STE_LINE = 278
+  integer, parameter :: B_SLURP = 279, B_CS_ENTROPY = 280, B_CS_READOPT = 281, B_CS_DGLD = 282, B_CS_SOLVOUT = 283
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -488,7 +490,16 @@ contains
       call bind_builtin(vs_get(base + 3), "array-kind", B_ARRAY_KIND)
       call bind_builtin(vs_get(base + 3), "array-shape", B_ARRAY_SHAPE)
       call bind_builtin(vs_get(base + 3), "dgemm", B_DGEMM)
+      ! ChemSol (src/f/chemsol, src/f/ChemSolBind.f90): the routines
+      ! main.f90 calls, each taking and answering a map.
+      call bind_builtin(vs_get(base + 3), "chemsol-entropy", B_CS_ENTROPY)
+      call bind_builtin(vs_get(base + 3), "chemsol-readopt", B_CS_READOPT)
+      call bind_builtin(vs_get(base + 3), "chemsol-dg-ld", B_CS_DGLD)
+      call bind_builtin(vs_get(base + 3), "chemsol-solvout", B_CS_SOLVOUT)
     end block
+    ! A whole file as a string. core.clj's slurp is written over
+    ! java.io, which is not here; this is the host's reader for it.
+    call bind_builtin(core, "clotran-slurp", B_SLURP)
     call bind_builtin(core, "count", B_COUNT)
     call bind_builtin(core, "first", B_FIRST)
     call bind_builtin(core, "rest", B_REST)
@@ -6242,6 +6253,30 @@ contains
          end if
        end block
 
+    case (B_SLURP)
+       block
+         character(len=:), allocatable :: path, text
+         integer :: u, st, fsize
+         path = text_of(gcv_nth(args, 0))
+         open(newunit=u, file=path, access="stream", form="unformatted", &
+              status="old", action="read", iostat=st)
+         if (st /= 0) then
+            call fail_as("java.io.FileNotFoundException", path // " (No such file or directory)", [vs_get(base + 1)])
+         else
+            inquire(unit=u, size=fsize)
+            allocate(character(len=fsize) :: text)
+            if (fsize > 0) read(u, iostat=st) text
+            close(u)
+            out = gc_str(text, [vs_get(base + 1)])
+         end if
+       end block
+
+    case (B_CS_ENTROPY)
+       out = gc_real(csb_entropy(num_dbl(strip_meta(gcv_nth(args, 0)))))
+
+    case (B_CS_READOPT, B_CS_DGLD, B_CS_SOLVOUT)
+       out = chemsol_call(id, gcv_nth(args, 0), gcv_nth(args, 1), vs_get(base + 1))
+
     case (B_ALENGTH)
        ! Clojure's alength on a multi-dimensional array is the
        ! OUTER length -- (alength (make-array Integer/TYPE 2 3)) is
@@ -10367,6 +10402,218 @@ contains
     sl = index(s, "/")
     if (sl > 1 .and. sl < len(s)) s = s(sl+1:)
   end function bare_name
+
+  ! --- ChemSol: a map in, the routine, a map out -------------------------
+  !
+  ! (fortran/chemsol-readopt m "vdw.par"), (fortran/chemsol-dg-ld m atoms)
+  ! and (fortran/chemsol-solvout m). The map's keys are the routines'
+  ! own argument names as keywords -- :iterld, :n-reg1, :xw -- with
+  ! underscores as hyphens. Scalars are read from the map and, for the
+  ! ones a routine writes, assoc'd back; arrays are clotran arrays whose
+  ! buffers the routine writes in place, so they need no repacking.
+  recursive function chemsol_call(id, m0, extra, roots) result(out)
+    integer, intent(in) :: id
+    type(gc_value), intent(in) :: m0, extra, roots
+    type(gc_value) :: out, m
+    type(cs_args) :: a
+    character(len=:), allocatable :: err
+    character(len=8), allocatable :: atom(:)
+    integer :: base, i, n
+
+    out = gc_nil()
+    m = strip_meta(m0)
+    if (.not. gca_is(m)) then
+       call fail("chemsol: needs a map")
+       return
+    end if
+    base = vs_enter(2)
+    call vs_set(base + 1, m)
+    if (.not. cs_from_map(vs_get(base + 1), a)) then
+       call vs_leave(base)
+       return
+    end if
+    err = ""
+    select case (id)
+    case (B_CS_READOPT)
+       call csb_readopt(a, text_of(extra), err)
+    case (B_CS_DGLD)
+       ! the atom names, as ChemSol's character(8)
+       if (.not. gcv_is(strip_meta(extra))) then
+          call fail("chemsol-dg-ld: needs a vector of atom names")
+          call vs_leave(base)
+          return
+       end if
+       n = gcv_count(strip_meta(extra))
+       allocate(atom(max(n, 1)))
+       atom = ""
+       do i = 1, n
+          atom(i) = text_of(gcv_nth(strip_meta(extra), i - 1))
+       end do
+       call csb_dg_ld(a, atom, err)
+    case (B_CS_SOLVOUT)
+       call csb_solvout(a)
+    end select
+    if (len(err) > 0) then
+       call fail(err)
+       call vs_leave(base)
+       return
+    end if
+    out = cs_to_map(vs_get(base + 1), a, roots)
+    call vs_leave(base)
+  end function chemsol_call
+
+  ! One scalar or array out of the map, by the routine's name.
+  function cs_key(name, roots) result(k)
+    character(len=*), intent(in) :: name
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: k
+    character(len=len(name)) :: t
+    integer :: i
+    t = name
+    do i = 1, len(t)
+       if (t(i:i) == "_") t(i:i) = "-"
+    end do
+    k = gc_key(t, roots)
+  end function cs_key
+
+  function cs_real(m, name, dflt) result(d)
+    type(gc_value), intent(in) :: m
+    character(len=*), intent(in) :: name
+    real(gc_dp), intent(in) :: dflt
+    real(gc_dp) :: d
+    type(gc_value) :: v
+    v = strip_meta(gca_get(m, cs_key(name, [m])))
+    d = dflt
+    if (v%tag == GCT_INT .or. v%tag == GCT_REAL .or. v%tag == GCT_RATIO) d = num_dbl(v)
+  end function cs_real
+
+  function cs_int(m, name, dflt) result(i)
+    type(gc_value), intent(in) :: m
+    character(len=*), intent(in) :: name
+    integer, intent(in) :: dflt
+    integer :: i
+    type(gc_value) :: v
+    v = strip_meta(gca_get(m, cs_key(name, [m])))
+    i = dflt
+    if (v%tag == GCT_INT) i = int(v%ival, kind=4)
+  end function cs_int
+
+  ! The handle of the array under `name`, checked for kind, or 0 with a
+  ! failure raised. A missing key is 0 without failure: the binding
+  ! decides which arrays each routine needs.
+  function cs_array(m, name, kind_name) result(h)
+    type(gc_value), intent(in) :: m
+    character(len=*), intent(in) :: name, kind_name
+    integer :: h
+    type(gc_value) :: v
+    h = 0
+    v = strip_meta(gca_get(m, cs_key(name, [m])))
+    if (v%tag == GCT_NIL) return
+    if (gc_kind(v) /= OBJ_ARRAY) then
+       call fail("chemsol: :" // name // " is not an array")
+       return
+    end if
+    if (gc_i2(v) /= -1) then
+       call fail("chemsol: :" // name // " is a slice; pass a whole array")
+       return
+    end if
+    if (gcna_kind(gc_i1(v)) /= kind_name) then
+       call fail("chemsol: :" // name // " must be a " // kind_name // " array")
+       return
+    end if
+    h = gc_i1(v)
+  end function cs_array
+
+  logical function cs_from_map(m, a)
+    type(gc_value), intent(in) :: m
+    type(cs_args), intent(out) :: a
+    type(gc_value) :: v
+    a%iterld = cs_int(m, "iterld", 0)
+    a%ndxp = cs_int(m, "ndxp", 0)
+    a%iprint = cs_int(m, "iprint", 0)
+    a%n_reg1 = cs_int(m, "n_reg1", 0)
+    a%itl = cs_int(m, "itl", 399)
+    a%clgvn = cs_real(m, "clgvn", 0.0_gc_dp)
+    a%slgvn = cs_real(m, "slgvn", 0.0_gc_dp)
+    a%tds0 = cs_real(m, "tds0", 0.0_gc_dp)
+    a%vdwsl = cs_real(m, "vdwsl", 0.0_gc_dp)
+    a%phobsl = cs_real(m, "phobsl", 0.0_gc_dp)
+    a%ephil1 = cs_real(m, "ephil1", 0.0_gc_dp)
+    a%ephil2 = cs_real(m, "ephil2", 0.0_gc_dp)
+    a%rzcut = cs_real(m, "rzcut", 0.0_gc_dp)
+    a%rg_reg1 = cs_real(m, "rg_reg1", 0.0_gc_dp)
+    a%rg = cs_real(m, "rg", 0.0_gc_dp)
+    a%rg_inner = cs_real(m, "rg_inner", 0.0_gc_dp)
+    a%rgim = cs_real(m, "rgim", 0.0_gc_dp)
+    a%drg = cs_real(m, "drg", 0.0_gc_dp)
+    a%drg_inner = cs_real(m, "drg_inner", 0.0_gc_dp)
+    a%rdcutl = cs_real(m, "rdcutl", 0.0_gc_dp)
+    a%out_cut = cs_real(m, "out_cut", 0.0_gc_dp)
+    a%evqdq = cs_real(m, "evqdq", 0.0_gc_dp)
+    a%elgwa = cs_real(m, "elgwa", 0.0_gc_dp)
+    a%evdw = cs_real(m, "evdw", 0.0_gc_dp)
+    a%elgvn = cs_real(m, "elgvn", 0.0_gc_dp)
+    a%ephob = cs_real(m, "ephob", 0.0_gc_dp)
+    a%etds = cs_real(m, "etds", 0.0_gc_dp)
+    a%ebw = cs_real(m, "ebw", 0.0_gc_dp)
+    a%vdwc6 = cs_array(m, "vdwc6", "real8")
+    a%dxp0 = cs_array(m, "dxp0", "real8")
+    a%rp = cs_array(m, "rp", "real8")
+    a%rpi = cs_array(m, "rpi", "real8")
+    a%pcenter = cs_array(m, "pcenter", "real8")
+    a%xw = cs_array(m, "xw", "real8")
+    a%q = cs_array(m, "q", "real8")
+    a%q_gas = cs_array(m, "q_gas", "real8")
+    a%q_mp2 = cs_array(m, "q_mp2", "real8")
+    a%iacw = cs_array(m, "iacw", "int4")
+    v = strip_meta(gca_get(m, cs_key("do_gas", [m])))
+    a%do_gas = truthy(v)
+    v = strip_meta(gca_get(m, cs_key("molname", [m])))
+    if (v%tag == GCT_STR) a%molname = gc_ref_text(v%ref)
+    v = strip_meta(gca_get(m, cs_key("ssname", [m])))
+    if (v%tag == GCT_STR) a%ssname = gc_ref_text(v%ref)
+    v = strip_meta(gca_get(m, cs_key("input_file", [m])))
+    if (v%tag == GCT_STR) a%input_file = gc_ref_text(v%ref)
+    a%input_skip = cs_int(m, "input_skip", 0)
+    cs_from_map = .not. has_error
+  end function cs_from_map
+
+  ! The scalars a routine may have written, assoc'd back over the map.
+  function cs_to_map(m, a, roots) result(out)
+    type(gc_value), intent(in) :: m, roots
+    type(cs_args), intent(in) :: a
+    type(gc_value) :: out
+    integer :: base
+    base = vs_enter(1)
+    call vs_set(base + 1, m)
+    call put_int("iterld", a%iterld);   call put_int("ndxp", a%ndxp)
+    call put_real("clgvn", a%clgvn);   call put_real("slgvn", a%slgvn);   call put_real("tds0", a%tds0)
+    call put_real("vdwsl", a%vdwsl);   call put_real("phobsl", a%phobsl); call put_real("ephil1", a%ephil1)
+    call put_real("ephil2", a%ephil2); call put_real("rzcut", a%rzcut);   call put_real("rg_reg1", a%rg_reg1)
+    call put_real("rg", a%rg);         call put_real("rg_inner", a%rg_inner); call put_real("rgim", a%rgim)
+    call put_real("evqdq", a%evqdq);   call put_real("elgwa", a%elgwa);   call put_real("evdw", a%evdw)
+    call put_real("elgvn", a%elgvn);   call put_real("ephob", a%ephob);   call put_real("etds", a%etds)
+    call put_real("ebw", a%ebw)
+    out = vs_get(base + 1)
+    call vs_leave(base)
+  contains
+    subroutine put_real(name, d)
+      character(len=*), intent(in) :: name
+      real(gc_dp), intent(in) :: d
+      type(gc_value) :: k, nm
+      k = cs_key(name, [roots, vs_get(base + 1)])
+      nm = gca_assoc(vs_get(base + 1), k, gc_real(d), [roots, vs_get(base + 1), k])
+      call vs_set(base + 1, nm)
+    end subroutine put_real
+    subroutine put_int(name, i)
+      character(len=*), intent(in) :: name
+      integer, intent(in) :: i
+      type(gc_value) :: k, nm
+      k = cs_key(name, [roots, vs_get(base + 1)])
+      nm = gca_assoc(vs_get(base + 1), k, gc_int(i), [roots, vs_get(base + 1), k])
+      call vs_set(base + 1, nm)
+    end subroutine put_int
+  end function cs_to_map
 
   ! Each form evaluated, in order, into a vector of values. For the two
   ! bridges (eval_dot, eval_new), whose forms are (quote v).
