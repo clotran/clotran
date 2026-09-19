@@ -62,9 +62,45 @@ module NativeArray
        gcna_extents, gcna_lows, gcna_total, gcna_index, &
        gcna_get_real, gcna_get_int, gcna_get_logical, &
        gcna_set_real, gcna_set_int, gcna_set_logical, gcna_elem_string, &
-       gcna_live_count
+       gcna_live_count, gcna_dgemm
 
 contains
+
+  ! C = A x B through the reference BLAS, the first Fortran routine
+  ! clotran calls. The three buffers are `real(dp)` here and go to
+  ! DGEMM as the `A(LDA,*)` it declares -- sequence association over a
+  ! contiguous buffer, no copy, no descriptor. The caller has checked
+  ! the kinds and the shapes; this only refuses what would corrupt
+  ! memory, since xerbla would STOP the process.
+  subroutine gcna_dgemm(ha, hb, hc, m, n, k, ok)
+    integer, intent(in) :: ha, hb, hc, m, n, k
+    logical, intent(out) :: ok
+    interface
+       subroutine dgemm(transa, transb, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc)
+         import :: dp
+         character, intent(in) :: transa, transb
+         integer, intent(in) :: m, n, k, lda, ldb, ldc
+         real(dp), intent(in) :: alpha, beta
+         real(dp), intent(in) :: a(lda, *), b(ldb, *)
+         real(dp), intent(inout) :: c(ldc, *)
+       end subroutine dgemm
+    end interface
+    ok = .false.
+    if (.not. (gcna_is(ha) .and. gcna_is(hb) .and. gcna_is(hc))) return
+    if (m < 0 .or. n < 0 .or. k < 0) return
+    if (size(reg(ha)%buf) < m * k .or. size(reg(hb)%buf) < k * n .or. size(reg(hc)%buf) < m * n) return
+    select type (a => reg(ha)%buf)
+    type is (real(dp))
+       select type (b => reg(hb)%buf)
+       type is (real(dp))
+          select type (c => reg(hc)%buf)
+          type is (real(dp))
+             call dgemm('N', 'N', m, n, k, 1.0_dp, a, max(1, m), b, max(1, k), 0.0_dp, c, max(1, m))
+             ok = .true.
+          end select
+       end select
+    end select
+  end subroutine gcna_dgemm
 
   ! Claims a registry slot and allocates the buffer. Returns the
   ! HANDLE, or 0 with err set.

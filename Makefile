@@ -142,8 +142,14 @@ $(B)/LispReader.o: $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/
 $(B)/Eval.o: $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/Env.o \
 	$(B)/Namespace.o $(B)/Printer.o $(B)/Regex.o $(B)/NativeArray.o $(S)/analyze.inc $(S)/exec.inc
 
+# The reference BLAS (src/f/blas/PROVENANCE.md): F77 fixed form, built
+# by the same compiler, linked wherever NativeArray is.
+blas-objects = $(B)/dgemm.o $(B)/lsame.o $(B)/xerbla.o
+$(B)/%.o: $(S)/blas/%.f | $(B)
+	$(FC) $(FCFLAGS) -c $< -o $@
+
 data-objects = $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(B)/Assoc.o \
-	$(B)/PersistentList.o $(B)/PersistentVector.o $(B)/NativeArray.o $(B)/Printer.o
+	$(B)/PersistentList.o $(B)/PersistentVector.o $(B)/NativeArray.o $(B)/Printer.o $(blas-objects)
 reader-objects = $(B)/LispReader.o $(B)/Regex.o $(B)/regex_shim.o
 eval-objects = $(data-objects) $(B)/Env.o $(B)/Namespace.o $(reader-objects) $(B)/Eval.o
 LINK_ICU = $(ICU_LIBS) $(LIBCXX) -lpthread

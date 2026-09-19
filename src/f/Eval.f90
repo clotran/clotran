@@ -159,6 +159,7 @@ module Eval
   integer, parameter :: B_SETVALIDATOR = 268, B_GETVALIDATOR = 269
   integer, parameter :: B_RTPRINT = 270
   integer, parameter :: B_NANOTIME = 271, B_MILLIS = 272
+  integer, parameter :: B_DGEMM = 273
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -354,6 +355,7 @@ contains
       call bind_builtin(vs_get(base + 3), "alength", B_ALENGTH)
       call bind_builtin(vs_get(base + 3), "array-kind", B_ARRAY_KIND)
       call bind_builtin(vs_get(base + 3), "array-shape", B_ARRAY_SHAPE)
+      call bind_builtin(vs_get(base + 3), "dgemm", B_DGEMM)
     end block
     call bind_builtin(core, "count", B_COUNT)
     call bind_builtin(core, "first", B_FIRST)
@@ -6042,6 +6044,54 @@ contains
          out = gc_obj(OBJ_ARRAY, [run], [vs_get(base + 1), run])
          call gc_set_i1(out, h)
          call gc_set_i2(out, -1) ! owns the handle -- not a slice
+       end block
+
+    case (B_DGEMM)
+       ! (fortran/dgemm a b) -- a new real8 array, a times b. The first
+       ! Fortran library routine called from clotran (PLAN.md step 6):
+       ! the buffers of a and b go to the reference DGEMM exactly as
+       ! Fortran declares them, and the product comes back in a buffer
+       ! this side allocated. Whole arrays only -- a slice is strided
+       ! and would be copied, which is the one thing this must not do.
+       block
+         type(gc_value) :: a0, b0
+         integer, allocatable :: ea(:), eb(:)
+         integer :: h, m, n, k
+         logical :: ok
+         character(len=:), allocatable :: err
+         a0 = strip_meta(gcv_nth(args, 0))
+         b0 = strip_meta(gcv_nth(args, 1))
+         if (gc_kind(a0) /= OBJ_ARRAY .or. gc_kind(b0) /= OBJ_ARRAY) then
+            call fail("dgemm: needs two arrays")
+         else if (gc_i2(a0) /= -1 .or. gc_i2(b0) /= -1) then
+            call fail("dgemm: a slice is not contiguous; pass whole arrays")
+         else if (gcna_kind(gc_i1(a0)) /= "real8" .or. gcna_kind(gc_i1(b0)) /= "real8") then
+            call fail("dgemm: needs real8 arrays")
+         else
+            ea = gcna_extents(gc_i1(a0))
+            eb = gcna_extents(gc_i1(b0))
+            if (size(ea) /= 2 .or. size(eb) /= 2) then
+               call fail("dgemm: needs rank-2 arrays")
+            else if (ea(2) /= eb(1)) then
+               call fail("dgemm: inner dimensions differ")
+            else
+               m = ea(1); k = ea(2); n = eb(2)
+               h = gcna_new("real8", [m, n], [0, 0], err)
+               if (h == 0) then
+                  call fail(err)
+               else
+                  call gcna_dgemm(gc_i1(a0), gc_i1(b0), h, m, n, k, ok)
+                  if (.not. ok) then
+                     call gcna_release(h)
+                     call fail("dgemm: refused")
+                  else
+                     out = gc_obj(OBJ_ARRAY, [gc_nil()], [vs_get(base + 1)])
+                     call gc_set_i1(out, h)
+                     call gc_set_i2(out, -1)
+                  end if
+               end if
+            end if
+         end if
        end block
 
     case (B_ALENGTH)
