@@ -23,8 +23,43 @@ plan's decision records that still hold are kept at the bottom.
 4. **Eventually a JIT**, which is also what would let clotran be
    transpiled to Fortran.
 
-Every item below is weighed against those four, not against a count
-from Clojure's test suite. The suite is a measure, not the work queue;
+## Design principles
+
+**A language for mathematicians and physical scientists, not computer
+scientists.** What makes Fortran a scientist's language is that you
+write the formula down and it translates. clotran keeps that and aims
+at the niche GNU Octave and Julia occupy, with the most modern
+language ideas it can carry -- Clojure's -- underneath. Nothing from
+computer science should leak into what a user has to think about: not
+floats versus integers, not the optimisation of a matrix, not a kind
+name. Consequences, each of which is a decision already made or a
+constraint on ones to come:
+
+- **Mathematical consistency over machine convenience.** An integer
+  that silently wraps at 2^63 (DEVIATIONS 26) is the opposite of this
+  spirit; the answer is Clojure's own: exact arithmetic promotes to a
+  bignum, `1N` and `1M` are real types (DEVIATIONS 30), and `(/ 1 3)`
+  is 1/3. A numeric tower with BigInt and BigDecimal is therefore
+  language work, not a nicety.
+- **Kinds are inferred, never named.** `(fortran/make-array "real8" 2
+  3)` asks the user for a Fortran kind. The user should write a matrix
+  and get one; the representation (real(8), integer(8), complex(8),
+  column-major, contiguous) is the host's business and the binding
+  generator's. The `fortran.*` vocabulary stays for the host boundary
+  and does not become the user's vocabulary.
+- **Linear algebra and element-wise operations are first-class**, the
+  way whole-array syntax is in Fortran, and the way they are in Octave
+  and Julia. This is what step 6 (dgemm) is the first brick of, and
+  what the array representation is kept honest for.
+- **Accuracy is measured, not assumed.** Printing a double is the
+  shortest text that reads back as itself (DEVIATIONS 27 is the
+  one exception, two subnormals); comparisons and hashes follow
+  equality; the oracle checks values against real Clojure. When a
+  numeric answer differs from Clojure's by design, it is a ledger
+  entry with the mathematical reason.
+
+Every item below is weighed against the four goals and this spirit,
+not against a count from Clojure's test suite. The suite is a measure, not the work queue;
 using it as the work queue is how two days produced 2,810 lines of
 JVM-shaped `case` arms in one file.
 
