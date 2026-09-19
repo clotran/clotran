@@ -1484,3 +1484,10 @@
 
 ;; nor with each other
 (= (count (set (map hash (range 20)))) 20)
+
+;; the clock exists (ClojureScript has system-time)
+(pos? (System/nanoTime))
+
+(pos? (System/currentTimeMillis))
+
+(number? (read-string (re-find #"[0-9.]+" (with-out-str (time nil)))))

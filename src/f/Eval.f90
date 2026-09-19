@@ -158,6 +158,7 @@ module Eval
   integer, parameter :: B_LATCHDOWN = 266, B_LATCHCOUNT = 267
   integer, parameter :: B_SETVALIDATOR = 268, B_GETVALIDATOR = 269
   integer, parameter :: B_RTPRINT = 270
+  integer, parameter :: B_NANOTIME = 271, B_MILLIS = 272
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -3927,6 +3928,14 @@ contains
     else if (cls == "System" .or. cls == "java.lang.System") then
        if (mname == "getProperty") then
           out = native(B_GETPROP, "clotran-get-property", [roots]); return
+       end if
+       ! The clock, so `time` works. ClojureScript has system-time, so
+       ! this is language, not JVM leakage.
+       if (mname == "nanoTime") then
+          out = native(B_NANOTIME, "clotran-nano-time", [roots]); return
+       end if
+       if (mname == "currentTimeMillis") then
+          out = native(B_MILLIS, "clotran-current-time-millis", [roots]); return
        end if
     else if (cls == "clojure.lang.Numbers") then
        select case (mname)
@@ -9209,6 +9218,18 @@ contains
        end if
     case (B_TOSTRING)
        out = gc_str(to_string_text(gcv_nth(args, 0)), [vs_get(base + 1)])
+    case (B_NANOTIME, B_MILLIS)
+       block
+         integer(8) :: c, r
+         real(gc_dp) :: secs
+         call system_clock(c, r)
+         secs = real(c, gc_dp) / real(r, gc_dp)
+         if (id == B_NANOTIME) then
+            out = gc_int(int(secs * 1.0d9, 8))
+         else
+            out = gc_int(int(secs * 1.0d3, 8))
+         end if
+       end block
     case (B_GETPROP)
        ! The host describing itself. Only the properties core.clj
        ! actually reads; anything else is nil, which is what
