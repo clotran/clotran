@@ -157,6 +157,7 @@ module GCEval
   integer, parameter :: B_AGENTDISPATCH = 265
   integer, parameter :: B_LATCHDOWN = 266, B_LATCHCOUNT = 267
   integer, parameter :: B_SETVALIDATOR = 268, B_GETVALIDATOR = 269
+  integer, parameter :: B_RTPRINT = 270
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -3433,6 +3434,35 @@ contains
        thunk = gca_empty([vs_get(base + 1)])
        call vs_set(base + 3, thunk)
        out = gc_obj(OBJ_ATOM, [vs_get(base + 3), gc_nil()], [vs_get(base + 3)])
+    else if (cname == "PrintWriter" .or. cname == "java.io.PrintWriter" .or. &
+         cname == "BufferedWriter" .or. cname == "java.io.BufferedWriter") then
+       ! A PrintWriter over a writer IS that writer here. Java's
+       ! wraps to add buffering and the print methods; clotran's
+       ! writers already take text and hold it, so wrapping would
+       ! only add a layer that forwards. What matters is that
+       ! (let [s (StringWriter.) p (PrintWriter. s)] ... (str s))
+       ! sees what was written to p, which sharing gives directly.
+       thunk = gc_str("", [vs_get(base + 1)])
+       if (gcl_count(vs_get(base + 1)) > 1) then
+          thunk = gce_eval(gcl_first(gcl_rest(vs_get(base + 1), [vs_get(base + 1)])), &
+               vs_get(base + 2), [vs_get(base + 1)])
+          if (has_error) then
+             call vs_leave(base)
+             return
+          end if
+          block
+            type(gc_value) :: inner
+            inner = strip_meta(thunk)
+            if (gc_kind(inner) == OBJ_SB .or. gc_kind(inner) == OBJ_WRITER) then
+               out = inner
+               call vs_leave(base)
+               return
+            end if
+          end block
+          thunk = gc_str("", [vs_get(base + 1)])
+       end if
+       call vs_set(base + 3, thunk)
+       out = gc_obj(OBJ_SB, [vs_get(base + 3)], [vs_get(base + 3)])
     else if (cname == "StringBuilder" .or. cname == "java.lang.StringBuilder" .or. &
          cname == "StringBuffer" .or. cname == "java.lang.StringBuffer" .or. &
          cname == "java.io.StringWriter" .or. cname == "StringWriter") then
@@ -4038,6 +4068,10 @@ contains
        ! auto-gensym counter, so a gensym and an x# can never collide.
        case ("isReduced"); out = native(B_ISREDUCED, "reduced?", [roots]); return
        case ("toArray"); out = native(B_TOARRAY, "to-array", [roots]); return
+       ! (RT/print x w) is what `pr` is underneath -- the printed
+       ! form, written to a writer rather than returned.
+       case ("print")
+          out = native(B_RTPRINT, "clotran-rt-print", [roots]); return
        ! into-array. The component type, when given, is the FIRST
        ! argument and the sequence is always the last.
        case ("seqToTypedArray")
@@ -9094,6 +9128,22 @@ contains
             call vs_set(base + 2, av)
             out = gc_str(java_format(gc_ref_text(fv%ref), vs_get(base + 2)), &
                  [vs_get(base + 1), vs_get(base + 2)])
+         end if
+       end block
+    case (B_RTPRINT)
+       block
+         type(gc_value) :: w
+         character(len=:), allocatable :: txt
+         txt = gcp_str(gcv_nth(args, 0), .true.)
+         out = gc_nil()
+         if (n >= 2) then
+            w = strip_meta(gcv_nth(args, 1))
+            if (gc_kind(w) == OBJ_SB) then
+               call gc_set_slot(w, 1, gc_str(text_of(gc_slot(w, 1)) // txt, &
+                    [vs_get(base + 1)]))
+            else if (gc_kind(w) == OBJ_WRITER) then
+               write(gc_i1(w), '(A)', advance='no') txt
+            end if
          end if
        end block
     case (B_SETVALIDATOR, B_GETVALIDATOR)

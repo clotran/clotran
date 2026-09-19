@@ -1259,6 +1259,32 @@
        (try (set-validator! (atom -1) pos?) :no (catch IllegalStateException e :refused))
        :refused)
 
+
+;;; ---- PrintWriter, and RT/print -----------------------------------
+;; A PrintWriter over a writer IS that writer here: Java's wraps to add
+;; buffering and the print methods, and clotran's writers already take
+;; text and hold it. What has to hold is that writing to the wrapper is
+;; visible through the wrapped one, which sharing gives directly.
+;; Clojure's own test helper builds *err* this way.
+
+(check "a PrintWriter shares its writer"
+       (let [s (java.io.StringWriter.) p (java.io.PrintWriter. s)]
+         (.write p "hi") (str s))
+       "hi")
+(check "and can stand in for *err*"
+       (let [s (java.io.StringWriter.) p (java.io.PrintWriter. s)]
+         (binding [*err* p] (.write *err* "boom")) (str s))
+       "boom")
+;; (RT/print x w) is `pr` underneath -- the readable form, written to a
+;; writer rather than returned.
+(check "RT/print is readable"
+       (let [s (java.io.StringWriter.)] (clojure.lang.RT/print "x" s) (str s))
+       "\"x\"")
+(check "RT/print a collection"
+       (let [s (java.io.StringWriter.)] (clojure.lang.RT/print [1 "a"] s) (str s))
+       "[1 \"a\"]")
+(check "RT/print to *out*" (with-out-str (clojure.lang.RT/print :k *out*)) ":k")
+
 ;;; ---- report -----------------------------------------------------
 
 
