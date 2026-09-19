@@ -1103,26 +1103,45 @@ contains
        ! real case below, and as Long.hashCode. Truncating instead
        ! would collide every pair differing only above bit 32.
        bits8 = v%ival
-       h = mix32(ieor(int(ieor(bits8, ishft(bits8, -32)), kind=4), v%tag))
+       ! THE TAG IS MIXED IN AFTER, not XORed into the value. The
+       ! tags are small integers, so XORing one straight onto the
+       ! value made every integer equal to its own tag collapse to
+       ! zero -- (hash 2) was 0, the same as (hash nil), because
+       ! GCT_INT is 2. `case` dispatches on the hash and then has
+       ! to insert a condp for every collision, so a case holding
+       ! the constant 2 and the constant nil compiled to a table
+       ! where they shared a bucket.
+       h = mix32(ieor(mix32(int(ieor(bits8, ishft(bits8, -32)), kind=4)), &
+            tag_salt(v%tag)))
     case (GCT_REAL)
        bits8 = transfer(v%rval, bits8)
        h = mix32(int(ieor(bits8, ishft(bits8, -32)), kind=4))
     case (GCT_RATIO)
        bits8 = v%ival
-       h = mix32(ieor(ieor(int(ieor(bits8, ishft(bits8, -32)), kind=4), &
-            ishft(v%ref, 16)), v%tag))
+       h = mix32(ieor(mix32(ieor(int(ieor(bits8, ishft(bits8, -32)), kind=4), &
+            ishft(v%ref, 16))), tag_salt(v%tag)))
     case (GCT_STR, GCT_SYM, GCT_KEY)
-       h = mix32(ieor(fnv1a(gc_ref_text(v%ref)), v%tag))
+       h = mix32(ieor(mix32(fnv1a(gc_ref_text(v%ref))), tag_salt(v%tag)))
     case default
        ! ...and hashing has to follow equality exactly, or a trie
        ! stores the same key twice and loses lookups.
        if (associated(obj_coll_hash) .and. is_structural_kind(gc_kind(v))) then
           h = obj_coll_hash(v)
        else
-          h = mix32(ieor(v%ref, v%tag))
+          h = mix32(ieor(mix32(v%ref), tag_salt(v%tag)))
        end if
     end select
   end function gc_hash
+
+  ! A tag, spread across the word before it is mixed in. The
+  ! tags are 0..10; XORing one straight onto a value disturbs
+  ! only its bottom four bits, which is not enough to separate
+  ! two kinds holding the same bits.
+  pure function tag_salt(tag) result(s)
+    integer, intent(in) :: tag
+    integer :: s
+    s = (tag + 1) * (-1640531527)   ! the golden-ratio constant
+  end function tag_salt
 
   function mix32(x) result(h)
     integer, intent(in) :: x
@@ -1272,7 +1291,7 @@ contains
     ! only consults the hook when BOTH sides are structural, so the
     ! two stay in step.
     is_structural_kind = (k == OBJ_CONS .or. k == OBJ_VECTOR .or. &
-         k == OBJ_MAP .or. k == OBJ_SET)
+         k == OBJ_MAP .or. k == OBJ_SET .or. k == OBJ_SEQ)
   end function is_structural_kind
 
   subroutine gc_global_keep(h, v)

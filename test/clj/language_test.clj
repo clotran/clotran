@@ -1380,6 +1380,62 @@
 (check "the non-finite doubles print"
        [(pr-str ##NaN) (pr-str ##Inf) (pr-str ##-Inf)] ["##NaN" "##Inf" "##-Inf"])
 
+
+;;; ---- hash follows equality ---------------------------------------
+;; Clojure guarantees (= a b) implies (= (hash a) (hash b)). Three
+;; things broke it, and `case` is where they showed, because case
+;; dispatches on the hash:
+;;
+;;   - the cons walk stopped on KIND, and the empty tail is itself a
+;;     cons, so every list hashed one extra nil -- (hash '(1)) came out
+;;     equal to (hash [1 2]).
+;;   - a seq VIEW was not structural at all, so it hashed by identity
+;;     while comparing equal to its vector.
+;;   - the tag was XORed straight onto the value, and the tags are
+;;     small integers, so (hash 2) was 0 -- the same as (hash nil),
+;;     because GCT_INT is 2.
+
+(check "a list hashes as a vector"
+       [(= (hash []) (hash '())) (= (hash [1]) (hash '(1))) (= (hash [1 2]) (hash '(1 2)))]
+       [true true true])
+(check "a seq view too"
+       [(= (hash (seq [1 2])) (hash [1 2])) (= (hash (rest [1 2 3])) (hash [2 3]))]
+       [true true])
+(check "small integers do not collide with nil"
+       (= (hash 2) (hash nil)) false)
+(check "nor with each other"
+       (= (count (set (map hash (range 20)))) 20) true)
+
+;;; ---- case ---------------------------------------------------------
+;; case compiles to a lookup keyed on the hash, with a shift and mask
+;; when the constants have to be squeezed together. The shift is
+;; ARITHMETIC in core.clj -- (bit-shift-right x shift) propagates the
+;; sign -- and Fortran's ishft fills with zeros, so a negative hash
+;; landed in a different bucket at runtime than the macro put it in.
+;; A case small enough to need no shift hid it completely.
+
+(let [two 2
+      f #(case %
+           1 :number
+           "foo" :string
+           \a :char
+           pow :symbol
+           :zap :keyword
+           (2 \b "bar") :one-of-many
+           [1 2] :sequential-thing
+           {:a 2} :map
+           {:r 2 :d 2} :droid
+           #{2 3 4 5} :set
+           [1 [[[2]]]] :deeply-nested
+           nil :nil
+           :default)]
+  (check "case over many kinds of constant"
+         (mapv f [1 "foo" \a :zap 'pow 2 \b "bar" [1 2] (list 1 2) [1 two]
+                  {:a 2} #{2 3 4 5} #{2 3 4 5 6} {:r 2 :d 2} [1 [[[two]]]] nil 42])
+         [:number :string :char :keyword :symbol :one-of-many :one-of-many :one-of-many
+          :sequential-thing :sequential-thing :sequential-thing :map :set :default
+          :droid :deeply-nested :nil :default]))
+
 ;;; ---- report -----------------------------------------------------
 
 

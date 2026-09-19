@@ -4687,7 +4687,16 @@ contains
     end if
     ! A zero mask means the map was keyed on the raw hash, unshifted --
     ! prep-hashes only shifts when it had to squeeze the ints together.
-    if (mask /= 0) h = iand(ishft(h, -shift), mask)
+    !
+    ! SHIFTA, not ISHFT. core.clj builds these keys with
+    ! (-> x (bit-shift-right shift) (bit-and mask)), and
+    ! bit-shift-right is ARITHMETIC -- it propagates the sign.
+    ! Fortran's ishft fills with zeros, so a NEGATIVE hash landed
+    ! in a different bucket at runtime than the one the macro put
+    ! it in. Roughly half of all hashes are negative, and a case
+    ! small enough not to need a shift hid it entirely: the bug
+    ! only appeared once a case had enough clauses to be squeezed.
+    if (mask /= 0) h = iand(shifta(h, shift), mask)
 
     entry = gca_get(vs_get(base + 4), gc_int(h))
     call vs_set(base + 5, strip_meta(entry))
@@ -9852,9 +9861,15 @@ contains
     end if
   end function gce_coll_equal
 
+  ! A SEQ VIEW counts too. It is a view over something already
+  ! realised -- a vector or an array -- so walking it forces
+  ! nothing, which is the reason OBJ_LAZY is still left out (see
+  ! is_structural_kind in GC.f90). Without it (hash (seq [1 2]))
+  ! was an identity hash while (= (seq [1 2]) [1 2]) was true,
+  ! which breaks the guarantee a map relies on.
   pure logical function is_seq_kind(k)
     integer, intent(in) :: k
-    is_seq_kind = (k == OBJ_CONS .or. k == OBJ_VECTOR)
+    is_seq_kind = (k == OBJ_CONS .or. k == OBJ_VECTOR .or. k == OBJ_SEQ)
   end function is_seq_kind
 
   ! Hash for the same kinds, and it must NOT allocate: gc_hash runs in
@@ -9889,11 +9904,29 @@ contains
     case (OBJ_CONS)
        ! Walked through the slots rather than the seq interface: car
        ! and cdr are already there, and sq_first/sq_rest can allocate.
+       !
+       ! THE EMPTY TAIL IS ITSELF AN OBJ_CONS, so a walk that stops
+       ! only on kind hashes one extra nil and (hash '(1)) came out
+       ! equal to (hash [1 2]) rather than to (hash [1]). Clojure
+       ! guarantees (= a b) implies (= (hash a) (hash b)), and a
+       ! list IS equal to a vector of the same elements -- so this
+       ! broke the guarantee for every list. `case` is where it
+       ! showed: it dispatches on the hash, so
+       ! (case (list 1 2) [1 2] :vec :d) answered :d.
        cur = v
-       do while (gc_kind(cur) == OBJ_CONS)
+       do while (gcl_is(cur) .and. gcl_count(cur) > 0)
           item = gc_slot(cur, 1)
           h = 31 * h + gc_hash(item)
           cur = gc_slot(cur, 2)
+       end do
+       h = mix32(h)
+    case (OBJ_SEQ)
+       ! Same fold as a vector, over the view's own elements.
+       ! Read THROUGH the view: seq_elem indexes a source collection,
+       ! and a seq is slot 1 plus the offset in i1.
+       n = sq_count(v, [v])
+       do i = 0, n - 1
+          h = 31 * h + gc_hash(seq_elem(gc_slot(v, 1), gc_i1(v) + i, [v]))
        end do
        h = mix32(h)
     case (OBJ_MAP)
