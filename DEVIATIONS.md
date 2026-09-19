@@ -836,3 +836,41 @@ agent rather than rethrowing, so the failure is observed through
 mutable boxes) and 11 (transients are the persistent collections) --
 every one of them is single-threadedness showing through, and none of
 them can go until Fortran here has somewhere to put a second thread.
+
+## 30. `1N` is an integer and `1M` is a double
+
+Clojure reads `1N` as a `clojure.lang.BigInt` and `1M` as a
+`java.math.BigDecimal`. clotran has neither type, and used to read both
+as SYMBOLS -- so `(cond 0M :a true :b)` answered "unable to resolve
+symbol: 0M" rather than `:a`, and `(= 45M (deref a))` could not run at
+all.
+
+Each suffix now drops to the nearest thing clotran does have, and the
+choice was made by what `=` then says rather than by which looks
+closest:
+
+| | Clojure | clotran | why |
+|---|---|---|---|
+| `1N` | BigInt | integer | `(= 1N 1)` is TRUE in Clojure, and stays true |
+| `1M` | BigDecimal | double | `(= 1M 1)` is FALSE in Clojure, and `(= 1.0 1)` is false here |
+
+Reading `45M` as the integer `45` would have been the obvious choice and
+the wrong one: it makes `(= 45M 45)` true where Clojure says false,
+because a BigDecimal is its own equality category. A double lands in a
+different category from an integer for exactly the same reason, so the
+comparison comes out right without the type existing.
+
+What is lost is arbitrary precision and the type itself:
+
+    (type 1N)     clojure.lang.BigInt      -> :int
+    (type 1M)     java.math.BigDecimal     -> :double
+    (pr-str 1N)   "1N"                     -> "1"
+    (pr-str 1M)   "1M"                     -> "1.0"
+    (* 1M 0.1M)                            -> not exact decimal
+
+and, with it, everything `with-precision` is for. A literal past
+2^63 is the same 64-bit ceiling deviation 26 names.
+
+**Removal**: a numeric tower with BigInt and BigDecimal in it. That is
+the same work deviation 26 ends on, and the suffixes are its most
+visible symptom rather than a separate problem.
