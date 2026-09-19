@@ -236,7 +236,21 @@ module Eval
   type(gc_root), save :: thrown_root
 
   public :: gce_eval, gce_base_env, gce_has_error, gce_error, gce_clear_error
-  public :: gce_analyze
+  public :: gce_analyze, gce_trace
+
+  ! THE CALL STACK. One entry per closure invocation in progress: the
+  ! closure and the position of the call that entered it (set by the
+  ! executor just before apply, read by invoke_closure). Nothing here
+  ! is a root: a closure on this stack is also in a value-stack slot of
+  ! the caller for as long as the call lasts. When an error is raised
+  ! the stack is rendered into `last_trace` at once, before it unwinds,
+  ! so the message can say where it came from. A `recur` does not push;
+  ! a deep loop is one frame, which a trace does not pretend otherwise.
+  type(gc_value), allocatable, save :: fstack_fn(:)
+  integer, allocatable, save :: fstack_site(:)
+  integer, save :: fstack_top = 0
+  integer, save :: pending_site = 0
+  character(len=:), allocatable, save :: last_trace
   ! Forms evaluated since startup. CLOTRAN_STATS=1 prints it at exit
   ! next to the collector's counters (main.f90), so a cost can be
   ! split into "more work" and "more collector" before theorising.
@@ -262,6 +276,7 @@ contains
     has_error = .false.
     last_error = ""
     call set_thrown(gc_nil())
+    if (allocated(last_trace)) last_trace = ""
   end subroutine gce_clear_error
 
   ! Re-checks the slot rather than trusting the index, for the same
@@ -292,7 +307,64 @@ contains
     character(len=*), intent(in) :: msg
     has_error = .true.
     last_error = msg
+    call capture_trace()
   end subroutine fail
+
+  ! The call stack as text, innermost first, taken when an error is
+  ! raised. Each line names the function entered and where it was
+  ! called from.
+  subroutine capture_trace()
+    integer :: i
+    type(gc_value) :: nm
+    character(len=:), allocatable :: who
+    last_trace = ""
+    do i = fstack_top, 1, -1
+       who = "fn"
+       if (gc_kind(fstack_fn(i)) == OBJ_CLOSURE) then
+          nm = gc_slot(fstack_fn(i), 5)
+          if (nm%tag == GCT_SYM) who = gc_ref_text(nm%ref)
+       end if
+       if (fstack_site(i) /= 0) then
+          last_trace = last_trace // "  at " // who // " (" // gcr_position(fstack_site(i)) // ")" // achar(10)
+       else
+          last_trace = last_trace // "  at " // who // achar(10)
+       end if
+    end do
+  end subroutine capture_trace
+
+  ! The trace of the last error, one line per frame, or empty.
+  function gce_trace() result(s)
+    character(len=:), allocatable :: s
+    s = ""
+    if (allocated(last_trace)) s = last_trace
+  end function gce_trace
+
+  subroutine push_frame(fn, site)
+    type(gc_value), intent(in) :: fn
+    integer, intent(in) :: site
+    type(gc_value), allocatable :: bf(:)
+    integer, allocatable :: bs(:)
+    integer :: n
+    if (.not. allocated(fstack_fn)) then
+       allocate(fstack_fn(256), fstack_site(256))
+       fstack_top = 0
+    end if
+    if (fstack_top >= size(fstack_fn)) then
+       n = size(fstack_fn)
+       allocate(bf(2 * n), bs(2 * n))
+       bf(1:n) = fstack_fn(1:n)
+       bs(1:n) = fstack_site(1:n)
+       call move_alloc(bf, fstack_fn)
+       call move_alloc(bs, fstack_site)
+    end if
+    fstack_top = fstack_top + 1
+    fstack_fn(fstack_top) = fn
+    fstack_site(fstack_top) = site
+  end subroutine push_frame
+
+  subroutine pop_frame()
+    if (fstack_top > 0) fstack_top = fstack_top - 1
+  end subroutine pop_frame
 
   ! An environment with the primitives bound. Built fresh rather than
   ! cached in a module variable: a cached handle would go stale across

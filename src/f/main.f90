@@ -90,6 +90,7 @@ program clotran
      call vs_set(base + 3, result)
      if (gce_has_error()) then
         print '(A,A)', "error: ", gce_error()
+        if (len(gce_trace()) > 0) write(*, '(A)', advance='no') gce_trace()
         cycle
      end if
      print '(A)', gcp_str(vs_get(base + 3), .true.)
@@ -181,6 +182,7 @@ contains
        call vs_set(lb + 3, r)
        if (gce_has_error()) then
           print '(A,A)', "  ", gce_error()
+          if (len(gce_trace()) > 0) write(*, '(A)', advance='no') gce_trace()
           print '(A,A)', "    in: ", first_line(gcp_str(vs_get(lb + 2), .true.))
           print '(A,A,A,I0)', "load ", path, ": stopped at form ", i
           exit

@@ -169,6 +169,8 @@
     base = vs_enter(5)
     call vs_set(base + 1, fn)
     call vs_set(base + 2, argv)
+    call push_frame(fn, pending_site)
+    pending_site = 0
     tmpl = gc_slot(fn, 1)
     call vs_set(base + 3, tmpl)
     arities = gcv_nth(tmpl, 1)
@@ -199,6 +201,7 @@
     end if
     if (.not. found) then
        call raise_arity(argc, vs_get(base + 1), [vs_get(base + 1), vs_get(base + 2)])
+       call pop_frame()
        call vs_leave(base)
        return
     end if
@@ -242,6 +245,7 @@
        if (has_error) exit
        if (gc_kind(out) /= OBJ_RECUR) exit
     end do
+    call pop_frame()
     call vs_leave(base)
   end function invoke_closure
 
@@ -297,6 +301,10 @@
           v = exec_args(gc_slot(vs_get(base + 1), 1), 1, vs_get(base + 2))
           if (.not. has_error) then
              call vs_set(base + 4, v)
+             ! where this call is, for the frame invoke_closure pushes
+             v = gc_slot(vs_get(base + 1), 4)
+             pending_site = 0
+             if (v%tag == GCT_INT) pending_site = int(v%ival, kind=4)
              out = apply(vs_get(base + 3), vs_get(base + 4))
           end if
        end if
@@ -333,6 +341,7 @@
           call set_thrown(v)
           has_error = .true.
           last_error = gcp_str(v, .true.)
+          call capture_trace()
        end if
     case (N_TRY)
        out = exec_try(nd, frame)

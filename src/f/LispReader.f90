@@ -48,10 +48,16 @@ module LispReader
   ! table; id 0 is "no file" (the REPL).
   integer, parameter :: POS_SHIFT = 2**26
   integer, parameter :: MAX_FILES = 64
-  character(len=512), save :: file_names(MAX_FILES)
+  ! One entry per file ever loaded, line index included: a position
+  ! inside core.clj is asked about long after some other file became
+  ! current, and must be answered against core.clj's own lines.
+  type :: src_file
+     character(len=512) :: name = ""
+     integer, allocatable :: line_starts(:)
+  end type src_file
+  type(src_file), save :: files(MAX_FILES)
   integer, save :: n_files = 0
   integer, save :: cur_file = 0
-  integer, allocatable, save :: line_starts(:)
 
 contains
 
@@ -79,25 +85,26 @@ contains
     integer :: i, n, k
     cur_file = 0
     do i = 1, n_files
-       if (trim(file_names(i)) == name) cur_file = i
+       if (trim(files(i)%name) == name) cur_file = i
     end do
     if (cur_file == 0 .and. n_files < MAX_FILES) then
        n_files = n_files + 1
-       file_names(n_files) = name
+       files(n_files)%name = name
        cur_file = n_files
     end if
+    if (cur_file == 0) return
     n = 1
     do i = 1, len(text)
        if (text(i:i) == achar(10)) n = n + 1
     end do
-    if (allocated(line_starts)) deallocate(line_starts)
-    allocate(line_starts(n))
-    line_starts(1) = 1
+    if (allocated(files(cur_file)%line_starts)) deallocate(files(cur_file)%line_starts)
+    allocate(files(cur_file)%line_starts(n))
+    files(cur_file)%line_starts(1) = 1
     k = 1
     do i = 1, len(text)
        if (text(i:i) == achar(10)) then
           k = k + 1
-          line_starts(k) = i + 1
+          files(cur_file)%line_starts(k) = i + 1
        end if
     end do
   end subroutine gcr_begin_file
@@ -134,24 +141,26 @@ contains
     off = mod(packed, POS_SHIFT)
     line = 1
     col = off
-    if (allocated(line_starts)) then
-       lo = 1
-       hi = size(line_starts)
-       do while (lo < hi)
-          mid = (lo + hi + 1) / 2
-          if (line_starts(mid) <= off) then
-             lo = mid
-          else
-             hi = mid - 1
-          end if
-       end do
-       line = lo
-       col = off - line_starts(lo) + 1
+    if (fid >= 1 .and. fid <= n_files) then
+       if (allocated(files(fid)%line_starts)) then
+          lo = 1
+          hi = size(files(fid)%line_starts)
+          do while (lo < hi)
+             mid = (lo + hi + 1) / 2
+             if (files(fid)%line_starts(mid) <= off) then
+                lo = mid
+             else
+                hi = mid - 1
+             end if
+          end do
+          line = lo
+          col = off - files(fid)%line_starts(lo) + 1
+       end if
     end if
     write(lb, '(I0)') line
     write(cb, '(I0)') col
     if (fid >= 1 .and. fid <= n_files) then
-       s = trim(file_names(fid)) // ":" // trim(lb) // ":" // trim(cb)
+       s = trim(files(fid)%name) // ":" // trim(lb) // ":" // trim(cb)
     else
        s = trim(lb) // ":" // trim(cb)
     end if
