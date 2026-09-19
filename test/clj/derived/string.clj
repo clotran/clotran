@@ -3,7 +3,7 @@
 
 (ns clojure.test-clojure.string (:require [clojure.string :as s]) (:use clojure.test))
 
-(set! *warn-on-reflection* true)
+
 
 ;; string.clj:7 [language]
 (deftest t-split

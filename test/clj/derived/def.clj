@@ -5,49 +5,6 @@
 
 
 
-;; def.clj:13 [language]
-(deftest defn-error-messages
-  (testing "multiarity syntax invalid parameter declaration"
-    (is (fails-with-cause? 
-          clojure.lang.ExceptionInfo
-          #"Call to clojure.core/defn did not conform to spec"
-          (eval-in-temp-ns (defn foo (arg1 arg2))))))
-
-  (testing "multiarity syntax invalid signature"
-    (is (fails-with-cause? 
-          clojure.lang.ExceptionInfo
-          #"Call to clojure.core/defn did not conform to spec"
-          (eval-in-temp-ns (defn foo 
-                             ([a] 1)
-                             [a b])))))
-
-  (testing "assume single arity syntax"
-    (is (fails-with-cause? 
-          clojure.lang.ExceptionInfo
-          #"Call to clojure.core/defn did not conform to spec"
-          (eval-in-temp-ns (defn foo a)))))
-
-  (testing "bad name"
-    (is (fails-with-cause? 
-          clojure.lang.ExceptionInfo
-          #"Call to clojure.core/defn did not conform to spec"
-          (eval-in-temp-ns (defn "bad docstring" testname [arg1 arg2])))))
-         
-  (testing "missing parameter/signature"
-    (is (fails-with-cause? 
-          clojure.lang.ExceptionInfo
-          #"Call to clojure.core/defn did not conform to spec"
-          (eval-in-temp-ns (defn testname)))))
-
-  (testing "allow trailing map"
-    (is (eval-in-temp-ns (defn a "asdf" ([a] 1) {:a :b}))))
-
-  (testing "don't allow interleaved map"
-    (is (fails-with-cause? 
-          clojure.lang.ExceptionInfo
-          #"Call to clojure.core/defn did not conform to spec"
-          (eval-in-temp-ns (defn a "asdf" ([a] 1) {:a :b} ([] 1)))))))
-
 ;; def.clj:63 [language]
 (deftest dynamic-redefinition
   ;; too many contextual things for this kind of caching to work...

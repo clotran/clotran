@@ -26,59 +26,6 @@
 (def public-vars-with-docstrings
   (filter (comp :doc meta) public-vars))
 
-;; metadata.clj:48 [language]
-(deftest interaction-of-def-with-metadata
-  (testing "initial def sets metadata"
-    (let [v (eval-in-temp-ns
-             (def ^{:a 1} foo 0)
-             #'foo)]
-      (is (= 1 (-> v meta :a)))))
-  (testing "const vars preserve metadata"
-    (let [[v1 v2] (eval-in-temp-ns
-                   (def ^:const foo ^:foo [])
-                   (def ^:const bar ^:foo [:bar])
-                   [(meta foo) (meta bar)])]
-      (is (= {:foo true} v1))
-      (is (= {:foo true} v2))))
-  #_(testing "subsequent declare doesn't overwrite metadata"
-    (let [v (eval-in-temp-ns
-             (def ^{:b 2} bar 0)
-             (declare bar)
-             #'bar)]
-      (is (= 2 (-> v meta :b))))
-    (testing "when compiled"
-      (let [v (eval-in-temp-ns
-               (def ^{:c 3} bar 0)
-               (defn declare-bar []
-                 (declare bar))
-               (declare-bar)
-               #'bar)]
-        (is (= 3 (-> v meta :c))))))
-  (testing "subsequent def with init-expr *does* overwrite metadata"
-    (let [v (eval-in-temp-ns
-             (def ^{:d 4} quux 0)
-             (def quux 1)
-             #'quux)]
-      (is (nil? (-> v meta :d))))
-    (testing "when compiled"
-      (let [v (eval-in-temp-ns
-               (def ^{:e 5} quux 0)
-               (defn def-quux []
-                 (def quux 1))
-               (def-quux)
-               #'quux)]
-        (is (nil? (-> v meta :e))))))
-  (testing "IllegalArgumentException should not be thrown"
-    (testing "when defining var whose value is calculated with a primitive fn."
-      (testing "This case fails without a fix for CLJ-852"
-        (is (eval-in-temp-ns
-             (defn foo ^long [^long x] x)
-             (def x (inc (foo 10))))))
-      (testing "This case should pass even without a fix for CLJ-852"
-        (is (eval-in-temp-ns
-             (defn foo ^long [^long x] x)
-             (def x (foo (inc 10)))))))))
-
 ;; metadata.clj:100 [language]
  (deftest fns-preserve-metadata-on-maps
    (let [xm {:a 1 :b -7}
@@ -201,25 +148,3 @@
      ;; join, index, map-invert: Currently always returns a value with
      ;; no metadata.  This seems reasonable.
      ))
-
-;; metadata.clj:220 [language]
-(deftest defn-primitive-args
-  (testing "Hinting the arg vector of a primitive-taking fn with a non-primitive type should not result in AbstractMethodError when invoked."
-    (testing "CLJ-850 is fixed when this case passes."
-      (is (= "foo"
-             (eval-in-temp-ns
-              (defn f ^String [^String s ^long i] s)
-              (f "foo" 1)))))
-    (testing "These cases should pass, even without a fix for CLJ-850."
-      (is (= "foo"
-             (eval-in-temp-ns
-              (defn f ^String [^String s] s)
-              (f "foo"))))
-      (is (= 1
-             (eval-in-temp-ns
-              (defn f ^long [^String s ^long i] i)
-              (f "foo" 1))))
-      (is (= 1
-             (eval-in-temp-ns
-              (defn f ^long [^long i] i)
-              (f 1)))))))

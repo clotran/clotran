@@ -12,10 +12,6 @@
 
 (defn ^String legacy-hinting [])
 
-(defprotocol HintedProtocol
-  (hintedp ^String [a]
-           ^Integer [a b]))
-
 (defn primfn
   (^long [])
   (^double [a]))
@@ -30,17 +26,16 @@
 
 (deftype CLJ1399 [munged-field-name])
 
-(def zf (fn rf [x] (lazy-seq (cons x (rf x)))))
+;; compilation.clj:58 [language]
+(deftest test-compiler-resolution
+  (testing "resolve nonexistent class create should return nil (assembla #262)"
+    (is (nil? (resolve 'NonExistentClass.))))
+  (testing "resolve nonexistent class should return nil"
+    (is (nil? (resolve 'NonExistentClass.Name)))))
 
-;; compilation.clj:122 [language]
-(deftest test-CLJ-671-regression
-  (testing "that the presence of hints does not cause the compiler to infinitely loop"
-    (letfn [(gcd [x y]
-              (loop [x (long x) y (long y)]
-                (if (== y 0)
-                  x
-                  (recur y ^Long(rem x y)))))]
-      (is (= 4 (gcd 8 100))))))
+;; compilation.clj:388 [language]
+(deftest CLJ-1586-lazyseq-literals-preserve-metadata
+  (should-not-reflect (eval (list '.substring (with-meta (concat '(identity) '("foo")) {:tag 'String}) 0))))
 
 ;; compilation.clj:391 [language]
 (deftest CLJ-1456-compiler-error-on-incorrect-number-of-parameters-to-throw
@@ -56,10 +51,12 @@
                  (finally
                    (let [z# y#])))))))
 
-;; compilation.clj:413 [language]
-(deftest test-anon-recursive-fn
-  (is (= [0 0] (take 2 ((fn rf [x] (lazy-seq (cons x (rf x)))) 0))))
-  (is (= [0 0] (take 2 (zf 0)))))
+;; compilation.clj:430 [language]
+(deftest clj-1714
+  (testing "CLJ-1714 Classes shouldn't have their static initialisers called simply by type hinting or importing"
+    ;; ClassWithFailingStaticInitialiser will throw if its static initialiser is called
+    (is (eval '(fn [^compilation.ClassWithFailingStaticInitialiser c])))
+    (is (eval '(import (compilation ClassWithFailingStaticInitialiser))))))
 
 ;; compilation.clj:436 [language]
 (deftest CLJ-2284
@@ -73,12 +70,3 @@
   (testing "CLJ-2580 Correctly calculate exit branches of case"
     (is (zero? (let [d (case nil :x nil 0)] d)))
     (is (nil? (let [d (case nil :x 0 nil)] d)))))
-
-;; compilation.clj:447 [language]
-(deftest CLJ-2945
-  (testing "CLJ-2945 Reify form and obj meta"
-    (are [m x]  (= (set (keys m)) x)
-      (meta (reify clojure.lang.ILookup)) #{}
-      (meta ^:foo (reify clojure.lang.ILookup)) #{:foo}
-      (meta (macroexpand-1 '(reify clojure.lang.ILookup))) #{:line :column}
-      (meta (macroexpand-1 '^:foo (reify clojure.lang.ILookup))) #{:line :column :foo})))

@@ -3,8 +3,7 @@
 
 (ns clojure.test-clojure.transients (:use clojure.test))
 
-(defn- hash-obj [hash]
-  (reify Object (hashCode [this] hash)))
+
 
 ;; transients.clj:4 [language]
 (deftest popping-off
@@ -21,26 +20,10 @@
                 (-> pv transient pop! pop! pop! (conj! 42))
                 (nth pv 31)))))
 
-;; transients.clj:21 [language]
-(deftest dissocing
-  (testing "dissocing colliding keys"
-    (is (= [0 {}] (let [ks (concat (range 7) [(hash-obj 42) (hash-obj 42)])
-                        m (zipmap ks ks)
-                        dm (persistent! (reduce dissoc! (transient m) (keys m)))]
-                    [(count dm) dm])))))
-
 ;; transients.clj:28 [language]
 (deftest test-disj!
   (testing "disjoin multiple items in one call"
     (is (= #{5 20} (-> #{5 10 15 20} transient (disj! 10 15) persistent!)))))
-
-;; transients.clj:35 [language]
-(deftest persistent-assoc-on-collision
-  (testing "Persistent assoc on a collision node which underwent a transient dissoc"
-    (let [a (reify Object (hashCode [_] 42))
-          b (reify Object (hashCode [_] 42))]
-      (is (= (-> #{a b} transient (disj! a) persistent! (conj a))
-            (-> #{a b} transient (disj! a) persistent! (conj a)))))))
 
 ;; transients.clj:50 [concurrency]
 (deftest transient-mod-ok-across-threads

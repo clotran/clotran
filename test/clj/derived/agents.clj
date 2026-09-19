@@ -22,10 +22,3 @@
     (is (nil? (agent-error agt)))
     (is (= agt (first @err)))
   (is (true? (instance? ArithmeticException (second @err))))))
-
-;; agents.clj:138 [concurrency]
-(deftest earmuff-agent-bound
-  (let [a (agent 1)]
-    (send a (fn [_] *agent*))
-    (await a)
-    (is (= a @a))))

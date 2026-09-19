@@ -9,13 +9,6 @@
 (deftest test-reduce-from-chunked-into-unchunked
   (is (= [1 2 \a \b] (into [] (concat [1 2] "ab")))))
 
-;; sequences.clj:87 [language]
-(deftest test-into-IReduceInit
-  (let [iri (reify clojure.lang.IReduceInit
-              (reduce [_ f start]
-                (reduce f start (range 5))))]
-    (is (= [0 1 2 3 4] (into [] iri)))))
-
 ;; sequences.clj:105 [language]
 (deftest test-equality
   ; lazy sequences

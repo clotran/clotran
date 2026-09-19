@@ -7,11 +7,6 @@
 
 (defrecord TestRecord [a b])
 
-(defrecord MapEntry [k v]
-  java.util.Map$Entry
-  (getKey [_] k)
-  (getValue [_] v))
-
 (deftype ExtendTestWidget [name])
 
 (deftype ExtendersTestWidget [])
@@ -72,9 +67,6 @@
 
 (deftype TypeToTestByteHint [^byte a])
 
-(defprotocol SyntaxQuoteTestProtocol
-  (sqtp [p]))
-
 (defmacro try-extend-type [c]
   `(extend-type ~c
      SyntaxQuoteTestProtocol
@@ -85,25 +77,20 @@
      ~c
      (sqtp [p#] p#)))
 
-(try-extend-protocol clojure.lang.Keyword)
-
-(defprotocol Dasherizer
-  (-do-dashed [this]))
-
-(deftype Dashed []
-  Dasherizer
-  (-do-dashed [this] 10))
-
-(defn aget-long-hinted ^long [x] (aget (longs-hinted x) 0))
-
 (import 'clojure.lang.ISeq)
 
-(defprotocol P
-  (^ISeq f [_]))
-
-(defprotocol PrimHinted
-  (^double f1 [p a])
-  (^void f2 [p]))
+;; protocols.clj:137 [language]
+(deftest illegal-extending
+  (testing "you cannot extend a protocol to a type that implements the protocol inline"
+    (is (fails-with-cause? IllegalArgumentException #".*HasProtocolInline already directly implements interface"
+          (eval '(extend clojure.test_clojure.protocols.HasProtocolInline
+                         clojure.test-clojure.protocols.examples/ExampleProtocol
+                         {:foo (fn [_] :extended)})))))
+  (testing "you cannot extend to an interface"
+    (is (fails-with-cause? IllegalArgumentException #"interface clojure.test_clojure.protocols.examples.ExampleProtocol is not a protocol"
+          (eval '(extend clojure.test_clojure.protocols.HasProtocolInline
+                         clojure.test_clojure.protocols.examples.ExampleProtocol
+                         {:foo (fn [_] :extended)}))))))
 
 ;; protocols.clj:262 [language]
 (deftest defrecord-with-specific-field-names
@@ -114,23 +101,9 @@
     (is (= (seq rec) '([:this 1] [:that 2] [:k 3] [:m 4] [:o 5])))
     (is (= (dissoc rec :k) {:this 1, :that 2, :m 4, :o 5}))))
 
-;; protocols.clj:663 [language]
-(deftest test-no-ns-capture
-  (is (= "foo" (sqtp "foo")))
-  (is (= :foo (sqtp :foo))))
-
 ;; protocols.clj:680 [language]
 (deftest test-base-reduce-kv
   (is (= {1 :a 2 :b}
          (reduce-kv #(assoc %1 %3 %2)
                     {}
                     (seq {:a 1 :b 2})))))
-
-;; protocols.clj:715 [language]
-(deftest test-prim-ret-hints-ignored
-  (is (thrown-with-msg?
-       Exception
-       #"Receiver class"
-       (eval '(f1 (reify PrimHinted) :foo))))
-  (is (= :foo  (f1 (reify PrimHinted (f1 [_ x] x)) :foo)))
-  (is (= "foo" (f2 (reify PrimHinted (f2 [_] "foo"))))))

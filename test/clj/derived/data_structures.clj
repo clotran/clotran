@@ -6,20 +6,8 @@
 (defn diff [s1 s2]
   (seq (reduce disj (set s1) (set s2))))
 
-(defn- transient? [x]
-  (instance? clojure.lang.ITransientCollection x))
-
 (defn tempty? [t]
   (= (count t) 0))
-
-(defn apply-actions [coll actions]
-  (reduce (fn [c [tfunc pfunc & args]]
-            (apply (if (transient? c) tfunc pfunc) c args))
-          coll
-          actions))
-
-(defn to-persistent [c]
-  (if (transient? c) (persistent! c) c))
 
 (defn case-indendent-string-cmp [s1 s2]
   (compare (string/lower-case s1) (string/lower-case s2)))
@@ -586,20 +574,6 @@
        {:a 2 :b -2} (assoc {} :b -2 :a 2))
   (is (thrown? IllegalArgumentException (assoc [] 0 5 1)))
   (is (thrown? IllegalArgumentException (assoc {} :b -2 :a))))
-
-;; data_structures.clj:1343 [language]
-(deftest record-hashing
-  (let [r (->Rec 1 1)
-        _ (hash r)
-        r2 (assoc r :c 2)]
-    (is (= (hash (->Rec 1 1)) (hash r)))
-    (is (= (hash r) (hash (with-meta r {:foo 2}))))
-    (is (not= (hash (->Rec 1 1)) (hash (assoc (->Rec 1 1) :a 2))))
-    (is (not= (hash (->Rec 1 1)) (hash r2)))
-    (is (not= (hash (->Rec 1 1)) (hash (assoc r :a 2))))
-    (is (= (hash (->Rec 1 1)) (hash (assoc r :a 1))))
-    (is (= (hash (->Rec 1 1)) (hash (dissoc r2 :c))))
-    (is (= (hash (->Rec 1 1)) (hash (dissoc (assoc r :c 1) :c))))))
 
 ;; data_structures.clj:1356 [language]
 (deftest singleton-map-in-destructure-context

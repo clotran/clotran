@@ -15,6 +15,14 @@
 
 (defmacro m2 [] (assoc))
 
+;; errors.clj:52 [language]
+(deftest compile-error-examples
+  (are [form errtype re] (thrown-with-cause-msg? errtype re (eval form))
+       '(Long/parseLong) Exception #"No matching method.*taking 0 args"
+       '(Long/parseLong :a :b :c) Exception #"No matching method.*taking 3 args")
+  (are [form errtype re] (thrown-with-msg? errtype re (eval form))
+       '(.jump "foo" 1) Exception #"No matching method.*taking 1 arg"))
+
 ;; errors.clj:69 [language]
 (deftest extract-ex-data
   (try

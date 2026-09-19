@@ -59,6 +59,11 @@
                         [(second f)]
                         (and (seq? f) (= 'import-macros (first f)))
                         (filter symbol? (nth f 2 nil))
+                        ;; (defmethod assert-expr 'thrown-with-cause-msg? ...) makes
+                        ;; that symbol usable inside (is ...)
+                        (and (seq? f) (= 'defmethod (first f)) (seq? (nth f 2 nil))
+                             (= 'quote (first (nth f 2))) (symbol? (second (nth f 2))))
+                        [(second (nth f 2))]
                         :else nil))
                     forms)))
 
@@ -115,13 +120,46 @@
 (defn ns-aliases [ns-form]
   (into {} (for [{:keys [lib as]} (require-specs ns-form) :when as] [as lib])))
 
+;; Every symbol a form USES. A quoted collection is data, not a use --
+;; (eval '(defn foo [] (throw))) uses eval, not foo -- and so is a quoted
+;; bare symbol. A quoted QUALIFIED symbol is kept: edamame expands a
+;; syntax-quote template into (quote gen/fmap) and that is a reference to
+;; a library, alias and all.
 (defn symbols-in [form]
-  (let [acc (atom [])]
-    (walk/postwalk (fn [x] (when (symbol? x) (swap! acc conj x)) x) form)
+  (let [acc (atom [])
+        walk (fn walk [x]
+               (cond (symbol? x) (swap! acc conj x)
+                     (and (seq? x) (= 'quote (first x)))
+                     (let [q (second x)] (when (and (symbol? q) (namespace q)) (swap! acc conj q)))
+                     (coll? x) (doseq [y x] (walk y))))]
+    (walk form)
+    @acc))
+
+;; Symbols that appear inside any vector literal of a form: an
+;; over-approximation of its binding positions (fn params, let/loop/for
+;; bindings, catch names, destructuring), used to tell a local from a
+;; name nothing defines. A symbol outside every vector that resolves to
+;; nothing is HOST: (vector-of :int) names gvec, (doc x) names
+;; clojure.repl, and neither is here.
+(defn vector-bound [form]
+  (let [acc (atom #{})
+        ;; symbols directly in the vector, or in nested vectors/maps
+        ;; (destructuring) -- but not inside a list, which is a call
+        grab (fn grab [x]
+               (cond (symbol? x) (swap! acc conj x)
+                     (seq? x) nil
+                     (coll? x) (doseq [y x] (grab y))))]
+    (walk/postwalk (fn [x]
+                     (cond (vector? x) (grab x)
+                           ;; the two binders that do not use a vector
+                           (and (seq? x) (= 'catch (first x)) (>= (count x) 3)) (grab (nth x 2))
+                           (and (seq? x) (= 'as-> (first x)) (>= (count x) 3)) (grab (nth x 2)))
+                     x)
+                   form)
     @acc))
 
 ;; Why a symbol is outside the language, or nil if it is inside.
-(defn offence [sym {:keys [aliases local-names core-only-names lang dropped]}]
+(defn offence [sym {:keys [aliases local-names core-only-names lang dropped bound helper-vocab]}]
   (let [n (name sym) nsp (namespace sym)]
     (cond
       (= sym 'clotran-tagged-literal) [:host sym]     ; #tag{...}: no tagged literals here
@@ -142,8 +180,13 @@
       (contains? exception-allowlist sym) nil
       (contains? dropped sym) [:host sym]              ; defined by a helper that was itself host
       (contains? local-names sym) nil
+      (contains? test-vocab sym) nil
+      (contains? helper-vocab sym) nil
       (capitalized? sym) [:host sym]
-      :else nil)))
+      (contains? bound sym) nil                        ; a local, probably
+      (= sym 'this) nil
+      (= sym '&) nil
+      :else [:host sym])))                             ; nothing defines it
 
 ;; A top-level form's HEAD must be something we can name: a special form,
 ;; a language or test name, or a definition in this file. An unknown head
@@ -158,7 +201,8 @@
         h))))
 
 (defn bucket [form ctx]
-  (let [offs (keep #(offence % ctx) (symbols-in form))
+  (let [ctx (assoc ctx :bound (vector-bound form))
+        offs (keep #(offence % ctx) (symbols-in form))
         offs (if-let [h (unknown-head form ctx)] (cons [:host h] offs) offs)
         kinds (set (map first offs))]
     {:bucket (cond (kinds :host) :host (kinds :concurrency) :concurrency :else :language)
@@ -170,7 +214,10 @@
                                   (str/starts-with? (name (first f)) "def"))
                          (second f)))
 
-(defn local-names-in [forms] (into #{} (keep defined-name forms)))
+;; (declare a b c) defines every name it lists.
+(defn local-names-in [forms]
+  (into (set (keep defined-name forms))
+        (for [f forms :when (and (seq? f) (= 'declare (first f))) s (rest f) :when (symbol? s)] s)))
 
 ;; Classify one file: helpers first, to a fixpoint (a helper using a dropped
 ;; helper is dropped too), then the tests against the surviving helpers.
@@ -179,7 +226,11 @@
         ;; a require of ANOTHER test file loads the vendored, JVM-shaped
         ;; original from the classpath, so it goes, and what it referred
         ;; becomes unavailable
-        foreign (filter #(contains? test-namespaces (:lib %)) specs)
+        portable-lib? (fn [lib] (or (contains? portable-libs lib)
+                                    (and (str/starts-with? lib "clojure.test-clojure")
+                                         (not (contains? test-namespaces lib))
+                                         (not= lib "clojure.test-clojure.generators"))))
+        foreign (remove #(portable-lib? (:lib %)) specs)
         dropped0 (into #{} (for [s foreign, r (if (sequential? (:refer s)) (:refer s) [])] r))
         helpers (remove #(or (deftest? %) (ns-form? %)) forms)
         ctx0 (assoc base-ctx :local-names (local-names-in forms) :aliases (ns-aliases ns-form))

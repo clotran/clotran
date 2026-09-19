@@ -15,9 +15,6 @@
 (defn- pos?$ [n]
   (if (number? n) (pos? n) false))
 
-(defn- empty?$ [s]
-  (if (instance? clojure.lang.Seqable s) (empty? s) false))
-
 (defn apply-as-seq [coll actions]
   (doall
     (loop [s coll

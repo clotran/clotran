@@ -75,58 +75,6 @@
       (or nil true (exception) false) true
       (or nil false "abc" (exception)) "abc" ))
 
-;; logic.clj:155 [language]
-(deftest test-not
-;  (is (thrown? IllegalArgumentException (not)))
-  (are [x] (= (not x) true)
-      nil
-      false )
-  (are [x]  (= (not x) false)
-      true
-
-      ; numbers
-      0
-      0.0
-      42
-      1.2
-      0/2
-      2/3
-
-      ; characters
-      \space
-      \tab
-      \a
-
-      ; strings
-      ""
-      "abc"
-
-      ; regexes
-      #""
-      #"a*b"
-
-      ; symbols
-      (symbol "")
-      'abc
-
-      ; keywords
-      :kw
-
-      ; collections/arrays
-      ()
-      '(1 2)
-      []
-      [1 2]
-      {}
-      {:a 1 :b 2}
-      #{}
-      #{1 2}
-      (into-array [])
-      (into-array [1 2])
-
-      ; Java objects
-      (new java.util.Date) ))
-
 ;; logic.clj:206 [language]
 (deftest test-some?
   (are [expected x] (= expected (some? x))
