@@ -44,18 +44,21 @@ once too high. The eight that fail -- `repl`, `main`, `instant`,
 want a JVM class (`Thread`, `Socket`, `SimpleDateFormat`, a SAX
 parser).
 
-`clojure.test` running means Clojure's own test suite runs:
-**1810 passing assertions** across 357 of its tests, from the 67
-namespaces vendored verbatim in `test/clj`. Over the assertions that
-EXECUTED that is 53%: 219 failed and 1396 errored alongside them.
+`clojure.test` running means Clojure's own tests run. The suite
+clotran is measured by is DERIVED from them: `scripts/derive-tests`
+keeps every `deftest` whose symbols lie in the intersection of
+`clojure.core` and `cljs.core` -- the language, as two implementations
+agree on it -- and leaves out the ones that name a Java class, a
+member call or a `clojure.core` function ClojureScript never had.
+That keeps 376 of 578 tests. **1869 passing assertions** across the
+307 of those that execute, against 158 failures and 358 errors, so
+**78% of the assertions that executed** (measured 2026-09-19).
 
 That denominator is assertions that executed, not assertions that
-exist. A test file that aborts partway defines no tests and contributes
-nothing to either side. 32 of the 67 namespaces produce a passing
-assertion today; several -- `proxy`, `genclass`, annotations, AOT,
-Java serialization -- can never pass here and have not been subtracted.
-`PLAN.md` step 2 is the plan to derive a suite whose denominator is the
-language rather than the JVM.
+exist: 6 of the 45 derived files still abort before defining a test.
+The 67 vendored namespaces also run verbatim, for reference, at 53%
+of executed assertions; the JVM-shaped half of them is why that number
+is not the one to watch.
 
 **Real Fortran arrays**, which is the one thing this host has that the
 JVM does not:
@@ -136,14 +139,16 @@ native, using ClojureScript as the control group.
 ## Build
 
 ```
-make            # builds clotran and every test binary
-make test       # builds and runs every test binary
+make            # builds ./clotran and the test binaries under build/
+make test       # the gate: host tests, language_test.clj, scripts/oracle
 make crosscheck # the same on flang and gfortran -- run before committing
 make FC=flang all test      # just the flang side
 ```
 
-The first build also compiles vendored ICU from source, which takes a
-few minutes once; after that it is cached.
+Every build product lives under `build/` -- objects, `.mod` files, the
+test binaries in `build/test/` -- and the only artifact in the root is
+`./clotran` itself. The first build also compiles vendored ICU from
+source, which takes a few minutes once; after that it is cached.
 
 `./clotran` is the interpreter, a plain stdin/stdout REPL with no line
 editing of its own; it loads the files named on its command line first,

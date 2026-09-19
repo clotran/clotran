@@ -128,7 +128,7 @@ Three measures, each named with its denominator:
 | scorecard | what it is |
 |---|---|
 | **our tests** | `test/f/*_test.f90` (the Fortran host -- GC, reader, printer, evaluator), `test/clj/language_test.clj` (host checks with core.clj loaded) and `scripts/oracle` (`test/clj/oracle.clj` through `clj` AND clotran, values compared). A GATE, not a grade: 100% or do not commit. |
-| **Clojure's tests** | `test/clj/clojure/test_clojure`, 67 namespaces verbatim. `scripts/run-clojure-tests` drives them. |
+| **the language suite** | `test/clj/derived/`, DERIVED from Clojure's own tests by `scripts/derive-tests`: the deftests whose symbols lie in the clojure.core/cljs.core intersection (plus concurrency). `scripts/run-clojure-tests-parallel test/clj/derived` runs it. Never edit the derived files; re-run the script. The 67 vendored namespaces still run verbatim with no argument, for reference. |
 | **libraries loading** | how many of Clojure's own libs `(require ...)` succeeds on. |
 
 State what the denominator excludes. A namespace that crashes before

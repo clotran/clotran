@@ -1,0 +1,227 @@
+#!/usr/bin/env bb
+;; Derives clotran's LANGUAGE test suite from Clojure's own, mechanically.
+;;
+;;   scripts/derive-tests --report      classify, print counts, write nothing
+;;   scripts/derive-tests               write test/clj/derived/*.clj
+;;
+;; THE RULE. The language is the intersection of two implementations:
+;; the public names of clojure.core (the pinned clone we vendor) and of
+;; cljs.core (the pinned ClojureScript clone). A deftest whose symbols
+;; all fall inside that set -- plus clojure.test, the portable libs, the
+;; special forms and a short allowlist of exception classes -- is a
+;; LANGUAGE test. One that names a Java class, a member call, a
+;; constructor, or a clojure.core public that ClojureScript never had is
+;; a HOST test and is left out. Between the two sits CONCURRENCY: refs,
+;; agents, futures, STM -- Clojure-only, but a stated goal (PLAN.md), so
+;; they are kept in their own bucket rather than discarded.
+;;
+;; Nothing is hand-listed except the exception allowlist and the
+;; concurrency vocabulary; both are printed by --report so they can be
+;; argued with. The vendored tree is never edited: the derived files
+;; carry the source file and line of every test they keep, and the
+;; derivation re-runs on the next Clojure release.
+(require '[clojure.string :as str]
+         '[clojure.java.io :as io]
+         '[clojure.walk :as walk]
+         '[edamame.core :as e])
+
+(def repo (-> *file* io/file .getCanonicalFile .getParentFile .getParentFile))
+(def home (System/getProperty "user.home"))
+;; core.clj and the files it (load)s: defrecord, defprotocol and
+;; print-method live in the siblings, not in core.clj itself.
+(def core-clj-files (map #(io/file repo "src/clj/clojure" %)
+                         ["core.clj" "core_deftype.clj" "core_print.clj" "core/protocols.clj"]))
+(def core-cljs (io/file home "jborden/clojurescript/src/main/cljs/cljs/core.cljs"))
+(def core-cljc (io/file home "jborden/clojurescript/src/main/clojure/cljs/core.cljc"))
+(def suite-dir (io/file repo "test/clj/clojure/test_clojure"))
+(def out-dir   (io/file repo "test/clj/derived"))
+
+;; Any tagged literal (#js {...}, a record literal) reads as its payload;
+;; reader conditionals take the :clj branch. Neither affects which
+;; symbols a form mentions, which is all this script reads.
+(defn parse [f]
+  (try (e/parse-string-all (slurp f) {:all true :end-location true :auto-resolve name
+                                       :readers (fn [_tag] identity)
+                                       :read-cond :allow :features #{:clj}})
+       (catch Exception ex (println "  cannot parse" (str f) ":" (.getMessage ex)) nil)))
+
+(def def-heads '#{def defn defmacro definline defmulti defonce defprotocol deftype defrecord
+                  defn- core/defmacro core/defn core/def defcurried})
+
+;; Public names defined at top level. `defn-` and ^:private are not public.
+;; cljs/core.cljc borrows a dozen macros from clojure.core by name --
+;; (import-macros clojure.core [-> when ...]) -- and those count too.
+(defn public-names [forms]
+  (into #{} (mapcat (fn [f]
+                      (cond
+                        (and (seq? f) (contains? def-heads (first f)) (symbol? (second f))
+                             (not= 'defn- (first f)) (not (:private (meta (second f)))))
+                        [(second f)]
+                        (and (seq? f) (= 'import-macros (first f)))
+                        (filter symbol? (nth f 2 nil))
+                        :else nil))
+                    forms)))
+
+(def specials '#{if do let* fn* quote var def loop* recur throw try catch finally new . set!
+                 letfn* case* deftype* reify* & monitor-enter monitor-exit import* clojure.core/import*})
+
+(def portable-libs #{"clojure.core" "clojure.test" "clojure.string" "clojure.set" "clojure.walk"
+                     "clojure.template" "clojure.zip" "clojure.data" "clojure.edn" "clojure.pprint"
+                     "clojure.math" "clojure.test-helper" "clojure.test-clojure.test-helper"})
+
+;; Exceptions whose CLASS NAME is how Clojure spells a language-level
+;; failure -- (thrown? ArityException ...) is about arity, not about Java.
+(def exception-allowlist
+  '#{Exception Throwable RuntimeException Error IllegalArgumentException IllegalStateException
+     ArithmeticException ClassCastException IndexOutOfBoundsException NullPointerException
+     UnsupportedOperationException NumberFormatException StackOverflowError AssertionError
+     ExceptionInfo ArityException clojure.lang.ExceptionInfo clojure.lang.ArityException
+     Object})
+
+(def concurrency-vocab
+  '#{ref deref dosync alter commute ref-set ensure ref-history-count ref-min-history ref-max-history
+     agent send send-off await await-for agent-error restart-agent set-error-handler!
+     set-error-mode! error-handler error-mode shutdown-agents release-pending-sends
+     future future-call future-cancel future-cancelled? future-done? future? pmap pcalls pvalues
+     promise deliver locking add-watch remove-watch io! sync
+     thread-bound? get-thread-bindings push-thread-bindings pop-thread-bindings
+     Thread})
+
+;; Host constants that spell LANGUAGE-level numeric facts: Clojure's
+;; integers are 64-bit longs and its doubles IEEE, and so are clotran's.
+(def numeric-constants
+  '#{Long/MAX_VALUE Long/MIN_VALUE Integer/MAX_VALUE Integer/MIN_VALUE
+     Double/MAX_VALUE Double/MIN_VALUE Double/POSITIVE_INFINITY Double/NEGATIVE_INFINITY Double/NaN})
+
+(defn capitalized? [s] (let [c (first (name s))] (and c (Character/isUpperCase c))))
+
+(defn ns-aliases [ns-form]
+  (into {} (for [clause (drop 2 ns-form)
+                 :when (and (seq? clause) (= :require (first clause)))
+                 spec (rest clause)
+                 :let [[lib & {:as opts}] (if (vector? spec) spec [spec])]
+                 :when (:as opts)]
+             [(name (:as opts)) (name lib)])))
+
+(defn symbols-in [form]
+  (let [acc (atom [])]
+    (walk/postwalk (fn [x] (when (symbol? x) (swap! acc conj x)) x) form)
+    @acc))
+
+;; Why a symbol is outside the language, or nil if it is inside.
+(defn offence [sym {:keys [aliases local-names core-only-names lang]}]
+  (let [n (name sym) nsp (namespace sym)]
+    (cond
+      (contains? numeric-constants sym) nil
+      nsp (let [nsp (get aliases nsp nsp)]
+            (cond (contains? portable-libs nsp) nil
+                  (or (capitalized? (symbol nsp)) (str/starts-with? nsp "java.")
+                      (str/starts-with? nsp "clojure.lang")) [:host sym]
+                  (str/starts-with? nsp "clojure.") [:host sym]   ; clojure.java.io, clojure.reflect ...
+                  :else nil))                                    ; a test's own helper ns
+      (str/starts-with? n ".") (if (= n ".") nil [:host sym])
+      (and (> (count n) 1) (str/ends-with? n "."))
+      (if (contains? exception-allowlist (symbol (subs n 0 (dec (count n))))) nil [:host sym])
+      (contains? specials sym) nil
+      (contains? lang sym) nil
+      (contains? concurrency-vocab sym) [:concurrency sym]
+      (contains? core-only-names sym) [:host sym]
+      (contains? exception-allowlist sym) nil
+      (contains? local-names sym) nil
+      (capitalized? sym) [:host sym]
+      :else nil)))
+
+(defn bucket [form ctx]
+  (let [offs (keep #(offence % ctx) (symbols-in form))
+        kinds (set (map first offs))]
+    {:bucket (cond (kinds :host) :host (kinds :concurrency) :concurrency :else :language)
+     :offences (distinct (map second offs))}))
+
+(defn deftest? [f] (and (seq? f) (= 'deftest (first f))))
+
+(defn local-names-in [forms]
+  (into #{} (for [f forms :when (and (seq? f) (symbol? (first f)) (symbol? (second f))
+                                     (or (str/starts-with? (name (first f)) "def")
+                                         (= 'deftest (first f))))]
+              (second f))))
+
+(let [report? (= "--report" (first *command-line-args*))
+      clj-names  (reduce into #{} (map (comp public-names parse) core-clj-files))
+      cljs-names (into (public-names (parse core-cljs)) (public-names (parse core-cljc)))
+      lang (set (filter cljs-names clj-names))
+      core-only (set (remove cljs-names clj-names))
+      files (sort-by #(.getName %) (filter #(str/ends-with? (.getName %) ".clj") (.listFiles suite-dir)))
+      offence-count (atom {})
+      rows (for [f files
+                 :let [forms (parse f)]
+                 :when forms
+                 :let [ns-form (first (filter #(and (seq? %) (= 'ns (first %))) forms))
+                       ctx {:aliases (when ns-form (ns-aliases ns-form))
+                            :local-names (local-names-in forms)
+                            :core-only-names core-only :lang lang}
+                       tests (for [t (filter deftest? forms)
+                                   :let [b (bucket t ctx)]]
+                               (do (when (= :host (:bucket b))
+                                     (doseq [o (:offences b)] (swap! offence-count update o (fnil inc 0))))
+                                   (assoc b :form t)))]]
+             {:file f :ns-form ns-form :forms forms :tests tests
+              :counts (frequencies (map :bucket tests))})]
+  (println (format "clojure.core publics %d, cljs.core publics %d, intersection (the language) %d, clojure-only %d"
+                   (count clj-names) (count cljs-names) (count lang) (count core-only)))
+  (println)
+  (println (format "%-44s %5s %5s %5s %5s" "namespace" "tests" "lang" "conc" "host"))
+  (doseq [{:keys [file counts]} rows]
+    (let [n (reduce + (vals counts))]
+      (println (format "%-44s %5d %5d %5d %5d" (.getName file) n (get counts :language 0)
+                       (get counts :concurrency 0) (get counts :host 0)))))
+  (let [tot (apply merge-with + (map :counts rows)) n (reduce + (vals tot))]
+    (println (format "%-44s %5d %5d %5d %5d" "TOTAL" n (:language tot 0) (:concurrency tot 0) (:host tot 0))))
+  (println)
+  (println "most frequent symbols that made a test HOST:")
+  (doseq [[s c] (take 40 (sort-by (comp - second) @offence-count))]
+    (println (format "  %4d %s" c s)))
+  (when-not report?
+    (.mkdirs out-dir)
+    (doseq [old (.listFiles out-dir)] (.delete old))
+    (doseq [{:keys [file ns-form forms tests]} rows
+            :let [kept (filter #(#{:language :concurrency} (:bucket %)) tests)]
+            :when (seq kept)]
+      (let [lines (str/split-lines (slurp file))
+            slice (fn [form] (let [m (meta form)] (str/join "\n" (subvec lines (dec (:row m)) (:end-row m)))))
+            ;; helpers: every non-deftest, non-ns top-level form that is itself
+            ;; language-clean travels with the tests that may need it
+            ctx {:aliases (ns-aliases ns-form) :local-names (local-names-in forms)
+                 :core-only-names core-only :lang lang}
+            helpers (filter #(and (not (deftest? %)) (not (and (seq? %) (= 'ns (first %))))
+                                  (not= :host (:bucket (bucket % ctx))))
+                            forms)
+            ;; the ns form keeps only what a language test can load: no
+            ;; :import, and no :require/:use of a JVM or third-party lib
+            ;; (test.check, generative) -- every test that used one is
+            ;; already in the host bucket, so nothing kept refers to it
+            portable-lib? (fn [spec] (let [lib (name (if (vector? spec) (first spec) spec))]
+                                       (or (contains? portable-libs lib)
+                                           ;; test-clojure.generators wraps clojure.data.generators,
+                                           ;; a third-party artifact; every test using it is host
+                                           (and (str/starts-with? lib "clojure.test-clojure")
+                                                (not= lib "clojure.test-clojure.generators"))
+                                           (str/starts-with? lib "clojure.test-helper"))))
+            ns-clean (concat (take 2 ns-form)
+                             (keep (fn [clause]
+                                     (cond (not (seq? clause)) clause
+                                           (= :import (first clause)) nil
+                                           (#{:require :use} (first clause))
+                                           (let [specs (filter portable-lib? (rest clause))]
+                                             (when (seq specs) (cons (first clause) specs)))
+                                           :else clause))
+                                   (drop 2 ns-form)))
+            out (io/file out-dir (.getName file))]
+        (spit out (str ";; DERIVED from " (str (.relativize (.toPath repo) (.toPath file))) " by scripts/derive-tests -- do not edit.\n"
+                       ";; Kept: tests whose symbols lie in the clojure.core/cljs.core intersection (plus concurrency).\n\n"
+                       (pr-str (with-meta (apply list ns-clean) nil)) "\n\n"
+                       (str/join "\n\n" (map slice helpers)) "\n\n"
+                       (str/join "\n\n" (for [t kept]
+                                          (str ";; " (.getName file) ":" (:row (meta (:form t))) " [" (name (:bucket t)) "]\n"
+                                               (slice (:form t)))))
+                       "\n"))))
+    (println "\nwrote" (count (.listFiles out-dir)) "files to" (str out-dir))))

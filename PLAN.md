@@ -34,7 +34,8 @@ JVM-shaped `case` arms in one file.
 |---|---|
 | core.clj | 724 of 724 forms load |
 | our tests | 100% on both compilers; the gate |
-| Clojure's suite | 1810 pass / 219 fail / 1396 error over 357 tests, so 53% of assertions that EXECUTED; 32 of 67 namespaces produce a passing assertion; none crash before reporting |
+| the derived language suite | 376 tests kept (364 language + 9 concurrency + 3 from unparsable-but-kept files), 307 executed: 1869 pass / 158 fail / 358 error, so 78% of assertions that EXECUTED. 6 of 45 derived files abort before defining a test: compilation, data-structures, def, numbers, reducers, transducers |
+| Clojure's suite, verbatim (for reference) | 1810 pass / 219 fail / 1396 error over 357 tests, 53% of executed; 32 of 67 namespaces produce a passing assertion |
 | startup | 7.2s, core.clj re-read every launch |
 | `loop`/`recur` | ~100 µs per iteration, linear |
 | `(reduce + (range n))` | n=4000: 22s. n=16000: 161s. SUPERLINEAR. n=100000 did not finish in 15 minutes |
@@ -109,23 +110,26 @@ Three layers, each answering a different question:
   Clojure's -- every one a known deviation, now marked `expect-diff`
   so the ledger goes red if a deviation quietly closes. `clj` is the
   oracle; bb never is.
-- **Language tests derived from Clojure's suite.** Not 67 verbatim
-  files with a hand-written exclusion list. The intersection of the
-  public names of `clojure.core` (pinned clone) and `cljs.core` (pinned
-  clone) IS the language. A `deftest` whose free symbols fall inside
-  that set, plus `clojure.test`, is a language test; one that reaches
-  outside it is a host test and is excluded. A bb script computes the
-  set, classifies every `deftest` in the vendored tree, and emits a
-  derived tree with provenance. The vendored files stay untouched, and
-  the derivation re-runs on the next Clojure release. This removes
-  `genclass`, `proxy`, `compilation`, `annotations`, `serialization`,
-  `reflect`, `method_thunks`, `param_tags`, the `generated_*_adapters`
-  files, `api` and `generators` mechanically. The intersection decides
-  what to test; `clj` still decides the answer (ClojureScript has only
-  doubles and different hashes).
+- **Language tests derived from Clojure's suite -- DONE.**
+  `scripts/derive-tests` computes the intersection of the public names
+  of `clojure.core` (the vendored source and its siblings) and
+  `cljs.core` (the pinned ClojureScript clone): 470 names, the
+  language. It classifies every `deftest` in the vendored tree by the
+  symbols it uses -- LANGUAGE if they all fall inside that set plus the
+  special forms, the portable libs and a short exception allowlist;
+  CONCURRENCY if the only outsiders are refs, agents, futures and STM
+  (Clojure-only, but goal 3); HOST otherwise (a Java class, a member
+  call, a constructor, a clojure.core name ClojureScript never had) --
+  and writes the kept tests to `test/clj/derived/` with the source
+  file and line of each. Of 578 deftests it can read, 364 are language,
+  9 concurrency, 205 host; 7 files it cannot read at all (method
+  values, param-tags, record literals) are all JVM-shaped. The two hand
+  lists it does contain, the exception allowlist and the concurrency
+  vocabulary, are printed by `--report` so they can be argued with.
+  `scripts/run-clojure-tests-parallel test/clj/derived` runs it.
 
-The scorecard becomes: pass rate over the derived language suite, with
-the denominator stated.
+The scorecard is now the pass rate over the derived language suite,
+with the denominator stated -- see "Where we are".
 
 ### 3. Freeze host-member work; one table, as data
 

@@ -36,6 +36,8 @@
 ;; namespace loading ever becomes self-contained this is worth
 ;; revisiting, because those 476 seconds are still there.
 ;;
+;;   scripts/run-clojure-tests-parallel [dir]   default test/clj/clojure/test_clojure;
+;;        test/clj/derived runs the derived LANGUAGE suite (scripts/derive-tests)
 ;;   CLOTRAN_TEST_JOBS      processes at once (default 4)
 ;;   CLOTRAN_TEST_TIMEOUT   seconds per namespace (default 600)
 
@@ -52,8 +54,10 @@
 (defn note [& xs]
   (binding [*out* *err*] (apply println xs) (flush)))
 
+(def suite-dir (or (first *command-line-args*) "test/clj/clojure/test_clojure"))
+
 (defn test-files []
-  (->> (io/file repo "test/clj/clojure/test_clojure")
+  (->> (io/file repo suite-dir)
        .listFiles
        (filter #(str/ends-with? (.getName %) ".clj"))
        (sort-by #(.getName %))))
@@ -71,7 +75,7 @@
    report, which is 38 of the 67 today."
   [f]
   (let [n    (ns-of f)
-        path (str "test/clj/clojure/test_clojure/" (.getName f))
+        path (str suite-dir "/" (.getName f))
         prog (str "(require 'clojure.test)\n"
                   "(load-file \"test/clj/clojure/test_helper.clj\")\n"
                   "(load-file \"" path "\")\n"
