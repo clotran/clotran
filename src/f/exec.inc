@@ -237,6 +237,8 @@
        call frame_set(vs_get(base + 5), int_of(gcv_nth(capv, 2 * i + 1)), gc_vec_get(caps, i + 1))
     end do
     if (self >= 0) call frame_set(vs_get(base + 5), self, vs_get(base + 1))
+    ! the arguments live in the frame now; the vector is dropped
+    call vs_set(base + 2, gc_nil())
 
     ! The body is a recur point: recur has already rewritten the
     ! parameter slots, so running the body again is the loop.
@@ -277,6 +279,9 @@
        out = gc_slot(nd, 2)
     case (N_LOCAL)
        out = frame_get(frame, gc_i2(nd))
+       ! the last read of this local: the slot is nil-ed so the frame
+       ! no longer pins the value (locals clearing, analyze.inc)
+       if (tag_of(gc_slot(nd, 3)) == GCT_BOOL) call frame_set(frame, gc_i2(nd), gc_nil())
     case (N_VAR)
        out = gcn_var_value(gc_slot(nd, 2))
     case (N_IF)
@@ -302,10 +307,17 @@
           if (.not. has_error) then
              call vs_set(base + 4, v)
              ! where this call is, for the frame invoke_closure pushes
-             v = gc_slot(vs_get(base + 1), 4)
+             fnv = gc_slot(vs_get(base + 1), 4)
              pending_site = 0
-             if (v%tag == GCT_INT) pending_site = int(v%ival, kind=4)
-             out = apply(vs_get(base + 3), vs_get(base + 4))
+             if (fnv%tag == GCT_INT) pending_site = int(fnv%ival, kind=4)
+             ! The argument vector is handed over, not kept: `apply`
+             ! roots it at once and the callee's frame takes the values,
+             ! so leaving it in this frame's slot for the whole call would
+             ! pin every argument -- the head of a seq being reduced --
+             ! for as long as the callee runs. No allocation happens
+             ! between this nil and apply's own vs_set.
+             call vs_set(base + 4, gc_nil())
+             out = apply(vs_get(base + 3), v)
           end if
        end if
     case (N_VECTOR)

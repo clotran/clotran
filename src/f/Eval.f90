@@ -5208,7 +5208,14 @@ contains
     case (OBJ_BUILTIN)
        out = call_builtin(gc_i1(fn), args)
     case (OBJ_CLOSURE)
-       out = invoke_closure(vs_get(base + 1), vs_get(base + 2))
+       ! handed over, not kept (see exec's N_CALL): the callee roots
+       ! args itself, immediately, and nothing allocates in between
+       block
+         type(gc_value) :: argl
+         argl = vs_get(base + 2)
+         call vs_set(base + 2, gc_nil())
+         out = invoke_closure(vs_get(base + 1), argl)
+       end block
     case (OBJ_MULTIFN)
        ! getFn(dispatchFn.invoke(args)).invoke(args) -- MultiFn.invoke,
        ! exactly. The dispatch function sees the same arguments the
