@@ -160,6 +160,8 @@ module Eval
   integer, parameter :: B_RTPRINT = 270
   integer, parameter :: B_NANOTIME = 271, B_MILLIS = 272
   integer, parameter :: B_DGEMM = 273
+  integer, parameter :: B_STACKTRACE = 274, B_STE_CLASS = 275, B_STE_METHOD = 276, &
+       B_STE_FILE = 277, B_STE_LINE = 278
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -282,10 +284,68 @@ contains
   ! Re-checks the slot rather than trusting the index, for the same
   ! reason PersistentList's empty-list singleton does: gc_init clears the
   ! global-root registry but this module variable survives it.
+  ! The thrown value. A Throwable that has no stack trace yet gets
+  ! the current one -- Java fills it in at construction; here that
+  ! happens in eval_new for a (new SomeException ...) and, failing
+  ! that, now, at the throw.
   subroutine set_thrown(v)
     type(gc_value), intent(in) :: v
+    type(gc_value) :: fr
+    integer :: base
     call gc_global_keep(thrown_root, v)
+    if (gc_kind(v) == OBJ_ERR) then
+       if (tag_of(gc_slot(v, 4)) == GCT_NIL) then
+          base = vs_enter(1)
+          fr = frames_vec([v])
+          call vs_set(base + 1, fr)
+          call gc_set_slot(v, 4, vs_get(base + 1))
+          call vs_leave(base)
+       end if
+    end if
   end subroutine set_thrown
+
+  ! The call stack as data, innermost first: one map per frame with
+  ! the four things a StackTraceElement answers. `:class` is the
+  ! function's qualified name, `:method` is always "invoke" -- there
+  ! is one way to call a function here -- `:file` and `:line` are the
+  ! call site's.
+  function frames_vec(roots) result(out)
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, m, nm
+    character(len=:), allocatable :: who, fname
+    integer :: i, base, line, col
+    base = vs_enter(2)
+    out = gcv_empty(roots)
+    call vs_set(base + 1, out)
+    do i = fstack_top, 1, -1
+       who = "fn"
+       if (gc_kind(fstack_fn(i)) == OBJ_CLOSURE) then
+          nm = gc_slot(fstack_fn(i), 5)
+          if (nm%tag == GCT_SYM) who = gc_ref_text(nm%ref)
+       end if
+       fname = ""
+       line = 0
+       if (fstack_site(i) /= 0) call gcr_position_parts(fstack_site(i), fname, line, col)
+       m = gca_empty([roots, vs_get(base + 1)])
+       call vs_set(base + 2, m)
+       m = gca_assoc(vs_get(base + 2), gc_key("class", [vs_get(base + 1), vs_get(base + 2)]), &
+            gc_str(who, [vs_get(base + 1), vs_get(base + 2)]), [vs_get(base + 1), vs_get(base + 2)])
+       call vs_set(base + 2, m)
+       m = gca_assoc(vs_get(base + 2), gc_key("method", [vs_get(base + 1), vs_get(base + 2)]), &
+            gc_str("invoke", [vs_get(base + 1), vs_get(base + 2)]), [vs_get(base + 1), vs_get(base + 2)])
+       call vs_set(base + 2, m)
+       m = gca_assoc(vs_get(base + 2), gc_key("file", [vs_get(base + 1), vs_get(base + 2)]), &
+            gc_str(fname, [vs_get(base + 1), vs_get(base + 2)]), [vs_get(base + 1), vs_get(base + 2)])
+       call vs_set(base + 2, m)
+       m = gca_assoc(vs_get(base + 2), gc_key("line", [vs_get(base + 1), vs_get(base + 2)]), &
+            gc_int(line), [vs_get(base + 1), vs_get(base + 2)])
+       call vs_set(base + 2, m)
+       out = gcv_conj(vs_get(base + 1), vs_get(base + 2), [roots])
+       call vs_set(base + 1, out)
+    end do
+    out = vs_get(base + 1)
+    call vs_leave(base)
+  end function frames_vec
 
   function thrown_value() result(v)
     type(gc_value) :: v
@@ -1748,7 +1808,12 @@ contains
     ! every path through it, which is every printed exception and
     ! every thrown-with-cause-msg? in Clojure's suite, died on
     ! "alength: not an array" rather than on anything real.
-    case ("getStackTrace"); out = native(B_EMPTYARRAY, "clotran-empty-array", [roots])
+    case ("getStackTrace"); out = native(B_STACKTRACE, "clotran-stack-trace", [roots])
+    ! StackTraceElement, which here is a map (frames_vec)
+    case ("getClassName");  out = native(B_STE_CLASS, "clotran-frame-class", [roots])
+    case ("getMethodName"); out = native(B_STE_METHOD, "clotran-frame-method", [roots])
+    case ("getFileName");   out = native(B_STE_FILE, "clotran-frame-file", [roots])
+    case ("getLineNumber"); out = native(B_STE_LINE, "clotran-frame-line", [roots])
     ! setStackTrace is a no-op: there is nothing to set. ex-info
     ! elides its own top frames through it, and the elision is
     ! meaningless when the trace is always empty -- but the call
@@ -2453,6 +2518,10 @@ contains
                nth_or_nil(vs_get(base + 3), 0), &
                nth_or_nil(vs_get(base + 3), 1)], &
               [vs_get(base + 3)])
+         ! filled in at construction, as Throwable's constructor does
+         call vs_set(base + 3, out)
+         call gc_set_slot(vs_get(base + 3), 4, frames_vec([vs_get(base + 3)]))
+         out = vs_get(base + 3)
        end block
     else
        ! A type deftype* created. Last, so nothing above is shadowed
@@ -6433,7 +6502,7 @@ contains
        block
          character(len=:), allocatable :: path, text
          type(gc_value) :: forms, genv, f
-         integer :: u, st, fsize, j
+         integer :: u, st, fsize, j, fid
          logical :: eof
          out = gc_nil()
          path = text_of(gcv_nth(args, 0))
@@ -6453,10 +6522,10 @@ contains
             end if
             call vs_set(base + 2, genv)
             ! one form at a time, as main.f90's load_file and Compiler.load
-            call gcr_begin_file(text, path)
+            fid = gcr_begin_file(text, path)
             j = 1
             do
-               forms = gcr_read_next(text, j, [vs_get(base + 1), vs_get(base + 2)], eof)
+               forms = gcr_read_next(text, j, [vs_get(base + 1), vs_get(base + 2)], eof, fid)
                if (gcr_has_error()) then
                   call fail("load-file " // path // ": " // gcr_error())
                   exit
@@ -7812,6 +7881,28 @@ contains
        end block
     case (B_EMPTYARRAY)
        out = value_array(gcv_empty([vs_get(base + 1)]), [vs_get(base + 1)])
+    case (B_STACKTRACE)
+       ! (.getStackTrace e): the frames e was thrown with; for anything
+       ! that is not a Throwable -- (Thread/currentThread) -- the
+       ! frames of the call in progress.
+       a = strip_meta(gcv_nth(args, 0))
+       if (gc_kind(a) == OBJ_ERR .and. gcv_is(gc_slot(a, 4))) then
+          out = value_array(gc_slot(a, 4), [vs_get(base + 1)])
+       else
+          call vs_set(base + 2, frames_vec([vs_get(base + 1)]))
+          out = value_array(vs_get(base + 2), [vs_get(base + 1), vs_get(base + 2)])
+       end if
+    case (B_STE_CLASS, B_STE_METHOD, B_STE_FILE, B_STE_LINE)
+       a = strip_meta(gcv_nth(args, 0))
+       out = gc_nil()
+       if (gca_is(a)) then
+          select case (id)
+          case (B_STE_CLASS);  out = gca_get(a, gc_key("class", [vs_get(base + 1)]))
+          case (B_STE_METHOD); out = gca_get(a, gc_key("method", [vs_get(base + 1)]))
+          case (B_STE_FILE);   out = gca_get(a, gc_key("file", [vs_get(base + 1)]))
+          case (B_STE_LINE);   out = gca_get(a, gc_key("line", [vs_get(base + 1)]))
+          end select
+       end if
     case (B_INTOARRAY)
        out = value_array(gcv_nth(args, n - 1), [vs_get(base + 1)])
     case (B_RE_START, B_RE_END)

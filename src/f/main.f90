@@ -128,7 +128,7 @@ contains
     type(gc_value), intent(in) :: env
     character(len=:), allocatable :: text
     type(gc_value) :: forms, r
-    integer :: u, st, lb, i, fsize, pos
+    integer :: u, st, lb, i, fsize, pos, fid
     logical :: eof
     character(len=8) :: envbuf
     logical :: trace
@@ -160,11 +160,11 @@ contains
     ! One form at a time: read, analyse, evaluate, read the next -- as
     ! Compiler.load does, so a form sees what the one before it did
     ! to *ns*, *data-readers* or a ::keyword's namespace.
-    call gcr_begin_file(text, path)
+    fid = gcr_begin_file(text, path)
     pos = 1
     i = 0
     do
-       forms = gcr_read_next(text, pos, [vs_get(lb + 1)], eof)
+       forms = gcr_read_next(text, pos, [vs_get(lb + 1)], eof, fid)
        if (gcr_has_error()) then
           print '(A,A,A,A)', "load ", path, ": reader error: ", gcr_error()
           exit

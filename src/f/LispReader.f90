@@ -35,7 +35,7 @@ module LispReader
   logical :: has_error = .false.
 
   public :: gcr_read, gcr_read_all, gcr_error, gcr_has_error
-  public :: gcr_begin_file, gcr_read_next, gcr_position
+  public :: gcr_begin_file, gcr_read_next, gcr_position, gcr_position_parts
 
   ! SOURCE POSITIONS. A list form records where it was read from:
   ! OBJ_CONS's i2 (free: i1 is the count) holds file-id * 2^26 + the
@@ -46,8 +46,10 @@ module LispReader
   ! newlines per form and simpler than threading a line counter
   ! through every read_* routine. Files are named once, in a small
   ! table; id 0 is "no file" (the REPL).
-  integer, parameter :: POS_SHIFT = 2**26
-  integer, parameter :: MAX_FILES = 64
+  ! 2^24: an offset up to 16M characters, a file id up to 127. 2^26 let
+  ! the 32nd file overflow the packed integer.
+  integer, parameter :: POS_SHIFT = 2**24
+  integer, parameter :: MAX_FILES = 120
   ! One entry per file ever loaded, line index included: a position
   ! inside core.clj is asked about long after some other file became
   ! current, and must be answered against core.clj's own lines.
@@ -78,10 +80,15 @@ contains
     last_error = msg
   end subroutine fail
 
-  ! Names the file the next gcr_read_next calls read from, and indexes
-  ! its lines. Call once per file, before the first form.
-  subroutine gcr_begin_file(text, name)
+  ! Names a file and indexes its lines; answers its id, which the
+  ! loader hands back to every gcr_read_next for that file. It must:
+  ! reading is interleaved with evaluation, and a (require ...) in the
+  ! middle of a file loads other files, each of which becomes the
+  ! current one -- so the next form of the OUTER file would otherwise
+  ! be stamped with the last inner file's id.
+  function gcr_begin_file(text, name) result(fid)
     character(len=*), intent(in) :: text, name
+    integer :: fid
     integer :: i, n, k
     cur_file = 0
     do i = 1, n_files
@@ -92,6 +99,7 @@ contains
        files(n_files)%name = name
        cur_file = n_files
     end if
+    fid = cur_file
     if (cur_file == 0) return
     n = 1
     do i = 1, len(text)
@@ -107,18 +115,20 @@ contains
           files(cur_file)%line_starts(k) = i + 1
        end if
     end do
-  end subroutine gcr_begin_file
+  end function gcr_begin_file
 
   ! The next form after pos, advancing pos past it; eof when only
   ! whitespace and comments remain. What Compiler.load does per form:
   ! read, then evaluate, then read again -- so a form can depend on
   ! what the one before it changed (DEVIATIONS 1, closed).
-  function gcr_read_next(text, pos, roots, eof) result(v)
+  function gcr_read_next(text, pos, roots, eof, fid) result(v)
     character(len=*), intent(in) :: text
     integer, intent(inout) :: pos
     type(gc_value), intent(in) :: roots(:)
     logical, intent(out) :: eof
+    integer, intent(in) :: fid
     type(gc_value) :: v
+    cur_file = fid
     has_error = .false.
     last_error = ""
     eof = .false.
@@ -134,11 +144,28 @@ contains
   ! "file:line:col" for a packed position, or "line:col" with no file.
   function gcr_position(packed) result(s)
     integer, intent(in) :: packed
-    character(len=:), allocatable :: s
+    character(len=:), allocatable :: s, fname
     character(len=24) :: lb, cb
-    integer :: fid, off, lo, hi, mid, line, col
+    integer :: line, col
+    call gcr_position_parts(packed, fname, line, col)
+    write(lb, '(I0)') line
+    write(cb, '(I0)') col
+    if (len(fname) > 0) then
+       s = fname // ":" // trim(lb) // ":" // trim(cb)
+    else
+       s = trim(lb) // ":" // trim(cb)
+    end if
+  end function gcr_position
+
+  ! The parts: file name (empty when none), line and column.
+  subroutine gcr_position_parts(packed, fname, line, col)
+    integer, intent(in) :: packed
+    character(len=:), allocatable, intent(out) :: fname
+    integer, intent(out) :: line, col
+    integer :: fid, off, lo, hi, mid
     fid = packed / POS_SHIFT
     off = mod(packed, POS_SHIFT)
+    fname = ""
     line = 1
     col = off
     if (fid >= 1 .and. fid <= n_files) then
@@ -157,14 +184,8 @@ contains
           col = off - files(fid)%line_starts(lo) + 1
        end if
     end if
-    write(lb, '(I0)') line
-    write(cb, '(I0)') col
-    if (fid >= 1 .and. fid <= n_files) then
-       s = trim(files(fid)%name) // ":" // trim(lb) // ":" // trim(cb)
-    else
-       s = trim(lb) // ":" // trim(cb)
-    end if
-  end function gcr_position
+    if (fid >= 1 .and. fid <= n_files) fname = trim(files(fid)%name)
+  end subroutine gcr_position_parts
 
   ! Reads ONE form from text. Trailing text is ignored, which is what
   ! a REPL line wants; a whole-file reader would loop on the position.

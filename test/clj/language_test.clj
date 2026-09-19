@@ -882,6 +882,25 @@
 (check "dgemm refuses mismatched shapes"
        (try (fb/dgemm dgA dgA) (catch Throwable t :refused)) :refused)
 
+;;; ---- stack traces --------------------------------------------------
+;;
+;; A thrown Throwable carries the call stack it was thrown from, as
+;; elements answering the four StackTraceElement questions
+;; clojure.stacktrace and clojure.test ask. Host check: the frame names
+;; are clotran's, so real Clojure cannot answer these.
+(defn st-thrower [] (throw (ex-info "boom" {})))
+(defn st-caller [] (st-thrower))
+(def st-trace (try (st-caller) (catch Throwable t (.getStackTrace t))))
+;; As on the JVM, the top frame is ex-info's own: the exception is
+;; constructed inside it.
+(check "a trace has a frame per call" (>= (alength st-trace) 3) true)
+(check "the top frame is ex-info" (.getClassName (aget st-trace 0)) "clojure.core/ex-info")
+(check "then the thrower" (.endsWith (.getClassName (aget st-trace 1)) "st-thrower") true)
+(check "then the caller" (.endsWith (.getClassName (aget st-trace 2)) "st-caller") true)
+(check "a frame's method is invoke" (.getMethodName (aget st-trace 0)) "invoke")
+(check "a frame names its file" (boolean (re-find #"language_test" (str (.getFileName (aget st-trace 1))))) true)
+(check "a frame has a line" (pos? (.getLineNumber (aget st-trace 1))) true)
+
 (println "")
 (if (zero? @*failures*)
   (println "LANGUAGE TESTS PASSED")
