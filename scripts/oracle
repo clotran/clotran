@@ -1,0 +1,122 @@
+#!/usr/bin/env bb
+;; Differential test: the same forms through real Clojure and through
+;; clotran, values compared. `clj` is the oracle. Memory is not.
+;;
+;;   scripts/oracle [forms.clj]          default test/clj/oracle.clj
+;;
+;; The file is ordinary Clojure, evaluated top to bottom in ONE process
+;; on each side, so a def early on is visible to a form later. Every
+;; top-level form is a case. Two kinds are special:
+;;
+;;   - a form headed by def, defn, deftype, ns, require, ... (see
+;;     `setup-heads`) is SETUP: run on both sides, its value not
+;;     compared, because a Var prints differently per host. It still
+;;     prints one line, so a setup form that throws on one side is a
+;;     difference, not a silent misalignment.
+;;   - (expect-diff "why") marks the NEXT form as one that must DIFFER.
+;;     It records a deviation (DEVIATIONS.md) and turns red the day the
+;;     deviation quietly closes, so the ledger stays honest.
+;;
+;; Values are compared through `canon`, a printer that sorts sets and
+;; maps by the text of their elements: hash order is not part of the
+;; language (DEVIATIONS 15), everything else is. A throw prints as
+;; !error, so both sides throwing is agreement. Each form is fed to
+;; `eval` as a string, so an error at analysis (a macro that fails to
+;; expand) is caught like any other and the two outputs stay aligned.
+;;
+;; Non-zero exit on any unexpected difference. `make test` runs this.
+(require '[clojure.string :as str]
+         '[clojure.walk :as walk]
+         '[clojure.java.io :as io]
+         '[edamame.core :as e]
+         '[babashka.process :as p])
+
+(def repo (-> *file* io/file .getCanonicalFile .getParentFile .getParentFile))
+(def forms-file (or (first *command-line-args*) "test/clj/oracle.clj"))
+
+(def setup-heads '#{def defn defn- defmacro deftype defrecord defprotocol defmulti
+                    defmethod defstruct defonce ns in-ns require alias import declare
+                    extend extend-type extend-protocol use refer})
+
+;; edamame, because it reads every reader macro clj does (#"", #(), `,
+;; #', @, ^) and bb's own `read` overflows its pushback buffer on this
+;; file. One difference worth knowing: its syntax-quote leaves symbols
+;; unqualified and expands to `sequence` rather than `seq`.
+(defn read-forms [text] (e/parse-string-all text {:all true}))
+
+(defn strip-positions [form]
+  (walk/postwalk (fn [x] (if-let [m (and (instance? clojure.lang.IObj x) (meta x))]
+                           (let [m (dissoc m :row :col :end-row :end-col :line :column :end-line :end-column :source)]
+                             (with-meta x (when (seq m) m)))
+                           x))
+                 form))
+
+(defn form-text [form] (binding [*print-meta* true] (pr-str (strip-positions form))))
+
+;; Pair each case with an optional expect-diff reason.
+(defn cases [forms]
+  (loop [fs forms acc [] why nil]
+    (if-let [f (first fs)]
+      (if (and (seq? f) (= 'expect-diff (first f)))
+        (recur (rest fs) acc (second f))
+        (recur (rest fs)
+               (conj acc {:form f :text (form-text f) :why why
+                          :setup? (boolean (and (seq? f) (contains? setup-heads (first f))))})
+               nil))
+      acc)))
+
+(def prelude "
+(defn clotran-oracle-canon [x]
+  (cond (map? x) (str \"{\" (clojure.string/join \", \" (sort (map (fn [e] (str (clotran-oracle-canon (key e)) \" \" (clotran-oracle-canon (val e)))) x))) \"}\")
+        (set? x) (str \"#{\" (clojure.string/join \" \" (sort (map clotran-oracle-canon x))) \"}\")
+        (vector? x) (str \"[\" (clojure.string/join \" \" (map clotran-oracle-canon x)) \"]\")
+        (sequential? x) (str \"(\" (clojure.string/join \" \" (map clotran-oracle-canon x)) \")\")
+        :else (pr-str x)))
+(defn clotran-oracle-case [s]
+  (println (try (clotran-oracle-canon (eval (read-string s))) (catch Throwable t \"!error\"))))
+(defn clotran-oracle-setup [s]
+  (println (try (do (eval (read-string s)) \"#setup\") (catch Throwable t \"!error\"))))
+")
+
+(defn script [cs]
+  (str "(in-ns 'user)\n(require 'clojure.string)\n" prelude
+       (str/join "\n" (for [c cs]
+                        ;; qualified: a setup form may (ns elsewhere)
+                        (str (if (:setup? c) "(user/clotran-oracle-setup " "(user/clotran-oracle-case ")
+                             (pr-str (:text c)) ")")))
+       "\n"))
+
+(defn run [& cmd]
+  (let [r (apply p/shell {:dir repo :in "" :out :string :err :string :continue true} cmd)]
+    (->> (str/split-lines (:out r))
+         (remove #(or (str/starts-with? % "note:") (str/starts-with? % "user=>") (str/blank? %)))
+         vec)))
+
+(let [cs (cases (read-forms (slurp (io/file repo forms-file))))
+      gen (io/file repo "test/clj/.oracle-gen.clj")
+      _ (spit gen (script cs))
+      want (run "clj" "-M" (str gen))
+      got (run "./clotran" "src/clj/clojure/core.clj" (str gen))
+      _ (when (System/getenv "ORACLE_KEEP") nil) _ (when-not (System/getenv "ORACLE_KEEP") (.delete gen))
+      n (count cs)]
+  (when (not= (count want) n)
+    (println "clj produced" (count want) "lines for" n "cases; the oracle side is broken:")
+    (doseq [l (take 5 want)] (println "  " l))
+    (System/exit 2))
+  (let [results (map-indexed (fn [i c]
+                               (let [w (nth want i) g (nth got i ::missing)
+                                     same (= w g)]
+                                 (assoc c :want w :got g
+                                        :ok (if (:why c) (not same) same))))
+                             cs)
+        bad (remove :ok results)]
+    (doseq [r bad]
+      (println (if (:why r) "SHOULD DIFFER" "DIFFER      ") (:text r))
+      (println "   clojure:" (:want r))
+      (println "   clotran:" (if (= ::missing (:got r)) "<no output: clotran stopped early>" (:got r)))
+      (when (:why r) (println "   expected to differ because:" (:why r))))
+    (println "---")
+    (println (format "oracle: %d cases, %d agree, %d expected differences, %d unexpected"
+                     n (count (filter #(and (:ok %) (not (:why %))) results))
+                     (count (filter #(and (:ok %) (:why %)) results)) (count bad)))
+    (System/exit (if (seq bad) 1 0))))

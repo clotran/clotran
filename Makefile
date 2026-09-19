@@ -203,6 +203,8 @@ test: $(unit-tests) clotran
 	@echo "--- language_test (with core.clj) ---"
 	./clotran src/clj/clojure/core.clj test/clj/language_test.clj </dev/null \
 	  | tee /dev/stderr | grep -q "^LANGUAGE TESTS PASSED"
+	@echo "--- oracle (the same forms through clj and clotran) ---"
+	scripts/oracle
 
 # What runs before every commit. Ends on the default compiler so the
 # tree is left with the build you actually use.

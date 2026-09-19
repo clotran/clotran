@@ -127,7 +127,7 @@ Three measures, each named with its denominator:
 
 | scorecard | what it is |
 |---|---|
-| **our tests** | `test/f/*_test.f90`, the Fortran host -- GC, reader, printer, evaluator. A GATE, not a grade: 100% or do not commit. |
+| **our tests** | `test/f/*_test.f90` (the Fortran host -- GC, reader, printer, evaluator), `test/clj/language_test.clj` (host checks with core.clj loaded) and `scripts/oracle` (`test/clj/oracle.clj` through `clj` AND clotran, values compared). A GATE, not a grade: 100% or do not commit. |
 | **Clojure's tests** | `test/clj/clojure/test_clojure`, 67 namespaces verbatim. `scripts/run-clojure-tests` drives them. |
 | **libraries loading** | how many of Clojure's own libs `(require ...)` succeeds on. |
 
@@ -153,6 +153,13 @@ it up.
   them already work".
 - `scripts/run-clojure-tests` -- Clojure's own suite, one namespace per
   run so a hard failure cannot hide the others.
+- `scripts/oracle` -- the differential test. Every form in
+  `test/clj/oracle.clj` runs through `clj` and through clotran and the
+  values are compared, so no expected value is ever typed in by hand.
+  `(expect-diff "DEVIATIONS n")` before a form says it MUST differ.
+  When you make something work, add the form there, not a hand-typed
+  check: 14 of the 477 hand-typed expectations turned out to be
+  clotran's answer, not Clojure's.
 - `make crosscheck` -- the gate.
 
 ## Gotchas that have cost real time

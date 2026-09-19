@@ -101,11 +101,14 @@ Three layers, each answering a different question:
 - **Host tests** (`test/f/gc_*`): the heap, collections, reader,
   printer, evaluator under GC torture. Things Clojure's suite cannot
   see. Kept as the gate.
-- **Runtime conformance, differential against `clj`.** One file of
-  forms, run through `clj` and through clotran in one process each,
-  values compared. This replaces hand-copied expected values in
-  `test/clj/language_test.clj` and is the only kind of check that
-  catches a silent wrong answer. `clj` is the oracle; bb never is.
+- **Runtime conformance, differential against `clj` -- DONE.**
+  `scripts/oracle` runs `test/clj/oracle.clj` through `clj` and through
+  clotran in one process each and compares values; `make test` runs it.
+  It replaced the hand-typed expectations in `language_test.clj`, and
+  14 of 477 of those turned out to be clotran's answer rather than
+  Clojure's -- every one a known deviation, now marked `expect-diff`
+  so the ledger goes red if a deviation quietly closes. `clj` is the
+  oracle; bb never is.
 - **Language tests derived from Clojure's suite.** Not 67 verbatim
   files with a hand-written exclusion list. The intersection of the
   public names of `clojure.core` (pinned clone) and `cljs.core` (pinned

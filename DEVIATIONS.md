@@ -524,6 +524,13 @@ It goes away with `String/format` and an identity for host objects --
 the same two pieces deviation 18 needs, and worth doing once for both
 rather than twice.
 
+The same holds for every other host object: a function prints as
+`#<fn>`, a namespace as `#<ns user>`, where Clojure prints
+`#object[user$eval1$fn__2 0x1a2b "user$eval1$fn__2@1a2b"]`. There is
+no class name to report and no stable address (deviation 18), and
+nothing reads the form back. `scripts/oracle` records these as
+expected differences.
+
 ## 22. RESOLVED -- collections as keys hash and compare structurally
 
 Kept as a record because the fix changed hashing semantics, and
@@ -874,3 +881,15 @@ and, with it, everything `with-precision` is for. A literal past
 **Removal**: a numeric tower with BigInt and BigDecimal in it. That is
 the same work deviation 26 ends on, and the suffixes are its most
 visible symptom rather than a separate problem.
+
+## 31. Stack traces are empty
+
+`(.getStackTrace e)` answers an empty array; Clojure answers one
+`StackTraceElement` per frame, and `clojure.stacktrace` and
+`clojure.test`'s failure reports print them. The evaluator keeps no
+frames -- there is nothing to report. It is honest rather than wrong:
+`(alength (.getStackTrace e))` is 0, never a fabricated trace.
+
+**Removal**: PLAN.md step 5. Once evaluation runs over explicit frames
+with source positions on nodes, a trace is a walk up that stack, and
+this entry closes together with the debugger it unblocks.
