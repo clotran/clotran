@@ -11,7 +11,16 @@
 # is both compilers before every commit -- `make crosscheck`. See
 # NOTES.md.
 FC = gfortran
-FCFLAGS = -g -Isrc/f -Jsrc/f $(FCFLAGS_$(notdir $(FC)))
+# Everything the build makes goes under build/: objects, .mod files,
+# the test binaries. The one artifact that stays in the root is the
+# clotran binary itself. -g is a COMPILE flag only -- on macOS a -g on
+# the link line makes the driver run dsymutil and drop a .dSYM bundle
+# beside every binary; the debug info is in the objects either way and
+# lldb finds it there.
+B = build
+.DEFAULT_GOAL := all
+FCFLAGS = -g -I$(B) -J$(B) $(FCFLAGS_$(notdir $(FC)))
+LDFLAGS = $(FCFLAGS_$(notdir $(FC)))
 
 # Fortran 2018 made every procedure recursive by default. flang follows
 # it; gfortran still defaults to F2008, where a procedure not marked
@@ -97,109 +106,81 @@ $(ICU_STAMP):
 
 $(ICU_LIBS): $(ICU_STAMP)
 
-src/c/regex_shim.o: src/c/regex_shim.c src/c/regex_shim.h
+$(B)/regex_shim.o: src/c/regex_shim.c src/c/regex_shim.h | $(B)
 	$(CC) -c $(ICU_INC) $< -o $@
-
-$(S)/Regex.o: $(S)/Regex.f90
-	$(FC) $(FCFLAGS) -c $< -o $@
 
 # --- the host ----------------------------------------------------------
 
-unit-tests = gc_test persistent_vector_test persistent_list_test persistent_array_map_test persistent_hash_map_test env_test \
-	assoc_test printer_test reader_test eval_test
-executables = clotran $(unit-tests)
+S = src/f
+T = test/f
+BT = $(B)/test
+
+unit-tests = gc_test persistent_vector_test persistent_list_test persistent_array_map_test \
+	persistent_hash_map_test env_test assoc_test printer_test reader_test eval_test
+test-bins = $(addprefix $(BT)/,$(unit-tests))
 
 .PHONY: all test crosscheck clean
-all: $(executables)
+all: clotran $(test-bins)
 
-$(S)/GC.o: $(S)/GC.f90
+$(B) $(BT):
+	mkdir -p $@
+
+# One rule compiles every module; the lines below it say which .mod
+# files each one needs first (a `use` is a compile-time dependency).
+$(B)/%.o: $(S)/%.f90 | $(B)
 	$(FC) $(FCFLAGS) -c $< -o $@
 
-gc_test: $(S)/GC.o $(T)/gc_test.f90
-	$(FC) $(FCFLAGS) -o $@ $(S)/GC.o $(T)/gc_test.f90
-
-data-objects = $(S)/GC.o $(S)/PersistentArrayMap.o $(S)/PersistentHashMap.o $(S)/Assoc.o $(S)/PersistentList.o \
-	$(S)/PersistentVector.o $(S)/NativeArray.o $(S)/Printer.o
-
-$(S)/Namespace.o: $(S)/Namespace.f90 $(S)/GC.o $(S)/Assoc.o
-	$(FC) $(FCFLAGS) -c $< -o $@
-
-$(S)/NativeArray.o: $(S)/NativeArray.f90 $(S)/GC.o
-	$(FC) $(FCFLAGS) -c $< -o $@
-
-$(S)/Eval.o: $(S)/Eval.f90 $(S)/GC.o $(S)/PersistentList.o $(S)/PersistentVector.o \
-	$(S)/Assoc.o $(S)/Env.o $(S)/Namespace.o $(S)/Printer.o $(S)/Regex.o \
-	$(S)/NativeArray.o
-	$(FC) $(FCFLAGS) -c $< -o $@
-
+$(B)/PersistentVector.o $(B)/PersistentList.o $(B)/PersistentArrayMap.o $(B)/NativeArray.o: $(B)/GC.o
+$(B)/PersistentHashMap.o $(B)/Env.o: $(B)/GC.o $(B)/PersistentArrayMap.o
+$(B)/Assoc.o: $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o
+$(B)/Namespace.o: $(B)/GC.o $(B)/Assoc.o
+$(B)/Printer.o: $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/NativeArray.o
 # LispReader depends on Regex: #"..." compiles a pattern at READ time,
 # matching real Clojure's own regex literal (LispReader compiles
 # straight to a Pattern, not to a string). See Regex.f90.
-reader-objects = $(S)/LispReader.o $(S)/Regex.o src/c/regex_shim.o
+$(B)/LispReader.o: $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/Regex.o
+$(B)/Eval.o: $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/Env.o \
+	$(B)/Namespace.o $(B)/Printer.o $(B)/Regex.o $(B)/NativeArray.o
 
-eval-objects = $(data-objects) $(S)/Env.o $(S)/Namespace.o $(reader-objects) $(S)/Eval.o
+data-objects = $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(B)/Assoc.o \
+	$(B)/PersistentList.o $(B)/PersistentVector.o $(B)/NativeArray.o $(B)/Printer.o
+reader-objects = $(B)/LispReader.o $(B)/Regex.o $(B)/regex_shim.o
+eval-objects = $(data-objects) $(B)/Env.o $(B)/Namespace.o $(reader-objects) $(B)/Eval.o
+LINK_ICU = $(ICU_LIBS) $(LIBCXX) -lpthread
 
 clotran: $(eval-objects) $(S)/main.f90 $(ICU_LIBS)
-	$(FC) $(FCFLAGS) -o $@ $(eval-objects) $(S)/main.f90 $(ICU_LIBS) $(LIBCXX) -lpthread
+	$(FC) $(FCFLAGS) -c $(S)/main.f90 -o $(B)/main.o
+	$(FC) $(LDFLAGS) -o $@ $(eval-objects) $(B)/main.o $(LINK_ICU)
 
-eval_test: $(eval-objects) $(T)/eval_test.f90 $(ICU_LIBS)
-	$(FC) $(FCFLAGS) -o $@ $(eval-objects) $(T)/eval_test.f90 $(ICU_LIBS) $(LIBCXX) -lpthread
+# Test binaries: each links exactly the modules it exercises, so a
+# module's test cannot pass by accident through something above it.
+$(BT)/gc_test: $(B)/GC.o $(T)/gc_test.f90 | $(BT)
+	$(FC) $(FCFLAGS) -c $(T)/gc_test.f90 -o $(BT)/gc_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/GC.o $(BT)/gc_test.o
+$(BT)/persistent_vector_test: $(B)/GC.o $(B)/PersistentVector.o $(T)/persistent_vector_test.f90 | $(BT)
+	$(FC) $(FCFLAGS) -c $(T)/persistent_vector_test.f90 -o $(BT)/persistent_vector_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/GC.o $(B)/PersistentVector.o $(BT)/persistent_vector_test.o
+$(BT)/persistent_list_test: $(B)/GC.o $(B)/PersistentList.o $(T)/persistent_list_test.f90 | $(BT)
+	$(FC) $(FCFLAGS) -c $(T)/persistent_list_test.f90 -o $(BT)/persistent_list_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/GC.o $(B)/PersistentList.o $(BT)/persistent_list_test.o
+$(BT)/persistent_array_map_test: $(B)/GC.o $(B)/PersistentArrayMap.o $(T)/persistent_array_map_test.f90 | $(BT)
+	$(FC) $(FCFLAGS) -c $(T)/persistent_array_map_test.f90 -o $(BT)/persistent_array_map_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/GC.o $(B)/PersistentArrayMap.o $(BT)/persistent_array_map_test.o
+$(BT)/persistent_hash_map_test: $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(T)/persistent_hash_map_test.f90 | $(BT)
+	$(FC) $(FCFLAGS) -c $(T)/persistent_hash_map_test.f90 -o $(BT)/persistent_hash_map_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(BT)/persistent_hash_map_test.o
+$(BT)/env_test: $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/Env.o $(T)/env_test.f90 | $(BT)
+	$(FC) $(FCFLAGS) -c $(T)/env_test.f90 -o $(BT)/env_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/Env.o $(BT)/env_test.o
+$(BT)/assoc_test: $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(B)/Assoc.o $(T)/assoc_test.f90 | $(BT)
+	$(FC) $(FCFLAGS) -c $(T)/assoc_test.f90 -o $(BT)/assoc_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(B)/Assoc.o $(BT)/assoc_test.o
+$(BT)/printer_test: $(data-objects) $(T)/printer_test.f90 | $(BT)
+	$(FC) $(FCFLAGS) -c $(T)/printer_test.f90 -o $(BT)/printer_test.o && $(FC) $(LDFLAGS) -o $@ $(data-objects) $(BT)/printer_test.o
+$(BT)/reader_test: $(data-objects) $(reader-objects) $(T)/reader_test.f90 $(ICU_LIBS) | $(BT)
+	$(FC) $(FCFLAGS) -c $(T)/reader_test.f90 -o $(BT)/reader_test.o && $(FC) $(LDFLAGS) -o $@ $(data-objects) $(reader-objects) $(BT)/reader_test.o $(LINK_ICU)
+$(BT)/eval_test: $(eval-objects) $(T)/eval_test.f90 $(ICU_LIBS) | $(BT)
+	$(FC) $(FCFLAGS) -c $(T)/eval_test.f90 -o $(BT)/eval_test.o && $(FC) $(LDFLAGS) -o $@ $(eval-objects) $(BT)/eval_test.o $(LINK_ICU)
 
-$(S)/LispReader.o: $(S)/LispReader.f90 $(S)/GC.o $(S)/PersistentList.o $(S)/PersistentVector.o $(S)/Assoc.o $(S)/Regex.o
-	$(FC) $(FCFLAGS) -c $< -o $@
-
-reader_test: $(data-objects) $(reader-objects) $(T)/reader_test.f90 $(ICU_LIBS)
-	$(FC) $(FCFLAGS) -o $@ $(data-objects) $(reader-objects) $(T)/reader_test.f90 $(ICU_LIBS) $(LIBCXX) -lpthread
-
-$(S)/Printer.o: $(S)/Printer.f90 $(S)/GC.o $(S)/PersistentList.o $(S)/PersistentVector.o $(S)/Assoc.o $(S)/NativeArray.o
-	$(FC) $(FCFLAGS) -c $< -o $@
-
-printer_test: $(data-objects) $(T)/printer_test.f90
-	$(FC) $(FCFLAGS) -o $@ $(data-objects) $(T)/printer_test.f90
-
-$(S)/Assoc.o: $(S)/Assoc.f90 $(S)/GC.o $(S)/PersistentArrayMap.o $(S)/PersistentHashMap.o
-	$(FC) $(FCFLAGS) -c $< -o $@
-
-assoc_test: $(S)/GC.o $(S)/PersistentArrayMap.o $(S)/PersistentHashMap.o $(S)/Assoc.o $(T)/assoc_test.f90
-	$(FC) $(FCFLAGS) -o $@ $(S)/GC.o $(S)/PersistentArrayMap.o $(S)/PersistentHashMap.o $(S)/Assoc.o $(T)/assoc_test.f90
-
-$(S)/Env.o: $(S)/Env.f90 $(S)/GC.o $(S)/PersistentArrayMap.o
-	$(FC) $(FCFLAGS) -c $< -o $@
-
-env_test: $(S)/GC.o $(S)/PersistentArrayMap.o $(S)/Env.o $(T)/env_test.f90
-	$(FC) $(FCFLAGS) -o $@ $(S)/GC.o $(S)/PersistentArrayMap.o $(S)/Env.o $(T)/env_test.f90
-
-$(S)/PersistentHashMap.o: $(S)/PersistentHashMap.f90 $(S)/GC.o $(S)/PersistentArrayMap.o
-	$(FC) $(FCFLAGS) -c $< -o $@
-
-persistent_hash_map_test: $(S)/GC.o $(S)/PersistentArrayMap.o $(S)/PersistentHashMap.o $(T)/persistent_hash_map_test.f90
-	$(FC) $(FCFLAGS) -o $@ $(S)/GC.o $(S)/PersistentArrayMap.o $(S)/PersistentHashMap.o $(T)/persistent_hash_map_test.f90
-
-$(S)/PersistentArrayMap.o: $(S)/PersistentArrayMap.f90 $(S)/GC.o
-	$(FC) $(FCFLAGS) -c $< -o $@
-
-persistent_array_map_test: $(S)/GC.o $(S)/PersistentArrayMap.o $(T)/persistent_array_map_test.f90
-	$(FC) $(FCFLAGS) -o $@ $(S)/GC.o $(S)/PersistentArrayMap.o $(T)/persistent_array_map_test.f90
-
-$(S)/PersistentList.o: $(S)/PersistentList.f90 $(S)/GC.o
-	$(FC) $(FCFLAGS) -c $< -o $@
-
-persistent_list_test: $(S)/GC.o $(S)/PersistentList.o $(T)/persistent_list_test.f90
-	$(FC) $(FCFLAGS) -o $@ $(S)/GC.o $(S)/PersistentList.o $(T)/persistent_list_test.f90
-
-$(S)/PersistentVector.o: $(S)/PersistentVector.f90 $(S)/GC.o
-	$(FC) $(FCFLAGS) -c $< -o $@
-
-persistent_vector_test: $(S)/GC.o $(S)/PersistentVector.o $(T)/persistent_vector_test.f90
-	$(FC) $(FCFLAGS) -o $@ $(S)/GC.o $(S)/PersistentVector.o $(T)/persistent_vector_test.f90
-
-# clotran is a prerequisite but NOT run as a unit test: it is listed so
-# that `make clean && make test` leaves the binary you actually use, and
-# so that main.f90 and the link line are inside the gate under both
-# compilers -- eval_test covers the modules, not the program.
-# scripts/clotran wraps the binary in rlwrap, the way clj wraps clojure.
-test: $(unit-tests) clotran
-	for t in $(unit-tests); do echo "--- $$t ---"; ./$$t || exit 1; done
+# The gate. Three layers (CLAUDE.md): the host tests, the host-level
+# checks that need core.clj loaded, and the differential oracle against
+# real Clojure. clotran is built here so main.f90 and its link line are
+# inside the gate under both compilers.
+test: $(test-bins) clotran
+	for t in $(unit-tests); do echo "--- $$t ---"; $(BT)/$$t || exit 1; done
 	@echo "--- language_test (with core.clj) ---"
 	./clotran src/clj/clojure/core.clj test/clj/language_test.clj </dev/null \
 	  | tee /dev/stderr | grep -q "^LANGUAGE TESTS PASSED"
@@ -213,4 +194,4 @@ crosscheck:
 	$(MAKE) clean && $(MAKE) test
 
 clean:
-	rm -rf $(S)/*.o $(S)/*.mod $(executables) *.dSYM
+	rm -rf $(B) clotran clotran.dSYM
