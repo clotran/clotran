@@ -34,7 +34,7 @@ JVM-shaped `case` arms in one file.
 |---|---|
 | core.clj | 724 of 724 forms load |
 | our tests | 100% on both compilers; the gate |
-| the derived language suite | 339 tests kept (330 language + 9 concurrency) in 40 files, every file loads, 352 tests execute: 2323 pass / 265 fail / 401 error, so 78% of assertions that EXECUTED |
+| the derived language suite | 314 tests kept (306 language + 8 concurrency) in 39 files, every file loads, 324 tests execute: 2164 pass / 241 fail / 370 error, so 78% of assertions that EXECUTED. Fewer tests are kept than before the analysis pass because the deriver now treats a symbol nothing defines as host; the pass rate over what is kept is unchanged |
 | Clojure's suite, verbatim (for reference) | 1810 pass / 219 fail / 1396 error over 357 tests, 53% of executed; 32 of 67 namespaces produce a passing assertion |
 | startup | 4.1s (was 7.2s before step 4), core.clj re-read every launch |
 | `(reduce + (range n))` | LINEAR since step 4: n=100000 in 17s net, ~170 µs and 60 evaluations per element. Before: n=16000 took 161s and n=100000 did not finish in 15 minutes |
@@ -122,13 +122,17 @@ Three layers, each answering a different question:
   (Clojure-only, but goal 3); HOST otherwise (a Java class, a member
   call, a constructor, a clojure.core name ClojureScript never had) --
   and writes the kept tests to `test/clj/derived/` with the source
-  file and line of each. Of 578 deftests it can read, 330 are language,
-  9 concurrency, 239 host; 7 files it cannot read at all (method
+  file and line of each. Of 578 deftests it can read, 306 are language,
+  8 concurrency, 264 host; 7 files it cannot read at all (method
   values, param-tags, record literals) are all JVM-shaped. A helper a
   kept test needs travels with it; a test whose helper is host goes
   with the helper; a top-level form with a head nobody defines
-  (test.check's `defspec`) goes; a require of another test file goes,
-  because it would load the vendored JVM-shaped original. The two hand
+  (test.check's `defspec`) goes; a require of a non-portable library
+  goes and so does everything it referred; a symbol nothing defines
+  makes its test host, where "defines" is approximated by the
+  binding positions of the form (its vector literals, `catch` names,
+  `as->`), so `(vector-of :int)` and `(doc x)` are recognised as the
+  JVM's without a list of them. The two hand
   lists it does contain, the exception allowlist and the concurrency
   vocabulary, are printed by `--report` so they can be argued with.
   `scripts/run-clojure-tests-parallel test/clj/derived` runs it.

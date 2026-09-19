@@ -124,13 +124,25 @@ namespace the form is analysed in -- which for a macro body is the
 namespace the macro was written in. It used to run at every evaluation.
 
 Auto-gensym is faithful -- one fresh name per syntax-quote, scoped by a map
-the way `GENSYM_ENV` is -- but symbol resolution is not: Clojure qualifies
-every symbol in a template to its namespace at read time, which is what
-makes a macro immune to a caller having rebound a name. We leave symbols
-bare.
+the way `GENSYM_ENV` is -- and so, since 2026-09-19, is symbol
+resolution: `qq_alias` is `Compiler.resolveSymbol` as `syntaxQuote`
+calls it. An unqualified symbol becomes `ns/name` -- the Var's own
+namespace if it resolves to one, the writing namespace otherwise --
+unless it is a special form, a class name, an auto-gensym, `&`, or host
+sugar. That is what makes a macro immune to a caller having rebound a
+name, and what makes clojure.test's `run-test` find `test-var`, which
+is defined later in its file than the macro that names it.
 
-**Open**, because it is not yet clear whether this can be moved into the
-reader without also moving `*ns*` resolution there.
+Two consequences had to be handled where Clojure's compiler handles
+them: a member name in a `.` form and a method name in a `deftype*`
+arrive qualified and are read by their name part (`HostExpr.Parser`,
+`NewInstanceMethod.parse`), and `(def ns/x ...)` defines `x` when `ns`
+is the current namespace (`DefExpr`).
+
+What remains open is only WHEN: analysis time rather than read time.
+The difference is observable through `read-string` -- `(read-string
+"`x")` answers the unexpanded `(quasiquote x)` here and the expansion
+in Clojure -- and closes by moving `qq_expand` into the reader.
 
 ## 7. Recursion runs out of stack about twenty times sooner
 

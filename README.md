@@ -50,8 +50,8 @@ keeps every `deftest` whose symbols lie in the intersection of
 `clojure.core` and `cljs.core` -- the language, as two implementations
 agree on it -- and leaves out the ones that name a Java class, a
 member call or a `clojure.core` function ClojureScript never had.
-That keeps 339 of 578 tests, in 40 files that all load. **2323
-passing assertions** against 265 failures and 401 errors, so **78% of
+That keeps 314 of 578 tests, in 39 files that all load. **2164
+passing assertions** against 241 failures and 370 errors, so **78% of
 the assertions that executed** (measured 2026-09-19).
 
 That denominator is assertions that executed, not assertions that
