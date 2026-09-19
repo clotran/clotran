@@ -105,6 +105,14 @@ with no copy. A binding generator that would do for any routine what
 was done by hand for these is what comes next; PLAN.md step 7 records
 what the library dictated for it.
 
+**Three extensions.** `.cljf` is a clotran file: it may use the
+`fortran` namespace and is looked for first. `.cljc` is portable
+Clojure; clotran reads its `#?` branches with the feature `:cljf`
+(and `:default`), so porting a `.cljc` library is adding a `:cljf`
+branch beside each `:clj` one. `.clj` is JVM Clojure, which clotran
+loads as written -- that being the point. `require` looks for the
+three in that order.
+
 Clojure's OWN array functions run over the same representation -- not
 reimplemented, the definitions in `core.clj`, which are written against
 `java.lang.reflect.Array` and `clojure.lang.RT`:

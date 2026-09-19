@@ -20,6 +20,7 @@ program reader_test
   call check_whitespace_and_comments()
   call check_errors()
   call check_invalid_numbers()
+  call check_reader_conditionals()
   call check_big_form_under_torture()
   call check_nested_literals_under_torture()
 
@@ -166,6 +167,33 @@ contains
     v = gcr_read("42", no_roots)
     call ok("7k. ...and a good number clears the error: ", .not. gcr_has_error())
   end subroutine check_invalid_numbers
+
+  ! #? and #?@. The feature is :cljf; :clj is the JVM. DEVIATIONS 33.
+  subroutine check_reader_conditionals()
+    type(gc_value) :: v
+    call gc_init(512)
+    call round("9a. #? keeps the :cljf branch: ", "#?(:clj 1 :cljf 2)", "2")
+    call round("9b. ...or :default: ", "#?(:clj 1 :default 3)", "3")
+    call round("9c. :clj is the JVM, not us: ", "(a #?(:clj 1) b)", "(a b)")
+    call round("9d. no branch at the end of a list: ", "(a #?(:cljs 1))", "(a)")
+    call round("9e. #?@ splices a vector: ", "[1 #?@(:cljf [2 3]) 4]", "[1 2 3 4]")
+    call round("9f. ...and a list: ", "(f #?@(:cljf (x y)))", "(f x y)")
+    call round("9g. ...and pairs into a map: ", "{#?@(:cljf [:b 2])}", "{:b 2}")
+    call round("9h. an unselected branch may hold a tagged literal: ", "#?(:cljs #js {:a 1} :cljf 5)", "5")
+    call round("9i. the first match wins: ", "#?(:default 1 :cljf 2)", "1")
+    call round("9j. nothing in a set: ", "#{#?(:cljs 1) 2}", "#{2}")
+    v = gcr_read("#?(:cljf)", no_roots)
+    call ok("9k. an odd body is an error: ", gcr_has_error())
+    v = gcr_read("#?(:cljs 1)", no_roots)
+    call ok("9l. nothing at the top level is EOF: ", gcr_has_error())
+    v = gcr_read("#?@(:cljf [1 2])", no_roots)
+    call ok("9m. a splice at the top level is an error: ", gcr_has_error())
+    v = gcr_read("'#?(:cljs 1)", no_roots)
+    call ok("9n. a quote needs a form: ", gcr_has_error())
+    v = gcr_read("#?@(:cljf 1)", no_roots)
+    call ok("9o. a splice needs a collection: ", gcr_has_error())
+    call round("9p. ...and a good form clears the error: ", "#?(:cljf 7)", "7")
+  end subroutine check_reader_conditionals
 
   subroutine check_errors()
     type(gc_value) :: v

@@ -21,6 +21,16 @@
     (do (swap! *failures* inc)
         (println "FAIL -" label "got" (pr-str got) "want" (pr-str want)))))
 
+;;; ---- reader conditionals ------------------------------------------
+
+;; The feature is :cljf. A branch nobody selects is read and dropped, so
+;; the :cljs one may hold #js. This file is .clj and the conditional is
+;; still read: clotran reads #? in every file (DEVIATIONS 33).
+
+(check "reader conditional" #?(:clj :jvm :cljs #js {} :cljf :fortran) :fortran)
+(check "reader conditional splice" [1 #?@(:cljf [2 3]) 4] [1 2 3 4])
+#?(:cljs (this-form-is-never-read))
+
 ;;; ---- deftype ----------------------------------------------------
 
 (deftype Point [x y]

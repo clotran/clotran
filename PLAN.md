@@ -402,6 +402,31 @@ changes the premise (Fortran as host becomes Fortran as runtime) and
 should be chosen deliberately. Step 5's resolved tree is the input
 either way.
 
+**Interop syntax is Clojure's, written with ClojureScript's discipline.**
+`(.method obj args)`, `(.-field obj)`, `(Type/static args)`,
+`Type/CONSTANT`, `(Type. args)` and `(set! (.-field obj) v)` -- all of
+which the JVM reader also accepts (`.-` since Clojure 1.4), so code
+written this way stays `.cljc`-portable. Fortran's object model maps
+onto it directly: a derived type is the class; a type-bound
+`procedure` is an instance method and one declared `nopass` is a
+static; a public component is a field, read with `.-`; `extends` is
+the supertype chain `host_super` answers, and `deferred` bindings on
+an `abstract` type are what a protocol is implemented against;
+`generic` bindings are arities; `final` is a finalizer. `%` is not
+used: it is Fortran's spelling of the accessor, not a semantic, and
+adopting it would break every portable file to say the same thing.
+What the `fortran` namespace does today -- `fortran/make-array`,
+`fortran/dgemm`, the ChemSol map-in map-out routines -- is the static
+half; the instance half arrives with the first wrapped derived type,
+which is step 7's generator.
+
+**Files: `.cljf`, `.cljc`, `.clj`.** A clotran source file is `.cljf`
+(the feature `:cljf` in reader conditionals is the same word);
+`.cljc` is portable Clojure, which clotran reads with `:cljf` and
+`:default` branches taken; `.clj` is JVM Clojure, loaded as written
+because that is the premise. `require` looks in that order.
+DEVIATIONS 33.
+
 **Arrays are never ragged.** A Fortran rank-2 array is one contiguous
 column-major block; `[[I` is nested and cannot be handed to BLAS at
 any price. `(aget m 1)` is a strided view over the parent's buffer.

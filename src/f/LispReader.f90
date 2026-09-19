@@ -60,6 +60,18 @@ module LispReader
   type(src_file), save :: files(MAX_FILES)
   integer, save :: n_files = 0
   integer, save :: cur_file = 0
+  ! Reader conditionals. A #?(...) that selects nothing is another kind
+  ! of space, like #_ (see skip_ignorables), and #?@ splices a
+  ! collection into the enclosing one. Whoever called read_form --
+  ! read_seq, read_map, the top level -- checks these two flags straight
+  ! after the call and clears them. LispReader.java hands back the
+  ! reader itself as its nothing-sentinel; a flag is the same signal
+  ! without inventing a value for it.
+  logical, save :: rc_nothing = .false., rc_splice = .false.
+  ! True while reading a branch the conditional did not select: a
+  ! tagged literal there is read past rather than resolved, which is
+  ! what *suppress-read* does, so a :cljs branch may hold #js {}.
+  logical, save :: suppress_read = .false.
 
 contains
 
@@ -133,12 +145,22 @@ contains
     last_error = ""
     eof = .false.
     v = gc_nil()
-    call skip_ignorables(text, pos, roots)
-    if (pos > len(text)) then
-       eof = .true.
-       return
-    end if
-    v = read_form(text, pos, roots)
+    do
+       call skip_ignorables(text, pos, roots)
+       if (pos > len(text)) then
+          eof = .true.
+          return
+       end if
+       v = read_form(text, pos, roots)
+       if (has_error) return
+       if (rc_splice) then
+          rc_splice = .false.
+          call fail("Reader conditional splicing not allowed at the top level.")
+          return
+       end if
+       if (.not. rc_nothing) return
+       rc_nothing = .false.
+    end do
   end function gcr_read_next
 
   ! "file:line:col" for a packed position, or "line:col" with no file.
@@ -197,7 +219,23 @@ contains
     has_error = .false.
     last_error = ""
     pos = 1
-    v = read_form(text, pos, roots)
+    do
+       v = read_form(text, pos, roots)
+       if (has_error) return
+       if (rc_splice) then
+          rc_splice = .false.
+          call fail("Reader conditional splicing not allowed at the top level.")
+          return
+       end if
+       if (.not. rc_nothing) return
+       ! nothing selected: the next form is the one, as read-string does
+       rc_nothing = .false.
+       call skip_ignorables(text, pos, roots)
+       if (pos > len(text)) then
+          call fail("EOF while reading")
+          return
+       end if
+    end do
   end function gcr_read
 
   ! Every form in the text, as a vector. What a file needs, as
@@ -221,6 +259,15 @@ contains
        if (pos > len(text)) exit
        form = read_form(text, pos, [vs_get(base + 1)])
        if (has_error) exit
+       if (rc_splice) then
+          rc_splice = .false.
+          call fail("Reader conditional splicing not allowed at the top level.")
+          exit
+       end if
+       if (rc_nothing) then
+          rc_nothing = .false.
+          cycle
+       end if
        v = gcv_conj(vs_get(base + 1), form, roots)
        call vs_set(base + 1, v)
     end do
@@ -679,10 +726,183 @@ contains
     case ("#")
        pos = pos + 2
        v = read_symbolic(text, pos, roots)
+    case ("?")
+       pos = pos + 2
+       v = read_cond(text, pos, roots)
     case default
-       call fail("reader: no dispatch for #" // c)
+       if (suppress_read .and. ((c >= "a" .and. c <= "z") .or. (c >= "A" .and. c <= "Z"))) then
+          ! #tag form in a branch nobody selected: read past the tag and
+          ! the form. A selected branch still has no data readers, and
+          ! fails below by tag as before.
+          pos = pos + 1
+          v = read_form(text, pos, roots)
+          if (has_error) return
+          v = read_form(text, pos, roots)
+          v = gc_nil()
+       else
+          call fail("reader: no dispatch for #" // c)
+       end if
     end select
   end function read_dispatch
+
+  ! ---- reader conditionals ----
+  !
+  ! #?(:feature form ...) and #?@(...). The features claimed here are
+  ! :cljf and :default; :clj is the JVM and is not claimed, so a .cljc
+  ! library ported to clotran gets a :cljf branch beside each :clj one
+  ! and that is the port. Branches are read in order, the first whose
+  ! feature matches is kept, and every other branch is read under
+  ! suppress_read and dropped -- LispReader.readCondDelimited, without
+  ! the :preserve mode. DEVIATIONS 33.
+  recursive function read_cond(text, pos, roots) result(v)
+    character(len=*), intent(in) :: text
+    integer, intent(inout) :: pos
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: v, k, val
+    logical :: splicing, chosen, match, saved, chosen_nothing
+    integer :: base
+
+    v = gc_nil()
+    rc_nothing = .false.
+    rc_splice = .false.
+    splicing = .false.
+    if (pos <= len(text)) then
+       if (text(pos:pos) == "@") then
+          splicing = .true.
+          pos = pos + 1
+       end if
+    end if
+    call skip_space(text, pos)
+    if (pos > len(text)) then
+       call fail("EOF while reading")
+       return
+    end if
+    if (text(pos:pos) /= "(") then
+       call fail("read-cond body must be a list")
+       return
+    end if
+    pos = pos + 1
+    base = vs_enter(1)
+    call vs_set(base + 1, gc_nil())
+    chosen = .false.
+    chosen_nothing = .false.
+    do
+       call skip_ignorables(text, pos, [roots, vs_get(base + 1)])
+       if (has_error) exit
+       if (pos > len(text)) then
+          call fail("EOF while reading, expected ')'")
+          exit
+       end if
+       if (text(pos:pos) == ")") then
+          pos = pos + 1
+          exit
+       end if
+       k = read_form(text, pos, [roots, vs_get(base + 1)])
+       if (has_error) exit
+       if (k%tag /= GCT_KEY) then
+          call fail("read-cond: feature must be a keyword")
+          exit
+       end if
+       call skip_ignorables(text, pos, [roots, vs_get(base + 1)])
+       if (has_error) exit
+       if (pos > len(text)) then
+          call fail("EOF while reading, expected ')'")
+          exit
+       end if
+       if (text(pos:pos) == ")") then
+          call fail("read-cond requires an even number of forms")
+          exit
+       end if
+       match = (.not. chosen) .and. &
+            (gc_ref_is(k%ref, "cljf") .or. gc_ref_is(k%ref, "default"))
+       saved = suppress_read
+       suppress_read = saved .or. .not. match
+       val = read_form(text, pos, [roots, vs_get(base + 1)])
+       suppress_read = saved
+       if (has_error) exit
+       if (match) then
+          chosen = .true.
+          chosen_nothing = rc_nothing
+          if (.not. rc_nothing) call vs_set(base + 1, val)
+       end if
+       rc_nothing = .false.
+       rc_splice = .false.
+    end do
+    if (.not. has_error) then
+       if (.not. chosen .or. chosen_nothing) then
+          rc_nothing = .true.
+       else
+          v = vs_get(base + 1)
+          if (splicing) then
+             if (gcl_is(v) .or. gcv_is(v)) then
+                rc_splice = .true.
+             else
+                v = gc_nil()
+                call fail("Spliced form list in read-cond-splicing must implement java.util.List")
+             end if
+          end if
+       end if
+    end if
+    call vs_leave(base)
+  end function read_cond
+
+  ! Every element of coll -- a list or a vector -- conj'd onto acc.
+  function splice_into(acc, coll, roots) result(out)
+    type(gc_value), intent(in) :: acc, coll
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out
+    integer :: base, i
+    base = vs_enter(2)
+    call vs_set(base + 1, acc)
+    call vs_set(base + 2, coll)
+    if (gcv_is(coll)) then
+       do i = 0, gcv_count(vs_get(base + 2)) - 1
+          call vs_set(base + 1, gcv_conj(vs_get(base + 1), gcv_nth(vs_get(base + 2), i), roots))
+       end do
+    else
+       do while (gcl_count(vs_get(base + 2)) > 0)
+          call vs_set(base + 1, gcv_conj(vs_get(base + 1), gcl_first(vs_get(base + 2)), roots))
+          call vs_set(base + 2, gcl_rest(vs_get(base + 2), roots))
+       end do
+    end if
+    out = vs_get(base + 1)
+    call vs_leave(base)
+  end function splice_into
+
+  ! #?@ inside a map literal: the spliced collection is key value pairs.
+  function splice_pairs(m, coll, roots) result(out)
+    type(gc_value), intent(in) :: m, coll
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, items
+    integer :: base, i
+    out = m
+    base = vs_enter(2)
+    call vs_set(base + 1, m)
+    items = splice_into(gcv_empty(roots), coll, [roots, vs_get(base + 1)])
+    call vs_set(base + 2, items)
+    if (mod(gcv_count(vs_get(base + 2)), 2) /= 0) then
+       call fail("map literal has an odd number of forms")
+    else
+       do i = 0, gcv_count(vs_get(base + 2)) - 1, 2
+          call vs_set(base + 1, gca_assoc(vs_get(base + 1), gcv_nth(vs_get(base + 2), i), &
+               gcv_nth(vs_get(base + 2), i + 1), roots))
+       end do
+       out = vs_get(base + 1)
+    end if
+    call vs_leave(base)
+  end function splice_pairs
+
+  ! A conditional that produced no form, or a splice, where exactly one
+  ! form is required -- after ', ^, @, #' and the rest.
+  logical function cond_leaked()
+    cond_leaked = rc_nothing .or. rc_splice
+    if (cond_leaked) then
+       rc_nothing = .false.
+       rc_splice = .false.
+       call fail("reader conditional did not produce a form here")
+    end if
+  end function cond_leaked
+
 
   ! ##Inf, ##-Inf and ##NaN -- the symbolic values. They have no
   ! literal spelling of their own, which is the whole reason the reader
@@ -739,6 +959,9 @@ contains
     if (has_error) then
        call vs_leave(base); return
     end if
+    if (cond_leaked()) then
+       call vs_leave(base); return
+    end if
     call vs_set(base + 1, m)
 
     ! Normalise the shorthands into a map.
@@ -776,6 +999,9 @@ contains
     if (has_error) then
        call vs_leave(base); return
     end if
+    if (cond_leaked()) then
+       call vs_leave(base); return
+    end if
     call vs_set(base + 2, form)
     v = gc_obj(OBJ_META, [vs_get(base + 2), vs_get(base + 1)], roots)
     call vs_leave(base)
@@ -793,6 +1019,7 @@ contains
     v = gc_nil()
     inner = read_form(text, pos, roots)
     if (has_error) return
+    if (cond_leaked()) return
     r2 = with(roots, inner)
     sym = gc_sym(name, r2)
     r2 = with(r2, sym)
@@ -830,6 +1057,15 @@ contains
        end if
        item = read_form(text, pos, r2)
        if (has_error) return
+       if (rc_nothing) then
+          rc_nothing = .false.
+          cycle
+       end if
+       if (rc_splice) then
+          rc_splice = .false.
+          acc = splice_into(acc, item, roots)
+          cycle
+       end if
        acc = gcv_conj(acc, item, with(r2, item))
     end do
 
@@ -866,6 +1102,16 @@ contains
        end if
        k = read_form(text, pos, r2)
        if (has_error) return
+       if (rc_nothing) then
+          rc_nothing = .false.
+          cycle
+       end if
+       if (rc_splice) then
+          rc_splice = .false.
+          v = splice_pairs(v, k, r2)
+          if (has_error) return
+          cycle
+       end if
        call skip_ignorables(text, pos, r2)
        if (pos > len(text)) then
           call fail("map literal has an odd number of forms")
@@ -877,6 +1123,12 @@ contains
        end if
        val = read_form(text, pos, with(r2, k))
        if (has_error) return
+       if (rc_nothing .or. rc_splice) then
+          rc_nothing = .false.
+          rc_splice = .false.
+          call fail("map literal has an odd number of forms")
+          return
+       end if
        v = gca_assoc(v, k, val, with(with(r2, k), val))
     end do
   end function read_map

@@ -952,3 +952,28 @@ old walker reported it too.
 **Removal**: either load those libraries (they are JVM-bound) or
 accept the form as-is; the honest end state is that `slurp` is defined
 in terms of a host reader clotran supplies.
+
+## 33. Reader conditionals are read in every file, and `.cljf` is a source extension
+
+Clojure reads `#?(...)` and `#?@(...)` only from a `.cljc` file, or
+when `read` is handed `{:read-cond :allow}`; in a `.clj` file the form
+is an error, "Conditional read not allowed". clotran reads them in
+every file.
+
+The feature it claims is `:cljf`, after the extension, alongside
+`:default`. `:clj` is the JVM and is not claimed, so a `.cljc` library
+ported here gets a `:cljf` branch wherever it had a `:clj` one, and
+that is the whole port. A branch nobody selects is read under the
+equivalent of `*suppress-read*` and dropped, so a `:cljs` branch may
+hold `#js {}`; a selected branch has no data readers and an unknown
+tag there fails by name, as before. `:read-cond :preserve` does not
+exist here.
+
+`require` and `load` look for `name.cljf`, then `name.cljc`, then
+`name.clj`, on each classpath root in turn. `RT.load` prefers `.clj`
+to `.cljc`; here the portable file is the one with a chance of
+loading, so it wins.
+
+**Removal**: tie the allowance to the extension as Clojure does, so
+`#?` in a `.clj` errors. Nothing depends on the leniency; it exists so
+a `.clj` being ported can be edited in place before it is renamed.

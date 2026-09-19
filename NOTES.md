@@ -2438,3 +2438,31 @@ non-finite values are kinds, because `ieee_value` is not.
 The lookup is a linear scan of ~300 rows. It runs at analysis time
 for a static member and once per unresolved instance member; nothing
 has shown it in a profile.
+
+## Reader conditionals, and what a file extension means here
+
+`#?` came in as a request to make `.cljc` libraries portable to
+clotran, and the design question was only what the nothing-case is.
+LispReader.java returns the reader itself as a sentinel when no
+branch matches, and every collection loop skips it -- the same trick
+`#_` uses. This reader already treats `#_` as "another kind of space"
+in `skip_ignorables`, so a conditional could not go there (it may
+produce a form), and returning a sentinel value would have needed a
+value that nothing else can produce. Two module flags do it:
+`read_cond` sets `rc_nothing` or `rc_splice` on the way out, and the
+caller that just read a form -- `read_seq`, `read_map`, the three top
+levels -- checks and clears them. Any other caller (`'`, `^`, `@`)
+requires exactly one form and fails through `cond_leaked`.
+
+Unselected branches are read under `suppress_read`, which is where
+`*suppress-read*` lives on the JVM: a `#js {}` in a `:cljs` branch is
+read past instead of failing on the tag. That was the difference
+between "reads .cljc" and "reads the .cljc files people actually
+write".
+
+The feature is `:cljf`, matching the extension, the way `:cljs`
+matches `.cljs` and `:cljr` matches `.cljr`. `:clj` is not claimed:
+it means the JVM, and a `:clj` branch that reaches for
+`java.util.concurrent` is exactly the one clotran must not take.
+`classpath_find` looks for `.cljf`, `.cljc`, `.clj` in that order; the
+reasoning is in DEVIATIONS 33.

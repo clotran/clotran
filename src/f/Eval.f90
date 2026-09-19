@@ -9029,16 +9029,24 @@ contains
     end block
   end function host_super
 
-  ! The classpath. One root was enough while only core.clj was being
-  ! loaded, but Clojure's own test suite lives under test/clj and
-  ! requires clojure.test-helper from there. First root holding the
-  ! file wins, which is what a classpath means.
+  ! The classpath, and the extensions. One root was enough while only
+  ! core.clj was being loaded, but Clojure's own test suite lives under
+  ! test/clj and requires clojure.test-helper from there. First root
+  ! holding the file wins, which is what a classpath means.
+  !
+  ! Extensions, in order: .cljf is clotran's own (a file that uses the
+  ! fortran namespace, say), .cljc is portable Clojure with reader
+  ! conditionals, .clj is JVM Clojure. A library that ships a .cljc
+  ! beside a .clj wrote the .cljc for other hosts, so it wins here;
+  ! RT.load prefers the .clj, which is right for the host the .clj was
+  ! written for. DEVIATIONS 33.
   function classpath_find(rel) result(path)
     character(len=*), intent(in) :: rel
     character(len=:), allocatable :: path, cand
     character(len=8) :: roots(3)
+    character(len=4), parameter :: exts(3) = [character(len=4) :: "cljf", "cljc", "clj"]
     logical :: there
-    integer :: i
+    integer :: i, e
 
     roots(1) = "src/clj"
     roots(2) = "test/clj"
@@ -9046,13 +9054,15 @@ contains
     ! The src/clj spelling is the fallback too, so a genuinely missing
     ! file still reports the path a reader would expect to see.
     path = "src/clj/" // rel // ".clj"
-    do i = 1, 3
-       cand = trim(roots(i)) // "/" // rel // ".clj"
-       inquire(file=cand, exist=there)
-       if (there) then
-          path = cand
-          return
-       end if
+    do e = 1, 3
+       do i = 1, 3
+          cand = trim(roots(i)) // "/" // rel // "." // trim(exts(e))
+          inquire(file=cand, exist=there)
+          if (there) then
+             path = cand
+             return
+          end if
+       end do
     end do
   end function classpath_find
 
