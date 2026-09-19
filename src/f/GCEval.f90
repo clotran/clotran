@@ -3434,6 +3434,26 @@ contains
        thunk = gca_empty([vs_get(base + 1)])
        call vs_set(base + 3, thunk)
        out = gc_obj(OBJ_ATOM, [vs_get(base + 3), gc_nil()], [vs_get(base + 3)])
+    else if (is_box_class(cname)) then
+       ! THE BOXING CONSTRUCTORS. (Long. 1) is 1, (String. "x") is
+       ! "x" -- on the JVM they wrap a primitive in an object, and
+       ! there is no unboxed number here to wrap. What they do have
+       ! to do is CONVERT, because (Long. "12") parses and
+       ! (Double. 1) widens, so each runs the same cast its
+       ! valueOf does.
+       if (gcl_count(vs_get(base + 1)) < 2) then
+          call fail("no matching constructor: " // cname)
+          call vs_leave(base)
+          return
+       end if
+       thunk = gce_eval(gcl_first(gcl_rest(vs_get(base + 1), [vs_get(base + 1)])), &
+            vs_get(base + 2), [vs_get(base + 1)])
+       if (has_error) then
+          call vs_leave(base)
+          return
+       end if
+       call vs_set(base + 3, thunk)
+       out = box_convert(cname, vs_get(base + 3), [vs_get(base + 1), vs_get(base + 3)])
     else if (cname == "PrintWriter" .or. cname == "java.io.PrintWriter" .or. &
          cname == "BufferedWriter" .or. cname == "java.io.BufferedWriter") then
        ! A PrintWriter over a writer IS that writer here. Java's
@@ -3622,6 +3642,74 @@ contains
     if (cname == "ExceptionInfo" .or. &
          cname == "clojure.lang.ExceptionInfo") is_throwable_class = .true.
   end function is_throwable_class
+
+  ! The java.lang boxes, whose constructors core.clj and
+  ! Clojure's suite both write.
+  logical function is_box_class(cname)
+    character(len=*), intent(in) :: cname
+    select case (cname)
+    case ("Long", "java.lang.Long", "Integer", "java.lang.Integer", &
+         "Short", "java.lang.Short", "Byte", "java.lang.Byte", &
+         "Double", "java.lang.Double", "Float", "java.lang.Float", &
+         "Boolean", "java.lang.Boolean", "String", "java.lang.String", &
+         "Character", "java.lang.Character")
+       is_box_class = .true.
+    case default
+       is_box_class = .false.
+    end select
+  end function is_box_class
+
+  ! What a box constructor answers: the value, converted the way
+  ! that box's valueOf would convert it.
+  function box_convert(cname, v0, roots) result(out)
+    character(len=*), intent(in) :: cname
+    type(gc_value), intent(in) :: v0
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, v
+    character(len=:), allocatable :: t
+    integer(gc_ip) :: iv
+    real(gc_dp) :: dv
+    integer :: st
+    v = strip_meta(v0)
+    out = v
+    select case (cname)
+    case ("String", "java.lang.String")
+       out = gc_str(text_of(v), roots)
+    case ("Boolean", "java.lang.Boolean")
+       if (v%tag == GCT_STR) then
+          out = gc_bool(gc_ref_is(v%ref, "true"))
+       else
+          out = gc_bool(truthy(v))
+       end if
+    case ("Character", "java.lang.Character")
+       if (v%tag == GCT_INT) out = gc_char(achar(int(v%ival, kind=4)))
+    case ("Double", "java.lang.Double", "Float", "java.lang.Float")
+       if (v%tag == GCT_STR) then
+          t = gc_ref_text(v%ref)
+          read(t, *, iostat=st) dv
+          if (st == 0) then
+             out = gc_real(dv)
+          else
+             call fail("For input string: " // t)
+          end if
+       else if (is_number(v)) then
+          out = gc_real(num_dbl(v))
+       end if
+    case default
+       ! The integer boxes.
+       if (v%tag == GCT_STR) then
+          t = gc_ref_text(v%ref)
+          read(t, *, iostat=st) iv
+          if (st == 0) then
+             out = gc_int(iv)
+          else
+             call fail("For input string: " // t)
+          end if
+       else if (v%tag == GCT_REAL) then
+          out = gc_int(int(v%rval, gc_ip))
+       end if
+    end select
+  end function box_convert
 
   function nth_or_nil(v, i) result(out)
     type(gc_value), intent(in) :: v

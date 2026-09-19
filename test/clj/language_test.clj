@@ -1321,6 +1321,25 @@
 ;; is neither is still a reader error.
 (check "not every N is a suffix"     (map str ['aN 'Nx 'x1N]) '("aN" "Nx" "x1N"))
 
+
+;;; ---- the boxing constructors -------------------------------------
+;; (Long. 1) is 1 and (String. "x") is "x": on the JVM these wrap a
+;; primitive in an object, and there is no unboxed number here to wrap.
+;; What they still have to do is CONVERT, because (Long. "12") parses.
+;; Every line below is `clj`'s answer.
+
+(check "Long."      (Long. 1) 1)
+(check "String."    (String. "x") "x")
+(check "Integer."   (Integer. 5) 5)
+(check "Double."    (Double. 1.5) 1.5)
+(check "Boolean."   (Boolean. true) true)
+(check "Character." (Character. \a) \a)
+(check "Long. parses"    (Long. "12") 12)
+(check "Double. parses"  (Double. "1.5") 1.5)
+(check "Boolean. parses" [(Boolean. "true") (Boolean. "no")] [true false])
+(check "a bad parse throws" (try (Long. "zz") :no (catch Throwable e :threw)) :threw)
+(check "the box is the value" [(= (Long. 1) 1) (= (String. "x") "x")] [true true])
+
 ;;; ---- report -----------------------------------------------------
 
 
