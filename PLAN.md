@@ -39,7 +39,7 @@ JVM-shaped `case` arms in one file.
 | startup | 4.1s (was 7.2s before step 4), core.clj re-read every launch |
 | `(reduce + (range n))` | LINEAR since step 4: n=100000 in 17s net, ~170 µs and 60 evaluations per element. Before: n=16000 took 161s and n=100000 did not finish in 15 minutes |
 | `loop`/`recur` | ~100 µs per iteration, linear |
-| Fortran library calls made through clotran | 1: `fortran/dgemm`, the reference BLAS on a clotran array, no copy |
+| Fortran library calls made through clotran | `fortran/dgemm` (reference BLAS) and ChemSol's `readopt`, `dg_ld`, `solvout`, `entropy`; `examples/chemsol.clj` reproduces the original program's output byte for byte on its three reference inputs (`scripts/chemsol-check`) |
 
 The reduce row was the one that mattered and no scorecard saw it; step 4
 below is how it was found and what it was.
@@ -275,15 +275,50 @@ What it fixed as the convention, for step 7:
   not what BLAS takes. A generated binding that wants a slice copies
   it explicitly and says so.
 
-### 7. ChemSol -- the interop finish line
+### 7. ChemSol -- the interop finish line -- DONE
 
-After dgemm proves the convention. Replace `main.f90` with clotran,
-import `chemsol.f90` and `push_array.f90`, run the three test inputs
-with `vdw.par`, compare outputs. Its routines take twenty to thirty
-positional arguments (`dg_ld`, `readopt`), which is the
-argument-marshaling problem NOTES describes: unpack a map into
-positional args, call the unmodified routine, repack. Independent of
-step 5; can run in a worktree once step 6 lands.
+`src/f/chemsol/` holds `chemsol.f90` and `push_array.f90` verbatim
+(PROVENANCE.md there); `main.f90` is replaced by `examples/chemsol.clj`.
+`scripts/chemsol-check` runs it on `test1.cs`, `test2.cs` and `test3.cs`
+with `vdw.par` and diffs against the original program's output: all
+three match byte for byte.
+
+The shape is the one NOTES.md asked for. `fortran/chemsol-readopt`,
+`fortran/chemsol-dg-ld` and `fortran/chemsol-solvout` each take ONE
+MAP whose keys are the routine's own argument names (`:iterld`,
+`:n-reg1`, `:xw`, underscores as hyphens), unpack it into the twenty to
+thirty positional arguments the unmodified routine declares, call it,
+and answer the map with the scalars the routine wrote assoc'd back.
+Arrays are clotran `real8`/`int4` arrays whose registry buffers the
+routine reads and writes in place through a contiguous pointer
+(`gcna_real8_ptr`), so `rpi`, `pcenter`, `vdwc6` and `iacw` come back
+filled without repacking. The driver is
+
+    (-> mol (f/chemsol-readopt vdw-par) (f/chemsol-dg-ld atoms) f/chemsol-solvout)
+
+with everything main.f90 did around those calls -- parsing the input,
+typing the atoms, the charge checks, the header -- written in Clojure.
+
+Three things the library dictated, worth knowing for the generator:
+
+- **A routine may do its own I/O.** `readopt` reads the tail of the
+  input file (the `rp` block) from unit 45 and `vdw.par` from 44;
+  `solvout` appends to `cs.arc`. The binding opens 44 and 45 around the
+  call, positioned where main.f90's reads had left 45, from
+  `:input-file` and `:input-skip` in the map. A generator has to be told
+  which units a routine touches.
+- **Fixed-size locals can be huge.** `dg_ld` declares 400 MB of them
+  (`jp`, `jp2` at 10^8 `integer(2)`). The original build keeps them
+  static; clotran's `-frecursive` would put them on an 8 MB stack and
+  the first call died with SIGILL. `chemsol.f90` is compiled without
+  that flag, and only it. A library's build flags are part of its
+  binding.
+- **Module state.** `ran2`'s seed lives in module variables, so one
+  calculation per process is what matches the reference; a second in
+  the same process continues the random sequence. Not hidden.
+
+Also added on the way: `clotran-slurp`, a host reader for a whole file
+(core.clj's `slurp` is written over `java.io`).
 
 ### 8. Then, each now cheap because of step 5
 
