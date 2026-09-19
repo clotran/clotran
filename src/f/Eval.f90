@@ -235,6 +235,11 @@ module Eval
 
   public :: gce_eval, gce_base_env, gce_has_error, gce_error, gce_clear_error
   public :: gce_analyze
+  ! Forms evaluated since startup. CLOTRAN_STATS=1 prints it at exit
+  ! next to the collector's counters (main.f90), so a cost can be
+  ! split into "more work" and "more collector" before theorising.
+  integer(8), public :: gce_evals = 0
+  integer, save :: trace_macros = 0   ! 0 unread, 1 on, 2 off
 
 contains
 
@@ -5604,6 +5609,48 @@ contains
           call vs_set(base + 3, out)
        end do
        out = vs_get(base + 3)
+       call vs_leave(base)
+       return
+    end if
+
+    ! A MAP OR SET LITERAL HOLDS CODE TOO, and this mattered more than
+    ! it looks: `extend` takes its method bodies as a MAP of fns,
+    ! {:internal-reduce (fn [s f val] (loop ... (if-let ...)))}, so
+    ! every protocol method installed by extend-type/extend-protocol
+    ! escaped analysis here and re-expanded its macros on EVERY CALL.
+    ! (reduce + (range 300)) expanded `let` 900 times and `if-let` 300
+    ! times at run time, and 87% of a reduce was spent in expand_macro.
+    if (gca_is(vs_get(base + 1)) .or. gc_kind(vs_get(base + 1)) == OBJ_SET) then
+       block
+         type(gc_value), allocatable :: ks(:), vls(:)
+         type(gc_value) :: k, v, mp
+         logical :: is_set
+         is_set = (gc_kind(vs_get(base + 1)) == OBJ_SET)
+         if (is_set) then
+            call gca_entries(gc_slot(vs_get(base + 1), 1), ks, vls)
+         else
+            call gca_entries(vs_get(base + 1), ks, vls)
+         end if
+         mp = gca_empty([vs_get(base + 1), vs_get(base + 2)])
+         call vs_set(base + 3, mp)
+         do i = 1, size(ks)
+            k = macroexpand_all(ks(i), vs_get(base + 2))
+            call vs_set(base + 4, k)
+            if (is_set) then
+               v = vs_get(base + 4)
+            else
+               v = macroexpand_all(vls(i), vs_get(base + 2))
+            end if
+            mp = gca_assoc(vs_get(base + 3), vs_get(base + 4), v, &
+                 [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 4)])
+            call vs_set(base + 3, mp)
+         end do
+         if (is_set) then
+            out = gc_obj(OBJ_SET, [vs_get(base + 3)], [vs_get(base + 3)])
+         else
+            out = vs_get(base + 3)
+         end if
+       end block
        call vs_leave(base)
        return
     end if
