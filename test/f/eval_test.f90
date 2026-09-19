@@ -99,7 +99,11 @@ contains
 
     gc_torture = torturing        ! from here on, collect at every allocation
     call gce_clear_error()
-    result = gce_eval(vs_get(base + 2), vs_get(base + 1), no_roots)
+    ! Analysed, then executed: the same two halves main.f90 runs, so
+    ! the torture pass covers the analyser's rooting too.
+    result = gce_analyze(vs_get(base + 2), vs_get(base + 1))
+    call vs_set(base + 2, result)
+    if (.not. gce_has_error()) result = gce_eval(vs_get(base + 2), vs_get(base + 1), no_roots)
     call vs_set(base + 3, result)
     if (gce_has_error()) then
        gc_torture = .false.
@@ -140,7 +144,11 @@ contains
     call vs_set(base + 2, form)
     gc_torture = torturing
     call gce_clear_error()
-    result = gce_eval(vs_get(base + 2), vs_get(base + 1), no_roots)
+    ! Analysed, then executed: the same two halves main.f90 runs, so
+    ! the torture pass covers the analyser's rooting too.
+    result = gce_analyze(vs_get(base + 2), vs_get(base + 1))
+    call vs_set(base + 2, result)
+    if (.not. gce_has_error()) result = gce_eval(vs_get(base + 2), vs_get(base + 1), no_roots)
     call vs_set(base + 3, result)
     errored = gce_has_error()
     gc_torture = .false.
@@ -190,7 +198,11 @@ contains
     call ev("3e. ", "(if false 1)", "nil")
     ! The untaken branch must NOT be evaluated -- if it were, this
     ! would fail on an unbound symbol rather than returning 1.
-    call ev("3f. ", "(if true 1 undefined-symbol)", "1")
+    ! Clojure fails to COMPILE this -- Unable to resolve symbol -- and
+    ! since the analyser resolves every symbol before anything runs,
+    ! so does clotran. It used to answer 1 because the branch was
+    ! never evaluated; that was deviation 16, now closed.
+    call ev_err("3f. ", "(if true 1 undefined-symbol)")
   end subroutine check_if
 
   subroutine check_def_and_symbols()
@@ -287,12 +299,12 @@ contains
     call ev("12b. ", "(do (def x 9) (quasiquote x))", "user/x")
     ! ~x evaluates; the reader turns it into (unquote x).
     call ev("12c. ", "(do (def x 9) `~x)", "9")
-    call ev("12d. ", "(do (def x 9) `(a ~x))", "(a 9)")
+    call ev("12d. ", "(do (def x 9) `(a ~x))", "(user/a 9)")
     call ev("12e. ", "`(1 2 3)", "(1 2 3)")
     ! ~@ splices a list in rather than nesting it.
     call ev("12f. ", "(do (def xs (list 2 3)) `(1 ~@xs 4))", "(1 2 3 4)")
     call ev("12g. ", "(do (def xs (list 2 3)) `(1 ~xs))", "(1 (2 3))")
-    call ev("12h. ", "`(a (b ~(+ 1 2)))", "(a (b 3))")
+    call ev("12h. ", "`(a (b ~(+ 1 2)))", "(user/a (user/b 3))")
   end subroutine check_quasiquote
 
   ! A macro gets its arguments UNEVALUATED and its result is evaluated
@@ -329,7 +341,9 @@ contains
     ! An internal error is catchable too, and arrives as a MAP rather
     ! than a bare string -- so a handler can tell it from a value the
     ! program itself threw. 14i is that distinction.
-    call ev("14e. ", "(try undefined-thing (catch Throwable e :caught))", ":caught")
+    ! A compile error is not a thrown value: try cannot catch an
+    ! unresolved symbol, in Clojure or here. Checked against clj.
+    call ev_err("14e. ", "(try undefined-thing (catch Throwable e :caught))")
     ! The handler runs in a scope where e is bound, and the outer
     ! environment is still visible.
     call ev("14f. ", "(do (def x 10) (try (throw 5) (catch Throwable e (+ e x))))", "15")
@@ -343,7 +357,7 @@ contains
     ! indistinguishable to a handler that wants to re-raise what it
     ! does not recognise.
     call ev("14i. ", '(try (throw "x") (catch Throwable e e))', '"x"')
-    call ev("14j. ", "(try nope (catch Throwable e (count e)))", "1")
+    call ev_err("14j. ", "(try nope (catch Throwable e (count e)))")
   end subroutine check_try_catch
 
   subroutine check_multi_arity()
@@ -414,7 +428,7 @@ contains
          " (def target (fn* [] :new)) (caller))", ":new")
     ! #'x is the Var itself, not its value.
     call ev("17g. ", "(do (def q 3) (var q))", "#'q")
-    call ev("17h. ", "(try (var nosuch) (catch Throwable e :unresolved))", ":unresolved")
+    call ev_err("17h. ", "(try (var nosuch) (catch Throwable e :unresolved))")
     ! A second namespace has its own bindings.
     call ev("17i. ", &
          "(do (def a 1) (in-ns (quote other)) (def a 2) a)", "2")
@@ -728,7 +742,11 @@ contains
     form = gcr_read('(fortran/make-array "real8" 4)', [vs_get(base + 1)])
     call vs_set(base + 2, form)
     call gce_clear_error()
-    result = gce_eval(vs_get(base + 2), vs_get(base + 1), no_roots)
+    ! Analysed, then executed: the same two halves main.f90 runs, so
+    ! the torture pass covers the analyser's rooting too.
+    result = gce_analyze(vs_get(base + 2), vs_get(base + 1))
+    call vs_set(base + 2, result)
+    if (.not. gce_has_error()) result = gce_eval(vs_get(base + 2), vs_get(base + 1), no_roots)
     call vs_set(base + 3, result)
     call ok("28a. an array claims a buffer: ", gcna_live_count() - before == 1)
     call ok("28b. ...of the kind asked for: ", gcna_kind(gc_i1(vs_get(base + 3))) == "real8")
@@ -780,7 +798,11 @@ contains
     form = gcr_read('(. #"a+" (matcher "aaa"))', [vs_get(base + 1)])
     call vs_set(base + 2, form)
     call gce_clear_error()
-    result = gce_eval(vs_get(base + 2), vs_get(base + 1), no_roots)
+    ! Analysed, then executed: the same two halves main.f90 runs, so
+    ! the torture pass covers the analyser's rooting too.
+    result = gce_analyze(vs_get(base + 2), vs_get(base + 1))
+    call vs_set(base + 2, result)
+    if (.not. gce_has_error()) result = gce_eval(vs_get(base + 2), vs_get(base + 1), no_roots)
     call vs_set(base + 3, result)
     ! The pattern and the matcher's own clone are two distinct handles.
     call ok("29a. a matcher opens handles: ", regex_live_count() - before >= 2)
@@ -808,7 +830,11 @@ contains
     form = gcr_read("(undefined-thing 1)", [vs_get(base + 1)])
     call vs_set(base + 2, form)
     call gce_clear_error()
-    result = gce_eval(vs_get(base + 2), vs_get(base + 1), no_roots)
+    ! Analysed, then executed: the same two halves main.f90 runs, so
+    ! the torture pass covers the analyser's rooting too.
+    result = gce_analyze(vs_get(base + 2), vs_get(base + 1))
+    call vs_set(base + 2, result)
+    if (.not. gce_has_error()) result = gce_eval(vs_get(base + 2), vs_get(base + 1), no_roots)
     call ok("9a. an unbound symbol is an error: ", gce_has_error())
     ! Leave the flag clear, or every evaluation after this one
     ! short-circuits -- which is exactly what the torture pass caught.

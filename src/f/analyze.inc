@@ -190,6 +190,28 @@
     call vs_leave(base)
   end function fail_node
 
+  ! A form as a list: a macro assembles its expansion with cons and
+  ! concat, so a clause of a try, an arity of a fn* or a method of a
+  ! deftype can arrive as a lazy seq or a view, and anything that
+  ! inspects a form's SHAPE has to realise it first.
+  ! The metadata wrapper comes off first: clojure.walk rebuilds a seq
+  ! with (with-meta (doall (map inner form)) (meta form)), and here a
+  ! with-meta of nil still wraps, so every clause of a walked try
+  ! arrived as OBJ_META over a lazy seq and was analysed as a call.
+  function norm_form(v, roots) result(out)
+    type(gc_value), intent(in) :: v
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out
+    integer :: base
+    out = strip_meta(v)
+    if (gc_kind(out) == OBJ_LAZY .or. gc_kind(out) == OBJ_SEQ) then
+       base = vs_enter(1)
+       call vs_set(base + 1, out)
+       out = seq_to_list(vs_get(base + 1), [roots, vs_get(base + 1)])
+       call vs_leave(base)
+    end if
+  end function norm_form
+
   ! Analyses every form of a list or vector into a children vector.
   recursive function analyze_all(forms, sc, roots) result(out)
     type(gc_value), intent(in) :: forms, sc
@@ -272,6 +294,7 @@
              nd = const_node(vs_get(base + 1), [vs_get(base + 2)])
           else
              nd = analyze_seq(vs_get(base + 1), vs_get(base + 2))
+             if (has_error) call trace_analysis_failure(vs_get(base + 1))
           end if
        case (OBJ_VECTOR)
           kids = analyze_all(vs_get(base + 1), vs_get(base + 2), [vs_get(base + 1)])
@@ -448,6 +471,19 @@
     call vs_leave(base)
   end function analyze_seq
 
+  ! CLOTRAN_TRACE_MACRO=1 also names the innermost list form whose
+  ! analysis failed, which is how a structural surprise in a
+  ! macro-built form gets found.
+  subroutine trace_analysis_failure(form)
+    type(gc_value), intent(in) :: form
+    character(len=:), allocatable :: t
+    if (trace_macros == 0) call read_trace_macros()
+    if (trace_macros /= 1) return
+    t = gcp_str(form, .true.)
+    if (len(t) > 300) t = t(1:300) // "..."
+    write(0, '(A,A)') "analysis failed in: ", t
+  end subroutine trace_analysis_failure
+
   ! (f a b) -> N_CALL with children [f a b].
   recursive function analyze_call(form, sc) result(nd)
     type(gc_value), intent(in) :: form, sc
@@ -581,6 +617,15 @@
        return
     end if
     mname = gc_ref_text(member%ref)
+    ! A member name reached through syntax-quote arrives qualified --
+    ! defmethod's template says addMethod and the reader makes it
+    ! clojure.core/addMethod. HostExpr.Parser reads sym.name only, and
+    ! so does this.
+    if (index(mname, "/") > 1) then
+       mname = mname(index(mname, "/") + 1:)
+       member = gc_sym(mname, [vs_get(base + 1), vs_get(base + 5)])
+       call vs_set(base + 5, member)
+    end if
 
     ! A host class as the target: a static member, resolved once.
     if (target%tag == GCT_SYM) then
@@ -854,8 +899,26 @@
        call vs_leave(base)
        return
     end if
-    call vs_set(base + 3, nm)
+    ! A qualified name -- (def ns/x ...) -- is allowed only for the
+    ! current namespace, and defines the bare name: DefExpr's rule. A
+    ! def inside a syntax-quote template arrives this way, as
+    ! clojure.pprint's defdirectives does.
     call vs_set(base + 4, md)
+    block
+      character(len=:), allocatable :: t
+      integer :: sl
+      t = gc_ref_text(nm%ref)
+      sl = index(t, "/")
+      if (sl > 1 .and. sl < len(t)) then
+         if (t(1:sl-1) /= gcn_name(gcn_current([vs_get(base + 1)]))) then
+            call fail("Can't create defs outside of current ns: " // t)
+            call vs_leave(base)
+            return
+         end if
+         nm = gc_sym(t(sl+1:), [vs_get(base + 1), vs_get(base + 4)])
+      end if
+    end block
+    call vs_set(base + 3, nm)
     var = gcn_lookup(gcn_current([vs_get(base + 1)]), vs_get(base + 3))
     if (.not. gcn_is_var(var)) then
        var = gcn_intern(gcn_current([vs_get(base + 1)]), vs_get(base + 3), gc_nil(), &
@@ -1071,6 +1134,7 @@
     ! One arity or several: (fn* [..] ..) versus (fn* ([..] ..) ...)
     head = strip_meta(gcl_first(vs_get(base + 3)))
     if (gcv_is(head)) then
+       ! single arity: the whole rest is the one clause
        call vs_set(base + 6, gcl_cons(vs_get(base + 3), gcl_empty([vs_get(base + 3)]), [vs_get(base + 3)]))
     else
        call vs_set(base + 6, vs_get(base + 3))
@@ -1080,7 +1144,7 @@
     walk = vs_get(base + 6)
     call vs_set(base + 8, walk)
     do while (gcl_count(vs_get(base + 8)) > 0)
-       clause = strip_meta(gcl_first(vs_get(base + 8)))
+       clause = norm_form(strip_meta(gcl_first(vs_get(base + 8))), [vs_get(base + 7), vs_get(base + 8)])
        ar = analyze_arity(clause, vs_get(base + 5))
        if (has_error) then
           call vs_leave(base)
@@ -1278,7 +1342,7 @@
     call vs_set(base + 3, body)
     ! body forms, kept in order: collect then reverse via cons
     do i = n - 1, 0, -1
-       item = nth_of(vs_get(base + 1), i)
+       item = norm_form(nth_of(vs_get(base + 1), i), [vs_get(base + 1), vs_get(base + 3)])
        if (is_clause(item, "catch") .or. is_clause(item, "finally")) cycle
        call vs_set(base + 4, item)
        body = gcl_cons(vs_get(base + 4), vs_get(base + 3), [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)])
@@ -1299,7 +1363,7 @@
     fin = gc_nil()
     call vs_set(base + 6, fin)
     do i = 0, n - 1
-       item = nth_of(vs_get(base + 1), i)
+       item = norm_form(nth_of(vs_get(base + 1), i), [vs_get(base + 1), vs_get(base + 5), vs_get(base + 6)])
        call vs_set(base + 4, item)
        if (is_clause(item, "catch")) then
           if (gcl_count(item) < 3) cycle
@@ -1534,13 +1598,13 @@
     call vs_set(base + 7, seen)
     call vs_set(base + 8, vs_get(base + 3))
     do while (gcl_count(vs_get(base + 8)) > 0)
-       m = strip_meta(gcl_first(vs_get(base + 8)))
+       m = norm_form(strip_meta(gcl_first(vs_get(base + 8))), [vs_get(base + 5), vs_get(base + 6), vs_get(base + 7), vs_get(base + 8)])
        mname = strip_meta(gcl_first(m))
        if (mname%tag == GCT_SYM) then
-          tmp = gc_key(gc_ref_text(mname%ref), [vs_get(base + 5), vs_get(base + 6), vs_get(base + 7), vs_get(base + 8)])
+          tmp = gc_key(bare_name(mname), [vs_get(base + 5), vs_get(base + 6), vs_get(base + 7), vs_get(base + 8)])
           call vs_set(base + 9, tmp)
           if (.not. gca_contains(vs_get(base + 7), vs_get(base + 9))) then
-             clauses = method_clauses(gc_ref_text(mname%ref), vs_get(base + 3), vs_get(base + 1))
+             clauses = method_clauses(bare_name(mname), vs_get(base + 3), vs_get(base + 1))
              call vs_set(base + 10, clauses)
              fnform = vs_get(base + 10)      ! the clause list IS fn*'s rest
              fnode = analyze_fn(fnform, vs_get(base + 4))

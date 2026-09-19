@@ -1399,7 +1399,7 @@ contains
        m = strip_meta(gcl_first(vs_get(base + 4)))
        mname = strip_meta(gcl_first(m))
        if (mname%tag == GCT_SYM) then
-          if (gc_ref_is(mname%ref, name)) then
+          if (bare_name(mname) == name) then
              tmp = bind_fields(gcl_rest(m, [vs_get(base + 2), vs_get(base + 3)]), &
                   vs_get(base + 2))
              call vs_set(base + 5, tmp)
@@ -5335,56 +5335,55 @@ contains
   ! clojure.test's `are` is the case that forced this: it aliases
   ! clojure.template as temp, and every (are ...) in Clojure's own test
   ! suite expands through it.
+  ! Compiler.resolveSymbol, as syntaxQuote calls it: an unqualified
+  ! symbol in a template becomes ns/name -- the Var's own namespace if
+  ! it resolves to one, the WRITING namespace otherwise -- unless it is
+  ! a special form, a class name, an auto-gensym, `&`, or host sugar
+  ! (.member, Ctor.), which are left as they are. A qualified symbol has
+  ! its alias expanded. Unconditional, as Clojure's is: qualifying only
+  ! what already resolved meant a macro defined BEFORE the function its
+  ! template names (clojure.test's run-test names test-var, defined
+  ! later in the file) expanded to a bare symbol that then resolved in
+  ! the caller's namespace, or not at all. Now that syntax-quote is
+  ! expanded at analysis time that ordering is real, and the only
+  ! correct answer is Clojure's.
   function qq_alias(sym, env) result(out)
     type(gc_value), intent(in) :: sym, env
-    type(gc_value) :: out, nsv, tgt, dns
+    type(gc_value) :: out, nsv, tgt, var
     character(len=:), allocatable :: t
-    integer :: slash
+    integer :: slash, n
 
     out = sym
     if (sym%tag /= GCT_SYM) return
     t = gc_ref_text(sym%ref)
-    nsv = gc_nil()
-    if (gce_is(env)) then
-       if (gce_find(env, gc_sym("__defining-ns__", [sym]), dns)) nsv = dns
-    end if
-    if (gc_kind(nsv) /= OBJ_NS) nsv = gcn_current([sym])
+    n = len(t)
+    if (n == 0) return
+    nsv = gcn_current([sym])
 
     slash = index(t, "/")
-    if (slash > 1 .and. slash < len(t)) then
+    if (slash > 1 .and. slash < n) then
        tgt = alias_in(nsv, t(1:slash-1), [sym])
        if (gc_kind(tgt) /= OBJ_NS) return
        out = gc_sym(gcn_name(tgt) // "/" // t(slash+1:), [sym])
        return
     end if
-
-    ! An UNQUALIFIED symbol resolves against the writing namespace too:
-    ! `apply-template inside clojure.template means that namespace's
-    ! Var, not clojure.core's. clotran used to leave it bare and let
-    ! resolution fall back to clojure.core, which is right for core.clj
-    ! and wrong for every other library.
-    !
-    ! Guarded on the lookup SUCCEEDING there, so a special form or a
-    ! core name is still left alone -- exactly the symbols that have no
-    ! Var in the writing namespace, and exactly the ones the fallback
-    ! already handles.
-    ! NOT for clojure.core. Its names already resolve by fallback
-    ! (deviation 3), so qualifying them buys nothing -- and it produced
-    ! clojure.core/<, clojure.core/chunked-seq? and friends, which
-    ! resolve at a REPL but not from inside every evaluation context,
-    ! turning a whole test file into one 'not found'. The case this is
-    ! for is a LIBRARY referring to its own Var: `apply-template inside
-    ! clojure.template.
-    if (gcn_name(nsv) == "clojure.core") return
-    ! NOT for clojure.core. Its names already resolve by fallback
-    ! (deviation 3), so qualifying them buys nothing -- and it produced
-    ! clojure.core/<, clojure.core/chunked-seq? and friends, which
-    ! resolve at a REPL but not from inside every evaluation context,
-    ! turning a whole test file into one "not found". The case this is
-    ! for is a LIBRARY referring to its own Var, as clojure.template
-    ! does with apply-template.
-    if (gcn_name(nsv) == "clojure.core") return
-    if (.not. gcn_is_var(gcn_lookup(nsv, sym))) return
+    if (t == "&" .or. t == "/") return
+    if (t(1:1) == ".") return
+    if (t(n:n) == ".") return
+    if (n > 8) then
+       if (t(n-7:n) == "__auto__") return
+    end if
+    if (is_special(sym)) return
+    if (gc_ref_is(sym%ref, "catch") .or. gc_ref_is(sym%ref, "finally") .or. &
+         gc_ref_is(sym%ref, "unquote") .or. gc_ref_is(sym%ref, "splice-unquote")) return
+    if (is_class_name(sym)) return
+    var = resolve_var(sym, gc_nil())
+    if (gcn_is_var(var)) then
+       if (gc_kind(gc_slot(var, 3)) == OBJ_NS) then
+          out = gc_sym(gcn_name(gc_slot(var, 3)) // "/" // t, [sym])
+          return
+       end if
+    end if
     out = gc_sym(gcn_name(nsv) // "/" // t, [sym])
   end function qq_alias
 
@@ -11936,6 +11935,18 @@ contains
     if (v%tag == GCT_NIL) yes = .false.
     if (v%tag == GCT_BOOL .and. v%ival == 0) yes = .false.
   end function truthy
+
+  ! A method symbol's name without its namespace. A deftype method
+  ! written inside a syntax-quote template -- every one of defrecord's
+  ! -- arrives qualified, and NewInstanceMethod.parse reads sym.name.
+  function bare_name(sym) result(s)
+    type(gc_value), intent(in) :: sym
+    character(len=:), allocatable :: s
+    integer :: sl
+    s = gc_ref_text(sym%ref)
+    sl = index(s, "/")
+    if (sl > 1 .and. sl < len(s)) s = s(sl+1:)
+  end function bare_name
 
   include "analyze.inc"
   include "exec.inc"
