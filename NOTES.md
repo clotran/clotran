@@ -2323,3 +2323,40 @@ its caller's value-stack slot for as long as the call lasts.
 This is the CallInfo frame array PLAN.md's debugger section asked for.
 What it is not yet: per-thread (it is a module array), a
 `StackTraceElement` (DEVIATIONS 31), or a breakpoint.
+
+## Locals clearing, and who was holding the head
+
+`(reduce + (range 100000))` peaked at 645 MB and `(into [] (map inc
+(range 100000)))` at 1.16 GB, with the collector doing its job: the
+realised seq was LIVE. Two things held its head for the length of the
+reduce, and neither was the loop that walks it.
+
+The first was every frame on the way down. `reduce`'s own `coll`
+parameter, `coll-reduce`'s `x` in the protocol dispatch, `seq-reduce`'s
+`coll`: each frame keeps its slot until it returns, and it returns only
+when the reduce is over. Clojure's compiler clears a local after its
+last use for exactly this reason. The analyser now does the same: a
+backwards liveness pass over each fn body (`liveness` in analyze.inc)
+finds, on every path, the read after which a slot is never read again,
+and marks that N_LOCAL; the executor nils the slot after that read. The
+first version marked only the textually last read, which in
+`(if p (f x) (g x))` is the one in the else branch -- the protocol
+dispatch takes the then branch, and the head stayed put. Alternatives
+are processed against the same after-set and merged, so both branches
+clear. Reads inside a loop body are never last (the body runs again),
+a body that recurs to its own fn is left alone (its captures are not
+rewritten by the recur), and captured slots are counted as read when
+the closure is made.
+
+The second was the argument vector. The executor builds a call's
+arguments into a vector, roots it on the value stack, and calls
+`apply`; `invoke_closure` copies the values into the new frame. That
+vector stayed rooted in the caller's slot for the whole call, holding
+every argument -- so clearing the callee's slot changed nothing. The
+caller now hands the vector over: it nils its slot just before `apply`,
+which roots the vector at once, and `invoke_closure` drops its own root
+as soon as the frame is filled. No allocation happens between the nil
+and the next root, which is the one condition that makes this safe.
+
+Both cases now stay at the 152 MB the loaded core.clj occupies. That
+baseline is stage 3's business.

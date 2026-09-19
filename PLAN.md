@@ -237,10 +237,13 @@ Staged so each step is checkable:
 2. intermediates move to the operand stack; `roots(:)` leaves every
    signature; module globals move into a context type; source
    positions on nodes.
-3. snapshot the heap after core.clj and start from the image. Memory
-   is part of this: a 100000-element reduce peaks at 640 MB because
-   every lazy cell is several pool objects and every persistent
-   vector node is a separately allocated array.
+3. snapshot the heap after core.clj and start from the image. The
+   baseline after loading core.clj is 152 MB; a 100000-element reduce
+   no longer adds to it, because locals are cleared after their last
+   read (a backwards liveness pass in analyze.inc, as Clojure's
+   compiler does) and a call's argument vector is handed to the
+   callee rather than kept rooted by the caller. Before those two,
+   the same reduce peaked at 645 MB and an `into` at 1.16 GB.
 
 This reverses the previous plan's "Not a bytecode VM" decision. Its
 two reasons -- the env chain as a name->value map makes eval-in-frame
