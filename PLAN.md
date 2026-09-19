@@ -175,7 +175,30 @@ expansion, and `sample` gave the call tree.
 
 `System/nanoTime` and `currentTimeMillis` exist now, so `time` works.
 
-### 5. The analysis pass, executed over explicit frames
+### 5. The analysis pass, executed over explicit frames -- STAGE 1 DONE
+
+Stage 1 landed 2026-09-19: `src/f/analyze.inc` and `src/f/exec.inc`.
+Every top-level form is analysed once into a node tree -- symbols
+resolved to frame slots, Vars or constants; macros and syntax-quote
+expanded in the writing namespace; special forms classified by an
+integer kind -- and executed over frames, one raw vector of slots per
+fn invocation, with flat closures that copy their captured values.
+`__defining-ns__` is gone, DEVIATIONS 16 is resolved, 6 moved to
+analysis time, and 32 records the one new deviation (a qualified
+symbol that does not resolve is deferred to run time, for the skipped
+JVM libraries' sake). Measured against the step-4 numbers:
+
+| | before | after |
+|---|---|---|
+| startup | 4.1s | 2.3s |
+| `(reduce + (range 100000))` | 21s | 9.9s |
+| `loop`/`recur`, 40000 | ~2s net | ~1s net |
+| `(into [] (map inc (range 100000)))` | 35s (with the loop) | 17s |
+
+Two bridges remain to the old walker: `eval_dot` and `eval_new` still
+take forms, so the executor hands them `(quote v)` forms with the
+values already computed (a static call on a host class is resolved to
+its native at analysis and bypasses this). Stage 2 is what follows.
 
 The one big investment. `gce_analyze` resolves every symbol -- to a Var
 handle, or to a (depth, slot) local -- classifies every node with an
@@ -196,11 +219,19 @@ that snapshots into an image (startup).
 
 Staged so each step is checkable:
 
-1. analyser resolves and classifies; the recursive walker consumes
-   nodes; read-one-form-at-a-time load rides along (DEVIATIONS 1);
+1. DONE -- analyser resolves and classifies; the executor consumes
+   nodes over frames. Still to do in this stage: delete the old
+   walker (`gce_eval`'s form paths, `eval_let`, `make_closure`,
+   `bind_params` and the rest), port `eval_dot`/`eval_new` to take
+   values so the `(quote v)` bridge goes, and read one form at a time
+   (DEVIATIONS 1).
 2. intermediates move to the operand stack; `roots(:)` leaves every
-   signature; module globals move into a context type;
-3. snapshot the heap after core.clj and start from the image.
+   signature; module globals move into a context type; source
+   positions on nodes.
+3. snapshot the heap after core.clj and start from the image. Memory
+   is part of this: a 100000-element reduce peaks at 640 MB because
+   every lazy cell is several pool objects and every persistent
+   vector node is a separately allocated array.
 
 This reverses the previous plan's "Not a bytecode VM" decision. Its
 two reasons -- the env chain as a name->value map makes eval-in-frame

@@ -2177,3 +2177,66 @@ own protocol installations were paying the same tax at load.
 
 Neither cause is visible to any scorecard, and both had been there
 since the GC evaluator was built.
+
+## The analysis pass: nodes, frames and flat closures
+
+Until 2026-09-19 clotran walked raw S-expressions at every evaluation:
+each list form re-decided whether its head was a special form (a
+24-way string cascade), a macro, host sugar or a call; each free symbol
+was resolved against whatever `*ns*` was at that moment, patched by a
+`__defining-ns__` binding in every closure's environment; locals were
+name -> value maps chained per frame. `analyze.inc` and `exec.inc`
+replace that with the two halves every real Clojure has.
+
+**Analysis** (`analyze_top` -> `analyze`) runs once per top-level form
+and produces OBJ_AST nodes: i1 the kind (`N_IF`, `N_CALL`, `N_FN`, ...),
+i2 an integer operand, slot 1 children, slots 2-3 payloads. Macros are
+expanded as they are met (a local shadows a macro, as
+`Compiler.isMacro` has it), syntax-quote is expanded here too, and
+every symbol is resolved once: a local to a frame slot, a Var to the
+Var itself, `Class/field` to its value, a class literal to its keyword.
+An unqualified symbol that resolves to nothing is an analysis error,
+as in Clojure; a qualified one is deferred (DEVIATIONS 32). A
+top-level `do` is not analysed as a unit -- `Compiler.eval` evaluates
+its subforms one at a time, so an `(ns ...)` earlier in the same `do`
+is in force for the rest -- and `N_TOPDO` does the same.
+
+**Scopes** are GC objects (K_SCOPE blocks chained inside a K_FNINFO
+per fn) because the analyser allocates constantly and everything it
+holds must be rootable. A fn reserves consecutive slots for its
+parameters; a `let`, `loop`, `letfn` or `catch` reserves slots in the
+same fn's frame; shadowing is a new binding in a child block. A `loop`
+reserves all its slots first and binds each name only after its init
+is analysed, so the slots stay consecutive for `recur` while the scope
+stays sequential.
+
+**Closures are flat.** When an inner fn refers to an outer local,
+`lookup_local` allocates a slot in the inner fn and records a capture
+pair (outer slot -> inner slot) on the template; making the closure
+COPIES those values. Locals are immutable in Clojure, so copying is
+exact, and it is what makes a closure made in one loop iteration keep
+that iteration's values after `recur` has rewritten the slots. The two
+rebinding forms are handled explicitly: `recur` evaluates its
+arguments and then writes the target's slots and returns a marker the
+enclosing loop or fn body reads; `letfn` makes every closure, stores
+them, and copies their captures a second time so each sees the others.
+
+**A template** (slot 2 of `N_FN`, slot 1 of a closure) is
+`[name arities captures nslots selfslot]`, each arity
+`[nfixed variadic? first-slot body]`; one frame of `nslots` serves
+every arity. `invoke_closure` picks the arity, fills parameters,
+captures and the self name, and loops on the body while it recurs.
+
+**What still bridges.** `eval_dot` and `eval_new` take forms; the
+executor evaluates their parts and hands them `(quote v)` forms, which
+is why `gce_eval`'s walker is still compiled. A static call on a host
+class, which is most of what core.clj does, is resolved to its native
+at analysis and never touches the bridge. `range` and `iterate` cells
+no longer close over an environment either: a pending tail carries
+`[lo hi step]` or `[f x]` and `gce_force` builds the next cell itself.
+
+**What it cost to find.** Three things the old walker never looked at
+surfaced the moment fn bodies were analysed at definition: a `set!` on
+a host static field inside `set-agent-send-executor!`, `monitor-enter`
+from `locking`, and `%1` under a type hint that the fn-literal rewrite
+had not renamed. Each had been latent for the life of the project.

@@ -25,7 +25,7 @@ Categories:
 | 3 | Symbols fall back to `clojure.core` instead of being referred | temporary | `src/f/Eval.f90` |
 | 4 | `.` reaches a fixed table of host members, not arbitrary classes | host | `src/f/Eval.f90` |
 | 5 | Metadata is a wrapper object, not carried on the value | host | `src/f/GC.f90` |
-| 6 | Syntax-quote expands at eval time, not read time | open | `src/f/Eval.f90` |
+| 6 | Syntax-quote expands at analysis time, not read time | open | `src/f/analyze.inc` |
 | 7 | Recursion depth is ~600 frames, against Clojure's ~11,200 | host | `src/f/Eval.f90` |
 | 8 | Multimethods dispatch on equality, plus a fixed host hierarchy | temporary | `src/f/Eval.f90` |
 | 9 | Sorted collections are unsorted | temporary | `src/f/Eval.f90` |
@@ -35,7 +35,7 @@ Categories:
 | 13 | Protocol dispatch is uncached | host | `src/f/GC.f90` |
 | 14 | Regex is ICU under java.util.regex's names, ASCII-offset only | host | `src/f/Regex.f90` |
 | 15 | `hash` values are gc_hash's, not the JVM's murmur3 | host | `src/f/GC.f90` |
-| 16 | Names resolve at call time, not while analysing | host | `src/f/Eval.f90` |
+| 16 | RESOLVED -- names resolve while analysing | -- | `src/f/analyze.inc` |
 
 ---
 
@@ -114,12 +114,14 @@ interned under a name nobody could spell.
 **Removal**: none available. Widening `gc_value` would cost a word on every
 value in the heap to serve the few that carry metadata.
 
-## 6. Syntax-quote expands at eval time, not read time
+## 6. Syntax-quote expands at analysis time, not read time
 
 `SyntaxQuoteReader` is a READER macro (`LispReader.java`): `` `x `` is
 resolved, gensym-ed and expanded into `concat`/`seq` calls before the form
 is ever evaluated. Ours is a `quasiquote` special form that `qq_expand`
-handles during evaluation.
+handles during ANALYSIS (`analyze_quasiquote`), once per form, in the
+namespace the form is analysed in -- which for a macro body is the
+namespace the macro was written in. It used to run at every evaluation.
 
 Auto-gensym is faithful -- one fresh name per syntax-quote, scoped by a map
 the way `GENSYM_ENV` is -- but symbol resolution is not: Clojure qualifies
@@ -409,6 +411,13 @@ back to `clojure.core` (deviation 3).
 
 It goes away by resolving names in `gce_analyze`, which already runs once
 per top-level form and today only macroexpands.
+
+**RESOLVED 2026-09-19.** `analyze.inc` resolves every symbol once, with
+the writing namespace and the lexical scope known: a local becomes a
+frame slot, a Var reference holds the Var, a class literal is a
+constant. `__defining-ns__` is gone. What remains of this entry is
+deviation 3 (the `clojure.core` fallback inside `resolve_var`) and the
+new deviation 32.
 
 ## 17. A deftype's short name is global, not imported per namespace
 
@@ -893,3 +902,21 @@ frames -- there is nothing to report. It is honest rather than wrong:
 **Removal**: PLAN.md step 5. Once evaluation runs over explicit frames
 with source positions on nodes, a trace is a walk up that stack, and
 this entry closes together with the debugger it unblocks.
+
+## 32. A qualified symbol that does not resolve is a run-time error
+
+Clojure fails to COMPILE a form naming a Var that does not exist:
+`Unable to resolve symbol: jio/reader`. clotran's analyser does the
+same for an unqualified symbol, but a QUALIFIED one that fails to
+resolve is deferred (`N_LATEVAR`): the function containing it is
+defined, and only a call of it fails, with the same message.
+
+The reason is the skipped JVM libraries (deviation 12). core.clj's
+`slurp` names `jio/reader`, and `clojure.java.io` is never loaded here,
+so failing at analysis would stop core.clj at that form. Deferring keeps
+the file loading and moves the failure to the call, which is where the
+old walker reported it too.
+
+**Removal**: either load those libraries (they are JVM-bound) or
+accept the form as-is; the honest end state is that `slurp` is defined
+in terms of a host reader clotran supplies.
