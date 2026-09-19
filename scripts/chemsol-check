@@ -1,5 +1,5 @@
 #!/usr/bin/env bb
-;; Runs examples/chemsol.clj on ChemSol's three reference inputs and
+;; Runs examples/chemsol.cljf on ChemSol's three reference inputs and
 ;; diffs the output against the original program's, byte for byte.
 ;;
 ;;   scripts/chemsol-check [chemsol-tests-dir]   default ~/jborden/chemsol/tests
@@ -21,7 +21,7 @@
 
 (defn run-one [n]
   (let [driver (fs/create-temp-file {:prefix "chemsol-check" :suffix ".clj"})
-        _ (spit (str driver) (str "(load-file \"" repo "/examples/chemsol.clj\")\n"
+        _ (spit (str driver) (str "(load-file \"" repo "/examples/chemsol.cljf\")\n"
                                   "(chemsol.example/run \"" tests "/vdw.par\" \"" tests "/test" n ".cs\")\n"))
         r (p/shell {:dir (str repo) :in "" :out :string :err :string :continue true}
                    (str repo "/clotran") "src/clj/clojure/core.clj" (str driver))

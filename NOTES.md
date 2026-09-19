@@ -2367,7 +2367,7 @@ baseline is stage 3's business.
 The goal NOTES opened with -- `(-> mol readopt dg-ld solvout)` calling
 real ChemSol code -- runs, and its output is the original program's
 byte for byte on the three reference inputs (`scripts/chemsol-check`).
-`examples/chemsol.clj` is `main.f90` rewritten; the library is vendored
+`examples/chemsol.cljf` is `main.f90` rewritten; the library is vendored
 untouched.
 
 **The binding.** `ChemSolBind.f90` holds one record, `cs_args`, with a

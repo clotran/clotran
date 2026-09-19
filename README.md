@@ -90,7 +90,7 @@ a Fortran KIND rather than a class -- see `SEAMS.md`.
 **ChemSol runs on clotran.** ChemSol is a solvation-energy program, a
 real scientific code with a 1,600-line library module whose routines
 take twenty to thirty positional arguments. Its `main.f90` is replaced
-by `examples/chemsol.clj`, the library is vendored unmodified in
+by `examples/chemsol.cljf`, the library is vendored unmodified in
 `src/f/chemsol/`, and each routine is a map-in, map-out function keyed
 by the routine's own argument names:
 

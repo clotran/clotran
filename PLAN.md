@@ -39,7 +39,7 @@ JVM-shaped `case` arms in one file.
 | startup | 4.1s (was 7.2s before step 4), core.clj re-read every launch |
 | `(reduce + (range n))` | LINEAR since step 4: n=100000 in 17s net, ~170 µs and 60 evaluations per element. Before: n=16000 took 161s and n=100000 did not finish in 15 minutes |
 | `loop`/`recur` | ~100 µs per iteration, linear |
-| Fortran library calls made through clotran | `fortran/dgemm` (reference BLAS) and ChemSol's `readopt`, `dg_ld`, `solvout`, `entropy`; `examples/chemsol.clj` reproduces the original program's output byte for byte on its three reference inputs (`scripts/chemsol-check`) |
+| Fortran library calls made through clotran | `fortran/dgemm` (reference BLAS) and ChemSol's `readopt`, `dg_ld`, `solvout`, `entropy`; `examples/chemsol.cljf` reproduces the original program's output byte for byte on its three reference inputs (`scripts/chemsol-check`) |
 
 The reduce row was the one that mattered and no scorecard saw it; step 4
 below is how it was found and what it was.
@@ -302,7 +302,7 @@ What it fixed as the convention, for step 7:
 ### 7. ChemSol -- the interop finish line -- DONE
 
 `src/f/chemsol/` holds `chemsol.f90` and `push_array.f90` verbatim
-(PROVENANCE.md there); `main.f90` is replaced by `examples/chemsol.clj`.
+(PROVENANCE.md there); `main.f90` is replaced by `examples/chemsol.cljf`.
 `scripts/chemsol-check` runs it on `test1.cs`, `test2.cs` and `test3.cs`
 with `vdw.par` and diffs against the original program's output: all
 three match byte for byte.

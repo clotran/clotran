@@ -9,7 +9,7 @@ library (Arieh Warshel, Jan Florian, James Borden), copied verbatim on
 
 Do not edit them. `main.f90` from the same directory is deliberately
 NOT here: replacing it with clotran code is the point (PLAN.md step 7),
-and `examples/chemsol.clj` is that replacement. `src/f/ChemSolBind.f90` is
+and `examples/chemsol.cljf` is that replacement. `src/f/ChemSolBind.f90` is
 the binding, ours.
 
 The reference outputs the driver is checked against are
