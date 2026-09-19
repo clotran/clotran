@@ -140,15 +140,34 @@ Three layers, each answering a different question:
 The scorecard is now the pass rate over the derived language suite,
 with the denominator stated -- see "Where we are".
 
-### 3. Freeze host-member work; one table, as data
+### 3. Freeze host-member work; one table, as data -- DONE
 
-No new `case` arms. The JVM surface clotran must READ (because core.clj
-writes it) is finite: audit it against what core.clj and the vendored
-libs we keep actually reference, and put it in ONE table -- preferably
-declared in Clojure as data, the way `Integer/MIN_VALUE` already is --
-with Fortran supplying only primitives. Anything in the Fortran not
-reached by that audit goes. Settle the open class-versus-type-tag
-question (below) in the same table.
+`src/f/hosttable.inc` is the JVM surface: 293 static rows (class,
+member, builtin id or constant) and 139 instance rows, as Fortran
+`parameter` data. `static_member`, `instance_member` and
+`is_host_class` are three lookups over it, so the class list and the
+member list can no longer disagree, and a bare class name is
+canonicalised once (`java.lang.` added, the libs' short imports
+mapped). The 900 lines of `case` arms are gone, along with
+`math_index` and the one builtin the audit found unreachable.
+
+The audit is `scripts/audit-host`: every `Class/member`, `(. x m)` and
+`.member` the loaded Clojure mentions (src/clj, the derived suite,
+the oracle, the examples). It found six members nothing mentions --
+`createWithCheck` on three classes, `unchecked_divide`,
+`getThreadBindingFrame`, `isUpperCase` -- and they are not rows. The
+rest of the old table was reached, which is the honest finding: the
+surface was already close to minimal, it was just not data.
+
+The table is Fortran data rather than a Clojure map because the
+natives it names would otherwise have to be interned by name for
+host.clj to reference them -- 156 more Vars in clojure.core, or a
+second namespace -- to buy nothing the parameter array does not.
+
+Not done here: the class-versus-type-tag question (Open, below).
+`is_instance` and `host_super` are still two hand-written hierarchies
+and belong in this file as a third table once that question is
+settled.
 
 ### 4. Profile the superlinear reduce -- DONE
 

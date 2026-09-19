@@ -115,7 +115,7 @@ module Eval
   integer, parameter :: B_INTVALUE = 144, B_STRCONTAINS = 145
   integer, parameter :: B_WRITE = 146, B_FLUSH = 147, B_CHARAT = 148
   integer, parameter :: B_NSADDALIAS = 149, B_SWAPVAL = 150
-  integer, parameter :: B_ISWS = 151, B_ISUPPER = 152, B_ISLOWER = 153
+  integer, parameter :: B_ISWS = 151, B_ISLOWER = 153
   integer, parameter :: B_ISDIGIT = 154, B_ISLETTER = 155, B_ISALNUM = 156
   integer, parameter :: B_UPCASE = 157, B_DOWNCASE = 158
   integer, parameter :: B_SYMBOL2 = B_SYMBOL
@@ -138,7 +138,7 @@ module Eval
   integer, parameter :: B_SWAPVALS = 187, B_RESETVALS = 188
   integer, parameter :: B_METHODTABLE = 189, B_GETMETHOD = 190
   integer, parameter :: B_EMPTYMAP = 191, B_REMOVEMETHOD = 192
-  ! java.lang.Math occupies a BLOCK: B_MATH0 + math_index(name).
+  ! java.lang.Math occupies a BLOCK: B_MATH0 + k, k from hosttable.inc.
   integer, parameter :: B_MATH0 = 200, B_MATHN = 45
   integer, parameter :: B_FORMAT = 193, B_NUMCOMPARE = 194
   integer, parameter :: B_READSTRING = 195, B_RE_SPLIT = 196
@@ -269,6 +269,8 @@ module Eval
        N_SETBANG = 24, N_FAIL = 25, N_TOP = 26, N_TOPDO = 27, N_LATEVAR = 28
   integer, parameter :: K_SCOPE = 100, K_FNINFO = 101
   integer, save :: trace_macros = 0   ! 0 unread, 1 on, 2 off
+
+  include "hosttable.inc"
 
 contains
 
@@ -1708,310 +1710,6 @@ contains
   end function cons_vec
 
 
-  ! Instance members, as natives. Same rule as the static ones:
-  ! these are clotran's own primitives under the names the JVM host
-  ! gives them, not adapters written to look like them.
-  function instance_member(mname, roots) result(out)
-    character(len=*), intent(in) :: mname
-    type(gc_value), intent(in) :: roots
-    type(gc_value) :: out
-    out = gc_nil()
-    select case (mname)
-    case ("meta");     out = native(B_META, "meta", [roots])
-    case ("withMeta"); out = native(B_WITHMETA, "with-meta", [roots])
-    case ("count");    out = native(B_COUNT, "count", [roots])
-    case ("seq");      out = native(B_SEQ, "seq", [roots])
-    case ("first");    out = native(B_FIRST, "first", [roots])
-    case ("next");     out = native(B_NEXT, "next", [roots])
-    case ("more");     out = native(B_REST, "rest", [roots])
-    case ("cons");     out = native(B_CONS, "cons", [roots])
-    case ("isInstance"); out = native(B_INSTANCE, "instance?", [roots])
-    case ("getName", "getSimpleName"); out = native(B_GETNAME, "clotran-get-name", [roots])
-    ! An ARRAY, not a vector. Throwable->map asks (alength st)
-    ! straight after, and an empty vector is not an array -- so
-    ! every path through it, which is every printed exception and
-    ! every thrown-with-cause-msg? in Clojure's suite, died on
-    ! "alength: not an array" rather than on anything real.
-    case ("getStackTrace"); out = native(B_STACKTRACE, "clotran-stack-trace", [roots])
-    ! StackTraceElement, which here is a map (frames_vec)
-    case ("getClassName");  out = native(B_STE_CLASS, "clotran-frame-class", [roots])
-    case ("getMethodName"); out = native(B_STE_METHOD, "clotran-frame-method", [roots])
-    case ("getFileName");   out = native(B_STE_FILE, "clotran-frame-file", [roots])
-    case ("getLineNumber"); out = native(B_STE_LINE, "clotran-frame-line", [roots])
-    ! setStackTrace is a no-op: there is nothing to set. ex-info
-    ! elides its own top frames through it, and the elision is
-    ! meaningless when the trace is always empty -- but the call
-    ! has to succeed, because it is (doto ex (.setStackTrace ...))
-    ! and the exception itself is the value.
-    case ("setStackTrace"); out = native(B_IDENTITY, "identity", [roots])
-    case ("getNamespace"); out = native(B_NAMESPACE, "namespace", [roots])
-    case ("getClass")
-       ! clotran's classes are its type tags, so .getClass is
-       ! clotran-type -- which is what makes (class x) answer something
-       ! protocol dispatch can key on. It answered nil for a while,
-       ! which silently emptied every protocol's impl lookup.
-       out = native(B_TYPE, "clotran-type", [roots])
-    case ("getComponentType")
-       ! The element type of an array CLASS. clotran has one class
-       ! keyword for every array -- :array, not [I versus [D -- so
-       ! there is nothing to answer, and the only caller is aget's
-       ! (Reflector/prepRet (.getComponentType (class array)) ...),
-       ! which ignores it because nothing here is boxed.
-       out = native(B_ALWAYS_NIL, "clotran-nil", [roots])
-    case ("getClassLoader", "getContextClassLoader")
-       out = native(B_ALWAYS_NIL, "clotran-nil", [roots])
-    case ("isRealized"); out = native(B_ISREALIZED, "clotran-is-realized", [roots])
-    case ("getResources")
-       ! NOTHING, and honestly so. getResources enumerates a
-       ! CLASSPATH for a named file, and clotran has no classpath --
-       ! getContextClassLoader above already answers nil for the
-       ! same reason. So there are no data_readers.clj files to find
-       ! and the true answer is the empty enumeration.
-       !
-       ! This is the wall at core.clj form 708: (data-reader-urls)
-       ! threw on nil.getResources, load-data-readers threw with it,
-       ! and the catch clause re-throws -- so the form failed and the
-       ! last sixteen forms of core.clj never loaded, update-keys and
-       ! update-vals among them.
-       out = native(B_ALWAYS_NIL, "clotran-nil", [roots])
-    ! Namespace members. The mappings ARE slot 2 -- ns-map hands the
-    ! same map the evaluator resolves against, not a copy.
-    case ("getMappings"); out = native(B_NSMAP, "ns-map", [roots])
-    case ("ns"); out = native(B_VARNS, "clotran-var-ns", [roots])
-    ! Var.toSymbol is the ns-qualified name, which is how a protocol
-    ! names the method it is dispatching.
-    case ("toSymbol"); out = native(B_VARSYM, "clotran-var-symbol", [roots])
-    case ("isPublic"); out = native(B_ISPUBLIC, "clotran-var-public", [roots])
-    case ("isMacro"); out = native(B_ISMACRO, "clotran-var-macro", [roots])
-    case ("setMacro"); out = native(B_SETMACRO, "clotran-set-macro", [roots])
-    case ("getAliases");  out = native(B_NSALIASES, "ns-aliases", [roots])
-    case ("refer"); out = native(B_NSREFER, "clotran-ns-refer", [roots])
-    case ("addAlias"); out = native(B_NSADDALIAS, "clotran-ns-add-alias", [roots])
-    ! The String methods core.clj reaches for while loading libs.
-    case ("startsWith"); out = native(B_STARTSWITH, "clotran-starts-with", [roots])
-    case ("endsWith"); out = native(B_ENDSWITH, "clotran-ends-with", [roots])
-    case ("replace"); out = native(B_REPLACE, "clotran-replace", [roots])
-    case ("length"); out = native(B_STRLEN, "clotran-length", [roots])
-    case ("substring", "subSequence"); out = native(B_SUBSTRING, "subs", [roots])
-    ! (. f (applyTo (seq args))) is core.clj's own apply, and the
-    ! target becoming the first argument makes it exactly (apply f seq).
-    case ("applyTo");   out = native(B_APPLY, "apply", [roots])
-    case ("deref");     out = native(B_DEREF, "deref", [roots])
-    case ("hasRoot");   out = native(B_HASROOT, "clotran-has-root", [roots])
-    case ("addMethod"); out = native(B_ADDMETHOD, "clotran-add-method", [roots])
-    case ("removeMethod")
-       out = native(B_REMOVEMETHOD, "clotran-remove-method", [roots])
-    ! preferMethod resolves an AMBIGUITY between two matching methods,
-    ! and exact-match dispatch has no ambiguity to resolve -- so it
-    ! records nothing and returns the multimethod. DEVIATIONS.md 8.
-    ! The protocol dispatch cache field, read and written on the
-    ! protocol function itself. Reading it answers nil -- a cold
-    ! cache -- and writing it is discarded, which is what a cache
-    ! with no storage behind it means.
-    ! Class.isAssignableFrom asks whether one JVM type is a subtype
-    ! of another. There are no interfaces here and no inheritance
-    ! between clotran's types, so the answer is false -- which is
-    ! what sends extends? and satisfies? down the extend-map path
-    ! that clotran does implement.
-    case ("getSuperclass")
-       ! clotran's types form no hierarchy: :vector has no superclass.
-       ! nil here is what sends find-protocol-impl to its (impl Object)
-       ! fallback, which is the branch that actually resolves.
-       out = native(B_ALWAYS_NIL, "clotran-nil", [roots])
-    case ("getInterfaces")
-       ! THE HOST SUPERTYPES, which is what clotran has instead of
-       ! interfaces. core.clj's `supers` is (set (.getInterfaces
-       ! class)) walked up .getSuperclass, and find-protocol-impl
-       ! searches that set before falling back to Object. Answering
-       ! an empty one meant EVERY protocol dispatch landed on
-       ! (impl Object) -- so clojure.data's equality-partition
-       ! called a map an :atom, even though the impls map had
-       ! java.util.Map in it all along.
-       out = native(B_GETIFACES, "clotran-get-interfaces", [roots])
-    case ("isAssignableFrom", "isInterface", "isArray")
-       out = native(B_ALWAYS_FALSE, "clotran-false", [roots])
-    ! The cache's named fields, read off the map it is.
-    case ("sym");      out = native(B_FLD_SYM, "clotran-sym", [roots])
-    case ("protocol"); out = native(B_FLD_PROTOCOL, "clotran-protocol", [roots])
-    case ("methodk");  out = native(B_FLD_METHODK, "clotran-methodk", [roots])
-    case ("map", "table"); out = native(B_FLD_MAP, "clotran-map", [roots])
-    case ("fnFor")
-       out = native(B_ALWAYS_NIL, "clotran-nil", [roots])
-    case ("__methodImplCache")
-       out = native(B_FLD_CACHE, "clotran-cache", [roots])
-    case ("preferMethod")
-       out = native(B_IDENTITY, "identity", [roots])
-    ! `methods` and `get-method` read the SAME table addMethod
-    ! writes, which is slot 4. getPreferTable is empty because
-    ! preferMethod records nothing -- DEVIATIONS.md 8 -- and an
-    ! empty map is the honest report of that, not a guess.
-    case ("getMethodTable")
-       out = native(B_METHODTABLE, "clotran-method-table", [roots])
-    case ("getPreferTable")
-       out = native(B_EMPTYMAP, "clotran-empty-map", [roots])
-    case ("getMethod")
-       out = native(B_GETMETHOD, "clotran-get-method", [roots])
-    case ("disjoin");   out = native(B_DISJ, "disj", [roots])
-
-    case ("concat"); out = native(B_STR, "str", [roots])
-    case ("toString"); out = native(B_TOSTRING, "clotran-to-string", [roots])
-    case ("toUpperCase"); out = native(B_UPCASE, "clotran-upcase", [roots])
-    case ("toLowerCase"); out = native(B_DOWNCASE, "clotran-downcase", [roots])
-    ! Throwable.getCause is nil when nothing wrapped it, which is every
-    ! error here: clotran has no cause chain to walk.
-    case ("getCause"); out = native(B_ALWAYS_NIL, "clotran-nil", [roots])
-    case ("append");   out = native(B_APPEND, "clotran-append", [roots])
-    ! Writer methods. core_print reaches for all three.
-    case ("charAt");   out = native(B_CHARAT, "clotran-char-at", [roots])
-    case ("pattern");  out = native(B_TOSTRING, "clotran-to-string", [roots])
-    case ("write");    out = native(B_WRITE, "clotran-write", [roots])
-    case ("flush");    out = native(B_FLUSH, "clotran-flush", [roots])
-    case ("getMessage", "getLocalizedMessage")
-       out = native(B_EXMSG, "ex-message", [roots])
-    case ("getData");   out = native(B_EXDATA, "ex-data", [roots])
-    ! A map entry is a two-element vector here, so key and val are the
-    ! two nths -- which is what Clojure's MapEntry is too.
-    case ("getKey");   out = native(B_KEY, "key", [roots])
-    case ("getValue"); out = native(B_VAL, "val", [roots])
-    ! IReference.alterMeta is resetMeta(alter.applyTo(listStar(meta(),
-    ! args))) -- the function sees the current metadata first.
-    case ("alterMeta"); out = native(B_ALTERMETA, "clotran-alter-meta", [roots])
-    case ("resetMeta", "setMeta")
-       out = native(B_RESETMETA, "clotran-reset-meta", [roots])
-    case ("set", "reset"); out = native(B_SETVAL, "clotran-set-val", [roots])
-    case ("swap")
-       out = native(B_SWAPVAL, "clotran-swap-val", [roots])
-    ! swap-vals! and reset-vals! answer [old new]. Same write as
-    ! .swap and .reset -- the pair is the only difference, and on
-    ! the JVM it is what makes the compare-and-set observable.
-    ! AGENTS. An agent is an atom with a mailbox of one, run
-    ! synchronously -- see DEVIATIONS.md. What it still has to
-    ! carry is the ERROR BOOKKEEPING, because core.clj's `agent`
-    ! sets the mode on the very first line and nothing worked
-    ! without it.
-    ! Double.isNaN and .isInfinite as INSTANCE members. They are
-    ! already here as statics; core_print writes (.isNaN ^Double o)
-    ! inside print-method, which is the one place a double gets
-    ! asked about itself.
-    case ("isNaN");      out = native(B_ISNAN, "clotran-is-nan", [roots])
-    case ("isInfinite"); out = native(B_ISINF, "clotran-is-infinite", [roots])
-    case ("countDown")
-       out = native(B_LATCHDOWN, "clotran-latch-down", [roots])
-    case ("getCount")
-       out = native(B_LATCHCOUNT, "clotran-latch-count", [roots])
-    ! .await on a latch that is already at zero returns at once,
-    ! which is every latch here.
-    case ("await");      out = native(B_ALWAYS_NIL, "clotran-nil", [roots])
-    case ("setErrorMode")
-       out = native(B_SETERRMODE, "set-error-mode!", [roots])
-    case ("getErrorMode")
-       out = native(B_GETERRMODE, "error-mode", [roots])
-    case ("setErrorHandler")
-       out = native(B_SETERRHANDLER, "set-error-handler!", [roots])
-    ! A VALIDATOR belongs to every reference type, not just an
-    ! agent -- atoms, refs and vars all take one. It shares slot 4
-    ! with the error handler, as a two-key map, because an object
-    ! has five slots and the other four are spoken for.
-    case ("setValidator")
-       out = native(B_SETVALIDATOR, "set-validator!", [roots])
-    case ("getValidator")
-       out = native(B_GETVALIDATOR, "get-validator", [roots])
-    case ("getErrorHandler")
-       out = native(B_GETERRHANDLER, "error-handler", [roots])
-    case ("getError")
-       out = native(B_AGENTERROR, "agent-error", [roots])
-    case ("restart")
-       out = native(B_AGENTRESTART, "restart-agent", [roots])
-    case ("dispatch")
-       out = native(B_AGENTDISPATCH, "clotran-agent-dispatch", [roots])
-    case ("swapVals")
-       out = native(B_SWAPVALS, "clotran-swap-vals", [roots])
-    case ("resetVals")
-       out = native(B_RESETVALS, "clotran-reset-vals", [roots])
-    case ("alter", "commute", "alterRoot")
-       ! alterRoot is alter on a Var's root, which is slot 1 -- the same
-       ! slot a Ref and an atom keep their value in.
-       out = native(B_ALTERVAL, "clotran-alter-val", [roots])
-    case ("bindRoot"); out = native(B_SETVAL, "clotran-set-val", [roots])
-    ! String.indexOf, 0-based and -1 when absent, which is the value
-    ! core.clj compares against: (Util/equiv (.indexOf (.getName tag) ".") -1).
-    case ("indexOf");  out = native(B_INDEXOF, "clotran-index-of", [roots])
-    case ("lastIndexOf"); out = native(B_LASTINDEXOF, "clotran-last-index-of", [roots])
-    case ("equiv", "equals"); out = native(B_EQ, "=", [roots])
-    ! TRANSIENTS ARE THE PERSISTENT COLLECTIONS HERE. A transient is an
-    ! optimisation, not a semantic: used correctly -- single-threaded and
-    ! linearly -- (persistent! (conj! (transient c) x)) and (conj c x)
-    ! are the same value. So asTransient and persistent are identity and
-    ! the bang operations are the ordinary ones. DEVIATIONS.md 11.
-    !
-    ! What is lost is the SPEED, and the error when a transient is used
-    ! after being persisted, which Clojure catches and we do not.
-    case ("asTransient", "persistent")
-       out = native(B_IDENTITY, "identity", [roots])
-    case ("empty")
-       out = native(B_COLLEMPTY, "clotran-coll-empty", [roots])
-    case ("conj");     out = native(B_CONJ, "conj", [roots])
-    case ("assoc");    out = native(B_ASSOC, "assoc", [roots])
-    case ("without");  out = native(B_DISSOC, "dissoc", [roots])
-    case ("valAt");    out = native(B_GET, "get", [roots])
-    ! .get is two different methods in Java -- Var.get() takes nothing
-    ! and derefs, Map.get(k) takes a key -- so it dispatches on how many
-    ! arguments arrived.
-    ! Resource loading, which is all core.clj asks a ClassLoader for.
-    case ("getResourceAsStream")
-       out = native(B_RESOURCE, "clotran-resource", [roots])
-    case ("load");        out = native(B_PROPLOAD, "clotran-props-load", [roots])
-    case ("getProperty"); out = native(B_PROPGET, "clotran-props-get", [roots])
-    ! with-open closes what it opened. Our streams are strings; there is
-    ! nothing to release, but the call must succeed.
-    case ("close");       out = native(B_CLOSE, "clotran-close", [roots])
-    case ("get");      out = native(B_DOTGET, "clotran-dot-get", [roots])
-    ! Ratio's two accessors. core.clj reads them as instance
-    ! members -- (.numerator ^Ratio r) -- so they belong here
-    ! rather than with the class statics.
-    ! (. comp (compare x y)) -- core.clj's sort-by calls the
-    ! comparator as a java.util.Comparator, which every Clojure
-    ! function is (AFunction implements it). The target is the
-    ! function itself, so this is an INSTANCE member.
-    case ("compare");     out = native(B_CMPCALL, "clotran-comparator-call", [roots])
-    case ("numerator");   out = native(B_NUMER, "numerator", [roots])
-    case ("denominator"); out = native(B_DENOM, "denominator", [roots])
-    case ("nth");      out = native(B_NTH, "nth", [roots])
-    case ("contains"); out = native(B_STRCONTAINS, "clotran-dot-contains", [roots])
-    ! java.util.regex.Pattern/Matcher instance methods -- see Regex.f90.
-    ! Pattern.split is clojure.string/split.
-    case ("split");      out = native(B_RE_SPLIT, "clotran-re-split", [roots])
-    ! Character.charValue hands back the char itself. Its callers
-    ! hint the result ^int, but everything that consumes it here
-    ! reads a character as its text, so the unwrapping is a no-op.
-    case ("charValue"); out = native(B_IDENTITY, "identity", [roots])
-    ! StringBuilder.reverse, which clojure.string/reverse is.
-    case ("reverse");   out = native(B_SBREVERSE, "clotran-sb-reverse", [roots])
-    ! Vector's stack end. RT has these as statics already; a
-    ! transient reaches them as instance members instead.
-    case ("pop");       out = native(B_POP, "pop", [roots])
-    case ("peek");      out = native(B_PEEK, "peek", [roots])
-    case ("matcher");    out = native(B_RE_MATCHER, "re-matcher", [roots])
-    case ("find");       out = native(B_RE_FIND, "re-find*", [roots])
-    case ("matches");    out = native(B_RE_MATCHES, "re-matches*", [roots])
-    case ("replaceAll")
-       out = native(B_RE_REPLACEALL, "clotran-re-replace-all", [roots])
-    case ("replaceFirst")
-       out = native(B_RE_REPLACEFIRST, "clotran-re-replace-first", [roots])
-    case ("appendReplacement")
-       out = native(B_RE_APPENDREPL, "clotran-re-append-replacement", [roots])
-    case ("appendTail")
-       out = native(B_RE_APPENDTAIL, "clotran-re-append-tail", [roots])
-    ! Matcher.start and .end -- where the last match sits. Both
-    ! take an optional group number, and both are -1 when that
-    ! group did not participate.
-    case ("start");      out = native(B_RE_START, "clotran-re-start", [roots])
-    case ("end");        out = native(B_RE_END, "clotran-re-end", [roots])
-    case ("groupCount"); out = native(B_RE_GROUPCOUNT, "re-group-count", [roots])
-    case ("group");      out = native(B_RE_GROUP, "re-group", [roots])
-    case default;       call fail("no such member: " // mname)
-    end select
-  end function instance_member
 
   ! (.member target args...) is (. target member args...), which is
   ! where macroexpand1 turns it into too -- the sugar is a rewrite, not
@@ -2414,615 +2112,103 @@ contains
     if (i < gcv_count(v)) out = gcv_nth(v, i)
   end function nth_or_nil
 
+
+  ! --- host members --------------------------------------------------
+  !
+  ! (. target member) and Class/member -- host interop. Clojure's host
+  ! is the JVM, so `.` there reaches arbitrary Java. Ours is Fortran,
+  ! and the only classes that exist are clotran's own runtime types --
+  ! so this is not a subset of Java interop, it is the same door onto a
+  ! different house. What is behind the door is DATA: hosttable.inc
+  ! lists every class and member the loaded Clojure reaches for, and
+  ! these three lookups read it. A member that is not a row does not
+  ! exist, and fails by NAME so a load report says what is missing.
+
+  ! The class name a form wrote, spelt as the table spells it:
+  ! java.lang is implicitly imported, and the libs import a few more
+  ! by short name.
+  function host_canon(cls) result(c)
+    character(len=*), intent(in) :: cls
+    character(len=:), allocatable :: c
+    integer :: i
+    c = cls
+    if (index(cls, ".") > 0) return
+    do i = 1, size(HOST_IMPORTS)
+       if (HOST_IMPORTS(i)%mem == cls) then
+          c = trim(HOST_IMPORTS(i)%cls)
+          return
+       end if
+    end do
+    c = "java.lang." // cls
+  end function host_canon
+
+  ! Whether a symbol names a host class: one with a row in the table.
+  ! Compiler.maybeClass asks the class loader; this asks the data.
   logical function is_host_class(sym)
     type(gc_value), intent(in) :: sym
-    is_host_class = gc_ref_is(sym%ref, "clojure.lang.PersistentList") .or. &
-         gc_ref_is(sym%ref, "clojure.lang.RT") .or. &
-         gc_ref_is(sym%ref, "clojure.lang.Util") .or. &
-         gc_ref_is(sym%ref, "clojure.lang.MapEntry") .or. &
-         gc_ref_is(sym%ref, "clojure.lang.EnumerationSeq") .or. &
-         gc_ref_is(sym%ref, "clojure.lang.Delay") .or. &
-         gc_ref_is(sym%ref, "java.lang.reflect.Array") .or. &
-         gc_ref_is(sym%ref, "Array") .or. &
-         gc_ref_is(sym%ref, "clojure.lang.Reflector") .or. &
-         gc_ref_is(sym%ref, "clojure.lang.LazilyPersistentVector") .or. &
-         gc_ref_is(sym%ref, "LazilyPersistentVector") .or. &
-         gc_ref_is(sym%ref, "clojure.lang.PersistentHashMap") .or. &
-         gc_ref_is(sym%ref, "clojure.lang.PersistentArrayMap") .or. &
-         gc_ref_is(sym%ref, "clojure.lang.PersistentHashSet") .or. &
-         gc_ref_is(sym%ref, "clojure.lang.PersistentTreeSet") .or. &
-         gc_ref_is(sym%ref, "clojure.lang.PersistentTreeMap") .or. &
-         gc_ref_is(sym%ref, "java.util.regex.Pattern") .or. &
-         gc_ref_is(sym%ref, "clojure.lang.Symbol") .or. &
-         gc_ref_is(sym%ref, "clojure.lang.Keyword") .or. &
-         gc_ref_is(sym%ref, "clojure.lang.Numbers") .or. &
-         gc_ref_is(sym%ref, "clojure.lang.PersistentStructMap") .or. &
-         gc_ref_is(sym%ref, "Number") .or. &
-         gc_ref_is(sym%ref, "Ratio") .or. &
-         gc_ref_is(sym%ref, "java.util.Arrays") .or. &
-         gc_ref_is(sym%ref, "Arrays") .or. &
-         gc_ref_is(sym%ref, "clojure.lang.Ratio") .or. &
-         gc_ref_is(sym%ref, "java.lang.Number") .or. &
-         gc_ref_is(sym%ref, "clojure.lang.Compiler$HostExpr") .or. &
-         gc_ref_is(sym%ref, "clojure.lang.Compiler") .or. &
-         gc_ref_is(sym%ref, "clojure.lang.Namespace") .or. &
-         gc_ref_is(sym%ref, "clojure.lang.Var") .or. &
-         gc_ref_is(sym%ref, "clojure.lang.LockingTransaction") .or. &
-         gc_ref_is(sym%ref, "Class") .or. &
-         gc_ref_is(sym%ref, "java.lang.Class") .or. &
-         gc_ref_is(sym%ref, "clojure.lang.Repeat") .or. &
-         gc_ref_is(sym%ref, "clojure.lang.Iterate") .or. &
-         gc_ref_is(sym%ref, "clojure.lang.Cycle") .or. &
-         gc_ref_is(sym%ref, "clojure.lang.Range") .or. &
-         gc_ref_is(sym%ref, "clojure.lang.LongRange") .or. &
-         gc_ref_is(sym%ref, "Integer") .or. gc_ref_is(sym%ref, "java.lang.Integer") .or. &
-         gc_ref_is(sym%ref, "Double") .or. gc_ref_is(sym%ref, "java.lang.Double") .or. &
-         gc_ref_is(sym%ref, "Long") .or. gc_ref_is(sym%ref, "java.lang.Long") .or. &
-         gc_ref_is(sym%ref, "Thread") .or. gc_ref_is(sym%ref, "java.lang.Thread") .or. &
-         gc_ref_is(sym%ref, "Character") .or. gc_ref_is(sym%ref, "java.lang.Character") .or. &
-         gc_ref_is(sym%ref, "Math") .or. gc_ref_is(sym%ref, "java.lang.Math") .or. &
-         gc_ref_is(sym%ref, "System") .or. gc_ref_is(sym%ref, "java.lang.System")
+    character(len=:), allocatable :: c
+    is_host_class = .false.
+    if (sym%tag /= GCT_SYM) return
+    c = host_canon(gc_ref_text(sym%ref))
+    is_host_class = any(HOST_STATICS(:)%cls == c)
   end function is_host_class
 
-  ! A static member, as a VALUE -- (. C m) hands it back, (. C (m a))
-  ! calls it, and both go through here.
-  !
-  ! These are the primitives core.clj bootstraps on. They are OUR
-  ! natives under the names the JVM host gives them, not adapters:
-  ! RT.more is what clotran already means by `rest`, and RT.next is
-  ! that put through seq.
+  ! A row's value: the native it names, or the constant it holds.
+  function host_value(row, roots) result(out)
+    type(hm), intent(in) :: row
+    type(gc_value), intent(in) :: roots
+    type(gc_value) :: out
+    out = gc_nil()
+    select case (row%id)
+    case (1:);          out = native(row%id, trim(row%name), [roots])
+    case (HK_INT);      out = gc_int(row%ival)
+    case (HK_REAL);     out = gc_real(row%rval)
+    case (HK_PINF);     out = gc_real(ieee_value(1.0_gc_dp, ieee_positive_inf))
+    case (HK_NINF);     out = gc_real(ieee_value(1.0_gc_dp, ieee_negative_inf))
+    case (HK_NAN);      out = gc_real(ieee_value(1.0_gc_dp, ieee_quiet_nan))
+    case (HK_NIL);      out = gc_nil()
+    case (HK_EMPTYMAP); out = gca_empty([roots])
+    case (HK_SPECIALS); out = specials_map([roots])
+    case (HK_TYPE);     out = gc_key(short_class_name(trim(row%cls)) // "/TYPE", [roots])
+    end select
+  end function host_value
+
+  ! Class/member: a static member, or a class constant.
   function static_member(cls, mname, roots) result(out)
     character(len=*), intent(in) :: cls, mname
     type(gc_value), intent(in) :: roots
     type(gc_value) :: out
-
+    character(len=:), allocatable :: c
+    integer :: i
     out = gc_nil()
-    if (cls == "clojure.lang.PersistentList") then
-       ! PersistentList.creator is a static IFn (a Primordial) that
-       ! builds a list from its arguments -- our `list`.
-       if (mname == "creator") then
-          out = native(B_LIST, "list", [roots])
+    c = host_canon(cls)
+    ! ponytail: a linear scan of ~300 rows, at analysis time; sort and
+    ! bisect if it ever shows in a profile.
+    do i = 1, size(HOST_STATICS)
+       if (HOST_STATICS(i)%cls == c .and. HOST_STATICS(i)%mem == mname) then
+          out = host_value(HOST_STATICS(i), roots)
           return
        end if
-    else if (cls == "java.lang.reflect.Array" .or. cls == "Array") then
-       ! core.clj's own make-array, aget, aset and the aset-int family
-       ! are written against these, so implementing them is what makes
-       ! Clojure's array code work rather than shadowing it.
-       !
-       ! Every typed variant -- getInt, setDouble, getBoolean -- shares
-       ! one implementation, because those exist on the JVM to avoid
-       ! boxing and clotran has no boxing to avoid. The element's kind
-       ! is the array's, not the accessor's name.
-       select case (mname)
-       case ("newInstance")
-          out = native(B_ANEWINST, "clotran-array-new", [roots]); return
-       case ("get", "getInt", "getLong", "getDouble", "getFloat", &
-             "getBoolean", "getChar", "getByte", "getShort")
-          out = native(B_AGET, "aget", [roots]); return
-       case ("set", "setInt", "setLong", "setDouble", "setFloat", &
-             "setBoolean", "setChar", "setByte", "setShort")
-          out = native(B_ASET, "aset", [roots]); return
-       case ("getLength")
-          out = native(B_ALENGTH, "alength", [roots]); return
-       end select
-    else if (cls == "clojure.lang.Reflector") then
-       ! prepRet UNBOXES on the JVM -- it turns a boxed Integer back
-       ! into a primitive for a known component type. There is nothing
-       ! boxed here, so the value it is handed is already the answer.
-       if (mname == "prepRet") then
-          out = native(B_PREPRET, "clotran-prep-ret", [roots]); return
-       end if
-    else if (cls == "clojure.lang.Delay") then
-       ! (force x) is Delay/force, which derefs a delay and hands
-       ! anything else straight back -- which is what deref already
-       ! does for a value that is not a reference type.
-       if (mname == "force") then
-          out = native(B_DEREF, "deref", [roots])
-          return
-       end if
-    else if (cls == "clojure.lang.EnumerationSeq") then
-       ! (enumeration-seq e) is EnumerationSeq/create, and a seq over
-       ! an enumeration that does not exist is a seq over nothing --
-       ! which `seq` already answers for nil.
-       if (mname == "create") then
-          out = native(B_SEQ, "seq", [roots])
-          return
-       end if
-    else if (cls == "clojure.lang.MapEntry") then
-       ! A MAP ENTRY IS A TWO-ELEMENT VECTOR here, which is what
-       ! (key e) and (val e) already read and what Clojure's MapEntry
-       ! is too -- it implements IPersistentVector and answers to two
-       ! nths. So MapEntry/create is `vector`, and needs to exist
-       ! because a record's own seq builds its entries with it.
-       if (mname == "create") then
-          out = native(B_VECTOR, "vector", [roots])
-          return
-       end if
-    else if (cls == "clojure.lang.PersistentStructMap") then
-       ! defstruct/struct/struct-map/accessor, which core.clj
-       ! writes entirely in terms of these four.
-       select case (mname)
-       case ("createSlotMap"); out = native(B_SBASIS, "clotran-struct-basis", [roots]); return
-       case ("create");        out = native(B_SCREATE, "clotran-struct-map", [roots]); return
-       case ("construct");     out = native(B_SCONSTRUCT, "clotran-struct", [roots]); return
-       case ("getAccessor");   out = native(B_SACCESSOR, "clotran-struct-accessor", [roots]); return
-       end select
-    else if (cls == "clojure.lang.Util") then
-       select case (mname)
-       case ("equiv", "equals"); out = native(B_EQ, "=", [roots]); return
-       case ("compare"); out = native(B_COMPARE, "compare", [roots]); return
-       case ("identical")
-          ! REFERENCE IDENTITY, not =. Util.identical is
-          ! (x == y) on the JVM, so (identical? [1] [1]) is false
-          ! while (= [1] [1]) is true. Sharing the = builtin made
-          ! it answer true, which was wrong on its own and became
-          ! fatal once a record's equiv could be reached: that
-          ! method opens with (identical? this other), so = on two
-          ! records called equiv, which called = , until the stack
-          ! ran out. Printing a record segfaulted in gc_equal.
-          out = native(B_IDENTICAL, "identical?", [roots]); return
-       case ("hash", "hasheq")
-          out = native(B_HASH, "hash", [roots]); return
-       case ("isReduced")
-          out = native(B_ISREDUCED, "reduced?", [roots]); return
-       case ("classOf")
-          ! clotran's classes ARE its type tags, so classOf is
-          ! clotran-type. Protocol dispatch then keys on :vector, :map
-          ! and so on, and Object -- the catch-all every protocol
-          ! extends -- is the keyword :Object.
-          out = native(B_TYPE, "clotran-type", [roots]); return
-       end select
-    else if (cls == "clojure.lang.LazilyPersistentVector" .or. &
-             cls == "LazilyPersistentVector") then
-       if (mname == "create" .or. mname == "createOwning") then
-          out = native(B_VEC, "vec", [roots]); return
-       end if
-    else if (cls == "clojure.lang.PersistentHashMap" .or. &
-             cls == "clojure.lang.PersistentArrayMap") then
-       ! EMPTY is a FIELD, not a call: core.clj's keyword-argument
-       ! destructuring names it directly, which is how pprint
-       ! reached it -- (defn f [& {:keys [...]}]) expands to it.
-       if (mname == "EMPTY") then
-          out = gca_empty([roots]); return
-       end if
-       ! createAsIfByAssoc takes ONE collection of alternating
-       ! keys and values, where hash-map takes them as separate
-       ! arguments -- so sharing hash-map's builtin made a map of
-       ! the collection itself rather than of its contents.
-       if (mname == "createAsIfByAssoc") then
-          out = native(B_ASIFASSOC, "clotran-map-from-pairs", [roots]); return
-       end if
-       if (mname == "create" .or. mname == "createWithCheck") then
-          out = native(B_HMAP, "hash-map", [roots]); return
-       end if
-    else if (cls == "clojure.lang.PersistentHashSet" .or. &
-             cls == "clojure.lang.PersistentTreeSet") then
-       ! A sorted set is an ORDINARY set here -- no ordering. core.clj
-       ! reaches for one first to hold *loaded-libs*, which only ever
-       ! asks about membership. DEVIATIONS.md 9.
-       if (mname == "create" .or. mname == "createWithCheck") then
-          out = native(B_HSET, "hash-set", [roots]); return
-       end if
-    else if (cls == "clojure.lang.PersistentTreeMap") then
-       if (mname == "create" .or. mname == "createWithCheck") then
-          out = native(B_HMAP, "hash-map", [roots]); return
-       end if
-    else if (cls == "System" .or. cls == "java.lang.System") then
-       if (mname == "getProperty") then
-          out = native(B_GETPROP, "clotran-get-property", [roots]); return
-       end if
-       ! The clock, so `time` works. ClojureScript has system-time, so
-       ! this is language, not JVM leakage.
-       if (mname == "nanoTime") then
-          out = native(B_NANOTIME, "clotran-nano-time", [roots]); return
-       end if
-       if (mname == "currentTimeMillis") then
-          out = native(B_MILLIS, "clotran-current-time-millis", [roots]); return
-       end if
-    else if (cls == "clojure.lang.Numbers") then
-       select case (mname)
-       case ("add", "addP", "unchecked_add", "unchecked_int_add")
-          out = native(B_ADD, "+", [roots]); return
-       case ("minus", "minusP", "unchecked_minus", "unchecked_int_subtract")
-          out = native(B_SUB, "-", [roots]); return
-       case ("multiply", "multiplyP", "unchecked_multiply")
-          out = native(B_MUL, "*", [roots]); return
-       case ("divide", "unchecked_divide", "unchecked_int_divide")
-          out = native(B_DIV, "/", [roots]); return
-       case ("lt"); out = native(B_LT, "<", [roots]); return
-       case ("gt"); out = native(B_GT, ">", [roots]); return
-       case ("lte"); out = native(B_LTE, "<=", [roots]); return
-       case ("gte"); out = native(B_GTE, ">=", [roots]); return
-       case ("equiv", "equal")
-          ! Numbers/equiv is ==, NOT =. They disagree across types:
-          ! (= 1 1.0) is false and (== 1 1.0) is true, because = is
-          ! Object.equals -- a Long is never equal to a Double -- and
-          ! == compares numeric VALUE. Routing this to B_EQ made
-          ! (== 1 1.0) answer false.
-          out = native(B_NUMEQ, "==", [roots]); return
-       case ("abs")
-          out = native(B_ABS, "abs", [roots]); return
-       case ("compare"); out = native(B_COMPARE, "compare", [roots]); return
-       case ("inc", "incP", "unchecked_inc", "unchecked_int_inc")
-          out = native(B_INC, "inc", [roots]); return
-       case ("dec", "decP", "unchecked_dec", "unchecked_int_dec")
-          out = native(B_DEC, "dec", [roots]); return
-       case ("remainder", "unchecked_int_remainder")
-          out = native(B_REM, "rem", [roots]); return
-       case ("quotient"); out = native(B_QUOT, "quot", [roots]); return
-       case ("num"); out = native(B_IDENTITY, "identity", [roots]); return
-       ! The bit operations. Fortran has these as intrinsics, so they
-       ! are the one part of Numbers that maps across exactly.
-       case ("and"); out = native(B_BITAND, "bit-and", [roots]); return
-       case ("or"); out = native(B_BITOR, "bit-or", [roots]); return
-       case ("xor"); out = native(B_BITXOR, "bit-xor", [roots]); return
-       case ("not"); out = native(B_BITNOT, "bit-not", [roots]); return
-       case ("andNot"); out = native(B_BITAND, "bit-and", [roots]); return
-       case ("shiftLeft"); out = native(B_SHL, "bit-shift-left", [roots]); return
-       case ("shiftRight", "unsignedShiftRight")
-          out = native(B_SHR, "bit-shift-right", [roots]); return
-       case ("isZero"); out = native(B_ZERO, "zero?", [roots]); return
-       case ("isPos"); out = native(B_POS, "pos?", [roots]); return
-       case ("isNeg"); out = native(B_NEG, "neg?", [roots]); return
-       case ("max"); out = native(B_MAX, "max", [roots]); return
-       case ("min"); out = native(B_MIN, "min", [roots]); return
-       end select
-    else if (cls == "java.util.Arrays" .or. cls == "Arrays") then
-       ! Only sort: it is the one thing core.clj asks Arrays for.
-       if (mname == "sort") then
-          out = native(B_ARRSORT, "clotran-array-sort", [roots]); return
-       end if
-    else if (cls == "Number" .or. cls == "java.lang.Number") then
-       ! core.clj's one-argument arithmetic is ([x] (cast Number x)),
-       ! and `cast` is (. c (cast x)) -- so without this, (+ 1.5),
-       ! (- 1.5) and (* 2.0) all failed with "no such member".
-       if (mname == "cast") then
-          out = native(B_NUMCAST, "clotran-num-cast", [roots]); return
-       end if
-    else if (cls == "Class" .or. cls == "java.lang.Class") then
-       if (mname == "forName") then
-          out = native(B_FORNAME, "clotran-for-name", [roots]); return
-       end if
-    else if (cls == "clojure.lang.Iterate") then
-       if (mname == "create") then
-          out = native(B_ITERATE, "iterate", [roots]); return
-       end if
-    else if (cls == "clojure.lang.Cycle") then
-       if (mname == "create") then
-          out = native(B_CYCLE, "cycle", [roots]); return
-       end if
-    else if (cls == "clojure.lang.Repeat") then
-       if (mname == "create") then
-          out = native(B_REPEAT, "repeat", [roots]); return
-       end if
-    else if (cls == "clojure.lang.Range" .or. cls == "clojure.lang.LongRange") then
-       if (mname == "create") then
-          out = native(B_RANGE, "range", [roots]); return
-       end if
-    else if (cls == "Matcher" .or. cls == "java.util.regex.Matcher") then
-       if (mname == "quoteReplacement") then
-          out = native(B_QUOTEREPL, "re-quote-replacement", [roots]); return
-       end if
-    else if (cls == "java.util.regex.Pattern") then
-       if (mname == "compile") then
-          out = native(B_RE_COMPILE, "re-pattern", [roots]); return
-       end if
-    else if (cls == "clojure.lang.LockingTransaction") then
-       ! dosync with no transaction: call the thunk. Single-threaded
-       ! that is what a transaction does -- the retry, the isolation and
-       ! the write skew are all about other threads. DEVIATIONS.md 11.
-       if (mname == "runInTransaction") then
-          out = native(B_RUNTX, "clotran-run-tx", [roots]); return
-       end if
-       ! Nothing is ever running one: there are no other threads
-       ! to be isolated from, so io! never has a transaction to
-       ! complain about. `await` is written inside io!.
-       if (mname == "isRunning") then
-          out = native(B_ALWAYS_FALSE, "clotran-false", [roots]); return
-       end if
-    else if (cls == "clojure.lang.Namespace") then
-       if (mname == "find" .or. mname == "findOrCreate") then
-          out = native(B_FINDNS, "find-ns", [roots]); return
-       end if
-    else if (cls == "clojure.lang.Var") then
-       select case (mname)
-       case ("pushThreadBindings")
-          out = native(B_PUSHTB, "push-thread-bindings", [roots]); return
-       case ("popThreadBindings")
-          out = native(B_POPTB, "pop-thread-bindings", [roots]); return
-       case ("find")
-          out = native(B_FINDVAR, "clotran-find-var", [roots]); return
-       case ("cloneThreadBindingFrame", "getThreadBindingFrame")
-          ! There is ONE binding stack here and one thread, so a
-          ! frame has nothing to clone -- DEVIATIONS.md 10. nil is
-          ! the honest token: binding-conveyor-fn takes it, hands
-          ! it back to resetThreadBindingFrame, and the bindings
-          ! it was meant to carry are already visible.
-          ! A CALL, not a field read: core.clj writes
-          ! (clojure.lang.Var/cloneThreadBindingFrame) with parens, so
-          ! this has to be a function that answers nil, not nil.
-          out = native(B_ALWAYS_NIL, "clotran-nil", [roots]); return
-       case ("resetThreadBindingFrame")
-          out = native(B_ALWAYS_NIL, "clotran-nil", [roots]); return
-       case ("intern")
-          ! Var.intern CREATES the Var in the namespace given, with
-          ! the value given. Mapping it to a lookup meant defprotocol
-          ! interned its protocol map and none of its METHODS -- so
-          ! coll-reduce did not exist and reduce could not resolve.
-          out = native(B_VARINTERN, "clotran-var-intern", [roots]); return
-       end select
-    else if (cls == "String" .or. cls == "java.lang.String") then
-       if (mname == "format") then
-          out = native(B_FORMAT, "format", [roots]); return
-       end if
-    else if (cls == "Math" .or. cls == "java.lang.Math") then
-       if (mname == "E") then
-          out = gc_real(exp(1.0_gc_dp)); return
-       end if
-       if (mname == "PI") then
-          out = gc_real(acos(-1.0_gc_dp)); return
-       end if
-       block
-         integer :: mk
-         mk = math_index(mname)
-         if (mk > 0) then
-            out = native(B_MATH0 + mk, "clotran-math-" // mname, [roots]); return
-         end if
-       end block
-    else if (cls == "clojure.lang.Agent") then
-       ! The two thread pools send and send-off name. They are
-       ! handed straight to .dispatch, which runs the action on
-       ! the spot, so there is nothing for them to be.
-       if (mname == "pooledExecutor" .or. mname == "soloExecutor") then
-          out = gc_nil(); return
-       end if
-       if (mname == "shutdown") then
-          out = native(B_ALWAYS_NIL, "clotran-nil", [roots]); return
-       end if
-    else if (cls == "clojure.lang.Compiler") then
-       if (mname == "specials") then
-          out = specials_map([roots]); return
-       end if
-       if (mname == "macroexpand1") then
-          out = native(B_MACROEXP1, "clotran-macroexpand-1", [roots]); return
-       end if
-       if (mname == "eval") then
-          out = native(B_EVAL, "eval", [roots]); return
-       end if
-       if (mname == "munge" .or. mname == "demunge") then
-          ! munge makes a Clojure name legal as a JVM identifier --
-          ! hyphens to underscores and so on. Nothing here constrains a
-          ! name, so there is nothing to mangle and nothing to undo.
-          out = native(B_IDENTITY, "identity", [roots]); return
-       end if
-       if (mname == "LOADER") then
-          ! A class loader is a JVM thing with no analogue. nil is safe
-          ! here: its only use is as a key in the map handed to
-          ! pushThreadBindings, which skips anything that is not a Var.
-          out = gc_nil(); return
-       end if
-       if (mname == "maybeResolveIn" .or. mname == "resolveIn" .or. &
-            mname == "resolve") then
-          ! Resolve a symbol to its Var, or nil. The namespace argument
-          ! is ignored -- resolution here is current-ns then
-          ! clojure.core, which is DEVIATIONS.md 3.
-          out = native(B_MAYBERESOLVE, "clotran-maybe-resolve", [roots]); return
-       end if
-    else if (cls == "clojure.lang.Compiler$HostExpr") then
-       ! The compiler internals sigs consults to normalise a :tag. Both
-       ! answer nil here, which is the honest answer: there are no
-       ! primitive tags and no classes to resolve a hint to, so
-       ! resolve-tag leaves the parameter vector as written.
-       if (mname == "maybeSpecialTag" .or. mname == "maybeClass") then
-          out = native(B_ALWAYS_NIL, "clotran-nil", [roots]); return
-       end if
-    else if (cls == "clojure.lang.Symbol") then
-       if (mname == "intern" .or. mname == "create") then
-          out = native(B_SYMBOL, "symbol", [roots]); return
-       end if
-    else if (cls == "clojure.lang.Keyword") then
-       if (mname == "intern" .or. mname == "find") then
-          out = native(B_KEYWORD, "keyword", [roots]); return
-       end if
-    else if (cls == "clojure.lang.RT") then
-       select case (mname)
-       ! read-string is (RT/readString s): ONE form, and trailing
-       ! text is ignored -- which is gcr_read rather than
-       ! gcr_read_all.
-       case ("readString")
-          out = native(B_READSTRING, "read-string", [roots]); return
-       case ("baseLoader")
-          out = native(B_BASELOADER, "clotran-base-loader", [roots]); return
-       ! The array accessors alength, aget, aset and aclone inline to
-       ! RT/... rather than to Array/..., so both spellings have to
-       ! reach the same place.
-       case ("alength")
-          out = native(B_ALENGTH, "alength", [roots]); return
-       case ("aget")
-          out = native(B_AGET, "aget", [roots]); return
-       case ("aset")
-          out = native(B_ASET, "aset", [roots]); return
-       case ("aclone")
-          out = native(B_ACLONE, "aclone", [roots]); return
-       ! The primitive casts. Fortran has its own integer and real
-       ! kinds and clotran has one of each, so the width-named casts
-       ! all land on the same two conversions.
-       case ("longCast", "uncheckedLongCast", "intCast", "uncheckedIntCast", &
-             "shortCast", "uncheckedShortCast", "byteCast", "uncheckedByteCast")
-          out = native(B_LONGCAST, "long", [roots]); return
-       case ("doubleCast", "uncheckedDoubleCast", "floatCast", "uncheckedFloatCast")
-          out = native(B_DBLCAST, "double", [roots]); return
-       case ("booleanCast"); out = native(B_BOOLCAST, "boolean", [roots]); return
-       case ("charCast", "uncheckedCharCast")
-          out = native(B_CHARCAST, "char", [roots]); return
-       ! RT.nextID is the counter gensym counts on. Shared with the
-       ! auto-gensym counter, so a gensym and an x# can never collide.
-       case ("isReduced"); out = native(B_ISREDUCED, "reduced?", [roots]); return
-       case ("toArray"); out = native(B_TOARRAY, "to-array", [roots]); return
-       ! (RT/print x w) is what `pr` is underneath -- the printed
-       ! form, written to a writer rather than returned.
-       case ("print")
-          out = native(B_RTPRINT, "clotran-rt-print", [roots]); return
-       ! into-array. The component type, when given, is the FIRST
-       ! argument and the sequence is always the last.
-       case ("seqToTypedArray")
-          out = native(B_INTOARRAY, "into-array", [roots]); return
-       case ("nextID"); out = native(B_NEXTID, "clotran-next-id", [roots]); return
-       case ("load"); out = native(B_RTLOAD, "clotran-rt-load", [roots]); return
-       case ("subvec"); out = native(B_SUBVEC, "subvec", [roots]); return
-       case ("first");  out = native(B_FIRST, "first", [roots]); return
-       case ("next");   out = native(B_NEXT, "next", [roots]);   return
-       case ("more");   out = native(B_REST, "rest", [roots]);   return
-       case ("seq");    out = native(B_SEQ, "seq", [roots]);     return
-       case ("cons");   out = native(B_CONS, "cons", [roots]);   return
-       case ("count");  out = native(B_COUNT, "count", [roots]); return
-       case ("get");    out = native(B_GET, "get", [roots]);     return
-       case ("nth");    out = native(B_NTH, "nth", [roots]);     return
-       case ("conj");   out = native(B_CONJ, "conj", [roots]);   return
-       case ("assoc");  out = native(B_ASSOC, "assoc", [roots]); return
-       case ("dissoc"); out = native(B_DISSOC, "dissoc", [roots]); return
-       case ("pop"); out = native(B_POP, "pop", [roots]); return
-       case ("peek"); out = native(B_PEEK, "peek", [roots]); return
-       case ("contains"); out = native(B_STRCONTAINS, "clotran-dot-contains", [roots]); return
-       case ("find"); out = native(B_FIND, "find", [roots]); return
-       case ("keys");   out = native(B_KEYS, "keys", [roots]);   return
-       case ("vals");   out = native(B_VALS, "vals", [roots]);   return
-       end select
-    end if
-    ! Thread.currentThread is asked for ONE thing here: a stack trace
-    ! to put a file and line on a test failure. clojure.test's do-report
-    ! calls it on every :fail, so without it a failing assertion threw
-    ! while being reported and came out as an ERROR instead -- which is
-    ! why the whole suite read fail=0. There is one thread and there are
-    ! no traces, so it answers itself and .getStackTrace answers empty.
-    ! Character's static predicates. clojure.string leans on these,
-    ! and so does anything classifying input a character at a time.
-    ! One builtin id each: call_builtin dispatches on the id alone and
-    ! cannot see which name the member table matched.
-    if (cls == "Character" .or. cls == "java.lang.Character") then
-       select case (mname)
-       case ("isWhitespace");    out = native(B_ISWS, "clotran-ws?", [roots]); return
-       case ("isUpperCase");     out = native(B_ISUPPER, "clotran-upper?", [roots]); return
-       case ("isLowerCase");     out = native(B_ISLOWER, "clotran-lower?", [roots]); return
-       case ("isDigit");         out = native(B_ISDIGIT, "clotran-digit?", [roots]); return
-       case ("isLetter");        out = native(B_ISLETTER, "clotran-letter?", [roots]); return
-       case ("isLetterOrDigit"); out = native(B_ISALNUM, "clotran-alnum?", [roots]); return
-       case ("toUpperCase");     out = native(B_UPCASE, "clotran-upcase", [roots]); return
-       case ("toLowerCase");     out = native(B_DOWNCASE, "clotran-downcase", [roots]); return
-       end select
-    end if
-    if (cls == "Thread" .or. cls == "java.lang.Thread") then
-       if (mname == "currentThread") then
-          out = native(B_BASELOADER, "clotran-current-thread", [roots]); return
-       end if
-    end if
-    if (cls == "Integer" .or. cls == "java.lang.Integer") then
-       select case (mname)
-       case ("MAX_VALUE"); out = gc_int(huge(0)); return
-       case ("MIN_VALUE"); out = gc_int(-huge(0) - 1); return
-       end select
-    end if
-    ! Long's bounds are clotran's own integer bounds: an integer
-    ! here IS a 64-bit one (gc_ip), which is what makes
-    ! (inc Long/MAX_VALUE) the same question in both.
-    if (cls == "Long" .or. cls == "java.lang.Long") then
-       select case (mname)
-       case ("MAX_VALUE"); out = gc_int(huge(0_gc_ip)); return
-       case ("MIN_VALUE"); out = gc_int(-huge(0_gc_ip) - 1_gc_ip); return
-       case ("SIZE");      out = gc_int(64); return
-       case ("BYTES");     out = gc_int(8); return
-       end select
-    end if
-    if (cls == "Short" .or. cls == "java.lang.Short") then
-       select case (mname)
-       case ("MAX_VALUE"); out = gc_int(32767); return
-       case ("MIN_VALUE"); out = gc_int(-32768); return
-       end select
-    end if
-    if (cls == "Byte" .or. cls == "java.lang.Byte") then
-       select case (mname)
-       case ("MAX_VALUE"); out = gc_int(127); return
-       case ("MIN_VALUE"); out = gc_int(-128); return
-       end select
-    end if
-    ! Double's constants, as IEEE doubles. MIN_VALUE is the
-    ! smallest POSITIVE value -- a denormal -- not the most
-    ! negative one, which is the trap Java sets here and which
-    ! Clojure's own math tests check.
-    if (cls == "Double" .or. cls == "java.lang.Double") then
-       select case (mname)
-       case ("MAX_VALUE");    out = gc_real(huge(1.0_gc_dp)); return
-       case ("MIN_VALUE");    out = gc_real(tiny(1.0_gc_dp) * epsilon(1.0_gc_dp)); return
-       case ("MIN_NORMAL");   out = gc_real(tiny(1.0_gc_dp)); return
-       case ("MAX_EXPONENT"); out = gc_int(1023); return
-       case ("MIN_EXPONENT"); out = gc_int(-1022); return
-       case ("SIZE");         out = gc_int(64); return
-       case ("BYTES");        out = gc_int(8); return
-       end select
-    end if
-    if (cls == "Float" .or. cls == "java.lang.Float") then
-       select case (mname)
-       case ("MAX_VALUE");    out = gc_real(real(huge(1.0_4), gc_dp)); return
-       case ("MIN_VALUE");    out = gc_real(1.4012984643248171e-45_gc_dp); return
-       case ("MAX_EXPONENT"); out = gc_int(127); return
-       case ("MIN_EXPONENT"); out = gc_int(-126); return
-       end select
-    end if
-    ! The three non-finite constants, shared by Double and Float.
-    if (cls == "Double" .or. cls == "java.lang.Double" .or. &
-         cls == "Float" .or. cls == "java.lang.Float") then
-       select case (mname)
-       case ("POSITIVE_INFINITY")
-          out = gc_real(ieee_value(1.0_gc_dp, ieee_positive_inf)); return
-       case ("NEGATIVE_INFINITY")
-          out = gc_real(ieee_value(1.0_gc_dp, ieee_negative_inf)); return
-       case ("NaN")
-          out = gc_real(ieee_value(1.0_gc_dp, ieee_quiet_nan)); return
-       end select
-    end if
-    ! Number.compare -- the TOTAL order Java puts on doubles, which
-    ! is not <: it ranks -0.0 below 0.0 and NaN above everything.
-    ! clojure.test-clojure.math tests signed zero through it.
-    if (mname == "compare") then
-       select case (cls)
-       case ("Double", "java.lang.Double", "Float", "java.lang.Float", &
-            "Long", "java.lang.Long", "Integer", "java.lang.Integer", &
-            "Short", "java.lang.Short", "Byte", "java.lang.Byte")
-          out = native(B_NUMCOMPARE, "clotran-num-compare", [roots]); return
-       end select
-    end if
-    if (cls == "Integer" .or. cls == "java.lang.Integer" .or. &
-         cls == "Long" .or. cls == "java.lang.Long") then
-       select case (mname)
-       case ("valueOf", "parseInt", "parseLong")
-          out = native(B_INTVALUE, "clotran-int-value", [roots]); return
-       end select
-    end if
-    if (cls == "Double" .or. cls == "java.lang.Double" .or. &
-         cls == "Float" .or. cls == "java.lang.Float") then
-       ! parse-double is (Double/valueOf s), and it is only reached
-       ! after core.clj has already matched the string against its own
-       ! regex -- so this converts, it does not validate.
-       select case (mname)
-       case ("valueOf", "parseDouble", "parseFloat")
-          out = native(B_DBLVALUE, "clotran-double-value", [roots]); return
-       case ("isNaN")
-          out = native(B_ISNAN, "clotran-is-nan", [roots]); return
-       case ("isInfinite")
-          out = native(B_ISINF, "clotran-is-infinite", [roots]); return
-       end select
-    end if
-    ! Class/TYPE is a JVM primitive-class constant -- Float/TYPE and
-    ! friends, which core_print uses to dispatch on primitive ARRAY
-    ! types. There are no primitive arrays here, so each answers a
-    ! distinct keyword: inert, never equal to anything clotran
-    ! produces, and enough for the dispatch table to be built.
-    if (mname == "TYPE") then
-       out = gc_key(cls // "/TYPE", [roots])
-       return
-    end if
+    end do
     call fail("no such member: " // cls // "/" // mname)
   end function static_member
+
+  ! .member: an instance member, by name alone -- the target's kind is
+  ! the native's business.
+  function instance_member(mname, roots) result(out)
+    character(len=*), intent(in) :: mname
+    type(gc_value), intent(in) :: roots
+    type(gc_value) :: out
+    integer :: i
+    out = gc_nil()
+    do i = 1, size(HOST_METHODS)
+       if (HOST_METHODS(i)%mem == mname) then
+          out = native(HOST_METHODS(i)%id, trim(HOST_METHODS(i)%name), [roots])
+          return
+       end if
+    end do
+    call fail("no such member: " // mname)
+  end function instance_member
 
   ! Sets :macro true in the Var's metadata, creating the map if the Var
   ! has none. Var metadata is slot 2.
@@ -4065,59 +3251,6 @@ contains
   ! this stays inside the premise that src/c holds only the regex
   ! shim.
 
-  ! Which Math member a name is, or 0. The index is the offset from
-  ! B_MATH0 and nothing else depends on the order.
-  integer function math_index(mname) result(k)
-    character(len=*), intent(in) :: mname
-    select case (mname)
-    case ("sin");            k = 1
-    case ("cos");            k = 2
-    case ("tan");            k = 3
-    case ("asin");           k = 4
-    case ("acos");           k = 5
-    case ("atan");           k = 6
-    case ("toRadians");      k = 7
-    case ("toDegrees");      k = 8
-    case ("exp");            k = 9
-    case ("log");            k = 10
-    case ("log10");          k = 11
-    case ("sqrt");           k = 12
-    case ("cbrt");           k = 13
-    case ("ceil");           k = 14
-    case ("floor");          k = 15
-    case ("rint");           k = 16
-    case ("signum");         k = 17
-    case ("sinh");           k = 18
-    case ("cosh");           k = 19
-    case ("tanh");           k = 20
-    case ("expm1");          k = 21
-    case ("log1p");          k = 22
-    case ("ulp");            k = 23
-    case ("nextUp");         k = 24
-    case ("nextDown");       k = 25
-    case ("abs");            k = 26
-    case ("IEEEremainder");  k = 27
-    case ("atan2");          k = 28
-    case ("pow");            k = 29
-    case ("hypot");          k = 30
-    case ("copySign");       k = 31
-    case ("nextAfter");      k = 32
-    case ("round");          k = 33
-    case ("getExponent");    k = 34
-    case ("scalb");          k = 35
-    case ("random");         k = 36
-    case ("addExact");       k = 37
-    case ("subtractExact");  k = 38
-    case ("multiplyExact");  k = 39
-    case ("incrementExact"); k = 40
-    case ("decrementExact"); k = 41
-    case ("negateExact");    k = 42
-    case ("floorDiv");       k = 43
-    case ("floorMod");       k = 44
-    case ("toIntExact");     k = 45
-    case default;            k = 0
-    end select
-  end function math_index
 
   ! Round half to EVEN, which is what Math.rint does and what neither
   ! anint (half away from zero) nor int truncation gives.
@@ -4154,7 +3287,7 @@ contains
     if (b == -1_gc_ip .and. a == -huge(a) - 1_gc_ip) bad = .true.
   end function mul_overflows
 
-  ! One Math call. `k` is math_index's answer.
+  ! One Math call. `k` is the Math row's index in hosttable.inc.
   function math_call(k, args, roots) result(out)
     integer, intent(in) :: k
     type(gc_value), intent(in) :: args
@@ -6512,7 +5645,7 @@ contains
             out = gc_bool(r == 1)
          end if
        end block
-    case (B_ISWS, B_ISUPPER, B_ISLOWER, B_ISDIGIT, B_ISLETTER, B_ISALNUM)
+    case (B_ISWS, B_ISLOWER, B_ISDIGIT, B_ISLETTER, B_ISALNUM)
        block
          type(gc_value) :: cv
          character :: c
@@ -6522,7 +5655,6 @@ contains
          case (B_ISWS)
             out = gc_bool(c == " " .or. c == achar(9) .or. c == achar(10) &
                  .or. c == achar(13) .or. c == achar(12))
-         case (B_ISUPPER); out = gc_bool(c >= "A" .and. c <= "Z")
          case (B_ISLOWER); out = gc_bool(c >= "a" .and. c <= "z")
          case (B_ISDIGIT); out = gc_bool(c >= "0" .and. c <= "9")
          case (B_ISLETTER)

@@ -1,0 +1,29 @@
+#!/usr/bin/env bb
+(require '[clojure.string :as str] '[babashka.fs :as fs])
+;; every Class/member and .member reference in the Clojure we load
+(def files (concat (fs/glob "src/clj" "**.clj") (fs/glob "test/clj/derived" "**.clj") ["test/clj/language_test.clj" "test/clj/oracle.clj"] (fs/glob "examples" "**.clj")))
+(def statics (atom {})) (def instances (atom {})) (def dotforms (atom {}))
+(defn strip-comments [s] (str/replace s #"(?m);.*$" ""))
+(doseq [f files]
+  (let [s (strip-comments (slurp (str f))) name (str f)]
+    ;; Foo/bar or a.b.Foo/bar where the class part starts upper-case somewhere
+    (doseq [[_ c m] (re-seq #"(?<![\w.\-/])((?:[a-z][\w]*\.)*[A-Z][\w$]*)/([\w\-$]+)" s)]
+      (swap! statics update (str c "/" m) (fnil conj #{}) name))
+    ;; (Foo. ...) constructor
+    (doseq [[_ c] (re-seq #"\(((?:[a-z][\w]*\.)*[A-Z][\w$]*)\.[\s)]" s)]
+      (swap! statics update (str "new " c) (fnil conj #{}) name))
+    (doseq [[_ c] (re-seq #"\(new\s+((?:[a-z][\w]*\.)*[A-Z][\w$]*)" s)]
+      (swap! statics update (str "new " c) (fnil conj #{}) name))
+    ;; (.member x ...) and (.-field x)
+    (doseq [[_ m] (re-seq #"\(\.-?([a-zA-Z][\w]*)[\s)]" s)]
+      (swap! instances update m (fnil conj #{}) name))
+    ;; (. x member) / (. x (member ...)) / (. Class member)
+    (doseq [[_ t m] (re-seq #"\(\.\s+(\S+)\s+\(?([a-zA-Z][\w]*)" s)]
+      (swap! dotforms update (str t " " m) (fnil conj #{}) name))))
+(defn short [names] (str/join " " (take 3 (map #(str/replace % #".*/" "") (sort names)))))
+(println "STATICS" (count @statics))
+(doseq [[k v] (sort @statics)] (println " " k "  <-" (short v)))
+(println "DOTFORMS" (count @dotforms))
+(doseq [[k v] (sort @dotforms)] (println " " k "  <-" (short v)))
+(println "INSTANCES" (count @instances))
+(doseq [[k v] (sort @instances)] (println " " k "  <-" (short v)))

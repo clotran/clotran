@@ -2406,3 +2406,35 @@ charge-consistency and atom-type checks are two small functions.
 **What did not need doing.** No clotran bug was hit. The one addition
 to the host is `clotran-slurp`, since core.clj's `slurp` is written
 over `java.io`.
+
+## The JVM surface, as data
+
+`static_member` was 550 lines of `if (cls == ...) ... case (mname)`,
+`instance_member` 300 more, and `is_host_class` a third list of class
+names that had to agree with the first by hand. It did not always:
+`Ratio` was a host class with no members, `Boolean/TYPE` worked only
+through the run-time keyword path because `Boolean` was not in the
+list, and `Integer/TYPE` and `java.lang.Integer/TYPE` evaluated to
+two different keywords depending on which spelling a file used.
+
+Now `src/f/hosttable.inc` holds a `parameter` array of rows -- class,
+member, builtin id (or a constant kind and its value), print name --
+and the three functions are lookups over it. The class list IS the
+set of classes with rows. A name is canonicalised once (`host_canon`:
+`java.lang.` prefixed onto a bare name, the five short names the
+libs import mapped), so both spellings land on one row.
+
+The audit that decides what is a row is `scripts/audit-host`. The
+finding was that nearly everything already there was reached: six
+members were not, and they are gone. That is worth saying because
+the expectation going in was a large unreached surface, and the
+number says the table had been kept honest by the load failures that
+added each row.
+
+The constants are constant expressions (`huge`, `tiny`, `epsilon`,
+`exp(1.0_gc_dp)` are all allowed in a `parameter`); the three IEEE
+non-finite values are kinds, because `ieee_value` is not.
+
+The lookup is a linear scan of ~300 rows. It runs at analysis time
+for a static member and once per unresolved instance member; nothing
+has shown it in a profile.

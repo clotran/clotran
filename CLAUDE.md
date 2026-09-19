@@ -151,6 +151,9 @@ it up.
   `./clotran core.clj forms/*.clj` reports every failure in one pass.
   This is how "the wall is form 656" became "5 forms fail and 63 behind
   them already work".
+- `scripts/audit-host` -- every host class and member the loaded
+  Clojure mentions. `src/f/hosttable.inc` is the JVM surface as data;
+  a member the audit does not find has no business being a row.
 - `scripts/run-clojure-tests` -- Clojure's own suite, one namespace per
   run so a hard failure cannot hide the others.
 - `scripts/oracle` -- the differential test. Every form in
