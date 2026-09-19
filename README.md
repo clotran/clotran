@@ -85,9 +85,25 @@ which is what a Fortran library expects to be handed -- and is:
 handed the two buffers exactly as `A(LDA,*)` declares them: no copy,
 no descriptor, no C shim. That is the claim the project rests on, and
 this is the first routine that tests it. The `fortran` namespace names
-a Fortran KIND rather than a class -- see `SEAMS.md`. A binding
-generator that would do for any routine what this does for one is
-PLAN.md step 7.
+a Fortran KIND rather than a class -- see `SEAMS.md`.
+
+**ChemSol runs on clotran.** ChemSol is a solvation-energy program, a
+real scientific code with a 1,600-line library module whose routines
+take twenty to thirty positional arguments. Its `main.f90` is replaced
+by `examples/chemsol.clj`, the library is vendored unmodified in
+`src/f/chemsol/`, and each routine is a map-in, map-out function keyed
+by the routine's own argument names:
+
+```clojure
+(-> mol (f/chemsol-readopt vdw-par) (f/chemsol-dg-ld atoms) f/chemsol-solvout)
+```
+
+`scripts/chemsol-check` runs it on ChemSol's three reference inputs and
+diffs against the original program's output: all three match byte for
+byte. The arrays cross as the same buffers the Fortran writes into,
+with no copy. A binding generator that would do for any routine what
+was done by hand for these is what comes next; PLAN.md step 7 records
+what the library dictated for it.
 
 Clojure's OWN array functions run over the same representation -- not
 reimplemented, the definitions in `core.clj`, which are written against
