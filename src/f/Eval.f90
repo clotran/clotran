@@ -554,143 +554,30 @@ contains
   ! can report; a Fortran stack overflow is a bare segfault with the
   ! output buffer unflushed, so runaway recursion has to be caught
   ! before the stack goes rather than after.
+  ! Evaluation is analysis followed by execution. A caller normally
+  ! hands over a node from gce_analyze; a raw form -- the (quote v)
+  ! forms eval_dot and eval_new still build -- is analysed here first.
+  ! `env` and `roots` are unused and kept for the callers' sake.
   recursive function gce_eval(form, env, roots) result(out)
     type(gc_value), intent(in) :: form, env
     type(gc_value), intent(in) :: roots(:)
-    type(gc_value) :: out, head
+    type(gc_value) :: out, nd
     integer :: base
-    logical :: found
 
     out = gc_nil()
     if (has_error) return
-    ! An analysed form runs on the executor; the walker below is what
-    ! the bridges (eval_dot, eval_new) still use for (quote v) forms.
     if (gc_kind(form) == OBJ_AST) then
        out = exec(form, gc_nil())
        return
     end if
-
-    if (ev_limit == 0) call read_depth_limit()
-    ev_depth = ev_depth + 1
-    gce_evals = gce_evals + 1
-    if (ev_depth > ev_limit) then
-       call fail("stack overflow near (" // first_form_name(form) // " ...)")
-       ev_depth = ev_depth - 1
-       return
-    end if
-
-    ! Slot 1 = the form, 2 = the env: both must survive every
-    ! allocation below, and neither can be left in a Fortran local.
-    base = vs_enter(4)
+    base = vs_enter(2)
     call vs_set(base + 1, form)
-    call vs_set(base + 2, env)
-
-    select case (form%tag)
-    case (GCT_SYM)
-       ! Lexical scope first, then the namespace. A local shadows a
-       ! Var of the same name, which is what makes (let [map ...])
-       ! legal rather than a redefinition of clojure.core/map.
-       found = gce_find(env, form, out)
-       if (.not. found) then
-          ! The ENV, not the form: resolve_var consults the namespace
-          ! the enclosing closure was defined in, which lives in a frame.
-          head = resolve_var(form, vs_get(base + 2))
-          if (gcn_is_var(head)) then
-             ! A bare symbol auto-derefs its Var, matching Clojure --
-             ! #'x is how you ask for the Var itself.
-             out = gcn_var_value(head)
-             found = .true.
-          end if
-       end if
-       if (.not. found) then
-          ! A CLASS LITERAL, tried last, exactly where maybeClass sits:
-          ! after locals and Vars have both missed. clotran's classes
-          ! are its own type tags, so the literal evaluates to the
-          ! keyword that names one -- (instance? clojure.lang.Symbol x)
-          ! and (= :symbol (clotran-type x)) are then the same question
-          ! asked twice.
-          if (is_class_name(form)) then
-             ! java.lang is implicitly imported, so Object and
-             ! java.lang.Object are the SAME class -- and must be the
-             ! same keyword, or a protocol extended to one is invisible
-             ! to a lookup for the other. core/protocols extends
-             ! CollReduce to Object and InternalReduce to
-             ! java.lang.Object, and find-protocol-impl falls back to
-             ! (impl Object) for both.
-             out = gc_key(short_class_name(gc_ref_text(form%ref)), &
-                  [vs_get(base + 1)])
-             found = .true.
-          else if (is_static_call(form)) then
-             ! Class/member in VALUE position -- a static FIELD, not a
-             ! call. clojure.lang.Compiler/LOADER is read that way, as a
-             ! map key, by the with-loading-context every (ns ...)
-             ! expands into.
-             block
-               character(len=:), allocatable :: t
-               integer :: sl
-               t = gc_ref_text(form%ref)
-               sl = index(t, "/")
-               out = static_member(t(1:sl-1), t(sl+1:), vs_get(base + 1))
-               found = .not. has_error
-               if (has_error) call gce_clear_error()
-             end block
-          end if
-       end if
-       if (.not. found) call fail("'" // gc_ref_text(form%ref) // "' not found")
-    case (GCT_OBJ)
-       select case (gc_kind(form))
-       case (OBJ_LAZY, OBJ_SEQ)
-          ! A SEQ IS A CALL. Compiler.eval dispatches on ISeq, not on
-          ! one concrete list class, and it has to: a macro assembles
-          ! its expansion with cons and seq, so what comes back is a
-          ! lazy cell or a view over a vector, never a PersistentList.
-          ! Evaluating only OBJ_CONS made every such expansion
-          ! self-evaluate silently -- defmacro built the right form and
-          ! nothing ran it.
-          !
-          ! Realised into a list rather than teaching eval_call to walk
-          ! any seq: it happens once per expansion, off the hot path.
-          out = gce_eval(seq_to_list(form, [vs_get(base + 1)]), env, &
-               [vs_get(base + 1)])
-       case (OBJ_CONS)
-          if (gcl_count(form) == 0) then
-             out = form
-          else
-             head = strip_meta(gcl_first(form))
-             if (head%tag == GCT_SYM .and. is_member_sym(head)) then
-                out = eval_member(form, env)
-             else if (head%tag == GCT_SYM .and. is_static_call(head)) then
-                out = eval_static(form, env)
-             else if (head%tag == GCT_SYM .and. is_ctor_sym(head)) then
-                out = eval_ctor(form, env)
-             else if (head%tag == GCT_SYM .and. is_special(head)) then
-                out = eval_special(form, env)
-             else
-                out = eval_call(form, env)
-             end if
-          end if
-       case (OBJ_META)
-          ! Metadata is information ABOUT a form, not part of what it
-          ! evaluates to, so evaluation sees straight through the
-          ! wrapper. Only def (and `meta`) look at it. Keeping the
-          ! unwrap here is what stops OBJ_META leaking into every
-          ! special form and builtin.
-          out = gce_eval(gc_slot(form, 1), env, [vs_get(base + 1)])
-       case (OBJ_VECTOR)
-          out = eval_vector(form, env)
-       case (OBJ_MAP, OBJ_HAMT)
-          out = eval_map(form, env)
-       case (OBJ_SET)
-          out = eval_set(form, env)
-       case default
-          out = form ! closures, builtins, vars: self-evaluating
-       end select
-    case default
-       out = form ! nil, bool, int, real, char, string, keyword
-    end select
-
+    nd = analyze_top(vs_get(base + 1))
+    if (.not. has_error) then
+       call vs_set(base + 2, nd)
+       out = exec(vs_get(base + 2), gc_nil())
+    end if
     call vs_leave(base)
-    ev_depth = ev_depth - 1
   end function gce_eval
 
   ! `ns` and `in-ns` are macros in real Clojure, defined in core.clj
@@ -727,313 +614,7 @@ contains
           gc_ref_is(sym%ref, "var")
   end function is_special
 
-  recursive function eval_special(form, env) result(out)
-    type(gc_value), intent(in) :: form, env
-    type(gc_value) :: out, head, rest, a, b
-    logical :: has_value
-    integer :: base
 
-    out = gc_nil()
-    head = strip_meta(gcl_first(form))
-    base = vs_enter(4)
-    call vs_set(base + 1, form)
-    call vs_set(base + 2, env)
-    rest = gcl_rest(form, [vs_get(base + 1)])
-    call vs_set(base + 3, rest)
-
-    if (gc_ref_is(head%ref, "quote")) then
-       out = gcl_first(vs_get(base + 3))
-
-    else if (gc_ref_is(head%ref, "if")) then
-       a = gce_eval(gcl_first(vs_get(base + 3)), vs_get(base + 2), [vs_get(base + 1)])
-       if (has_error) then
-          call vs_leave(base); return
-       end if
-       rest = gcl_rest(vs_get(base + 3), [vs_get(base + 1)])
-       call vs_set(base + 3, rest)
-       if (truthy(a)) then
-          out = gce_eval(gcl_first(vs_get(base + 3)), vs_get(base + 2), [vs_get(base + 1)])
-       else
-          rest = gcl_rest(vs_get(base + 3), [vs_get(base + 1)])
-          call vs_set(base + 3, rest)
-          if (gcl_count(vs_get(base + 3)) > 0) then
-             out = gce_eval(gcl_first(vs_get(base + 3)), vs_get(base + 2), [vs_get(base + 1)])
-          end if
-       end if
-
-    else if (gc_ref_is(head%ref, "do")) then
-       do while (gcl_count(vs_get(base + 3)) > 0)
-          out = gce_eval(gcl_first(vs_get(base + 3)), vs_get(base + 2), [vs_get(base + 1)])
-          if (has_error) exit
-          rest = gcl_rest(vs_get(base + 3), [vs_get(base + 1)])
-          call vs_set(base + 3, rest)
-       end do
-
-    else if (gc_ref_is(head%ref, "def")) then
-       ! Interns in the CURRENT NAMESPACE, not the enclosing frame --
-       ! (let [] (def x 1)) really does define x at the top level,
-       ! which is Clojure's behaviour and was the one divergence this
-       ! evaluator had before namespaces existed.
-       a = gcl_first(vs_get(base + 3))
-       call vs_set(base + 4, a)
-       rest = gcl_rest(vs_get(base + 3), [vs_get(base + 1)])
-       call vs_set(base + 3, rest)
-       has_value = (gcl_count(vs_get(base + 3)) > 0)
-       b = gce_eval(gcl_first(vs_get(base + 3)), vs_get(base + 2), [vs_get(base + 1)])
-       if (.not. has_error) then
-          block
-            type(gc_value) :: nm, md, var
-            integer :: db
-            ! The name may arrive wrapped: (def ^{:macro true} let ...).
-            nm = vs_get(base + 4)
-            md = gc_nil()
-            if (gc_kind(nm) == OBJ_META) then
-               md = gc_slot(nm, 2)
-               nm = strip_meta(nm)
-            end if
-            call vs_set(base + 4, nm)
-            ! Var metadata is EVALUATED. Compiler.DefExpr analyses the
-            ! meta map as an expression, and core.clj is written for
-            ! that: defn quotes its :arglists -- (list 'quote (sigs
-            ! fdecl)) -- precisely because the list would otherwise be
-            ! CALLED. Storing it raw made (:test (meta #'t)) a list
-            ! rather than a function, which is every clojure.test
-            ! deftest, since deftest puts (fn [] body) there.
-            db = vs_enter(2)
-            call vs_set(db + 1, b)
-            call vs_set(db + 2, md)
-            if (md%tag /= GCT_NIL) then
-               md = gce_eval(vs_get(db + 2), vs_get(base + 2), &
-                    [vs_get(base + 1), vs_get(db + 1)])
-               call vs_set(db + 2, md)
-            end if
-            if (has_error) then
-               call vs_leave(db)
-               call vs_leave(base)
-               return
-            end if
-            var = gcn_intern(gcn_current([vs_get(base + 1)]), &
-                 vs_get(base + 4), vs_get(db + 1), &
-                 [vs_get(base + 1), vs_get(base + 4), vs_get(db + 2)])
-            md = vs_get(db + 2)
-            call vs_leave(db)
-            ! Nothing more to do for (def ^{:macro true} let ...):
-            ! putting the metadata on the Var IS declaring the macro,
-            ! because that is where macro-ness is read from. core.clj
-            ! defines let, loop and fn exactly this way, at its line 32.
-            if (md%tag /= GCT_NIL) call gc_set_slot(var, 2, md)
-            ! i1 marks a ROOT BINDING. (def x) with no value interns the
-            ! Var and leaves it unbound -- Var's own constructor sets
-            ! root to an Unbound -- and defmulti turns on exactly that:
-            ! (let [v# (def name)] (when-not (.hasRoot v#) ...)).
-            if (has_value) call gc_set_i1(var, 1)
-            ! THE FUNCTION REMEMBERS ITS NAME, in the closure's
-            ! spare slot. Nothing dispatches on it; it exists so an
-            ! arity error can say WHICH function was called wrong,
-            ! the way Clojure's ArityException does -- "Wrong
-            ! number of args (1) passed to: user/f0" rather than
-            ! naming no one. Set here because `def` is the only
-            ! place a function acquires a name at all.
-            block
-              type(gc_value) :: fnv, slot5, nmsym
-              character(len=:), allocatable :: qual
-              fnv = strip_meta(gcn_var_value(var))
-              if (gc_kind(fnv) == OBJ_CLOSURE) then
-                 slot5 = gc_slot(fnv, 5)
-                 if (slot5%tag == GCT_NIL) then
-                    nmsym = vs_get(base + 4)
-                    qual = gcn_name(gcn_current([vs_get(base + 1)])) // "/" // &
-                         gc_ref_text(nmsym%ref)
-                    call gc_set_slot(fnv, 5, gc_sym(qual, [vs_get(base + 1), fnv]))
-                 end if
-              end if
-            end block
-            ! def evaluates to the VAR, not to the value. defmulti is
-            ! written around it.
-            out = var
-          end block
-       end if
-
-    else if (gc_ref_is(head%ref, "let*")) then
-       out = eval_let(vs_get(base + 3), vs_get(base + 2))
-
-    else if (gc_ref_is(head%ref, "letfn*")) then
-       out = eval_letfn(vs_get(base + 3), vs_get(base + 2))
-
-    else if (gc_ref_is(head%ref, "fn*")) then
-       out = make_closure(vs_get(base + 3), vs_get(base + 2))
-
-    else if (gc_ref_is(head%ref, "loop*")) then
-       out = eval_loop(vs_get(base + 3), vs_get(base + 2))
-
-    else if (gc_ref_is(head%ref, "recur")) then
-       out = eval_recur(vs_get(base + 3), vs_get(base + 2))
-
-    else if (gc_ref_is(head%ref, "var")) then
-       ! The Var itself, undereferenced -- what #'x means, and what a
-       ! caller needs to hold a stable reference across redefinition.
-       ! The name can arrive hinted -- (. (var ^{:private true} x)
-       ! (setMacro)) is what defmacro expands to for a private macro.
-       ! THE ENV, not the form. resolve_var reads the namespace
-       ! the enclosing closure was defined in out of a frame, and
-       ! a form is not a frame -- so this fell straight through
-       ! to the CURRENT namespace, which is whoever happened to
-       ! be calling. clojure.test's own (binding
-       ! [*report-counters* ...]) is exactly that shape: the
-       ! binding form expands to (var *report-counters*), and
-       ! run-tests is called from the namespace under test, where
-       ! that name does not exist. Every deftest namespace
-       ! reported nothing because of it.
-       out = resolve_var(strip_meta(gcl_first(vs_get(base + 3))), vs_get(base + 2))
-       if (.not. gcn_is_var(out)) &
-            call fail("Unable to resolve var: " // &
-            gc_ref_text(nth_sym_ref(vs_get(base + 3))))
-
-    else if (gc_ref_is(head%ref, "lazy-seq*")) then
-       ! (lazy-seq* body) captures the body in a no-argument closure
-       ! and hands back an unrealised node. Nothing of the body runs
-       ! until something asks for the seq's first element, which is
-       ! the entire point: (iterate inc 0) is a finite object.
-       a = gc_obj(OBJ_CLOSURE, &
-            [gcv_empty([vs_get(base + 1)]), vs_get(base + 3), vs_get(base + 2), gc_nil()], &
-            [vs_get(base + 1), vs_get(base + 2)])
-       out = gc_obj(OBJ_LAZY, [a, gc_nil(), gc_nil()], [vs_get(base + 1), a])
-       call gc_set_i1(out, LAZY_PENDING)
-
-    else if (gc_ref_is(head%ref, "throw")) then
-       a = gce_eval(gcl_first(vs_get(base + 3)), vs_get(base + 2), [vs_get(base + 1)])
-       if (.not. has_error) then
-          call set_thrown(a)
-          has_error = .true.
-          ! The message carries the thrown value. "thrown" on its own
-          ! told a caller nothing, which made every assertion in
-          ! core.clj look identical.
-          last_error = gcp_str(a, .true.)
-       end if
-
-    else if (gc_ref_is(head%ref, "try")) then
-       out = eval_try(vs_get(base + 3), vs_get(base + 2))
-
-    else if (gc_ref_is(head%ref, "case*")) then
-       out = eval_case(vs_get(base + 3), vs_get(base + 2))
-
-    else if (gc_ref_is(head%ref, "deftype*")) then
-       out = eval_deftype(vs_get(base + 3), vs_get(base + 2))
-
-    else if (gc_ref_is(head%ref, "proxy")) then
-       out = eval_proxy(vs_get(base + 3), vs_get(base + 2))
-
-    else if (gc_ref_is(head%ref, "reify*")) then
-       out = eval_reify(vs_get(base + 3), vs_get(base + 2))
-
-    else if (gc_ref_is(head%ref, "quasiquote")) then
-       ! Expand to ordinary cons/concat calls, then evaluate those.
-       ! Syntax-quote is a source transformation, not a runtime thing,
-       ! which is why it becomes a form rather than a value here.
-       if (qq_depth == 0) call gc_global_keep(gensym_root, &
-            gca_empty([vs_get(base + 1), vs_get(base + 2)]))
-       qq_depth = qq_depth + 1
-       a = qq_expand(gcl_first(vs_get(base + 3)), vs_get(base + 2))
-       qq_depth = qq_depth - 1
-       if (.not. has_error) out = gce_eval(a, vs_get(base + 2), [vs_get(base + 1)])
-
-    else if (gc_ref_is(head%ref, "clojure.core/import*")) then
-       ! Spelled qualified because that is its actual name:
-       ! Symbol.intern("clojure.core", "import*") in the specials
-       ! table, and core.clj emits it that way. The only special form
-       ! with a namespace.
-       !
-       ! A NO-OP, and honestly so. import binds a short class name to a
-       ! package-qualified one in the namespace; clotran recognises a
-       ! class by the SHAPE of its name (is_class_name), so there is
-       ! nothing to bind. Kept as a special form rather than left to
-       ! fail, because core.clj imports at its top and every form after
-       ! that would be lost.
-       out = gc_nil()
-
-    else if (gc_ref_is(head%ref, "set!")) then
-       ! (set! var-or-symbol value). Clojure only permits this on a Var
-       ! with a thread-local binding, or a host field; with one thread
-       ! and one global binding stack there is nothing to distinguish,
-       ! so it sets the Var. DEVIATIONS.md 11.
-       block
-         type(gc_value) :: tgt, val
-         tgt = strip_meta(gcl_first(vs_get(base + 3)))
-         if (tgt%tag == GCT_SYM) then
-            ! The env, for the same reason (var ...) needs it.
-            tgt = resolve_var(tgt, vs_get(base + 2))
-         else
-            tgt = gce_eval(tgt, vs_get(base + 2), [vs_get(base + 1)])
-         end if
-         if (has_error) then
-            call vs_leave(base)
-            return
-         end if
-         call vs_set(base + 4, tgt)
-         val = gce_eval(gcl_first(gcl_rest(vs_get(base + 3), [vs_get(base + 1)])), &
-              vs_get(base + 2), [vs_get(base + 1), vs_get(base + 4)])
-         if (.not. has_error) then
-            if (gcn_is_var(vs_get(base + 4)) .or. &
-                 gc_kind(vs_get(base + 4)) == OBJ_ATOM) then
-               call gc_set_slot(vs_get(base + 4), 1, val)
-               out = val
-            else if (is_cache_field(gcl_first(vs_get(base + 3)))) then
-               ! (set! (.__methodImplCache f) cache) -- the one host
-               ! field with real storage behind it, in the closure
-               ! slot a single-arity fn does not use.
-               block
-                 type(gc_value) :: tf
-                 tf = strip_meta(gce_eval(gcl_first(gcl_rest( &
-                      strip_meta(gcl_first(vs_get(base + 3))), &
-                      [vs_get(base + 1)])), vs_get(base + 2), &
-                      [vs_get(base + 1)]))
-                 if (gc_kind(tf) == OBJ_CLOSURE) call gc_set_slot(tf, 5, val)
-                 out = val
-               end block
-            else if (gcl_is(strip_meta(gcl_first(vs_get(base + 3))))) then
-               ! (set! (.field obj) v) -- a HOST FIELD. The only one
-               ! clotran models is the protocol dispatch cache, which
-               ! has no storage, so the write is discarded and the
-               ! value returned. A bare symbol that is not a Var is
-               ! still an error, so this does not swallow a typo.
-               out = val
-            else
-               call fail("set! needs a var")
-            end if
-         end if
-       end block
-
-    else if (gc_ref_is(head%ref, "new")) then
-       out = eval_new(vs_get(base + 3), vs_get(base + 2))
-
-    else if (gc_ref_is(head%ref, ".")) then
-       out = eval_dot(vs_get(base + 3), vs_get(base + 2))
-
-    else if (gc_ref_is(head%ref, "defmacro*")) then
-       a = gcl_first(vs_get(base + 3))
-       call vs_set(base + 4, a)
-       rest = gcl_rest(vs_get(base + 3), [vs_get(base + 1)])
-       call vs_set(base + 3, rest)
-       b = gce_eval(gcl_first(vs_get(base + 3)), vs_get(base + 2), [vs_get(base + 1)])
-       if (.not. has_error) then
-          if (gc_kind(b) /= OBJ_CLOSURE) then
-             call fail("defmacro* needs a function")
-          else
-             ! def plus setMacro, which is all defmacro is in core.clj
-             ! too -- it just cannot say so until it exists.
-             block
-               type(gc_value) :: var
-               var = gcn_intern(gcn_current([vs_get(base + 1)]), vs_get(base + 4), &
-                    b, [vs_get(base + 1), vs_get(base + 4)])
-               call var_set_macro(var, vs_get(base + 2))
-               out = b
-             end block
-          end if
-       end if
-    end if
-
-    call vs_leave(base)
-  end function eval_special
 
   ! (deftype* user/Name user.Name [fields]
   !    :implements [ifaces] opt val ...
@@ -1046,63 +627,7 @@ contains
   ! a class literal evaluates to, which is what makes `new`,
   ! `instance?` and a protocol's :impls lookup all agree about what
   ! user.Name means without a hierarchy to walk.
-  recursive function eval_deftype(rest, env) result(out)
-    type(gc_value), intent(in) :: rest, env
-    type(gc_value) :: out, w, cname, k, ty
-    integer :: base
 
-    out = gc_nil()
-    base = vs_enter(6)
-    call vs_set(base + 1, rest)
-    call vs_set(base + 2, env)
-
-    ! Past the tagname (user/Name): it names the VAR core_deftype
-    ! builds around this, and the CLASSNAME is what everything here
-    ! keys on.
-    w = gcl_rest(vs_get(base + 1), [vs_get(base + 1)])
-    call vs_set(base + 3, w)
-    cname = strip_meta(gcl_first(vs_get(base + 3)))
-    if (cname%tag /= GCT_SYM) then
-       call fail("deftype* needs a class name")
-       call vs_leave(base)
-       return
-    end if
-    call vs_set(base + 4, cname)
-
-    w = gcl_rest(vs_get(base + 3), [vs_get(base + 1), vs_get(base + 4)])
-    call vs_set(base + 3, w)
-    call vs_set(base + 5, strip_meta(gcl_first(vs_get(base + 3))))
-    w = gcl_rest(vs_get(base + 3), &
-         [vs_get(base + 1), vs_get(base + 4), vs_get(base + 5)])
-    call vs_set(base + 3, w)
-
-    ! The options arrive as keyword/value pairs spliced in ahead of
-    ! the methods, :implements among them. Only :implements is read;
-    ! :load-ns and :no-print have nothing to correspond to here, and
-    ! are skipped rather than rejected so a form using them still
-    ! loads.
-    w = gcv_empty([vs_get(base + 1)])
-    call vs_set(base + 6, w)
-    do while (gcl_count(vs_get(base + 3)) > 0)
-       k = strip_meta(gcl_first(vs_get(base + 3)))
-       if (k%tag /= GCT_KEY) exit
-       w = gcl_rest(vs_get(base + 3), [vs_get(base + 1), vs_get(base + 6)])
-       call vs_set(base + 3, w)
-       if (gc_ref_is(k%ref, "implements")) &
-            call vs_set(base + 6, strip_meta(gcl_first(vs_get(base + 3))))
-       w = gcl_rest(vs_get(base + 3), [vs_get(base + 1), vs_get(base + 6)])
-       call vs_set(base + 3, w)
-    end do
-
-    ty = build_type(class_of_text(vs_get(base + 4)), vs_get(base + 5), &
-         vs_get(base + 6), vs_get(base + 3), vs_get(base + 2))
-    if (.not. has_error) then
-       call vs_set(base + 4, ty)
-       call register_type(vs_get(base + 4))
-       out = vs_get(base + 4)
-    end if
-    call vs_leave(base)
-  end function eval_deftype
 
   ! (reify* [ifaces] (methodName [this args*] body)*)
   !
@@ -1114,34 +639,7 @@ contains
   ! deftype's forbids; here they are closures either way, and the
   ! difference is invisible because a deftype method body is written
   ! at the top level.
-  recursive function eval_reify(rest, env) result(out)
-    type(gc_value), intent(in) :: rest, env
-    type(gc_value) :: out, ty
-    character(len=24) :: buf
-    integer :: base
 
-    out = gc_nil()
-    base = vs_enter(5)
-    call vs_set(base + 1, rest)
-    call vs_set(base + 2, env)
-    call vs_set(base + 3, strip_meta(gcl_first(vs_get(base + 1))))
-    reify_id = reify_id + 1
-    write(buf, '(I0)') reify_id
-    ! Two allocations in one argument list -- see range_cell.
-    call vs_set(base + 4, gcv_empty([vs_get(base + 1), vs_get(base + 3)]))
-    call vs_set(base + 5, gcl_rest(vs_get(base + 1), &
-         [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)]))
-    ty = build_type("clotran.reify__" // trim(buf), &
-         vs_get(base + 4), vs_get(base + 3), vs_get(base + 5), &
-         vs_get(base + 2))
-    if (.not. has_error) then
-       call vs_set(base + 4, ty)
-       out = gc_obj(OBJ_INST, &
-            [vs_get(base + 4), gcv_empty([vs_get(base + 4)]), gc_nil()], &
-            [vs_get(base + 4)])
-    end if
-    call vs_leave(base)
-  end function eval_reify
 
   ! (proxy [supers] [ctor-args] (name [args*] body*)*)
   !
@@ -1167,47 +665,7 @@ contains
   ! vendored (src/clj/clojure/PROVENANCE.md) because it is written
   ! against the class loader. clojure.pprint's writers are proxies, so
   ! without this the pretty printer cannot exist at all.
-  recursive function eval_proxy(rest, env) result(out)
-    type(gc_value), intent(in) :: rest, env
-    type(gc_value) :: out, ty, methods
-    character(len=24) :: buf
-    integer :: base
 
-    out = gc_nil()
-    base = vs_enter(6)
-    call vs_set(base + 1, rest)
-    call vs_set(base + 2, env)
-    call vs_set(base + 3, strip_meta(gcl_first(vs_get(base + 1))))
-    if (.not. gcv_is(vs_get(base + 3))) then
-       call fail("proxy needs a vector of superclasses")
-       call vs_leave(base)
-       return
-    end if
-    ! Past the superclasses and the constructor arguments.
-    methods = gcl_rest(vs_get(base + 1), [vs_get(base + 1), vs_get(base + 3)])
-    call vs_set(base + 4, methods)
-    methods = gcl_rest(vs_get(base + 4), [vs_get(base + 3), vs_get(base + 4)])
-    call vs_set(base + 4, methods)
-    methods = proxy_methods(vs_get(base + 4), [vs_get(base + 3)])
-    if (has_error) then
-       call vs_leave(base)
-       return
-    end if
-    call vs_set(base + 4, methods)
-
-    proxy_id = proxy_id + 1
-    write(buf, '(I0)') proxy_id
-    call vs_set(base + 5, gcv_empty([vs_get(base + 3), vs_get(base + 4)]))
-    ty = build_type("clotran.proxy__" // trim(buf), &
-         vs_get(base + 5), vs_get(base + 3), vs_get(base + 4), vs_get(base + 2))
-    if (.not. has_error) then
-       call vs_set(base + 6, ty)
-       out = gc_obj(OBJ_INST, &
-            [vs_get(base + 6), gcv_empty([vs_get(base + 6)]), gc_nil()], &
-            [vs_get(base + 6)])
-    end if
-    call vs_leave(base)
-  end function eval_proxy
 
   ! Proxy method forms, rewritten into the one-arity-per-form shape
   ! build_type reads, with `this` prepended to every parameter vector.
@@ -1299,59 +757,7 @@ contains
   ! Grouped by re-scanning the method list once per distinct name,
   ! which is quadratic in the number of methods. A type has a handful,
   ! and this runs once per deftype rather than once per call.
-  recursive function build_type(cname, fields, ifaces, methods, env) result(out)
-    character(len=*), intent(in) :: cname
-    type(gc_value), intent(in) :: fields, ifaces, methods, env
-    type(gc_value) :: out, w, m, mname, tmp
-    integer :: base
 
-    out = gc_nil()
-    base = vs_enter(9)
-    call vs_set(base + 1, fields)
-    call vs_set(base + 2, ifaces)
-    call vs_set(base + 3, methods)
-    call vs_set(base + 4, env)
-    tmp = gca_empty([vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)])
-    call vs_set(base + 5, tmp)
-    call vs_set(base + 6, vs_get(base + 3))
-
-    do while (gcl_count(vs_get(base + 6)) > 0)
-       m = strip_meta(gcl_first(vs_get(base + 6)))
-       mname = strip_meta(gcl_first(m))
-       if (mname%tag == GCT_SYM) then
-          tmp = gc_key(gc_ref_text(mname%ref), &
-               [vs_get(base + 5), vs_get(base + 6)])
-          call vs_set(base + 7, tmp)
-          if (.not. gca_contains(vs_get(base + 5), vs_get(base + 7))) then
-             tmp = method_clauses(gc_ref_text(mname%ref), vs_get(base + 3), &
-                  vs_get(base + 1))
-             call vs_set(base + 8, tmp)
-             ! Closure FIRST, then assoc. Two allocations as arguments
-             ! to one call lets the second collect the first.
-             tmp = make_closure(vs_get(base + 8), vs_get(base + 4))
-             call vs_set(base + 9, tmp)
-             tmp = gca_assoc(vs_get(base + 5), vs_get(base + 7), &
-                  vs_get(base + 9), [vs_get(base + 5), vs_get(base + 7), &
-                  vs_get(base + 9)])
-             call vs_set(base + 5, tmp)
-          end if
-       end if
-       tmp = gcl_rest(vs_get(base + 6), [vs_get(base + 5), vs_get(base + 6)])
-       call vs_set(base + 6, tmp)
-    end do
-
-    ! The interfaces, normalised to the keyword a class literal
-    ! evaluates to, so instance? is a string compare and not a second
-    ! naming convention.
-    tmp = iface_keys(vs_get(base + 2))
-    call vs_set(base + 6, tmp)
-    tmp = gc_str(cname, [vs_get(base + 5), vs_get(base + 6)])
-    call vs_set(base + 7, tmp)
-    out = gc_obj(OBJ_TYPE, [vs_get(base + 7), vs_get(base + 1), &
-         vs_get(base + 5), vs_get(base + 6)], &
-         [vs_get(base + 1), vs_get(base + 5), vs_get(base + 6), vs_get(base + 7)])
-    call vs_leave(base)
-  end function build_type
 
   ! Each interface symbol as its class keyword. java.lang is
   ! implicitly imported, so short_class_name is what makes Object and
@@ -1587,78 +993,7 @@ contains
 
   ! (new user.Name f1 f2) for a type deftype* created: the fields in
   ! declaration order, which is the one constructor deftype defines.
-  recursive function construct_type(ty, argforms, env) result(out)
-    type(gc_value), intent(in) :: ty, argforms, env
-    type(gc_value) :: out, item, tmp
-    character(len=24) :: want, got
-    integer :: base
 
-    out = gc_nil()
-    base = vs_enter(5)
-    call vs_set(base + 1, ty)
-    call vs_set(base + 2, argforms)
-    call vs_set(base + 3, env)
-    tmp = gcv_empty([vs_get(base + 1), vs_get(base + 2)])
-    call vs_set(base + 4, tmp)
-    call vs_set(base + 5, vs_get(base + 2))
-
-    do while (gcl_count(vs_get(base + 5)) > 0)
-       item = gce_eval(gcl_first(vs_get(base + 5)), vs_get(base + 3), &
-            [vs_get(base + 1), vs_get(base + 4), vs_get(base + 5)])
-       if (has_error) then
-          call vs_leave(base)
-          return
-       end if
-       tmp = gcv_conj(vs_get(base + 4), item, &
-            [vs_get(base + 1), vs_get(base + 4), vs_get(base + 5), item])
-       call vs_set(base + 4, tmp)
-       tmp = gcl_rest(vs_get(base + 5), [vs_get(base + 4), vs_get(base + 5)])
-       call vs_set(base + 5, tmp)
-    end do
-
-    ! A RECORD TAKES THREE ARITIES. defrecord conjes __meta,
-    ! __extmap, __hash and __hasheq onto the declared fields, but
-    ! ->Person calls (new Person name age) with only the declared
-    ! ones, and .assoc calls it with those plus two. On the JVM those
-    ! are extra CONSTRUCTORS: Compiler.java counts trailing fields
-    ! named __meta/__extmap/__hash/__hasheq into altCtorDrops and, when
-    ! that is non-zero, emits one ctor dropping all of them and one
-    ! dropping the last two. Same rule here, by the same names.
-    !
-    ! The missing fields are filled the way those ctors fill them:
-    ! ACONST_NULL for __meta and __extmap, ICONST_0 for the two
-    ! hashes -- and the 0 matters, because core_deftype reads them
-    ! back as (if (zero? __hasheq) ...recompute... __hasheq), which a
-    ! nil would not survive.
-    !
-    ! A plain deftype has no such trailing fields, so drops is 0 and
-    ! the arity stays exact: (Point. 1) on a two-field type is still
-    ! an error rather than a silently half-built instance.
-    block
-      integer :: nf, na, drops
-      nf = gcv_count(gc_slot(vs_get(base + 1), 2))
-      na = gcv_count(vs_get(base + 4))
-      drops = alt_ctor_drops(gc_slot(vs_get(base + 1), 2))
-      if (na /= nf) then
-         if (drops > 0 .and. (na == nf - drops .or. na == nf - 2)) then
-            tmp = pad_record_fields(vs_get(base + 4), &
-                 gc_slot(vs_get(base + 1), 2))
-            call vs_set(base + 4, tmp)
-         else
-            write(want, '(I0)') nf
-            write(got, '(I0)') na
-            call fail(class_text(vs_get(base + 1)) // &
-                 " takes " // trim(want) // " fields, given " // trim(got))
-            call vs_leave(base)
-            return
-         end if
-      end if
-    end block
-
-    out = gc_obj(OBJ_INST, [vs_get(base + 1), vs_get(base + 4), gc_nil()], &
-         [vs_get(base + 1), vs_get(base + 4)])
-    call vs_leave(base)
-  end function construct_type
 
   ! How many TRAILING fields are defrecord's bookkeeping, counted by
   ! name exactly as Compiler.java counts altCtorDrops. Zero for a plain
@@ -2000,51 +1335,7 @@ contains
 
   ! let* binds sequentially in a fresh child frame, so later bindings
   ! can see earlier ones -- which is what Clojure's let does.
-  recursive function eval_let(rest, env) result(out)
-    type(gc_value), intent(in) :: rest, env
-    type(gc_value) :: out, binds, child, k, v
-    integer :: base, i, n
 
-    out = gc_nil()
-    base = vs_enter(4)
-    call vs_set(base + 1, rest)
-    call vs_set(base + 2, env)
-    binds = gcl_first(rest)
-    call vs_set(base + 3, binds)
-    child = gce_new(env, [vs_get(base + 1), vs_get(base + 3)])
-    call vs_set(base + 4, child)
-
-    n = gcv_count(vs_get(base + 3))
-    if (mod(n, 2) /= 0) then
-       call fail("let* needs an even number of binding forms")
-       call vs_leave(base)
-       return
-    end if
-    do i = 0, n - 2, 2
-       ! The NAME can carry a type hint -- core.clj writes
-       ! (let [^clojure.lang.Symbol tag (:tag m)] ...) -- so the wrapper
-       ! comes off, exactly as it does for a parameter. Binding the
-       ! wrapper makes the local invisible in its own body.
-       k = strip_meta(gcv_nth(vs_get(base + 3), i))
-       v = gce_eval(gcv_nth(vs_get(base + 3), i + 1), vs_get(base + 4), &
-            [vs_get(base + 1), vs_get(base + 3)])
-       if (has_error) then
-          call vs_leave(base); return
-       end if
-       call gce_set(vs_get(base + 4), k, v, [vs_get(base + 1), vs_get(base + 3)])
-    end do
-
-    ! Body: every form, last value wins.
-    binds = gcl_rest(vs_get(base + 1), [vs_get(base + 1)])
-    call vs_set(base + 3, binds)
-    do while (gcl_count(vs_get(base + 3)) > 0)
-       out = gce_eval(gcl_first(vs_get(base + 3)), vs_get(base + 4), [vs_get(base + 1)])
-       if (has_error) exit
-       binds = gcl_rest(vs_get(base + 3), [vs_get(base + 1)])
-       call vs_set(base + 3, binds)
-    end do
-    call vs_leave(base)
-  end function eval_let
 
   ! (letfn* [name (fn ...) name (fn ...)] body...)
   !
@@ -2064,157 +1355,21 @@ contains
   ! The frame is mutated rather than rebuilt per binding, unlike loop*,
   ! which rebinds into a fresh frame each iteration so a closure keeps
   ! what it captured. Here sharing one frame IS the requirement.
-  recursive function eval_letfn(rest, env) result(out)
-    type(gc_value), intent(in) :: rest, env
-    type(gc_value) :: out, binds, child, k, v
-    integer :: base, i, n
 
-    out = gc_nil()
-    base = vs_enter(4)
-    call vs_set(base + 1, rest)
-    call vs_set(base + 2, env)
-    binds = gcl_first(rest)
-    call vs_set(base + 3, binds)
-    child = gce_new(env, [vs_get(base + 1), vs_get(base + 3)])
-    call vs_set(base + 4, child)
-
-    n = gcv_count(vs_get(base + 3))
-    if (.not. gcv_is(vs_get(base + 3))) then
-       call fail("letfn* needs a vector of bindings")
-       call vs_leave(base)
-       return
-    end if
-    if (mod(n, 2) /= 0) then
-       call fail("letfn* needs an even number of binding forms")
-       call vs_leave(base)
-       return
-    end if
-
-    ! Pass one: seed every name.
-    do i = 0, n - 2, 2
-       k = strip_meta(gcv_nth(vs_get(base + 3), i))
-       if (k%tag /= GCT_SYM) then
-          call fail("letfn* needs a symbol to bind")
-          call vs_leave(base)
-          return
-       end if
-       call gce_set(vs_get(base + 4), k, gc_nil(), &
-            [vs_get(base + 1), vs_get(base + 3)])
-    end do
-
-    ! Pass two: evaluate each init in the frame that already holds all
-    ! of the names.
-    do i = 0, n - 2, 2
-       k = strip_meta(gcv_nth(vs_get(base + 3), i))
-       v = gce_eval(gcv_nth(vs_get(base + 3), i + 1), vs_get(base + 4), &
-            [vs_get(base + 1), vs_get(base + 3)])
-       if (has_error) then
-          call vs_leave(base); return
-       end if
-       call gce_set(vs_get(base + 4), k, v, [vs_get(base + 1), vs_get(base + 3)])
-    end do
-
-    binds = gcl_rest(vs_get(base + 1), [vs_get(base + 1)])
-    call vs_set(base + 3, binds)
-    do while (gcl_count(vs_get(base + 3)) > 0)
-       out = gce_eval(gcl_first(vs_get(base + 3)), vs_get(base + 4), [vs_get(base + 1)])
-       if (has_error) exit
-       binds = gcl_rest(vs_get(base + 3), [vs_get(base + 1)])
-       call vs_set(base + 3, binds)
-    end do
-    call vs_leave(base)
-  end function eval_letfn
 
   ! loop* binds like let*, then iterates: evaluate the body, and if it
   ! hands back a recur, rebind the same names from the recur's
   ! arguments and go again. The bindings are rebound in a FRESH frame
   ! each time rather than mutated, so a closure made during one
   ! iteration keeps the values it captured.
-  recursive function eval_loop(rest, env) result(out)
-    type(gc_value), intent(in) :: rest, env
-    type(gc_value) :: out, binds, names, child, body, v
-    integer :: base, i, n
 
-    out = gc_nil()
-    base = vs_enter(6)
-    call vs_set(base + 1, rest)
-    call vs_set(base + 2, env)
-    binds = gcl_first(rest)
-    call vs_set(base + 3, binds)
-
-    n = gcv_count(vs_get(base + 3))
-    if (mod(n, 2) /= 0) then
-       call fail("loop* needs an even number of binding forms")
-       call vs_leave(base); return
-    end if
-
-    ! The names, kept so recur can rebind them by position.
-    names = gcv_empty([vs_get(base + 1), vs_get(base + 3)])
-    call vs_set(base + 4, names)
-    do i = 0, n - 2, 2
-       names = gcv_conj(vs_get(base + 4), strip_meta(gcv_nth(vs_get(base + 3), i)), &
-            [vs_get(base + 1), vs_get(base + 3)])
-       call vs_set(base + 4, names)
-    end do
-
-    ! Initial bindings, sequential like let*.
-    child = gce_new(vs_get(base + 2), [vs_get(base + 1), vs_get(base + 4)])
-    call vs_set(base + 5, child)
-    do i = 0, n - 2, 2
-       v = gce_eval(gcv_nth(vs_get(base + 3), i + 1), vs_get(base + 5), &
-            [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)])
-       if (has_error) then
-          call vs_leave(base); return
-       end if
-       call gce_set(vs_get(base + 5), gcv_nth(vs_get(base + 3), i), v, &
-            [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)])
-    end do
-
-    body = gcl_rest(vs_get(base + 1), [vs_get(base + 1)])
-    call vs_set(base + 6, body)
-
-    do
-       out = eval_body(vs_get(base + 6), vs_get(base + 5))
-       if (has_error) exit
-       if (gc_kind(out) /= OBJ_RECUR) exit
-       child = rebind(vs_get(base + 4), gc_slot(out, 1), vs_get(base + 2))
-       if (has_error) exit
-       call vs_set(base + 5, child)
-    end do
-    call vs_leave(base)
-  end function eval_loop
 
   ! (recur a b) evaluates its arguments and hands back a marker. The
   ! nearest loop* or fn* catches it; anywhere else it simply escapes,
   ! which is a recur outside a recur point and would be a compile
   ! error in real Clojure. Left as a value here rather than diagnosed,
   ! since this evaluator has no compile pass to diagnose it in.
-  recursive function eval_recur(rest, env) result(out)
-    type(gc_value), intent(in) :: rest, env
-    type(gc_value) :: out, args, item, walk
-    integer :: base
 
-    base = vs_enter(4)
-    call vs_set(base + 1, rest)
-    call vs_set(base + 2, env)
-    args = gcv_empty([vs_get(base + 1)])
-    call vs_set(base + 3, args)
-    walk = vs_get(base + 1)
-    call vs_set(base + 4, walk)
-    do while (gcl_count(vs_get(base + 4)) > 0)
-       item = gce_eval(gcl_first(vs_get(base + 4)), vs_get(base + 2), &
-            [vs_get(base + 1), vs_get(base + 3)])
-       if (has_error) then
-          call vs_leave(base); return
-       end if
-       args = gcv_conj(vs_get(base + 3), item, [vs_get(base + 1), vs_get(base + 4)])
-       call vs_set(base + 3, args)
-       walk = gcl_rest(vs_get(base + 4), [vs_get(base + 1)])
-       call vs_set(base + 4, walk)
-    end do
-    out = gc_obj(OBJ_RECUR, [vs_get(base + 3)], [vs_get(base + 1)])
-    call vs_leave(base)
-  end function eval_recur
 
   ! Binds a parameter vector to arguments in a fresh frame, handling
   ! `&`: (fn* [a & more] ...) binds `more` to a LIST of whatever is
@@ -2245,148 +1400,13 @@ contains
   ! hand ks a nil; re-collecting turns that nil into (nil), which is
   ! truthy, and (if ks ...) then never ends. core.clj's own disj is
   ! written exactly that way.
-  function bind_params(params, args, outer, recur_mode) result(child)
-    type(gc_value), intent(in) :: params, args, outer
-    logical, intent(in), optional :: recur_mode
-    type(gc_value) :: child, rest, name
-    logical :: rec
-    integer :: base, i, n, amp
 
-    rec = .false.
-    if (present(recur_mode)) rec = recur_mode
-
-    base = vs_enter(5)
-    call vs_set(base + 1, params)
-    call vs_set(base + 2, args)
-    call vs_set(base + 3, outer)
-
-    n = gcv_count(params)
-    amp = -1
-    do i = 0, n - 1
-       name = strip_meta(gcv_nth(params, i))
-       if (name%tag == GCT_SYM) then
-          if (gc_ref_is(name%ref, "&")) then
-             amp = i
-             exit
-          end if
-       end if
-    end do
-
-    if (amp < 0) then
-       if (n /= gcv_count(args)) then
-          call raise_arity(gcv_count(args), gc_nil(), [vs_get(base + 1)])
-          child = gc_nil()
-          call vs_leave(base); return
-       end if
-    else if (rec) then
-       if (gcv_count(args) /= amp + 1) then
-          call fail("wrong number of arguments to recur")
-          child = gc_nil()
-          call vs_leave(base); return
-       end if
-    else if (gcv_count(args) < amp) then
-       call fail("too few arguments")
-       child = gc_nil()
-       call vs_leave(base); return
-    else if (amp + 2 /= n) then
-       call fail("& must be followed by exactly one name")
-       child = gc_nil()
-       call vs_leave(base); return
-    end if
-
-    child = gce_new(vs_get(base + 3), [vs_get(base + 1), vs_get(base + 2)])
-    call vs_set(base + 4, child)
-
-    if (amp < 0) then
-       do i = 0, n - 1
-          call gce_set(vs_get(base + 4), strip_meta(gcv_nth(vs_get(base + 1), i)), &
-               gcv_nth(vs_get(base + 2), i), [vs_get(base + 1), vs_get(base + 2)])
-       end do
-    else if (rec) then
-       do i = 0, amp - 1
-          call gce_set(vs_get(base + 4), strip_meta(gcv_nth(vs_get(base + 1), i)), &
-               gcv_nth(vs_get(base + 2), i), [vs_get(base + 1), vs_get(base + 2)])
-       end do
-       call gce_set(vs_get(base + 4), strip_meta(gcv_nth(vs_get(base + 1), amp + 1)), &
-            gcv_nth(vs_get(base + 2), amp), [vs_get(base + 1), vs_get(base + 2)])
-    else
-       do i = 0, amp - 1
-          call gce_set(vs_get(base + 4), strip_meta(gcv_nth(vs_get(base + 1), i)), &
-               gcv_nth(vs_get(base + 2), i), [vs_get(base + 1), vs_get(base + 2)])
-       end do
-       ! NIL when nothing is left, not the empty list. Clojure binds a
-       ! rest parameter to a seq or to nil, and core.clj tests it
-       ! directly: if-let asserts (nil? oldform) to reject a third form.
-       ! An empty list is truthy, so that assertion fired on every
-       ! correct call.
-       if (gcv_count(vs_get(base + 2)) <= amp) then
-          call gce_set(vs_get(base + 4), strip_meta(gcv_nth(vs_get(base + 1), amp + 1)), &
-               gc_nil(), [vs_get(base + 1), vs_get(base + 2)])
-          child = vs_get(base + 4)
-          call vs_leave(base)
-          return
-       end if
-       rest = gcl_empty([vs_get(base + 1), vs_get(base + 2), vs_get(base + 4)])
-       call vs_set(base + 5, rest)
-       do i = gcv_count(vs_get(base + 2)) - 1, amp, -1
-          rest = gcl_cons(gcv_nth(vs_get(base + 2), i), vs_get(base + 5), &
-               [vs_get(base + 1), vs_get(base + 2), vs_get(base + 4)])
-          call vs_set(base + 5, rest)
-       end do
-       call gce_set(vs_get(base + 4), strip_meta(gcv_nth(vs_get(base + 1), amp + 1)), &
-            vs_get(base + 5), [vs_get(base + 1), vs_get(base + 2)])
-    end if
-
-    child = vs_get(base + 4)
-    call vs_leave(base)
-  end function bind_params
 
   ! A fresh frame binding names(i) to vals(i), for a recur.
-  function rebind(names, vals, outer) result(child)
-    type(gc_value), intent(in) :: names, vals, outer
-    type(gc_value) :: child
-    integer :: base, i
 
-    base = vs_enter(4)
-    call vs_set(base + 1, names)
-    call vs_set(base + 2, vals)
-    call vs_set(base + 3, outer)
-    if (gcv_count(names) /= gcv_count(vals)) then
-       call fail("recur has the wrong number of arguments")
-       child = gc_nil()
-       call vs_leave(base); return
-    end if
-    child = gce_new(vs_get(base + 3), [vs_get(base + 1), vs_get(base + 2)])
-    call vs_set(base + 4, child)
-    do i = 0, gcv_count(names) - 1
-       call gce_set(vs_get(base + 4), gcv_nth(vs_get(base + 1), i), &
-            gcv_nth(vs_get(base + 2), i), [vs_get(base + 1), vs_get(base + 2)])
-    end do
-    child = vs_get(base + 4)
-    call vs_leave(base)
-  end function rebind
 
   ! Every form in a body, last value wins.
-  recursive function eval_body(body, env) result(out)
-    type(gc_value), intent(in) :: body, env
-    type(gc_value) :: out, walk
-    integer :: base
 
-    out = gc_nil()
-    base = vs_enter(3)
-    call vs_set(base + 1, body)
-    call vs_set(base + 2, env)
-    walk = body
-    call vs_set(base + 3, walk)
-    do while (gcl_count(vs_get(base + 3)) > 0)
-       out = gce_eval(gcl_first(vs_get(base + 3)), vs_get(base + 2), &
-            [vs_get(base + 1)])
-       if (has_error) exit
-       walk = gcl_rest(vs_get(base + 3), [vs_get(base + 1)])
-       call vs_set(base + 3, walk)
-    end do
-    call vs_leave(base)
-  end function eval_body
 
   ! Two shapes, the same two real Clojure has:
   !
@@ -2398,180 +1418,15 @@ contains
   ! Multi-arity keeps its clauses in slot 4 -- the slot GC.f90's
   ! OBJ_CLOSURE comment already reserved for them -- and leaves slot 1
   ! nil, so "is this multi-arity" is one test rather than a flag.
-  recursive function make_closure(rest, env) result(out)
-    type(gc_value), intent(in) :: rest, env
-    type(gc_value) :: out, params, body, head
-    type(gc_value) :: r(3)
-    integer :: base
 
-    base = vs_enter(4)
-    call vs_set(base + 1, rest)
-    call vs_set(base + 2, env)
-    head = gcl_first(rest)
-    ! core.clj hints both halves of a fn head: (fn ^:static seq
-    ! ^clojure.lang.ISeq [coll] ...) wraps the NAME and the PARAMETER
-    ! VECTOR. Either arriving wrapped makes it unrecognisable, so the
-    ! wrapper comes off before anything is decided about it.
-    head = strip_meta(head)
-
-    ! (fn* name [params] body) -- the optional SELF-NAME. core.clj
-    ! writes almost every primitive that way, and not just for the
-    ! stack trace: the name is bound inside the body so the function
-    ! can call itself without going through its Var.
-    !
-    ! The knot is tied after the fact: build the closure over env,
-    ! then give it a frame that binds the name to the closure itself
-    ! and point it at that. Nothing can observe the intermediate state.
-    if (head%tag == GCT_SYM) then
-       call vs_set(base + 4, head)
-       out = make_closure(gcl_rest(vs_get(base + 1), [vs_get(base + 1)]), &
-            vs_get(base + 2))
-       block
-         type(gc_value) :: frame
-         call vs_set(base + 3, out)
-         ! Over the env the recursive call BUILT, not the one passed in.
-         ! That call tagged the closure with its defining namespace;
-         ! building this frame over the original env and storing it back
-         ! threw the tag away -- and core.clj writes almost every
-         ! primitive with a self-name, so almost every primitive lost it.
-         ! (clojure.core/last [1 2 3]) then answered :shadow in a
-         ! namespace that had defined its own first.
-         frame = gce_new(gc_slot(vs_get(base + 3), 3), &
-              [vs_get(base + 3), vs_get(base + 4)])
-         call gce_set(frame, vs_get(base + 4), vs_get(base + 3), &
-              [vs_get(base + 3), vs_get(base + 4)])
-         call gc_set_slot(vs_get(base + 3), 3, frame)
-         out = vs_get(base + 3)
-       end block
-       call vs_leave(base)
-       return
-    end if
-
-    ! A closure REMEMBERS THE NAMESPACE IT WAS DEFINED IN, by way
-    ! of one extra frame binding a reserved name. Clojure resolves a
-    ! symbol at compile time against the namespace the form was
-    ! written in; resolving at call time against whatever namespace
-    ! happens to be current is DEVIATIONS.md 3, and it shows the
-    ! moment a function in one namespace calls a private helper in
-    ! its own -- clojure.core.protocols/seq-reduce, called from a
-    ! reduce running in clojure.core.
-    !
-    ! EVERY closure, clojure.core's included. Skipping core used to
-    ! look free -- everything falls back to core anyway -- but the
-    ! fallback is consulted LAST and the current namespace FIRST, so an
-    ! untagged core function resolved its own free symbols against
-    ! whatever namespace happened to be calling it. clojure.zip defines
-    ! its own next, and from that form on every defn in the file
-    ! expanded into core code that called the ZIPPER next. It hung.
-    block
-      type(gc_value) :: dns, inherited
-      logical :: has_dns
-      ! INHERITED if the enclosing env already carries one. Clojure
-      ! binds the namespace while COMPILING, so every nested fn in a
-      ! form belongs to the namespace that form was written in. Taking
-      ! *ns* afresh here instead meant an inner (fn ...) created while
-      ! a macro RAN was stamped with the caller's namespace, which
-      ! shadowed the writer's -- clojure.template/do-template calls
-      ! apply-template from inside exactly such a nested fn, and so
-      ! could not find it.
-      has_dns = .false.
-      if (gce_is(vs_get(base + 2))) then
-         if (gce_find(vs_get(base + 2), &
-              gc_sym("__defining-ns__", [vs_get(base + 2)]), inherited)) &
-              has_dns = (gc_kind(inherited) == OBJ_NS)
-      end if
-      dns = gcn_current([vs_get(base + 1), vs_get(base + 2)])
-      if (.not. has_dns) then
-        call vs_set(base + 4, dns)
-        call vs_set(base + 2, gce_new(vs_get(base + 2), &
-             [vs_get(base + 1), vs_get(base + 4)]))
-        call gce_set(vs_get(base + 2), &
-             gc_sym("__defining-ns__", [vs_get(base + 2)]), &
-             vs_get(base + 4), [vs_get(base + 1), vs_get(base + 4)])
-      end if
-    end block
-
-    if (gcl_is(head)) then
-       ! Multi-arity: `rest` is already the list of clauses.
-       r(1) = vs_get(base + 1); r(2) = vs_get(base + 2); r(3) = gc_nil()
-       out = gc_obj(OBJ_CLOSURE, &
-            [gc_nil(), gc_nil(), vs_get(base + 2), vs_get(base + 1)], r)
-    else
-       call vs_set(base + 3, head)
-       body = gcl_rest(vs_get(base + 1), [vs_get(base + 1)])
-       r(1) = vs_get(base + 1); r(2) = vs_get(base + 2); r(3) = vs_get(base + 3)
-       out = gc_obj(OBJ_CLOSURE, &
-            [vs_get(base + 3), body, vs_get(base + 2), gc_nil()], r)
-    end if
-    call vs_leave(base)
-  end function make_closure
 
   ! Picks the clause matching argc: an exact arity wins, otherwise the
   ! first variadic one that can take this many. Real Clojure resolves
   ! this at compile time; here it is a short linear scan, which is
   ! fine for the handful of clauses a fn ever has.
-  function select_clause(clauses, argc, params, body) result(found)
-    type(gc_value), intent(in) :: clauses
-    integer, intent(in) :: argc
-    type(gc_value), intent(out) :: params, body
-    logical :: found
-    type(gc_value) :: clause, p, name
-    integer :: base, i, n, j, amp
 
-    found = .false.
-    params = gc_nil()
-    body = gc_nil()
-    base = vs_enter(2)
-    call vs_set(base + 1, clauses)
-    n = gcl_count(clauses)
-    do i = 0, n - 1
-       clause = strip_meta(nth_of(vs_get(base + 1), i))
-       call vs_set(base + 2, clause)
-       p = strip_meta(gcl_first(clause))
-       if (.not. gcv_is(p)) cycle
-       amp = -1
-       do j = 0, gcv_count(p) - 1
-          name = strip_meta(gcv_nth(p, j))
-          if (name%tag == GCT_SYM) then
-             if (gc_ref_is(name%ref, "&")) then
-                amp = j
-                exit
-             end if
-          end if
-       end do
-       if (amp < 0) then
-          if (gcv_count(p) /= argc) cycle
-       else
-          if (argc < amp) cycle
-       end if
-       params = p
-       body = gcl_rest(vs_get(base + 2), [vs_get(base + 1)])
-       found = .true.
-       exit
-    end do
-    call vs_leave(base)
-  end function select_clause
 
-  recursive function eval_vector(form, env) result(out)
-    type(gc_value), intent(in) :: form, env
-    type(gc_value) :: out, item
-    integer :: base, i
 
-    base = vs_enter(3)
-    call vs_set(base + 1, form)
-    call vs_set(base + 2, env)
-    out = gcv_empty([vs_get(base + 1)])
-    call vs_set(base + 3, out)
-    do i = 0, gcv_count(vs_get(base + 1)) - 1
-       item = gce_eval(gcv_nth(vs_get(base + 1), i), vs_get(base + 2), &
-            [vs_get(base + 1), vs_get(base + 3)])
-       if (has_error) exit
-       out = gcv_conj(vs_get(base + 3), item, [vs_get(base + 1), vs_get(base + 2)])
-       call vs_set(base + 3, out)
-    end do
-    out = vs_get(base + 3)
-    call vs_leave(base)
-  end function eval_vector
 
   ! (. target member) and (. target (member args...)) -- host interop.
   !
@@ -3129,43 +1984,7 @@ contains
     is_member_sym = (t(1:1) == ".")
   end function is_member_sym
 
-  recursive function eval_member(form, env) result(out)
-    type(gc_value), intent(in) :: form, env
-    type(gc_value) :: out, head, rest, args
-    character(len=:), allocatable :: hname
-    integer :: base
 
-    out = gc_nil()
-    base = vs_enter(5)
-    call vs_set(base + 1, form)
-    call vs_set(base + 2, env)
-    head = gcl_first(vs_get(base + 1))
-    hname = gc_ref_text(head%ref)
-    rest = gcl_rest(vs_get(base + 1), [vs_get(base + 1)])
-    call vs_set(base + 3, rest)
-    if (gcl_count(vs_get(base + 3)) < 1) then
-       call fail("Malformed member expression, expecting (.member target ...)")
-       call vs_leave(base)
-       return
-    end if
-    ! (target member . rest) -- the shape eval_dot reads.
-    ! TWO ALLOCATIONS IN ONE ARGUMENT LIST is the hazard
-    ! CLAUDE.md names: Fortran fixes no evaluation order, so
-    ! whichever of these runs first is unrooted while the other
-    ! allocates, and a collection there drops it. This one cost
-    ! a day: (count (range 200000)) answered a number that was
-    ! simply wrong, because the argument list of the recursive
-    ! (Range/create __lo __hi __st) was collected and the call
-    ! arrived with no arguments at all. Each part goes on the
-    ! shadow stack before the next allocation runs.
-    call vs_set(base + 4, gc_sym(hname(2:), [vs_get(base + 3)]))
-    call vs_set(base + 5, gcl_rest(vs_get(base + 3), [vs_get(base + 3), vs_get(base + 4)]))
-    args = gcl_cons(vs_get(base + 4), vs_get(base + 5), &
-         [vs_get(base + 3), vs_get(base + 4), vs_get(base + 5)])
-    args = gcl_cons(gcl_first(vs_get(base + 3)), args, [vs_get(base + 3), args])
-    out = eval_dot(args, vs_get(base + 2))
-    call vs_leave(base)
-  end function eval_member
 
   ! apply fn to already-evaluated first argument plus evaluated rest.
   recursive function apply_forms_pre(fn, first_arg, all_forms, env) result(out)
@@ -3251,33 +2070,7 @@ contains
     is_ctor_sym = (t(1:1) /= ".")
   end function is_ctor_sym
 
-  recursive function eval_ctor(form, env) result(out)
-    type(gc_value), intent(in) :: form, env
-    type(gc_value) :: out, head, args
-    character(len=:), allocatable :: t
-    integer :: base
 
-    base = vs_enter(4)
-    call vs_set(base + 1, form)
-    call vs_set(base + 2, env)
-    head = gcl_first(vs_get(base + 1))
-    t = gc_ref_text(head%ref)
-    ! TWO ALLOCATIONS IN ONE ARGUMENT LIST is the hazard
-    ! CLAUDE.md names: Fortran fixes no evaluation order, so
-    ! whichever of these runs first is unrooted while the other
-    ! allocates, and a collection there drops it. This one cost
-    ! a day: (count (range 200000)) answered a number that was
-    ! simply wrong, because the argument list of the recursive
-    ! (Range/create __lo __hi __st) was collected and the call
-    ! arrived with no arguments at all. Each part goes on the
-    ! shadow stack before the next allocation runs.
-    call vs_set(base + 3, gc_sym(t(1:len(t)-1), [vs_get(base + 1)]))
-    call vs_set(base + 4, gcl_rest(vs_get(base + 1), [vs_get(base + 1), vs_get(base + 3)]))
-    args = gcl_cons(vs_get(base + 3), vs_get(base + 4), &
-         [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)])
-    out = eval_new(args, vs_get(base + 2))
-    call vs_leave(base)
-  end function eval_ctor
 
   logical function is_static_call(sym)
     type(gc_value), intent(in) :: sym
@@ -3293,48 +2086,7 @@ contains
     is_static_call = is_class_name(qual)
   end function is_static_call
 
-  recursive function eval_static(form, env) result(out)
-    type(gc_value), intent(in) :: form, env
-    type(gc_value) :: out, head, args
-    character(len=:), allocatable :: t
-    integer :: base, slash
 
-    out = gc_nil()
-    base = vs_enter(5)
-    call vs_set(base + 1, form)
-    call vs_set(base + 2, env)
-    head = gcl_first(vs_get(base + 1))
-    t = gc_ref_text(head%ref)
-    slash = index(t, "/")
-    ! (Class (member . args)) -- the PARENTHESISED shape, because
-    ! Class/member in head position is always a call, arguments or not.
-    ! (clojure.lang.Var/popThreadBindings) takes none, and handing
-    ! eval_dot the bare symbol made it read the member as a field and
-    ! return the function itself. binding then never restored anything.
-    ! TWO ALLOCATIONS IN ONE ARGUMENT LIST is the hazard
-    ! CLAUDE.md names: Fortran fixes no evaluation order, so
-    ! whichever of these runs first is unrooted while the other
-    ! allocates, and a collection there drops it. This one cost
-    ! a day: (count (range 200000)) answered a number that was
-    ! simply wrong, because the argument list of the recursive
-    ! (Range/create __lo __hi __st) was collected and the call
-    ! arrived with no arguments at all. Each part goes on the
-    ! shadow stack before the next allocation runs.
-    call vs_set(base + 4, gc_sym(t(slash+1:), [vs_get(base + 1)]))
-    call vs_set(base + 5, gcl_rest(vs_get(base + 1), [vs_get(base + 1), vs_get(base + 4)]))
-    args = gcl_cons(vs_get(base + 4), vs_get(base + 5), &
-         [vs_get(base + 1), vs_get(base + 4), vs_get(base + 5)])
-    call vs_set(base + 3, args)
-    call vs_set(base + 4, gcl_empty([vs_get(base + 3)]))
-    args = gcl_cons(vs_get(base + 3), vs_get(base + 4), &
-         [vs_get(base + 3), vs_get(base + 4)])
-    call vs_set(base + 3, args)
-    call vs_set(base + 4, gc_sym(t(1:slash-1), [vs_get(base + 3)]))
-    args = gcl_cons(vs_get(base + 4), vs_get(base + 3), &
-         [vs_get(base + 3), vs_get(base + 4)])
-    out = eval_dot(args, vs_get(base + 2))
-    call vs_leave(base)
-  end function eval_static
 
   ! (new Class args...). The one class core.clj constructs during the
   ! bootstrap is LazySeq, which `lazy-seq` expands into -- and a
@@ -3636,9 +2388,9 @@ contains
          ty = find_type(cname)
          if (gc_kind(ty) == OBJ_TYPE) then
             call vs_set(base + 3, ty)
-            out = construct_type(vs_get(base + 3), &
-                 gcl_rest(vs_get(base + 1), [vs_get(base + 1), vs_get(base + 3)]), &
-                 vs_get(base + 2))
+            call vs_set(base + 4, eval_forms_vec(gcl_rest(vs_get(base + 1), [vs_get(base + 1), vs_get(base + 3)]), &
+                 vs_get(base + 2)))
+            if (.not. has_error) out = construct_type_vals(vs_get(base + 3), vs_get(base + 4))
          else
             call fail("no such class: " // cname)
          end if
@@ -4384,7 +3136,6 @@ contains
     type(gc_value) :: var, md
     var = gc_nil()
     if (head%tag /= GCT_SYM) return
-    if (gce_find(env, head, md)) return
     var = resolve_var(head, env)
     if (.not. gcn_is_var(var)) then
        var = gc_nil()
@@ -4402,188 +3153,55 @@ contains
   ! via refer-clojure. This is that referral hard-wired, and it differs
   ! wherever refer is selective: (refer-clojure :exclude [map]) cannot
   ! be honoured by a rule that has no map of what was referred.
+  ! The Var a symbol names, in the namespace being analysed. Analysis
+  ! runs in the writing namespace, so "current" is the right one; the
+  ! executor never resolves a name (a deferred qualified symbol,
+  ! DEVIATIONS 32, is the one exception and it comes back here).
+  !
+  ! A qualified symbol names its namespace, through an alias if there
+  ! is one. An unqualified symbol not in the current namespace falls
+  ! back to clojure.core -- DEVIATIONS 3, standing in for refer.
   function resolve_var(sym, roots) result(var)
     type(gc_value), intent(in) :: sym, roots
-    type(gc_value) :: var, bare, dns, ans
+    type(gc_value) :: var, bare, ans
     character(len=:), allocatable :: t
     integer :: slash
 
-    ! The namespace the enclosing function was DEFINED in comes
-    ! FIRST. Clojure resolves a free symbol while compiling the form
-    ! that contains it, in the namespace being compiled -- the caller's
-    ! namespace never enters into it. Asking the current namespace
-    ! first meant a function's meaning depended on who called it, which
-    ! is the whole shadowing bug: see make_closure above.
-    !
-    ! With no enclosing closure -- a form typed at the REPL, or a
-    ! top-level form being loaded -- there is no defining namespace and
-    ! the current one is the right and only answer.
-    if (gce_is(roots)) then
-       if (gce_find(roots, gc_sym("__defining-ns__", [roots]), dns)) then
-          var = gcn_lookup(dns, sym)
-          if (gcn_is_var(var)) return
-       end if
-    end if
-
+    var = gc_nil()
+    if (sym%tag /= GCT_SYM) return
     var = gcn_lookup(gcn_current([roots]), sym)
     if (gcn_is_var(var)) return
 
-    ! A QUALIFIED symbol names its own namespace. Syntax-quote produces
-    ! these constantly -- every `when in core.clj reads as
-    ! clojure.core/when -- so this is not an edge case, it is most of
-    ! what a macro expands into.
-    if (sym%tag == GCT_SYM) then
-       t = gc_ref_text(sym%ref)
-       slash = index(t, "/")
-       if (slash > 1 .and. slash < len(t)) then
-          bare = gc_sym(t(slash+1:), [roots])
-          ! An ALIAS first. Without this the prefix was taken as a
-          ! namespace name, find-or-create made an empty one, and the
-          ! lookup could only miss -- which is every :as in every ns
-          ! form Clojure's own test suite writes.
-          ! In the DEFINING namespace first. Clojure resolves a
-          ! symbol while compiling the form, in the namespace being
-          ! compiled; clotran resolves at call time, when *ns* is
-          ! wherever the caller happens to be. A deftest body invoked
-          ! by run-tests is exactly that case -- the alias is real, it
-          ! is just not in the namespace doing the calling.
-          ans = gc_nil()
-          if (gce_is(roots)) then
-             if (gce_find(roots, gc_sym("__defining-ns__", [roots]), dns)) &
-                  ans = alias_in(dns, t(1:slash-1), [roots, bare])
-          end if
-          if (gc_kind(ans) /= OBJ_NS) &
-               ans = alias_target(t(1:slash-1), [roots, bare])
-          if (gc_kind(ans) == OBJ_NS) then
-             var = gcn_lookup(ans, bare)
-             if (gcn_is_var(var)) return
-          end if
-          var = gcn_lookup(gcn_find_or_create(t(1:slash-1), [roots, bare]), bare)
+    t = gc_ref_text(sym%ref)
+    slash = index(t, "/")
+    if (slash > 1 .and. slash < len(t)) then
+       bare = gc_sym(t(slash+1:), [roots])
+       ans = alias_target(t(1:slash-1), [roots, bare])
+       if (gc_kind(ans) == OBJ_NS) then
+          var = gcn_lookup(ans, bare)
           if (gcn_is_var(var)) return
-          var = gc_nil()
-          return
        end if
+       var = gcn_lookup(gcn_find_or_create(t(1:slash-1), [roots, bare]), bare)
+       if (.not. gcn_is_var(var)) var = gc_nil()
+       return
     end if
 
     var = gcn_lookup(gcn_find_or_create("clojure.core", [roots]), sym)
   end function resolve_var
 
-  ! A MAP LITERAL EVALUATES ITS ENTRIES, and a set literal its members.
-  ! {:k (+ 1 2)} is {:k 3}, not a map holding a form.
-  !
   ! Vectors already did this; maps and sets did not, and the cost was
   ! not cosmetic. #{'&} held the form (quote &) rather than the symbol,
   ! so destructure's (some #{'&} b) never found the rest marker and
   ! every (let [[a & b] ...]) produced a binding for b with nothing
   ! bound to it.
-  recursive function eval_map(form, env) result(out)
-    type(gc_value), intent(in) :: form, env
-    type(gc_value) :: out, k, v
-    type(gc_value), allocatable :: ks(:), vls(:)
-    integer :: base, i
 
-    base = vs_enter(3)
-    call vs_set(base + 1, form)
-    call vs_set(base + 2, env)
-    call gca_entries(form, ks, vls)
-    out = gca_empty([vs_get(base + 1), vs_get(base + 2)])
-    call vs_set(base + 3, out)
-    do i = 1, size(ks)
-       k = gce_eval(ks(i), vs_get(base + 2), [vs_get(base + 1), vs_get(base + 3)])
-       if (has_error) then
-          call vs_leave(base); return
-       end if
-       v = gce_eval(vls(i), vs_get(base + 2), [vs_get(base + 1), vs_get(base + 3), k])
-       if (has_error) then
-          call vs_leave(base); return
-       end if
-       out = gca_assoc(vs_get(base + 3), k, v, [vs_get(base + 1), vs_get(base + 3)])
-       call vs_set(base + 3, out)
-    end do
-    out = vs_get(base + 3)
-    call vs_leave(base)
-  end function eval_map
 
-  recursive function eval_set(form, env) result(out)
-    type(gc_value), intent(in) :: form, env
-    type(gc_value) :: out, item, mp
-    type(gc_value), allocatable :: ks(:), vls(:)
-    integer :: base, i
 
-    base = vs_enter(3)
-    call vs_set(base + 1, form)
-    call vs_set(base + 2, env)
-    call gca_entries(gc_slot(form, 1), ks, vls)
-    mp = gca_empty([vs_get(base + 1), vs_get(base + 2)])
-    call vs_set(base + 3, mp)
-    do i = 1, size(ks)
-       item = gce_eval(ks(i), vs_get(base + 2), [vs_get(base + 1), vs_get(base + 3)])
-       if (has_error) then
-          call vs_leave(base); return
-       end if
-       mp = gca_assoc(vs_get(base + 3), item, item, [vs_get(base + 1), vs_get(base + 3)])
-       call vs_set(base + 3, mp)
-    end do
-    out = gc_obj(OBJ_SET, [vs_get(base + 3)], [vs_get(base + 3)])
-    call vs_leave(base)
-  end function eval_set
 
   ! Evaluates the head and every argument, then applies. Arguments
   ! accumulate in a GC vector rather than a Fortran array for the same
   ! reason the reader does it: the collector cannot see a local array.
-  recursive function eval_call(form, env) result(out)
-    type(gc_value), intent(in) :: form, env
-    type(gc_value) :: out, fn, args, rest, item
-    integer :: base
 
-    out = gc_nil()
-    base = vs_enter(5)
-    call vs_set(base + 1, form)
-    call vs_set(base + 2, env)
-
-    ! A macro receives its arguments UNEVALUATED and its result is
-    ! evaluated in the caller's environment, so the question has to be
-    ! asked before anything is touched -- including the head itself.
-    !
-    ! Asked of the VAR, not of the function it holds, which is
-    ! Compiler.isMacro. Two consequences worth naming: a local shadows
-    ! a macro ("no local macros for now"), and (def foo when) binds a
-    ! plain function, because the new Var carries no :macro.
-    fn = macro_var(gcl_first(form), env)
-    if (gcn_is_var(fn)) then
-       call vs_set(base + 3, gcn_var_value(fn))
-       out = expand_macro(vs_get(base + 3), vs_get(base + 1), vs_get(base + 2))
-       if (.not. has_error) out = gce_eval(out, vs_get(base + 2), [vs_get(base + 1)])
-       call vs_leave(base)
-       return
-    end if
-
-    fn = gce_eval(gcl_first(form), env, [vs_get(base + 1)])
-    if (has_error) then
-       call vs_leave(base); return
-    end if
-    call vs_set(base + 3, fn)
-
-    args = gcv_empty([vs_get(base + 1), vs_get(base + 3)])
-    call vs_set(base + 4, args)
-    rest = gcl_rest(vs_get(base + 1), [vs_get(base + 1)])
-    call vs_set(base + 5, rest)
-    do while (gcl_count(vs_get(base + 5)) > 0)
-       item = gce_eval(gcl_first(vs_get(base + 5)), vs_get(base + 2), &
-            [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)])
-       if (has_error) then
-          call vs_leave(base); return
-       end if
-       args = gcv_conj(vs_get(base + 4), item, &
-            [vs_get(base + 1), vs_get(base + 3), vs_get(base + 5)])
-       call vs_set(base + 4, args)
-       rest = gcl_rest(vs_get(base + 5), [vs_get(base + 1)])
-       call vs_set(base + 5, rest)
-    end do
-
-    out = apply(vs_get(base + 3), vs_get(base + 4))
-    call vs_leave(base)
-  end function eval_call
 
   ! (try* body (catch* e handler)). The catch clause is optional; with
   ! none, an error simply propagates.
@@ -4600,82 +3218,7 @@ contains
   ! The real shape, not the two-form try*/catch* this used to be:
   ! several body forms, several catch clauses each naming a class to
   ! match, and an optional finally that runs either way.
-  recursive function eval_try(rest, env) result(out)
-    type(gc_value), intent(in) :: rest, env
-    type(gc_value) :: out, item, head2, exc, child, fin
-    logical :: caught
-    integer :: base, i, n
 
-    out = gc_nil()
-    base = vs_enter(7)
-    call vs_set(base + 1, rest)
-    call vs_set(base + 2, env)
-    n = gcl_count(rest)
-    fin = gc_nil()
-
-    ! Body first: everything up to the first catch or finally.
-    do i = 0, n - 1
-       item = nth_of(vs_get(base + 1), i)
-       if (is_clause(item, "catch") .or. is_clause(item, "finally")) exit
-       call vs_set(base + 3, item)
-       out = gce_eval(vs_get(base + 3), vs_get(base + 2), [vs_get(base + 1)])
-       if (has_error) exit
-    end do
-
-    if (has_error) then
-       ! Capture the thrown value BEFORE clearing: clearing resets it.
-       exc = thrown_value()
-       if (exc%tag == GCT_NIL) exc = error_value(gce_error(), [vs_get(base + 1)])
-       call vs_set(base + 5, exc)
-       caught = .false.
-       do i = 0, n - 1
-          item = nth_of(vs_get(base + 1), i)
-          if (.not. is_clause(item, "catch")) cycle
-          if (gcl_count(item) < 3) cycle
-          call vs_set(base + 4, item)
-          if (.not. catch_matches(nth_of(vs_get(base + 4), 1), vs_get(base + 5), &
-               vs_get(base + 2))) cycle
-          call gce_clear_error()
-          child = gce_new(vs_get(base + 2), &
-               [vs_get(base + 1), vs_get(base + 4), vs_get(base + 5)])
-          call vs_set(base + 6, child)
-          call gce_set(vs_get(base + 6), strip_meta(nth_of(vs_get(base + 4), 2)), &
-               vs_get(base + 5), [vs_get(base + 1), vs_get(base + 4)])
-          out = eval_body(gcl_rest(gcl_rest(gcl_rest(vs_get(base + 4), &
-               [vs_get(base + 1)]), [vs_get(base + 1)]), [vs_get(base + 1)]), &
-               vs_get(base + 6))
-          caught = .true.
-          exit
-       end do
-    end if
-
-    ! finally runs whether or not anything was caught, and its value is
-    ! discarded -- but an error inside it wins.
-    do i = 0, n - 1
-       item = nth_of(vs_get(base + 1), i)
-       if (.not. is_clause(item, "finally")) cycle
-       call vs_set(base + 7, item)
-       block
-         logical :: had
-         type(gc_value) :: saved_exc
-         character(len=:), allocatable :: saved_msg
-         had = has_error
-         saved_msg = last_error
-         saved_exc = thrown_value()
-         call gce_clear_error()
-         fin = eval_body(gcl_rest(vs_get(base + 7), [vs_get(base + 1)]), &
-              vs_get(base + 2))
-         if (.not. has_error .and. had) then
-            has_error = .true.
-            last_error = saved_msg
-            call set_thrown(saved_exc)
-         end if
-       end block
-       exit
-    end do
-
-    call vs_leave(base)
-  end function eval_try
 
   ! (case* expr shift mask default map<case-int [test then]> table-type
   !  test-type skip-check?)
@@ -4686,77 +3229,7 @@ contains
   ! runtime value -- so clojure.lang.Util/hash MUST be gc_hash, because
   ! these keys were built with it at macroexpansion time. Constant time
   ! either way; only the constant differs.
-  recursive function eval_case(rest, env) result(out)
-    type(gc_value), intent(in) :: rest, env
-    type(gc_value) :: out, val, entry, tt
-    integer :: base, shift, mask, h, n
-    logical :: hit
 
-    out = gc_nil()
-    base = vs_enter(5)
-    call vs_set(base + 1, rest)
-    call vs_set(base + 2, env)
-    n = gcl_count(rest)
-
-    val = gce_eval(nth_of(vs_get(base + 1), 0), vs_get(base + 2), &
-         [vs_get(base + 1)])
-    if (has_error) then
-       call vs_leave(base); return
-    end if
-    call vs_set(base + 3, val)
-
-    shift = ival_of(nth_of(vs_get(base + 1), 1))
-    mask = ival_of(nth_of(vs_get(base + 1), 2))
-    call vs_set(base + 4, strip_meta(nth_of(vs_get(base + 1), 4)))
-
-    ! :int keys on the integer itself; the two hash modes on gc_hash.
-    tt = strip_meta(nth_of(vs_get(base + 1), 6))
-    if (tt%tag == GCT_KEY .and. gc_ref_is(tt%ref, "int")) then
-       h = ival_of(vs_get(base + 3))
-    else
-       h = gc_hash(vs_get(base + 3))
-    end if
-    ! A zero mask means the map was keyed on the raw hash, unshifted --
-    ! prep-hashes only shifts when it had to squeeze the ints together.
-    !
-    ! SHIFTA, not ISHFT. core.clj builds these keys with
-    ! (-> x (bit-shift-right shift) (bit-and mask)), and
-    ! bit-shift-right is ARITHMETIC -- it propagates the sign.
-    ! Fortran's ishft fills with zeros, so a NEGATIVE hash landed
-    ! in a different bucket at runtime than the one the macro put
-    ! it in. Roughly half of all hashes are negative, and a case
-    ! small enough not to need a shift hid it entirely: the bug
-    ! only appeared once a case had enough clauses to be squeezed.
-    if (mask /= 0) h = iand(shifta(h, shift), mask)
-
-    entry = gca_get(vs_get(base + 4), gc_int(h))
-    call vs_set(base + 5, strip_meta(entry))
-
-    hit = .false.
-    if (gc_kind(vs_get(base + 5)) == OBJ_VECTOR) then
-       if (gcv_count(vs_get(base + 5)) == 2) then
-          ! A case-int in skip-check holds a condp that re-tests for
-          ! itself. It is there BECAUSE two constants hashed alike, so
-          ! comparing against the stored test would ask the wrong
-          ! question -- the stored test is the hash, not a constant.
-          if (n >= 8 .and. in_skip(nth_of(vs_get(base + 1), 7), h)) then
-             hit = .true.
-          else
-             hit = deep_equal(vs_get(base + 3), gcv_nth(vs_get(base + 5), 0), &
-                  [vs_get(base + 3), vs_get(base + 5)])
-          end if
-       end if
-    end if
-
-    if (hit) then
-       out = gce_eval(gcv_nth(vs_get(base + 5), 1), vs_get(base + 2), &
-            [vs_get(base + 1)])
-    else
-       out = gce_eval(nth_of(vs_get(base + 1), 3), vs_get(base + 2), &
-            [vs_get(base + 1)])
-    end if
-    call vs_leave(base)
-  end function eval_case
 
   ! Whether a case-int is in case*'s skip-check set.
   logical function in_skip(s, h)
@@ -5324,17 +3797,6 @@ contains
     call vs_leave(base)
   end function auto_gensym
 
-  ! `temp/do-template -- syntax-quote RESOLVES an alias, so what the
-  ! expansion carries is clojure.template/do-template and the reader of
-  ! that expansion needs to know nothing about temp. Compiler's
-  ! resolveSymbol does it while READING; clotran expands at eval time,
-  ! so the namespace to ask is the one the quote was WRITTEN in -- which
-  ! the closure carries as __defining-ns__ -- and NOT *ns*, which by
-  ! then is whoever called the macro.
-  !
-  ! clojure.test's `are` is the case that forced this: it aliases
-  ! clojure.template as temp, and every (are ...) in Clojure's own test
-  ! suite expands through it.
   ! Compiler.resolveSymbol, as syntaxQuote calls it: an unqualified
   ! symbol in a template becomes ns/name -- the Var's own namespace if
   ! it resolves to one, the WRITING namespace otherwise -- unless it is
@@ -5474,50 +3936,9 @@ contains
   end function qq_rebuild
 
   ! Each clause of a multi-arity fn, body expanded, params untouched.
-  recursive function expand_clauses(clauses, env) result(out)
-    type(gc_value), intent(in) :: clauses, env
-    type(gc_value) :: out, walk, clause, built
-    integer :: base, i, n
 
-    base = vs_enter(4)
-    call vs_set(base + 1, clauses)
-    call vs_set(base + 2, env)
-    n = gcl_count(clauses)
-    out = gcl_empty([vs_get(base + 1)])
-    call vs_set(base + 3, out)
-    do i = n - 1, 0, -1
-       clause = nth_of(vs_get(base + 1), i)
-       call vs_set(base + 4, clause)
-       built = gcl_cons(gcl_first(vs_get(base + 4)), &
-            expand_forms(gcl_rest(vs_get(base + 4), [vs_get(base + 1)]), &
-                         vs_get(base + 2)), &
-            [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)])
-       out = gcl_cons(built, vs_get(base + 3), [vs_get(base + 1), built])
-       call vs_set(base + 3, out)
-    end do
-    out = vs_get(base + 3)
-    call vs_leave(base)
-  end function expand_clauses
 
-  recursive function expand_forms(forms, env) result(out)
-    type(gc_value), intent(in) :: forms, env
-    type(gc_value) :: out, item
-    integer :: base, i, n
 
-    base = vs_enter(3)
-    call vs_set(base + 1, forms)
-    call vs_set(base + 2, env)
-    n = gcl_count(forms)
-    out = gcl_empty([vs_get(base + 1)])
-    call vs_set(base + 3, out)
-    do i = n - 1, 0, -1
-       item = macroexpand_all(nth_of(vs_get(base + 1), i), vs_get(base + 2))
-       out = gcl_cons(item, vs_get(base + 3), [vs_get(base + 1), item])
-       call vs_set(base + 3, out)
-    end do
-    out = vs_get(base + 3)
-    call vs_leave(base)
-  end function expand_forms
 
   ! Compiler.macroexpand, then the same walk over the subforms.
   !
@@ -5564,11 +3985,7 @@ contains
   ! function bodies escaped analysis and were re-expanded at call time.
   ! Both are fixed. Genuine runaway expansion now surfaces as the
   ! evaluation depth limit, which is where the JVM would report it too.
-  recursive function macroexpand_all(form, env) result(out)
-    type(gc_value), intent(in) :: form, env
-    type(gc_value) :: out
-    out = mx_walk(form, env)
-  end function macroexpand_all
+
 
   subroutine read_trace_macros()
     character(len=8) :: buf
@@ -5605,169 +4022,7 @@ contains
     if (h%tag == GCT_SYM) s = gc_ref_text(h%ref)
   end function first_form_name
 
-  recursive function mx_walk(form, env) result(out)
-    type(gc_value), intent(in) :: form, env
-    type(gc_value) :: out, head, mvar, expanded, item
-    integer :: base, i, n
 
-    out = form
-    base = vs_enter(4)
-    call vs_set(base + 1, form)
-    call vs_set(base + 2, env)
-
-    if (gc_kind(vs_get(base + 1)) == OBJ_LAZY .or. &
-         gc_kind(vs_get(base + 1)) == OBJ_SEQ) then
-       ! A SEQ IS CODE, same as a list. A macro assembles its expansion
-       ! with cons, list* and concat, so pieces of it come back as lazy
-       ! cells and views rather than cons chains -- lazy-seq itself
-       ! expands through (list* ^{:once true} fn* [] body), and treating
-       ! that as a leaf meant the body of every lazy-seq in core.clj
-       ! escaped analysis and kept its macros for call time.
-       call vs_set(base + 1, seq_to_list(vs_get(base + 1), &
-            [vs_get(base + 1), vs_get(base + 2)]))
-    end if
-
-    if (gc_kind(vs_get(base + 1)) == OBJ_META) then
-       ! METADATA IS TRANSPARENT TO THE WALK, and this one mattered more
-       ! than any other place: defn returns its expansion wrapped --
-       ! (with-meta (cons `fn fdecl) {:rettag ...}) -- so treating the
-       ! wrapper as a leaf meant EVERY function body escaped analysis
-       ! and kept its macros to be re-expanded at call time.
-       out = gc_obj(OBJ_META, &
-            [macroexpand_all(gc_slot(vs_get(base + 1), 1), vs_get(base + 2)), &
-             gc_slot(vs_get(base + 1), 2)], &
-            [vs_get(base + 1), vs_get(base + 2)])
-       call vs_leave(base)
-       return
-    end if
-
-    if (gcv_is(vs_get(base + 1))) then
-       ! A vector holds forms too -- (let [x (when a b)] ...).
-       out = gcv_empty([vs_get(base + 1), vs_get(base + 2)])
-       call vs_set(base + 3, out)
-       do i = 0, gcv_count(vs_get(base + 1)) - 1
-          item = macroexpand_all(gcv_nth(vs_get(base + 1), i), vs_get(base + 2))
-          out = gcv_conj(vs_get(base + 3), item, [vs_get(base + 1), vs_get(base + 2)])
-          call vs_set(base + 3, out)
-       end do
-       out = vs_get(base + 3)
-       call vs_leave(base)
-       return
-    end if
-
-    ! A MAP OR SET LITERAL HOLDS CODE TOO, and this mattered more than
-    ! it looks: `extend` takes its method bodies as a MAP of fns,
-    ! {:internal-reduce (fn [s f val] (loop ... (if-let ...)))}, so
-    ! every protocol method installed by extend-type/extend-protocol
-    ! escaped analysis here and re-expanded its macros on EVERY CALL.
-    ! (reduce + (range 300)) expanded `let` 900 times and `if-let` 300
-    ! times at run time, and 87% of a reduce was spent in expand_macro.
-    if (gca_is(vs_get(base + 1)) .or. gc_kind(vs_get(base + 1)) == OBJ_SET) then
-       block
-         type(gc_value), allocatable :: ks(:), vls(:)
-         type(gc_value) :: k, v, mp
-         logical :: is_set
-         is_set = (gc_kind(vs_get(base + 1)) == OBJ_SET)
-         if (is_set) then
-            call gca_entries(gc_slot(vs_get(base + 1), 1), ks, vls)
-         else
-            call gca_entries(vs_get(base + 1), ks, vls)
-         end if
-         mp = gca_empty([vs_get(base + 1), vs_get(base + 2)])
-         call vs_set(base + 3, mp)
-         do i = 1, size(ks)
-            k = macroexpand_all(ks(i), vs_get(base + 2))
-            call vs_set(base + 4, k)
-            if (is_set) then
-               v = vs_get(base + 4)
-            else
-               v = macroexpand_all(vls(i), vs_get(base + 2))
-            end if
-            mp = gca_assoc(vs_get(base + 3), vs_get(base + 4), v, &
-                 [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 4)])
-            call vs_set(base + 3, mp)
-         end do
-         if (is_set) then
-            out = gc_obj(OBJ_SET, [vs_get(base + 3)], [vs_get(base + 3)])
-         else
-            out = vs_get(base + 3)
-         end if
-       end block
-       call vs_leave(base)
-       return
-    end if
-
-    if (.not. gcl_is(vs_get(base + 1))) then
-       call vs_leave(base)
-       return
-    end if
-    if (gcl_count(vs_get(base + 1)) == 0) then
-       call vs_leave(base)
-       return
-    end if
-
-    head = strip_meta(gcl_first(vs_get(base + 1)))
-    ! quote and quasiquote hold DATA, not code, so the walk stops at
-    ! both. Descending into a template expanded the `let` inside
-    ! (`(let [v# ...] ...)) at definition time, before qq_expand had
-    ! renamed v# -- which left a bare v# in the emitted code.
-    !
-    ! Clojure never has to make this distinction: syntax-quote is a
-    ! READER macro there, so by the time analyze sees the form the
-    ! template is already (seq (concat ...)) over quoted data. Ours is
-    ! a special form, which is DEVIATIONS.md 6.
-    if (head%tag == GCT_SYM) then
-       if (gc_ref_is(head%ref, "quote") .or. &
-            gc_ref_is(head%ref, "quasiquote")) then
-          call vs_leave(base)
-          return
-       end if
-    end if
-
-    ! Expand this form for as long as it names a macro.
-    do
-       mvar = macro_var(head, vs_get(base + 2))
-       if (.not. gcn_is_var(mvar)) exit
-       expanded = expand_macro(gcn_var_value(mvar), vs_get(base + 1), vs_get(base + 2))
-       ! An expansion failure is a COMPILE ERROR, and it propagates.
-       ! Swallowing it left the form unexpanded and handed it to the
-       ! evaluator, which expanded it again at call time -- against
-       ! whatever the macro had become by then. That is precisely the
-       ! re-expansion this pass exists to prevent.
-       if (has_error) exit
-       ! A macro can return anything, including a seq that is not a
-       ! list; the rest of this walk needs a list.
-       if (gc_kind(expanded) == OBJ_LAZY .or. gc_kind(expanded) == OBJ_SEQ) &
-            expanded = seq_to_list(expanded, [vs_get(base + 1), vs_get(base + 2)])
-       call vs_set(base + 1, expanded)
-       if (.not. gcl_is(vs_get(base + 1))) then
-          out = macroexpand_all(vs_get(base + 1), vs_get(base + 2))
-          call vs_leave(base)
-          return
-       end if
-       if (gcl_count(vs_get(base + 1)) == 0) exit
-       head = strip_meta(gcl_first(vs_get(base + 1)))
-       if (head%tag == GCT_SYM) then
-          if (gc_ref_is(head%ref, "quote") .or. &
-               gc_ref_is(head%ref, "quasiquote")) then
-             out = vs_get(base + 1)
-             call vs_leave(base)
-             return
-          end if
-       end if
-    end do
-
-    n = gcl_count(vs_get(base + 1))
-    out = gcl_empty([vs_get(base + 1)])
-    call vs_set(base + 3, out)
-    do i = n - 1, 0, -1
-       item = macroexpand_all(nth_of(vs_get(base + 1), i), vs_get(base + 2))
-       out = gcl_cons(item, vs_get(base + 3), [vs_get(base + 1), item])
-       call vs_set(base + 3, out)
-    end do
-    out = vs_get(base + 3)
-    call vs_leave(base)
-  end function mx_walk
 
   ! Compiler.macroexpand1 -- ONE step, and no walk into subforms.
   ! core.clj's macroexpand-1 is this and nothing else; macroexpand is
@@ -6810,38 +5065,7 @@ contains
     case (OBJ_BUILTIN)
        out = call_builtin(gc_i1(fn), args)
     case (OBJ_CLOSURE)
-       if (is_node_closure(fn)) then
-          out = invoke_closure(vs_get(base + 1), vs_get(base + 2))
-          call vs_leave(base)
-          return
-       end if
-       params = gc_slot(fn, 1)
-       body = gc_slot(fn, 2)
-       if (gcl_is(gc_slot(fn, 4))) then
-          if (.not. select_clause(gc_slot(fn, 4), gcv_count(args), params, body)) then
-             call raise_arity(gcv_count(args), vs_get(base + 1), &
-                  [vs_get(base + 1), vs_get(base + 2)])
-             call vs_leave(base); return
-          end if
-       end if
-       call vs_set(base + 4, body)
-       child = bind_params(params, args, gc_slot(fn, 3))
-       if (has_error) then
-          call vs_leave(base); return
-       end if
-       call vs_set(base + 3, child)
-       ! A fn* body is a recur point, exactly like loop*: recur rebinds
-       ! the parameters and re-enters the body rather than growing the
-       ! stack, which is what makes a self-recursive function with
-       ! recur run in constant space.
-       do
-          out = eval_body(vs_get(base + 4), vs_get(base + 3))
-          if (has_error) exit
-          if (gc_kind(out) /= OBJ_RECUR) exit
-          child = bind_params(params, gc_slot(out, 1), gc_slot(vs_get(base + 1), 3), .true.)
-          if (has_error) exit
-          call vs_set(base + 3, child)
-       end do
+       out = invoke_closure(vs_get(base + 1), vs_get(base + 2))
     case (OBJ_MULTIFN)
        ! getFn(dispatchFn.invoke(args)).invoke(args) -- MultiFn.invoke,
        ! exactly. The dispatch function sees the same arguments the
@@ -9828,37 +8052,9 @@ contains
 
   ! Realises a whole lazy seq to count it. Does not terminate on an
   ! infinite one, which is correct: (count (range)) does not either.
-  function lazy_len(v) result(n)
-    type(gc_value), intent(in) :: v
-    type(gc_value) :: p
-    integer :: base, n
-    n = 0
-    base = vs_enter(1)
-    p = v
-    call vs_set(base + 1, p)
-    do
-       if (gc_kind(vs_get(base + 1)) == OBJ_LAZY) then
-          call gce_force(vs_get(base + 1))
-          if (gc_i1(vs_get(base + 1)) /= LAZY_CONS) exit
-          n = n + 1
-          call vs_set(base + 1, gc_slot(vs_get(base + 1), 3))
-       else if (gcl_is(vs_get(base + 1))) then
-          n = n + gcl_count(vs_get(base + 1))
-          exit
-       else
-          exit
-       end if
-    end do
-    call vs_leave(base)
-  end function lazy_len
 
-  function nth_sym_ref(l) result(r)
-    type(gc_value), intent(in) :: l
-    type(gc_value) :: x
-    integer :: r
-    x = gcl_first(l)
-    r = x%ref
-  end function nth_sym_ref
+
+
 
   ! Structural equality, which is what `=` means in Clojure: two
   ! vectors of equal elements ARE equal, however they were built.
@@ -11947,6 +10143,30 @@ contains
     sl = index(s, "/")
     if (sl > 1 .and. sl < len(s)) s = s(sl+1:)
   end function bare_name
+
+  ! Each form evaluated, in order, into a vector of values. For the two
+  ! bridges (eval_dot, eval_new), whose forms are (quote v).
+  recursive function eval_forms_vec(forms, env) result(out)
+    type(gc_value), intent(in) :: forms, env
+    type(gc_value) :: out, walk, item
+    integer :: base
+    base = vs_enter(3)
+    call vs_set(base + 1, forms)
+    out = gcv_empty([vs_get(base + 1)])
+    call vs_set(base + 2, out)
+    walk = forms
+    call vs_set(base + 3, walk)
+    do while (gcl_count(vs_get(base + 3)) > 0)
+       item = gce_eval(gcl_first(vs_get(base + 3)), env, [vs_get(base + 1)])
+       if (has_error) exit
+       out = gcv_conj(vs_get(base + 2), item, [vs_get(base + 1), vs_get(base + 3)])
+       call vs_set(base + 2, out)
+       walk = gcl_rest(vs_get(base + 3), [vs_get(base + 1)])
+       call vs_set(base + 3, walk)
+    end do
+    out = vs_get(base + 2)
+    call vs_leave(base)
+  end function eval_forms_vec
 
   include "analyze.inc"
   include "exec.inc"
