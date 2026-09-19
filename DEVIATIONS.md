@@ -20,7 +20,7 @@ Categories:
 
 | # | What | Kind | Where |
 |---|------|------|-------|
-| 1 | Load reads the whole file, then evaluates | temporary | `src/f/main.f90` |
+| 1 | RESOLVED -- load reads one form, evaluates it, reads the next | -- | `src/f/main.f90` |
 | 2 | `host.clj` preloaded before `core.clj` | temporary | `src/clj/host.clj` |
 | 3 | Symbols fall back to `clojure.core` instead of being referred | temporary | `src/f/Eval.f90` |
 | 4 | `.` reaches a fixed table of host members, not arbitrary classes | host | `src/f/Eval.f90` |
@@ -59,6 +59,13 @@ depends on state that evaluation sets -- `::kw` resolves against `*ns*`,
 **Removal**: make the reader streaming over a cursor so a form can be read,
 evaluated, and the next read begun. `gcr_read_all` already walks a cursor
 internally; it needs to be exposed one form at a time.
+
+**RESOLVED 2026-09-19.** `gcr_read_next` reads one form from a
+position and advances it; `load_file` in main.f90 and the `load-file`
+builtin read, analyse, evaluate and read again, as `Compiler.load`
+does. The same change gave list forms a source position (the opening
+paren's offset, on the cons cell), which the analyser copies to its
+node and an error reports as `file:line:col`.
 
 ## 2. `host.clj` is loaded before `core.clj`
 

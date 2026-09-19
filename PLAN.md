@@ -226,9 +226,11 @@ Staged so each step is checkable:
 1. DONE -- analyser resolves and classifies; the executor consumes
    nodes over frames. The old walker is deleted: `gce_eval` is now
    "analyse if it is a form, then execute", and Eval.f90 lost 1,700
-   lines. Still to do in this stage: port `eval_dot`/`eval_new` to take
-   values so the `(quote v)` bridge goes, and read one form at a time
-   (DEVIATIONS 1).
+   lines. Load reads one form at a time (DEVIATIONS 1 resolved), and
+   list forms carry a source position that the analyser puts on the
+   node and an error reports as `file:line:col` -- the first half of
+   what the debugger needs. Still to do in this stage: port
+   `eval_dot`/`eval_new` to take values so the `(quote v)` bridge goes.
 2. intermediates move to the operand stack; `roots(:)` leaves every
    signature; module globals move into a context type; source
    positions on nodes.

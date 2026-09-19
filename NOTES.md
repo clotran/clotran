@@ -2274,3 +2274,25 @@ transpose flags, in-place accumulation (beta), and anything a generated
 binding would need to read from an `interface` block. One routine by
 hand first; PLAN.md step 7 is the generator, and ChemSol is what it is
 for.
+
+## Source positions, second time: on the list cell, read by the analyser
+
+The pre-GC evaluator recorded line, column and file on every list
+cell; the port lost it ("Source positions: where a form came from",
+above, is that design). It is back, smaller. `OBJ_CONS` had a free
+integer, i2, and the reader puts the opening paren's character offset
+there, packed with a file id (`file-id * 2^26 + offset`). Line and
+column are not stored: `gcr_begin_file` indexes the newlines of a
+file once and `gcr_position` recovers them by binary search when an
+error needs them, which is rarely, rather than on every list read.
+The analyser copies the position onto the node it builds for the
+list; a macro's expansion keeps the position of the form that was
+written, because the expansion's fresh cells have none of their own
+and the node already has one. An error appends `  at file:line:col`
+from the innermost node that has a position, once -- analysis errors
+from the form, run-time errors from the node -- and every enclosing
+node sees the mark already there and leaves it.
+
+End positions are not recorded yet. The old design argued for them
+(sexp-level highlighting in a debugger); when the debugger's frames
+exist they are one more integer on the cell.
