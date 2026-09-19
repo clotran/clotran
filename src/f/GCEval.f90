@@ -8912,6 +8912,20 @@ contains
          ! sits at core.clj line 6983 and `reduce` is at 7076, so
          ! stopping at the first of them costs the whole second half
          ! of the seq library. DEVIATIONS.md 12.
+         ! CLOJURE.CORE IS ALREADY LOADED, and loading it again is
+         ! not merely wasteful -- it re-evaluates every definition
+         ! in the file against a namespace that already has them.
+         ! (require 'clojure.core) and (use 'clojure.core) both
+         ! reach here, and Clojure's own test helper opens every
+         ! temporary namespace with (clojure.core/use 'clojure.core)
+         ! -- which died on an arity error halfway through the
+         ! reload. Clojure answers nil and changes nothing;
+         ! so does this. Quietly, because it is not a gap.
+         if (rel == "clojure/core") then
+            out = gc_nil()
+            call vs_leave(base)
+            return
+         end if
          if (rel == "clojure/core_proxy" .or. &
               rel == "clojure/genclass" .or. &
               rel == "clojure/gvec" .or. &

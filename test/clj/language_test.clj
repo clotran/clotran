@@ -1285,6 +1285,19 @@
        "[1 \"a\"]")
 (check "RT/print to *out*" (with-out-str (clojure.lang.RT/print :k *out*)) ":k")
 
+
+;;; ---- clojure.core is already loaded ------------------------------
+;; (require 'clojure.core) reached clotran's loader and re-read the
+;; whole file, re-evaluating every definition against a namespace that
+;; already had them -- and died partway with an arity error. Clojure
+;; answers nil and changes nothing. Clojure's own test helper opens
+;; every temporary namespace with (clojure.core/use 'clojure.core), so
+;; nothing written through eval-in-temp-ns ran at all.
+
+(check "require it"      (require (quote clojure.core)) nil)
+(check "use it"          (use (quote clojure.core)) nil)
+(check "and core still works" (+ 1 2) 3)
+
 ;;; ---- report -----------------------------------------------------
 
 
