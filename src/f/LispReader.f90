@@ -365,6 +365,12 @@ contains
        end if
        return
     end if
+    ! A hinted symbol -- (.getClassName ^StackTraceElement %1) -- is
+    ! wrapped in metadata; the walk looks through the wrapper.
+    if (gc_kind(form) == OBJ_META) then
+       call scan_percent(gc_slot(form, 1), maxn, has_rest)
+       return
+    end if
     if (gcl_is(form)) then
        walk = form
        do while (gcl_count(walk) > 0)
@@ -408,7 +414,13 @@ contains
 
     base = vs_enter(3)
     call vs_set(base + 1, form)
-    if (gcl_is(form)) then
+    if (gc_kind(form) == OBJ_META) then
+       ! rewrite the value inside the wrapper, keep the metadata
+       item = rewrite_percent(gc_slot(vs_get(base + 1), 1), roots)
+       call vs_set(base + 2, item)
+       out = gc_obj(OBJ_META, [vs_get(base + 2), gc_slot(vs_get(base + 1), 2)], &
+            [roots, vs_get(base + 1), vs_get(base + 2)])
+    else if (gcl_is(form)) then
        acc = gcv_empty(roots)
        call vs_set(base + 2, acc)
        walk = vs_get(base + 1)

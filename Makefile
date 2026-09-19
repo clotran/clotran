@@ -19,7 +19,7 @@ FC = gfortran
 # lldb finds it there.
 B = build
 .DEFAULT_GOAL := all
-FCFLAGS = -g -I$(B) -J$(B) $(FCFLAGS_$(notdir $(FC)))
+FCFLAGS = -g -I$(B) -Isrc/f -J$(B) $(FCFLAGS_$(notdir $(FC)))
 LDFLAGS = $(FCFLAGS_$(notdir $(FC)))
 
 # Fortran 2018 made every procedure recursive by default. flang follows
@@ -140,7 +140,7 @@ $(B)/Printer.o: $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Ass
 # straight to a Pattern, not to a string). See Regex.f90.
 $(B)/LispReader.o: $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/Regex.o
 $(B)/Eval.o: $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/Env.o \
-	$(B)/Namespace.o $(B)/Printer.o $(B)/Regex.o $(B)/NativeArray.o
+	$(B)/Namespace.o $(B)/Printer.o $(B)/Regex.o $(B)/NativeArray.o $(S)/analyze.inc $(S)/exec.inc
 
 data-objects = $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(B)/Assoc.o \
 	$(B)/PersistentList.o $(B)/PersistentVector.o $(B)/NativeArray.o $(B)/Printer.o

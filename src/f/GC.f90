@@ -251,6 +251,11 @@ module GC
   ! references outside the heap is how those references become
   ! dangling. push_mark already traces GCT_VEC, so this costs nothing.
   integer, parameter, public :: OBJ_ARRAY     = 26 ! 1=value run; i1=buffer handle
+  ! An analysed form (Eval.f90's analyze.inc): 1=children 2,3=payloads;
+  ! i1=node kind, i2=an integer operand. Also the analyser's scopes.
+  ! Not OBJ_NODE: Fortran is case-insensitive and obj_node is the pool's
+  ! derived type.
+  integer, parameter, public :: OBJ_AST       = 30
   integer, parameter, public :: OBJ_HAMT      = 11 ! 1=root run; i1=count
   integer, parameter, public :: OBJ_HAMT_LEAF = 12 ! 1=key 2=val
   ! Slot 3 was reserved for a per-Var dynamic stack; the dynamic
@@ -454,6 +459,10 @@ module GC
   ! allocations while a different pool held a live set of hundreds of
   ! thousands, and each of its collections marked all of them.
   integer(8) :: last_marked = 0
+  ! ...and per pool, so each pool grows to twice ITS OWN live count
+  ! rather than to the heap-wide total, which sized every pool to the
+  ! largest and cost 1.4 GB for a 100000-element into.
+  integer :: obj_marked = 0, vec_marked = 0, str_marked = 0
 
   ! Collect at EVERY allocation. Turns a missing root from a rare,
   ! timing-dependent corruption into an immediate, deterministic
@@ -751,7 +760,7 @@ contains
        ! was killed. Torture tests rooting, not the growth policy.
        if (.not. gc_torture) then
           if (2 * str_swept < size(str_pool)) call grow_str()
-          do while (size(str_pool) < last_marked)
+          do while (size(str_pool) < 2 * str_marked)
              call grow_str()
           end do
        end if
@@ -792,7 +801,7 @@ contains
        ! was killed. Torture tests rooting, not the growth policy.
        if (.not. gc_torture) then
           if (2 * obj_swept < size(obj_pool)) call grow_obj()
-          do while (size(obj_pool) < last_marked)
+          do while (size(obj_pool) < 2 * obj_marked)
              call grow_obj()
           end do
        end if
@@ -837,7 +846,7 @@ contains
        ! was killed. Torture tests rooting, not the growth policy.
        if (.not. gc_torture) then
           if (2 * vec_swept < size(vec_pool)) call grow_vec()
-          do while (size(vec_pool) < last_marked)
+          do while (size(vec_pool) < 2 * vec_marked)
              call grow_vec()
           end do
        end if
@@ -1045,6 +1054,7 @@ contains
 
     gc_collections = gc_collections + 1
     last_marked = gc_marked
+    obj_marked = 0; vec_marked = 0; str_marked = 0
     obj_mark = .false.
     vec_mark = .false.
     str_mark = .false.
@@ -1424,6 +1434,7 @@ contains
           if (obj_mark(v%ref)) cycle
           obj_mark(v%ref) = .true.
           gc_marked = gc_marked + 1
+          obj_marked = obj_marked + 1
           do i = 1, OBJ_SLOTS
              call push_mark(obj_pool(v%ref)%slot(i))
           end do
@@ -1431,6 +1442,7 @@ contains
           if (vec_mark(v%ref)) cycle
           vec_mark(v%ref) = .true.
           gc_marked = gc_marked + 1
+          vec_marked = vec_marked + 1
           n = 0
           if (allocated(vec_pool(v%ref)%items)) n = size(vec_pool(v%ref)%items)
           do i = 1, n
@@ -1439,6 +1451,7 @@ contains
        case (GCT_STR, GCT_SYM, GCT_KEY)
           str_mark(v%ref) = .true. ! a leaf: holds no references
           gc_marked = gc_marked + 1
+          str_marked = str_marked + 1
        end select
     end do
   end subroutine drain_mark_stack

@@ -240,6 +240,15 @@ module Eval
   ! next to the collector's counters (main.f90), so a cost can be
   ! split into "more work" and "more collector" before theorising.
   integer(8), public :: gce_evals = 0
+
+  ! Node kinds (analyze.inc / exec.inc). K_* are the analyser's own
+  ! scope objects, which share OBJ_AST.
+  integer, parameter :: N_CONST = 1, N_LOCAL = 2, N_VAR = 3, N_IF = 4, N_DO = 5, &
+       N_CALL = 6, N_VECTOR = 7, N_MAP = 8, N_SET = 9, N_DEF = 10, N_LET = 11, &
+       N_LOOP = 12, N_LETFN = 13, N_FN = 14, N_LAZY = 15, N_RECUR = 16, N_THROW = 17, &
+       N_TRY = 18, N_CASE = 19, N_DEFTYPE = 20, N_DOT = 21, N_NEW = 22, N_NEWTYPE = 23, &
+       N_SETBANG = 24, N_FAIL = 25, N_TOP = 26, N_TOPDO = 27, N_LATEVAR = 28
+  integer, parameter :: K_SCOPE = 100, K_FNINFO = 101
   integer, save :: trace_macros = 0   ! 0 unread, 1 on, 2 off
 
 contains
@@ -554,6 +563,12 @@ contains
 
     out = gc_nil()
     if (has_error) return
+    ! An analysed form runs on the executor; the walker below is what
+    ! the bridges (eval_dot, eval_new) still use for (quote v) forms.
+    if (gc_kind(form) == OBJ_AST) then
+       out = exec(form, gc_nil())
+       return
+    end if
 
     if (ev_limit == 0) call read_depth_limit()
     ev_depth = ev_depth + 1
@@ -708,6 +723,7 @@ contains
           gc_ref_is(sym%ref, "case*") .or. &
           gc_ref_is(sym%ref, "deftype*") .or. gc_ref_is(sym%ref, "reify*") .or. &
           gc_ref_is(sym%ref, "proxy") .or. &
+          gc_ref_is(sym%ref, "monitor-enter") .or. gc_ref_is(sym%ref, "monitor-exit") .or. &
           gc_ref_is(sym%ref, "var")
   end function is_special
 
@@ -4996,8 +5012,24 @@ contains
 
     base = vs_enter(2)
     call vs_set(base + 1, v)
-    args = gcv_empty([vs_get(base + 1)])
-    r = apply(gc_slot(vs_get(base + 1), 1), args)
+    select case (gc_i2(vs_get(base + 1)))
+    case (1)
+       ! a native range tail: slot 1 = [lo hi step]
+       args = gc_slot(vs_get(base + 1), 1)
+       r = range_cell(gcv_nth(args, 0), gcv_nth(args, 1), gcv_nth(args, 2), [vs_get(base + 1)])
+    case (2)
+       ! a native iterate tail: slot 1 = [f x]; the next head is (f x)
+       args = gc_slot(vs_get(base + 1), 1)
+       call vs_set(base + 2, gcv_conj(gcv_empty([vs_get(base + 1)]), gcv_nth(args, 1), [vs_get(base + 1)]))
+       r = apply(gcv_nth(gc_slot(vs_get(base + 1), 1), 0), vs_get(base + 2))
+       if (.not. has_error) then
+          call vs_set(base + 2, r)
+          r = iterate_cell(gcv_nth(gc_slot(vs_get(base + 1), 1), 0), vs_get(base + 2), [vs_get(base + 1)])
+       end if
+    case default
+       args = gcv_empty([vs_get(base + 1)])
+       r = apply(gc_slot(vs_get(base + 1), 1), args)
+    end select
     call vs_set(base + 2, r)
     if (has_error) then
        call gc_set_i1(vs_get(base + 1), LAZY_EMPTY)
@@ -5518,11 +5550,13 @@ contains
   ! top-level form once pins those inner bodies to the `let` that
   ! existed when destructure was defined, which is what compiling them
   ! would have done.
+  ! Analysis: a form to a node tree, symbols resolved, macros expanded,
+  ! locals as slots. `env` is unused and kept for the callers' sake.
   recursive function gce_analyze(form, env) result(out)
     type(gc_value), intent(in) :: form, env
     type(gc_value) :: out
     ev_depth = 0
-    out = macroexpand_all(form, env)
+    out = analyze_top(form)
   end function gce_analyze
 
   ! No depth limit of its own: Clojure has none, and the runaway
@@ -6675,10 +6709,13 @@ contains
   ! forever. Carrying the values through means the arithmetic
   ! decides the type, so a double range counts in doubles and a
   ! ratio step stays exact.
+  ! One cell of (range lo hi step): head lo, and a NATIVE pending tail
+  ! (OBJ_LAZY, i2 = 1) holding [lo+step hi step], which gce_force turns
+  ! into the next cell. No closure, no environment, no form.
   recursive function range_cell(lo, hi, stp, roots) result(out)
     type(gc_value), intent(in) :: lo, hi, stp
     type(gc_value), intent(in) :: roots(:)
-    type(gc_value) :: out, frame, body, callf, thunk, tail, nxt
+    type(gc_value) :: out, spec, tail, nxt
     integer :: base
     real(gc_dp) :: sd
 
@@ -6688,54 +6725,21 @@ contains
     if (sd < 0.0_gc_dp .and. .not. num_lt(hi, lo)) return
 
     base = vs_enter(4)
-    frame = gce_new(gc_nil(), roots)
-    call vs_set(base + 1, frame)
-    ! The head is lo; the frame carries where the TAIL starts.
-    nxt = num_add2(lo, stp, [vs_get(base + 1)])
-    call gce_set(vs_get(base + 1), gc_sym("__lo", [vs_get(base + 1)]), &
-         nxt, [vs_get(base + 1)])
-    call gce_set(vs_get(base + 1), gc_sym("__hi", [vs_get(base + 1)]), &
-         hi, [vs_get(base + 1)])
-    call gce_set(vs_get(base + 1), gc_sym("__st", [vs_get(base + 1)]), &
-         stp, [vs_get(base + 1)])
-
-    ! (clojure.lang.Range/create __lo __hi __st)
-    ! THE ACCUMULATOR LIVES ON THE SHADOW STACK, not in a bare
-    ! local. Passing it in the `roots` array is not enough: the
-    ! array constructor is just another actual argument, so it is
-    ! built either side of gc_sym's allocation and protects
-    ! nothing while that allocation runs. This is the bug behind
-    ! (count (range 200000)) answering 5845 -- the call form the
-    ! tail thunk evaluates lost its arguments, and
-    ! (clojure.lang.Range/create) with none yields nothing.
-    call vs_set(base + 2, gcl_empty([vs_get(base + 1)]))
-    call vs_set(base + 4, gc_sym("__st", [vs_get(base + 1), vs_get(base + 2)]))
-    call vs_set(base + 2, gcl_cons(vs_get(base + 4), vs_get(base + 2), &
-         [vs_get(base + 1), vs_get(base + 2), vs_get(base + 4)]))
-    call vs_set(base + 4, gc_sym("__hi", [vs_get(base + 1), vs_get(base + 2)]))
-    call vs_set(base + 2, gcl_cons(vs_get(base + 4), vs_get(base + 2), &
-         [vs_get(base + 1), vs_get(base + 2), vs_get(base + 4)]))
-    call vs_set(base + 4, gc_sym("__lo", [vs_get(base + 1), vs_get(base + 2)]))
-    call vs_set(base + 2, gcl_cons(vs_get(base + 4), vs_get(base + 2), &
-         [vs_get(base + 1), vs_get(base + 2), vs_get(base + 4)]))
-    call vs_set(base + 4, gc_sym("clojure.lang.Range/create", &
-         [vs_get(base + 1), vs_get(base + 2)]))
-    call vs_set(base + 2, gcl_cons(vs_get(base + 4), vs_get(base + 2), &
-         [vs_get(base + 1), vs_get(base + 2), vs_get(base + 4)]))
-    call vs_set(base + 4, gcl_empty([vs_get(base + 2)]))
-    call vs_set(base + 2, gcl_cons(vs_get(base + 2), vs_get(base + 4), &
-         [vs_get(base + 2), vs_get(base + 4)]))
-
-    thunk = gc_obj(OBJ_CLOSURE, [gcv_empty([vs_get(base + 2)]), &
-         vs_get(base + 2), vs_get(base + 1), gc_nil()], &
-         [vs_get(base + 1), vs_get(base + 2)])
-    call vs_set(base + 3, thunk)
-    tail = gc_obj(OBJ_LAZY, [vs_get(base + 3), gc_nil(), gc_nil()], &
-         [vs_get(base + 3)])
+    call vs_set(base + 1, lo)
+    call vs_set(base + 2, hi)
+    call vs_set(base + 3, stp)
+    nxt = num_add2(vs_get(base + 1), vs_get(base + 3), [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+    call vs_set(base + 4, nxt)
+    spec = gcv_empty([roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 4)])
+    spec = gcv_conj(spec, vs_get(base + 4), [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), spec])
+    spec = gcv_conj(spec, vs_get(base + 2), [roots, vs_get(base + 1), vs_get(base + 3), spec])
+    spec = gcv_conj(spec, vs_get(base + 3), [roots, vs_get(base + 1), spec])
+    call vs_set(base + 4, spec)
+    tail = gc_obj(OBJ_LAZY, [vs_get(base + 4), gc_nil(), gc_nil()], [roots, vs_get(base + 1), vs_get(base + 4)])
     call gc_set_i1(tail, LAZY_PENDING)
-    call vs_set(base + 3, tail)
-    out = gc_obj(OBJ_LAZY, [gc_nil(), lo, vs_get(base + 3)], &
-         [vs_get(base + 3)])
+    call gc_set_i2(tail, 1)
+    call vs_set(base + 4, tail)
+    out = gc_obj(OBJ_LAZY, [gc_nil(), vs_get(base + 1), vs_get(base + 4)], [roots, vs_get(base + 1), vs_get(base + 4)])
     call gc_set_i1(out, LAZY_CONS)
     call vs_leave(base)
   end function range_cell
@@ -6759,64 +6763,27 @@ contains
     end if
   end function num_add2
 
+  ! One cell of (iterate f x): head x, and a native pending tail
+  ! (OBJ_LAZY, i2 = 2) holding [f x]; gce_force applies f and builds the
+  ! next cell.
   recursive function iterate_cell(f, x, roots) result(out)
     type(gc_value), intent(in) :: f, x
     type(gc_value), intent(in) :: roots(:)
-    type(gc_value) :: out, frame, body, callf, nextf, thunk, tail
+    type(gc_value) :: out, spec, tail
     integer :: base
 
-    base = vs_enter(7)
+    base = vs_enter(3)
     call vs_set(base + 1, f)
     call vs_set(base + 2, x)
-    frame = gce_new(gc_nil(), [vs_get(base + 1), vs_get(base + 2)])
-    call vs_set(base + 3, frame)
-    call gce_set(vs_get(base + 3), gc_sym("__f", [vs_get(base + 3)]), &
-         vs_get(base + 1), [vs_get(base + 1), vs_get(base + 3)])
-    call gce_set(vs_get(base + 3), gc_sym("__x", [vs_get(base + 3)]), &
-         vs_get(base + 2), [vs_get(base + 2), vs_get(base + 3)])
-
-    ! (__f __x)
-    ! THE ACCUMULATOR LIVES ON THE SHADOW STACK, not in a bare
-    ! local. Passing it in the `roots` array is not enough: the
-    ! array constructor is just another actual argument, so it is
-    ! built either side of gc_sym's allocation and protects
-    ! nothing while that allocation runs. This is the bug behind
-    ! (count (range 200000)) answering 5845 -- the call form the
-    ! tail thunk evaluates lost its arguments, and
-    ! (clojure.lang.Range/create) with none yields nothing.
-    call vs_set(base + 4, gcl_empty([vs_get(base + 3)]))
-    call vs_set(base + 7, gc_sym("__x", [vs_get(base + 3), vs_get(base + 4)]))
-    call vs_set(base + 4, gcl_cons(vs_get(base + 7), vs_get(base + 4), &
-         [vs_get(base + 3), vs_get(base + 4), vs_get(base + 7)]))
-    call vs_set(base + 7, gc_sym("__f", [vs_get(base + 3), vs_get(base + 4)]))
-    call vs_set(base + 4, gcl_cons(vs_get(base + 7), vs_get(base + 4), &
-         [vs_get(base + 3), vs_get(base + 4), vs_get(base + 7)]))
-
-    ! (clojure.lang.Iterate/create __f (__f __x))
-    call vs_set(base + 5, gcl_empty([vs_get(base + 4)]))
-    call vs_set(base + 5, gcl_cons(vs_get(base + 4), vs_get(base + 5), &
-         [vs_get(base + 4), vs_get(base + 5)]))
-    call vs_set(base + 7, gc_sym("__f", [vs_get(base + 4), vs_get(base + 5)]))
-    call vs_set(base + 5, gcl_cons(vs_get(base + 7), vs_get(base + 5), &
-         [vs_get(base + 4), vs_get(base + 5), vs_get(base + 7)]))
-    call vs_set(base + 7, gc_sym("clojure.lang.Iterate/create", &
-         [vs_get(base + 4), vs_get(base + 5)]))
-    call vs_set(base + 5, gcl_cons(vs_get(base + 7), vs_get(base + 5), &
-         [vs_get(base + 4), vs_get(base + 5), vs_get(base + 7)]))
-    call vs_set(base + 7, gcl_empty([vs_get(base + 5)]))
-    call vs_set(base + 5, gcl_cons(vs_get(base + 5), vs_get(base + 7), &
-         [vs_get(base + 5), vs_get(base + 7)]))
-
-    thunk = gc_obj(OBJ_CLOSURE, [gcv_empty([vs_get(base + 5)]), &
-         vs_get(base + 5), vs_get(base + 3), gc_nil()], &
-         [vs_get(base + 3), vs_get(base + 5)])
-    call vs_set(base + 6, thunk)
-    tail = gc_obj(OBJ_LAZY, [vs_get(base + 6), gc_nil(), gc_nil()], &
-         [vs_get(base + 6)])
+    spec = gcv_empty([roots, vs_get(base + 1), vs_get(base + 2)])
+    spec = gcv_conj(spec, vs_get(base + 1), [roots, vs_get(base + 2), spec])
+    spec = gcv_conj(spec, vs_get(base + 2), [roots, vs_get(base + 1), spec])
+    call vs_set(base + 3, spec)
+    tail = gc_obj(OBJ_LAZY, [vs_get(base + 3), gc_nil(), gc_nil()], [roots, vs_get(base + 2), vs_get(base + 3)])
     call gc_set_i1(tail, LAZY_PENDING)
-    call vs_set(base + 6, tail)
-    out = gc_obj(OBJ_LAZY, [gc_nil(), vs_get(base + 2), vs_get(base + 6)], &
-         [vs_get(base + 2), vs_get(base + 6)])
+    call gc_set_i2(tail, 2)
+    call vs_set(base + 3, tail)
+    out = gc_obj(OBJ_LAZY, [gc_nil(), vs_get(base + 2), vs_get(base + 3)], [roots, vs_get(base + 2), vs_get(base + 3)])
     call gc_set_i1(out, LAZY_CONS)
     call vs_leave(base)
   end function iterate_cell
@@ -6844,6 +6811,11 @@ contains
     case (OBJ_BUILTIN)
        out = call_builtin(gc_i1(fn), args)
     case (OBJ_CLOSURE)
+       if (is_node_closure(fn)) then
+          out = invoke_closure(vs_get(base + 1), vs_get(base + 2))
+          call vs_leave(base)
+          return
+       end if
        params = gc_slot(fn, 1)
        body = gc_slot(fn, 2)
        if (gcl_is(gc_slot(fn, 4))) then
@@ -11964,5 +11936,8 @@ contains
     if (v%tag == GCT_NIL) yes = .false.
     if (v%tag == GCT_BOOL .and. v%ival == 0) yes = .false.
   end function truthy
+
+  include "analyze.inc"
+  include "exec.inc"
 
 end module Eval
