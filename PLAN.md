@@ -228,8 +228,11 @@ Staged so each step is checkable:
    "analyse if it is a form, then execute", and Eval.f90 lost 1,700
    lines. Load reads one form at a time (DEVIATIONS 1 resolved), and
    list forms carry a source position that the analyser puts on the
-   node and an error reports as `file:line:col` -- the first half of
-   what the debugger needs. Still to do in this stage: port
+   node and an error reports as `file:line:col`, followed by the call
+   stack: every closure invocation pushes a frame (the closure and its
+   call site) that `fail` and `throw` render into the error before it
+   unwinds. That is the frame array the debugger needs, before the
+   protocol around it. Still to do in this stage: port
    `eval_dot`/`eval_new` to take values so the `(quote v)` bridge goes.
 2. intermediates move to the operand stack; `roots(:)` leaves every
    signature; module globals move into a context type; source

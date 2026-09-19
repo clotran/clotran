@@ -922,6 +922,13 @@ frames -- there is nothing to report. It is honest rather than wrong:
 with source positions on nodes, a trace is a walk up that stack, and
 this entry closes together with the debugger it unblocks.
 
+**Half closed 2026-09-19.** The evaluator keeps a call stack (one entry
+per closure invocation: the closure and where it was called from), and
+an error prints it after the message, innermost first. What is still
+missing is the object: `.getStackTrace` answers an empty array because
+`clojure.stacktrace` and `clojure.test` read `StackTraceElement`
+methods off each element, and there is no such element here yet.
+
 ## 32. A qualified symbol that does not resolve is a run-time error
 
 Clojure fails to COMPILE a form naming a Var that does not exist:

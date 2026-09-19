@@ -2296,3 +2296,30 @@ node sees the mark already there and leaves it.
 End positions are not recorded yet. The old design argued for them
 (sexp-level highlighting in a debugger); when the debugger's frames
 exist they are one more integer on the cell.
+
+## The call stack
+
+`push_frame`/`pop_frame` bracket every closure invocation
+(`invoke_closure`); the executor sets `pending_site` from the call
+node's position just before `apply`, so a frame is the closure entered
+and where it was entered from. `fail` and `throw` call `capture_trace`
+at once -- the stack must be read before the error unwinds it -- and
+the REPL and loader print it after the message:
+
+    Divide by zero  at src/clj/clojure/core.clj:1029:10
+      at clojure.core// (p3.clj:1:17)
+      at clojure.core/inner (p3.clj:3:3)
+      at clojure.core/middle (p3.clj:5:3)
+      at clojure.core/outer (p3.clj:6:1)
+
+Each frame names the callee and the site in its caller, which is the
+information a call site has; a frame does not know which line of its
+own body is executing, because no position is recorded on entry to a
+node, only consulted on error. `recur` pushes nothing, so a loop of a
+million iterations is one frame, and a trace does not pretend
+otherwise. The frames are not GC roots: a closure on the stack is in
+its caller's value-stack slot for as long as the call lasts.
+
+This is the CallInfo frame array PLAN.md's debugger section asked for.
+What it is not yet: per-thread (it is a module array), a
+`StackTraceElement` (DEVIATIONS 31), or a breakpoint.

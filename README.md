@@ -121,7 +121,7 @@ recalled. See `CLAUDE.md`.
 | speed | a `loop`/`recur` iteration costs ~25 µs and a reduce step ~75 µs; linear, but two orders slower than the JVM. PLAN.md step 5 |
 | startup | 2.3s: core.clj is re-read and re-analysed every launch; there is no image yet |
 | memory | a 100000-element reduce peaks at 640 MB; PLAN.md step 5, stage 3 |
-| stack frames | an error reports `file:line:col` of the innermost form it happened in, but there is no stack trace and no debugger yet; PLAN.md step 5 stage 2 |
+| debugger | an error reports `file:line:col` and the chain of calls that led to it; `.getStackTrace` is still empty (DEVIATIONS 31) and there is no breakpoint or step yet; PLAN.md step 8 |
 | `pprint` | `cl-format` works; `pprint` itself does not, see the open question at the end of PLAN.md |
 | `BigDecimal` and `BigInt` | `1M` reads as a double and `1N` as an integer; DEVIATIONS 30 |
 | sorted collections | `sorted-map` and `sorted-set` are unsorted; DEVIATIONS 9 |
