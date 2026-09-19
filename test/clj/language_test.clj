@@ -1340,6 +1340,46 @@
 (check "a bad parse throws" (try (Long. "zz") :no (catch Throwable e :threw)) :threw)
 (check "the box is the value" [(= (Long. 1) 1) (= (String. "x") "x")] [true true])
 
+
+;;; ---- the host supertype chain ------------------------------------
+;; host_super feeds multimethod dispatch, and it was picked by index
+;; with two silent holes: entries keyed "float" and "bool" where
+;; type_name says "double" and "boolean" -- so a double and a boolean
+;; had NO supertypes -- and an Object fallback at index 4 that only a
+;; type with exactly three supertypes ever reached. print-dup on a
+;; double was "No method in multimethod for dispatch value: :double".
+;;
+;; Order is specific-to-general, because dispatch takes the first
+;; match: print-dup has a method on Long and another on Number, and
+;; only Long's prints 1 rather than #=(java.lang.Long. "1").
+;; All checked against `clj`.
+
+(check "print-dup a double"  (binding [*print-dup* true] (pr-str 1.5)) "1.5")
+(check "print-dup an integer" (binding [*print-dup* true] (pr-str 1)) "1")
+(check "print-dup a string"  (binding [*print-dup* true] (pr-str "x")) "\"x\"")
+(check "print-dup a char"    (binding [*print-dup* true] (pr-str \a)) "\\a")
+(check "print-dup a boolean" (binding [*print-dup* true] (pr-str true)) "true")
+(check "print-dup nil"       (binding [*print-dup* true] (pr-str nil)) "nil")
+(check "print-dup a keyword" (binding [*print-dup* true] (pr-str :k)) ":k")
+;; core_print registers print-dup on PersistentVector and
+;; PersistentHashSet by NAME, and only those print plainly.
+(check "print-dup a vector"  (binding [*print-dup* true] (pr-str [1 2])) "[1 2]")
+(check "print-dup a set"     (binding [*print-dup* true] (pr-str #{1})) "#{1}")
+
+;; print-method still finds what it found before.
+(check "print-method unchanged"
+       [(pr-str 1) (pr-str 1.5) (pr-str "x") (pr-str [1 2]) (pr-str \newline) (pr-str {:a 1})]
+       ["1" "1.5" "\"x\"" "[1 2]" "\\newline" "{:a 1}"])
+(check "and for seqs"
+       [(pr-str '(1 2)) (pr-str #{1}) (pr-str (seq [1 2])) (pr-str (lazy-seq [1]))]
+       ["(1 2)" "#{1}" "(1 2)" "(1)"])
+;; Double's own predicates, which print-method asks of it.
+(check "isNaN and isInfinite"
+       [(.isNaN ##NaN) (.isNaN 1.0) (.isInfinite ##Inf) (.isInfinite 1.0)]
+       [true false true false])
+(check "the non-finite doubles print"
+       [(pr-str ##NaN) (pr-str ##Inf) (pr-str ##-Inf)] ["##NaN" "##Inf" "##-Inf"])
+
 ;;; ---- report -----------------------------------------------------
 
 

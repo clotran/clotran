@@ -2948,6 +2948,12 @@ contains
     ! carry is the ERROR BOOKKEEPING, because core.clj's `agent`
     ! sets the mode on the very first line and nothing worked
     ! without it.
+    ! Double.isNaN and .isInfinite as INSTANCE members. They are
+    ! already here as statics; core_print writes (.isNaN ^Double o)
+    ! inside print-method, which is the one place a double gets
+    ! asked about itself.
+    case ("isNaN");      out = native(B_ISNAN, "clotran-is-nan", [roots])
+    case ("isInfinite"); out = native(B_ISINF, "clotran-is-infinite", [roots])
     case ("countDown")
        out = native(B_LATCHDOWN, "clotran-latch-down", [roots])
     case ("getCount")
@@ -11464,69 +11470,130 @@ contains
       end if
     end block
 
-    select case (t)
-    case ("vector")
-       select case (i)
-       case (1); k = gc_key("clojure.lang.IPersistentVector", [roots])
-       case (2); k = gc_key("java.util.List", [roots])
-       case (3); k = gc_key("java.util.RandomAccess", [roots])
-       end select
-    case ("map")
-       select case (i)
-       case (1); k = gc_key("clojure.lang.IPersistentMap", [roots])
-       case (2); k = gc_key("java.util.Map", [roots])
-       end select
-    case ("set")
-       select case (i)
-       case (1); k = gc_key("clojure.lang.IPersistentSet", [roots])
-       case (2); k = gc_key("java.util.Set", [roots])
-       end select
-    ! These are type_name's spellings, and they have to be exactly
-    ! that: the entry read "lazy" while type_name says "lazy-seq",
-    ! so a lazy seq matched no supertype and print-method never
-    ! found ISeq for one.
-    case ("list", "seq", "lazy-seq", "cons")
-       select case (i)
-       case (1); k = gc_key("clojure.lang.ISeq", [roots])
-       case (2); k = gc_key("java.util.List", [roots])
-       end select
-    case ("keyword")
-       if (i == 1) k = gc_key("clojure.lang.Keyword", [roots])
-    case ("symbol")
-       if (i == 1) k = gc_key("clojure.lang.Symbol", [roots])
-    case ("var")
-       if (i == 1) k = gc_key("clojure.lang.Var", [roots])
-    case ("atom")
-       if (i == 1) k = gc_key("clojure.lang.IDeref", [roots])
-    case ("regex")
-       if (i == 1) k = gc_key("java.util.regex.Pattern", [roots])
-    case ("string")
-       if (i == 1) k = gc_key("String", [roots])
-    case ("char")
-       ! "Character", not "java.lang.Character": a class literal in
-       ! dispatch position evaluates to a keyword with the java.lang
-       ! prefix STRIPPED -- java.lang.Character is :Character, while
-       ! java.util.List and clojure.lang.ISeq keep theirs. core_print
-       ! registers this method as java.lang.Character, so the key it
-       ! lands under is :Character and the full name matched nothing.
-       ! That is why (pr-str \\newline) was a raw newline rather than
-       ! \\newline: print-method never found the Character method.
-       if (i == 1) k = gc_key("Character", [roots])
-    case ("bool")
-       if (i == 1) k = gc_key("Boolean", [roots])
-    case ("error")
-       if (i == 1) k = gc_key("Throwable", [roots])
-    case ("int")
-       if (i == 1) k = gc_key("Number", [roots])
-    case ("float")
-       select case (i)
-       case (1); k = gc_key("Double", [roots])
-       case (2); k = gc_key("Number", [roots])
-       end select
-    end select
-    ! Everything is an Object, which is where core.clj's catch-all
-    ! print-method is registered.
-    if (k%tag == GCT_NIL .and. i == 4) k = gc_key("Object", [roots])
+    ! THE CHAIN IS BUILT, THEN INDEXED, rather than each case picking
+    ! by index. Doing it by index left two kinds of hole and both were
+    ! silent:
+    !
+    !   - two entries were keyed on names type_name does not use --
+    !     "float" where it says "double", "bool" where it says
+    !     "boolean" -- so a double and a boolean had NO supertypes at
+    !     all. (binding [*print-dup* true] (pr-str 1.5)) was "No method
+    !     in multimethod 'print-dup' for dispatch value: :double".
+    !
+    !   - the Object fallback sat at index 4, and the caller stops at
+    !     the first nil. Only a type with exactly three supertypes ever
+    !     reached it; for everything else Object was unreachable.
+    !
+    ! Order is specific-to-general, because the caller takes the first
+    ! match: print-dup has a method on Long and another on Number, and
+    ! only the Long one prints 1 rather than #=(java.lang.Long. "1").
+    block
+      character(len=34) :: chain(8)
+      integer :: cnt
+      cnt = 0
+      select case (t)
+      ! The CONCRETE class comes first, and it has to: core_print
+      ! registers print-dup on clojure.lang.PersistentVector and
+      ! PersistentHashSet by name, and only those two methods print
+      ! [1 2] rather than #=(.../create [1 2]). clotran's :vector IS
+      ! the concrete class, so naming it here is what a class chain
+      ! looks like rather than a special case.
+      case ("vector")
+         chain(1) = "clojure.lang.PersistentVector"
+         chain(2) = "clojure.lang.IPersistentVector"
+         chain(3) = "java.util.List"
+         chain(4) = "java.util.RandomAccess"
+         chain(5) = "clojure.lang.IPersistentCollection"
+         chain(6) = "java.util.Collection"
+         cnt = 6
+      case ("map")
+         chain(1) = "clojure.lang.IPersistentMap"
+         chain(2) = "java.util.Map"
+         chain(3) = "clojure.lang.IPersistentCollection"
+         chain(4) = "java.util.Collection"
+         cnt = 4
+      case ("set")
+         chain(1) = "clojure.lang.PersistentHashSet"
+         chain(2) = "clojure.lang.IPersistentSet"
+         chain(3) = "java.util.Set"
+         chain(4) = "clojure.lang.IPersistentCollection"
+         chain(5) = "java.util.Collection"
+         cnt = 5
+      ! These are type_name's spellings, and they have to be exactly
+      ! that: the entry read "lazy" while type_name says "lazy-seq",
+      ! so a lazy seq matched no supertype and print-method never
+      ! found ISeq for one.
+      case ("list")
+         chain(1) = "clojure.lang.IPersistentList"
+         chain(2) = "clojure.lang.ISeq"
+         chain(3) = "java.util.List"
+         chain(4) = "clojure.lang.IPersistentCollection"
+         chain(5) = "java.util.Collection"
+         cnt = 5
+      case ("seq", "lazy-seq", "cons")
+         chain(1) = "clojure.lang.ISeq"
+         chain(2) = "java.util.List"
+         chain(3) = "clojure.lang.IPersistentCollection"
+         chain(4) = "java.util.Collection"
+         cnt = 4
+      case ("keyword")
+         chain(1) = "clojure.lang.Keyword"; cnt = 1
+      case ("symbol")
+         chain(1) = "clojure.lang.Symbol"; cnt = 1
+      case ("var")
+         chain(1) = "clojure.lang.Var"
+         chain(2) = "clojure.lang.IDeref"
+         cnt = 2
+      case ("atom", "delay")
+         chain(1) = "clojure.lang.IDeref"; cnt = 1
+      case ("regex")
+         chain(1) = "java.util.regex.Pattern"; cnt = 1
+      case ("string")
+         chain(1) = "String"
+         chain(2) = "CharSequence"
+         cnt = 2
+      ! "Character", not "java.lang.Character": a class literal in
+      ! dispatch position evaluates to a keyword with the java.lang
+      ! prefix STRIPPED -- java.lang.Character is :Character, while
+      ! java.util.List and clojure.lang.ISeq keep theirs. core_print
+      ! registers this method as java.lang.Character, so the key it
+      ! lands under is :Character and the full name matched nothing.
+      ! That is why (pr-str \newline) was a raw newline rather than
+      ! \newline: print-method never found the Character method.
+      case ("char")
+         chain(1) = "Character"; cnt = 1
+      case ("boolean")
+         chain(1) = "Boolean"; cnt = 1
+      case ("error")
+         chain(1) = "Throwable"; cnt = 1
+      case ("int")
+         chain(1) = "Long"
+         chain(2) = "Number"
+         cnt = 2
+      case ("double")
+         chain(1) = "Double"
+         chain(2) = "Number"
+         cnt = 2
+      case ("ratio")
+         chain(1) = "clojure.lang.Ratio"
+         chain(2) = "Number"
+         cnt = 2
+      case ("ns")
+         chain(1) = "clojure.lang.Namespace"; cnt = 1
+      case ("multifn")
+         chain(1) = "clojure.lang.MultiFn"; cnt = 1
+      end select
+      ! Everything with supertypes at all ends at Object, where
+      ! core.clj's catch-all print-method is registered. A type with
+      ! NONE keeps falling to :default as before -- adding Object for
+      ! a closure would change how a function prints, which is
+      ! DEVIATIONS.md 23's territory and not this function's.
+      if (cnt > 0) then
+         cnt = cnt + 1
+         chain(cnt) = "Object"
+      end if
+      if (i >= 1 .and. i <= cnt) k = gc_key(trim(chain(i)), [roots])
+    end block
   end function host_super
 
   ! The classpath. One root was enough while only core.clj was being
