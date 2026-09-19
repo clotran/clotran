@@ -106,8 +106,8 @@ recalled. See `CLAUDE.md`.
 
 | | |
 |---|---|
-| speed | `(reduce + (range 16000))` takes 161s and scales superlinearly; a `loop`/`recur` iteration costs ~100 µs. PLAN.md steps 4 and 5 |
-| startup | 7.2s: core.clj is re-read and re-evaluated every launch; there is no image yet |
+| speed | a `loop`/`recur` iteration costs ~100 µs and a reduce step ~170 µs; linear, but two to three orders slower than the JVM. PLAN.md step 5 |
+| startup | 4.1s: core.clj is re-read and re-evaluated every launch; there is no image yet |
 | source positions | none, so no error reports `file:line:col`, and there are no stack frames |
 | `pprint` | `cl-format` works; `pprint` itself does not, see the open question at the end of PLAN.md |
 | `BigDecimal` and `BigInt` | `1M` reads as a double and `1N` as an integer; DEVIATIONS 30 |

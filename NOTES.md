@@ -2130,3 +2130,50 @@ A leak here is invisible from Clojure, so it is checked against the
 registry's own count rather than through any value. `28d` is the half
 people forget -- a finalizer that frees too eagerly looks identical to
 a working one until something reads a freed buffer.
+
+## The superlinear reduce: two causes, neither the one guessed
+
+`(reduce + (range 16000))` took 161 seconds and 100,000 did not finish
+in fifteen minutes, while `loop`/`recur` over the same counts was
+linear. PLAN.md had guessed uncached protocol dispatch or lazy-seq
+realisation. Both guesses were wrong, which is the reason the rule is
+to instrument first.
+
+**What the instruments were.** `CLOTRAN_STATS=1` prints evaluations,
+allocations, collections and marks at exit; run at n = 1000, 2000,
+4000, 8000 it showed evaluations and allocations perfectly linear
+(1832 evaluations per element) and collections jumping from 883 to
+2960 between 4000 and 8000, with marks 130M -> 622M. `sample` on the
+running process gave the call tree. `CLOTRAN_TRACE_MACRO=1` names each
+expansion on stderr; diffing a run against startup alone attributed
+three `let`s and one `if-let` to every element.
+
+**Cause 1, the collector's growth policy.** A pool grew only when a
+collection freed nothing at all. `reduce` holds the head of the seq it
+is reducing -- it is `reduce`'s own argument, and Clojure's compiler
+clears that local after last use where a tree-walker keeps every
+binding until the frame returns -- so the live set grows with n. When
+the live set is nearly the whole pool, each collection frees a sliver,
+the sliver is used up in a few hundred allocations, and it collects
+again, marking the entire live set every time. Quadratic. The policy
+is now the standard one: grow when a collection leaves the pool more
+than half live, and grow the triggering pool until it can absorb the
+whole live set (`last_marked`) before filling again, so collections
+are proportional to allocation divided by live and marking is
+proportional to allocation. A first version put the half-live test
+inside the growth loop, which never terminates (doubling makes it
+more true); it is outside it.
+
+**Cause 2, and the larger one: analysis skipped map literals.**
+`mx_walk` descended into lists and vectors and treated everything else
+as a leaf. `extend` takes its method bodies as a MAP -- `(extend Object
+InternalReduce {:internal-reduce (fn [s f val] (loop ... (if-let
+...)))})` -- so every protocol method installed by `extend-type` or
+`extend-protocol` kept its macros and re-expanded them on every call.
+87% of a reduce was inside `expand_macro`. With maps and sets walked,
+evaluations per element went 1832 -> 60, reduce over 100,000 runs in
+17 seconds, and startup fell from 7.2 s to 4.1 s because core.clj's
+own protocol installations were paying the same tax at load.
+
+Neither cause is visible to any scorecard, and both had been there
+since the GC evaluator was built.

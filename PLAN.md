@@ -36,12 +36,13 @@ JVM-shaped `case` arms in one file.
 | our tests | 100% on both compilers; the gate |
 | the derived language suite | 376 tests kept (364 language + 9 concurrency + 3 from unparsable-but-kept files), 307 executed: 1869 pass / 158 fail / 358 error, so 78% of assertions that EXECUTED. 6 of 45 derived files abort before defining a test: compilation, data-structures, def, numbers, reducers, transducers |
 | Clojure's suite, verbatim (for reference) | 1810 pass / 219 fail / 1396 error over 357 tests, 53% of executed; 32 of 67 namespaces produce a passing assertion |
-| startup | 7.2s, core.clj re-read every launch |
+| startup | 4.1s (was 7.2s before step 4), core.clj re-read every launch |
+| `(reduce + (range n))` | LINEAR since step 4: n=100000 in 17s net, ~170 µs and 60 evaluations per element. Before: n=16000 took 161s and n=100000 did not finish in 15 minutes |
 | `loop`/`recur` | ~100 µs per iteration, linear |
-| `(reduce + (range n))` | n=4000: 22s. n=16000: 161s. SUPERLINEAR. n=100000 did not finish in 15 minutes |
 | Fortran library calls made through clotran | 0 |
 
-The reduce row is the one that matters and no scorecard sees it.
+The reduce row was the one that mattered and no scorecard saw it; step 4
+below is how it was found and what it was.
 
 ## The diagnosis
 
@@ -141,15 +142,34 @@ with Fortran supplying only primitives. Anything in the Fortran not
 reached by that audit goes. Settle the open class-versus-type-tag
 question (below) in the same table.
 
-### 4. Profile the superlinear reduce -- BEFORE step 5
+### 4. Profile the superlinear reduce -- DONE
 
-`sample <pid>` on macOS names the path without a rebuild. Add
-evaluation and collection counters per top-level form behind an
-environment variable, and `System/nanoTime` so `time` works (it is in
-the intersection: cljs has `system-time`). Instrument before
-theorising. It is probably one pathology -- uncached protocol dispatch
-(DEVIATIONS 13) or lazy-seq realisation -- and step 5 will not fix it
-on its own.
+Two causes, neither of them the ones guessed above (uncached protocol
+dispatch, lazy-seq realisation). Instrumenting first was the right
+call: `CLOTRAN_STATS=1` prints evaluations, allocations, collections
+and marks at exit, `CLOTRAN_TRACE_MACRO=1` names every macro
+expansion, and `sample` gave the call tree.
+
+1. **The collector grew a pool only when a sweep freed NOTHING.**
+   `reduce` holds the head of the range it is reducing (its own
+   argument; Clojure's compiler clears that local, ours cannot yet),
+   so the live set grows with n. A full-pool-only trigger then
+   collected every few hundred allocations, each time marking the
+   whole live set: 8000 elements, 2344 collections, 535 million
+   marks. Now a pool grows when a collection leaves it more than half
+   live, and the triggering pool grows until it can absorb the live
+   set before filling again -- the amortised bound a tracing collector
+   is supposed to have. Collections for n=8000 went 2960 -> 167.
+2. **Analysis did not descend into map or set literals.** `extend`
+   takes its method bodies as a MAP of fns, so every protocol method
+   installed by `extend-type` or `extend-protocol` escaped
+   `macroexpand_all` and re-expanded its macros on EVERY call: 3
+   `let`s and an `if-let` per reduce step, 87% of the run inside
+   `expand_macro`. Fixed in `mx_walk`. Evaluations per element went
+   1832 -> 60, and startup 7.2s -> 4.1s, because core.clj's own
+   protocol maps were paying the same tax on load.
+
+Still to do from this step: `System/nanoTime`, so `time` works.
 
 ### 5. The analysis pass, executed over explicit frames
 
