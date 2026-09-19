@@ -427,6 +427,27 @@ which is step 7's generator.
 because that is the premise. `require` looks in that order.
 DEVIATIONS 33.
 
+**Executors are the concurrency seam, and the first one is processes.**
+core.clj already routes every concurrent construct through an executor
+object: `future` is `(.submit clojure.lang.Agent/soloExecutor f)`,
+`pmap` is futures, `send` and `send-off` are `.dispatch` onto
+`pooledExecutor`/`soloExecutor`, and `set-agent-send-executor!` is the
+public knob. Today those two are nil and `.submit` fails. The plan is
+an executor as a protocol with `submit`, and impls: a local process
+pool (fork `clotran`, ship the form and its data as text, read the
+printed result back), ssh/Slurm (the same, with a job script), a
+Kubernetes Job, a tuple space. Code being data is what makes shipping
+a task trivial where Python must pickle a closure. None of that needs
+the collector to be thread-safe, so it can land BEFORE in-process
+threads, which wait on the context type (stage 2) and the OpenMP vs
+pthreads spike. A GPU is not an executor for closures: it runs
+kernels over arrays, so it arrives as array operations (`do
+concurrent`, OpenACC, a device BLAS) under the `fortran` namespace,
+not as a thread impl. Prior art the design follows: Julia's
+`Distributed` with ClusterManagers, Parsl, Dask; Clojure's own
+executor knobs and `claypoole`; Erlang for location transparency;
+Linda for the tuple space.
+
 **Arrays are never ragged.** A Fortran rank-2 array is one contiguous
 column-major block; `[[I` is nested and cannot be handed to BLAS at
 any price. `(aget m 1)` is a strided view over the parent's buffer.

@@ -2500,3 +2500,34 @@ spells every class keyword. The hand-kept HOST_IMPORTS table went
 with it. String.split, String.replaceAll and
 `System/identityHashCode` were added along the way because pprint
 reached them next; they are host members, so they are rows.
+
+## pprint, and what a proxy inherits
+
+Once `class` agreed with the literal, pprint failed four more times,
+each on a host contract the pretty writer assumed:
+
+1. `(.split s "\n" -1)` -- String.split takes a pattern SOURCE and
+   compiles it; only Pattern.split took a Pattern.
+2. `(.replaceFirst s0 "\\s+$" "")` -- the same, for replaceAll and
+   replaceFirst.
+3. `(newline)` is `(.append *out* ...)`, and the pretty writer is a
+   `(proxy [Writer IDeref PrettyFlush] ...)` that defines `write` and
+   not `append`. On the JVM `Writer.append` is a concrete method of
+   the superclass that calls `write`, so the proxy inherits it. Here
+   an unknown member on an instance fell through to the host native,
+   `clotran-append`, which knows StringBuilders and Fortran units and
+   did nothing for an instance. So the newline was dropped, silently
+   -- `(pprint [1 2])` printed `[1 2]` with no line end, and nothing
+   errored. `eval_dot` now maps `append` to the instance's own `write`.
+4. `(.write w \space)` on that path: `Writer.append(char)` calls
+   `write(int)` with the CODE POINT, and the proxy's `write` is a
+   `condp` on `Integer`/`Long`; a Character matched no clause. And
+   the column writer hands `(int \newline)` down to the base
+   `StringWriter`, whose `write(int)` must write the character, not
+   the digits -- `"a10"` was the symptom.
+
+Each was a silent wrong answer before it was an error, which is the
+order CLAUDE.md warns about. The oracle now holds six `with-out-str`
+pprint cases against `clj`; the seventh, a 12-entry map, was dropped
+because a JVM hash map iterates in its own order and the text cannot
+be compared, only the values.

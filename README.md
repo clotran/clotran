@@ -105,6 +105,16 @@ with no copy. A binding generator that would do for any routine what
 was done by hand for these is what comes next; PLAN.md step 7 records
 what the library dictated for it.
 
+**`pprint` works.** Through Clojure's own `clojure.pprint`, verbatim:
+the pretty writer is a `proxy` over `Writer` and `IDeref`, the column
+writer another, and six `with-out-str` cases in the oracle print
+byte-for-byte what `clj` prints for vectors, nested maps, a `defn`
+form and `print-table`. What it took was not pprint code but host
+contract: `class` answering the literal's keyword, `import` recording
+short names, `String.split`, `String.replaceAll`, `Writer.append`
+reaching a proxy's `write`, and `Writer.write(int)` writing the
+character.
+
 **Three extensions.** `.cljf` is a clotran file: it may use the
 `fortran` namespace and is looked for first. `.cljc` is portable
 Clojure; clotran reads its `#?` branches with the feature `:cljf`
@@ -146,7 +156,6 @@ recalled. See `CLAUDE.md`.
 | startup | 2.3s: core.clj is re-read and re-analysed every launch; there is no image yet |
 | memory | 152 MB after loading core.clj, and a 100000-element reduce stays there since locals are cleared after their last read; the image (PLAN.md step 5, stage 3) is what would shrink the baseline |
 | debugger | an error reports `file:line:col` and the chain of calls that led to it, and `.getStackTrace` answers real elements; there is no breakpoint or step yet; PLAN.md step 8 |
-| `pprint` | `cl-format` and `print-table` work; `pprint` prints, but breaks a line after every element: its column accounting is wrong somewhere in `pretty_writer.clj`'s path through clotran |
 | `BigDecimal` and `BigInt` | `1M` reads as a double and `1N` as an integer; DEVIATIONS 30 |
 | sorted collections | `sorted-map` and `sorted-set` are unsorted; DEVIATIONS 9 |
 | mutable deftype fields | `(set! afield v)` is refused, loudly; DEVIATIONS 20 |

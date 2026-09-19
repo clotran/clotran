@@ -1513,6 +1513,23 @@
 ;; nor with each other
 (= (count (set (map hash (range 20)))) 20)
 
+;; pprint, through the real pretty writer: a proxy over Writer and IDeref
+(require (quote clojure.pprint))
+
+(with-out-str (clojure.pprint/pprint [1 2]))
+
+(with-out-str (clojure.pprint/pprint (vec (range 40))))
+
+(with-out-str (clojure.pprint/pprint {:a [1 2 3] :b "s" :c {:d (range 5)}}))
+
+(with-out-str (clojure.pprint/pprint (quote (defn f [x] (let [y (* x 2)] (if (> y 10) :big :small))))))
+
+;; twelve wide strings, so the block breaks (a 12-entry MAP would be a hash
+;; map on the JVM and iterate in a different order: values, not text)
+(with-out-str (clojure.pprint/pprint (vec (map #(apply str (repeat 8 (char (+ 97 %)))) (range 12)))))
+
+(with-out-str (clojure.pprint/print-table [{:a 1 :b 2} {:a 3 :b 4}]))
+
 ;; the clock exists (ClojureScript has system-time)
 (pos? (System/nanoTime))
 

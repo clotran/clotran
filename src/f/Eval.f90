@@ -1644,6 +1644,20 @@ contains
        end if
        call vs_set(base + 4, gca_get(gc_slot(gc_slot(vs_get(base + 3), 1), 3), &
             gc_key(mname, [vs_get(base + 3)])))
+       ! Writer.append is a concrete method of the superclass that calls
+       ! the write the proxy defined: (newline) is (.append *out* ...),
+       ! and a proxy over Writer that only wrote `write` inherits it.
+       if (gc_kind(vs_get(base + 4)) /= OBJ_CLOSURE .and. mname == "append") then
+          call vs_set(base + 4, gca_get(gc_slot(gc_slot(vs_get(base + 3), 1), 3), &
+               gc_key("write", [vs_get(base + 3)])))
+          ! append(char) reaches write(int): the code point, not the char.
+          if (gcv_count(vs_get(base + 2)) == 1) then
+             if (tag_of(gcv_nth(vs_get(base + 2), 0)) == GCT_CHAR) then
+                call vs_set(base + 2, gcv_conj(gcv_empty([vs_get(base + 3)]), &
+                     gc_int(int_of(gcv_nth(vs_get(base + 2), 0))), [vs_get(base + 3)]))
+             end if
+          end if
+       end if
        if (gc_kind(vs_get(base + 4)) == OBJ_CLOSURE) then
           ! `this` is an explicit first parameter of the method, so
           ! the target is prepended exactly as for a host member.
@@ -5757,17 +5771,25 @@ contains
          end if
        end block
     case (B_WRITE)
-       ! (.write w s). A char writes as itself; anything else goes
-       ! through str, as Writer.write(int) does for a code point.
+       ! (.write w s). A char writes as itself, and so does an INTEGER:
+       ! Writer.write(int) takes a code point, which is how the column
+       ! writer under pprint hands a newline down. (StringBuilder.append
+       ! of an int is its digits; that is B_APPEND, not this.)
        block
-         type(gc_value) :: w
+         type(gc_value) :: w, x
+         character(len=:), allocatable :: piece
          w = strip_meta(gcv_nth(args, 0))
+         x = strip_meta(gcv_nth(args, 1))
+         if (x%tag == GCT_INT .and. x%ival >= 0 .and. x%ival < 128) then
+            ! ponytail: ASCII only; a code point past 127 still prints as digits.
+            piece = achar(int(x%ival))
+         else
+            piece = text_of(x)
+         end if
          if (gc_kind(w) == OBJ_WRITER) then
-            write(gc_i1(w), '(A)', advance='no') text_of(gcv_nth(args, 1))
+            write(gc_i1(w), '(A)', advance='no') piece
          else if (gc_kind(w) == OBJ_SB) then
-            call gc_set_slot(w, 1, gc_str( &
-                 text_of(gc_slot(w, 1)) // text_of(gcv_nth(args, 1)), &
-                 [vs_get(base + 1)]))
+            call gc_set_slot(w, 1, gc_str(text_of(gc_slot(w, 1)) // piece, [vs_get(base + 1)]))
          end if
          out = gc_nil()
        end block
