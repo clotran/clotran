@@ -34,7 +34,7 @@ JVM-shaped `case` arms in one file.
 |---|---|
 | core.clj | 724 of 724 forms load |
 | our tests | 100% on both compilers; the gate |
-| the derived language suite | 376 tests kept (364 language + 9 concurrency + 3 from unparsable-but-kept files), 307 executed: 1869 pass / 158 fail / 358 error, so 78% of assertions that EXECUTED. 6 of 45 derived files abort before defining a test: compilation, data-structures, def, numbers, reducers, transducers |
+| the derived language suite | 339 tests kept (330 language + 9 concurrency) in 40 files, every file loads, 352 tests execute: 2323 pass / 265 fail / 401 error, so 78% of assertions that EXECUTED |
 | Clojure's suite, verbatim (for reference) | 1810 pass / 219 fail / 1396 error over 357 tests, 53% of executed; 32 of 67 namespaces produce a passing assertion |
 | startup | 4.1s (was 7.2s before step 4), core.clj re-read every launch |
 | `(reduce + (range n))` | LINEAR since step 4: n=100000 in 17s net, ~170 µs and 60 evaluations per element. Before: n=16000 took 161s and n=100000 did not finish in 15 minutes |
@@ -122,9 +122,13 @@ Three layers, each answering a different question:
   (Clojure-only, but goal 3); HOST otherwise (a Java class, a member
   call, a constructor, a clojure.core name ClojureScript never had) --
   and writes the kept tests to `test/clj/derived/` with the source
-  file and line of each. Of 578 deftests it can read, 364 are language,
-  9 concurrency, 205 host; 7 files it cannot read at all (method
-  values, param-tags, record literals) are all JVM-shaped. The two hand
+  file and line of each. Of 578 deftests it can read, 330 are language,
+  9 concurrency, 239 host; 7 files it cannot read at all (method
+  values, param-tags, record literals) are all JVM-shaped. A helper a
+  kept test needs travels with it; a test whose helper is host goes
+  with the helper; a top-level form with a head nobody defines
+  (test.check's `defspec`) goes; a require of another test file goes,
+  because it would load the vendored JVM-shaped original. The two hand
   lists it does contain, the exception allowlist and the concurrency
   vocabulary, are printed by `--report` so they can be argued with.
   `scripts/run-clojure-tests-parallel test/clj/derived` runs it.
@@ -169,7 +173,7 @@ expansion, and `sample` gave the call tree.
    1832 -> 60, and startup 7.2s -> 4.1s, because core.clj's own
    protocol maps were paying the same tax on load.
 
-Still to do from this step: `System/nanoTime`, so `time` works.
+`System/nanoTime` and `currentTimeMillis` exist now, so `time` works.
 
 ### 5. The analysis pass, executed over explicit frames
 

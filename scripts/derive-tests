@@ -41,7 +41,7 @@
 ;; symbols a form mentions, which is all this script reads.
 (defn parse [f]
   (try (e/parse-string-all (slurp f) {:all true :end-location true :auto-resolve name
-                                       :readers (fn [_tag] identity)
+                                       :readers (fn [_tag] (fn [v] (list (quote clotran-tagged-literal) v)))
                                        :read-cond :allow :features #{:clj}})
        (catch Exception ex (println "  cannot parse" (str f) ":" (.getMessage ex)) nil)))
 
@@ -69,6 +69,16 @@
                      "clojure.template" "clojure.zip" "clojure.data" "clojure.edn" "clojure.pprint"
                      "clojure.math" "clojure.test-helper" "clojure.test-clojure.test-helper"})
 
+;; What clojure.test refers into every test namespace. Listed because
+;; (:require [clojure.test :refer :all]) cannot be enumerated from the
+;; ns form; clojure.test-helper's publics are read from its file.
+(def test-vocab
+  '#{deftest deftest- testing is are thrown? thrown-with-msg? use-fixtures compose-fixtures
+     join-fixtures set-test with-test run-tests run-all-tests run-test test-var test-vars
+     test-all-vars successful? do-report inc-report-counter report assert-expr try-expr
+     testing-vars-str testing-contexts-str file-position function? *load-tests* *stack-trace-depth*
+     *report-counters* *testing-vars* *testing-contexts* *test-out* with-test-out})
+
 ;; Exceptions whose CLASS NAME is how Clojure spells a language-level
 ;; failure -- (thrown? ArityException ...) is about arity, not about Java.
 (def exception-allowlist
@@ -95,13 +105,15 @@
 
 (defn capitalized? [s] (let [c (first (name s))] (and c (Character/isUpperCase c))))
 
+(defn require-specs [ns-form]
+  (for [clause (drop 2 ns-form)
+        :when (and (seq? clause) (#{:require :use} (first clause)))
+        spec (rest clause)
+        :let [[lib & {:as opts}] (if (vector? spec) spec [spec])]]
+    {:lib (name lib) :as (some-> (:as opts) name) :refer (:refer opts) :use? (= :use (first clause))}))
+
 (defn ns-aliases [ns-form]
-  (into {} (for [clause (drop 2 ns-form)
-                 :when (and (seq? clause) (= :require (first clause)))
-                 spec (rest clause)
-                 :let [[lib & {:as opts}] (if (vector? spec) spec [spec])]
-                 :when (:as opts)]
-             [(name (:as opts)) (name lib)])))
+  (into {} (for [{:keys [lib as]} (require-specs ns-form) :when as] [as lib])))
 
 (defn symbols-in [form]
   (let [acc (atom [])]
@@ -109,9 +121,10 @@
     @acc))
 
 ;; Why a symbol is outside the language, or nil if it is inside.
-(defn offence [sym {:keys [aliases local-names core-only-names lang]}]
+(defn offence [sym {:keys [aliases local-names core-only-names lang dropped]}]
   (let [n (name sym) nsp (namespace sym)]
     (cond
+      (= sym 'clotran-tagged-literal) [:host sym]     ; #tag{...}: no tagged literals here
       (contains? numeric-constants sym) nil
       nsp (let [nsp (get aliases nsp nsp)]
             (cond (contains? portable-libs nsp) nil
@@ -127,45 +140,93 @@
       (contains? concurrency-vocab sym) [:concurrency sym]
       (contains? core-only-names sym) [:host sym]
       (contains? exception-allowlist sym) nil
+      (contains? dropped sym) [:host sym]              ; defined by a helper that was itself host
       (contains? local-names sym) nil
       (capitalized? sym) [:host sym]
       :else nil)))
 
+;; A top-level form's HEAD must be something we can name: a special form,
+;; a language or test name, or a definition in this file. An unknown head
+;; -- test.check's defspec, generative's defspec -- is a library we do
+;; not have, and the whole form goes with it.
+(defn unknown-head [form {:keys [lang local-names helper-vocab]}]
+  (when (and (seq? form) (symbol? (first form)) (nil? (namespace (first form))))
+    (let [h (first form)]
+      (when-not (or (contains? specials h) (contains? lang h) (contains? test-vocab h)
+                    (contains? helper-vocab h) (contains? local-names h)
+                    (contains? concurrency-vocab h))
+        h))))
+
 (defn bucket [form ctx]
   (let [offs (keep #(offence % ctx) (symbols-in form))
+        offs (if-let [h (unknown-head form ctx)] (cons [:host h] offs) offs)
         kinds (set (map first offs))]
     {:bucket (cond (kinds :host) :host (kinds :concurrency) :concurrency :else :language)
      :offences (distinct (map second offs))}))
 
 (defn deftest? [f] (and (seq? f) (= 'deftest (first f))))
+(defn ns-form? [f] (and (seq? f) (= 'ns (first f))))
+(defn defined-name [f] (when (and (seq? f) (symbol? (first f)) (symbol? (second f))
+                                  (str/starts-with? (name (first f)) "def"))
+                         (second f)))
 
-(defn local-names-in [forms]
-  (into #{} (for [f forms :when (and (seq? f) (symbol? (first f)) (symbol? (second f))
-                                     (or (str/starts-with? (name (first f)) "def")
-                                         (= 'deftest (first f))))]
-              (second f))))
+(defn local-names-in [forms] (into #{} (keep defined-name forms)))
+
+;; Classify one file: helpers first, to a fixpoint (a helper using a dropped
+;; helper is dropped too), then the tests against the surviving helpers.
+(defn classify-file [forms ns-form base-ctx test-namespaces]
+  (let [specs (when ns-form (require-specs ns-form))
+        ;; a require of ANOTHER test file loads the vendored, JVM-shaped
+        ;; original from the classpath, so it goes, and what it referred
+        ;; becomes unavailable
+        foreign (filter #(contains? test-namespaces (:lib %)) specs)
+        dropped0 (into #{} (for [s foreign, r (if (sequential? (:refer s)) (:refer s) [])] r))
+        helpers (remove #(or (deftest? %) (ns-form? %)) forms)
+        ctx0 (assoc base-ctx :local-names (local-names-in forms) :aliases (ns-aliases ns-form))
+        step (fn [dropped]
+               (let [ctx (assoc ctx0 :dropped dropped)
+                     bad (filter #(= :host (:bucket (bucket % ctx))) helpers)]
+                 (into dropped (keep defined-name bad))))
+        dropped (loop [d dropped0] (let [d2 (step d)] (if (= d d2) d (recur d2))))
+        ctx (assoc ctx0 :dropped dropped)
+        kept-helpers (remove #(= :host (:bucket (bucket % ctx))) helpers)
+        tests (for [t (filter deftest? forms)] (assoc (bucket t ctx) :form t))]
+    {:tests tests :helpers kept-helpers :dropped dropped
+     :ns-clean (when ns-form
+                 (let [portable? (fn [{:keys [lib]}]
+                                   (or (contains? portable-libs lib)
+                                       (and (str/starts-with? lib "clojure.test-clojure")
+                                            (not (contains? test-namespaces lib))
+                                            ;; wraps clojure.data.generators, a third-party artifact
+                                            (not= lib "clojure.test-clojure.generators"))))]
+                   (concat (take 2 ns-form)
+                           (keep (fn [clause]
+                                   (cond (not (seq? clause)) clause
+                                         (= :import (first clause)) nil
+                                         (#{:require :use} (first clause))
+                                         (let [specs (filter (fn [spec] (portable? {:lib (name (if (vector? spec) (first spec) spec))}))
+                                                             (rest clause))]
+                                           (when (seq specs) (cons (first clause) specs)))
+                                         :else clause))
+                                 (drop 2 ns-form)))))}))
 
 (let [report? (= "--report" (first *command-line-args*))
       clj-names  (reduce into #{} (map (comp public-names parse) core-clj-files))
       cljs-names (into (public-names (parse core-cljs)) (public-names (parse core-cljc)))
       lang (set (filter cljs-names clj-names))
       core-only (set (remove cljs-names clj-names))
+      helper-vocab (public-names (parse (io/file repo "test/clj/clojure/test_helper.clj")))
       files (sort-by #(.getName %) (filter #(str/ends-with? (.getName %) ".clj") (.listFiles suite-dir)))
+      parsed (for [f files :let [forms (parse f)] :when forms]
+               {:file f :forms forms :ns-form (first (filter ns-form? forms))})
+      test-namespaces (into #{} (keep #(some-> (:ns-form %) second name) parsed))
+      base-ctx {:core-only-names core-only :lang lang :helper-vocab helper-vocab}
       offence-count (atom {})
-      rows (for [f files
-                 :let [forms (parse f)]
-                 :when forms
-                 :let [ns-form (first (filter #(and (seq? %) (= 'ns (first %))) forms))
-                       ctx {:aliases (when ns-form (ns-aliases ns-form))
-                            :local-names (local-names-in forms)
-                            :core-only-names core-only :lang lang}
-                       tests (for [t (filter deftest? forms)
-                                   :let [b (bucket t ctx)]]
-                               (do (when (= :host (:bucket b))
-                                     (doseq [o (:offences b)] (swap! offence-count update o (fnil inc 0))))
-                                   (assoc b :form t)))]]
-             {:file f :ns-form ns-form :forms forms :tests tests
-              :counts (frequencies (map :bucket tests))})]
+      rows (for [{:keys [file forms ns-form]} parsed
+                 :let [r (classify-file forms ns-form base-ctx test-namespaces)]]
+             (do (doseq [t (:tests r) :when (= :host (:bucket t)) o (:offences t)]
+                   (swap! offence-count update o (fnil inc 0)))
+                 (assoc r :file file :counts (frequencies (map :bucket (:tests r))))))]
   (println (format "clojure.core publics %d, cljs.core publics %d, intersection (the language) %d, clojure-only %d"
                    (count clj-names) (count cljs-names) (count lang) (count core-only)))
   (println)
@@ -183,38 +244,11 @@
   (when-not report?
     (.mkdirs out-dir)
     (doseq [old (.listFiles out-dir)] (.delete old))
-    (doseq [{:keys [file ns-form forms tests]} rows
+    (doseq [{:keys [file tests helpers ns-clean]} rows
             :let [kept (filter #(#{:language :concurrency} (:bucket %)) tests)]
             :when (seq kept)]
       (let [lines (str/split-lines (slurp file))
             slice (fn [form] (let [m (meta form)] (str/join "\n" (subvec lines (dec (:row m)) (:end-row m)))))
-            ;; helpers: every non-deftest, non-ns top-level form that is itself
-            ;; language-clean travels with the tests that may need it
-            ctx {:aliases (ns-aliases ns-form) :local-names (local-names-in forms)
-                 :core-only-names core-only :lang lang}
-            helpers (filter #(and (not (deftest? %)) (not (and (seq? %) (= 'ns (first %))))
-                                  (not= :host (:bucket (bucket % ctx))))
-                            forms)
-            ;; the ns form keeps only what a language test can load: no
-            ;; :import, and no :require/:use of a JVM or third-party lib
-            ;; (test.check, generative) -- every test that used one is
-            ;; already in the host bucket, so nothing kept refers to it
-            portable-lib? (fn [spec] (let [lib (name (if (vector? spec) (first spec) spec))]
-                                       (or (contains? portable-libs lib)
-                                           ;; test-clojure.generators wraps clojure.data.generators,
-                                           ;; a third-party artifact; every test using it is host
-                                           (and (str/starts-with? lib "clojure.test-clojure")
-                                                (not= lib "clojure.test-clojure.generators"))
-                                           (str/starts-with? lib "clojure.test-helper"))))
-            ns-clean (concat (take 2 ns-form)
-                             (keep (fn [clause]
-                                     (cond (not (seq? clause)) clause
-                                           (= :import (first clause)) nil
-                                           (#{:require :use} (first clause))
-                                           (let [specs (filter portable-lib? (rest clause))]
-                                             (when (seq specs) (cons (first clause) specs)))
-                                           :else clause))
-                                   (drop 2 ns-form)))
             out (io/file out-dir (.getName file))]
         (spit out (str ";; DERIVED from " (str (.relativize (.toPath repo) (.toPath file))) " by scripts/derive-tests -- do not edit.\n"
                        ";; Kept: tests whose symbols lie in the clojure.core/cljs.core intersection (plus concurrency).\n\n"

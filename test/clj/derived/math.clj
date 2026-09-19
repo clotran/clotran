@@ -11,15 +11,6 @@
   (let [mu (* (m/ulp x) m)]
     (<= (- x mu) y (+ x mu))))
 
-;; math.clj:30 [language]
-(deftest test-sin
-  (is (NaN? (m/sin ##NaN)))
-  (is (NaN? (m/sin ##-Inf)))
-  (is (NaN? (m/sin ##Inf)))
-  (is (pos-zero? (m/sin 0.0)))
-  (is (neg-zero? (m/sin -0.0)))
-  (is (ulp= (m/sin m/PI) (- (m/sin (- m/PI))) 1)))
-
 ;; math.clj:38 [language]
 (deftest test-cos
   (is (NaN? (m/cos ##NaN)))
@@ -27,15 +18,6 @@
   (is (NaN? (m/cos ##Inf)))
   (is (= 1.0 (m/cos 0.0) (m/cos -0.0)))
   (is (ulp= (m/cos m/PI) (m/cos (- m/PI)) 1)))
-
-;; math.clj:45 [language]
-(deftest test-tan
-  (is (NaN? (m/tan ##NaN)))
-  (is (NaN? (m/tan ##-Inf)))
-  (is (NaN? (m/tan ##Inf)))
-  (is (pos-zero? (m/tan 0.0)))
-  (is (neg-zero? (m/tan -0.0)))
-  (is (ulp= (- (m/tan m/PI)) (m/tan (- m/PI)) 1)))
 
 ;; math.clj:53 [language]
 (deftest test-asin
@@ -51,25 +33,10 @@
   (is (NaN? (m/acos 2.0)))
   (is (ulp= (* 2 (m/acos 0.0)) m/PI 1)))
 
-;; math.clj:65 [language]
-(deftest test-atan
-  (is (NaN? (m/atan ##NaN)))
-  (is (pos-zero? (m/atan 0.0)))
-  (is (neg-zero? (m/atan -0.0)))
-  (is (ulp= (m/atan 1) 0.7853981633974483 1)))
-
 ;; math.clj:71 [language]
 (deftest test-radians-degrees-roundtrip
   (doseq [d (range 0.0 360.0 5.0)]
     (is (ulp= (m/round d) (m/round (-> d m/to-radians m/to-degrees)) 1))))
-
-;; math.clj:75 [language]
-(deftest test-exp
-  (is (NaN? (m/exp ##NaN)))
-  (is (= ##Inf (m/exp ##Inf)))
-  (is (pos-zero? (m/exp ##-Inf)))
-  (is (ulp= (m/exp 0.0) 1.0 1))
-  (is (ulp= (m/exp 1) m/E 1)))
 
 ;; math.clj:82 [language]
 (deftest test-log
@@ -86,22 +53,6 @@
   (is (= ##Inf (m/log10 ##Inf)))
   (is (= ##-Inf (m/log10 0.0)))
   (is (ulp= (m/log10 10) 1.0 1)))
-
-;; math.clj:96 [language]
-(deftest test-sqrt
-  (is (NaN? (m/sqrt ##NaN)))
-  (is (NaN? (m/sqrt -1.0)))
-  (is (= ##Inf (m/sqrt ##Inf)))
-  (is (pos-zero? (m/sqrt 0)))
-  (is (= (m/sqrt 4.0) 2.0)))
-
-;; math.clj:103 [language]
-(deftest test-cbrt
-  (is (NaN? (m/cbrt ##NaN)))
-  (is (= ##-Inf (m/cbrt ##-Inf)))
-  (is (= ##Inf (m/cbrt ##Inf)))
-  (is (pos-zero? (m/cbrt 0)))
-  (is (= 2.0 (m/cbrt 8.0))))
 
 ;; math.clj:110 [language]
 (deftest test-IEEE-remainder
@@ -125,57 +76,6 @@
   (is (= ##Inf (m/floor ##Inf)))
   (is (= ##-Inf (m/floor ##-Inf)))
   (is (= 3.0 (m/floor m/PI))))
-
-;; math.clj:130 [language]
-(deftest test-rint
-  (is (NaN? (m/rint ##NaN)))
-  (is (= ##Inf (m/rint ##Inf)))
-  (is (= ##-Inf (m/rint ##-Inf)))
-  (is (= 1.0 (m/rint 1.2)))
-  (is (neg-zero? (m/rint -0.01))))
-
-;; math.clj:137 [language]
-(deftest test-atan2
-  (is (NaN? (m/atan2 ##NaN 1.0)))
-  (is (NaN? (m/atan2 1.0 ##NaN)))
-  (is (pos-zero? (m/atan2 0.0 1.0)))
-  (is (neg-zero? (m/atan2 -0.0 1.0)))
-  (is (ulp= (m/atan2 0.0 -1.0) m/PI 2))
-  (is (ulp= (m/atan2 -0.0 -1.0) (- m/PI) 2))
-  (is (ulp= (* 2.0 (m/atan2 1.0 0.0)) m/PI 2))
-  (is (ulp= (* -2.0 (m/atan2 -1.0 0.0)) m/PI 2))
-  (is (ulp= (* 4.0 (m/atan2 ##Inf ##Inf)) m/PI 2))
-  (is (ulp= (/ (* 4.0 (m/atan2 ##Inf ##-Inf)) 3.0) m/PI 2))
-  (is (ulp= (* -4.0 (m/atan2 ##-Inf ##Inf)) m/PI 2))
-  (is (ulp= (/ (* -4.0 (m/atan2 ##-Inf ##-Inf)) 3.0) m/PI 2)))
-
-;; math.clj:151 [language]
-(deftest test-pow
-  (is (= 1.0 (m/pow 4.0 0.0)))
-  (is (= 1.0 (m/pow 4.0 -0.0)))
-  (is (= 4.2 (m/pow 4.2 1.0)))
-  (is (NaN? (m/pow 4.2 ##NaN)))
-  (is (NaN? (m/pow ##NaN 2.0)))
-  (is (= ##Inf (m/pow 2.0 ##Inf)))
-  (is (= ##Inf (m/pow 0.5 ##-Inf)))
-  (is (= 0.0 (m/pow 2.0 ##-Inf)))
-  (is (= 0.0 (m/pow 0.5 ##Inf)))
-  (is (NaN? (m/pow 1.0 ##Inf)))
-  (is (pos-zero? (m/pow 0.0 1.5)))
-  (is (pos-zero? (m/pow ##Inf -2.0)))
-  (is (= ##Inf (m/pow 0.0 -2.0)))
-  (is (= ##Inf (m/pow ##Inf 2.0)))
-  (is (pos-zero? (m/pow -0.0 1.5)))
-  (is (pos-zero? (m/pow ##-Inf -1.5)))
-  (is (neg-zero? (m/pow -0.0 3.0)))
-  (is (neg-zero? (m/pow ##-Inf -3.0)))
-  (is (= ##Inf (m/pow -0.0 -1.5)))
-  (is (= ##Inf (m/pow ##-Inf 2.5)))
-  (is (= ##-Inf (m/pow -0.0 -3.0)))
-  (is (= ##-Inf (m/pow ##-Inf 3.0)))
-  (is (= 4.0 (m/pow -2.0 2.0)))
-  (is (= -8.0 (m/pow -2.0 3.0)))
-  (is (= 8.0 (m/pow 2.0 3.0))))
 
 ;; math.clj:178 [language]
 (deftest test-round
@@ -297,28 +197,11 @@
   (is (= -1.0 (m/expm1 ##-Inf)))
   (is (= 0.0 (m/expm1 0.0))))
 
-;; math.clj:282 [language]
-(deftest test-log1p
-  (is (NaN? (m/log1p ##NaN)))
-  (is (= ##Inf (m/log1p ##Inf)))
-  (is (= ##-Inf (m/log1p -1.0)))
-  (is (pos-zero? (m/log1p 0.0)))
-  (is (neg-zero? (m/log1p -0.0))))
-
 ;; math.clj:289 [language]
 (deftest test-copy-sign
   (is (= 1.0 (m/copy-sign 1.0 42.0)))
   (is (= -1.0 (m/copy-sign 1.0 -42.0)))
   (is (= -1.0 (m/copy-sign 1.0 ##-Inf))))
-
-;; math.clj:302 [language]
-(deftest test-next-after
-  (is (NaN? (m/next-after ##NaN 1)))
-  (is (NaN? (m/next-after 1 ##NaN)))
-  (is (pos-zero? (m/next-after 0.0 0.0)))
-  (is (neg-zero? (m/next-after -0.0 -0.0)))
-  (is (= Double/MAX_VALUE (m/next-after ##Inf 1.0)))
-  (is (pos-zero? (m/next-after Double/MIN_VALUE -1.0))))
 
 ;; math.clj:310 [language]
 (deftest test-next-up
@@ -331,12 +214,3 @@
   (is (NaN? (m/next-down ##NaN)))
   (is (= ##-Inf (m/next-down ##-Inf)))
   (is (= (- Double/MIN_VALUE) (m/next-down 0.0))))
-
-;; math.clj:320 [language]
-(deftest test-scalb
-  (is (NaN? (m/scalb ##NaN 1)))
-  (is (= ##Inf (m/scalb ##Inf 1)))
-  (is (= ##-Inf (m/scalb ##-Inf 1)))
-  (is (pos-zero? (m/scalb 0.0 2)))
-  (is (neg-zero? (m/scalb -0.0 2)))
-  (is (= 32.0 (m/scalb 2.0 4))))

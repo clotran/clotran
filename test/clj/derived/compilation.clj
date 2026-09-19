@@ -20,18 +20,11 @@
   (^long [])
   (^double [a]))
 
-(defspec test-munge-roundtrip
-  munge-roundtrip
-  [^{:tag clojure.test-clojure.compilation/gen-name} n]
-  (assert (= n %)))
-
 (defn ^{:tag 'long} hinted-primfn [^long x] x)
 
 (defn unhinted-primfn [^long x] x)
 
 (defrecord Y [a])
-
-#clojure.test_clojure.compilation.Y[1]
 
 (defrecord Y [b])
 

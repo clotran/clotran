@@ -26,10 +26,6 @@
 (def public-vars-with-docstrings
   (filter (comp :doc meta) public-vars))
 
-;; metadata.clj:45 [language]
-(deftest public-vars-with-docstrings-have-added
-  (is (= [] (remove (comp :added meta) public-vars-with-docstrings-not-generated))))
-
 ;; metadata.clj:48 [language]
 (deftest interaction-of-def-with-metadata
   (testing "initial def sets metadata"

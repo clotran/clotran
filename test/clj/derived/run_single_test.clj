@@ -1,7 +1,7 @@
 ;; DERIVED from test/clj/clojure/test_clojure/run_single_test.clj by scripts/derive-tests -- do not edit.
 ;; Kept: tests whose symbols lie in the clojure.core/cljs.core intersection (plus concurrency).
 
-(ns clojure.test-clojure.run-single-test (:require [clojure.test :refer [is deftest run-test run-tests]] [clojure.test-helper :refer [with-err-string-writer]] [clojure.test-clojure.test-fixtures :as tf]))
+(ns clojure.test-clojure.run-single-test (:require [clojure.test :refer [is deftest run-test run-tests]] [clojure.test-helper :refer [with-err-string-writer]]))
 
 (defn not-a-test
   [])

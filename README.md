@@ -50,15 +50,15 @@ keeps every `deftest` whose symbols lie in the intersection of
 `clojure.core` and `cljs.core` -- the language, as two implementations
 agree on it -- and leaves out the ones that name a Java class, a
 member call or a `clojure.core` function ClojureScript never had.
-That keeps 376 of 578 tests. **1869 passing assertions** across the
-307 of those that execute, against 158 failures and 358 errors, so
-**78% of the assertions that executed** (measured 2026-09-19).
+That keeps 339 of 578 tests, in 40 files that all load. **2323
+passing assertions** against 265 failures and 401 errors, so **78% of
+the assertions that executed** (measured 2026-09-19).
 
 That denominator is assertions that executed, not assertions that
-exist: 6 of the 45 derived files still abort before defining a test.
-The 67 vendored namespaces also run verbatim, for reference, at 53%
-of executed assertions; the JVM-shaped half of them is why that number
-is not the one to watch.
+exist: a test that errors part-way contributes only what ran. The 67
+vendored namespaces also run verbatim, for reference, at 53% of
+executed assertions; the JVM-shaped half of them is why that number is
+not the one to watch.
 
 **Real Fortran arrays**, which is the one thing this host has that the
 JVM does not:

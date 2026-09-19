@@ -34,8 +34,6 @@
 
 (defrecord RecordToTestBasisHinted [^String a ^Long b c])
 
-(defrecord RecordToTestHugeBasis [a b c d e f g h i j k l m n o p q r s t u v w x y z])
-
 (defrecord TypeToTestBasis [a b c])
 
 (defrecord TypeToTestBasisHinted [^String a ^Long b c])
@@ -46,17 +44,11 @@
 
 (defrecord RecordToTestB [b])
 
-(defrecord RecordToTestHugeFactories [a b c d e f g h i j k l m n o p q r s t u v w x y z])
-
 (defrecord RecordToTestDegenerateFactories [])
 
 (deftype TypeToTestFactory [a])
 
-(defrecord TypeToTestHugeFactories [a b c d e f g h i j k l m n o p q r s t u v w x y z])
-
 (defrecord RecordToTestLiterals [a])
-
-(defrecord TestNode [v l r])
 
 (deftype TypeToTestLiterals [a])
 

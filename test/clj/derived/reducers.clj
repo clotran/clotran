@@ -17,15 +17,6 @@
   [m p]
   (reduce-kv (fn [_ k v] (when (== p k) (reduced :foo))) nil m))
 
-(defspec reduced-always-returns
-  (fn [probe to-end]
-    (let [len (+ probe to-end 1)
-          nums (range len)
-          m (zipmap nums nums)]
-      (reduced-at-probe m probe)))
-  [^{:tag `gen-num} probe ^{:tag `gen-num} to-end]
-  (assert (= :foo %)))
-
 ;; reducers.clj:53 [language]
 (deftest test-sorted-maps
   (let [m (into (sorted-map)

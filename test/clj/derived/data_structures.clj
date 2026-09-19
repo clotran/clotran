@@ -6,15 +6,6 @@
 (defn diff [s1 s2]
   (seq (reduce disj (set s1) (set s2))))
 
-(defspec subcollection-counts-are-consistent
-  identity
-  [^{:tag cgen/ednable-collection} coll]
-  (let [n (count coll)]
-    (dotimes [i n]
-      (is (= n
-             (+ i (count (nthnext coll i)))
-             (+ i (count (drop i coll))))))))
-
 (defn- transient? [x]
   (instance? clojure.lang.ITransientCollection x))
 
@@ -30,20 +21,6 @@
 (defn to-persistent [c]
   (if (transient? c) (persistent! c) c))
 
-(defspec same-output-persistent-transient-set
-  identity
-  [^{:tag clojure.test-clojure.data-structures/gen-transient-set-actions} actions]
-  (assert-same-collection
-   (to-persistent (apply-actions #{} actions))
-   (to-persistent (apply-actions #{} actions))))
-
-(defspec same-output-persistent-transient-vector
-  identity
-  [^{:tag clojure.test-clojure.data-structures/gen-transient-vector-actions} actions]
-  (assert-same-collection
-   (to-persistent (apply-actions [] actions))
-   (to-persistent (apply-actions [] actions))))
-
 (defn case-indendent-string-cmp [s1 s2]
   (compare (string/lower-case s1) (string/lower-case s2)))
 
@@ -57,60 +34,7 @@
   (-> (reduce unchecked-add-int 0 (map hash collection))
       (mix-collection-hash (count collection))))
 
-(defspec ordered-collection-hashes-match
-  identity
-  [^{:tag clojure.test-clojure.data-structures/gen-elements} elem]
-  (let [v (vec elem)
-        l (apply list elem)]
-    (is (= (hash v)
-           (hash l)
-           (hash (map identity elem))
-           (hash-ordered elem)))))
-
-(defspec unordered-set-hashes-match
-  identity
-  [^{:tag clojure.test-clojure.data-structures/gen-elements} elem]
-  (let [unique-elem (distinct elem)
-        s (into #{} unique-elem)]
-    (is (= (hash s)
-           (hash-unordered unique-elem)))))
-
-(defspec seq-and-iter-match-for-maps
-  identity
-  [^{:tag clojure.test-clojure.data-structures/gen-map} m]
-  (seq-iter-match m m))
-
-(defspec seq-and-iter-match-for-sets
-  identity
-  [^{:tag clojure.test-clojure.data-structures/gen-set} s]
-  (seq-iter-match s s))
-
-(defspec seq-and-iter-match-for-queues
-  identity
-  [^{:tag clojure.test-clojure.data-structures/gen-queue} q]
-  (seq-iter-match q q))
-
 (defrecord Rec [a b])
-
-(defspec seq-and-iter-match-for-records
-         identity
-         [^{:tag clojure.test-clojure.data-structures/gen-record} r]
-         (seq-iter-match r r))
-
-(defspec seq-and-iter-match-for-keys
-         identity
-         [^{:tag clojure.test-clojure.data-structures/gen-map} m]
-         (seq-iter-match (keys m) (keys m)))
-
-(defspec seq-and-iter-match-for-vals
-         identity
-         [^{:tag clojure.test-clojure.data-structures/gen-map} m]
-         (seq-iter-match (vals m) (vals m)))
-
-(defspec seq-and-iter-match-for-structs
-         identity
-         [^{:tag clojure.test-clojure.data-structures/gen-struct} s]
-         (seq-iter-match s s))
 
 ;; data_structures.clj:269 [language]
 (deftest test-conj
@@ -662,52 +586,6 @@
        {:a 2 :b -2} (assoc {} :b -2 :a 2))
   (is (thrown? IllegalArgumentException (assoc [] 0 5 1)))
   (is (thrown? IllegalArgumentException (assoc {} :b -2 :a))))
-
-;; data_structures.clj:1174 [language]
-(deftest set-equality-test
-  (let [empty-sets [ #{}
-                     (hash-set)
-                     (sorted-set)
-                     (sorted-set-by case-indendent-string-cmp) ]]
-    (doseq [s1 empty-sets, s2 empty-sets]
-      (is-same-collection s1 s2)))
-  (let [sets1 [ #{"Banana" "apple" "7th"}
-                (hash-set "Banana" "apple" "7th")
-                (sorted-set "Banana" "apple" "7th")
-                (sorted-set-by case-indendent-string-cmp "Banana" "apple" "7th") ]]
-    (doseq [s1 sets1, s2 sets1]
-      (is-same-collection s1 s2))))
-
-;; data_structures.clj:1188 [language]
-(deftest map-equality-test
-  (let [empty-maps [ {}
-                     (hash-map)
-                     (array-map)
-                     (sorted-map)
-                     (sorted-map-by case-indendent-string-cmp) ]]
-    (doseq [m1 empty-maps, m2 empty-maps]
-      (is-same-collection m1 m2)))
-  (let [maps1 [ {"Banana" "like", "apple" "love", "7th" "indifferent"}
-                (hash-map "Banana" "like", "apple" "love", "7th" "indifferent")
-                (array-map "Banana" "like", "apple" "love", "7th" "indifferent")
-                (sorted-map "Banana" "like", "apple" "love", "7th" "indifferent")
-                (sorted-map-by case-indendent-string-cmp
-                               "Banana" "like", "apple" "love", "7th" "indifferent") ]]
-    (doseq [m1 maps1, m2 maps1]
-      (is-same-collection m1 m2))))
-
-;; data_structures.clj:1267 [language]
-(deftest test-seq-iter-match
-  (let [maps (mapcat #(vector (apply array-map %)
-                              (apply hash-map %)
-                              (apply sorted-map %))
-                     [[] [nil 1] [nil 1 2 3] [1 2 3 4]])]
-    (doseq [m maps]
-      (seq-iter-match m m)
-      (seq-iter-match (keys m) (keys m))
-      (seq-iter-match (vals m) (vals m))
-      (seq-iter-match (rest (keys m)) (rest (keys m)))
-      (seq-iter-match (rest (vals m)) (rest (vals m))))))
 
 ;; data_structures.clj:1343 [language]
 (deftest record-hashing

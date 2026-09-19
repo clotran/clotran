@@ -834,34 +834,6 @@
          dorun)
     (is (= n @m))))
 
-;; sequences.clj:1210 [language]
-(deftest test-longrange-corners
-  (let [lmax Long/MAX_VALUE
-        lmax-1 (- Long/MAX_VALUE 1)
-        lmax-2 (- Long/MAX_VALUE 2)
-        lmax-31 (- Long/MAX_VALUE 31)
-        lmax-32 (- Long/MAX_VALUE 32)
-        lmax-33 (- Long/MAX_VALUE 33)
-        lmin Long/MIN_VALUE
-        lmin+1 (+ Long/MIN_VALUE 1)
-        lmin+2 (+ Long/MIN_VALUE 2)
-        lmin+31 (+ Long/MIN_VALUE 31)
-        lmin+32 (+ Long/MIN_VALUE 32)
-        lmin+33 (+ Long/MIN_VALUE 33)]
-    (doseq [range-args [ [lmax-2 lmax]
-                         [lmax-33 lmax]
-                         [lmax-33 lmax-31]
-                         [lmin+2 lmin -1]
-                         [lmin+33 lmin -1]
-                         [lmin+33 lmin+31 -1]
-                         [lmin lmax lmax]
-                         [lmax lmin lmin]
-                         [-1 lmax lmax]
-                         [1 lmin lmin]]]
-    (is (= (apply unlimited-range-create range-args)
-           (apply range range-args))
-        (apply str "from (range " (concat (interpose " " range-args) ")"))))))
-
 ;; sequences.clj:1237 [language]
 (deftest test-empty?
   (are [x] (empty? x)

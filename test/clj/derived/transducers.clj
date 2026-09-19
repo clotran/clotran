@@ -18,41 +18,6 @@
 (defn- empty?$ [s]
   (if (instance? clojure.lang.Seqable s) (empty? s) false))
 
-(def gen-mapfn
-  (pickfn inc$ dec$))
-
-(def gen-mapcatfn
-  (pickfn vector
-          #(if (instance? clojure.lang.Seqable %) (partition-all 3 %) (vector %))))
-
-(def gen-predfn
-  (pickfn odd?$ pos?$ empty?$ sequential?))
-
-(def gen-indexedfn
-  (pickfn (fn [index item] index)
-          (fn [index item] item)
-          (fn [index item] (if (number? item) (+ index item) index))))
-
-(def gen-drop-while (fbind gen-predfn drop-while))
-
-(def gen-map (fbind gen-mapfn map))
-
-(def gen-mapcat (fbind gen-mapcatfn mapcat))
-
-(def gen-filter (fbind gen-predfn filter))
-
-(def gen-remove (fbind gen-predfn remove))
-
-(def gen-keep (fbind gen-predfn keep))
-
-(def gen-partition-by (fbind gen-predfn partition-by))
-
-(def gen-take-while (fbind gen-predfn take-while))
-
-(def gen-keep-indexed (fbind gen-indexedfn keep-indexed))
-
-(def gen-map-indexed (fbind gen-indexedfn map-indexed))
-
 (defn apply-as-seq [coll actions]
   (doall
     (loop [s coll

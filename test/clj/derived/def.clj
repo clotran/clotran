@@ -1,7 +1,7 @@
 ;; DERIVED from test/clj/clojure/test_clojure/def.clj by scripts/derive-tests -- do not edit.
 ;; Kept: tests whose symbols lie in the clojure.core/cljs.core intersection (plus concurrency).
 
-(ns clojure.test-clojure.def (:use clojure.test clojure.test-helper clojure.test-clojure.protocols))
+(ns clojure.test-clojure.def (:use clojure.test clojure.test-helper))
 
 
 
