@@ -73,43 +73,6 @@
     call vs_leave(base)
   end function exec_args
 
-  ! (quote v) -- a value as a form the old walker evaluates to itself.
-  ! The bridge to eval_dot and eval_new, which still take forms.
-  function quoted(v, roots) result(out)
-    type(gc_value), intent(in) :: v
-    type(gc_value), intent(in) :: roots(:)
-    type(gc_value) :: out, q
-    integer :: base
-    base = vs_enter(3)
-    call vs_set(base + 1, v)
-    q = gcl_cons(vs_get(base + 1), gcl_empty([roots, vs_get(base + 1)]), [roots, vs_get(base + 1)])
-    call vs_set(base + 2, q)
-    q = gc_sym("quote", [roots, vs_get(base + 2)])
-    call vs_set(base + 3, q)
-    out = gcl_cons(vs_get(base + 3), vs_get(base + 2), [roots, vs_get(base + 2), vs_get(base + 3)])
-    call vs_leave(base)
-  end function quoted
-
-  ! A list of quoted values from a vector of values.
-  function quoted_list(argv, roots) result(out)
-    type(gc_value), intent(in) :: argv
-    type(gc_value), intent(in) :: roots(:)
-    type(gc_value) :: out, q
-    integer :: base, i
-    base = vs_enter(3)
-    call vs_set(base + 1, argv)
-    out = gcl_empty([roots, vs_get(base + 1)])
-    call vs_set(base + 2, out)
-    do i = gcv_count(argv) - 1, 0, -1
-       q = quoted(gcv_nth(vs_get(base + 1), i), [roots, vs_get(base + 2)])
-       call vs_set(base + 3, q)
-       out = gcl_cons(vs_get(base + 3), vs_get(base + 2), [roots, vs_get(base + 2), vs_get(base + 3)])
-       call vs_set(base + 2, out)
-    end do
-    out = vs_get(base + 2)
-    call vs_leave(base)
-  end function quoted_list
-
   ! --- closures ------------------------------------------------------
 
   ! A closure over `frame` from a template: the captured slots are
@@ -367,11 +330,7 @@
        v = exec_args(kids, 0, frame)
        if (.not. has_error) then
           call vs_set(base + 3, v)
-          v = quoted_list(vs_get(base + 3), [vs_get(base + 1)])
-          call vs_set(base + 4, v)
-          v = gcl_cons(gc_slot(vs_get(base + 1), 2), vs_get(base + 4), [vs_get(base + 1), vs_get(base + 4)])
-          call vs_set(base + 4, v)
-          out = eval_new(vs_get(base + 4), gc_nil())
+          out = eval_new(sym_text(gc_slot(vs_get(base + 1), 2)), vs_get(base + 3))
        end if
     case (N_NEWTYPE)
        v = exec_args(kids, 0, frame)
@@ -517,7 +476,7 @@
           call gc_set_slot(vs_get(base + 4), 5, gc_sym(qual, [vs_get(base + 3), vs_get(base + 4)]))
        end if
     end if
-    if (iand(flags, 2) /= 0) call var_set_macro(vs_get(base + 3), gc_nil())
+    if (iand(flags, 2) /= 0) call var_set_macro(vs_get(base + 3))
     out = vs_get(base + 3)
     call vs_leave(base)
   end function exec_def
@@ -751,15 +710,15 @@
 
   ! (. target member args): a native instance member on anything but a
   ! deftype instance is called directly; everything else is handed to
-  ! eval_dot with its parts evaluated and quoted.
+  ! eval_dot with its parts evaluated.
   recursive function exec_dot(nd, frame) result(out)
     type(gc_value), intent(in) :: nd, frame
-    type(gc_value) :: out, kids, tv, argv, native, form, m, q
+    type(gc_value) :: out, kids, tv, argv, native
     integer :: base, from
     logical :: is_call
 
     out = gc_nil()
-    base = vs_enter(6)
+    base = vs_enter(4)
     call vs_set(base + 1, nd)
     call vs_set(base + 2, frame)
     kids = gc_slot(nd, 1)
@@ -789,39 +748,17 @@
          gc_kind(strip_meta(vs_get(base + 3))) /= OBJ_INST .and. &
          .not. gcn_is_var(strip_meta(vs_get(base + 3)))) then
        ! (target args...) through the native
-       q = gcv_empty([vs_get(base + 3), vs_get(base + 4)])
-       call vs_set(base + 5, q)
-       q = gcv_conj(vs_get(base + 5), vs_get(base + 3), [vs_get(base + 4)])
-       call vs_set(base + 5, q)
-       q = concat_vecs(vs_get(base + 5), vs_get(base + 4), [vs_get(base + 3)])
-       call vs_set(base + 5, q)
-       out = apply(native, vs_get(base + 5))
+       call vs_set(base + 4, cons_vec(vs_get(base + 3), vs_get(base + 4), [vs_get(base + 1)]))
+       out = apply(native, vs_get(base + 4))
        call vs_leave(base)
        return
     end if
 
-    ! the bridge: (target' member) or (target' (member args'...))
-    if (is_call) then
-       m = quoted_list(vs_get(base + 4), [vs_get(base + 3)])
-       call vs_set(base + 5, m)
-       m = gcl_cons(gc_slot(vs_get(base + 1), 2), vs_get(base + 5), [vs_get(base + 3), vs_get(base + 5)])
-       call vs_set(base + 5, m)
-       form = gcl_cons(vs_get(base + 5), gcl_empty([vs_get(base + 3), vs_get(base + 5)]), [vs_get(base + 3), vs_get(base + 5)])
-    else
-       form = gcl_cons(gc_slot(vs_get(base + 1), 2), gcl_empty([vs_get(base + 3)]), [vs_get(base + 3)])
-    end if
-    call vs_set(base + 5, form)
-    if (from == 1) then
-       q = quoted(vs_get(base + 3), [vs_get(base + 5)])
-    else
-       q = vs_get(base + 3)
-    end if
-    call vs_set(base + 6, q)
-    form = gcl_cons(vs_get(base + 6), vs_get(base + 5), [vs_get(base + 5), vs_get(base + 6)])
-    call vs_set(base + 5, form)
-    out = eval_dot(vs_get(base + 5), gc_nil())
+    out = eval_dot(vs_get(base + 3), sym_text(gc_slot(vs_get(base + 1), 2)), is_call, &
+         vs_get(base + 4), from == 0)
     call vs_leave(base)
   end function exec_dot
+
 
   recursive function exec_setbang(nd, frame) result(out)
     type(gc_value), intent(in) :: nd, frame

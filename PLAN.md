@@ -199,10 +199,9 @@ JVM libraries' sake). Measured against the step-4 numbers:
 | `loop`/`recur`, 40000 | ~2s net | ~1s net |
 | `(into [] (map inc (range 100000)))` | 35s (with the loop) | 17s |
 
-Two bridges remain to the old walker: `eval_dot` and `eval_new` still
-take forms, so the executor hands them `(quote v)` forms with the
-values already computed (a static call on a host class is resolved to
-its native at analysis and bypasses this). Stage 2 is what follows.
+Nothing of the old walker remains: `eval_dot` and `eval_new` take
+values, and no form is re-analysed at run time. Stage 2 is what
+follows.
 
 The one big investment. `gce_analyze` resolves every symbol -- to a Var
 handle, or to a (depth, slot) local -- classifies every node with an
@@ -232,8 +231,8 @@ Staged so each step is checkable:
    stack: every closure invocation pushes a frame (the closure and its
    call site) that `fail` and `throw` render into the error before it
    unwinds. That is the frame array the debugger needs, before the
-   protocol around it. Still to do in this stage: port
-   `eval_dot`/`eval_new` to take values so the `(quote v)` bridge goes.
+   protocol around it. `eval_dot` and `eval_new` take values, so
+   nothing is re-analysed at run time.
 2. intermediates move to the operand stack; `roots(:)` leaves every
    signature; module globals move into a context type; source
    positions on nodes.

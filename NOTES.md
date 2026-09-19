@@ -2227,15 +2227,17 @@ them, and copies their captures a second time so each sees the others.
 every arity. `invoke_closure` picks the arity, fills parameters,
 captures and the self name, and loops on the body while it recurs.
 
-**What still bridges.** `eval_dot` and `eval_new` take forms; the
-executor evaluates their parts and hands them `(quote v)` forms, and
-`gce_eval` -- which is now "analyse, then execute" -- turns each
-back into its value. The old walker itself is gone: every `eval_*`
-routine that took a form and an environment, `make_closure`,
-`bind_params`, `select_clause`, `mx_walk`, and the `__defining-ns__`
-lookups in `resolve_var`. A static call on a host
+**Nothing bridges.** `eval_dot` and `eval_new` took forms for a
+while after the walker went; the executor evaluated their parts and
+handed them `(quote v)` forms, which `gce_eval` re-analysed back into
+values. They now take the evaluated target, member name and argument
+vector directly, and `quoted`, `quoted_list`, `apply_forms` and
+`eval_forms_vec` went with the bridge. The old walker itself is gone:
+every `eval_*` routine that took a form and an environment,
+`make_closure`, `bind_params`, `select_clause`, `mx_walk`, and the
+`__defining-ns__` lookups in `resolve_var`. A static call on a host
 class, which is most of what core.clj does, is resolved to its native
-at analysis and never touches the bridge. `range` and `iterate` cells
+at analysis and never reaches `eval_dot`. `range` and `iterate` cells
 no longer close over an environment either: a pending tail carries
 `[lo hi step]` or `[f x]` and `gce_force` builds the next cell itself.
 
