@@ -551,6 +551,7 @@ contains
 
     if (ev_limit == 0) call read_depth_limit()
     ev_depth = ev_depth + 1
+    gce_evals = gce_evals + 1
     if (ev_depth > ev_limit) then
        call fail("stack overflow near (" // first_form_name(form) // " ...)")
        ev_depth = ev_depth - 1
@@ -5075,6 +5076,12 @@ contains
     call vs_set(base + 1, fn)
     call vs_set(base + 2, form)
     call vs_set(base + 5, env)
+    ! CLOTRAN_TRACE_MACRO=1 names every expansion on stderr. An
+    ! expansion that shows up per ITERATION of a loop escaped analysis
+    ! and is being paid for at call time; this is how the first one
+    ! was found.
+    if (trace_macros == 0) call read_trace_macros()
+    if (trace_macros == 1) write(0, '(A,A)') "macro: ", first_form_name(form)
     ! The two HIDDEN PARAMETERS every macro takes: the whole form and
     ! the local environment. macroexpand1 builds the same call --
     ! RT.cons(form, RT.cons(LOCAL_ENV.get(), form.next())) -- and
@@ -5515,6 +5522,13 @@ contains
     type(gc_value) :: out
     out = mx_walk(form, env)
   end function macroexpand_all
+
+  subroutine read_trace_macros()
+    character(len=8) :: buf
+    call get_environment_variable("CLOTRAN_TRACE_MACRO", buf)
+    trace_macros = 2
+    if (trim(buf) == "1") trace_macros = 1
+  end subroutine read_trace_macros
 
   subroutine read_depth_limit()
     character(len=16) :: buf

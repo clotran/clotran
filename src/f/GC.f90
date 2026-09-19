@@ -429,6 +429,31 @@ module GC
   integer, public :: gc_allocs = 0
   integer, public :: gc_frees = 0
   integer, public :: gc_collections = 0
+  ! Objects marked, summed over every collection: the collector's
+  ! total work, which is what a growing live set inflates.
+  integer(8), public :: gc_marked = 0
+  ! Slots the LAST sweep freed, per pool. The growth policy reads them:
+  ! a collection that frees less than half a pool means the pool is
+  ! mostly live, and collecting again as soon as that sliver is used
+  ! up would mark the same live set again. Without this the heap was
+  ! quadratic under (reduce + (range n)) -- the realized range is held
+  ! by reduce's own argument, so the live set grows with n, and a
+  ! full-pool-only trigger collected every few hundred allocations,
+  ! each time marking everything: 8000 elements, 2344 collections,
+  ! 535 million marks. Growing on a mostly-live pool is what every
+  ! collector does; this one had only grown when a sweep freed NOTHING.
+  integer :: obj_swept = 0, vec_swept = 0, str_swept = 0
+  ! Objects marked by the LAST collection: the live set, heap-wide.
+  ! Every collection costs this much, whichever pool triggered it, so
+  ! the pool that triggered it grows until it can absorb that many
+  ! allocations before filling again. That makes collections
+  ! proportional to allocation / live, and total marking proportional
+  ! to allocation -- the amortised bound a tracing collector is meant
+  ! to have. Half-live alone was not enough: a garbage-churning pool
+  ! (argument vectors, frames) kept filling every few thousand
+  ! allocations while a different pool held a live set of hundreds of
+  ! thousands, and each of its collections marked all of them.
+  integer(8) :: last_marked = 0
 
   ! Collect at EVERY allocation. Turns a missing root from a rare,
   ! timing-dependent corruption into an immediate, deterministic
@@ -720,6 +745,16 @@ contains
     else if (gc_torture .or. (str_free_head == 0 .and. str_used >= size(str_pool))) then
        call gc_collect(roots)
        if (str_free_head == 0 .and. str_used >= size(str_pool)) call grow_str()
+       ! Not under torture: it collects at EVERY allocation, so almost
+       ! nothing is garbage per collection and the half-live rule
+       ! would double the pool on every allocation until the process
+       ! was killed. Torture tests rooting, not the growth policy.
+       if (.not. gc_torture) then
+          if (2 * str_swept < size(str_pool)) call grow_str()
+          do while (size(str_pool) < last_marked)
+             call grow_str()
+          end do
+       end if
     end if
     if (str_free_head /= 0) then
        idx = str_free_head
@@ -751,6 +786,16 @@ contains
        all_roots(size(roots) + 1:) = slots
        call gc_collect(all_roots)
        if (obj_free_head == 0 .and. obj_used >= size(obj_pool)) call grow_obj()
+       ! Not under torture: it collects at EVERY allocation, so almost
+       ! nothing is garbage per collection and the half-live rule
+       ! would double the pool on every allocation until the process
+       ! was killed. Torture tests rooting, not the growth policy.
+       if (.not. gc_torture) then
+          if (2 * obj_swept < size(obj_pool)) call grow_obj()
+          do while (size(obj_pool) < last_marked)
+             call grow_obj()
+          end do
+       end if
     end if
     if (obj_free_head /= 0) then
        idx = obj_free_head
@@ -786,6 +831,16 @@ contains
     else if (gc_torture .or. (vec_free_head == 0 .and. vec_used >= size(vec_pool))) then
        call gc_collect(roots)
        if (vec_free_head == 0 .and. vec_used >= size(vec_pool)) call grow_vec()
+       ! Not under torture: it collects at EVERY allocation, so almost
+       ! nothing is garbage per collection and the half-live rule
+       ! would double the pool on every allocation until the process
+       ! was killed. Torture tests rooting, not the growth policy.
+       if (.not. gc_torture) then
+          if (2 * vec_swept < size(vec_pool)) call grow_vec()
+          do while (size(vec_pool) < last_marked)
+             call grow_vec()
+          end do
+       end if
     end if
     if (vec_free_head /= 0) then
        idx = vec_free_head
@@ -989,6 +1044,7 @@ contains
     integer :: i
 
     gc_collections = gc_collections + 1
+    last_marked = gc_marked
     obj_mark = .false.
     vec_mark = .false.
     str_mark = .false.
@@ -1004,6 +1060,7 @@ contains
        call push_mark(roots(i))
     end do
     call drain_mark_stack()
+    last_marked = gc_marked - last_marked
     call sweep()
   end subroutine gc_collect
 
@@ -1366,12 +1423,14 @@ contains
           ! terminate instead of looping forever.
           if (obj_mark(v%ref)) cycle
           obj_mark(v%ref) = .true.
+          gc_marked = gc_marked + 1
           do i = 1, OBJ_SLOTS
              call push_mark(obj_pool(v%ref)%slot(i))
           end do
        case (GCT_VEC)
           if (vec_mark(v%ref)) cycle
           vec_mark(v%ref) = .true.
+          gc_marked = gc_marked + 1
           n = 0
           if (allocated(vec_pool(v%ref)%items)) n = size(vec_pool(v%ref)%items)
           do i = 1, n
@@ -1379,6 +1438,7 @@ contains
           end do
        case (GCT_STR, GCT_SYM, GCT_KEY)
           str_mark(v%ref) = .true. ! a leaf: holds no references
+          gc_marked = gc_marked + 1
        end select
     end do
   end subroutine drain_mark_stack
@@ -1388,8 +1448,10 @@ contains
   ! heap that is mostly garbage.
   subroutine sweep()
     integer :: i, j
+    obj_swept = 0; vec_swept = 0; str_swept = 0
     do i = 1, obj_used
        if (obj_mark(i) .or. obj_free(i)) cycle
+       obj_swept = obj_swept + 1
        ! Tell the owner before the slot is reused, so a buffer or a
        ! host handle is released exactly once, here, rather than
        ! leaking for the life of the process.
@@ -1410,6 +1472,7 @@ contains
     do i = 1, vec_used
        if (vec_mark(i) .or. vec_free(i)) cycle
        if (allocated(vec_pool(i)%items)) deallocate(vec_pool(i)%items)
+       vec_swept = vec_swept + 1
        vec_free(i) = .true.
        vec_free_next(i) = vec_free_head
        vec_free_head = i
@@ -1421,6 +1484,7 @@ contains
        ! place a finalizer genuinely belongs, run once per object by
        ! sweep instead of once per copy.
        if (allocated(str_pool(i)%text)) deallocate(str_pool(i)%text)
+       str_swept = str_swept + 1
        str_free(i) = .true.
        str_free_next(i) = str_free_head
        str_free_head = i

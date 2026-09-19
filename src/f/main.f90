@@ -18,6 +18,7 @@ program clotran
   type(gc_value) :: none(0)
   integer :: base, ios, size_read, i, arglen
   character(len=1024) :: argbuf
+  character(len=8) :: statbuf
 
   call gc_init(65536)
   base = vs_enter(3)
@@ -94,6 +95,11 @@ program clotran
      print '(A)', gcp_str(vs_get(base + 3), .true.)
   end do
   print *, ""
+  call get_environment_variable("CLOTRAN_STATS", statbuf)
+  if (trim(statbuf) == "1") then
+     write(0, '(A,I0,A,I0,A,I0,A,I0,A,I0)') "stats: evals=", gce_evals, " allocs=", gc_allocs, &
+          " collections=", gc_collections, " marked=", gc_marked, " obj_capacity=", gc_obj_capacity()
+  end if
 
 contains
 
