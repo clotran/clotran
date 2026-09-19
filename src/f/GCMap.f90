@@ -1,17 +1,14 @@
 ! GCMap: the array map, over the GC heap.
 !
-! Companion to GCVector.f90 and GCList.f90 -- built and tested
-! standalone, nothing uses it yet. See PLAN.md 3c-2/3d.
-!
 ! Shape, matching GC.f90's comment on OBJ_MAP:
 !
 !   map   an object: slot 1 = keys run, slot 2 = vals run, i1 = count
 !
 ! A flat, linear-scan key/value pair, which is what real Clojure uses
 ! up to 8 entries before promoting to a hash trie. The promotion is
-! NOT here yet -- it arrives with the HAMT module, and until then this
-! stays linear at any size. That is a correctness-preserving gap, not
-! a behavioural one: a linear map answers exactly the same questions,
+! GCAssoc's job, over this module and GCHamt; on its own this stays
+! linear at any size, which is correctness-preserving: a linear map
+! answers exactly the same questions,
 ! just more slowly past 8 entries.
 !
 ! Every operation is persistent: assoc and dissoc build new runs and

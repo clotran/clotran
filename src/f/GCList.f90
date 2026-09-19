@@ -1,13 +1,10 @@
 ! GCList: the persistent list, over the GC heap.
 !
-! Companion to GCVector.f90 -- built and tested standalone, nothing
-! uses it yet. See PLAN.md 3c-2/3d.
-!
 ! Shape, matching GC.f90's comment on OBJ_CONS:
 !
 !   cons   an object: slot 1 = car, slot 2 = cdr, i1 = count
 !
-! Count is cached on the cell, exactly as cons_cell does today, so
+! Count is cached on the cell, so
 ! `count` stays O(1) rather than walking the chain. That matters more
 ! here than it looks: `count` is called constantly by the evaluator on
 ! argument lists.

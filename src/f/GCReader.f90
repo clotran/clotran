@@ -1,7 +1,6 @@
 ! GCReader: text into the GC heap.
 !
-! The counterpart to GCPrinter.f90, and the last piece of the new data
-! layer built standalone. Nothing uses it yet. See PLAN.md 3c-2/3d.
+! The counterpart to GCPrinter.f90.
 !
 ! Together the two give a ROUND TRIP -- read a form, print it, get the
 ! input back -- which tests the whole layer against real Clojure text
@@ -10,7 +9,7 @@
 ! what it was given.
 !
 ! Recursive descent straight over the character buffer, with no
-! separate token array. LispReader.f90 has one because it records a
+! separate token array. The pre-GC reader had one because it recorded a
 ! line and column per token; source positions are an open question for
 ! the new representation (PLAN.md: a GC object has i1/i2 and count
 ! already took i1), so this deliberately does not pretend to solve it.

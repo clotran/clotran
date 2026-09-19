@@ -12,8 +12,8 @@ the Java of one version while running the core.clj of another is the same
 mistake as citing memory, and it nearly bit us: the clone was first taken
 at master `07adae6`, three hunks newer than what we run (`tap->`, a
 rewritten `select-keys`, one `BigDecimal/valueOf` cast). Re-vendoring to
-match the clone was the wrong direction -- it broke clotran-bin, whose
-tests are written against these files -- so the clone moved instead.
+match the clone was the wrong direction -- our tests are written against
+these files -- so the clone moved instead.
 
 To confirm they still match:
 
@@ -40,12 +40,12 @@ that are NOT here. Everything else is, whether or not it currently
 loads -- `set`, `data`, `edn`, `datafy`, `walk`, `uuid` and `template`
 already do.
 
-Their absence is load-bearing for the OLD evaluator, which is worth
-writing down because it cost a red crosscheck to learn. core.clj says
-`(load "core_proxy")`; clotran-gc skips that by name, but clotran-bin
-relies on the file simply not being there. Vendoring it turned a silent
-skip into a real load and broke `defprotocol`, `extend-protocol`,
-`satisfies?` and `into`. Adding a file can be a breaking change.
+Skip them BY NAME, never by absence. core.clj says `(load
+"core_proxy")` and clotran-gc skips that by name. An earlier evaluator
+relied on the file simply not being there, and vendoring it turned a
+silent skip into a real load that broke `defprotocol`,
+`extend-protocol`, `satisfies?` and `into` -- a red crosscheck from
+adding a file. Adding a file can be a breaking change.
 
 That boundary is also the useful one: everything a Clojure program
 normally reaches for -- the seq library, destructuring, the macros -- is

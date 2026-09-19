@@ -1,10 +1,7 @@
 ! GCPrinter: values in the GC heap, back to text.
 !
-! Built and tested standalone -- nothing uses it yet. See PLAN.md
-! 3c-2/3d.
-!
-! Written now, before the evaluator switch, for two reasons beyond
-! eventually needing it:
+! Built and tested standalone before the evaluator, for two reasons
+! beyond eventually needing it:
 !
 !   1. It is the first thing that walks EVERY structure in the new
 !      data layer at once -- list, vector, both map representations,

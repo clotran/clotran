@@ -1,10 +1,5 @@
 ! GCNativeArray: a REAL Fortran array as a clotran value, on the GC heap.
 !
-! The port of NativeArray.f90 to gc_value. The original is reachable
-! only from Eval.f90 -- the pre-GC evaluator -- so this capability was
-! absent from the interpreter that actually ships, and retiring
-! clotran-bin would have deleted the only copy (PLAN.md).
-!
 ! Deliberately not a port of java.lang.Object[]. Emulating the JVM's
 ! array would throw away the one thing this host has that the JVM does
 ! not: the bytes ARE a Fortran array and can be handed to a Fortran

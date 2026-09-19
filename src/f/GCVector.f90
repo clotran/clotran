@@ -1,15 +1,14 @@
 ! GCVector: the persistent vector, over the GC heap.
 !
-! The same 32-way branching trie PersistentVector.f90 implements, but
-! every reference is a GC handle rather than a refcounted pointer.
-! Nothing uses this yet: it is built and tested on its own first, the
-! way GC.f90 and the value stack were, so the data layer can be proven
-! before the evaluator is switched onto it. See PLAN.md 3c-2/3d.
+! Clojure's 32-way branching trie, with every reference a GC handle.
+! Built and tested on its own first, the way GC.f90 and the value
+! stack were, so the data layer could be proven before the evaluator
+! was switched onto it.
 !
 ! Why this one first: the trie is the most intricate structure in the
-! layer, and it is where PLAN.md 4a'' lives -- a vec_node released
-! while a live reference still points at it. Under a tracing collector
-! that bug cannot be expressed. Nothing decrements, so nothing can
+! layer, and it is where the refcounted evaluator's use-after-free
+! lived -- a node released while a live reference still pointed at it.
+! Under a tracing collector that bug cannot be expressed. Nothing decrements, so nothing can
 ! decrement too often; a node is reachable or it is not.
 !
 ! Shape, matching GC.f90's own comment on OBJ_VECTOR:

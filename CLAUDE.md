@@ -115,11 +115,11 @@ what commit, and what is deliberately absent. Read it before touching
 the tree.
 
 **Adding a vendored file can be a breaking change.** core.clj says
-`(load "core_proxy")`. `clotran-gc` skips that by name; the older
-`clotran-bin` relies on the file simply not being there. Vendoring it
-turned a silent skip into a real load and broke `defprotocol`,
-`extend-protocol`, `satisfies?` and `into` -- a red crosscheck from
-adding files and changing no code.
+`(load "core_proxy")` and `clotran-gc` skips that by name. An
+evaluator that instead relied on the file simply not being there broke
+`defprotocol`, `extend-protocol`, `satisfies?` and `into` the day it
+was vendored -- a red crosscheck from adding files and changing no
+code. Skip by name, never by absence.
 
 ## Report scorecards, not bug counts
 

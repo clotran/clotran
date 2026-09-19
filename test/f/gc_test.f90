@@ -378,9 +378,8 @@ contains
     gc_torture = .false.
   end subroutine check_namespaces
 
-  ! Migration scaffolding (PLAN.md 3c-2): while payloads move into the
-  ! heap one at a time there is nothing rooting them yet, so the pools
-  ! must only grow. Nothing here is rooted at all -- under the normal
+  ! Grow-only mode, left over from the migration into this heap, when
+  ! nothing rooted the payloads yet and the pools had to only grow. Nothing here is rooted at all -- under the normal
   ! policy the first collection would sweep every one of these.
   subroutine check_grow_only()
     type(gc_value) :: kept(200)
@@ -401,7 +400,7 @@ contains
     gc_no_collect = .false.
   end subroutine check_grow_only
 
-  ! The value stack (PLAN.md 3d, Design B). These are the checks that
+  ! The value stack. These are the checks that
   ! decide whether rooting-by-construction actually holds: every one
   ! collects with NO argument roots at all, so if the stack is not
   ! scanned, the data is gone.

@@ -1,10 +1,9 @@
-! GC: a non-moving mark-sweep heap, built standalone.
+! GC: a non-moving mark-sweep heap.
 !
-! Nothing in clotran uses this yet. It exists so the collector can be
-! written and tested on its own before the value representation is
-! committed to it -- see PLAN.md step 3.
+! Built standalone and tested on its own before anything used it.
 !
-! WHY THIS EXISTS AT ALL. Measured: one `cons_value` copy costs 497 ns,
+! WHY THIS EXISTS AT ALL. Measured: one copy of the previous value type
+! (`cons_value`, nine allocatable components and a FINAL) cost 497 ns,
 ! and 94.7% of clotran's runtime is flang's generic derived-type
 ! machinery. That is a per-COPY cost, not allocation and not freeing,
 ! and it is there because `cons_value` has a FINAL binding and nine
@@ -401,7 +400,7 @@ module GC
   procedure(coll_hash_i), pointer, save :: obj_coll_hash => null()
   procedure(coll_equal_i), pointer, save :: obj_coll_equal => null()
 
-  ! --- the value stack (PLAN.md 3d, Design B) ----------------------
+  ! --- the value stack ----------------------------------------------
   !
   ! The evaluator's roots, and the reason rooting is by CONSTRUCTION
   ! rather than by discipline: a value the evaluator is working on
@@ -436,12 +435,9 @@ module GC
   ! failure; the test suite runs under it.
   logical, public :: gc_torture = .false.
 
-  ! MIGRATION SCAFFOLDING -- PLAN.md 3c-2. Payloads move into this heap
-  ! one at a time, and until 3d makes the evaluator root properly there
-  ! is nothing to trace from: a collection would sweep everything that
-  ! is actually live. In this mode the pools only ever grow, never
-  ! collect. It is a leak by construction, and temporary; 3d turns it
-  ! off, and gc_check_heap plus torture mode are what replace it.
+  ! Grow-only mode: the pools never collect. Left over from the
+  ! migration, when payloads moved into this heap before anything
+  ! rooted them; kept because gc_test still exercises it.
   logical, public :: gc_no_collect = .false.
 
   public :: gc_init, gc_collect
@@ -479,10 +475,10 @@ contains
     gc_no_collect = .true.
   end subroutine gc_ensure_init
 
-  ! ---- ref-level text API (PLAN.md 3c-2) --------------------------
+  ! ---- ref-level text API ------------------------------------------
   !
-  ! A migrating cons_value holds a bare handle, not a gc_value, so text
-  ! is reached by ref. Split the same way Values' own accessors are:
+  ! Text is reached by ref, not by value, so the evaluator can compare
+  ! a symbol without copying its text:
   ! gc_ref_is and gc_ref_len touch the pool WITHOUT copying, because
   ! comparing a symbol against a literal is the hottest read in the
   ! interpreter. gc_ref_text is the one that copies.
@@ -1011,8 +1007,7 @@ contains
     call sweep()
   end subroutine gc_collect
 
-  ! Value equality, mirroring Values.f90's value_equal so the two
-  ! representations agree during the migration: same tag, and same
+  ! Value equality: same tag, and same
   ! scalar or text content. Collections compare by IDENTITY, not
   ! deeply -- which is what value_equal does today too, and what map
   ! keys currently rely on. Deep equality for collection keys is a

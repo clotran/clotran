@@ -6,8 +6,6 @@
 \#*
 .\#*
 /clotran
-/clotran-bin
-/rc_test
 /atom_test
 /persistent_vector_test
 /persistent_list_test

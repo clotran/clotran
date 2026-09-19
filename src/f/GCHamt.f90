@@ -1,8 +1,5 @@
 ! GCHamt: the hash array mapped trie, over the GC heap.
 !
-! Companion to GCVector/GCList/GCMap -- built and tested standalone,
-! nothing uses it yet. See PLAN.md 3c-2/3d.
-!
 ! What a real Clojure map promotes into past 8 entries. Five bits of
 ! the hash per level, so a node is 32 slots wide and a lookup is at
 ! most seven hops for a 32-bit hash.

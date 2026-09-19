@@ -332,9 +332,9 @@ not, because the name is the documentation.
 When this section was written it had none, which was the finding that
 prompted it: the one genuine Fortran interop surface -- native arrays,
 contiguous, column-major, declared kind, the thing the whole project is
-FOR -- lived in `NativeArray.f90`, referenced by `Eval.f90` and by
-nothing else. `GCEval.f90` mentioned it zero times. It had not survived
-the GC port, and `clotran-bin` was scheduled for deletion.
+FOR -- lived only in the pre-GC evaluator, since deleted. `GCEval.f90`
+mentioned it zero times. It had not survived the GC port, and the only
+copy was in code scheduled for deletion.
 
 It is ported now, and it went into a `fortran` namespace rather than
 `clojure.core` -- which is this section's argument made concrete rather

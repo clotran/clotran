@@ -1,8 +1,5 @@
 ! GCAssoc: the map clotran actually uses, over the GC heap.
 !
-! Last of the standalone data-layer modules -- nothing uses it yet.
-! See PLAN.md 3c-2/3d.
-!
 ! A map is an array map up to 8 entries and a hash trie beyond, which
 ! is exactly what real Clojure does (confirmed against the `clojure`
 ! CLI: 8 entries stays a PersistentArrayMap, 9 becomes a

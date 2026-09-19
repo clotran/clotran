@@ -31,27 +31,31 @@ transducers, metadata, `case`, regex literals, `deftype`, `reify`,
 `defrecord`, `letfn`, `delay` and the whole seq library -- because
 clotran does not implement those, core.clj does.
 
-**15 of Clojure's own 21 libraries load** -- `set`, `data`, `edn`,
-`datafy`, `walk`, `string`, `template`, `zip`, `stacktrace`, `test`,
-`inspector`, `reflect`, `parallel`, `core.protocols` and
-`core.reducers`. Loaded means a
-var of theirs RESOLVES afterwards, not merely that `require` returned
-without complaint: `clojure.uuid` is skipped by name, so requiring it
-succeeds and defines nothing, and counting that as a load is how this
-number was once too high.
+**17 of the 27 Clojure library namespaces probed load** (measured
+2026-09-19): `set`, `data`, `edn`, `datafy`, `walk`, `string`,
+`template`, `zip`, `stacktrace`, `test`, `inspector`, `reflect`,
+`parallel`, `pprint`, `math`, `core.protocols` and `core.reducers`.
+Loaded means a var of theirs RESOLVES afterwards, not merely that
+`require` returned without complaint: `clojure.uuid` and
+`clojure.java.io` are skipped by name, so requiring them succeeds and
+defines nothing, and counting that as a load is how this number was
+once too high. The eight that fail -- `repl`, `main`, `instant`,
+`xml`, `java.shell`, `java.browse`, `core.server`, `process` -- each
+want a JVM class (`Thread`, `Socket`, `SimpleDateFormat`, a SAX
+parser).
 
 `clojure.test` running means Clojure's own test suite runs:
-**771 passing assertions** across 196 of its tests, from the 67
-namespaces vendored verbatim in `test/clj`.
+**1810 passing assertions** across 357 of its tests, from the 67
+namespaces vendored verbatim in `test/clj`. Over the assertions that
+EXECUTED that is 53%: 219 failed and 1396 errored alongside them.
 
-That number is over assertions that EXECUTED. 7 namespaces still crash
-before reporting anything and contribute zero to both halves of it, and
-several of the 67 -- `proxy`, `genclass`, annotations, AOT -- can never
-pass here. 18 of 67 namespaces produce a passing assertion today.
-
-Leaving the crashed column is not the same as passing. `reflect` left
-it when the reader learned hex literals, and went straight to reporting
-nothing: `tests=0`. It is counted in the 8 becoming 7, not in the 771.
+That denominator is assertions that executed, not assertions that
+exist. A test file that aborts partway defines no tests and contributes
+nothing to either side. 32 of the 67 namespaces produce a passing
+assertion today; several -- `proxy`, `genclass`, annotations, AOT,
+Java serialization -- can never pass here and have not been subtracted.
+`PLAN.md` step 2 is the plan to derive a suite whose denominator is the
+language rather than the JVM.
 
 **Real Fortran arrays**, which is the one thing this host has that the
 JVM does not:
@@ -90,7 +94,7 @@ one contiguous column-major block a BLAS routine can take, which `[[I`
 cannot be at any price. `DEVIATIONS.md` 24 and 25 carry both.
 
 Four oracles keep it honest: gfortran and flang must agree
-(`make crosscheck`, 1145 assertions each), `clj` -- real JVM Clojure --
+(`make crosscheck`), `clj` -- real JVM Clojure --
 answers what Clojure actually does rather than what anyone remembers,
 and pinned clones of Clojure and ClojureScript are cited rather than
 recalled. See `CLAUDE.md`.
@@ -99,14 +103,17 @@ recalled. See `CLAUDE.md`.
 
 | | |
 |---|---|
+| speed | `(reduce + (range 16000))` takes 161s and scales superlinearly; a `loop`/`recur` iteration costs ~100 µs. PLAN.md steps 4 and 5 |
+| startup | 7.2s: core.clj is re-read and re-evaluated every launch; there is no image yet |
+| source positions | none, so no error reports `file:line:col`, and there are no stack frames |
+| `pprint` | `cl-format` works; `pprint` itself does not, see the open question at the end of PLAN.md |
+| `BigDecimal` and `BigInt` | `1M` reads as a double and `1N` as an integer; DEVIATIONS 30 |
+| sorted collections | `sorted-map` and `sorted-set` are unsorted; DEVIATIONS 9 |
 | mutable deftype fields | `(set! afield v)` is refused, loudly; DEVIATIONS 20 |
-| source positions | the GC evaluator has none, so no error reports `file:line:col` |
-| ratio and BigDecimal literals | `2/3`, `1M` do not read |
-| `clojure.string/split` | needs `Pattern.split` |
+| `tap>`, `promise`, `shuffle` | need threads, queues or `ArrayList` |
 | the five JVM-only sibling libs | bytecode generation; see `src/clj/clojure/PROVENANCE.md` |
-| `tap>`, `promise`, `shuffle`, `format` | need threads, queues, `ArrayList`, or `String/format` |
-| startup | core.clj is re-read every launch; there is no image yet |
 | regex | ICU, with ASCII/Latin-1 offsets only |
+| calling a Fortran library | the array representation is built; no binding exists yet. PLAN.md step 6 |
 
 `DEVIATIONS.md` is the full ledger: every place clotran does something
 real Clojure does not, why, and what removing it would take. A
@@ -147,21 +154,6 @@ binary with a note if `rlwrap` isn't found.
 
 ```
 ./clotran
-```
-
-There is a second, older evaluator in the tree: `clotran-bin`, built
-from `src/f/Eval.f90`. It predates the GC and is kept only because the
-mal regression suites below still drive it. It is not the interpreter
-this project is about, and it is on its way out.
-
-`test/regression/` carries the official mal per-step test suites (see
-`NOTES.md`) -- running those needs mal's own `runtest.py`, external to
-this repo (no Python vendored here), against the raw binary (not the
-rlwrap-wrapping launcher, same as testing `clojure` rather than `clj`):
-
-```
-python3 ~/jborden/mal/runtest.py --deferrable --rundir test/regression \
-    step9_try.mal -- ../../clotran-bin
 ```
 
 ## Why host it on Fortran rather than bridge to it
@@ -308,17 +300,15 @@ the payoff is at the interop boundary, which is not.
 
 ## Status
 
-This code originated as a [mal](https://github.com/kanaka/mal)
-implementation -- mal was bootstrap/validation scaffolding to get a
-real interpreter working against a real test suite, not the identity
-of this project. See `NOTES.md` for the actual design history,
-decisions, and what's ahead.
+`PLAN.md` is where this is going and why, in order. `NOTES.md` is the
+design history. The code began as a [mal](https://github.com/kanaka/mal)
+implementation; that evaluator and its test suites have been removed.
 
 
 ## License
 
 clotran is EPL-2.0 (`LICENSE`).
 
-It redistributes Clojure (EPL-1.0), ICU4C (Unicode License v3) and mal
-test suites (MIT), each under its own license. `NOTICE` says which is
-which; none of them is relicensed by this repository.
+It redistributes Clojure (EPL-1.0) and ICU4C (Unicode License v3), each
+under its own license. `NOTICE` says which is which; neither is
+relicensed by this repository.

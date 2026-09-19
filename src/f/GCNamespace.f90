@@ -1,8 +1,5 @@
 ! GCNamespace: namespaces and Vars, over the GC heap.
 !
-! Standalone like the rest of the new layer; GCEval uses it. See
-! PLAN.md 3c-2/3d.
-!
 ! Shape, matching GC.f90's comments on OBJ_NS and OBJ_VAR:
 !
 !   namespace  an object: slot 1 = name, slot 2 = bindings map

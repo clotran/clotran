@@ -7,10 +7,10 @@
 ! they are not -- intermediate values live across recursive calls,
 ! each of which can allocate and therefore collect.
 !
-! Nothing uses this yet. It is not a port of Eval.f90: it is the core
-! of one -- enough special forms and primitives to run real programs
-! and prove the mechanism, deliberately not the ~5400 lines of the
-! full evaluator. What it has:
+! It began as the core of an evaluator -- enough special forms and
+! primitives to run real programs and prove the mechanism -- and grew
+! into the whole thing as core.clj was loaded form by form. What it
+! started with:
 !
 !   special forms   quote, if, do, def, let*, fn*, loop*, recur
 !   primitives      + - * = < list vector count first rest

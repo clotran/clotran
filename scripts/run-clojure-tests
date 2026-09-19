@@ -9,7 +9,7 @@
 # namespace's summary and a total.
 #
 # These are the conformance number that matters: test/f/*_test.f90 covers
-# the Fortran host (refcounting, native interop, the gotchas catalog),
+# the Fortran host (the collector, native arrays, the gotchas catalog),
 # which upstream cannot test, and everything about the LANGUAGE is
 # checked here by Clojure's own assertions instead of ours.
 set -e

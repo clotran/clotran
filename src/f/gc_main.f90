@@ -1,9 +1,5 @@
-! A REPL over the new GC-backed stack.
-!
-! Not clotran-bin: that drives the refcounted evaluator, and both have
-! to keep working until the switch. This exists so the new stack can
-! be driven by hand and fed real Clojure, which is how the remaining
-! gaps get FOUND rather than guessed at.
+! The clotran program: load the files named on the command line, then
+! a REPL. scripts/clotran wraps this in rlwrap and hands it core.clj.
 !
 ! Reads a form per line, evaluates, prints. No line editing of its own
 ! -- scripts/clotran's rlwrap trick applies here too if wanted.
@@ -132,7 +128,7 @@ contains
     ! Read in ONE allocation, via stream access, rather than
     ! appending line by line. Appending is O(n^2) -- each // builds a
     ! whole new string -- and on an 8000-line file that is not slow,
-    ! it is indistinguishable from a hang. LispReader.f90 carries the
+    ! it is indistinguishable from a hang. An earlier reader carried the
     ! same warning for the same reason; this repeated the mistake.
     open(newunit=u, file=path, access="stream", form="unformatted", &
          status="old", action="read", iostat=st)

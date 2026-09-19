@@ -1,17 +1,17 @@
 # src/clj
 
-Real Clojure source, mirroring the upstream
-[clojure/clojure](https://github.com/clojure/clojure) repo's own
-`src/clj/clojure/...` layout (namespace segments as directories, same
-as the JVM classpath convention) -- this is the actual file `Eval.f90`
-loads at startup. Edited in place with additive `#?(:cljf ...)`
-reader-conditional branches wherever real Clojure's own Java interop
-can't run here; the real `:clj` branch of anything already ported
-never gets deleted or rewritten, so the file stays a genuine port of
-the original, not a rewrite inspired by it.
+Clojure source loaded at startup.
 
-A file moves to `src/cljc` once it actually has a `#?(...)` branch in
-it -- that's the real Clojure convention for when a file earns the
-`.cljc` extension, not before. See NOTES.md ("Importing real
-clojure/core.clj") for the running log of what's ported, what's
-stubbed, and why.
+- `clojure/` -- Rich Hickey's, vendored unmodified from
+  `clojure/clojure` at `71b4623d`. See `clojure/PROVENANCE.md`. Never
+  edited; if clotran cannot load one of these files, that is clotran's
+  bug.
+- `host.clj` -- the one file of ours. Loaded BEFORE core.clj, it holds
+  only what core.clj cannot supply because it depends on how this host
+  represents values: the type predicates over `clotran-type`, and the
+  three scaffolding macros needed to write them. DEVIATIONS.md 2 says
+  when it goes.
+
+Layout mirrors upstream's `src/clj/clojure/...` (namespace segments as
+directories) because that is the classpath convention `load` and
+`require` resolve against.

@@ -1,18 +1,14 @@
 ! GCEnv: the lexical environment, over the GC heap.
 !
-! Companion to GCVector/GCList/GCMap/GCHamt -- built and tested
-! standalone, nothing uses it yet. See PLAN.md 3c-2/3d.
-!
 ! Shape, matching GC.f90's comment on OBJ_ENV:
 !
 !   env   an object: slot 1 = bindings map, slot 2 = outer env,
 !         i1 = defining namespace index
 !
-! A chain of frames, each a name -> value map, searched outward. This
-! is Env.f90's structure unchanged; what changes is that a frame is
-! reached by handle, which matters for one specific reason:
+! A chain of frames, each a name -> value map, searched outward. A
+! frame is reached by handle, which matters for one specific reason:
 !
-! An env is the thing refcounting could NOT collect. `eval_fn` binds a
+! An env is the thing a refcounting collector could NOT collect. `eval_fn` binds a
 ! closure into its own frame so `recur` can find it, and that frame is
 ! reachable from the closure -- a cycle. Refcounting leaks every such
 ! closure for the life of the process. Check 5 here is that cycle,
@@ -20,7 +16,7 @@
 ! of why the GC exists at all (PLAN.md, "Decisions taken").
 !
 ! env_set MUTATES the frame in place rather than returning a new one.
-! That is deliberate and matches Env.f90: `def` and `let*` add to the
+! That is deliberate: `def` and `let*` add to the
 ! frame a closure may already be holding, and everything sharing that
 ! frame must see the binding.
 module GCEnv
@@ -61,9 +57,8 @@ contains
 
   ! Mutates this frame. Note the two-step: build the new bindings map
   ! FIRST, then store it. Never store into a slot from an expression
-  ! that reads the same slot -- Env.f90 carries the same warning, and
-  ! the reason there (a self-referencing assignment silently dropping
-  ! the update) applies to a handle just as much as to a pointer.
+  ! that reads the same slot: a self-referencing assignment silently
+  ! drops the update, for a handle just as much as for a pointer.
   subroutine gce_set(e, key, val, roots)
     type(gc_value), intent(in) :: e, key, val
     type(gc_value), intent(in) :: roots(:)
