@@ -39,7 +39,7 @@ JVM-shaped `case` arms in one file.
 | startup | 4.1s (was 7.2s before step 4), core.clj re-read every launch |
 | `(reduce + (range n))` | LINEAR since step 4: n=100000 in 17s net, ~170 µs and 60 evaluations per element. Before: n=16000 took 161s and n=100000 did not finish in 15 minutes |
 | `loop`/`recur` | ~100 µs per iteration, linear |
-| Fortran library calls made through clotran | 0 |
+| Fortran library calls made through clotran | 1: `fortran/dgemm`, the reference BLAS on a clotran array, no copy |
 
 The reduce row was the one that mattered and no scorecard saw it; step 4
 below is how it was found and what it was.
@@ -244,18 +244,34 @@ per-function symbol table gives eval-in-frame, and nodes carry
 positions. The goals stated above (frames, threads) both want an
 explicit frame stack.
 
-### 6. dgemm: the first real Fortran call
+### 6. dgemm: the first real Fortran call -- DONE
 
-Vendor netlib's reference `dgemm.f`, `lsame.f` and `xerbla.f` (F77,
-single files, no framework, builds the same on Linux). Build two
-matrices in clotran, multiply with dgemm, read back, compare against
-the same product computed in Clojure with `reduce`. This validates the
-premise -- that hosting on Fortran beats bridging to it -- which after
-154 commits is still unvalidated, and it fixes the marshaling
-convention. Decide explicitly that interop is STATIC: standard Fortran
-has no dynamic loading, so a binding is compiled into clotran and the
-product is a library you link your Fortran against, like embedding
-Lua. That shapes the generator: emit `.f90` glue, rebuild.
+`src/f/blas/` holds netlib's reference `dgemm.f`, `lsame.f` and
+`xerbla.f`, verbatim (PROVENANCE.md there). `fortran/dgemm` takes two
+`real8` rank-2 arrays and answers their product in a third; the three
+buffers reach DGEMM as the `A(LDA,*)` it declares, by sequence
+association over the contiguous registry buffer -- no copy, no
+descriptor, no C. The language test builds A and B, multiplies, and
+compares against the same product computed over `aget` in Clojure and
+against the numbers.
+
+What it fixed as the convention, for step 7:
+
+- **Interop is STATIC.** Standard Fortran has no dynamic loading, so a
+  routine is compiled into clotran and the product is a binary you
+  link your Fortran into, like embedding Lua. The generator's output
+  is `.f90` glue plus a rebuild, not a runtime loader.
+- **The buffer crosses inside NativeArray.** `class(*), allocatable`
+  buffers become typed by `select type` there and only there
+  (`gcna_dgemm`); a binding never sees `class(*)`. One nested select
+  per typed argument is the shape a generated binding will have.
+- **Shapes are checked on this side.** `xerbla` STOPs the process, so
+  no call may reach it with a bad argument; the builtin refuses
+  mismatched ranks, kinds, inner dimensions and slices (a slice is
+  strided and would be copied) before calling.
+- **Whole arrays only.** The strided view `(aget m 1)` hands back is
+  not what BLAS takes. A generated binding that wants a slice copies
+  it explicitly and says so.
 
 ### 7. ChemSol -- the interop finish line
 

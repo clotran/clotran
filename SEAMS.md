@@ -327,7 +327,7 @@ one that describes THIS host.
 Seams are fine. Seams that call themselves by another host's names are
 not, because the name is the documentation.
 
-### `fortran.*` now has exactly one thing in it
+### `fortran.*` has native arrays in it, and one routine that takes them
 
 When this section was written it had none, which was the finding that
 prompted it: the one genuine Fortran interop surface -- native arrays,

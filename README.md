@@ -72,10 +72,22 @@ JVM does not:
 ```
 
 The bytes ARE a Fortran array at an address the collector never moves,
-which is what a Fortran library expects to be handed. The `fortran`
-namespace is the version that names a Fortran KIND rather than a class
--- see `SEAMS.md`. The binding generator that would pass one to `dgemm`
-is not written yet.
+which is what a Fortran library expects to be handed -- and is:
+
+```clojure
+(def a (f/make-array "real8" 2 3))    ; fill with 1..6, row-major reading
+(def b (f/make-array "real8" 3 2))    ; 7..12
+(def c (f/dgemm a b))                 ; the reference BLAS, vendored in src/f/blas
+(f/aget c 1 1)                        ;=> 154.0
+```
+
+`dgemm` is netlib's own F77 source, compiled by the same compiler and
+handed the two buffers exactly as `A(LDA,*)` declares them: no copy,
+no descriptor, no C shim. That is the claim the project rests on, and
+this is the first routine that tests it. The `fortran` namespace names
+a Fortran KIND rather than a class -- see `SEAMS.md`. A binding
+generator that would do for any routine what this does for one is
+PLAN.md step 7.
 
 Clojure's OWN array functions run over the same representation -- not
 reimplemented, the definitions in `core.clj`, which are written against
@@ -117,7 +129,7 @@ recalled. See `CLAUDE.md`.
 | `tap>`, `promise`, `shuffle` | need threads, queues or `ArrayList` |
 | the five JVM-only sibling libs | bytecode generation; see `src/clj/clojure/PROVENANCE.md` |
 | regex | ICU, with ASCII/Latin-1 offsets only |
-| calling a Fortran library | the array representation is built; no binding exists yet. PLAN.md step 6 |
+| calling a Fortran library | one routine, `dgemm`, hand-bound; the generator that would do it for any routine is PLAN.md step 7 |
 
 `DEVIATIONS.md` is the full ledger: every place clotran does something
 real Clojure does not, why, and what removing it would take. A

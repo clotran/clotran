@@ -2244,3 +2244,33 @@ surfaced the moment fn bodies were analysed at definition: a `set!` on
 a host static field inside `set-agent-send-executor!`, `monitor-enter`
 from `locking`, and `%1` under a type hint that the fn-literal rewrite
 had not renamed. Each had been latent for the life of the project.
+
+## dgemm: the premise, tested
+
+The project's claim is that hosting Clojure ON Fortran makes calling a
+Fortran library an ordinary call, where bridging from the JVM makes it
+a descriptor to fabricate and a copy to pay for. Until 2026-09-19 no
+Fortran library had been called at all. `fortran/dgemm` is the first.
+
+netlib's reference BLAS is vendored (`src/f/blas/`) rather than a
+system BLAS linked, because a proof of the calling convention should
+build identically everywhere; three F77 files compile under gfortran
+and flang without a flag. `gcna_dgemm` in NativeArray.f90 selects the
+`real(dp)` type of each registry buffer and calls `DGEMM('N','N', m, n,
+k, 1, a, m, b, k, 0, c, m)`: the buffer is a contiguous rank-1
+`allocatable`, the dummy is `A(LDA,*)`, and sequence association hands
+the address across with no temporary -- which NOTES already established
+for `a(*)` dummies when the registry was designed. The builtin above it
+checks kinds, ranks, inner dimensions and refuses slices, so `xerbla`,
+which STOPs, is never reached.
+
+The test multiplies a 2x3 by a 3x2 and compares against the product
+computed in Clojure over `aget` and against [58 64 139 154]. It is a
+host check in language_test.clj, not an oracle case: real Clojure has
+no `fortran` namespace to answer it.
+
+What this did NOT settle, deliberately: kinds other than real8, the
+transpose flags, in-place accumulation (beta), and anything a generated
+binding would need to read from an `interface` block. One routine by
+hand first; PLAN.md step 7 is the generator, and ChemSol is what it is
+for.
