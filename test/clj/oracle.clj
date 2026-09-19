@@ -397,9 +397,37 @@
 ;; a lazy seq
 (pr-str (map identity ["a"]))
 
-;; a seq has a type
-(expect-diff "PLAN.md open question: class answers a type tag, not a concrete class")
+;; a seq has a type. It PRINTS differently -- a class here is a keyword,
+;; and clotran has one seq view where the JVM has ChunkedSeq, StringSeq
+;; and the rest -- but compares equal to the literal, below.
+(expect-diff "DEVIATIONS 34: a class is a keyword and prints as one")
 (type (seq ["a"]))
+
+;; class answers the class a literal names, so the two compare equal
+[(= (class "a") String) (= (class 1) Long) (= (class 1.5) Double) (= (class \a) Character)
+ (= (class true) Boolean) (= (class :k) clojure.lang.Keyword) (= (class 'a) clojure.lang.Symbol)]
+
+[(= (class []) clojure.lang.PersistentVector) (= (class {}) clojure.lang.PersistentArrayMap)
+ (= (class #{}) clojure.lang.PersistentHashSet) (= (class '(1)) clojure.lang.PersistentList)
+ (= (class (lazy-seq [1])) clojure.lang.LazySeq) (= (class (seq [1 2])) clojure.lang.PersistentVector$ChunkedSeq)]
+
+[(= (class (atom 1)) clojure.lang.Atom) (= (class (delay 1)) clojure.lang.Delay) (= (class #'first) clojure.lang.Var)
+ (= (class #"x") java.util.regex.Pattern) (= (class *ns*) clojure.lang.Namespace) (= (class 1/2) clojure.lang.Ratio)]
+
+;; which is what pprint's writers do
+[(condp = (class "x") String :s Long :l :other) (condp = (class 2) String :s Long :l :other) (condp = (class 2.5) String :s Long :l :other)]
+
+;; nil has no class; type reads :type metadata first
+[(class nil) (type (with-meta [] {:type :mine})) (= (type "a") String)]
+
+;; instance? and supers agree with class
+[(instance? (class "a") "a") (instance? (class []) []) (instance? (class 1) 1)
+ (contains? (supers (class [])) clojure.lang.IPersistentCollection) (contains? (supers (class "a")) CharSequence)
+ (contains? (supers (class 1)) Number) (contains? (supers (class (atom 1))) clojure.lang.IDeref)]
+
+;; a thrown thing's class is the one it was made with
+[(= (class (ex-info "e" {})) clojure.lang.ExceptionInfo) (= (class (Exception. "e")) Exception)
+ (= (class (try (throw (IllegalArgumentException. "x")) (catch Exception e e))) IllegalArgumentException)]
 
 ;; char readably
 (pr-str \a)

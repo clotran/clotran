@@ -2466,3 +2466,37 @@ it means the JVM, and a `:clj` branch that reaches for
 `java.util.concurrent` is exactly the one clotran must not take.
 `classpath_find` looks for `.cljf`, `.cljc`, `.clj` in that order; the
 reasoning is in DEVIATIONS 33.
+
+## `class` is a keyword, and `import*` finally does something
+
+The open question was whether `(class x)` should answer the type tag
+(`:string`) or the thing a class literal evaluates to (`:String`).
+core.clj decided it: `(condp = (class x) String ...)` in pprint,
+`(defmethod print-method String ...)`, `(extend-type String ...)` all
+compare `class` against the literal, and they only work if the two are
+the same value. So `class_name_of` maps each tag to the JVM class the
+literal names, the tag went behind `clotran-type` where host.clj reads
+it, and `host_super` is keyed by those names. There is no class
+SYSTEM in this: 25 lines of table, and Fortran has no classes to
+model. What there is, is the vocabulary core.clj was written in, and
+we run core.clj unmodified.
+
+Two bugs came out from under it, both of the same shape: a name
+written SHORT under an import. `(ExceptionInfo. ...)` in core.clj gave
+an error whose class printed as `:ExceptionInfo`, unequal to the
+literal `clojure.lang.ExceptionInfo`; and pprint's pretty writer,
+`(proxy [Writer IDeref PrettyFlush] ...)` under `(import [clojure.lang
+IDeref])`, was not an `IDeref`, so `deref` handed the proxy back
+instead of its fields, and `(alter @*out* assoc ...)` then wrote a map
+into the proxy's TYPE slot. That last one presented as a run-time
+error naming a different member every run -- `opts.ppflush`,
+`try.ppflush` -- because `class_text` was reading a recycled node.
+The instrumented message (kind, tag, the slot's kind) found it in one
+run; the theories before it did not.
+
+The fix is the one DEVIATIONS 17 had been asking for: `import*`
+records `Short -> full.name`, globally, and one function `class_key`
+spells every class keyword. The hand-kept HOST_IMPORTS table went
+with it. String.split, String.replaceAll and
+`System/identityHashCode` were added along the way because pprint
+reached them next; they are host members, so they are rows.

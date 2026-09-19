@@ -146,7 +146,7 @@ recalled. See `CLAUDE.md`.
 | startup | 2.3s: core.clj is re-read and re-analysed every launch; there is no image yet |
 | memory | 152 MB after loading core.clj, and a 100000-element reduce stays there since locals are cleared after their last read; the image (PLAN.md step 5, stage 3) is what would shrink the baseline |
 | debugger | an error reports `file:line:col` and the chain of calls that led to it, and `.getStackTrace` answers real elements; there is no breakpoint or step yet; PLAN.md step 8 |
-| `pprint` | `cl-format` works; `pprint` itself does not, see the open question at the end of PLAN.md |
+| `pprint` | `cl-format` and `print-table` work; `pprint` prints, but breaks a line after every element: its column accounting is wrong somewhere in `pretty_writer.clj`'s path through clotran |
 | `BigDecimal` and `BigInt` | `1M` reads as a double and `1N` as an integer; DEVIATIONS 30 |
 | sorted collections | `sorted-map` and `sorted-set` are unsorted; DEVIATIONS 9 |
 | mutable deftype fields | `(set! afield v)` is refused, loudly; DEVIATIONS 20 |

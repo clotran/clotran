@@ -8,8 +8,8 @@
 !
 ! A row is a class, a member name, and either a builtin id with the name
 ! the builtin prints as, or a constant kind (HK_*) with its value.
-! Classes are spelt in full; host_canon adds java.lang to a bare name and
-! HOST_IMPORTS covers the few others the libs import short.
+! Classes are spelt in full; canon_class (Eval.f90) adds java.lang to a
+! bare name, or the import that named it.
   type hm
      character(len=40) :: cls = ""
      character(len=28) :: mem = ""
@@ -21,7 +21,7 @@
   integer, parameter :: HK_INT = -1, HK_REAL = -2, HK_PINF = -3, HK_NINF = -4, &
        HK_NAN = -5, HK_NIL = -6, HK_EMPTYMAP = -7, HK_SPECIALS = -8, HK_TYPE = -9
 
-  type(hm), parameter :: HOST_STATICS_1(80) = [ &
+  type(hm), parameter :: HOST_STATICS_1(81) = [ &
   ! PersistentList.creator is a static IFn that builds a list from its arguments.
        hm("clojure.lang.PersistentList", "creator", B_LIST, "list"), &
   ! core.clj's own make-array, aget, aset and the aset-int family are
@@ -66,8 +66,9 @@
        hm("clojure.lang.Util", "hash", B_HASH, "hash"), &
        hm("clojure.lang.Util", "hasheq", B_HASH, "hash"), &
        hm("clojure.lang.Util", "isReduced", B_ISREDUCED, "reduced?"), &
-  ! clotran's classes ARE its type tags, so classOf is clotran-type.
-       hm("clojure.lang.Util", "classOf", B_TYPE, "clotran-type"), &
+  ! Util.classOf and .getClass are `class`: the canonical class keyword
+  ! (class_name_of). clotran-type, the internal tag, is host.clj's.
+       hm("clojure.lang.Util", "classOf", B_CLASSOF, "clotran-class"), &
        hm("clojure.lang.LazilyPersistentVector", "create", B_VEC, "vec"), &
        hm("clojure.lang.LazilyPersistentVector", "createOwning", B_VEC, "vec"), &
   ! EMPTY is a field, not a call: keyword-argument destructuring names it.
@@ -86,6 +87,7 @@
   ! The clock, so `time` works. ClojureScript has system-time, so this is language.
        hm("java.lang.System", "nanoTime", B_NANOTIME, "clotran-nano-time"), &
        hm("java.lang.System", "currentTimeMillis", B_MILLIS, "clotran-current-time-millis"), &
+       hm("java.lang.System", "identityHashCode", B_IDHASH, "clotran-identity-hash"), &
        hm("clojure.lang.Numbers", "add", B_ADD, "+"), &
        hm("clojure.lang.Numbers", "addP", B_ADD, "+"), &
        hm("clojure.lang.Numbers", "unchecked_add", B_ADD, "+"), &
@@ -353,7 +355,7 @@
        hm("java.lang.Integer", "TYPE", HK_TYPE), &
        hm("java.lang.Long", "TYPE", HK_TYPE), &
        hm("java.lang.Short", "TYPE", HK_TYPE) ]
-  type(hm), parameter :: HOST_STATICS(293) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
+  type(hm), parameter :: HOST_STATICS(294) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
   type(hm), parameter :: HOST_METHODS_1(80) = [ &
   ! Instance members. The target becomes the first argument, which is all
@@ -379,7 +381,7 @@
        hm("", "setStackTrace", B_IDENTITY, "identity"), &
        hm("", "getNamespace", B_NAMESPACE, "namespace"), &
   ! .getClass is clotran-type, which is what protocol dispatch keys on.
-       hm("", "getClass", B_TYPE, "clotran-type"), &
+       hm("", "getClass", B_CLASSOF, "clotran-class"), &
   ! No boxing, no classpath, no class loader: nil is the honest answer for each.
        hm("", "getComponentType", B_ALWAYS_NIL, "clotran-nil"), &
        hm("", "getClassLoader", B_ALWAYS_NIL, "clotran-nil"), &
@@ -515,11 +517,3 @@
        hm("", "group", B_RE_GROUP, "re-group") ]
   type(hm), parameter :: HOST_METHODS(139) = [HOST_METHODS_1, HOST_METHODS_2]
 
-  ! Short names the libs import: (:import (java.util.regex Pattern Matcher)) and the like.
-  type(hm), parameter :: HOST_IMPORTS_1(5) = [ &
-       hm("java.lang.reflect.Array", "Array"), &
-       hm("java.util.Arrays", "Arrays"), &
-       hm("java.util.regex.Matcher", "Matcher"), &
-       hm("java.util.regex.Pattern", "Pattern"), &
-       hm("clojure.lang.LazilyPersistentVector", "LazilyPersistentVector") ]
-  type(hm), parameter :: HOST_IMPORTS(5) = [HOST_IMPORTS_1]

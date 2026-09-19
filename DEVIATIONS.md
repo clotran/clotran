@@ -443,10 +443,10 @@ new deviation 32.
 `(deftype Point [x y])` expands to `(deftype* clojure.core/Point
 clojure.core.Point ...)` followed by `(import clojure.core.Point)`, and
 on the JVM that import is what makes the bare name `Point` mean that
-class *in that namespace and nowhere else*. clotran's `import` is a
-no-op (deviation 12's neighbour: a class is recognised by the SHAPE of
-its name, so there is no class table to bind into), so there is nowhere
-namespace-local to record it.
+class *in that namespace and nowhere else*. clotran's `import*` records
+the short name in ONE list for the whole process (`record_import`),
+not per namespace, so a class name written short after an import
+means the imported class everywhere.
 
 Instead `deftype*` registers the type under BOTH its full name and its
 last segment, and `instance?` accepts an unqualified name that matches
@@ -516,7 +516,16 @@ It goes away when a field is a writable slot rather than a let binding
 -- the representation already allows it, since an instance holds its
 fields in a run `gc_set_slot` can write.
 
-## 21. `pr` of a namespace shows its name, not an `#object[...]` form
+## 21. RESOLVED -- `pr` of a namespace shows its name, not an `#object[...]` form
+
+**RESOLVED 2026-09-19.** Both missing pieces exist: `String/format` and
+`System/identityHashCode` (a heap object's pool index, stable because
+the collector does not move). `(pr-str *ns*)` is now
+`#object[clojure.lang.Namespace 0x3 "user"]`, an atom prints as
+`#object[clojure.lang.Atom 0x.. {:status :ready, :val 1}]`, and the
+number after `0x` is the one thing that still differs from the JVM.
+A function still prints as `#<fn>`: deviation 23. The original entry
+follows.
 
 Clojure separates two things about a Namespace, and clotran can only
 reproduce one of them:
@@ -977,3 +986,35 @@ loading, so it wins.
 **Removal**: tie the allowance to the extension as Clojure does, so
 `#?` in a `.clj` errors. Nothing depends on the leniency; it exists so
 a `.clj` being ported can be edited in place before it is renamed.
+
+## 34. A class is a keyword
+
+`(class "a")` is `:String`, `(class [])` is
+`:clojure.lang.PersistentVector`, and the literal `String` evaluates to
+`:String` -- the same keyword, so `(= (class x) String)`, `(condp =
+(class x) String ...)`, `(instance? (class x) x)` and a protocol's
+`:impls` map keyed by the literal all behave as on the JVM. The
+spelling is one rule, `class_key`: the full name with `java.lang`
+stripped, a bare name resolved through what `import*` recorded (34
+lines: `record_import`, `canon_class`, `class_key` in Eval.f90).
+
+What differs from a `java.lang.Class`:
+
+- it PRINTS as a keyword: `(pr-str (class 1))` is `:Long`, not
+  `java.lang.Long`, and `(class (class 1))` is `clojure.lang.Keyword`.
+- clotran has one map, one set, one seq view and one function class
+  where the JVM has many, so the most common JVM class stands for
+  each: every map is a `PersistentArrayMap`, every `seq` a
+  `PersistentVector$ChunkedSeq`, every function a
+  `clojure.lang.AFunction`. An array is `:array`.
+- `supers` answers the short chain `host_super` lists -- the
+  interfaces `core_print` and `core_deftype` dispatch on -- not the
+  thirty-odd a JVM class implements. `isa?` on two classes is
+  equality only (`.isAssignableFrom` is always false here).
+
+The internal type TAG -- `:string`, `:vector`, `:int` -- is what
+`clotran-type` answers and what `host.clj`'s predicates are written
+on; it is not `class`, and never was meant to leak.
+
+**Removal**: a class value of its own kind, printing as its name, with
+`(class (class x))` answering it. Nothing loaded needs that.

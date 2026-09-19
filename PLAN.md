@@ -434,15 +434,13 @@ DEVIATIONS 24 and 25.
 
 ## Open
 
-**`class` answers a type tag, class literals evaluate to a class
-name, and they do not agree.** `(class "a")` is `:string`; `String`
-evaluates to `:String`. `clojure.pprint`'s writers do `(condp = (class
-x) String ...)` and miss every branch, which is the largest single
-thing between clotran and a working `pprint`. Recommended: option 1,
-class literals and `(class x)` both evaluate to the same class object,
-the tag stays internal, and `host_super` is re-keyed in the step-3
-table. Hazard: `(class x)` is a protocol's `:impls` key, so change the
-table first and what `class` answers last, behind the language suite.
+**RESOLVED: `class` and a class literal answer the same keyword.**
+`(class "a")` and `String` are both `:String` (`class_name_of`,
+`class_key`); the tag stays behind `clotran-type`; `host_super` is
+keyed by class name; `import*` records short names. The derived suite
+did not move (2164/241/370 over 324 executed), the oracle gained
+seven value-compared cases, and `pprint` got past `(condp = (class x)
+String ...)` -- to a column-accounting bug of its own. DEVIATIONS 34.
 
 **Where does the binding generator read type information from?**
 Parsing `interface` blocks, or a declaration written in clotran.

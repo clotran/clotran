@@ -414,7 +414,7 @@
     if (is_class_name(sym)) then
        ! A CLASS LITERAL evaluates to the keyword naming clotran's type
        ! tag, java.lang implicitly imported (Object == java.lang.Object).
-       v = gc_key(short_class_name(gc_ref_text(sym%ref)), [vs_get(base + 1), vs_get(base + 2)])
+       v = gc_key(class_key(gc_ref_text(sym%ref)), [vs_get(base + 1), vs_get(base + 2)])
        call vs_set(base + 3, v)
        nd = const_node(vs_get(base + 3), [vs_get(base + 1), vs_get(base + 2)])
        call vs_leave(base)
@@ -830,7 +830,12 @@
        ! One thread: the lock expression is evaluated and that is all.
        nd = analyze_one(N_DO, gcl_first(vs_get(base + 3)), vs_get(base + 2))
     else if (gc_ref_is(head%ref, "clojure.core/import*")) then
-       ! A no-op: clotran recognises a class by the shape of its name.
+       ! Records the short name, at analysis like a def; see record_import.
+       block
+         type(gc_value) :: cn
+         cn = strip_meta(gcl_first(vs_get(base + 3)))
+         if (cn%tag == GCT_STR .or. cn%tag == GCT_SYM) call record_import(gc_ref_text(cn%ref))
+       end block
        nd = const_node(gc_nil(), [vs_get(base + 1), vs_get(base + 2)])
     else if (gc_ref_is(head%ref, "set!")) then
        nd = analyze_setbang(vs_get(base + 3), vs_get(base + 2))

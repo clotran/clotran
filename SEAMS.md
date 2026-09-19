@@ -291,10 +291,11 @@ choice we got wrong:
   JVM-shaped shim exists, not that clotran hashes or matches correctly.
   They should assert clotran's own vocabulary and would then keep
   passing if every Java name were renamed tomorrow.
-- `host_super` translates `:vector` into `clojure.lang.IPersistentVector`
-  so a multimethod registered on the Java name dispatches. Necessary at
-  the boundary, but it means clotran's INTERNAL dispatch graph is spelled
-  in Java.
+- `host_super` answers `clojure.lang.IPersistentVector` for a vector
+  so a multimethod registered on the Java name dispatches, and `class`
+  itself answers `:clojure.lang.PersistentVector` (DEVIATIONS 34).
+  Necessary at the boundary, but it means clotran's INTERNAL dispatch
+  graph is spelled in Java.
 - `instance?` accepts only Java names. `(instance? Regex p)` is not a
   thing anyone can write, even though `regex` is exactly what
   `clotran-type` answers.

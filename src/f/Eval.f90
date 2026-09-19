@@ -164,6 +164,7 @@ module Eval
   integer, parameter :: B_STACKTRACE = 274, B_STE_CLASS = 275, B_STE_METHOD = 276, &
        B_STE_FILE = 277, B_STE_LINE = 278
   integer, parameter :: B_SLURP = 279, B_CS_ENTROPY = 280, B_CS_READOPT = 281, B_CS_DGLD = 282, B_CS_SOLVOUT = 283
+  integer, parameter :: B_CLASSOF = 284, B_IDHASH = 285
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -224,6 +225,9 @@ module Eval
   ! thread the two are indistinguishable; with more they are not.
   ! DEVIATIONS.md 10.
   type(gc_root), save :: binding_stack_root
+  ! import* records these; see record_import.
+  character(len=64), allocatable, save :: import_full(:), import_short(:)
+  integer, save :: n_imports = 0
   type(gc_root), save :: global_env_root
   integer, save :: ev_depth = 0
   integer, save :: ev_limit = 0
@@ -922,7 +926,7 @@ contains
        do i = 0, gcv_count(vs_get(base + 1)) - 1
           s = strip_meta(gcv_nth(vs_get(base + 1), i))
           if (s%tag /= GCT_SYM) cycle
-          tmp = gc_key(short_class_name(gc_ref_text(s%ref)), &
+          tmp = gc_key(class_key(gc_ref_text(s%ref)), &
                [vs_get(base + 1), vs_get(base + 2)])
           call vs_set(base + 2, gcv_conj(vs_get(base + 2), tmp, &
                [vs_get(base + 1), vs_get(base + 2), tmp]))
@@ -1133,7 +1137,7 @@ contains
     tbl = gc_root_get(types_root)
     call vs_set(base + 1, tbl)
     out = gca_get(vs_get(base + 1), &
-         gc_key(short_class_name(cname), [vs_get(base + 1)]))
+         gc_key(class_key(cname), [vs_get(base + 1)]))
     call vs_leave(base)
   end function find_type
 
@@ -1618,7 +1622,7 @@ contains
        end if
        ! A class literal is_host_class does not know evaluates to the
        ! keyword naming its type tag; the retry below sees it as one.
-       call vs_set(base + 1, gc_key(short_class_name(gc_ref_text(target0%ref)), [vs_get(base + 2)]))
+       call vs_set(base + 1, gc_key(class_key(gc_ref_text(target0%ref)), [vs_get(base + 2)]))
     end if
 
     ! A deftype/reify instance answers its own methods and fields
@@ -1687,7 +1691,7 @@ contains
     else
        ! Name the TARGET as well as the member: "no such member:
        ! create" alone does not say which create.
-       call fail("no such member: " // type_name(tv) // "." // mname)
+       call fail("no such member: " // class_name_of(tv) // "." // mname)
     end if
     call vs_leave(base)
   end function eval_dot
@@ -2124,23 +2128,70 @@ contains
   ! these three lookups read it. A member that is not a row does not
   ! exist, and fails by NAME so a load report says what is missing.
 
-  ! The class name a form wrote, spelt as the table spells it:
-  ! java.lang is implicitly imported, and the libs import a few more
-  ! by short name.
-  function host_canon(cls) result(c)
-    character(len=*), intent(in) :: cls
-    character(len=:), allocatable :: c
-    integer :: i
-    c = cls
-    if (index(cls, ".") > 0) return
-    do i = 1, size(HOST_IMPORTS)
-       if (HOST_IMPORTS(i)%mem == cls) then
-          c = trim(HOST_IMPORTS(i)%cls)
+  ! --- imports ---------------------------------------------------------
+  !
+  ! (import* "java.util.regex.Pattern") records Pattern -> that name, so
+  ! a class written by its short name afterwards means the imported one.
+  ! One list for the whole process, not one per namespace, the same
+  ! choice DEVIATIONS 17 makes for deftype names. java.lang needs no
+  ! entry: it is implicitly imported, as on the JVM.
+  subroutine record_import(full)
+    character(len=*), intent(in) :: full
+    character(len=64), allocatable :: nf(:), ns(:)
+    integer :: i, last_dot
+    last_dot = 0
+    do i = 1, len(full)
+       if (full(i:i) == ".") last_dot = i
+    end do
+    if (last_dot == 0) return
+    do i = 1, n_imports
+       if (import_short(i) == full(last_dot + 1:)) then
+          import_full(i) = full
           return
        end if
     end do
-    c = "java.lang." // cls
-  end function host_canon
+    if (.not. allocated(import_full)) then
+       allocate(import_full(32), import_short(32))
+    else if (n_imports == size(import_full)) then
+       allocate(nf(2 * n_imports), ns(2 * n_imports))
+       nf(1:n_imports) = import_full
+       ns(1:n_imports) = import_short
+       call move_alloc(nf, import_full)
+       call move_alloc(ns, import_short)
+    end if
+    n_imports = n_imports + 1
+    import_full(n_imports) = full
+    import_short(n_imports) = full(last_dot + 1:)
+  end subroutine record_import
+
+  ! A class name in full: a dotted name is already one, a bare name is
+  ! the import it names, or java.lang's.
+  function canon_class(name) result(c)
+    character(len=*), intent(in) :: name
+    character(len=:), allocatable :: c
+    integer :: i
+    c = name
+    if (index(name, ".") > 0) return
+    do i = 1, n_imports
+       if (import_short(i) == name) then
+          c = trim(import_full(i))
+          return
+       end if
+    end do
+    c = "java.lang." // name
+  end function canon_class
+
+  ! The ONE spelling a class keyword has, wherever it is built: the
+  ! canonical name with java.lang stripped, so String and
+  ! java.lang.String are :String, and IDeref after (import
+  ! clojure.lang.IDeref) is :clojure.lang.IDeref like the literal
+  ! written in full. A bare name nothing imported stays bare.
+  function class_key(name) result(k)
+    character(len=*), intent(in) :: name
+    character(len=:), allocatable :: k
+    k = short_class_name(canon_class(name))
+  end function class_key
+
 
   ! Whether a symbol names a host class: one with a row in the table.
   ! Compiler.maybeClass asks the class loader; this asks the data.
@@ -2149,7 +2200,7 @@ contains
     character(len=:), allocatable :: c
     is_host_class = .false.
     if (sym%tag /= GCT_SYM) return
-    c = host_canon(gc_ref_text(sym%ref))
+    c = canon_class(gc_ref_text(sym%ref))
     is_host_class = any(HOST_STATICS(:)%cls == c)
   end function is_host_class
 
@@ -2181,7 +2232,7 @@ contains
     character(len=:), allocatable :: c
     integer :: i
     out = gc_nil()
-    c = host_canon(cls)
+    c = canon_class(cls)
     ! ponytail: a linear scan of ~300 rows, at analysis time; sort and
     ! bisect if it ever shows in a profile.
     do i = 1, size(HOST_STATICS)
@@ -6865,11 +6916,42 @@ contains
        block
          type(gc_value) :: mt
          mt = strip_meta(gcv_nth(args, 0))
-         if (gc_kind(mt) /= OBJ_MATCHER) then
-            call fail("replaceAll needs a Matcher")
-         else
+         if (gc_kind(mt) == OBJ_MATCHER) then
             out = regex_replace(mt, text_of(gcv_nth(args, 1)), &
                  id == B_RE_REPLACEFIRST, [vs_get(base + 1)])
+         else if (mt%tag == GCT_STR .and. n >= 3) then
+            ! String.replaceAll(regex, replacement) and replaceFirst: the
+            ! pattern source is compiled here, as Java compiles it on
+            ! every call, and matched against the string.
+            block
+              type(gc_value) :: rx, mv
+              integer :: h, mh
+              character(len=:), allocatable :: stext
+              h = regex_compile(text_of(gcv_nth(args, 1)))
+              if (h == 0) then
+                 call fail("regex: " // regex_last_error())
+              else
+                 rx = gc_obj(OBJ_REGEX, [gc_str(text_of(gcv_nth(args, 1)), [vs_get(base + 1)])], [vs_get(base + 1)])
+                 call gc_set_i1(rx, h)
+                 call vs_set(base + 2, rx)
+                 mh = regex_clone(h)
+                 stext = text_of(mt)
+                 if (mh == 0) then
+                    call fail("regex: " // regex_last_error())
+                 else if (.not. regex_set_text(mh, stext)) then
+                    call fail("regex: " // regex_last_error())
+                 else
+                    mv = gc_obj(OBJ_MATCHER, [vs_get(base + 2), gc_str(stext, [vs_get(base + 1), vs_get(base + 2)])], &
+                         [vs_get(base + 1), vs_get(base + 2)])
+                    call gc_set_i1(mv, mh)
+                    call vs_set(base + 3, mv)
+                    out = regex_replace(vs_get(base + 3), text_of(gcv_nth(args, 2)), &
+                         id == B_RE_REPLACEFIRST, [vs_get(base + 1)])
+                 end if
+              end if
+            end block
+         else
+            call fail("replaceAll needs a Matcher")
          end if
        end block
     case (B_RE_APPENDREPL, B_RE_APPENDTAIL)
@@ -6915,10 +6997,28 @@ contains
             lv = strip_meta(gcv_nth(args, 2))
             lim = int(lv%ival)
          end if
-         if (gc_kind(pv) /= OBJ_REGEX) then
-            call fail("split needs a Pattern")
-         else
+         if (gc_kind(pv) == OBJ_REGEX) then
             out = regex_split(pv, sv, lim, [vs_get(base + 1)])
+         else if (pv%tag == GCT_STR .and. sv%tag == GCT_STR) then
+            ! String.split(regex[, limit]): the string is the subject and
+            ! the second argument is a pattern SOURCE, compiled here as
+            ! Java compiles it on every call.
+            call vs_set(base + 2, pv)
+            block
+              type(gc_value) :: rx
+              integer :: h
+              h = regex_compile(text_of(sv))
+              if (h == 0) then
+                 call fail("regex: " // regex_last_error())
+              else
+                 rx = gc_obj(OBJ_REGEX, [gc_str(text_of(sv), [vs_get(base + 1)])], [vs_get(base + 1)])
+                 call gc_set_i1(rx, h)
+                 call vs_set(base + 3, rx)
+                 out = regex_split(vs_get(base + 3), vs_get(base + 2), lim, [vs_get(base + 1)])
+              end if
+            end block
+         else
+            call fail("split needs a Pattern")
          end if
        end block
     case (B_QUOTEREPL)
@@ -7126,6 +7226,26 @@ contains
        end block
     case (B_INSTANCE)
        out = gc_bool(is_instance(gcv_nth(args, 0), gcv_nth(args, 1)))
+    case (B_IDHASH)
+       ! System.identityHashCode: a number that is the same for the same
+       ! object and usually differs between objects. The pool index is
+       ! exactly that for a heap object (the collector does not move),
+       ! and an immediate hashes by value, as a boxed Long would not --
+       ! print-object only puts it in #object[... 0x..] anyway.
+       a = strip_meta(gcv_nth(args, 0))
+       if (a%ref /= 0) then
+          out = gc_int(int(a%ref, gc_ip))
+       else
+          out = gc_int(int(gc_hash(a), gc_ip))
+       end if
+    case (B_CLASSOF)
+       ! (class x): the canonical class keyword, nil for nil.
+       a = strip_meta(gcv_nth(args, 0))
+       if (a%tag == GCT_NIL) then
+          out = gc_nil()
+       else
+          out = gc_key(class_name_of(a), [vs_get(base + 1)])
+       end if
     case (B_TYPE)
        ! One host primitive instead of a dozen predicates: core is
        ! written in Clojure on top of this, which is how real Clojure
@@ -8694,6 +8814,20 @@ contains
        ! which is how @(delay 1) came back as the delay itself.
        yes = (t == "atom" .or. t == "delay" .or. t == "var")
     case ("clojure.lang.Delay"); yes = (t == "delay")
+    ! The concrete classes `class` answers (class_name_of), so that
+    ! (instance? (class x) x) holds and a condp on them can ask.
+    case ("clojure.lang.PersistentVector"); yes = (t == "vector")
+    case ("clojure.lang.PersistentArrayMap", "clojure.lang.PersistentHashMap"); yes = (t == "map")
+    case ("clojure.lang.PersistentHashSet"); yes = (t == "set")
+    case ("clojure.lang.PersistentList"); yes = (t == "list")
+    case ("clojure.lang.LazySeq"); yes = (t == "lazy-seq")
+    case ("clojure.lang.PersistentVector$ChunkedSeq", "clojure.lang.Cons"); yes = (t == "seq")
+    case ("clojure.lang.Atom"); yes = (t == "atom")
+    case ("clojure.lang.AFunction", "clojure.lang.AFn"); yes = (t == "fn")
+    case ("StringBuilder", "java.lang.StringBuilder"); yes = (t == "string-builder")
+    case ("java.io.PrintWriter", "java.io.Writer"); yes = (t == "writer")
+    ! Everything but nil is an Object.
+    case ("Object", "java.lang.Object"); yes = (v%tag /= GCT_NIL)
     ! Both spellings. clojure.string imports these -- (:import
     ! (java.util.regex Pattern Matcher)) -- and then writes the
     ! SHORT name, so (instance? Pattern re) has to answer the same
@@ -8855,22 +8989,15 @@ contains
     is_number = (v%tag == GCT_INT .or. v%tag == GCT_REAL .or. v%tag == GCT_RATIO)
   end function is_number
 
-  ! A value as plain text: a string'\''s own characters, anything else
-  ! printed the way `str` prints it.
-  ! A writer is nothing but the Fortran unit it writes to. No buffer:
-  ! the host already has one, and giving it a second would mean every
-  ! print needed an explicit flush to be seen.
-  ! clotran's classes ARE its type tags, but core.clj registers its
-  ! print-method methods on the JVM INTERFACES -- IPersistentVector,
-  ! ISeq, Number. With no hierarchy, (class [1 2]) answered :vector,
-  ! matched no method, and fell to :default -- whose IObj branch calls
-  ! print-method on that same vector again. Unbounded recursion, and
-  ! the segfault that made (pr [1 2]) kill the process.
-  !
-  ! This is DEVIATIONS 8's missing hierarchy, cut down to the fixed
-  ! host part of it: what each clotran type would implement on the JVM,
-  ! most specific first. Consulted only AFTER an exact miss and only
-  ! BEFORE :default, so no dispatch that resolves today can change.
+  ! The host supertypes of a class, one per call. `supers` walks them
+  ! through .getInterfaces, and multimethod dispatch and
+  ! find-protocol-impl walk them the same way. The class is what
+  ! `class` answers (class_name_of), so the keys here are CLASS NAMES,
+  ! spelt as a class literal evaluates: java.lang stripped, everything
+  ! else in full. Order is specific-to-general, because the caller
+  ! takes the first match: print-dup has a method on Long and another
+  ! on Number, and only the Long one prints 1 rather than
+  ! #=(java.lang.Long. "1").
   function host_super(dv, i, roots) result(k)
     type(gc_value), intent(in) :: dv, roots
     integer, intent(in) :: i
@@ -8903,131 +9030,124 @@ contains
       end if
     end block
 
-    ! THE CHAIN IS BUILT, THEN INDEXED, rather than each case picking
-    ! by index. Doing it by index left two kinds of hole and both were
-    ! silent:
-    !
-    !   - two entries were keyed on names type_name does not use --
-    !     "float" where it says "double", "bool" where it says
-    !     "boolean" -- so a double and a boolean had NO supertypes at
-    !     all. (binding [*print-dup* true] (pr-str 1.5)) was "No method
-    !     in multimethod 'print-dup' for dispatch value: :double".
-    !
-    !   - the Object fallback sat at index 4, and the caller stops at
-    !     the first nil. Only a type with exactly three supertypes ever
-    !     reached it; for everything else Object was unreachable.
-    !
-    ! Order is specific-to-general, because the caller takes the first
-    ! match: print-dup has a method on Long and another on Number, and
-    ! only the Long one prints 1 rather than #=(java.lang.Long. "1").
+    ! THE CHAIN IS BUILT, THEN INDEXED. Every class this table knows
+    ! ends at Object, where core.clj's catch-all print-method is
+    ! registered; a class it does not know -- a function, an array --
+    ! has no supertypes and falls to :default, which for a function
+    ! is DEVIATIONS.md 23's territory and not this function's.
     block
-      character(len=34) :: chain(8)
+      character(len=36) :: chain(8)
       integer :: cnt
+      logical :: known
       cnt = 0
+      known = .true.
       select case (t)
-      ! The CONCRETE class comes first, and it has to: core_print
-      ! registers print-dup on clojure.lang.PersistentVector and
-      ! PersistentHashSet by name, and only those two methods print
-      ! [1 2] rather than #=(.../create [1 2]). clotran's :vector IS
-      ! the concrete class, so naming it here is what a class chain
-      ! looks like rather than a special case.
-      case ("vector")
-         chain(1) = "clojure.lang.PersistentVector"
-         chain(2) = "clojure.lang.IPersistentVector"
-         chain(3) = "java.util.List"
-         chain(4) = "java.util.RandomAccess"
-         chain(5) = "clojure.lang.IPersistentCollection"
-         chain(6) = "java.util.Collection"
-         cnt = 6
-      case ("map")
-         chain(1) = "clojure.lang.IPersistentMap"
-         chain(2) = "java.util.Map"
-         chain(3) = "clojure.lang.IPersistentCollection"
-         chain(4) = "java.util.Collection"
-         cnt = 4
-      case ("set")
-         chain(1) = "clojure.lang.PersistentHashSet"
-         chain(2) = "clojure.lang.IPersistentSet"
-         chain(3) = "java.util.Set"
-         chain(4) = "clojure.lang.IPersistentCollection"
-         chain(5) = "java.util.Collection"
+      case ("clojure.lang.PersistentVector")
+         chain(1:5) = [character(len=36) :: "clojure.lang.IPersistentVector", &
+              "java.util.List", "java.util.RandomAccess", &
+              "clojure.lang.IPersistentCollection", "java.util.Collection"]
          cnt = 5
-      ! These are type_name's spellings, and they have to be exactly
-      ! that: the entry read "lazy" while type_name says "lazy-seq",
-      ! so a lazy seq matched no supertype and print-method never
-      ! found ISeq for one.
-      case ("list")
-         chain(1) = "clojure.lang.IPersistentList"
-         chain(2) = "clojure.lang.ISeq"
-         chain(3) = "java.util.List"
-         chain(4) = "clojure.lang.IPersistentCollection"
-         chain(5) = "java.util.Collection"
-         cnt = 5
-      case ("seq", "lazy-seq", "cons")
-         chain(1) = "clojure.lang.ISeq"
-         chain(2) = "java.util.List"
-         chain(3) = "clojure.lang.IPersistentCollection"
-         chain(4) = "java.util.Collection"
+      case ("clojure.lang.PersistentArrayMap")
+         chain(1:4) = [character(len=36) :: "clojure.lang.IPersistentMap", "java.util.Map", &
+              "clojure.lang.IPersistentCollection", "java.util.Collection"]
          cnt = 4
-      case ("keyword")
-         chain(1) = "clojure.lang.Keyword"; cnt = 1
-      case ("symbol")
-         chain(1) = "clojure.lang.Symbol"; cnt = 1
-      case ("var")
-         chain(1) = "clojure.lang.Var"
-         chain(2) = "clojure.lang.IDeref"
-         cnt = 2
-      case ("atom", "delay")
-         chain(1) = "clojure.lang.IDeref"; cnt = 1
-      case ("regex")
-         chain(1) = "java.util.regex.Pattern"; cnt = 1
-      case ("string")
-         chain(1) = "String"
-         chain(2) = "CharSequence"
-         cnt = 2
-      ! "Character", not "java.lang.Character": a class literal in
-      ! dispatch position evaluates to a keyword with the java.lang
-      ! prefix STRIPPED -- java.lang.Character is :Character, while
-      ! java.util.List and clojure.lang.ISeq keep theirs. core_print
-      ! registers this method as java.lang.Character, so the key it
-      ! lands under is :Character and the full name matched nothing.
-      ! That is why (pr-str \newline) was a raw newline rather than
-      ! \newline: print-method never found the Character method.
-      case ("char")
-         chain(1) = "Character"; cnt = 1
-      case ("boolean")
-         chain(1) = "Boolean"; cnt = 1
-      case ("error")
-         chain(1) = "Throwable"; cnt = 1
-      case ("int")
-         chain(1) = "Long"
-         chain(2) = "Number"
-         cnt = 2
-      case ("double")
-         chain(1) = "Double"
-         chain(2) = "Number"
-         cnt = 2
-      case ("ratio")
-         chain(1) = "clojure.lang.Ratio"
-         chain(2) = "Number"
-         cnt = 2
-      case ("ns")
-         chain(1) = "clojure.lang.Namespace"; cnt = 1
-      case ("multifn")
-         chain(1) = "clojure.lang.MultiFn"; cnt = 1
+      case ("clojure.lang.PersistentHashSet")
+         chain(1:4) = [character(len=36) :: "clojure.lang.IPersistentSet", "java.util.Set", &
+              "clojure.lang.IPersistentCollection", "java.util.Collection"]
+         cnt = 4
+      case ("clojure.lang.PersistentList")
+         chain(1:5) = [character(len=36) :: "clojure.lang.IPersistentList", "clojure.lang.ISeq", &
+              "java.util.List", "clojure.lang.IPersistentCollection", "java.util.Collection"]
+         cnt = 5
+      case ("clojure.lang.LazySeq", "clojure.lang.PersistentVector$ChunkedSeq", "clojure.lang.Cons")
+         chain(1:4) = [character(len=36) :: "clojure.lang.ISeq", "java.util.List", &
+              "clojure.lang.IPersistentCollection", "java.util.Collection"]
+         cnt = 4
+      case ("clojure.lang.Var", "clojure.lang.Atom", "clojure.lang.Delay")
+         chain(1) = "clojure.lang.IDeref"
+         cnt = 1
+      case ("String")
+         chain(1) = "CharSequence"
+         cnt = 1
+      case ("Long", "Double", "clojure.lang.Ratio")
+         chain(1) = "Number"
+         cnt = 1
+      case ("clojure.lang.Keyword", "clojure.lang.Symbol", "Character", "Boolean", &
+            "java.util.regex.Pattern", "java.util.regex.Matcher", "clojure.lang.Namespace", &
+            "clojure.lang.MultiFn", "StringBuilder", "java.io.PrintWriter")
+         continue
+      case default
+         if (is_throwable_class(t)) then
+            chain(1) = "Throwable"
+            cnt = 1
+         else
+            known = .false.
+         end if
       end select
-      ! Everything with supertypes at all ends at Object, where
-      ! core.clj's catch-all print-method is registered. A type with
-      ! NONE keeps falling to :default as before -- adding Object for
-      ! a closure would change how a function prints, which is
-      ! DEVIATIONS.md 23's territory and not this function's.
-      if (cnt > 0) then
+      if (known) then
          cnt = cnt + 1
          chain(cnt) = "Object"
       end if
       if (i >= 1 .and. i <= cnt) k = gc_key(trim(chain(i)), [roots])
     end block
   end function host_super
+
+  ! What `class` answers: the canonical class of a value, spelt as a
+  ! class literal evaluates (java.lang stripped), so (= (class "a")
+  ! String) holds, (condp = (class x) String ...) takes its branch,
+  ! and a protocol's :impls map keyed by the literal is hit directly.
+  ! The type TAG (type_name) stays internal: host.clj's predicates
+  ! read it through clotran-type, and messages use it. Where clotran
+  ! has one type for several of Clojure's classes -- one map, one
+  ! seq view -- the most common class stands for it.
+  recursive function class_name_of(v) result(s)
+    type(gc_value), intent(in) :: v
+    character(len=:), allocatable :: s
+    type(gc_value) :: c
+    if (gc_kind(v) == OBJ_META) then
+       s = class_name_of(gc_slot(v, 1))
+       return
+    end if
+    select case (v%tag)
+    case (GCT_NIL);   s = ""
+    case (GCT_BOOL);  s = "Boolean"
+    case (GCT_INT);   s = "Long"
+    case (GCT_REAL);  s = "Double"
+    case (GCT_RATIO); s = "clojure.lang.Ratio"
+    case (GCT_CHAR);  s = "Character"
+    case (GCT_STR);   s = "String"
+    case (GCT_SYM);   s = "clojure.lang.Symbol"
+    case (GCT_KEY);   s = "clojure.lang.Keyword"
+    case default
+       select case (gc_kind(v))
+       case (OBJ_CONS);    s = "clojure.lang.PersistentList"
+       case (OBJ_VECTOR);  s = "clojure.lang.PersistentVector"
+       case (OBJ_MAP, OBJ_HAMT); s = "clojure.lang.PersistentArrayMap"
+       case (OBJ_SET);     s = "clojure.lang.PersistentHashSet"
+       case (OBJ_CLOSURE, OBJ_BUILTIN); s = "clojure.lang.AFunction"
+       case (OBJ_MULTIFN); s = "clojure.lang.MultiFn"
+       case (OBJ_REGEX);   s = "java.util.regex.Pattern"
+       case (OBJ_MATCHER); s = "java.util.regex.Matcher"
+       case (OBJ_WRITER);  s = "java.io.PrintWriter"
+       case (OBJ_SB);      s = "StringBuilder"
+       case (OBJ_ERR)
+          ! Its own class, as constructed, spelt as the literal is:
+          ! core.clj writes (ExceptionInfo. ...) under an import.
+          c = gc_slot(v, 1)
+          s = class_key(gc_ref_text(c%ref))
+       case (OBJ_LAZY);    s = "clojure.lang.LazySeq"
+       case (OBJ_SEQ);     s = "clojure.lang.PersistentVector$ChunkedSeq"
+       case (OBJ_VAR);     s = "clojure.lang.Var"
+       case (OBJ_NS);      s = "clojure.lang.Namespace"
+       case (OBJ_DELAY);   s = "clojure.lang.Delay"
+       case (OBJ_ATOM);    s = "clojure.lang.Atom"
+       case (OBJ_ARRAY);   s = "array"
+       case (OBJ_INST);    s = class_text(v)
+       case (OBJ_TYPE);    s = "Class"
+       case default;       s = "Object"
+       end select
+    end select
+  end function class_name_of
 
   ! The classpath, and the extensions. One root was enough while only
   ! core.clj was being loaded, but Clojure's own test suite lives under
