@@ -1,0 +1,49 @@
+#!/usr/bin/env bb
+;; Runs examples/chemsol.clj on ChemSol's three reference inputs and
+;; diffs the output against the original program's, byte for byte.
+;;
+;;   scripts/chemsol-check [chemsol-tests-dir]   default ~/jborden/chemsol/tests
+;;
+;; Each input runs in its own clotran process (the library's random
+;; generator is module state), from the repo root (clotran loads
+;; src/clj/host.clj relative to it). solvout appends to cs.arc in the
+;; working directory; that file is removed afterwards. Exit status is
+;; non-zero if any of the three differs; the first differing lines are
+;; printed.
+(require '[clojure.string :as str]
+         '[clojure.java.io :as io]
+         '[babashka.process :as p]
+         '[babashka.fs :as fs])
+
+(def repo (-> *file* io/file .getCanonicalFile .getParentFile .getParentFile))
+(def tests (io/file (or (first *command-line-args*)
+                        (str (System/getProperty "user.home") "/jborden/chemsol/tests"))))
+
+(defn run-one [n]
+  (let [driver (fs/create-temp-file {:prefix "chemsol-check" :suffix ".clj"})
+        _ (spit (str driver) (str "(load-file \"" repo "/examples/chemsol.clj\")\n"
+                                  "(chemsol.example/run \"" tests "/vdw.par\" \"" tests "/test" n ".cs\")\n"))
+        r (p/shell {:dir (str repo) :in "" :out :string :err :string :continue true}
+                   (str repo "/clotran") "src/clj/clojure/core.clj" (str driver))
+        ;; the REPL prints one blank line when stdin ends (main.f90); the
+        ;; original program does not, so that one line is not the output
+        got (->> (str/split-lines (:out r))
+                 (remove #(or (str/starts-with? % "note:") (str/starts-with? % "user=>")))
+                 vec)
+        got (if (and (seq got) (str/blank? (peek got))) (pop got) got)
+        want (vec (str/split-lines (slurp (io/file tests (str "test" n "_main.out")))))]
+    (fs/delete driver)
+    (fs/delete-if-exists (io/file repo "cs.arc"))
+    {:n n :got got :want want :err (:err r) :same (= got want)}))
+
+(let [results (mapv run-one [1 2 3])]
+  (doseq [{:keys [n got want same err]} results]
+    (println (format "test%d: %s (%d lines, reference %d)" n (if same "MATCHES" "DIFFERS") (count got) (count want)))
+    (when-not same
+      (let [i (or (first (keep-indexed (fn [i _] (when (not= (get got i) (get want i)) i))
+                                       (range (max (count got) (count want))))) 0)]
+        (println "  first difference at line" (inc i))
+        (println "  clotran:  " (pr-str (get got i)))
+        (println "  reference:" (pr-str (get want i))))
+      (when (seq err) (println "  stderr:" (first (str/split-lines err))))))
+  (System/exit (if (every? :same results) 0 1)))

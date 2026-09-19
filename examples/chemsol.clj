@@ -1,0 +1,175 @@
+;; ChemSol's main.f90, as clotran.
+;;
+;; The library -- chemsol.f90, unmodified, vendored under src/f/chemsol --
+;; is reached through three functions in the `fortran` namespace, each
+;; taking and answering ONE MAP whose keys are the routine's own argument
+;; names: readopt, dg-ld, solvout. Everything main.f90 did around those
+;; calls -- read the input, type the atoms, check the charges, print the
+;; header -- is written here, in Clojure, so that
+;;
+;;     (-> mol (readopt vdw-par) (dg-ld atoms) solvout)
+;;
+;; is the whole calculation. The output is byte-identical to the original
+;; program's for the three reference inputs (scripts/chemsol-check).
+;;
+;; Run one calculation per process: ChemSol's random generator keeps its
+;; state in module variables (src/f/chemsol/PROVENANCE.md).
+(ns chemsol.example
+  (:require [clojure.string :as str]))
+
+(alias 'f 'fortran)
+
+;; --- the tables main.f90 carried ------------------------------------
+
+;; Gaussian nuclear charge -> ChemSol atom type (main.f90, iac_conv)
+(def iac-conv
+  [1 2 3 4 5 6 9 13 16 17 18 19 20 21 22 24 25 26
+   27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44
+   45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62
+   63 64 65 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+   66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 81 82])
+
+;; nuclear charge -> atomic mass (main.f90, mass)
+(def mass
+  [1 4 7 9 11 12 14 16 19 20 23 24 27 28 31 32 35 40
+   39 40 45 48 51 52 55 56 59 59 64 65 70 73 75 79 80 84
+   85 88 89 91 93 96 97 101 103 106 108 112 115 119 122 128 127 131
+   132 137 139 140 141 144 145 150 152 157 159 163 165 167 169 173 175
+   178 181 184 186 190 192 195 197 201 204 207 208 209 210 222 223 226])
+
+;; ChemSol atom type -> van der Waals radius (main.f90, rp); readopt
+;; overwrites a handful from vdw.par
+(def rp
+  [2.3 2.3 2.15 2.00 2.40 2.65 3.0 3.25 2.65 2.85
+   3.2 3.0 2.32 2.65 2.8 2.46 2.5 2.58 1.82 1.70
+   3.1 3.2 3.0 3.2 3.16 2.8 3.06 2.38 1.5 2.00
+   1.91 1.89 1.93 1.84 1.57 1.50 1.88 1.55 2.00 2.50
+   3.00 3.00 3.44 3.00 3.25 2.70 1.75 2.00 2.00 2.00
+   2.00 2.00 2.00 2.00 2.25 1.98 2.45 2.44 3.00 3.70
+   3.80 3.55 3.58 2.92 2.30 3.00 3.00 3.00 3.00 3.00
+   3.00 1.77 1.94 2.00 2.55 3.00 3.00 3.00 3.00 3.00
+   3.50 3.00])
+
+;; --- the input file ----------------------------------------------------
+
+(defn- fixed
+  "The first n characters of s, blank-padded: Fortran's (An)."
+  [s n]
+  (let [s (str s)]
+    (if (>= (count s) n) (subs s 0 n) (str s (apply str (repeat (- n (count s)) " "))))))
+
+(defn- num [s] (Double/parseDouble (str/trim s)))
+
+(defn- parse-atom-line
+  "atom zan q x y z -- list-directed, so whitespace-separated; the atom
+   name is character(3)."
+  [line]
+  (let [[a zan q x y z] (str/split (str/trim line) #"\s+")]
+    {:atom (fixed a 3) :zan (num zan) :q (num q) :x (num x) :y (num y) :z (num z)}))
+
+(defn read-input
+  "The .cs file as main.f90 reads it: molname (a13), n_reg1 and ngeom,
+   ssname (a4), n atom lines, then an optional pcm block whose charges
+   are columns 18-27 of each line ((17x,f10.4))."
+  [path]
+  (let [lines (str/split-lines (clotran-slurp path))
+        molname (fixed (nth lines 0) 13)
+        [n ngeom] (map #(Long/parseLong %) (str/split (str/trim (nth lines 1)) #"\s+"))
+        ssname (fixed (nth lines 2 "") 4)
+        atoms (mapv parse-atom-line (subvec lines 3 (+ 3 n)))
+        after (drop (+ 3 n) lines)
+        pcm? (and (seq after) (str/starts-with? (first after) "pcm"))
+        q-pcm (when pcm? (mapv #(num (subs % 17 (min 27 (count %)))) (take n (rest after))))]
+    {:molname molname :n n :ngeom ngeom :ssname ssname :atoms atoms
+     ;; readopt reads the rest of this file itself (the optional rp
+     ;; block), so it needs the path and how far main.f90 had read
+     :input-file path :input-skip (+ 3 n (if pcm? (+ 1 n) 0))
+     ;; q is the PCM set when there is one, q-gas the first set (main.f90)
+     :q (if pcm? q-pcm (mapv :q atoms))
+     :q-gas (mapv :q atoms)
+     :do-gas (boolean pcm?)}))
+
+;; --- what main.f90 computed before calling the library ---------------------
+
+(defn atom-types
+  "iacw: the ChemSol type of each atom, from its nuclear charge, then
+   the second character of the name ('1', '2', '3') picking a wider type."
+  [atoms]
+  (mapv (fn [{:keys [atom zan]}]
+          (let [t (nth iac-conv (dec (int zan)))
+                c (second atom)]
+            (if (= t 1) t
+                (cond (= c \1) (+ t 1) (= c \2) (+ t 2) (= c \3) (+ t 3) :else t))))
+        atoms))
+
+(defn whole-charge?
+  "main.f90's consistency check: the total is within 0.012 of an integer
+   between 0 and 9."
+  [qsum]
+  (boolean (some #(< (Math/abs (- (Math/abs qsum) (double %))) 0.012) (range 0 10))))
+
+(defn- real8 [& extents] (apply f/make-array "real8" extents))
+
+(defn- fill1 [arr xs] (doseq [[i x] (map-indexed vector xs)] (f/aset arr i (double x))) arr)
+
+(defn molecule
+  "The map the library takes, from the parsed input: main.f90's
+   block-data defaults, its tables as arrays, the topology as arrays."
+  [{:keys [molname ssname n atoms q q-gas do-gas input-file input-skip]}]
+  (let [xw (real8 3 n)
+        iacw (f/make-array "int4" n)]
+    (doseq [[i {:keys [x y z]}] (map-indexed vector atoms)]
+      (f/aset xw 0 i x) (f/aset xw 1 i y) (f/aset xw 2 i z))
+    (doseq [[i t] (map-indexed vector (atom-types atoms))] (f/aset iacw i t))
+    {:molname molname :ssname ssname :n-reg1 n :do-gas do-gas
+     :input-file input-file :input-skip input-skip
+     :iprint 0 :itl 399
+     :rg 26.0 :drg 3.0 :drg-inner 1.0 :rdcutl 6.1 :out-cut 16.0 :rgim 2.0 :rzcut 1.1
+     :dxp0 (real8 3) :pcenter (real8 3)
+     :rp (fill1 (real8 82) rp) :vdwc6 (real8 82) :rpi (real8 n)
+     :xw xw :iacw iacw
+     :q (fill1 (real8 n) q) :q-gas (fill1 (real8 n) q-gas) :q-mp2 (fill1 (real8 n) q)}))
+
+;; --- the header main.f90 printed -----------------------------------------
+
+(def banner
+  ["***********************************************************"
+   "                                                           "
+   "                       CHEMSOL 2.1                         "
+   "                                                           "
+   "              Jan Florian and Arieh Warshel                "
+   "            University of Southern California              "
+   "                    Los Angeles, 1999                      "
+   "                                                           "
+   "***********************************************************"])
+
+(defn print-header [{:keys [molname atoms q q-gas]}]
+  (doseq [l banner] (println (str "      " l)))
+  (println) (println) (println)                       ; format 55's trailing /, write(*,*), the Solute format's leading /
+  (let [qsum1 (reduce + q)
+        qsum2 (reduce + q-gas)
+        amas (double (reduce + (map #(nth mass (dec (int (:zan %)))) atoms)))]
+    (println (str " Solute                           :      " molname))
+    (println (format " Total charge for gas-phase solute: %9.2f" qsum1))
+    (println (format " Total charge for PCM solute      : %9.2f" qsum2))
+    (println (format " Molecular weight (a.u.)          : %9.2f" amas))
+    (println (format " Gas-phase transl. entropy (298dS): %9.2f kcal/mol" (f/chemsol-entropy amas)))
+    (when-not (whole-charge? qsum1) (throw (ex-info "Inconsistent gas-phase charges" {})))
+    (when-not (whole-charge? qsum2) (throw (ex-info "Inconsistent pcm charges" {})))))
+
+;; --- the calculation -------------------------------------------------------
+
+(defn run
+  "One ChemSol calculation: vdw.par and a .cs input, output as the
+   original program printed it."
+  [vdw-par input]
+  (let [in (read-input input)
+        mol (molecule in)
+        atoms (mapv :atom (:atoms in))]
+    (print-header in)
+    (when (some zero? (seq (atom-types (:atoms in))))
+      (throw (ex-info "Unknown atom type on input" {})))
+    (-> mol
+        (f/chemsol-readopt vdw-par)
+        (f/chemsol-dg-ld atoms)
+        (f/chemsol-solvout))))
