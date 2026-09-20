@@ -1069,3 +1069,22 @@ through `gca_assoc`, `gca_get` and the trie, and then hashing may
 force. That is the same plumbing PLAN stage 2 removes in the other
 direction (roots leaving signatures once the operand stack holds
 them), so it is worth doing after that, not before.
+
+## 36. `binding` accepts a Var that was not declared `^:dynamic`
+
+`(def g nil) (binding [g 1] g)` answers `1` here. Clojure refuses it
+at compile time -- `Can't dynamically bind non-dynamic var: user/g`
+(`clj`; Compiler.java's `BindingInit` checks `Var.isDynamic`) -- and
+ClojureScript warns and refuses too, so the rule is the language's,
+not the JVM's. `push-thread-bindings` here binds whatever Var it is
+handed, and no Var carries a dynamic flag: `(def ^:dynamic *h* nil)`
+and `(def h nil)` are the same object to it.
+
+Noticed while giving the debugger its handler Var,
+`*clotran-break-handler*`, which the language tests bind with
+`binding` and which works either way.
+
+**Removal**: record `:dynamic` from a `def`'s metadata on the Var (and
+mark the earmuffed core Vars `RT.doInit` makes dynamic), and have
+`push-thread-bindings` refuse a Var without it. Small; it waits only
+for someone to want the refusal.
