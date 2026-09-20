@@ -77,7 +77,7 @@ new JVM member is a few hundred lines of Fortran and a rebuild.
 
 ## The work, in order
 
-### 1. Delete the retired evaluator -- IN PROGRESS
+### 1. Delete the retired evaluator -- DONE
 
 `clotran-bin`, its 17 modules (`Eval`, `LispReader`, `Values`, `RT`,
 `Namespace`, `Env`, `Atom`, `Numbers`, `printer`, `readline`,
@@ -92,12 +92,13 @@ Then the `GC` prefix went (DONE). With one evaluator there is nothing
 to distinguish it from: `GCEval.f90` is `Eval.f90`, `GCReader` is
 `LispReader`, `GCVector` is `PersistentVector`, and so on -- Clojure's
 own names, as the deleted modules were called. Only the collector
-itself keeps the name, because it IS the GC. The binary is `clotran`
-and `scripts/clotran` wraps it in rlwrap. Procedure prefixes (`gce_`,
+itself keeps the name, because it IS the GC. The binary is
+`clotran-bin` and `./clotran` at the root is the launcher: rlwrap and
+core.clj, from any directory. Procedure prefixes (`gce_`,
 `gcv_`, `gcl_`, ...) stay: they are short namespaces, and renaming a
 few thousand call sites buys nothing until step 5 rewrites them anyway.
 
-### 2. Decide what our test suite is, then derive it
+### 2. Decide what our test suite is, then derive it -- DONE
 
 Three layers, each answering a different question:
 
