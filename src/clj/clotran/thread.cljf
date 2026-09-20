@@ -1,0 +1,135 @@
+(ns clotran.thread
+  "A thread is work the runtime runs apart from its caller, with a handle
+  the caller keeps. What KIND of thread runs it is an implementation of
+  the Kind protocol -- green, the default: a task in an evaluator context
+  of its own, on this OS thread -- and later a process, an OS thread, a
+  coarray image: one API, pluggable implementations, the way core.matrix
+  does it.
+
+    (spawn f)          starts f under the current kind; answers a handle
+    (join h) / @h      its value, once it has one; a failure is rethrown
+    (join h ms v)      or v after ms milliseconds
+    (status h)         :running :parked :done :failed :cancelled
+    (cancel! h)        stops one still to finish
+    (send! h msg)      into its mailbox
+    (receive)          the next message sent to the calling thread; blocks
+    (receive ms v)     or v after ms milliseconds
+    (self)             a handle to the calling thread, for replies
+
+  core.clj's future is spawn under green, always: it takes a closure, and
+  a kind that cannot share the heap takes a form and data instead
+  (-takes). The host half -- task-spawn, task-status, task-mailbox,
+  current-task -- is bound into this namespace by Eval.f90 (tasks.inc).")
+
+(defprotocol Kind
+  "A kind of thread: what -spawn runs `work` as."
+  (-name [kind] "The keyword naming this kind.")
+  (-takes [kind] ":fn -- a closure, the heap is shared -- or :form, a form and data, when it is not.")
+  (-spawn [kind work] "Starts work and answers its Handle.")
+  (-self [kind] "A Handle to the calling thread.")
+  (-receive [kind] [kind timeout-ms timeout-val] "The next message sent to the calling thread; blocks for it."))
+
+(defprotocol Handle
+  "What a spawned thread's handle answers."
+  (-join [h] [h timeout-ms timeout-val] "Its value, once it has one; a failure is rethrown.")
+  (-status [h] ":running, :parked, :done, :failed or :cancelled.")
+  (-cancel [h] "Stops it if it has not finished; true when that was so.")
+  (-send [h msg] "Puts msg in its mailbox."))
+
+;;; ---- green: a task in a context of its own --------------------------
+
+(defn- get-task
+  ([task] (.get task))
+  ([task ms v] (try (.get task ms java.util.concurrent.TimeUnit/MILLISECONDS)
+                    (catch java.util.concurrent.TimeoutException e v))))
+
+(defn- take-message!
+  "The next message in mailbox mb, waiting for one; v after ms when given.
+  A task switch happens only inside .await, so the take after it is not
+  interleaved with another taker."
+  [mb ms v]
+  (if (if ms (.await mb ms java.util.concurrent.TimeUnit/MILLISECONDS) (do (.await mb) true))
+    (let [msgs @mb]
+      (reset! mb (subvec msgs 1))
+      (nth msgs 0))
+    v))
+
+(deftype GreenHandle [task]
+  Handle
+  (-join [_] (get-task task))
+  (-join [_ ms v] (get-task task ms v))
+  (-status [_] (task-status task))
+  (-cancel [_] (.cancel task true))
+  (-send [_ msg] (swap! (task-mailbox task) conj msg) nil)
+  clojure.lang.IDeref
+  (deref [_] (get-task task))
+  clojure.lang.IBlockingDeref
+  (deref [_ ms v] (get-task task ms v))
+  clojure.lang.IPending
+  (isRealized [_] (.isDone task)))
+
+(deftype MainHandle []
+  Handle
+  (-join [_] (throw (ex-info "the main thread cannot be joined" {})))
+  (-join [_ ms v] v)
+  (-status [_] :running)
+  (-cancel [_] false)
+  (-send [_ msg] (swap! (task-mailbox nil) conj msg) nil))
+
+(deftype Green []
+  Kind
+  (-name [_] :green)
+  (-takes [_] :fn)
+  (-spawn [_ f] (GreenHandle. (task-spawn f)))
+  (-self [_] (if-let [t (current-task)] (GreenHandle. t) (MainHandle.)))
+  (-receive [_] (take-message! (task-mailbox (current-task)) nil nil))
+  (-receive [_ ms v] (take-message! (task-mailbox (current-task)) ms v)))
+
+(def green "The default kind." (Green.))
+
+;;; ---- the API: one current kind, the way core.matrix has one ----------
+
+(def ^:dynamic *kind* green)
+
+(defn set-kind!
+  "Makes kind the default for spawn, self and receive."
+  [kind]
+  (alter-var-root #'*kind* (constantly kind)))
+
+(defn kind-name [] (-name *kind*))
+
+(defn spawn
+  "Starts work under the current kind, or the one given, and answers its
+  handle. Work is a fn of no args for a kind whose -takes is :fn."
+  ([work] (-spawn *kind* work))
+  ([kind work] (-spawn kind work)))
+
+(defn join
+  "The thread's value, once it has one; a failure is rethrown. With a
+  timeout, timeout-val when it runs out."
+  ([h] (-join h))
+  ([h timeout-ms timeout-val] (-join h timeout-ms timeout-val)))
+
+(defn status [h] (-status h))
+
+(defn cancel!
+  "Stops a thread still to finish; true when it was."
+  [h]
+  (-cancel h))
+
+(defn send!
+  "Puts msg in the thread's mailbox."
+  [h msg]
+  (-send h msg)
+  nil)
+
+(defn receive
+  "The next message sent to the calling thread, blocking for one; with a
+  timeout, timeout-val when it runs out."
+  ([] (-receive *kind*))
+  ([timeout-ms timeout-val] (-receive *kind* timeout-ms timeout-val)))
+
+(defn self
+  "A handle to the calling thread, to be sent along for a reply."
+  []
+  (-self *kind*))

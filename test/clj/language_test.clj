@@ -1064,6 +1064,39 @@
 (check "a thousand futures give their contexts back"
        (count (doall (map deref (doall (map #(future (* % %)) (range 1000)))))) 1000)
 
+;;; ---- clotran.thread: the protocol, and green as its default ---------
+;;
+;; One API over pluggable kinds of thread; green is a task. Host check:
+;; the namespace is ours, and so is when a thread runs.
+(require 'clotran.thread)
+(alias 'th 'clotran.thread)
+(check "the default kind is green, and it takes a closure" [(th/kind-name) (th/-takes th/green)] [:green :fn])
+(def th-a (th/spawn (fn [] (+ 1 2))))
+(check "spawn answers a handle: join, deref and status" [(th/join th-a) @th-a (th/status th-a) (realized? th-a)] [3 3 :done true])
+(def th-box (promise))
+(def th-b (th/spawn (fn [] @th-box)))
+(check "a thread blocked on a promise is parked" (th/status th-b) :parked)
+(deliver th-box 7)
+(check "and joins with its value, in time" (th/join th-b 100 :late) 7)
+(check "join with a timeout answers the timeout value" (th/join (th/spawn (fn [] @(promise))) 5 :late) :late)
+(check "cancel! stops a thread still to finish" (let [h (th/spawn (fn [] @(promise)))] [(th/cancel! h) (th/status h) (th/cancel! h)]) [true :cancelled false])
+(check "a failure is rethrown by join"
+       (try (th/join (th/spawn (fn [] (throw (ex-info "bad" {}))))) (catch java.util.concurrent.ExecutionException e :failed)) :failed)
+;; a worker that squares what it is sent and replies to the sender
+(def th-worker (th/spawn (fn [] (loop [] (let [[from x] (th/receive)]
+                                           (if (= x :stop) :stopped (do (th/send! from (* x x)) (recur))))))))
+(check "a worker waiting for mail is parked" (th/status th-worker) :parked)
+(th/send! th-worker [(th/self) 4])
+(check "a reply arrives in the caller's mailbox" (th/receive) 16)
+(th/send! th-worker [(th/self) 5])
+(check "and again, with a timeout" (th/receive 100 :none) 25)
+(check "an empty mailbox times out" (th/receive 5 :nothing) :nothing)
+(th/send! th-worker [(th/self) :stop])
+(check "the worker stops when told" (th/join th-worker) :stopped)
+(check "a thread's self is a handle to it"
+       (let [p (promise)] (th/join (th/spawn (fn [] (th/send! (th/self) :note) (deliver p (th/receive)) @p)))) :note)
+(check "the main thread is not joinable" (try (th/join (th/self)) (catch Throwable e :no)) :no)
+
 (println "")
 (if (zero? @*failures*)
   (println "LANGUAGE TESTS PASSED")

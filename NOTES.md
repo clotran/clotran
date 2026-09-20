@@ -3033,3 +3033,43 @@ an error, DEVIATIONS 37. The full scorecard is in the commit.
 `execute_command_line` for the pipeline vision, `:os` when the
 collector can take it. Agents are still synchronous. `deref` with a
 timeout inside a pinned wait counts the deadline but cannot park.
+
+## clotran.thread: the contract, and green as its default
+
+James's framing: start with green threads, but have the overall idea
+of a contract of a thread first, then let green be the first
+implementation and the default. So `src/clj/clotran/thread.cljf` is
+two protocols and one current kind, the way core.matrix has one API
+and pluggable implementations. `Kind` is what an implementation
+supplies -- its name, what `-spawn` takes (`:fn` for a closure over
+the shared heap, `:form` for a form and data when the heap is not
+shared), `-spawn`, `-self`, `-receive` -- and `Handle` is what a
+spawned thread answers: `-join`, `-status`, `-cancel`, `-send`. The
+API is `spawn`, `join`, `status`, `cancel!`, `send!`, `receive` and
+`self` over `*kind*`, with `set-kind!` to change the default and
+`binding` to scope one.
+
+`green` is a deftype whose handle wraps a task (tasks.inc): `-join`
+is the task's `.get`, `-status` its state in the protocol's five
+words, `-cancel` its `.cancel`, and the mailbox is a fifth slot on
+the task, an atom holding a vector, which `block_on` already knows
+how to wait on once `satisfied` learned that an atom holding a vector
+is ready when it is not empty. `receive` is `.await` on it and a
+take; a task switch happens only inside `.await`, so the take is not
+interleaved. The main context has a mailbox of its own, so a worker
+can reply to whoever sent, and `self` in the main context is a handle
+that can be sent to but not joined. The host half is four builtins
+interned into the namespace at bootstrap, as `fortran`'s are.
+
+Two bugs stood in the way, each its own commit. `(def green "The
+default kind." (Green.))` bound the docstring: `def` had never learned
+its four-element form, and fixing it let core.clj's
+`default-data-readers` init be analysed for the first time -- it
+var-quotes a reader in the skipped `clojure.uuid`, so a qualified
+var-quote that does not resolve now interns the Var unbound (the
+var-quote's half of DEVIATIONS 32). And `(. x (-name))` was taken for
+the field read `(.-name x)`: the dash shortcut ignored the analyser's
+own is-call flag, so no protocol method spelt `-something` had ever
+been callable on a deftype.
+
+Not here: `:process`, which is the reason the contract has `-takes`.

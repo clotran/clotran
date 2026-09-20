@@ -171,7 +171,8 @@ module Eval
   integer, parameter :: B_BREAK = 293, B_LASTBREAK = 294, B_BREAKON = 295
   integer, parameter :: B_RESUME = 296, B_REPL = 297
   integer, parameter :: B_SUBMIT = 298, B_TASKDONE = 299, B_TASKCANCELLED = 300, B_TASKCANCEL = 301, &
-       B_LATCHWAIT = 302, B_SLEEP = 303, B_NPROCS = 304
+       B_LATCHWAIT = 302, B_SLEEP = 303, B_NPROCS = 304, &
+       B_TASKSTATUS = 306, B_MAILBOX = 307, B_CURTASK = 308
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -268,7 +269,7 @@ module Eval
   ! nil in the main context; the depth of its outermost run, where a
   ! block may yield; a yield in progress; and the context ids finished
   ! tasks gave back, for the next ones.
-  type(gc_root), save :: tasks_root
+  type(gc_root), save :: tasks_root, main_mailbox_root
   type(gc_value), save :: cur_task
   integer, save :: task_loop_depth = 0
   logical, save :: yield_flag = .false.
@@ -613,6 +614,14 @@ contains
       call bind_builtin(vs_get(base + 3), "array-kind", B_ARRAY_KIND)
       call bind_builtin(vs_get(base + 3), "array-shape", B_ARRAY_SHAPE)
       call bind_builtin(vs_get(base + 3), "dgemm", B_DGEMM)
+      ! The thread primitive's host half, in the namespace the protocol
+      ! lives in (src/clj/clotran/thread.cljf; tasks.inc).
+      fns = gcn_find_or_create("clotran.thread", [core])
+      call vs_set(base + 3, fns)
+      call bind_builtin(vs_get(base + 3), "task-spawn", B_SUBMIT)
+      call bind_builtin(vs_get(base + 3), "task-status", B_TASKSTATUS)
+      call bind_builtin(vs_get(base + 3), "task-mailbox", B_MAILBOX)
+      call bind_builtin(vs_get(base + 3), "current-task", B_CURTASK)
       ! ChemSol (src/f/chemsol, src/f/ChemSolBind.f90): the routines
       ! main.f90 calls, each taking and answering a map.
       call bind_builtin(vs_get(base + 3), "chemsol-entropy", B_CS_ENTROPY)
@@ -6196,6 +6205,33 @@ contains
     case (B_NPROCS)
        ! Runtime.availableProcessors: one OS thread runs everything here
        out = gc_int(1_gc_ip)
+    case (B_TASKSTATUS)
+       ! (task-status t): the protocol's five words for a task's state
+       a = strip_meta(gcv_nth(args, 0))
+       out = gc_nil()
+       if (gc_kind(a) == OBJ_TASK) then
+          select case (gc_i1(a))
+          case (TASK_NEW, TASK_RUNNABLE)
+             out = gc_key("parked", [a])
+          case (TASK_RUNNING)
+             out = gc_key("running", [a])
+          case (TASK_DONE)
+             out = gc_key("done", [a])
+          case (TASK_FAILED)
+             out = gc_key("failed", [a])
+          case default
+             out = gc_key("cancelled", [a])
+          end select
+       end if
+    case (B_MAILBOX)
+       ! (task-mailbox t), or (task-mailbox nil) for the main context
+       a = gc_nil()
+       if (n > 0) a = strip_meta(gcv_nth(args, 0))
+       out = task_mailbox(a)
+    case (B_CURTASK)
+       ! (current-task): the task running now, or nil in the main context
+       out = gc_nil()
+       if (gc_kind(cur_task) == OBJ_TASK) out = cur_task
     case (B_GENIFACE)
        out = gc_nil()
     case (B_ALWAYS_FALSE)

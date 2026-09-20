@@ -550,9 +550,18 @@ block, park, resume on demand. Yielding needs a re-executable dispatch
 under the block, so `.` became a loop-driven node and a reify method
 reached through it runs in the loop rather than a nested run; a block
 under a native frame is pinned, as Loom pins a carrier. The protocol
-(`spawn`, `join`, `status`, `cancel`, a mailbox) is not yet a named
-thing: `future`, `deref`, `future-done?` and `future-cancel` are it,
-and `:process` will be the second impl behind the same names.
+(`spawn`, `join`, `status`, `cancel`, a mailbox) is `clotran.thread`
+(src/clj/clotran/thread.cljf): two protocols, `Kind` -- what an
+implementation supplies: `-name`, `-takes`, `-spawn`, `-self`,
+`-receive` -- and `Handle` -- what a spawned thread answers: `-join`,
+`-status`, `-cancel`, `-send` -- with one current kind in `*kind*`
+the way core.matrix keeps a current implementation, and `green` the
+default. The API over them is `spawn`, `join`, `status`, `cancel!`,
+`send!`, `receive`, `self`, `set-kind!`. `green` is a deftype whose
+handle wraps a task; its host half is four builtins the namespace is
+born with (`task-spawn`, `task-status`, `task-mailbox`,
+`current-task`). `:process` is the second kind to write, behind the
+same names, with `-takes` `:form`.
 
 **Arrays are never ragged.** A Fortran rank-2 array is one contiguous
 column-major block; `[[I` is nested and cannot be handed to BLAS at

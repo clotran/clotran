@@ -200,6 +200,26 @@ There is one OS thread, so this is concurrency without parallelism;
 what it buys is that pipeline code reads as straight-line Clojure.
 DEVIATIONS 38 lists what differs from a JVM thread.
 
+**A thread is a contract, and green is its default.** `clotran.thread`
+is the protocol a kind of thread implements -- `spawn`, `join`,
+`status`, `cancel!`, a mailbox with `send!` and `receive`, and `self`
+for replies -- with one current kind, the way core.matrix keeps a
+current implementation. `green` is the task above; a process kind is
+next, behind the same names. Verified output:
+
+```
+user=> nil
+user=> nil
+user=> :green
+user=> #'worker
+user=> :parked
+user=> nil
+user=> 144
+user=> nil
+user=> nil
+user=> :done
+```
+
 Four oracles keep it honest: gfortran and flang must agree
 (`make crosscheck`), `clj` -- real JVM Clojure --
 answers what Clojure actually does rather than what anyone remembers,

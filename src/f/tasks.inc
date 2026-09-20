@@ -206,9 +206,40 @@
        yes = gc_i1(target) >= TASK_DONE
     else if (gc_kind(target) == OBJ_ATOM) then
        c = gc_slot(target, 1)
-       if (c%tag == GCT_INT) yes = c%ival <= 0
+       if (c%tag == GCT_INT) then
+          yes = c%ival <= 0          ! a latch: its count
+       else if (gcv_is(c)) then
+          yes = gcv_count(c) > 0     ! a mailbox: a message
+       end if
     end if
   end function satisfied
+
+  ! A task's mailbox -- slot 5 -- or the main context's: an atom holding
+  ! a vector of messages, made on first use. As a block_on target it is
+  ! ready when it holds one (satisfied); the protocol's send! and
+  ! receive are conj and a take (clotran/thread.cljf).
+  function task_mailbox(t) result(mb)
+    type(gc_value), intent(in) :: t
+    type(gc_value) :: mb, v
+    integer :: base
+    mb = gc_nil()
+    if (gc_kind(t) == OBJ_TASK) then
+       mb = gc_slot(t, 5)
+    else if (gc_root_live(main_mailbox_root)) then
+       mb = gc_root_get(main_mailbox_root)
+    end if
+    if (gc_kind(mb) == OBJ_ATOM) return
+    base = vs_enter(1)
+    v = gcv_empty([t])
+    call vs_set(base + 1, v)
+    mb = gc_obj(OBJ_ATOM, [vs_get(base + 1), gc_nil()], [t, vs_get(base + 1)])
+    if (gc_kind(t) == OBJ_TASK) then
+       call gc_set_slot(t, 5, mb)
+    else
+       call gc_global_keep(main_mailbox_root, mb)
+    end if
+    call vs_leave(base)
+  end function task_mailbox
 
   ! Done waiting: the running task's wait slots are cleared.
   subroutine clear_wait()
@@ -295,7 +326,7 @@
     if (gc_kind(target) == OBJ_TASK) then
        s = "the future"
     else if (gc_kind(target) == OBJ_ATOM) then
-       s = "the promise"
+       s = "the promise or mailbox"
     else
        s = "the clock"
     end if
