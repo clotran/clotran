@@ -365,6 +365,45 @@ Threads over VM contexts (the concurrency decision below). JIT only
 when a profile still demands it, and then jank's way -- LLVM IR in
 process -- rather than generated Fortran text through a compiler.
 
+### 9. Packages -- after the main work, not before
+
+Not first priority; needed once stage 2, the thread primitive and the
+binding generator exist, and recorded now so the shape is not
+re-argued then.
+
+**The problem.** `clotran-bin` links BLAS and ChemSol into every build.
+Nobody wants every scientific library in every binary, and the base
+should be core.clj, host.clj and the `fortran` namespace primitives
+(`make-array`, `aget`, `aset`, the array kinds) and nothing else.
+
+**What a package IS here.** Interop is static (step 6): standard
+Fortran has no dynamic loading, `dlopen` is POSIX not Fortran, and
+the product is a binary with your Fortran linked in, like embedding
+Lua. So a package is a directory of Fortran sources, the bindings
+the generator wrote for them (or hand-written `ChemSolBind.f90`-style
+ones), and `.cljf`/`.cljc` files on a classpath root -- and
+installing a package means LINKING it. BLAS and ChemSol become the
+first two packages; `scripts/chemsol-check` and the dgemm test keep
+proving the seam either way.
+
+**The manifest, deps.edn-shaped.** A `deps.edn` at the project root
+names packages by local path or git coordinate with `:paths` for the
+Clojure side and `:fortran` for the sources, the way tools.deps names
+`:paths` and `:deps`. `clotran build` (or `make PACKAGES=...`) reads it,
+generates the Makefile fragment that compiles those sources with the
+pinned compiler, links `clotran-bin` for that project, and adds the
+package directories to `classpath_find`'s roots so `require` finds
+their namespaces. Per-project binaries, like a per-project JVM
+classpath, is the honest model; a global cache of compiled packages
+keyed by compiler and version is the optimisation.
+
+**What it depends on.** The binding generator (step 7's follow-up)
+for packages to be declarable rather than hand-bound; the image
+(step 5 stage 3) so that a per-project binary starts fast; nothing
+from threads. A package that is pure Clojure (`.cljc`, `.cljf`) needs
+none of that and is just a classpath root today: `require` already
+looks in `.cljf`, `.cljc`, `.clj` on each root.
+
 ## Decisions that still hold
 
 **The value type has no `FINAL`.** Copying a `cons_value` (nine
