@@ -61,12 +61,12 @@
     base = vs_enter(3)
     call vs_set(base + 1, kids)
     call vs_set(base + 2, frame)
-    argv = gcv_empty([vs_get(base + 1), vs_get(base + 2)])
+    argv = gcv_build(gcv_count(kids) - from, [vs_get(base + 1), vs_get(base + 2)])
     call vs_set(base + 3, argv)
     do i = from, gcv_count(vs_get(base + 1)) - 1
        v = exec(gcv_nth(vs_get(base + 1), i), vs_get(base + 2))
        if (has_error) exit
-       argv = gcv_conj(vs_get(base + 3), v, [vs_get(base + 1), vs_get(base + 2), v])
+       argv = gcv_put(vs_get(base + 3), i - from, v, [vs_get(base + 1), vs_get(base + 2), v])
        call vs_set(base + 3, argv)
     end do
     argv = vs_get(base + 3)
@@ -143,6 +143,40 @@
     call vs_leave(base)
   end function invoke_closure
 
+  ! The captured values and the fn's own name into a frame that already
+  ! holds the arguments. No allocation.
+  subroutine bind_captures(fn, frame)
+    type(gc_value), intent(in) :: fn, frame
+    type(gc_value) :: tmpl, caps, capv
+    integer :: i, ncap, self
+    tmpl = gc_slot(fn, 1)
+    caps = gc_slot(fn, 2)
+    capv = gcv_nth(tmpl, 2)
+    ncap = gcv_count(capv) / 2
+    do i = 0, ncap - 1
+       call frame_set(frame, int_of(gcv_nth(capv, 2 * i + 1)), gc_vec_get(caps, i + 1))
+    end do
+    self = int_of(gcv_nth(tmpl, 4))
+    if (self >= 0) call frame_set(frame, self, fn)
+  end subroutine bind_captures
+
+  ! The index of the fixed arity taking exactly argc arguments, or -1.
+  integer function fixed_arity(fn, argc)
+    type(gc_value), intent(in) :: fn
+    integer, intent(in) :: argc
+    type(gc_value) :: arities, ar
+    integer :: i
+    fixed_arity = -1
+    arities = gcv_nth(gc_slot(fn, 1), 1)
+    do i = 0, gcv_count(arities) - 1
+       ar = gcv_nth(arities, i)
+       if (.not. truthy(gcv_nth(ar, 1)) .and. int_of(gcv_nth(ar, 0)) == argc) then
+          fixed_arity = i
+          return
+       end if
+    end do
+  end function fixed_arity
+
   ! Picks the arity, builds the frame and binds the arguments, the
   ! captures and the fn's own name. Answers the frame and the body to
   ! run; false with an error set when no arity fits. `argv` is taken
@@ -218,14 +252,7 @@
           end do
        end if
     end if
-    ! captures, then the fn's own name
-    caps = gc_slot(vs_get(base + 1), 2)
-    capv = gcv_nth(vs_get(base + 3), 2)
-    ncap = gcv_count(capv) / 2
-    do i = 0, ncap - 1
-       call frame_set(vs_get(base + 5), int_of(gcv_nth(capv, 2 * i + 1)), gc_vec_get(caps, i + 1))
-    end do
-    if (self >= 0) call frame_set(vs_get(base + 5), self, vs_get(base + 1))
+    call bind_captures(vs_get(base + 1), vs_get(base + 5))
     frame = vs_get(base + 5)
     body = gcv_nth(vs_get(base + 4), 3)
     ok = .true.
@@ -277,6 +304,7 @@
     kst(ksp)%i = 0
     kst(ksp)%flags = flags
     kst(ksp)%nfr = 0
+    kst(ksp)%mode = 0
     if (iand(flags, KF_FNBODY) /= 0) kst(ksp)%nfr = 1
     call vs_set(b + 1, nd)
     call vs_set(b + 2, frame)
@@ -295,6 +323,7 @@
     call vs_set(b + 4, gc_nil())
     kst(ksp)%pc = 0
     kst(ksp)%i = 0
+    kst(ksp)%mode = 0
     gce_evals = gce_evals + 1
   end subroutine k_tail
 
@@ -463,8 +492,25 @@
              kst(ksp)%pc = 1
              call k_push(gcv_nth(kids, 0), vs_get(b + 2), 0, gc_nil())
           case (1)
-             call vs_set(b + 3, val)
-             call vs_set(b + 4, gcv_empty([vs_get(b + 1)]))
+             ! The callee is known before its arguments are: a closure
+             ! with a fixed arity of the right count gets its FRAME now
+             ! and the arguments land in it (mode 2); anything else gets
+             ! a one-node argument vector (mode 1). No vector is copied
+             ! per argument either way.
+             fnv = strip_meta(val)
+             if (gcn_is_var(fnv)) fnv = gcn_var_value(fnv)
+             call vs_set(b + 3, fnv)
+             n = gcv_count(kids) - 1
+             kst(ksp)%mode = 1
+             if (is_node_closure(vs_get(b + 3))) then
+                kst(ksp)%aux2 = fixed_arity(vs_get(b + 3), n)
+                if (kst(ksp)%aux2 >= 0) then
+                   kst(ksp)%mode = 2
+                   kst(ksp)%aux = int_of(gcv_nth(gcv_nth(gcv_nth(gc_slot(vs_get(b + 3), 1), 1), kst(ksp)%aux2), 2))
+                   call vs_set(b + 4, new_frame(int_of(gcv_nth(gc_slot(vs_get(b + 3), 1), 3)), [vs_get(b + 1)]))
+                end if
+             end if
+             if (kst(ksp)%mode == 1) call vs_set(b + 4, gcv_build(n, [vs_get(b + 1)]))
              kst(ksp)%i = 1
              kst(ksp)%pc = 2
           case (2)
@@ -475,7 +521,11 @@
                 kst(ksp)%pc = 4
              end if
           case (3)
-             call vs_set(b + 4, gcv_conj(vs_get(b + 4), val, [vs_get(b + 1)]))
+             if (kst(ksp)%mode == 2) then
+                call frame_set(vs_get(b + 4), kst(ksp)%aux + kst(ksp)%i - 1, val)
+             else
+                call vs_set(b + 4, gcv_put(vs_get(b + 4), kst(ksp)%i - 1, val, [vs_get(b + 1)]))
+             end if
              kst(ksp)%i = kst(ksp)%i + 1
              kst(ksp)%pc = 2
           case (4)
@@ -483,8 +533,21 @@
              v = gc_slot(nd, 4)
              site = 0
              if (v%tag == GCT_INT) site = int(v%ival, kind=4)
-             fnv = strip_meta(vs_get(b + 3))
-             if (gcn_is_var(fnv)) fnv = gcn_var_value(fnv)
+             fnv = vs_get(b + 3)
+             if (kst(ksp)%mode == 2) then
+                ! the frame holds the arguments; captures and the name
+                ! complete it, and this frame becomes the body's
+                call push_frame(fnv, site)
+                if (has_error) cycle
+                kst(ksp)%nfr = kst(ksp)%nfr + 1
+                call bind_captures(vs_get(b + 3), vs_get(b + 4))
+                body = gcv_nth(gcv_nth(gcv_nth(gc_slot(vs_get(b + 3), 1), 1), kst(ksp)%aux2), 3)
+                call vs_set(b + 2, vs_get(b + 4))
+                call vs_set(b + 5, body)
+                kst(ksp)%flags = ior(kst(ksp)%flags, KF_RESTART)
+                call k_tail(body)
+                cycle
+             end if
              ! The argument vector is handed over, not kept (see
              ! bind_closure / apply): nothing allocates between this nil
              ! and the callee rooting it.
@@ -568,7 +631,7 @@
           ! children collected into slot 4, one frame each, then built
           select case (kst(ksp)%pc)
           case (0)
-             call vs_set(b + 4, gcv_empty([vs_get(b + 1)]))
+             call vs_set(b + 4, gcv_build(gcv_count(kids), [vs_get(b + 1)]))
              kst(ksp)%i = 0
              kst(ksp)%pc = 2
           case (2)
@@ -584,7 +647,7 @@
                 call k_finish(val)
              end if
           case (3)
-             call vs_set(b + 4, gcv_conj(vs_get(b + 4), val, [vs_get(b + 1)]))
+             call vs_set(b + 4, gcv_put(vs_get(b + 4), kst(ksp)%i, val, [vs_get(b + 1)]))
              kst(ksp)%i = kst(ksp)%i + 1
              kst(ksp)%pc = 2
           end select

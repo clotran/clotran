@@ -290,6 +290,9 @@ module GC
      real(gc_dp) :: rval = 0.0_gc_dp
      integer :: ref = 0 ! index into this tag's pool; 0 for immediates
   end type gc_value
+  ! nil, as a constant: every slot the pools and stacks clear is set
+  ! to this rather than through a call.
+  type(gc_value), parameter :: nilv = gc_value()
 
   ! --- object pool -----------------------------------------------
   type :: obj_node
@@ -595,7 +598,7 @@ contains
 
     if (allocated(vstack)) deallocate(vstack)
     allocate(vstack(max(n, 64)))
-    vstack = gc_nil()
+    vstack = nilv
     vs_top = 0
 
     if (allocated(mark_stack)) deallocate(mark_stack)
@@ -604,7 +607,7 @@ contains
 
     if (allocated(global_root)) deallocate(global_root)
     allocate(global_root(8))
-    global_root = gc_nil()
+    global_root = nilv
     global_count = 0
     global_gen = global_gen + 1
     gc_allocs = 0; gc_frees = 0; gc_collections = 0
@@ -627,7 +630,7 @@ contains
     n_saved_stacks = max(n_saved_stacks, id)
     if (allocated(saved_stacks(id)%vstack)) deallocate(saved_stacks(id)%vstack)
     allocate(saved_stacks(id)%vstack(64))
-    saved_stacks(id)%vstack = gc_nil()
+    saved_stacks(id)%vstack = nilv
     saved_stacks(id)%vs_top = 0
   end subroutine gc_stack_new
 
@@ -640,7 +643,7 @@ contains
     call move_alloc(vstack, saved_stacks(id)%vstack)
     saved_stacks(id)%vs_top = vs_top
     allocate(vstack(64))
-    vstack = gc_nil()
+    vstack = nilv
     vs_top = 0
   end subroutine gc_stack_save
 
@@ -661,7 +664,7 @@ contains
 
   function gc_nil() result(v)
     type(gc_value) :: v
-    v%tag = GCT_NIL
+    v = nilv
   end function gc_nil
 
   function gc_bool(b) result(v)
@@ -723,7 +726,7 @@ contains
     type(gc_value) :: v
     integer(gc_ip) :: num, den, g
     if (den0 == 0) then
-       v = gc_nil()
+       v = nilv
        return
     end if
     num = num0
@@ -878,7 +881,7 @@ contains
     obj_pool(idx)%i1 = 0
     obj_pool(idx)%i2 = 0
     do i = 1, OBJ_SLOTS
-       obj_pool(idx)%slot(i) = gc_nil()
+       obj_pool(idx)%slot(i) = nilv
     end do
     do i = 1, min(size(slots), OBJ_SLOTS)
        obj_pool(idx)%slot(i) = slots(i)
@@ -922,7 +925,7 @@ contains
     if (allocated(vec_pool(idx)%items)) deallocate(vec_pool(idx)%items)
     allocate(vec_pool(idx)%items(max(n, 0)))
     do i = 1, n
-       vec_pool(idx)%items(i) = gc_nil()
+       vec_pool(idx)%items(i) = nilv
     end do
     v%tag = GCT_VEC
     v%ref = idx
@@ -1304,13 +1307,13 @@ contains
     call gc_ensure_init()
     do while (vs_top + n > size(vstack))
        allocate(bigger(2 * size(vstack)))
-       bigger = gc_nil()
+       bigger = nilv
        bigger(1:vs_top) = vstack(1:vs_top)
        call move_alloc(bigger, vstack)
     end do
     base = vs_top
     do i = base + 1, base + n
-       vstack(i) = gc_nil()
+       vstack(i) = nilv
     end do
     vs_top = base + n
   end function vs_enter
@@ -1323,7 +1326,7 @@ contains
     integer :: i
     if (base < 0 .or. base > vs_top) return
     do i = base + 1, vs_top
-       vstack(i) = gc_nil()
+       vstack(i) = nilv
     end do
     vs_top = base
   end subroutine vs_leave
@@ -1337,7 +1340,7 @@ contains
   function vs_get(slot) result(v)
     integer, intent(in) :: slot
     type(gc_value) :: v
-    v = gc_nil()
+    v = nilv
     if (slot >= 1 .and. slot <= vs_top) v = vstack(slot)
   end function vs_get
 
@@ -1360,7 +1363,7 @@ contains
     ! There was never a recovery a caller could write.
     if (.not. allocated(global_root)) then
        allocate(global_root(8))
-       global_root = gc_nil()
+       global_root = nilv
     end if
     if (global_count >= size(global_root)) call grow_global_roots()
     global_count = global_count + 1
@@ -1377,7 +1380,7 @@ contains
   subroutine grow_global_roots()
     type(gc_value), allocatable :: bigger(:)
     allocate(bigger(max(8, 2 * size(global_root))))
-    bigger = gc_nil()
+    bigger = nilv
     bigger(1:global_count) = global_root(1:global_count)
     call move_alloc(bigger, global_root)
   end subroutine grow_global_roots
@@ -1438,7 +1441,7 @@ contains
   function gc_root_get(h) result(v)
     type(gc_root), intent(in) :: h
     type(gc_value) :: v
-    v = gc_nil()
+    v = nilv
     if (h%gen /= global_gen) return
     v = gc_global_get(h%idx)
   end function gc_root_get
@@ -1458,7 +1461,7 @@ contains
   function gc_global_get(idx) result(v)
     integer, intent(in) :: idx
     type(gc_value) :: v
-    v = gc_nil()
+    v = nilv
     if (idx >= 1 .and. idx <= global_count) v = global_root(idx)
   end function gc_global_get
 
@@ -1541,7 +1544,7 @@ contains
        if (associated(obj_finalizer) .and. obj_pool(i)%kind /= 0) &
             call obj_finalizer(obj_pool(i)%kind, obj_pool(i)%i1, obj_pool(i)%i2)
        do j = 1, OBJ_SLOTS
-          obj_pool(i)%slot(j) = gc_nil()
+          obj_pool(i)%slot(j) = nilv
        end do
        obj_pool(i)%kind = 0
        obj_free(i) = .true.

@@ -2611,3 +2611,34 @@ fill one node. The raw-vector pool mallocs each vector's storage
 separately (`allocate(items(n))`), which is the malloc/free in the
 profile; a slab would remove it. Both are constant factors, and
 constant factors are all an interpreter has until the JIT.
+
+## The call path: no vector per call
+
+The profile after -O2 still said `gc_vec`, `node_assoc`, `gcv_conj`:
+every call built its argument vector by `conj`, and this persistent
+vector has no tail, so each conj copied a 32-slot node -- 95 heap
+allocations per step of `(reduce + (range n))`. Two changes, both in
+the executor's N_CALL frame:
+
+- The callee is evaluated before its arguments, so it is known when
+  they are. A node closure with a fixed arity of the right count gets
+  its FRAME allocated then, and each argument is written into its
+  slot as it arrives (`mode 2`); `bind_captures` finishes the frame
+  and the same kframe becomes the body's. No argument vector exists.
+- Everything else -- a native, a multimethod, a keyword, a variadic
+  arity -- gets one vector built as one node (`gcv_build`) and filled
+  in place (`gcv_put`). Literals and `exec_args` use the same.
+
+And `gc_nil()` is a constant, `nilv`: it was 631 samples of function
+calls clearing slots.
+
+Per reduce step: 95 allocations -> 44, and `scripts/bench` moved
+every ratio: fib 253x -> 142x, loop/recur 863x -> 475x, `into`
+2296x -> 1127x, plain recursion 151x -> 118x. What is left per step
+is structural: a malloc per raw vector (`allocate(items(n))` in
+`gc_vec`, so every frame and every node is a malloc/free pair), the
+frame itself, and 79 node evaluations, which is what interpreting
+core.clj's seq-reduce loop costs with no inlining. A slab under
+`gc_vec` and a native reduce over native ranges and vectors (which is
+what LongRange.reduce and PersistentVector.reduce are on the JVM)
+are the next two constant factors; past them the gap is the JIT's.

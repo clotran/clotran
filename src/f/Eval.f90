@@ -287,6 +287,7 @@ module Eval
   ! stack, as the JVM does; msg is a try's saved error.
   type kframe
      integer :: base = 0, pc = 0, i = 0, flags = 0, nfr = 0
+     integer :: mode = 0, aux = 0, aux2 = 0   ! a call's argument mode, first slot, arity
      character(len=:), allocatable :: msg
   end type kframe
   type(kframe), allocatable, save :: kst(:)

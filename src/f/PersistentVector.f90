@@ -30,7 +30,7 @@ module PersistentVector
   integer, parameter :: VBRANCH = 32
   integer, parameter :: VMASK = 31
 
-  public :: gcv_empty, gcv_count, gcv_nth, gcv_conj, gcv_assoc, gcv_is
+  public :: gcv_empty, gcv_count, gcv_nth, gcv_conj, gcv_assoc, gcv_is, gcv_build, gcv_put
 
 contains
 
@@ -118,6 +118,43 @@ contains
   end function node_assoc
 
   ! Appends x, growing the trie by a level once the current one fills.
+  ! A vector of n slots, n <= VBRANCH, as ONE node and one object: the
+  ! executor fills it with gcv_put as a call's arguments arrive, where
+  ! n conj calls copied n nodes. Beyond VBRANCH it is the empty vector
+  ! and gcv_put falls back to conj.
+  function gcv_build(n, roots) result(v)
+    integer, intent(in) :: n
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: v, node
+    integer :: base
+    if (n <= 0 .or. n > VBRANCH) then
+       v = gcv_empty(roots)
+       return
+    end if
+    base = vs_enter(1)
+    node = gc_vec(VBRANCH, roots)
+    call vs_set(base + 1, node)
+    v = gc_obj(OBJ_VECTOR, [vs_get(base + 1)], [roots, vs_get(base + 1)])
+    call gc_set_i1(v, n)
+    call gc_set_i2(v, 0)
+    call vs_leave(base)
+  end function gcv_build
+
+  ! Slot i (0-based) of a vector gcv_build made; conj when it was too
+  ! big for one node (then i must be the next slot, as it is).
+  function gcv_put(v, i, x, roots) result(out)
+    type(gc_value), intent(in) :: v, x
+    integer, intent(in) :: i
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out
+    if (i < gc_i1(v)) then
+       call gc_vec_set(gc_slot(v, 1), i + 1, x)
+       out = v
+    else
+       out = gcv_conj(v, x, roots)
+    end if
+  end function gcv_put
+
   function gcv_conj(v, x, roots) result(out)
     type(gc_value), intent(in) :: v, x
     type(gc_value), intent(in) :: roots(:)
