@@ -450,9 +450,23 @@ a tuple space. A shared-heap impl takes a closure; a process or
 remote impl takes a form and data, since a closure over local state
 cannot be shipped, and `spawn` must say which it was given. A GPU is
 not an impl of this: it runs kernels over arrays and arrives as
-array operations under the `fortran` namespace. Prior art: Erlang,
-Julia's Distributed with ClusterManagers, core.async,
-bordeaux-threads, core.matrix's implementation protocol.
+array operations under the `fortran` namespace.
+
+Java's virtual threads (Loom) are this model and show where the work
+has to go: executors and pools were always a library, but a thread
+that parks and resumes needed the runtime, because only the runtime
+can capture its stack. Here the context type is the host's part and
+the protocol and impls are a library in clotran. Copy Loom's rule
+about blocking: `deref` of an unfinished future, a mailbox `receive`
+and a subprocess wait yield to the scheduler, so pipeline code is
+straight-line Clojure. The limit: on one OS thread a blocking
+Fortran call (dgemm, ChemSol's dg_ld) holds every green thread until
+it returns; carrier threads are the `:os` impl. Clojure itself has
+not moved: at our commit Agent.java builds soloExecutor with
+newCachedThreadPool. Prior art: Erlang, Loom, Julia's Distributed
+with ClusterManagers, core.async, bordeaux-threads, core.matrix's
+implementation protocol, and Fortran's own coarrays, which are the
+impl a Fortran user will look for first.
 
 **Arrays are never ragged.** A Fortran rank-2 array is one contiguous
 column-major block; `[[I` is nested and cannot be handed to BLAS at
