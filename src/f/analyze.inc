@@ -39,7 +39,11 @@
     call vs_set(base + 3, cmap)
     info = gc_obj(OBJ_AST, [vs_get(base + 2), vs_get(base + 1), vs_get(base + 3), gc_nil()], &
          [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-    call gc_set_i1(info, K_FNINFO)
+    ! i1 is the SLOT COUNTER, from zero. It was set to K_FNINFO (101) as
+    ! a kind tag nothing ever read, and reserve_slots counted on from
+    ! there: every frame in the system had 101 slots nobody used, a
+    ! 128-slot arena run per call, and memory to match.
+    call gc_set_i1(info, 0)
     call gc_set_i2(info, -1)          ! self slot: none
     call vs_set(base + 4, info)
     names = gca_empty([roots, vs_get(base + 4)])
