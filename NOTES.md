@@ -2642,3 +2642,47 @@ core.clj's seq-reduce loop costs with no inlining. A slab under
 `gc_vec` and a native reduce over native ranges and vectors (which is
 what LongRange.reduce and PersistentVector.reduce are on the JVM)
 are the next two constant factors; past them the gap is the JIT's.
+
+## The slab, and the 101 slots every frame carried
+
+`gc_vec` allocated each raw vector's storage with its own
+`allocate(items(n))`: a malloc and a free per frame, per vector node,
+per argument vector. The profile after the call-path change was
+malloc, free and memset. Now every run is a slice of one arena,
+`vec_store`, handed out in power-of-two size classes with a free
+list per class threaded through the first slot of each free run;
+offsets survive the arena doubling, which pointers would not. All
+twelve accesses were inside GC.f90, so nothing else changed.
+
+The slab then made two things visible that malloc had hidden.
+
+First, the collection trigger. The node pool collects when its node
+COUNT fills, and grows when a sweep frees less than half of it. With
+the arena, a run is 1 slot or 128, and the node count says nothing
+about slot volume; the arena reached four times the live size. The
+first fix -- collect when the arena would grow, and double it if the
+sweep freed less than half -- looped: the node pool's own growth rule
+ran after every arena-triggered collection and doubled the pool each
+time, and `grow_vec` was the hot function in the sample. The second
+-- double the arena when a sweep freed little -- took it to 67M slots
+for 4.6M live, because "freed little" is what fragmentation across
+size classes looks like. What holds is the classic rule, applied to
+SLOTS: collect when as many slots have been handed out since the
+last collection as twice what it found live, and otherwise let the
+arena grow.
+
+Second, and the one that mattered: 217,018 free runs of 128 slots at
+exit. Frames. `CLOTRAN_TRACE_MACRO=1` now reports a template asking
+for more than 64 slots, and every function did -- a one-argument
+`(fn [n] ...)` had a 110-slot frame. `new_fn_scope` set the fn-info
+object's `i1` to K_FNINFO, 101, as a kind tag, and `reserve_slots`
+uses `i1` as the slot counter, so every frame in the system began at
+slot 101. Nothing ever read the tag. The counter starts at zero now,
+frames are the size of their locals, and the numbers moved more than
+any change today: startup 1.0s -> 0.62s (2.3s this morning), reduce
+over 100,000 1.85s -> 1.42s, a loop/recur iteration 5.8us -> 4.6us,
+fib 20 0.12s -> 0.084s, memory after core.clj 280 MB -> 168 MB.
+
+Instrument before theorising, again: the arena counters and the
+per-class free-list report under CLOTRAN_STATS found both in one run
+each, after two wrong policies written from the armchair.

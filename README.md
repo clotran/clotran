@@ -152,9 +152,9 @@ recalled. See `CLAUDE.md`.
 
 | | |
 |---|---|
-| speed | measured by `scripts/bench`, the same forms on a warmed JVM and on clotran: a function call ~8 µs, a loop/recur iteration ~9 µs, a reduce step ~24 µs. Against the JVM that is 150x on plain recursion, 250x on fib, 860x on loop/recur, and 8,800x on `(reduce + (range n))`, where the JVM has a specialised reduce over ranges. Two to four orders of magnitude, an AST interpreter's honest number; PLAN.md step 8 has the JIT decision |
-| startup | 1.0s: core.clj is re-read and re-analysed every launch; there is no image yet |
-| memory | 156 MB after loading core.clj, and a 100000-element reduce stays there since locals are cleared after their last read; the image (PLAN.md step 5, stage 3) is what would shrink the baseline |
+| speed | measured by `scripts/bench`, the same forms on a warmed JVM and on clotran: a function call ~4 µs, a loop/recur iteration ~5 µs, a reduce step ~15 µs. Against the JVM that is 70x on plain recursion, 95x on fib, 360x on loop/recur, and 4,800x on `(reduce + (range n))`, where the JVM has a specialised reduce over ranges. Two to almost four orders of magnitude, an AST interpreter's honest number; PLAN.md step 8 has the JIT decision |
+| startup | 0.6s: core.clj is re-read and re-analysed every launch; there is no image yet |
+| memory | 168 MB after loading core.clj, and a 100000-element reduce stays there since locals are cleared after their last read; the image (PLAN.md step 5, stage 3) is what would shrink the baseline |
 | debugger | an error reports `file:line:col` and the chain of calls that led to it, and `.getStackTrace` answers real elements; there is no breakpoint or step yet; PLAN.md step 8 |
 | `BigDecimal` and `BigInt` | `1M` reads as a double and `1N` as an integer; DEVIATIONS 30 |
 | sorted collections | `sorted-map` and `sorted-set` are unsorted; DEVIATIONS 9 |

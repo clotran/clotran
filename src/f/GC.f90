@@ -307,11 +307,27 @@ module GC
   integer :: obj_free_head = 0, obj_used = 0
 
   ! --- value-run pool --------------------------------------------
+  !
+  ! A run's storage is a slice of ONE arena, vec_store, not its own
+  ! allocatable: every frame and every vector node used to be a
+  ! malloc/free pair, and the profile said so. Runs are handed out in
+  ! power-of-two size classes, each class with a free list threaded
+  ! through the first slot of its free runs (a free run is never
+  ! marked, so the slot is ours). The arena grows by doubling and is
+  ! never returned; offsets stay valid across growth, which pointers
+  ! would not.
   type :: vec_node
-     type(gc_value), allocatable :: items(:)
+     integer :: off = 0, len = 0   ! slice vec_store(off : off+len-1); len 0 = empty
   end type vec_node
 
   type(vec_node), allocatable :: vec_pool(:)
+  type(gc_value), allocatable :: vec_store(:)
+  integer :: store_used = 0
+  integer :: arena_alloc_since = 0   ! slots handed out since the last collection
+  integer :: arena_live = 0          ! slots the last collection found live
+  integer(8) :: arena_reused = 0, arena_fresh = 0   ! runs served from a free list / from fresh arena
+  integer, parameter :: VCLASSES = 30
+  integer :: class_head(VCLASSES) = 0
   logical, allocatable :: vec_mark(:), vec_free(:)
   integer, allocatable :: vec_free_next(:)
   integer :: vec_free_head = 0, vec_used = 0
@@ -513,6 +529,7 @@ module GC
   public :: gc_ensure_init, gc_str_ref, gc_ref_text, gc_ref_is, gc_ref_len
   public :: vs_enter, vs_leave, vs_set, vs_get, vs_depth
   public :: gc_stack_new, gc_stack_save, gc_stack_restore, gc_stacks_reset
+  public :: gc_arena_stats
   public :: gc_equal, gc_hash
 
 contains
@@ -590,6 +607,13 @@ contains
     allocate(vec_pool(n), vec_mark(n), vec_free(n), vec_free_next(n))
     vec_mark = .false.; vec_free = .false.; vec_free_next = 0
     vec_free_head = 0; vec_used = 0
+    if (allocated(vec_store)) deallocate(vec_store)
+    allocate(vec_store(max(8 * n, 4096)))
+    vec_store = nilv
+    store_used = 0
+    class_head = 0
+    arena_alloc_since = 0
+    arena_live = 0
 
     if (allocated(str_pool)) deallocate(str_pool, str_mark, str_free, str_free_next)
     allocate(str_pool(n), str_mark(n), str_free(n), str_free_next(n))
@@ -898,8 +922,26 @@ contains
     type(gc_value) :: v
     integer :: idx, i
 
+    ! Growing the ARENA is a reason to collect first, like filling the
+    ! node pool: otherwise every run between two collections comes from
+    ! fresh arena and it ends four times the live size (measured: 4.2M
+    ! slots for 1.0M live after core.clj). One collection per doubling
+    ! is the amortised bound either way.
     if (gc_no_collect) then
        if (vec_free_head == 0 .and. vec_used >= size(vec_pool)) call grow_vec()
+    else if (.not. gc_torture .and. .not. (vec_free_head == 0 .and. vec_used >= size(vec_pool)) &
+         .and. arena_alloc_since >= max(2 * arena_live, 262144)) then
+       ! As many SLOTS have been handed out since the last collection as
+       ! twice what that collection found live: collect, whether or not
+       ! the arena is full, because a 128-slot frame is 128 slots of
+       ! garbage and the node count does not see that. Otherwise
+       ! slab_alloc simply grows the arena. That is the amortised bound -- arena about
+       ! three times live in the worst case -- and it does not depend on
+       ! how much one sweep freed, which fragmentation across size
+       ! classes makes meaningless. ("Freed less than half" doubled the
+       ! arena to 67M slots for 4.6M live.) The node pool's own growth
+       ! rule must NOT run here: it doubled the pool on every one of these.
+       call gc_collect(roots)
     else if (gc_torture .or. (vec_free_head == 0 .and. vec_used >= size(vec_pool))) then
        call gc_collect(roots)
        if (vec_free_head == 0 .and. vec_used >= size(vec_pool)) call grow_vec()
@@ -922,10 +964,10 @@ contains
        idx = vec_used
     end if
     vec_free(idx) = .false.
-    if (allocated(vec_pool(idx)%items)) deallocate(vec_pool(idx)%items)
-    allocate(vec_pool(idx)%items(max(n, 0)))
+    call slab_alloc(max(n, 0), vec_pool(idx)%off)
+    vec_pool(idx)%len = max(n, 0)
     do i = 1, n
-       vec_pool(idx)%items(i) = nilv
+       vec_store(vec_pool(idx)%off + i - 1) = nilv
     end do
     v%tag = GCT_VEC
     v%ref = idx
@@ -966,6 +1008,103 @@ contains
     call move_alloc(bnext, obj_free_next)
   end subroutine grow_obj
 
+  ! The size class of a run of n: the smallest power of two that holds it.
+  integer function size_class(n)
+    integer, intent(in) :: n
+    integer :: c
+    c = 1
+    do while (ishft(1, c - 1) < n)
+       c = c + 1
+    end do
+    size_class = c
+  end function size_class
+
+  ! Whether a run of n would have to extend the arena: no free run of
+  ! its class and no room at the end.
+  logical function arena_would_grow(n)
+    integer, intent(in) :: n
+    integer :: c
+    arena_would_grow = .false.
+    if (n <= 0) return
+    c = size_class(n)
+    if (class_head(c) /= 0) return
+    arena_would_grow = (store_used + ishft(1, c - 1) > size(vec_store))
+  end function arena_would_grow
+
+  ! A run of n slots: a free run of its class, or fresh arena.
+  subroutine slab_alloc(n, off)
+    integer, intent(in) :: n
+    integer, intent(out) :: off
+    type(gc_value), allocatable :: bigger(:)
+    integer :: c, l, sz
+    off = 0
+    if (n <= 0) return
+    c = size_class(n)
+    arena_alloc_since = arena_alloc_since + ishft(1, c - 1)
+    if (class_head(c) /= 0) then
+       off = class_head(c)
+       class_head(c) = int(vec_store(off)%ival)
+       arena_reused = arena_reused + 1
+       return
+    end if
+    arena_fresh = arena_fresh + 1
+    l = ishft(1, c - 1)
+    if (store_used + l > size(vec_store)) then
+       sz = size(vec_store)
+       do while (store_used + l > sz)
+          sz = 2 * sz
+       end do
+       allocate(bigger(sz))
+       bigger(1:store_used) = vec_store(1:store_used)
+       bigger(store_used + 1:) = nilv
+       call move_alloc(bigger, vec_store)
+    end if
+    off = store_used + 1
+    store_used = store_used + l
+  end subroutine slab_alloc
+
+  ! A dead run goes back to its class's free list; its first slot
+  ! carries the link.
+  subroutine slab_free(idx)
+    integer, intent(in) :: idx
+    integer :: c, off
+    if (vec_pool(idx)%len <= 0) return
+    c = size_class(vec_pool(idx)%len)
+    off = vec_pool(idx)%off
+    vec_store(off) = nilv
+    vec_store(off)%ival = class_head(c)
+    class_head(c) = off
+    vec_pool(idx)%off = 0
+    vec_pool(idx)%len = 0
+  end subroutine slab_free
+
+  ! Arena accounting for CLOTRAN_STATS: capacity, handed out, and the
+  ! slots live runs actually use.
+  subroutine gc_arena_stats(cap, used, live)
+    integer, intent(out) :: cap, used, live
+    integer :: i
+    cap = 0
+    if (allocated(vec_store)) cap = size(vec_store)
+    used = store_used
+    live = 0
+    do i = 1, vec_used
+       if (.not. vec_free(i)) live = live + vec_pool(i)%len
+    end do
+    write(0, '(A,I0,A,I0)') "arena: reused=", arena_reused, " fresh=", arena_fresh
+    block
+      integer :: c, off, cnt
+      do c = 1, 12
+         cnt = 0
+         off = class_head(c)
+         do while (off /= 0)
+            cnt = cnt + 1
+            off = int(vec_store(off)%ival)
+         end do
+         if (cnt > 0) write(0, '(A,I0,A,I0,A,I0)') "arena: class ", ishft(1, c - 1), " free runs=", cnt, " slots=", cnt * ishft(1, c - 1)
+      end do
+    end block
+  end subroutine gc_arena_stats
+
   subroutine grow_vec()
     type(vec_node), allocatable :: bigger(:)
     logical, allocatable :: bmark(:), bfree(:)
@@ -973,9 +1112,7 @@ contains
     integer :: n, i
     n = size(vec_pool)
     allocate(bigger(2 * n), bmark(2 * n), bfree(2 * n), bnext(2 * n))
-    do i = 1, n
-       if (allocated(vec_pool(i)%items)) bigger(i)%items = vec_pool(i)%items
-    end do
+    bigger(1:n) = vec_pool(1:n)
     bmark = .false.; bfree = .false.; bnext = 0
     bfree(1:n) = vec_free(1:n)
     bnext(1:n) = vec_free_next(1:n)
@@ -1067,7 +1204,7 @@ contains
     integer :: n
     n = 0
     if (v%tag /= GCT_VEC) return
-    if (allocated(vec_pool(v%ref)%items)) n = size(vec_pool(v%ref)%items)
+    n = vec_pool(v%ref)%len
   end function gc_vec_len
 
   function gc_vec_get(v, i) result(out)
@@ -1076,7 +1213,7 @@ contains
     type(gc_value) :: out
     if (v%tag /= GCT_VEC) return
     if (i < 1 .or. i > gc_vec_len(v)) return
-    out = vec_pool(v%ref)%items(i)
+    out = vec_store(vec_pool(v%ref)%off + i - 1)
   end function gc_vec_get
 
   subroutine gc_vec_set(v, i, x)
@@ -1084,7 +1221,7 @@ contains
     integer, intent(in) :: i
     if (v%tag /= GCT_VEC) return
     if (i < 1 .or. i > gc_vec_len(v)) return
-    vec_pool(v%ref)%items(i) = x
+    vec_store(vec_pool(v%ref)%off + i - 1) = x
   end subroutine gc_vec_set
 
   function gc_car(v) result(out)
@@ -1116,6 +1253,8 @@ contains
     integer :: i, k
 
     gc_collections = gc_collections + 1
+    arena_alloc_since = 0
+    arena_live = 0
     last_marked = gc_marked
     obj_marked = 0; vec_marked = 0; str_marked = 0
     obj_mark = .false.
@@ -1513,10 +1652,10 @@ contains
           vec_mark(v%ref) = .true.
           gc_marked = gc_marked + 1
           vec_marked = vec_marked + 1
-          n = 0
-          if (allocated(vec_pool(v%ref)%items)) n = size(vec_pool(v%ref)%items)
+          n = vec_pool(v%ref)%len
+          arena_live = arena_live + n
           do i = 1, n
-             call push_mark(vec_pool(v%ref)%items(i))
+             call push_mark(vec_store(vec_pool(v%ref)%off + i - 1))
           end do
        case (GCT_STR, GCT_SYM, GCT_KEY)
           str_mark(v%ref) = .true. ! a leaf: holds no references
@@ -1554,7 +1693,7 @@ contains
     end do
     do i = 1, vec_used
        if (vec_mark(i) .or. vec_free(i)) cycle
-       if (allocated(vec_pool(i)%items)) deallocate(vec_pool(i)%items)
+       call slab_free(i)
        vec_swept = vec_swept + 1
        vec_free(i) = .true.
        vec_free_next(i) = vec_free_head
@@ -1613,10 +1752,9 @@ contains
     end do
     do i = 1, vec_used
        if (vec_free(i)) cycle
-       n = 0
-       if (allocated(vec_pool(i)%items)) n = size(vec_pool(i)%items)
+       n = vec_pool(i)%len
        do j = 1, n
-          problem = bad_ref(vec_pool(i)%items(j))
+          problem = bad_ref(vec_store(vec_pool(i)%off + j - 1))
           if (len(problem) > 0) return
        end do
     end do

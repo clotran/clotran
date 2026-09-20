@@ -82,6 +82,8 @@
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: fn, caps, capv
     integer :: base, ncap, i
+    if (trace_macros == 1 .and. int_of(gcv_nth(tmpl, 3)) > 64) &
+         write(0, '(A,I0,A,A)') "wide frame: ", int_of(gcv_nth(tmpl, 3)), " slots for ", gcp_str(gcv_nth(tmpl, 0), .false.)
     base = vs_enter(3)
     call vs_set(base + 1, tmpl)
     call vs_set(base + 2, frame)
