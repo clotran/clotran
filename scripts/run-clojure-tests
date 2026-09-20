@@ -23,7 +23,7 @@ for f in test/clj/clojure/test_clojure/*.clj; do
   # does exactly that today -- see NOTES.md). No portable `timeout` on
   # macOS, hence the background-and-kill.
   printf "(require 'clojure.test)\n(load-file \"test/clj/clojure/test_helper.clj\")\n(load-file \"%s\")\n(clojure.test/run-tests '%s)\n" "$f" "$ns" > /tmp/clotran-run.clj
-  ./clotran src/clj/clojure/core.clj < /tmp/clotran-run.clj > /tmp/clotran-run.out 2>&1 &
+  ./clotran-bin src/clj/clojure/core.clj < /tmp/clotran-run.clj > /tmp/clotran-run.out 2>&1 &
   pid=$!
   waited=0
   while kill -0 $pid 2>/dev/null && [ $waited -lt ${CLOTRAN_TEST_TIMEOUT:-240} ]; do

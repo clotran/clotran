@@ -211,6 +211,8 @@ contains
 
   ! Reads ONE form from text. Trailing text is ignored, which is what
   ! a REPL line wants; a whole-file reader would loop on the position.
+  ! A REPL form belongs to no file: an error in it reports line:col,
+  ! not the file that happened to load last.
   function gcr_read(text, roots) result(v)
     character(len=*), intent(in) :: text
     type(gc_value), intent(in) :: roots(:)
@@ -218,6 +220,7 @@ contains
     integer :: pos
     has_error = .false.
     last_error = ""
+    cur_file = 0
     pos = 1
     do
        v = read_form(text, pos, roots)

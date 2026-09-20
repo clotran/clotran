@@ -1,0 +1,21 @@
+#!/bin/sh
+# clotran: the entry point. Loads Clojure's own core.clj into the
+# interpreter (clotran-bin, built by make) and hands the REPL to
+# rlwrap when there is a terminal to edit in -- the same flags clj
+# itself uses: -m multi-line, -r remember words, -q/-b tuned for Lisp.
+#
+# Files named on the command line load after core.clj, in order, so
+# `clotran some.cljf` runs a program and `clotran` alone is the REPL.
+# core.clj is loaded on every start; there is no image yet, so this
+# costs about a second before the prompt.
+root=$(cd "$(dirname "$0")" && pwd)
+bin="$root/clotran-bin"
+core="$root/src/clj/clojure/core.clj"
+[ -x "$bin" ] || { echo "build first: make" >&2; exit 1; }
+
+if [ -t 0 ] && type rlwrap >/dev/null 2>&1; then
+  exec rlwrap -m -r -q '"' -b "(){}[],^%#@\";:'" "$bin" "$core" "$@"
+else
+  [ -t 0 ] && echo "note: install rlwrap for line editing and history" >&2
+  exec "$bin" "$core" "$@"
+fi

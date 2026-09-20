@@ -8,7 +8,7 @@ language implemented in Fortran: the Fortran is the *host*, standing
 where the JVM stands, and the language comes from Clojure's own source.
 
 ```
-$ make && scripts/clotran
+$ make && ./clotran
 user=> (defn greet [who]
   #_=>   (str "hello, " who))
 #'greet
@@ -185,7 +185,7 @@ native, using ClojureScript as the control group.
 ## Build
 
 ```
-make            # builds ./clotran and the test binaries under build/
+make            # builds ./clotran-bin and the test binaries under build/
 make test       # the gate: host tests, language_test.clj, scripts/oracle
 make crosscheck # the same on flang and gfortran -- run before committing
 make FC=flang all test      # just the flang side
@@ -193,19 +193,22 @@ make FC=flang all test      # just the flang side
 
 Every build product lives under `build/` -- objects, `.mod` files, the
 test binaries in `build/test/` -- and the only artifact in the root is
-`./clotran` itself. The first build also compiles vendored ICU from
+`./clotran-bin` itself. The first build also compiles vendored ICU from
 source, which takes a few minutes once; after that it is cached.
 
-`./clotran` is the interpreter, a plain stdin/stdout REPL with no line
-editing of its own; it loads the files named on its command line first,
-so `./clotran src/clj/clojure/core.clj` is Clojure. `scripts/clotran`
-is the launcher: it hands the binary core.clj and wraps it in `rlwrap`
-when installed, for history and arrow-key editing, exactly the way real
-Clojure's own `clj` wraps `clojure`, and falls back to the raw binary
-with a note if `rlwrap` isn't found.
+`./clotran` is the entry point, a shell script: it hands `clotran-bin`
+core.clj and wraps the REPL in `rlwrap` when there is a terminal and
+`rlwrap` is installed, for history and arrow-key editing, exactly the
+way real Clojure's own `clj` wraps `clojure`. Files named after it load
+after core.clj, so `./clotran prog.cljf` runs a program. It works from
+any directory: the binary takes its own directory as a classpath root.
+
+`./clotran-bin` is the interpreter alone, a plain stdin/stdout REPL that
+loads only `host.clj` and the files named on its command line -- which
+is what the scripts and the Makefile use, passing core.clj explicitly.
 
 ```
-scripts/clotran
+./clotran
 ```
 
 ## Why host it on Fortran rather than bridge to it

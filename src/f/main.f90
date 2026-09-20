@@ -1,5 +1,5 @@
-! The clotran program: load the files named on the command line, then
-! a REPL. scripts/clotran wraps this in rlwrap and hands it core.clj.
+! clotran-bin: load the files named on the command line, then a REPL.
+! ./clotran, the launcher, wraps this in rlwrap and hands it core.clj.
 !
 ! Reads a form per line, evaluates, prints. No line editing of its own
 ! -- scripts/clotran's rlwrap trick applies here too if wanted.
@@ -21,6 +21,7 @@ program clotran
   character(len=8) :: statbuf
 
   call gc_init(65536)
+  call gce_set_home(home_dir())
   base = vs_enter(3)
   env = gce_base_env(none)
   call vs_set(base + 1, env)
@@ -29,7 +30,7 @@ program clotran
   ! because it would ask instance? about Java classes. NOT a core
   ! library: everything else Clojure programs use must come from
   ! the real core.clj, which is the point of the project.
-  call load_file("src/clj/host.clj", vs_get(base + 1))
+  call load_file(under_home("src/clj/host.clj"), vs_get(base + 1))
   ! host.clj leaves clojure.core current, being part of its bootstrap.
 
   ! Any files named on the command line load next, in order, so
@@ -205,5 +206,28 @@ contains
   function no_roots() result(r)
     type(gc_value) :: r(0)
   end function no_roots
+
+  ! The directory the binary was started from, by argv(0): the repo
+  ! root when it is ./clotran, and a classpath root either way (Eval's
+  ! classpath_find), so `clotran` works from any directory.
+  function home_dir() result(d)
+    character(len=:), allocatable :: d
+    character(len=1024) :: exe
+    integer :: n, k
+    d = "."
+    call get_command_argument(0, exe, n)
+    k = index(exe(1:n), "/", back=.true.)
+    if (k > 1) d = exe(1:k-1)
+  end function home_dir
+
+  ! A file relative to the cwd if it is there, else under home.
+  function under_home(rel) result(p)
+    character(len=*), intent(in) :: rel
+    character(len=:), allocatable :: p
+    logical :: there
+    p = rel
+    inquire(file=p, exist=there)
+    if (.not. there) p = gce_home() // "/" // rel
+  end function under_home
 
 end program clotran

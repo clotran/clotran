@@ -120,7 +120,7 @@ unit-tests = gc_test persistent_vector_test persistent_list_test persistent_arra
 test-bins = $(addprefix $(BT)/,$(unit-tests))
 
 .PHONY: all test crosscheck clean
-all: clotran $(test-bins)
+all: clotran-bin $(test-bins)
 
 $(B) $(BT):
 	mkdir -p $@
@@ -181,7 +181,7 @@ reader-objects = $(B)/LispReader.o $(B)/Regex.o $(B)/regex_shim.o
 eval-objects = $(data-objects) $(B)/Env.o $(B)/Namespace.o $(reader-objects) $(chemsol-objects) $(B)/Eval.o
 LINK_ICU = $(ICU_LIBS) $(LIBCXX) -lpthread
 
-clotran: $(eval-objects) $(S)/main.f90 $(ICU_LIBS)
+clotran-bin: $(eval-objects) $(S)/main.f90 $(ICU_LIBS)
 	$(FC) $(FCFLAGS) -c $(S)/main.f90 -o $(B)/main.o
 	$(FC) $(LDFLAGS) -o $@ $(eval-objects) $(B)/main.o $(LINK_ICU)
 
@@ -212,10 +212,10 @@ $(BT)/eval_test: $(eval-objects) $(T)/eval_test.f90 $(ICU_LIBS) | $(BT) $(FCSTAM
 # checks that need core.clj loaded, and the differential oracle against
 # real Clojure. clotran is built here so main.f90 and its link line are
 # inside the gate under both compilers.
-test: $(test-bins) clotran
+test: $(test-bins) clotran-bin
 	for t in $(unit-tests); do echo "--- $$t ---"; $(BT)/$$t || exit 1; done
 	@echo "--- language_test (with core.clj) ---"
-	./clotran src/clj/clojure/core.clj test/clj/language_test.clj </dev/null \
+	./clotran-bin src/clj/clojure/core.clj test/clj/language_test.clj </dev/null \
 	  | tee /dev/stderr | grep -q "^LANGUAGE TESTS PASSED"
 	@echo "--- oracle (the same forms through clj and clotran) ---"
 	scripts/oracle
@@ -227,4 +227,4 @@ crosscheck:
 	$(MAKE) clean && $(MAKE) test
 
 clean:
-	rm -rf $(B) clotran clotran.dSYM
+	rm -rf $(B) clotran-bin clotran-bin.dSYM

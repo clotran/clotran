@@ -246,6 +246,7 @@ module Eval
   public :: gce_eval, gce_base_env, gce_has_error, gce_error, gce_clear_error
   public :: gce_analyze, gce_trace
   public :: gce_ctx_new, gce_ctx_switch, gce_ctx_current
+  public :: gce_set_home, gce_home
 
   ! THE CALL STACK. One entry per closure invocation in progress: the
   ! closure and the position of the call that entered it (set by the
@@ -315,6 +316,10 @@ module Eval
   end type eval_ctx
   type(eval_ctx), allocatable, save :: ctxs(:)
   integer, save :: cur_ctx = 0, n_ctx = 0
+
+  ! The directory the binary lives in: a classpath root, so `clotran`
+  ! run from anywhere finds src/clj. main.f90 sets it from argv(0).
+  character(len=:), allocatable, save :: clotran_home
 
   include "hosttable.inc"
 
@@ -5865,7 +5870,9 @@ contains
          out = gc_nil()
        end block
     case (B_BASELOADER)
-       out = gc_str("src/clj", [vs_get(base + 1)])
+       ! the classpath root beside the binary, so getResourceAsStream
+       ! finds clojure/version.properties from any directory
+       out = gc_str(gce_home() // "/src/clj", [vs_get(base + 1)])
     case (B_RESOURCE)
        ! Java answers null for a resource that is not there, and
        ! with-open then fails on the nil -- same shape either way.
@@ -9249,7 +9256,7 @@ contains
   function classpath_find(rel) result(path)
     character(len=*), intent(in) :: rel
     character(len=:), allocatable :: path, cand
-    character(len=8) :: roots(3)
+    character(len=1024) :: roots(5)
     character(len=4), parameter :: exts(3) = [character(len=4) :: "cljf", "cljc", "clj"]
     logical :: there
     integer :: i, e
@@ -9257,11 +9264,13 @@ contains
     roots(1) = "src/clj"
     roots(2) = "test/clj"
     roots(3) = "."
+    roots(4) = gce_home() // "/src/clj"
+    roots(5) = gce_home() // "/test/clj"
     ! The src/clj spelling is the fallback too, so a genuinely missing
     ! file still reports the path a reader would expect to see.
     path = "src/clj/" // rel // ".clj"
     do e = 1, 3
-       do i = 1, 3
+       do i = 1, 5
           cand = trim(roots(i)) // "/" // rel // "." // trim(exts(e))
           inquire(file=cand, exist=there)
           if (there) then
@@ -9815,6 +9824,17 @@ contains
     call gc_stack_restore(id)
     cur_ctx = id
   end subroutine gce_ctx_switch
+
+  subroutine gce_set_home(dir)
+    character(len=*), intent(in) :: dir
+    clotran_home = dir
+  end subroutine gce_set_home
+
+  function gce_home() result(h)
+    character(len=:), allocatable :: h
+    h = "."
+    if (allocated(clotran_home)) h = clotran_home
+  end function gce_home
 
   subroutine ctx_reset()
     if (allocated(ctxs)) deallocate(ctxs)

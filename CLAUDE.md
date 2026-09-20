@@ -146,9 +146,9 @@ it up.
 
 - `scripts/split-forms <file.clj> [outdir] [start]` -- splits a Clojure
   file into one file per top-level form. `load_file` aborts on its first
-  error, so `clotran core.clj` answers exactly one question; the
+  error, so `clotran-bin core.clj` answers exactly one question; the
   ARGUMENT LIST does not abort, so
-  `./clotran core.clj forms/*.clj` reports every failure in one pass.
+  `./clotran-bin core.clj forms/*.clj` reports every failure in one pass.
   This is how "the wall is form 656" became "5 forms fail and 63 behind
   them already work".
 - `scripts/audit-host` -- every host class and member the loaded

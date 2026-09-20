@@ -12,7 +12,7 @@
 ;; The argument list does not abort, so:
 ;;
 ;;   scripts/split-forms src/clj/clojure/core.clj /tmp/forms 655
-;;   ./clotran src/clj/clojure/core.clj /tmp/forms/*.clj
+;;   ./clotran-bin src/clj/clojure/core.clj /tmp/forms/*.clj
 ;;
 ;; evaluates each remaining form on its own and reports every failure in
 ;; one pass. That is how "the wall is form 656" became "5 forms fail,

@@ -24,7 +24,7 @@
         _ (spit (str driver) (str "(load-file \"" repo "/examples/chemsol.cljf\")\n"
                                   "(chemsol.example/run \"" tests "/vdw.par\" \"" tests "/test" n ".cs\")\n"))
         r (p/shell {:dir (str repo) :in "" :out :string :err :string :continue true}
-                   (str repo "/clotran") "src/clj/clojure/core.clj" (str driver))
+                   (str repo "/clotran-bin") "src/clj/clojure/core.clj" (str driver))
         ;; the REPL prints one blank line when stdin ends (main.f90); the
         ;; original program does not, so that one line is not the output
         got (->> (str/split-lines (:out r))

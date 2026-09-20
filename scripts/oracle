@@ -96,7 +96,7 @@
       gen (io/file repo "test/clj/.oracle-gen.clj")
       _ (spit gen (script cs))
       want (run "clj" "-M" (str gen))
-      got (run "./clotran" "src/clj/clojure/core.clj" (str gen))
+      got (run "./clotran-bin" "src/clj/clojure/core.clj" (str gen))
       _ (when (System/getenv "ORACLE_KEEP") nil) _ (when-not (System/getenv "ORACLE_KEEP") (.delete gen))
       n (count cs)]
   (when (not= (count want) n)
