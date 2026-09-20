@@ -1674,3 +1674,70 @@
 (into [] (dedupe) [1 1 2 2 1])
 
 (into [] (interpose :x) [1 2 3])
+
+;; sorted maps and sets: the array map with its keys in comparator order
+(sorted-map 3 :c 1 :a 2 :b)
+
+(seq (sorted-map 3 :c 1 :a 2 :b))
+
+(sorted-set 3 1 2)
+
+(sorted-map-by > 1 :a 3 :c 2 :b)
+
+(sorted-set-by > 1 3 2)
+
+(assoc (sorted-map 1 :a 3 :c) 2 :b)
+
+(assoc (sorted-map 1 :a 3 :c) 3 :C)
+
+(dissoc (sorted-map 1 :a 2 :b 3 :c) 2)
+
+(into (sorted-map) {5 :e 1 :a 3 :c})
+
+(into (sorted-set) (range 20 0 -1))
+
+(count (into (sorted-map) (map (fn [i] [i i]) (range 100))))
+
+(get (sorted-map-by (fn [a b] (compare (str a) (str b))) :a 1) :a)
+
+(subseq (sorted-set 1 2 3 4 5) > 2)
+
+(subseq (sorted-set 1 2 3 4 5) >= 2 < 4)
+
+(subseq (sorted-map 1 :a 2 :b 3 :c) < 3)
+
+(rsubseq (sorted-set 1 2 3 4 5) < 3)
+
+(rsubseq (sorted-map 1 :a 2 :b 3 :c) >= 2)
+
+(subseq (sorted-map-by > 1 :a 2 :b 3 :c) > 2)
+
+(rseq (sorted-map 1 :a 2 :b))
+
+(rseq [1 2 3])
+
+(rseq [])
+
+(rseq (sorted-set 1 2 3))
+
+(first (sorted-set 3 1 2))
+
+[(sorted? (sorted-map)) (sorted? {}) (sorted? (sorted-set)) (reversible? [1]) (reversible? (sorted-set)) (reversible? {})]
+
+(= (sorted-map 1 2) {1 2})
+
+(sorted? (empty (sorted-map)))
+
+(conj (sorted-set 5 1) 3)
+
+(disj (sorted-set 1 2 3) 2)
+
+(contains? (sorted-set 1 2 3) 2)
+
+[(keys (sorted-map 2 :b 1 :a)) (vals (sorted-map 2 :b 1 :a))]
+
+(try (sorted-set 1 "a") (catch ClassCastException e :cce))
+
+(reduce-kv (fn [acc k v] (conj acc k)) [] (sorted-map 3 :c 1 :a))
+
+(map key (subseq (sorted-map 1 :a 2 :b 3 :c 4 :d) >= 2 <= 3))

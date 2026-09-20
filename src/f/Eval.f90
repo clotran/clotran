@@ -176,6 +176,9 @@ module Eval
   ! A host member that is Clojure on this host: a row with this id names
   ! a var in clotran.rt (src/clj/clotran/rt.cljf), loaded on first use.
   integer, parameter :: B_RTFN = 309
+  ! Sorted maps and sets (sorted.inc)
+  integer, parameter :: B_SORTEDMAP = 310, B_SORTEDSET = 311, B_SEQFROM = 312, B_ENTRYKEY = 313, &
+       B_COMPARATOR = 314, B_RSEQ = 315
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -556,6 +559,7 @@ contains
     ! orphaned; this is the one place that always follows gc_init.
     call gcna_reset()
     call gcp_set_forcer(gce_force)
+    call gca_set_comparer(compare_via)
     ! The sweep tells us when an object owning out-of-heap storage
     ! dies, so a native array's buffer is freed exactly once rather
     ! than leaking for the life of the process.
@@ -3544,9 +3548,18 @@ contains
     case (OBJ_VECTOR)
        out = gcv_empty([roots, vs_get(base + 1)])
     case (OBJ_MAP)
-       out = gca_empty([roots, vs_get(base + 1)])
+       ! a sorted map's empty keeps its order and comparator
+       if (gca_is_sorted(vs_get(base + 1))) then
+          out = gca_sorted_empty(gca_comparator(vs_get(base + 1)), [roots, vs_get(base + 1)])
+       else
+          out = gca_empty([roots, vs_get(base + 1)])
+       end if
     case (OBJ_SET)
-       inner = gca_empty([roots, vs_get(base + 1)])
+       if (gca_is_sorted(gc_slot(vs_get(base + 1), 1))) then
+          inner = gca_sorted_empty(gca_comparator(gc_slot(vs_get(base + 1), 1)), [roots, vs_get(base + 1)])
+       else
+          inner = gca_empty([roots, vs_get(base + 1)])
+       end if
        call vs_set(base + 2, inner)
        out = gc_obj(OBJ_SET, [vs_get(base + 2)], [roots, vs_get(base + 2)])
     case (OBJ_CONS, OBJ_SEQ, OBJ_LAZY, OBJ_CHUNKSEQ)
@@ -4665,7 +4678,7 @@ contains
          return
       end if
       call vs_set(base + 3, r)
-      if (gca_contains(strip_meta(r), gc_key("clotran/reduced", [vs_get(base + 3)]))) then
+      if (is_reduced(r)) then
          call vs_set(base + 3, gca_get(strip_meta(vs_get(base + 3)), gc_key("clotran/reduced", [vs_get(base + 3)])))
          done = .true.
       end if
@@ -5405,6 +5418,14 @@ contains
             [vs_get(base + 1)])
     case (B_SEQ)
        a = strip_meta(gcv_nth(vs_get(base + 1), 0))
+       if (n >= 2) then
+          ! (. sc seq ascending?), which subseq and rsubseq use
+          if (.not. truthy(gcv_nth(args, 1))) then
+             out = reverse_seq(a, [vs_get(base + 1)])
+             call vs_leave(base)
+             return
+          end if
+       end if
        if (gc_kind(a) == OBJ_INST) then
           out = inst_invoke0(a, "seq", hit)
           if (hit) then
@@ -6297,6 +6318,35 @@ contains
     case (B_NPROCS)
        ! Runtime.availableProcessors: one OS thread runs everything here
        out = gc_int(1_gc_ip)
+    case (B_SORTEDMAP, B_SORTEDSET)
+       ! PersistentTreeMap/create keyvals, or comparator keyvals, and
+       ! PersistentTreeSet/create likewise over keys (sorted.inc)
+       out = sorted_create(args, n, id == B_SORTEDSET, [vs_get(base + 1)])
+    case (B_SEQFROM)
+       ! (. sc seqFrom key ascending?): the entries from the first key
+       ! at or past `key`, that way
+       a = strip_meta(gcv_nth(args, 0))
+       b = sorted_backing(a)
+       out = gc_nil()
+       if (b%tag /= GCT_NIL) then
+          i = gca_sorted_from(b, gcv_nth(args, 1), truthy(gcv_nth(args, 2)))
+          if (.not. has_error) out = sorted_entries(a, i, truthy(gcv_nth(args, 2)), [vs_get(base + 1)])
+       end if
+    case (B_ENTRYKEY)
+       ! (. sc entryKey e): an entry's key -- the element itself, for a set
+       a = strip_meta(gcv_nth(args, 0))
+       if (gc_kind(a) == OBJ_SET) then
+          out = gcv_nth(args, 1)
+       else
+          out = sq_first(gcv_nth(args, 1), [vs_get(base + 1)])
+       end if
+    case (B_COMPARATOR)
+       ! (.comparator sc): its comparator, or compare itself
+       out = gca_comparator(sorted_backing(gcv_nth(args, 0)))
+       if (out%tag == GCT_NIL) out = native(B_COMPARE, "compare", [vs_get(base + 1)])
+    case (B_RSEQ)
+       ! (rseq coll): a vector or a sorted collection, last first; nil when empty
+       out = reverse_seq(strip_meta(gcv_nth(args, 0)), [vs_get(base + 1)])
     case (B_TASKSTATUS)
        ! (task-status t): the protocol's five words for a task's state
        a = strip_meta(gcv_nth(args, 0))
@@ -6647,8 +6697,7 @@ contains
          end if
        end block
     case (B_ISREDUCED)
-       out = gc_bool(gca_contains(strip_meta(gcv_nth(args, 0)), &
-            gc_key("clotran/reduced", [vs_get(base + 1)])))
+       out = gc_bool(is_reduced(gcv_nth(args, 0)))
     case (B_FLD_SYM, B_FLD_PROTOCOL, B_FLD_METHODK, B_FLD_MAP)
        ! (.field x) on a map-shaped host object: the field name IS
        ! a keyword in the map.
@@ -7369,8 +7418,7 @@ contains
           out = gc_slot(a, 2)
        else if (gcn_is_var(a) .or. gc_kind(a) == OBJ_ATOM .or. gc_kind(a) == OBJ_VOLATILE) then
           out = gc_slot(a, 1)
-       else if (gca_contains(a, gc_key("clotran/reduced", &
-            [vs_get(base + 1)]))) then
+       else if (is_reduced(a)) then
           ! Unwrapping a (reduced x) is a deref in Clojure too.
           out = gca_get(a, gc_key("clotran/reduced", [vs_get(base + 1)]))
        else
@@ -9708,6 +9756,8 @@ contains
     case ("clojure.lang.PersistentVector"); yes = (t == "vector")
     case ("clojure.lang.PersistentArrayMap", "clojure.lang.PersistentHashMap"); yes = (t == "map")
     case ("clojure.lang.PersistentHashSet"); yes = (t == "set")
+    case ("clojure.lang.PersistentTreeMap"); yes = (t == "map") .and. is_sorted_coll(v)
+    case ("clojure.lang.PersistentTreeSet"); yes = (t == "set") .and. is_sorted_coll(v)
     case ("clojure.lang.PersistentList"); yes = (t == "list")
     case ("clojure.lang.LazySeq"); yes = (t == "lazy-seq" .and. gc_i2(strip_meta(v)) /= 1)
     case ("clojure.lang.LongRange", "clojure.lang.Range"); yes = (t == "lazy-seq" .and. gc_i2(strip_meta(v)) == 1)
@@ -9738,7 +9788,7 @@ contains
        ! A Reduced is the one-key map (reduced x) builds, so instance?
        ! asks for the key. Without this reduce returned the WRAPPER
        ! instead of unwrapping it on an early exit.
-       yes = gca_contains(strip_meta(v), gc_key("clotran/reduced", [v]))
+       yes = is_reduced(v)
     case ("Throwable", "java.lang.Throwable", "Exception", "java.lang.Exception", &
           "Error", "IExceptionInfo", "clojure.lang.IExceptionInfo", &
           "ExceptionInfo", "clojure.lang.ExceptionInfo")
@@ -9748,6 +9798,8 @@ contains
     case ("clojure.lang.IPersistentVector", "clojure.lang.Indexed"); yes = (t == "vector")
     case ("clojure.lang.IPersistentMap", "java.util.Map"); yes = (t == "map")
     case ("clojure.lang.IPersistentSet"); yes = (t == "set")
+    case ("clojure.lang.Sorted"); yes = is_sorted_coll(v)
+    case ("clojure.lang.Reversible"); yes = (t == "vector") .or. is_sorted_coll(v)
     case ("clojure.lang.Associative"); yes = (t == "map" .or. t == "vector")
     case ("clojure.lang.Counted"); &
          yes = (t == "list" .or. t == "vector" .or. t == "map" .or. &
@@ -9964,6 +10016,16 @@ contains
          chain(1:4) = [character(len=36) :: "clojure.lang.IPersistentSet", "java.util.Set", &
               "clojure.lang.IPersistentCollection", "java.util.Collection"]
          cnt = 4
+      case ("clojure.lang.PersistentTreeMap")
+         chain(1:6) = [character(len=36) :: "clojure.lang.Sorted", "clojure.lang.Reversible", &
+              "clojure.lang.IPersistentMap", "java.util.Map", &
+              "clojure.lang.IPersistentCollection", "java.util.Collection"]
+         cnt = 6
+      case ("clojure.lang.PersistentTreeSet")
+         chain(1:6) = [character(len=36) :: "clojure.lang.Sorted", "clojure.lang.Reversible", &
+              "clojure.lang.IPersistentSet", "java.util.Set", &
+              "clojure.lang.IPersistentCollection", "java.util.Collection"]
+         cnt = 6
       case ("clojure.lang.PersistentList")
          chain(1:5) = [character(len=36) :: "clojure.lang.IPersistentList", "clojure.lang.ISeq", &
               "java.util.List", "clojure.lang.IPersistentCollection", "java.util.Collection"]
@@ -10032,8 +10094,12 @@ contains
        select case (gc_kind(v))
        case (OBJ_CONS);    s = "clojure.lang.PersistentList"
        case (OBJ_VECTOR);  s = "clojure.lang.PersistentVector"
-       case (OBJ_MAP, OBJ_HAMT); s = "clojure.lang.PersistentArrayMap"
-       case (OBJ_SET);     s = "clojure.lang.PersistentHashSet"
+       case (OBJ_MAP, OBJ_HAMT)
+          s = "clojure.lang.PersistentArrayMap"
+          if (gca_is_sorted(v)) s = "clojure.lang.PersistentTreeMap"
+       case (OBJ_SET)
+          s = "clojure.lang.PersistentHashSet"
+          if (gca_is_sorted(gc_slot(v, 1))) s = "clojure.lang.PersistentTreeSet"
        case (OBJ_CLOSURE, OBJ_BUILTIN); s = "clojure.lang.AFunction"
        case (OBJ_MULTIFN); s = "clojure.lang.MultiFn"
        case (OBJ_REGEX);   s = "java.util.regex.Pattern"
@@ -10725,5 +10791,6 @@ contains
   include "exec.inc"
   include "repl.inc"
   include "tasks.inc"
+  include "sorted.inc"
 
 end module Eval

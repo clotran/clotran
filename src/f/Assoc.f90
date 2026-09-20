@@ -29,6 +29,24 @@ module Assoc
   ! The threshold real Clojure uses. Crossing it is what triggers the
   ! one-way promotion.
   integer, parameter, public :: GCA_ARRAY_MAX = 8
+  ! Sorted maps: the array map with its keys in comparator order. i2 = 1
+  ! marks one and slot 3 holds its comparator (nil: Clojure's compare);
+  ! it is never promoted, its keys are found by binary search, and each
+  ! edit is a positional copy of the two runs -- O(n) per assoc, which
+  ! is the ponytail ceiling; a balanced tree if a sorted map of many
+  ! thousands ever matters. Ordering may run a Clojure fn, so it goes
+  ! through `comparer`, which Eval supplies (compare_via); a comparer
+  ! that fails answers huge(0) and the search stops.
+  abstract interface
+     function cmp_i(comparator, a, b) result(c)
+       import :: gc_value
+       type(gc_value), intent(in) :: comparator, a, b
+       integer :: c
+     end function cmp_i
+  end interface
+  procedure(cmp_i), pointer, save :: comparer => null()
+  public :: gca_set_comparer, gca_sorted_empty, gca_is_sorted, gca_comparator, &
+       gca_key_at, gca_val_at, gca_sorted_from
 
   public :: gca_empty, gca_is, gca_count, gca_get, gca_contains, &
        gca_assoc, gca_dissoc, gca_is_array_map, gca_entries
@@ -40,6 +58,96 @@ contains
     type(gc_value) :: m
     m = gcm_empty(roots)
   end function gca_empty
+
+  subroutine gca_set_comparer(f)
+    procedure(cmp_i) :: f
+    comparer => f
+  end subroutine gca_set_comparer
+
+  function gca_sorted_empty(comparator, roots) result(m)
+    type(gc_value), intent(in) :: comparator
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: m
+    m = gcm_empty(with(roots, comparator))
+    call gc_set_i2(m, 1)
+    call gc_set_slot(m, 3, comparator)
+  end function gca_sorted_empty
+
+  function gca_is_sorted(m) result(yes)
+    type(gc_value), intent(in) :: m
+    logical :: yes
+    yes = .false.
+    if (gcm_is(m)) yes = (gc_i2(m) == 1)
+  end function gca_is_sorted
+
+  function gca_comparator(m) result(c)
+    type(gc_value), intent(in) :: m
+    type(gc_value) :: c
+    c = gc_nil()
+    if (gca_is_sorted(m)) c = gc_slot(m, 3)
+  end function gca_comparator
+
+  function gca_key_at(m, i) result(k)
+    type(gc_value), intent(in) :: m
+    integer, intent(in) :: i
+    type(gc_value) :: k
+    k = gcm_key_at(m, i)
+  end function gca_key_at
+
+  function gca_val_at(m, i) result(v)
+    type(gc_value), intent(in) :: m
+    integer, intent(in) :: i
+    type(gc_value) :: v
+    v = gcm_val_at(m, i)
+  end function gca_val_at
+
+  ! Binary search: `pos` is the first position whose key is not before
+  ! k, count + 1 when every key is; `found` when one is equal to it.
+  ! m and k are rooted here because the comparer may allocate.
+  subroutine sorted_search(m, k, pos, found)
+    type(gc_value), intent(in) :: m, k
+    integer, intent(out) :: pos
+    logical, intent(out) :: found
+    integer :: lo, hi, mid, c, base
+    found = .false.
+    base = vs_enter(2)
+    call vs_set(base + 1, m)
+    call vs_set(base + 2, k)
+    lo = 1
+    hi = gcm_count(m)
+    pos = hi + 1
+    do while (lo <= hi)
+       mid = (lo + hi) / 2
+       c = comparer(gc_slot(vs_get(base + 1), 3), gcm_key_at(vs_get(base + 1), mid), vs_get(base + 2))
+       if (c == huge(0)) then
+          pos = gcm_count(m) + 1
+          found = .false.
+          exit
+       end if
+       if (c < 0) then
+          lo = mid + 1
+       else
+          pos = mid
+          hi = mid - 1
+          if (c == 0) then
+             found = .true.
+             exit
+          end if
+       end if
+    end do
+    call vs_leave(base)
+  end subroutine sorted_search
+
+  ! For seqFrom: the first position at or after k, ascending, or the
+  ! last at or before it, descending -- count + 1 or 0 when none.
+  function gca_sorted_from(m, k, ascending) result(pos)
+    type(gc_value), intent(in) :: m, k
+    logical, intent(in) :: ascending
+    integer :: pos
+    logical :: found
+    call sorted_search(m, k, pos, found)
+    if (.not. ascending .and. .not. found) pos = pos - 1
+  end function gca_sorted_from
 
   function gca_is(m) result(yes)
     type(gc_value), intent(in) :: m
@@ -70,7 +178,13 @@ contains
   function gca_get(m, k) result(v)
     type(gc_value), intent(in) :: m, k
     type(gc_value) :: v
-    if (gcm_is(m)) then
+    integer :: pos
+    logical :: found
+    if (gca_is_sorted(m)) then
+       v = gc_nil()
+       call sorted_search(m, k, pos, found)
+       if (found) v = gcm_val_at(m, pos)
+    else if (gcm_is(m)) then
        v = gcm_get(m, k)
     else if (gch_is(m)) then
        v = gch_get(m, k)
@@ -82,7 +196,10 @@ contains
   function gca_contains(m, k) result(yes)
     type(gc_value), intent(in) :: m, k
     logical :: yes
-    if (gcm_is(m)) then
+    integer :: pos
+    if (gca_is_sorted(m)) then
+       call sorted_search(m, k, pos, yes)
+    else if (gcm_is(m)) then
        yes = gcm_contains(m, k)
     else if (gch_is(m)) then
        yes = gch_contains(m, k)
@@ -103,6 +220,23 @@ contains
        return
     end if
     if (.not. gcm_is(m)) return
+    if (gca_is_sorted(m)) then
+       ! in place of an equal key, or before the first key after it
+       block
+         integer :: at
+         logical :: found
+         call sorted_search(m, k, at, found)
+         r2 = with(with(roots, m), gc_slot(m, 3))
+         if (found) then
+            out = gcm_replace_at(m, at, v, r2)
+         else
+            out = gcm_insert_at(m, at, k, v, r2)
+         end if
+         call gc_set_i2(out, 1)
+         call gc_set_slot(out, 3, gc_slot(m, 3))
+       end block
+       return
+    end if
 
     ! Only a NEW key can push the map over the threshold; replacing an
     ! existing one leaves the count where it was, so a full array map
@@ -122,7 +256,18 @@ contains
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out
     out = m
-    if (gcm_is(m)) then
+    if (gca_is_sorted(m)) then
+       block
+         integer :: at
+         logical :: found
+         call sorted_search(m, k, at, found)
+         if (found) then
+            out = gcm_remove_at(m, at, with(with(roots, m), gc_slot(m, 3)))
+            call gc_set_i2(out, 1)
+            call gc_set_slot(out, 3, gc_slot(m, 3))
+         end if
+       end block
+    else if (gcm_is(m)) then
        out = gcm_dissoc(m, k, roots)
     else if (gch_is(m)) then
        out = gch_dissoc(m, k, roots)

@@ -21,7 +21,8 @@ module PersistentArrayMap
   private
 
   public :: gcm_empty, gcm_count, gcm_is, gcm_get, gcm_contains, &
-       gcm_assoc, gcm_dissoc, gcm_key_at, gcm_val_at
+       gcm_assoc, gcm_dissoc, gcm_key_at, gcm_val_at, &
+       gcm_insert_at, gcm_replace_at, gcm_remove_at
 
 contains
 
@@ -198,6 +199,84 @@ contains
   ! src. Allocating first and copying after is deliberate: the new run
   ! is what may trigger a collection, and src has to be rooted across
   ! it, which is why it is in the caller's root list.
+  ! The three POSITIONAL edits a sorted map needs (Assoc.f90): the
+  ! order of the entries is kept, where assoc appends and dissoc moves
+  ! the last entry into the hole.
+  function gcm_insert_at(m, at, k, v, roots) result(out)
+    type(gc_value), intent(in) :: m, k, v
+    integer, intent(in) :: at
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, keys, vals
+    type(gc_value), allocatable :: r2(:)
+    integer :: n, i
+    out = gc_nil()
+    if (.not. gcm_is(m)) return
+    n = gc_i1(m)
+    r2 = append_root(append_root(append_root(roots, m), k), v)
+    keys = gc_vec(n + 1, r2)
+    r2 = append_root(r2, keys)
+    vals = gc_vec(n + 1, r2)
+    r2 = append_root(r2, vals)
+    do i = 1, at - 1
+       call gc_vec_set(keys, i, gc_vec_get(gc_slot(m, 1), i))
+       call gc_vec_set(vals, i, gc_vec_get(gc_slot(m, 2), i))
+    end do
+    call gc_vec_set(keys, at, k)
+    call gc_vec_set(vals, at, v)
+    do i = at, n
+       call gc_vec_set(keys, i + 1, gc_vec_get(gc_slot(m, 1), i))
+       call gc_vec_set(vals, i + 1, gc_vec_get(gc_slot(m, 2), i))
+    end do
+    out = gc_obj(OBJ_MAP, [keys, vals], r2)
+    call gc_set_i1(out, n + 1)
+  end function gcm_insert_at
+
+  function gcm_replace_at(m, at, v, roots) result(out)
+    type(gc_value), intent(in) :: m, v
+    integer, intent(in) :: at
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, keys, vals
+    type(gc_value), allocatable :: r2(:)
+    integer :: n
+    out = gc_nil()
+    if (.not. gcm_is(m)) return
+    n = gc_i1(m)
+    r2 = append_root(append_root(roots, m), v)
+    keys = copy_run(gc_slot(m, 1), n, n, r2)
+    r2 = append_root(r2, keys)
+    vals = copy_run(gc_slot(m, 2), n, n, r2)
+    r2 = append_root(r2, vals)
+    call gc_vec_set(vals, at, v)
+    out = gc_obj(OBJ_MAP, [keys, vals], r2)
+    call gc_set_i1(out, n)
+  end function gcm_replace_at
+
+  function gcm_remove_at(m, at, roots) result(out)
+    type(gc_value), intent(in) :: m
+    integer, intent(in) :: at
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, keys, vals
+    type(gc_value), allocatable :: r2(:)
+    integer :: n, i, j
+    out = gc_nil()
+    if (.not. gcm_is(m)) return
+    n = gc_i1(m)
+    r2 = append_root(roots, m)
+    keys = gc_vec(n - 1, r2)
+    r2 = append_root(r2, keys)
+    vals = gc_vec(n - 1, r2)
+    r2 = append_root(r2, vals)
+    j = 0
+    do i = 1, n
+       if (i == at) cycle
+       j = j + 1
+       call gc_vec_set(keys, j, gc_vec_get(gc_slot(m, 1), i))
+       call gc_vec_set(vals, j, gc_vec_get(gc_slot(m, 2), i))
+    end do
+    out = gc_obj(OBJ_MAP, [keys, vals], r2)
+    call gc_set_i1(out, n - 1)
+  end function gcm_remove_at
+
   function copy_run(src, oldn, newn, roots) result(out)
     type(gc_value), intent(in) :: src
     integer, intent(in) :: oldn, newn

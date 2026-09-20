@@ -123,6 +123,13 @@ branch beside each `:clj` one. `.clj` is JVM Clojure, which clotran
 loads as written -- that being the point. `require` looks for the
 three in that order.
 
+**Sorted collections.** `sorted-map`, `sorted-map-by`, `sorted-set`,
+`sorted-set-by`, `subseq`, `rsubseq` and `rseq`, from core.clj's own
+definitions: a sorted map is the array map with its keys kept in
+comparator order, never promoted to a hash trie, and a sorted set is
+a set over one. Verified: `(subseq (sorted-set 1 2 3 4 5) >= 2 < 4)`
+is `(2 3)`, and `(into (sorted-set) (range 20 0 -1))` counts up.
+
 **Host members written in Clojure.** `sequence`, `eduction`,
 `iterator-seq`, `volatile!`, `shuffle` and the transducers that buffer
 (`partition-all`, `partition-by`) are core.clj's own definitions, which
@@ -247,7 +254,6 @@ recalled. See `CLAUDE.md`.
 | memory | 168 MB after loading core.clj, and a 100000-element reduce stays there since locals are cleared after their last read; the image (PLAN.md step 5, stage 3) is what would shrink the baseline |
 | debugger | steps count calls, not lines, since a call is the event the executor has; one level, so a break inside the handler is a snapshot; no socket. What it does is under "What works" |
 | `BigDecimal` and `BigInt` | `1M` reads as a double and `1N` as an integer; DEVIATIONS 30 |
-| sorted collections | `sorted-map` and `sorted-set` are unsorted; DEVIATIONS 9 |
 | mutable deftype fields | `(set! afield v)` is refused, loudly; DEVIATIONS 20 |
 | `tap>`, agents that run apart | queues; an agent's action runs at `send`, on the one thread there is |
 | futures | run on the one OS thread, at creation until they first block; a wait under a `map` or `reduce` callback cannot park, and a wait nothing can satisfy is an error, not a hang; DEVIATIONS 38 |

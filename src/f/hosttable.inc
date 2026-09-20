@@ -81,8 +81,8 @@
        hm("clojure.lang.PersistentArrayMap", "create", B_HMAP, "hash-map"), &
   ! A sorted set or map is an ordinary one here. DEVIATIONS.md 9.
        hm("clojure.lang.PersistentHashSet", "create", B_HSET, "hash-set"), &
-       hm("clojure.lang.PersistentTreeSet", "create", B_HSET, "hash-set"), &
-       hm("clojure.lang.PersistentTreeMap", "create", B_HMAP, "hash-map"), &
+       hm("clojure.lang.PersistentTreeSet", "create", B_SORTEDSET, "sorted-set"), &
+       hm("clojure.lang.PersistentTreeMap", "create", B_SORTEDMAP, "sorted-map"), &
        hm("java.lang.System", "getProperty", B_GETPROP, "clotran-get-property"), &
   ! The clock, so `time` works. ClojureScript has system-time, so this is language.
        hm("java.lang.System", "nanoTime", B_NANOTIME, "clotran-nano-time"), &
@@ -475,7 +475,7 @@
        hm("", "resetMeta", B_RESETMETA, "clotran-reset-meta"), &
        hm("", "setMeta", B_RESETMETA, "clotran-reset-meta"), &
        hm("", "set", B_SETVAL, "clotran-set-val") ]
-  type(hm), parameter :: HOST_METHODS_2(65) = [ &
+  type(hm), parameter :: HOST_METHODS_2(69) = [ &
        hm("", "reset", B_SETVAL, "clotran-set-val"), &
        hm("", "bindRoot", B_SETVAL, "clotran-set-val"), &
        hm("", "swap", B_SWAPVAL, "clotran-swap-val"), &
@@ -485,6 +485,11 @@
        hm("", "countDown", B_LATCHDOWN, "clotran-latch-down"), &
        hm("", "getCount", B_LATCHCOUNT, "clotran-latch-count"), &
        hm("", "compareAndSet", B_CAS, "compare-and-set!"), &
+  ! Sorted collections (sorted.inc): what subseq, rsubseq and rseq ask
+       hm("", "seqFrom", B_SEQFROM, "clotran-seq-from"), &
+       hm("", "entryKey", B_ENTRYKEY, "clotran-entry-key"), &
+       hm("", "comparator", B_COMPARATOR, "clotran-comparator"), &
+       hm("", "rseq", B_RSEQ, "rseq"), &
        hm("", "await", B_LATCHWAIT, "clotran-latch-await"), &
        hm("", "setErrorMode", B_SETERRMODE, "set-error-mode!"), &
        hm("", "getErrorMode", B_GETERRMODE, "error-mode"), &
@@ -547,5 +552,5 @@
        hm("", "isCancelled", B_TASKCANCELLED, "clotran-task-cancelled"), &
        hm("", "cancel", B_TASKCANCEL, "clotran-task-cancel"), &
        hm("", "availableProcessors", B_NPROCS, "clotran-processors") ]
-  type(hm), parameter :: HOST_METHODS(152) = [HOST_METHODS_1, HOST_METHODS_2]
+  type(hm), parameter :: HOST_METHODS(156) = [HOST_METHODS_1, HOST_METHODS_2]
 

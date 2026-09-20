@@ -69,6 +69,7 @@ contains
     call check_symbol_names()
     call check_meta_lookup()
     call check_contexts()
+    call check_sorted()
     call check_native_arrays()
     call check_regex_release()
     call check_resources()
@@ -712,6 +713,27 @@ contains
   ! A second context, switched to under torture, must not lose what
   ! the first was holding on its value stack: the parked stack is
   ! scanned by the collector like the live one.
+  ! A sorted map under torture: every assoc copies both runs through
+  ! the comparer, which is where a rooting slip would show.
+  subroutine check_sorted()
+    type(gc_value) :: env, r
+    integer :: base
+    character(len=:), allocatable :: got
+    call gc_init(64)
+    gc_torture = .false.
+    base = vs_enter(1)
+    env = gce_base_env(no_roots)
+    call vs_set(base + 1, env)
+    gc_torture = torturing
+    r = gce_analyze(gcr_read("(dissoc (assoc (assoc (clojure.lang.PersistentTreeMap/create (list 3 :c 1 :a 9 :z)) 2 :b) 0 :zero) 9)", no_roots), gc_nil())
+    if (.not. gce_has_error()) r = gce_eval(r, gc_nil(), no_roots)
+    got = gcp_str(r, .true.)
+    call ok("31a. a sorted map keeps its keys in order through assoc and dissoc: " // got, &
+         got == "{0 :zero, 1 :a, 2 :b, 3 :c}" .and. .not. gce_has_error())
+    gc_torture = .false.
+    call vs_leave(base)
+  end subroutine check_sorted
+
   subroutine check_contexts()
     type(gc_value) :: env, form, r
     integer :: base, c1, c2

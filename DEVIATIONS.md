@@ -28,7 +28,7 @@ Categories:
 | 6 | Syntax-quote expands at analysis time, not read time | open | `src/f/analyze.inc` |
 | 7 | Recursion depth is ~600 frames, against Clojure's ~11,200 | host | `src/f/Eval.f90` |
 | 8 | Multimethods dispatch on equality, plus a fixed host hierarchy | temporary | `src/f/Eval.f90` |
-| 9 | Sorted collections are unsorted | temporary | `src/f/Eval.f90` |
+| 9 | RESOLVED -- sorted collections | -- | `src/f/Assoc.f90` |
 | 10 | Refs are mutable boxes; dynamic bindings are global | temporary | `src/f/Eval.f90` |
 | 11 | Transients are the persistent collections | host | `src/f/Eval.f90` |
 | 12 | Five JVM-only libs are skipped by name, and not vendored | host | `src/f/Eval.f90` |
@@ -220,14 +220,19 @@ dispatch value, falls back to the default, and has no hierarchy, no
 **Removal**: implement `isa?` over the hierarchy Var and widen
 `findAndCacheBestMethod`. Not needed until `derive` is used.
 
-## 9. Sorted collections are unsorted
+## 9. RESOLVED -- sorted collections
 
-`PersistentTreeSet/create` and `PersistentTreeMap/create` build ordinary
-hash collections. core.clj reaches for a sorted set first to hold
-`*loaded-libs*`, which only ever asks about membership.
-
-**Removal**: a flag on the object plus a sort at `seq` time, or a real
-balanced tree if the ordering has to be cheap.
+`sorted-map`, `sorted-map-by`, `sorted-set`, `sorted-set-by`,
+`subseq`, `rsubseq` and `rseq` work, from core.clj's own
+definitions. A sorted map is the array map with its keys kept in
+comparator order -- a flag and a comparator slot on the object, a
+binary search, and no promotion to a hash trie however large it
+grows (Assoc.f90) -- and a sorted set is a set over one. Every
+assoc copies the two runs, so building one of n entries is O(n^2):
+a balanced tree when a sorted map of many thousands matters. The
+comparator is called through a hook Eval supplies, since ordering
+may run a Clojure fn; with none it is Clojure's `compare`, and keys
+it cannot order throw ClassCastException as on the JVM.
 
 ## 10. Refs are mutable boxes, and dynamic bindings are global
 

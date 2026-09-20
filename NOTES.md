@@ -3110,3 +3110,48 @@ closes over the iterator, and the host cannot make a closure; the
 transducer's reducing function likewise closes over its buffer. In
 Clojure both are one `fn`. The premise holds: core.clj is untouched,
 and it reaches these by the JVM names it always used.
+
+## Sorted collections: the array map, in order
+
+Two hundred of the language suite's errors were one member on sorted
+sets, `seqFrom`, because `sorted-map` and `sorted-set` had built hash
+collections since the start (DEVIATIONS 9). The fix is not a tree. An
+array map is two runs, keys and values, walked in order; a sorted map
+is that with the keys kept in comparator order: `i2 = 1` marks it,
+slot 3 holds the comparator, lookup is a binary search, and it is
+never promoted to a hash trie however large it grows. `assoc` puts a
+new key before the first key after it, `dissoc` closes the gap, each
+by a positional copy of both runs -- O(n) per edit, so a map of n
+entries is O(n^2) to build, which is the ponytail ceiling and stays
+until a sorted map of many thousands matters. A sorted set is a set
+over a sorted map, and comes for free.
+
+Ordering may run a Clojure fn -- `sorted-map-by` -- and Assoc.f90
+cannot call Eval, so it goes through a comparer procedure pointer Eval
+installs, as the printer's forcer is installed: `compare_via` applies
+the map's comparator, or Clojure's `compare` when it has none, and
+throws ClassCastException for keys `compare` cannot order, as the JVM
+does. A comparer that failed answers `huge(0)` and the search stops;
+the value it would have produced is discarded with the error.
+
+The rest is what core.clj asks a Sorted for: `seqFrom` (a seq of the
+entries from the first key at or past one, forward or back),
+`entryKey`, `comparator` (the fn, or `compare` itself), a `seq` with
+a direction, and `rseq`, which had no row at all and now reverses a
+vector too. `empty` keeps the order and comparator; `sorted?` and
+`reversible?` know them; `(= (sorted-map 1 2) {1 2})` was already
+true. Under GC torture the evaluator test builds one through assoc
+and dissoc, since every edit allocates through the comparer.
+
+**The reduced marker met the comparator.** `(reduced x)` is the map
+`{:clotran/reduced x}`, and four places asked "is this value reduced?"
+by probing any map for that key. On a sorted map the probe went
+through the comparator, which compared `:clotran/reduced` against a
+numeric key and threw ClassCastException -- so `(into (sorted-map)
+{5 :e})` failed inside `reduce` while `(assoc (sorted-map) 5 :e)`
+worked, and `println` of a sorted map overflowed the stack for a
+different reason, the new class names having no supertype chain for
+`print-method` to walk. One `is_reduced` helper, which never probes a
+sorted map, replaced the four probes; `host_super` learned the two
+tree classes. A representation trick that leans on "any map" has to be
+revisited whenever a new kind of map arrives.
