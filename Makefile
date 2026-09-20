@@ -133,7 +133,7 @@ $(B) $(BT):
 # binary depends on it, order-only, so nothing is compiled against a
 # module the other compiler wrote.
 FCSTAMP = $(B)/.built-with-$(FCNAME)
-$(FCSTAMP): | $(B) $(FCSTAMP)
+$(FCSTAMP): | $(B)
 	rm -rf $(B)/*.o $(B)/*.mod $(B)/.built-with-* $(BT)
 	mkdir -p $(BT)
 	touch $@
