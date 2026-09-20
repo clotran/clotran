@@ -157,6 +157,7 @@ module Eval
   integer, parameter :: B_AGENTERROR = 263, B_AGENTRESTART = 264
   integer, parameter :: B_AGENTDISPATCH = 265
   integer, parameter :: B_LATCHDOWN = 266, B_LATCHCOUNT = 267
+  integer, parameter :: B_CAS = 305
   integer, parameter :: B_SETVALIDATOR = 268, B_GETVALIDATOR = 269
   integer, parameter :: B_RTPRINT = 270
   integer, parameter :: B_NANOTIME = 271, B_MILLIS = 272
@@ -2660,6 +2661,15 @@ contains
     last_error = msg
     call vs_leave(base)
   end subroutine raise_class
+
+  ! identical?: the same slot for a reference, the same value for an
+  ! immediate.
+  function same_object(a, b) result(yes)
+    type(gc_value), intent(in) :: a, b
+    logical :: yes
+    yes = a%tag == b%tag .and. a%ref == b%ref .and. a%ival == b%ival
+    if (yes .and. a%rval /= b%rval) yes = (a%rval /= a%rval .and. b%rval /= b%rval)
+  end function same_object
 
   ! Clojure's own wording, from ArityException: "Wrong number of
   ! args (2) passed to: user/f". The count is what a reader of
@@ -7243,6 +7253,19 @@ contains
              end block
           else
              out = gc_slot(a, 1)
+          end if
+       end if
+    case (B_CAS)
+       ! Atom.compareAndSet: the new value goes in only if the current
+       ! one is IDENTICAL to the old -- the same slot, or the same
+       ! immediate -- which is how a promise delivers exactly once.
+       a = strip_meta(gcv_nth(args, 0))
+       out = gc_bool(.false.)
+       if (gc_kind(a) == OBJ_ATOM .and. n >= 3) then
+          b = gc_slot(a, 1)
+          if (same_object(b, gcv_nth(args, 1))) then
+             call gc_set_slot(a, 1, gcv_nth(args, 2))
+             out = gc_bool(.true.)
           end if
        end if
     case (B_SETERRMODE, B_SETERRHANDLER)

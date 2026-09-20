@@ -459,7 +459,7 @@
        hm("", "resetMeta", B_RESETMETA, "clotran-reset-meta"), &
        hm("", "setMeta", B_RESETMETA, "clotran-reset-meta"), &
        hm("", "set", B_SETVAL, "clotran-set-val") ]
-  type(hm), parameter :: HOST_METHODS_2(59) = [ &
+  type(hm), parameter :: HOST_METHODS_2(60) = [ &
        hm("", "reset", B_SETVAL, "clotran-set-val"), &
        hm("", "bindRoot", B_SETVAL, "clotran-set-val"), &
        hm("", "swap", B_SWAPVAL, "clotran-swap-val"), &
@@ -468,6 +468,7 @@
   ! A latch is a counter when there is one thread; .await has nothing to wait for.
        hm("", "countDown", B_LATCHDOWN, "clotran-latch-down"), &
        hm("", "getCount", B_LATCHCOUNT, "clotran-latch-count"), &
+       hm("", "compareAndSet", B_CAS, "compare-and-set!"), &
        hm("", "await", B_ALWAYS_NIL, "clotran-nil"), &
        hm("", "setErrorMode", B_SETERRMODE, "set-error-mode!"), &
        hm("", "getErrorMode", B_GETERRMODE, "error-mode"), &
@@ -523,5 +524,5 @@
        hm("", "end", B_RE_END, "clotran-re-end"), &
        hm("", "groupCount", B_RE_GROUPCOUNT, "re-group-count"), &
        hm("", "group", B_RE_GROUP, "re-group") ]
-  type(hm), parameter :: HOST_METHODS(146) = [HOST_METHODS_1, HOST_METHODS_2]
+  type(hm), parameter :: HOST_METHODS(147) = [HOST_METHODS_1, HOST_METHODS_2]
 

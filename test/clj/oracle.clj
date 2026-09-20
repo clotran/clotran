@@ -1575,3 +1575,6 @@
 (pos? (System/currentTimeMillis))
 
 (number? (read-string (re-find #"[0-9.]+" (with-out-str (time nil)))))
+
+;; Atom.compareAndSet, which core.clj's compare-and-set! is; identity, not equality
+(let [a (atom 1)] [(compare-and-set! a 1 2) @a (compare-and-set! a 1 3) @a])
