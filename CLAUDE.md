@@ -163,6 +163,8 @@ it up.
   When you make something work, add the form there, not a hand-typed
   check: 14 of the 477 hand-typed expectations turned out to be
   clotran's answer, not Clojure's.
+- `scripts/bench` -- the same forms timed on a warmed JVM (`clj`) and on
+  clotran, with the ratio. Speed claims cite this, not a feeling.
 - `make crosscheck` -- the gate.
 
 ## Gotchas that have cost real time

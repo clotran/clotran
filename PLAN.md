@@ -263,7 +263,9 @@ Staged so each step is checkable:
    (DEVIATIONS 7 resolved), and a suspended context is now data,
    which is what a green thread and a paused debugger frame need.
    Same speed or better: reduce over 100000 9.9s -> 6.6s, `into`
-   17s -> 12.8s, loop/recur unchanged at 25 us. Still to do in this
+   17s -> 12.8s, loop/recur unchanged at 25 us -- and then -O2 (the
+   build had none) took each by 2.7x again; `scripts/bench` has the
+   JVM ratios. Still to do in this
    stage: intermediates move to the operand stack; `roots(:)` leaves every
    signature; module globals move into a context type; source
    positions on nodes.

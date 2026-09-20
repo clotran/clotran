@@ -3396,15 +3396,25 @@ contains
   ! The *Exact family throws where ordinary arithmetic wraps. Detected
   ! by dividing back out rather than by the wrapped sign, which is
   ! undefined behaviour to rely on.
+  ! Decided BEFORE multiplying, by range: signed overflow is undefined
+  ! in Fortran as in C, and at -O2 a check that multiplies first and
+  ! divides back is folded away -- (multiply-exact Long/MAX_VALUE 2)
+  ! stopped throwing the day optimisation was turned on.
   logical function mul_overflows(a, b) result(bad)
     integer(gc_ip), intent(in) :: a, b
-    integer(gc_ip) :: p
+    integer(gc_ip), parameter :: big = huge(0_gc_ip), small = -huge(0_gc_ip) - 1_gc_ip
     bad = .false.
     if (a == 0_gc_ip .or. b == 0_gc_ip) return
-    p = a * b
-    bad = (p / b /= a)
-    if (a == -1_gc_ip .and. b == -huge(b) - 1_gc_ip) bad = .true.
-    if (b == -1_gc_ip .and. a == -huge(a) - 1_gc_ip) bad = .true.
+    if (a > 0_gc_ip .and. b > 0_gc_ip) then
+       bad = a > big / b
+    else if (a > 0_gc_ip) then
+       bad = b < small / a
+    else if (b > 0_gc_ip) then
+       bad = a < small / b
+    else
+       bad = (a == small .or. b == small)
+       if (.not. bad) bad = (-a) > big / (-b)
+    end if
   end function mul_overflows
 
   ! One Math call. `k` is the Math row's index in hosttable.inc.
@@ -3537,20 +3547,19 @@ contains
        out = gc_int(int(exponent(x) - 1, 8))
     case (35); out = gc_real(scale(x, int(y)))
     case (37)
-       ir = ia + ib
-       if ((ia > 0 .and. ib > 0 .and. ir < 0) .or. &
-            (ia < 0 .and. ib < 0 .and. ir >= 0)) then
+       ! by range, before the add (see mul_overflows)
+       if ((ib > 0 .and. ia > huge(ia) - ib) .or. &
+            (ib < 0 .and. ia < -huge(ia) - 1_gc_ip - ib)) then
           call fail("integer overflow")
        else
-          out = gc_int(ir)
+          out = gc_int(ia + ib)
        end if
     case (38)
-       ir = ia - ib
-       if ((ia >= 0 .and. ib < 0 .and. ir < 0) .or. &
-            (ia < 0 .and. ib > 0 .and. ir >= 0)) then
+       if ((ib < 0 .and. ia > huge(ia) + ib) .or. &
+            (ib > 0 .and. ia < -huge(ia) - 1_gc_ip + ib)) then
           call fail("integer overflow")
        else
-          out = gc_int(ir)
+          out = gc_int(ia - ib)
        end if
     case (39)
        if (mul_overflows(ia, ib)) then

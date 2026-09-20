@@ -158,10 +158,12 @@ continuation stack (exec.inc, `run`), so a Clojure call no longer
 costs Fortran stack. Measured: a non-tail-recursive function reaches
 100,000 deep and returns; the JVM's default stops near 11,000. The
 limit is now a FRAME COUNT, 200,000 by default, `CLOTRAN_MAX_FRAMES`
-to change it, and it bounds the call stack too: a tail-recursive
-function without `recur` overflows at it, as on the JVM, because a
-call in tail position reuses the continuation frame but keeps the
-caller on the call stack so a trace names every call. What still
+to change it, and it bounds the call stack too. There is NO tail-call
+optimisation, because Clojure has none: a tail-recursive function
+without `recur` overflows at the limit, exactly as on the JVM, only
+later. What a call in tail position reuses is the continuation frame
+(memory), while the caller stays on the call stack, so a trace names
+every call and the count is what overflows. `recur` is the loop. What still
 nests on the Fortran stack is a native calling back into Clojure --
 forcing a lazy seq, a multimethod's dispatch, a def's value -- and
 `CLOTRAN_MAX_DEPTH` (2200) still bounds that. A rendered trace stops

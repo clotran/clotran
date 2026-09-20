@@ -2578,3 +2578,36 @@ And a runaway recursion at a 1,000,000-frame limit printed a
 26-megabyte trace, built by quadratic concatenation, which is what
 was actually slow: the limit is 200,000 now and a rendered trace
 stops at 128 frames.
+
+## -O2, and the check that optimisation folded away
+
+The build had no optimisation flag at all: `-g` and nothing else,
+from the first Makefile on. Adding `-O2` gave 2.7x across the board
+-- reduce over 100,000 from 6.6s to 2.4s, a loop/recur iteration from
+25us to 9us, startup from 2.3s to 1.0s -- for nothing. The profile
+had said so: the top entries were `gc_vec`, `gc_nil`, `gc_vec_len`,
+`gc_slot`, trivial accessors that only an optimiser inlines.
+
+It cost one bug, and the oracle caught it in the same run:
+`(multiply-exact Long/MAX_VALUE 2)` stopped throwing. `mul_overflows`
+multiplied and divided back; signed overflow is undefined in Fortran
+as in C, and at -O2 the compiler folded `(a*b)/b /= a` to false. The
+add and subtract checks tested the sign of the wrapped sum, the same
+mistake. All three now decide by RANGE before the operation, which is
+defined everywhere and what Math.addExact's own source does too.
+
+`scripts/bench` runs the same forms through a warmed `clj` and
+through clotran and prints the ratio, because James was right that
+"two orders slower" was a guess: it is two to four, and the biggest
+gap, `(reduce + (range n))` at 8,800x, is the JVM's specialised
+range reduce against our seq walk, not the interpreter alone.
+
+What the profile says is next, in order: every call builds its
+argument vector as a PERSISTENT vector, and this vector has no tail
+optimisation, so each `conj` allocates and copies a 32-slot node --
+95 heap allocations per reduce step, most of them that. Arguments to
+a closure can go straight into its frame; arguments to a native can
+fill one node. The raw-vector pool mallocs each vector's storage
+separately (`allocate(items(n))`), which is the malloc/free in the
+profile; a slab would remove it. Both are constant factors, and
+constant factors are all an interpreter has until the JIT.

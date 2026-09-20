@@ -19,7 +19,7 @@ FC = gfortran
 # lldb finds it there.
 B = build
 .DEFAULT_GOAL := all
-FCFLAGS = -g -I$(B) -Isrc/f -J$(B) $(FCFLAGS_$(notdir $(FC)))
+FCFLAGS = -g -O2 -I$(B) -Isrc/f -J$(B) $(FCFLAGS_$(notdir $(FC)))
 LDFLAGS = $(FCFLAGS_$(notdir $(FC)))
 
 # Fortran 2018 made every procedure recursive by default. flang follows

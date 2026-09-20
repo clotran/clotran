@@ -1,0 +1,41 @@
+#!/usr/bin/env bb
+;; The same forms timed on the JVM (clj, warmed) and on clotran, and the
+;; ratio. Absolute numbers on their own flatter or damn depending on the
+;; machine; the ratio is what "two orders slower" has to be measured as.
+;;
+;;   scripts/bench            all forms below
+;;   scripts/bench '(form)'   one form
+(require '[babashka.process :as p] '[clojure.string :as str])
+(def repo (-> *file* java.io.File. .getAbsoluteFile .getParentFile .getParentFile str))
+(def forms
+  (or (seq *command-line-args*)
+      ["(reduce + (range 100000))"
+       "(loop [i 0 acc 0] (if (< i 200000) (recur (inc i) (+ acc i)) acc))"
+       "(count (into [] (map inc (range 100000))))"
+       "((fn fib [n] (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))) 20)"
+       "((fn f [n] (if (zero? n) 0 (inc (f (dec n))))) 10000)"
+       "(count (str (vec (range 20000))))"
+       "(count (sort (map #(mod (* % 7919) 10007) (range 50000))))"
+       "(reduce (fn [m i] (assoc m i (* i i))) {} (range 20000))"]))
+(defn timed-script [warm?]
+  (str "(in-ns 'user)\n"
+       (str/join "\n" (for [f forms]
+                        (str (when warm? (str "(dotimes [_ 3] " f ")\n"))
+                             "(let [t0 (System/nanoTime) v " f " t1 (System/nanoTime)] (println (/ (- t1 t0) 1e6)))")))
+       "\n"))
+(defn run-lines [& cmd]
+  (let [r (apply p/shell {:dir repo :in "" :out :string :err :string :continue true} cmd)]
+    (->> (str/split-lines (:out r))
+         (remove #(or (str/starts-with? % "note:") (str/starts-with? % "user=>") (str/blank? %)))
+         (map #(Double/parseDouble (str/trim (str/replace % "user=> " ""))))
+         vec)))
+(let [jvm-file (str repo "/test/clj/.bench-jvm.clj")
+      cl-file (str repo "/test/clj/.bench-clotran.clj")]
+  (spit jvm-file (timed-script true))
+  (spit cl-file (timed-script false))
+  (let [jvm (run-lines "clj" "-M" jvm-file)
+        cl (run-lines "./clotran" "src/clj/clojure/core.clj" cl-file)]
+    (.delete (java.io.File. jvm-file)) (.delete (java.io.File. cl-file))
+    (println (format "%-72s %10s %10s %8s" "form" "jvm ms" "clotran ms" "ratio"))
+    (doseq [[f j c] (map vector forms jvm cl)]
+      (println (format "%-72s %10.2f %10.1f %8.0fx" (subs f 0 (min 72 (count f))) j c (/ c j))))))
