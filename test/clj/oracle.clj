@@ -1617,3 +1617,8 @@
 @(future (+ @(future 1) @(future 2)))
 
 (count (map deref (doall (map #(future (* % %)) (range 100)))))
+
+;; (def name "doc" init): the docstring is :doc metadata, not the value
+(do (def dx "a doc" 1) [dx (:doc (meta #'dx))])
+
+(do (def dy "just a value") dy)

@@ -1002,7 +1002,7 @@
     integer :: base, flags
 
     nd = gc_nil()
-    base = vs_enter(6)
+    base = vs_enter(7)
     call vs_set(base + 1, rest)
     call vs_set(base + 2, sc)
     nm = gcl_first(rest)
@@ -1044,13 +1044,29 @@
     end if
     call vs_set(base + 5, var)
 
+    ! (def name "doc" init): DefExpr's four-element form. The docstring
+    ! joins the metadata as :doc and the init is what follows it -- it
+    ! used to BE the init, and (def x "doc" 1) bound the string.
+    call vs_set(base + 7, gcl_rest(vs_get(base + 1), [vs_get(base + 1)]))
+    if (gcl_count(vs_get(base + 1)) == 3) then
+       c = gcl_first(vs_get(base + 7))
+       if (c%tag == GCT_STR) then
+          if (md%tag == GCT_NIL) md = gca_empty([vs_get(base + 1), vs_get(base + 7)])
+          call vs_set(base + 4, md)
+          md = gca_assoc(vs_get(base + 4), gc_key("doc", [vs_get(base + 1), vs_get(base + 4), vs_get(base + 7)]), &
+               c, [vs_get(base + 1), vs_get(base + 4), vs_get(base + 7)])
+          call vs_set(base + 4, md)
+          call vs_set(base + 7, gcl_rest(vs_get(base + 7), [vs_get(base + 1)]))
+       end if
+    end if
+
     flags = 0
     if (is_macro) flags = 2
     kids = gcv_empty([vs_get(base + 1), vs_get(base + 5)])
     call vs_set(base + 6, kids)
-    if (gcl_count(rest) > 1) then
+    if (gcl_count(vs_get(base + 7)) > 0) then
        flags = flags + 1
-       c = analyze(gcl_first(gcl_rest(vs_get(base + 1), [vs_get(base + 1)])), vs_get(base + 2))
+       c = analyze(gcl_first(vs_get(base + 7)), vs_get(base + 2))
        if (has_error) then
           call vs_leave(base)
           return
@@ -1407,6 +1423,31 @@
     call vs_leave(base)
   end function analyze_recur
 
+  ! ns/name as an unbound Var in ns, created if need be; nil for a bare
+  ! name, which has no namespace to be unbound in.
+  function intern_unbound(sym, roots) result(var)
+    type(gc_value), intent(in) :: sym
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: var, ns, nm
+    character(len=:), allocatable :: t
+    integer :: sl, base
+    var = gc_nil()
+    t = gc_ref_text(sym%ref)
+    sl = index(t, "/")
+    if (sl <= 1 .or. sl >= len(t)) return
+    base = vs_enter(2)
+    ns = gcn_find_or_create(t(1:sl-1), roots)
+    call vs_set(base + 1, ns)
+    nm = gc_sym(t(sl+1:), [roots, vs_get(base + 1)])
+    call vs_set(base + 2, nm)
+    var = gcn_lookup(vs_get(base + 1), vs_get(base + 2))
+    if (.not. gcn_is_var(var)) then
+       var = gcn_intern(vs_get(base + 1), vs_get(base + 2), gc_nil(), [roots, vs_get(base + 1), vs_get(base + 2)])
+       call gc_set_i1(var, 0)
+    end if
+    call vs_leave(base)
+  end function intern_unbound
+
   ! (var sym) -> the Var itself, resolved now.
   recursive function analyze_varq(rest, sc) result(nd)
     type(gc_value), intent(in) :: rest, sc
@@ -1424,9 +1465,18 @@
     end if
     var = resolve_var(sym, gc_nil())
     if (.not. gcn_is_var(var)) then
-       call fail("Unable to resolve var: " // gc_ref_text(sym%ref))
-       call vs_leave(base)
-       return
+       ! A QUALIFIED name that does not resolve is interned unbound, in
+       ! its namespace, created if need be -- the var-quote's half of
+       ! deviation 32. core.clj's default-data-readers holds
+       ! #'clojure.uuid/default-uuid-reader, and clojure.uuid is a
+       ! skipped library: the map loads, and only reading a #uuid
+       ! literal fails.
+       var = intern_unbound(sym, [vs_get(base + 1), vs_get(base + 2)])
+       if (.not. gcn_is_var(var)) then
+          call fail("Unable to resolve var: " // gc_ref_text(sym%ref))
+          call vs_leave(base)
+          return
+       end if
     end if
     call vs_set(base + 3, var)
     nd = const_node(vs_get(base + 3), [vs_get(base + 1), vs_get(base + 2)])

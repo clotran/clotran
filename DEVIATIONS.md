@@ -975,6 +975,14 @@ so failing at analysis would stop core.clj at that form. Deferring keeps
 the file loading and moves the failure to the call, which is where the
 old walker reported it too.
 
+The var-quote has the same rule. `#'clojure.uuid/default-uuid-reader`
+in core.clj's `default-data-readers` names a Var in a library that is
+skipped, and Clojure would refuse the form; here a qualified name that
+does not resolve is interned UNBOUND in its namespace, created if
+need be, so the map loads and only reading a `#uuid` literal fails.
+(That form's init was never analysed before `def` learned its
+docstring form, which is how this stayed hidden.)
+
 **Removal**: either load those libraries (they are JVM-bound) or
 accept the form as-is; the honest end state is that `slurp` is defined
 in terms of a host reader clotran supplies.
