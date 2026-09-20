@@ -1741,3 +1741,10 @@
 (reduce-kv (fn [acc k v] (conj acc k)) [] (sorted-map 3 :c 1 :a))
 
 (map key (subseq (sorted-map 1 :a 2 :b 3 :c 4 :d) >= 2 <= 3))
+
+;; #(...) parameters are gensyms: a p1 of the program's own is not shadowed
+(let [p1 even?] ((fn [& args] (every? #(p1 %) args)) 2 4))
+
+((every-pred even? number?) 2 4 6 8)
+
+((some-fn even?) 1 3 5 6)

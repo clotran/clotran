@@ -258,7 +258,7 @@ contains
     ! without it -- what matters here is that it comes back at all.
     call round("6f. metadata inside a list: ", "(a ^:m b c)", "(a b c)")
     call round("6g. an anonymous fn inside a list: ", "(a #(+ % 1) b)", &
-         "(a (fn* [p1] (+ p1 1)) b)")
+         "(a (fn* [p1__1#] (+ p1__1# 1)) b)")
     call ok("6h. ...and the heap audits clean: ", gc_check_heap() == "")
     gc_torture = .false.
   end subroutine check_nested_literals_under_torture

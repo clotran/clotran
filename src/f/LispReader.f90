@@ -60,6 +60,7 @@ module LispReader
   type(src_file), save :: files(MAX_FILES)
   integer, save :: n_files = 0
   integer, save :: cur_file = 0
+  integer, save :: anon_seq = 0   ! the suffix the last #(...) read gave its parameters
   ! Reader conditionals. A #?(...) that selects nothing is another kind
   ! of space, like #_ (see skip_ignorables), and #?@ splices a
   ! collection into the enclosing one. Whoever called read_form --
@@ -501,8 +502,13 @@ contains
     ! Same defect read_set had.
     params = gcv_empty(roots)
     call vs_set(base + 2, params)
+    ! Each #(...) gets a fresh suffix, so its parameters are gensyms
+    ! as Clojure's are (p1__1#) and cannot shadow a `p1` of the
+    ! program's own -- every-pred's, for one, whose #() read the
+    ! predicate as its own argument.
+    anon_seq = anon_seq + 1
     do i = 1, maxn
-       write(nm, '(A,I0)') "p", i
+       write(nm, '(A,I0,A,I0,A)') "p", i, "__", anon_seq, "#"
        sym = gc_sym(trim(nm), roots)
        call vs_set(base + 3, sym)
        params = gcv_conj(vs_get(base + 2), vs_get(base + 3), roots)
@@ -513,7 +519,8 @@ contains
        call vs_set(base + 3, sym)
        params = gcv_conj(vs_get(base + 2), vs_get(base + 3), roots)
        call vs_set(base + 2, params)
-       sym = gc_sym("pr", roots)
+       write(nm, '(A,I0,A)') "rest__", anon_seq, "#"
+       sym = gc_sym(trim(nm), roots)
        call vs_set(base + 3, sym)
        params = gcv_conj(vs_get(base + 2), vs_get(base + 3), roots)
        call vs_set(base + 2, params)
@@ -592,13 +599,15 @@ contains
        if (len(t) < 1) return
        if (t(1:1) /= "%") return
        if (t == "%") then
-          out = gc_sym("p1", roots)
+          write(nm, '(A,I0,A)') "p1__", anon_seq, "#"
+          out = gc_sym(trim(nm), roots)
        else if (t == "%&") then
-          out = gc_sym("pr", roots)
+          write(nm, '(A,I0,A)') "rest__", anon_seq, "#"
+          out = gc_sym(trim(nm), roots)
        else
           read(t(2:), *, iostat=ios) num
           if (ios == 0) then
-             write(nm, '(A,I0)') "p", num
+             write(nm, '(A,I0,A,I0,A)') "p", num, "__", anon_seq, "#"
              out = gc_sym(trim(nm), roots)
           end if
        end if
