@@ -61,7 +61,10 @@ program clotran
      end if
      flush(6)
      read(*, '(A)', iostat=ios, size=size_read, advance='no') buf
-     if (ios < 0 .and. size_read == 0) exit   ! EOF
+     ! End of file, or a read error -- gfortran reports a read AFTER the
+     ! end as a positive code. An empty line is end of RECORD with size
+     ! 0, which is a line, not the end: it used to quit the REPL.
+     if (is_iostat_end(ios) .or. ios > 0) exit
      line = trim(buf(1:max(size_read, 0)))
      if (len(pending) == 0 .and. len(line) == 0) cycle
      if (len(pending) == 0) then
