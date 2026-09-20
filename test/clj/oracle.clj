@@ -1541,6 +1541,34 @@
 [(instance? clojure.lang.IReduceInit (range 3)) (instance? clojure.lang.IReduceInit [1]) (instance? clojure.lang.IReduceInit (list 1))
  (instance? clojure.lang.IReduceInit (map inc [1])) (= (class (range 3)) clojure.lang.LongRange) (seq? (range 3)) (counted? [1])]
 
+;; chunked seqs: a vector's seq and a range hand out chunks, map and
+;; friends build ChunkedConses through a chunk buffer, as on the JVM
+[(chunked-seq? (seq [1 2 3])) (chunked-seq? (range 5)) (chunked-seq? (seq (range 5))) (chunked-seq? (map inc [1 2]))
+ (chunked-seq? (seq (map inc (range 100)))) (chunked-seq? (list 1 2)) (chunked-seq? (seq "ab")) (chunked-seq? nil)]
+
+[(count (chunk-first (seq [1 2 3]))) (.nth (chunk-first (seq [1 2 3])) 1) (count (chunk-first (seq (range 100))))
+ (count (chunk-first (seq (range 10)))) (seq (chunk-rest (seq (range 40)))) (chunk-next (seq [1 2]))]
+
+[(into [] (map inc (range 100))) (vec (map inc (range 33))) (filter even? (range 70)) (keep #(when (odd? %) %) (range 50))
+ (for [x (range 40) :when (even? x)] (* x x)) (map-indexed vector (range 35)) (map + (range 10) (range 5))]
+
+[(reduce + (map inc (range 100))) (count (concat (range 40) [1 2])) (last (map inc (range 100))) (nth (map inc (range)) 100)
+ (take 3 (map inc (range))) (first (filter #(> % 40) (range))) (rest (seq (map inc [1 2 3]))) (next (seq (map inc [1])))]
+
+;; a seq whose tail is not realised hashes by identity, and map's own
+;; chunk-cons is handed an unrealised rest, so this is the common case
+(expect-diff "DEVIATIONS 35: an unrealised seq hashes by identity")
+(= (hash (seq (map inc [1 2 3]))) (hash [2 3 4]))
+
+;; ...while one that IS realised to the end hashes as the sequence
+[(= (hash (doall (seq (map inc [1 2 3])))) (hash [2 3 4])) (= (hash (seq [2 3 4])) (hash (list 2 3 4)))]
+
+[(= (map inc [1 2 3]) [2 3 4]) (= (seq (map inc (range 40))) (range 1 41))
+ (pr-str (map inc (range 5))) (str (seq (map inc [1 2]))) (empty (seq (map inc [1 2]))) (with-out-str (doseq [x (range 40)] (print x)))]
+
+[(count (chunk-first (seq (range 0.5 10.5)))) (map inc (range 0.5 4)) (map inc (range 10 0 -3)) (map inc (range 1/3 1 1/3))
+ (sequential? (seq (map inc [1 2]))) (seq? (seq (map inc [1 2]))) (= (class (seq (map inc (range 5)))) clojure.lang.ChunkedCons)]
+
 ;; the clock exists (ClojureScript has system-time)
 (pos? (System/nanoTime))
 

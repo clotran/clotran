@@ -131,6 +131,11 @@ module GC
   integer, parameter, public :: LAZY_PENDING = 0
   integer, parameter, public :: LAZY_CONS    = 1
   integer, parameter, public :: LAZY_EMPTY   = 2
+  ! DELEGATING: the thunk returned a seq that must stay itself -- a
+  ! ChunkedCons, whose chunk is lost if it is split into a head and a
+  ! tail. Slot 2 holds that seq and `seq` answers it, which is what
+  ! LazySeq.seq does on the JVM (it returns `s`, it does not wrap it).
+  integer, parameter, public :: LAZY_DELEG   = 3
   integer, parameter, public :: OBJ_ENV     = 7  ! 1=bindings 2=outer; i1=defining ns
   ! A value CARRYING metadata: slot 1 = the value, slot 2 = the
   ! metadata map. A wrapper rather than a field, because gc_value
@@ -256,6 +261,11 @@ module GC
   ! Not OBJ_NODE: Fortran is case-insensitive and obj_node is the pool's
   ! derived type.
   integer, parameter, public :: OBJ_AST       = 30
+  ! Chunked seqs (Eval.f90, chunks): a window onto a backing run or
+  ! vector; a buffer being filled; a ChunkedCons of a chunk and a rest.
+  integer, parameter, public :: OBJ_CHUNK     = 31 ! 1=backing; i1=offset i2=end
+  integer, parameter, public :: OBJ_CHUNKBUF  = 32 ! 1=run; i1=count
+  integer, parameter, public :: OBJ_CHUNKSEQ  = 33 ! 1=chunk 2=more 3=meta
   integer, parameter, public :: OBJ_HAMT      = 11 ! 1=root run; i1=count
   integer, parameter, public :: OBJ_HAMT_LEAF = 12 ! 1=key 2=val
   ! Slot 3 was reserved for a per-Var dynamic stack; the dynamic
@@ -1561,8 +1571,10 @@ contains
     ! seq used as a key keeps the old identity behaviour; equality
     ! only consults the hook when BOTH sides are structural, so the
     ! two stay in step.
+    ! A ChunkedCons IS here: its own chunk is already realised, and the
+    ! hook checks whether the rest is before folding (DEVIATIONS 35).
     is_structural_kind = (k == OBJ_CONS .or. k == OBJ_VECTOR .or. &
-         k == OBJ_MAP .or. k == OBJ_SET .or. k == OBJ_SEQ)
+         k == OBJ_MAP .or. k == OBJ_SET .or. k == OBJ_SEQ .or. k == OBJ_CHUNKSEQ)
   end function is_structural_kind
 
   subroutine gc_global_keep(h, v)

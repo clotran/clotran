@@ -2770,3 +2770,51 @@ a lazy seq it is the seq: `map` makes a lazy cell, a thunk closure
 and a cons per element where the JVM's chunked seqs do 32 at a time
 through a chunk buffer. Chunked seqs are the next faithful step for
 pipelines; `sort` at 616x is a comparator call per comparison.
+
+## Chunked seqs, and the lazy seq that ate the chunk
+
+`map`, `filter`, `keep`, `for` and `doseq` in core.clj all have a
+chunked branch: ask `chunked-seq?`, take 32 elements through a chunk
+buffer, and hand back `(chunk-cons (chunk b) (recur-on (chunk-rest
+s)))`. Without the host types behind it that branch is dead and every
+element costs a lazy cell, a thunk closure and a cons -- which is why
+`into` over a mapped range was 1,000x the JVM when everything else had
+come down to 30x.
+
+The host side is four kinds and six members: OBJ_CHUNK (a window
+[i1,i2) onto a backing run or vector -- a vector's seq chunks IN
+PLACE, no copy), OBJ_CHUNKBUF (`ChunkBuffer.add`, `.chunk`),
+OBJ_CHUNKSEQ (`ChunkedCons`), and `chunkedFirst`/`chunkedMore`/
+`chunkedNext` on the seqs that have chunks: a vector's seq view and a
+range. A range chunks by walking its arithmetic into a fresh run and
+leaving a pending tail for the rest, so `(map inc (range 1e6))` never
+materialises a cell.
+
+Then it did nothing, and the reason took a probe to find. `map`
+returns `(lazy-seq ... (chunk-cons ...))`, and `gce_force` SPLIT
+whatever the thunk returned into the lazy cell's head and tail slots.
+A ChunkedCons split that way is a plain cons: `chunked-seq?` on it is
+false, so the next stage of the pipeline took the one-at-a-time
+branch and chunking never propagated past the first collection. On
+the JVM `LazySeq.seq()` returns the realised seq ITSELF -- it
+delegates rather than wrapping -- so a lazy seq over a ChunkedCons IS
+a ChunkedCons to everything downstream. LAZY_DELEG is that: slot 2
+holds the realised seq and `to_seq` answers it.
+
+Measured, against a warmed JVM: `(count (into [] (map inc (range
+100000))))` 1,014x -> 514x, `(sort (map ...))` 616x -> 332x, plain
+recursion 32x -> 23x. The derived suite did NOT move -- 2170 pass,
+235 fail, 370 error, exactly as before -- because what chunking
+changes is how many cells a pipeline allocates, not what it answers.
+Nineteen oracle cases pin the answers instead, including the shapes
+where a chunk boundary could hide a bug: 33 elements through a
+32-wide chunk, a partly consumed chunk, a double range, a ratio
+range, `map` over two collections, and an infinite range.
+
+One thing it exposed rather than caused: hashing. A ChunkedCons is
+equal to a vector of the same elements, and until now it hashed by
+identity, like every lazy seq (DEVIATIONS 35). It hashes structurally
+now WHEN the rest is already realised, and `seq_realised_p` checks
+before folding -- a partly realised seq would otherwise hash its
+first 32 elements and claim to be the whole sequence, which is the
+silent wrong answer rather than the loud one.

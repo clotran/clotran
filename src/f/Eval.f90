@@ -165,6 +165,8 @@ module Eval
        B_STE_FILE = 277, B_STE_LINE = 278
   integer, parameter :: B_SLURP = 279, B_CS_ENTROPY = 280, B_CS_READOPT = 281, B_CS_DGLD = 282, B_CS_SOLVOUT = 283
   integer, parameter :: B_CLASSOF = 284, B_IDHASH = 285, B_REDUCEINIT = 286
+  integer, parameter :: B_CHUNK_ADD = 287, B_CHUNK_OF = 288, B_CHUNK_FIRST = 289, &
+       B_CHUNK_MORE = 290, B_CHUNK_NEXT = 291, B_CHUNK_DROP = 292
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -2030,6 +2032,16 @@ contains
        end if
        call vs_set(base + 3, thunk)
        out = gc_obj(OBJ_SB, [vs_get(base + 3)], [vs_get(base + 3)])
+    else if (cname == "clojure.lang.ChunkBuffer") then
+       ! (ChunkBuffer. capacity): a run to fill, count in i1
+       thunk = gc_vec(max(int_of(nth_or_nil(vs_get(base + 1), 0)), 1), [vs_get(base + 1)])
+       call vs_set(base + 3, thunk)
+       out = gc_obj(OBJ_CHUNKBUF, [vs_get(base + 3)], [vs_get(base + 3)])
+       call gc_set_i1(out, 0)
+    else if (cname == "clojure.lang.ChunkedCons") then
+       ! (ChunkedCons. chunk more)
+       out = gc_obj(OBJ_CHUNKSEQ, [nth_or_nil(vs_get(base + 1), 0), nth_or_nil(vs_get(base + 1), 1), gc_nil()], &
+            [vs_get(base + 1)])
     else if (cname == "clojure.lang.MultiFn") then
        ! (new MultiFn name dispatch-fn default hierarchy). The
        ! hierarchy is accepted and ignored -- see DEVIATIONS.md 7.
@@ -2741,6 +2753,12 @@ contains
 
     do while (gc_kind(vs_get(base + 2)) == OBJ_LAZY)
        call gce_force(vs_get(base + 2))
+       if (gc_i1(vs_get(base + 2)) == LAZY_DELEG) then
+          call gc_set_slot(vs_get(base + 1), 2, gc_slot(vs_get(base + 2), 2))
+          call gc_set_i1(vs_get(base + 1), LAZY_DELEG)
+          call vs_leave(base)
+          return
+       end if
        if (gc_i1(vs_get(base + 2)) == LAZY_CONS) then
           call gc_set_slot(vs_get(base + 1), 2, gc_slot(vs_get(base + 2), 2))
           call gc_set_slot(vs_get(base + 1), 3, gc_slot(vs_get(base + 2), 3))
@@ -2754,6 +2772,18 @@ contains
     end do
 
     r = vs_get(base + 2)
+    if (gc_kind(r) == OBJ_CHUNKSEQ) then
+       ! A CHUNK SURVIVES THE LAZY SEQ. map, filter, keep and for all
+       ! return (lazy-seq ... (chunk-cons (chunk b) ...)), and splitting
+       ! that into a head and a tail here is what made every one of them
+       ! answer a plain lazy seq: chunked-seq? was then false on it, so
+       ! the next map down the pipeline took the one-at-a-time branch and
+       ! the chunking never propagated past the first collection.
+       call gc_set_slot(vs_get(base + 1), 2, r)
+       call gc_set_i1(vs_get(base + 1), LAZY_DELEG)
+       call vs_leave(base)
+       return
+    end if
     if (gcl_is(r)) then
        if (gcl_count(r) == 0) then
           call gc_set_i1(vs_get(base + 1), LAZY_EMPTY)
@@ -3273,7 +3303,7 @@ contains
     out = vs_get(base + 1)
 
     form = strip_meta(vs_get(base + 1))
-    if (gc_kind(form) == OBJ_LAZY .or. gc_kind(form) == OBJ_SEQ) &
+    if (gc_kind(form) == OBJ_LAZY .or. gc_kind(form) == OBJ_SEQ .or. gc_kind(form) == OBJ_CHUNKSEQ) &
          form = seq_to_list(form, [vs_get(base + 1)])
     call vs_set(base + 2, form)
     if (.not. gcl_is(vs_get(base + 2))) then
@@ -3358,7 +3388,7 @@ contains
        inner = gca_empty([roots, vs_get(base + 1)])
        call vs_set(base + 2, inner)
        out = gc_obj(OBJ_SET, [vs_get(base + 2)], [roots, vs_get(base + 2)])
-    case (OBJ_CONS, OBJ_SEQ, OBJ_LAZY)
+    case (OBJ_CONS, OBJ_SEQ, OBJ_LAZY, OBJ_CHUNKSEQ)
        ! Every seq empties to (), the way PersistentList.EMPTY is what
        ! ASeq.empty answers.
        out = gcl_empty([roots, vs_get(base + 1)])
@@ -4151,6 +4181,226 @@ contains
   ! One cell of (range lo hi step): head lo, and a NATIVE pending tail
   ! (OBJ_LAZY, i2 = 1) holding [lo+step hi step], which gce_force turns
   ! into the next cell. No closure, no environment, no form.
+  ! --- chunks --------------------------------------------------------
+  !
+  ! core.clj's map, filter, keep, for and doseq process a chunked seq
+  ! 32 elements at a time through a chunk buffer, and reduce over one
+  ! reduces each chunk with the host's loop. That is where the JVM's
+  ! seq speed comes from, and the code is core.clj's; what it needs
+  ! from the host is IChunk, ChunkBuffer, ChunkedCons and chunkedFirst/
+  ! chunkedMore on the seqs that are chunked: a vector's seq and a
+  ! range, exactly as on the JVM.
+  !
+  ! A chunk (OBJ_CHUNK) is a window [i1, i2) onto a backing: a raw run
+  ! (from a chunk buffer or a materialised range) or a vector (a
+  ! vector's seq chunks in place, no copy).
+
+  function make_chunk(backing, off, fin, roots) result(c)
+    type(gc_value), intent(in) :: backing
+    integer, intent(in) :: off, fin
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: c
+    c = gc_obj(OBJ_CHUNK, [backing], [roots, backing])
+    call gc_set_i1(c, off)
+    call gc_set_i2(c, fin)
+  end function make_chunk
+
+  integer function chunk_count(c)
+    type(gc_value), intent(in) :: c
+    chunk_count = max(0, gc_i2(c) - gc_i1(c))
+  end function chunk_count
+
+  function chunk_nth(c, i) result(x)
+    type(gc_value), intent(in) :: c
+    integer, intent(in) :: i
+    type(gc_value) :: x, b
+    x = gc_nil()
+    if (i < 0 .or. i >= chunk_count(c)) return
+    b = gc_slot(c, 1)
+    if (b%tag == GCT_VEC) then
+       x = gc_vec_get(b, gc_i1(c) + i + 1)
+    else
+       x = gcv_nth(b, gc_i1(c) + i)
+    end if
+  end function chunk_nth
+
+  ! Whether `v` is a seq that hands out chunks: a ChunkedCons, a
+  ! vector's seq view, a realised range cell.
+  logical function is_chunked_seq(v)
+    type(gc_value), intent(in) :: v
+    is_chunked_seq = .false.
+    select case (gc_kind(v))
+    case (OBJ_CHUNKSEQ)
+       is_chunked_seq = .true.
+    case (OBJ_SEQ)
+       is_chunked_seq = gcv_is(gc_slot(v, 1))
+    case (OBJ_LAZY)
+       is_chunked_seq = (gc_i2(v) == 1 .and. gc_i1(v) == LAZY_CONS)
+    end select
+  end function is_chunked_seq
+
+  ! IChunkedSeq.chunkedFirst and chunkedMore of a chunked seq, both at
+  ! once since a range decides them together. `more` is nil when
+  ! nothing follows.
+  recursive subroutine chunked_parts(s0, chunk, more, roots)
+    type(gc_value), intent(in) :: s0
+    type(gc_value), intent(out) :: chunk, more
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: s, src, cell, nxt, spec, buf
+    integer :: base, at, total, fin, cnt
+    real(gc_dp) :: sd
+
+    chunk = gc_nil()
+    more = gc_nil()
+    s = strip_meta(s0)
+    base = vs_enter(6)
+    call vs_set(base + 1, s)
+    select case (gc_kind(s))
+    case (OBJ_CHUNKSEQ)
+       chunk = gc_slot(s, 1)
+       more = gc_slot(s, 2)
+    case (OBJ_SEQ)
+       src = gc_slot(s, 1)
+       at = gc_i1(s)
+       total = gcv_count(src)
+       fin = min(total, at + 32)
+       chunk = make_chunk(src, at, fin, [roots, vs_get(base + 1)])
+       call vs_set(base + 2, chunk)
+       if (fin < total) then
+          more = gc_obj(OBJ_SEQ, [src], [roots, vs_get(base + 1), vs_get(base + 2)])
+          call gc_set_i1(more, fin)
+       end if
+       chunk = vs_get(base + 2)
+    case (OBJ_LAZY)
+       ! up to 32 values into one run: realised cells first, then the
+       ! pending tail's arithmetic, then whatever is left is `more`
+       buf = gc_vec(32, [roots, vs_get(base + 1)])
+       call vs_set(base + 2, buf)
+       cnt = 0
+       call vs_set(base + 3, vs_get(base + 1))      ! the cell being read
+       do
+          cell = vs_get(base + 3)
+          if (gc_kind(cell) /= OBJ_LAZY) exit
+          if (gc_i1(cell) == LAZY_CONS) then
+             if (cnt >= 32) exit
+             call gc_vec_set(vs_get(base + 2), cnt + 1, gc_slot(cell, 2))
+             cnt = cnt + 1
+             call vs_set(base + 3, gc_slot(cell, 3))
+             cycle
+          end if
+          if (gc_i1(cell) == LAZY_PENDING .and. gc_i2(cell) == 1) then
+             spec = gc_slot(cell, 1)
+             call vs_set(base + 4, gcv_nth(spec, 0))   ! cursor
+             call vs_set(base + 5, gcv_nth(spec, 1))   ! hi
+             call vs_set(base + 6, gcv_nth(spec, 2))   ! step
+             sd = num_dbl(vs_get(base + 6))
+             do while (cnt < 32)
+                if (sd > 0.0_gc_dp .and. .not. num_lt(vs_get(base + 4), vs_get(base + 5))) exit
+                if (sd < 0.0_gc_dp .and. .not. num_lt(vs_get(base + 5), vs_get(base + 4))) exit
+                call gc_vec_set(vs_get(base + 2), cnt + 1, vs_get(base + 4))
+                cnt = cnt + 1
+                call vs_set(base + 4, num_add2(vs_get(base + 4), vs_get(base + 6), [vs_get(base + 2)]))
+             end do
+             ! what is left of the range, as a fresh pending tail
+             if ((sd > 0.0_gc_dp .and. num_lt(vs_get(base + 4), vs_get(base + 5))) .or. &
+                  (sd < 0.0_gc_dp .and. num_lt(vs_get(base + 5), vs_get(base + 4))) .or. sd == 0.0_gc_dp) then
+                spec = gcv_build(3, [vs_get(base + 2)])
+                call vs_set(base + 3, spec)
+                call gc_vec_set(gc_slot(spec, 1), 1, vs_get(base + 4))
+                call gc_vec_set(gc_slot(spec, 1), 2, vs_get(base + 5))
+                call gc_vec_set(gc_slot(spec, 1), 3, vs_get(base + 6))
+                nxt = gc_obj(OBJ_LAZY, [vs_get(base + 3), gc_nil(), gc_nil()], [vs_get(base + 2), vs_get(base + 3)])
+                call gc_set_i1(nxt, LAZY_PENDING)
+                call gc_set_i2(nxt, 1)
+                call vs_set(base + 3, nxt)
+             else
+                call vs_set(base + 3, gc_nil())
+             end if
+          end if
+          exit
+       end do
+       chunk = make_chunk(vs_get(base + 2), 0, cnt, [vs_get(base + 3)])
+       more = vs_get(base + 3)
+       if (gc_kind(more) == OBJ_LAZY) then
+          if (gc_i1(more) == LAZY_EMPTY) more = gc_nil()
+       end if
+    end select
+    call vs_leave(base)
+  end subroutine chunked_parts
+
+  ! Whether every cell of a seq is already realised, so that folding it
+  ! reads the whole sequence rather than a prefix. gc_hash may not force
+  ! -- it runs inside a map insert and has no roots to hand an allocation
+  ! -- so a seq that is not realised keeps identity hashing instead.
+  recursive logical function seq_realised_p(v) result(yes)
+    type(gc_value), intent(in) :: v
+    type(gc_value) :: cur
+    yes = .true.
+    cur = v
+    do
+       select case (gc_kind(cur))
+       case (OBJ_CHUNKSEQ)
+          cur = gc_slot(cur, 2)
+       case (OBJ_LAZY)
+          select case (gc_i1(cur))
+          case (LAZY_EMPTY)
+             return
+          case (LAZY_DELEG)
+             cur = gc_slot(cur, 2)
+          case (LAZY_CONS)
+             cur = gc_slot(cur, 3)
+          case default
+             yes = .false.
+             return
+          end select
+       case default
+          return
+       end select
+       if (cur%tag == GCT_NIL) return
+    end do
+  end function seq_realised_p
+
+  ! The unmixed fold of a seq's elements into h, for the hash of a
+  ! ChunkedCons: it must equal a list's. No allocation. An unrealised
+  ! tail stops the fold, as an unrealised lazy seq is not hashable here.
+  recursive subroutine fold_seq(v, h)
+    type(gc_value), intent(in) :: v
+    integer, intent(inout) :: h
+    type(gc_value) :: cur
+    integer :: i
+    cur = v
+    do
+       select case (gc_kind(cur))
+       case (OBJ_CHUNKSEQ)
+          do i = 0, chunk_count(gc_slot(cur, 1)) - 1
+             h = 31 * h + gc_hash(chunk_nth(gc_slot(cur, 1), i))
+          end do
+          cur = gc_slot(cur, 2)
+       case (OBJ_CONS)
+          do while (gcl_is(cur) .and. gcl_count(cur) > 0)
+             h = 31 * h + gc_hash(gc_slot(cur, 1))
+             cur = gc_slot(cur, 2)
+          end do
+          return
+       case (OBJ_SEQ)
+          do i = gc_i1(cur), seq_len(gc_slot(cur, 1)) - 1
+             h = 31 * h + gc_hash(seq_elem(gc_slot(cur, 1), i, [cur]))
+          end do
+          return
+       case (OBJ_LAZY)
+          if (gc_i1(cur) == LAZY_DELEG) then
+             cur = gc_slot(cur, 2)
+             cycle
+          end if
+          if (gc_i1(cur) /= LAZY_CONS) return
+          h = 31 * h + gc_hash(gc_slot(cur, 2))
+          cur = gc_slot(cur, 3)
+       case default
+          return
+       end select
+    end do
+  end subroutine fold_seq
+
   recursive function reduce_native(coll, f, has_init, init) result(out)
     type(gc_value), intent(in) :: coll, f, init
     logical, intent(in) :: has_init
@@ -4205,8 +4455,21 @@ contains
           if (done) exit
           call vs_set(base + 1, gc_slot(vs_get(base + 1), 3))
        end do
+    case (OBJ_CHUNK)
+       do i = 0, chunk_count(vs_get(base + 1)) - 1
+          call step(chunk_nth(vs_get(base + 1), i))
+          if (done) exit
+       end do
     case default
-       call fail("reduce: not reducible: " // type_name(coll))
+       ! a ChunkedCons, or anything else seqable: walked as a seq
+       call vs_set(base + 1, to_seq(vs_get(base + 1), [vs_get(base + 2)]))
+       do
+          cell = vs_get(base + 1)
+          if (cell%tag == GCT_NIL) exit
+          call step(sq_first(vs_get(base + 1), [vs_get(base + 2)]))
+          if (done) exit
+          call vs_set(base + 1, to_seq(sq_rest(vs_get(base + 1), [vs_get(base + 2)]), [vs_get(base + 2)]))
+       end do
     end select
     if (.not. has_error .and. .not. done) then
        if (have) then
@@ -4715,7 +4978,9 @@ contains
          idx = gcv_nth(vs_get(base + 1), 1)
          want = idx%ival
          out = gc_nil()
-         if (gcv_is(coll) .or. coll%tag == GCT_STR) then
+         if (gc_kind(coll) == OBJ_CHUNK) then
+            out = chunk_nth(coll, want)
+         else if (gcv_is(coll) .or. coll%tag == GCT_STR) then
             if (want >= 0 .and. want < seq_len(coll)) &
                  out = seq_elem(coll, want, [vs_get(base + 1)])
          else if (want >= 0) then
@@ -7430,6 +7695,66 @@ contains
        ! arithmetic and allocates no cells; a reduced value ends it
        ! and is unwrapped, as Java's reduce does.
        out = reduce_native(strip_meta(gcv_nth(args, 0)), gcv_nth(args, 1), n >= 3, gcv_nth(args, 2))
+    case (B_CHUNK_ADD)
+       ! ChunkBuffer.add: the buffer grows if asked past its capacity,
+       ! where Java's throws -- nothing in core.clj asks.
+       a = strip_meta(gcv_nth(args, 0))
+       if (gc_kind(a) /= OBJ_CHUNKBUF) then
+          call fail("no such member: " // class_name_of(a) // ".add")
+       else
+          block
+            type(gc_value) :: run, bigger
+            integer :: cnt, k
+            run = gc_slot(a, 1)
+            cnt = gc_i1(a)
+            if (cnt >= gc_vec_len(run)) then
+               call vs_set(base + 2, a)
+               bigger = gc_vec(max(2 * cnt, 1), [vs_get(base + 1), vs_get(base + 2)])
+               do k = 1, cnt
+                  call gc_vec_set(bigger, k, gc_vec_get(gc_slot(vs_get(base + 2), 1), k))
+               end do
+               call gc_set_slot(vs_get(base + 2), 1, bigger)
+               a = vs_get(base + 2)
+               run = gc_slot(a, 1)
+            end if
+            call gc_vec_set(run, cnt + 1, gcv_nth(args, 1))
+            call gc_set_i1(a, cnt + 1)
+          end block
+          out = gc_nil()
+       end if
+    case (B_CHUNK_OF)
+       a = strip_meta(gcv_nth(args, 0))
+       if (gc_kind(a) /= OBJ_CHUNKBUF) then
+          call fail("no such member: " // class_name_of(a) // ".chunk")
+       else
+          out = make_chunk(gc_slot(a, 1), 0, gc_i1(a), [vs_get(base + 1)])
+       end if
+    case (B_CHUNK_FIRST, B_CHUNK_MORE, B_CHUNK_NEXT)
+       block
+         type(gc_value) :: ch, mo
+         a = strip_meta(gcv_nth(args, 0))
+         if (.not. is_chunked_seq(a)) then
+            call fail("no such member: " // class_name_of(a) // ".chunkedFirst")
+         else
+            call chunked_parts(a, ch, mo, [vs_get(base + 1)])
+            if (id == B_CHUNK_FIRST) then
+               out = ch
+            else if (id == B_CHUNK_MORE) then
+               out = mo
+               if (out%tag == GCT_NIL) out = gcl_empty([vs_get(base + 1)])
+            else
+               call vs_set(base + 2, mo)
+               out = to_seq(vs_get(base + 2), [vs_get(base + 1)])
+            end if
+         end if
+       end block
+    case (B_CHUNK_DROP)
+       a = strip_meta(gcv_nth(args, 0))
+       if (gc_kind(a) /= OBJ_CHUNK) then
+          call fail("no such member: " // class_name_of(a) // ".dropFirst")
+       else
+          out = make_chunk(gc_slot(a, 1), gc_i1(a) + 1, gc_i2(a), [vs_get(base + 1)])
+       end if
     case (B_IDHASH)
        ! System.identityHashCode: a number that is the same for the same
        ! object and usually differs between objects. The pool index is
@@ -7593,7 +7918,7 @@ contains
   ! which breaks the guarantee a map relies on.
   pure logical function is_seq_kind(k)
     integer, intent(in) :: k
-    is_seq_kind = (k == OBJ_CONS .or. k == OBJ_VECTOR .or. k == OBJ_SEQ)
+    is_seq_kind = (k == OBJ_CONS .or. k == OBJ_VECTOR .or. k == OBJ_SEQ .or. k == OBJ_CHUNKSEQ)
   end function is_seq_kind
 
   ! Hash for the same kinds, and it must NOT allocate: gc_hash runs in
@@ -7653,6 +7978,15 @@ contains
           h = 31 * h + gc_hash(seq_elem(gc_slot(v, 1), gc_i1(v) + i, [v]))
        end do
        h = mix32(h)
+    case (OBJ_CHUNKSEQ)
+       if (seq_realised_p(v)) then
+          call fold_seq(v, h)
+          h = mix32(h)
+       else
+          ! not realised to the end: identity, as an unrealised lazy seq
+          ! gets (DEVIATIONS 35)
+          h = mix32(ieor(mix32(v%ref), OBJ_CHUNKSEQ))
+       end if
     case (OBJ_MAP)
        call gca_entries(v, ks, vs_)
        do i = 1, size(ks)
@@ -8268,7 +8602,7 @@ contains
     logical :: yes
     v = strip_meta(v0)
     yes = gcl_is(v) .or. gcv_is(v) .or. &
-         gc_kind(v) == OBJ_LAZY .or. gc_kind(v) == OBJ_SEQ
+         gc_kind(v) == OBJ_LAZY .or. gc_kind(v) == OBJ_SEQ .or. gc_kind(v) == OBJ_CHUNKSEQ
   end function sequential_p
 
   ! COUNTED: the count is known without walking. Both references use a
@@ -8339,10 +8673,20 @@ contains
     if (gc_kind(v) == OBJ_LAZY) then
        call gce_force(v)
        if (gc_i1(v) == LAZY_CONS) out = v
+       if (gc_i1(v) == LAZY_DELEG) out = gc_slot(v, 2)
        return
     end if
     if (gc_kind(v) == OBJ_SEQ) then
        if (seq_len(gc_slot(v, 1)) > gc_i1(v)) out = v
+       return
+    end if
+    if (gc_kind(v) == OBJ_CHUNKSEQ) then
+       ! a ChunkedCons is a seq; an empty chunk defers to what follows
+       if (chunk_count(gc_slot(v, 1)) > 0) then
+          out = v
+       else
+          out = to_seq(gc_slot(v, 2), roots)
+       end if
        return
     end if
 
@@ -8451,6 +8795,8 @@ contains
        out = gc_slot(vs_get(base + 1), 2)
     else if (gc_kind(vs_get(base + 1)) == OBJ_SEQ) then
        out = seq_elem(gc_slot(vs_get(base + 1), 1), gc_i1(vs_get(base + 1)), roots)
+    else if (gc_kind(vs_get(base + 1)) == OBJ_CHUNKSEQ) then
+       out = chunk_nth(gc_slot(vs_get(base + 1), 1), 0)
     end if
     call vs_leave(base)
   end function sq_first
@@ -8477,6 +8823,18 @@ contains
        out = gc_obj(OBJ_SEQ, [gc_slot(vs_get(base + 1), 1)], &
             [vs_get(base + 1)])
        call gc_set_i1(out, gc_i1(vs_get(base + 1)) + 1)
+    else if (gc_kind(vs_get(base + 1)) == OBJ_CHUNKSEQ) then
+       ! ChunkedCons.more: the chunk less its first while that leaves
+       ! any, else what follows (or () when nothing does)
+       if (chunk_count(gc_slot(vs_get(base + 1), 1)) > 1) then
+          call vs_set(base + 2, make_chunk(gc_slot(gc_slot(vs_get(base + 1), 1), 1), &
+               gc_i1(gc_slot(vs_get(base + 1), 1)) + 1, gc_i2(gc_slot(vs_get(base + 1), 1)), [vs_get(base + 1)]))
+          out = gc_obj(OBJ_CHUNKSEQ, [vs_get(base + 2), gc_slot(vs_get(base + 1), 2), gc_nil()], &
+               [vs_get(base + 1), vs_get(base + 2)])
+       else
+          out = gc_slot(vs_get(base + 1), 2)
+          if (out%tag == GCT_NIL) out = gcl_empty(roots)
+       end if
     end if
     call vs_leave(base)
   end function sq_rest
@@ -8498,6 +8856,20 @@ contains
     end if
     if (gc_kind(v) == OBJ_SEQ) then
        n = seq_len(gc_slot(v, 1)) - gc_i1(v)
+       return
+    end if
+    if (gc_kind(v) == OBJ_CHUNK) then
+       n = chunk_count(v)
+       return
+    end if
+    if (gc_kind(v) == OBJ_LAZY) then
+       if (gc_i1(v) == LAZY_DELEG) then
+          n = sq_count(gc_slot(v, 2), roots)
+          return
+       end if
+    end if
+    if (gc_kind(v) == OBJ_CHUNKSEQ) then
+       n = chunk_count(gc_slot(v, 1)) + sq_count(gc_slot(v, 2), roots)
        return
     end if
     if (gc_kind(v) /= OBJ_LAZY) then
@@ -8566,6 +8938,9 @@ contains
        ! which does not quote. is_instance already expected the
        ! name "seq" here.
        case (OBJ_SEQ);     s = "seq"
+       case (OBJ_CHUNKSEQ); s = "seq"
+       case (OBJ_CHUNK);   s = "chunk"
+       case (OBJ_CHUNKBUF); s = "chunk-buffer"
        case (OBJ_VAR);     s = "var"
        case (OBJ_NS);      s = "ns"
        ! A deftype instance answers with its OWN class name, so
@@ -9030,6 +9405,10 @@ contains
     ! the JVM's LongRange, PersistentVector and PersistentList do.
     case ("clojure.lang.IReduceInit", "clojure.lang.IReduce")
        yes = (t == "vector" .or. t == "list" .or. (t == "lazy-seq" .and. gc_i2(strip_meta(v)) == 1))
+    case ("clojure.lang.IChunkedSeq"); yes = is_chunked_seq(strip_meta(v))
+    case ("clojure.lang.IChunk", "clojure.lang.ArrayChunk"); yes = (gc_kind(strip_meta(v)) == OBJ_CHUNK)
+    case ("clojure.lang.ChunkBuffer"); yes = (gc_kind(strip_meta(v)) == OBJ_CHUNKBUF)
+    case ("clojure.lang.ChunkedCons"); yes = (gc_kind(strip_meta(v)) == OBJ_CHUNKSEQ)
     case ("clojure.lang.PersistentVector$ChunkedSeq", "clojure.lang.Cons"); yes = (t == "seq")
     case ("clojure.lang.Atom"); yes = (t == "atom")
     case ("clojure.lang.AFunction", "clojure.lang.AFn"); yes = (t == "fn")
@@ -9269,7 +9648,7 @@ contains
               "java.util.List", "clojure.lang.IPersistentCollection", "java.util.Collection"]
          cnt = 5
       case ("clojure.lang.LazySeq", "clojure.lang.PersistentVector$ChunkedSeq", "clojure.lang.Cons", &
-            "clojure.lang.LongRange")
+            "clojure.lang.LongRange", "clojure.lang.Range", "clojure.lang.ChunkedCons")
          chain(1:4) = [character(len=36) :: "clojure.lang.ISeq", "java.util.List", &
               "clojure.lang.IPersistentCollection", "java.util.Collection"]
          cnt = 4
@@ -9347,8 +9726,21 @@ contains
           s = class_key(gc_ref_text(c%ref))
        case (OBJ_LAZY)
           s = "clojure.lang.LazySeq"
-          if (gc_i2(v) == 1) s = "clojure.lang.LongRange"
+          if (gc_i2(v) == 1) then
+             ! Clojure has two range classes and picks between them on
+             ! the bounds: LongRange for integers, Range for anything
+             ! else. Ours is one cell either way, so the head decides.
+             s = "clojure.lang.Range"
+             if (gc_i1(v) == LAZY_CONS) then
+                if (tag_of(gc_slot(v, 2)) == GCT_INT) s = "clojure.lang.LongRange"
+             else if (tag_of(gcv_nth(gc_slot(v, 1), 0)) == GCT_INT) then
+                s = "clojure.lang.LongRange"
+             end if
+          end if
        case (OBJ_SEQ);     s = "clojure.lang.PersistentVector$ChunkedSeq"
+       case (OBJ_CHUNKSEQ); s = "clojure.lang.ChunkedCons"
+       case (OBJ_CHUNK);   s = "clojure.lang.ArrayChunk"
+       case (OBJ_CHUNKBUF); s = "clojure.lang.ChunkBuffer"
        case (OBJ_VAR);     s = "clojure.lang.Var"
        case (OBJ_NS);      s = "clojure.lang.Namespace"
        case (OBJ_DELAY);   s = "clojure.lang.Delay"

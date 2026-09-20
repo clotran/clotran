@@ -1035,3 +1035,37 @@ on; it is not `class`, and never was meant to leak.
 
 **Removal**: a class value of its own kind, printing as its name, with
 `(class (class x))` answering it. Nothing loaded needs that.
+
+## 35. An unrealised seq hashes by identity, so it is not found as a map key
+
+`(= (map inc [1 2 3]) [2 3 4])` is true here, as it is in Clojure. But
+`(hash (map inc [1 2 3]))` is an identity hash, not the sequence hash,
+so `(get {(list 2 3 4) :v} (map inc [1 2 3]))` answers nil where
+Clojure answers `:v`. Equality and hash disagree, which is a guarantee
+Clojure gives and clotran does not.
+
+The reason is structural. `gc_hash` runs INSIDE a map insert or lookup,
+and it takes no root set: anything it allocates cannot root the
+half-built trie the caller is holding. Hashing a lazy seq means
+REALISING it, which runs arbitrary Clojure and allocates freely, so
+hashing-by-forcing from there would be a collector bug rather than a
+slow path. `is_structural_kind` in GC.f90 therefore leaves `OBJ_LAZY`
+out, and anything not in that list falls back to an identity hash.
+
+What IS hashed structurally: lists, vectors, maps, sets, seq views,
+and -- since chunked seqs arrived -- a ChunkedCons whose whole rest is
+already realised (`seq_realised_p` checks before folding; a partly
+realised one would otherwise hash its first 32 elements and claim to
+be the whole sequence, which is the silent wrong answer, not the loud
+one). That guard bites more often than it sounds: `map` builds its result
+with `(chunk-cons (chunk b) (map f (chunk-rest s)))`, and the rest
+handed to `chunk-cons` has not been realised yet, so a ChunkedCons
+straight out of `map` hashes by identity. `(hash (doall (seq (map inc
+[1 2 3]))))` is the sequence hash; `(hash (seq (map inc [1 2 3])))` is
+not.
+
+**Removal**: give `gc_hash` a root set, which means threading roots
+through `gca_assoc`, `gca_get` and the trie, and then hashing may
+force. That is the same plumbing PLAN stage 2 removes in the other
+direction (roots leaving signatures once the operand stack holds
+them), so it is worth doing after that, not before.

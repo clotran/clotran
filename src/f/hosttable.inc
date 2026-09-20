@@ -357,7 +357,7 @@
        hm("java.lang.Short", "TYPE", HK_TYPE) ]
   type(hm), parameter :: HOST_STATICS(294) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
-  type(hm), parameter :: HOST_METHODS_1(81) = [ &
+  type(hm), parameter :: HOST_METHODS_1(87) = [ &
   ! Instance members. The target becomes the first argument, which is all
   ! an instance method is: (.withMeta x m) calls with-meta on x and m.
        hm("", "meta", B_META, "meta"), &
@@ -407,6 +407,13 @@
   ! (. f (applyTo (seq args))) is core.clj's own apply.
        hm("", "applyTo", B_APPLY, "apply"), &
        hm("", "deref", B_DEREF, "deref"), &
+  ! chunked seqs: ChunkBuffer.add and .chunk, IChunkedSeq's three, IChunk.dropFirst
+       hm("", "add", B_CHUNK_ADD, "clotran-chunk-add"), &
+       hm("", "chunk", B_CHUNK_OF, "clotran-chunk"), &
+       hm("", "chunkedFirst", B_CHUNK_FIRST, "clotran-chunked-first"), &
+       hm("", "chunkedMore", B_CHUNK_MORE, "clotran-chunked-more"), &
+       hm("", "chunkedNext", B_CHUNK_NEXT, "clotran-chunked-next"), &
+       hm("", "dropFirst", B_CHUNK_DROP, "clotran-chunk-drop-first"), &
        hm("", "reduce", B_REDUCEINIT, "clotran-reduce"), &
        hm("", "hasRoot", B_HASROOT, "clotran-has-root"), &
        hm("", "addMethod", B_ADDMETHOD, "clotran-add-method"), &
@@ -516,5 +523,5 @@
        hm("", "end", B_RE_END, "clotran-re-end"), &
        hm("", "groupCount", B_RE_GROUPCOUNT, "re-group-count"), &
        hm("", "group", B_RE_GROUP, "re-group") ]
-  type(hm), parameter :: HOST_METHODS(140) = [HOST_METHODS_1, HOST_METHODS_2]
+  type(hm), parameter :: HOST_METHODS(146) = [HOST_METHODS_1, HOST_METHODS_2]
 

@@ -173,6 +173,19 @@ contains
        i = 0
        do
           call lazy_forcer(p)
+          if (gc_i1(p) == LAZY_DELEG) then
+             ! realised into a seq that stays itself (a ChunkedCons):
+             ! its elements belong inside these parens
+             block
+               character(len=:), allocatable :: tl
+               tl = inner_of(gcp_str(gc_slot(p, 2), readable))
+               if (len(tl) > 0) then
+                  if (i > 0) s = s // " "
+                  s = s // tl
+               end if
+             end block
+             exit
+          end if
           if (gc_i1(p) /= LAZY_CONS) exit
           if (i > 0) s = s // " "
           s = s // gcp_str(gc_slot(p, 2), readable)
@@ -195,6 +208,35 @@ contains
           end if
        end do
        s = s // ")"
+    case (OBJ_CHUNKSEQ)
+       ! A ChunkedCons: its chunk's elements, then whatever follows,
+       ! inside the same parens.
+       block
+         type(gc_value) :: c, b, more
+         integer :: k
+         character(len=:), allocatable :: tl
+         c = gc_slot(v, 1)
+         b = gc_slot(c, 1)
+         s = "("
+         do k = gc_i1(c), gc_i2(c) - 1
+            if (k > gc_i1(c)) s = s // " "
+            if (b%tag == GCT_VEC) then
+               s = s // gcp_str(gc_vec_get(b, k + 1), readable)
+            else
+               s = s // gcp_str(gcv_nth(b, k), readable)
+            end if
+         end do
+         more = gc_slot(v, 2)
+         if (more%tag /= GCT_NIL) then
+            tl = inner_of(gcp_str(more, readable))
+            if (len(tl) > 0) s = s // " " // tl
+         end if
+         s = s // ")"
+       end block
+    case (OBJ_CHUNK)
+       s = "#<chunk>"
+    case (OBJ_CHUNKBUF)
+       s = "#<chunk-buffer>"
     case (OBJ_SEQ)
        ! A seq VIEW prints as the sequence it denotes, not as the
        ! collection it borrows from: (seq [1 2 3]) is (1 2 3), and
