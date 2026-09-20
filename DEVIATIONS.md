@@ -1088,3 +1088,19 @@ Noticed while giving the debugger its handler Var,
 mark the earmuffed core Vars `RT.doInit` makes dynamic), and have
 `push-thread-bindings` refuse a Var without it. Small; it waits only
 for someone to want the refusal.
+
+## 37. `apply` realises its last argument, up to a million elements
+
+`(apply f (range))` returns on the JVM when `f` is `[& args]`:
+`RestFn.applyTo` takes the fixed parameters off the seq and hands the
+rest to the function as the seq it is, unrealised. Here `apply` builds
+one argument vector from the whole seq first, so an infinite one never
+returned -- it hung, which is how Clojure's own `test-vars-apply-lazily`
+looked once futures ran it. The realisation is now bounded: more than
+1,000,000 arguments is an error naming this entry, which is what a
+test sees instead of a ten-minute timeout.
+
+**Removal**: have `apply` realise only as many elements as the arity
+being called fixes, and bind the rest parameter to the remaining seq
+itself. `bind_closure` builds the rest from the argument vector today;
+it would take the seq instead.

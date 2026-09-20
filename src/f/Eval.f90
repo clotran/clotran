@@ -5150,8 +5150,10 @@ contains
          ! vectors made (apply f (seq xs)) call f with no arguments at
          ! all.
          call vs_set(base + 2, fargs)
+         ! Realised in full, which Clojure does not do (DEVIATIONS 37):
+         ! bounded, so (apply f (range)) is an error and not a hang.
          last = coll_to_vector(gcv_nth(vs_get(base + 1), n - 1), &
-              [vs_get(base + 1), vs_get(base + 2)])
+              [vs_get(base + 1), vs_get(base + 2)], limit=1000000)
          call vs_set(base + 3, last)
          fargs = vs_get(base + 2)
          do j = 0, gcv_count(vs_get(base + 3)) - 1
@@ -5160,7 +5162,7 @@ contains
             call vs_set(base + 2, fargs)
          end do
          fargs = vs_get(base + 2)
-         out = apply(gcv_nth(vs_get(base + 1), 0), fargs)
+         if (.not. has_error) out = apply(gcv_nth(vs_get(base + 1), 0), fargs)
        end block
     case (B_PRN)
        do i = 0, n - 1
@@ -9593,18 +9595,29 @@ contains
 
   ! Every element of a seqable, as a vector. The three host `create`
   ! statics all take a collection, so they all start here.
-  recursive function coll_to_vector(coll, roots) result(out)
+  recursive function coll_to_vector(coll, roots, limit) result(out)
     type(gc_value), intent(in) :: coll
     type(gc_value), intent(in) :: roots(:)
+    integer, intent(in), optional :: limit   ! more elements than this is an error, not a hang
     type(gc_value) :: out, walk, item
-    integer :: base
+    integer :: base, k
+    character(len=16) :: buf
 
     base = vs_enter(2)
     out = gcv_empty(roots)
     call vs_set(base + 1, out)
     walk = to_seq(coll, roots)
     call vs_set(base + 2, walk)
+    k = 0
     do while (walk%tag /= GCT_NIL)
+       if (present(limit)) then
+          k = k + 1
+          if (k > limit) then
+             write(buf, '(I0)') limit
+             call fail("apply: more than " // trim(buf) // " arguments; the argument seq is realised here (DEVIATIONS 37)")
+             exit
+          end if
+       end if
        item = sq_first(vs_get(base + 2), [vs_get(base + 1)])
        out = gcv_conj(vs_get(base + 1), item, [vs_get(base + 1), vs_get(base + 2)])
        call vs_set(base + 1, out)
