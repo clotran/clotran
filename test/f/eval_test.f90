@@ -68,6 +68,7 @@ contains
     call check_letfn()
     call check_symbol_names()
     call check_meta_lookup()
+    call check_contexts()
     call check_native_arrays()
     call check_regex_release()
     call check_resources()
@@ -708,6 +709,39 @@ contains
   ! That is how `require` lost its :refer -- select-keys ends
   ! (with-meta ret (meta map)), so load-lib asked (:refer filter-opts)
   ! of a wrapped map and never called refer at all.
+  ! A second context, switched to under torture, must not lose what
+  ! the first was holding on its value stack: the parked stack is
+  ! scanned by the collector like the live one.
+  subroutine check_contexts()
+    type(gc_value) :: env, form, r
+    integer :: base, c1, c2
+    character(len=:), allocatable :: got
+
+    call gc_init(64)
+    gc_torture = .false.
+    base = vs_enter(3)
+    env = gce_base_env(no_roots)
+    call vs_set(base + 1, env)
+    form = gcr_read("(list 1 2 3 (str ""a"" ""b"") [4 5] {:k 6})", [vs_get(base + 1)])
+    call vs_set(base + 2, form)
+    c1 = gce_ctx_current()
+    c2 = gce_ctx_new()
+    gc_torture = torturing
+    call gce_ctx_switch(c2)
+    ! allocate a lot in the new context; every allocation collects
+    r = gce_analyze(gcr_read("(loop* [i 0 acc []] (if (< i 200) (recur (+ i 1) (conj acc (str i))) (count acc)))", no_roots), gc_nil())
+    if (.not. gce_has_error()) r = gce_eval(r, gc_nil(), no_roots)
+    got = gcp_str(r, .true.)
+    call ok("30a. a form evaluates in a second context: " // got, got == "200" .and. .not. gce_has_error())
+    call gce_ctx_switch(c1)
+    gc_torture = .false.
+    got = gcp_str(vs_get(base + 2), .true.)
+    call ok("30b. the first context's stack survived the switch: " // got, &
+         got == "(list 1 2 3 (str ""a"" ""b"") [4 5] {:k 6})")
+    call ok("30c. and it is current again", gce_ctx_current() == c1)
+    call vs_leave(base)
+  end subroutine check_contexts
+
   subroutine check_meta_lookup()
     call ev('27a. ', '(:a (with-meta {:a 1} {:x 9}))', '1')
     call ev('27b. ', '(get (with-meta {:a 1} {:x 9}) :a)', '1')

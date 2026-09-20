@@ -245,6 +245,7 @@ module Eval
 
   public :: gce_eval, gce_base_env, gce_has_error, gce_error, gce_clear_error
   public :: gce_analyze, gce_trace
+  public :: gce_ctx_new, gce_ctx_switch, gce_ctx_current
 
   ! THE CALL STACK. One entry per closure invocation in progress: the
   ! closure and the position of the call that entered it (set by the
@@ -291,6 +292,29 @@ module Eval
   integer, save :: ksp = 0
   integer, parameter :: KF_FNBODY = 1, KF_RESTART = 2, K_SLOTS = 5
   integer, save :: k_limit = 0
+
+  ! --- evaluation contexts ---------------------------------------------
+  !
+  ! Everything the evaluator keeps between two steps of `run`: the
+  ! continuation stack, the call stack, the error state, the thrown
+  ! value, the dynamic bindings. One context is live in the module
+  ! variables above; the others are parked here, arrays moved in and
+  ! out with move_alloc so a switch costs nothing per frame. The value
+  ! stack is parked beside it in GC (gc_stack_save). A green thread is
+  ! a context; so is the paused frame a debugger inspects while the
+  ! REPL runs in another (PLAN stage 2).
+  type eval_ctx
+     type(kframe), allocatable :: kst(:)
+     integer :: ksp = 0
+     type(gc_value), allocatable :: fstack_fn(:)
+     integer, allocatable :: fstack_site(:)
+     integer :: fstack_top = 0, pending_site = 0, ev_depth = 0
+     logical :: has_error = .false.
+     character(len=:), allocatable :: last_error, last_trace
+     type(gc_root) :: thrown_root, binding_stack_root
+  end type eval_ctx
+  type(eval_ctx), allocatable, save :: ctxs(:)
+  integer, save :: cur_ctx = 0, n_ctx = 0
 
   include "hosttable.inc"
 
@@ -483,6 +507,7 @@ contains
     call gc_set_finalizer(gce_finalize_obj)
     call gc_set_coll_ops(gce_coll_hash, gce_coll_equal)
     call gcn_reset(roots)
+    call ctx_reset()
     ! Three slots: env, clojure.core, and the fortran namespace. The
     ! third is NOT optional -- core lives in slot 2 for the whole of
     ! this routine.
@@ -9689,6 +9714,105 @@ contains
     end subroutine put_int
   end function cs_to_map
 
+
+
+  ! --- evaluation contexts ---------------------------------------------
+
+  ! Context 1 is the one the program started in; it exists as soon as
+  ! anything asks.
+  subroutine ctx_ensure_main()
+    if (n_ctx > 0) return
+    allocate(ctxs(8))
+    n_ctx = 1
+    cur_ctx = 1
+  end subroutine ctx_ensure_main
+
+  ! A fresh context: empty stacks, no error, no bindings, its own root
+  ! slots for the thrown value and the binding stack.
+  function gce_ctx_new() result(id)
+    integer :: id
+    type(eval_ctx), allocatable :: bigger(:)
+    type(eval_ctx) :: blank   ! default-initialised; flang rejects eval_ctx()
+    integer :: n
+    call ctx_ensure_main()
+    if (n_ctx >= size(ctxs)) then
+       n = size(ctxs)
+       allocate(bigger(2 * n))
+       bigger(1:n) = ctxs(1:n)
+       call move_alloc(bigger, ctxs)
+    end if
+    n_ctx = n_ctx + 1
+    id = n_ctx
+    ctxs(id) = blank
+    ctxs(id)%last_error = ""
+    ctxs(id)%last_trace = ""
+    call gc_stack_new(id)
+  end function gce_ctx_new
+
+  integer function gce_ctx_current()
+    call ctx_ensure_main()
+    gce_ctx_current = cur_ctx
+  end function gce_ctx_current
+
+  ! Parks the live context and brings `id` in. Only between steps: a
+  ! run in progress on the Fortran stack (a native calling back into
+  ! Clojure) belongs to the context that started it, and switching
+  ! under it is the caller's mistake, not this routine's.
+  subroutine gce_ctx_switch(id)
+    integer, intent(in) :: id
+    call ctx_ensure_main()
+    if (id == cur_ctx .or. id < 1 .or. id > n_ctx) return
+    ! out
+    if (allocated(kst)) call move_alloc(kst, ctxs(cur_ctx)%kst)
+    ctxs(cur_ctx)%ksp = ksp
+    if (allocated(fstack_fn)) then
+       call move_alloc(fstack_fn, ctxs(cur_ctx)%fstack_fn)
+       call move_alloc(fstack_site, ctxs(cur_ctx)%fstack_site)
+    end if
+    ctxs(cur_ctx)%fstack_top = fstack_top
+    ctxs(cur_ctx)%pending_site = pending_site
+    ctxs(cur_ctx)%ev_depth = ev_depth
+    ctxs(cur_ctx)%has_error = has_error
+    if (allocated(last_error)) then
+       ctxs(cur_ctx)%last_error = last_error
+    else
+       ctxs(cur_ctx)%last_error = ""
+    end if
+    if (allocated(last_trace)) then
+       ctxs(cur_ctx)%last_trace = last_trace
+    else
+       ctxs(cur_ctx)%last_trace = ""
+    end if
+    ctxs(cur_ctx)%thrown_root = thrown_root
+    ctxs(cur_ctx)%binding_stack_root = binding_stack_root
+    call gc_stack_save(cur_ctx)
+    ! in
+    if (allocated(kst)) deallocate(kst)
+    if (allocated(ctxs(id)%kst)) call move_alloc(ctxs(id)%kst, kst)
+    ksp = ctxs(id)%ksp
+    if (allocated(fstack_fn)) deallocate(fstack_fn, fstack_site)
+    if (allocated(ctxs(id)%fstack_fn)) then
+       call move_alloc(ctxs(id)%fstack_fn, fstack_fn)
+       call move_alloc(ctxs(id)%fstack_site, fstack_site)
+    end if
+    fstack_top = ctxs(id)%fstack_top
+    pending_site = ctxs(id)%pending_site
+    ev_depth = ctxs(id)%ev_depth
+    has_error = ctxs(id)%has_error
+    last_error = ctxs(id)%last_error
+    last_trace = ctxs(id)%last_trace
+    thrown_root = ctxs(id)%thrown_root
+    binding_stack_root = ctxs(id)%binding_stack_root
+    call gc_stack_restore(id)
+    cur_ctx = id
+  end subroutine gce_ctx_switch
+
+  subroutine ctx_reset()
+    if (allocated(ctxs)) deallocate(ctxs)
+    n_ctx = 0
+    cur_ctx = 0
+    call gc_stacks_reset()
+  end subroutine ctx_reset
 
   include "analyze.inc"
   include "exec.inc"

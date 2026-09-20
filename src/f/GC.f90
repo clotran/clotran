@@ -424,6 +424,19 @@ module GC
   type(gc_value), allocatable :: vstack(:)
   integer :: vs_top = 0
 
+  ! --- saved value stacks -------------------------------------------
+  !
+  ! One evaluation context is live: its value stack is `vstack`. Every
+  ! other context's stack is parked here, and the collector scans them
+  ! all, so a suspended context keeps what it was holding. Eval's
+  ! ctx_switch moves a stack in and out with move_alloc: no copy.
+  type :: gc_saved_stack
+     type(gc_value), allocatable :: vstack(:)
+     integer :: vs_top = 0
+  end type gc_saved_stack
+  type(gc_saved_stack), allocatable :: saved_stacks(:)
+  integer :: n_saved_stacks = 0
+
   ! --- marking work list -----------------------------------------
   ! An explicit stack, not recursion: a list is a chain thousands of
   ! nodes deep, and recursive marking would overflow the real stack on
@@ -496,6 +509,7 @@ module GC
   public :: gc_set_finalizer
   public :: gc_ensure_init, gc_str_ref, gc_ref_text, gc_ref_is, gc_ref_len
   public :: vs_enter, vs_leave, vs_set, vs_get, vs_depth
+  public :: gc_stack_new, gc_stack_save, gc_stack_restore, gc_stacks_reset
   public :: gc_equal, gc_hash
 
 contains
@@ -595,7 +609,53 @@ contains
     global_gen = global_gen + 1
     gc_allocs = 0; gc_frees = 0; gc_collections = 0
     gc_no_collect = .false.
+    call gc_stacks_reset()
   end subroutine gc_init
+
+  ! Room for a context's parked stack, as an empty one.
+  subroutine gc_stack_new(id)
+    integer, intent(in) :: id
+    type(gc_saved_stack), allocatable :: bigger(:)
+    integer :: n
+    if (.not. allocated(saved_stacks)) allocate(saved_stacks(8))
+    if (id > size(saved_stacks)) then
+       n = size(saved_stacks)
+       allocate(bigger(max(2 * n, id)))
+       bigger(1:n) = saved_stacks(1:n)
+       call move_alloc(bigger, saved_stacks)
+    end if
+    n_saved_stacks = max(n_saved_stacks, id)
+    if (allocated(saved_stacks(id)%vstack)) deallocate(saved_stacks(id)%vstack)
+    allocate(saved_stacks(id)%vstack(64))
+    saved_stacks(id)%vstack = gc_nil()
+    saved_stacks(id)%vs_top = 0
+  end subroutine gc_stack_new
+
+  ! The live stack is parked under `id`; the live one is then empty
+  ! until gc_stack_restore brings another in.
+  subroutine gc_stack_save(id)
+    integer, intent(in) :: id
+    if (id > n_saved_stacks) call gc_stack_new(id)
+    if (allocated(saved_stacks(id)%vstack)) deallocate(saved_stacks(id)%vstack)
+    call move_alloc(vstack, saved_stacks(id)%vstack)
+    saved_stacks(id)%vs_top = vs_top
+    allocate(vstack(64))
+    vstack = gc_nil()
+    vs_top = 0
+  end subroutine gc_stack_save
+
+  subroutine gc_stack_restore(id)
+    integer, intent(in) :: id
+    if (allocated(vstack)) deallocate(vstack)
+    call move_alloc(saved_stacks(id)%vstack, vstack)
+    vs_top = saved_stacks(id)%vs_top
+    saved_stacks(id)%vs_top = 0
+  end subroutine gc_stack_restore
+
+  subroutine gc_stacks_reset()
+    if (allocated(saved_stacks)) deallocate(saved_stacks)
+    n_saved_stacks = 0
+  end subroutine gc_stacks_reset
 
   ! --- immediates: no heap involved at all -----------------------
 
@@ -1050,7 +1110,7 @@ contains
 
   subroutine gc_collect(roots)
     type(gc_value), intent(in) :: roots(:)
-    integer :: i
+    integer :: i, k
 
     gc_collections = gc_collections + 1
     last_marked = gc_marked
@@ -1065,6 +1125,13 @@ contains
     end do
     do i = 1, vs_top
        call push_mark(vstack(i))
+    end do
+    do i = 1, n_saved_stacks
+       if (allocated(saved_stacks(i)%vstack)) then
+          do k = 1, saved_stacks(i)%vs_top
+             call push_mark(saved_stacks(i)%vstack(k))
+          end do
+       end if
     end do
     do i = 1, size(roots)
        call push_mark(roots(i))
