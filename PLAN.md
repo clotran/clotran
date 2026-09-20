@@ -427,26 +427,32 @@ which is step 7's generator.
 because that is the premise. `require` looks in that order.
 DEVIATIONS 33.
 
-**Executors are the concurrency seam, and the first one is processes.**
-core.clj already routes every concurrent construct through an executor
-object: `future` is `(.submit clojure.lang.Agent/soloExecutor f)`,
-`pmap` is futures, `send` and `send-off` are `.dispatch` onto
-`pooledExecutor`/`soloExecutor`, and `set-agent-send-executor!` is the
-public knob. Today those two are nil and `.submit` fails. The plan is
-an executor as a protocol with `submit`, and impls: a local process
-pool (fork `clotran`, ship the form and its data as text, read the
-printed result back), ssh/Slurm (the same, with a job script), a
-Kubernetes Job, a tuple space. Code being data is what makes shipping
-a task trivial where Python must pickle a closure. None of that needs
-the collector to be thread-safe, so it can land BEFORE in-process
-threads, which wait on the context type (stage 2) and the OpenMP vs
-pthreads spike. A GPU is not an executor for closures: it runs
-kernels over arrays, so it arrives as array operations (`do
-concurrent`, OpenACC, a device BLAS) under the `fortran` namespace,
-not as a thread impl. Prior art the design follows: Julia's
-`Distributed` with ClusterManagers, Parsl, Dask; Clojure's own
-executor knobs and `claypoole`; Erlang for location transparency;
-Linda for the tuple space.
+**A thread is an evaluator context; the kinds of thread are impls of
+one protocol.** Three things not to conflate: `fork` is a process,
+a green thread is a context the runtime multiplexes on one OS
+thread at points it chooses (Erlang, Go, Java virtual threads,
+core.async), an OS thread is real parallelism over a shared heap.
+Stage 2 moves the evaluator's state into a context type; a green
+thread is then a context the evaluator loop switches between, on one
+OS thread, with no change to the collector -- and the debugger's
+paused frame is one context while the REPL runs in another. That is
+the primitive. Over it, one protocol (`spawn`, `join`, `status`,
+`cancel`, a mailbox) with a current implementation the way
+core.matrix has one; core.clj's `future`, `pmap`, agents and
+`promise` already go through executor objects and become thin
+wrappers over it. Impls, in the order they get cheap: `:green` (the
+default); `:process` (local subprocesses, ssh, Slurm, a Kubernetes
+Job -- via `execute_command_line`, which is standard Fortran and
+works on Windows; NOT `fork`, which is Unix-only); `:os` (OpenMP or
+C11 threads through iso_c_binding, after the collector is
+thread-safe -- the spike); `:coarray` (Fortran's own images);
+a tuple space. A shared-heap impl takes a closure; a process or
+remote impl takes a form and data, since a closure over local state
+cannot be shipped, and `spawn` must say which it was given. A GPU is
+not an impl of this: it runs kernels over arrays and arrives as
+array operations under the `fortran` namespace. Prior art: Erlang,
+Julia's Distributed with ClusterManagers, core.async,
+bordeaux-threads, core.matrix's implementation protocol.
 
 **Arrays are never ragged.** A Fortran rank-2 array is one contiguous
 column-major block; `[[I` is nested and cannot be handed to BLAS at
