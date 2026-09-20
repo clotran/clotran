@@ -152,7 +152,7 @@ recalled. See `CLAUDE.md`.
 
 | | |
 |---|---|
-| speed | measured by `scripts/bench`, the same forms on a warmed JVM and on clotran: a function call ~4 µs, a loop/recur iteration ~5 µs, a reduce step ~15 µs. Against the JVM that is 70x on plain recursion, 95x on fib, 360x on loop/recur, and 4,800x on `(reduce + (range n))`, where the JVM has a specialised reduce over ranges. Two to almost four orders of magnitude, an AST interpreter's honest number; PLAN.md step 8 has the JIT decision |
+| speed | measured by `scripts/bench`, the same forms on a warmed JVM and on clotran: a function call ~2.5 µs, a loop/recur iteration ~2.6 µs, a reduce step ~13 µs. Against the JVM that is 44x on plain recursion, 58x on fib, 194x on loop/recur, and 4,600x on `(reduce + (range n))`, where the JVM runs a specialised reduce over ranges in Java. Between one and a half and almost four orders of magnitude, an AST interpreter's honest number; PLAN.md step 8 has the JIT decision |
 | startup | 0.6s: core.clj is re-read and re-analysed every launch; there is no image yet |
 | memory | 168 MB after loading core.clj, and a 100000-element reduce stays there since locals are cleared after their last read; the image (PLAN.md step 5, stage 3) is what would shrink the baseline |
 | debugger | an error reports `file:line:col` and the chain of calls that led to it, and `.getStackTrace` answers real elements; there is no breakpoint or step yet; PLAN.md step 8 |

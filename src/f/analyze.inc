@@ -429,6 +429,56 @@
   end function analyze_symbol
 
   ! A list form: special form, macro call, host sugar, or a call.
+  ! The :inline fn of the Var `head` names, when its :inline-arities
+  ! accept `argc`; nil otherwise. Compiler.isInline.
+  recursive function inline_fn(head, argc) result(fn)
+    type(gc_value), intent(in) :: head
+    integer, intent(in) :: argc
+    type(gc_value) :: fn, var, md, pred, ok
+    integer :: base
+    fn = gc_nil()
+    var = resolve_var(head, gc_nil())
+    if (.not. gcn_is_var(var)) return
+    md = gc_slot(var, 2)
+    if (.not. gca_is(md)) return
+    base = vs_enter(2)
+    call vs_set(base + 1, md)
+    fn = gca_get(vs_get(base + 1), gc_key("inline", [vs_get(base + 1)]))
+    if (fn%tag == GCT_NIL) then
+       call vs_leave(base)
+       return
+    end if
+    call vs_set(base + 2, fn)
+    pred = gca_get(vs_get(base + 1), gc_key("inline-arities", [vs_get(base + 1), vs_get(base + 2)]))
+    if (pred%tag /= GCT_NIL) then
+       ok = apply(pred, gcv_conj(gcv_empty([vs_get(base + 1), vs_get(base + 2), pred]), gc_int(int(argc, gc_ip)), &
+            [vs_get(base + 1), vs_get(base + 2), pred]))
+       if (has_error .or. .not. truthy(ok)) fn = gc_nil()
+    end if
+    if (fn%tag /= GCT_NIL) fn = vs_get(base + 2)
+    call vs_leave(base)
+  end function inline_fn
+
+  ! A list of forms as a vector, for apply.
+  function args_vector(forms, roots) result(v)
+    type(gc_value), intent(in) :: forms
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: v, walk
+    integer :: base
+    base = vs_enter(2)
+    call vs_set(base + 1, forms)
+    v = gcv_empty([roots, vs_get(base + 1)])
+    call vs_set(base + 2, v)
+    walk = vs_get(base + 1)
+    do while (gcl_count(walk) > 0)
+       call vs_set(base + 2, gcv_conj(vs_get(base + 2), gcl_first(walk), [roots, vs_get(base + 1), walk]))
+       walk = gcl_rest(walk, [roots, vs_get(base + 1), vs_get(base + 2)])
+       call vs_set(base + 1, walk)
+    end do
+    v = vs_get(base + 2)
+    call vs_leave(base)
+  end function args_vector
+
   recursive function analyze_seq(form, sc) result(nd)
     type(gc_value), intent(in) :: form, sc
     type(gc_value) :: nd, head, mvar, expanded
@@ -451,6 +501,32 @@
           if (gcn_is_var(mvar)) then
              call vs_set(base + 3, gcn_var_value(mvar))
              expanded = expand_macro(vs_get(base + 3), vs_get(base + 1), gc_nil())
+             if (has_error) then
+                call vs_leave(base)
+                return
+             end if
+             call vs_set(base + 4, expanded)
+             nd = analyze(vs_get(base + 4), vs_get(base + 2))
+             call vs_leave(base)
+             return
+          end if
+          ! :inline, as Compiler.analyzeSeq does right after macroexpansion
+          ! (isInline): a Var whose metadata carries an :inline fn, and
+          ! whose :inline-arities -- if any -- accepts this argument count,
+          ! has that fn applied to the argument FORMS and the result
+          ! analysed instead of a call. core.clj gives 129 definitions one:
+          ! (+ a b) becomes (. clojure.lang.Numbers (add a b)) and the
+          ! static call resolves to the native here, so the arithmetic
+          ! in a loop costs no closure call. preserveTag is not done: a
+          ! :tag on the form is a hint nothing here reads.
+          mvar = inline_fn(head, gcl_count(vs_get(base + 1)) - 1)
+          if (has_error) then
+             call vs_leave(base)
+             return
+          end if
+          if (mvar%tag /= GCT_NIL) then
+             call vs_set(base + 3, mvar)
+             expanded = apply(vs_get(base + 3), args_vector(gcl_rest(vs_get(base + 1), [vs_get(base + 3)]), [vs_get(base + 3)]))
              if (has_error) then
                 call vs_leave(base)
                 return

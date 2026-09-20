@@ -2686,3 +2686,31 @@ fib 20 0.12s -> 0.084s, memory after core.clj 280 MB -> 168 MB.
 Instrument before theorising, again: the arena counters and the
 per-class free-list report under CLOTRAN_STATS found both in one run
 each, after two wrong policies written from the armchair.
+
+## :inline is part of the language, and we were not honouring it
+
+core.clj gives 129 definitions `:inline` metadata -- `+`, `-`, `<`,
+`inc`, `zero?`, `aget`, `nth` and the rest -- a fn from argument
+forms to a replacement form, with `:inline-arities` saying which
+counts it covers. Compiler.analyzeSeq applies it right after
+macroexpansion (`isInline`): `(+ a b)` never calls `+`, it becomes
+`(. clojure.lang.Numbers (add a b))` at compile time. clotran ran
+every one of those as a closure call: frame, call stack entry, a
+second call from the body to the static native.
+
+`inline_fn` in analyze.inc is `isInline`: resolve the head to a Var,
+read `:inline` and `:inline-arities` from its metadata (the metadata
+is evaluated at def time, so the fns are real), apply the predicate
+to the argument count -- a set, `#{2}`, is callable, as on the JVM
+-- and if it passes, apply the inline fn to the argument forms and
+analyse what comes back. The static call it produces resolves to the
+native at analysis (analyze_dot), so the arithmetic in a loop is one
+node. `preserveTag` is skipped: a :tag is a hint nothing here reads.
+
+`scripts/bench`: loop/recur 361x -> 194x (2.6us an iteration), fib
+94x -> 58x, plain recursion 69x -> 44x, the map-building reduce
+115x -> 100x. `(reduce + (range n))` stayed near 4,600x, because its
+cost is `first`, `next` and the range cell per element, not the add:
+that is where the JVM runs LongRange.reduce in Java, and where a
+native reduce over native ranges and vectors is the faithful next
+step.
