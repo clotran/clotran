@@ -256,8 +256,9 @@ Staged so each step is checkable:
    continuation stack (exec.inc `run`, `kframe` in Eval.f90): a frame
    per pending node, its values in a region of the value stack, calls
    in tail position reusing the frame. `if`, `do`, `let*`/`loop*`,
-   `case*`, calls, `recur`, `try` and `fn` run in the loop; the other
-   kinds and every native that calls back into Clojure nest a run.
+   `case*`, calls, `recur`, `try`, `fn` and the vector, map and set
+   literals run in the loop; the other kinds and every native that
+   calls back into Clojure nest a run.
    Recursion is bounded by a frame count, not the Fortran stack
    (DEVIATIONS 7 resolved), and a suspended context is now data,
    which is what a green thread and a paused debugger frame need.

@@ -2567,8 +2567,8 @@ methods, dot forms) and every native that calls back into Clojure --
 forcing a lazy seq, a multimethod's dispatch function, `swap!`'s
 function. Each of those is a nested `run` on the Fortran stack,
 bounded by ev_limit as before, and is the equivalent of Loom's pinned
-frame. Moving the vector/map/set literals into the loop is easy and
-next; the natives are the real seam, and the answer there is the
+frame. The vector, map and set literals moved into the loop next
+(50,000 deep through `[(h (dec n))]` works); the natives are the real seam, and the answer there is the
 context type, not more cases in the loop.
 
 Two things bit on the way. The first cut popped the caller's call

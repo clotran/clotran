@@ -564,6 +564,30 @@
           case default
              call k_finish(val)
           end select
+       case (N_VECTOR, N_MAP, N_SET)
+          ! children collected into slot 4, one frame each, then built
+          select case (kst(ksp)%pc)
+          case (0)
+             call vs_set(b + 4, gcv_empty([vs_get(b + 1)]))
+             kst(ksp)%i = 0
+             kst(ksp)%pc = 2
+          case (2)
+             if (kst(ksp)%i < gcv_count(kids)) then
+                kst(ksp)%pc = 3
+                call k_push(gcv_nth(kids, kst(ksp)%i), vs_get(b + 2), 0, gc_nil())
+             else
+                select case (kind)
+                case (N_VECTOR); val = vs_get(b + 4)
+                case (N_SET);    val = vec_to_set(vs_get(b + 4), [vs_get(b + 1)])
+                case default;    val = vec_to_map(vs_get(b + 4), [vs_get(b + 1)])
+                end select
+                call k_finish(val)
+             end if
+          case (3)
+             call vs_set(b + 4, gcv_conj(vs_get(b + 4), val, [vs_get(b + 1)]))
+             kst(ksp)%i = kst(ksp)%i + 1
+             kst(ksp)%pc = 2
+          end select
        case (N_RECUR)
           val = exec_recur(nd, vs_get(b + 2))
           if (.not. has_error) call k_finish(val)
@@ -615,16 +639,6 @@
     kind = gc_i1(nd)
     kids = gc_slot(nd, 1)
     select case (kind)
-    case (N_VECTOR)
-       out = exec_args(kids, 0, frame)
-    case (N_MAP)
-       out = exec_map(kids, frame)
-    case (N_SET)
-       v = exec_args(kids, 0, frame)
-       if (.not. has_error) then
-          call vs_set(base + 3, v)
-          out = vec_to_set(vs_get(base + 3), [vs_get(base + 1)])
-       end if
     case (N_DEF)
        out = exec_def(nd, frame)
     case (N_LETFN)
@@ -692,27 +706,24 @@
     last_error = last_error // "  at " // gcr_position(int(p%ival, kind=4))
   end subroutine note_position
 
-  recursive function exec_map(kids, frame) result(out)
-    type(gc_value), intent(in) :: kids, frame
-    type(gc_value) :: out, k, v
+  ! Alternating keys and values, as a map literal's children come.
+  function vec_to_map(vals, roots) result(out)
+    type(gc_value), intent(in) :: vals
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, mp
     integer :: base, i
-    base = vs_enter(4)
-    call vs_set(base + 1, kids)
-    call vs_set(base + 2, frame)
-    out = gca_empty([vs_get(base + 1), vs_get(base + 2)])
-    call vs_set(base + 3, out)
-    do i = 0, gcv_count(kids) - 1, 2
-       k = exec(gcv_nth(vs_get(base + 1), i), vs_get(base + 2))
-       if (has_error) exit
-       call vs_set(base + 4, k)
-       v = exec(gcv_nth(vs_get(base + 1), i + 1), vs_get(base + 2))
-       if (has_error) exit
-       out = gca_assoc(vs_get(base + 3), vs_get(base + 4), v, [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)])
-       call vs_set(base + 3, out)
+    base = vs_enter(2)
+    call vs_set(base + 1, vals)
+    mp = gca_empty([roots, vs_get(base + 1)])
+    call vs_set(base + 2, mp)
+    do i = 0, gcv_count(vals) - 1, 2
+       mp = gca_assoc(vs_get(base + 2), gcv_nth(vs_get(base + 1), i), gcv_nth(vs_get(base + 1), i + 1), &
+            [roots, vs_get(base + 1), vs_get(base + 2)])
+       call vs_set(base + 2, mp)
     end do
-    out = vs_get(base + 3)
+    out = vs_get(base + 2)
     call vs_leave(base)
-  end function exec_map
+  end function vec_to_map
 
   function vec_to_set(vals, roots) result(out)
     type(gc_value), intent(in) :: vals
