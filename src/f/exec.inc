@@ -1461,6 +1461,29 @@
        call vs_set(base + 5, md)
        call gc_set_slot(vs_get(base + 3), 2, vs_get(base + 5))
     end if
+    ! The Var's metadata as DefExpr leaves it: what the form carried,
+    ! plus :name, :ns, :file, :line and :column. clojure.test names a
+    ! test by the first, and a def had none of them.
+    call vs_set(base + 5, gc_slot(vs_get(base + 3), 2))
+    if (.not. gca_is(vs_get(base + 5))) call vs_set(base + 5, gca_empty([vs_get(base + 1), vs_get(base + 3)]))
+    call brk_put(base + 5, "name", gc_slot(vs_get(base + 3), 4), [vs_get(base + 1), vs_get(base + 3)], base)
+    call brk_put(base + 5, "ns", gc_slot(vs_get(base + 3), 3), [vs_get(base + 1), vs_get(base + 3)], base)
+    block
+      type(gc_value) :: pos
+      character(len=:), allocatable :: fname
+      integer :: line, col
+      pos = gc_slot(vs_get(base + 1), 4)
+      if (pos%tag == GCT_INT) then
+         if (pos%ival > 0) then
+            call gcr_position_parts(int(pos%ival, kind=4), fname, line, col)
+            if (len(fname) > 0) call brk_put(base + 5, "file", gc_str(fname, [vs_get(base + 1), vs_get(base + 3)]), &
+                 [vs_get(base + 1), vs_get(base + 3)], base)
+            call brk_put(base + 5, "line", gc_int(int(line, gc_ip)), [vs_get(base + 1), vs_get(base + 3)], base)
+            call brk_put(base + 5, "column", gc_int(int(col, gc_ip)), [vs_get(base + 1), vs_get(base + 3)], base)
+         end if
+      end if
+    end block
+    call gc_set_slot(vs_get(base + 3), 2, vs_get(base + 5))
     fnv = strip_meta(gcn_var_value(vs_get(base + 3)))
     if (gc_kind(fnv) == OBJ_CLOSURE) then
        if (tag_of(gc_slot(fnv, 5)) == GCT_NIL) then

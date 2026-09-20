@@ -3543,7 +3543,7 @@ contains
 
     out = gc_nil()
     base = vs_enter(2)
-    call vs_set(base + 1, v)
+    call vs_set(base + 1, strip_meta(v))
     select case (gc_kind(vs_get(base + 1)))
     case (OBJ_VECTOR)
        out = gcv_empty([roots, vs_get(base + 1)])
@@ -3568,6 +3568,8 @@ contains
        out = gcl_empty([roots, vs_get(base + 1)])
     end select
     if (gcl_is(vs_get(base + 1))) out = gcl_empty([roots, vs_get(base + 1)])
+    ! (empty x) keeps x's metadata, as IPersistentCollection.empty does
+    out = keep_meta(v, out, [roots, vs_get(base + 1)])
     call vs_leave(base)
   end function coll_empty
 
@@ -5243,6 +5245,7 @@ contains
                gcv_nth(vs_get(base + 1), 1), &
                gcv_nth(vs_get(base + 1), 2), [vs_get(base + 1)])
        end if
+       out = keep_meta(gcv_nth(vs_get(base + 1), 0), out, [vs_get(base + 1)])
     case (B_KEYS, B_VALS)
        a = strip_meta(gcv_nth(vs_get(base + 1), 0))
        if (gc_kind(a) == OBJ_INST) then
@@ -5277,7 +5280,7 @@ contains
           a = conj1(a, gcv_nth(vs_get(base + 1), i), [vs_get(base + 1)])
           call vs_set(base + 2, a)
        end do
-       out = a
+       out = keep_meta(gcv_nth(vs_get(base + 1), 0), a, [vs_get(base + 1)])
     case (B_EMPTY)
        block
          type(gc_value) :: sv
@@ -6955,7 +6958,7 @@ contains
                        [vs_get(base + 1), vs_get(base + 2)])
                   call vs_set(base + 2, acc)
                end do
-               out = vs_get(base + 2)
+               out = keep_meta(gcv_nth(args, 0), vs_get(base + 2), [vs_get(base + 1)])
             end if
          else if (coll%tag /= GCT_NIL) then
             if (id == B_PEEK) then
@@ -7990,13 +7993,14 @@ contains
        ! A set is a map to itself, so disj is dissoc on the backing map.
        block
          type(gc_value) :: st
-         st = gcv_nth(args, 0)
+         st = strip_meta(gcv_nth(args, 0))
          if (gc_kind(st) == OBJ_SET) then
             out = gc_obj(OBJ_SET, &
                  [gca_dissoc(gc_slot(st, 1), gcv_nth(args, 1), [vs_get(base + 1)])], &
                  [vs_get(base + 1)])
+            out = keep_meta(gcv_nth(args, 0), out, [vs_get(base + 1)])
          else
-            out = st
+            out = gcv_nth(args, 0)
          end if
        end block
     case (B_INSTANCE)

@@ -1748,3 +1748,25 @@
 ((every-pred even? number?) 2 4 6 8)
 
 ((some-fn even?) 1 3 5 6)
+
+;; metadata rides through the collection operations, and a def's Var
+;; carries :name, :ns, :line and :column
+(meta (assoc (with-meta {} {:a 1}) :k 1))
+
+(meta (reduce (fn [m i] (assoc m i i)) (with-meta {} {:a 1}) (range 20)))
+
+(meta (conj (with-meta [] {:a 1}) 1))
+
+(meta (into (with-meta {} {:a 1}) {:k 2}))
+
+(meta (disj (with-meta #{1 2} {:a 1}) 1))
+
+(meta (pop (with-meta [1 2] {:a 1})))
+
+(meta (empty (with-meta [1 2] {:a 1})))
+
+(meta (assoc (with-meta [1 2] {:a 1}) 0 9))
+
+(do (def mm-doc "d" 1) [(select-keys (meta #'mm-doc) [:name :doc]) (integer? (:line (meta #'mm-doc))) (integer? (:column (meta #'mm-doc)))])
+
+(do (def ^:private mm-priv 1) [(:private (meta #'mm-priv)) (:name (meta #'mm-priv)) (= *ns* (:ns (meta #'mm-priv)))])

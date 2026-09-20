@@ -42,6 +42,21 @@
     yes = gca_contains(m, gc_key("clotran/reduced", [m]))
   end function is_reduced
 
+  ! A collection operation answers with the metadata its argument had:
+  ! (assoc (with-meta {} m) k v) keeps m, as every persistent
+  ! collection's does on the JVM. Metadata is a wrapper here
+  ! (DEVIATIONS 5), so the result is wrapped again.
+  function keep_meta(orig, v, roots) result(out)
+    type(gc_value), intent(in) :: orig, v
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out
+    out = v
+    if (gc_kind(orig) /= OBJ_META) return
+    if (v%tag /= GCT_OBJ) return
+    if (gc_kind(v) == OBJ_META) return
+    out = gc_obj(OBJ_META, [v, gc_slot(orig, 2)], [roots, orig, v])
+  end function keep_meta
+
   ! The sorted map behind a sorted map or set, or nil.
   function sorted_backing(v) result(m)
     type(gc_value), intent(in) :: v
