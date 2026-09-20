@@ -170,6 +170,8 @@ module Eval
        B_CHUNK_MORE = 290, B_CHUNK_NEXT = 291, B_CHUNK_DROP = 292
   integer, parameter :: B_BREAK = 293, B_LASTBREAK = 294, B_BREAKON = 295
   integer, parameter :: B_RESUME = 296, B_REPL = 297
+  integer, parameter :: B_SUBMIT = 298, B_TASKDONE = 299, B_TASKCANCELLED = 300, B_TASKCANCEL = 301, &
+       B_LATCHWAIT = 302, B_SLEEP = 303, B_NPROCS = 304
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -262,6 +264,21 @@ module Eval
   type(gc_root), save :: handler_var_root, handler_fn_root, resume_root, repl_fn_root
   logical, save :: in_handler = .false., resume_pending = .false.
   integer, save :: handler_ctx = 0, step_at = 0, repl_depth = 0
+  ! Tasks (tasks.inc): every task not yet finished; the one running now,
+  ! nil in the main context; the depth of its outermost run, where a
+  ! block may yield; a yield in progress; and the context ids finished
+  ! tasks gave back, for the next ones.
+  type(gc_root), save :: tasks_root
+  type(gc_value), save :: cur_task
+  integer, save :: task_loop_depth = 0
+  logical, save :: yield_flag = .false.
+  logical, save :: task_trace = .false., task_trace_read = .false.   ! CLOTRAN_TASK_TRACE=1: the scheduler's decisions, on stderr
+  integer, allocatable, save :: free_ctx(:)
+  integer, save :: n_free_ctx = 0
+  ! A task's states (i1): parked and resumable, on the Fortran stack
+  ! now, and the three finished ones.
+  integer, parameter :: TASK_NEW = 0, TASK_RUNNABLE = 1, TASK_RUNNING = 2, &
+       TASK_DONE = 3, TASK_FAILED = 4, TASK_CANCELLED = 5
 
   public :: gce_eval, gce_base_env, gce_has_error, gce_error, gce_clear_error
   public :: gce_analyze, gce_trace
@@ -1764,9 +1781,11 @@ contains
        end if
        if (gc_kind(vs_get(base + 4)) == OBJ_CLOSURE) then
           ! `this` is an explicit first parameter of the method, so
-          ! the target is prepended exactly as for a host member.
+          ! the target is prepended exactly as for a host member. The
+          ! call itself is the loop's to make (exec.inc enter_call),
+          ! not a nested run: a method that blocks must be able to yield.
           call vs_set(base + 2, cons_vec(vs_get(base + 3), vs_get(base + 2), [vs_get(base + 4)]))
-          out = apply(vs_get(base + 4), vs_get(base + 2))
+          out = call_request(vs_get(base + 4), vs_get(base + 2))
           call vs_leave(base)
           return
        end if
@@ -4668,6 +4687,20 @@ contains
          call vs_set(base + 2, gc_nil())
          out = invoke_closure(vs_get(base + 1), argl)
        end block
+    case (OBJ_INST)
+       ! A deftype or reify that implements IFn is callable: (promise x)
+       ! is its invoke method, with the instance as `this` in front.
+       block
+         type(gc_value) :: m
+         m = gca_get(gc_slot(gc_slot(fn, 1), 3), gc_key("invoke", [vs_get(base + 1), vs_get(base + 2)]))
+         if (gc_kind(m) == OBJ_CLOSURE) then
+            call vs_set(base + 3, m)
+            call vs_set(base + 2, cons_vec(vs_get(base + 1), vs_get(base + 2), [vs_get(base + 3)]))
+            out = apply(vs_get(base + 3), vs_get(base + 2))
+         else
+            call fail("not a function: " // gcp_str(fn, .true.))
+         end if
+       end block
     case (OBJ_MULTIFN)
        ! getFn(dispatchFn.invoke(args)).invoke(args) -- MultiFn.invoke,
        ! exactly. The dispatch function sees the same arguments the
@@ -6111,16 +6144,55 @@ contains
        call var_set_macro(a)
        out = gc_nil()
     case (B_DOTGET)
-       if (n >= 2) then
-          out = gca_get(strip_meta(gcv_nth(args, 0)), gcv_nth(args, 1))
+       a = strip_meta(gcv_nth(args, 0))
+       if (gc_kind(a) == OBJ_TASK) then
+          ! (.get task), or (.get task timeout unit); tasks.inc
+          if (n >= 2) then
+             out = task_get(a, now_ms() + int(int_of(gcv_nth(args, 1)), gc_ip))
+          else
+             out = task_get(a, -1_gc_ip)
+          end if
+       else if (n >= 2) then
+          out = gca_get(a, gcv_nth(args, 1))
        else
-          a = strip_meta(gcv_nth(args, 0))
           if (gcn_is_var(a) .or. gc_kind(a) == OBJ_ATOM) then
              out = gc_slot(a, 1)
           else
              out = a
           end if
        end if
+    case (B_SUBMIT)
+       ! (.submit executor f): the executor is whatever soloExecutor is
+       ! -- nil here -- and the task is what matters (tasks.inc).
+       out = task_submit(gcv_nth(args, n - 1))
+    case (B_TASKDONE, B_TASKCANCELLED)
+       a = strip_meta(gcv_nth(args, 0))
+       out = gc_bool(.false.)
+       if (gc_kind(a) == OBJ_TASK) then
+          if (id == B_TASKDONE) then
+             out = gc_bool(gc_i1(a) >= TASK_DONE)
+          else
+             out = gc_bool(gc_i1(a) == TASK_CANCELLED)
+          end if
+       end if
+    case (B_TASKCANCEL)
+       out = gc_bool(task_cancel(strip_meta(gcv_nth(args, 0))))
+    case (B_LATCHWAIT)
+       ! (.await latch), or (.await latch ms unit) answering whether the
+       ! count reached zero in time. A latch is an atom holding its count.
+       a = strip_meta(gcv_nth(args, 0))
+       if (n >= 2) then
+          hit = block_on(a, now_ms() + int(int_of(gcv_nth(args, 1)), gc_ip))
+          if (.not. yield_flag .and. .not. has_error) out = gc_bool(hit)
+       else
+          hit = block_on(a, -1_gc_ip)
+       end if
+    case (B_SLEEP)
+       ! Thread.sleep: the clock, with the other tasks running meanwhile
+       hit = block_on(gc_nil(), now_ms() + int(int_of(gcv_nth(args, 0)), gc_ip))
+    case (B_NPROCS)
+       ! Runtime.availableProcessors: one OS thread runs everything here
+       out = gc_int(1_gc_ip)
     case (B_GENIFACE)
        out = gc_nil()
     case (B_ALWAYS_FALSE)
@@ -9853,6 +9925,7 @@ contains
        case (OBJ_VAR);     s = "clojure.lang.Var"
        case (OBJ_NS);      s = "clojure.lang.Namespace"
        case (OBJ_DELAY);   s = "clojure.lang.Delay"
+       case (OBJ_TASK);    s = "java.util.concurrent.FutureTask"
        case (OBJ_ATOM);    s = "clojure.lang.Atom"
        case (OBJ_ARRAY);   s = "array"
        case (OBJ_INST);    s = class_text(v)
@@ -10373,6 +10446,12 @@ contains
     type(eval_ctx) :: blank   ! default-initialised; flang rejects eval_ctx()
     integer :: n
     call ctx_ensure_main()
+    if (n_free_ctx > 0) then
+       ! one a finished task gave back, already emptied (ctx_release)
+       id = free_ctx(n_free_ctx)
+       n_free_ctx = n_free_ctx - 1
+       return
+    end if
     if (n_ctx >= size(ctxs)) then
        n = size(ctxs)
        allocate(bigger(2 * n))
@@ -10468,11 +10547,42 @@ contains
     resume_pending = .false.
     step_at = 0
     repl_depth = 0
+    n_free_ctx = 0
+    yield_flag = .false.
+    task_loop_depth = 0
+    cur_task = gc_nil()
     call gc_stacks_reset()
   end subroutine ctx_reset
+
+  ! A finished task's context, emptied and kept for the next one, so a
+  ! pmap over ten thousand elements does not hold ten thousand stacks.
+  subroutine ctx_release(id)
+    integer, intent(in) :: id
+    integer, allocatable :: bigger(:)
+    if (id < 1 .or. id > n_ctx .or. id == cur_ctx) return
+    if (allocated(ctxs(id)%kst)) deallocate(ctxs(id)%kst)
+    if (allocated(ctxs(id)%fstack_fn)) deallocate(ctxs(id)%fstack_fn, ctxs(id)%fstack_site)
+    ctxs(id)%ksp = 0
+    ctxs(id)%fstack_top = 0
+    ctxs(id)%pending_site = 0
+    ctxs(id)%ev_depth = 0
+    ctxs(id)%has_error = .false.
+    ctxs(id)%last_error = ""
+    ctxs(id)%last_trace = ""
+    call gc_stack_new(id)
+    if (.not. allocated(free_ctx)) allocate(free_ctx(16))
+    if (n_free_ctx >= size(free_ctx)) then
+       allocate(bigger(2 * size(free_ctx)))
+       bigger(1:n_free_ctx) = free_ctx(1:n_free_ctx)
+       call move_alloc(bigger, free_ctx)
+    end if
+    n_free_ctx = n_free_ctx + 1
+    free_ctx(n_free_ctx) = id
+  end subroutine ctx_release
 
   include "analyze.inc"
   include "exec.inc"
   include "repl.inc"
+  include "tasks.inc"
 
 end module Eval

@@ -160,6 +160,17 @@ carry `OBJ_MATCHER` at all, and it is the sole cause of the bounded
 per-Matcher buffer leak in DEVIATIONS 14. We pay that cost for Java's API
 shape, not for Clojure's semantics.
 
+`future`, `promise`, `pmap` and `Thread/sleep` are the other worked
+example, and the larger one: ClojureScript has none of them -- no
+threads in a browser -- so by the detector they are Java showing
+through. core.clj writes them against `Agent/soloExecutor.submit`, a
+`Future`'s `get`/`isDone`/`cancel`, a `CountDownLatch` and
+`TimeUnit`. We supply exactly those objects (tasks.inc) and the
+definitions run verbatim, which is the premise; what is ours is the
+thread underneath them, a context (PLAN.md), not a JVM thread. The
+seam is the Java object surface; the primitive behind it is the
+language's to define, and ClojureScript's silence says so.
+
 ---
 
 ## What ClojureScript is for

@@ -1104,3 +1104,40 @@ test sees instead of a ten-minute timeout.
 being called fixes, and bind the rest parameter to the remaining seq
 itself. `bind_closure` builds the rest from the argument vector today;
 it would take the seq instead.
+
+## 38. A future runs on the one thread there is, until it blocks
+
+Clojure's `future` starts a thread; here it starts a TASK, a context
+of its own that runs right away, on the same OS thread, until it
+finishes or blocks -- on a promise, another future, or `Thread/sleep`
+-- and then parks, to be resumed by whoever next waits (tasks.inc;
+NOTES "Threads over contexts"). Values come out the same and the
+oracle checks twenty of them. What differs:
+
+- **Order.** Side effects of a future happen at its creation, up to
+  its first block, so `(do (future (println "a")) (println "b"))`
+  prints `a` then `b`, every time. On the JVM either order can happen.
+- **Pinning.** A future that blocks under a native frame -- inside a
+  callback `map`, `reduce` or `swap!` made -- cannot park: the Fortran
+  below it is not resumable. The other futures run there, nested,
+  but the MAIN context cannot, since it is what the future was
+  started from. Such a wait on something only the main context will
+  deliver is reported as a deadlock. At the top of a future's body, or
+  in a `let`, the same wait parks and works.
+- **Deadlock is an error.** `@(promise)` with nothing left to run
+  throws "deadlock: nothing left to run can make the promise ready"
+  where Clojure blocks forever.
+- **Sleeping spins.** With nothing runnable and a deadline still to
+  come, the waiter busy-waits on the clock; there is no other thread
+  to hand the CPU to.
+- **Bindings are shared.** DEVIATIONS 10 becomes observable: a future
+  sees a `binding` in force when it runs, which is the conveyance
+  Clojure's suite checks, but a parked future resumed after the
+  binding has been popped sees the root.
+- **`ExecutionException` carries the text, not the cause.**
+  `.getCause` is nil; the message is the failure's class and message.
+  `availableProcessors` answers 1.
+
+**Removal**: the `:os` impl of the thread protocol (PLAN.md) -- real
+threads over a collector that tolerates them -- for order and
+pinning; the rest are choices that would stay.

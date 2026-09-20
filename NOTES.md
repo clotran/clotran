@@ -2976,3 +2976,60 @@ reachable (it reads the rest of the pipe, sees the end, resumes, and
 the outer loop reads again) and which looped forever. Both loops now
 test `is_iostat_end` and bail on any positive code; that fix landed
 first, on its own.
+
+## Threads over contexts: a future is a task, and a task is a context
+
+PLAN.md's decision: a thread is an evaluator context, and the kinds
+of thread are impls of one protocol. This is the primitive and the
+first impl, `:green`: a TASK is a closure run in a context of its
+own, on the one OS thread, and core.clj's `future`, `promise`,
+`pmap`, `pcalls`, `pvalues` and `deref` run verbatim over the Java
+objects they expect. `Agent/soloExecutor.submit` answers a task; a
+task answers `.get`, `.isDone`, `.isCancelled`, `.cancel`; a
+`CountDownLatch` was already an atom holding its count, and `.await`
+now waits for zero; `Thread/sleep` is the clock. `(promise x)` needed
+`compare-and-set!`, which had no host row, and a reify that
+implements `IFn` to be callable through `apply`.
+
+**When a task runs.** At submit, until it finishes or BLOCKS; then it
+yields: its continuation stack, value stack and call stack stay parked
+in its context, and whoever stepped it gets control back. The one
+blocking primitive is `block_on`: inside a task at its outermost run
+it parks the task with what it waits for and a deadline, sets
+`yield_flag`, and the run loop exits without finishing the node that
+blocked. Anywhere else -- the main context, or a task PINNED under a
+native frame -- it runs the other tasks right there, nested, until the
+wait is over: `pick_runnable` is a scan, `task_step` is the same
+bracketed context switch the debugger's handler uses. Nothing runnable
+and no deadline is a deadlock, reported rather than hung.
+
+**The re-executable unit is the dispatch, not the node.** A parked
+task resumes by running its loop again over the parked frames, and the
+node that blocked runs again. The first version re-ran the whole `.`
+node -- receiver, arguments, dispatch -- and a promise's `deref` came
+back with a nil latch: the receiver `d` had been read once already,
+that read was its last, and locals clearing had nulled the slot. One
+`CLOTRAN_TASK_TRACE=1` line showed the target kind as nil; the theory
+about nesting depth it replaced was wrong. So `.` is now a loop-driven
+node like a call: the target, then the arguments, into the frame's
+slots, then a dispatch that reads no local and can run twice. That
+also took `.` calls out of the nested-run helper, which is where they
+had been pinned all along -- a reify method reached through `.` used
+to be applied through `invoke_closure`, a nested run, so a promise's
+`deref` could never have yielded. It now comes back as a CALL REQUEST
+the loop honours by entering the method in place of the node's frame
+(`enter_call`), the same frame swap a tail call once got.
+
+**Contexts come back.** Each task takes a context; a finished one is
+emptied and its id kept for the next (`ctx_release`, the free list
+`gce_ctx_new` pops), so a thousand futures use a handful of stacks.
+
+**What moved.** Clojure's own `parallel` namespace: 0 of 2 tests to 2
+of 2. `vars` reached its `(apply sample (range))`, which had never run
+before, and hung -- `apply` realises its argument seq; now bounded and
+an error, DEVIATIONS 37. The full scorecard is in the commit.
+
+**Not here.** The protocol's other impls: `:process` through
+`execute_command_line` for the pipeline vision, `:os` when the
+collector can take it. Agents are still synchronous. `deref` with a
+timeout inside a pinned wait counts the deadline but cannot park.

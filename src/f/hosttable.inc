@@ -295,7 +295,7 @@
   ! Long's bounds are clotran's own: an integer here IS a 64-bit one.
        hm("java.lang.Long", "MAX_VALUE", HK_INT, "", huge(0_gc_ip)), &
        hm("java.lang.Long", "MIN_VALUE", HK_INT, "", -huge(0_gc_ip) - 1_gc_ip) ]
-  type(hm), parameter :: HOST_STATICS_4(53) = [ &
+  type(hm), parameter :: HOST_STATICS_4(56) = [ &
        hm("java.lang.Long", "SIZE", HK_INT, "", 64_gc_ip), &
        hm("java.lang.Long", "BYTES", HK_INT, "", 8_gc_ip), &
        hm("java.lang.Short", "MAX_VALUE", HK_INT, "", 32767_gc_ip), &
@@ -354,8 +354,14 @@
        hm("java.lang.Float", "TYPE", HK_TYPE), &
        hm("java.lang.Integer", "TYPE", HK_TYPE), &
        hm("java.lang.Long", "TYPE", HK_TYPE), &
-       hm("java.lang.Short", "TYPE", HK_TYPE) ]
-  type(hm), parameter :: HOST_STATICS(294) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
+       hm("java.lang.Short", "TYPE", HK_TYPE), &
+  ! Threads over VM contexts (tasks.inc). Thread.sleep lets the other
+  ! tasks run; one OS thread runs them all, which is what
+  ! availableProcessors answers; TimeUnit is a marker, milliseconds only.
+       hm("java.lang.Thread", "sleep", B_SLEEP, "clotran-sleep"), &
+       hm("java.lang.Runtime", "getRuntime", B_ALWAYS_NIL, "clotran-nil"), &
+       hm("java.util.concurrent.TimeUnit", "MILLISECONDS", HK_INT, "", 1_gc_ip) ]
+  type(hm), parameter :: HOST_STATICS(297) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
   type(hm), parameter :: HOST_METHODS_1(87) = [ &
   ! Instance members. The target becomes the first argument, which is all
@@ -459,7 +465,7 @@
        hm("", "resetMeta", B_RESETMETA, "clotran-reset-meta"), &
        hm("", "setMeta", B_RESETMETA, "clotran-reset-meta"), &
        hm("", "set", B_SETVAL, "clotran-set-val") ]
-  type(hm), parameter :: HOST_METHODS_2(60) = [ &
+  type(hm), parameter :: HOST_METHODS_2(65) = [ &
        hm("", "reset", B_SETVAL, "clotran-set-val"), &
        hm("", "bindRoot", B_SETVAL, "clotran-set-val"), &
        hm("", "swap", B_SWAPVAL, "clotran-swap-val"), &
@@ -469,7 +475,7 @@
        hm("", "countDown", B_LATCHDOWN, "clotran-latch-down"), &
        hm("", "getCount", B_LATCHCOUNT, "clotran-latch-count"), &
        hm("", "compareAndSet", B_CAS, "compare-and-set!"), &
-       hm("", "await", B_ALWAYS_NIL, "clotran-nil"), &
+       hm("", "await", B_LATCHWAIT, "clotran-latch-await"), &
        hm("", "setErrorMode", B_SETERRMODE, "set-error-mode!"), &
        hm("", "getErrorMode", B_GETERRMODE, "error-mode"), &
        hm("", "setErrorHandler", B_SETERRHANDLER, "set-error-handler!"), &
@@ -523,6 +529,13 @@
        hm("", "start", B_RE_START, "clotran-re-start"), &
        hm("", "end", B_RE_END, "clotran-re-end"), &
        hm("", "groupCount", B_RE_GROUPCOUNT, "re-group-count"), &
-       hm("", "group", B_RE_GROUP, "re-group") ]
-  type(hm), parameter :: HOST_METHODS(147) = [HOST_METHODS_1, HOST_METHODS_2]
+       hm("", "group", B_RE_GROUP, "re-group"), &
+  ! A task (tasks.inc) is what Agent/soloExecutor.submit answers and what
+  ! core.clj's future-call reify wraps.
+       hm("", "submit", B_SUBMIT, "clotran-submit"), &
+       hm("", "isDone", B_TASKDONE, "clotran-task-done"), &
+       hm("", "isCancelled", B_TASKCANCELLED, "clotran-task-cancelled"), &
+       hm("", "cancel", B_TASKCANCEL, "clotran-task-cancel"), &
+       hm("", "availableProcessors", B_NPROCS, "clotran-processors") ]
+  type(hm), parameter :: HOST_METHODS(152) = [HOST_METHODS_1, HOST_METHODS_2]
 

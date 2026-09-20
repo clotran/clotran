@@ -1576,5 +1576,44 @@
 
 (number? (read-string (re-find #"[0-9.]+" (with-out-str (time nil)))))
 
-;; Atom.compareAndSet, which core.clj's compare-and-set! is; identity, not equality
+;; futures and promises: core.clj's own definitions over the host's
+;; tasks (tasks.inc); one OS thread, so a future runs until it blocks
+@(future (+ 1 2))
+
+(let [p (promise)] (deliver p 42) @p)
+
+(let [p (promise)] (future (deliver p 42)) @p)
+
+(let [p (promise)] [(realized? p) (do (deliver p 1) (realized? p)) @p])
+
+(let [p (promise)] (deliver p 1) (deliver p 2) @p)
+
+(deref (promise) 10 :t)
+
+(pmap inc [1 2 3])
+
+(pvalues 1 2)
+
+(pcalls #(+ 1 1) #(+ 2 2))
+
+(let [f (future 1)] [@f (future-done? f) (future-cancelled? f) (future-cancel f) (realized? f)])
+
+(let [a (future (Thread/sleep 5) 1) b (future 2)] (+ @a @b))
+
+(try @(future (throw (ex-info "x" {}))) (catch java.util.concurrent.ExecutionException e :ee))
+
+(deref (future (Thread/sleep 200) 1) 1 :t)
+
+(let [p (promise) f (future @p)] (deliver p :v) @f)
+
+(let [p1 (promise) p2 (promise) f (future (deliver p2 (inc @p1)) :done)] (deliver p1 41) [@p2 @f])
+
+(binding [*print-length* 3] @(future *print-length*))
+
 (let [a (atom 1)] [(compare-and-set! a 1 2) @a (compare-and-set! a 1 3) @a])
+
+(take 2 (pmap inc (range)))
+
+@(future (+ @(future 1) @(future 2)))
+
+(count (map deref (doall (map #(future (* % %)) (range 100)))))

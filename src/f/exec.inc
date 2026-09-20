@@ -537,9 +537,9 @@
   ! next call made once this frame has returned.
   recursive function take_break(reason) result(out)
     character(len=*), intent(in) :: reason
-    type(gc_value) :: out, h, cmd, argv, thrown
+    type(gc_value) :: out, h, cmd, argv, thrown, saved_task
     type(gc_value) :: none(0)
-    integer :: base, paused, depth
+    integer :: base, paused, depth, saved_depth
     logical :: failed
     character(len=:), allocatable :: msg, trc
 
@@ -558,6 +558,11 @@
     if (handler_ctx == 0) handler_ctx = gce_ctx_new()
     paused = gce_ctx_current()
     ctxs(handler_ctx)%ev_depth = ev_depth   ! one Fortran stack: the nesting limit counts on
+    ! the handler is not a task, whatever it interrupted was
+    saved_task = cur_task
+    saved_depth = task_loop_depth
+    cur_task = gc_nil()
+    task_loop_depth = 0
     in_handler = .true.
     call gce_ctx_switch(handler_ctx)
     call gce_clear_error()
@@ -578,6 +583,8 @@
     call vs_leave(base)
     call gce_ctx_switch(paused)
     in_handler = .false.
+    cur_task = saved_task
+    task_loop_depth = saved_depth
     ! back where the break was taken; the error state is as it was
 
     out = gc_nil()
@@ -879,9 +886,8 @@
   recursive function run(nd0, frame0, flags0, restart0, fn0) result(out)
     type(gc_value), intent(in) :: nd0, frame0, restart0, fn0
     integer, intent(in) :: flags0
-    type(gc_value) :: out, nd, kids, val, v, fnv, newframe, body
-    integer :: kbot, vbase, kind, n, b, site
-    logical :: ok
+    type(gc_value) :: out
+    integer :: kbot, vbase
 
     out = gc_nil()
     if (has_error) return
@@ -894,11 +900,31 @@
     end if
     vbase = vs_enter(1)
     kbot = ksp
-    val = gc_nil()
     call k_push(nd0, frame0, flags0, restart0)
     call vs_set(kst(ksp)%base + 7, fn0)
     if (step_at /= 0 .and. gc_kind(fn0) == OBJ_CLOSURE) call step_check()
+    out = run_loop(kbot, vbase)
+    if (has_error) out = gc_nil()
+    call vs_leave(vbase)
+    ! the top-level form is over: a step it did not reach does not wait
+    ! for the next form's first call
+    if (ev_depth == 1) step_at = 0
+    ev_depth = ev_depth - 1
+  end function run
 
+  ! The loop itself, over the frames above `kbot`, with the value in
+  ! flight rooted at vbase + 1. Returns when the stack is back at kbot
+  ! -- the value, or nil with has_error set -- or when a blocking
+  ! builtin has asked to YIELD (yield_flag, tasks.inc): then the frames
+  ! stay as they are, the node that blocked is not finished, and the
+  ! task scheduler resumes the loop later and re-executes that node.
+  recursive function run_loop(kbot, vbase) result(val)
+    integer, intent(in) :: kbot, vbase
+    type(gc_value) :: val, nd, kids, v, fnv, newframe, body
+    integer :: kind, n, b, site
+    logical :: ok
+
+    val = gc_nil()
     do
        if (has_error) then
           call k_unwind(kbot)
@@ -1063,6 +1089,11 @@
              else
                 pending_site = site
                 val = apply(vs_get(b + 3), v)
+                if (yield_flag) then
+                   ! parked here: the vector goes back for the re-dispatch
+                   call vs_set(b + 4, v)
+                   exit
+                end if
                 call k_finish(val)
              end if
           end select
@@ -1166,21 +1197,117 @@
           v = new_frame(gc_i2(nd), [vs_get(b + 1)])
           call vs_set(b + 2, v)
           call k_tail(gc_slot(vs_get(b + 1), 2))
+       case (N_DOT)
+          ! (. target member args...): the target, then the arguments,
+          ! into this frame -- slot 3 and slot 4 -- and then the dispatch,
+          ! which is re-executable as it stands: a block in it yields
+          ! (tasks.inc) and resumes by dispatching again, reading no
+          ! local a clearing pass may since have dropped. aux is where
+          ! the arguments start among the children: 1 after an evaluated
+          ! target, 0 when the target is a class.
+          select case (kst(ksp)%pc)
+          case (0)
+             if (tag_of(gc_slot(nd, 3)) == GCT_SYM) then
+                call vs_set(b + 3, gc_slot(nd, 3))
+                kst(ksp)%aux = 0
+                kst(ksp)%i = 0
+                kst(ksp)%pc = 2
+             else
+                kst(ksp)%pc = 1
+                call k_push(gcv_nth(kids, 0), vs_get(b + 2), 0, gc_nil())
+             end if
+          case (1)
+             call vs_set(b + 3, val)
+             kst(ksp)%aux = 1
+             kst(ksp)%i = 1
+             kst(ksp)%pc = 2
+          case (2)
+             if (kst(ksp)%i == kst(ksp)%aux) &
+                  call vs_set(b + 4, gcv_build(gcv_count(kids) - kst(ksp)%aux, [vs_get(b + 1)]))
+             if (kst(ksp)%i < gcv_count(kids)) then
+                kst(ksp)%pc = 3
+                call k_push(gcv_nth(kids, kst(ksp)%i), vs_get(b + 2), 0, gc_nil())
+             else
+                kst(ksp)%pc = 4
+             end if
+          case (3)
+             call vs_set(b + 4, gcv_put(vs_get(b + 4), kst(ksp)%i - kst(ksp)%aux, val, [vs_get(b + 1)]))
+             kst(ksp)%i = kst(ksp)%i + 1
+             kst(ksp)%pc = 2
+          case (4)
+             val = dot_dispatch(nd, vs_get(b + 3), vs_get(b + 4), kst(ksp)%aux)
+             if (yield_flag) exit
+             if (has_error) cycle
+             if (is_call_request(val)) then
+                v = gc_slot(nd, 4)
+                site = 0
+                if (v%tag == GCT_INT) site = int(v%ival, kind=4)
+                call enter_call(val, site)
+             else
+                call k_finish(val)
+             end if
+          end select
        case default
           val = exec_other(nd, vs_get(b + 2))
           if (.not. has_error) call k_finish(val)
        end select
        call vs_set(vbase + 1, val)
     end do
+  end function run_loop
 
-    out = val
-    if (has_error) out = gc_nil()
-    call vs_leave(vbase)
-    ! the top-level form is over: a step it did not reach does not wait
-    ! for the next form's first call
-    if (ev_depth == 1) step_at = 0
-    ev_depth = ev_depth - 1
-  end function run
+  ! A closure a helper wants called -- a reify or deftype method reached
+  ! through `.` (eval_dot) -- as a request the loop honours itself. i1 =
+  ! 1 tells it from the recur marker, the other OBJ_RECUR.
+  function call_request(fn, argv) result(req)
+    type(gc_value), intent(in) :: fn, argv
+    type(gc_value) :: req
+    req = gc_obj(OBJ_RECUR, [fn, argv], [fn, argv])
+    call gc_set_i1(req, 1)
+  end function call_request
+
+  logical function is_call_request(v)
+    type(gc_value), intent(in) :: v
+    is_call_request = .false.
+    if (gc_kind(v) == OBJ_RECUR) is_call_request = gc_i1(v) == 1
+  end function is_call_request
+
+  ! Runs the requested closure IN THE LOOP, in place of the node that
+  ! asked: that node's frame becomes the callee's body frame, and the
+  ! value the body finishes with is the node's. Through apply it would
+  ! be a nested run, which PINS it (tasks.inc): a promise's deref is
+  ! such a method, and it has to be able to yield. The callee also
+  ! shows in a break's frames this way.
+  subroutine enter_call(req, site)
+    type(gc_value), intent(in) :: req
+    integer, intent(in) :: site
+    type(gc_value) :: frame, body, argv
+    integer :: b
+    logical :: ok
+    b = kst(ksp)%base
+    call vs_set(b + 3, gc_slot(req, 1))
+    argv = gc_slot(req, 2)
+    call push_frame(vs_get(b + 3), site)
+    if (has_error) return
+    ok = bind_closure(vs_get(b + 3), argv, frame, body)
+    if (.not. ok) then
+       call pop_frame()
+       return
+    end if
+    call vs_set(b + 1, body)
+    call vs_set(b + 2, frame)
+    call vs_set(b + 4, gc_nil())
+    call vs_set(b + 5, body)
+    call vs_set(b + 6, gc_nil())
+    call vs_set(b + 7, vs_get(b + 3))
+    kst(ksp)%pc = 0
+    kst(ksp)%i = 0
+    kst(ksp)%flags = ior(KF_FNBODY, KF_RESTART)
+    kst(ksp)%nfr = 1
+    kst(ksp)%mode = 0
+    kst(ksp)%aux = 0
+    kst(ksp)%aux2 = 0
+    if (step_at /= 0) call step_check()
+  end subroutine enter_call
 
   ! The node kinds the loop leaves to a helper. Each helper evaluates
   ! its children through exec, nesting a run.
@@ -1202,8 +1329,6 @@
        out = exec_letfn(nd, frame)
     case (N_DEFTYPE)
        out = exec_deftype(nd, frame)
-    case (N_DOT)
-       out = exec_dot(nd, frame)
     case (N_NEW)
        v = exec_args(kids, 0, frame)
        if (.not. has_error) then
@@ -1540,56 +1665,34 @@
     call vs_leave(base)
   end function exec_deftype
 
-  ! (. target member args): a native instance member on anything but a
-  ! deftype instance is called directly; everything else is handed to
-  ! eval_dot with its parts evaluated.
-  recursive function exec_dot(nd, frame) result(out)
-    type(gc_value), intent(in) :: nd, frame
-    type(gc_value) :: out, kids, tv, argv, native
-    integer :: base, from
-    logical :: is_call
+  ! The dispatch of a `.` node, its target and arguments already
+  ! evaluated by the loop (run_loop, N_DOT): a native instance member
+  ! on anything but a deftype instance is called directly; everything
+  ! else is handed to eval_dot. Nothing here reads a local, so a block
+  ! inside can yield (tasks.inc) and resume by dispatching again.
+  recursive function dot_dispatch(nd, tv, argv, from) result(out)
+    type(gc_value), intent(in) :: nd, tv, argv
+    integer, intent(in) :: from
+    type(gc_value) :: out, native
+    integer :: base
 
     out = gc_nil()
-    base = vs_enter(4)
+    base = vs_enter(3)
     call vs_set(base + 1, nd)
-    call vs_set(base + 2, frame)
-    kids = gc_slot(nd, 1)
-    is_call = (gc_i2(nd) == 1)
-    if (tag_of(gc_slot(nd, 3)) == GCT_SYM) then
-       ! class target: unevaluated symbol, children are all arguments
-       tv = gc_slot(nd, 3)
-       from = 0
-    else
-       tv = exec(gcv_nth(kids, 0), frame)
-       if (has_error) then
-          call vs_leave(base)
-          return
-       end if
-       from = 1
-    end if
-    call vs_set(base + 3, tv)
-    argv = exec_args(gc_slot(vs_get(base + 1), 1), from, vs_get(base + 2))
-    if (has_error) then
-       call vs_leave(base)
-       return
-    end if
-    call vs_set(base + 4, argv)
-
-    native = gc_slot(vs_get(base + 1), 3)
+    call vs_set(base + 2, tv)
+    call vs_set(base + 3, argv)
+    native = gc_slot(nd, 3)
     if (from == 1 .and. gc_kind(native) == OBJ_BUILTIN .and. &
-         gc_kind(strip_meta(vs_get(base + 3))) /= OBJ_INST .and. &
-         .not. gcn_is_var(strip_meta(vs_get(base + 3)))) then
+         gc_kind(strip_meta(tv)) /= OBJ_INST .and. .not. gcn_is_var(strip_meta(tv))) then
        ! (target args...) through the native
-       call vs_set(base + 4, cons_vec(vs_get(base + 3), vs_get(base + 4), [vs_get(base + 1)]))
-       out = apply(native, vs_get(base + 4))
-       call vs_leave(base)
-       return
+       call vs_set(base + 3, cons_vec(vs_get(base + 2), vs_get(base + 3), [vs_get(base + 1)]))
+       out = apply(native, vs_get(base + 3))
+    else
+       out = eval_dot(vs_get(base + 2), sym_text(gc_slot(vs_get(base + 1), 2)), gc_i2(nd) == 1, &
+            vs_get(base + 3), from == 0)
     end if
-
-    out = eval_dot(vs_get(base + 3), sym_text(gc_slot(vs_get(base + 1), 2)), is_call, &
-         vs_get(base + 4), from == 0)
     call vs_leave(base)
-  end function exec_dot
+  end function dot_dispatch
 
 
   recursive function exec_setbang(nd, frame) result(out)

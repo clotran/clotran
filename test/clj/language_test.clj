@@ -1032,6 +1032,38 @@
 (check "a frame names its file" (boolean (re-find #"language_test" (str (.getFileName (aget st-trace 1))))) true)
 (check "a frame has a line" (pos? (.getLineNumber (aget st-trace 1))) true)
 
+;;; ---- tasks: futures that yield ------------------------------------
+;;
+;; A future is a task in a context of its own (tasks.inc). It runs
+;; when made, until it blocks; then it is parked, and resumed by
+;; whoever waits for it. Host checks: when it runs is ours; the values
+;; are the oracle's.
+(def tk-ping (promise)) (def tk-pong (promise))
+(def tk-t1 (future (let [x 10 y @tk-ping] (deliver tk-pong (+ x y)) :t1-done)))
+(check "a future runs until it blocks, then is parked" (future-done? tk-t1) false)
+(deliver tk-ping 5)
+(check "and stays parked until something waits" (future-done? tk-t1) false)
+(check "resumed, it has its locals" [@tk-pong @tk-t1] [15 :t1-done])
+(def tk-t5 (future (Thread/sleep 5) 7))
+(check "a block under a native frame is pinned and runs the others there"
+       @(future (mapv (fn [i] (+ i @tk-t5)) [1 2])) [8 9])
+(def tk-q (promise))
+(check "pinned, it cannot wait for the main context: a deadlock, not a hang"
+       (try @(future (mapv (fn [i] (+ i @tk-q)) [1 2])) (catch Throwable e (boolean (re-find #"deadlock" (str e))))) true)
+(check "so is a wait nothing can satisfy"
+       (try @(promise) (catch Throwable t (boolean (re-find #"deadlock" (str t))))) true)
+(def tk-p3 (promise)) (def tk-t3 (future @tk-p3))
+(check "a parked future can be cancelled"
+       [(future-cancel tk-t3) (future-cancelled? tk-t3) (try @tk-t3 (catch java.util.concurrent.CancellationException e :cancelled))]
+       [true true :cancelled])
+(def tk-slow (promise)) (def tk-t7 (future (deref tk-slow 20 :gave-up)))
+(Thread/sleep 30)
+(check "a deadline rides on the parked future" @tk-t7 :gave-up)
+(check "the failure's text is in the ExecutionException"
+       (try @(future (throw (ex-info "boom" {}))) (catch Throwable e (boolean (re-find #"boom" (str e))))) true)
+(check "a thousand futures give their contexts back"
+       (count (doall (map deref (doall (map #(future (* % %)) (range 1000)))))) 1000)
+
 (println "")
 (if (zero? @*failures*)
   (println "LANGUAGE TESTS PASSED")

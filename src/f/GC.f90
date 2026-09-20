@@ -266,6 +266,10 @@ module GC
   integer, parameter, public :: OBJ_CHUNK     = 31 ! 1=backing; i1=offset i2=end
   integer, parameter, public :: OBJ_CHUNKBUF  = 32 ! 1=run; i1=count
   integer, parameter, public :: OBJ_CHUNKSEQ  = 33 ! 1=chunk 2=more 3=meta
+  ! A task: a closure run in a context of its own, the thread primitive
+  ! (Eval's tasks.inc). i1 is its state, i2 the context it runs in -- 0
+  ! before it starts and once it has finished.
+  integer, parameter, public :: OBJ_TASK      = 34 ! 1=thunk 2=value or failure 3=awaited 4=deadline
   integer, parameter, public :: OBJ_HAMT      = 11 ! 1=root run; i1=count
   integer, parameter, public :: OBJ_HAMT_LEAF = 12 ! 1=key 2=val
   ! Slot 3 was reserved for a per-Var dynamic stack; the dynamic

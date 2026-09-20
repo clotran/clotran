@@ -370,7 +370,11 @@ state goes to `*clotran-break-handler*`, whose command resumes:
 `:abort`. The handler runs in a context of its own while the paused
 one is parked -- the first use of stage 2's context type, and the
 shape a green thread takes. The REPL is the default handler, nested.
-Threads over VM contexts (the concurrency decision below). JIT only
+Threads over VM contexts (the concurrency decision below) -- the
+primitive and the `:green` impl are DONE: a future is a task in a
+context of its own, parked when it blocks and resumed by whoever
+waits; core.clj's future, promise, pmap and deref run verbatim over
+it (tasks.inc, DEVIATIONS 38). `:process` is next. JIT only
 when a profile still demands it, and then jank's way -- LLVM IR in
 process -- rather than generated Fortran text through a compiler.
 
@@ -539,6 +543,16 @@ newCachedThreadPool. Prior art: Erlang, Loom, Julia's Distributed
 with ClusterManagers, core.async, bordeaux-threads, core.matrix's
 implementation protocol, and Fortran's own coarrays, which are the
 impl a Fortran user will look for first.
+
+As built (2026-09-20): the task type (`OBJ_TASK`, tasks.inc) is the
+primitive; `:green` is its scheduling -- run at submit until the first
+block, park, resume on demand. Yielding needs a re-executable dispatch
+under the block, so `.` became a loop-driven node and a reify method
+reached through it runs in the loop rather than a nested run; a block
+under a native frame is pinned, as Loom pins a carrier. The protocol
+(`spawn`, `join`, `status`, `cancel`, a mailbox) is not yet a named
+thing: `future`, `deref`, `future-done?` and `future-cancel` are it,
+and `:process` will be the second impl behind the same names.
 
 **Arrays are never ragged.** A Fortran rank-2 array is one contiguous
 column-major block; `[[I` is nested and cannot be handed to BLAS at

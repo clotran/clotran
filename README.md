@@ -180,6 +180,26 @@ once the current frame has returned. Evaluating in a frame is the
 handler's own `let` over `:env`, since locals are immutable and the
 values are already in the map.
 
+**Futures and promises, on one thread.** core.clj's own `future`,
+`promise`, `pmap`, `pcalls`, `pvalues` and `deref`, verbatim, over a
+task the host runs in an evaluator context of its own -- a green
+thread: it runs when made, parks when it blocks, and resumes when
+something waits for it. Verified output:
+
+```
+user=> #'p
+user=> #'f
+user=> false
+user=> #object[clotran.reify__2]
+user=> 15
+user=> (2 3 4)
+user=> :nobody-delivered
+```
+
+There is one OS thread, so this is concurrency without parallelism;
+what it buys is that pipeline code reads as straight-line Clojure.
+DEVIATIONS 38 lists what differs from a JVM thread.
+
 Four oracles keep it honest: gfortran and flang must agree
 (`make crosscheck`), `clj` -- real JVM Clojure --
 answers what Clojure actually does rather than what anyone remembers,
@@ -197,7 +217,8 @@ recalled. See `CLAUDE.md`.
 | `BigDecimal` and `BigInt` | `1M` reads as a double and `1N` as an integer; DEVIATIONS 30 |
 | sorted collections | `sorted-map` and `sorted-set` are unsorted; DEVIATIONS 9 |
 | mutable deftype fields | `(set! afield v)` is refused, loudly; DEVIATIONS 20 |
-| `tap>`, `promise`, `shuffle` | need threads, queues or `ArrayList` |
+| `tap>`, `shuffle`, agents that run apart | queues or `ArrayList`; an agent's action runs at `send`, on the one thread there is |
+| futures | run on the one OS thread, at creation until they first block; a wait under a `map` or `reduce` callback cannot park, and a wait nothing can satisfy is an error, not a hang; DEVIATIONS 38 |
 | the five JVM-only sibling libs | bytecode generation; see `src/clj/clojure/PROVENANCE.md` |
 | regex | ICU, with ASCII/Latin-1 offsets only |
 | calling a Fortran library | one routine, `dgemm`, hand-bound; the generator that would do it for any routine is PLAN.md step 7 |
