@@ -361,7 +361,12 @@ Also added on the way: `clotran-slurp`, a host reader for a whole file
 
 ### 8. Then, each now cheap because of step 5
 
-Image for startup. Debugger over frames (the protocol below).
+Image for startup. Debugger over frames (the protocol below) -- the
+STATE half is done: `(clotran-break)`, break-on-error and
+`(clotran-last-break)` answer frames with locals by name, so the
+remaining half is resuming (`:continue`, `:step`, eval-in-frame),
+which needs the paused stack to be resumable from outside `run` --
+the same capability a green thread needs.
 Threads over VM contexts (the concurrency decision below). JIT only
 when a profile still demands it, and then jank's way -- LLVM IR in
 process -- rather than generated Fortran text through a compiler.

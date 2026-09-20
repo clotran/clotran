@@ -2818,3 +2818,58 @@ now WHEN the rest is already realised, and `seq_realised_p` checks
 before folding -- a partly realised seq would otherwise hash its
 first 32 elements and claim to be the whole sequence, which is the
 silent wrong answer rather than the loud one.
+
+## A break is data, and what it cost to get the caller's locals
+
+The debugger PLAN.md asks for is a protocol, not a UI: pause, hand the
+state to a handler, take a command back. This is the first half of it,
+the part that is useful on its own -- the state, as data:
+
+    {:reason :error
+     :message "no such member: Long.nosuchmember"
+     :frames [{:fn "clojure.core/boom" :file "x.clj" :line 1 :col 33
+               :env {x 10, y 30}}
+              {:fn "clojure.core/caller" ...}]}
+
+`(clotran-break)` takes one anywhere and answers it -- a breakpoint
+that needs no protocol at all, since the answer is a map you can look
+at. An error takes one when `CLOTRAN_BREAK=1`, when
+`CLOTRAN_BREAK_FILE=path` is set (appended, for a run that ends before
+anyone can ask), or after `(clotran-break-on! true)` at a REPL, and
+`(clotran-last-break)` reads the most recent one back, the way `*e`
+holds the last exception. It is taken at the THROW, in capture_trace,
+where every frame is still pending; after the unwind the locals are
+gone. Capture is off by default: it builds a map of every frame at
+every error, caught ones included.
+
+Two things had to change to make the frames worth reading.
+
+**Locals by name.** The analyser knew each local's name and slot and
+threw the mapping away after analysis. `bind_name` now also records
+slot -> name at the FN level, and it rides on the closure's template
+as a sixth element. The debugger reads it; nothing else does.
+
+**A tail call now keeps its own frame.** The executor reused the
+caller's continuation frame for a call in tail position, which was
+free -- the caller was finished with its locals -- until a break
+wanted to show them. `(defn outer [coll] (let [n (count coll)]
+(inner n 41)))` reported one frame, and the caller's `n` and `coll`
+were unreachable, while the call stack named `outer` in the trace
+either way. Now the callee's body is pushed rather than swapped in.
+It costs about 5% on call-heavy benchmarks and some value-stack
+memory per pending call, and it is also what Clojure does: there is
+no tail-call elimination on the JVM, so the caller's frame is
+genuinely still there.
+
+`CLOTRAN_KEEP_LOCALS=1` turns the locals-clearing pass off, so a frame
+shows every local it bound rather than nil for the ones already read.
+Clojure has the same switch, `:disable-locals-clearing`, for the same
+reason. Without it a break is still useful but half the values read
+nil, which is honest -- the frame really has dropped them -- and
+confusing the first time.
+
+What is NOT here: resuming. The handler Var, `:continue`, `:step` and
+`{:eval form :frame 2}` all need the paused continuation stack to be
+resumable from outside `run`, which is the same capability a green
+thread needs (PLAN stage 2's context type). That is the next piece,
+and the data above is meant to not change when it lands.

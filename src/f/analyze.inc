@@ -96,12 +96,22 @@
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: names
     integer :: base
-    base = vs_enter(2)
+    base = vs_enter(3)
     call vs_set(base + 1, sc)
     call vs_set(base + 2, sym)
     names = gca_assoc(gc_slot(vs_get(base + 1), 1), vs_get(base + 2), gc_int(slot), &
          [roots, vs_get(base + 1), vs_get(base + 2)])
     call gc_set_slot(vs_get(base + 1), 1, names)
+    ! ...and the other way round, at the FN level: slot -> name, for
+    ! every block of the fn, so a paused frame can report its locals by
+    ! name (the debugger, exec.inc break_frames). The scope map above is
+    ! per block and gone after analysis; this one rides on the template.
+    call vs_set(base + 3, scope_info(vs_get(base + 1)))
+    names = gc_slot(vs_get(base + 3), 4)
+    if (.not. gca_is(names)) names = gca_empty([roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+    names = gca_assoc(names, gc_int(slot), vs_get(base + 2), &
+         [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+    call gc_set_slot(vs_get(base + 3), 4, names)
     call vs_leave(base)
   end subroutine bind_name
 
@@ -1258,7 +1268,7 @@
        call apply_clears(gcv_nth(gcv_nth(vs_get(base + 7), i), 3), gc_i1(scope_info(vs_get(base + 5))))
     end do
 
-    ! [name arities captures nslots selfslot]
+    ! [name arities captures nslots selfslot slotnames]
     tmpl = gcv_empty([vs_get(base + 1), vs_get(base + 5), vs_get(base + 7)])
     call vs_set(base + 8, tmpl)
     tmpl = gcv_conj(vs_get(base + 8), vs_get(base + 4), [vs_get(base + 5), vs_get(base + 7)])
@@ -1271,6 +1281,15 @@
     call vs_set(base + 8, tmpl)
     tmpl = gcv_conj(vs_get(base + 8), gc_int(self_slot), [vs_get(base + 5)])
     call vs_set(base + 8, tmpl)
+    ! slot -> name, for the debugger; an empty map when the fn has no
+    ! named locals at all
+    block
+      type(gc_value) :: nm
+      nm = gc_slot(scope_info(vs_get(base + 5)), 4)
+      if (.not. gca_is(nm)) nm = gca_empty([vs_get(base + 5), vs_get(base + 8)])
+      tmpl = gcv_conj(vs_get(base + 8), nm, [vs_get(base + 5)])
+      call vs_set(base + 8, tmpl)
+    end block
     nd = mk_node(N_FN, gc_nil(), vs_get(base + 8), gc_nil(), 0, [vs_get(base + 1), vs_get(base + 2)])
     call vs_leave(base)
   end function analyze_fn
@@ -2104,10 +2123,25 @@
   ! Runs the pass over one body with `nslots` slots and marks the reads.
   ! A body that recurs to its fn re-runs from the top with its captures
   ! unchanged, so it gets no clearing at all.
+  ! CLOTRAN_KEEP_LOCALS=1 turns the clearing pass off, so a paused frame
+  ! shows every local it ever bound rather than nil for the ones already
+  ! read. Clojure has the same switch, :disable-locals-clearing, and for
+  ! the same reason: cleared locals are invisible to a debugger.
+  logical function keep_locals()
+    character(len=8) :: b
+    if (keep_locals_mode == 0) then
+       keep_locals_mode = 1
+       call get_environment_variable("CLOTRAN_KEEP_LOCALS", b)
+       if (trim(b) == "1") keep_locals_mode = 2
+    end if
+    keep_locals = (keep_locals_mode == 2)
+  end function keep_locals
+
   subroutine apply_clears(body, nslots)
     type(gc_value), intent(in) :: body
     integer, intent(in) :: nslots
     logical, allocatable :: live(:)
+    if (keep_locals()) return
     if (nslots <= 0) return
     if (has_fn_recur(body)) return
     allocate(live(nslots))

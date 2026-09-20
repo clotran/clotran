@@ -120,7 +120,7 @@
     is_node_closure = .false.
     if (gc_kind(fn) /= OBJ_CLOSURE) return
     is_node_closure = gcv_is(gc_slot(fn, 1)) .and. (gc_kind(gc_slot(fn, 3)) /= OBJ_ENV)
-    if (is_node_closure) is_node_closure = (gcv_count(gc_slot(fn, 1)) == 5)
+    if (is_node_closure) is_node_closure = (gcv_count(gc_slot(fn, 1)) >= 5)
   end function is_node_closure
 
   ! Calls a closure from outside the loop -- a native, a multimethod.
@@ -138,7 +138,7 @@
     pending_site = 0
     ok = bind_closure(vs_get(base + 1), argv, frame, body)
     if (ok) then
-       out = run(body, frame, ior(KF_FNBODY, KF_RESTART), body)
+       out = run(body, frame, ior(KF_FNBODY, KF_RESTART), body, vs_get(base + 1))
     else
        call pop_frame()
     end if
@@ -281,6 +281,236 @@
   ! bounded by ev_limit as before. A native that calls back into
   ! Clojure -- forcing a lazy seq, a multimethod's dispatch -- nests the
   ! same way. Those are the pinned frames Loom has too.
+
+  ! --- the break protocol --------------------------------------------
+  !
+  ! A break is the paused state as DATA: why, where, and one entry per
+  ! call still on the continuation stack with that call's locals by
+  ! name. Nothing here knows about a terminal. `(clotran-break)` takes
+  ! one and answers it; an error takes one when CLOTRAN_BREAK=1 or
+  ! CLOTRAN_BREAK_FILE is set, and `(clotran-last-break)` reads it back
+  ! afterwards, the way *e holds the last exception.
+  !
+  ! It is taken BEFORE unwinding -- capture_trace runs at the throw,
+  ! where every frame is still pending -- because after the unwind the
+  ! locals are gone. PLAN.md's debugger protocol is this data plus a
+  ! handler that can answer :continue or :eval; the handler is not
+  ! here yet, and the shape of the data is meant to not change when it
+  ! arrives.
+
+  ! A value as a short string, WITHOUT forcing anything: a break may
+  ! be taken while an infinite seq is half built, and printing it is
+  ! not worth hanging the process that was already in trouble.
+  function safe_str(v) result(s)
+    type(gc_value), intent(in) :: v
+    character(len=:), allocatable :: s
+    character(len=16) :: nbuf
+    integer :: k, n
+    k = gc_kind(strip_meta(v))
+    n = -1
+    select case (k)
+    case (OBJ_LAZY, OBJ_CHUNKSEQ)
+       if (.not. seq_realised_p(strip_meta(v))) then
+          s = "#<unrealised seq>"
+          return
+       end if
+    case (OBJ_VECTOR)
+       if (gcv_count(strip_meta(v)) > 32) then
+          n = gcv_count(strip_meta(v))
+          s = "#<vector "
+       end if
+    case (OBJ_MAP, OBJ_HAMT)
+       if (gca_count(strip_meta(v)) > 32) then
+          n = gca_count(strip_meta(v))
+          s = "#<map "
+       end if
+    case (OBJ_SET)
+       if (gca_count(gc_slot(strip_meta(v), 1)) > 32) then
+          n = gca_count(gc_slot(strip_meta(v), 1))
+          s = "#<set "
+       end if
+    case (OBJ_CONS)
+       if (gcl_count(strip_meta(v)) > 32) then
+          n = gcl_count(strip_meta(v))
+          s = "#<list "
+       end if
+    end select
+    if (n >= 0) then
+       write(nbuf, '(I0)') n
+       s = s // trim(nbuf) // ">"
+       return
+    end if
+    s = gcp_str(v, .true.)
+    if (len(s) > 120) s = s(1:117) // "..."
+  end function safe_str
+
+  ! One map per call still pending, innermost first:
+  !   {:fn "user/f" :file "x.clj" :line 12 :col 3 :env {x 3, coll [1 2]}}
+  ! A frame that is not a fn body -- an `if` waiting on its test -- is
+  ! not a call and is skipped. A local already cleared after its last
+  ! read reads as nil, here as on the JVM.
+  function break_frames(roots) result(out)
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, m, fn, nd, env, names, tmpl, nm, pos
+    type(gc_value), allocatable :: ks(:), vls(:)
+    character(len=:), allocatable :: who, fname
+    integer :: base, i, j, b, line, col, slot
+
+    base = vs_enter(4)
+    out = gcv_empty(roots)
+    call vs_set(base + 1, out)
+    do i = ksp, 1, -1
+       b = kst(i)%base
+       fn = vs_get(b + 7)
+       if (gc_kind(fn) /= OBJ_CLOSURE) cycle
+       call vs_set(base + 2, fn)
+       nd = vs_get(b + 1)
+       fname = ""
+       line = 0
+       col = 0
+       pos = gc_slot(nd, 4)
+       if (pos%tag == GCT_INT) call gcr_position_parts(int(pos%ival, kind=4), fname, line, col)
+       who = "fn"
+       nm = gc_slot(vs_get(base + 2), 5)
+       if (nm%tag == GCT_SYM) who = gc_ref_text(nm%ref)
+
+       env = gca_empty([roots, vs_get(base + 1), vs_get(base + 2)])
+       call vs_set(base + 3, env)
+       tmpl = gc_slot(vs_get(base + 2), 1)
+       if (gcv_count(tmpl) >= 6) then
+          names = gcv_nth(tmpl, 5)
+          if (gca_is(names)) then
+             call gca_entries(names, ks, vls)
+             do j = 1, size(ks)
+                slot = int_of(ks(j))
+                if (slot >= 0 .and. slot < gc_vec_len(vs_get(b + 2))) then
+                   env = gca_assoc(vs_get(base + 3), vls(j), frame_get(vs_get(b + 2), slot), &
+                        [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+                   call vs_set(base + 3, env)
+                end if
+             end do
+          end if
+       end if
+
+       m = gca_empty([roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+       call vs_set(base + 4, m)
+       call brk_put(base + 4, "fn", gc_str(who, [vs_get(base + 4)]), roots, base)
+       call brk_put(base + 4, "file", gc_str(fname, [vs_get(base + 4)]), roots, base)
+       call brk_put(base + 4, "line", gc_int(int(line, gc_ip)), roots, base)
+       call brk_put(base + 4, "col", gc_int(int(col, gc_ip)), roots, base)
+       call brk_put(base + 4, "env", vs_get(base + 3), roots, base)
+       out = gcv_conj(vs_get(base + 1), vs_get(base + 4), &
+            [roots, vs_get(base + 1), vs_get(base + 4)])
+       call vs_set(base + 1, out)
+    end do
+    out = vs_get(base + 1)
+    call vs_leave(base)
+  end function break_frames
+
+  ! (assoc m :k v) in place on a value-stack slot, so the callers above
+  ! stay readable.
+  subroutine brk_put(slot, k, v, roots, base)
+    integer, intent(in) :: slot, base
+    character(len=*), intent(in) :: k
+    type(gc_value), intent(in) :: v
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: m
+    m = gca_assoc(vs_get(slot), gc_key(k, [roots, vs_get(slot), v]), v, &
+         [roots, vs_get(slot), v])
+    call vs_set(slot, m)
+  end subroutine brk_put
+
+  ! The paused state, stored and answered. `reason` is :error or :break.
+  function capture_break(reason) result(out)
+    character(len=*), intent(in) :: reason
+    type(gc_value) :: out, fr
+    integer :: base
+    base = vs_enter(2)
+    fr = break_frames([gc_nil()])
+    call vs_set(base + 1, fr)
+    out = gca_empty([vs_get(base + 1)])
+    call vs_set(base + 2, out)
+    call brk_put(base + 2, "reason", gc_key(reason, [vs_get(base + 1), vs_get(base + 2)]), &
+         [vs_get(base + 1)], base)
+    if (allocated(last_error)) then
+       call brk_put(base + 2, "message", gc_str(last_error, [vs_get(base + 1), vs_get(base + 2)]), &
+            [vs_get(base + 1)], base)
+    end if
+    call brk_put(base + 2, "frames", vs_get(base + 1), [vs_get(base + 1)], base)
+    out = vs_get(base + 2)
+    call gc_global_keep(break_root, out)
+    call vs_leave(base)
+  end function capture_break
+
+  ! CLOTRAN_BREAK=1 writes each break to stderr; CLOTRAN_BREAK_FILE
+  ! writes it to that file as well, appended, for a run that ends
+  ! before anyone can ask. Either one turns capture on; without them an
+  ! error costs nothing extra.
+  subroutine read_break_mode()
+    character(len=1024) :: b
+    break_mode = 1
+    break_stderr = .false.
+    call get_environment_variable("CLOTRAN_BREAK", b)
+    if (trim(b) == "1") then
+       break_mode = 2
+       break_stderr = .true.
+    end if
+    call get_environment_variable("CLOTRAN_BREAK_FILE", b)
+    if (len_trim(b) > 0) then
+       break_path = trim(b)
+       break_mode = 2
+    end if
+  end subroutine read_break_mode
+
+  subroutine dump_break(m)
+    type(gc_value), intent(in) :: m
+    integer :: u, st
+    if (break_stderr) call write_break(m, 0)
+    if (allocated(break_path)) then
+       open(newunit=u, file=break_path, position="append", action="write", iostat=st)
+       if (st == 0) then
+          call write_break(m, u)
+          close(u)
+       end if
+    end if
+  end subroutine dump_break
+
+  ! Rendered by hand rather than printed as a map: every value goes
+  ! through safe_str, so a dump never forces a seq or writes a
+  ! megabyte.
+  subroutine write_break(m, u)
+    type(gc_value), intent(in) :: m
+    integer, intent(in) :: u
+    type(gc_value) :: frames, f, env
+    type(gc_value), allocatable :: ks(:), vls(:)
+    character(len=32) :: nbuf
+    integer :: i, j
+    write(u, '(A)') "break: " // gcp_str(gca_get(m, gc_key("reason", [m])), .true.) // " " // &
+         text_of(gca_get(m, gc_key("message", [m])))
+    frames = gca_get(m, gc_key("frames", [m]))
+    do i = 0, gcv_count(frames) - 1
+       f = gcv_nth(frames, i)
+       write(nbuf, '(I0)') i
+       write(u, '(A)') "  " // trim(nbuf) // " " // text_of(gca_get(f, gc_key("fn", [f]))) // &
+            " (" // text_of(gca_get(f, gc_key("file", [f]))) // ":" // &
+            trim(int_text(gca_get(f, gc_key("line", [f])))) // ":" // &
+            trim(int_text(gca_get(f, gc_key("col", [f])))) // ")"
+       env = gca_get(f, gc_key("env", [f]))
+       if (gca_is(env)) then
+          call gca_entries(env, ks, vls)
+          do j = 1, size(ks)
+             write(u, '(A)') "      " // gcp_str(ks(j), .false.) // " = " // safe_str(vls(j))
+          end do
+       end if
+    end do
+    flush(u)
+  end subroutine write_break
+
+  function int_text(v) result(s)
+    type(gc_value), intent(in) :: v
+    character(len=32) :: s
+    write(s, '(I0)') int(v%ival, kind=4)
+  end function int_text
 
   ! The builtins a call may hand a REUSED argument vector: numeric, and
   ! none of them keeps its arguments or calls back into Clojure. That
@@ -453,11 +683,13 @@
   recursive function exec(nd, frame) result(out)
     type(gc_value), intent(in) :: nd, frame
     type(gc_value) :: out
-    out = run(nd, frame, 0, gc_nil())
+    out = run(nd, frame, 0, gc_nil(), gc_nil())
   end function exec
 
-  recursive function run(nd0, frame0, flags0, restart0) result(out)
-    type(gc_value), intent(in) :: nd0, frame0, restart0
+  ! `fn0` is the closure whose body this is, for the debugger: it rides
+  ! in kframe slot 7 and is what break_frames reports a frame as.
+  recursive function run(nd0, frame0, flags0, restart0, fn0) result(out)
+    type(gc_value), intent(in) :: nd0, frame0, restart0, fn0
     integer, intent(in) :: flags0
     type(gc_value) :: out, nd, kids, val, v, fnv, newframe, body
     integer :: kbot, vbase, kind, n, b, site
@@ -476,6 +708,7 @@
     kbot = ksp
     val = gc_nil()
     call k_push(nd0, frame0, flags0, restart0)
+    call vs_set(kst(ksp)%base + 7, fn0)
 
     do
        if (has_error) then
@@ -573,6 +806,9 @@
              end if
              kst(ksp)%i = kst(ksp)%i + 1
              kst(ksp)%pc = 2
+          case (5)
+             ! the callee's body finished; its value is this call's
+             call k_finish(val)
           case (4)
              ! where this call is, for the call stack
              v = gc_slot(nd, 4)
@@ -594,17 +830,22 @@
                 cycle
              end if
              if (kst(ksp)%mode == 2) then
-                ! the frame holds the arguments; captures and the name
-                ! complete it, and this frame becomes the body's
+                ! the frame already holds the arguments; captures and the
+                ! fn's own name complete it, and the body runs in a frame
+                ! OF ITS OWN. A call in tail position used to reuse this
+                ! one, which cost nothing at the time -- the caller was
+                ! finished with its locals -- but a caller's locals are
+                ! exactly what a break has to show, and the call stack
+                ! names the caller either way. Clojure eliminates no tail
+                ! call, so keeping the frame is also what it does.
                 call push_frame(fnv, site)
                 if (has_error) cycle
-                kst(ksp)%nfr = kst(ksp)%nfr + 1
                 call bind_captures(vs_get(b + 3), vs_get(b + 4))
                 body = gcv_nth(gcv_nth(gcv_nth(gc_slot(vs_get(b + 3), 1), 1), kst(ksp)%aux2), 3)
-                call vs_set(b + 2, vs_get(b + 4))
                 call vs_set(b + 5, body)
-                kst(ksp)%flags = ior(kst(ksp)%flags, KF_RESTART)
-                call k_tail(body)
+                kst(ksp)%pc = 5
+                call k_push(vs_get(b + 5), vs_get(b + 4), ior(KF_FNBODY, KF_RESTART), vs_get(b + 5))
+                call vs_set(kst(ksp)%base + 7, fnv)
                 cycle
              end if
              ! The argument vector is handed over, not kept (see
@@ -613,20 +854,20 @@
              v = vs_get(b + 4)
              call vs_set(b + 4, gc_nil())
              if (is_node_closure(fnv)) then
-                ! A tail call: this frame becomes the callee's body. The
-                ! caller stays on the call stack, as it would on the JVM,
-                ! so a trace names every call and a runaway tail recursion
-                ! overflows at k_limit rather than running forever.
+                ! The callee's body, in a frame of its own (see mode 2).
                 call push_frame(fnv, site)
                 if (has_error) cycle
-                kst(ksp)%nfr = kst(ksp)%nfr + 1
                 call vs_set(b + 3, fnv)
                 ok = bind_closure(vs_get(b + 3), v, newframe, body)
                 if (ok) then
-                   call vs_set(b + 2, newframe)
+                   call vs_set(b + 4, newframe)
                    call vs_set(b + 5, body)
-                   kst(ksp)%flags = ior(kst(ksp)%flags, KF_RESTART)
-                   call k_tail(body)
+                   kst(ksp)%pc = 5
+                   call k_push(vs_get(b + 5), vs_get(b + 4), ior(KF_FNBODY, KF_RESTART), vs_get(b + 5))
+                   call vs_set(kst(ksp)%base + 7, vs_get(b + 3))
+                else
+                   ! no arity fits: the entry pushed above is ours to drop
+                   call pop_frame()
                 end if
              else
                 pending_site = site

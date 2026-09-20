@@ -21,6 +21,46 @@
     (do (swap! *failures* inc)
         (println "FAIL -" label "got" (pr-str got) "want" (pr-str want)))))
 
+;;; ---- the break protocol -------------------------------------------
+;;
+;; A break is the paused state as DATA: why, where, and one frame per
+;; call still pending, each with its locals BY NAME. Host check: real
+;; Clojure has no clotran-break, and the frame names are ours.
+
+(defn brk-inner [a b] (let [sum (+ a b) label "mid"] (clotran-break)))
+(defn brk-outer [coll] (let [n (count coll)] (brk-inner n 41)))
+(def brk (brk-outer [1 2 3]))
+
+(check "a break says why" (:reason brk) :break)
+(check "a break has a frame per call" (count (:frames brk)) 2)
+(check "the innermost call is first" (:fn (first (:frames brk))) "clojure.core/brk-inner")
+(check "its caller is under it" (:fn (second (:frames brk))) "clojure.core/brk-outer")
+;; a call in tail position keeps ITS OWN frame -- Clojure eliminates no
+;; tail call, and a caller's locals are what a break is for
+(check "a frame names its locals" (contains? (:env (first (:frames brk))) (quote sum)) true)
+(check "and carries their values" (get (:env (first (:frames brk))) (quote sum)) 44)
+(check "a string local too" (get (:env (first (:frames brk))) (quote label)) "mid")
+;; a local ALREADY READ for the last time reads nil: the frame really
+;; has dropped it, which is what the clearing pass is for and what
+;; CLOTRAN_KEEP_LOCALS=1 turns off for a debugging run
+(check "the caller's locals are named" (contains? (:env (second (:frames brk))) (quote n)) true)
+(check "...and a cleared one reads nil" (get (:env (second (:frames brk))) (quote n)) nil)
+(check "a frame knows its line" (number? (:line (first (:frames brk)))) true)
+(check "and its file" (string? (:file (first (:frames brk)))) true)
+
+;; an error takes one too, once capture is on
+(defn brk-boom [x] (let [doubled (* x 2)] (.nosuchmember doubled)))
+(clotran-break-on! true)
+(def brk-caught (try (brk-boom 21) (catch Throwable t :caught)))
+(def brk-err (clotran-last-break))
+(clotran-break-on! false)
+
+(check "the error was still caught" brk-caught :caught)
+(check "an error breaks too" (:reason brk-err) :error)
+(check "with the message" (string? (:message brk-err)) true)
+(check "and the failing frame" (:fn (first (:frames brk-err))) "clojure.core/brk-boom")
+(check "with its locals named" (contains? (:env (first (:frames brk-err))) (quote doubled)) true)
+
 ;;; ---- reader conditionals ------------------------------------------
 
 ;; The feature is :cljf. A branch nobody selects is read and dropped, so

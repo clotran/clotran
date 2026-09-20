@@ -167,6 +167,7 @@ module Eval
   integer, parameter :: B_CLASSOF = 284, B_IDHASH = 285, B_REDUCEINIT = 286
   integer, parameter :: B_CHUNK_ADD = 287, B_CHUNK_OF = 288, B_CHUNK_FIRST = 289, &
        B_CHUNK_MORE = 290, B_CHUNK_NEXT = 291, B_CHUNK_DROP = 292
+  integer, parameter :: B_BREAK = 293, B_LASTBREAK = 294, B_BREAKON = 295
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -247,6 +248,11 @@ module Eval
   ! Reused argument vectors for the numeric builtins (exec.inc, N_CALL
   ! mode 3), and the one recur marker: none of those allocate per call.
   type(gc_root), save :: scratch1_root, scratch2_root, recur_root
+  ! The last paused state, as data; see the break protocol in exec.inc.
+  type(gc_root), save :: break_root
+  integer, save :: break_mode = 0   ! 0 unread, 1 off, 2 capturing
+  logical, save :: break_stderr = .false.
+  character(len=:), allocatable, save :: break_path
 
   public :: gce_eval, gce_base_env, gce_has_error, gce_error, gce_clear_error
   public :: gce_analyze, gce_trace
@@ -280,6 +286,7 @@ module Eval
        N_SETBANG = 24, N_FAIL = 25, N_TOP = 26, N_TOPDO = 27, N_LATEVAR = 28
   integer, parameter :: K_SCOPE = 100, K_FNINFO = 101
   integer, save :: trace_macros = 0   ! 0 unread, 1 on, 2 off
+  integer, save :: keep_locals_mode = 0   ! 0 unread, 1 clear, 2 keep
 
   ! The executor's continuation stack (exec.inc, `run`): one entry per
   ! node being evaluated. Its values live in a K_SLOTS-wide region of
@@ -297,7 +304,7 @@ module Eval
   end type kframe
   type(kframe), allocatable, save :: kst(:)
   integer, save :: ksp = 0
-  integer, parameter :: KF_FNBODY = 1, KF_RESTART = 2, K_SLOTS = 6   ! slot 6: a scalar call's first argument
+  integer, parameter :: KF_FNBODY = 1, KF_RESTART = 2, K_SLOTS = 7   ! slot 6: a scalar call's first argument; slot 7: the closure whose body this is
   integer, save :: k_limit = 0
 
   ! --- evaluation contexts ---------------------------------------------
@@ -440,6 +447,7 @@ contains
   ! element array .getStackTrace answers is still the whole stack.
   subroutine capture_trace()
     integer :: i
+    type(gc_value) :: bm
     type(gc_value) :: nm
     character(len=:), allocatable :: who
     character(len=16) :: more
@@ -458,6 +466,12 @@ contains
        end if
     end do
     if (fstack_top > 128) last_trace = last_trace // "  ... " // trim(more) // " more" // achar(10)
+    ! and the paused state as data, while the frames are still pending
+    if (break_mode == 0) call read_break_mode()
+    if (break_mode == 2) then
+       bm = capture_break("error")
+       call dump_break(bm)
+    end if
   end subroutine capture_trace
 
   ! The trace of the last error, one line per frame, or empty.
@@ -535,6 +549,10 @@ contains
     call bind_builtin(core, "<", B_LT)
     call bind_builtin(core, "list", B_LIST)
     call bind_builtin(core, "vector", B_VECTOR)
+    ! The debugger's two entry points; PLAN.md's break protocol.
+    call bind_builtin(core, "clotran-break", B_BREAK)
+    call bind_builtin(core, "clotran-last-break", B_LASTBREAK)
+    call bind_builtin(core, "clotran-break-on!", B_BREAKON)
     ! Native arrays go in a `fortran` NAMESPACE, not in clojure.core.
     !
     ! Two reasons, and the first is practical: core.clj defines its
@@ -7755,6 +7773,28 @@ contains
        else
           out = make_chunk(gc_slot(a, 1), gc_i1(a) + 1, gc_i2(a), [vs_get(base + 1)])
        end if
+    case (B_BREAK)
+       ! (clotran-break) -- the paused state here, as data, and stored.
+       out = capture_break("break")
+       call vs_set(base + 2, out)
+       if (break_mode == 0) call read_break_mode()
+       if (break_mode == 2) call dump_break(vs_get(base + 2))
+       out = vs_get(base + 2)
+    case (B_LASTBREAK)
+       out = gc_nil()
+       if (gc_root_live(break_root)) out = gc_root_get(break_root)
+    case (B_BREAKON)
+       ! (clotran-break-on! true) at a REPL, for when the process was not
+       ! started under CLOTRAN_BREAK. Capturing is off by default because
+       ! it builds a map of every frame at every error, caught ones
+       ! included.
+       if (break_mode == 0) call read_break_mode()
+       if (truthy(gcv_nth(args, 0))) then
+          break_mode = 2
+       else
+          break_mode = 1
+       end if
+       out = gc_bool(break_mode == 2)
     case (B_IDHASH)
        ! System.identityHashCode: a number that is the same for the same
        ! object and usually differs between objects. The pool index is
