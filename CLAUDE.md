@@ -171,7 +171,14 @@ it up.
 
 - **Do not build while `make crosscheck` runs.** It does `make clean` and
   compiles from source; an edit mid-run lands in the second compiler's
-  pass, and a rebuild deletes the binary another job is using.
+  pass, and a rebuild deletes the binary another job is using. (A
+  crosscheck interrupted between its halves used to leave flang's
+  `.mod` files for gfortran to choke on; `build/.built-with-<fc>` now
+  makes a compiler change empty the directory first.)
+- **The gate's verdict is the `EXIT` line in its log.** Run it as
+  `(make crosscheck > log; echo "EXIT $?" >> log)` and commit only on
+  `grep -q '^EXIT 0' log`. A wrapper's or a background task's exit code
+  is not the gate's; two commits were made on a red gate that way.
 - **Instrument before theorising.** An hour went into an elaborate
   name-resolution theory that one `print` statement disproved in a
   single run. If there is a testable claim, test it.

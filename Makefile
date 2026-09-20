@@ -106,7 +106,7 @@ $(ICU_STAMP):
 
 $(ICU_LIBS): $(ICU_STAMP)
 
-$(B)/regex_shim.o: src/c/regex_shim.c src/c/regex_shim.h | $(B)
+$(B)/regex_shim.o: src/c/regex_shim.c src/c/regex_shim.h | $(B) $(FCSTAMP)
 	$(CC) -c $(ICU_INC) $< -o $@
 
 # --- the host ----------------------------------------------------------
@@ -125,9 +125,22 @@ all: clotran $(test-bins)
 $(B) $(BT):
 	mkdir -p $@
 
+# The build directory belongs to ONE compiler: .mod files are not
+# portable between them, and a crosscheck interrupted between its two
+# halves left flang's behind for gfortran to choke on ("not a GNU
+# Fortran module file"). The stamp names the owner; building with the
+# other compiler empties the directory first. Every object and test
+# binary depends on it, order-only, so nothing is compiled against a
+# module the other compiler wrote.
+FCSTAMP = $(B)/.built-with-$(FCNAME)
+$(FCSTAMP): | $(B) $(FCSTAMP)
+	rm -rf $(B)/*.o $(B)/*.mod $(B)/.built-with-* $(BT)
+	mkdir -p $(BT)
+	touch $@
+
 # One rule compiles every module; the lines below it say which .mod
 # files each one needs first (a `use` is a compile-time dependency).
-$(B)/%.o: $(S)/%.f90 | $(B)
+$(B)/%.o: $(S)/%.f90 | $(B) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -c $< -o $@
 
 $(B)/PersistentVector.o $(B)/PersistentList.o $(B)/PersistentArrayMap.o $(B)/NativeArray.o: $(B)/GC.o
@@ -145,20 +158,20 @@ $(B)/Eval.o: $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.
 # The reference BLAS (src/f/blas/PROVENANCE.md): F77 fixed form, built
 # by the same compiler, linked wherever NativeArray is.
 blas-objects = $(B)/dgemm.o $(B)/lsame.o $(B)/xerbla.o
-$(B)/%.o: $(S)/blas/%.f | $(B)
+$(B)/%.o: $(S)/blas/%.f | $(B) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -c $< -o $@
 
 # ChemSol (src/f/chemsol/PROVENANCE.md), unmodified, and its binding.
 # chemsol.f90 uses push_array's module; the binding uses both and the
 # registry.
 chemsol-objects = $(B)/push_array.o $(B)/chemsol.o $(B)/ChemSolBind.o
-$(B)/push_array.o: $(S)/chemsol/push_array.f90 | $(B)
+$(B)/push_array.o: $(S)/chemsol/push_array.f90 | $(B) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -c $< -o $@
 # NOT -frecursive: dg_ld declares 400 MB of fixed-size locals (jp, jp2 at
 # mxpair = 10^8 integer(2) each), which the original build keeps in static
 # storage and -frecursive would put on an 8 MB stack -- SIGILL on the first
 # call. Built as the original program is: nothing on the language level.
-$(B)/chemsol.o: $(S)/chemsol/chemsol.f90 $(B)/push_array.o | $(B)
+$(B)/chemsol.o: $(S)/chemsol/chemsol.f90 $(B)/push_array.o | $(B) $(FCSTAMP)
 	$(FC) $(filter-out -frecursive,$(FCFLAGS)) -c $< -o $@
 $(B)/ChemSolBind.o: $(B)/GC.o $(B)/NativeArray.o $(B)/chemsol.o
 
@@ -174,25 +187,25 @@ clotran: $(eval-objects) $(S)/main.f90 $(ICU_LIBS)
 
 # Test binaries: each links exactly the modules it exercises, so a
 # module's test cannot pass by accident through something above it.
-$(BT)/gc_test: $(B)/GC.o $(T)/gc_test.f90 | $(BT)
+$(BT)/gc_test: $(B)/GC.o $(T)/gc_test.f90 | $(BT) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -c $(T)/gc_test.f90 -o $(BT)/gc_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/GC.o $(BT)/gc_test.o
-$(BT)/persistent_vector_test: $(B)/GC.o $(B)/PersistentVector.o $(T)/persistent_vector_test.f90 | $(BT)
+$(BT)/persistent_vector_test: $(B)/GC.o $(B)/PersistentVector.o $(T)/persistent_vector_test.f90 | $(BT) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -c $(T)/persistent_vector_test.f90 -o $(BT)/persistent_vector_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/GC.o $(B)/PersistentVector.o $(BT)/persistent_vector_test.o
-$(BT)/persistent_list_test: $(B)/GC.o $(B)/PersistentList.o $(T)/persistent_list_test.f90 | $(BT)
+$(BT)/persistent_list_test: $(B)/GC.o $(B)/PersistentList.o $(T)/persistent_list_test.f90 | $(BT) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -c $(T)/persistent_list_test.f90 -o $(BT)/persistent_list_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/GC.o $(B)/PersistentList.o $(BT)/persistent_list_test.o
-$(BT)/persistent_array_map_test: $(B)/GC.o $(B)/PersistentArrayMap.o $(T)/persistent_array_map_test.f90 | $(BT)
+$(BT)/persistent_array_map_test: $(B)/GC.o $(B)/PersistentArrayMap.o $(T)/persistent_array_map_test.f90 | $(BT) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -c $(T)/persistent_array_map_test.f90 -o $(BT)/persistent_array_map_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/GC.o $(B)/PersistentArrayMap.o $(BT)/persistent_array_map_test.o
-$(BT)/persistent_hash_map_test: $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(T)/persistent_hash_map_test.f90 | $(BT)
+$(BT)/persistent_hash_map_test: $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(T)/persistent_hash_map_test.f90 | $(BT) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -c $(T)/persistent_hash_map_test.f90 -o $(BT)/persistent_hash_map_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(BT)/persistent_hash_map_test.o
-$(BT)/env_test: $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/Env.o $(T)/env_test.f90 | $(BT)
+$(BT)/env_test: $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/Env.o $(T)/env_test.f90 | $(BT) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -c $(T)/env_test.f90 -o $(BT)/env_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/Env.o $(BT)/env_test.o
-$(BT)/assoc_test: $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(B)/Assoc.o $(T)/assoc_test.f90 | $(BT)
+$(BT)/assoc_test: $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(B)/Assoc.o $(T)/assoc_test.f90 | $(BT) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -c $(T)/assoc_test.f90 -o $(BT)/assoc_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(B)/Assoc.o $(BT)/assoc_test.o
-$(BT)/printer_test: $(data-objects) $(T)/printer_test.f90 | $(BT)
+$(BT)/printer_test: $(data-objects) $(T)/printer_test.f90 | $(BT) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -c $(T)/printer_test.f90 -o $(BT)/printer_test.o && $(FC) $(LDFLAGS) -o $@ $(data-objects) $(BT)/printer_test.o
-$(BT)/reader_test: $(data-objects) $(reader-objects) $(T)/reader_test.f90 $(ICU_LIBS) | $(BT)
+$(BT)/reader_test: $(data-objects) $(reader-objects) $(T)/reader_test.f90 $(ICU_LIBS) | $(BT) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -c $(T)/reader_test.f90 -o $(BT)/reader_test.o && $(FC) $(LDFLAGS) -o $@ $(data-objects) $(reader-objects) $(BT)/reader_test.o $(LINK_ICU)
-$(BT)/eval_test: $(eval-objects) $(T)/eval_test.f90 $(ICU_LIBS) | $(BT)
+$(BT)/eval_test: $(eval-objects) $(T)/eval_test.f90 $(ICU_LIBS) | $(BT) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -c $(T)/eval_test.f90 -o $(BT)/eval_test.o && $(FC) $(LDFLAGS) -o $@ $(eval-objects) $(BT)/eval_test.o $(LINK_ICU)
 
 # The gate. Three layers (CLAUDE.md): the host tests, the host-level
