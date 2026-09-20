@@ -2882,6 +2882,16 @@ second gap: their inner slots are allocated in `lookup_local`, not
 `bind_name`, so they were never named at all and a closed-over value
 never appeared in a frame.
 
+**A frame is where its pending call is.** The position reported for
+a frame was its body node's, and a body that came out of a macro --
+every `let`, every `defn` with a docstring -- has no position, so a
+break inside `(let [n ..] (clotran-break) ..)` reported `0:0`. What a
+trace line shows is the innermost pending node WITHIN the function:
+the call it is waiting on, or the break itself. The reader now takes
+the first node with a position walking down from the top of the
+continuation stack and resets at each fn frame, so `map`'s frame
+reports core.clj line 2767, where its lazy seq calls `f`.
+
 What is NOT here: resuming. The handler Var, `:continue`, `:step` and
 `{:eval form :frame 2}` all need the paused continuation stack to be
 resumable from outside `run`, which is the same capability a green

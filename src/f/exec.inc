@@ -356,23 +356,43 @@
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, m, fn, nd, env, names, tmpl, nm, pos
     type(gc_value), allocatable :: ks(:), vls(:)
-    character(len=:), allocatable :: who, fname
-    integer :: base, i, j, b, line, col, slot, lo, hi
+    character(len=:), allocatable :: who, fname, pfname
+    integer :: base, i, j, b, line, col, slot, lo, hi, pline, pcol
+    logical :: have_pos
 
     base = vs_enter(4)
     out = gcv_empty(roots)
     call vs_set(base + 1, out)
+    have_pos = .false.
     do i = ksp, 1, -1
        b = kst(i)%base
+       nd = vs_get(b + 1)
+       ! Where a fn IS: its innermost pending node's position, the one
+       ! a trace line shows -- the call it is waiting on, or the break
+       ! itself -- rather than its body's, which a macro's expansion
+       ! usually has not got. The first node with one, walking down
+       ! from the top; reset at each fn frame.
+       if (.not. have_pos) then
+          pos = gc_slot(nd, 4)
+          if (pos%tag == GCT_INT) then
+             if (pos%ival > 0) then
+                call gcr_position_parts(int(pos%ival, kind=4), pfname, pline, pcol)
+                have_pos = .true.
+             end if
+          end if
+       end if
        fn = vs_get(b + 7)
        if (gc_kind(fn) /= OBJ_CLOSURE) cycle
        call vs_set(base + 2, fn)
-       nd = vs_get(b + 1)
        fname = ""
        line = 0
        col = 0
-       pos = gc_slot(nd, 4)
-       if (pos%tag == GCT_INT) call gcr_position_parts(int(pos%ival, kind=4), fname, line, col)
+       if (have_pos) then
+          fname = pfname
+          line = pline
+          col = pcol
+       end if
+       have_pos = .false.
        who = "fn"
        nm = gc_slot(vs_get(base + 2), 5)
        if (nm%tag == GCT_SYM) who = gc_ref_text(nm%ref)

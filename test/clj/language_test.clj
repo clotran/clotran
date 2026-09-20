@@ -35,6 +35,9 @@
 (check "a break has a frame per call" (count (:frames brk)) 2)
 (check "the innermost call is first" (:fn (first (:frames brk))) "clojure.core/brk-inner")
 (check "its caller is under it" (:fn (second (:frames brk))) "clojure.core/brk-outer")
+;; Where each is: the call it is waiting on -- (clotran-break) on line
+;; 30 and (brk-inner n 41) on line 31 of this file -- not its body.
+(check "a frame is where its pending call is" (map (juxt :line :col) (:frames brk)) [[30 54] [31 46]])
 ;; One frame serves every arity of a fn, so the other arities' slots
 ;; exist and read nil; they are not this frame's locals.
 (defn brk-arity ([a] (clotran-break)) ([a b] (clotran-break)))
