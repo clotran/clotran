@@ -2868,6 +2868,20 @@ reason. Without it a break is still useful but half the values read
 nil, which is honest -- the frame really has dropped them -- and
 confusing the first time.
 
+**A frame's locals are its arity's.** One frame serves every arity of
+a fn -- the arities' slots are numbered consecutively, the second's
+beginning where the first's end -- and the slot-to-name map was
+fn-wide, so a frame of the first arity reported the last arity's
+names over its own, and nil for all of them: `(defn two ([a] ..) ([a
+b] ..))` paused in `(two 1)` showed `{a nil, b nil}`. Every fn with
+more than one arity, which is most of core.clj, lied. The reader now
+finds the frame's arity by its body node (the frame's restart node is
+the body) and reports the slots in that arity's range, plus the fn's
+own name and its captures, which every arity binds. Captures were the
+second gap: their inner slots are allocated in `lookup_local`, not
+`bind_name`, so they were never named at all and a closed-over value
+never appeared in a frame.
+
 What is NOT here: resuming. The handler Var, `:continue`, `:step` and
 `{:eval form :frame 2}` all need the paused continuation stack to be
 resumable from outside `run`, which is the same capability a green

@@ -102,18 +102,26 @@
     names = gca_assoc(gc_slot(vs_get(base + 1), 1), vs_get(base + 2), gc_int(slot), &
          [roots, vs_get(base + 1), vs_get(base + 2)])
     call gc_set_slot(vs_get(base + 1), 1, names)
-    ! ...and the other way round, at the FN level: slot -> name, for
-    ! every block of the fn, so a paused frame can report its locals by
-    ! name (the debugger, exec.inc break_frames). The scope map above is
-    ! per block and gone after analysis; this one rides on the template.
+    ! ...and the other way round, at the FN level.
     call vs_set(base + 3, scope_info(vs_get(base + 1)))
-    names = gc_slot(vs_get(base + 3), 4)
-    if (.not. gca_is(names)) names = gca_empty([roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-    names = gca_assoc(names, gc_int(slot), vs_get(base + 2), &
-         [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-    call gc_set_slot(vs_get(base + 3), 4, names)
+    call note_slot_name(vs_get(base + 3), slot, vs_get(base + 2), [roots, vs_get(base + 1)])
     call vs_leave(base)
   end subroutine bind_name
+
+  ! slot -> name at the FN level, for every block of the fn and for its
+  ! captures, so a paused frame can report its locals by name (the
+  ! debugger, exec.inc break_frames). The scope maps are per block and
+  ! gone after analysis; this one rides on the template.
+  subroutine note_slot_name(info, slot, sym, roots)
+    type(gc_value), intent(in) :: info, sym
+    integer, intent(in) :: slot
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: names
+    names = gc_slot(info, 4)
+    if (.not. gca_is(names)) names = gca_empty([roots, info, sym])
+    names = gca_assoc(names, gc_int(slot), sym, [roots, info, sym])
+    call gc_set_slot(info, 4, names)
+  end subroutine note_slot_name
 
   ! Declares a new local: one slot, bound in this block.
   function declare_local(sc, sym, roots) result(slot)
@@ -167,6 +175,8 @@
     cmap = gca_assoc(gc_slot(vs_get(base + 1), 3), vs_get(base + 2), gc_int(slot), &
          [vs_get(base + 1), vs_get(base + 2)])
     call gc_set_slot(vs_get(base + 1), 3, cmap)
+    ! a captured value is a local of every arity's frame; name it too
+    call note_slot_name(vs_get(base + 1), slot, vs_get(base + 2), [vs_get(base + 1), vs_get(base + 2)])
     call vs_leave(base)
   end function lookup_local
 

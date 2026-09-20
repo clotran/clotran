@@ -348,13 +348,16 @@
   !   {:fn "user/f" :file "x.clj" :line 12 :col 3 :env {x 3, coll [1 2]}}
   ! A frame that is not a fn body -- an `if` waiting on its test -- is
   ! not a call and is skipped. A local already cleared after its last
-  ! read reads as nil, here as on the JVM.
+  ! read reads as nil, here as on the JVM. Only the slots this frame's
+  ! ARITY binds are its locals (arity_slots): one frame serves every
+  ! arity, and the others' slots read nil without ever having been
+  ! bound, which is not the same thing.
   function break_frames(roots) result(out)
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, m, fn, nd, env, names, tmpl, nm, pos
     type(gc_value), allocatable :: ks(:), vls(:)
     character(len=:), allocatable :: who, fname
-    integer :: base, i, j, b, line, col, slot
+    integer :: base, i, j, b, line, col, slot, lo, hi
 
     base = vs_enter(4)
     out = gcv_empty(roots)
@@ -379,10 +382,14 @@
        tmpl = gc_slot(vs_get(base + 2), 1)
        if (gcv_count(tmpl) >= 6) then
           names = gcv_nth(tmpl, 5)
+          call arity_slots(tmpl, vs_get(b + 5), lo, hi)
           if (gca_is(names)) then
              call gca_entries(names, ks, vls)
              do j = 1, size(ks)
                 slot = int_of(ks(j))
+                if (slot < lo .or. slot >= hi) then
+                   if (slot /= int_of(gcv_nth(tmpl, 4)) .and. .not. captured_slot(tmpl, slot)) cycle
+                end if
                 if (slot >= 0 .and. slot < gc_vec_len(vs_get(b + 2))) then
                    env = gca_assoc(vs_get(base + 3), vls(j), frame_get(vs_get(b + 2), slot), &
                         [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
@@ -406,6 +413,44 @@
     out = vs_get(base + 1)
     call vs_leave(base)
   end function break_frames
+
+  ! The slot range a frame running `body` binds: parameters and lets
+  ! take consecutive slots and the next arity's begin where they end
+  ! (analyze_fn), so an arity owns [its first parameter slot, the next
+  ! arity's). The fn's own name and its captures, bound for every
+  ! arity, lie outside the range and are admitted by name.
+  subroutine arity_slots(tmpl, body, lo, hi)
+    type(gc_value), intent(in) :: tmpl, body
+    integer, intent(out) :: lo, hi
+    type(gc_value) :: ars, ar, bd
+    integer :: i, n
+    ars = gcv_nth(tmpl, 1)
+    n = gcv_count(ars)
+    lo = 0
+    hi = int_of(gcv_nth(tmpl, 3))
+    do i = 0, n - 1
+       ar = gcv_nth(ars, i)
+       bd = gcv_nth(ar, 3)
+       if (bd%tag == body%tag .and. bd%ref == body%ref) then
+          lo = int_of(gcv_nth(ar, 2))
+          if (i + 1 < n) hi = int_of(gcv_nth(gcv_nth(ars, i + 1), 2))
+          return
+       end if
+    end do
+  end subroutine arity_slots
+
+  ! Captures are (outer, inner) slot pairs, flattened.
+  logical function captured_slot(tmpl, slot)
+    type(gc_value), intent(in) :: tmpl
+    integer, intent(in) :: slot
+    type(gc_value) :: caps
+    integer :: k
+    captured_slot = .false.
+    caps = gcv_nth(tmpl, 2)
+    do k = 1, gcv_count(caps) - 1, 2
+       if (int_of(gcv_nth(caps, k)) == slot) captured_slot = .true.
+    end do
+  end function captured_slot
 
   ! (assoc m :k v) in place on a value-stack slot, so the callers above
   ! stay readable.

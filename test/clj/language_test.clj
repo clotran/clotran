@@ -35,6 +35,13 @@
 (check "a break has a frame per call" (count (:frames brk)) 2)
 (check "the innermost call is first" (:fn (first (:frames brk))) "clojure.core/brk-inner")
 (check "its caller is under it" (:fn (second (:frames brk))) "clojure.core/brk-outer")
+;; One frame serves every arity of a fn, so the other arities' slots
+;; exist and read nil; they are not this frame's locals.
+(defn brk-arity ([a] (clotran-break)) ([a b] (clotran-break)))
+(check "a frame reports its own arity's locals" (:env (first (:frames (brk-arity 1)))) (quote {a 1}))
+(check "and the other arity its own" (:env (first (:frames (brk-arity 1 2)))) (quote {a 1, b 2}))
+(def brk-cap (let [k :kept] (fn ([a] (clotran-break)) ([a b] (clotran-break k)))))
+(check "a capture is every arity's local" (:env (first (:frames (brk-cap 1)))) (quote {a 1, k :kept}))
 ;; a call in tail position keeps ITS OWN frame -- Clojure eliminates no
 ;; tail call, and a caller's locals are what a break is for
 (check "a frame names its locals" (contains? (:env (first (:frames brk))) (quote sum)) true)
