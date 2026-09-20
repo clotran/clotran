@@ -2739,3 +2739,34 @@ values against clj, reduced-early ones included.
 The derived suite moved for the first time today: transducers 14/12
 -> 20/6 pass/fail, 2170 pass overall, because `reduced` inside a
 transducer now reaches the host loop that honours it.
+
+## Two allocations a loop iteration did not need
+
+After :inline, `(if (< i n) (recur (inc i) (+ acc i)) acc)` still
+allocated per iteration: a one-node argument vector for each of `<`,
+`inc` and `+` (two objects each), and a fresh OBJ_RECUR marker. Both
+went.
+
+A call to a builtin on a WHITELIST -- the numeric operations,
+comparisons, inc/dec, the sign predicates, `=` and `identical?` --
+with one or two arguments (`mode 3` in N_CALL) fills a reused
+two-slot vector and calls `call_builtin` on it. The condition that
+makes the reuse safe is that none of these keeps its argument vector
+or calls back into Clojure, which is why `vector`, `list` and `conj`
+can never be on that list; `scalar_builtin` says so beside the list.
+Nesting is the trap: `(+ (f x) (g y))` evaluates `(g y)` after
+`(f x)` has been computed, and anything inside `g` may use the
+scratch, so the first argument is parked in a sixth kframe slot and
+both are copied into the scratch only at the moment of the call.
+
+The recur marker is one object for the whole process, held by a
+global root; nothing reads anything out of it.
+
+`scripts/bench`: loop/recur 186x -> 125x (1.7us an iteration), fib
+57x -> 33x, plain recursion 46x -> 32x, the map-building reduce 37x
+-> 26x. What is left in the loop is the interpretation itself --
+k_push and k_finish per node, the frame reads -- and in `into` over
+a lazy seq it is the seq: `map` makes a lazy cell, a thunk closure
+and a cons per element where the JVM's chunked seqs do 32 at a time
+through a chunk buffer. Chunked seqs are the next faithful step for
+pipelines; `sort` at 616x is a comparator call per comparison.

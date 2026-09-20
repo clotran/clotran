@@ -242,6 +242,9 @@ module Eval
   ! collector cannot see, and a collection in that window would free
   ! the exception before its handler ever ran.
   type(gc_root), save :: thrown_root
+  ! Reused argument vectors for the numeric builtins (exec.inc, N_CALL
+  ! mode 3), and the one recur marker: none of those allocate per call.
+  type(gc_root), save :: scratch1_root, scratch2_root, recur_root
 
   public :: gce_eval, gce_base_env, gce_has_error, gce_error, gce_clear_error
   public :: gce_analyze, gce_trace
@@ -292,7 +295,7 @@ module Eval
   end type kframe
   type(kframe), allocatable, save :: kst(:)
   integer, save :: ksp = 0
-  integer, parameter :: KF_FNBODY = 1, KF_RESTART = 2, K_SLOTS = 5
+  integer, parameter :: KF_FNBODY = 1, KF_RESTART = 2, K_SLOTS = 6   ! slot 6: a scalar call's first argument
   integer, save :: k_limit = 0
 
   ! --- evaluation contexts ---------------------------------------------

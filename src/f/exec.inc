@@ -282,6 +282,41 @@
   ! Clojure -- forcing a lazy seq, a multimethod's dispatch -- nests the
   ! same way. Those are the pinned frames Loom has too.
 
+  ! The builtins a call may hand a REUSED argument vector: numeric, and
+  ! none of them keeps its arguments or calls back into Clojure. That
+  ! is the whole condition, and the reason `vector` or `list` can
+  ! never be here.
+  logical function scalar_builtin(id)
+    integer, intent(in) :: id
+    select case (id)
+    case (B_ADD, B_SUB, B_MUL, B_DIV, B_LT, B_GT, B_LTE, B_GTE, B_NUMEQ, B_EQ, &
+         B_INC, B_DEC, B_ZERO, B_POS, B_NEG, B_REM, B_QUOT, B_MAX, B_MIN, B_ABS, B_IDENTICAL)
+       scalar_builtin = .true.
+    case default
+       scalar_builtin = .false.
+    end select
+  end function scalar_builtin
+
+  ! The scratch vector of n slots (1 or 2), made once.
+  function scratch_args(n) result(v)
+    integer, intent(in) :: n
+    type(gc_value) :: v
+    if (n == 1) then
+       if (.not. gc_root_live(scratch1_root)) call gc_global_keep(scratch1_root, gcv_build(1, [gc_nil()]))
+       v = gc_root_get(scratch1_root)
+    else
+       if (.not. gc_root_live(scratch2_root)) call gc_global_keep(scratch2_root, gcv_build(2, [gc_nil()]))
+       v = gc_root_get(scratch2_root)
+    end if
+  end function scratch_args
+
+  ! The recur marker, one for the whole process.
+  function recur_marker() result(v)
+    type(gc_value) :: v
+    if (.not. gc_root_live(recur_root)) call gc_global_keep(recur_root, gc_obj(OBJ_RECUR, [gc_nil()], [gc_nil()]))
+    v = gc_root_get(recur_root)
+  end function recur_marker
+
   subroutine k_push(nd, frame, flags, restart)
     type(gc_value), intent(in) :: nd, frame, restart
     integer, intent(in) :: flags
@@ -323,6 +358,7 @@
     call vs_set(b + 1, nd)
     call vs_set(b + 3, gc_nil())
     call vs_set(b + 4, gc_nil())
+    call vs_set(b + 6, gc_nil())
     kst(ksp)%pc = 0
     kst(ksp)%i = 0
     kst(ksp)%mode = 0
@@ -512,6 +548,11 @@
                    call vs_set(b + 4, new_frame(int_of(gcv_nth(gc_slot(vs_get(b + 3), 1), 3)), [vs_get(b + 1)]))
                 end if
              end if
+             if (kst(ksp)%mode == 1 .and. n >= 1 .and. n <= 2) then
+                if (gc_kind(vs_get(b + 3)) == OBJ_BUILTIN) then
+                   if (scalar_builtin(gc_i1(vs_get(b + 3)))) kst(ksp)%mode = 3
+                end if
+             end if
              if (kst(ksp)%mode == 1) call vs_set(b + 4, gcv_build(n, [vs_get(b + 1)]))
              kst(ksp)%i = 1
              kst(ksp)%pc = 2
@@ -525,6 +566,8 @@
           case (3)
              if (kst(ksp)%mode == 2) then
                 call frame_set(vs_get(b + 4), kst(ksp)%aux + kst(ksp)%i - 1, val)
+             else if (kst(ksp)%mode == 3) then
+                if (kst(ksp)%i == 1) call vs_set(b + 6, val)
              else
                 call vs_set(b + 4, gcv_put(vs_get(b + 4), kst(ksp)%i - 1, val, [vs_get(b + 1)]))
              end if
@@ -536,6 +579,20 @@
              site = 0
              if (v%tag == GCT_INT) site = int(v%ival, kind=4)
              fnv = vs_get(b + 3)
+             if (kst(ksp)%mode == 3) then
+                ! the numeric fast path: no vector is allocated for the call
+                n = gcv_count(kids) - 1
+                v = scratch_args(n)
+                if (n == 1) then
+                   call gc_vec_set(gc_slot(v, 1), 1, val)
+                else
+                   call gc_vec_set(gc_slot(v, 1), 1, vs_get(b + 6))
+                   call gc_vec_set(gc_slot(v, 1), 2, val)
+                end if
+                val = call_builtin(gc_i1(fnv), v)
+                call k_finish(val)
+                cycle
+             end if
              if (kst(ksp)%mode == 2) then
                 ! the frame holds the arguments; captures and the name
                 ! complete it, and this frame becomes the body's
@@ -911,7 +968,7 @@
     do i = 0, n - 1
        call frame_set(vs_get(base + 2), start + i, gcv_nth(vs_get(base + 3), i))
     end do
-    out = gc_obj(OBJ_RECUR, [gc_nil()], [vs_get(base + 1)])
+    out = recur_marker()
     call vs_leave(base)
   end function exec_recur
 

@@ -38,7 +38,7 @@ JVM-shaped `case` arms in one file.
 | Clojure's suite, verbatim (for reference) | 1810 pass / 219 fail / 1396 error over 357 tests, 53% of executed; 32 of 67 namespaces produce a passing assertion |
 | startup | 0.6s (7.2s before step 4, 2.3s at the start of stage 2), core.clj re-read every launch |
 | `(reduce + (range n))` | LINEAR since step 4: n=100000 in 0.16s, ~1.6 µs per element through the host's own IReduceInit reduce (17s and 170 µs at the end of step 4). Before: n=16000 took 161s and n=100000 did not finish in 15 minutes |
-| `loop`/`recur` | ~2.6 µs per iteration, linear; a function call ~2.5 µs. `scripts/bench` has the JVM ratios: 44x to 4,600x depending on the form |
+| `loop`/`recur` | ~1.7 µs per iteration, linear; a function call ~1.5 µs. `scripts/bench` has the JVM ratios: 26x to 1,000x depending on the form; lazy-seq pipelines are the slow end (no chunked seqs yet) |
 | memory | 168 MB after core.clj; recursion 100,000 deep works |
 | Fortran library calls made through clotran | `fortran/dgemm` (reference BLAS) and ChemSol's `readopt`, `dg_ld`, `solvout`, `entropy`; `examples/chemsol.cljf` reproduces the original program's output byte for byte on its three reference inputs (`scripts/chemsol-check`) |
 
