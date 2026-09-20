@@ -1622,3 +1622,8 @@
 (do (def dx "a doc" 1) [dx (:doc (meta #'dx))])
 
 (do (def dy "just a value") dy)
+
+;; a protocol method spelt with a dash is a method when written as a call
+(do (defprotocol PD (-pname [x])) (deftype TD [] PD (-pname [_] :td)) (-pname (TD.)))
+
+(do (deftype TF [x]) [(.-x (TF. 3)) (. (TF. 4) -x)])

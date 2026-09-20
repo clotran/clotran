@@ -1755,8 +1755,11 @@ contains
        call vs_set(base + 3, tv)
        ! (.-name x) is a field read and never a call; a bare name is
        ! a method if the type has one and a field otherwise, which
-       ! is the order Compiler's HostExpr resolves them in.
-       if (mname(1:1) == "-") then
+       ! is the order Compiler's HostExpr resolves them in. Written
+       ! as a call, (. x (-name)), a leading dash is just part of the
+       ! method's name -- protocol methods are often spelt that way,
+       ! and a protocol fn reaches its type's method exactly so.
+       if (mname(1:1) == "-" .and. .not. is_call) then
           out = inst_field(vs_get(base + 3), mname(2:), found)
           if (.not. found) call fail("no such field: " // &
                class_text(vs_get(base + 3)) // "." // mname(2:))
