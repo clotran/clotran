@@ -274,6 +274,24 @@ module Eval
   integer, parameter :: K_SCOPE = 100, K_FNINFO = 101
   integer, save :: trace_macros = 0   ! 0 unread, 1 on, 2 off
 
+  ! The executor's continuation stack (exec.inc, `run`): one entry per
+  ! node being evaluated. Its values live in a K_SLOTS-wide region of
+  ! the value stack at `base` -- node, frame, aux, argv, restart -- so
+  ! the collector sees them; pc and i are its progress; flags say what
+  ! happens when it finishes (a fn body pops the call stack, a restart
+  ! point runs again on recur); nfr is how many call-stack entries it
+  ! pops when it finishes -- one per call it stands for, since a call in
+  ! tail position reuses the frame but keeps the caller on the call
+  ! stack, as the JVM does; msg is a try's saved error.
+  type kframe
+     integer :: base = 0, pc = 0, i = 0, flags = 0, nfr = 0
+     character(len=:), allocatable :: msg
+  end type kframe
+  type(kframe), allocatable, save :: kst(:)
+  integer, save :: ksp = 0
+  integer, parameter :: KF_FNBODY = 1, KF_RESTART = 2, K_SLOTS = 5
+  integer, save :: k_limit = 0
+
   include "hosttable.inc"
 
 contains
@@ -381,12 +399,18 @@ contains
   ! The call stack as text, innermost first, taken when an error is
   ! raised. Each line names the function entered and where it was
   ! called from.
+  ! The rendered trace stops at 128 frames, as the JVM's stops at
+  ! MaxJavaStackTraceDepth: a stack overflow 200000 deep is not 200000
+  ! lines, and building them by concatenation was quadratic. The
+  ! element array .getStackTrace answers is still the whole stack.
   subroutine capture_trace()
     integer :: i
     type(gc_value) :: nm
     character(len=:), allocatable :: who
+    character(len=16) :: more
     last_trace = ""
-    do i = fstack_top, 1, -1
+    if (fstack_top > 128) write(more, '(I0)') fstack_top - 128
+    do i = fstack_top, max(1, fstack_top - 127), -1
        who = "fn"
        if (gc_kind(fstack_fn(i)) == OBJ_CLOSURE) then
           nm = gc_slot(fstack_fn(i), 5)
@@ -398,6 +422,7 @@ contains
           last_trace = last_trace // "  at " // who // achar(10)
        end if
     end do
+    if (fstack_top > 128) last_trace = last_trace // "  ... " // trim(more) // " more" // achar(10)
   end subroutine capture_trace
 
   ! The trace of the last error, one line per frame, or empty.
@@ -424,6 +449,11 @@ contains
        bs(1:n) = fstack_site(1:n)
        call move_alloc(bf, fstack_fn)
        call move_alloc(bs, fstack_site)
+    end if
+    if (k_limit == 0) call read_frame_limit()
+    if (fstack_top >= k_limit) then
+       call fail("stack overflow")
+       return
     end if
     fstack_top = fstack_top + 1
     fstack_fn(fstack_top) = fn

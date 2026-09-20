@@ -152,9 +152,9 @@ recalled. See `CLAUDE.md`.
 
 | | |
 |---|---|
-| speed | a `loop`/`recur` iteration costs ~25 µs and a reduce step ~75 µs; linear, but two orders slower than the JVM. PLAN.md step 5 |
+| speed | a `loop`/`recur` iteration costs ~25 µs, a reduce step ~65 µs and a function call ~24 µs; linear, but two orders slower than the JVM. PLAN.md step 5 |
 | startup | 2.3s: core.clj is re-read and re-analysed every launch; there is no image yet |
-| memory | 152 MB after loading core.clj, and a 100000-element reduce stays there since locals are cleared after their last read; the image (PLAN.md step 5, stage 3) is what would shrink the baseline |
+| memory | 156 MB after loading core.clj, and a 100000-element reduce stays there since locals are cleared after their last read; the image (PLAN.md step 5, stage 3) is what would shrink the baseline |
 | debugger | an error reports `file:line:col` and the chain of calls that led to it, and `.getStackTrace` answers real elements; there is no breakpoint or step yet; PLAN.md step 8 |
 | `BigDecimal` and `BigInt` | `1M` reads as a double and `1N` as an integer; DEVIATIONS 30 |
 | sorted collections | `sorted-map` and `sorted-set` are unsorted; DEVIATIONS 9 |

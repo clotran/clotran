@@ -252,7 +252,18 @@ Staged so each step is checkable:
    unwinds. That is the frame array the debugger needs, before the
    protocol around it. `eval_dot` and `eval_new` take values, so
    nothing is re-analysed at run time.
-2. intermediates move to the operand stack; `roots(:)` leaves every
+2. DONE, first half -- the executor is a loop over an explicit
+   continuation stack (exec.inc `run`, `kframe` in Eval.f90): a frame
+   per pending node, its values in a region of the value stack, calls
+   in tail position reusing the frame. `if`, `do`, `let*`/`loop*`,
+   `case*`, calls, `recur`, `try` and `fn` run in the loop; the other
+   kinds and every native that calls back into Clojure nest a run.
+   Recursion is bounded by a frame count, not the Fortran stack
+   (DEVIATIONS 7 resolved), and a suspended context is now data,
+   which is what a green thread and a paused debugger frame need.
+   Same speed or better: reduce over 100000 9.9s -> 6.6s, `into`
+   17s -> 12.8s, loop/recur unchanged at 25 us. Still to do in this
+   stage: intermediates move to the operand stack; `roots(:)` leaves every
    signature; module globals move into a context type; source
    positions on nodes.
 3. snapshot the heap after core.clj and start from the image. The

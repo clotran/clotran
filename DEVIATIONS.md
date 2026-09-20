@@ -151,7 +151,22 @@ The difference is observable through `read-string` -- `(read-string
 "`x")` answers the unexpanded `(quasiquote x)` here and the expansion
 in Clojure -- and closes by moving `qq_expand` into the reader.
 
-## 7. Recursion runs out of stack about twenty times sooner
+## 7. RESOLVED -- recursion runs out of stack about twenty times sooner
+
+**RESOLVED 2026-09-19.** The executor is a loop over an explicit
+continuation stack (exec.inc, `run`), so a Clojure call no longer
+costs Fortran stack. Measured: a non-tail-recursive function reaches
+100,000 deep and returns; the JVM's default stops near 11,000. The
+limit is now a FRAME COUNT, 200,000 by default, `CLOTRAN_MAX_FRAMES`
+to change it, and it bounds the call stack too: a tail-recursive
+function without `recur` overflows at it, as on the JVM, because a
+call in tail position reuses the continuation frame but keeps the
+caller on the call stack so a trace names every call. What still
+nests on the Fortran stack is a native calling back into Clojure --
+forcing a lazy seq, a multimethod's dispatch, a def's value -- and
+`CLOTRAN_MAX_DEPTH` (2200) still bounds that. A rendered trace stops
+at 128 frames with `... N more`; `.getStackTrace` has them all. The
+original entry follows.
 
 Both runtimes stop somewhere; the JVM raises `StackOverflowError` and we
 report `stack overflow near (f ...)`. What differs is how soon.

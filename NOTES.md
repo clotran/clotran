@@ -2531,3 +2531,50 @@ order CLAUDE.md warns about. The oracle now holds six `with-out-str`
 pprint cases against `clj`; the seventh, a 12-entry map, was dropped
 because a JVM hash map iterates in its own order and the text cannot
 be compared, only the values.
+
+## The executor is a loop
+
+Stage 2's first half. `exec` used to be a recursive Fortran function:
+every Clojure call was `exec` -> `apply` -> `invoke_closure` -> `exec`
+on the Fortran stack, which is why recursion died near 700 deep
+(DEVIATIONS 7) and why nothing could suspend an evaluation halfway.
+`run` is a loop over an explicit continuation stack instead. A
+`kframe` is one pending node: its values -- node, frame, an aux slot,
+the argument vector being built, the restart node -- live in a
+five-slot region of the value stack, so the collector sees them
+without a new root; `pc` and `i` are its progress. A child is
+evaluated by pushing a frame; when it finishes it delivers `val`,
+and the parent's `pc` says what to do with it.
+
+Two rules make it cheap. A node in TAIL position -- the branch an
+`if` took, the last form of a `do`, the body of a `let`, the callee's
+body after a call -- replaces the frame that was waiting for it, so
+the stack holds only what is still pending. And a `recur` is a value:
+the marker flows up through tail-replaced frames to the one flagged
+as a restart point, which runs its body again in the same locals.
+
+The call stack the debugger sees is deliberately NOT the continuation
+stack. A tail call reuses the kframe but pushes the callee onto the
+call stack and leaves the caller there (`nfr` counts what the frame
+owes on exit), so a trace names every call the way the JVM's does,
+and a tail-recursive function without `recur` overflows at the frame
+limit rather than looping in constant space. Being faithful to
+Clojure won over free tail calls; `recur` is the loop.
+
+What still nests: the node kinds the loop hands to helpers (a def's
+value, a throw's argument, a vector literal's elements, deftype
+methods, dot forms) and every native that calls back into Clojure --
+forcing a lazy seq, a multimethod's dispatch function, `swap!`'s
+function. Each of those is a nested `run` on the Fortran stack,
+bounded by ev_limit as before, and is the equivalent of Loom's pinned
+frame. Moving the vector/map/set literals into the loop is easy and
+next; the natives are the real seam, and the answer there is the
+context type, not more cases in the loop.
+
+Two things bit on the way. The first cut popped the caller's call
+stack entry on a tail call, and `language_test`'s trace check caught
+it in one run: a trace of `st-c` -> `st-b` -> `st-a` had lost `st-b`.
+And a runaway recursion at a 1,000,000-frame limit printed a
+26-megabyte trace, built by quadratic concatenation, which is what
+was actually slow: the limit is 200,000 now and a rendered trace
+stops at 128 frames.
