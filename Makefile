@@ -153,7 +153,7 @@ $(B)/Printer.o: $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Ass
 # straight to a Pattern, not to a string). See Regex.f90.
 $(B)/LispReader.o: $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/Regex.o
 $(B)/Eval.o: $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/Env.o \
-	$(B)/Namespace.o $(B)/Printer.o $(B)/Regex.o $(B)/NativeArray.o $(B)/ChemSolBind.o $(S)/analyze.inc $(S)/exec.inc
+	$(B)/Namespace.o $(B)/Printer.o $(B)/Regex.o $(B)/NativeArray.o $(B)/ChemSolBind.o $(S)/analyze.inc $(S)/exec.inc $(S)/repl.inc
 
 # The reference BLAS (src/f/blas/PROVENANCE.md): F77 fixed form, built
 # by the same compiler, linked wherever NativeArray is.
@@ -217,6 +217,9 @@ test: $(test-bins) clotran-bin
 	@echo "--- language_test (with core.clj) ---"
 	./clotran-bin src/clj/clojure/core.clj test/clj/language_test.clj </dev/null \
 	  | tee /dev/stderr | grep -q "^LANGUAGE TESTS PASSED"
+	@echo "--- a break pauses into a nested REPL, and clotran-resume answers it ---"
+	printf '((fn [x] (clotran-break)) 1)\n(clotran-resume {:continue (* 42 (get (:env (first (:frames (clotran-last-break)))) (quote x)))})\n' \
+	  | ./clotran-bin src/clj/clojure/core.clj | grep -q '42$$'
 	@echo "--- oracle (the same forms through clj and clotran) ---"
 	scripts/oracle
 

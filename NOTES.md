@@ -2897,3 +2897,79 @@ What is NOT here: resuming. The handler Var, `:continue`, `:step` and
 resumable from outside `run`, which is the same capability a green
 thread needs (PLAN stage 2's context type). That is the next piece,
 and the data above is meant to not change when it lands.
+
+## A break resumes: the handler Var, a context of its own, and steps by calls
+
+The second half of the protocol PLAN.md asked for. A break -- on
+demand, at an error with break-on-error on, or at a step -- hands the
+state map to `*clotran-break-handler*` and the handler's answer is a
+command:
+
+    :continue | {:continue v} | :step-in | :step-over | :step-out | :abort
+
+`(clotran-break)` is worth `v`, or nil; `:abort` throws "aborted at
+break" there; a handler that throws, throws there too, value and all.
+With no handler bound the break is what it was, a snapshot answered
+as a map, which is what a script and the language tests want.
+
+**The handler runs in another context.** This is the first use of
+stage 2's context type for its stated purpose. `take_break` parks the
+paused context -- its continuation stack, value stack, call stack,
+error and trace -- switches to a context kept for the handler, applies
+the handler, and switches back before the native that took the break
+returns. The comment on `gce_ctx_switch` says never to switch under a
+run in progress; this is the one shape that is safe, a switch
+bracketed inside one native call, because the paused run never
+executes while the other context is live. The Fortran stack is shared
+either way, so the handler context inherits `ev_depth` and the nesting
+limit keeps counting.
+
+What that buys over running the handler on the paused stacks: its
+frames are its own (an error in the nested REPL prints its own trace,
+not two hundred paused frames under it), the paused error state at an
+error break is restored by the switch rather than by hand, and the
+break map read by `(clotran-last-break)` describes the paused context
+alone. What it costs: a `binding` in force at the break is a root value
+in the handler, since the binding stack is per context -- which is why
+the handler Var is read BEFORE the switch, where the user's `binding`
+of it is in force.
+
+**The REPL is the default handler.** The loop moved out of main.f90
+into Eval (`repl.inc`), and `(clotran-repl state)` runs it nested: it
+prints the state (eight frames, then a count) and a line naming the
+commands, prompts `[1] user=>`, and `(clotran-resume cmd)` is how the
+keyboard answers. Starting a REPL binds it as the handler if nothing
+else is bound, so `./clotran` pauses into a nested REPL on
+`(clotran-break)` and a script does not. One level: a break inside
+the handler is a snapshot and an error there is not a break, so the
+debugger does not debug itself and `(clotran-last-break)` is not
+overwritten by a typo at the nested prompt.
+
+**Steps count calls.** The executor has no line events; it has calls.
+So from a stop at depth d (`fstack_top`): `:step-in` stops at the next
+call anywhere, `:step-over` at the next call no deeper than d + 1 --
+the calls this frame's fn makes, or its callers make after it returns,
+walking this body without descending -- and `:step-out` at the next
+call no deeper than d, once this frame is gone. One integer, checked
+at the three places a callee's frame comes into being, after its
+arguments are bound so the stop shows it on top. A step the form never
+reached is cleared when the outermost run exits, or the next form's
+first call would stop. At an error break a step is dropped: the throw
+is in progress and the next call would be the `binding` macro's own
+`pop-thread-bindings` in the finally.
+
+**Eval-in-frame is the handler's job.** PLAN sketched `{:eval form
+:frame n}` as a command. Locals are immutable and `:env` already holds
+their values, so `(eval (list 'let (vec (mapcat (fn [[s v]] [s (list
+'quote v)]) env)) form))` on the handler's side is the whole feature,
+over the data, and the evaluator learned no command for it.
+
+**Found on the way: an empty line quit the REPL.** The loop treated
+`iostat < 0` with size 0 as end of file, and an empty line is end of
+RECORD with size 0. It had been so since the loop was written; nobody
+pressed Enter on nothing through a pipe. And under gfortran a read
+after the end reports a POSITIVE code, which the nested REPL made
+reachable (it reads the rest of the pipe, sees the end, resumes, and
+the outer loop reads again) and which looped forever. Both loops now
+test `is_iostat_end` and bail on any positive code; that fix landed
+first, on its own.

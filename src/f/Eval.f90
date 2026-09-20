@@ -168,6 +168,7 @@ module Eval
   integer, parameter :: B_CHUNK_ADD = 287, B_CHUNK_OF = 288, B_CHUNK_FIRST = 289, &
        B_CHUNK_MORE = 290, B_CHUNK_NEXT = 291, B_CHUNK_DROP = 292
   integer, parameter :: B_BREAK = 293, B_LASTBREAK = 294, B_BREAKON = 295
+  integer, parameter :: B_RESUME = 296, B_REPL = 297
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -253,10 +254,18 @@ module Eval
   integer, save :: break_mode = 0   ! 0 unread, 1 off, 2 capturing
   logical, save :: break_stderr = .false.
   character(len=:), allocatable, save :: break_path
+  ! The resuming half (exec.inc, take_break): the handler Var, the fn it
+  ! held when the break was taken, the command that came back, the REPL
+  ! as a fn value, and the context the handler runs in. step_at is a
+  ! step still to be taken: stop at the next call no deeper than it.
+  type(gc_root), save :: handler_var_root, handler_fn_root, resume_root, repl_fn_root
+  logical, save :: in_handler = .false., resume_pending = .false.
+  integer, save :: handler_ctx = 0, step_at = 0, repl_depth = 0
 
   public :: gce_eval, gce_base_env, gce_has_error, gce_error, gce_clear_error
   public :: gce_analyze, gce_trace
   public :: gce_ctx_new, gce_ctx_switch, gce_ctx_current
+  public :: gce_repl
   public :: gce_set_home, gce_home
 
   ! THE CALL STACK. One entry per closure invocation in progress: the
@@ -466,12 +475,10 @@ contains
        end if
     end do
     if (fstack_top > 128) last_trace = last_trace // "  ... " // trim(more) // " more" // achar(10)
-    ! and the paused state as data, while the frames are still pending
+    ! and the paused state as data, while the frames are still pending,
+    ! to the handler if one is bound
     if (break_mode == 0) call read_break_mode()
-    if (break_mode == 2) then
-       bm = capture_break("error")
-       call dump_break(bm)
-    end if
+    if (break_mode == 2) bm = take_break("error")
   end subroutine capture_trace
 
   ! The trace of the last error, one line per frame, or empty.
@@ -519,7 +526,7 @@ contains
   ! caught.
   function gce_base_env(roots) result(env)
     type(gc_value), intent(in) :: roots(:)
-    type(gc_value) :: env, core
+    type(gc_value) :: env, core, var
     integer :: base
 
     ! A fresh heap means every array handle from a previous one is
@@ -553,6 +560,14 @@ contains
     call bind_builtin(core, "clotran-break", B_BREAK)
     call bind_builtin(core, "clotran-last-break", B_LASTBREAK)
     call bind_builtin(core, "clotran-break-on!", B_BREAKON)
+    ! and the resuming half: the handler Var a break calls, the command
+    ! a nested REPL answers with, and the REPL itself as the default
+    ! handler (gce_repl binds it when a REPL starts).
+    call bind_builtin(core, "clotran-resume", B_RESUME)
+    call bind_builtin(core, "clotran-repl", B_REPL, var_out=var)
+    call gc_global_keep(repl_fn_root, gcn_var_value(var))
+    call bind_var(core, "*clotran-break-handler*", gc_nil(), var_out=var)
+    call gc_global_keep(handler_var_root, var)
     ! Native arrays go in a `fortran` NAMESPACE, not in clojure.core.
     !
     ! Two reasons, and the first is practical: core.clj defines its
@@ -743,9 +758,10 @@ contains
 
   ! Interns a plain value as a Var in clojure.core. Same shape as
   ! bind_builtin, for the things RT interns that are not functions.
-  subroutine bind_var(ns, name, val)
+  subroutine bind_var(ns, name, val, var_out)
     type(gc_value), intent(in) :: ns, val
     character(len=*), intent(in) :: name
+    type(gc_value), intent(out), optional :: var_out
     type(gc_value) :: sym, var
     integer :: base
     base = vs_enter(2)
@@ -755,14 +771,16 @@ contains
     var = gcn_intern(vs_get(base + 1), sym, vs_get(base + 2), &
          [vs_get(base + 1), vs_get(base + 2), sym])
     call gc_set_i1(var, 1)
+    if (present(var_out)) var_out = var
     call vs_leave(base)
   end subroutine bind_var
 
-  subroutine bind_builtin(ns, name, id, is_macro)
+  subroutine bind_builtin(ns, name, id, is_macro, var_out)
     type(gc_value), intent(in) :: ns
     character(len=*), intent(in) :: name
     integer, intent(in) :: id
     logical, intent(in), optional :: is_macro
+    type(gc_value), intent(out), optional :: var_out
     type(gc_value) :: sym, fn, var
     type(gc_value) :: r(2)
     integer :: base
@@ -780,6 +798,7 @@ contains
     if (present(is_macro)) then
        if (is_macro) call var_set_macro(var)
     end if
+    if (present(var_out)) var_out = var
     call vs_leave(base)
   end subroutine bind_builtin
 
@@ -7774,12 +7793,26 @@ contains
           out = make_chunk(gc_slot(a, 1), gc_i1(a) + 1, gc_i2(a), [vs_get(base + 1)])
        end if
     case (B_BREAK)
-       ! (clotran-break) -- the paused state here, as data, and stored.
-       out = capture_break("break")
-       call vs_set(base + 2, out)
-       if (break_mode == 0) call read_break_mode()
-       if (break_mode == 2) call dump_break(vs_get(base + 2))
-       out = vs_get(base + 2)
+       ! (clotran-break) -- the paused state here, as data, stored, and
+       ! handed to the handler; what comes back is the value here.
+       out = take_break("break")
+    case (B_RESUME)
+       ! (clotran-resume cmd) at a nested REPL: the command that REPL
+       ! answers with, once the form that called this has returned.
+       ! No argument is :continue.
+       if (repl_depth < 2) then
+          call fail("clotran-resume: not at a break")
+       else
+          a = gc_key("continue", [gc_nil()])
+          if (n > 0) a = gcv_nth(args, 0)
+          call gc_global_keep(resume_root, a)
+          resume_pending = .true.
+       end if
+    case (B_REPL)
+       ! (clotran-repl state): a nested REPL, the default handler.
+       a = gc_nil()
+       if (n > 0) a = gcv_nth(args, 0)
+       out = repl_loop(a)
     case (B_LASTBREAK)
        out = gc_nil()
        if (gc_root_live(break_root)) out = gc_root_get(break_root)
@@ -10326,7 +10359,10 @@ contains
   ! Parks the live context and brings `id` in. Only between steps: a
   ! run in progress on the Fortran stack (a native calling back into
   ! Clojure) belongs to the context that started it, and switching
-  ! under it is the caller's mistake, not this routine's.
+  ! under it is the caller's mistake, not this routine's. The one
+  ! exception is a switch BRACKETED inside a native call -- out and
+  ! back before that call returns, as take_break does -- since the run
+  ! in progress never executes under the other context.
   subroutine gce_ctx_switch(id)
     integer, intent(in) :: id
     call ctx_ensure_main()
@@ -10391,10 +10427,16 @@ contains
     if (allocated(ctxs)) deallocate(ctxs)
     n_ctx = 0
     cur_ctx = 0
+    handler_ctx = 0
+    in_handler = .false.
+    resume_pending = .false.
+    step_at = 0
+    repl_depth = 0
     call gc_stacks_reset()
   end subroutine ctx_reset
 
   include "analyze.inc"
   include "exec.inc"
+  include "repl.inc"
 
 end module Eval

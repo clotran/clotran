@@ -361,12 +361,14 @@ Also added on the way: `clotran-slurp`, a host reader for a whole file
 
 ### 8. Then, each now cheap because of step 5
 
-Image for startup. Debugger over frames (the protocol below) -- the
-STATE half is done: `(clotran-break)`, break-on-error and
-`(clotran-last-break)` answer frames with locals by name, so the
-remaining half is resuming (`:continue`, `:step`, eval-in-frame),
-which needs the paused stack to be resumable from outside `run` --
-the same capability a green thread needs.
+Image for startup. Debugger over frames (the protocol below) -- DONE,
+both halves: `(clotran-break)`, break-on-error and
+`(clotran-last-break)` answer frames with locals by name, and the
+state goes to `*clotran-break-handler*`, whose command resumes:
+`:continue`, `{:continue v}`, `:step-in`, `:step-over`, `:step-out`,
+`:abort`. The handler runs in a context of its own while the paused
+one is parked -- the first use of stage 2's context type, and the
+shape a green thread takes. The REPL is the default handler, nested.
 Threads over VM contexts (the concurrency decision below). JIT only
 when a profile still demands it, and then jank's way -- LLVM IR in
 process -- rather than generated Fortran text through a compiler.
@@ -443,14 +445,24 @@ Var with the paused state as data and gets a command back:
             :line 6 :col 3 :end-line 6 :end-col 25
             :env {x 3, coll [1 2]}}
            ...]}
-;; handler returns :continue | :step-in | :step-over | :step-out | :abort
-;;                 | {:eval form :frame 0}
+;; handler returns :continue | {:continue v} | :step-in | :step-over
+;;                 | :step-out | :abort
 ```
 
 Nothing in the evaluator may assume a terminal. Pausing into a nested
 REPL is the model (Common Lisp `break`, SLDB); sockets are additive
 later. Frames must record tail calls elided by `recur`, or a deep loop
 shows one frame and the trace lies.
+
+As built (step 8): the Var is `*clotran-break-handler*`, `binding` it
+scopes a handler, and the REPL binds itself as the root handler when
+it starts. `{:eval form :frame n}` was not built: locals are
+immutable and `:env` already holds their values, so evaluating in a
+frame is the handler's own `(eval (list 'let bindings form))` over
+the data, not a command the evaluator has to know. Steps count calls,
+the events the executor has, not lines. One level: a break inside the
+handler is a snapshot, and an error there is not a break. At an error
+the throw is already in progress, so every command lets it continue.
 
 **Not generated Fortran through a compiler.** gfortran costs 100 ms to
 1 s per invocation and loses to interpreting for everything but a hot

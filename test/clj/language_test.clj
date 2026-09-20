@@ -71,6 +71,68 @@
 (check "and the failing frame" (:fn (first (:frames brk-err))) "clojure.core/brk-boom")
 (check "with its locals named" (contains? (:env (first (:frames brk-err))) (quote doubled)) true)
 
+;; The resuming half. A handler Var gets the state and answers a
+;; command, and the command is what the break is worth. Host check: the
+;; Var, the commands and the frame names are all ours.
+(check "without a handler the state itself is the answer" (:reason (brk-outer [1])) :break)
+(check "a handler's {:continue v} is the break's value"
+       (binding [*clotran-break-handler* (fn [b] {:continue (count (:frames b))})] (brk-outer [1 2 3]))
+       2)
+(check ":continue alone is nil"
+       (binding [*clotran-break-handler* (fn [b] :continue)] (brk-outer [1])) nil)
+(check ":abort throws at the break"
+       (binding [*clotran-break-handler* (fn [b] :abort)]
+         (try (brk-outer [1]) (catch Throwable t (re-find #"aborted at break" (str t)))))
+       "aborted at break")
+(check "a handler that throws, throws at the break"
+       (binding [*clotran-break-handler* (fn [b] (throw (ex-info "from the handler" {:k 1})))]
+         (try (brk-outer [1]) (catch Throwable t (:k (ex-data t)))))
+       1)
+(check "a break inside the handler is only a snapshot"
+       (binding [*clotran-break-handler* (fn [b] {:continue (:reason ((fn [] (clotran-break))))})] (brk-outer [1]))
+       :break)
+
+;; Stepping counts CALLS, the events this executor has. From a stop: in
+;; = the next call anywhere; over = the next call this frame's fn or
+;; its callers make, so it walks this body without descending; out =
+;; the next call once this frame has returned. The handler answers each
+;; stop from a queue and records what it saw.
+(defn st-leaf [x] (inc x))
+(defn st-mid [x] (st-leaf (st-leaf x)))
+(defn st-top [] (clotran-break) (st-mid 1) (st-leaf 5))
+(defn st-run [cmds]
+  (let [seen (atom []) q (atom cmds)]
+    (binding [*clotran-break-handler*
+              (fn [b] (swap! seen conj [(:reason b) (:fn (first (:frames b))) (get (:env (first (:frames b))) 'x)])
+                (let [c (first @q)] (swap! q rest) (or c :continue)))]
+      (st-top))
+    @seen))
+(check ":step-in stops at every call, the callee on top with its argument"
+       (st-run [:step-in :step-in :step-in :step-in])
+       [[:break "clojure.core/st-top" nil] [:step "clojure.core/st-mid" 1] [:step "clojure.core/st-leaf" 1]
+        [:step "clojure.core/st-leaf" 2] [:step "clojure.core/st-leaf" 5]])
+(check ":step-over at st-mid's entry walks st-mid's own calls"
+       (st-run [:step-in :step-over])
+       [[:break "clojure.core/st-top" nil] [:step "clojure.core/st-mid" 1] [:step "clojure.core/st-leaf" 1]])
+(check ":step-out at st-mid's entry stops at st-top's next call"
+       (st-run [:step-in :step-out])
+       [[:break "clojure.core/st-top" nil] [:step "clojure.core/st-mid" 1] [:step "clojure.core/st-leaf" 5]])
+(def st-stray (atom nil))
+(binding [*clotran-break-handler* (fn [b] :step-in)] ((fn [] (clotran-break))))
+(binding [*clotran-break-handler* (fn [b] (reset! st-stray (:reason b)) :continue)] (st-leaf 1))
+(check "a step the form did not reach does not wait for the next form" @st-stray nil)
+
+;; An error break: the throw is in progress, every command lets it go
+;; on, and a step asked for there is dropped -- it would otherwise fire
+;; at the binding's own pop-thread-bindings call.
+(def eb-seen (atom nil))
+(clotran-break-on! true)
+(def eb-result (binding [*clotran-break-handler* (fn [b] (reset! eb-seen [(:reason b) (:fn (first (:frames b)))]) :step-in)]
+                 (try (brk-boom 21) (catch Throwable t :caught))))
+(clotran-break-on! false)
+(check "an error break reaches the handler" @eb-seen [:error "clojure.core/brk-boom"])
+(check "and the error still goes on to its catch" eb-result :caught)
+
 ;;; ---- reader conditionals ------------------------------------------
 
 ;; The feature is :cljf. A branch nobody selects is read and dropped, so

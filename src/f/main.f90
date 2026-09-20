@@ -2,7 +2,7 @@
 ! ./clotran, the launcher, wraps this in rlwrap and hands it core.clj.
 !
 ! Reads a form per line, evaluates, prints. No line editing of its own
-! -- scripts/clotran's rlwrap trick applies here too if wanted.
+! -- the launcher supplies rlwrap.
 program clotran
   use GC
   use LispReader
@@ -12,11 +12,9 @@ program clotran
   use PersistentVector
   implicit none
 
-  character(len=:), allocatable :: line, pending
-  character(len=4096) :: buf
-  type(gc_value) :: env, form, result
+  type(gc_value) :: env
   type(gc_value) :: none(0)
-  integer :: base, ios, size_read, i, arglen
+  integer :: base, i, arglen
   character(len=1024) :: argbuf
   character(len=8) :: statbuf
 
@@ -48,57 +46,9 @@ program clotran
   ! be defined into clojure.core.
   call gcn_set_current(gcn_find_or_create("user", none))
 
-  ! The REPL reads FORMS, not lines. A line that does not close what it
-  ! opened is not an error, it is a request for more input -- without
-  ! this, (defn f [x] <enter> was unusable and every definition had to
-  ! be typed on one line.
-  pending = ""
-  do
-     if (len(pending) == 0) then
-        write(*, '(A)', advance='no') gcn_name(gcn_current(none)) // "=> "
-     else
-        write(*, '(A)', advance='no') "#_=> "
-     end if
-     flush(6)
-     read(*, '(A)', iostat=ios, size=size_read, advance='no') buf
-     ! End of file, or a read error -- gfortran reports a read AFTER the
-     ! end as a positive code. An empty line is end of RECORD with size
-     ! 0, which is a line, not the end: it used to quit the REPL.
-     if (is_iostat_end(ios) .or. ios > 0) exit
-     line = trim(buf(1:max(size_read, 0)))
-     if (len(pending) == 0 .and. len(line) == 0) cycle
-     if (len(pending) == 0) then
-        pending = line
-     else
-        ! Newline, not a space: a ; comment must still end at its line.
-        pending = pending // new_line('a') // line
-     end if
-
-     form = gcr_read(pending, [vs_get(base + 1)])
-     if (gcr_has_error()) then
-        ! Every unclosed-form message the reader produces begins this
-        ! way -- an unclosed list, vector, map, string or regex. Any
-        ! other reader error is real.
-        if (index(gcr_error(), "EOF while reading") == 1) cycle
-        print '(A,A)', "reader error: ", gcr_error()
-        pending = ""
-        cycle
-     end if
-     pending = ""
-     call vs_set(base + 2, form)
-
-     call gce_clear_error()
-     result = gce_analyze(vs_get(base + 2), vs_get(base + 1))
-     if (.not. gce_has_error()) &
-          result = gce_eval(result, vs_get(base + 1), no_roots())
-     call vs_set(base + 3, result)
-     if (gce_has_error()) then
-        print '(A,A)', "error: ", gce_error()
-        if (len(gce_trace()) > 0) write(*, '(A)', advance='no') gce_trace()
-        cycle
-     end if
-     print '(A)', gcp_str(vs_get(base + 3), .true.)
-  end do
+  ! The loop itself is Eval's (repl.inc): the same loop runs nested at
+  ! a break, where it is the debugger's default handler.
+  call gce_repl()
   print *, ""
   call get_environment_variable("CLOTRAN_STATS", statbuf)
   if (trim(statbuf) == "1") then

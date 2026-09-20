@@ -507,6 +507,114 @@
     call vs_leave(base)
   end function capture_break
 
+  ! The protocol (PLAN.md): the paused state goes to the handler Var,
+  ! *clotran-break-handler*, and a command comes back --
+  !   :continue | {:continue v} | :step-in | :step-over | :step-out | :abort
+  ! -- which decides what the break answers. The handler runs in a
+  ! context of its own: the paused stacks, error and trace are parked
+  ! untouched while it works, and its frames and errors are its own.
+  ! That switch happens INSIDE a native call and is undone before the
+  ! call returns, the one safe way to switch under a run in progress
+  ! (see gce_ctx_switch).
+  !
+  ! No handler bound, or a break taken while the handler runs, and the
+  ! state itself is the answer: the break is then only a snapshot, which
+  ! is what a script and the tests want. One level: the debugger does
+  ! not debug itself, and an error inside the handler is not a break.
+  !
+  ! `reason` is "break", "step" or "error". At an error the throw is
+  ! already in progress: every command lets it go on, and a step asked
+  ! for there is dropped rather than left to fire at the REPL's next
+  ! call. A step counts CALLS, the events this executor has: in = the
+  ! next call anywhere; over = the next call this frame's fn or its
+  ! callers make, so it walks this body without descending; out = the
+  ! next call made once this frame has returned.
+  recursive function take_break(reason) result(out)
+    character(len=*), intent(in) :: reason
+    type(gc_value) :: out, h, cmd, argv, thrown
+    type(gc_value) :: none(0)
+    integer :: base, paused, depth
+    logical :: failed
+    character(len=:), allocatable :: msg, trc
+
+    out = gc_nil()
+    if (in_handler .and. reason /= "break") return
+    out = capture_break(reason)
+    if (break_mode == 0) call read_break_mode()
+    if (break_mode == 2) call dump_break(gc_root_get(break_root))
+    h = gc_nil()
+    if (gc_root_live(handler_var_root)) h = gcn_var_value(gc_root_get(handler_var_root))
+    if (in_handler .or. h%tag == GCT_NIL) return
+    ! read here, in the paused context, where a `binding` of it is in force
+    call gc_global_keep(handler_fn_root, h)
+    depth = fstack_top
+
+    if (handler_ctx == 0) handler_ctx = gce_ctx_new()
+    paused = gce_ctx_current()
+    ctxs(handler_ctx)%ev_depth = ev_depth   ! one Fortran stack: the nesting limit counts on
+    in_handler = .true.
+    call gce_ctx_switch(handler_ctx)
+    call gce_clear_error()
+    base = vs_enter(1)
+    argv = gcv_build(1, none)
+    call vs_set(base + 1, argv)
+    argv = gcv_put(vs_get(base + 1), 0, gc_root_get(break_root), [vs_get(base + 1)])
+    call vs_set(base + 1, argv)
+    cmd = apply(gc_root_get(handler_fn_root), vs_get(base + 1))
+    call gc_global_keep(resume_root, cmd)
+    failed = has_error
+    thrown = gc_nil()
+    if (failed) then
+       msg = last_error
+       trc = last_trace
+       thrown = thrown_value()   ! stays rooted: the handler context keeps its slot
+    end if
+    call vs_leave(base)
+    call gce_ctx_switch(paused)
+    in_handler = .false.
+    ! back where the break was taken; the error state is as it was
+
+    out = gc_nil()
+    if (failed .and. reason /= "error") then
+       ! the handler threw: that is the break's answer, thrown here
+       has_error = .true.
+       last_error = msg
+       last_trace = trc
+       call set_thrown(thrown)
+       return
+    end if
+    cmd = strip_meta(gc_root_get(resume_root))
+    if (cmd%tag == GCT_KEY) then
+       if (reason == "error") return
+       select case (gc_ref_text(cmd%ref))
+       case ("step-in")
+          step_at = huge(step_at)
+       case ("step-over")
+          step_at = depth + 1
+       case ("step-out")
+          step_at = depth
+       case ("abort")
+          ! set directly, not through fail: an abort is not an error to
+          ! take another break on
+          has_error = .true.
+          last_error = "aborted at break"
+          last_trace = ""
+       end select
+    else if (gca_is(cmd)) then
+       out = gca_get(cmd, gc_key("continue", [cmd]))
+    end if
+  end function take_break
+
+  ! A step command pending from the last break: stop at the next call
+  ! no deeper than step_at. Called once the callee's frame is in place,
+  ! so the break shows it at the top with its arguments bound.
+  recursive subroutine step_check()
+    type(gc_value) :: v
+    if (fstack_top > step_at) return
+    step_at = 0
+    v = take_break("step")
+  end subroutine step_check
+
   ! CLOTRAN_BREAK=1 writes each break to stderr; CLOTRAN_BREAK_FILE
   ! writes it to that file as well, appended, for a run that ends
   ! before anyone can ask. Either one turns capture on; without them an
@@ -543,23 +651,28 @@
   ! Rendered by hand rather than printed as a map: every value goes
   ! through safe_str, so a dump never forces a seq or writes a
   ! megabyte.
-  subroutine write_break(m, u)
+  subroutine write_break(m, u, limit)
     type(gc_value), intent(in) :: m
     integer, intent(in) :: u
+    integer, intent(in), optional :: limit   ! frames to show; the rest are counted
     type(gc_value) :: frames, f, env
     type(gc_value), allocatable :: ks(:), vls(:)
     character(len=32) :: nbuf
-    integer :: i, j
+    character(len=:), allocatable :: where
+    integer :: i, j, top
     write(u, '(A)') "break: " // gcp_str(gca_get(m, gc_key("reason", [m])), .true.) // " " // &
          text_of(gca_get(m, gc_key("message", [m])))
     frames = gca_get(m, gc_key("frames", [m]))
-    do i = 0, gcv_count(frames) - 1
+    top = gcv_count(frames) - 1
+    if (present(limit)) top = min(top, limit - 1)
+    do i = 0, top
        f = gcv_nth(frames, i)
        write(nbuf, '(I0)') i
-       write(u, '(A)') "  " // trim(nbuf) // " " // text_of(gca_get(f, gc_key("fn", [f]))) // &
-            " (" // text_of(gca_get(f, gc_key("file", [f]))) // ":" // &
-            trim(int_text(gca_get(f, gc_key("line", [f])))) // ":" // &
-            trim(int_text(gca_get(f, gc_key("col", [f])))) // ")"
+       where = text_of(gca_get(f, gc_key("file", [f])))
+       if (len(where) > 0) where = where // ":"
+       where = where // trim(int_text(gca_get(f, gc_key("line", [f])))) // ":" // &
+            trim(int_text(gca_get(f, gc_key("col", [f]))))
+       write(u, '(A)') "  " // trim(nbuf) // " " // text_of(gca_get(f, gc_key("fn", [f]))) // " (" // where // ")"
        env = gca_get(f, gc_key("env", [f]))
        if (gca_is(env)) then
           call gca_entries(env, ks, vls)
@@ -568,6 +681,10 @@
           end do
        end if
     end do
+    if (top < gcv_count(frames) - 1) then
+       write(nbuf, '(I0)') gcv_count(frames) - 1 - top
+       write(u, '(A)') "  ... " // trim(nbuf) // " more"
+    end if
     flush(u)
   end subroutine write_break
 
@@ -774,6 +891,7 @@
     val = gc_nil()
     call k_push(nd0, frame0, flags0, restart0)
     call vs_set(kst(ksp)%base + 7, fn0)
+    if (step_at /= 0 .and. gc_kind(fn0) == OBJ_CLOSURE) call step_check()
 
     do
        if (has_error) then
@@ -911,6 +1029,7 @@
                 kst(ksp)%pc = 5
                 call k_push(vs_get(b + 5), vs_get(b + 4), ior(KF_FNBODY, KF_RESTART), vs_get(b + 5))
                 call vs_set(kst(ksp)%base + 7, fnv)
+                if (step_at /= 0) call step_check()
                 cycle
              end if
              ! The argument vector is handed over, not kept (see
@@ -930,6 +1049,7 @@
                    kst(ksp)%pc = 5
                    call k_push(vs_get(b + 5), vs_get(b + 4), ior(KF_FNBODY, KF_RESTART), vs_get(b + 5))
                    call vs_set(kst(ksp)%base + 7, vs_get(b + 3))
+                   if (step_at /= 0) call step_check()
                 else
                    ! no arity fits: the entry pushed above is ours to drop
                    call pop_frame()
@@ -1050,6 +1170,9 @@
     out = val
     if (has_error) out = gc_nil()
     call vs_leave(vbase)
+    ! the top-level form is over: a step it did not reach does not wait
+    ! for the next form's first call
+    if (ev_depth == 1) step_at = 0
     ev_depth = ev_depth - 1
   end function run
 

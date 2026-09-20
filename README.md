@@ -142,6 +142,44 @@ that rows cannot differ in length; the gain is that the whole thing is
 one contiguous column-major block a BLAS routine can take, which `[[I`
 cannot be at any price. `DEVIATIONS.md` 24 and 25 carry both.
 
+**A debugger, as data.** `(clotran-break)` pauses. The paused state
+is a map -- why, and one frame per pending call with its position and
+its locals by name -- handed to `*clotran-break-handler*`, whose
+answer resumes it: `:continue`, `{:continue v}`, `:step-in`,
+`:step-over`, `:step-out` or `:abort`. `binding` the Var scopes a
+handler; with none bound the break is a snapshot and the map is its
+value, which is what a script wants. At the REPL the handler is a
+nested REPL, and this is verified output:
+
+```
+user=> #'sq
+user=> #'hyp
+user=> break: :break 
+  0 user/hyp (1:17)
+      a = 3
+      b = 4
+;; (clotran-resume :continue | {:continue v} | :step-in | :step-over | :step-out | :abort)
+[1] user=> {a 3, b 4}
+[1] user=> break: :step 
+  0 user/sq (0:0)
+      x = 3
+  1 user/hyp (1:36)
+      a = nil
+      b = 4
+;; (clotran-resume :continue | {:continue v} | :step-in | :step-over | :step-out | :abort)
+[1] user=> 25
+```
+
+`(clotran-break-on! true)` breaks at every error too, taken at the
+throw so the frames are still there, and `CLOTRAN_BREAK_FILE=path`
+appends every break to a file for a run that ends before anyone can
+ask. Steps count calls, not lines, since a call is the event the
+executor has: in stops at the next call anywhere, over walks the
+current fn's own calls without descending, out stops at the next call
+once the current frame has returned. Evaluating in a frame is the
+handler's own `let` over `:env`, since locals are immutable and the
+values are already in the map.
+
 Four oracles keep it honest: gfortran and flang must agree
 (`make crosscheck`), `clj` -- real JVM Clojure --
 answers what Clojure actually does rather than what anyone remembers,
@@ -155,7 +193,7 @@ recalled. See `CLAUDE.md`.
 | speed | measured by `scripts/bench`, the same forms on a warmed JVM and on clotran: a function call ~1.3 µs, a loop/recur iteration ~1.7 µs, a reduce step over a range ~1.3 µs. Against the JVM that is 23x on plain recursion, 39x on a reduce building a map, 40x on fib, 120x on loop/recur, 454x on `(reduce + (range n))` and 514x on `into` over a mapped range. Between one and a half and two and a half orders of magnitude, an AST interpreter's honest number; PLAN.md step 8 has the JIT decision |
 | startup | 0.6s: core.clj is re-read and re-analysed every launch; there is no image yet |
 | memory | 168 MB after loading core.clj, and a 100000-element reduce stays there since locals are cleared after their last read; the image (PLAN.md step 5, stage 3) is what would shrink the baseline |
-| debugger | `(clotran-break)` and errors answer the paused state as data -- one frame per pending call with its locals by name, `(clotran-last-break)` to read the last one, `CLOTRAN_BREAK_FILE` to write every one to a file. There is no resuming yet: no `:continue`, no step, no `eval`-in-frame; PLAN.md step 8 |
+| debugger | steps count calls, not lines, since a call is the event the executor has; one level, so a break inside the handler is a snapshot; no socket. What it does is under "What works" |
 | `BigDecimal` and `BigInt` | `1M` reads as a double and `1N` as an integer; DEVIATIONS 30 |
 | sorted collections | `sorted-map` and `sorted-set` are unsorted; DEVIATIONS 9 |
 | mutable deftype fields | `(set! afield v)` is refused, loudly; DEVIATIONS 20 |
