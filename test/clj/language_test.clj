@@ -38,6 +38,15 @@
 ;; Where each is: the call it is waiting on -- (clotran-break) on line
 ;; 30 and (brk-inner n 41) on line 31 of this file -- not its body.
 (check "a frame is where its pending call is" (map (juxt :line :col) (:frames brk)) [[30 54] [31 46]])
+;; A step stops at a fn's entry, before any call is pending: that
+;; frame is where its body begins, the (let ...) at column 23.
+(def brk-entry (atom nil))
+(binding [*clotran-break-handler* (fn [b] (case (:reason b)
+                                            :step (do (reset! brk-entry b) :continue)
+                                            :break (if @brk-entry :continue :step-in)))]
+  ((fn [] (clotran-break) (brk-inner 1 2))))
+(check "a frame just entered is where its body begins" (map (juxt :fn :line :col) (take 1 (:frames @brk-entry)))
+       [["clojure.core/brk-inner" 30 23]])
 ;; One frame serves every arity of a fn, so the other arities' slots
 ;; exist and read nil; they are not this frame's locals.
 (defn brk-arity ([a] (clotran-break)) ([a b] (clotran-break)))

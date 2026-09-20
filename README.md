@@ -161,7 +161,7 @@ user=> break: :break
 ;; (clotran-resume :continue | {:continue v} | :step-in | :step-over | :step-out | :abort)
 [1] user=> {a 3, b 4}
 [1] user=> break: :step 
-  0 user/sq (0:0)
+  0 user/sq (1:14)
       x = 3
   1 user/hyp (1:36)
       a = nil

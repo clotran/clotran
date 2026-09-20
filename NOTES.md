@@ -2890,7 +2890,10 @@ trace line shows is the innermost pending node WITHIN the function:
 the call it is waiting on, or the break itself. The reader now takes
 the first node with a position walking down from the top of the
 continuation stack and resets at each fn frame, so `map`'s frame
-reports core.clj line 2767, where its lazy seq calls `f`.
+reports core.clj line 2767, where its lazy seq calls `f`. A frame a
+step has just entered has no pending node yet and its body is a `do`
+the analyser made, positionless; that frame is where the body's
+first form is.
 
 What is NOT here: resuming. The handler Var, `:continue`, `:step` and
 `{:eval form :frame 2}` all need the paused continuation stack to be

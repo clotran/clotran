@@ -374,6 +374,12 @@
        ! from the top; reset at each fn frame.
        if (.not. have_pos) then
           pos = gc_slot(nd, 4)
+          ! a body just entered (a step stops there) is a `do` the
+          ! analyser made, with no position of its own: it is where its
+          ! first form is
+          if (pos%tag /= GCT_INT .and. gc_i1(nd) == N_DO) then
+             if (gcv_count(gc_slot(nd, 1)) > 0) pos = gc_slot(gcv_nth(gc_slot(nd, 1), 0), 4)
+          end if
           if (pos%tag == GCT_INT) then
              if (pos%ival > 0) then
                 call gcr_position_parts(int(pos%ival, kind=4), pfname, pline, pcol)
