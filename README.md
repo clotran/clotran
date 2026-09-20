@@ -50,8 +50,8 @@ keeps every `deftest` whose symbols lie in the intersection of
 `clojure.core` and `cljs.core` -- the language, as two implementations
 agree on it -- and leaves out the ones that name a Java class, a
 member call or a `clojure.core` function ClojureScript never had.
-That keeps 314 of 578 tests, in 39 files that all load. **2164
-passing assertions** against 241 failures and 370 errors, so **78% of
+That keeps 314 of 578 tests, in 39 files that all load. **2170
+passing assertions** against 235 failures and 370 errors, so **78% of
 the assertions that executed** (measured 2026-09-19).
 
 That denominator is assertions that executed, not assertions that
@@ -152,7 +152,7 @@ recalled. See `CLAUDE.md`.
 
 | | |
 |---|---|
-| speed | measured by `scripts/bench`, the same forms on a warmed JVM and on clotran: a function call ~2.5 µs, a loop/recur iteration ~2.6 µs, a reduce step ~13 µs. Against the JVM that is 44x on plain recursion, 58x on fib, 194x on loop/recur, and 4,600x on `(reduce + (range n))`, where the JVM runs a specialised reduce over ranges in Java. Between one and a half and almost four orders of magnitude, an AST interpreter's honest number; PLAN.md step 8 has the JIT decision |
+| speed | measured by `scripts/bench`, the same forms on a warmed JVM and on clotran: a function call ~2.5 µs, a loop/recur iteration ~2.7 µs, a reduce step over a range ~1.6 µs. Against the JVM that is 37x on a reduce building a map, 46x on plain recursion, 57x on fib, 186x on loop/recur, 566x on `(reduce + (range n))` and 837x on `into` over a lazy seq, where every element is a seq cell. Between one and a half and three orders of magnitude, an AST interpreter's honest number; PLAN.md step 8 has the JIT decision |
 | startup | 0.6s: core.clj is re-read and re-analysed every launch; there is no image yet |
 | memory | 168 MB after loading core.clj, and a 100000-element reduce stays there since locals are cleared after their last read; the image (PLAN.md step 5, stage 3) is what would shrink the baseline |
 | debugger | an error reports `file:line:col` and the chain of calls that led to it, and `.getStackTrace` answers real elements; there is no breakpoint or step yet; PLAN.md step 8 |

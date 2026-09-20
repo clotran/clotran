@@ -2714,3 +2714,28 @@ cost is `first`, `next` and the range cell per element, not the add:
 that is where the JVM runs LongRange.reduce in Java, and where a
 native reduce over native ranges and vectors is the faithful next
 step.
+
+## reduce is host code on the JVM too
+
+`(reduce + (range n))` stayed at 4,600x after everything else because
+none of it was arithmetic: per element, core.clj's seq-reduce called
+`first`, `next` and `reduced?` as Clojure functions and the range
+cell was realised into a lazy cons. On the JVM `(range n)` is a
+LongRange, which implements IReduceInit, and `reduce` opens with
+`(if (instance? clojure.lang.IReduceInit coll) (.reduce coll f val)
+...)` -- a Java loop over longs, no seq at all. PersistentVector and
+PersistentList reduce the same way. So a native `.reduce` is not a
+shortcut around Clojure; it is where Clojure itself puts the loop.
+
+`reduce_native` (B_REDUCEINIT, the `.reduce` row) walks a native range
+by its arithmetic without allocating a cell, a vector by index, a
+list by cells; a range that was partly realised continues from its
+pending tail. A reduced value stops it and is unwrapped, as
+Java's does. `instance?` answers IReduceInit for exactly those three,
+a realised range cell now carries the mark that says it is one, and
+`(class (range 3))` is LongRange. Nineteen oracle cases pin the
+values against clj, reduced-early ones included.
+
+The derived suite moved for the first time today: transducers 14/12
+-> 20/6 pass/fail, 2170 pass overall, because `reduced` inside a
+transducer now reaches the host loop that honours it.

@@ -34,10 +34,10 @@ JVM-shaped `case` arms in one file.
 |---|---|
 | core.clj | 724 of 724 forms load |
 | our tests | 100% on both compilers; the gate |
-| the derived language suite | 314 tests kept (306 language + 8 concurrency) in 39 files, every file loads, 324 tests execute: 2164 pass / 241 fail / 370 error, so 78% of assertions that EXECUTED. Fewer tests are kept than before the analysis pass because the deriver now treats a symbol nothing defines as host; the pass rate over what is kept is unchanged |
+| the derived language suite | 314 tests kept (306 language + 8 concurrency) in 39 files, every file loads, 324 tests execute: 2170 pass / 235 fail / 370 error, so 78% of assertions that EXECUTED. Fewer tests are kept than before the analysis pass because the deriver now treats a symbol nothing defines as host; the pass rate over what is kept is unchanged |
 | Clojure's suite, verbatim (for reference) | 1810 pass / 219 fail / 1396 error over 357 tests, 53% of executed; 32 of 67 namespaces produce a passing assertion |
 | startup | 0.6s (7.2s before step 4, 2.3s at the start of stage 2), core.clj re-read every launch |
-| `(reduce + (range n))` | LINEAR since step 4: n=100000 in 1.4s, ~15 µs per element (17s and 170 µs at the end of step 4). Before: n=16000 took 161s and n=100000 did not finish in 15 minutes |
+| `(reduce + (range n))` | LINEAR since step 4: n=100000 in 0.16s, ~1.6 µs per element through the host's own IReduceInit reduce (17s and 170 µs at the end of step 4). Before: n=16000 took 161s and n=100000 did not finish in 15 minutes |
 | `loop`/`recur` | ~2.6 µs per iteration, linear; a function call ~2.5 µs. `scripts/bench` has the JVM ratios: 44x to 4,600x depending on the form |
 | memory | 168 MB after core.clj; recursion 100,000 deep works |
 | Fortran library calls made through clotran | `fortran/dgemm` (reference BLAS) and ChemSol's `readopt`, `dg_ld`, `solvout`, `entropy`; `examples/chemsol.cljf` reproduces the original program's output byte for byte on its three reference inputs (`scripts/chemsol-check`) |

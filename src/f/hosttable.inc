@@ -357,7 +357,7 @@
        hm("java.lang.Short", "TYPE", HK_TYPE) ]
   type(hm), parameter :: HOST_STATICS(294) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
-  type(hm), parameter :: HOST_METHODS_1(80) = [ &
+  type(hm), parameter :: HOST_METHODS_1(81) = [ &
   ! Instance members. The target becomes the first argument, which is all
   ! an instance method is: (.withMeta x m) calls with-meta on x and m.
        hm("", "meta", B_META, "meta"), &
@@ -407,6 +407,7 @@
   ! (. f (applyTo (seq args))) is core.clj's own apply.
        hm("", "applyTo", B_APPLY, "apply"), &
        hm("", "deref", B_DEREF, "deref"), &
+       hm("", "reduce", B_REDUCEINIT, "clotran-reduce"), &
        hm("", "hasRoot", B_HASROOT, "clotran-has-root"), &
        hm("", "addMethod", B_ADDMETHOD, "clotran-add-method"), &
        hm("", "removeMethod", B_REMOVEMETHOD, "clotran-remove-method"), &
@@ -515,5 +516,5 @@
        hm("", "end", B_RE_END, "clotran-re-end"), &
        hm("", "groupCount", B_RE_GROUPCOUNT, "re-group-count"), &
        hm("", "group", B_RE_GROUP, "re-group") ]
-  type(hm), parameter :: HOST_METHODS(139) = [HOST_METHODS_1, HOST_METHODS_2]
+  type(hm), parameter :: HOST_METHODS(140) = [HOST_METHODS_1, HOST_METHODS_2]
 

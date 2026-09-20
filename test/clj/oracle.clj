@@ -1530,6 +1530,17 @@
 
 (with-out-str (clojure.pprint/print-table [{:a 1 :b 2} {:a 3 :b 4}]))
 
+;; reduce over a range, a vector and a list goes through the host's own
+;; .reduce (IReduceInit), as LongRange.reduce and PersistentVector.reduce
+;; do on the JVM; a reduced value stops it and is unwrapped
+[(reduce + (range 100000)) (reduce + 5 (range 3)) (reduce + (range 0)) (reduce + [])
+ (reduce + 1.5 (range 0.5 3)) (reduce + (range 10 0 -3)) (reduce conj [] (quote (1 2 3)))
+ (reduce (fn [a x] (if (> x 3) (reduced a) (+ a x))) (range 10)) (reduce (fn [a x] (reduced :first)) 0 [1 2])
+ (reduce max [3 9 2]) (reduce + (rest (range 5))) (reduce + (next (range 5)))]
+
+[(instance? clojure.lang.IReduceInit (range 3)) (instance? clojure.lang.IReduceInit [1]) (instance? clojure.lang.IReduceInit (list 1))
+ (instance? clojure.lang.IReduceInit (map inc [1])) (= (class (range 3)) clojure.lang.LongRange) (seq? (range 3)) (counted? [1])]
+
 ;; the clock exists (ClojureScript has system-time)
 (pos? (System/nanoTime))
 

@@ -164,7 +164,7 @@ module Eval
   integer, parameter :: B_STACKTRACE = 274, B_STE_CLASS = 275, B_STE_METHOD = 276, &
        B_STE_FILE = 277, B_STE_LINE = 278
   integer, parameter :: B_SLURP = 279, B_CS_ENTROPY = 280, B_CS_READOPT = 281, B_CS_DGLD = 282, B_CS_SOLVOUT = 283
-  integer, parameter :: B_CLASSOF = 284, B_IDHASH = 285
+  integer, parameter :: B_CLASSOF = 284, B_IDHASH = 285, B_REDUCEINIT = 286
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -4148,6 +4148,103 @@ contains
   ! One cell of (range lo hi step): head lo, and a NATIVE pending tail
   ! (OBJ_LAZY, i2 = 1) holding [lo+step hi step], which gce_force turns
   ! into the next cell. No closure, no environment, no form.
+  recursive function reduce_native(coll, f, has_init, init) result(out)
+    type(gc_value), intent(in) :: coll, f, init
+    logical, intent(in) :: has_init
+    type(gc_value) :: out, x, cell, spec
+    integer :: base, i
+    logical :: have, done
+    real(gc_dp) :: sd
+    ! slots: 1 coll/cell 2 f 3 acc 4 cursor (a range's next value) 5 hi 6 step
+    base = vs_enter(6)
+    call vs_set(base + 1, coll)
+    call vs_set(base + 2, f)
+    have = has_init
+    if (has_init) call vs_set(base + 3, init)
+    done = .false.
+    select case (gc_kind(coll))
+    case (OBJ_VECTOR)
+       do i = 0, gcv_count(vs_get(base + 1)) - 1
+          call step(gcv_nth(vs_get(base + 1), i))
+          if (done) exit
+       end do
+    case (OBJ_CONS)
+       do while (gcl_count(vs_get(base + 1)) > 0)
+          call step(gcl_first(vs_get(base + 1)))
+          if (done) exit
+          call vs_set(base + 1, gcl_rest(vs_get(base + 1), [vs_get(base + 3)]))
+       end do
+    case (OBJ_LAZY)
+       do
+          cell = vs_get(base + 1)
+          if (gc_i1(cell) == LAZY_PENDING .and. gc_i2(cell) == 1) then
+             ! the rest of a range: walk the arithmetic, no cells
+             spec = gc_slot(cell, 1)
+             call vs_set(base + 4, gcv_nth(spec, 0))
+             call vs_set(base + 5, gcv_nth(spec, 1))
+             call vs_set(base + 6, gcv_nth(spec, 2))
+             sd = num_dbl(vs_get(base + 6))
+             do
+                if (sd > 0.0_gc_dp .and. .not. num_lt(vs_get(base + 4), vs_get(base + 5))) exit
+                if (sd < 0.0_gc_dp .and. .not. num_lt(vs_get(base + 5), vs_get(base + 4))) exit
+                if (sd == 0.0_gc_dp .and. .not. num_lt(vs_get(base + 4), vs_get(base + 5))) exit
+                call step(vs_get(base + 4))
+                if (done) exit
+                call vs_set(base + 4, num_add2(vs_get(base + 4), vs_get(base + 6), [vs_get(base + 3)]))
+             end do
+             exit
+          end if
+          call gce_force(cell)
+          if (has_error) exit
+          cell = vs_get(base + 1)
+          if (gc_i1(cell) /= LAZY_CONS) exit
+          call step(gc_slot(cell, 2))
+          if (done) exit
+          call vs_set(base + 1, gc_slot(vs_get(base + 1), 3))
+       end do
+    case default
+       call fail("reduce: not reducible: " // type_name(coll))
+    end select
+    if (.not. has_error .and. .not. done) then
+       if (have) then
+          out = vs_get(base + 3)
+       else
+          out = apply(vs_get(base + 2), gcv_empty([vs_get(base + 2)]))
+       end if
+    else if (done) then
+       out = vs_get(base + 3)
+    else
+       out = gc_nil()
+    end if
+    call vs_leave(base)
+  contains
+    ! One element: the first is the accumulator when there was no init;
+    ! otherwise (f acc x), and a reduced result unwraps and stops.
+    subroutine step(x0)
+      type(gc_value), intent(in) :: x0
+      type(gc_value) :: argv, r
+      if (.not. have) then
+         call vs_set(base + 3, x0)
+         have = .true.
+         return
+      end if
+      x = x0
+      argv = gcv_build(2, [vs_get(base + 3), x])
+      call gc_vec_set(gc_slot(argv, 1), 1, vs_get(base + 3))
+      call gc_vec_set(gc_slot(argv, 1), 2, x)
+      r = apply(vs_get(base + 2), argv)
+      if (has_error) then
+         done = .true.
+         return
+      end if
+      call vs_set(base + 3, r)
+      if (gca_contains(strip_meta(r), gc_key("clotran/reduced", [vs_get(base + 3)]))) then
+         call vs_set(base + 3, gca_get(strip_meta(vs_get(base + 3)), gc_key("clotran/reduced", [vs_get(base + 3)])))
+         done = .true.
+      end if
+    end subroutine step
+  end function reduce_native
+
   recursive function range_cell(lo, hi, stp, roots) result(out)
     type(gc_value), intent(in) :: lo, hi, stp
     type(gc_value), intent(in) :: roots(:)
@@ -4177,6 +4274,9 @@ contains
     call vs_set(base + 4, tail)
     out = gc_obj(OBJ_LAZY, [gc_nil(), vs_get(base + 1), vs_get(base + 4)], [roots, vs_get(base + 1), vs_get(base + 4)])
     call gc_set_i1(out, LAZY_CONS)
+    ! i2 = 1 on the realised cell as well: it says "this is a range", which
+    ! is what makes it a LongRange to `class` and an IReduceInit to reduce.
+    call gc_set_i2(out, 1)
     call vs_leave(base)
   end function range_cell
 
@@ -7320,6 +7420,13 @@ contains
        end block
     case (B_INSTANCE)
        out = gc_bool(is_instance(gcv_nth(args, 0), gcv_nth(args, 1)))
+    case (B_REDUCEINIT)
+       ! (.reduce coll f) and (.reduce coll f init): IReduceInit.reduce,
+       ! the host loop the JVM runs for a LongRange, a vector or a list
+       ! instead of walking seqs. A native range is walked by its
+       ! arithmetic and allocates no cells; a reduced value ends it
+       ! and is unwrapped, as Java's reduce does.
+       out = reduce_native(strip_meta(gcv_nth(args, 0)), gcv_nth(args, 1), n >= 3, gcv_nth(args, 2))
     case (B_IDHASH)
        ! System.identityHashCode: a number that is the same for the same
        ! object and usually differs between objects. The pool index is
@@ -8914,7 +9021,12 @@ contains
     case ("clojure.lang.PersistentArrayMap", "clojure.lang.PersistentHashMap"); yes = (t == "map")
     case ("clojure.lang.PersistentHashSet"); yes = (t == "set")
     case ("clojure.lang.PersistentList"); yes = (t == "list")
-    case ("clojure.lang.LazySeq"); yes = (t == "lazy-seq")
+    case ("clojure.lang.LazySeq"); yes = (t == "lazy-seq" .and. gc_i2(strip_meta(v)) /= 1)
+    case ("clojure.lang.LongRange", "clojure.lang.Range"); yes = (t == "lazy-seq" .and. gc_i2(strip_meta(v)) == 1)
+    ! What reduce hands to a host .reduce rather than walking as a seq:
+    ! the JVM's LongRange, PersistentVector and PersistentList do.
+    case ("clojure.lang.IReduceInit", "clojure.lang.IReduce")
+       yes = (t == "vector" .or. t == "list" .or. (t == "lazy-seq" .and. gc_i2(strip_meta(v)) == 1))
     case ("clojure.lang.PersistentVector$ChunkedSeq", "clojure.lang.Cons"); yes = (t == "seq")
     case ("clojure.lang.Atom"); yes = (t == "atom")
     case ("clojure.lang.AFunction", "clojure.lang.AFn"); yes = (t == "fn")
@@ -9153,7 +9265,8 @@ contains
          chain(1:5) = [character(len=36) :: "clojure.lang.IPersistentList", "clojure.lang.ISeq", &
               "java.util.List", "clojure.lang.IPersistentCollection", "java.util.Collection"]
          cnt = 5
-      case ("clojure.lang.LazySeq", "clojure.lang.PersistentVector$ChunkedSeq", "clojure.lang.Cons")
+      case ("clojure.lang.LazySeq", "clojure.lang.PersistentVector$ChunkedSeq", "clojure.lang.Cons", &
+            "clojure.lang.LongRange")
          chain(1:4) = [character(len=36) :: "clojure.lang.ISeq", "java.util.List", &
               "clojure.lang.IPersistentCollection", "java.util.Collection"]
          cnt = 4
@@ -9229,7 +9342,9 @@ contains
           ! core.clj writes (ExceptionInfo. ...) under an import.
           c = gc_slot(v, 1)
           s = class_key(gc_ref_text(c%ref))
-       case (OBJ_LAZY);    s = "clojure.lang.LazySeq"
+       case (OBJ_LAZY)
+          s = "clojure.lang.LazySeq"
+          if (gc_i2(v) == 1) s = "clojure.lang.LongRange"
        case (OBJ_SEQ);     s = "clojure.lang.PersistentVector$ChunkedSeq"
        case (OBJ_VAR);     s = "clojure.lang.Var"
        case (OBJ_NS);      s = "clojure.lang.Namespace"
