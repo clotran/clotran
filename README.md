@@ -123,6 +123,18 @@ branch beside each `:clj` one. `.clj` is JVM Clojure, which clotran
 loads as written -- that being the point. `require` looks for the
 three in that order.
 
+**Host members written in Clojure.** `sequence`, `eduction`,
+`iterator-seq`, `volatile!`, `shuffle` and the transducers that buffer
+(`partition-all`, `partition-by`) are core.clj's own definitions, which
+name `RT/iter`, `RT/chunkIteratorSeq`, `TransformerIterator`,
+`java.util.ArrayList` and `Eduction`. ClojureScript writes those in
+Clojure, so clotran does too: `src/clj/clotran/rt.cljf` holds them,
+the host table's rows for those members call its vars, and the file
+loads the first time one is reached. `Volatile` is a box the host
+supplies. Verified: `(sequence (comp (take 3) (map inc)) (range))` is
+`(1 2 3)`, and `(into [] (partition-by odd?) [1 3 2 4])` is
+`[[1 3] [2 4]]`.
+
 Clojure's OWN array functions run over the same representation -- not
 reimplemented, the definitions in `core.clj`, which are written against
 `java.lang.reflect.Array` and `clojure.lang.RT`:
@@ -237,7 +249,7 @@ recalled. See `CLAUDE.md`.
 | `BigDecimal` and `BigInt` | `1M` reads as a double and `1N` as an integer; DEVIATIONS 30 |
 | sorted collections | `sorted-map` and `sorted-set` are unsorted; DEVIATIONS 9 |
 | mutable deftype fields | `(set! afield v)` is refused, loudly; DEVIATIONS 20 |
-| `tap>`, `shuffle`, agents that run apart | queues or `ArrayList`; an agent's action runs at `send`, on the one thread there is |
+| `tap>`, agents that run apart | queues; an agent's action runs at `send`, on the one thread there is |
 | futures | run on the one OS thread, at creation until they first block; a wait under a `map` or `reduce` callback cannot park, and a wait nothing can satisfy is an error, not a hang; DEVIATIONS 38 |
 | the five JVM-only sibling libs | bytecode generation; see `src/clj/clojure/PROVENANCE.md` |
 | regex | ICU, with ASCII/Latin-1 offsets only |

@@ -3073,3 +3073,40 @@ own is-call flag, so no protocol method spelt `-something` had ever
 been callable on a deftype.
 
 Not here: `:process`, which is the reason the contract has `-takes`.
+
+## clotran.rt: host members written in Clojure, loaded on first use
+
+"Let's just finish out the language." The language suite's errors
+were counted by message: 200 of sequences' 222 were one missing
+member on sorted sets, 61 were `clojure.lang.Volatile`, 28 were
+`RT/chunkIteratorSeq`, 9 were `java.util.ArrayList`. This is the
+three small ones.
+
+`Volatile` is a new box kind, `OBJ_VOLATILE`: `deref` reads it,
+`.reset` writes it, `instance?` knows it as `IDeref`, which is what
+`@v` turns on -- without that, `@(volatile! 1)` answered the box, and
+`partition-by`, whose transducer keeps its previous value in one,
+started a partition per element.
+
+The rest is a new kind of host-table row. ClojureScript writes
+`iter`, `SeqIter`, `MultiIterator`, `TransformerIterator`,
+`chunkIteratorSeq`, `ArrayList` and `Eduction` in Clojure
+(core.cljs), so they are Clojure here too, in
+`src/clj/clotran/rt.cljf`, ported nearly line for line: a mutable
+field is an atom, since a deftype's fields cannot be set!
+(DEVIATIONS 20), and the transformer's state is one map in one atom.
+A row whose id is `B_RTFN` -- `RT/iter`, `RT/chunkIteratorSeq`,
+`TransformerIterator/create` and `createMulti`,
+`Collections/shuffle` -- names the var to call in its name column,
+`apply` sends such a builtin to `rt_call`, and the constructors
+`eval_new` cannot build natively, `ArrayList.` and `Eduction.`, go
+the same way. `rt_call` loads the file through the same `RT/load`
+path `require` uses, once, on the first row reached. `to_seq` learned
+that a deftype with a `seq` method is whatever that answers, which is
+how `(seq (eduction ..))` and `(vec (eduction ..))` work.
+
+Why not Fortran: a lazy seq over an iterator needs a thunk that
+closes over the iterator, and the host cannot make a closure; the
+transducer's reducing function likewise closes over its buffer. In
+Clojure both are one `fn`. The premise holds: core.clj is untouched,
+and it reaches these by the JVM names it always used.

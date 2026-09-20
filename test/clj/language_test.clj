@@ -1064,6 +1064,10 @@
 (check "a thousand futures give their contexts back"
        (count (doall (map deref (doall (map #(future (* % %)) (range 1000)))))) 1000)
 
+;;; ---- clotran.rt: host members written in Clojure, loaded on use ----
+(check "sequence reaches clotran.rt" (sequence (map inc) [1 2]) [2 3])
+(check "which is then loaded" (some? (find-ns 'clotran.rt)) true)
+
 ;;; ---- clotran.thread: the protocol, and green as its default ---------
 ;;
 ;; One API over pluggable kinds of thread; green is a task. Host check:

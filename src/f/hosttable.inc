@@ -295,7 +295,7 @@
   ! Long's bounds are clotran's own: an integer here IS a 64-bit one.
        hm("java.lang.Long", "MAX_VALUE", HK_INT, "", huge(0_gc_ip)), &
        hm("java.lang.Long", "MIN_VALUE", HK_INT, "", -huge(0_gc_ip) - 1_gc_ip) ]
-  type(hm), parameter :: HOST_STATICS_4(56) = [ &
+  type(hm), parameter :: HOST_STATICS_4(62) = [ &
        hm("java.lang.Long", "SIZE", HK_INT, "", 64_gc_ip), &
        hm("java.lang.Long", "BYTES", HK_INT, "", 8_gc_ip), &
        hm("java.lang.Short", "MAX_VALUE", HK_INT, "", 32767_gc_ip), &
@@ -360,8 +360,18 @@
   ! availableProcessors answers; TimeUnit is a marker, milliseconds only.
        hm("java.lang.Thread", "sleep", B_SLEEP, "clotran-sleep"), &
        hm("java.lang.Runtime", "getRuntime", B_ALWAYS_NIL, "clotran-nil"), &
-       hm("java.util.concurrent.TimeUnit", "MILLISECONDS", HK_INT, "", 1_gc_ip) ]
-  type(hm), parameter :: HOST_STATICS(297) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
+       hm("java.util.concurrent.TimeUnit", "MILLISECONDS", HK_INT, "", 1_gc_ip), &
+  ! Clojure on this host (clotran.rt, reached by name through rt_call):
+  ! the iterator pieces behind sequence, iterator-seq and eduction, and
+  ! Collections.shuffle over clotran.rt's ArrayList. RT.vector spreads
+  ! an array into a vector, which vec does.
+       hm("clojure.lang.RT", "iter", B_RTFN, "iter"), &
+       hm("clojure.lang.RT", "chunkIteratorSeq", B_RTFN, "chunk-iterator-seq"), &
+       hm("clojure.lang.TransformerIterator", "create", B_RTFN, "ti-create"), &
+       hm("clojure.lang.TransformerIterator", "createMulti", B_RTFN, "ti-create-multi"), &
+       hm("java.util.Collections", "shuffle", B_RTFN, "shuffle!"), &
+       hm("clojure.lang.RT", "vector", B_VEC, "vec") ]
+  type(hm), parameter :: HOST_STATICS(303) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
   type(hm), parameter :: HOST_METHODS_1(87) = [ &
   ! Instance members. The target becomes the first argument, which is all

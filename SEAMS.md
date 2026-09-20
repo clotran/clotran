@@ -160,6 +160,15 @@ carry `OBJ_MATCHER` at all, and it is the sole cause of the bounded
 per-Matcher buffer leak in DEVIATIONS 14. We pay that cost for Java's API
 shape, not for Clojure's semantics.
 
+The iterator pieces are bucket B done the other way: `RT/iter`,
+`RT/chunkIteratorSeq`, `TransformerIterator`, `ArrayList` and
+`Eduction` are what `sequence`, `iterator-seq`, `eduction` and the
+buffering transducers name, ClojureScript writes every one of them in
+Clojure, and so `src/clj/clotran/rt.cljf` does here: a host-table
+row whose id is `B_RTFN` calls the var of that name in `clotran.rt`,
+loaded on first use. The JVM member is the seam; the code behind it
+is the language's.
+
 `future`, `promise`, `pmap` and `Thread/sleep` are the other worked
 example, and the larger one: ClojureScript has none of them -- no
 threads in a browser -- so by the detector they are Java showing

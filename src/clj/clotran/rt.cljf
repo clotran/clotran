@@ -1,0 +1,133 @@
+(ns clotran.rt
+  "The part of clojure.lang.RT and its neighbours that ClojureScript
+  writes in Clojure, written in Clojure here too: the iterators behind
+  sequence, iterator-seq and eduction, an ArrayList for the transducers
+  that buffer, and Collections.shuffle. core.clj reaches them as the
+  JVM members it names -- RT/iter, RT/chunkIteratorSeq,
+  TransformerIterator/create, (java.util.ArrayList.), (Eduction. ..) --
+  through rows in hosttable.inc that call the vars named here (Eval.f90
+  rt_call), and this file loads the first time one is reached. A
+  deftype's fields cannot be set! here (DEVIATIONS 20), so each mutable
+  one holds an atom.")
+
+;;; ---- iterators ------------------------------------------------------
+
+(deftype SeqIter [remaining]
+  Object
+  (hasNext [_] (boolean (seq @remaining)))
+  (next [_]
+    (if-let [s (seq @remaining)]
+      (do (reset! remaining (rest s)) (first s))
+      (throw (ex-info "No such element" {})))))
+
+(defn iter
+  "An iterator over anything seqable; nil is empty."
+  [coll]
+  (SeqIter. (atom coll)))
+
+(deftype MultiIterator [iters]
+  Object
+  (hasNext [_] (every? #(.hasNext %) iters))
+  (next [_] (doall (map #(.next %) iters))))
+
+(defn- ti-step!
+  "Fills the iterator's next slot from its buffer, pulling from the
+  source through the transducer until something lands there or the
+  source runs out. True when a next value is ready."
+  [st]
+  (loop []
+    (let [{:keys [has-next? buffer completed? source multi? xf]} @st]
+      (cond
+        has-next? true
+        (seq buffer) (do (swap! st assoc :next (nth buffer 0) :buffer (subvec buffer 1) :has-next? true)
+                         true)
+        completed? false
+        (.hasNext source) (let [r (if multi?
+                                    (apply xf nil (.next source))
+                                    (xf nil (.next source)))]
+                            (when (reduced? r)
+                              (xf nil)
+                              (swap! st assoc :completed? true))
+                            (recur))
+        :else (do (xf nil)
+                  (swap! st assoc :completed? true)
+                  (recur))))))
+
+(deftype TransformerIterator [st]
+  Object
+  (hasNext [_] (ti-step! st))
+  (next [_]
+    (if (ti-step! st)
+      (let [v (:next @st)]
+        (swap! st assoc :has-next? false :next nil)
+        v)
+      (throw (ex-info "No such element" {})))))
+
+(defn- transformer-iterator [xform source multi?]
+  (let [st (atom {:buffer [] :has-next? false :completed? false :source source :multi? multi?})]
+    (swap! st assoc :xf (xform (fn
+                                 ([] nil)
+                                 ([acc] acc)
+                                 ([acc o] (swap! st update :buffer conj o) acc))))
+    (TransformerIterator. st)))
+
+(defn ti-create [xform source] (transformer-iterator xform source false))
+
+(defn ti-create-multi [xform sources] (transformer-iterator xform (MultiIterator. (vec sources)) true))
+
+(defn chunk-iterator-seq
+  "A lazy seq over an iterator, 32 at a time, as RT.chunkIteratorSeq."
+  [it]
+  (lazy-seq
+    (when (.hasNext it)
+      (let [b (chunk-buffer 32)]
+        (loop [n 0]
+          (if (and (< n 32) (.hasNext it))
+            (do (chunk-append b (.next it)) (recur (inc n)))
+            (chunk-cons (chunk b) (chunk-iterator-seq it))))))))
+
+;;; ---- java.util.ArrayList, for the transducers that buffer -----------
+
+(deftype ArrayList [items]
+  Object
+  (add [_ x] (swap! items conj x) true)
+  (size [_] (count @items))
+  (isEmpty [_] (empty? @items))
+  (clear [_] (reset! items []) nil)
+  (get [_ i] (nth @items i))
+  (toArray [_] @items)
+  (iterator [_] (iter @items))
+  (seq [_] (seq @items)))
+
+(defn array-list
+  "(ArrayList.), (ArrayList. n) -- a capacity, ignored -- or (ArrayList. coll)."
+  ([] (ArrayList. (atom [])))
+  ([n-or-coll] (ArrayList. (atom (if (number? n-or-coll) [] (vec n-or-coll))))))
+
+(defn shuffle!
+  "Collections.shuffle: the list's items in a random order, in place."
+  [^ArrayList al]
+  (swap! (.-items al)
+         (fn [v]
+           (loop [v v i (dec (count v))]
+             (if (pos? i)
+               (let [j (rand-int (inc i))]
+                 (recur (assoc v i (nth v j) j (nth v i)) (dec i)))
+               v))))
+  nil)
+
+;;; ---- Eduction --------------------------------------------------------
+
+(deftype Eduction [xform coll]
+  Object
+  (iterator [_] (ti-create xform (iter coll)))
+  (seq [_] (seq (chunk-iterator-seq (ti-create xform (iter coll)))))
+  clojure.lang.Sequential
+  clojure.lang.IReduceInit
+  (reduce [_ f init] (transduce xform (completing f) init coll)))
+
+(extend-protocol clojure.core.protocols/CollReduce
+  Eduction
+  (coll-reduce
+    ([e f] (let [r (.reduce e (fn ([] (f)) ([acc x] (f acc x))) (f))] r))
+    ([e f init] (.reduce e f init))))

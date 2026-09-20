@@ -173,6 +173,9 @@ module Eval
   integer, parameter :: B_SUBMIT = 298, B_TASKDONE = 299, B_TASKCANCELLED = 300, B_TASKCANCEL = 301, &
        B_LATCHWAIT = 302, B_SLEEP = 303, B_NPROCS = 304, &
        B_TASKSTATUS = 306, B_MAILBOX = 307, B_CURTASK = 308
+  ! A host member that is Clojure on this host: a row with this id names
+  ! a var in clotran.rt (src/clj/clotran/rt.cljf), loaded on first use.
+  integer, parameter :: B_RTFN = 309
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -274,6 +277,7 @@ module Eval
   integer, save :: task_loop_depth = 0
   logical, save :: yield_flag = .false.
   logical, save :: task_trace = .false., task_trace_read = .false.   ! CLOTRAN_TASK_TRACE=1: the scheduler's decisions, on stderr
+  logical, save :: rt_loaded = .false.   ! clotran.rt, once (rt_call)
   integer, allocatable, save :: free_ctx(:)
   integer, save :: n_free_ctx = 0
   ! A task's states (i1): parked and resumable, on the Fortran stack
@@ -769,6 +773,75 @@ contains
   ! lookup: core.clj is in the middle of REDEFINING first, next, rest,
   ! seq and cons in terms of the host when it asks for them, so
   ! resolving .RT/first through the Var `first` would be a loop.
+  ! (seq inst) for a deftype with a `seq` method; nil for one without.
+  recursive function inst_seq(v, roots) result(out)
+    type(gc_value), intent(in) :: v
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, m, argv
+    integer :: base
+    out = gc_nil()
+    base = vs_enter(3)
+    call vs_set(base + 1, v)
+    m = gca_get(gc_slot(gc_slot(v, 1), 3), gc_key("seq", [roots, vs_get(base + 1)]))
+    if (gc_kind(m) /= OBJ_CLOSURE) then
+       call vs_leave(base)
+       return
+    end if
+    call vs_set(base + 2, m)
+    argv = gcv_conj(gcv_empty([roots, vs_get(base + 1), vs_get(base + 2)]), vs_get(base + 1), &
+         [roots, vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 3, argv)
+    out = apply(vs_get(base + 2), vs_get(base + 3))
+    if (.not. has_error) then
+       call vs_set(base + 3, out)
+       out = to_seq(vs_get(base + 3), [roots, vs_get(base + 1)])
+    end if
+    call vs_leave(base)
+  end function inst_seq
+
+  ! The var `name` in clotran.rt, applied to `args`. clotran.rt is the
+  ! part of clojure.lang.RT and its neighbours that ClojureScript
+  ! writes in Clojure -- iterators, TransformerIterator, ArrayList,
+  ! Eduction -- written in Clojure here too (src/clj/clotran/rt.cljf)
+  ! and loaded the first time a row with B_RTFN, or a constructor
+  ! eval_new sends here, is reached.
+  recursive function rt_call(name, args) result(out)
+    character(len=*), intent(in) :: name
+    type(gc_value), intent(in) :: args
+    type(gc_value) :: out, fargs, ns, var, sym
+    integer :: base
+    out = gc_nil()
+    base = vs_enter(3)
+    call vs_set(base + 1, args)
+    if (.not. rt_loaded) then
+       rt_loaded = .true.   ! before the load: a row reached while loading is an error, not a loop
+       fargs = gcv_empty([vs_get(base + 1)])
+       call vs_set(base + 2, fargs)
+       fargs = gcv_conj(vs_get(base + 2), gc_str("clotran/rt", [vs_get(base + 1), vs_get(base + 2)]), &
+            [vs_get(base + 1), vs_get(base + 2)])
+       call vs_set(base + 2, fargs)
+       out = call_builtin(B_RTLOAD, vs_get(base + 2))
+       out = gc_nil()
+       if (has_error) then
+          call vs_leave(base)
+          return
+       end if
+    end if
+    ns = gcn_find_or_create("clotran.rt", [vs_get(base + 1)])
+    call vs_set(base + 2, ns)
+    sym = gc_sym(name, [vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 3, sym)
+    var = gcn_lookup(vs_get(base + 2), vs_get(base + 3))
+    if (.not. gcn_is_var(var)) then
+       call fail("clotran.rt has no " // name)
+       call vs_leave(base)
+       return
+    end if
+    call vs_set(base + 3, gcn_var_value(var))
+    out = apply(vs_get(base + 3), vs_get(base + 1))
+    call vs_leave(base)
+  end function rt_call
+
   function native(id, name, roots) result(fn)
     integer, intent(in) :: id
     character(len=*), intent(in) :: name
@@ -2160,6 +2233,16 @@ contains
        call vs_set(base + 3, out)
        call gc_set_slot(vs_get(base + 3), 4, frames_vec([vs_get(base + 3)]))
        out = vs_get(base + 3)
+    else if (cname == "Volatile" .or. cname == "clojure.lang.Volatile") then
+       ! volatile!: a box, deref'd and .reset, with none of an atom's
+       ! validators or watches
+       call vs_set(base + 3, nth_or_nil(vs_get(base + 1), 0))
+       out = gc_obj(OBJ_VOLATILE, [vs_get(base + 3)], [vs_get(base + 3)])
+    else if (cname == "ArrayList" .or. cname == "java.util.ArrayList") then
+       ! Clojure on this host: clotran.rt's ArrayList (rt_call)
+       out = rt_call("array-list", vs_get(base + 1))
+    else if (cname == "Eduction" .or. cname == "clojure.lang.Eduction") then
+       out = rt_call("->Eduction", vs_get(base + 1))
     else
        ! A type deftype* created. Last, so nothing above is shadowed
        ! by a deftype that happens to pick one of those names.
@@ -4689,7 +4772,16 @@ contains
 
     select case (gc_kind(fn))
     case (OBJ_BUILTIN)
-       out = call_builtin(gc_i1(fn), args)
+       if (gc_i1(fn) == B_RTFN) then
+          ! a host member written in Clojure: its var in clotran.rt
+          block
+            type(gc_value) :: nm
+            nm = gc_slot(fn, 1)
+            out = rt_call(gc_ref_text(nm%ref), args)
+          end block
+       else
+          out = call_builtin(gc_i1(fn), args)
+       end if
     case (OBJ_CLOSURE)
        ! handed over, not kept (see exec's N_CALL): the callee roots
        ! args itself, immediately, and nothing allocates in between
@@ -7275,7 +7367,7 @@ contains
              return
           end if
           out = gc_slot(a, 2)
-       else if (gcn_is_var(a) .or. gc_kind(a) == OBJ_ATOM) then
+       else if (gcn_is_var(a) .or. gc_kind(a) == OBJ_ATOM .or. gc_kind(a) == OBJ_VOLATILE) then
           out = gc_slot(a, 1)
        else if (gca_contains(a, gc_key("clotran/reduced", &
             [vs_get(base + 1)]))) then
@@ -8899,6 +8991,13 @@ contains
        return
     end if
 
+    ! A deftype that answers seq -- ISeqable, as ClojureScript spells
+    ! it; clotran.rt's Eduction does -- is whatever that answers.
+    if (gc_kind(v) == OBJ_INST) then
+       out = inst_seq(v, roots)
+       return
+    end if
+
     ! Indexable: a VIEW, not a copy. rest is then O(1).
     if (seq_len(v) == 0) return
     base = vs_enter(1)
@@ -9156,6 +9255,7 @@ contains
        ! (class x) is the keyword a protocol's :impls map is keyed by
        ! and extend-type on the type reaches it.
        case (OBJ_DELAY);   s = "delay"
+       case (OBJ_VOLATILE); s = "volatile"
        case (OBJ_ARRAY);   s = "array"
        case (OBJ_INST);    s = class_text(v)
        case (OBJ_TYPE);    s = "class"
@@ -9600,8 +9700,9 @@ contains
        ! (.deref ref) (deref-future ref)), so a thing that derefs has
        ! to ANSWER to IDeref or it silently takes the future path --
        ! which is how @(delay 1) came back as the delay itself.
-       yes = (t == "atom" .or. t == "delay" .or. t == "var")
+       yes = (t == "atom" .or. t == "delay" .or. t == "var" .or. t == "volatile")
     case ("clojure.lang.Delay"); yes = (t == "delay")
+    case ("clojure.lang.Volatile"); yes = (t == "volatile")
     ! The concrete classes `class` answers (class_name_of), so that
     ! (instance? (class x) x) holds and a condp on them can ask.
     case ("clojure.lang.PersistentVector"); yes = (t == "vector")
@@ -9965,6 +10066,7 @@ contains
        case (OBJ_NS);      s = "clojure.lang.Namespace"
        case (OBJ_DELAY);   s = "clojure.lang.Delay"
        case (OBJ_TASK);    s = "java.util.concurrent.FutureTask"
+       case (OBJ_VOLATILE); s = "clojure.lang.Volatile"
        case (OBJ_ATOM);    s = "clojure.lang.Atom"
        case (OBJ_ARRAY);   s = "array"
        case (OBJ_INST);    s = class_text(v)

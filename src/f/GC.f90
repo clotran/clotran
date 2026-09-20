@@ -270,6 +270,7 @@ module GC
   ! (Eval's tasks.inc). i1 is its state, i2 the context it runs in -- 0
   ! before it starts and once it has finished.
   integer, parameter, public :: OBJ_TASK      = 34 ! 1=thunk 2=value or failure 3=awaited 4=deadline 5=mailbox
+  integer, parameter, public :: OBJ_VOLATILE  = 35 ! 1=value; clojure.lang.Volatile, a box with no validator or watches
   integer, parameter, public :: OBJ_HAMT      = 11 ! 1=root run; i1=count
   integer, parameter, public :: OBJ_HAMT_LEAF = 12 ! 1=key 2=val
   ! Slot 3 was reserved for a per-Var dynamic stack; the dynamic

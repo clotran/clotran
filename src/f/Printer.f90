@@ -335,6 +335,8 @@ contains
        s = gcp_str(gc_slot(v, 1), readable)
     case (OBJ_TASK)
        s = "#object[java.util.concurrent.FutureTask]"
+    case (OBJ_VOLATILE)
+       s = "#<volatile " // gcp_str(gc_slot(v, 1), readable) // ">"
     case (OBJ_DELAY)
        ! Clojure shows #object[clojure.lang.Delay 0x.. {:status :pending,
        ! :val nil}]. Same two facts, in clotran's own #<...> shape.

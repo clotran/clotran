@@ -1627,3 +1627,50 @@
 (do (defprotocol PD (-pname [x])) (deftype TD [] PD (-pname [_] :td)) (-pname (TD.)))
 
 (do (deftype TF [x]) [(.-x (TF. 3)) (. (TF. 4) -x)])
+
+;; sequence, eduction, iterator-seq, volatile! and the buffering
+;; transducers: the RT pieces ClojureScript writes in Clojure, written
+;; in Clojure here too (clotran.rt), reached as the JVM members
+(sequence (map inc) [1 2 3])
+
+(take 3 (sequence (map inc) (range)))
+
+(sequence (map +) [1 2 3] [10 20 30])
+
+(sequence (partition-all 2) [1 2 3 4 5])
+
+(sequence (comp (filter odd?) (map inc)) (range 10))
+
+(sequence (comp (take 3) (map inc)) (range))
+
+(sequence (map inc) nil)
+
+(into [] (partition-all 2) (range 5))
+
+(into [] (partition-by odd?) [1 3 2 4])
+
+(transduce (partition-all 3) conj (range 7))
+
+(into [] (eduction (map inc) (filter even?) (range 10)))
+
+(seq (eduction (map inc) [1 2]))
+
+(vec (eduction (take 2) [5 6 7]))
+
+(reduce + (eduction (map inc) (range 5)))
+
+(reduce + 100 (eduction (map inc) (range 5)))
+
+(let [v (volatile! 1)] (vswap! v inc) [@v (volatile? v) (volatile? (atom 1)) (vreset! v 9) @v])
+
+(iterator-seq (.iterator (java.util.ArrayList. [1 2 3])))
+
+(sort (shuffle [3 1 2 5 4]))
+
+(count (shuffle (range 10)))
+
+(into [] (distinct) [1 2 1 3 2])
+
+(into [] (dedupe) [1 1 2 2 1])
+
+(into [] (interpose :x) [1 2 3])
