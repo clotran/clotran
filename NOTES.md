@@ -3310,3 +3310,57 @@ deftype's declared interfaces or a built-in's supertype chain instead
 of `false` to everything, which is what lets `extend` refuse a type that
 already implements the protocol inline, and `extends?` say so; and
 `Long/valueOf` with the wrong count fails in the Reflector's words.
+
+## What Clojure's verbatim suite named next: hashCode, causes, and a record's own methods
+
+With the derived suite at 98.6%, the 67 verbatim namespaces were run
+again (82% of executed, from 53%) and their language-shaped failures
+read. What they named, each checked against `clj` before it became an
+oracle case:
+
+- **`Util.hash` is `Object.hashCode`, not `hasheq`.** The `case` macro
+  keys its table with `Util/hash`, merges tests whose hashes collide
+  into one bucket, and makes the merged test the int hash itself. Both
+  rows pointed at clotran's `hash`, so `(case 1 1 :long
+  -9223372034707292159 :big :else)` -- the suite's own collision --
+  answered `:else`. `java_hashcode` is `Long.hashCode` for every
+  integer (Clojure's are all longs there), `Double.hashCode`,
+  `String.hashCode`, 1231 and 1237; `.hashCode` and `Util/hash` reach
+  it, and `case_branch` hashes the value the same way. A merged
+  bucket's key is the hash of its hash, which the JVM's boxed Integer
+  makes the same number and a negative long does not, so `case_branch`
+  probes that second key on a miss and lets skip-check say it was a
+  merge.
+- **An exception has a cause.** `(ex-info m data cause)` and
+  `(Exception. m cause)` kept nothing in slot 5; `getCause` answered
+  nil, so `ex-cause` and `Throwable->map`'s `:via` chain stopped at the
+  first exception.
+- **A macro's arity error counts what the caller wrote.** The
+  ArityException said `(3)` for `(m0 1)`, `&form` and `&env` included;
+  `macro_arity_fixup` takes the two off, only when the exception names
+  the macro itself, as `Compiler.macroexpand1` does.
+- **A private Var is not reachable by its qualified name** from another
+  namespace: "var: other/secret is not public", as `resolveIn` says;
+  `#'other/secret` still works, as there.
+- **`find-ns` created namespaces.** So `(the-ns 'nope)` answered a
+  namespace, `alias` to one nobody made succeeded, and `require`'s
+  "namespace not found after loading" could never fire. It is
+  `Namespace.find` now; `create-ns` has `findOrCreate` to itself,
+  `remove-ns` exists, and a skipped JVM-only lib (DEVIATIONS 12) leaves
+  an empty namespace behind so that `require` of it still succeeds --
+  core.clj's own `(require '[clojure.java.io :as jio])` is form 645.
+- **`find` answers the map's own key**, metadata and all, as
+  `MapEntry(key, val)` does; it answered the lookup key.
+- **A record's `conj`, `with-meta` and `meta` are its own methods.**
+  `conj` on a record built a list of its entries; `with-meta` wrapped
+  it and its `meta` method then saw no `__meta`. `cons`, `withMeta`
+  and `meta` are what the defrecord expansion wrote, so they are called.
+  And a deftype is an instance of what its interfaces EXTEND:
+  `IPersistentMap` is an `IPersistentCollection`, `Counted`, `Seqable`
+  and a `java.util.Map`, which is what `coll?`, `counted?`, `seqable?`
+  and `clojure.walk` ask (`iface_extends`); `seqable?` itself is
+  `RT.canSeq`, which had no row.
+- **Math edges:** `pow` of 1 or -1 to an infinite power is NaN,
+  `getExponent` of NaN and the infinities is 1024 and of zero and the
+  subnormals -1023, `nextAfter` towards NaN is NaN; and `Boolean/TRUE`
+  and `FALSE`.

@@ -2045,3 +2045,63 @@
 
 ;; a qualified symbol is not a local
 [(try (eval '(let* [a/x 1] x)) (catch Exception e :threw)) (try (eval '(loop* [a/x 1] x)) (catch Exception e :threw)) (let [/ 1] /)]
+
+;; case keys its table with Util.hash, which is hashCode: 1 and
+;; -9223372034707292159 collide and the condp under the key tells them apart
+[(case 1 1 :long -9223372034707292159 :big :else) (case -9223372034707292159 1 :long -9223372034707292159 :big :else) (case 4294967297 4294967297 :big :else) (case 1 4294967297 :big 1 :one :else) (case "a" "a" :s :else) (case :k :k :kw :else) (case 7 (1 7) :either :else) (case 'x (x y) :sym :else) (case 3 (1 7) :either :else)]
+
+[(.hashCode 1) (.hashCode -9223372034707292159) (.hashCode 4294967297) (.hashCode -1) (.hashCode "abc") (.hashCode "") (.hashCode true) (.hashCode false) (.hashCode 1.5) (.hashCode 0.0)]
+
+;; a cause
+(let [e (ex-info "outer" {:o 1} (ex-info "inner" {:i 2}))] [(ex-message (ex-cause e)) (ex-data (ex-cause e)) (ex-cause (ex-cause e)) (ex-message (.getCause e)) (ex-data e)])
+
+(let [{:keys [cause via]} (Throwable->map (Exception. "I am not a number" (Exception. "double two")))] [cause (mapv :message via) (count via) (vector? via)])
+
+(let [{:keys [cause via]} (Throwable->map (Exception. "alone"))] [cause (mapv :message via)])
+
+;; a macro called with the wrong count says the count the caller wrote
+(defmacro m0 [] 1)
+
+(defmacro m1 [a] a)
+
+[(try (macroexpand '(m0 1)) (catch clojure.lang.ArityException e (.getMessage e))) (try (macroexpand '(m1 1 2)) (catch clojure.lang.ArityException e (.getMessage e))) (macroexpand '(m1 5))]
+
+;; a private Var is not reachable by its qualified name from another namespace; #'ns/x still is
+(ns other-ns)
+
+(def ^:private secret 1)
+
+(in-ns 'user)
+
+(try (eval 'other-ns/secret) (catch Exception e (boolean (re-find #"not public" (.getMessage (or (.getCause e) e))))))
+
+@#'other-ns/secret
+
+;; find-ns does not create, so the-ns and alias can refuse
+[(find-ns 'nope-ns) (try (alias 'bogus 'epicfail) (catch Exception e (.getMessage e))) (some? (find-ns 'clojure.core))]
+
+;; Math edges
+(require 'clojure.math)
+
+[(NaN? (clojure.math/pow 1.0 ##Inf)) (NaN? (clojure.math/pow -1.0 ##-Inf)) (clojure.math/pow 2.0 ##Inf) (clojure.math/pow 2.0 3.0) (clojure.math/get-exponent ##NaN) (clojure.math/get-exponent ##Inf) (clojure.math/get-exponent 0.0) (clojure.math/get-exponent 1.0) (clojure.math/get-exponent 1024.5) (clojure.math/get-exponent 4.9E-324) (NaN? (clojure.math/next-after 1 ##NaN)) (clojure.math/next-after 1.0 ##Inf)]
+
+;; find answers the map's own key, metadata and all
+(let [k (with-meta 'k {:a "A"}) m {k 1} big (into {} (map (fn [i] [i i]) (range 40))) bk (with-meta 'bk {:b 1})] [(meta (key (find m 'k))) (meta (key (find (assoc big bk 9) 'bk))) (meta (key (find (sorted-map k 1) 'k))) (find m 'k)])
+
+;; a record: conj through its own cons, its own metadata, and what it is an instance of
+(defrecord Foo [a b c])
+
+(require 'clojure.walk)
+
+[(conj (->Foo 1 2 3) [:x 1]) (record? (conj (->Foo 1 2 3) [:x 1])) (meta (with-meta (->Foo 1 2 3) {:m 1})) (coll? (->Foo 1 2 3)) (map? (->Foo 1 2 3)) (associative? (->Foo 1 2 3)) (seqable? (->Foo 1 2 3)) (counted? (->Foo 1 2 3)) (clojure.walk/walk identity identity (->Foo 1 2 3)) (meta (clojure.walk/postwalk identity (with-meta (->Foo 1 2 3) {:m 1}))) (into (->Foo 1 2 3) {:d 4}) (= (->Foo 1 2 3) (conj (->Foo 1 2 3) [:a 1])) (:a (conj (->Foo 1 2 3) {:a 9})) (meta (conj (with-meta (->Foo 1 2 3) {:m 1}) [:d 4]))]
+
+;; the Boolean constants
+[Boolean/TRUE Boolean/FALSE (identical? true Boolean/TRUE)]
+
+;; remove-ns takes a namespace out of the registry, and refuses clojure.core
+(do (create-ns 'temp-ns) [(some? (find-ns 'temp-ns)) (some? (remove-ns 'temp-ns)) (find-ns 'temp-ns) (remove-ns 'temp-ns)])
+
+(try (remove-ns 'clojure.core) (catch IllegalArgumentException e (.getMessage e)))
+
+;; seqable? is RT.canSeq
+[(seqable? nil) (seqable? 1) (seqable? "s") (seqable? [1]) (seqable? {}) (seqable? #{}) (seqable? '(1)) (seqable? (range 3)) (seqable? (->Foo 1 2 3)) (seqable? (eduction (map inc) [1])) (seqable? :k) (seqable? 'x) (seqable? (fn []))]

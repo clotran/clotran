@@ -186,6 +186,7 @@ module Eval
   ! reaches its row instead of a NullPointerException
   integer, parameter :: B_STUB = 321
   integer, parameter :: B_MAPENTRY = 322, B_ISASSIGN = 323, B_BINDROOT = 324, B_RAWROOT = 325
+  integer, parameter :: B_HASHCODE = 326, B_GETCAUSE = 327, B_NSREMOVE = 328, B_NSCREATE = 329, B_CANSEQ = 330
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -2280,21 +2281,36 @@ contains
        ! -- its hierarchy, its stack trace -- has nothing to correspond
        ! to here, so the class name is kept as written and nothing is
        ! invented around it.
-       call vs_set(base + 3, nth_or_nil(vs_get(base + 1), 1))
-       ! ex-info's nil data is an empty map: (ex-data (ex-info "m" nil)) is {}
-       thunk = vs_get(base + 3)
-       if (thunk%tag == GCT_NIL .and. (cname == "ExceptionInfo" .or. cname == "clojure.lang.ExceptionInfo")) then
-          call vs_set(base + 3, gca_empty([vs_get(base + 1)]))
-       end if
-       out = gc_obj(OBJ_ERR, &
-            [gc_sym(cname, [vs_get(base + 1), vs_get(base + 3)]), &
-             nth_or_nil(vs_get(base + 1), 0), &
-             vs_get(base + 3)], &
-            [vs_get(base + 1), vs_get(base + 3)])
-       ! filled in at construction, as Throwable's constructor does
-       call vs_set(base + 3, out)
-       call gc_set_slot(vs_get(base + 3), 4, frames_vec([vs_get(base + 3)]))
-       out = vs_get(base + 3)
+       block
+         logical :: is_info
+         type(gc_value) :: cause
+         is_info = (cname == "ExceptionInfo" .or. cname == "clojure.lang.ExceptionInfo")
+         ! ex-info's data, an empty map when given nil; other classes carry none
+         call vs_set(base + 3, gc_nil())
+         if (is_info) then
+            call vs_set(base + 3, nth_or_nil(vs_get(base + 1), 1))
+            thunk = vs_get(base + 3)
+            if (thunk%tag == GCT_NIL) call vs_set(base + 3, gca_empty([vs_get(base + 1)]))
+         end if
+         out = gc_obj(OBJ_ERR, &
+              [gc_sym(cname, [vs_get(base + 1), vs_get(base + 3)]), &
+               nth_or_nil(vs_get(base + 1), 0), &
+               vs_get(base + 3)], &
+              [vs_get(base + 1), vs_get(base + 3)])
+         ! filled in at construction, as Throwable's constructor does
+         call vs_set(base + 3, out)
+         call gc_set_slot(vs_get(base + 3), 4, frames_vec([vs_get(base + 3)]))
+         ! the cause, in slot 5: ex-info's third argument, any other
+         ! class's second -- what getCause, ex-cause and Throwable->map's
+         ! :via chain read
+         if (is_info) then
+            cause = nth_or_nil(vs_get(base + 1), 2)
+         else
+            cause = nth_or_nil(vs_get(base + 1), 1)
+         end if
+         if (gc_kind(strip_meta(cause)) == OBJ_ERR) call gc_set_slot(vs_get(base + 3), 5, cause)
+         out = vs_get(base + 3)
+       end block
     else if (cname == "Volatile" .or. cname == "clojure.lang.Volatile") then
        ! volatile!: a box, deref'd and .reset, with none of an atom's
        ! validators or watches
@@ -2524,6 +2540,8 @@ contains
     case (HK_PINF);     out = gc_real(ieee_value(1.0_gc_dp, ieee_positive_inf))
     case (HK_NINF);     out = gc_real(ieee_value(1.0_gc_dp, ieee_negative_inf))
     case (HK_NAN);      out = gc_real(ieee_value(1.0_gc_dp, ieee_quiet_nan))
+    case (HK_TRUE);     out = gc_bool(.true.)
+    case (HK_FALSE);    out = gc_bool(.false.)
     case (HK_NIL);      out = gc_nil()
     case (HK_EMPTYMAP); out = gca_empty([roots])
     case (HK_SPECIALS); out = specials_map([roots])
@@ -3101,8 +3119,42 @@ contains
   end function as_list_rest
 
   ! Applies a macro to the unevaluated argument forms.
-  recursive function expand_macro(fn, form, env) result(out)
+  ! Compiler.macroexpand1: an ArityException thrown by the MACRO ITSELF
+  ! is rethrown with &form and &env taken off the count, so the message
+  ! says what the caller wrote; one from inside its body is left alone.
+  ! The macro is known by the name its exception carries.
+  subroutine macro_arity_fixup(mvar)
+    type(gc_value), intent(in) :: mvar
+    type(gc_value) :: e, cls, ns, sym
+    character(len=:), allocatable :: msg, name
+    character(len=16) :: cbuf
+    integer :: p, q, n, st
+    e = thrown_value()
+    if (gc_kind(e) /= OBJ_ERR) return
+    cls = gc_slot(e, 1)
+    if (cls%tag /= GCT_SYM) return
+    if (.not. gc_ref_is(cls%ref, "ArityException")) return
+    ns = gc_slot(mvar, 3)
+    sym = gc_slot(mvar, 4)
+    if (gc_kind(ns) /= OBJ_NS .or. sym%tag /= GCT_SYM) return
+    name = gcn_name(ns) // "/" // gc_ref_text(sym%ref)
+    msg = text_of(gc_slot(e, 2))
+    q = index(msg, "passed to: ")
+    if (q == 0) return
+    if (msg(q+11:) /= name) return
+    p = index(msg, "(")
+    q = index(msg, ")")
+    if (p == 0 .or. q <= p + 1) return
+    read(msg(p+1:q-1), *, iostat=st) n
+    if (st /= 0) return
+    write(cbuf, '(I0)') n - 2
+    call gce_clear_error()
+    call raise_class("ArityException", "Wrong number of args (" // trim(cbuf) // ") passed to: " // name, [mvar])
+  end subroutine macro_arity_fixup
+
+  recursive function expand_macro(fn, form, env, mvar) result(out)
     type(gc_value), intent(in) :: fn, form, env
+    type(gc_value), intent(in), optional :: mvar
     type(gc_value) :: out, args, walk
     integer :: base
 
@@ -3134,6 +3186,7 @@ contains
        call vs_set(base + 4, walk)
     end do
     out = apply(vs_get(base + 1), vs_get(base + 3))
+    if (has_error .and. present(mvar)) call macro_arity_fixup(mvar)
     call vs_leave(base)
   end function expand_macro
 
@@ -3577,7 +3630,7 @@ contains
 
     mvar = macro_var(head, gc_nil())
     if (gcn_is_var(mvar)) then
-       out = expand_macro(gcn_var_value(mvar), vs_get(base + 2), gc_nil())
+       out = expand_macro(gcn_var_value(mvar), vs_get(base + 2), gc_nil(), mvar)
        call vs_leave(base); return
     end if
 
@@ -3844,11 +3897,19 @@ contains
           out = gc_real(x - y * math_rint(x / y))
        end if
     case (28); out = gc_real(atan2(x, y))
-    case (29); out = gc_real(x ** y)
+    case (29)
+       ! Math.pow: 1 or -1 to an infinite power is NaN, where C says 1
+       if (abs(x) == 1.0_gc_dp .and. abs(y) > huge(y)) then
+          out = gc_real(ieee_value(1.0_gc_dp, ieee_quiet_nan))
+       else
+          out = gc_real(x ** y)
+       end if
     case (30); out = gc_real(hypot(x, y))
     case (31); out = gc_real(sign(abs(x), y))
     case (32)
-       if (x == y) then
+       if (x /= x .or. y /= y) then
+          out = gc_real(ieee_value(1.0_gc_dp, ieee_quiet_nan))
+       else if (x == y) then
           out = gc_real(y)
        else
           out = gc_real(nearest(x, y - x))
@@ -3859,7 +3920,15 @@ contains
     case (34)
        ! Java's unbiased exponent has the mantissa in [1,2);
        ! Fortran's has it in [0.5,1).
-       out = gc_int(int(exponent(x) - 1, 8))
+       ! NaN and the infinities answer MAX_EXPONENT + 1, zero and the
+       ! subnormals MIN_EXPONENT - 1, as Math.getExponent does
+       if (x /= x .or. abs(x) > huge(x)) then
+          out = gc_int(1024_gc_ip)
+       else if (abs(x) < tiny(x)) then
+          out = gc_int(-1023_gc_ip)
+       else
+          out = gc_int(int(exponent(x) - 1, 8))
+       end if
     case (35); out = gc_real(scale(x, int(y)))
     case (37)
        ! by range, before the add (see mul_overflows)
@@ -5479,11 +5548,29 @@ contains
        ! silently dropped the rest, which is how maybe-destructured
        ! built a one-element parameter vector.
        a = strip_meta(gcv_nth(vs_get(base + 1), 0))
-       do i = 1, n - 1
-          a = conj1(a, gcv_nth(vs_get(base + 1), i), [vs_get(base + 1)])
-          call vs_set(base + 2, a)
-       end do
-       out = keep_meta(gcv_nth(vs_get(base + 1), 0), a, [vs_get(base + 1)])
+       if (gc_kind(a) == OBJ_INST) then
+          ! a record's own cons, one argument at a time; it keeps its
+          ! metadata itself. conj1 answered a list of the entries.
+          block
+            type(gc_value) :: one
+            do i = 1, n - 1
+               call vs_set(base + 2, a)
+               one = gcv_conj(gcv_empty([vs_get(base + 1), vs_get(base + 2)]), gcv_nth(vs_get(base + 1), i), &
+                    [vs_get(base + 1), vs_get(base + 2)])
+               call vs_set(base + 3, one)
+               a = inst_invoke(vs_get(base + 2), "cons", vs_get(base + 3), hit)
+               if (.not. hit) a = conj1(vs_get(base + 2), gcv_nth(vs_get(base + 1), i), [vs_get(base + 1)])
+               if (has_error) exit
+            end do
+            out = a
+          end block
+       else
+          do i = 1, n - 1
+             a = conj1(a, gcv_nth(vs_get(base + 1), i), [vs_get(base + 1)])
+             call vs_set(base + 2, a)
+          end do
+          out = keep_meta(gcv_nth(vs_get(base + 1), 0), a, [vs_get(base + 1)])
+       end if
     case (B_EMPTY)
        block
          type(gc_value) :: sv
@@ -5566,6 +5653,10 @@ contains
           out = gc_slot(a, meta_slot(a))
        else if (gc_kind(a) == OBJ_META) then
           out = gc_slot(a, 2)
+       else if (gc_kind(a) == OBJ_INST) then
+          ! a record answers its own meta
+          out = inst_invoke(a, "meta", gcv_empty([vs_get(base + 1)]), hit)
+          if (.not. hit) out = gc_nil()
        end if
     case (B_WITHMETA)
        ! REPLACES metadata, never nests it. IObj.withMeta returns a new
@@ -5573,6 +5664,15 @@ contains
        ! one -- and defn calls (with-meta name m) on a name the reader
        ! already wrapped, so nesting buried the symbol two deep and the
        ! Var got interned under a wrapper nobody could name.
+       a = strip_meta(gcv_nth(vs_get(base + 1), 0))
+       if (gc_kind(a) == OBJ_INST) then
+          ! a record carries its own metadata: its withMeta, not a wrapper
+          out = inst_invoke(a, "withMeta", rest_args(vs_get(base + 1), 1), hit)
+          if (hit) then
+             call vs_leave(base)
+             return
+          end if
+       end if
        out = gc_obj(OBJ_META, &
             [strip_meta(gcv_nth(vs_get(base + 1), 0)), gcv_nth(vs_get(base + 1), 1)], &
             [vs_get(base + 1)])
@@ -6383,8 +6483,11 @@ contains
          end if
        end block
     case (B_FINDNS)
+       ! Namespace.find: nil for a namespace nobody made. Creating one
+       ! here made (the-ns 'nope) answer a namespace instead of
+       ! throwing, and alias to it succeed.
        a = strip_meta(gcv_nth(args, 0))
-       out = gcn_find_or_create(gc_ref_text(a%ref), [vs_get(base + 1)])
+       out = gcn_find(gc_ref_text(a%ref))
     case (B_LOADFILE)
        ! Read the whole file, then analyse and evaluate each form. The
        ! first error ends it, as Compiler.load does.
@@ -7302,7 +7405,8 @@ contains
             end if
          else if (gca_contains(coll, gcv_nth(args, 1))) then
             pair = gcv_empty([vs_get(base + 1)])
-            pair = gcv_conj(pair, gcv_nth(args, 1), [vs_get(base + 1)])
+            ! the map's own key, metadata and all, as MapEntry carries it
+            pair = gcv_conj(pair, gca_find_key(coll, gcv_nth(args, 1)), [vs_get(base + 1)])
             call vs_set(base + 2, pair)
             pair = gcv_conj(vs_get(base + 2), gca_get(coll, gcv_nth(args, 1)), &
                  [vs_get(base + 1), vs_get(base + 2)])
@@ -7420,6 +7524,40 @@ contains
        call mark_entry(out)
     case (B_ISASSIGN)
        out = gc_bool(class_assignable(strip_meta(gcv_nth(args, 0)), strip_meta(gcv_nth(args, 1))))
+    case (B_HASHCODE)
+       out = gc_int(int(java_hashcode(gcv_nth(args, 0)), gc_ip))
+    case (B_CANSEQ)
+       ! RT.canSeq, behind seqable?: what seq would take without
+       ! complaint -- nil, strings, the collections, and a deftype
+       ! that answers seq or iterator
+       a = strip_meta(gcv_nth(args, 0))
+       if (a%tag == GCT_NIL) then
+          out = gc_bool(.true.)
+       else if (gc_kind(a) == OBJ_INST) then
+          out = gc_bool(gc_kind(inst_method(a, "seq")) == OBJ_CLOSURE .or. &
+               gc_kind(inst_method(a, "iterator")) == OBJ_CLOSURE)
+       else
+          out = gc_bool(seqable_quiet(a))
+       end if
+    case (B_NSCREATE)
+       ! Namespace.findOrCreate, behind create-ns: the one that makes one
+       a = strip_meta(gcv_nth(args, 0))
+       out = gcn_find_or_create(gc_ref_text(a%ref), [vs_get(base + 1)])
+    case (B_NSREMOVE)
+       ! Namespace.remove, which refuses clojure.core as it does there
+       a = strip_meta(gcv_nth(args, 0))
+       out = gc_nil()
+       if (a%tag == GCT_SYM) then
+          if (gc_ref_is(a%ref, "clojure.core")) then
+             call raise_class("IllegalArgumentException", "Cannot remove clojure namespace", [vs_get(base + 1)])
+          else
+             out = gcn_remove(gc_ref_text(a%ref))
+          end if
+       end if
+    case (B_GETCAUSE)
+       a = strip_meta(gcv_nth(args, 0))
+       out = gc_nil()
+       if (gc_kind(a) == OBJ_ERR) out = gc_slot(a, 5)
     case (B_RESETMETA)
        a = gcv_nth(args, 0)
        out = gcv_nth(args, 1)
@@ -7572,6 +7710,19 @@ contains
               rel == "clojure/java/io") then
             print '(A,A,A)', "note: skipping ", rel, &
                  " (JVM-only)"
+            ! The namespace exists, empty: require checks that a lib
+            ! defined its namespace after loading, and find-ns no
+            ! longer creates one on the way to answering.
+            block
+              character(len=:), allocatable :: nsname
+              integer :: ci
+              nsname = rel
+              do ci = 1, len(nsname)
+                 if (nsname(ci:ci) == "/") nsname(ci:ci) = "."
+                 if (nsname(ci:ci) == "_") nsname(ci:ci) = "-"
+              end do
+              call vs_set(base + 2, gcn_find_or_create(nsname, [vs_get(base + 1)]))
+            end block
             out = gc_nil()
             call vs_leave(base)
             return
@@ -10170,6 +10321,120 @@ contains
     end do
   end function class_assignable
 
+  ! Object.hashCode as the JVM's classes define it, where clotran can
+  ! say: an integer is (int)(v ^ (v >>> 32)), Long.hashCode, since
+  ! Clojure's integers are all longs there; a double is that fold over
+  ! its bits; a string is Java's 31-polynomial over its chars; true and
+  ! false are 1231 and 1237; nil is 0. Everything else is clotran's
+  ! own hash. `case` leans on the integer rule: its collision merging
+  ! keys the table with Util.hash, which IS hashCode, so 1 and
+  ! -9223372034707292159 both hash to 1 here as there (case_branch
+  ! has the rest of that story).
+  function java_hashcode(v0) result(h)
+    type(gc_value), intent(in) :: v0
+    type(gc_value) :: v
+    integer :: h, i
+    integer(gc_ip) :: iv, acc
+    character(len=:), allocatable :: t
+    v = strip_meta(v0)
+    select case (v%tag)
+    case (GCT_NIL)
+       h = 0
+    case (GCT_BOOL)
+       if (v%ival /= 0) then
+          h = 1231
+       else
+          h = 1237
+       end if
+    case (GCT_INT)
+       h = fold_long(v%ival)
+    case (GCT_REAL)
+       iv = transfer(v%rval, iv)
+       h = fold_long(iv)
+    case (GCT_STR)
+       t = gc_ref_text(v%ref)
+       acc = 0_gc_ip
+       do i = 1, len(t)
+          acc = iand(31_gc_ip * acc + int(ichar(t(i:i)), gc_ip), 4294967295_gc_ip)
+       end do
+       h = fold_long(acc)
+    case default
+       h = gc_hash(v)
+    end select
+  contains
+    ! Long.hashCode, for every integer: Clojure's are all longs there
+    integer function fold_long(x)
+      integer(gc_ip), intent(in) :: x
+      integer(gc_ip) :: y
+      y = ieor(iand(x, 4294967295_gc_ip), ishft(x, -32))
+      if (y > 2147483647_gc_ip) y = y - 4294967296_gc_ip
+      fold_long = int(y)
+    end function fold_long
+  end function java_hashcode
+
+  ! Compiler.resolveIn: a qualified symbol may not name another
+  ! namespace's private Var.
+  logical function var_not_public(var)
+    type(gc_value), intent(in) :: var
+    type(gc_value) :: md, owner, p
+    var_not_public = .false.
+    owner = gc_slot(var, 3)
+    if (gc_kind(owner) /= OBJ_NS) return
+    if (gcn_name(owner) == gcn_name(gcn_current([var]))) return
+    md = gc_slot(var, 2)
+    if (.not. gca_is(md)) return
+    p = gca_get(md, gc_key("private", [var, md]))
+    var_not_public = truthy(p)
+  end function var_not_public
+
+  ! What the interfaces a deftype declares extend: a record that says
+  ! IPersistentMap is an IPersistentCollection, Associative, Counted,
+  ! Seqable and a java.util.Map too, which is what coll?, counted? and
+  ! clojure.walk ask. The JVM reads this off the interfaces; here it
+  ! is a list.
+  logical function iface_in_vector(vec, want)
+    type(gc_value), intent(in) :: vec
+    character(len=*), intent(in) :: want
+    type(gc_value) :: k
+    integer :: i
+    iface_in_vector = .false.
+    do i = 0, gcv_count(vec) - 1
+       k = gcv_nth(vec, i)
+       if (k%tag /= GCT_KEY) cycle
+       if (iface_extends(gc_ref_text(k%ref), want)) then
+          iface_in_vector = .true.
+          return
+       end if
+    end do
+  end function iface_in_vector
+
+  logical function iface_extends(iface, want)
+    character(len=*), intent(in) :: iface, want
+    character(len=:), allocatable :: supers
+    select case (iface)
+    case ("clojure.lang.IPersistentMap")
+       supers = " clojure.lang.IPersistentCollection clojure.lang.Associative clojure.lang.ILookup" // &
+            " clojure.lang.Counted clojure.lang.Seqable java.util.Map java.lang.Iterable "
+    case ("clojure.lang.IPersistentVector")
+       supers = " clojure.lang.IPersistentCollection clojure.lang.Associative clojure.lang.ILookup" // &
+            " clojure.lang.Counted clojure.lang.Seqable clojure.lang.Sequential clojure.lang.IPersistentStack" // &
+            " clojure.lang.Reversible clojure.lang.Indexed java.util.List java.lang.Iterable "
+    case ("clojure.lang.IPersistentSet")
+       supers = " clojure.lang.IPersistentCollection clojure.lang.Counted clojure.lang.Seqable java.util.Set java.lang.Iterable "
+    case ("clojure.lang.IPersistentList", "clojure.lang.ISeq")
+       supers = " clojure.lang.IPersistentCollection clojure.lang.Seqable clojure.lang.Sequential clojure.lang.IPersistentStack "
+    case ("clojure.lang.IObj")
+       supers = " clojure.lang.IMeta "
+    case ("clojure.lang.IPersistentCollection")
+       supers = " clojure.lang.Seqable "
+    case default
+       supers = ""
+    end select
+    iface_extends = (index(supers, " " // want // " ") > 0)
+    if (.not. iface_extends .and. index(want, ".") == 0) &
+         iface_extends = (index(supers, "." // want // " ") > 0)
+  end function iface_extends
+
   ! Whether a vector of class keywords names this class.
   logical function key_in_vector(vec, name)
     type(gc_value), intent(in) :: vec
@@ -10208,6 +10473,7 @@ contains
     if (gc_kind(strip_meta(v)) == OBJ_INST) then
        yes = class_matches(t, c) .or. (c == "Object") .or. &
             key_in_vector(gc_slot(gc_slot(strip_meta(v), 1), 4), c)
+       if (.not. yes) yes = iface_in_vector(gc_slot(gc_slot(strip_meta(v), 1), 4), c)
        return
     end if
     select case (c)

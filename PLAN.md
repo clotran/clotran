@@ -28,15 +28,16 @@ from Clojure's test suite. The suite is a measure, not the work queue;
 using it as the work queue is how two days produced 2,810 lines of
 JVM-shaped `case` arms in one file.
 
-## Where we are (measured 2026-09-19)
+## Where we are (measured 2026-09-21)
 
 | | |
 |---|---|
 | core.clj | 724 of 724 forms load |
-| our tests | 100% on both compilers; the gate |
-| the derived language suite | 314 tests kept (306 language + 8 concurrency) in 39 files, every file loads, 324 tests execute: 2170 pass / 235 fail / 370 error, so 78% of assertions that EXECUTED. Fewer tests are kept than before the analysis pass because the deriver now treats a symbol nothing defines as host; the pass rate over what is kept is unchanged |
-| Clojure's suite, verbatim (for reference) | 1810 pass / 219 fail / 1396 error over 357 tests, 53% of executed; 32 of 67 namespaces produce a passing assertion |
-| startup | 0.6s (7.2s before step 4, 2.3s at the start of stage 2), core.clj re-read every launch |
+| our tests | 100% on both compilers; the gate. 739 oracle cases value-compared against `clj`, 15 expected differences |
+| the derived language suite | 39 files, every file loads, 327 tests execute: 2866 pass / 35 fail / 5 error, so 98.6% of assertions that EXECUTED (2170 / 235 / 370 on 2026-09-19). What remains is named, not chased: 26 spec-conformance messages (special, fn), 4 JVM-only (compilation), 3 non-ASCII whitespace in byte strings (string), 2 class printing (protocols, DEVIATIONS 34), 2 boxed-math warnings (numbers), 2 `apply` realising a million elements (vars, DEVIATIONS 37), 1 `1.0M`/`1N` (transducers, DEVIATIONS 26) |
+| libraries loading | 25 of 25 vendored libraries `require` (clojure.set, string, walk, zip, data, edn, pprint, test, repl, main, math, xml, ...). Loading, not running: reflect, inspector and core.server load because nothing touches the host until a call |
+| Clojure's suite, verbatim (for reference) | 1988 pass / 166 fail / 262 error over 351 tests, 82% of executed (1810 / 219 / 1396 on 2026-09-19); 34 of 66 namespaces produce a passing assertion. The rest is the JVM: rt, array-symbols, java-interop, serialization, reflect, streams, clearing, param-tags, method thunks and the generated adapters |
+| startup | 0.75s (7.2s before step 4, 2.3s at the start of stage 2), core.clj re-read every launch |
 | `(reduce + (range n))` | LINEAR since step 4: n=100000 in 0.16s, ~1.6 µs per element through the host's own IReduceInit reduce (17s and 170 µs at the end of step 4). Before: n=16000 took 161s and n=100000 did not finish in 15 minutes |
 | `loop`/`recur` | ~1.7 µs per iteration, linear; a function call ~1.3 µs. `scripts/bench` has the JVM ratios: 23x to 514x depending on the form. Seqs are chunked, as on the JVM |
 | memory | 168 MB after core.clj; recursion 100,000 deep works |

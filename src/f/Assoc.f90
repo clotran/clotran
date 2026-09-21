@@ -45,6 +45,7 @@ module Assoc
      end function cmp_i
   end interface
   procedure(cmp_i), pointer, save :: comparer => null()
+  public :: gca_find_key
   public :: gca_set_comparer, gca_sorted_empty, gca_is_sorted, gca_comparator, &
        gca_key_at, gca_val_at, gca_sorted_from
 
@@ -281,6 +282,30 @@ contains
        out = gch_dissoc(m, k, roots)
     end if
   end function gca_dissoc
+
+  ! The key the map holds for k -- equal to it, but the map's OWN
+  ! object, with the metadata it was stored with. find's entry carries
+  ! it, as MapEntry(key, val) does; the lookup key answered instead.
+  function gca_find_key(m, k) result(out)
+    type(gc_value), intent(in) :: m, k
+    type(gc_value) :: out
+    integer :: i, at
+    logical :: found
+    out = gc_nil()
+    if (gca_is_sorted(m)) then
+       call sorted_search(m, k, at, found)
+       if (found) out = gca_key_at(m, at)
+    else if (gcm_is(m)) then
+       do i = 1, gcm_count(m)
+          if (gc_equal(gcm_key_at(m, i), k)) then
+             out = gcm_key_at(m, i)
+             return
+          end if
+       end do
+    else if (gch_is(m)) then
+       out = gch_find_key(m, k)
+    end if
+  end function gca_find_key
 
   ! Every entry, whichever representation the map is in.
   subroutine gca_entries(m, keys, vals)

@@ -30,7 +30,7 @@ module PersistentHashMap
   integer, parameter :: HMASK = 31
   integer, parameter :: HMAX_SHIFT = 30 ! 6 levels of 5 bits, then buckets
 
-  public :: gch_empty, gch_count, gch_is, gch_get, gch_contains, gch_assoc, gch_dissoc
+  public :: gch_empty, gch_count, gch_is, gch_get, gch_contains, gch_assoc, gch_dissoc, gch_find_key
   public :: gch_entries
 
 contains
@@ -67,6 +67,28 @@ contains
     if (.not. gch_is(t)) return
     v = node_get(gc_slot(t, 1), gc_hash(k), 0, k)
   end function gch_get
+
+  ! The key the map HOLDS for k: equal to it, and the map's own object,
+  ! metadata and all -- what find's entry carries, as MapEntry does.
+  function gch_find_key(t, k) result(out)
+    type(gc_value), intent(in) :: t, k
+    type(gc_value) :: out, node
+    integer :: i
+    out = gc_nil()
+    if (.not. gch_is(t)) return
+    node = node_find(gc_slot(t, 1), gc_hash(k), 0, k)
+    select case (gc_kind(node))
+    case (OBJ_HAMT_LEAF)
+       out = gc_slot(node, 1)
+    case (OBJ_MAP)
+       do i = 1, gcm_count(node)
+          if (gc_equal(gcm_key_at(node, i), k)) then
+             out = gcm_key_at(node, i)
+             return
+          end if
+       end do
+    end select
+  end function gch_find_key
 
   function gch_contains(t, k) result(yes)
     type(gc_value), intent(in) :: t, k

@@ -33,7 +33,7 @@ module Namespace
   type(gc_root), save :: current_root    ! bootstrap only
   type(gc_root), save :: ns_var_root     ! #'clojure.core/*ns*
 
-  public :: gcn_reset, gcn_current, gcn_set_current, gcn_find_or_create
+  public :: gcn_reset, gcn_current, gcn_set_current, gcn_find_or_create, gcn_find, gcn_remove
   public :: gcn_intern, gcn_lookup, gcn_var_value, gcn_set_var, gcn_is_var
   public :: gcn_name
 
@@ -154,6 +154,41 @@ contains
     nm = gc_slot(ns, 1)
     s = gc_ref_text(nm%ref)
   end function gcn_name
+
+  ! Namespace.find: the namespace called name, or nil -- never a new one.
+  function gcn_find(name) result(ns)
+    character(len=*), intent(in) :: name
+    type(gc_value) :: ns, key
+    type(gc_value) :: none(0)
+    integer :: base
+    ns = gc_nil()
+    if (.not. roots_live()) return
+    base = vs_enter(1)
+    key = gc_str(name, none)
+    call vs_set(base + 1, key)
+    ns = gca_get(gc_root_get(registry_root), vs_get(base + 1))
+    if (gc_kind(ns) /= OBJ_NS) ns = gc_nil()
+    call vs_leave(base)
+  end function gcn_find
+
+  ! Namespace.remove: the namespace that was registered under name,
+  ! taken out of the registry; nil when there was none.
+  function gcn_remove(name) result(ns)
+    character(len=*), intent(in) :: name
+    type(gc_value) :: ns, key, reg
+    type(gc_value) :: none(0)
+    integer :: base
+    ns = gcn_find(name)
+    if (gc_kind(ns) /= OBJ_NS) return
+    base = vs_enter(2)
+    call vs_set(base + 1, ns)
+    key = gc_str(name, none)
+    call vs_set(base + 2, key)
+    reg = gca_dissoc(gc_root_get(registry_root), vs_get(base + 2), [vs_get(base + 1), vs_get(base + 2)])
+    call gc_global_keep(registry_root, reg)
+    ns = vs_get(base + 1)
+    call vs_leave(base)
+  end function gcn_remove
 
   function gcn_find_or_create(name, roots) result(ns)
     character(len=*), intent(in) :: name

@@ -19,7 +19,8 @@
      real(gc_dp) :: rval = 0.0_gc_dp
   end type hm
   integer, parameter :: HK_INT = -1, HK_REAL = -2, HK_PINF = -3, HK_NINF = -4, &
-       HK_NAN = -5, HK_NIL = -6, HK_EMPTYMAP = -7, HK_SPECIALS = -8, HK_TYPE = -9
+       HK_NAN = -5, HK_NIL = -6, HK_EMPTYMAP = -7, HK_SPECIALS = -8, HK_TYPE = -9, &
+       HK_TRUE = -10, HK_FALSE = -11
 
   type(hm), parameter :: HOST_STATICS_1(81) = [ &
   ! PersistentList.creator is a static IFn that builds a list from its arguments.
@@ -63,7 +64,8 @@
   ! Util.identical is reference identity, not =: sharing = made a record's
   ! equiv call = call equiv until the stack ran out.
        hm("clojure.lang.Util", "identical", B_IDENTICAL, "identical?"), &
-       hm("clojure.lang.Util", "hash", B_HASH, "hash"), &
+  ! Util.hash IS Object.hashCode -- the case macro merges collisions on it
+       hm("clojure.lang.Util", "hash", B_HASHCODE, "clotran-hashcode"), &
        hm("clojure.lang.Util", "hasheq", B_HASH, "hash"), &
        hm("clojure.lang.Util", "isReduced", B_ISREDUCED, "reduced?"), &
   ! Util.classOf and .getClass are `class`: the canonical class keyword
@@ -151,7 +153,7 @@
        hm("clojure.lang.LockingTransaction", "runInTransaction", B_RUNTX, "clotran-run-tx"), &
        hm("clojure.lang.LockingTransaction", "isRunning", B_ALWAYS_FALSE, "clotran-false"), &
        hm("clojure.lang.Namespace", "find", B_FINDNS, "find-ns"), &
-       hm("clojure.lang.Namespace", "findOrCreate", B_FINDNS, "find-ns"), &
+       hm("clojure.lang.Namespace", "findOrCreate", B_NSCREATE, "create-ns"), &
        hm("clojure.lang.Var", "pushThreadBindings", B_PUSHTB, "push-thread-bindings"), &
        hm("clojure.lang.Var", "popThreadBindings", B_POPTB, "pop-thread-bindings"), &
        hm("clojure.lang.Var", "find", B_FINDVAR, "clotran-find-var"), &
@@ -295,7 +297,7 @@
   ! Long's bounds are clotran's own: an integer here IS a 64-bit one.
        hm("java.lang.Long", "MAX_VALUE", HK_INT, "", huge(0_gc_ip)), &
        hm("java.lang.Long", "MIN_VALUE", HK_INT, "", -huge(0_gc_ip) - 1_gc_ip) ]
-  type(hm), parameter :: HOST_STATICS_4(69) = [ &
+  type(hm), parameter :: HOST_STATICS_4(73) = [ &
        hm("java.lang.Long", "SIZE", HK_INT, "", 64_gc_ip), &
        hm("java.lang.Long", "BYTES", HK_INT, "", 8_gc_ip), &
        hm("java.lang.Short", "MAX_VALUE", HK_INT, "", 32767_gc_ip), &
@@ -348,6 +350,9 @@
   ! Class/TYPE is a JVM primitive-class constant. There are no primitive
   ! arrays here, so each is a distinct inert keyword, enough for core_print's dispatch table.
        hm("java.lang.Boolean", "TYPE", HK_TYPE), &
+       hm("java.lang.Boolean", "TRUE", HK_TRUE), &
+       hm("java.lang.Boolean", "FALSE", HK_FALSE), &
+       hm("clojure.lang.Namespace", "remove", B_NSREMOVE, "clotran-ns-remove"), &
        hm("java.lang.Byte", "TYPE", HK_TYPE), &
        hm("java.lang.Character", "TYPE", HK_TYPE), &
        hm("java.lang.Double", "TYPE", HK_TYPE), &
@@ -366,6 +371,7 @@
   ! Collections.shuffle over clotran.rt's ArrayList. RT.vector spreads
   ! an array into a vector, which vec does.
        hm("clojure.lang.RT", "iter", B_RTFN, "iter"), &
+       hm("clojure.lang.RT", "canSeq", B_CANSEQ, "clotran-can-seq"), &
        hm("clojure.lang.RT", "chunkIteratorSeq", B_RTFN, "chunk-iterator-seq"), &
        hm("clojure.lang.TransformerIterator", "create", B_RTFN, "ti-create"), &
        hm("clojure.lang.TransformerIterator", "createMulti", B_RTFN, "ti-create-multi"), &
@@ -379,9 +385,9 @@
        hm("clojure.lang.Numbers", "flipBit", B_RTFN, "flip-bit"), &
        hm("clojure.lang.Numbers", "long_array", B_RTFN, "long-array-of"), &
        hm("clojure.lang.Numbers", "double_array", B_RTFN, "double-array-of") ]
-  type(hm), parameter :: HOST_STATICS(310) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
+  type(hm), parameter :: HOST_STATICS(314) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
-  type(hm), parameter :: HOST_METHODS_1(88) = [ &
+  type(hm), parameter :: HOST_METHODS_1(89) = [ &
   ! Instance members. The target becomes the first argument, which is all
   ! an instance method is: (.withMeta x m) calls with-meta on x and m.
        hm("", "meta", B_META, "meta"), &
@@ -469,7 +475,8 @@
        hm("", "toUpperCase", B_UPCASE, "clotran-upcase"), &
        hm("", "toLowerCase", B_DOWNCASE, "clotran-downcase"), &
   ! No cause chain to walk.
-       hm("", "getCause", B_ALWAYS_NIL, "clotran-nil"), &
+       hm("", "getCause", B_GETCAUSE, "clotran-cause"), &
+       hm("", "hashCode", B_HASHCODE, "clotran-hashcode"), &
        hm("", "printStackTrace", B_ALWAYS_NIL, "clotran-nil"), &
        hm("", "append", B_APPEND, "clotran-append"), &
        hm("", "charAt", B_CHARAT, "clotran-char-at"), &
@@ -563,5 +570,5 @@
        hm("", "isCancelled", B_TASKCANCELLED, "clotran-task-cancelled"), &
        hm("", "cancel", B_TASKCANCEL, "clotran-task-cancel"), &
        hm("", "availableProcessors", B_NPROCS, "clotran-processors") ]
-  type(hm), parameter :: HOST_METHODS(159) = [HOST_METHODS_1, HOST_METHODS_2]
+  type(hm), parameter :: HOST_METHODS(160) = [HOST_METHODS_1, HOST_METHODS_2]
 

@@ -420,6 +420,15 @@
     end if
     var = resolve_var(vs_get(base + 1), gc_nil())
     if (gcn_is_var(var)) then
+       ! Compiler.resolveIn: another namespace's private Var is not
+       ! reachable by its qualified name; #'ns/x still is
+       if (index(gc_ref_text(sym%ref), "/") > 1) then
+          if (var_not_public(var)) then
+             call fail("var: " // gc_ref_text(sym%ref) // " is not public")
+             call vs_leave(base)
+             return
+          end if
+       end if
        call vs_set(base + 3, var)
        nd = mk_node(N_VAR, gc_nil(), vs_get(base + 3), gc_nil(), 0, [vs_get(base + 1), vs_get(base + 2)])
        call vs_leave(base)
@@ -520,7 +529,7 @@
           mvar = macro_var(head, gc_nil())
           if (gcn_is_var(mvar)) then
              call vs_set(base + 3, gcn_var_value(mvar))
-             expanded = expand_macro(vs_get(base + 3), vs_get(base + 1), gc_nil())
+             expanded = expand_macro(vs_get(base + 3), vs_get(base + 1), gc_nil(), mvar)
              if (has_error) then
                 call vs_leave(base)
                 return
