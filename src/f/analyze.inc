@@ -447,7 +447,7 @@
     if (is_class_name(sym)) then
        ! A CLASS LITERAL evaluates to the keyword naming clotran's type
        ! tag, java.lang implicitly imported (Object == java.lang.Object).
-       v = gc_key(class_key(gc_ref_text(sym%ref)), [vs_get(base + 1), vs_get(base + 2)])
+       v = gc_class(class_key(gc_ref_text(sym%ref)), [vs_get(base + 1), vs_get(base + 2)])
        call vs_set(base + 3, v)
        nd = const_node(vs_get(base + 3), [vs_get(base + 1), vs_get(base + 2)])
        call vs_leave(base)

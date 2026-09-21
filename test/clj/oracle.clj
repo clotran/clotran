@@ -397,10 +397,9 @@
 ;; a lazy seq
 (pr-str (map identity ["a"]))
 
-;; a seq has a type. It PRINTS differently -- a class here is a keyword,
-;; and clotran has one seq view where the JVM has ChunkedSeq, StringSeq
-;; and the rest -- but compares equal to the literal, below.
-(expect-diff "DEVIATIONS 34: a class is a keyword and prints as one")
+;; a seq has a type. clotran has ONE seq view where the JVM has
+;; ChunkedSeq, StringSeq and the rest, so the name it answers is the
+;; commonest of them.
 (type (seq ["a"]))
 
 ;; class answers the class a literal names, so the two compare equal
@@ -2239,3 +2238,11 @@
 (pr-str (biginteger 1))
 [(nth [10 20 30] 1N) (get [10 20 30] 1N) (subs "abcd" 1N 3N) (take 2N [1 2 3 4]) (repeat 2N :x) (nthrest [1 2 3] 1N) (abs -123N) (abs 5N) (= (range 1N 4N) (range 1 4))]
 [(try (bit-and 3N 1) (catch IllegalArgumentException e :not-supported)) (try (bit-shift-left 1N 2) (catch IllegalArgumentException e :not-supported)) (bit-and 3 1)]
+
+;; a class is a value of its own, named and printed as the JVM names it
+[(class 1) (class "a") (class []) (class {}) (class :k) (class nil) (class (class 1)) (pr-str (class 1)) (str (class 1)) (class? (class 1)) (keyword? (class 1))]
+[(= (class 1) Long) (= (class "a") String) (identical? (class 1) (class 1)) (instance? Long 1) (instance? Object 1) (instance? CharSequence "a") (isa? (class 1) Object) (isa? Long Number)]
+[(resolve 'String) (resolve 'clojure.lang.PersistentVector) (resolve 'NonExistentClass.Name) (resolve 'NonExistentClass.) (pr-str {(class 1) :a}) (get {(class 1) :a} Long) (class (class Long))]
+(expect-diff "DEVIATIONS 34: supers is the short chain clotran models, not the JVM's two dozen")
+(let [m (sort-by str (supers (class {})))] (vec m))
+(do (deftype CPoint [x y]) (defrecord CRec [a b]) [(str (class (->CRec 1 2))) (= (class (->CRec 1 2)) (class (->CRec 3 4))) (= (->CRec 1 2) (->CRec 1 2)) (resolve 'CRec)])

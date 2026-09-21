@@ -1075,37 +1075,41 @@ loading, so it wins.
 `#?` in a `.clj` errors. Nothing depends on the leniency; it exists so
 a `.clj` being ported can be edited in place before it is renamed.
 
-## 34. A class is a keyword
+## 34. RESOLVED -- a class is a value of its own kind
 
-`(class "a")` is `:String`, `(class [])` is
-`:clojure.lang.PersistentVector`, and the literal `String` evaluates to
-`:String` -- the same keyword, so `(= (class x) String)`, `(condp =
-(class x) String ...)`, `(instance? (class x) x)` and a protocol's
-`:impls` map keyed by the literal all behave as on the JVM. The
-spelling is one rule, `class_key`: the full name with `java.lang`
-stripped, a bare name resolved through what `import*` recorded (34
-lines: `record_import`, `canon_class`, `class_key` in Eval.f90).
+**RESOLVED 2026-09-21.** A class is `GCT_CLASS`: its canonical name in
+the string pool, printed as that name, equal and hashed by it. So
+`(class 1)` is `java.lang.Long`, `(pr-str (class 1))` is
+`java.lang.Long` and not `:Long`, `(str (class 1))` is
+`class java.lang.Long` as `Class.toString` gives it, `(class (class
+1))` is `java.lang.Class`, `(class? (class 1))` is true and
+`(keyword? (class 1))` is false. `(= (class x) String)` still holds,
+because the literal and the answer are the same name: `class_key` is
+the one spelling rule, now `canon_class` in full.
 
-What differs from a `java.lang.Class`:
+`(resolve 'NonExistentClass.Name)` is nil, as on the JVM. There is no
+class loader to ask, so `known_class_name` decides: a row in the host
+table, a deftype, or a package clotran models (`clojure.lang.`,
+`java.`). A made-up package answers nil; a made-up class inside a real
+one would not.
 
-- it PRINTS as a keyword: `(pr-str (class 1))` is `:Long`, not
-  `java.lang.Long`, and `(class (class 1))` is `clojure.lang.Keyword`.
+What still differs from a `java.lang.Class`:
+
 - clotran has one map, one set, one seq view and one function class
   where the JVM has many, so the most common JVM class stands for
   each: every map is a `PersistentArrayMap`, every `seq` a
   `PersistentVector$ChunkedSeq`, every function a
-  `clojure.lang.AFunction`. An array is `:array`.
+  `clojure.lang.AFunction`. An array is `array`.
 - `supers` answers the short chain `host_super` lists -- the
   interfaces `core_print` and `core_deftype` dispatch on -- not the
-  thirty-odd a JVM class implements. `isa?` on two classes is
-  equality only (`.isAssignableFrom` is always false here).
+  two dozen a JVM class implements.
+- there is no `Class` object graph: no `getSuperclass`, no
+  `getDeclaredMethods`, nothing reflective. A class here is a NAME
+  with the runtime's own answers behind it.
 
 The internal type TAG -- `:string`, `:vector`, `:int` -- is what
 `clotran-type` answers and what `host.clj`'s predicates are written
 on; it is not `class`, and never was meant to leak.
-
-**Removal**: a class value of its own kind, printing as its name, with
-`(class (class x))` answering it. Nothing loaded needs that.
 
 ## 35. An unrealised seq hashes by identity, so it is not found as a map key
 

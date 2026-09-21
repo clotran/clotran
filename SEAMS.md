@@ -316,7 +316,7 @@ choice we got wrong:
   passing if every Java name were renamed tomorrow.
 - `host_super` answers `clojure.lang.IPersistentVector` for a vector
   so a multimethod registered on the Java name dispatches, and `class`
-  itself answers `:clojure.lang.PersistentVector` (DEVIATIONS 34).
+  itself answers `clojure.lang.PersistentVector` (DEVIATIONS 34).
   Necessary at the boundary, but it means clotran's INTERNAL dispatch
   graph is spelled in Java.
 - `instance?` accepts only Java names. `(instance? Regex p)` is not a

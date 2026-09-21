@@ -1312,7 +1312,7 @@ contains
        do i = 0, gcv_count(vs_get(base + 1)) - 1
           s = strip_meta(gcv_nth(vs_get(base + 1), i))
           if (s%tag /= GCT_SYM) cycle
-          tmp = gc_key(class_key(gc_ref_text(s%ref)), &
+          tmp = gc_class(class_key(gc_ref_text(s%ref)), &
                [vs_get(base + 1), vs_get(base + 2)])
           call vs_set(base + 2, gcv_conj(vs_get(base + 2), tmp, &
                [vs_get(base + 1), vs_get(base + 2), tmp]))
@@ -1481,7 +1481,7 @@ contains
     else
        call vs_set(base + 2, gca_empty([vs_get(base + 1)]))
     end if
-    k = gc_key(short_class_name(class_text(vs_get(base + 1))), &
+    k = gc_class(short_class_name(class_text(vs_get(base + 1))), &
          [vs_get(base + 1), vs_get(base + 2)])
     call vs_set(base + 3, k)
     tbl = gca_assoc(vs_get(base + 2), vs_get(base + 3), vs_get(base + 1), &
@@ -1500,7 +1500,7 @@ contains
          if (full(i:i) == ".") last_dot = i
       end do
       if (last_dot > 0 .and. last_dot < len(full)) then
-         k = gc_key(full(last_dot+1:), [vs_get(base + 1), vs_get(base + 2)])
+         k = gc_class(full(last_dot+1:), [vs_get(base + 1), vs_get(base + 2)])
          call vs_set(base + 3, k)
          tbl = gca_assoc(vs_get(base + 2), vs_get(base + 3), vs_get(base + 1), &
               [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
@@ -1523,7 +1523,13 @@ contains
     tbl = gc_root_get(types_root)
     call vs_set(base + 1, tbl)
     out = gca_get(vs_get(base + 1), &
-         gc_key(class_key(cname), [vs_get(base + 1)]))
+         gc_class(class_key(cname), [vs_get(base + 1)]))
+    ! A deftype is registered under its own name and under the bare
+    ! last segment, and class_key qualifies a bare name with java.lang
+    ! (canon_class) -- so (Point. 3 4) looks up java.lang.Point and
+    ! must then try Point itself.
+    if (gc_kind(out) /= OBJ_TYPE) out = gca_get(vs_get(base + 1), &
+         gc_class(cname, [vs_get(base + 1)]))
     call vs_leave(base)
   end function find_type
 
@@ -2014,7 +2020,7 @@ contains
        end if
        ! A class literal is_host_class does not know evaluates to the
        ! keyword naming its type tag; the retry below sees it as one.
-       call vs_set(base + 1, gc_key(class_key(gc_ref_text(target0%ref)), [vs_get(base + 2)]))
+       call vs_set(base + 1, gc_class(class_key(gc_ref_text(target0%ref)), [vs_get(base + 2)]))
     end if
 
     ! A deftype/reify instance answers its own methods and fields
@@ -2099,7 +2105,7 @@ contains
        ! (def foo some-macro) bind a plain function rather than a macro.
        call var_set_macro(vs_get(base + 1))
        out = gc_nil()
-    else if (tv%tag == GCT_KEY) then
+    else if (tv%tag == GCT_CLASS) then
        ! A class reached through a VARIABLE, not written as a
        ! literal. core.clj's `cast` is (. c (cast x)) with c a
        ! parameter, so the analysis -- which tests the symbol --
@@ -2702,12 +2708,41 @@ contains
   ! java.lang.String are :String, and IDeref after (import
   ! clojure.lang.IDeref) is :clojure.lang.IDeref like the literal
   ! written in full. A bare name nothing imported stays bare.
+  ! The ONE spelling a class has, wherever it is built: the canonical
+  ! name IN FULL, so String and java.lang.String are both
+  ! java.lang.Class's java.lang.String and (pr-str (class 1)) is
+  ! java.lang.Long, as it is on the JVM. A bare name nothing imported
+  ! stays bare, which is what a deftype's own name is.
   function class_key(name) result(k)
     character(len=*), intent(in) :: name
     character(len=:), allocatable :: k
-    k = short_class_name(canon_class(name))
+    k = canon_class(name)
   end function class_key
 
+
+  ! Whether a name is a class this runtime KNOWS -- what
+  ! Compiler.maybeClass answers by asking the class loader, and what
+  ! (resolve (quote NonExistentClass.Name)) must answer nil for. A row
+  ! in the host table, a deftype, or a package clotran models: the
+  ! last is a compromise, since there is no loader to ask, and it
+  ! keeps (resolve (quote clojure.lang.PersistentVector)) answering a
+  ! class while a made-up package answers nil.
+  logical function known_class_name(t) result(yes)
+    character(len=*), intent(in) :: t
+    yes = .true.
+    ! By TEXT, allocating nothing: this runs inside analysis, where a
+    ! fresh symbol would be a value the collector cannot see. The
+    ! name is the one WRITTEN, not the canonical one -- canon_class
+    ! qualifies every bare name with java.lang, and the prefix rule
+    ! below would then accept anything at all.
+    if (any(HOST_STATICS(:)%cls == canon_class(t))) return
+    if (any(HOST_METHODS(:)%cls == canon_class(t))) return
+    if (gc_kind(find_type(t)) == OBJ_TYPE) return
+    if (index(t, "clojure.lang.") == 1) return
+    if (index(t, "clojure.asm.") == 1) return
+    if (index(t, "java.") == 1) return
+    yes = .false.
+  end function known_class_name
 
   ! Whether a symbol names a host class: one with a row in the table.
   ! Compiler.maybeClass asks the class loader; this asks the data.
@@ -5555,7 +5590,7 @@ contains
           case (GCT_NIL); out = gc_bool(.true.)
           case (GCT_BOOL, GCT_INT, GCT_CHAR); out = gc_bool(a%ival == b%ival)
           case (GCT_REAL); out = gc_bool(a%rval == b%rval)
-          case (GCT_STR, GCT_SYM, GCT_KEY)
+          case (GCT_STR, GCT_SYM, GCT_KEY, GCT_CLASS, GCT_BIG)
              ! By TEXT, not by pool slot. clotran does not intern
              ! text -- gc_equal says so: the same text allocated
              ! twice is two slots but one value -- while the JVM
@@ -6119,7 +6154,7 @@ contains
               type(gc_value) :: a0
               a0 = strip_meta(gcv_nth(args, 0))
               if (a0%tag == GCT_STR .or. a0%tag == GCT_SYM .or. &
-                   a0%tag == GCT_KEY) then
+                   a0%tag == GCT_KEY .or. a0%tag == GCT_CLASS) then
                  t = class_of_text(a0)
               else
                  t = name_part(a0)
@@ -7685,7 +7720,11 @@ case (B_SLURP)
                     out = gcn_lookup(gcn_find_or_create("clojure.core", [vs_get(base + 1)]), sym2)
                if (.not. gcn_is_var(out)) then
                   out = gc_nil()
-                  if (is_class_name(sym2)) out = gc_key(class_key(t), [vs_get(base + 1)])
+                  ! A class that EXISTS -- a row in the host table or a
+                  ! deftype -- and not merely a name shaped like one:
+                  ! (resolve 'NonExistentClass.Name) is nil on the JVM.
+                  if (is_class_name(sym2) .and. known_class_name(t)) &
+                       out = gc_class(class_key(t), [vs_get(base + 1)])
                end if
             end if
          end if
@@ -8533,7 +8572,7 @@ case (B_SLURP)
          end do
          ! an INTERFACE: what it extends (iface_supers), so that parents
          ! and bases of one are not empty
-         if (gcv_count(vs_get(base + 2)) == 0 .and. cv%tag == GCT_KEY) then
+         if (gcv_count(vs_get(base + 2)) == 0 .and. cv%tag == GCT_CLASS) then
             block
               character(len=:), allocatable :: list
               integer :: p, q
@@ -8543,7 +8582,7 @@ case (B_SLURP)
                  q = index(list(p:), " ")
                  if (q == 0) exit
                  if (q > 1) then
-                    sk = gc_key(list(p:p+q-2), [vs_get(base + 1), vs_get(base + 2)])
+                    sk = gc_class(list(p:p+q-2), [vs_get(base + 1), vs_get(base + 2)])
                     acc = gcv_conj(vs_get(base + 2), sk, [vs_get(base + 1), vs_get(base + 2), sk])
                     call vs_set(base + 2, acc)
                  end if
@@ -9179,12 +9218,12 @@ case (B_SLURP)
           out = gc_int(int(gc_hash(a), gc_ip))
        end if
     case (B_CLASSOF)
-       ! (class x): the canonical class keyword, nil for nil.
+       ! (class x): the class, spelt canonically, nil for nil.
        a = strip_meta(gcv_nth(args, 0))
        if (a%tag == GCT_NIL) then
           out = gc_nil()
        else
-          out = gc_key(class_name_of(a), [vs_get(base + 1)])
+          out = gc_class(class_name_of(a), [vs_get(base + 1)])
        end if
     case (B_TYPE)
        ! One host primitive instead of a dozen predicates: core is
@@ -10397,6 +10436,7 @@ case (B_SLURP)
     case (GCT_REAL); s = "double"
     case (GCT_RATIO); s = "ratio"
     case (GCT_CHAR); s = "char"
+    case (GCT_CLASS); s = "class"
     case (GCT_BIG);  s = "bigint"
     case (GCT_STR);  s = "string"
     case (GCT_SYM);  s = "symbol"
@@ -10470,7 +10510,11 @@ case (B_SLURP)
     type(gc_value), intent(in) :: v
     character(len=:), allocatable :: s
     type(gc_value) :: inner
-    if (gc_kind(v) == OBJ_SB .or. gc_kind(v) == OBJ_REGEX .or. &
+    ! Class.toString is "class java.lang.Long" while print-method
+    ! writes the NAME, so (str Long) and (pr-str Long) differ.
+    if (v%tag == GCT_CLASS) then
+       s = "class " // gc_class_text(v)
+    else if (gc_kind(v) == OBJ_SB .or. gc_kind(v) == OBJ_REGEX .or. &
          gc_kind(v) == OBJ_NS) then
        inner = gc_slot(v, 1)
        s = gcp_str(inner, .false.)
@@ -10877,8 +10921,8 @@ case (B_SLURP)
     type(gc_value) :: k
     integer :: i
     yes = .false.
-    if (av%tag /= GCT_KEY .and. av%tag /= GCT_SYM) return
-    if (bv%tag /= GCT_KEY .and. bv%tag /= GCT_SYM) return
+    if (av%tag /= GCT_CLASS .and. av%tag /= GCT_SYM) return
+    if (bv%tag /= GCT_CLASS .and. bv%tag /= GCT_SYM) return
     a = gc_ref_text(av%ref)
     b = gc_ref_text(bv%ref)
     yes = class_matches(a, b) .or. class_matches(b, a) .or. a == "Object" .or. a == "java.lang.Object"
@@ -10886,7 +10930,7 @@ case (B_SLURP)
     i = 1
     do
        k = host_super(bv, i, av)
-       if (k%tag /= GCT_KEY) exit
+       if (k%tag /= GCT_CLASS) exit
        if (class_matches(gc_ref_text(k%ref), a) .or. class_matches(a, gc_ref_text(k%ref))) then
           yes = .true.
           return
@@ -10990,7 +11034,7 @@ case (B_SLURP)
     iface_in_vector = .false.
     do i = 0, gcv_count(vec) - 1
        k = gcv_nth(vec, i)
-       if (k%tag /= GCT_KEY) cycle
+       if (k%tag /= GCT_CLASS) cycle
        if (iface_extends(gc_ref_text(k%ref), want)) then
           iface_in_vector = .true.
           return
@@ -11060,6 +11104,9 @@ case (B_SLURP)
     end select
   end function iface_supers
 
+  ! Whether TEXT names a class. Kept for the reader and the analyser,
+  ! which decide from a symbol's spelling; a VALUE is a class when its
+  ! tag says so.
   logical function names_a_class(t)
     character(len=*), intent(in) :: t
     type(gc_value) :: none(0)
@@ -11470,7 +11517,7 @@ case (B_SLURP)
     key_in_vector = .false.
     do i = 0, gcv_count(vec) - 1
        k = gcv_nth(vec, i)
-       if (k%tag /= GCT_KEY) cycle
+       if (k%tag /= GCT_CLASS) cycle
        if (class_matches(gc_ref_text(k%ref), name)) then
           key_in_vector = .true.
           return
@@ -11483,8 +11530,12 @@ case (B_SLURP)
     logical :: yes
     character(len=:), allocatable :: c, t
     yes = .false.
-    if (cls%tag /= GCT_KEY) return
-    c = gc_ref_text(cls%ref)
+    if (cls%tag /= GCT_CLASS) return
+    ! SHORTENED: a class value carries its canonical name, and the
+    ! cases below are written the way a Clojure program writes the
+    ! class -- Object, String, CharSequence -- so java.lang comes off
+    ! first. Everything else keeps its package.
+    c = short_class_name(gc_ref_text(cls%ref))
     t = type_name(v)
     ! A deftype/reify instance is an instance of its own class and of
     ! everything its :implements list names -- which is the whole
@@ -11504,11 +11555,7 @@ case (B_SLURP)
     end if
     select case (c)
     case ("Class", "java.lang.Class")
-       ! a class is a keyword (DEVIATIONS 34): one naming a deftype or
-       ! spelt like a host class -- which is what lets isa? take its
-       ! isAssignableFrom branch for (class x), and print-method find
-       ! a method on an interface the value's class extends
-       if (v%tag == GCT_KEY) yes = names_a_class(gc_ref_text(v%ref))
+       yes = (t == "class")
     case ("clojure.lang.Symbol");   yes = (t == "symbol")
     case ("clojure.lang.Keyword");  yes = (t == "keyword")
     case ("clojure.lang.Var");      yes = (t == "var")
@@ -11803,8 +11850,13 @@ case (B_SLURP)
     character(len=:), allocatable :: t
 
     k = gc_nil()
-    if (dv%tag /= GCT_KEY) return
-    t = gc_ref_text(dv%ref)
+    if (dv%tag /= GCT_CLASS) return
+    ! The chain table below is written in SHORT names for the java.lang
+    ! ones (Number, Object) and in full for the rest, so the class name
+    ! is shortened on the way in and canonicalised on the way out --
+    ! a class value is its canonical name, and Number must come back as
+    ! java.lang.Number or print-method Number will not match a Long.
+    t = short_class_name(gc_ref_text(dv%ref))
 
     ! A DEFTYPE'S SUPERTYPES ARE THE INTERFACES IT DECLARED. The
     ! table below is fixed because clotran's built-in types are, but
@@ -11900,7 +11952,7 @@ case (B_SLURP)
          cnt = cnt + 1
          chain(cnt) = "Object"
       end if
-      if (i >= 1 .and. i <= cnt) k = gc_key(trim(chain(i)), [roots])
+      if (i >= 1 .and. i <= cnt) k = gc_class(class_key(trim(chain(i))), [roots])
     end block
   end function host_super
 
@@ -11922,13 +11974,14 @@ case (B_SLURP)
     end if
     select case (v%tag)
     case (GCT_NIL);   s = ""
-    case (GCT_BOOL);  s = "Boolean"
-    case (GCT_INT);   s = "Long"
-    case (GCT_REAL);  s = "Double"
+    case (GCT_BOOL);  s = "java.lang.Boolean"
+    case (GCT_INT);   s = "java.lang.Long"
+    case (GCT_REAL);  s = "java.lang.Double"
     case (GCT_RATIO); s = "clojure.lang.Ratio"
-    case (GCT_CHAR);  s = "Character"
+    case (GCT_CHAR);  s = "java.lang.Character"
+    case (GCT_CLASS); s = "java.lang.Class"
     case (GCT_BIG);   s = "clojure.lang.BigInt"
-    case (GCT_STR);   s = "String"
+    case (GCT_STR);   s = "java.lang.String"
     case (GCT_SYM);   s = "clojure.lang.Symbol"
     case (GCT_KEY);   s = "clojure.lang.Keyword"
     case default
@@ -11946,7 +11999,7 @@ case (B_SLURP)
        case (OBJ_REGEX);   s = "java.util.regex.Pattern"
        case (OBJ_MATCHER); s = "java.util.regex.Matcher"
        case (OBJ_WRITER);  s = "java.io.PrintWriter"
-       case (OBJ_SB);      s = "StringBuilder"
+       case (OBJ_SB);      s = "java.lang.StringBuilder"
        case (OBJ_ERR)
           ! Its own class, as constructed, spelt as the literal is:
           ! core.clj writes (ExceptionInfo. ...) under an import.

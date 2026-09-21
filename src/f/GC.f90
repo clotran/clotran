@@ -127,6 +127,16 @@ module GC
   ! hashes match, so a map keyed by one finds the other.
   integer, parameter, public :: GCT_BIG = 11
 
+  ! A CLASS. Its name is the value -- the canonical spelling with
+  ! java.lang stripped -- in the string pool, so ref means what it
+  ! means for a string and the collector needs no new case. A class
+  ! was a KEYWORD until 2026-09-21 (DEVIATIONS 34), which made
+  ! (= (class x) String) work and (pr-str (class 1)) answer :Long.
+  ! Equality and hashing are by NAME, so two classes of the same name
+  ! are one value however they were built -- a literal, (class x), or
+  ! a deftype's :implements list.
+  integer, parameter, public :: GCT_CLASS = 12
+
   ! A run of values. Internal -- reached from objects, not normally
   ! held by user code directly.
   integer, parameter, public :: GCT_VEC  = 9
@@ -543,6 +553,7 @@ module GC
   end interface gc_int
   public :: gc_ratio, gc_numerator, gc_denominator, gc_gcd
   public :: gc_big, gc_big_text, gc_is_big
+  public :: gc_class, gc_class_text
   public :: gc_set_coll_ops
   ! The hash mixer, so the collection walkers installed through
   ! gc_set_coll_ops finish with the same one every other hash uses.
@@ -777,6 +788,22 @@ contains
   ! operation has, reached sooner. DEVIATIONS 26.
   ! A BigInt from canonical decimal text. Nothing else builds one:
   ! the text is normalized here so every later comparison is exact.
+  ! A class from its canonical name. class_key in Eval.f90 decides
+  ! the spelling; this only stores it.
+  function gc_class(text, roots) result(v)
+    character(len=*), intent(in) :: text
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: v
+    v = new_text(text, roots, GCT_CLASS)
+  end function gc_class
+
+  function gc_class_text(v) result(s)
+    type(gc_value), intent(in) :: v
+    character(len=:), allocatable :: s
+    s = ""
+    if (v%tag == GCT_CLASS) s = gc_ref_text(v%ref)
+  end function gc_class_text
+
   function gc_big(text, roots) result(v)
     character(len=*), intent(in) :: text
     type(gc_value), intent(in) :: roots(:)
@@ -1384,7 +1411,7 @@ contains
        ! cross-multiplying, and the default branch below would have
        ! compared the denominators alone.
        eq = (a%ival == b%ival .and. a%ref == b%ref)
-    case (GCT_BIG)
+    case (GCT_BIG, GCT_CLASS)
        ! Canonical text, so this is exact.
        eq = gc_ref_is(a%ref, gc_ref_text(b%ref))
     case (GCT_STR, GCT_SYM, GCT_KEY)
@@ -1470,7 +1497,7 @@ contains
        else
           h = mix32(ieor(mix32(fnv1a(gc_ref_text(v%ref))), tag_salt(v%tag)))
        end if
-    case (GCT_STR, GCT_SYM, GCT_KEY)
+    case (GCT_STR, GCT_SYM, GCT_KEY, GCT_CLASS)
        h = mix32(ieor(mix32(fnv1a(gc_ref_text(v%ref))), tag_salt(v%tag)))
     case default
        ! ...and hashing has to follow equality exactly, or a trie
@@ -1711,7 +1738,7 @@ contains
     integer :: n
     if (v%ref == 0) return
     select case (v%tag)
-    case (GCT_OBJ, GCT_VEC, GCT_STR, GCT_SYM, GCT_KEY, GCT_BIG)
+    case (GCT_OBJ, GCT_VEC, GCT_STR, GCT_SYM, GCT_KEY, GCT_BIG, GCT_CLASS)
        continue
     case default
        return ! an immediate holds nothing
@@ -1753,7 +1780,7 @@ contains
           do i = 1, n
              call push_mark(vec_store(vec_pool(v%ref)%off + i - 1))
           end do
-       case (GCT_STR, GCT_SYM, GCT_KEY, GCT_BIG)
+       case (GCT_STR, GCT_SYM, GCT_KEY, GCT_BIG, GCT_CLASS)
           str_mark(v%ref) = .true. ! a leaf: holds no references
           gc_marked = gc_marked + 1
           str_marked = str_marked + 1

@@ -3510,6 +3510,45 @@ The oracle has fifteen cases for it, values against clj, including
 `(apply (fn [a & r] [a (take 3 r)]) 1 (range))` and the atom count
 that shows only one element of a hundred was realised.
 
+## A class is a value, and what held it back
+
+A class was a KEYWORD for a long time, and it worked: `(= (class x)
+String)` held because the literal and the answer were the same
+keyword. What it cost was everything printed -- `:Long` where Clojure
+says `java.lang.Long` -- and `(class (class 1))` answering
+`clojure.lang.Keyword`.
+
+A class is now `GCT_CLASS`, its canonical name in the string pool: the
+same shape as a BigInt, so the collector, equality and hashing needed
+one case each. The spelling rule moved with it. `class_key` used to
+STRIP `java.lang` (`Long`, `String`) so that a class value would match
+the way a program writes the literal; now it keeps the canonical name
+in full, and the shortening happens where a NAME is matched instead --
+`is_instance` and `host_super` shorten on the way in, because their
+tables are written the way a Clojure program writes a class.
+
+Three things broke on the way, and each says something:
+
+- **Every number printed as `#object[java.lang.Long ...]`.**
+  `print-method` has a method on `Number`, and dispatch reaches it
+  through `host_super`, whose supertype table is keyed by the SHORT
+  name. With full names nothing matched, `Object` won, and
+  `print-object` printed the wrapper. The table now shortens its input
+  and canonicalises its output.
+- **`(= (->P 1 2) (->P 1 2))` was false.** A record's generated
+  `equiv` opens with `(identical? (class this) (class other))`, and
+  `identical?` compares text for strings, symbols and keywords -- but
+  fell to slot comparison for the new tag. Classes (and BigInts) now
+  compare there by text too.
+- **`clojure.string/replace` stopped working.** Its dispatch asks
+  `(instance? CharSequence match)`, and `CharSequence` canonicalises
+  to `java.lang.CharSequence`, which was not one of the names
+  `is_instance` listed. Shortening at the top of `is_instance` fixed
+  that class of bug once rather than one label at a time.
+
+The derived language suite came out at 2879 passing assertions and one
+failure, which is `1.0M` and belongs to BigDecimal.
+
 ## BigInt is decimal text, and the hash bug it uncovered
 
 `clojure.lang.BigInt` is a type in the LANGUAGE -- ClojureScript has

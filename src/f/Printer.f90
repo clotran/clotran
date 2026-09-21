@@ -103,6 +103,10 @@ contains
        else
           s = u8_enc(int(v%ival, kind=4))
        end if
+    case (GCT_CLASS)
+       ! A class prints as its NAME, readably or not: java.lang.Long,
+       ! never :Long. (class (class 1)) is java.lang.Class.
+       s = gc_ref_text(v%ref)
     case (GCT_BIG)
        ! 1N readably, 1 as text: (pr-str 1N) is "1N" and (str 1N) is "1".
        s = gc_big_text(v)
