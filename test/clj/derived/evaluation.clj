@@ -3,14 +3,6 @@
 
 (ns clojure.test-clojure.evaluation (:use clojure.test clojure.test-helper))
 
-(import '(java.lang Boolean)
-        '(clojure.lang Compiler Compiler$CompilerException))
-
-(defmacro in-test-ns [& body]
-  `(binding [*ns* *ns*]
-     (in-ns 'clojure.test-clojure.evaluation)
-     ~@body))
-
 (defmacro #^{:private true} evaluates-to-itself? [expr]
   `(let [v# ~expr
          q# (quote ~expr)]

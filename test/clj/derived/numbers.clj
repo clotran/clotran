@@ -12,26 +12,6 @@
    true
    (catch Exception _)))
 
-(defmacro check-warn-on-box [warn? form]
-  `(do (binding [*unchecked-math* :warn-on-boxed]
-                (is (= ~warn?
-                       (boolean
-                         (re-find #"^Boxed math warning"
-                                  (helper/with-err-string-writer
-                                    (helper/eval-in-temp-ns ~form)))))))
-       (binding [*unchecked-math* true]
-                (is (false?
-                      (boolean
-                        (re-find #"^Boxed math warning"
-                                 (helper/with-err-string-writer
-                                   (helper/eval-in-temp-ns ~form)))))))
-       (binding [*unchecked-math* false]
-                (is (false?
-                      (boolean
-                        (re-find #"^Boxed math warning"
-                                 (helper/with-err-string-writer
-                                   (helper/eval-in-temp-ns ~form)))))))))
-
 ;; numbers.clj:154 [language]
 (deftest unchecked-cast-char
   ; in keeping with the checked cast functions, char and Character can only be cast to int
@@ -347,11 +327,3 @@
     -123N 123N
     -1/5 1/5)
   (is (NaN? (abs ##NaN))))
-
-;; numbers.clj:835 [language]
-(deftest warn-on-boxed
-  (check-warn-on-box true (#(inc %) 2))
-  (check-warn-on-box false (#(inc ^long %) 2))
-  (check-warn-on-box false (long-array 5))
-  (check-warn-on-box true (> (first (range 3)) 0))
-  (check-warn-on-box false (> ^long (first (range 3)) 0)))

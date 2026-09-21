@@ -27,11 +27,7 @@
 
 (defrecord RecordToTestBasis [a b c])
 
-(defrecord RecordToTestBasisHinted [^String a ^Long b c])
-
 (defrecord TypeToTestBasis [a b c])
-
-(defrecord TypeToTestBasisHinted [^String a ^Long b c])
 
 (defrecord RecordToTestFactories [a b c])
 
@@ -61,36 +57,9 @@
 
 (defrecord RecordToTestBoolHint [^boolean a])
 
-(defrecord RecordToTestCovariantHint [^String a]) ;; same for arrays also
-
 (deftype TypeToTestLongHint [^long a])
 
 (deftype TypeToTestByteHint [^byte a])
-
-(defmacro try-extend-type [c]
-  `(extend-type ~c
-     SyntaxQuoteTestProtocol
-     (sqtp [p#] p#)))
-
-(defmacro try-extend-protocol [c]
-  `(extend-protocol SyntaxQuoteTestProtocol
-     ~c
-     (sqtp [p#] p#)))
-
-(import 'clojure.lang.ISeq)
-
-;; protocols.clj:137 [language]
-(deftest illegal-extending
-  (testing "you cannot extend a protocol to a type that implements the protocol inline"
-    (is (fails-with-cause? IllegalArgumentException #".*HasProtocolInline already directly implements interface"
-          (eval '(extend clojure.test_clojure.protocols.HasProtocolInline
-                         clojure.test-clojure.protocols.examples/ExampleProtocol
-                         {:foo (fn [_] :extended)})))))
-  (testing "you cannot extend to an interface"
-    (is (fails-with-cause? IllegalArgumentException #"interface clojure.test_clojure.protocols.examples.ExampleProtocol is not a protocol"
-          (eval '(extend clojure.test_clojure.protocols.HasProtocolInline
-                         clojure.test_clojure.protocols.examples.ExampleProtocol
-                         {:foo (fn [_] :extended)}))))))
 
 ;; protocols.clj:262 [language]
 (deftest defrecord-with-specific-field-names

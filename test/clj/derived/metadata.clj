@@ -3,28 +3,7 @@
 
 (ns clojure.test-clojure.metadata (:use clojure.test [clojure.test-helper :only (eval-in-temp-ns)]) (:require [clojure.set :as set]))
 
-(def public-namespaces
-  '[clojure.core
-    clojure.pprint
-    clojure.inspector
-    clojure.set
-    clojure.stacktrace
-    clojure.test
-    clojure.walk
-    clojure.xml
-    clojure.zip
-    clojure.java.io
-    clojure.java.browse
-    clojure.java.javadoc
-    clojure.java.shell
-    clojure.string
-    clojure.data])
 
-(def public-vars
-  (mapcat #(vals (ns-publics %)) public-namespaces))
-
-(def public-vars-with-docstrings
-  (filter (comp :doc meta) public-vars))
 
 ;; metadata.clj:100 [language]
  (deftest fns-preserve-metadata-on-maps

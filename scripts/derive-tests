@@ -3,6 +3,7 @@
 ;;
 ;;   scripts/derive-tests --report      classify, print counts, write nothing
 ;;   scripts/derive-tests               write test/clj/derived/*.clj
+;;   DERIVE_WHY=test-name ...           also print what put that test in its bucket
 ;;
 ;; THE RULE. The language is the intersection of two implementations:
 ;; the public names of clojure.core (the pinned clone we vendor) and of
@@ -11,7 +12,9 @@
 ;; special forms and a short allowlist of exception classes -- is a
 ;; LANGUAGE test. One that names a Java class, a member call, a
 ;; constructor, or a clojure.core public that ClojureScript never had is
-;; a HOST test and is left out. Between the two sits CONCURRENCY: refs,
+;; a HOST test and is left out -- whether it names it directly, in a
+;; type hint, in a syntax-quoted helper macro, in a quoted namespace
+;; name, or in code it hands to `eval`. Between the two sits CONCURRENCY: refs,
 ;; agents, futures, STM -- Clojure-only, but a stated goal (PLAN.md), so
 ;; they are kept in their own bucket rather than discarded.
 ;;
@@ -38,9 +41,13 @@
 
 ;; Any tagged literal (#js {...}, a record literal) reads as its payload;
 ;; reader conditionals take the :clj branch. Neither affects which
-;; symbols a form mentions, which is all this script reads.
+;; symbols a form mentions, which is all this script reads. A symbol a
+;; syntax-quote would resolve -- `(binding [*unchecked-math* ..]) in a
+;; helper macro -- comes out as sq/*unchecked-math*, so it is told apart
+;; from a hand-quoted 'symbol (data) and judged as the bare name.
 (defn parse [f]
   (try (e/parse-string-all (slurp f) {:all true :end-location true :auto-resolve name
+                                       :syntax-quote {:resolve-symbol (fn [s] (if (namespace s) s (symbol "sq" (name s))))}
                                        :readers (fn [_tag] (fn [v] (list (quote clotran-tagged-literal) v)))
                                        :read-cond :allow :features #{:clj}})
        (catch Exception ex (println "  cannot parse" (str f) ":" (.getMessage ex)) nil)))
@@ -67,8 +74,9 @@
                         :else nil))
                     forms)))
 
+;; ns is a macro on the JVM and a special form in ClojureScript; either way both have it.
 (def specials '#{if do let* fn* quote var def loop* recur throw try catch finally new . set!
-                 letfn* case* deftype* reify* & monitor-enter monitor-exit import* clojure.core/import*})
+                 letfn* case* deftype* reify* & monitor-enter monitor-exit import* clojure.core/import* ns})
 
 (def portable-libs #{"clojure.core" "clojure.test" "clojure.string" "clojure.set" "clojure.walk"
                      "clojure.template" "clojure.zip" "clojure.data" "clojure.edn" "clojure.pprint"
@@ -120,19 +128,49 @@
 (defn ns-aliases [ns-form]
   (into {} (for [{:keys [lib as]} (require-specs ns-form) :when as] [as lib])))
 
-;; Every symbol a form USES. A quoted collection is data, not a use --
-;; (eval '(defn foo [] (throw))) uses eval, not foo -- and so is a quoted
-;; bare symbol. A quoted QUALIFIED symbol is kept: edamame expands a
-;; syntax-quote template into (quote gen/fmap) and that is a reference to
-;; a library, alias and all.
+;; Every symbol a form USES. A quoted collection is data, not a use, and
+;; so is a quoted bare symbol -- with three exceptions. A quoted QUALIFIED
+;; symbol is kept: edamame expands a syntax-quote template into (quote
+;; gen/fmap) and that is a reference to a library, alias and all. A quoted
+;; bare symbol spelled clojure.something names a NAMESPACE, and a
+;; namespace we do not have is host (metadata.clj enumerates
+;; clojure.java.io's publics). And the argument of `eval` is CODE that
+;; happens to be quoted -- but code a test evaluates is where it puts
+;; the symbols it MEANS to leave unbound, (eval '(let [{:keys! [a & :b]}
+;; m] b)), so only what looks like a class, a member or a namespace
+;; counts there: (eval '(fn [^some.Class c])) uses the class. A symbol's
+;; :tag is a use too -- the class a hint names.
+(defn class-like? [s]
+  (or (namespace s) (capitalized? s) (str/includes? (name s) ".")))
+
+(defn unsq [s] (if (= "sq" (namespace s)) (symbol (name s)) s))
+
 (defn symbols-in [form]
   (let [acc (atom [])
-        walk (fn walk [x]
-               (cond (symbol? x) (swap! acc conj x)
+        use! (fn [s code?]
+               (let [s (unsq s)]
+                 (when (and (not (str/ends-with? (name s) "__auto__"))   ; a gensym
+                            (or (not code?) (class-like? s)))
+                   (swap! acc conj s))))
+        walk (fn walk [x code?]
+               (when-let [tag (and (instance? clojure.lang.IObj x) (:tag (meta x)))]
+                 (when (symbol? tag) (use! tag false)))
+               (cond (symbol? x) (use! x code?)
                      (and (seq? x) (= 'quote (first x)))
-                     (let [q (second x)] (when (and (symbol? q) (namespace q)) (swap! acc conj q)))
-                     (coll? x) (doseq [y x] (walk y))))]
-    (walk form)
+                     (let [q (second x)]
+                       (cond code? (walk q true)
+                             (and (symbol? q) (or (namespace q) (str/starts-with? (name q) "clojure.")))
+                             (use! q false)
+                             (coll? q) (doseq [y (flatten (seq q))]
+                                         (when (and (symbol? y) (str/starts-with? (name y) "clojure."))
+                                           (swap! acc conj y)))))
+                     (and (seq? x) (= 'eval (first x)))
+                     (doseq [y (rest x)] (walk y true))
+                     ;; the name a def introduces is not a use of it
+                     (and (seq? x) (contains? def-heads (first x)) (symbol? (second x)))
+                     (doseq [y (cons (first x) (drop 2 x))] (walk y code?))
+                     (coll? x) (doseq [y x] (walk y code?))))]
+    (walk form false)
     @acc))
 
 ;; Symbols that appear inside any vector literal of a form: an
@@ -159,14 +197,28 @@
     @acc))
 
 ;; Why a symbol is outside the language, or nil if it is inside.
-(defn offence [sym {:keys [aliases local-names core-only-names lang dropped bound helper-vocab]}]
+(defn offence [sym {:keys [aliases local-names core-only-names lang dropped bound helper-vocab self-ns] :as ctx}]
   (let [n (name sym) nsp (namespace sym)]
     (cond
+      ;; the file's own namespace: naming it is fine, and a name
+      ;; qualified with it is judged as the bare name would be
+      (and self-ns (= n self-ns) (nil? nsp)) nil
+      (and self-ns (= nsp self-ns)) (offence (symbol n) (dissoc ctx :self-ns))
       (= sym 'clotran-tagged-literal) [:host sym]     ; #tag{...}: no tagged literals here
       (contains? numeric-constants sym) nil
+      ;; a quoted namespace name: ours, or not here
+      (and (nil? nsp) (str/starts-with? n "clojure.") (not (str/ends-with? n "."))
+           (not (contains? exception-allowlist sym)))
+      (if (contains? portable-libs n) nil [:host sym])
       nsp (let [nsp (get aliases nsp nsp)]
-            (cond (contains? portable-libs nsp) nil
-                  (or (capitalized? (symbol nsp)) (str/starts-with? nsp "java.")
+            (cond ;; clojure.core/x names x, and x had better be the language's:
+                  ;; a syntax-quoted *unchecked-math* is the JVM's compiler flag
+                  (= nsp "clojure.core") (when-not (or (contains? lang (symbol n)) (contains? specials (symbol n)))
+                                           (if (contains? concurrency-vocab (symbol n)) [:concurrency sym] [:host sym]))
+                  (contains? portable-libs nsp) nil
+                  ;; a class, however lowercase its package: compilation.JDK8InterfaceMethods/staticMethod0
+                  (or (capitalized? (symbol nsp)) (capitalized? (symbol (last (str/split nsp #"\."))))
+                      (str/starts-with? nsp "java.")
                       (str/starts-with? nsp "clojure.lang")) [:host sym]
                   (str/starts-with? nsp "clojure.") [:host sym]   ; clojure.java.io, clojure.reflect ...
                   :else nil))                                    ; a test's own helper ns
@@ -233,7 +285,8 @@
         foreign (remove #(portable-lib? (:lib %)) specs)
         dropped0 (into #{} (for [s foreign, r (if (sequential? (:refer s)) (:refer s) [])] r))
         helpers (remove #(or (deftest? %) (ns-form? %)) forms)
-        ctx0 (assoc base-ctx :local-names (local-names-in forms) :aliases (ns-aliases ns-form))
+        ctx0 (assoc base-ctx :local-names (local-names-in forms) :aliases (ns-aliases ns-form)
+                    :self-ns (some-> ns-form second name))
         step (fn [dropped]
                (let [ctx (assoc ctx0 :dropped dropped)
                      bad (filter #(= :host (:bucket (bucket % ctx))) helpers)]
@@ -242,6 +295,10 @@
         ctx (assoc ctx0 :dropped dropped)
         kept-helpers (remove #(= :host (:bucket (bucket % ctx))) helpers)
         tests (for [t (filter deftest? forms)] (assoc (bucket t ctx) :form t))]
+    ;; DERIVE_WHY=test-name prints what made that test host
+    (when-let [why (System/getenv "DERIVE_WHY")]
+      (doseq [t tests :when (= why (name (second (:form t))))]
+        (println "WHY" why (:bucket t) (:offences t))))
     {:tests tests :helpers kept-helpers :dropped dropped
      :ns-clean (when ns-form
                  (let [portable? (fn [{:keys [lib]}]
@@ -266,7 +323,9 @@
       cljs-names (into (public-names (parse core-cljs)) (public-names (parse core-cljc)))
       lang (set (filter cljs-names clj-names))
       core-only (set (remove cljs-names clj-names))
-      helper-vocab (public-names (parse (io/file repo "test/clj/clojure/test_helper.clj")))
+      ;; less the helper that asserts the JVM compiler emitted no reflection
+      ;; warning: there is no reflection here to warn about
+      helper-vocab (disj (public-names (parse (io/file repo "test/clj/clojure/test_helper.clj"))) 'should-not-reflect)
       files (sort-by #(.getName %) (filter #(str/ends-with? (.getName %) ".clj") (.listFiles suite-dir)))
       parsed (for [f files :let [forms (parse f)] :when forms]
                {:file f :forms forms :ns-form (first (filter ns-form? forms))})
