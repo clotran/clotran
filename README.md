@@ -257,7 +257,7 @@ recalled. See `CLAUDE.md`.
 | startup | 0.6s: core.clj is re-read and re-analysed every launch; there is no image yet |
 | memory | 168 MB after loading core.clj, and a 100000-element reduce stays there since locals are cleared after their last read; the image (PLAN.md step 5, stage 3) is what would shrink the baseline |
 | debugger | steps count calls, not lines, since a call is the event the executor has; one level, so a break inside the handler is a snapshot; no socket. What it does is under "What works" |
-| `BigDecimal` and `BigInt` | `1M` reads as a double and `1N` as an integer; DEVIATIONS 30 |
+| `BigDecimal` | `1M` reads as a double; DEVIATIONS 30. `BigInt` is real: `1N`, `+'`, exact at any size |
 | mutable deftype fields | `(set! afield v)` is refused, loudly; DEVIATIONS 20 |
 | `tap>`, agents that run apart | queues; an agent's action runs at `send`, on the one thread there is |
 | futures | run on the one OS thread, at creation until they first block; a wait under a `map` or `reduce` callback cannot park, and a wait nothing can satisfy is an error, not a hang; DEVIATIONS 38 |

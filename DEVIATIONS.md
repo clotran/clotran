@@ -765,9 +765,45 @@ Closing it would mean tracking a declared element type per call site
 and rejecting a value whose Clojure type is not exactly it, which is
 re-creating boxing in order to reproduce its error message.
 
-## 26. No BigInt: `+'` cannot promote, and `42N` and `1.5M` read as symbols
+## 26. RESOLVED -- BigInt, and what a Ratio still cannot hold
 
-**The overflow half is RESOLVED (2026-09-19, fedccc9).** `+`, `-`, `*`,
+**RESOLVED 2026-09-21.** There is a `clojure.lang.BigInt`:
+`src/f/BigInt.f90` is arbitrary-precision integer arithmetic over
+decimal text (add, subtract, multiply, truncating divmod, compare),
+and a big integer is that text in the string pool under its own tag
+(`GCT_BIG`), so the collector marks it as it marks a string and
+nothing else in the heap changed. `42N` reads as one, so does a plain
+literal past 2^63, `(pr-str 1N)` is `"1N"`, `(= 1N 1)` is true and the
+two hash alike, and `+'` `-'` `*'` `inc'` `dec'` promote instead of
+throwing. `(* 99999999999999999999N 99999999999999999999N)` is exact.
+
+What is NOT closed, and is the rest of this entry:
+
+- **A Ratio's numerator and denominator are still 64-bit.** So a
+  division that leaves a remainder outside that range --
+  `(/ 99999999999999999999N 7)` -- raises "a Ratio of BigInts is not
+  supported" rather than answering an exact ratio. Clojure's Ratio
+  holds two BigIntegers. Removing it is the same change again, one
+  level up: a Ratio whose parts are big integers.
+- **`1.5M` is still a double** (deviation 30), so there is no
+  BigDecimal and `(bigint 2.5)` fails where Clojure routes it through
+  `BigDecimal/valueOf`.
+- **One big integer type, not two.** `biginteger` answers the same
+  BigInt, which prints `1N` where Clojure's `java.math.BigInteger`
+  prints `1`.
+- **`long` of a BigInt truncates** rather than throwing when the value
+  is out of range: the row is shared with `uncheckedLongCast`, and
+  `even?` needs the truncating one.
+- **`range` narrows its bounds.** `(range 1N 4N)` is `(1 2 3)` here and
+  `(1N 2N 3N)` on the JVM. The values are equal and compare equal; the
+  ELEMENT TYPE is a long. A BigInt used as an index, a count or a
+  range bound is narrowed the same way (`as_int`), which is what makes
+  `(nth v 1N)` answer element 1 rather than element 0.
+
+What the entry recorded before, kept because the reasoning still
+stands:
+
+**The overflow half was resolved on 2026-09-19 (fedccc9).** `+`, `-`, `*`,
 `inc` and `dec` raise `ArithmeticException: long overflow` as
 `Numbers.throwIntOverflow` does, and the `unchecked-` variants wrap.
 What this entry now records is what those checks cannot give: the
@@ -785,13 +821,8 @@ bits, so `9999999999` read back as `1410065407` and `2147483648` as
 `real(8)` early on with precisely this argument, and the integer was
 left behind.
 
-Closing the remainder means arbitrary precision behind `+'`, `*'` and
-friends, which promote instead of throwing.
-
-`42N` and `1.5M` read as SYMBOLS, so they resolve to nothing and fail
-where they are used rather than where they are read. They are not read
-as 42 and 1.5: answering with a near-miss of a different type would be
-the same silent-wrong-answer mistake as the truncation above.
+`42N` and `1.5M` once read as SYMBOLS, so they resolved to nothing and
+failed where they were used rather than where they were read.
 
 `3/4` used to be in that list and is not any more -- there is a real
 Ratio now, exact and normalized, and `(/ 1 3)` is `1/3` rather than
@@ -930,21 +961,19 @@ mutable boxes) and 11 (transients are the persistent collections) --
 every one of them is single-threadedness showing through, and none of
 them can go until Fortran here has somewhere to put a second thread.
 
-## 30. `1N` is an integer and `1M` is a double
+## 30. `1M` is a double
 
-Clojure reads `1N` as a `clojure.lang.BigInt` and `1M` as a
-`java.math.BigDecimal`. clotran has neither type, and used to read both
-as SYMBOLS -- so `(cond 0M :a true :b)` answered "unable to resolve
-symbol: 0M" rather than `:a`, and `(= 45M (deref a))` could not run at
-all.
+Clojure reads `1M` as a `java.math.BigDecimal`. clotran has no such
+type, and used to read the literal as a SYMBOL -- so `(cond 0M :a true
+:b)` answered "unable to resolve symbol: 0M" rather than `:a`, and
+`(= 45M (deref a))` could not run at all.
 
-Each suffix now drops to the nearest thing clotran does have, and the
+The suffix now drops to the nearest thing clotran does have, and the
 choice was made by what `=` then says rather than by which looks
 closest:
 
 | | Clojure | clotran | why |
 |---|---|---|---|
-| `1N` | BigInt | integer | `(= 1N 1)` is TRUE in Clojure, and stays true |
 | `1M` | BigDecimal | double | `(= 1M 1)` is FALSE in Clojure, and `(= 1.0 1)` is false here |
 
 Reading `45M` as the integer `45` would have been the obvious choice and
@@ -953,13 +982,15 @@ because a BigDecimal is its own equality category. A double lands in a
 different category from an integer for exactly the same reason, so the
 comparison comes out right without the type existing.
 
-What is lost is arbitrary precision and the type itself:
+`1N` is NOT in this entry any more: there is a real BigInt
+(deviation 26), and `1N` reads as one.
 
-    (type 1N)     clojure.lang.BigInt      -> :int
+What is lost is exact decimal arithmetic and the type itself:
+
     (type 1M)     java.math.BigDecimal     -> :double
-    (pr-str 1N)   "1N"                     -> "1"
     (pr-str 1M)   "1M"                     -> "1.0"
     (* 1M 0.1M)                            -> not exact decimal
+    (bigint 2.5)                           -> no such member: BigDecimal/valueOf
 
 and, with it, everything `with-precision` is for. A literal past
 2^63 is the same 64-bit ceiling deviation 26 names.

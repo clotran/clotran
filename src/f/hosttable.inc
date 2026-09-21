@@ -22,7 +22,7 @@
        HK_NAN = -5, HK_NIL = -6, HK_EMPTYMAP = -7, HK_SPECIALS = -8, HK_TYPE = -9, &
        HK_TRUE = -10, HK_FALSE = -11, HK_LINEBOX = -12
 
-  type(hm), parameter :: HOST_STATICS_1(74) = [ &
+  type(hm), parameter :: HOST_STATICS_1(77) = [ &
   ! PersistentList.creator is a static IFn that builds a list from its arguments.
        hm("clojure.lang.PersistentList", "creator", B_LIST, "list"), &
   ! core.clj's own make-array, aget, aset and the aset-int family are
@@ -86,15 +86,15 @@
        hm("java.lang.System", "nanoTime", B_NANOTIME, "clotran-nano-time"), &
        hm("java.lang.System", "identityHashCode", B_IDHASH, "clotran-identity-hash"), &
        hm("clojure.lang.Numbers", "add", B_ADD, "+"), &
-       hm("clojure.lang.Numbers", "addP", B_ADD, "+"), &
+       hm("clojure.lang.Numbers", "addP", B_PADD, "+'"), &
        hm("clojure.lang.Numbers", "unchecked_add", B_UADD, "unchecked-add"), &
        hm("clojure.lang.Numbers", "unchecked_int_add", B_UADD, "unchecked-add"), &
        hm("clojure.lang.Numbers", "minus", B_SUB, "-"), &
-       hm("clojure.lang.Numbers", "minusP", B_SUB, "-"), &
+       hm("clojure.lang.Numbers", "minusP", B_PSUB, "-'"), &
        hm("clojure.lang.Numbers", "unchecked_minus", B_USUB, "unchecked-subtract"), &
        hm("clojure.lang.Numbers", "unchecked_int_subtract", B_USUB, "unchecked-subtract"), &
        hm("clojure.lang.Numbers", "multiply", B_MUL, "*"), &
-       hm("clojure.lang.Numbers", "multiplyP", B_MUL, "*"), &
+       hm("clojure.lang.Numbers", "multiplyP", B_PMUL, "*'"), &
        hm("clojure.lang.Numbers", "unchecked_multiply", B_UMUL, "unchecked-multiply"), &
        hm("clojure.lang.Numbers", "divide", B_DIV, "/"), &
        hm("clojure.lang.Numbers", "unchecked_int_divide", B_DIV, "/"), &
@@ -106,11 +106,15 @@
        hm("clojure.lang.Numbers", "equiv", B_NUMEQ, "=="), &
        hm("clojure.lang.Numbers", "abs", B_ABS, "abs"), &
        hm("clojure.lang.Numbers", "inc", B_INC, "inc"), &
-       hm("clojure.lang.Numbers", "incP", B_INC, "inc"), &
+       hm("clojure.lang.Numbers", "incP", B_PINC, "inc'"), &
        hm("clojure.lang.Numbers", "unchecked_inc", B_UINC, "unchecked-inc"), &
        hm("clojure.lang.Numbers", "unchecked_int_inc", B_UINC, "unchecked-inc"), &
        hm("clojure.lang.Numbers", "dec", B_DEC, "dec"), &
-       hm("clojure.lang.Numbers", "decP", B_DEC, "dec"), &
+       hm("clojure.lang.Numbers", "decP", B_PDEC, "dec'"), &
+       ! (bigint x) for a number is (clojure.lang.BigInt/valueOf (long x))
+       hm("clojure.lang.BigInt", "valueOf", B_TOBIG, "bigint"), &
+       hm("clojure.lang.BigInt", "fromBigInteger", B_TOBIG, "bigint"), &
+       hm("java.math.BigInteger", "valueOf", B_TOBIG, "bigint"), &
        hm("clojure.lang.Numbers", "unchecked_dec", B_UDEC, "unchecked-dec"), &
        hm("clojure.lang.Numbers", "unchecked_int_dec", B_UDEC, "unchecked-dec") ]
   type(hm), parameter :: HOST_STATICS_2(80) = [ &
@@ -348,9 +352,9 @@
        hm("clojure.lang.Numbers", "flipBit", B_RTFN, "flip-bit"), &
        hm("clojure.lang.Numbers", "long_array", B_RTFN, "long-array-of"), &
        hm("clojure.lang.Numbers", "double_array", B_RTFN, "double-array-of") ]
-  type(hm), parameter :: HOST_STATICS(271) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
+  type(hm), parameter :: HOST_STATICS(274) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
-  type(hm), parameter :: HOST_METHODS_1(86) = [ &
+  type(hm), parameter :: HOST_METHODS_1(88) = [ &
   ! Instance members. The target becomes the first argument, which is all
   ! an instance method is: (.withMeta x m) calls with-meta on x and m.
        hm("", "meta", B_META, "meta"), &
@@ -363,6 +367,9 @@
        hm("", "cons", B_CONS, "cons"), &
        hm("", "isInstance", B_INSTANCE, "instance?"), &
        hm("", "getName", B_GETNAME, "clotran-get-name"), &
+       ! biginteger, and bigint of a Ratio, go through these
+       hm("", "toBigInteger", B_TOBIG, "bigint"), &
+       hm("", "bigIntegerValue", B_TOBIG, "bigint"), &
        hm("", "name", B_GETNAME, "clotran-get-name"), &
        hm("", "getSimpleName", B_GETNAME, "clotran-get-name"), &
   ! An ARRAY of frames, not a vector: Throwable->map asks (alength st) straight after.
@@ -529,4 +536,4 @@
        hm("", "isCancelled", B_TASKCANCELLED, "clotran-task-cancelled"), &
        hm("", "cancel", B_TASKCANCEL, "clotran-task-cancel"), &
        hm("", "availableProcessors", B_NPROCS, "clotran-processors") ]
-  type(hm), parameter :: HOST_METHODS(156) = [HOST_METHODS_1, HOST_METHODS_2]
+  type(hm), parameter :: HOST_METHODS(158) = [HOST_METHODS_1, HOST_METHODS_2]

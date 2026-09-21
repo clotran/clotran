@@ -23,6 +23,7 @@
 ! core shapes; the shapes are what the data layer needs proving.
 module LispReader
   use GC
+  use BigInt
   use PersistentList
   use PersistentVector
   use Assoc
@@ -1438,6 +1439,17 @@ contains
        ! raise rather than interning.
        rok = .false.
        rclaim = .false.
+       ! A plain decimal integer too big for 64 bits READS AS A BigInt,
+       ! as Clojure's readNumber does: 12345678901234567890 is a
+       ! BigInt there, not a wrapped long. Only the plain decimal
+       ! shape -- a radix or hex literal past the range still wraps,
+       ! which is what digits_radix has always done.
+       if (plain_decimal(tok)) then
+          if (.not. big_fits_i64(tok)) then
+             v = gc_big(tok, roots)
+             return
+          end if
+       end if
        call parse_int(tok, ival, iok, iclaim)
        if (.not. iclaim) call parse_ratio(tok, rval, rok, rclaim)
        if (iok) then
@@ -1583,10 +1595,18 @@ contains
     if (start > n) return
     if (n <= start) return
     if (s(n:n) == "N") then
-       call parse_int(s(1:n - 1), iv, iok, iclaim)
-       if (iok) then
-          val = gc_int(iv)
+       ! 42N is a BigInt, of any size. A plain decimal keeps its own
+       ! text; a radix or hex literal goes through parse_int first,
+       ! which is where its value comes from.
+       if (plain_decimal(s(1:n - 1))) then
+          val = gc_big(s(1:n - 1), roots)
           yes = .true.
+       else
+          call parse_int(s(1:n - 1), iv, iok, iclaim)
+          if (iok) then
+             val = gc_big(int_text(iv), roots)
+             yes = .true.
+          end if
        end if
     else if (s(n:n) == "M") then
        if (looks_real(s(1:n - 1))) then
@@ -1596,6 +1616,14 @@ contains
     end if
     if (.false.) val = gc_sym(s, roots)
   end function suffixed_number
+
+  pure function int_text(i) result(s)
+    integer(gc_ip), intent(in) :: i
+    character(len=:), allocatable :: s
+    character(len=24) :: buf
+    write(buf, '(I0)') i
+    s = trim(buf)
+  end function int_text
 
   ! ratioPat: ([-+]?[0-9]+)/([0-9]+). A denominator of zero is an
   ! error, the same as (/ 1 0) -- Clojure raises rather than reading
@@ -1683,6 +1711,23 @@ contains
     end do
     ok = .true.
   end subroutine digits_radix
+
+  ! [-+]?[0-9]+ and nothing else: the shape whose VALUE is its own
+  ! text, so a BigInt can be made from it without parsing.
+  pure function plain_decimal(s) result(yes)
+    character(len=*), intent(in) :: s
+    logical :: yes
+    integer :: start
+    yes = .false.
+    start = 1
+    if (len(s) >= 1) then
+       if (s(1:1) == "-" .or. s(1:1) == "+") start = 2
+    end if
+    if (len(s) < start) return
+    ! a single leading zero is octal in Clojure, not decimal
+    if (len(s) > start .and. s(min(start, len(s)):min(start, len(s))) == "0") return
+    yes = all_decimal(s(start:))
+  end function plain_decimal
 
   pure function all_decimal(s) result(yes)
     character(len=*), intent(in) :: s

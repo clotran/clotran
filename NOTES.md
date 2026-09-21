@@ -3510,6 +3510,47 @@ The oracle has fifteen cases for it, values against clj, including
 `(apply (fn [a & r] [a (take 3 r)]) 1 (range))` and the atom count
 that shows only one element of a hundred was realised.
 
+## BigInt is decimal text, and the hash bug it uncovered
+
+`clojure.lang.BigInt` is a type in the LANGUAGE -- ClojureScript has
+one, `1N` reads as one, and `+'` has nowhere to promote into without
+it -- so it is reproduced rather than approximated. `src/f/BigInt.f90`
+is the arithmetic: add, subtract, multiply, truncating divmod and
+compare, schoolbook, one decimal digit per array element, with its own
+unit test (`test/f/bigint_test.f90`, 20! and 25! both ways).
+
+The VALUE is that decimal text in the string pool under a new tag,
+`GCT_BIG`. That choice is in the module's header comment: base 10
+multiplication is O(n^2) where base 10^9 limbs would be ~81x cheaper,
+but a BigInt shows up where a long overflowed or a literal asked for
+one, and the text is what the reader hands in and what the printer
+wants back -- limbs would convert at both ends of every operation.
+Because it lives in the string pool, the collector marks it with the
+case that already existed for strings, and nothing else in the heap
+changed.
+
+A BigInt is never collapsed to a long, however small: `1N` is a BigInt
+in Clojure and stays one through `(+ 1N 1)`. Equality and hashing cross
+the two tags instead -- `(= 1N 1)` is true, and a map keyed by one
+finds the other. Contagion in the arithmetic is double > ratio >
+bigint > long, so `(+ 1N 1.5)` is a double and `(+ 1/2 1N)` is `3/2`.
+The promoting operators compute the whole expression in arbitrary
+precision and narrow the answer back to a long if it fits AND no
+operand was a BigInt, which is what makes `(+' 1 1)` a Long and
+`(+' Long/MAX_VALUE 1)` a BigInt.
+
+**The bug underneath.** `(hash 1N)` and `(hash 1)` disagreed although
+both ran the same formula, so a BigInt key was invisible in a hash map
+(an array map found it by equality, which is why small maps looked
+fine). The cause was not BigInt at all: `tag_salt` is
+`(tag + 1) * 0x9E3779B9`, which OVERFLOWS a 32-bit signed integer --
+undefined in Fortran -- and gfortran folded it at compile time for a
+constant tag and computed it at run time for a variable one, with
+different answers. Every mixing step in `GC.f90` now multiplies in 64
+bits and wraps explicitly (`wrap32`). The hashes changed value; they
+were never the JVM's (DEVIATIONS 15) and nothing reads them but the
+maps themselves.
+
 ## #:ns{...} and what the launcher binds
 
 The reader had no namespaced map literal. `#:a{:b 1 :c/d 2 :_/e 3}` is

@@ -122,7 +122,7 @@ T = test/f
 BT = $(B)/test
 
 unit-tests = gc_test persistent_vector_test persistent_list_test persistent_array_map_test \
-	persistent_hash_map_test env_test assoc_test printer_test reader_test eval_test
+	persistent_hash_map_test env_test assoc_test printer_test reader_test eval_test bigint_test
 test-bins = $(addprefix $(BT)/,$(unit-tests))
 
 .PHONY: all test crosscheck clean
@@ -149,16 +149,17 @@ $(FCSTAMP): | $(B)
 $(B)/%.o: $(S)/%.f90 | $(B) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -c $< -o $@
 
+$(B)/GC.o: $(B)/BigInt.o
 $(B)/PersistentVector.o $(B)/PersistentList.o $(B)/PersistentArrayMap.o $(B)/NativeArray.o: $(B)/GC.o
 $(B)/PersistentHashMap.o $(B)/Env.o: $(B)/GC.o $(B)/PersistentArrayMap.o
 $(B)/Assoc.o: $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o
 $(B)/Namespace.o: $(B)/GC.o $(B)/Assoc.o
-$(B)/Printer.o: $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/NativeArray.o
+$(B)/Printer.o: $(B)/BigInt.o $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/NativeArray.o
 # LispReader depends on Regex: #"..." compiles a pattern at READ time,
 # matching real Clojure's own regex literal (LispReader compiles
 # straight to a Pattern, not to a string). See Regex.f90.
-$(B)/LispReader.o: $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/Regex.o
-$(B)/Eval.o: $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/Env.o \
+$(B)/LispReader.o: $(B)/BigInt.o $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/Regex.o
+$(B)/Eval.o: $(B)/BigInt.o $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/Env.o \
 	$(B)/Namespace.o $(B)/Printer.o $(B)/Regex.o $(B)/NativeArray.o $(B)/DynLoad.o $(S)/analyze.inc $(S)/exec.inc $(S)/repl.inc $(S)/tasks.inc $(S)/sorted.inc $(S)/hosttable.inc
 
 # The reference BLAS (src/f/blas/PROVENANCE.md), F77 fixed form, as a
@@ -184,7 +185,7 @@ packages/chemsol/libchemsol.$(SOEXT): $(S)/chemsol/push_array.f90 $(S)/chemsol/c
 	$(FC) $(filter-out -frecursive -J$(B),$(FCFLAGS)) -J$(PKGMOD) -shared -fPIC -o $@ $^
 packages: packages/chemsol/libchemsol.$(SOEXT) packages/blas/libblas.$(SOEXT)
 
-data-objects = $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(B)/Assoc.o \
+data-objects = $(B)/BigInt.o $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(B)/Assoc.o \
 	$(B)/PersistentList.o $(B)/PersistentVector.o $(B)/NativeArray.o $(B)/Printer.o
 reader-objects = $(B)/LispReader.o $(B)/Regex.o $(B)/regex_shim.o
 eval-objects = $(data-objects) $(B)/Env.o $(B)/Namespace.o $(reader-objects) $(B)/DynLoad.o $(B)/Eval.o
@@ -196,20 +197,22 @@ clotran-bin: $(eval-objects) $(S)/main.f90 $(ICU_LIBS)
 
 # Test binaries: each links exactly the modules it exercises, so a
 # module's test cannot pass by accident through something above it.
-$(BT)/gc_test: $(B)/GC.o $(T)/gc_test.f90 | $(BT) $(FCSTAMP)
-	$(FC) $(FCFLAGS) -c $(T)/gc_test.f90 -o $(BT)/gc_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/GC.o $(BT)/gc_test.o
-$(BT)/persistent_vector_test: $(B)/GC.o $(B)/PersistentVector.o $(T)/persistent_vector_test.f90 | $(BT) $(FCSTAMP)
-	$(FC) $(FCFLAGS) -c $(T)/persistent_vector_test.f90 -o $(BT)/persistent_vector_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/GC.o $(B)/PersistentVector.o $(BT)/persistent_vector_test.o
-$(BT)/persistent_list_test: $(B)/GC.o $(B)/PersistentList.o $(T)/persistent_list_test.f90 | $(BT) $(FCSTAMP)
-	$(FC) $(FCFLAGS) -c $(T)/persistent_list_test.f90 -o $(BT)/persistent_list_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/GC.o $(B)/PersistentList.o $(BT)/persistent_list_test.o
-$(BT)/persistent_array_map_test: $(B)/GC.o $(B)/PersistentArrayMap.o $(T)/persistent_array_map_test.f90 | $(BT) $(FCSTAMP)
-	$(FC) $(FCFLAGS) -c $(T)/persistent_array_map_test.f90 -o $(BT)/persistent_array_map_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/GC.o $(B)/PersistentArrayMap.o $(BT)/persistent_array_map_test.o
-$(BT)/persistent_hash_map_test: $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(T)/persistent_hash_map_test.f90 | $(BT) $(FCSTAMP)
-	$(FC) $(FCFLAGS) -c $(T)/persistent_hash_map_test.f90 -o $(BT)/persistent_hash_map_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(BT)/persistent_hash_map_test.o
-$(BT)/env_test: $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/Env.o $(T)/env_test.f90 | $(BT) $(FCSTAMP)
-	$(FC) $(FCFLAGS) -c $(T)/env_test.f90 -o $(BT)/env_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/Env.o $(BT)/env_test.o
-$(BT)/assoc_test: $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(B)/Assoc.o $(T)/assoc_test.f90 | $(BT) $(FCSTAMP)
-	$(FC) $(FCFLAGS) -c $(T)/assoc_test.f90 -o $(BT)/assoc_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(B)/Assoc.o $(BT)/assoc_test.o
+$(BT)/bigint_test: $(B)/BigInt.o $(T)/bigint_test.f90 | $(BT) $(FCSTAMP)
+	$(FC) $(FCFLAGS) -c $(T)/bigint_test.f90 -o $(BT)/bigint_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/BigInt.o $(BT)/bigint_test.o
+$(BT)/gc_test: $(B)/BigInt.o $(B)/GC.o $(T)/gc_test.f90 | $(BT) $(FCSTAMP)
+	$(FC) $(FCFLAGS) -c $(T)/gc_test.f90 -o $(BT)/gc_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/BigInt.o $(B)/GC.o $(BT)/gc_test.o
+$(BT)/persistent_vector_test: $(B)/BigInt.o $(B)/GC.o $(B)/PersistentVector.o $(T)/persistent_vector_test.f90 | $(BT) $(FCSTAMP)
+	$(FC) $(FCFLAGS) -c $(T)/persistent_vector_test.f90 -o $(BT)/persistent_vector_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/BigInt.o $(B)/GC.o $(B)/PersistentVector.o $(BT)/persistent_vector_test.o
+$(BT)/persistent_list_test: $(B)/BigInt.o $(B)/GC.o $(B)/PersistentList.o $(T)/persistent_list_test.f90 | $(BT) $(FCSTAMP)
+	$(FC) $(FCFLAGS) -c $(T)/persistent_list_test.f90 -o $(BT)/persistent_list_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/BigInt.o $(B)/GC.o $(B)/PersistentList.o $(BT)/persistent_list_test.o
+$(BT)/persistent_array_map_test: $(B)/BigInt.o $(B)/GC.o $(B)/PersistentArrayMap.o $(T)/persistent_array_map_test.f90 | $(BT) $(FCSTAMP)
+	$(FC) $(FCFLAGS) -c $(T)/persistent_array_map_test.f90 -o $(BT)/persistent_array_map_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/BigInt.o $(B)/GC.o $(B)/PersistentArrayMap.o $(BT)/persistent_array_map_test.o
+$(BT)/persistent_hash_map_test: $(B)/BigInt.o $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(T)/persistent_hash_map_test.f90 | $(BT) $(FCSTAMP)
+	$(FC) $(FCFLAGS) -c $(T)/persistent_hash_map_test.f90 -o $(BT)/persistent_hash_map_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/BigInt.o $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(BT)/persistent_hash_map_test.o
+$(BT)/env_test: $(B)/BigInt.o $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/Env.o $(T)/env_test.f90 | $(BT) $(FCSTAMP)
+	$(FC) $(FCFLAGS) -c $(T)/env_test.f90 -o $(BT)/env_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/BigInt.o $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/Env.o $(BT)/env_test.o
+$(BT)/assoc_test: $(B)/BigInt.o $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(B)/Assoc.o $(T)/assoc_test.f90 | $(BT) $(FCSTAMP)
+	$(FC) $(FCFLAGS) -c $(T)/assoc_test.f90 -o $(BT)/assoc_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/BigInt.o $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(B)/Assoc.o $(BT)/assoc_test.o
 $(BT)/printer_test: $(data-objects) $(T)/printer_test.f90 | $(BT) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -c $(T)/printer_test.f90 -o $(BT)/printer_test.o && $(FC) $(LDFLAGS) -o $@ $(data-objects) $(BT)/printer_test.o
 $(BT)/reader_test: $(data-objects) $(reader-objects) $(T)/reader_test.f90 $(ICU_LIBS) | $(BT) $(FCSTAMP)

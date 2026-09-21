@@ -103,6 +103,10 @@ contains
        else
           s = u8_enc(int(v%ival, kind=4))
        end if
+    case (GCT_BIG)
+       ! 1N readably, 1 as text: (pr-str 1N) is "1N" and (str 1N) is "1".
+       s = gc_big_text(v)
+       if (readable) s = s // "N"
     case (GCT_STR)
        if (readable) then
           s = quoted(gc_ref_text(v%ref))

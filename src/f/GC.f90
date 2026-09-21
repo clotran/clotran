@@ -66,6 +66,7 @@
 ! `gc_value` deliberately has no allocatable components and no FINAL,
 ! which is the entire point: copying one is a flat move.
 module GC
+  use BigInt
   implicit none
   private
 
@@ -113,6 +114,18 @@ module GC
   ! (= 2/1 2) is true only because 2/1 never exists. Nothing else
   ! should construct one.
   integer, parameter, public :: GCT_RATIO = 10
+
+  ! An arbitrary-precision integer: clojure.lang.BigInt, which `1N`
+  ! reads as and `+'` promotes into. The VALUE is its decimal text,
+  ! canonical (BigInt.f90), in the string pool -- ref is the pool
+  ! index, exactly as for a string, so the collector marks it with the
+  ! same case and nothing else here changes.
+  !
+  ! A BigInt is never collapsed to an integer, however small: `1N` is
+  ! a BigInt in Clojure and stays one through (+ 1N 1). Equality and
+  ! hashing cross the two tags instead -- (= 1N 1) is true and the
+  ! hashes match, so a map keyed by one finds the other.
+  integer, parameter, public :: GCT_BIG = 11
 
   ! A run of values. Internal -- reached from objects, not normally
   ! held by user code directly.
@@ -529,6 +542,7 @@ module GC
      module procedure gc_int4, gc_int8
   end interface gc_int
   public :: gc_ratio, gc_numerator, gc_denominator, gc_gcd
+  public :: gc_big, gc_big_text, gc_is_big
   public :: gc_set_coll_ops
   ! The hash mixer, so the collection walkers installed through
   ! gc_set_coll_ops finish with the same one every other hash uses.
@@ -761,6 +775,28 @@ contains
   ! DENOMINATOR lives in `ref`, which is 32-bit, so a denominator
   ! past 2^31 wraps -- the same overflow every other integer
   ! operation has, reached sooner. DEVIATIONS 26.
+  ! A BigInt from canonical decimal text. Nothing else builds one:
+  ! the text is normalized here so every later comparison is exact.
+  function gc_big(text, roots) result(v)
+    character(len=*), intent(in) :: text
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: v
+    v = new_text(big_norm(text), roots, GCT_BIG)
+  end function gc_big
+
+  pure function gc_is_big(v) result(yes)
+    type(gc_value), intent(in) :: v
+    logical :: yes
+    yes = (v%tag == GCT_BIG)
+  end function gc_is_big
+
+  function gc_big_text(v) result(s)
+    type(gc_value), intent(in) :: v
+    character(len=:), allocatable :: s
+    s = "0"
+    if (v%tag == GCT_BIG) s = gc_ref_text(v%ref)
+  end function gc_big_text
+
   function gc_ratio(num0, den0) result(v)
     integer(gc_ip), intent(in) :: num0, den0
     type(gc_value) :: v
@@ -1322,6 +1358,19 @@ contains
        b = gc_slot(b, 1)
     end do
     eq = .false.
+    ! An integer and a BigInt of the same value ARE equal: Clojure's
+    ! equiv puts Long and BigInt in one category, so (= 1N 1) is true
+    ! (and (= 1N 1.0) is not -- a double is its own category).
+    if (a%tag == GCT_BIG .neqv. b%tag == GCT_BIG) then
+       if (a%tag == GCT_BIG .and. b%tag == GCT_INT) then
+          eq = big_fits_i64(gc_ref_text(a%ref))
+          if (eq) eq = (big_to_i64(gc_ref_text(a%ref)) == b%ival)
+       else if (b%tag == GCT_BIG .and. a%tag == GCT_INT) then
+          eq = big_fits_i64(gc_ref_text(b%ref))
+          if (eq) eq = (big_to_i64(gc_ref_text(b%ref)) == a%ival)
+       end if
+       return
+    end if
     if (a%tag /= b%tag) return
     select case (a%tag)
     case (GCT_NIL)
@@ -1335,6 +1384,9 @@ contains
        ! cross-multiplying, and the default branch below would have
        ! compared the denominators alone.
        eq = (a%ival == b%ival .and. a%ref == b%ref)
+    case (GCT_BIG)
+       ! Canonical text, so this is exact.
+       eq = gc_ref_is(a%ref, gc_ref_text(b%ref))
     case (GCT_STR, GCT_SYM, GCT_KEY)
        ! Compared by CONTENT, not by pool slot: the same text
        ! allocated twice is two slots but one value.
@@ -1407,6 +1459,17 @@ contains
        bits8 = v%ival
        h = mix32(ieor(mix32(ieor(int(ieor(bits8, ishft(bits8, -32)), kind=4), &
             ishft(v%ref, 16))), tag_salt(v%tag)))
+    case (GCT_BIG)
+       ! HASHES AS THE INTEGER it equals when it is one, because equal
+       ! values must hash alike: {1N :a} and (get m 1) is the case.
+       ! Past the 64-bit range no integer can equal it, so the text's
+       ! own hash will do.
+       if (big_fits_i64(gc_ref_text(v%ref))) then
+          bits8 = big_to_i64(gc_ref_text(v%ref))
+          h = mix32(ieor(mix32(int(ieor(bits8, ishft(bits8, -32)), kind=4)), tag_salt(GCT_INT)))
+       else
+          h = mix32(ieor(mix32(fnv1a(gc_ref_text(v%ref))), tag_salt(v%tag)))
+       end if
     case (GCT_STR, GCT_SYM, GCT_KEY)
        h = mix32(ieor(mix32(fnv1a(gc_ref_text(v%ref))), tag_salt(v%tag)))
     case default
@@ -1424,20 +1487,35 @@ contains
   ! tags are 0..10; XORing one straight onto a value disturbs
   ! only its bottom four bits, which is not enough to separate
   ! two kinds holding the same bits.
+  ! A 32-bit multiply WRAPS here, and saying so is not pedantry: a
+  ! signed overflow is undefined in Fortran, and gfortran folded
+  ! (tag + 1) * C at compile time for a constant tag and computed it
+  ! at run time for a variable one -- with different results. The
+  ! symptom was (hash 1N) /= (hash 1) from two calls running the same
+  ! formula. Every mixing step below goes through here instead.
+  pure function wrap32(p) result(s)
+    integer(kind=8), intent(in) :: p
+    integer :: s
+    integer(kind=8) :: low
+    low = iand(p, 4294967295_8)
+    if (low >= 2147483648_8) low = low - 4294967296_8
+    s = int(low, kind=4)
+  end function wrap32
+
   pure function tag_salt(tag) result(s)
     integer, intent(in) :: tag
     integer :: s
-    s = (tag + 1) * (-1640531527)   ! the golden-ratio constant
+    s = wrap32(int(tag + 1, 8) * (-1640531527_8))   ! the golden-ratio constant
   end function tag_salt
 
-  function mix32(x) result(h)
+  pure function mix32(x) result(h)
     integer, intent(in) :: x
     integer :: h
     h = x
     h = ieor(h, ishft(h, -16))
-    h = h * (-2048144789) ! 0x85ebca6b as signed 32-bit
+    h = wrap32(int(h, 8) * (-2048144789_8)) ! 0x85ebca6b as signed 32-bit
     h = ieor(h, ishft(h, -13))
-    h = h * (-1028477387) ! 0xc2b2ae35 as signed 32-bit
+    h = wrap32(int(h, 8) * (-1028477387_8)) ! 0xc2b2ae35 as signed 32-bit
     h = ieor(h, ishft(h, -16))
   end function mix32
 
@@ -1633,7 +1711,7 @@ contains
     integer :: n
     if (v%ref == 0) return
     select case (v%tag)
-    case (GCT_OBJ, GCT_VEC, GCT_STR, GCT_SYM, GCT_KEY)
+    case (GCT_OBJ, GCT_VEC, GCT_STR, GCT_SYM, GCT_KEY, GCT_BIG)
        continue
     case default
        return ! an immediate holds nothing
@@ -1675,7 +1753,7 @@ contains
           do i = 1, n
              call push_mark(vec_store(vec_pool(v%ref)%off + i - 1))
           end do
-       case (GCT_STR, GCT_SYM, GCT_KEY)
+       case (GCT_STR, GCT_SYM, GCT_KEY, GCT_BIG)
           str_mark(v%ref) = .true. ! a leaf: holds no references
           gc_marked = gc_marked + 1
           str_marked = str_marked + 1

@@ -46,6 +46,7 @@ module Eval
   use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_copy_sign, &
        ieee_positive_inf, ieee_negative_inf, ieee_quiet_nan
   use GC
+  use BigInt
   use PersistentList
   use PersistentVector
   use Assoc
@@ -191,6 +192,11 @@ module Eval
   integer, parameter :: B_PREFERMETHOD = 331, B_PREFERTABLE = 332, B_DISPATCHFN = 333
   integer, parameter :: B_PKGLOAD = 334, B_PKGCALL = 335, B_PKGFN = 336, B_RANDOMUUID = 337
   integer, parameter :: B_GCTORTURE = 338
+  ! The PROMOTING operators: +' -' *' inc' dec' (Numbers.addP and
+  ! friends). Same arithmetic as + - * inc dec, but an overflow
+  ! promotes to a BigInt instead of throwing.
+  integer, parameter :: B_PADD = 339, B_PSUB = 340, B_PMUL = 341
+  integer, parameter :: B_PINC = 342, B_PDEC = 343, B_TOBIG = 344
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -604,6 +610,7 @@ contains
     ! A fresh heap means every array handle from a previous one is
     ! orphaned; this is the one place that always follows gc_init.
     call gcna_reset()
+    call seed_default_imports()
     call gcp_set_forcer(gce_force)
     call gca_set_comparer(compare_via)
     call gcr_set_ns_resolver(kw_ns_of)
@@ -2253,7 +2260,11 @@ contains
     base = vs_enter(5)
     call vs_set(base + 1, argv)
 
-    if (cname == "clojure.lang.MapEntry") then
+    if (cname == "BigInteger" .or. cname == "java.math.BigInteger") then
+       ! (BigInteger. "12"), which core.clj's bigint falls back to for
+       ! a string. There is one big integer type here, not two.
+       out = call_builtin(B_TOBIG, vs_get(base + 1))
+    else if (cname == "clojure.lang.MapEntry") then
        ! (MapEntry. k v): a map entry is a two-vector marked as one
        ! (DEVIATIONS 39); clojure.spec.alpha's tagged-ret builds them
        call vs_set(base + 3, gcv_empty([vs_get(base + 1)]))
@@ -2629,6 +2640,17 @@ contains
   ! One list for the whole process, not one per namespace, the same
   ! choice DEVIATIONS 17 makes for deftype names. java.lang needs no
   ! entry: it is implicitly imported, as on the JVM.
+  ! RT.DEFAULT_IMPORTS names java.math.BigDecimal and
+  ! java.math.BigInteger in every namespace, which is why core.clj
+  ! writes (. BigDecimal valueOf x) with no import of its own. Seeded
+  ! here rather than left to canon_class, which would answer
+  ! java.lang.BigDecimal and find no row.
+  subroutine seed_default_imports()
+    if (n_imports > 0) return
+    call record_import("java.math.BigDecimal")
+    call record_import("java.math.BigInteger")
+  end subroutine seed_default_imports
+
   subroutine record_import(full)
     character(len=*), intent(in) :: full
     character(len=64), allocatable :: nf(:), ns(:)
@@ -5330,7 +5352,7 @@ contains
     integer :: base, i, n
     ! 64-bit, or every sum would truncate on the way out of %ival.
     integer(gc_ip) :: acc
-    logical :: hit, checked
+    logical :: hit, checked, promote
     integer :: op
 
     out = gc_nil()
@@ -5347,14 +5369,19 @@ contains
     call vs_set(base + 1, args)
 
     select case (id)
-    case (B_ADD, B_SUB, B_MUL, B_UADD, B_USUB, B_UMUL)
+    case (B_ADD, B_SUB, B_MUL, B_UADD, B_USUB, B_UMUL, B_PADD, B_PSUB, B_PMUL)
        ! Long arithmetic THROWS on overflow, as Numbers.add and friends
        ! do; the unchecked- variants wrap, as theirs do.
        checked = (id == B_ADD .or. id == B_SUB .or. id == B_MUL)
+       ! +' -' *' promote instead: the whole expression is computed in
+       ! arbitrary precision and narrowed back to a long at the end if
+       ! it fits and no operand was a BigInt to begin with, which is
+       ! what makes (+' 1 1) a Long and (+' Long/MAX_VALUE 1) a BigInt.
+       promote = (id == B_PADD .or. id == B_PSUB .or. id == B_PMUL)
        op = id
-       if (id == B_UADD) op = B_ADD
-       if (id == B_USUB) op = B_SUB
-       if (id == B_UMUL) op = B_MUL
+       if (id == B_UADD .or. id == B_PADD) op = B_ADD
+       if (id == B_USUB .or. id == B_PSUB) op = B_SUB
+       if (id == B_UMUL .or. id == B_PMUL) op = B_MUL
        if (.not. numbers_ok(args, n, [vs_get(base + 1)])) then
           call vs_leave(base)
           return
@@ -5379,15 +5406,18 @@ contains
           end if
        else
           block
-            logical :: any_real, any_ratio
+            logical :: any_real, any_ratio, any_big
             real(gc_dp) :: racc
             integer(gc_ip) :: qn, qd, bn, bd, g
+            character(len=:), allocatable :: bacc
             any_real = .false.
             any_ratio = .false.
+            any_big = .false.
             do i = 0, n - 1
                b = strip_meta(gcv_nth(args, i))
                if (b%tag == GCT_REAL) any_real = .true.
                if (b%tag == GCT_RATIO) any_ratio = .true.
+               if (b%tag == GCT_BIG) any_big = .true.
             end do
             a = gcv_nth(args, 0)
             if (any_ratio .and. .not. any_real) then
@@ -5401,12 +5431,26 @@ contains
                ! overflowing a 32-bit integer sooner than it must:
                ! summing halves would otherwise square the
                ! denominator on each term.
-               b = strip_meta(a)
+               ! A BigInt here is exact only while it fits in 64
+               ! bits: a Ratio's parts are integers (DEVIATIONS 26).
+               b = rat_operand(strip_meta(a), hit)
+               if (.not. hit) then
+                  call raise_class("ArithmeticException", &
+                       "a Ratio of BigInts is not supported (DEVIATIONS 26)", [vs_get(base + 1)])
+                  call vs_leave(base)
+                  return
+               end if
                qn = gc_numerator(b)
                qd = gc_denominator(b)
                if (n == 1 .and. op == B_SUB) qn = -qn
                do i = 1, n - 1
-                  b = strip_meta(gcv_nth(args, i))
+                  b = rat_operand(strip_meta(gcv_nth(args, i)), hit)
+                  if (.not. hit) then
+                     call raise_class("ArithmeticException", &
+                          "a Ratio of BigInts is not supported (DEVIATIONS 26)", [vs_get(base + 1)])
+                     call vs_leave(base)
+                     return
+                  end if
                   bn = gc_numerator(b)
                   bd = gc_denominator(b)
                   select case (op)
@@ -5425,6 +5469,9 @@ contains
                   qd = qd / g
                end do
                out = gc_ratio(qn, qd)
+               ! (* 2N 1/2) is 1N, not 1: a BigInt anywhere keeps the
+               ! answer a BigInt when it comes out integral.
+               if (any_big .and. out%tag == GCT_INT) out = gc_big(big_from_i64(out%ival), [vs_get(base + 1)])
             else if (any_real) then
                racc = num_dbl(a)
                if (n == 1 .and. op == B_SUB) racc = -racc
@@ -5437,6 +5484,25 @@ contains
                   end select
                end do
                out = gc_real(racc)
+            else if (any_big .or. promote) then
+               ! Exact, in decimal text (BigInt.f90). A BigInt anywhere
+               ! makes the answer a BigInt -- (+ 1N 1) is 2N -- and a
+               ! promoting operator narrows back to a long below.
+               bacc = big_of(strip_meta(a))
+               if (n == 1 .and. op == B_SUB) bacc = big_neg(bacc)
+               do i = 1, n - 1
+                  b = strip_meta(gcv_nth(args, i))
+                  select case (op)
+                  case (B_ADD); bacc = big_add(bacc, big_of(b))
+                  case (B_SUB); bacc = big_sub(bacc, big_of(b))
+                  case (B_MUL); bacc = big_mul(bacc, big_of(b))
+                  end select
+               end do
+               if (.not. any_big .and. big_fits_i64(bacc)) then
+                  out = gc_int(big_to_i64(bacc))
+               else
+                  out = gc_big(bacc, [vs_get(base + 1)])
+               end if
             else
                acc = a%ival
                if (n == 1 .and. op == B_SUB) then
@@ -5615,8 +5681,8 @@ contains
          type(gc_value) :: coll, idx, walk
          integer :: want, k
          coll = gcv_nth(vs_get(base + 1), 0)
-         idx = gcv_nth(vs_get(base + 1), 1)
-         want = idx%ival
+         idx = as_int(gcv_nth(vs_get(base + 1), 1))
+         want = int(idx%ival)
          out = gc_nil()
          if (gc_kind(coll) == OBJ_CHUNK) then
             out = chunk_nth(coll, want)
@@ -5913,6 +5979,26 @@ contains
        end if
        ! unlike `/`, where (/ 1.0 0) is ##Inf.
        a = strip_meta(gcv_nth(args, 0)); b = strip_meta(gcv_nth(args, 1))
+       ! Exact, truncating toward zero, with the remainder taking the
+       ! dividend's sign -- BigInteger.divide and .remainder.
+       if ((a%tag == GCT_BIG .or. b%tag == GCT_BIG) .and. &
+            (a%tag == GCT_BIG .or. a%tag == GCT_INT) .and. (b%tag == GCT_BIG .or. b%tag == GCT_INT)) then
+          block
+            character(len=:), allocatable :: bq, br
+            if (big_of(b) == "0") then
+               call raise_class("ArithmeticException", "Divide by zero", [vs_get(base + 1)])
+            else
+               call big_divmod(big_of(a), big_of(b), bq, br)
+               if (id == B_QUOT) then
+                  out = gc_big(bq, [vs_get(base + 1)])
+               else
+                  out = gc_big(br, [vs_get(base + 1)])
+               end if
+            end if
+          end block
+          call vs_leave(base)
+          return
+       end if
        if (is_ratio(a) .or. is_ratio(b)) then
           ! Exact, and the integer arm below would have read a ratio
           ! as its numerator: (quot 7/2 1) would answer 7, not 3.
@@ -6058,11 +6144,11 @@ contains
             return
          end if
          t = gc_ref_text(a%ref)
-         b = gcv_nth(args, 1)
+         b = as_int(gcv_nth(args, 1))
          lo = int(b%ival)
          hi = u8_count(t)
          if (n >= 3) then
-            b = gcv_nth(args, 2)
+            b = as_int(gcv_nth(args, 2))
             hi = int(b%ival)
          end if
          if (lo < 0 .or. hi > u8_count(t) .or. lo > hi) then
@@ -6108,7 +6194,17 @@ contains
          out = gc_obj(OBJ_SET, [vs_get(base + 3)], [vs_get(base + 3)])
        end block
     case (B_BITAND, B_BITOR, B_BITXOR, B_SHL, B_SHR)
-       a = gcv_nth(args, 0); b = gcv_nth(args, 1)
+       ! A bit operation is defined on FIXED-WIDTH integers only, and
+       ! Clojure says so rather than guessing: "bit operation not
+       ! supported for: class clojure.lang.BigInt". Without the check
+       ! a BigInt read as its (empty) integer field and answered 0.
+       a = strip_meta(gcv_nth(args, 0)); b = strip_meta(gcv_nth(args, 1))
+       if (a%tag /= GCT_INT .or. (n >= 2 .and. b%tag /= GCT_INT)) then
+          call raise_class("IllegalArgumentException", "bit operation not supported for: " // &
+               class_name_of(merge(b, a, a%tag == GCT_INT)), [vs_get(base + 1)])
+          call vs_leave(base)
+          return
+       end if
        select case (id)
        case (B_BITAND); out = gc_int(iand(a%ival, b%ival))
        case (B_BITOR);  out = gc_int(ior(a%ival, b%ival))
@@ -6121,7 +6217,25 @@ contains
        out = gc_int(not(a%ival))
     case (B_LONGCAST)
        a = strip_meta(gcv_nth(args, 0))
-       if (a%tag == GCT_REAL) then
+       if (a%tag == GCT_BIG) then
+          ! TRUNCATING, which is uncheckedLongCast's rule and not
+          ! longCast's -- the two share this row (DEVIATIONS 26). It is
+          ! what (even? n) needs on a number past the 64-bit range,
+          ! since core.clj asks for the low bit through a long.
+          block
+            character(len=:), allocatable :: bq, br
+            integer(gc_ip) :: lv
+            if (big_fits_i64(gc_big_text(a))) then
+               out = gc_int(big_to_i64(gc_big_text(a)))
+            else
+               call big_divmod(gc_big_text(a), "18446744073709551616", bq, br)
+               if (big_cmp(br, "9223372036854775807") > 0) br = big_sub(br, "18446744073709551616")
+               if (big_cmp(br, "-9223372036854775808") < 0) br = big_add(br, "18446744073709551616")
+               lv = big_to_i64(br)
+               out = gc_int(lv)
+            end if
+          end block
+       else if (a%tag == GCT_REAL) then
           out = gc_int(int(a%rval))
        else if (is_ratio(a)) then
           ! (int 1/2) is 0 -- truncation toward zero, the same as for
@@ -6189,6 +6303,8 @@ contains
             out = gc_real(abs(x%rval))
          else if (is_ratio(x)) then
             out = gc_ratio(abs(gc_numerator(x)), gc_denominator(x))
+         else if (x%tag == GCT_BIG) then
+            out = gc_big(big_abs(gc_big_text(x)), [vs_get(base + 1)])
          else
             out = gc_int(abs(x%ival))
          end if
@@ -6760,11 +6876,11 @@ case (B_SLURP)
          type(gc_value) :: iv
          integer :: lo, hi
          t = text_of(gcv_nth(args, 0))
-         iv = gcv_nth(args, 1)
+         iv = as_int(gcv_nth(args, 1))
          lo = int(iv%ival)
          hi = u8_count(t)
          if (n >= 3) then
-            iv = gcv_nth(args, 2)
+            iv = as_int(gcv_nth(args, 2))
             hi = int(iv%ival)
          end if
          if (lo < 0 .or. hi > u8_count(t) .or. lo > hi) then
@@ -6977,6 +7093,33 @@ case (B_SLURP)
             end if
             out = gc_bool(r == 1)
          end if
+       end block
+    case (B_TOBIG)
+       ! (bigint x) and (biginteger x), and the .toBigInteger /
+       ! .bigIntegerValue members core.clj reaches them through. A
+       ! double and a ratio TRUNCATE toward zero, as BigDecimal's and
+       ! Ratio's own conversions do.
+       block
+         type(gc_value) :: bv
+         bv = strip_meta(gcv_nth(args, 0))
+         select case (bv%tag)
+         case (GCT_BIG)
+            out = bv
+         case (GCT_INT, GCT_CHAR)
+            out = gc_big(big_from_i64(bv%ival), [vs_get(base + 1)])
+         case (GCT_RATIO)
+            out = gc_big(big_from_i64(gc_numerator(bv) / gc_denominator(bv)), [vs_get(base + 1)])
+         case (GCT_REAL)
+            out = gc_big(big_from_i64(int(aint(bv%rval), gc_ip)), [vs_get(base + 1)])
+         case (GCT_STR)
+            if (big_valid(text_of(bv))) then
+               out = gc_big(text_of(bv), [vs_get(base + 1)])
+            else
+               call raise_class("NumberFormatException", "For input string: " // text_of(bv), [vs_get(base + 1)])
+            end if
+         case default
+            call raise_class("IllegalArgumentException", "cannot convert to a BigInt", [vs_get(base + 1)])
+         end select
        end block
     case (B_GCTORTURE)
        ! (clotran-gc-torture true) -- collect at EVERY allocation from
@@ -7406,7 +7549,7 @@ case (B_SLURP)
           block
             type(gc_value) :: acc, iv
             integer :: j, cnt
-            iv = gcv_nth(args, 0)
+            iv = as_int(gcv_nth(args, 0))
             cnt = int(iv%ival)
             acc = gcl_empty([vs_get(base + 1)])
             call vs_set(base + 2, acc)
@@ -7429,12 +7572,12 @@ case (B_SLURP)
          type(gc_value) :: lo, hi, stp
          lo = gc_int(0)
          stp = gc_int(1)
-         hi = strip_meta(gcv_nth(args, 0))
+         hi = as_int(gcv_nth(args, 0))
          if (n >= 2) then
             lo = hi
-            hi = strip_meta(gcv_nth(args, 1))
+            hi = as_int(gcv_nth(args, 1))
          end if
-         if (n >= 3) stp = strip_meta(gcv_nth(args, 2))
+         if (n >= 3) stp = as_int(gcv_nth(args, 2))
          if (.not. (is_number(lo) .and. is_number(hi) .and. is_number(stp))) then
                  call fail("range: not a number")
          else
@@ -8775,6 +8918,31 @@ case (B_SLURP)
        ! double, and otherwise the result stays exact. Dividing by a
        ! ratio multiplies by its reciprocal.
        a = strip_meta(gcv_nth(args, 0)); b = strip_meta(gcv_nth(args, 1))
+       ! Two integrals, one of them a BigInt: exact. It divides evenly
+       ! or it is a Ratio -- (/ 4N 2) is 2N and (/ 10N 4) is 5/2 --
+       ! and a Ratio's parts are 64-bit, so a remainder past that
+       ! range has nowhere to go (DEVIATIONS 26).
+       if ((a%tag == GCT_BIG .or. b%tag == GCT_BIG) .and. &
+            (a%tag == GCT_BIG .or. a%tag == GCT_INT) .and. (b%tag == GCT_BIG .or. b%tag == GCT_INT)) then
+          block
+            character(len=:), allocatable :: bq, br
+            if (big_of(b) == "0") then
+               call raise_class("ArithmeticException", "Divide by zero", [vs_get(base + 1)])
+            else
+               call big_divmod(big_of(a), big_of(b), bq, br)
+               if (br == "0") then
+                  out = gc_big(bq, [vs_get(base + 1)])
+               else if (big_fits_i64(big_of(a)) .and. big_fits_i64(big_of(b))) then
+                  out = gc_ratio(big_to_i64(big_of(a)), big_to_i64(big_of(b)))
+               else
+                  call raise_class("ArithmeticException", &
+                       "a Ratio of BigInts is not supported (DEVIATIONS 26)", [vs_get(base + 1)])
+               end if
+            end if
+          end block
+          call vs_leave(base)
+          return
+       end if
        if (is_ratio(a) .or. is_ratio(b)) then
           ! Exact, and the integer arm below would have read a ratio
           ! as its numerator: (quot 7/2 1) would answer 7, not 3.
@@ -8806,12 +8974,31 @@ case (B_SLURP)
           out = gc_ratio(gc_numerator(a) * gc_denominator(b), &
                          gc_denominator(a) * gc_numerator(b))
        end if
-    case (B_INC, B_DEC, B_UINC, B_UDEC)
+    case (B_INC, B_DEC, B_UINC, B_UDEC, B_PINC, B_PDEC)
        checked = (id == B_INC .or. id == B_DEC)
        op = id
-       if (id == B_UINC) op = B_INC
-       if (id == B_UDEC) op = B_DEC
+       if (id == B_UINC .or. id == B_PINC) op = B_INC
+       if (id == B_UDEC .or. id == B_PDEC) op = B_DEC
        a = strip_meta(gcv_nth(args, 0))
+       ! A BigInt counts exactly, and inc'/dec' promote rather than
+       ! throw at the edge of the 64-bit range.
+       if (a%tag == GCT_BIG .or. ((id == B_PINC .or. id == B_PDEC) .and. a%tag == GCT_INT)) then
+          block
+            character(len=:), allocatable :: bt
+            if (op == B_INC) then
+               bt = big_add(big_of(a), "1")
+            else
+               bt = big_sub(big_of(a), "1")
+            end if
+            if (a%tag /= GCT_BIG .and. big_fits_i64(bt)) then
+               out = gc_int(big_to_i64(bt))
+            else
+               out = gc_big(bt, [vs_get(base + 1)])
+            end if
+          end block
+          call vs_leave(base)
+          return
+       end if
        if (.not. numbers_ok(args, 1, [vs_get(base + 1)])) then
           call vs_leave(base)
           return
@@ -10210,6 +10397,7 @@ case (B_SLURP)
     case (GCT_REAL); s = "double"
     case (GCT_RATIO); s = "ratio"
     case (GCT_CHAR); s = "char"
+    case (GCT_BIG);  s = "bigint"
     case (GCT_STR);  s = "string"
     case (GCT_SYM);  s = "symbol"
     case (GCT_KEY);  s = "keyword"
@@ -10738,6 +10926,15 @@ case (B_SLURP)
        end if
     case (GCT_INT)
        h = fold_long(v%ival)
+    case (GCT_BIG)
+       ! BigInt.hashCode is Long.hashCode while the value fits in a
+       ! long, which is what keeps (hash 1N) and (hash 1) equal -- and
+       ! they must be, because (= 1N 1).
+       if (big_fits_i64(gc_big_text(v))) then
+          h = fold_long(big_to_i64(gc_big_text(v)))
+       else
+          h = gc_hash(v)
+       end if
     case (GCT_REAL)
        iv = transfer(v%rval, iv)
        h = fold_long(iv)
@@ -11438,11 +11635,14 @@ case (B_SLURP)
     case ("Character", "java.lang.Character"); yes = (t == "char")
     case ("Boolean", "java.lang.Boolean"); yes = (t == "boolean")
     case ("Long", "java.lang.Long", "Integer", "java.lang.Integer"); yes = (t == "int")
+    ! int? is Long/Integer/Short/Byte and answers FALSE for a BigInt;
+    ! integer? asks for this one as well, so (integer? 1N) is true.
+    case ("clojure.lang.BigInt", "BigInt", "BigInteger", "java.math.BigInteger"); yes = (t == "bigint")
     case ("Double", "java.lang.Double", "Float"); yes = (t == "double")
     case ("Ratio", "clojure.lang.Ratio"); yes = (t == "ratio")
     case ("Number", "java.lang.Number")
        ! A Ratio is a Number on the JVM too, so (number? 1/2) is true.
-       yes = (t == "int" .or. t == "double" .or. t == "ratio")
+       yes = (t == "int" .or. t == "double" .or. t == "ratio" .or. t == "bigint")
     end select
   end function is_instance
 
@@ -11505,20 +11705,67 @@ case (B_SLURP)
   ! Numeric comparison across int and double. Comparing %ival alone
   ! made (< 1.5 2.0) read two garbage integers; one place to decide it
   ! means < > <= >= and compare cannot disagree.
+  ! Every ordering in the language funnels through here: <, >, <=, >=,
+  ! min, max, zero?, pos?, neg? and compare. Two integral values are
+  ! compared EXACTLY -- through the text when either is a BigInt --
+  ! because a double cannot tell 2^63 from 2^63 + 1.
   logical function num_lt(a, b)
     type(gc_value), intent(in) :: a, b
     if (a%tag == GCT_INT .and. b%tag == GCT_INT) then
        num_lt = (a%ival < b%ival)
+    else if ((a%tag == GCT_INT .or. a%tag == GCT_BIG) .and. &
+             (b%tag == GCT_INT .or. b%tag == GCT_BIG)) then
+       num_lt = (big_cmp(big_of(a), big_of(b)) < 0)
     else
        num_lt = (num_dbl(a) < num_dbl(b))
     end if
   end function num_lt
+
+  ! The decimal text of an INTEGRAL value -- an integer or a BigInt --
+  ! which is the form every big operation takes and returns.
+  ! A BigInt as a plain integer for rational arithmetic, while it
+  ! fits. ok is false when it does not, and the caller raises.
+  ! A value USED AS AN INTEGER -- an index, a count, a range bound.
+  ! A BigInt that fits becomes the long it equals, because everything
+  ! below reads %ival and a BigInt keeps 0 there: (nth v 1N) answered
+  ! element 0, silently. One past the range stays a BigInt and the
+  ! caller's own bounds check rejects it.
+  function as_int(v0) result(o)
+    type(gc_value), intent(in) :: v0
+    type(gc_value) :: o
+    o = strip_meta(v0)
+    if (o%tag /= GCT_BIG) return
+    if (big_fits_i64(gc_big_text(o))) o = gc_int(big_to_i64(gc_big_text(o)))
+  end function as_int
+
+  function rat_operand(v, ok) result(o)
+    type(gc_value), intent(in) :: v
+    logical, intent(out) :: ok
+    type(gc_value) :: o
+    ok = .true.
+    o = v
+    if (v%tag /= GCT_BIG) return
+    ok = big_fits_i64(gc_big_text(v))
+    if (ok) o = gc_int(big_to_i64(gc_big_text(v)))
+  end function rat_operand
+
+  function big_of(v) result(s)
+    type(gc_value), intent(in) :: v
+    character(len=:), allocatable :: s
+    if (v%tag == GCT_BIG) then
+       s = gc_big_text(v)
+    else
+       s = big_from_i64(v%ival)
+    end if
+  end function big_of
 
   function num_dbl(v) result(d)
     type(gc_value), intent(in) :: v
     real(gc_dp) :: d
     if (v%tag == GCT_REAL) then
        d = v%rval
+    else if (v%tag == GCT_BIG) then
+       d = big_to_dbl(gc_big_text(v))
     else if (v%tag == GCT_RATIO) then
        ! Every comparison goes through here, so without this a ratio
        ! would compare as its NUMERATOR: (< 1/3 1/2) would be 1 < 1.
@@ -11536,7 +11783,8 @@ case (B_SLURP)
   ! Whether a value is any of clotran's numbers.
   logical function is_number(v)
     type(gc_value), intent(in) :: v
-    is_number = (v%tag == GCT_INT .or. v%tag == GCT_REAL .or. v%tag == GCT_RATIO)
+    is_number = (v%tag == GCT_INT .or. v%tag == GCT_REAL .or. v%tag == GCT_RATIO &
+         .or. v%tag == GCT_BIG)
   end function is_number
 
   ! The host supertypes of a class, one per call. `supers` walks them
@@ -11679,6 +11927,7 @@ case (B_SLURP)
     case (GCT_REAL);  s = "Double"
     case (GCT_RATIO); s = "clojure.lang.Ratio"
     case (GCT_CHAR);  s = "Character"
+    case (GCT_BIG);   s = "clojure.lang.BigInt"
     case (GCT_STR);   s = "String"
     case (GCT_SYM);   s = "clojure.lang.Symbol"
     case (GCT_KEY);   s = "clojure.lang.Keyword"
@@ -11862,7 +12111,9 @@ case (B_SLURP)
     type(gc_value) :: out, coll, kk
     character(len=:), allocatable :: t
     coll = strip_meta(coll0)
-    kk = strip_meta(k)
+    ! as_int, not strip_meta: an index may be a BigInt, and every
+    ! branch below reads %ival (which a BigInt leaves at 0).
+    kk = as_int(k)
     if (gc_kind(coll) == OBJ_SET) then
        out = gca_get(gc_slot(coll, 1), k)
     else if (gcv_is(coll) .and. kk%tag == GCT_INT) then
@@ -11890,7 +12141,7 @@ case (B_SLURP)
     type(gc_value) :: coll, kk
     logical :: yes
     coll = strip_meta(coll0)
-    kk = strip_meta(k)
+    kk = as_int(k)
     if (gc_kind(coll) == OBJ_SET) then
        yes = gca_contains(gc_slot(coll, 1), k)
     else if (gcv_is(coll)) then

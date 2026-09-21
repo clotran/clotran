@@ -1382,18 +1382,17 @@
 (cond 0M :a true :b)
 
 ;; arithmetic
-(expect-diff "DEVIATIONS 30: 1N is a long and 1M a double")
+(expect-diff "DEVIATIONS 30: 1M is a double")
 [(+ 1N 1) (* 2M 3M)]
 
 ;; comparison
 [(= 1N 1N) (< 1N 2N) (zero? 0M)]
 
 ;; negatives
-(expect-diff "DEVIATIONS 30: 1N is a long and 1M a double")
+(expect-diff "DEVIATIONS 30: 1M is a double")
 [(- 0 2N) -3.5M]
 
 ;; read-string too
-(expect-diff "DEVIATIONS 30: 1N is a long and 1M a double")
 (read-string "1N")
 
 ;; not every N is a suffix
@@ -2220,3 +2219,23 @@
 (try (eval '(defn)) (catch Exception e (.getMessage (.getCause e))))
 (try (eval '(ns foo.bar (:require [clojure.string :as]))) (catch Exception e (.getMessage (.getCause e))))
 [(instance? clojure.lang.IObj (reify)) (meta (with-meta (reify) {:a 1})) (isa? (class (reify)) Object) (ifn? #{1}) (ifn? {}) (ifn? []) (ifn? :a) (ifn? 'a) (ifn? #'first) (ifn? 1) (fn? #{1}) (fn? first) (#(identity {:a % :b #{%}}) 1) (map-entry? (clojure.lang.MapEntry. 1 2)) (key (clojure.lang.MapEntry. 1 2)) (string? (str (java.util.UUID/randomUUID))) (= (java.util.UUID/randomUUID) (java.util.UUID/randomUUID))]
+
+;; BigInt: 1N is its own type, exact at any size, and `+'` promotes
+;; into it (DEVIATIONS 26, 30)
+[(pr-str 1N) (str 1N) (pr-str [1N]) (= 1N 1) (== 1N 1) (= 1N 1.0) (== 1N 1.0) (= (hash 1N) (hash 1)) (pr-str -42N) (pr-str 0N)]
+[(+ 1N 1) (- 1N 2N) (* 99999999999999999999N 99999999999999999999N) (+ 1N 1.5) (* 1N 0) (- 1N) (+ 1N 1N) (- 1N 1N)]
+[(< 1N 2) (> 2N 1) (zero? 0N) (pos? 1N) (neg? -1N) (max 1N 2) (min 1N 2) (compare 1N 2) (compare 2N 1) (compare 1N 1) (< 9223372036854775807N 9223372036854775808N)]
+[(integer? 1N) (int? 1N) (number? 1N) (rational? 1N) (decimal? 1N) (float? 1N) (ratio? 1N) (even? 2N) (odd? 3N) (even? 10000000000000000000N)]
+[(+' 1 1) (+' 9223372036854775807 1) (*' 4611686018427387904 4) (inc' 9223372036854775807) (dec' -9223372036854775808) (-' 1 2) (reduce *' 1 (range 1 26))]
+[(bigint 1) (bigint "12") (bigint 5/2) (bigint 1N) (bigint 12345678901234567890) (long 1N) (double 1N) (int 5N) (str 1N)]
+[(quot 10N 3) (rem 10N 3) (mod -7N 3) (quot -10N 3) (rem -10N 3) (quot 18446744073709551616N 4) (rem 18446744073709551616N 7)]
+[(/ 1N 3) (/ 4N 2) (/ 10N 4) (* 2N 1/2) (+ 1/2 1N) (- 1N 1/2) (try (/ 1N 0) (catch ArithmeticException e :divide-by-zero))]
+[(pr-str 12345678901234567890) (read-string "42N") (apply + [1N 2N]) (reduce + 0N [1N 2N]) (sort [2 1N 3N]) (vec (repeat 2 1N)) (pr-str {1N 2N})]
+(let [m (into {} (map vector (range 40) (range 40)))] [(get m 1N) (contains? #{1N} 1) (count (set [1 1N])) (= {1N :a} {1 :a})])
+(loop [i 0 acc 1N] (if (< i 25) (recur (inc i) (* acc (inc i))) acc))
+(expect-diff "DEVIATIONS 26: a Ratio's parts are 64-bit, so a BigInt remainder has nowhere to go")
+(try (/ 99999999999999999999N 7) (catch ArithmeticException e :no-big-ratio))
+(expect-diff "DEVIATIONS 30: one big integer type, so biginteger answers a BigInt and prints 1N")
+(pr-str (biginteger 1))
+[(nth [10 20 30] 1N) (get [10 20 30] 1N) (subs "abcd" 1N 3N) (take 2N [1 2 3 4]) (repeat 2N :x) (nthrest [1 2 3] 1N) (abs -123N) (abs 5N) (= (range 1N 4N) (range 1 4))]
+[(try (bit-and 3N 1) (catch IllegalArgumentException e :not-supported)) (try (bit-shift-left 1N 2) (catch IllegalArgumentException e :not-supported)) (bit-and 3 1)]
