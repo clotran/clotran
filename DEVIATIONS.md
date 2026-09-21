@@ -1193,3 +1193,27 @@ class; `map-entry?` is what it asks, and that is answered.
 **Removal**: `class_name_of` answering MapEntry for a marked vector, and
 `host_super` giving that name the vector chain plus `IMapEntry` and
 `Map$Entry`.
+
+## 40. `core_print.clj` and `data.clj` are clotran's own
+
+Two of the vendored files are Clojure written against `java.util`:
+`core_print.clj` dispatches `print-method` and `print-dup` on
+`java.util.Map`, `Collection`, `List`, `RandomAccess` and `Set` and
+prefers among them, and `data.clj` extends its two protocols to three of
+them. Running them verbatim meant modelling Java's interface inheritance
+in Fortran -- a `Class` that is a keyword, `isAssignableFrom`,
+`getInterfaces`, a table of what `java.util.List` extends -- for two
+files. ClojureScript's answer to both is a version of its own (its
+printing is on a protocol in core.cljs, and it ships `data.cljs`), and so
+is clotran's: `src/clj/clotran/core_print.cljf` and `data.cljf` are the
+same files with the JVM keys taken out, loaded in their place by
+`B_RTLOAD`. The vendored files stay in the tree, unmodified and unread,
+as `core_proxy.clj` does (deviation 12).
+
+What differs from the JVM: a value that is only a `java.util` collection
+has no print method here, and nothing in clotran makes one; `diff`
+partitions arrays as atoms. Everything that prints a Clojure value is
+Rich's, line for line.
+
+**Removal**: none sought. This is the premise applied, not bent: the
+language is reproduced, the JVM is an implementation detail.

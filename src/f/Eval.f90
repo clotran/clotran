@@ -7760,6 +7760,15 @@ contains
             call vs_leave(base)
             return
          end if
+         ! Two of Rich's files are Clojure written against java.util --
+         ! core_print.clj dispatches print-method on Map, Collection, List,
+         ! RandomAccess and Set, data.clj extends its protocols to three
+         ! of them -- and ClojureScript's answer to both is a version of
+         ! its own. So is clotran's: the same file with the JVM keys taken
+         ! out, loaded in its place. The vendored file stays, unread.
+         ! DEVIATIONS.md 40.
+         if (rel == "clojure/core_print") rel = "clotran/core_print"
+         if (rel == "clojure/data") rel = "clotran/data"
          fargs = gcv_empty([vs_get(base + 1)])
          fargs = gcv_conj(fargs, gc_str(classpath_find(rel), &
               [vs_get(base + 1)]), [vs_get(base + 1)])
@@ -10516,8 +10525,8 @@ contains
     end do
   end function iface_extends
 
-  ! The interfaces an interface DIRECTLY extends, as clojure.lang and
-  ! java.util declare them, space-delimited with a space at each end:
+  ! The interfaces an interface DIRECTLY extends, as clojure.lang
+  ! declares them, space-delimited with a space at each end:
   ! what .getInterfaces answers for one, so `bases` and `parents` see
   ! it and `supers` takes the closure. Direct, not transitive, because
   ! print-method prefers RandomAccess to java.util.List: a transitive
@@ -10529,7 +10538,7 @@ contains
     character(len=:), allocatable :: supers
     select case (iface)
     case ("clojure.lang.IPersistentMap")
-       supers = " java.lang.Iterable clojure.lang.Associative clojure.lang.Counted "
+       supers = " clojure.lang.Associative clojure.lang.Counted "
     case ("clojure.lang.IPersistentVector")
        supers = " clojure.lang.Associative clojure.lang.Sequential clojure.lang.IPersistentStack" // &
             " clojure.lang.Reversible clojure.lang.Indexed "
@@ -10547,10 +10556,6 @@ contains
        supers = " clojure.lang.Seqable "
     case ("clojure.lang.IObj")
        supers = " clojure.lang.IMeta "
-    case ("java.util.List", "java.util.Set")
-       supers = " java.util.Collection "
-    case ("java.util.Collection")
-       supers = " java.lang.Iterable "
     case default
        supers = ""
     end select
@@ -10988,38 +10993,36 @@ contains
       cnt = 0
       known = .true.
       select case (t)
+      ! The clojure.lang interfaces only: what cljs.core's types also
+      ! declare, under its own names. The java.util ones (List,
+      ! RandomAccess, Map, Set, Collection) were here for core_print.clj
+      ! and data.clj, which clotran no longer runs verbatim (B_RTLOAD).
       case ("clojure.lang.PersistentVector")
-         chain(1:6) = [character(len=36) :: "clojure.lang.IPersistentVector", &
-              "java.util.List", "java.util.RandomAccess", "clojure.lang.IKVReduce", &
-              "clojure.lang.IPersistentCollection", "java.util.Collection"]
-         cnt = 6
+         chain(1:3) = [character(len=36) :: "clojure.lang.IPersistentVector", &
+              "clojure.lang.IKVReduce", "clojure.lang.IPersistentCollection"]
+         cnt = 3
       case ("clojure.lang.PersistentArrayMap")
-         chain(1:4) = [character(len=36) :: "clojure.lang.IPersistentMap", "java.util.Map", &
-              "clojure.lang.IPersistentCollection", "java.util.Collection"]
-         cnt = 4
+         chain(1:2) = [character(len=36) :: "clojure.lang.IPersistentMap", "clojure.lang.IPersistentCollection"]
+         cnt = 2
       case ("clojure.lang.PersistentHashSet")
-         chain(1:4) = [character(len=36) :: "clojure.lang.IPersistentSet", "java.util.Set", &
-              "clojure.lang.IPersistentCollection", "java.util.Collection"]
-         cnt = 4
+         chain(1:2) = [character(len=36) :: "clojure.lang.IPersistentSet", "clojure.lang.IPersistentCollection"]
+         cnt = 2
       case ("clojure.lang.PersistentTreeMap")
-         chain(1:6) = [character(len=36) :: "clojure.lang.Sorted", "clojure.lang.Reversible", &
-              "clojure.lang.IPersistentMap", "java.util.Map", &
-              "clojure.lang.IPersistentCollection", "java.util.Collection"]
-         cnt = 6
+         chain(1:4) = [character(len=36) :: "clojure.lang.Sorted", "clojure.lang.Reversible", &
+              "clojure.lang.IPersistentMap", "clojure.lang.IPersistentCollection"]
+         cnt = 4
       case ("clojure.lang.PersistentTreeSet")
-         chain(1:6) = [character(len=36) :: "clojure.lang.Sorted", "clojure.lang.Reversible", &
-              "clojure.lang.IPersistentSet", "java.util.Set", &
-              "clojure.lang.IPersistentCollection", "java.util.Collection"]
-         cnt = 6
+         chain(1:4) = [character(len=36) :: "clojure.lang.Sorted", "clojure.lang.Reversible", &
+              "clojure.lang.IPersistentSet", "clojure.lang.IPersistentCollection"]
+         cnt = 4
       case ("clojure.lang.PersistentList")
-         chain(1:5) = [character(len=36) :: "clojure.lang.IPersistentList", "clojure.lang.ISeq", &
-              "java.util.List", "clojure.lang.IPersistentCollection", "java.util.Collection"]
-         cnt = 5
+         chain(1:3) = [character(len=36) :: "clojure.lang.IPersistentList", "clojure.lang.ISeq", &
+              "clojure.lang.IPersistentCollection"]
+         cnt = 3
       case ("clojure.lang.LazySeq", "clojure.lang.PersistentVector$ChunkedSeq", "clojure.lang.Cons", &
             "clojure.lang.LongRange", "clojure.lang.Range", "clojure.lang.ChunkedCons")
-         chain(1:4) = [character(len=36) :: "clojure.lang.ISeq", "java.util.List", &
-              "clojure.lang.IPersistentCollection", "java.util.Collection"]
-         cnt = 4
+         chain(1:2) = [character(len=36) :: "clojure.lang.ISeq", "clojure.lang.IPersistentCollection"]
+         cnt = 2
       case ("clojure.lang.Var", "clojure.lang.Atom", "clojure.lang.Delay")
          chain(1) = "clojure.lang.IDeref"
          cnt = 1

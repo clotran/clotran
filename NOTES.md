@@ -3454,3 +3454,30 @@ on `java.util.Map`, `Collection`, `List`, `RandomAccess` and `Set`, and
 ClojureScript's answer to those two files is its own versions. So is
 clotran's, and the Java interface model that ran them verbatim goes
 with the change.
+
+## core_print and data are clotran's own, as ClojureScript's are
+
+The second correction from the 21st. `core_print.clj` is Clojure written
+against `java.util`: `print-method` and `print-dup` keyed on `Map`,
+`Collection`, `List`, `RandomAccess` and `Set`, with preferences among
+them, and `data.clj` extends `EqualityPartition` and `Diff` to three of
+those. Running them verbatim is what put Java's interface inheritance
+into Fortran: a `Class` that is a keyword, `isAssignableFrom`,
+`getInterfaces`, a table of what `java.util.List` extends, and
+`java.util` entries in every supertype chain. Two files, one model.
+
+ClojureScript never ran them: its printing is on `IPrintWithWriter` in
+core.cljs and it ships `data.cljs`. So `src/clj/clotran/core_print.cljf`
+and `data.cljf` are Rich's files with the JVM keys taken out (a script
+did the taking, and the header of each says what went), and `B_RTLOAD`
+loads them when core.clj says `(load "core_print")` and when `require`
+asks for `clojure.data`. The vendored files stay in the tree, unread,
+as `core_proxy.clj` does; PROVENANCE.md says so.
+
+With that, the supertype chains are `clojure.lang` only -- what
+cljs.core's types also declare -- and the interface table is the
+`clojure.lang` graph. The `java.util.Map` and `Map$Entry` instance
+checks stay, because `reducers.clj` and `map-entry?` ask them; they are
+the seam, and they cost no model. What the JVM's class machinery still
+does here is `isa?` over `clojure.lang` interfaces for multimethods,
+which is the language's own type hierarchy and cljs has it too.

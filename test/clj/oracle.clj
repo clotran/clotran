@@ -2134,7 +2134,7 @@
 [(count (methods simple1)) (do (remove-all-methods simple1) (count (methods simple1))) (prefers simple1) (try (simple1 :a) (catch IllegalArgumentException e :no-method))]
 
 ;; the class keywords are classes to isa?, and an interface has parents
-[(class? (class {})) (class? :foo) (class? :user/rect) (isa? (class {}) clojure.lang.IPersistentMap) (isa? (class []) clojure.lang.IPersistentMap) (isa? (class "") Object) (contains? (supers clojure.lang.IPersistentVector) clojure.lang.IPersistentCollection) (contains? (supers java.util.List) java.util.Collection) (isa? clojure.lang.IPersistentMap clojure.lang.IPersistentCollection) (isa? clojure.lang.IPersistentVector clojure.lang.Sequential)]
+[(class? (class {})) (class? :foo) (class? :user/rect) (isa? (class {}) clojure.lang.IPersistentMap) (isa? (class []) clojure.lang.IPersistentMap) (isa? (class "") Object) (contains? (supers clojure.lang.IPersistentVector) clojure.lang.IPersistentCollection) (isa? clojure.lang.IPersistentMap clojure.lang.IPersistentCollection) (isa? clojure.lang.IPersistentVector clojure.lang.Sequential)]
 
 (binding [*print-dup* true] (pr-str [{:a 1} [1] '(1) #{1} "s" 1.5 \c :k 'sym nil true]))
 

@@ -71,3 +71,11 @@ starts lying about what is actually running.
 
 Note this makes `diff -r ~/jborden/clojure/src/clj/clojure src/clj/clojure`
 report it as an extra file. That is the only expected difference.
+
+## Vendored, unmodified, and not loaded
+
+`core_print.clj` and `data.clj` are here verbatim for the diff, but
+clotran loads `src/clj/clotran/core_print.cljf` and `data.cljf` in their
+place -- the same files with the `java.util` dispatch keys taken out
+(DEVIATIONS.md 40). ClojureScript ships its own versions of both for the
+same reason.
