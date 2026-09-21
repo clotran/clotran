@@ -417,11 +417,15 @@ arrays are written in place. `src/f/DynLoad.f90` is the loader and the
 calling convention; `B_PKGLOAD` and `B_PKGCALL` in Eval.f90 do the
 marshalling; `src/clj/clotran/package.cljf` makes the fns.
 
-**Building one.** `scripts/bind-fortran` reads the Fortran sources'
-signatures (explicit interfaces, `intent`, rank) and writes the shims,
-the manifest and a Makefile fragment that builds the library with
-`-shared -fPIC`; a hand-written binding (ChemSol's, with its unit-44
-and unit-43 handling) is a shim like any other. A package manager is
+**Building one.** `scripts/bind-fortran` (DONE) reads a free-form
+module's signatures -- type, `intent`, rank -- and writes the shims and
+the manifest; the Makefile builds the library with `-shared -fPIC`.
+test/f/samplelib.f90 is a library written with no thought of clotran,
+bound by the generator and called through the door in the language
+test. A hand-written binding (ChemSol's, with its unit-44 and unit-45
+handling; BLAS's F77) is a shim like any other. Not read yet:
+fixed-form F77, derived types, optional and pointer dummies -- listed
+in the output rather than guessed. A package manager is
 then a directory of such libraries and a `deps.edn`-shaped manifest
 naming them -- one with ChemSol and GAMESS, another with Qdyn -- and
 `clotran-bin` never changes. BLAS and ChemSol become the first two

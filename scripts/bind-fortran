@@ -1,0 +1,175 @@
+#!/usr/bin/env bb
+;; bind-fortran: the shims and manifest for a package, from a library's
+;; own signatures (PLAN.md step 9, src/f/DynLoad.f90).
+;;
+;;   scripts/bind-fortran --package NAME --out FILE.f90 SRC.f90 [SRC2.f90 ...]
+;;
+;; Reads free-form Fortran modules: every subroutine and function whose
+;; dummy arguments are declared with a type this door carries -- real(8)
+;; or double precision, integer or integer(4), integer(8), logical,
+;; character -- as scalars, explicit-shape, assumed-shape or assumed-size
+;; arrays. For each it writes a bind(C) shim taking argc C pointers (a
+;; scalar by pointer to its C type, an array by pointer then one int4 per
+;; extent, a string null-terminated) and unpacking them to the routine's
+;; positional arguments, plus one clotran_manifest function answering the
+;; EDN that names them all. An intent the source does not declare is
+;; taken as :inout, which is safe and costs a key in the answer map.
+;;
+;; What it does not bind, it lists in a comment at the top of the output
+;; rather than guessing: derived types, optional, pointer and allocatable
+;; dummies, procedure arguments, kinds it does not carry. Fixed-form F77
+;; is not read; packages/blas shows that shim written by hand.
+(require '[clojure.string :as str])
+
+(def kinds {"real8" "real(c_double)" "int4" "integer(c_int)" "int8" "integer(c_long)" "logical" "logical(c_bool)"})
+
+(defn strip [src]
+  ;; comments off, continuation lines joined, lower-cased except string contents are irrelevant here
+  (let [lines (map #(str/replace % #"!.*$" "") (str/split-lines src))
+        joined (loop [ls lines acc [] cur nil]
+                 (if (empty? ls)
+                   (if cur (conj acc cur) acc)
+                   (let [l (str/trimr (first ls))
+                         l (str/replace l #"^\s*&" "")]
+                     (if (str/ends-with? l "&")
+                       (recur (rest ls) acc (str (or cur "") (subs l 0 (dec (count l)))))
+                       (recur (rest ls) (conj acc (str (or cur "") l)) nil)))))]
+    (map #(str/lower-case (str/trim %)) joined)))
+
+(defn split-args [s] (when-not (str/blank? s) (map str/trim (str/split s #","))))
+
+;; "real(8), intent(in) :: a(n), b" -> [{:type "real8" :intent "in"} ["a(n)" "b"]]
+(defn parse-decl [l]
+  (when-let [[_ spec names] (re-matches #"^(.*?)\s*::\s*(.*)$" l)]
+    (let [spec (str/replace spec #"\s+" "")
+          type (cond (re-find #"^(real\(8\)|real\(kind=8\)|doubleprecision|real\(c_double\)|real\(dp\))" spec) "real8"
+                     (re-find #"^(integer\(8\)|integer\(kind=8\)|integer\(c_long\))" spec) "int8"
+                     (re-find #"^(integer\(4\)|integer\(kind=4\)|integer\(c_int\)|integer)(?![(\w])" spec) "int4"
+                     (re-find #"^logical" spec) "logical"
+                     (re-find #"^character" spec) "string"
+                     :else nil)
+          intent (second (re-find #"intent\((in|out|inout)\)" spec))
+          unbindable (cond (re-find #"^type\(" spec) "derived type"
+                           (re-find #",optional" spec) "optional"
+                           (re-find #",pointer" spec) "pointer"
+                           (re-find #",allocatable" spec) "allocatable"
+                           (re-find #"^procedure" spec) "procedure argument"
+                           (nil? type) (str "kind " spec)
+                           :else nil)
+          dim (second (re-find #"dimension\(([^)]*)\)" spec))
+          ;; split names on commas outside parentheses
+          names (loop [cs (seq names) depth 0 cur "" out []]
+                  (if (empty? cs) (map str/trim (remove str/blank? (conj out cur)))
+                    (let [c (first cs)]
+                      (cond (= c \() (recur (rest cs) (inc depth) (str cur c) out)
+                            (= c \)) (recur (rest cs) (dec depth) (str cur c) out)
+                            (and (= c \,) (zero? depth)) (recur (rest cs) depth "" (conj out cur))
+                            :else (recur (rest cs) depth (str cur c) out)))))]
+      [{:type type :intent intent :unbindable unbindable :dim dim} names])))
+
+(defn rank-of [name-with-dims dim]
+  (let [d (or (second (re-find #"\(([^)]*)\)" name-with-dims)) dim)]
+    (if d (inc (count (re-seq #"," d))) 0)))
+
+(defn bare-name [n] (str/replace n #"\(.*$" ""))
+
+;; the routines of one module: [{:module m :name n :kind :subroutine/:function :args [..] :result r} ..]
+(defn routines [src]
+  (let [ls (vec (strip src))
+        module (some #(second (re-matches #"^module\s+(\w+)$" %)) ls)]
+    (loop [i 0 out []]
+      (if (>= i (count ls)) out
+        (let [l (ls i)
+              m (or (when-let [[_ n a] (re-matches #"^(?:recursive\s+|pure\s+|elemental\s+)*subroutine\s+(\w+)\s*\(([^)]*)\)\s*$" l)] {:kind :subroutine :name n :params (split-args a)})
+                    (when-let [[_ t n a r] (re-matches #"^(?:(.*?)\s+)?function\s+(\w+)\s*\(([^)]*)\)\s*(?:result\s*\((\w+)\))?\s*$" l)]
+                      (when-not (re-find #"^end" l) {:kind :function :name n :params (split-args a) :result (or r n) :rtype-spec t})))]
+          (if-not m (recur (inc i) out)
+            ;; the body up to end subroutine/function: collect declarations of the dummies
+            (let [end (loop [j (inc i)] (if (or (>= j (count ls)) (re-matches (re-pattern (str "^end\\s*(" (name (:kind m)) ")?\\s*(" (:name m) ")?\\s*$")) (ls j))) j (recur (inc j))))
+                  decls (keep parse-decl (subvec ls (inc i) (min end (count ls))))
+                  wanted (set (map str/lower-case (concat (:params m) (when (= :function (:kind m)) [(:result m)]))))
+                  info (reduce (fn [acc [spec names]]
+                                 (reduce (fn [acc n] (let [b (bare-name n)] (if (contains? wanted b) (assoc acc b (assoc spec :rank (rank-of n (:dim spec)))) acc))) acc names))
+                               {} decls)
+                  rspec (when (= :function (:kind m))
+                          (or (get info (:result m))
+                              (when-let [[spec _] (and (:rtype-spec m) (parse-decl (str (:rtype-spec m) " :: " (:result m))))] (assoc spec :rank 0))))
+                  args (mapv (fn [p] (merge {:name p :rank 0} (get info p {:unbindable "undeclared"}))) (:params m))]
+              (recur end (conj out (assoc m :module module :args args :rspec rspec))))))))))
+
+(defn bindable? [r]
+  (and (every? #(and (nil? (:unbindable %)) (:type %)) (:args r))
+       (or (= :subroutine (:kind r)) (and (:rspec r) (nil? (:unbindable (:rspec r))) (not= "string" (:type (:rspec r))) (zero? (:rank (:rspec r)))))
+       (not-any? #(and (= "string" (:type %)) (pos? (:rank %))) (:args r))
+       (not-any? #(and (= "string" (:type %)) (= "out" (:intent %))) (:args r))))
+
+(defn edn-name [n] (str/replace n "_" "-"))
+
+(defn manifest [pkg rs]
+  (str "{:package \"" pkg ".raw\" :routines ["
+       (str/join " "
+         (for [r rs]
+           (str "{:name \"" (edn-name (:name r)) "\" :symbol \"" pkg "_" (:name r) "_shim\" :args ["
+                (str/join " " (for [a (:args r)] (str "{:name \"" (edn-name (:name a)) "\" :type :" (:type a) " :intent :" (or (:intent a) "inout") " :rank " (:rank a) "}")))
+                "]" (when (:rspec r) (str " :returns :" (:type (:rspec r)))) "}")))
+       "]}"))
+
+(defn fortran-string-lines [s]
+  ;; the EDN as a Fortran character parameter, in pieces a free-form line can hold
+  (let [pieces (map #(apply str %) (partition-all 90 s))]
+    (str/join " // &\n       " (map #(str "'" (str/replace % "'" "''") "'") pieces))))
+
+(defn shim [pkg r]
+  (let [args (:args r)
+        ;; argv slots: a scalar one, an array one plus its rank, then the result
+        slots (loop [as args k 1 out []] (if (empty? as) out (let [a (first as)] (recur (rest as) (+ k 1 (:rank a)) (conj out (assoc a :slot k))))))
+        rslot (inc (reduce + (count args) (map :rank args)))
+        decl (fn [a] (case (:type a)
+                       "string" nil
+                       (str "    " (kinds (:type a)) ", pointer :: " (:name a) (when (pos? (:rank a)) (str "(" (str/join "," (repeat (:rank a) ":")) ")")))))
+        ext-decl (fn [a] (when (pos? (:rank a)) (str "    integer(c_int), pointer :: " (str/join ", " (for [d (range (:rank a))] (str "n" (:name a) "_" (inc d)))))))
+        unpack (fn [a] (if (= "string" (:type a))
+                         (str "    s_" (:name a) " = cstr(argv(" (:slot a) "))")
+                         (if (zero? (:rank a))
+                           (str "    call c_f_pointer(argv(" (:slot a) "), " (:name a) ")")
+                           (str (str/join "\n" (for [d (range (:rank a))] (str "    call c_f_pointer(argv(" (+ (:slot a) 1 d) "), n" (:name a) "_" (inc d) ")")))
+                                "\n    call c_f_pointer(argv(" (:slot a) "), " (:name a) ", [" (str/join ", " (for [d (range (:rank a))] (str "n" (:name a) "_" (inc d)))) "])"))))
+        call-args (str/join ", " (for [a args] (if (= "string" (:type a)) (str "s_" (:name a)) (:name a))))
+        strings (filter #(= "string" (:type %)) args)]
+    (str "  subroutine " pkg "_" (:name r) "_shim(argc, argv) bind(C, name=\"" pkg "_" (:name r) "_shim\")\n"
+         "    integer(c_int), value :: argc\n    type(c_ptr), dimension(*) :: argv\n"
+         (str/join "\n" (remove nil? (concat (map decl args) (map ext-decl args))))
+         (when (seq strings) (str "\n    character(len=:), allocatable :: " (str/join ", " (map #(str "s_" (:name %)) strings))))
+         (when (:rspec r) (str "\n    " (kinds (:type (:rspec r))) ", pointer :: result_"))
+         "\n" (str/join "\n" (map unpack slots))
+         (if (:rspec r)
+           (str "\n    call c_f_pointer(argv(" rslot "), result_)\n    result_ = " (:name r) "(" call-args ")")
+           (str "\n    call " (:name r) "(" call-args ")"))
+         "\n  end subroutine " pkg "_" (:name r) "_shim\n")))
+
+(defn generate [pkg srcs]
+  (let [rs (mapcat (fn [f] (routines (slurp f))) srcs)
+        ok (filter bindable? rs)
+        skipped (remove bindable? rs)
+        modules (distinct (keep :module ok))]
+    (str "! GENERATED by scripts/bind-fortran for package " pkg " from " (str/join ", " srcs) ".\n"
+         "! The manifest and one shim per routine (src/f/DynLoad.f90). Do not edit;\n! regenerate.\n"
+         (when (seq skipped) (str "! Not bound: " (str/join "; " (for [r skipped] (str (:name r) " (" (str/join ", " (distinct (keep (fn [a] (or (:unbindable a) (when (and (= "string" (:type a)) (pos? (:rank a))) "character array"))) (conj (vec (:args r)) (:rspec r))))) ")"))) "\n"))
+         "module " pkg "_pkg\n  use iso_c_binding\n"
+         (str/join "\n" (for [m modules] (str "  use " m ", only: " (str/join ", " (map :name (filter #(= m (:module %)) ok))))))
+         "\n  implicit none\n"
+         "  character(kind=c_char, len=*), parameter :: manifest = &\n       " (fortran-string-lines (manifest pkg ok)) " // c_null_char\n"
+         "  ! filled at the first call, not initialised: flang will not fold transfer of a long string\n  character(kind=c_char), allocatable, target, save :: manifest_buf(:)\n"
+         "contains\n"
+         "  function clotran_manifest() bind(C, name=\"clotran_manifest\") result(p)\n    type(c_ptr) :: p\n    integer :: i\n    if (.not. allocated(manifest_buf)) then\n       allocate(manifest_buf(len(manifest)))\n       do i = 1, len(manifest)\n          manifest_buf(i) = manifest(i:i)\n       end do\n    end if\n    p = c_loc(manifest_buf)\n  end function clotran_manifest\n\n"
+         "  ! a null-terminated string as Fortran text\n  function cstr(p) result(s)\n    type(c_ptr), intent(in) :: p\n    character(len=:), allocatable :: s\n    character(kind=c_char), pointer :: c(:)\n    integer :: n\n    call c_f_pointer(p, c, [huge(0)])\n    n = 0\n    do while (c(n + 1) /= c_null_char)\n       n = n + 1\n    end do\n    allocate(character(len=n) :: s)\n    do n = 1, len(s)\n       s(n:n) = c(n)\n    end do\n  end function cstr\n\n"
+         (str/join "\n" (map #(shim pkg %) ok))
+         "end module " pkg "_pkg\n")))
+
+(let [args *command-line-args*
+      opt (fn [k] (second (drop-while #(not= % k) args)))
+      pkg (opt "--package") out (opt "--out")
+      srcs (->> args (partition-all 2 1) (remove (fn [[a _]] (str/starts-with? a "--"))) (map first) (remove #(contains? #{pkg out} %)) (filter #(re-find #"\.f90$" %)))]
+  (when-not (and pkg out (seq srcs)) (binding [*out* *err*] (println "usage: scripts/bind-fortran --package NAME --out FILE.f90 SRC.f90 [SRC.f90 ...]")) (System/exit 2))
+  (spit out (generate pkg srcs))
+  (println "wrote" out "for" pkg "from" (str/join ", " srcs)))

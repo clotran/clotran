@@ -106,8 +106,7 @@ function keyed by the routine's own argument names:
 `scripts/chemsol-check` runs it on ChemSol's three reference inputs and
 diffs against the original program's output: all three match byte for
 byte. The arrays cross as the same buffers the Fortran writes into,
-with no copy. A binding generator that would do for any routine what
-was done by hand for these is what comes next; PLAN.md step 7 records
+with no copy. `scripts/bind-fortran` writes the shims and manifest for a library from its own signatures, so a package is declared rather than hand-bound.md step 7 records
 what the library dictated for it.
 
 **`pprint` works.** Through Clojure's own `clojure.pprint`, verbatim:

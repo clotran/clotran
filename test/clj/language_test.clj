@@ -1146,3 +1146,17 @@
 (check "the wrong argument count is an ArityException" (try (testpkg/double-it) (catch clojure.lang.ArityException e :arity)) :arity)
 (check "a scalar where an array is wanted is an error" (try (testpkg/sum-arr 1.0) (catch Exception e :not-array)) :not-array)
 (check "the fns carry arglists" (:arglists (meta #'testpkg/divmod)) '([a b]))
+
+;;; ---- a library bound by the generator: scripts/bind-fortran -----------
+;; test/f/samplelib.f90 has no shims and no manifest; the Makefile runs
+;; the generator over it and builds build/libsamplelib from the two.
+(def sl (try (fortran/load-package "build/libsamplelib.dylib")
+             (catch Exception e (fortran/load-package "build/libsamplelib.so"))))
+(check "the generator named the package" (:package sl) "samplelib.raw")
+(check "a generated :out scalar" (samplelib.raw/double-it 21.0) {:y 42.0})
+(check "a generated function over an array and its length"
+       (let [a (fortran/make-array "real8" 3)] (fortran/aset a 0 1.5) (fortran/aset a 1 2.5) (fortran/aset a 2 3.0) (samplelib.raw/sum-arr a 3)) 7.0)
+(check "a generated character(len=*) argument" (samplelib.raw/count-chars "hello") 5)
+(check "generated intents from the source" (samplelib.raw/divmod 17 5) {:q 3 :r 2})
+(check "a generated rank-2 argument" (let [m (fortran/make-array "real8" 2 2)] (fortran/aset m 0 0 1.0) (fortran/aset m 1 1 5.0) (samplelib.raw/trace m 2)) {:t 6.0})
+(check "a generated :inout array, in place" (let [a (fortran/make-array "real8" 2)] (fortran/aset a 0 1.0) (fortran/aset a 1 2.0) (samplelib.raw/scale a 2 10.0) [(fortran/aget a 0) (fortran/aget a 1)]) [10.0 20.0])

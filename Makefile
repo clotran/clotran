@@ -222,7 +222,16 @@ $(BT)/eval_test: $(eval-objects) $(T)/eval_test.f90 $(ICU_LIBS) | $(BT) $(FCSTAM
 $(B)/libtestpkg.$(SOEXT): $(T)/testpkg.f90 | $(B) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -shared -fPIC -o $@ $<
 
-test: $(test-bins) clotran-bin $(B)/libtestpkg.$(SOEXT) packages
+# and the same library bound by the GENERATOR: scripts/bind-fortran writes
+# the shims and manifest for test/f/samplelib.f90, a library written with
+# no thought of clotran, and the language test calls them through the door.
+$(B)/samplelib_shims.f90: $(T)/samplelib.f90 scripts/bind-fortran | $(B)
+	scripts/bind-fortran --package samplelib --out $@ $<
+$(B)/libsamplelib.$(SOEXT): $(T)/samplelib.f90 $(B)/samplelib_shims.f90 | $(B) $(FCSTAMP)
+	mkdir -p $(PKGMOD)
+	$(FC) $(filter-out -frecursive -J$(B),$(FCFLAGS)) -J$(PKGMOD) -shared -fPIC -o $@ $^
+
+test: $(test-bins) clotran-bin $(B)/libtestpkg.$(SOEXT) $(B)/libsamplelib.$(SOEXT) packages
 	for t in $(unit-tests); do echo "--- $$t ---"; $(BT)/$$t || exit 1; done
 	@echo "--- language_test (with core.clj) ---"
 	./clotran-bin src/clj/clojure/core.clj test/clj/language_test.clj </dev/null \

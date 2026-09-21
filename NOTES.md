@@ -3562,3 +3562,18 @@ host.clj, the `fortran` array primitives and the door -- what PLAN step
 9 asked for -- and `make packages` builds what is beside it. A package
 directory that is not built says so by name instead of handing the
 directory to dlopen.
+
+**The generator.** `scripts/bind-fortran --package NAME --out FILE.f90
+SRC.f90..` reads a free-form module's subroutines and functions -- the
+dummy declarations for type, `intent` and rank, `result` names, an
+undeclared intent taken as `:inout` -- and writes the file a package
+needs: the manifest and one shim per routine, in the shape
+test/f/testpkg.f90 and packages/chemsol were written by hand. What it
+cannot carry it lists in a comment at the top instead of guessing:
+derived types, optional, pointer and allocatable dummies, kinds the door
+does not have, character arrays, fixed-form F77. test/f/samplelib.f90 is
+a library written with no thought of clotran; the Makefile generates its
+shims into build/, builds `libsamplelib`, and the language test calls
+all six routines through the door. That is a package declared rather
+than hand-bound, which is what a package manager needs from a library:
+its sources and nothing else.
