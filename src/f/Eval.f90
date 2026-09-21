@@ -179,6 +179,8 @@ module Eval
   ! Sorted maps and sets (sorted.inc)
   integer, parameter :: B_SORTEDMAP = 310, B_SORTEDSET = 311, B_SEQFROM = 312, B_ENTRYKEY = 313, &
        B_COMPARATOR = 314, B_RSEQ = 315
+  ! The unchecked arithmetic, which wraps where + - * inc dec throw
+  integer, parameter :: B_UADD = 316, B_USUB = 317, B_UMUL = 318, B_UINC = 319, B_UDEC = 320
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -3765,51 +3767,51 @@ contains
        ! by range, before the add (see mul_overflows)
        if ((ib > 0 .and. ia > huge(ia) - ib) .or. &
             (ib < 0 .and. ia < -huge(ia) - 1_gc_ip - ib)) then
-          call fail("integer overflow")
+          call raise_class("ArithmeticException", "integer overflow", [gc_nil()])
        else
           out = gc_int(ia + ib)
        end if
     case (38)
        if ((ib < 0 .and. ia > huge(ia) + ib) .or. &
             (ib > 0 .and. ia < -huge(ia) - 1_gc_ip + ib)) then
-          call fail("integer overflow")
+          call raise_class("ArithmeticException", "integer overflow", [gc_nil()])
        else
           out = gc_int(ia - ib)
        end if
     case (39)
        if (mul_overflows(ia, ib)) then
-          call fail("integer overflow")
+          call raise_class("ArithmeticException", "integer overflow", [gc_nil()])
        else
           out = gc_int(ia * ib)
        end if
     case (40)
        if (ia == huge(ia)) then
-          call fail("integer overflow")
+          call raise_class("ArithmeticException", "integer overflow", [gc_nil()])
        else
           out = gc_int(ia + 1_gc_ip)
        end if
     case (41)
        if (ia == -huge(ia) - 1_gc_ip) then
-          call fail("integer overflow")
+          call raise_class("ArithmeticException", "integer overflow", [gc_nil()])
        else
           out = gc_int(ia - 1_gc_ip)
        end if
     case (42)
        if (ia == -huge(ia) - 1_gc_ip) then
-          call fail("integer overflow")
+          call raise_class("ArithmeticException", "integer overflow", [gc_nil()])
        else
           out = gc_int(-ia)
        end if
     case (43)
        ! Floor division, not truncation: (floorDiv -7 2) is -4.
        if (ib == 0_gc_ip) then
-          call fail("Divide by zero")
+          call raise_class("ArithmeticException", "Divide by zero", [gc_nil()])
        else
           out = gc_int(int(floor(real(ia, gc_dp) / real(ib, gc_dp)), gc_ip))
        end if
     case (44)
        if (ib == 0_gc_ip) then
-          call fail("Divide by zero")
+          call raise_class("ArithmeticException", "Divide by zero", [gc_nil()])
        else
           out = gc_int(modulo(ia, ib))
        end if
@@ -4932,7 +4934,8 @@ contains
     integer :: base, i, n
     ! 64-bit, or every sum would truncate on the way out of %ival.
     integer(gc_ip) :: acc
-    logical :: hit
+    logical :: hit, checked
+    integer :: op
 
     out = gc_nil()
     hit = .false.
@@ -4948,7 +4951,14 @@ contains
     call vs_set(base + 1, args)
 
     select case (id)
-    case (B_ADD, B_SUB, B_MUL)
+    case (B_ADD, B_SUB, B_MUL, B_UADD, B_USUB, B_UMUL)
+       ! Long arithmetic THROWS on overflow, as Numbers.add and friends
+       ! do; the unchecked- variants wrap, as theirs do.
+       checked = (id == B_ADD .or. id == B_SUB .or. id == B_MUL)
+       op = id
+       if (id == B_UADD) op = B_ADD
+       if (id == B_USUB) op = B_SUB
+       if (id == B_UMUL) op = B_MUL
        ! Reals used to be IGNORED here. The accumulator read %ival,
        ! which is 0 for a GCT_REAL, so (+ 1.5 2) answered 2 and
        ! (* 2.0 3) answered 0 -- a wrong answer with no error, in the
@@ -4962,7 +4972,7 @@ contains
        ! which is also where a Ratio would slot in, as a third case
        ! between the two.
        if (n == 0) then
-          if (id == B_MUL) then
+          if (op == B_MUL) then
              out = gc_int(1)
           else
              out = gc_int(0)
@@ -4994,12 +5004,12 @@ contains
                b = strip_meta(a)
                qn = gc_numerator(b)
                qd = gc_denominator(b)
-               if (n == 1 .and. id == B_SUB) qn = -qn
+               if (n == 1 .and. op == B_SUB) qn = -qn
                do i = 1, n - 1
                   b = strip_meta(gcv_nth(args, i))
                   bn = gc_numerator(b)
                   bd = gc_denominator(b)
-                  select case (id)
+                  select case (op)
                   case (B_ADD)
                      qn = qn * bd + bn * qd
                      qd = qd * bd
@@ -5017,10 +5027,10 @@ contains
                out = gc_ratio(qn, qd)
             else if (any_real) then
                racc = num_dbl(a)
-               if (n == 1 .and. id == B_SUB) racc = -racc
+               if (n == 1 .and. op == B_SUB) racc = -racc
                do i = 1, n - 1
                   b = gcv_nth(args, i)
-                  select case (id)
+                  select case (op)
                   case (B_ADD); racc = racc + num_dbl(b)
                   case (B_SUB); racc = racc - num_dbl(b)
                   case (B_MUL); racc = racc * num_dbl(b)
@@ -5029,10 +5039,29 @@ contains
                out = gc_real(racc)
             else
                acc = a%ival
-               if (n == 1 .and. id == B_SUB) acc = -acc
+               if (n == 1 .and. op == B_SUB) then
+                  if (checked .and. acc == -huge(acc) - 1_gc_ip) then
+                     call raise_class("ArithmeticException", "integer overflow", [vs_get(base + 1)])
+                     call vs_leave(base)
+                     return
+                  end if
+                  acc = -acc
+               end if
                do i = 1, n - 1
                   b = strip_meta(gcv_nth(args, i))
-                  select case (id)
+                  if (checked) then
+                     select case (op)
+                     case (B_ADD); hit = add_overflows(acc, b%ival)
+                     case (B_SUB); hit = add_overflows(acc, -b%ival) .or. b%ival == -huge(acc) - 1_gc_ip
+                     case (B_MUL); hit = mul_overflows(acc, b%ival)
+                     end select
+                     if (hit) then
+                        call raise_class("ArithmeticException", "integer overflow", [vs_get(base + 1)])
+                        call vs_leave(base)
+                        return
+                     end if
+                  end if
+                  select case (op)
                   case (B_ADD); acc = acc + b%ival
                   case (B_SUB); acc = acc - b%ival
                   case (B_MUL); acc = acc * b%ival
@@ -5390,7 +5419,7 @@ contains
             an = gc_numerator(a); ad = gc_denominator(a)
             bn = gc_numerator(b); bd = gc_denominator(b)
             if (bn == 0) then
-               call fail("Divide by zero")
+               call raise_class("ArithmeticException", "Divide by zero", [gc_nil()])
             else
                qi = (an * bd) / (ad * bn)
                if (id == B_QUOT) then
@@ -5403,14 +5432,14 @@ contains
           end block
        else if (a%tag == GCT_REAL .or. b%tag == GCT_REAL) then
           if (num_dbl(b) == 0.0_gc_dp) then
-             call fail("Divide by zero")
+             call raise_class("ArithmeticException", "Divide by zero", [gc_nil()])
           else if (id == B_QUOT) then
              out = gc_real(aint(num_dbl(a) / num_dbl(b)))
           else
              out = gc_real(mod(num_dbl(a), num_dbl(b)))
           end if
        else if (b%ival == 0) then
-          call fail("Divide by zero")
+          call raise_class("ArithmeticException", "Divide by zero", [gc_nil()])
        else if (id == B_QUOT) then
           out = gc_int(a%ival / b%ival)
        else
@@ -7931,7 +7960,7 @@ contains
             an = gc_numerator(a); ad = gc_denominator(a)
             bn = gc_numerator(b); bd = gc_denominator(b)
             if (bn == 0) then
-               call fail("Divide by zero")
+               call raise_class("ArithmeticException", "Divide by zero", [gc_nil()])
             else
                qi = (an * bd) / (ad * bn)
                if (id == B_QUOT) then
@@ -7947,30 +7976,42 @@ contains
           ! raises. Verified against clj.
           out = gc_real(num_dbl(a) / num_dbl(b))
        else if (gc_numerator(b) == 0) then
-          call fail("Divide by zero")
+          call raise_class("ArithmeticException", "Divide by zero", [gc_nil()])
        else
           out = gc_ratio(gc_numerator(a) * gc_denominator(b), &
                          gc_denominator(a) * gc_numerator(b))
        end if
-    case (B_INC, B_DEC)
+    case (B_INC, B_DEC, B_UINC, B_UDEC)
+       checked = (id == B_INC .or. id == B_DEC)
+       op = id
+       if (id == B_UINC) op = B_INC
+       if (id == B_UDEC) op = B_DEC
        a = strip_meta(gcv_nth(args, 0))
+       if (a%tag == GCT_INT .and. checked) then
+          if ((op == B_INC .and. a%ival == huge(a%ival)) .or. &
+               (op == B_DEC .and. a%ival == -huge(a%ival) - 1_gc_ip)) then
+             call raise_class("ArithmeticException", "integer overflow", [vs_get(base + 1)])
+             call vs_leave(base)
+             return
+          end if
+       end if
        if (is_ratio(a)) then
           ! (inc 1/2) is 3/2, not 1.5 -- the else branch below sends
           ! everything that is not an integer through num_dbl, which
           ! would silently drop a ratio to a double.
-          if (id == B_INC) then
+          if (op == B_INC) then
              out = gc_ratio(gc_numerator(a) + gc_denominator(a), gc_denominator(a))
           else
              out = gc_ratio(gc_numerator(a) - gc_denominator(a), gc_denominator(a))
           end if
        else if (a%tag == GCT_INT) then
-          if (id == B_INC) then
+          if (op == B_INC) then
              out = gc_int(a%ival + 1)
           else
              out = gc_int(a%ival - 1)
           end if
        else
-          if (id == B_INC) then
+          if (op == B_INC) then
              out = gc_real(num_dbl(a) + 1.0_gc_dp)
           else
              out = gc_real(num_dbl(a) - 1.0_gc_dp)
@@ -7984,9 +8025,10 @@ contains
          if (cok) then
             out = gc_int(cv)
          else
-            call fail("compare: cannot compare " // &
+            ! what the JVM throws when neither is Comparable to the other
+            call raise_class("ClassCastException", "compare: cannot compare " // &
                  type_name(strip_meta(gcv_nth(args, 0))) // " with " // &
-                 type_name(strip_meta(gcv_nth(args, 1))))
+                 type_name(strip_meta(gcv_nth(args, 1))), [vs_get(base + 1)])
          end if
        end block
     case (B_DISJ)
@@ -8457,8 +8499,40 @@ contains
        return
     end if
 
+    ! Util.compare answers 0 for an object against itself, and Clojure's
+    ! empty collections are singletons: (compare {} {}) is 0 there, and
+    ! (compare {:a 1} {:a 1}) throws.
+    if (same_object(a, b)) then
+       c = 0
+       return
+    end if
+    if (gc_kind(a) == gc_kind(b) .and. empty_coll(a) .and. empty_coll(b)) then
+       c = 0
+       return
+    end if
     ok = .false.
   end function compare_values
+
+  ! An empty map, set or list.
+  function empty_coll(v) result(yes)
+    type(gc_value), intent(in) :: v
+    logical :: yes
+    yes = .false.
+    if (gca_is(v)) then
+       yes = gca_count(v) == 0
+    else if (gc_kind(v) == OBJ_SET) then
+       yes = gca_count(gc_slot(v, 1)) == 0
+    else if (gcl_is(v)) then
+       yes = gcl_count(v) == 0
+    end if
+  end function empty_coll
+
+  ! Long addition would overflow: by range, before the add.
+  function add_overflows(a, b) result(bad)
+    integer(gc_ip), intent(in) :: a, b
+    logical :: bad
+    bad = (b > 0 .and. a > huge(a) - b) .or. (b < 0 .and. a < -huge(a) - 1_gc_ip - b)
+  end function add_overflows
 
   ! A `value`-kind array holding a collection's elements. This is what
   ! to-array answers, because `sort` mutates the array it gets.

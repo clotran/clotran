@@ -1770,3 +1770,28 @@
 (do (def mm-doc "d" 1) [(select-keys (meta #'mm-doc) [:name :doc]) (integer? (:line (meta #'mm-doc))) (integer? (:column (meta #'mm-doc)))])
 
 (do (def ^:private mm-priv 1) [(:private (meta #'mm-priv)) (:name (meta #'mm-priv)) (= *ns* (:ns (meta #'mm-priv)))])
+
+;; the errors arithmetic and compare raise carry the JVM's classes
+(try (quot 9 0) (catch ArithmeticException e :arith))
+
+(try (mod 9 0) (catch ArithmeticException e :arith))
+
+(try (/ 1 0) (catch ArithmeticException e :arith))
+
+(try (* Long/MAX_VALUE 2) (catch ArithmeticException e :arith))
+
+(try (inc Long/MAX_VALUE) (catch ArithmeticException e :arith))
+
+(try (compare #{1} #{2}) (catch ClassCastException e :cce))
+
+(try (compare {} {}) (catch ClassCastException e :cce))
+
+(try (sort [1 :a]) (catch ClassCastException e :cce))
+
+(try (compare {:a 1} {:a 1}) (catch ClassCastException e :cce))
+
+(try (- Long/MIN_VALUE) (catch ArithmeticException e :arith))
+
+[(unchecked-add Long/MAX_VALUE 1) (unchecked-inc Long/MAX_VALUE) (unchecked-multiply Long/MAX_VALUE 2) (unchecked-dec Long/MIN_VALUE) (unchecked-subtract Long/MIN_VALUE 1)]
+
+[(+ 1 2 3) (- 10 1 2) (* 2 3 4) (- 5) (inc 1) (dec 1) (+ 1.5 2) (* 2 1/3)]

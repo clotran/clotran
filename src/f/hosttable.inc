@@ -90,15 +90,15 @@
        hm("java.lang.System", "identityHashCode", B_IDHASH, "clotran-identity-hash"), &
        hm("clojure.lang.Numbers", "add", B_ADD, "+"), &
        hm("clojure.lang.Numbers", "addP", B_ADD, "+"), &
-       hm("clojure.lang.Numbers", "unchecked_add", B_ADD, "+"), &
-       hm("clojure.lang.Numbers", "unchecked_int_add", B_ADD, "+"), &
+       hm("clojure.lang.Numbers", "unchecked_add", B_UADD, "unchecked-add"), &
+       hm("clojure.lang.Numbers", "unchecked_int_add", B_UADD, "unchecked-add"), &
        hm("clojure.lang.Numbers", "minus", B_SUB, "-"), &
        hm("clojure.lang.Numbers", "minusP", B_SUB, "-"), &
-       hm("clojure.lang.Numbers", "unchecked_minus", B_SUB, "-"), &
-       hm("clojure.lang.Numbers", "unchecked_int_subtract", B_SUB, "-"), &
+       hm("clojure.lang.Numbers", "unchecked_minus", B_USUB, "unchecked-subtract"), &
+       hm("clojure.lang.Numbers", "unchecked_int_subtract", B_USUB, "unchecked-subtract"), &
        hm("clojure.lang.Numbers", "multiply", B_MUL, "*"), &
        hm("clojure.lang.Numbers", "multiplyP", B_MUL, "*"), &
-       hm("clojure.lang.Numbers", "unchecked_multiply", B_MUL, "*"), &
+       hm("clojure.lang.Numbers", "unchecked_multiply", B_UMUL, "unchecked-multiply"), &
        hm("clojure.lang.Numbers", "divide", B_DIV, "/"), &
        hm("clojure.lang.Numbers", "unchecked_int_divide", B_DIV, "/"), &
        hm("clojure.lang.Numbers", "lt", B_LT, "<"), &
@@ -112,12 +112,12 @@
        hm("clojure.lang.Numbers", "compare", B_COMPARE, "compare"), &
        hm("clojure.lang.Numbers", "inc", B_INC, "inc"), &
        hm("clojure.lang.Numbers", "incP", B_INC, "inc"), &
-       hm("clojure.lang.Numbers", "unchecked_inc", B_INC, "inc"), &
-       hm("clojure.lang.Numbers", "unchecked_int_inc", B_INC, "inc"), &
+       hm("clojure.lang.Numbers", "unchecked_inc", B_UINC, "unchecked-inc"), &
+       hm("clojure.lang.Numbers", "unchecked_int_inc", B_UINC, "unchecked-inc"), &
        hm("clojure.lang.Numbers", "dec", B_DEC, "dec"), &
        hm("clojure.lang.Numbers", "decP", B_DEC, "dec"), &
-       hm("clojure.lang.Numbers", "unchecked_dec", B_DEC, "dec"), &
-       hm("clojure.lang.Numbers", "unchecked_int_dec", B_DEC, "dec") ]
+       hm("clojure.lang.Numbers", "unchecked_dec", B_UDEC, "unchecked-dec"), &
+       hm("clojure.lang.Numbers", "unchecked_int_dec", B_UDEC, "unchecked-dec") ]
   type(hm), parameter :: HOST_STATICS_2(80) = [ &
        hm("clojure.lang.Numbers", "remainder", B_REM, "rem"), &
        hm("clojure.lang.Numbers", "unchecked_int_remainder", B_REM, "rem"), &
