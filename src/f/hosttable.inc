@@ -387,7 +387,7 @@
        hm("clojure.lang.Numbers", "double_array", B_RTFN, "double-array-of") ]
   type(hm), parameter :: HOST_STATICS(314) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
-  type(hm), parameter :: HOST_METHODS_1(89) = [ &
+  type(hm), parameter :: HOST_METHODS_1(90) = [ &
   ! Instance members. The target becomes the first argument, which is all
   ! an instance method is: (.withMeta x m) calls with-meta on x and m.
        hm("", "meta", B_META, "meta"), &
@@ -464,9 +464,10 @@
        hm("", "fnFor", B_ALWAYS_NIL, "clotran-nil"), &
        hm("", "__methodImplCache", B_FLD_CACHE, "clotran-cache"), &
   ! preferMethod resolves an ambiguity exact-match dispatch never has. DEVIATIONS.md 8.
-       hm("", "preferMethod", B_IDENTITY, "identity"), &
+       hm("", "preferMethod", B_PREFERMETHOD, "clotran-prefer-method"), &
+       hm("", "dispatchFn", B_DISPATCHFN, "clotran-dispatch-fn"), &
        hm("", "getMethodTable", B_METHODTABLE, "clotran-method-table"), &
-       hm("", "getPreferTable", B_EMPTYMAP, "clotran-empty-map"), &
+       hm("", "getPreferTable", B_PREFERTABLE, "clotran-prefer-table"), &
        hm("", "getMethod", B_GETMETHOD, "clotran-get-method"), &
        hm("", "disjoin", B_DISJ, "disj"), &
        hm("", "concat", B_STR, "str"), &
@@ -570,5 +571,5 @@
        hm("", "isCancelled", B_TASKCANCELLED, "clotran-task-cancelled"), &
        hm("", "cancel", B_TASKCANCEL, "clotran-task-cancel"), &
        hm("", "availableProcessors", B_NPROCS, "clotran-processors") ]
-  type(hm), parameter :: HOST_METHODS(160) = [HOST_METHODS_1, HOST_METHODS_2]
+  type(hm), parameter :: HOST_METHODS(161) = [HOST_METHODS_1, HOST_METHODS_2]
 

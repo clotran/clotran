@@ -3364,3 +3364,44 @@ oracle case:
   `getExponent` of NaN and the infinities is 1024 and of zero and the
   subnormals -1023, `nextAfter` towards NaN is NaN; and `Boolean/TRUE`
   and `FALSE`.
+
+## Multimethods: isa?, preferences, and where the method selection lives
+
+DEVIATIONS 8 had stood since the first evaluator: a multimethod looked
+its dispatch value up, walked the host's supertype chain for a class,
+and fell to the default. No hierarchy, no `prefer-method`, no ambiguity
+error -- and the verbatim suite's `preferences-multimethod-test` and
+`indirect-preferences-mulitmethod-test` said so.
+
+**The selection is Clojure.** `MultiFn.findAndCacheBestMethod`,
+`prefers` and `preferMethod`'s conflict check are written in
+`src/clj/clotran/multifn.cljf`, as ClojureScript writes them in
+cljs.core (SEAMS.md: not host-bound). It is a file of its own, apart
+from clotran.rt, because it is first needed while core.clj is still
+loading -- core_print.clj's `prefer-method` calls come before
+core_deftype.clj -- so it uses only what core.clj has defined by then:
+no `deftype`, no `reduce`, `in-ns` rather than `ns`. Eval reaches it
+through `mf_call`, the same lazy loader as `rt_call` with a file and a
+flag of its own.
+
+**The cache is Fortran.** A multimethod's slot 5 holds `[hierarchy-ref
+prefers cache cached-hierarchy]`; `mf_lookup` answers from the cache
+while the hierarchy is the object it was filled under, tries the exact
+entry, and only then asks `find-method`, caching what it answers.
+`addMethod`, `removeMethod`, `preferMethod` and `reset` drop the cache;
+a `derive` replaces the hierarchy map, and the identity check drops it
+too. A user multimethod dispatches in about 5 us, hit or cached miss.
+
+**What `isa?` needed.** `(class? (class {}))` was false, so `isa?` never
+took its `isAssignableFrom` branch for class keywords and print-method
+could not see that a vector's class extends `IPersistentCollection`.
+A keyword naming a deftype or spelt like a host class is a Class now;
+`isAssignableFrom` reads the host chains and, for an interface, what it
+extends (`iface_supers`, which `getInterfaces` also answers, so
+`parents` and `bases` of an interface are not empty). Two things came
+out of walking that: `Throwable`'s chain named itself, so `supers` of an
+exception went round forever and printing one never returned; and where
+two of print-dup's methods each dominate the other, the JVM's answer is
+whichever its table yields last -- clotran takes the more specific by
+`isa?`, which is the JVM's answer for a map and is recorded in
+DEVIATIONS 8's closing note.

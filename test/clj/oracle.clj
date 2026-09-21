@@ -2105,3 +2105,73 @@
 
 ;; seqable? is RT.canSeq
 [(seqable? nil) (seqable? 1) (seqable? "s") (seqable? [1]) (seqable? {}) (seqable? #{}) (seqable? '(1)) (seqable? (range 3)) (seqable? (->Foo 1 2 3)) (seqable? (eduction (map inc) [1])) (seqable? :k) (seqable? 'x) (seqable? (fn []))]
+
+;; multimethods dispatch with isa? over the hierarchy; preferences resolve what isa? cannot,
+;; and two matches with no preference are the ambiguity error
+(do (derive :user/rect :user/shape) nil)
+
+(defmulti bar (fn [x y] [x y]))
+
+(defmethod bar [:user/rect :user/shape] [x y] :rect-shape)
+
+(defmethod bar [:user/shape :user/rect] [x y] :shape-rect)
+
+[(try (bar :user/rect :user/rect) (catch IllegalArgumentException e (boolean (re-find #"Multiple methods in multimethod 'bar' match dispatch value" (.getMessage e))))) (prefers bar) (bar :user/rect :user/shape) (bar :user/shape :user/rect) (bar :user/rect :user/other)]
+
+(do (prefer-method bar [:user/rect :user/shape] [:user/shape :user/rect]) nil)
+
+[(bar :user/rect :user/rect) (prefers bar) (try (prefer-method bar [:user/shape :user/rect] [:user/rect :user/shape]) (catch IllegalStateException e (boolean (re-find #"Preference conflict" (.getMessage e)))))]
+
+(do (derive :user/parent-1 :user/grandparent-1) (derive :user/parent-2 :user/grandparent-2) (derive :user/child :user/parent-1) (derive :user/child :user/parent-2) nil)
+
+(defmulti indirect-1 keyword)
+
+(do (prefer-method indirect-1 :user/parent-1 :user/grandparent-2) nil)
+
+(defmethod indirect-1 :user/parent-1 [_] :p1)
+
+(defmethod indirect-1 :user/parent-2 [_] :p2)
+
+(indirect-1 :user/child)
+
+(defmulti indirect-2 keyword)
+
+(do (prefer-method indirect-2 :user/grandparent-1 :user/parent-2) nil)
+
+(defmethod indirect-2 :user/parent-1 [_] :p1)
+
+(defmethod indirect-2 :user/parent-2 [_] :p2)
+
+(indirect-2 :user/child)
+
+(def local-h (-> (make-hierarchy) (derive :parent-1 :grandparent-1) (derive :parent-2 :grandparent-2) (derive :child :parent-1) (derive :child :parent-2)))
+
+(defmulti indirect-3 keyword :hierarchy #'local-h)
+
+(do (prefer-method indirect-3 :parent-1 :grandparent-2) nil)
+
+(defmethod indirect-3 :parent-1 [_] :p1)
+
+(defmethod indirect-3 :parent-2 [_] :p2)
+
+[(indirect-3 :child) (indirect-3 :parent-2) (try (indirect-3 :nobody) (catch IllegalArgumentException e (boolean (re-find #"No method in multimethod 'indirect-3' for dispatch value: :nobody" (.getMessage e)))))]
+
+;; a method on an ancestor applies, the default when none does, and a later derive is seen
+(defmulti area :shape)
+
+(defmethod area :user/shape [s] :generic)
+
+(defmethod area :default [s] :none)
+
+[(area {:shape :user/rect}) (area {:shape :user/shape}) (area {:shape :user/other}) (do (derive :user/other :user/shape) (area {:shape :user/other})) (some? (get-method area :user/rect)) (some? (get-method area :user/nobody)) (= (get-method area :user/nobody) (get-method area :default))]
+
+(defmulti simple1 identity)
+
+(defmethod simple1 :a [x] :a)
+
+[(count (methods simple1)) (do (remove-all-methods simple1) (count (methods simple1))) (prefers simple1) (try (simple1 :a) (catch IllegalArgumentException e :no-method))]
+
+;; the class keywords are classes to isa?, and an interface has parents
+[(class? (class {})) (class? :foo) (class? :user/rect) (isa? (class {}) clojure.lang.IPersistentMap) (isa? (class []) clojure.lang.IPersistentMap) (isa? (class "") Object) (contains? (supers clojure.lang.IPersistentVector) clojure.lang.IPersistentCollection) (contains? (supers java.util.List) java.util.Collection) (isa? clojure.lang.IPersistentMap clojure.lang.IPersistentCollection) (isa? clojure.lang.IPersistentVector clojure.lang.Sequential)]
+
+(binding [*print-dup* true] (pr-str [{:a 1} [1] '(1) #{1} "s" 1.5 \c :k 'sym nil true]))

@@ -187,6 +187,7 @@ module Eval
   integer, parameter :: B_STUB = 321
   integer, parameter :: B_MAPENTRY = 322, B_ISASSIGN = 323, B_BINDROOT = 324, B_RAWROOT = 325
   integer, parameter :: B_HASHCODE = 326, B_GETCAUSE = 327, B_NSREMOVE = 328, B_NSCREATE = 329, B_CANSEQ = 330
+  integer, parameter :: B_PREFERMETHOD = 331, B_PREFERTABLE = 332, B_DISPATCHFN = 333
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -289,6 +290,7 @@ module Eval
   logical, save :: yield_flag = .false.
   logical, save :: task_trace = .false., task_trace_read = .false.   ! CLOTRAN_TASK_TRACE=1: the scheduler's decisions, on stderr
   logical, save :: rt_loaded = .false.   ! clotran.rt, once (rt_call)
+  logical, save :: mf_loaded = .false.   ! clotran.multifn, once (mf_call)
   integer, allocatable, save :: free_ctx(:)
   integer, save :: n_free_ctx = 0
   ! A task's states (i1): parked and resumable, on the Fortran stack
@@ -837,16 +839,33 @@ contains
   recursive function rt_call(name, args) result(out)
     character(len=*), intent(in) :: name
     type(gc_value), intent(in) :: args
+    type(gc_value) :: out
+    out = rt_call_in("clotran/rt", "clotran.rt", rt_loaded, name, args)
+  end function rt_call
+
+  ! clotran.multifn: the multimethod's method selection, a file of its
+  ! own because it is first needed while core.clj is still loading
+  recursive function mf_call(name, args) result(out)
+    character(len=*), intent(in) :: name
+    type(gc_value), intent(in) :: args
+    type(gc_value) :: out
+    out = rt_call_in("clotran/multifn", "clotran.multifn", mf_loaded, name, args)
+  end function mf_call
+
+  recursive function rt_call_in(lib, nsname, loaded, name, args) result(out)
+    character(len=*), intent(in) :: lib, nsname, name
+    logical, intent(inout) :: loaded
+    type(gc_value), intent(in) :: args
     type(gc_value) :: out, fargs, ns, var, sym
     integer :: base
     out = gc_nil()
     base = vs_enter(3)
     call vs_set(base + 1, args)
-    if (.not. rt_loaded) then
-       rt_loaded = .true.   ! before the load: a row reached while loading is an error, not a loop
+    if (.not. loaded) then
+       loaded = .true.   ! before the load: a row reached while loading is an error, not a loop
        fargs = gcv_empty([vs_get(base + 1)])
        call vs_set(base + 2, fargs)
-       fargs = gcv_conj(vs_get(base + 2), gc_str("clotran/rt", [vs_get(base + 1), vs_get(base + 2)]), &
+       fargs = gcv_conj(vs_get(base + 2), gc_str(lib, [vs_get(base + 1), vs_get(base + 2)]), &
             [vs_get(base + 1), vs_get(base + 2)])
        call vs_set(base + 2, fargs)
        out = call_builtin(B_RTLOAD, vs_get(base + 2))
@@ -856,20 +875,20 @@ contains
           return
        end if
     end if
-    ns = gcn_find_or_create("clotran.rt", [vs_get(base + 1)])
+    ns = gcn_find_or_create(nsname, [vs_get(base + 1)])
     call vs_set(base + 2, ns)
     sym = gc_sym(name, [vs_get(base + 1), vs_get(base + 2)])
     call vs_set(base + 3, sym)
     var = gcn_lookup(vs_get(base + 2), vs_get(base + 3))
     if (.not. gcn_is_var(var)) then
-       call fail("clotran.rt has no " // name)
+       call fail(nsname // " has no " // name)
        call vs_leave(base)
        return
     end if
     call vs_set(base + 3, gcn_var_value(var))
     out = apply(vs_get(base + 3), vs_get(base + 1))
     call vs_leave(base)
-  end function rt_call
+  end function rt_call_in
 
   function native(id, name, roots) result(fn)
     integer, intent(in) :: id
@@ -2242,12 +2261,25 @@ contains
        out = gc_obj(OBJ_CHUNKSEQ, [nth_or_nil(vs_get(base + 1), 0), nth_or_nil(vs_get(base + 1), 1), gc_nil()], &
             [vs_get(base + 1)])
     else if (cname == "clojure.lang.MultiFn") then
-       ! (new MultiFn name dispatch-fn default hierarchy). The
-       ! hierarchy is accepted and ignored -- see DEVIATIONS.md 7.
+       ! (new MultiFn name dispatch-fn default hierarchy): name, the
+       ! dispatch fn, the default value and the method table in slots
+       ! 1-4, and in slot 5 [hierarchy-ref prefers cache cached-hierarchy]
+       ! for mf_lookup
+       call vs_set(base + 3, gcv_build(4, [vs_get(base + 1)]))
+       thunk = gcv_put(vs_get(base + 3), 0, nth_or_nil(vs_get(base + 1), 3), [vs_get(base + 1), vs_get(base + 3)])
+       call vs_set(base + 3, thunk)
+       thunk = gca_empty([vs_get(base + 1), vs_get(base + 3)])
+       call vs_set(base + 4, thunk)
+       thunk = gcv_put(vs_get(base + 3), 1, vs_get(base + 4), [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)])
+       call vs_set(base + 3, thunk)
+       thunk = gcv_put(vs_get(base + 3), 2, vs_get(base + 4), [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)])
+       call vs_set(base + 3, thunk)
+       thunk = gca_empty([vs_get(base + 1), vs_get(base + 3)])
+       call vs_set(base + 4, thunk)
        out = gc_obj(OBJ_MULTIFN, &
             [nth_or_nil(vs_get(base + 1), 0), nth_or_nil(vs_get(base + 1), 1), &
-             nth_or_nil(vs_get(base + 1), 2), gca_empty([vs_get(base + 1)])], &
-            [vs_get(base + 1)])
+             nth_or_nil(vs_get(base + 1), 2), vs_get(base + 4), vs_get(base + 3)], &
+            [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)])
     else if (cname == "clojure.lang.Delay") then
        ! (delay body) is (new clojure.lang.Delay (fn [] body)) in
        ! core.clj, so the argument is already a no-argument closure and
@@ -5010,33 +5042,15 @@ contains
             return
          end if
          call vs_set(base + 3, dv)
-         meth = gca_get(gc_slot(vs_get(base + 1), 4), vs_get(base + 3))
-         ! Then the host supertypes, then :default. See host_super.
-         if (meth%tag == GCT_NIL) then
-            block
-              integer :: si
-              type(gc_value) :: sk
-              ! A built-in type declares at most a handful of
-              ! supertypes; a RECORD declares a dozen -- IRecord,
-              ! IHashEq, IObj, ILookup, IPersistentMap, java.util.Map
-              ! and more -- so the walk has to be long enough to
-              ! reach the one a method was registered on. It stops at
-              ! the first nil, so this costs nothing for the others.
-              do si = 1, 24
-                 sk = host_super(vs_get(base + 3), si, vs_get(base + 1))
-                 if (sk%tag == GCT_NIL) exit
-                 meth = gca_get(gc_slot(vs_get(base + 1), 4), sk)
-                 if (meth%tag /= GCT_NIL) exit
-              end do
-            end block
+         meth = mf_lookup(vs_get(base + 1), vs_get(base + 3), [vs_get(base + 1), vs_get(base + 3)])
+         if (has_error) then
+            call vs_leave(base)
+            return
          end if
-         if (meth%tag == GCT_NIL) &
-              meth = gca_get(gc_slot(vs_get(base + 1), 4), &
-                             gc_slot(vs_get(base + 1), 3))
          if (meth%tag == GCT_NIL) then
-            call fail("No method in multimethod '" // &
+            call raise_class("IllegalArgumentException", "No method in multimethod '" // &
                  gcp_str(gc_slot(vs_get(base + 1), 1), .false.) // &
-                 "' for dispatch value: " // gcp_str(vs_get(base + 3), .true.))
+                 "' for dispatch value: " // gcp_str(vs_get(base + 3), .true.), [vs_get(base + 1)])
          else
             out = apply(meth, args)
          end if
@@ -7416,6 +7430,15 @@ contains
        end block
     case (B_SETVAL, B_RESETVALS)
        a = gcv_nth(args, 0)
+       if (gc_kind(a) == OBJ_MULTIFN) then
+          ! MultiFn.reset, behind remove-all-methods: methods, preferences and cache
+          call gc_set_slot(a, 4, gca_empty([vs_get(base + 1)]))
+          call mf_aux_set(a, 1, gca_empty([vs_get(base + 1)]))
+          call mf_reset_cache(a)
+          out = a
+          call vs_leave(base)
+          return
+       end if
        out = gcv_nth(args, 1)
        block
          type(gc_value) :: prev
@@ -7918,6 +7941,7 @@ contains
        if (gc_kind(a) == OBJ_MULTIFN) then
           call gc_set_slot(a, 4, gca_assoc(gc_slot(a, 4), gcv_nth(args, 1), &
                gcv_nth(args, 2), [vs_get(base + 1)]))
+          call mf_reset_cache(a)
        end if
     case (B_METHODTABLE)
        a = gcv_nth(args, 0)
@@ -7928,9 +7952,11 @@ contains
        ! addMethod.
        a = gcv_nth(args, 0)
        out = a
-       if (gc_kind(a) == OBJ_MULTIFN) &
-            call gc_set_slot(a, 4, gca_dissoc(gc_slot(a, 4), gcv_nth(args, 1), &
-                 [vs_get(base + 1)]))
+       if (gc_kind(a) == OBJ_MULTIFN) then
+          call gc_set_slot(a, 4, gca_dissoc(gc_slot(a, 4), gcv_nth(args, 1), &
+               [vs_get(base + 1)]))
+          call mf_reset_cache(a)
+       end if
     case (B_MATH0 + 1 : B_MATH0 + B_MATHN)
        out = math_call(id - B_MATH0, args, [vs_get(base + 1)])
     case (B_FORMAT)
@@ -8120,6 +8146,26 @@ contains
                  [vs_get(base + 1), vs_get(base + 2), sk])
             call vs_set(base + 2, acc)
          end do
+         ! an INTERFACE: what it extends (iface_supers), so that parents
+         ! and bases of one are not empty
+         if (gcv_count(vs_get(base + 2)) == 0 .and. cv%tag == GCT_KEY) then
+            block
+              character(len=:), allocatable :: list
+              integer :: p, q
+              list = iface_supers(gc_ref_text(cv%ref))
+              p = 2
+              do while (p <= len(list))
+                 q = index(list(p:), " ")
+                 if (q == 0) exit
+                 if (q > 1) then
+                    sk = gc_key(list(p:p+q-2), [vs_get(base + 1), vs_get(base + 2)])
+                    acc = gcv_conj(vs_get(base + 2), sk, [vs_get(base + 1), vs_get(base + 2), sk])
+                    call vs_set(base + 2, acc)
+                 end if
+                 p = p + q
+              end do
+            end block
+         end if
          out = vs_get(base + 2)
        end block
     case (B_EMPTYARRAY)
@@ -8355,28 +8401,50 @@ contains
     case (B_EMPTYMAP)
        out = gca_empty([vs_get(base + 1)])
     case (B_GETMETHOD)
-       ! The method a dispatch value WOULD reach. Same three steps
-       ! the multimethod call itself takes -- exact, host
-       ! supertypes, then the default dispatch value -- because
-       ! get-method is documented as answering what WOULD apply.
+       ! what WOULD apply: the same lookup a call makes, default included
        a = gcv_nth(args, 0)
        out = gc_nil()
        if (gc_kind(a) == OBJ_MULTIFN) then
+          out = mf_lookup(a, gcv_nth(args, 1), [vs_get(base + 1)])
+       end if
+    case (B_PREFERMETHOD)
+       ! MultiFn.preferMethod, the table update in clotran.rt
+       a = gcv_nth(args, 0)
+       out = a
+       if (gc_kind(a) == OBJ_MULTIFN) then
           block
-            integer :: si
-            type(gc_value) :: sk
-            out = gca_get(gc_slot(a, 4), gcv_nth(args, 1))
-            if (out%tag == GCT_NIL) then
-               do si = 1, 24
-                  sk = host_super(gcv_nth(args, 1), si, a)
-                  if (sk%tag == GCT_NIL) exit
-                  out = gca_get(gc_slot(a, 4), sk)
-                  if (out%tag /= GCT_NIL) exit
-               end do
+            type(gc_value) :: fargs, pt
+            call vs_set(base + 2, a)
+            fargs = gcv_build(5, [vs_get(base + 1)])
+            call vs_set(base + 3, fargs)
+            fargs = gcv_put(vs_get(base + 3), 0, gc_slot(vs_get(base + 2), 1), [vs_get(base + 1), vs_get(base + 3)])
+            call vs_set(base + 3, fargs)
+            fargs = gcv_put(vs_get(base + 3), 1, mf_aux(vs_get(base + 2), 1), [vs_get(base + 1), vs_get(base + 3)])
+            call vs_set(base + 3, fargs)
+            pt = mf_hierarchy(vs_get(base + 2))
+            call vs_set(base + 4, pt)
+            fargs = gcv_put(vs_get(base + 3), 2, vs_get(base + 4), [vs_get(base + 1), vs_get(base + 3)])
+            call vs_set(base + 3, fargs)
+            fargs = gcv_put(vs_get(base + 3), 3, gcv_nth(args, 1), [vs_get(base + 1), vs_get(base + 3)])
+            call vs_set(base + 3, fargs)
+            fargs = gcv_put(vs_get(base + 3), 4, gcv_nth(args, 2), [vs_get(base + 1), vs_get(base + 3)])
+            call vs_set(base + 3, fargs)
+            pt = mf_call("prefer", vs_get(base + 3))
+            if (.not. has_error) then
+               call mf_aux_set(vs_get(base + 2), 1, pt)
+               call mf_reset_cache(vs_get(base + 2))
             end if
-            if (out%tag == GCT_NIL) out = gca_get(gc_slot(a, 4), gc_slot(a, 3))
+            out = vs_get(base + 2)
           end block
        end if
+    case (B_PREFERTABLE)
+       a = gcv_nth(args, 0)
+       out = gca_empty([vs_get(base + 1)])
+       if (gc_kind(a) == OBJ_MULTIFN) out = mf_aux(a, 1)
+    case (B_DISPATCHFN)
+       a = gcv_nth(args, 0)
+       out = gc_nil()
+       if (gc_kind(a) == OBJ_MULTIFN) out = gc_slot(a, 2)
     case (B_IDENTITY)
        out = gcv_nth(args, 0)
     case (B_GT, B_LTE, B_GTE)
@@ -10319,6 +10387,10 @@ contains
        end if
        i = i + 1
     end do
+    ! an interface from an interface it extends: IPersistentCollection
+    ! from IPersistentMap (iface_supers), which is how isa? orders the
+    ! two when both have a print-dup method
+    if (.not. yes) yes = iface_extends(b, a)
   end function class_assignable
 
   ! Object.hashCode as the JVM's classes define it, where clotran can
@@ -10411,6 +10483,20 @@ contains
   logical function iface_extends(iface, want)
     character(len=*), intent(in) :: iface, want
     character(len=:), allocatable :: supers
+    supers = iface_supers(iface)
+    iface_extends = (index(supers, " " // want // " ") > 0)
+    if (.not. iface_extends .and. index(want, ".") == 0) &
+         iface_extends = (index(supers, "." // want // " ") > 0)
+  end function iface_extends
+
+  ! The interfaces an interface extends, space-delimited with a space
+  ! at each end -- what .getInterfaces answers for one, and so what
+  ! `parents` and `bases` see, which is how print-method's preference
+  ! for IPersistentCollection over RandomAccess reaches a vector's
+  ! IPersistentVector method.
+  function iface_supers(iface) result(supers)
+    character(len=*), intent(in) :: iface
+    character(len=:), allocatable :: supers
     select case (iface)
     case ("clojure.lang.IPersistentMap")
        supers = " clojure.lang.IPersistentCollection clojure.lang.Associative clojure.lang.ILookup" // &
@@ -10427,13 +10513,130 @@ contains
        supers = " clojure.lang.IMeta "
     case ("clojure.lang.IPersistentCollection")
        supers = " clojure.lang.Seqable "
+    case ("clojure.lang.IPersistentStack")
+       supers = " clojure.lang.IPersistentCollection clojure.lang.Seqable "
+    case ("clojure.lang.Associative")
+       supers = " clojure.lang.IPersistentCollection clojure.lang.ILookup clojure.lang.Seqable "
+    case ("clojure.lang.Indexed")
+       supers = " clojure.lang.Counted "
+    case ("java.util.List", "java.util.Set")
+       supers = " java.util.Collection java.lang.Iterable "
+    case ("java.util.Collection")
+       supers = " java.lang.Iterable "
     case default
        supers = ""
     end select
-    iface_extends = (index(supers, " " // want // " ") > 0)
-    if (.not. iface_extends .and. index(want, ".") == 0) &
-         iface_extends = (index(supers, "." // want // " ") > 0)
-  end function iface_extends
+  end function iface_supers
+
+  logical function names_a_class(t)
+    character(len=*), intent(in) :: t
+    type(gc_value) :: none(0)
+    names_a_class = .false.
+    if (index(t, "/") > 0) return
+    if (gc_kind(find_type(t)) == OBJ_TYPE) then
+       names_a_class = .true.
+    else
+       names_a_class = is_class_name(gc_sym(t, none))
+    end if
+  end function names_a_class
+
+  ! A multimethod's slot 5: [hierarchy-ref prefers cache cached-hierarchy].
+  function mf_aux(mf, i) result(out)
+    type(gc_value), intent(in) :: mf
+    integer, intent(in) :: i
+    type(gc_value) :: out
+    out = gc_nil()
+    if (gcv_is(gc_slot(mf, 5))) out = gcv_nth(gc_slot(mf, 5), i)
+  end function mf_aux
+
+  subroutine mf_aux_set(mf, i, v)
+    type(gc_value), intent(in) :: mf, v
+    integer, intent(in) :: i
+    type(gc_value) :: nv
+    if (.not. gcv_is(gc_slot(mf, 5))) return
+    nv = gcv_put(gc_slot(mf, 5), i, v, [mf, v])
+    call gc_set_slot(mf, 5, nv)
+  end subroutine mf_aux_set
+
+  ! The hierarchy the multimethod dispatches over: its ref's value --
+  ! #'global-hierarchy unless defmulti was given :hierarchy
+  function mf_hierarchy(mf) result(h)
+    type(gc_value), intent(in) :: mf
+    type(gc_value) :: h, ref
+    ref = mf_aux(mf, 0)
+    h = ref
+    if (gcn_is_var(ref)) then
+       h = gcn_var_value(ref)
+    else if (gc_kind(ref) == OBJ_ATOM) then
+       h = gc_slot(ref, 1)
+    end if
+  end function mf_hierarchy
+
+  subroutine mf_reset_cache(mf)
+    type(gc_value), intent(in) :: mf
+    call mf_aux_set(mf, 2, gca_empty([mf]))
+    call mf_aux_set(mf, 3, gc_nil())
+  end subroutine mf_reset_cache
+
+  ! MultiFn.getFn: the method for a dispatch value, from the cache when
+  ! the hierarchy is the one it was filled under; else the exact entry,
+  ! else clotran.rt's mf-find-method -- isa? over the hierarchy, the
+  ! preferences, the default, and the ambiguity error -- and cached.
+  ! nil when there is none. (DEVIATIONS 8, resolved.)
+  recursive function mf_lookup(mf, dv, roots) result(meth)
+    type(gc_value), intent(in) :: mf, dv
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: meth, h, fargs, cache
+    integer :: base
+    base = vs_enter(4)
+    call vs_set(base + 1, mf)
+    call vs_set(base + 2, dv)
+    ! the exact entry first: it dominates whatever else matches, and
+    ! it is the common case -- print-method on a map's class -- so it
+    ! costs one lookup, as it always did
+    meth = gca_get(gc_slot(vs_get(base + 1), 4), vs_get(base + 2))
+    if (meth%tag /= GCT_NIL) then
+       call vs_leave(base)
+       return
+    end if
+    h = mf_hierarchy(vs_get(base + 1))
+    call vs_set(base + 3, h)
+    if (.not. same_object(mf_aux(vs_get(base + 1), 3), vs_get(base + 3))) then
+       call mf_reset_cache(vs_get(base + 1))
+       call mf_aux_set(vs_get(base + 1), 3, vs_get(base + 3))
+    end if
+    meth = gca_get(mf_aux(vs_get(base + 1), 2), vs_get(base + 2))
+    if (meth%tag == GCT_NIL) then
+       fargs = gcv_build(6, [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+       call vs_set(base + 4, fargs)
+       fargs = gcv_put(vs_get(base + 4), 0, gc_slot(vs_get(base + 1), 1), [vs_get(base + 1), vs_get(base + 4)])
+       call vs_set(base + 4, fargs)
+       fargs = gcv_put(vs_get(base + 4), 1, vs_get(base + 2), [vs_get(base + 1), vs_get(base + 4)])
+       call vs_set(base + 4, fargs)
+       fargs = gcv_put(vs_get(base + 4), 2, vs_get(base + 3), [vs_get(base + 1), vs_get(base + 4)])
+       call vs_set(base + 4, fargs)
+       fargs = gcv_put(vs_get(base + 4), 3, gc_slot(vs_get(base + 1), 4), [vs_get(base + 1), vs_get(base + 4)])
+       call vs_set(base + 4, fargs)
+       fargs = gcv_put(vs_get(base + 4), 4, mf_aux(vs_get(base + 1), 1), [vs_get(base + 1), vs_get(base + 4)])
+       call vs_set(base + 4, fargs)
+       fargs = gcv_put(vs_get(base + 4), 5, gc_slot(vs_get(base + 1), 3), [vs_get(base + 1), vs_get(base + 4)])
+       call vs_set(base + 4, fargs)
+       meth = mf_call("find-method", vs_get(base + 4))
+       if (has_error) then
+          meth = gc_nil()
+          call vs_leave(base)
+          return
+       end if
+    end if
+    if (meth%tag /= GCT_NIL) then
+       call vs_set(base + 4, meth)
+       cache = gca_assoc(mf_aux(vs_get(base + 1), 2), vs_get(base + 2), vs_get(base + 4), &
+            [vs_get(base + 1), vs_get(base + 2), vs_get(base + 4)])
+       call mf_aux_set(vs_get(base + 1), 2, cache)
+       meth = vs_get(base + 4)
+    end if
+    call vs_leave(base)
+  end function mf_lookup
 
   ! Whether a vector of class keywords names this class.
   logical function key_in_vector(vec, name)
@@ -10477,6 +10680,12 @@ contains
        return
     end if
     select case (c)
+    case ("Class", "java.lang.Class")
+       ! a class is a keyword (DEVIATIONS 34): one naming a deftype or
+       ! spelt like a host class -- which is what lets isa? take its
+       ! isAssignableFrom branch for (class x), and print-method find
+       ! a method on an interface the value's class extends
+       if (v%tag == GCT_KEY) yes = names_a_class(gc_ref_text(v%ref))
     case ("clojure.lang.Symbol");   yes = (t == "symbol")
     case ("clojure.lang.Keyword");  yes = (t == "keyword")
     case ("clojure.lang.Var");      yes = (t == "var")
@@ -10797,7 +11006,12 @@ contains
             "clojure.lang.MultiFn", "StringBuilder", "java.io.PrintWriter")
          continue
       case default
-         if (is_throwable_class(t)) then
+         if (t == "Throwable" .or. t == "java.lang.Throwable") then
+            ! Throwable's own supertype is Object alone: naming itself
+            ! sent `supers` round in a circle, and printing an exception
+            ! never returned
+            cnt = 0
+         else if (is_throwable_class(t)) then
             chain(1) = "Throwable"
             cnt = 1
          else

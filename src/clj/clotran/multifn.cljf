@@ -1,0 +1,62 @@
+;; MultiFn.findAndCacheBestMethod, preferMethod and prefers, as
+;; ClojureScript writes them in cljs.core: isa? over the multimethod's
+;; hierarchy picks the methods that apply, dominates picks between two,
+;; and neither dominating is the ambiguity error. The cache is Eval's
+;; (mf_lookup), keyed by dispatch value and dropped when a method, a
+;; preference or the hierarchy changes.
+;;
+;; A file of its own, apart from clotran.rt, because it is first needed
+;; while core.clj is still loading -- core_print.clj's prefer-method
+;; calls come before core_deftype.clj -- so it uses only what core.clj
+;; has defined by then: no deftype, no reduce, and in-ns rather than ns.
+(in-ns 'clotran.multifn)
+(clojure.core/refer 'clojure.core)
+
+(defn- prefers* [x y prefer-table hierarchy]
+  (let [xprefs (get prefer-table x)]
+    (boolean
+      (or (and xprefs (contains? xprefs y))
+          (some (fn [p] (prefers* x p prefer-table hierarchy)) (parents hierarchy y))
+          (some (fn [p] (prefers* p y prefer-table hierarchy)) (parents hierarchy x))))))
+
+(defn- dominates [x y prefer-table hierarchy]
+  (or (prefers* x y prefer-table hierarchy) (isa? hierarchy x y)))
+
+(defn find-method
+  "The method for dispatch-val: the one whose dispatch value it is-a,
+  the dominant one when several are, the default's when none; an
+  IllegalArgumentException when two match and neither is preferred."
+  [name dispatch-val hierarchy method-table prefer-table default-val]
+  (loop [es (seq method-table) be nil]
+    (if es
+      (let [e (first es) k (first e)]
+        (if (isa? hierarchy dispatch-val k)
+          (let [b (first be)
+                k-dom (and be (dominates k b prefer-table hierarchy))
+                b-dom (and be (dominates b k prefer-table hierarchy))
+                ;; Each dominating the other -- one preferred through a
+                ;; parent, the other by isa? -- is an answer the JVM
+                ;; takes from whichever its table yields last. Here the
+                ;; more specific by isa? wins: print-dup of a map goes to
+                ;; IPersistentMap's method, as it does there, and nothing
+                ;; the JVM answers deterministically changes.
+                be2 (cond (nil? be) e
+                          (and k-dom b-dom) (if (and (isa? hierarchy b k) (not (isa? hierarchy k b))) be e)
+                          k-dom e
+                          :else be)]
+            (when-not (or (nil? be) k-dom b-dom)
+              (throw (IllegalArgumentException.
+                       (str "Multiple methods in multimethod '" name "' match dispatch value: "
+                            dispatch-val " -> " k " and " b ", and neither is preferred"))))
+            (recur (next es) be2))
+          (recur (next es) be)))
+      (if be (second be) (get method-table default-val)))))
+
+(defn prefer
+  "preferMethod's table: x's preferences gain y, unless y is already
+  preferred to x, through the hierarchy, which is an IllegalStateException."
+  [name prefer-table hierarchy x y]
+  (when (prefers* y x prefer-table hierarchy)
+    (throw (IllegalStateException.
+             (str "Preference conflict in multimethod '" name "': " y " is already preferred to " x))))
+  (assoc prefer-table x (conj (get prefer-table x #{}) y)))

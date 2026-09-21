@@ -27,7 +27,7 @@ Categories:
 | 5 | Metadata is a wrapper object, not carried on the value | host | `src/f/GC.f90` |
 | 6 | Syntax-quote expands at analysis time, not read time | open | `src/f/analyze.inc` |
 | 7 | Recursion depth is ~600 frames, against Clojure's ~11,200 | host | `src/f/Eval.f90` |
-| 8 | Multimethods dispatch on equality, plus a fixed host hierarchy | temporary | `src/f/Eval.f90` |
+| 8 | RESOLVED -- multimethods dispatch with `isa?` and preferences | -- | `src/clj/clotran/multifn.cljf` |
 | 9 | RESOLVED -- sorted collections | -- | `src/f/Assoc.f90` |
 | 10 | Refs are mutable boxes; dynamic bindings are global | temporary | `src/f/Eval.f90` |
 | 11 | Transients are the persistent collections | host | `src/f/Eval.f90` |
@@ -220,15 +220,27 @@ nursery and unwinds it periodically, which needs `longjmp` and a compiler
 to C -- neither available here, and no `bind(c)` anywhere in `src/f` by
 design. The transferable part is the principle, not the mechanism.
 
-## 8. Multimethods dispatch on equality only
+## 8. RESOLVED -- multimethods dispatch with `isa?` over the hierarchy, and preferences
 
-`MultiFn.getFn` picks the best method with `isA` over a hierarchy, and
-raises when two methods match and neither is preferred. Ours looks up the
-dispatch value, falls back to the default, and has no hierarchy, no
-`prefer-method`, and no ambiguity check.
+**RESOLVED 2026-09-21.** `MultiFn.getFn`'s selection -- every method
+whose dispatch value the actual one `isa?`, the dominant one by
+preference or by `isa?` when several match, the default when none, and
+`IllegalArgumentException` when two match and neither dominates -- is
+written in Clojure in `src/clj/clotran/multifn.cljf`, as ClojureScript
+writes it in cljs.core. `prefer-method` records preferences and refuses
+a conflict; `prefers`, `methods`, `get-method` and `remove-all-methods`
+read and reset the tables; the hierarchy given to `defmulti` is honoured
+and a change to it drops the per-multimethod cache (Eval.f90
+`mf_lookup`). `isa?` on class keywords goes through `isAssignableFrom`,
+which reads a deftype's interfaces and the host's supertype chains,
+including what an interface extends.
 
-**Removal**: implement `isa?` over the hierarchy Var and widen
-`findAndCacheBestMethod`. Not needed until `derive` is used.
+One choice remains where the JVM's own answer is arbitrary: when two
+matching methods each dominate the other -- one preferred through a
+parent, the other by `isa?` -- the JVM takes whichever its method table
+yields last; clotran takes the more specific by `isa?`. That is the
+JVM's answer for print-dup of a map, and nothing the JVM decides
+deterministically differs.
 
 ## 9. RESOLVED -- sorted collections
 

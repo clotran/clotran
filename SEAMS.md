@@ -106,7 +106,10 @@ points too, which is the confirmation that they are real.
 `src/f/PersistentList.f90` (117), `PersistentVector.f90` (201), `PersistentArrayMap.f90` (224),
 `PersistentHashMap.f90` (363), `Assoc.f90` (178) -- about 1,100 lines standing exactly
 where core.cljs has deftypes. Also `OBJ_LAZY`, `OBJ_ATOM`, `OBJ_MULTIFN`,
-`OBJ_NS`, `OBJ_VAR`.
+`OBJ_NS`, `OBJ_VAR`. The multimethod's OBJECT is native; its method
+SELECTION -- `isa?`, preferences, the ambiguity error -- is Clojure, in
+`src/clj/clotran/multifn.cljf`, exactly as cljs.core writes it, with only
+the per-dispatch-value cache in Fortran.
 
 These are performance decisions, they are reversible in principle, and they
 are **not deviations**. They do not belong in DEVIATIONS.md. What they do owe
