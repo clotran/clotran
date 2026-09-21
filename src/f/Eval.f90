@@ -2249,6 +2249,9 @@ contains
        out = rt_call("array-list", vs_get(base + 1))
     else if (cname == "Eduction" .or. cname == "clojure.lang.Eduction") then
        out = rt_call("->Eduction", vs_get(base + 1))
+    else if (cname == "Object" .or. cname == "java.lang.Object") then
+       ! (Object.), a sentinel equal only to itself
+       out = rt_call("object", vs_get(base + 1))
     else
        ! A type deftype* created. Last, so nothing above is shadowed
        ! by a deftype that happens to pick one of those names.

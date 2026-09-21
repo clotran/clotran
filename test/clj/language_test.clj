@@ -1068,6 +1068,12 @@
 (check "sequence reaches clotran.rt" (sequence (map inc) [1 2]) [2 3])
 (check "which is then loaded" (some? (find-ns 'clotran.rt)) true)
 
+;;; ---- :keys! destructuring -------------------------------------------
+;; core.clj here is newer than the clj the oracle runs: :keys! is
+;; :added "1.13", and 1.12 cannot read it, so the check lives here.
+(check ":keys! binds what is there" (let [{:keys! [a b]} {:a 1 :b 2}] [a b]) [1 2])
+(check "and throws for what is not" (try (let [{:keys! [a b]} {:a 1}] a) (catch IllegalArgumentException e :missing)) :missing)
+
 ;;; ---- clotran.thread: the protocol, and green as its default ---------
 ;;
 ;; One API over pluggable kinds of thread; green is a task. Host check:

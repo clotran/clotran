@@ -1795,3 +1795,23 @@
 [(unchecked-add Long/MAX_VALUE 1) (unchecked-inc Long/MAX_VALUE) (unchecked-multiply Long/MAX_VALUE 2) (unchecked-dec Long/MIN_VALUE) (unchecked-subtract Long/MIN_VALUE 1)]
 
 [(+ 1 2 3) (- 10 1 2) (* 2 3 4) (- 5) (inc 1) (dec 1) (+ 1.5 2) (* 2 1/3)]
+
+;; the small members the language suite named: :keys! destructuring,
+;; (Object.) as a sentinel, the bit tests, long-array and double-array
+(let [o (Object.)] [(= o o) (= o (Object.)) (instance? Object o)])
+
+(get-in {:a {:b 1}} [:a :c] :nope)
+
+(get-in {:a {:b nil}} [:a :b] :nope)
+
+[(bit-test 5 0) (bit-test 5 1) (bit-set 1 2) (bit-clear 7 1) (bit-flip 2 1)]
+
+(vec (long-array [1 2 3]))
+
+(vec (long-array 3))
+
+(vec (long-array 2 7))
+
+(vec (double-array [1.5 2.5]))
+
+(aget (long-array [4 5 6]) 1)

@@ -295,7 +295,7 @@
   ! Long's bounds are clotran's own: an integer here IS a 64-bit one.
        hm("java.lang.Long", "MAX_VALUE", HK_INT, "", huge(0_gc_ip)), &
        hm("java.lang.Long", "MIN_VALUE", HK_INT, "", -huge(0_gc_ip) - 1_gc_ip) ]
-  type(hm), parameter :: HOST_STATICS_4(62) = [ &
+  type(hm), parameter :: HOST_STATICS_4(69) = [ &
        hm("java.lang.Long", "SIZE", HK_INT, "", 64_gc_ip), &
        hm("java.lang.Long", "BYTES", HK_INT, "", 8_gc_ip), &
        hm("java.lang.Short", "MAX_VALUE", HK_INT, "", 32767_gc_ip), &
@@ -370,8 +370,16 @@
        hm("clojure.lang.TransformerIterator", "create", B_RTFN, "ti-create"), &
        hm("clojure.lang.TransformerIterator", "createMulti", B_RTFN, "ti-create-multi"), &
        hm("java.util.Collections", "shuffle", B_RTFN, "shuffle!"), &
-       hm("clojure.lang.RT", "vector", B_VEC, "vec") ]
-  type(hm), parameter :: HOST_STATICS(303) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
+       hm("clojure.lang.RT", "vector", B_VEC, "vec"), &
+  ! and the small members the language suite named, Clojure too
+       hm("clojure.lang.RT", "req", B_RTFN, "req"), &
+       hm("clojure.lang.Numbers", "testBit", B_RTFN, "test-bit"), &
+       hm("clojure.lang.Numbers", "setBit", B_RTFN, "set-bit"), &
+       hm("clojure.lang.Numbers", "clearBit", B_RTFN, "clear-bit"), &
+       hm("clojure.lang.Numbers", "flipBit", B_RTFN, "flip-bit"), &
+       hm("clojure.lang.Numbers", "long_array", B_RTFN, "long-array-of"), &
+       hm("clojure.lang.Numbers", "double_array", B_RTFN, "double-array-of") ]
+  type(hm), parameter :: HOST_STATICS(310) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
   type(hm), parameter :: HOST_METHODS_1(87) = [ &
   ! Instance members. The target becomes the first argument, which is all

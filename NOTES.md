@@ -3155,3 +3155,30 @@ different reason, the new class names having no supertype chain for
 sorted map, replaced the four probes; `host_super` learned the two
 tree classes. A representation trick that leans on "any map" has to be
 revisited whenever a new kind of map arrives.
+
+## Finishing the language: what the suite's own errors named
+
+With sorted collections in, the language suite's remaining errors
+were counted by message and worked in order, each its own commit:
+
+- **`#(...)` named `%` `p1`**, where Clojure names it `p1__1#`. So
+  `every-pred`'s `#(and (p1 %) (p2 %))` read its own argument as the
+  predicate `p1`, and `((every-pred even? number?) 2 4 6 8)` said
+  "not a function: 8". The reader now gives each `#()` a fresh suffix.
+  The reader test had typed the old name in by hand -- the same trap
+  the oracle exists to avoid -- and was corrected to Clojure's shape.
+- **Metadata fell off.** `assoc`, `conj`, `disj`, `pop` and `empty`
+  stripped the wrapper (DEVIATIONS 5) and answered bare; only `dissoc`
+  kept it, by accident. `keep_meta` wraps the result again, and
+  `into` already re-attached through `with-meta`. And a `def`'s Var
+  had no metadata of its own: `:name`, `:ns`, `:file`, `:line` and
+  `:column` are now set as DefExpr sets them, which is also why
+  clojure.test's reports now name the test instead of `(nil)`.
+- **Errors without classes.** `(quot 9 0)` failed with a bare message
+  and `(thrown? ArithmeticException ...)` could not catch it; so with
+  overflow and with `compare` on things that do not compare. They are
+  ArithmeticException and ClassCastException now.
+- **Small members**, Clojure in clotran.rt: `RT/req` behind `:keys!`
+  destructuring, `(Object.)` as a sentinel (`get-in`'s not-found
+  path uses one), the bit tests, `long-array` and `double-array` over
+  Fortran arrays.

@@ -131,3 +131,44 @@
   (coll-reduce
     ([e f] (let [r (.reduce e (fn ([] (f)) ([acc x] (f acc x))) (f))] r))
     ([e f init] (.reduce e f init))))
+
+;;; ---- small members the language suite named ---------------------------
+
+(defn req
+  "RT.req, behind :keys! destructuring: the value, or an error when the
+  key is absent."
+  [m k]
+  (let [v (get m k ::absent)]
+    (if (identical? v ::absent)
+      (throw (IllegalArgumentException. (str "Key not found: " k)))
+      v)))
+
+(defn object
+  "(Object.): a fresh object equal only to itself -- a sentinel."
+  []
+  (reify))
+
+(defn test-bit [x n] (not (zero? (bit-and x (bit-shift-left 1 n)))))
+(defn set-bit [x n] (bit-or x (bit-shift-left 1 n)))
+(defn clear-bit [x n] (bit-and x (bit-not (bit-shift-left 1 n))))
+(defn flip-bit [x n] (bit-xor x (bit-shift-left 1 n)))
+
+(defn- typed-array
+  "Numbers.long_array and double_array: a Fortran array of the kind, of
+  a size, a size and an initial value, or the elements of a seq."
+  ([kind x]
+   (if (number? x)
+     (fortran/make-array kind x)
+     (let [v (vec x) a (fortran/make-array kind (count v))]
+       (dotimes [i (count v)] (fortran/aset a i (nth v i)))
+       a)))
+  ([kind n init]
+   (let [a (fortran/make-array kind n)]
+     (if (number? init)
+       (dotimes [i n] (fortran/aset a i init))
+       (let [v (vec (take n init))]
+         (dotimes [i (count v)] (fortran/aset a i (nth v i)))))
+     a)))
+
+(defn long-array-of ([x] (typed-array "int8" x)) ([n init] (typed-array "int8" n init)))
+(defn double-array-of ([x] (typed-array "real8" x)) ([n init] (typed-array "real8" n init)))
