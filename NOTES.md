@@ -3481,3 +3481,49 @@ checks stay, because `reducers.clj` and `map-entry?` ask them; they are
 the seam, and they cost no model. What the JVM's class machinery still
 does here is `isa?` over `clojure.lang` interfaces for multimethods,
 which is the language's own type hierarchy and cljs has it too.
+
+## The door: a package is a shared library any clotran can open
+
+PLAN.md step 9 said a package is linked into a per-project binary,
+because "standard Fortran has no dynamic loading". James did not want
+that -- no `clotran-chemsol`, no `clotran-qdyn`; one binary, pointed at
+compiled packages. And the premise was wrong in practice: `dlopen` and
+`dlsym` are C functions, `iso_c_binding` names them, `c_f_procpointer`
+makes the symbol callable, and a twenty-line program proved it under
+gfortran and flang before anything was designed.
+
+**The convention** (src/f/DynLoad.f90). A package exports
+`clotran_manifest`, a function answering a C string of EDN -- the
+package's name and every routine with its symbol, arguments (name,
+type, intent, rank) and return type -- and one shim per routine,
+`<name>_shim(argc, argv)`, `bind(C)`, argc C pointers unpacked to the
+real routine's positional arguments. So clotran has exactly one
+procedure-pointer interface, ever, and a package built by any Fortran
+compiler is callable from any clotran. The manifest is read by
+clotran's own reader; nothing else parses it.
+
+**The marshalling** (Eval.f90 `pkg_call`). A scalar goes by pointer to
+a temporary of its C type (`real8`, `int4`, `int8`, `logical`); an
+array by pointer into its registry buffer -- non-moving and contiguous,
+which is what the collector's design promised interop -- followed by
+one `int4` per extent; a string null-terminated. `:out` and `:inout`
+scalars come back as a map by name, a `:returns` value as the value
+(under `:return` when there are outs too); arrays are written in place.
+Too few or too many arguments is an ArityException naming the routine;
+a scalar where an array is wanted, a slice, the wrong rank, the wrong
+kind are each refused by name.
+
+**The fns** (src/clj/clotran/package.cljf). `(fortran/load-package
+path)` opens the library, reads the manifest, and interns one fn per
+routine in the namespace the manifest names, with `:arglists` from the
+manifest, so a package called `testpkg` answers to `(testpkg/divmod 17
+5)`. test/f/testpkg.f90 is such a package -- five routines, their
+shims, a manifest -- built by the Makefile like any other, and the
+language test goes through the door.
+
+What comes next through the same door: ChemSol and BLAS as packages,
+and out of the base binary; then `scripts/bind-fortran`, which writes
+the shims and manifest from a library's interfaces, so a package is
+declared rather than hand-bound. Windows is `LoadLibrary` and
+`GetProcAddress` under the same two wrappers, a second implementation
+of DynLoad.f90, not a change to its callers.

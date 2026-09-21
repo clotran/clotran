@@ -1124,3 +1124,23 @@
 (if (zero? @*failures*)
   (println "LANGUAGE TESTS PASSED")
   (println "LANGUAGE TESTS FAILED:" @*failures*))
+
+;;; ---- a package through the door: DynLoad.f90, clotran.package --------
+;; test/f/testpkg.f90 is a shared library with a manifest and one shim per
+;; routine, built by the Makefile like any package. (fortran/load-package
+;; path) opens it and interns its routines as fns in the namespace the
+;; manifest names.
+(def tp (try (fortran/load-package "build/libtestpkg.dylib")
+             (catch Exception e (fortran/load-package "build/libtestpkg.so"))))
+(check "the manifest names the package" (:package tp) "testpkg")
+(check "an :out scalar comes back by name" (testpkg/double-it 21.0) {:y 42.0})
+(check "an array goes by pointer with its extent; a :returns value is the value"
+       (let [a (make-array Double/TYPE 3)] (aset a 0 1.5) (aset a 1 2.5) (aset a 2 3.0) (testpkg/sum-arr a)) 7.0)
+(check "an :inout array is written in place"
+       (let [a (make-array Double/TYPE 2)] (aset a 0 1.0) (aset a 1 2.0) (testpkg/scale! a 10.0) [(aget a 0) (aget a 1)]) [10.0 20.0])
+(check "a string crosses null-terminated" (testpkg/count-chars "hello") 5)
+(check "two :out scalars" (testpkg/divmod 17 5) {:q 3 :r 2})
+(check "a library that is not there is an error" (try (fortran/load-package "build/nope.dylib") :loaded (catch Exception e :no)) :no)
+(check "the wrong argument count is an ArityException" (try (testpkg/double-it) (catch clojure.lang.ArityException e :arity)) :arity)
+(check "a scalar where an array is wanted is an error" (try (testpkg/sum-arr 1.0) (catch Exception e :not-array)) :not-array)
+(check "the fns carry arglists" (:arglists (meta #'testpkg/divmod)) '([a b]))

@@ -75,9 +75,13 @@ UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
 ICU_PLATFORM = macOS
 LIBCXX = -lc++
+SOEXT = dylib
+LIBDL =
 else
 ICU_PLATFORM = Linux
 LIBCXX = -lstdc++
+SOEXT = so
+LIBDL = -ldl
 endif
 
 CC ?= cc
@@ -153,7 +157,7 @@ $(B)/Printer.o: $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Ass
 # straight to a Pattern, not to a string). See Regex.f90.
 $(B)/LispReader.o: $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/Regex.o
 $(B)/Eval.o: $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/Env.o \
-	$(B)/Namespace.o $(B)/Printer.o $(B)/Regex.o $(B)/NativeArray.o $(B)/ChemSolBind.o $(S)/analyze.inc $(S)/exec.inc $(S)/repl.inc $(S)/tasks.inc $(S)/sorted.inc $(S)/hosttable.inc
+	$(B)/Namespace.o $(B)/Printer.o $(B)/Regex.o $(B)/NativeArray.o $(B)/ChemSolBind.o $(B)/DynLoad.o $(S)/analyze.inc $(S)/exec.inc $(S)/repl.inc $(S)/tasks.inc $(S)/sorted.inc $(S)/hosttable.inc
 
 # The reference BLAS (src/f/blas/PROVENANCE.md): F77 fixed form, built
 # by the same compiler, linked wherever NativeArray is.
@@ -178,12 +182,12 @@ $(B)/ChemSolBind.o: $(B)/GC.o $(B)/NativeArray.o $(B)/chemsol.o
 data-objects = $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(B)/Assoc.o \
 	$(B)/PersistentList.o $(B)/PersistentVector.o $(B)/NativeArray.o $(B)/Printer.o $(blas-objects)
 reader-objects = $(B)/LispReader.o $(B)/Regex.o $(B)/regex_shim.o
-eval-objects = $(data-objects) $(B)/Env.o $(B)/Namespace.o $(reader-objects) $(chemsol-objects) $(B)/Eval.o
+eval-objects = $(data-objects) $(B)/Env.o $(B)/Namespace.o $(reader-objects) $(chemsol-objects) $(B)/DynLoad.o $(B)/Eval.o
 LINK_ICU = $(ICU_LIBS) $(LIBCXX) -lpthread
 
 clotran-bin: $(eval-objects) $(S)/main.f90 $(ICU_LIBS)
 	$(FC) $(FCFLAGS) -c $(S)/main.f90 -o $(B)/main.o
-	$(FC) $(LDFLAGS) -o $@ $(eval-objects) $(B)/main.o $(LINK_ICU)
+	$(FC) $(LDFLAGS) -o $@ $(eval-objects) $(B)/main.o $(LINK_ICU) $(LIBDL)
 
 # Test binaries: each links exactly the modules it exercises, so a
 # module's test cannot pass by accident through something above it.
@@ -212,7 +216,12 @@ $(BT)/eval_test: $(eval-objects) $(T)/eval_test.f90 $(ICU_LIBS) | $(BT) $(FCSTAM
 # checks that need core.clj loaded, and the differential oracle against
 # real Clojure. clotran is built here so main.f90 and its link line are
 # inside the gate under both compilers.
-test: $(test-bins) clotran-bin
+# The package the language test loads through the door (DynLoad.f90):
+# a shared library with a manifest and shims, built like any package.
+$(B)/libtestpkg.$(SOEXT): $(T)/testpkg.f90 | $(B) $(FCSTAMP)
+	$(FC) $(FCFLAGS) -shared -fPIC -o $@ $<
+
+test: $(test-bins) clotran-bin $(B)/libtestpkg.$(SOEXT)
 	for t in $(unit-tests); do echo "--- $$t ---"; $(BT)/$$t || exit 1; done
 	@echo "--- language_test (with core.clj) ---"
 	./clotran-bin src/clj/clojure/core.clj test/clj/language_test.clj </dev/null \

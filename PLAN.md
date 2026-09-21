@@ -384,44 +384,67 @@ it (tasks.inc, DEVIATIONS 38). `:process` is next. JIT only
 when a profile still demands it, and then jank's way -- LLVM IR in
 process -- rather than generated Fortran text through a compiler.
 
-### 9. Packages -- after the main work, not before
+### 9. Packages -- a shared library any clotran can open
 
-Not first priority; needed once stage 2, the thread primitive and the
-binding generator exist, and recorded now so the shape is not
-re-argued then.
+Superseded 2026-09-21. The earlier text said a package is LINKED into a
+per-project `clotran-bin`, because "standard Fortran has no dynamic
+loading". True of the standard, not of practice: `dlopen` and `dlsym`
+are C functions, `iso_c_binding` names them, and `c_f_procpointer`
+makes the symbol callable, with no C source of clotran's own. Proved on
+this machine under gfortran and flang before this was written. James's
+requirement: one clotran binary, pointed at compiled packages; no
+`clotran-chemsol`, no `clotran-qdyn`.
 
-**The problem.** `clotran-bin` links BLAS and ChemSol into every build.
-Nobody wants every scientific library in every binary, and the base
-should be core.clj, host.clj and the `fortran` namespace primitives
-(`make-array`, `aget`, `aset`, the array kinds) and nothing else.
+**A package is one artifact.** A shared library (`.dylib`, `.so`,
+`.dll`) that exports
 
-**What a package IS here.** Interop is static (step 6): standard
-Fortran has no dynamic loading, `dlopen` is POSIX not Fortran, and
-the product is a binary with your Fortran linked in, like embedding
-Lua. So a package is a directory of Fortran sources, the bindings
-the generator wrote for them (or hand-written `ChemSolBind.f90`-style
-ones), and `.cljf`/`.cljc` files on a classpath root -- and
-installing a package means LINKING it. BLAS and ChemSol become the
-first two packages; `scripts/chemsol-check` and the dgemm test keep
-proving the seam either way.
+- `clotran_manifest`: a C string of EDN naming the package and every
+  routine -- its symbol, its arguments with type, intent and rank, what
+  it returns. The reader that reads it is clotran's own.
+- one shim per routine, `<name>_shim(argc, argv)`, `bind(C)`: argc
+  C pointers, unpacked to the real routine's positional arguments. So
+  clotran has exactly one procedure-pointer interface, ever, and a
+  package built by any Fortran compiler is callable from any clotran.
 
-**The manifest, deps.edn-shaped.** A `deps.edn` at the project root
-names packages by local path or git coordinate with `:paths` for the
-Clojure side and `:fortran` for the sources, the way tools.deps names
-`:paths` and `:deps`. `clotran build` (or `make PACKAGES=...`) reads it,
-generates the Makefile fragment that compiles those sources with the
-pinned compiler, links `clotran-bin` for that project, and adds the
-package directories to `classpath_find`'s roots so `require` finds
-their namespaces. Per-project binaries, like a per-project JVM
-classpath, is the honest model; a global cache of compiled packages
-keyed by compiler and version is the optimisation.
+**Calling it.** `(fortran/load-package "lib/libchemsol.dylib")` opens
+the library, reads the manifest, and interns one fn per routine in the
+package's namespace. A call marshals by the manifest: scalars by
+pointer to a temporary, arrays by pointer into the registry buffer
+(non-moving, contiguous -- the collector's design decision below is
+what makes this safe), strings as character arrays with a length; the
+result is the returned value, or a map of the `:out` scalars by name;
+arrays are written in place. `src/f/DynLoad.f90` is the loader and the
+calling convention; `B_PKGLOAD` and `B_PKGCALL` in Eval.f90 do the
+marshalling; `src/clj/clotran/package.cljf` makes the fns.
 
-**What it depends on.** The binding generator (step 7's follow-up)
-for packages to be declarable rather than hand-bound; the image
-(step 5 stage 3) so that a per-project binary starts fast; nothing
-from threads. A package that is pure Clojure (`.cljc`, `.cljf`) needs
-none of that and is just a classpath root today: `require` already
-looks in `.cljf`, `.cljc`, `.clj` on each root.
+**Building one.** `scripts/bind-fortran` reads the Fortran sources'
+signatures (explicit interfaces, `intent`, rank) and writes the shims,
+the manifest and a Makefile fragment that builds the library with
+`-shared -fPIC`; a hand-written binding (ChemSol's, with its unit-44
+and unit-43 handling) is a shim like any other. A package manager is
+then a directory of such libraries and a `deps.edn`-shaped manifest
+naming them -- one with ChemSol and GAMESS, another with Qdyn -- and
+`clotran-bin` never changes. BLAS and ChemSol become the first two
+packages and leave the base binary; `scripts/chemsol-check` keeps
+proving the seam through the door instead of the link.
+
+**Known limits, recorded now.** A package carries its compiler's Fortran
+runtime; one built with clotran's own compiler is the supported case,
+and mixing runtimes in one process (two owners of unit 6) is a case to
+test, not assume. A routine that calls back into clotran does not exist
+yet; when one does, it enters through a context like a task. Many
+Fortran libraries are not thread-safe; the manifest will say so and the
+`:process` kind will serialise them.
+
+**The JIT is the same door.** The resolved tree (step 5) compiled to
+Fortran source, built into a shared library, and loaded here is the
+transpiler of goal 4 and the cheapest compilation there is: seconds per
+namespace, ahead of time, `clotran compile my.cljf` producing a package.
+An in-process JIT (LLVM, jank's way) stays what the decision record
+below says: when a profile demands it.
+
+**What it depends on.** Nothing from threads. The image (step 5 stage 3)
+is welcome but not required.
 
 ## Decisions that still hold
 

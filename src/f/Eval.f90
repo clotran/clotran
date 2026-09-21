@@ -56,6 +56,8 @@ module Eval
   use ChemSolBind
   use Regex
   use LispReader
+  use DynLoad
+  use iso_c_binding, only: c_ptr, c_funptr, c_loc, c_double, c_int, c_long, c_char, c_null_char, c_associated, c_bool
   implicit none
   private
 
@@ -188,6 +190,7 @@ module Eval
   integer, parameter :: B_MAPENTRY = 322, B_ISASSIGN = 323, B_BINDROOT = 324, B_RAWROOT = 325
   integer, parameter :: B_HASHCODE = 326, B_GETCAUSE = 327, B_NSREMOVE = 328, B_NSCREATE = 329, B_CANSEQ = 330
   integer, parameter :: B_PREFERMETHOD = 331, B_PREFERTABLE = 332, B_DISPATCHFN = 333
+  integer, parameter :: B_PKGLOAD = 334, B_PKGCALL = 335, B_PKGFN = 336
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -291,6 +294,15 @@ module Eval
   logical, save :: task_trace = .false., task_trace_read = .false.   ! CLOTRAN_TASK_TRACE=1: the scheduler's decisions, on stderr
   logical, save :: rt_loaded = .false.   ! clotran.rt, once (rt_call)
   logical, save :: mf_loaded = .false.   ! clotran.multifn, once (mf_call)
+  logical, save :: pk_loaded = .false.   ! clotran.package, once (B_PKGFN)
+  ! The packages opened (DynLoad.f90), by handle: a package's fns carry
+  ! the index, never the pointer.
+  type(c_ptr), allocatable, save :: pkg_handles(:)
+  integer, save :: pkg_count = 0
+  ! a string argument on its way to a shim, null-terminated
+  type :: cbuf
+     character(kind=c_char), allocatable :: s(:)
+  end type cbuf
   integer, allocatable, save :: free_ctx(:)
   integer, save :: n_free_ctx = 0
   ! A task's states (i1): parked and resumable, on the Fortran stack
@@ -633,6 +645,10 @@ contains
       call bind_builtin(vs_get(base + 3), "array-kind", B_ARRAY_KIND)
       call bind_builtin(vs_get(base + 3), "array-shape", B_ARRAY_SHAPE)
       call bind_builtin(vs_get(base + 3), "dgemm", B_DGEMM)
+      ! packages: a shared library opened at run time (DynLoad.f90, clotran.package)
+      call bind_builtin(vs_get(base + 3), "load-package*", B_PKGLOAD)
+      call bind_builtin(vs_get(base + 3), "call-package*", B_PKGCALL)
+      call bind_builtin(vs_get(base + 3), "load-package", B_PKGFN)
       ! The thread primitive's host half, in the namespace the protocol
       ! lives in (src/clj/clotran/thread.cljf; tasks.inc).
       fns = gcn_find_or_create("clotran.thread", [core])
@@ -8464,6 +8480,57 @@ contains
        a = gcv_nth(args, 0)
        out = gc_nil()
        if (gc_kind(a) == OBJ_MULTIFN) out = gc_slot(a, 2)
+    case (B_PKGFN)
+       ! (fortran/load-package path): clotran.package makes the fns
+       out = rt_call_in("clotran/package", "clotran.package", pk_loaded, "load-package", args)
+    case (B_PKGLOAD)
+       ! (load-package* path): the library opened, its manifest read by
+       ! clotran's own reader, {:handle n :manifest m} answered
+       block
+         character(len=:), allocatable :: path, text
+         type(c_ptr) :: h
+         type(gc_value) :: m, res, k
+         type(c_ptr), allocatable :: grown(:)
+         path = text_of(gcv_nth(args, 0))
+         h = dl_open(path)
+         if (.not. c_associated(h)) then
+            call fail("load-package: " // path // ": " // dl_error())
+         else
+            text = dl_manifest(h)
+            if (len(text) == 0) then
+               call fail("load-package: " // path // " exports no clotran_manifest")
+            else
+               m = gcr_read(text, [vs_get(base + 1)])
+               if (gcr_has_error()) then
+                  call fail("load-package: " // path // ": manifest: " // gcr_error())
+               else
+                  call vs_set(base + 2, m)
+                  if (.not. allocated(pkg_handles)) allocate(pkg_handles(8))
+                  if (pkg_count >= size(pkg_handles)) then
+                     allocate(grown(2 * size(pkg_handles)))
+                     grown(1:pkg_count) = pkg_handles(1:pkg_count)
+                     call move_alloc(grown, pkg_handles)
+                  end if
+                  pkg_count = pkg_count + 1
+                  pkg_handles(pkg_count) = h
+                  res = gca_empty([vs_get(base + 1), vs_get(base + 2)])
+                  call vs_set(base + 3, res)
+                  k = gc_key("handle", [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+                  call vs_set(base + 4, k)
+                  res = gca_assoc(vs_get(base + 3), vs_get(base + 4), gc_int(int(pkg_count, gc_ip)), &
+                       [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 4)])
+                  call vs_set(base + 3, res)
+                  k = gc_key("manifest", [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+                  call vs_set(base + 4, k)
+                  res = gca_assoc(vs_get(base + 3), vs_get(base + 4), vs_get(base + 2), &
+                       [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 4)])
+                  out = res
+               end if
+            end if
+         end if
+       end block
+    case (B_PKGCALL)
+       out = pkg_call(gcv_nth(args, 0), gcv_nth(args, 1), gcv_nth(args, 2), [vs_get(base + 1)])
     case (B_IDENTITY)
        out = gcv_nth(args, 0)
     case (B_GT, B_LTE, B_GTE)
@@ -10670,6 +10737,246 @@ contains
     end if
     call vs_leave(base)
   end function mf_lookup
+
+  ! (call-package* handle routine args), marshalled by the manifest and
+  ! called through the shim (DynLoad.f90). A scalar goes by pointer to a
+  ! temporary of its C type; an array by pointer into its registry
+  ! buffer, followed by one int4 per extent; a string null-terminated.
+  ! The :out and :inout scalars come back as a map by name, a :returns
+  ! value as the value (under :return when there are outs as well);
+  ! arrays are written in place.
+  recursive function pkg_call(hv, routine, cargs, roots) result(out)
+    type(gc_value), intent(in) :: hv, routine, cargs
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out
+    type(gc_value) :: spec, av, tv, res, k, rt
+    integer :: hi, nspec, ncall, nargv, slot, dslot, i, j, r, d, nout, base
+    integer(c_int), allocatable, target :: ti(:), td(:)
+    integer(c_long), allocatable, target :: tl(:)
+    real(c_double), allocatable, target :: tr(:)
+    logical(c_bool), allocatable, target :: tb(:)
+    type(cbuf), allocatable, target :: ts(:)
+    type(c_ptr), allocatable :: argv(:)
+    character(len=:), allocatable :: sym, rname, text, rty
+    character(len=8), allocatable :: ty(:), it(:)
+    integer, allocatable :: rk(:), ext(:)
+    type(c_funptr) :: fp
+    real(c_double), pointer, contiguous :: pr(:)
+    integer, pointer, contiguous :: pi(:)
+    logical :: ok, has_ret
+    character(len=16) :: cbuf1, cbuf2
+
+    out = gc_nil()
+    base = vs_enter(5)
+    call vs_set(base + 1, strip_meta(routine))
+    call vs_set(base + 2, strip_meta(cargs))
+    once: do
+       hi = ival_of(hv)
+       if (hi < 1 .or. hi > pkg_count) then
+          call fail("call-package*: no such package handle")
+          exit once
+       end if
+       k = gc_key("symbol", [roots, vs_get(base + 1)])
+       sym = text_of(gca_get(vs_get(base + 1), k))
+       k = gc_key("name", [roots, vs_get(base + 1)])
+       rname = text_of(gca_get(vs_get(base + 1), k))
+       k = gc_key("args", [roots, vs_get(base + 1)])
+       spec = strip_meta(gca_get(vs_get(base + 1), k))
+       call vs_set(base + 3, spec)
+       k = gc_key("returns", [roots, vs_get(base + 1)])
+       rt = strip_meta(gca_get(vs_get(base + 1), k))
+       has_ret = (rt%tag == GCT_KEY)
+       rty = ""
+       if (has_ret) rty = gc_ref_text(rt%ref)
+       nspec = gcv_count(vs_get(base + 3))
+       ncall = gcv_count(vs_get(base + 2))
+       allocate(ty(nspec), it(nspec), rk(nspec))
+       nargv = nspec
+       do i = 1, nspec
+          av = strip_meta(gcv_nth(vs_get(base + 3), i - 1))
+          k = gc_key("type", [roots, av])
+          tv = strip_meta(gca_get(av, k))
+          ty(i) = ""
+          if (tv%tag == GCT_KEY) ty(i) = gc_ref_text(tv%ref)
+          k = gc_key("intent", [roots, av])
+          tv = strip_meta(gca_get(av, k))
+          it(i) = "in"
+          if (tv%tag == GCT_KEY) it(i) = gc_ref_text(tv%ref)
+          k = gc_key("rank", [roots, av])
+          tv = strip_meta(gca_get(av, k))
+          rk(i) = 0
+          if (tv%tag == GCT_INT) rk(i) = int(tv%ival)
+          nargv = nargv + rk(i)
+       end do
+       if (has_ret) nargv = nargv + 1
+       allocate(ti(nspec + 1), tl(nspec + 1), tr(nspec + 1), tb(nspec + 1), ts(nspec + 1), argv(nargv), td(max(1, nargv)))
+       ti = 0; tl = 0; tr = 0.0_c_double; tb = .false.; td = 0
+       ! the call's arguments are the manifest's, less the :out ones
+       j = 0
+       do i = 1, nspec
+          if (it(i) /= "out") j = j + 1
+       end do
+       if (j /= ncall) then
+          write(cbuf1, '(I0)') j
+          write(cbuf2, '(I0)') ncall
+          call raise_class("ArityException", "Wrong number of args (" // trim(cbuf2) // ") passed to: " // rname // &
+               ", which takes " // trim(cbuf1), [roots, vs_get(base + 1)])
+          exit once
+       end if
+       slot = 0
+       dslot = 0
+       j = 0
+       do i = 1, nspec
+          tv = gc_nil()
+          if (it(i) /= "out") then
+             tv = strip_meta(gcv_nth(vs_get(base + 2), j))
+             j = j + 1
+          end if
+          slot = slot + 1
+          if (rk(i) == 0) then
+             select case (trim(ty(i)))
+             case ("real8")
+                if (it(i) /= "out") then
+                   if (.not. is_number(tv)) then
+                      call raise_class("ClassCastException", sym // ": argument " // trim(cbuf_of(i)) // " is not a number", [roots])
+                      exit once
+                   end if
+                   tr(i) = real(num_dbl(tv), c_double)
+                end if
+                argv(slot) = c_loc(tr(i))
+             case ("int4")
+                if (it(i) /= "out") ti(i) = int(tv%ival, c_int)
+                argv(slot) = c_loc(ti(i))
+             case ("int8")
+                if (it(i) /= "out") tl(i) = int(tv%ival, c_long)
+                argv(slot) = c_loc(tl(i))
+             case ("logical")
+                if (it(i) /= "out") tb(i) = logical(truthy(tv), c_bool)
+                argv(slot) = c_loc(tb(i))
+             case ("string")
+                if (it(i) == "out") then
+                   call fail("call-package*: " // sym // ": a string cannot be an :out argument")
+                   exit once
+                end if
+                text = text_of(tv)
+                allocate(ts(i)%s(len(text) + 1))
+                do d = 1, len(text)
+                   ts(i)%s(d) = text(d:d)
+                end do
+                ts(i)%s(len(text) + 1) = c_null_char
+                argv(slot) = c_loc(ts(i)%s)
+             case default
+                call fail("call-package*: " // sym // ": unknown argument type " // trim(ty(i)))
+                exit once
+             end select
+          else
+             ! an array: the registry buffer, then its extents
+             if (gc_kind(tv) /= OBJ_ARRAY) then
+                call fail("call-package*: " // sym // ": argument " // trim(cbuf_of(i)) // " must be an array")
+                exit once
+             end if
+             if (gc_i2(tv) /= -1) then
+                call fail("call-package*: " // sym // ": a slice is not contiguous; pass a whole array")
+                exit once
+             end if
+             ext = gcna_extents(gc_i1(tv))
+             if (size(ext) /= rk(i)) then
+                call fail("call-package*: " // sym // ": argument " // trim(cbuf_of(i)) // " has the wrong rank")
+                exit once
+             end if
+             ok = .false.
+             select case (trim(ty(i)))
+             case ("real8")
+                call gcna_real8_ptr(gc_i1(tv), pr, ok)
+                if (ok) argv(slot) = c_loc(pr)
+             case ("int4")
+                call gcna_int4_ptr(gc_i1(tv), pi, ok)
+                if (ok) argv(slot) = c_loc(pi)
+             end select
+             if (.not. ok) then
+                call fail("call-package*: " // sym // ": argument " // trim(cbuf_of(i)) // " is not a " // trim(ty(i)) // " array")
+                exit once
+             end if
+             do d = 1, rk(i)
+                dslot = dslot + 1
+                td(dslot) = int(ext(d), c_int)
+                slot = slot + 1
+                argv(slot) = c_loc(td(dslot))
+             end do
+          end if
+       end do
+       if (has_ret) then
+          slot = slot + 1
+          select case (rty)
+          case ("real8");   argv(slot) = c_loc(tr(nspec + 1))
+          case ("int4");    argv(slot) = c_loc(ti(nspec + 1))
+          case ("int8");    argv(slot) = c_loc(tl(nspec + 1))
+          case ("logical"); argv(slot) = c_loc(tb(nspec + 1))
+          case default
+             call fail("call-package*: " // sym // ": unknown return type " // rty)
+             exit once
+          end select
+       end if
+       fp = dl_sym(pkg_handles(hi), sym)
+       if (.not. c_associated(fp)) then
+          call fail("call-package*: the package has no " // sym)
+          exit once
+       end if
+       call dl_call_shim(fp, argv)
+       ! the results
+       res = gca_empty([roots, vs_get(base + 1)])
+       call vs_set(base + 4, res)
+       nout = 0
+       do i = 1, nspec
+          if (rk(i) /= 0 .or. it(i) == "in") cycle
+          av = strip_meta(gcv_nth(vs_get(base + 3), i - 1))
+          k = gc_key("name", [roots, av])
+          tv = strip_meta(gca_get(av, k))
+          k = gc_key(text_of(tv), [roots, vs_get(base + 4)])
+          call vs_set(base + 5, k)
+          res = gca_assoc(vs_get(base + 4), vs_get(base + 5), temp_value(i), [roots, vs_get(base + 5), vs_get(base + 4)])
+          call vs_set(base + 4, res)
+          nout = nout + 1
+       end do
+       if (has_ret) then
+          if (nout == 0) then
+             out = temp_value(nspec + 1)
+          else
+             k = gc_key("return", [roots, vs_get(base + 4)])
+             call vs_set(base + 5, k)
+             res = gca_assoc(vs_get(base + 4), vs_get(base + 5), temp_value(nspec + 1), [roots, vs_get(base + 5), vs_get(base + 4)])
+             out = res
+          end if
+       else if (nout > 0) then
+          out = vs_get(base + 4)
+       end if
+       exit once
+    end do once
+    call vs_leave(base)
+  contains
+    function temp_value(i) result(v)
+      integer, intent(in) :: i
+      type(gc_value) :: v
+      character(len=8) :: t
+      if (i > nspec) then
+         t = rty
+      else
+         t = ty(i)
+      end if
+      select case (trim(t))
+      case ("real8");   v = gc_real(real(tr(i), gc_dp))
+      case ("int4");    v = gc_int(int(ti(i), gc_ip))
+      case ("int8");    v = gc_int(int(tl(i), gc_ip))
+      case ("logical"); v = gc_bool(logical(tb(i)))
+      case default;     v = gc_nil()
+      end select
+    end function temp_value
+    function cbuf_of(i) result(s)
+      integer, intent(in) :: i
+      character(len=16) :: s
+      write(s, '(I0)') i
+    end function cbuf_of
+  end function pkg_call
 
   ! Whether a vector of class keywords names this class.
   logical function key_in_vector(vec, name)

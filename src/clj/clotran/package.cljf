@@ -1,0 +1,21 @@
+(ns clotran.package
+  "A package is a shared library any clotran can open (PLAN.md step 9,
+  src/f/DynLoad.f90): it exports a manifest, EDN naming its routines,
+  and one shim per routine with the one signature clotran calls. This
+  namespace turns a manifest into fns: (load-package path) opens the
+  library, reads the manifest, and interns a fn per routine in the
+  package's own namespace, so a package named chemsol answers to
+  (chemsol/readopt ..). Loading and calling are the host's, reached as
+  fortran/load-package* and fortran/call-package*.")
+
+(defn load-package
+  "Opens the shared library at path and interns its routines as fns in
+  the namespace the manifest names. Answers the manifest."
+  [path]
+  (let [{:keys [handle manifest]} (fortran/load-package* path)
+        ns-sym (symbol (:package manifest))
+        pkg-ns (create-ns ns-sym)]
+    (doseq [r (:routines manifest)]
+      (intern pkg-ns (with-meta (symbol (:name r)) {:doc (:doc r) :arglists (list (mapv (comp symbol :name) (remove #(= :out (:intent %)) (:args r))))})
+              (fn [& args] (fortran/call-package* handle r (vec args)))))
+    manifest))
