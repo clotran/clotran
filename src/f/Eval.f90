@@ -2338,7 +2338,10 @@ contains
          if (is_info) then
             cause = nth_or_nil(vs_get(base + 1), 2)
          else
-            cause = nth_or_nil(vs_get(base + 1), 1)
+            ! the LAST argument, when it is one: (Exception. msg cause), and
+            ! (CompilerException. file line col cause)
+            cause = gc_nil()
+            if (gcv_count(vs_get(base + 1)) >= 2) cause = gcv_nth(vs_get(base + 1), gcv_count(vs_get(base + 1)) - 1)
          end if
          if (gc_kind(strip_meta(cause)) == OBJ_ERR) call gc_set_slot(vs_get(base + 3), 5, cause)
          out = vs_get(base + 3)
@@ -2574,6 +2577,7 @@ contains
     case (HK_NAN);      out = gc_real(ieee_value(1.0_gc_dp, ieee_quiet_nan))
     case (HK_TRUE);     out = gc_bool(.true.)
     case (HK_FALSE);    out = gc_bool(.false.)
+    case (HK_LINEBOX);  out = gc_obj(OBJ_ATOM, [gc_int(0_gc_ip), gc_nil()], [roots])
     case (HK_NIL);      out = gc_nil()
     case (HK_EMPTYMAP); out = gca_empty([roots])
     case (HK_SPECIALS); out = specials_map([roots])
@@ -3432,6 +3436,11 @@ contains
     if (t == "&" .or. t == "/") return
     if (t(1:1) == ".") return
     if (t(n:n) == ".") return
+    ! Compiler.resolveSymbol: a name with a dot in it is a class name
+    ! and stays as written -- `clojure.core is clojure.core, not
+    ! this-ns/clojure.core, which is what (use 'clojure.core) inside a
+    ! syntax-quote was asking to load
+    if (index(t, ".") > 0) return
     if (n > 8) then
        if (t(n-7:n) == "__auto__") return
     end if
@@ -10480,47 +10489,65 @@ contains
     end do
   end function iface_in_vector
 
-  logical function iface_extends(iface, want)
+  ! Whether an interface extends another, through any number of steps.
+  recursive function iface_extends(iface, want) result(yes)
     character(len=*), intent(in) :: iface, want
+    logical :: yes
     character(len=:), allocatable :: supers
+    integer :: p, q
+    yes = .false.
     supers = iface_supers(iface)
-    iface_extends = (index(supers, " " // want // " ") > 0)
-    if (.not. iface_extends .and. index(want, ".") == 0) &
-         iface_extends = (index(supers, "." // want // " ") > 0)
+    if (len(supers) == 0) return
+    yes = (index(supers, " " // want // " ") > 0)
+    if (.not. yes .and. index(want, ".") == 0) yes = (index(supers, "." // want // " ") > 0)
+    if (yes) return
+    p = 2
+    do while (p <= len(supers))
+       q = index(supers(p:), " ")
+       if (q == 0) exit
+       if (q > 1) then
+          if (iface_extends(supers(p:p+q-2), want)) then
+             yes = .true.
+             return
+          end if
+       end if
+       p = p + q
+    end do
   end function iface_extends
 
-  ! The interfaces an interface extends, space-delimited with a space
-  ! at each end -- what .getInterfaces answers for one, and so what
-  ! `parents` and `bases` see, which is how print-method's preference
-  ! for IPersistentCollection over RandomAccess reaches a vector's
-  ! IPersistentVector method.
+  ! The interfaces an interface DIRECTLY extends, as clojure.lang and
+  ! java.util declare them, space-delimited with a space at each end:
+  ! what .getInterfaces answers for one, so `bases` and `parents` see
+  ! it and `supers` takes the closure. Direct, not transitive, because
+  ! print-method prefers RandomAccess to java.util.List: a transitive
+  ! list that gave IPersistentVector a java.util.List parent let
+  ! RandomAccess's method dominate the vector's own, and print-str of a
+  ! vector answered #object[..].
   function iface_supers(iface) result(supers)
     character(len=*), intent(in) :: iface
     character(len=:), allocatable :: supers
     select case (iface)
     case ("clojure.lang.IPersistentMap")
-       supers = " clojure.lang.IPersistentCollection clojure.lang.Associative clojure.lang.ILookup" // &
-            " clojure.lang.Counted clojure.lang.Seqable java.util.Map java.lang.Iterable "
+       supers = " java.lang.Iterable clojure.lang.Associative clojure.lang.Counted "
     case ("clojure.lang.IPersistentVector")
-       supers = " clojure.lang.IPersistentCollection clojure.lang.Associative clojure.lang.ILookup" // &
-            " clojure.lang.Counted clojure.lang.Seqable clojure.lang.Sequential clojure.lang.IPersistentStack" // &
-            " clojure.lang.Reversible clojure.lang.Indexed java.util.List java.lang.Iterable "
+       supers = " clojure.lang.Associative clojure.lang.Sequential clojure.lang.IPersistentStack" // &
+            " clojure.lang.Reversible clojure.lang.Indexed "
     case ("clojure.lang.IPersistentSet")
-       supers = " clojure.lang.IPersistentCollection clojure.lang.Counted clojure.lang.Seqable java.util.Set java.lang.Iterable "
-    case ("clojure.lang.IPersistentList", "clojure.lang.ISeq")
-       supers = " clojure.lang.IPersistentCollection clojure.lang.Seqable clojure.lang.Sequential clojure.lang.IPersistentStack "
-    case ("clojure.lang.IObj")
-       supers = " clojure.lang.IMeta "
-    case ("clojure.lang.IPersistentCollection")
-       supers = " clojure.lang.Seqable "
-    case ("clojure.lang.IPersistentStack")
-       supers = " clojure.lang.IPersistentCollection clojure.lang.Seqable "
+       supers = " clojure.lang.IPersistentCollection clojure.lang.Counted "
+    case ("clojure.lang.IPersistentList")
+       supers = " clojure.lang.Sequential clojure.lang.IPersistentStack "
+    case ("clojure.lang.ISeq", "clojure.lang.IPersistentStack")
+       supers = " clojure.lang.IPersistentCollection "
     case ("clojure.lang.Associative")
-       supers = " clojure.lang.IPersistentCollection clojure.lang.ILookup clojure.lang.Seqable "
+       supers = " clojure.lang.IPersistentCollection clojure.lang.ILookup "
     case ("clojure.lang.Indexed")
        supers = " clojure.lang.Counted "
+    case ("clojure.lang.IPersistentCollection")
+       supers = " clojure.lang.Seqable "
+    case ("clojure.lang.IObj")
+       supers = " clojure.lang.IMeta "
     case ("java.util.List", "java.util.Set")
-       supers = " java.util.Collection java.lang.Iterable "
+       supers = " java.util.Collection "
     case ("java.util.Collection")
        supers = " java.lang.Iterable "
     case default

@@ -20,7 +20,7 @@
   end type hm
   integer, parameter :: HK_INT = -1, HK_REAL = -2, HK_PINF = -3, HK_NINF = -4, &
        HK_NAN = -5, HK_NIL = -6, HK_EMPTYMAP = -7, HK_SPECIALS = -8, HK_TYPE = -9, &
-       HK_TRUE = -10, HK_FALSE = -11
+       HK_TRUE = -10, HK_FALSE = -11, HK_LINEBOX = -12
 
   type(hm), parameter :: HOST_STATICS_1(81) = [ &
   ! PersistentList.creator is a static IFn that builds a list from its arguments.
@@ -297,7 +297,7 @@
   ! Long's bounds are clotran's own: an integer here IS a 64-bit one.
        hm("java.lang.Long", "MAX_VALUE", HK_INT, "", huge(0_gc_ip)), &
        hm("java.lang.Long", "MIN_VALUE", HK_INT, "", -huge(0_gc_ip) - 1_gc_ip) ]
-  type(hm), parameter :: HOST_STATICS_4(73) = [ &
+  type(hm), parameter :: HOST_STATICS_4(75) = [ &
        hm("java.lang.Long", "SIZE", HK_INT, "", 64_gc_ip), &
        hm("java.lang.Long", "BYTES", HK_INT, "", 8_gc_ip), &
        hm("java.lang.Short", "MAX_VALUE", HK_INT, "", 32767_gc_ip), &
@@ -352,6 +352,9 @@
        hm("java.lang.Boolean", "TYPE", HK_TYPE), &
        hm("java.lang.Boolean", "TRUE", HK_TRUE), &
        hm("java.lang.Boolean", "FALSE", HK_FALSE), &
+  ! Compiler.LINE and COLUMN are Vars the compiler binds; throw-if derefs them for a CompilerException
+       hm("clojure.lang.Compiler", "LINE", HK_LINEBOX), &
+       hm("clojure.lang.Compiler", "COLUMN", HK_LINEBOX), &
        hm("clojure.lang.Namespace", "remove", B_NSREMOVE, "clotran-ns-remove"), &
        hm("java.lang.Byte", "TYPE", HK_TYPE), &
        hm("java.lang.Character", "TYPE", HK_TYPE), &
@@ -385,7 +388,7 @@
        hm("clojure.lang.Numbers", "flipBit", B_RTFN, "flip-bit"), &
        hm("clojure.lang.Numbers", "long_array", B_RTFN, "long-array-of"), &
        hm("clojure.lang.Numbers", "double_array", B_RTFN, "double-array-of") ]
-  type(hm), parameter :: HOST_STATICS(314) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
+  type(hm), parameter :: HOST_STATICS(316) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
   type(hm), parameter :: HOST_METHODS_1(90) = [ &
   ! Instance members. The target becomes the first argument, which is all

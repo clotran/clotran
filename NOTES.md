@@ -3405,3 +3405,15 @@ two of print-dup's methods each dominate the other, the JVM's answer is
 whichever its table yields last -- clotran takes the more specific by
 `isa?`, which is the JVM's answer for a map and is recorded in
 DEVIATIONS 8's closing note.
+
+**Two things the suite found on the way.** The interface table has to
+be DIRECT, as `clojure.lang` declares it: a transitive list that gave
+`IPersistentVector` a `java.util.List` parent let print-method's
+RandomAccess method -- preferred to List -- dominate the vector's own,
+and `print-str` of a vector answered `#object[..]`; `supers` takes the
+closure itself. And syntax-quote qualified `clojure.core` as
+`this-ns/clojure.core`, which `Compiler.resolveSymbol` never does -- a
+name with a dot in it is a class name and stays as written -- so
+test_helper's `eval-in-temp-ns`, which `use`s `'clojure.core` inside a
+syntax-quote, asked `require` for a namespace nobody had, and with
+`find-ns` no longer inventing one, `require` finally said so.

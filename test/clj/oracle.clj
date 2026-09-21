@@ -2175,3 +2175,6 @@
 [(class? (class {})) (class? :foo) (class? :user/rect) (isa? (class {}) clojure.lang.IPersistentMap) (isa? (class []) clojure.lang.IPersistentMap) (isa? (class "") Object) (contains? (supers clojure.lang.IPersistentVector) clojure.lang.IPersistentCollection) (contains? (supers java.util.List) java.util.Collection) (isa? clojure.lang.IPersistentMap clojure.lang.IPersistentCollection) (isa? clojure.lang.IPersistentVector clojure.lang.Sequential)]
 
 (binding [*print-dup* true] (pr-str [{:a 1} [1] '(1) #{1} "s" 1.5 \c :k 'sym nil true]))
+
+;; syntax-quote leaves a dotted symbol as written -- a class name, as Compiler.resolveSymbol takes it
+(let [x 1] [(pr-str `(clojure.core java.util.Map foo.bar/baz x)) (pr-str `clojure.string) (pr-str `String)])
