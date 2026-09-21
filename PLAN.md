@@ -41,7 +41,7 @@ JVM-shaped `case` arms in one file.
 | `(reduce + (range n))` | LINEAR since step 4: n=100000 in 0.16s, ~1.6 µs per element through the host's own IReduceInit reduce (17s and 170 µs at the end of step 4). Before: n=16000 took 161s and n=100000 did not finish in 15 minutes |
 | `loop`/`recur` | ~1.7 µs per iteration, linear; a function call ~1.3 µs. `scripts/bench` has the JVM ratios: 23x to 514x depending on the form. Seqs are chunked, as on the JVM |
 | memory | 168 MB after core.clj; recursion 100,000 deep works |
-| Fortran library calls made through clotran | two PACKAGES, `packages/blas` and `packages/chemsol` -- shared libraries opened at run time by the unchanged binary, `dgemm` and ChemSol's `readopt`, `dg_ld`, `solvout` and `entropy` through one shim signature; the base binary links no BLAS and no ChemSol; `examples/chemsol.cljf` reproduces the original program's output byte for byte on its three reference inputs (`scripts/chemsol-check`) |
+| Fortran library calls made through clotran | two PACKAGES, `packages/blas` and `packages/chemsol` (and `scripts/bind-fortran` binds a library from its own signatures) -- shared libraries opened at run time by the unchanged binary, `dgemm` and ChemSol's `readopt`, `dg_ld`, `solvout` and `entropy` through one shim signature; the base binary links no BLAS and no ChemSol; `examples/chemsol.cljf` reproduces the original program's output byte for byte on its three reference inputs (`scripts/chemsol-check`) |
 
 The reduce row was the one that mattered and no scorecard saw it; step 4
 below is how it was found and what it was.
@@ -449,6 +449,51 @@ below says: when a profile demands it.
 
 **What it depends on.** Nothing from threads. The image (step 5 stage 3)
 is welcome but not required.
+
+### 10. Compilation through the door -- the JIT as ahead-of-time
+
+Recorded 2026-09-21, not started. James asked whether a JIT is even
+possible here; the door (step 9) is the answer, and it settles the shape.
+
+**What a compiled namespace is.** A package. `clotran compile my.cljf`
+runs the analysis pass (step 5) over the file, walks the resolved tree
+-- every node already classified, every symbol already a Var handle or
+a frame slot -- and writes a Fortran module: one procedure per `fn`,
+locals as `gc_value` variables on the shadow stack, tail calls as
+loops, calls through Var handles to `apply`, collections through the
+same `gcv_conj`, `gca_assoc` and `gc_obj` the interpreter uses. The
+module is built into a shared library with `-shared -fPIC` against
+clotran's own `.mod` files and loaded through DynLoad; the `defn`s of
+the namespace install native fn objects whose entry is the compiled
+procedure, so a call from interpreted code reaches compiled code
+through the ordinary fn-call path and back. Compile time is seconds per
+namespace, which is why this is ahead of time: a program compiles the
+namespaces it keeps, not the expression it is typing.
+
+**What it needs from clotran-bin.** The runtime's symbols exported to
+loaded libraries (`-Wl,-export_dynamic` on macOS, `-rdynamic` on Linux)
+and its `.mod` files installed beside the binary, so generated code can
+`use GC` and call `gc_int`, `apply`, `vs_enter` as the interpreter
+does. The collector needs nothing new: generated code roots what it
+holds the way exec.inc does, on the shadow stack, and a compiled
+procedure runs to completion like a native does -- unless it blocks,
+which is the green-thread question of step 8 and is answered the same
+way, by a context.
+
+**What it does not need.** LLVM, ORC, machine code, or any change to
+the value representation. The decision record below ("Should we JIT?")
+stands: an in-process JIT is the day a profile shows the interpreter's
+node dispatch, at about a microsecond a node, is what a real program
+waits on; compile-to-package removes that cost for the namespaces that
+matter without the machinery.
+
+**In order.** The exporter (a namespace's resolved tree as data, which
+the debugger already reads); a code generator for the node kinds
+exec.inc runs in its loop -- `if`, `do`, `let*`, `loop*`, `fn`, calls,
+`recur`, the literals -- with every other kind left to a call back into
+the interpreter; `clotran compile`; then unboxed arithmetic where the
+analyser can prove a number, which is where the scientific loops are.
+Measured against `scripts/bench` at each step, or not claimed.
 
 ## Decisions that still hold
 
