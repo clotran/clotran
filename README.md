@@ -91,11 +91,15 @@ a Fortran KIND rather than a class -- see `SEAMS.md`.
 real scientific code with a 1,600-line library module whose routines
 take twenty to thirty positional arguments. Its `main.f90` is replaced
 by `examples/chemsol.cljf`, the library is vendored unmodified in
-`src/f/chemsol/`, and each routine is a map-in, map-out function keyed
-by the routine's own argument names:
+`src/f/chemsol/`, and it is a PACKAGE: a shared library beside its
+Clojure in `packages/chemsol/`, opened at run time by one unchanged
+clotran binary, never linked in. Each routine is a map-in, map-out
+function keyed by the routine's own argument names:
 
 ```clojure
-(-> mol (f/chemsol-readopt vdw-par) (f/chemsol-dg-ld atoms) f/chemsol-solvout)
+(fortran/load-package "packages/chemsol")
+(require 'chemsol)
+(-> mol (chemsol/readopt vdw-par) (chemsol/dg-ld atoms) chemsol/solvout)
 ```
 
 `scripts/chemsol-check` runs it on ChemSol's three reference inputs and

@@ -4,3 +4,7 @@
 /build/
 /clotran-bin
 /.claude/
+/packages/*/lib*.dylib
+/packages/*/lib*.so
+/packages/*/*.mod
+/packages/*/*.dSYM

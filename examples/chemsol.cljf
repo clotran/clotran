@@ -18,6 +18,10 @@
   (:require [clojure.string :as str]))
 
 (alias 'f 'fortran)
+;; the library, as a package: its directory holds libchemsol and the
+;; chemsol namespace that wraps the routines map-in, map-out
+(fortran/load-package "packages/chemsol")
+(require 'chemsol)
 
 ;; --- the tables main.f90 carried ------------------------------------
 
@@ -153,7 +157,7 @@
     (println (format " Total charge for gas-phase solute: %9.2f" qsum1))
     (println (format " Total charge for PCM solute      : %9.2f" qsum2))
     (println (format " Molecular weight (a.u.)          : %9.2f" amas))
-    (println (format " Gas-phase transl. entropy (298dS): %9.2f kcal/mol" (f/chemsol-entropy amas)))
+    (println (format " Gas-phase transl. entropy (298dS): %9.2f kcal/mol" (chemsol/entropy amas)))
     (when-not (whole-charge? qsum1) (throw (ex-info "Inconsistent gas-phase charges" {})))
     (when-not (whole-charge? qsum2) (throw (ex-info "Inconsistent pcm charges" {})))))
 
@@ -170,6 +174,6 @@
     (when (some zero? (seq (atom-types (:atoms in))))
       (throw (ex-info "Unknown atom type on input" {})))
     (-> mol
-        (f/chemsol-readopt vdw-par)
-        (f/chemsol-dg-ld atoms)
-        (f/chemsol-solvout))))
+        (chemsol/readopt vdw-par)
+        (chemsol/dg-ld atoms)
+        (chemsol/solvout))))

@@ -157,7 +157,7 @@ $(B)/Printer.o: $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Ass
 # straight to a Pattern, not to a string). See Regex.f90.
 $(B)/LispReader.o: $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/Regex.o
 $(B)/Eval.o: $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/Env.o \
-	$(B)/Namespace.o $(B)/Printer.o $(B)/Regex.o $(B)/NativeArray.o $(B)/ChemSolBind.o $(B)/DynLoad.o $(S)/analyze.inc $(S)/exec.inc $(S)/repl.inc $(S)/tasks.inc $(S)/sorted.inc $(S)/hosttable.inc
+	$(B)/Namespace.o $(B)/Printer.o $(B)/Regex.o $(B)/NativeArray.o $(B)/DynLoad.o $(S)/analyze.inc $(S)/exec.inc $(S)/repl.inc $(S)/tasks.inc $(S)/sorted.inc $(S)/hosttable.inc
 
 # The reference BLAS (src/f/blas/PROVENANCE.md): F77 fixed form, built
 # by the same compiler, linked wherever NativeArray is.
@@ -165,24 +165,22 @@ blas-objects = $(B)/dgemm.o $(B)/lsame.o $(B)/xerbla.o
 $(B)/%.o: $(S)/blas/%.f | $(B) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -c $< -o $@
 
-# ChemSol (src/f/chemsol/PROVENANCE.md), unmodified, and its binding.
-# chemsol.f90 uses push_array's module; the binding uses both and the
-# registry.
-chemsol-objects = $(B)/push_array.o $(B)/chemsol.o $(B)/ChemSolBind.o
-$(B)/push_array.o: $(S)/chemsol/push_array.f90 | $(B) $(FCSTAMP)
-	$(FC) $(FCFLAGS) -c $< -o $@
-# NOT -frecursive: dg_ld declares 400 MB of fixed-size locals (jp, jp2 at
-# mxpair = 10^8 integer(2) each), which the original build keeps in static
-# storage and -frecursive would put on an 8 MB stack -- SIGILL on the first
-# call. Built as the original program is: nothing on the language level.
-$(B)/chemsol.o: $(S)/chemsol/chemsol.f90 $(B)/push_array.o | $(B) $(FCSTAMP)
-	$(FC) $(filter-out -frecursive,$(FCFLAGS)) -c $< -o $@
-$(B)/ChemSolBind.o: $(B)/GC.o $(B)/NativeArray.o $(B)/chemsol.o
+# ChemSol (src/f/chemsol/PROVENANCE.md), unmodified, as a PACKAGE: a
+# shared library beside its Clojure in packages/chemsol, opened at run
+# time (src/f/DynLoad.f90), never linked into clotran-bin. chemsol.f90
+# is built without -frecursive: dg_ld declares 400 MB of fixed-size
+# locals, which the original build keeps in static storage and
+# -frecursive would put on an 8 MB stack -- SIGILL on the first call.
+PKGMOD = $(B)/pkgmod
+packages/chemsol/libchemsol.$(SOEXT): $(S)/chemsol/push_array.f90 $(S)/chemsol/chemsol.f90 packages/chemsol/chemsol_shims.f90 | $(B) $(FCSTAMP)
+	mkdir -p $(PKGMOD)
+	$(FC) $(filter-out -frecursive -J$(B),$(FCFLAGS)) -J$(PKGMOD) -shared -fPIC -o $@ $^
+packages: packages/chemsol/libchemsol.$(SOEXT)
 
 data-objects = $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(B)/Assoc.o \
 	$(B)/PersistentList.o $(B)/PersistentVector.o $(B)/NativeArray.o $(B)/Printer.o $(blas-objects)
 reader-objects = $(B)/LispReader.o $(B)/Regex.o $(B)/regex_shim.o
-eval-objects = $(data-objects) $(B)/Env.o $(B)/Namespace.o $(reader-objects) $(chemsol-objects) $(B)/DynLoad.o $(B)/Eval.o
+eval-objects = $(data-objects) $(B)/Env.o $(B)/Namespace.o $(reader-objects) $(B)/DynLoad.o $(B)/Eval.o
 LINK_ICU = $(ICU_LIBS) $(LIBCXX) -lpthread
 
 clotran-bin: $(eval-objects) $(S)/main.f90 $(ICU_LIBS)
@@ -221,7 +219,7 @@ $(BT)/eval_test: $(eval-objects) $(T)/eval_test.f90 $(ICU_LIBS) | $(BT) $(FCSTAM
 $(B)/libtestpkg.$(SOEXT): $(T)/testpkg.f90 | $(B) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -shared -fPIC -o $@ $<
 
-test: $(test-bins) clotran-bin $(B)/libtestpkg.$(SOEXT)
+test: $(test-bins) clotran-bin $(B)/libtestpkg.$(SOEXT) packages
 	for t in $(unit-tests); do echo "--- $$t ---"; $(BT)/$$t || exit 1; done
 	@echo "--- language_test (with core.clj) ---"
 	./clotran-bin src/clj/clojure/core.clj test/clj/language_test.clj </dev/null \

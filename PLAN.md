@@ -41,7 +41,7 @@ JVM-shaped `case` arms in one file.
 | `(reduce + (range n))` | LINEAR since step 4: n=100000 in 0.16s, ~1.6 µs per element through the host's own IReduceInit reduce (17s and 170 µs at the end of step 4). Before: n=16000 took 161s and n=100000 did not finish in 15 minutes |
 | `loop`/`recur` | ~1.7 µs per iteration, linear; a function call ~1.3 µs. `scripts/bench` has the JVM ratios: 23x to 514x depending on the form. Seqs are chunked, as on the JVM |
 | memory | 168 MB after core.clj; recursion 100,000 deep works |
-| Fortran library calls made through clotran | `fortran/dgemm` (reference BLAS) and ChemSol's `readopt`, `dg_ld`, `solvout`, `entropy`; `examples/chemsol.cljf` reproduces the original program's output byte for byte on its three reference inputs (`scripts/chemsol-check`) |
+| Fortran library calls made through clotran | `fortran/dgemm` (reference BLAS, still linked) and ChemSol as a PACKAGE -- `packages/chemsol`, a shared library opened at run time by the unchanged binary, its `readopt`, `dg_ld`, `solvout` and `entropy` through one shim signature; `examples/chemsol.cljf` reproduces the original program's output byte for byte on its three reference inputs (`scripts/chemsol-check`) |
 
 The reduce row was the one that mattered and no scorecard saw it; step 4
 below is how it was found and what it was.

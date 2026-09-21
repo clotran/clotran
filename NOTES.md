@@ -3527,3 +3527,26 @@ the shims and manifest from a library's interfaces, so a package is
 declared rather than hand-bound. Windows is `LoadLibrary` and
 `GetProcAddress` under the same two wrappers, a second implementation
 of DynLoad.f90, not a change to its callers.
+
+**ChemSol through the door.** The first real package: `packages/chemsol/`
+holds `chemsol_shims.f90` -- the manifest and four shims, written by
+hand once as the generator will write them, with the three things a
+generator could not know (readopt's units 44 and 45, dg_ld's
+`character(8)` atom names as one string of 8-character fields,
+solvout's units) -- and `chemsol.cljf`, the map-in, map-out API the
+example uses, over the raw positional fns `fortran/load-package` interns
+in `chemsol.raw`. The Makefile builds `libchemsol` from the vendored
+sources and the shims, `-shared -fPIC`, `chemsol.f90` still without
+`-frecursive`; `ChemSolBind.f90` and the four builtins are gone from the
+base binary. `scripts/chemsol-check`: all three reference inputs match
+byte for byte through the door, as they did through the link. A
+package given as a DIRECTORY is the shape: `load-package` opens
+`lib<name>` there and adds the directory to the classpath roots, so the
+package's own namespaces are one `require` away.
+
+Two bugs the package turned up, fixed after it: `defn-` of a name
+clojure.core has (`num`) wrote clojure.core's Var instead of interning
+one here -- `analyze_def` used the referred Var; and the native printer
+lost characters between a map's key and a nested map value, gfortran's
+handling of two allocatable-character function results in one
+concatenation, which is now two statements.

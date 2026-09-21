@@ -1,0 +1,51 @@
+(ns chemsol
+  "ChemSol (Florian and Warshel, 1999) as a clotran package: the
+  library, vendored unmodified in src/f/chemsol, behind the door
+  (src/f/DynLoad.f90) as packages/chemsol/libchemsol with the shims and
+  manifest in chemsol_shims.f90. This namespace is the API the example
+  program uses: each routine takes the molecule MAP and answers it with
+  what the routine wrote assoc'd in. The map's keys are the routines'
+  own argument names as keywords, with hyphens -- :iterld, :n-reg1,
+  :xw -- and its arrays are clotran arrays the routines write in place.
+  The raw positional fns live in chemsol.raw, interned from the
+  manifest by fortran/load-package.")
+
+(defn entropy
+  "Gas-phase translational entropy of a molecule of the given mass."
+  [mass]
+  (chemsol.raw/entropy (double mass)))
+
+(defn- real-of [m k] (double (get m k 0.0)))
+(defn- int-of [m k] (int (get m k 0)))
+
+(defn readopt
+  "Reads vdw.par and the input's optional rp block into the map."
+  [mol vdw-path]
+  (merge mol
+         (chemsol.raw/readopt
+          (int-of mol :iterld) (:vdwc6 mol) (:dxp0 mol) (real-of mol :clgvn) (real-of mol :slgvn) (real-of mol :tds0)
+          (:rp mol) (real-of mol :vdwsl) (real-of mol :phobsl) (real-of mol :ephil1) (real-of mol :ephil2) (real-of mol :rzcut)
+          (:rpi mol) (:pcenter mol) (real-of mol :rg-reg1) (real-of mol :rg) (real-of mol :rg-inner) (real-of mol :rgim)
+          (int-of mol :ndxp) (:iacw mol) (:xw mol) (:q mol) (:q-gas mol) (int-of mol :n-reg1) (real-of mol :drg)
+          (int-of mol :iprint) vdw-path (:input-file mol) (int-of mol :input-skip))))
+
+(defn dg-ld
+  "The calculation: the solvation energies, assoc'd into the map."
+  [mol atoms]
+  (merge mol
+         (chemsol.raw/dg-ld
+          (int-of mol :iterld) (int-of mol :iprint) (real-of mol :evqdq) (real-of mol :elgwa) (real-of mol :evdw) (real-of mol :elgvn)
+          (real-of mol :ephob) (real-of mol :etds) (real-of mol :ebw) (real-of mol :clgvn) (:dxp0 mol) (real-of mol :ephil1)
+          (real-of mol :ephil2) (:iacw mol) (int-of mol :ndxp) (:pcenter mol) (real-of mol :phobsl) (:q mol) (:q-gas mol)
+          (:q-mp2 mol) (real-of mol :rg) (real-of mol :rg-inner) (real-of mol :rg-reg1) (real-of mol :rgim) (:rpi mol)
+          (real-of mol :rzcut) (real-of mol :slgvn) (real-of mol :tds0) (:vdwc6 mol) (real-of mol :vdwsl) (:xw mol)
+          (apply str (map #(format "%-8s" %) atoms)) (int-of mol :n-reg1) (real-of mol :drg) (real-of mol :drg-inner)
+          (real-of mol :rdcutl) (real-of mol :out-cut) (int (get mol :itl 399)))))
+
+(defn solvout
+  "Prints the results as the original program did, and appends to cs.arc."
+  [mol]
+  (chemsol.raw/solvout (int-of mol :iterld) (int-of mol :iprint) (boolean (:do-gas mol)) (real-of mol :evqdq)
+                       (real-of mol :elgwa) (real-of mol :etds) (real-of mol :evdw) (real-of mol :ebw) (real-of mol :elgvn)
+                       (real-of mol :ephob) (str (:molname mol)) (str (:ssname mol)))
+  mol)
