@@ -1245,3 +1245,19 @@ point, where `String.toUpperCase` would turn `ß` into `SS`.
 
 **Removal**: none sought. The code point is what a string of text
 is made of; the surrogate pair is what Java is made of.
+
+---
+
+## 42. `s/check-asserts` cannot be turned on
+
+clojure.spec.alpha's `assert` is
+`(if clojure.lang.RT/checkSpecAsserts (assert* ...) x)`, and
+`check-asserts` flips that field with `(set! (. clojure.lang.RT
+checkSpecAsserts) flag)`. The field is here as a host static that reads
+FALSE -- the JVM's default, `-Dclojure.spec.check-asserts` unset -- so
+`(s/assert spec x)` is `x`, as it is on a stock JVM. `set!` of a host
+static has nowhere to write (DEVIATIONS 4), so `(s/check-asserts true)`
+throws instead of enabling the checks.
+
+**Removal**: a writable box behind the row, as `Compiler/LINE` has, and
+`set!` on a static that names one.

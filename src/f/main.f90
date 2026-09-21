@@ -14,9 +14,9 @@ program clotran
 
   type(gc_value) :: env
   type(gc_value) :: none(0)
-  integer :: base, i, arglen
+  integer :: base, i, arglen, st
   character(len=1024) :: argbuf
-  character(len=8) :: statbuf
+  character(len=8) :: statbuf, tortbuf
 
   call gc_init(65536)
   call gce_set_home(home_dir())
@@ -38,6 +38,22 @@ program clotran
   do i = 1, command_argument_count()
      call get_command_argument(i, argbuf, arglen)
      call load_file(argbuf(1:arglen), vs_get(base + 1))
+     ! RT.CHECK_SPECS: once core.clj -- the first file -- has loaded,
+     ! every macro call is checked against clojure.core.specs.alpha,
+     ! unless CLOTRAN_SPEC_SKIP_MACROS is set (clojure.spec.skip-macros)
+     if (i == 1) then
+        call gce_main_bindings()
+        ! CLOTRAN_GC_TORTURE=1 collects at EVERY allocation from here on --
+        ! what test/f's torture pass does, and the only way a rooting bug
+        ! shows reliably: a value that is not on the shadow stack is
+        ! collected the moment the next allocation happens. It starts
+        ! AFTER the first file (core.clj takes minutes under it), so the
+        ! form under suspicion runs tortured and the bootstrap does not.
+        call get_environment_variable("CLOTRAN_GC_TORTURE", tortbuf)
+        gc_torture = (trim(tortbuf) == "1")
+        call get_environment_variable("CLOTRAN_SPEC_SKIP_MACROS", status=st)
+        call gce_set_spec_check(st /= 0)
+     end if
   end do
 
   ! The REPL starts in user, as Clojure's does -- AFTER the files on the

@@ -594,6 +594,18 @@ contains
        do i = 0, gcv_count(form) - 1
           call scan_percent(gcv_nth(form, i), maxn, has_rest)
        end do
+    else if (gca_is(form)) then
+       ! a map literal in the body: #(identity {:pred % :val x})
+       block
+         type(gc_value), allocatable :: ks(:), vls(:)
+         call gca_entries(form, ks, vls)
+         do i = 1, size(ks)
+            call scan_percent(ks(i), maxn, has_rest)
+            call scan_percent(vls(i), maxn, has_rest)
+         end do
+       end block
+    else if (gc_kind(form) == OBJ_SET) then
+       call scan_percent(gc_slot(form, 1), maxn, has_rest)
     end if
   end subroutine scan_percent
 
@@ -662,6 +674,27 @@ contains
           call vs_set(base + 2, acc)
        end do
        out = vs_get(base + 2)
+    else if (gca_is(form)) then
+       ! a map literal: each key and value rewritten, the map rebuilt
+       block
+         type(gc_value), allocatable :: ks(:), vls(:)
+         type(gc_value) :: v2
+         call gca_entries(vs_get(base + 1), ks, vls)
+         acc = gca_empty(roots)
+         call vs_set(base + 2, acc)
+         do i = 1, size(ks)
+            item = rewrite_percent(ks(i), roots)
+            call vs_set(base + 3, item)
+            v2 = rewrite_percent(vls(i), [roots, vs_get(base + 3)])
+            acc = gca_assoc(vs_get(base + 2), vs_get(base + 3), v2, [roots, v2])
+            call vs_set(base + 2, acc)
+         end do
+         out = vs_get(base + 2)
+       end block
+    else if (gc_kind(form) == OBJ_SET) then
+       item = rewrite_percent(gc_slot(vs_get(base + 1), 1), roots)
+       call vs_set(base + 2, item)
+       out = gc_obj(OBJ_SET, [vs_get(base + 2)], [roots, vs_get(base + 2)])
     end if
     call vs_leave(base)
   end function rewrite_percent
@@ -754,6 +787,8 @@ contains
     case ("?")
        pos = pos + 2
        v = read_cond(text, pos, roots)
+    case (":")
+       v = read_ns_map(text, pos, roots)
     case default
        if (suppress_read .and. ((c >= "a" .and. c <= "z") .or. (c >= "A" .and. c <= "Z"))) then
           ! #tag form in a branch nobody selected: read past the tag and
@@ -1157,6 +1192,95 @@ contains
        v = gca_assoc(v, k, val, with(with(r2, k), val))
     end do
   end function read_map
+
+
+  ! #:ns{:a 1} -- a NAMESPACED MAP: every unqualified key takes that
+  ! namespace, :_/x means none, and an already-qualified key is left
+  ! alone. #::{...} is the current namespace and #::alias{...} goes
+  ! through an alias, the same resolver ::keywords use. Symbol keys
+  ! qualify too; anything else is a key like any other.
+  recursive function read_ns_map(text, pos, roots) result(v)
+    character(len=*), intent(in) :: text
+    integer, intent(inout) :: pos
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: v, m, k2
+    type(gc_value), allocatable :: ks(:), vls(:)
+    character(len=:), allocatable :: tok, ns
+    integer :: start, base, i
+
+    v = gc_nil()
+    pos = pos + 1            ! past the #, now at the :
+    start = pos
+    do while (pos <= len(text))
+       if (is_space(text(pos:pos)) .or. text(pos:pos) == "{") exit
+       pos = pos + 1
+    end do
+    tok = text(start:pos-1)
+    if (len(tok) >= 2 .and. tok(1:min(2,len(tok))) == "::") then
+       if (.not. associated(ns_resolver)) then
+          call fail("reader: no namespace resolver for " // tok)
+          return
+       end if
+       ns = ns_resolver(tok(3:))
+       if (len(ns) == 0) then
+          call fail("Invalid token: " // tok)
+          return
+       end if
+    else if (len(tok) >= 2) then
+       ns = tok(2:)
+    else
+       call fail("reader: a namespaced map needs a namespace")
+       return
+    end if
+    call skip_ignorables(text, pos, roots)
+    if (pos > len(text) .or. text(min(pos,len(text)):min(pos,len(text))) /= "{") then
+       call fail("reader: #" // tok // " must be followed by a map")
+       return
+    end if
+    pos = pos + 1
+    m = read_map(text, pos, roots)
+    if (has_error) return
+
+    base = vs_enter(3)
+    call vs_set(base + 1, m)
+    call gca_entries(vs_get(base + 1), ks, vls)
+    v = gca_empty([roots, vs_get(base + 1)])
+    call vs_set(base + 2, v)
+    do i = 1, size(ks)
+       k2 = qualify_key(ks(i), ns, [roots, vs_get(base + 1), vs_get(base + 2)])
+       call vs_set(base + 3, k2)
+       v = gca_assoc(vs_get(base + 2), vs_get(base + 3), vls(i), &
+            [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+       call vs_set(base + 2, v)
+    end do
+    v = vs_get(base + 2)
+    call vs_leave(base)
+  end function read_ns_map
+
+  function qualify_key(k, ns, roots) result(out)
+    type(gc_value), intent(in) :: k
+    character(len=*), intent(in) :: ns
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out
+    character(len=:), allocatable :: t
+    integer :: slash
+    out = k
+    if (k%tag /= GCT_KEY .and. k%tag /= GCT_SYM) return
+    t = gc_ref_text(k%ref)
+    slash = index(t, "/")
+    if (slash == 0) then
+       t = ns // "/" // t
+    else if (t(1:slash-1) == "_") then
+       t = t(slash+1:)
+    else
+       return
+    end if
+    if (k%tag == GCT_KEY) then
+       out = gc_key(t, roots)
+    else
+       out = gc_sym(t, roots)
+    end if
+  end function qualify_key
 
   function read_string(text, pos, roots) result(v)
     character(len=*), intent(in) :: text

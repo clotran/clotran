@@ -282,7 +282,7 @@
   ! Long's bounds are clotran's own: an integer here IS a 64-bit one.
        hm("java.lang.Long", "MAX_VALUE", HK_INT, "", huge(0_gc_ip)), &
        hm("java.lang.Long", "MIN_VALUE", HK_INT, "", -huge(0_gc_ip) - 1_gc_ip) ]
-  type(hm), parameter :: HOST_STATICS_4(43) = [ &
+  type(hm), parameter :: HOST_STATICS_4(45) = [ &
   ! Double.MIN_VALUE is the smallest POSITIVE value, a denormal, which
   ! Clojure's own math tests check.
        hm("java.lang.Double", "MAX_VALUE", HK_REAL, "", 0_gc_ip, huge(1.0_gc_dp)), &
@@ -312,6 +312,13 @@
        hm("clojure.lang.Namespace", "remove", B_NSREMOVE, "clotran-ns-remove"), &
        hm("java.lang.Byte", "TYPE", HK_TYPE), &
        hm("java.lang.Character", "TYPE", HK_TYPE), &
+       ! clojure.spec.alpha tags each or/alt/rep spec with one, and only
+       ! ever compares them: a fresh unique string is what it needs
+       hm("java.util.UUID", "randomUUID", B_RANDOMUUID, "clotran-random-uuid"), &
+       ! RT.checkSpecAsserts: -Dclojure.spec.check-asserts, off by default,
+       ! so (s/assert spec x) is x. (s/check-asserts true) would set! it,
+       ! which a host static here cannot be (DEVIATIONS 4).
+       hm("clojure.lang.RT", "checkSpecAsserts", HK_FALSE), &
        hm("java.lang.Double", "TYPE", HK_TYPE), &
        hm("java.lang.Float", "TYPE", HK_TYPE), &
        hm("java.lang.Integer", "TYPE", HK_TYPE), &
@@ -341,9 +348,9 @@
        hm("clojure.lang.Numbers", "flipBit", B_RTFN, "flip-bit"), &
        hm("clojure.lang.Numbers", "long_array", B_RTFN, "long-array-of"), &
        hm("clojure.lang.Numbers", "double_array", B_RTFN, "double-array-of") ]
-  type(hm), parameter :: HOST_STATICS(269) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
+  type(hm), parameter :: HOST_STATICS(271) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
-  type(hm), parameter :: HOST_METHODS_1(85) = [ &
+  type(hm), parameter :: HOST_METHODS_1(86) = [ &
   ! Instance members. The target becomes the first argument, which is all
   ! an instance method is: (.withMeta x m) calls with-meta on x and m.
        hm("", "meta", B_META, "meta"), &
@@ -356,6 +363,7 @@
        hm("", "cons", B_CONS, "cons"), &
        hm("", "isInstance", B_INSTANCE, "instance?"), &
        hm("", "getName", B_GETNAME, "clotran-get-name"), &
+       hm("", "name", B_GETNAME, "clotran-get-name"), &
        hm("", "getSimpleName", B_GETNAME, "clotran-get-name"), &
   ! An ARRAY of frames, not a vector: Throwable->map asks (alength st) straight after.
        hm("", "getStackTrace", B_STACKTRACE, "clotran-stack-trace"), &
@@ -521,4 +529,4 @@
        hm("", "isCancelled", B_TASKCANCELLED, "clotran-task-cancelled"), &
        hm("", "cancel", B_TASKCANCEL, "clotran-task-cancel"), &
        hm("", "availableProcessors", B_NPROCS, "clotran-processors") ]
-  type(hm), parameter :: HOST_METHODS(155) = [HOST_METHODS_1, HOST_METHODS_2]
+  type(hm), parameter :: HOST_METHODS(156) = [HOST_METHODS_1, HOST_METHODS_2]

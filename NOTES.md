@@ -3510,6 +3510,61 @@ The oracle has fifteen cases for it, values against clj, including
 `(apply (fn [a & r] [a (take 3 r)]) 1 (range))` and the atom count
 that shows only one element of a hundred was realised.
 
+## #:ns{...} and what the launcher binds
+
+The reader had no namespaced map literal. `#:a{:b 1 :c/d 2 :_/e 3}` is
+`{:a/b 1, :c/d 2, :e 3}`: an unqualified key takes the namespace, an
+already-qualified one keeps its own, and `:_/x` means none. `#::{...}`
+is the current namespace and `#::alias{...}` goes through an alias, the
+same resolver `::keyword` uses. Symbol keys qualify too. ClojureScript
+reads them, so this is the language, not the host.
+
+Printing was already right and looked wrong: `*print-namespace-maps*`
+is false at its root (core_print, Rich's value) and
+`clojure.main/with-bindings` binds it TRUE for a script or a REPL --
+which is what `clj` runs with, so the oracle saw `#:u{:n 1}` against
+clotran's `{:u/n 1}`. clotran's binary IS the launcher, so it now binds
+what clojure.main binds, once core.clj has loaded (`gce_main_bindings`).
+
+## A lazy seq must not be forced while an error is in flight
+
+`(try (throw (ex-info "b" {:s (map inc [1 2 3])})) (catch Exception e
+(vec (:s (ex-data e)))))` answered `[]`. Worse, the seq was ruined for
+good: a lazy seq that had been carried through a throw was empty
+afterwards for every later reader.
+
+Raising an error prints the thrown value to build its message, printing
+forces a lazy seq, and `gce_force` forced it with `has_error` already
+set -- so `apply` refused to run the thunk, the thunk answered nothing,
+and the cell was cached as `LAZY_EMPTY`. Two lines now: force nothing
+while an error is pending, and when the thunk itself throws leave the
+cell PENDING rather than empty, which is what Clojure's LazySeq does
+(it keeps the fn; the next `seq` runs it and throws again).
+
+This is the shape the project keeps warning itself about: not a crash,
+an answer. Five oracle cases cover it.
+
+## Rooting: two allocations in one argument list
+
+`frames_vec` built each stack frame's map with
+`(gca_assoc m (gc_key "class" ...) (gc_str who ...) ...)`. Both
+arguments allocate, neither is in the other's root list, and Fortran
+may evaluate them in either order -- so whichever went first could be
+collected by whichever went second. The frame then carried a nil
+`:class`, `Throwable->map` called `(symbol nil)`, and the answer was
+"no conversion to symbol" -- but only when the heap happened to fill
+between the two allocations. It never fired until clojure.spec.alpha
+started checking every macro call and the heap filled faster.
+
+The fix is the rule NOTES has carried since the GC went in: put each
+value on the shadow stack before the call that needs both.
+
+Two switches make the class of bug findable rather than lucky:
+`CLOTRAN_GC_TORTURE=1` turns on collect-at-every-allocation once the
+first file has loaded (core.clj itself takes minutes under it), and
+`(clotran-gc-torture true)` turns it on around one form from inside
+Clojure. test/f has run both passes all along; the binary could not.
+
 ## Strings are characters, in UTF-8
 
 A string was a byte buffer and `count`, `nth`, `subs`, `.charAt` and
@@ -3542,6 +3597,59 @@ Two things are recorded rather than matched: ICU's `\w` and `(?i)` are
 Unicode where java.util.regex's are ASCII by default (DEVIATIONS 14),
 and a code point off the BMP is one character here and a surrogate
 pair there (DEVIATIONS 41).
+
+## Spec: every macro call is checked, as the Compiler checks it
+
+Twenty-six of the derived suite's failures were `thrown-with-cause-msg?
+Exception #"did not conform to spec"` around `(eval '(fn "a" a))`,
+`(let [:a 1] a)` and the like. On the JVM those messages come from
+clojure.spec.alpha, a separate library the Compiler loads lazily and
+consults before every macro expansion (`Compiler.checkSpecs`, called
+from `macroexpand1` right after `isMacro`). So spec.alpha 0.6.249 and
+core.specs.alpha 0.6.127-alpha9 -- the versions the pinned clone's
+pom.xml names -- are vendored verbatim (PROVENANCE.md), and
+`check_specs` in Eval.f90 does what `checkSpecs` does: at the first
+macro call after core.clj it loads the two libs with no checking while
+they load, then calls `macroexpand-check` with the macro's Var and the
+form's arguments. A failure is wrapped the way CompilerException wraps
+it -- a RuntimeException "Syntax error macroexpanding clojure.core/fn."
+whose CAUSE is spec's ex-info -- because that is what the test helpers
+read through `.getCause`. The message carries no source position where
+Clojure's says `at (file:line:col)`.
+
+Loading spec.alpha as written turned up five things clotran had wrong,
+none of them about spec:
+
+- `def` is a special form and spec defines a macro called `def`
+  (`(:refer-clojure :exclude [def])`); `(defn ...)` in that file expands
+  to `(def ...)`, and the analyser looked macros up before specials.
+  `Compiler.macroexpand1` asks `isSpecial` first. Now so does
+  `analyze_seq`.
+- `(.name *ns*)` -- `Namespace.name` is a field -- had no host row.
+- `#(identity {:pred % :val x})`: the reader rewrote `%` in lists and
+  vectors but not inside a map or set literal.
+- `reify` always implements `IObj` (the Compiler adds it, not the
+  macro), and spec's `with-name` puts a spec's name in its metadata.
+  A reify instance now carries metadata in its third slot; `with-meta`
+  and `meta` read and write it when the type has no method of its own.
+  With that, `print-method :default` recursed on a reify -- it
+  vary-metas and dispatches again -- until a reify's class counted as
+  a class, so `isa? Object` holds and the Object method is reached.
+- `(ifn? #{'&})`: a set, a map, a vector, a keyword, a symbol and a Var
+  are all `IFn`; `instance?` said only functions were. `Fn` is still
+  functions only, so `fn?` is unchanged.
+
+Also `(clojure.lang.MapEntry. k v)` (spec's `tagged-ret`) and
+`java.util.UUID/randomUUID`, which spec uses only as a unique tag for
+`or`, `alt` and `rep` specs: a fresh string is what it needs and what
+the row answers.
+
+The cost is real and it is the JVM's cost too: spec's own load is
+about 1.6 seconds here, and conforming every `fn`, `let`, `defn` and
+`ns` through the interpreter roughly triples the language test's time
+(2.7s to 9.1s). `CLOTRAN_SPEC_SKIP_MACROS=1` turns the checks off, as
+`-Dclojure.spec.skip-macros=true` does. Values at run time are
+unaffected; only loading pays.
 
 ## The door: a package is a shared library any clotran can open
 

@@ -2188,3 +2188,35 @@
 (re-find #"(?i)É" "xé")
 (expect-diff "DEVIATIONS 41: a code point off the BMP is one character here, a surrogate pair there")
 [(count "😀") (int (first "😀"))]
+
+;; A lazy seq carried through a throw is still there in the handler:
+;; raising an error must not force it (it would cache as empty).
+(try (throw (ex-info "b" {:s (map inc [1 2 3])})) (catch Exception e (vec (:s (ex-data e)))))
+(let [l (lazy-seq (cons 1 (lazy-seq (cons 2 nil))))] [(try (throw (ex-info "b" {:s l})) (catch Exception e (vec (:s (ex-data e))))) (vec l)])
+(try (throw (ex-info "b" {:s (filter odd? (range 6))})) (catch Exception e (count (:s (ex-data e)))))
+[(counted? "ab") (counted? [1]) (counted? {}) (counted? (range 3)) (coll? "ab") (bounded-count 2 "abc")]
+[(resolve 'nil?) (resolve 'fn) (resolve 'if) (resolve 'no-such-name-here) (ns-resolve 'clojure.string 'join) (ns-resolve *ns* 'inc)]
+
+;; #:ns{...} -- a namespaced map, read and printed as clojure.main does
+[(pr-str #:a{:b 1 :c/d 2 :_/e 3}) (= #:u{:n 1} {:u/n 1}) (pr-str {:u/n 1}) (pr-str #:n{:a #:o{:b 1}}) *print-namespace-maps* (vec (keys #:a{:b 1 :c/d 2 :_/e 3})) (pr-str (read-string "#:q{:a 1}")) (pr-str #:u{})]
+
+;; clojure.spec.alpha and core.specs.alpha, vendored (PROVENANCE.md) and
+;; consulted before every macro expansion, as Compiler.checkSpecs does
+(require '[clojure.spec.alpha :as sa])
+(sa/def :user/n int?)
+(sa/def :user/pair (sa/cat :a :user/n :b string?))
+(sa/def :user/m (sa/keys :req [:user/n]))
+[(sa/valid? :user/n 1) (sa/valid? :user/n "x") (sa/conform :user/pair [1 "x"]) (sa/conform :user/pair [1 2]) (sa/valid? :user/m {:user/n 1}) (sa/valid? :user/m {}) (sa/conform (sa/or :i int? :s string?) "a") (sa/conform (sa/* int?) [1 2]) (sa/conform (sa/nilable int?) nil) (sa/conform (sa/and int? even?) 2) (sa/conform (sa/coll-of int?) [1 2]) (sa/conform (sa/map-of keyword? int?) {:a 1}) (sa/conform (sa/tuple int? string?) [1 "a"]) (sa/valid? (sa/? int?) []) (sa/conform (sa/alt :i int? :s string?) [1]) (sa/conform (sa/+ int?) [1 2 3])]
+(sa/explain-str :user/n "x")
+(map :path (:clojure.spec.alpha/problems (sa/explain-data :user/pair [1 2])))
+[(sa/valid? :clojure.core.specs.alpha/binding-form '[a b & c :as d]) (sa/valid? :clojure.core.specs.alpha/binding-form :a) (sa/conform :clojure.core.specs.alpha/defn-args '(foo "doc" [a b] (+ a b)))]
+(sa/describe :user/pair)
+(sa/form :user/pair)
+[(sa/conform (sa/spec (sa/cat :a int?)) [1]) (sa/unform :user/pair (sa/conform :user/pair [1 "x"])) (sa/valid? (sa/every int?) [1 2 3]) (sa/conform (sa/merge (sa/keys :req [:user/n]) (sa/keys :opt [:user/x])) {:user/n 1}) (sa/conform (sa/conformer #(if (int? %) (inc %) :clojure.spec.alpha/invalid)) 1) (some? (sa/regex? (sa/cat))) (some? (sa/spec? (sa/spec int?))) (sa/assert int? 1)]
+(try (eval '(fn "a" a)) (catch Exception e [(instance? Exception e) (.getMessage (.getCause e)) (map (juxt :path :pred) (:clojure.spec.alpha/problems (ex-data (.getCause e))))]))
+(try (eval '(let [:a 1] a)) (catch Exception e (.getMessage (.getCause e))))
+(try (eval '(let [a/x 1, [y] [1]] x)) (catch Exception e (.getMessage (.getCause e))))
+(try (eval '(let [[:a] [1]] a)) (catch Exception e (.getMessage (.getCause e))))
+(try (eval '(defn)) (catch Exception e (.getMessage (.getCause e))))
+(try (eval '(ns foo.bar (:require [clojure.string :as]))) (catch Exception e (.getMessage (.getCause e))))
+[(instance? clojure.lang.IObj (reify)) (meta (with-meta (reify) {:a 1})) (isa? (class (reify)) Object) (ifn? #{1}) (ifn? {}) (ifn? []) (ifn? :a) (ifn? 'a) (ifn? #'first) (ifn? 1) (fn? #{1}) (fn? first) (#(identity {:a % :b #{%}}) 1) (map-entry? (clojure.lang.MapEntry. 1 2)) (key (clojure.lang.MapEntry. 1 2)) (string? (str (java.util.UUID/randomUUID))) (= (java.util.UUID/randomUUID) (java.util.UUID/randomUUID))]

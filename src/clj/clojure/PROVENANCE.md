@@ -70,7 +70,30 @@ core.clj is re-vendored from a different tag, or `(clojure-version)`
 starts lying about what is actually running.
 
 Note this makes `diff -r ~/jborden/clojure/src/clj/clojure src/clj/clojure`
-report it as an extra file. That is the only expected difference.
+report it as an extra file. The spec trees below are the other expected
+extras.
+
+## clojure.spec.alpha and clojure.core.specs.alpha
+
+`spec/alpha.clj`, `spec/gen/alpha.clj`, `spec/test/alpha.clj` and
+`core/specs/alpha.clj` are not in the clojure/clojure repository; they
+are separate libraries the JVM loads from Maven. They are here verbatim
+from the jars the pinned clone's own `pom.xml` names:
+
+| library | version | jar sha1 |
+|---|---|---|
+| org.clojure/spec.alpha | 0.6.249 | `adc033378b9f8b8760c4b239e15ac46ec2cdf803` |
+| org.clojure/core.specs.alpha | 0.6.127-alpha9 | `0182816f52211ffabcb06d8fad6f10567eeb3d7f` |
+
+The Compiler loads the first two (`spec/alpha`, `core/specs/alpha`) at
+the first macro expansion after core.clj (`Compiler.ensureMacroCheck`),
+and from then on `clojure.spec.alpha/macroexpand-check` runs before
+every macro call; clotran does the same (`check_specs` in Eval.f90,
+switched on by main.f90 after the first file loads, off under
+`CLOTRAN_SPEC_SKIP_MACROS` as under `clojure.spec.skip-macros`).
+`spec/gen/alpha.clj` loads because spec requires it; its generators
+reach for test.check on first use, which is not here. `spec/test/alpha.clj`
+is vendored for completeness and loads on `require`.
 
 ## Vendored, unmodified, and not loaded
 

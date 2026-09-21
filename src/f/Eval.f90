@@ -189,7 +189,8 @@ module Eval
   integer, parameter :: B_MAPENTRY = 322, B_ISASSIGN = 323, B_BINDROOT = 324, B_RAWROOT = 325
   integer, parameter :: B_HASHCODE = 326, B_GETCAUSE = 327, B_NSREMOVE = 328, B_NSCREATE = 329, B_CANSEQ = 330
   integer, parameter :: B_PREFERMETHOD = 331, B_PREFERTABLE = 332, B_DISPATCHFN = 333
-  integer, parameter :: B_PKGLOAD = 334, B_PKGCALL = 335, B_PKGFN = 336
+  integer, parameter :: B_PKGLOAD = 334, B_PKGCALL = 335, B_PKGFN = 336, B_RANDOMUUID = 337
+  integer, parameter :: B_GCTORTURE = 338
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -293,6 +294,13 @@ module Eval
   logical, save :: task_trace = .false., task_trace_read = .false.   ! CLOTRAN_TASK_TRACE=1: the scheduler's decisions, on stderr
   logical, save :: rt_loaded = .false.   ! clotran.rt, once (rt_call)
   logical, save :: mf_loaded = .false.   ! clotran.multifn, once (mf_call)
+  ! Compiler.checkSpecs: clojure.spec.alpha/macroexpand-check before a
+  ! macro expands. RT.CHECK_SPECS comes on once core.clj has loaded
+  ! (main.f90); the two spec libs load at the first check, and no check
+  ! runs while they load (MACRO_CHECK_LOADING).
+  logical, save :: spec_check = .false.
+  logical, save :: spec_loaded = .false.
+  logical, save :: spec_loading = .false.
   logical, save :: pk_loaded = .false.   ! clotran.package, once (B_PKGFN)
   ! The packages opened (DynLoad.f90), by handle: a package's fns carry
   ! the index, never the pointer.
@@ -311,7 +319,8 @@ module Eval
   integer, parameter :: TASK_NEW = 0, TASK_RUNNABLE = 1, TASK_RUNNING = 2, &
        TASK_DONE = 3, TASK_FAILED = 4, TASK_CANCELLED = 5
 
-  public :: gce_eval, gce_base_env, gce_has_error, gce_error, gce_clear_error
+  public :: gce_eval, gce_base_env, gce_has_error, gce_error, gce_clear_error, gce_set_spec_check
+  public :: gce_main_bindings
   public :: gce_analyze, gce_trace
   public :: gce_ctx_new, gce_ctx_switch, gce_ctx_current
   public :: gce_repl
@@ -435,12 +444,18 @@ contains
   ! function's qualified name, `:method` is always "invoke" -- there
   ! is one way to call a function here -- `:file` and `:line` are the
   ! call site's.
+  ! Each key and each value goes on the shadow stack BEFORE the assoc:
+  ! two allocations in one argument list means the second can collect
+  ! the first (NOTES, "Rooting"), and the frame map then carried a nil
+  ! class -- which Throwable->map turns into (symbol nil), "no
+  ! conversion to symbol", but only when the heap happened to fill
+  ! between the two. The oracle caught it with spec loaded.
   function frames_vec(roots) result(out)
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, m, nm
     character(len=:), allocatable :: who, fname
     integer :: i, base, line, col
-    base = vs_enter(2)
+    base = vs_enter(4)
     out = gcv_empty(roots)
     call vs_set(base + 1, out)
     do i = fstack_top, 1, -1
@@ -454,24 +469,32 @@ contains
        if (fstack_site(i) /= 0) call gcr_position_parts(fstack_site(i), fname, line, col)
        m = gca_empty([roots, vs_get(base + 1)])
        call vs_set(base + 2, m)
-       m = gca_assoc(vs_get(base + 2), gc_key("class", [vs_get(base + 1), vs_get(base + 2)]), &
-            gc_str(who, [vs_get(base + 1), vs_get(base + 2)]), [vs_get(base + 1), vs_get(base + 2)])
-       call vs_set(base + 2, m)
-       m = gca_assoc(vs_get(base + 2), gc_key("method", [vs_get(base + 1), vs_get(base + 2)]), &
-            gc_str("invoke", [vs_get(base + 1), vs_get(base + 2)]), [vs_get(base + 1), vs_get(base + 2)])
-       call vs_set(base + 2, m)
-       m = gca_assoc(vs_get(base + 2), gc_key("file", [vs_get(base + 1), vs_get(base + 2)]), &
-            gc_str(fname, [vs_get(base + 1), vs_get(base + 2)]), [vs_get(base + 1), vs_get(base + 2)])
-       call vs_set(base + 2, m)
-       m = gca_assoc(vs_get(base + 2), gc_key("line", [vs_get(base + 1), vs_get(base + 2)]), &
-            gc_int(line), [vs_get(base + 1), vs_get(base + 2)])
-       call vs_set(base + 2, m)
+       call frame_put(base, roots, "class", gc_str(who, [roots, vs_get(base + 1), vs_get(base + 2)]))
+       call frame_put(base, roots, "method", gc_str("invoke", [roots, vs_get(base + 1), vs_get(base + 2)]))
+       call frame_put(base, roots, "file", gc_str(fname, [roots, vs_get(base + 1), vs_get(base + 2)]))
+       call frame_put(base, roots, "line", gc_int(line))
        out = gcv_conj(vs_get(base + 1), vs_get(base + 2), [roots])
        call vs_set(base + 1, out)
     end do
     out = vs_get(base + 1)
     call vs_leave(base)
   end function frames_vec
+
+  ! One key/value into the frame map in slot base+2. The VALUE is
+  ! already built (and rooted by its own allocation); the key is built
+  ! here, with the value on the stack first.
+  subroutine frame_put(base, roots, key, val)
+    integer, intent(in) :: base
+    type(gc_value), intent(in) :: roots(:), val
+    character(len=*), intent(in) :: key
+    type(gc_value) :: k, m
+    call vs_set(base + 4, val)
+    k = gc_key(key, [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 4)])
+    call vs_set(base + 3, k)
+    m = gca_assoc(vs_get(base + 2), vs_get(base + 3), vs_get(base + 4), &
+         [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 4)])
+    call vs_set(base + 2, m)
+  end subroutine frame_put
 
   function thrown_value() result(v)
     type(gc_value) :: v
@@ -680,6 +703,7 @@ contains
     call bind_builtin(core, "keys", B_KEYS)
     call bind_builtin(core, "vals", B_VALS)
     call bind_builtin(core, "prn", B_PRN)
+    call bind_builtin(core, "clotran-gc-torture", B_GCTORTURE)
     call bind_builtin(core, "quot", B_QUOT)
     call bind_builtin(core, "rem", B_REM)
     call bind_builtin(core, "seq", B_SEQ)
@@ -862,6 +886,99 @@ contains
     type(gc_value) :: out
     out = rt_call_in("clotran/multifn", "clotran.multifn", mf_loaded, name, args)
   end function mf_call
+
+  ! The libs load when checking is switched on, not at the first
+  ! macro: on the JVM clojure.main's own macros pull spec in before any
+  ! user code, so spec's (:require [clojure.string]) never lands in the
+  ! middle of clojure.string's own load -- which is exactly where the
+  ! first user (require 'clojure.string) would otherwise put it.
+  subroutine gce_set_spec_check(on)
+    logical, intent(in) :: on
+    spec_check = on
+    if (on) call ensure_specs()
+  end subroutine gce_set_spec_check
+
+  ! What clojure.main/with-bindings binds for a script or a REPL, and
+  ! `clj` therefore runs with: *print-namespace-maps* true, so a map
+  ! whose keys share a namespace prints as #:ns{...}. The Var's ROOT is
+  ! false (core_print.cljf, Rich's value); this is the launcher's
+  ! binding, set once core.clj has loaded.
+  subroutine gce_main_bindings()
+    type(gc_value) :: var, none(0)
+    var = gcn_lookup(gcn_find_or_create("clojure.core", none), gc_sym("*print-namespace-maps*", none))
+    if (gcn_is_var(var)) call gc_set_slot(var, var_root_slot(var), gc_bool(.true.))
+  end subroutine gce_main_bindings
+
+  recursive subroutine ensure_specs()
+    type(gc_value) :: fargs, out
+    integer :: base
+    if (spec_loaded) return
+    base = vs_enter(1)
+    spec_loading = .true.
+    fargs = gcv_empty([gc_nil()])
+    call vs_set(base + 1, fargs)
+    fargs = gcv_conj(vs_get(base + 1), gc_str("clojure/spec/alpha", [vs_get(base + 1)]), [vs_get(base + 1)])
+    call vs_set(base + 1, fargs)
+    out = call_builtin(B_RTLOAD, vs_get(base + 1))
+    if (.not. has_error) then
+       fargs = gcv_empty([gc_nil()])
+       call vs_set(base + 1, fargs)
+       fargs = gcv_conj(vs_get(base + 1), gc_str("clojure/core/specs/alpha", [vs_get(base + 1)]), [vs_get(base + 1)])
+       call vs_set(base + 1, fargs)
+       out = call_builtin(B_RTLOAD, vs_get(base + 1))
+    end if
+    spec_loading = .false.
+    spec_loaded = .true.
+    call vs_leave(base)
+  end subroutine ensure_specs
+
+  ! Compiler.checkSpecs(v, form): (macroexpand-check v (next form)),
+  ! and a failure is wrapped as the CompilerException is -- a
+  ! RuntimeException whose cause is spec's ex-info, which is what
+  ! (thrown-with-cause-msg? Exception #"did not conform to spec" ...)
+  ! reads.
+  recursive subroutine check_specs(mvar, form)
+    type(gc_value), intent(in) :: mvar, form
+    type(gc_value) :: fargs, out, e
+    logical :: was_loaded
+    character(len=:), allocatable :: vt
+    integer :: base
+    if (.not. spec_check .or. spec_loading) return
+    base = vs_enter(4)
+    call vs_set(base + 1, mvar)
+    call vs_set(base + 2, form)
+    if (.not. spec_loaded) then
+       call ensure_specs()
+       if (has_error) then
+          call vs_leave(base)
+          return
+       end if
+    end if
+    fargs = gcv_empty([vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 3, fargs)
+    fargs = gcv_conj(vs_get(base + 3), vs_get(base + 1), [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+    call vs_set(base + 3, fargs)
+    fargs = gcv_conj(vs_get(base + 3), gcl_rest(vs_get(base + 2), [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)]), &
+         [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+    call vs_set(base + 3, fargs)
+    was_loaded = .true.
+    out = rt_call_in("clojure/spec/alpha", "clojure.spec.alpha", was_loaded, "macroexpand-check", vs_get(base + 3))
+    if (has_error) then
+       vt = to_string_text(vs_get(base + 1))
+       if (len(vt) > 2) then
+          if (vt(1:2) == "#'") vt = vt(3:)
+       end if
+       call vs_set(base + 3, thrown_value())
+       call vs_set(base + 4, gc_sym("RuntimeException", [vs_get(base + 1), vs_get(base + 3)]))
+       e = gc_obj(OBJ_ERR, [vs_get(base + 4), gc_str("Syntax error macroexpanding " // vt // ".", &
+            [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)]), gc_nil()], &
+            [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)])
+       call gc_set_slot(e, 5, vs_get(base + 3))
+       call set_thrown(e)
+       last_error = "Syntax error macroexpanding " // vt // "."
+    end if
+    call vs_leave(base)
+  end subroutine check_specs
 
   recursive function rt_call_in(lib, nsname, loaded, name, args) result(out)
     character(len=*), intent(in) :: lib, nsname, name
@@ -2136,7 +2253,15 @@ contains
     base = vs_enter(5)
     call vs_set(base + 1, argv)
 
-    if (cname == "clojure.lang.Reduced") then
+    if (cname == "clojure.lang.MapEntry") then
+       ! (MapEntry. k v): a map entry is a two-vector marked as one
+       ! (DEVIATIONS 39); clojure.spec.alpha's tagged-ret builds them
+       call vs_set(base + 3, gcv_empty([vs_get(base + 1)]))
+       out = gcv_conj(vs_get(base + 3), nth_or_nil(vs_get(base + 1), 0), [vs_get(base + 1), vs_get(base + 3)])
+       call vs_set(base + 3, out)
+       out = gcv_conj(vs_get(base + 3), nth_or_nil(vs_get(base + 1), 1), [vs_get(base + 1), vs_get(base + 3)])
+       call mark_entry(out)
+    else if (cname == "clojure.lang.Reduced") then
        ! (reduced x) wraps a value to say "stop reducing". A
        ! one-key map is enough to carry the mark and the value,
        ! and the key is one no Clojure program can write.
@@ -3044,6 +3169,15 @@ contains
 
     if (gc_kind(v) /= OBJ_LAZY) return
     if (gc_i1(v) /= LAZY_PENDING) return
+    ! NOT while an error is in flight. `apply` refuses to run anything
+    ! with has_error set, so forcing here would answer nothing and the
+    ! cell would be cached as EMPTY -- permanently, for every later
+    ! reader. That is how a lazy seq inside an exception's ex-data came
+    ! back empty in the catch handler: raising the error printed the
+    ! map, printing forced the seq, and the seq was gone. Leave it
+    ! pending; whoever forces it after the error is handled gets the
+    ! real elements.
+    if (has_error) return
 
     base = vs_enter(2)
     call vs_set(base + 1, v)
@@ -3067,7 +3201,10 @@ contains
     end select
     call vs_set(base + 2, r)
     if (has_error) then
-       call gc_set_i1(vs_get(base + 1), LAZY_EMPTY)
+       ! The thunk threw. Clojure's LazySeq caches nothing in that case --
+       ! it keeps the fn, and the next seq call runs it again and throws
+       ! again -- so the cell stays PENDING rather than becoming an
+       ! empty seq that silently swallows the failure.
        call vs_leave(base)
        return
     end if
@@ -5739,9 +5876,9 @@ contains
        else if (gc_kind(a) == OBJ_META) then
           out = gc_slot(a, 2)
        else if (gc_kind(a) == OBJ_INST) then
-          ! a record answers its own meta
+          ! a record answers its own meta; a reify keeps it in slot 3
           out = inst_invoke(a, "meta", gcv_empty([vs_get(base + 1)]), hit)
-          if (.not. hit) out = gc_nil()
+          if (.not. hit) out = gc_slot(a, 3)
        end if
     case (B_WITHMETA)
        ! REPLACES metadata, never nests it. IObj.withMeta returns a new
@@ -5753,10 +5890,14 @@ contains
        if (gc_kind(a) == OBJ_INST) then
           ! a record carries its own metadata: its withMeta, not a wrapper
           out = inst_invoke(a, "withMeta", rest_args(vs_get(base + 1), 1), hit)
-          if (hit) then
-             call vs_leave(base)
-             return
+          if (.not. hit) then
+             ! a reify (or any deftype instance): the same type and
+             ! fields under the new metadata, in slot 3
+             out = gc_obj(OBJ_INST, [gc_slot(a, 1), gc_slot(a, 2), gcv_nth(vs_get(base + 1), 1)], &
+                  [vs_get(base + 1)])
           end if
+          call vs_leave(base)
+          return
        end if
        out = gc_obj(OBJ_META, &
             [strip_meta(gcv_nth(vs_get(base + 1), 0)), gcv_nth(vs_get(base + 1), 1)], &
@@ -5852,7 +5993,8 @@ contains
     case (B_GETNAME)
        ! .getName answers in the type the host uses: a Namespace gives
        ! back a SYMBOL (which is what ns-name returns), everything else
-       ! a string.
+       ! a string. The `name` FIELD of Namespace and Symbol is the same
+       ! answer, (.name *ns*) in clojure.spec.alpha's ns-qualify.
        a = strip_meta(gcv_nth(args, 0))
        if (gc_kind(a) == OBJ_NS) then
           out = gc_sym(gcn_name(a), [vs_get(base + 1)])
@@ -6836,6 +6978,36 @@ case (B_SLURP)
             out = gc_bool(r == 1)
          end if
        end block
+    case (B_GCTORTURE)
+       ! (clotran-gc-torture true) -- collect at EVERY allocation from
+       ! here on. A rooting bug is otherwise a value that is wrong only
+       ! when the heap happens to fill at the wrong moment; under
+       ! torture it is wrong every time. The env var CLOTRAN_GC_TORTURE
+       ! does the same from the second file onwards (main.f90); this is
+       ! for turning it on around one form.
+       gc_torture = truthy(gcv_nth(args, 0))
+       out = gc_bool(gc_torture)
+    case (B_RANDOMUUID)
+       ! A version-4 UUID's text, from the random generator plus a
+       ! counter so two in one process never collide. There is no UUID
+       ! class here (uuid.clj is skipped, DEVIATIONS 12); spec.alpha only
+       ! compares the ids it makes with these.
+       block
+         character(len=36) :: u
+         character(len=32) :: hx
+         real :: r(4)
+         integer :: k, w(4)
+         integer, save :: uuid_seq = 0
+         uuid_seq = uuid_seq + 1
+         call random_number(r)
+         do k = 1, 4
+            w(k) = int(r(k) * 2147483647.0)
+         end do
+         w(4) = ieor(w(4), uuid_seq)
+         write(hx, '(4Z8.8)') w
+         u = hx(1:8) // "-" // hx(9:12) // "-4" // hx(14:16) // "-a" // hx(18:20) // "-" // hx(21:32)
+         out = gc_str(u, [vs_get(base + 1)])
+       end block
     case (B_ISWS, B_ISLOWER, B_ISDIGIT, B_ISLETTER, B_ISALNUM)
        ! Character.isX over the code point, answered by ICU (cu_* in
        ! regex_shim.c); u_isWhitespace is defined as Java's.
@@ -7361,6 +7533,13 @@ case (B_SLURP)
                if (.not. gcn_is_var(out)) out = gc_nil()
             else
                out = gcn_lookup(vs_get(base + 2), sym2)
+               ! then clojure.core, which every namespace refers -- the
+               ! same fallback a bare symbol takes when it is analysed
+               ! (DEVIATIONS 3). Without it (resolve 'nil?) was nil in
+               ! every namespace but clojure.core, and clojure.spec.alpha
+               ! resolves the symbols of a pred form that way.
+               if (.not. gcn_is_var(out)) &
+                    out = gcn_lookup(gcn_find_or_create("clojure.core", [vs_get(base + 1)]), sym2)
                if (.not. gcn_is_var(out)) then
                   out = gc_nil()
                   if (is_class_name(sym2)) out = gc_key(class_key(t), [vs_get(base + 1)])
@@ -10691,6 +10870,10 @@ case (B_SLURP)
     if (index(t, "/") > 0) return
     if (gc_kind(find_type(t)) == OBJ_TYPE) then
        names_a_class = .true.
+    else if (index(t, "clotran.reify__") == 1 .or. index(t, "clotran.proxy__") == 1) then
+       ! a reify's class is never registered (analyze_reify), but it
+       ! is a class: isa? Object, so print-method reaches Object
+       names_a_class = .true.
     else
        names_a_class = is_class_name(gc_sym(t, none))
     end if
@@ -11133,7 +11316,11 @@ case (B_SLURP)
     case ("clojure.lang.Keyword");  yes = (t == "keyword")
     case ("clojure.lang.Var");      yes = (t == "var")
     case ("clojure.lang.Namespace"); yes = (t == "ns")
-    case ("clojure.lang.IFn", "clojure.lang.Fn"); yes = (t == "fn" .or. t == "multifn")
+    ! ifn? is (instance? clojure.lang.IFn x): a set, a map, a vector, a
+    ! keyword, a symbol and a Var all invoke; fn? is Fn, functions only.
+    case ("clojure.lang.IFn"); yes = (t == "fn" .or. t == "multifn" .or. t == "set" .or. t == "map" .or. &
+         t == "vector" .or. t == "keyword" .or. t == "symbol" .or. t == "var")
+    case ("clojure.lang.Fn"); yes = (t == "fn")
     case ("clojure.lang.MultiFn"); yes = (t == "multifn")
     case ("clojure.lang.IDeref", "clojure.lang.IPending")
        ! core.clj's deref is (if (instance? clojure.lang.IDeref ref)
@@ -11198,9 +11385,11 @@ case (B_SLURP)
     case ("clojure.lang.Sorted"); yes = is_sorted_coll(v)
     case ("clojure.lang.Reversible"); yes = (t == "vector") .or. is_sorted_coll(v)
     case ("clojure.lang.Associative"); yes = (t == "map" .or. t == "vector")
+    ! A String is NOT Counted on the JVM: RT.count knows how to count
+    ! one, but (counted? "ab") is false there, so bounded-count walks it.
     case ("clojure.lang.Counted"); &
-         yes = (t == "list" .or. t == "vector" .or. t == "map" .or. &
-                t == "set" .or. t == "string")
+         yes = (t == "list" .or. t == "vector" .or. t == "map" .or. t == "set" .or. &
+                (t == "lazy-seq" .and. gc_i2(strip_meta(v)) == 1))
     case ("clojure.lang.Sequential"); &
          yes = (t == "list" .or. t == "vector" .or. t == "lazy-seq" .or. t == "seq")
     case ("clojure.lang.IPersistentCollection", "clojure.lang.Seqable"); &

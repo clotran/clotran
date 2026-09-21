@@ -523,11 +523,27 @@
        ! A LOCAL shadows everything: a special form name, a macro, host
        ! sugar. (let [do 1] (do)) is a call of the local.
        if (lookup_local(vs_get(base + 2), head) < 0) then
-          ! Macros are expanded first: `..` is a macro whose name looks
+          ! A special form is itself whatever a macro of that name says:
+          ! Compiler.macroexpand1 asks isSpecial before isMacro, which is
+          ! what lets clojure.spec.alpha define a macro named `def` and
+          ! still write (defn ...) in the same file.
+          if (is_special(head)) then
+             nd = analyze_special(head, vs_get(base + 1), vs_get(base + 2))
+             call vs_leave(base)
+             return
+          end if
+          ! Macros are expanded next: `..` is a macro whose name looks
           ! like member sugar, and Compiler.macroexpand1 asks isMacro
           ! before it looks at the dot.
           mvar = macro_var(head, gc_nil())
           if (gcn_is_var(mvar)) then
+             call vs_set(base + 3, mvar)
+             call check_specs(vs_get(base + 3), vs_get(base + 1))
+             if (has_error) then
+                call vs_leave(base)
+                return
+             end if
+             mvar = vs_get(base + 3)
              call vs_set(base + 3, gcn_var_value(mvar))
              expanded = expand_macro(vs_get(base + 3), vs_get(base + 1), gc_nil(), mvar)
              if (has_error) then
@@ -562,11 +578,6 @@
              end if
              call vs_set(base + 4, expanded)
              nd = analyze(vs_get(base + 4), vs_get(base + 2))
-             call vs_leave(base)
-             return
-          end if
-          if (is_special(head)) then
-             nd = analyze_special(head, vs_get(base + 1), vs_get(base + 2))
              call vs_leave(base)
              return
           end if
@@ -1787,6 +1798,15 @@
        reify_id = reify_id + 1
        write(buf, '(I0)') reify_id
        buf = "clotran.reify__" // trim(buf)
+       ! reify always implements IObj: the reify macro does not say so,
+       ! NewInstanceExpr adds it, and its meta/withMeta are the
+       ! instance's own slot (B_META, B_WITHMETA)
+       if (gcv_is(vs_get(base + 3))) then
+          spec = gc_sym("clojure.lang.IObj", [vs_get(base + 3)])
+          call vs_set(base + 6, spec)
+          ifaces = gcv_conj(vs_get(base + 3), vs_get(base + 6), [vs_get(base + 3), vs_get(base + 6)])
+          call vs_set(base + 3, ifaces)
+       end if
     end if
     call vs_set(base + 5, gcv_empty([vs_get(base + 3), vs_get(base + 4)]))
     spec = type_spec(trim(buf), vs_get(base + 5), vs_get(base + 3), vs_get(base + 4), vs_get(base + 2))
