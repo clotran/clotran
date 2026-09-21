@@ -650,9 +650,10 @@ DEVIATIONS 24 and 25.
 
 ## Open
 
-**RESOLVED: `class` and a class literal answer the same keyword.**
-`(class "a")` and `String` are both `:String` (`class_name_of`,
-`class_key`); the tag stays behind `clotran-type`; `host_super` is
+**RESOLVED: `class` and a class literal answer the same value.**
+`(class "a")` and `String` are both the class `java.lang.String`
+(`class_name_of`, `class_key`; a KEYWORD until 2026-09-21, when a
+class became a kind of its own -- DEVIATIONS 34); the tag stays behind `clotran-type`; `host_super` is
 keyed by class name; `import*` records short names. The derived suite
 did not move (2164/241/370 over 324 executed), the oracle gained
 seven value-compared cases, and `pprint` got past `(condp = (class x)

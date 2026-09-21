@@ -2472,7 +2472,11 @@ it means the JVM, and a `:clj` branch that reaches for
 `classpath_find` looks for `.cljf`, `.cljc`, `.clj` in that order; the
 reasoning is in DEVIATIONS 33.
 
-## `class` is a keyword, and `import*` finally does something
+## `class` answers what a class literal does, and `import*` finally does something
+
+(A class was a KEYWORD when this was written; it is its own kind since
+2026-09-21, and the section below reads `:String` for what is now
+`java.lang.String`. The argument it records is unchanged.)
 
 The open question was whether `(class x)` should answer the type tag
 (`:string`) or the thing a class literal evaluates to (`:String`).
