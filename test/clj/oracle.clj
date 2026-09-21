@@ -2170,3 +2170,21 @@
 (try (apply (fn [a b & r] [a b]) [1]) (catch clojure.lang.ArityException e :arity))
 (let [a (atom 0)] (apply (fn [x & r] x) (map (fn [i] (swap! a inc) i) (range 100))) @a)
 (deref (future (apply (fn [x & r] (take 2 r)) (range))) 1000 :timeout)
+
+;; strings are characters (DEVIATIONS 41): counted, indexed, sliced and
+;; searched by code point, with the Character predicates ICU's
+[(count "\u2002ab") (count "é") (.length "é") (subs "é" 0 1) (.charAt "\u2002x" 1) (int (.charAt "\u2002x" 0)) (int \u2002) (= "\u2002" (str \u2002)) (str \o101) (int \u00e9)]
+[(clojure.string/triml "\u2002 \tbar") (clojure.string/trimr "bar\t \u2002") (clojure.string/trim "\u2000bar\t \u2002") (clojure.string/blank? "\u2002") (clojure.string/blank? "\u00a0")]
+[(nth "aé" 1) (.indexOf "aéb" "b") (clojure.string/upper-case "éa") (clojure.string/lower-case "ÉA") (vec "aé") (seq "aé") (clojure.string/reverse "aé") (last "aé") (get "aé" 1) (contains? "aé" 1) (contains? "aé" 2) (clojure.string/capitalize "élan")]
+[(Character/isWhitespace \u2002) (Character/isWhitespace \u00a0) (Character/isLetter \é) (Character/isLetter \u2002) (Character/toUpperCase \é) (Character/isLetter \A) (Character/isWhitespace \space) (Character/isWhitespace \a) (Character/toLowerCase \É)]
+[(re-find #"é" "aéb") (clojure.string/index-of "aéb" "b") (.substring "aéb" 2) (re-seq #".\d" "é1x2") (clojure.string/replace "aéb" #"é" "E") (clojure.string/replace "aébé" "é" "<$0>") (clojure.string/last-index-of "éaéb" "é") (clojure.string/index-of "éaéb" "é" 1) (clojure.string/split "éaéb" #"é") (clojure.string/split "aébéc" #"")]
+[(pr-str "é") (pr-str \é) (pr-str \u2002) (clojure.string/escape "aé" {\é "E"}) (.toUpperCase "é") (subs "aéb" 1) (subs "aéb" 1 2) (subs "aéb" 3) (try (subs "aéb" 4) (catch StringIndexOutOfBoundsException e :oob)) (try (subs "aéb" 2 1) (catch StringIndexOutOfBoundsException e :oob)) (.substring "aéb" 1 3) (map int "aé") (apply str (map char [233 65]))]
+[(re-matches #".." "aé") (re-matches #".." "aéb") (let [m (re-matcher #"é" "aébé")] (re-find m) [(.start m) (.end m)]) (clojure.string/replace-first "aébé" #"é" "E") (clojure.string/split-lines "é\nb") (clojure.string/includes? "aéb" "é") (clojure.string/starts-with? "éa" "é") (clojure.string/ends-with? "aé" "é") (let [m (re-matcher #"é" "aébé")] (re-find m) (let [sb (StringBuffer.)] (.appendReplacement m sb "E") (.appendTail m sb) (str sb)))]
+(expect-diff "DEVIATIONS 14: ICU's \\s is Unicode, java.util.regex's is ASCII")
+(clojure.string/split "a\u2002b" #"\s")
+(expect-diff "DEVIATIONS 14: ICU's \\w is Unicode, java.util.regex's is ASCII")
+(re-find #"\w+" "héllo")
+(expect-diff "DEVIATIONS 14: ICU's (?i) folds Unicode, java.util.regex's folds ASCII")
+(re-find #"(?i)É" "xé")
+(expect-diff "DEVIATIONS 41: a code point off the BMP is one character here, a surrogate pair there")
+[(count "😀") (int (first "😀"))]

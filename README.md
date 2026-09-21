@@ -262,7 +262,7 @@ recalled. See `CLAUDE.md`.
 | `tap>`, agents that run apart | queues; an agent's action runs at `send`, on the one thread there is |
 | futures | run on the one OS thread, at creation until they first block; a wait under a `map` or `reduce` callback cannot park, and a wait nothing can satisfy is an error, not a hang; DEVIATIONS 38 |
 | the five JVM-only sibling libs | bytecode generation; see `src/clj/clojure/PROVENANCE.md` |
-| regex | ICU, with ASCII/Latin-1 offsets only |
+| regex | ICU over UTF-8; its `\w` and `(?i)` are Unicode where Java's are ASCII |
 | calling a Fortran library | one routine, `dgemm`, hand-bound; the generator that would do it for any routine is PLAN.md step 7 |
 
 `DEVIATIONS.md` is the full ledger: every place clotran does something

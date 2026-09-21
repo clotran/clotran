@@ -3510,6 +3510,39 @@ The oracle has fifteen cases for it, values against clj, including
 `(apply (fn [a & r] [a (take 3 r)]) 1 (range))` and the atom count
 that shows only one element of a hundred was realised.
 
+## Strings are characters, in UTF-8
+
+A string was a byte buffer and `count`, `nth`, `subs`, `.charAt` and
+the rest indexed it by byte, so `(count "é")` was 2, `.charAt` on
+`"\u2002 bar"` handed `Character/isWhitespace` the byte 0xE2, and
+`clojure.string/triml` left the non-breaking spaces where they were --
+the three string tests that failed. The storage stays UTF-8 (the pool
+is bytes, printing is a copy); what changed is that every operation
+that counts or indexes converts at the edge. `GC.f90` has the six
+functions: `u8_count`, `u8_off` (character index to byte position),
+`u8_cpidx` (the other way), `u8_slice`, `u8_dec`/`u8_at` and `u8_enc`.
+Each walk is linear from the front of the string -- an offset table
+per string if a long non-ASCII string ever shows in a profile.
+
+A character was already a code point in `ival`; the printer wrote it
+with `achar`, which is one byte, and the reader took `\é` as two bytes
+and refused it. `gc_char_cp` makes one from a code point, the printer
+encodes it, and `read_char` takes one character of any width, `\uXXXX`
+and `\oNNN`.
+
+The regex shim decodes both pattern and subject with `u_strFromUTF8`
+instead of widening bytes, so ICU's offsets are character indices and
+the Fortran side slices with `u8_slice` (split, replace, group,
+appendReplacement). Bytes that are not UTF-8 fall back to the old
+widening. ICU's character predicates and simple case maps stand behind
+`Character/isWhitespace`, `isLetter`, `toUpperCase` and the string
+case folds, eight one-line wrappers at the end of `regex_shim.c`.
+
+Two things are recorded rather than matched: ICU's `\w` and `(?i)` are
+Unicode where java.util.regex's are ASCII by default (DEVIATIONS 14),
+and a code point off the BMP is one character here and a surrogate
+pair there (DEVIATIONS 41).
+
 ## The door: a package is a shared library any clotran can open
 
 PLAN.md step 9 said a package is linked into a per-project binary,

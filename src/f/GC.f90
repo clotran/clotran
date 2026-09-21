@@ -523,6 +523,7 @@ module GC
 
   public :: gc_init, gc_collect
   public :: gc_nil, gc_bool, gc_int, gc_real, gc_char, gc_str, gc_sym, gc_key
+  public :: gc_char_cp, u8_count, u8_off, u8_cpidx, u8_slice, u8_dec, u8_at, u8_enc
 
   interface gc_int
      module procedure gc_int4, gc_int8
@@ -1802,5 +1803,130 @@ contains
        end if
     end select
   end function bad_ref
+
+  ! --- UTF-8 -----------------------------------------------------
+  !
+  ! A string is UTF-8 bytes; the language indexes it by CHARACTER
+  ! (Java: by UTF-16 unit, the same thing off the astral plane). These
+  ! are the two conversions and nothing else: a continuation byte is
+  ! 10xxxxxx, so a character starts at every byte that is not one.
+  ! Each walk is linear from the front -- ponytail: an index into a
+  ! long non-ASCII string is O(n), a table of offsets if that shows.
+
+  pure function u8_lead(c) result(yes)
+    character, intent(in) :: c
+    logical :: yes
+    yes = iand(ichar(c), 192) /= 128
+  end function u8_lead
+
+  pure function u8_count(t) result(n)
+    character(len=*), intent(in) :: t
+    integer :: n, i
+    n = 0
+    do i = 1, len(t)
+       if (u8_lead(t(i:i))) n = n + 1
+    end do
+  end function u8_count
+
+  ! The 1-based byte position where character i (0-based) starts;
+  ! len(t)+1 for i at or past the count.
+  pure function u8_off(t, i) result(p)
+    character(len=*), intent(in) :: t
+    integer, intent(in) :: i
+    integer :: p, seen
+    seen = -1
+    do p = 1, len(t)
+       if (u8_lead(t(p:p))) then
+          seen = seen + 1
+          if (seen == i) return
+       end if
+    end do
+    p = len(t) + 1
+  end function u8_off
+
+  ! The character index (0-based) of byte position p (1-based).
+  pure function u8_cpidx(t, p) result(i)
+    character(len=*), intent(in) :: t
+    integer, intent(in) :: p
+    integer :: i
+    i = u8_count(t(1:min(p, len(t) + 1) - 1))
+  end function u8_cpidx
+
+  ! Characters cs (inclusive) to ce (exclusive), as their bytes.
+  pure function u8_slice(t, cs, ce) result(s)
+    character(len=*), intent(in) :: t
+    integer, intent(in) :: cs, ce
+    character(len=:), allocatable :: s
+    s = t(u8_off(t, cs):u8_off(t, ce) - 1)
+  end function u8_slice
+
+  ! The code point starting at byte p and how many bytes it took. A
+  ! byte that is not valid UTF-8 is its own code point, one byte, so
+  ! Latin-1 text read from a file still round-trips.
+  pure subroutine u8_dec(t, p, cp, nb)
+    character(len=*), intent(in) :: t
+    integer, intent(in) :: p
+    integer, intent(out) :: cp, nb
+    integer :: b, k, c
+    b = ichar(t(p:p))
+    cp = b
+    nb = 1
+    if (b < 192) return
+    if (b < 224) then
+       nb = 2; cp = b - 192
+    else if (b < 240) then
+       nb = 3; cp = b - 224
+    else
+       nb = 4; cp = b - 240
+    end if
+    if (p + nb - 1 > len(t)) then
+       cp = b; nb = 1
+       return
+    end if
+    do k = 1, nb - 1
+       c = ichar(t(p+k:p+k))
+       if (iand(c, 192) /= 128) then
+          cp = b; nb = 1
+          return
+       end if
+       cp = cp * 64 + iand(c, 63)
+    end do
+  end subroutine u8_dec
+
+  ! The code point of character i, or -1 past the end.
+  pure function u8_at(t, i) result(cp)
+    character(len=*), intent(in) :: t
+    integer, intent(in) :: i
+    integer :: cp, p, nb
+    p = u8_off(t, i)
+    cp = -1
+    if (p <= len(t)) call u8_dec(t, p, cp, nb)
+  end function u8_at
+
+  ! A code point as UTF-8, one to four bytes.
+  pure function u8_enc(cp) result(s)
+    integer, intent(in) :: cp
+    character(len=:), allocatable :: s
+    if (cp < 0) then
+       s = "?"
+    else if (cp < 128) then
+       s = achar(cp)
+    else if (cp < 2048) then
+       s = achar(192 + cp / 64) // achar(128 + mod(cp, 64))
+    else if (cp < 65536) then
+       s = achar(224 + cp / 4096) // achar(128 + mod(cp / 64, 64)) // achar(128 + mod(cp, 64))
+    else
+       s = achar(240 + cp / 262144) // achar(128 + mod(cp / 4096, 64)) // &
+            achar(128 + mod(cp / 64, 64)) // achar(128 + mod(cp, 64))
+    end if
+  end function u8_enc
+
+  ! A character from its code point; gc_char takes one byte.
+  function gc_char_cp(cp) result(v)
+    integer, intent(in) :: cp
+    type(gc_value) :: v
+    v%tag = GCT_CHAR
+    v%ival = int(cp, gc_ip)
+  end function gc_char_cp
 
 end module GC

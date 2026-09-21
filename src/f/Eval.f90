@@ -56,7 +56,7 @@ module Eval
   use Regex
   use LispReader
   use DynLoad
-  use iso_c_binding, only: c_ptr, c_funptr, c_loc, c_double, c_int, c_long, c_char, c_null_char, c_associated, c_bool
+  use iso_c_binding, only: c_ptr, c_funptr, c_loc, c_double, c_int, c_long, c_char, c_null_char, c_associated, c_bool, c_int32_t
   implicit none
   private
 
@@ -2448,7 +2448,7 @@ contains
           out = gc_bool(truthy(v))
        end if
     case ("Character", "java.lang.Character")
-       if (v%tag == GCT_INT) out = gc_char(achar(int(v%ival, kind=4)))
+       if (v%tag == GCT_INT) out = gc_char_cp(int(v%ival, kind=4))
     case ("Double", "java.lang.Double", "Float", "java.lang.Float")
        if (v%tag == GCT_STR) then
           t = gc_ref_text(v%ref)
@@ -4192,7 +4192,7 @@ contains
        ! A zero-width match at the position we are already at would
        ! loop forever and produce nothing; Java skips it too.
        if (ge == gs .and. gs == from .and. from == 0) cycle
-       piece = gc_str(s(from+1:gs), [roots, vs_get(base + 1)])
+       piece = gc_str(u8_slice(s, from, gs), [roots, vs_get(base + 1)])
        call vs_set(base + 2, piece)
        out = gcv_conj(vs_get(base + 1), vs_get(base + 2), &
             [roots, vs_get(base + 1), vs_get(base + 2)])
@@ -4203,7 +4203,7 @@ contains
     end do
     call regex_release(mh)
 
-    piece = gc_str(s(from+1:), [roots, vs_get(base + 1)])
+    piece = gc_str(s(u8_off(s, from):), [roots, vs_get(base + 1)])
     call vs_set(base + 2, piece)
     out = gcv_conj(vs_get(base + 1), vs_get(base + 2), &
          [roots, vs_get(base + 1), vs_get(base + 2)])
@@ -4310,7 +4310,7 @@ contains
             repl(min(i+1, len(repl)):min(i+1, len(repl))) >= "0" .and. &
             repl(min(i+1, len(repl)):min(i+1, len(repl))) <= "9") then
           gnum = iachar(repl(i+1:i+1)) - iachar("0")
-          if (regex_group_span(mh, gnum, gs, ge)) s = s // subj(gs+1:ge)
+          if (regex_group_span(mh, gnum, gs, ge)) s = s // u8_slice(subj, gs, ge)
           i = i + 2
        else
           s = s // repl(i:i)
@@ -4336,17 +4336,17 @@ contains
     do
        if (regex_find_next(mh) /= 1) exit
        if (.not. regex_group_span(mh, 0, gs, ge)) exit
-       acc = acc // subj(from+1:gs) // expand_replacement(repl, mh, subj)
+       acc = acc // u8_slice(subj, from, gs) // expand_replacement(repl, mh, subj)
        from = ge
        if (only_first) exit
        ! A zero-width match cannot advance on its own.
        if (ge == gs) then
-          if (ge >= len(subj)) exit
-          acc = acc // subj(ge+1:ge+1)
+          if (ge >= u8_count(subj)) exit
+          acc = acc // u8_slice(subj, ge, ge + 1)
           from = ge + 1
        end if
     end do
-    out = gc_str(acc // subj(from+1:), roots)
+    out = gc_str(acc // subj(u8_off(subj, from):), roots)
   end function regex_replace
 
   ! One conversion, before padding.
@@ -5917,16 +5917,16 @@ contains
          end if
          t = gc_ref_text(a%ref)
          b = gcv_nth(args, 1)
-         lo = b%ival + 1
-         hi = len(t)
+         lo = int(b%ival)
+         hi = u8_count(t)
          if (n >= 3) then
             b = gcv_nth(args, 2)
-            hi = b%ival
+            hi = int(b%ival)
          end if
-         if (lo < 1 .or. hi > len(t) .or. lo > hi + 1) then
-            call fail("subs: index out of range")
+         if (lo < 0 .or. hi > u8_count(t) .or. lo > hi) then
+            call raise_class("StringIndexOutOfBoundsException", "begin " // trim(itoa(lo)) // ", end " // trim(itoa(hi)) // ", length " // trim(itoa(u8_count(t))), [vs_get(base + 1)])
          else
-            out = gc_str(t(lo:hi), [vs_get(base + 1)])
+            out = gc_str(u8_slice(t, lo, hi), [vs_get(base + 1)])
          end if
        end block
     case (B_VEC)
@@ -6607,7 +6607,7 @@ case (B_SLURP)
          type(gc_value) :: cv
          cv = strip_meta(gcv_nth(args, 0))
          if (cv%tag == GCT_STR) then
-            out = gc_int(len(gc_ref_text(cv%ref)))
+            out = gc_int(u8_count(gc_ref_text(cv%ref)))
          else
             out = gc_int(sq_count(cv, [vs_get(base + 1)]))
          end if
@@ -6620,12 +6620,16 @@ case (B_SLURP)
          t = text_of(gcv_nth(args, 0))
          iv = gcv_nth(args, 1)
          lo = int(iv%ival)
-         hi = len(t)
+         hi = u8_count(t)
          if (n >= 3) then
             iv = gcv_nth(args, 2)
             hi = int(iv%ival)
          end if
-         out = gc_str(t(lo+1:hi), [vs_get(base + 1)])
+         if (lo < 0 .or. hi > u8_count(t) .or. lo > hi) then
+            call raise_class("StringIndexOutOfBoundsException", "begin " // trim(itoa(lo)) // ", end " // trim(itoa(hi)) // ", length " // trim(itoa(u8_count(t))), [vs_get(base + 1)])
+         else
+            out = gc_str(u8_slice(t, lo, hi), [vs_get(base + 1)])
+         end if
        end block
     case (B_ISPUBLIC, B_ISMACRO)
        ! Both read the Var's metadata, which is where Clojure keeps
@@ -6833,49 +6837,45 @@ case (B_SLURP)
          end if
        end block
     case (B_ISWS, B_ISLOWER, B_ISDIGIT, B_ISLETTER, B_ISALNUM)
+       ! Character.isX over the code point, answered by ICU (cu_* in
+       ! regex_shim.c); u_isWhitespace is defined as Java's.
        block
          type(gc_value) :: cv
-         character :: c
+         integer(c_int32_t) :: cp
          cv = strip_meta(gcv_nth(args, 0))
-         c = achar(max(0, min(255, cv%ival)))
+         cp = int(cv%ival, c_int32_t)
          select case (id)
-         case (B_ISWS)
-            out = gc_bool(c == " " .or. c == achar(9) .or. c == achar(10) &
-                 .or. c == achar(13) .or. c == achar(12))
-         case (B_ISLOWER); out = gc_bool(c >= "a" .and. c <= "z")
-         case (B_ISDIGIT); out = gc_bool(c >= "0" .and. c <= "9")
-         case (B_ISLETTER)
-            out = gc_bool((c >= "A" .and. c <= "Z") .or. (c >= "a" .and. c <= "z"))
-         case (B_ISALNUM)
-            out = gc_bool((c >= "A" .and. c <= "Z") .or. (c >= "a" .and. c <= "z") &
-                 .or. (c >= "0" .and. c <= "9"))
+         case (B_ISWS);     out = gc_bool(cu_isws(cp) /= 0)
+         case (B_ISLOWER);  out = gc_bool(cu_islower(cp) /= 0)
+         case (B_ISDIGIT);  out = gc_bool(cu_isdigit(cp) /= 0)
+         case (B_ISLETTER); out = gc_bool(cu_isalpha(cp) /= 0)
+         case (B_ISALNUM);  out = gc_bool(cu_isalnum(cp) /= 0)
          end select
        end block
     case (B_UPCASE, B_DOWNCASE)
        ! A character or a whole string: Character/toUpperCase and
-       ! String.toUpperCase are the same fold either way. ASCII only,
-       ! as everything else here is -- DEVIATIONS 14.
+       ! String.toUpperCase, one code point at a time through ICU's
+       ! SIMPLE case map -- one code point to one, so ß stays ß where
+       ! Java's String.toUpperCase writes SS.
        block
          type(gc_value) :: v
-         character(len=:), allocatable :: t
-         integer :: j, d
+         character(len=:), allocatable :: t, r
+         integer :: p, cp, nb
          logical :: up
          up = (id == B_UPCASE)
          v = strip_meta(gcv_nth(args, 0))
          if (v%tag == GCT_CHAR) then
-            t = achar(max(0, min(255, v%ival)))
+            out = gc_char_cp(case_cp(int(v%ival), up))
          else
             t = text_of(v)
-         end if
-         do j = 1, len(t)
-            d = iachar(t(j:j))
-            if (up .and. d >= 97 .and. d <= 122) t(j:j) = achar(d - 32)
-            if (.not. up .and. d >= 65 .and. d <= 90) t(j:j) = achar(d + 32)
-         end do
-         if (v%tag == GCT_CHAR) then
-            out = gc_char(t(1:1))
-         else
-            out = gc_str(t, [vs_get(base + 1)])
+            r = ""
+            p = 1
+            do while (p <= len(t))
+               call u8_dec(t, p, cp, nb)
+               r = r // u8_enc(case_cp(cp, up))
+               p = p + nb
+            end do
+            out = gc_str(r, [vs_get(base + 1)])
          end if
        end block
     case (B_CHARAT)
@@ -6889,7 +6889,7 @@ case (B_SLURP)
          out = gc_nil()
          t = text_of(sv)
          if (iv%tag == GCT_INT) then
-            if (iv%ival >= 0 .and. iv%ival < len(t)) out = gc_char(t(iv%ival + 1:iv%ival + 1))
+            if (iv%ival >= 0 .and. iv%ival < u8_count(t)) out = gc_char_cp(u8_at(t, int(iv%ival)))
          end if
        end block
     case (B_WRITE)
@@ -7095,7 +7095,7 @@ case (B_SLURP)
             if (participated) then
                subj = gc_slot(mt, 2)
                stext = text_of(subj)
-               out = gc_str(stext(gstart+1:gend), [vs_get(base + 1)])
+               out = gc_str(u8_slice(stext, gstart, gend), [vs_get(base + 1)])
             end if
          end if
        end block
@@ -7733,13 +7733,17 @@ case (B_SLURP)
             do j = 1, len(hay) - len(ned) + 1
                if (hay(j:j+len(ned)-1) == ned) then
                   if (n >= 3) then
-                     if (j - 1 > int(strip_int(gcv_nth(args, 2)))) exit
+                     if (u8_cpidx(hay, j) > int(strip_int(gcv_nth(args, 2)))) exit
                   end if
                   hit = j
                end if
             end do
          end if
-         out = gc_int(hit - 1)
+         if (hit > 0) then
+            out = gc_int(u8_cpidx(hay, hit))
+         else
+            out = gc_int(-1)
+         end if
        end block
     case (B_RTLOAD)
        ! RT.load takes a CLASSPATH-relative name without its extension:
@@ -7829,16 +7833,18 @@ case (B_SLURP)
        ! returned the format unchanged.
        block
          character(len=:), allocatable :: hay, ned
-         integer :: from1, hit1
+         integer :: from1, hit1, fb
          hay = text_of(gcv_nth(args, 0))
          ned = needle_text(gcv_nth(args, 1))
          from1 = 0
          if (n >= 3) from1 = max(0, int(strip_int(gcv_nth(args, 2))))
+         ! indices are characters; the search is over bytes
+         fb = u8_off(hay, from1)
          hit1 = 0
-         if (from1 < len(hay) .or. len(ned) == 0) &
-              hit1 = index(hay(from1+1:), ned)
+         if (fb <= len(hay) .or. len(ned) == 0) &
+              hit1 = index(hay(fb:), ned)
          if (hit1 > 0) then
-            out = gc_int(hit1 + from1 - 1)
+            out = gc_int(u8_cpidx(hay, hit1 + fb - 1))
          else
             out = gc_int(-1)
          end if
@@ -8333,9 +8339,9 @@ case (B_SLURP)
             mh2 = gc_i1(mt)
             apos = gc_i2(mt)
             if (id == B_RE_APPENDTAIL) then
-               piece = subj(apos+1:)
+               piece = subj(u8_off(subj, apos):)
             else if (regex_group_span(mh2, 0, gs2, ge2)) then
-               piece = subj(apos+1:gs2) // &
+               piece = u8_slice(subj, apos, gs2) // &
                     expand_replacement(text_of(gcv_nth(args, 2)), mh2, subj)
                call gc_set_i2(mt, ge2)
             else
@@ -8398,9 +8404,9 @@ case (B_SLURP)
          a = gcv_nth(args, 0)
          out = a
          bt = text_of(a)
-         rt = bt
-         do bi = 1, len(bt)
-            rt(bi:bi) = bt(len(bt) - bi + 1:len(bt) - bi + 1)
+         rt = ""
+         do bi = u8_count(bt) - 1, 0, -1
+            rt = rt // u8_slice(bt, bi, bi + 1)
          end do
          if (gc_kind(a) == OBJ_SB) then
             call gc_set_slot(a, 1, gc_str(rt, [vs_get(base + 1)]))
@@ -9825,7 +9831,7 @@ case (B_SLURP)
     else if (gca_is(v)) then
        n = gca_count(v)
     else if (v%tag == GCT_STR) then
-       n = gc_ref_len(v%ref)
+       n = u8_count(gc_ref_text(v%ref))
     else if (gc_kind(v) == OBJ_ARRAY) then
        ! An array seqs as its elements, so `sort` can hand the array
        ! it just sorted back to `seq`. The length is the FIRST extent,
@@ -9871,7 +9877,7 @@ case (B_SLURP)
        block
          character(len=:), allocatable :: t
          t = gc_ref_text(v%ref)
-         if (i >= 0 .and. i < len(t)) out = gc_char(t(i+1:i+1))
+         if (i >= 0 .and. i < u8_count(t)) out = gc_char_cp(u8_at(t, i))
        end block
     else if (gca_is(v)) then
        call gca_entries(v, ks, vls)
@@ -10538,7 +10544,7 @@ case (B_SLURP)
   function java_hashcode(v0) result(h)
     type(gc_value), intent(in) :: v0
     type(gc_value) :: v
-    integer :: h, i
+    integer :: h, i, cp, nb
     integer(gc_ip) :: iv, acc
     character(len=:), allocatable :: t
     v = strip_meta(v0)
@@ -10559,8 +10565,11 @@ case (B_SLURP)
     case (GCT_STR)
        t = gc_ref_text(v%ref)
        acc = 0_gc_ip
-       do i = 1, len(t)
-          acc = iand(31_gc_ip * acc + int(ichar(t(i:i)), gc_ip), 4294967295_gc_ip)
+       i = 1
+       do while (i <= len(t))
+          call u8_dec(t, i, cp, nb)
+          acc = iand(31_gc_ip * acc + int(cp, gc_ip), 4294967295_gc_ip)
+          i = i + nb
        end do
        h = fold_long(acc)
     case default
@@ -11679,8 +11688,8 @@ case (B_SLURP)
     else if (coll%tag == GCT_STR .and. kk%tag == GCT_INT) then
        out = gc_nil()
        t = gc_ref_text(coll%ref)
-       if (kk%ival >= 0 .and. kk%ival < int(len(t), gc_ip)) &
-            out = gc_char(t(int(kk%ival) + 1:int(kk%ival) + 1))
+       if (kk%ival >= 0 .and. kk%ival < int(u8_count(t), gc_ip)) &
+            out = gc_char_cp(u8_at(t, int(kk%ival)))
     else
        out = gca_get(coll, k)
     end if
@@ -11703,7 +11712,7 @@ case (B_SLURP)
     else if (coll%tag == GCT_STR) then
        yes = (kk%tag == GCT_INT)
        if (yes) yes = (kk%ival >= 0 .and. &
-            kk%ival < int(gc_ref_len(coll%ref), gc_ip))
+            kk%ival < int(u8_count(gc_ref_text(coll%ref)), gc_ip))
     else
        yes = gca_contains(coll, k)
     end if
@@ -11712,13 +11721,33 @@ case (B_SLURP)
   ! What a String.indexOf needle MEANS. A string is itself, and a
   ! character -- or an integer, which is how Java spells one
   ! here -- is the single character it names.
+  function itoa(i) result(s)
+    integer, intent(in) :: i
+    character(len=:), allocatable :: s
+    character(len=24) :: buf
+    write(buf, '(I0)') i
+    s = trim(buf)
+  end function itoa
+
+  ! One code point through ICU's simple case map.
+  function case_cp(cp, up) result(r)
+    integer, intent(in) :: cp
+    logical, intent(in) :: up
+    integer :: r
+    if (up) then
+       r = int(cu_toupper(int(cp, c_int32_t)))
+    else
+       r = int(cu_tolower(int(cp, c_int32_t)))
+    end if
+  end function case_cp
+
   function needle_text(v0) result(s)
     type(gc_value), intent(in) :: v0
     character(len=:), allocatable :: s
     type(gc_value) :: v
     v = strip_meta(v0)
     if (v%tag == GCT_INT .or. v%tag == GCT_CHAR) then
-       s = achar(int(max(0_gc_ip, min(255_gc_ip, v%ival)), kind=4))
+       s = u8_enc(int(v%ival, kind=4))
     else
        s = text_of(v)
     end if

@@ -1206,7 +1206,7 @@ contains
                   call fail("Invalid unicode escape: \u" // text(pos+1:pos+4))
                   return
                end if
-               acc = acc // utf8_of(cp)
+               acc = acc // u8_enc(cp)
                pos = pos + 4
              end block
           case default; acc = acc // text(pos:pos)
@@ -1218,19 +1218,6 @@ contains
     end do
     v = gc_str(acc, roots)
   end function read_string
-
-  ! A code point as UTF-8, one to three bytes.
-  function utf8_of(cp) result(s)
-    integer, intent(in) :: cp
-    character(len=:), allocatable :: s
-    if (cp < 128) then
-       s = achar(cp)
-    else if (cp < 2048) then
-       s = achar(192 + cp / 64) // achar(128 + mod(cp, 64))
-    else
-       s = achar(224 + cp / 4096) // achar(128 + mod(cp / 64, 64)) // achar(128 + mod(cp, 64))
-    end if
-  end function utf8_of
 
   ! A backslash takes the very next character unconditionally, then
   ! any word characters after it -- so \( and \" read, and the named
@@ -1263,11 +1250,23 @@ contains
     case ("backspace"); v = gc_char(achar(8))
     case ("formfeed");  v = gc_char(achar(12))
     case default
-       if (len(name) == 1) then
-          v = gc_char(name(1:1))
-       else
-          call fail("unsupported character literal: " // achar(92) // name)
-       end if
+       ! \é is one character however many bytes; \uXXXX and \oNNN are
+       ! the code point in hex and octal, as LispReader.java reads them.
+       block
+         integer :: cp, ios
+         if (u8_count(name) == 1) then
+            v = gc_char_cp(u8_at(name, 0))
+            return
+         end if
+         ios = 1
+         if (len(name) == 5 .and. name(1:1) == "u") read(name(2:5), '(Z4)', iostat=ios) cp
+         if (len(name) >= 2 .and. len(name) <= 4 .and. name(1:1) == "o") read(name(2:), '(O3)', iostat=ios) cp
+         if (ios == 0) then
+            v = gc_char_cp(cp)
+            return
+         end if
+       end block
+       call fail("unsupported character literal: " // achar(92) // name)
     end select
   end function read_char
 

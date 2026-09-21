@@ -82,6 +82,46 @@ module Regex
        integer(c_int32_t), intent(out) :: start, endp
        integer(c_int32_t) :: r
      end function cre_group_span_c
+     function cu_isws(cp) result(r) bind(C, name="cu_isws")
+       import :: c_int32_t
+       integer(c_int32_t), value :: cp
+       integer(c_int32_t) :: r
+     end function cu_isws
+     function cu_isalpha(cp) result(r) bind(C, name="cu_isalpha")
+       import :: c_int32_t
+       integer(c_int32_t), value :: cp
+       integer(c_int32_t) :: r
+     end function cu_isalpha
+     function cu_isdigit(cp) result(r) bind(C, name="cu_isdigit")
+       import :: c_int32_t
+       integer(c_int32_t), value :: cp
+       integer(c_int32_t) :: r
+     end function cu_isdigit
+     function cu_isupper(cp) result(r) bind(C, name="cu_isupper")
+       import :: c_int32_t
+       integer(c_int32_t), value :: cp
+       integer(c_int32_t) :: r
+     end function cu_isupper
+     function cu_islower(cp) result(r) bind(C, name="cu_islower")
+       import :: c_int32_t
+       integer(c_int32_t), value :: cp
+       integer(c_int32_t) :: r
+     end function cu_islower
+     function cu_isalnum(cp) result(r) bind(C, name="cu_isalnum")
+       import :: c_int32_t
+       integer(c_int32_t), value :: cp
+       integer(c_int32_t) :: r
+     end function cu_isalnum
+     function cu_toupper(cp) result(r) bind(C, name="cu_toupper")
+       import :: c_int32_t
+       integer(c_int32_t), value :: cp
+       integer(c_int32_t) :: r
+     end function cu_toupper
+     function cu_tolower(cp) result(r) bind(C, name="cu_tolower")
+       import :: c_int32_t
+       integer(c_int32_t), value :: cp
+       integer(c_int32_t) :: r
+     end function cu_tolower
   end interface
 
   ! Handles are OPAQUE C POINTERS, and gc_value has no room for one --
@@ -106,6 +146,8 @@ module Regex
        regex_release, regex_live_count, &
        regex_find_next, regex_group_count, regex_group_span, &
        regex_last_error
+  ! java.lang.Character, answered by ICU (regex_shim.c)
+  public :: cu_isws, cu_isalpha, cu_isdigit, cu_isupper, cu_islower, cu_isalnum, cu_toupper, cu_tolower
 
 contains
 

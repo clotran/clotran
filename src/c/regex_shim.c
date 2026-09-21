@@ -6,25 +6,36 @@
  * ever sees.
  *
  * ICU matches over UChar (UTF-16 code units); clotran's strings are
- * plain byte buffers, one byte per character, matching the Latin-1/
- * ASCII assumption already made throughout GC.f90. So every byte is
- * WIDENED to a UChar with the high byte zero, never decoded as UTF-8 --
- * which keeps a UTF-16 offset numerically identical to a byte offset,
- * so Fortran can slice its own buffer directly off uregex_start/_end
- * with no conversion at all. A real multibyte string would need real
+ * UTF-8 bytes, so the subject and the pattern are DECODED on the way
+ * in (widen), and the offsets ICU reports are character indices that
+ * Fortran turns back into byte positions with u8_off/u8_slice (GC.f90).
+ * Text that is not valid UTF-8 is widened byte for byte instead. What
+ * follows in this comment is the history of the one-byte version:
  * decoding here; nothing in this codebase currently does one.
  */
 #include "regex_shim.h"
 #include <unicode/uregex.h>
 #include <unicode/utypes.h>
+#include <unicode/ustring.h>
 #include <stdlib.h>
 #include <string.h>
 
-static UChar *widen(const char *bytes, int32_t len) {
+/* UTF-8 to UTF-16, so a multibyte string matches as its characters
+ * and every offset ICU reports is a character index (a UTF-16 unit; the
+ * same thing off the astral plane), which is what Fortran's u8_slice
+ * takes. Bytes that are not UTF-8 -- Latin-1 read from a file -- are
+ * widened one byte to one unit instead, as everything once was. */
+static UChar *widen(const char *bytes, int32_t len, int32_t *ulen) {
+  UErrorCode status = U_ZERO_ERROR;
   UChar *out = (UChar *)malloc((size_t)(len > 0 ? len : 1) * sizeof(UChar));
-  int32_t i;
+  int32_t i, n = 0;
   if (!out) return NULL;
-  for (i = 0; i < len; i++) out[i] = (UChar)(unsigned char)bytes[i];
+  u_strFromUTF8(out, len, &n, bytes, len, &status);
+  if (U_FAILURE(status)) {
+    for (i = 0; i < len; i++) out[i] = (UChar)(unsigned char)bytes[i];
+    n = len;
+  }
+  *ulen = n;
   return out;
 }
 
@@ -34,16 +45,17 @@ void *cre_compile(const char *pattern, int32_t pattern_len,
   UParseError pe;
   URegularExpression *re;
   UChar *upattern;
+  int32_t ulen;
 
   if (err_cap > 0) err_buf[0] = '\0';
   memset(&pe, 0, sizeof(pe));
 
-  upattern = widen(pattern, pattern_len);
+  upattern = widen(pattern, pattern_len, &ulen);
   if (!upattern) {
     if (err_cap > 0) strncpy(err_buf, "out of memory", (size_t)err_cap - 1);
     return NULL;
   }
-  re = uregex_open(upattern, pattern_len, 0, &pe, &status);
+  re = uregex_open(upattern, ulen, 0, &pe, &status);
   free(upattern);
   if (U_FAILURE(status)) {
     if (err_cap > 0) {
@@ -92,8 +104,9 @@ int32_t cre_set_text(void *handle, const char *text, int32_t text_len,
                      void **out_buf) {
   UErrorCode status = U_ZERO_ERROR;
   UChar *utext;
+  int32_t ulen;
   if (!handle) return -1;
-  utext = widen(text, text_len);
+  utext = widen(text, text_len, &ulen);
   if (!utext) return -1;
   /* ICU keeps only a shallow reference to this buffer -- uregex_setText's
    * own doc says so -- never copying or freeing it, so it must outlive
@@ -103,7 +116,7 @@ int32_t cre_set_text(void *handle, const char *text, int32_t text_len,
    * is set once, used through a short find/matches loop, and the
    * process is short-lived (a REPL or a bootstrap run), so the leak is
    * bytes, not an unbounded one. */
-  uregex_setText((URegularExpression *)handle, utext, text_len, &status);
+  uregex_setText((URegularExpression *)handle, utext, ulen, &status);
   if (U_FAILURE(status)) {
     free(utext);
     return -1;
@@ -154,3 +167,20 @@ int32_t cre_group_span(void *handle, int32_t idx, int32_t *start, int32_t *end) 
   *end = e;
   return 1;
 }
+
+/* --- Character ----------------------------------------------------
+ * java.lang.Character's predicates and case maps over a code point,
+ * answered by ICU (unicode/uchar.h). u_isWhitespace is documented as
+ * Java's Character.isWhitespace: the separators less the no-break
+ * spaces, plus the C0 controls Java counts. The case maps are the
+ * SIMPLE ones, one code point to one. */
+#include <unicode/uchar.h>
+
+int32_t cu_isws(int32_t cp)    { return u_isWhitespace((UChar32)cp) ? 1 : 0; }
+int32_t cu_isalpha(int32_t cp) { return u_isalpha((UChar32)cp) ? 1 : 0; }
+int32_t cu_isdigit(int32_t cp) { return u_isdigit((UChar32)cp) ? 1 : 0; }
+int32_t cu_isupper(int32_t cp) { return u_isupper((UChar32)cp) ? 1 : 0; }
+int32_t cu_islower(int32_t cp) { return u_islower((UChar32)cp) ? 1 : 0; }
+int32_t cu_isalnum(int32_t cp) { return u_isalnum((UChar32)cp) ? 1 : 0; }
+int32_t cu_toupper(int32_t cp) { return (int32_t)u_toupper((UChar32)cp); }
+int32_t cu_tolower(int32_t cp) { return (int32_t)u_tolower((UChar32)cp); }

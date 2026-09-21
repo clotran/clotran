@@ -33,7 +33,7 @@ Categories:
 | 11 | Transients are the persistent collections | host | `src/f/Eval.f90` |
 | 12 | Five JVM-only libs are skipped by name, and not vendored | host | `src/f/Eval.f90` |
 | 13 | Protocol dispatch is uncached | host | `src/f/GC.f90` |
-| 14 | Regex is ICU under java.util.regex's names, ASCII-offset only | host | `src/f/Regex.f90` |
+| 14 | Regex is ICU under java.util.regex's names; `\w` and `(?i)` are Unicode | host | `src/f/Regex.f90` |
 | 15 | `hash` values are gc_hash's, not the JVM's murmur3 | host | `src/f/GC.f90` |
 | 16 | RESOLVED -- names resolve while analysing | -- | `src/f/analyze.inc` |
 
@@ -314,13 +314,17 @@ This is **host**, and it is the one place C exists in this codebase at
 all (see `src/f/Regex.f90`'s own header comment on why that trade was
 made). Three real gaps come with it:
 
-- **ASCII/Latin-1 only.** Every byte is widened to a UTF-16 `UChar`
-  with the high byte zero, never decoded as UTF-8, so `\d`, `\w`,
-  case-insensitive matching and every offset are only correct for
-  single-byte text -- which is what clotran's strings already are
-  throughout `GC.f90`. A real multibyte string would need a real
-  decoder in `regex_shim.c`, matching whatever this codebase decides
-  UTF-8 support looks like everywhere else, not just here.
+- **~~ASCII/Latin-1 only~~ -- FIXED 2026-09-21; what is left is
+  the class definitions.** The shim decodes the pattern and the
+  subject as UTF-8 (`u_strFromUTF8`; bytes that are not UTF-8 are
+  widened one to one as before), so a match is over characters and
+  every offset ICU reports is a character index, which the Fortran
+  side turns into bytes with `u8_slice` (deviation 41). What still
+  differs is what a class MEANS: java.util.regex's `\w`, `\d`, `\s`
+  and `\b` are ASCII unless `(?U)` is given, and `(?i)` folds ASCII only
+  unless `(?u)` is; ICU's are Unicode always. So `(re-find #"\w+"
+  "héllo")` is `"héllo"` here and `"h"` on the JVM, and `#"(?i)É"`
+  finds `é` here and nothing there. The oracle marks both.
 - **~~A Matcher's subject-text buffer leaks~~ -- FIXED, and it was worse
   than this entry said.** It described the text buffer only. In fact
   `cre_close` was declared in `Regex.f90`'s interface block and called
@@ -350,7 +354,10 @@ made). Three real gaps come with it:
   (`replace`, `split` and friends) will need whichever of these they
   actually call, added the same way, when something needs them.
 
-**Removal of the ASCII limit**: real UTF-8 decoding in the shim.
+**Removal of the class difference**: ICU has no ASCII-only mode for
+its classes; the pattern would be rewritten on the way in (`\w` to
+`[a-zA-Z0-9_]` and so on, unless `(?U)` is present). Not sought: the
+Unicode meaning is the one a reader of `\w` expects.
 The missing operations: add them to `regex_shim.h`/`.c` and the
 `instance_member` table in `Eval.f90` as they come up, the same way
 every other host member in this file did.
@@ -1215,3 +1222,26 @@ Rich's, line for line.
 
 **Removal**: none sought. This is the premise applied, not bent: the
 language is reproduced, the JVM is an implementation detail.
+
+## 41. A string is indexed by code point, not by UTF-16 unit
+
+A string is UTF-8 bytes in the pool and every operation that counts or
+indexes it -- `count`, `nth`, `get`, `subs`, `.charAt`, `.indexOf`,
+`.substring`, `seq`, `reverse`, `.length`, regex group spans -- counts
+CHARACTERS (`u8_count`, `u8_off`, `u8_slice` in `GC.f90`). A character
+is its code point, so `\é` reads, `(str \u2002)` prints the three
+bytes of U+2002, `Character/isWhitespace` and `toUpperCase` are ICU's
+(`cu_*` in `regex_shim.c`; `u_isWhitespace` is defined as Java's), and
+`(clojure.string/trim "\u2000bar\t \u2002")` is `"bar"` as it is
+on the JVM. Clojure's own string tests pass in full.
+
+What differs: Java's unit is the UTF-16 code unit, and a code point
+off the Basic Multilingual Plane is two of them. `(count "😀")` is 2
+there and 1 here; `(first "😀")` is a lone surrogate there and the
+character here; `(char 128512)` throws there and is that character
+here. Every string in the test suites is on the plane, so no test
+sees it. The case maps are ICU's simple ones, a code point to a code
+point, where `String.toUpperCase` would turn `ß` into `SS`.
+
+**Removal**: none sought. The code point is what a string of text
+is made of; the surrogate pair is what Java is made of.

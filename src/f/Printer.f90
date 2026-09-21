@@ -101,7 +101,7 @@ contains
           ! truncation.
           s = char_readable(int(v%ival, kind=4))
        else
-          s = achar(v%ival)
+          s = u8_enc(int(v%ival, kind=4))
        end if
     case (GCT_STR)
        if (readable) then
@@ -572,7 +572,7 @@ contains
     case (13); s = achar(92) // "return"
     case (8);  s = achar(92) // "backspace"
     case (12); s = achar(92) // "formfeed"
-    case default; s = achar(92) // achar(code)
+    case default; s = achar(92) // u8_enc(code)
     end select
   end function char_readable
 

@@ -68,6 +68,17 @@ int32_t cre_group_count(void *handle);
  * -1 on error or if idx is out of range. */
 int32_t cre_group_span(void *handle, int32_t idx, int32_t *start, int32_t *end);
 
+/* java.lang.Character over a code point: 1/0 answers, and the simple
+ * case maps. See the C file. */
+int32_t cu_isws(int32_t cp);
+int32_t cu_isalpha(int32_t cp);
+int32_t cu_isdigit(int32_t cp);
+int32_t cu_isupper(int32_t cp);
+int32_t cu_islower(int32_t cp);
+int32_t cu_isalnum(int32_t cp);
+int32_t cu_toupper(int32_t cp);
+int32_t cu_tolower(int32_t cp);
+
 #ifdef __cplusplus
 }
 #endif
