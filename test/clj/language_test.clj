@@ -981,17 +981,19 @@
 ;;; ---- report -----------------------------------------------------
 
 
-;;; ---- dgemm: the first Fortran routine called from clotran -------
+;;; ---- dgemm: the first Fortran routine called from clotran, now a package --
 ;;
 ;; A = [[1 2 3] [4 5 6]], B = [[7 8] [9 10] [11 12]]; A x B is
 ;; [[58 64] [139 154]]. Checked against the same product computed in
 ;; Clojure over aget, and then against the numbers.
 (alias 'fb 'fortran)
+(fortran/load-package "packages/blas")
+(require 'blas)
 (def dgA (fb/make-array "real8" 2 3))
 (def dgB (fb/make-array "real8" 3 2))
 (dotimes [i 2] (dotimes [j 3] (fb/aset dgA i j (double (+ 1 j (* 3 i))))))
 (dotimes [i 3] (dotimes [j 2] (fb/aset dgB i j (double (+ 7 j (* 2 i))))))
-(def dgC (fb/dgemm dgA dgB))
+(def dgC (blas/dgemm dgA dgB))
 (check "dgemm answers a real8 array" (fb/array-kind dgC) "real8")
 (check "dgemm answers m x n" (fb/array-shape dgC) [2 2])
 (check "dgemm C = A x B"
@@ -1000,7 +1002,7 @@
               (reduce + (for [l (range 3)] (* (fb/aget dgA i l) (fb/aget dgB l j)))))))
 (check "dgemm C = A x B, the numbers" (vec (for [i (range 2) j (range 2)] (fb/aget dgC i j))) [58.0 64.0 139.0 154.0])
 (check "dgemm refuses mismatched shapes"
-       (try (fb/dgemm dgA dgA) (catch Throwable t :refused)) :refused)
+       (try (blas/dgemm dgA dgA) (catch Throwable t :refused)) :refused)
 
 ;;; ---- stack traces --------------------------------------------------
 ;;

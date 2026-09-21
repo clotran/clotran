@@ -76,11 +76,13 @@ ifeq ($(UNAME_S),Darwin)
 ICU_PLATFORM = macOS
 LIBCXX = -lc++
 SOEXT = dylib
+PKGMOD = $(B)/pkgmod
 LIBDL =
 else
 ICU_PLATFORM = Linux
 LIBCXX = -lstdc++
 SOEXT = so
+PKGMOD = $(B)/pkgmod
 LIBDL = -ldl
 endif
 
@@ -159,11 +161,12 @@ $(B)/LispReader.o: $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/
 $(B)/Eval.o: $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/Env.o \
 	$(B)/Namespace.o $(B)/Printer.o $(B)/Regex.o $(B)/NativeArray.o $(B)/DynLoad.o $(S)/analyze.inc $(S)/exec.inc $(S)/repl.inc $(S)/tasks.inc $(S)/sorted.inc $(S)/hosttable.inc
 
-# The reference BLAS (src/f/blas/PROVENANCE.md): F77 fixed form, built
-# by the same compiler, linked wherever NativeArray is.
-blas-objects = $(B)/dgemm.o $(B)/lsame.o $(B)/xerbla.o
-$(B)/%.o: $(S)/blas/%.f | $(B) $(FCSTAMP)
-	$(FC) $(FCFLAGS) -c $< -o $@
+# The reference BLAS (src/f/blas/PROVENANCE.md), F77 fixed form, as a
+# PACKAGE beside its Clojure in packages/blas, opened at run time; the
+# base binary links no BLAS.
+packages/blas/libblas.$(SOEXT): $(S)/blas/dgemm.f $(S)/blas/lsame.f $(S)/blas/xerbla.f packages/blas/blas_shims.f90 | $(B) $(FCSTAMP)
+	mkdir -p $(PKGMOD)
+	$(FC) $(filter-out -frecursive -J$(B),$(FCFLAGS)) -J$(PKGMOD) -shared -fPIC -o $@ $^
 
 # ChemSol (src/f/chemsol/PROVENANCE.md), unmodified, as a PACKAGE: a
 # shared library beside its Clojure in packages/chemsol, opened at run
@@ -175,10 +178,10 @@ PKGMOD = $(B)/pkgmod
 packages/chemsol/libchemsol.$(SOEXT): $(S)/chemsol/push_array.f90 $(S)/chemsol/chemsol.f90 packages/chemsol/chemsol_shims.f90 | $(B) $(FCSTAMP)
 	mkdir -p $(PKGMOD)
 	$(FC) $(filter-out -frecursive -J$(B),$(FCFLAGS)) -J$(PKGMOD) -shared -fPIC -o $@ $^
-packages: packages/chemsol/libchemsol.$(SOEXT)
+packages: packages/chemsol/libchemsol.$(SOEXT) packages/blas/libblas.$(SOEXT)
 
 data-objects = $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(B)/Assoc.o \
-	$(B)/PersistentList.o $(B)/PersistentVector.o $(B)/NativeArray.o $(B)/Printer.o $(blas-objects)
+	$(B)/PersistentList.o $(B)/PersistentVector.o $(B)/NativeArray.o $(B)/Printer.o
 reader-objects = $(B)/LispReader.o $(B)/Regex.o $(B)/regex_shim.o
 eval-objects = $(data-objects) $(B)/Env.o $(B)/Namespace.o $(reader-objects) $(B)/DynLoad.o $(B)/Eval.o
 LINK_ICU = $(ICU_LIBS) $(LIBCXX) -lpthread

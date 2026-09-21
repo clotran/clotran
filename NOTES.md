@@ -3550,3 +3550,15 @@ one here -- `analyze_def` used the referred Var; and the native printer
 lost characters between a map's key and a nested map value, gfortran's
 handling of two allocatable-character function results in one
 concatenation, which is now two statements.
+
+**BLAS through the door, and the base binary carries no library.**
+`packages/blas/` is the second package: netlib's `dgemm.f`, `lsame.f`
+and `xerbla.f` with a shim that takes A, B and C by pointer with their
+extents and calls DGEMM as the F77 interface declares it, and
+`blas.cljf`'s `(blas/dgemm a b)`, which refuses shapes that do not
+agree and allocates the result. `fortran/dgemm`, `gcna_dgemm` and the
+BLAS objects are gone from clotran-bin. The base binary is now core.clj,
+host.clj, the `fortran` array primitives and the door -- what PLAN step
+9 asked for -- and `make packages` builds what is beside it. A package
+directory that is not built says so by name instead of handing the
+directory to dlopen.

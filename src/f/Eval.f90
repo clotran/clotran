@@ -645,7 +645,6 @@ contains
       call bind_builtin(vs_get(base + 3), "alength", B_ALENGTH)
       call bind_builtin(vs_get(base + 3), "array-kind", B_ARRAY_KIND)
       call bind_builtin(vs_get(base + 3), "array-shape", B_ARRAY_SHAPE)
-      call bind_builtin(vs_get(base + 3), "dgemm", B_DGEMM)
       ! packages: a shared library opened at run time (DynLoad.f90, clotran.package)
       call bind_builtin(vs_get(base + 3), "load-package*", B_PKGLOAD)
       call bind_builtin(vs_get(base + 3), "call-package*", B_PKGCALL)
@@ -6187,55 +6186,7 @@ contains
          call gc_set_i2(out, -1) ! owns the handle -- not a slice
        end block
 
-    case (B_DGEMM)
-       ! (fortran/dgemm a b) -- a new real8 array, a times b. The first
-       ! Fortran library routine called from clotran (PLAN.md step 6):
-       ! the buffers of a and b go to the reference DGEMM exactly as
-       ! Fortran declares them, and the product comes back in a buffer
-       ! this side allocated. Whole arrays only -- a slice is strided
-       ! and would be copied, which is the one thing this must not do.
-       block
-         type(gc_value) :: a0, b0
-         integer, allocatable :: ea(:), eb(:)
-         integer :: h, m, n, k
-         logical :: ok
-         character(len=:), allocatable :: err
-         a0 = strip_meta(gcv_nth(args, 0))
-         b0 = strip_meta(gcv_nth(args, 1))
-         if (gc_kind(a0) /= OBJ_ARRAY .or. gc_kind(b0) /= OBJ_ARRAY) then
-            call fail("dgemm: needs two arrays")
-         else if (gc_i2(a0) /= -1 .or. gc_i2(b0) /= -1) then
-            call fail("dgemm: a slice is not contiguous; pass whole arrays")
-         else if (gcna_kind(gc_i1(a0)) /= "real8" .or. gcna_kind(gc_i1(b0)) /= "real8") then
-            call fail("dgemm: needs real8 arrays")
-         else
-            ea = gcna_extents(gc_i1(a0))
-            eb = gcna_extents(gc_i1(b0))
-            if (size(ea) /= 2 .or. size(eb) /= 2) then
-               call fail("dgemm: needs rank-2 arrays")
-            else if (ea(2) /= eb(1)) then
-               call fail("dgemm: inner dimensions differ")
-            else
-               m = ea(1); k = ea(2); n = eb(2)
-               h = gcna_new("real8", [m, n], [0, 0], err)
-               if (h == 0) then
-                  call fail(err)
-               else
-                  call gcna_dgemm(gc_i1(a0), gc_i1(b0), h, m, n, k, ok)
-                  if (.not. ok) then
-                     call gcna_release(h)
-                     call fail("dgemm: refused")
-                  else
-                     out = gc_obj(OBJ_ARRAY, [gc_nil()], [vs_get(base + 1)])
-                     call gc_set_i1(out, h)
-                     call gc_set_i2(out, -1)
-                  end if
-               end if
-            end if
-         end if
-       end block
-
-    case (B_SLURP)
+case (B_SLURP)
        block
          character(len=:), allocatable :: path, text
          integer :: u, st, fsize
@@ -8512,6 +8463,10 @@ contains
          type(gc_value) :: m, res, k
          type(c_ptr), allocatable :: grown(:)
          path = pkg_library(text_of(gcv_nth(args, 0)))
+         if (has_error) then
+            call vs_leave(base)
+            return
+         end if
          h = dl_open(path)
          if (.not. c_associated(h)) then
             call fail("load-package: " // path // ": " // dl_error())
@@ -10801,6 +10756,12 @@ contains
           return
        end if
     end do
+    ! a directory with no library in it says so, rather than handing
+    ! the directory to dlopen for a page of paths it tried
+    ! no extension and no library found: a package directory that is
+    ! not built, not a file for dlopen to try a page of paths on
+    if (index(base, ".") == 0) &
+         call fail("load-package: no lib" // base // ".dylib or .so in " // given // " (is the package built?)")
   end function pkg_library
 
   ! (call-package* handle routine args), marshalled by the manifest and
@@ -10959,7 +10920,7 @@ contains
                 if (ok) argv(slot) = c_loc(pi)
              end select
              if (.not. ok) then
-                call fail("call-package*: " // sym // ": argument " // trim(cbuf_of(i)) // " is not a " // trim(ty(i)) // " array")
+                call fail("call-package*: " // sym // ": argument " // trim(cbuf_of(i)) // " is not a " // trim(ty(i)) // " array (it is a " // gcna_kind(gc_i1(tv)) // " array; fortran/make-array makes typed ones)")
                 exit once
              end if
              do d = 1, rk(i)

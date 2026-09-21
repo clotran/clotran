@@ -77,7 +77,8 @@ which is what a Fortran library expects to be handed -- and is:
 ```clojure
 (def a (f/make-array "real8" 2 3))    ; fill with 1..6, row-major reading
 (def b (f/make-array "real8" 3 2))    ; 7..12
-(def c (f/dgemm a b))                 ; the reference BLAS, vendored in src/f/blas
+(fortran/load-package "packages/blas") (require 'blas)
+(def c (blas/dgemm a b))              ; the reference BLAS, vendored in src/f/blas, a package
 (f/aget c 1 1)                        ;=> 154.0
 ```
 
