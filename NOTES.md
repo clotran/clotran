@@ -3290,7 +3290,12 @@ while a binding keeps showing its own value. The first binding of a Var
 now parks the root in slot 5 and `i2` counts the bindings; `bindRoot`,
 `alter-var-root`, `def` and `intern` write slot 5 while that count is
 positive, `getRawRoot` reads it, and the last pop restores the root as
-those may have left it. `set!` still writes the binding, as it should.
+those may have left it. `set!` still writes the binding, as it should,
+and so does `in-ns` -- `RT.CURRENT_NS.set` -- which the first cut of
+this routed through `intern` and so through the root: under `(binding
+[*ns* *ns*] (in-ns ..))` the namespace never changed, clotran.rt loaded
+its definitions into the wrong namespace, and the suite's numbers and
+ns-libs tests said so before the commit did.
 
 **An error was an instance of nothing.** `(instance? ArithmeticException
 e)` was false for the very error `catch ArithmeticException` takes, so

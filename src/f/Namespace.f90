@@ -129,8 +129,16 @@ contains
     core = gcn_find_or_create("clojure.core", [vs_get(base + 1)])
     call vs_set(base + 2, core)
     sym = gc_sym("*ns*", [vs_get(base + 1), vs_get(base + 2)])
-    core = gcn_intern(vs_get(base + 2), sym, vs_get(base + 1), &
-         [vs_get(base + 1), vs_get(base + 2), sym])
+    ! in-ns is RT.CURRENT_NS.set(ns): the CURRENT value -- the binding,
+    ! when (binding [*ns* ..] (in-ns ..)) has one in force -- never the
+    ! root, which intern would write under a binding.
+    core = gcn_lookup(vs_get(base + 2), sym)
+    if (gcn_is_var(core)) then
+       call gc_set_slot(core, 1, vs_get(base + 1))
+    else
+       core = gcn_intern(vs_get(base + 2), sym, vs_get(base + 1), &
+            [vs_get(base + 1), vs_get(base + 2), sym])
+    end if
     ! Cache the VAR, not its value: gcn_current then derefs it with no
     ! lookup and no allocation, on a path that runs constantly.
     call gc_global_keep(ns_var_root, core)

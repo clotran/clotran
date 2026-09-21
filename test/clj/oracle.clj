@@ -2037,3 +2037,8 @@
 (try (eval '(Long/parseLong)) (catch Exception e (boolean (re-find #"No matching method.*taking 0 args" (.getMessage (or (.getCause e) e))))))
 
 (try (eval '(Long/parseLong :a :b :c)) (catch Exception e (boolean (re-find #"No matching method.*taking 3 args" (.getMessage (or (.getCause e) e))))))
+
+;; in-ns under a binding of *ns* changes the binding, not the root
+(binding [*ns* *ns*] (in-ns 'oracle-tmp-ns) (def in-tmp 1) [(ns-name *ns*) (some? (ns-resolve 'oracle-tmp-ns 'in-tmp))])
+
+(ns-name *ns*)
