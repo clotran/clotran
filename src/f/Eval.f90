@@ -7329,11 +7329,42 @@ contains
          end if
        end block
     case (B_MAYBERESOLVE)
+       ! Compiler.maybeResolveIn(ns, sym): in THAT namespace -- its
+       ! mappings, its aliases -- not the current one. It resolved in
+       ! the current namespace, so (ns-resolve 'clojure.core 'num) from
+       ! a namespace with its own num answered that one.
        block
-         type(gc_value) :: sym2
+         type(gc_value) :: sym2, nsv, tgt
+         character(len=:), allocatable :: t
+         integer :: slash
          sym2 = strip_meta(gcv_nth(args, n - 1))
+         nsv = gc_nil()
+         if (n >= 2) nsv = strip_meta(gcv_nth(args, 0))
          out = gc_nil()
-         if (sym2%tag == GCT_SYM) out = resolve_var(sym2, vs_get(base + 1))
+         if (sym2%tag /= GCT_SYM) then
+            continue
+         else if (gc_kind(nsv) /= OBJ_NS) then
+            out = resolve_var(sym2, vs_get(base + 1))
+         else
+            call vs_set(base + 2, nsv)
+            t = gc_ref_text(sym2%ref)
+            slash = index(t, "/")
+            if (slash > 1 .and. slash < len(t)) then
+               tgt = alias_in(vs_get(base + 2), t(1:slash-1), [vs_get(base + 1)])
+               if (gc_kind(tgt) /= OBJ_NS) tgt = gcn_find(t(1:slash-1))
+               if (gc_kind(tgt) == OBJ_NS) then
+                  call vs_set(base + 3, tgt)
+                  out = gcn_lookup(vs_get(base + 3), gc_sym(t(slash+1:), [vs_get(base + 1), vs_get(base + 3)]))
+               end if
+               if (.not. gcn_is_var(out)) out = gc_nil()
+            else
+               out = gcn_lookup(vs_get(base + 2), sym2)
+               if (.not. gcn_is_var(out)) then
+                  out = gc_nil()
+                  if (is_class_name(sym2)) out = gc_key(class_key(t), [vs_get(base + 1)])
+               end if
+            end if
+         end if
        end block
     case (B_POP, B_PEEK)
        ! Both work at the END of a vector and the FRONT of a list --
@@ -10047,6 +10078,10 @@ contains
          gc_kind(v) == OBJ_NS) then
        inner = gc_slot(v, 1)
        s = gcp_str(inner, .false.)
+    else if (sequential_p(v) .or. gca_is(strip_meta(v)) .or. gc_kind(strip_meta(v)) == OBJ_SET) then
+       ! a collection's toString is its READABLE form -- RT.printString
+       ! -- so (str ["a" \b]) is ["a" \b], not [a b]
+       s = gcp_str(v, .true.)
     else
        s = gcp_str(v, .false.)
     end if

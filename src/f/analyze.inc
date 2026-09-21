@@ -1053,6 +1053,16 @@
     end block
     call vs_set(base + 3, nm)
     var = gcn_lookup(gcn_current([vs_get(base + 1)]), vs_get(base + 3))
+    if (gcn_is_var(var)) then
+       ! A name this namespace only REFERS -- clojure.core's num -- is
+       ! not ours to write. DefExpr interns a Var HERE (Namespace.intern
+       ! warns and replaces the mapping) and leaves the foreign root
+       ! alone; using the referred Var redefined clojure.core/num for the
+       ! whole program the first time a package wrote (defn- num ..).
+       if (gc_kind(gc_slot(var, 3)) == OBJ_NS) then
+          if (gcn_name(gc_slot(var, 3)) /= gcn_name(gcn_current([vs_get(base + 1)]))) var = gc_nil()
+       end if
+    end if
     if (.not. gcn_is_var(var)) then
        var = gcn_intern(gcn_current([vs_get(base + 1)]), vs_get(base + 3), gc_nil(), &
             [vs_get(base + 1), vs_get(base + 3)])

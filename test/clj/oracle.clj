@@ -2140,3 +2140,15 @@
 
 ;; syntax-quote leaves a dotted symbol as written -- a class name, as Compiler.resolveSymbol takes it
 (let [x 1] [(pr-str `(clojure.core java.util.Map foo.bar/baz x)) (pr-str `clojure.string) (pr-str `String)])
+
+;; str of nested collections goes through the native printer: nothing lost between a key and a map value
+[(str {:data {:x 1}}) (str {:abcdef {:x 1}}) (str {"data" {:x 1}}) (str [{:data 1}]) (str {:a [1 {:b 2}]}) (str {"a" 1}) (str ["a" \b]) (str '("a")) (str #{"a"})]
+
+;; def of a name this namespace only refers interns a Var HERE and leaves the referred one alone
+(ns shadow-ns)
+
+(defn- num [m k] :mine)
+
+[(num {} :a) (str (:ns (meta (ns-resolve 'shadow-ns 'num)))) (clojure.core/num 5) (= #'clojure.core/num (ns-resolve 'clojure.core 'num))]
+
+(in-ns 'user)

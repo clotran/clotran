@@ -156,7 +156,12 @@ contains
        s = "{"
        do i = 1, size(keys)
           if (i > 1) s = s // ", "
-          s = s // gcp_str(keys(i), readable) // " " // gcp_str(vals(i), readable)
+          ! two statements, not one: gfortran lost characters between the
+          ! key and a nested map value when both allocatable-character
+          ! results sat in one concatenation -- {:data {:x 1}} printed as
+          ! {:da{:x 1}}
+          s = s // gcp_str(keys(i), readable) // " "
+          s = s // gcp_str(vals(i), readable)
        end do
        s = s // "}"
     case (OBJ_LAZY)
@@ -360,7 +365,8 @@ contains
     case (OBJ_VAR)
        ! #'ns/name, as Var.toString prints it
        if (gc_kind(gc_slot(v, 3)) == OBJ_NS) then
-          s = "#'" // gcp_str(gc_slot(gc_slot(v, 3), 1), .false.) // "/" // gcp_str(gc_slot(v, 4), .false.)
+          s = "#'" // gcp_str(gc_slot(gc_slot(v, 3), 1), .false.) // "/"
+          s = s // gcp_str(gc_slot(v, 4), .false.)
        else
           s = "#'" // gcp_str(gc_slot(v, 4), .false.)
        end if
