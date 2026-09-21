@@ -881,17 +881,6 @@
 ;; Clojure validates the CURRENT value on the way in.
 
 
-;;; ---- PrintWriter, and RT/print -----------------------------------
-;; A PrintWriter over a writer IS that writer here: Java's wraps to add
-;; buffering and the print methods, and clotran's writers already take
-;; text and hold it. What has to hold is that writing to the wrapper is
-;; visible through the wrapped one, which sharing gives directly.
-;; Clojure's own test helper builds *err* this way.
-
-;; (RT/print x w) is `pr` underneath -- the readable form, written to a
-;; writer rather than returned.
-
-
 ;;; ---- clojure.core is already loaded ------------------------------
 ;; (require 'clojure.core) reached clotran's loader and re-read the
 ;; whole file, re-evaluating every definition against a namespace that
@@ -1044,7 +1033,8 @@
 (deliver tk-ping 5)
 (check "and stays parked until something waits" (future-done? tk-t1) false)
 (check "resumed, it has its locals" [@tk-pong @tk-t1] [15 :t1-done])
-(def tk-t5 (future (Thread/sleep 5) 7))
+(require 'clotran.thread)
+(def tk-t5 (future (clotran.thread/sleep 5) 7))
 (check "a block under a native frame is pinned and runs the others there"
        @(future (mapv (fn [i] (+ i @tk-t5)) [1 2])) [8 9])
 (def tk-q (promise))
@@ -1057,7 +1047,7 @@
        [(future-cancel tk-t3) (future-cancelled? tk-t3) (try @tk-t3 (catch java.util.concurrent.CancellationException e :cancelled))]
        [true true :cancelled])
 (def tk-slow (promise)) (def tk-t7 (future (deref tk-slow 20 :gave-up)))
-(Thread/sleep 30)
+(clotran.thread/sleep 30)
 (check "a deadline rides on the parked future" @tk-t7 :gave-up)
 (check "the failure's text is in the ExecutionException"
        (try @(future (throw (ex-info "boom" {}))) (catch Throwable e (boolean (re-find #"boom" (str e))))) true)

@@ -168,6 +168,11 @@ host.clj to reference them -- 156 more Vars in clojure.core, or a
 second namespace -- to buy nothing the parameter array does not.
 
 Not done here: the class-versus-type-tag question (Open, below).
+
+Amended 2026-09-21: a row is justified by the Clojure under `src/clj`
+and the examples, never by a test. `scripts/audit-host` prints the rows
+nothing justifies, with the blind spots its comments name; 53 rows were removed that day (NOTES, "The
+table pruned to what the language asks for").
 `is_instance` and `host_super` are still two hand-written hierarchies
 and belong in this file as a third table once that question is
 settled.

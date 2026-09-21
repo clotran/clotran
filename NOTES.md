@@ -3417,3 +3417,40 @@ name with a dot in it is a class name and stays as written -- so
 test_helper's `eval-in-temp-ns`, which `use`s `'clojure.core` inside a
 syntax-quote, asked `require` for a namespace nobody had, and with
 `find-ns` no longer inventing one, `require` finally said so.
+
+## The table pruned to what the language asks for
+
+James's reading of the position, 2026-09-21: the JVM and JS are
+implementation details of Clojure; clotran reproduces the language that
+is pure Clojure and owes the JVM nothing beyond what core.clj itself
+reaches for. Two days of suite-driven work had drifted from that --
+rows added because a test named a JVM member, and a model of Java's
+interface inheritance built so that `core_print.clj` could run
+verbatim.
+
+The first correction is the table. `scripts/audit-host` justified a row
+by anything under `src/clj` or the tests; now only `src/clj` and the
+examples count -- a test naming a JVM member is not the language asking
+for it -- and it reports every row nothing justifies. It printed 78.
+Twenty-three of those the runtime reaches in ways a static read cannot
+see: `cast` calls `(. c (cast x))` with the class in a variable,
+`aset-int` reaches `reflect.Array/setInt` through the `def-aset`
+macro's symbol argument, `pmap` reaches `availableProcessors` through
+`..`, `subseq` reaches `.comparator` through `(. sc comparator)`. The
+first prune took them too, and the oracle said so within the minute --
+which is the order of authority: the audit asks, the gate and the
+oracle answer. The other 53 went: the `Float`, `Byte` and `Short`
+constants and comparators, `Double/compare`, `.hashCode`,
+`Boolean/TRUE`, `Thread/sleep`, `RT/print`, `Numbers/equal`, and the
+rest of the list. 477 rows became 424. Sleeping is a clotran facility
+now, `clotran.thread/sleep`, on the same host call the JVM name used to
+reach; the oracle cases that existed only to exercise the removed rows
+went with them. And `hosttable.inc` was not a dependency of `Eval.o`
+in the Makefile, so an edit to the table did not rebuild -- the gate's
+`make clean` had always hidden that; it is one now.
+
+The second correction, next: `core_print.clj` and `data.clj` dispatch
+on `java.util.Map`, `Collection`, `List`, `RandomAccess` and `Set`, and
+ClojureScript's answer to those two files is its own versions. So is
+clotran's, and the Java interface model that ran them verbatim goes
+with the change.

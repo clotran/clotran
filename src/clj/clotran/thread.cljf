@@ -133,3 +133,9 @@
   "A handle to the calling thread, to be sent along for a reply."
   []
   (-self *kind*))
+
+(defn sleep
+  "Pauses the calling thread for ms milliseconds. On the green kind the
+  task parks and the scheduler runs another; the host does the waiting."
+  [ms]
+  (task-sleep ms))

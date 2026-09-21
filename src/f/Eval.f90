@@ -641,6 +641,7 @@ contains
       call bind_builtin(vs_get(base + 3), "task-status", B_TASKSTATUS)
       call bind_builtin(vs_get(base + 3), "task-mailbox", B_MAILBOX)
       call bind_builtin(vs_get(base + 3), "current-task", B_CURTASK)
+      call bind_builtin(vs_get(base + 3), "task-sleep", B_SLEEP)
       ! ChemSol (src/f/chemsol, src/f/ChemSolBind.f90): the routines
       ! main.f90 calls, each taking and answering a map.
       call bind_builtin(vs_get(base + 3), "chemsol-entropy", B_CS_ENTROPY)

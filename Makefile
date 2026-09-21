@@ -153,7 +153,7 @@ $(B)/Printer.o: $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Ass
 # straight to a Pattern, not to a string). See Regex.f90.
 $(B)/LispReader.o: $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/Regex.o
 $(B)/Eval.o: $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/Env.o \
-	$(B)/Namespace.o $(B)/Printer.o $(B)/Regex.o $(B)/NativeArray.o $(B)/ChemSolBind.o $(S)/analyze.inc $(S)/exec.inc $(S)/repl.inc $(S)/tasks.inc $(S)/sorted.inc
+	$(B)/Namespace.o $(B)/Printer.o $(B)/Regex.o $(B)/NativeArray.o $(B)/ChemSolBind.o $(S)/analyze.inc $(S)/exec.inc $(S)/repl.inc $(S)/tasks.inc $(S)/sorted.inc $(S)/hosttable.inc
 
 # The reference BLAS (src/f/blas/PROVENANCE.md): F77 fixed form, built
 # by the same compiler, linked wherever NativeArray is.

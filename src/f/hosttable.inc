@@ -22,7 +22,7 @@
        HK_NAN = -5, HK_NIL = -6, HK_EMPTYMAP = -7, HK_SPECIALS = -8, HK_TYPE = -9, &
        HK_TRUE = -10, HK_FALSE = -11, HK_LINEBOX = -12
 
-  type(hm), parameter :: HOST_STATICS_1(81) = [ &
+  type(hm), parameter :: HOST_STATICS_1(74) = [ &
   ! PersistentList.creator is a static IFn that builds a list from its arguments.
        hm("clojure.lang.PersistentList", "creator", B_LIST, "list"), &
   ! core.clj's own make-array, aget, aset and the aset-int family are
@@ -67,20 +67,16 @@
   ! Util.hash IS Object.hashCode -- the case macro merges collisions on it
        hm("clojure.lang.Util", "hash", B_HASHCODE, "clotran-hashcode"), &
        hm("clojure.lang.Util", "hasheq", B_HASH, "hash"), &
-       hm("clojure.lang.Util", "isReduced", B_ISREDUCED, "reduced?"), &
   ! Util.classOf and .getClass are `class`: the canonical class keyword
   ! (class_name_of). clotran-type, the internal tag, is host.clj's.
        hm("clojure.lang.Util", "classOf", B_CLASSOF, "clotran-class"), &
        hm("clojure.lang.LazilyPersistentVector", "create", B_VEC, "vec"), &
        hm("clojure.lang.LazilyPersistentVector", "createOwning", B_VEC, "vec"), &
   ! EMPTY is a field, not a call: keyword-argument destructuring names it.
-       hm("clojure.lang.PersistentHashMap", "EMPTY", HK_EMPTYMAP), &
        hm("clojure.lang.PersistentArrayMap", "EMPTY", HK_EMPTYMAP), &
   ! createAsIfByAssoc takes ONE collection of alternating keys and values.
-       hm("clojure.lang.PersistentHashMap", "createAsIfByAssoc", B_ASIFASSOC, "clotran-map-from-pairs"), &
        hm("clojure.lang.PersistentArrayMap", "createAsIfByAssoc", B_ASIFASSOC, "clotran-map-from-pairs"), &
        hm("clojure.lang.PersistentHashMap", "create", B_HMAP, "hash-map"), &
-       hm("clojure.lang.PersistentArrayMap", "create", B_HMAP, "hash-map"), &
   ! A sorted set or map is an ordinary one here. DEVIATIONS.md 9.
        hm("clojure.lang.PersistentHashSet", "create", B_HSET, "hash-set"), &
        hm("clojure.lang.PersistentTreeSet", "create", B_SORTEDSET, "sorted-set"), &
@@ -88,7 +84,6 @@
        hm("java.lang.System", "getProperty", B_GETPROP, "clotran-get-property"), &
   ! The clock, so `time` works. ClojureScript has system-time, so this is language.
        hm("java.lang.System", "nanoTime", B_NANOTIME, "clotran-nano-time"), &
-       hm("java.lang.System", "currentTimeMillis", B_MILLIS, "clotran-current-time-millis"), &
        hm("java.lang.System", "identityHashCode", B_IDHASH, "clotran-identity-hash"), &
        hm("clojure.lang.Numbers", "add", B_ADD, "+"), &
        hm("clojure.lang.Numbers", "addP", B_ADD, "+"), &
@@ -109,9 +104,7 @@
        hm("clojure.lang.Numbers", "gte", B_GTE, ">="), &
   ! Numbers.equiv is ==, NOT =: (= 1 1.0) is false and (== 1 1.0) is true.
        hm("clojure.lang.Numbers", "equiv", B_NUMEQ, "=="), &
-       hm("clojure.lang.Numbers", "equal", B_NUMEQ, "=="), &
        hm("clojure.lang.Numbers", "abs", B_ABS, "abs"), &
-       hm("clojure.lang.Numbers", "compare", B_COMPARE, "compare"), &
        hm("clojure.lang.Numbers", "inc", B_INC, "inc"), &
        hm("clojure.lang.Numbers", "incP", B_INC, "inc"), &
        hm("clojure.lang.Numbers", "unchecked_inc", B_UINC, "unchecked-inc"), &
@@ -206,12 +199,11 @@
        hm("java.lang.Math", "subtractExact", B_MATH0 + 38, "clotran-math-subtractExact"), &
        hm("java.lang.Math", "multiplyExact", B_MATH0 + 39, "clotran-math-multiplyExact"), &
        hm("java.lang.Math", "incrementExact", B_MATH0 + 40, "clotran-math-incrementExact") ]
-  type(hm), parameter :: HOST_STATICS_3(80) = [ &
+  type(hm), parameter :: HOST_STATICS_3(72) = [ &
        hm("java.lang.Math", "decrementExact", B_MATH0 + 41, "clotran-math-decrementExact"), &
        hm("java.lang.Math", "negateExact", B_MATH0 + 42, "clotran-math-negateExact"), &
        hm("java.lang.Math", "floorDiv", B_MATH0 + 43, "clotran-math-floorDiv"), &
        hm("java.lang.Math", "floorMod", B_MATH0 + 44, "clotran-math-floorMod"), &
-       hm("java.lang.Math", "toIntExact", B_MATH0 + 45, "clotran-math-toIntExact"), &
   ! The thread pools send and send-off name go straight to .dispatch, which
   ! runs the action on the spot, so there is nothing for them to be.
        hm("clojure.lang.Agent", "pooledExecutor", B_ALWAYS_NIL, "clotran-nil"), &
@@ -226,13 +218,10 @@
        hm("clojure.lang.Compiler", "LOADER", HK_NIL), &
   ! The namespace argument is ignored: DEVIATIONS.md 3.
        hm("clojure.lang.Compiler", "maybeResolveIn", B_MAYBERESOLVE, "clotran-maybe-resolve"), &
-       hm("clojure.lang.Compiler", "resolveIn", B_MAYBERESOLVE, "clotran-maybe-resolve"), &
-       hm("clojure.lang.Compiler", "resolve", B_MAYBERESOLVE, "clotran-maybe-resolve"), &
   ! No primitive tags and no classes to resolve a hint to: resolve-tag leaves the vector as written.
        hm("clojure.lang.Compiler$HostExpr", "maybeSpecialTag", B_ALWAYS_NIL, "clotran-nil"), &
        hm("clojure.lang.Compiler$HostExpr", "maybeClass", B_ALWAYS_NIL, "clotran-nil"), &
        hm("clojure.lang.Symbol", "intern", B_SYMBOL, "symbol"), &
-       hm("clojure.lang.Symbol", "create", B_SYMBOL, "symbol"), &
        hm("clojure.lang.Keyword", "intern", B_KEYWORD, "keyword"), &
        hm("clojure.lang.Keyword", "find", B_KEYWORD, "keyword"), &
   ! read-string is ONE form, trailing text ignored.
@@ -260,7 +249,6 @@
        hm("clojure.lang.RT", "uncheckedCharCast", B_CHARCAST, "char"), &
        hm("clojure.lang.RT", "isReduced", B_ISREDUCED, "reduced?"), &
        hm("clojure.lang.RT", "toArray", B_TOARRAY, "to-array"), &
-       hm("clojure.lang.RT", "print", B_RTPRINT, "clotran-rt-print"), &
        hm("clojure.lang.RT", "seqToTypedArray", B_INTOARRAY, "into-array"), &
   ! RT.nextID is the counter gensym counts on, shared with the auto-gensym counter.
        hm("clojure.lang.RT", "nextID", B_NEXTID, "clotran-next-id"), &
@@ -284,10 +272,7 @@
        hm("clojure.lang.RT", "keys", B_KEYS, "keys"), &
        hm("clojure.lang.RT", "vals", B_VALS, "vals"), &
        hm("java.lang.Character", "isWhitespace", B_ISWS, "clotran-ws?"), &
-       hm("java.lang.Character", "isLowerCase", B_ISLOWER, "clotran-lower?"), &
-       hm("java.lang.Character", "isDigit", B_ISDIGIT, "clotran-digit?"), &
        hm("java.lang.Character", "isLetter", B_ISLETTER, "clotran-letter?"), &
-       hm("java.lang.Character", "isLetterOrDigit", B_ISALNUM, "clotran-alnum?"), &
        hm("java.lang.Character", "toUpperCase", B_UPCASE, "clotran-upcase"), &
        hm("java.lang.Character", "toLowerCase", B_DOWNCASE, "clotran-downcase"), &
   ! One thread: it answers itself, and .getStackTrace on it answers the frames.
@@ -297,61 +282,30 @@
   ! Long's bounds are clotran's own: an integer here IS a 64-bit one.
        hm("java.lang.Long", "MAX_VALUE", HK_INT, "", huge(0_gc_ip)), &
        hm("java.lang.Long", "MIN_VALUE", HK_INT, "", -huge(0_gc_ip) - 1_gc_ip) ]
-  type(hm), parameter :: HOST_STATICS_4(75) = [ &
-       hm("java.lang.Long", "SIZE", HK_INT, "", 64_gc_ip), &
-       hm("java.lang.Long", "BYTES", HK_INT, "", 8_gc_ip), &
-       hm("java.lang.Short", "MAX_VALUE", HK_INT, "", 32767_gc_ip), &
-       hm("java.lang.Short", "MIN_VALUE", HK_INT, "", -32768_gc_ip), &
-       hm("java.lang.Byte", "MAX_VALUE", HK_INT, "", 127_gc_ip), &
-       hm("java.lang.Byte", "MIN_VALUE", HK_INT, "", -128_gc_ip), &
+  type(hm), parameter :: HOST_STATICS_4(43) = [ &
   ! Double.MIN_VALUE is the smallest POSITIVE value, a denormal, which
   ! Clojure's own math tests check.
        hm("java.lang.Double", "MAX_VALUE", HK_REAL, "", 0_gc_ip, huge(1.0_gc_dp)), &
        hm("java.lang.Double", "MIN_VALUE", HK_REAL, "", 0_gc_ip, tiny(1.0_gc_dp) * epsilon(1.0_gc_dp)), &
-       hm("java.lang.Double", "MIN_NORMAL", HK_REAL, "", 0_gc_ip, tiny(1.0_gc_dp)), &
        hm("java.lang.Double", "MAX_EXPONENT", HK_INT, "", 1023_gc_ip), &
        hm("java.lang.Double", "MIN_EXPONENT", HK_INT, "", -1022_gc_ip), &
-       hm("java.lang.Double", "SIZE", HK_INT, "", 64_gc_ip), &
-       hm("java.lang.Double", "BYTES", HK_INT, "", 8_gc_ip), &
-       hm("java.lang.Float", "MAX_VALUE", HK_REAL, "", 0_gc_ip, real(huge(1.0_4), gc_dp)), &
-       hm("java.lang.Float", "MIN_VALUE", HK_REAL, "", 0_gc_ip, 1.4012984643248171e-45_gc_dp), &
-       hm("java.lang.Float", "MAX_EXPONENT", HK_INT, "", 127_gc_ip), &
-       hm("java.lang.Float", "MIN_EXPONENT", HK_INT, "", -126_gc_ip), &
        hm("java.lang.Double", "POSITIVE_INFINITY", HK_PINF), &
        hm("java.lang.Double", "NEGATIVE_INFINITY", HK_NINF), &
-       hm("java.lang.Double", "NaN", HK_NAN), &
        hm("java.lang.Float", "POSITIVE_INFINITY", HK_PINF), &
        hm("java.lang.Float", "NEGATIVE_INFINITY", HK_NINF), &
-       hm("java.lang.Float", "NaN", HK_NAN), &
   ! Number.compare is the TOTAL order Java puts on doubles: -0.0 below 0.0, NaN above everything.
-       hm("java.lang.Double", "compare", B_NUMCOMPARE, "clotran-num-compare"), &
-       hm("java.lang.Float", "compare", B_NUMCOMPARE, "clotran-num-compare"), &
-       hm("java.lang.Long", "compare", B_NUMCOMPARE, "clotran-num-compare"), &
-       hm("java.lang.Integer", "compare", B_NUMCOMPARE, "clotran-num-compare"), &
-       hm("java.lang.Short", "compare", B_NUMCOMPARE, "clotran-num-compare"), &
-       hm("java.lang.Byte", "compare", B_NUMCOMPARE, "clotran-num-compare"), &
        hm("java.lang.Integer", "valueOf", B_INTVALUE, "clotran-int-value"), &
        hm("java.lang.Integer", "parseInt", B_INTVALUE, "clotran-int-value"), &
-       hm("java.lang.Integer", "parseLong", B_INTVALUE, "clotran-int-value"), &
        hm("java.lang.Long", "valueOf", B_INTVALUE, "clotran-int-value"), &
-       hm("java.lang.Long", "parseInt", B_INTVALUE, "clotran-int-value"), &
        hm("java.lang.Long", "parseLong", B_INTVALUE, "clotran-int-value"), &
   ! parse-double is (Double/valueOf s), reached after core.clj's own regex: this converts, it does not validate.
        hm("java.lang.Double", "valueOf", B_DBLVALUE, "clotran-double-value"), &
        hm("java.lang.Double", "parseDouble", B_DBLVALUE, "clotran-double-value"), &
-       hm("java.lang.Double", "parseFloat", B_DBLVALUE, "clotran-double-value"), &
-       hm("java.lang.Float", "valueOf", B_DBLVALUE, "clotran-double-value"), &
-       hm("java.lang.Float", "parseDouble", B_DBLVALUE, "clotran-double-value"), &
-       hm("java.lang.Float", "parseFloat", B_DBLVALUE, "clotran-double-value"), &
        hm("java.lang.Double", "isNaN", B_ISNAN, "clotran-is-nan"), &
-       hm("java.lang.Float", "isNaN", B_ISNAN, "clotran-is-nan"), &
        hm("java.lang.Double", "isInfinite", B_ISINF, "clotran-is-infinite"), &
-       hm("java.lang.Float", "isInfinite", B_ISINF, "clotran-is-infinite"), &
   ! Class/TYPE is a JVM primitive-class constant. There are no primitive
   ! arrays here, so each is a distinct inert keyword, enough for core_print's dispatch table.
        hm("java.lang.Boolean", "TYPE", HK_TYPE), &
-       hm("java.lang.Boolean", "TRUE", HK_TRUE), &
-       hm("java.lang.Boolean", "FALSE", HK_FALSE), &
   ! Compiler.LINE and COLUMN are Vars the compiler binds; throw-if derefs them for a CompilerException
        hm("clojure.lang.Compiler", "LINE", HK_LINEBOX), &
        hm("clojure.lang.Compiler", "COLUMN", HK_LINEBOX), &
@@ -366,7 +320,6 @@
   ! Threads over VM contexts (tasks.inc). Thread.sleep lets the other
   ! tasks run; one OS thread runs them all, which is what
   ! availableProcessors answers; TimeUnit is a marker, milliseconds only.
-       hm("java.lang.Thread", "sleep", B_SLEEP, "clotran-sleep"), &
        hm("java.lang.Runtime", "getRuntime", B_NPROCS, "clotran-processors"), &
        hm("java.util.concurrent.TimeUnit", "MILLISECONDS", HK_INT, "", 1_gc_ip), &
   ! Clojure on this host (clotran.rt, reached by name through rt_call):
@@ -388,9 +341,9 @@
        hm("clojure.lang.Numbers", "flipBit", B_RTFN, "flip-bit"), &
        hm("clojure.lang.Numbers", "long_array", B_RTFN, "long-array-of"), &
        hm("clojure.lang.Numbers", "double_array", B_RTFN, "double-array-of") ]
-  type(hm), parameter :: HOST_STATICS(316) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
+  type(hm), parameter :: HOST_STATICS(269) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
-  type(hm), parameter :: HOST_METHODS_1(90) = [ &
+  type(hm), parameter :: HOST_METHODS_1(85) = [ &
   ! Instance members. The target becomes the first argument, which is all
   ! an instance method is: (.withMeta x m) calls with-meta on x and m.
        hm("", "meta", B_META, "meta"), &
@@ -426,7 +379,6 @@
        hm("", "ns", B_VARNS, "clotran-var-ns"), &
        hm("", "toSymbol", B_VARSYM, "clotran-var-symbol"), &
        hm("", "isPublic", B_ISPUBLIC, "clotran-var-public"), &
-       hm("", "isMacro", B_ISMACRO, "clotran-var-macro"), &
        hm("", "setMacro", B_SETMACRO, "clotran-set-macro"), &
        hm("", "getAliases", B_NSALIASES, "ns-aliases"), &
        hm("", "refer", B_NSREFER, "clotran-ns-refer"), &
@@ -446,7 +398,6 @@
        hm("", "chunkedFirst", B_CHUNK_FIRST, "clotran-chunked-first"), &
        hm("", "chunkedMore", B_CHUNK_MORE, "clotran-chunked-more"), &
        hm("", "chunkedNext", B_CHUNK_NEXT, "clotran-chunked-next"), &
-       hm("", "dropFirst", B_CHUNK_DROP, "clotran-chunk-drop-first"), &
        hm("", "reduce", B_REDUCEINIT, "clotran-reduce"), &
        hm("", "hasRoot", B_HASROOT, "clotran-has-root"), &
        hm("", "addMethod", B_ADDMETHOD, "clotran-add-method"), &
@@ -456,7 +407,6 @@
   ! The host supertypes, which is what clotran has instead of interfaces (host_super).
        hm("", "getInterfaces", B_GETIFACES, "clotran-get-interfaces"), &
        hm("", "isAssignableFrom", B_ISASSIGN, "clotran-assignable"), &
-       hm("", "isInterface", B_ALWAYS_FALSE, "clotran-false"), &
        hm("", "isArray", B_ALWAYS_FALSE, "clotran-false"), &
   ! The protocol dispatch cache is a map with named fields, and fnFor answers nil: a permanently cold cache. DEVIATIONS.md 13.
        hm("", "sym", B_FLD_SYM, "clotran-sym"), &
@@ -468,7 +418,6 @@
        hm("", "__methodImplCache", B_FLD_CACHE, "clotran-cache"), &
   ! preferMethod resolves an ambiguity exact-match dispatch never has. DEVIATIONS.md 8.
        hm("", "preferMethod", B_PREFERMETHOD, "clotran-prefer-method"), &
-       hm("", "dispatchFn", B_DISPATCHFN, "clotran-dispatch-fn"), &
        hm("", "getMethodTable", B_METHODTABLE, "clotran-method-table"), &
        hm("", "getPreferTable", B_PREFERTABLE, "clotran-prefer-table"), &
        hm("", "getMethod", B_GETMETHOD, "clotran-get-method"), &
@@ -480,7 +429,6 @@
        hm("", "toLowerCase", B_DOWNCASE, "clotran-downcase"), &
   ! No cause chain to walk.
        hm("", "getCause", B_GETCAUSE, "clotran-cause"), &
-       hm("", "hashCode", B_HASHCODE, "clotran-hashcode"), &
        hm("", "printStackTrace", B_ALWAYS_NIL, "clotran-nil"), &
        hm("", "append", B_APPEND, "clotran-append"), &
        hm("", "charAt", B_CHARAT, "clotran-char-at"), &
@@ -495,14 +443,13 @@
        hm("", "resetMeta", B_RESETMETA, "clotran-reset-meta"), &
        hm("", "setMeta", B_RESETMETA, "clotran-reset-meta"), &
        hm("", "set", B_SETVAL, "clotran-set-val") ]
-  type(hm), parameter :: HOST_METHODS_2(71) = [ &
+  type(hm), parameter :: HOST_METHODS_2(70) = [ &
        hm("", "reset", B_SETVAL, "clotran-set-val"), &
        hm("", "bindRoot", B_BINDROOT, "clotran-bind-root"), &
        hm("", "getRawRoot", B_RAWROOT, "clotran-raw-root"), &
        hm("", "kvreduce", B_RTFN, "kvreduce-of"), &
        hm("", "swap", B_SWAPVAL, "clotran-swap-val"), &
        hm("", "isNaN", B_ISNAN, "clotran-is-nan"), &
-       hm("", "isInfinite", B_ISINF, "clotran-is-infinite"), &
   ! A latch is a counter when there is one thread; .await has nothing to wait for.
        hm("", "countDown", B_LATCHDOWN, "clotran-latch-down"), &
        hm("", "getCount", B_LATCHCOUNT, "clotran-latch-count"), &
@@ -574,5 +521,4 @@
        hm("", "isCancelled", B_TASKCANCELLED, "clotran-task-cancelled"), &
        hm("", "cancel", B_TASKCANCEL, "clotran-task-cancel"), &
        hm("", "availableProcessors", B_NPROCS, "clotran-processors") ]
-  type(hm), parameter :: HOST_METHODS(161) = [HOST_METHODS_1, HOST_METHODS_2]
-
+  type(hm), parameter :: HOST_METHODS(155) = [HOST_METHODS_1, HOST_METHODS_2]

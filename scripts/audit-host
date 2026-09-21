@@ -1,7 +1,10 @@
 #!/usr/bin/env bb
 (require '[clojure.string :as str] '[babashka.fs :as fs])
 ;; every Class/member and .member reference in the Clojure we load
-(def files (concat (fs/glob "src/clj" "**.clj") (fs/glob "test/clj/derived" "**.clj") ["test/clj/language_test.clj" "test/clj/oracle.clj"] (fs/glob "examples" "**.clj")))
+;; The Clojure that JUSTIFIES a row: the vendored language and libraries,
+;; clotran's own .cljf files, and the examples. Not the tests -- a test
+;; naming a JVM member is not the language asking for it.
+(def files (concat (fs/glob "src/clj" "**.{clj,cljf}") (fs/glob "examples" "**.{clj,cljf}")))
 (def statics (atom {})) (def instances (atom {})) (def dotforms (atom {}))
 (defn strip-comments [s] (str/replace s #"(?m);.*$" ""))
 (doseq [f files]
@@ -15,11 +18,19 @@
     (doseq [[_ c] (re-seq #"\(new\s+((?:[a-z][\w]*\.)*[A-Z][\w$]*)" s)]
       (swap! statics update (str "new " c) (fnil conj #{}) name))
     ;; (.member x ...) and (.-field x)
-    (doseq [[_ m] (re-seq #"\(\.-?([a-zA-Z][\w]*)[\s)]" s)]
+    (doseq [[_ m] (re-seq #"\(\.-?([a-zA-Z_][\w]*)[\s)]" s)]
       (swap! instances update m (fnil conj #{}) name))
     ;; (. x member) / (. x (member ...)) / (. Class member)
     (doseq [[_ t m] (re-seq #"\(\.\s+(\S+)\s+\(?([a-zA-Z][\w]*)" s)]
-      (swap! dotforms update (str t " " m) (fnil conj #{}) name))))
+      (swap! dotforms update (str t " " m) (fnil conj #{}) name))
+    ;; (.. x member member) and (-> x .member): the chain and threading shapes
+    (doseq [[_ chain] (re-seq #"\(\.\.\s+\S+((?:\s+\(?[a-zA-Z_][\w]*)+)" s) [_ m] (re-seq #"([a-zA-Z_][\w]*)" chain)]
+      (swap! instances update m (fnil conj #{}) name))
+    (doseq [[_ m] (re-seq #"\s\.([a-zA-Z_][\w]*)[\s)]" s)]
+      (swap! instances update m (fnil conj #{}) name))
+    ;; (. (expr) (member ..)) -- core.clj's (. (var name) (setMacro))
+    (doseq [[_ m] (re-seq #"\(\.\s+\([^()]*\)\s+\(?([a-zA-Z_][\w]*)" s)]
+      (swap! instances update m (fnil conj #{}) name))))
 (defn short [names] (str/join " " (take 3 (map #(str/replace % #".*/" "") (sort names)))))
 (println "STATICS" (count @statics))
 (doseq [[k v] (sort @statics)] (println " " k "  <-" (short v)))
@@ -27,3 +38,21 @@
 (doseq [[k v] (sort @dotforms)] (println " " k "  <-" (short v)))
 (println "INSTANCES" (count @instances))
 (doseq [[k v] (sort @instances)] (println " " k "  <-" (short v)))
+
+;; Every row of hosttable.inc that none of that Clojure mentions -- the
+;; rows that have no business being rows. The gate does not run this;
+;; a person does, before adding one. It is a static read and it has
+;; blind spots the prune of 2026-09-21 found: a member name a macro
+;; receives as a symbol (def-aset's setInt), and a class held in a
+;; variable ((. c (cast x)) in `cast`). A row this lists is a question;
+;; the gate and the suites answer it.
+(defn short-cls [c] (last (str/split c #"\.")))
+(let [known (set (concat (keys @statics)
+                         (for [[k _] @instances] (str "*/" k))
+                         (for [[k _] @dotforms :let [[t m] (str/split k #" " 2)]] (str t "/" m))
+                         (for [[k _] @dotforms :let [[_ m] (str/split k #" " 2)]] (str "*/" m))))
+      rows (for [[_ cls mem] (re-seq #"hm\(\"([^\"]*)\", \"([^\"]*)\"" (slurp "src/f/hosttable.inc"))] [cls mem])
+      unjustified (remove (fn [[cls mem]] (or (contains? known (str cls "/" mem)) (contains? known (str (short-cls cls) "/" mem))
+                                              (and (= cls "") (contains? known (str "*/" mem))))) rows)]
+  (println "UNJUSTIFIED ROWS" (count unjustified) "of" (count rows))
+  (doseq [[c m] unjustified] (println "  " (if (= c "") "." c) m)))
