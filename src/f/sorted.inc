@@ -28,6 +28,32 @@
     end if
   end function compare_via
 
+  ! Whether `seq` can be asked of v: nil, a string, or a heap object
+  ! that is not a fn, a reference or a task. RT.seq throws
+  ! IllegalArgumentException for the rest, and so does this, which is
+  ! how (first 1) and (get-in m 5) fail rather than answer nil.
+  function seqable(v0) result(yes)
+    type(gc_value), intent(in) :: v0
+    logical :: yes
+    type(gc_value) :: v
+    v = strip_meta(v0)
+    yes = .true.
+    select case (v%tag)
+    case (GCT_NIL, GCT_STR)
+       return
+    case (GCT_OBJ)
+       select case (gc_kind(v))
+       case (OBJ_CLOSURE, OBJ_BUILTIN, OBJ_MULTIFN, OBJ_ATOM, OBJ_VAR, OBJ_NS, OBJ_TASK, OBJ_VOLATILE, &
+            OBJ_DELAY, OBJ_REGEX, OBJ_MATCHER, OBJ_WRITER, OBJ_ERR, OBJ_TYPE)
+          yes = .false.
+       end select
+    case default
+       yes = .false.
+    end select
+    if (.not. yes) call raise_class("IllegalArgumentException", &
+         "Don't know how to create ISeq from: " // class_name_of(v), [v])
+  end function seqable
+
   ! (reduced x) is {:clotran/reduced x}, an array map of one entry; the
   ! probe for it must not reach a sorted map's comparator, which would
   ! compare the marker key against whatever keys it holds.

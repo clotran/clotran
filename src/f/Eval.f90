@@ -5143,10 +5143,16 @@ contains
        end if
        out = gc_int(sq_count(gcv_nth(vs_get(base + 1), 0), [vs_get(base + 1)]))
     case (B_FIRST)
-       out = sq_first(gcv_nth(vs_get(base + 1), 0), [vs_get(base + 1)])
+       if (seqable(gcv_nth(vs_get(base + 1), 0))) &
+            out = sq_first(gcv_nth(vs_get(base + 1), 0), [vs_get(base + 1)])
     case (B_REST)
-       out = sq_rest(gcv_nth(vs_get(base + 1), 0), [vs_get(base + 1)])
+       if (seqable(gcv_nth(vs_get(base + 1), 0))) &
+            out = sq_rest(gcv_nth(vs_get(base + 1), 0), [vs_get(base + 1)])
     case (B_NEXT)
+       if (.not. seqable(gcv_nth(vs_get(base + 1), 0))) then
+          call vs_leave(base)
+          return
+       end if
        ! RT.next is RT.more put through seq: the two differ only in
        ! what an exhausted sequence gives back, nil versus (). Every
        ! `if (next x)` in core.clj rests on that difference.
@@ -5168,6 +5174,7 @@ contains
          ! infinite loop -- (cons n (from (+ n 1))) would realise
          ! the whole infinite seq to build one cell.
          tl = gcv_nth(vs_get(base + 1), 1)
+         if (seqable(tl)) then
          if (gc_kind(tl) /= OBJ_LAZY) &
               tl = to_seq(tl, [vs_get(base + 1)])
          ! An EMPTY tail seq's is to nil, and (cons 1 ()) must still be
@@ -5182,6 +5189,7 @@ contains
                  [gc_nil(), gcv_nth(vs_get(base + 1), 0), tl], &
                  [vs_get(base + 1), tl])
             call gc_set_i1(out, LAZY_CONS)
+         end if
          end if
        end block
     case (B_STR)
@@ -5290,7 +5298,9 @@ contains
        block
          type(gc_value), allocatable :: ks(:), vls(:)
          call gca_entries(strip_meta(gcv_nth(vs_get(base + 1), 0)), ks, vls)
-         out = gcl_empty([vs_get(base + 1)])
+         ! nil for an empty map, as RT.keys and RT.vals answer
+         out = gc_nil()
+         if (size(ks) > 0) out = gcl_empty([vs_get(base + 1)])
          do i = size(ks), 1, -1
             if (id == B_KEYS) then
                out = gcl_cons(ks(i), out, [vs_get(base + 1), out])
@@ -5468,7 +5478,8 @@ contains
              return
           end if
        end if
-       out = to_seq(gcv_nth(vs_get(base + 1), 0), [vs_get(base + 1)])
+       if (seqable(gcv_nth(vs_get(base + 1), 0))) &
+            out = to_seq(gcv_nth(vs_get(base + 1), 0), [vs_get(base + 1)])
     case (B_DISSOC)
        a = strip_meta(gcv_nth(vs_get(base + 1), 0))
        if (gc_kind(a) == OBJ_INST) then
@@ -6317,6 +6328,8 @@ contains
        else
           if (gcn_is_var(a) .or. gc_kind(a) == OBJ_ATOM) then
              out = gc_slot(a, 1)
+          else if (is_reduced(a)) then
+             out = gca_get(a, gc_key("clotran/reduced", [vs_get(base + 1)]))
           else
              out = a
           end if
@@ -9830,6 +9843,9 @@ contains
        ! to ANSWER to IDeref or it silently takes the future path --
        ! which is how @(delay 1) came back as the delay itself.
        yes = (t == "atom" .or. t == "delay" .or. t == "var" .or. t == "volatile")
+       ! Reduced implements IDeref: @(reduced x) is x, and reduce's
+       ! Clojure-side loops unwrap through deref
+       if (c == "clojure.lang.IDeref" .and. .not. yes) yes = is_reduced(v)
     case ("clojure.lang.Delay"); yes = (t == "delay")
     case ("clojure.lang.Volatile"); yes = (t == "volatile")
     ! The concrete classes `class` answers (class_name_of), so that
@@ -9898,7 +9914,10 @@ contains
        ! so answering false here makes (meta (with-meta (fn [] 1) {:a 1}))
        ! nil. Split from IObj below, which a function must NOT claim.
        yes = (t == "symbol" .or. t == "list" .or. t == "vector" .or. &
-              t == "map" .or. t == "set" .or. t == "var" .or. t == "fn")
+              t == "map" .or. t == "set" .or. t == "var" .or. t == "fn" .or. &
+              t == "seq" .or. t == "lazy-seq")
+       ! and anything with-meta has wrapped can report what it was given
+       if (gc_kind(v) == OBJ_META) yes = .true.
     case ("clojure.lang.IObj")
        ! NOT "fn", and that is a deviation with a reason. print-method's
        ! :default is

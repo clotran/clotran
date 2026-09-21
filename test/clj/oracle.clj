@@ -1815,3 +1815,44 @@
 (vec (double-array [1.5 2.5]))
 
 (aget (long-array [4 5 6]) 1)
+
+;; the seq library's edges: reduced unwraps wherever deref reaches it,
+;; keys and vals of an empty map are nil, seq of a non-seqable throws,
+;; cycle is lazy and empty for an empty coll, with-meta on a seq holds
+@(reduced 1)
+
+(reduce (fn [a x] (reduced :done)) 0 (range))
+
+(transduce (take 1) conj [] (seq [1 2 3]))
+
+(reductions (constantly (reduced :x)) (range))
+
+(reduce-kv (fn [acc k v] (reduced (+ acc k))) 0 {1 2})
+
+(partitionv 2 [1 2 3 4 5])
+
+(partitionv-all 4 2 [1 2 3 4 5 6 7 8 9])
+
+[(keys {}) (vals {}) (keys (sorted-map)) (keys {1 2}) (vals {1 2})]
+
+(try (first 1) (catch IllegalArgumentException e :iae))
+
+(try (next :k) (catch IllegalArgumentException e :iae))
+
+(try (cons 1 2) (catch IllegalArgumentException e :iae))
+
+(try (get-in {:a 1} 5) (catch IllegalArgumentException e :iae))
+
+[(first nil) (first "ab") (seq nil) (cons 1 nil) (cons 1 "ab") (next [1])]
+
+[(cycle []) (take 5 (cycle [1 2]))]
+
+(take 2 (cycle (map #(/ 42 %) '(2 1 0))))
+
+(transduce (take 5) + 2 (cycle [3 7]))
+
+(meta (with-meta (seq [1 2]) {:a 1}))
+
+(meta (sort (with-meta (range 10) {:a true})))
+
+(meta (sort-by :a (with-meta (seq [{:a 5} {:a 2}]) {:a true})))

@@ -141,7 +141,7 @@
        hm("java.lang.Number", "cast", B_NUMCAST, "clotran-num-cast"), &
        hm("java.lang.Class", "forName", B_FORNAME, "clotran-for-name"), &
        hm("clojure.lang.Iterate", "create", B_ITERATE, "iterate"), &
-       hm("clojure.lang.Cycle", "create", B_CYCLE, "cycle"), &
+       hm("clojure.lang.Cycle", "create", B_RTFN, "cycle-of"), &
        hm("clojure.lang.Repeat", "create", B_REPEAT, "repeat"), &
        hm("clojure.lang.Range", "create", B_RANGE, "range"), &
        hm("clojure.lang.LongRange", "create", B_RANGE, "range"), &

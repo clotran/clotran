@@ -172,3 +172,9 @@
 
 (defn long-array-of ([x] (typed-array "int8" x)) ([n init] (typed-array "int8" n init)))
 (defn double-array-of ([x] (typed-array "real8" x)) ([n init] (typed-array "real8" n init)))
+
+(defn cycle-of
+  "Cycle.create: the seq repeated forever, realised only as far as it is
+  walked -- (take 2 (cycle (map f xs))) never reaches the third f."
+  [s]
+  (lazy-seq (when-let [s (seq s)] (concat s (cycle-of s)))))
