@@ -185,6 +185,7 @@ module Eval
   ! calls methods on -- a class loader, a thread: non-nil, so the call
   ! reaches its row instead of a NullPointerException
   integer, parameter :: B_STUB = 321
+  integer, parameter :: B_MAPENTRY = 322, B_ISASSIGN = 323, B_BINDROOT = 324, B_RAWROOT = 325
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -1846,9 +1847,15 @@ contains
        end if
        if (is_host_class(target0)) then
           out = static_member(gc_ref_text(target0%ref), mname, vs_get(base + 2))
-          if (.not. has_error .and. is_call) out = apply(out, vs_get(base + 2))
-          call vs_leave(base)
-          return
+          if (.not. has_error) then
+             if (is_call) out = apply(out, vs_get(base + 2))
+             call vs_leave(base)
+             return
+          end if
+          ! Not a static of that class: a member of the CLASS OBJECT
+          ! -- (.isAssignableFrom String Object), (.getName String) --
+          ! is an instance member of the keyword naming it, below.
+          call gce_clear_error()
        end if
        ! A class literal is_host_class does not know evaluates to the
        ! keyword naming its type tag; the retry below sees it as one.
@@ -2769,33 +2776,27 @@ contains
     end select
   end function is_runtime_class
 
-  recursive function catch_matches(cls, exc, env) result(yes)
-    type(gc_value), intent(in) :: cls, exc, env
-    logical :: yes
-    character(len=:), allocatable :: want
+  ! Whether an exception object answers to a class name: its own,
+  ! under either spelling, or through the two edges of hierarchy --
+  ! and Throwable and Exception take anything. Asked by catch and by
+  ! instance?, so an agent's error handler can tell an
+  ! ArithmeticException from the rest.
+  logical function exc_class_matches(want, exc)
+    character(len=*), intent(in) :: want
+    type(gc_value), intent(in) :: exc
     type(gc_value) :: got
-
-    yes = .true.
-    if (cls%tag /= GCT_SYM) return
-    want = gc_ref_text(cls%ref)
+    exc_class_matches = .true.
     if (want == "Throwable" .or. want == "java.lang.Throwable" .or. &
          want == "Exception" .or. want == "java.lang.Exception") return
-    if (gc_kind(exc) /= OBJ_ERR) then
-       yes = .false.
-       return
-    end if
+    exc_class_matches = .false.
+    if (gc_kind(exc) /= OBJ_ERR) return
     got = gc_slot(exc, 1)
-    if (got%tag /= GCT_SYM) then
-       yes = .false.
-       return
-    end if
+    if (got%tag /= GCT_SYM) return
     ! RuntimeException is the parent of every runtime class clotran
     ! throws, a host failure among them; only the checked classes and
-    ! the Errors stand outside it. The second fact of hierarchy, after
-    ! ArityException's below, and for the same reason: code catches
-    ! RuntimeException meaning "anything the runtime raised".
+    ! the Errors stand outside it.
     if (want == "RuntimeException" .or. want == "java.lang.RuntimeException") then
-       yes = is_runtime_class(gc_ref_text(got%ref))
+       exc_class_matches = is_runtime_class(gc_ref_text(got%ref))
        return
     end if
     ! Either spelling. The class name is kept as the THROWING
@@ -2804,17 +2805,25 @@ contains
     ! its short imported name, and Clojure's own suite catches
     ! clojure.lang.ExceptionInfo. class_matches knows the rule
     ! but only in one direction, so it is asked both ways.
-    yes = class_matches(gc_ref_text(got%ref), want) .or. &
+    exc_class_matches = class_matches(gc_ref_text(got%ref), want) .or. &
          class_matches(want, gc_ref_text(got%ref))
     ! The other fact of hierarchy, because Clojure's own suite relies
     ! on it: ArityException extends IllegalArgumentException, so
     ! (thrown? IllegalArgumentException (f)) catches a bad-arity
-    ! call. Beyond RuntimeException above and this edge, clotran's
-    ! classes form no hierarchy (DEVIATIONS 4).
-    if (.not. yes) then
+    ! call. Beyond these two edges clotran's classes form no
+    ! hierarchy (DEVIATIONS 4).
+    if (.not. exc_class_matches) then
        if (gc_ref_is(got%ref, "ArityException")) &
-            yes = class_matches("IllegalArgumentException", want)
+            exc_class_matches = class_matches("IllegalArgumentException", want)
     end if
+  end function exc_class_matches
+
+  recursive function catch_matches(cls, exc, env) result(yes)
+    type(gc_value), intent(in) :: cls, exc, env
+    logical :: yes
+    yes = .true.
+    if (cls%tag /= GCT_SYM) return
+    yes = exc_class_matches(gc_ref_text(cls%ref), exc)
   end function catch_matches
 
   ! {:error "message"} -- an internal failure as an ordinary clotran
@@ -5029,6 +5038,10 @@ contains
              ! (:require [clojure.test :refer [deftest]]) interned
              ! nothing and whole test files died on (deftest ...).
              out = coll_get(gcv_nth(args, 0), fn)
+             ! (:k coll not-found): on a set or a transient as on a map
+             if (gcv_count(args) >= 2 .and. out%tag == GCT_NIL) then
+                if (.not. coll_has(strip_meta(gcv_nth(args, 0)), fn)) out = gcv_nth(args, 1)
+             end if
           end if
        else if (gca_is(fn)) then
           ! (m k) and (m k not-found)
@@ -6853,6 +6866,18 @@ contains
     case (B_CLOSE)
        out = gc_nil()
     case (B_INTVALUE)
+       ! Long.valueOf and parseLong take one argument; any other count
+       ! fails in the Reflector's words, as the static call does there
+       if (n /= 1) then
+          block
+            character(len=16) :: cbuf
+            write(cbuf, '(I0)') n
+            call raise_class("IllegalArgumentException", "No matching method found taking " // &
+                 trim(cbuf) // " args for class java.lang.Long", [vs_get(base + 1)])
+          end block
+          call vs_leave(base)
+          return
+       end if
        block
          type(gc_value) :: a0
          character(len=:), allocatable :: t
@@ -7273,6 +7298,7 @@ contains
                pair = gcv_conj(vs_get(base + 2), gcv_nth(coll, int_of(gcv_nth(args, 1))), &
                     [vs_get(base + 1), vs_get(base + 2)])
                out = pair
+               call mark_entry(out)
             end if
          else if (gca_contains(coll, gcv_nth(args, 1))) then
             pair = gcv_empty([vs_get(base + 1)])
@@ -7281,6 +7307,7 @@ contains
             pair = gcv_conj(vs_get(base + 2), gca_get(coll, gcv_nth(args, 1)), &
                  [vs_get(base + 1), vs_get(base + 2)])
             out = pair
+            call mark_entry(out)
          end if
        end block
     case (B_SETVAL, B_RESETVALS)
@@ -7359,7 +7386,7 @@ contains
          ref = gcv_nth(args, 0)
          call vs_set(base + 2, ref)
          fargs = gcv_empty([vs_get(base + 1), vs_get(base + 2)])
-         fargs = gcv_conj(fargs, gc_slot(vs_get(base + 2), 1), &
+         fargs = gcv_conj(fargs, gc_slot(vs_get(base + 2), var_root_slot(vs_get(base + 2))), &
               [vs_get(base + 1), vs_get(base + 2)])
          call vs_set(base + 3, fargs)
          if (n >= 3) then
@@ -7371,8 +7398,28 @@ contains
             end do
          end if
          out = apply(gcv_nth(args, 1), vs_get(base + 3))
-         if (.not. has_error) call gc_set_slot(vs_get(base + 2), 1, out)
+         if (.not. has_error) call gc_set_slot(vs_get(base + 2), var_root_slot(vs_get(base + 2)), out)
        end block
+    case (B_BINDROOT)
+       ! Var.bindRoot: the root, wherever a binding in force has put it
+       a = gcv_nth(args, 0)
+       out = gcv_nth(args, 1)
+       if (.not. validate_ref(a, ref_fn_get(a, "validator", [vs_get(base + 1)]), &
+            out, [vs_get(base + 1)])) then
+          call vs_leave(base)
+          return
+       end if
+       call gc_set_slot(a, var_root_slot(a), out)
+       out = gc_nil()
+    case (B_RAWROOT)
+       a = gcv_nth(args, 0)
+       out = gc_slot(a, var_root_slot(a))
+    case (B_MAPENTRY)
+       ! MapEntry/create
+       out = value_pair(gcv_nth(args, 0), gcv_nth(args, 1), [vs_get(base + 1)])
+       call mark_entry(out)
+    case (B_ISASSIGN)
+       out = gc_bool(class_assignable(strip_meta(gcv_nth(args, 0)), strip_meta(gcv_nth(args, 1))))
     case (B_RESETMETA)
        a = gcv_nth(args, 0)
        out = gcv_nth(args, 1)
@@ -7412,6 +7459,13 @@ contains
                saved = gca_assoc(vs_get(base + 3), kk(j), gc_slot(kk(j), 1), &
                     [vs_get(base + 1), vs_get(base + 3)])
                call vs_set(base + 3, saved)
+               ! The first binding of a Var parks its ROOT in slot 5,
+               ! where bindRoot, alter-var-root and def reach it while
+               ! the binding stands; i2 counts the bindings. So
+               ! with-redefs inside a binding changes what the binding
+               ! restores to and not what it shows, as on the JVM.
+               if (gc_i2(kk(j)) == 0) call gc_set_slot(kk(j), 5, gc_slot(kk(j), 1))
+               call gc_set_i2(kk(j), gc_i2(kk(j)) + 1)
                call gc_set_slot(kk(j), 1, vv(j))
             end if
          end do
@@ -7438,7 +7492,15 @@ contains
                call vs_set(base + 3, frame)
                call gca_entries(vs_get(base + 3), kk, vv)
                do j = 1, size(kk)
-                  if (gcn_is_var(kk(j))) call gc_set_slot(kk(j), 1, vv(j))
+                  if (gcn_is_var(kk(j))) then
+                     call gc_set_slot(kk(j), 1, vv(j))
+                     call gc_set_i2(kk(j), max(0, gc_i2(kk(j)) - 1))
+                     if (gc_i2(kk(j)) == 0) then
+                        ! the last binding gone: the root, as bindRoot left it
+                        call gc_set_slot(kk(j), 1, gc_slot(kk(j), 5))
+                        call gc_set_slot(kk(j), 5, gc_nil())
+                     end if
+                  end if
                end do
                call gc_global_keep(binding_stack_root, &
                     gcl_rest(vs_get(base + 2), [vs_get(base + 2)]))
@@ -9472,6 +9534,7 @@ contains
           out = gcv_conj(vs_get(base + 1), ks(i+1), roots)
           call vs_set(base + 1, out)
           out = gcv_conj(vs_get(base + 1), vls(i+1), roots)
+          call mark_entry(out)
           call vs_leave(base)
        end if
     end if
@@ -10046,6 +10109,67 @@ contains
     class_matches = (declared(last_dot+1:) == asked)
   end function class_matches
 
+  ! A map entry is a two-element vector marked in a slot the vector
+  ! never uses. MapEntry is an APersistentVector on the JVM, so every
+  ! vector operation works on one, and conj or assoc on it builds a
+  ! plain vector, as there. The mark is what map-entry? reads, and
+  ! it is how clojure.walk tells an entry from a vector it may rewrite.
+  subroutine mark_entry(v)
+    type(gc_value), intent(in) :: v
+    if (gcv_is(v)) call gc_set_slot(v, 5, gc_int(1))
+  end subroutine mark_entry
+
+  logical function is_map_entry(v0)
+    type(gc_value), intent(in) :: v0
+    type(gc_value) :: v, m
+    v = strip_meta(v0)
+    is_map_entry = .false.
+    if (.not. gcv_is(v)) return
+    m = gc_slot(v, 5)
+    is_map_entry = (m%tag == GCT_INT)
+  end function is_map_entry
+
+  ! Where a Var's root lives: slot 1, or slot 5 while a binding stands.
+  integer function var_root_slot(v)
+    type(gc_value), intent(in) :: v
+    var_root_slot = 1
+    if (gcn_is_var(v)) then
+       if (gc_i2(v) > 0) var_root_slot = 5
+    end if
+  end function var_root_slot
+
+  ! Class.isAssignableFrom, over what clotran knows of classes: a class
+  ! is assignable from itself under either spelling, Object from
+  ! anything, and an interface from a deftype that declared it or a
+  ! built-in whose supertype chain (host_super) names it. It is what
+  ! `extend` asks before refusing a type that implements the protocol
+  ! inline, and what extends? and implements? read; it answered false
+  ! to everything.
+  function class_assignable(av, bv) result(yes)
+    type(gc_value), intent(in) :: av, bv
+    logical :: yes
+    character(len=:), allocatable :: a, b
+    type(gc_value) :: k
+    integer :: i
+    yes = .false.
+    if (av%tag /= GCT_KEY .and. av%tag /= GCT_SYM) return
+    if (bv%tag /= GCT_KEY .and. bv%tag /= GCT_SYM) return
+    a = gc_ref_text(av%ref)
+    b = gc_ref_text(bv%ref)
+    yes = class_matches(a, b) .or. class_matches(b, a) .or. a == "Object" .or. a == "java.lang.Object"
+    if (yes) return
+    i = 1
+    do
+       k = host_super(bv, i, av)
+       if (k%tag /= GCT_KEY) exit
+       if (class_matches(gc_ref_text(k%ref), a) .or. class_matches(a, gc_ref_text(k%ref))) then
+          yes = .true.
+          return
+       end if
+       i = i + 1
+    end do
+  end function class_assignable
+
   ! Whether a vector of class keywords names this class.
   logical function key_in_vector(vec, name)
     type(gc_value), intent(in) :: vec
@@ -10075,6 +10199,12 @@ contains
     ! everything its :implements list names -- which is the whole
     ! hierarchy there is, and enough for find-protocol-impl, whose
     ! first question is (instance? (:on-interface protocol) x).
+    ! An exception is an instance of its own class and of what catch
+    ! would take it under
+    if (t == "error" .and. is_throwable_class(c)) then
+       yes = exc_class_matches(c, strip_meta(v))
+       return
+    end if
     if (gc_kind(strip_meta(v)) == OBJ_INST) then
        yes = class_matches(t, c) .or. (c == "Object") .or. &
             key_in_vector(gc_slot(gc_slot(strip_meta(v), 1), 4), c)
@@ -10145,6 +10275,7 @@ contains
     case ("clojure.lang.IPersistentVector", "clojure.lang.Indexed"); yes = (t == "vector")
     case ("clojure.lang.IPersistentMap", "java.util.Map"); yes = (t == "map")
     case ("clojure.lang.IPersistentSet"); yes = (t == "set")
+    case ("java.util.Map$Entry", "clojure.lang.IMapEntry", "clojure.lang.MapEntry"); yes = is_map_entry(v)
     case ("clojure.lang.IKVReduce"); yes = (t == "vector" .or. t == "map")
     case ("clojure.lang.Sorted"); yes = is_sorted_coll(v)
     case ("clojure.lang.Reversible"); yes = (t == "vector") .or. is_sorted_coll(v)

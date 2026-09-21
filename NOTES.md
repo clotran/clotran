@@ -3262,3 +3262,46 @@ before it became an oracle case:
   taking 1 args for class String"; `Math.ulp` of infinity and zero,
   `IEEEremainder` by zero, and `floorDiv` of Long/MIN_VALUE by -1,
   which wraps rather than passing through a double.
+
+## A map entry has a type, a Var has a root, and an error answers to its class
+
+The suite's next failures were three things Clojure keeps and clotran
+had flattened away.
+
+**A map entry was a plain vector.** `(first {1 2})` IS a vector on the
+JVM too -- `MapEntry` extends `APersistentVector` -- but it is also a
+`Map$Entry`, and `clojure.walk` tells the two apart: `postwalk` rebuilds
+a vector it is handed and leaves an entry alone, so a walker that turned
+vectors into lists turned every map into `{nil nil}`. The mark lives in
+a slot the vector never uses (slot 5; the trie root is slot 1 and `i2`
+is the shift), set where entries are built -- the seq of a map, `find`,
+a sorted map's seq, `MapEntry/create` -- and read by `map-entry?`
+through `instance?` on `java.util.Map$Entry`. `conj` and `assoc` on an
+entry build a fresh vector, so the mark falls off exactly where the
+JVM's type does; `=` never looked at the slot, so `(= [1 2] (first {1
+2}))` stays true. `class` still says PersistentVector: changing it would
+change protocol dispatch on entries, and nothing asked for that.
+
+**A Var's root and its binding were one slot.** `push-thread-bindings`
+saved the value and overwrote it, so `with-redefs` inside a `binding` of
+the same Var replaced the binding, and `def` under a binding did too;
+the JVM's `bindRoot`, `alterRoot` and `DefExpr` all write the root
+while a binding keeps showing its own value. The first binding of a Var
+now parks the root in slot 5 and `i2` counts the bindings; `bindRoot`,
+`alter-var-root`, `def` and `intern` write slot 5 while that count is
+positive, `getRawRoot` reads it, and the last pop restores the root as
+those may have left it. `set!` still writes the binding, as it should.
+
+**An error was an instance of nothing.** `(instance? ArithmeticException
+e)` was false for the very error `catch ArithmeticException` takes, so
+an agent's error handler could not tell what it was handed. The class
+test `catch` uses is now `exc_class_matches`, and `instance?` asks it
+for any throwable class name -- the same two edges of hierarchy, and
+Throwable and Exception take anything.
+
+And the small ones: `(:k coll not-found)` honours the default on a set
+or a transient, not only a map; `Class/isAssignableFrom` answers from a
+deftype's declared interfaces or a built-in's supertype chain instead
+of `false` to everything, which is what lets `extend` refuse a type that
+already implements the protocol inline, and `extends?` say so; and
+`Long/valueOf` with the wrong count fails in the Reflector's words.

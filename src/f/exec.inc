@@ -1448,7 +1448,9 @@
           return
        end if
        call vs_set(base + 4, v)
-       call gc_set_slot(vs_get(base + 3), 1, vs_get(base + 4))
+       ! the ROOT: under a binding of this Var that is slot 5, and the
+       ! binding keeps showing its own value, as DefExpr's bindRoot does
+       call gc_set_slot(vs_get(base + 3), var_root_slot(vs_get(base + 3)), vs_get(base + 4))
        call gc_set_i1(vs_get(base + 3), 1)
     end if
     md = gc_slot(vs_get(base + 1), 3)

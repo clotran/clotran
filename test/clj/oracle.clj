@@ -2010,3 +2010,30 @@
 (let [m (into (sorted-map) '{1 a, 2 b, 3 c, 4 d})] [(reduce-kv str "" m) (reduce-kv (fn [acc k v] (reduced (+ acc k))) 0 m)])
 
 [(instance? clojure.lang.IKVReduce {}) (instance? clojure.lang.IKVReduce []) (instance? clojure.lang.IKVReduce (sorted-map))]
+
+;; a map entry keeps its type through seqs and find; conj and assoc on one make a vector
+[(map-entry? (first {1 2})) (map-entry? [1 2]) (map-entry? (find {1 2} 1)) (map-entry? (find [5 6] 1)) (map-entry? (conj (first {1 2}) 3)) (map-entry? (assoc (first {1 2}) 0 9)) (vector? (first {1 2})) (map-entry? (first (seq (sorted-map 1 2)))) (map-entry? (first (rseq (sorted-map 1 2)))) (map-entry? (first (subseq (sorted-map 1 2) > 0))) (map-entry? (nth (seq {1 2 3 4}) 1)) (map-entry? (first (reduce conj [] {1 2}))) (map-entry? (first (into [] {1 2}))) (map-entry? (first (map identity {1 2}))) (map-entry? (first (vec {1 2}))) (map-entry? (clojure.lang.MapEntry/create 1 2)) (= [1 2] (first {1 2})) (key (first {1 2})) (val (clojure.lang.MapEntry/create 1 2))]
+
+(require 'clojure.walk)
+
+(let [f (fn [e] (if (and (vector? e) (not (map-entry? e))) (apply list e) e))] (clojure.walk/postwalk f [:html {:a ["b" 1]} ""]))
+
+;; a keyword called with a default, on any collection
+[(:b #{:a} 1) (:b (transient #{:a}) 1) (:a {:a nil} 1) (:b {:a 1} 1) (:b (transient {:a 1}) 1) (:a #{:a} 1)]
+
+;; an error is an instance of its class, and of what catch would take it under
+(let [e (try (/ 1 0) (catch Exception e e))] [(instance? ArithmeticException e) (instance? RuntimeException e) (instance? IllegalArgumentException e) (instance? Exception e) (instance? Throwable e) (instance? Object e)])
+
+
+;; isAssignableFrom, and extend's refusal of a type that implements the protocol inline
+(do (defprotocol PP (pp [x])) (deftype TT [] PP (pp [_] 1)) [(extends? PP TT) (satisfies? PP (TT.)) (try (extend TT PP {:pp (fn [_] 2)}) :extended (catch IllegalArgumentException e (boolean (re-find #"already directly implements" (.getMessage e)))))])
+
+[(.isAssignableFrom Object String) (.isAssignableFrom clojure.lang.IPersistentVector clojure.lang.PersistentVector) (.isAssignableFrom String Object) (.isAssignableFrom clojure.lang.IPersistentMap clojure.lang.PersistentTreeMap) (.isAssignableFrom clojure.lang.IPersistentMap clojure.lang.PersistentVector) (.isAssignableFrom String String)]
+
+;; the root of a Var under a binding: bindRoot, alter-var-root and def reach the root, the binding shows
+(do (def ^:dynamic dv 1) [(binding [dv 2] (with-redefs [dv 3] [dv (.getRawRoot #'dv)])) dv (binding [dv 2] (alter-var-root #'dv inc) [dv (.getRawRoot #'dv)]) dv (binding [dv 5] (def dv 7) [dv (.getRawRoot #'dv)]) dv (binding [dv 8] (binding [dv 9] (with-redefs [dv 10] dv))) dv])
+
+;; Long/valueOf with the wrong count fails in the Reflector's words
+(try (eval '(Long/parseLong)) (catch Exception e (boolean (re-find #"No matching method.*taking 0 args" (.getMessage (or (.getCause e) e))))))
+
+(try (eval '(Long/parseLong :a :b :c)) (catch Exception e (boolean (re-find #"No matching method.*taking 3 args" (.getMessage (or (.getCause e) e))))))

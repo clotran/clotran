@@ -52,7 +52,7 @@
        hm("clojure.lang.Delay", "force", B_DEREF, "deref"), &
        hm("clojure.lang.EnumerationSeq", "create", B_SEQ, "seq"), &
   ! A map entry is a two-element vector, as Clojure's MapEntry is too.
-       hm("clojure.lang.MapEntry", "create", B_VECTOR, "vector"), &
+       hm("clojure.lang.MapEntry", "create", B_MAPENTRY, "map-entry"), &
        hm("clojure.lang.PersistentStructMap", "createSlotMap", B_SBASIS, "clotran-struct-basis"), &
        hm("clojure.lang.PersistentStructMap", "create", B_SCREATE, "clotran-struct-map"), &
        hm("clojure.lang.PersistentStructMap", "construct", B_SCONSTRUCT, "clotran-struct"), &
@@ -446,7 +446,7 @@
        hm("", "getSuperclass", B_ALWAYS_NIL, "clotran-nil"), &
   ! The host supertypes, which is what clotran has instead of interfaces (host_super).
        hm("", "getInterfaces", B_GETIFACES, "clotran-get-interfaces"), &
-       hm("", "isAssignableFrom", B_ALWAYS_FALSE, "clotran-false"), &
+       hm("", "isAssignableFrom", B_ISASSIGN, "clotran-assignable"), &
        hm("", "isInterface", B_ALWAYS_FALSE, "clotran-false"), &
        hm("", "isArray", B_ALWAYS_FALSE, "clotran-false"), &
   ! The protocol dispatch cache is a map with named fields, and fnFor answers nil: a permanently cold cache. DEVIATIONS.md 13.
@@ -486,9 +486,8 @@
        hm("", "set", B_SETVAL, "clotran-set-val") ]
   type(hm), parameter :: HOST_METHODS_2(71) = [ &
        hm("", "reset", B_SETVAL, "clotran-set-val"), &
-       hm("", "bindRoot", B_SETVAL, "clotran-set-val"), &
-  ! the root binding, which with no thread binding in force is the value
-       hm("", "getRawRoot", B_DEREF, "deref"), &
+       hm("", "bindRoot", B_BINDROOT, "clotran-bind-root"), &
+       hm("", "getRawRoot", B_RAWROOT, "clotran-raw-root"), &
        hm("", "kvreduce", B_RTFN, "kvreduce-of"), &
        hm("", "swap", B_SWAPVAL, "clotran-swap-val"), &
        hm("", "isNaN", B_ISNAN, "clotran-is-nan"), &

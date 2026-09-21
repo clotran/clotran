@@ -745,36 +745,37 @@
           if (gc_kind(find_type(gc_ref_text(target%ref))) /= OBJ_TYPE .and. is_host_class(target)) then
              fnv = static_member(gc_ref_text(target%ref), mname, vs_get(base + 1))
              if (has_error) then
+                ! Not a static of that class: a member of the CLASS
+                ! OBJECT, (.isAssignableFrom String Object) or (.getName
+                ! String), left to eval_dot below. A member neither has
+                ! still fails there by name.
                 call gce_clear_error()
-                nd = fail_node("no such member: " // gc_ref_text(target%ref) // "/" // mname, &
-                     [vs_get(base + 1), vs_get(base + 2)])
+             else
+                call vs_set(base + 7, fnv)
+                if (.not. is_call) then
+                   nd = const_node(vs_get(base + 7), [vs_get(base + 1), vs_get(base + 2)])
+                   call vs_leave(base)
+                   return
+                end if
+                ! (native args...) as a plain call
+                tn = const_node(vs_get(base + 7), [vs_get(base + 1), vs_get(base + 2)])
+                call vs_set(base + 8, tn)
+                kids = gcv_empty([vs_get(base + 1), vs_get(base + 2), vs_get(base + 8)])
+                call vs_set(base + 7, kids)
+                kids = gcv_conj(vs_get(base + 7), vs_get(base + 8), [vs_get(base + 1), vs_get(base + 2)])
+                call vs_set(base + 7, kids)
+                kids = analyze_all(vs_get(base + 6), vs_get(base + 2), [vs_get(base + 1), vs_get(base + 7)])
+                call vs_set(base + 8, kids)
+                if (has_error) then
+                   call vs_leave(base)
+                   return
+                end if
+                kids = concat_vecs(vs_get(base + 7), vs_get(base + 8), [vs_get(base + 1), vs_get(base + 2)])
+                call vs_set(base + 7, kids)
+                nd = mk_node(N_CALL, vs_get(base + 7), gc_nil(), gc_nil(), 0, [vs_get(base + 1), vs_get(base + 2)])
                 call vs_leave(base)
                 return
              end if
-             call vs_set(base + 7, fnv)
-             if (.not. is_call) then
-                nd = const_node(vs_get(base + 7), [vs_get(base + 1), vs_get(base + 2)])
-                call vs_leave(base)
-                return
-             end if
-             ! (native args...) as a plain call
-             tn = const_node(vs_get(base + 7), [vs_get(base + 1), vs_get(base + 2)])
-             call vs_set(base + 8, tn)
-             kids = gcv_empty([vs_get(base + 1), vs_get(base + 2), vs_get(base + 8)])
-             call vs_set(base + 7, kids)
-             kids = gcv_conj(vs_get(base + 7), vs_get(base + 8), [vs_get(base + 1), vs_get(base + 2)])
-             call vs_set(base + 7, kids)
-             kids = analyze_all(vs_get(base + 6), vs_get(base + 2), [vs_get(base + 1), vs_get(base + 7)])
-             call vs_set(base + 8, kids)
-             if (has_error) then
-                call vs_leave(base)
-                return
-             end if
-             kids = concat_vecs(vs_get(base + 7), vs_get(base + 8), [vs_get(base + 1), vs_get(base + 2)])
-             call vs_set(base + 7, kids)
-             nd = mk_node(N_CALL, vs_get(base + 7), gc_nil(), gc_nil(), 0, [vs_get(base + 1), vs_get(base + 2)])
-             call vs_leave(base)
-             return
           end if
           ! A deftype class, or a class name is_host_class does not know:
           ! left to eval_dot, target passed as the symbol, unevaluated.

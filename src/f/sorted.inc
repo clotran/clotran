@@ -244,6 +244,7 @@
                [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
           e = gcv_put(vs_get(base + 3), 1, gca_val_at(vs_get(base + 1), i), &
                [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+          call mark_entry(e)
        end if
        call vs_set(base + 3, e)
        acc = gcv_conj(vs_get(base + 2), vs_get(base + 3), &

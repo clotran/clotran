@@ -1122,6 +1122,14 @@
 (check "& is not a let* binding" (try (eval '(let* [& 42] &)) (catch Exception e :threw)) :threw)
 (check "nor a loop* binding" (try (eval '(loop* [& 42] &)) (catch Exception e :threw)) :threw)
 
+;;; ---- an agent's error handler is handed the error itself -- an oracle
+;;; case would leave clj's agent pool running and its JVM never exiting
+(check "the handler sees the error's class"
+       (let [err (atom nil) a (agent 0 :error-mode :continue :error-handler #(reset! err %&))]
+         (send a /) (await-for 1000 a)
+         [(instance? ArithmeticException (second @err)) (= a (first @err)) @a (agent-error a)])
+       [true true 0 nil])
+
 (println "")
 (if (zero? @*failures*)
   (println "LANGUAGE TESTS PASSED")

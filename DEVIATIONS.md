@@ -1162,3 +1162,22 @@ oracle checks twenty of them. What differs:
 **Removal**: the `:os` impl of the thread protocol (PLAN.md) -- real
 threads over a collector that tolerates them -- for order and
 pinning; the rest are choices that would stay.
+
+## 39. A map entry's class is PersistentVector
+
+`(first {1 2})` answers `map-entry?` and `(instance? java.util.Map$Entry
+..)` as Clojure's does -- the entry is a two-element vector carrying a
+mark in a slot vectors never use, set where entries are built and read by
+`instance?` (NOTES.md, "A map entry has a type"). What differs is
+`class`: Clojure says `clojure.lang.MapEntry`, clotran says
+`clojure.lang.PersistentVector`.
+
+This is a **choice**. `class` is what protocol dispatch and `print-method`
+look up, and a MapEntry class with its own supertype chain would have to
+reproduce `APersistentVector`'s for every protocol extended to vectors to
+keep reaching entries. Nothing in the vendored suite asks an entry its
+class; `map-entry?` is what it asks, and that is answered.
+
+**Removal**: `class_name_of` answering MapEntry for a marked vector, and
+`host_super` giving that name the vector chain plus `IMapEntry` and
+`Map$Entry`.

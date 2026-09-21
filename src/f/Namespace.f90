@@ -229,7 +229,13 @@ contains
             ours = .true.
          end if
          if (ours) then
-            call gc_set_slot(var, 1, vs_get(base + 3))
+            ! the ROOT: slot 5 while a binding of it stands (Eval's
+            ! push-thread-bindings), else the value itself
+            if (gc_i2(var) > 0) then
+               call gc_set_slot(var, 5, vs_get(base + 3))
+            else
+               call gc_set_slot(var, 1, vs_get(base + 3))
+            end if
             call vs_leave(base)
             return
          end if
