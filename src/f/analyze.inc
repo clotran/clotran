@@ -1145,12 +1145,25 @@
           call vs_leave(base)
           return
        end if
-       ! Compiler.LetExpr.Parser: & is the rest marker, not a name
+       ! Compiler.LetExpr.Parser: & is the rest marker, not a name,
+       ! and a qualified symbol names a Var, not a local -- it was
+       ! bound as written, and the body's x then resolved to nothing
        if (gc_ref_is(k%ref, "&")) then
           call fail("Can't use & as a local binding")
           call vs_leave(base)
           return
        end if
+       block
+         character(len=:), allocatable :: kt
+         integer :: slash
+         kt = gc_ref_text(k%ref)
+         slash = index(kt, "/")
+         if (slash > 1 .and. slash < len(kt)) then
+            call fail("Can't let qualified name: " // kt)
+            call vs_leave(base)
+            return
+         end if
+       end block
        call bind_name(vs_get(base + 4), k, start + i, [vs_get(base + 1), vs_get(base + 5)])
     end do
     c = analyze_body(gcl_rest(vs_get(base + 1), [vs_get(base + 1)]), vs_get(base + 4), &

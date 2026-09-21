@@ -2042,3 +2042,6 @@
 (binding [*ns* *ns*] (in-ns 'oracle-tmp-ns) (def in-tmp 1) [(ns-name *ns*) (some? (ns-resolve 'oracle-tmp-ns 'in-tmp))])
 
 (ns-name *ns*)
+
+;; a qualified symbol is not a local
+[(try (eval '(let* [a/x 1] x)) (catch Exception e :threw)) (try (eval '(loop* [a/x 1] x)) (catch Exception e :threw)) (let [/ 1] /)]
