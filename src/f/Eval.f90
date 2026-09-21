@@ -5615,20 +5615,70 @@ contains
        ! (apply f a b args) -- the last argument is a SEQUENCE spread
        ! into the call, which is what makes variadic forwarding work.
        block
-         type(gc_value) :: fargs, last
-         integer :: j
+         type(gc_value) :: fargs, last, f, arities, ar, s, v
+         integer :: j, req
          fargs = gcv_empty([vs_get(base + 1)])
          do j = 1, n - 2
             fargs = gcv_conj(fargs, gcv_nth(vs_get(base + 1), j), [vs_get(base + 1), fargs])
          end do
+         call vs_set(base + 2, fargs)
+         ! A variadic closure gets its rest AS IT IS. RestFn.applyTo walks
+         ! the seq only as far as the required arity; what follows is the
+         ! rest argument, unrealised, so (apply f 1 (range)) hands f an
+         ! infinite seq instead of realising a million elements first.
+         ! Anything else -- a native, a keyword, a fixed-arity fn -- takes
+         ! its arguments spread, as below.
+         f = strip_meta(gcv_nth(vs_get(base + 1), 0))
+         if (gcn_is_var(f)) f = strip_meta(gcn_var_value(f))
+         req = -1
+         if (gc_kind(f) == OBJ_CLOSURE) then
+            arities = gcv_nth(gc_slot(f, 1), 1)
+            do j = 0, gcv_count(arities) - 1
+               ar = gcv_nth(arities, j)
+               if (truthy(gcv_nth(ar, 1))) req = int_of(gcv_nth(ar, 0))
+            end do
+         end if
+         if (req >= 0) then
+            s = to_seq(gcv_nth(vs_get(base + 1), n - 1), [vs_get(base + 1), vs_get(base + 2)])
+            call vs_set(base + 3, s)
+            ! the fixed arguments still wanted come off the front of the seq
+            do while (gcv_count(vs_get(base + 2)) < req .and. s%tag /= GCT_NIL .and. .not. has_error)
+               v = sq_first(vs_get(base + 3), [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+               fargs = gcv_conj(vs_get(base + 2), v, [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), v])
+               call vs_set(base + 2, fargs)
+               s = sq_rest(vs_get(base + 3), [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+               call vs_set(base + 3, s)
+               s = to_seq(vs_get(base + 3), [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+               call vs_set(base + 3, s)
+            end do
+            if (has_error) then
+               continue
+            else if (gcv_count(vs_get(base + 2)) > req .or. s%tag /= GCT_NIL) then
+               ! leading arguments past the fixed ones go onto the seq as it is
+               do j = gcv_count(vs_get(base + 2)) - 1, req, -1
+                  s = seq_cons(gcv_nth(vs_get(base + 2), j), vs_get(base + 3), &
+                       [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+                  call vs_set(base + 3, s)
+               end do
+               fargs = gcv_empty([vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+               call vs_set(base + 4, fargs)
+               do j = 0, req - 1
+                  fargs = gcv_conj(vs_get(base + 4), gcv_nth(vs_get(base + 2), j), &
+                       [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 4)])
+                  call vs_set(base + 4, fargs)
+               end do
+               out = invoke_closure(f, vs_get(base + 4), vs_get(base + 3))
+            else
+               ! too few for the variadic arity: spread, and a fixed arity may match
+               fargs = vs_get(base + 2)
+               out = apply(gcv_nth(vs_get(base + 1), 0), fargs)
+            end if
+         else
          ! Through coll_to_vector, not a two-case count: the last
          ! argument is whatever `seq` produced, which is a VIEW over a
          ! vector as often as it is a list, and counting only lists and
          ! vectors made (apply f (seq xs)) call f with no arguments at
-         ! all.
-         call vs_set(base + 2, fargs)
-         ! Realised in full, which Clojure does not do (DEVIATIONS 37):
-         ! bounded, so (apply f (range)) is an error and not a hang.
+         ! all. Bounded, so (apply + (range)) is an error and not a hang.
          last = coll_to_vector(gcv_nth(vs_get(base + 1), n - 1), &
               [vs_get(base + 1), vs_get(base + 2)], limit=1000000)
          call vs_set(base + 3, last)
@@ -5640,6 +5690,7 @@ contains
          end do
          fargs = vs_get(base + 2)
          if (.not. has_error) out = apply(gcv_nth(vs_get(base + 1), 0), fargs)
+         end if
        end block
     case (B_PRN)
        do i = 0, n - 1
@@ -9690,6 +9741,23 @@ case (B_SLURP)
   ! metadata is still a vector; ours wraps it, and a funnel that did not
   ! unwrap made (count (with-meta [1 2] m)) zero and (first ...) nil.
   ! DEVIATIONS.md 5.
+  ! (cons head tl) as B_CONS builds it: a list tail stays a list, any
+  ! other tail -- lazy, unrealised -- is kept as it is under a cell.
+  recursive function seq_cons(head, tl0, roots) result(out)
+    type(gc_value), intent(in) :: head, tl0
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, tl
+    tl = tl0
+    if (gc_kind(tl) /= OBJ_LAZY .and. tl%tag /= GCT_NIL) tl = to_seq(tl, [roots, head])
+    if (tl%tag == GCT_NIL) tl = gcl_empty([roots, head])
+    if (gcl_is(tl)) then
+       out = gcl_cons(head, tl, [roots, head, tl])
+    else
+       out = gc_obj(OBJ_LAZY, [gc_nil(), head, tl], [roots, head, tl])
+       call gc_set_i1(out, LAZY_CONS)
+    end if
+  end function seq_cons
+
   recursive function to_seq(v0, roots) result(out)
     type(gc_value), intent(in) :: v0
     type(gc_value), intent(in) :: roots(:)
@@ -11201,7 +11269,7 @@ case (B_SLURP)
           k = k + 1
           if (k > limit) then
              write(buf, '(I0)') limit
-             call fail("apply: more than " // trim(buf) // " arguments; the argument seq is realised here (DEVIATIONS 37)")
+             call fail("apply: more than " // trim(buf) // " arguments; the argument seq is realised here -- a native or a fixed-arity callee spreads it; only a variadic fn takes a seq as it is)")
              exit
           end if
        end if

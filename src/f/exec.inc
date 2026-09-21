@@ -126,8 +126,11 @@
   ! Calls a closure from outside the loop -- a native, a multimethod.
   ! The body runs in a nested run; a call the loop itself makes does
   ! not come here (see run, N_CALL).
-  recursive function invoke_closure(fn, argv) result(out)
+  ! restseq, when given, is the REST argument as it is -- a seq apply
+  ! did not realise -- with argv holding only the fixed arguments.
+  recursive function invoke_closure(fn, argv, restseq) result(out)
     type(gc_value), intent(in) :: fn, argv
+    type(gc_value), intent(in), optional :: restseq
     type(gc_value) :: out, frame, body
     integer :: base
     logical :: ok
@@ -136,7 +139,11 @@
     call vs_set(base + 1, fn)
     call push_frame(fn, pending_site)
     pending_site = 0
-    ok = bind_closure(vs_get(base + 1), argv, frame, body)
+    if (present(restseq)) then
+       ok = bind_closure(vs_get(base + 1), argv, frame, body, restseq)
+    else
+       ok = bind_closure(vs_get(base + 1), argv, frame, body)
+    end if
     if (ok) then
        out = run(body, frame, ior(KF_FNBODY, KF_RESTART), body, vs_get(base + 1))
     else
@@ -183,9 +190,13 @@
   ! captures and the fn's own name. Answers the frame and the body to
   ! run; false with an error set when no arity fits. `argv` is taken
   ! over: it is rooted here at once and dropped once the frame has it.
-  function bind_closure(fn, argv, frame, body) result(ok)
+  ! With restseq, argv is exactly the variadic arity's fixed arguments
+  ! and restseq is its rest as it is (RestFn.doInvoke's last argument),
+  ! so only the variadic arity can match.
+  function bind_closure(fn, argv, frame, body, restseq) result(ok)
     type(gc_value), intent(in) :: fn, argv
     type(gc_value), intent(out) :: frame, body
+    type(gc_value), intent(in), optional :: restseq
     logical :: ok
     type(gc_value) :: tmpl, arities, ar, caps, capv, rest
     integer :: base, argc, i, n, nfixed, start, nslots, ncap, self
@@ -209,7 +220,7 @@
        ar = gcv_nth(arities, i)
        nfixed = int_of(gcv_nth(ar, 0))
        variadic = truthy(gcv_nth(ar, 1))
-       if (.not. variadic .and. nfixed == argc) then
+       if (.not. variadic .and. nfixed == argc .and. .not. present(restseq)) then
           found = .true.
           exit
        end if
@@ -240,7 +251,9 @@
     do i = 0, nfixed - 1
        call frame_set(vs_get(base + 5), start + i, gcv_nth(vs_get(base + 2), i))
     end do
-    if (variadic) then
+    if (variadic .and. present(restseq)) then
+       call frame_set(vs_get(base + 5), start + nfixed, restseq)
+    else if (variadic) then
        ! nil when nothing is left, not the empty list (if-let asserts it)
        if (argc <= nfixed) then
           call frame_set(vs_get(base + 5), start + nfixed, gc_nil())

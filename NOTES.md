@@ -3482,6 +3482,34 @@ the seam, and they cost no model. What the JVM's class machinery still
 does here is `isa?` over `clojure.lang` interfaces for multimethods,
 which is the language's own type hierarchy and cljs has it too.
 
+## apply hands the rest over unrealised
+
+`(apply f (range))` hung, then errored at a million elements
+(DEVIATIONS 37), because `apply` built one argument vector from the
+whole seq before `bind_closure` rebuilt the rest list from it.
+`RestFn.applyTo` never does that: it takes `getRequiredArity()`
+elements off the seq and passes what is left as the last argument, the
+seq itself, and `(apply sample (range))` returns because `sample` never
+looks past `(first args)`.
+
+`bind_closure` and `invoke_closure` take an optional `restseq`. When it
+is present `argv` holds exactly the variadic arity's fixed arguments,
+only that arity can match, and the rest slot is bound to `restseq` as
+it is. `B_APPLY` decides: a closure (a Var is dereferenced first) with
+a variadic arity of R fixed parameters gets the leading arguments plus
+`sq_first`/`sq_rest` steps off the seq until it holds R, and if
+anything is left -- more leading arguments than R, or a non-empty seq
+-- the extras are consed onto the seq with `seq_cons` (B_CONS's cell:
+a list tail stays a list, a lazy tail is kept under a `LAZY_CONS` cell)
+and the closure is invoked with the rest unrealised. Fewer than R in
+total falls through to the old spread, so a fixed arity of that count
+still wins as `bind_closure` prefers it. Natives, keywords and
+fixed-only fns spread as before, bounded at a million.
+
+The oracle has fifteen cases for it, values against clj, including
+`(apply (fn [a & r] [a (take 3 r)]) 1 (range))` and the atom count
+that shows only one element of a hundred was realised.
+
 ## The door: a package is a shared library any clotran can open
 
 PLAN.md step 9 said a package is linked into a per-project binary,

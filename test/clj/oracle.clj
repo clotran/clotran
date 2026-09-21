@@ -2152,3 +2152,21 @@
 [(num {} :a) (str (:ns (meta (ns-resolve 'shadow-ns 'num)))) (clojure.core/num 5) (= #'clojure.core/num (ns-resolve 'clojure.core 'num))]
 
 (in-ns 'user)
+
+;; apply hands a variadic fn its rest unrealised (RestFn.applyTo); a
+;; fixed arity, a native or a keyword still takes the arguments spread.
+(apply (fn [a & r] [a (take 3 r)]) 1 (range))
+(apply (fn [a b & r] [a b (take 3 r)]) (range))
+(apply (fn [a b & r] [a b r]) 1 2 3 4 [5 6])
+(apply (fn [a b & r] [a b r]) 1 2 3 4 [])
+(apply (fn [a b & r] [a b r]) 1 [2])
+(apply (fn ([a] [:one a]) ([a & r] [:more a r])) [1])
+(apply (fn ([a] [:one a]) ([a & r] [:more a r])) [1 2])
+(apply (fn ([a] [:one a]) ([a & r] [:more a r])) 1 [])
+(apply (fn [& r] r) nil)
+(apply (fn [& r] r) [])
+(apply (fn [& r] (count r)) 1 2 (range 3))
+(try (apply (fn [a b] [a b]) [1]) (catch clojure.lang.ArityException e :arity))
+(try (apply (fn [a b & r] [a b]) [1]) (catch clojure.lang.ArityException e :arity))
+(let [a (atom 0)] (apply (fn [x & r] x) (map (fn [i] (swap! a inc) i) (range 100))) @a)
+(deref (future (apply (fn [x & r] (take 2 r)) (range))) 1000 :timeout)
