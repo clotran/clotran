@@ -23,9 +23,32 @@
 
 (def kinds {"real8" "real(c_double)" "int4" "integer(c_int)" "int8" "integer(c_long)" "logical" "logical(c_bool)"})
 
-(defn strip [src]
-  ;; comments off, continuation lines joined, lower-cased except string contents are irrelevant here
-  (let [lines (map #(str/replace % #"!.*$" "") (str/split-lines src))
+(defn fixed-form? [path] (boolean (re-find #"(?i)\.(f|for|f77)$" path)))
+
+(defn fixed-to-free
+  "Fixed-form source as free-form lines: a C, c, * or ! in column 1 is a
+  comment, a non-blank column 6 continues the line above, columns 7-72
+  carry the statement."
+  [src]
+  (let [ls (->> (str/split-lines src)
+                (remove #(re-find #"^[Cc*!]" %))
+                (remove str/blank?)
+                (map #(let [l (if (> (count %) 72) (subs % 0 72) %)
+                            cont (and (>= (count l) 6) (not (str/blank? (subs l 5 6))))
+                            body (if (>= (count l) 7) (subs l 6) "")]
+                        [cont body])))]
+    (loop [ls ls acc []]
+      (if (empty? ls) acc
+        (let [[cont body] (first ls)]
+          (if (and cont (seq acc))
+            (recur (rest ls) (conj (pop acc) (str (peek acc) body)))
+            (recur (rest ls) (conj acc body))))))))
+
+(defn strip [src & [path]]
+  ;; comments off, continuation lines joined, lower-cased
+  (let [lines (if (and path (fixed-form? path))
+                (fixed-to-free src)
+                (map #(str/replace % #"!.*$" "") (str/split-lines src)))
         joined (loop [ls lines acc [] cur nil]
                  (if (empty? ls)
                    (if cur (conj acc cur) acc)
@@ -39,12 +62,16 @@
 (defn split-args [s] (when-not (str/blank? s) (map str/trim (str/split s #","))))
 
 ;; "real(8), intent(in) :: a(n), b" -> [{:type "real8" :intent "in"} ["a(n)" "b"]]
+(def f77-type #"^(double\s*precision|real\*8|real\*4|real|integer\*8|integer\*4|integer\*2|integer|logical|character\*\(\*\)|character\*\d+|character)\s+([a-z_].*)$")
+
 (defn parse-decl [l]
-  (when-let [[_ spec names] (re-matches #"^(.*?)\s*::\s*(.*)$" l)]
+  (when-let [[_ spec names] (or (re-matches #"^(.*?)\s*::\s*(.*)$" l)
+                                (when-not (re-find #"::|\bfunction\b|\bsubroutine\b|^(external|intrinsic|parameter|data|save|common|implicit|dimension)\b" l)
+                                  (when-let [[_ ty names] (re-matches f77-type l)] [nil ty names])))]
     (let [spec (str/replace spec #"\s+" "")
-          type (cond (re-find #"^(real\(8\)|real\(kind=8\)|doubleprecision|real\(c_double\)|real\(dp\))" spec) "real8"
-                     (re-find #"^(integer\(8\)|integer\(kind=8\)|integer\(c_long\))" spec) "int8"
-                     (re-find #"^(integer\(4\)|integer\(kind=4\)|integer\(c_int\)|integer)(?![(\w])" spec) "int4"
+          type (cond (re-find #"^(real\(8\)|real\(kind=8\)|doubleprecision|real\*8|real\(c_double\)|real\(dp\))" spec) "real8"
+                     (re-find #"^(integer\(8\)|integer\(kind=8\)|integer\*8|integer\(c_long\))" spec) "int8"
+                     (re-find #"^(integer\(4\)|integer\(kind=4\)|integer\*4|integer\(c_int\)|integer)(?![(\w*])" spec) "int4"
                      (re-find #"^logical" spec) "logical"
                      (re-find #"^character" spec) "string"
                      :else nil)
@@ -65,7 +92,7 @@
                             (= c \)) (recur (rest cs) (dec depth) (str cur c) out)
                             (and (= c \,) (zero? depth)) (recur (rest cs) depth "" (conj out cur))
                             :else (recur (rest cs) depth (str cur c) out)))))]
-      [{:type type :intent intent :unbindable unbindable :dim dim} names])))
+      [{:type type :intent intent :unbindable unbindable :dim dim :ftype (first (str/split spec #","))} names])))
 
 (defn rank-of [name-with-dims dim]
   (let [d (or (second (re-find #"\(([^)]*)\)" name-with-dims)) dim)]
@@ -74,8 +101,8 @@
 (defn bare-name [n] (str/replace n #"\(.*$" ""))
 
 ;; the routines of one module: [{:module m :name n :kind :subroutine/:function :args [..] :result r} ..]
-(defn routines [src]
-  (let [ls (vec (strip src))
+(defn routines [src & [path]]
+  (let [ls (vec (strip src path))
         module (some #(second (re-matches #"^module\s+(\w+)$" %)) ls)]
     (loop [i 0 out []]
       (if (>= i (count ls)) out
@@ -89,7 +116,7 @@
                   decls (keep parse-decl (subvec ls (inc i) (min end (count ls))))
                   wanted (set (map str/lower-case (concat (:params m) (when (= :function (:kind m)) [(:result m)]))))
                   info (reduce (fn [acc [spec names]]
-                                 (reduce (fn [acc n] (let [b (bare-name n)] (if (contains? wanted b) (assoc acc b (assoc spec :rank (rank-of n (:dim spec)))) acc))) acc names))
+                                 (reduce (fn [acc n] (let [b (bare-name n)] (if (contains? wanted b) (assoc acc b (assoc spec :rank (rank-of n (:dim spec)) :dims (or (second (re-find #"\(([^)]*)\)" n)) (:dim spec)))) acc))) acc names))
                                {} decls)
                   rspec (when (= :function (:kind m))
                           (or (get info (:result m))
@@ -105,12 +132,27 @@
 
 (defn edn-name [n] (str/replace n "_" "-"))
 
+(defn ftype-decl [a]
+  (let [ft (case (:type a) "real8" "double precision" "int4" "integer" "int8" "integer(8)" "logical" "logical" "string" "character(len=*)")]
+    (str "       " ft " :: " (:name a) (when (pos? (:rank a)) (str "(" (or (:dims a) (str/join "," (repeat (:rank a) "*"))) ")")))))
+
+(defn interface-of [r]
+  ;; scalars first, so an array's dims may name them
+  (let [[scalars arrays] ((juxt filter remove) #(zero? (:rank %)) (:args r))
+        head (if (= :function (:kind r))
+               (str "     function " (:name r) "(" (str/join ", " (map :name (:args r))) ")" (when (not= (:result r) (:name r)) (str " result(" (:result r) ")")) "\n")
+               (str "     subroutine " (:name r) "(" (str/join ", " (map :name (:args r))) ")\n"))]
+    (str head
+         (str/join "\n" (map ftype-decl (concat scalars arrays))) "\n"
+         (when (= :function (:kind r)) (str (ftype-decl (assoc (:rspec r) :name (:result r) :rank 0)) "\n"))
+         "     end " (name (:kind r)) " " (:name r) "\n")))
+
 (defn manifest [pkg rs]
   (str "{:package \"" pkg ".raw\" :routines ["
        (str/join " "
          (for [r rs]
            (str "{:name \"" (edn-name (:name r)) "\" :symbol \"" pkg "_" (:name r) "_shim\" :args ["
-                (str/join " " (for [a (:args r)] (str "{:name \"" (edn-name (:name a)) "\" :type :" (:type a) " :intent :" (or (:intent a) "inout") " :rank " (:rank a) "}")))
+                (str/join " " (for [a (:args r)] (str "{:name \"" (edn-name (:name a)) "\" :type :" (:type a) " :intent :" (or (:intent a) (if (= "string" (:type a)) "in" "inout")) " :rank " (:rank a) "}")))
                 "]" (when (:rspec r) (str " :returns :" (:type (:rspec r)))) "}")))
        "]}"))
 
@@ -148,7 +190,7 @@
          "\n  end subroutine " pkg "_" (:name r) "_shim\n")))
 
 (defn generate [pkg srcs]
-  (let [rs (mapcat (fn [f] (routines (slurp f))) srcs)
+  (let [rs (mapcat (fn [f] (routines (slurp f) f)) srcs)
         ok (filter bindable? rs)
         skipped (remove bindable? rs)
         modules (distinct (keep :module ok))]
@@ -158,6 +200,11 @@
          "module " pkg "_pkg\n  use iso_c_binding\n"
          (str/join "\n" (for [m modules] (str "  use " m ", only: " (str/join ", " (map :name (filter #(= m (:module %)) ok))))))
          "\n  implicit none\n"
+         (let [ext (remove :module ok)]
+           (when (seq ext)
+             (str "  ! routines outside any module, as F77 writes them: their interfaces, from their declarations\n  interface\n"
+                  (str/join "\n" (map interface-of ext))
+                  "  end interface\n")))
          "  character(kind=c_char, len=*), parameter :: manifest = &\n       " (fortran-string-lines (manifest pkg ok)) " // c_null_char\n"
          "  ! filled at the first call, not initialised: flang will not fold transfer of a long string\n  character(kind=c_char), allocatable, target, save :: manifest_buf(:)\n"
          "contains\n"
@@ -169,7 +216,7 @@
 (let [args *command-line-args*
       opt (fn [k] (second (drop-while #(not= % k) args)))
       pkg (opt "--package") out (opt "--out")
-      srcs (->> args (partition-all 2 1) (remove (fn [[a _]] (str/starts-with? a "--"))) (map first) (remove #(contains? #{pkg out} %)) (filter #(re-find #"\.f90$" %)))]
+      srcs (->> args (partition-all 2 1) (remove (fn [[a _]] (str/starts-with? a "--"))) (map first) (remove #(contains? #{pkg out} %)) (filter #(re-find #"(?i)\.(f90|f95|f03|f08|f|for|f77)$" %)))]
   (when-not (and pkg out (seq srcs)) (binding [*out* *err*] (println "usage: scripts/bind-fortran --package NAME --out FILE.f90 SRC.f90 [SRC.f90 ...]")) (System/exit 2))
   (spit out (generate pkg srcs))
   (println "wrote" out "for" pkg "from" (str/join ", " srcs)))

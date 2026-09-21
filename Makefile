@@ -164,7 +164,11 @@ $(B)/Eval.o: $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.
 # The reference BLAS (src/f/blas/PROVENANCE.md), F77 fixed form, as a
 # PACKAGE beside its Clojure in packages/blas, opened at run time; the
 # base binary links no BLAS.
-packages/blas/libblas.$(SOEXT): $(S)/blas/dgemm.f $(S)/blas/lsame.f $(S)/blas/xerbla.f packages/blas/blas_shims.f90 | $(B) $(FCSTAMP)
+# Its shims and manifest are GENERATED from the F77 sources by scripts/bind-fortran.
+blas-sources = $(S)/blas/dgemm.f $(S)/blas/lsame.f $(S)/blas/xerbla.f
+packages/blas/blas_bind.f90: $(blas-sources) scripts/bind-fortran
+	scripts/bind-fortran --package blas --out $@ $(blas-sources)
+packages/blas/libblas.$(SOEXT): $(blas-sources) packages/blas/blas_bind.f90 | $(B) $(FCSTAMP)
 	mkdir -p $(PKGMOD)
 	$(FC) $(filter-out -frecursive -J$(B),$(FCFLAGS)) -J$(PKGMOD) -shared -fPIC -o $@ $^
 

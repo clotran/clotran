@@ -1,9 +1,9 @@
 (ns blas
   "The reference BLAS (netlib, vendored unmodified in src/f/blas) as a
   clotran package: packages/blas/libblas behind the door
-  (src/f/DynLoad.f90), the shim and manifest in blas_shims.f90. The raw
-  positional fn is blas.raw/dgemm, interned from the manifest by
-  fortran/load-package; this namespace is the API.")
+  (src/f/DynLoad.f90), its shims and manifest generated from the F77
+  sources by scripts/bind-fortran. blas.raw/dgemm is DGEMM as netlib
+  declares it, thirteen positional arguments; this namespace is the API.")
 
 (defn dgemm
   "C = A x B for two real8 rank-2 arrays; a new real8 array, m by n.
@@ -14,5 +14,5 @@
     (when (or (nil? k) (nil? n) (not= k k2))
       (throw (ex-info "dgemm: inner dimensions differ" {:a [m k] :b [k2 n]})))
     (let [c (fortran/make-array "real8" m n)]
-      (blas.raw/dgemm a b c)
+      (blas.raw/dgemm "N" "N" m n k 1.0 a m b k 0.0 c m)
       c)))

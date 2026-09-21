@@ -423,9 +423,11 @@ the manifest; the Makefile builds the library with `-shared -fPIC`.
 test/f/samplelib.f90 is a library written with no thought of clotran,
 bound by the generator and called through the door in the language
 test. A hand-written binding (ChemSol's, with its unit-44 and unit-45
-handling; BLAS's F77) is a shim like any other. Not read yet:
-fixed-form F77, derived types, optional and pointer dummies -- listed
-in the output rather than guessed. A package manager is
+handling) is a shim like any other. Fixed-form F77 is read too -- BLAS's
+binding is generated from netlib's own dgemm.f, with an interface block
+for procedures outside a module; an intent F77 cannot declare is taken as
+:inout. Not read: derived types, optional and pointer dummies -- listed in
+the output rather than guessed. A package manager is
 then a directory of such libraries and a `deps.edn`-shaped manifest
 naming them -- one with ChemSol and GAMESS, another with Qdyn -- and
 `clotran-bin` never changes. BLAS and ChemSol become the first two

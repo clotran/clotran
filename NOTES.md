@@ -3577,3 +3577,16 @@ shims into build/, builds `libsamplelib`, and the language test calls
 all six routines through the door. That is a package declared rather
 than hand-bound, which is what a package manager needs from a library:
 its sources and nothing else.
+
+**F77 too.** James asked whether F77 had to wait, and it does not: the
+generator reads fixed form -- a `C`, `*` or `!` in column 1 is a comment,
+a non-blank column 6 continues the line, columns 7 to 72 carry the
+statement -- and the declarations F77 writes, `DOUBLE PRECISION
+A(LDA,*)`, `INTEGER M,N`, `CHARACTER TRANSA`, with no `::` and no
+`intent`. A procedure outside any module gets an interface block in the
+shim from those declarations, scalars first so an array's dims may name
+them. An intent F77 cannot declare is taken as `:inout`, which is safe
+and shows as extra keys in the answer; a string can only go in, so it is
+`:in`. BLAS's binding is generated from netlib's `dgemm.f` now, the hand
+shim is gone, and `blas.raw/dgemm` is DGEMM as netlib declares it,
+thirteen arguments; `blas/dgemm` wraps it as before.

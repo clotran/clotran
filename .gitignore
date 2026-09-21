@@ -8,3 +8,4 @@
 /packages/*/lib*.so
 /packages/*/*.mod
 /packages/*/*.dSYM
+/packages/*/*_bind.f90
