@@ -181,6 +181,10 @@ module Eval
        B_COMPARATOR = 314, B_RSEQ = 315
   ! The unchecked arithmetic, which wraps where + - * inc dec throw
   integer, parameter :: B_UADD = 316, B_USUB = 317, B_UMUL = 318, B_UINC = 319, B_UDEC = 320
+  ! A stand-in for a JVM object clotran has no counterpart to but code
+  ! calls methods on -- a class loader, a thread: non-nil, so the call
+  ! reaches its row instead of a NullPointerException
+  integer, parameter :: B_STUB = 321
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -1887,6 +1891,16 @@ contains
        end if
     end if
 
+    ! A method called on nil is a NullPointerException, as on the JVM:
+    ! (.toUpperCase nil) is how clojure.string's fns fail on nil there.
+    if (.not. class_target) then
+       tv = strip_meta(vs_get(base + 1))
+       if (tv%tag == GCT_NIL) then
+          call raise_class("NullPointerException", "Cannot invoke ." // mname // " on nil", [vs_get(base + 1)])
+          call vs_leave(base)
+          return
+       end if
+    end if
     out = instance_member(mname, vs_get(base + 1))
     if (.not. has_error) then
        ! The target is the first argument, which is all an instance
@@ -2177,6 +2191,13 @@ contains
        if (gcv_count(vs_get(base + 1)) > 0) then
           thunk = strip_meta(gcv_nth(vs_get(base + 1), 0))
           if (thunk%tag == GCT_INT) thunk = gc_str("", [vs_get(base + 1)])
+          if (thunk%tag == GCT_NIL) then
+             ! (StringBuilder. nil) is a NullPointerException, which is
+             ! how clojure.string/reverse fails on nil
+             call raise_class("NullPointerException", "StringBuilder of nil", [vs_get(base + 1)])
+             call vs_leave(base)
+             return
+          end if
        end if
        call vs_set(base + 3, thunk)
        out = gc_obj(OBJ_SB, [vs_get(base + 3)], [vs_get(base + 3)])
@@ -5583,6 +5604,11 @@ contains
          character(len=:), allocatable :: t
          integer :: lo, hi
          a = gcv_nth(args, 0)
+         if (a%tag == GCT_NIL) then
+            call raise_class("NullPointerException", "subs of nil", [vs_get(base + 1)])
+            call vs_leave(base)
+            return
+         end if
          t = gc_ref_text(a%ref)
          b = gcv_nth(args, 1)
          lo = b%ival + 1
@@ -6396,6 +6422,8 @@ contains
     case (B_NPROCS)
        ! Runtime.availableProcessors: one OS thread runs everything here
        out = gc_int(1_gc_ip)
+    case (B_STUB)
+       out = gc_key("clotran/stub", [vs_get(base + 1)])
     case (B_SORTEDMAP, B_SORTEDSET)
        ! PersistentTreeMap/create keyvals, or comparator keyvals, and
        ! PersistentTreeSet/create likewise over keys (sorted.inc)
@@ -7871,6 +7899,11 @@ contains
          integer :: lim
          pv = strip_meta(gcv_nth(args, 0))
          sv = strip_meta(gcv_nth(args, 1))
+         if (sv%tag == GCT_NIL) then
+            call raise_class("NullPointerException", "split of nil", [vs_get(base + 1)])
+            call vs_leave(base)
+            return
+         end if
          lim = 0
          if (n >= 3) then
             lv = strip_meta(gcv_nth(args, 2))

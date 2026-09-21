@@ -1705,6 +1705,20 @@
     call vs_set(base + 2, tv)
     call vs_set(base + 3, argv)
     native = gc_slot(nd, 3)
+    ! a method called on nil is a NullPointerException, on this path
+    ! as on eval_dot's
+    if (from == 1) then
+       block
+         type(gc_value) :: tv2
+         tv2 = strip_meta(tv)
+         if (tv2%tag == GCT_NIL) then
+            call raise_class("NullPointerException", &
+                 "Cannot invoke ." // sym_text(gc_slot(vs_get(base + 1), 2)) // " on nil", [vs_get(base + 1)])
+            call vs_leave(base)
+            return
+         end if
+       end block
+    end if
     if (from == 1 .and. gc_kind(native) == OBJ_BUILTIN .and. &
          gc_kind(strip_meta(tv)) /= OBJ_INST .and. .not. gcn_is_var(strip_meta(tv))) then
        ! (target args...) through the native

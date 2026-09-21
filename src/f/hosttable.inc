@@ -212,8 +212,8 @@
        hm("java.lang.Math", "toIntExact", B_MATH0 + 45, "clotran-math-toIntExact"), &
   ! The thread pools send and send-off name go straight to .dispatch, which
   ! runs the action on the spot, so there is nothing for them to be.
-       hm("clojure.lang.Agent", "pooledExecutor", HK_NIL), &
-       hm("clojure.lang.Agent", "soloExecutor", HK_NIL), &
+       hm("clojure.lang.Agent", "pooledExecutor", B_ALWAYS_NIL, "clotran-nil"), &
+       hm("clojure.lang.Agent", "soloExecutor", B_ALWAYS_NIL, "clotran-nil"), &
        hm("clojure.lang.Agent", "shutdown", B_ALWAYS_NIL, "clotran-nil"), &
        hm("clojure.lang.Compiler", "specials", HK_SPECIALS), &
        hm("clojure.lang.Compiler", "macroexpand1", B_MACROEXP1, "clotran-macroexpand-1"), &
@@ -289,7 +289,7 @@
        hm("java.lang.Character", "toUpperCase", B_UPCASE, "clotran-upcase"), &
        hm("java.lang.Character", "toLowerCase", B_DOWNCASE, "clotran-downcase"), &
   ! One thread: it answers itself, and .getStackTrace on it answers the frames.
-       hm("java.lang.Thread", "currentThread", B_BASELOADER, "clotran-current-thread"), &
+       hm("java.lang.Thread", "currentThread", B_STUB, "clotran-stub"), &
        hm("java.lang.Integer", "MAX_VALUE", HK_INT, "", 2147483647_gc_ip), &
        hm("java.lang.Integer", "MIN_VALUE", HK_INT, "", -2147483648_gc_ip), &
   ! Long's bounds are clotran's own: an integer here IS a 64-bit one.
@@ -359,7 +359,7 @@
   ! tasks run; one OS thread runs them all, which is what
   ! availableProcessors answers; TimeUnit is a marker, milliseconds only.
        hm("java.lang.Thread", "sleep", B_SLEEP, "clotran-sleep"), &
-       hm("java.lang.Runtime", "getRuntime", B_ALWAYS_NIL, "clotran-nil"), &
+       hm("java.lang.Runtime", "getRuntime", B_NPROCS, "clotran-processors"), &
        hm("java.util.concurrent.TimeUnit", "MILLISECONDS", HK_INT, "", 1_gc_ip), &
   ! Clojure on this host (clotran.rt, reached by name through rt_call):
   ! the iterator pieces behind sequence, iterator-seq and eduction, and
@@ -381,7 +381,7 @@
        hm("clojure.lang.Numbers", "double_array", B_RTFN, "double-array-of") ]
   type(hm), parameter :: HOST_STATICS(310) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
-  type(hm), parameter :: HOST_METHODS_1(87) = [ &
+  type(hm), parameter :: HOST_METHODS_1(88) = [ &
   ! Instance members. The target becomes the first argument, which is all
   ! an instance method is: (.withMeta x m) calls with-meta on x and m.
        hm("", "meta", B_META, "meta"), &
@@ -408,8 +408,8 @@
        hm("", "getClass", B_CLASSOF, "clotran-class"), &
   ! No boxing, no classpath, no class loader: nil is the honest answer for each.
        hm("", "getComponentType", B_ALWAYS_NIL, "clotran-nil"), &
-       hm("", "getClassLoader", B_ALWAYS_NIL, "clotran-nil"), &
-       hm("", "getContextClassLoader", B_ALWAYS_NIL, "clotran-nil"), &
+       hm("", "getClassLoader", B_STUB, "clotran-stub"), &
+       hm("", "getContextClassLoader", B_STUB, "clotran-stub"), &
        hm("", "getResources", B_ALWAYS_NIL, "clotran-nil"), &
        hm("", "isRealized", B_ISREALIZED, "clotran-is-realized"), &
   ! Namespace members: the mappings ARE slot 2, not a copy.
@@ -470,6 +470,7 @@
        hm("", "toLowerCase", B_DOWNCASE, "clotran-downcase"), &
   ! No cause chain to walk.
        hm("", "getCause", B_ALWAYS_NIL, "clotran-nil"), &
+       hm("", "printStackTrace", B_ALWAYS_NIL, "clotran-nil"), &
        hm("", "append", B_APPEND, "clotran-append"), &
        hm("", "charAt", B_CHARAT, "clotran-char-at"), &
        hm("", "write", B_WRITE, "clotran-write"), &
@@ -560,5 +561,5 @@
        hm("", "isCancelled", B_TASKCANCELLED, "clotran-task-cancelled"), &
        hm("", "cancel", B_TASKCANCEL, "clotran-task-cancel"), &
        hm("", "availableProcessors", B_NPROCS, "clotran-processors") ]
-  type(hm), parameter :: HOST_METHODS(156) = [HOST_METHODS_1, HOST_METHODS_2]
+  type(hm), parameter :: HOST_METHODS(157) = [HOST_METHODS_1, HOST_METHODS_2]
 

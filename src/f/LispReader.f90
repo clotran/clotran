@@ -1176,7 +1176,26 @@ contains
           case ("n"); acc = acc // achar(10)
           case ("t"); acc = acc // achar(9)
           case ("r"); acc = acc // achar(13)
+          case ("b"); acc = acc // achar(8)
+          case ("f"); acc = acc // achar(12)
           case ('"'); acc = acc // '"'
+          case ("u")
+             ! \uXXXX: four hex digits, the code point, as UTF-8 bytes --
+             ! a string is bytes here, so "é" is the two of e-acute
+             if (pos + 4 > len(text)) then
+                call fail("EOF in a \u escape")
+                return
+             end if
+             block
+               integer :: cp, ios
+               read(text(pos+1:pos+4), '(Z4)', iostat=ios) cp
+               if (ios /= 0) then
+                  call fail("Invalid unicode escape: \u" // text(pos+1:pos+4))
+                  return
+               end if
+               acc = acc // utf8_of(cp)
+               pos = pos + 4
+             end block
           case default; acc = acc // text(pos:pos)
           end select
        else
@@ -1186,6 +1205,19 @@ contains
     end do
     v = gc_str(acc, roots)
   end function read_string
+
+  ! A code point as UTF-8, one to three bytes.
+  function utf8_of(cp) result(s)
+    integer, intent(in) :: cp
+    character(len=:), allocatable :: s
+    if (cp < 128) then
+       s = achar(cp)
+    else if (cp < 2048) then
+       s = achar(192 + cp / 64) // achar(128 + mod(cp, 64))
+    else
+       s = achar(224 + cp / 4096) // achar(128 + mod(cp / 64, 64)) // achar(128 + mod(cp, 64))
+    end if
+  end function utf8_of
 
   ! A backslash takes the very next character unconditionally, then
   ! any word characters after it -- so \( and \" read, and the named

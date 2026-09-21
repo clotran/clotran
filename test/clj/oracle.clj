@@ -1909,3 +1909,27 @@
 (try (sorted-set-by < 1 "a") (catch Exception e :ex))
 
 [(sorted-set nil) (sorted-set 1.5 1) (sorted-set "b" "a") (sorted-set [2] [1])]
+
+;; \u escapes in strings, and a method called on nil is a
+;; NullPointerException, which is how clojure.string's fns fail on nil
+"Aé x"
+
+(= "A" "A")
+
+(do (require 'clojure.string) (try (clojure.string/upper-case nil) (catch NullPointerException e :npe)))
+
+(do (require 'clojure.string) (try (clojure.string/reverse nil) (catch NullPointerException e :npe)))
+
+(do (require 'clojure.string) (try (clojure.string/split nil #"-") (catch NullPointerException e :npe)))
+
+(do (require 'clojure.string) (try (clojure.string/capitalize nil) (catch NullPointerException e :npe)))
+
+(do (require 'clojure.string) (try (clojure.string/trim nil) (catch NullPointerException e :npe)))
+
+(do (require 'clojure.string) (try (clojure.string/replace nil #"a" "b") (catch NullPointerException e :npe)))
+
+(try (.toUpperCase nil) (catch NullPointerException e :npe))
+
+(try (subs nil 0 1) (catch NullPointerException e :npe))
+
+[@(future 1) (count (pmap inc [1 2 3])) (pos? (.availableProcessors (Runtime/getRuntime)))]
