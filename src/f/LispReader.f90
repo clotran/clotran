@@ -36,6 +36,19 @@ module LispReader
 
   public :: gcr_read, gcr_read_all, gcr_error, gcr_has_error
   public :: gcr_begin_file, gcr_read_next, gcr_position, gcr_position_parts
+  public :: gcr_set_ns_resolver
+
+  ! ::x is resolved at READ time against the current namespace, and
+  ! ::a/x against its aliases -- which the reader does not know. The
+  ! evaluator installs the lookup; a resolver is what LispReader.java
+  ! reaches through Compiler.currentNS and namespaceFor.
+  abstract interface
+     function ns_resolver_i(alias) result(ns)
+       character(len=*), intent(in) :: alias
+       character(len=:), allocatable :: ns
+     end function ns_resolver_i
+  end interface
+  procedure(ns_resolver_i), pointer, save :: ns_resolver => null()
 
   ! SOURCE POSITIONS. A list form records where it was read from:
   ! OBJ_CONS's i2 (free: i1 is the count) holds file-id * 2^26 + the
@@ -1316,12 +1329,41 @@ contains
           call fail("Invalid number: " // tok)
           v = gc_nil()
        end if
+    else if (len(tok) > 2 .and. tok(1:2) == "::" .and. associated(ns_resolver)) then
+       ! ::name is :current-ns/name and ::alias/name goes through
+       ! the alias, as LispReader.matchSymbol reads them; an alias
+       ! that resolves to nothing is "Invalid token: ::a/x". It was
+       ! read as a keyword whose NAME began with a colon, so ::a and
+       ! :user/a were two different keywords and (namespace ::a) nil.
+       block
+         character(len=:), allocatable :: ns
+         integer :: slash
+         slash = index(tok, "/")
+         if (slash > 0) then
+            ns = ns_resolver(tok(3:slash-1))
+         else
+            ns = ns_resolver("")
+         end if
+         if (len(ns) == 0) then
+            call fail("Invalid token: " // tok)
+            v = gc_nil()
+         else if (slash > 0) then
+            v = gc_key(ns // tok(slash:), roots)
+         else
+            v = gc_key(ns // "/" // tok(3:), roots)
+         end if
+       end block
     else if (len(tok) > 1 .and. tok(1:1) == ":") then
        v = gc_key(tok(2:), roots)
     else
        v = gc_sym(tok, roots)
     end if
   end function read_atom
+
+  subroutine gcr_set_ns_resolver(f)
+    procedure(ns_resolver_i) :: f
+    ns_resolver => f
+  end subroutine gcr_set_ns_resolver
 
   ! ---- number recognition ----
   !

@@ -1107,6 +1107,21 @@
        (let [p (promise)] (th/join (th/spawn (fn [] (th/send! (th/self) :note) (deliver p (th/receive)) @p)))) :note)
 (check "the main thread is not joinable" (try (th/join (th/self)) (catch Throwable e :no)) :no)
 
+;;; ---- ::keywords resolve in the reader, against *ns* and its aliases ----
+(check "::b is the current namespace's" (namespace ::b) "user")
+(check "and prints so" (pr-str ::b) ":user/b")
+(require '[clojure.string :as lt-s])
+(check "::alias/x goes through the alias" (namespace ::lt-s/x) "clojure.string")
+(check "a namespace name is not an alias" (try (read-string "::clojure.core/x") (catch Exception e :invalid)) :invalid)
+(check "an alias nobody made is an invalid token" (try (read-string "::nope/x") (catch Exception e (boolean (re-find #"Invalid token" (.getMessage e))))) true)
+
+;;; ---- & is the rest marker, never a local: Compiler.java LetExpr.Parser
+;;; at 71b4623d says "Can't use & as a local binding". The clj on this
+;;; machine is 1.12.0 and answers 42, so it is a language-test case,
+;;; not an oracle one.
+(check "& is not a let* binding" (try (eval '(let* [& 42] &)) (catch Exception e :threw)) :threw)
+(check "nor a loop* binding" (try (eval '(loop* [& 42] &)) (catch Exception e :threw)) :threw)
+
 (println "")
 (if (zero? @*failures*)
   (println "LANGUAGE TESTS PASSED")

@@ -1933,3 +1933,80 @@
 (try (subs nil 0 1) (catch NullPointerException e :npe))
 
 [@(future 1) (count (pmap inc [1 2 3])) (pos? (.availableProcessors (Runtime/getRuntime)))]
+
+;; a host error is an exception with a message; a symbol is callable;
+;; keyword arguments merge a trailing map; a keyword called with the
+;; wrong count is an ArityException; and the small edges the suite named
+(try (first 1) (catch RuntimeException e (boolean (.getMessage e))))
+
+(try (get-in {:a 1} 5) (catch Exception e (boolean (re-find #"ISeq" (.getMessage e)))))
+
+['b {'b 2}]
+
+('b {'b 2})
+
+('c {'b 2} :none)
+
+(let [addn (fn [n & {:keys [a b] :or {a 0 b 0}}] (+ n a b))] [(addn 100 :a 1 {:b 2}) (addn 100 :a 1) (addn 100 {:a 5 :b 2})])
+
+(try (:kw) (catch IllegalArgumentException e (.getMessage e)))
+
+(try (apply :foo/bar (range 20)) (catch IllegalArgumentException e (.getMessage e)))
+
+(try (apply :foo/bar (range 21)) (catch IllegalArgumentException e (.getMessage e)))
+
+[(parse-long "9223372036854775807") (parse-long "-9223372036854775808") (parse-long "+42") (parse-long "x")]
+
+(pr-str #'pr-str)
+
+(ex-data (ex-info "message" nil))
+
+(try (eval '(throw)) (catch RuntimeException e :rt))
+
+(try (.jump "foo" 1) (catch Exception e (boolean (re-find #"No matching method.*taking 1 arg" (.getMessage e)))))
+
+(reduce-kv + 10 [2 4 6])
+
+(reduce-kv (fn [acc i x] (if (= i 1) (reduced acc) (+ acc x))) 0 [5 6 7])
+
+[(= [1 2 3 4 5] (eduction (map inc) (range 5))) (= (eduction (map inc) []) []) (= [1] (eduction (map inc) [5]))]
+
+[(clojure.math/floor-div Long/MIN_VALUE -1) (clojure.math/floor-div -7 2) (clojure.math/floor-div 7 -2)]
+
+[(= ##Inf (clojure.math/ulp ##Inf)) (= Double/MIN_VALUE (clojure.math/ulp 0.0)) (clojure.math/ulp 1.0)]
+
+(NaN? (clojure.math/IEEE-remainder 2 0.0))
+
+;; the operations a metadata-carrying collection answers, and the
+;; metadata it keeps -- dissoc on one answered it UNCHANGED
+(let [m (with-meta {:a 1 :b 2} {:m 1})] [(dissoc m :a) (meta (dissoc m :a)) (dissoc m :zz) (assoc m :c 3) (meta (assoc m :c 3)) (get m :a) (m :a) (:a m) (count m) (contains? m :a) (find m :a) (keys m) (vals m) (seq m) (merge m {:c 3}) (update m :a inc) (select-keys m [:a]) (= m {:a 1 :b 2}) (empty m) (meta (empty m)) (into m [[:z 9]]) (meta (into m [[:z 9]])) (reduce-kv (fn [acc k v] (+ acc v)) 0 m) (dissoc m :a :b)])
+
+(let [v (with-meta [1 2 3] {:m 1})] [(conj v 4) (meta (conj v 4)) (pop v) (meta (pop v)) (peek v) (nth v 0) (v 1) (subvec v 1) (count v) (first v) (rest v) (next v) (= v [1 2 3]) (= v '(1 2 3)) (reduce + v) (into v [4]) (meta (into v [4])) (map inc v) (assoc v 0 9) (meta (assoc v 0 9)) (empty v) (meta (empty v)) (vec v) (set v) (sort v) (apply + v) (empty? v) (str v)])
+
+(let [s (with-meta #{1 2} {:m 1})] [(disj s 1) (meta (disj s 1)) (conj s 3) (meta (conj s 3)) (contains? s 1) (s 1) (get s 2) (count s) (= s #{1 2}) (empty s) (meta (empty s)) (seq (sort s))])
+
+(let [l (with-meta '(1 2) {:m 1})] [(conj l 0) (meta (conj l 0)) (pop l) (peek l) (first l) (rest l) (count l) (= l [1 2]) (vec l)])
+
+(do (defrecord R2 [a b]) (let [r (->R2 1 2)] [(map? (dissoc r :a)) (record? (dissoc r :a)) (dissoc r :a) (= (dissoc r :zz) r) (assoc r :c 3) (:a (assoc r :c 3)) (into {} r)]))
+
+;; auto-resolved keywords read against the current namespace, and its aliases
+(let [k (read-string "::b")] [(pr-str k) (namespace k) (name k) (= k :user/b) (keyword? k)])
+
+(require '[clojure.string :as s])
+
+(let [k (read-string "::s/x")] [(pr-str k) (namespace k) (= k :clojure.string/x) (try (read-string "::clojure.core/y") (catch Exception e :invalid))])
+
+(try (read-string "::nope/x") (catch Exception e (boolean (re-find #"Invalid token" (.getMessage e)))))
+
+(binding [*ns* (find-ns 'clojure.string)] (read-string "::q"))
+
+(try (derive :user/a :user/b) (derive :user/b :user/a) (catch Exception e (.getMessage e)))
+
+;; a namespace carries metadata
+(do (alter-meta! *ns* assoc :k 1) [(:k (meta *ns*)) (instance? clojure.lang.IMeta *ns*)])
+
+(do (def stub-me :orig) (let [p (promise)] (try (with-redefs [stub-me :temp] (deliver p stub-me) (throw (Exception. "x"))) (catch Exception e nil)) [@p stub-me]))
+
+(let [m (into (sorted-map) '{1 a, 2 b, 3 c, 4 d})] [(reduce-kv str "" m) (reduce-kv (fn [acc k v] (reduced (+ acc k))) 0 m)])
+
+[(instance? clojure.lang.IKVReduce {}) (instance? clojure.lang.IKVReduce []) (instance? clojure.lang.IKVReduce (sorted-map))]

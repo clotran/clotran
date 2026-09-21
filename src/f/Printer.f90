@@ -358,7 +358,12 @@ contains
     case (OBJ_ATOM)
        s = "#<atom " // gcp_str(gc_slot(v, 1), readable) // ">"
     case (OBJ_VAR)
-       s = "#'" // gcp_str(gc_slot(v, 4), .false.)
+       ! #'ns/name, as Var.toString prints it
+       if (gc_kind(gc_slot(v, 3)) == OBJ_NS) then
+          s = "#'" // gcp_str(gc_slot(gc_slot(v, 3), 1), .false.) // "/" // gcp_str(gc_slot(v, 4), .false.)
+       else
+          s = "#'" // gcp_str(gc_slot(v, 4), .false.)
+       end if
     case (OBJ_NS)
        ! The PRINT form, for pr, print, prn and any namespace nested in
        ! a collection -- Clojure shows #object[clojure.lang.Namespace

@@ -429,7 +429,7 @@ contains
          "(do (def target (fn* [] :old)) (def caller (fn* [] (target)))" // &
          " (def target (fn* [] :new)) (caller))", ":new")
     ! #'x is the Var itself, not its value.
-    call ev("17g. ", "(do (def q 3) (var q))", "#'q")
+    call ev("17g. ", "(do (def q 3) (var q))", "#'user/q")
     call ev_err("17h. ", "(try (var nosuch) (catch Throwable e :unresolved))")
     ! A second namespace has its own bindings.
     call ev("17i. ", &

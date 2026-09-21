@@ -913,7 +913,13 @@
     else if (gc_ref_is(head%ref, "lazy-seq*")) then
        nd = analyze_lazy(vs_get(base + 3), vs_get(base + 2))
     else if (gc_ref_is(head%ref, "throw")) then
-       nd = analyze_one(N_THROW, gcl_first(vs_get(base + 3)), vs_get(base + 2))
+       if (gcl_count(vs_get(base + 3)) < 1) then
+          call fail("Too few arguments to throw, expected: a single Throwable instance")
+       else if (gcl_count(vs_get(base + 3)) > 1) then
+          call fail("Too many arguments to throw, expected: a single Throwable instance")
+       else
+          nd = analyze_one(N_THROW, gcl_first(vs_get(base + 3)), vs_get(base + 2))
+       end if
     else if (gc_ref_is(head%ref, "try")) then
        nd = analyze_try(vs_get(base + 3), vs_get(base + 2))
     else if (gc_ref_is(head%ref, "case*")) then
@@ -1135,6 +1141,12 @@
        k = strip_meta(gcv_nth(vs_get(base + 3), 2 * i))
        if (k%tag /= GCT_SYM) then
           call fail("let* needs a symbol to bind")
+          call vs_leave(base)
+          return
+       end if
+       ! Compiler.LetExpr.Parser: & is the rest marker, not a name
+       if (gc_ref_is(k%ref, "&")) then
+          call fail("Can't use & as a local binding")
           call vs_leave(base)
           return
        end if

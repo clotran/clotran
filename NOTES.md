@@ -1158,13 +1158,17 @@ absence for a 1-in-6 bug.
       collection, and check 14d (throwing a list and counting it in
       the handler) is what proves it.
 
-      An internal error is catchable too, and arrives as a **map**,
-      `{:error "message"}`, not a bare string. A string would be
+      An internal error is catchable too, and arrives as an
+      **exception object** -- class `RuntimeException`, the message
+      as `.getMessage` -- not a bare string. A string would be
       indistinguishable from `(throw "x")`, so a handler that wants to
       re-raise anything it does not recognise would have no way to
       tell them apart. clotran's older evaluator uses a string here;
       this is a deliberate improvement on it rather than an accident
-      of the port. Checks 14i/14j are that distinction.
+      of the port. Checks 14i/14j are that distinction. (It was the
+      map `{:error "message"}` until `ex-message` and `(catch
+      RuntimeException e ..)` needed to work on one; see "The
+      language's leftovers" below.)
 
       **What `catch` cannot catch: a Fortran runtime error.** Fortran
       has no exceptions and no stack unwinding, so a segfault, a failed
@@ -1998,7 +2002,8 @@ And `parse-long` is written around a TYPED exception:
 
     (try (Long/valueOf s) (catch NumberFormatException _ nil))
 
-`fail` produces `{:error "..."}`, an ordinary map, and `catch_matches`
+`fail` produced `{:error "..."}`, an ordinary map (now a
+RuntimeException object), and `catch_matches`
 only lets `Throwable` and `Exception` catch one of those -- so the
 failure escaped the function whose entire purpose was to contain it, and
 `(parse-long "x")` was an error instead of nil. `fail_as` throws a named
@@ -3182,3 +3187,78 @@ were counted by message and worked in order, each its own commit:
   destructuring, `(Object.)` as a sentinel (`get-in`'s not-found
   path uses one), the bit tests, `long-array` and `double-array` over
   Fortran arrays.
+
+## The language's leftovers: what the reader never resolved, and what the runtime never raised
+
+The next pass over the suite's failures turned up two things that were
+not test-shaped bugs but language gaps that had never been noticed
+because everything agreed with itself.
+
+**`::keyword` was never resolved.** The reader took `::b` as a keyword
+whose NAME began with a colon: it printed as `::b`, `(namespace ::b)`
+was nil, and `(= ::b :user/b)` was false. core.clj uses `::` nine
+times and every use compares a `::x` to another `::x`, so nothing
+broke; the first thing that asked the keyword what it was named was
+the multimethods suite's "Cyclic derivation: ::child has ::ancestor-1
+as ancestor". LispReader.java resolves at READ time through
+`Compiler.currentNS` and `namespaceFor` -- the current namespace for
+`::x`, the alias -- an alias only, `lookupAlias`, so `::clojure.core/y`
+is an invalid token even there -- for `::a/x`, and "Invalid token" for
+an alias nobody made. LispReader.f90 cannot see namespaces, so the
+evaluator installs a resolver the way it installs the sorted map's
+comparer (`gcr_set_ns_resolver`, `kw_ns_of`). One
+consequence worth knowing: a `::alias/x` is read when its FORM is
+read, so the `require` that makes the alias has to be an earlier
+top-level form, exactly as on the JVM -- a `(do (require ..) ::a/x)`
+is an invalid token there too.
+
+**A host failure was a map.** `fail` threw `{:error "message"}`, so
+`(catch RuntimeException e (.getMessage e))` could not see it,
+`ex-message` answered nil, and `thrown-with-msg?` never matched an
+error the host raised. `error_value` now builds the same OBJ_ERR that
+`fail_as` builds, of class RuntimeException. With it came the second
+fact of class hierarchy after ArityException's: `RuntimeException`
+catches every runtime class clotran throws (`is_runtime_class` lists
+them), and nothing else -- `(catch RuntimeException e ..)` does not
+take an `Exception.` someone threw, as on the JVM.
+
+The rest were the suite's own findings, each checked against `clj`
+before it became an oracle case:
+
+- **`dissoc` on a metadata-carrying map answered it unchanged.**
+  `gca_dissoc` saw the wrapper, not a map, and returned its argument;
+  so a record's own field would not dissoc, because `without` is
+  `(dissoc (with-meta (into {} this) __meta) k)`. It strips and keeps
+  the metadata now, as `assoc` and `conj` did, and the oracle has a
+  block of every operation over a wrapped map, vector, set and list.
+- **A namespace's metadata.** `alter-meta!` set it and `meta` read
+  nil, because `(meta x)` is `(if (instance? IMeta x) (.meta x))` and
+  a Namespace did not claim IMeta.
+- **`(seq (eduction ..))` was nil.** core.clj's own Eduction has
+  `iterator` and `reduce` and no `seq`; RT.seqFrom seqs an Iterable
+  through its iterator, so `inst_seq` does the same via
+  `chunk-iterator-seq`. With that, `(= [2 3] (eduction (map inc) [1
+  2]))` compares element by element, one instance to one sequence --
+  two eductions stay unequal, as Object's equals leaves them.
+- **`reduce-kv` on a vector.** The vector claims `IKVReduce` in its
+  supers, so the protocol reaches `.kvreduce`, a row to
+  clotran.rt's `kvreduce-of`: index and element, stopping at a
+  reduced value.
+- **Callable things.** A keyword called with no argument or with
+  three is `ArityException` with the JVM's count and its `(> 20)`;
+  a symbol is callable, the same lookup as a keyword's;
+  `createAsIfByAssoc` merges a trailing map, which is what `(f :a 1
+  {:b 2})` with `& {:keys ..}` means since 1.11.
+- **`Long/valueOf`** read through Fortran's list-directed input,
+  which took "1 2" and "1,2" as 1 and truncated Long/MAX_VALUE to 32
+  bits. It is an optional sign and digits now, and 64-bit.
+- **Small edges the tests named.** `(ex-data (ex-info "m" nil))` is
+  `{}`; `(pr-str #'inc)` is `#'clojure.core/inc`; `(throw)` and
+  `(throw a b)` are analysis errors; `& ` is not a `let*` or `loop*`
+  binding ("Can't use & as a local binding", Compiler.LetExpr.Parser
+  -- the clj on this machine is 1.12 and allows it, so that is a
+  language-test check, not an oracle case); a method the table does
+  not have fails in Reflector's words, "No matching method jump found
+  taking 1 args for class String"; `Math.ulp` of infinity and zero,
+  `IEEEremainder` by zero, and `floorDiv` of Long/MIN_VALUE by -1,
+  which wraps rather than passing through a double.

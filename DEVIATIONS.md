@@ -99,7 +99,17 @@ what we already mean by `rest`, `Numbers/add` is `+` -- so the entries are
 bindings, not adapters. It grows as core.clj asks for more.
 
 An unlisted member fails **by name**, never as a generic `.` failure, so a
-load report says which one to add next.
+load report says which one to add next -- in Reflector's words for an
+instance member, "No matching method jump found taking 1 args for class
+String", so `thrown-with-msg?` can match it.
+
+The exception classes have no hierarchy either, with two edges and a
+ceiling: `Throwable` and `Exception` catch everything; `RuntimeException`
+catches every runtime class clotran throws (`is_runtime_class` lists them,
+and a host failure is one); `ArityException` is an
+`IllegalArgumentException`. A class caught under any other parent --
+`(catch IndexOutOfBoundsException e ..)` for an
+`ArrayIndexOutOfBoundsException` -- is not caught.
 
 ## 5. Metadata is a wrapper object
 
@@ -736,19 +746,18 @@ Closing it would mean tracking a declared element type per call site
 and rejecting a value whose Clojure type is not exactly it, which is
 re-creating boxing in order to reproduce its error message.
 
-## 26. Integer overflow wraps where Clojure throws
+## 26. No BigInt: `+'` cannot promote, and `42N` and `1.5M` read as symbols
+
+**The overflow half is RESOLVED (2026-09-19, fedccc9).** `+`, `-`, `*`,
+`inc` and `dec` raise `ArithmeticException: long overflow` as
+`Numbers.throwIntOverflow` does, and the `unchecked-` variants wrap.
+What this entry now records is what those checks cannot give: the
+promoting operators `+'`, `*'`, `inc'` and `dec'` have no BigInt to
+promote INTO, so they throw where Clojure answers `10000000000000000000N`.
 
 The reader agrees with Clojure on every number SHAPE (hex, octal,
 explicit radix, exponents), ratios are exact, and integers are 64-bit
-like Clojure's `long`. What is left is the top of that range. Measured,
-clotran first, `clj` second:
-
-    (* 9999999999 9999999999)  7766279611452241921   throws "long overflow"
-
-Clojure checks and raises `ArithmeticException: long overflow`; Fortran
-wraps, and clotran does not check. So this is a wrong answer that looks
-plausible -- the failure mode CLAUDE.md singles out -- but it is now
-confined to values above 2^63 rather than above 2^31.
+like Clojure's `long`. What is left is the top of that range.
 
 What it replaced is worth recording, because it stood for a long time
 and showed on no scorecard: `ival` was Fortran's default `integer`, 32
@@ -757,9 +766,8 @@ bits, so `9999999999` read back as `1410065407` and `2147483648` as
 `real(8)` early on with precisely this argument, and the integer was
 left behind.
 
-Closing the remainder means checking each operation for overflow and
-raising, and then arbitrary precision behind `+'`, `*'` and friends,
-which promote instead of throwing.
+Closing the remainder means arbitrary precision behind `+'`, `*'` and
+friends, which promote instead of throwing.
 
 `42N` and `1.5M` read as SYMBOLS, so they resolve to nothing and fail
 where they are used rather than where they are read. They are not read

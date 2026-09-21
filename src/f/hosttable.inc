@@ -484,9 +484,12 @@
        hm("", "resetMeta", B_RESETMETA, "clotran-reset-meta"), &
        hm("", "setMeta", B_RESETMETA, "clotran-reset-meta"), &
        hm("", "set", B_SETVAL, "clotran-set-val") ]
-  type(hm), parameter :: HOST_METHODS_2(69) = [ &
+  type(hm), parameter :: HOST_METHODS_2(71) = [ &
        hm("", "reset", B_SETVAL, "clotran-set-val"), &
        hm("", "bindRoot", B_SETVAL, "clotran-set-val"), &
+  ! the root binding, which with no thread binding in force is the value
+       hm("", "getRawRoot", B_DEREF, "deref"), &
+       hm("", "kvreduce", B_RTFN, "kvreduce-of"), &
        hm("", "swap", B_SWAPVAL, "clotran-swap-val"), &
        hm("", "isNaN", B_ISNAN, "clotran-is-nan"), &
        hm("", "isInfinite", B_ISINF, "clotran-is-infinite"), &
@@ -561,5 +564,5 @@
        hm("", "isCancelled", B_TASKCANCELLED, "clotran-task-cancelled"), &
        hm("", "cancel", B_TASKCANCEL, "clotran-task-cancel"), &
        hm("", "availableProcessors", B_NPROCS, "clotran-processors") ]
-  type(hm), parameter :: HOST_METHODS(157) = [HOST_METHODS_1, HOST_METHODS_2]
+  type(hm), parameter :: HOST_METHODS(159) = [HOST_METHODS_1, HOST_METHODS_2]
 

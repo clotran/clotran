@@ -178,3 +178,13 @@
   walked -- (take 2 (cycle (map f xs))) never reaches the third f."
   [s]
   (lazy-seq (when-let [s (seq s)] (concat s (cycle-of s)))))
+
+(defn kvreduce-of
+  "IKVReduce.kvreduce for a vector: f over index and element, stopping
+  at a reduced value, which is unwrapped."
+  [v f init]
+  (loop [i 0 acc init]
+    (if (< i (count v))
+      (let [r (f acc i (nth v i))]
+        (if (reduced? r) @r (recur (inc i) r)))
+      acc)))

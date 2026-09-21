@@ -566,6 +566,7 @@ contains
     call gcna_reset()
     call gcp_set_forcer(gce_force)
     call gca_set_comparer(compare_via)
+    call gcr_set_ns_resolver(kw_ns_of)
     ! The sweep tells us when an object owning out-of-heap storage
     ! dies, so a native array's buffer is freed exactly once rather
     ! than leaking for the life of the process.
@@ -789,19 +790,35 @@ contains
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, m, argv
     integer :: base
+    logical :: via_iter
     out = gc_nil()
     base = vs_enter(3)
     call vs_set(base + 1, v)
+    via_iter = .false.
     m = gca_get(gc_slot(gc_slot(v, 1), 3), gc_key("seq", [roots, vs_get(base + 1)]))
     if (gc_kind(m) /= OBJ_CLOSURE) then
-       call vs_leave(base)
-       return
+       ! No seq: an Iterable is seq'd through its iterator, 32 at a
+       ! time, as RT.seqFrom does -- and core.clj's own Eduction has
+       ! iterator and reduce and no seq, so (seq (eduction ..)) was nil.
+       m = gca_get(gc_slot(gc_slot(v, 1), 3), gc_key("iterator", [roots, vs_get(base + 1)]))
+       if (gc_kind(m) /= OBJ_CLOSURE) then
+          call vs_leave(base)
+          return
+       end if
+       via_iter = .true.
     end if
     call vs_set(base + 2, m)
     argv = gcv_conj(gcv_empty([roots, vs_get(base + 1), vs_get(base + 2)]), vs_get(base + 1), &
          [roots, vs_get(base + 1), vs_get(base + 2)])
     call vs_set(base + 3, argv)
     out = apply(vs_get(base + 2), vs_get(base + 3))
+    if (.not. has_error .and. via_iter) then
+       call vs_set(base + 3, out)
+       argv = gcv_conj(gcv_empty([roots, vs_get(base + 1), vs_get(base + 3)]), vs_get(base + 3), &
+            [roots, vs_get(base + 1), vs_get(base + 3)])
+       call vs_set(base + 3, argv)
+       out = rt_call("chunk-iterator-seq", vs_get(base + 3))
+    end if
     if (.not. has_error) then
        call vs_set(base + 3, out)
        out = to_seq(vs_get(base + 3), [roots, vs_get(base + 1)])
@@ -1931,9 +1948,14 @@ contains
        out = static_member(gc_ref_text(tv%ref), mname, vs_get(base + 2))
        if (.not. has_error .and. is_call) out = apply(out, vs_get(base + 2))
     else
-       ! Name the TARGET as well as the member: "no such member:
-       ! create" alone does not say which create.
-       call fail("no such member: " // class_name_of(tv) // "." // mname)
+       ! Reflector's words, class and count included: "No matching
+       ! method jump found taking 1 args for class java.lang.String"
+       block
+         character(len=16) :: cbuf
+         write(cbuf, '(I0)') gcv_count(vs_get(base + 2))
+         call raise_class("IllegalArgumentException", "No matching method " // mname // &
+              " found taking " // trim(cbuf) // " args for class " // class_name_of(tv), [vs_get(base + 1)])
+       end block
     end if
     call vs_leave(base)
   end function eval_dot
@@ -2251,11 +2273,17 @@ contains
        ! -- its hierarchy, its stack trace -- has nothing to correspond
        ! to here, so the class name is kept as written and nothing is
        ! invented around it.
+       call vs_set(base + 3, nth_or_nil(vs_get(base + 1), 1))
+       ! ex-info's nil data is an empty map: (ex-data (ex-info "m" nil)) is {}
+       thunk = vs_get(base + 3)
+       if (thunk%tag == GCT_NIL .and. (cname == "ExceptionInfo" .or. cname == "clojure.lang.ExceptionInfo")) then
+          call vs_set(base + 3, gca_empty([vs_get(base + 1)]))
+       end if
        out = gc_obj(OBJ_ERR, &
-            [gc_sym(cname, [vs_get(base + 1)]), &
+            [gc_sym(cname, [vs_get(base + 1), vs_get(base + 3)]), &
              nth_or_nil(vs_get(base + 1), 0), &
-             nth_or_nil(vs_get(base + 1), 1)], &
-            [vs_get(base + 1)])
+             vs_get(base + 3)], &
+            [vs_get(base + 1), vs_get(base + 3)])
        ! filled in at construction, as Throwable's constructor does
        call vs_set(base + 3, out)
        call gc_set_slot(vs_get(base + 3), 4, frames_vec([vs_get(base + 3)]))
@@ -2724,6 +2752,23 @@ contains
     call vs_leave(base)
   end subroutine fail_as
 
+  function is_runtime_class(cname) result(yes)
+    character(len=*), intent(in) :: cname
+    logical :: yes
+    integer :: dot
+    dot = index(cname, ".", back=.true.)
+    select case (cname(dot+1:))
+    case ("RuntimeException", "ArithmeticException", "ArityException", "ClassCastException", &
+          "IllegalArgumentException", "IllegalStateException", "IndexOutOfBoundsException", &
+          "NullPointerException", "NumberFormatException", "UnsupportedOperationException", &
+          "ExceptionInfo", "NoSuchElementException", "ConcurrentModificationException", &
+          "ArrayIndexOutOfBoundsException", "StringIndexOutOfBoundsException", "NegativeArraySizeException")
+       yes = .true.
+    case default
+       yes = .false.
+    end select
+  end function is_runtime_class
+
   recursive function catch_matches(cls, exc, env) result(yes)
     type(gc_value), intent(in) :: cls, exc, env
     logical :: yes
@@ -2744,6 +2789,15 @@ contains
        yes = .false.
        return
     end if
+    ! RuntimeException is the parent of every runtime class clotran
+    ! throws, a host failure among them; only the checked classes and
+    ! the Errors stand outside it. The second fact of hierarchy, after
+    ! ArityException's below, and for the same reason: code catches
+    ! RuntimeException meaning "anything the runtime raised".
+    if (want == "RuntimeException" .or. want == "java.lang.RuntimeException") then
+       yes = is_runtime_class(gc_ref_text(got%ref))
+       return
+    end if
     ! Either spelling. The class name is kept as the THROWING
     ! code wrote it, and the catch names it however the catching
     ! code wrote it -- ex-info constructs an ExceptionInfo under
@@ -2752,11 +2806,11 @@ contains
     ! but only in one direction, so it is asked both ways.
     yes = class_matches(gc_ref_text(got%ref), want) .or. &
          class_matches(want, gc_ref_text(got%ref))
-    ! ONE FACT OF HIERARCHY, because Clojure's own suite relies
+    ! The other fact of hierarchy, because Clojure's own suite relies
     ! on it: ArityException extends IllegalArgumentException, so
     ! (thrown? IllegalArgumentException (f)) catches a bad-arity
-    ! call. clotran's classes form no hierarchy (DEVIATIONS 4);
-    ! this is the single edge that matters.
+    ! call. Beyond RuntimeException above and this edge, clotran's
+    ! classes form no hierarchy (DEVIATIONS 4).
     if (.not. yes) then
        if (gc_ref_is(got%ref, "ArityException")) &
             yes = class_matches("IllegalArgumentException", want)
@@ -2772,15 +2826,17 @@ contains
     type(gc_value) :: v, k, text
     integer :: base
 
+    ! An exception object, of class RuntimeException -- what most of
+    ! the JVM's own runtime failures are -- so (.getMessage e),
+    ! ex-message and (catch RuntimeException e) all work on a host
+    ! error. It was {:error msg}, a map, and none of them did.
     base = vs_enter(3)
-    v = gca_empty(roots)
-    call vs_set(base + 1, v)
-    k = gc_key("error", [vs_get(base + 1)])
+    k = gc_sym("RuntimeException", roots)
     call vs_set(base + 2, k)
-    text = gc_str(msg, [vs_get(base + 1), vs_get(base + 2)])
+    text = gc_str(msg, [roots, vs_get(base + 2)])
     call vs_set(base + 3, text)
-    v = gca_assoc(vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), &
-         [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+    v = gc_obj(OBJ_ERR, [vs_get(base + 2), vs_get(base + 3), gc_nil()], &
+         [roots, vs_get(base + 2), vs_get(base + 3)])
     call vs_leave(base)
   end function error_value
 
@@ -3752,7 +3808,15 @@ contains
        else
           out = gc_real(log(1.0_gc_dp + x))
        end if
-    case (23); out = gc_real(spacing(x))
+    case (23)
+       ! Math.ulp: infinity's is infinity, zero's the least denormal
+       if (abs(x) > huge(x)) then
+          out = gc_real(abs(x))
+       else if (x == 0.0_gc_dp) then
+          out = gc_real(scale(1.0_gc_dp, -1074))
+       else
+          out = gc_real(spacing(x))
+       end if
     case (24); out = gc_real(nearest(x, 1.0_gc_dp))
     case (25); out = gc_real(nearest(x, -1.0_gc_dp))
     case (26)
@@ -3763,9 +3827,10 @@ contains
           out = gc_real(abs(x))
        end if
     case (27)
-       ! IEEE remainder: x - y*rint(x/y), which is what ieee_rem is.
+       ! IEEE remainder: x - y*rint(x/y), which is what ieee_rem is;
+       ! by zero it is NaN, as Java's
        if (y == 0.0_gc_dp) then
-          out = gc_real(x / y)
+          out = gc_real(ieee_value(1.0_gc_dp, ieee_quiet_nan))
        else
           out = gc_real(x - y * math_rint(x / y))
        end if
@@ -3827,11 +3892,20 @@ contains
           out = gc_int(-ia)
        end if
     case (43)
-       ! Floor division, not truncation: (floorDiv -7 2) is -4.
+       ! Floor division, not truncation: (floorDiv -7 2) is -4. In
+       ! integers, so Long/MIN_VALUE by -1 wraps as Java's does rather
+       ! than going through a double.
        if (ib == 0_gc_ip) then
           call raise_class("ArithmeticException", "Divide by zero", [gc_nil()])
+       else if (ib == -1_gc_ip) then
+          out = gc_int(-ia)
        else
-          out = gc_int(int(floor(real(ia, gc_dp) / real(ib, gc_dp)), gc_ip))
+          block
+            integer(gc_ip) :: q
+            q = ia / ib
+            if (mod(ia, ib) /= 0_gc_ip .and. ((ia < 0_gc_ip) .neqv. (ib < 0_gc_ip))) q = q - 1_gc_ip
+            out = gc_int(q)
+          end block
        end if
     case (44)
        if (ib == 0_gc_ip) then
@@ -4894,7 +4968,38 @@ contains
        ! is a closure: (:k m) looks itself up IN m, and (m :k) looks up
        ! its argument. Same lookup from opposite sides, which is why
        ! both live here rather than as builtins.
-       if (fn%tag == GCT_KEY) then
+       if (fn%tag == GCT_KEY .and. (gcv_count(args) == 0 .or. gcv_count(args) > 2)) then
+          ! Keyword.invoke has one and two: ArityException otherwise,
+          ! with the JVM's own count and its "(> 20)" past twenty
+          block
+            character(len=16) :: cbuf
+            if (gcv_count(args) > 20) then
+               cbuf = "> 20"
+            else
+               write(cbuf, '(I0)') gcv_count(args)
+            end if
+            call raise_class("ArityException", "Wrong number of args (" // trim(cbuf) // &
+                 ") passed to: " // gcp_str(fn, .true.), [vs_get(base + 1)])
+          end block
+       else if (fn%tag == GCT_SYM) then
+          ! A SYMBOL IS CALLABLE too, the same lookup as a keyword's
+          if (gcv_count(args) >= 1) then
+             block
+               type(gc_value) :: tgt
+               tgt = strip_meta(gcv_nth(args, 0))
+               if (gca_is(tgt)) then
+                  out = gca_get(tgt, fn)
+                  if (gcv_count(args) >= 2 .and. out%tag == GCT_NIL) then
+                     if (.not. gca_contains(tgt, fn)) out = gcv_nth(args, 1)
+                  end if
+               else if (gc_kind(tgt) == OBJ_SET) then
+                  out = gca_get(gc_slot(tgt, 1), fn)
+               else if (gcv_count(args) >= 2) then
+                  out = gcv_nth(args, 1)
+               end if
+             end block
+          end if
+       else if (fn%tag == GCT_KEY) then
           ! (:a record) is the same lookup `get` does, so it has to
           ! ask the instance the same way -- this is the form people
           ! actually write to read a record field.
@@ -5536,8 +5641,11 @@ contains
              return
           end if
        end if
-       out = gca_dissoc(gcv_nth(vs_get(base + 1), 0), gcv_nth(vs_get(base + 1), 1), &
-            [vs_get(base + 1)])
+       ! on the map UNDER any metadata, which the result keeps -- given
+       ! the wrapper, gca_dissoc saw no map and answered it unchanged,
+       ! so a record's own field would not dissoc
+       out = gca_dissoc(a, gcv_nth(vs_get(base + 1), 1), [vs_get(base + 1)])
+       out = keep_meta(gcv_nth(vs_get(base + 1), 0), out, [vs_get(base + 1)])
     case (B_NAME)
        ! The NAME PART, without the namespace: (name (quote a/b)) is
        ! "b". Returning the whole text made every qualified symbol
@@ -5815,6 +5923,27 @@ contains
                  [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
             call vs_set(base + 3, acc)
          end do
+         ! an odd count ends in a map, merged: keyword arguments with a
+         ! trailing map, as createAsIfByAssoc takes since 1.11
+         if (mod(n2, 2) == 1) then
+            block
+              type(gc_value) :: last
+              type(gc_value), allocatable :: kk(:), vv(:)
+              integer :: j
+              last = strip_meta(gcv_nth(vs_get(base + 2), n2 - 1))
+              if (gca_is(last)) then
+                 call gca_entries(last, kk, vv)
+                 do j = 1, size(kk)
+                    acc = gca_assoc(vs_get(base + 3), kk(j), vv(j), &
+                         [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+                    call vs_set(base + 3, acc)
+                 end do
+              else
+                 call raise_class("IllegalArgumentException", "No value supplied for key: " // &
+                      gcp_str(last, .true.), [vs_get(base + 1)])
+              end if
+            end block
+         end if
          out = vs_get(base + 3)
        end block
 
@@ -6727,13 +6856,22 @@ contains
        block
          type(gc_value) :: a0
          character(len=:), allocatable :: t
-         integer :: iv, st
+         integer(gc_ip) :: iv
+         integer :: st
          a0 = strip_meta(gcv_nth(args, 0))
          if (a0%tag == GCT_INT) then
             out = a0
          else
             t = trim(adjustl(text_of(a0)))
-            read(t, *, iostat=st) iv
+            ! Long.valueOf's grammar, not list-directed input's: an
+            ! optional sign and digits and nothing else. "1 2" and
+            ! "1,2" read as 1 without a word; and a 64-bit result, or
+            ! Long/MAX_VALUE came back truncated.
+            st = 1
+            if (len(t) > 0 .and. len(t) <= 20) then
+               if (verify(t, "+-0123456789") == 0 .and. verify(t(2:), "0123456789") == 0 &
+                    .and. scan(t, "0123456789") > 0) read(t, *, iostat=st) iv
+            end if
             if (st /= 0) then
                call fail_as("NumberFormatException", "valueOf: not a number: " // t, &
                     [vs_get(base + 1)])
@@ -9012,7 +9150,7 @@ contains
     !
     ! ClojureScript writes this in Clojure, so it is not host-bound and
     ! being in Fortran here is a choice, not a seam. SEAMS.md bucket B.
-    if (sequential_p(a) .and. sequential_p(b)) then
+    if ((sequential_p(a) .and. sequential_p(b)) .or. seq_inst_pair(a, b)) then
        if (counted_p(a) .and. counted_p(b)) then
           if (seq_count(a) /= seq_count(b)) then
              eq = .false.
@@ -9136,6 +9274,21 @@ contains
   ! Sequential, and clj agrees that (= #{1 2} [1 2]) and
   ! (= "ab" [\a \b]) are both false. (seq "ab") IS sequential, and that
   ! is the OBJ_SEQ case rather than the string case.
+  ! A deftype that answers seq -- an Eduction -- is Sequential, and a
+  ! vector, list or seq equals it element by element. Two such
+  ! instances are NOT equal to each other: Eduction keeps Object's
+  ! identity equals, and so the pair is one instance and one sequence.
+  function seq_inst_pair(a, b) result(yes)
+    type(gc_value), intent(in) :: a, b
+    logical :: yes
+    yes = .false.
+    if (gc_kind(a) == OBJ_INST .and. sequential_p(b)) then
+       yes = (gc_kind(inst_method(a, "seq")) == OBJ_CLOSURE) .or. (gc_kind(inst_method(a, "iterator")) == OBJ_CLOSURE)
+    else if (gc_kind(b) == OBJ_INST .and. sequential_p(a)) then
+       yes = (gc_kind(inst_method(b, "seq")) == OBJ_CLOSURE) .or. (gc_kind(inst_method(b, "iterator")) == OBJ_CLOSURE)
+    end if
+  end function seq_inst_pair
+
   function sequential_p(v0) result(yes)
     type(gc_value), intent(in) :: v0
     type(gc_value) :: v
@@ -9992,6 +10145,7 @@ contains
     case ("clojure.lang.IPersistentVector", "clojure.lang.Indexed"); yes = (t == "vector")
     case ("clojure.lang.IPersistentMap", "java.util.Map"); yes = (t == "map")
     case ("clojure.lang.IPersistentSet"); yes = (t == "set")
+    case ("clojure.lang.IKVReduce"); yes = (t == "vector" .or. t == "map")
     case ("clojure.lang.Sorted"); yes = is_sorted_coll(v)
     case ("clojure.lang.Reversible"); yes = (t == "vector") .or. is_sorted_coll(v)
     case ("clojure.lang.Associative"); yes = (t == "map" .or. t == "vector")
@@ -10012,7 +10166,7 @@ contains
        ! nil. Split from IObj below, which a function must NOT claim.
        yes = (t == "symbol" .or. t == "list" .or. t == "vector" .or. &
               t == "map" .or. t == "set" .or. t == "var" .or. t == "fn" .or. &
-              t == "seq" .or. t == "lazy-seq")
+              t == "seq" .or. t == "lazy-seq" .or. t == "ns")
        ! and anything with-meta has wrapped can report what it was given
        if (gc_kind(v) == OBJ_META) yes = .true.
     case ("clojure.lang.IObj")
@@ -10201,10 +10355,10 @@ contains
       known = .true.
       select case (t)
       case ("clojure.lang.PersistentVector")
-         chain(1:5) = [character(len=36) :: "clojure.lang.IPersistentVector", &
-              "java.util.List", "java.util.RandomAccess", &
+         chain(1:6) = [character(len=36) :: "clojure.lang.IPersistentVector", &
+              "java.util.List", "java.util.RandomAccess", "clojure.lang.IKVReduce", &
               "clojure.lang.IPersistentCollection", "java.util.Collection"]
-         cnt = 5
+         cnt = 6
       case ("clojure.lang.PersistentArrayMap")
          chain(1:4) = [character(len=36) :: "clojure.lang.IPersistentMap", "java.util.Map", &
               "clojure.lang.IPersistentCollection", "java.util.Collection"]
@@ -10401,6 +10555,25 @@ contains
     if (.not. gca_is(al)) return
     nsv = gca_get(al, gc_sym(name, roots))
   end function alias_in
+
+  ! The namespace an auto-resolved keyword names, for the reader:
+  ! ::x is the current namespace and ::a/x the ALIAS a -- an alias
+  ! only, as LispReader.matchSymbol's lookupAlias is, so a namespace's
+  ! full name is an invalid token there and here. "" when there is
+  ! none.
+  function kw_ns_of(alias) result(ns)
+    character(len=*), intent(in) :: alias
+    character(len=:), allocatable :: ns
+    type(gc_value) :: nsv
+    type(gc_value) :: none(0)
+    ns = ""
+    if (len(alias) == 0) then
+       nsv = gcn_current(none)
+    else
+       nsv = alias_target(alias, none)
+    end if
+    if (gc_kind(nsv) == OBJ_NS) ns = gcn_name(nsv)
+  end function kw_ns_of
 
   function make_writer(unit, roots) result(w)
     integer, intent(in) :: unit
