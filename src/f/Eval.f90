@@ -4905,21 +4905,35 @@ contains
              out = coll_get(gcv_nth(args, 0), fn)
           end if
        else if (gca_is(fn)) then
+          ! (m k) and (m k not-found)
           if (gcv_count(args) >= 1) out = gca_get(fn, gcv_nth(args, 0))
+          if (gcv_count(args) >= 2 .and. out%tag == GCT_NIL) then
+             if (.not. gca_contains(fn, gcv_nth(args, 0))) out = gcv_nth(args, 1)
+          end if
        else if (gc_kind(fn) == OBJ_SET) then
           ! A SET IS CALLABLE, on membership: (#{1 2} 1) is 1 and
           ! (#{1 2} 9) is nil. core.clj leans on it -- destructure asks
           ! (some #{'&} b) whether a binding form has a rest arg -- and
           ! without it that call returned no value at all.
           if (gcv_count(args) >= 1) out = gca_get(gc_slot(fn, 1), gcv_nth(args, 0))
+          if (gcv_count(args) >= 2 .and. out%tag == GCT_NIL) then
+             if (.not. gca_contains(gc_slot(fn, 1), gcv_nth(args, 0))) out = gcv_nth(args, 1)
+          end if
        else if (gcv_is(fn)) then
           ! A vector is callable on an index, as in ([:a :b] 1).
           if (gcv_count(args) >= 1) then
              block
                type(gc_value) :: ix
                ix = gcv_nth(args, 0)
-               ! A vector index, narrow by nature.
-               if (ix%tag == GCT_INT) out = gcv_nth(fn, int(ix%ival, kind=4))
+               ! A vector index, narrow by nature; out of range throws
+               ! as PersistentVector.nth does.
+               if (ix%tag /= GCT_INT) then
+                  call raise_class("IllegalArgumentException", "Key must be integer", [vs_get(base + 1)])
+               else if (ix%ival < 0 .or. ix%ival >= int(gcv_count(fn), gc_ip)) then
+                  call raise_class("IndexOutOfBoundsException", "index out of bounds", [vs_get(base + 1)])
+               else
+                  out = gcv_nth(fn, int(ix%ival, kind=4))
+               end if
              end block
           end if
        else
@@ -4962,6 +4976,10 @@ contains
        if (id == B_UADD) op = B_ADD
        if (id == B_USUB) op = B_SUB
        if (id == B_UMUL) op = B_MUL
+       if (.not. numbers_ok(args, n, [vs_get(base + 1)])) then
+          call vs_leave(base)
+          return
+       end if
        ! Reals used to be IGNORED here. The accumulator read %ival,
        ! which is 0 for a GCT_REAL, so (+ 1.5 2) answered 2 and
        ! (* 2.0 3) answered 0 -- a wrong answer with no error, in the
@@ -5116,6 +5134,10 @@ contains
           end if
        end do
     case (B_LT)
+       if (.not. numbers_ok(args, n, [vs_get(base + 1)])) then
+          call vs_leave(base)
+          return
+       end if
        out = gc_bool(.true.)
        do i = 1, n - 1
           a = gcv_nth(args, i - 1)
@@ -5420,6 +5442,10 @@ contains
        ! rather than 3.0 -- the same silent discard that + - * had.
        ! A zero divisor was not checked either: Clojure raises
        ! "Divide by zero" here for doubles as well as integers,
+       if (.not. numbers_ok(args, n, [vs_get(base + 1)])) then
+          call vs_leave(base)
+          return
+       end if
        ! unlike `/`, where (/ 1.0 0) is ##Inf.
        a = strip_meta(gcv_nth(args, 0)); b = strip_meta(gcv_nth(args, 1))
        if (is_ratio(a) .or. is_ratio(b)) then
@@ -5652,6 +5678,10 @@ contains
        end block
 
     case (B_NUMEQ)
+       if (.not. numbers_ok(args, n, [vs_get(base + 1)])) then
+          call vs_leave(base)
+          return
+       end if
        ! == : equal as NUMBERS, across int and real. Non-numeric
        ! arguments are an error in Clojure rather than false, which
        ! is the difference from =.
@@ -6995,6 +7025,8 @@ contains
             cn = gcv_count(coll)
             if (id == B_PEEK) then
                if (cn > 0) out = gcv_nth(coll, cn - 1)
+            else if (cn == 0) then
+               call raise_class("IllegalStateException", "Can't pop empty vector", [vs_get(base + 1)])
             else
                acc = gcv_empty([vs_get(base + 1)])
                call vs_set(base + 2, acc)
@@ -7005,11 +7037,21 @@ contains
                end do
                out = keep_meta(gcv_nth(args, 0), vs_get(base + 2), [vs_get(base + 1)])
             end if
+         else if (.not. gcl_is(coll) .and. coll%tag /= GCT_NIL) then
+            ! not a stack: IPersistentStack is a vector or a list, and a
+            ! seq, a set or a map is refused as on the JVM
+            call raise_class("ClassCastException", class_name_of(coll) // &
+                 " cannot be cast to clojure.lang.IPersistentStack", [vs_get(base + 1)])
          else if (coll%tag /= GCT_NIL) then
             if (id == B_PEEK) then
                out = sq_first(coll, [vs_get(base + 1)])
             else
-               out = sq_rest(coll, [vs_get(base + 1)])
+               acc = to_seq(coll, [vs_get(base + 1)])
+               if (acc%tag == GCT_NIL) then
+                  call raise_class("IllegalStateException", "Can't pop empty list", [vs_get(base + 1)])
+               else
+                  out = sq_rest(coll, [vs_get(base + 1)])
+               end if
             end if
          end if
        end block
@@ -7056,7 +7098,17 @@ contains
          type(gc_value) :: coll, pair
          coll = strip_meta(gcv_nth(args, 0))
          out = gc_nil()
-         if (gca_contains(coll, gcv_nth(args, 1))) then
+         if (gcv_is(coll)) then
+            ! a vector is associative by index: (find [1 2] 0) is [0 1]
+            if (coll_has(coll, gcv_nth(args, 1))) then
+               pair = gcv_empty([vs_get(base + 1)])
+               pair = gcv_conj(pair, gcv_nth(args, 1), [vs_get(base + 1)])
+               call vs_set(base + 2, pair)
+               pair = gcv_conj(vs_get(base + 2), gcv_nth(coll, int_of(gcv_nth(args, 1))), &
+                    [vs_get(base + 1), vs_get(base + 2)])
+               out = pair
+            end if
+         else if (gca_contains(coll, gcv_nth(args, 1))) then
             pair = gcv_empty([vs_get(base + 1)])
             pair = gcv_conj(pair, gcv_nth(args, 1), [vs_get(base + 1)])
             call vs_set(base + 2, pair)
@@ -7380,6 +7432,10 @@ contains
          end select
        end block
     case (B_MAX, B_MIN)
+       if (.not. numbers_ok(args, n, [vs_get(base + 1)])) then
+          call vs_leave(base)
+          return
+       end if
        out = gcv_nth(args, 0)
        do i = 1, n - 1
           b = gcv_nth(args, i)
@@ -7959,6 +8015,10 @@ contains
          out = gc_bool(ok)
        end block
     case (B_DIV)
+       if (.not. numbers_ok(args, n, [vs_get(base + 1)])) then
+          call vs_leave(base)
+          return
+       end if
        ! There IS a Ratio now, so an inexact integer division is no
        ! longer approximated with a double: (/ 1 3) is 1/3.
        !
@@ -8003,6 +8063,10 @@ contains
        if (id == B_UINC) op = B_INC
        if (id == B_UDEC) op = B_DEC
        a = strip_meta(gcv_nth(args, 0))
+       if (.not. numbers_ok(args, 1, [vs_get(base + 1)])) then
+          call vs_leave(base)
+          return
+       end if
        if (a%tag == GCT_INT .and. checked) then
           if ((op == B_INC .and. a%ival == huge(a%ival)) .or. &
                (op == B_DEC .and. a%ival == -huge(a%ival) - 1_gc_ip)) then
@@ -10457,6 +10521,11 @@ contains
        end if
     else if (coll%tag == GCT_NIL) then
        out = gcl_cons(vs_get(base + 2), gcl_empty(roots), roots)
+    else if (.not. seqable_quiet(coll) .or. coll%tag == GCT_STR .or. gc_kind(coll) == OBJ_ARRAY) then
+       ! a string or an array is not a collection to conj onto
+       out = gc_nil()
+       call raise_class("ClassCastException", class_name_of(coll) // &
+            " cannot be cast to clojure.lang.IPersistentCollection", roots)
     else
        out = gcl_cons(vs_get(base + 2), to_seq(vs_get(base + 1), roots), roots)
     end if

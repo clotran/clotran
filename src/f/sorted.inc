@@ -16,6 +16,15 @@
     logical :: ok
     c = 0
     if (cmp%tag == GCT_NIL) then
+       ! A key ADMITTED to a sorted collection is compared with itself
+       ! first (Assoc's empty-map case), which is where PersistentTreeMap
+       ! refuses a key that is not nil, a Number or Comparable
+       if (same_object(a, b) .and. .not. comparable_kind(a)) then
+          call raise_class("ClassCastException", &
+               "Default comparator requires nil, Number, or Comparable: " // gcp_str(a, .true.), [a])
+          c = huge(0)
+          return
+       end if
        c = compare_values(a, b, ok)
        if (.not. ok) then
           call raise_class("ClassCastException", &
@@ -82,6 +91,64 @@
     if (gc_kind(v) == OBJ_META) return
     out = gc_obj(OBJ_META, [v, gc_slot(orig, 2)], [roots, orig, v])
   end function keep_meta
+
+  ! Every argument a number, or ClassCastException for the first that
+  ! is not: what Numbers.add, lt and the rest throw, where reading a
+  ! string's %ival answered 0 without a word.
+  function numbers_ok(args, n, roots) result(ok)
+    type(gc_value), intent(in) :: args
+    integer, intent(in) :: n
+    type(gc_value), intent(in) :: roots(:)
+    logical :: ok
+    type(gc_value) :: x
+    integer :: i
+    ok = .true.
+    do i = 0, n - 1
+       x = strip_meta(gcv_nth(args, i))
+       if (.not. is_number(x)) then
+          ok = .false.
+          call raise_class("ClassCastException", "class " // class_name_of(x) // &
+               " cannot be cast to class java.lang.Number", roots)
+          return
+       end if
+    end do
+  end function numbers_ok
+
+  ! What the default comparator can order: nil, a number, a string, a
+  ! keyword, a symbol, a character, a boolean, or a vector.
+  function comparable_kind(v0) result(yes)
+    type(gc_value), intent(in) :: v0
+    logical :: yes
+    type(gc_value) :: v
+    v = strip_meta(v0)
+    select case (v%tag)
+    case (GCT_NIL, GCT_INT, GCT_REAL, GCT_RATIO, GCT_STR, GCT_KEY, GCT_SYM, GCT_CHAR, GCT_BOOL)
+       yes = .true.
+    case default
+       yes = gcv_is(v)
+    end select
+  end function comparable_kind
+
+  ! seqable, without the error: for the callers that answer their own.
+  function seqable_quiet(v0) result(yes)
+    type(gc_value), intent(in) :: v0
+    logical :: yes
+    type(gc_value) :: v
+    v = strip_meta(v0)
+    yes = .true.
+    select case (v%tag)
+    case (GCT_NIL, GCT_STR)
+       return
+    case (GCT_OBJ)
+       select case (gc_kind(v))
+       case (OBJ_CLOSURE, OBJ_BUILTIN, OBJ_MULTIFN, OBJ_ATOM, OBJ_VAR, OBJ_NS, OBJ_TASK, OBJ_VOLATILE, &
+            OBJ_DELAY, OBJ_REGEX, OBJ_MATCHER, OBJ_WRITER, OBJ_ERR, OBJ_TYPE)
+          yes = .false.
+       end select
+    case default
+       yes = .false.
+    end select
+  end function seqable_quiet
 
   ! The sorted map behind a sorted map or set, or nil.
   function sorted_backing(v) result(m)

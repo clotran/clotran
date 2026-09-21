@@ -221,10 +221,18 @@ contains
     end if
     if (.not. gcm_is(m)) return
     if (gca_is_sorted(m)) then
-       ! in place of an equal key, or before the first key after it
+       ! in place of an equal key, or before the first key after it;
+       ! the first key of all is compared with itself, which is where
+       ! the comparer refuses one it cannot order (compare_via)
        block
          integer :: at
          logical :: found
+         if (gcm_count(m) == 0) then
+            if (comparer(gc_slot(m, 3), k, k) == huge(0)) then
+               out = m
+               return
+            end if
+         end if
          call sorted_search(m, k, at, found)
          r2 = with(with(roots, m), gc_slot(m, 3))
          if (found) then

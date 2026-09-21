@@ -1856,3 +1856,56 @@
 (meta (sort (with-meta (range 10) {:a true})))
 
 (meta (sort-by :a (with-meta (seq [{:a 5} {:a 2}]) {:a true})))
+
+;; refusals: a stack is a vector, a list or a seq; an empty one cannot
+;; pop; a string or an array cannot be conj'd onto; a vector called out
+;; of range throws; a sorted collection admits only what compare orders
+(try (pop #{1}) (catch ClassCastException e :cce))
+
+(try (peek {:a 1}) (catch ClassCastException e :cce))
+
+(try (pop []) (catch IllegalStateException e :ise))
+
+(try (pop ()) (catch IllegalStateException e :ise))
+
+(try (pop! (transient [])) (catch IllegalStateException e :ise))
+
+[(pop [1 2]) (pop '(1 2)) (peek [1 2]) (peek '(1 2)) (peek []) (pop nil) (peek nil)]
+
+(try (pop (seq [1 2])) (catch ClassCastException e :cce))
+
+(try (conj "" \a) (catch ClassCastException e :cce))
+
+(try (conj (into-array []) 1) (catch ClassCastException e :cce))
+
+(try ([1 2] 7) (catch IndexOutOfBoundsException e :ioobe))
+
+(try ([1 2] -1) (catch IndexOutOfBoundsException e :ioobe))
+
+[({:a 1} :a) ({:a 1} :b 2) (#{:a} :a) ((transient #{:a}) :b 2) ({:a nil} :a 2)]
+
+(try (< 1 "a") (catch ClassCastException e :cce))
+
+(try (+ "ab" "cd") (catch ClassCastException e :cce))
+
+(try (inc "a") (catch ClassCastException e :cce))
+
+(try (max 1 "a") (catch ClassCastException e :cce))
+
+(try (== 1 :a) (catch ClassCastException e :cce))
+
+[(get #{:a} :b 1) (get (transient #{:a}) :b 1) ((transient #{:a}) :b 1)]
+
+[(find [1 2] 0) (find [1 2] 5) (find {:a 1} :a)]
+
+(try (sorted-set ()) (catch ClassCastException e :cce))
+
+(try (sorted-set {}) (catch ClassCastException e :cce))
+
+(try (sorted-map [1] 1 #{} 2) (catch ClassCastException e :cce))
+
+(try (assoc (sorted-map) () 1) (catch ClassCastException e :cce))
+
+(try (sorted-set-by < 1 "a") (catch Exception e :ex))
+
+[(sorted-set nil) (sorted-set 1.5 1) (sorted-set "b" "a") (sorted-set [2] [1])]
