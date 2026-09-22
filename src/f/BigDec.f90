@@ -4,7 +4,9 @@
 ! java.math.BigDecimal is a type the LANGUAGE has: `1.0M` reads as one,
 ! `(= 1.0M 1.0)` is FALSE because a decimal is its own equality
 ! category, and `bigdec` and `with-precision` exist to make them. It is
-! reproduced here rather than approximated as a double (DEVIATIONS 30).
+! reproduced here rather than approximated as a double (DEVIATIONS 30),
+! rounding included: `with-precision` is the only way to divide 1M by 3,
+! and the eight RoundingModes Java names are at the bottom of this file.
 !
 ! A decimal is UNSCALED x 10^-SCALE: 1.0M is (10, 1), 1M is (1, 0),
 ! -3.50M is (-350, 2), 1.0E+3M is (10, -2). The unscaled part is a
@@ -34,8 +36,190 @@ module BigDec
   public :: dec_add, dec_sub, dec_mul, dec_div, dec_quot, dec_rem
   public :: dec_neg, dec_abs, dec_cmp, dec_strip, dec_to_dbl, dec_to_big
   public :: dec_is_zero
+  public :: dec_round, dec_div_mc, dec_mode_of
+
+  ! ---- rounding ---------------------------------------------------
+  !
+  ! java.math.RoundingMode, as an integer code. `with-precision` is the
+  ! only thing that asks for one, and it names them exactly as Java
+  ! does; dec_mode_of maps that name.
+  integer, parameter, public :: DEC_UP = 1, DEC_DOWN = 2, DEC_CEILING = 3, &
+       DEC_FLOOR = 4, DEC_HALF_UP = 5, DEC_HALF_DOWN = 6, DEC_HALF_EVEN = 7, &
+       DEC_UNNECESSARY = 8
 
 contains
+
+  pure function dec_mode_of(name) result(m)
+    character(len=*), intent(in) :: name
+    integer :: m
+    select case (name)
+    case ("UP");           m = DEC_UP
+    case ("DOWN");         m = DEC_DOWN
+    case ("CEILING");      m = DEC_CEILING
+    case ("FLOOR");        m = DEC_FLOOR
+    case ("HALF_UP");      m = DEC_HALF_UP
+    case ("HALF_DOWN");    m = DEC_HALF_DOWN
+    case ("HALF_EVEN");    m = DEC_HALF_EVEN
+    case ("UNNECESSARY");  m = DEC_UNNECESSARY
+    case default;          m = 0
+    end select
+  end function dec_mode_of
+
+  ! Whether the digits being dropped force the kept ones up. `d` is the
+  ! first dropped digit, `sticky` says whether anything nonzero follows
+  ! it, `neg` is the sign of the whole value, and `last` is the final
+  ! kept digit (HALF_EVEN's tie-breaker). These are Java's eight rules
+  ! and nothing else; UNNECESSARY is the one that can fail, and it
+  ! answers through `ok`.
+  pure subroutine round_up_p(mode, d, sticky, neg, last, up, ok)
+    integer, intent(in) :: mode, d, last
+    logical, intent(in) :: sticky, neg
+    logical, intent(out) :: up, ok
+    logical :: any
+    any = (d > 0 .or. sticky)
+    up = .false.
+    ok = .true.
+    select case (mode)
+    case (DEC_UP);        up = any
+    case (DEC_DOWN);      up = .false.
+    case (DEC_CEILING);   up = (any .and. .not. neg)
+    case (DEC_FLOOR);     up = (any .and. neg)
+    case (DEC_HALF_UP);   up = (d >= 5)
+    case (DEC_HALF_DOWN); up = (d > 5 .or. (d == 5 .and. sticky))
+    case (DEC_HALF_EVEN); up = (d > 5 .or. (d == 5 .and. (sticky .or. mod(last, 2) == 1)))
+    case (DEC_UNNECESSARY)
+       ok = .not. any
+    case default;         up = (d >= 5)      ! HALF_UP is the default
+    end select
+  end subroutine round_up_p
+
+  ! The magnitude `mag` cut to `precision` digits. `sticky0` says
+  ! whether digits beyond `mag` itself were already discarded, which is
+  ! how division hands over its remainder. `extra` comes back as the
+  ! number of digits removed, which the caller takes off the scale.
+  pure subroutine round_mag(mag, precision, mode, neg, sticky0, out_mag, extra, ok)
+    character(len=*), intent(in) :: mag
+    integer, intent(in) :: precision, mode
+    logical, intent(in) :: neg, sticky0
+    character(len=:), allocatable, intent(out) :: out_mag
+    integer, intent(out) :: extra
+    logical, intent(out) :: ok
+    character(len=:), allocatable :: kept
+    integer :: digits, drop, d, last, i
+    logical :: sticky, up
+
+    digits = len(mag)
+    ok = .true.
+    extra = 0
+    out_mag = mag
+    if (precision <= 0 .or. digits <= precision) then
+       ! Nothing is dropped here, but a caller that already dropped
+       ! something still has to hear about UNNECESSARY.
+       if (sticky0 .and. mode == DEC_UNNECESSARY) ok = .false.
+       return
+    end if
+    drop = digits - precision
+    kept = mag(1:precision)
+    d = ichar(mag(precision+1:precision+1)) - 48
+    sticky = sticky0
+    do i = precision + 2, digits
+       if (mag(i:i) /= "0") sticky = .true.
+    end do
+    last = ichar(kept(precision:precision)) - 48
+    call round_up_p(mode, d, sticky, neg, last, up, ok)
+    if (.not. ok) return
+    if (up) then
+       kept = big_add(kept, "1")
+       ! 999 + 1 is 1000: one digit too many, and the extra one is a
+       ! zero, so it comes off and the scale moves with it.
+       if (len(kept) > precision) then
+          kept = kept(1:precision)
+          drop = drop + 1
+       end if
+    end if
+    out_mag = kept
+    extra = drop
+  end subroutine round_mag
+
+  ! A decimal at no more than `precision` significant digits, rounded
+  ! as `mode` says -- BigDecimal.round(MathContext). ok is false only
+  ! for UNNECESSARY, which throws rather than rounding.
+  pure subroutine dec_round(v, precision, mode, o, ok)
+    character(len=*), intent(in) :: v
+    integer, intent(in) :: precision, mode
+    character(len=:), allocatable, intent(out) :: o
+    logical, intent(out) :: ok
+    character(len=:), allocatable :: mag, kept
+    integer :: extra
+    logical :: neg
+    o = v
+    ok = .true.
+    if (precision <= 0) return
+    neg = big_is_neg(dec_unscaled(v))
+    mag = big_abs(dec_unscaled(v))
+    if (mag == "0") return
+    call round_mag(mag, precision, mode, neg, .false., kept, extra, ok)
+    if (.not. ok) return
+    if (neg) kept = "-" // kept
+    o = dec_make(kept, dec_scale(v) - extra)
+  end subroutine dec_round
+
+  ! Division under a MathContext: the quotient to `precision`
+  ! significant digits, rounded. This is the one that makes
+  ! (with-precision 10 (/ 1M 3)) answer 0.3333333333M where the exact
+  ! division has nowhere to stop.
+  pure subroutine dec_div_mc(a, b, precision, mode, o, ok)
+    character(len=*), intent(in) :: a, b
+    integer, intent(in) :: precision, mode
+    character(len=:), allocatable, intent(out) :: o
+    logical, intent(out) :: ok
+    character(len=:), allocatable :: ua, ub, q, r, kept, limit
+    integer :: k, extra, i
+    logical :: neg
+
+    ok = .false.
+    o = dec_make("0", 0)
+    if (precision <= 0) then
+       call dec_div(a, b, o, ok)
+       return
+    end if
+    ua = big_abs(dec_unscaled(a))
+    ub = big_abs(dec_unscaled(b))
+    if (ub == "0") return
+    neg = (big_is_neg(dec_unscaled(a)) .neqv. big_is_neg(dec_unscaled(b)))
+    if (ua == "0") then
+       o = dec_make("0", 0)
+       ok = .true.
+       return
+    end if
+    ! EXACT FIRST. BigDecimal.divide(d, mc) answers the exact
+    ! quotient when it terminates inside the precision -- (/ 1M 8)
+    ! under (with-precision 10) is 0.125M, not 0.1250000000M -- and
+    ! only rounds when there is no exact answer to give.
+    call dec_div(a, b, o, ok)
+    if (ok) then
+       if (len(big_abs(dec_unscaled(o))) <= precision) return
+       ok = .false.
+    end if
+    ! Enough digits to round from: one more than asked for, with the
+    ! remainder as the sticky bit.
+    limit = "1"
+    do i = 1, precision
+       limit = limit // "0"
+    end do
+    k = 0
+    do
+       call big_divmod(shift_up(ua, k), ub, q, r)
+       if (big_cmp(q, limit) >= 0) exit
+       k = k + 1
+       if (k > 2 * precision + 64) exit
+    end do
+    call round_mag(q, precision, mode, neg, r /= "0", kept, extra, ok)
+    if (.not. ok) return
+    if (neg) kept = "-" // kept
+    o = dec_make(kept, dec_scale(a) - dec_scale(b) + k - extra)
+    ok = .true.
+  end subroutine dec_div_mc
 
   ! ---- the pair ---------------------------------------------------
 

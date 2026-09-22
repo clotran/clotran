@@ -1160,3 +1160,23 @@
 (check "generated intents from the source" (samplelib.raw/divmod 17 5) {:q 3 :r 2})
 (check "a generated rank-2 argument" (let [m (fortran/make-array "real8" 2 2)] (fortran/aset m 0 0 1.0) (fortran/aset m 1 1 5.0) (samplelib.raw/trace m 2)) {:t 6.0})
 (check "a generated :inout array, in place" (let [a (fortran/make-array "real8" 2)] (fortran/aset a 0 1.0) (fortran/aset a 1 2.0) (samplelib.raw/scale a 2 10.0) [(fortran/aget a 0) (fortran/aget a 1)]) [10.0 20.0])
+
+;; The decimal's working precision. The oracle compares with-precision
+;; against real Clojure form by form; what it cannot check is the part
+;; where clotran deliberately answers where Clojure raises, because
+;; there is no Clojure answer to compare with (DEVIATIONS 43).
+(check "a decimal division answers rather than raising"
+       (/ 1M 3) 0.3333333333333333333333333333333333M)
+(check "at decimal128's 34 digits" (count (str (/ 1M 3))) 36)
+(check "the default context is visible, not hidden"
+       *math-context* {:precision 34 :rounding :HALF_EVEN})
+(check "rounding is half to even" (/ 2M 3) 0.6666666666666666666666666666666667M)
+(check "an exact quotient is still exact" (/ 1M 8) 0.125M)
+(check "with-precision narrows it" (with-precision 10 (/ 1M 3)) 0.3333333333M)
+(check "and nil asks for Clojure's own arithmetic back"
+       (binding [*math-context* nil]
+         (try (/ 1M 3) (catch ArithmeticException e :exact-or-throw)))
+       :exact-or-throw)
+(check "a literal keeps every digit it was written with"
+       (str 1.2345678901234567890123456789012345678901M)
+       "1.2345678901234567890123456789012345678901")

@@ -288,6 +288,9 @@ module Eval
   ! as a fn value, and the context the handler runs in. step_at is a
   ! step still to be taken: stop at the next call no deeper than it.
   type(gc_root), save :: handler_var_root, handler_fn_root, resume_root, repl_fn_root
+  ! clojure.core/*math-context*, so the decimal arithmetic can read what
+  ! with-precision bound without looking a Var up by name every time
+  type(gc_root), save :: math_ctx_root
   logical, save :: in_handler = .false., resume_pending = .false.
   integer, save :: handler_ctx = 0, step_at = 0, repl_depth = 0
   ! Tasks (tasks.inc): every task not yet finished; the one running now,
@@ -785,7 +788,20 @@ contains
     call bind_var(core, "*data-readers*", gca_empty([vs_get(base + 1)]))
     call bind_var(core, "*default-data-reader-fn*", gc_nil())
     call bind_var(core, "*assert*", gc_bool(.true.))
-    call bind_var(core, "*math-context*", gc_nil())
+    ! NOT nil, which is Clojure's root and means "exact, or throw".
+    ! clotran is a language for people doing arithmetic, and every
+    ! other such language answers 1/3 rather than raising: MATLAB and
+    ! Octave compute in doubles and never raise, and Julia gives
+    ! BigFloat a working precision (256 bits by default, changed with
+    ! setprecision) so big(1)/big(3) is a number. So the root here is
+    ! Java's own name for that default, MathContext.DECIMAL128 --
+    ! 34 significant digits, HALF_EVEN, which is IEEE 754 decimal128 --
+    ! and with-precision is setprecision. DEVIATIONS 43.
+    !
+    ! (binding [*math-context* nil] ...) asks for Clojure's exact
+    ! arithmetic back, and then (/ 1M 3) throws as it does there.
+    call bind_var(core, "*math-context*", default_math_context([vs_get(base + 1)]), var_out=var)
+    call gc_global_keep(math_ctx_root, var)
     call bind_var(core, "*command-line-args*", gc_nil())
     call bind_var(core, "*flush-on-newline*", gc_bool(.true.))
     call bind_var(core, "*print-meta*", gc_bool(.false.))
@@ -2267,7 +2283,26 @@ contains
     base = vs_enter(5)
     call vs_set(base + 1, argv)
 
-    if (cname == "BigDecimal" .or. cname == "java.math.BigDecimal") then
+    if (cname == "MathContext" .or. cname == "java.math.MathContext") then
+       ! (MathContext. precision) and (MathContext. precision mode) --
+       ! a MAP with named fields, as MethodImplCache is, because
+       ! nothing reads one but the arithmetic below. with-precision
+       ! builds it and binds *math-context* to it.
+       block
+         type(gc_value) :: mc
+         mc = gca_empty([vs_get(base + 1)])
+         call vs_set(base + 3, mc)
+         call vs_set(base + 4, gc_key("precision", [vs_get(base + 1), vs_get(base + 3)]))
+         mc = gca_assoc(vs_get(base + 3), vs_get(base + 4), nth_or_nil(vs_get(base + 1), 0), &
+              [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)])
+         call vs_set(base + 3, mc)
+         call vs_set(base + 4, gc_key("rounding", [vs_get(base + 1), vs_get(base + 3)]))
+         call vs_set(base + 5, gc_key("HALF_UP", [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)]))
+         if (gcv_count(vs_get(base + 1)) >= 2) call vs_set(base + 5, gcv_nth(vs_get(base + 1), 1))
+         out = gca_assoc(vs_get(base + 3), vs_get(base + 4), vs_get(base + 5), &
+              [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4), vs_get(base + 5)])
+       end block
+    else if (cname == "BigDecimal" .or. cname == "java.math.BigDecimal") then
        ! (BigDecimal. x), which core.cljs bigdec falls back to for a
        ! string and uses for a Ratio numerator.
        out = call_builtin(B_TODEC, vs_get(base + 1))
@@ -2780,6 +2815,7 @@ contains
     case (HK_EMPTYMAP); out = gca_empty([roots])
     case (HK_SPECIALS); out = specials_map([roots])
     case (HK_TYPE);     out = gc_key(short_class_name(trim(row%cls)) // "/TYPE", [roots])
+    case (HK_SELFKEY);  out = gc_key(trim(row%mem), [roots])
     end select
   end function host_value
 
@@ -5448,6 +5484,7 @@ contains
           block
             logical :: any_real, any_ratio, any_big, any_dec, dok
             character(len=:), allocatable :: dacc, dopn
+            integer :: mcp, mcm
             real(gc_dp) :: racc
             integer(gc_ip) :: qn, qd, bn, bd, g
             character(len=:), allocatable :: bacc
@@ -5480,12 +5517,20 @@ contains
                   case (B_MUL); dacc = dec_mul(dacc, dopn)
                   end select
                end do
+               ! Under with-precision every operation rounds, as
+               ! Numbers.add(x, y, mc) does; with none it is exact.
+               if (dok) then
+                  call math_context(mcp, mcm)
+                  if (mcp > 0) then
+                     dopn = dacc
+                     call dec_round(dopn, mcp, mcm, dacc, dok)
+                  end if
+               end if
                if (dok) then
                   out = gc_dec(dacc, [vs_get(base + 1)])
                else
                   call raise_class("ArithmeticException", &
-                       "Non-terminating decimal expansion; no exact representable decimal result.", &
-                       [vs_get(base + 1)])
+                       "Rounding necessary", [vs_get(base + 1)])
                   call vs_leave(base)
                   return
                end if
@@ -9054,12 +9099,23 @@ case (B_SLURP)
           block
             character(len=:), allocatable :: dq
             logical :: dok
+            integer :: mcp, mcm
             if (dec_is_zero(dec_of(b))) then
                call raise_class("ArithmeticException", "Divide by zero", [vs_get(base + 1)])
             else
-               call dec_div(dec_of(a), dec_of(b), dq, dok)
+               ! With a precision the quotient is rounded to it; with
+               ! none it is exact or it throws, which is what Java does
+               ! outside with-precision.
+               call math_context(mcp, mcm)
+               if (mcp > 0) then
+                  call dec_div_mc(dec_of(a), dec_of(b), mcp, mcm, dq, dok)
+               else
+                  call dec_div(dec_of(a), dec_of(b), dq, dok)
+               end if
                if (dok) then
                   out = gc_dec(dq, [vs_get(base + 1)])
+               else if (mcp > 0) then
+                  call raise_class("ArithmeticException", "Rounding necessary", [vs_get(base + 1)])
                else
                   call raise_class("ArithmeticException", &
                        "Non-terminating decimal expansion; no exact representable decimal result.", &
@@ -11927,6 +11983,52 @@ case (B_SLURP)
     ok = big_fits_i64(gc_big_text(v))
     if (ok) o = gc_int(big_to_i64(gc_big_text(v)))
   end function rat_operand
+
+  ! MathContext.DECIMAL128 as the map (MathContext. p mode) builds:
+  ! 34 significant digits, rounding half to even. It is what
+  ! *math-context* holds until something binds it.
+  function default_math_context(roots) result(mc)
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: mc, k, v
+    integer :: base
+    base = vs_enter(3)
+    mc = gca_empty(roots)
+    call vs_set(base + 1, mc)
+    k = gc_key("precision", [roots, vs_get(base + 1)])
+    call vs_set(base + 2, k)
+    mc = gca_assoc(vs_get(base + 1), vs_get(base + 2), gc_int(34_gc_ip), &
+         [roots, vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 1, mc)
+    k = gc_key("rounding", [roots, vs_get(base + 1)])
+    call vs_set(base + 2, k)
+    v = gc_key("HALF_EVEN", [roots, vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 3, v)
+    mc = gca_assoc(vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), &
+         [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+    call vs_leave(base)
+  end function default_math_context
+
+  ! What with-precision bound, if anything: the precision (0 when
+  ! there is no context, which every operation reads as "exact or
+  ! throw") and the rounding mode.
+  subroutine math_context(prec, mode)
+    integer, intent(out) :: prec, mode
+    type(gc_value) :: var, mc, pv, rv, none(0)
+    prec = 0
+    mode = DEC_HALF_UP
+    if (.not. gc_root_live(math_ctx_root)) return
+    var = gc_root_get(math_ctx_root)
+    if (.not. gcn_is_var(var)) return
+    mc = strip_meta(gcn_var_value(var))
+    if (.not. gca_is(mc)) return
+    pv = strip_meta(gca_get(mc, gc_key("precision", [mc])))
+    if (pv%tag /= GCT_INT) return
+    prec = int(pv%ival)
+    rv = strip_meta(gca_get(mc, gc_key("rounding", [mc])))
+    if (rv%tag == GCT_KEY) then
+       if (dec_mode_of(gc_ref_text(rv%ref)) /= 0) mode = dec_mode_of(gc_ref_text(rv%ref))
+    end if
+  end subroutine math_context
 
   ! Whether a value is EXACT -- an integer, a BigInt or a decimal --
   ! which is what decides whether a comparison can avoid doubles. A

@@ -17,6 +17,7 @@ program bigdec_test
   call check_quot_rem()
   call check_cmp_strip()
   call check_conversions()
+  call check_rounding()
 
   if (all_ok) then
      print *, ""
@@ -159,5 +160,59 @@ contains
     call eqi("7h. zero is zero: ", merge(1, 0, dec_is_zero(d("0.000"))), 1)
     call eqi("7i. and one is not: ", merge(1, 0, dec_is_zero(d("0.001"))), 0)
   end subroutine check_conversions
+
+  ! Every expected value here is what (with-precision n :rounding MODE ...)
+  ! answers in real Clojure, which is java.math.BigDecimal.round.
+  subroutine check_rounding()
+    character(len=:), allocatable :: r
+    logical :: ok
+    call dec_round(d("4.5555555"), 4, DEC_HALF_UP, r, ok)
+    call eq("8a. four digits: ", dec_to_text(r), "4.556")
+    call dec_round(d("4.5555555"), 6, DEC_HALF_UP, r, ok)
+    call eq("8b. six digits: ", dec_to_text(r), "4.55556")
+    call dec_round(d("4.5555555"), 6, DEC_CEILING, r, ok)
+    call eq("8c. ceiling: ", dec_to_text(r), "4.55556")
+    call dec_round(d("4.5555555"), 6, DEC_FLOOR, r, ok)
+    call eq("8d. floor: ", dec_to_text(r), "4.55555")
+    call dec_round(d("4.5555555"), 6, DEC_UP, r, ok)
+    call eq("8e. up: ", dec_to_text(r), "4.55556")
+    call dec_round(d("4.5555555"), 6, DEC_DOWN, r, ok)
+    call eq("8f. down: ", dec_to_text(r), "4.55555")
+    ! a negative goes the other way for CEILING and FLOOR
+    call dec_round(d("-4.5555555"), 6, DEC_CEILING, r, ok)
+    call eq("8g. ceiling, negative: ", dec_to_text(r), "-4.55555")
+    call dec_round(d("-4.5555555"), 6, DEC_FLOOR, r, ok)
+    call eq("8h. floor, negative: ", dec_to_text(r), "-4.55556")
+    ! the half cases differ only on an exact tie
+    call dec_round(d("2.5"), 1, DEC_HALF_UP, r, ok)
+    call eq("8i. half up: ", dec_to_text(r), "3")
+    call dec_round(d("2.5"), 1, DEC_HALF_DOWN, r, ok)
+    call eq("8j. half down: ", dec_to_text(r), "2")
+    call dec_round(d("2.5"), 1, DEC_HALF_EVEN, r, ok)
+    call eq("8k. half even, to even: ", dec_to_text(r), "2")
+    call dec_round(d("3.5"), 1, DEC_HALF_EVEN, r, ok)
+    call eq("8l. half even, up: ", dec_to_text(r), "4")
+    ! carrying past the leading digit moves the scale
+    call dec_round(d("999.9"), 3, DEC_HALF_UP, r, ok)
+    call eq("8m. carry: ", dec_to_text(r), "1.00E+3")
+    ! nothing to drop
+    call dec_round(d("1.5"), 6, DEC_HALF_UP, r, ok)
+    call eq("8n. already short enough: ", dec_to_text(r), "1.5")
+    call dec_round(d("4.5555"), 5, DEC_UNNECESSARY, r, ok)
+    call eqi("8o. unnecessary, and it was: ", merge(1, 0, ok), 1)
+    call dec_round(d("4.5555555"), 5, DEC_UNNECESSARY, r, ok)
+    call eqi("8p. unnecessary, and it was not: ", merge(1, 0, ok), 0)
+    ! division that has nowhere to stop without a precision
+    call dec_div_mc(d("1"), d("3"), 10, DEC_HALF_UP, r, ok)
+    call eq("8q. a third to ten digits: ", dec_to_text(r), "0.3333333333")
+    call dec_div_mc(d("2"), d("3"), 10, DEC_HALF_UP, r, ok)
+    call eq("8r. two thirds, which rounds up: ", dec_to_text(r), "0.6666666667")
+    call dec_div_mc(d("1"), d("8"), 10, DEC_HALF_UP, r, ok)
+    call eq("8s. one that terminates early: ", dec_to_text(r), "0.125")
+    call dec_div_mc(d("100"), d("4"), 10, DEC_HALF_UP, r, ok)
+    call eq("8t. and one with no fraction: ", dec_to_text(r), "25")
+    call dec_div_mc(d("-1"), d("3"), 5, DEC_HALF_UP, r, ok)
+    call eq("8u. negative: ", dec_to_text(r), "-0.33333")
+  end subroutine check_rounding
 
 end program bigdec_test

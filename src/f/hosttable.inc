@@ -20,9 +20,9 @@
   end type hm
   integer, parameter :: HK_INT = -1, HK_REAL = -2, HK_PINF = -3, HK_NINF = -4, &
        HK_NAN = -5, HK_NIL = -6, HK_EMPTYMAP = -7, HK_SPECIALS = -8, HK_TYPE = -9, &
-       HK_TRUE = -10, HK_FALSE = -11, HK_LINEBOX = -12
+       HK_TRUE = -10, HK_FALSE = -11, HK_LINEBOX = -12, HK_SELFKEY = -13
 
-  type(hm), parameter :: HOST_STATICS_1(78) = [ &
+  type(hm), parameter :: HOST_STATICS_1(86) = [ &
   ! PersistentList.creator is a static IFn that builds a list from its arguments.
        hm("clojure.lang.PersistentList", "creator", B_LIST, "list"), &
   ! core.clj's own make-array, aget, aset and the aset-int family are
@@ -117,6 +117,17 @@
        hm("java.math.BigInteger", "valueOf", B_TOBIG, "bigint"), &
        ! (bigdec x) and the BigDecimal/valueOf it goes through
        hm("java.math.BigDecimal", "valueOf", B_TODEC, "bigdec"), &
+       ! RoundingMode's constants, each the keyword of its own name --
+       ! with-precision writes (. java.math.RoundingMode HALF_UP) and
+       ! nothing else ever looks at one (BigDec.f90 maps the name).
+       hm("java.math.RoundingMode", "UP", HK_SELFKEY), &
+       hm("java.math.RoundingMode", "DOWN", HK_SELFKEY), &
+       hm("java.math.RoundingMode", "CEILING", HK_SELFKEY), &
+       hm("java.math.RoundingMode", "FLOOR", HK_SELFKEY), &
+       hm("java.math.RoundingMode", "HALF_UP", HK_SELFKEY), &
+       hm("java.math.RoundingMode", "HALF_DOWN", HK_SELFKEY), &
+       hm("java.math.RoundingMode", "HALF_EVEN", HK_SELFKEY), &
+       hm("java.math.RoundingMode", "UNNECESSARY", HK_SELFKEY), &
        hm("clojure.lang.Numbers", "unchecked_dec", B_UDEC, "unchecked-dec"), &
        hm("clojure.lang.Numbers", "unchecked_int_dec", B_UDEC, "unchecked-dec") ]
   type(hm), parameter :: HOST_STATICS_2(80) = [ &
@@ -354,7 +365,7 @@
        hm("clojure.lang.Numbers", "flipBit", B_RTFN, "flip-bit"), &
        hm("clojure.lang.Numbers", "long_array", B_RTFN, "long-array-of"), &
        hm("clojure.lang.Numbers", "double_array", B_RTFN, "double-array-of") ]
-  type(hm), parameter :: HOST_STATICS(275) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
+  type(hm), parameter :: HOST_STATICS(283) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
   type(hm), parameter :: HOST_METHODS_1(90) = [ &
   ! Instance members. The target becomes the first argument, which is all

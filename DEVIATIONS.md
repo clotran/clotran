@@ -974,15 +974,13 @@ throws. `(* 1M 0.1M)` is `0.1M`, `(+ 0.1M 0.2M)` is `0.3M`, and
 category -- which is what `(transduce (dedupe) conj [1 1.0 1.0M 1N])`
 in Clojure's own transducer tests asks about.
 
+`with-precision` works too, with all eight of Java's rounding modes:
+`java.math.MathContext` is a map of `:precision` and `:rounding`, and
+`java.math.RoundingMode`'s constants are the keywords of their own
+names. What DEFAULT it has is deviation 43, and it is a deliberate one.
+
 What is NOT closed:
 
-- **`with-precision` does not work.** It binds `*math-context*` to a
-  `java.math.MathContext`, and there is no such class here, so the
-  form raises rather than rounding. Without it there is no rounding at
-  all: `(/ 1M 3)` throws "Non-terminating decimal expansion", which is
-  also what the JVM does outside `with-precision`. Removing it means a
-  MathContext value, `dec_round` with Java's eight rounding modes, and
-  the arithmetic consulting the binding.
 - **`.setScale`, `.precision` and the rest of BigDecimal's methods**
   are not host members. The arithmetic is here, the object protocol is
   not.
@@ -1291,3 +1289,51 @@ throws instead of enabling the checks.
 
 **Removal**: a writable box behind the row, as `Compiler/LINE` has, and
 `set!` on a static that names one.
+
+---
+
+## 43. `*math-context*` has a working precision, so a decimal division answers
+
+Clojure binds `*math-context*` to nil, and a BigDecimal division with
+no context is EXACT OR NOTHING: `(/ 1M 3)` throws
+`ArithmeticException: Non-terminating decimal expansion; no exact
+representable decimal result.` You get a number only by wrapping the
+form in `with-precision`.
+
+clotran binds it to `MathContext.DECIMAL128` instead -- 34 significant
+digits, rounding half to even, which is IEEE 754-2008's decimal128 and
+Java's own name for it. `(/ 1M 3)` answers
+`0.3333333333333333333333333333333333M`.
+
+**Why**, and this is the one deviation taken for a reason outside
+Clojure: clotran is for people doing arithmetic, and no other language
+they use raises on a third.
+
+| | one third |
+|---|---|
+| MATLAB, Octave | `1/3` is a double, `0.3333`; there is no exact-decimal type and no exception |
+| Julia | `1/3` is a `Float64`; `big(1)/big(3)` is a `BigFloat` at the global working precision -- 256 bits, about 77 decimal digits, changed with `setprecision` |
+| Clojure | `(/ 1M 3)` throws unless `with-precision` says otherwise |
+| clotran | `(/ 1M 3)` is 34 digits, and `with-precision` is `setprecision` |
+
+Nothing else moves. A precision only rounds a result that has MORE
+significant digits than it, so every exact case answers exactly as
+Clojure does: `(* 1M 0.1M)` is `0.1M`, `(+ 0.1M 0.2M)` is `0.3M`,
+`(/ 1M 8)` is `0.125M`, `(/ 100M 4)` is `25M`. A literal keeps every
+digit it was written with, because reading is not an operation. Exact
+integers and ratios are untouched -- `(/ 1 3)` is still `1/3`, which is
+more accurate than any decimal and is what Julia's `1//3` does too.
+
+**Clojure's arithmetic is one binding away.** `(binding [*math-context*
+nil] (/ 1M 3))` throws exactly as the JVM does, because nil is still
+"exact or nothing" here. That is also the switch to reach for if a
+program needs to KNOW that a result was inexact rather than be handed a
+rounded one.
+
+The visible cost: `*math-context*` prints as `{:precision 34, :rounding
+:HALF_EVEN}` where Clojure prints nil, and a division that Clojure
+refuses gives an answer here. Both are in the oracle as expected
+differences, so the day either changes, the ledger says so.
+
+**Removal**: bind the Var to nil at bootstrap (`gce_base_env`). One
+line, and everything else about the decimal stays as it is.

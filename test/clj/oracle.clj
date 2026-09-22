@@ -2255,7 +2255,25 @@
 [(pr-str (quot 10.5M 3)) (pr-str (rem 10.5M 3)) (pr-str (mod -7M 3)) (pr-str (inc 1M)) (pr-str (dec 1M)) (pr-str (abs -1.5M)) (compare 1M 2M) (compare 1.0M 1M) (< 1M 2M) (pr-str (max 1M 2M))]
 [(pr-str (bigdec 1)) (pr-str (bigdec 1.5)) (pr-str (bigdec "2.50")) (pr-str (bigdec 1N)) (pr-str (bigdec 1/2)) (pr-str (bigdec 1M)) (bigint 2.5M) (long 2.5M) (double 1.5M) (int 2M)]
 [(transduce (dedupe) conj [1 1.0 1.0M 1N]) (distinct [1 1.0 1.0M 1N]) (pr-str (sort [2M 1M 1.5M]))]
+(expect-diff "DEVIATIONS 43: *math-context* is decimal128 here, so this answers rather than throwing")
 (try (/ 1M 3) (catch ArithmeticException e :non-terminating))
 (try (even? 2M) (catch IllegalArgumentException e :not-an-integer))
 [(sorted-set 0M) (sorted-set 1M 1M) (sorted-set 1N 2N) (sorted-set 1 1.5M 2N) (sorted-map 1M :a) (pr-str (sort [2M 1M 1.5M])) (pr-str (sort [2N 1N 3]))]
 [(bound? (var map)) (.isBound (var map)) (bound? (var map) (var inc))]
+
+;; with-precision, which the derived suite cannot see: `with-precision`
+;; is not in cljs.core, so the clojure/cljs intersection leaves it out
+;; and these are the only tests it has (DEVIATIONS 30, 43)
+[(with-precision 4 (+ 3.5555555M 1)) (with-precision 6 (+ 3.5555555M 1)) (with-precision 2 (* 1.11M 2)) (with-precision 10 (/ 1M 3)) (with-precision 5 (* 1.23456M 1M)) (with-precision 3 (/ 2M 3)) (with-precision 1 (+ 999.9M 0))]
+[(with-precision 6 :rounding CEILING (+ 3.5555555M 1)) (with-precision 6 :rounding FLOOR (+ 3.5555555M 1)) (with-precision 6 :rounding HALF_UP (+ 3.5555555M 1)) (with-precision 6 :rounding HALF_DOWN (+ 3.5555555M 1)) (with-precision 6 :rounding HALF_EVEN (+ 3.5555555M 1)) (with-precision 6 :rounding UP (+ 3.5555555M 1)) (with-precision 6 :rounding DOWN (+ 3.5555555M 1)) (with-precision 6 :rounding UNNECESSARY (+ 3.5555M 1))]
+[(with-precision 6 :rounding CEILING (- 0M 3.5555555M)) (with-precision 6 :rounding FLOOR (- 0M 3.5555555M)) (with-precision 1 :rounding HALF_EVEN (+ 2.5M 0)) (with-precision 1 :rounding HALF_EVEN (+ 3.5M 0)) (with-precision 1 :rounding HALF_DOWN (+ 2.5M 0))]
+[(with-precision 10 (/ 1M 8)) (with-precision 10 (/ 100M 4)) (with-precision 34 (/ 1M 2))]
+(try (with-precision 3 :rounding UNNECESSARY (+ 3.5555M 1)) (catch ArithmeticException e (.getMessage e)))
+(binding [*math-context* (java.math.MathContext. 8)] (+ 3.55555555555555M 1))
+(binding [*math-context* nil] (try (/ 1M 3) (catch ArithmeticException e (.getMessage e))))
+
+;; and the default that makes clotran answer where Clojure raises
+(expect-diff "DEVIATIONS 43: *math-context* is decimal128 here, so a decimal division answers instead of throwing")
+(try (/ 1M 3) (catch ArithmeticException e :throws))
+(expect-diff "DEVIATIONS 43: *math-context* has a value here and is nil in Clojure")
+(pr-str *math-context*)

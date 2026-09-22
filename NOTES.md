@@ -3514,6 +3514,39 @@ The oracle has fifteen cases for it, values against clj, including
 `(apply (fn [a & r] [a (take 3 r)]) 1 (range))` and the atom count
 that shows only one element of a hundred was realised.
 
+## A working precision, because a scientist should not have to ask
+
+`with-precision` is not in cljs.core. The derived suite is the
+clojure.core/cljs.core intersection, so it cannot see the feature at
+all, and the tests for it are OURS: a block of oracle cases compared
+against real Clojure form by form, plus the language test for the one
+part Clojure has no answer to compare with.
+
+The implementation is `dec_round` and `dec_div_mc` in BigDec.f90 --
+Java's eight RoundingModes, decided from the first dropped digit, a
+sticky bit for everything after it, the sign, and the last kept digit
+for HALF_EVEN's tie. `java.math.MathContext` is a map of `:precision`
+and `:rounding` (the shape MethodImplCache already uses), and
+`java.math.RoundingMode`'s constants are the keywords of their own
+names, so Rich's macro runs as written.
+
+Division under a context tries the EXACT quotient first and only
+rounds when there is no exact one, because that is what
+`BigDecimal.divide(d, mc)` does: `(with-precision 10 (/ 1M 8))` is
+`0.125M`, not `0.1250000000M`.
+
+**The default is not Clojure's.** Clojure leaves `*math-context*` nil,
+which means exact-or-throw, so `(/ 1M 3)` raises. clotran binds
+decimal128 -- 34 digits, half to even -- and answers. The reason is
+not Clojure: it is that MATLAB, Octave and Julia all answer, and a
+language people do arithmetic in should not make them think about
+accuracy to divide by three. Julia is the closest shape -- a working
+precision on BigFloat, 256 bits by default, changed with
+`setprecision` -- and `with-precision` IS `setprecision`. A precision
+only rounds what is longer than it, so every exact case is unchanged,
+and `(binding [*math-context* nil] ...)` gives Clojure's arithmetic
+back. DEVIATIONS 43 carries the argument and the removal.
+
 ## BigDecimal: the scale is the value
 
 The last failing test in the derived suite was one line of Clojure's
