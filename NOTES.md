@@ -3913,3 +3913,66 @@ and shows as extra keys in the answer; a string can only go in, so it is
 `:in`. BLAS's binding is generated from netlib's `dgemm.f` now, the hand
 shim is gone, and `blas.raw/dgemm` is DGEMM as netlib declares it,
 thirteen arguments; `blas/dgemm` wraps it as before.
+
+## The intersection is a list of NAMES, and the deriver never walked it
+
+`scripts/derive-tests` picks Clojure's own deftests whose symbols lie
+in the clojure.core/cljs.core intersection. That is a FILTER over the
+tests that exist, not an enumeration of the intersection, and the
+difference is the whole story: a name Clojure's suite never exercises
+is a name the derived suite cannot exercise either, and a green
+scorecard says nothing about it.
+
+Counted rather than assumed:
+
+| | names |
+|---|---|
+| in both clojure.core and cljs.core | 470 |
+| named somewhere in `test/clj/derived/` | 270 |
+| named in `oracle.clj` or `language_test.clj` | 284 |
+| in NEITHER | 115 |
+
+After the sweep the same four counts read 470, 270, 385 and **16**,
+and the 16 are what is left when the testable ones are gone: the REPL
+vars `*1 *2 *3 *e`, the protocols `Inst`, `IKVReduce` and `Eduction`,
+the private helpers (`spread`, `chunk-append`, `chunk-buffer`,
+`mk-bound-fn`, `some-vals`), the namespace forms `import` and
+`refer-clojure`, `bases` (whose answer is our own class hierarchy, not
+the JVM's), and `inst-ms`, which has nothing to take an instant from
+(DEVIATIONS 46).
+
+`int-array` and `object-array` sat in that gap, and both were broken --
+`(int-array 3)` raised. The suite had been green over them the whole
+time.
+
+Writing an oracle case per untested name turned up about twenty
+defects, and FOUR of them were silent wrong answers rather than
+errors:
+
+- `bit-and-not` computed a plain `and`
+- `unsigned-bit-shift-right` shifted arithmetically, so a negative
+  number stayed negative
+- `unchecked-byte` and `unchecked-short` did not truncate
+- `unchecked-divide-int` answered a ratio
+
+Every one of those would have passed a test that only asked whether
+the form was accepted. That is the rule in CLAUDE.md -- test VALUES --
+arriving a second time, now with a denominator attached.
+
+Two more came out of the same sweep afterwards: `munge` was wired to
+`identity`, so `(munge "a-b")` answered `"a-b"`; and `reset-meta!` on
+an atom wrote a slot `meta` never read, because `type_name` had no
+case for `OBJ_ATOM` and an atom therefore answered no to
+`(instance? clojure.lang.IMeta x)`. The dead `t == "atom"` branches in
+`is_instance` had been sitting there waiting for a name nothing
+produced.
+
+**What to do with this.** The gap is a measurement, so re-measure it
+rather than trusting this table. The three numbers are:
+
+    intersection names            -- the two clones, pinned
+    names the derived suite names -- grep test/clj/derived
+    names our own tests name      -- grep oracle.clj, language_test.clj
+
+The remainder is the work. Clojure-only names are the same question asked of the other
+list, and `ns-unmap`, `reset-meta!` and `alter-meta!` came from there.

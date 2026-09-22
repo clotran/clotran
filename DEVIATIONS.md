@@ -1337,3 +1337,85 @@ differences, so the day either changes, the ledger says so.
 
 **Removal**: bind the Var to nil at bootstrap (`gce_base_env`). One
 line, and everything else about the decimal stays as it is.
+
+## 44. `tap>` delivers on the calling thread, before it returns
+
+Clojure's tap set is fed by an `ArrayBlockingQueue` with a daemon
+thread draining it, so `(tap> x)` puts the value on the queue and
+returns `true` at once; the tap functions run later, on that thread.
+A tap that appends to an atom is therefore still empty on the line
+after `tap>`.
+
+clotran has one OS thread (DEVIATIONS 38): the tap thread is a task,
+the queue is a task mailbox, and `.offer` steps the ready tasks before
+it returns. So the taps have already run when `tap>` answers, and
+`(do (tap> 1) @seen)` is `[1]` here and `[]` there.
+
+Nothing else differs: `add-tap`, `remove-tap` and the return value of
+`tap>` are the same, and a program that reads the tap's effect later
+rather than immediately cannot tell the two apart. Only a program that
+reads it IMMEDIATELY sees an answer Clojure would not have yet.
+
+**Removal**: the same thing that removes 38 -- real threads. Delivery
+becomes whatever the scheduler does, which is what Clojure's is.
+
+## 45. An array has ONE class, so `bytes?` cannot answer
+
+`(class (byte-array 1))` is `array` here, and the same `array` for
+every element type; `(.getComponentType (class (byte-array 1)))` is
+nil. Clojure answers `[B` and `byte`.
+
+The consequence is `bytes?`, which core.clj writes as
+
+    (-> x class .getComponentType (= Byte/TYPE))
+
+so it is FALSE for a byte array here. It is false for every other
+array too, so nothing is misidentified as bytes -- the answer is a
+wrong no, never a wrong yes.
+
+An array's storage width is real (`int4`, `real8`, `logical`,
+`value`), but it is a WIDTH, not a JVM primitive type: `byte-array` and
+`short-array` both store `int4`, because Fortran's narrow integer kinds
+buy nothing here and the values are checked on the way in. So even the
+width cannot tell `[B` from `[S`.
+
+`bytes?` is not in the clojure.core/cljs.core intersection --
+ClojureScript has no byte array and no such predicate -- so this is
+Java showing through rather than the language, which is why it is a
+recorded deviation and not a bug.
+
+**Removal**: give OBJ_ARRAY an element-type field distinct from its
+storage width, make `class` answer a class per element type, and give
+those classes a component type. `aset`'s range checks already know the
+type; nothing else does.
+
+
+## 46. There are no data readers, so `#uuid` and `#inst` do not read
+
+`#tag form` is a reader error here -- "reader: no dispatch for #u" --
+for every tag. The reader has no data-reader step at all: it does not
+consult `*data-readers*`, `default-data-readers` or `*default-data-reader-fn*`.
+
+Both Vars exist, because core.clj defines them, and
+`default-data-readers` even holds `{uuid #'clojure.uuid/default-uuid-reader}`.
+Nothing reads the map, and the Var it names is one `clojure.uuid`
+would have defined -- a lib DEVIATIONS 12 skips by name. `#inst` is
+not in the map at all, for the same ledger's other half: `instant.clj`
+is loaded by `(when-class "java.sql.Timestamp" (load "instant"))`, and
+`Class/forName` throws for every name that is not an array class.
+
+What DOES work is everything reachable without the reader:
+`parse-uuid`, `uuid?`, `random-uuid`, `tagged-literal` and
+`tagged-literal?` all answer as Clojure's do, and `read-string` on a
+tagged form inside an unselected reader-conditional branch is skipped
+rather than failing. `inst?` answers false for everything, having
+nothing to be true of. `inst-ms` has no value to take.
+
+**Removal**: one branch in `read_dispatch` for a letter -- read the tag
+symbol, read the form, look up the tag in `*data-readers*` and then
+`default-data-readers`, apply it. The cost is that the READER then
+calls the evaluator, which nothing in `LispReader.f90` does today; that
+layering is the reason this is recorded rather than done. `#uuid`
+then works through `clojure.uuid`, which has to stop being skipped;
+`#inst` additionally wants a date type, which is the same entry's
+other half.

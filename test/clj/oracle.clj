@@ -2277,3 +2277,31 @@
 (try (/ 1M 3) (catch ArithmeticException e :throws))
 (expect-diff "DEVIATIONS 43: *math-context* has a value here and is nil in Clojure")
 (pr-str *math-context*)
+
+;; THE INTERSECTION, name by name. scripts/derive-tests filters Clojure's
+;; own deftests; it never enumerated the intersection itself, so a name
+;; Rich only exercises from a JVM-shaped test had nothing testing it
+;; here. These are those names.
+[(any? 1) (char? \a) (double? 1.0) (ident? 'a) (ident? :a) (indexed? [1]) (inst? 1) (nat-int? 0) (neg-int? -1) (pos-int? 1) (delay? (delay 1)) (distinct? 1 2) (reduced? (reduced 1)) (tagged-literal? (tagged-literal 'x 1))]
+[(qualified-ident? 'a/b) (qualified-keyword? :a/b) (qualified-symbol? 'a/b) (simple-ident? 'a) (simple-keyword? :a) (simple-symbol? 'a) (uri? 1) (uuid? 1) (uuid? (random-uuid)) (string? (str (random-uuid))) (uuid? (parse-uuid "11111111-2222-3333-4444-555555555555"))]
+[(bit-and-not 7 2) (bit-not 0) (bit-or 1 2) (bit-xor 3 1) (unsigned-bit-shift-right -1 60)]
+[(unchecked-byte 300) (unchecked-char 65) (unchecked-short 70000) (unchecked-long 5) (unchecked-double 5) (unchecked-float 5) (unchecked-negate 5) (unchecked-inc-int 5) (unchecked-dec-int 5) (unchecked-negate-int 5) (unchecked-subtract-int 5 2) (unchecked-divide-int 7 2) (unchecked-remainder-int 7 2)]
+[(alength (int-array 3)) (alength (object-array 3)) (aget (int-array [1 2 3]) 1) (aget (object-array [:a :b]) 0) (vec (int-array [1 2 3])) (alength (float-array 2)) (alength (byte-array 2)) (vec (char-array [\a \b])) (vec (boolean-array 2)) (alength (ints (int-array 2)))]
+[(vec (amap (int-array [1 2 3]) i a (* 2 (aget a i)))) (vec (booleans (boolean-array [true false]))) (vec (floats (float-array [1.0 2.0]))) (vec (shorts (short-array [1 2]))) ((memfn toUpperCase) "ab") (comment 1 2) (vec (bytes (byte-array [1 2])))]
+[(mapv vec (to-array-2d [[1 2] [3 4]])) (mapv vec (to-array-2d [[1 2] [3]])) (count (to-array-2d [])) (mapv vec (to-array-2d (list (list :a) (list :b :c))))]
+[(vec (keep-indexed (fn [i x] (when (odd? i) x)) [:a :b :c :d])) (list* 1 [2 3]) (not-empty []) (not-empty [1]) (vec (remove odd? [1 2 3 4])) (count (repeatedly 3 (constantly 1))) (vec (replicate 3 :x)) (splitv-at 2 [1 2 3 4]) (vec (take-last 2 [1 2 3 4])) (vec (tree-seq vector? seq [1 [2 3]])) (trampoline (fn [] (fn [] 42)))]
+[(ancestors :user/none) (descendants :user/none) (let [h (derive (make-hierarchy) :user/a :user/b)] [(contains? (ancestors h :user/a) :user/b) (contains? (descendants h :user/b) :user/a) (contains? (ancestors (underive h :user/a :user/b) :user/a) :user/b)])]
+(require 'clojure.set)
+[(pos? (count (ns-publics 'clojure.set))) (contains? (ns-interns 'clojure.set) 'union) (map? (ns-imports 'clojure.core)) (contains? (ns-publics 'clojure.core) 'map)]
+(let [n (create-ns 'oracle-unmap-ns)] (intern n 'gone 1) [(contains? (ns-publics n) 'gone) (do (ns-unmap n 'gone) (contains? (ns-publics n) 'gone))])
+[(= (hash-ordered-coll [1 2]) (hash-ordered-coll '(1 2))) (= (hash-unordered-coll #{1 2}) (hash-unordered-coll #{2 1})) (integer? (hash-combine 1 2))]
+[((memoize inc) 1) (munge "a-b") (doto [1] count) (locking (Object.) 42) (symbol? (gensym)) (let [a (atom 1)] (reset-meta! a {:b 2}) (meta a)) (munge "a-b?") (munge 'a*b)]
+[(with-out-str (pr 1 2)) (println-str 1) (prn-str 1) (with-out-str (flush)) (<= 0.0 (rand) 1.0) (<= 0 (rand-int 5) 4) (count (random-sample 1.0 [1 2 3]))]
+[(let [a (atom 0) seen (atom nil)] (add-watch a :k (fn [k r o n] (reset! seen n))) (reset! a 5) (remove-watch a :k) (reset! a 9) [@seen @a])]
+[(let [f (fn [x] x)] [(add-tap f) (tap> :hello) (remove-tap f)])]
+[(re-pattern "a+") (str (re-pattern "a+")) (vec (re-seq (re-pattern "a+") "aa b aaa"))]
+[(vector? (destructure '[[a b] [1 2]])) (reduced? (ensure-reduced 1)) (unreduced (reduced 1)) (unreduced 1)]
+(expect-diff "DEVIATIONS 11: a transient IS the persistent collection, so assoc! does not mutate in place")
+[(let [t (transient [1 2])] (assoc! t 0 9) (persistent! t)) (let [t (transient {:a 1})] (dissoc! t :a) (persistent! t))]
+[(do (defprotocol OP (om [x])) (extend-type String OP (om [_] :s)) (extend-protocol OP Long (om [_] :l)) [(om "x") (om 1)])]
+[(let [a (double-array [1.0 2.0])] (areduce a i ret 0.0 (+ ret (aget a i))))]

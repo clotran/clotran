@@ -66,6 +66,47 @@
   ! (reduced x) is {:clotran/reduced x}, an array map of one entry; the
   ! probe for it must not reach a sorted map's comparator, which would
   ! compare the marker key against whatever keys it holds.
+  ! A TAGGED LITERAL -- #inst "..." as data -- is a map of :tag and
+  ! :form under a marker key, the same shape a Reduced uses, so that
+  ! (:tag x) and (:form x) are ordinary lookups and equality is the
+  ! map's. class_name_of answers clojure.lang.TaggedLiteral for it,
+  ! which is what instance? and print-method dispatch on.
+  ! Whether a STRING has the shape of a UUID: 8-4-4-4-12 hex
+  ! digits. A UUID is text here, so this is what uuid? can ask.
+  function is_uuid_text(v) result(yes)
+    type(gc_value), intent(in) :: v
+    logical :: yes
+    type(gc_value) :: s
+    character(len=:), allocatable :: u
+    integer :: i
+    yes = .false.
+    s = strip_meta(v)
+    if (s%tag /= GCT_STR) return
+    u = gc_ref_text(s%ref)
+    if (len(u) /= 36) return
+    do i = 1, 36
+       if (i == 9 .or. i == 14 .or. i == 19 .or. i == 24) then
+          if (u(i:i) /= "-") return
+       else if (.not. ((u(i:i) >= "0" .and. u(i:i) <= "9") .or. &
+            (u(i:i) >= "a" .and. u(i:i) <= "f") .or. &
+            (u(i:i) >= "A" .and. u(i:i) <= "F"))) then
+          return
+       end if
+    end do
+    yes = .true.
+  end function is_uuid_text
+
+  function is_tagged_literal(v) result(yes)
+    type(gc_value), intent(in) :: v
+    logical :: yes
+    type(gc_value) :: m
+    yes = .false.
+    m = strip_meta(v)
+    if (.not. gca_is(m)) return
+    if (gca_is_sorted(m)) return
+    yes = gca_contains(m, gc_key("clotran/tagged-literal", [m]))
+  end function is_tagged_literal
+
   function is_reduced(v) result(yes)
     type(gc_value), intent(in) :: v
     logical :: yes

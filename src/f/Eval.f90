@@ -198,6 +198,45 @@ module Eval
   ! promotes to a BigInt instead of throwing.
   integer, parameter :: B_PADD = 339, B_PSUB = 340, B_PMUL = 341
   integer, parameter :: B_PINC = 342, B_PDEC = 343, B_TOBIG = 344, B_TODEC = 345
+  ! andNot and the UNSIGNED shift. Both used to be pointed at their
+  ! nearest neighbour -- bit-and and an arithmetic shift -- which is a
+  ! wrong ANSWER rather than a missing one: (bit-and-not 7 2) came
+  ! back 2 instead of 5.
+  integer, parameter :: B_BITANDNOT = 346, B_USHR = 347
+  ! the narrowing casts, which TRUNCATE to their width
+  integer, parameter :: B_SHORTCAST = 348, B_BYTECAST = 349, B_INTCAST = 350
+  ! and the CHECKED ones, which raise instead of truncating
+  integer, parameter :: B_CHKSHORT = 351, B_CHKBYTE = 352, B_CHKINT = 353
+  ! Murmur3.hashOrdered/hashUnordered and Util.hashCombine, which are
+  ! what hash-ordered-coll, hash-unordered-coll and a defrecord's
+  ! generated hasheq are written on.
+  integer, parameter :: B_HASHORD = 354, B_HASHUNORD = 355, B_HASHCOMB = 356
+  ! IRef.addWatch/removeWatch/getWatches. A watch is a fn of four
+  ! arguments -- key, reference, old, new -- run after every change.
+  integer, parameter :: B_ADDWATCH = 357, B_REMWATCH = 358, B_GETWATCHES = 359
+  ! TaggedLiteral/create and UUID/fromString
+  integer, parameter :: B_TAGGEDLIT = 360, B_UUIDOF = 361
+  ! The tap queue: java.util.concurrent.ArrayBlockingQueue, which is
+  ! a task MAILBOX here (tasks.inc) -- an atom holding a vector,
+  ! ready when it holds anything -- and a Thread, which is a task.
+  integer, parameter :: B_QOFFER = 362, B_QTAKE = 363, B_THREADSTART = 364
+  integer, parameter :: B_THREADDAEMON = 365, B_NSUNMAP = 366
+  integer, parameter :: B_MUNGE = 367, B_DEMUNGE = 368
+
+  ! Compiler.CHAR_MAP, verbatim from the pinned clone: the characters
+  ! a Clojure name may hold that a JVM member name may not. '.' is
+  ! commented out there and so absent here. The two arrays are one
+  ! table read in both directions; demunge tries the long escapes
+  ! first, so _COLON_ is not read as the _ that stands for a hyphen.
+  character(len=1), parameter :: MUNGE_CH(24) = [ &
+       "-", ":", "+", ">", "<", "=", "~", "!", "@", "#", "'", '"', "%", &
+       "^", "&", "*", "|", "{", "}", "[", "]", "/", "\", "?" ]
+  character(len=16), parameter :: MUNGE_ESC(24) = [ character(len=16) :: &
+       "_", "_COLON_", "_PLUS_", "_GT_", "_LT_", "_EQ_", "_TILDE_", &
+       "_BANG_", "_CIRCA_", "_SHARP_", "_SINGLEQUOTE_", "_DOUBLEQUOTE_", &
+       "_PERCENT_", "_CARET_", "_AMPERSAND_", "_STAR_", "_BAR_", &
+       "_LBRACE_", "_RBRACE_", "_LBRACK_", "_RBRACK_", "_SLASH_", &
+       "_BSLASH_", "_QMARK_" ]
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -2283,7 +2322,17 @@ contains
     base = vs_enter(5)
     call vs_set(base + 1, argv)
 
-    if (cname == "MathContext" .or. cname == "java.math.MathContext") then
+    if (cname == "java.util.concurrent.ArrayBlockingQueue" .or. cname == "ArrayBlockingQueue") then
+       ! A queue is a task mailbox: an atom holding a vector. The
+       ! capacity argument is read and ignored -- nothing here drops.
+       call vs_set(base + 3, gcv_empty([vs_get(base + 1)]))
+       out = gc_obj(OBJ_ATOM, [vs_get(base + 3), gc_nil()], [vs_get(base + 3)])
+    else if (cname == "Thread" .or. cname == "java.lang.Thread") then
+       ! (Thread. f name): the fn, held until .start submits it as a
+       ! task. A thread IS a task here (PLAN.md: a thread is an
+       ! evaluator context); the name is dropped.
+       out = nth_or_nil(vs_get(base + 1), 0)
+    else if (cname == "MathContext" .or. cname == "java.math.MathContext") then
        ! (MathContext. precision) and (MathContext. precision mode) --
        ! a MAP with named fields, as MethodImplCache is, because
        ! nothing reads one but the arithmetic below. with-precision
@@ -3187,6 +3236,77 @@ contains
     call raise_class("ArityException", &
          "Wrong number of args (" // trim(buf) // ") passed to: " // who, roots)
   end subroutine raise_arity
+
+  ! Everything but the first n of a vector, as a vector.
+  function gcv_subvec_from(v, n, roots) result(out)
+    type(gc_value), intent(in) :: v
+    integer, intent(in) :: n
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out
+    integer :: base, i
+    base = vs_enter(2)
+    call vs_set(base + 1, v)
+    out = gcv_empty([roots, vs_get(base + 1)])
+    call vs_set(base + 2, out)
+    do i = n, gcv_count(vs_get(base + 1)) - 1
+       out = gcv_conj(vs_get(base + 2), gcv_nth(vs_get(base + 1), i), &
+            [roots, vs_get(base + 1), vs_get(base + 2)])
+       call vs_set(base + 2, out)
+    end do
+    out = vs_get(base + 2)
+    call vs_leave(base)
+  end function gcv_subvec_from
+
+  ! Step whatever tasks can run right now. tap> needs it: the loop
+  ! that drains the tap queue is a task parked on that queue, and
+  ! with one OS thread nothing else would ever wake it.
+  recursive subroutine run_ready_tasks(target)
+    type(gc_value), intent(in) :: target
+    type(gc_value) :: t
+    logical :: sleeping
+    integer :: guard
+    guard = 0
+    do
+       guard = guard + 1
+       if (guard > 64) exit
+       t = pick_runnable(gc_nil(), sleeping)
+       if (gc_kind(t) /= OBJ_TASK) exit
+       call task_step(t)
+       if (has_error) exit
+    end do
+  end subroutine run_ready_tasks
+
+  ! Every watch on a reference, called with the key, the reference,
+  ! the old value and the new one -- IRef.notifyWatches, which runs
+  ! AFTER the change is in place, so a watch that reads the reference
+  ! sees the new value.
+  recursive subroutine notify_watches(r, oldv, newv, roots)
+    type(gc_value), intent(in) :: r, oldv, newv
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: w, fargs, res
+    type(gc_value), allocatable :: ks(:), fs(:)
+    integer :: base, i
+    if (r%tag /= GCT_OBJ) return
+    w = ref_fn_get(r, "watches", roots)
+    if (.not. gca_is(w)) return
+    if (gca_count(w) == 0) return
+    base = vs_enter(4)
+    call vs_set(base + 1, r)
+    call vs_set(base + 2, w)
+    call vs_set(base + 3, oldv)
+    call vs_set(base + 4, newv)
+    call gca_entries(vs_get(base + 2), ks, fs)
+    do i = 1, size(ks)
+       if (has_error) exit
+       fargs = gcv_empty([roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 4)])
+       fargs = gcv_conj(fargs, ks(i), [roots, vs_get(base + 1), vs_get(base + 3), vs_get(base + 4), fargs])
+       fargs = gcv_conj(fargs, vs_get(base + 1), [roots, vs_get(base + 1), vs_get(base + 3), vs_get(base + 4), fargs])
+       fargs = gcv_conj(fargs, vs_get(base + 3), [roots, vs_get(base + 1), vs_get(base + 3), vs_get(base + 4), fargs])
+       fargs = gcv_conj(fargs, vs_get(base + 4), [roots, vs_get(base + 1), vs_get(base + 3), vs_get(base + 4), fargs])
+       res = apply(fs(i), fargs)
+    end do
+    call vs_leave(base)
+  end subroutine notify_watches
 
   ! A reference's functions -- its validator and its error
   ! handler -- as a small map in slot 4. An object has five
@@ -6051,7 +6171,11 @@ contains
        ! in a wrapper. nil when there is none, as Clojure's meta does.
        a = gcv_nth(vs_get(base + 1), 0)
        out = gc_nil()
-       if (gcn_is_var(a) .or. gc_kind(a) == OBJ_NS) then
+       if (gcn_is_var(a) .or. gc_kind(a) == OBJ_NS .or. gc_kind(a) == OBJ_ATOM) then
+          ! An atom, ref or agent is an IReference: it carries its own
+          ! metadata in the box rather than in a wrapper, which is
+          ! what reset-meta! and alter-meta! write. Leaving it out
+          ! here made both of them answer and then be invisible.
           out = gc_slot(a, meta_slot(a))
        else if (gc_kind(a) == OBJ_META) then
           out = gc_slot(a, 2)
@@ -6320,7 +6444,7 @@ contains
          end do
          out = gc_obj(OBJ_SET, [vs_get(base + 3)], [vs_get(base + 3)])
        end block
-    case (B_BITAND, B_BITOR, B_BITXOR, B_SHL, B_SHR)
+    case (B_BITAND, B_BITOR, B_BITXOR, B_SHL, B_SHR, B_BITANDNOT, B_USHR)
        ! A bit operation is defined on FIXED-WIDTH integers only, and
        ! Clojure says so rather than guessing: "bit operation not
        ! supported for: class clojure.lang.BigInt". Without the check
@@ -6338,10 +6462,65 @@ contains
        case (B_BITXOR); out = gc_int(ieor(a%ival, b%ival))
        case (B_SHL);    out = gc_int(shiftl(a%ival, int(b%ival)))
        case (B_SHR);    out = gc_int(shifta(a%ival, int(b%ival)))
+       ! x AND NOT y, which is what Numbers.andNot is
+       case (B_BITANDNOT); out = gc_int(iand(a%ival, not(b%ival)))
+       ! LOGICAL, not arithmetic: the sign bit is shifted in as a
+       ! zero, so (unsigned-bit-shift-right -1 60) is 15 and not -1.
+       case (B_USHR);   out = gc_int(shiftr(a%ival, int(b%ival)))
        end select
     case (B_BITNOT)
        a = gcv_nth(args, 0)
        out = gc_int(not(a%ival))
+    case (B_CHKSHORT, B_CHKBYTE, B_CHKINT)
+       ! (int 5000000000) is an ERROR in Clojure, not a truncation:
+       ! RT.intCast checks the range and throws. The unchecked- ones
+       ! below truncate, and pointing both at the same builtin made
+       ! the checked ones answer the whole 64 bits.
+       block
+         integer(gc_ip) :: w, lo, hi
+         character(len=32) :: wbuf
+         a = strip_meta(gcv_nth(args, 0))
+         w = int_of_number(a)
+         select case (id)
+         case (B_CHKBYTE);  lo = -128_gc_ip;        hi = 127_gc_ip
+         case (B_CHKSHORT); lo = -32768_gc_ip;      hi = 32767_gc_ip
+         case default;      lo = -2147483648_gc_ip; hi = 2147483647_gc_ip
+         end select
+         if (w < lo .or. w > hi) then
+            write(wbuf, '(I0)') w
+            ! RT.intCast(long) is Math.toIntExact, which throws
+            ! ArithmeticException; every other checked narrowing --
+            ! and intCast of a DOUBLE -- throws IllegalArgumentException
+            ! naming the value.
+            if (id == B_CHKINT .and. a%tag /= GCT_REAL) then
+               call raise_class("ArithmeticException", "integer overflow", [vs_get(base + 1)])
+            else
+               call raise_class("IllegalArgumentException", &
+                    "Value out of range for " // trim(cast_width_name(id)) // ": " // to_string_text(a), &
+                    [vs_get(base + 1)])
+            end if
+         else
+            out = gc_int(w)
+         end if
+       end block
+    case (B_SHORTCAST, B_BYTECAST, B_INTCAST)
+       ! uncheckedShortCast and friends TRUNCATE to the width, which
+       ! is what makes (unchecked-byte 300) 44 and not 300. They went
+       ! through longCast, which is the whole 64 bits.
+       block
+         integer(gc_ip) :: w, m, half
+         a = strip_meta(gcv_nth(args, 0))
+         w = int_of_number(a)
+         select case (id)
+         case (B_BYTECAST);  m = 256_gc_ip
+         case (B_SHORTCAST); m = 65536_gc_ip
+         case default;       m = 4294967296_gc_ip
+         end select
+         half = m / 2
+         w = modulo(w, m)
+         if (w >= half) w = w - m
+         out = gc_int(w)
+       end block
     case (B_LONGCAST)
        a = strip_meta(gcv_nth(args, 0))
        if (a%tag == GCT_DEC) then
@@ -7548,6 +7727,184 @@ case (B_SLURP)
        end block
     case (B_HASH)
        out = gc_int(gc_hash(gcv_nth(args, 0)))
+    case (B_MUNGE, B_DEMUNGE)
+       a = strip_meta(gcv_nth(args, 0))
+       if (id == B_MUNGE) then
+          out = gc_str(munge_text(gc_ref_text(a%ref)), [vs_get(base + 1)])
+       else
+          out = gc_str(demunge_text(gc_ref_text(a%ref)), [vs_get(base + 1)])
+       end if
+    case (B_NSUNMAP)
+       ! (.unmap ns sym): the mapping goes, the Var itself stays
+       ! wherever else it is referred from. Namespace.unmap.
+       block
+         type(gc_value) :: nsv, m
+         nsv = strip_meta(gcv_nth(args, 0))
+         out = gc_nil()
+         if (gc_kind(nsv) == OBJ_NS) then
+            call vs_set(base + 2, nsv)
+            m = gca_dissoc(gc_slot(vs_get(base + 2), 2), strip_meta(gcv_nth(args, 1)), &
+                 [vs_get(base + 1), vs_get(base + 2)])
+            call gc_set_slot(vs_get(base + 2), 2, m)
+            out = vs_get(base + 2)
+         end if
+       end block
+    case (B_QOFFER, B_QTAKE)
+       ! .offer conjes onto the queue and answers true; .take blocks
+       ! until there is something and pops the front. The queue is an
+       ! atom holding a vector, which is exactly what block_on already
+       ! knows how to wait for.
+       block
+         type(gc_value) :: q, items
+         logical :: gotit
+         q = strip_meta(gcv_nth(args, 0))
+         call vs_set(base + 2, q)
+         if (id == B_QOFFER) then
+            items = gc_slot(vs_get(base + 2), 1)
+            if (.not. gcv_is(items)) items = gcv_empty([vs_get(base + 1), vs_get(base + 2)])
+            call vs_set(base + 3, items)
+            items = gcv_conj(vs_get(base + 3), gcv_nth(args, 1), &
+                 [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+            call gc_set_slot(vs_get(base + 2), 1, items)
+            ! Nothing else will run the taps: one OS thread, and the
+            ! loop that reads this queue is parked on it. Step it here,
+            ! so tap> delivers rather than waiting for the next block.
+            call run_ready_tasks(vs_get(base + 2))
+            out = gc_bool(.true.)
+         else
+            gotit = block_on(vs_get(base + 2), -1_gc_ip)
+            items = gc_slot(vs_get(base + 2), 1)
+            if (gcv_is(items) .and. gcv_count(items) > 0) then
+               out = gcv_nth(items, 0)
+               call vs_set(base + 3, out)
+               call gc_set_slot(vs_get(base + 2), 1, &
+                    gcv_subvec_from(items, 1, [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)]))
+               out = vs_get(base + 3)
+            else
+               out = gc_nil()
+            end if
+         end if
+       end block
+    case (B_THREADSTART)
+       ! kept for a thread started by something other than .start
+       out = strip_meta(gcv_nth(args, 0))
+       if (gc_kind(out) == OBJ_CLOSURE) out = task_submit(out)
+    case (B_THREADDAEMON)
+       ! (.setDaemon t b): there is one OS thread, so this is a no-op
+       ! that answers the thread, which doto threads on.
+       out = strip_meta(gcv_nth(args, 0))
+    case (B_TAGGEDLIT)
+       ! (tagged-literal tag form): {:tag t :form f} under the marker.
+       block
+         type(gc_value) :: m
+         m = gca_empty([vs_get(base + 1)])
+         call vs_set(base + 2, m)
+         call vs_set(base + 3, gc_key("clotran/tagged-literal", [vs_get(base + 1), vs_get(base + 2)]))
+         m = gca_assoc(vs_get(base + 2), vs_get(base + 3), gc_bool(.true.), &
+              [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+         call vs_set(base + 2, m)
+         call vs_set(base + 3, gc_key("tag", [vs_get(base + 1), vs_get(base + 2)]))
+         m = gca_assoc(vs_get(base + 2), vs_get(base + 3), gcv_nth(args, 0), &
+              [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+         call vs_set(base + 2, m)
+         call vs_set(base + 3, gc_key("form", [vs_get(base + 1), vs_get(base + 2)]))
+         out = gca_assoc(vs_get(base + 2), vs_get(base + 3), gcv_nth(args, 1), &
+              [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+       end block
+    case (B_UUIDOF)
+       ! (parse-uuid s) and UUID/fromString. A UUID is its TEXT here
+       ! (DEVIATIONS 12: java.util.UUID is not a type clotran has), so
+       ! this checks the shape and answers the string; a string that
+       ! is not one raises, which is what parse-uuid catches to nil.
+       block
+         character(len=:), allocatable :: u
+         integer :: i
+         logical :: okuuid
+         u = text_of(gcv_nth(args, 0))
+         okuuid = (len(u) == 36)
+         if (okuuid) then
+            do i = 1, 36
+               if (i == 9 .or. i == 14 .or. i == 19 .or. i == 24) then
+                  if (u(i:i) /= "-") okuuid = .false.
+               else if (.not. ((u(i:i) >= "0" .and. u(i:i) <= "9") .or. &
+                    (u(i:i) >= "a" .and. u(i:i) <= "f") .or. &
+                    (u(i:i) >= "A" .and. u(i:i) <= "F"))) then
+                  okuuid = .false.
+               end if
+            end do
+         end if
+         if (okuuid) then
+            out = gc_str(u, [vs_get(base + 1)])
+         else
+            call raise_class("IllegalArgumentException", "Invalid UUID string: " // u, [vs_get(base + 1)])
+         end if
+       end block
+    case (B_ADDWATCH, B_REMWATCH, B_GETWATCHES)
+       ! The watches live beside the validator and the error handler
+       ! in slot 4, as a map from key to fn.
+       block
+         type(gc_value) :: r, w
+         r = strip_meta(gcv_nth(args, 0))
+         call vs_set(base + 2, r)
+         w = ref_fn_get(vs_get(base + 2), "watches", [vs_get(base + 1), vs_get(base + 2)])
+         if (.not. gca_is(w)) w = gca_empty([vs_get(base + 1), vs_get(base + 2)])
+         call vs_set(base + 3, w)
+         select case (id)
+         case (B_GETWATCHES)
+            out = vs_get(base + 3)
+         case (B_ADDWATCH)
+            w = gca_assoc(vs_get(base + 3), gcv_nth(args, 1), gcv_nth(args, 2), &
+                 [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+            call vs_set(base + 3, w)
+            call ref_fn_put(vs_get(base + 2), "watches", vs_get(base + 3), [vs_get(base + 1)])
+            out = vs_get(base + 2)
+         case default
+            w = gca_dissoc(vs_get(base + 3), gcv_nth(args, 1), &
+                 [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+            call vs_set(base + 3, w)
+            call ref_fn_put(vs_get(base + 2), "watches", vs_get(base + 3), [vs_get(base + 1)])
+            out = vs_get(base + 2)
+         end select
+       end block
+    case (B_HASHORD, B_HASHUNORD)
+       ! The SAME folds gce_coll_hash uses, so a collection and the
+       ! hash of its elements agree: ordered multiplies by 31 as a
+       ! vector does, unordered sums as a set does. The numbers are
+       ! not murmur3's (DEVIATIONS 15); what matters is that equal
+       ! collections hash alike and that these agree with `hash`.
+       block
+         type(gc_value) :: sq, el
+         integer :: acc
+         acc = 0
+         sq = to_seq(gcv_nth(args, 0), [vs_get(base + 1)])
+         call vs_set(base + 2, sq)
+         sq = vs_get(base + 2)
+         do while (sq%tag /= GCT_NIL .and. .not. has_error)
+            el = sq_first(vs_get(base + 2), [vs_get(base + 1), vs_get(base + 2)])
+            if (id == B_HASHORD) then
+               acc = 31 * acc + gc_hash(el)
+            else
+               acc = acc + gc_hash(el)
+            end if
+            sq = sq_rest(vs_get(base + 2), [vs_get(base + 1), vs_get(base + 2)])
+            call vs_set(base + 2, sq)
+            sq = to_seq(vs_get(base + 2), [vs_get(base + 1), vs_get(base + 2)])
+            call vs_set(base + 2, sq)
+         end do
+         if (id == B_HASHORD) then
+            out = gc_int(mix32(acc))
+         else
+            out = gc_int(mix32(ieor(acc, OBJ_SET)))
+         end if
+       end block
+    case (B_HASHCOMB)
+       ! Util.hashCombine: seed ^ (hash + 0x9e3779b9 + (seed<<6) + (seed>>2))
+       block
+         integer :: sd, hv
+         sd = int(strip_int(gcv_nth(args, 0)))
+         hv = int(strip_int(gcv_nth(args, 1)))
+         out = gc_int(int(ieor(sd, hv + (-1640531527) + shiftl(sd, 6) + shifta(sd, 2)), gc_ip))
+       end block
     case (B_RE_GROUPCOUNT)
        block
          type(gc_value) :: mt
@@ -7648,7 +8005,29 @@ case (B_SLURP)
          out = var2
        end block
     case (B_FORNAME)
-       ! There are no Java classes, so Class/forName THROWS -- which
+       ! An ARRAY class is the exception, and core.clj needs it:
+       ! to-array-2d is (make-array (Class/forName "[Ljava.lang.Object;")
+       ! n), so throwing here made it fail on every collection, ragged
+       ! or not. The name answers as a class, make-array reads it as
+       ! the "value" kind (array_kind_for's default), and each row is
+       ! then an ARRAY STORED AS AN ELEMENT -- which is how a ragged
+       ! result is possible here despite DEVIATIONS 24: the rank-2
+       ! Fortran buffer is not involved.
+       a = strip_meta(gcv_nth(args, 0))
+       if (a%tag == GCT_STR) then
+          block
+            character(len=:), allocatable :: cn
+            cn = gc_ref_text(a%ref)
+            if (len(cn) > 0) then
+               if (cn(1:1) == "[") then
+                  out = gc_class(cn, [vs_get(base + 1)])
+                  call vs_leave(base)
+                  return
+               end if
+            end if
+          end block
+       end if
+       ! Otherwise there are no Java classes, so Class/forName THROWS -- which
        ! is the honest answer and also the useful one: core.clj's
        ! when-class catches ClassNotFoundException and skips the
        ! body, so (when-class "java.sql.Timestamp" (load "instant"))
@@ -7994,6 +8373,7 @@ case (B_SLURP)
          end if
          prev = gc_slot(a, 1)
          call gc_set_slot(a, 1, out)
+         call notify_watches(a, prev, out, [vs_get(base + 1)])
          if (id == B_RESETVALS) out = value_pair(prev, out, [a, args])
        end block
     case (B_SWAPVAL, B_SWAPVALS)
@@ -8041,8 +8421,11 @@ case (B_SLURP)
                out = value_pair(gc_slot(vs_get(lb + 1), 1), out, &
                     [vs_get(lb + 1), vs_get(lb + 2)])
                call gc_set_slot(vs_get(lb + 1), 1, gcv_nth(out, 1))
+               call notify_watches(vs_get(lb + 1), gcv_nth(out, 0), gcv_nth(out, 1), [vs_get(lb + 2)])
             else
+               call vs_set(lb + 3, gc_slot(vs_get(lb + 1), 1))
                call gc_set_slot(vs_get(lb + 1), 1, out)
+               call notify_watches(vs_get(lb + 1), vs_get(lb + 3), out, [vs_get(lb + 2)])
             end if
          end if
          call vs_leave(lb)
@@ -8584,6 +8967,7 @@ case (B_SLURP)
           b = gc_slot(a, 1)
           if (same_object(b, gcv_nth(args, 1))) then
              call gc_set_slot(a, 1, gcv_nth(args, 2))
+             call notify_watches(a, b, gcv_nth(args, 2), [vs_get(base + 1)])
              out = gc_bool(.true.)
           end if
        end if
@@ -8752,6 +9136,14 @@ case (B_SLURP)
     case (B_INTOARRAY)
        out = value_array(gcv_nth(args, n - 1), [vs_get(base + 1)])
     case (B_RE_START, B_RE_END)
+       ! (.start t) on a THREAD is the task starting; the member name
+       ! is shared with a Matcher's group start, and the target says
+       ! which is meant.
+       if (id == B_RE_START .and. gc_kind(strip_meta(gcv_nth(args, 0))) == OBJ_CLOSURE) then
+          out = task_submit(strip_meta(gcv_nth(args, 0)))
+          call vs_leave(base)
+          return
+       end if
        block
          type(gc_value) :: mt, iv
          integer :: mh3, gnum3, gs3, ge3
@@ -10649,6 +11041,12 @@ case (B_SLURP)
        ! A deftype instance answers with its OWN class name, so
        ! (class x) is the keyword a protocol's :impls map is keyed by
        ! and extend-type on the type reaches it.
+       ! An atom names itself here, so the "atom" the IDeref, Atom
+       ! and IMeta cases in is_instance already looked for is a name
+       ! something actually answers to. Without it an atom was an
+       ! "object", which is how (instance? clojure.lang.IMeta (atom 1))
+       ! came back false and reset-meta! wrote a slot `meta` never read.
+       case (OBJ_ATOM);    s = "atom"
        case (OBJ_DELAY);   s = "delay"
        case (OBJ_VOLATILE); s = "volatile"
        case (OBJ_ARRAY);   s = "array"
@@ -11789,6 +12187,13 @@ case (B_SLURP)
     ! "Invalid match arg" on a perfectly good pattern.
     case ("java.util.regex.Pattern", "Pattern"); yes = (t == "regex")
     case ("java.util.regex.Matcher", "Matcher"); yes = (t == "matcher")
+    case ("clojure.lang.TaggedLiteral")
+       ! the same marker-map trick as Reduced, just below
+       yes = is_tagged_literal(v)
+    case ("java.util.UUID", "UUID")
+       ! a UUID is its text here (DEVIATIONS 12), so uuid? asks
+       ! whether the string has the shape of one
+       yes = is_uuid_text(v)
     case ("clojure.lang.Reduced")
        ! A Reduced is the one-key map (reduced x) builds, so instance?
        ! asks for the key. Without this reduce returned the WRAPPER
@@ -11825,9 +12230,12 @@ case (B_SLURP)
        !   (if (instance? clojure.lang.IMeta x) (.meta x))
        ! so answering false here makes (meta (with-meta (fn [] 1) {:a 1}))
        ! nil. Split from IObj below, which a function must NOT claim.
+       ! "atom" is here because an atom, ref or agent is an
+       ! IReference, which extends IMeta: reset-meta! and alter-meta!
+       ! write the box's own metadata slot and `meta` must read it.
        yes = (t == "symbol" .or. t == "list" .or. t == "vector" .or. &
               t == "map" .or. t == "set" .or. t == "var" .or. t == "fn" .or. &
-              t == "seq" .or. t == "lazy-seq" .or. t == "ns")
+              t == "seq" .or. t == "lazy-seq" .or. t == "ns" .or. t == "atom")
        ! and anything with-meta has wrapped can report what it was given
        if (gc_kind(v) == OBJ_META) yes = .true.
     case ("clojure.lang.IObj")
@@ -12029,6 +12437,34 @@ case (B_SLURP)
        if (dec_mode_of(gc_ref_text(rv%ref)) /= 0) mode = dec_mode_of(gc_ref_text(rv%ref))
     end if
   end subroutine math_context
+
+  pure function cast_width_name(id) result(s)
+    integer, intent(in) :: id
+    character(len=:), allocatable :: s
+    select case (id)
+    case (B_CHKBYTE);  s = "byte"
+    case (B_CHKSHORT); s = "short"
+    case default;      s = "int"
+    end select
+  end function cast_width_name
+
+  ! The integer a NUMBER carries, whatever kind it is: what the
+  ! narrowing casts start from.
+  function int_of_number(v) result(i)
+    type(gc_value), intent(in) :: v
+    integer(gc_ip) :: i
+    if (v%tag == GCT_REAL) then
+       i = int(v%rval, gc_ip)
+    else if (v%tag == GCT_BIG) then
+       i = big_to_i64(gc_big_text(v))
+    else if (v%tag == GCT_DEC) then
+       i = big_to_i64(dec_to_big(gc_dec_text(v)))
+    else if (v%tag == GCT_RATIO) then
+       i = gc_numerator(v) / gc_denominator(v)
+    else
+       i = v%ival
+    end if
+  end function int_of_number
 
   ! Whether a value is EXACT -- an integer, a BigInt or a decimal --
   ! which is what decides whether a comparison can avoid doubles. A
@@ -12600,6 +13036,62 @@ case (B_SLURP)
        meta_slot = 2
     end if
   end function meta_slot
+
+  ! Compiler.munge: every character CHAR_MAP names replaced by its
+  ! escape, everything else left alone.
+  function munge_text(s) result(o)
+    character(len=*), intent(in) :: s
+    character(len=:), allocatable :: o
+    integer :: i, j
+    o = ""
+    outer: do i = 1, len(s)
+       do j = 1, size(MUNGE_CH)
+          if (s(i:i) == MUNGE_CH(j)) then
+             o = o // trim(MUNGE_ESC(j))
+             cycle outer
+          end if
+       end do
+       o = o // s(i:i)
+    end do outer
+  end function munge_text
+
+  ! Compiler.demunge: the escapes read back, longest match first,
+  ! plus the $ a nested class name carries standing for a slash.
+  function demunge_text(s) result(o)
+    character(len=*), intent(in) :: s
+    character(len=:), allocatable :: o, e
+    integer :: i, j, n
+    logical :: hit
+    o = ""
+    i = 1
+    n = len(s)
+    do while (i <= n)
+       if (s(i:i) == "$") then
+          o = o // "/"
+          i = i + 1
+          cycle
+       end if
+       hit = .false.
+       do j = 2, size(MUNGE_ESC)
+          e = trim(MUNGE_ESC(j))
+          if (i + len(e) - 1 <= n) then
+             if (s(i:i+len(e)-1) == e) then
+                o = o // MUNGE_CH(j)
+                i = i + len(e)
+                hit = .true.
+                exit
+             end if
+          end if
+       end do
+       if (hit) cycle
+       if (s(i:i) == "_") then
+          o = o // "-"
+       else
+          o = o // s(i:i)
+       end if
+       i = i + 1
+    end do
+  end function demunge_text
 
   ! A symbol or keyword's name, with any namespace qualifier removed;
   ! a string is already its own name.

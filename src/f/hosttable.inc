@@ -22,7 +22,7 @@
        HK_NAN = -5, HK_NIL = -6, HK_EMPTYMAP = -7, HK_SPECIALS = -8, HK_TYPE = -9, &
        HK_TRUE = -10, HK_FALSE = -11, HK_LINEBOX = -12, HK_SELFKEY = -13
 
-  type(hm), parameter :: HOST_STATICS_1(86) = [ &
+  type(hm), parameter :: HOST_STATICS_1(90) = [ &
   ! PersistentList.creator is a static IFn that builds a list from its arguments.
        hm("clojure.lang.PersistentList", "creator", B_LIST, "list"), &
   ! core.clj's own make-array, aget, aset and the aset-int family are
@@ -67,6 +67,9 @@
   ! Util.hash IS Object.hashCode -- the case macro merges collisions on it
        hm("clojure.lang.Util", "hash", B_HASHCODE, "clotran-hashcode"), &
        hm("clojure.lang.Util", "hasheq", B_HASH, "hash"), &
+       hm("clojure.lang.Util", "hashCombine", B_HASHCOMB, "hash-combine"), &
+       hm("clojure.lang.Murmur3", "hashOrdered", B_HASHORD, "hash-ordered-coll"), &
+       hm("clojure.lang.Murmur3", "hashUnordered", B_HASHUNORD, "hash-unordered-coll"), &
   ! Util.classOf and .getClass are `class`: the canonical class keyword
   ! (class_name_of). clotran-type, the internal tag, is host.clj's.
        hm("clojure.lang.Util", "classOf", B_CLASSOF, "clotran-class"), &
@@ -97,7 +100,9 @@
        hm("clojure.lang.Numbers", "multiplyP", B_PMUL, "*'"), &
        hm("clojure.lang.Numbers", "unchecked_multiply", B_UMUL, "unchecked-multiply"), &
        hm("clojure.lang.Numbers", "divide", B_DIV, "/"), &
-       hm("clojure.lang.Numbers", "unchecked_int_divide", B_DIV, "/"), &
+       ! INTEGER division, truncating: (unchecked-divide-int 7 2) is 3
+       hm("clojure.lang.Numbers", "unchecked_int_divide", B_QUOT, "quot"), &
+       hm("clojure.lang.Numbers", "unchecked_int_negate", B_SUB, "-"), &
        hm("clojure.lang.Numbers", "lt", B_LT, "<"), &
        hm("clojure.lang.Numbers", "gt", B_GT, ">"), &
        hm("clojure.lang.Numbers", "lte", B_LTE, "<="), &
@@ -139,10 +144,10 @@
        hm("clojure.lang.Numbers", "or", B_BITOR, "bit-or"), &
        hm("clojure.lang.Numbers", "xor", B_BITXOR, "bit-xor"), &
        hm("clojure.lang.Numbers", "not", B_BITNOT, "bit-not"), &
-       hm("clojure.lang.Numbers", "andNot", B_BITAND, "bit-and"), &
+       hm("clojure.lang.Numbers", "andNot", B_BITANDNOT, "bit-and-not"), &
        hm("clojure.lang.Numbers", "shiftLeft", B_SHL, "bit-shift-left"), &
        hm("clojure.lang.Numbers", "shiftRight", B_SHR, "bit-shift-right"), &
-       hm("clojure.lang.Numbers", "unsignedShiftRight", B_SHR, "bit-shift-right"), &
+       hm("clojure.lang.Numbers", "unsignedShiftRight", B_USHR, "unsigned-bit-shift-right"), &
        hm("clojure.lang.Numbers", "isZero", B_ZERO, "zero?"), &
        hm("clojure.lang.Numbers", "isPos", B_POS, "pos?"), &
        hm("clojure.lang.Numbers", "isNeg", B_NEG, "neg?"), &
@@ -230,8 +235,8 @@
        hm("clojure.lang.Compiler", "macroexpand1", B_MACROEXP1, "clotran-macroexpand-1"), &
        hm("clojure.lang.Compiler", "eval", B_EVAL, "eval"), &
   ! Nothing constrains a name here, so there is nothing to mangle.
-       hm("clojure.lang.Compiler", "munge", B_IDENTITY, "identity"), &
-       hm("clojure.lang.Compiler", "demunge", B_IDENTITY, "identity"), &
+       hm("clojure.lang.Compiler", "munge", B_MUNGE, "munge"), &
+       hm("clojure.lang.Compiler", "demunge", B_DEMUNGE, "demunge"), &
        hm("clojure.lang.Compiler", "LOADER", HK_NIL), &
   ! The namespace argument is ignored: DEVIATIONS.md 3.
        hm("clojure.lang.Compiler", "maybeResolveIn", B_MAYBERESOLVE, "clotran-maybe-resolve"), &
@@ -251,12 +256,12 @@
   ! The primitive casts: one integer kind and one real kind, so the width-named casts land on two conversions.
        hm("clojure.lang.RT", "longCast", B_LONGCAST, "long"), &
        hm("clojure.lang.RT", "uncheckedLongCast", B_LONGCAST, "long"), &
-       hm("clojure.lang.RT", "intCast", B_LONGCAST, "long"), &
-       hm("clojure.lang.RT", "uncheckedIntCast", B_LONGCAST, "long"), &
-       hm("clojure.lang.RT", "shortCast", B_LONGCAST, "long"), &
-       hm("clojure.lang.RT", "uncheckedShortCast", B_LONGCAST, "long"), &
-       hm("clojure.lang.RT", "byteCast", B_LONGCAST, "long"), &
-       hm("clojure.lang.RT", "uncheckedByteCast", B_LONGCAST, "long"), &
+       hm("clojure.lang.RT", "intCast", B_CHKINT, "int"), &
+       hm("clojure.lang.RT", "uncheckedIntCast", B_INTCAST, "unchecked-int"), &
+       hm("clojure.lang.RT", "shortCast", B_CHKSHORT, "short"), &
+       hm("clojure.lang.RT", "uncheckedShortCast", B_SHORTCAST, "unchecked-short"), &
+       hm("clojure.lang.RT", "byteCast", B_CHKBYTE, "byte"), &
+       hm("clojure.lang.RT", "uncheckedByteCast", B_BYTECAST, "unchecked-byte"), &
        hm("clojure.lang.RT", "doubleCast", B_DBLCAST, "double"), &
        hm("clojure.lang.RT", "uncheckedDoubleCast", B_DBLCAST, "double"), &
        hm("clojure.lang.RT", "floatCast", B_DBLCAST, "double"), &
@@ -299,7 +304,7 @@
   ! Long's bounds are clotran's own: an integer here IS a 64-bit one.
        hm("java.lang.Long", "MAX_VALUE", HK_INT, "", huge(0_gc_ip)), &
        hm("java.lang.Long", "MIN_VALUE", HK_INT, "", -huge(0_gc_ip) - 1_gc_ip) ]
-  type(hm), parameter :: HOST_STATICS_4(45) = [ &
+  type(hm), parameter :: HOST_STATICS_4(62) = [ &
   ! Double.MIN_VALUE is the smallest POSITIVE value, a denormal, which
   ! Clojure's own math tests check.
        hm("java.lang.Double", "MAX_VALUE", HK_REAL, "", 0_gc_ip, huge(1.0_gc_dp)), &
@@ -332,6 +337,8 @@
        ! clojure.spec.alpha tags each or/alt/rep spec with one, and only
        ! ever compares them: a fresh unique string is what it needs
        hm("java.util.UUID", "randomUUID", B_RANDOMUUID, "clotran-random-uuid"), &
+       hm("java.util.UUID", "fromString", B_UUIDOF, "clotran-uuid-of"), &
+       hm("clojure.lang.TaggedLiteral", "create", B_TAGGEDLIT, "tagged-literal"), &
        ! RT.checkSpecAsserts: -Dclojure.spec.check-asserts, off by default,
        ! so (s/assert spec x) is x. (s/check-asserts true) would set! it,
        ! which a host static here cannot be (DEVIATIONS 4).
@@ -364,15 +371,36 @@
        hm("clojure.lang.Numbers", "clearBit", B_RTFN, "clear-bit"), &
        hm("clojure.lang.Numbers", "flipBit", B_RTFN, "flip-bit"), &
        hm("clojure.lang.Numbers", "long_array", B_RTFN, "long-array-of"), &
-       hm("clojure.lang.Numbers", "double_array", B_RTFN, "double-array-of") ]
-  type(hm), parameter :: HOST_STATICS(283) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
+       hm("clojure.lang.Numbers", "double_array", B_RTFN, "double-array-of"), &
+       hm("clojure.lang.Numbers", "int_array", B_RTFN, "int-array-of"), &
+       hm("clojure.lang.Numbers", "float_array", B_RTFN, "float-array-of"), &
+       hm("clojure.lang.Numbers", "short_array", B_RTFN, "short-array-of"), &
+       hm("clojure.lang.Numbers", "byte_array", B_RTFN, "byte-array-of"), &
+       hm("clojure.lang.Numbers", "char_array", B_RTFN, "char-array-of"), &
+       hm("clojure.lang.Numbers", "boolean_array", B_RTFN, "boolean-array-of"), &
+       hm("clojure.lang.RT", "object_array", B_RTFN, "object-array-of"), &
+       ! the primitive-array COERCIONS: a clotran array already knows
+       ! its own kind, so each of these is the array it was given
+       hm("clojure.lang.Numbers", "booleans", B_IDENTITY, "identity"), &
+       hm("clojure.lang.Numbers", "bytes", B_IDENTITY, "identity"), &
+       hm("clojure.lang.Numbers", "chars", B_IDENTITY, "identity"), &
+       hm("clojure.lang.Numbers", "shorts", B_IDENTITY, "identity"), &
+       hm("clojure.lang.Numbers", "floats", B_IDENTITY, "identity"), &
+       hm("clojure.lang.Numbers", "ints", B_IDENTITY, "identity"), &
+       hm("clojure.lang.Numbers", "longs", B_IDENTITY, "identity"), &
+       hm("clojure.lang.Numbers", "doubles", B_IDENTITY, "identity") ]
+  type(hm), parameter :: HOST_STATICS(304) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
-  type(hm), parameter :: HOST_METHODS_1(90) = [ &
+  type(hm), parameter :: HOST_METHODS_1(91) = [ &
   ! Instance members. The target becomes the first argument, which is all
   ! an instance method is: (.withMeta x m) calls with-meta on x and m.
        hm("", "meta", B_META, "meta"), &
        hm("", "withMeta", B_WITHMETA, "with-meta"), &
        hm("", "count", B_COUNT, "count"), &
+       ! java.util.Collection.size, which core.clj's to-array-2d
+       ! calls on its argument. A deftype with its own `size` is
+       ! reached before this row, so rt.cljf's ArrayList keeps its.
+       hm("", "size", B_COUNT, "count"), &
        hm("", "seq", B_SEQ, "seq"), &
        hm("", "first", B_FIRST, "first"), &
        hm("", "next", B_NEXT, "next"), &
@@ -477,7 +505,7 @@
        hm("", "resetMeta", B_RESETMETA, "clotran-reset-meta"), &
        hm("", "setMeta", B_RESETMETA, "clotran-reset-meta"), &
        hm("", "set", B_SETVAL, "clotran-set-val") ]
-  type(hm), parameter :: HOST_METHODS_2(70) = [ &
+  type(hm), parameter :: HOST_METHODS_2(77) = [ &
        hm("", "reset", B_SETVAL, "clotran-set-val"), &
        hm("", "bindRoot", B_BINDROOT, "clotran-bind-root"), &
        hm("", "getRawRoot", B_RAWROOT, "clotran-raw-root"), &
@@ -488,6 +516,15 @@
        hm("", "countDown", B_LATCHDOWN, "clotran-latch-down"), &
        hm("", "getCount", B_LATCHCOUNT, "clotran-latch-count"), &
        hm("", "compareAndSet", B_CAS, "compare-and-set!"), &
+       ! IRef's watches: add-watch, remove-watch and the map itself
+       hm("", "addWatch", B_ADDWATCH, "add-watch"), &
+       hm("", "removeWatch", B_REMWATCH, "remove-watch"), &
+       hm("", "getWatches", B_GETWATCHES, "clotran-get-watches"), &
+       hm("", "unmap", B_NSUNMAP, "ns-unmap"), &
+       ! the tap queue and the loop that drains it
+       hm("", "offer", B_QOFFER, "clotran-queue-offer"), &
+       hm("", "take", B_QTAKE, "clotran-queue-take"), &
+       hm("", "setDaemon", B_THREADDAEMON, "clotran-thread-daemon"), &
   ! Sorted collections (sorted.inc): what subseq, rsubseq and rseq ask
        hm("", "seqFrom", B_SEQFROM, "clotran-seq-from"), &
        hm("", "entryKey", B_ENTRYKEY, "clotran-entry-key"), &
@@ -555,4 +592,4 @@
        hm("", "isCancelled", B_TASKCANCELLED, "clotran-task-cancelled"), &
        hm("", "cancel", B_TASKCANCEL, "clotran-task-cancel"), &
        hm("", "availableProcessors", B_NPROCS, "clotran-processors") ]
-  type(hm), parameter :: HOST_METHODS(160) = [HOST_METHODS_1, HOST_METHODS_2]
+  type(hm), parameter :: HOST_METHODS(168) = [HOST_METHODS_1, HOST_METHODS_2]

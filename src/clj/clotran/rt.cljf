@@ -172,6 +172,19 @@
 
 (defn long-array-of ([x] (typed-array "int8" x)) ([n init] (typed-array "int8" n init)))
 (defn double-array-of ([x] (typed-array "real8" x)) ([n init] (typed-array "real8" n init)))
+(defn int-array-of ([x] (typed-array "int4" x)) ([n init] (typed-array "int4" n init)))
+(defn float-array-of ([x] (typed-array "real4" x)) ([n init] (typed-array "real4" n init)))
+;; Fortran has no 8- or 16-bit numeric kind here, and a Java short
+;; and byte are integers of a narrower width: they get int4, the same
+;; mapping (make-array Short/TYPE n) already uses.
+(defn short-array-of ([x] (typed-array "int4" x)) ([n init] (typed-array "int4" n init)))
+(defn byte-array-of ([x] (typed-array "int4" x)) ([n init] (typed-array "int4" n init)))
+(defn boolean-array-of ([x] (typed-array "logical" x)) ([n init] (typed-array "logical" n init)))
+;; A char and an object array hold clotran VALUES rather than a
+;; numeric kind, so a character stays a character and an object array
+;; can hold anything -- which is what object-array is for.
+(defn char-array-of ([x] (typed-array "value" x)) ([n init] (typed-array "value" n init)))
+(defn object-array-of ([x] (typed-array "value" x)) ([n init] (typed-array "value" n init)))
 
 (defn cycle-of
   "Cycle.create: the seq repeated forever, realised only as far as it is
@@ -188,3 +201,4 @@
       (let [r (f acc i (nth v i))]
         (if (reduced? r) @r (recur (inc i) r)))
       acc)))
+
