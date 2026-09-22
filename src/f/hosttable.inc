@@ -356,7 +356,7 @@
        hm("clojure.lang.Numbers", "double_array", B_RTFN, "double-array-of") ]
   type(hm), parameter :: HOST_STATICS(275) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
-  type(hm), parameter :: HOST_METHODS_1(89) = [ &
+  type(hm), parameter :: HOST_METHODS_1(90) = [ &
   ! Instance members. The target becomes the first argument, which is all
   ! an instance method is: (.withMeta x m) calls with-meta on x and m.
        hm("", "meta", B_META, "meta"), &
@@ -418,6 +418,11 @@
        hm("", "chunkedNext", B_CHUNK_NEXT, "clotran-chunked-next"), &
        hm("", "reduce", B_REDUCEINIT, "clotran-reduce"), &
        hm("", "hasRoot", B_HASROOT, "clotran-has-root"), &
+       ! Var.isBound is hasRoot OR a thread binding; there are no
+       ! thread bindings to ask about here, so the two are one row.
+       ! (bound? v) is what needs it, and clojure.repl and
+       ! clojure.reflect both call it.
+       hm("", "isBound", B_HASROOT, "clotran-has-root"), &
        hm("", "addMethod", B_ADDMETHOD, "clotran-add-method"), &
        hm("", "removeMethod", B_REMOVEMETHOD, "clotran-remove-method"), &
   ! clotran's types form no class hierarchy: nil sends find-protocol-impl to its Object fallback.
@@ -539,4 +544,4 @@
        hm("", "isCancelled", B_TASKCANCELLED, "clotran-task-cancelled"), &
        hm("", "cancel", B_TASKCANCEL, "clotran-task-cancel"), &
        hm("", "availableProcessors", B_NPROCS, "clotran-processors") ]
-  type(hm), parameter :: HOST_METHODS(159) = [HOST_METHODS_1, HOST_METHODS_2]
+  type(hm), parameter :: HOST_METHODS(160) = [HOST_METHODS_1, HOST_METHODS_2]

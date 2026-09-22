@@ -2258,3 +2258,4 @@
 (try (/ 1M 3) (catch ArithmeticException e :non-terminating))
 (try (even? 2M) (catch IllegalArgumentException e :not-an-integer))
 [(sorted-set 0M) (sorted-set 1M 1M) (sorted-set 1N 2N) (sorted-set 1 1.5M 2N) (sorted-map 1M :a) (pr-str (sort [2M 1M 1.5M])) (pr-str (sort [2N 1N 3]))]
+[(bound? (var map)) (.isBound (var map)) (bound? (var map) (var inc))]
