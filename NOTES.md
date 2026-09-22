@@ -3968,11 +3968,14 @@ case for `OBJ_ATOM` and an atom therefore answered no to
 produced.
 
 **What to do with this.** The gap is a measurement, so re-measure it
-rather than trusting this table. The three numbers are:
+rather than trusting this table:
 
-    intersection names            -- the two clones, pinned
-    names the derived suite names -- grep test/clj/derived
-    names our own tests name      -- grep oracle.clj, language_test.clj
+    bb scripts/derive-tests --coverage
+
+which prints the four counts and then names the gap. It reuses the
+deriver's own intersection -- the two pinned clones, read with
+edamame rather than grepped -- and writes nothing, so it is safe to
+run against a derived suite you do not want regenerated.
 
 The remainder is the work. Clojure-only names are the same question asked of the other
 list, and `ns-unmap`, `reset-meta!` and `alter-meta!` came from there.

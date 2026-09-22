@@ -318,7 +318,8 @@
                                          :else clause))
                                  (drop 2 ns-form)))))}))
 
-(let [report? (= "--report" (first *command-line-args*))
+(let [report? (#{"--report" "--coverage"} (first *command-line-args*))
+      coverage? (= "--coverage" (first *command-line-args*))
       clj-names  (reduce into #{} (map (comp public-names parse) core-clj-files))
       cljs-names (into (public-names (parse core-cljs)) (public-names (parse core-cljc)))
       lang (set (filter cljs-names clj-names))
@@ -347,6 +348,31 @@
                        (get counts :concurrency 0) (get counts :host 0)))))
   (let [tot (apply merge-with + (map :counts rows)) n (reduce + (vals tot))]
     (println (format "%-44s %5d %5d %5d %5d" "TOTAL" n (:language tot 0) (:concurrency tot 0) (:host tot 0))))
+  (when coverage?
+    ;; The intersection is a LIST OF NAMES; this script's filter runs
+    ;; over the tests that exist, which is not the same thing. A name
+    ;; Clojure's suite never exercises is a name the derived suite
+    ;; cannot exercise either -- int-array and object-array sat in
+    ;; that gap and were both broken while the suite was green.
+    ;; NOTES.md "The intersection is a list of NAMES" is the finding.
+    (let [text  (fn [fs] (apply str (map slurp fs)))
+          derived (text (filter #(str/ends-with? (.getName %) ".clj") (.listFiles out-dir)))
+          ours    (text [(io/file repo "test/clj/oracle.clj")
+                         (io/file repo "test/clj/language_test.clj")])
+          tok   (fn [n] (re-pattern (str "(?<![A-Za-z0-9*+!_?<>=/.'-])"
+                                         (java.util.regex.Pattern/quote (str n))
+                                         "(?![A-Za-z0-9*+!_?<>=/.'-])")))
+          in?   (fn [hay n] (boolean (re-find (tok n) hay)))
+          d     (set (filter #(in? derived %) lang))
+          o     (set (filter #(in? ours %) lang))
+          gap   (sort (remove (into d o) lang))]
+      (println)
+      (println (format "intersection names                %4d" (count lang)))
+      (println (format "named in the derived suite        %4d" (count d)))
+      (println (format "named in oracle/language_test     %4d" (count o)))
+      (println (format "named in NEITHER                  %4d" (count gap)))
+      (println)
+      (println (str/join " " gap))))
   (println)
   (println "most frequent symbols that made a test HOST:")
   (doseq [[s c] (take 40 (sort-by (comp - second) @offence-count))]
