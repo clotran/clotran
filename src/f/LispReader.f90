@@ -24,6 +24,7 @@
 module LispReader
   use GC
   use BigInt
+  use BigDec
   use PersistentList
   use PersistentVector
   use Assoc
@@ -1609,10 +1610,17 @@ contains
           end if
        end if
     else if (s(n:n) == "M") then
-       if (looks_real(s(1:n - 1))) then
-          val = gc_real(to_real(s(1:n - 1)))
-          yes = .true.
-       end if
+       ! 1.0M is a BigDecimal, and the literal's own text decides its
+       ! scale: 1M, 1.0M and 1.00M are three different decimals.
+       block
+         character(len=:), allocatable :: dv
+         logical :: dok
+         call dec_from_text(s(1:n - 1), dv, dok)
+         if (dok) then
+            val = gc_dec(dv, roots)
+            yes = .true.
+         end if
+       end block
     end if
     if (.false.) val = gc_sym(s, roots)
   end function suffixed_number

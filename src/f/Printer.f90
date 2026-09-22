@@ -17,6 +17,7 @@
 ! printing quotes.
 module Printer
   use GC
+  use BigDec
   use PersistentList
   use PersistentVector
   use Assoc
@@ -103,6 +104,11 @@ contains
        else
           s = u8_enc(int(v%ival, kind=4))
        end if
+    case (GCT_DEC)
+       ! 1.0M readably, 1.0 as text -- and the SCALE is part of it, so
+       ! 1M and 1.0M print apart however equal they are.
+       s = dec_to_text(gc_ref_text(v%ref))
+       if (readable) s = s // "M"
     case (GCT_CLASS)
        ! A class prints as its NAME, readably or not: java.lang.Long,
        ! never :Long. (class (class 1)) is java.lang.Class.

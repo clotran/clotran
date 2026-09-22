@@ -122,7 +122,8 @@
     type(gc_value) :: v
     v = strip_meta(v0)
     select case (v%tag)
-    case (GCT_NIL, GCT_INT, GCT_REAL, GCT_RATIO, GCT_STR, GCT_KEY, GCT_SYM, GCT_CHAR, GCT_BOOL)
+    case (GCT_NIL, GCT_INT, GCT_REAL, GCT_RATIO, GCT_STR, GCT_KEY, GCT_SYM, GCT_CHAR, GCT_BOOL, &
+          GCT_BIG, GCT_DEC)
        yes = .true.
     case default
        yes = gcv_is(v)

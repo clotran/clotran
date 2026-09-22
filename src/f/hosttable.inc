@@ -22,7 +22,7 @@
        HK_NAN = -5, HK_NIL = -6, HK_EMPTYMAP = -7, HK_SPECIALS = -8, HK_TYPE = -9, &
        HK_TRUE = -10, HK_FALSE = -11, HK_LINEBOX = -12
 
-  type(hm), parameter :: HOST_STATICS_1(77) = [ &
+  type(hm), parameter :: HOST_STATICS_1(78) = [ &
   ! PersistentList.creator is a static IFn that builds a list from its arguments.
        hm("clojure.lang.PersistentList", "creator", B_LIST, "list"), &
   ! core.clj's own make-array, aget, aset and the aset-int family are
@@ -115,6 +115,8 @@
        hm("clojure.lang.BigInt", "valueOf", B_TOBIG, "bigint"), &
        hm("clojure.lang.BigInt", "fromBigInteger", B_TOBIG, "bigint"), &
        hm("java.math.BigInteger", "valueOf", B_TOBIG, "bigint"), &
+       ! (bigdec x) and the BigDecimal/valueOf it goes through
+       hm("java.math.BigDecimal", "valueOf", B_TODEC, "bigdec"), &
        hm("clojure.lang.Numbers", "unchecked_dec", B_UDEC, "unchecked-dec"), &
        hm("clojure.lang.Numbers", "unchecked_int_dec", B_UDEC, "unchecked-dec") ]
   type(hm), parameter :: HOST_STATICS_2(80) = [ &
@@ -352,9 +354,9 @@
        hm("clojure.lang.Numbers", "flipBit", B_RTFN, "flip-bit"), &
        hm("clojure.lang.Numbers", "long_array", B_RTFN, "long-array-of"), &
        hm("clojure.lang.Numbers", "double_array", B_RTFN, "double-array-of") ]
-  type(hm), parameter :: HOST_STATICS(274) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
+  type(hm), parameter :: HOST_STATICS(275) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
-  type(hm), parameter :: HOST_METHODS_1(88) = [ &
+  type(hm), parameter :: HOST_METHODS_1(89) = [ &
   ! Instance members. The target becomes the first argument, which is all
   ! an instance method is: (.withMeta x m) calls with-meta on x and m.
        hm("", "meta", B_META, "meta"), &
@@ -369,6 +371,7 @@
        hm("", "getName", B_GETNAME, "clotran-get-name"), &
        ! biginteger, and bigint of a Ratio, go through these
        hm("", "toBigInteger", B_TOBIG, "bigint"), &
+       hm("", "toBigDecimal", B_TODEC, "bigdec"), &
        hm("", "bigIntegerValue", B_TOBIG, "bigint"), &
        hm("", "name", B_GETNAME, "clotran-get-name"), &
        hm("", "getSimpleName", B_GETNAME, "clotran-get-name"), &
@@ -536,4 +539,4 @@
        hm("", "isCancelled", B_TASKCANCELLED, "clotran-task-cancelled"), &
        hm("", "cancel", B_TASKCANCEL, "clotran-task-cancel"), &
        hm("", "availableProcessors", B_NPROCS, "clotran-processors") ]
-  type(hm), parameter :: HOST_METHODS(158) = [HOST_METHODS_1, HOST_METHODS_2]
+  type(hm), parameter :: HOST_METHODS(159) = [HOST_METHODS_1, HOST_METHODS_2]

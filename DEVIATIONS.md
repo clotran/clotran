@@ -961,36 +961,31 @@ mutable boxes) and 11 (transients are the persistent collections) --
 every one of them is single-threadedness showing through, and none of
 them can go until Fortran here has somewhere to put a second thread.
 
-## 30. `1M` is a double
+## 30. RESOLVED -- BigDecimal, except for rounding
 
-Clojure reads `1M` as a `java.math.BigDecimal`. clotran has no such
-type, and used to read the literal as a SYMBOL -- so `(cond 0M :a true
-:b)` answered "unable to resolve symbol: 0M" rather than `:a`, and
-`(= 45M (deref a))` could not run at all.
+**RESOLVED 2026-09-21.** `1M` reads as a `java.math.BigDecimal`:
+`src/f/BigDec.f90` is an unscaled BigInt and a scale, and the scale is
+part of the value, so `1M`, `1.0M` and `1.00M` are three decimals that
+print apart and compare EQUAL, as Java's `compareTo` and Clojure's `=`
+say they do. Every scale rule is BigDecimal's: add and subtract take
+the larger scale, multiply adds them, and division is exact or it
+throws. `(* 1M 0.1M)` is `0.1M`, `(+ 0.1M 0.2M)` is `0.3M`, and
+`(= 1.0M 1.0)` is false because a decimal is its own equality
+category -- which is what `(transduce (dedupe) conj [1 1.0 1.0M 1N])`
+in Clojure's own transducer tests asks about.
 
-The suffix now drops to the nearest thing clotran does have, and the
-choice was made by what `=` then says rather than by which looks
-closest:
+What is NOT closed:
 
-| | Clojure | clotran | why |
-|---|---|---|---|
-| `1M` | BigDecimal | double | `(= 1M 1)` is FALSE in Clojure, and `(= 1.0 1)` is false here |
-
-Reading `45M` as the integer `45` would have been the obvious choice and
-the wrong one: it makes `(= 45M 45)` true where Clojure says false,
-because a BigDecimal is its own equality category. A double lands in a
-different category from an integer for exactly the same reason, so the
-comparison comes out right without the type existing.
-
-`1N` is NOT in this entry any more: there is a real BigInt
-(deviation 26), and `1N` reads as one.
-
-What is lost is exact decimal arithmetic and the type itself:
-
-    (type 1M)     java.math.BigDecimal     -> :double
-    (pr-str 1M)   "1M"                     -> "1.0"
-    (* 1M 0.1M)                            -> not exact decimal
-    (bigint 2.5)                           -> no such member: BigDecimal/valueOf
+- **`with-precision` does not work.** It binds `*math-context*` to a
+  `java.math.MathContext`, and there is no such class here, so the
+  form raises rather than rounding. Without it there is no rounding at
+  all: `(/ 1M 3)` throws "Non-terminating decimal expansion", which is
+  also what the JVM does outside `with-precision`. Removing it means a
+  MathContext value, `dec_round` with Java's eight rounding modes, and
+  the arithmetic consulting the binding.
+- **`.setScale`, `.precision` and the rest of BigDecimal's methods**
+  are not host members. The arithmetic is here, the object protocol is
+  not.
 
 and, with it, everything `with-precision` is for. A literal past
 2^63 is the same 64-bit ceiling deviation 26 names.

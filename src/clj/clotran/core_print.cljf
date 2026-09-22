@@ -10,8 +10,9 @@
 ;; place (Eval.f90 B_RTLOAD), with what was the JVM taken out -- the
 ;; print-method and print-dup methods keyed on java.util.List, Map, Set,
 ;; Collection and RandomAccess and the preferences among them, and the
-;; methods for Float, BigDecimal and StackTraceElement, which clotran
-;; never produces. Everything that prints a Clojure value is Rich's, line
+;; methods for Float and StackTraceElement, which clotran never
+;; produces (BigDecimal came back on 2026-09-21, when 1.0M started
+;; reading as one). Everything that prints a Clojure value is Rich's, line
 ;; for line. ClojureScript does the same: its printing is its own, on a
 ;; protocol, and it does not model java.util to run this file verbatim.
 ;; DEVIATIONS.md 40.
@@ -314,6 +315,7 @@
 (defmethod print-dup java.lang.Long [o w] (print-method o w))
 (defmethod print-dup java.lang.Double [o w] (print-method o w))
 (defmethod print-dup clojure.lang.Ratio [o w] (print-method o w))
+(defmethod print-dup java.math.BigDecimal [o w] (print-method o w))
 (defmethod print-dup clojure.lang.BigInt [o w] (print-method o w))
 (defmethod print-dup clojure.lang.PersistentHashMap [o w] (print-method o w))
 (defmethod print-dup clojure.lang.PersistentHashSet [o w] (print-method o w))
@@ -348,6 +350,10 @@
     :else (do
             (.write w "#=")
             (.write w (.getName c)))))
+
+(defmethod print-method java.math.BigDecimal [b, ^Writer w]
+  (.write w (str b))
+  (.write w "M"))
 
 (defmethod print-method clojure.lang.BigInt [b, ^Writer w]
   (.write w (str b))

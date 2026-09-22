@@ -47,6 +47,7 @@ module Eval
        ieee_positive_inf, ieee_negative_inf, ieee_quiet_nan
   use GC
   use BigInt
+  use BigDec
   use PersistentList
   use PersistentVector
   use Assoc
@@ -196,7 +197,7 @@ module Eval
   ! friends). Same arithmetic as + - * inc dec, but an overflow
   ! promotes to a BigInt instead of throwing.
   integer, parameter :: B_PADD = 339, B_PSUB = 340, B_PMUL = 341
-  integer, parameter :: B_PINC = 342, B_PDEC = 343, B_TOBIG = 344
+  integer, parameter :: B_PINC = 342, B_PDEC = 343, B_TOBIG = 344, B_TODEC = 345
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
   integer, parameter :: B_COMPTYPE = 173
 
@@ -2266,7 +2267,11 @@ contains
     base = vs_enter(5)
     call vs_set(base + 1, argv)
 
-    if (cname == "BigInteger" .or. cname == "java.math.BigInteger") then
+    if (cname == "BigDecimal" .or. cname == "java.math.BigDecimal") then
+       ! (BigDecimal. x), which core.cljs bigdec falls back to for a
+       ! string and uses for a Ratio numerator.
+       out = call_builtin(B_TODEC, vs_get(base + 1))
+    else if (cname == "BigInteger" .or. cname == "java.math.BigInteger") then
        ! (BigInteger. "12"), which core.clj's bigint falls back to for
        ! a string. There is one big integer type here, not two.
        out = call_builtin(B_TOBIG, vs_get(base + 1))
@@ -5441,21 +5446,50 @@ contains
           end if
        else
           block
-            logical :: any_real, any_ratio, any_big
+            logical :: any_real, any_ratio, any_big, any_dec, dok
+            character(len=:), allocatable :: dacc, dopn
             real(gc_dp) :: racc
             integer(gc_ip) :: qn, qd, bn, bd, g
             character(len=:), allocatable :: bacc
             any_real = .false.
             any_ratio = .false.
             any_big = .false.
+            any_dec = .false.
             do i = 0, n - 1
                b = strip_meta(gcv_nth(args, i))
                if (b%tag == GCT_REAL) any_real = .true.
                if (b%tag == GCT_RATIO) any_ratio = .true.
                if (b%tag == GCT_BIG) any_big = .true.
+               if (b%tag == GCT_DEC) any_dec = .true.
             end do
             a = gcv_nth(args, 0)
-            if (any_ratio .and. .not. any_real) then
+            if (any_dec .and. .not. any_real) then
+               ! CONTAGION, one step above a ratio and below a double:
+               ! (+ 1M 1/2) is 1.5M and (+ 1M 1.0) is 2.0. Every scale
+               ! rule is BigDecimal's (BigDec.f90): add and subtract
+               ! take the larger scale, multiply adds them.
+               dacc = dec_operand(strip_meta(a), dok)
+               if (dok .and. n == 1 .and. op == B_SUB) dacc = dec_neg(dacc)
+               do i = 1, n - 1
+                  if (.not. dok) exit
+                  dopn = dec_operand(strip_meta(gcv_nth(args, i)), dok)
+                  if (.not. dok) exit
+                  select case (op)
+                  case (B_ADD); dacc = dec_add(dacc, dopn)
+                  case (B_SUB); dacc = dec_sub(dacc, dopn)
+                  case (B_MUL); dacc = dec_mul(dacc, dopn)
+                  end select
+               end do
+               if (dok) then
+                  out = gc_dec(dacc, [vs_get(base + 1)])
+               else
+                  call raise_class("ArithmeticException", &
+                       "Non-terminating decimal expansion; no exact representable decimal result.", &
+                       [vs_get(base + 1)])
+                  call vs_leave(base)
+                  return
+               end if
+            else if (any_ratio .and. .not. any_real) then
                ! Exact rational arithmetic, kept exact. The
                ! contagion order is double > ratio > integer, so
                ! this arm runs only when no double is present --
@@ -6014,6 +6048,19 @@ contains
        end if
        ! unlike `/`, where (/ 1.0 0) is ##Inf.
        a = strip_meta(gcv_nth(args, 0)); b = strip_meta(gcv_nth(args, 1))
+       ! A decimal quotient keeps the preferred scale, so
+       ! (quot 10.5M 3) is 3.0M and (rem 10.5M 3) is 1.5M.
+       if ((a%tag == GCT_DEC .or. b%tag == GCT_DEC) .and. exact_num(a) .and. exact_num(b)) then
+          if (dec_is_zero(dec_of(b))) then
+             call raise_class("ArithmeticException", "Divide by zero", [vs_get(base + 1)])
+          else if (id == B_QUOT) then
+             out = gc_dec(dec_quot(dec_of(a), dec_of(b)), [vs_get(base + 1)])
+          else
+             out = gc_dec(dec_rem(dec_of(a), dec_of(b)), [vs_get(base + 1)])
+          end if
+          call vs_leave(base)
+          return
+       end if
        ! Exact, truncating toward zero, with the remainder taking the
        ! dividend's sign -- BigInteger.divide and .remainder.
        if ((a%tag == GCT_BIG .or. b%tag == GCT_BIG) .and. &
@@ -6252,7 +6299,10 @@ contains
        out = gc_int(not(a%ival))
     case (B_LONGCAST)
        a = strip_meta(gcv_nth(args, 0))
-       if (a%tag == GCT_BIG) then
+       if (a%tag == GCT_DEC) then
+          ! truncating, as BigDecimal.longValue is
+          out = gc_int(big_to_i64(dec_to_big(gc_dec_text(a))))
+       else if (a%tag == GCT_BIG) then
           ! TRUNCATING, which is uncheckedLongCast's rule and not
           ! longCast's -- the two share this row (DEVIATIONS 26). It is
           ! what (even? n) needs on a number past the 64-bit range,
@@ -6340,6 +6390,8 @@ contains
             out = gc_ratio(abs(gc_numerator(x)), gc_denominator(x))
          else if (x%tag == GCT_BIG) then
             out = gc_big(big_abs(gc_big_text(x)), [vs_get(base + 1)])
+         else if (x%tag == GCT_DEC) then
+            out = gc_dec(dec_abs(gc_dec_text(x)), [vs_get(base + 1)])
          else
             out = gc_int(abs(x%ival))
          end if
@@ -7146,6 +7198,8 @@ case (B_SLURP)
             out = gc_big(big_from_i64(gc_numerator(bv) / gc_denominator(bv)), [vs_get(base + 1)])
          case (GCT_REAL)
             out = gc_big(big_from_i64(int(aint(bv%rval), gc_ip)), [vs_get(base + 1)])
+         case (GCT_DEC)
+            out = gc_big(dec_to_big(gc_dec_text(bv)), [vs_get(base + 1)])
          case (GCT_STR)
             if (big_valid(text_of(bv))) then
                out = gc_big(text_of(bv), [vs_get(base + 1)])
@@ -7154,6 +7208,40 @@ case (B_SLURP)
             end if
          case default
             call raise_class("IllegalArgumentException", "cannot convert to a BigInt", [vs_get(base + 1)])
+         end select
+       end block
+    case (B_TODEC)
+       ! (bigdec x), and the BigDecimal/valueOf and (BigDecimal. x)
+       ! core.clj reaches it through. A double goes by its printed
+       ! form, which is what BigDecimal.valueOf(double) does -- and
+       ! why (bigdec 1.5) is 1.5M and not the binary approximation.
+       block
+         type(gc_value) :: dv2
+         character(len=:), allocatable :: dt
+         logical :: dok2
+         dv2 = strip_meta(gcv_nth(args, 0))
+         select case (dv2%tag)
+         case (GCT_DEC)
+            out = dv2
+         case (GCT_INT, GCT_CHAR)
+            out = gc_dec(dec_from_i64(dv2%ival), [vs_get(base + 1)])
+         case (GCT_BIG)
+            out = gc_dec(dec_from_big(gc_big_text(dv2)), [vs_get(base + 1)])
+         case (GCT_REAL, GCT_STR, GCT_RATIO)
+            if (dv2%tag == GCT_RATIO) then
+               call dec_div(dec_from_big(big_from_i64(gc_numerator(dv2))), &
+                    dec_from_big(big_from_i64(gc_denominator(dv2))), dt, dok2)
+            else
+               call dec_from_text(to_string_text(dv2), dt, dok2)
+            end if
+            if (dok2) then
+               out = gc_dec(dt, [vs_get(base + 1)])
+            else
+               call raise_class("NumberFormatException", &
+                    "not a decimal: " // to_string_text(dv2), [vs_get(base + 1)])
+            end if
+         case default
+            call raise_class("IllegalArgumentException", "cannot convert to a BigDecimal", [vs_get(base + 1)])
          end select
        end block
     case (B_GCTORTURE)
@@ -8957,6 +9045,31 @@ case (B_SLURP)
        ! double, and otherwise the result stays exact. Dividing by a
        ! ratio multiplies by its reciprocal.
        a = strip_meta(gcv_nth(args, 0)); b = strip_meta(gcv_nth(args, 1))
+       ! A decimal divides EXACTLY or not at all: BigDecimal.divide
+       ! with no MathContext throws on a non-terminating expansion
+       ! rather than rounding, and there is no with-precision here to
+       ! say otherwise (DEVIATIONS 30).
+       if ((a%tag == GCT_DEC .or. b%tag == GCT_DEC) .and. &
+            exact_num(a) .and. exact_num(b)) then
+          block
+            character(len=:), allocatable :: dq
+            logical :: dok
+            if (dec_is_zero(dec_of(b))) then
+               call raise_class("ArithmeticException", "Divide by zero", [vs_get(base + 1)])
+            else
+               call dec_div(dec_of(a), dec_of(b), dq, dok)
+               if (dok) then
+                  out = gc_dec(dq, [vs_get(base + 1)])
+               else
+                  call raise_class("ArithmeticException", &
+                       "Non-terminating decimal expansion; no exact representable decimal result.", &
+                       [vs_get(base + 1)])
+               end if
+            end if
+          end block
+          call vs_leave(base)
+          return
+       end if
        ! Two integrals, one of them a BigInt: exact. It divides evenly
        ! or it is a Ratio -- (/ 4N 2) is 2N and (/ 10N 4) is 5/2 --
        ! and a Ratio's parts are 64-bit, so a remainder past that
@@ -9019,6 +9132,15 @@ case (B_SLURP)
        if (id == B_UINC .or. id == B_PINC) op = B_INC
        if (id == B_UDEC .or. id == B_PDEC) op = B_DEC
        a = strip_meta(gcv_nth(args, 0))
+       if (a%tag == GCT_DEC) then
+          if (op == B_INC) then
+             out = gc_dec(dec_add(gc_dec_text(a), dec_from_big("1")), [vs_get(base + 1)])
+          else
+             out = gc_dec(dec_sub(gc_dec_text(a), dec_from_big("1")), [vs_get(base + 1)])
+          end if
+          call vs_leave(base)
+          return
+       end if
        ! A BigInt counts exactly, and inc'/dec' promote rather than
        ! throw at the edge of the 64-bit range.
        if (a%tag == GCT_BIG .or. ((id == B_PINC .or. id == B_PDEC) .and. a%tag == GCT_INT)) then
@@ -10437,6 +10559,7 @@ case (B_SLURP)
     case (GCT_RATIO); s = "ratio"
     case (GCT_CHAR); s = "char"
     case (GCT_CLASS); s = "class"
+    case (GCT_DEC);  s = "bigdec"
     case (GCT_BIG);  s = "bigint"
     case (GCT_STR);  s = "string"
     case (GCT_SYM);  s = "symbol"
@@ -11685,11 +11808,14 @@ case (B_SLURP)
     ! int? is Long/Integer/Short/Byte and answers FALSE for a BigInt;
     ! integer? asks for this one as well, so (integer? 1N) is true.
     case ("clojure.lang.BigInt", "BigInt", "BigInteger", "java.math.BigInteger"); yes = (t == "bigint")
+    ! decimal? is (instance? BigDecimal x), and nothing else answers it
+    case ("BigDecimal", "java.math.BigDecimal"); yes = (t == "bigdec")
     case ("Double", "java.lang.Double", "Float"); yes = (t == "double")
     case ("Ratio", "clojure.lang.Ratio"); yes = (t == "ratio")
     case ("Number", "java.lang.Number")
        ! A Ratio is a Number on the JVM too, so (number? 1/2) is true.
-       yes = (t == "int" .or. t == "double" .or. t == "ratio" .or. t == "bigint")
+       yes = (t == "int" .or. t == "double" .or. t == "ratio" .or. t == "bigint" &
+            .or. t == "bigdec")
     end select
   end function is_instance
 
@@ -11763,6 +11889,12 @@ case (B_SLURP)
     else if ((a%tag == GCT_INT .or. a%tag == GCT_BIG) .and. &
              (b%tag == GCT_INT .or. b%tag == GCT_BIG)) then
        num_lt = (big_cmp(big_of(a), big_of(b)) < 0)
+    else if (exact_num(a) .and. exact_num(b) .and. &
+             (a%tag == GCT_DEC .or. b%tag == GCT_DEC)) then
+       ! A decimal compares EXACTLY against another decimal, an
+       ! integer or a BigInt -- a double would lose the difference
+       ! between 1M and 1.0000000000000000001M.
+       num_lt = (dec_cmp(dec_of(a), dec_of(b)) < 0)
     else
        num_lt = (num_dbl(a) < num_dbl(b))
     end if
@@ -11796,6 +11928,42 @@ case (B_SLURP)
     if (ok) o = gc_int(big_to_i64(gc_big_text(v)))
   end function rat_operand
 
+  ! Whether a value is EXACT -- an integer, a BigInt or a decimal --
+  ! which is what decides whether a comparison can avoid doubles. A
+  ! Ratio is exact too but has no decimal form for every value.
+  logical function exact_num(v)
+    type(gc_value), intent(in) :: v
+    exact_num = (v%tag == GCT_INT .or. v%tag == GCT_BIG .or. v%tag == GCT_DEC)
+  end function exact_num
+
+  ! An exact value as a DECIMAL, which an integer and a BigInt are at
+  ! scale zero.
+  function dec_of(v) result(s)
+    type(gc_value), intent(in) :: v
+    character(len=:), allocatable :: s
+    if (v%tag == GCT_DEC) then
+       s = gc_dec_text(v)
+    else
+       s = dec_from_big(big_of(v))
+    end if
+  end function dec_of
+
+  ! The same, for an operand that may also be a RATIO: 1/2 is 0.5M and
+  ! (+ 1M 1/2) is 1.5M, but 1/3 has no decimal form and Java's
+  ! BigDecimal refuses rather than rounding. ok says which happened.
+  function dec_operand(v, ok) result(s)
+    type(gc_value), intent(in) :: v
+    logical, intent(out) :: ok
+    character(len=:), allocatable :: s
+    ok = .true.
+    if (v%tag == GCT_RATIO) then
+       call dec_div(dec_from_big(big_from_i64(gc_numerator(v))), &
+            dec_from_big(big_from_i64(gc_denominator(v))), s, ok)
+    else
+       s = dec_of(v)
+    end if
+  end function dec_operand
+
   function big_of(v) result(s)
     type(gc_value), intent(in) :: v
     character(len=:), allocatable :: s
@@ -11813,6 +11981,8 @@ case (B_SLURP)
        d = v%rval
     else if (v%tag == GCT_BIG) then
        d = big_to_dbl(gc_big_text(v))
+    else if (v%tag == GCT_DEC) then
+       d = dec_to_dbl(gc_dec_text(v))
     else if (v%tag == GCT_RATIO) then
        ! Every comparison goes through here, so without this a ratio
        ! would compare as its NUMERATOR: (< 1/3 1/2) would be 1 < 1.
@@ -11831,7 +12001,7 @@ case (B_SLURP)
   logical function is_number(v)
     type(gc_value), intent(in) :: v
     is_number = (v%tag == GCT_INT .or. v%tag == GCT_REAL .or. v%tag == GCT_RATIO &
-         .or. v%tag == GCT_BIG)
+         .or. v%tag == GCT_BIG .or. v%tag == GCT_DEC)
   end function is_number
 
   ! The host supertypes of a class, one per call. `supers` walks them
@@ -11980,6 +12150,7 @@ case (B_SLURP)
     case (GCT_RATIO); s = "clojure.lang.Ratio"
     case (GCT_CHAR);  s = "java.lang.Character"
     case (GCT_CLASS); s = "java.lang.Class"
+    case (GCT_DEC);   s = "java.math.BigDecimal"
     case (GCT_BIG);   s = "clojure.lang.BigInt"
     case (GCT_STR);   s = "java.lang.String"
     case (GCT_SYM);   s = "clojure.lang.Symbol"

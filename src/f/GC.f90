@@ -67,6 +67,7 @@
 ! which is the entire point: copying one is a flat move.
 module GC
   use BigInt
+  use BigDec
   implicit none
   private
 
@@ -136,6 +137,15 @@ module GC
   ! are one value however they were built -- a literal, (class x), or
   ! a deftype's :implements list.
   integer, parameter, public :: GCT_CLASS = 12
+
+  ! An arbitrary-precision DECIMAL: java.math.BigDecimal, which `1.0M`
+  ! reads as. The value is BigDec's "unscaled|scale" text in the string
+  ! pool, so the collector marks it as it marks a string.
+  !
+  ! Unlike every other text-backed tag, two decimals are equal when
+  ! their VALUES are, not their texts: 1M and 1.0M are equal and hash
+  ! alike, as Clojure says they do, while printing differently.
+  integer, parameter, public :: GCT_DEC = 13
 
   ! A run of values. Internal -- reached from objects, not normally
   ! held by user code directly.
@@ -554,6 +564,7 @@ module GC
   public :: gc_ratio, gc_numerator, gc_denominator, gc_gcd
   public :: gc_big, gc_big_text, gc_is_big
   public :: gc_class, gc_class_text
+  public :: gc_dec, gc_dec_text
   public :: gc_set_coll_ops
   ! The hash mixer, so the collection walkers installed through
   ! gc_set_coll_ops finish with the same one every other hash uses.
@@ -790,6 +801,22 @@ contains
   ! the text is normalized here so every later comparison is exact.
   ! A class from its canonical name. class_key in Eval.f90 decides
   ! the spelling; this only stores it.
+  ! A decimal from BigDec's internal pair text. The reader and the
+  ! arithmetic build that; nothing else should.
+  function gc_dec(text, roots) result(v)
+    character(len=*), intent(in) :: text
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: v
+    v = new_text(text, roots, GCT_DEC)
+  end function gc_dec
+
+  function gc_dec_text(v) result(s)
+    type(gc_value), intent(in) :: v
+    character(len=:), allocatable :: s
+    s = dec_make("0", 0)
+    if (v%tag == GCT_DEC) s = gc_ref_text(v%ref)
+  end function gc_dec_text
+
   function gc_class(text, roots) result(v)
     character(len=*), intent(in) :: text
     type(gc_value), intent(in) :: roots(:)
@@ -1414,6 +1441,9 @@ contains
     case (GCT_BIG, GCT_CLASS)
        ! Canonical text, so this is exact.
        eq = gc_ref_is(a%ref, gc_ref_text(b%ref))
+    case (GCT_DEC)
+       ! By VALUE: (= 1M 1.0M) is true although the two print apart.
+       eq = (dec_cmp(gc_ref_text(a%ref), gc_ref_text(b%ref)) == 0)
     case (GCT_STR, GCT_SYM, GCT_KEY)
        ! Compared by CONTENT, not by pool slot: the same text
        ! allocated twice is two slots but one value.
@@ -1497,6 +1527,9 @@ contains
        else
           h = mix32(ieor(mix32(fnv1a(gc_ref_text(v%ref))), tag_salt(v%tag)))
        end if
+    case (GCT_DEC)
+       ! Over the STRIPPED value, so equal decimals hash alike.
+       h = mix32(ieor(mix32(fnv1a(dec_strip(gc_ref_text(v%ref)))), tag_salt(v%tag)))
     case (GCT_STR, GCT_SYM, GCT_KEY, GCT_CLASS)
        h = mix32(ieor(mix32(fnv1a(gc_ref_text(v%ref))), tag_salt(v%tag)))
     case default
@@ -1738,7 +1771,7 @@ contains
     integer :: n
     if (v%ref == 0) return
     select case (v%tag)
-    case (GCT_OBJ, GCT_VEC, GCT_STR, GCT_SYM, GCT_KEY, GCT_BIG, GCT_CLASS)
+    case (GCT_OBJ, GCT_VEC, GCT_STR, GCT_SYM, GCT_KEY, GCT_BIG, GCT_CLASS, GCT_DEC)
        continue
     case default
        return ! an immediate holds nothing
@@ -1780,7 +1813,7 @@ contains
           do i = 1, n
              call push_mark(vec_store(vec_pool(v%ref)%off + i - 1))
           end do
-       case (GCT_STR, GCT_SYM, GCT_KEY, GCT_BIG, GCT_CLASS)
+       case (GCT_STR, GCT_SYM, GCT_KEY, GCT_BIG, GCT_CLASS, GCT_DEC)
           str_mark(v%ref) = .true. ! a leaf: holds no references
           gc_marked = gc_marked + 1
           str_marked = str_marked + 1

@@ -1381,14 +1381,12 @@
 (cond 0M :a true :b)
 
 ;; arithmetic
-(expect-diff "DEVIATIONS 30: 1M is a double")
 [(+ 1N 1) (* 2M 3M)]
 
 ;; comparison
 [(= 1N 1N) (< 1N 2N) (zero? 0M)]
 
 ;; negatives
-(expect-diff "DEVIATIONS 30: 1M is a double")
 [(- 0 2N) -3.5M]
 
 ;; read-string too
@@ -2246,3 +2244,17 @@
 (expect-diff "DEVIATIONS 34: supers is the short chain clotran models, not the JVM's two dozen")
 (let [m (sort-by str (supers (class {})))] (vec m))
 (do (deftype CPoint [x y]) (defrecord CRec [a b]) [(str (class (->CRec 1 2))) (= (class (->CRec 1 2)) (class (->CRec 3 4))) (= (->CRec 1 2) (->CRec 1 2)) (resolve 'CRec)])
+
+;; BigDecimal: 1.0M is its own type and its own equality category, and
+;; the SCALE is part of the value (DEVIATIONS 30)
+[(pr-str 1.0M) (str 1.0M) (pr-str 1M) (pr-str -3.50M) (pr-str 0M) (pr-str 0.001M) (pr-str 0.0000001M) (pr-str 1e10M) (pr-str 1.5e-10M) (pr-str 1.0e3M) (pr-str 100M)]
+[(= 1.0M 1.0) (= 1.0M 1M) (== 1.0M 1M) (= 1M 1) (== 1M 1) (= 1M 1N) (== 1M 1N) (= (hash 1M) (hash 1.0M)) (count (set [1M 1.0M])) (get {1M :a} 1.0M) (count (set [1 1.0 1.0M 1N]))]
+[(decimal? 1M) (number? 1M) (rational? 1M) (float? 1M) (integer? 1M) (int? 1M) (ratio? 1M) (zero? 0M) (pos? 1M) (neg? -1M)]
+[(pr-str (+ 1M 1)) (pr-str (+ 1.5M 2.25M)) (pr-str (* 1.5M 2.25M)) (pr-str (- 1M 2M)) (pr-str (+ 0.1M 0.2M)) (pr-str (* 0.1M 0.1M)) (pr-str (* 1M 0.1M)) (pr-str (- 1M)) (pr-str (+ 1M 1N)) (pr-str (+ 1M 1/2)) (pr-str (* 1M 1/2))]
+[(+ 1M 1.0) (* 2M 3.0) (pr-str (/ 1M 2)) (pr-str (/ 1M 8)) (pr-str (/ 100M 4)) (pr-str (/ 1.0M 2)) (pr-str (/ 10M 4))]
+[(pr-str (quot 10.5M 3)) (pr-str (rem 10.5M 3)) (pr-str (mod -7M 3)) (pr-str (inc 1M)) (pr-str (dec 1M)) (pr-str (abs -1.5M)) (compare 1M 2M) (compare 1.0M 1M) (< 1M 2M) (pr-str (max 1M 2M))]
+[(pr-str (bigdec 1)) (pr-str (bigdec 1.5)) (pr-str (bigdec "2.50")) (pr-str (bigdec 1N)) (pr-str (bigdec 1/2)) (pr-str (bigdec 1M)) (bigint 2.5M) (long 2.5M) (double 1.5M) (int 2M)]
+[(transduce (dedupe) conj [1 1.0 1.0M 1N]) (distinct [1 1.0 1.0M 1N]) (pr-str (sort [2M 1M 1.5M]))]
+(try (/ 1M 3) (catch ArithmeticException e :non-terminating))
+(try (even? 2M) (catch IllegalArgumentException e :not-an-integer))
+[(sorted-set 0M) (sorted-set 1M 1M) (sorted-set 1N 2N) (sorted-set 1 1.5M 2N) (sorted-map 1M :a) (pr-str (sort [2M 1M 1.5M])) (pr-str (sort [2N 1N 3]))]

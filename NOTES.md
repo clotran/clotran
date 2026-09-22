@@ -3514,6 +3514,43 @@ The oracle has fifteen cases for it, values against clj, including
 `(apply (fn [a & r] [a (take 3 r)]) 1 (range))` and the atom count
 that shows only one element of a hundred was realised.
 
+## BigDecimal: the scale is the value
+
+The last failing test in the derived suite was one line of Clojure's
+own transducer tests:
+
+    (= (transduce (dedupe) conj [1 1.0 1.0M 1N]) [1 1.0 1.0M 1N])
+
+`dedupe` drops a value equal to the one before it, and all four of
+those survive on the JVM because no two of them are `=`. Reading `1.0M`
+as a double made the third element equal to the second and the vector
+came back one short. There was no way to pass it without the type.
+
+So `src/f/BigDec.f90`: a decimal is an unscaled BigInt and a scale,
+carried as `"unscaled|scale"` in one string-pool slot (a pair would
+have needed an object). BigInt does the arithmetic and this module does
+the scale bookkeeping, which IS the type: add and subtract take the
+larger scale, multiply adds them, and `1M`, `1.0M` and `1.00M` are
+three values that print apart and compare equal. Equality and hashing
+therefore cannot use the text -- they go through `dec_cmp` and
+`dec_strip`, the only text-backed tag in the heap that does.
+
+Division is exact or it throws. `(/ 1M 8)` is `0.125M` because the
+quotient terminates; `(/ 1M 3)` raises "Non-terminating decimal
+expansion", which is what BigDecimal.divide does with no MathContext.
+`with-precision` is where that MathContext would come from and is the
+piece still missing (DEVIATIONS 30).
+
+Printing is Java's `toString`, scientific notation included: plain
+while the scale is not negative and the adjusted exponent is at least
+-6, so `0.001M` prints plainly and `1E-7M` does not. The two rules are
+worth having exactly, because a decimal that prints differently from
+the JVM's is a decimal nobody can check against it.
+
+The two `print-method` methods for BigDecimal came back into
+`clotran/core_print.cljf` with the type. They had been taken out on the
+grounds that clotran never produces one, which was true until now.
+
 ## A class is a value, and what held it back
 
 A class was a KEYWORD for a long time, and it worked: `(= (class x)
