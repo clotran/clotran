@@ -39,6 +39,12 @@
 (def suite-dir (io/file repo "test/clj/clojure/test_clojure"))
 (def out-dir   (io/file repo "test/clj/derived"))
 
+;; A file's name RELATIVE to the suite root, with separators flattened:
+;; pprint/cl_format.clj derives to pprint_cl_format.clj, because the
+;; derived directory is flat and two files could otherwise collide.
+(defn rel-name [f]
+  (-> (.relativize (.toPath suite-dir) (.toPath f)) str (str/replace "/" "_")))
+
 ;; Any tagged literal (#js {...}, a record literal) reads as its payload;
 ;; reader conditionals take the :clj branch. Neither affects which
 ;; symbols a form mentions, which is all this script reads. A symbol a
@@ -80,7 +86,8 @@
 
 (def portable-libs #{"clojure.core" "clojure.test" "clojure.string" "clojure.set" "clojure.walk"
                      "clojure.template" "clojure.zip" "clojure.data" "clojure.edn" "clojure.pprint"
-                     "clojure.math" "clojure.test-helper" "clojure.test-clojure.test-helper"})
+                     "clojure.math" "clojure.datafy" "clojure.test-helper"
+                     "clojure.test-clojure.test-helper"})
 
 ;; What clojure.test refers into every test namespace. Listed because
 ;; (:require [clojure.test :refer :all]) cannot be enumerated from the
@@ -327,10 +334,22 @@
       ;; less the helper that asserts the JVM compiler emitted no reflection
       ;; warning: there is no reflection here to warn about
       helper-vocab (disj (public-names (parse (io/file repo "test/clj/clojure/test_helper.clj"))) 'should-not-reflect)
-      files (sort-by #(.getName %) (filter #(str/ends-with? (.getName %) ".clj") (.listFiles suite-dir)))
+      ;; The suite is a TREE, not a directory. pprint's nine cl-format
+      ;; tests and the protocol tests sit one level down, and listing
+      ;; only the top level never saw them -- a gap in this script, not
+      ;; in Clojure's suite.
+      files (sort-by rel-name (filter #(and (.isFile %) (str/ends-with? (.getName %) ".clj"))
+                                      (file-seq suite-dir)))
       parsed (for [f files :let [forms (parse f)] :when forms]
                {:file f :forms forms :ns-form (first (filter ns-form? forms))})
-      test-namespaces (into #{} (keep #(some-> (:ns-form %) second name) parsed))
+      ;; A file is a TEST namespace only if it holds deftests. The
+      ;; suite's subdirectories are mostly helpers -- the protocols
+      ;; their tests extend, the namespace repl.clj reaches into --
+      ;; and a derived test still requires those verbatim. Counting
+      ;; them as test namespaces stripped them from the ns form.
+      test-namespaces (into #{} (keep #(when (some deftest? (:forms %))
+                                         (some-> (:ns-form %) second name))
+                                      parsed))
       base-ctx {:core-only-names core-only :lang lang :helper-vocab helper-vocab}
       offence-count (atom {})
       rows (for [{:keys [file forms ns-form]} parsed
@@ -344,7 +363,7 @@
   (println (format "%-44s %5s %5s %5s %5s" "namespace" "tests" "lang" "conc" "host"))
   (doseq [{:keys [file counts]} rows]
     (let [n (reduce + (vals counts))]
-      (println (format "%-44s %5d %5d %5d %5d" (.getName file) n (get counts :language 0)
+      (println (format "%-44s %5d %5d %5d %5d" (rel-name file) n (get counts :language 0)
                        (get counts :concurrency 0) (get counts :host 0)))))
   (let [tot (apply merge-with + (map :counts rows)) n (reduce + (vals tot))]
     (println (format "%-44s %5d %5d %5d %5d" "TOTAL" n (:language tot 0) (:concurrency tot 0) (:host tot 0))))
@@ -385,13 +404,13 @@
             :when (seq kept)]
       (let [lines (str/split-lines (slurp file))
             slice (fn [form] (let [m (meta form)] (str/join "\n" (subvec lines (dec (:row m)) (:end-row m)))))
-            out (io/file out-dir (.getName file))]
+            out (io/file out-dir (rel-name file))]
         (spit out (str ";; DERIVED from " (str (.relativize (.toPath repo) (.toPath file))) " by scripts/derive-tests -- do not edit.\n"
                        ";; Kept: tests whose symbols lie in the clojure.core/cljs.core intersection (plus concurrency).\n\n"
                        (pr-str (with-meta (apply list ns-clean) nil)) "\n\n"
                        (str/join "\n\n" (map slice helpers)) "\n\n"
                        (str/join "\n\n" (for [t kept]
-                                          (str ";; " (.getName file) ":" (:row (meta (:form t))) " [" (name (:bucket t)) "]\n"
+                                          (str ";; " (rel-name file) ":" (:row (meta (:form t))) " [" (name (:bucket t)) "]\n"
                                                (slice (:form t)))))
                        "\n"))))
     (println "\nwrote" (count (.listFiles out-dir)) "files to" (str out-dir))))

@@ -1,0 +1,53 @@
+#!/bin/sh
+# Clojure's OWN tests for the PORTABLE LIBRARIES, run verbatim.
+#
+# These namespaces are not in the derived suite and mostly cannot be:
+# the pprint tests are fragments loaded into one namespace with a
+# macro of their own, and clojure.zip's file has no deftest at all.
+# They are pure Clojure, though, so they run here unchanged -- which is
+# better evidence than a derived copy, because nothing was filtered.
+#
+# THE DENOMINATOR. Five namespaces, every assertion in them. What is
+# deliberately NOT here:
+#   clojure.test-clojure.data     one deftest, and it imports
+#                                 java.util.HashSet (DEVIATIONS 12)
+#   clojure.test-clojure.clojure-zip
+#   clojure.test-clojure.reducers no deftest in Clojure's own file
+#   clojure.test-clojure.edn      written with clojure.test.generative,
+#                                 which is not vendored
+# clojure.zip, clojure.data, clojure.edn, clojure.template and
+# clojure.datafy are covered by test/clj/oracle.clj instead.
+#
+# A GATE: any failure or error is a non-zero exit.
+set -e
+cd "$(dirname "$0")/.."
+NSS="clojure_set clojure_walk string math pprint"
+total_pass=0; total_fail=0; total_err=0; total_test=0; bad=0
+for f in $NSS; do
+  src="test/clj/clojure/test_clojure/$f.clj"
+  ns=$(sed -n 's/^(ns \([a-zA-Z0-9._-]*\).*/\1/p' "$src" | head -1)
+  printf "(require 'clojure.test)\n(load-file \"test/clj/clojure/test_helper.clj\")\n(load-file \"%s\")\n(clojure.test/run-tests '%s)\n" "$src" "$ns" > /tmp/clotran-lib.clj
+  ./clotran-bin src/clj/clojure/core.clj < /tmp/clotran-lib.clj > /tmp/clotran-lib.out 2>&1 || true
+  sum=$(grep -o '{:test [0-9]*, :pass [0-9]*, :fail [0-9]*, :error [0-9]*' /tmp/clotran-lib.out | head -1)
+  if [ -z "$sum" ]; then
+    printf "%-44s NO SUMMARY -- the file did not load\n" "$ns"
+    tail -5 /tmp/clotran-lib.out
+    bad=1
+    continue
+  fi
+  t=$(echo "$sum" | sed 's/.*:test \([0-9]*\).*/\1/')
+  p=$(echo "$sum" | sed 's/.*:pass \([0-9]*\).*/\1/')
+  fl=$(echo "$sum" | sed 's/.*:fail \([0-9]*\).*/\1/')
+  e=$(echo "$sum" | sed 's/.*:error \([0-9]*\).*/\1/')
+  printf "%-44s tests=%-5s pass=%-6s fail=%-5s error=%-5s\n" "$ns" "$t" "$p" "$fl" "$e"
+  total_test=$((total_test + t)); total_pass=$((total_pass + p))
+  total_fail=$((total_fail + fl)); total_err=$((total_err + e))
+  if [ "$fl" != "0" ] || [ "$e" != "0" ]; then
+    grep -A3 -E '^(FAIL|ERROR)' /tmp/clotran-lib.out | head -20
+    bad=1
+  fi
+done
+echo "---"
+printf "%-44s tests=%-5s pass=%-6s fail=%-5s error=%-5s\n" "TOTAL" "$total_test" "$total_pass" "$total_fail" "$total_err"
+[ "$bad" = "0" ] || { echo "LIBRARY TESTS FAILED"; exit 1; }
+echo "LIBRARY TESTS PASSED"
