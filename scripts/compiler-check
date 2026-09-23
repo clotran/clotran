@@ -55,7 +55,16 @@
                                (recur (+ i 1) (loop [j 0 s t] (if (< j 2) (recur (+ j 1) (+ s 1)) s)))
                                t)))
      [[0] [1] [4]]]
-    ["a loop with no recur" (fn [x] (loop [y x] y)) [[7]]]])
+    ["a loop with no recur" (fn [x] (loop [y x] y)) [[7]]]
+    ;; these reach node kinds the generator does not emit, so they go
+    ;; through the escape hatch and must still answer the same
+    ["a try, both ways" (fn [x] (try (/ 10 x) (catch Throwable e :boom)))
+     [[2] [0] [5]]]
+    ["a set literal" (fn [a b] (count #{a b})) [[1 2] [3 3]]]
+    ["a map literal" (fn [a] (get {:k a} :k)) [[9] [nil]]]
+    ["destructuring" (fn [v] (let [[a b] v] (+ a b))) [[[1 2]] [[10 20]]]]
+    ["a hatch inside a loop" (fn [n] (loop [i 0 acc []] (if (< i n) (recur (+ i 1) (conj acc i)) (count acc))))
+     [[0] [3]]]])
 
 (defn- run-clotran
   "Runs a file through clotran with core.clj loaded, answering stdout."

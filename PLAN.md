@@ -671,11 +671,30 @@ the parameters. Each loop owns its flag and the outer one is restored
 when an inner one ends -- `compiler-check` caught that as a difference
 on a nested loop before it was, which is the entire point of having it.
 
-**What it declines**, and each is the next thing to teach it: `:vector`,
-`:map` and `:set` nodes, more than one arity, variadic, a closure over
-an outer local, and a function that names itself. `decline-reason` is
-the list, so the answer is always visible. A declined function stays
-interpreted and nothing else changes.
+**The escape hatch is wired in, and NOTHING declines for a node kind
+any more.** A kind the generator does not emit has its NODE put in the
+pool and run by `clotran_eval_node` in the same frame the compiled code
+is using. `try`, set and map literals, destructuring and a hatched call
+inside a compiled loop all answer what the interpreter answers: 64 of
+64 calls agree.
+
+That needed one change to the exporter: `(clotran-ast form)` now
+carries `:node`, the node itself, beside its data. The exported map is
+a copy, so without it the original was not reachable from Clojure and
+the hatch had nothing to run.
+
+It also caught its own bug. `gen-into` took the pool shortcut for every
+pooled entry, so a hatched subtree was COPIED as an argument rather
+than run, and `(get {:a 1} :a)` came back nil. A `:var` or a `:const`
+entry is the value; a `:node` entry is a subtree. `compiler-check` said
+so before it shipped.
+
+What still DECLINES is a whole function, never a node: more than one
+arity, variadic, a closure over an outer local, and a function that
+names itself.
+
+`decline-reason` is the list, so the answer is always visible. A
+declined function stays interpreted and nothing else changes.
 
 **Still to do before this is usable**: `loop`/`recur` as a Fortran loop,
 which is where the interpreter-dispatch win is; a `clotran compile`

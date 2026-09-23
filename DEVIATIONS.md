@@ -1433,3 +1433,31 @@ be true of, and `inst-ms` has no value to take.
 `load`, with `*data-readers*` over `default-data-readers` as the map
 and `*default-data-reader-fn*` as the fallback. `#uuid` then needs
 `clojure.uuid` to stop being skipped; `#inst` needs a date type.
+
+## 47. `all-ns` answers a namespace per host class name as well
+
+`(count (all-ns))` is 64 here against real Clojure's dozen, and the
+extra entries are host class names: `Math`, `String`, `java.util.UUID`,
+`clojure.lang.RT` and every other class a loaded file mentions.
+
+The cause is that a qualified host symbol goes through the same
+registry a namespace does. `(clojure.lang.RT/count x)` resolves
+`clojure.lang.RT` by `gcn_find_or_create`, which makes a real
+`Namespace` object for it, and the registry is what `all-ns` walks. The
+entries are genuine namespace objects, empty of bindings, so nothing
+distinguishes them by kind.
+
+This was invisible until 2026-09-23, because `Namespace/all` had no
+host member and `all-ns` simply threw. It answers now, and answers too
+much, which is the honest trade: a function that works with a caveat
+against one that does not work at all.
+
+What it costs: anything that walks every namespace sees 50 more than it
+should. `(ns-publics x)` on one of them is empty, so a search like the
+compiler's is slow rather than wrong. A program that PRINTS all-ns
+shows names no Clojure program would.
+
+**Removal**: mark a namespace made for a host class -- a flag in the
+object, or a separate registry for imports -- and filter it out of
+`gcn_all`. The resolution path that creates them is `analyze_symbol`'s,
+and it is the only caller that should be setting the flag.

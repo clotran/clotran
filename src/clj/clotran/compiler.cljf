@@ -101,6 +101,11 @@
        import :: c_int
        integer(c_int), value :: dst, var
      end subroutine clotran_deref
+     function clotran_eval_node(dst, node, fr) bind(C, name=\"clotran_eval_node\") result(st)
+       import :: c_int
+       integer(c_int), value :: dst, node, fr
+       integer(c_int) :: st
+     end function clotran_eval_node
      subroutine clotran_pool_get(dst, h, i) bind(C, name=\"clotran_pool_get\")
        import :: c_int
        integer(c_int), value :: dst, h, i
@@ -150,6 +155,11 @@ end module clotran_rt_decl
   [t]
   (filter #(and (map? %) (:op %)) (tree-seq coll? seq t)))
 
+(def ^:private compiled-ops
+  "The node kinds the generator emits code for. Everything else goes
+  through the escape hatch, which is slower and still correct."
+  #{:const :local :if :do :call :var :loop :recur})
+
 (defn- pooled
   "The value this node needs out of the pool, or nil if it needs none.
 
@@ -162,6 +172,9 @@ end module clotran_rt_decl
   (cond
     (= :var (:op nd)) {:kind :var :value (:p1 nd)}
     (and (= :const (:op nd)) (not (spellable? (:p1 nd)))) {:kind :const :value (:p1 nd)}
+    ;; a kind we do not emit: the pool holds the NODE and the
+    ;; interpreter runs it
+    (not (compiled-ops (:op nd))) {:kind :node :value (:node nd)}
     :else nil))
 
 (defn decline-reason
@@ -178,8 +191,7 @@ end module clotran_rt_decl
       (true? (nth (first arities) 1)) "variadic"
       (seq captures) "closes over an outer local"
       (not= -1 selfslot) "refers to itself by name"
-      :else (when-let [op (first (remove handled-ops (map :op nodes)))]
-              (str "node kind " op)))))
+      :else nil)))
 
 (defn- fn-pool
   "Everything the body needs out of the pool, in order, without
@@ -220,6 +232,26 @@ end module clotran_rt_decl
 
 (declare gen)
 
+(defn- fallback
+  "A node kind the generator has not learned, handed back to the
+  interpreter: its NODE goes in the pool and `clotran_eval_node` runs it
+  in the same frame the compiled code is using.
+
+  This is why the generator can be permanently incomplete without the
+  language losing anything. An unhandled construct costs the
+  interpreter's speed for that subtree and nothing else -- not
+  correctness, and not the whole function."
+  [nd st]
+  (let [p {:kind :node :value (:node nd)}
+        [r st] (fresh st)]
+    [[(str "st = clotran_eval_node(b + " r ", b + " (get (:pool st) p) ", b + 1)")
+      "if (st /= 0) then"
+      "   call clotran_frame_leave(b)"
+      "   return"
+      "end if"]
+     r st]))
+
+
 (defn- gen-into
   "Generate a node so that its value ends up in slot `dst`.
 
@@ -229,7 +261,11 @@ end module clotran_rt_decl
   them and the copy was pure overhead."
   [nd dst st]
   (cond
-    (pooled nd)
+    ;; a :var or a :const entry IS the value and can be copied. A
+    ;; :node entry is the SUBTREE and has to be run, so it falls
+    ;; through to gen -- copying it handed the argument the node
+    ;; itself, which is how (get {:a 1} :a) came back nil.
+    (#{:var :const} (:kind (pooled nd)))
     [[(str "call clotran_copy(b + " dst ", b + " (get (:pool st) (pooled nd)) ")")] st]
 
     (= :const (:op nd))
@@ -256,7 +292,9 @@ end module clotran_rt_decl
   "One node. Answers [code slot state]: the statements that compute it,
   the temporary its value lands in, and the slot state after."
   [nd st]
-  (if-let [p (pooled nd)]
+  (if (not (compiled-ops (:op nd)))
+    (fallback nd st)
+    (if-let [p (pooled nd)]
     ;; already sitting in its slot from the top of the procedure, and a
     ;; Var was derefed there too. Nothing to emit: hand back the slot.
     [[] (get (:pool st) p) st]
@@ -369,7 +407,7 @@ end module clotran_rt_decl
                         "   call clotran_frame_leave(b)"
                         "   return"
                         "end if"])
-               r st]))))
+               r st])))))
 
 (defn- fn-procedure
   "One arity of one function, as a Fortran subroutine."

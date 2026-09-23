@@ -13339,6 +13339,11 @@ case (B_SLURP)
     end if
     call ast_put(b, roots, "p2", ast_walk(gc_slot(vs_get(b + 1), 3), &
          [roots, [vs_get(b + 1), vs_get(b + 2)]]))
+    ! THE NODE ITSELF, so a generator can hand an unhandled subtree
+    ! back to the interpreter. The exported map is a copy; without
+    ! this the original node is not reachable from Clojure at all,
+    ! and the escape hatch would have nothing to run.
+    call ast_put(b, roots, "node", vs_get(b + 1))
     call ast_put(b, roots, "i2", gc_int(int(gc_i2(vs_get(b + 1)), gc_ip)))
     call ast_put(b, roots, "pos", gc_slot(vs_get(b + 1), 4))
     out = vs_get(b + 2)
