@@ -2368,3 +2368,21 @@
 ;;; and the collection carries it. clojure.zip is built on it.
 [(meta ^{:a 1} [1]) (meta ^{:a 1} {:k 1}) (meta ^{:a 1} #{1}) (meta ^:foo [1])
  (let [f inc] ((:a (meta ^{:a f} [1])) 5)) (meta [1]) (:tag (meta ^String [1]))]
+
+(require 'clojure.edn)
+[(clojure.edn/read-string "{:a [1 2] :b #{3}}")
+ (clojure.edn/read-string "(1 2 3)")
+ (clojure.edn/read-string {:readers {'x (fn [v] [:tagged v])}} "#x 5")
+ (clojure.edn/read-string {:default (fn [t v] [t v])} "#unknown 5")
+ (clojure.edn/read-string nil)
+ (clojure.edn/read-string "nil")
+ (try (clojure.edn/read-string "#unknown 5") (catch Throwable e (.getMessage e)))]
+[(clojure.edn/read-string {:readers {'a (fn [v] {:a v}) 'b (fn [v] [:b v])}} "#a #b 1")
+ (clojure.edn/read-string {:readers {'t (fn [v] (count v))}} "[#t [1 2] #t {:x 1}]")
+ (clojure.edn/read-string {:readers {'t (fn [v] (count v))}} "#{#t [1 2]}")
+ (clojure.edn/read-string {:readers {'t (fn [v] (count v))}} "(#t [1 2 3])")
+ (clojure.edn/read-string "1/2") (clojure.edn/read-string "3.5M")
+ (clojure.edn/read-string "7N") (clojure.edn/read-string ":a/b")
+ (clojure.edn/read-string "\"a\nb\"")]
+(expect-diff "DEVIATIONS 12: java.util.UUID is not a type here, so a uuid IS its text -- the same answer parse-uuid gives")
+[(clojure.edn/read-string "#uuid \"00000000-0000-0000-0000-000000000000\"")]

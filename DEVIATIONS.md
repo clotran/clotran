@@ -1395,32 +1395,41 @@ those classes a component type. `aset`'s range checks already know the
 type; nothing else does.
 
 
-## 46. There are no data readers, so `#uuid` and `#inst` do not read
+## 46. Data readers work in `clojure.edn` and nowhere else
 
-`#tag form` is a reader error here -- "reader: no dispatch for #u" --
-for every tag. The reader has no data-reader step at all: it does not
-consult `*data-readers*`, `default-data-readers` or `*default-data-reader-fn*`.
+`clojure.edn` reads `#tag form` exactly as Clojure's EdnReader does:
+the tag is looked for in the opts `:readers` map, then among the
+readers EDN has built in (`uuid`), then in `:default`, and a tag
+nothing answers raises `No reader function for tag x` -- the same
+message, so a program that catches on it catches here.
 
-Both Vars exist, because core.clj defines them, and
-`default-data-readers` even holds `{uuid #'clojure.uuid/default-uuid-reader}`.
-Nothing reads the map, and the Var it names is one `clojure.uuid`
-would have defined -- a lib DEVIATIONS 12 skips by name. `#inst` is
-not in the map at all, for the same ledger's other half: `instant.clj`
-is loaded by `(when-class "java.sql.Timestamp" (load "instant"))`, and
-`Class/forName` throws for every name that is not an array class.
+Everywhere else, `#tag form` is a reader error: "reader: no dispatch
+for #u". `read-string`, `read` and a loaded source file do not consult
+`*data-readers*`, `default-data-readers` or `*default-data-reader-fn*`,
+and `#inst` and `#uuid` are therefore not readable in source.
 
-What DOES work is everything reachable without the reader:
-`parse-uuid`, `uuid?`, `random-uuid`, `tagged-literal` and
-`tagged-literal?` all answer as Clojure's do, and `read-string` on a
-tagged form inside an unselected reader-conditional branch is skipped
-rather than failing. `inst?` answers false for everything, having
-nothing to be true of. `inst-ms` has no value to take.
+**Why the split.** The reader cannot apply a data reader itself: it
+would have to call the evaluator, and `Eval.f90` uses `LispReader`
+rather than the other way round. So the reader leaves `#tag form` as
+a MARKER -- `{:clotran/tagged-literal true :tag t :form f}`, the same
+shape `tagged-literal` builds -- and whoever turned markers on
+resolves them afterwards. `EdnReader/readString` is the one caller
+that does. Markers are off for ordinary source, so an unknown tag in
+a file is still an error there rather than a map nobody expected.
 
-**Removal**: one branch in `read_dispatch` for a letter -- read the tag
-symbol, read the form, look up the tag in `*data-readers*` and then
-`default-data-readers`, apply it. The cost is that the READER then
-calls the evaluator, which nothing in `LispReader.f90` does today; that
-layering is the reason this is recorded rather than done. `#uuid`
-then works through `clojure.uuid`, which has to stop being skipped;
-`#inst` additionally wants a date type, which is the same entry's
-other half.
+Two other things keep `#inst` and `#uuid` out of `read-string` even
+once that is wired: `default-data-readers` names
+`clojure.uuid/default-uuid-reader`, and `clojure.uuid` is a lib
+DEVIATIONS 12 skips by name; and `#inst` wants a date type, which
+`instant.clj` would bring if `Class/forName` answered for
+`java.sql.Timestamp`.
+
+What works regardless of the reader: `parse-uuid`, `uuid?`,
+`random-uuid`, `tagged-literal` and `tagged-literal?` all answer as
+Clojure's do. `inst?` answers false for everything, having nothing to
+be true of, and `inst-ms` has no value to take.
+
+**Removal**: call the same resolution from `read-string`, `read` and
+`load`, with `*data-readers*` over `default-data-readers` as the map
+and `*default-data-reader-fn*` as the fallback. `#uuid` then needs
+`clojure.uuid` to stop being skipped; `#inst` needs a date type.

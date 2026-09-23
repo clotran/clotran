@@ -4033,3 +4033,37 @@ out of it -- `Double/compare` (a total order where -0.0 is below 0.0,
 which `compare` is not) for clojure.math, and `Class.isArray`, which
 was hard-wired false, for clojure.data. `data.cljf` had been edited to
 say `:atom` unconditionally because of it; that edit is now backed out.
+
+## The reader cannot call the evaluator, so a #tag is a marker
+
+`clojure.edn/read-string` is `(EdnReader/readString s opts)`, and its
+data readers come from the OPTS MAP rather than from `*data-readers*`.
+That is the whole difference between it and `read-string`, and it is
+also the reason edn was the last of the portable libraries not to
+work: there was no `#tag` handling at all.
+
+The layering problem is real. Applying a data reader means CALLING a
+function, which is the evaluator's job, and `Eval.f90` uses
+`LispReader`, not the other way round. Clojure has no such constraint
+because its reader and its runtime are one program.
+
+The answer is to split reading from resolving. `gcr_set_tag_markers`
+turns on a mode in which `#tag form` reads as
+
+    {:clotran/tagged-literal true :tag t :form f}
+
+the same marker map `tagged-literal` already built for the intersection
+sweep, and `resolve_tags` walks the value afterwards replacing each
+marker with what its reader answers -- innermost first, which is the
+order Clojure gets for free by reading the inner form before the outer
+tag can see it.
+
+Markers are OFF for ordinary source. That matters: with them on, an
+unknown tag in a file would stop being a reader error and start being a
+map nobody expected, which is the silent-wrong-answer shape CLAUDE.md
+warns about. Only the caller that resolves markers turns them on.
+
+Wiring `read-string` and `load` the same way is DEVIATIONS 46's removal
+note, and it needs two more things first: `clojure.uuid` un-skipped,
+because `default-data-readers` names a Var from it, and a date type for
+`#inst`.

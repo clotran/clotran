@@ -135,7 +135,7 @@
        hm("java.math.RoundingMode", "UNNECESSARY", HK_SELFKEY), &
        hm("clojure.lang.Numbers", "unchecked_dec", B_UDEC, "unchecked-dec"), &
        hm("clojure.lang.Numbers", "unchecked_int_dec", B_UDEC, "unchecked-dec") ]
-  type(hm), parameter :: HOST_STATICS_2(80) = [ &
+  type(hm), parameter :: HOST_STATICS_2(81) = [ &
        hm("clojure.lang.Numbers", "remainder", B_REM, "rem"), &
        hm("clojure.lang.Numbers", "unchecked_int_remainder", B_REM, "rem"), &
        hm("clojure.lang.Numbers", "quotient", B_QUOT, "quot"), &
@@ -157,6 +157,10 @@
   ! core.clj's one-argument arithmetic is (cast Number x).
        hm("java.lang.Number", "cast", B_NUMCAST, "clotran-num-cast"), &
        hm("java.lang.Class", "forName", B_FORNAME, "clotran-for-name"), &
+       ! clojure.edn's read-string is (EdnReader/readString s opts).
+       ! Its data readers come from the opts map, not from
+       ! *data-readers*, which is the whole difference here.
+       hm("clojure.lang.EdnReader", "readString", B_EDNREAD, "clotran-edn-read"), &
        hm("clojure.lang.Iterate", "create", B_ITERATE, "iterate"), &
        hm("clojure.lang.Cycle", "create", B_RTFN, "cycle-of"), &
        hm("clojure.lang.Repeat", "create", B_REPEAT, "repeat"), &
@@ -307,7 +311,7 @@
   type(hm), parameter :: HOST_STATICS_4(63) = [ &
   ! Double.compare, NOT clojure.core/compare: a total order in which
   ! -0.0 is below 0.0. clojure.math's tests are written on it.
-       hm("java.lang.Double", "compare", B_DBLCOMPARE, "clotran-double-compare"), &
+       hm("java.lang.Double", "compare", B_NUMCOMPARE, "clotran-num-compare"), &
   ! Double.MIN_VALUE is the smallest POSITIVE value, a denormal, which
   ! Clojure's own math tests check.
        hm("java.lang.Double", "MAX_VALUE", HK_REAL, "", 0_gc_ip, huge(1.0_gc_dp)), &
@@ -392,7 +396,7 @@
        hm("clojure.lang.Numbers", "ints", B_IDENTITY, "identity"), &
        hm("clojure.lang.Numbers", "longs", B_IDENTITY, "identity"), &
        hm("clojure.lang.Numbers", "doubles", B_IDENTITY, "identity") ]
-  type(hm), parameter :: HOST_STATICS(305) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
+  type(hm), parameter :: HOST_STATICS(306) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
   type(hm), parameter :: HOST_METHODS_1(91) = [ &
   ! Instance members. The target becomes the first argument, which is all

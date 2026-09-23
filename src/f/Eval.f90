@@ -222,7 +222,7 @@ module Eval
   integer, parameter :: B_QOFFER = 362, B_QTAKE = 363, B_THREADSTART = 364
   integer, parameter :: B_THREADDAEMON = 365, B_NSUNMAP = 366
   integer, parameter :: B_MUNGE = 367, B_DEMUNGE = 368
-  integer, parameter :: B_ISARRAY = 369, B_DBLCOMPARE = 370
+  integer, parameter :: B_ISARRAY = 369, B_EDNREAD = 370
 
   ! Compiler.CHAR_MAP, verbatim from the pinned clone: the characters
   ! a Clojure name may hold that a JVM member name may not. '.' is
@@ -7739,6 +7739,36 @@ case (B_SLURP)
        end block
     case (B_HASH)
        out = gc_int(gc_hash(gcv_nth(args, 0)))
+    case (B_EDNREAD)
+       ! (EdnReader/readString s opts). The EDN grammar is the Clojure
+       ! reader's without eval, syntax-quote or the deref and var
+       ! shorthands, none of which our reader produces from data
+       ! anyway; what IS particular to it is that its data readers
+       ! come from the OPTS map rather than from *data-readers*. So
+       ! the form is read with #tag left as a marker and the markers
+       ! are resolved here, against :readers, then the built-in uuid,
+       ! then :default.
+       block
+         type(gc_value) :: sv, opts, form
+         logical :: was
+         sv = strip_meta(gcv_nth(args, 0))
+         opts = strip_meta(gcv_nth(args, 1))
+         call vs_set(base + 2, opts)
+         if (sv%tag /= GCT_STR) then
+            call fail("edn/read-string wants a string")
+         else
+            was = gcr_set_tag_markers(.true.)
+            form = gcr_read(gc_ref_text(sv%ref), [vs_get(base + 1), vs_get(base + 2)])
+            was = gcr_set_tag_markers(was)
+            if (gcr_has_error()) then
+               call fail(gcr_error())
+            else
+               call vs_set(base + 3, form)
+               out = resolve_tags(vs_get(base + 3), vs_get(base + 2), &
+                    [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+            end if
+         end if
+       end block
     case (B_ISARRAY)
        ! Class.isArray, which clojure.data reaches as
        ! (.. x getClass isArray) to decide that an array diffs as a
@@ -7750,33 +7780,6 @@ case (B_SLURP)
        else
           out = gc_bool(gc_kind(a) == OBJ_ARRAY)
        end if
-    case (B_DBLCOMPARE)
-       ! Double.compare: a TOTAL order, where -0.0 sorts below 0.0 and
-       ! NaN above everything -- which is not what `compare` answers,
-       ! and is the whole point of clojure.math's neg-zero? test.
-       block
-         real(gc_dp) :: x, y
-         x = num_dbl(gcv_nth(args, 0))
-         y = num_dbl(gcv_nth(args, 1))
-         if (x < y) then
-            out = gc_int(-1_gc_ip)
-         else if (x > y) then
-            out = gc_int(1_gc_ip)
-         else
-            ! equal as numbers: separate -0.0 from 0.0, and put a NaN
-            ! last, the way doubleToLongBits ordering does.
-            out = gc_int(int(sign(1.0_gc_dp, x) - sign(1.0_gc_dp, y), gc_ip) / 2_gc_ip)
-            if (x /= x .or. y /= y) then
-               if (x /= x .and. y == y) then
-                  out = gc_int(1_gc_ip)
-               else if (y /= y .and. x == x) then
-                  out = gc_int(-1_gc_ip)
-               else
-                  out = gc_int(0_gc_ip)
-               end if
-            end if
-         end if
-       end block
     case (B_MUNGE, B_DEMUNGE)
        a = strip_meta(gcv_nth(args, 0))
        if (id == B_MUNGE) then
@@ -7866,29 +7869,7 @@ case (B_SLURP)
        ! (DEVIATIONS 12: java.util.UUID is not a type clotran has), so
        ! this checks the shape and answers the string; a string that
        ! is not one raises, which is what parse-uuid catches to nil.
-       block
-         character(len=:), allocatable :: u
-         integer :: i
-         logical :: okuuid
-         u = text_of(gcv_nth(args, 0))
-         okuuid = (len(u) == 36)
-         if (okuuid) then
-            do i = 1, 36
-               if (i == 9 .or. i == 14 .or. i == 19 .or. i == 24) then
-                  if (u(i:i) /= "-") okuuid = .false.
-               else if (.not. ((u(i:i) >= "0" .and. u(i:i) <= "9") .or. &
-                    (u(i:i) >= "a" .and. u(i:i) <= "f") .or. &
-                    (u(i:i) >= "A" .and. u(i:i) <= "F"))) then
-                  okuuid = .false.
-               end if
-            end do
-         end if
-         if (okuuid) then
-            out = gc_str(u, [vs_get(base + 1)])
-         else
-            call raise_class("IllegalArgumentException", "Invalid UUID string: " // u, [vs_get(base + 1)])
-         end if
-       end block
+       out = uuid_of(gcv_nth(args, 0), [vs_get(base + 1)])
     case (B_ADDWATCH, B_REMWATCH, B_GETWATCHES)
        ! The watches live beside the validator and the error handler
        ! in slot 4, as a map from key to fn.
@@ -9362,7 +9343,8 @@ case (B_SLURP)
          end if
        end block
     case (B_NUMCOMPARE)
-       ! Double.compare's total order. -0.0 < 0.0, and NaN is
+       ! Double.compare's total order, which the host table reaches as
+       ! Double/compare (clojure.math's neg-zero? is written on it). -0.0 < 0.0, and NaN is
        ! greater than every other value including +Inf -- neither
        ! of which plain < can say.
        block
@@ -13107,6 +13089,196 @@ case (B_SLURP)
        meta_slot = 2
     end if
   end function meta_slot
+
+  ! UUID/fromString and parse-uuid. A UUID is its TEXT here
+  ! (DEVIATIONS 12: java.util.UUID is not a type clotran has), so
+  ! this checks the shape and answers the string; a string that is
+  ! not one raises, which is what parse-uuid catches to nil.
+  function uuid_of(v, roots) result(out)
+    type(gc_value), intent(in) :: v
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out
+    character(len=:), allocatable :: u
+    integer :: i
+    logical :: okuuid
+    out = gc_nil()
+    u = text_of(strip_meta(v))
+    okuuid = (len(u) == 36)
+    if (okuuid) then
+       do i = 1, 36
+          if (i == 9 .or. i == 14 .or. i == 19 .or. i == 24) then
+             if (u(i:i) /= "-") okuuid = .false.
+          else if (.not. ((u(i:i) >= "0" .and. u(i:i) <= "9") .or. &
+               (u(i:i) >= "a" .and. u(i:i) <= "f") .or. &
+               (u(i:i) >= "A" .and. u(i:i) <= "F"))) then
+             okuuid = .false.
+          end if
+       end do
+    end if
+    if (okuuid) then
+       out = gc_str(u, roots)
+    else
+       call raise_class("IllegalArgumentException", "Invalid UUID string: " // u, roots)
+    end if
+  end function uuid_of
+
+  ! A SET holding a vector's elements. Same two lines B_SET runs;
+  ! a set IS a map from each element to itself.
+  function set_of_vector(vec, roots) result(out)
+    type(gc_value), intent(in) :: vec
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, mp
+    integer :: base, i
+    base = vs_enter(2)
+    call vs_set(base + 1, vec)
+    mp = gca_empty([roots, [vs_get(base + 1)]])
+    call vs_set(base + 2, mp)
+    do i = 0, gcv_count(vs_get(base + 1)) - 1
+       mp = gca_assoc(vs_get(base + 2), gcv_nth(vs_get(base + 1), i), &
+            gcv_nth(vs_get(base + 1), i), [roots, [vs_get(base + 1), vs_get(base + 2)]])
+       call vs_set(base + 2, mp)
+    end do
+    out = gc_obj(OBJ_SET, [vs_get(base + 2)], [roots, [vs_get(base + 2)]])
+    call vs_leave(base)
+  end function set_of_vector
+
+  ! Every #tag marker in a value replaced by what its data reader
+  ! answers, innermost first -- which is the order Clojure's reader
+  ! applies them in, since it reads the inner form before the outer
+  ! tag can see it.
+  !
+  ! The tag is looked for in opts :readers, then among the readers
+  ! EDN has built in, then opts :default (called with tag and form).
+  ! A tag nothing answers is an error, as EdnReader raises one.
+  recursive function resolve_tags(v, opts, roots) result(out)
+    type(gc_value), intent(in) :: v, opts
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, tag, form, fn, av
+    integer :: base, i
+    out = v
+    if (has_error) return
+    base = vs_enter(6)
+    call vs_set(base + 1, v)
+    call vs_set(base + 2, opts)
+    if (is_tagged_literal(vs_get(base + 1))) then
+       tag = gca_get(vs_get(base + 1), gc_key("tag", [vs_get(base + 1), vs_get(base + 2)]))
+       call vs_set(base + 3, tag)
+       form = gca_get(vs_get(base + 1), gc_key("form", [vs_get(base + 1), vs_get(base + 2)]))
+       call vs_set(base + 4, form)
+       form = resolve_tags(vs_get(base + 4), vs_get(base + 2), &
+            [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 4)])
+       if (has_error) then
+          call vs_leave(base); return
+       end if
+       call vs_set(base + 4, form)
+       fn = gca_get(gca_get(vs_get(base + 2), &
+            gc_key("readers", [vs_get(base + 1), vs_get(base + 2)])), vs_get(base + 3))
+       call vs_set(base + 5, fn)
+       if (tag_of(vs_get(base + 5)) /= GCT_NIL) then
+          av = gcv_empty([vs_get(base + 1), vs_get(base + 2), vs_get(base + 4), vs_get(base + 5)])
+          call vs_set(base + 6, av)
+          av = gcv_conj(vs_get(base + 6), vs_get(base + 4), &
+               [vs_get(base + 1), vs_get(base + 2), vs_get(base + 4), vs_get(base + 5), vs_get(base + 6)])
+          call vs_set(base + 6, av)
+          out = apply(vs_get(base + 5), vs_get(base + 6))
+       else if (name_part(vs_get(base + 3)) == "uuid") then
+          ! EDN has uuid built in. A UUID is its text here
+          ! (DEVIATIONS 12), which is what parse-uuid answers too.
+          out = uuid_of(vs_get(base + 4), [vs_get(base + 1), vs_get(base + 4)])
+       else
+          fn = gca_get(vs_get(base + 2), gc_key("default", [vs_get(base + 1), vs_get(base + 2)]))
+          call vs_set(base + 5, fn)
+          if (tag_of(vs_get(base + 5)) /= GCT_NIL) then
+             av = gcv_empty([vs_get(base + 1), vs_get(base + 2), vs_get(base + 4), vs_get(base + 5)])
+             call vs_set(base + 6, av)
+             av = gcv_conj(vs_get(base + 6), vs_get(base + 3), &
+                  [vs_get(base + 1), vs_get(base + 2), vs_get(base + 4), vs_get(base + 5), vs_get(base + 6)])
+             call vs_set(base + 6, av)
+             av = gcv_conj(vs_get(base + 6), vs_get(base + 4), &
+                  [vs_get(base + 1), vs_get(base + 2), vs_get(base + 4), vs_get(base + 5), vs_get(base + 6)])
+             call vs_set(base + 6, av)
+             out = apply(vs_get(base + 5), vs_get(base + 6))
+          else
+             call raise_class("RuntimeException", "No reader function for tag " // &
+                  name_part(vs_get(base + 3)), [vs_get(base + 1)])
+             out = gc_nil()
+          end if
+       end if
+       call vs_leave(base)
+       return
+    end if
+    ! Not a marker: walk the collections, since a tag can be nested.
+    if (gcv_is(vs_get(base + 1))) then
+       av = gcv_empty([vs_get(base + 1), vs_get(base + 2)])
+       call vs_set(base + 6, av)
+       do i = 0, gcv_count(vs_get(base + 1)) - 1
+          av = resolve_tags(gcv_nth(vs_get(base + 1), i), vs_get(base + 2), &
+               [vs_get(base + 1), vs_get(base + 2), vs_get(base + 6)])
+          if (has_error) then
+             call vs_leave(base); return
+          end if
+          call vs_set(base + 5, av)
+          av = gcv_conj(vs_get(base + 6), vs_get(base + 5), &
+               [vs_get(base + 1), vs_get(base + 2), vs_get(base + 5), vs_get(base + 6)])
+          call vs_set(base + 6, av)
+       end do
+       out = vs_get(base + 6)
+    else if (gca_is(vs_get(base + 1))) then
+       block
+         type(gc_value), allocatable :: ks(:), vls(:)
+         type(gc_value) :: m, kk, vv
+         call gca_entries(vs_get(base + 1), ks, vls)
+         m = gca_empty([vs_get(base + 1), vs_get(base + 2)])
+         call vs_set(base + 6, m)
+         do i = 1, size(ks)
+            kk = resolve_tags(ks(i), vs_get(base + 2), &
+                 [vs_get(base + 1), vs_get(base + 2), vs_get(base + 6)])
+            if (has_error) then
+               call vs_leave(base); return
+            end if
+            call vs_set(base + 4, kk)
+            vv = resolve_tags(vls(i), vs_get(base + 2), &
+                 [vs_get(base + 1), vs_get(base + 2), vs_get(base + 4), vs_get(base + 6)])
+            if (has_error) then
+               call vs_leave(base); return
+            end if
+            call vs_set(base + 5, vv)
+            m = gca_assoc(vs_get(base + 6), vs_get(base + 4), vs_get(base + 5), &
+                 [vs_get(base + 1), vs_get(base + 2), vs_get(base + 4), vs_get(base + 5), vs_get(base + 6)])
+            call vs_set(base + 6, m)
+         end do
+         out = vs_get(base + 6)
+       end block
+    else if (gc_kind(vs_get(base + 1)) == OBJ_SET .or. &
+         gc_kind(vs_get(base + 1)) == OBJ_CONS) then
+       block
+         type(gc_value) :: sq, e
+         sq = to_seq(vs_get(base + 1), [vs_get(base + 1), vs_get(base + 2)])
+         call vs_set(base + 3, sq)
+         av = gcv_empty([vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+         call vs_set(base + 6, av)
+         do while (tag_of(vs_get(base + 3)) /= GCT_NIL)
+            e = resolve_tags(sq_first(vs_get(base + 3), [vs_get(base + 3)]), vs_get(base + 2), &
+                 [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 6)])
+            if (has_error) then
+               call vs_leave(base); return
+            end if
+            call vs_set(base + 5, e)
+            av = gcv_conj(vs_get(base + 6), vs_get(base + 5), &
+                 [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 5), vs_get(base + 6)])
+            call vs_set(base + 6, av)
+            sq = to_seq(sq_rest(vs_get(base + 3), [vs_get(base + 3)]), [vs_get(base + 3)])
+            call vs_set(base + 3, sq)
+         end do
+         if (gc_kind(vs_get(base + 1)) == OBJ_SET) then
+            out = set_of_vector(vs_get(base + 6), [vs_get(base + 1), vs_get(base + 6)])
+         else
+            out = seq_to_list(vs_get(base + 6), [vs_get(base + 1), vs_get(base + 6)])
+         end if
+       end block
+    end if
+    call vs_leave(base)
+  end function resolve_tags
 
   ! Compiler.munge: every character CHAR_MAP names replaced by its
   ! escape, everything else left alone.

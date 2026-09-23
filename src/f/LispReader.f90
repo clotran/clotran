@@ -38,7 +38,7 @@ module LispReader
 
   public :: gcr_read, gcr_read_all, gcr_error, gcr_has_error
   public :: gcr_begin_file, gcr_read_next, gcr_position, gcr_position_parts
-  public :: gcr_set_ns_resolver
+  public :: gcr_set_ns_resolver, gcr_set_tag_markers
 
   ! ::x is resolved at READ time against the current namespace, and
   ! ::a/x against its aliases -- which the reader does not know. The
@@ -88,6 +88,14 @@ module LispReader
   ! tagged literal there is read past rather than resolved, which is
   ! what *suppress-read* does, so a :cljs branch may hold #js {}.
   logical, save :: suppress_read = .false.
+  ! When on, #tag form READS as a marker map instead of failing --
+  ! {:clotran/tagged-literal true :tag t :form f}, the same shape
+  ! `tagged-literal` builds. The reader cannot apply a data reader
+  ! itself (it would have to call the evaluator, and Eval uses this
+  ! module, not the other way round), so the caller that turned this
+  ! on resolves the markers afterwards. Off for ordinary source, so
+  ! an unknown tag in a file is still a reader error there.
+  logical, save :: tag_markers = .false.
 
 contains
 
@@ -801,11 +809,73 @@ contains
           if (has_error) return
           v = read_form(text, pos, roots)
           v = gc_nil()
+       else if (tag_markers .and. ((c >= "a" .and. c <= "z") .or. &
+            (c >= "A" .and. c <= "Z"))) then
+          pos = pos + 1
+          v = read_tagged(text, pos, roots)
        else
           call fail("reader: no dispatch for #" // c)
        end if
     end select
   end function read_dispatch
+
+  ! #tag form as a marker map. The tag is read as a symbol and the
+  ! form as any form, exactly as LispReader.CtorReader does before it
+  ! looks the tag up.
+  recursive function read_tagged(text, pos, roots) result(v)
+    character(len=*), intent(in) :: text
+    integer, intent(inout) :: pos
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: v, tag, form, m, k
+    integer :: base
+    v = gc_nil()
+    base = vs_enter(4)
+    tag = read_form(text, pos, roots)
+    if (has_error) then
+       call vs_leave(base); return
+    end if
+    call vs_set(base + 1, tag)
+    if (tag%tag /= GCT_SYM) then
+       call fail("reader: a tag must be a symbol")
+       call vs_leave(base); return
+    end if
+    form = read_form(text, pos, [roots, [vs_get(base + 1)]])
+    if (has_error) then
+       call vs_leave(base); return
+    end if
+    call vs_set(base + 2, form)
+    m = gca_empty([roots, [vs_get(base + 1), vs_get(base + 2)]])
+    call vs_set(base + 3, m)
+    k = gc_key("clotran/tagged-literal", [roots, [vs_get(base + 1), &
+         vs_get(base + 2), vs_get(base + 3)]])
+    call vs_set(base + 4, k)
+    m = gca_assoc(vs_get(base + 3), vs_get(base + 4), gc_bool(.true.), &
+         [roots, [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), &
+         vs_get(base + 4)]])
+    call vs_set(base + 3, m)
+    k = gc_key("tag", [roots, [vs_get(base + 1), vs_get(base + 2), &
+         vs_get(base + 3)]])
+    call vs_set(base + 4, k)
+    m = gca_assoc(vs_get(base + 3), vs_get(base + 4), vs_get(base + 1), &
+         [roots, [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), &
+         vs_get(base + 4)]])
+    call vs_set(base + 3, m)
+    k = gc_key("form", [roots, [vs_get(base + 1), vs_get(base + 2), &
+         vs_get(base + 3)]])
+    call vs_set(base + 4, k)
+    v = gca_assoc(vs_get(base + 3), vs_get(base + 4), vs_get(base + 2), &
+         [roots, [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), &
+         vs_get(base + 4)]])
+    call vs_leave(base)
+  end function read_tagged
+
+  ! Turns #tag markers on or off, and answers what it was, so the
+  ! caller can restore it.
+  logical function gcr_set_tag_markers(on) result(was)
+    logical, intent(in) :: on
+    was = tag_markers
+    tag_markers = on
+  end function gcr_set_tag_markers
 
   ! ---- reader conditionals ----
   !
