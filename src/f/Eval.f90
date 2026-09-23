@@ -5397,6 +5397,23 @@ contains
        call vs_leave(base)
        return
     end if
+    ! A NUMERIC BUILTIN reuses the interpreter's scratch vector and
+    ! allocates nothing, by the same rule exec.inc's N_CALL uses
+    ! (scalar_builtin: numeric, keeps no argument, never calls back).
+    ! Without this a compiled loop built a fresh vector for every +
+    ! and <, and a profile had the collector at 58% of its time --
+    ! the interpreter, which already took this path, allocated none.
+    if (gc_kind(vs_get(base + 1)) == OBJ_BUILTIN .and. (nargs == 1 .or. nargs == 2)) then
+       if (scalar_builtin(gc_i1(vs_get(base + 1)))) then
+          av = scratch_args(nargs)
+          do j = 1, nargs
+             call gc_vec_set(gc_slot(av, 1), j, vs_get(argbase + j))
+          end do
+          out = call_builtin(gc_i1(vs_get(base + 1)), av)
+          call vs_leave(base)
+          return
+       end if
+    end if
     ! ONE allocation, not one per argument: gcv_conj would build a
     ! new vector each time round, which for a two-argument call in a
     ! loop is twice the garbage the interpreter makes.

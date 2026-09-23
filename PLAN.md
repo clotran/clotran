@@ -671,6 +671,35 @@ the parameters. Each loop owns its flag and the outer one is restored
 when an inner one ends -- `compiler-check` caught that as a difference
 on a nested loop before it was, which is the entire point of having it.
 
+**The 1.2x was a bug, not a ceiling -- and a profile found it.** A
+sampled compiled loop spent 58% of its time in the collector. The
+interpreter already calls numeric builtins without allocating, reusing
+one scratch vector by the `scalar_builtin` rule; `gce_apply_slots` did
+not, and built a fresh argument vector for every `+` and `<`. Giving it
+the same rule took the collector out of the profile entirely.
+
+| summing loop, 200,000 iterations | interpreted | compiled |
+|---|---|---|
+| before the fix | 385 ms | 317 ms |
+| after the fix | 398 ms | 85 ms |
+| after, with `-flto` (not adopted yet) | 345 ms | 67 ms |
+
+What the profile says is left, with the collector gone: two thirds of
+the time in ONE-LINE ACCESSORS -- `vs_get`, `vs_set`, `gc_slot`,
+`gc_kind`, `gcv_nth` -- called out of line because they live in `GC.f90`
+and their callers do not. Link-time optimisation inlines them, which is
+the `-flto` row; it is not in the Makefile yet because flang has to
+agree under the gate first.
+
+The rest is the generic numeric path: `call_builtin`'s dispatch and the
+tag checks in `numbers_ok`. Unboxed arithmetic removes all of it for a
+value the analyser can prove is a number, and that is where the
+remaining distance to the JVM's 2.77 ms is.
+
+Two GC knobs were tried and did NOTHING: keeping the heap at 4x or 8x
+the live set instead of 2x, and collecting at 8x live slots allocated
+instead of 2x. Recorded so nobody tries them again as the answer.
+
 **The escape hatch is wired in, and NOTHING declines for a node kind
 any more.** A kind the generator does not emit has its NODE put in the
 pool and run by `clotran_eval_node` in the same frame the compiled code
