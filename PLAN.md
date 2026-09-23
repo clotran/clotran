@@ -602,6 +602,52 @@ all take it for what it is.
 So the generator has nothing left to prove about HOW its output is
 reached. Only about what it emits.
 
+**Milestones 4 and 5 are done: the generator exists and it agrees.**
+`src/clj/clotran/compiler.cljf` reads `(clotran-ast form)` and writes
+Fortran: one procedure per function, calling the runtime through the C
+convention, plus the one `clotran_install` the loader knows.
+`scripts/compiler-check` generates, builds with gfortran, loads through
+`clotran-load-compiled` and runs every case BOTH WAYS, comparing
+values. On 16 cases it compiles 14, and 36 of 36 calls agree.
+
+Three decisions the generator made that are worth keeping.
+
+*Locals live in an interpreter frame, not in raw slots.* A frame is a
+`gc_vec`: one allocation per call, indexed, already traced. It costs
+more than raw slots and it buys two things that matter more right now
+-- the escape hatch is one call rather than a bridge, and the debugger
+sees a real frame. Raw slots for leaf procedures that never fall back
+are a later optimisation with a measurement behind it.
+
+*Anything Fortran cannot spell goes in the CONSTANT POOL.* Analysis
+folds a resolved core function into the call head, so the head of
+`(inc x)` is the function itself and not a lookup. A procedure cannot
+write that down, nor a map, nor a Var. The pool holds the exact value
+the interpreter would have used, so compiling cannot change what a form
+means. Strings are pooled too, deliberately: a Fortran literal would
+need its quotes doubled, its newlines turned into concatenations and
+its byte length counted by hand, and each of those is a way to emit a
+file that compiles into a different string.
+
+*The pool handle is passed to `clotran_install`, not baked in.* The
+file is written before the pool is registered. This also means compile
+and install must happen in ONE process, because a pool holds Vars and
+functions and cannot be written to a file and read back.
+`compiler-check` compiles twice and throws the first Fortran away,
+which works because compilation is deterministic.
+
+**What it declines**, and each is the next thing to teach it: `:vector`,
+`:map` and `:set` nodes, more than one arity, variadic, a closure over
+an outer local, and a function that names itself. `decline-reason` is
+the list, so the answer is always visible. A declined function stays
+interpreted and nothing else changes.
+
+**Still to do before this is usable**: `loop`/`recur` as a Fortran loop,
+which is where the interpreter-dispatch win is; a `clotran compile`
+driver that does a whole namespace rather than one function; and the
+escape hatch wired into the generator so a node kind it does not know
+costs speed rather than a decline.
+
 **In order, from here.**
 
 2. ~~The exporter: a namespace's resolved tree as Clojure data.~~ Done.

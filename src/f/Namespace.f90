@@ -22,6 +22,7 @@
 module Namespace
   use GC
   use Assoc
+  use PersistentVector
   implicit none
   private
 
@@ -35,7 +36,7 @@ module Namespace
 
   public :: gcn_reset, gcn_current, gcn_set_current, gcn_find_or_create, gcn_find, gcn_remove
   public :: gcn_intern, gcn_lookup, gcn_var_value, gcn_set_var, gcn_is_var
-  public :: gcn_name
+  public :: gcn_name, gcn_all
 
 contains
 
@@ -311,6 +312,31 @@ contains
   ! The Var `sym` names in `ns`, or nil. Returns the VAR, not its
   ! value, because a caller that wants the var itself (#'x) and one
   ! that wants the value need different things from the same lookup.
+  ! Every namespace that exists, as a vector. Namespace.all, which
+  ! core.clj's all-ns is. The registry is a map from name to
+  ! namespace and nothing else enumerated it, so all-ns could not
+  ! answer at all.
+  function gcn_all(roots) result(out)
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, reg
+    type(gc_value), allocatable :: ks(:), vls(:)
+    integer :: base, i
+    out = gcv_empty(roots)
+    if (.not. roots_live()) return
+    reg = gc_root_get(registry_root)
+    base = vs_enter(2)
+    call vs_set(base + 1, reg)
+    call gca_entries(vs_get(base + 1), ks, vls)
+    call vs_set(base + 2, out)
+    do i = 1, size(vls)
+       out = gcv_conj(vs_get(base + 2), vls(i), &
+            [roots, [vs_get(base + 1), vs_get(base + 2)]])
+       call vs_set(base + 2, out)
+    end do
+    out = vs_get(base + 2)
+    call vs_leave(base)
+  end function gcn_all
+
   function gcn_lookup(ns, sym) result(var)
     type(gc_value), intent(in) :: ns, sym
     type(gc_value) :: var

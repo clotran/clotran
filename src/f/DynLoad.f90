@@ -26,6 +26,7 @@ module DynLoad
   implicit none
   private
   public :: dl_open, dl_sym, dl_error, dl_c_string, dl_call_shim, dl_manifest, shim_i
+  public :: dl_install, install_i
 
   interface
      function dlopen(path, mode) bind(C, name="dlopen") result(h)
@@ -49,6 +50,20 @@ module DynLoad
        type(c_ptr), value :: s
        integer(c_size_t) :: n
      end function strlen
+  end interface
+
+  ! What a generated library exports so the loader can find it.
+  ! What a generated library exports. The argument is the handle of
+  ! the CONSTANT POOL the loader registered for it: a generated
+  ! procedure cannot spell a map, a Var or a folded function in
+  ! Fortran, so the values live in a vector the driver registers and
+  ! the procedures index. The handle is not known when the source is
+  ! written, which is why it is passed in rather than baked in.
+  abstract interface
+     subroutine install_i(pool) bind(C)
+       import :: c_int
+       integer(c_int), value :: pool
+     end subroutine install_i
   end interface
 
   ! the shim: argc arguments, each a C pointer
@@ -126,6 +141,47 @@ contains
   end function dl_manifest
 
   ! One call through the uniform signature.
+  ! Opens a COMPILED NAMESPACE and lets it install itself.
+  !
+  ! A generated library exports one procedure per function plus
+  !
+  !   subroutine clotran_install() bind(C, name="clotran_install")
+  !
+  ! which calls clotran_def_fn for each of them. So the loader knows one
+  ! symbol, forever, exactly as a package is one shim signature -- and a
+  ! library built by any compiler works, because the only thing crossing
+  ! the boundary is the C convention.
+  !
+  ! The library is NEVER CLOSED. A compiled function value names its
+  ! procedure through CompiledFn's table, and closing the library while
+  ! one is reachable would crash; a recompile loads a new file under a
+  ! new name instead and leaks the old (PLAN step 10).
+  function dl_install(path, pool, err) result(ok)
+    character(len=*), intent(in) :: path
+    integer, intent(in) :: pool
+    character(len=:), allocatable, intent(out) :: err
+    logical :: ok
+    type(c_ptr) :: h
+    type(c_funptr) :: fp
+    procedure(install_i), pointer :: f
+    ok = .false.
+    err = ""
+    h = dl_open(path)
+    if (.not. c_associated(h)) then
+       err = dl_error()
+       if (len(err) == 0) err = "cannot open " // path
+       return
+    end if
+    fp = dl_sym(h, "clotran_install")
+    if (.not. c_associated(fp)) then
+       err = "no clotran_install in " // path
+       return
+    end if
+    call c_f_procpointer(fp, f)
+    call f(int(pool, c_int))
+    ok = .true.
+  end function dl_install
+
   subroutine dl_call_shim(fp, argv)
     type(c_funptr), intent(in) :: fp
     type(c_ptr), intent(in) :: argv(:)

@@ -224,6 +224,7 @@ module Eval
   integer, parameter :: B_THREADDAEMON = 365, B_NSUNMAP = 366
   integer, parameter :: B_MUNGE = 367, B_DEMUNGE = 368
   integer, parameter :: B_ISARRAY = 369, B_EDNREAD = 370, B_ASTDATA = 371
+  integer, parameter :: B_LOADCOMPILED = 372, B_ALLNS = 373, B_POOLREG = 374
 
   ! Compiler.CHAR_MAP, verbatim from the pinned clone: the characters
   ! a Clojure name may hold that a JVM member name may not. '.' is
@@ -376,7 +377,7 @@ module Eval
   public :: gce_ctx_new, gce_ctx_switch, gce_ctx_current
   public :: gce_repl
   public :: gce_set_home, gce_home
-  public :: gce_apply, gce_env, gce_exec_node
+  public :: gce_apply, gce_env, gce_exec_node, gce_apply_slots
 
   ! THE CALL STACK. One entry per closure invocation in progress: the
   ! closure and the position of the call that entered it (set by the
@@ -688,6 +689,8 @@ contains
     ! generator can be written in Clojure over the same tree the
     ! executor runs. PLAN step 10.
     call bind_builtin(core, "clotran-ast", B_ASTDATA)
+    call bind_builtin(core, "clotran-load-compiled", B_LOADCOMPILED)
+    call bind_builtin(core, "clotran-pool-register", B_POOLREG)
     call bind_builtin(core, "clotran-break", B_BREAK)
     call bind_builtin(core, "clotran-last-break", B_LASTBREAK)
     call bind_builtin(core, "clotran-break-on!", B_BREAKON)
@@ -5367,6 +5370,44 @@ contains
     if (gc_root_live(global_env_root)) env = gc_root_get(global_env_root)
   end function gce_env
 
+  ! A call whose arguments are already in CONSECUTIVE shadow stack
+  ! slots. A compiled call site has them there anyway, so calling
+  ! another compiled function costs no vector at all; every other
+  ! callee gets one built here, which is what the interpreter would
+  ! have done.
+  recursive function gce_apply_slots(fn0, argbase, nargs) result(out)
+    type(gc_value), intent(in) :: fn0
+    integer, intent(in) :: argbase, nargs
+    type(gc_value) :: out, fn, av
+    integer :: base, j
+    out = gc_nil()
+    fn = strip_meta(fn0)
+    if (gcn_is_var(fn)) fn = gcn_var_value(fn)
+    base = vs_enter(2)
+    call vs_set(base + 1, fn)
+    if (gc_kind(vs_get(base + 1)) == OBJ_COMPILED .and. &
+         (gc_i2(vs_get(base + 1)) < 0 .or. gc_i2(vs_get(base + 1)) == nargs)) then
+       block
+         integer :: rb
+         rb = vs_enter(1)
+         call cf_call(gc_i1(vs_get(base + 1)), argbase, nargs, rb + 1)
+         out = vs_get(rb + 1)
+         call vs_leave(rb)
+       end block
+       call vs_leave(base)
+       return
+    end if
+    av = gcv_empty([vs_get(base + 1)])
+    call vs_set(base + 2, av)
+    do j = 1, nargs
+       av = gcv_conj(vs_get(base + 2), vs_get(argbase + j), &
+            [vs_get(base + 1), vs_get(base + 2)])
+       call vs_set(base + 2, av)
+    end do
+    out = apply(vs_get(base + 1), vs_get(base + 2))
+    call vs_leave(base)
+  end function gce_apply_slots
+
   ! `exec` under a public name: an already-analysed node run in a
   ! frame. This is the compiler's escape hatch -- generated code calls
   ! it for every node kind the generator has not learned, so an
@@ -7804,6 +7845,27 @@ case (B_SLURP)
        end block
     case (B_HASH)
        out = gc_int(gc_hash(gcv_nth(args, 0)))
+    case (B_POOLREG)
+       ! (clotran-pool-register v) -- a compiled namespace's constants,
+       ! kept alive and answered by handle.
+       out = gc_int(int(cf_pool_add(strip_meta(gcv_nth(args, 0))), gc_ip))
+    case (B_ALLNS)
+       ! Namespace.all: core.clj's all-ns.
+       out = gcn_all([vs_get(base + 1)])
+    case (B_LOADCOMPILED)
+       ! (clotran-load-compiled "path" pool) -- open a compiled
+       ! namespace and let it install its functions, handing it the
+       ! handle of the constant pool registered for it. True, or an
+       ! error naming what the loader could not do.
+       block
+         character(len=:), allocatable :: lerr
+         if (dl_install(text_of(strip_meta(gcv_nth(args, 0))), &
+              int(int_of_number(strip_meta(gcv_nth(args, 1)))), lerr)) then
+            out = gc_bool(.true.)
+         else
+            call raise_class("RuntimeException", lerr, [vs_get(base + 1)])
+         end if
+       end block
     case (B_ASTDATA)
        ! (clotran-ast 'form) -- analyse the form and hand back the
        ! tree as nested maps. Analysis is where every name has already

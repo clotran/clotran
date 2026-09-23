@@ -1,0 +1,167 @@
+#!/usr/bin/env bb
+;; The compiler's differential test: every form is run INTERPRETED and
+;; COMPILED and the two answers are compared.
+;;
+;; This is `scripts/oracle` applied to the other axis. The oracle holds
+;; clotran to real Clojure; this holds compiled clotran to interpreted
+;; clotran. No expected value is typed in by hand in either, which is
+;; the only reason to trust them: 14 of the 477 hand-typed expectations
+;; this project started with turned out to be clotran's answer rather
+;; than Clojure's.
+;;
+;; A case is a [name fn-form [args ...] ...] -- the function, and the
+;; argument lists to call it with. A function the generator DECLINES is
+;; reported and skipped, not failed: declining is the designed answer
+;; for a construct it has not learned, and the report is how the next
+;; thing to teach it stays visible.
+;;
+;;   scripts/compiler-check           run every case
+;;   scripts/compiler-check --keep    leave the generated Fortran to read
+(require '[clojure.string :as str]
+         '[clojure.java.io :as io]
+         '[babashka.process :refer [shell]])
+
+(def repo (-> *file* io/file .getCanonicalFile .getParentFile .getParentFile))
+(def work (io/file "/tmp/clotran-compiler-check"))
+(def keep? (some #{"--keep"} *command-line-args*))
+
+;; Each case: a name, the fn form, and the calls to make on it.
+(def cases
+  '[["a constant" (fn [] 42) [[]]]
+    ["the argument back" (fn [x] x) [[1] ["a"] [nil]]]
+    ["a call to a core fn" (fn [x] (inc x)) [[1] [-1] [0]]]
+    ["arithmetic" (fn [x] (* x 2)) [[3] [0] [-4]]]
+    ["two arguments" (fn [a b] (+ a b)) [[1 2] [-5 5]]]
+    ["nested calls" (fn [x] (+ (* x 2) (- x 1))) [[3] [10]]]
+    ["an if, both ways" (fn [x] (if (< x 10) :small :big)) [[1] [100]]]
+    ["an if with no else" (fn [x] (if x :yes)) [[true] [false] [nil]]]
+    ["a string constant" (fn [x] (if x "yes" "no")) [[true] [false]]]
+    ["a double" (fn [x] (* x 1.5)) [[2] [0]]]
+    ["truthiness is Clojure's" (fn [x] (if x 1 0)) [[0] [""] [false] [nil] [[]]]]
+    ["a call through a Var" (fn [x] (compiler-check-target x)) [[5] [0]]]
+    ["comparison" (fn [a b] (if (= a b) :same :different)) [[1 1] [1 2] ["a" "a"]]]
+    ["a collection constant" (fn [x] (get {:a 1 :b 2} x)) [[:a] [:b] [:c]]]
+    ["a vector literal" (fn [a b] [a b]) [[1 2]]]
+    ["nesting three deep" (fn [x] (if (< x 0) (- 0 x) (if (= x 0) :zero x))) [[-3] [0] [7]]]])
+
+(defn- run-clotran
+  "Runs a file through clotran with core.clj loaded, answering stdout."
+  [path]
+  ;; :in "" closes stdin: clotran enters its REPL after loading a file
+  ;; and would otherwise wait on a terminal that never ends.
+  (let [r (shell {:out :string :err :string :dir (str repo) :continue true :in ""}
+                 "./clotran-bin" "src/clj/clojure/core.clj" (str path))]
+    (str (:out r) (:err r))))
+
+(defn- driver-source
+  "The Clojure the check runs inside clotran: compile each case and
+  PRINT its Fortran between markers. It prints rather than writes
+  because `spit` wants clojure.java.io, which DEVIATIONS 12 skips."
+  []
+  (str
+   "(load-file \"src/clj/clotran/compiler.cljf\")\n"
+   "(in-ns 'user)\n"
+   "(defn compiler-check-target [x] (+ x 100))\n"
+   (apply str
+          (for [[i [nm form _]] (map-indexed vector cases)]
+            (str "(let [r (clotran.compiler/compile-fn \"cc\" \"f" i "\" '" (pr-str form) ")]\n"
+                 "  (if (:declined r)\n"
+                 "    (println \"DECLINED\" " (pr-str nm) " (:declined r))\n"
+                 "    (do (println \"===BEGIN " i "\")\n"
+                 "        (print (clotran.compiler/module-text \"cc_mod" i "\" [r]))\n"
+                 "        (println \"===END\"))))\n")))))
+
+(defn- runner-source
+  "The Clojure that loads each built library and compares.
+
+  It COMPILES AGAIN, and throws the Fortran away. The pool holds Vars
+  and functions, which cannot be written to a file and read back, so
+  the process that registers it has to be the process that built it --
+  and compilation is deterministic, so the pool this run produces is
+  the one the generated code was written against.
+
+  The interpreted answer comes from evaluating the form; the compiled
+  one from the installed Var. Values are compared, never printed text."
+  [ids soext]
+  (str
+   "(load-file \"src/clj/clotran/compiler.cljf\")\n"
+   "(in-ns 'user)\n"
+   "(defn compiler-check-target [x] (+ x 100))\n"
+   "(def fails (atom 0))\n"
+   "(def ran (atom 0))\n"
+   (apply str
+          (for [i ids
+                :let [[nm form calls] (nth cases i)]]
+            (str "(let [r (clotran.compiler/compile-fn \"cc\" \"f" i "\" '" (pr-str form) ")\n"
+                 "      h (clotran-pool-register (:pool r))]\n"
+                 "  (clotran-load-compiled \"" (str work) "/libf" i "." soext "\" h)\n"
+                 "  (let [interp " (pr-str form) "\n"
+                 "        comp @(resolve 'cc/f" i ")]\n"
+                 (apply str
+                        (for [args calls]
+                          (str "    (swap! ran inc)\n"
+                               "    (let [a (try (apply interp '" (pr-str (vec args)) ")"
+                               " (catch Throwable e [:threw (.getMessage e)]))\n"
+                               "          b (try (apply comp '" (pr-str (vec args)) ")"
+                               " (catch Throwable e [:threw (.getMessage e)]))]\n"
+                               "      (when-not (= a b)\n"
+                               "        (swap! fails inc)\n"
+                               "        (println \"DIFFER\" " (pr-str nm) " '" (pr-str (vec args)) ")\n"
+                               "        (println \"   interpreted:\" (pr-str a))\n"
+                               "        (println \"   compiled:   \" (pr-str b))))\n")))
+                 "))\n")))
+   "(println \"---\")\n"
+   "(println (str \"compiler-check: \" @ran \" calls, \" (- @ran @fails) \" agree, \" @fails \" differ\"))\n"))
+
+;; ---- run it ----------------------------------------------------------
+
+(.mkdirs work)
+(when-not keep? (doseq [f (.listFiles work)] (.delete f)))
+(.mkdirs work)
+
+(def soext (if (str/starts-with? (System/getProperty "os.name") "Mac") "dylib" "so"))
+
+(spit (io/file work "gen.clj") (driver-source))
+(let [out (run-clotran (io/file work "gen.clj"))
+      lines (str/split-lines out)]
+  (doseq [l lines :when (str/starts-with? l "DECLINED")]
+    (println "declined:" (subs l 9)))
+  ;; split the printed Fortran back out, one file per case
+  (let [ids (atom [])]
+    (loop [ls lines]
+      (when-let [l (first ls)]
+        (if-let [m (re-matches #"===BEGIN (\d+)" l)]
+          (let [i (parse-long (second m))
+                [body more] (split-with #(not= "===END" %) (rest ls))]
+            (spit (io/file work (str "f" i ".f90")) (str (str/join "\n" body) "\n"))
+            (swap! ids conj i)
+            (recur (rest more)))
+          (recur (rest ls)))))
+    (when (empty? @ids)
+      (println out)
+      (println "nothing compiled")
+      (System/exit 1))
+    (doseq [i @ids
+            :let [src (io/file work (str "f" i ".f90"))
+                  lib (io/file work (str "libf" i "." soext))
+                  ;; A compiled namespace resolves clotran_* against the
+                  ;; RUNNING BINARY at dlopen time, so those symbols are
+                  ;; undefined at link time on purpose. Linux allows that
+                  ;; in a shared object; macOS wants to be told.
+                  r (apply shell {:out :string :err :string :continue true :dir (str work)}
+                           (concat ["gfortran" "-g" "-O2" "-shared" "-fPIC"]
+                                   (when (= soext "dylib")
+                                     ["-Wl,-undefined,dynamic_lookup"])
+                                   ["-o" (str lib) (str src)]))]]
+      (when-not (zero? (:exit r))
+        (println "BUILD FAILED for case" i (first (nth cases i)))
+        (println (:err r))
+        (System/exit 1)))
+    (spit (io/file work "run.clj") (runner-source @ids soext))
+    (let [out2 (run-clotran (io/file work "run.clj"))
+          body (->> (str/split-lines out2)
+                    (remove #(str/starts-with? % "note:"))
+                    (remove #(str/includes? % "WARNING"))
+                    (str/join "\n"))]
+      (println body)
+      (when-not (re-find #", 0 differ" body) (System/exit 1)))))

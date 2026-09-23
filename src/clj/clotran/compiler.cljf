@@ -1,0 +1,393 @@
+(ns clotran.compiler
+  "Compiles a Clojure function to Fortran.
+
+  The input is `(clotran-ast form)` -- the SAME resolved tree the
+  executor runs, so there is no second front end that could disagree
+  with the first. Every name in it is already a frame slot or a
+  constant; this namespace does no analysis of its own and must not
+  start.
+
+  The output is Fortran source for one procedure per function, plus a
+  `clotran_install` that hands each to `clotran_def_fn`. The procedures
+  call the runtime through the C convention (`ClotranABI.f90`), never
+  through a Fortran module, so a library built by any compiler loads
+  into any clotran.
+
+  WHAT IT REFUSES. A function the generator does not fully understand
+  is DECLINED -- `compile-fn` answers nil -- and stays interpreted at
+  today's speed. Nothing is half-compiled. Declining rather than
+  guessing is what lets this be incomplete without the language losing
+  anything, and the list of reasons is `decline-reason` below, so the
+  next kind to teach it is always visible.
+
+  The one thing it may not do is change what a form MEANS.
+  `scripts/compiler-check` runs the same forms interpreted and compiled
+  and compares values, so a generator bug is a difference rather than a
+  silent wrong answer."
+  (:require [clojure.string :as str]))
+
+;;; ---- the declarations a generated file needs ------------------------
+;;;
+;;; A generated library cannot `use` a clotran module: a module file is
+;;; a private format tied to one compiler and one version of it. So the
+;;; entry points it calls are declared in its own source, from their C
+;;; bindings alone. This block is the canonical copy.
+
+(def ^:private runtime-decls
+  "module clotran_rt_decl
+  use iso_c_binding
+  implicit none
+  interface
+     function clotran_frame_enter(n) bind(C, name=\"clotran_frame_enter\") result(base)
+       import :: c_int
+       integer(c_int), value :: n
+       integer(c_int) :: base
+     end function clotran_frame_enter
+     subroutine clotran_frame_leave(base) bind(C, name=\"clotran_frame_leave\")
+       import :: c_int
+       integer(c_int), value :: base
+     end subroutine clotran_frame_leave
+     subroutine clotran_set_nil(slot) bind(C, name=\"clotran_set_nil\")
+       import :: c_int
+       integer(c_int), value :: slot
+     end subroutine clotran_set_nil
+     subroutine clotran_set_int(slot, n) bind(C, name=\"clotran_set_int\")
+       import :: c_int, c_int64_t
+       integer(c_int), value :: slot
+       integer(c_int64_t), value :: n
+     end subroutine clotran_set_int
+     subroutine clotran_set_real(slot, x) bind(C, name=\"clotran_set_real\")
+       import :: c_int, c_double
+       integer(c_int), value :: slot
+       real(c_double), value :: x
+     end subroutine clotran_set_real
+     subroutine clotran_set_bool(slot, b) bind(C, name=\"clotran_set_bool\")
+       import :: c_int
+       integer(c_int), value :: slot, b
+     end subroutine clotran_set_bool
+     subroutine clotran_set_str(slot, chars, n) bind(C, name=\"clotran_set_str\")
+       import :: c_int, c_char
+       integer(c_int), value :: slot
+       character(kind=c_char), intent(in) :: chars(*)
+       integer(c_int), value :: n
+     end subroutine clotran_set_str
+     subroutine clotran_copy(dst, src) bind(C, name=\"clotran_copy\")
+       import :: c_int
+       integer(c_int), value :: dst, src
+     end subroutine clotran_copy
+     function clotran_bool(slot) bind(C, name=\"clotran_bool\") result(b)
+       import :: c_int
+       integer(c_int), value :: slot
+       integer(c_int) :: b
+     end function clotran_bool
+     subroutine clotran_frame_new(dst, n) bind(C, name=\"clotran_frame_new\")
+       import :: c_int
+       integer(c_int), value :: dst, n
+     end subroutine clotran_frame_new
+     subroutine clotran_frame_get(dst, fr, i) bind(C, name=\"clotran_frame_get\")
+       import :: c_int
+       integer(c_int), value :: dst, fr, i
+     end subroutine clotran_frame_get
+     subroutine clotran_frame_put(fr, i, src) bind(C, name=\"clotran_frame_put\")
+       import :: c_int
+       integer(c_int), value :: fr, i, src
+     end subroutine clotran_frame_put
+     function clotran_call_slots(dst, fn, argbase, nargs) bind(C, name=\"clotran_call_slots\") result(st)
+       import :: c_int
+       integer(c_int), value :: dst, fn, argbase, nargs
+       integer(c_int) :: st
+     end function clotran_call_slots
+     subroutine clotran_deref(dst, var) bind(C, name=\"clotran_deref\")
+       import :: c_int
+       integer(c_int), value :: dst, var
+     end subroutine clotran_deref
+     subroutine clotran_pool_get(dst, h, i) bind(C, name=\"clotran_pool_get\")
+       import :: c_int
+       integer(c_int), value :: dst, h, i
+     end subroutine clotran_pool_get
+     function clotran_def_fn(ns, nsn, name, namen, fp, arity) bind(C, name=\"clotran_def_fn\") result(st)
+       import :: c_int, c_char, c_funptr
+       character(kind=c_char), intent(in) :: ns(*), name(*)
+       integer(c_int), value :: nsn, namen, arity
+       type(c_funptr), value :: fp
+       integer(c_int) :: st
+     end function clotran_def_fn
+  end interface
+contains
+  function ctext(s) result(a)
+    character(len=*), intent(in) :: s
+    character(kind=c_char) :: a(len(s))
+    integer :: i
+    do i = 1, len(s)
+       a(i) = s(i:i)
+    end do
+  end function ctext
+end module clotran_rt_decl
+")
+
+;;; ---- what the generator understands ---------------------------------
+
+(def ^:private handled-ops #{:const :local :if :do :call :var})
+
+(defn- spellable?
+  "A constant a generated procedure can write into its own source.
+  Everything else -- a collection, a Var, a string, the function
+  analysis folded into a call head -- goes in the CONSTANT POOL
+  instead.
+
+  A STRING could be written as a Fortran literal, and deliberately is
+  not. It would need its quotes doubled, its newlines turned into
+  concatenations and its byte length counted by hand, and every one of
+  those is a way to emit a file that does not compile or, worse, one
+  that compiles into a different string. The pool already holds the
+  exact value."
+  [v]
+  (or (nil? v) (true? v) (false? v)
+      (integer? v) (float? v)))
+
+(defn- walk-nodes
+  "Every node in the tree, depth first."
+  [t]
+  (filter #(and (map? %) (:op %)) (tree-seq coll? seq t)))
+
+(defn- pooled
+  "The value this node needs out of the pool, or nil if it needs none.
+
+  A :var node holds the Var itself, so the pool holds the Var and the
+  procedure derefs it at the call -- which is what makes a redefinition
+  visible to compiled code. A :const holding anything unspellable holds
+  exactly the value the interpreter would have used, so compiling
+  cannot change what the form means."
+  [nd]
+  (cond
+    (= :var (:op nd)) {:kind :var :value (:p1 nd)}
+    (and (= :const (:op nd)) (not (spellable? (:p1 nd)))) {:kind :const :value (:p1 nd)}
+    :else nil))
+
+(defn decline-reason
+  "Why this function cannot be compiled yet, or nil if it can. A list of
+  reasons rather than a boolean, so the next thing to teach the
+  generator is always the answer to a question."
+  [tmpl]
+  (let [[_ arities captures _ selfslot _] tmpl
+        body (some-> arities first (nth 3))
+        nodes (walk-nodes body)]
+    (cond
+      (nil? body) "no body"
+      (> (count arities) 1) "more than one arity"
+      (true? (nth (first arities) 1)) "variadic"
+      (seq captures) "closes over an outer local"
+      (not= -1 selfslot) "refers to itself by name"
+      :else (when-let [op (first (remove handled-ops (map :op nodes)))]
+              (str "node kind " op)))))
+
+(defn- fn-pool
+  "Everything the body needs out of the pool, in order, without
+  duplicates. Each gets one read at the top of the procedure rather
+  than one per use."
+  [body]
+  (->> (walk-nodes body) (keep pooled) distinct vec))
+
+;;; ---- emitting -------------------------------------------------------
+
+(defn- fort-ident
+  "A Fortran identifier from a Clojure name. Fortran allows letters,
+  digits and underscore and nothing else -- not the dot a namespace
+  is full of, and not the characters `munge` keeps. Case is folded
+  because Fortran is case-insensitive and two names differing only in
+  case would collide in the symbol table."
+  [s]
+  (str/lower-case (str/replace s #"[^A-Za-z0-9]" "_")))
+
+(defn- fort-str
+  "A Fortran string literal: the only escape is a doubled quote."
+  [s]
+  (str "\"" (str/replace s "\"" "\"\"") "\""))
+
+(defn- emit-const [slot v]
+  (cond
+    (nil? v)     [(str "call clotran_set_nil(" slot ")")]
+    (true? v)    [(str "call clotran_set_bool(" slot ", 1_c_int)")]
+    (false? v)   [(str "call clotran_set_bool(" slot ", 0_c_int)")]
+    (integer? v) [(str "call clotran_set_int(" slot ", " v "_c_int64_t)")]
+    (float? v)   [(str "call clotran_set_real(" slot ", " (double v) "_c_double)")]
+    :else        (throw (ex-info "not spellable" {:value v}))))
+
+;; A procedure's temporaries are slots b+2 upwards; b+1 holds the frame
+;; of locals. `next` is the next free one and `high` the most ever used,
+;; which is what the frame at the top has to reserve.
+(defn- fresh [st] [(:next st) (-> st (update :next inc) (update :high max (:next st)))])
+
+(declare gen)
+
+(defn- gen-seq
+  "Generate each node in turn, answering the code and the slot the LAST
+  one landed in."
+  [nodes st]
+  (reduce (fn [[code _ st] nd]
+            (let [[c s st'] (gen nd st)]
+              [(into code c) s st']))
+          [[] nil st] nodes))
+
+(defn- gen
+  "One node. Answers [code slot state]: the statements that compute it,
+  the temporary its value lands in, and the slot state after."
+  [nd st]
+  (if-let [p (pooled nd)]
+    ;; read once at the top of the procedure; a Var was derefed there too
+    (let [[s st] (fresh st)]
+      [[(str "call clotran_copy(b + " s ", b + " (get (:pool st) p) ")")] s st])
+    (case (:op nd)
+      :const (let [[s st] (fresh st)]
+               [(emit-const (str "b + " s) (:p1 nd)) s st])
+
+      :local (let [[s st] (fresh st)]
+               ;; locals live in the frame at b+1, by the index analysis
+               ;; already assigned; :i2 is that index
+               [[(str "call clotran_frame_get(b + " s ", b + 1, " (:i2 nd) "_c_int)")] s st])
+
+      :do (let [[code s st] (gen-seq (:children nd) st)]
+            (if s [code s st] (gen {:op :const :p1 nil} st)))
+
+      :if (let [[tc ts st] (gen (first (:children nd)) st)
+                [r st] (fresh st)
+                [thc ths st] (gen (second (:children nd)) st)
+                [elc els st] (if (> (count (:children nd)) 2)
+                               (gen (nth (:children nd) 2) st)
+                               (gen {:op :const :p1 nil} st))]
+            [(concat tc
+                     [(str "if (clotran_bool(b + " ts ") /= 0) then")]
+                     (map #(str "   " %) thc)
+                     [(str "   call clotran_copy(b + " r ", b + " ths ")")
+                      "else"]
+                     (map #(str "   " %) elc)
+                     [(str "   call clotran_copy(b + " r ", b + " els ")")
+                      "end if"])
+             r st])
+
+      :call (let [kids (:children nd)
+                  [hc hs st] (gen (first kids) st)
+                  ;; every argument into its own temporary first, then
+                  ;; copied into a CONSECUTIVE block: a call wants its
+                  ;; arguments side by side, and generating one can use
+                  ;; temporaries of its own in between
+                  [ac argslots st] (reduce (fn [[code slots st] k]
+                                             (let [[c s st'] (gen k st)]
+                                               [(into code c) (conj slots s) st']))
+                                           [[] [] st] (rest kids))
+                  n (count argslots)
+                  [blk st] (reduce (fn [[bl st] _]
+                                     (let [[s st'] (fresh st)] [(conj bl s) st']))
+                                   [[] st] (range n))
+                  [r st] (fresh st)]
+              [(concat hc ac
+                       (map (fn [d s] (str "call clotran_copy(b + " d ", b + " s ")"))
+                            blk argslots)
+                       [(str "st = clotran_call_slots(b + " r ", b + " hs ", b + "
+                             (if (zero? n) 1 (dec (first blk))) ", " n "_c_int)")
+                        "if (st /= 0) then"
+                        "   call clotran_frame_leave(b)"
+                        "   return"
+                        "end if"])
+               r st]))))
+
+(defn- fn-procedure
+  "One arity of one function, as a Fortran subroutine."
+  [sym tmpl]
+  (let [[_ arities _ nslots _ _] tmpl
+        [nargs _ _ body] (first arities)
+        pool (fn-pool body)
+        ;; b+1 is the locals frame, b+2 .. b+1+P hold what the pool
+        ;; supplies, and temporaries start after them
+        pslots (into {} (map-indexed (fn [i p] [p (+ 2 i)]) pool))
+        first-temp (+ 2 (count pool))
+        st0 {:next first-temp :high (dec first-temp) :pool pslots}
+        [code res st] (gen body st0)]
+    {:arity nargs
+     :symbol sym
+     :pool (mapv :value pool)
+     :text
+     (str "  subroutine " sym "(argbase, nargs, dst) bind(C, name=\"" sym "\")\n"
+          "    integer(c_int), value :: argbase, nargs, dst\n"
+          "    integer(c_int) :: b, st\n"
+          "    st = 0\n"
+          "    b = clotran_frame_enter(" (max 1 (:high st)) "_c_int)\n"
+          "    call clotran_frame_new(b + 1, " nslots "_c_int)\n"
+          (apply str (for [i (range nargs)]
+                       (str "    call clotran_frame_put(b + 1, " i "_c_int, argbase + "
+                            (inc i) ")\n")))
+          (apply str (for [[p s] (sort-by val pslots)]
+                       (str "    call clotran_pool_get(b + " s ", cf_pool, "
+                            (- s 2) "_c_int)\n"
+                            (when (= :var (:kind p))
+                              (str "    call clotran_deref(b + " s ", b + " s ")\n")))))
+          (apply str (map #(str "    " % "\n") code))
+          "    call clotran_copy(dst, b + " res ")\n"
+          "    call clotran_frame_leave(b)\n"
+          "  end subroutine " sym "\n")}))
+
+(defn compile-fn
+  "Compiles one function to Fortran. Answers a map with :text, :symbol,
+  :arity and :pool, or one with :declined saying why it could not.
+
+  `form` is the (fn ...) form. The :pool is the values the procedure
+  needs that Fortran cannot spell -- Vars, collections, the functions
+  analysis folded into call heads -- and the driver registers it and
+  hands the handle to the library at install time."
+  [ns-name fn-name form]
+  (let [top (clotran-ast form)
+        fnode (:p1 top)]
+    (if (not= :fn (:op fnode))
+      {:declined "not a fn form"}
+      (let [tmpl (:p1 fnode)]
+        (if-let [why (decline-reason tmpl)]
+          {:declined why}
+          (let [sym (str "cf_" (fort-ident (str ns-name)) "_" (fort-ident (str fn-name)))
+                proc (fn-procedure sym tmpl)]
+            (assoc proc :ns ns-name :name fn-name)))))))
+
+(defn module-text
+  "A whole generated file: the declarations, the procedures, and the one
+  `clotran_install` the loader looks for.
+
+  Every procedure in one file shares one pool, so `pool-of` below is
+  how the driver knows what to register. The install entry takes the
+  handle rather than having it baked in, because a file is written
+  before it is registered."
+  [mod-name procs]
+  (str "! GENERATED by clotran.compiler. Do not edit; recompile.\n"
+       runtime-decls
+       "\nmodule " mod-name "\n"
+       "  use iso_c_binding\n"
+       "  use clotran_rt_decl\n"
+       "  implicit none\n"
+       "  ! the handle of this namespace's constant pool, told to us at\n"
+       "  ! install time because it is not known when this file is written\n"
+       "  integer(c_int), save :: cf_pool = 0\n"
+       "contains\n"
+       (str/join "\n" (map :text procs))
+       "end module " mod-name "\n"
+       "\n! The one symbol the loader knows, forever.\n"
+       "subroutine clotran_install(pool) bind(C, name=\"clotran_install\")\n"
+       "  use iso_c_binding\n"
+       "  use clotran_rt_decl\n"
+       "  use " mod-name "\n"
+       "  implicit none\n"
+       "  integer(c_int), value :: pool\n"
+       "  integer(c_int) :: st\n"
+       "  cf_pool = pool\n"
+       (apply str
+              (for [p procs]
+                (str "  st = clotran_def_fn(ctext(" (fort-str (str (:ns p))) "), "
+                     (count (str (:ns p))) "_c_int, ctext(" (fort-str (str (:name p))) "), "
+                     (count (str (:name p))) "_c_int, c_funloc(" (:symbol p) "), "
+                     (:arity p) "_c_int)\n")))
+       "end subroutine clotran_install\n"))
+
+(defn pool-of
+  "The constants every procedure in a file needs, as one vector. Each
+  procedure numbers its own entries from zero, so a file holding more
+  than one has to be given a shared pool; for now a file is one
+  function and this is simply its own."
+  [procs]
+  (vec (mapcat :pool procs)))

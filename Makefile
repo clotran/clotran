@@ -78,12 +78,17 @@ LIBCXX = -lc++
 SOEXT = dylib
 PKGMOD = $(B)/pkgmod
 LIBDL =
+# A COMPILED NAMESPACE resolves clotran_* against the running binary
+# at dlopen time, so those symbols have to be in its dynamic symbol
+# table. Without this the library loads and every call is undefined.
+EXPORTDYN = -Wl,-export_dynamic
 else
 ICU_PLATFORM = Linux
 LIBCXX = -lstdc++
 SOEXT = so
 PKGMOD = $(B)/pkgmod
 LIBDL = -ldl
+EXPORTDYN = -rdynamic
 endif
 
 CC ?= cc
@@ -155,7 +160,7 @@ $(B)/GC.o: $(B)/BigInt.o $(B)/BigDec.o
 $(B)/PersistentVector.o $(B)/PersistentList.o $(B)/PersistentArrayMap.o $(B)/NativeArray.o: $(B)/GC.o
 $(B)/PersistentHashMap.o $(B)/Env.o: $(B)/GC.o $(B)/PersistentArrayMap.o
 $(B)/Assoc.o: $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o
-$(B)/Namespace.o: $(B)/GC.o $(B)/Assoc.o
+$(B)/Namespace.o: $(B)/GC.o $(B)/Assoc.o $(B)/PersistentVector.o
 $(B)/Printer.o: $(B)/BigInt.o $(B)/BigDec.o $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/NativeArray.o
 # LispReader depends on Regex: #"..." compiles a pattern at READ time,
 # matching real Clojure's own regex literal (LispReader compiles
@@ -200,13 +205,14 @@ reader-objects = $(B)/LispReader.o $(B)/Regex.o $(B)/regex_shim.o
 # dependency of its own, and both Eval (to call) and ClotranABI (to
 # register) need it, so it sits below them.
 compiled-objects = $(B)/CompiledFn.o
+$(B)/CompiledFn.o: $(B)/GC.o $(B)/PersistentVector.o
 eval-objects = $(data-objects) $(B)/Env.o $(B)/Namespace.o $(reader-objects) $(B)/DynLoad.o $(compiled-objects) $(B)/Eval.o \
 	$(B)/ClotranABI.o
 LINK_ICU = $(ICU_LIBS) $(LIBCXX) -lpthread
 
 clotran-bin: $(eval-objects) $(S)/main.f90 $(ICU_LIBS)
 	$(FC) $(FCFLAGS) -c $(S)/main.f90 -o $(B)/main.o
-	$(FC) $(LDFLAGS) -o $@ $(eval-objects) $(B)/main.o $(LINK_ICU) $(LIBDL)
+	$(FC) $(LDFLAGS) $(EXPORTDYN) -o $@ $(eval-objects) $(B)/main.o $(LINK_ICU) $(LIBDL)
 
 # Test binaries: each links exactly the modules it exercises, so a
 # module's test cannot pass by accident through something above it.

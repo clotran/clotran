@@ -32,9 +32,12 @@
 ! the old shared library, on purpose").
 module CompiledFn
   use iso_c_binding
+  use GC
+  use PersistentVector
   implicit none
   private
   public :: compiled_i, cf_register, cf_call, cf_count, cf_name, cf_valid
+  public :: cf_pool_add, cf_pool_get
 
   abstract interface
      subroutine compiled_i(argbase, nargs, dst) bind(C)
@@ -54,6 +57,13 @@ module CompiledFn
 
   type(cf_entry), allocatable, save :: tbl(:)
   integer, save :: used = 0
+
+  ! THE CONSTANT POOLS, one vector per compiled namespace, held in a
+  ! global root because nothing else refers to them. A generated
+  ! procedure cannot spell a map, a Var or a folded function in
+  ! Fortran, so the driver puts them here and the procedure indexes
+  ! by a handle it is told at install time.
+  type(gc_root), save :: pool_root
 
 contains
 
@@ -94,6 +104,35 @@ contains
     call c_f_procpointer(tbl(h)%fp, f)
     call f(int(argbase, c_int), int(nargs, c_int), int(dst, c_int))
   end subroutine cf_call
+
+  ! Adds a pool and answers its handle, 1-based.
+  function cf_pool_add(v) result(h)
+    type(gc_value), intent(in) :: v
+    integer :: h, base
+    type(gc_value) :: pools
+    base = vs_enter(2)
+    call vs_set(base + 1, v)
+    pools = gc_root_get(pool_root)
+    if (.not. gcv_is(pools)) pools = gcv_empty([vs_get(base + 1)])
+    call vs_set(base + 2, pools)
+    pools = gcv_conj(vs_get(base + 2), vs_get(base + 1), &
+         [vs_get(base + 1), vs_get(base + 2)])
+    call gc_global_keep(pool_root, pools)
+    h = gcv_count(pools)
+    call vs_leave(base)
+  end function cf_pool_add
+
+  ! Entry i of pool h, both counted the way their callers count:
+  ! the handle from one, the index from zero.
+  function cf_pool_get(h, i) result(v)
+    integer, intent(in) :: h, i
+    type(gc_value) :: v, pools
+    v = gc_nil()
+    pools = gc_root_get(pool_root)
+    if (.not. gcv_is(pools)) return
+    if (h < 1 .or. h > gcv_count(pools)) return
+    v = gcv_nth(gcv_nth(pools, h - 1), i)
+  end function cf_pool_get
 
   function cf_name(h) result(s)
     integer, intent(in) :: h

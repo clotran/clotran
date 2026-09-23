@@ -46,6 +46,7 @@ module ClotranABI
   use PersistentVector
   use LispReader
   use CompiledFn
+  use DynLoad
   use Namespace
   use Eval
   implicit none
@@ -59,15 +60,12 @@ module ClotranABI
   public :: clotran_tag, clotran_int, clotran_real, clotran_bool
   public :: clotran_str_len, clotran_str_copy
   public :: clotran_vec_empty, clotran_vec_conj, clotran_vec_count, clotran_vec_nth
-  public :: clotran_var, clotran_deref, clotran_call, clotran_def_fn
+  public :: clotran_var, clotran_deref, clotran_call, clotran_call_slots, clotran_def_fn
   public :: clotran_has_error, clotran_error_len, clotran_error_copy, clotran_clear_error
   public :: clotran_collect, clotran_live_count, clotran_set_torture
   public :: clotran_frame_new, clotran_frame_get, clotran_frame_put
   public :: clotran_eval_node, clotran_pool_register, clotran_pool_get
-
-  ! The constant pools, one per compiled namespace, kept alive here
-  ! because nothing else refers to them.
-  type(gc_root), save :: pool_root
+  public :: clotran_load_compiled
 
 contains
 
@@ -476,31 +474,49 @@ contains
     end if
   end function clotran_eval_node
 
-  ! A CONSTANT POOL. A generated procedure cannot write a map or an AST
-  ! node into its own source, so the loader hands the namespace a vector
-  ! of everything its procedures need -- literal collections, and the
-  ! nodes the escape hatch runs -- and each procedure indexes it. The
-  ! pool is kept as a global root, because nothing else refers to it.
+  ! A CONSTANT POOL, registered for one compiled namespace. The table
+  ! is CompiledFn's, so the Clojure builtin and this entry cannot
+  ! drift apart. A generated procedure cannot spell a map, a Var or a
+  ! folded function in Fortran, so those live here and it indexes.
   function clotran_pool_register(slot) bind(C, name="clotran_pool_register") result(h)
     integer(c_int), value :: slot
     integer(c_int) :: h
-    type(gc_value) :: pools, none(0)
-    pools = gc_root_get(pool_root)
-    if (.not. gcv_is(pools)) pools = gcv_empty(none)
-    pools = gcv_conj(pools, vs_get(int(slot)), [pools])
-    call gc_global_keep(pool_root, pools)
-    h = int(gcv_count(pools), c_int)
+    h = int(cf_pool_add(vs_get(int(slot))), c_int)
   end function clotran_pool_register
 
   subroutine clotran_pool_get(dst, h, i) bind(C, name="clotran_pool_get")
     integer(c_int), value :: dst, h, i
-    type(gc_value) :: pools
-    call vs_set(int(dst), gc_nil())
-    pools = gc_root_get(pool_root)
-    if (.not. gcv_is(pools)) return
-    if (h < 1 .or. int(h) > gcv_count(pools)) return
-    call vs_set(int(dst), gcv_nth(gcv_nth(pools, int(h) - 1), int(i)))
+    call vs_set(int(dst), cf_pool_get(int(h), int(i)))
   end subroutine clotran_pool_get
+
+  ! A call with the arguments already in consecutive slots
+  ! argbase+1 .. argbase+nargs. This is the call a compiled site makes;
+  ! clotran_call, which takes a vector, is the general one.
+  function clotran_call_slots(dst, fn, argbase, nargs) &
+       bind(C, name="clotran_call_slots") result(st)
+    integer(c_int), value :: dst, fn, argbase, nargs
+    integer(c_int) :: st
+    type(gc_value) :: out
+    out = gce_apply_slots(vs_get(int(fn)), int(argbase), int(nargs))
+    if (gce_has_error()) then
+       call vs_set(int(dst), gc_nil())
+       st = 1
+    else
+       call vs_set(int(dst), out)
+       st = 0
+    end if
+  end function clotran_call_slots
+
+  ! The loader, for an embedder. The logic is DynLoad's, so that the
+  ! Clojure builtin and this entry cannot drift apart.
+  function clotran_load_compiled(path, n, pool) bind(C, name="clotran_load_compiled") result(st)
+    character(kind=c_char), intent(in) :: path(*)
+    integer(c_int), value :: n, pool
+    integer(c_int) :: st
+    character(len=:), allocatable :: err
+    st = 1
+    if (dl_install(c_text(path, n), int(pool), err)) st = 0
+  end function clotran_load_compiled
 
   ! --- errors ------------------------------------------------------
 

@@ -135,7 +135,7 @@
        hm("java.math.RoundingMode", "UNNECESSARY", HK_SELFKEY), &
        hm("clojure.lang.Numbers", "unchecked_dec", B_UDEC, "unchecked-dec"), &
        hm("clojure.lang.Numbers", "unchecked_int_dec", B_UDEC, "unchecked-dec") ]
-  type(hm), parameter :: HOST_STATICS_2(81) = [ &
+  type(hm), parameter :: HOST_STATICS_2(82) = [ &
        hm("clojure.lang.Numbers", "remainder", B_REM, "rem"), &
        hm("clojure.lang.Numbers", "unchecked_int_remainder", B_REM, "rem"), &
        hm("clojure.lang.Numbers", "quotient", B_QUOT, "quot"), &
@@ -156,6 +156,7 @@
        hm("java.util.Arrays", "sort", B_ARRSORT, "clotran-array-sort"), &
   ! core.clj's one-argument arithmetic is (cast Number x).
        hm("java.lang.Number", "cast", B_NUMCAST, "clotran-num-cast"), &
+       hm("clojure.lang.Namespace", "all", B_ALLNS, "all-ns"), &
        hm("java.lang.Class", "forName", B_FORNAME, "clotran-for-name"), &
        ! clojure.edn's read-string is (EdnReader/readString s opts).
        ! Its data readers come from the opts map, not from
@@ -396,7 +397,7 @@
        hm("clojure.lang.Numbers", "ints", B_IDENTITY, "identity"), &
        hm("clojure.lang.Numbers", "longs", B_IDENTITY, "identity"), &
        hm("clojure.lang.Numbers", "doubles", B_IDENTITY, "identity") ]
-  type(hm), parameter :: HOST_STATICS(306) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
+  type(hm), parameter :: HOST_STATICS(307) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
   type(hm), parameter :: HOST_METHODS_1(91) = [ &
   ! Instance members. The target becomes the first argument, which is all
