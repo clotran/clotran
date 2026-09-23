@@ -222,7 +222,7 @@ module Eval
   integer, parameter :: B_QOFFER = 362, B_QTAKE = 363, B_THREADSTART = 364
   integer, parameter :: B_THREADDAEMON = 365, B_NSUNMAP = 366
   integer, parameter :: B_MUNGE = 367, B_DEMUNGE = 368
-  integer, parameter :: B_ISARRAY = 369, B_EDNREAD = 370
+  integer, parameter :: B_ISARRAY = 369, B_EDNREAD = 370, B_ASTDATA = 371
 
   ! Compiler.CHAR_MAP, verbatim from the pinned clone: the characters
   ! a Clojure name may hold that a JVM member name may not. '.' is
@@ -683,6 +683,10 @@ contains
     call bind_builtin(core, "list", B_LIST)
     call bind_builtin(core, "vector", B_VECTOR)
     ! The debugger's two entry points; PLAN.md's break protocol.
+    ! The compiler's front door: the resolved tree as DATA, so a code
+    ! generator can be written in Clojure over the same tree the
+    ! executor runs. PLAN step 10.
+    call bind_builtin(core, "clotran-ast", B_ASTDATA)
     call bind_builtin(core, "clotran-break", B_BREAK)
     call bind_builtin(core, "clotran-last-break", B_LASTBREAK)
     call bind_builtin(core, "clotran-break-on!", B_BREAKON)
@@ -7759,6 +7763,23 @@ case (B_SLURP)
        end block
     case (B_HASH)
        out = gc_int(gc_hash(gcv_nth(args, 0)))
+    case (B_ASTDATA)
+       ! (clotran-ast 'form) -- analyse the form and hand back the
+       ! tree as nested maps. Analysis is where every name has already
+       ! become a Var handle or a frame slot and every node has a
+       ! kind, so a generator reading this never has to resolve
+       ! anything. It is the SAME analysis the executor runs; there is
+       ! no second front end to disagree with the first.
+       block
+         type(gc_value) :: genv, node
+         genv = gce_env()
+         call vs_set(base + 2, genv)
+         node = gce_analyze(strip_meta(gcv_nth(args, 0)), vs_get(base + 2))
+         if (.not. has_error) then
+            call vs_set(base + 3, node)
+            out = ast_data(vs_get(base + 3), [vs_get(base + 1), vs_get(base + 2)])
+         end if
+       end block
     case (B_EDNREAD)
        ! (EdnReader/readString s opts). The EDN grammar is the Clojure
        ! reader's without eval, syntax-quote or the deref and var
@@ -13109,6 +13130,177 @@ case (B_SLURP)
        meta_slot = 2
     end if
   end function meta_slot
+
+  ! A node kind's name, as the keyword the exported tree carries.
+  ! Written out rather than derived, because the generator reads
+  ! these and a number would tell it nothing.
+  function node_kind_name(k) result(s)
+    integer, intent(in) :: k
+    character(len=:), allocatable :: s
+    select case (k)
+    case (N_CONST);   s = "const"
+    case (N_LOCAL);   s = "local"
+    case (N_VAR);     s = "var"
+    case (N_IF);      s = "if"
+    case (N_DO);      s = "do"
+    case (N_CALL);    s = "call"
+    case (N_VECTOR);  s = "vector"
+    case (N_MAP);     s = "map"
+    case (N_SET);     s = "set"
+    case (N_DEF);     s = "def"
+    case (N_LET);     s = "let"
+    case (N_LOOP);    s = "loop"
+    case (N_LETFN);   s = "letfn"
+    case (N_FN);      s = "fn"
+    case (N_LAZY);    s = "lazy"
+    case (N_RECUR);   s = "recur"
+    case (N_THROW);   s = "throw"
+    case (N_TRY);     s = "try"
+    case (N_CASE);    s = "case"
+    case (N_DEFTYPE); s = "deftype"
+    case (N_DOT);     s = "dot"
+    case (N_NEW);     s = "new"
+    case (N_NEWTYPE); s = "newtype"
+    case (N_SETBANG); s = "set!"
+    case (N_FAIL);    s = "fail"
+    case (N_TOP);     s = "top"
+    case (N_TOPDO);   s = "topdo"
+    case (N_LATEVAR); s = "latevar"
+    case default;     s = "unknown"
+    end select
+  end function node_kind_name
+
+  ! One node as a map. The shape is deliberately GENERIC -- :op,
+  ! :children, :p1, :p2, :i2, :pos -- rather than a key per kind,
+  ! because it then cannot fall out of step with mk_node. A child or
+  ! a p-slot that is itself a node is exported as a map; anything
+  ! else is exported as the value it is, so a constant arrives as the
+  ! constant and a Var as the Var.
+  recursive function ast_data(nd, roots) result(out)
+    type(gc_value), intent(in) :: nd
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, kids, v
+    integer :: b, i
+    out = nd
+    if (gc_kind(nd) /= OBJ_AST) return
+    b = vs_enter(4)
+    call vs_set(b + 1, nd)
+    out = gca_empty([roots, [vs_get(b + 1)]])
+    call vs_set(b + 2, out)
+    call ast_put(b, roots, "op", gc_key(node_kind_name(gc_i1(vs_get(b + 1))), &
+         [roots, [vs_get(b + 1), vs_get(b + 2)]]))
+    ! the children, each one exported in turn
+    kids = gc_slot(vs_get(b + 1), 1)
+    if (gcv_is(kids)) then
+       call vs_set(b + 3, kids)
+       v = gcv_empty([roots, [vs_get(b + 1), vs_get(b + 2), vs_get(b + 3)]])
+       call vs_set(b + 4, v)
+       do i = 0, gcv_count(vs_get(b + 3)) - 1
+          v = ast_walk(gcv_nth(vs_get(b + 3), i), &
+               [roots, [vs_get(b + 1), vs_get(b + 2), vs_get(b + 3), vs_get(b + 4)]])
+          if (has_error) then
+             call vs_leave(b); return
+          end if
+          v = gcv_conj(vs_get(b + 4), v, &
+               [roots, [vs_get(b + 1), vs_get(b + 2), vs_get(b + 3), vs_get(b + 4), v]])
+          call vs_set(b + 4, v)
+       end do
+       call ast_put(b, roots, "children", vs_get(b + 4))
+    end if
+    ! A CONSTANT's value is handed over as it is: it is data, not a
+    ! tree, and walking it would rebuild collections and could force a
+    ! seq. Every other p-slot is walked, because a fn hides its
+    ! arity bodies inside a plain vector template.
+    if (gc_i1(vs_get(b + 1)) == N_CONST) then
+       call ast_put(b, roots, "p1", gc_slot(vs_get(b + 1), 2))
+    else
+       call ast_put(b, roots, "p1", ast_walk(gc_slot(vs_get(b + 1), 2), &
+            [roots, [vs_get(b + 1), vs_get(b + 2)]]))
+    end if
+    call ast_put(b, roots, "p2", ast_walk(gc_slot(vs_get(b + 1), 3), &
+         [roots, [vs_get(b + 1), vs_get(b + 2)]]))
+    call ast_put(b, roots, "i2", gc_int(int(gc_i2(vs_get(b + 1)), gc_ip)))
+    call ast_put(b, roots, "pos", gc_slot(vs_get(b + 1), 4))
+    out = vs_get(b + 2)
+    call vs_leave(b)
+  end function ast_data
+
+  ! A node, or a collection that might hold one. N_FN's p1 is the
+  ! template vector [name arities captures nslots selfslot slotnames],
+  ! and each arity's body node sits inside it, so exporting only
+  ! direct AST slots showed a function with no body at all.
+  recursive function ast_walk(v, roots) result(out)
+    type(gc_value), intent(in) :: v
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, e, m
+    type(gc_value), allocatable :: ks(:), vls(:)
+    integer :: b, i
+    out = v
+    if (gc_kind(v) == OBJ_AST) then
+       out = ast_data(v, roots)
+       return
+    end if
+    if (gcv_is(v)) then
+       b = vs_enter(2)
+       call vs_set(b + 1, v)
+       out = gcv_empty([roots, [vs_get(b + 1)]])
+       call vs_set(b + 2, out)
+       do i = 0, gcv_count(vs_get(b + 1)) - 1
+          e = ast_walk(gcv_nth(vs_get(b + 1), i), &
+               [roots, [vs_get(b + 1), vs_get(b + 2)]])
+          if (has_error) then
+             call vs_leave(b); return
+          end if
+          out = gcv_conj(vs_get(b + 2), e, &
+               [roots, [vs_get(b + 1), vs_get(b + 2), e]])
+          call vs_set(b + 2, out)
+       end do
+       out = vs_get(b + 2)
+       call vs_leave(b)
+       return
+    end if
+    if (gca_is(v)) then
+       b = vs_enter(3)
+       call vs_set(b + 1, v)
+       call gca_entries(vs_get(b + 1), ks, vls)
+       out = gca_empty([roots, [vs_get(b + 1)]])
+       call vs_set(b + 2, out)
+       do i = 1, size(ks)
+          e = ast_walk(vls(i), [roots, [vs_get(b + 1), vs_get(b + 2)]])
+          if (has_error) then
+             call vs_leave(b); return
+          end if
+          call vs_set(b + 3, e)
+          m = gca_assoc(vs_get(b + 2), ks(i), vs_get(b + 3), &
+               [roots, [vs_get(b + 1), vs_get(b + 2), vs_get(b + 3)]])
+          call vs_set(b + 2, m)
+       end do
+       out = vs_get(b + 2)
+       call vs_leave(b)
+       return
+    end if
+  end function ast_walk
+
+  ! assoc one key into the map ast_data is building at b + 2. The
+  ! keyword and the value are allocated one at a time and each lands
+  ! on the stack before the next allocation, which is the rule two
+  ! allocations in one argument list broke (NOTES.md).
+  subroutine ast_put(b, roots, k, v)
+    integer, intent(in) :: b
+    type(gc_value), intent(in) :: roots(:)
+    character(len=*), intent(in) :: k
+    type(gc_value), intent(in) :: v
+    type(gc_value) :: kw, m
+    integer :: kb
+    kb = vs_enter(2)
+    call vs_set(kb + 1, v)
+    kw = gc_key(k, [roots, [vs_get(b + 1), vs_get(b + 2), vs_get(kb + 1)]])
+    call vs_set(kb + 2, kw)
+    m = gca_assoc(vs_get(b + 2), vs_get(kb + 2), vs_get(kb + 1), &
+         [roots, [vs_get(b + 1), vs_get(b + 2), vs_get(kb + 1), vs_get(kb + 2)]])
+    call vs_set(b + 2, m)
+    call vs_leave(kb)
+  end subroutine ast_put
 
   ! UUID/fromString and parse-uuid. A UUID is its TEXT here
   ! (DEVIATIONS 12: java.util.UUID is not a type clotran has), so

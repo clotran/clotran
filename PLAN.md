@@ -556,6 +556,37 @@ run backwards, since it already parses those declarations. It does not
 need the compiler at all, only the speed the compiler would give the
 callback.
 
+**Loading and collisions, decided 2026-09-23.** Compiling is a
+property of what a VAR HOLDS, not of a file. Compiling a namespace
+installs a compiled function as each Var's value; redefining one at
+the REPL puts an interpreted closure back in that one Var and leaves
+its neighbours compiled. Callers go through the Var and cannot tell.
+That is what the Var indirection is FOR, and it is why a caller does
+not need recompiling when its callee does. Inlining a call target
+would destroy it, so nothing inlines until something declares it may.
+
+The package path is ORDERED and the first provider of a namespace
+wins, like a classpath, so nobody learns a second model. Three
+warnings, all of them James's call:
+
+- two providers claim one namespace -- the warning Clojure's
+  classpath lacks and everyone wishes it had; a package manager can
+  probably keep it from ever firing
+- source redefines a namespace that came from a compiled package,
+  which is where you silently lose the compiled code you thought you
+  were running
+- the compiled artifact's recorded source hash no longer matches the
+  file on disk, so a session and its artifact have diverged
+
+A recompile LEAKS the old shared library, on purpose. It cannot be
+closed while a compiled function object still points into it, and
+closing it would crash; each compile gets a distinct name instead. A
+session recompiling fifty times leaks a few megabytes, the same
+bargain the JVM makes with class loaders.
+
+Optimisation flags and a tree shaker for dependencies are wanted
+eventually and are not now.
+
 **In order, from here.**
 
 2. The exporter: a namespace's resolved tree as Clojure data.

@@ -1180,3 +1180,52 @@
 (check "a literal keeps every digit it was written with"
        (str 1.2345678901234567890123456789012345678901M)
        "1.2345678901234567890123456789012345678901")
+
+;; The compiler's front door: the resolved tree as data (PLAN step 10).
+;; Nothing in Clojure answers this, so it cannot go in the oracle. What
+;; matters is that the tree a generator reads is the SAME one the
+;; executor runs -- one analysis, not two front ends that can disagree.
+(check "a form analyses to a top node" (:op (clotran-ast '(if true 1 2))) :top)
+(check "with the form under it" (:op (:p1 (clotran-ast '(if true 1 2)))) :if)
+(check "an if has its three children"
+       (mapv :op (:children (:p1 (clotran-ast '(if true 1 2)))))
+       [:const :const :const])
+(check "a constant carries its value, not a rebuilt copy"
+       (mapv :p1 (:children (:p1 (clotran-ast '(if true 1 2)))))
+       [true 1 2])
+(check "a literal collection is handed over whole"
+       (:p1 (:p1 (clotran-ast '[1 {:a 2}])))
+       nil)
+;; A fn keeps its arity bodies inside a plain template vector, so the
+;; exporter has to walk collections or a function shows up with no body.
+(check "a fn's body is reachable through the template"
+       (some? (first (filter map? (tree-seq coll? seq (clotran-ast '(fn [x] x))))))
+       true)
+(check "a local knows its frame slot"
+       (->> (clotran-ast '(fn [x] (let [y 1] y)))
+            (tree-seq coll? seq)
+            (filter #(and (map? %) (= :local (:op %))))
+            (map :i2)
+            set)
+       #{1})
+(check "and its name, for the debugger"
+       (->> (clotran-ast '(fn [x] (let [y 1] y)))
+            (tree-seq coll? seq)
+            (filter #(and (map? %) (= :local (:op %))))
+            (map (comp str :p1))
+            set)
+       #{"y"})
+(check "a call's head is a node like any other"
+       (:op (first (:children (->> (clotran-ast '(fn [x] (inc x)))
+                                   (tree-seq coll? seq)
+                                   (filter #(and (map? %) (= :call (:op %))))
+                                   first))))
+       :const)
+(check "every node kind that reaches the exporter has a name"
+       (->> (clotran-ast '(fn [x] (loop [i 0] (if (< i x) (recur (inc i)) i))))
+            (tree-seq coll? seq)
+            (filter map?)
+            (map :op)
+            (filter #(= :unknown %))
+            count)
+       0)
