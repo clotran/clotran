@@ -17,6 +17,7 @@
 ;;
 ;;   scripts/compiler-check           run every case
 ;;   scripts/compiler-check --keep    leave the generated Fortran to read
+;;   scripts/compiler-check --bench   also time one loop both ways
 (require '[clojure.string :as str]
          '[clojure.java.io :as io]
          '[babashka.process :refer [shell]])
@@ -24,6 +25,7 @@
 (def repo (-> *file* io/file .getCanonicalFile .getParentFile .getParentFile))
 (def work (io/file "/tmp/clotran-compiler-check"))
 (def keep? (some #{"--keep"} *command-line-args*))
+(def bench? (some #{"--bench"} *command-line-args*))
 
 ;; Each case: a name, the fn form, and the calls to make on it.
 (def cases
@@ -42,7 +44,18 @@
     ["comparison" (fn [a b] (if (= a b) :same :different)) [[1 1] [1 2] ["a" "a"]]]
     ["a collection constant" (fn [x] (get {:a 1 :b 2} x)) [[:a] [:b] [:c]]]
     ["a vector literal" (fn [a b] [a b]) [[1 2]]]
-    ["nesting three deep" (fn [x] (if (< x 0) (- 0 x) (if (= x 0) :zero x))) [[-3] [0] [7]]]])
+    ["nesting three deep" (fn [x] (if (< x 0) (- 0 x) (if (= x 0) :zero x))) [[-3] [0] [7]]]
+    ["a loop that sums" (fn [n] (loop [i 0 acc 0] (if (< i n) (recur (+ i 1) (+ acc i)) acc)))
+     [[0] [1] [10] [100]]]
+    ["a loop that never runs" (fn [n] (loop [i 0] (if (< i n) (recur (+ i 1)) i))) [[0] [3]]]
+    ["recur on the function itself" (fn [n acc] (if (= n 0) acc (recur (- n 1) (+ acc n))))
+     [[0 0] [5 0] [50 0]]]
+    ["nested loops" (fn [n] (loop [i 0 t 0]
+                             (if (< i n)
+                               (recur (+ i 1) (loop [j 0 s t] (if (< j 2) (recur (+ j 1) (+ s 1)) s)))
+                               t)))
+     [[0] [1] [4]]]
+    ["a loop with no recur" (fn [x] (loop [y x] y)) [[7]]]])
 
 (defn- run-clotran
   "Runs a file through clotran with core.clj loaded, answering stdout."
@@ -110,6 +123,19 @@
                                "        (println \"   interpreted:\" (pr-str a))\n"
                                "        (println \"   compiled:   \" (pr-str b))))\n")))
                  "))\n")))
+   (when bench?
+     ;; One loop, timed both ways. PLAN step 10: measured, or not
+     ;; claimed. A compiled procedure pays a C call per operation
+     ;; where the interpreter pays a switch arm, so this number is
+     ;; the whole argument for unboxing the arithmetic next.
+     (str "(let [f (fn [n] (loop [i 0 acc 0] (if (< i n) (recur (+ i 1) (+ acc i)) acc)))\n"
+          "      r (clotran.compiler/compile-fn \"ccb\" \"sum\" '(fn [n] (loop [i 0 acc 0] (if (< i n) (recur (+ i 1) (+ acc i)) acc))))\n"
+          "      h (clotran-pool-register (:pool r))]\n"
+          "  (clotran-load-compiled \"" (str work) "/bench." soext "\" h)\n"
+          "  (let [c @(resolve 'ccb/sum)\n"
+          "        ms (fn [g] (let [t (System/nanoTime)] (g) (/ (- (System/nanoTime) t) 1000000.0)))]\n"
+          "    (println (str \"bench 200000 iterations: interpreted \" (int (ms (fn [] (f 200000))))\n"
+          "                  \" ms, compiled \" (int (ms (fn [] (c 200000)))) \" ms\"))))\n"))
    "(println \"---\")\n"
    "(println (str \"compiler-check: \" @ran \" calls, \" (- @ran @fails) \" agree, \" @fails \" differ\"))\n"))
 
@@ -157,6 +183,22 @@
         (println "BUILD FAILED for case" i (first (nth cases i)))
         (println (:err r))
         (System/exit 1)))
+    ;; the benchmark case needs its own library built too
+    (when bench?
+      (spit (io/file work "bench.clj")
+            (str "(load-file \"src/clj/clotran/compiler.cljf\")\n(in-ns (quote user))\n"
+                 "(let [r (clotran.compiler/compile-fn \"ccb\" \"sum\"\n"
+                 "        (quote (fn [n] (loop [i 0 acc 0] (if (< i n) (recur (+ i 1) (+ acc i)) acc)))))]\n"
+                 "  (println \"===BEGIN\") (print (clotran.compiler/module-text \"ccb_mod\" [r])) (println \"===END\"))\n"))
+      (let [out3 (run-clotran (io/file work "bench.clj"))
+            body (->> (str/split-lines out3)
+                      (drop-while #(not= "===BEGIN" %)) rest
+                      (take-while #(not= "===END" %)))]
+        (spit (io/file work "bench.f90") (str (str/join "\n" body) "\n"))
+        (apply shell {:continue true :dir (str work)}
+               (concat ["gfortran" "-g" "-O2" "-shared" "-fPIC"]
+                       (when (= soext "dylib") ["-Wl,-undefined,dynamic_lookup"])
+                       ["-o" (str (io/file work (str "bench." soext))) (str (io/file work "bench.f90"))]))))
     (spit (io/file work "run.clj") (runner-source @ids soext))
     (let [out2 (run-clotran (io/file work "run.clj"))
           body (->> (str/split-lines out2)

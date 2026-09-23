@@ -127,7 +127,7 @@ end module clotran_rt_decl
 
 ;;; ---- what the generator understands ---------------------------------
 
-(def ^:private handled-ops #{:const :local :if :do :call :var})
+(def ^:private handled-ops #{:const :local :if :do :call :var :loop :recur})
 
 (defn- spellable?
   "A constant a generated procedure can write into its own source.
@@ -220,6 +220,29 @@ end module clotran_rt_decl
 
 (declare gen)
 
+(defn- gen-into
+  "Generate a node so that its value ends up in slot `dst`.
+
+  A constant, a local and a pooled value can be put there directly;
+  anything else is generated where it likes and then copied. The point
+  is a call's argument block, where the direct cases are almost all of
+  them and the copy was pure overhead."
+  [nd dst st]
+  (cond
+    (pooled nd)
+    [[(str "call clotran_copy(b + " dst ", b + " (get (:pool st) (pooled nd)) ")")] st]
+
+    (= :const (:op nd))
+    [(emit-const (str "b + " dst) (:p1 nd)) st]
+
+    (= :local (:op nd))
+    [[(str "call clotran_frame_get(b + " dst ", b + 1, " (:i2 nd) "_c_int)")] st]
+
+    :else
+    (let [[c s st] (gen nd st)]
+      [(conj (vec c) (str "call clotran_copy(b + " dst ", b + " s ")")) st])))
+
+
 (defn- gen-seq
   "Generate each node in turn, answering the code and the slot the LAST
   one landed in."
@@ -234,9 +257,9 @@ end module clotran_rt_decl
   the temporary its value lands in, and the slot state after."
   [nd st]
   (if-let [p (pooled nd)]
-    ;; read once at the top of the procedure; a Var was derefed there too
-    (let [[s st] (fresh st)]
-      [[(str "call clotran_copy(b + " s ", b + " (get (:pool st) p) ")")] s st])
+    ;; already sitting in its slot from the top of the procedure, and a
+    ;; Var was derefed there too. Nothing to emit: hand back the slot.
+    [[] (get (:pool st) p) st]
     (case (:op nd)
       :const (let [[s st] (fresh st)]
                [(emit-const (str "b + " s) (:p1 nd)) s st])
@@ -265,24 +288,81 @@ end module clotran_rt_decl
                       "end if"])
              r st])
 
+      ;; A LOOP is a Fortran loop, and that is the point of compiling.
+      ;;
+      ;; Clojure guarantees `recur` is constant stack, so it has to be a
+      ;; jump in any correct implementation -- this is not a workaround
+      ;; for anything Fortran cannot do. The inits go into the frame
+      ;; slots analysis assigned, the body runs, and a `recur` inside it
+      ;; rebinds those slots and raises a flag; the loop reads the flag
+      ;; and goes round again.
+      ;;
+      ;; That works because `recur` is always in TAIL position. Whatever
+      ;; generated statements follow it in the same branch are copies
+      ;; into a result slot nobody reads, so running them before the
+      ;; loop test is harmless.
+      :loop (let [kids (:children nd)
+                  n (:i2 nd)
+                  base (:p1 nd)
+                  ;; whose loop a recur belongs to is the INNERMOST one, so
+                  ;; the outer flag has to come back when this one ends --
+                  ;; without that, an outer recur raised the inner flag and
+                  ;; the outer loop ran once
+                  outer (:loop st)
+                  [ic islots st] (reduce (fn [[code slots st] k]
+                                           (let [[c s st'] (gen k st)]
+                                             [(into code c) (conj slots s) st']))
+                                         [[] [] st] (take n kids))
+                  flag (str "recur" (count (:flags st)))
+                  st (update st :flags conj flag)
+                  [bc bs st] (gen (nth kids n) (assoc st :loop flag))]
+              [(concat ic
+                       (map-indexed (fn [i s]
+                                      (str "call clotran_frame_put(b + 1, " (+ base i)
+                                           "_c_int, b + " s ")"))
+                                    islots)
+                       ["do"
+                        (str "   " flag " = 0")]
+                       (map #(str "   " %) bc)
+                       [(str "   if (" flag " == 0) exit")
+                        "end do"])
+               bs (assoc st :loop outer)])
+
+      ;; RECUR: rebind the slots its target owns, raise that target's
+      ;; flag, and answer nil. :p1 is [_ start count], the same triple
+      ;; exec_recur reads.
+      :recur (let [start (nth (:p1 nd) 1)
+                   [ac aslots st] (reduce (fn [[code slots st] k]
+                                            (let [[c s st'] (gen k st)]
+                                              [(into code c) (conj slots s) st']))
+                                          [[] [] st] (:children nd))
+                   [r st] (fresh st)]
+               [(concat ac
+                        (map-indexed (fn [i s]
+                                       (str "call clotran_frame_put(b + 1, " (+ start i)
+                                            "_c_int, b + " s ")"))
+                                     aslots)
+                        [(str (:loop st) " = 1")
+                         (str "call clotran_set_nil(b + " r ")")])
+                r st])
+
       :call (let [kids (:children nd)
                   [hc hs st] (gen (first kids) st)
-                  ;; every argument into its own temporary first, then
-                  ;; copied into a CONSECUTIVE block: a call wants its
-                  ;; arguments side by side, and generating one can use
-                  ;; temporaries of its own in between
-                  [ac argslots st] (reduce (fn [[code slots st] k]
-                                             (let [[c s st'] (gen k st)]
-                                               [(into code c) (conj slots s) st']))
-                                           [[] [] st] (rest kids))
-                  n (count argslots)
+                  n (count (rest kids))
+                  ;; The argument block is allocated FIRST and each
+                  ;; argument generated straight into its slot. A call
+                  ;; wants its arguments side by side, and copying them
+                  ;; there afterwards was a third of the work in a loop
+                  ;; body for nothing.
                   [blk st] (reduce (fn [[bl st] _]
                                      (let [[s st'] (fresh st)] [(conj bl s) st']))
                                    [[] st] (range n))
+                  [ac st] (reduce (fn [[code st] [k d]]
+                                    (let [[c st'] (gen-into k d st)]
+                                      [(into code c) st']))
+                                  [[] st] (map vector (rest kids) blk))
                   [r st] (fresh st)]
               [(concat hc ac
-                       (map (fn [d s] (str "call clotran_copy(b + " d ", b + " s ")"))
-                            blk argslots)
                        [(str "st = clotran_call_slots(b + " r ", b + " hs ", b + "
                              (if (zero? n) 1 (dec (first blk))) ", " n "_c_int)")
                         "if (st /= 0) then"
@@ -301,7 +381,11 @@ end module clotran_rt_decl
         ;; supplies, and temporaries start after them
         pslots (into {} (map-indexed (fn [i p] [p (+ 2 i)]) pool))
         first-temp (+ 2 (count pool))
-        st0 {:next first-temp :high (dec first-temp) :pool pslots}
+        ;; the BODY IS A LOOP too, so (fn [x] (... (recur ...))) works:
+        ;; a recur with no enclosing loop targets the function itself,
+        ;; rebinding its parameters. An unused flag costs nothing.
+        st0 {:next first-temp :high (dec first-temp) :pool pslots
+             :flags ["recur0"] :loop "recur0"}
         [code res st] (gen body st0)]
     {:arity nargs
      :symbol sym
@@ -310,6 +394,7 @@ end module clotran_rt_decl
      (str "  subroutine " sym "(argbase, nargs, dst) bind(C, name=\"" sym "\")\n"
           "    integer(c_int), value :: argbase, nargs, dst\n"
           "    integer(c_int) :: b, st\n"
+          "    integer(c_int) :: " (str/join ", " (:flags st)) "\n"
           "    st = 0\n"
           "    b = clotran_frame_enter(" (max 1 (:high st)) "_c_int)\n"
           "    call clotran_frame_new(b + 1, " nslots "_c_int)\n"
@@ -321,7 +406,11 @@ end module clotran_rt_decl
                             (- s 2) "_c_int)\n"
                             (when (= :var (:kind p))
                               (str "    call clotran_deref(b + " s ", b + " s ")\n")))))
-          (apply str (map #(str "    " % "\n") code))
+          "    do\n"
+          "       recur0 = 0\n"
+          (apply str (map #(str "       " % "\n") code))
+          "       if (recur0 == 0) exit\n"
+          "    end do\n"
           "    call clotran_copy(dst, b + " res ")\n"
           "    call clotran_frame_leave(b)\n"
           "  end subroutine " sym "\n")}))

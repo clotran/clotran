@@ -5397,13 +5397,26 @@ contains
        call vs_leave(base)
        return
     end if
-    av = gcv_empty([vs_get(base + 1)])
-    call vs_set(base + 2, av)
-    do j = 1, nargs
-       av = gcv_conj(vs_get(base + 2), vs_get(argbase + j), &
-            [vs_get(base + 1), vs_get(base + 2)])
+    ! ONE allocation, not one per argument: gcv_conj would build a
+    ! new vector each time round, which for a two-argument call in a
+    ! loop is twice the garbage the interpreter makes.
+    if (nargs > 0 .and. nargs <= 32) then
+       av = gcv_build(nargs, [vs_get(base + 1)])
        call vs_set(base + 2, av)
-    end do
+       do j = 1, nargs
+          av = gcv_put(vs_get(base + 2), j - 1, vs_get(argbase + j), &
+               [vs_get(base + 1), vs_get(base + 2)])
+          call vs_set(base + 2, av)
+       end do
+    else
+       av = gcv_empty([vs_get(base + 1)])
+       call vs_set(base + 2, av)
+       do j = 1, nargs
+          av = gcv_conj(vs_get(base + 2), vs_get(argbase + j), &
+               [vs_get(base + 1), vs_get(base + 2)])
+          call vs_set(base + 2, av)
+       end do
+    end if
     out = apply(vs_get(base + 1), vs_get(base + 2))
     call vs_leave(base)
   end function gce_apply_slots

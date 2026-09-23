@@ -636,6 +636,41 @@ functions and cannot be written to a file and read back.
 `compiler-check` compiles twice and throws the first Fortran away,
 which works because compilation is deterministic.
 
+**`loop` and `recur` compile, and compiled is now FASTER than
+interpreted** -- but only after a measurement said it was not.
+
+| 200,000 iterations of a summing loop | |
+|---|---|
+| interpreted | 385 ms |
+| compiled, first working version | 625 ms |
+| compiled, now | 318 ms |
+
+The first version LOST, by a lot, and the reason is the design's own
+bargain: every operation is an out-of-line C call where the
+interpreter's equivalent is an inlined switch arm. Three things closed
+the gap, and the third was almost all of it.
+
+- a pooled value is already in a slot, so using it beat copying it
+- a call's arguments are generated straight into the consecutive block
+  rather than computed elsewhere and copied in
+- **`gce_apply_slots` built its argument vector one `conj` at a time**,
+  allocating a fresh vector per argument. `gcv_build` plus `gcv_put`
+  makes one. A two-argument call in a loop was making twice the garbage
+  the interpreter makes.
+
+That is the shape of the remaining work, and it says plainly where the
+real win is: not in emitting better statements, but in not calling the
+runtime at all. `(+ i 1)` on two values the analyser can prove are
+integers should be Fortran integer addition. That is the last
+milestone and it is where the scientific loops live.
+
+`recur` is a Fortran loop with a flag, which is what Clojure's
+constant-stack guarantee requires in any implementation. The procedure
+body is itself a loop, so a `recur` with no enclosing `loop` rebinds
+the parameters. Each loop owns its flag and the outer one is restored
+when an inner one ends -- `compiler-check` caught that as a difference
+on a nested loop before it was, which is the entire point of having it.
+
 **What it declines**, and each is the next thing to teach it: `:vector`,
 `:map` and `:set` nodes, more than one arity, variadic, a closure over
 an outer local, and a function that names itself. `decline-reason` is
