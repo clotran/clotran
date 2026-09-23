@@ -3979,3 +3979,57 @@ run against a derived suite you do not want regenerated.
 
 The remainder is the work. Clojure-only names are the same question asked of the other
 list, and `ns-unmap`, `reset-meta!` and `alter-meta!` came from there.
+
+## The libraries were names, not behaviour, and three bugs were under them
+
+Every public name of the 23 portable libraries resolves -- 458 of them,
+and 662 of clojure.core's 679. That says nothing about whether they
+WORK, and asking the second question found three bugs that the derived
+suite could not have seen.
+
+**Metadata on a collection literal was dropped.** `(meta ^{:a 1} [1])`
+was nil. Clojure's Compiler ends VectorExpr, MapExpr and SetExpr with
+
+    if(form instanceof IObj && ((IObj) form).meta() != null)
+       return new MetaExpr(ret, MapExpr.parse(..., meta));
+
+so the metadata map is EVALUATED and the constructed collection carries
+it -- which is why `(:tag (meta ^String [1]))` is a Class and not a
+symbol. `analyze` stripped metadata from every form on the grounds that
+it is information about the form rather than part of what it means.
+True of a symbol and of a call; false of a literal.
+
+`clojure.zip` is built entirely on it. `zipper` returns
+
+    ^{:zip/branch? branch? :zip/children children :zip/make-node make-node}
+    [root nil]
+
+so with the map gone, `branch?` was `(nil node)` and every zipper
+failed on its first `down`. The whole library was unusable and no test
+said so.
+
+**`char` read the integer field of a non-integer.** `(char 50.0)` was a
+space and `(char 955)` a guillemet: the first read `%ival` on a REAL,
+the second used `achar`, which wraps at 256. This is the `(* 2.0 3)`
+bug from CLAUDE.md wearing a different hat.
+
+**An index was not coerced.** `(nth [:a :b :c] 2.0)` was `:a`, and
+`(subs "abcd" 1.0)` was `"abcd"`. Clojure reads an index through
+`RT.intCast`, so a double index truncates. `as_index` is that, and it
+is deliberately NOT `as_int`: `(get [:a :b] 1.0)` is nil and
+`(contains? [:a :b] 1.0)` false, because a map-style lookup asks
+whether the key IS an integer rather than coercing it.
+
+The last two are one bug from `cl-format`'s point of view. `base-str`
+walks a number's digits with `quot`, `rem`, `nth` and `char`, so
+`(cl-format nil "~D" 2e6)` printed seven spaces and `~R` said "zero
+million". Clojure's own pprint suite went 315 → 321 → 323 of 323 as
+each was fixed.
+
+**What found them** was running Clojure's own library tests verbatim
+rather than deriving them. `scripts/run-library-tests` is now a gate:
+five namespaces, 109 tests, 859 assertions. Two more host members came
+out of it -- `Double/compare` (a total order where -0.0 is below 0.0,
+which `compare` is not) for clojure.math, and `Class.isArray`, which
+was hard-wired false, for clojure.data. `data.cljf` had been edited to
+say `:atom` unconditionally because of it; that edit is now backed out.

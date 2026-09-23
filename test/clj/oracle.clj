@@ -2305,3 +2305,66 @@
 [(let [t (transient [1 2])] (assoc! t 0 9) (persistent! t)) (let [t (transient {:a 1})] (dissoc! t :a) (persistent! t))]
 [(do (defprotocol OP (om [x])) (extend-type String OP (om [_] :s)) (extend-protocol OP Long (om [_] :l)) [(om "x") (om 1)])]
 [(let [a (double-array [1.0 2.0])] (areduce a i ret 0.0 (+ ret (aget a i))))]
+
+;;; ---- the portable libraries, by namespace ---------------------------
+;;;
+;;; Every name in these resolves (all 458 library publics do), which is
+;;; a weaker claim than every name WORKING. clojure.zip in particular
+;;; answered nil from branch? until a collection literal started
+;;; carrying its metadata, and nothing in the derived suite could see
+;;; it: Clojure's own zip tests contain no deftest.
+
+(require 'clojure.zip)
+[(-> (clojure.zip/vector-zip [1 [2 3] 4]) clojure.zip/down clojure.zip/right clojure.zip/down clojure.zip/node)
+ (-> (clojure.zip/vector-zip [1 2]) clojure.zip/down (clojure.zip/edit inc) clojure.zip/root)
+ (vec (-> (clojure.zip/seq-zip '(1 (2 3))) clojure.zip/down clojure.zip/rights))
+ (-> (clojure.zip/vector-zip [1]) clojure.zip/down (clojure.zip/insert-right 2) clojure.zip/root)
+ (clojure.zip/node (clojure.zip/xml-zip {:tag :a :content [{:tag :b}]}))]
+[(loop [l (clojure.zip/vector-zip [1 [2 [3]] 4]) acc []]
+   (if (clojure.zip/end? l) acc (recur (clojure.zip/next l) (conj acc (clojure.zip/node l)))))
+ (-> (clojure.zip/vector-zip [[1 2] 3]) clojure.zip/down clojure.zip/down clojure.zip/right clojure.zip/lefts vec)
+ (-> (clojure.zip/vector-zip [1 2 3]) clojure.zip/down clojure.zip/rightmost clojure.zip/node)
+ (-> (clojure.zip/vector-zip [1 2]) clojure.zip/down clojure.zip/remove clojure.zip/root)
+ (-> (clojure.zip/vector-zip [1]) clojure.zip/down (clojure.zip/replace 9) clojure.zip/root)
+ (clojure.zip/path (-> (clojure.zip/vector-zip [[1]]) clojure.zip/down clojure.zip/down))]
+
+(require 'clojure.data)
+[(clojure.data/diff {:a 1 :b 2} {:a 1 :c 3})
+ (clojure.data/diff [1 2 3] [1 9 3])
+ (clojure.data/diff #{1 2} #{2 3})
+ (clojure.data/diff 1 1)
+ (clojure.data/diff nil {:a 1})
+ (clojure.data/diff {:a {:b 1 :c 2}} {:a {:b 1 :c 9}})]
+
+(require 'clojure.template)
+[(clojure.template/apply-template '[x] '(+ x 1) [5])
+ (clojure.template/apply-template '[x y] '(list x y x) [1 2])
+ (with-out-str (clojure.template/do-template [x y] (print x y) 1 2 3 4))]
+
+(require 'clojure.datafy)
+[(clojure.datafy/datafy {:a 1})
+ (clojure.datafy/datafy [1 2])
+ (clojure.datafy/nav [1 2] 0 1)
+ (clojure.datafy/datafy (with-meta [1] {`clojure.core.protocols/datafy (fn [x] :custom)}))
+ (clojure.datafy/nav (with-meta [1] {`clojure.core.protocols/nav (fn [c k v] [:nav k v])}) 0 9)]
+
+(require 'clojure.pprint)
+[(with-out-str (clojure.pprint/pprint [1 2 3]))
+ (clojure.pprint/cl-format nil "~D" 2000000)
+ (clojure.pprint/cl-format nil "~:D" 2000000)
+ (clojure.pprint/cl-format nil "~A and ~S" "x" "x")
+ (clojure.pprint/cl-format nil "~{~A~^, ~}" [1 2 3])
+ (clojure.pprint/cl-format nil "~5,'0D" 42)
+ (clojure.pprint/cl-format nil "~R" 42)
+ (clojure.pprint/cl-format nil "~:(~A~)" "hello world")]
+[(with-out-str (clojure.pprint/print-table [{:a 1 :b 2} {:a 3 :b 4}]))
+ (with-out-str (binding [clojure.pprint/*print-right-margin* 10] (clojure.pprint/pprint (range 12))))
+ (with-out-str (clojure.pprint/with-pprint-dispatch clojure.pprint/code-dispatch (clojure.pprint/pprint '(defn f [x] x))))
+ (clojure.pprint/cl-format nil "~,2F" 3.14159)
+ (with-out-str (clojure.pprint/pprint {:a 1}))]
+
+;;; Metadata on a collection LITERAL: Clojure's Compiler wraps the
+;;; vector, map and set literals in a MetaExpr, so the map is evaluated
+;;; and the collection carries it. clojure.zip is built on it.
+[(meta ^{:a 1} [1]) (meta ^{:a 1} {:k 1}) (meta ^{:a 1} #{1}) (meta ^:foo [1])
+ (let [f inc] ((:a (meta ^{:a f} [1])) 5)) (meta [1]) (:tag (meta ^String [1]))]

@@ -222,6 +222,7 @@ module Eval
   integer, parameter :: B_QOFFER = 362, B_QTAKE = 363, B_THREADSTART = 364
   integer, parameter :: B_THREADDAEMON = 365, B_NSUNMAP = 366
   integer, parameter :: B_MUNGE = 367, B_DEMUNGE = 368
+  integer, parameter :: B_ISARRAY = 369, B_DBLCOMPARE = 370
 
   ! Compiler.CHAR_MAP, verbatim from the pinned clone: the characters
   ! a Clojure name may hold that a JVM member name may not. '.' is
@@ -5915,7 +5916,7 @@ contains
          type(gc_value) :: coll, idx, walk
          integer :: want, k
          coll = gcv_nth(vs_get(base + 1), 0)
-         idx = as_int(gcv_nth(vs_get(base + 1), 1))
+         idx = as_index(gcv_nth(vs_get(base + 1), 1))
          want = int(idx%ival)
          out = gc_nil()
          if (gc_kind(coll) == OBJ_CHUNK) then
@@ -6395,11 +6396,11 @@ contains
             return
          end if
          t = gc_ref_text(a%ref)
-         b = as_int(gcv_nth(args, 1))
+         b = as_index(gcv_nth(args, 1))
          lo = int(b%ival)
          hi = u8_count(t)
          if (n >= 3) then
-            b = as_int(gcv_nth(args, 2))
+            b = as_index(gcv_nth(args, 2))
             hi = int(b%ival)
          end if
          if (lo < 0 .or. hi > u8_count(t) .or. lo > hi) then
@@ -7055,11 +7056,17 @@ case (B_SLURP)
     case (B_BOOLCAST)
        out = gc_bool(truthy(gcv_nth(args, 0)))
     case (B_CHARCAST)
-       a = gcv_nth(args, 0)
+       ! int_of_number, not the integer FIELD, and a code point, not
+       ! achar. (char 50.0) read the unset ival of a real and answered
+       ! a space, which is how cl-format's base-str turned every digit
+       ! of a double or a BigInt into one -- (cl-format nil "~D" 2e6)
+       ! was seven blanks. achar also wrapped at 256, so (char 955)
+       ! was a guillemet rather than a lambda.
+       a = strip_meta(gcv_nth(args, 0))
        if (a%tag == GCT_CHAR) then
           out = a
        else
-          out = gc_char(achar(a%ival))
+          out = gc_char_cp(int(int_of_number(a)))
        end if
     case (B_ALTERMETA)
        block
@@ -7177,6 +7184,11 @@ case (B_SLURP)
          cv = strip_meta(gcv_nth(args, 0))
          if (cv%tag == GCT_STR) then
             out = gc_int(u8_count(gc_ref_text(cv%ref)))
+         else if (gc_kind(cv) == OBJ_SB) then
+            ! A StringBuilder IS a CharSequence, so .length is its
+            ! text's. Answering the seq count (0) made clojure.string's
+            ! trim -- which loops down from .length -- answer "".
+            out = gc_int(u8_count(text_of(cv)))
          else
             out = gc_int(sq_count(cv, [vs_get(base + 1)]))
          end if
@@ -7187,11 +7199,11 @@ case (B_SLURP)
          type(gc_value) :: iv
          integer :: lo, hi
          t = text_of(gcv_nth(args, 0))
-         iv = as_int(gcv_nth(args, 1))
+         iv = as_index(gcv_nth(args, 1))
          lo = int(iv%ival)
          hi = u8_count(t)
          if (n >= 3) then
-            iv = as_int(gcv_nth(args, 2))
+            iv = as_index(gcv_nth(args, 2))
             hi = int(iv%ival)
          end if
          if (lo < 0 .or. hi > u8_count(t) .or. lo > hi) then
@@ -7727,6 +7739,44 @@ case (B_SLURP)
        end block
     case (B_HASH)
        out = gc_int(gc_hash(gcv_nth(args, 0)))
+    case (B_ISARRAY)
+       ! Class.isArray, which clojure.data reaches as
+       ! (.. x getClass isArray) to decide that an array diffs as a
+       ! SEQUENCE rather than as an atom. Answering false always made
+       ! (diff [1 2] (into-array [1 2])) say they differ.
+       a = strip_meta(gcv_nth(args, 0))
+       if (a%tag == GCT_CLASS) then
+          out = gc_bool(short_class_name(gc_ref_text(a%ref)) == "array")
+       else
+          out = gc_bool(gc_kind(a) == OBJ_ARRAY)
+       end if
+    case (B_DBLCOMPARE)
+       ! Double.compare: a TOTAL order, where -0.0 sorts below 0.0 and
+       ! NaN above everything -- which is not what `compare` answers,
+       ! and is the whole point of clojure.math's neg-zero? test.
+       block
+         real(gc_dp) :: x, y
+         x = num_dbl(gcv_nth(args, 0))
+         y = num_dbl(gcv_nth(args, 1))
+         if (x < y) then
+            out = gc_int(-1_gc_ip)
+         else if (x > y) then
+            out = gc_int(1_gc_ip)
+         else
+            ! equal as numbers: separate -0.0 from 0.0, and put a NaN
+            ! last, the way doubleToLongBits ordering does.
+            out = gc_int(int(sign(1.0_gc_dp, x) - sign(1.0_gc_dp, y), gc_ip) / 2_gc_ip)
+            if (x /= x .or. y /= y) then
+               if (x /= x .and. y == y) then
+                  out = gc_int(1_gc_ip)
+               else if (y /= y .and. x == x) then
+                  out = gc_int(-1_gc_ip)
+               else
+                  out = gc_int(0_gc_ip)
+               end if
+            end if
+         end if
+       end block
     case (B_MUNGE, B_DEMUNGE)
        a = strip_meta(gcv_nth(args, 0))
        if (id == B_MUNGE) then
@@ -8096,7 +8146,7 @@ case (B_SLURP)
           block
             type(gc_value) :: acc, iv
             integer :: j, cnt
-            iv = as_int(gcv_nth(args, 0))
+            iv = as_index(gcv_nth(args, 0))
             cnt = int(iv%ival)
             acc = gcl_empty([vs_get(base + 1)])
             call vs_set(base + 2, acc)
@@ -12265,7 +12315,12 @@ case (B_SLURP)
        ! it too.
        yes = (t == "symbol" .or. t == "list" .or. t == "vector" .or. &
               t == "map" .or. t == "set" .or. t == "var")
-    case ("String", "java.lang.String", "CharSequence"); yes = (t == "string")
+    case ("String", "java.lang.String"); yes = (t == "string")
+    ! A StringBuilder is a CharSequence but NOT a String, and
+    ! clojure.string tells them apart: replace takes the CharSequence
+    ! branch for a match or a replacement and calls the thing as a
+    ! FUNCTION otherwise -- "not a function: a".
+    case ("CharSequence"); yes = (t == "string" .or. t == "string-builder")
     case ("Character", "java.lang.Character"); yes = (t == "char")
     case ("Boolean", "java.lang.Boolean"); yes = (t == "boolean")
     case ("Long", "java.lang.Long", "Integer", "java.lang.Integer"); yes = (t == "int")
@@ -12380,6 +12435,22 @@ case (B_SLURP)
     if (o%tag /= GCT_BIG) return
     if (big_fits_i64(gc_big_text(o))) o = gc_int(big_to_i64(gc_big_text(o)))
   end function as_int
+
+  ! An INDEX, which Clojure reads through RT.intCast: a double
+  ! index is truncated, so (nth [:a :b :c] 2.0) is :c and
+  ! (subs "abcd" 1.0) is "bcd". Not the same question as as_int --
+  ! (get [:a :b] 1.0) is nil and (contains? [:a :b] 1.0) false,
+  ! because a map-style lookup asks whether the KEY is an integer
+  ! rather than coercing it. cl-format walks a double's digits with
+  ! nth, which is how (cl-format nil "~R" 2e6) said "zero million".
+  function as_index(v0) result(o)
+    type(gc_value), intent(in) :: v0
+    type(gc_value) :: o
+    o = strip_meta(v0)
+    if (o%tag == GCT_INT) return
+    if (o%tag == GCT_REAL .or. o%tag == GCT_BIG .or. o%tag == GCT_DEC &
+         .or. o%tag == GCT_RATIO) o = gc_int(int_of_number(o))
+  end function as_index
 
   function rat_operand(v, ok) result(o)
     type(gc_value), intent(in) :: v

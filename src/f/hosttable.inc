@@ -304,7 +304,10 @@
   ! Long's bounds are clotran's own: an integer here IS a 64-bit one.
        hm("java.lang.Long", "MAX_VALUE", HK_INT, "", huge(0_gc_ip)), &
        hm("java.lang.Long", "MIN_VALUE", HK_INT, "", -huge(0_gc_ip) - 1_gc_ip) ]
-  type(hm), parameter :: HOST_STATICS_4(62) = [ &
+  type(hm), parameter :: HOST_STATICS_4(63) = [ &
+  ! Double.compare, NOT clojure.core/compare: a total order in which
+  ! -0.0 is below 0.0. clojure.math's tests are written on it.
+       hm("java.lang.Double", "compare", B_DBLCOMPARE, "clotran-double-compare"), &
   ! Double.MIN_VALUE is the smallest POSITIVE value, a denormal, which
   ! Clojure's own math tests check.
        hm("java.lang.Double", "MAX_VALUE", HK_REAL, "", 0_gc_ip, huge(1.0_gc_dp)), &
@@ -389,7 +392,7 @@
        hm("clojure.lang.Numbers", "ints", B_IDENTITY, "identity"), &
        hm("clojure.lang.Numbers", "longs", B_IDENTITY, "identity"), &
        hm("clojure.lang.Numbers", "doubles", B_IDENTITY, "identity") ]
-  type(hm), parameter :: HOST_STATICS(304) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
+  type(hm), parameter :: HOST_STATICS(305) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
   type(hm), parameter :: HOST_METHODS_1(91) = [ &
   ! Instance members. The target becomes the first argument, which is all
@@ -469,7 +472,7 @@
   ! The host supertypes, which is what clotran has instead of interfaces (host_super).
        hm("", "getInterfaces", B_GETIFACES, "clotran-get-interfaces"), &
        hm("", "isAssignableFrom", B_ISASSIGN, "clotran-assignable"), &
-       hm("", "isArray", B_ALWAYS_FALSE, "clotran-false"), &
+       hm("", "isArray", B_ISARRAY, "clotran-is-array"), &
   ! The protocol dispatch cache is a map with named fields, and fnFor answers nil: a permanently cold cache. DEVIATIONS.md 13.
        hm("", "sym", B_FLD_SYM, "clotran-sym"), &
        hm("", "protocol", B_FLD_PROTOCOL, "clotran-protocol"), &

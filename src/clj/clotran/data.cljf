@@ -91,7 +91,7 @@
                          ((if (.. a getClass isArray) diff-sequential atom-diff) a b))}
         EqualityPartition
         {:equality-partition (fn [^Object x]
-                               :atom)})
+                               (if (.. x getClass isArray) :sequential :atom))})
 
 (extend-protocol EqualityPartition
   nil

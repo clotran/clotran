@@ -1244,9 +1244,14 @@ same files with the JVM keys taken out, loaded in their place by
 as `core_proxy.clj` does (deviation 12).
 
 What differs from the JVM: a value that is only a `java.util` collection
-has no print method here, and nothing in clotran makes one; `diff`
-partitions arrays as atoms. Everything that prints a Clojure value is
-Rich's, line for line.
+has no print method here, and nothing in clotran makes one. Everything
+that prints a Clojure value is Rich's, line for line.
+
+`diff` used to partition an array as an atom, because `Class.isArray`
+was hard-wired false and `data.cljf` had been edited to say `:atom`
+unconditionally. `isArray` answers now and the upstream line is back,
+so `(diff [1 2] (into-array [1 2]))` is `[nil nil [1 2]]` as it is on
+the JVM.
 
 **Removal**: none sought. This is the premise applied, not bent: the
 language is reproduced, the JVM is an implementation detail.

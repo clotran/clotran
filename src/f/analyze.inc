@@ -295,12 +295,26 @@
 
     nd = gc_nil()
     if (has_error) return
-    base = vs_enter(4)
+    base = vs_enter(6)
     call vs_set(base + 2, sc)
     form = form0
     ! Metadata on a form is information about it, not part of what it
     ! means; only def looks at it (and does so from the raw form).
-    if (gc_kind(form) == OBJ_META) form = strip_meta(form)
+    !
+    ! A COLLECTION LITERAL is the exception, and Clojure's Compiler
+    ! says so: VectorExpr, MapExpr and SetExpr each end with
+    !   if(form instanceof IObj && ((IObj) form).meta() != null)
+    !      return new MetaExpr(ret, MapExpr.parse(..., meta));
+    ! so the map is EVALUATED and the constructed collection carries
+    ! it -- which is why (:tag (meta ^String [1])) is a Class and not
+    ! a symbol. Dropping it here made clojure.zip unusable: `zipper`
+    ! returns ^{:zip/branch? branch? ...} [root nil], and with the map
+    ! gone every branch? call was (nil node).
+    call vs_set(base + 5, gc_nil())
+    if (gc_kind(form) == OBJ_META) then
+       if (literal_coll(strip_meta(form))) call vs_set(base + 5, gc_slot(form, 2))
+       form = strip_meta(form)
+    end if
     ! A seq is code, like a list; realised once, here.
     if (gc_kind(form) == OBJ_LAZY .or. gc_kind(form) == OBJ_SEQ) then
        call vs_set(base + 1, form)
@@ -352,8 +366,62 @@
     case default
        nd = const_node(vs_get(base + 1), [vs_get(base + 2)])
     end select
+    ! MetaExpr: (with-meta <the collection> <the map>), built as a
+    ! call to the builtin rather than to the NAME with-meta, so that a
+    ! literal carrying metadata analyses the same during core.clj's
+    ! bootstrap as after it.
+    if (.not. has_error .and. tag_of(vs_get(base + 5)) /= GCT_NIL &
+         .and. gc_kind(nd) == OBJ_AST) then
+       call vs_set(base + 6, nd)
+       nd = meta_call_node(vs_get(base + 6), vs_get(base + 5), vs_get(base + 2))
+    end if
     call vs_leave(base)
   end function analyze
+
+  ! Whether a form is a collection LITERAL -- the three Clojure's
+  ! Compiler wraps in a MetaExpr. A list is code, not a literal, and
+  ! its metadata is the caller's business.
+  logical function literal_coll(v)
+    type(gc_value), intent(in) :: v
+    integer :: k
+    literal_coll = .false.
+    if (v%tag /= GCT_OBJ) return
+    k = gc_kind(v)
+    literal_coll = (k == OBJ_VECTOR .or. k == OBJ_MAP .or. k == OBJ_HAMT &
+         .or. k == OBJ_SET)
+  end function literal_coll
+
+  ! (with-meta value-node meta-form): the metadata map is ANALYSED,
+  ! so ^{:zip/branch? branch?} closes over the local.
+  recursive function meta_call_node(vnode, mform, sc) result(nd)
+    type(gc_value), intent(in) :: vnode, mform, sc
+    type(gc_value) :: nd, kids, mn
+    integer :: base
+    base = vs_enter(5)
+    call vs_set(base + 1, vnode)
+    call vs_set(base + 2, mform)
+    call vs_set(base + 3, sc)
+    mn = analyze(vs_get(base + 2), vs_get(base + 3))
+    if (has_error) then
+       nd = vs_get(base + 1)
+       call vs_leave(base)
+       return
+    end if
+    call vs_set(base + 4, mn)
+    kids = gcv_empty([vs_get(base + 1), vs_get(base + 4)])
+    call vs_set(base + 5, kids)
+    kids = gcv_conj(vs_get(base + 5), &
+         const_node(native(B_WITHMETA, "with-meta", [vs_get(base + 5)]), &
+                    [vs_get(base + 5)]), [vs_get(base + 5)])
+    call vs_set(base + 5, kids)
+    kids = gcv_conj(vs_get(base + 5), vs_get(base + 1), [vs_get(base + 5)])
+    call vs_set(base + 5, kids)
+    kids = gcv_conj(vs_get(base + 5), vs_get(base + 4), [vs_get(base + 5)])
+    call vs_set(base + 5, kids)
+    nd = mk_node(N_CALL, vs_get(base + 5), gc_nil(), gc_nil(), 0, &
+         [vs_get(base + 5)])
+    call vs_leave(base)
+  end function meta_call_node
 
   ! A map literal: children alternate key, value.
   recursive function analyze_map(form, sc) result(nd)
