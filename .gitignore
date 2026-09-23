@@ -9,3 +9,6 @@
 /packages/*/*.mod
 /packages/*/*.dSYM
 /packages/*/*_bind.f90
+# gfortran drops a .mod beside itself; a compiled namespace built in the
+# working directory leaves one here
+*.mod
