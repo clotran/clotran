@@ -89,6 +89,38 @@ module clotran_abi_decl
        integer(c_int), value :: n
        integer(c_int) :: w
      end function clotran_str_copy
+     function clotran_analyze(src, n, dst) bind(C, name="clotran_analyze") result(st)
+       import :: c_char, c_int
+       character(kind=c_char), intent(in) :: src(*)
+       integer(c_int), value :: n, dst
+       integer(c_int) :: st
+     end function clotran_analyze
+     subroutine clotran_frame_new(dst, n) bind(C, name="clotran_frame_new")
+       import :: c_int
+       integer(c_int), value :: dst, n
+     end subroutine clotran_frame_new
+     subroutine clotran_frame_get(dst, fr, i) bind(C, name="clotran_frame_get")
+       import :: c_int
+       integer(c_int), value :: dst, fr, i
+     end subroutine clotran_frame_get
+     subroutine clotran_frame_put(fr, i, src) bind(C, name="clotran_frame_put")
+       import :: c_int
+       integer(c_int), value :: fr, i, src
+     end subroutine clotran_frame_put
+     function clotran_eval_node(dst, node, fr) bind(C, name="clotran_eval_node") result(st)
+       import :: c_int
+       integer(c_int), value :: dst, node, fr
+       integer(c_int) :: st
+     end function clotran_eval_node
+     function clotran_pool_register(slot) bind(C, name="clotran_pool_register") result(h)
+       import :: c_int
+       integer(c_int), value :: slot
+       integer(c_int) :: h
+     end function clotran_pool_register
+     subroutine clotran_pool_get(dst, h, i) bind(C, name="clotran_pool_get")
+       import :: c_int
+       integer(c_int), value :: dst, h, i
+     end subroutine clotran_pool_get
      subroutine clotran_copy(dst, src) bind(C, name="clotran_copy")
        import :: c_int
        integer(c_int), value :: dst, src
@@ -169,6 +201,8 @@ module abi_test_fns
   use iso_c_binding
   use clotran_abi_decl
   implicit none
+  ! the pool handle the test registers before calling abi_fallback
+  integer(c_int), save :: test_pool = 0
 contains
 
   ! (defn add2 [a b] (+ a b)) at its simplest: no allocation, no call.
@@ -191,6 +225,33 @@ contains
     call clotran_copy(dst, b + 1)
     call clotran_frame_leave(b)
   end subroutine abi_pair
+
+  ! THE ESCAPE HATCH, as a generated procedure will use it. It makes a
+  ! frame for its locals, puts its arguments in, pulls an analysed node
+  ! out of the namespace's constant pool, and hands node and frame back
+  ! to the interpreter. Every node kind the generator has not learned
+  ! is emitted as these four calls.
+  subroutine abi_fallback(argbase, nargs, dst) bind(C, name="abi_fallback")
+    integer(c_int), value :: argbase, nargs, dst
+    integer(c_int) :: b, st
+    b = clotran_frame_enter(2_c_int)
+    call clotran_frame_new(b + 1, 2_c_int)
+    call clotran_frame_put(b + 1, 0_c_int, argbase + 1)
+    call clotran_pool_get(b + 2, test_pool, 0_c_int)
+    st = clotran_eval_node(dst, b + 2, b + 1)
+    call clotran_frame_leave(b)
+  end subroutine abi_fallback
+
+  ! Frames on their own: in, out, and the value is the one that went in.
+  subroutine abi_frame_echo(argbase, nargs, dst) bind(C, name="abi_frame_echo")
+    integer(c_int), value :: argbase, nargs, dst
+    integer(c_int) :: b
+    b = clotran_frame_enter(1_c_int)
+    call clotran_frame_new(b + 1, 4_c_int)
+    call clotran_frame_put(b + 1, 3_c_int, argbase + 1)
+    call clotran_frame_get(dst, b + 1, 3_c_int)
+    call clotran_frame_leave(b)
+  end subroutine abi_frame_echo
 
   ! What a RECOMPILE installs: the same name, a different procedure.
   subroutine abi_add2b(argbase, nargs, dst) bind(C, name="abi_add2b")
@@ -261,6 +322,7 @@ program abi_test
   call check_compiled_functions()
   call clotran_set_torture(0_c_int)
   call check_language_sees_compiled_fns()
+  call check_escape_hatch()
 
   if (failures == 0) then
      print *, ""
@@ -474,6 +536,40 @@ contains
     end do
     print *, "       error: ", trim(msg)
   end subroutine show_error
+
+  ! THE ESCAPE HATCH. An analysed node goes into a constant pool, a
+  ! compiled procedure pulls it out and runs it in its own frame, and
+  ! the answer comes back. This is the mechanism that lets the
+  ! generator be permanently incomplete without the language losing
+  ! anything: an unhandled node kind costs speed, not correctness.
+  subroutine check_escape_hatch()
+    integer(c_int) :: b, st
+    b = clotran_frame_enter(3_c_int)
+    st = clotran_analyze(cbuf("(+ 20 22)"), 9_c_int, b + 1)
+    call ok("a form analyses to a node without running", st == 0)
+    call clotran_vec_empty(b + 2)
+    call clotran_vec_conj(b + 2, b + 2, b + 1)
+    test_pool = clotran_pool_register(b + 2)
+    call ok("a constant pool registers", test_pool > 0)
+    call clotran_pool_get(b + 3, test_pool, 0_c_int)
+    st = clotran_eval_node(b + 3, b + 3, b + 1)
+    call ok("and a node out of it runs", st == 0 .and. clotran_int(b + 3) == 42)
+    st = deffn("compiled.test", "fallback", c_funloc(abi_fallback), 1_c_int)
+    st = ev("(compiled.test/fallback 99)", b + 1)
+    call ok("a compiled procedure falls back to the interpreter", &
+         st == 0 .and. clotran_int(b + 1) == 42)
+    st = deffn("compiled.test", "echo", c_funloc(abi_frame_echo), 1_c_int)
+    st = ev("(compiled.test/echo 7)", b + 1)
+    call ok("and keeps its locals in a real frame", &
+         st == 0 .and. clotran_int(b + 1) == 7)
+    ! the pool must survive collection: nothing but the root holds it
+    call clotran_collect()
+    call clotran_collect()
+    st = ev("(compiled.test/fallback 1)", b + 1)
+    call ok("the pool survives collection", &
+         st == 0 .and. clotran_int(b + 1) == 42)
+    call clotran_frame_leave(b)
+  end subroutine check_escape_hatch
 
   ! WITH THE LANGUAGE LOADED. Everything above runs on the builtins
   ! alone, which is enough to prove the surface but not enough to

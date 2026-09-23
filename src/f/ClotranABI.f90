@@ -53,7 +53,7 @@ module ClotranABI
 
   ! Everything public here is public BECAUSE it is bind(C); the module
   ! is never `use`d by generated code, only linked against.
-  public :: clotran_init, clotran_boot, clotran_eval, clotran_frame_enter, clotran_frame_leave, clotran_frame_depth
+  public :: clotran_init, clotran_boot, clotran_eval, clotran_analyze, clotran_frame_enter, clotran_frame_leave, clotran_frame_depth
   public :: clotran_set_nil, clotran_set_int, clotran_set_real, clotran_set_bool
   public :: clotran_set_str, clotran_copy
   public :: clotran_tag, clotran_int, clotran_real, clotran_bool
@@ -62,6 +62,12 @@ module ClotranABI
   public :: clotran_var, clotran_deref, clotran_call, clotran_def_fn
   public :: clotran_has_error, clotran_error_len, clotran_error_copy, clotran_clear_error
   public :: clotran_collect, clotran_live_count, clotran_set_torture
+  public :: clotran_frame_new, clotran_frame_get, clotran_frame_put
+  public :: clotran_eval_node, clotran_pool_register, clotran_pool_get
+
+  ! The constant pools, one per compiled namespace, kept alive here
+  ! because nothing else refers to them.
+  type(gc_root), save :: pool_root
 
 contains
 
@@ -131,6 +137,36 @@ contains
     end if
     call vs_leave(base)
   end function clotran_eval
+
+  ! Reads and ANALYSES one form, leaving the node in the slot without
+  ! running it. This is what a compiler driver calls: the nodes it
+  ! puts in a namespace's constant pool, for the escape hatch to run,
+  ! come from here. Analysis is the same pass the executor uses, so
+  ! there is no second front end to disagree with the first.
+  function clotran_analyze(src, n, dst) bind(C, name="clotran_analyze") result(st)
+    character(kind=c_char), intent(in) :: src(*)
+    integer(c_int), value :: n, dst
+    integer(c_int) :: st
+    type(gc_value) :: form, node, env
+    integer :: base
+    st = 1
+    call vs_set(int(dst), gc_nil())
+    env = gce_env()
+    base = vs_enter(2)
+    call vs_set(base + 1, env)
+    form = gcr_read(c_text(src, n), [vs_get(base + 1)])
+    if (gcr_has_error()) then
+       call vs_leave(base)
+       return
+    end if
+    call vs_set(base + 2, form)
+    node = gce_analyze(vs_get(base + 2), vs_get(base + 1))
+    if (.not. gce_has_error()) then
+       call vs_set(int(dst), node)
+       st = 0
+    end if
+    call vs_leave(base)
+  end function clotran_analyze
 
   ! --- frames ------------------------------------------------------
 
@@ -393,6 +429,78 @@ contains
     call vs_leave(base)
     if (gcn_is_var(var)) st = 0
   end function clotran_def_fn
+
+  ! --- frames, constants, and the way back into the interpreter ------
+  !
+  ! A generated procedure keeps its locals in an interpreter FRAME, not
+  ! in raw shadow-stack slots, and that is a deliberate choice for the
+  ! first version. A frame is a gc_vec: one heap allocation per call,
+  ! O(1) indexed, already traced. What it buys is that an interpreted
+  ! subtree inside compiled code sees the same locals, so the escape
+  ! hatch below is one call rather than a bridge -- and the debugger
+  ! sees a real frame, which is what makes the debug build cheap.
+  ! Raw-slot locals for leaf procedures that never fall back are a
+  ! later optimisation, with a measurement behind it.
+
+  subroutine clotran_frame_new(dst, n) bind(C, name="clotran_frame_new")
+    integer(c_int), value :: dst, n
+    type(gc_value) :: none(0)
+    call vs_set(int(dst), gc_vec(max(int(n), 0), none))
+  end subroutine clotran_frame_new
+
+  subroutine clotran_frame_get(dst, fr, i) bind(C, name="clotran_frame_get")
+    integer(c_int), value :: dst, fr, i
+    call vs_set(int(dst), gc_vec_get(vs_get(int(fr)), int(i) + 1))
+  end subroutine clotran_frame_get
+
+  subroutine clotran_frame_put(fr, i, src) bind(C, name="clotran_frame_put")
+    integer(c_int), value :: fr, i, src
+    call gc_vec_set(vs_get(int(fr)), int(i) + 1, vs_get(int(src)))
+  end subroutine clotran_frame_put
+
+  ! THE ESCAPE HATCH. Runs an already-analysed node in a frame, which is
+  ! what a generated procedure does for every node kind the generator
+  ! has not learned. It is why the generator is correct from the first
+  ! kind it handles: an unhandled construct is slow, not broken.
+  function clotran_eval_node(dst, node, fr) bind(C, name="clotran_eval_node") result(st)
+    integer(c_int), value :: dst, node, fr
+    integer(c_int) :: st
+    type(gc_value) :: out
+    out = gce_exec_node(vs_get(int(node)), vs_get(int(fr)))
+    if (gce_has_error()) then
+       call vs_set(int(dst), gc_nil())
+       st = 1
+    else
+       call vs_set(int(dst), out)
+       st = 0
+    end if
+  end function clotran_eval_node
+
+  ! A CONSTANT POOL. A generated procedure cannot write a map or an AST
+  ! node into its own source, so the loader hands the namespace a vector
+  ! of everything its procedures need -- literal collections, and the
+  ! nodes the escape hatch runs -- and each procedure indexes it. The
+  ! pool is kept as a global root, because nothing else refers to it.
+  function clotran_pool_register(slot) bind(C, name="clotran_pool_register") result(h)
+    integer(c_int), value :: slot
+    integer(c_int) :: h
+    type(gc_value) :: pools, none(0)
+    pools = gc_root_get(pool_root)
+    if (.not. gcv_is(pools)) pools = gcv_empty(none)
+    pools = gcv_conj(pools, vs_get(int(slot)), [pools])
+    call gc_global_keep(pool_root, pools)
+    h = int(gcv_count(pools), c_int)
+  end function clotran_pool_register
+
+  subroutine clotran_pool_get(dst, h, i) bind(C, name="clotran_pool_get")
+    integer(c_int), value :: dst, h, i
+    type(gc_value) :: pools
+    call vs_set(int(dst), gc_nil())
+    pools = gc_root_get(pool_root)
+    if (.not. gcv_is(pools)) return
+    if (h < 1 .or. int(h) > gcv_count(pools)) return
+    call vs_set(int(dst), gcv_nth(gcv_nth(pools, int(h) - 1), int(i)))
+  end subroutine clotran_pool_get
 
   ! --- errors ------------------------------------------------------
 

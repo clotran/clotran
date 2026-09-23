@@ -376,7 +376,7 @@ module Eval
   public :: gce_ctx_new, gce_ctx_switch, gce_ctx_current
   public :: gce_repl
   public :: gce_set_home, gce_home
-  public :: gce_apply, gce_env
+  public :: gce_apply, gce_env, gce_exec_node
 
   ! THE CALL STACK. One entry per closure invocation in progress: the
   ! closure and the position of the call that entered it (set by the
@@ -5366,6 +5366,16 @@ contains
     env = gc_nil()
     if (gc_root_live(global_env_root)) env = gc_root_get(global_env_root)
   end function gce_env
+
+  ! `exec` under a public name: an already-analysed node run in a
+  ! frame. This is the compiler's escape hatch -- generated code calls
+  ! it for every node kind the generator has not learned, so an
+  ! unhandled construct is slow rather than broken.
+  recursive function gce_exec_node(node, frame) result(out)
+    type(gc_value), intent(in) :: node, frame
+    type(gc_value) :: out
+    out = exec(node, frame)
+  end function gce_exec_node
 
   ! `apply` under a public name, for ClotranABI. The ABI is the
   ! surface compiled code and an embedder call through, and it must
