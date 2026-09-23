@@ -36,7 +36,14 @@ LDFLAGS = $(FCFLAGS_$(notdir $(FC)))
 # -frecursive forces locals onto the stack, which IS the F2018/flang
 # semantics this source is written against. -std=f2018 does NOT do it
 # (checked on gfortran 16).
-FCFLAGS_gfortran = -frecursive
+#
+# -flto because a profile said so: two thirds of a hot loop's time
+# was one-line accessors in GC.f90 (vs_get, vs_set, gc_slot,
+# gc_kind) called out of line from Eval.f90, which no compiler can
+# inline across files without link-time optimisation. Measured on
+# 2026-09-23: 13% on the interpreter, 21% on compiled code.
+FCFLAGS_gfortran = -frecursive -flto
+FCFLAGS_flang = -flto
 
 # Pinned, not just "whatever's on PATH": subtle compiler-specific
 # behaviour (FINAL, defined assignment, unlimited polymorphic) means a
