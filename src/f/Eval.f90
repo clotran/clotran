@@ -375,6 +375,7 @@ module Eval
   public :: gce_ctx_new, gce_ctx_switch, gce_ctx_current
   public :: gce_repl
   public :: gce_set_home, gce_home
+  public :: gce_apply, gce_env
 
   ! THE CALL STACK. One entry per closure invocation in progress: the
   ! closure and the position of the call that entered it (set by the
@@ -5351,6 +5352,25 @@ contains
     call gc_set_i1(out, LAZY_CONS)
     call vs_leave(base)
   end function iterate_cell
+
+  ! The global environment gce_base_env built and rooted, or nil.
+  ! ClotranABI needs it to analyse and evaluate on an embedder's
+  ! behalf; B_EVAL reaches the same root from inside.
+  function gce_env() result(env)
+    type(gc_value) :: env
+    env = gc_nil()
+    if (gc_root_live(global_env_root)) env = gc_root_get(global_env_root)
+  end function gce_env
+
+  ! `apply` under a public name, for ClotranABI. The ABI is the
+  ! surface compiled code and an embedder call through, and it must
+  ! not reach into the module's internals; this is the one call it
+  ! needs that GC and Namespace do not already export.
+  recursive function gce_apply(fn, args) result(out)
+    type(gc_value), intent(in) :: fn, args
+    type(gc_value) :: out
+    out = apply(fn, args)
+  end function gce_apply
 
   recursive function apply(fn0, args) result(out)
     type(gc_value), intent(in) :: fn0, args

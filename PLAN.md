@@ -453,51 +453,133 @@ below says: when a profile demands it.
 **What it depends on.** Nothing from threads. The image (step 5 stage 3)
 is welcome but not required.
 
-### 10. Compilation through the door -- the JIT as ahead-of-time
+### 10. Compilation ahead of time, through the door
 
-Recorded 2026-09-21, not started. James asked whether a JIT is even
-possible here; the door (step 9) is the answer, and it settles the shape.
+Recorded 2026-09-21, decided and started 2026-09-23 on
+`feat/clotran-compiler`. James asked whether a JIT is even possible
+here; it is, but what we are building is not one, and the section is
+renamed to stop the word doing damage.
 
-**What a compiled namespace is.** A package. `clotran compile my.cljf`
-runs the analysis pass (step 5) over the file, walks the resolved tree
--- every node already classified, every symbol already a Var handle or
-a frame slot -- and writes a Fortran module: one procedure per `fn`,
-locals as `gc_value` variables on the shadow stack, tail calls as
-loops, calls through Var handles to `apply`, collections through the
-same `gcv_conj`, `gca_assoc` and `gc_obj` the interpreter uses. The
-module is built into a shared library with `-shared -fPIC` against
-clotran's own `.mod` files and loaded through DynLoad; the `defn`s of
-the namespace install native fn objects whose entry is the compiled
-procedure, so a call from interpreted code reaches compiled code
-through the ordinary fn-call path and back. Compile time is seconds per
-namespace, which is why this is ahead of time: a program compiles the
-namespaces it keeps, not the expression it is typing.
+**It is ahead of time, per namespace, and you ask for it.** Clojure on
+the JVM compiles every form to bytecode, `(+ 1 1)` at the REPL
+included, because a class loads in microseconds. Invoking gfortran
+costs 100 ms to 1 s, so compiling a typed form would take a thousand
+times longer than interpreting it at about a microsecond a node. So:
+`clotran compile my.cljf`. The REPL, `eval` and a `defn` you type stay
+interpreted.
 
-**What it needs from clotran-bin.** The runtime's symbols exported to
-loaded libraries (`-Wl,-export_dynamic` on macOS, `-rdynamic` on Linux)
-and its `.mod` files installed beside the binary, so generated code can
-`use GC` and call `gc_int`, `apply`, `vs_enter` as the interpreter
-does. The collector needs nothing new: generated code roots what it
-holds the way exec.inc does, on the shadow stack, and a compiled
-procedure runs to completion like a native does -- unless it blocks,
-which is the green-thread question of step 8 and is answered the same
-way, by a context.
+That still gets the speed, because the expensive thing is almost never
+the form you typed. `(count (into [] (map inc (range 100000))))` is
+705x the JVM on `scripts/bench`, and the five nodes of the form cost
+five microseconds; all of it is inside `map`, `into` and the lazy seq
+machinery, which is Clojure source in `clojure.core`. **So the first
+namespace worth compiling is `clojure.core` itself**, which also takes
+the 0.75 s startup down to process start.
 
-**What it does not need.** LLVM, ORC, machine code, or any change to
-the value representation. The decision record below ("Should we JIT?")
-stands: an in-process JIT is the day a profile shows the interpreter's
-node dispatch, at about a microsecond a node, is what a real program
-waits on; compile-to-package removes that cost for the namespaces that
-matter without the machinery.
+**Two delivery shapes, and they want different answers.**
 
-**In order.** The exporter (a namespace's resolved tree as data, which
-the debugger already reads); a code generator for the node kinds
-exec.inc runs in its loop -- `if`, `do`, `let*`, `loop*`, `fn`, calls,
-`recur`, the literals -- with every other kind left to a call back into
-the interpreter; `clotran compile`; then unboxed arithmetic where the
-analyser can prove a number, which is where the scientific loops are.
+| shape | how generated code reaches the runtime |
+|---|---|
+| a package loaded at run time | the C ABI, any compiler, the existing door |
+| a namespace linked into a binary | could `use GC`; goes through the C ABI anyway |
+
+A statically linked binary is a build target, not a replacement for the
+package system. The package system is the architecture.
+
+**The runtime surface is `src/f/ClotranABI.f90`, and it is built.** A
+Fortran module file is a private format tied to one compiler and one
+version, and `make crosscheck` builds with two compilers, so generated
+code cannot `use GC`. `bind(C)` and `iso_c_binding` are Fortran -- there
+is no C source -- and the package door already speaks that convention.
+The static case does not need it and uses it anyway, so that one
+surface is exercised by every path and the generator emits one kind of
+call.
+
+**Rooting is JNI's model, for JNI's reason.** Values are not passed
+across the boundary. They live in SLOTS on the shadow stack and every
+entry point names a slot by index. The collector already scans the
+shadow stack, so anything foreign code holds is rooted by construction
+and nothing can sit in a register across an allocation -- the bug this
+codebase has paid for twice. The cost is a slot write per intermediate,
+which is the "root everything, stupidly" position; a value-passing fast
+path needs a measurement behind it, not a preference.
+
+**Errors report, they do not throw.** A Clojure error cannot unwind
+through a foreign caller's frames. `clotran_call` answers a status and
+the error is read with `clotran_error_copy`, the same discipline JNI
+imposes. A binding that ignores the status keeps running with a broken
+value, so a manifest has to say so.
+
+**Milestone 1 is done.** `test/f/abi_test.f90` declares every entry
+point by hand, uses no clotran module, and passes plain and under
+torture: values held only in slots survive collection, a Var resolves
+by namespace and name and calls, 2000 allocations collect without
+losing what is kept, and a raising call reports rather than throws.
+That was the one step that could have said the whole idea was wrong.
+
+**Two decisions taken now rather than discovered later.**
+
+*The debugger is a build flag.* The break protocol hands a handler
+frames with the function, file, line, column and the locals by name,
+and those come from the interpreter's continuation frames. A compiled
+procedure has none, so compiled code is invisible to a break and absent
+from a trace unless it is told to keep them -- and deviation 7's own
+note applies, a trace that skips frames lies. James chose: compile
+twice. A debug build emits frame bookkeeping, a release build does not.
+It changes what every emitted procedure looks like, so it is settled
+before the generator exists.
+
+*Compiled recursion is machine-stack recursion, and that is a
+regression to measure.* Deviation 7 is resolved because the executor
+stopped using the Fortran stack: it is a loop over a heap continuation
+stack, which is why a non-tail-recursive function reaches 100,000 deep
+where the JVM stops near 11,000. Compile that to a Fortran procedure
+calling itself and it is back on the machine stack, where the existing
+native-nesting bound is 2,200 (`CLOTRAN_MAX_DEPTH`). `recur` is a loop
+either way, because Clojure guarantees constant stack for it, not
+because Fortran cannot recurse -- `-frecursive` is on and we already
+depend on it. The number for compiled code is measured and published,
+not assumed.
+
+**Scope, set 2026-09-23.** Prebuilt third-party binaries are OUT for
+now. A package manager fetches source plus a build recipe and builds on
+the target, which is what Homebrew and Julia's ecosystem do, and which
+is what makes other architectures work without us shipping anything.
+Three things keep that door open at no cost: the C ABI on the dynamic
+path, a version on every manifest from the first compiled package, and
+the compiler and target recorded in it.
+
+**The callback direction shares all of this.** A Fortran solver calling
+a Clojure integrand needs the same surface plus a generated adapter
+with the solver's exact declared interface -- `scripts/bind-fortran`
+run backwards, since it already parses those declarations. It does not
+need the compiler at all, only the speed the compiler would give the
+callback.
+
+**In order, from here.**
+
+2. The exporter: a namespace's resolved tree as Clojure data.
+3. The generator for the straight-line subset -- constants, locals,
+   `if`, `do`, `let*`, and calls through Var handles -- with every
+   other node kind emitting a call back into the interpreter for that
+   subtree. That escape hatch is what makes the generator correct from
+   the first node kind it handles.
+4. `loop` and `recur` as a real Fortran loop.
+5. `clotran compile`, producing a package; then a linked binary.
+6. `clojure.core` compiled.
+7. Unboxed arithmetic where the analyser can prove a number, which is
+   where the scientific loops are.
+
+Correctness comes free: `scripts/oracle` already runs every form
+through `clj` and through clotran and compares values, so the compiled
+path becomes a third leg and no expected value is ever typed by hand.
 Measured against `scripts/bench` at each step, or not claimed.
 
+**What this does not need.** LLVM, ORC, machine code, or any change to
+the value representation. An in-process JIT stays what the decision
+record below says: the day a profile shows node dispatch is what a real
+program waits on. Nothing here forecloses it, because the input either
+way is the resolved tree.
 ## Decisions that still hold
 
 **The value type has no `FINAL`.** Copying a `cons_value` (nine

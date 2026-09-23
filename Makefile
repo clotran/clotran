@@ -123,7 +123,7 @@ BT = $(B)/test
 
 unit-tests = gc_test persistent_vector_test persistent_list_test persistent_array_map_test \
 	persistent_hash_map_test env_test assoc_test printer_test reader_test eval_test bigint_test \
-	bigdec_test
+	bigdec_test abi_test
 test-bins = $(addprefix $(BT)/,$(unit-tests))
 
 .PHONY: all test crosscheck clean
@@ -161,6 +161,12 @@ $(B)/Printer.o: $(B)/BigInt.o $(B)/BigDec.o $(B)/GC.o $(B)/PersistentList.o $(B)
 # matching real Clojure's own regex literal (LispReader compiles
 # straight to a Pattern, not to a string). See Regex.f90.
 $(B)/LispReader.o: $(B)/BigInt.o $(B)/BigDec.o $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/Regex.o
+# The C-callable runtime surface. Linked into clotran-bin so that a
+# compiled namespace -- loaded through the door, or linked in -- and an
+# embedder both find the same symbols. It is the LAST module: it sits
+# on top of Eval, nothing sits on it.
+$(B)/ClotranABI.o: $(B)/GC.o $(B)/PersistentVector.o $(B)/Namespace.o $(B)/Eval.o
+
 $(B)/Eval.o: $(B)/BigInt.o $(B)/BigDec.o $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/Env.o \
 	$(B)/Namespace.o $(B)/Printer.o $(B)/Regex.o $(B)/NativeArray.o $(B)/DynLoad.o $(S)/analyze.inc $(S)/exec.inc $(S)/repl.inc $(S)/tasks.inc $(S)/sorted.inc $(S)/hosttable.inc
 
@@ -190,7 +196,8 @@ packages: packages/chemsol/libchemsol.$(SOEXT) packages/blas/libblas.$(SOEXT)
 data-objects = $(B)/BigInt.o $(B)/BigDec.o $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(B)/Assoc.o \
 	$(B)/PersistentList.o $(B)/PersistentVector.o $(B)/NativeArray.o $(B)/Printer.o
 reader-objects = $(B)/LispReader.o $(B)/Regex.o $(B)/regex_shim.o
-eval-objects = $(data-objects) $(B)/Env.o $(B)/Namespace.o $(reader-objects) $(B)/DynLoad.o $(B)/Eval.o
+eval-objects = $(data-objects) $(B)/Env.o $(B)/Namespace.o $(reader-objects) $(B)/DynLoad.o $(B)/Eval.o \
+	$(B)/ClotranABI.o
 LINK_ICU = $(ICU_LIBS) $(LIBCXX) -lpthread
 
 clotran-bin: $(eval-objects) $(S)/main.f90 $(ICU_LIBS)
@@ -223,6 +230,13 @@ $(BT)/reader_test: $(data-objects) $(reader-objects) $(T)/reader_test.f90 $(ICU_
 	$(FC) $(FCFLAGS) -c $(T)/reader_test.f90 -o $(BT)/reader_test.o && $(FC) $(LDFLAGS) -o $@ $(data-objects) $(reader-objects) $(BT)/reader_test.o $(LINK_ICU)
 $(BT)/eval_test: $(eval-objects) $(T)/eval_test.f90 $(ICU_LIBS) | $(BT) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -c $(T)/eval_test.f90 -o $(BT)/eval_test.o && $(FC) $(LDFLAGS) -o $@ $(eval-objects) $(BT)/eval_test.o $(LINK_ICU)
+
+# abi_test declares every entry point itself and uses no clotran
+# module, which is the point of it -- so it compiles with -I nowhere
+# near build/. It still LINKS the objects, the way a generated
+# namespace linked into a binary will.
+$(BT)/abi_test: $(eval-objects) $(T)/abi_test.f90 $(ICU_LIBS) | $(BT) $(FCSTAMP)
+	$(FC) $(FCFLAGS) -c $(T)/abi_test.f90 -o $(BT)/abi_test.o && $(FC) $(LDFLAGS) -o $@ $(eval-objects) $(BT)/abi_test.o $(LINK_ICU)
 
 # The gate. Three layers (CLAUDE.md): the host tests, the host-level
 # checks that need core.clj loaded, and the differential oracle against
