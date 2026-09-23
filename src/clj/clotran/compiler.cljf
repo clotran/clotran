@@ -75,6 +75,21 @@
        import :: c_int
        integer(c_int), value :: dst, src
      end subroutine clotran_copy
+     function clotran_tag(slot) bind(C, name=\"clotran_tag\") result(t)
+       import :: c_int
+       integer(c_int), value :: slot
+       integer(c_int) :: t
+     end function clotran_tag
+     function clotran_int(slot) bind(C, name=\"clotran_int\") result(n)
+       import :: c_int, c_int64_t
+       integer(c_int), value :: slot
+       integer(c_int64_t) :: n
+     end function clotran_int
+     function clotran_real(slot) bind(C, name=\"clotran_real\") result(x)
+       import :: c_int, c_double
+       integer(c_int), value :: slot
+       real(c_double) :: x
+     end function clotran_real
      function clotran_bool(slot) bind(C, name=\"clotran_bool\") result(b)
        import :: c_int
        integer(c_int), value :: slot
@@ -132,8 +147,6 @@ end module clotran_rt_decl
 
 ;;; ---- what the generator understands ---------------------------------
 
-(def ^:private handled-ops #{:const :local :if :do :call :var :loop :recur})
-
 (defn- spellable?
   "A constant a generated procedure can write into its own source.
   Everything else -- a collection, a Var, a string, the function
@@ -141,14 +154,16 @@ end module clotran_rt_decl
   instead.
 
   A STRING could be written as a Fortran literal, and deliberately is
-  not. It would need its quotes doubled, its newlines turned into
-  concatenations and its byte length counted by hand, and every one of
-  those is a way to emit a file that does not compile or, worse, one
-  that compiles into a different string. The pool already holds the
-  exact value."
+  not: its quotes, newlines and byte length are each a way to emit a
+  file that compiles into a different string. A BigInt is `integer?`
+  and must not be written as a long, so this asks `int?`. A double
+  that is not finite has no Fortran spelling, and Long/MIN_VALUE
+  cannot be written as a negative literal because its magnitude does
+  not fit."
   [v]
   (or (nil? v) (true? v) (false? v)
-      (integer? v) (float? v)))
+      (and (int? v) (not= v Long/MIN_VALUE))
+      (and (double? v) (not (NaN? v)) (not (infinite? v)))))
 
 (defn- walk-nodes
   "Every node in the tree, depth first."
@@ -158,7 +173,7 @@ end module clotran_rt_decl
 (def ^:private compiled-ops
   "The node kinds the generator emits code for. Everything else goes
   through the escape hatch, which is slower and still correct."
-  #{:const :local :if :do :call :var :loop :recur})
+  #{:const :local :if :do :call :var :let :loop :recur})
 
 (defn- pooled
   "The value this node needs out of the pool, or nil if it needs none.
@@ -191,6 +206,14 @@ end module clotran_rt_decl
       (true? (nth (first arities) 1)) "variadic"
       (seq captures) "closes over an outer local"
       (not= -1 selfslot) "refers to itself by name"
+      ;; A recur inside a subtree the interpreter runs would rebind the
+      ;; frame and hand back the recur marker as a VALUE; the compiled
+      ;; loop around it would never go round again. Declined rather
+      ;; than wrong.
+      (some (fn [nd] (and (not (compiled-ops (:op nd)))
+                          (some #(= :recur (:op %)) (rest (walk-nodes nd)))))
+            nodes)
+      "a recur inside a form the generator hands to the interpreter"
       :else nil)))
 
 (defn- fn-pool
@@ -199,6 +222,121 @@ end module clotran_rt_decl
   than one per use."
   [body]
   (->> (walk-nodes body) (keep pooled) distinct vec))
+
+;;; ---- types ----------------------------------------------------------
+;;;
+;;; What makes compiled code FAST rather than merely compiled. A profile
+;;; of the first compiled loop had two thirds of its time in the generic
+;;; numeric path -- builtin dispatch, tag checks, argument slots -- for
+;;; an addition. A value PROVEN to be a long is a Fortran integer(8),
+;;; and (+ i 1) on two of them is one add and one overflow test.
+;;;
+;;; The rules are Clojure's own, which is why they are not a deviation:
+;;; a loop or let local takes the primitive type of its init, so
+;;; (loop [i 0] ...) has a primitive long `i`, and a parameter with no
+;;; hint is boxed. What real Clojure does with :inline on +, <, inc and
+;;; the rest -- call Numbers directly rather than through the Var -- is
+;;; what this does too.
+;;;
+;;; Types: :long, :double, :bool, :any (boxed), :none (a recur, which
+;;; produces nothing to its surroundings).
+
+(defn- prim? [t] (#{:long :double :bool} t))
+(defn- num? [t] (#{:long :double} t))
+(defn- join [a b] (cond (= a :none) b (= b :none) a (= a b) a :else :any))
+
+(def ^:private op-kinds
+  '{+ :arith, - :arith, * :arith, / :div, inc :inc, dec :dec,
+    < :cmp, > :cmp, <= :cmp, >= :cmp, == :cmp, = :eq,
+    zero? :pred, pos? :pred, neg? :pred})
+
+(def ^:private fortran-op
+  '{+ "+", - "-", * "*", / "/", < "<", > ">", <= "<=", >= ">=", == "==", = "=="})
+
+(defn- head-op
+  "[kind sym] for a call head that is one of the numeric ops, or nil.
+
+  A head analysis FOLDED to a builtin carries the builtin's name on
+  :builtin -- the object is fresh per analysis, so identity cannot
+  tell + from anything else. A head that is still a Var lookup is
+  recognised by being the very Var clojure.core has for the op."
+  [head]
+  (let [s (case (:op head)
+            :const (some-> (:builtin head) name symbol)
+            :var (some (fn [s] (when (identical? (:p1 head) (ns-resolve 'clojure.core s)) s))
+                       (keys op-kinds))
+            nil)]
+    (when-let [k (and s (op-kinds s))] [k s])))
+
+(declare infer)
+
+(defn- const-type [v]
+  (cond (and (int? v) (spellable? v)) :long
+        (and (double? v) (spellable? v)) :double
+        (or (true? v) (false? v)) :bool
+        :else :any))
+
+(defn- call-type [nd env]
+  (let [[kind _] (head-op (first (:children nd)))
+        ts (mapv #(infer % env) (rest (:children nd)))
+        n (count ts)]
+    (case kind
+      :arith (if (and (= n 2) (every? num? ts))
+               (if (every? #{:long} ts) :long :double)
+               :any)
+      :div (if (and (= n 2) (every? num? ts) (some #{:double} ts)) :double :any)
+      (:inc :dec) (if (and (= n 1) (num? (first ts))) (first ts) :any)
+      ;; one boxed operand is fine: its tag is checked at run time
+      :cmp (if (and (= n 2) (some num? ts) (every? #(or (num? %) (= :any %)) ts)) :bool :any)
+      :eq (if (and (= n 2) (num? (first ts)) (= (first ts) (second ts))) :bool :any)
+      :pred (if (and (= n 1) (num? (first ts))) :bool :any)
+      :any)))
+
+(defn- bind-types
+  "The types a let's slots take from their inits, in order, each init
+  seeing the bindings before it."
+  [nd env]
+  (let [kids (:children nd) n (:i2 nd) base (:p1 nd)]
+    (reduce (fn [e i] (assoc-in e [:slots (+ base i)] (infer (nth kids i) e)))
+            env (range n))))
+
+(defn- loop-env
+  "A loop's slots: the join of each init's type and every recur's
+  argument type for that slot, iterated until it settles. A slot that
+  does not settle is boxed."
+  [nd env]
+  (let [kids (:children nd) n (:i2 nd) base (:p1 nd)]
+    (loop [e (bind-types nd env) k 0]
+      (let [acc (atom {})
+            _ (infer (nth kids n) (assoc e :recurs acc))
+            rts (get @acc base [])
+            e' (reduce (fn [e i]
+                         (update-in e [:slots (+ base i)]
+                                    (fn [t] (reduce join t (map #(nth % i :any) rts)))))
+                       e (range n))]
+        (cond (= e' e) e
+              (> k 4) (reduce (fn [e i] (assoc-in e [:slots (+ base i)] :any)) e (range n))
+              :else (recur e' (inc k)))))))
+
+(defn- infer
+  "The type a node's value is PROVEN to have, given the types of the
+  slots in scope."
+  [nd env]
+  (case (:op nd)
+    :const (const-type (:p1 nd))
+    :local (get-in env [:slots (:i2 nd)] :any)
+    :do (if (seq (:children nd)) (last (mapv #(infer % env) (:children nd))) :any)
+    :if (let [[t th el] (:children nd)]
+          (infer t env)
+          (join (infer th env) (if el (infer el env) :any)))
+    :let (infer (nth (:children nd) (:i2 nd)) (bind-types nd env))
+    :loop (infer (nth (:children nd) (:i2 nd)) (loop-env nd env))
+    :recur (do (when-let [a (:recurs env)]
+                 (swap! a update (nth (:p1 nd) 1) (fnil conj [])
+                        (mapv #(infer % env) (:children nd))))
+               :none)
+    :call (call-type nd env)
+    :any))
 
 ;;; ---- emitting -------------------------------------------------------
 
@@ -221,8 +359,8 @@ end module clotran_rt_decl
     (nil? v)     [(str "call clotran_set_nil(" slot ")")]
     (true? v)    [(str "call clotran_set_bool(" slot ", 1_c_int)")]
     (false? v)   [(str "call clotran_set_bool(" slot ", 0_c_int)")]
-    (integer? v) [(str "call clotran_set_int(" slot ", " v "_c_int64_t)")]
-    (float? v)   [(str "call clotran_set_real(" slot ", " (double v) "_c_double)")]
+    (int? v)     [(str "call clotran_set_int(" slot ", " v "_c_int64_t)")]
+    (double? v)  [(str "call clotran_set_real(" slot ", " v "_c_double)")]
     :else        (throw (ex-info "not spellable" {:value v}))))
 
 ;; A procedure's temporaries are slots b+2 upwards; b+1 holds the frame
@@ -230,7 +368,241 @@ end module clotran_rt_decl
 ;; which is what the frame at the top has to reserve.
 (defn- fresh [st] [(:next st) (-> st (update :next inc) (update :high max (:next st)))])
 
-(declare gen)
+;; Primitive values live in Fortran variables: a slot's own is l<slot>,
+;; d<slot> or q<slot> by type, and a temporary is ti/td/tl<n>.
+(defn- slot-var [slot t] (str (case t :long "l" :double "d" :bool "q") slot))
+
+(defn- declare-var [st nm t] (update st :decls (fnil conj #{}) [nm t]))
+
+(defn- tmp [st t]
+  (let [k (:ntmp st 0)
+        nm (str (case t :long "ti" :double "td" :bool "tl") k)]
+    [nm (-> st (assoc :ntmp (inc k)) (declare-var nm t))]))
+
+(defn- box
+  "The statement that puts a primitive expression into a slot as a value."
+  [slot t expr]
+  (case t
+    :long (str "call clotran_set_int(b + " slot ", " expr ")")
+    :double (str "call clotran_set_real(b + " slot ", " expr ")")
+    :bool (str "call clotran_set_bool(b + " slot ", merge(1_c_int, 0_c_int, " expr "))")))
+
+(defn- unbox [t slot]
+  (case t
+    :long (str "clotran_int(b + " slot ")")
+    :double (str "clotran_real(b + " slot ")")
+    :bool (str "(clotran_bool(b + " slot ") /= 0)")))
+
+(defn- coerce
+  "A long where a double is wanted is widened, as Clojure's Numbers
+  does. Nothing else is ever asked for."
+  [expr from to]
+  (cond (= from to) expr
+        (and (= from :long) (= to :double)) (str "real(" expr ", c_double)")
+        :else (throw (ex-info "bad coerce" {:from from :to to}))))
+
+(defn- lit
+  "A primitive literal, parenthesised: a negative one after an operator
+  is two operators in a row, which Fortran does not allow."
+  [v t]
+  (case t
+    :long (str "(" v "_c_int64_t)")
+    :double (str "(" (double v) "_c_double)")
+    :bool (if v ".true." ".false.")))
+
+(def ^:private err-return
+  ["if (st /= 0) then" "   call clotran_frame_leave(b)" "   return" "end if"])
+
+(declare gen gp)
+
+(defn- slow-call
+  "The GENERIC call, for when the fast path cannot answer: an overflow
+  about to happen, or an operand whose tag is not a number. It is the
+  interpreter's own path, so it raises exactly what Clojure raises;
+  when it does not raise, its answer is read back as the type the
+  surrounding code expects.
+
+  operands are [expr type] pairs, where the type :slot means the
+  expression is already a slot holding a value."
+  [nd operands r rt st]
+  (let [head (first (:children nd))
+        hs (get (:pool st) (pooled head))
+        n (count operands)
+        [blk st] (reduce (fn [[bl st] _] (let [[s st'] (fresh st)] [(conj bl s) st']))
+                         [[] st] (range n))
+        [res st] (fresh st)]
+    [(concat (map (fn [s [e t]]
+                    (if (= t :slot)
+                      (str "call clotran_copy(b + " s ", b + " e ")")
+                      (box s t e)))
+                  blk operands)
+             [(str "st = clotran_call_slots(b + " res ", b + " hs ", b + "
+                   (dec (first blk)) ", " n "_c_int)")]
+             err-return
+             [(str r " = " (unbox rt res))])
+     st]))
+
+(defn- lit-long
+  "The value of a long LITERAL as `lit` writes it, or nil for anything
+  else."
+  [e]
+  (some-> (re-matches #"\((-?\d+)_c_int64_t\)" e) second parse-long))
+
+(defn- ovf
+  "True when a long add, subtract or multiply is about to overflow.
+  Checked BEFORE the operation, because signed overflow in Fortran is
+  not defined. A multiply is judged in double precision, with a margin
+  below 2^63; a product that is merely large takes the generic path,
+  which answers it exactly.
+
+  When the right operand is a LITERAL its sign is known, and only the
+  half of the test that can run is written. Writing both let gfortran
+  fold the other half -- -huge - 1 - 1 -- and refuse the file for an
+  overflow in code that could never execute."
+  [sym a b]
+  (let [h "huge(0_c_int64_t)"
+        k (lit-long b)]
+    (case sym
+      (+ -) (let [pos (str "(" a " > " h (if (= sym '+) " - " " + ") b ")")
+                  neg (str "(" a " < -" h " - 1_c_int64_t " (if (= sym '+) "- " "+ ") b ")")]
+              (cond
+              (nil? k) (if (= sym '+)
+                         (str "(" b " > 0 .and. " pos ") .or. (" b " < 0 .and. " neg ")")
+                         (str "(" b " < 0 .and. " pos ") .or. (" b " > 0 .and. " neg ")"))
+              (zero? k) ".false."
+              ;; + overflows upward only for a positive b; - for a negative
+              (= (pos? k) (= sym '+)) pos
+              :else neg))
+      * (str "abs(real(" a ", c_double) * real(" b ", c_double)) > 9.0e18_c_double"))))
+
+(defn- gp-call
+  "A numeric op, primitive in and out. Answers [code expr state] with
+  expr a Fortran variable of type t."
+  [nd t st]
+  (let [[kind sym] (head-op (first (:children nd)))
+        args (vec (rest (:children nd)))
+        ats (mapv #(infer % (:env st)) args)
+        fop (fortran-op sym)]
+    (case kind
+      :arith
+      (let [[c1 a st] (gp (args 0) t st)
+            [c2 b st] (gp (args 1) t st)
+            [r st] (tmp st t)]
+        (if (= t :double)
+          [(concat c1 c2 [(str r " = " a " " fop " " b)]) r st]
+          (let [[slow st] (slow-call nd [[a :long] [b :long]] r :long st)]
+            [(concat c1 c2 [(str "if (" (ovf sym a b) ") then")]
+                     (map #(str "   " %) slow)
+                     ["else" (str "   " r " = " a " " fop " " b) "end if"])
+             r st])))
+
+      :div
+      (let [[c1 a st] (gp (args 0) :double st)
+            [c2 b st] (gp (args 1) :double st)
+            [r st] (tmp st :double)]
+        [(concat c1 c2 [(str r " = " a " / " b)]) r st])
+
+      (:inc :dec)
+      (let [[c1 a st] (gp (args 0) t st)
+            [r st] (tmp st t)
+            op (if (= kind :inc) " + " " - ")]
+        (if (= t :double)
+          [(concat c1 [(str r " = " a op "1.0_c_double")]) r st]
+          (let [edge (if (= kind :inc) "huge(0_c_int64_t)" "(-huge(0_c_int64_t) - 1_c_int64_t)")
+                [slow st] (slow-call nd [[a :long]] r :long st)]
+            [(concat c1 [(str "if (" a " == " edge ") then")]
+                     (map #(str "   " %) slow)
+                     ["else" (str "   " r " = " a op "1_c_int64_t") "end if"])
+             r st])))
+
+      :pred
+      (let [at (ats 0)
+            [c1 a st] (gp (args 0) at st)
+            [r st] (tmp st :bool)
+            zero (lit 0 at)]
+        [(concat c1 [(str r " = " a (case sym zero? " == " pos? " > " neg? " < ") zero)])
+         r st])
+
+      :eq
+      (let [[c1 a st] (gp (args 0) (ats 0) st)
+            [c2 b st] (gp (args 1) (ats 1) st)
+            [r st] (tmp st :bool)]
+        [(concat c1 c2 [(str r " = " a " == " b)]) r st])
+
+      :cmp
+      (if (every? num? ats)
+        (let [w (if (some #{:double} ats) :double :long)
+              [c1 a st] (gp (args 0) w st)
+              [c2 b st] (gp (args 1) w st)
+              [r st] (tmp st :bool)]
+          [(concat c1 c2 [(str r " = " a " " fop " " b)]) r st])
+        ;; One operand is boxed. Check its tag: a long or a double is
+        ;; compared unboxed, anything else takes the generic call. The
+        ;; ORDER is kept -- (< i n) is not (< n i).
+        (let [bi (if (num? (ats 0)) 1 0)
+              ni (- 1 bi)
+              nt (ats ni)
+              [cn x st] (gp (args ni) nt st)
+              ;; a boxed local that cannot change in this loop was read
+              ;; and unboxed once before it (see :loop); otherwise the
+              ;; tag and value are read here, every time
+              h (when (= :local (:op (args bi))) (get (:hoisted st) (:i2 (args bi))))
+              [cb s st] (if h [[] (:slot h) st] (gen (args bi) st))
+              tagx (if h (:tag h) (str "clotran_tag(b + " s ")"))
+              intx (if h (:i h) (str "clotran_int(b + " s ")"))
+              realx (if h (:d h) (str "clotran_real(b + " s ")"))
+              [r st] (tmp st :bool)
+              ord (fn [xe ye] (if (= bi 1) (str xe " " fop " " ye) (str ye " " fop " " xe)))
+              [slow st] (slow-call nd (if (= bi 1) [[x nt] [s :slot]] [[s :slot] [x nt]]) r :bool st)]
+          [(concat cn cb
+                   [(str "if (" tagx " == 2_c_int) then")
+                    (str "   " r " = " (if (= nt :double)
+                                          (ord x (str "real(" intx ", c_double)"))
+                                          (ord x intx)))
+                    (str "else if (" tagx " == 3_c_int) then")
+                    (str "   " r " = " (ord (coerce x nt :double) realx))
+                    "else"]
+                   (map #(str "   " %) slow)
+                   ["end if"])
+           r st])))))
+
+(defn- gp
+  "A node as a PRIMITIVE of type `want`: [code expr state], expr being a
+  Fortran expression of that type. Only asked of a node whose inferred
+  type is `want`, or a long where a double is wanted."
+  [nd want st]
+  (let [t (infer nd (:env st))]
+    (cond
+      (and (= :const (:op nd)) (prim? t))
+      [[] (coerce (lit (:p1 nd) t) t want) st]
+
+      (and (= :local (:op nd)) (prim? t))
+      [[] (coerce (slot-var (:i2 nd) t) t want) st]
+
+      (and (= :call (:op nd)) (prim? t) (head-op (first (:children nd))))
+      (let [[c e st] (gp-call nd t st)] [c (coerce e t want) st])
+
+      ;; Anything else whose type is PROVEN: generate it as a value and
+      ;; read the primitive back out. The proof is what makes the read
+      ;; safe.
+      :else
+      (let [[c s st] (gen nd st)] [c (coerce (unbox t s) t want) st]))))
+
+(defn- flush-typed
+  "Every primitive local in scope, written back into the frame. The
+  interpreter reads locals from the frame, so this runs before a
+  subtree is handed to it; it cannot rebind one (a recur inside such a
+  subtree is declined), so nothing has to be read back afterwards."
+  [st]
+  (let [typed (filter (fn [[_ t]] (prim? t)) (get-in st [:env :slots]))]
+    (if (empty? typed)
+      [[] st]
+      (let [[s st] (fresh st)]
+        [(mapcat (fn [[slot t]]
+                   [(box s t (slot-var slot t))
+                    (str "call clotran_frame_put(b + 1, " slot "_c_int, b + " s ")")])
+                 typed)
+         st]))))
 
 (defn- fallback
   "A node kind the generator has not learned, handed back to the
@@ -239,45 +611,40 @@ end module clotran_rt_decl
 
   This is why the generator can be permanently incomplete without the
   language losing anything. An unhandled construct costs the
-  interpreter's speed for that subtree and nothing else -- not
-  correctness, and not the whole function."
+  interpreter's speed for that subtree and nothing else."
   [nd st]
   (let [p {:kind :node :value (:node nd)}
+        [fc st] (flush-typed st)
         [r st] (fresh st)]
-    [[(str "st = clotran_eval_node(b + " r ", b + " (get (:pool st) p) ", b + 1)")
-      "if (st /= 0) then"
-      "   call clotran_frame_leave(b)"
-      "   return"
-      "end if"]
+    [(concat fc
+             [(str "st = clotran_eval_node(b + " r ", b + " (get (:pool st) p) ", b + 1)")]
+             err-return)
      r st]))
 
-
 (defn- gen-into
-  "Generate a node so that its value ends up in slot `dst`.
-
-  A constant, a local and a pooled value can be put there directly;
-  anything else is generated where it likes and then copied. The point
-  is a call's argument block, where the direct cases are almost all of
-  them and the copy was pure overhead."
+  "Generate a node so that its value ends up in slot `dst`. A constant,
+  a local and a pooled value are put there directly; anything else is
+  generated where it likes and then copied."
   [nd dst st]
-  (cond
-    ;; a :var or a :const entry IS the value and can be copied. A
-    ;; :node entry is the SUBTREE and has to be run, so it falls
-    ;; through to gen -- copying it handed the argument the node
-    ;; itself, which is how (get {:a 1} :a) came back nil.
-    (#{:var :const} (:kind (pooled nd)))
-    [[(str "call clotran_copy(b + " dst ", b + " (get (:pool st) (pooled nd)) ")")] st]
+  (let [t (when (= :local (:op nd)) (get-in st [:env :slots (:i2 nd)]))]
+    (cond
+      ;; a :var or :const entry IS the value; a :node entry is a subtree
+      ;; and has to be run
+      (#{:var :const} (:kind (pooled nd)))
+      [[(str "call clotran_copy(b + " dst ", b + " (get (:pool st) (pooled nd)) ")")] st]
 
-    (= :const (:op nd))
-    [(emit-const (str "b + " dst) (:p1 nd)) st]
+      (= :const (:op nd))
+      [(emit-const (str "b + " dst) (:p1 nd)) st]
 
-    (= :local (:op nd))
-    [[(str "call clotran_frame_get(b + " dst ", b + 1, " (:i2 nd) "_c_int)")] st]
+      (and (= :local (:op nd)) (prim? t))
+      [[(box dst t (slot-var (:i2 nd) t))] st]
 
-    :else
-    (let [[c s st] (gen nd st)]
-      [(conj (vec c) (str "call clotran_copy(b + " dst ", b + " s ")")) st])))
+      (= :local (:op nd))
+      [[(str "call clotran_frame_get(b + " dst ", b + 1, " (:i2 nd) "_c_int)")] st]
 
+      :else
+      (let [[c s st] (gen nd st)]
+        [(conj (vec c) (str "call clotran_copy(b + " dst ", b + " s ")")) st]))))
 
 (defn- gen-seq
   "Generate each node in turn, answering the code and the slot the LAST
@@ -288,126 +655,184 @@ end module clotran_rt_decl
               [(into code c) s st']))
           [[] nil st] nodes))
 
+(defn- bind-slots
+  "Bind a let's or loop's slots in order. A primitive slot is assigned
+  its Fortran variable; a boxed one goes into the frame. `types` gives
+  a loop's settled types; a let's are inferred as it goes."
+  [kids n base types st]
+  (reduce (fn [[code st] i]
+            (let [slot (+ base i)
+                  t (or (get types slot) (infer (nth kids i) (:env st)))]
+              (if (prim? t)
+                (let [[c e st] (gp (nth kids i) t st)
+                      v (slot-var slot t)]
+                  [(into code (conj (vec c) (str v " = " e)))
+                   (-> st (declare-var v t) (assoc-in [:env :slots slot] t))])
+                (let [[c s st] (gen (nth kids i) st)]
+                  [(into code (conj (vec c) (str "call clotran_frame_put(b + 1, " slot "_c_int, b + " s ")")))
+                   (assoc-in st [:env :slots slot] :any)]))))
+          [[] st] (range n)))
+
+(defn- hoist-invariants
+  "Read and unbox, ONCE and before the loop, every boxed local the
+  loop body compares and cannot change: a parameter, or a local bound
+  outside the loop. Locals are immutable and only a recur rebinds
+  one, and a recur rebinds only its own loop's slots -- so these are
+  fixed for the loop's whole run, and reading them every iteration
+  was three runtime calls a time round for nothing. It is what the
+  JVM's JIT does by speculation; here it is known."
+  [body own st]
+  (let [nparams (:nparams st 0)
+        slots (->> (walk-nodes body)
+                   (filter #(= :local (:op %)))
+                   (map :i2)
+                   (remove own)
+                   (remove #(get (:hoisted st) %))
+                   (filter #(or (< % nparams) (= :any (get-in st [:env :slots %]))))
+                   (remove #(prim? (get-in st [:env :slots %])))
+                   distinct)]
+    (reduce (fn [[code st] slot]
+              (let [[s st] (fresh st)
+                    k (:ntmp st 0)
+                    tg (str "tg" k) hi (str "hi" k) hd (str "hd" k)
+                    st (-> st (assoc :ntmp (inc k))
+                           (declare-var tg :tag) (declare-var hi :long) (declare-var hd :double)
+                           (assoc-in [:hoisted slot] {:slot s :tag tg :i hi :d hd}))]
+                [(into code [(str "call clotran_frame_get(b + " s ", b + 1, " slot "_c_int)")
+                             (str tg " = clotran_tag(b + " s ")")
+                             (str hi " = 0_c_int64_t")
+                             (str hd " = 0.0_c_double")
+                             (str "if (" tg " == 2_c_int) " hi " = clotran_int(b + " s ")")
+                             (str "if (" tg " == 3_c_int) " hd " = clotran_real(b + " s ")")])
+                 st]))
+            [[] st] slots)))
+
 (defn- gen
-  "One node. Answers [code slot state]: the statements that compute it,
-  the temporary its value lands in, and the slot state after."
+  "One node, as a VALUE. Answers [code slot state]: the statements that
+  compute it, the slot its value lands in, and the state after."
   [nd st]
   (if (not (compiled-ops (:op nd)))
     (fallback nd st)
     (if-let [p (pooled nd)]
-    ;; already sitting in its slot from the top of the procedure, and a
-    ;; Var was derefed there too. Nothing to emit: hand back the slot.
-    [[] (get (:pool st) p) st]
-    (case (:op nd)
-      :const (let [[s st] (fresh st)]
-               [(emit-const (str "b + " s) (:p1 nd)) s st])
+      ;; already in its slot from the top of the procedure
+      [[] (get (:pool st) p) st]
+      (let [t (infer nd (:env st))]
+        (case (:op nd)
+          :const (let [[s st] (fresh st)]
+                   [(emit-const (str "b + " s) (:p1 nd)) s st])
 
-      :local (let [[s st] (fresh st)]
-               ;; locals live in the frame at b+1, by the index analysis
-               ;; already assigned; :i2 is that index
-               [[(str "call clotran_frame_get(b + " s ", b + 1, " (:i2 nd) "_c_int)")] s st])
+          :local (let [[s st] (fresh st)]
+                   (if (prim? t)
+                     [[(box s t (slot-var (:i2 nd) t))] s st]
+                     [[(str "call clotran_frame_get(b + " s ", b + 1, " (:i2 nd) "_c_int)")] s st]))
 
-      :do (let [[code s st] (gen-seq (:children nd) st)]
-            (if s [code s st] (gen {:op :const :p1 nil} st)))
+          :do (let [[code s st] (gen-seq (:children nd) st)]
+                (if s [code s st] (gen {:op :const :p1 nil} st)))
 
-      :if (let [[tc ts st] (gen (first (:children nd)) st)
-                [r st] (fresh st)
-                [thc ths st] (gen (second (:children nd)) st)
-                [elc els st] (if (> (count (:children nd)) 2)
-                               (gen (nth (:children nd) 2) st)
-                               (gen {:op :const :p1 nil} st))]
-            [(concat tc
-                     [(str "if (clotran_bool(b + " ts ") /= 0) then")]
-                     (map #(str "   " %) thc)
-                     [(str "   call clotran_copy(b + " r ", b + " ths ")")
-                      "else"]
-                     (map #(str "   " %) elc)
-                     [(str "   call clotran_copy(b + " r ", b + " els ")")
-                      "end if"])
-             r st])
+          :if (let [[test th el] (:children nd)
+                    tt (infer test (:env st))
+                    [tc cond st] (if (= :bool tt)
+                                   (gp test :bool st)
+                                   (let [[c s st] (gen test st)]
+                                     [c (str "clotran_bool(b + " s ") /= 0") st]))
+                    [r st] (fresh st)
+                    [thc ths st] (gen th st)
+                    [elc els st] (if el (gen el st) (gen {:op :const :p1 nil} st))
+                    ;; a recur branch produces nothing anyone reads
+                    copy (fn [br s] (when-not (= :recur (:op br))
+                                      [(str "   call clotran_copy(b + " r ", b + " s ")")]))]
+                [(concat tc
+                         [(str "if (" cond ") then")]
+                         (map #(str "   " %) thc)
+                         (copy th ths)
+                         ["else"]
+                         (map #(str "   " %) elc)
+                         (copy (or el {:op :const}) els)
+                         ["end if"])
+                 r st])
 
-      ;; A LOOP is a Fortran loop, and that is the point of compiling.
-      ;;
-      ;; Clojure guarantees `recur` is constant stack, so it has to be a
-      ;; jump in any correct implementation -- this is not a workaround
-      ;; for anything Fortran cannot do. The inits go into the frame
-      ;; slots analysis assigned, the body runs, and a `recur` inside it
-      ;; rebinds those slots and raises a flag; the loop reads the flag
-      ;; and goes round again.
-      ;;
-      ;; That works because `recur` is always in TAIL position. Whatever
-      ;; generated statements follow it in the same branch are copies
-      ;; into a result slot nobody reads, so running them before the
-      ;; loop test is harmless.
-      :loop (let [kids (:children nd)
-                  n (:i2 nd)
-                  base (:p1 nd)
-                  ;; whose loop a recur belongs to is the INNERMOST one, so
-                  ;; the outer flag has to come back when this one ends --
-                  ;; without that, an outer recur raised the inner flag and
-                  ;; the outer loop ran once
-                  outer (:loop st)
-                  [ic islots st] (reduce (fn [[code slots st] k]
-                                           (let [[c s st'] (gen k st)]
-                                             [(into code c) (conj slots s) st']))
-                                         [[] [] st] (take n kids))
-                  flag (str "recur" (count (:flags st)))
-                  st (update st :flags conj flag)
-                  [bc bs st] (gen (nth kids n) (assoc st :loop flag))]
-              [(concat ic
-                       (map-indexed (fn [i s]
-                                      (str "call clotran_frame_put(b + 1, " (+ base i)
-                                           "_c_int, b + " s ")"))
-                                    islots)
-                       ["do"
-                        (str "   " flag " = 0")]
-                       (map #(str "   " %) bc)
-                       [(str "   if (" flag " == 0) exit")
-                        "end do"])
-               bs (assoc st :loop outer)])
+          :call (if (and (prim? t) (head-op (first (:children nd))))
+                  ;; a numeric op on proven numbers: primitive, then boxed
+                  ;; once for whoever wants the value
+                  (let [[c e st] (gp-call nd t st)
+                        [s st] (fresh st)]
+                    [(conj (vec c) (box s t e)) s st])
+                  (let [kids (:children nd)
+                        [hc hs st] (gen (first kids) st)
+                        n (count (rest kids))
+                        [blk st] (reduce (fn [[bl st] _]
+                                           (let [[s st'] (fresh st)] [(conj bl s) st']))
+                                         [[] st] (range n))
+                        [ac st] (reduce (fn [[code st] [k d]]
+                                          (let [[c st'] (gen-into k d st)]
+                                            [(into code c) st']))
+                                        [[] st] (map vector (rest kids) blk))
+                        [r st] (fresh st)]
+                    [(concat hc ac
+                             [(str "st = clotran_call_slots(b + " r ", b + " hs ", b + "
+                                   (if (zero? n) 1 (dec (first blk))) ", " n "_c_int)")]
+                             err-return)
+                     r st]))
 
-      ;; RECUR: rebind the slots its target owns, raise that target's
-      ;; flag, and answer nil. :p1 is [_ start count], the same triple
-      ;; exec_recur reads.
-      :recur (let [start (nth (:p1 nd) 1)
-                   [ac aslots st] (reduce (fn [[code slots st] k]
-                                            (let [[c s st'] (gen k st)]
-                                              [(into code c) (conj slots s) st']))
-                                          [[] [] st] (:children nd))
-                   [r st] (fresh st)]
-               [(concat ac
-                        (map-indexed (fn [i s]
-                                       (str "call clotran_frame_put(b + 1, " (+ start i)
-                                            "_c_int, b + " s ")"))
-                                     aslots)
-                        [(str (:loop st) " = 1")
-                         (str "call clotran_set_nil(b + " r ")")])
-                r st])
+          :let (let [kids (:children nd) n (:i2 nd) outer (:env st)
+                     [bc st] (bind-slots kids n (:p1 nd) {} st)
+                     [c s st] (gen (nth kids n) st)]
+                 [(concat bc c) s (assoc st :env outer)])
 
-      :call (let [kids (:children nd)
-                  [hc hs st] (gen (first kids) st)
-                  n (count (rest kids))
-                  ;; The argument block is allocated FIRST and each
-                  ;; argument generated straight into its slot. A call
-                  ;; wants its arguments side by side, and copying them
-                  ;; there afterwards was a third of the work in a loop
-                  ;; body for nothing.
-                  [blk st] (reduce (fn [[bl st] _]
-                                     (let [[s st'] (fresh st)] [(conj bl s) st']))
-                                   [[] st] (range n))
-                  [ac st] (reduce (fn [[code st] [k d]]
-                                    (let [[c st'] (gen-into k d st)]
-                                      [(into code c) st']))
-                                  [[] st] (map vector (rest kids) blk))
-                  [r st] (fresh st)]
-              [(concat hc ac
-                       [(str "st = clotran_call_slots(b + " r ", b + " hs ", b + "
-                             (if (zero? n) 1 (dec (first blk))) ", " n "_c_int)")
-                        "if (st /= 0) then"
-                        "   call clotran_frame_leave(b)"
-                        "   return"
-                        "end if"])
-               r st])))))
+          ;; A LOOP is a Fortran loop. Clojure guarantees `recur` is
+          ;; constant stack, so it is a jump in any correct
+          ;; implementation. A recur rebinds the loop's slots and raises
+          ;; its flag; `recur` is always in TAIL position, so whatever
+          ;; statements follow it in its branch are never read.
+          :loop (let [kids (:children nd) n (:i2 nd) base (:p1 nd)
+                      outer-loop (:loop st)
+                      outer-env (:env st)
+                      lenv (loop-env nd (:env st))
+                      types (into {} (for [i (range n)]
+                                       [(+ base i) (get-in lenv [:slots (+ base i)])]))
+                      [ic st] (bind-slots kids n base types st)
+                      outer-hoisted (:hoisted st)
+                      [hc st] (hoist-invariants (nth kids n) (set (range base (+ base n))) st)
+                      flag (str "recur" (count (:flags st)))
+                      st (update st :flags conj flag)
+                      [bc bs st] (gen (nth kids n) (assoc st :loop flag))]
+                  [(concat ic hc
+                           ["do" (str "   " flag " = 0")]
+                           (map #(str "   " %) bc)
+                           [(str "   if (" flag " == 0) exit") "end do"])
+                   bs (assoc st :loop outer-loop :env outer-env :hoisted outer-hoisted)])
+
+          ;; RECUR: every argument is computed BEFORE any slot is
+          ;; rebound -- (recur (+ i 1) (+ acc i)) reads the old i twice
+          ;; -- then the slots are assigned and the flag raised.
+          :recur (let [start (nth (:p1 nd) 1)
+                       [code vals st]
+                       (reduce (fn [[code vs st] [i k]]
+                                 (let [slot (+ start i)
+                                       ts (get-in st [:env :slots slot] :any)]
+                                   (if (prim? ts)
+                                     (let [[c e st] (gp k ts st)
+                                           [tv st] (tmp st ts)]
+                                       [(into code (conj (vec c) (str tv " = " e)))
+                                        (conj vs (str (slot-var slot ts) " = " tv)) st])
+                                     (let [[c s st] (gen k st)]
+                                       [(into code c)
+                                        (conj vs (str "call clotran_frame_put(b + 1, " slot
+                                                      "_c_int, b + " s ")"))
+                                        st]))))
+                               [[] [] st] (map-indexed vector (:children nd)))
+                       [r st] (fresh st)]
+                   [(concat code vals [(str (:loop st) " = 1")]) r st]))))))
+
+(defn- decls-text
+  "The Fortran declarations for every primitive variable a procedure
+  used, grouped by type."
+  [decls]
+  (apply str
+         (for [[t ty] [[:tag "integer(c_int)"] [:long "integer(c_int64_t)"] [:double "real(c_double)"] [:bool "logical"]]
+               :let [names (sort (keep (fn [[nm k]] (when (= k t) nm)) decls))]
+               :when (seq names)]
+           (str "    " ty " :: " (str/join ", " names) "\n"))))
 
 (defn- fn-procedure
   "One arity of one function, as a Fortran subroutine."
@@ -419,11 +844,11 @@ end module clotran_rt_decl
         ;; supplies, and temporaries start after them
         pslots (into {} (map-indexed (fn [i p] [p (+ 2 i)]) pool))
         first-temp (+ 2 (count pool))
-        ;; the BODY IS A LOOP too, so (fn [x] (... (recur ...))) works:
-        ;; a recur with no enclosing loop targets the function itself,
-        ;; rebinding its parameters. An unused flag costs nothing.
+        ;; the BODY IS A LOOP too, so a recur with no enclosing loop
+        ;; rebinds the parameters. Parameters are boxed: a hint would
+        ;; be what makes one primitive, as in Clojure.
         st0 {:next first-temp :high (dec first-temp) :pool pslots
-             :flags ["recur0"] :loop "recur0"}
+             :flags ["recur0"] :loop "recur0" :env {:slots {}} :nparams nargs}
         [code res st] (gen body st0)]
     {:arity nargs
      :symbol sym
@@ -433,6 +858,7 @@ end module clotran_rt_decl
           "    integer(c_int), value :: argbase, nargs, dst\n"
           "    integer(c_int) :: b, st\n"
           "    integer(c_int) :: " (str/join ", " (:flags st)) "\n"
+          (decls-text (:decls st))
           "    st = 0\n"
           "    b = clotran_frame_enter(" (max 1 (:high st)) "_c_int)\n"
           "    call clotran_frame_new(b + 1, " nslots "_c_int)\n"

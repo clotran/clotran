@@ -64,7 +64,38 @@
     ["a map literal" (fn [a] (get {:k a} :k)) [[9] [nil]]]
     ["destructuring" (fn [v] (let [[a b] v] (+ a b))) [[[1 2]] [[10 20]]]]
     ["a hatch inside a loop" (fn [n] (loop [i 0 acc []] (if (< i n) (recur (+ i 1) (conj acc i)) (count acc))))
-     [[0] [3]]]])
+     [[0] [3]]]
+    ;; PRIMITIVE locals. Each must answer exactly what the interpreter
+    ;; answers, overflow included: the fast path hands an overflow to
+    ;; the generic call, which raises what Clojure raises.
+    ["a primitive let" (fn [a] (let [x 2 y (* x 3)] (+ y a))) [[1] [10]]]
+    ["a primitive bool local" (fn [a] (let [ok (< 1 2)] (if ok a 0))) [[5]]]
+    ["a double accumulator" (fn [n] (loop [i 0 s 0.0] (if (< i n) (recur (inc i) (+ s (* 0.5 i))) s)))
+     [[0] [4] [100]]]
+    ["compared with a double" (fn [x] (loop [i 0] (if (< i x) (recur (inc i)) i))) [[3.5] [0.0] [-1.5]]]
+    ["compared with a non-number" (fn [x] (loop [i 0] (if (< i x) (recur (inc i)) i))) [["a"] [nil] [3N]]]
+    ["long overflow in a loop" (fn [] (loop [i 9223372036854775800 k 0] (if (< k 20) (recur (+ i 1) (+ k 1)) i))) [[]]]
+    ["long overflow on multiply" (fn [] (loop [i 3 k 0] (if (< k 60) (recur (* i 3) (+ k 1)) i))) [[]]]
+    ["inc at the edge" (fn [] (let [m 9223372036854775807] (inc m))) [[]]]
+    ["a primitive local read by the interpreter" (fn [] (let [x 5] (try (+ x 1) (catch Throwable e 0)))) [[]]]
+    ["zero? pos? neg?" (fn [] (let [a 0 b 3 c -2.5] [(zero? a) (pos? b) (neg? c) (zero? b)])) [[]]]
+    ["= and == on numbers" (fn [] (let [a 2 b 2 c 2.0] [(= a b) (== a c) (= c 2.0)])) [[]]]
+    ["double division" (fn [] (let [a 1.0 b 4.0] (/ a b))) [[]]]
+    ["long division stays a ratio" (fn [] (let [a 1 b 4] (/ a b))) [[]]]
+    ["a recur inside a case is declined" (fn [n] (loop [i 0] (case i 3 i (recur (inc i))))) [[0]]]])
+
+;; Benchmarks are cases like any other -- built the same way and
+;; compared for correctness on their small calls -- plus the arguments
+;; to TIME them with. PLAN step 10: measured, or not claimed. The
+;; second is the form the JVM figure in scripts/bench is taken on,
+;; every local primitive, so it is the like-for-like comparison.
+(def benches
+  '[["bench: sum to n" (fn [n] (loop [i 0 acc 0] (if (< i n) (recur (+ i 1) (+ acc i)) acc)))
+     [[1000]] [200000]]
+    ["bench: sum to 200000, all primitive" (fn [] (loop [i 0 acc 0] (if (< i 200000) (recur (+ i 1) (+ acc i)) acc)))
+     [[]] []]])
+
+(def all-cases (if bench? (into cases benches) cases))
 
 (defn- run-clotran
   "Runs a file through clotran with core.clj loaded, answering stdout."
@@ -85,7 +116,7 @@
    "(in-ns 'user)\n"
    "(defn compiler-check-target [x] (+ x 100))\n"
    (apply str
-          (for [[i [nm form _]] (map-indexed vector cases)]
+          (for [[i [nm form _]] (map-indexed vector all-cases)]
             (str "(let [r (clotran.compiler/compile-fn \"cc\" \"f" i "\" '" (pr-str form) ")]\n"
                  "  (if (:declined r)\n"
                  "    (println \"DECLINED\" " (pr-str nm) " (:declined r))\n"
@@ -113,7 +144,7 @@
    "(def ran (atom 0))\n"
    (apply str
           (for [i ids
-                :let [[nm form calls] (nth cases i)]]
+                :let [[nm form calls] (nth all-cases i)]]
             (str "(let [r (clotran.compiler/compile-fn \"cc\" \"f" i "\" '" (pr-str form) ")\n"
                  "      h (clotran-pool-register (:pool r))]\n"
                  "  (clotran-load-compiled \"" (str work) "/libf" i "." soext "\" h)\n"
@@ -131,20 +162,11 @@
                                "        (println \"DIFFER\" " (pr-str nm) " '" (pr-str (vec args)) ")\n"
                                "        (println \"   interpreted:\" (pr-str a))\n"
                                "        (println \"   compiled:   \" (pr-str b))))\n")))
+                 (when-let [targs (nth (nth all-cases i) 3 nil)]
+                   (str "    (let [ms (fn [g] (let [t (System/nanoTime)] (g) (/ (- (System/nanoTime) t) 1000000.0)))]\n"
+                        "      (println (str " (pr-str nm) " \": interpreted \" (int (ms (fn [] (apply interp '" (pr-str targs) ")))) \" ms, compiled \"\n"
+                        "                    (ms (fn [] (apply comp '" (pr-str targs) "))) \" ms\")))\n"))
                  "))\n")))
-   (when bench?
-     ;; One loop, timed both ways. PLAN step 10: measured, or not
-     ;; claimed. A compiled procedure pays a C call per operation
-     ;; where the interpreter pays a switch arm, so this number is
-     ;; the whole argument for unboxing the arithmetic next.
-     (str "(let [f (fn [n] (loop [i 0 acc 0] (if (< i n) (recur (+ i 1) (+ acc i)) acc)))\n"
-          "      r (clotran.compiler/compile-fn \"ccb\" \"sum\" '(fn [n] (loop [i 0 acc 0] (if (< i n) (recur (+ i 1) (+ acc i)) acc))))\n"
-          "      h (clotran-pool-register (:pool r))]\n"
-          "  (clotran-load-compiled \"" (str work) "/bench." soext "\" h)\n"
-          "  (let [c @(resolve 'ccb/sum)\n"
-          "        ms (fn [g] (let [t (System/nanoTime)] (g) (/ (- (System/nanoTime) t) 1000000.0)))]\n"
-          "    (println (str \"bench 200000 iterations: interpreted \" (int (ms (fn [] (f 200000))))\n"
-          "                  \" ms, compiled \" (int (ms (fn [] (c 200000)))) \" ms\"))))\n"))
    "(println \"---\")\n"
    "(println (str \"compiler-check: \" @ran \" calls, \" (- @ran @fails) \" agree, \" @fails \" differ\"))\n"))
 
@@ -172,6 +194,19 @@
             (swap! ids conj i)
             (recur (rest more)))
           (recur (rest ls)))))
+    ;; EVERY case has to be accounted for, compiled or declined. A
+    ;; generator that throws part-way used to leave the rest
+    ;; silently unrun, and the check reported success over the
+    ;; ones that happened to get through.
+    (let [declined (count (filter #(str/starts-with? % "DECLINED") lines))
+          accounted (+ declined (count @ids))]
+      (when (< accounted (count all-cases))
+        (println (str "GENERATOR STOPPED: " accounted " of " (count all-cases)
+                      " cases compiled or declined"))
+        (println (->> lines (remove #(str/starts-with? % "note:"))
+                      (filter #(re-find #"error|Exception|stopped" %)) (take 5)
+                      (str/join "\n")))
+        (System/exit 1)))
     (when (empty? @ids)
       (println out)
       (println "nothing compiled")
@@ -184,30 +219,14 @@
                   ;; undefined at link time on purpose. Linux allows that
                   ;; in a shared object; macOS wants to be told.
                   r (apply shell {:out :string :err :string :continue true :dir (str work)}
-                           (concat ["gfortran" "-g" "-O2" "-shared" "-fPIC"]
+                           (concat ["gfortran" "-g" "-O2" "-shared" "-fPIC" "-ffree-line-length-none"]
                                    (when (= soext "dylib")
                                      ["-Wl,-undefined,dynamic_lookup"])
                                    ["-o" (str lib) (str src)]))]]
       (when-not (zero? (:exit r))
-        (println "BUILD FAILED for case" i (first (nth cases i)))
+        (println "BUILD FAILED for case" i (first (nth all-cases i)))
         (println (:err r))
         (System/exit 1)))
-    ;; the benchmark case needs its own library built too
-    (when bench?
-      (spit (io/file work "bench.clj")
-            (str "(load-file \"src/clj/clotran/compiler.cljf\")\n(in-ns (quote user))\n"
-                 "(let [r (clotran.compiler/compile-fn \"ccb\" \"sum\"\n"
-                 "        (quote (fn [n] (loop [i 0 acc 0] (if (< i n) (recur (+ i 1) (+ acc i)) acc)))))]\n"
-                 "  (println \"===BEGIN\") (print (clotran.compiler/module-text \"ccb_mod\" [r])) (println \"===END\"))\n"))
-      (let [out3 (run-clotran (io/file work "bench.clj"))
-            body (->> (str/split-lines out3)
-                      (drop-while #(not= "===BEGIN" %)) rest
-                      (take-while #(not= "===END" %)))]
-        (spit (io/file work "bench.f90") (str (str/join "\n" body) "\n"))
-        (apply shell {:continue true :dir (str work)}
-               (concat ["gfortran" "-g" "-O2" "-shared" "-fPIC"]
-                       (when (= soext "dylib") ["-Wl,-undefined,dynamic_lookup"])
-                       ["-o" (str (io/file work (str "bench." soext))) (str (io/file work "bench.f90"))]))))
     (spit (io/file work "run.clj") (runner-source @ids soext))
     (let [out2 (run-clotran (io/file work "run.clj"))
           body (->> (str/split-lines out2)

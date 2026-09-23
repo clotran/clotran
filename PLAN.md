@@ -700,6 +700,49 @@ Two GC knobs were tried and did NOTHING: keeping the heap at 4x or 8x
 the live set instead of 2x, and collecting at 8x live slots allocated
 instead of 2x. Recorded so nobody tries them again as the answer.
 
+**Unboxed arithmetic landed, and it is the orders of magnitude.** The
+same functions on a warmed JVM, called 100 times after 200 warm-up
+calls, against the compiled procedures:
+
+| 200,000 iterations | interpreted | compiled | warmed JVM |
+|---|---|---|---|
+| sum to a parameter `n` | 340 ms | 0.14 ms | 0.075 ms |
+| sum to a literal bound, every local primitive | 318 ms | 0.075 ms | 0.075 ms |
+
+The rules are Clojure's own. A loop or let local takes the primitive
+type of its init, so `(loop [i 0] ...)` has a primitive long `i`, and
+keeps it only if every `recur` feeds it the same type. An unhinted
+parameter is boxed. `+`, `<`, `inc` and the rest are called directly
+rather than through their Vars, which is what Clojure's `:inline` does
+too. A primitive local lives in a Fortran variable, and `(+ i 1)` is an
+add and an overflow test; an overflow takes the generic call, which
+raises exactly what Clojure raises. A boxed operand of a comparison
+gets a tag check, long and double compare unboxed, and anything else
+is the generic call.
+
+Four things the measurement taught, each fixed:
+
+- A folded builtin in a call head is a FRESH OBJECT per analysis, so
+  recognising `+` by identity found nothing and every addition stayed
+  generic. The exporter now says `:builtin +`.
+- gfortran folds BOTH halves of an overflow test at compile time, and
+  with a literal operand the half that can never run overflowed and
+  the file was refused. With a literal the sign is known, so only the
+  reachable half is written.
+- The unknown `n` in `(< i n)` was read from the frame and tag-checked
+  on every iteration, three runtime calls a time round: 1.26 ms. A
+  boxed local the loop cannot change -- a parameter, or anything bound
+  outside the loop -- is now read and unboxed ONCE before it: 0.14 ms.
+  That is what the JVM's JIT does by speculation; here it is known.
+- `compiler-check` reported success when the generator threw part-way
+  and silently left later cases unrun. It now fails unless every case
+  is compiled or declined.
+
+What this does NOT touch: sequence-heavy code. `(into [] (map inc
+...))` spends its time in `clojure.core`'s lazy sequence machinery, and
+compiling the caller changes almost nothing. That needs `clojure.core`
+compiled.
+
 **The escape hatch is wired in, and NOTHING declines for a node kind
 any more.** A kind the generator does not emit has its NODE put in the
 pool and run by `clotran_eval_node` in the same frame the compiled code

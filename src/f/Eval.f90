@@ -13350,6 +13350,14 @@ case (B_SLURP)
     ! arity bodies inside a plain vector template.
     if (gc_i1(vs_get(b + 1)) == N_CONST) then
        call ast_put(b, roots, "p1", gc_slot(vs_get(b + 1), 2))
+       ! A folded BUILTIN says which one it is. Analysis puts the
+       ! function itself in the head of (+ i 1), and it is a fresh
+       ! object each time, so a generator cannot recognise + by
+       ! identity; the name in its slot 1 is stable.
+       if (gc_kind(strip_meta(gc_slot(vs_get(b + 1), 2))) == OBJ_BUILTIN) then
+          call ast_put(b, roots, "builtin", &
+               gc_slot(strip_meta(gc_slot(vs_get(b + 1), 2)), 1))
+       end if
     else
        call ast_put(b, roots, "p1", ast_walk(gc_slot(vs_get(b + 1), 2), &
             [roots, [vs_get(b + 1), vs_get(b + 2)]]))

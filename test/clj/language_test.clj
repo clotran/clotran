@@ -1229,3 +1229,12 @@
             (filter #(= :unknown %))
             count)
        0)
+;; A folded builtin in a call head names itself. The object is fresh on
+;; every analysis, so a code generator cannot recognise + by identity,
+;; and without the name it compiled every addition as a generic call.
+(check "a folded call head says which builtin it is"
+       (->> (clotran-ast '(fn [x] (+ x 1)))
+            (tree-seq coll? seq)
+            (filter #(and (map? %) (= :call (:op %))))
+            first :children first :builtin str)
+       "+")
