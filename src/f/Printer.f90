@@ -324,6 +324,11 @@ contains
        end block
     case (OBJ_CLOSURE)
        s = "#<fn>"
+    case (OBJ_COMPILED)
+       ! A compiled one names itself, because a trace that says
+       ! #<fn> tells you nothing about which compiled procedure you
+       ! are in. Slot 1 is ns/name, set when it was installed.
+       s = "#<compiled " // gcp_str(gc_slot(v, 1), .false.) // ">"
     case (OBJ_REGEX)
        ! A Pattern prints as its own source text, readable or not --
        ! (str #"a.b") and (pr-str #"a.b") both give #"a.b", which is

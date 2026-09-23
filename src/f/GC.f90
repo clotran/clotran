@@ -304,6 +304,11 @@ module GC
   ! before it starts and once it has finished.
   integer, parameter, public :: OBJ_TASK      = 34 ! 1=thunk 2=value or failure 3=awaited 4=deadline 5=mailbox
   integer, parameter, public :: OBJ_VOLATILE  = 35 ! 1=value; clojure.lang.Volatile, a box with no validator or watches
+  ! A COMPILED function: slot 1 = its name (for printing and traces),
+  ! i1 = its handle in CompiledFn's table, i2 = its arity, or -1 for
+  ! any. The procedure pointer is NOT here, because a gc_value has no
+  ! pointer component and that is what keeps a copy at 4 ns.
+  integer, parameter, public :: OBJ_COMPILED = 36 ! 1=name; i1=handle i2=arity
   integer, parameter, public :: OBJ_HAMT      = 11 ! 1=root run; i1=count
   integer, parameter, public :: OBJ_HAMT_LEAF = 12 ! 1=key 2=val
   ! Slot 3 was reserved for a per-Var dynamic stack; the dynamic

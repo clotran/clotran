@@ -52,7 +52,7 @@
        return
     case (GCT_OBJ)
        select case (gc_kind(v))
-       case (OBJ_CLOSURE, OBJ_BUILTIN, OBJ_MULTIFN, OBJ_ATOM, OBJ_VAR, OBJ_NS, OBJ_TASK, OBJ_VOLATILE, &
+       case (OBJ_CLOSURE, OBJ_BUILTIN, OBJ_COMPILED, OBJ_MULTIFN, OBJ_ATOM, OBJ_VAR, OBJ_NS, OBJ_TASK, OBJ_VOLATILE, &
             OBJ_DELAY, OBJ_REGEX, OBJ_MATCHER, OBJ_WRITER, OBJ_ERR, OBJ_TYPE)
           yes = .false.
        end select
@@ -183,7 +183,7 @@
        return
     case (GCT_OBJ)
        select case (gc_kind(v))
-       case (OBJ_CLOSURE, OBJ_BUILTIN, OBJ_MULTIFN, OBJ_ATOM, OBJ_VAR, OBJ_NS, OBJ_TASK, OBJ_VOLATILE, &
+       case (OBJ_CLOSURE, OBJ_BUILTIN, OBJ_COMPILED, OBJ_MULTIFN, OBJ_ATOM, OBJ_VAR, OBJ_NS, OBJ_TASK, OBJ_VOLATILE, &
             OBJ_DELAY, OBJ_REGEX, OBJ_MATCHER, OBJ_WRITER, OBJ_ERR, OBJ_TYPE)
           yes = .false.
        end select

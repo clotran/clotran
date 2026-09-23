@@ -587,10 +587,27 @@ bargain the JVM makes with class loaders.
 Optimisation flags and a tree shaker for dependencies are wanted
 eventually and are not now.
 
+**Milestone 2 is done**: `(clotran-ast form)` hands back the resolved
+tree as nested maps, walking the template vector a `fn` hides its
+arity bodies in. **Milestone 3, the call path, is done too**: a
+compiled procedure is `OBJ_COMPILED`, its pointer lives in
+`CompiledFn`'s table (a `gc_value` has no pointer component, which is
+what keeps a copy at 4 ns), `clotran_def_fn` installs one as a Var,
+and `apply` reaches it. A hand-written Fortran procedure is called
+from Clojure source, allocates, calls back through a Var, is refused
+at the wrong arity, is reinstalled under the same name and the new
+one is reached -- and with core.clj loaded, `fn?`, `ifn?` and `map`
+all take it for what it is.
+
+So the generator has nothing left to prove about HOW its output is
+reached. Only about what it emits.
+
 **In order, from here.**
 
-2. The exporter: a namespace's resolved tree as Clojure data.
-3. The generator for the straight-line subset -- constants, locals,
+2. ~~The exporter: a namespace's resolved tree as Clojure data.~~ Done.
+3. An ABI entry that evaluates an already-analysed node in a given
+   frame, which is the generator's escape hatch.
+4. The generator for the straight-line subset -- constants, locals,
    `if`, `do`, `let*`, and calls through Var handles -- with every
    other node kind emitting a call back into the interpreter for that
    subtree. That escape hatch is what makes the generator correct from

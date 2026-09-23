@@ -57,6 +57,7 @@ module Eval
   use NativeArray
   use Regex
   use LispReader
+  use CompiledFn
   use DynLoad
   use iso_c_binding, only: c_ptr, c_funptr, c_loc, c_double, c_int, c_long, c_char, c_null_char, c_associated, c_bool, c_int32_t
   implicit none
@@ -5415,6 +5416,36 @@ contains
          argl = vs_get(base + 2)
          call vs_set(base + 2, gc_nil())
          out = invoke_closure(vs_get(base + 1), argl)
+       end block
+    case (OBJ_COMPILED)
+       ! A compiled procedure. The arguments go into CONSECUTIVE
+       ! slots and the answer comes back in one more, so a call costs
+       ! no vector -- which is most of the point of compiling. The
+       ! args arrive here as a vector because `apply` is the general
+       ! path; a compiled CALL SITE will write the slots directly and
+       ! never build one.
+       block
+         type(gc_value) :: av, nmv
+         integer :: cb, cn, j
+         av = vs_get(base + 2)
+         cn = gcv_count(av)
+         nmv = gc_slot(vs_get(base + 1), 1)
+         if (gc_i2(vs_get(base + 1)) >= 0 .and. gc_i2(vs_get(base + 1)) /= cn) then
+            call raise_class("ArityException", &
+                 "Wrong number of args (" // itoa(cn) // ") passed to: " // &
+                 gc_ref_text(nmv%ref), [vs_get(base + 1)])
+         else
+            ! slots cb+1 .. cb+cn are the arguments and cb+cn+1 is
+            ! where the answer lands, which is the convention every
+            ! generated procedure is written to.
+            cb = vs_enter(cn + 1)
+            do j = 1, cn
+               call vs_set(cb + j, gcv_nth(av, j - 1))
+            end do
+            call cf_call(gc_i1(vs_get(base + 1)), cb, cn, cb + cn + 1)
+            out = vs_get(cb + cn + 1)
+            call vs_leave(cb)
+         end if
        end block
     case (OBJ_INST)
        ! A deftype or reify that implements IFn is callable: (promise x)
@@ -11091,7 +11122,11 @@ case (B_SLURP)
        case (OBJ_VECTOR);  s = "vector"
        case (OBJ_MAP, OBJ_HAMT); s = "map"
        case (OBJ_SET);     s = "set"
-       case (OBJ_CLOSURE, OBJ_BUILTIN); s = "fn"
+       ! A compiled procedure IS a function: fn?, ifn?, the IFn
+       ! instance check and everything core does with a callable all
+       ! read this name, so leaving it out made a compiled fn an
+       ! "object" that map would refuse.
+       case (OBJ_CLOSURE, OBJ_BUILTIN, OBJ_COMPILED); s = "fn"
        case (OBJ_MULTIFN); s = "multifn"
        case (OBJ_REGEX);   s = "regex"
        case (OBJ_MATCHER); s = "matcher"
@@ -12797,7 +12832,7 @@ case (B_SLURP)
        case (OBJ_SET)
           s = "clojure.lang.PersistentHashSet"
           if (gca_is_sorted(gc_slot(v, 1))) s = "clojure.lang.PersistentTreeSet"
-       case (OBJ_CLOSURE, OBJ_BUILTIN); s = "clojure.lang.AFunction"
+       case (OBJ_CLOSURE, OBJ_BUILTIN, OBJ_COMPILED); s = "clojure.lang.AFunction"
        case (OBJ_MULTIFN); s = "clojure.lang.MultiFn"
        case (OBJ_REGEX);   s = "java.util.regex.Pattern"
        case (OBJ_MATCHER); s = "java.util.regex.Matcher"

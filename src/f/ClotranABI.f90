@@ -45,6 +45,7 @@ module ClotranABI
   use GC
   use PersistentVector
   use LispReader
+  use CompiledFn
   use Namespace
   use Eval
   implicit none
@@ -58,7 +59,7 @@ module ClotranABI
   public :: clotran_tag, clotran_int, clotran_real, clotran_bool
   public :: clotran_str_len, clotran_str_copy
   public :: clotran_vec_empty, clotran_vec_conj, clotran_vec_count, clotran_vec_nth
-  public :: clotran_var, clotran_deref, clotran_call
+  public :: clotran_var, clotran_deref, clotran_call, clotran_def_fn
   public :: clotran_has_error, clotran_error_len, clotran_error_copy, clotran_clear_error
   public :: clotran_collect, clotran_live_count, clotran_set_torture
 
@@ -349,6 +350,49 @@ contains
        st = 0
     end if
   end function clotran_call
+
+  ! Installs a COMPILED PROCEDURE as ns/name. This is what a compiled
+  ! namespace calls once per function when its library is loaded: the
+  ! procedure goes in CompiledFn's table, an OBJ_COMPILED value names
+  ! its handle, and the Var is interned to hold it. Everything that
+  ! already refers to that Var -- interpreted code, other compiled
+  ! code -- reaches the new procedure on its next call, because a call
+  ! goes through the Var. That is the whole interactive story.
+  !
+  ! arity is the fixed argument count, or -1 to accept any and let the
+  ! procedure check for itself.
+  function clotran_def_fn(ns, nsn, name, namen, fp, arity) &
+       bind(C, name="clotran_def_fn") result(st)
+    character(kind=c_char), intent(in) :: ns(*), name(*)
+    integer(c_int), value :: nsn, namen, arity
+    type(c_funptr), value :: fp
+    integer(c_int) :: st
+    type(gc_value) :: nsv, sym, fnv, var, none(0)
+    character(len=:), allocatable :: nsname, fname
+    integer :: base, h
+    st = 1
+    if (.not. c_associated(fp)) return
+    nsname = c_text(ns, nsn)
+    fname = c_text(name, namen)
+    nsv = gcn_find_or_create(nsname, none)
+    if (gc_kind(nsv) /= OBJ_NS) return
+    h = cf_register(fp, nsname // "/" // fname)
+    base = vs_enter(3)
+    call vs_set(base + 1, nsv)
+    fnv = gc_str(nsname // "/" // fname, [vs_get(base + 1)])
+    call vs_set(base + 2, fnv)
+    fnv = gc_obj(OBJ_COMPILED, [vs_get(base + 2)], &
+         [vs_get(base + 1), vs_get(base + 2)])
+    call gc_set_i1(fnv, h)
+    call gc_set_i2(fnv, int(arity))
+    call vs_set(base + 2, fnv)
+    sym = gc_sym(fname, [vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 3, sym)
+    var = gcn_intern(vs_get(base + 1), vs_get(base + 3), vs_get(base + 2), &
+         [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+    call vs_leave(base)
+    if (gcn_is_var(var)) st = 0
+  end function clotran_def_fn
 
   ! --- errors ------------------------------------------------------
 
