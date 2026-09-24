@@ -110,6 +110,13 @@
     ;; A hint the argument does not honour: the guard fails, the untyped
     ;; body runs, and it must throw what Clojure throws -- a checkcast
     ;; where the array is used, a conversion where a ^long is bound.
+    ;; No hints at all: the arrays are speculated double, then long,
+    ;; and anything else runs the untyped body.
+    ["arrays with no hints"
+     (fn [a b] (loop [i 0 s 0] (if (< i (alength a)) (do (aset b i (* 2 (aget a i))) (recur (inc i) (+ s (aget a i)))) s)))
+     [[(double-array [1 2]) (double-array 2)] [(long-array [1 2]) (long-array 2)] [(long-array [1 2]) (double-array 2)]
+      [(double-array [1 2]) (long-array 2)] [(object-array [1 2]) (object-array 2)] [[1 2] (double-array 2)]
+      [nil (double-array 2)] [(long-array [Long/MAX_VALUE]) (long-array 1)] [(double-array [1 2]) (double-array 1)]]]
     ["a hint the argument does not honour"
      (fn [^doubles a ^long n] (if (< n 0) :unused (loop [i 0 s 0.0] (if (< i n) (recur (inc i) (+ s (aget a i))) s))))
      [[(double-array [1 2 3]) 3] [(double-array [1 2 3]) 2.9] [(long-array [1 2]) 1] [[1 2] 1] [[1 2] -1] [nil 1] [(double-array 2) "x"]]]])
@@ -126,6 +133,9 @@
      [[]] []]
     ["bench: sum a 200000-element double array"
      (fn [^doubles a] (let [n (alength a)] (loop [i 0 s 0.0] (if (< i n) (recur (inc i) (+ s (aget a i))) s))))
+     [[(double-array [1.0 2.0])]] [(double-array (range 200000))]]
+    ["bench: sum a 200000-element double array, no hints"
+     (fn [a] (let [n (alength a)] (loop [i 0 s 0.0] (if (< i n) (recur (inc i) (+ s (aget a i))) s))))
      [[(double-array [1.0 2.0])]] [(double-array (range 200000))]]])
 
 (def all-cases (if bench? (into cases benches) cases))

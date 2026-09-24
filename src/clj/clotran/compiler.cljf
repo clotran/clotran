@@ -279,6 +279,12 @@ end module clotran_rt_decl
 
 (declare infer)
 
+(defn- av-name
+  "The Fortran pointer to an array parameter's buffer, one per kind: a
+  procedure speculating double then long declares both."
+  [slot t]
+  (str "av" (if (= t :doubles) "d" "l") slot))
+
 (defn- op-args
   "The argument nodes of a numeric op. The analyser puts Clojure's
   checkcast in front of an array-hinted argument of aget, aset and
@@ -560,7 +566,7 @@ end module clotran_rt_decl
             [slow st] (slow-call nd [[as :slot] [i :long]] r t st)]
         [(concat ci
                  [(str "if (" i " >= 0 .and. " i " < an" aslot ") then")
-                  (str "   " r " = av" aslot "(" i " + 1)")
+                  (str "   " r " = " (av-name aslot (ats 0)) "(" i " + 1)")
                   "else"
                   (str "   call clotran_frame_get(b + " as ", b + 1, " aslot "_c_int)")]
                  (map #(str "   " %) slow)
@@ -576,7 +582,7 @@ end module clotran_rt_decl
             [slow st] (slow-call nd [[as :slot] [i :long] [v t]] r t st)]
         [(concat ci cv
                  [(str "if (" i " >= 0 .and. " i " < an" aslot ") then")
-                  (str "   av" aslot "(" i " + 1) = " v)
+                  (str "   " (av-name aslot (ats 0)) "(" i " + 1) = " v)
                   (str "   " r " = " v)
                   "else"
                   (str "   call clotran_frame_get(b + " as ", b + 1, " aslot "_c_int)")]
@@ -962,6 +968,35 @@ end module clotran_rt_decl
                   [i t]))
               params))))
 
+(defn- array-params
+  "The parameters the body uses as arrays -- the first argument of aget,
+  aset or alength -- and that carry no hint. Nested fns are skipped:
+  their slots are their own frame's."
+  [body nargs hints]
+  (let [nodes (tree-seq #(and (coll? %) (not= :fn (:op %))) seq body)]
+    (into (sorted-set)
+          (for [nd nodes
+                :when (and (map? nd) (= :call (:op nd)))
+                :let [[k] (head-op (first (:children nd)))
+                      a (second (:children nd))]
+                :when (and (#{:aget :aset :alength} k) (= :local (:op a))
+                           (< (:i2 a) nargs) (not (contains? hints (:i2 a))))]
+            (:i2 a)))))
+
+(defn- versions
+  "The typings a procedure is generated for, tried in order, before the
+  untyped body. A scientist writes (aget a i) and no hint, so the
+  arrays the body indexes are SPECULATED: all double, then all long.
+  The guard checks the argument itself, so a wrong guess costs one
+  check and runs the untyped body -- it never changes an answer."
+  [hints arrays]
+  ;; ponytail: one kind for all arrays per version, not every mix; a fn
+  ;; indexing a double array and a long array together runs untyped.
+  (cond
+    (seq arrays) (for [t [:doubles :longs]] (into hints (map (fn [s] [s t]) arrays)))
+    (seq hints) [hints]
+    :else []))
+
 (defn- guard-code
   "Read each hinted parameter and check it is what its hint says: a
   double or a long by its tag, an array by asking for a view of it.
@@ -976,10 +1011,10 @@ end module clotran_rt_decl
                 (:doubles :longs)
                 (let [st (-> st (declare-var (str "ap" slot) :cptr)
                              (declare-var (str "an" slot) :long)
-                             (declare-var (str "av" slot) (if (= t :doubles) :dptr :iptr)))]
+                             (declare-var (av-name slot t) (if (= t :doubles) :dptr :iptr)))]
                   [(into code [get (str "hok = hok .and. clotran_array_view(b + " s ", "
                                         (if (= t :doubles) 1 2) "_c_int, ap" slot ", an" slot ") /= 0")])
-                   (conj setup (str "call c_f_pointer(ap" slot ", av" slot ", [an" slot "])"))
+                   (conj setup (str "call c_f_pointer(ap" slot ", " (av-name slot t) ", [an" slot "])"))
                    st])
                 (:double :long)
                 (let [v (slot-var slot t)
@@ -1003,6 +1038,7 @@ end module clotran_rt_decl
   [sym tmpl hints]
   (let [[_ arities _ nslots _ _] tmpl
         [nargs _ _ body] (first arities)
+        vs (versions hints (array-params body nargs hints))
         pool (fn-pool body)
         ;; b+1 is the locals frame, b+2 .. b+1+P hold what the pool
         ;; supplies, and temporaries start after them
@@ -1013,22 +1049,28 @@ end module clotran_rt_decl
         st0 {:next first-temp :high (dec first-temp) :pool pslots
              :flags ["recur0"] :loop "recur0" :env {:slots {}} :nparams nargs}
         [code res st]
-        (if (empty? hints)
+        (if (empty? vs)
           (gen body st0)
-          (let [[gc setup st] (guard-code hints st0)
-                st (declare-var st "hok" :bool)
+          ;; each version nests in the previous one's else: guard, typed
+          ;; body, and failing that the next -- the untyped body last
+          (let [st (declare-var st0 "hok" :bool)
                 [r st] (fresh st)
-                [tc tres st] (gen body (assoc st :env {:slots hints} :hoisted {}))
-                [uc ures st] (gen body (assoc st :env {:slots {}} :hoisted {}))]
-            [(concat ["hok = .true."] gc
-                     ["if (hok) then"]
-                     (map #(str "   " %) (concat setup tc))
-                     [(str "   call clotran_copy(b + " r ", b + " tres ")")
-                      "else"]
-                     (map #(str "   " %) uc)
-                     [(str "   call clotran_copy(b + " r ", b + " ures ")")
-                      "end if"])
-             r st]))]
+                [uc ures st] (gen body (assoc st :env {:slots {}} :hoisted {}))
+                [code st]
+                (reduce (fn [[inner st] h]
+                          (let [[gc setup st] (guard-code h st)
+                                [tc tres st] (gen body (assoc st :env {:slots h} :hoisted {}))]
+                            [(concat ["hok = .true."] gc
+                                     ["if (hok) then"]
+                                     (map #(str "   " %) (concat setup tc))
+                                     [(str "   call clotran_copy(b + " r ", b + " tres ")")
+                                      "else"]
+                                     (map #(str "   " %) inner)
+                                     ["end if"])
+                             st]))
+                        [(concat uc [(str "call clotran_copy(b + " r ", b + " ures ")")]) st]
+                        (reverse vs))]
+            [code r st]))]
     {:arity nargs
      :symbol sym
      :pool (mapv :value pool)
