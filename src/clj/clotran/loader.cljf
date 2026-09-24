@@ -9,7 +9,8 @@
   functions the compiler declined all come from it -- and the library
   then replaces the functions it compiled.
 
-  THE POOL IS REBUILT, not read. A procedure's constants -- Vars,
+  THE POOL IS REBUILT, not read, by the host's own walk (Eval.f90,
+  compiled_pool), which the compiler also takes its pool from. A procedure's constants -- Vars,
   collections, the functions analysis folded into call heads, whole
   subtrees handed to the interpreter -- are live objects, and no file
   can hold them. Analysis is deterministic, so analysing the same form
@@ -26,66 +27,7 @@
   interpreted definitions stand. Loading this namespace is cheap on
   purpose: it is the part of the compiler every run needs, and only
   that part."
-  (:require [clojure.string :as str]
-            [clojure.walk :as walk]))
-
-;;; ---- shared with clotran.compiler: what goes in the pool -------------
-
-(defn spellable?
-  "A constant a generated procedure can write into its own source.
-  Everything else -- a collection, a Var, a string, the function
-  analysis folded into a call head -- goes in the CONSTANT POOL
-  instead.
-
-  A STRING could be written as a Fortran literal, and deliberately is
-  not: its quotes, newlines and byte length are each a way to emit a
-  file that compiles into a different string. A BigInt is `integer?`
-  and must not be written as a long, so this asks `int?`. A double
-  that is not finite has no Fortran spelling, and Long/MIN_VALUE
-  cannot be written as a negative literal because its magnitude does
-  not fit."
-  [v]
-  (or (nil? v) (true? v) (false? v)
-      (and (int? v) (not= v Long/MIN_VALUE))
-      (and (double? v) (not (NaN? v)) (not (infinite? v)))))
-
-
-(defn walk-nodes
-  "Every node in the tree, depth first."
-  [t]
-  (filter #(and (map? %) (:op %)) (tree-seq coll? seq t)))
-
-
-(def compiled-ops
-  "The node kinds the generator emits code for. Everything else goes
-  through the escape hatch, which is slower and still correct."
-  #{:const :local :if :do :call :var :let :loop :recur})
-
-
-(defn pooled
-  "The value this node needs out of the pool, or nil if it needs none.
-
-  A :var node holds the Var itself, so the pool holds the Var and the
-  procedure derefs it at the call -- which is what makes a redefinition
-  visible to compiled code. A :const holding anything unspellable holds
-  exactly the value the interpreter would have used, so compiling
-  cannot change what the form means."
-  [nd]
-  (cond
-    (= :var (:op nd)) {:kind :var :value (:p1 nd)}
-    (and (= :const (:op nd)) (not (spellable? (:p1 nd)))) {:kind :const :value (:p1 nd)}
-    ;; a kind we do not emit: the pool holds the NODE and the
-    ;; interpreter runs it
-    (not (compiled-ops (:op nd))) {:kind :node :value (:node nd)}
-    :else nil))
-
-
-(defn fn-pool
-  "Everything the body needs out of the pool, in order, without
-  duplicates. Each gets one read at the top of the procedure rather
-  than one per use."
-  [body]
-  (->> (walk-nodes body) (keep pooled) distinct vec))
+  (:require [clojure.string :as str]))
 
 ;;; ---- one function, analysed ---------------------------------------
 
@@ -107,27 +49,41 @@
   [form]
   (binding [*print-meta* true] (pr-str form)))
 
-(defn fingerprint
-  "A hash of an analysed tree that is the same in every process that
-  analyses the same code: node objects and source positions removed,
-  functions reduced to :fn."
-  [ast]
-  (hash (pr-str (walk/postwalk (fn [v] (cond (map? v) (dissoc v :node :pos)
-                                              (fn? v) :fn
-                                              :else v))
-                               ast))))
+(defn- entries
+  "The host's pool as the compiler keys it: [kind value] pairs, one per
+  entry the generated code reads (Eval.f90, compiled_pool)."
+  [pool]
+  (mapv (fn [[k v]] {:kind k :value v}) pool))
 
 (defn analyse
-  "The analysed (fn ...) `form`, in the current namespace: {:tmpl the
-  fn's template, or nil when the form is not a fn; :fingerprint; :pool}."
+  "The analysed (fn ...) `form`, in the current namespace, as the
+  compiler needs it: {:tmpl the fn's template, or nil when the form is
+  not a fn; :pool; :fingerprint}. The pool and the fingerprint come from
+  the host, which is also where `pool-of` below gets them, so the two
+  cannot disagree."
   [form]
   (let [top (clotran-ast form)
-        fnode (:p1 top)
-        tmpl (when (= :fn (:op fnode)) (:p1 fnode))
-        body (some-> tmpl second first (nth 3))]
-    {:tmpl tmpl :fingerprint (fingerprint top) :pool (fn-pool body)}))
+        fnode (:p1 top)]
+    {:tmpl (when (= :fn (:op fnode)) (:p1 fnode))
+     :pool (entries (:pool top))
+     :fingerprint (:fingerprint top)}))
+
+(defn pool-of
+  "The pool and fingerprint of `form` without exporting its tree: what
+  installing needs, at a small part of clotran-ast's cost."
+  [form]
+  (let [r (clotran-ast-pool form)]
+    {:pool (entries (:pool r)) :fingerprint (:fingerprint r)}))
 
 ;;; ---- installing ------------------------------------------------------
+
+(defn defined-in?
+  "Whether Var `v` was last defined by the file `src`, by its :file
+  metadata. The two may be spelled differently -- relative at one
+  load, absolute at another -- so the shorter must end the longer."
+  [v src]
+  (let [f (:file (meta v))]
+    (boolean (and (string? f) (or (str/ends-with? src f) (str/ends-with? f src))))))
 
 (defn install
   "Install the compiled library `lib` built from the source file `src`.
@@ -139,9 +95,16 @@
     (if (not= source-hash (hash (clotran-slurp src)))
       (note (str src " has changed since it was compiled; recompile it"))
       (let [built (binding [*ns* (the-ns (symbol ns))]
-                    (mapv #(analyse (read-string (:form %))) fns))
+                    (mapv #(pool-of (read-string (:form %))) fns))
             stale (keep (fn [[f b]] (when (not= (:fingerprint f) (:fingerprint b)) (:name f)))
                         (map vector fns built))]
         (if (seq stale)
           (note (str "these analyse differently now: " (str/join ", " stale) "; recompile it"))
-          (clotran-load-compiled lib (clotran-pool-register (vec (mapcat #(map :value (:pool %)) built)))))))))
+          ;; A Var some other file defined since -- a later load
+          ;; redefining a core function -- keeps what that file gave it:
+          ;; the library installs every function, and those are put back.
+          (let [vars (map #(ns-resolve (symbol ns) (symbol (:name %))) fns)
+                keep (into {} (for [v vars :when (not (defined-in? v src))] [v @v]))]
+            (clotran-load-compiled lib (clotran-pool-register (vec (mapcat #(map :value (:pool %)) built))))
+            (doseq [[v old] keep] (alter-var-root v (constantly old)))
+            true))))))

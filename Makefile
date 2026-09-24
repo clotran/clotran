@@ -138,7 +138,7 @@ unit-tests = gc_test persistent_vector_test persistent_list_test persistent_arra
 	bigdec_test abi_test native_array_test
 test-bins = $(addprefix $(BT)/,$(unit-tests))
 
-.PHONY: all test crosscheck clean
+.PHONY: all test crosscheck clean compiled-core
 all: clotran-bin $(test-bins)
 
 $(B) $(BT):
@@ -293,6 +293,14 @@ test: $(test-bins) clotran-bin $(B)/libtestpkg.$(SOEXT) $(B)/libsamplelib.$(SOEX
 crosscheck:
 	$(MAKE) clean && $(MAKE) FC=flang test
 	$(MAKE) clean && $(MAKE) test
+
+# clojure.core, compiled (clotran compile). Opt-in: generating it takes
+# about 100 s, and `clean` -- so the gate -- removes it. When present,
+# every load of core.clj installs it (clotran.loader); a clotran whose
+# analysis has changed since refuses it with a note until it is rebuilt.
+compiled-core: clotran-bin
+	mkdir -p $(B)/compiled/clojure
+	./clotran compile src/clj/clojure/core.clj $(B)/compiled/clojure/core.$(SOEXT)
 
 clean:
 	rm -rf $(B) clotran-bin clotran-bin.dSYM

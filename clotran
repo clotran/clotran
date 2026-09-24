@@ -20,13 +20,16 @@ core="$root/src/clj/clojure/core.clj"
 [ -x "$bin" ] || { echo "build first: make" >&2; exit 1; }
 
 if [ "$1" = "compile" ]; then
-  [ $# -eq 2 ] || { echo "usage: clotran compile file.cljf" >&2; exit 2; }
+  [ $# -eq 2 ] || [ $# -eq 3 ] || { echo "usage: clotran compile file.cljf [library]" >&2; exit 2; }
   src=$2
   stem=${src%.*}
   case "$(uname -s)" in
     Darwin) lib="$stem.dylib"; undef="-Wl,-undefined,dynamic_lookup" ;;
     *)      lib="$stem.so";    undef="" ;;
   esac
+  # a source under src/clj/ may keep its library under build/compiled/
+  # instead -- clojure/core.clj is vendored and gets nothing added
+  [ $# -eq 3 ] && lib=$3
   work=$(mktemp -d) || exit 1
   trap 'rm -rf "$work"' EXIT
   printf '(let [r (clotran.compiler/compile-file "%s" "%s/out.f90")]\n  (doseq [[n why] (:declined r)] (println "declined:" n "--" why))\n  (println "compiled:" (count (:compiled r)) "functions"))\n' \

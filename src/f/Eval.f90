@@ -227,6 +227,7 @@ module Eval
   integer, parameter :: B_LOADCOMPILED = 372, B_ALLNS = 373, B_POOLREG = 374
   integer, parameter :: B_LONGCAST_CHECKED = 375, B_SIMPLENAME = 376
   integer, parameter :: B_NUMLONG = 377, B_ARRAYCAST = 378, B_SPIT = 379
+  integer, parameter :: B_ASTPOOL = 380
 
   ! Compiler.CHAR_MAP, verbatim from the pinned clone: the characters
   ! a Clojure name may hold that a JVM member name may not. '.' is
@@ -697,6 +698,7 @@ contains
     ! generator can be written in Clojure over the same tree the
     ! executor runs. PLAN step 10.
     call bind_builtin(core, "clotran-ast", B_ASTDATA)
+    call bind_builtin(core, "clotran-ast-pool", B_ASTPOOL)
     call bind_builtin(core, "clotran-load-compiled", B_LOADCOMPILED)
     call bind_builtin(core, "clotran-pool-register", B_POOLREG)
     call bind_builtin(core, "clotran-break", B_BREAK)
@@ -1065,7 +1067,9 @@ contains
   ! After a source file loads: when a compiled library sits beside it
   ! -- foo.cljf and foo.dylib or foo.so, as a class file sits beside a
   ! .clj for RT.load -- clotran.loader installs it over the functions
-  ! the source just defined. Nothing beside it, nothing happens, and
+  ! the source just defined. A file under src/clj/ may instead have its
+  ! library at the same place under build/compiled/: clojure/core.clj
+  ! is vendored, and nothing is added to that tree. Nothing beside it, nothing happens, and
   ! clotran.loader is never read. A library that will not install is
   ! REPORTED and the interpreted definitions stand: the source loaded,
   ! so the program is still right, only slower.
@@ -1075,12 +1079,17 @@ contains
     character(len=:), allocatable :: stem, cand
     type(gc_value) :: args, r
     logical :: there
-    integer :: dot, i, base
+    integer :: dot, i, base, at
     dot = index(path, ".", back=.true.)
     if (dot <= index(path, "/", back=.true.)) return
     stem = path(1:dot)
-    do i = 1, 2
-       cand = stem // trim(exts(i))
+    do i = 1, 4
+       cand = stem // trim(exts(mod(i - 1, 2) + 1))
+       if (i > 2) then
+          at = index(stem, "src/clj/", back=.true.)
+          if (at == 0) exit
+          cand = stem(1:at-1) // "build/compiled/" // stem(at+8:) // trim(exts(i - 2))
+       end if
        inquire(file=cand, exist=there)
        if (.not. there) cycle
        base = vs_enter(1)
@@ -8099,6 +8108,37 @@ contains
          if (.not. has_error) then
             call vs_set(base + 3, node)
             out = ast_data(vs_get(base + 3), [vs_get(base + 1), vs_get(base + 2)])
+            ! and the pool and fingerprint of this same analysis, so the
+            ! pool's nodes are the ones the tree's :node keys hold
+            block
+              integer :: lb
+              lb = vs_enter(3)
+              call vs_set(lb + 1, out)
+              out = compiled_pool(vs_get(base + 3), [vs_get(base + 1), vs_get(lb + 1)])
+              call vs_set(lb + 2, out)
+              call vs_set(lb + 3, gc_key("pool", [vs_get(base + 1), vs_get(lb + 1), vs_get(lb + 2)]))
+              out = gca_assoc(vs_get(lb + 1), vs_get(lb + 3), gca_get(vs_get(lb + 2), vs_get(lb + 3)), &
+                   [vs_get(base + 1), vs_get(lb + 1), vs_get(lb + 2), vs_get(lb + 3)])
+              call vs_set(lb + 1, out)
+              call vs_set(lb + 3, gc_key("fingerprint", [vs_get(base + 1), vs_get(lb + 1), vs_get(lb + 2)]))
+              out = gca_assoc(vs_get(lb + 1), vs_get(lb + 3), gca_get(vs_get(lb + 2), vs_get(lb + 3)), &
+                   [vs_get(base + 1), vs_get(lb + 1), vs_get(lb + 2), vs_get(lb + 3)])
+              call vs_leave(lb)
+            end block
+         end if
+       end block
+    case (B_ASTPOOL)
+       ! (clotran-ast-pool 'form) -- clotran-ast's :pool and :fingerprint
+       ! without exporting the tree: what clotran.loader needs to install
+       ! a compiled function, at a small part of the cost.
+       block
+         type(gc_value) :: genv, node
+         genv = gce_env()
+         call vs_set(base + 2, genv)
+         node = gce_analyze(strip_meta(gcv_nth(args, 0)), vs_get(base + 2))
+         if (.not. has_error) then
+            call vs_set(base + 3, node)
+            out = compiled_pool(vs_get(base + 3), [vs_get(base + 1), vs_get(base + 2)])
          end if
        end block
     case (B_EDNREAD)
@@ -13533,6 +13573,252 @@ contains
   ! a p-slot that is itself a node is exported as a map; anything
   ! else is exported as the value it is, so a constant arrives as the
   ! constant and a Var as the Var.
+  ! ---- a compiled function's constant pool, and its fingerprint -----
+  !
+  ! clotran.compiler numbers the pool entries its generated code reads,
+  ! and clotran.loader rebuilds the pool in a LATER process by analysing
+  ! the same form again: Vars, folded functions and subtrees handed to
+  ! the interpreter are live objects no file can hold. Both sides take
+  ! the pool from HERE, so there is one rule and no second copy to drift.
+  !
+  ! The walk covers the part of the body the generator emits -- the
+  ! kinds below -- and stops at any other node: that node is itself the
+  ! pool entry, and the interpreter runs it. The fingerprint is 32-bit
+  ! FNV-1a (held in 64 bits, so the multiply cannot overflow)
+  ! over what the generated code depends on: node kinds, slot numbers,
+  ! spellable constants, and each pool entry's kind and identity by
+  ! name. A local's NAME is left out: it is debugging text, and a gensym
+  ! (G__1039) differs in every process.
+
+  logical function pool_compiled_kind(k)
+    integer, intent(in) :: k
+    pool_compiled_kind = any(k == [N_CONST, N_LOCAL, N_IF, N_DO, N_CALL, N_VAR, N_LET, N_LOOP, N_RECUR])
+  end function pool_compiled_kind
+
+  ! A constant the generated code writes into its own source (the
+  ! compiler's spellable?): nil, a boolean, a long other than
+  ! Long/MIN_VALUE, a finite double.
+  logical function pool_spellable(v0)
+    type(gc_value), intent(in) :: v0
+    type(gc_value) :: v
+    v = strip_meta(v0)
+    select case (v%tag)
+    case (GCT_NIL, GCT_BOOL)
+       pool_spellable = .true.
+    case (GCT_INT)
+       pool_spellable = (v%ival /= -huge(v%ival) - 1)
+    case (GCT_REAL)
+       pool_spellable = (v%rval == v%rval .and. abs(v%rval) <= huge(v%rval))
+    case default
+       pool_spellable = .false.
+    end select
+  end function pool_spellable
+
+  subroutine fp_mix(h, x)
+    integer(gc_ip), intent(inout) :: h
+    integer(gc_ip), intent(in) :: x
+    integer :: i
+    do i = 0, 7
+       h = ieor(h, iand(shiftr(x, 8 * i), 255_gc_ip))
+       h = iand(h * 16777619_gc_ip, 4294967295_gc_ip)
+    end do
+  end subroutine fp_mix
+
+  subroutine fp_mix_text(h, s)
+    integer(gc_ip), intent(inout) :: h
+    character(len=*), intent(in) :: s
+    integer :: i
+    call fp_mix(h, int(len(s), gc_ip))
+    do i = 1, len(s)
+       h = ieor(h, int(ichar(s(i:i)), gc_ip))
+       h = iand(h * 16777619_gc_ip, 4294967295_gc_ip)
+    end do
+  end subroutine fp_mix_text
+
+  ! A scalar field, or a vector of them -- a recur's [count start] --
+  ! mixed in; a symbol, a node or anything else is not.
+  ! Text with the digits after every "__" removed: mm__1096__auto__ and
+  ! G__1039 are gensyms, and the counter in them depends on how much
+  ! code ran before, not on what this code is.
+  function without_gensym_counters(s) result(t)
+    character(len=*), intent(in) :: s
+    character(len=:), allocatable :: t
+    character(len=len(s)) :: buf
+    integer :: i, n
+    logical :: skip
+    n = 0
+    skip = .false.
+    do i = 1, len(s)
+       if (skip .and. index("0123456789", s(i:i)) > 0) cycle
+       skip = .false.
+       n = n + 1
+       buf(n:n) = s(i:i)
+       if (i > 1) skip = (s(i-1:i) == "__")
+    end do
+    t = buf(1:n)
+  end function without_gensym_counters
+
+  recursive subroutine fp_mix_field(h, v0)
+    integer(gc_ip), intent(inout) :: h
+    type(gc_value), intent(in) :: v0
+    type(gc_value) :: v
+    integer :: i
+    v = strip_meta(v0)
+    select case (v%tag)
+    case (GCT_NIL)
+       call fp_mix(h, -1_gc_ip)
+    case (GCT_BOOL, GCT_INT)
+       call fp_mix(h, int(v%ival, gc_ip))
+    case (GCT_REAL)
+       call fp_mix(h, transfer(v%rval, 0_gc_ip))
+    case default
+       if (gcv_is(v)) then
+          do i = 0, gcv_count(v) - 1
+             call fp_mix_field(h, gcv_nth(v, i))
+          end do
+       end if
+    end select
+  end subroutine fp_mix_field
+
+  ! Append [kind value] to the pool at stack slot pb unless an entry of
+  ! that kind already holds the same thing: a Var or a node by
+  ! identity, a constant by value. Mixes the entry into the fingerprint
+  ! either way, so where it recurs is part of the shape too.
+  subroutine pool_add(pb, kind, v, h)
+    integer, intent(in) :: pb
+    character(len=*), intent(in) :: kind
+    type(gc_value), intent(in) :: v
+    integer(gc_ip), intent(inout) :: h
+    type(gc_value) :: e, pool
+    integer :: i, b, at
+    b = vs_enter(3)
+    call vs_set(b + 1, v)
+    pool = vs_get(pb)
+    at = -1
+    do i = 0, gcv_count(pool) - 1
+       e = gcv_nth(pool, i)
+       if (text_of(gcv_nth(e, 0)) /= kind) cycle
+       e = gcv_nth(e, 1)
+       if (kind == "const") then
+          if (gc_equal(e, v)) at = i
+       else if (e%tag == v%tag .and. e%ref == v%ref) then
+          at = i
+       end if
+       if (at >= 0) exit
+    end do
+    call fp_mix_text(h, kind)
+    select case (kind)
+    case ("var")
+       call fp_mix_text(h, gcp_str(v, .true.))
+    case ("node")
+       call fp_mix(h, int(gc_i1(v), gc_ip))
+    case default
+       if (gc_kind(strip_meta(v)) == OBJ_BUILTIN) then
+          call fp_mix_text(h, text_of(gc_slot(strip_meta(v), 1)))
+       else if (gc_kind(strip_meta(v)) == OBJ_CLOSURE) then
+          call fp_mix_text(h, "fn")
+       else
+          call fp_mix_text(h, without_gensym_counters(gcp_str(v, .true.)))
+       end if
+    end select
+    if (at < 0) then
+       e = gcv_empty([vs_get(pb), vs_get(b + 1)])
+       call vs_set(b + 2, e)
+       call vs_set(b + 3, gc_key(kind, [vs_get(pb), vs_get(b + 1), vs_get(b + 2)]))
+       e = gcv_conj(vs_get(b + 2), vs_get(b + 3), [vs_get(pb), vs_get(b + 1), vs_get(b + 2), vs_get(b + 3)])
+       call vs_set(b + 2, e)
+       e = gcv_conj(vs_get(b + 2), vs_get(b + 1), [vs_get(pb), vs_get(b + 1), vs_get(b + 2)])
+       call vs_set(b + 2, e)
+       pool = gcv_conj(vs_get(pb), vs_get(b + 2), [vs_get(pb), vs_get(b + 2)])
+       call vs_set(pb, pool)
+       at = gcv_count(pool) - 1
+    end if
+    call fp_mix(h, int(at, gc_ip))
+    call vs_leave(b)
+  end subroutine pool_add
+
+  recursive subroutine pool_walk(nd, pb, h)
+    type(gc_value), intent(in) :: nd
+    integer, intent(in) :: pb
+    integer(gc_ip), intent(inout) :: h
+    type(gc_value) :: kids
+    integer :: b, i, k
+    if (gc_kind(nd) /= OBJ_AST) then
+       call fp_mix_field(h, nd)
+       return
+    end if
+    b = vs_enter(2)
+    call vs_set(b + 1, nd)
+    k = gc_i1(nd)
+    call fp_mix(h, int(k, gc_ip))
+    if (.not. pool_compiled_kind(k)) then
+       call pool_add(pb, "node", vs_get(b + 1), h)
+    else if (k == N_VAR) then
+       call pool_add(pb, "var", gc_slot(vs_get(b + 1), 2), h)
+    else if (k == N_CONST) then
+       if (pool_spellable(gc_slot(vs_get(b + 1), 2))) then
+          call fp_mix_field(h, gc_slot(vs_get(b + 1), 2))
+       else
+          call pool_add(pb, "const", gc_slot(vs_get(b + 1), 2), h)
+       end if
+    else
+       call fp_mix(h, int(gc_i2(vs_get(b + 1)), gc_ip))
+       if (k /= N_LOCAL) call fp_mix_field(h, gc_slot(vs_get(b + 1), 2))
+       call fp_mix_field(h, gc_slot(vs_get(b + 1), 3))
+       kids = gc_slot(vs_get(b + 1), 1)
+       call vs_set(b + 2, kids)
+       if (gcv_is(kids)) then
+          call fp_mix(h, int(gcv_count(kids), gc_ip))
+          do i = 0, gcv_count(vs_get(b + 2)) - 1
+             call pool_walk(gcv_nth(vs_get(b + 2), i), pb, h)
+          end do
+       end if
+    end if
+    if (k == N_LOCAL) call fp_mix(h, int(gc_i2(vs_get(b + 1)), gc_ip))
+    call vs_leave(b)
+  end subroutine pool_walk
+
+  ! {:pool [[kind value] ...] :fingerprint n} for the analysed form
+  ! `top` -- a top node over a fn -- from its first arity's body, which
+  ! is all the compiler compiles. Anything else answers an empty pool.
+  recursive function compiled_pool(top, roots) result(out)
+    type(gc_value), intent(in) :: top
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, fnode, tmpl, arity, m
+    integer(gc_ip) :: h
+    integer :: b
+    b = vs_enter(4)
+    call vs_set(b + 1, top)
+    call vs_set(b + 2, gcv_empty([roots, vs_get(b + 1)]))
+    h = 2166136261_gc_ip
+    fnode = top
+    if (gc_kind(fnode) == OBJ_AST) then
+       if (gc_i1(fnode) == N_TOP) fnode = gc_slot(fnode, 2)
+    end if
+    if (gc_kind(fnode) == OBJ_AST) then
+       if (gc_i1(fnode) == N_FN) then
+          tmpl = gc_slot(fnode, 2)
+          ! [name arities captures nslots selfslot slotnames]
+          call fp_mix(h, int(gcv_count(gcv_nth(tmpl, 1)), gc_ip))
+          call fp_mix_field(h, gcv_nth(tmpl, 3))
+          call fp_mix_field(h, gcv_nth(tmpl, 4))
+          arity = gcv_nth(gcv_nth(tmpl, 1), 0)
+          call fp_mix_field(h, gcv_nth(arity, 0))
+          call fp_mix_field(h, gcv_nth(arity, 1))
+          call pool_walk(gcv_nth(arity, 3), b + 2, h)
+       end if
+    end if
+    m = gca_empty([roots, vs_get(b + 1), vs_get(b + 2)])
+    call vs_set(b + 3, m)
+    call vs_set(b + 4, gc_key("pool", [roots, vs_get(b + 2), vs_get(b + 3)]))
+    m = gca_assoc(vs_get(b + 3), vs_get(b + 4), vs_get(b + 2), [roots, vs_get(b + 2), vs_get(b + 3), vs_get(b + 4)])
+    call vs_set(b + 3, m)
+    call vs_set(b + 4, gc_key("fingerprint", [roots, vs_get(b + 3)]))
+    m = gca_assoc(vs_get(b + 3), vs_get(b + 4), gc_int(int(h, gc_ip)), [roots, vs_get(b + 3), vs_get(b + 4)])
+    out = m
+    call vs_leave(b)
+  end function compiled_pool
+
   recursive function ast_data(nd, roots) result(out)
     type(gc_value), intent(in) :: nd
     type(gc_value), intent(in) :: roots(:)

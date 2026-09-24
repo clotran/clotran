@@ -834,7 +834,18 @@ costs speed rather than a decline.
    elsewhere that changed the expansion refuses it too). Installing costs
    about a second at startup, mostly loading the loader and analysing
    again; the heap image (step 5, stage 3) is what removes it.
-6. `clojure.core` compiled.
+6. `clojure.core` compiled -- the plumbing done 2026-09-24, the speed
+   not yet. `make compiled-core` compiles 339 of core.clj's 529 defns
+   into build/compiled/clojure/core.dylib, and every load of core.clj
+   installs it: `make test` and the derived suite (2880 of 2880) pass
+   with it in place. `scripts/bench` does not move, and should not be
+   expected to: `map`, `reduce`, `into`, `range` and `sort` are among
+   the 139 declined for more than one arity and the 49 declined as
+   variadic. Multi-arity and variadic functions are what makes this pay.
+   The pool and fingerprint are the HOST's (Eval.f90 compiled_pool),
+   shared by compiler and loader: the first loader rebuilt them in
+   Clojure and took 41 s to install core; this takes about half a
+   second.
 7. Unboxed arithmetic where the analyser can prove a number, which is
    where the scientific loops are.
 

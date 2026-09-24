@@ -25,7 +25,7 @@
   and compares values, so a generator bug is a difference rather than a
   silent wrong answer."
   (:require [clojure.string :as str]
-            [clotran.loader :as loader :refer [spellable? walk-nodes compiled-ops pooled fn-pool]]))
+            [clotran.loader :as loader]))
 
 ;;; ---- the declarations a generated file needs ------------------------
 ;;;
@@ -154,6 +154,60 @@ end module clotran_rt_decl
 ")
 
 ;;; ---- what the generator understands ---------------------------------
+
+;; The HOST decides what is pooled (Eval.f90, compiled_pool): these
+;; three say the same thing, and a disagreement shows up as an entry
+;; the generator asks for and the pool does not have.
+
+(defn- spellable?
+  "A constant a generated procedure can write into its own source.
+  Everything else -- a collection, a Var, a string, the function
+  analysis folded into a call head -- goes in the CONSTANT POOL
+  instead.
+
+  A STRING could be written as a Fortran literal, and deliberately is
+  not: its quotes, newlines and byte length are each a way to emit a
+  file that compiles into a different string. A BigInt is `integer?`
+  and must not be written as a long, so this asks `int?`. A double
+  that is not finite has no Fortran spelling, and Long/MIN_VALUE
+  cannot be written as a negative literal because its magnitude does
+  not fit."
+  [v]
+  (or (nil? v) (true? v) (false? v)
+      (and (int? v) (not= v Long/MIN_VALUE))
+      (and (double? v) (not (NaN? v)) (not (infinite? v)))))
+
+
+(defn- walk-nodes
+  "Every node in the tree, depth first."
+  [t]
+  (filter #(and (map? %) (:op %)) (tree-seq coll? seq t)))
+
+
+(def ^:private compiled-ops
+  "The node kinds the generator emits code for. Everything else goes
+  through the escape hatch, which is slower and still correct."
+  #{:const :local :if :do :call :var :let :loop :recur})
+
+
+(defn- pooled
+  "The value this node needs out of the pool, or nil if it needs none.
+
+  A :var node holds the Var itself, so the pool holds the Var and the
+  procedure derefs it at the call -- which is what makes a redefinition
+  visible to compiled code. A :const holding anything unspellable holds
+  exactly the value the interpreter would have used, so compiling
+  cannot change what the form means."
+  [nd]
+  (cond
+    (= :var (:op nd)) {:kind :var :value (:p1 nd)}
+    (and (= :const (:op nd)) (not (spellable? (:p1 nd)))) {:kind :const :value (:p1 nd)}
+    ;; a kind we do not emit: the pool holds the NODE and the
+    ;; interpreter runs it
+    (not (compiled-ops (:op nd))) {:kind :node :value (:node nd)}
+    :else nil))
+
+
 
 (defn decline-reason
   "Why this function cannot be compiled yet, or nil if it can. A list of
@@ -984,11 +1038,10 @@ end module clotran_rt_decl
   code the function would get with no hints at all. So a wrong argument
   answers exactly what the interpreter answers, and compiling still
   cannot change what a call means."
-  [sym tmpl hints offset]
+  [sym tmpl hints offset pool]
   (let [[_ arities _ nslots _ _] tmpl
         [nargs _ _ body] (first arities)
         vs (versions hints (array-params body nargs hints))
-        pool (fn-pool body)
         ;; b+1 is the locals frame, b+2 .. b+1+P hold what the pool
         ;; supplies, and temporaries start after them
         pslots (into {} (map-indexed (fn [i p] [p (+ 2 i)]) pool))
@@ -1057,15 +1110,21 @@ end module clotran_rt_decl
   needs that Fortran cannot spell -- Vars, collections, the functions
   analysis folded into call heads -- and the driver registers it and
   hands the handle to the library at install time."
-  ([ns-name fn-name form] (compile-fn ns-name fn-name form 0))
-  ([ns-name fn-name form offset]
-   (let [{:keys [tmpl fingerprint]} (loader/analyse form)]
+  ([ns-name fn-name form] (compile-fn ns-name fn-name form 0 nil))
+  ([ns-name fn-name form offset idx]
+   (let [{:keys [tmpl fingerprint pool]} (loader/analyse form)]
      (if (nil? tmpl)
        {:declined "not a fn form"}
        (if-let [why (decline-reason tmpl)]
          {:declined why}
-         (let [sym (str "cf_" (fort-ident (str ns-name)) "_" (fort-ident (str fn-name)))
-               proc (fn-procedure sym tmpl (param-hints form) offset)]
+         ;; Mangling is not one-to-one -- volatile! and volatile? are both
+         ;; volatile_ -- and Fortran stops at 63 characters, so a file of
+         ;; many functions numbers them and keeps the name for reading.
+         (let [sym (if idx
+                     (let [nm (fort-ident (str fn-name))]
+                       (str "cf" idx "_" (subs nm 0 (min 50 (count nm)))))
+                     (str "cf_" (fort-ident (str ns-name)) "_" (fort-ident (str fn-name))))
+               proc (fn-procedure sym tmpl (param-hints form) offset pool)]
            (assoc proc :ns ns-name :name fn-name :fingerprint fingerprint)))))))
 
 (defn- manifest-text
@@ -1141,6 +1200,22 @@ end module clotran_rt_decl
   [procs]
   (vec (mapcat :pool procs)))
 
+(defn- last-touch
+  "name -> the index of the LAST top-level form that defines it or names
+  its Var -- (def x ...), (defn x ...), (alter-var-root #'x ...), any
+  (var x) at all. Clojure installs a compiled defn at its own place in
+  the file; the loader installs after the whole file has run, so a defn
+  anything later touches would clobber what came after it."
+  [forms]
+  (let [defs '#{def defn defn- defmacro defmulti defonce definline}]
+    (reduce (fn [m [i f]]
+              (reduce (fn [m x]
+                        (if (and (seq? x) (or (defs (first x)) (= 'var (first x))) (symbol? (second x)))
+                          (assoc m (second x) i)
+                          m))
+                      m (tree-seq coll? seq f)))
+            {} (map-indexed vector forms))))
+
 (defn compile-file
   "Compiles every top-level defn in the source file `src` to one
   Fortran file, `out`, and answers what it did: {:compiled [names]
@@ -1153,19 +1228,28 @@ end module clotran_rt_decl
   analyses exactly what this one did."
   [src out]
   (let [text (clotran-slurp src)
-        _ (load-file src)
         [head ns-name] (read-string text)
+        ;; clojure.core is loaded before anything runs, and loading it
+        ;; again re-evaluates every definition against itself
+        _ (when-not (find-ns ns-name) (load-file src))
         _ (when-not (= 'ns head) (throw (ex-info (str src " does not begin with (ns ...)") {})))
         forms (binding [*ns* (the-ns ns-name)] (read-string (str "[" text "\n]")))
-        defns (filter #(and (seq? %) (#{'defn 'defn-} (first %))) forms)
+        touched (last-touch forms)
+        defns (keep-indexed (fn [i f] (when (and (seq? f) (#{'defn 'defn-} (first f))) [i f])) forms)
         [procs declined]
         (binding [*ns* (the-ns ns-name)]
-          (reduce (fn [[procs declined] d]
+          (reduce (fn [[procs declined] [i d]]
                     (let [nm (second d)
                           f (some-> (loader/fn-form d) loader/print-form)
-                          r (if f
-                              (compile-fn ns-name nm (read-string f) (count (pool-of procs)))
-                              {:declined "not a fn"})]
+                          r (cond
+                              (> (touched nm i) i)
+                              {:declined "defined again, or its Var named, later in the file"}
+                              (not (loader/defined-in? (ns-resolve ns-name nm) src))
+                              {:declined "its Var's definition comes from another file"}
+                              :else
+                            (if f
+                              (compile-fn ns-name nm (read-string f) (count (pool-of procs)) (count procs))
+                              {:declined "not a fn"}))]
                       (if (:declined r)
                         [procs (assoc declined (str nm) (:declined r))]
                         [(conj procs (assoc r :form f)) declined])))
