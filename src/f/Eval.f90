@@ -226,7 +226,7 @@ module Eval
   integer, parameter :: B_ISARRAY = 369, B_EDNREAD = 370, B_ASTDATA = 371
   integer, parameter :: B_LOADCOMPILED = 372, B_ALLNS = 373, B_POOLREG = 374
   integer, parameter :: B_LONGCAST_CHECKED = 375, B_SIMPLENAME = 376
-  integer, parameter :: B_NUMLONG = 377, B_ARRAYCAST = 378
+  integer, parameter :: B_NUMLONG = 377, B_ARRAYCAST = 378, B_SPIT = 379
 
   ! Compiler.CHAR_MAP, verbatim from the pinned clone: the characters
   ! a Clojure name may hold that a JVM member name may not. '.' is
@@ -356,6 +356,7 @@ module Eval
   logical, save :: spec_loaded = .false.
   logical, save :: spec_loading = .false.
   logical, save :: pk_loaded = .false.   ! clotran.package, once (B_PKGFN)
+  logical, save :: ld_loaded = .false.   ! clotran.loader, once (gce_install_compiled)
   ! The packages opened (DynLoad.f90), by handle: a package's fns carry
   ! the index, never the pointer.
   type(c_ptr), allocatable, save :: pkg_handles(:)
@@ -374,7 +375,7 @@ module Eval
        TASK_DONE = 3, TASK_FAILED = 4, TASK_CANCELLED = 5
 
   public :: gce_eval, gce_base_env, gce_has_error, gce_error, gce_clear_error, gce_set_spec_check
-  public :: gce_main_bindings
+  public :: gce_main_bindings, gce_install_compiled
   public :: gce_analyze, gce_trace
   public :: gce_ctx_new, gce_ctx_switch, gce_ctx_current
   public :: gce_repl
@@ -752,6 +753,7 @@ contains
     ! A whole file as a string. core.clj's slurp is written over
     ! java.io, which is not here; this is the host's reader for it.
     call bind_builtin(core, "clotran-slurp", B_SLURP)
+    call bind_builtin(core, "clotran-spit", B_SPIT)
     call bind_builtin(core, "count", B_COUNT)
     call bind_builtin(core, "first", B_FIRST)
     call bind_builtin(core, "rest", B_REST)
@@ -1059,6 +1061,44 @@ contains
     end if
     call vs_leave(base)
   end subroutine check_specs
+
+  ! After a source file loads: when a compiled library sits beside it
+  ! -- foo.cljf and foo.dylib or foo.so, as a class file sits beside a
+  ! .clj for RT.load -- clotran.loader installs it over the functions
+  ! the source just defined. Nothing beside it, nothing happens, and
+  ! clotran.loader is never read. A library that will not install is
+  ! REPORTED and the interpreted definitions stand: the source loaded,
+  ! so the program is still right, only slower.
+  recursive subroutine gce_install_compiled(path)
+    character(len=*), intent(in) :: path
+    character(len=5), parameter :: exts(2) = [character(len=5) :: "dylib", "so"]
+    character(len=:), allocatable :: stem, cand
+    type(gc_value) :: args, r
+    logical :: there
+    integer :: dot, i, base
+    dot = index(path, ".", back=.true.)
+    if (dot <= index(path, "/", back=.true.)) return
+    stem = path(1:dot)
+    do i = 1, 2
+       cand = stem // trim(exts(i))
+       inquire(file=cand, exist=there)
+       if (.not. there) cycle
+       base = vs_enter(1)
+       args = gcv_empty([gc_nil()])
+       call vs_set(base + 1, args)
+       args = gcv_conj(vs_get(base + 1), gc_str(cand, [vs_get(base + 1)]), [vs_get(base + 1)])
+       call vs_set(base + 1, args)
+       args = gcv_conj(vs_get(base + 1), gc_str(path, [vs_get(base + 1)]), [vs_get(base + 1)])
+       call vs_set(base + 1, args)
+       r = rt_call_in("clotran/loader", "clotran.loader", ld_loaded, "install", vs_get(base + 1))
+       if (has_error) then
+          print '(A,A,A,A)', "note: not using ", cand, ": ", gce_error()
+          call gce_clear_error()
+       end if
+       call vs_leave(base)
+       return
+    end do
+  end subroutine gce_install_compiled
 
   recursive function rt_call_in(lib, nsname, loaded, name, args) result(out)
     character(len=*), intent(in) :: lib, nsname, name
@@ -6956,7 +6996,26 @@ contains
          call gc_set_i2(out, -1) ! owns the handle -- not a slice
        end block
 
-case (B_SLURP)
+    case (B_SPIT)
+       ! (clotran-spit path text): the whole file replaced by the text.
+       ! core.clj's spit is written over java.io, which is not here;
+       ! this is clotran-slurp's other half.
+       block
+         character(len=:), allocatable :: path, text
+         integer :: u, st
+         path = text_of(gcv_nth(args, 0))
+         text = text_of(gcv_nth(args, 1))
+         open(newunit=u, file=path, access="stream", form="unformatted", &
+              status="replace", action="write", iostat=st)
+         if (st /= 0) then
+            call fail_as("java.io.FileNotFoundException", path // " (cannot open for writing)", [vs_get(base + 1)])
+         else
+            write(u) text
+            close(u)
+            out = gc_nil()
+         end if
+       end block
+    case (B_SLURP)
        block
          character(len=:), allocatable :: path, text
          integer :: u, st, fsize
@@ -7400,6 +7459,7 @@ case (B_SLURP)
                out = gce_eval(f, vs_get(base + 2), [vs_get(base + 1), vs_get(base + 3)])
                if (has_error) exit
             end do
+            if (.not. has_error) call gce_install_compiled(path)
          end if
        end block
     case (B_ENDSWITH)

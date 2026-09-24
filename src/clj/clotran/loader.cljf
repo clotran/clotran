@@ -1,0 +1,147 @@
+(ns clotran.loader
+  "Installs a compiled namespace over the one its source just defined.
+
+  Clojure's RT.load prefers a class file sitting beside the source when
+  the class is newer; clotran's compiled artifact is a shared library
+  sitting beside the source, `foo.cljf` and `foo.dylib` (or `.so`), and
+  `load` calls `install` here when there is one. The source is still
+  loaded first -- its macros, its defs that are not functions, and the
+  functions the compiler declined all come from it -- and the library
+  then replaces the functions it compiled.
+
+  THE POOL IS REBUILT, not read. A procedure's constants -- Vars,
+  collections, the functions analysis folded into call heads, whole
+  subtrees handed to the interpreter -- are live objects, and no file
+  can hold them. Analysis is deterministic, so analysing the same form
+  in the same namespace hands back the same pool in the same order.
+  Two checks make \"the same\" true rather than hoped for:
+
+  - the manifest carries a hash of the source, and a library built
+    from other text is not installed;
+  - each function carries a FINGERPRINT of its analysed tree, and a
+    tree that analyses differently now -- a macro in another namespace
+    changed, a Var went away -- is not installed either.
+
+  A library that fails either check is reported and left alone; the
+  interpreted definitions stand. Loading this namespace is cheap on
+  purpose: it is the part of the compiler every run needs, and only
+  that part."
+  (:require [clojure.string :as str]
+            [clojure.walk :as walk]))
+
+;;; ---- shared with clotran.compiler: what goes in the pool -------------
+
+(defn spellable?
+  "A constant a generated procedure can write into its own source.
+  Everything else -- a collection, a Var, a string, the function
+  analysis folded into a call head -- goes in the CONSTANT POOL
+  instead.
+
+  A STRING could be written as a Fortran literal, and deliberately is
+  not: its quotes, newlines and byte length are each a way to emit a
+  file that compiles into a different string. A BigInt is `integer?`
+  and must not be written as a long, so this asks `int?`. A double
+  that is not finite has no Fortran spelling, and Long/MIN_VALUE
+  cannot be written as a negative literal because its magnitude does
+  not fit."
+  [v]
+  (or (nil? v) (true? v) (false? v)
+      (and (int? v) (not= v Long/MIN_VALUE))
+      (and (double? v) (not (NaN? v)) (not (infinite? v)))))
+
+
+(defn walk-nodes
+  "Every node in the tree, depth first."
+  [t]
+  (filter #(and (map? %) (:op %)) (tree-seq coll? seq t)))
+
+
+(def compiled-ops
+  "The node kinds the generator emits code for. Everything else goes
+  through the escape hatch, which is slower and still correct."
+  #{:const :local :if :do :call :var :let :loop :recur})
+
+
+(defn pooled
+  "The value this node needs out of the pool, or nil if it needs none.
+
+  A :var node holds the Var itself, so the pool holds the Var and the
+  procedure derefs it at the call -- which is what makes a redefinition
+  visible to compiled code. A :const holding anything unspellable holds
+  exactly the value the interpreter would have used, so compiling
+  cannot change what the form means."
+  [nd]
+  (cond
+    (= :var (:op nd)) {:kind :var :value (:p1 nd)}
+    (and (= :const (:op nd)) (not (spellable? (:p1 nd)))) {:kind :const :value (:p1 nd)}
+    ;; a kind we do not emit: the pool holds the NODE and the
+    ;; interpreter runs it
+    (not (compiled-ops (:op nd))) {:kind :node :value (:node nd)}
+    :else nil))
+
+
+(defn fn-pool
+  "Everything the body needs out of the pool, in order, without
+  duplicates. Each gets one read at the top of the procedure rather
+  than one per use."
+  [body]
+  (->> (walk-nodes body) (keep pooled) distinct vec))
+
+;;; ---- one function, analysed ---------------------------------------
+
+(defn fn-form
+  "The (fn ...) a top-level defn defines, with a single arity written
+  as Clojure writes fn: `(fn [x] body)`, its hints where they were. A
+  defn whose value is not a fn form answers nil."
+  [defn-form]
+  (let [[_ _ f] (macroexpand defn-form)]
+    (when (and (seq? f) (= 'fn (symbol (name (first f)))))
+      (let [arities (rest f)]
+        (if (and (= 1 (count arities)) (seq? (first arities)) (vector? (ffirst arities)))
+          (list* 'fn (first arities))
+          f)))))
+
+(defn print-form
+  "A form as text that reads back with its hints: *print-meta* keeps
+  ^long and ^doubles, which the compiler reads."
+  [form]
+  (binding [*print-meta* true] (pr-str form)))
+
+(defn fingerprint
+  "A hash of an analysed tree that is the same in every process that
+  analyses the same code: node objects and source positions removed,
+  functions reduced to :fn."
+  [ast]
+  (hash (pr-str (walk/postwalk (fn [v] (cond (map? v) (dissoc v :node :pos)
+                                              (fn? v) :fn
+                                              :else v))
+                               ast))))
+
+(defn analyse
+  "The analysed (fn ...) `form`, in the current namespace: {:tmpl the
+  fn's template, or nil when the form is not a fn; :fingerprint; :pool}."
+  [form]
+  (let [top (clotran-ast form)
+        fnode (:p1 top)
+        tmpl (when (= :fn (:op fnode)) (:p1 fnode))
+        body (some-> tmpl second first (nth 3))]
+    {:tmpl tmpl :fingerprint (fingerprint top) :pool (fn-pool body)}))
+
+;;; ---- installing ------------------------------------------------------
+
+(defn install
+  "Install the compiled library `lib` built from the source file `src`.
+  True when it is installed; nil, with a note saying why, when it is
+  not."
+  [lib src]
+  (let [{:keys [ns source-hash fns]} (:manifest (fortran/load-package* lib))
+        note (fn [why] (println (str "note: not using " lib ": " why)) nil)]
+    (if (not= source-hash (hash (clotran-slurp src)))
+      (note (str src " has changed since it was compiled; recompile it"))
+      (let [built (binding [*ns* (the-ns (symbol ns))]
+                    (mapv #(analyse (read-string (:form %))) fns))
+            stale (keep (fn [[f b]] (when (not= (:fingerprint f) (:fingerprint b)) (:name f)))
+                        (map vector fns built))]
+        (if (seq stale)
+          (note (str "these analyse differently now: " (str/join ", " stale) "; recompile it"))
+          (clotran-load-compiled lib (clotran-pool-register (vec (mapcat #(map :value (:pool %)) built)))))))))

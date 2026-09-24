@@ -8,10 +8,40 @@
 # `clotran some.cljf` runs a program and `clotran` alone is the REPL.
 # core.clj is loaded on every start; there is no image yet, so this
 # costs about a second before the prompt.
+#
+# `clotran compile foo.cljf` compiles the namespace to foo.dylib (foo.so
+# on Linux) beside it. Loading foo.cljf afterwards installs the library
+# over the functions it compiled (clotran.loader); editing the source
+# makes the library stale, and it is then reported and not used. FC
+# picks the Fortran compiler, gfortran by default.
 root=$(cd "$(dirname "$0")" && pwd)
 bin="$root/clotran-bin"
 core="$root/src/clj/clojure/core.clj"
 [ -x "$bin" ] || { echo "build first: make" >&2; exit 1; }
+
+if [ "$1" = "compile" ]; then
+  [ $# -eq 2 ] || { echo "usage: clotran compile file.cljf" >&2; exit 2; }
+  src=$2
+  stem=${src%.*}
+  case "$(uname -s)" in
+    Darwin) lib="$stem.dylib"; undef="-Wl,-undefined,dynamic_lookup" ;;
+    *)      lib="$stem.so";    undef="" ;;
+  esac
+  work=$(mktemp -d) || exit 1
+  trap 'rm -rf "$work"' EXIT
+  printf '(let [r (clotran.compiler/compile-file "%s" "%s/out.f90")]\n  (doseq [[n why] (:declined r)] (println "declined:" n "--" why))\n  (println "compiled:" (count (:compiled r)) "functions"))\n' \
+    "$src" "$work" > "$work/driver.clj"
+  "$bin" "$core" "$root/src/clj/clotran/compiler.cljf" "$work/driver.clj" </dev/null \
+    | grep -v '^note: skipping\|^user=>\|WARNING: ->Eduction' | tee "$work/log"
+  [ -s "$work/out.f90" ] || { echo "clotran compile: no Fortran was written" >&2; exit 1; }
+  # A compiled namespace resolves clotran_* against the RUNNING binary
+  # at dlopen time, so those symbols are undefined at link time on
+  # purpose; macOS has to be told.
+  ${FC:-gfortran} -O2 -shared -fPIC -ffree-line-length-none $undef \
+    -J "$work" -o "$lib" "$work/out.f90" || exit 1
+  echo "wrote $lib"
+  exit 0
+fi
 
 if [ -t 0 ] && type rlwrap >/dev/null 2>&1; then
   exec rlwrap -m -r -q '"' -b "(){}[],^%#@\";:'" "$bin" "$core" "$@"

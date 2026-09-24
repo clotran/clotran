@@ -249,6 +249,34 @@ answers what Clojure actually does rather than what anyone remembers,
 and pinned clones of Clojure and ClojureScript are cited rather than
 recalled. See `CLAUDE.md`.
 
+### Compiling a namespace
+
+`clotran compile stats.cljf` turns every `defn` in the file into
+Fortran and builds `stats.dylib` (`stats.so` on Linux) beside it.
+Loading `stats.cljf` afterwards -- by `load-file`, `require` or the
+command line -- loads the source as usual and then puts the compiled
+functions in place of the interpreted ones. No hints needed:
+
+```clojure
+(ns stats)
+(defn total [a]
+  (let [n (alength a)]
+    (loop [i 0 s 0.0] (if (< i n) (recur (inc i) (+ s (aget a i))) s))))
+```
+
+    $ ./clotran compile stats.cljf
+    declined: variadic -- variadic
+    compiled: 4 functions
+    wrote stats.dylib
+
+`(stats/total (double-array (range 200000)))` takes 558 ms
+interpreted and 0.199 ms compiled; a warmed JVM takes 0.192 ms with a
+`^doubles` hint and 526 ms without one. What the compiler declines --
+here a variadic function -- stays interpreted and says why. Edit the
+source and the library is reported stale and not used until it is
+recompiled. `scripts/compiler-check` runs every case both ways and
+compares the answers.
+
 ## What does not
 
 | | |

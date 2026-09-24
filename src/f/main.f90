@@ -160,10 +160,12 @@ contains
           if (len(gce_trace()) > 0) write(*, '(A)', advance='no') gce_trace()
           print '(A,A)', "    in: ", first_line(gcp_str(vs_get(lb + 2), .true.))
           print '(A,A,A,I0)', "load ", path, ": stopped at form ", i
-          exit
+          call vs_leave(lb)
+          return
        end if
     end do
     call vs_leave(lb)
+    if (.not. gcr_has_error()) call gce_install_compiled(path)
   end subroutine load_file
 
   ! Just enough of a form to identify it in a report.

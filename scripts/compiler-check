@@ -294,3 +294,48 @@
                     (str/join "\n"))]
       (println body)
       (when-not (re-find #", 0 differ" body) (System/exit 1)))))
+
+;; ---- a whole namespace, through `clotran compile` --------------------
+;;
+;; The same file run twice, once with the library beside it and once
+;; without, and the answers compared; then the source edited, and the
+;; library must be refused rather than run against text it was not
+;; built from. The pool is rebuilt at load time by analysing again
+;; (clotran.loader), so this is the check that a later process gets the
+;; pool the generated code was written against.
+(let [dir (io/file work "ns")
+      src (io/file dir "cc_space.cljf")
+      lib (io/file dir (str "cc_space." soext))
+      run (io/file dir "run.cljf")
+      go (fn [] (->> (str/split-lines (run-clotran run))
+               (remove #(or (str/starts-with? % "note: skipping") (str/includes? % "WARNING") (str/starts-with? % "user=>")))))]
+  (.mkdirs dir)
+  (spit src (str "(ns cc-space)\n"
+                 "(def scale 3)\n"
+                 "(defmacro twice [x] `(* 2 ~x))\n"
+                 "(defn total [a] (let [n (alength a)] (loop [i 0 s 0.0] (if (< i n) (recur (inc i) (+ s (aget a i))) s))))\n"
+                 "(defn- scaled [x] (twice (* scale x)))\n"
+                 "(defn summary [a] {:total (total a) :scaled (scaled (alength a)) :kw ::k :v [1 \"two\" 3.0]})\n"
+                 "(defn guarded [^long n] (try (quot 10 n) (catch ArithmeticException e :div0)))\n"
+                 "(defn many [& xs] (count xs))\n"))
+  (spit run (str "(load-file \"" src "\")\n"
+                 "(prn [(cc-space/total (double-array [1 2 3])) (cc-space/total (long-array [1 2]))\n"
+                 "      (cc-space/summary (double-array 4)) (cc-space/guarded 5) (cc-space/guarded 0) (cc-space/guarded 2.5)\n"
+                 "      (cc-space/many 1 2 3) (try (cc-space/total [1]) (catch Exception e :threw))])\n"))
+  (.delete lib)
+  (let [interp (go)
+        r (shell {:out :string :err :string :dir (str repo) :continue true :in ""} "./clotran" "compile" (str src))
+        compiled (go)
+        _ (spit src (str (slurp src) "(defn added [] 1)\n"))
+        stale (go)]
+    (println "namespace: compile says" (pr-str (str/join " / " (remove str/blank? (str/split-lines (:out r))))))
+    (cond
+      (not (.exists lib))
+      (do (println "namespace: NO LIBRARY" (:err r)) (System/exit 1))
+      (not= interp compiled)
+      (do (println "namespace: DIFFER\n   interpreted:" interp "\n   compiled:   " compiled) (System/exit 1))
+      (not (some #(str/includes? % "has changed since it was compiled") stale))
+      (do (println "namespace: a STALE library was not refused:" stale) (System/exit 1))
+      (not= (remove #(str/starts-with? % "note: not using") stale) interp)
+      (do (println "namespace: refused, but the interpreted answer changed:" stale) (System/exit 1))
+      :else (println "namespace: compiled and interpreted agree; a stale library is refused"))))

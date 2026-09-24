@@ -823,7 +823,17 @@ costs speed rather than a decline.
    subtree. That escape hatch is what makes the generator correct from
    the first node kind it handles.
 4. `loop` and `recur` as a real Fortran loop.
-5. `clotran compile`, producing a package; then a linked binary.
+5. ~~`clotran compile`, producing a package~~ Done 2026-09-24; a linked
+   binary is still to do. `clotran compile foo.cljf` writes `foo.dylib`
+   (`.so`) beside the source; loading the source installs it, as RT.load
+   prefers a class file beside a .clj. The constant pool cannot be
+   written to a file -- Vars, folded functions, hatched subtrees -- so
+   `clotran.loader` REBUILDS it by analysing each compiled form again,
+   and two checks make that sound: a hash of the source (an edited file
+   refuses its library) and a fingerprint of each analysed tree (a macro
+   elsewhere that changed the expansion refuses it too). Installing costs
+   about a second at startup, mostly loading the loader and analysing
+   again; the heap image (step 5, stage 3) is what removes it.
 6. `clojure.core` compiled.
 7. Unboxed arithmetic where the analyser can prove a number, which is
    where the scientific loops are.
