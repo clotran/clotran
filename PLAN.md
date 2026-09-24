@@ -872,6 +872,80 @@ the value representation. An in-process JIT stays what the decision
 record below says: the day a profile shows node dispatch is what a real
 program waits on. Nothing here forecloses it, because the input either
 way is the resolved tree.
+
+### 11. Parallelism: one shape, three stages (decided 2026-09-24)
+
+**The shape.** clotran parallelizes one way at every scale: split the
+data, compute each piece locally, combine the partial results with an
+associative function. Clojure already names it -- `r/fold`, and `pmap`
+followed by a `reduce` -- and it is the one shape that reaches every
+level: a `do concurrent` loop (`reduce(+:s)`), threads in one process
+(combine at the join), and, later, images across machines (`co_sum`,
+`co_reduce`). A shared atom hammered by many workers is NOT the shape:
+it is slow even on the JVM (contention, retries), and machines share no
+memory to put it in. Atoms keep the job Clojure gave them, coordination.
+Every parallel package keeps this shape: `repro/*` is fold with
+order-independent combining; `coarrays` would be fold across images.
+
+**The three stages.**
+
+1. Baton threads. A future is a real OS thread with its own machine
+   stack, so a task blocked below compiled code parks instead of pinning
+   (DEVIATIONS 49 closes). Only one thread runs clotran code at a time --
+   one global lock, the baton -- so the heap stays single-threaded and
+   every answer is today's. POSIX (`pthread_*`) covers macOS and Linux;
+   Windows is a second file behind the same interface, or the same file
+   through MinGW's winpthreads, as libgomp does -- to be proven. Proved
+   2026-09-24: plain Fortran drives pthreads through iso_c_binding, one
+   source, under gfortran and flang both.
+2. Release the baton where no heap is touched: around Fortran package
+   calls (`dgemm`, ChemSol), in `do concurrent` loops, and in the typed
+   region of compiled numeric code (unboxed locals, raw array pointers).
+   A slow path -- overflow, a wrong-typed argument, a hatch -- takes the
+   baton back. This is multi-core for scientific work: `(pmap simulate
+   params)` over a compiled `simulate` uses every core. It is what NumPy
+   does under Python's lock. It needs array buffers that never move
+   (done, 5949ee1), arrays the caller keeps rooted, and each thread's
+   roots visible to the collector. `Runtime.availableProcessors` must
+   then answer the real count; today it answers 1, which sizes pmap.
+3. A thread-safe collector: thread-local allocation, safepoints, write
+   barriers, and a value compact enough for a hardware compare-and-swap
+   (a `gc_value` is 32 bytes under both compilers; hardware CAS takes 16
+   at most). Then any Clojure runs in parallel. A project of its own,
+   named here so that it is not slipped in piece by piece.
+
+The future semantics are the SAME at every stage: removing the baton
+changes the runtime, never a program. `pmap`, `pcalls` and `pvalues` are
+core.clj's own, built on `future`, so they come free at stage 1 and turn
+multi-core at stage 2 with no change to anyone's code. `pmap`'s own
+docstring gives the grain rule: "Only useful for computationally
+intensive functions where the time of f dominates the coordination
+overhead."
+
+**`do concurrent` is emitted, never written.** The compiler emits it
+only where the SHAPE of the code proves independence -- `amap` (a fresh
+output array, one slot written per iteration) and `areduce` with an
+exact operation -- and its body may contain no `clotran_*` runtime call,
+only arithmetic on primitives and array pointers. `do concurrent` is a
+promise the Fortran compiler trusts, not one it checks, so a wrong one is
+a silent wrong answer. What is not proven runs serially. Compilers differ
+in acting on it: flang with `-fopenmp -fdo-concurrent-to-openmp=host`
+ran a test loop 3.2x faster on 10 threads; gfortran's
+`-ftree-parallelize-loops` did not parallelize it at all. The same
+source is the GPU door later (nvfortran `-stdpar=gpu`, flang `=device`).
+
+**Floating-point reductions stay explicit.** Addition of doubles is not
+associative in any language: `(+ (+ 0.1 0.2) 0.3)` is
+0.6000000000000001 and `(+ 0.1 (+ 0.2 0.3))` is 0.6, in clj and in both
+Fortran compilers. A plain `reduce` stays serial and bit-identical to
+Clojure; order-independent parallel sums are the `repro/*` package
+(PACKAGES.md), asked for by name.
+
+**Not now**: coarrays (PACKAGES.md: 348 MB and 2.3 s per clotran image;
+the right tool only across machines), OpenMP directives in generated
+code (they need `-fopenmp` to mean anything), native atomics for atoms
+(stage 3).
+
 ## Decisions that still hold
 
 **The value type has no `FINAL`.** Copying a `cons_value` (nine
