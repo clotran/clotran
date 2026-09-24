@@ -228,6 +228,9 @@ claim has to match the evidence.
 - `SEAMS.md` -- the other question: what must be native versus what we
   merely chose to make native, with ClojureScript as the control group.
   Not the same ledger as DEVIATIONS; do not mix them.
+- `PACKAGES.md` -- the package system: what a package is, the core
+  packages we ship, the planned ones, and the vendoring rules (pinned by
+  sha256, private prefix, never a system package manager).
 - `PLAN.md` -- what we are about to build, what we decided not to, and
   why, so decisions are not re-argued from scratch. Contains the
   "Should we JIT?" decision record.
