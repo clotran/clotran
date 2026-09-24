@@ -972,6 +972,65 @@ compiled. JVM Clojure keeps its compiler at run time for the same
 reason. `.cljc` compiles once it has `:cljf` or `:default` branches; a
 library with only `:clj` and `:cljs` reads as nothing here.
 
+
+### 13. As much as possible into pure Fortran: tiers, and warnings that say how to fix (decided 2026-09-24)
+
+**Measured, 2026-09-24.** `clotran-bin` is 36.4 MB, of which the machine
+code is 1.86 MB and 33.1 MB is ICU's complete data, linked whole. Linked
+against ICU's empty stub data instead it is 3.07 MB and language_test
+passes; Arabic letters, scripts and digits, case maps and `\w` all
+behave the same. What needs data is emoji properties (ICU feature
+`uemoji`, 13 KiB) and character names for `\N{...}` (`unames`, 269 KiB).
+Locales, collation and legacy charsets are never reached by
+clojure.core. So: ship the ~300 KB of Unicode data clojure.core needs
+inside the binary, and the full ICU archive BESIDE it as an optional
+package -- Java's own layout (`java.base` holds Unicode data, standard
+charsets and English; `jdk.localedata` and `jdk.charsets` are optional
+modules `jlink` can drop). ICU supports it: `--with-data-packaging=archive`
+and the Data Build Tool's feature filters.
+
+A tier-A function written as the generator would emit it -- `stats/total`
+-- is 1.1 KB of object code and a 35 KB program (`/usr/bin/grep` is
+153 KB here).
+
+**The tiers.** A program links only the runtime modules it reaches:
+
+- A, pure Fortran: numbers, booleans, chars, primitive arrays, strings
+  and small collections that do not outlive the function (escape
+  analysis), keywords as constants, records of primitives (derived
+  types), printing strings and numbers (`write`), `map`/`filter`/
+  `reduce`/`range` chains FUSED into a loop (Clojure's own transducers
+  say the same thing), and `def`/`defn` direct-linked -- Clojure 1.8's
+  direct linking, under which clojure.core itself is compiled, excluding
+  `^:dynamic` and `^:redef` (the pinned changes.md 1.1; Compiler.java
+  `directLinkingKey`). A tier-A namespace is an ordinary Fortran module,
+  usable from any Fortran program, and it is exactly the code that can
+  release the baton, run in `do concurrent`, and go to a GPU.
+- B, the collector and collections (and the printer, reader or regex
+  module where reached): maps, vectors and seqs that are kept, shared or
+  returned; protocols; atoms; exceptions.
+- C, the interpreter and dynamic Vars: `eval`, `load-string`, runtime
+  `require` of source, `binding`, `with-redefs`, `resolve` and call.
+
+Most functions have no fixed tier: `map` over an array consumed by
+`reduce` is A; the same `map` returned as a lazy seq is B.
+
+**Warnings: every case, with the fix.** The compiler reports each call
+site that pulls a function out of tier A, where, why, and what would
+keep it in -- Rust's diagnostics are the model: a location, the span, a
+note saying why, and a `help:` with the rewrite. So a programmer who
+merely forgot to consume a seq is told so:
+
+    warning[B001]: lazy seq kept, so `stats/squares` needs the collector
+      --> stats.cljf:12:3
+       |
+    12 |   (map #(* % %) xs))
+       |   ^^^^^^^^^^^^^^^^^ returned to the caller as a lazy seq
+       = help: consume it here to stay pure Fortran:
+               (reduce + (map #(* % %) xs))  or  (amap xs i r (* (aget xs i) (aget xs i)))
+
+The existing `decline-reason` plumbing is where this starts.
+
 ## Decisions that still hold
 
 **The value type has no `FINAL`.** Copying a `cons_value` (nine
