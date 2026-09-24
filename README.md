@@ -277,6 +277,27 @@ source and the library is reported stale and not used until it is
 recompiled. `scripts/compiler-check` runs every case both ways and
 compares the answers.
 
+### Which code can be pure Fortran
+
+`clotran compile --report file.cljf` sorts every function into a tier --
+**A** pure Fortran, needing no clotran runtime; **B** the collector and
+collections; **C** the interpreter -- and, at every call site that
+leaves tier A, says why and what would keep it there:
+
+    tier A  tiers-sample/sum-squares
+    tier B  tiers-sample/squares
+
+    warning[B001]: lazy seq kept: the result of `map` is returned or stored, so it needs the collector
+      in `tiers-sample/squares`
+       --> test/clj/tiers_sample.cljf:17:20
+       |
+    17 | (defn squares [xs] (map #(* % %) xs))
+       |                    ^
+       = help: consume it where it is made, so the chain fuses into one loop: (reduce f init (map ...)), (run! f (map ...)), or (into-array (map ...))
+
+It classifies; tier A does not yet compile to a stand-alone Fortran
+module. PLAN.md step 13 has the design.
+
 ## What does not
 
 | | |
