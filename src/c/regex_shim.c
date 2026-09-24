@@ -21,8 +21,8 @@
 #include <string.h>
 
 /* UTF-8 to UTF-16, so a multibyte string matches as its characters
- * and every offset ICU reports is a character index (a UTF-16 unit; the
- * same thing off the astral plane), which is what Fortran's u8_slice
+ * and ICU reports offsets in UTF-16 units, which cre_group_span counts
+ * back into characters (they differ past the BMP), which Fortran's u8_slice
  * takes. Bytes that are not UTF-8 -- Latin-1 read from a file -- are
  * widened one byte to one unit instead, as everything once was. */
 static UChar *widen(const char *bytes, int32_t len, int32_t *ulen) {
@@ -163,8 +163,19 @@ int32_t cre_group_span(void *handle, int32_t idx, int32_t *start, int32_t *end) 
   e = uregex_end((URegularExpression *)handle, idx, &status);
   if (U_FAILURE(status)) return -1;
   if (s < 0) return 0;
-  *start = s;
-  *end = e;
+  /* ICU's offsets are UTF-16 UNITS; clotran's are CHARACTERS (code
+   * points, DEVIATIONS 41). They differ past the Basic Multilingual
+   * Plane -- an emoji is two units and one character -- and taking one
+   * for the other sliced (re-find #"x" "<emoji>x") to "". So the units
+   * before each offset are counted as characters. getText is safe here:
+   * a group has a span only after a match, and a match needs text. */
+  {
+    int32_t tlen = 0;
+    const UChar *txt = uregex_getText((URegularExpression *)handle, &tlen, &status);
+    if (U_FAILURE(status) || !txt) return -1;
+    *start = u_countChar32(txt, s);
+    *end = *start + u_countChar32(txt + s, e - s);
+  }
   return 1;
 }
 

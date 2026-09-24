@@ -2415,3 +2415,16 @@
 [(hint-t #(let [^long x 1.5] x))]
 (expect-diff "DEVIATIONS 48: aset on a ^doubles array with a long finds no method on the JVM")
 [(hint-t #((fn [^doubles a] (aset a 0 2)) (double-array 1)))]
+
+;;; Regex past the Basic Multilingual Plane. ICU reports offsets in
+;;; UTF-16 units and clotran indexes by character (DEVIATIONS 41); the
+;;; shim counts one into the other, and without it every match after an
+;;; emoji was shifted -- (re-find #"x" "👋x") was "". Arabic is here as
+;;; a right-to-left script in the Basic Plane, for contrast.
+[(re-find #"x" "👋x") (re-seq #"." "a👋b") (re-seq #"\p{So}" "hi 👋🏽 👨‍👩‍👧 🇯🇵 ✅")
+ (re-seq #"\X" "hi 👋🏽 👨‍👩‍👧 🇯🇵 ✅") (re-find #"(\S+) (x)" "👋🏽 x")
+ (clojure.string/split "a👋b👋c" #"👋") (clojure.string/replace "👋x👋y" #"[xy]" "!")
+ (clojure.string/replace "👋ab" #"(a)(b)" "$2$1") (re-matches #"(.)(.)" "👋🇯")]
+[(re-seq #"\p{L}+" "مرحبا بالعالم ١٢٣") (re-seq #"\p{IsArabic}+" "مرحبا بالعالم ١٢٣")
+ (re-seq #"\p{Nd}+" "مرحبا ١٢٣") (clojure.string/upper-case "istanbul ı")
+ (sort ["b" "ä" "a" "z" "é"])]
