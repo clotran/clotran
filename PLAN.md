@@ -946,6 +946,32 @@ the right tool only across machines), OpenMP directives in generated
 code (they need `-fopenmp` to mean anything), native atomics for atoms
 (stage 3).
 
+
+### 12. Compile everything but eval; an image; standalone binaries (direction, 2026-09-24)
+
+Where step 10 leads. Today 528 of core.clj's 529 defns compile, but the
+generator emits only nine node kinds (const, local, if, do, call, var,
+let, loop, recur) and hands every other subtree to the interpreter; and
+only `defn` forms compile. In order:
+
+1. The remaining node kinds -- closures (`fn` inside a function),
+   `lazy-seq`, collection literals, `try`, `case`, `letfn`, `deftype`,
+   `reify` and protocol dispatch -- and cheaper calls (no heap frame
+   for a small function). This is what makes compiled core FASTER, not
+   only compiled: map's work is in a lazy-seq, reduce's in a protocol.
+2. The heap image (step 5, stage 3). Saving the heap after compiled
+   core loads saves the pool with it, so installing compiled code stops
+   re-analysing (half a second for core today) and startup stops being
+   2.3 s and 348 MB of rebuilding.
+3. `clotran build app.cljf -o app`: one executable -- runtime, compiled
+   core, the program's compiled namespaces, the image -- with `-main`
+   receiving `*command-line-args*`. Packages still load at run time.
+
+What stays interpreted is `eval`: the REPL, `load-string`, source never
+compiled. JVM Clojure keeps its compiler at run time for the same
+reason. `.cljc` compiles once it has `:cljf` or `:default` branches; a
+library with only `:clj` and `:cljs` reads as nothing here.
+
 ## Decisions that still hold
 
 **The value type has no `FINAL`.** Copying a `cons_value` (nine
