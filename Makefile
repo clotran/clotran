@@ -135,7 +135,7 @@ BT = $(B)/test
 
 unit-tests = gc_test persistent_vector_test persistent_list_test persistent_array_map_test \
 	persistent_hash_map_test env_test assoc_test printer_test reader_test eval_test bigint_test \
-	bigdec_test abi_test
+	bigdec_test abi_test native_array_test
 test-bins = $(addprefix $(BT)/,$(unit-tests))
 
 .PHONY: all test crosscheck clean
@@ -177,7 +177,7 @@ $(B)/LispReader.o: $(B)/BigInt.o $(B)/BigDec.o $(B)/GC.o $(B)/PersistentList.o $
 # compiled namespace -- loaded through the door, or linked in -- and an
 # embedder both find the same symbols. It is the LAST module: it sits
 # on top of Eval, nothing sits on it.
-$(B)/ClotranABI.o: $(B)/GC.o $(B)/PersistentVector.o $(B)/Namespace.o $(B)/CompiledFn.o $(B)/Eval.o
+$(B)/ClotranABI.o: $(B)/GC.o $(B)/PersistentVector.o $(B)/Namespace.o $(B)/CompiledFn.o $(B)/NativeArray.o $(B)/Eval.o
 
 $(B)/Eval.o: $(B)/BigInt.o $(B)/BigDec.o $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/Env.o \
 	$(B)/Namespace.o $(B)/Printer.o $(B)/Regex.o $(B)/NativeArray.o $(B)/DynLoad.o $(B)/CompiledFn.o $(S)/analyze.inc $(S)/exec.inc $(S)/repl.inc $(S)/tasks.inc $(S)/sorted.inc $(S)/hosttable.inc
@@ -227,6 +227,8 @@ $(BT)/bigint_test: $(B)/BigInt.o $(T)/bigint_test.f90 | $(BT) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -c $(T)/bigint_test.f90 -o $(BT)/bigint_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/BigInt.o $(BT)/bigint_test.o
 $(BT)/bigdec_test: $(B)/BigInt.o $(B)/BigDec.o $(T)/bigdec_test.f90 | $(BT) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -c $(T)/bigdec_test.f90 -o $(BT)/bigdec_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/BigInt.o $(B)/BigDec.o $(BT)/bigdec_test.o
+$(BT)/native_array_test: $(B)/BigInt.o $(B)/BigDec.o $(B)/GC.o $(B)/NativeArray.o $(T)/native_array_test.f90 | $(BT) $(FCSTAMP)
+	$(FC) $(FCFLAGS) -c $(T)/native_array_test.f90 -o $(BT)/native_array_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/BigInt.o $(B)/BigDec.o $(B)/GC.o $(B)/NativeArray.o $(BT)/native_array_test.o
 $(BT)/gc_test: $(B)/BigInt.o $(B)/BigDec.o $(B)/GC.o $(T)/gc_test.f90 | $(BT) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -c $(T)/gc_test.f90 -o $(BT)/gc_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/BigInt.o $(B)/BigDec.o $(B)/GC.o $(BT)/gc_test.o
 $(BT)/persistent_vector_test: $(B)/BigInt.o $(B)/BigDec.o $(B)/GC.o $(B)/PersistentVector.o $(T)/persistent_vector_test.f90 | $(BT) $(FCSTAMP)

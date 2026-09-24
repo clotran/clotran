@@ -66,7 +66,7 @@ module NativeArray
        gcna_extents, gcna_lows, gcna_total, gcna_index, &
        gcna_get_real, gcna_get_int, gcna_get_logical, &
        gcna_set_real, gcna_set_int, gcna_set_logical, gcna_elem_string, &
-       gcna_live_count, gcna_real8_ptr, gcna_int4_ptr
+       gcna_live_count, gcna_real8_ptr, gcna_int4_ptr, gcna_int8_ptr
 
 contains
 
@@ -87,6 +87,22 @@ contains
        ok = .true.
     end select
   end subroutine gcna_real8_ptr
+
+  ! The same for an int8 buffer, which is what long-array makes.
+  subroutine gcna_int8_ptr(handle, p, ok)
+    integer, intent(in) :: handle
+    integer(8), pointer, contiguous, intent(out) :: p(:)
+    logical, intent(out) :: ok
+    ok = .false.
+    p => null()
+    if (.not. gcna_is(handle)) return
+    if (.not. allocated(reg(handle)%buf)) return
+    select type (b => reg(handle)%buf)
+    type is (integer(8))
+       p => b
+       ok = .true.
+    end select
+  end subroutine gcna_int8_ptr
 
   subroutine gcna_int4_ptr(handle, p, ok)
     integer, intent(in) :: handle
@@ -419,8 +435,20 @@ contains
        end if
     end do
     if (reg_used >= size(reg)) then
+       ! Each component MOVES, it is not copied. An assignment of
+       ! the nodes deep-copies every allocatable component, so
+       ! every array's buffer used to change address whenever the
+       ! registry grew -- and a compiled loop holds a pointer into
+       ! a buffer across allocations. move_alloc hands over the
+       ! allocation itself, so a buffer is where it always was.
        allocate(bigger(2 * size(reg)))
-       bigger(1:reg_used) = reg(1:reg_used)
+       do i = 1, reg_used
+          bigger(i)%used = reg(i)%used
+          if (allocated(reg(i)%elem_kind)) call move_alloc(reg(i)%elem_kind, bigger(i)%elem_kind)
+          if (allocated(reg(i)%extents)) call move_alloc(reg(i)%extents, bigger(i)%extents)
+          if (allocated(reg(i)%lows)) call move_alloc(reg(i)%lows, bigger(i)%lows)
+          if (allocated(reg(i)%buf)) call move_alloc(reg(i)%buf, bigger(i)%buf)
+       end do
        call move_alloc(bigger, reg)
     end if
     reg_used = reg_used + 1
