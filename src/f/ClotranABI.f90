@@ -44,6 +44,7 @@ module ClotranABI
   use iso_c_binding
   use GC
   use PersistentVector
+  use PersistentList
   use LispReader
   use CompiledFn
   use DynLoad
@@ -67,6 +68,7 @@ module ClotranABI
   public :: clotran_frame_new, clotran_frame_get, clotran_frame_put
   public :: clotran_eval_node, clotran_pool_register, clotran_pool_get
   public :: clotran_load_compiled, clotran_array_view
+  public :: clotran_rest_args, clotran_arity_error
 
 contains
 
@@ -474,6 +476,37 @@ contains
        st = 0
     end if
   end function clotran_eval_node
+
+  ! --- arities -------------------------------------------------------
+  !
+  ! A compiled function with several arities, or a variadic one, is ONE
+  ! procedure that picks by `nargs` itself, as bind_closure does for an
+  ! interpreted one: an exact fixed arity first, then the variadic.
+
+  ! The REST argument of a variadic arity: the arguments in slots
+  ! argbase+from+1 .. argbase+nargs as a list, or nil when there are
+  ! none -- nil, not the empty list, as bind_closure binds it.
+  subroutine clotran_rest_args(dst, argbase, from, nargs) bind(C, name="clotran_rest_args")
+    integer(c_int), value :: dst, argbase, from, nargs
+    type(gc_value) :: rest
+    integer :: i
+    call vs_set(int(dst), gc_nil())
+    if (nargs <= from) return
+    rest = gcl_empty([vs_get(int(dst))])
+    call vs_set(int(dst), rest)
+    do i = int(nargs), int(from) + 1, -1
+       rest = gcl_cons(vs_get(int(argbase) + i), vs_get(int(dst)), [vs_get(int(dst))])
+       call vs_set(int(dst), rest)
+    end do
+  end subroutine clotran_rest_args
+
+  ! No arity takes `nargs`: Clojure's ArityException, naming the
+  ! function as the JVM does, ns/name.
+  subroutine clotran_arity_error(nargs, name, n) bind(C, name="clotran_arity_error")
+    integer(c_int), value :: nargs, n
+    character(kind=c_char), intent(in) :: name(*)
+    call gce_raise_arity_named(int(nargs), c_text(name, n))
+  end subroutine clotran_arity_error
 
   ! A CONSTANT POOL, registered for one compiled namespace. The table
   ! is CompiledFn's, so the Clojure builtin and this entry cannot

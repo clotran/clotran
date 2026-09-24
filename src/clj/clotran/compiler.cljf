@@ -133,6 +133,15 @@
        import :: c_int
        integer(c_int), value :: dst, h, i
      end subroutine clotran_pool_get
+     subroutine clotran_rest_args(dst, argbase, from, nargs) bind(C, name=\"clotran_rest_args\")
+       import :: c_int
+       integer(c_int), value :: dst, argbase, from, nargs
+     end subroutine clotran_rest_args
+     subroutine clotran_arity_error(nargs, name, n) bind(C, name=\"clotran_arity_error\")
+       import :: c_int, c_char
+       integer(c_int), value :: nargs, n
+       character(kind=c_char), intent(in) :: name(*)
+     end subroutine clotran_arity_error
      function clotran_def_fn(ns, nsn, name, namen, fp, arity) bind(C, name=\"clotran_def_fn\") result(st)
        import :: c_int, c_char, c_funptr
        character(kind=c_char), intent(in) :: ns(*), name(*)
@@ -209,26 +218,43 @@ end module clotran_rt_decl
 
 
 
+(def ^:private blocking-builtins
+  "The host members that call block_on (tasks.inc), by the name the
+  exporter gives a folded builtin."
+  #{"deref" "clotran-dot-get" "clotran-latch-await" "clotran-queue-take" "task-sleep"})
+
 (defn decline-reason
   "Why this function cannot be compiled yet, or nil if it can. A list of
   reasons rather than a boolean, so the next thing to teach the
   generator is always the answer to a question."
   [tmpl]
   (let [[_ arities captures _ selfslot _] tmpl
-        body (some-> arities first (nth 3))
-        nodes (walk-nodes body)]
+        bodies (map #(nth % 3) arities)
+        nodes (mapcat walk-nodes bodies)]
     (cond
-      (nil? body) "no body"
-      (> (count arities) 1) "more than one arity"
-      (true? (nth (first arities) 1)) "variadic"
+      (or (empty? bodies) (some nil? bodies)) "no body"
       (seq captures) "closes over an outer local"
+      ;; A task parks only where the interpreter's own run is the one
+      ;; blocking (tasks.inc); below compiled code it is pinned, and a
+      ;; pinned task cannot wait for its parent. So what blocks DIRECTLY
+      ;; -- deref-future's .get, a latch's .await, .deref, a queue's
+      ;; take, sleep -- stays interpreted, and @promise inside a future
+      ;; still parks.
+      (some #(blocking-builtins (some-> (:builtin %) str)) nodes)
+      "blocks, and a task can park only in interpreted code"
       (not= -1 selfslot) "refers to itself by name"
       ;; A recur inside a subtree the interpreter runs would rebind the
       ;; frame and hand back the recur marker as a VALUE; the compiled
       ;; loop around it would never go round again. Declined rather
-      ;; than wrong.
+      ;; than wrong. Only a recur that targets the COMPILED code counts:
+      ;; one inside a loop, fn or lazy-seq of that subtree is its own,
+      ;; and the interpreter runs it whole -- map's variadic arity is
+      ;; such a lazy-seq.
       (some (fn [nd] (and (not (compiled-ops (:op nd)))
-                          (some #(= :recur (:op %)) (rest (walk-nodes nd)))))
+                          (some #(= :recur (:op %))
+                                (filter #(and (map? %) (:op %))
+                                        (tree-seq #(and (coll? %) (not (#{:loop :fn :lazy} (:op %))))
+                                                  seq nd)))))
             nodes)
       "a recur inside a form the generator hands to the interpreter"
       :else nil)))
@@ -791,7 +817,7 @@ end module clotran_rt_decl
   was three runtime calls a time round for nothing. It is what the
   JVM's JIT does by speculation; here it is known."
   [body own st]
-  (let [nparams (:nparams st 0)
+  (let [params (:params st #{})
         slots (->> (walk-nodes body)
                    (filter #(= :local (:op %)))
                    (map :i2)
@@ -801,7 +827,7 @@ end module clotran_rt_decl
                    ;; local already bound. A HINTED parameter is typed and
                    ;; is not hoisted.
                    (filter #(and (= :any (get-in st [:env :slots %] :any))
-                                 (or (< % nparams) (contains? (get-in st [:env :slots]) %))))
+                                 (or (params %) (contains? (get-in st [:env :slots]) %))))
                    distinct)]
     (reduce (fn [[code st] slot]
               (let [[s st] (fresh st)
@@ -929,7 +955,7 @@ end module clotran_rt_decl
                                            ;; versioned procedure's guard reads them from
                                            ;; the frame next time round -- so the frame is
                                            ;; kept in step with the Fortran variable
-                                           fn-level? (= "recur0" (:loop st))
+                                           fn-level? (= (:fn-loop st) (:loop st))
                                            [bs st] (if fn-level? (fresh st) [nil st])]
                                        [(into code (conj (vec c) (str tv " = " e)))
                                         (into vs (cond-> [(str (slot-var slot ts) " = " tv)]
@@ -958,24 +984,33 @@ end module clotran_rt_decl
                :when (seq names)]
            (str "    " ty " :: " (str/join ", " names) "\n"))))
 
-(defn- param-hints
-  "The type each HINTED parameter promises, by slot. Clojure's own
-  spelling: ^double and ^long make a primitive, ^doubles and ^longs an
-  array of one. A parameter with no hint, or any other hint, is boxed."
+(defn- param-vectors
+  "The parameter vector of each arity of a (fn ...) form, in order:
+  (fn [x] ...) has one, (fn ([x] ...) ([x y] ...)) one per clause."
   [form]
-  (let [params (first (filter vector? form))]
-    (into {} (keep-indexed
-              (fn [i p]
-                (when-let [t ('{doubles :doubles longs :longs double :double long :long}
-                              (:tag (meta p)))]
-                  [i t]))
-              params))))
+  (if-let [v (first (filter vector? form))]
+    [v]
+    (mapv first (filter seq? form))))
+
+(defn- param-hints
+  "The type each HINTED fixed parameter of one arity promises, by its
+  frame slot (the arity's start plus its position). Clojure's own
+  spelling: ^double and ^long make a primitive, ^doubles and ^longs an
+  array of one. A parameter with no hint, any other hint, or the rest
+  parameter of a variadic arity is boxed."
+  [params start]
+  (into {} (keep-indexed
+            (fn [i p]
+              (when-let [t ('{doubles :doubles longs :longs double :double long :long}
+                            (:tag (meta p)))]
+                [(+ start i) t]))
+            (take-while #(not= '& %) params))))
 
 (defn- array-params
   "The parameters the body uses as arrays -- the first argument of aget,
   aset or alength -- and that carry no hint. Nested fns are skipped:
   their slots are their own frame's."
-  [body nargs hints]
+  [body params hints]
   (let [nodes (tree-seq #(and (coll? %) (not= :fn (:op %))) seq body)]
     (into (sorted-set)
           (for [nd nodes
@@ -983,7 +1018,7 @@ end module clotran_rt_decl
                 :let [[k] (head-op (first (:children nd)))
                       a (second (:children nd))]
                 :when (and (#{:aget :aset :alength} k) (= :local (:op a))
-                           (< (:i2 a) nargs) (not (contains? hints (:i2 a))))]
+                           (params (:i2 a)) (not (contains? hints (:i2 a))))]
             (:i2 a)))))
 
 (defn- versions
@@ -1028,34 +1063,37 @@ end module clotran_rt_decl
                    st]))))
           [[] [] st] (sort hints)))
 
-(defn- fn-procedure
-  "One arity of one function, as a Fortran subroutine.
+(defn- arity-code
+  "One arity's statements, inside the procedure: its arguments into the
+  frame, its body as a loop -- a recur with no enclosing loop rebinds
+  the parameters -- and its value copied to dst.
 
-  With HINTS it is VERSIONED. Every hinted parameter is checked on the
-  way in; if all of them are what they promise, the typed body runs,
-  with arrays indexed through Fortran pointers and primitives in
-  Fortran variables. If any is not, the untyped body runs -- the same
-  code the function would get with no hints at all. So a wrong argument
-  answers exactly what the interpreter answers, and compiling still
-  cannot change what a call means."
-  [sym tmpl hints offset pool]
-  (let [[_ arities _ nslots _ _] tmpl
-        [nargs _ _ body] (first arities)
-        vs (versions hints (array-params body nargs hints))
-        ;; b+1 is the locals frame, b+2 .. b+1+P hold what the pool
-        ;; supplies, and temporaries start after them
-        pslots (into {} (map-indexed (fn [i p] [p (+ 2 i)]) pool))
-        first-temp (+ 2 (count pool))
-        ;; the BODY IS A LOOP too, so a recur with no enclosing loop
-        ;; rebinds the parameters
-        st0 {:next first-temp :high (dec first-temp) :pool pslots
-             :flags ["recur0"] :loop "recur0" :env {:slots {}} :nparams nargs}
+  With speculated or hinted types the body is VERSIONED. Every typed
+  parameter is checked on the way in; if all are what they promise,
+  the typed body runs, with arrays indexed through Fortran pointers and
+  primitives in Fortran variables. If any is not, the untyped body runs
+  -- the code the arity would get with no hints at all. So a wrong
+  argument answers exactly what the interpreter answers, and compiling
+  still cannot change what a call means."
+  [[nfixed variadic start body] pvec st]
+  (let [params (set (range start (+ start nfixed (if variadic 1 0))))
+        hints (param-hints pvec start)
+        vs (versions hints (array-params body params hints))
+        flag (str "recur" (count (:flags st)))
+        st (-> st (update :flags conj flag)
+               (assoc :loop flag :fn-loop flag :params params :env {:slots {}} :hoisted {}))
+        [rest-code st] (if variadic
+                         (let [[s st] (fresh st)]
+                           [[(str "call clotran_rest_args(b + " s ", argbase, " nfixed "_c_int, nargs)")
+                             (str "call clotran_frame_put(b + 1, " (+ start nfixed) "_c_int, b + " s ")")]
+                            st])
+                         [[] st])
         [code res st]
         (if (empty? vs)
-          (gen body st0)
+          (gen body st)
           ;; each version nests in the previous one's else: guard, typed
           ;; body, and failing that the next -- the untyped body last
-          (let [st (declare-var st0 "hok" :bool)
+          (let [st (declare-var st "hok" :bool)
                 [r st] (fresh st)
                 [uc ures st] (gen body (assoc st :env {:slots {}} :hoisted {}))
                 [code st]
@@ -1073,32 +1111,71 @@ end module clotran_rt_decl
                         [(concat uc [(str "call clotran_copy(b + " r ", b + " ures ")")]) st]
                         (reverse vs))]
             [code r st]))]
-    {:arity nargs
+    [(concat (for [i (range nfixed)]
+               (str "call clotran_frame_put(b + 1, " (+ start i) "_c_int, argbase + " (inc i) ")"))
+             rest-code
+             ["do" (str "   " flag " = 0")]
+             (map #(str "   " %) code)
+             [(str "   if (" flag " == 0) exit") "end do"
+              (str "call clotran_copy(dst, b + " res ")")])
+     st]))
+
+(defn- fn-procedure
+  "One function, every arity of it, as a Fortran subroutine.
+
+  A function with ONE fixed arity is registered with that arity and
+  the caller checks the count. Any other is registered as taking any
+  count and picks here, as the interpreter's bind_closure does: an
+  exact fixed arity first, then the variadic one if enough arguments
+  came; failing both, Clojure's ArityException."
+  [sym who tmpl form offset pool]
+  (let [[_ arities _ nslots _ _] tmpl
+        pvecs (param-vectors form)
+        ;; b+1 is the locals frame, b+2 .. b+1+P hold what the pool
+        ;; supplies, and temporaries start after them
+        pslots (into {} (map-indexed (fn [i p] [p (+ 2 i)]) pool))
+        first-temp (+ 2 (count pool))
+        st0 {:next first-temp :high (dec first-temp) :pool pslots :flags []}
+        [branches st]
+        (reduce (fn [[bs st] [ar pv]]
+                  (let [[c st] (arity-code ar pv st)] [(conj bs [ar c]) st]))
+                [[] st0] (map vector arities pvecs))
+        single? (and (= 1 (count arities)) (not (nth (first arities) 1)))
+        fixed (remove (fn [[ar _]] (nth ar 1)) branches)
+        varg (first (filter (fn [[ar _]] (nth ar 1)) branches))
+        indent #(map (fn [l] (str "   " l)) %)
+        body (if single?
+               (second (first branches))
+               (concat
+                (apply concat
+                       (map-indexed (fn [i [[n] c]]
+                                      (concat [(str (if (zero? i) "if" "else if") " (nargs == " n ") then")]
+                                              (indent c)))
+                                    fixed))
+                (when varg
+                  (let [[[n] c] varg]
+                    (concat [(str (if (seq fixed) "else if" "if") " (nargs >= " n ") then")] (indent c))))
+                ["else"
+                 (str "   call clotran_arity_error(nargs, ctext(" (fort-str who) "), " (count who) "_c_int)")
+                 "end if"]))]
+    {:arity (if single? (first (first arities)) -1)
      :symbol sym
      :pool (mapv :value pool)
      :text
      (str "  subroutine " sym "(argbase, nargs, dst) bind(C, name=\"" sym "\")\n"
           "    integer(c_int), value :: argbase, nargs, dst\n"
           "    integer(c_int) :: b, st\n"
-          "    integer(c_int) :: " (str/join ", " (:flags st)) "\n"
+          (when (seq (:flags st)) (str "    integer(c_int) :: " (str/join ", " (:flags st)) "\n"))
           (decls-text (:decls st))
           "    st = 0\n"
           "    b = clotran_frame_enter(" (max 1 (:high st)) "_c_int)\n"
           "    call clotran_frame_new(b + 1, " nslots "_c_int)\n"
-          (apply str (for [i (range nargs)]
-                       (str "    call clotran_frame_put(b + 1, " i "_c_int, argbase + "
-                            (inc i) ")\n")))
           (apply str (for [[p s] (sort-by val pslots)]
                        (str "    call clotran_pool_get(b + " s ", cf_pool, "
                             (+ offset (- s 2)) "_c_int)\n"
                             (when (= :var (:kind p))
                               (str "    call clotran_deref(b + " s ", b + " s ")\n")))))
-          "    do\n"
-          "       recur0 = 0\n"
-          (apply str (map #(str "       " % "\n") code))
-          "       if (recur0 == 0) exit\n"
-          "    end do\n"
-          "    call clotran_copy(dst, b + " res ")\n"
+          (apply str (map #(str "    " % "\n") body))
           "    call clotran_frame_leave(b)\n"
           "  end subroutine " sym "\n")}))
 
@@ -1124,7 +1201,7 @@ end module clotran_rt_decl
                      (let [nm (fort-ident (str fn-name))]
                        (str "cf" idx "_" (subs nm 0 (min 50 (count nm)))))
                      (str "cf_" (fort-ident (str ns-name)) "_" (fort-ident (str fn-name))))
-               proc (fn-procedure sym tmpl (param-hints form) offset pool)]
+               proc (fn-procedure sym (str ns-name "/" fn-name) tmpl form offset pool)]
            (assoc proc :ns ns-name :name fn-name :fingerprint fingerprint)))))))
 
 (defn- manifest-text

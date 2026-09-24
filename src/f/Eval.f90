@@ -376,7 +376,7 @@ module Eval
        TASK_DONE = 3, TASK_FAILED = 4, TASK_CANCELLED = 5
 
   public :: gce_eval, gce_base_env, gce_has_error, gce_error, gce_clear_error, gce_set_spec_check
-  public :: gce_main_bindings, gce_install_compiled
+  public :: gce_main_bindings, gce_install_compiled, gce_raise_arity_named
   public :: gce_analyze, gce_trace
   public :: gce_ctx_new, gce_ctx_switch, gce_ctx_current
   public :: gce_repl
@@ -525,6 +525,9 @@ contains
        if (gc_kind(fstack_fn(i)) == OBJ_CLOSURE) then
           nm = gc_slot(fstack_fn(i), 5)
           if (nm%tag == GCT_SYM) who = gc_ref_text(nm%ref)
+       else if (gc_kind(fstack_fn(i)) == OBJ_COMPILED) then
+          nm = gc_slot(fstack_fn(i), 1)
+          who = gc_ref_text(nm%ref)
        end if
        fname = ""
        line = 0
@@ -601,6 +604,9 @@ contains
        if (gc_kind(fstack_fn(i)) == OBJ_CLOSURE) then
           nm = gc_slot(fstack_fn(i), 5)
           if (nm%tag == GCT_SYM) who = gc_ref_text(nm%ref)
+       else if (gc_kind(fstack_fn(i)) == OBJ_COMPILED) then
+          nm = gc_slot(fstack_fn(i), 1)
+          who = gc_ref_text(nm%ref)
        end if
        if (fstack_site(i) /= 0) then
           last_trace = last_trace // "  at " // who // " (" // gcr_position(fstack_site(i)) // ")" // achar(10)
@@ -3283,6 +3289,17 @@ contains
     if (yes .and. a%rval /= b%rval) yes = (a%rval /= a%rval .and. b%rval /= b%rval)
   end function same_object
 
+  ! raise_arity for a function known by name -- a compiled one, whose
+  ! procedure picks its own arity (ClotranABI, clotran_arity_error).
+  subroutine gce_raise_arity_named(got, who)
+    integer, intent(in) :: got
+    character(len=*), intent(in) :: who
+    character(len=16) :: buf
+    type(gc_value) :: none(0)
+    write(buf, '(I0)') got
+    call raise_class("ArityException", "Wrong number of args (" // trim(buf) // ") passed to: " // who, none)
+  end subroutine gce_raise_arity_named
+
   ! Clojure's own wording, from ArityException: "Wrong number of
   ! args (2) passed to: user/f". The count is what a reader of
   ! the message needs and "no matching arity" did not carry it.
@@ -5431,6 +5448,32 @@ contains
   ! another compiled function costs no vector at all; every other
   ! callee gets one built here, which is what the interpreter would
   ! have done.
+  ! Every call into a compiled procedure comes through here. It is a
+  ! FRAME, as a closure's call is: a stack trace names it (ns/name) and
+  ! a runaway recursion is the same "stack overflow" error rather than
+  ! a crash of the Fortran stack. And it is a NESTED RUN, as a callback
+  ! from a builtin is: a task that blocks below compiled code cannot
+  ! yield -- there is Fortran on the stack between it and its context --
+  ! so it is pinned (tasks.inc) and the other tasks run right there.
+  ! Counted as nothing, a block down there yielded anyway: the builtin
+  ! answered nil into compiled code that carried on with it.
+  recursive subroutine call_compiled(fn, argbase, nargs, dst)
+    type(gc_value), intent(in) :: fn
+    integer, intent(in) :: argbase, nargs, dst
+    if (ev_limit == 0) call read_depth_limit()
+    call push_frame(fn, pending_site)
+    pending_site = 0
+    if (has_error) return
+    ev_depth = ev_depth + 1
+    if (ev_depth > ev_limit) then
+       call fail("stack overflow")
+    else
+       call cf_call(gc_i1(fn), argbase, nargs, dst)
+    end if
+    ev_depth = ev_depth - 1
+    call pop_frame()
+  end subroutine call_compiled
+
   recursive function gce_apply_slots(fn0, argbase, nargs) result(out)
     type(gc_value), intent(in) :: fn0
     integer, intent(in) :: argbase, nargs
@@ -5446,7 +5489,7 @@ contains
        block
          integer :: rb
          rb = vs_enter(1)
-         call cf_call(gc_i1(vs_get(base + 1)), argbase, nargs, rb + 1)
+         call call_compiled(vs_get(base + 1), argbase, nargs, rb + 1)
          out = vs_get(rb + 1)
          call vs_leave(rb)
        end block
@@ -5579,7 +5622,7 @@ contains
             do j = 1, cn
                call vs_set(cb + j, gcv_nth(av, j - 1))
             end do
-            call cf_call(gc_i1(vs_get(base + 1)), cb, cn, cb + cn + 1)
+            call call_compiled(vs_get(base + 1), cb, cn, cb + cn + 1)
             out = vs_get(cb + cn + 1)
             call vs_leave(cb)
          end if
@@ -13779,14 +13822,14 @@ contains
   end subroutine pool_walk
 
   ! {:pool [[kind value] ...] :fingerprint n} for the analysed form
-  ! `top` -- a top node over a fn -- from its first arity's body, which
-  ! is all the compiler compiles. Anything else answers an empty pool.
+  ! `top` -- a top node over a fn -- from every arity's body, in order.
+  ! Anything else answers an empty pool.
   recursive function compiled_pool(top, roots) result(out)
     type(gc_value), intent(in) :: top
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, fnode, tmpl, arity, m
     integer(gc_ip) :: h
-    integer :: b
+    integer :: b, ia
     b = vs_enter(4)
     call vs_set(b + 1, top)
     call vs_set(b + 2, gcv_empty([roots, vs_get(b + 1)]))
@@ -13802,10 +13845,14 @@ contains
           call fp_mix(h, int(gcv_count(gcv_nth(tmpl, 1)), gc_ip))
           call fp_mix_field(h, gcv_nth(tmpl, 3))
           call fp_mix_field(h, gcv_nth(tmpl, 4))
-          arity = gcv_nth(gcv_nth(tmpl, 1), 0)
-          call fp_mix_field(h, gcv_nth(arity, 0))
-          call fp_mix_field(h, gcv_nth(arity, 1))
-          call pool_walk(gcv_nth(arity, 3), b + 2, h)
+          ! each arity: [nfixed variadic start body]
+          do ia = 0, gcv_count(gcv_nth(tmpl, 1)) - 1
+             arity = gcv_nth(gcv_nth(tmpl, 1), ia)
+             call fp_mix_field(h, gcv_nth(arity, 0))
+             call fp_mix_field(h, gcv_nth(arity, 1))
+             call fp_mix_field(h, gcv_nth(arity, 2))
+             call pool_walk(gcv_nth(arity, 3), b + 2, h)
+          end do
        end if
     end if
     m = gca_empty([roots, vs_get(b + 1), vs_get(b + 2)])

@@ -39,9 +39,13 @@ if [ "$1" = "compile" ]; then
   [ -s "$work/out.f90" ] || { echo "clotran compile: no Fortran was written" >&2; exit 1; }
   # A compiled namespace resolves clotran_* against the RUNNING binary
   # at dlopen time, so those symbols are undefined at link time on
-  # purpose; macOS has to be told.
-  ${FC:-gfortran} -O2 -shared -fPIC -ffree-line-length-none $undef \
-    -J "$work" -o "$lib" "$work/out.f90" || exit 1
+  # purpose; macOS has to be told. The compiler runs INSIDE the work
+  # directory: a stale clotran_rt_decl.mod in the caller's directory was
+  # once read in place of the one this file defines, and every new
+  # runtime entry became an unresolved implicit external.
+  case "$lib" in /*) out="$lib" ;; *) out="$(pwd)/$lib" ;; esac
+  (cd "$work" && ${FC:-gfortran} -O2 -shared -fPIC -ffree-line-length-none $undef \
+    -o "$out" out.f90) || exit 1
   echo "wrote $lib"
   exit 0
 fi

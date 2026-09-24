@@ -841,7 +841,20 @@ costs speed rather than a decline.
    with it in place. `scripts/bench` does not move, and should not be
    expected to: `map`, `reduce`, `into`, `range` and `sort` are among
    the 139 declined for more than one arity and the 49 declined as
-   variadic. Multi-arity and variadic functions are what makes this pay.
+   variadic.
+
+   Multi-arity and variadic functions compile now (one procedure picks
+   by argument count), and so do all 529 defns but one. It did NOT pay:
+   `(reduce + (range 100000))` 111 -> 90 ms, `(into [] (map inc ...))`
+   1852 -> 2029 ms, a non-tail recursion through inc/dec 13 -> 27 ms.
+   map's work is inside a lazy-seq, which the interpreter still runs;
+   reduce and into dispatch through protocols; and every compiled call
+   allocates a frame and re-reads every pool entry, which costs more
+   than the interpreter's own call of a small function like inc. What
+   would pay, measured first: fn and lazy-seq bodies compiled (closures
+   over captures), a call that allocates no frame for a leaf, pool
+   entries read once per namespace rather than per call. Compiled core
+   also pins tasks (DEVIATIONS 49).
    The pool and fingerprint are the HOST's (Eval.f90 compiled_pool),
    shared by compiler and loader: the first loader rebuilt them in
    Clojure and took 41 s to install core; this takes about half a

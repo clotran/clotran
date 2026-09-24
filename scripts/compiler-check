@@ -110,6 +110,24 @@
     ;; A hint the argument does not honour: the guard fails, the untyped
     ;; body runs, and it must throw what Clojure throws -- a checkcast
     ;; where the array is used, a conversion where a ^long is bound.
+    ;; SEVERAL ARITIES and VARIADIC ones: one procedure picks by the
+    ;; argument count, an exact fixed arity before the variadic.
+    ;; a recur inside a subtree the interpreter runs, targeting its OWN
+    ;; loop or fn there: compiled, not declined
+    ["a recur the interpreter owns"
+     (fn [n] [(try (loop [i 0 s 0] (if (< i n) (recur (inc i) (+ s i)) s)) (catch Exception e :x))
+              (doall (take 3 (lazy-seq ((fn step [k] (if (pos? k) (recur (dec k)) (list k n))) n))))])
+     [[0] [4]]]
+    ["two arities" (fn ([x] (+ x 1)) ([x y] (* x y))) [[3] [3 4] [2.5 2]]]
+    ["variadic, rest nil or a list" (fn [x & more] [x more (count more) (seq? more)]) [[1] [1 2] [1 2 3 4]]]
+    ["only a rest" (fn [& xs] (apply + xs)) [[] [1] [1 2 3]]]
+    ["fixed beats variadic" (fn ([a b] [:fixed a b]) ([a b & c] [:rest a b c])) [[1 2] [1 2 3] [1 2 3 4]]]
+    ["recur in a variadic arity" (fn [acc & xs] (if xs (recur (+ acc (first xs)) (next xs)) acc)) [[0] [0 1 2 3] [10 5]]]
+    ["three arities, a loop in one"
+     (fn ([] 0) ([n] (loop [i 0 s 0] (if (< i n) (recur (inc i) (+ s i)) s))) ([n m] (- n m)))
+     [[] [10] [1000] [5 3]]]
+    ["hints per arity" (fn ([^long n] (+ n 1)) ([^doubles a i] (aget a i))) [[41] [(double-array [1.5 2.5]) 1] [[1 2] 0]]]
+    ["arity recur rebinds its own parameters" (fn ([n] (if (> n 0) (recur (dec n)) :done)) ([n m] (if (> n 0) (recur (dec n) (inc m)) m))) [[5] [5 0]]]
     ;; No hints at all: the arrays are speculated double, then long,
     ;; and anything else runs the untyped body.
     ["arrays with no hints"
