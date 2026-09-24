@@ -7472,14 +7472,19 @@ contains
        out = gcn_find(gc_ref_text(a%ref))
     case (B_LOADFILE)
        ! Read the whole file, then analyse and evaluate each form. The
-       ! first error ends it, as Compiler.load does.
+       ! first error ends it, as Compiler.load does. *ns* is SAVED AND
+       ! RESTORED around it, as Compiler.load pushes a binding for it:
+       ! a loaded file's (ns ...) once leaked into its caller, and the
+       ! forms after (load-file ...) were analysed in the wrong namespace.
        block
          character(len=:), allocatable :: path, text
          type(gc_value) :: forms, genv, f
-         integer :: u, st, fsize, j, fid
+         integer :: u, st, fsize, j, fid, nsb
          logical :: eof
          out = gc_nil()
          path = text_of(gcv_nth(args, 0))
+         nsb = vs_enter(1)
+         call vs_set(nsb + 1, gcn_current([vs_get(base + 1)]))
          open(newunit=u, file=path, access="stream", form="unformatted", &
               status="old", action="read", iostat=st)
          if (st /= 0) then
@@ -7513,6 +7518,8 @@ contains
             end do
             if (.not. has_error) call gce_install_compiled(path)
          end if
+         call gcn_set_current(vs_get(nsb + 1))
+         call vs_leave(nsb)
        end block
     case (B_ENDSWITH)
        block

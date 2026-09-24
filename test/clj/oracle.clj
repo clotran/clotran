@@ -2428,3 +2428,7 @@
 [(re-seq #"\p{L}+" "مرحبا بالعالم ١٢٣") (re-seq #"\p{IsArabic}+" "مرحبا بالعالم ١٢٣")
  (re-seq #"\p{Nd}+" "مرحبا ١٢٣") (clojure.string/upper-case "istanbul ı")
  (sort ["b" "ä" "a" "z" "é"])]
+
+;;; load-file restores *ns*, as Compiler.load binds it: the loaded file's
+;;; (ns ...) does not leak into the forms after it.
+[(do (load-file "test/clj/load_file_sample.clj") (str *ns*)) @(resolve 'load-file-sample/x)]
