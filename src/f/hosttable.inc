@@ -259,8 +259,8 @@
        hm("clojure.lang.RT", "aset", B_ASET, "aset"), &
        hm("clojure.lang.RT", "aclone", B_ACLONE, "aclone"), &
   ! The primitive casts: one integer kind and one real kind, so the width-named casts land on two conversions.
-       hm("clojure.lang.RT", "longCast", B_LONGCAST, "long"), &
-       hm("clojure.lang.RT", "uncheckedLongCast", B_LONGCAST, "long"), &
+       hm("clojure.lang.RT", "longCast", B_LONGCAST_CHECKED, "long"), &
+       hm("clojure.lang.RT", "uncheckedLongCast", B_LONGCAST, "unchecked-long"), &
        hm("clojure.lang.RT", "intCast", B_CHKINT, "int"), &
        hm("clojure.lang.RT", "uncheckedIntCast", B_INTCAST, "unchecked-int"), &
        hm("clojure.lang.RT", "shortCast", B_CHKSHORT, "short"), &
@@ -421,7 +421,7 @@
        hm("", "toBigDecimal", B_TODEC, "bigdec"), &
        hm("", "bigIntegerValue", B_TOBIG, "bigint"), &
        hm("", "name", B_GETNAME, "clotran-get-name"), &
-       hm("", "getSimpleName", B_GETNAME, "clotran-get-name"), &
+       hm("", "getSimpleName", B_SIMPLENAME, "clotran-simple-name"), &
   ! An ARRAY of frames, not a vector: Throwable->map asks (alength st) straight after.
        hm("", "getStackTrace", B_STACKTRACE, "clotran-stack-trace"), &
        hm("", "getClassName", B_STE_CLASS, "clotran-frame-class"), &

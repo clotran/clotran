@@ -2386,3 +2386,32 @@
  (clojure.edn/read-string "\"a\nb\"")]
 (expect-diff "DEVIATIONS 12: java.util.UUID is not a type here, so a uuid IS its text -- the same answer parse-uuid gives")
 [(clojure.edn/read-string "#uuid \"00000000-0000-0000-0000-000000000000\"")]
+
+;;; Type hints change behaviour, not only speed. A ^long or ^double
+;;; parameter or return converts by RT.longCast/doubleCast after a
+;;; checkCast to Number (Compiler.emitUnboxArg); an array hint is a
+;;; checkcast where the value is USED as an array, so an unused or
+;;; counted parameter never notices. Compared by exception class.
+(defn hint-t [f] (try (let [v (f)] [v (.getSimpleName (class v))])
+                      (catch Throwable e [:threw (.getSimpleName (class e))])))
+[(long 1.9) (long -1.9) (long 7/2) (long \a) (double 3) (double 1/4)
+ (unchecked-long 1.9) (unchecked-long 1e30) (unchecked-long -1e30) (unchecked-long ##NaN)
+ (hint-t #(long "x")) (hint-t #(long nil)) (hint-t #(long 1e30)) (hint-t #(double "x")) (hint-t #(double nil))]
+[(hint-t #((fn [^long n] n) 1.5)) (hint-t #((fn [^double x] x) 2)) (hint-t #((fn [^long n] n) 7/2))
+ (hint-t #((fn [^long n] n) \a)) (hint-t #((fn [^long n] n) "x")) (hint-t #((fn [^long n] n) nil))
+ (hint-t #((fn ^long [x] x) 1.5)) (hint-t #((fn ^double [x] x) 2))
+ (hint-t #((fn ([^long n] n) ([^long n m] m)) 1.5)) (hint-t #(((fn [^long n] (fn [] n)) 2.5)))
+ (hint-t #((fn [^String s ^long n] [s n]) "x" 1.5))]
+[(hint-t #((fn [^doubles a] :ok) [1 2])) (hint-t #((fn [^doubles a] (aget a 0)) [1 2]))
+ (hint-t #((fn [^doubles a] (alength a)) [1 2])) (hint-t #((fn [^doubles a] (aset a 0 1.0)) [1 2]))
+ (hint-t #((fn [^longs a] (aget a 0)) (double-array [1.5]))) (hint-t #((fn [^doubles a] (aget a 0)) (long-array [3])))
+ (hint-t #((fn [^doubles a] (aget a 0)) nil)) (hint-t #((fn [^ints a] (aget a 0)) (long-array [3])))
+ (hint-t #((fn [^objects a] (aget a 0)) (long-array [3]))) (hint-t #(let [^doubles a [1 2]] (aget a 0)))
+ (hint-t #((fn [^doubles a] (let [a [1]] (nth a 0))) (double-array 1)))
+ (hint-t #((fn [^doubles a] (aget a 0)) (double-array [2.5])))]
+(expect-diff "DEVIATIONS 48: recur to a ^long local with a double is a compile error on the JVM, a conversion here")
+[(hint-t #((fn [^long n acc] (if (< n 1) acc (recur (- n 0.5) (conj acc n)))) 2 []))]
+(expect-diff "DEVIATIONS 48: a primitive hint on a let local is an UnsupportedOperationException on the JVM")
+[(hint-t #(let [^long x 1.5] x))]
+(expect-diff "DEVIATIONS 48: aset on a ^doubles array with a long finds no method on the JVM")
+[(hint-t #((fn [^doubles a] (aset a 0 2)) (double-array 1)))]

@@ -106,7 +106,13 @@
     ;; loop reading freed memory.
     ["arrays allocated while one is held"
      (fn [^doubles a] (loop [i 0 s 0.0 held []] (if (< i (alength a)) (recur (inc i) (+ s (aget a i)) (conj held (double-array (alength a)))) s)))
-     [[(double-array (range 300))]]]])
+     [[(double-array (range 300))]]]
+    ;; A hint the argument does not honour: the guard fails, the untyped
+    ;; body runs, and it must throw what Clojure throws -- a checkcast
+    ;; where the array is used, a conversion where a ^long is bound.
+    ["a hint the argument does not honour"
+     (fn [^doubles a ^long n] (if (< n 0) :unused (loop [i 0 s 0.0] (if (< i n) (recur (inc i) (+ s (aget a i))) s))))
+     [[(double-array [1 2 3]) 3] [(double-array [1 2 3]) 2.9] [(long-array [1 2]) 1] [[1 2] 1] [[1 2] -1] [nil 1] [(double-array 2) "x"]]]])
 
 ;; Benchmarks are cases like any other -- built the same way and
 ;; compared for correctness on their small calls -- plus the arguments

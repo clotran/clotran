@@ -108,6 +108,134 @@
     call vs_leave(base)
   end subroutine bind_name
 
+  ! --- array hints ---------------------------------------------------
+  !
+  ! Clojure casts an array-hinted value WHERE IT IS USED as an array,
+  ! not where it is bound: (fn [^doubles a] (count a)) given a vector
+  ! answers 2, and (aget a 0) in the same fn throws ClassCastException.
+  ! So a scope remembers which of its names carry an array hint -- in
+  ! its fifth slot, a map from name to hint -- and aget, aset and
+  ! alength look the name up the same way name resolution does, so
+  ! shadowing and closures come out right without further thought.
+
+  ! The array hint on a binding form, or "" -- doubles, longs, ints and
+  ! the rest, the way Clojure spells them.
+  function array_hint_of(raw) result(h)
+    type(gc_value), intent(in) :: raw
+    character(len=:), allocatable :: h
+    type(gc_value) :: md, tg
+    h = ""
+    if (gc_kind(raw) /= OBJ_META) return
+    md = gc_slot(raw, 2)
+    if (.not. gca_is(md)) return
+    tg = strip_meta(gca_get(md, gc_key("tag", [raw, md])))
+    if (tg%tag /= GCT_SYM) return
+    select case (gc_ref_text(tg%ref))
+    case ("doubles", "longs", "ints", "floats", "shorts", "bytes", "booleans", "chars", "objects")
+       h = gc_ref_text(tg%ref)
+    end select
+  end function array_hint_of
+
+  ! Record the binding's array hint, if it has one, in the scope that
+  ! binds it.
+  subroutine bind_array_hint(sc, sym, raw, roots)
+    type(gc_value), intent(in) :: sc, sym, raw
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: m
+    character(len=:), allocatable :: h
+    integer :: base
+    h = array_hint_of(raw)
+    if (len(h) == 0) return
+    base = vs_enter(3)
+    call vs_set(base + 1, sc)
+    call vs_set(base + 2, sym)
+    m = gc_slot(vs_get(base + 1), 5)
+    if (.not. gca_is(m)) m = gca_empty([roots, vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 3, m)
+    m = gca_assoc(vs_get(base + 3), vs_get(base + 2), gc_key(h, [roots, vs_get(base + 1), vs_get(base + 3)]), &
+         [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+    call gc_set_slot(vs_get(base + 1), 5, m)
+    call vs_leave(base)
+  end subroutine bind_array_hint
+
+  ! The array hint of the local `sym` names here, or nil. The walk is
+  ! name resolution's: the innermost scope that BINDS the name decides,
+  ! so a rebinding with no hint hides an outer one that had it.
+  function local_array_hint(sc0, sym) result(h)
+    type(gc_value), intent(in) :: sc0, sym
+    type(gc_value) :: h, sc, m
+    h = gc_nil()
+    sc = sc0
+    do while (gc_kind(sc) == OBJ_AST)
+       if (gca_is(gc_slot(sc, 1))) then
+          if (gca_contains(gc_slot(sc, 1), sym)) then
+             m = gc_slot(sc, 5)
+             if (gca_is(m)) h = gca_get(m, sym)
+             return
+          end if
+       end if
+       if (gc_kind(gc_slot(sc, 2)) == OBJ_AST) then
+          sc = gc_slot(sc, 2)
+       else
+          ! the fn's root block: carry on in the block the fn is written in
+          sc = gc_slot(gc_slot(sc, 3), 2)
+       end if
+    end do
+  end function local_array_hint
+
+  ! If this call is aget, aset or alength and its array argument carries
+  ! a hint -- on the expression itself, or on the local it names -- put
+  ! the cast in front of it: (aget a i) becomes
+  ! (aget (clotran-array-cast a :doubles) i). `rawargs` is the argument
+  ! forms as written; core.clj's aget arrives here through its :inline
+  ! as (. clojure.lang.RT (aget a i)).
+  recursive function cast_array_arg(rawargs, kids, sc, roots) result(out)
+    type(gc_value), intent(in) :: rawargs, kids, sc
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, head, fv, raw, h, cnode, cargs
+    integer :: base, id
+    out = kids
+    if (gcv_count(kids) < 2) return
+    head = gcv_nth(kids, 0)
+    if (gc_kind(head) /= OBJ_AST) return
+    if (gc_i1(head) /= N_CONST) return
+    fv = strip_meta(gc_slot(head, 2))
+    if (gc_kind(fv) /= OBJ_BUILTIN) return
+    id = gc_i1(fv)
+    if (id /= B_AGET .and. id /= B_ASET .and. id /= B_ALENGTH) return
+    raw = gcl_first(rawargs)
+    base = vs_enter(4)
+    call vs_set(base + 1, kids)
+    h = gc_nil()
+    if (len(array_hint_of(raw)) > 0) then
+       h = gc_key(array_hint_of(raw), [roots, vs_get(base + 1)])
+    else
+       fv = strip_meta(raw)
+       if (fv%tag == GCT_SYM) h = local_array_hint(sc, fv)
+    end if
+    if (tag_of(h) == GCT_NIL) then
+       call vs_leave(base)
+       return
+    end if
+    call vs_set(base + 2, h)
+    ! [cast-fn, the argument's node, the hint]
+    cargs = gcv_empty([roots, vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 3, cargs)
+    cnode = const_node(native(B_ARRAYCAST, "clotran-array-cast", [roots, vs_get(base + 1), vs_get(base + 3)]), &
+         [roots, vs_get(base + 1), vs_get(base + 3)])
+    cargs = gcv_conj(vs_get(base + 3), cnode, [roots, vs_get(base + 1), vs_get(base + 3), cnode])
+    call vs_set(base + 3, cargs)
+    cargs = gcv_conj(vs_get(base + 3), gcv_nth(vs_get(base + 1), 1), [roots, vs_get(base + 1), vs_get(base + 3)])
+    call vs_set(base + 3, cargs)
+    cnode = const_node(vs_get(base + 2), [roots, vs_get(base + 1), vs_get(base + 3)])
+    cargs = gcv_conj(vs_get(base + 3), cnode, [roots, vs_get(base + 1), vs_get(base + 3), cnode])
+    call vs_set(base + 3, cargs)
+    cnode = mk_node(N_CALL, vs_get(base + 3), gc_nil(), gc_nil(), 0, [roots, vs_get(base + 1), vs_get(base + 3)])
+    call vs_set(base + 4, cnode)
+    out = gcv_put(vs_get(base + 1), 1, vs_get(base + 4), [roots, vs_get(base + 1), vs_get(base + 4)])
+    call vs_leave(base)
+  end function cast_array_arg
+
   ! slot -> name at the FN level, for every block of the fn and for its
   ! captures, so a paused frame can report its locals by name (the
   ! debugger, exec.inc break_frames). The scope maps are per block and
@@ -695,6 +823,11 @@
     call vs_set(base + 2, sc)
     kids = analyze_all(vs_get(base + 1), vs_get(base + 2), [vs_get(base + 1)])
     call vs_set(base + 3, kids)
+    if (.not. has_error) then
+       kids = cast_array_arg(gcl_rest(vs_get(base + 1), [vs_get(base + 1)]), vs_get(base + 3), vs_get(base + 2), &
+            [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+       call vs_set(base + 3, kids)
+    end if
     if (.not. has_error) nd = mk_node(N_CALL, vs_get(base + 3), gc_nil(), gc_nil(), 0, &
          [vs_get(base + 1), vs_get(base + 2)])
     call vs_leave(base)
@@ -859,6 +992,9 @@
                    return
                 end if
                 kids = concat_vecs(vs_get(base + 7), vs_get(base + 8), [vs_get(base + 1), vs_get(base + 2)])
+                call vs_set(base + 7, kids)
+                kids = cast_array_arg(vs_get(base + 6), vs_get(base + 7), vs_get(base + 2), &
+                     [vs_get(base + 1), vs_get(base + 2), vs_get(base + 6), vs_get(base + 7)])
                 call vs_set(base + 7, kids)
                 nd = mk_node(N_CALL, vs_get(base + 7), gc_nil(), gc_nil(), 0, [vs_get(base + 1), vs_get(base + 2)])
                 call vs_leave(base)
@@ -1263,6 +1399,8 @@
          end if
        end block
        call bind_name(vs_get(base + 4), k, start + i, [vs_get(base + 1), vs_get(base + 5)])
+       call bind_array_hint(vs_get(base + 4), k, gcv_nth(vs_get(base + 3), 2 * i), &
+            [vs_get(base + 1), vs_get(base + 5)])
     end do
     c = analyze_body(gcl_rest(vs_get(base + 1), [vs_get(base + 1)]), vs_get(base + 4), &
          [vs_get(base + 1), vs_get(base + 5)])
@@ -1367,7 +1505,12 @@
     type(gc_value), intent(in) :: rest, sc
     type(gc_value) :: nd, head, name, fsc, arities, clauses, clause, ar, tmpl, walk
     integer :: base, self_slot, nfixed, i
+    logical :: hints
 
+    ! captured ONCE: a method's own clauses are exempt from fn hint
+    ! rules, and any fn* nested in its body is not
+    hints = .not. analyzing_method
+    analyzing_method = .false.
     nd = gc_nil()
     base = vs_enter(8)
     call vs_set(base + 1, rest)
@@ -1402,7 +1545,7 @@
     call vs_set(base + 8, walk)
     do while (gcl_count(vs_get(base + 8)) > 0)
        clause = norm_form(strip_meta(gcl_first(vs_get(base + 8))), [vs_get(base + 7), vs_get(base + 8)])
-       ar = analyze_arity(clause, vs_get(base + 5))
+       ar = analyze_arity(clause, vs_get(base + 5), hints)
        if (has_error) then
           call vs_leave(base)
           return
@@ -1445,8 +1588,145 @@
   end function analyze_fn
 
   ! ([params] body...) -> [nfixed variadic? first-slot body]
-  recursive function analyze_arity(clause, fsc) result(ar)
+  ! A hint's primitive kind: 1 long, 2 double, -1 a primitive Clojure
+  ! refuses on a fn (int, float, ...), 0 anything else -- no hint, a
+  ! class, an array type.
+  integer function prim_hint_kind(v)
+    type(gc_value), intent(in) :: v
+    type(gc_value) :: md, tg
+    prim_hint_kind = 0
+    if (gc_kind(v) /= OBJ_META) return
+    md = gc_slot(v, 2)
+    if (.not. gca_is(md)) return
+    tg = strip_meta(gca_get(md, gc_key("tag", [v, md])))
+    if (tg%tag /= GCT_SYM) return
+    select case (gc_ref_text(tg%ref))
+    case ("long");   prim_hint_kind = 1
+    case ("double"); prim_hint_kind = 2
+    case ("int", "float", "short", "byte", "char", "boolean"); prim_hint_kind = -1
+    end select
+  end function prim_hint_kind
+
+  ! Clojure's PRIMITIVE HINTS on a fn, as a rewrite of its body.
+  !
+  ! A ^long or ^double parameter is CONVERTED on the way in, by RT's
+  ! longCast and doubleCast -- (fn [^long n] n) given 1.5 answers 1,
+  ! and given "a" throws ClassCastException -- and a ^long or ^double
+  ! on the parameter VECTOR converts what the fn returns. clotran used
+  ! to ignore both, so a wrong argument quietly gave a non-Clojure
+  ! answer. The JVM does this in the method it emits; here it is
+  !
+  !   (fn [^long n acc] body)         (let* [n (long n)] body)
+  !   (fn ^long [^long n acc] body)   (long (loop* [n (long n) acc acc] body))
+  !
+  ! The return case needs the loop so that a recur in body stays in
+  ! tail position and still targets the whole arity. With no return
+  ! hint a let is enough: a recur rebinds the parameters and the body,
+  ! let and all, runs again and converts again.
+  !
+  ! And the forms Clojure refuses, refused the same way: more than four
+  ! primitive parameters, a variadic primitive fn, and a hint of a
+  ! primitive other than long or double.
+  !
+  ! `enabled` is false for a deftype or reify METHOD, whose parameters
+  ! take their types from the interface and may be ^int, or number
+  ! more than four.
+  recursive function prim_hint_body(rawparams, params, nfixed, variadic, body, enabled, roots) result(out)
+    type(gc_value), intent(in) :: rawparams, params, body
+    integer, intent(in) :: nfixed
+    logical, intent(in) :: variadic, enabled
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, bindings, x, form
+    integer :: kinds(max(nfixed, 1)), ret, i, base
+    logical :: any_prim
+
+    out = body
+    if (.not. enabled) return
+    any_prim = .false.
+    do i = 0, nfixed - 1
+       kinds(i + 1) = prim_hint_kind(gcv_nth(params, i))
+       if (kinds(i + 1) < 0) then
+          call raise_class("IllegalArgumentException", "Only long and double primitives are supported", roots)
+          return
+       end if
+       if (kinds(i + 1) > 0) any_prim = .true.
+    end do
+    ret = prim_hint_kind(rawparams)
+    if (ret < 0) ret = 0
+    if (.not. any_prim .and. ret == 0) return
+    if (variadic) then
+       call raise_class("RuntimeException", "fns taking primitives cannot be variadic", roots)
+       return
+    end if
+    if (nfixed > 4) then
+       call raise_class("IllegalArgumentException", "fns taking primitives support only 4 or fewer args", roots)
+       return
+    end if
+
+    base = vs_enter(5)
+    call vs_set(base + 1, body)
+    bindings = gcv_empty([roots, [vs_get(base + 1)]])
+    call vs_set(base + 2, bindings)
+    do i = 0, nfixed - 1
+       ! a let binds only what converts; a loop has to bind every
+       ! parameter, since recur's arity is the loop's
+       if (kinds(i + 1) == 0 .and. ret == 0) cycle
+       x = strip_meta(gcv_nth(params, i))
+       call vs_set(base + 3, x)
+       bindings = gcv_conj(vs_get(base + 2), vs_get(base + 3), [roots, [vs_get(base + 2), vs_get(base + 3)]])
+       call vs_set(base + 2, bindings)
+       if (kinds(i + 1) == 0) then
+          x = vs_get(base + 3)
+       else
+          x = gcl_cons(vs_get(base + 3), gcl_empty([roots, [vs_get(base + 2), vs_get(base + 3)]]), &
+               [roots, [vs_get(base + 2), vs_get(base + 3)]])
+          call vs_set(base + 4, x)
+          x = gcl_cons(cast_fn(kinds(i + 1), [roots, [vs_get(base + 2), vs_get(base + 4)]]), &
+               vs_get(base + 4), [roots, [vs_get(base + 2), vs_get(base + 4)]])
+       end if
+       call vs_set(base + 4, x)
+       bindings = gcv_conj(vs_get(base + 2), vs_get(base + 4), [roots, [vs_get(base + 2), vs_get(base + 4)]])
+       call vs_set(base + 2, bindings)
+    end do
+    ! (let* bindings . body) or (loop* bindings . body)
+    form = gcl_cons(vs_get(base + 2), vs_get(base + 1), [roots, [vs_get(base + 1), vs_get(base + 2)]])
+    call vs_set(base + 5, form)
+    if (ret /= 0) then
+       x = gc_sym("loop*", [roots, [vs_get(base + 5)]])
+    else
+       x = gc_sym("let*", [roots, [vs_get(base + 5)]])
+    end if
+    form = gcl_cons(x, vs_get(base + 5), [roots, [vs_get(base + 5)]])
+    call vs_set(base + 5, form)
+    if (ret /= 0) then
+       ! (cast (loop* ...))
+       form = gcl_cons(vs_get(base + 5), gcl_empty([roots, [vs_get(base + 5)]]), [roots, [vs_get(base + 5)]])
+       call vs_set(base + 5, form)
+       form = gcl_cons(cast_fn(ret, [roots, [vs_get(base + 5)]]), vs_get(base + 5), [roots, [vs_get(base + 5)]])
+       call vs_set(base + 5, form)
+    end if
+    ! the new body is that one form
+    out = gcl_cons(vs_get(base + 5), gcl_empty([roots, [vs_get(base + 5)]]), [roots, [vs_get(base + 5)]])
+    call vs_leave(base)
+  end function prim_hint_body
+
+  ! The cast a primitive hint means, as the function itself -- not the
+  ! name `long`, which a program may shadow or which may not be defined
+  ! yet while core.clj is loading.
+  function cast_fn(kind, roots) result(f)
+    integer, intent(in) :: kind
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: f
+    if (kind == 1) then
+       f = native(B_NUMLONG, "long", roots)
+    else
+       f = native(B_DBLCAST, "double", roots)
+    end if
+  end function cast_fn
+
+  recursive function analyze_arity(clause, fsc, hints) result(ar)
     type(gc_value), intent(in) :: clause, fsc
+    logical, intent(in) :: hints
     type(gc_value) :: ar, params, blk, p, body, rinfo
     integer :: base, i, n, amp, start, nfixed
     logical :: variadic
@@ -1495,6 +1775,7 @@
           return
        end if
        call bind_name(vs_get(base + 4), p, start + i, [vs_get(base + 1)])
+       call bind_array_hint(vs_get(base + 4), p, gcv_nth(vs_get(base + 3), i), [vs_get(base + 1)])
     end do
     if (variadic) then
        p = strip_meta(gcv_nth(vs_get(base + 3), amp + 1))
@@ -1504,8 +1785,16 @@
     rinfo = int_vec([merge(2, 1, variadic), start, merge(nfixed + 1, nfixed, variadic)], &
          [vs_get(base + 1), vs_get(base + 4)])
     call gc_set_slot(vs_get(base + 4), 4, rinfo)
-    body = analyze_body(gcl_rest(vs_get(base + 1), [vs_get(base + 1)]), vs_get(base + 4), &
-         [vs_get(base + 1), vs_get(base + 2)])
+    body = prim_hint_body(gcl_first(vs_get(base + 1)), vs_get(base + 3), nfixed, variadic, &
+         gcl_rest(vs_get(base + 1), [vs_get(base + 1)]), hints, &
+         [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 4)])
+    if (has_error) then
+       call vs_leave(base)
+       return
+    end if
+    call vs_set(base + 5, body)
+    body = analyze_body(vs_get(base + 5), vs_get(base + 4), &
+         [vs_get(base + 1), vs_get(base + 2), vs_get(base + 5)])
     if (has_error) then
        call vs_leave(base)
        return
@@ -1921,6 +2210,7 @@
              clauses = method_clauses(bare_name(mname), vs_get(base + 3), vs_get(base + 1))
              call vs_set(base + 10, clauses)
              fnform = vs_get(base + 10)      ! the clause list IS fn*'s rest
+             analyzing_method = .true.
              fnode = analyze_fn(fnform, vs_get(base + 4))
              if (has_error) then
                 call vs_leave(base)

@@ -1461,3 +1461,38 @@ shows names no Clojure program would.
 object, or a separate registry for imports -- and filter it out of
 `gcn_all`. The resolution path that creates them is `analyze_symbol`'s,
 and it is the only caller that should be setting the flag.
+
+## 48. Type hints: the runtime half is Clojure's, the compile-time half is not
+
+A hint changes what a Clojure program DOES, and clotran now does it: a
+`^long` or `^double` parameter or return converts by `RT.longCast` /
+`RT.doubleCast` after a checkcast to Number (`Compiler.emitUnboxArg`),
+so `((fn [^long n] n) 1.5)` is 1 and `((fn [^long n] n) \a)` throws; an
+array hint is a checkcast where the value is USED as an array (`aget`,
+`aset`, `alength`), so a `^doubles` parameter handed a vector is fine
+until indexed. More than four primitive parameters, a variadic one, and
+`^int`/`^float` parameters fail as they do on the JVM. The oracle's
+"Type hints" cases compare all of this by exception class.
+
+What differs is everything the JVM decides by its static types:
+
+- `recur` to a `^long` parameter with a double is a compile error there
+  ("recur arg for primitive local ... is not matching primitive"); here
+  the value is converted again on the next iteration.
+- `(let [^long x 1.5] x)` is an UnsupportedOperationException there
+  ("Can't type hint a local with a primitive initializer"); here the
+  hint on a let local is ignored.
+- `(aset ^doubles a 0 2)` with a long value finds no method there; here
+  the store converts.
+- `*unchecked-math*` does not switch a parameter's conversion to
+  `uncheckedLongCast`; the checked cast is always used.
+- `aget`/`alength` on an UNHINTED non-array is a reflection
+  IllegalArgumentException there (and on a literal `nil`, a compile
+  error); here it is a RuntimeException "not an array". A hinted nil is
+  a NullPointerException on both, with a different message.
+
+**Removal**: each item is a static check in the analyser. The recur
+check needs the primitive kind of each loop local, which
+`prim_hint_body` already knows; the let check needs the init's
+primitive type, which needs the compiler's type inference in the
+analyser rather than only in `compiler.cljf`.

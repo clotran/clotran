@@ -225,6 +225,8 @@ module Eval
   integer, parameter :: B_MUNGE = 367, B_DEMUNGE = 368
   integer, parameter :: B_ISARRAY = 369, B_EDNREAD = 370, B_ASTDATA = 371
   integer, parameter :: B_LOADCOMPILED = 372, B_ALLNS = 373, B_POOLREG = 374
+  integer, parameter :: B_LONGCAST_CHECKED = 375, B_SIMPLENAME = 376
+  integer, parameter :: B_NUMLONG = 377, B_ARRAYCAST = 378
 
   ! Compiler.CHAR_MAP, verbatim from the pinned clone: the characters
   ! a Clojure name may hold that a JVM member name may not. '.' is
@@ -406,6 +408,11 @@ module Eval
        N_SETBANG = 24, N_FAIL = 25, N_TOP = 26, N_TOPDO = 27, N_LATEVAR = 28
   integer, parameter :: K_SCOPE = 100, K_FNINFO = 101
   integer, save :: trace_macros = 0   ! 0 unread, 1 on, 2 off
+  ! Set by deftype* and reify* just before a method's clauses go
+  ! through analyze_fn, and read and cleared by it at once: a
+  ! method's parameters take their types from the interface, not
+  ! from fn's primitive hint rules.
+  logical, save :: analyzing_method = .false.
   integer, save :: keep_locals_mode = 0   ! 0 unread, 1 clear, 2 keep
 
   ! The executor's continuation stack (exec.inc, `run`): one entry per
@@ -6682,7 +6689,10 @@ contains
             end if
           end block
        else if (a%tag == GCT_REAL) then
-          out = gc_int(int(a%rval))
+          ! Java's (long) of a double: truncation, SATURATING at the
+          ! ends and 0 for NaN. int() at the default kind gave
+          ! 2147483647 for 1e30.
+          out = gc_int(long_of_double(a%rval))
        else if (is_ratio(a)) then
           ! (int 1/2) is 0 -- truncation toward zero, the same as for
           ! a double. The else branch would have handed the ratio
@@ -6690,8 +6700,11 @@ contains
           out = gc_int(gc_numerator(a) / gc_denominator(a))
        else if (a%tag == GCT_CHAR) then
           out = gc_int(a%ival)
-       else
+       else if (a%tag == GCT_INT) then
           out = a
+       else
+          ! ((Number) x).longValue(): not a number is not a long
+          call raise_number_cast(a, [vs_get(base + 1)])
        end if
     case (B_ANEWINST)
        out = array_new_instance(vs_get(base + 1), [vs_get(base + 1)])
@@ -7187,8 +7200,123 @@ case (B_SLURP)
          out = gc_bool(a0%tag == GCT_REAL .and. dv == dv .and. &
               abs(dv) > huge(1.0_gc_dp))
        end block
+    case (B_SIMPLENAME)
+       ! Class.getSimpleName: the name without its package, so
+       ! String's is "String". It shared getName's row and answered
+       ! "java.lang.String", which every error report that names an
+       ! exception's class then carried.
+       block
+         character(len=:), allocatable :: nm
+         type(gc_value) :: full
+         full = call_builtin(B_GETNAME, args)
+         if (.not. has_error) then
+            nm = text_of(full)
+            out = gc_str(nm(index(nm, ".", back=.true.) + 1:), [vs_get(base + 1)])
+         end if
+       end block
+    case (B_ARRAYCAST)
+       ! (clotran-array-cast value :doubles) -- the checkcast Clojure
+       ! emits where an array-hinted value is used as an array. The
+       ! value comes back unchanged or it throws. nil is the
+       ! NullPointerException the array operation would raise on it; the
+       ! wrong thing is a ClassCastException naming both types the way
+       ! the JVM does, [D for double[] and so on.
+       block
+         character(len=:), allocatable :: want, desc, have, kind
+         type(gc_value) :: hv
+         a = strip_meta(gcv_nth(args, 0))
+         hv = strip_meta(gcv_nth(args, 1))
+         select case (gc_ref_text(hv%ref))
+         case ("doubles");  want = "real8";   desc = "[D"
+         case ("longs");    want = "int8";    desc = "[J"
+         case ("ints");     want = "int4";    desc = "[I"
+         case ("shorts");   want = "int4";    desc = "[S"
+         case ("bytes");    want = "int4";    desc = "[B"
+         case ("floats");   want = "real4";   desc = "[F"
+         case ("booleans"); want = "logical"; desc = "[Z"
+         case ("chars");    want = "value";   desc = "[C"
+         case default;      want = "value";   desc = "[Ljava.lang.Object;"
+         end select
+         if (a%tag == GCT_NIL) then
+            call raise_class("NullPointerException", "Cannot use a null array", [vs_get(base + 1)])
+         else if (gc_kind(a) == OBJ_ARRAY) then
+            kind = gcna_kind(gc_i1(a))
+            if (kind == want .and. gcna_rank(gc_i1(a)) == 1) then
+               out = a
+            else
+               select case (kind)
+               case ("real8");   have = "[D"
+               case ("int8");    have = "[J"
+               case ("int4");    have = "[I"
+               case ("real4");   have = "[F"
+               case ("logical"); have = "[Z"
+               case default;     have = "[Ljava.lang.Object;"
+               end select
+               if (gcna_rank(gc_i1(a)) > 1) have = repeat("[", gcna_rank(gc_i1(a)) - 1) // have
+               call raise_class("ClassCastException", "class " // have // " cannot be cast to class " // desc, &
+                    [vs_get(base + 1)])
+            end if
+         else
+            call raise_class("ClassCastException", "class " // class_name_of(a) // &
+                 " cannot be cast to class " // desc, [vs_get(base + 1)])
+         end if
+       end block
+    case (B_LONGCAST_CHECKED, B_NUMLONG)
+       ! B_NUMLONG is a ^long PARAMETER's conversion: the compiler checks
+       ! for a Number first (Compiler.emitUnboxArg), so a character is a
+       ! ClassCastException there, though (long \a) is 97.
+       a = strip_meta(gcv_nth(args, 0))
+       if (id == B_NUMLONG .and. a%tag == GCT_CHAR) then
+          call raise_number_cast(a, [vs_get(base + 1)])
+          call vs_leave(base)
+          return
+       end if
+       ! RT.longCast, clojure.core/long. Read from RT.java at the pinned
+       ! commit: an integer answers itself; a BigInt must fit or it is
+       ! "Value out of range for long"; a ratio truncates; a character
+       ! is its code; ANY OTHER number goes through its double, with the
+       ! same range check. A non-number is a ClassCastException and nil
+       ! a NullPointerException, because RT casts to Number. Sharing
+       ! uncheckedLongCast's row made (long "a") answer "a" and
+       ! (long 1e30) answer 2147483647.
+       a = strip_meta(gcv_nth(args, 0))
+       if (a%tag == GCT_INT .or. a%tag == GCT_CHAR) then
+          out = gc_int(a%ival)
+       else if (a%tag == GCT_BIG) then
+          if (big_fits_i64(gc_big_text(a))) then
+             out = gc_int(big_to_i64(gc_big_text(a)))
+          else
+             call raise_class("IllegalArgumentException", "Value out of range for long: " // &
+                  gcp_str(a, .false.), [vs_get(base + 1)])
+          end if
+       else if (is_ratio(a)) then
+          out = gc_int(gc_numerator(a) / gc_denominator(a))
+       else if (a%tag == GCT_REAL .or. a%tag == GCT_DEC) then
+          block
+            real(gc_dp) :: d
+            d = num_dbl(a)
+            ! -2^63 and 2^63 as doubles are what Long.MIN_VALUE and
+            ! MAX_VALUE become in RT's comparison
+            if (d < -9223372036854775808.0_gc_dp .or. d > 9223372036854775808.0_gc_dp) then
+               call raise_class("IllegalArgumentException", "Value out of range for long: " // &
+                    gcp_str(gc_real(d), .false.), [vs_get(base + 1)])
+            else
+               out = gc_int(long_of_double(d))
+            end if
+          end block
+       else
+          call raise_number_cast(a, [vs_get(base + 1)])
+       end if
     case (B_DBLCAST)
-       out = gc_real(num_dbl(gcv_nth(args, 0)))
+       ! ((Number) x).doubleValue(), checked and unchecked alike: a
+       ! number converts, nil and anything else raise. It answered
+       ! 0.0 for both.
+       a = strip_meta(gcv_nth(args, 0))
+       if (is_number(a)) then
+          out = gc_real(num_dbl(a))
+       else
+          call raise_number_cast(a, [vs_get(base + 1)])
+       end if
     case (B_BOOLCAST)
        out = gc_bool(truthy(gcv_nth(args, 0)))
     case (B_CHARCAST)
@@ -12742,6 +12870,38 @@ case (B_SLURP)
        s = big_from_i64(v%ival)
     end if
   end function big_of
+
+  ! Java's (long) of a double: truncate toward zero, saturate at the
+  ! ends of the range, and 0 for NaN. Fortran's int() is undefined out
+  ! of range, so the ends are handled first.
+  function long_of_double(d) result(n)
+    real(gc_dp), intent(in) :: d
+    integer(gc_ip) :: n
+    if (d /= d) then
+       n = 0
+    else if (d >= 9223372036854775807.0_gc_dp) then
+       n = huge(0_gc_ip)
+    else if (d <= -9223372036854775808.0_gc_dp) then
+       n = -huge(0_gc_ip) - 1_gc_ip
+    else
+       n = int(d, gc_ip)
+    end if
+  end function long_of_double
+
+  ! What RT's ((Number) x) raises for something that is not a number:
+  ! a NullPointerException for nil, a ClassCastException otherwise,
+  ! naming the class the way the JVM does.
+  subroutine raise_number_cast(v, roots)
+    type(gc_value), intent(in) :: v
+    type(gc_value), intent(in) :: roots(:)
+    if (v%tag == GCT_NIL) then
+       call raise_class("NullPointerException", &
+            'Cannot invoke "java.lang.Number.doubleValue()" because "x" is null', roots)
+    else
+       call raise_class("ClassCastException", "class " // class_name_of(v) // &
+            " cannot be cast to class java.lang.Number", roots)
+    end if
+  end subroutine raise_number_cast
 
   function num_dbl(v) result(d)
     type(gc_value), intent(in) :: v

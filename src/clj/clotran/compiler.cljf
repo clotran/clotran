@@ -279,6 +279,23 @@ end module clotran_rt_decl
 
 (declare infer)
 
+(defn- op-args
+  "The argument nodes of a numeric op. The analyser puts Clojure's
+  checkcast in front of an array-hinted argument of aget, aset and
+  alength, (clotran-array-cast a :doubles); where the version guard has
+  already proved `a` is that array, the cast is dropped and the op sees
+  the local."
+  [nd kind env]
+  (let [args (vec (rest (:children nd)))
+        a (first args)]
+    (if (and (#{:aget :aset :alength} kind)
+             (= :call (:op a))
+             (= 'clotran-array-cast (some-> (:builtin (first (:children a))) name symbol))
+             (let [[_ inner hint] (:children a)]
+               (= (infer inner env) (:p1 hint))))
+      (assoc args 0 (second (:children a)))
+      args)))
+
 (defn- const-type [v]
   (cond (and (int? v) (spellable? v)) :long
         (and (double? v) (spellable? v)) :double
@@ -287,7 +304,7 @@ end module clotran_rt_decl
 
 (defn- call-type [nd env]
   (let [[kind _] (head-op (first (:children nd)))
-        ts (mapv #(infer % env) (rest (:children nd)))
+        ts (mapv #(infer % env) (op-args nd kind env))
         n (count ts)]
     (case kind
       :arith (if (and (= n 2) (every? num? ts))
@@ -499,7 +516,7 @@ end module clotran_rt_decl
   expr a Fortran variable of type t."
   [nd t st]
   (let [[kind sym] (head-op (first (:children nd)))
-        args (vec (rest (:children nd)))
+        args (op-args nd kind (:env st))
         ats (mapv #(infer % (:env st)) args)
         fop (fortran-op sym)]
     (case kind
