@@ -1,0 +1,338 @@
+(ns clotran.tiers
+  "Which tier each function of a file lands in, and why, at every call
+  site that pulls it out of tier A -- with the rewrite that would keep it
+  in (PLAN.md step 13).
+
+    A  pure Fortran: no clotran runtime at all
+    B  the collector and collections (and the printer, reader, regex)
+    C  the interpreter and dynamic Vars
+
+  It reads the SAME resolved tree the compiler and the interpreter use
+  (clotran-ast), so macros are already expanded and every name is a Var
+  or a slot. It classifies; it does not compile. The rules are the
+  design's, and this is their first cut: where it cannot tell, it says B
+  rather than promise pure Fortran it cannot deliver."
+  (:require [clojure.string :as str]
+            [clotran.loader :as loader]))
+
+;;; ---- what lowers to Fortran ------------------------------------------
+
+(def ^:private core-a
+  "clojure.core functions with a pure-Fortran lowering over numbers,
+  strings and primitive arrays."
+  '#{+ - * / inc dec < > <= >= = == not= zero? pos? neg? even? odd?
+     max min abs quot rem mod not identity
+     int long double float short byte char boolean num
+     unchecked-add unchecked-subtract unchecked-multiply unchecked-inc unchecked-dec
+     bit-and bit-or bit-xor bit-not bit-shift-left bit-shift-right unsigned-bit-shift-right
+     aget aset alength aclone double-array long-array int-array float-array make-array
+     aset-double aset-long aset-int
+     count str subs println print printf format newline})
+
+(def ^:private producers
+  "Sequence functions whose result is a lazy seq: pure Fortran only when
+  something right there consumes it, so the chain fuses into one loop."
+  '#{map filter remove keep range take drop take-while drop-while
+     iterate repeatedly mapcat map-indexed keep-indexed partition})
+
+(def ^:private consumers
+  "Functions that consume a seq on the spot: a producer handed straight
+  to one of these fuses into a loop."
+  '#{reduce transduce run! every? some not-any? into-array count doall dorun})
+
+(def ^:private core-c
+  "What needs the interpreter or the dynamic Var machinery."
+  '#{eval load load-string load-file load-reader require use refer resolve
+     ns-resolve intern alter-var-root in-ns macroexpand macroexpand-1
+     push-thread-bindings pop-thread-bindings with-redefs-fn find-var var-set})
+
+(def ^:private string-a
+  "clojure.string functions with a pure-Fortran lowering: strings in,
+  strings, numbers or booleans out."
+  '#{clojure.string/includes? clojure.string/starts-with? clojure.string/ends-with?
+     clojure.string/upper-case clojure.string/lower-case clojure.string/capitalize
+     clojure.string/trim clojure.string/triml clojure.string/trimr clojure.string/blank?
+     clojure.string/index-of clojure.string/last-index-of clojure.string/reverse})
+
+(def ^:private specific-help
+  "What to say instead of the generic advice, for the functions people
+  reach for most."
+  '{re-find "a regex needs the regex module; for fixed text, (clojure.string/includes? s \"...\") or (clojure.string/index-of s \"...\") stays pure Fortran"
+    re-seq "a regex needs the regex module; to split fixed text, loop with (clojure.string/index-of s sep from)"
+    re-matches "a regex needs the regex module; for fixed text, compare with = or clojure.string/starts-with?"
+    read-string "reading data needs the reader module; if the text is a number, (Long/parseLong s) or (Double/parseDouble s) stays pure Fortran"
+    read "reading data needs the reader module; parse numbers with Long/parseLong or Double/parseDouble"
+    apply "apply spreads a seq of arguments on the heap; call the function with its arguments directly, or (reduce f arr) to fold an array"
+    str "str of a collection needs the printer; str of numbers and strings is pure Fortran"
+    assoc "a map is a heap value; if the keys are fixed, a defrecord of numbers is a Fortran derived type"
+    get "a map lookup needs the collector; a record field, (:field rec), on a record of numbers does not"
+    conj "a growing collection needs the collector; if the size is known, fill a primitive array"
+    vec "a vector needs the collector; (double-array ...) or (long-array ...) does not"
+    into "into a vector or map needs the collector; into-array of numbers does not"
+    atom "an atom is shared heap state; in a kernel, thread the value through loop/recur instead"
+    swap! "an atom is shared heap state; in a kernel, thread the value through loop/recur instead"})
+
+(def ^:private numeric-builtins
+  "Host builtins (folded into call heads) with a Fortran lowering, by the
+  name the exporter gives them."
+  #{"+" "-" "*" "/" "<" ">" "<=" ">=" "==" "=" "inc" "dec" "zero?" "pos?" "neg?"
+    "aget" "aset" "alength" "int" "long" "double" "clotran-array-cast"
+    "sqrt" "sin" "cos" "tan" "exp" "log" "log10" "pow" "abs" "floor" "ceil"
+    "min" "max" "quot" "rem" "unchecked-long" "clotran-num-long"})
+
+;;; ---- walking --------------------------------------------------------
+
+(defn- var-sym
+  "The Var a :var node names, as ns/name, from its printed form: every
+  Var prints as #'ns/name, and not every one here has a namespace object
+  to ask."
+  [v]
+  (cond
+    (var? v) (let [s (str v)] (symbol (if (str/starts-with? s "#'") (subs s 2) s)))
+    ;; a builtin standing for a core function (see call-findings)
+    (symbol? v) v))
+
+(defn- core-name [v]
+  (let [s (var-sym v)]
+    (when (and s (= "clojure.core" (namespace s))) (symbol (name s)))))
+
+(defn- finding [tier code pos msg help]
+  {:tier tier :code code :pos pos :msg msg :help help})
+
+(declare walk)
+
+(defn- walk-all
+  "Findings for each node; a hole -- the nil a try without finally
+  leaves among its children -- is no node."
+  [nds ctx]
+  (mapcat #(walk % ctx) (filter #(and (map? %) (:op %)) nds)))
+
+(defn- sub-nodes
+  "Every node directly inside nd, wherever the exporter put it: children,
+  and nodes hidden in p1/p2 (a case's branches, a fn's template)."
+  [nd]
+  (let [kids (:children nd)
+        hidden (->> [(:p1 nd) (:p2 nd)]
+                    (mapcat #(tree-seq (fn [x] (and (coll? x) (not (:op x)))) seq %))
+                    (filter #(and (map? %) (:op %))))]
+    (concat kids hidden)))
+
+(defn- first-pos
+  "The node's own position, or the first one found inside it: a
+  literal carries none, but the calls in it do."
+  [nd]
+  (or (:pos nd) (some first-pos (sub-nodes nd))))
+
+(defn- call-findings [nd {:keys [pos tiers fname consuming] :as ctx}]
+  (let [[head & args] (:children nd)
+        pos (or (:pos nd) pos)
+        ctx (assoc ctx :pos pos)]
+    (case (:op head)
+      :var
+      (let [v (:p1 head) cn (core-name v) vs (var-sym v)]
+        (cond
+          (and cn (core-c cn))
+          (cons (finding :C "C001" pos (str "`" cn "` needs the interpreter or dynamic Vars")
+                         (str "`" cn "` runs or finds code at run time; move it out of this function, "
+                              "into the program's setup, and pass the result in"))
+                (walk-all args ctx))
+
+          (and cn (producers cn))
+          (if consuming
+            (walk-all args (assoc ctx :consuming false :fusing true))
+            (cons (finding :B "B001" pos (str "lazy seq kept: the result of `" cn "` is returned or stored, so it needs the collector")
+                           (str "consume it where it is made, so the chain fuses into one loop: "
+                                "(reduce f init (" cn " ...)), (run! f (" cn " ...)), or (into-array (" cn " ...))"))
+                  (walk-all args (assoc ctx :fusing true))))
+
+          (and cn (consumers cn))
+          (walk-all args (assoc ctx :consuming true :fusing true))
+
+          (and cn (core-a cn))
+          (walk-all args (assoc ctx :consuming false))
+
+          (contains? tiers vs)
+          (let [t (get tiers vs)]
+            (concat (when (not= :A t)
+                      [(finding t "B002" pos (str "calls `" vs "`, which is tier " (name t))
+                                (str "see `" vs "`'s own warnings; once it is tier A, so is this call"))])
+                    (walk-all args (assoc ctx :consuming false))))
+
+          (string-a vs)
+          (walk-all args (assoc ctx :consuming false))
+
+          cn
+          (cons (finding :B "B003" pos (str "calls `clojure.core/" cn "`, which has no pure-Fortran lowering yet")
+                         (or (specific-help cn)
+                             (str "if `" cn "` is on numbers or arrays, its Fortran equivalent may exist: "
+                                  "a loop over (aget ...), or a Math/ intrinsic")))
+                (walk-all args ctx))
+
+          :else
+          (cons (finding :B "B004" pos (str "calls `" vs "` from another namespace, which is not known to be pure")
+                         "compile that namespace with --report too; a tier-A function is called directly")
+                (walk-all args ctx))))
+
+      :const
+      (let [b (some-> (:builtin head) str)
+            bs (some-> b symbol)]
+        (cond
+          (keyword? (:p1 head))
+          (cons (finding :B "B011" pos (str "looks up " (:p1 head) " in a map, which needs the collector")
+                         "if the keys are fixed, a defrecord of numbers is a Fortran derived type and a field read is pure")
+                (walk-all args ctx))
+
+          (and b (numeric-builtins b))
+          (walk-all args (assoc ctx :consuming false))
+
+          ;; a builtin that IS a core function -- core.clj's :inline turns
+          ;; (count x) into a host call -- is judged as that function
+          (and bs (or (core-a bs) (producers bs) (consumers bs) (core-c bs) (specific-help bs)))
+          (call-findings (assoc nd :children (cons {:op :var :p1 (symbol "clojure.core" b)} args)) ctx)
+
+          :else
+          (cons (finding :B "B005" pos (str "calls the host function `" (or b "?") "`, which needs the runtime")
+                         "use arithmetic, Math/ functions or array operations here if that is what it computes")
+                (walk-all args ctx))))
+
+      :local
+      (cons (finding :B "B006" pos "calls a function held in a local, so which code runs is known only at run time"
+                     "call a defn by name instead, so the call can be linked directly")
+            (walk-all args ctx))
+
+      (walk-all (:children nd) ctx))))
+
+(defn- walk
+  "Findings for node nd: a seq of maps, empty when the node is pure."
+  [nd {:keys [pos fusing] :as ctx}]
+  (let [pos (or (first-pos nd) pos)
+        ctx (assoc ctx :pos pos)]
+    (case (:op nd)
+      (:const) (let [v (:p1 nd)]
+                 (if (or (nil? v) (number? v) (string? v) (keyword? v) (char? v)
+                         (true? v) (false? v) (fn? v)
+                         ;; a pattern: the regex call using it is what is reported
+                         (= (type v) (type #"")))
+                   []
+                   [(finding :B "B010" pos (str "the collection " (let [s (pr-str v)] (if (> (count s) 30) (str (subs s 0 30) "...") s))
+                                                " is a heap value")
+                             "if it is numbers, use a primitive array: (double-array [...]), or (long-array [...])")]))
+      (:local :recur-target) []
+      (:if :do :let :loop :recur :case) (walk-all (sub-nodes nd) ctx)
+      :var (let [v (:p1 nd)]
+             (cond
+               (and (var? v) (:dynamic (meta v)))
+               [(finding :C "C002" pos (str "reads the dynamic Var `" (var-sym v) "`")
+                         "pass its value in as an argument; a dynamic Var needs the Var machinery")]
+               ;; a function handed to a fused chain is called in the loop,
+               ;; so the loop is as pure as the function
+               (and fusing (let [cn (core-name v)] (and cn (core-a cn)))) []
+               (and fusing (= :A (get (:tiers ctx) (var-sym v)))) []
+               (and fusing (contains? (:tiers ctx) (var-sym v)))
+               [(finding (get (:tiers ctx) (var-sym v)) "B002" pos
+                         (str "passes `" (var-sym v) "`, which is tier " (name (get (:tiers ctx) (var-sym v))) ", into the loop")
+                         (str "see `" (var-sym v) "`'s own warnings; once it is tier A, the loop is too"))]
+               :else [(finding :B "B007" pos (str "uses the function `" (var-sym v) "` as a value")
+                               "a function value is a heap object; call it directly, or pass it to map, filter or reduce where the chain fuses")]))
+      (:vector :map :set)
+      (cons (finding :B "B010" pos (str "builds a " (name (:op nd)) " literal, a heap value")
+                     "if it holds numbers, use a primitive array: (double-array [...]); if it does not leave this function, a later compiler can keep it off the heap")
+            (walk-all (sub-nodes nd) ctx))
+      :fn (if fusing
+            (walk-all (sub-nodes nd) (assoc ctx :fusing false :consuming false))
+            (cons (finding :B "B020" pos "makes a closure, a heap value"
+                           "if it is passed to map, filter or reduce over an array, it fuses away; otherwise lift it into a defn")
+                  (walk-all (sub-nodes nd) ctx)))
+      :lazy [(finding :B "B030" pos "lazy-seq builds a heap thunk"
+                      "produce the values in a loop instead, or consume the sequence where it is made")]
+      (:try :throw)
+      (cons (finding :B "B040" pos (str (name (:op nd)) " needs exception objects on the heap")
+                     "return a status (a number or keyword) instead of throwing, if this is a numeric kernel")
+            (walk-all (sub-nodes nd) ctx))
+      (:letfn :deftype :newtype :new :dot)
+      (cons (finding :B "B050" pos (str (name (:op nd)) " needs the runtime")
+                     "keep objects and host interop out of the kernel; pass their numbers in")
+            (walk-all (sub-nodes nd) ctx))
+      (:def :set! :latevar)
+      [(finding :C "C003" pos (str (name (:op nd)) " inside a function changes Vars at run time")
+                "define it at the top level of the file instead")]
+      :call (call-findings nd ctx)
+      :fail [(finding :B "B098" pos "refers to something this host does not have; running it raises an error"
+                      "see DEVIATIONS.md; if the kernel does not need it, take it out")]
+      [(finding :B "B099" pos (str "`" (name (:op nd)) "` is not classified yet") "")])))
+
+(defn- tier-of [fs]
+  (cond (some #(= :C (:tier %)) fs) :C
+        (some #(= :B (:tier %)) fs) :B
+        :else :A))
+
+(defn- fn-findings
+  "Findings for one analysed (fn ...): every arity's body, and each
+  variadic arity itself -- its rest arguments arrive as a heap list."
+  [top tiers fname]
+  (let [tmpl (:p1 (:p1 top))
+        arities (second tmpl)
+        bodies (map #(nth % 3) arities)
+        pos (or (:pos (:p1 top)) (some first-pos bodies))]
+    (vec (concat
+          (for [ar arities :when (true? (nth ar 1))]
+            (finding :B "B060" pos "is variadic: its rest arguments arrive as a heap list"
+                     "take a fixed number of arguments, or one primitive array of them"))
+          (walk-all bodies {:pos pos :tiers tiers :fname fname})))))
+
+;;; ---- a file ---------------------------------------------------------
+
+(defn classify
+  "{ns/name {:tier :A|:B|:C :findings [...]}} for every top-level defn of
+  the file `src`, loading it first if its namespace is not loaded. A
+  function's tier includes the tiers of the functions of the same file
+  it calls, so this goes round until nothing changes."
+  [src]
+  (let [text (clotran-slurp src)
+        [head ns-name] (read-string text)
+        _ (when-not (= 'ns head) (throw (ex-info (str src " does not begin with (ns ...)") {})))
+        _ (when-not (find-ns ns-name) (load-file src))
+        forms (binding [*ns* (the-ns ns-name)] (clotran-read-forms src))
+        defns (for [f forms :when (and (seq? f) (#{'defn 'defn-} (first f)))
+                    :let [fnf (loader/fn-form f)] :when fnf]
+                [(symbol (str ns-name) (str (second f))) fnf])
+        tops (binding [*ns* (the-ns ns-name)]
+               (into {} (for [[s fnf] defns] [s (clotran-ast fnf)])))]
+    (loop [tiers (into {} (for [[s] defns] [s :A])) rounds 0]
+      (let [result (into {} (for [[s] defns
+                                  :let [fs (fn-findings (tops s) tiers s)]]
+                              [s {:tier (tier-of fs) :findings fs}]))
+            tiers' (into {} (for [[s r] result] [s (:tier r)]))]
+        (if (or (= tiers tiers') (> rounds 20))
+          result
+          (recur tiers' (inc rounds)))))))
+
+;;; ---- the report ------------------------------------------------------
+
+(defn- source-line [lines n] (when (and n (pos? n) (<= n (count lines))) (nth lines (dec n))))
+
+(defn- render [fname {:keys [tier code pos msg help]} lines]
+  (let [[file line col] (some-> pos clotran-position)
+        src (source-line lines line)
+        gutter (apply str (repeat (count (str (or line ""))) " "))]
+    (str (if (= :C tier) "warning" "warning") "[" code "]: " msg "\n"
+         "  in `" fname "`\n"
+         (when line (str gutter " --> " file ":" line ":" col "\n"))
+         (when src (str gutter " |\n"
+                        line " | " src "\n"
+                        gutter " | " (apply str (repeat (max 0 (dec (or col 1))) " ")) "^\n"))
+         (when (seq help) (str gutter " = help: " help "\n")))))
+
+(defn report
+  "Print the tier of every function in `src`, then a warning, with its
+  fix, at every call site that leaves tier A. Answers the classification."
+  [src]
+  (let [r (classify src)
+        lines (str/split-lines (clotran-slurp src))]
+    (doseq [[s {:keys [tier]}] (sort-by key r)]
+      (println (str "tier " (name tier) "  " s)))
+    (println)
+    (doseq [[s {:keys [findings]}] (sort-by key r)
+            f (distinct findings)]
+      (println (render s f lines)))
+    r))

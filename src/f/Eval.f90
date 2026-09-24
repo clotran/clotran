@@ -227,7 +227,7 @@ module Eval
   integer, parameter :: B_LOADCOMPILED = 372, B_ALLNS = 373, B_POOLREG = 374
   integer, parameter :: B_LONGCAST_CHECKED = 375, B_SIMPLENAME = 376
   integer, parameter :: B_NUMLONG = 377, B_ARRAYCAST = 378, B_SPIT = 379
-  integer, parameter :: B_ASTPOOL = 380
+  integer, parameter :: B_ASTPOOL = 380, B_POSITION = 381, B_READFORMS = 382
 
   ! Compiler.CHAR_MAP, verbatim from the pinned clone: the characters
   ! a Clojure name may hold that a JVM member name may not. '.' is
@@ -705,6 +705,8 @@ contains
     ! executor runs. PLAN step 10.
     call bind_builtin(core, "clotran-ast", B_ASTDATA)
     call bind_builtin(core, "clotran-ast-pool", B_ASTPOOL)
+    call bind_builtin(core, "clotran-position", B_POSITION)
+    call bind_builtin(core, "clotran-read-forms", B_READFORMS)
     call bind_builtin(core, "clotran-load-compiled", B_LOADCOMPILED)
     call bind_builtin(core, "clotran-pool-register", B_POOLREG)
     call bind_builtin(core, "clotran-break", B_BREAK)
@@ -8175,6 +8177,73 @@ contains
                    [vs_get(base + 1), vs_get(lb + 1), vs_get(lb + 2), vs_get(lb + 3)])
               call vs_leave(lb)
             end block
+         end if
+       end block
+    case (B_READFORMS)
+       ! (clotran-read-forms path): every top-level form of a file as a
+       ! vector, read as load-file reads them -- the file registered with
+       ! the reader, so each form's position decodes to its real file,
+       ! line and column (clotran-position). Nothing is evaluated, so a
+       ! ::keyword resolves against the CURRENT namespace: bind *ns*.
+       block
+         character(len=:), allocatable :: path, text
+         type(gc_value) :: form, acc
+         integer :: u, st, fsize, j, fid, lb
+         logical :: eof
+         path = text_of(gcv_nth(args, 0))
+         open(newunit=u, file=path, access="stream", form="unformatted", &
+              status="old", action="read", iostat=st)
+         if (st /= 0) then
+            call fail_as("java.io.FileNotFoundException", path // " (No such file or directory)", [vs_get(base + 1)])
+         else
+            inquire(unit=u, size=fsize)
+            allocate(character(len=fsize) :: text)
+            if (fsize > 0) read(u, iostat=st) text
+            close(u)
+            lb = vs_enter(1)
+            call vs_set(lb + 1, gcv_empty([vs_get(base + 1)]))
+            fid = gcr_begin_file(text, path)
+            j = 1
+            do
+               form = gcr_read_next(text, j, [vs_get(base + 1), vs_get(lb + 1)], eof, fid)
+               if (gcr_has_error()) then
+                  call fail("clotran-read-forms " // path // ": " // gcr_error())
+                  exit
+               end if
+               if (eof) exit
+               acc = gcv_conj(vs_get(lb + 1), form, [vs_get(base + 1), vs_get(lb + 1), form])
+               call vs_set(lb + 1, acc)
+            end do
+            if (.not. has_error) out = vs_get(lb + 1)
+            call vs_leave(lb)
+         end if
+       end block
+    case (B_POSITION)
+       ! (clotran-position pos): a node's packed source position, as the
+       ! analyser recorded it (clotran-ast's :pos), decoded to
+       ! [file line column]; nil for a node with none. The compiler's
+       ! diagnostics point at source with it.
+       block
+         character(len=:), allocatable :: fname
+         integer :: line, col, lb
+         type(gc_value) :: pv, v
+         pv = strip_meta(gcv_nth(args, 0))
+         out = gc_nil()
+         if (pv%tag == GCT_INT) then
+            if (pv%ival > 0) then
+               call gcr_position_parts(int(pv%ival), fname, line, col)
+               lb = vs_enter(1)
+               v = gcv_empty([vs_get(base + 1)])
+               call vs_set(lb + 1, v)
+               v = gcv_conj(vs_get(lb + 1), gc_str(fname, [vs_get(base + 1), vs_get(lb + 1)]), &
+                    [vs_get(base + 1), vs_get(lb + 1)])
+               call vs_set(lb + 1, v)
+               v = gcv_conj(vs_get(lb + 1), gc_int(int(line, gc_ip)), [vs_get(base + 1), vs_get(lb + 1)])
+               call vs_set(lb + 1, v)
+               v = gcv_conj(vs_get(lb + 1), gc_int(int(col, gc_ip)), [vs_get(base + 1), vs_get(lb + 1)])
+               out = v
+               call vs_leave(lb)
+            end if
          end if
        end block
     case (B_ASTPOOL)

@@ -19,6 +19,19 @@ bin="$root/clotran-bin"
 core="$root/src/clj/clojure/core.clj"
 [ -x "$bin" ] || { echo "build first: make" >&2; exit 1; }
 
+if [ "$1" = "compile" ] && [ "$2" = "--report" ]; then
+  # `clotran compile --report foo.cljf`: each function's tier -- A pure
+  # Fortran, B the collector, C the interpreter -- and, at every call
+  # site that leaves tier A, why and how to stay (clotran.tiers).
+  [ $# -eq 3 ] || { echo "usage: clotran compile --report file.cljf" >&2; exit 2; }
+  work=$(mktemp -d) || exit 1
+  trap 'rm -rf "$work"' EXIT
+  printf '(clotran.tiers/report "%s")\n' "$3" > "$work/report.clj"
+  "$bin" "$core" "$root/src/clj/clotran/loader.cljf" "$root/src/clj/clotran/tiers.cljf" "$work/report.clj" </dev/null \
+    | grep -v '^note: skipping\|^user=>\|WARNING: ->Eduction'
+  exit 0
+fi
+
 if [ "$1" = "compile" ]; then
   [ $# -eq 2 ] || [ $# -eq 3 ] || { echo "usage: clotran compile file.cljf [library]" >&2; exit 2; }
   src=$2

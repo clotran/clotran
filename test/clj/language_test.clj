@@ -1122,10 +1122,6 @@
          [(instance? ArithmeticException (second @err)) (= a (first @err)) @a (agent-error a)])
        [true true 0 nil])
 
-(println "")
-(if (zero? @*failures*)
-  (println "LANGUAGE TESTS PASSED")
-  (println "LANGUAGE TESTS FAILED:" @*failures*))
 
 ;;; ---- a package through the door: DynLoad.f90, clotran.package --------
 ;; test/f/testpkg.f90 is a shared library with a manifest and one shim per
@@ -1238,3 +1234,34 @@
             (filter #(and (map? %) (= :call (:op %))))
             first :children first :builtin str)
        "+")
+
+;;; ---- tiers: what compiles to pure Fortran ------------------------
+;;
+;; clotran.tiers (PLAN.md step 13) sorts each function into A (pure
+;; Fortran), B (needs the collector) or C (needs the interpreter), and
+;; says why at every call site. Host check: the tiers are clotran's.
+(require 'clotran.tiers)
+(def tier-result (clotran.tiers/classify "test/clj/tiers_sample.cljf"))
+(check "tiers, per function"
+       (into (sorted-map) (for [[k v] tier-result] [(name k) (:tier v)]))
+       (sorted-map "count-big" :A "describe" :B "many" :B "mean" :A "parse" :B
+                   "run-it" :C "scaled" :C "show" :A "shout" :A "spread" :B
+                   "squares" :B "sum-squares" :A "total" :A "uses-describe" :B))
+(check "tiers, the reason codes"
+       (into (sorted-map) (for [[k v] tier-result :when (not= :A (:tier v))]
+                            [(name k) (vec (sort (distinct (map :code (:findings v)))))]))
+       (sorted-map "describe" ["B010"] "many" ["B060"] "parse" ["B003"]
+                   "run-it" ["B003" "C001"] "scaled" ["C002"] "spread" ["B003"]
+                   "squares" ["B001"] "uses-describe" ["B002" "B011"]))
+(check "a warning carries its line and its fix"
+       (let [f (first (:findings (tier-result 'tiers-sample/squares)))]
+         [(second (clotran-position (:pos f))) (boolean (re-find #"reduce" (:help f)))])
+       [17 true])
+
+;;; ---- the verdict: LAST, so every check above counts. It once sat
+;;; 140 lines early, and the package and tier checks after it could fail
+;;; without the gate hearing of it.
+(println "")
+(if (zero? @*failures*)
+  (println "LANGUAGE TESTS PASSED")
+  (println "LANGUAGE TESTS FAILED:" @*failures*))

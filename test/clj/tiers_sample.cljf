@@ -1,0 +1,35 @@
+(ns tiers-sample
+  "The sample clotran.tiers is checked against (language_test.clj): one
+  function per verdict the classifier gives.")
+
+(def ^:dynamic *scale* 2.0)
+
+(defn total [a]
+  (let [n (alength a)]
+    (loop [i 0 s 0.0] (if (< i n) (recur (inc i) (+ s (aget a i))) s))))
+
+(defn mean [a] (/ (total a) (alength a)))
+
+(defn sum-squares [xs] (reduce + (map #(* % %) xs)))
+
+(defn count-big [xs] (count (filter #(> % 10.0) xs)))
+
+(defn squares [xs] (map #(* % %) xs))
+
+(defn describe [a] {:n (alength a) :mean (mean a)})
+
+(defn show [a] (println "mean:" (mean a)))
+
+(defn shout [s] (clojure.string/upper-case s))
+
+(defn parse [s] (re-find #"\d+" s))
+
+(defn scaled [x] (* *scale* x))
+
+(defn spread [f xs] (apply f xs))
+
+(defn many [& xs] (count xs))
+
+(defn run-it [code] (eval (read-string code)))
+
+(defn uses-describe [a] (:n (describe a)))
