@@ -20,7 +20,8 @@
 ;;   scripts/compiler-check --bench   also time one loop both ways
 (require '[clojure.string :as str]
          '[clojure.java.io :as io]
-         '[babashka.process :refer [shell]])
+         '[babashka.process :refer [shell]]
+         '[clojure.walk])
 
 (def repo (-> *file* io/file .getCanonicalFile .getParentFile .getParentFile))
 (def work (io/file "/tmp/clotran-compiler-check"))
@@ -82,7 +83,30 @@
     ["= and == on numbers" (fn [] (let [a 2 b 2 c 2.0] [(= a b) (== a c) (= c 2.0)])) [[]]]
     ["double division" (fn [] (let [a 1.0 b 4.0] (/ a b))) [[]]]
     ["long division stays a ratio" (fn [] (let [a 1 b 4] (/ a b))) [[]]]
-    ["a recur inside a case is declined" (fn [n] (loop [i 0] (case i 3 i (recur (inc i))))) [[0]]]])
+    ["a recur inside a case is declined" (fn [n] (loop [i 0] (case i 3 i (recur (inc i))))) [[0]]]
+    ;; HINTED parameters. A matching argument runs the typed version; a
+    ;; vector for ^doubles, or a long for ^double, runs the untyped one,
+    ;; and must still answer what the interpreter answers.
+    ["sum a double array" (fn [^doubles a] (let [n (alength a)] (loop [i 0 s 0.0] (if (< i n) (recur (inc i) (+ s (aget a i))) s))))
+     [[(double-array [1.0 2.5 3.0])] [(double-array 0)] [[1.0 2.0]]]]
+    ["scale a double array in place" (fn [^doubles a ^double k] (let [n (alength a)] (loop [i 0] (if (< i n) (do (aset a i (* k (aget a i))) (recur (inc i))) (vec a)))))
+     [[(double-array [1.0 2.0]) 3.0] [(double-array [1.0]) 2]]]
+    ["aset answers the value" (fn [^doubles a] (aset a 0 2.5)) [[(double-array 1)]]]
+    ["an index out of range" (fn [^doubles a] (aget a 5)) [[(double-array 2)]]]
+    ["a long array" (fn [^longs a] (loop [i 0 s 0] (if (< i (alength a)) (recur (inc i) (+ s (aget a i))) s)))
+     [[(long-array [1 2 3])] [(double-array 2)]]]
+    ["a primitive double parameter" (fn [^double x] (* x x)) [[3.0] [2]]]
+    ["the fn's own recur on typed parameters" (fn [^long n ^long acc] (if (= n 0) acc (recur (dec n) (+ acc n))))
+     [[10 0] [0 5] [3 1.5]]]
+    ["casts" (fn [] (let [x 7 d 2.9] [(int x) (long d) (double x) (int -2.9)])) [[]]]
+    ;; The array REGISTRY grows while the loop holds a pointer into a's
+    ;; buffer: every iteration makes an array and keeps it, so the
+    ;; registry has to grow past its first sixteen. Growing it used to
+    ;; deep-copy every buffer to a new address, which would leave the
+    ;; loop reading freed memory.
+    ["arrays allocated while one is held"
+     (fn [^doubles a] (loop [i 0 s 0.0 held []] (if (< i (alength a)) (recur (inc i) (+ s (aget a i)) (conj held (double-array (alength a)))) s)))
+     [[(double-array (range 300))]]]])
 
 ;; Benchmarks are cases like any other -- built the same way and
 ;; compared for correctness on their small calls -- plus the arguments
@@ -93,9 +117,28 @@
   '[["bench: sum to n" (fn [n] (loop [i 0 acc 0] (if (< i n) (recur (+ i 1) (+ acc i)) acc)))
      [[1000]] [200000]]
     ["bench: sum to 200000, all primitive" (fn [] (loop [i 0 acc 0] (if (< i 200000) (recur (+ i 1) (+ acc i)) acc)))
-     [[]] []]])
+     [[]] []]
+    ["bench: sum a 200000-element double array"
+     (fn [^doubles a] (let [n (alength a)] (loop [i 0 s 0.0] (if (< i n) (recur (inc i) (+ s (aget a i))) s))))
+     [[(double-array [1.0 2.0])]] [(double-array (range 200000))]]])
 
 (def all-cases (if bench? (into cases benches) cases))
+
+(defn- src
+  "A form as source, WITH its type hints. pr-str drops metadata, so
+  every ^doubles in a case used to reach the compiler stripped and
+  the hinted cases ran the untyped version -- the typed path went
+  untested and the array benchmark looked 700 times slower than it
+  is. Only :tag is kept; the line numbers the reader attaches are
+  noise."
+  [form]
+  (binding [*print-meta* true]
+    (pr-str (clojure.walk/postwalk
+             (fn [x]
+               (cond (symbol? x) (if-let [t (:tag (meta x))] (with-meta x {:tag t}) (with-meta x nil))
+                     (instance? clojure.lang.IObj x) (with-meta x nil)
+                     :else x))
+             form))))
 
 (defn- run-clotran
   "Runs a file through clotran with core.clj loaded, answering stdout."
@@ -117,7 +160,7 @@
    "(defn compiler-check-target [x] (+ x 100))\n"
    (apply str
           (for [[i [nm form _]] (map-indexed vector all-cases)]
-            (str "(let [r (clotran.compiler/compile-fn \"cc\" \"f" i "\" '" (pr-str form) ")]\n"
+            (str "(let [r (clotran.compiler/compile-fn \"cc\" \"f" i "\" '" (src form) ")]\n"
                  "  (if (:declined r)\n"
                  "    (println \"DECLINED\" " (pr-str nm) " (:declined r))\n"
                  "    (do (println \"===BEGIN " i "\")\n"
@@ -145,27 +188,27 @@
    (apply str
           (for [i ids
                 :let [[nm form calls] (nth all-cases i)]]
-            (str "(let [r (clotran.compiler/compile-fn \"cc\" \"f" i "\" '" (pr-str form) ")\n"
+            (str "(let [r (clotran.compiler/compile-fn \"cc\" \"f" i "\" '" (src form) ")\n"
                  "      h (clotran-pool-register (:pool r))]\n"
                  "  (clotran-load-compiled \"" (str work) "/libf" i "." soext "\" h)\n"
-                 "  (let [interp " (pr-str form) "\n"
+                 "  (let [interp " (src form) "\n"
                  "        comp @(resolve 'cc/f" i ")]\n"
                  (apply str
                         (for [args calls]
                           (str "    (swap! ran inc)\n"
-                               "    (let [a (try (apply interp '" (pr-str (vec args)) ")"
-                               " (catch Throwable e [:threw (.getMessage e)]))\n"
-                               "          b (try (apply comp '" (pr-str (vec args)) ")"
-                               " (catch Throwable e [:threw (.getMessage e)]))]\n"
+                               "    (let [a (try (apply interp " (pr-str (vec args)) ")"
+                               " (catch Throwable e [:threw (first (clojure.string/split (.getMessage e) #\"  at \"))]))\n"
+                               "          b (try (apply comp " (pr-str (vec args)) ")"
+                               " (catch Throwable e [:threw (first (clojure.string/split (.getMessage e) #\"  at \"))]))]\n"
                                "      (when-not (= a b)\n"
                                "        (swap! fails inc)\n"
                                "        (println \"DIFFER\" " (pr-str nm) " '" (pr-str (vec args)) ")\n"
                                "        (println \"   interpreted:\" (pr-str a))\n"
                                "        (println \"   compiled:   \" (pr-str b))))\n")))
                  (when-let [targs (nth (nth all-cases i) 3 nil)]
-                   (str "    (let [ms (fn [g] (let [t (System/nanoTime)] (g) (/ (- (System/nanoTime) t) 1000000.0)))]\n"
-                        "      (println (str " (pr-str nm) " \": interpreted \" (int (ms (fn [] (apply interp '" (pr-str targs) ")))) \" ms, compiled \"\n"
-                        "                    (ms (fn [] (apply comp '" (pr-str targs) "))) \" ms\")))\n"))
+                   (str "    (let [targs " (pr-str (vec targs)) "\n          ms (fn [g] (apply min (for [_ (range 5)] (let [t (System/nanoTime)] (g) (/ (- (System/nanoTime) t) 1000000.0)))))]\n"
+                        "      (println (str " (pr-str nm) " \": interpreted \" (int (ms (fn [] (apply interp targs)))) \" ms, compiled \"\n"
+                        "                    (ms (fn [] (apply comp targs))) \" ms\")))\n"))
                  "))\n")))
    "(println \"---\")\n"
    "(println (str \"compiler-check: \" @ran \" calls, \" (- @ran @fails) \" agree, \" @fails \" differ\"))\n"))

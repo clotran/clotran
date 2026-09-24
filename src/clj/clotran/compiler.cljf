@@ -90,6 +90,13 @@
        integer(c_int), value :: slot
        real(c_double) :: x
      end function clotran_real
+     function clotran_array_view(slot, kind, ptr, n) bind(C, name=\"clotran_array_view\") result(ok)
+       import :: c_int, c_ptr, c_int64_t
+       integer(c_int), value :: slot, kind
+       type(c_ptr), intent(out) :: ptr
+       integer(c_int64_t), intent(out) :: n
+       integer(c_int) :: ok
+     end function clotran_array_view
      function clotran_bool(slot) bind(C, name=\"clotran_bool\") result(b)
        import :: c_int
        integer(c_int), value :: slot
@@ -248,7 +255,9 @@ end module clotran_rt_decl
 (def ^:private op-kinds
   '{+ :arith, - :arith, * :arith, / :div, inc :inc, dec :dec,
     < :cmp, > :cmp, <= :cmp, >= :cmp, == :cmp, = :eq,
-    zero? :pred, pos? :pred, neg? :pred})
+    zero? :pred, pos? :pred, neg? :pred,
+    aget :aget, aset :aset, alength :alength,
+    int :to-int, long :to-long, double :to-double})
 
 (def ^:private fortran-op
   '{+ "+", - "-", * "*", / "/", < "<", > ">", <= "<=", >= ">=", == "==", = "=="})
@@ -290,6 +299,16 @@ end module clotran_rt_decl
       :cmp (if (and (= n 2) (some num? ts) (every? #(or (num? %) (= :any %)) ts)) :bool :any)
       :eq (if (and (= n 2) (num? (first ts)) (= (first ts) (second ts))) :bool :any)
       :pred (if (and (= n 1) (num? (first ts))) :bool :any)
+      ;; an array is typed only through a hinted parameter, so its
+      ;; argument is always a local
+      :aget (if (and (= n 2) (#{:doubles :longs} (ts 0)) (= :long (ts 1)))
+              (if (= :doubles (ts 0)) :double :long) :any)
+      :aset (if (and (= n 3) (#{:doubles :longs} (ts 0)) (= :long (ts 1))
+                     (if (= :doubles (ts 0)) (num? (ts 2)) (= :long (ts 2))))
+              (if (= :doubles (ts 0)) :double :long) :any)
+      :alength (if (and (= n 1) (#{:doubles :longs} (ts 0))) :long :any)
+      (:to-int :to-long) (if (and (= n 1) (num? (ts 0))) :long :any)
+      :to-double (if (and (= n 1) (num? (ts 0))) :double :any)
       :any)))
 
 (defn- bind-types
@@ -484,6 +503,70 @@ end module clotran_rt_decl
         ats (mapv #(infer % (:env st)) args)
         fop (fortran-op sym)]
     (case kind
+      ;; ARRAYS, through the Fortran pointer the version guard set up. An
+      ;; index out of range takes the generic call, which raises what
+      ;; Clojure raises; the array for it is read from the frame, where
+      ;; the parameter still is.
+      ;; CASTS, by RT's own range rules: a value out of range takes the
+      ;; generic call, which throws what Clojure throws. (aget a i)
+      ;; inlines to (aget a (int i)), so without these no index was ever
+      ;; typed.
+      :to-double
+      (let [[c a st] (gp (args 0) (ats 0) st)]
+        [c (coerce a (ats 0) :double) st])
+
+      (:to-int :to-long)
+      (let [at (ats 0)
+            [c a st] (gp (args 0) at st)
+            [r st] (tmp st :long)
+            in-range (cond
+                       (and (= at :long) (= kind :to-long)) nil
+                       (= at :long) (str a " >= -2147483648_c_int64_t .and. " a " <= 2147483647_c_int64_t")
+                       (= kind :to-int) (str a " >= -2147483648.0_c_double .and. " a " <= 2147483647.0_c_double")
+                       :else (str "abs(" a ") < 9.2e18_c_double"))
+            conv (if (= at :long) a (str "int(" a ", c_int64_t)"))]
+        (if (nil? in-range)
+          [c a st]
+          (let [[slow st] (slow-call nd [[a at]] r :long st)]
+            [(concat c [(str "if (" in-range ") then") (str "   " r " = " conv) "else"]
+                     (map #(str "   " %) slow) ["end if"])
+             r st])))
+
+      :alength
+      [[] (str "an" (:i2 (args 0))) st]
+
+      :aget
+      (let [aslot (:i2 (args 0))
+            [ci i st] (gp (args 1) :long st)
+            [r st] (tmp st t)
+            [as st] (fresh st)
+            [slow st] (slow-call nd [[as :slot] [i :long]] r t st)]
+        [(concat ci
+                 [(str "if (" i " >= 0 .and. " i " < an" aslot ") then")
+                  (str "   " r " = av" aslot "(" i " + 1)")
+                  "else"
+                  (str "   call clotran_frame_get(b + " as ", b + 1, " aslot "_c_int)")]
+                 (map #(str "   " %) slow)
+                 ["end if"])
+         r st])
+
+      :aset
+      (let [aslot (:i2 (args 0))
+            [ci i st] (gp (args 1) :long st)
+            [cv v st] (gp (args 2) t st)
+            [r st] (tmp st t)
+            [as st] (fresh st)
+            [slow st] (slow-call nd [[as :slot] [i :long] [v t]] r t st)]
+        [(concat ci cv
+                 [(str "if (" i " >= 0 .and. " i " < an" aslot ") then")
+                  (str "   av" aslot "(" i " + 1) = " v)
+                  (str "   " r " = " v)
+                  "else"
+                  (str "   call clotran_frame_get(b + " as ", b + 1, " aslot "_c_int)")]
+                 (map #(str "   " %) slow)
+                 ["end if"])
+         r st])
+
       :arith
       (let [[c1 a st] (gp (args 0) t st)
             [c2 b st] (gp (args 1) t st)
@@ -688,8 +771,11 @@ end module clotran_rt_decl
                    (map :i2)
                    (remove own)
                    (remove #(get (:hoisted st) %))
-                   (filter #(or (< % nparams) (= :any (get-in st [:env :slots %]))))
-                   (remove #(prim? (get-in st [:env :slots %])))
+                   ;; boxed, and in scope at the loop: a parameter, or a
+                   ;; local already bound. A HINTED parameter is typed and
+                   ;; is not hoisted.
+                   (filter #(and (= :any (get-in st [:env :slots %] :any))
+                                 (or (< % nparams) (contains? (get-in st [:env :slots]) %))))
                    distinct)]
     (reduce (fn [[code st] slot]
               (let [[s st] (fresh st)
@@ -812,9 +898,19 @@ end module clotran_rt_decl
                                        ts (get-in st [:env :slots slot] :any)]
                                    (if (prim? ts)
                                      (let [[c e st] (gp k ts st)
-                                           [tv st] (tmp st ts)]
+                                           [tv st] (tmp st ts)
+                                           ;; the fn's OWN recur rebinds parameters, and a
+                                           ;; versioned procedure's guard reads them from
+                                           ;; the frame next time round -- so the frame is
+                                           ;; kept in step with the Fortran variable
+                                           fn-level? (= "recur0" (:loop st))
+                                           [bs st] (if fn-level? (fresh st) [nil st])]
                                        [(into code (conj (vec c) (str tv " = " e)))
-                                        (conj vs (str (slot-var slot ts) " = " tv)) st])
+                                        (into vs (cond-> [(str (slot-var slot ts) " = " tv)]
+                                                   fn-level? (into [(box bs ts tv)
+                                                                    (str "call clotran_frame_put(b + 1, " slot
+                                                                         "_c_int, b + " bs ")")])))
+                                        st])
                                      (let [[c s st] (gen k st)]
                                        [(into code c)
                                         (conj vs (str "call clotran_frame_put(b + 1, " slot
@@ -829,14 +925,65 @@ end module clotran_rt_decl
   used, grouped by type."
   [decls]
   (apply str
-         (for [[t ty] [[:tag "integer(c_int)"] [:long "integer(c_int64_t)"] [:double "real(c_double)"] [:bool "logical"]]
-               :let [names (sort (keep (fn [[nm k]] (when (= k t) nm)) decls))]
+         (for [[t ty] [[:tag "integer(c_int)"] [:long "integer(c_int64_t)"] [:double "real(c_double)"]
+                       [:bool "logical"] [:cptr "type(c_ptr)"]
+                       [:dptr "real(c_double), pointer"] [:iptr "integer(c_int64_t), pointer"]]
+               :let [names (sort (keep (fn [[nm k]] (when (= k t) (if (#{:dptr :iptr} t) (str nm "(:)") nm))) decls))]
                :when (seq names)]
            (str "    " ty " :: " (str/join ", " names) "\n"))))
 
+(defn- param-hints
+  "The type each HINTED parameter promises, by slot. Clojure's own
+  spelling: ^double and ^long make a primitive, ^doubles and ^longs an
+  array of one. A parameter with no hint, or any other hint, is boxed."
+  [form]
+  (let [params (first (filter vector? form))]
+    (into {} (keep-indexed
+              (fn [i p]
+                (when-let [t ('{doubles :doubles longs :longs double :double long :long}
+                              (:tag (meta p)))]
+                  [i t]))
+              params))))
+
+(defn- guard-code
+  "Read each hinted parameter and check it is what its hint says: a
+  double or a long by its tag, an array by asking for a view of it.
+  Answers [code setup state]: the checks, which leave `hok` true only
+  if every one passed, and what to do once they have -- point the
+  array variables at the buffers and unbox the primitives."
+  [hints st]
+  (reduce (fn [[code setup st] [slot t]]
+            (let [[s st] (fresh st)
+                  get (str "call clotran_frame_get(b + " s ", b + 1, " slot "_c_int)")]
+              (case t
+                (:doubles :longs)
+                (let [st (-> st (declare-var (str "ap" slot) :cptr)
+                             (declare-var (str "an" slot) :long)
+                             (declare-var (str "av" slot) (if (= t :doubles) :dptr :iptr)))]
+                  [(into code [get (str "hok = hok .and. clotran_array_view(b + " s ", "
+                                        (if (= t :doubles) 1 2) "_c_int, ap" slot ", an" slot ") /= 0")])
+                   (conj setup (str "call c_f_pointer(ap" slot ", av" slot ", [an" slot "])"))
+                   st])
+                (:double :long)
+                (let [v (slot-var slot t)
+                      st (declare-var st v t)]
+                  [(into code [get (str "hok = hok .and. clotran_tag(b + " s ") == "
+                                        (if (= t :double) 3 2) "_c_int")])
+                   (conj setup (str v " = " (unbox t s)))
+                   st]))))
+          [[] [] st] (sort hints)))
+
 (defn- fn-procedure
-  "One arity of one function, as a Fortran subroutine."
-  [sym tmpl]
+  "One arity of one function, as a Fortran subroutine.
+
+  With HINTS it is VERSIONED. Every hinted parameter is checked on the
+  way in; if all of them are what they promise, the typed body runs,
+  with arrays indexed through Fortran pointers and primitives in
+  Fortran variables. If any is not, the untyped body runs -- the same
+  code the function would get with no hints at all. So a wrong argument
+  answers exactly what the interpreter answers, and compiling still
+  cannot change what a call means."
+  [sym tmpl hints]
   (let [[_ arities _ nslots _ _] tmpl
         [nargs _ _ body] (first arities)
         pool (fn-pool body)
@@ -845,11 +992,26 @@ end module clotran_rt_decl
         pslots (into {} (map-indexed (fn [i p] [p (+ 2 i)]) pool))
         first-temp (+ 2 (count pool))
         ;; the BODY IS A LOOP too, so a recur with no enclosing loop
-        ;; rebinds the parameters. Parameters are boxed: a hint would
-        ;; be what makes one primitive, as in Clojure.
+        ;; rebinds the parameters
         st0 {:next first-temp :high (dec first-temp) :pool pslots
              :flags ["recur0"] :loop "recur0" :env {:slots {}} :nparams nargs}
-        [code res st] (gen body st0)]
+        [code res st]
+        (if (empty? hints)
+          (gen body st0)
+          (let [[gc setup st] (guard-code hints st0)
+                st (declare-var st "hok" :bool)
+                [r st] (fresh st)
+                [tc tres st] (gen body (assoc st :env {:slots hints} :hoisted {}))
+                [uc ures st] (gen body (assoc st :env {:slots {}} :hoisted {}))]
+            [(concat ["hok = .true."] gc
+                     ["if (hok) then"]
+                     (map #(str "   " %) (concat setup tc))
+                     [(str "   call clotran_copy(b + " r ", b + " tres ")")
+                      "else"]
+                     (map #(str "   " %) uc)
+                     [(str "   call clotran_copy(b + " r ", b + " ures ")")
+                      "end if"])
+             r st]))]
     {:arity nargs
      :symbol sym
      :pool (mapv :value pool)
@@ -896,7 +1058,7 @@ end module clotran_rt_decl
         (if-let [why (decline-reason tmpl)]
           {:declined why}
           (let [sym (str "cf_" (fort-ident (str ns-name)) "_" (fort-ident (str fn-name)))
-                proc (fn-procedure sym tmpl)]
+                proc (fn-procedure sym tmpl (param-hints form))]
             (assoc proc :ns ns-name :name fn-name)))))))
 
 (defn module-text

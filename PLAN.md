@@ -700,6 +700,44 @@ Two GC knobs were tried and did NOTHING: keeping the heap at 4x or 8x
 the live set instead of 2x, and collecting at 8x live slots allocated
 instead of 2x. Recorded so nobody tries them again as the answer.
 
+**Arrays, through hints, as Clojure writes fast array code.** A
+parameter hinted `^doubles`, `^longs`, `^double` or `^long` is checked
+ONCE on the way in, and the procedure is VERSIONED: if every hinted
+argument is what it promises, the typed body runs, with an array
+indexed through a Fortran pointer to its buffer and a bounds check that
+hands anything out of range to the generic call. If any argument is
+not, the untyped body runs -- the code the function would get with no
+hints. So a vector passed for `^doubles` answers exactly what the
+interpreter answers, and compiling still cannot change what a call
+means. `int`, `long` and `double` are typed casts with RT's range rules,
+because `(aget a i)` inlines to `(aget a (int i))` and without them no
+index was ever typed.
+
+| 200,000-element double array, summed | |
+|---|---|
+| interpreted | 554 ms |
+| compiled | 0.191 ms |
+| warmed JVM, same function | 0.192 ms |
+
+Two things the check got wrong, both now fixed in it:
+
+- It printed each case with `pr-str`, which DROPS metadata, so every
+  `^doubles` reached the compiler stripped and the hinted cases ran
+  the untyped version. The typed array path was untested and the array
+  benchmark read 134 ms. Forms now keep `:tag`.
+- It compared exceptions including the `at file:line` clotran appends,
+  which is where an error was noticed, not what it says.
+
+And one real bug underneath, in the array registry, not the compiler.
+Growing it assigned the nodes to a bigger array, which DEEP-COPIES
+every allocatable component, so every buffer moved to a new address.
+A compiled loop holds a pointer into a buffer across allocations. Each
+component is now handed over with `move_alloc`, which keeps the
+address, and `test/f/native_array_test.f90` checks the invariant
+directly -- the address before and after 200 allocations -- rather
+than hoping to catch a read of freed memory, which depends on the
+allocator and on the platform.
+
 **Unboxed arithmetic landed, and it is the orders of magnitude.** The
 same functions on a warmed JVM, called 100 times after 200 warm-up
 calls, against the compiled procedures:

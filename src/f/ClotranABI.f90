@@ -47,6 +47,7 @@ module ClotranABI
   use LispReader
   use CompiledFn
   use DynLoad
+  use NativeArray
   use Namespace
   use Eval
   implicit none
@@ -65,7 +66,7 @@ module ClotranABI
   public :: clotran_collect, clotran_live_count, clotran_set_torture
   public :: clotran_frame_new, clotran_frame_get, clotran_frame_put
   public :: clotran_eval_node, clotran_pool_register, clotran_pool_get
-  public :: clotran_load_compiled
+  public :: clotran_load_compiled, clotran_array_view
 
 contains
 
@@ -517,6 +518,52 @@ contains
     st = 1
     if (dl_install(c_text(path, n), int(pool), err)) st = 0
   end function clotran_load_compiled
+
+  ! A VIEW of a one-dimensional array: the address of its first element
+  ! and its length, for compiled code to index directly. kind is 1 for
+  ! a double array and 2 for a long array. Answers 1, or 0 when the
+  ! value is not an array of that kind, not rank 1, or a slice -- and
+  ! then the caller takes its generic path, which is the interpreter's.
+  !
+  ! The address is good for as long as the array lives: the collector
+  ! does not move objects, and the registry keeps each buffer where it
+  ! is when it grows.
+  function clotran_array_view(slot, kind, ptr, n) bind(C, name="clotran_array_view") result(ok)
+    integer(c_int), value :: slot, kind
+    type(c_ptr), intent(out) :: ptr
+    integer(c_int64_t), intent(out) :: n
+    integer(c_int) :: ok
+    type(gc_value) :: v
+    real(c_double), pointer, contiguous :: rp(:)
+    integer(8), pointer, contiguous :: ip(:)
+    logical :: good
+    integer :: h
+    ok = 0
+    ptr = c_null_ptr
+    n = 0
+    v = vs_get(int(slot))
+    if (gc_kind(v) /= OBJ_ARRAY) return
+    ! a slice shares its base's buffer at an offset; only an array that
+    ! owns its buffer is viewed
+    if (gc_i2(v) /= -1) return
+    h = gc_i1(v)
+    if (gcna_rank(h) /= 1) return
+    select case (kind)
+    case (1)
+       call gcna_real8_ptr(h, rp, good)
+       if (.not. good) return
+       n = int(size(rp), c_int64_t)
+       if (n > 0) ptr = c_loc(rp(1))
+    case (2)
+       call gcna_int8_ptr(h, ip, good)
+       if (.not. good) return
+       n = int(size(ip), c_int64_t)
+       if (n > 0) ptr = c_loc(ip(1))
+    case default
+       return
+    end select
+    ok = 1
+  end function clotran_array_view
 
   ! --- errors ------------------------------------------------------
 
