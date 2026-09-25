@@ -66,6 +66,8 @@
 ! `gc_value` deliberately has no allocatable components and no FINAL,
 ! which is the entire point: copying one is a flat move.
 module GC
+  use Threads, only: th_key, th_key_create, th_key_set, th_key_get
+  use iso_c_binding, only: c_ptr, c_loc, c_f_pointer, c_associated
   use BigInt
   use BigDec
   implicit none
@@ -493,21 +495,24 @@ module GC
   !
   ! Lives in this module, not beside the evaluator, because the
   ! collector has to scan it directly and nothing else may.
-  type(gc_value), allocatable :: vstack(:)
-  integer :: vs_top = 0
-
-  ! --- saved value stacks -------------------------------------------
   !
-  ! One evaluation context is live: its value stack is `vstack`. Every
-  ! other context's stack is parked here, and the collector scans them
-  ! all, so a suspended context keeps what it was holding. Eval's
-  ! ctx_switch moves a stack in and out with move_alloc: no copy.
-  type :: gc_saved_stack
+  ! One stack per evaluation context, and each thread runs on its own
+  ! context's (PLAN.md step 14b): the stack this module's key names on
+  ! that thread. Each is allocated on its own and never moves, so growing
+  ! the table copies pointers; the collector scans every one, so a parked
+  ! context keeps what it was holding. Stack 1 is the main thread's, made
+  ! and bound by gc_init.
+  type :: gc_stack
      type(gc_value), allocatable :: vstack(:)
      integer :: vs_top = 0
-  end type gc_saved_stack
-  type(gc_saved_stack), allocatable :: saved_stacks(:)
-  integer :: n_saved_stacks = 0
+  end type gc_stack
+  type :: gc_stack_ref
+     type(gc_stack), pointer :: s => null()
+  end type gc_stack_ref
+  type(gc_stack_ref), allocatable :: stacks(:)
+  integer :: n_stacks = 0
+  type(th_key) :: stack_key
+  logical :: stack_key_made = .false.
 
   ! --- marking work list -----------------------------------------
   ! An explicit stack, not recursion: a list is a chain thousands of
@@ -584,8 +589,23 @@ module GC
   public :: gc_global_keep, gc_root_get, gc_root_live
   public :: gc_set_finalizer
   public :: gc_ensure_init, gc_str_ref, gc_ref_text, gc_ref_is, gc_ref_len
-  public :: vs_enter, vs_leave, vs_set, vs_get, vs_depth
-  public :: gc_stack_new, gc_stack_save, gc_stack_restore, gc_stacks_reset
+  public :: vs_enter, vs_leave, vs_set, vs_get, vs_depth, gc_stack, gc_my_stack
+  interface vs_enter
+     module procedure vs_enter_self, vs_enter_on
+  end interface vs_enter
+  interface vs_leave
+     module procedure vs_leave_self, vs_leave_on
+  end interface vs_leave
+  interface vs_set
+     module procedure vs_set_self, vs_set_on
+  end interface vs_set
+  interface vs_get
+     module procedure vs_get_self, vs_get_on
+  end interface vs_get
+  interface vs_depth
+     module procedure vs_depth_self, vs_depth_on
+  end interface vs_depth
+  public :: gc_stack_new, gc_stack_bind, gc_stacks_reset
   public :: gc_arena_stats
   public :: gc_equal, gc_hash
 
@@ -677,11 +697,6 @@ contains
     str_mark = .false.; str_free = .false.; str_free_next = 0
     str_free_head = 0; str_used = 0
 
-    if (allocated(vstack)) deallocate(vstack)
-    allocate(vstack(max(n, 64)))
-    vstack = nilv
-    vs_top = 0
-
     if (allocated(mark_stack)) deallocate(mark_stack)
     allocate(mark_stack(n))
     mark_sp = 0
@@ -694,51 +709,62 @@ contains
     gc_allocs = 0; gc_frees = 0; gc_collections = 0
     gc_no_collect = .false.
     call gc_stacks_reset()
+    call gc_stack_new(1)   ! a fresh heap: stack 1 starts empty
   end subroutine gc_init
 
-  ! Room for a context's parked stack, as an empty one.
+  ! Context `id`'s stack, empty -- made, or emptied for reuse.
   subroutine gc_stack_new(id)
     integer, intent(in) :: id
-    type(gc_saved_stack), allocatable :: bigger(:)
+    type(gc_stack_ref), allocatable :: bigger(:)
     integer :: n
-    if (.not. allocated(saved_stacks)) allocate(saved_stacks(8))
-    if (id > size(saved_stacks)) then
-       n = size(saved_stacks)
+    if (.not. allocated(stacks)) allocate(stacks(8))
+    if (id > size(stacks)) then
+       n = size(stacks)
        allocate(bigger(max(2 * n, id)))
-       bigger(1:n) = saved_stacks(1:n)
-       call move_alloc(bigger, saved_stacks)
+       bigger(1:n) = stacks(1:n)
+       call move_alloc(bigger, stacks)
     end if
-    n_saved_stacks = max(n_saved_stacks, id)
-    if (allocated(saved_stacks(id)%vstack)) deallocate(saved_stacks(id)%vstack)
-    allocate(saved_stacks(id)%vstack(64))
-    saved_stacks(id)%vstack = nilv
-    saved_stacks(id)%vs_top = 0
+    n_stacks = max(n_stacks, id)
+    if (.not. associated(stacks(id)%s)) allocate(stacks(id)%s)
+    if (allocated(stacks(id)%s%vstack)) deallocate(stacks(id)%s%vstack)
+    allocate(stacks(id)%s%vstack(64))
+    stacks(id)%s%vstack = nilv
+    stacks(id)%s%vs_top = 0
   end subroutine gc_stack_new
 
-  ! The live stack is parked under `id`; the live one is then empty
-  ! until gc_stack_restore brings another in.
-  subroutine gc_stack_save(id)
+  ! The calling thread runs on context `id`'s stack from now on: at a
+  ! thread's start, and for the debugger's same-thread switch.
+  subroutine gc_stack_bind(id)
     integer, intent(in) :: id
-    if (id > n_saved_stacks) call gc_stack_new(id)
-    if (allocated(saved_stacks(id)%vstack)) deallocate(saved_stacks(id)%vstack)
-    call move_alloc(vstack, saved_stacks(id)%vstack)
-    saved_stacks(id)%vs_top = vs_top
-    allocate(vstack(64))
-    vstack = nilv
-    vs_top = 0
-  end subroutine gc_stack_save
+    logical :: ok
+    if (id > n_stacks) call gc_stack_new(id)
+    if (.not. associated(stacks(id)%s)) call gc_stack_new(id)
+    ok = th_key_set(stack_key, c_loc(stacks(id)%s))
+  end subroutine gc_stack_bind
 
-  subroutine gc_stack_restore(id)
-    integer, intent(in) :: id
-    if (allocated(vstack)) deallocate(vstack)
-    call move_alloc(saved_stacks(id)%vstack, vstack)
-    vs_top = saved_stacks(id)%vs_top
-    saved_stacks(id)%vs_top = 0
-  end subroutine gc_stack_restore
+  ! This thread's stack.
+  function my_stack() result(s)
+    type(gc_stack), pointer :: s
+    type(c_ptr) :: p
+    p = th_key_get(stack_key)
+    if (.not. c_associated(p)) error stop "clotran: a value stack used on a thread with none"
+    call c_f_pointer(p, s)
+  end function my_stack
 
+  ! Every stack but 1 gone, and the calling thread on stack 1 -- kept as
+  ! it is: Eval starts its contexts over (ctx_reset) with frames of its
+  ! own on it. gc_init empties it.
   subroutine gc_stacks_reset()
-    if (allocated(saved_stacks)) deallocate(saved_stacks)
-    n_saved_stacks = 0
+    integer :: i
+    if (.not. stack_key_made) then
+       if (.not. th_key_create(stack_key)) error stop "clotran: no thread key for the value stacks"
+       stack_key_made = .true.
+    end if
+    do i = 2, n_stacks
+       if (associated(stacks(i)%s)) deallocate(stacks(i)%s)
+    end do
+    n_stacks = min(n_stacks, 1)
+    call gc_stack_bind(1)
   end subroutine gc_stacks_reset
 
   ! --- immediates: no heap involved at all -----------------------
@@ -1376,13 +1402,14 @@ contains
     do i = 1, global_count
        call push_mark(global_root(i))
     end do
-    do i = 1, vs_top
-       call push_mark(vstack(i))
+    do i = 1, 0   ! every stack is below, the running thread's included
+       call push_mark(nilv)
     end do
-    do i = 1, n_saved_stacks
-       if (allocated(saved_stacks(i)%vstack)) then
-          do k = 1, saved_stacks(i)%vs_top
-             call push_mark(saved_stacks(i)%vstack(k))
+    do i = 1, n_stacks
+       if (.not. associated(stacks(i)%s)) cycle
+       if (allocated(stacks(i)%s%vstack)) then
+          do k = 1, stacks(i)%s%vs_top
+             call push_mark(stacks(i)%s%vstack(k))
           end do
        end if
     end do
@@ -1598,54 +1625,99 @@ contains
 
   ! Reserves n slots, cleared to nil, and returns the frame's base.
   ! Pass that base back to vs_leave; slots are addressed base+1 .. base+n.
-  function vs_enter(n) result(base)
+  ! Each has two forms: on this thread's stack, found through the key,
+  ! and on a stack the caller already holds -- the evaluator fetches its
+  ! own once per procedure (gc_my_stack) rather than once per slot.
+  function vs_enter_self(n) result(base)
+    integer, intent(in) :: n
+    integer :: base
+    call gc_ensure_init()
+    base = vs_enter_on(my_stack(), n)
+  end function vs_enter_self
+
+  function vs_enter_on(s, n) result(base)
+    type(gc_stack), pointer, intent(in) :: s
     integer, intent(in) :: n
     integer :: base, i
     type(gc_value), allocatable :: bigger(:)
-    call gc_ensure_init()
-    do while (vs_top + n > size(vstack))
-       allocate(bigger(2 * size(vstack)))
+    do while (s%vs_top + n > size(s%vstack))
+       allocate(bigger(2 * size(s%vstack)))
        bigger = nilv
-       bigger(1:vs_top) = vstack(1:vs_top)
-       call move_alloc(bigger, vstack)
+       bigger(1:s%vs_top) = s%vstack(1:s%vs_top)
+       call move_alloc(bigger, s%vstack)
     end do
-    base = vs_top
+    base = s%vs_top
     do i = base + 1, base + n
-       vstack(i) = nilv
+       s%vstack(i) = nilv
     end do
-    vs_top = base + n
-  end function vs_enter
+    s%vs_top = base + n
+  end function vs_enter_on
 
   ! Pops back to base. Clearing on the way out is not tidiness: a stale
   ! value above the top would be traced on the next collection and keep
   ! dead data alive, which is the leak a stack collector is prone to.
-  subroutine vs_leave(base)
+  subroutine vs_leave_self(base)
+    integer, intent(in) :: base
+    call vs_leave_on(my_stack(), base)
+  end subroutine vs_leave_self
+
+  subroutine vs_leave_on(s, base)
+    type(gc_stack), pointer, intent(in) :: s
     integer, intent(in) :: base
     integer :: i
-    if (base < 0 .or. base > vs_top) return
-    do i = base + 1, vs_top
-       vstack(i) = nilv
+    if (base < 0 .or. base > s%vs_top) return
+    do i = base + 1, s%vs_top
+       s%vstack(i) = nilv
     end do
-    vs_top = base
-  end subroutine vs_leave
+    s%vs_top = base
+  end subroutine vs_leave_on
 
-  subroutine vs_set(slot, v)
+  subroutine vs_set_self(slot, v)
     integer, intent(in) :: slot
     type(gc_value), intent(in) :: v
-    if (slot >= 1 .and. slot <= vs_top) vstack(slot) = v
-  end subroutine vs_set
+    call vs_set_on(my_stack(), slot, v)
+  end subroutine vs_set_self
 
-  function vs_get(slot) result(v)
+  subroutine vs_set_on(s, slot, v)
+    type(gc_stack), pointer, intent(in) :: s
+    integer, intent(in) :: slot
+    type(gc_value), intent(in) :: v
+    if (slot >= 1 .and. slot <= s%vs_top) s%vstack(slot) = v
+  end subroutine vs_set_on
+
+  function vs_get_self(slot) result(v)
+    integer, intent(in) :: slot
+    type(gc_value) :: v
+    v = vs_get_on(my_stack(), slot)
+  end function vs_get_self
+
+  function vs_get_on(s, slot) result(v)
+    type(gc_stack), pointer, intent(in) :: s
     integer, intent(in) :: slot
     type(gc_value) :: v
     v = nilv
-    if (slot >= 1 .and. slot <= vs_top) v = vstack(slot)
-  end function vs_get
+    if (slot >= 1 .and. slot <= s%vs_top) v = s%vstack(slot)
+  end function vs_get_on
 
-  function vs_depth() result(n)
+  function vs_depth_self() result(n)
     integer :: n
-    n = vs_top
-  end function vs_depth
+    type(gc_stack), pointer :: s
+    s => my_stack()
+    n = s%vs_top
+  end function vs_depth_self
+
+  function vs_depth_on(s) result(n)
+    type(gc_stack), pointer, intent(in) :: s
+    integer :: n
+    n = s%vs_top
+  end function vs_depth_on
+
+  ! This thread's stack, for vs_*_on.
+  function gc_my_stack() result(s)
+    type(gc_stack), pointer :: s
+    call gc_ensure_init()
+    s => my_stack()
+  end function gc_my_stack
 
   ! --- global roots ----------------------------------------------
 

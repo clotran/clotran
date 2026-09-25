@@ -438,12 +438,11 @@ module Eval
   !
   ! Everything the evaluator keeps between two steps of `run`: the
   ! continuation stack, the call stack, the error state, the thrown
-  ! value, the dynamic bindings. One context is live in the module
-  ! variables above; the others are parked here, arrays moved in and
-  ! out with move_alloc so a switch costs nothing per frame. The value
-  ! stack is parked beside it in GC (gc_stack_save). A green thread is
-  ! a context; so is the paused frame a debugger inspects while the
-  ! REPL runs in another (PLAN stage 2).
+  ! value, the dynamic bindings. Each thread runs on its own, the one
+  ! ctx_self finds through the thread's key (PLAN.md step 14b); its value
+  ! stack is GC's, bound the same way (gc_stack_bind). A task is a
+  ! context; so is the paused frame a debugger inspects while the REPL
+  ! runs in another, on the same thread.
   type eval_ctx
      type(kframe), allocatable :: kst(:)
      integer :: ksp = 0
@@ -502,19 +501,21 @@ contains
   ! happens in eval_new for a (new SomeException ...) and, failing
   ! that, now, at the throw.
   subroutine set_thrown(v)
+    type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: v
     type(gc_value) :: fr
     integer :: base
+    vst => gc_my_stack()
     tctx => ctx_self()
     call gc_global_keep(tctx%thrown_root, v)
     if (gc_kind(v) == OBJ_ERR) then
        if (tag_of(gc_slot(v, 4)) == GCT_NIL) then
-          base = vs_enter(1)
+          base = vs_enter(vst, 1)
           fr = frames_vec([v])
-          call vs_set(base + 1, fr)
-          call gc_set_slot(v, 4, vs_get(base + 1))
-          call vs_leave(base)
+          call vs_set(vst, base + 1, fr)
+          call gc_set_slot(v, 4, vs_get(vst, base + 1))
+          call vs_leave(vst, base)
        end if
     end if
   end subroutine set_thrown
@@ -531,15 +532,17 @@ contains
   ! conversion to symbol", but only when the heap happened to fill
   ! between the two. The oracle caught it with spec loaded.
   function frames_vec(roots) result(out)
+    type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, m, nm
     character(len=:), allocatable :: who, fname
     integer :: i, base, line, col
+    vst => gc_my_stack()
     tctx => ctx_self()
-    base = vs_enter(4)
+    base = vs_enter(vst, 4)
     out = gcv_empty(roots)
-    call vs_set(base + 1, out)
+    call vs_set(vst, base + 1, out)
     do i = tctx%fstack_top, 1, -1
        who = "fn"
        if (gc_kind(tctx%fstack_fn(i)) == OBJ_CLOSURE) then
@@ -552,33 +555,35 @@ contains
        fname = ""
        line = 0
        if (tctx%fstack_site(i) /= 0) call gcr_position_parts(tctx%fstack_site(i), fname, line, col)
-       m = gca_empty([roots, vs_get(base + 1)])
-       call vs_set(base + 2, m)
-       call frame_put(base, roots, "class", gc_str(who, [roots, vs_get(base + 1), vs_get(base + 2)]))
-       call frame_put(base, roots, "method", gc_str("invoke", [roots, vs_get(base + 1), vs_get(base + 2)]))
-       call frame_put(base, roots, "file", gc_str(fname, [roots, vs_get(base + 1), vs_get(base + 2)]))
+       m = gca_empty([roots, vs_get(vst, base + 1)])
+       call vs_set(vst, base + 2, m)
+       call frame_put(base, roots, "class", gc_str(who, [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+       call frame_put(base, roots, "method", gc_str("invoke", [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+       call frame_put(base, roots, "file", gc_str(fname, [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)]))
        call frame_put(base, roots, "line", gc_int(line))
-       out = gcv_conj(vs_get(base + 1), vs_get(base + 2), [roots])
-       call vs_set(base + 1, out)
+       out = gcv_conj(vs_get(vst, base + 1), vs_get(vst, base + 2), [roots])
+       call vs_set(vst, base + 1, out)
     end do
-    out = vs_get(base + 1)
-    call vs_leave(base)
+    out = vs_get(vst, base + 1)
+    call vs_leave(vst, base)
   end function frames_vec
 
   ! One key/value into the frame map in slot base+2. The VALUE is
   ! already built (and rooted by its own allocation); the key is built
   ! here, with the value on the stack first.
   subroutine frame_put(base, roots, key, val)
+    type(gc_stack), pointer :: vst
     integer, intent(in) :: base
     type(gc_value), intent(in) :: roots(:), val
     character(len=*), intent(in) :: key
     type(gc_value) :: k, m
-    call vs_set(base + 4, val)
-    k = gc_key(key, [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 4)])
-    call vs_set(base + 3, k)
-    m = gca_assoc(vs_get(base + 2), vs_get(base + 3), vs_get(base + 4), &
-         [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 4)])
-    call vs_set(base + 2, m)
+    vst => gc_my_stack()
+    call vs_set(vst, base + 4, val)
+    k = gc_key(key, [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 4)])
+    call vs_set(vst, base + 3, k)
+    m = gca_assoc(vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 4), &
+         [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+    call vs_set(vst, base + 2, m)
   end subroutine frame_put
 
   function thrown_value() result(v)
@@ -701,12 +706,14 @@ contains
   ! gc_init, which is exactly the singleton bug PersistentList's check 4c
   ! caught.
   function gce_base_env(roots) result(env)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: env, core, var
     integer :: base
 
     ! A fresh heap means every array handle from a previous one is
     ! orphaned; this is the one place that always follows gc_init.
+    vst => gc_my_stack()
     call gcna_reset()
     call seed_default_imports()
     call gcp_set_forcer(gce_force)
@@ -722,12 +729,12 @@ contains
     ! Three slots: env, clojure.core, and the fortran namespace. The
     ! third is NOT optional -- core lives in slot 2 for the whole of
     ! this routine.
-    base = vs_enter(3)
+    base = vs_enter(vst, 3)
     env = gce_new(gc_nil(), roots)
-    call vs_set(base + 1, env)
-    call gc_global_keep(global_env_root, vs_get(base + 1))
-    core = gcn_find_or_create("clojure.core", [vs_get(base + 1)])
-    call vs_set(base + 2, core)
+    call vs_set(vst, base + 1, env)
+    call gc_global_keep(global_env_root, vs_get(vst, base + 1))
+    core = gcn_find_or_create("clojure.core", [vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, core)
     call bind_builtin(core, "+", B_ADD)
     call bind_builtin(core, "-", B_SUB)
     call bind_builtin(core, "*", B_MUL)
@@ -775,26 +782,26 @@ contains
       ! whole of this routine, and clobbering it sent every builtin bound
       ! after this block into the wrong namespace.
       fns = gcn_find_or_create("fortran", [core])
-      call vs_set(base + 3, fns)
-      call bind_builtin(vs_get(base + 3), "make-array", B_MAKE_ARRAY)
-      call bind_builtin(vs_get(base + 3), "aget", B_AGET)
-      call bind_builtin(vs_get(base + 3), "aset", B_ASET)
-      call bind_builtin(vs_get(base + 3), "alength", B_ALENGTH)
-      call bind_builtin(vs_get(base + 3), "array-kind", B_ARRAY_KIND)
-      call bind_builtin(vs_get(base + 3), "array-shape", B_ARRAY_SHAPE)
+      call vs_set(vst, base + 3, fns)
+      call bind_builtin(vs_get(vst, base + 3), "make-array", B_MAKE_ARRAY)
+      call bind_builtin(vs_get(vst, base + 3), "aget", B_AGET)
+      call bind_builtin(vs_get(vst, base + 3), "aset", B_ASET)
+      call bind_builtin(vs_get(vst, base + 3), "alength", B_ALENGTH)
+      call bind_builtin(vs_get(vst, base + 3), "array-kind", B_ARRAY_KIND)
+      call bind_builtin(vs_get(vst, base + 3), "array-shape", B_ARRAY_SHAPE)
       ! packages: a shared library opened at run time (DynLoad.f90, clotran.package)
-      call bind_builtin(vs_get(base + 3), "load-package*", B_PKGLOAD)
-      call bind_builtin(vs_get(base + 3), "call-package*", B_PKGCALL)
-      call bind_builtin(vs_get(base + 3), "load-package", B_PKGFN)
+      call bind_builtin(vs_get(vst, base + 3), "load-package*", B_PKGLOAD)
+      call bind_builtin(vs_get(vst, base + 3), "call-package*", B_PKGCALL)
+      call bind_builtin(vs_get(vst, base + 3), "load-package", B_PKGFN)
       ! The thread primitive's host half, in the namespace the protocol
       ! lives in (src/clj/clotran/thread.cljf; tasks.inc).
       fns = gcn_find_or_create("clotran.thread", [core])
-      call vs_set(base + 3, fns)
-      call bind_builtin(vs_get(base + 3), "task-spawn", B_SUBMIT)
-      call bind_builtin(vs_get(base + 3), "task-status", B_TASKSTATUS)
-      call bind_builtin(vs_get(base + 3), "task-mailbox", B_MAILBOX)
-      call bind_builtin(vs_get(base + 3), "current-task", B_CURTASK)
-      call bind_builtin(vs_get(base + 3), "task-sleep", B_SLEEP)
+      call vs_set(vst, base + 3, fns)
+      call bind_builtin(vs_get(vst, base + 3), "task-spawn", B_SUBMIT)
+      call bind_builtin(vs_get(vst, base + 3), "task-status", B_TASKSTATUS)
+      call bind_builtin(vs_get(vst, base + 3), "task-mailbox", B_MAILBOX)
+      call bind_builtin(vs_get(vst, base + 3), "current-task", B_CURTASK)
+      call bind_builtin(vs_get(vst, base + 3), "task-sleep", B_SLEEP)
     end block
     ! A whole file as a string. core.clj's slurp is written over
     ! java.io, which is not here; this is the host's reader for it.
@@ -889,7 +896,7 @@ contains
     call bind_var(core, "*err*", make_writer(0, core))
     call bind_var(core, "*agent*", gc_nil())
     call bind_var(core, "*read-eval*", gc_bool(.true.))
-    call bind_var(core, "*data-readers*", gca_empty([vs_get(base + 1)]))
+    call bind_var(core, "*data-readers*", gca_empty([vs_get(vst, base + 1)]))
     call bind_var(core, "*default-data-reader-fn*", gc_nil())
     call bind_var(core, "*assert*", gc_bool(.true.))
     ! NOT nil, which is Clojure's root and means "exact, or throw".
@@ -904,7 +911,7 @@ contains
     !
     ! (binding [*math-context* nil] ...) asks for Clojure's exact
     ! arithmetic back, and then (/ 1M 3) throws as it does there.
-    call bind_var(core, "*math-context*", default_math_context([vs_get(base + 1)]), var_out=var)
+    call bind_var(core, "*math-context*", default_math_context([vs_get(vst, base + 1)]), var_out=var)
     call gc_global_keep(math_ctx_root, var)
     call bind_var(core, "*command-line-args*", gc_nil())
     call bind_var(core, "*flush-on-newline*", gc_bool(.true.))
@@ -920,14 +927,14 @@ contains
     call bind_var(core, "*compile-files*", gc_bool(.false.))
     call bind_var(core, "*file*", gc_nil())
     call bind_var(core, "*source-path*", gc_nil())
-    call bind_var(core, "*compile-path*", gc_str("classes", [vs_get(base + 1)]))
+    call bind_var(core, "*compile-path*", gc_str("classes", [vs_get(vst, base + 1)]))
     call bind_var(core, "*warn-on-reflection*", gc_bool(.false.))
-    call bind_var(core, "*clojure-version*", gca_empty([vs_get(base + 1)]))
+    call bind_var(core, "*clojure-version*", gca_empty([vs_get(vst, base + 1)]))
     call bind_var(core, "*fn-loader*", gc_nil())
     call bind_var(core, "*verbose-defrecords*", gc_bool(.false.))
     call bind_var(core, "*print-namespace-maps*", gc_bool(.false.))
     call bind_var(core, "*repl*", gc_bool(.false.))
-    call bind_var(core, "*compiler-options*", gca_empty([vs_get(base + 1)]))
+    call bind_var(core, "*compiler-options*", gca_empty([vs_get(vst, base + 1)]))
     call bind_var(core, "*suppress-read*", gc_nil())
     call bind_var(core, "*use-context-classloader*", gc_bool(.true.))
     call bind_builtin(core, "second", B_SECOND)
@@ -935,8 +942,8 @@ contains
     call bind_builtin(core, "with-meta", B_WITHMETA)
     call bind_builtin(core, "ns", B_NS, .true.)
     call bind_builtin(core, "in-ns", B_INNS)
-    env = vs_get(base + 1)
-    call vs_leave(base)
+    env = vs_get(vst, base + 1)
+    call vs_leave(vst, base)
   end function gce_base_env
 
   ! Interns a native as a VAR IN clojure.core -- not as a binding in
@@ -953,46 +960,48 @@ contains
   ! resolving .RT/first through the Var `first` would be a loop.
   ! (seq inst) for a deftype with a `seq` method; nil for one without.
   recursive function inst_seq(v, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: v
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, m, argv
     integer :: base
     logical :: via_iter
+    vst => gc_my_stack()
     tctx => ctx_self()
     out = gc_nil()
-    base = vs_enter(3)
-    call vs_set(base + 1, v)
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, v)
     via_iter = .false.
-    m = gca_get(gc_slot(gc_slot(v, 1), 3), gc_key("seq", [roots, vs_get(base + 1)]))
+    m = gca_get(gc_slot(gc_slot(v, 1), 3), gc_key("seq", [roots, vs_get(vst, base + 1)]))
     if (gc_kind(m) /= OBJ_CLOSURE) then
        ! No seq: an Iterable is seq'd through its iterator, 32 at a
        ! time, as RT.seqFrom does -- and core.clj's own Eduction has
        ! iterator and reduce and no seq, so (seq (eduction ..)) was nil.
-       m = gca_get(gc_slot(gc_slot(v, 1), 3), gc_key("iterator", [roots, vs_get(base + 1)]))
+       m = gca_get(gc_slot(gc_slot(v, 1), 3), gc_key("iterator", [roots, vs_get(vst, base + 1)]))
        if (gc_kind(m) /= OBJ_CLOSURE) then
-          call vs_leave(base)
+          call vs_leave(vst, base)
           return
        end if
        via_iter = .true.
     end if
-    call vs_set(base + 2, m)
-    argv = gcv_conj(gcv_empty([roots, vs_get(base + 1), vs_get(base + 2)]), vs_get(base + 1), &
-         [roots, vs_get(base + 1), vs_get(base + 2)])
-    call vs_set(base + 3, argv)
-    out = apply(vs_get(base + 2), vs_get(base + 3))
+    call vs_set(vst, base + 2, m)
+    argv = gcv_conj(gcv_empty([roots, vs_get(vst, base + 1), vs_get(vst, base + 2)]), vs_get(vst, base + 1), &
+         [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 3, argv)
+    out = apply(vs_get(vst, base + 2), vs_get(vst, base + 3))
     if (.not. tctx%has_error .and. via_iter) then
-       call vs_set(base + 3, out)
-       argv = gcv_conj(gcv_empty([roots, vs_get(base + 1), vs_get(base + 3)]), vs_get(base + 3), &
-            [roots, vs_get(base + 1), vs_get(base + 3)])
-       call vs_set(base + 3, argv)
-       out = rt_call("chunk-iterator-seq", vs_get(base + 3))
+       call vs_set(vst, base + 3, out)
+       argv = gcv_conj(gcv_empty([roots, vs_get(vst, base + 1), vs_get(vst, base + 3)]), vs_get(vst, base + 3), &
+            [roots, vs_get(vst, base + 1), vs_get(vst, base + 3)])
+       call vs_set(vst, base + 3, argv)
+       out = rt_call("chunk-iterator-seq", vs_get(vst, base + 3))
     end if
     if (.not. tctx%has_error) then
-       call vs_set(base + 3, out)
-       out = to_seq(vs_get(base + 3), [roots, vs_get(base + 1)])
+       call vs_set(vst, base + 3, out)
+       out = to_seq(vs_get(vst, base + 3), [roots, vs_get(vst, base + 1)])
     end if
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end function inst_seq
 
   ! The var `name` in clotran.rt, applied to `args`. clotran.rt is the
@@ -1040,28 +1049,30 @@ contains
   end subroutine gce_main_bindings
 
   recursive subroutine ensure_specs()
+    type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value) :: fargs, out
     integer :: base
+    vst => gc_my_stack()
     tctx => ctx_self()
     if (spec_loaded) return
-    base = vs_enter(1)
+    base = vs_enter(vst, 1)
     spec_loading = .true.
     fargs = gcv_empty([gc_nil()])
-    call vs_set(base + 1, fargs)
-    fargs = gcv_conj(vs_get(base + 1), gc_str("clojure/spec/alpha", [vs_get(base + 1)]), [vs_get(base + 1)])
-    call vs_set(base + 1, fargs)
-    out = call_builtin(B_RTLOAD, vs_get(base + 1))
+    call vs_set(vst, base + 1, fargs)
+    fargs = gcv_conj(vs_get(vst, base + 1), gc_str("clojure/spec/alpha", [vs_get(vst, base + 1)]), [vs_get(vst, base + 1)])
+    call vs_set(vst, base + 1, fargs)
+    out = call_builtin(B_RTLOAD, vs_get(vst, base + 1))
     if (.not. tctx%has_error) then
        fargs = gcv_empty([gc_nil()])
-       call vs_set(base + 1, fargs)
-       fargs = gcv_conj(vs_get(base + 1), gc_str("clojure/core/specs/alpha", [vs_get(base + 1)]), [vs_get(base + 1)])
-       call vs_set(base + 1, fargs)
-       out = call_builtin(B_RTLOAD, vs_get(base + 1))
+       call vs_set(vst, base + 1, fargs)
+       fargs = gcv_conj(vs_get(vst, base + 1), gc_str("clojure/core/specs/alpha", [vs_get(vst, base + 1)]), [vs_get(vst, base + 1)])
+       call vs_set(vst, base + 1, fargs)
+       out = call_builtin(B_RTLOAD, vs_get(vst, base + 1))
     end if
     spec_loading = .false.
     spec_loaded = .true.
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end subroutine ensure_specs
 
   ! Compiler.checkSpecs(v, form): (macroexpand-check v (next form)),
@@ -1070,48 +1081,50 @@ contains
   ! (thrown-with-cause-msg? Exception #"did not conform to spec" ...)
   ! reads.
   recursive subroutine check_specs(mvar, form)
+    type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: mvar, form
     type(gc_value) :: fargs, out, e
     logical :: was_loaded
     character(len=:), allocatable :: vt
     integer :: base
+    vst => gc_my_stack()
     tctx => ctx_self()
     if (.not. spec_check .or. spec_loading) return
-    base = vs_enter(4)
-    call vs_set(base + 1, mvar)
-    call vs_set(base + 2, form)
+    base = vs_enter(vst, 4)
+    call vs_set(vst, base + 1, mvar)
+    call vs_set(vst, base + 2, form)
     if (.not. spec_loaded) then
        call ensure_specs()
        if (tctx%has_error) then
-          call vs_leave(base)
+          call vs_leave(vst, base)
           return
        end if
     end if
-    fargs = gcv_empty([vs_get(base + 1), vs_get(base + 2)])
-    call vs_set(base + 3, fargs)
-    fargs = gcv_conj(vs_get(base + 3), vs_get(base + 1), [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-    call vs_set(base + 3, fargs)
-    fargs = gcv_conj(vs_get(base + 3), gcl_rest(vs_get(base + 2), [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)]), &
-         [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-    call vs_set(base + 3, fargs)
+    fargs = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 3, fargs)
+    fargs = gcv_conj(vs_get(vst, base + 3), vs_get(vst, base + 1), [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+    call vs_set(vst, base + 3, fargs)
+    fargs = gcv_conj(vs_get(vst, base + 3), gcl_rest(vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)]), &
+         [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+    call vs_set(vst, base + 3, fargs)
     was_loaded = .true.
-    out = rt_call_in("clojure/spec/alpha", "clojure.spec.alpha", was_loaded, "macroexpand-check", vs_get(base + 3))
+    out = rt_call_in("clojure/spec/alpha", "clojure.spec.alpha", was_loaded, "macroexpand-check", vs_get(vst, base + 3))
     if (tctx%has_error) then
-       vt = to_string_text(vs_get(base + 1))
+       vt = to_string_text(vs_get(vst, base + 1))
        if (len(vt) > 2) then
           if (vt(1:2) == "#'") vt = vt(3:)
        end if
-       call vs_set(base + 3, thrown_value())
-       call vs_set(base + 4, gc_sym("RuntimeException", [vs_get(base + 1), vs_get(base + 3)]))
-       e = gc_obj(OBJ_ERR, [vs_get(base + 4), gc_str("Syntax error macroexpanding " // vt // ".", &
-            [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)]), gc_nil()], &
-            [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)])
-       call gc_set_slot(e, 5, vs_get(base + 3))
+       call vs_set(vst, base + 3, thrown_value())
+       call vs_set(vst, base + 4, gc_sym("RuntimeException", [vs_get(vst, base + 1), vs_get(vst, base + 3)]))
+       e = gc_obj(OBJ_ERR, [vs_get(vst, base + 4), gc_str("Syntax error macroexpanding " // vt // ".", &
+            [vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)]), gc_nil()], &
+            [vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+       call gc_set_slot(e, 5, vs_get(vst, base + 3))
        call set_thrown(e)
        tctx%last_error = "Syntax error macroexpanding " // vt // "."
     end if
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end subroutine check_specs
 
   ! After a source file loads: when a compiled library sits beside it
@@ -1124,6 +1137,7 @@ contains
   ! REPORTED and the interpreted definitions stand: the source loaded,
   ! so the program is still right, only slower.
   recursive subroutine gce_install_compiled(path)
+    type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     character(len=*), intent(in) :: path
     character(len=5), parameter :: exts(2) = [character(len=5) :: "dylib", "so"]
@@ -1131,6 +1145,7 @@ contains
     type(gc_value) :: args, r
     logical :: there
     integer :: dot, i, base, at
+    vst => gc_my_stack()
     tctx => ctx_self()
     dot = index(path, ".", back=.true.)
     if (dot <= index(path, "/", back=.true.)) return
@@ -1144,97 +1159,104 @@ contains
        end if
        inquire(file=cand, exist=there)
        if (.not. there) cycle
-       base = vs_enter(1)
+       base = vs_enter(vst, 1)
        args = gcv_empty([gc_nil()])
-       call vs_set(base + 1, args)
-       args = gcv_conj(vs_get(base + 1), gc_str(cand, [vs_get(base + 1)]), [vs_get(base + 1)])
-       call vs_set(base + 1, args)
-       args = gcv_conj(vs_get(base + 1), gc_str(path, [vs_get(base + 1)]), [vs_get(base + 1)])
-       call vs_set(base + 1, args)
-       r = rt_call_in("clotran/loader", "clotran.loader", ld_loaded, "install", vs_get(base + 1))
+       call vs_set(vst, base + 1, args)
+       args = gcv_conj(vs_get(vst, base + 1), gc_str(cand, [vs_get(vst, base + 1)]), [vs_get(vst, base + 1)])
+       call vs_set(vst, base + 1, args)
+       args = gcv_conj(vs_get(vst, base + 1), gc_str(path, [vs_get(vst, base + 1)]), [vs_get(vst, base + 1)])
+       call vs_set(vst, base + 1, args)
+       r = rt_call_in("clotran/loader", "clotran.loader", ld_loaded, "install", vs_get(vst, base + 1))
        if (tctx%has_error) then
           print '(A,A,A,A)', "note: not using ", cand, ": ", gce_error()
           call gce_clear_error()
        end if
-       call vs_leave(base)
+       call vs_leave(vst, base)
        return
     end do
   end subroutine gce_install_compiled
 
   recursive function rt_call_in(lib, nsname, loaded, name, args) result(out)
+    type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     character(len=*), intent(in) :: lib, nsname, name
     logical, intent(inout) :: loaded
     type(gc_value), intent(in) :: args
     type(gc_value) :: out, fargs, ns, var, sym
     integer :: base
+    vst => gc_my_stack()
     tctx => ctx_self()
     out = gc_nil()
-    base = vs_enter(3)
-    call vs_set(base + 1, args)
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, args)
     if (.not. loaded) then
        loaded = .true.   ! before the load: a row reached while loading is an error, not a loop
-       fargs = gcv_empty([vs_get(base + 1)])
-       call vs_set(base + 2, fargs)
-       fargs = gcv_conj(vs_get(base + 2), gc_str(lib, [vs_get(base + 1), vs_get(base + 2)]), &
-            [vs_get(base + 1), vs_get(base + 2)])
-       call vs_set(base + 2, fargs)
-       out = call_builtin(B_RTLOAD, vs_get(base + 2))
+       fargs = gcv_empty([vs_get(vst, base + 1)])
+       call vs_set(vst, base + 2, fargs)
+       fargs = gcv_conj(vs_get(vst, base + 2), gc_str(lib, [vs_get(vst, base + 1), vs_get(vst, base + 2)]), &
+            [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       call vs_set(vst, base + 2, fargs)
+       out = call_builtin(B_RTLOAD, vs_get(vst, base + 2))
        out = gc_nil()
        if (tctx%has_error) then
-          call vs_leave(base)
+          call vs_leave(vst, base)
           return
        end if
     end if
-    ns = gcn_find_or_create(nsname, [vs_get(base + 1)])
-    call vs_set(base + 2, ns)
-    sym = gc_sym(name, [vs_get(base + 1), vs_get(base + 2)])
-    call vs_set(base + 3, sym)
-    var = gcn_lookup(vs_get(base + 2), vs_get(base + 3))
+    ns = gcn_find_or_create(nsname, [vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, ns)
+    sym = gc_sym(name, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 3, sym)
+    var = gcn_lookup(vs_get(vst, base + 2), vs_get(vst, base + 3))
     if (.not. gcn_is_var(var)) then
        call fail(nsname // " has no " // name)
-       call vs_leave(base)
+       call vs_leave(vst, base)
        return
     end if
-    call vs_set(base + 3, gcn_var_value(var))
-    out = apply(vs_get(base + 3), vs_get(base + 1))
-    call vs_leave(base)
+    call vs_set(vst, base + 3, gcn_var_value(var))
+    out = apply(vs_get(vst, base + 3), vs_get(vst, base + 1))
+    call vs_leave(vst, base)
   end function rt_call_in
 
   function native(id, name, roots) result(fn)
+    type(gc_stack), pointer :: vst
     integer, intent(in) :: id
     character(len=*), intent(in) :: name
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: fn, sym
     integer :: base
-    base = vs_enter(1)
+    vst => gc_my_stack()
+    base = vs_enter(vst, 1)
     sym = gc_sym(name, roots)
-    call vs_set(base + 1, sym)
-    fn = gc_obj(OBJ_BUILTIN, [vs_get(base + 1)], roots)
+    call vs_set(vst, base + 1, sym)
+    fn = gc_obj(OBJ_BUILTIN, [vs_get(vst, base + 1)], roots)
     call gc_set_i1(fn, id)
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end function native
 
   ! Interns a plain value as a Var in clojure.core. Same shape as
   ! bind_builtin, for the things RT interns that are not functions.
   subroutine bind_var(ns, name, val, var_out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: ns, val
     character(len=*), intent(in) :: name
     type(gc_value), intent(out), optional :: var_out
     type(gc_value) :: sym, var
     integer :: base
-    base = vs_enter(2)
-    call vs_set(base + 1, ns)
-    call vs_set(base + 2, val)
-    sym = gc_sym(name, [vs_get(base + 1), vs_get(base + 2)])
-    var = gcn_intern(vs_get(base + 1), sym, vs_get(base + 2), &
-         [vs_get(base + 1), vs_get(base + 2), sym])
+    vst => gc_my_stack()
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, ns)
+    call vs_set(vst, base + 2, val)
+    sym = gc_sym(name, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    var = gcn_intern(vs_get(vst, base + 1), sym, vs_get(vst, base + 2), &
+         [vs_get(vst, base + 1), vs_get(vst, base + 2), sym])
     call gc_set_i1(var, 1)
     if (present(var_out)) var_out = var
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end subroutine bind_var
 
   subroutine bind_builtin(ns, name, id, is_macro, var_out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: ns
     character(len=*), intent(in) :: name
     integer, intent(in) :: id
@@ -1244,21 +1266,22 @@ contains
     type(gc_value) :: r(2)
     integer :: base
 
-    base = vs_enter(3)
-    call vs_set(base + 1, ns)
-    sym = gc_sym(name, [vs_get(base + 1)])
-    call vs_set(base + 2, sym)
-    r(1) = vs_get(base + 1)
-    r(2) = vs_get(base + 2)
+    vst => gc_my_stack()
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, ns)
+    sym = gc_sym(name, [vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, sym)
+    r(1) = vs_get(vst, base + 1)
+    r(2) = vs_get(vst, base + 2)
     fn = gc_obj(OBJ_BUILTIN, [sym], r)
     call gc_set_i1(fn, id)
-    call vs_set(base + 3, fn)
-    var = gcn_intern(vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), r)
+    call vs_set(vst, base + 3, fn)
+    var = gcn_intern(vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), r)
     if (present(is_macro)) then
        if (is_macro) call var_set_macro(var)
     end if
     if (present(var_out)) var_out = var
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end subroutine bind_builtin
 
   ! ---- evaluation ----
@@ -1271,12 +1294,14 @@ contains
   ! a node from gce_analyze. A raw form is analysed here first.
   ! `env` and `roots` are unused and kept for the callers' sake.
   recursive function gce_eval(form, env, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: form, env
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, nd
     integer :: base
 
+    vst => gc_my_stack()
     tctx => ctx_self()
     out = gc_nil()
     if (tctx%has_error) return
@@ -1284,14 +1309,14 @@ contains
        out = exec(form, gc_nil())
        return
     end if
-    base = vs_enter(2)
-    call vs_set(base + 1, form)
-    nd = analyze_top(vs_get(base + 1))
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, form)
+    nd = analyze_top(vs_get(vst, base + 1))
     if (.not. tctx%has_error) then
-       call vs_set(base + 2, nd)
-       out = exec(vs_get(base + 2), gc_nil())
+       call vs_set(vst, base + 2, nd)
+       out = exec(vs_get(vst, base + 2), gc_nil())
     end if
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end function gce_eval
 
   ! `ns` and `in-ns` are macros in real Clojure, defined in core.clj
@@ -1384,83 +1409,87 @@ contains
   ! Proxy method forms, rewritten into the one-arity-per-form shape
   ! build_type reads, with `this` prepended to every parameter vector.
   recursive function proxy_methods(forms, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: forms
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, m, mname, second, acc, w, clauses
     integer :: base, i
 
-    base = vs_enter(6)
-    call vs_set(base + 1, forms)
-    acc = gcv_empty([roots, vs_get(base + 1)])
-    call vs_set(base + 2, acc)
-    call vs_set(base + 3, vs_get(base + 1))
+    vst => gc_my_stack()
+    base = vs_enter(vst, 6)
+    call vs_set(vst, base + 1, forms)
+    acc = gcv_empty([roots, vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, acc)
+    call vs_set(vst, base + 3, vs_get(vst, base + 1))
 
-    do while (gcl_count(vs_get(base + 3)) > 0)
-       m = strip_meta(gcl_first(vs_get(base + 3)))
-       call vs_set(base + 4, m)
-       mname = strip_meta(gcl_first(vs_get(base + 4)))
+    do while (gcl_count(vs_get(vst, base + 3)) > 0)
+       m = strip_meta(gcl_first(vs_get(vst, base + 3)))
+       call vs_set(vst, base + 4, m)
+       mname = strip_meta(gcl_first(vs_get(vst, base + 4)))
        if (mname%tag /= GCT_SYM) then
           call fail("proxy: a method needs a name")
-          call vs_leave(base)
+          call vs_leave(vst, base)
           return
        end if
-       call vs_set(base + 5, mname)
-       second = strip_meta(gcl_first(gcl_rest(vs_get(base + 4), [vs_get(base + 4)])))
-       call vs_set(base + 6, second)
-       if (gcv_is(vs_get(base + 6))) then
+       call vs_set(vst, base + 5, mname)
+       second = strip_meta(gcl_first(gcl_rest(vs_get(vst, base + 4), [vs_get(vst, base + 4)])))
+       call vs_set(vst, base + 6, second)
+       if (gcv_is(vs_get(vst, base + 6))) then
           ! One arity, written flat.
-          acc = gcv_conj(vs_get(base + 2), &
-               proxy_clause(vs_get(base + 5), vs_get(base + 6), &
-                    gcl_rest(gcl_rest(vs_get(base + 4), [vs_get(base + 4)]), &
-                         [vs_get(base + 4)]), [roots, vs_get(base + 2)]), &
-               [roots, vs_get(base + 2)])
-          call vs_set(base + 2, acc)
+          acc = gcv_conj(vs_get(vst, base + 2), &
+               proxy_clause(vs_get(vst, base + 5), vs_get(vst, base + 6), &
+                    gcl_rest(gcl_rest(vs_get(vst, base + 4), [vs_get(vst, base + 4)]), &
+                         [vs_get(vst, base + 4)]), [roots, vs_get(vst, base + 2)]), &
+               [roots, vs_get(vst, base + 2)])
+          call vs_set(vst, base + 2, acc)
        else
           ! Several arities, each its own list.
-          clauses = gcl_rest(vs_get(base + 4), [vs_get(base + 4)])
-          call vs_set(base + 6, clauses)
-          do i = 1, gcl_count(vs_get(base + 6))
-             w = strip_meta(nth_of(vs_get(base + 6), i - 1))
-             acc = gcv_conj(vs_get(base + 2), &
-                  proxy_clause(vs_get(base + 5), strip_meta(gcl_first(w)), &
-                       gcl_rest(w, [vs_get(base + 2)]), [roots, vs_get(base + 2)]), &
-                  [roots, vs_get(base + 2)])
-             call vs_set(base + 2, acc)
+          clauses = gcl_rest(vs_get(vst, base + 4), [vs_get(vst, base + 4)])
+          call vs_set(vst, base + 6, clauses)
+          do i = 1, gcl_count(vs_get(vst, base + 6))
+             w = strip_meta(nth_of(vs_get(vst, base + 6), i - 1))
+             acc = gcv_conj(vs_get(vst, base + 2), &
+                  proxy_clause(vs_get(vst, base + 5), strip_meta(gcl_first(w)), &
+                       gcl_rest(w, [vs_get(vst, base + 2)]), [roots, vs_get(vst, base + 2)]), &
+                  [roots, vs_get(vst, base + 2)])
+             call vs_set(vst, base + 2, acc)
           end do
        end if
-       call vs_set(base + 3, gcl_rest(vs_get(base + 3), [roots, vs_get(base + 2)]))
+       call vs_set(vst, base + 3, gcl_rest(vs_get(vst, base + 3), [roots, vs_get(vst, base + 2)]))
     end do
 
-    out = seq_to_list(vs_get(base + 2), [roots, vs_get(base + 2)])
-    call vs_leave(base)
+    out = seq_to_list(vs_get(vst, base + 2), [roots, vs_get(vst, base + 2)])
+    call vs_leave(vst, base)
   end function proxy_methods
 
   ! (name [this params*] body*) -- one method form in build_type's shape.
   recursive function proxy_clause(mname, params, body, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: mname, params, body
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, ps
     integer :: base, i
 
-    base = vs_enter(4)
-    call vs_set(base + 1, mname)
-    call vs_set(base + 2, params)
-    call vs_set(base + 3, body)
+    vst => gc_my_stack()
+    base = vs_enter(vst, 4)
+    call vs_set(vst, base + 1, mname)
+    call vs_set(vst, base + 2, params)
+    call vs_set(vst, base + 3, body)
     ! [this ~@params]
-    ps = gcv_empty([roots, vs_get(base + 2), vs_get(base + 3)])
-    call vs_set(base + 4, ps)
-    call vs_set(base + 4, gcv_conj(vs_get(base + 4), &
-         gc_sym("this", [roots, vs_get(base + 4)]), [roots, vs_get(base + 4)]))
-    do i = 0, gcv_count(vs_get(base + 2)) - 1
-       call vs_set(base + 4, gcv_conj(vs_get(base + 4), gcv_nth(vs_get(base + 2), i), &
-            [roots, vs_get(base + 2), vs_get(base + 4)]))
+    ps = gcv_empty([roots, vs_get(vst, base + 2), vs_get(vst, base + 3)])
+    call vs_set(vst, base + 4, ps)
+    call vs_set(vst, base + 4, gcv_conj(vs_get(vst, base + 4), &
+         gc_sym("this", [roots, vs_get(vst, base + 4)]), [roots, vs_get(vst, base + 4)]))
+    do i = 0, gcv_count(vs_get(vst, base + 2)) - 1
+       call vs_set(vst, base + 4, gcv_conj(vs_get(vst, base + 4), gcv_nth(vs_get(vst, base + 2), i), &
+            [roots, vs_get(vst, base + 2), vs_get(vst, base + 4)]))
     end do
-    out = gcl_cons(vs_get(base + 4), vs_get(base + 3), &
-         [roots, vs_get(base + 3), vs_get(base + 4)])
-    call vs_set(base + 4, out)
-    out = gcl_cons(vs_get(base + 1), vs_get(base + 4), &
-         [roots, vs_get(base + 1), vs_get(base + 4)])
-    call vs_leave(base)
+    out = gcl_cons(vs_get(vst, base + 4), vs_get(vst, base + 3), &
+         [roots, vs_get(vst, base + 3), vs_get(vst, base + 4)])
+    call vs_set(vst, base + 4, out)
+    out = gcl_cons(vs_get(vst, base + 1), vs_get(vst, base + 4), &
+         [roots, vs_get(vst, base + 1), vs_get(vst, base + 4)])
+    call vs_leave(vst, base)
   end function proxy_clause
 
   ! A type object from its parts, with each method form compiled to a
@@ -1478,62 +1507,66 @@ contains
   ! java.lang.Object the same entry -- the same rule a class literal
   ! in value position follows.
   recursive function iface_keys(ifaces) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: ifaces
     type(gc_value) :: out, s, tmp
     integer :: base, i
 
-    base = vs_enter(2)
-    call vs_set(base + 1, ifaces)
-    tmp = gcv_empty([vs_get(base + 1)])
-    call vs_set(base + 2, tmp)
-    if (gcv_is(vs_get(base + 1))) then
-       do i = 0, gcv_count(vs_get(base + 1)) - 1
-          s = strip_meta(gcv_nth(vs_get(base + 1), i))
+    vst => gc_my_stack()
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, ifaces)
+    tmp = gcv_empty([vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, tmp)
+    if (gcv_is(vs_get(vst, base + 1))) then
+       do i = 0, gcv_count(vs_get(vst, base + 1)) - 1
+          s = strip_meta(gcv_nth(vs_get(vst, base + 1), i))
           if (s%tag /= GCT_SYM) cycle
           tmp = gc_class(class_key(gc_ref_text(s%ref)), &
-               [vs_get(base + 1), vs_get(base + 2)])
-          call vs_set(base + 2, gcv_conj(vs_get(base + 2), tmp, &
-               [vs_get(base + 1), vs_get(base + 2), tmp]))
+               [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+          call vs_set(vst, base + 2, gcv_conj(vs_get(vst, base + 2), tmp, &
+               [vs_get(vst, base + 1), vs_get(vst, base + 2), tmp]))
        end do
     end if
-    out = vs_get(base + 2)
-    call vs_leave(base)
+    out = vs_get(vst, base + 2)
+    call vs_leave(vst, base)
   end function iface_keys
 
   ! Every clause for one method name, in order, each with the type's
   ! fields bound around its body.
   recursive function method_clauses(name, methods, fields) result(out)
+    type(gc_stack), pointer :: vst
     character(len=*), intent(in) :: name
     type(gc_value), intent(in) :: methods, fields
     type(gc_value) :: out, m, mname, tmp
     integer :: base
 
-    base = vs_enter(5)
-    call vs_set(base + 1, methods)
-    call vs_set(base + 2, fields)
-    tmp = gcv_empty([vs_get(base + 1), vs_get(base + 2)])
-    call vs_set(base + 3, tmp)
-    call vs_set(base + 4, vs_get(base + 1))
+    vst => gc_my_stack()
+    base = vs_enter(vst, 5)
+    call vs_set(vst, base + 1, methods)
+    call vs_set(vst, base + 2, fields)
+    tmp = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 3, tmp)
+    call vs_set(vst, base + 4, vs_get(vst, base + 1))
 
-    do while (gcl_count(vs_get(base + 4)) > 0)
-       m = strip_meta(gcl_first(vs_get(base + 4)))
+    do while (gcl_count(vs_get(vst, base + 4)) > 0)
+       m = strip_meta(gcl_first(vs_get(vst, base + 4)))
        mname = strip_meta(gcl_first(m))
        if (mname%tag == GCT_SYM) then
           if (bare_name(mname) == name) then
-             tmp = bind_fields(gcl_rest(m, [vs_get(base + 2), vs_get(base + 3)]), &
-                  vs_get(base + 2))
-             call vs_set(base + 5, tmp)
-             tmp = gcv_conj(vs_get(base + 3), vs_get(base + 5), &
-                  [vs_get(base + 3), vs_get(base + 5)])
-             call vs_set(base + 3, tmp)
+             tmp = bind_fields(gcl_rest(m, [vs_get(vst, base + 2), vs_get(vst, base + 3)]), &
+                  vs_get(vst, base + 2))
+             call vs_set(vst, base + 5, tmp)
+             tmp = gcv_conj(vs_get(vst, base + 3), vs_get(vst, base + 5), &
+                  [vs_get(vst, base + 3), vs_get(vst, base + 5)])
+             call vs_set(vst, base + 3, tmp)
           end if
        end if
-       tmp = gcl_rest(vs_get(base + 4), [vs_get(base + 3), vs_get(base + 4)])
-       call vs_set(base + 4, tmp)
+       tmp = gcl_rest(vs_get(vst, base + 4), [vs_get(vst, base + 3), vs_get(vst, base + 4)])
+       call vs_set(vst, base + 4, tmp)
     end do
 
-    out = seq_to_list(vs_get(base + 3), [vs_get(base + 3)])
-    call vs_leave(base)
+    out = seq_to_list(vs_get(vst, base + 3), [vs_get(vst, base + 3)])
+    call vs_leave(vst, base)
   end function method_clauses
 
   ! One clause -- (params body...) -- with the type's fields bound
@@ -1548,10 +1581,12 @@ contains
   ! the other way round, the parameter winning, and skipping is how
   ! this gets the same answer.
   recursive function bind_fields(clause, fields) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: clause, fields
     type(gc_value) :: out, params, this, f, tmp
     integer :: base, i
 
+    vst => gc_my_stack()
     out = clause
     if (.not. gcv_is(fields)) return
     if (gcv_count(fields) == 0) return
@@ -1561,44 +1596,44 @@ contains
     this = strip_meta(gcv_nth(params, 0))
     if (this%tag /= GCT_SYM) return
 
-    base = vs_enter(6)
-    call vs_set(base + 1, clause)
-    call vs_set(base + 2, fields)
-    call vs_set(base + 3, params)
-    call vs_set(base + 4, this)
-    tmp = gcv_empty([vs_get(base + 1), vs_get(base + 2)])
-    call vs_set(base + 5, tmp)
+    base = vs_enter(vst, 6)
+    call vs_set(vst, base + 1, clause)
+    call vs_set(vst, base + 2, fields)
+    call vs_set(vst, base + 3, params)
+    call vs_set(vst, base + 4, this)
+    tmp = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 5, tmp)
 
-    do i = 0, gcv_count(vs_get(base + 2)) - 1
-       f = strip_meta(gcv_nth(vs_get(base + 2), i))
+    do i = 0, gcv_count(vs_get(vst, base + 2)) - 1
+       f = strip_meta(gcv_nth(vs_get(vst, base + 2), i))
        if (f%tag /= GCT_SYM) cycle
-       if (params_bind(vs_get(base + 3), gc_ref_text(f%ref))) cycle
-       tmp = gcv_conj(vs_get(base + 5), f, [vs_get(base + 5), f])
-       call vs_set(base + 5, tmp)
-       tmp = field_read(vs_get(base + 4), gc_ref_text(f%ref), &
-            [vs_get(base + 4), vs_get(base + 5)])
-       call vs_set(base + 6, tmp)
-       tmp = gcv_conj(vs_get(base + 5), vs_get(base + 6), &
-            [vs_get(base + 5), vs_get(base + 6)])
-       call vs_set(base + 5, tmp)
+       if (params_bind(vs_get(vst, base + 3), gc_ref_text(f%ref))) cycle
+       tmp = gcv_conj(vs_get(vst, base + 5), f, [vs_get(vst, base + 5), f])
+       call vs_set(vst, base + 5, tmp)
+       tmp = field_read(vs_get(vst, base + 4), gc_ref_text(f%ref), &
+            [vs_get(vst, base + 4), vs_get(vst, base + 5)])
+       call vs_set(vst, base + 6, tmp)
+       tmp = gcv_conj(vs_get(vst, base + 5), vs_get(vst, base + 6), &
+            [vs_get(vst, base + 5), vs_get(vst, base + 6)])
+       call vs_set(vst, base + 5, tmp)
     end do
 
-    if (gcv_count(vs_get(base + 5)) > 0) then
+    if (gcv_count(vs_get(vst, base + 5)) > 0) then
        ! (params (let* [f (. this -f) ...] body...))
-       tmp = gcl_cons(vs_get(base + 5), &
-            gcl_rest(vs_get(base + 1), [vs_get(base + 1), vs_get(base + 5)]), &
-            [vs_get(base + 1), vs_get(base + 5)])
-       call vs_set(base + 6, tmp)
-       tmp = gcl_cons(gc_sym("let*", [vs_get(base + 6)]), vs_get(base + 6), &
-            [vs_get(base + 1), vs_get(base + 6)])
-       call vs_set(base + 6, tmp)
-       tmp = gcl_cons(vs_get(base + 6), gcl_empty([vs_get(base + 6)]), &
-            [vs_get(base + 6)])
-       call vs_set(base + 6, tmp)
-       out = gcl_cons(vs_get(base + 3), vs_get(base + 6), &
-            [vs_get(base + 3), vs_get(base + 6)])
+       tmp = gcl_cons(vs_get(vst, base + 5), &
+            gcl_rest(vs_get(vst, base + 1), [vs_get(vst, base + 1), vs_get(vst, base + 5)]), &
+            [vs_get(vst, base + 1), vs_get(vst, base + 5)])
+       call vs_set(vst, base + 6, tmp)
+       tmp = gcl_cons(gc_sym("let*", [vs_get(vst, base + 6)]), vs_get(vst, base + 6), &
+            [vs_get(vst, base + 1), vs_get(vst, base + 6)])
+       call vs_set(vst, base + 6, tmp)
+       tmp = gcl_cons(vs_get(vst, base + 6), gcl_empty([vs_get(vst, base + 6)]), &
+            [vs_get(vst, base + 6)])
+       call vs_set(vst, base + 6, tmp)
+       out = gcl_cons(vs_get(vst, base + 3), vs_get(vst, base + 6), &
+            [vs_get(vst, base + 3), vs_get(vst, base + 6)])
     end if
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end function bind_fields
 
   ! Whether a parameter vector already binds this name. Destructuring
@@ -1624,47 +1659,51 @@ contains
   ! The form (. this -name) -- a field read, spelled the way eval_dot
   ! reads one.
   function field_read(this, name, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: this
     character(len=*), intent(in) :: name
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, tmp
     integer :: base
 
-    base = vs_enter(2)
-    call vs_set(base + 1, this)
+    vst => gc_my_stack()
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, this)
     tmp = gcl_empty(roots)
-    call vs_set(base + 2, tmp)
-    tmp = gc_sym("-" // name, [vs_get(base + 1), vs_get(base + 2)])
-    call vs_set(base + 2, gcl_cons(tmp, vs_get(base + 2), &
-         [vs_get(base + 1), vs_get(base + 2), tmp]))
-    call vs_set(base + 2, gcl_cons(vs_get(base + 1), vs_get(base + 2), &
-         [vs_get(base + 1), vs_get(base + 2)]))
-    tmp = gc_sym(".", [vs_get(base + 1), vs_get(base + 2)])
-    out = gcl_cons(tmp, vs_get(base + 2), [vs_get(base + 2), tmp])
-    call vs_leave(base)
+    call vs_set(vst, base + 2, tmp)
+    tmp = gc_sym("-" // name, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 2, gcl_cons(tmp, vs_get(vst, base + 2), &
+         [vs_get(vst, base + 1), vs_get(vst, base + 2), tmp]))
+    call vs_set(vst, base + 2, gcl_cons(vs_get(vst, base + 1), vs_get(vst, base + 2), &
+         [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+    tmp = gc_sym(".", [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    out = gcl_cons(tmp, vs_get(vst, base + 2), [vs_get(vst, base + 2), tmp])
+    call vs_leave(vst, base)
   end function field_read
 
   ! The type table. Keyed by the class keyword rather than the raw
   ! name so that a lookup here and an instance? test cannot disagree
   ! about java.lang.
   subroutine register_type(ty)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: ty
     type(gc_value) :: tbl, k
     integer :: base
 
-    base = vs_enter(3)
-    call vs_set(base + 1, ty)
+    vst => gc_my_stack()
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, ty)
     if (gc_root_live(types_root)) then
-       call vs_set(base + 2, gc_root_get(types_root))
+       call vs_set(vst, base + 2, gc_root_get(types_root))
     else
-       call vs_set(base + 2, gca_empty([vs_get(base + 1)]))
+       call vs_set(vst, base + 2, gca_empty([vs_get(vst, base + 1)]))
     end if
-    k = gc_class(short_class_name(class_text(vs_get(base + 1))), &
-         [vs_get(base + 1), vs_get(base + 2)])
-    call vs_set(base + 3, k)
-    tbl = gca_assoc(vs_get(base + 2), vs_get(base + 3), vs_get(base + 1), &
-         [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-    call vs_set(base + 2, tbl)
+    k = gc_class(short_class_name(class_text(vs_get(vst, base + 1))), &
+         [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 3, k)
+    tbl = gca_assoc(vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 1), &
+         [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+    call vs_set(vst, base + 2, tbl)
     ! Under the BARE name too, which is the (import clojure.core.Point)
     ! that deftype emits and that clotran has nowhere to record. It is
     ! what makes (Point. 3 4) and (new Point 3 4) find the type; see
@@ -1672,43 +1711,45 @@ contains
     block
       character(len=:), allocatable :: full
       integer :: i, last_dot
-      full = class_text(vs_get(base + 1))
+      full = class_text(vs_get(vst, base + 1))
       last_dot = 0
       do i = 1, len(full)
          if (full(i:i) == ".") last_dot = i
       end do
       if (last_dot > 0 .and. last_dot < len(full)) then
-         k = gc_class(full(last_dot+1:), [vs_get(base + 1), vs_get(base + 2)])
-         call vs_set(base + 3, k)
-         tbl = gca_assoc(vs_get(base + 2), vs_get(base + 3), vs_get(base + 1), &
-              [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-         call vs_set(base + 2, tbl)
+         k = gc_class(full(last_dot+1:), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+         call vs_set(vst, base + 3, k)
+         tbl = gca_assoc(vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 1), &
+              [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+         call vs_set(vst, base + 2, tbl)
       end if
     end block
-    call gc_global_keep(types_root, vs_get(base + 2))
-    call vs_leave(base)
+    call gc_global_keep(types_root, vs_get(vst, base + 2))
+    call vs_leave(vst, base)
   end subroutine register_type
 
   ! The type registered under a class name, or nil.
   function find_type(cname) result(out)
+    type(gc_stack), pointer :: vst
     character(len=*), intent(in) :: cname
     type(gc_value) :: out, tbl
     integer :: base
 
+    vst => gc_my_stack()
     out = gc_nil()
     if (.not. gc_root_live(types_root)) return
-    base = vs_enter(1)
+    base = vs_enter(vst, 1)
     tbl = gc_root_get(types_root)
-    call vs_set(base + 1, tbl)
-    out = gca_get(vs_get(base + 1), &
-         gc_class(class_key(cname), [vs_get(base + 1)]))
+    call vs_set(vst, base + 1, tbl)
+    out = gca_get(vs_get(vst, base + 1), &
+         gc_class(class_key(cname), [vs_get(vst, base + 1)]))
     ! A deftype is registered under its own name and under the bare
     ! last segment, and class_key qualifies a bare name with java.lang
     ! (canon_class) -- so (Point. 3 4) looks up java.lang.Point and
     ! must then try Point itself.
-    if (gc_kind(out) /= OBJ_TYPE) out = gca_get(vs_get(base + 1), &
-         gc_class(cname, [vs_get(base + 1)]))
-    call vs_leave(base)
+    if (gc_kind(out) /= OBJ_TYPE) out = gca_get(vs_get(vst, base + 1), &
+         gc_class(cname, [vs_get(vst, base + 1)]))
+    call vs_leave(vst, base)
   end function find_type
 
   ! (new user.Name f1 f2) for a type deftype* created: the fields in
@@ -1737,26 +1778,28 @@ contains
   ! caches. By NAME rather than by position, so dropping four and
   ! dropping two both land the right value in the right field.
   function pad_record_fields(given, fields) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: given, fields
     type(gc_value) :: out, f, fill, tmp
     integer :: base, i
 
-    base = vs_enter(3)
-    call vs_set(base + 1, given)
-    call vs_set(base + 2, fields)
-    call vs_set(base + 3, vs_get(base + 1))
-    do i = gcv_count(vs_get(base + 1)), gcv_count(vs_get(base + 2)) - 1
-       f = strip_meta(gcv_nth(vs_get(base + 2), i))
+    vst => gc_my_stack()
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, given)
+    call vs_set(vst, base + 2, fields)
+    call vs_set(vst, base + 3, vs_get(vst, base + 1))
+    do i = gcv_count(vs_get(vst, base + 1)), gcv_count(vs_get(vst, base + 2)) - 1
+       f = strip_meta(gcv_nth(vs_get(vst, base + 2), i))
        fill = gc_nil()
        if (f%tag == GCT_SYM) then
           if (gc_ref_is(f%ref, "__hash") .or. gc_ref_is(f%ref, "__hasheq")) &
                fill = gc_int(0)
        end if
-       tmp = gcv_conj(vs_get(base + 3), fill, [vs_get(base + 2), vs_get(base + 3)])
-       call vs_set(base + 3, tmp)
+       tmp = gcv_conj(vs_get(vst, base + 3), fill, [vs_get(vst, base + 2), vs_get(vst, base + 3)])
+       call vs_set(vst, base + 3, tmp)
     end do
-    out = vs_get(base + 3)
-    call vs_leave(base)
+    out = vs_get(vst, base + 3)
+    call vs_leave(vst, base)
   end function pad_record_fields
 
   ! --- deftype instances in the generic operations -----------------
@@ -1797,68 +1840,74 @@ contains
   ! Applies one, with `this` as the first argument -- a method's own
   ! parameter list names it, exactly as eval_dot passes it.
   recursive function inst_invoke(inst, name, rest_args, found) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: inst, rest_args
     character(len=*), intent(in) :: name
     logical, intent(out) :: found
     type(gc_value) :: out, m, tmp
     integer :: base, i
 
+    vst => gc_my_stack()
     out = gc_nil()
     found = .false.
     m = inst_method(inst, name)
     if (gc_kind(m) /= OBJ_CLOSURE) return
     found = .true.
 
-    base = vs_enter(4)
-    call vs_set(base + 1, inst)
-    call vs_set(base + 2, m)
-    call vs_set(base + 3, rest_args)
-    tmp = gcv_empty([vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-    call vs_set(base + 4, tmp)
-    tmp = gcv_conj(vs_get(base + 4), vs_get(base + 1), &
-         [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 4)])
-    call vs_set(base + 4, tmp)
-    do i = 0, gcv_count(vs_get(base + 3)) - 1
-       tmp = gcv_conj(vs_get(base + 4), gcv_nth(vs_get(base + 3), i), &
-            [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 4)])
-       call vs_set(base + 4, tmp)
+    base = vs_enter(vst, 4)
+    call vs_set(vst, base + 1, inst)
+    call vs_set(vst, base + 2, m)
+    call vs_set(vst, base + 3, rest_args)
+    tmp = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+    call vs_set(vst, base + 4, tmp)
+    tmp = gcv_conj(vs_get(vst, base + 4), vs_get(vst, base + 1), &
+         [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+    call vs_set(vst, base + 4, tmp)
+    do i = 0, gcv_count(vs_get(vst, base + 3)) - 1
+       tmp = gcv_conj(vs_get(vst, base + 4), gcv_nth(vs_get(vst, base + 3), i), &
+            [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+       call vs_set(vst, base + 4, tmp)
     end do
-    out = apply(vs_get(base + 2), vs_get(base + 4))
-    call vs_leave(base)
+    out = apply(vs_get(vst, base + 2), vs_get(vst, base + 4))
+    call vs_leave(vst, base)
   end function inst_invoke
 
   ! The same, for the common no-extra-argument case.
   recursive function inst_invoke0(inst, name, found) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: inst
     character(len=*), intent(in) :: name
     logical, intent(out) :: found
     type(gc_value) :: out, empty
     integer :: base
-    base = vs_enter(1)
-    call vs_set(base + 1, inst)
-    empty = gcv_empty([vs_get(base + 1)])
-    out = inst_invoke(vs_get(base + 1), name, empty, found)
-    call vs_leave(base)
+    vst => gc_my_stack()
+    base = vs_enter(vst, 1)
+    call vs_set(vst, base + 1, inst)
+    empty = gcv_empty([vs_get(vst, base + 1)])
+    out = inst_invoke(vs_get(vst, base + 1), name, empty, found)
+    call vs_leave(vst, base)
   end function inst_invoke0
 
   ! The arguments from `from` onward, as a vector -- what a builtin
   ! has to hand inst_invoke once it has peeled off the target.
   function rest_args(args, from) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: args
     integer, intent(in) :: from
     type(gc_value) :: out, tmp
     integer :: base, i
-    base = vs_enter(2)
-    call vs_set(base + 1, args)
-    tmp = gcv_empty([vs_get(base + 1)])
-    call vs_set(base + 2, tmp)
-    do i = from, gcv_count(vs_get(base + 1)) - 1
-       tmp = gcv_conj(vs_get(base + 2), gcv_nth(vs_get(base + 1), i), &
-            [vs_get(base + 1), vs_get(base + 2)])
-       call vs_set(base + 2, tmp)
+    vst => gc_my_stack()
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, args)
+    tmp = gcv_empty([vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, tmp)
+    do i = from, gcv_count(vs_get(vst, base + 1)) - 1
+       tmp = gcv_conj(vs_get(vst, base + 2), gcv_nth(vs_get(vst, base + 1), i), &
+            [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       call vs_set(vst, base + 2, tmp)
     end do
-    out = vs_get(base + 2)
-    call vs_leave(base)
+    out = vs_get(vst, base + 2)
+    call vs_leave(vst, base)
   end function rest_args
 
   ! (get inst k) and (get inst k not-found) through the instance's own
@@ -1866,47 +1915,51 @@ contains
   ! -- and the three-argument one is what makes a record distinguish a
   ! key bound to nil from a key that is absent.
   recursive function inst_lookup(inst, k, has_default, dflt, found) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: inst, k, dflt
     logical, intent(in) :: has_default
     logical, intent(out) :: found
     type(gc_value) :: out, argv, tmp
     integer :: base
 
-    base = vs_enter(4)
-    call vs_set(base + 1, inst)
-    call vs_set(base + 2, k)
-    call vs_set(base + 3, dflt)
-    tmp = gcv_empty([vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-    call vs_set(base + 4, tmp)
-    tmp = gcv_conj(vs_get(base + 4), vs_get(base + 2), &
-         [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)])
-    call vs_set(base + 4, tmp)
+    vst => gc_my_stack()
+    base = vs_enter(vst, 4)
+    call vs_set(vst, base + 1, inst)
+    call vs_set(vst, base + 2, k)
+    call vs_set(vst, base + 3, dflt)
+    tmp = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+    call vs_set(vst, base + 4, tmp)
+    tmp = gcv_conj(vs_get(vst, base + 4), vs_get(vst, base + 2), &
+         [vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+    call vs_set(vst, base + 4, tmp)
     if (has_default) then
-       tmp = gcv_conj(vs_get(base + 4), vs_get(base + 3), &
-            [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)])
-       call vs_set(base + 4, tmp)
+       tmp = gcv_conj(vs_get(vst, base + 4), vs_get(vst, base + 3), &
+            [vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+       call vs_set(vst, base + 4, tmp)
     end if
-    argv = vs_get(base + 4)
-    out = inst_invoke(vs_get(base + 1), "valAt", argv, found)
-    call vs_leave(base)
+    argv = vs_get(vst, base + 4)
+    out = inst_invoke(vs_get(vst, base + 1), "valAt", argv, found)
+    call vs_leave(vst, base)
   end function inst_lookup
 
   ! (= inst other) through the instance's own equiv.
   recursive function inst_equiv(inst, other, found) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: inst, other
     logical, intent(out) :: found
     type(gc_value) :: out, tmp
     integer :: base
-    base = vs_enter(3)
-    call vs_set(base + 1, inst)
-    call vs_set(base + 2, other)
-    tmp = gcv_empty([vs_get(base + 1), vs_get(base + 2)])
-    call vs_set(base + 3, tmp)
-    tmp = gcv_conj(vs_get(base + 3), vs_get(base + 2), &
-         [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-    call vs_set(base + 3, tmp)
-    out = inst_invoke(vs_get(base + 1), "equiv", vs_get(base + 3), found)
-    call vs_leave(base)
+    vst => gc_my_stack()
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, inst)
+    call vs_set(vst, base + 2, other)
+    tmp = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 3, tmp)
+    tmp = gcv_conj(vs_get(vst, base + 3), vs_get(vst, base + 2), &
+         [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+    call vs_set(vst, base + 3, tmp)
+    out = inst_invoke(vs_get(vst, base + 1), "equiv", vs_get(vst, base + 3), found)
+    call vs_leave(vst, base)
   end function inst_equiv
 
   ! (keys inst) / (vals inst), built from the instance's own seq --
@@ -1915,38 +1968,40 @@ contains
   ! field vector directly is what makes a record's __extmap show up:
   ! an assoc'd key is not a field, but it IS in the seq.
   recursive function inst_entries(inst, want_keys, found) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: inst
     logical, intent(in) :: want_keys
     logical, intent(out) :: found
     type(gc_value) :: out, sq, items, e
     integer :: base, i
 
+    vst => gc_my_stack()
     out = gc_nil()
-    base = vs_enter(3)
-    call vs_set(base + 1, inst)
-    sq = inst_invoke0(vs_get(base + 1), "seq", found)
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, inst)
+    sq = inst_invoke0(vs_get(vst, base + 1), "seq", found)
     if (.not. found) then
-       call vs_leave(base)
+       call vs_leave(vst, base)
        return
     end if
-    call vs_set(base + 2, sq)
-    items = coll_to_vector(vs_get(base + 2), [vs_get(base + 1), vs_get(base + 2)])
-    call vs_set(base + 2, items)
-    out = gcl_empty([vs_get(base + 2)])
-    call vs_set(base + 3, out)
-    do i = gcv_count(vs_get(base + 2)) - 1, 0, -1
-       e = gcv_nth(vs_get(base + 2), i)
+    call vs_set(vst, base + 2, sq)
+    items = coll_to_vector(vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 2, items)
+    out = gcl_empty([vs_get(vst, base + 2)])
+    call vs_set(vst, base + 3, out)
+    do i = gcv_count(vs_get(vst, base + 2)) - 1, 0, -1
+       e = gcv_nth(vs_get(vst, base + 2), i)
        if (want_keys) then
-          e = sq_first(e, [vs_get(base + 2), vs_get(base + 3)])
+          e = sq_first(e, [vs_get(vst, base + 2), vs_get(vst, base + 3)])
        else
-          e = sq_first(sq_rest(e, [vs_get(base + 2), vs_get(base + 3)]), &
-               [vs_get(base + 2), vs_get(base + 3)])
+          e = sq_first(sq_rest(e, [vs_get(vst, base + 2), vs_get(vst, base + 3)]), &
+               [vs_get(vst, base + 2), vs_get(vst, base + 3)])
        end if
-       out = gcl_cons(e, vs_get(base + 3), [vs_get(base + 2), vs_get(base + 3), e])
-       call vs_set(base + 3, out)
+       out = gcl_cons(e, vs_get(vst, base + 3), [vs_get(vst, base + 2), vs_get(vst, base + 3), e])
+       call vs_set(vst, base + 3, out)
     end do
-    out = vs_get(base + 3)
-    call vs_leave(base)
+    out = vs_get(vst, base + 3)
+    call vs_leave(vst, base)
   end function inst_entries
 
   ! The static `create` every record class gets: (Person/create m),
@@ -1960,46 +2015,48 @@ contains
   ! keys it never declared -- with nil for an empty remainder, as the
   ! emitted bytecode does.
   recursive function record_create(ty, m, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: ty, m
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, fields, f, k, rest, vals, tmp
     integer :: base, i, declared
 
-    base = vs_enter(5)
-    call vs_set(base + 1, ty)
-    call vs_set(base + 2, m)
-    fields = gc_slot(vs_get(base + 1), 2)
-    call vs_set(base + 3, fields)
-    declared = gcv_count(vs_get(base + 3)) - alt_ctor_drops(vs_get(base + 3))
+    vst => gc_my_stack()
+    base = vs_enter(vst, 5)
+    call vs_set(vst, base + 1, ty)
+    call vs_set(vst, base + 2, m)
+    fields = gc_slot(vs_get(vst, base + 1), 2)
+    call vs_set(vst, base + 3, fields)
+    declared = gcv_count(vs_get(vst, base + 3)) - alt_ctor_drops(vs_get(vst, base + 3))
 
     vals = gcv_empty(roots)
-    call vs_set(base + 4, vals)
-    call vs_set(base + 5, vs_get(base + 2))
+    call vs_set(vst, base + 4, vals)
+    call vs_set(vst, base + 5, vs_get(vst, base + 2))
     do i = 0, declared - 1
-       f = strip_meta(gcv_nth(vs_get(base + 3), i))
-       k = gc_key(gc_ref_text(f%ref), [vs_get(base + 3), vs_get(base + 4), vs_get(base + 5)])
-       tmp = gcv_conj(vs_get(base + 4), gca_get(vs_get(base + 2), k), &
-            [vs_get(base + 3), vs_get(base + 4), vs_get(base + 5), k])
-       call vs_set(base + 4, tmp)
-       rest = gca_dissoc(vs_get(base + 5), k, &
-            [vs_get(base + 3), vs_get(base + 4), vs_get(base + 5), k])
-       call vs_set(base + 5, rest)
+       f = strip_meta(gcv_nth(vs_get(vst, base + 3), i))
+       k = gc_key(gc_ref_text(f%ref), [vs_get(vst, base + 3), vs_get(vst, base + 4), vs_get(vst, base + 5)])
+       tmp = gcv_conj(vs_get(vst, base + 4), gca_get(vs_get(vst, base + 2), k), &
+            [vs_get(vst, base + 3), vs_get(vst, base + 4), vs_get(vst, base + 5), k])
+       call vs_set(vst, base + 4, tmp)
+       rest = gca_dissoc(vs_get(vst, base + 5), k, &
+            [vs_get(vst, base + 3), vs_get(vst, base + 4), vs_get(vst, base + 5), k])
+       call vs_set(vst, base + 5, rest)
     end do
 
     ! __meta, then __extmap -- nil when nothing is left over, which is
     ! what (not-empty ...) gives everywhere else a record builds one.
-    tmp = gcv_conj(vs_get(base + 4), gc_nil(), [vs_get(base + 4), vs_get(base + 5)])
-    call vs_set(base + 4, tmp)
-    rest = vs_get(base + 5)
+    tmp = gcv_conj(vs_get(vst, base + 4), gc_nil(), [vs_get(vst, base + 4), vs_get(vst, base + 5)])
+    call vs_set(vst, base + 4, tmp)
+    rest = vs_get(vst, base + 5)
     if (gca_count(rest) == 0) rest = gc_nil()
-    tmp = gcv_conj(vs_get(base + 4), rest, [vs_get(base + 4), vs_get(base + 5)])
-    call vs_set(base + 4, tmp)
+    tmp = gcv_conj(vs_get(vst, base + 4), rest, [vs_get(vst, base + 4), vs_get(vst, base + 5)])
+    call vs_set(vst, base + 4, tmp)
 
-    tmp = pad_record_fields(vs_get(base + 4), vs_get(base + 3))
-    call vs_set(base + 4, tmp)
-    out = gc_obj(OBJ_INST, [vs_get(base + 1), vs_get(base + 4), gc_nil()], &
-         [vs_get(base + 1), vs_get(base + 4)])
-    call vs_leave(base)
+    tmp = pad_record_fields(vs_get(vst, base + 4), vs_get(vst, base + 3))
+    call vs_set(vst, base + 4, tmp)
+    out = gc_obj(OBJ_INST, [vs_get(vst, base + 1), vs_get(vst, base + 4), gc_nil()], &
+         [vs_get(vst, base + 1), vs_get(vst, base + 4)])
+    call vs_leave(vst, base)
   end function record_create
 
   ! A field of an instance by name, and whether there was one.
@@ -2161,6 +2218,7 @@ contains
   ! class NAME, a symbol never evaluated: a deftype's `create` or a
   ! static member.
   recursive function eval_dot(target0, mname, is_call, argv, class_target) result(out)
+    type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: target0, argv
     character(len=*), intent(in) :: mname
@@ -2169,28 +2227,29 @@ contains
     logical :: found
     integer :: base
 
+    vst => gc_my_stack()
     tctx => ctx_self()
     out = gc_nil()
-    base = vs_enter(4)
-    call vs_set(base + 1, target0)
-    call vs_set(base + 2, argv)
+    base = vs_enter(vst, 4)
+    call vs_set(vst, base + 1, target0)
+    call vs_set(vst, base + 2, argv)
 
     if (class_target) then
        ! A DEFTYPE CLASS in member position. The only static one has
        ! is a record's `create`, which is what map->Name calls.
        dty = find_type(gc_ref_text(target0%ref))
        if (gc_kind(dty) == OBJ_TYPE .and. mname == "create") then
-          call vs_set(base + 3, dty)
-          out = record_create(vs_get(base + 3), nth_or_nil(vs_get(base + 2), 0), &
-               [vs_get(base + 3), vs_get(base + 2)])
-          call vs_leave(base)
+          call vs_set(vst, base + 3, dty)
+          out = record_create(vs_get(vst, base + 3), nth_or_nil(vs_get(vst, base + 2), 0), &
+               [vs_get(vst, base + 3), vs_get(vst, base + 2)])
+          call vs_leave(vst, base)
           return
        end if
        if (is_host_class(target0)) then
-          out = static_member(gc_ref_text(target0%ref), mname, vs_get(base + 2))
+          out = static_member(gc_ref_text(target0%ref), mname, vs_get(vst, base + 2))
           if (.not. tctx%has_error) then
-             if (is_call) out = apply(out, vs_get(base + 2))
-             call vs_leave(base)
+             if (is_call) out = apply(out, vs_get(vst, base + 2))
+             call vs_leave(vst, base)
              return
           end if
           ! Not a static of that class: a member of the CLASS OBJECT
@@ -2200,16 +2259,16 @@ contains
        end if
        ! A class literal is_host_class does not know evaluates to the
        ! keyword naming its type tag; the retry below sees it as one.
-       call vs_set(base + 1, gc_class(class_key(gc_ref_text(target0%ref)), [vs_get(base + 2)]))
+       call vs_set(vst, base + 1, gc_class(class_key(gc_ref_text(target0%ref)), [vs_get(vst, base + 2)]))
     end if
 
     ! A deftype/reify instance answers its own methods and fields
     ! FIRST. They are what the type declares, and a host member of the
     ! same name would otherwise shadow the implementation the program
     ! actually wrote.
-    tv = strip_meta(vs_get(base + 1))
+    tv = strip_meta(vs_get(vst, base + 1))
     if (gc_kind(tv) == OBJ_INST .and. len(mname) > 0) then
-       call vs_set(base + 3, tv)
+       call vs_set(vst, base + 3, tv)
        ! (.-name x) is a field read and never a call; a bare name is
        ! a method if the type has one and a field otherwise, which
        ! is the order Compiler's HostExpr resolves them in. Written
@@ -2217,41 +2276,41 @@ contains
        ! method's name -- protocol methods are often spelt that way,
        ! and a protocol fn reaches its type's method exactly so.
        if (mname(1:1) == "-" .and. .not. is_call) then
-          out = inst_field(vs_get(base + 3), mname(2:), found)
+          out = inst_field(vs_get(vst, base + 3), mname(2:), found)
           if (.not. found) call fail("no such field: " // &
-               class_text(vs_get(base + 3)) // "." // mname(2:))
-          call vs_leave(base)
+               class_text(vs_get(vst, base + 3)) // "." // mname(2:))
+          call vs_leave(vst, base)
           return
        end if
-       call vs_set(base + 4, gca_get(gc_slot(gc_slot(vs_get(base + 3), 1), 3), &
-            gc_key(mname, [vs_get(base + 3)])))
+       call vs_set(vst, base + 4, gca_get(gc_slot(gc_slot(vs_get(vst, base + 3), 1), 3), &
+            gc_key(mname, [vs_get(vst, base + 3)])))
        ! Writer.append is a concrete method of the superclass that calls
        ! the write the proxy defined: (newline) is (.append *out* ...),
        ! and a proxy over Writer that only wrote `write` inherits it.
-       if (gc_kind(vs_get(base + 4)) /= OBJ_CLOSURE .and. mname == "append") then
-          call vs_set(base + 4, gca_get(gc_slot(gc_slot(vs_get(base + 3), 1), 3), &
-               gc_key("write", [vs_get(base + 3)])))
+       if (gc_kind(vs_get(vst, base + 4)) /= OBJ_CLOSURE .and. mname == "append") then
+          call vs_set(vst, base + 4, gca_get(gc_slot(gc_slot(vs_get(vst, base + 3), 1), 3), &
+               gc_key("write", [vs_get(vst, base + 3)])))
           ! append(char) reaches write(int): the code point, not the char.
-          if (gcv_count(vs_get(base + 2)) == 1) then
-             if (tag_of(gcv_nth(vs_get(base + 2), 0)) == GCT_CHAR) then
-                call vs_set(base + 2, gcv_conj(gcv_empty([vs_get(base + 3)]), &
-                     gc_int(int_of(gcv_nth(vs_get(base + 2), 0))), [vs_get(base + 3)]))
+          if (gcv_count(vs_get(vst, base + 2)) == 1) then
+             if (tag_of(gcv_nth(vs_get(vst, base + 2), 0)) == GCT_CHAR) then
+                call vs_set(vst, base + 2, gcv_conj(gcv_empty([vs_get(vst, base + 3)]), &
+                     gc_int(int_of(gcv_nth(vs_get(vst, base + 2), 0))), [vs_get(vst, base + 3)]))
              end if
           end if
        end if
-       if (gc_kind(vs_get(base + 4)) == OBJ_CLOSURE) then
+       if (gc_kind(vs_get(vst, base + 4)) == OBJ_CLOSURE) then
           ! `this` is an explicit first parameter of the method, so
           ! the target is prepended exactly as for a host member. The
           ! call itself is the loop's to make (exec.inc enter_call),
           ! not a nested run: a method that blocks must be able to yield.
-          call vs_set(base + 2, cons_vec(vs_get(base + 3), vs_get(base + 2), [vs_get(base + 4)]))
-          out = call_request(vs_get(base + 4), vs_get(base + 2))
-          call vs_leave(base)
+          call vs_set(vst, base + 2, cons_vec(vs_get(vst, base + 3), vs_get(vst, base + 2), [vs_get(vst, base + 4)]))
+          out = call_request(vs_get(vst, base + 4), vs_get(vst, base + 2))
+          call vs_leave(vst, base)
           return
        end if
-       out = inst_field(vs_get(base + 3), mname, found)
+       out = inst_field(vs_get(vst, base + 3), mname, found)
        if (found) then
-          call vs_leave(base)
+          call vs_leave(vst, base)
           return
        end if
     end if
@@ -2259,31 +2318,31 @@ contains
     ! A method called on nil is a NullPointerException, as on the JVM:
     ! (.toUpperCase nil) is how clojure.string's fns fail on nil there.
     if (.not. class_target) then
-       tv = strip_meta(vs_get(base + 1))
+       tv = strip_meta(vs_get(vst, base + 1))
        if (tv%tag == GCT_NIL) then
-          call raise_class("NullPointerException", "Cannot invoke ." // mname // " on nil", [vs_get(base + 1)])
-          call vs_leave(base)
+          call raise_class("NullPointerException", "Cannot invoke ." // mname // " on nil", [vs_get(vst, base + 1)])
+          call vs_leave(vst, base)
           return
        end if
     end if
-    out = instance_member(mname, vs_get(base + 1))
+    out = instance_member(mname, vs_get(vst, base + 1))
     if (.not. tctx%has_error) then
        ! The target is the first argument, which is all an instance
        ! method is: (.withMeta x m) calls with-meta on x and m.
-       call vs_set(base + 4, out)
-       call vs_set(base + 2, cons_vec(vs_get(base + 1), vs_get(base + 2), [vs_get(base + 4)]))
-       out = apply(vs_get(base + 4), vs_get(base + 2))
-       call vs_leave(base)
+       call vs_set(vst, base + 4, out)
+       call vs_set(vst, base + 2, cons_vec(vs_get(vst, base + 1), vs_get(vst, base + 2), [vs_get(vst, base + 4)]))
+       out = apply(vs_get(vst, base + 4), vs_get(vst, base + 2))
+       call vs_leave(vst, base)
        return
     end if
     call gce_clear_error()
 
-    if (mname == "setMacro" .and. gcn_is_var(vs_get(base + 1))) then
+    if (mname == "setMacro" .and. gcn_is_var(vs_get(vst, base + 1))) then
        ! Var.setMacro is alterMeta(assoc, {:macro true}) -- macro-ness
        ! is METADATA ON THE VAR, not a flag on the function. That is
        ! what makes (:macro (meta (var when))) true, and what makes
        ! (def foo some-macro) bind a plain function rather than a macro.
-       call var_set_macro(vs_get(base + 1))
+       call var_set_macro(vs_get(vst, base + 1))
        out = gc_nil()
     else if (tv%tag == GCT_CLASS) then
        ! A class reached through a VARIABLE, not written as a
@@ -2293,36 +2352,38 @@ contains
        ! the class. Retrying it as a static member is what makes
        ! (cast Number 1.5) work, and any other class held in a
        ! variable with it.
-       out = static_member(gc_ref_text(tv%ref), mname, vs_get(base + 2))
-       if (.not. tctx%has_error .and. is_call) out = apply(out, vs_get(base + 2))
+       out = static_member(gc_ref_text(tv%ref), mname, vs_get(vst, base + 2))
+       if (.not. tctx%has_error .and. is_call) out = apply(out, vs_get(vst, base + 2))
     else
        ! Reflector's words, class and count included: "No matching
        ! method jump found taking 1 args for class java.lang.String"
        block
          character(len=16) :: cbuf
-         write(cbuf, '(I0)') gcv_count(vs_get(base + 2))
+         write(cbuf, '(I0)') gcv_count(vs_get(vst, base + 2))
          call raise_class("IllegalArgumentException", "No matching method " // mname // &
-              " found taking " // trim(cbuf) // " args for class " // class_name_of(tv), [vs_get(base + 1)])
+              " found taking " // trim(cbuf) // " args for class " // class_name_of(tv), [vs_get(vst, base + 1)])
        end block
     end if
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end function eval_dot
 
   ! [x, v...]
   function cons_vec(x, v, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: x, v
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out
     integer :: base
-    base = vs_enter(3)
-    call vs_set(base + 1, x)
-    call vs_set(base + 2, v)
-    out = gcv_empty([roots, vs_get(base + 1), vs_get(base + 2)])
-    call vs_set(base + 3, out)
-    out = gcv_conj(vs_get(base + 3), vs_get(base + 1), [roots, vs_get(base + 2)])
-    call vs_set(base + 3, out)
-    out = concat_vecs(vs_get(base + 3), vs_get(base + 2), [roots, vs_get(base + 1)])
-    call vs_leave(base)
+    vst => gc_my_stack()
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, x)
+    call vs_set(vst, base + 2, v)
+    out = gcv_empty([roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 3, out)
+    out = gcv_conj(vs_get(vst, base + 3), vs_get(vst, base + 1), [roots, vs_get(vst, base + 2)])
+    call vs_set(vst, base + 3, out)
+    out = concat_vecs(vs_get(vst, base + 3), vs_get(vst, base + 2), [roots, vs_get(vst, base + 1)])
+    call vs_leave(vst, base)
   end function cons_vec
 
 
@@ -2437,25 +2498,27 @@ contains
 
   ! (new cname args...) once the executor has evaluated the arguments.
   recursive function eval_new(cname, argv) result(out)
+    type(gc_stack), pointer :: vst
     character(len=*), intent(in) :: cname
     type(gc_value), intent(in) :: argv
     type(gc_value) :: out, thunk
     integer :: base
 
+    vst => gc_my_stack()
     out = gc_nil()
-    base = vs_enter(5)
-    call vs_set(base + 1, argv)
+    base = vs_enter(vst, 5)
+    call vs_set(vst, base + 1, argv)
 
     if (cname == "java.util.concurrent.ArrayBlockingQueue" .or. cname == "ArrayBlockingQueue") then
        ! A queue is a task mailbox: an atom holding a vector. The
        ! capacity argument is read and ignored -- nothing here drops.
-       call vs_set(base + 3, gcv_empty([vs_get(base + 1)]))
-       out = gc_obj(OBJ_ATOM, [vs_get(base + 3), gc_nil()], [vs_get(base + 3)])
+       call vs_set(vst, base + 3, gcv_empty([vs_get(vst, base + 1)]))
+       out = gc_obj(OBJ_ATOM, [vs_get(vst, base + 3), gc_nil()], [vs_get(vst, base + 3)])
     else if (cname == "Thread" .or. cname == "java.lang.Thread") then
        ! (Thread. f name): the fn, held until .start submits it as a
        ! task. A thread IS a task here (PLAN.md: a thread is an
        ! evaluator context); the name is dropped.
-       out = nth_or_nil(vs_get(base + 1), 0)
+       out = nth_or_nil(vs_get(vst, base + 1), 0)
     else if (cname == "MathContext" .or. cname == "java.math.MathContext") then
        ! (MathContext. precision) and (MathContext. precision mode) --
        ! a MAP with named fields, as MethodImplCache is, because
@@ -2463,45 +2526,45 @@ contains
        ! builds it and binds *math-context* to it.
        block
          type(gc_value) :: mc
-         mc = gca_empty([vs_get(base + 1)])
-         call vs_set(base + 3, mc)
-         call vs_set(base + 4, gc_key("precision", [vs_get(base + 1), vs_get(base + 3)]))
-         mc = gca_assoc(vs_get(base + 3), vs_get(base + 4), nth_or_nil(vs_get(base + 1), 0), &
-              [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)])
-         call vs_set(base + 3, mc)
-         call vs_set(base + 4, gc_key("rounding", [vs_get(base + 1), vs_get(base + 3)]))
-         call vs_set(base + 5, gc_key("HALF_UP", [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)]))
-         if (gcv_count(vs_get(base + 1)) >= 2) call vs_set(base + 5, gcv_nth(vs_get(base + 1), 1))
-         out = gca_assoc(vs_get(base + 3), vs_get(base + 4), vs_get(base + 5), &
-              [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4), vs_get(base + 5)])
+         mc = gca_empty([vs_get(vst, base + 1)])
+         call vs_set(vst, base + 3, mc)
+         call vs_set(vst, base + 4, gc_key("precision", [vs_get(vst, base + 1), vs_get(vst, base + 3)]))
+         mc = gca_assoc(vs_get(vst, base + 3), vs_get(vst, base + 4), nth_or_nil(vs_get(vst, base + 1), 0), &
+              [vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+         call vs_set(vst, base + 3, mc)
+         call vs_set(vst, base + 4, gc_key("rounding", [vs_get(vst, base + 1), vs_get(vst, base + 3)]))
+         call vs_set(vst, base + 5, gc_key("HALF_UP", [vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)]))
+         if (gcv_count(vs_get(vst, base + 1)) >= 2) call vs_set(vst, base + 5, gcv_nth(vs_get(vst, base + 1), 1))
+         out = gca_assoc(vs_get(vst, base + 3), vs_get(vst, base + 4), vs_get(vst, base + 5), &
+              [vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4), vs_get(vst, base + 5)])
        end block
     else if (cname == "BigDecimal" .or. cname == "java.math.BigDecimal") then
        ! (BigDecimal. x), which core.cljs bigdec falls back to for a
        ! string and uses for a Ratio numerator.
-       out = call_builtin(B_TODEC, vs_get(base + 1))
+       out = call_builtin(B_TODEC, vs_get(vst, base + 1))
     else if (cname == "BigInteger" .or. cname == "java.math.BigInteger") then
        ! (BigInteger. "12"), which core.clj's bigint falls back to for
        ! a string. There is one big integer type here, not two.
-       out = call_builtin(B_TOBIG, vs_get(base + 1))
+       out = call_builtin(B_TOBIG, vs_get(vst, base + 1))
     else if (cname == "clojure.lang.MapEntry") then
        ! (MapEntry. k v): a map entry is a two-vector marked as one
        ! (DEVIATIONS 39); clojure.spec.alpha's tagged-ret builds them
-       call vs_set(base + 3, gcv_empty([vs_get(base + 1)]))
-       out = gcv_conj(vs_get(base + 3), nth_or_nil(vs_get(base + 1), 0), [vs_get(base + 1), vs_get(base + 3)])
-       call vs_set(base + 3, out)
-       out = gcv_conj(vs_get(base + 3), nth_or_nil(vs_get(base + 1), 1), [vs_get(base + 1), vs_get(base + 3)])
+       call vs_set(vst, base + 3, gcv_empty([vs_get(vst, base + 1)]))
+       out = gcv_conj(vs_get(vst, base + 3), nth_or_nil(vs_get(vst, base + 1), 0), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
+       call vs_set(vst, base + 3, out)
+       out = gcv_conj(vs_get(vst, base + 3), nth_or_nil(vs_get(vst, base + 1), 1), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
        call mark_entry(out)
     else if (cname == "clojure.lang.Reduced") then
        ! (reduced x) wraps a value to say "stop reducing". A
        ! one-key map is enough to carry the mark and the value,
        ! and the key is one no Clojure program can write.
-       call vs_set(base + 3, nth_or_nil(vs_get(base + 1), 0))
+       call vs_set(vst, base + 3, nth_or_nil(vs_get(vst, base + 1), 0))
        ! Two allocations in one argument list -- see range_cell.
-       call vs_set(base + 4, gca_empty([vs_get(base + 3)]))
-       call vs_set(base + 5, gc_key("clotran/reduced", &
-            [vs_get(base + 3), vs_get(base + 4)]))
-       out = gca_assoc(vs_get(base + 4), vs_get(base + 5), &
-            vs_get(base + 3), [vs_get(base + 3), vs_get(base + 4), vs_get(base + 5)])
+       call vs_set(vst, base + 4, gca_empty([vs_get(vst, base + 3)]))
+       call vs_set(vst, base + 5, gc_key("clotran/reduced", &
+            [vs_get(vst, base + 3), vs_get(vst, base + 4)]))
+       out = gca_assoc(vs_get(vst, base + 4), vs_get(vst, base + 5), &
+            vs_get(vst, base + 3), [vs_get(vst, base + 3), vs_get(vst, base + 4), vs_get(vst, base + 5)])
     else if (cname == "clojure.lang.MethodImplCache" .or. &
          cname == "clojure.lang.MethodImplCache$Entry") then
        ! The protocol dispatch cache, as a MAP with named fields:
@@ -2517,29 +2580,29 @@ contains
          type(gc_value) :: mp
          integer :: fi
          character(len=12) :: fname
-         mp = gca_empty([vs_get(base + 1)])
-         call vs_set(base + 3, mp)
-         do fi = 0, gcv_count(vs_get(base + 1)) - 1
+         mp = gca_empty([vs_get(vst, base + 1)])
+         call vs_set(vst, base + 3, mp)
+         do fi = 0, gcv_count(vs_get(vst, base + 1)) - 1
             select case (fi)
             case (0); fname = "sym"
             case (1); fname = "protocol"
             case (2); fname = "methodk"
             case default; fname = "map"
             end select
-            mp = gca_assoc(vs_get(base + 3), &
-                 gc_key(trim(fname), [vs_get(base + 3)]), gcv_nth(vs_get(base + 1), fi), &
-                 [vs_get(base + 1), vs_get(base + 3)])
-            call vs_set(base + 3, mp)
+            mp = gca_assoc(vs_get(vst, base + 3), &
+                 gc_key(trim(fname), [vs_get(vst, base + 3)]), gcv_nth(vs_get(vst, base + 1), fi), &
+                 [vs_get(vst, base + 1), vs_get(vst, base + 3)])
+            call vs_set(vst, base + 3, mp)
          end do
-         if (gcv_count(vs_get(base + 1)) < 4) then
+         if (gcv_count(vs_get(vst, base + 1)) < 4) then
             ! Two allocations in one argument list -- see range_cell.
-            call vs_set(base + 4, gc_key("map", [vs_get(base + 3)]))
-            call vs_set(base + 5, gca_empty([vs_get(base + 3), vs_get(base + 4)]))
-            mp = gca_assoc(vs_get(base + 3), vs_get(base + 4), vs_get(base + 5), &
-                 [vs_get(base + 3), vs_get(base + 4), vs_get(base + 5)])
-            call vs_set(base + 3, mp)
+            call vs_set(vst, base + 4, gc_key("map", [vs_get(vst, base + 3)]))
+            call vs_set(vst, base + 5, gca_empty([vs_get(vst, base + 3), vs_get(vst, base + 4)]))
+            mp = gca_assoc(vs_get(vst, base + 3), vs_get(vst, base + 4), vs_get(vst, base + 5), &
+                 [vs_get(vst, base + 3), vs_get(vst, base + 4), vs_get(vst, base + 5)])
+            call vs_set(vst, base + 3, mp)
          end if
-         out = vs_get(base + 3)
+         out = vs_get(vst, base + 3)
        end block
     else if (cname == "CountDownLatch" .or. &
          cname == "java.util.concurrent.CountDownLatch") then
@@ -2549,19 +2612,19 @@ contains
        ! before it returns, the count is already zero by the time
        ! anything waits. So: an atom holding the count, .countDown
        ! decrements it, and .await has nothing to wait for.
-       call vs_set(base + 3, nth_or_nil(vs_get(base + 1), 0))
-       out = gc_obj(OBJ_ATOM, [vs_get(base + 3), gc_nil()], [vs_get(base + 3)])
+       call vs_set(vst, base + 3, nth_or_nil(vs_get(vst, base + 1), 0))
+       out = gc_obj(OBJ_ATOM, [vs_get(vst, base + 3), gc_nil()], [vs_get(vst, base + 3)])
     else if (cname == "clojure.lang.Ref" .or. cname == "clojure.lang.Atom" .or. &
          cname == "clojure.lang.Agent") then
        ! A Ref IS an atom here: a mutable box, with no transaction
        ! around it. Single-threaded that is indistinguishable; the
        ! moment threads arrive it is not. DEVIATIONS.md 9.
-       call vs_set(base + 3, nth_or_nil(vs_get(base + 1), 0))
-       out = gc_obj(OBJ_ATOM, [vs_get(base + 3), gc_nil()], [vs_get(base + 3)])
+       call vs_set(vst, base + 3, nth_or_nil(vs_get(vst, base + 1), 0))
+       out = gc_obj(OBJ_ATOM, [vs_get(vst, base + 3), gc_nil()], [vs_get(vst, base + 3)])
     else if (cname == "java.util.Properties" .or. cname == "Properties") then
-       thunk = gca_empty([vs_get(base + 1)])
-       call vs_set(base + 3, thunk)
-       out = gc_obj(OBJ_ATOM, [vs_get(base + 3), gc_nil()], [vs_get(base + 3)])
+       thunk = gca_empty([vs_get(vst, base + 1)])
+       call vs_set(vst, base + 3, thunk)
+       out = gc_obj(OBJ_ATOM, [vs_get(vst, base + 3), gc_nil()], [vs_get(vst, base + 3)])
     else if (is_box_class(cname)) then
        ! THE BOXING CONSTRUCTORS. (Long. 1) is 1, (String. "x") is
        ! "x" -- on the JVM they wrap a primitive in an object, and
@@ -2569,13 +2632,13 @@ contains
        ! to do is CONVERT, because (Long. "12") parses and
        ! (Double. 1) widens, so each runs the same cast its
        ! valueOf does.
-       if (gcv_count(vs_get(base + 1)) < 1) then
+       if (gcv_count(vs_get(vst, base + 1)) < 1) then
           call fail("no matching constructor: " // cname)
-          call vs_leave(base)
+          call vs_leave(vst, base)
           return
        end if
-       call vs_set(base + 3, gcv_nth(vs_get(base + 1), 0))
-       out = box_convert(cname, vs_get(base + 3), [vs_get(base + 1), vs_get(base + 3)])
+       call vs_set(vst, base + 3, gcv_nth(vs_get(vst, base + 1), 0))
+       out = box_convert(cname, vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
     else if (cname == "PrintWriter" .or. cname == "java.io.PrintWriter" .or. &
          cname == "BufferedWriter" .or. cname == "java.io.BufferedWriter") then
        ! A PrintWriter over a writer IS that writer here. Java's
@@ -2584,17 +2647,17 @@ contains
        ! only add a layer that forwards. What matters is that
        ! (let [s (StringWriter.) p (PrintWriter. s)] ... (str s))
        ! sees what was written to p, which sharing gives directly.
-       if (gcv_count(vs_get(base + 1)) > 0) then
-          thunk = strip_meta(gcv_nth(vs_get(base + 1), 0))
+       if (gcv_count(vs_get(vst, base + 1)) > 0) then
+          thunk = strip_meta(gcv_nth(vs_get(vst, base + 1), 0))
           if (gc_kind(thunk) == OBJ_SB .or. gc_kind(thunk) == OBJ_WRITER) then
              out = thunk
-             call vs_leave(base)
+             call vs_leave(vst, base)
              return
           end if
        end if
-       thunk = gc_str("", [vs_get(base + 1)])
-       call vs_set(base + 3, thunk)
-       out = gc_obj(OBJ_SB, [vs_get(base + 3)], [vs_get(base + 3)])
+       thunk = gc_str("", [vs_get(vst, base + 1)])
+       call vs_set(vst, base + 3, thunk)
+       out = gc_obj(OBJ_SB, [vs_get(vst, base + 3)], [vs_get(vst, base + 3)])
     else if (cname == "StringBuilder" .or. cname == "java.lang.StringBuilder" .or. &
          cname == "StringBuffer" .or. cname == "java.lang.StringBuffer" .or. &
          cname == "java.io.StringWriter" .or. cname == "StringWriter") then
@@ -2602,56 +2665,56 @@ contains
        ! starts empty. clojure.string/replace writes
        ! (StringBuffer. (.length s)) and every replacement it built
        ! came out with the length stuck on the front.
-       thunk = gc_str("", [vs_get(base + 1)])
-       if (gcv_count(vs_get(base + 1)) > 0) then
-          thunk = strip_meta(gcv_nth(vs_get(base + 1), 0))
-          if (thunk%tag == GCT_INT) thunk = gc_str("", [vs_get(base + 1)])
+       thunk = gc_str("", [vs_get(vst, base + 1)])
+       if (gcv_count(vs_get(vst, base + 1)) > 0) then
+          thunk = strip_meta(gcv_nth(vs_get(vst, base + 1), 0))
+          if (thunk%tag == GCT_INT) thunk = gc_str("", [vs_get(vst, base + 1)])
           if (thunk%tag == GCT_NIL) then
              ! (StringBuilder. nil) is a NullPointerException, which is
              ! how clojure.string/reverse fails on nil
-             call raise_class("NullPointerException", "StringBuilder of nil", [vs_get(base + 1)])
-             call vs_leave(base)
+             call raise_class("NullPointerException", "StringBuilder of nil", [vs_get(vst, base + 1)])
+             call vs_leave(vst, base)
              return
           end if
        end if
-       call vs_set(base + 3, thunk)
-       out = gc_obj(OBJ_SB, [vs_get(base + 3)], [vs_get(base + 3)])
+       call vs_set(vst, base + 3, thunk)
+       out = gc_obj(OBJ_SB, [vs_get(vst, base + 3)], [vs_get(vst, base + 3)])
     else if (cname == "clojure.lang.ChunkBuffer") then
        ! (ChunkBuffer. capacity): a run to fill, count in i1
-       thunk = gc_vec(max(int_of(nth_or_nil(vs_get(base + 1), 0)), 1), [vs_get(base + 1)])
-       call vs_set(base + 3, thunk)
-       out = gc_obj(OBJ_CHUNKBUF, [vs_get(base + 3)], [vs_get(base + 3)])
+       thunk = gc_vec(max(int_of(nth_or_nil(vs_get(vst, base + 1), 0)), 1), [vs_get(vst, base + 1)])
+       call vs_set(vst, base + 3, thunk)
+       out = gc_obj(OBJ_CHUNKBUF, [vs_get(vst, base + 3)], [vs_get(vst, base + 3)])
        call gc_set_i1(out, 0)
     else if (cname == "clojure.lang.ChunkedCons") then
        ! (ChunkedCons. chunk more)
-       out = gc_obj(OBJ_CHUNKSEQ, [nth_or_nil(vs_get(base + 1), 0), nth_or_nil(vs_get(base + 1), 1), gc_nil()], &
-            [vs_get(base + 1)])
+       out = gc_obj(OBJ_CHUNKSEQ, [nth_or_nil(vs_get(vst, base + 1), 0), nth_or_nil(vs_get(vst, base + 1), 1), gc_nil()], &
+            [vs_get(vst, base + 1)])
     else if (cname == "clojure.lang.MultiFn") then
        ! (new MultiFn name dispatch-fn default hierarchy): name, the
        ! dispatch fn, the default value and the method table in slots
        ! 1-4, and in slot 5 [hierarchy-ref prefers cache cached-hierarchy]
        ! for mf_lookup
-       call vs_set(base + 3, gcv_build(4, [vs_get(base + 1)]))
-       thunk = gcv_put(vs_get(base + 3), 0, nth_or_nil(vs_get(base + 1), 3), [vs_get(base + 1), vs_get(base + 3)])
-       call vs_set(base + 3, thunk)
-       thunk = gca_empty([vs_get(base + 1), vs_get(base + 3)])
-       call vs_set(base + 4, thunk)
-       thunk = gcv_put(vs_get(base + 3), 1, vs_get(base + 4), [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)])
-       call vs_set(base + 3, thunk)
-       thunk = gcv_put(vs_get(base + 3), 2, vs_get(base + 4), [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)])
-       call vs_set(base + 3, thunk)
-       thunk = gca_empty([vs_get(base + 1), vs_get(base + 3)])
-       call vs_set(base + 4, thunk)
+       call vs_set(vst, base + 3, gcv_build(4, [vs_get(vst, base + 1)]))
+       thunk = gcv_put(vs_get(vst, base + 3), 0, nth_or_nil(vs_get(vst, base + 1), 3), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
+       call vs_set(vst, base + 3, thunk)
+       thunk = gca_empty([vs_get(vst, base + 1), vs_get(vst, base + 3)])
+       call vs_set(vst, base + 4, thunk)
+       thunk = gcv_put(vs_get(vst, base + 3), 1, vs_get(vst, base + 4), [vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+       call vs_set(vst, base + 3, thunk)
+       thunk = gcv_put(vs_get(vst, base + 3), 2, vs_get(vst, base + 4), [vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+       call vs_set(vst, base + 3, thunk)
+       thunk = gca_empty([vs_get(vst, base + 1), vs_get(vst, base + 3)])
+       call vs_set(vst, base + 4, thunk)
        out = gc_obj(OBJ_MULTIFN, &
-            [nth_or_nil(vs_get(base + 1), 0), nth_or_nil(vs_get(base + 1), 1), &
-             nth_or_nil(vs_get(base + 1), 2), vs_get(base + 4), vs_get(base + 3)], &
-            [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)])
+            [nth_or_nil(vs_get(vst, base + 1), 0), nth_or_nil(vs_get(vst, base + 1), 1), &
+             nth_or_nil(vs_get(vst, base + 1), 2), vs_get(vst, base + 4), vs_get(vst, base + 3)], &
+            [vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)])
     else if (cname == "clojure.lang.Delay") then
        ! (delay body) is (new clojure.lang.Delay (fn [] body)) in
        ! core.clj, so the argument is already a no-argument closure and
        ! nothing here needs to know about the body.
-       call vs_set(base + 3, nth_or_nil(vs_get(base + 1), 0))
-       out = gc_obj(OBJ_DELAY, [vs_get(base + 3), gc_nil()], [vs_get(base + 3)])
+       call vs_set(vst, base + 3, nth_or_nil(vs_get(vst, base + 1), 0))
+       out = gc_obj(OBJ_DELAY, [vs_get(vst, base + 3), gc_nil()], [vs_get(vst, base + 3)])
        call gc_set_i1(out, 0)
     else if (cname == "java.util.concurrent.ArrayBlockingQueue" .or. &
          cname == "java.util.concurrent.LinkedBlockingQueue" .or. &
@@ -2665,13 +2728,13 @@ contains
        ! Thread that clotran never starts. So .offer accumulates and
        ! .take is the operation that cannot be honoured -- see
        ! instance_member, where it fails rather than inventing a value.
-       thunk = gcv_empty([vs_get(base + 1)])
-       call vs_set(base + 3, thunk)
-       out = gc_obj(OBJ_ATOM, [vs_get(base + 3), gc_nil()], [vs_get(base + 3)])
+       thunk = gcv_empty([vs_get(vst, base + 1)])
+       call vs_set(vst, base + 3, thunk)
+       out = gc_obj(OBJ_ATOM, [vs_get(vst, base + 3), gc_nil()], [vs_get(vst, base + 3)])
     else if (cname == "clojure.lang.LazySeq") then
-       call vs_set(base + 3, nth_or_nil(vs_get(base + 1), 0))
-       out = gc_obj(OBJ_LAZY, [vs_get(base + 3), gc_nil(), gc_nil()], &
-            [vs_get(base + 3)])
+       call vs_set(vst, base + 3, nth_or_nil(vs_get(vst, base + 1), 0))
+       out = gc_obj(OBJ_LAZY, [vs_get(vst, base + 3), gc_nil(), gc_nil()], &
+            [vs_get(vst, base + 3)])
        call gc_set_i1(out, LAZY_PENDING)
     else if (is_throwable_class(cname)) then
        ! Every exception class core.clj names takes a message, and
@@ -2684,59 +2747,59 @@ contains
          type(gc_value) :: cause
          is_info = (cname == "ExceptionInfo" .or. cname == "clojure.lang.ExceptionInfo")
          ! ex-info's data, an empty map when given nil; other classes carry none
-         call vs_set(base + 3, gc_nil())
+         call vs_set(vst, base + 3, gc_nil())
          if (is_info) then
-            call vs_set(base + 3, nth_or_nil(vs_get(base + 1), 1))
-            thunk = vs_get(base + 3)
-            if (thunk%tag == GCT_NIL) call vs_set(base + 3, gca_empty([vs_get(base + 1)]))
+            call vs_set(vst, base + 3, nth_or_nil(vs_get(vst, base + 1), 1))
+            thunk = vs_get(vst, base + 3)
+            if (thunk%tag == GCT_NIL) call vs_set(vst, base + 3, gca_empty([vs_get(vst, base + 1)]))
          end if
          out = gc_obj(OBJ_ERR, &
-              [gc_sym(cname, [vs_get(base + 1), vs_get(base + 3)]), &
-               nth_or_nil(vs_get(base + 1), 0), &
-               vs_get(base + 3)], &
-              [vs_get(base + 1), vs_get(base + 3)])
+              [gc_sym(cname, [vs_get(vst, base + 1), vs_get(vst, base + 3)]), &
+               nth_or_nil(vs_get(vst, base + 1), 0), &
+               vs_get(vst, base + 3)], &
+              [vs_get(vst, base + 1), vs_get(vst, base + 3)])
          ! filled in at construction, as Throwable's constructor does
-         call vs_set(base + 3, out)
-         call gc_set_slot(vs_get(base + 3), 4, frames_vec([vs_get(base + 3)]))
+         call vs_set(vst, base + 3, out)
+         call gc_set_slot(vs_get(vst, base + 3), 4, frames_vec([vs_get(vst, base + 3)]))
          ! the cause, in slot 5: ex-info's third argument, any other
          ! class's second -- what getCause, ex-cause and Throwable->map's
          ! :via chain read
          if (is_info) then
-            cause = nth_or_nil(vs_get(base + 1), 2)
+            cause = nth_or_nil(vs_get(vst, base + 1), 2)
          else
             ! the LAST argument, when it is one: (Exception. msg cause), and
             ! (CompilerException. file line col cause)
             cause = gc_nil()
-            if (gcv_count(vs_get(base + 1)) >= 2) cause = gcv_nth(vs_get(base + 1), gcv_count(vs_get(base + 1)) - 1)
+            if (gcv_count(vs_get(vst, base + 1)) >= 2) cause = gcv_nth(vs_get(vst, base + 1), gcv_count(vs_get(vst, base + 1)) - 1)
          end if
-         if (gc_kind(strip_meta(cause)) == OBJ_ERR) call gc_set_slot(vs_get(base + 3), 5, cause)
-         out = vs_get(base + 3)
+         if (gc_kind(strip_meta(cause)) == OBJ_ERR) call gc_set_slot(vs_get(vst, base + 3), 5, cause)
+         out = vs_get(vst, base + 3)
        end block
     else if (cname == "Volatile" .or. cname == "clojure.lang.Volatile") then
        ! volatile!: a box, deref'd and .reset, with none of an atom's
        ! validators or watches
-       call vs_set(base + 3, nth_or_nil(vs_get(base + 1), 0))
-       out = gc_obj(OBJ_VOLATILE, [vs_get(base + 3)], [vs_get(base + 3)])
+       call vs_set(vst, base + 3, nth_or_nil(vs_get(vst, base + 1), 0))
+       out = gc_obj(OBJ_VOLATILE, [vs_get(vst, base + 3)], [vs_get(vst, base + 3)])
     else if (cname == "ArrayList" .or. cname == "java.util.ArrayList") then
        ! Clojure on this host: clotran.rt's ArrayList (rt_call)
-       out = rt_call("array-list", vs_get(base + 1))
+       out = rt_call("array-list", vs_get(vst, base + 1))
     else if (cname == "Eduction" .or. cname == "clojure.lang.Eduction") then
-       out = rt_call("->Eduction", vs_get(base + 1))
+       out = rt_call("->Eduction", vs_get(vst, base + 1))
     else if (cname == "Object" .or. cname == "java.lang.Object") then
        ! (Object.), a sentinel equal only to itself
-       out = rt_call("object", vs_get(base + 1))
+       out = rt_call("object", vs_get(vst, base + 1))
     else
        ! A type deftype* created. Last, so nothing above is shadowed
        ! by a deftype that happens to pick one of those names.
        thunk = find_type(cname)
        if (gc_kind(thunk) == OBJ_TYPE) then
-          call vs_set(base + 3, thunk)
-          out = construct_type_vals(vs_get(base + 3), vs_get(base + 1))
+          call vs_set(vst, base + 3, thunk)
+          out = construct_type_vals(vs_get(vst, base + 3), vs_get(vst, base + 1))
        else
           call fail("no such class: " // cname)
        end if
     end if
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end function eval_new
 
   ! Whether a class name is one of the throwables. By SHAPE, because
@@ -3032,18 +3095,20 @@ contains
   ! Sets :macro true in the Var's metadata, creating the map if the Var
   ! has none. Var metadata is slot 2.
   subroutine var_set_macro(var)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: var
     type(gc_value) :: md
     integer :: base
-    base = vs_enter(2)
-    call vs_set(base + 1, var)
-    md = gc_slot(vs_get(base + 1), 2)
-    if (.not. gca_is(md)) md = gca_empty([vs_get(base + 1)])
-    call vs_set(base + 2, md)
-    md = gca_assoc(vs_get(base + 2), gc_key("macro", [vs_get(base + 1)]), &
-         gc_bool(.true.), [vs_get(base + 1), vs_get(base + 2)])
-    call gc_set_slot(vs_get(base + 1), 2, md)
-    call vs_leave(base)
+    vst => gc_my_stack()
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, var)
+    md = gc_slot(vs_get(vst, base + 1), 2)
+    if (.not. gca_is(md)) md = gca_empty([vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, md)
+    md = gca_assoc(vs_get(vst, base + 2), gc_key("macro", [vs_get(vst, base + 1)]), &
+         gc_bool(.true.), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call gc_set_slot(vs_get(vst, base + 1), 2, md)
+    call vs_leave(vst, base)
   end subroutine var_set_macro
 
   ! The Var a macro call's head names, or nil. This is Compiler.isMacro:
@@ -3202,24 +3267,26 @@ contains
   ! catch could not match, and the failure escaped the function that
   ! existed to contain it.
   subroutine fail_as(class_name, msg, roots)
+    type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     character(len=*), intent(in) :: class_name, msg
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: e, cls, txt
     integer :: base
 
+    vst => gc_my_stack()
     tctx => ctx_self()
-    base = vs_enter(2)
+    base = vs_enter(vst, 2)
     cls = gc_sym(class_name, roots)
-    call vs_set(base + 1, cls)
-    txt = gc_str(msg, [vs_get(base + 1)])
-    call vs_set(base + 2, txt)
-    e = gc_obj(OBJ_ERR, [vs_get(base + 1), vs_get(base + 2), gc_nil()], &
-         [vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(vst, base + 1, cls)
+    txt = gc_str(msg, [vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, txt)
+    e = gc_obj(OBJ_ERR, [vs_get(vst, base + 1), vs_get(vst, base + 2), gc_nil()], &
+         [vs_get(vst, base + 1), vs_get(vst, base + 2)])
     call set_thrown(e)
     tctx%has_error = .true.
     tctx%last_error = gcp_str(e, .true.)
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end subroutine fail_as
 
   function is_runtime_class(cname) result(yes)
@@ -3293,6 +3360,7 @@ contains
   ! map, so it prints, can be destructured, and is distinguishable
   ! from any value a program might itself throw.
   function error_value(msg, roots) result(v)
+    type(gc_stack), pointer :: vst
     character(len=*), intent(in) :: msg
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: v, k, text
@@ -3302,14 +3370,15 @@ contains
     ! the JVM's own runtime failures are -- so (.getMessage e),
     ! ex-message and (catch RuntimeException e) all work on a host
     ! error. It was {:error msg}, a map, and none of them did.
-    base = vs_enter(3)
+    vst => gc_my_stack()
+    base = vs_enter(vst, 3)
     k = gc_sym("RuntimeException", roots)
-    call vs_set(base + 2, k)
-    text = gc_str(msg, [roots, vs_get(base + 2)])
-    call vs_set(base + 3, text)
-    v = gc_obj(OBJ_ERR, [vs_get(base + 2), vs_get(base + 3), gc_nil()], &
-         [roots, vs_get(base + 2), vs_get(base + 3)])
-    call vs_leave(base)
+    call vs_set(vst, base + 2, k)
+    text = gc_str(msg, [roots, vs_get(vst, base + 2)])
+    call vs_set(vst, base + 3, text)
+    v = gc_obj(OBJ_ERR, [vs_get(vst, base + 2), vs_get(vst, base + 3), gc_nil()], &
+         [roots, vs_get(vst, base + 2), vs_get(vst, base + 3)])
+    call vs_leave(vst, base)
   end function error_value
 
   ! Raise a CLASSED exception, the way a (throw (Foo. msg)) in
@@ -3318,22 +3387,24 @@ contains
   ! can match -- so an error clotran raises itself was
   ! uncatchable by name however well the message read.
   subroutine raise_class(cls, msg, roots)
+    type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     character(len=*), intent(in) :: cls, msg
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: e
     integer :: base
 
+    vst => gc_my_stack()
     tctx => ctx_self()
-    base = vs_enter(2)
-    call vs_set(base + 1, gc_sym(cls, roots))
-    call vs_set(base + 2, gc_str(msg, [roots, vs_get(base + 1)]))
-    e = gc_obj(OBJ_ERR, [vs_get(base + 1), vs_get(base + 2), gc_nil()], &
-         [roots, vs_get(base + 1), vs_get(base + 2)])
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, gc_sym(cls, roots))
+    call vs_set(vst, base + 2, gc_str(msg, [roots, vs_get(vst, base + 1)]))
+    e = gc_obj(OBJ_ERR, [vs_get(vst, base + 1), vs_get(vst, base + 2), gc_nil()], &
+         [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
     call set_thrown(e)
     tctx%has_error = .true.
     tctx%last_error = msg
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end subroutine raise_class
 
   ! identical?: the same slot for a reference, the same value for an
@@ -3378,22 +3449,24 @@ contains
 
   ! Everything but the first n of a vector, as a vector.
   function gcv_subvec_from(v, n, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: v
     integer, intent(in) :: n
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out
     integer :: base, i
-    base = vs_enter(2)
-    call vs_set(base + 1, v)
-    out = gcv_empty([roots, vs_get(base + 1)])
-    call vs_set(base + 2, out)
-    do i = n, gcv_count(vs_get(base + 1)) - 1
-       out = gcv_conj(vs_get(base + 2), gcv_nth(vs_get(base + 1), i), &
-            [roots, vs_get(base + 1), vs_get(base + 2)])
-       call vs_set(base + 2, out)
+    vst => gc_my_stack()
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, v)
+    out = gcv_empty([roots, vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, out)
+    do i = n, gcv_count(vs_get(vst, base + 1)) - 1
+       out = gcv_conj(vs_get(vst, base + 2), gcv_nth(vs_get(vst, base + 1), i), &
+            [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       call vs_set(vst, base + 2, out)
     end do
-    out = vs_get(base + 2)
-    call vs_leave(base)
+    out = vs_get(vst, base + 2)
+    call vs_leave(vst, base)
   end function gcv_subvec_from
 
   ! Step whatever tasks can run right now. tap> needs it: the loop
@@ -3422,33 +3495,35 @@ contains
   ! AFTER the change is in place, so a watch that reads the reference
   ! sees the new value.
   recursive subroutine notify_watches(r, oldv, newv, roots)
+    type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: r, oldv, newv
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: w, fargs, res
     type(gc_value), allocatable :: ks(:), fs(:)
     integer :: base, i
+    vst => gc_my_stack()
     tctx => ctx_self()
     if (r%tag /= GCT_OBJ) return
     w = ref_fn_get(r, "watches", roots)
     if (.not. gca_is(w)) return
     if (gca_count(w) == 0) return
-    base = vs_enter(4)
-    call vs_set(base + 1, r)
-    call vs_set(base + 2, w)
-    call vs_set(base + 3, oldv)
-    call vs_set(base + 4, newv)
-    call gca_entries(vs_get(base + 2), ks, fs)
+    base = vs_enter(vst, 4)
+    call vs_set(vst, base + 1, r)
+    call vs_set(vst, base + 2, w)
+    call vs_set(vst, base + 3, oldv)
+    call vs_set(vst, base + 4, newv)
+    call gca_entries(vs_get(vst, base + 2), ks, fs)
     do i = 1, size(ks)
        if (tctx%has_error) exit
-       fargs = gcv_empty([roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 4)])
-       fargs = gcv_conj(fargs, ks(i), [roots, vs_get(base + 1), vs_get(base + 3), vs_get(base + 4), fargs])
-       fargs = gcv_conj(fargs, vs_get(base + 1), [roots, vs_get(base + 1), vs_get(base + 3), vs_get(base + 4), fargs])
-       fargs = gcv_conj(fargs, vs_get(base + 3), [roots, vs_get(base + 1), vs_get(base + 3), vs_get(base + 4), fargs])
-       fargs = gcv_conj(fargs, vs_get(base + 4), [roots, vs_get(base + 1), vs_get(base + 3), vs_get(base + 4), fargs])
+       fargs = gcv_empty([roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+       fargs = gcv_conj(fargs, ks(i), [roots, vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4), fargs])
+       fargs = gcv_conj(fargs, vs_get(vst, base + 1), [roots, vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4), fargs])
+       fargs = gcv_conj(fargs, vs_get(vst, base + 3), [roots, vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4), fargs])
+       fargs = gcv_conj(fargs, vs_get(vst, base + 4), [roots, vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4), fargs])
        res = apply(fs(i), fargs)
     end do
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end subroutine notify_watches
 
   ! A reference's functions -- its validator and its error
@@ -3466,53 +3541,57 @@ contains
   end function ref_fn_get
 
   subroutine ref_fn_put(r, name, v, roots)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: r, v
     character(len=*), intent(in) :: name
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: m
     integer :: base
+    vst => gc_my_stack()
     if (r%tag /= GCT_OBJ) return
-    base = vs_enter(3)
-    call vs_set(base + 1, r)
-    call vs_set(base + 2, v)
-    m = gc_slot(vs_get(base + 1), 4)
-    if (.not. gca_is(m)) m = gca_empty([roots, vs_get(base + 1), vs_get(base + 2)])
-    call vs_set(base + 3, m)
-    call vs_set(base + 3, gca_assoc(vs_get(base + 3), &
-         gc_key(name, [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)]), &
-         vs_get(base + 2), [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)]))
-    call gc_set_slot(vs_get(base + 1), 4, vs_get(base + 3))
-    call vs_leave(base)
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, r)
+    call vs_set(vst, base + 2, v)
+    m = gc_slot(vs_get(vst, base + 1), 4)
+    if (.not. gca_is(m)) m = gca_empty([roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 3, m)
+    call vs_set(vst, base + 3, gca_assoc(vs_get(vst, base + 3), &
+         gc_key(name, [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)]), &
+         vs_get(vst, base + 2), [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)]))
+    call gc_set_slot(vs_get(vst, base + 1), 4, vs_get(vst, base + 3))
+    call vs_leave(vst, base)
   end subroutine ref_fn_put
 
   ! Whether `v` passes `f`. A nil validator passes everything;
   ! anything else must answer truthy, and a false answer is an
   ! IllegalStateException with Clojure's own wording.
   function validate_ref(r, f, v, roots) result(ok)
+    type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: r, f, v
     type(gc_value), intent(in) :: roots(:)
     logical :: ok
     type(gc_value) :: fargs, res
     integer :: base
+    vst => gc_my_stack()
     tctx => ctx_self()
     ok = .true.
     if (f%tag == GCT_NIL) return
-    base = vs_enter(2)
-    call vs_set(base + 1, f)
-    call vs_set(base + 2, v)
-    fargs = gcv_empty([roots, vs_get(base + 1), vs_get(base + 2)])
-    fargs = gcv_conj(fargs, vs_get(base + 2), &
-         [roots, vs_get(base + 1), vs_get(base + 2)])
-    call vs_set(base + 2, fargs)
-    res = apply(vs_get(base + 1), vs_get(base + 2))
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, f)
+    call vs_set(vst, base + 2, v)
+    fargs = gcv_empty([roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    fargs = gcv_conj(fargs, vs_get(vst, base + 2), &
+         [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 2, fargs)
+    res = apply(vs_get(vst, base + 1), vs_get(vst, base + 2))
     if (tctx%has_error) then
        ok = .false.
     else if (.not. truthy(res)) then
        ok = .false.
        call raise_class("IllegalStateException", "Invalid reference state", roots)
     end if
-    call vs_leave(base)
+    call vs_leave(vst, base)
     if (r%tag == GCT_NIL) return
   end function validate_ref
 
@@ -3526,11 +3605,13 @@ contains
   ! so walk down to something concrete, realising as it goes. Each is
   ! memoised in its own node, so this never repeats work.
   recursive subroutine gce_force(v)
+    type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: v
     type(gc_value) :: r, args
     integer :: base
 
+    vst => gc_my_stack()
     tctx => ctx_self()
     if (gc_kind(v) /= OBJ_LAZY) return
     if (gc_i1(v) /= LAZY_PENDING) return
@@ -3544,57 +3625,57 @@ contains
     ! real elements.
     if (tctx%has_error) return
 
-    base = vs_enter(2)
-    call vs_set(base + 1, v)
-    select case (gc_i2(vs_get(base + 1)))
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, v)
+    select case (gc_i2(vs_get(vst, base + 1)))
     case (1)
        ! a native range tail: slot 1 = [lo hi step]
-       args = gc_slot(vs_get(base + 1), 1)
-       r = range_cell(gcv_nth(args, 0), gcv_nth(args, 1), gcv_nth(args, 2), [vs_get(base + 1)])
+       args = gc_slot(vs_get(vst, base + 1), 1)
+       r = range_cell(gcv_nth(args, 0), gcv_nth(args, 1), gcv_nth(args, 2), [vs_get(vst, base + 1)])
     case (2)
        ! a native iterate tail: slot 1 = [f x]; the next head is (f x)
-       args = gc_slot(vs_get(base + 1), 1)
-       call vs_set(base + 2, gcv_conj(gcv_empty([vs_get(base + 1)]), gcv_nth(args, 1), [vs_get(base + 1)]))
-       r = apply(gcv_nth(gc_slot(vs_get(base + 1), 1), 0), vs_get(base + 2))
+       args = gc_slot(vs_get(vst, base + 1), 1)
+       call vs_set(vst, base + 2, gcv_conj(gcv_empty([vs_get(vst, base + 1)]), gcv_nth(args, 1), [vs_get(vst, base + 1)]))
+       r = apply(gcv_nth(gc_slot(vs_get(vst, base + 1), 1), 0), vs_get(vst, base + 2))
        if (.not. tctx%has_error) then
-          call vs_set(base + 2, r)
-          r = iterate_cell(gcv_nth(gc_slot(vs_get(base + 1), 1), 0), vs_get(base + 2), [vs_get(base + 1)])
+          call vs_set(vst, base + 2, r)
+          r = iterate_cell(gcv_nth(gc_slot(vs_get(vst, base + 1), 1), 0), vs_get(vst, base + 2), [vs_get(vst, base + 1)])
        end if
     case default
-       args = gcv_empty([vs_get(base + 1)])
-       r = apply(gc_slot(vs_get(base + 1), 1), args)
+       args = gcv_empty([vs_get(vst, base + 1)])
+       r = apply(gc_slot(vs_get(vst, base + 1), 1), args)
     end select
-    call vs_set(base + 2, r)
+    call vs_set(vst, base + 2, r)
     if (tctx%has_error) then
        ! The thunk threw. Clojure's LazySeq caches nothing in that case --
        ! it keeps the fn, and the next seq call runs it again and throws
        ! again -- so the cell stays PENDING rather than becoming an
        ! empty seq that silently swallows the failure.
-       call vs_leave(base)
+       call vs_leave(vst, base)
        return
     end if
 
-    do while (gc_kind(vs_get(base + 2)) == OBJ_LAZY)
-       call gce_force(vs_get(base + 2))
-       if (gc_i1(vs_get(base + 2)) == LAZY_DELEG) then
-          call gc_set_slot(vs_get(base + 1), 2, gc_slot(vs_get(base + 2), 2))
-          call gc_set_i1(vs_get(base + 1), LAZY_DELEG)
-          call vs_leave(base)
+    do while (gc_kind(vs_get(vst, base + 2)) == OBJ_LAZY)
+       call gce_force(vs_get(vst, base + 2))
+       if (gc_i1(vs_get(vst, base + 2)) == LAZY_DELEG) then
+          call gc_set_slot(vs_get(vst, base + 1), 2, gc_slot(vs_get(vst, base + 2), 2))
+          call gc_set_i1(vs_get(vst, base + 1), LAZY_DELEG)
+          call vs_leave(vst, base)
           return
        end if
-       if (gc_i1(vs_get(base + 2)) == LAZY_CONS) then
-          call gc_set_slot(vs_get(base + 1), 2, gc_slot(vs_get(base + 2), 2))
-          call gc_set_slot(vs_get(base + 1), 3, gc_slot(vs_get(base + 2), 3))
-          call gc_set_i1(vs_get(base + 1), LAZY_CONS)
-          call vs_leave(base)
+       if (gc_i1(vs_get(vst, base + 2)) == LAZY_CONS) then
+          call gc_set_slot(vs_get(vst, base + 1), 2, gc_slot(vs_get(vst, base + 2), 2))
+          call gc_set_slot(vs_get(vst, base + 1), 3, gc_slot(vs_get(vst, base + 2), 3))
+          call gc_set_i1(vs_get(vst, base + 1), LAZY_CONS)
+          call vs_leave(vst, base)
           return
        end if
-       call gc_set_i1(vs_get(base + 1), LAZY_EMPTY)
-       call vs_leave(base)
+       call gc_set_i1(vs_get(vst, base + 1), LAZY_EMPTY)
+       call vs_leave(vst, base)
        return
     end do
 
-    r = vs_get(base + 2)
+    r = vs_get(vst, base + 2)
     if (gc_kind(r) == OBJ_CHUNKSEQ) then
        ! A CHUNK SURVIVES THE LAZY SEQ. map, filter, keep and for all
        ! return (lazy-seq ... (chunk-cons (chunk b) ...)), and splitting
@@ -3602,27 +3683,27 @@ contains
        ! answer a plain lazy seq: chunked-seq? was then false on it, so
        ! the next map down the pipeline took the one-at-a-time branch and
        ! the chunking never propagated past the first collection.
-       call gc_set_slot(vs_get(base + 1), 2, r)
-       call gc_set_i1(vs_get(base + 1), LAZY_DELEG)
-       call vs_leave(base)
+       call gc_set_slot(vs_get(vst, base + 1), 2, r)
+       call gc_set_i1(vs_get(vst, base + 1), LAZY_DELEG)
+       call vs_leave(vst, base)
        return
     end if
     if (gcl_is(r)) then
        if (gcl_count(r) == 0) then
-          call gc_set_i1(vs_get(base + 1), LAZY_EMPTY)
+          call gc_set_i1(vs_get(vst, base + 1), LAZY_EMPTY)
        else
-          call gc_set_slot(vs_get(base + 1), 2, gcl_first(r))
-          call gc_set_slot(vs_get(base + 1), 3, gcl_rest(r, [vs_get(base + 1)]))
-          call gc_set_i1(vs_get(base + 1), LAZY_CONS)
+          call gc_set_slot(vs_get(vst, base + 1), 2, gcl_first(r))
+          call gc_set_slot(vs_get(vst, base + 1), 3, gcl_rest(r, [vs_get(vst, base + 1)]))
+          call gc_set_i1(vs_get(vst, base + 1), LAZY_CONS)
        end if
     else if (gcv_is(r)) then
        if (gcv_count(r) == 0) then
-          call gc_set_i1(vs_get(base + 1), LAZY_EMPTY)
+          call gc_set_i1(vs_get(vst, base + 1), LAZY_EMPTY)
        else
-          call gc_set_slot(vs_get(base + 1), 2, gcv_nth(r, 0))
-          call gc_set_slot(vs_get(base + 1), 3, &
-               as_list_rest(r, [vs_get(base + 1)]))
-          call gc_set_i1(vs_get(base + 1), LAZY_CONS)
+          call gc_set_slot(vs_get(vst, base + 1), 2, gcv_nth(r, 0))
+          call gc_set_slot(vs_get(vst, base + 1), 3, &
+               as_list_rest(r, [vs_get(vst, base + 1)]))
+          call gc_set_i1(vs_get(vst, base + 1), LAZY_CONS)
        end if
     else
        ! ANYTHING ELSE SEQABLE, through seq. A thunk may return a view
@@ -3632,39 +3713,41 @@ contains
        ! drop then truncated every destructuring loop binding.
        block
          type(gc_value) :: sv
-         sv = to_seq(vs_get(base + 2), [vs_get(base + 1)])
+         sv = to_seq(vs_get(vst, base + 2), [vs_get(vst, base + 1)])
          if (sv%tag == GCT_NIL) then
-            call gc_set_i1(vs_get(base + 1), LAZY_EMPTY)
+            call gc_set_i1(vs_get(vst, base + 1), LAZY_EMPTY)
          else
-            call vs_set(base + 2, sv)
-            call gc_set_slot(vs_get(base + 1), 2, &
-                 sq_first(vs_get(base + 2), [vs_get(base + 1)]))
-            call gc_set_slot(vs_get(base + 1), 3, &
-                 sq_rest(vs_get(base + 2), [vs_get(base + 1)]))
-            call gc_set_i1(vs_get(base + 1), LAZY_CONS)
+            call vs_set(vst, base + 2, sv)
+            call gc_set_slot(vs_get(vst, base + 1), 2, &
+                 sq_first(vs_get(vst, base + 2), [vs_get(vst, base + 1)]))
+            call gc_set_slot(vs_get(vst, base + 1), 3, &
+                 sq_rest(vs_get(vst, base + 2), [vs_get(vst, base + 1)]))
+            call gc_set_i1(vs_get(vst, base + 1), LAZY_CONS)
          end if
        end block
     end if
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end subroutine gce_force
 
   ! Everything but the first element of a vector, as a list.
   function as_list_rest(v, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: v
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out
     integer :: base, i
-    base = vs_enter(2)
-    call vs_set(base + 1, v)
+    vst => gc_my_stack()
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, v)
     out = gcl_empty(roots)
-    call vs_set(base + 2, out)
-    do i = gcv_count(vs_get(base + 1)) - 1, 1, -1
-       out = gcl_cons(gcv_nth(vs_get(base + 1), i), vs_get(base + 2), &
-            [vs_get(base + 1)])
-       call vs_set(base + 2, out)
+    call vs_set(vst, base + 2, out)
+    do i = gcv_count(vs_get(vst, base + 1)) - 1, 1, -1
+       out = gcl_cons(gcv_nth(vs_get(vst, base + 1), i), vs_get(vst, base + 2), &
+            [vs_get(vst, base + 1)])
+       call vs_set(vst, base + 2, out)
     end do
-    out = vs_get(base + 2)
-    call vs_leave(base)
+    out = vs_get(vst, base + 2)
+    call vs_leave(vst, base)
   end function as_list_rest
 
   ! Applies a macro to the unevaluated argument forms.
@@ -3702,17 +3785,19 @@ contains
   end subroutine macro_arity_fixup
 
   recursive function expand_macro(fn, form, env, mvar) result(out)
+    type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: fn, form, env
     type(gc_value), intent(in), optional :: mvar
     type(gc_value) :: out, args, walk
     integer :: base
 
+    vst => gc_my_stack()
     tctx => ctx_self()
-    base = vs_enter(5)
-    call vs_set(base + 1, fn)
-    call vs_set(base + 2, form)
-    call vs_set(base + 5, env)
+    base = vs_enter(vst, 5)
+    call vs_set(vst, base + 1, fn)
+    call vs_set(vst, base + 2, form)
+    call vs_set(vst, base + 5, env)
     ! CLOTRAN_TRACE_MACRO=1 names every expansion on stderr. An
     ! expansion that shows up per ITERATION of a loop escaped analysis
     ! and is being paid for at call time; this is how the first one
@@ -3723,22 +3808,22 @@ contains
     ! the local environment. macroexpand1 builds the same call --
     ! RT.cons(form, RT.cons(LOCAL_ENV.get(), form.next())) -- and
     ! core.clj's macros name them &form and &env.
-    args = gcv_empty([vs_get(base + 1), vs_get(base + 2)])
-    args = gcv_conj(args, vs_get(base + 2), [vs_get(base + 1), vs_get(base + 2)])
-    args = gcv_conj(args, vs_get(base + 5), [vs_get(base + 1), vs_get(base + 2)])
-    call vs_set(base + 3, args)
-    walk = gcl_rest(vs_get(base + 2), [vs_get(base + 2)])
-    call vs_set(base + 4, walk)
-    do while (gcl_count(vs_get(base + 4)) > 0)
-       args = gcv_conj(vs_get(base + 3), gcl_first(vs_get(base + 4)), &
-            [vs_get(base + 1), vs_get(base + 2), vs_get(base + 4)])
-       call vs_set(base + 3, args)
-       walk = gcl_rest(vs_get(base + 4), [vs_get(base + 2)])
-       call vs_set(base + 4, walk)
+    args = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    args = gcv_conj(args, vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    args = gcv_conj(args, vs_get(vst, base + 5), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 3, args)
+    walk = gcl_rest(vs_get(vst, base + 2), [vs_get(vst, base + 2)])
+    call vs_set(vst, base + 4, walk)
+    do while (gcl_count(vs_get(vst, base + 4)) > 0)
+       args = gcv_conj(vs_get(vst, base + 3), gcl_first(vs_get(vst, base + 4)), &
+            [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 4)])
+       call vs_set(vst, base + 3, args)
+       walk = gcl_rest(vs_get(vst, base + 4), [vs_get(vst, base + 2)])
+       call vs_set(vst, base + 4, walk)
     end do
-    out = apply(vs_get(base + 1), vs_get(base + 3))
+    out = apply(vs_get(vst, base + 1), vs_get(vst, base + 3))
     if (tctx%has_error .and. present(mvar)) call macro_arity_fixup(mvar)
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end function expand_macro
 
   ! Syntax-quote, expanded into cons/concat calls exactly as mal and
@@ -3752,6 +3837,7 @@ contains
   !
   ! Built right to left so the result comes out in order.
   recursive function qq_expand(form, env) result(out)
+    type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: form, env
     type(gc_value) :: out, head, elt, inner, sym
@@ -3764,10 +3850,11 @@ contains
     ! allocate -- so under torture the symbol was collected before it
     ! was ever stored, and the accumulated tail went with it. Only the
     ! torture pass showed it; the plain pass was perfectly green.
+    vst => gc_my_stack()
     tctx => ctx_self()
-    base = vs_enter(6)
-    call vs_set(base + 1, form)
-    call vs_set(base + 2, env)
+    base = vs_enter(vst, 6)
+    call vs_set(vst, base + 1, form)
+    call vs_set(vst, base + 2, env)
 
     if (gcv_is(form)) then
        ! `[a ~b] -- a vector inside syntax-quote. Expanded as a seq and
@@ -3775,8 +3862,8 @@ contains
        ! (concat ...))). Without this a vector passed straight through
        ! and every unquote inside it stayed literal, which is most of
        ! what a (let [...]) template is.
-       out = qq_rebuild(form, "vec", vs_get(base + 2))
-       call vs_leave(base)
+       out = qq_rebuild(form, "vec", vs_get(vst, base + 2))
+       call vs_leave(vst, base)
        return
     end if
 
@@ -3786,16 +3873,16 @@ contains
        ! this let a whole subtree through as literal data: every (ns ...)
        ! expands into a with-loading-context whose body is a MAP, and
        ! the gensym inside it was never renamed.
-       out = qq_rebuild(flatten_map(form, vs_get(base + 2)), "hash-map", &
-            vs_get(base + 2), .true.)
-       call vs_leave(base)
+       out = qq_rebuild(flatten_map(form, vs_get(vst, base + 2)), "hash-map", &
+            vs_get(vst, base + 2), .true.)
+       call vs_leave(vst, base)
        return
     end if
 
     if (gc_kind(form) == OBJ_SET) then
-       out = qq_rebuild(set_elems(form, vs_get(base + 2)), "set", &
-            vs_get(base + 2))
-       call vs_leave(base)
+       out = qq_rebuild(set_elems(form, vs_get(vst, base + 2)), "set", &
+            vs_get(vst, base + 2))
+       call vs_leave(vst, base)
        return
     end if
 
@@ -3805,24 +3892,24 @@ contains
        ! treating the wrapper as an opaque leaf renamed the other
        ! occurrence of loading# and not this one -- which is worse than
        ! renaming neither.
-       out = qq_expand(gc_slot(vs_get(base + 1), 1), vs_get(base + 2))
-       call vs_leave(base)
+       out = qq_expand(gc_slot(vs_get(vst, base + 1), 1), vs_get(vst, base + 2))
+       call vs_leave(vst, base)
        return
     end if
 
     if (.not. gcl_is(form)) then
        if (form%tag == GCT_SYM) then
-          call vs_set(base + 1, auto_gensym(vs_get(base + 1)))
-          call vs_set(base + 1, qq_alias(vs_get(base + 1), vs_get(base + 2)))
-          sym = gc_sym("quote", [vs_get(base + 1)])
-          call vs_set(base + 3, sym)
-          out = gcl_empty([vs_get(base + 1), vs_get(base + 3)])
-          out = gcl_cons(vs_get(base + 1), out, [vs_get(base + 3), out])
-          out = gcl_cons(vs_get(base + 3), out, [vs_get(base + 1), out])
+          call vs_set(vst, base + 1, auto_gensym(vs_get(vst, base + 1)))
+          call vs_set(vst, base + 1, qq_alias(vs_get(vst, base + 1), vs_get(vst, base + 2)))
+          sym = gc_sym("quote", [vs_get(vst, base + 1)])
+          call vs_set(vst, base + 3, sym)
+          out = gcl_empty([vs_get(vst, base + 1), vs_get(vst, base + 3)])
+          out = gcl_cons(vs_get(vst, base + 1), out, [vs_get(vst, base + 3), out])
+          out = gcl_cons(vs_get(vst, base + 3), out, [vs_get(vst, base + 1), out])
        else
           out = form
        end if
-       call vs_leave(base)
+       call vs_leave(vst, base)
        return
     end if
 
@@ -3831,19 +3918,19 @@ contains
        head = gcl_first(form)
        if (head%tag == GCT_SYM) then
           if (gc_ref_is(head%ref, "unquote")) then
-             out = nth_of(vs_get(base + 1), 1)
-             call vs_leave(base)
+             out = nth_of(vs_get(vst, base + 1), 1)
+             call vs_leave(vst, base)
              return
           end if
        end if
     end if
 
-    n = gcl_count(vs_get(base + 1))
-    out = gcl_empty([vs_get(base + 1)])
-    call vs_set(base + 4, out)
+    n = gcl_count(vs_get(vst, base + 1))
+    out = gcl_empty([vs_get(vst, base + 1)])
+    call vs_set(vst, base + 4, out)
     do i = n - 1, 0, -1
-       elt = nth_of(vs_get(base + 1), i)
-       call vs_set(base + 5, elt)
+       elt = nth_of(vs_get(vst, base + 1), i)
+       call vs_set(vst, base + 5, elt)
        spliced = .false.
        if (gcl_is(elt)) then
           if (gcl_count(elt) == 2) then
@@ -3852,28 +3939,28 @@ contains
           end if
        end if
        if (spliced) then
-          sym = gc_sym("concat", [vs_get(base + 1), vs_get(base + 4), vs_get(base + 5)])
-          call vs_set(base + 3, sym)
-          inner = nth_of(vs_get(base + 5), 1)
+          sym = gc_sym("concat", [vs_get(vst, base + 1), vs_get(vst, base + 4), vs_get(vst, base + 5)])
+          call vs_set(vst, base + 3, sym)
+          inner = nth_of(vs_get(vst, base + 5), 1)
        else
-          sym = gc_sym("cons", [vs_get(base + 1), vs_get(base + 4), vs_get(base + 5)])
-          call vs_set(base + 3, sym)
-          inner = qq_expand(vs_get(base + 5), vs_get(base + 2))
+          sym = gc_sym("cons", [vs_get(vst, base + 1), vs_get(vst, base + 4), vs_get(vst, base + 5)])
+          call vs_set(vst, base + 3, sym)
+          inner = qq_expand(vs_get(vst, base + 5), vs_get(vst, base + 2))
           if (tctx%has_error) then
-             call vs_leave(base); return
+             call vs_leave(vst, base); return
           end if
        end if
-       call vs_set(base + 6, inner)
+       call vs_set(vst, base + 6, inner)
        ! (sym inner <acc>), built back to front.
-       out = gcl_empty([vs_get(base + 3), vs_get(base + 4), vs_get(base + 6)])
-       out = gcl_cons(vs_get(base + 4), out, &
-            [vs_get(base + 3), vs_get(base + 6), out])
-       out = gcl_cons(vs_get(base + 6), out, [vs_get(base + 3), out])
-       out = gcl_cons(vs_get(base + 3), out, [out])
-       call vs_set(base + 4, out)
+       out = gcl_empty([vs_get(vst, base + 3), vs_get(vst, base + 4), vs_get(vst, base + 6)])
+       out = gcl_cons(vs_get(vst, base + 4), out, &
+            [vs_get(vst, base + 3), vs_get(vst, base + 6), out])
+       out = gcl_cons(vs_get(vst, base + 6), out, [vs_get(vst, base + 3), out])
+       out = gcl_cons(vs_get(vst, base + 3), out, [out])
+       call vs_set(vst, base + 4, out)
     end do
-    out = vs_get(base + 4)
-    call vs_leave(base)
+    out = vs_get(vst, base + 4)
+    call vs_leave(vst, base)
   end function qq_expand
 
   ! x# inside a syntax-quote becomes one fresh name, the SAME fresh
@@ -3882,12 +3969,14 @@ contains
   ! without capturing the caller's -- (or x y) expands to a let over
   ! or__17__auto__, which no caller can have written.
   function auto_gensym(sym) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: sym
     type(gc_value) :: out, gmap, hit
     character(len=:), allocatable :: t
     character(len=24) :: buf
     integer :: base
 
+    vst => gc_my_stack()
     out = sym
     if (sym%tag /= GCT_SYM) return
     t = gc_ref_text(sym%ref)
@@ -3896,26 +3985,26 @@ contains
     if (index(t, "/") > 0) return
     if (.not. gc_root_live(gensym_root)) return
 
-    base = vs_enter(3)
-    call vs_set(base + 1, sym)
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, sym)
     gmap = gc_root_get(gensym_root)
-    call vs_set(base + 2, gmap)
-    hit = gca_get(vs_get(base + 2), vs_get(base + 1))
+    call vs_set(vst, base + 2, gmap)
+    hit = gca_get(vs_get(vst, base + 2), vs_get(vst, base + 1))
     if (hit%tag == GCT_SYM) then
        out = hit
-       call vs_leave(base)
+       call vs_leave(vst, base)
        return
     end if
     gensym_id = gensym_id + 1
     write(buf, '(I0)') gensym_id
     out = gc_sym(t(1:len(t)-1) // "__" // trim(buf) // "__auto__", &
-         [vs_get(base + 1), vs_get(base + 2)])
-    call vs_set(base + 3, out)
-    gmap = gca_assoc(vs_get(base + 2), vs_get(base + 1), vs_get(base + 3), &
-         [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+         [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 3, out)
+    gmap = gca_assoc(vs_get(vst, base + 2), vs_get(vst, base + 1), vs_get(vst, base + 3), &
+         [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
     call gc_global_keep(gensym_root, gmap)
-    out = vs_get(base + 3)
-    call vs_leave(base)
+    out = vs_get(vst, base + 3)
+    call vs_leave(vst, base)
   end function auto_gensym
 
   ! Compiler.resolveSymbol, as syntaxQuote calls it: an unqualified
@@ -3977,39 +4066,43 @@ contains
 
   ! A map as a vector of k v k v ..., the shape flattenMap produces.
   function flatten_map(m, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: m, roots
     type(gc_value) :: out
     type(gc_value), allocatable :: ks(:), vls(:)
     integer :: base, i
-    base = vs_enter(1)
+    vst => gc_my_stack()
+    base = vs_enter(vst, 1)
     call gca_entries(m, ks, vls)
     out = gcv_empty([roots])
-    call vs_set(base + 1, out)
+    call vs_set(vst, base + 1, out)
     do i = 1, size(ks)
-       out = gcv_conj(vs_get(base + 1), ks(i), [roots])
-       call vs_set(base + 1, out)
-       out = gcv_conj(vs_get(base + 1), vls(i), [roots])
-       call vs_set(base + 1, out)
+       out = gcv_conj(vs_get(vst, base + 1), ks(i), [roots])
+       call vs_set(vst, base + 1, out)
+       out = gcv_conj(vs_get(vst, base + 1), vls(i), [roots])
+       call vs_set(vst, base + 1, out)
     end do
-    out = vs_get(base + 1)
-    call vs_leave(base)
+    out = vs_get(vst, base + 1)
+    call vs_leave(vst, base)
   end function flatten_map
 
   function set_elems(st, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: st, roots
     type(gc_value) :: out
     type(gc_value), allocatable :: ks(:), vls(:)
     integer :: base, i
-    base = vs_enter(1)
+    vst => gc_my_stack()
+    base = vs_enter(vst, 1)
     call gca_entries(gc_slot(st, 1), ks, vls)
     out = gcv_empty([roots])
-    call vs_set(base + 1, out)
+    call vs_set(vst, base + 1, out)
     do i = 1, size(ks)
-       out = gcv_conj(vs_get(base + 1), ks(i), [roots])
-       call vs_set(base + 1, out)
+       out = gcv_conj(vs_get(vst, base + 1), ks(i), [roots])
+       call vs_set(vst, base + 1, out)
     end do
-    out = vs_get(base + 1)
-    call vs_leave(base)
+    out = vs_get(vst, base + 1)
+    call vs_leave(vst, base)
   end function set_elems
 
   ! A collection inside syntax-quote: expand its elements as a seq,
@@ -4026,6 +4119,7 @@ contains
   !
   ! `vec` and `set` both take a collection, so only the map needs it.
   recursive function qq_rebuild(form, ctor, env, use_apply) result(out)
+    type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: form, env
     character(len=*), intent(in) :: ctor
@@ -4034,33 +4128,34 @@ contains
     logical :: ap
     integer :: base, i
 
+    vst => gc_my_stack()
     tctx => ctx_self()
     ap = .false.
     if (present(use_apply)) ap = use_apply
 
-    base = vs_enter(3)
-    call vs_set(base + 1, form)
-    call vs_set(base + 2, env)
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, form)
+    call vs_set(vst, base + 2, env)
     ! The elements as a list, so the existing list path expands them.
-    lst = gcl_empty([vs_get(base + 1)])
-    call vs_set(base + 3, lst)
-    do i = gcv_count(vs_get(base + 1)) - 1, 0, -1
-       lst = gcl_cons(gcv_nth(vs_get(base + 1), i), vs_get(base + 3), &
-            [vs_get(base + 1), vs_get(base + 3)])
-       call vs_set(base + 3, lst)
+    lst = gcl_empty([vs_get(vst, base + 1)])
+    call vs_set(vst, base + 3, lst)
+    do i = gcv_count(vs_get(vst, base + 1)) - 1, 0, -1
+       lst = gcl_cons(gcv_nth(vs_get(vst, base + 1), i), vs_get(vst, base + 3), &
+            [vs_get(vst, base + 1), vs_get(vst, base + 3)])
+       call vs_set(vst, base + 3, lst)
     end do
-    inner = qq_expand(vs_get(base + 3), vs_get(base + 2))
+    inner = qq_expand(vs_get(vst, base + 3), vs_get(vst, base + 2))
     if (tctx%has_error) then
        out = gc_nil()
-       call vs_leave(base)
+       call vs_leave(vst, base)
        return
     end if
-    call vs_set(base + 3, inner)
-    out = gcl_empty([vs_get(base + 3)])
-    out = gcl_cons(vs_get(base + 3), out, [vs_get(base + 3), out])
-    out = gcl_cons(gc_sym(ctor, [vs_get(base + 3), out]), out, [out])
+    call vs_set(vst, base + 3, inner)
+    out = gcl_empty([vs_get(vst, base + 3)])
+    out = gcl_cons(vs_get(vst, base + 3), out, [vs_get(vst, base + 3), out])
+    out = gcl_cons(gc_sym(ctor, [vs_get(vst, base + 3), out]), out, [out])
     if (ap) out = gcl_cons(gc_sym("apply", [out]), out, [out])
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end function qq_rebuild
 
   ! Each clause of a multi-arity fn, body expanded, params untouched.
@@ -4164,36 +4259,38 @@ contains
   ! LOCAL_ENV, which is bound only while the compiler is analysing a
   ! body, and a call from user code is not inside that.
   recursive function macroexpand_1step(form0) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: form0
     type(gc_value) :: out, form, head, mvar, item
     character(len=:), allocatable :: t
     integer :: base, i, n
 
-    base = vs_enter(3)
-    call vs_set(base + 1, form0)
-    out = vs_get(base + 1)
+    vst => gc_my_stack()
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, form0)
+    out = vs_get(vst, base + 1)
 
-    form = strip_meta(vs_get(base + 1))
+    form = strip_meta(vs_get(vst, base + 1))
     if (gc_kind(form) == OBJ_LAZY .or. gc_kind(form) == OBJ_SEQ .or. gc_kind(form) == OBJ_CHUNKSEQ) &
-         form = seq_to_list(form, [vs_get(base + 1)])
-    call vs_set(base + 2, form)
-    if (.not. gcl_is(vs_get(base + 2))) then
-       call vs_leave(base); return
+         form = seq_to_list(form, [vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, form)
+    if (.not. gcl_is(vs_get(vst, base + 2))) then
+       call vs_leave(vst, base); return
     end if
-    n = gcl_count(vs_get(base + 2))
+    n = gcl_count(vs_get(vst, base + 2))
     if (n == 0) then
-       call vs_leave(base); return
+       call vs_leave(vst, base); return
     end if
 
-    head = strip_meta(gcl_first(vs_get(base + 2)))
+    head = strip_meta(gcl_first(vs_get(vst, base + 2)))
     if (head%tag /= GCT_SYM) then
-       call vs_leave(base); return
+       call vs_leave(vst, base); return
     end if
 
     mvar = macro_var(head, gc_nil())
     if (gcn_is_var(mvar)) then
-       out = expand_macro(gcn_var_value(mvar), vs_get(base + 2), gc_nil(), mvar)
-       call vs_leave(base); return
+       out = expand_macro(gcn_var_value(mvar), vs_get(vst, base + 2), gc_nil(), mvar)
+       call vs_leave(vst, base); return
     end if
 
     ! The two SUGARS macroexpand1 rewrites before it gives up. clotran
@@ -4203,37 +4300,37 @@ contains
     t = gc_ref_text(head%ref)
     if (is_member_sym(head) .and. n >= 2) then
        ! (.foo target args...) -> (. target foo args...)
-       out = gcl_empty([vs_get(base + 2)])
-       call vs_set(base + 3, out)
+       out = gcl_empty([vs_get(vst, base + 2)])
+       call vs_set(vst, base + 3, out)
        do i = n - 1, 2, -1
-          item = nth_of(vs_get(base + 2), i)
-          out = gcl_cons(item, vs_get(base + 3), [vs_get(base + 2), item])
-          call vs_set(base + 3, out)
+          item = nth_of(vs_get(vst, base + 2), i)
+          out = gcl_cons(item, vs_get(vst, base + 3), [vs_get(vst, base + 2), item])
+          call vs_set(vst, base + 3, out)
        end do
-       item = gc_sym(t(2:), [vs_get(base + 2), vs_get(base + 3)])
-       out = gcl_cons(item, vs_get(base + 3), [vs_get(base + 2), item])
-       call vs_set(base + 3, out)
-       item = nth_of(vs_get(base + 2), 1)
-       out = gcl_cons(item, vs_get(base + 3), [vs_get(base + 2), item])
-       call vs_set(base + 3, out)
-       item = gc_sym(".", [vs_get(base + 2), vs_get(base + 3)])
-       out = gcl_cons(item, vs_get(base + 3), [vs_get(base + 2), item])
+       item = gc_sym(t(2:), [vs_get(vst, base + 2), vs_get(vst, base + 3)])
+       out = gcl_cons(item, vs_get(vst, base + 3), [vs_get(vst, base + 2), item])
+       call vs_set(vst, base + 3, out)
+       item = nth_of(vs_get(vst, base + 2), 1)
+       out = gcl_cons(item, vs_get(vst, base + 3), [vs_get(vst, base + 2), item])
+       call vs_set(vst, base + 3, out)
+       item = gc_sym(".", [vs_get(vst, base + 2), vs_get(vst, base + 3)])
+       out = gcl_cons(item, vs_get(vst, base + 3), [vs_get(vst, base + 2), item])
     else if (is_ctor_sym(head)) then
        ! (Classname. args...) -> (new Classname args...)
-       out = gcl_empty([vs_get(base + 2)])
-       call vs_set(base + 3, out)
+       out = gcl_empty([vs_get(vst, base + 2)])
+       call vs_set(vst, base + 3, out)
        do i = n - 1, 1, -1
-          item = nth_of(vs_get(base + 2), i)
-          out = gcl_cons(item, vs_get(base + 3), [vs_get(base + 2), item])
-          call vs_set(base + 3, out)
+          item = nth_of(vs_get(vst, base + 2), i)
+          out = gcl_cons(item, vs_get(vst, base + 3), [vs_get(vst, base + 2), item])
+          call vs_set(vst, base + 3, out)
        end do
-       item = gc_sym(t(:len(t) - 1), [vs_get(base + 2), vs_get(base + 3)])
-       out = gcl_cons(item, vs_get(base + 3), [vs_get(base + 2), item])
-       call vs_set(base + 3, out)
-       item = gc_sym("new", [vs_get(base + 2), vs_get(base + 3)])
-       out = gcl_cons(item, vs_get(base + 3), [vs_get(base + 2), item])
+       item = gc_sym(t(:len(t) - 1), [vs_get(vst, base + 2), vs_get(vst, base + 3)])
+       out = gcl_cons(item, vs_get(vst, base + 3), [vs_get(vst, base + 2), item])
+       call vs_set(vst, base + 3, out)
+       item = gc_sym("new", [vs_get(vst, base + 2), vs_get(vst, base + 3)])
+       out = gcl_cons(item, vs_get(vst, base + 3), [vs_get(vst, base + 2), item])
     end if
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end function macroexpand_1step
 
   ! IPersistentCollection.empty -- what core.clj's `empty` is, in full:
@@ -4242,41 +4339,43 @@ contains
   ! {}; anything that is not a collection answers nil, which is the
   ! `when`'s else branch rather than an error.
   function coll_empty(v, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: v
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, inner
     integer :: base
 
+    vst => gc_my_stack()
     out = gc_nil()
-    base = vs_enter(2)
-    call vs_set(base + 1, strip_meta(v))
-    select case (gc_kind(vs_get(base + 1)))
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, strip_meta(v))
+    select case (gc_kind(vs_get(vst, base + 1)))
     case (OBJ_VECTOR)
-       out = gcv_empty([roots, vs_get(base + 1)])
+       out = gcv_empty([roots, vs_get(vst, base + 1)])
     case (OBJ_MAP)
        ! a sorted map's empty keeps its order and comparator
-       if (gca_is_sorted(vs_get(base + 1))) then
-          out = gca_sorted_empty(gca_comparator(vs_get(base + 1)), [roots, vs_get(base + 1)])
+       if (gca_is_sorted(vs_get(vst, base + 1))) then
+          out = gca_sorted_empty(gca_comparator(vs_get(vst, base + 1)), [roots, vs_get(vst, base + 1)])
        else
-          out = gca_empty([roots, vs_get(base + 1)])
+          out = gca_empty([roots, vs_get(vst, base + 1)])
        end if
     case (OBJ_SET)
-       if (gca_is_sorted(gc_slot(vs_get(base + 1), 1))) then
-          inner = gca_sorted_empty(gca_comparator(gc_slot(vs_get(base + 1), 1)), [roots, vs_get(base + 1)])
+       if (gca_is_sorted(gc_slot(vs_get(vst, base + 1), 1))) then
+          inner = gca_sorted_empty(gca_comparator(gc_slot(vs_get(vst, base + 1), 1)), [roots, vs_get(vst, base + 1)])
        else
-          inner = gca_empty([roots, vs_get(base + 1)])
+          inner = gca_empty([roots, vs_get(vst, base + 1)])
        end if
-       call vs_set(base + 2, inner)
-       out = gc_obj(OBJ_SET, [vs_get(base + 2)], [roots, vs_get(base + 2)])
+       call vs_set(vst, base + 2, inner)
+       out = gc_obj(OBJ_SET, [vs_get(vst, base + 2)], [roots, vs_get(vst, base + 2)])
     case (OBJ_CONS, OBJ_SEQ, OBJ_LAZY, OBJ_CHUNKSEQ)
        ! Every seq empties to (), the way PersistentList.EMPTY is what
        ! ASeq.empty answers.
-       out = gcl_empty([roots, vs_get(base + 1)])
+       out = gcl_empty([roots, vs_get(vst, base + 1)])
     end select
-    if (gcl_is(vs_get(base + 1))) out = gcl_empty([roots, vs_get(base + 1)])
+    if (gcl_is(vs_get(vst, base + 1))) out = gcl_empty([roots, vs_get(vst, base + 1)])
     ! (empty x) keeps x's metadata, as IPersistentCollection.empty does
-    out = keep_meta(v, out, [roots, vs_get(base + 1)])
-    call vs_leave(base)
+    out = keep_meta(v, out, [roots, vs_get(vst, base + 1)])
+    call vs_leave(vst, base)
   end function coll_empty
 
   ! ---- java.lang.Math ---------------------------------------------
@@ -4670,6 +4769,7 @@ contains
   ! unsplit; zero or absent means no cap AND trailing empty parts are
   ! dropped; a negative limit means no cap and keep them.
   function regex_split(pat, subj, limit, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: pat, subj
     integer, intent(in) :: limit
     type(gc_value), intent(in) :: roots(:)
@@ -4678,6 +4778,7 @@ contains
     integer :: mh, base, from, gs, ge, nparts, last
     logical :: ok
 
+    vst => gc_my_stack()
     out = gc_nil()
     s = text_of(subj)
     mh = regex_clone(gc_i1(pat))
@@ -4691,9 +4792,9 @@ contains
        return
     end if
 
-    base = vs_enter(2)
+    base = vs_enter(vst, 2)
     out = gcv_empty(roots)
-    call vs_set(base + 1, out)
+    call vs_set(vst, base + 1, out)
     from = 0
     nparts = 0
     do
@@ -4704,42 +4805,42 @@ contains
        ! A zero-width match at the position we are already at would
        ! loop forever and produce nothing; Java skips it too.
        if (ge == gs .and. gs == from .and. from == 0) cycle
-       piece = gc_str(u8_slice(s, from, gs), [roots, vs_get(base + 1)])
-       call vs_set(base + 2, piece)
-       out = gcv_conj(vs_get(base + 1), vs_get(base + 2), &
-            [roots, vs_get(base + 1), vs_get(base + 2)])
-       call vs_set(base + 1, out)
+       piece = gc_str(u8_slice(s, from, gs), [roots, vs_get(vst, base + 1)])
+       call vs_set(vst, base + 2, piece)
+       out = gcv_conj(vs_get(vst, base + 1), vs_get(vst, base + 2), &
+            [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       call vs_set(vst, base + 1, out)
        nparts = nparts + 1
        from = ge
        if (ge == gs) from = ge
     end do
     call regex_release(mh)
 
-    piece = gc_str(s(u8_off(s, from):), [roots, vs_get(base + 1)])
-    call vs_set(base + 2, piece)
-    out = gcv_conj(vs_get(base + 1), vs_get(base + 2), &
-         [roots, vs_get(base + 1), vs_get(base + 2)])
-    call vs_set(base + 1, out)
+    piece = gc_str(s(u8_off(s, from):), [roots, vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, piece)
+    out = gcv_conj(vs_get(vst, base + 1), vs_get(vst, base + 2), &
+         [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 1, out)
 
     if (limit == 0) then
        ! Drop trailing empties.
-       last = gcv_count(vs_get(base + 1))
+       last = gcv_count(vs_get(vst, base + 1))
        do while (last > 0)
-          if (len(text_of(gcv_nth(vs_get(base + 1), last - 1))) > 0) exit
+          if (len(text_of(gcv_nth(vs_get(vst, base + 1), last - 1))) > 0) exit
           last = last - 1
        end do
-       out = gcv_empty([roots, vs_get(base + 1)])
-       call vs_set(base + 2, out)
+       out = gcv_empty([roots, vs_get(vst, base + 1)])
+       call vs_set(vst, base + 2, out)
        do nparts = 0, last - 1
-          out = gcv_conj(vs_get(base + 2), gcv_nth(vs_get(base + 1), nparts), &
-               [roots, vs_get(base + 1), vs_get(base + 2)])
-          call vs_set(base + 2, out)
+          out = gcv_conj(vs_get(vst, base + 2), gcv_nth(vs_get(vst, base + 1), nparts), &
+               [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+          call vs_set(vst, base + 2, out)
        end do
-       out = vs_get(base + 2)
+       out = vs_get(vst, base + 2)
     else
-       out = vs_get(base + 1)
+       out = vs_get(vst, base + 1)
     end if
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end function regex_split
 
   ! A `value` array holding the elements of a collection, which is what
@@ -4749,35 +4850,37 @@ contains
   ! and discarded, which is DEVIATIONS.md 24's territory rather than a
   ! new one.
   function value_array(items, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: items
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, vec, run
     character(len=:), allocatable :: err
     integer :: base, h, k, cnt
 
+    vst => gc_my_stack()
     out = gc_nil()
-    base = vs_enter(3)
+    base = vs_enter(vst, 3)
     vec = coll_to_vector(items, roots)
-    call vs_set(base + 1, vec)
-    cnt = gcv_count(vs_get(base + 1))
+    call vs_set(vst, base + 1, vec)
+    cnt = gcv_count(vs_get(vst, base + 1))
     h = gcna_new("value", [cnt], [0], err)
     if (h == 0) then
        call fail(err)
-       call vs_leave(base)
+       call vs_leave(vst, base)
        return
     end if
-    run = gc_vec(max(1, cnt), [roots, vs_get(base + 1)])
-    call vs_set(base + 2, run)
-    out = gc_obj(OBJ_ARRAY, [vs_get(base + 2)], [roots, vs_get(base + 1), vs_get(base + 2)])
-    call vs_set(base + 3, out)
-    call gc_set_i1(vs_get(base + 3), h)
-    call gc_set_i2(vs_get(base + 3), -1) ! owns the handle
+    run = gc_vec(max(1, cnt), [roots, vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, run)
+    out = gc_obj(OBJ_ARRAY, [vs_get(vst, base + 2)], [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 3, out)
+    call gc_set_i1(vs_get(vst, base + 3), h)
+    call gc_set_i2(vs_get(vst, base + 3), -1) ! owns the handle
     do k = 0, cnt - 1
-       call gc_vec_set(gc_slot(vs_get(base + 3), 1), k + 1, &
-            gcv_nth(vs_get(base + 1), k))
+       call gc_vec_set(gc_slot(vs_get(vst, base + 3), 1), k + 1, &
+            gcv_nth(vs_get(vst, base + 1), k))
     end do
-    out = vs_get(base + 3)
-    call vs_leave(base)
+    out = vs_get(vst, base + 3)
+    call vs_leave(vst, base)
   end function value_array
 
   ! Matcher.quoteReplacement: \ and $ are the only two characters a
@@ -5021,22 +5124,24 @@ contains
 
   ! [old new], the vector swap-vals! and reset-vals! answer.
   function value_pair(a0, b0, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: a0, b0
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out
     integer :: base
 
-    base = vs_enter(3)
-    call vs_set(base + 1, a0)
-    call vs_set(base + 2, b0)
-    out = gcv_empty([roots, vs_get(base + 1), vs_get(base + 2)])
-    call vs_set(base + 3, out)
-    out = gcv_conj(vs_get(base + 3), vs_get(base + 1), &
-         [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-    call vs_set(base + 3, out)
-    out = gcv_conj(vs_get(base + 3), vs_get(base + 2), &
-         [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-    call vs_leave(base)
+    vst => gc_my_stack()
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, a0)
+    call vs_set(vst, base + 2, b0)
+    out = gcv_empty([roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 3, out)
+    out = gcv_conj(vs_get(vst, base + 3), vs_get(vst, base + 1), &
+         [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+    call vs_set(vst, base + 3, out)
+    out = gcv_conj(vs_get(vst, base + 3), vs_get(vst, base + 2), &
+         [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+    call vs_leave(vst, base)
   end function value_pair
 
   ! Compiler.specials -- the map special-symbol? asks. Its VALUES are
@@ -5049,6 +5154,7 @@ contains
   ! those would make special-symbol? report on our host rather than on
   ! the language.
   function specials_map(roots) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, k
     integer :: base, i
@@ -5058,16 +5164,17 @@ contains
          "deftype*", "reify*", "try", "throw", "monitor-enter", &
          "monitor-exit", "catch", "finally", "new", "&"]
 
-    base = vs_enter(1)
+    vst => gc_my_stack()
+    base = vs_enter(vst, 1)
     out = gca_empty([roots])
-    call vs_set(base + 1, out)
+    call vs_set(vst, base + 1, out)
     do i = 1, size(names)
-       k = gc_sym(trim(names(i)), [roots, vs_get(base + 1)])
-       out = gca_assoc(vs_get(base + 1), k, gc_nil(), [roots, vs_get(base + 1), k])
-       call vs_set(base + 1, out)
+       k = gc_sym(trim(names(i)), [roots, vs_get(vst, base + 1)])
+       out = gca_assoc(vs_get(vst, base + 1), k, gc_nil(), [roots, vs_get(vst, base + 1), k])
+       call vs_set(vst, base + 1, out)
     end do
-    out = vs_get(base + 1)
-    call vs_leave(base)
+    out = vs_get(vst, base + 1)
+    call vs_leave(vst, base)
   end function specials_map
 
   ! One cell of (iterate f x): a realised head and an unrealised
@@ -5161,6 +5268,7 @@ contains
   ! once since a range decides them together. `more` is nil when
   ! nothing follows.
   recursive subroutine chunked_parts(s0, chunk, more, roots)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: s0
     type(gc_value), intent(out) :: chunk, more
     type(gc_value), intent(in) :: roots(:)
@@ -5168,11 +5276,12 @@ contains
     integer :: base, at, total, fin, cnt
     real(gc_dp) :: sd
 
+    vst => gc_my_stack()
     chunk = gc_nil()
     more = gc_nil()
     s = strip_meta(s0)
-    base = vs_enter(6)
-    call vs_set(base + 1, s)
+    base = vs_enter(vst, 6)
+    call vs_set(vst, base + 1, s)
     select case (gc_kind(s))
     case (OBJ_CHUNKSEQ)
        chunk = gc_slot(s, 1)
@@ -5182,68 +5291,68 @@ contains
        at = gc_i1(s)
        total = gcv_count(src)
        fin = min(total, at + 32)
-       chunk = make_chunk(src, at, fin, [roots, vs_get(base + 1)])
-       call vs_set(base + 2, chunk)
+       chunk = make_chunk(src, at, fin, [roots, vs_get(vst, base + 1)])
+       call vs_set(vst, base + 2, chunk)
        if (fin < total) then
-          more = gc_obj(OBJ_SEQ, [src], [roots, vs_get(base + 1), vs_get(base + 2)])
+          more = gc_obj(OBJ_SEQ, [src], [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
           call gc_set_i1(more, fin)
        end if
-       chunk = vs_get(base + 2)
+       chunk = vs_get(vst, base + 2)
     case (OBJ_LAZY)
        ! up to 32 values into one run: realised cells first, then the
        ! pending tail's arithmetic, then whatever is left is `more`
-       buf = gc_vec(32, [roots, vs_get(base + 1)])
-       call vs_set(base + 2, buf)
+       buf = gc_vec(32, [roots, vs_get(vst, base + 1)])
+       call vs_set(vst, base + 2, buf)
        cnt = 0
-       call vs_set(base + 3, vs_get(base + 1))      ! the cell being read
+       call vs_set(vst, base + 3, vs_get(vst, base + 1))      ! the cell being read
        do
-          cell = vs_get(base + 3)
+          cell = vs_get(vst, base + 3)
           if (gc_kind(cell) /= OBJ_LAZY) exit
           if (gc_i1(cell) == LAZY_CONS) then
              if (cnt >= 32) exit
-             call gc_vec_set(vs_get(base + 2), cnt + 1, gc_slot(cell, 2))
+             call gc_vec_set(vs_get(vst, base + 2), cnt + 1, gc_slot(cell, 2))
              cnt = cnt + 1
-             call vs_set(base + 3, gc_slot(cell, 3))
+             call vs_set(vst, base + 3, gc_slot(cell, 3))
              cycle
           end if
           if (gc_i1(cell) == LAZY_PENDING .and. gc_i2(cell) == 1) then
              spec = gc_slot(cell, 1)
-             call vs_set(base + 4, gcv_nth(spec, 0))   ! cursor
-             call vs_set(base + 5, gcv_nth(spec, 1))   ! hi
-             call vs_set(base + 6, gcv_nth(spec, 2))   ! step
-             sd = num_dbl(vs_get(base + 6))
+             call vs_set(vst, base + 4, gcv_nth(spec, 0))   ! cursor
+             call vs_set(vst, base + 5, gcv_nth(spec, 1))   ! hi
+             call vs_set(vst, base + 6, gcv_nth(spec, 2))   ! step
+             sd = num_dbl(vs_get(vst, base + 6))
              do while (cnt < 32)
-                if (sd > 0.0_gc_dp .and. .not. num_lt(vs_get(base + 4), vs_get(base + 5))) exit
-                if (sd < 0.0_gc_dp .and. .not. num_lt(vs_get(base + 5), vs_get(base + 4))) exit
-                call gc_vec_set(vs_get(base + 2), cnt + 1, vs_get(base + 4))
+                if (sd > 0.0_gc_dp .and. .not. num_lt(vs_get(vst, base + 4), vs_get(vst, base + 5))) exit
+                if (sd < 0.0_gc_dp .and. .not. num_lt(vs_get(vst, base + 5), vs_get(vst, base + 4))) exit
+                call gc_vec_set(vs_get(vst, base + 2), cnt + 1, vs_get(vst, base + 4))
                 cnt = cnt + 1
-                call vs_set(base + 4, num_add2(vs_get(base + 4), vs_get(base + 6), [vs_get(base + 2)]))
+                call vs_set(vst, base + 4, num_add2(vs_get(vst, base + 4), vs_get(vst, base + 6), [vs_get(vst, base + 2)]))
              end do
              ! what is left of the range, as a fresh pending tail
-             if ((sd > 0.0_gc_dp .and. num_lt(vs_get(base + 4), vs_get(base + 5))) .or. &
-                  (sd < 0.0_gc_dp .and. num_lt(vs_get(base + 5), vs_get(base + 4))) .or. sd == 0.0_gc_dp) then
-                spec = gcv_build(3, [vs_get(base + 2)])
-                call vs_set(base + 3, spec)
-                call gc_vec_set(gc_slot(spec, 1), 1, vs_get(base + 4))
-                call gc_vec_set(gc_slot(spec, 1), 2, vs_get(base + 5))
-                call gc_vec_set(gc_slot(spec, 1), 3, vs_get(base + 6))
-                nxt = gc_obj(OBJ_LAZY, [vs_get(base + 3), gc_nil(), gc_nil()], [vs_get(base + 2), vs_get(base + 3)])
+             if ((sd > 0.0_gc_dp .and. num_lt(vs_get(vst, base + 4), vs_get(vst, base + 5))) .or. &
+                  (sd < 0.0_gc_dp .and. num_lt(vs_get(vst, base + 5), vs_get(vst, base + 4))) .or. sd == 0.0_gc_dp) then
+                spec = gcv_build(3, [vs_get(vst, base + 2)])
+                call vs_set(vst, base + 3, spec)
+                call gc_vec_set(gc_slot(spec, 1), 1, vs_get(vst, base + 4))
+                call gc_vec_set(gc_slot(spec, 1), 2, vs_get(vst, base + 5))
+                call gc_vec_set(gc_slot(spec, 1), 3, vs_get(vst, base + 6))
+                nxt = gc_obj(OBJ_LAZY, [vs_get(vst, base + 3), gc_nil(), gc_nil()], [vs_get(vst, base + 2), vs_get(vst, base + 3)])
                 call gc_set_i1(nxt, LAZY_PENDING)
                 call gc_set_i2(nxt, 1)
-                call vs_set(base + 3, nxt)
+                call vs_set(vst, base + 3, nxt)
              else
-                call vs_set(base + 3, gc_nil())
+                call vs_set(vst, base + 3, gc_nil())
              end if
           end if
           exit
        end do
-       chunk = make_chunk(vs_get(base + 2), 0, cnt, [vs_get(base + 3)])
-       more = vs_get(base + 3)
+       chunk = make_chunk(vs_get(vst, base + 2), 0, cnt, [vs_get(vst, base + 3)])
+       more = vs_get(vst, base + 3)
        if (gc_kind(more) == OBJ_LAZY) then
           if (gc_i1(more) == LAZY_EMPTY) more = gc_nil()
        end if
     end select
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end subroutine chunked_parts
 
   ! Whether every cell of a seq is already realised, so that folding it
@@ -5320,6 +5429,7 @@ contains
   end subroutine fold_seq
 
   recursive function reduce_native(coll, f, has_init, init) result(out)
+    type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: coll, f, init
     logical, intent(in) :: has_init
@@ -5328,144 +5438,149 @@ contains
     logical :: have, done
     real(gc_dp) :: sd
     ! slots: 1 coll/cell 2 f 3 acc 4 cursor (a range's next value) 5 hi 6 step
+    vst => gc_my_stack()
     tctx => ctx_self()
-    base = vs_enter(6)
-    call vs_set(base + 1, coll)
-    call vs_set(base + 2, f)
+    base = vs_enter(vst, 6)
+    call vs_set(vst, base + 1, coll)
+    call vs_set(vst, base + 2, f)
     have = has_init
-    if (has_init) call vs_set(base + 3, init)
+    if (has_init) call vs_set(vst, base + 3, init)
     done = .false.
     select case (gc_kind(coll))
     case (OBJ_VECTOR)
-       do i = 0, gcv_count(vs_get(base + 1)) - 1
-          call step(gcv_nth(vs_get(base + 1), i))
+       do i = 0, gcv_count(vs_get(vst, base + 1)) - 1
+          call step(gcv_nth(vs_get(vst, base + 1), i))
           if (done) exit
        end do
     case (OBJ_CONS)
-       do while (gcl_count(vs_get(base + 1)) > 0)
-          call step(gcl_first(vs_get(base + 1)))
+       do while (gcl_count(vs_get(vst, base + 1)) > 0)
+          call step(gcl_first(vs_get(vst, base + 1)))
           if (done) exit
-          call vs_set(base + 1, gcl_rest(vs_get(base + 1), [vs_get(base + 3)]))
+          call vs_set(vst, base + 1, gcl_rest(vs_get(vst, base + 1), [vs_get(vst, base + 3)]))
        end do
     case (OBJ_LAZY)
        do
-          cell = vs_get(base + 1)
+          cell = vs_get(vst, base + 1)
           if (gc_i1(cell) == LAZY_PENDING .and. gc_i2(cell) == 1) then
              ! the rest of a range: walk the arithmetic, no cells
              spec = gc_slot(cell, 1)
-             call vs_set(base + 4, gcv_nth(spec, 0))
-             call vs_set(base + 5, gcv_nth(spec, 1))
-             call vs_set(base + 6, gcv_nth(spec, 2))
-             sd = num_dbl(vs_get(base + 6))
+             call vs_set(vst, base + 4, gcv_nth(spec, 0))
+             call vs_set(vst, base + 5, gcv_nth(spec, 1))
+             call vs_set(vst, base + 6, gcv_nth(spec, 2))
+             sd = num_dbl(vs_get(vst, base + 6))
              do
-                if (sd > 0.0_gc_dp .and. .not. num_lt(vs_get(base + 4), vs_get(base + 5))) exit
-                if (sd < 0.0_gc_dp .and. .not. num_lt(vs_get(base + 5), vs_get(base + 4))) exit
-                if (sd == 0.0_gc_dp .and. .not. num_lt(vs_get(base + 4), vs_get(base + 5))) exit
-                call step(vs_get(base + 4))
+                if (sd > 0.0_gc_dp .and. .not. num_lt(vs_get(vst, base + 4), vs_get(vst, base + 5))) exit
+                if (sd < 0.0_gc_dp .and. .not. num_lt(vs_get(vst, base + 5), vs_get(vst, base + 4))) exit
+                if (sd == 0.0_gc_dp .and. .not. num_lt(vs_get(vst, base + 4), vs_get(vst, base + 5))) exit
+                call step(vs_get(vst, base + 4))
                 if (done) exit
-                call vs_set(base + 4, num_add2(vs_get(base + 4), vs_get(base + 6), [vs_get(base + 3)]))
+                call vs_set(vst, base + 4, num_add2(vs_get(vst, base + 4), vs_get(vst, base + 6), [vs_get(vst, base + 3)]))
              end do
              exit
           end if
           call gce_force(cell)
           if (tctx%has_error) exit
-          cell = vs_get(base + 1)
+          cell = vs_get(vst, base + 1)
           if (gc_i1(cell) /= LAZY_CONS) exit
           call step(gc_slot(cell, 2))
           if (done) exit
-          call vs_set(base + 1, gc_slot(vs_get(base + 1), 3))
+          call vs_set(vst, base + 1, gc_slot(vs_get(vst, base + 1), 3))
        end do
     case (OBJ_CHUNK)
-       do i = 0, chunk_count(vs_get(base + 1)) - 1
-          call step(chunk_nth(vs_get(base + 1), i))
+       do i = 0, chunk_count(vs_get(vst, base + 1)) - 1
+          call step(chunk_nth(vs_get(vst, base + 1), i))
           if (done) exit
        end do
     case default
        ! a ChunkedCons, or anything else seqable: walked as a seq
-       call vs_set(base + 1, to_seq(vs_get(base + 1), [vs_get(base + 2)]))
+       call vs_set(vst, base + 1, to_seq(vs_get(vst, base + 1), [vs_get(vst, base + 2)]))
        do
-          cell = vs_get(base + 1)
+          cell = vs_get(vst, base + 1)
           if (cell%tag == GCT_NIL) exit
-          call step(sq_first(vs_get(base + 1), [vs_get(base + 2)]))
+          call step(sq_first(vs_get(vst, base + 1), [vs_get(vst, base + 2)]))
           if (done) exit
-          call vs_set(base + 1, to_seq(sq_rest(vs_get(base + 1), [vs_get(base + 2)]), [vs_get(base + 2)]))
+          call vs_set(vst, base + 1, to_seq(sq_rest(vs_get(vst, base + 1), [vs_get(vst, base + 2)]), [vs_get(vst, base + 2)]))
        end do
     end select
     if (.not. tctx%has_error .and. .not. done) then
        if (have) then
-          out = vs_get(base + 3)
+          out = vs_get(vst, base + 3)
        else
-          out = apply(vs_get(base + 2), gcv_empty([vs_get(base + 2)]))
+          out = apply(vs_get(vst, base + 2), gcv_empty([vs_get(vst, base + 2)]))
        end if
     else if (done) then
-       out = vs_get(base + 3)
+       out = vs_get(vst, base + 3)
     else
        out = gc_nil()
     end if
-    call vs_leave(base)
+    call vs_leave(vst, base)
   contains
     ! One element: the first is the accumulator when there was no init;
     ! otherwise (f acc x), and a reduced result unwraps and stops.
     subroutine step(x0)
+    type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
       type(gc_value), intent(in) :: x0
       type(gc_value) :: argv, r
+    vst => gc_my_stack()
     tctx => ctx_self()
       if (.not. have) then
-         call vs_set(base + 3, x0)
+         call vs_set(vst, base + 3, x0)
          have = .true.
          return
       end if
       x = x0
-      argv = gcv_build(2, [vs_get(base + 3), x])
-      call gc_vec_set(gc_slot(argv, 1), 1, vs_get(base + 3))
+      argv = gcv_build(2, [vs_get(vst, base + 3), x])
+      call gc_vec_set(gc_slot(argv, 1), 1, vs_get(vst, base + 3))
       call gc_vec_set(gc_slot(argv, 1), 2, x)
-      r = apply(vs_get(base + 2), argv)
+      r = apply(vs_get(vst, base + 2), argv)
       if (tctx%has_error) then
          done = .true.
          return
       end if
-      call vs_set(base + 3, r)
+      call vs_set(vst, base + 3, r)
       if (is_reduced(r)) then
-         call vs_set(base + 3, gca_get(strip_meta(vs_get(base + 3)), gc_key("clotran/reduced", [vs_get(base + 3)])))
+         call vs_set(vst, base + 3, gca_get(strip_meta(vs_get(vst, base + 3)), gc_key("clotran/reduced", [vs_get(vst, base + 3)])))
          done = .true.
       end if
     end subroutine step
   end function reduce_native
 
   recursive function range_cell(lo, hi, stp, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: lo, hi, stp
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, spec, tail, nxt
     integer :: base
     real(gc_dp) :: sd
 
+    vst => gc_my_stack()
     out = gcl_empty(roots)
     sd = num_dbl(stp)
     if (sd > 0.0_gc_dp .and. .not. num_lt(lo, hi)) return
     if (sd < 0.0_gc_dp .and. .not. num_lt(hi, lo)) return
 
-    base = vs_enter(4)
-    call vs_set(base + 1, lo)
-    call vs_set(base + 2, hi)
-    call vs_set(base + 3, stp)
-    nxt = num_add2(vs_get(base + 1), vs_get(base + 3), [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-    call vs_set(base + 4, nxt)
-    spec = gcv_empty([roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 4)])
-    spec = gcv_conj(spec, vs_get(base + 4), [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), spec])
-    spec = gcv_conj(spec, vs_get(base + 2), [roots, vs_get(base + 1), vs_get(base + 3), spec])
-    spec = gcv_conj(spec, vs_get(base + 3), [roots, vs_get(base + 1), spec])
-    call vs_set(base + 4, spec)
-    tail = gc_obj(OBJ_LAZY, [vs_get(base + 4), gc_nil(), gc_nil()], [roots, vs_get(base + 1), vs_get(base + 4)])
+    base = vs_enter(vst, 4)
+    call vs_set(vst, base + 1, lo)
+    call vs_set(vst, base + 2, hi)
+    call vs_set(vst, base + 3, stp)
+    nxt = num_add2(vs_get(vst, base + 1), vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+    call vs_set(vst, base + 4, nxt)
+    spec = gcv_empty([roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+    spec = gcv_conj(spec, vs_get(vst, base + 4), [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), spec])
+    spec = gcv_conj(spec, vs_get(vst, base + 2), [roots, vs_get(vst, base + 1), vs_get(vst, base + 3), spec])
+    spec = gcv_conj(spec, vs_get(vst, base + 3), [roots, vs_get(vst, base + 1), spec])
+    call vs_set(vst, base + 4, spec)
+    tail = gc_obj(OBJ_LAZY, [vs_get(vst, base + 4), gc_nil(), gc_nil()], [roots, vs_get(vst, base + 1), vs_get(vst, base + 4)])
     call gc_set_i1(tail, LAZY_PENDING)
     call gc_set_i2(tail, 1)
-    call vs_set(base + 4, tail)
-    out = gc_obj(OBJ_LAZY, [gc_nil(), vs_get(base + 1), vs_get(base + 4)], [roots, vs_get(base + 1), vs_get(base + 4)])
+    call vs_set(vst, base + 4, tail)
+    out = gc_obj(OBJ_LAZY, [gc_nil(), vs_get(vst, base + 1), vs_get(vst, base + 4)], [roots, vs_get(vst, base + 1), vs_get(vst, base + 4)])
     call gc_set_i1(out, LAZY_CONS)
     ! i2 = 1 on the realised cell as well: it says "this is a range", which
     ! is what makes it a LongRange to `class` and an IReduceInit to reduce.
     call gc_set_i2(out, 1)
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end function range_cell
 
   ! a + b with Clojure's contagion: double beats ratio beats
@@ -5491,25 +5606,27 @@ contains
   ! (OBJ_LAZY, i2 = 2) holding [f x]; gce_force applies f and builds the
   ! next cell.
   recursive function iterate_cell(f, x, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: f, x
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, spec, tail
     integer :: base
 
-    base = vs_enter(3)
-    call vs_set(base + 1, f)
-    call vs_set(base + 2, x)
-    spec = gcv_empty([roots, vs_get(base + 1), vs_get(base + 2)])
-    spec = gcv_conj(spec, vs_get(base + 1), [roots, vs_get(base + 2), spec])
-    spec = gcv_conj(spec, vs_get(base + 2), [roots, vs_get(base + 1), spec])
-    call vs_set(base + 3, spec)
-    tail = gc_obj(OBJ_LAZY, [vs_get(base + 3), gc_nil(), gc_nil()], [roots, vs_get(base + 2), vs_get(base + 3)])
+    vst => gc_my_stack()
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, f)
+    call vs_set(vst, base + 2, x)
+    spec = gcv_empty([roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    spec = gcv_conj(spec, vs_get(vst, base + 1), [roots, vs_get(vst, base + 2), spec])
+    spec = gcv_conj(spec, vs_get(vst, base + 2), [roots, vs_get(vst, base + 1), spec])
+    call vs_set(vst, base + 3, spec)
+    tail = gc_obj(OBJ_LAZY, [vs_get(vst, base + 3), gc_nil(), gc_nil()], [roots, vs_get(vst, base + 2), vs_get(vst, base + 3)])
     call gc_set_i1(tail, LAZY_PENDING)
     call gc_set_i2(tail, 2)
-    call vs_set(base + 3, tail)
-    out = gc_obj(OBJ_LAZY, [gc_nil(), vs_get(base + 2), vs_get(base + 3)], [roots, vs_get(base + 2), vs_get(base + 3)])
+    call vs_set(vst, base + 3, tail)
+    out = gc_obj(OBJ_LAZY, [gc_nil(), vs_get(vst, base + 2), vs_get(vst, base + 3)], [roots, vs_get(vst, base + 2), vs_get(vst, base + 3)])
     call gc_set_i1(out, LAZY_CONS)
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end function iterate_cell
 
   ! The global environment gce_base_env built and rooted, or nil.
@@ -5555,25 +5672,27 @@ contains
   end subroutine call_compiled
 
   recursive function gce_apply_slots(fn0, argbase, nargs) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: fn0
     integer, intent(in) :: argbase, nargs
     type(gc_value) :: out, fn, av
     integer :: base, j
+    vst => gc_my_stack()
     out = gc_nil()
     fn = strip_meta(fn0)
     if (gcn_is_var(fn)) fn = gcn_var_value(fn)
-    base = vs_enter(2)
-    call vs_set(base + 1, fn)
-    if (gc_kind(vs_get(base + 1)) == OBJ_COMPILED .and. &
-         (gc_i2(vs_get(base + 1)) < 0 .or. gc_i2(vs_get(base + 1)) == nargs)) then
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, fn)
+    if (gc_kind(vs_get(vst, base + 1)) == OBJ_COMPILED .and. &
+         (gc_i2(vs_get(vst, base + 1)) < 0 .or. gc_i2(vs_get(vst, base + 1)) == nargs)) then
        block
          integer :: rb
-         rb = vs_enter(1)
-         call call_compiled(vs_get(base + 1), argbase, nargs, rb + 1)
-         out = vs_get(rb + 1)
-         call vs_leave(rb)
+         rb = vs_enter(vst, 1)
+         call call_compiled(vs_get(vst, base + 1), argbase, nargs, rb + 1)
+         out = vs_get(vst, rb + 1)
+         call vs_leave(vst, rb)
        end block
-       call vs_leave(base)
+       call vs_leave(vst, base)
        return
     end if
     ! A NUMERIC BUILTIN reuses the interpreter's scratch vector and
@@ -5582,14 +5701,14 @@ contains
     ! Without this a compiled loop built a fresh vector for every +
     ! and <, and a profile had the collector at 58% of its time --
     ! the interpreter, which already took this path, allocated none.
-    if (gc_kind(vs_get(base + 1)) == OBJ_BUILTIN .and. (nargs == 1 .or. nargs == 2)) then
-       if (scalar_builtin(gc_i1(vs_get(base + 1)))) then
+    if (gc_kind(vs_get(vst, base + 1)) == OBJ_BUILTIN .and. (nargs == 1 .or. nargs == 2)) then
+       if (scalar_builtin(gc_i1(vs_get(vst, base + 1)))) then
           av = scratch_args(nargs)
           do j = 1, nargs
-             call gc_vec_set(gc_slot(av, 1), j, vs_get(argbase + j))
+             call gc_vec_set(gc_slot(av, 1), j, vs_get(vst, argbase + j))
           end do
-          out = call_builtin(gc_i1(vs_get(base + 1)), av)
-          call vs_leave(base)
+          out = call_builtin(gc_i1(vs_get(vst, base + 1)), av)
+          call vs_leave(vst, base)
           return
        end if
     end if
@@ -5597,24 +5716,24 @@ contains
     ! new vector each time round, which for a two-argument call in a
     ! loop is twice the garbage the interpreter makes.
     if (nargs > 0 .and. nargs <= 32) then
-       av = gcv_build(nargs, [vs_get(base + 1)])
-       call vs_set(base + 2, av)
+       av = gcv_build(nargs, [vs_get(vst, base + 1)])
+       call vs_set(vst, base + 2, av)
        do j = 1, nargs
-          av = gcv_put(vs_get(base + 2), j - 1, vs_get(argbase + j), &
-               [vs_get(base + 1), vs_get(base + 2)])
-          call vs_set(base + 2, av)
+          av = gcv_put(vs_get(vst, base + 2), j - 1, vs_get(vst, argbase + j), &
+               [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+          call vs_set(vst, base + 2, av)
        end do
     else
-       av = gcv_empty([vs_get(base + 1)])
-       call vs_set(base + 2, av)
+       av = gcv_empty([vs_get(vst, base + 1)])
+       call vs_set(vst, base + 2, av)
        do j = 1, nargs
-          av = gcv_conj(vs_get(base + 2), vs_get(argbase + j), &
-               [vs_get(base + 1), vs_get(base + 2)])
-          call vs_set(base + 2, av)
+          av = gcv_conj(vs_get(vst, base + 2), vs_get(vst, argbase + j), &
+               [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+          call vs_set(vst, base + 2, av)
        end do
     end if
-    out = apply(vs_get(base + 1), vs_get(base + 2))
-    call vs_leave(base)
+    out = apply(vs_get(vst, base + 1), vs_get(vst, base + 2))
+    call vs_leave(vst, base)
   end function gce_apply_slots
 
   ! `exec` under a public name: an already-analysed node run in a
@@ -5638,6 +5757,7 @@ contains
   end function gce_apply
 
   recursive function apply(fn0, args) result(out)
+    type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: fn0, args
     type(gc_value) :: out, child, body, params, fn
@@ -5647,6 +5767,7 @@ contains
     ! (with-meta (cons (quote fn*) decl) (meta &form)), so the value a
     ! caller holds is an OBJ_META around the closure. Metadata never
     ! changes what a value IS.
+    vst => gc_my_stack()
     tctx => ctx_self()
     fn = strip_meta(fn0)
     ! A VAR IS CALLABLE. (#'f x) derefs and applies -- core.clj calls
@@ -5654,9 +5775,9 @@ contains
     ! that a redefinition is picked up.
     if (gcn_is_var(fn)) fn = gcn_var_value(fn)
     out = gc_nil()
-    base = vs_enter(4)
-    call vs_set(base + 1, fn)
-    call vs_set(base + 2, args)
+    base = vs_enter(vst, 4)
+    call vs_set(vst, base + 1, fn)
+    call vs_set(vst, base + 2, args)
 
     select case (gc_kind(fn))
     case (OBJ_BUILTIN)
@@ -5675,9 +5796,9 @@ contains
        ! args itself, immediately, and nothing allocates in between
        block
          type(gc_value) :: argl
-         argl = vs_get(base + 2)
-         call vs_set(base + 2, gc_nil())
-         out = invoke_closure(vs_get(base + 1), argl)
+         argl = vs_get(vst, base + 2)
+         call vs_set(vst, base + 2, gc_nil())
+         out = invoke_closure(vs_get(vst, base + 1), argl)
        end block
     case (OBJ_COMPILED)
        ! A compiled procedure. The arguments go into CONSECUTIVE
@@ -5689,24 +5810,24 @@ contains
        block
          type(gc_value) :: av, nmv
          integer :: cb, cn, j
-         av = vs_get(base + 2)
+         av = vs_get(vst, base + 2)
          cn = gcv_count(av)
-         nmv = gc_slot(vs_get(base + 1), 1)
-         if (gc_i2(vs_get(base + 1)) >= 0 .and. gc_i2(vs_get(base + 1)) /= cn) then
+         nmv = gc_slot(vs_get(vst, base + 1), 1)
+         if (gc_i2(vs_get(vst, base + 1)) >= 0 .and. gc_i2(vs_get(vst, base + 1)) /= cn) then
             call raise_class("ArityException", &
                  "Wrong number of args (" // itoa(cn) // ") passed to: " // &
-                 gc_ref_text(nmv%ref), [vs_get(base + 1)])
+                 gc_ref_text(nmv%ref), [vs_get(vst, base + 1)])
          else
             ! slots cb+1 .. cb+cn are the arguments and cb+cn+1 is
             ! where the answer lands, which is the convention every
             ! generated procedure is written to.
-            cb = vs_enter(cn + 1)
+            cb = vs_enter(vst, cn + 1)
             do j = 1, cn
-               call vs_set(cb + j, gcv_nth(av, j - 1))
+               call vs_set(vst, cb + j, gcv_nth(av, j - 1))
             end do
-            call call_compiled(vs_get(base + 1), cb, cn, cb + cn + 1)
-            out = vs_get(cb + cn + 1)
-            call vs_leave(cb)
+            call call_compiled(vs_get(vst, base + 1), cb, cn, cb + cn + 1)
+            out = vs_get(vst, cb + cn + 1)
+            call vs_leave(vst, cb)
          end if
        end block
     case (OBJ_INST)
@@ -5714,11 +5835,11 @@ contains
        ! is its invoke method, with the instance as `this` in front.
        block
          type(gc_value) :: m
-         m = gca_get(gc_slot(gc_slot(fn, 1), 3), gc_key("invoke", [vs_get(base + 1), vs_get(base + 2)]))
+         m = gca_get(gc_slot(gc_slot(fn, 1), 3), gc_key("invoke", [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
          if (gc_kind(m) == OBJ_CLOSURE) then
-            call vs_set(base + 3, m)
-            call vs_set(base + 2, cons_vec(vs_get(base + 1), vs_get(base + 2), [vs_get(base + 3)]))
-            out = apply(vs_get(base + 3), vs_get(base + 2))
+            call vs_set(vst, base + 3, m)
+            call vs_set(vst, base + 2, cons_vec(vs_get(vst, base + 1), vs_get(vst, base + 2), [vs_get(vst, base + 3)]))
+            out = apply(vs_get(vst, base + 3), vs_get(vst, base + 2))
          else
             call fail("not a function: " // gcp_str(fn, .true.))
          end if
@@ -5731,19 +5852,19 @@ contains
          type(gc_value) :: dv, meth
          dv = apply(gc_slot(fn, 2), args)
          if (tctx%has_error) then
-            call vs_leave(base)
+            call vs_leave(vst, base)
             return
          end if
-         call vs_set(base + 3, dv)
-         meth = mf_lookup(vs_get(base + 1), vs_get(base + 3), [vs_get(base + 1), vs_get(base + 3)])
+         call vs_set(vst, base + 3, dv)
+         meth = mf_lookup(vs_get(vst, base + 1), vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
          if (tctx%has_error) then
-            call vs_leave(base)
+            call vs_leave(vst, base)
             return
          end if
          if (meth%tag == GCT_NIL) then
             call raise_class("IllegalArgumentException", "No method in multimethod '" // &
-                 gcp_str(gc_slot(vs_get(base + 1), 1), .false.) // &
-                 "' for dispatch value: " // gcp_str(vs_get(base + 3), .true.), [vs_get(base + 1)])
+                 gcp_str(gc_slot(vs_get(vst, base + 1), 1), .false.) // &
+                 "' for dispatch value: " // gcp_str(vs_get(vst, base + 3), .true.), [vs_get(vst, base + 1)])
          else
             out = apply(meth, args)
          end if
@@ -5764,7 +5885,7 @@ contains
                write(cbuf, '(I0)') gcv_count(args)
             end if
             call raise_class("ArityException", "Wrong number of args (" // trim(cbuf) // &
-                 ") passed to: " // gcp_str(fn, .true.), [vs_get(base + 1)])
+                 ") passed to: " // gcp_str(fn, .true.), [vs_get(vst, base + 1)])
           end block
        else if (fn%tag == GCT_SYM) then
           ! A SYMBOL IS CALLABLE too, the same lookup as a keyword's
@@ -5796,7 +5917,7 @@ contains
                if (gc_kind(tgt) == OBJ_INST) then
                   out = inst_lookup(tgt, fn, .false., gc_nil(), khit)
                   if (khit) then
-                     call vs_leave(base)
+                     call vs_leave(vst, base)
                      return
                   end if
                end if
@@ -5843,9 +5964,9 @@ contains
                ! A vector index, narrow by nature; out of range throws
                ! as PersistentVector.nth does.
                if (ix%tag /= GCT_INT) then
-                  call raise_class("IllegalArgumentException", "Key must be integer", [vs_get(base + 1)])
+                  call raise_class("IllegalArgumentException", "Key must be integer", [vs_get(vst, base + 1)])
                else if (ix%ival < 0 .or. ix%ival >= int(gcv_count(fn), gc_ip)) then
-                  call raise_class("IndexOutOfBoundsException", "index out of bounds", [vs_get(base + 1)])
+                  call raise_class("IndexOutOfBoundsException", "index out of bounds", [vs_get(vst, base + 1)])
                else
                   out = gcv_nth(fn, int(ix%ival, kind=4))
                end if
@@ -5856,10 +5977,11 @@ contains
        end if
     end select
 
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end function apply
 
   function call_builtin(id, args) result(out)
+    type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     integer, intent(in) :: id
     type(gc_value), intent(in) :: args
@@ -5870,6 +5992,7 @@ contains
     logical :: hit, checked, promote
     integer :: op
 
+    vst => gc_my_stack()
     tctx => ctx_self()
     out = gc_nil()
     hit = .false.
@@ -5881,8 +6004,8 @@ contains
     ! reads back as NIL rather than failing -- so an agent send
     ! with arguments silently dropped them and (send a + 10) left
     ! the agent alone. Widen this before using another slot.
-    base = vs_enter(4)
-    call vs_set(base + 1, args)
+    base = vs_enter(vst, 4)
+    call vs_set(vst, base + 1, args)
 
     select case (id)
     case (B_ADD, B_SUB, B_MUL, B_UADD, B_USUB, B_UMUL, B_PADD, B_PSUB, B_PMUL)
@@ -5898,8 +6021,8 @@ contains
        if (id == B_UADD .or. id == B_PADD) op = B_ADD
        if (id == B_USUB .or. id == B_PSUB) op = B_SUB
        if (id == B_UMUL .or. id == B_PMUL) op = B_MUL
-       if (.not. numbers_ok(args, n, [vs_get(base + 1)])) then
-          call vs_leave(base)
+       if (.not. numbers_ok(args, n, [vs_get(vst, base + 1)])) then
+          call vs_leave(vst, base)
           return
        end if
        ! Reals used to be IGNORED here. The accumulator read %ival,
@@ -5967,11 +6090,11 @@ contains
                   end if
                end if
                if (dok) then
-                  out = gc_dec(dacc, [vs_get(base + 1)])
+                  out = gc_dec(dacc, [vs_get(vst, base + 1)])
                else
                   call raise_class("ArithmeticException", &
-                       "Rounding necessary", [vs_get(base + 1)])
-                  call vs_leave(base)
+                       "Rounding necessary", [vs_get(vst, base + 1)])
+                  call vs_leave(vst, base)
                   return
                end if
             else if (any_ratio .and. .not. any_real) then
@@ -5990,8 +6113,8 @@ contains
                b = rat_operand(strip_meta(a), hit)
                if (.not. hit) then
                   call raise_class("ArithmeticException", &
-                       "a Ratio of BigInts is not supported (DEVIATIONS 26)", [vs_get(base + 1)])
-                  call vs_leave(base)
+                       "a Ratio of BigInts is not supported (DEVIATIONS 26)", [vs_get(vst, base + 1)])
+                  call vs_leave(vst, base)
                   return
                end if
                qn = gc_numerator(b)
@@ -6001,8 +6124,8 @@ contains
                   b = rat_operand(strip_meta(gcv_nth(args, i)), hit)
                   if (.not. hit) then
                      call raise_class("ArithmeticException", &
-                          "a Ratio of BigInts is not supported (DEVIATIONS 26)", [vs_get(base + 1)])
-                     call vs_leave(base)
+                          "a Ratio of BigInts is not supported (DEVIATIONS 26)", [vs_get(vst, base + 1)])
+                     call vs_leave(vst, base)
                      return
                   end if
                   bn = gc_numerator(b)
@@ -6025,7 +6148,7 @@ contains
                out = gc_ratio(qn, qd)
                ! (* 2N 1/2) is 1N, not 1: a BigInt anywhere keeps the
                ! answer a BigInt when it comes out integral.
-               if (any_big .and. out%tag == GCT_INT) out = gc_big(big_from_i64(out%ival), [vs_get(base + 1)])
+               if (any_big .and. out%tag == GCT_INT) out = gc_big(big_from_i64(out%ival), [vs_get(vst, base + 1)])
             else if (any_real) then
                racc = num_dbl(a)
                if (n == 1 .and. op == B_SUB) racc = -racc
@@ -6055,14 +6178,14 @@ contains
                if (.not. any_big .and. big_fits_i64(bacc)) then
                   out = gc_int(big_to_i64(bacc))
                else
-                  out = gc_big(bacc, [vs_get(base + 1)])
+                  out = gc_big(bacc, [vs_get(vst, base + 1)])
                end if
             else
                acc = a%ival
                if (n == 1 .and. op == B_SUB) then
                   if (checked .and. acc == -huge(acc) - 1_gc_ip) then
-                     call raise_class("ArithmeticException", "long overflow", [vs_get(base + 1)])
-                     call vs_leave(base)
+                     call raise_class("ArithmeticException", "long overflow", [vs_get(vst, base + 1)])
+                     call vs_leave(vst, base)
                      return
                   end if
                   acc = -acc
@@ -6076,8 +6199,8 @@ contains
                      case (B_MUL); hit = mul_overflows(acc, b%ival)
                      end select
                      if (hit) then
-                        call raise_class("ArithmeticException", "long overflow", [vs_get(base + 1)])
-                        call vs_leave(base)
+                        call raise_class("ArithmeticException", "long overflow", [vs_get(vst, base + 1)])
+                        call vs_leave(vst, base)
                         return
                      end if
                   end if
@@ -6127,14 +6250,14 @@ contains
        out = gc_bool(.true.)
        do i = 1, n - 1
           if (.not. deep_equal(gcv_nth(args, i - 1), gcv_nth(args, i), &
-               [vs_get(base + 1)])) then
+               [vs_get(vst, base + 1)])) then
              out = gc_bool(.false.)
              exit
           end if
        end do
     case (B_LT)
-       if (.not. numbers_ok(args, n, [vs_get(base + 1)])) then
-          call vs_leave(base)
+       if (.not. numbers_ok(args, n, [vs_get(vst, base + 1)])) then
+          call vs_leave(vst, base)
           return
        end if
        out = gc_bool(.true.)
@@ -6147,38 +6270,38 @@ contains
           end if
        end do
     case (B_LIST)
-       out = gcl_empty([vs_get(base + 1)])
+       out = gcl_empty([vs_get(vst, base + 1)])
        do i = n - 1, 0, -1
-          out = gcl_cons(gcv_nth(vs_get(base + 1), i), out, [vs_get(base + 1)])
+          out = gcl_cons(gcv_nth(vs_get(vst, base + 1), i), out, [vs_get(vst, base + 1)])
        end do
     case (B_VECTOR)
-       out = vs_get(base + 1)
+       out = vs_get(vst, base + 1)
     case (B_COUNT)
-       a = strip_meta(gcv_nth(vs_get(base + 1), 0))
+       a = strip_meta(gcv_nth(vs_get(vst, base + 1), 0))
        if (gc_kind(a) == OBJ_INST) then
           out = inst_invoke0(a, "count", hit)
           if (hit) then
-             call vs_leave(base)
+             call vs_leave(vst, base)
              return
           end if
        end if
-       out = gc_int(sq_count(gcv_nth(vs_get(base + 1), 0), [vs_get(base + 1)]))
+       out = gc_int(sq_count(gcv_nth(vs_get(vst, base + 1), 0), [vs_get(vst, base + 1)]))
     case (B_FIRST)
-       if (seqable(gcv_nth(vs_get(base + 1), 0))) &
-            out = sq_first(gcv_nth(vs_get(base + 1), 0), [vs_get(base + 1)])
+       if (seqable(gcv_nth(vs_get(vst, base + 1), 0))) &
+            out = sq_first(gcv_nth(vs_get(vst, base + 1), 0), [vs_get(vst, base + 1)])
     case (B_REST)
-       if (seqable(gcv_nth(vs_get(base + 1), 0))) &
-            out = sq_rest(gcv_nth(vs_get(base + 1), 0), [vs_get(base + 1)])
+       if (seqable(gcv_nth(vs_get(vst, base + 1), 0))) &
+            out = sq_rest(gcv_nth(vs_get(vst, base + 1), 0), [vs_get(vst, base + 1)])
     case (B_NEXT)
-       if (.not. seqable(gcv_nth(vs_get(base + 1), 0))) then
-          call vs_leave(base)
+       if (.not. seqable(gcv_nth(vs_get(vst, base + 1), 0))) then
+          call vs_leave(vst, base)
           return
        end if
        ! RT.next is RT.more put through seq: the two differ only in
        ! what an exhausted sequence gives back, nil versus (). Every
        ! `if (next x)` in core.clj rests on that difference.
-       out = to_seq(sq_rest(gcv_nth(vs_get(base + 1), 0), [vs_get(base + 1)]), &
-            [vs_get(base + 1)])
+       out = to_seq(sq_rest(gcv_nth(vs_get(vst, base + 1), 0), [vs_get(vst, base + 1)]), &
+            [vs_get(vst, base + 1)])
     case (B_CONS)
        ! (cons x anything-seqable) is a SEQ, so the tail is seq'd
        ! rather than type-tested: (cons 1 "ab") is (1 \a \b).
@@ -6194,21 +6317,21 @@ contains
          ! forces, and forcing here is not a slowdown but an
          ! infinite loop -- (cons n (from (+ n 1))) would realise
          ! the whole infinite seq to build one cell.
-         tl = gcv_nth(vs_get(base + 1), 1)
+         tl = gcv_nth(vs_get(vst, base + 1), 1)
          if (seqable(tl)) then
          if (gc_kind(tl) /= OBJ_LAZY) &
-              tl = to_seq(tl, [vs_get(base + 1)])
+              tl = to_seq(tl, [vs_get(vst, base + 1)])
          ! An EMPTY tail seq's is to nil, and (cons 1 ()) must still be
          ! the LIST (1), not a lazy cell. Macro expansions are lists,
          ! and the evaluator only recognises a list as a form -- get
          ! this wrong and a macro returns its own expansion unevaluated.
-         if (tl%tag == GCT_NIL) tl = gcl_empty([vs_get(base + 1)])
+         if (tl%tag == GCT_NIL) tl = gcl_empty([vs_get(vst, base + 1)])
          if (gcl_is(tl)) then
-            out = gcl_cons(gcv_nth(vs_get(base + 1), 0), tl, [vs_get(base + 1), tl])
+            out = gcl_cons(gcv_nth(vs_get(vst, base + 1), 0), tl, [vs_get(vst, base + 1), tl])
          else
             out = gc_obj(OBJ_LAZY, &
-                 [gc_nil(), gcv_nth(vs_get(base + 1), 0), tl], &
-                 [vs_get(base + 1), tl])
+                 [gc_nil(), gcv_nth(vs_get(vst, base + 1), 0), tl], &
+                 [vs_get(vst, base + 1), tl])
             call gc_set_i1(out, LAZY_CONS)
          end if
          end if
@@ -6218,9 +6341,9 @@ contains
          character(len=:), allocatable :: acc2
          acc2 = ""
          do i = 0, n - 1
-            acc2 = acc2 // to_string_text(gcv_nth(vs_get(base + 1), i))
+            acc2 = acc2 // to_string_text(gcv_nth(vs_get(vst, base + 1), i))
          end do
-         out = gc_str(acc2, [vs_get(base + 1)])
+         out = gc_str(acc2, [vs_get(vst, base + 1)])
        end block
     case (B_NOT)
        out = gc_bool(.not. truthy(gcv_nth(args, 0)))
@@ -6234,31 +6357,31 @@ contains
        block
          type(gc_value) :: coll, idx, walk
          integer :: want, k
-         coll = gcv_nth(vs_get(base + 1), 0)
-         idx = as_index(gcv_nth(vs_get(base + 1), 1))
+         coll = gcv_nth(vs_get(vst, base + 1), 0)
+         idx = as_index(gcv_nth(vs_get(vst, base + 1), 1))
          want = int(idx%ival)
          out = gc_nil()
          if (gc_kind(coll) == OBJ_CHUNK) then
             out = chunk_nth(coll, want)
          else if (gcv_is(coll) .or. coll%tag == GCT_STR) then
             if (want >= 0 .and. want < seq_len(coll)) &
-                 out = seq_elem(coll, want, [vs_get(base + 1)])
+                 out = seq_elem(coll, want, [vs_get(vst, base + 1)])
          else if (want >= 0) then
-            walk = to_seq(coll, [vs_get(base + 1)])
+            walk = to_seq(coll, [vs_get(vst, base + 1)])
             do k = 1, want
-               walk = sq_rest(walk, [vs_get(base + 1)])
-               walk = to_seq(walk, [vs_get(base + 1)])
+               walk = sq_rest(walk, [vs_get(vst, base + 1)])
+               walk = to_seq(walk, [vs_get(vst, base + 1)])
             end do
-            if (walk%tag /= GCT_NIL) out = sq_first(walk, [vs_get(base + 1)])
+            if (walk%tag /= GCT_NIL) out = sq_first(walk, [vs_get(vst, base + 1)])
          end if
-         if (out%tag == GCT_NIL .and. n >= 3) out = gcv_nth(vs_get(base + 1), 2)
+         if (out%tag == GCT_NIL .and. n >= 3) out = gcv_nth(vs_get(vst, base + 1), 2)
        end block
     case (B_GET)
        a = strip_meta(gcv_nth(args, 0))
        if (gc_kind(a) == OBJ_INST) then
           out = inst_lookup(a, gcv_nth(args, 1), n >= 3, gcv_nth(args, 2), hit)
           if (hit) then
-             call vs_leave(base)
+             call vs_leave(vst, base)
              return
           end if
        end if
@@ -6271,15 +6394,15 @@ contains
        ! able to build a path that does not exist yet. Returning nil
        ! made (assoc-in {} [:impls t] m) produce {:impls nil}, so every
        ! protocol extension was silently discarded.
-       a = strip_meta(gcv_nth(vs_get(base + 1), 0))
+       a = strip_meta(gcv_nth(vs_get(vst, base + 1), 0))
        if (gc_kind(a) == OBJ_INST) then
-          out = inst_invoke(a, "assoc", rest_args(vs_get(base + 1), 1), hit)
+          out = inst_invoke(a, "assoc", rest_args(vs_get(vst, base + 1), 1), hit)
           if (hit) then
-             call vs_leave(base)
+             call vs_leave(vst, base)
              return
           end if
        end if
-       if (a%tag == GCT_NIL) a = gca_empty([vs_get(base + 1)])
+       if (a%tag == GCT_NIL) a = gca_empty([vs_get(vst, base + 1)])
        if (gcv_is(a)) then
           ! A VECTOR IS ASSOCIATIVE BY INDEX, and assoc on one
           ! answered nil -- gca_assoc only knows maps. An index
@@ -6289,44 +6412,44 @@ contains
           ! is built entirely out of this.
           block
             type(gc_value) :: ix
-            ix = strip_meta(gcv_nth(vs_get(base + 1), 1))
+            ix = strip_meta(gcv_nth(vs_get(vst, base + 1), 1))
             if (ix%tag /= GCT_INT) then
                call fail("assoc: a vector takes an integer key")
             else if (ix%ival == int(gcv_count(a), gc_ip)) then
-               out = gcv_conj(a, gcv_nth(vs_get(base + 1), 2), [vs_get(base + 1)])
+               out = gcv_conj(a, gcv_nth(vs_get(vst, base + 1), 2), [vs_get(vst, base + 1)])
             else if (ix%ival >= 0 .and. ix%ival < int(gcv_count(a), gc_ip)) then
                out = gcv_assoc(a, int(ix%ival), &
-                    gcv_nth(vs_get(base + 1), 2), [vs_get(base + 1)])
+                    gcv_nth(vs_get(vst, base + 1), 2), [vs_get(vst, base + 1)])
             else
                call fail("Index out of bounds")
             end if
           end block
        else
           out = gca_assoc(a, &
-               gcv_nth(vs_get(base + 1), 1), &
-               gcv_nth(vs_get(base + 1), 2), [vs_get(base + 1)])
+               gcv_nth(vs_get(vst, base + 1), 1), &
+               gcv_nth(vs_get(vst, base + 1), 2), [vs_get(vst, base + 1)])
        end if
-       out = keep_meta(gcv_nth(vs_get(base + 1), 0), out, [vs_get(base + 1)])
+       out = keep_meta(gcv_nth(vs_get(vst, base + 1), 0), out, [vs_get(vst, base + 1)])
     case (B_KEYS, B_VALS)
-       a = strip_meta(gcv_nth(vs_get(base + 1), 0))
+       a = strip_meta(gcv_nth(vs_get(vst, base + 1), 0))
        if (gc_kind(a) == OBJ_INST) then
           out = inst_entries(a, id == B_KEYS, hit)
           if (hit) then
-             call vs_leave(base)
+             call vs_leave(vst, base)
              return
           end if
        end if
        block
          type(gc_value), allocatable :: ks(:), vls(:)
-         call gca_entries(strip_meta(gcv_nth(vs_get(base + 1), 0)), ks, vls)
+         call gca_entries(strip_meta(gcv_nth(vs_get(vst, base + 1), 0)), ks, vls)
          ! nil for an empty map, as RT.keys and RT.vals answer
          out = gc_nil()
-         if (size(ks) > 0) out = gcl_empty([vs_get(base + 1)])
+         if (size(ks) > 0) out = gcl_empty([vs_get(vst, base + 1)])
          do i = size(ks), 1, -1
             if (id == B_KEYS) then
-               out = gcl_cons(ks(i), out, [vs_get(base + 1), out])
+               out = gcl_cons(ks(i), out, [vs_get(vst, base + 1), out])
             else
-               out = gcl_cons(vls(i), out, [vs_get(base + 1), out])
+               out = gcl_cons(vls(i), out, [vs_get(vst, base + 1), out])
             end if
          end do
        end block
@@ -6338,34 +6461,34 @@ contains
        ! VARIADIC: (conj [] 1 2) is [1 2]. Taking only the first item
        ! silently dropped the rest, which is how maybe-destructured
        ! built a one-element parameter vector.
-       a = strip_meta(gcv_nth(vs_get(base + 1), 0))
+       a = strip_meta(gcv_nth(vs_get(vst, base + 1), 0))
        if (gc_kind(a) == OBJ_INST) then
           ! a record's own cons, one argument at a time; it keeps its
           ! metadata itself. conj1 answered a list of the entries.
           block
             type(gc_value) :: one
             do i = 1, n - 1
-               call vs_set(base + 2, a)
-               one = gcv_conj(gcv_empty([vs_get(base + 1), vs_get(base + 2)]), gcv_nth(vs_get(base + 1), i), &
-                    [vs_get(base + 1), vs_get(base + 2)])
-               call vs_set(base + 3, one)
-               a = inst_invoke(vs_get(base + 2), "cons", vs_get(base + 3), hit)
-               if (.not. hit) a = conj1(vs_get(base + 2), gcv_nth(vs_get(base + 1), i), [vs_get(base + 1)])
+               call vs_set(vst, base + 2, a)
+               one = gcv_conj(gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)]), gcv_nth(vs_get(vst, base + 1), i), &
+                    [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+               call vs_set(vst, base + 3, one)
+               a = inst_invoke(vs_get(vst, base + 2), "cons", vs_get(vst, base + 3), hit)
+               if (.not. hit) a = conj1(vs_get(vst, base + 2), gcv_nth(vs_get(vst, base + 1), i), [vs_get(vst, base + 1)])
                if (tctx%has_error) exit
             end do
             out = a
           end block
        else
           do i = 1, n - 1
-             a = conj1(a, gcv_nth(vs_get(base + 1), i), [vs_get(base + 1)])
-             call vs_set(base + 2, a)
+             a = conj1(a, gcv_nth(vs_get(vst, base + 1), i), [vs_get(vst, base + 1)])
+             call vs_set(vst, base + 2, a)
           end do
-          out = keep_meta(gcv_nth(vs_get(base + 1), 0), a, [vs_get(base + 1)])
+          out = keep_meta(gcv_nth(vs_get(vst, base + 1), 0), a, [vs_get(vst, base + 1)])
        end if
     case (B_EMPTY)
        block
          type(gc_value) :: sv
-         sv = to_seq(gcv_nth(vs_get(base + 1), 0), [vs_get(base + 1)])
+         sv = to_seq(gcv_nth(vs_get(vst, base + 1), 0), [vs_get(vst, base + 1)])
          out = gc_bool(sv%tag == GCT_NIL)
        end block
     case (B_APPLY)
@@ -6374,18 +6497,18 @@ contains
        block
          type(gc_value) :: fargs, last, f, arities, ar, s, v
          integer :: j, req
-         fargs = gcv_empty([vs_get(base + 1)])
+         fargs = gcv_empty([vs_get(vst, base + 1)])
          do j = 1, n - 2
-            fargs = gcv_conj(fargs, gcv_nth(vs_get(base + 1), j), [vs_get(base + 1), fargs])
+            fargs = gcv_conj(fargs, gcv_nth(vs_get(vst, base + 1), j), [vs_get(vst, base + 1), fargs])
          end do
-         call vs_set(base + 2, fargs)
+         call vs_set(vst, base + 2, fargs)
          ! A variadic closure gets its rest AS IT IS. RestFn.applyTo walks
          ! the seq only as far as the required arity; what follows is the
          ! rest argument, unrealised, so (apply f 1 (range)) hands f an
          ! infinite seq instead of realising a million elements first.
          ! Anything else -- a native, a keyword, a fixed-arity fn -- takes
          ! its arguments spread, as below.
-         f = strip_meta(gcv_nth(vs_get(base + 1), 0))
+         f = strip_meta(gcv_nth(vs_get(vst, base + 1), 0))
          if (gcn_is_var(f)) f = strip_meta(gcn_var_value(f))
          req = -1
          if (gc_kind(f) == OBJ_CLOSURE) then
@@ -6396,39 +6519,39 @@ contains
             end do
          end if
          if (req >= 0) then
-            s = to_seq(gcv_nth(vs_get(base + 1), n - 1), [vs_get(base + 1), vs_get(base + 2)])
-            call vs_set(base + 3, s)
+            s = to_seq(gcv_nth(vs_get(vst, base + 1), n - 1), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+            call vs_set(vst, base + 3, s)
             ! the fixed arguments still wanted come off the front of the seq
-            do while (gcv_count(vs_get(base + 2)) < req .and. s%tag /= GCT_NIL .and. .not. tctx%has_error)
-               v = sq_first(vs_get(base + 3), [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-               fargs = gcv_conj(vs_get(base + 2), v, [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), v])
-               call vs_set(base + 2, fargs)
-               s = sq_rest(vs_get(base + 3), [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-               call vs_set(base + 3, s)
-               s = to_seq(vs_get(base + 3), [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-               call vs_set(base + 3, s)
+            do while (gcv_count(vs_get(vst, base + 2)) < req .and. s%tag /= GCT_NIL .and. .not. tctx%has_error)
+               v = sq_first(vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+               fargs = gcv_conj(vs_get(vst, base + 2), v, [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), v])
+               call vs_set(vst, base + 2, fargs)
+               s = sq_rest(vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+               call vs_set(vst, base + 3, s)
+               s = to_seq(vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+               call vs_set(vst, base + 3, s)
             end do
             if (tctx%has_error) then
                continue
-            else if (gcv_count(vs_get(base + 2)) > req .or. s%tag /= GCT_NIL) then
+            else if (gcv_count(vs_get(vst, base + 2)) > req .or. s%tag /= GCT_NIL) then
                ! leading arguments past the fixed ones go onto the seq as it is
-               do j = gcv_count(vs_get(base + 2)) - 1, req, -1
-                  s = seq_cons(gcv_nth(vs_get(base + 2), j), vs_get(base + 3), &
-                       [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-                  call vs_set(base + 3, s)
+               do j = gcv_count(vs_get(vst, base + 2)) - 1, req, -1
+                  s = seq_cons(gcv_nth(vs_get(vst, base + 2), j), vs_get(vst, base + 3), &
+                       [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+                  call vs_set(vst, base + 3, s)
                end do
-               fargs = gcv_empty([vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-               call vs_set(base + 4, fargs)
+               fargs = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+               call vs_set(vst, base + 4, fargs)
                do j = 0, req - 1
-                  fargs = gcv_conj(vs_get(base + 4), gcv_nth(vs_get(base + 2), j), &
-                       [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 4)])
-                  call vs_set(base + 4, fargs)
+                  fargs = gcv_conj(vs_get(vst, base + 4), gcv_nth(vs_get(vst, base + 2), j), &
+                       [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+                  call vs_set(vst, base + 4, fargs)
                end do
-               out = invoke_closure(f, vs_get(base + 4), vs_get(base + 3))
+               out = invoke_closure(f, vs_get(vst, base + 4), vs_get(vst, base + 3))
             else
                ! too few for the variadic arity: spread, and a fixed arity may match
-               fargs = vs_get(base + 2)
-               out = apply(gcv_nth(vs_get(base + 1), 0), fargs)
+               fargs = vs_get(vst, base + 2)
+               out = apply(gcv_nth(vs_get(vst, base + 1), 0), fargs)
             end if
          else
          ! Through coll_to_vector, not a two-case count: the last
@@ -6436,23 +6559,23 @@ contains
          ! vector as often as it is a list, and counting only lists and
          ! vectors made (apply f (seq xs)) call f with no arguments at
          ! all. Bounded, so (apply + (range)) is an error and not a hang.
-         last = coll_to_vector(gcv_nth(vs_get(base + 1), n - 1), &
-              [vs_get(base + 1), vs_get(base + 2)], limit=1000000)
-         call vs_set(base + 3, last)
-         fargs = vs_get(base + 2)
-         do j = 0, gcv_count(vs_get(base + 3)) - 1
-            fargs = gcv_conj(fargs, gcv_nth(vs_get(base + 3), j), &
-                 [vs_get(base + 1), vs_get(base + 3)])
-            call vs_set(base + 2, fargs)
+         last = coll_to_vector(gcv_nth(vs_get(vst, base + 1), n - 1), &
+              [vs_get(vst, base + 1), vs_get(vst, base + 2)], limit=1000000)
+         call vs_set(vst, base + 3, last)
+         fargs = vs_get(vst, base + 2)
+         do j = 0, gcv_count(vs_get(vst, base + 3)) - 1
+            fargs = gcv_conj(fargs, gcv_nth(vs_get(vst, base + 3), j), &
+                 [vs_get(vst, base + 1), vs_get(vst, base + 3)])
+            call vs_set(vst, base + 2, fargs)
          end do
-         fargs = vs_get(base + 2)
-         if (.not. tctx%has_error) out = apply(gcv_nth(vs_get(base + 1), 0), fargs)
+         fargs = vs_get(vst, base + 2)
+         if (.not. tctx%has_error) out = apply(gcv_nth(vs_get(vst, base + 1), 0), fargs)
          end if
        end block
     case (B_PRN)
        do i = 0, n - 1
           if (i > 0) write(*, '(A)', advance='no') " "
-          write(*, '(A)', advance='no') gcp_str(gcv_nth(vs_get(base + 1), i), .true.)
+          write(*, '(A)', advance='no') gcp_str(gcv_nth(vs_get(vst, base + 1), i), .true.)
        end do
        write(*, '(A)') ""
        out = gc_nil()
@@ -6469,27 +6592,27 @@ contains
        !
        ! It also arrives WRAPPED, since core.clj's own first form is
        ! (ns ^{:doc ...} clojure.core).
-       a = strip_meta(gcv_nth(vs_get(base + 1), 2))
+       a = strip_meta(gcv_nth(vs_get(vst, base + 1), 2))
        if (a%tag /= GCT_SYM) then
           call fail("ns needs a symbol name")
        else
-          out = gcn_find_or_create(gc_ref_text(a%ref), [vs_get(base + 1)])
+          out = gcn_find_or_create(gc_ref_text(a%ref), [vs_get(vst, base + 1)])
           call gcn_set_current(out)
        end if
     case (B_INNS)
        ! A FUNCTION, not a macro -- RT.java interns inNamespace without
        ! setMacro, so (in-ns 'user) evaluates its argument.
-       a = strip_meta(gcv_nth(vs_get(base + 1), 0))
+       a = strip_meta(gcv_nth(vs_get(vst, base + 1), 0))
        if (a%tag /= GCT_SYM) then
           call fail("in-ns needs a symbol")
        else
-          out = gcn_find_or_create(gc_ref_text(a%ref), [vs_get(base + 1)])
+          out = gcn_find_or_create(gc_ref_text(a%ref), [vs_get(vst, base + 1)])
           call gcn_set_current(out)
        end if
     case (B_META)
        ! A Var keeps its metadata in slot 2; anything else carries it
        ! in a wrapper. nil when there is none, as Clojure's meta does.
-       a = gcv_nth(vs_get(base + 1), 0)
+       a = gcv_nth(vs_get(vst, base + 1), 0)
        out = gc_nil()
        if (gcn_is_var(a) .or. gc_kind(a) == OBJ_NS .or. gc_kind(a) == OBJ_ATOM) then
           ! An atom, ref or agent is an IReference: it carries its own
@@ -6501,7 +6624,7 @@ contains
           out = gc_slot(a, 2)
        else if (gc_kind(a) == OBJ_INST) then
           ! a record answers its own meta; a reify keeps it in slot 3
-          out = inst_invoke(a, "meta", gcv_empty([vs_get(base + 1)]), hit)
+          out = inst_invoke(a, "meta", gcv_empty([vs_get(vst, base + 1)]), hit)
           if (.not. hit) out = gc_slot(a, 3)
        end if
     case (B_WITHMETA)
@@ -6510,29 +6633,29 @@ contains
        ! one -- and defn calls (with-meta name m) on a name the reader
        ! already wrapped, so nesting buried the symbol two deep and the
        ! Var got interned under a wrapper nobody could name.
-       a = strip_meta(gcv_nth(vs_get(base + 1), 0))
+       a = strip_meta(gcv_nth(vs_get(vst, base + 1), 0))
        if (gc_kind(a) == OBJ_INST) then
           ! a record carries its own metadata: its withMeta, not a wrapper
-          out = inst_invoke(a, "withMeta", rest_args(vs_get(base + 1), 1), hit)
+          out = inst_invoke(a, "withMeta", rest_args(vs_get(vst, base + 1), 1), hit)
           if (.not. hit) then
              ! a reify (or any deftype instance): the same type and
              ! fields under the new metadata, in slot 3
-             out = gc_obj(OBJ_INST, [gc_slot(a, 1), gc_slot(a, 2), gcv_nth(vs_get(base + 1), 1)], &
-                  [vs_get(base + 1)])
+             out = gc_obj(OBJ_INST, [gc_slot(a, 1), gc_slot(a, 2), gcv_nth(vs_get(vst, base + 1), 1)], &
+                  [vs_get(vst, base + 1)])
           end if
-          call vs_leave(base)
+          call vs_leave(vst, base)
           return
        end if
        out = gc_obj(OBJ_META, &
-            [strip_meta(gcv_nth(vs_get(base + 1), 0)), gcv_nth(vs_get(base + 1), 1)], &
-            [vs_get(base + 1)])
+            [strip_meta(gcv_nth(vs_get(vst, base + 1), 0)), gcv_nth(vs_get(vst, base + 1), 1)], &
+            [vs_get(vst, base + 1)])
     case (B_QUOT, B_REM)
        ! Both used to read %ival only, so (quot 7.0 2) answered 0
        ! rather than 3.0 -- the same silent discard that + - * had.
        ! A zero divisor was not checked either: Clojure raises
        ! "Divide by zero" here for doubles as well as integers,
-       if (.not. numbers_ok(args, n, [vs_get(base + 1)])) then
-          call vs_leave(base)
+       if (.not. numbers_ok(args, n, [vs_get(vst, base + 1)])) then
+          call vs_leave(vst, base)
           return
        end if
        ! unlike `/`, where (/ 1.0 0) is ##Inf.
@@ -6541,13 +6664,13 @@ contains
        ! (quot 10.5M 3) is 3.0M and (rem 10.5M 3) is 1.5M.
        if ((a%tag == GCT_DEC .or. b%tag == GCT_DEC) .and. exact_num(a) .and. exact_num(b)) then
           if (dec_is_zero(dec_of(b))) then
-             call raise_class("ArithmeticException", "Divide by zero", [vs_get(base + 1)])
+             call raise_class("ArithmeticException", "Divide by zero", [vs_get(vst, base + 1)])
           else if (id == B_QUOT) then
-             out = gc_dec(dec_quot(dec_of(a), dec_of(b)), [vs_get(base + 1)])
+             out = gc_dec(dec_quot(dec_of(a), dec_of(b)), [vs_get(vst, base + 1)])
           else
-             out = gc_dec(dec_rem(dec_of(a), dec_of(b)), [vs_get(base + 1)])
+             out = gc_dec(dec_rem(dec_of(a), dec_of(b)), [vs_get(vst, base + 1)])
           end if
-          call vs_leave(base)
+          call vs_leave(vst, base)
           return
        end if
        ! Exact, truncating toward zero, with the remainder taking the
@@ -6557,17 +6680,17 @@ contains
           block
             character(len=:), allocatable :: bq, br
             if (big_of(b) == "0") then
-               call raise_class("ArithmeticException", "Divide by zero", [vs_get(base + 1)])
+               call raise_class("ArithmeticException", "Divide by zero", [vs_get(vst, base + 1)])
             else
                call big_divmod(big_of(a), big_of(b), bq, br)
                if (id == B_QUOT) then
-                  out = gc_big(bq, [vs_get(base + 1)])
+                  out = gc_big(bq, [vs_get(vst, base + 1)])
                else
-                  out = gc_big(br, [vs_get(base + 1)])
+                  out = gc_big(br, [vs_get(vst, base + 1)])
                end if
             end if
           end block
-          call vs_leave(base)
+          call vs_leave(vst, base)
           return
        end if
        if (is_ratio(a) .or. is_ratio(b)) then
@@ -6607,46 +6730,46 @@ contains
           out = gc_int(mod(a%ival, b%ival))
        end if
     case (B_SECOND)
-       out = sq_first(sq_rest(gcv_nth(vs_get(base + 1), 0), [vs_get(base + 1)]), &
-            [vs_get(base + 1)])
+       out = sq_first(sq_rest(gcv_nth(vs_get(vst, base + 1), 0), [vs_get(vst, base + 1)]), &
+            [vs_get(vst, base + 1)])
     case (B_SEQ)
-       a = strip_meta(gcv_nth(vs_get(base + 1), 0))
+       a = strip_meta(gcv_nth(vs_get(vst, base + 1), 0))
        if (n >= 2) then
           ! (. sc seq ascending?), which subseq and rsubseq use
           if (.not. truthy(gcv_nth(args, 1))) then
-             out = reverse_seq(a, [vs_get(base + 1)])
-             call vs_leave(base)
+             out = reverse_seq(a, [vs_get(vst, base + 1)])
+             call vs_leave(vst, base)
              return
           end if
        end if
        if (gc_kind(a) == OBJ_INST) then
           out = inst_invoke0(a, "seq", hit)
           if (hit) then
-             call vs_leave(base)
+             call vs_leave(vst, base)
              return
           end if
        end if
-       if (seqable(gcv_nth(vs_get(base + 1), 0))) &
-            out = to_seq(gcv_nth(vs_get(base + 1), 0), [vs_get(base + 1)])
+       if (seqable(gcv_nth(vs_get(vst, base + 1), 0))) &
+            out = to_seq(gcv_nth(vs_get(vst, base + 1), 0), [vs_get(vst, base + 1)])
     case (B_DISSOC)
-       a = strip_meta(gcv_nth(vs_get(base + 1), 0))
+       a = strip_meta(gcv_nth(vs_get(vst, base + 1), 0))
        if (gc_kind(a) == OBJ_INST) then
-          out = inst_invoke(a, "without", rest_args(vs_get(base + 1), 1), hit)
+          out = inst_invoke(a, "without", rest_args(vs_get(vst, base + 1), 1), hit)
           if (hit) then
-             call vs_leave(base)
+             call vs_leave(vst, base)
              return
           end if
        end if
        ! on the map UNDER any metadata, which the result keeps -- given
        ! the wrapper, gca_dissoc saw no map and answered it unchanged,
        ! so a record's own field would not dissoc
-       out = gca_dissoc(a, gcv_nth(vs_get(base + 1), 1), [vs_get(base + 1)])
-       out = keep_meta(gcv_nth(vs_get(base + 1), 0), out, [vs_get(base + 1)])
+       out = gca_dissoc(a, gcv_nth(vs_get(vst, base + 1), 1), [vs_get(vst, base + 1)])
+       out = keep_meta(gcv_nth(vs_get(vst, base + 1), 0), out, [vs_get(vst, base + 1)])
     case (B_NAME)
        ! The NAME PART, without the namespace: (name (quote a/b)) is
        ! "b". Returning the whole text made every qualified symbol
        ! answer with its qualifier still attached.
-       out = gc_str(name_part(gcv_nth(args, 0)), [vs_get(base + 1)])
+       out = gc_str(name_part(gcv_nth(args, 0)), [vs_get(vst, base + 1)])
     case (B_GETNAME)
        ! .getName answers in the type the host uses: a Namespace gives
        ! back a SYMBOL (which is what ns-name returns), everything else
@@ -6654,9 +6777,9 @@ contains
        ! answer, (.name *ns*) in clojure.spec.alpha's ns-qualify.
        a = strip_meta(gcv_nth(args, 0))
        if (gc_kind(a) == OBJ_NS) then
-          out = gc_sym(gcn_name(a), [vs_get(base + 1)])
+          out = gc_sym(gcn_name(a), [vs_get(vst, base + 1)])
        else
-          out = gc_str(name_part(a), [vs_get(base + 1)])
+          out = gc_str(name_part(a), [vs_get(vst, base + 1)])
        end if
     case (B_KEYWORD, B_SYMBOL2)
        ! Two arguments make a QUALIFIED name: (symbol "clojure.core"
@@ -6698,9 +6821,9 @@ contains
             end block
          end if
          if (id == B_KEYWORD) then
-            out = gc_key(t, [vs_get(base + 1)])
+            out = gc_key(t, [vs_get(vst, base + 1)])
          else
-            out = gc_sym(t, [vs_get(base + 1)])
+            out = gc_sym(t, [vs_get(vst, base + 1)])
          end if
        end block
 
@@ -6710,8 +6833,8 @@ contains
          integer :: lo, hi
          a = gcv_nth(args, 0)
          if (a%tag == GCT_NIL) then
-            call raise_class("NullPointerException", "subs of nil", [vs_get(base + 1)])
-            call vs_leave(base)
+            call raise_class("NullPointerException", "subs of nil", [vs_get(vst, base + 1)])
+            call vs_leave(vst, base)
             return
          end if
          t = gc_ref_text(a%ref)
@@ -6723,46 +6846,46 @@ contains
             hi = int(b%ival)
          end if
          if (lo < 0 .or. hi > u8_count(t) .or. lo > hi) then
-            call raise_class("StringIndexOutOfBoundsException", "Range [" // trim(itoa(lo)) // ", " // trim(itoa(hi)) // ") out of bounds for length " // trim(itoa(u8_count(t))), [vs_get(base + 1)])
+            call raise_class("StringIndexOutOfBoundsException", "Range [" // trim(itoa(lo)) // ", " // trim(itoa(hi)) // ") out of bounds for length " // trim(itoa(u8_count(t))), [vs_get(vst, base + 1)])
          else
-            out = gc_str(u8_slice(t, lo, hi), [vs_get(base + 1)])
+            out = gc_str(u8_slice(t, lo, hi), [vs_get(vst, base + 1)])
          end if
        end block
     case (B_VEC)
-       out = coll_to_vector(gcv_nth(args, 0), [vs_get(base + 1)])
+       out = coll_to_vector(gcv_nth(args, 0), [vs_get(vst, base + 1)])
     case (B_HMAP)
        ! A flat seq of alternating keys and values, which is the shape
        ! PersistentHashMap.create takes.
        block
          type(gc_value) :: items, mp
          integer :: i2
-         items = coll_to_vector(gcv_nth(args, 0), [vs_get(base + 1)])
-         call vs_set(base + 2, items)
-         mp = gca_empty([vs_get(base + 1), vs_get(base + 2)])
-         call vs_set(base + 3, mp)
-         do i2 = 0, gcv_count(vs_get(base + 2)) - 2, 2
-            mp = gca_assoc(vs_get(base + 3), gcv_nth(vs_get(base + 2), i2), &
-                 gcv_nth(vs_get(base + 2), i2 + 1), &
-                 [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-            call vs_set(base + 3, mp)
+         items = coll_to_vector(gcv_nth(args, 0), [vs_get(vst, base + 1)])
+         call vs_set(vst, base + 2, items)
+         mp = gca_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
+         call vs_set(vst, base + 3, mp)
+         do i2 = 0, gcv_count(vs_get(vst, base + 2)) - 2, 2
+            mp = gca_assoc(vs_get(vst, base + 3), gcv_nth(vs_get(vst, base + 2), i2), &
+                 gcv_nth(vs_get(vst, base + 2), i2 + 1), &
+                 [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+            call vs_set(vst, base + 3, mp)
          end do
-         out = vs_get(base + 3)
+         out = vs_get(vst, base + 3)
        end block
     case (B_HSET)
        block
          type(gc_value) :: items, mp
          integer :: i2
-         items = coll_to_vector(gcv_nth(args, 0), [vs_get(base + 1)])
-         call vs_set(base + 2, items)
-         mp = gca_empty([vs_get(base + 1), vs_get(base + 2)])
-         call vs_set(base + 3, mp)
-         do i2 = 0, gcv_count(vs_get(base + 2)) - 1
-            mp = gca_assoc(vs_get(base + 3), gcv_nth(vs_get(base + 2), i2), &
-                 gcv_nth(vs_get(base + 2), i2), &
-                 [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-            call vs_set(base + 3, mp)
+         items = coll_to_vector(gcv_nth(args, 0), [vs_get(vst, base + 1)])
+         call vs_set(vst, base + 2, items)
+         mp = gca_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
+         call vs_set(vst, base + 3, mp)
+         do i2 = 0, gcv_count(vs_get(vst, base + 2)) - 1
+            mp = gca_assoc(vs_get(vst, base + 3), gcv_nth(vs_get(vst, base + 2), i2), &
+                 gcv_nth(vs_get(vst, base + 2), i2), &
+                 [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+            call vs_set(vst, base + 3, mp)
          end do
-         out = gc_obj(OBJ_SET, [vs_get(base + 3)], [vs_get(base + 3)])
+         out = gc_obj(OBJ_SET, [vs_get(vst, base + 3)], [vs_get(vst, base + 3)])
        end block
     case (B_BITAND, B_BITOR, B_BITXOR, B_SHL, B_SHR, B_BITANDNOT, B_USHR)
        ! A bit operation is defined on FIXED-WIDTH integers only, and
@@ -6772,8 +6895,8 @@ contains
        a = strip_meta(gcv_nth(args, 0)); b = strip_meta(gcv_nth(args, 1))
        if (a%tag /= GCT_INT .or. (n >= 2 .and. b%tag /= GCT_INT)) then
           call raise_class("IllegalArgumentException", "bit operation not supported for: " // &
-               class_name_of(merge(b, a, a%tag == GCT_INT)), [vs_get(base + 1)])
-          call vs_leave(base)
+               class_name_of(merge(b, a, a%tag == GCT_INT)), [vs_get(vst, base + 1)])
+          call vs_leave(vst, base)
           return
        end if
        select case (id)
@@ -6813,11 +6936,11 @@ contains
             ! and intCast of a DOUBLE -- throws IllegalArgumentException
             ! naming the value.
             if (id == B_CHKINT .and. a%tag /= GCT_REAL) then
-               call raise_class("ArithmeticException", "integer overflow", [vs_get(base + 1)])
+               call raise_class("ArithmeticException", "integer overflow", [vs_get(vst, base + 1)])
             else
                call raise_class("IllegalArgumentException", &
                     "Value out of range for " // trim(cast_width_name(id)) // ": " // to_string_text(a), &
-                    [vs_get(base + 1)])
+                    [vs_get(vst, base + 1)])
             end if
          else
             out = gc_int(w)
@@ -6880,10 +7003,10 @@ contains
           out = a
        else
           ! ((Number) x).longValue(): not a number is not a long
-          call raise_number_cast(a, [vs_get(base + 1)])
+          call raise_number_cast(a, [vs_get(vst, base + 1)])
        end if
     case (B_ANEWINST)
-       out = array_new_instance(vs_get(base + 1), [vs_get(base + 1)])
+       out = array_new_instance(vs_get(vst, base + 1), [vs_get(vst, base + 1)])
 
     case (B_NUMCAST)
        ! Class.cast: the value unchanged, or a ClassCastException.
@@ -6901,8 +7024,8 @@ contains
        end block
 
     case (B_NUMEQ)
-       if (.not. numbers_ok(args, n, [vs_get(base + 1)])) then
-          call vs_leave(base)
+       if (.not. numbers_ok(args, n, [vs_get(vst, base + 1)])) then
+          call vs_leave(vst, base)
           return
        end if
        ! == : equal as NUMBERS, across int and real. Non-numeric
@@ -6939,9 +7062,9 @@ contains
          else if (is_ratio(x)) then
             out = gc_ratio(abs(gc_numerator(x)), gc_denominator(x))
          else if (x%tag == GCT_BIG) then
-            out = gc_big(big_abs(gc_big_text(x)), [vs_get(base + 1)])
+            out = gc_big(big_abs(gc_big_text(x)), [vs_get(vst, base + 1)])
          else if (x%tag == GCT_DEC) then
-            out = gc_dec(dec_abs(gc_dec_text(x)), [vs_get(base + 1)])
+            out = gc_dec(dec_abs(gc_dec_text(x)), [vs_get(vst, base + 1)])
          else
             out = gc_int(abs(x%ival))
          end if
@@ -6986,16 +7109,16 @@ contains
        out = gc_int(comparator_call(gcv_nth(args, 0), gcv_nth(args, 1), gcv_nth(args, 2)))
 
     case (B_SBASIS)
-       out = struct_basis(args, [vs_get(base + 1)])
+       out = struct_basis(args, [vs_get(vst, base + 1)])
     case (B_SCREATE)
-       out = struct_create(args, [vs_get(base + 1)])
+       out = struct_create(args, [vs_get(vst, base + 1)])
     case (B_SCONSTRUCT)
-       out = struct_construct(args, [vs_get(base + 1)])
+       out = struct_construct(args, [vs_get(vst, base + 1)])
     case (B_SACCESSOR)
-       out = struct_accessor(args, [vs_get(base + 1)])
+       out = struct_accessor(args, [vs_get(vst, base + 1)])
 
     case (B_COLLEMPTY)
-       out = coll_empty(gcv_nth(args, 0), [vs_get(base + 1)])
+       out = coll_empty(gcv_nth(args, 0), [vs_get(vst, base + 1)])
 
     case (B_MACROEXP1)
        out = macroexpand_1step(gcv_nth(args, 0))
@@ -7005,16 +7128,16 @@ contains
        block
          type(gc_value) :: kvv, acc
          integer :: i, n2
-         kvv = coll_to_vector(gcv_nth(args, 0), [vs_get(base + 1)])
-         call vs_set(base + 2, kvv)
-         n2 = gcv_count(vs_get(base + 2))
-         acc = gca_empty([vs_get(base + 1), vs_get(base + 2)])
-         call vs_set(base + 3, acc)
+         kvv = coll_to_vector(gcv_nth(args, 0), [vs_get(vst, base + 1)])
+         call vs_set(vst, base + 2, kvv)
+         n2 = gcv_count(vs_get(vst, base + 2))
+         acc = gca_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
+         call vs_set(vst, base + 3, acc)
          do i = 0, n2 - 2, 2
-            acc = gca_assoc(vs_get(base + 3), gcv_nth(vs_get(base + 2), i), &
-                 gcv_nth(vs_get(base + 2), i + 1), &
-                 [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-            call vs_set(base + 3, acc)
+            acc = gca_assoc(vs_get(vst, base + 3), gcv_nth(vs_get(vst, base + 2), i), &
+                 gcv_nth(vs_get(vst, base + 2), i + 1), &
+                 [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+            call vs_set(vst, base + 3, acc)
          end do
          ! an odd count ends in a map, merged: keyword arguments with a
          ! trailing map, as createAsIfByAssoc takes since 1.11
@@ -7023,21 +7146,21 @@ contains
               type(gc_value) :: last
               type(gc_value), allocatable :: kk(:), vv(:)
               integer :: j
-              last = strip_meta(gcv_nth(vs_get(base + 2), n2 - 1))
+              last = strip_meta(gcv_nth(vs_get(vst, base + 2), n2 - 1))
               if (gca_is(last)) then
                  call gca_entries(last, kk, vv)
                  do j = 1, size(kk)
-                    acc = gca_assoc(vs_get(base + 3), kk(j), vv(j), &
-                         [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-                    call vs_set(base + 3, acc)
+                    acc = gca_assoc(vs_get(vst, base + 3), kk(j), vv(j), &
+                         [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+                    call vs_set(vst, base + 3, acc)
                  end do
               else
                  call raise_class("IllegalArgumentException", "No value supplied for key: " // &
-                      gcp_str(last, .true.), [vs_get(base + 1)])
+                      gcp_str(last, .true.), [vs_get(vst, base + 1)])
               end if
             end block
          end if
-         out = vs_get(base + 3)
+         out = vs_get(vst, base + 3)
        end block
 
     case (B_PREPRET)
@@ -7056,11 +7179,11 @@ contains
          a0 = strip_meta(gcv_nth(args, 0))
          if (gc_kind(a0) /= OBJ_ARRAY) then
             call fail("aclone: not an array")
-            call vs_leave(base)
+            call vs_leave(vst, base)
             return
          end if
-         call vs_set(base + 2, a0)
-         h = gc_i1(vs_get(base + 2))
+         call vs_set(vst, base + 2, a0)
+         h = gc_i1(vs_get(vst, base + 2))
          kn = gcna_kind(h)
          ! The clone has the shape of the VIEW, not of the buffer
          ! behind it: (aclone (aget m 0)) on a 2x3 is a fresh length-3
@@ -7068,25 +7191,25 @@ contains
          ! gcna_extents(h) here cloned the whole 2x3 instead. Every
          ! dimension of a fresh array is 0-based, so lows is zeros
          ! rather than the source's.
-         ext = array_own_extents(vs_get(base + 2))
+         ext = array_own_extents(vs_get(vst, base + 2))
          allocate(lows(size(ext)))
          lows = 0
          h2 = gcna_new(kn, ext, lows, err)
          if (h2 == 0) then
             call fail(err)
-            call vs_leave(base)
+            call vs_leave(vst, base)
             return
          end if
          n2 = gcna_total(h2)
          run = gc_nil()
-         if (kn == "value") run = gc_vec(max(1, n2), [vs_get(base + 2)])
-         call vs_set(base + 3, run)
-         out = gc_obj(OBJ_ARRAY, [vs_get(base + 3)], &
-              [vs_get(base + 2), vs_get(base + 3)])
+         if (kn == "value") run = gc_vec(max(1, n2), [vs_get(vst, base + 2)])
+         call vs_set(vst, base + 3, run)
+         out = gc_obj(OBJ_ARRAY, [vs_get(vst, base + 3)], &
+              [vs_get(vst, base + 2), vs_get(vst, base + 3)])
          call gc_set_i1(out, h2)
          call gc_set_i2(out, -1) ! owns the handle -- not a slice
          do k = 1, n2
-            e = array_elem(vs_get(base + 2), k)
+            e = array_elem(vs_get(vst, base + 2), k)
             call array_put(out, k, e)
          end do
        end block
@@ -7106,7 +7229,7 @@ contains
          nd = n - 1
          if (nd < 1) then
             call fail("make-array: needs a kind and at least one extent")
-            call vs_leave(base)
+            call vs_leave(vst, base)
             return
          end if
          kname = text_of(a0)
@@ -7119,22 +7242,22 @@ contains
          h = gcna_new(kname, ext, lows, err)
          if (len(err) > 9) then
             if (err(1:9) == "negative:") then
-               call raise_class("NegativeArraySizeException", err(10:), [vs_get(base + 1)])
-               call vs_leave(base)
+               call raise_class("NegativeArraySizeException", err(10:), [vs_get(vst, base + 1)])
+               call vs_leave(vst, base)
                return
             end if
          end if
          if (h == 0) then
             call fail(err)
-            call vs_leave(base)
+            call vs_leave(vst, base)
             return
          end if
          ! A `value` array keeps its elements in a GC RUN so the
          ! collector traces them; every numeric kind has its buffer in
          ! the registry and leaves slot 1 nil.
          run = gc_nil()
-         if (kname == "value") run = gc_vec(max(1, gcna_total(h)), [vs_get(base + 1)])
-         out = gc_obj(OBJ_ARRAY, [run], [vs_get(base + 1), run])
+         if (kname == "value") run = gc_vec(max(1, gcna_total(h)), [vs_get(vst, base + 1)])
+         out = gc_obj(OBJ_ARRAY, [run], [vs_get(vst, base + 1), run])
          call gc_set_i1(out, h)
          call gc_set_i2(out, -1) ! owns the handle -- not a slice
        end block
@@ -7151,7 +7274,7 @@ contains
          open(newunit=u, file=path, access="stream", form="unformatted", &
               status="replace", action="write", iostat=st)
          if (st /= 0) then
-            call fail_as("java.io.FileNotFoundException", path // " (cannot open for writing)", [vs_get(base + 1)])
+            call fail_as("java.io.FileNotFoundException", path // " (cannot open for writing)", [vs_get(vst, base + 1)])
          else
             write(u) text
             close(u)
@@ -7166,13 +7289,13 @@ contains
          open(newunit=u, file=path, access="stream", form="unformatted", &
               status="old", action="read", iostat=st)
          if (st /= 0) then
-            call fail_as("java.io.FileNotFoundException", path // " (No such file or directory)", [vs_get(base + 1)])
+            call fail_as("java.io.FileNotFoundException", path // " (No such file or directory)", [vs_get(vst, base + 1)])
          else
             inquire(unit=u, size=fsize)
             allocate(character(len=fsize) :: text)
             if (fsize > 0) read(u, iostat=st) text
             close(u)
-            out = gc_str(text, [vs_get(base + 1)])
+            out = gc_str(text, [vs_get(vst, base + 1)])
          end if
        end block
 
@@ -7201,7 +7324,7 @@ contains
          if (gc_kind(a0) /= OBJ_ARRAY) then
             call fail("array-kind: not an array")
          else
-            out = gc_str(gcna_kind(gc_i1(a0)), [vs_get(base + 1)])
+            out = gc_str(gcna_kind(gc_i1(a0)), [vs_get(vst, base + 1)])
          end if
        end block
 
@@ -7215,13 +7338,13 @@ contains
             call fail("array-shape: not an array")
          else
             ext = array_own_extents(a0)
-            acc = gcv_empty([vs_get(base + 1)])
-            call vs_set(base + 2, acc)
+            acc = gcv_empty([vs_get(vst, base + 1)])
+            call vs_set(vst, base + 2, acc)
             do k = 1, size(ext)
-               acc = gcv_conj(vs_get(base + 2), gc_int(ext(k)), [vs_get(base + 2)])
-               call vs_set(base + 2, acc)
+               acc = gcv_conj(vs_get(vst, base + 2), gc_int(ext(k)), [vs_get(vst, base + 2)])
+               call vs_set(vst, base + 2, acc)
             end do
-            out = vs_get(base + 2)
+            out = vs_get(vst, base + 2)
          end if
        end block
 
@@ -7245,7 +7368,7 @@ contains
          a0 = strip_meta(gcv_nth(args, 0))
          if (gc_kind(a0) /= OBJ_ARRAY) then
             call fail("aget/aset: not an array")
-            call vs_leave(base)
+            call vs_leave(vst, base)
             return
          end if
          h = gc_i1(a0)
@@ -7253,7 +7376,7 @@ contains
          if (id == B_ASET) nsub = n - 2
          if (nsub < 1) then
             call fail("aget/aset: needs at least one index")
-            call vs_leave(base)
+            call vs_leave(vst, base)
             return
          end if
          allocate(subs(nsub))
@@ -7265,7 +7388,7 @@ contains
          own_rank = array_own_rank(a0)
          if (nsub > own_rank) then
             call fail("aget/aset: too many indices")
-            call vs_leave(base)
+            call vs_leave(vst, base)
             return
          end if
 
@@ -7281,8 +7404,8 @@ contains
                  write(bi, '(I0)') subs(k)
                  write(bn, '(I0)') ext(k)
                  call raise_class("ArrayIndexOutOfBoundsException", "Index " // trim(bi) // &
-                      " out of bounds for length " // trim(bn), [vs_get(base + 1)])
-                 call vs_leave(base)
+                      " out of bounds for length " // trim(bn), [vs_get(vst, base + 1)])
+                 call vs_leave(vst, base)
                  return
               end if
            end do
@@ -7295,11 +7418,11 @@ contains
             ! writing -- so this path is aget-only.
             if (id == B_ASET) then
                call fail("aset: not enough indices")
-               call vs_leave(base)
+               call vs_leave(vst, base)
                return
             end if
-            out = array_make_slice(a0, subs, [vs_get(base + 1)])
-            call vs_leave(base)
+            out = array_make_slice(a0, subs, [vs_get(vst, base + 1)])
+            call vs_leave(vst, base)
             return
          end if
 
@@ -7308,7 +7431,7 @@ contains
          call array_fold(a0, subs, foff, fstr, ok)
          if (.not. ok) then
             call fail("aget/aset: index out of bounds")
-            call vs_leave(base)
+            call vs_leave(vst, base)
             return
          end if
          at = foff + 1
@@ -7394,7 +7517,7 @@ contains
             read(t, *, iostat=st) dv
             if (st /= 0) then
                call fail_as("NumberFormatException", "valueOf: not a number: " // t, &
-                    [vs_get(base + 1)])
+                    [vs_get(vst, base + 1)])
             else
                out = gc_real(dv)
             end if
@@ -7432,7 +7555,7 @@ contains
          full = call_builtin(B_GETNAME, args)
          if (.not. tctx%has_error) then
             nm = text_of(full)
-            out = gc_str(nm(index(nm, ".", back=.true.) + 1:), [vs_get(base + 1)])
+            out = gc_str(nm(index(nm, ".", back=.true.) + 1:), [vs_get(vst, base + 1)])
          end if
        end block
     case (B_ARRAYCAST)
@@ -7459,7 +7582,7 @@ contains
          case default;      want = "value";   desc = "[Ljava.lang.Object;"
          end select
          if (a%tag == GCT_NIL) then
-            call raise_class("NullPointerException", "Cannot use a null array", [vs_get(base + 1)])
+            call raise_class("NullPointerException", "Cannot use a null array", [vs_get(vst, base + 1)])
          else if (gc_kind(a) == OBJ_ARRAY) then
             kind = gcna_kind(gc_i1(a))
             if (kind == want .and. gcna_rank(gc_i1(a)) == 1) then
@@ -7475,11 +7598,11 @@ contains
                end select
                if (gcna_rank(gc_i1(a)) > 1) have = repeat("[", gcna_rank(gc_i1(a)) - 1) // have
                call raise_class("ClassCastException", "class " // have // " cannot be cast to class " // desc, &
-                    [vs_get(base + 1)])
+                    [vs_get(vst, base + 1)])
             end if
          else
             call raise_class("ClassCastException", "class " // class_name_of(a) // &
-                 " cannot be cast to class " // desc, [vs_get(base + 1)])
+                 " cannot be cast to class " // desc, [vs_get(vst, base + 1)])
          end if
        end block
     case (B_LONGCAST_CHECKED, B_NUMLONG)
@@ -7488,8 +7611,8 @@ contains
        ! ClassCastException there, though (long \a) is 97.
        a = strip_meta(gcv_nth(args, 0))
        if (id == B_NUMLONG .and. a%tag == GCT_CHAR) then
-          call raise_number_cast(a, [vs_get(base + 1)])
-          call vs_leave(base)
+          call raise_number_cast(a, [vs_get(vst, base + 1)])
+          call vs_leave(vst, base)
           return
        end if
        ! RT.longCast, clojure.core/long. Read from RT.java at the pinned
@@ -7508,7 +7631,7 @@ contains
              out = gc_int(big_to_i64(gc_big_text(a)))
           else
              call raise_class("IllegalArgumentException", "Value out of range for long: " // &
-                  gcp_str(a, .false.), [vs_get(base + 1)])
+                  gcp_str(a, .false.), [vs_get(vst, base + 1)])
           end if
        else if (is_ratio(a)) then
           out = gc_int(gc_numerator(a) / gc_denominator(a))
@@ -7520,13 +7643,13 @@ contains
             ! MAX_VALUE become in RT's comparison
             if (d < -9223372036854775808.0_gc_dp .or. d > 9223372036854775808.0_gc_dp) then
                call raise_class("IllegalArgumentException", "Value out of range for long: " // &
-                    gcp_str(gc_real(d), .false.), [vs_get(base + 1)])
+                    gcp_str(gc_real(d), .false.), [vs_get(vst, base + 1)])
             else
                out = gc_int(long_of_double(d))
             end if
           end block
        else
-          call raise_number_cast(a, [vs_get(base + 1)])
+          call raise_number_cast(a, [vs_get(vst, base + 1)])
        end if
     case (B_DBLCAST)
        ! ((Number) x).doubleValue(), checked and unchecked alike: a
@@ -7536,7 +7659,7 @@ contains
        if (is_number(a)) then
           out = gc_real(num_dbl(a))
        else
-          call raise_number_cast(a, [vs_get(base + 1)])
+          call raise_number_cast(a, [vs_get(vst, base + 1)])
        end if
     case (B_BOOLCAST)
        out = gc_bool(truthy(gcv_nth(args, 0)))
@@ -7558,20 +7681,20 @@ contains
          type(gc_value) :: ref, fargs, extra
          integer :: j
          ref = gcv_nth(args, 0)
-         call vs_set(base + 2, ref)
-         fargs = gcv_empty([vs_get(base + 1), vs_get(base + 2)])
-         fargs = gcv_conj(fargs, gc_slot(vs_get(base + 2), meta_slot(vs_get(base + 2))), &
-              [vs_get(base + 1), vs_get(base + 2)])
-         call vs_set(base + 3, fargs)
-         extra = coll_to_vector(gcv_nth(args, 2), [vs_get(base + 1), vs_get(base + 3)])
-         fargs = vs_get(base + 3)
+         call vs_set(vst, base + 2, ref)
+         fargs = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
+         fargs = gcv_conj(fargs, gc_slot(vs_get(vst, base + 2), meta_slot(vs_get(vst, base + 2))), &
+              [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+         call vs_set(vst, base + 3, fargs)
+         extra = coll_to_vector(gcv_nth(args, 2), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
+         fargs = vs_get(vst, base + 3)
          do j = 0, gcv_count(extra) - 1
-            fargs = gcv_conj(fargs, gcv_nth(extra, j), [vs_get(base + 1), extra])
-            call vs_set(base + 3, fargs)
+            fargs = gcv_conj(fargs, gcv_nth(extra, j), [vs_get(vst, base + 1), extra])
+            call vs_set(vst, base + 3, fargs)
          end do
-         out = apply(gcv_nth(args, 1), vs_get(base + 3))
+         out = apply(gcv_nth(args, 1), vs_get(vst, base + 3))
          if (.not. tctx%has_error) then
-            call gc_set_slot(vs_get(base + 2), meta_slot(vs_get(base + 2)), out)
+            call gc_set_slot(vs_get(vst, base + 2), meta_slot(vs_get(vst, base + 2)), out)
          end if
        end block
     case (B_FINDNS)
@@ -7593,8 +7716,8 @@ contains
          logical :: eof
          out = gc_nil()
          path = text_of(gcv_nth(args, 0))
-         nsb = vs_enter(1)
-         call vs_set(nsb + 1, gcn_current([vs_get(base + 1)]))
+         nsb = vs_enter(vst, 1)
+         call vs_set(vst, nsb + 1, gcn_current([vs_get(vst, base + 1)]))
          open(newunit=u, file=path, access="stream", form="unformatted", &
               status="old", action="read", iostat=st)
          if (st /= 0) then
@@ -7609,27 +7732,27 @@ contains
             else
                genv = gc_nil()
             end if
-            call vs_set(base + 2, genv)
+            call vs_set(vst, base + 2, genv)
             ! one form at a time, as main.f90's load_file and Compiler.load
             fid = gcr_begin_file(text, path)
             j = 1
             do
-               forms = gcr_read_next(text, j, [vs_get(base + 1), vs_get(base + 2)], eof, fid)
+               forms = gcr_read_next(text, j, [vs_get(vst, base + 1), vs_get(vst, base + 2)], eof, fid)
                if (gcr_has_error()) then
                   call fail("load-file " // path // ": " // gcr_error())
                   exit
                end if
                if (eof) exit
-               call vs_set(base + 3, forms)
-               f = gce_analyze(vs_get(base + 3), vs_get(base + 2))
+               call vs_set(vst, base + 3, forms)
+               f = gce_analyze(vs_get(vst, base + 3), vs_get(vst, base + 2))
                if (tctx%has_error) exit
-               out = gce_eval(f, vs_get(base + 2), [vs_get(base + 1), vs_get(base + 3)])
+               out = gce_eval(f, vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
                if (tctx%has_error) exit
             end do
             if (.not. tctx%has_error) call gce_install_compiled(path)
          end if
-         call gcn_set_current(vs_get(nsb + 1))
-         call vs_leave(nsb)
+         call gcn_set_current(vs_get(vst, nsb + 1))
+         call vs_leave(vst, nsb)
        end block
     case (B_ENDSWITH)
        block
@@ -7658,7 +7781,7 @@ contains
             acc = acc // t(1:at-1) // too
             t = t(at+len(frm):)
          end do
-         out = gc_str(acc // t, [vs_get(base + 1)])
+         out = gc_str(acc // t, [vs_get(vst, base + 1)])
        end block
     case (B_STARTSWITH)
        block
@@ -7683,7 +7806,7 @@ contains
             ! trim -- which loops down from .length -- answer "".
             out = gc_int(u8_count(text_of(cv)))
          else
-            out = gc_int(sq_count(cv, [vs_get(base + 1)]))
+            out = gc_int(sq_count(cv, [vs_get(vst, base + 1)]))
          end if
        end block
     case (B_SUBSTRING)
@@ -7700,9 +7823,9 @@ contains
             hi = int(iv%ival)
          end if
          if (lo < 0 .or. hi > u8_count(t) .or. lo > hi) then
-            call raise_class("StringIndexOutOfBoundsException", "Range [" // trim(itoa(lo)) // ", " // trim(itoa(hi)) // ") out of bounds for length " // trim(itoa(u8_count(t))), [vs_get(base + 1)])
+            call raise_class("StringIndexOutOfBoundsException", "Range [" // trim(itoa(lo)) // ", " // trim(itoa(hi)) // ") out of bounds for length " // trim(itoa(u8_count(t))), [vs_get(vst, base + 1)])
          else
-            out = gc_str(u8_slice(t, lo, hi), [vs_get(base + 1)])
+            out = gc_str(u8_slice(t, lo, hi), [vs_get(vst, base + 1)])
          end if
        end block
     case (B_ISPUBLIC, B_ISMACRO)
@@ -7714,10 +7837,10 @@ contains
          md2 = gc_nil()
          if (gcn_is_var(a)) md2 = gc_slot(a, 2)
          if (id == B_ISMACRO) then
-            out = gc_bool(truthy(gca_get(md2, gc_key("macro", [vs_get(base + 1)]))))
+            out = gc_bool(truthy(gca_get(md2, gc_key("macro", [vs_get(vst, base + 1)]))))
          else
             out = gc_bool(.not. truthy(gca_get(md2, &
-                 gc_key("private", [vs_get(base + 1)]))))
+                 gc_key("private", [vs_get(vst, base + 1)]))))
          end if
        end block
     case (B_SETMACRO)
@@ -7739,7 +7862,7 @@ contains
           if (gcn_is_var(a) .or. gc_kind(a) == OBJ_ATOM) then
              out = gc_slot(a, 1)
           else if (is_reduced(a)) then
-             out = gca_get(a, gc_key("clotran/reduced", [vs_get(base + 1)]))
+             out = gca_get(a, gc_key("clotran/reduced", [vs_get(vst, base + 1)]))
           else
              out = a
           end if
@@ -7779,11 +7902,11 @@ contains
        ! whose Fortran runs off the baton use them (tasks.inc).
        out = gc_int(int(th_ncpus(), gc_ip))
     case (B_STUB)
-       out = gc_key("clotran/stub", [vs_get(base + 1)])
+       out = gc_key("clotran/stub", [vs_get(vst, base + 1)])
     case (B_SORTEDMAP, B_SORTEDSET)
        ! PersistentTreeMap/create keyvals, or comparator keyvals, and
        ! PersistentTreeSet/create likewise over keys (sorted.inc)
-       out = sorted_create(args, n, id == B_SORTEDSET, [vs_get(base + 1)])
+       out = sorted_create(args, n, id == B_SORTEDSET, [vs_get(vst, base + 1)])
     case (B_SEQFROM)
        ! (. sc seqFrom key ascending?): the entries from the first key
        ! at or past `key`, that way
@@ -7792,7 +7915,7 @@ contains
        out = gc_nil()
        if (b%tag /= GCT_NIL) then
           i = gca_sorted_from(b, gcv_nth(args, 1), truthy(gcv_nth(args, 2)))
-          if (.not. tctx%has_error) out = sorted_entries(a, i, truthy(gcv_nth(args, 2)), [vs_get(base + 1)])
+          if (.not. tctx%has_error) out = sorted_entries(a, i, truthy(gcv_nth(args, 2)), [vs_get(vst, base + 1)])
        end if
     case (B_ENTRYKEY)
        ! (. sc entryKey e): an entry's key -- the element itself, for a set
@@ -7800,15 +7923,15 @@ contains
        if (gc_kind(a) == OBJ_SET) then
           out = gcv_nth(args, 1)
        else
-          out = sq_first(gcv_nth(args, 1), [vs_get(base + 1)])
+          out = sq_first(gcv_nth(args, 1), [vs_get(vst, base + 1)])
        end if
     case (B_COMPARATOR)
        ! (.comparator sc): its comparator, or compare itself
        out = gca_comparator(sorted_backing(gcv_nth(args, 0)))
-       if (out%tag == GCT_NIL) out = native(B_COMPARE, "compare", [vs_get(base + 1)])
+       if (out%tag == GCT_NIL) out = native(B_COMPARE, "compare", [vs_get(vst, base + 1)])
     case (B_RSEQ)
        ! (rseq coll): a vector or a sorted collection, last first; nil when empty
-       out = reverse_seq(strip_meta(gcv_nth(args, 0)), [vs_get(base + 1)])
+       out = reverse_seq(strip_meta(gcv_nth(args, 0)), [vs_get(vst, base + 1)])
     case (B_TASKSTATUS)
        ! (task-status t): the protocol's five words for a task's state
        a = strip_meta(gcv_nth(args, 0))
@@ -7841,7 +7964,7 @@ contains
     case (B_ALWAYS_FALSE)
        out = gc_bool(.false.)
     case (B_EMPTYVEC)
-       out = gcv_empty([vs_get(base + 1)])
+       out = gcv_empty([vs_get(vst, base + 1)])
     case (B_RE_COMPILE)
        ! re-pattern's own definition already guards against re-compiling
        ! a Pattern (instance? checks first), so by the time this runs
@@ -7856,7 +7979,7 @@ contains
          if (h == 0) then
             call fail("regex: " // regex_last_error())
          else
-            pv = gc_obj(OBJ_REGEX, [gc_str(ptext, [vs_get(base + 1)])], [vs_get(base + 1)])
+            pv = gc_obj(OBJ_REGEX, [gc_str(ptext, [vs_get(vst, base + 1)])], [vs_get(vst, base + 1)])
             call gc_set_i1(pv, h)
             out = pv
          end if
@@ -7884,8 +8007,8 @@ contains
                if (.not. regex_set_text(mh, stext)) then
                   call fail("regex: " // regex_last_error())
                else
-                  mv = gc_obj(OBJ_MATCHER, [pat, gc_str(stext, [vs_get(base + 1), pat])], &
-                       [vs_get(base + 1), pat])
+                  mv = gc_obj(OBJ_MATCHER, [pat, gc_str(stext, [vs_get(vst, base + 1), pat])], &
+                       [vs_get(vst, base + 1), pat])
                   call gc_set_i1(mv, mh)
                   out = mv
                end if
@@ -7924,21 +8047,21 @@ contains
          case (GCT_BIG)
             out = bv
          case (GCT_INT, GCT_CHAR)
-            out = gc_big(big_from_i64(bv%ival), [vs_get(base + 1)])
+            out = gc_big(big_from_i64(bv%ival), [vs_get(vst, base + 1)])
          case (GCT_RATIO)
-            out = gc_big(big_from_i64(gc_numerator(bv) / gc_denominator(bv)), [vs_get(base + 1)])
+            out = gc_big(big_from_i64(gc_numerator(bv) / gc_denominator(bv)), [vs_get(vst, base + 1)])
          case (GCT_REAL)
-            out = gc_big(big_from_i64(int(aint(bv%rval), gc_ip)), [vs_get(base + 1)])
+            out = gc_big(big_from_i64(int(aint(bv%rval), gc_ip)), [vs_get(vst, base + 1)])
          case (GCT_DEC)
-            out = gc_big(dec_to_big(gc_dec_text(bv)), [vs_get(base + 1)])
+            out = gc_big(dec_to_big(gc_dec_text(bv)), [vs_get(vst, base + 1)])
          case (GCT_STR)
             if (big_valid(text_of(bv))) then
-               out = gc_big(text_of(bv), [vs_get(base + 1)])
+               out = gc_big(text_of(bv), [vs_get(vst, base + 1)])
             else
-               call raise_class("NumberFormatException", "For input string: " // text_of(bv), [vs_get(base + 1)])
+               call raise_class("NumberFormatException", "For input string: " // text_of(bv), [vs_get(vst, base + 1)])
             end if
          case default
-            call raise_class("IllegalArgumentException", "cannot convert to a BigInt", [vs_get(base + 1)])
+            call raise_class("IllegalArgumentException", "cannot convert to a BigInt", [vs_get(vst, base + 1)])
          end select
        end block
     case (B_TODEC)
@@ -7955,9 +8078,9 @@ contains
          case (GCT_DEC)
             out = dv2
          case (GCT_INT, GCT_CHAR)
-            out = gc_dec(dec_from_i64(dv2%ival), [vs_get(base + 1)])
+            out = gc_dec(dec_from_i64(dv2%ival), [vs_get(vst, base + 1)])
          case (GCT_BIG)
-            out = gc_dec(dec_from_big(gc_big_text(dv2)), [vs_get(base + 1)])
+            out = gc_dec(dec_from_big(gc_big_text(dv2)), [vs_get(vst, base + 1)])
          case (GCT_REAL, GCT_STR, GCT_RATIO)
             if (dv2%tag == GCT_RATIO) then
                call dec_div(dec_from_big(big_from_i64(gc_numerator(dv2))), &
@@ -7966,13 +8089,13 @@ contains
                call dec_from_text(to_string_text(dv2), dt, dok2)
             end if
             if (dok2) then
-               out = gc_dec(dt, [vs_get(base + 1)])
+               out = gc_dec(dt, [vs_get(vst, base + 1)])
             else
                call raise_class("NumberFormatException", &
-                    "not a decimal: " // to_string_text(dv2), [vs_get(base + 1)])
+                    "not a decimal: " // to_string_text(dv2), [vs_get(vst, base + 1)])
             end if
          case default
-            call raise_class("IllegalArgumentException", "cannot convert to a BigDecimal", [vs_get(base + 1)])
+            call raise_class("IllegalArgumentException", "cannot convert to a BigDecimal", [vs_get(vst, base + 1)])
          end select
        end block
     case (B_GCTORTURE)
@@ -8003,7 +8126,7 @@ contains
          w(4) = ieor(w(4), uuid_seq)
          write(hx, '(4Z8.8)') w
          u = hx(1:8) // "-" // hx(9:12) // "-4" // hx(14:16) // "-a" // hx(18:20) // "-" // hx(21:32)
-         out = gc_str(u, [vs_get(base + 1)])
+         out = gc_str(u, [vs_get(vst, base + 1)])
        end block
     case (B_ISWS, B_ISLOWER, B_ISDIGIT, B_ISLETTER, B_ISALNUM)
        ! Character.isX over the code point, answered by ICU (cu_* in
@@ -8044,7 +8167,7 @@ contains
                r = r // u8_enc(case_cp(cp, up))
                p = p + nb
             end do
-            out = gc_str(r, [vs_get(base + 1)])
+            out = gc_str(r, [vs_get(vst, base + 1)])
          end if
        end block
     case (B_CHARAT)
@@ -8080,7 +8203,7 @@ contains
          if (gc_kind(w) == OBJ_WRITER) then
             write(gc_i1(w), '(A)', advance='no') piece
          else if (gc_kind(w) == OBJ_SB) then
-            call gc_set_slot(w, 1, gc_str(text_of(gc_slot(w, 1)) // piece, [vs_get(base + 1)]))
+            call gc_set_slot(w, 1, gc_str(text_of(gc_slot(w, 1)) // piece, [vs_get(vst, base + 1)]))
          end if
          out = gc_nil()
        end block
@@ -8094,7 +8217,7 @@ contains
     case (B_BASELOADER)
        ! the classpath root beside the binary, so getResourceAsStream
        ! finds clojure/version.properties from any directory
-       out = gc_str(gce_home() // "/src/clj", [vs_get(base + 1)])
+       out = gc_str(gce_home() // "/src/clj", [vs_get(vst, base + 1)])
     case (B_RESOURCE)
        ! Java answers null for a resource that is not there, and
        ! with-open then fails on the nil -- same shape either way.
@@ -8110,7 +8233,7 @@ contains
             allocate(character(len=fsize) :: text)
             read(u, iostat=st) text
             close(u)
-            out = gc_str(text, [vs_get(base + 1)])
+            out = gc_str(text, [vs_get(vst, base + 1)])
          end if
        end block
     case (B_PROPLOAD)
@@ -8124,11 +8247,11 @@ contains
          character(len=:), allocatable :: txt, ln
          type(gc_value) :: m, kk, vv
          integer :: lb, p0, p1, eq
-         lb = vs_enter(4)
-         call vs_set(lb + 1, strip_meta(gcv_nth(args, 0)))
+         lb = vs_enter(vst, 4)
+         call vs_set(vst, lb + 1, strip_meta(gcv_nth(args, 0)))
          txt = text_of(gcv_nth(args, 1))
-         m = gca_empty([vs_get(lb + 1)])
-         call vs_set(lb + 2, m)
+         m = gca_empty([vs_get(vst, lb + 1)])
+         call vs_set(vst, lb + 2, m)
          p0 = 1
          do while (p0 <= len(txt))
             p1 = index(txt(p0:), new_line('a'))
@@ -8143,21 +8266,21 @@ contains
                   eq = index(ln, "=")
                   if (eq > 1) then
                      kk = gc_str(trim(ln(1:eq - 1)), &
-                          [vs_get(lb + 1), vs_get(lb + 2)])
-                     call vs_set(lb + 3, kk)
+                          [vs_get(vst, lb + 1), vs_get(vst, lb + 2)])
+                     call vs_set(vst, lb + 3, kk)
                      vv = gc_str(trim(adjustl(ln(eq + 1:))), &
-                          [vs_get(lb + 1), vs_get(lb + 2), vs_get(lb + 3)])
-                     call vs_set(lb + 4, vv)
-                     m = gca_assoc(vs_get(lb + 2), vs_get(lb + 3), vs_get(lb + 4), &
-                          [vs_get(lb + 1), vs_get(lb + 2), vs_get(lb + 3), vs_get(lb + 4)])
-                     call vs_set(lb + 2, m)
+                          [vs_get(vst, lb + 1), vs_get(vst, lb + 2), vs_get(vst, lb + 3)])
+                     call vs_set(vst, lb + 4, vv)
+                     m = gca_assoc(vs_get(vst, lb + 2), vs_get(vst, lb + 3), vs_get(vst, lb + 4), &
+                          [vs_get(vst, lb + 1), vs_get(vst, lb + 2), vs_get(vst, lb + 3), vs_get(vst, lb + 4)])
+                     call vs_set(vst, lb + 2, m)
                   end if
                end if
             end if
             p0 = p1 + 1
          end do
-         call gc_set_slot(vs_get(lb + 1), 1, vs_get(lb + 2))
-         call vs_leave(lb)
+         call gc_set_slot(vs_get(vst, lb + 1), 1, vs_get(vst, lb + 2))
+         call vs_leave(vst, lb)
          out = gc_nil()
        end block
     case (B_PROPGET)
@@ -8176,9 +8299,9 @@ contains
             character(len=16) :: cbuf
             write(cbuf, '(I0)') n
             call raise_class("IllegalArgumentException", "No matching method found taking " // &
-                 trim(cbuf) // " args for class java.lang.Long", [vs_get(base + 1)])
+                 trim(cbuf) // " args for class java.lang.Long", [vs_get(vst, base + 1)])
           end block
-          call vs_leave(base)
+          call vs_leave(vst, base)
           return
        end if
        block
@@ -8202,7 +8325,7 @@ contains
             end if
             if (st /= 0) then
                call fail_as("NumberFormatException", "valueOf: not a number: " // t, &
-                    [vs_get(base + 1)])
+                    [vs_get(vst, base + 1)])
             else
                out = gc_int(iv)
             end if
@@ -8240,7 +8363,7 @@ contains
        out = gc_int(int(cf_pool_add(strip_meta(gcv_nth(args, 0))), gc_ip))
     case (B_ALLNS)
        ! Namespace.all: core.clj's all-ns.
-       out = gcn_all([vs_get(base + 1)])
+       out = gcn_all([vs_get(vst, base + 1)])
     case (B_LOADCOMPILED)
        ! (clotran-load-compiled "path" pool) -- open a compiled
        ! namespace and let it install its functions, handing it the
@@ -8252,7 +8375,7 @@ contains
               int(int_of_number(strip_meta(gcv_nth(args, 1)))), lerr)) then
             out = gc_bool(.true.)
          else
-            call raise_class("RuntimeException", lerr, [vs_get(base + 1)])
+            call raise_class("RuntimeException", lerr, [vs_get(vst, base + 1)])
          end if
        end block
     case (B_ASTDATA)
@@ -8265,27 +8388,27 @@ contains
        block
          type(gc_value) :: genv, node
          genv = gce_env()
-         call vs_set(base + 2, genv)
-         node = gce_analyze(strip_meta(gcv_nth(args, 0)), vs_get(base + 2))
+         call vs_set(vst, base + 2, genv)
+         node = gce_analyze(strip_meta(gcv_nth(args, 0)), vs_get(vst, base + 2))
          if (.not. tctx%has_error) then
-            call vs_set(base + 3, node)
-            out = ast_data(vs_get(base + 3), [vs_get(base + 1), vs_get(base + 2)])
+            call vs_set(vst, base + 3, node)
+            out = ast_data(vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
             ! and the pool and fingerprint of this same analysis, so the
             ! pool's nodes are the ones the tree's :node keys hold
             block
               integer :: lb
-              lb = vs_enter(3)
-              call vs_set(lb + 1, out)
-              out = compiled_pool(vs_get(base + 3), [vs_get(base + 1), vs_get(lb + 1)])
-              call vs_set(lb + 2, out)
-              call vs_set(lb + 3, gc_key("pool", [vs_get(base + 1), vs_get(lb + 1), vs_get(lb + 2)]))
-              out = gca_assoc(vs_get(lb + 1), vs_get(lb + 3), gca_get(vs_get(lb + 2), vs_get(lb + 3)), &
-                   [vs_get(base + 1), vs_get(lb + 1), vs_get(lb + 2), vs_get(lb + 3)])
-              call vs_set(lb + 1, out)
-              call vs_set(lb + 3, gc_key("fingerprint", [vs_get(base + 1), vs_get(lb + 1), vs_get(lb + 2)]))
-              out = gca_assoc(vs_get(lb + 1), vs_get(lb + 3), gca_get(vs_get(lb + 2), vs_get(lb + 3)), &
-                   [vs_get(base + 1), vs_get(lb + 1), vs_get(lb + 2), vs_get(lb + 3)])
-              call vs_leave(lb)
+              lb = vs_enter(vst, 3)
+              call vs_set(vst, lb + 1, out)
+              out = compiled_pool(vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, lb + 1)])
+              call vs_set(vst, lb + 2, out)
+              call vs_set(vst, lb + 3, gc_key("pool", [vs_get(vst, base + 1), vs_get(vst, lb + 1), vs_get(vst, lb + 2)]))
+              out = gca_assoc(vs_get(vst, lb + 1), vs_get(vst, lb + 3), gca_get(vs_get(vst, lb + 2), vs_get(vst, lb + 3)), &
+                   [vs_get(vst, base + 1), vs_get(vst, lb + 1), vs_get(vst, lb + 2), vs_get(vst, lb + 3)])
+              call vs_set(vst, lb + 1, out)
+              call vs_set(vst, lb + 3, gc_key("fingerprint", [vs_get(vst, base + 1), vs_get(vst, lb + 1), vs_get(vst, lb + 2)]))
+              out = gca_assoc(vs_get(vst, lb + 1), vs_get(vst, lb + 3), gca_get(vs_get(vst, lb + 2), vs_get(vst, lb + 3)), &
+                   [vs_get(vst, base + 1), vs_get(vst, lb + 1), vs_get(vst, lb + 2), vs_get(vst, lb + 3)])
+              call vs_leave(vst, lb)
             end block
          end if
        end block
@@ -8304,28 +8427,28 @@ contains
          open(newunit=u, file=path, access="stream", form="unformatted", &
               status="old", action="read", iostat=st)
          if (st /= 0) then
-            call fail_as("java.io.FileNotFoundException", path // " (No such file or directory)", [vs_get(base + 1)])
+            call fail_as("java.io.FileNotFoundException", path // " (No such file or directory)", [vs_get(vst, base + 1)])
          else
             inquire(unit=u, size=fsize)
             allocate(character(len=fsize) :: text)
             if (fsize > 0) read(u, iostat=st) text
             close(u)
-            lb = vs_enter(1)
-            call vs_set(lb + 1, gcv_empty([vs_get(base + 1)]))
+            lb = vs_enter(vst, 1)
+            call vs_set(vst, lb + 1, gcv_empty([vs_get(vst, base + 1)]))
             fid = gcr_begin_file(text, path)
             j = 1
             do
-               form = gcr_read_next(text, j, [vs_get(base + 1), vs_get(lb + 1)], eof, fid)
+               form = gcr_read_next(text, j, [vs_get(vst, base + 1), vs_get(vst, lb + 1)], eof, fid)
                if (gcr_has_error()) then
                   call fail("clotran-read-forms " // path // ": " // gcr_error())
                   exit
                end if
                if (eof) exit
-               acc = gcv_conj(vs_get(lb + 1), form, [vs_get(base + 1), vs_get(lb + 1), form])
-               call vs_set(lb + 1, acc)
+               acc = gcv_conj(vs_get(vst, lb + 1), form, [vs_get(vst, base + 1), vs_get(vst, lb + 1), form])
+               call vs_set(vst, lb + 1, acc)
             end do
-            if (.not. tctx%has_error) out = vs_get(lb + 1)
-            call vs_leave(lb)
+            if (.not. tctx%has_error) out = vs_get(vst, lb + 1)
+            call vs_leave(vst, lb)
          end if
        end block
     case (B_ARRAYTYPESYM)
@@ -8351,7 +8474,7 @@ contains
             comp = cn(dims + 2:len(cn) - 1)   ! L<name>;
          end select
          write(db, '(I0)') dims
-         out = gc_sym(comp // "/" // trim(db), [vs_get(base + 1)])
+         out = gc_sym(comp // "/" // trim(db), [vs_get(vst, base + 1)])
        end block
     case (B_POSITION)
        ! (clotran-position pos): a node's packed source position, as the
@@ -8367,17 +8490,17 @@ contains
          if (pv%tag == GCT_INT) then
             if (pv%ival > 0) then
                call gcr_position_parts(int(pv%ival), fname, line, col)
-               lb = vs_enter(1)
-               v = gcv_empty([vs_get(base + 1)])
-               call vs_set(lb + 1, v)
-               v = gcv_conj(vs_get(lb + 1), gc_str(fname, [vs_get(base + 1), vs_get(lb + 1)]), &
-                    [vs_get(base + 1), vs_get(lb + 1)])
-               call vs_set(lb + 1, v)
-               v = gcv_conj(vs_get(lb + 1), gc_int(int(line, gc_ip)), [vs_get(base + 1), vs_get(lb + 1)])
-               call vs_set(lb + 1, v)
-               v = gcv_conj(vs_get(lb + 1), gc_int(int(col, gc_ip)), [vs_get(base + 1), vs_get(lb + 1)])
+               lb = vs_enter(vst, 1)
+               v = gcv_empty([vs_get(vst, base + 1)])
+               call vs_set(vst, lb + 1, v)
+               v = gcv_conj(vs_get(vst, lb + 1), gc_str(fname, [vs_get(vst, base + 1), vs_get(vst, lb + 1)]), &
+                    [vs_get(vst, base + 1), vs_get(vst, lb + 1)])
+               call vs_set(vst, lb + 1, v)
+               v = gcv_conj(vs_get(vst, lb + 1), gc_int(int(line, gc_ip)), [vs_get(vst, base + 1), vs_get(vst, lb + 1)])
+               call vs_set(vst, lb + 1, v)
+               v = gcv_conj(vs_get(vst, lb + 1), gc_int(int(col, gc_ip)), [vs_get(vst, base + 1), vs_get(vst, lb + 1)])
                out = v
-               call vs_leave(lb)
+               call vs_leave(vst, lb)
             end if
          end if
        end block
@@ -8388,11 +8511,11 @@ contains
        block
          type(gc_value) :: genv, node
          genv = gce_env()
-         call vs_set(base + 2, genv)
-         node = gce_analyze(strip_meta(gcv_nth(args, 0)), vs_get(base + 2))
+         call vs_set(vst, base + 2, genv)
+         node = gce_analyze(strip_meta(gcv_nth(args, 0)), vs_get(vst, base + 2))
          if (.not. tctx%has_error) then
-            call vs_set(base + 3, node)
-            out = compiled_pool(vs_get(base + 3), [vs_get(base + 1), vs_get(base + 2)])
+            call vs_set(vst, base + 3, node)
+            out = compiled_pool(vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
          end if
        end block
     case (B_EDNREAD)
@@ -8409,19 +8532,19 @@ contains
          logical :: was
          sv = strip_meta(gcv_nth(args, 0))
          opts = strip_meta(gcv_nth(args, 1))
-         call vs_set(base + 2, opts)
+         call vs_set(vst, base + 2, opts)
          if (sv%tag /= GCT_STR) then
             call fail("edn/read-string wants a string")
          else
             was = gcr_set_tag_markers(.true.)
-            form = gcr_read(gc_ref_text(sv%ref), [vs_get(base + 1), vs_get(base + 2)])
+            form = gcr_read(gc_ref_text(sv%ref), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
             was = gcr_set_tag_markers(was)
             if (gcr_has_error()) then
                call fail(gcr_error())
             else
-               call vs_set(base + 3, form)
-               out = resolve_tags(vs_get(base + 3), vs_get(base + 2), &
-                    [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+               call vs_set(vst, base + 3, form)
+               out = resolve_tags(vs_get(vst, base + 3), vs_get(vst, base + 2), &
+                    [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
             end if
          end if
        end block
@@ -8440,9 +8563,9 @@ contains
     case (B_MUNGE, B_DEMUNGE)
        a = strip_meta(gcv_nth(args, 0))
        if (id == B_MUNGE) then
-          out = gc_str(munge_text(gc_ref_text(a%ref)), [vs_get(base + 1)])
+          out = gc_str(munge_text(gc_ref_text(a%ref)), [vs_get(vst, base + 1)])
        else
-          out = gc_str(demunge_text(gc_ref_text(a%ref)), [vs_get(base + 1)])
+          out = gc_str(demunge_text(gc_ref_text(a%ref)), [vs_get(vst, base + 1)])
        end if
     case (B_NSUNMAP)
        ! (.unmap ns sym): the mapping goes, the Var itself stays
@@ -8452,11 +8575,11 @@ contains
          nsv = strip_meta(gcv_nth(args, 0))
          out = gc_nil()
          if (gc_kind(nsv) == OBJ_NS) then
-            call vs_set(base + 2, nsv)
-            m = gca_dissoc(gc_slot(vs_get(base + 2), 2), strip_meta(gcv_nth(args, 1)), &
-                 [vs_get(base + 1), vs_get(base + 2)])
-            call gc_set_slot(vs_get(base + 2), 2, m)
-            out = vs_get(base + 2)
+            call vs_set(vst, base + 2, nsv)
+            m = gca_dissoc(gc_slot(vs_get(vst, base + 2), 2), strip_meta(gcv_nth(args, 1)), &
+                 [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+            call gc_set_slot(vs_get(vst, base + 2), 2, m)
+            out = vs_get(vst, base + 2)
          end if
        end block
     case (B_QOFFER, B_QTAKE)
@@ -8468,28 +8591,28 @@ contains
          type(gc_value) :: q, items
          logical :: gotit
          q = strip_meta(gcv_nth(args, 0))
-         call vs_set(base + 2, q)
+         call vs_set(vst, base + 2, q)
          if (id == B_QOFFER) then
-            items = gc_slot(vs_get(base + 2), 1)
-            if (.not. gcv_is(items)) items = gcv_empty([vs_get(base + 1), vs_get(base + 2)])
-            call vs_set(base + 3, items)
-            items = gcv_conj(vs_get(base + 3), gcv_nth(args, 1), &
-                 [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-            call gc_set_slot(vs_get(base + 2), 1, items)
+            items = gc_slot(vs_get(vst, base + 2), 1)
+            if (.not. gcv_is(items)) items = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
+            call vs_set(vst, base + 3, items)
+            items = gcv_conj(vs_get(vst, base + 3), gcv_nth(args, 1), &
+                 [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+            call gc_set_slot(vs_get(vst, base + 2), 1, items)
             ! Nothing else will run the taps: one OS thread, and the
             ! loop that reads this queue is parked on it. Step it here,
             ! so tap> delivers rather than waiting for the next block.
-            call run_ready_tasks(vs_get(base + 2))
+            call run_ready_tasks(vs_get(vst, base + 2))
             out = gc_bool(.true.)
          else
-            gotit = block_on(vs_get(base + 2), -1_gc_ip)
-            items = gc_slot(vs_get(base + 2), 1)
+            gotit = block_on(vs_get(vst, base + 2), -1_gc_ip)
+            items = gc_slot(vs_get(vst, base + 2), 1)
             if (gcv_is(items) .and. gcv_count(items) > 0) then
                out = gcv_nth(items, 0)
-               call vs_set(base + 3, out)
-               call gc_set_slot(vs_get(base + 2), 1, &
-                    gcv_subvec_from(items, 1, [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)]))
-               out = vs_get(base + 3)
+               call vs_set(vst, base + 3, out)
+               call gc_set_slot(vs_get(vst, base + 2), 1, &
+                    gcv_subvec_from(items, 1, [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)]))
+               out = vs_get(vst, base + 3)
             else
                out = gc_nil()
             end if
@@ -8507,51 +8630,51 @@ contains
        ! (tagged-literal tag form): {:tag t :form f} under the marker.
        block
          type(gc_value) :: m
-         m = gca_empty([vs_get(base + 1)])
-         call vs_set(base + 2, m)
-         call vs_set(base + 3, gc_key("clotran/tagged-literal", [vs_get(base + 1), vs_get(base + 2)]))
-         m = gca_assoc(vs_get(base + 2), vs_get(base + 3), gc_bool(.true.), &
-              [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-         call vs_set(base + 2, m)
-         call vs_set(base + 3, gc_key("tag", [vs_get(base + 1), vs_get(base + 2)]))
-         m = gca_assoc(vs_get(base + 2), vs_get(base + 3), gcv_nth(args, 0), &
-              [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-         call vs_set(base + 2, m)
-         call vs_set(base + 3, gc_key("form", [vs_get(base + 1), vs_get(base + 2)]))
-         out = gca_assoc(vs_get(base + 2), vs_get(base + 3), gcv_nth(args, 1), &
-              [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+         m = gca_empty([vs_get(vst, base + 1)])
+         call vs_set(vst, base + 2, m)
+         call vs_set(vst, base + 3, gc_key("clotran/tagged-literal", [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+         m = gca_assoc(vs_get(vst, base + 2), vs_get(vst, base + 3), gc_bool(.true.), &
+              [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+         call vs_set(vst, base + 2, m)
+         call vs_set(vst, base + 3, gc_key("tag", [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+         m = gca_assoc(vs_get(vst, base + 2), vs_get(vst, base + 3), gcv_nth(args, 0), &
+              [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+         call vs_set(vst, base + 2, m)
+         call vs_set(vst, base + 3, gc_key("form", [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+         out = gca_assoc(vs_get(vst, base + 2), vs_get(vst, base + 3), gcv_nth(args, 1), &
+              [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
        end block
     case (B_UUIDOF)
        ! (parse-uuid s) and UUID/fromString. A UUID is its TEXT here
        ! (DEVIATIONS 12: java.util.UUID is not a type clotran has), so
        ! this checks the shape and answers the string; a string that
        ! is not one raises, which is what parse-uuid catches to nil.
-       out = uuid_of(gcv_nth(args, 0), [vs_get(base + 1)])
+       out = uuid_of(gcv_nth(args, 0), [vs_get(vst, base + 1)])
     case (B_ADDWATCH, B_REMWATCH, B_GETWATCHES)
        ! The watches live beside the validator and the error handler
        ! in slot 4, as a map from key to fn.
        block
          type(gc_value) :: r, w
          r = strip_meta(gcv_nth(args, 0))
-         call vs_set(base + 2, r)
-         w = ref_fn_get(vs_get(base + 2), "watches", [vs_get(base + 1), vs_get(base + 2)])
-         if (.not. gca_is(w)) w = gca_empty([vs_get(base + 1), vs_get(base + 2)])
-         call vs_set(base + 3, w)
+         call vs_set(vst, base + 2, r)
+         w = ref_fn_get(vs_get(vst, base + 2), "watches", [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+         if (.not. gca_is(w)) w = gca_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
+         call vs_set(vst, base + 3, w)
          select case (id)
          case (B_GETWATCHES)
-            out = vs_get(base + 3)
+            out = vs_get(vst, base + 3)
          case (B_ADDWATCH)
-            w = gca_assoc(vs_get(base + 3), gcv_nth(args, 1), gcv_nth(args, 2), &
-                 [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-            call vs_set(base + 3, w)
-            call ref_fn_put(vs_get(base + 2), "watches", vs_get(base + 3), [vs_get(base + 1)])
-            out = vs_get(base + 2)
+            w = gca_assoc(vs_get(vst, base + 3), gcv_nth(args, 1), gcv_nth(args, 2), &
+                 [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+            call vs_set(vst, base + 3, w)
+            call ref_fn_put(vs_get(vst, base + 2), "watches", vs_get(vst, base + 3), [vs_get(vst, base + 1)])
+            out = vs_get(vst, base + 2)
          case default
-            w = gca_dissoc(vs_get(base + 3), gcv_nth(args, 1), &
-                 [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-            call vs_set(base + 3, w)
-            call ref_fn_put(vs_get(base + 2), "watches", vs_get(base + 3), [vs_get(base + 1)])
-            out = vs_get(base + 2)
+            w = gca_dissoc(vs_get(vst, base + 3), gcv_nth(args, 1), &
+                 [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+            call vs_set(vst, base + 3, w)
+            call ref_fn_put(vs_get(vst, base + 2), "watches", vs_get(vst, base + 3), [vs_get(vst, base + 1)])
+            out = vs_get(vst, base + 2)
          end select
        end block
     case (B_HASHORD, B_HASHUNORD)
@@ -8564,20 +8687,20 @@ contains
          type(gc_value) :: sq, el
          integer :: acc
          acc = 0
-         sq = to_seq(gcv_nth(args, 0), [vs_get(base + 1)])
-         call vs_set(base + 2, sq)
-         sq = vs_get(base + 2)
+         sq = to_seq(gcv_nth(args, 0), [vs_get(vst, base + 1)])
+         call vs_set(vst, base + 2, sq)
+         sq = vs_get(vst, base + 2)
          do while (sq%tag /= GCT_NIL .and. .not. tctx%has_error)
-            el = sq_first(vs_get(base + 2), [vs_get(base + 1), vs_get(base + 2)])
+            el = sq_first(vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
             if (id == B_HASHORD) then
                acc = 31 * acc + gc_hash(el)
             else
                acc = acc + gc_hash(el)
             end if
-            sq = sq_rest(vs_get(base + 2), [vs_get(base + 1), vs_get(base + 2)])
-            call vs_set(base + 2, sq)
-            sq = to_seq(vs_get(base + 2), [vs_get(base + 1), vs_get(base + 2)])
-            call vs_set(base + 2, sq)
+            sq = sq_rest(vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+            call vs_set(vst, base + 2, sq)
+            sq = to_seq(vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+            call vs_set(vst, base + 2, sq)
          end do
          if (id == B_HASHORD) then
             out = gc_int(mix32(acc))
@@ -8623,7 +8746,7 @@ contains
             if (participated) then
                subj = gc_slot(mt, 2)
                stext = text_of(subj)
-               out = gc_str(u8_slice(stext, gstart, gend), [vs_get(base + 1)])
+               out = gc_str(u8_slice(stext, gstart, gend), [vs_get(vst, base + 1)])
             end if
          end if
        end block
@@ -8643,7 +8766,7 @@ contains
               tv2 = strip_meta(gcv_nth(args, 0))
               if (gcn_is_var(tv2)) then
                  out = gc_slot(tv2, 4)
-                 call vs_leave(base)
+                 call vs_leave(vst, base)
                  return
               end if
             end block
@@ -8653,7 +8776,7 @@ contains
          case default;          fk = "map"
          end select
          out = gca_get(strip_meta(gcv_nth(args, 0)), &
-              gc_key(trim(fk), [vs_get(base + 1)]))
+              gc_key(trim(fk), [vs_get(vst, base + 1)]))
        end block
     case (B_FLD_CACHE)
        ! A protocol function carries its dispatch cache on ITSELF --
@@ -8673,7 +8796,7 @@ contains
          if (gcn_is_var(vv)) then
             nm2 = gc_slot(vv, 4)
             out = gc_sym(gcn_name(gc_slot(vv, 3)) // "/" // name_part(nm2), &
-                 [vs_get(base + 1)])
+                 [vs_get(vst, base + 1)])
          end if
        end block
     case (B_VARINTERN)
@@ -8685,10 +8808,10 @@ contains
          sym2 = strip_meta(gcv_nth(args, 1))
          val2 = gc_nil()
          if (n >= 3) val2 = gcv_nth(args, 2)
-         call vs_set(base + 2, nsv)
-         call vs_set(base + 3, sym2)
-         var2 = gcn_intern(vs_get(base + 2), vs_get(base + 3), val2, &
-              [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+         call vs_set(vst, base + 2, nsv)
+         call vs_set(vst, base + 3, sym2)
+         var2 = gcn_intern(vs_get(vst, base + 2), vs_get(vst, base + 3), val2, &
+              [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
          if (n >= 3) call gc_set_i1(var2, 1)
          out = var2
        end block
@@ -8708,8 +8831,8 @@ contains
             cn = gc_ref_text(a%ref)
             if (len(cn) > 0) then
                if (cn(1:1) == "[") then
-                  out = gc_class(cn, [vs_get(base + 1)])
-                  call vs_leave(base)
+                  out = gc_class(cn, [vs_get(vst, base + 1)])
+                  call vs_leave(vst, base)
                   return
                end if
             end if
@@ -8723,12 +8846,12 @@ contains
        block
          type(gc_value) :: exc
          exc = gc_obj(OBJ_ERR, &
-              [gc_sym("ClassNotFoundException", [vs_get(base + 1)]), &
-               gcv_nth(args, 0), gc_nil()], [vs_get(base + 1)])
-         call vs_set(base + 2, exc)
-         call set_thrown(vs_get(base + 2))
+              [gc_sym("ClassNotFoundException", [vs_get(vst, base + 1)]), &
+               gcv_nth(args, 0), gc_nil()], [vs_get(vst, base + 1)])
+         call vs_set(vst, base + 2, exc)
+         call set_thrown(vs_get(vst, base + 2))
          tctx%has_error = .true.
-         tctx%last_error = gcp_str(vs_get(base + 2), .true.)
+         tctx%last_error = gcp_str(vs_get(vst, base + 2), .true.)
          out = gc_nil()
        end block
     case (B_TOARRAY)
@@ -8737,13 +8860,13 @@ contains
        ! `sort`: it is (let [a (to-array coll)] (. Arrays (sort a cmp))
        ! (seq a)) -- the array is sorted IN PLACE and then read back,
        ! and a persistent vector cannot be mutated.
-       out = value_array_of(gcv_nth(args, 0), [vs_get(base + 1)])
+       out = value_array_of(gcv_nth(args, 0), [vs_get(vst, base + 1)])
     case (B_ITERATE)
        ! (iterate f x) -- x, (f x), (f (f x)) ... unbounded, so a
        ! LAZY cell whose thunk is built by the evaluator. Realised
        ! head, unrealised tail: exactly what lazy-seq produces.
        out = iterate_cell(gcv_nth(args, 0), gcv_nth(args, 1), &
-            [vs_get(base + 1)])
+            [vs_get(vst, base + 1)])
     case (B_CYCLE)
        ! (cycle coll) repeats it forever. Built by hand as a ring:
        ! the last cell'"s tail is the first cell, so the whole thing
@@ -8751,28 +8874,28 @@ contains
        block
          type(gc_value) :: items, cell, prev, firstc
          integer :: j, cn
-         items = coll_to_vector(gcv_nth(args, 0), [vs_get(base + 1)])
-         call vs_set(base + 2, items)
-         cn = gcv_count(vs_get(base + 2))
+         items = coll_to_vector(gcv_nth(args, 0), [vs_get(vst, base + 1)])
+         call vs_set(vst, base + 2, items)
+         cn = gcv_count(vs_get(vst, base + 2))
          out = gc_nil()
          if (cn > 0) then
             firstc = gc_nil()
             prev = gc_nil()
             do j = 0, cn - 1
                cell = gc_obj(OBJ_LAZY, [gc_nil(), &
-                    gcv_nth(vs_get(base + 2), j), gc_nil()], &
-                    [vs_get(base + 1), vs_get(base + 2)])
+                    gcv_nth(vs_get(vst, base + 2), j), gc_nil()], &
+                    [vs_get(vst, base + 1), vs_get(vst, base + 2)])
                call gc_set_i1(cell, LAZY_CONS)
                if (j == 0) then
                   firstc = cell
-                  call vs_set(base + 3, firstc)
+                  call vs_set(vst, base + 3, firstc)
                else
                   call gc_set_slot(prev, 3, cell)
                end if
                prev = cell
             end do
-            call gc_set_slot(prev, 3, vs_get(base + 3))
-            out = vs_get(base + 3)
+            call gc_set_slot(prev, 3, vs_get(vst, base + 3))
+            out = vs_get(vst, base + 3)
          end if
        end block
     case (B_REPEAT)
@@ -8786,17 +8909,17 @@ contains
             integer :: j, cnt
             iv = as_index(gcv_nth(args, 0))
             cnt = int(iv%ival)
-            acc = gcl_empty([vs_get(base + 1)])
-            call vs_set(base + 2, acc)
+            acc = gcl_empty([vs_get(vst, base + 1)])
+            call vs_set(vst, base + 2, acc)
             do j = 1, cnt
-               acc = gcl_cons(gcv_nth(args, 1), vs_get(base + 2), [vs_get(base + 1)])
-               call vs_set(base + 2, acc)
+               acc = gcl_cons(gcv_nth(args, 1), vs_get(vst, base + 2), [vs_get(vst, base + 1)])
+               call vs_set(vst, base + 2, acc)
             end do
-            out = vs_get(base + 2)
+            out = vs_get(vst, base + 2)
           end block
        else
           out = gc_obj(OBJ_LAZY, [gc_nil(), gcv_nth(args, 0), gc_nil()], &
-               [vs_get(base + 1)])
+               [vs_get(vst, base + 1)])
           call gc_set_i1(out, LAZY_CONS)
           call gc_set_slot(out, 3, out)
        end if
@@ -8816,11 +8939,11 @@ contains
          if (.not. (is_number(lo) .and. is_number(hi) .and. is_number(stp))) then
                  call fail("range: not a number")
          else
-            out = range_cell(lo, hi, stp, [vs_get(base + 1)])
+            out = range_cell(lo, hi, stp, [vs_get(vst, base + 1)])
          end if
        end block
     case (B_RUNTX)
-       out = apply(gcv_nth(args, 0), gcv_empty([vs_get(base + 1)]))
+       out = apply(gcv_nth(args, 0), gcv_empty([vs_get(vst, base + 1)]))
     case (B_VARNS)
        a = strip_meta(gcv_nth(args, 0))
        out = gc_nil()
@@ -8838,7 +8961,7 @@ contains
                slot = 3
             end if
             out = gc_slot(nsv, slot)
-            if (.not. gca_is(out)) out = gca_empty([vs_get(base + 1)])
+            if (.not. gca_is(out)) out = gca_empty([vs_get(vst, base + 1)])
          end if
        end block
     case (B_NSADDALIAS)
@@ -8852,14 +8975,14 @@ contains
          nsv = strip_meta(gcv_nth(args, 0))
          out = gc_nil()
          if (gc_kind(nsv) == OBJ_NS) then
-            call vs_set(base + 2, nsv)
-            m = gc_slot(vs_get(base + 2), 3)
-            if (.not. gca_is(m)) m = gca_empty([vs_get(base + 1)])
-            call vs_set(base + 3, m)
-            m = gca_assoc(vs_get(base + 3), strip_meta(gcv_nth(args, 1)), &
+            call vs_set(vst, base + 2, nsv)
+            m = gc_slot(vs_get(vst, base + 2), 3)
+            if (.not. gca_is(m)) m = gca_empty([vs_get(vst, base + 1)])
+            call vs_set(vst, base + 3, m)
+            m = gca_assoc(vs_get(vst, base + 3), strip_meta(gcv_nth(args, 1)), &
                  gcv_nth(args, 2), &
-                 [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-            call gc_set_slot(vs_get(base + 2), 3, m)
+                 [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+            call gc_set_slot(vs_get(vst, base + 2), 3, m)
          end if
        end block
     case (B_NSREFER)
@@ -8871,13 +8994,13 @@ contains
          nsv = strip_meta(gcv_nth(args, 0))
          out = gc_nil()
          if (gc_kind(nsv) == OBJ_NS) then
-            call vs_set(base + 2, nsv)
-            m = gc_slot(vs_get(base + 2), 2)
-            if (.not. gca_is(m)) m = gca_empty([vs_get(base + 1)])
+            call vs_set(vst, base + 2, nsv)
+            m = gc_slot(vs_get(vst, base + 2), 2)
+            if (.not. gca_is(m)) m = gca_empty([vs_get(vst, base + 1)])
             m = gca_assoc(m, strip_meta(gcv_nth(args, 1)), gcv_nth(args, 2), &
-                 [vs_get(base + 1), vs_get(base + 2)])
-            call gc_set_slot(vs_get(base + 2), 2, m)
-            out = vs_get(base + 2)
+                 [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+            call gc_set_slot(vs_get(vst, base + 2), 2, m)
+            out = vs_get(vst, base + 2)
          end if
        end block
     case (B_MAYBERESOLVE)
@@ -8896,35 +9019,35 @@ contains
          if (sym2%tag /= GCT_SYM) then
             continue
          else if (gc_kind(nsv) /= OBJ_NS) then
-            out = resolve_var(sym2, vs_get(base + 1))
+            out = resolve_var(sym2, vs_get(vst, base + 1))
          else
-            call vs_set(base + 2, nsv)
+            call vs_set(vst, base + 2, nsv)
             t = gc_ref_text(sym2%ref)
             slash = index(t, "/")
             if (slash > 1 .and. slash < len(t)) then
-               tgt = alias_in(vs_get(base + 2), t(1:slash-1), [vs_get(base + 1)])
+               tgt = alias_in(vs_get(vst, base + 2), t(1:slash-1), [vs_get(vst, base + 1)])
                if (gc_kind(tgt) /= OBJ_NS) tgt = gcn_find(t(1:slash-1))
                if (gc_kind(tgt) == OBJ_NS) then
-                  call vs_set(base + 3, tgt)
-                  out = gcn_lookup(vs_get(base + 3), gc_sym(t(slash+1:), [vs_get(base + 1), vs_get(base + 3)]))
+                  call vs_set(vst, base + 3, tgt)
+                  out = gcn_lookup(vs_get(vst, base + 3), gc_sym(t(slash+1:), [vs_get(vst, base + 1), vs_get(vst, base + 3)]))
                end if
                if (.not. gcn_is_var(out)) out = gc_nil()
             else
-               out = gcn_lookup(vs_get(base + 2), sym2)
+               out = gcn_lookup(vs_get(vst, base + 2), sym2)
                ! then clojure.core, which every namespace refers -- the
                ! same fallback a bare symbol takes when it is analysed
                ! (DEVIATIONS 3). Without it (resolve 'nil?) was nil in
                ! every namespace but clojure.core, and clojure.spec.alpha
                ! resolves the symbols of a pred form that way.
                if (.not. gcn_is_var(out)) &
-                    out = gcn_lookup(gcn_find_or_create("clojure.core", [vs_get(base + 1)]), sym2)
+                    out = gcn_lookup(gcn_find_or_create("clojure.core", [vs_get(vst, base + 1)]), sym2)
                if (.not. gcn_is_var(out)) then
                   out = gc_nil()
                   ! A class that EXISTS -- a row in the host table or a
                   ! deftype -- and not merely a name shaped like one:
                   ! (resolve 'NonExistentClass.Name) is nil on the JVM.
                   if (is_class_name(sym2) .and. known_class_name(t)) &
-                       out = gc_class(class_key(t), [vs_get(base + 1)])
+                       out = gc_class(class_key(t), [vs_get(vst, base + 1)])
                end if
             end if
          end if
@@ -8943,31 +9066,31 @@ contains
             if (id == B_PEEK) then
                if (cn > 0) out = gcv_nth(coll, cn - 1)
             else if (cn == 0) then
-               call raise_class("IllegalStateException", "Can't pop empty vector", [vs_get(base + 1)])
+               call raise_class("IllegalStateException", "Can't pop empty vector", [vs_get(vst, base + 1)])
             else
-               acc = gcv_empty([vs_get(base + 1)])
-               call vs_set(base + 2, acc)
+               acc = gcv_empty([vs_get(vst, base + 1)])
+               call vs_set(vst, base + 2, acc)
                do j = 0, cn - 2
-                  acc = gcv_conj(vs_get(base + 2), gcv_nth(coll, j), &
-                       [vs_get(base + 1), vs_get(base + 2)])
-                  call vs_set(base + 2, acc)
+                  acc = gcv_conj(vs_get(vst, base + 2), gcv_nth(coll, j), &
+                       [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+                  call vs_set(vst, base + 2, acc)
                end do
-               out = keep_meta(gcv_nth(args, 0), vs_get(base + 2), [vs_get(base + 1)])
+               out = keep_meta(gcv_nth(args, 0), vs_get(vst, base + 2), [vs_get(vst, base + 1)])
             end if
          else if (.not. gcl_is(coll) .and. coll%tag /= GCT_NIL) then
             ! not a stack: IPersistentStack is a vector or a list, and a
             ! seq, a set or a map is refused as on the JVM
             call raise_class("ClassCastException", class_name_of(coll) // &
-                 " cannot be cast to clojure.lang.IPersistentStack", [vs_get(base + 1)])
+                 " cannot be cast to clojure.lang.IPersistentStack", [vs_get(vst, base + 1)])
          else if (coll%tag /= GCT_NIL) then
             if (id == B_PEEK) then
-               out = sq_first(coll, [vs_get(base + 1)])
+               out = sq_first(coll, [vs_get(vst, base + 1)])
             else
-               acc = to_seq(coll, [vs_get(base + 1)])
+               acc = to_seq(coll, [vs_get(vst, base + 1)])
                if (acc%tag == GCT_NIL) then
-                  call raise_class("IllegalStateException", "Can't pop empty list", [vs_get(base + 1)])
+                  call raise_class("IllegalStateException", "Can't pop empty list", [vs_get(vst, base + 1)])
                else
-                  out = sq_rest(coll, [vs_get(base + 1)])
+                  out = sq_rest(coll, [vs_get(vst, base + 1)])
                end if
             end if
          end if
@@ -8982,7 +9105,7 @@ contains
          if (a%tag == GCT_SYM .or. a%tag == GCT_KEY) then
             t = gc_ref_text(a%ref)
             sl = index(t, "/")
-            if (sl > 1) out = gc_str(t(1:sl-1), [vs_get(base + 1)])
+            if (sl > 1) out = gc_str(t(1:sl-1), [vs_get(vst, base + 1)])
          end if
        end block
     case (B_KEY, B_VAL)
@@ -8990,9 +9113,9 @@ contains
          type(gc_value) :: e
          e = strip_meta(gcv_nth(args, 0))
          if (id == B_KEY) then
-            out = seq_elem(e, 0, [vs_get(base + 1)])
+            out = seq_elem(e, 0, [vs_get(vst, base + 1)])
          else
-            out = seq_elem(e, 1, [vs_get(base + 1)])
+            out = seq_elem(e, 1, [vs_get(vst, base + 1)])
          end if
        end block
     case (B_CONTAINS)
@@ -9002,7 +9125,7 @@ contains
          if (gc_kind(coll) == OBJ_INST) then
             out = inst_invoke(coll, "containsKey", rest_args(args, 1), hit)
             if (hit) then
-             call vs_leave(base)
+             call vs_leave(vst, base)
              return
           end if
          end if
@@ -9018,21 +9141,21 @@ contains
          if (gcv_is(coll)) then
             ! a vector is associative by index: (find [1 2] 0) is [0 1]
             if (coll_has(coll, gcv_nth(args, 1))) then
-               pair = gcv_empty([vs_get(base + 1)])
-               pair = gcv_conj(pair, gcv_nth(args, 1), [vs_get(base + 1)])
-               call vs_set(base + 2, pair)
-               pair = gcv_conj(vs_get(base + 2), gcv_nth(coll, int_of(gcv_nth(args, 1))), &
-                    [vs_get(base + 1), vs_get(base + 2)])
+               pair = gcv_empty([vs_get(vst, base + 1)])
+               pair = gcv_conj(pair, gcv_nth(args, 1), [vs_get(vst, base + 1)])
+               call vs_set(vst, base + 2, pair)
+               pair = gcv_conj(vs_get(vst, base + 2), gcv_nth(coll, int_of(gcv_nth(args, 1))), &
+                    [vs_get(vst, base + 1), vs_get(vst, base + 2)])
                out = pair
                call mark_entry(out)
             end if
          else if (gca_contains(coll, gcv_nth(args, 1))) then
-            pair = gcv_empty([vs_get(base + 1)])
+            pair = gcv_empty([vs_get(vst, base + 1)])
             ! the map's own key, metadata and all, as MapEntry carries it
-            pair = gcv_conj(pair, gca_find_key(coll, gcv_nth(args, 1)), [vs_get(base + 1)])
-            call vs_set(base + 2, pair)
-            pair = gcv_conj(vs_get(base + 2), gca_get(coll, gcv_nth(args, 1)), &
-                 [vs_get(base + 1), vs_get(base + 2)])
+            pair = gcv_conj(pair, gca_find_key(coll, gcv_nth(args, 1)), [vs_get(vst, base + 1)])
+            call vs_set(vst, base + 2, pair)
+            pair = gcv_conj(vs_get(vst, base + 2), gca_get(coll, gcv_nth(args, 1)), &
+                 [vs_get(vst, base + 1), vs_get(vst, base + 2)])
             out = pair
             call mark_entry(out)
          end if
@@ -9041,11 +9164,11 @@ contains
        a = gcv_nth(args, 0)
        if (gc_kind(a) == OBJ_MULTIFN) then
           ! MultiFn.reset, behind remove-all-methods: methods, preferences and cache
-          call gc_set_slot(a, 4, gca_empty([vs_get(base + 1)]))
-          call mf_aux_set(a, 1, gca_empty([vs_get(base + 1)]))
+          call gc_set_slot(a, 4, gca_empty([vs_get(vst, base + 1)]))
+          call mf_aux_set(a, 1, gca_empty([vs_get(vst, base + 1)]))
           call mf_reset_cache(a)
           out = a
-          call vs_leave(base)
+          call vs_leave(vst, base)
           return
        end if
        out = gcv_nth(args, 1)
@@ -9054,14 +9177,14 @@ contains
          ! THE VALIDATOR RUNS BEFORE THE WRITE, and a refusal
          ! leaves the reference alone -- which is the whole point
          ! of set-validator!.
-         if (.not. validate_ref(a, ref_fn_get(a, "validator", [vs_get(base + 1)]), &
-              out, [vs_get(base + 1)])) then
-            call vs_leave(base)
+         if (.not. validate_ref(a, ref_fn_get(a, "validator", [vs_get(vst, base + 1)]), &
+              out, [vs_get(vst, base + 1)])) then
+            call vs_leave(vst, base)
             return
          end if
          prev = gc_slot(a, 1)
          call gc_set_slot(a, 1, out)
-         call notify_watches(a, prev, out, [vs_get(base + 1)])
+         call notify_watches(a, prev, out, [vs_get(vst, base + 1)])
          if (id == B_RESETVALS) out = value_pair(prev, out, [a, args])
        end block
     case (B_SWAPVAL, B_SWAPVALS)
@@ -9075,48 +9198,48 @@ contains
        block
          type(gc_value) :: fargs
          integer :: lb, j
-         lb = vs_enter(3)
-         call vs_set(lb + 1, strip_meta(gcv_nth(args, 0)))
-         fargs = gcv_empty([vs_get(lb + 1)])
-         fargs = gcv_conj(fargs, gc_slot(vs_get(lb + 1), 1), [vs_get(lb + 1)])
-         call vs_set(lb + 2, fargs)
+         lb = vs_enter(vst, 3)
+         call vs_set(vst, lb + 1, strip_meta(gcv_nth(args, 0)))
+         fargs = gcv_empty([vs_get(vst, lb + 1)])
+         fargs = gcv_conj(fargs, gc_slot(vs_get(vst, lb + 1), 1), [vs_get(vst, lb + 1)])
+         call vs_set(vst, lb + 2, fargs)
          ! indices 2 and 3 are values
          do j = 2, min(n, 4) - 1
-            fargs = gcv_conj(vs_get(lb + 2), gcv_nth(args, j), &
-                 [vs_get(lb + 1), vs_get(lb + 2)])
-            call vs_set(lb + 2, fargs)
+            fargs = gcv_conj(vs_get(vst, lb + 2), gcv_nth(args, j), &
+                 [vs_get(vst, lb + 1), vs_get(vst, lb + 2)])
+            call vs_set(vst, lb + 2, fargs)
          end do
          ! index 4, when present, is a seq to splice
          if (n >= 5) then
-            call vs_set(lb + 3, coll_to_vector(gcv_nth(args, 4), &
-                 [vs_get(lb + 1), vs_get(lb + 2)]))
-            do j = 0, gcv_count(vs_get(lb + 3)) - 1
-               fargs = gcv_conj(vs_get(lb + 2), gcv_nth(vs_get(lb + 3), j), &
-                    [vs_get(lb + 1), vs_get(lb + 2), vs_get(lb + 3)])
-               call vs_set(lb + 2, fargs)
+            call vs_set(vst, lb + 3, coll_to_vector(gcv_nth(args, 4), &
+                 [vs_get(vst, lb + 1), vs_get(vst, lb + 2)]))
+            do j = 0, gcv_count(vs_get(vst, lb + 3)) - 1
+               fargs = gcv_conj(vs_get(vst, lb + 2), gcv_nth(vs_get(vst, lb + 3), j), &
+                    [vs_get(vst, lb + 1), vs_get(vst, lb + 2), vs_get(vst, lb + 3)])
+               call vs_set(vst, lb + 2, fargs)
             end do
          end if
-         out = apply(gcv_nth(args, 1), vs_get(lb + 2))
+         out = apply(gcv_nth(args, 1), vs_get(vst, lb + 2))
          if (.not. tctx%has_error) then
-            if (.not. validate_ref(vs_get(lb + 1), &
-                 ref_fn_get(vs_get(lb + 1), "validator", [vs_get(lb + 1)]), &
-                 out, [vs_get(lb + 1)])) then
-               call vs_leave(lb)
-               call vs_leave(base)
+            if (.not. validate_ref(vs_get(vst, lb + 1), &
+                 ref_fn_get(vs_get(vst, lb + 1), "validator", [vs_get(vst, lb + 1)]), &
+                 out, [vs_get(vst, lb + 1)])) then
+               call vs_leave(vst, lb)
+               call vs_leave(vst, base)
                return
             end if
             if (id == B_SWAPVALS) then
-               out = value_pair(gc_slot(vs_get(lb + 1), 1), out, &
-                    [vs_get(lb + 1), vs_get(lb + 2)])
-               call gc_set_slot(vs_get(lb + 1), 1, gcv_nth(out, 1))
-               call notify_watches(vs_get(lb + 1), gcv_nth(out, 0), gcv_nth(out, 1), [vs_get(lb + 2)])
+               out = value_pair(gc_slot(vs_get(vst, lb + 1), 1), out, &
+                    [vs_get(vst, lb + 1), vs_get(vst, lb + 2)])
+               call gc_set_slot(vs_get(vst, lb + 1), 1, gcv_nth(out, 1))
+               call notify_watches(vs_get(vst, lb + 1), gcv_nth(out, 0), gcv_nth(out, 1), [vs_get(vst, lb + 2)])
             else
-               call vs_set(lb + 3, gc_slot(vs_get(lb + 1), 1))
-               call gc_set_slot(vs_get(lb + 1), 1, out)
-               call notify_watches(vs_get(lb + 1), vs_get(lb + 3), out, [vs_get(lb + 2)])
+               call vs_set(vst, lb + 3, gc_slot(vs_get(vst, lb + 1), 1))
+               call gc_set_slot(vs_get(vst, lb + 1), 1, out)
+               call notify_watches(vs_get(vst, lb + 1), vs_get(vst, lb + 3), out, [vs_get(vst, lb + 2)])
             end if
          end if
-         call vs_leave(lb)
+         call vs_leave(vst, lb)
        end block
     case (B_ALTERVAL)
        ! (.alter ref f args) is (apply f @ref args), stored back.
@@ -9124,29 +9247,29 @@ contains
          type(gc_value) :: ref, fargs, extra
          integer :: j
          ref = gcv_nth(args, 0)
-         call vs_set(base + 2, ref)
-         fargs = gcv_empty([vs_get(base + 1), vs_get(base + 2)])
-         fargs = gcv_conj(fargs, gc_slot(vs_get(base + 2), var_root_slot(vs_get(base + 2))), &
-              [vs_get(base + 1), vs_get(base + 2)])
-         call vs_set(base + 3, fargs)
+         call vs_set(vst, base + 2, ref)
+         fargs = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
+         fargs = gcv_conj(fargs, gc_slot(vs_get(vst, base + 2), var_root_slot(vs_get(vst, base + 2))), &
+              [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+         call vs_set(vst, base + 3, fargs)
          if (n >= 3) then
-            extra = coll_to_vector(gcv_nth(args, 2), [vs_get(base + 1), vs_get(base + 3)])
-            fargs = vs_get(base + 3)
+            extra = coll_to_vector(gcv_nth(args, 2), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
+            fargs = vs_get(vst, base + 3)
             do j = 0, gcv_count(extra) - 1
-               fargs = gcv_conj(fargs, gcv_nth(extra, j), [vs_get(base + 1), extra])
-               call vs_set(base + 3, fargs)
+               fargs = gcv_conj(fargs, gcv_nth(extra, j), [vs_get(vst, base + 1), extra])
+               call vs_set(vst, base + 3, fargs)
             end do
          end if
-         out = apply(gcv_nth(args, 1), vs_get(base + 3))
-         if (.not. tctx%has_error) call gc_set_slot(vs_get(base + 2), var_root_slot(vs_get(base + 2)), out)
+         out = apply(gcv_nth(args, 1), vs_get(vst, base + 3))
+         if (.not. tctx%has_error) call gc_set_slot(vs_get(vst, base + 2), var_root_slot(vs_get(vst, base + 2)), out)
        end block
     case (B_BINDROOT)
        ! Var.bindRoot: the root, wherever a binding in force has put it
        a = gcv_nth(args, 0)
        out = gcv_nth(args, 1)
-       if (.not. validate_ref(a, ref_fn_get(a, "validator", [vs_get(base + 1)]), &
-            out, [vs_get(base + 1)])) then
-          call vs_leave(base)
+       if (.not. validate_ref(a, ref_fn_get(a, "validator", [vs_get(vst, base + 1)]), &
+            out, [vs_get(vst, base + 1)])) then
+          call vs_leave(vst, base)
           return
        end if
        call gc_set_slot(a, var_root_slot(a), out)
@@ -9156,7 +9279,7 @@ contains
        out = gc_slot(a, var_root_slot(a))
     case (B_MAPENTRY)
        ! MapEntry/create
-       out = value_pair(gcv_nth(args, 0), gcv_nth(args, 1), [vs_get(base + 1)])
+       out = value_pair(gcv_nth(args, 0), gcv_nth(args, 1), [vs_get(vst, base + 1)])
        call mark_entry(out)
     case (B_ISASSIGN)
        out = gc_bool(class_assignable(strip_meta(gcv_nth(args, 0)), strip_meta(gcv_nth(args, 1))))
@@ -9178,14 +9301,14 @@ contains
     case (B_NSCREATE)
        ! Namespace.findOrCreate, behind create-ns: the one that makes one
        a = strip_meta(gcv_nth(args, 0))
-       out = gcn_find_or_create(gc_ref_text(a%ref), [vs_get(base + 1)])
+       out = gcn_find_or_create(gc_ref_text(a%ref), [vs_get(vst, base + 1)])
     case (B_NSREMOVE)
        ! Namespace.remove, which refuses clojure.core as it does there
        a = strip_meta(gcv_nth(args, 0))
        out = gc_nil()
        if (a%tag == GCT_SYM) then
           if (gc_ref_is(a%ref, "clojure.core")) then
-             call raise_class("IllegalArgumentException", "Cannot remove clojure namespace", [vs_get(base + 1)])
+             call raise_class("IllegalArgumentException", "Cannot remove clojure namespace", [vs_get(vst, base + 1)])
           else
              out = gcn_remove(gc_ref_text(a%ref))
           end if
@@ -9208,11 +9331,11 @@ contains
          else
             genv = gc_nil()
          end if
-         call vs_set(base + 2, genv)
-         form = gce_analyze(gcv_nth(args, 0), vs_get(base + 2))
-         call vs_set(base + 3, form)
+         call vs_set(vst, base + 2, genv)
+         form = gce_analyze(gcv_nth(args, 0), vs_get(vst, base + 2))
+         call vs_set(vst, base + 3, form)
          if (.not. tctx%has_error) &
-              out = gce_eval(vs_get(base + 3), vs_get(base + 2), [vs_get(base + 1)])
+              out = gce_eval(vs_get(vst, base + 3), vs_get(vst, base + 2), [vs_get(vst, base + 1)])
        end block
     case (B_ALWAYS_NIL)
        out = gc_nil()
@@ -9224,15 +9347,15 @@ contains
          type(gc_value), allocatable :: kk(:), vv(:)
          integer :: j
          m = strip_meta(gcv_nth(args, 0))
-         call vs_set(base + 2, m)
-         call gca_entries(vs_get(base + 2), kk, vv)
-         saved = gca_empty([vs_get(base + 1), vs_get(base + 2)])
-         call vs_set(base + 3, saved)
+         call vs_set(vst, base + 2, m)
+         call gca_entries(vs_get(vst, base + 2), kk, vv)
+         saved = gca_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
+         call vs_set(vst, base + 3, saved)
          do j = 1, size(kk)
             if (gcn_is_var(kk(j))) then
-               saved = gca_assoc(vs_get(base + 3), kk(j), gc_slot(kk(j), 1), &
-                    [vs_get(base + 1), vs_get(base + 3)])
-               call vs_set(base + 3, saved)
+               saved = gca_assoc(vs_get(vst, base + 3), kk(j), gc_slot(kk(j), 1), &
+                    [vs_get(vst, base + 1), vs_get(vst, base + 3)])
+               call vs_set(vst, base + 3, saved)
                ! The first binding of a Var parks its ROOT in slot 5,
                ! where bindRoot, alter-var-root and def reach it while
                ! the binding stands; i2 counts the bindings. So
@@ -9246,9 +9369,9 @@ contains
          if (gc_root_live(tctx%binding_stack_root)) then
             stack = gc_root_get(tctx%binding_stack_root)
          else
-            stack = gcl_empty([vs_get(base + 3)])
+            stack = gcl_empty([vs_get(vst, base + 3)])
          end if
-         stack = gcl_cons(vs_get(base + 3), stack, [vs_get(base + 3), stack])
+         stack = gcl_cons(vs_get(vst, base + 3), stack, [vs_get(vst, base + 3), stack])
          call gc_global_keep(tctx%binding_stack_root, stack)
          out = gc_nil()
        end block
@@ -9260,11 +9383,11 @@ contains
          out = gc_nil()
          if (gc_root_live(tctx%binding_stack_root)) then
             stack = gc_root_get(tctx%binding_stack_root)
-            call vs_set(base + 2, stack)
-            if (gcl_count(vs_get(base + 2)) > 0) then
-               frame = gcl_first(vs_get(base + 2))
-               call vs_set(base + 3, frame)
-               call gca_entries(vs_get(base + 3), kk, vv)
+            call vs_set(vst, base + 2, stack)
+            if (gcl_count(vs_get(vst, base + 2)) > 0) then
+               frame = gcl_first(vs_get(vst, base + 2))
+               call vs_set(vst, base + 3, frame)
+               call gca_entries(vs_get(vst, base + 3), kk, vv)
                do j = 1, size(kk)
                   if (gcn_is_var(kk(j))) then
                      call gc_set_slot(kk(j), 1, vv(j))
@@ -9277,7 +9400,7 @@ contains
                   end if
                end do
                call gc_global_keep(tctx%binding_stack_root, &
-                    gcl_rest(vs_get(base + 2), [vs_get(base + 2)]))
+                    gcl_rest(vs_get(vst, base + 2), [vs_get(vst, base + 2)]))
             end if
          end if
        end block
@@ -9285,7 +9408,7 @@ contains
        block
          type(gc_value) :: sym2
          sym2 = strip_meta(gcv_nth(args, 0))
-         out = resolve_var(sym2, vs_get(base + 1))
+         out = resolve_var(sym2, vs_get(vst, base + 1))
        end block
     case (B_LASTINDEXOF)
        block
@@ -9340,7 +9463,7 @@ contains
          ! so does this. Quietly, because it is not a gap.
          if (rel == "clojure/core") then
             out = gc_nil()
-            call vs_leave(base)
+            call vs_leave(vst, base)
             return
          end if
          if (rel == "clojure/core_proxy" .or. &
@@ -9361,10 +9484,10 @@ contains
                  if (nsname(ci:ci) == "/") nsname(ci:ci) = "."
                  if (nsname(ci:ci) == "_") nsname(ci:ci) = "-"
               end do
-              call vs_set(base + 2, gcn_find_or_create(nsname, [vs_get(base + 1)]))
+              call vs_set(vst, base + 2, gcn_find_or_create(nsname, [vs_get(vst, base + 1)]))
             end block
             out = gc_nil()
-            call vs_leave(base)
+            call vs_leave(vst, base)
             return
          end if
          ! Two of Rich's files are Clojure written against java.util --
@@ -9376,17 +9499,17 @@ contains
          ! DEVIATIONS.md 40.
          if (rel == "clojure/core_print") rel = "clotran/core_print"
          if (rel == "clojure/data") rel = "clotran/data"
-         fargs = gcv_empty([vs_get(base + 1)])
+         fargs = gcv_empty([vs_get(vst, base + 1)])
          fargs = gcv_conj(fargs, gc_str(classpath_find(rel), &
-              [vs_get(base + 1)]), [vs_get(base + 1)])
-         call vs_set(base + 2, fargs)
+              [vs_get(vst, base + 1)]), [vs_get(vst, base + 1)])
+         call vs_set(vst, base + 2, fargs)
          ! *ns* is SAVED AND RESTORED around the load, as RT.load
          ! does by pushing CURRENT_NS. Without it a loaded file's
          ! own (ns ...) leaks into whatever loaded it, and the next
          ! (load "x") resolves x relative to the wrong namespace.
-         call vs_set(base + 3, gcn_current([vs_get(base + 1)]))
-         out = call_builtin(B_LOADFILE, vs_get(base + 2))
-         call gcn_set_current(vs_get(base + 3))
+         call vs_set(vst, base + 3, gcn_current([vs_get(vst, base + 1)]))
+         out = call_builtin(B_LOADFILE, vs_get(vst, base + 2))
+         call gcn_set_current(vs_get(vst, base + 3))
        end block
     case (B_INDEXOF)
        ! String.indexOf is overloaded on (int ch) as well as
@@ -9429,13 +9552,13 @@ contains
             ix = gcv_nth(args, 2)
             hi = int(ix%ival)
          end if
-         acc = gcv_empty([vs_get(base + 1)])
-         call vs_set(base + 2, acc)
+         acc = gcv_empty([vs_get(vst, base + 1)])
+         call vs_set(vst, base + 2, acc)
          do j = lo, hi - 1
-            acc = gcv_conj(vs_get(base + 2), gcv_nth(src, j), [vs_get(base + 1), vs_get(base + 2)])
-            call vs_set(base + 2, acc)
+            acc = gcv_conj(vs_get(vst, base + 2), gcv_nth(src, j), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+            call vs_set(vst, base + 2, acc)
          end do
-         out = vs_get(base + 2)
+         out = vs_get(vst, base + 2)
        end block
     case (B_NEXTID)
        gensym_id = gensym_id + 1
@@ -9462,8 +9585,8 @@ contains
          end select
        end block
     case (B_MAX, B_MIN)
-       if (.not. numbers_ok(args, n, [vs_get(base + 1)])) then
-          call vs_leave(base)
+       if (.not. numbers_ok(args, n, [vs_get(vst, base + 1)])) then
+          call vs_leave(vst, base)
           return
        end if
        out = gcv_nth(args, 0)
@@ -9484,12 +9607,12 @@ contains
        if (gc_kind(a) == OBJ_SB) then
           call gc_set_slot(a, 1, gc_str( &
                text_of(gc_slot(a, 1)) // text_of(gcv_nth(args, 1)), &
-               [vs_get(base + 1)]))
+               [vs_get(vst, base + 1)]))
        else if (gc_kind(a) == OBJ_WRITER) then
           write(gc_i1(a), '(A)', advance='no') text_of(gcv_nth(args, 1))
        end if
     case (B_TOSTRING)
-       out = gc_str(to_string_text(gcv_nth(args, 0)), [vs_get(base + 1)])
+       out = gc_str(to_string_text(gcv_nth(args, 0)), [vs_get(vst, base + 1)])
     case (B_NANOTIME, B_MILLIS)
        block
          integer(8) :: c, r
@@ -9509,7 +9632,7 @@ contains
        a = gcv_nth(args, 0)
        out = gc_nil()
        if (a%tag == GCT_STR) then
-          if (gc_ref_is(a%ref, "line.separator")) out = gc_str(achar(10), [vs_get(base + 1)])
+          if (gc_ref_is(a%ref, "line.separator")) out = gc_str(achar(10), [vs_get(vst, base + 1)])
        end if
     case (B_DEREF)
        ! A Var, an atom and a delay all deref the same way here: the
@@ -9520,9 +9643,9 @@ contains
           ! cached in slot 2; i1 says which state it is in. Running it
           ! again would be observable whenever the body has an effect.
           if (gc_i1(a) == 0) then
-             call vs_set(base + 2, a)
-             b = apply(gc_slot(vs_get(base + 2), 1), &
-                  gcv_empty([vs_get(base + 1), vs_get(base + 2)]))
+             call vs_set(vst, base + 2, a)
+             b = apply(gc_slot(vs_get(vst, base + 2), 1), &
+                  gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)]))
              if (tctx%has_error) then
                 ! A DELAY THAT THREW STAYS THROWN, with the SAME
                 ! exception object every time -- Delay.deref
@@ -9532,21 +9655,21 @@ contains
                 ! meant the body RAN AGAIN, which is observable
                 ! whenever it has an effect, and made
                 ! (identical? r (deref-again)) false.
-                call gc_set_slot(vs_get(base + 2), 2, thrown_value())
-                call gc_set_slot(vs_get(base + 2), 3, &
-                     gc_str(gce_error(), [vs_get(base + 1), vs_get(base + 2)]))
-                call gc_set_i1(vs_get(base + 2), 2)
-                call vs_leave(base)
+                call gc_set_slot(vs_get(vst, base + 2), 2, thrown_value())
+                call gc_set_slot(vs_get(vst, base + 2), 3, &
+                     gc_str(gce_error(), [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+                call gc_set_i1(vs_get(vst, base + 2), 2)
+                call vs_leave(vst, base)
                 return
              end if
-             call gc_set_slot(vs_get(base + 2), 2, b)
-             call gc_set_i1(vs_get(base + 2), 1)
-             a = vs_get(base + 2)
+             call gc_set_slot(vs_get(vst, base + 2), 2, b)
+             call gc_set_i1(vs_get(vst, base + 2), 1)
+             a = vs_get(vst, base + 2)
           end if
           if (gc_i1(a) == 2) then
              call set_thrown(gc_slot(a, 2))
              call fail(text_of(gc_slot(a, 3)))
-             call vs_leave(base)
+             call vs_leave(vst, base)
              return
           end if
           out = gc_slot(a, 2)
@@ -9554,7 +9677,7 @@ contains
           out = gc_slot(a, 1)
        else if (is_reduced(a)) then
           ! Unwrapping a (reduced x) is a deref in Clojure too.
-          out = gca_get(a, gc_key("clotran/reduced", [vs_get(base + 1)]))
+          out = gca_get(a, gc_key("clotran/reduced", [vs_get(vst, base + 1)]))
        else
           out = a
        end if
@@ -9568,12 +9691,12 @@ contains
        out = a
        if (gc_kind(a) == OBJ_MULTIFN) then
           call gc_set_slot(a, 4, gca_assoc(gc_slot(a, 4), gcv_nth(args, 1), &
-               gcv_nth(args, 2), [vs_get(base + 1)]))
+               gcv_nth(args, 2), [vs_get(vst, base + 1)]))
           call mf_reset_cache(a)
        end if
     case (B_METHODTABLE)
        a = gcv_nth(args, 0)
-       out = gca_empty([vs_get(base + 1)])
+       out = gca_empty([vs_get(vst, base + 1)])
        if (gc_kind(a) == OBJ_MULTIFN) out = gc_slot(a, 4)
     case (B_REMOVEMETHOD)
        ! Mutates and answers the multimethod, the mirror of
@@ -9582,11 +9705,11 @@ contains
        out = a
        if (gc_kind(a) == OBJ_MULTIFN) then
           call gc_set_slot(a, 4, gca_dissoc(gc_slot(a, 4), gcv_nth(args, 1), &
-               [vs_get(base + 1)]))
+               [vs_get(vst, base + 1)]))
           call mf_reset_cache(a)
        end if
     case (B_MATH0 + 1 : B_MATH0 + B_MATHN)
-       out = math_call(id - B_MATH0, args, [vs_get(base + 1)])
+       out = math_call(id - B_MATH0, args, [vs_get(vst, base + 1)])
     case (B_FORMAT)
        ! (String/format fmt (to-array args)) -- the arguments
        ! arrive as one ARRAY, not spread.
@@ -9596,11 +9719,11 @@ contains
          if (fv%tag /= GCT_STR) then
             call fail("format: first argument must be a string")
          else
-            av = gcv_empty([vs_get(base + 1)])
-            if (n >= 2) av = coll_to_vector(gcv_nth(args, 1), [vs_get(base + 1)])
-            call vs_set(base + 2, av)
-            out = gc_str(java_format(gc_ref_text(fv%ref), vs_get(base + 2)), &
-                 [vs_get(base + 1), vs_get(base + 2)])
+            av = gcv_empty([vs_get(vst, base + 1)])
+            if (n >= 2) av = coll_to_vector(gcv_nth(args, 1), [vs_get(vst, base + 1)])
+            call vs_set(vst, base + 2, av)
+            out = gc_str(java_format(gc_ref_text(fv%ref), vs_get(vst, base + 2)), &
+                 [vs_get(vst, base + 1), vs_get(vst, base + 2)])
          end if
        end block
     case (B_RTPRINT)
@@ -9613,7 +9736,7 @@ contains
             w = strip_meta(gcv_nth(args, 1))
             if (gc_kind(w) == OBJ_SB) then
                call gc_set_slot(w, 1, gc_str(text_of(gc_slot(w, 1)) // txt, &
-                    [vs_get(base + 1)]))
+                    [vs_get(vst, base + 1)]))
             else if (gc_kind(w) == OBJ_WRITER) then
                write(gc_i1(w), '(A)', advance='no') txt
             end if
@@ -9623,13 +9746,13 @@ contains
        a = strip_meta(gcv_nth(args, 0))
        out = gc_nil()
        if (id == B_GETVALIDATOR) then
-          out = ref_fn_get(a, "validator", [vs_get(base + 1)])
+          out = ref_fn_get(a, "validator", [vs_get(vst, base + 1)])
        else
           ! Clojure VALIDATES THE CURRENT VALUE on the way in and
           ! refuses a validator the state already fails.
           if (validate_ref(a, gcv_nth(args, 1), gc_slot(a, 1), &
-               [vs_get(base + 1)])) call ref_fn_put(a, "validator", &
-               gcv_nth(args, 1), [vs_get(base + 1)])
+               [vs_get(vst, base + 1)])) call ref_fn_put(a, "validator", &
+               gcv_nth(args, 1), [vs_get(vst, base + 1)])
        end if
     case (B_LATCHDOWN, B_LATCHCOUNT)
        a = strip_meta(gcv_nth(args, 0))
@@ -9655,7 +9778,7 @@ contains
           b = gc_slot(a, 1)
           if (same_object(b, gcv_nth(args, 1))) then
              call gc_set_slot(a, 1, gcv_nth(args, 2))
-             call notify_watches(a, b, gcv_nth(args, 2), [vs_get(base + 1)])
+             call notify_watches(a, b, gcv_nth(args, 2), [vs_get(vst, base + 1)])
              out = gc_bool(.true.)
           end if
        end if
@@ -9667,7 +9790,7 @@ contains
           if (id == B_SETERRMODE) then
              call gc_set_slot(a, 3, gcv_nth(args, 1))
           else
-             call ref_fn_put(a, "error-handler", gcv_nth(args, 1), [vs_get(base + 1)])
+             call ref_fn_put(a, "error-handler", gcv_nth(args, 1), [vs_get(vst, base + 1)])
           end if
        end if
     case (B_GETERRMODE, B_GETERRHANDLER, B_AGENTERROR)
@@ -9676,7 +9799,7 @@ contains
        if (gc_kind(a) == OBJ_ATOM) then
           select case (id)
           case (B_GETERRMODE);    out = gc_slot(a, 3)
-          case (B_GETERRHANDLER); out = ref_fn_get(a, "error-handler", [vs_get(base + 1)])
+          case (B_GETERRHANDLER); out = ref_fn_get(a, "error-handler", [vs_get(vst, base + 1)])
           case default;           out = gc_slot(a, 5)
           end select
        end if
@@ -9706,59 +9829,59 @@ contains
             call fail("dispatch: not an agent")
          else if (prior%tag /= GCT_NIL) then
             call raise_class("RuntimeException", &
-                 "Agent is failed, needs restart", [vs_get(base + 1)])
+                 "Agent is failed, needs restart", [vs_get(vst, base + 1)])
          else
-            call vs_set(base + 2, ag)
-            fargs = gcv_empty([vs_get(base + 1), vs_get(base + 2)])
-            fargs = gcv_conj(fargs, gc_slot(vs_get(base + 2), 1), &
-                 [vs_get(base + 1), vs_get(base + 2)])
-            call vs_set(base + 3, fargs)
+            call vs_set(vst, base + 2, ag)
+            fargs = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
+            fargs = gcv_conj(fargs, gc_slot(vs_get(vst, base + 2), 1), &
+                 [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+            call vs_set(vst, base + 3, fargs)
             block
               type(gc_value) :: extra
               extra = coll_to_vector(gcv_nth(args, 2), &
-                   [vs_get(base + 1), vs_get(base + 3)])
-              call vs_set(base + 4, extra)
-              do j = 0, gcv_count(vs_get(base + 4)) - 1
-                 fargs = gcv_conj(vs_get(base + 3), gcv_nth(vs_get(base + 4), j), &
-                      [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)])
-                 call vs_set(base + 3, fargs)
+                   [vs_get(vst, base + 1), vs_get(vst, base + 3)])
+              call vs_set(vst, base + 4, extra)
+              do j = 0, gcv_count(vs_get(vst, base + 4)) - 1
+                 fargs = gcv_conj(vs_get(vst, base + 3), gcv_nth(vs_get(vst, base + 4), j), &
+                      [vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+                 call vs_set(vst, base + 3, fargs)
               end do
             end block
-            res = apply(gcv_nth(args, 1), vs_get(base + 3))
+            res = apply(gcv_nth(args, 1), vs_get(vst, base + 3))
             if (tctx%has_error) then
-               call gc_set_slot(vs_get(base + 2), 5, thrown_value())
-               hnd = ref_fn_get(vs_get(base + 2), "error-handler", [vs_get(base + 1)])
+               call gc_set_slot(vs_get(vst, base + 2), 5, thrown_value())
+               hnd = ref_fn_get(vs_get(vst, base + 2), "error-handler", [vs_get(vst, base + 1)])
                call gce_clear_error()
                if (hnd%tag /= GCT_NIL) then
-                  fargs = gcv_empty([vs_get(base + 1), vs_get(base + 2)])
-                  fargs = gcv_conj(fargs, vs_get(base + 2), &
-                       [vs_get(base + 1), vs_get(base + 2)])
-                  call vs_set(base + 3, fargs)
-                  fargs = gcv_conj(vs_get(base + 3), &
-                       gc_slot(vs_get(base + 2), 5), &
-                       [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-                  call vs_set(base + 3, fargs)
-                  res = apply(hnd, vs_get(base + 3))
+                  fargs = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
+                  fargs = gcv_conj(fargs, vs_get(vst, base + 2), &
+                       [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+                  call vs_set(vst, base + 3, fargs)
+                  fargs = gcv_conj(vs_get(vst, base + 3), &
+                       gc_slot(vs_get(vst, base + 2), 5), &
+                       [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+                  call vs_set(vst, base + 3, fargs)
+                  res = apply(hnd, vs_get(vst, base + 3))
                   call gce_clear_error()
                end if
                ! :continue forgets the failure; :fail keeps it.
-               if (.not. gc_equal(gc_slot(vs_get(base + 2), 3), &
-                    gc_key("fail", [vs_get(base + 1)]))) &
-                    call gc_set_slot(vs_get(base + 2), 5, gc_nil())
-            else if (.not. validate_ref(vs_get(base + 2), &
-                 ref_fn_get(vs_get(base + 2), "validator", [vs_get(base + 1)]), &
-                 res, [vs_get(base + 1)])) then
+               if (.not. gc_equal(gc_slot(vs_get(vst, base + 2), 3), &
+                    gc_key("fail", [vs_get(vst, base + 1)]))) &
+                    call gc_set_slot(vs_get(vst, base + 2), 5, gc_nil())
+            else if (.not. validate_ref(vs_get(vst, base + 2), &
+                 ref_fn_get(vs_get(vst, base + 2), "validator", [vs_get(vst, base + 1)]), &
+                 res, [vs_get(vst, base + 1)])) then
                ! A REJECTED STATE IS AN AGENT ERROR, handled the
                ! same way a thrown action is.
-               call gc_set_slot(vs_get(base + 2), 5, thrown_value())
+               call gc_set_slot(vs_get(vst, base + 2), 5, thrown_value())
                call gce_clear_error()
-               if (.not. gc_equal(gc_slot(vs_get(base + 2), 3), &
-                    gc_key("fail", [vs_get(base + 1)]))) &
-                    call gc_set_slot(vs_get(base + 2), 5, gc_nil())
+               if (.not. gc_equal(gc_slot(vs_get(vst, base + 2), 3), &
+                    gc_key("fail", [vs_get(vst, base + 1)]))) &
+                    call gc_set_slot(vs_get(vst, base + 2), 5, gc_nil())
             else
-               call gc_set_slot(vs_get(base + 2), 1, res)
+               call gc_set_slot(vs_get(vst, base + 2), 1, res)
             end if
-            out = vs_get(base + 2)
+            out = vs_get(vst, base + 2)
          end if
        end block
     case (B_GETIFACES)
@@ -9766,18 +9889,18 @@ contains
          type(gc_value) :: cv, acc, sk
          integer :: si2
          cv = strip_meta(gcv_nth(args, 0))
-         acc = gcv_empty([vs_get(base + 1)])
-         call vs_set(base + 2, acc)
+         acc = gcv_empty([vs_get(vst, base + 1)])
+         call vs_set(vst, base + 2, acc)
          do si2 = 1, 24
-            sk = host_super(cv, si2, vs_get(base + 1))
+            sk = host_super(cv, si2, vs_get(vst, base + 1))
             if (sk%tag == GCT_NIL) exit
-            acc = gcv_conj(vs_get(base + 2), sk, &
-                 [vs_get(base + 1), vs_get(base + 2), sk])
-            call vs_set(base + 2, acc)
+            acc = gcv_conj(vs_get(vst, base + 2), sk, &
+                 [vs_get(vst, base + 1), vs_get(vst, base + 2), sk])
+            call vs_set(vst, base + 2, acc)
          end do
          ! an INTERFACE: what it extends (iface_supers), so that parents
          ! and bases of one are not empty
-         if (gcv_count(vs_get(base + 2)) == 0 .and. cv%tag == GCT_CLASS) then
+         if (gcv_count(vs_get(vst, base + 2)) == 0 .and. cv%tag == GCT_CLASS) then
             block
               character(len=:), allocatable :: list
               integer :: p, q
@@ -9787,49 +9910,49 @@ contains
                  q = index(list(p:), " ")
                  if (q == 0) exit
                  if (q > 1) then
-                    sk = gc_class(list(p:p+q-2), [vs_get(base + 1), vs_get(base + 2)])
-                    acc = gcv_conj(vs_get(base + 2), sk, [vs_get(base + 1), vs_get(base + 2), sk])
-                    call vs_set(base + 2, acc)
+                    sk = gc_class(list(p:p+q-2), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+                    acc = gcv_conj(vs_get(vst, base + 2), sk, [vs_get(vst, base + 1), vs_get(vst, base + 2), sk])
+                    call vs_set(vst, base + 2, acc)
                  end if
                  p = p + q
               end do
             end block
          end if
-         out = vs_get(base + 2)
+         out = vs_get(vst, base + 2)
        end block
     case (B_EMPTYARRAY)
-       out = value_array(gcv_empty([vs_get(base + 1)]), [vs_get(base + 1)])
+       out = value_array(gcv_empty([vs_get(vst, base + 1)]), [vs_get(vst, base + 1)])
     case (B_STACKTRACE)
        ! (.getStackTrace e): the frames e was thrown with; for anything
        ! that is not a Throwable -- (Thread/currentThread) -- the
        ! frames of the call in progress.
        a = strip_meta(gcv_nth(args, 0))
        if (gc_kind(a) == OBJ_ERR .and. gcv_is(gc_slot(a, 4))) then
-          out = value_array(gc_slot(a, 4), [vs_get(base + 1)])
+          out = value_array(gc_slot(a, 4), [vs_get(vst, base + 1)])
        else
-          call vs_set(base + 2, frames_vec([vs_get(base + 1)]))
-          out = value_array(vs_get(base + 2), [vs_get(base + 1), vs_get(base + 2)])
+          call vs_set(vst, base + 2, frames_vec([vs_get(vst, base + 1)]))
+          out = value_array(vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
        end if
     case (B_STE_CLASS, B_STE_METHOD, B_STE_FILE, B_STE_LINE)
        a = strip_meta(gcv_nth(args, 0))
        out = gc_nil()
        if (gca_is(a)) then
           select case (id)
-          case (B_STE_CLASS);  out = gca_get(a, gc_key("class", [vs_get(base + 1)]))
-          case (B_STE_METHOD); out = gca_get(a, gc_key("method", [vs_get(base + 1)]))
-          case (B_STE_FILE);   out = gca_get(a, gc_key("file", [vs_get(base + 1)]))
-          case (B_STE_LINE);   out = gca_get(a, gc_key("line", [vs_get(base + 1)]))
+          case (B_STE_CLASS);  out = gca_get(a, gc_key("class", [vs_get(vst, base + 1)]))
+          case (B_STE_METHOD); out = gca_get(a, gc_key("method", [vs_get(vst, base + 1)]))
+          case (B_STE_FILE);   out = gca_get(a, gc_key("file", [vs_get(vst, base + 1)]))
+          case (B_STE_LINE);   out = gca_get(a, gc_key("line", [vs_get(vst, base + 1)]))
           end select
        end if
     case (B_INTOARRAY)
-       out = value_array(gcv_nth(args, n - 1), [vs_get(base + 1)])
+       out = value_array(gcv_nth(args, n - 1), [vs_get(vst, base + 1)])
     case (B_RE_START, B_RE_END)
        ! (.start t) on a THREAD is the task starting; the member name
        ! is shared with a Matcher's group start, and the target says
        ! which is meant.
        if (id == B_RE_START .and. gc_kind(strip_meta(gcv_nth(args, 0))) == OBJ_CLOSURE) then
           out = task_submit(strip_meta(gcv_nth(args, 0)))
-          call vs_leave(base)
+          call vs_leave(vst, base)
           return
        end if
        block
@@ -9859,7 +9982,7 @@ contains
          mt = strip_meta(gcv_nth(args, 0))
          if (gc_kind(mt) == OBJ_MATCHER) then
             out = regex_replace(mt, text_of(gcv_nth(args, 1)), &
-                 id == B_RE_REPLACEFIRST, [vs_get(base + 1)])
+                 id == B_RE_REPLACEFIRST, [vs_get(vst, base + 1)])
          else if (mt%tag == GCT_STR .and. n >= 3) then
             ! String.replaceAll(regex, replacement) and replaceFirst: the
             ! pattern source is compiled here, as Java compiles it on
@@ -9872,9 +9995,9 @@ contains
               if (h == 0) then
                  call fail("regex: " // regex_last_error())
               else
-                 rx = gc_obj(OBJ_REGEX, [gc_str(text_of(gcv_nth(args, 1)), [vs_get(base + 1)])], [vs_get(base + 1)])
+                 rx = gc_obj(OBJ_REGEX, [gc_str(text_of(gcv_nth(args, 1)), [vs_get(vst, base + 1)])], [vs_get(vst, base + 1)])
                  call gc_set_i1(rx, h)
-                 call vs_set(base + 2, rx)
+                 call vs_set(vst, base + 2, rx)
                  mh = regex_clone(h)
                  stext = text_of(mt)
                  if (mh == 0) then
@@ -9882,12 +10005,12 @@ contains
                  else if (.not. regex_set_text(mh, stext)) then
                     call fail("regex: " // regex_last_error())
                  else
-                    mv = gc_obj(OBJ_MATCHER, [vs_get(base + 2), gc_str(stext, [vs_get(base + 1), vs_get(base + 2)])], &
-                         [vs_get(base + 1), vs_get(base + 2)])
+                    mv = gc_obj(OBJ_MATCHER, [vs_get(vst, base + 2), gc_str(stext, [vs_get(vst, base + 1), vs_get(vst, base + 2)])], &
+                         [vs_get(vst, base + 1), vs_get(vst, base + 2)])
                     call gc_set_i1(mv, mh)
-                    call vs_set(base + 3, mv)
-                    out = regex_replace(vs_get(base + 3), text_of(gcv_nth(args, 2)), &
-                         id == B_RE_REPLACEFIRST, [vs_get(base + 1)])
+                    call vs_set(vst, base + 3, mv)
+                    out = regex_replace(vs_get(vst, base + 3), text_of(gcv_nth(args, 2)), &
+                         id == B_RE_REPLACEFIRST, [vs_get(vst, base + 1)])
                  end if
               end if
             end block
@@ -9923,7 +10046,7 @@ contains
             end if
             if (gc_kind(bufv) == OBJ_SB) then
                call gc_set_slot(bufv, 1, gc_str( &
-                    text_of(gc_slot(bufv, 1)) // piece, [vs_get(base + 1)]))
+                    text_of(gc_slot(bufv, 1)) // piece, [vs_get(vst, base + 1)]))
             end if
          end if
        end block
@@ -9934,8 +10057,8 @@ contains
          pv = strip_meta(gcv_nth(args, 0))
          sv = strip_meta(gcv_nth(args, 1))
          if (sv%tag == GCT_NIL) then
-            call raise_class("NullPointerException", "split of nil", [vs_get(base + 1)])
-            call vs_leave(base)
+            call raise_class("NullPointerException", "split of nil", [vs_get(vst, base + 1)])
+            call vs_leave(vst, base)
             return
          end if
          lim = 0
@@ -9944,12 +10067,12 @@ contains
             lim = int(lv%ival)
          end if
          if (gc_kind(pv) == OBJ_REGEX) then
-            out = regex_split(pv, sv, lim, [vs_get(base + 1)])
+            out = regex_split(pv, sv, lim, [vs_get(vst, base + 1)])
          else if (pv%tag == GCT_STR .and. sv%tag == GCT_STR) then
             ! String.split(regex[, limit]): the string is the subject and
             ! the second argument is a pattern SOURCE, compiled here as
             ! Java compiles it on every call.
-            call vs_set(base + 2, pv)
+            call vs_set(vst, base + 2, pv)
             block
               type(gc_value) :: rx
               integer :: h
@@ -9957,10 +10080,10 @@ contains
               if (h == 0) then
                  call fail("regex: " // regex_last_error())
               else
-                 rx = gc_obj(OBJ_REGEX, [gc_str(text_of(sv), [vs_get(base + 1)])], [vs_get(base + 1)])
+                 rx = gc_obj(OBJ_REGEX, [gc_str(text_of(sv), [vs_get(vst, base + 1)])], [vs_get(vst, base + 1)])
                  call gc_set_i1(rx, h)
-                 call vs_set(base + 3, rx)
-                 out = regex_split(vs_get(base + 3), vs_get(base + 2), lim, [vs_get(base + 1)])
+                 call vs_set(vst, base + 3, rx)
+                 out = regex_split(vs_get(vst, base + 3), vs_get(vst, base + 2), lim, [vs_get(vst, base + 1)])
               end if
             end block
          else
@@ -9969,7 +10092,7 @@ contains
        end block
     case (B_QUOTEREPL)
        out = gc_str(quote_replacement(text_of(gcv_nth(args, 0))), &
-            [vs_get(base + 1)])
+            [vs_get(vst, base + 1)])
     case (B_SBREVERSE)
        ! Mutates and returns the builder, like append.
        block
@@ -9983,9 +10106,9 @@ contains
             rt = rt // u8_slice(bt, bi, bi + 1)
          end do
          if (gc_kind(a) == OBJ_SB) then
-            call gc_set_slot(a, 1, gc_str(rt, [vs_get(base + 1)]))
+            call gc_set_slot(a, 1, gc_str(rt, [vs_get(vst, base + 1)]))
          else
-            out = gc_str(rt, [vs_get(base + 1)])
+            out = gc_str(rt, [vs_get(vst, base + 1)])
          end if
        end block
     case (B_READSTRING)
@@ -9995,7 +10118,7 @@ contains
          if (sv%tag /= GCT_STR) then
             call fail("read-string wants a string")
          else
-            out = gcr_read(gc_ref_text(sv%ref), [vs_get(base + 1)])
+            out = gcr_read(gc_ref_text(sv%ref), [vs_get(vst, base + 1)])
             if (gcr_has_error()) call fail(gcr_error())
          end if
        end block
@@ -10037,13 +10160,13 @@ contains
          out = gc_int(cres)
        end block
     case (B_EMPTYMAP)
-       out = gca_empty([vs_get(base + 1)])
+       out = gca_empty([vs_get(vst, base + 1)])
     case (B_GETMETHOD)
        ! what WOULD apply: the same lookup a call makes, default included
        a = gcv_nth(args, 0)
        out = gc_nil()
        if (gc_kind(a) == OBJ_MULTIFN) then
-          out = mf_lookup(a, gcv_nth(args, 1), [vs_get(base + 1)])
+          out = mf_lookup(a, gcv_nth(args, 1), [vs_get(vst, base + 1)])
        end if
     case (B_PREFERMETHOD)
        ! MultiFn.preferMethod, the table update in clotran.rt
@@ -10052,32 +10175,32 @@ contains
        if (gc_kind(a) == OBJ_MULTIFN) then
           block
             type(gc_value) :: fargs, pt
-            call vs_set(base + 2, a)
-            fargs = gcv_build(5, [vs_get(base + 1)])
-            call vs_set(base + 3, fargs)
-            fargs = gcv_put(vs_get(base + 3), 0, gc_slot(vs_get(base + 2), 1), [vs_get(base + 1), vs_get(base + 3)])
-            call vs_set(base + 3, fargs)
-            fargs = gcv_put(vs_get(base + 3), 1, mf_aux(vs_get(base + 2), 1), [vs_get(base + 1), vs_get(base + 3)])
-            call vs_set(base + 3, fargs)
-            pt = mf_hierarchy(vs_get(base + 2))
-            call vs_set(base + 4, pt)
-            fargs = gcv_put(vs_get(base + 3), 2, vs_get(base + 4), [vs_get(base + 1), vs_get(base + 3)])
-            call vs_set(base + 3, fargs)
-            fargs = gcv_put(vs_get(base + 3), 3, gcv_nth(args, 1), [vs_get(base + 1), vs_get(base + 3)])
-            call vs_set(base + 3, fargs)
-            fargs = gcv_put(vs_get(base + 3), 4, gcv_nth(args, 2), [vs_get(base + 1), vs_get(base + 3)])
-            call vs_set(base + 3, fargs)
-            pt = mf_call("prefer", vs_get(base + 3))
+            call vs_set(vst, base + 2, a)
+            fargs = gcv_build(5, [vs_get(vst, base + 1)])
+            call vs_set(vst, base + 3, fargs)
+            fargs = gcv_put(vs_get(vst, base + 3), 0, gc_slot(vs_get(vst, base + 2), 1), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
+            call vs_set(vst, base + 3, fargs)
+            fargs = gcv_put(vs_get(vst, base + 3), 1, mf_aux(vs_get(vst, base + 2), 1), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
+            call vs_set(vst, base + 3, fargs)
+            pt = mf_hierarchy(vs_get(vst, base + 2))
+            call vs_set(vst, base + 4, pt)
+            fargs = gcv_put(vs_get(vst, base + 3), 2, vs_get(vst, base + 4), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
+            call vs_set(vst, base + 3, fargs)
+            fargs = gcv_put(vs_get(vst, base + 3), 3, gcv_nth(args, 1), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
+            call vs_set(vst, base + 3, fargs)
+            fargs = gcv_put(vs_get(vst, base + 3), 4, gcv_nth(args, 2), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
+            call vs_set(vst, base + 3, fargs)
+            pt = mf_call("prefer", vs_get(vst, base + 3))
             if (.not. tctx%has_error) then
-               call mf_aux_set(vs_get(base + 2), 1, pt)
-               call mf_reset_cache(vs_get(base + 2))
+               call mf_aux_set(vs_get(vst, base + 2), 1, pt)
+               call mf_reset_cache(vs_get(vst, base + 2))
             end if
-            out = vs_get(base + 2)
+            out = vs_get(vst, base + 2)
           end block
        end if
     case (B_PREFERTABLE)
        a = gcv_nth(args, 0)
-       out = gca_empty([vs_get(base + 1)])
+       out = gca_empty([vs_get(vst, base + 1)])
        if (gc_kind(a) == OBJ_MULTIFN) out = mf_aux(a, 1)
     case (B_DISPATCHFN)
        a = gcv_nth(args, 0)
@@ -10096,7 +10219,7 @@ contains
          type(c_ptr), allocatable :: grown(:)
          path = pkg_library(text_of(gcv_nth(args, 0)))
          if (tctx%has_error) then
-            call vs_leave(base)
+            call vs_leave(vst, base)
             return
          end if
          h = dl_open(path)
@@ -10107,11 +10230,11 @@ contains
             if (len(text) == 0) then
                call fail("load-package: " // path // " exports no clotran_manifest")
             else
-               m = gcr_read(text, [vs_get(base + 1)])
+               m = gcr_read(text, [vs_get(vst, base + 1)])
                if (gcr_has_error()) then
                   call fail("load-package: " // path // ": manifest: " // gcr_error())
                else
-                  call vs_set(base + 2, m)
+                  call vs_set(vst, base + 2, m)
                   if (.not. allocated(pkg_handles)) allocate(pkg_handles(8))
                   if (pkg_count >= size(pkg_handles)) then
                      allocate(grown(2 * size(pkg_handles)))
@@ -10120,24 +10243,24 @@ contains
                   end if
                   pkg_count = pkg_count + 1
                   pkg_handles(pkg_count) = h
-                  res = gca_empty([vs_get(base + 1), vs_get(base + 2)])
-                  call vs_set(base + 3, res)
-                  k = gc_key("handle", [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-                  call vs_set(base + 4, k)
-                  res = gca_assoc(vs_get(base + 3), vs_get(base + 4), gc_int(int(pkg_count, gc_ip)), &
-                       [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 4)])
-                  call vs_set(base + 3, res)
-                  k = gc_key("manifest", [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-                  call vs_set(base + 4, k)
-                  res = gca_assoc(vs_get(base + 3), vs_get(base + 4), vs_get(base + 2), &
-                       [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 4)])
+                  res = gca_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
+                  call vs_set(vst, base + 3, res)
+                  k = gc_key("handle", [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+                  call vs_set(vst, base + 4, k)
+                  res = gca_assoc(vs_get(vst, base + 3), vs_get(vst, base + 4), gc_int(int(pkg_count, gc_ip)), &
+                       [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+                  call vs_set(vst, base + 3, res)
+                  k = gc_key("manifest", [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+                  call vs_set(vst, base + 4, k)
+                  res = gca_assoc(vs_get(vst, base + 3), vs_get(vst, base + 4), vs_get(vst, base + 2), &
+                       [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 4)])
                   out = res
                end if
             end if
          end if
        end block
     case (B_PKGCALL)
-       out = pkg_call(gcv_nth(args, 0), gcv_nth(args, 1), gcv_nth(args, 2), [vs_get(base + 1)])
+       out = pkg_call(gcv_nth(args, 0), gcv_nth(args, 1), gcv_nth(args, 2), [vs_get(vst, base + 1)])
     case (B_IDENTITY)
        out = gcv_nth(args, 0)
     case (B_GT, B_LTE, B_GTE)
@@ -10160,8 +10283,8 @@ contains
          out = gc_bool(ok)
        end block
     case (B_DIV)
-       if (.not. numbers_ok(args, n, [vs_get(base + 1)])) then
-          call vs_leave(base)
+       if (.not. numbers_ok(args, n, [vs_get(vst, base + 1)])) then
+          call vs_leave(vst, base)
           return
        end if
        ! There IS a Ratio now, so an inexact integer division is no
@@ -10182,7 +10305,7 @@ contains
             logical :: dok
             integer :: mcp, mcm
             if (dec_is_zero(dec_of(b))) then
-               call raise_class("ArithmeticException", "Divide by zero", [vs_get(base + 1)])
+               call raise_class("ArithmeticException", "Divide by zero", [vs_get(vst, base + 1)])
             else
                ! With a precision the quotient is rounded to it; with
                ! none it is exact or it throws, which is what Java does
@@ -10194,17 +10317,17 @@ contains
                   call dec_div(dec_of(a), dec_of(b), dq, dok)
                end if
                if (dok) then
-                  out = gc_dec(dq, [vs_get(base + 1)])
+                  out = gc_dec(dq, [vs_get(vst, base + 1)])
                else if (mcp > 0) then
-                  call raise_class("ArithmeticException", "Rounding necessary", [vs_get(base + 1)])
+                  call raise_class("ArithmeticException", "Rounding necessary", [vs_get(vst, base + 1)])
                else
                   call raise_class("ArithmeticException", &
                        "Non-terminating decimal expansion; no exact representable decimal result.", &
-                       [vs_get(base + 1)])
+                       [vs_get(vst, base + 1)])
                end if
             end if
           end block
-          call vs_leave(base)
+          call vs_leave(vst, base)
           return
        end if
        ! Two integrals, one of them a BigInt: exact. It divides evenly
@@ -10216,20 +10339,20 @@ contains
           block
             character(len=:), allocatable :: bq, br
             if (big_of(b) == "0") then
-               call raise_class("ArithmeticException", "Divide by zero", [vs_get(base + 1)])
+               call raise_class("ArithmeticException", "Divide by zero", [vs_get(vst, base + 1)])
             else
                call big_divmod(big_of(a), big_of(b), bq, br)
                if (br == "0") then
-                  out = gc_big(bq, [vs_get(base + 1)])
+                  out = gc_big(bq, [vs_get(vst, base + 1)])
                else if (big_fits_i64(big_of(a)) .and. big_fits_i64(big_of(b))) then
                   out = gc_ratio(big_to_i64(big_of(a)), big_to_i64(big_of(b)))
                else
                   call raise_class("ArithmeticException", &
-                       "a Ratio of BigInts is not supported (DEVIATIONS 26)", [vs_get(base + 1)])
+                       "a Ratio of BigInts is not supported (DEVIATIONS 26)", [vs_get(vst, base + 1)])
                end if
             end if
           end block
-          call vs_leave(base)
+          call vs_leave(vst, base)
           return
        end if
        if (is_ratio(a) .or. is_ratio(b)) then
@@ -10271,11 +10394,11 @@ contains
        a = strip_meta(gcv_nth(args, 0))
        if (a%tag == GCT_DEC) then
           if (op == B_INC) then
-             out = gc_dec(dec_add(gc_dec_text(a), dec_from_big("1")), [vs_get(base + 1)])
+             out = gc_dec(dec_add(gc_dec_text(a), dec_from_big("1")), [vs_get(vst, base + 1)])
           else
-             out = gc_dec(dec_sub(gc_dec_text(a), dec_from_big("1")), [vs_get(base + 1)])
+             out = gc_dec(dec_sub(gc_dec_text(a), dec_from_big("1")), [vs_get(vst, base + 1)])
           end if
-          call vs_leave(base)
+          call vs_leave(vst, base)
           return
        end if
        ! A BigInt counts exactly, and inc'/dec' promote rather than
@@ -10291,21 +10414,21 @@ contains
             if (a%tag /= GCT_BIG .and. big_fits_i64(bt)) then
                out = gc_int(big_to_i64(bt))
             else
-               out = gc_big(bt, [vs_get(base + 1)])
+               out = gc_big(bt, [vs_get(vst, base + 1)])
             end if
           end block
-          call vs_leave(base)
+          call vs_leave(vst, base)
           return
        end if
-       if (.not. numbers_ok(args, 1, [vs_get(base + 1)])) then
-          call vs_leave(base)
+       if (.not. numbers_ok(args, 1, [vs_get(vst, base + 1)])) then
+          call vs_leave(vst, base)
           return
        end if
        if (a%tag == GCT_INT .and. checked) then
           if ((op == B_INC .and. a%ival == huge(a%ival)) .or. &
                (op == B_DEC .and. a%ival == -huge(a%ival) - 1_gc_ip)) then
-             call raise_class("ArithmeticException", "long overflow", [vs_get(base + 1)])
-             call vs_leave(base)
+             call raise_class("ArithmeticException", "long overflow", [vs_get(vst, base + 1)])
+             call vs_leave(vst, base)
              return
           end if
        end if
@@ -10342,7 +10465,7 @@ contains
             ! what the JVM throws when neither is Comparable to the other
             call raise_class("ClassCastException", "compare: cannot compare " // &
                  type_name(strip_meta(gcv_nth(args, 0))) // " with " // &
-                 type_name(strip_meta(gcv_nth(args, 1))), [vs_get(base + 1)])
+                 type_name(strip_meta(gcv_nth(args, 1))), [vs_get(vst, base + 1)])
          end if
        end block
     case (B_DISJ)
@@ -10352,9 +10475,9 @@ contains
          st = strip_meta(gcv_nth(args, 0))
          if (gc_kind(st) == OBJ_SET) then
             out = gc_obj(OBJ_SET, &
-                 [gca_dissoc(gc_slot(st, 1), gcv_nth(args, 1), [vs_get(base + 1)])], &
-                 [vs_get(base + 1)])
-            out = keep_meta(gcv_nth(args, 0), out, [vs_get(base + 1)])
+                 [gca_dissoc(gc_slot(st, 1), gcv_nth(args, 1), [vs_get(vst, base + 1)])], &
+                 [vs_get(vst, base + 1)])
+            out = keep_meta(gcv_nth(args, 0), out, [vs_get(vst, base + 1)])
          else
             out = gcv_nth(args, 0)
          end if
@@ -10381,13 +10504,13 @@ contains
             run = gc_slot(a, 1)
             cnt = gc_i1(a)
             if (cnt >= gc_vec_len(run)) then
-               call vs_set(base + 2, a)
-               bigger = gc_vec(max(2 * cnt, 1), [vs_get(base + 1), vs_get(base + 2)])
+               call vs_set(vst, base + 2, a)
+               bigger = gc_vec(max(2 * cnt, 1), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
                do k = 1, cnt
-                  call gc_vec_set(bigger, k, gc_vec_get(gc_slot(vs_get(base + 2), 1), k))
+                  call gc_vec_set(bigger, k, gc_vec_get(gc_slot(vs_get(vst, base + 2), 1), k))
                end do
-               call gc_set_slot(vs_get(base + 2), 1, bigger)
-               a = vs_get(base + 2)
+               call gc_set_slot(vs_get(vst, base + 2), 1, bigger)
+               a = vs_get(vst, base + 2)
                run = gc_slot(a, 1)
             end if
             call gc_vec_set(run, cnt + 1, gcv_nth(args, 1))
@@ -10400,7 +10523,7 @@ contains
        if (gc_kind(a) /= OBJ_CHUNKBUF) then
           call fail("no such member: " // class_name_of(a) // ".chunk")
        else
-          out = make_chunk(gc_slot(a, 1), 0, gc_i1(a), [vs_get(base + 1)])
+          out = make_chunk(gc_slot(a, 1), 0, gc_i1(a), [vs_get(vst, base + 1)])
        end if
     case (B_CHUNK_FIRST, B_CHUNK_MORE, B_CHUNK_NEXT)
        block
@@ -10409,15 +10532,15 @@ contains
          if (.not. is_chunked_seq(a)) then
             call fail("no such member: " // class_name_of(a) // ".chunkedFirst")
          else
-            call chunked_parts(a, ch, mo, [vs_get(base + 1)])
+            call chunked_parts(a, ch, mo, [vs_get(vst, base + 1)])
             if (id == B_CHUNK_FIRST) then
                out = ch
             else if (id == B_CHUNK_MORE) then
                out = mo
-               if (out%tag == GCT_NIL) out = gcl_empty([vs_get(base + 1)])
+               if (out%tag == GCT_NIL) out = gcl_empty([vs_get(vst, base + 1)])
             else
-               call vs_set(base + 2, mo)
-               out = to_seq(vs_get(base + 2), [vs_get(base + 1)])
+               call vs_set(vst, base + 2, mo)
+               out = to_seq(vs_get(vst, base + 2), [vs_get(vst, base + 1)])
             end if
          end if
        end block
@@ -10426,7 +10549,7 @@ contains
        if (gc_kind(a) /= OBJ_CHUNK) then
           call fail("no such member: " // class_name_of(a) // ".dropFirst")
        else
-          out = make_chunk(gc_slot(a, 1), gc_i1(a) + 1, gc_i2(a), [vs_get(base + 1)])
+          out = make_chunk(gc_slot(a, 1), gc_i1(a) + 1, gc_i2(a), [vs_get(vst, base + 1)])
        end if
     case (B_BREAK)
        ! (clotran-break) -- the paused state here, as data, stored, and
@@ -10482,81 +10605,85 @@ contains
        if (a%tag == GCT_NIL) then
           out = gc_nil()
        else
-          out = gc_class(class_name_of(a), [vs_get(base + 1)])
+          out = gc_class(class_name_of(a), [vs_get(vst, base + 1)])
        end if
     case (B_TYPE)
        ! One host primitive instead of a dozen predicates: core is
        ! written in Clojure on top of this, which is how real Clojure
        ! does it too (instance? plus defns).
        a = gcv_nth(args, 0)
-       out = gc_key(type_name(a), [vs_get(base + 1)])
+       out = gc_key(type_name(a), [vs_get(vst, base + 1)])
     case (B_CONCAT)
        ! Right to left, so the result comes out in order without a
        ! reverse. Every argument is seq'd to a list first, which is
        ! what lets (concat [1 2] (list 3)) work.
-       out = gcl_empty([vs_get(base + 1)])
+       out = gcl_empty([vs_get(vst, base + 1)])
        do i = n - 1, 0, -1
           block
             type(gc_value) :: piece
             integer :: j
-            piece = as_list(gcv_nth(vs_get(base + 1), i), [vs_get(base + 1), out])
+            piece = as_list(gcv_nth(vs_get(vst, base + 1), i), [vs_get(vst, base + 1), out])
             do j = gcl_count(piece) - 1, 0, -1
-               out = gcl_cons(nth_of(piece, j), out, [vs_get(base + 1), piece])
+               out = gcl_cons(nth_of(piece, j), out, [vs_get(vst, base + 1), piece])
             end do
           end block
        end do
     end select
 
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end function call_builtin
 
   ! A list view of a value: lists pass through, vectors are copied
   ! into one, nil is the empty list. Enough for cons/concat and for
   ! quasiquote's splicing; a real seq abstraction is a later feature.
   function as_list(v, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: v
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out
     integer :: base, i
 
-    base = vs_enter(2)
-    call vs_set(base + 1, v)
+    vst => gc_my_stack()
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, v)
     if (gcl_is(v)) then
        out = v
-       call vs_leave(base)
+       call vs_leave(vst, base)
        return
     end if
     out = gcl_empty(roots)
-    call vs_set(base + 2, out)
+    call vs_set(vst, base + 2, out)
     if (gcv_is(v)) then
-       do i = gcv_count(vs_get(base + 1)) - 1, 0, -1
-          out = gcl_cons(gcv_nth(vs_get(base + 1), i), vs_get(base + 2), &
-               [vs_get(base + 1)])
-          call vs_set(base + 2, out)
+       do i = gcv_count(vs_get(vst, base + 1)) - 1, 0, -1
+          out = gcl_cons(gcv_nth(vs_get(vst, base + 1), i), vs_get(vst, base + 2), &
+               [vs_get(vst, base + 1)])
+          call vs_set(vst, base + 2, out)
        end do
     end if
-    out = vs_get(base + 2)
-    call vs_leave(base)
+    out = vs_get(vst, base + 2)
+    call vs_leave(vst, base)
   end function as_list
 
   ! The nth element of a list, by walking. Only used where the list is
   ! already in hand and short.
   function nth_of(l, i) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: l
     integer, intent(in) :: i
     type(gc_value) :: out, walk
     integer :: base, k
 
-    base = vs_enter(2)
-    call vs_set(base + 1, l)
+    vst => gc_my_stack()
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, l)
     walk = l
-    call vs_set(base + 2, walk)
+    call vs_set(vst, base + 2, walk)
     do k = 1, i
-       walk = gcl_rest(vs_get(base + 2), [vs_get(base + 1)])
-       call vs_set(base + 2, walk)
+       walk = gcl_rest(vs_get(vst, base + 2), [vs_get(vst, base + 1)])
+       call vs_set(vst, base + 2, walk)
     end do
-    out = gcl_first(vs_get(base + 2))
-    call vs_leave(base)
+    out = gcl_first(vs_get(vst, base + 2))
+    call vs_leave(vst, base)
   end function nth_of
 
   ! Realises a whole lazy seq to count it. Does not terminate on an
@@ -10851,35 +10978,37 @@ contains
   ! A `value`-kind array holding a collection's elements. This is what
   ! to-array answers, because `sort` mutates the array it gets.
   function value_array_of(coll, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: coll
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, vecd, run
     integer, allocatable :: ext(:), lows(:)
     character(len=:), allocatable :: err
     integer :: n, h, i, base
-    base = vs_enter(2)
+    vst => gc_my_stack()
+    base = vs_enter(vst, 2)
     vecd = coll_to_vector(coll, roots)
-    call vs_set(base + 1, vecd)
-    n = gcv_count(vs_get(base + 1))
+    call vs_set(vst, base + 1, vecd)
+    n = gcv_count(vs_get(vst, base + 1))
     allocate(ext(1), lows(1))
     ext(1) = n
     lows(1) = 0
     h = gcna_new("value", ext, lows, err)
     if (h == 0) then
        call fail(err)
-       call vs_leave(base)
+       call vs_leave(vst, base)
        out = gc_nil()
        return
     end if
-    run = gc_vec(max(1, n), [roots, [vs_get(base + 1)]])
-    call vs_set(base + 2, run)
-    out = gc_obj(OBJ_ARRAY, [vs_get(base + 2)], [roots, [vs_get(base + 1), vs_get(base + 2)]])
+    run = gc_vec(max(1, n), [roots, [vs_get(vst, base + 1)]])
+    call vs_set(vst, base + 2, run)
+    out = gc_obj(OBJ_ARRAY, [vs_get(vst, base + 2)], [roots, [vs_get(vst, base + 1), vs_get(vst, base + 2)]])
     call gc_set_i1(out, h)
     call gc_set_i2(out, -1)   ! owns its handle; not a slice
     do i = 1, n
-       call array_put(out, i, gcv_nth(vs_get(base + 1), i - 1))
+       call array_put(out, i, gcv_nth(vs_get(vst, base + 1), i - 1))
     end do
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end function value_array_of
 
   ! One comparator call, following AFunction.compare (AFunction.java):
@@ -10887,14 +11016,16 @@ contains
   ! works -- true means "less", and false asks the reverse question to
   ! tell 0 from 1. Anything else is a number and its sign is the answer.
   recursive function comparator_call(cmp, x, y) result(c)
+    type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: cmp, x, y
     integer :: c
     type(gc_value) :: r, args2, rev
     integer :: base
+    vst => gc_my_stack()
     tctx => ctx_self()
-    base = vs_enter(4)
-    call vs_set(base + 1, cmp)
+    base = vs_enter(vst, 4)
+    call vs_set(vst, base + 1, cmp)
     ! A VECTOR, not a list: apply counts its arguments with
     ! gcv_count to pick an arity, and a list counts as zero --
     ! which is how a two-argument comparator produced
@@ -10903,30 +11034,30 @@ contains
     ! Each conj is rooted before the next allocation: two
     ! allocations as arguments to one call means the second can
     ! collect the first.
-    args2 = gcv_empty([vs_get(base + 1)])
-    call vs_set(base + 2, args2)
-    args2 = gcv_conj(vs_get(base + 2), x, [vs_get(base + 1), vs_get(base + 2)])
-    call vs_set(base + 2, args2)
-    args2 = gcv_conj(vs_get(base + 2), y, [vs_get(base + 1), vs_get(base + 2)])
-    call vs_set(base + 2, args2)
-    r = apply(vs_get(base + 1), vs_get(base + 2))
-    call vs_set(base + 3, r)
+    args2 = gcv_empty([vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, args2)
+    args2 = gcv_conj(vs_get(vst, base + 2), x, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 2, args2)
+    args2 = gcv_conj(vs_get(vst, base + 2), y, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 2, args2)
+    r = apply(vs_get(vst, base + 1), vs_get(vst, base + 2))
+    call vs_set(vst, base + 3, r)
     c = 0
     if (tctx%has_error) then
-       call vs_leave(base)
+       call vs_leave(vst, base)
        return
     end if
     if (r%tag == GCT_BOOL) then
        if (truthy(r)) then
           c = -1
        else
-          rev = gcv_empty([vs_get(base + 1)])
-          call vs_set(base + 2, rev)
-          rev = gcv_conj(vs_get(base + 2), y, [vs_get(base + 1), vs_get(base + 2)])
-          call vs_set(base + 2, rev)
-          rev = gcv_conj(vs_get(base + 2), x, [vs_get(base + 1), vs_get(base + 2)])
-          call vs_set(base + 2, rev)
-          r = apply(vs_get(base + 1), vs_get(base + 2))
+          rev = gcv_empty([vs_get(vst, base + 1)])
+          call vs_set(vst, base + 2, rev)
+          rev = gcv_conj(vs_get(vst, base + 2), y, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+          call vs_set(vst, base + 2, rev)
+          rev = gcv_conj(vs_get(vst, base + 2), x, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+          call vs_set(vst, base + 2, rev)
+          r = apply(vs_get(vst, base + 1), vs_get(vst, base + 2))
           if (.not. tctx%has_error) then
              if (truthy(r)) c = 1
           end if
@@ -10938,7 +11069,7 @@ contains
           c = 1
        end if
     end if
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end function comparator_call
 
   ! java.util.Arrays/sort -- IN PLACE, and STABLE, which Clojure's sort
@@ -10946,20 +11077,22 @@ contains
   ! merge sort rather than a quicksort for exactly that reason; the
   ! extra array is the price of the guarantee.
   recursive subroutine array_sort(arr, cmp)
+    type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: arr, cmp
     integer :: n, width, i, lo, mid, hi
     type(gc_value), allocatable :: buf(:), src(:)
     integer :: base
+    vst => gc_my_stack()
     tctx => ctx_self()
     n = seq_len(arr)
     if (n < 2) return
-    base = vs_enter(2)
-    call vs_set(base + 1, arr)
-    call vs_set(base + 2, cmp)
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, arr)
+    call vs_set(vst, base + 2, cmp)
     allocate(src(n), buf(n))
     do i = 1, n
-       src(i) = array_elem(vs_get(base + 1), i)
+       src(i) = array_elem(vs_get(vst, base + 1), i)
     end do
     ! Bottom-up: merge runs of 1, then 2, then 4... Taking from the
     ! left run on a tie is what keeps it stable.
@@ -10969,9 +11102,9 @@ contains
        do while (lo <= n)
           mid = min(lo + width - 1, n)
           hi = min(lo + 2 * width - 1, n)
-          call merge_run(src, buf, lo, mid, hi, vs_get(base + 2))
+          call merge_run(src, buf, lo, mid, hi, vs_get(vst, base + 2))
           if (tctx%has_error) then
-             call vs_leave(base)
+             call vs_leave(vst, base)
              return
           end if
           lo = hi + 1
@@ -10980,9 +11113,9 @@ contains
        width = 2 * width
     end do
     do i = 1, n
-       call array_put(vs_get(base + 1), i, src(i))
+       call array_put(vs_get(vst, base + 1), i, src(i))
     end do
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end subroutine array_sort
 
   recursive subroutine merge_run(src, buf, lo, mid, hi, cmp)
@@ -11062,82 +11195,88 @@ contains
   ! than absent -- that is what makes (struct point 1) answer
   ! {:x 1, :y nil} rather than {:x 1}.
   function struct_blank(basis, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: basis
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, tmp
     integer :: i, base
-    base = vs_enter(2)
-    call vs_set(base + 1, basis)
+    vst => gc_my_stack()
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, basis)
     tmp = gca_empty([roots, [basis]])
-    call vs_set(base + 2, tmp)
-    do i = 0, gcv_count(vs_get(base + 1)) - 1
-       tmp = gca_assoc(vs_get(base + 2), gcv_nth(vs_get(base + 1), i), gc_nil(), &
-            [roots, [vs_get(base + 1), vs_get(base + 2)]])
-       call vs_set(base + 2, tmp)
+    call vs_set(vst, base + 2, tmp)
+    do i = 0, gcv_count(vs_get(vst, base + 1)) - 1
+       tmp = gca_assoc(vs_get(vst, base + 2), gcv_nth(vs_get(vst, base + 1), i), gc_nil(), &
+            [roots, [vs_get(vst, base + 1), vs_get(vst, base + 2)]])
+       call vs_set(vst, base + 2, tmp)
     end do
-    out = vs_get(base + 2)
-    call vs_leave(base)
+    out = vs_get(vst, base + 2)
+    call vs_leave(vst, base)
   end function struct_blank
 
   ! construct: the values positionally against the basis.
   function struct_construct(args, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: args
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, basis, vals, tmp
     integer :: i, n, base
-    base = vs_enter(3)
+    vst => gc_my_stack()
+    base = vs_enter(vst, 3)
     basis = strip_meta(gcv_nth(args, 0))
-    call vs_set(base + 1, basis)
+    call vs_set(vst, base + 1, basis)
     vals = coll_to_vector(gcv_nth(args, 1), [roots, [basis]])
-    call vs_set(base + 2, vals)
-    n = gcv_count(vs_get(base + 2))
-    if (n > gcv_count(vs_get(base + 1))) then
+    call vs_set(vst, base + 2, vals)
+    n = gcv_count(vs_get(vst, base + 2))
+    if (n > gcv_count(vs_get(vst, base + 1))) then
        call fail("Too many arguments to struct constructor")
-       call vs_leave(base)
+       call vs_leave(vst, base)
        out = gc_nil()
        return
     end if
-    tmp = struct_blank(vs_get(base + 1), [roots, [vs_get(base + 2)]])
-    call vs_set(base + 3, tmp)
+    tmp = struct_blank(vs_get(vst, base + 1), [roots, [vs_get(vst, base + 2)]])
+    call vs_set(vst, base + 3, tmp)
     do i = 0, n - 1
-       tmp = gca_assoc(vs_get(base + 3), gcv_nth(vs_get(base + 1), i), &
-            gcv_nth(vs_get(base + 2), i), &
-            [roots, [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)]])
-       call vs_set(base + 3, tmp)
+       tmp = gca_assoc(vs_get(vst, base + 3), gcv_nth(vs_get(vst, base + 1), i), &
+            gcv_nth(vs_get(vst, base + 2), i), &
+            [roots, [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)]])
+       call vs_set(vst, base + 3, tmp)
     end do
-    out = vs_get(base + 3)
-    call vs_leave(base)
+    out = vs_get(vst, base + 3)
+    call vs_leave(vst, base)
   end function struct_construct
 
   ! create: key/value pairs, which may name keys outside the basis.
   function struct_create(args, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: args
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, basis, kvs, tmp
     integer :: i, n, base
-    base = vs_enter(3)
+    vst => gc_my_stack()
+    base = vs_enter(vst, 3)
     basis = strip_meta(gcv_nth(args, 0))
-    call vs_set(base + 1, basis)
+    call vs_set(vst, base + 1, basis)
     kvs = coll_to_vector(gcv_nth(args, 1), [roots, [basis]])
-    call vs_set(base + 2, kvs)
-    n = gcv_count(vs_get(base + 2))
+    call vs_set(vst, base + 2, kvs)
+    n = gcv_count(vs_get(vst, base + 2))
     if (mod(n, 2) /= 0) then
        call fail("No value supplied for key: " // &
-            gcp_str(gcv_nth(vs_get(base + 2), n - 1), .true.))
-       call vs_leave(base)
+            gcp_str(gcv_nth(vs_get(vst, base + 2), n - 1), .true.))
+       call vs_leave(vst, base)
        out = gc_nil()
        return
     end if
-    tmp = struct_blank(vs_get(base + 1), [roots, [vs_get(base + 2)]])
-    call vs_set(base + 3, tmp)
+    tmp = struct_blank(vs_get(vst, base + 1), [roots, [vs_get(vst, base + 2)]])
+    call vs_set(vst, base + 3, tmp)
     do i = 0, n - 2, 2
-       tmp = gca_assoc(vs_get(base + 3), gcv_nth(vs_get(base + 2), i), &
-            gcv_nth(vs_get(base + 2), i + 1), &
-            [roots, [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)]])
-       call vs_set(base + 3, tmp)
+       tmp = gca_assoc(vs_get(vst, base + 3), gcv_nth(vs_get(vst, base + 2), i), &
+            gcv_nth(vs_get(vst, base + 2), i + 1), &
+            [roots, [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)]])
+       call vs_set(vst, base + 3, tmp)
     end do
-    out = vs_get(base + 3)
-    call vs_leave(base)
+    out = vs_get(vst, base + 3)
+    call vs_leave(vst, base)
   end function struct_create
 
   ! getAccessor: the KEY itself. Clojure returns a closure over the
@@ -11164,6 +11303,7 @@ contains
   end function struct_accessor
 
   recursive function deep_equal(a0, b0, roots) result(eq)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: a0, b0
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: a, b
@@ -11178,6 +11318,7 @@ contains
     ! true. The wrapper used to reach the sequential test, which
     ! answered false for it, so a hinted collection compared by
     ! identity.
+    vst => gc_my_stack()
     a = strip_meta(a0)
     b = strip_meta(b0)
 
@@ -11229,17 +11370,17 @@ contains
        block
          type(gc_value) :: sa, sb, tmp
          integer :: base
-         base = vs_enter(6)
-         call vs_set(base + 1, a)
-         call vs_set(base + 2, b)
-         tmp = to_seq(vs_get(base + 1), [vs_get(base + 1), vs_get(base + 2)])
-         call vs_set(base + 3, tmp)
-         tmp = to_seq(vs_get(base + 2), [vs_get(base + 2), vs_get(base + 3)])
-         call vs_set(base + 4, tmp)
+         base = vs_enter(vst, 6)
+         call vs_set(vst, base + 1, a)
+         call vs_set(vst, base + 2, b)
+         tmp = to_seq(vs_get(vst, base + 1), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+         call vs_set(vst, base + 3, tmp)
+         tmp = to_seq(vs_get(vst, base + 2), [vs_get(vst, base + 2), vs_get(vst, base + 3)])
+         call vs_set(vst, base + 4, tmp)
          eq = .false.
          do
-            sa = vs_get(base + 3)
-            sb = vs_get(base + 4)
+            sa = vs_get(vst, base + 3)
+            sb = vs_get(vst, base + 4)
             ! to_seq answers nil for an exhausted seq, which is
             ! RT.seq returning null and (seq x) returning nil. Both
             ! ending together is the only way to be equal.
@@ -11252,24 +11393,24 @@ contains
             ! Each element onto the stack BEFORE the other is taken:
             ! two allocations as arguments to one call means the
             ! second can collect the first.
-            tmp = sq_first(vs_get(base + 3), [vs_get(base + 3), vs_get(base + 4)])
-            call vs_set(base + 5, tmp)
-            tmp = sq_first(vs_get(base + 4), &
-                 [vs_get(base + 3), vs_get(base + 4), vs_get(base + 5)])
-            call vs_set(base + 6, tmp)
-            if (.not. deep_equal(vs_get(base + 5), vs_get(base + 6), &
-                 [vs_get(base + 3), vs_get(base + 4)])) exit
+            tmp = sq_first(vs_get(vst, base + 3), [vs_get(vst, base + 3), vs_get(vst, base + 4)])
+            call vs_set(vst, base + 5, tmp)
+            tmp = sq_first(vs_get(vst, base + 4), &
+                 [vs_get(vst, base + 3), vs_get(vst, base + 4), vs_get(vst, base + 5)])
+            call vs_set(vst, base + 6, tmp)
+            if (.not. deep_equal(vs_get(vst, base + 5), vs_get(vst, base + 6), &
+                 [vs_get(vst, base + 3), vs_get(vst, base + 4)])) exit
 
-            tmp = sq_rest(vs_get(base + 3), [vs_get(base + 3), vs_get(base + 4)])
-            call vs_set(base + 5, tmp)
-            tmp = to_seq(vs_get(base + 5), [vs_get(base + 4), vs_get(base + 5)])
-            call vs_set(base + 3, tmp)
-            tmp = sq_rest(vs_get(base + 4), [vs_get(base + 3), vs_get(base + 4)])
-            call vs_set(base + 6, tmp)
-            tmp = to_seq(vs_get(base + 6), [vs_get(base + 3), vs_get(base + 6)])
-            call vs_set(base + 4, tmp)
+            tmp = sq_rest(vs_get(vst, base + 3), [vs_get(vst, base + 3), vs_get(vst, base + 4)])
+            call vs_set(vst, base + 5, tmp)
+            tmp = to_seq(vs_get(vst, base + 5), [vs_get(vst, base + 4), vs_get(vst, base + 5)])
+            call vs_set(vst, base + 3, tmp)
+            tmp = sq_rest(vs_get(vst, base + 4), [vs_get(vst, base + 3), vs_get(vst, base + 4)])
+            call vs_set(vst, base + 6, tmp)
+            tmp = to_seq(vs_get(vst, base + 6), [vs_get(vst, base + 3), vs_get(vst, base + 6)])
+            call vs_set(vst, base + 4, tmp)
          end do
-         call vs_leave(base)
+         call vs_leave(vst, base)
        end block
        return
     end if
@@ -11435,11 +11576,13 @@ contains
   end function seq_cons
 
   recursive function to_seq(v0, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: v0
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, v
     integer :: base
 
+    vst => gc_my_stack()
     v = strip_meta(v0)
     out = gc_nil()
     if (v%tag == GCT_NIL) return
@@ -11478,11 +11621,11 @@ contains
 
     ! Indexable: a VIEW, not a copy. rest is then O(1).
     if (seq_len(v) == 0) return
-    base = vs_enter(1)
-    call vs_set(base + 1, v)
-    out = gc_obj(OBJ_SEQ, [vs_get(base + 1)], roots)
+    base = vs_enter(vst, 1)
+    call vs_set(vst, base + 1, v)
+    out = gc_obj(OBJ_SEQ, [vs_get(vst, base + 1)], roots)
     call gc_set_i1(out, 0)
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end function to_seq
 
   ! How many elements an indexable value has. The only other place
@@ -11518,6 +11661,7 @@ contains
   ! its entries as two-element vectors, which is what makes
   ! (first {:a 1}) an entry and lets destructuring walk a map.
   function seq_elem(v, i, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: v
     integer, intent(in) :: i
     type(gc_value), intent(in) :: roots(:)
@@ -11525,6 +11669,7 @@ contains
     type(gc_value), allocatable :: ks(:), vls(:)
     integer :: base
 
+    vst => gc_my_stack()
     out = gc_nil()
     if (gcv_is(v)) then
        out = gcv_nth(v, i)
@@ -11552,88 +11697,94 @@ contains
     else if (gca_is(v)) then
        call gca_entries(v, ks, vls)
        if (i >= 0 .and. i < size(ks)) then
-          base = vs_enter(1)
+          base = vs_enter(vst, 1)
           out = gcv_empty(roots)
-          call vs_set(base + 1, out)
-          out = gcv_conj(vs_get(base + 1), ks(i+1), roots)
-          call vs_set(base + 1, out)
-          out = gcv_conj(vs_get(base + 1), vls(i+1), roots)
+          call vs_set(vst, base + 1, out)
+          out = gcv_conj(vs_get(vst, base + 1), ks(i+1), roots)
+          call vs_set(vst, base + 1, out)
+          out = gcv_conj(vs_get(vst, base + 1), vls(i+1), roots)
           call mark_entry(out)
-          call vs_leave(base)
+          call vs_leave(vst, base)
        end if
     end if
   end function seq_elem
 
   ! first/rest work on SEQS only. Anything else is seq'd first.
   recursive function sq_first(v0, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: v0
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, s, v
     integer :: base
 
+    vst => gc_my_stack()
     v = strip_meta(v0)
     out = gc_nil()
-    base = vs_enter(1)
+    base = vs_enter(vst, 1)
     s = to_seq(v, roots)
-    call vs_set(base + 1, s)
-    if (gcl_is(vs_get(base + 1))) then
-       out = gcl_first(vs_get(base + 1))
-    else if (gc_kind(vs_get(base + 1)) == OBJ_LAZY) then
-       out = gc_slot(vs_get(base + 1), 2)
-    else if (gc_kind(vs_get(base + 1)) == OBJ_SEQ) then
-       out = seq_elem(gc_slot(vs_get(base + 1), 1), gc_i1(vs_get(base + 1)), roots)
-    else if (gc_kind(vs_get(base + 1)) == OBJ_CHUNKSEQ) then
-       out = chunk_nth(gc_slot(vs_get(base + 1), 1), 0)
+    call vs_set(vst, base + 1, s)
+    if (gcl_is(vs_get(vst, base + 1))) then
+       out = gcl_first(vs_get(vst, base + 1))
+    else if (gc_kind(vs_get(vst, base + 1)) == OBJ_LAZY) then
+       out = gc_slot(vs_get(vst, base + 1), 2)
+    else if (gc_kind(vs_get(vst, base + 1)) == OBJ_SEQ) then
+       out = seq_elem(gc_slot(vs_get(vst, base + 1), 1), gc_i1(vs_get(vst, base + 1)), roots)
+    else if (gc_kind(vs_get(vst, base + 1)) == OBJ_CHUNKSEQ) then
+       out = chunk_nth(gc_slot(vs_get(vst, base + 1), 1), 0)
     end if
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end function sq_first
 
   ! Always a seq, never nil -- Clojure's `rest`, as opposed to `next`.
   ! For a view this bumps the index and shares the source, so walking
   ! a vector is O(1) per step rather than copying the tail each time.
   recursive function sq_rest(v0, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: v0
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, s, v
     integer :: base
 
+    vst => gc_my_stack()
     v = strip_meta(v0)
-    base = vs_enter(2)
+    base = vs_enter(vst, 2)
     s = to_seq(v, roots)
-    call vs_set(base + 1, s)
+    call vs_set(vst, base + 1, s)
     out = gcl_empty(roots)
-    if (gcl_is(vs_get(base + 1))) then
-       out = gcl_rest(vs_get(base + 1), roots)
-    else if (gc_kind(vs_get(base + 1)) == OBJ_LAZY) then
-       out = gc_slot(vs_get(base + 1), 3)
-    else if (gc_kind(vs_get(base + 1)) == OBJ_SEQ) then
-       out = gc_obj(OBJ_SEQ, [gc_slot(vs_get(base + 1), 1)], &
-            [vs_get(base + 1)])
-       call gc_set_i1(out, gc_i1(vs_get(base + 1)) + 1)
-    else if (gc_kind(vs_get(base + 1)) == OBJ_CHUNKSEQ) then
+    if (gcl_is(vs_get(vst, base + 1))) then
+       out = gcl_rest(vs_get(vst, base + 1), roots)
+    else if (gc_kind(vs_get(vst, base + 1)) == OBJ_LAZY) then
+       out = gc_slot(vs_get(vst, base + 1), 3)
+    else if (gc_kind(vs_get(vst, base + 1)) == OBJ_SEQ) then
+       out = gc_obj(OBJ_SEQ, [gc_slot(vs_get(vst, base + 1), 1)], &
+            [vs_get(vst, base + 1)])
+       call gc_set_i1(out, gc_i1(vs_get(vst, base + 1)) + 1)
+    else if (gc_kind(vs_get(vst, base + 1)) == OBJ_CHUNKSEQ) then
        ! ChunkedCons.more: the chunk less its first while that leaves
        ! any, else what follows (or () when nothing does)
-       if (chunk_count(gc_slot(vs_get(base + 1), 1)) > 1) then
-          call vs_set(base + 2, make_chunk(gc_slot(gc_slot(vs_get(base + 1), 1), 1), &
-               gc_i1(gc_slot(vs_get(base + 1), 1)) + 1, gc_i2(gc_slot(vs_get(base + 1), 1)), [vs_get(base + 1)]))
-          out = gc_obj(OBJ_CHUNKSEQ, [vs_get(base + 2), gc_slot(vs_get(base + 1), 2), gc_nil()], &
-               [vs_get(base + 1), vs_get(base + 2)])
+       if (chunk_count(gc_slot(vs_get(vst, base + 1), 1)) > 1) then
+          call vs_set(vst, base + 2, make_chunk(gc_slot(gc_slot(vs_get(vst, base + 1), 1), 1), &
+               gc_i1(gc_slot(vs_get(vst, base + 1), 1)) + 1, gc_i2(gc_slot(vs_get(vst, base + 1), 1)), [vs_get(vst, base + 1)]))
+          out = gc_obj(OBJ_CHUNKSEQ, [vs_get(vst, base + 2), gc_slot(vs_get(vst, base + 1), 2), gc_nil()], &
+               [vs_get(vst, base + 1), vs_get(vst, base + 2)])
        else
-          out = gc_slot(vs_get(base + 1), 2)
+          out = gc_slot(vs_get(vst, base + 1), 2)
           if (out%tag == GCT_NIL) out = gcl_empty(roots)
        end if
     end if
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end function sq_rest
 
   ! How many elements a seq yields. Realises a lazy seq, as (count)
   ! must.
   recursive function sq_count(v0, roots) result(n)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: v0
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: s, v
     integer :: base, n
 
+    vst => gc_my_stack()
     v = strip_meta(v0)
     n = 0
     if (v%tag == GCT_NIL) return
@@ -11663,19 +11814,19 @@ contains
        n = seq_len(v)
        return
     end if
-    base = vs_enter(1)
-    call vs_set(base + 1, v)
+    base = vs_enter(vst, 1)
+    call vs_set(vst, base + 1, v)
     do
-       s = to_seq(vs_get(base + 1), roots)
-       call vs_set(base + 1, s)
+       s = to_seq(vs_get(vst, base + 1), roots)
+       call vs_set(vst, base + 1, s)
        ! s, not vs_get(...)%tag: neither compiler will take a
        ! component off a function result (NOTES.md gotcha).
        if (s%tag == GCT_NIL) exit
        n = n + 1
-       s = sq_rest(vs_get(base + 1), roots)
-       call vs_set(base + 1, s)
+       s = sq_rest(vs_get(vst, base + 1), roots)
+       call vs_set(vst, base + 1, s)
     end do
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end function sq_count
 
   ! Clojure's truthiness: everything except nil and false.
@@ -12020,6 +12171,7 @@ contains
   ! rank -- a full set of subscripts is an ELEMENT, not a slice, and
   ! callers check that first.
   function array_make_slice(arr, subs, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: arr
     integer, intent(in) :: subs(:)
     type(gc_value), intent(in) :: roots(:)
@@ -12029,37 +12181,38 @@ contains
     logical :: ok
     integer :: base
 
+    vst => gc_my_stack()
     out = gc_nil()
     call array_fold(arr, subs, new_offset, new_stride, ok)
     if (.not. ok) return
 
-    base = vs_enter(3)
-    call vs_set(base + 1, arr)
-    own_rank = array_own_rank(vs_get(base + 1))
-    extents = array_own_extents(vs_get(base + 1))
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, arr)
+    own_rank = array_own_rank(vs_get(vst, base + 1))
+    extents = array_own_extents(vs_get(vst, base + 1))
 
-    tmp = gcv_empty([vs_get(base + 1), roots])
-    call vs_set(base + 2, tmp)
-    tmp = gcv_conj(vs_get(base + 2), gc_int(new_stride), &
-         [vs_get(base + 1), vs_get(base + 2), roots])
-    call vs_set(base + 2, tmp)
+    tmp = gcv_empty([vs_get(vst, base + 1), roots])
+    call vs_set(vst, base + 2, tmp)
+    tmp = gcv_conj(vs_get(vst, base + 2), gc_int(new_stride), &
+         [vs_get(vst, base + 1), vs_get(vst, base + 2), roots])
+    call vs_set(vst, base + 2, tmp)
     do k = size(subs) + 1, own_rank
-       tmp = gcv_conj(vs_get(base + 2), gc_int(extents(k)), &
-            [vs_get(base + 1), vs_get(base + 2), roots])
-       call vs_set(base + 2, tmp)
+       tmp = gcv_conj(vs_get(vst, base + 2), gc_int(extents(k)), &
+            [vs_get(vst, base + 1), vs_get(vst, base + 2), roots])
+       call vs_set(vst, base + 2, tmp)
     end do
-    shapevec = vs_get(base + 2)
-    call vs_set(base + 3, shapevec)
+    shapevec = vs_get(vst, base + 2)
+    call vs_set(vst, base + 3, shapevec)
 
     ! Slot 1 (the value-run, for a `value`-kind array) is SHARED with
     ! the parent, unchanged -- the run holds every element of the
     ! whole base array, and this view's offset/stride already say
     ! which of them are ours.
-    out = gc_obj(OBJ_ARRAY, [gc_slot(vs_get(base + 1), 1), vs_get(base + 3)], &
-         [vs_get(base + 1), vs_get(base + 3), roots])
-    call gc_set_i1(out, gc_i1(vs_get(base + 1)))
+    out = gc_obj(OBJ_ARRAY, [gc_slot(vs_get(vst, base + 1), 1), vs_get(vst, base + 3)], &
+         [vs_get(vst, base + 1), vs_get(vst, base + 3), roots])
+    call gc_set_i1(out, gc_i1(vs_get(vst, base + 1)))
     call gc_set_i2(out, new_offset)
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end function array_make_slice
 
   ! Writes one element, by a 1-based index into the array's OWN
@@ -12463,60 +12616,62 @@ contains
   ! preferences, the default, and the ambiguity error -- and cached.
   ! nil when there is none. (DEVIATIONS 8, resolved.)
   recursive function mf_lookup(mf, dv, roots) result(meth)
+    type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: mf, dv
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: meth, h, fargs, cache
     integer :: base
+    vst => gc_my_stack()
     tctx => ctx_self()
-    base = vs_enter(4)
-    call vs_set(base + 1, mf)
-    call vs_set(base + 2, dv)
+    base = vs_enter(vst, 4)
+    call vs_set(vst, base + 1, mf)
+    call vs_set(vst, base + 2, dv)
     ! the exact entry first: it dominates whatever else matches, and
     ! it is the common case -- print-method on a map's class -- so it
     ! costs one lookup, as it always did
-    meth = gca_get(gc_slot(vs_get(base + 1), 4), vs_get(base + 2))
+    meth = gca_get(gc_slot(vs_get(vst, base + 1), 4), vs_get(vst, base + 2))
     if (meth%tag /= GCT_NIL) then
-       call vs_leave(base)
+       call vs_leave(vst, base)
        return
     end if
-    h = mf_hierarchy(vs_get(base + 1))
-    call vs_set(base + 3, h)
-    if (.not. same_object(mf_aux(vs_get(base + 1), 3), vs_get(base + 3))) then
-       call mf_reset_cache(vs_get(base + 1))
-       call mf_aux_set(vs_get(base + 1), 3, vs_get(base + 3))
+    h = mf_hierarchy(vs_get(vst, base + 1))
+    call vs_set(vst, base + 3, h)
+    if (.not. same_object(mf_aux(vs_get(vst, base + 1), 3), vs_get(vst, base + 3))) then
+       call mf_reset_cache(vs_get(vst, base + 1))
+       call mf_aux_set(vs_get(vst, base + 1), 3, vs_get(vst, base + 3))
     end if
-    meth = gca_get(mf_aux(vs_get(base + 1), 2), vs_get(base + 2))
+    meth = gca_get(mf_aux(vs_get(vst, base + 1), 2), vs_get(vst, base + 2))
     if (meth%tag == GCT_NIL) then
-       fargs = gcv_build(6, [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-       call vs_set(base + 4, fargs)
-       fargs = gcv_put(vs_get(base + 4), 0, gc_slot(vs_get(base + 1), 1), [vs_get(base + 1), vs_get(base + 4)])
-       call vs_set(base + 4, fargs)
-       fargs = gcv_put(vs_get(base + 4), 1, vs_get(base + 2), [vs_get(base + 1), vs_get(base + 4)])
-       call vs_set(base + 4, fargs)
-       fargs = gcv_put(vs_get(base + 4), 2, vs_get(base + 3), [vs_get(base + 1), vs_get(base + 4)])
-       call vs_set(base + 4, fargs)
-       fargs = gcv_put(vs_get(base + 4), 3, gc_slot(vs_get(base + 1), 4), [vs_get(base + 1), vs_get(base + 4)])
-       call vs_set(base + 4, fargs)
-       fargs = gcv_put(vs_get(base + 4), 4, mf_aux(vs_get(base + 1), 1), [vs_get(base + 1), vs_get(base + 4)])
-       call vs_set(base + 4, fargs)
-       fargs = gcv_put(vs_get(base + 4), 5, gc_slot(vs_get(base + 1), 3), [vs_get(base + 1), vs_get(base + 4)])
-       call vs_set(base + 4, fargs)
-       meth = mf_call("find-method", vs_get(base + 4))
+       fargs = gcv_build(6, [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+       call vs_set(vst, base + 4, fargs)
+       fargs = gcv_put(vs_get(vst, base + 4), 0, gc_slot(vs_get(vst, base + 1), 1), [vs_get(vst, base + 1), vs_get(vst, base + 4)])
+       call vs_set(vst, base + 4, fargs)
+       fargs = gcv_put(vs_get(vst, base + 4), 1, vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 4)])
+       call vs_set(vst, base + 4, fargs)
+       fargs = gcv_put(vs_get(vst, base + 4), 2, vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 4)])
+       call vs_set(vst, base + 4, fargs)
+       fargs = gcv_put(vs_get(vst, base + 4), 3, gc_slot(vs_get(vst, base + 1), 4), [vs_get(vst, base + 1), vs_get(vst, base + 4)])
+       call vs_set(vst, base + 4, fargs)
+       fargs = gcv_put(vs_get(vst, base + 4), 4, mf_aux(vs_get(vst, base + 1), 1), [vs_get(vst, base + 1), vs_get(vst, base + 4)])
+       call vs_set(vst, base + 4, fargs)
+       fargs = gcv_put(vs_get(vst, base + 4), 5, gc_slot(vs_get(vst, base + 1), 3), [vs_get(vst, base + 1), vs_get(vst, base + 4)])
+       call vs_set(vst, base + 4, fargs)
+       meth = mf_call("find-method", vs_get(vst, base + 4))
        if (tctx%has_error) then
           meth = gc_nil()
-          call vs_leave(base)
+          call vs_leave(vst, base)
           return
        end if
     end if
     if (meth%tag /= GCT_NIL) then
-       call vs_set(base + 4, meth)
-       cache = gca_assoc(mf_aux(vs_get(base + 1), 2), vs_get(base + 2), vs_get(base + 4), &
-            [vs_get(base + 1), vs_get(base + 2), vs_get(base + 4)])
-       call mf_aux_set(vs_get(base + 1), 2, cache)
-       meth = vs_get(base + 4)
+       call vs_set(vst, base + 4, meth)
+       cache = gca_assoc(mf_aux(vs_get(vst, base + 1), 2), vs_get(vst, base + 2), vs_get(vst, base + 4), &
+            [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 4)])
+       call mf_aux_set(vs_get(vst, base + 1), 2, cache)
+       meth = vs_get(vst, base + 4)
     end if
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end function mf_lookup
 
   ! The library a package name reaches: the path itself when it is a
@@ -12574,6 +12729,7 @@ contains
   ! value as the value (under :return when there are outs as well);
   ! arrays are written in place.
   recursive function pkg_call(hv, routine, cargs, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: hv, routine, cargs
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out
@@ -12595,34 +12751,35 @@ contains
     logical :: ok, has_ret
     character(len=16) :: cbuf1, cbuf2
 
+    vst => gc_my_stack()
     out = gc_nil()
-    base = vs_enter(5)
-    call vs_set(base + 1, strip_meta(routine))
-    call vs_set(base + 2, strip_meta(cargs))
+    base = vs_enter(vst, 5)
+    call vs_set(vst, base + 1, strip_meta(routine))
+    call vs_set(vst, base + 2, strip_meta(cargs))
     once: do
        hi = ival_of(hv)
        if (hi < 1 .or. hi > pkg_count) then
           call fail("call-package*: no such package handle")
           exit once
        end if
-       k = gc_key("symbol", [roots, vs_get(base + 1)])
-       sym = text_of(gca_get(vs_get(base + 1), k))
-       k = gc_key("name", [roots, vs_get(base + 1)])
-       rname = text_of(gca_get(vs_get(base + 1), k))
-       k = gc_key("args", [roots, vs_get(base + 1)])
-       spec = strip_meta(gca_get(vs_get(base + 1), k))
-       call vs_set(base + 3, spec)
-       k = gc_key("returns", [roots, vs_get(base + 1)])
-       rt = strip_meta(gca_get(vs_get(base + 1), k))
+       k = gc_key("symbol", [roots, vs_get(vst, base + 1)])
+       sym = text_of(gca_get(vs_get(vst, base + 1), k))
+       k = gc_key("name", [roots, vs_get(vst, base + 1)])
+       rname = text_of(gca_get(vs_get(vst, base + 1), k))
+       k = gc_key("args", [roots, vs_get(vst, base + 1)])
+       spec = strip_meta(gca_get(vs_get(vst, base + 1), k))
+       call vs_set(vst, base + 3, spec)
+       k = gc_key("returns", [roots, vs_get(vst, base + 1)])
+       rt = strip_meta(gca_get(vs_get(vst, base + 1), k))
        has_ret = (rt%tag == GCT_KEY)
        rty = ""
        if (has_ret) rty = gc_ref_text(rt%ref)
-       nspec = gcv_count(vs_get(base + 3))
-       ncall = gcv_count(vs_get(base + 2))
+       nspec = gcv_count(vs_get(vst, base + 3))
+       ncall = gcv_count(vs_get(vst, base + 2))
        allocate(ty(nspec), it(nspec), rk(nspec))
        nargv = nspec
        do i = 1, nspec
-          av = strip_meta(gcv_nth(vs_get(base + 3), i - 1))
+          av = strip_meta(gcv_nth(vs_get(vst, base + 3), i - 1))
           k = gc_key("type", [roots, av])
           tv = strip_meta(gca_get(av, k))
           ty(i) = ""
@@ -12649,7 +12806,7 @@ contains
           write(cbuf1, '(I0)') j
           write(cbuf2, '(I0)') ncall
           call raise_class("ArityException", "Wrong number of args (" // trim(cbuf2) // ") passed to: " // rname // &
-               ", which takes " // trim(cbuf1), [roots, vs_get(base + 1)])
+               ", which takes " // trim(cbuf1), [roots, vs_get(vst, base + 1)])
           exit once
        end if
        slot = 0
@@ -12658,7 +12815,7 @@ contains
        do i = 1, nspec
           tv = gc_nil()
           if (it(i) /= "out") then
-             tv = strip_meta(gcv_nth(vs_get(base + 2), j))
+             tv = strip_meta(gcv_nth(vs_get(vst, base + 2), j))
              j = j + 1
           end if
           slot = slot + 1
@@ -12756,35 +12913,35 @@ contains
        call dl_call_shim(fp, argv)
        if (nrel) call native_end(nme)
        ! the results
-       res = gca_empty([roots, vs_get(base + 1)])
-       call vs_set(base + 4, res)
+       res = gca_empty([roots, vs_get(vst, base + 1)])
+       call vs_set(vst, base + 4, res)
        nout = 0
        do i = 1, nspec
           if (rk(i) /= 0 .or. it(i) == "in") cycle
-          av = strip_meta(gcv_nth(vs_get(base + 3), i - 1))
+          av = strip_meta(gcv_nth(vs_get(vst, base + 3), i - 1))
           k = gc_key("name", [roots, av])
           tv = strip_meta(gca_get(av, k))
-          k = gc_key(text_of(tv), [roots, vs_get(base + 4)])
-          call vs_set(base + 5, k)
-          res = gca_assoc(vs_get(base + 4), vs_get(base + 5), temp_value(i), [roots, vs_get(base + 5), vs_get(base + 4)])
-          call vs_set(base + 4, res)
+          k = gc_key(text_of(tv), [roots, vs_get(vst, base + 4)])
+          call vs_set(vst, base + 5, k)
+          res = gca_assoc(vs_get(vst, base + 4), vs_get(vst, base + 5), temp_value(i), [roots, vs_get(vst, base + 5), vs_get(vst, base + 4)])
+          call vs_set(vst, base + 4, res)
           nout = nout + 1
        end do
        if (has_ret) then
           if (nout == 0) then
              out = temp_value(nspec + 1)
           else
-             k = gc_key("return", [roots, vs_get(base + 4)])
-             call vs_set(base + 5, k)
-             res = gca_assoc(vs_get(base + 4), vs_get(base + 5), temp_value(nspec + 1), [roots, vs_get(base + 5), vs_get(base + 4)])
+             k = gc_key("return", [roots, vs_get(vst, base + 4)])
+             call vs_set(vst, base + 5, k)
+             res = gca_assoc(vs_get(vst, base + 4), vs_get(vst, base + 5), temp_value(nspec + 1), [roots, vs_get(vst, base + 5), vs_get(vst, base + 4)])
              out = res
           end if
        else if (nout > 0) then
-          out = vs_get(base + 4)
+          out = vs_get(vst, base + 4)
        end if
        exit once
     end do once
-    call vs_leave(base)
+    call vs_leave(vst, base)
   contains
     function temp_value(i) result(v)
       integer, intent(in) :: i
@@ -13028,6 +13185,7 @@ contains
   ! Every element of a seqable, as a vector. The three host `create`
   ! statics all take a collection, so they all start here.
   recursive function coll_to_vector(coll, roots, limit) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: coll
     type(gc_value), intent(in) :: roots(:)
     integer, intent(in), optional :: limit   ! more elements than this is an error, not a hang
@@ -13035,11 +13193,12 @@ contains
     integer :: base, k
     character(len=16) :: buf
 
-    base = vs_enter(2)
+    vst => gc_my_stack()
+    base = vs_enter(vst, 2)
     out = gcv_empty(roots)
-    call vs_set(base + 1, out)
+    call vs_set(vst, base + 1, out)
     walk = to_seq(coll, roots)
-    call vs_set(base + 2, walk)
+    call vs_set(vst, base + 2, walk)
     k = 0
     do while (walk%tag /= GCT_NIL)
        if (present(limit)) then
@@ -13050,35 +13209,37 @@ contains
              exit
           end if
        end if
-       item = sq_first(vs_get(base + 2), [vs_get(base + 1)])
-       out = gcv_conj(vs_get(base + 1), item, [vs_get(base + 1), vs_get(base + 2)])
-       call vs_set(base + 1, out)
-       walk = to_seq(sq_rest(vs_get(base + 2), [vs_get(base + 1)]), [vs_get(base + 1)])
-       call vs_set(base + 2, walk)
+       item = sq_first(vs_get(vst, base + 2), [vs_get(vst, base + 1)])
+       out = gcv_conj(vs_get(vst, base + 1), item, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       call vs_set(vst, base + 1, out)
+       walk = to_seq(sq_rest(vs_get(vst, base + 2), [vs_get(vst, base + 1)]), [vs_get(vst, base + 1)])
+       call vs_set(vst, base + 2, walk)
     end do
-    out = vs_get(base + 1)
-    call vs_leave(base)
+    out = vs_get(vst, base + 1)
+    call vs_leave(vst, base)
   end function coll_to_vector
 
   ! Every element of a seq, as a proper list.
   recursive function seq_to_list(v, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: v
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, items
     integer :: base, i
 
-    base = vs_enter(2)
+    vst => gc_my_stack()
+    base = vs_enter(vst, 2)
     items = coll_to_vector(v, roots)
-    call vs_set(base + 1, items)
-    out = gcl_empty([vs_get(base + 1)])
-    call vs_set(base + 2, out)
-    do i = gcv_count(vs_get(base + 1)) - 1, 0, -1
-       out = gcl_cons(gcv_nth(vs_get(base + 1), i), vs_get(base + 2), &
-            [vs_get(base + 1), vs_get(base + 2)])
-       call vs_set(base + 2, out)
+    call vs_set(vst, base + 1, items)
+    out = gcl_empty([vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, out)
+    do i = gcv_count(vs_get(vst, base + 1)) - 1, 0, -1
+       out = gcl_cons(gcv_nth(vs_get(vst, base + 1), i), vs_get(vst, base + 2), &
+            [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       call vs_set(vst, base + 2, out)
     end do
-    out = vs_get(base + 2)
-    call vs_leave(base)
+    out = vs_get(vst, base + 2)
+    call vs_leave(vst, base)
   end function seq_to_list
 
   ! Numeric comparison across int and double. Comparing %ival alone
@@ -13154,24 +13315,26 @@ contains
   ! 34 significant digits, rounding half to even. It is what
   ! *math-context* holds until something binds it.
   function default_math_context(roots) result(mc)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: mc, k, v
     integer :: base
-    base = vs_enter(3)
+    vst => gc_my_stack()
+    base = vs_enter(vst, 3)
     mc = gca_empty(roots)
-    call vs_set(base + 1, mc)
-    k = gc_key("precision", [roots, vs_get(base + 1)])
-    call vs_set(base + 2, k)
-    mc = gca_assoc(vs_get(base + 1), vs_get(base + 2), gc_int(34_gc_ip), &
-         [roots, vs_get(base + 1), vs_get(base + 2)])
-    call vs_set(base + 1, mc)
-    k = gc_key("rounding", [roots, vs_get(base + 1)])
-    call vs_set(base + 2, k)
-    v = gc_key("HALF_EVEN", [roots, vs_get(base + 1), vs_get(base + 2)])
-    call vs_set(base + 3, v)
-    mc = gca_assoc(vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), &
-         [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-    call vs_leave(base)
+    call vs_set(vst, base + 1, mc)
+    k = gc_key("precision", [roots, vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, k)
+    mc = gca_assoc(vs_get(vst, base + 1), vs_get(vst, base + 2), gc_int(34_gc_ip), &
+         [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 1, mc)
+    k = gc_key("rounding", [roots, vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, k)
+    v = gc_key("HALF_EVEN", [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 3, v)
+    mc = gca_assoc(vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), &
+         [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+    call vs_leave(vst, base)
   end function default_math_context
 
   ! What with-precision bound, if anything: the precision (0 when
@@ -13760,21 +13923,23 @@ contains
   ! (conj (list 1) 2) prepends, (conj {:a 1} [:b 2]) assocs, and
   ! (conj {:a 1} {:b 2}) merges. That difference is the feature.
   recursive function conj1(coll0, x, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: coll0, x
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, coll
     integer :: base
 
+    vst => gc_my_stack()
     coll = strip_meta(coll0)
-    base = vs_enter(2)
-    call vs_set(base + 1, coll)
-    call vs_set(base + 2, x)
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, coll)
+    call vs_set(vst, base + 2, x)
 
     if (gcv_is(coll)) then
-       out = gcv_conj(vs_get(base + 1), vs_get(base + 2), roots)
+       out = gcv_conj(vs_get(vst, base + 1), vs_get(vst, base + 2), roots)
     else if (gc_kind(coll) == OBJ_SET) then
-       out = gc_obj(OBJ_SET, [gca_assoc(gc_slot(vs_get(base + 1), 1), &
-            vs_get(base + 2), vs_get(base + 2), roots)], roots)
+       out = gc_obj(OBJ_SET, [gca_assoc(gc_slot(vs_get(vst, base + 1), 1), &
+            vs_get(vst, base + 2), vs_get(vst, base + 2), roots)], roots)
     else if (gca_is(coll)) then
        if (x%tag == GCT_NIL) then
           ! CONJ OF NIL ONTO A MAP IS A NO-OP. APersistentMap.cons
@@ -13784,35 +13949,35 @@ contains
           ! (merge m nil) is (conj m nil) -- so every map that
           ! passed through merge grew a spurious nil entry.
           ! clojure.data/diff folds with merge over [nil nil nil].
-          out = vs_get(base + 1)
-       else if (gca_is(vs_get(base + 2))) then
+          out = vs_get(vst, base + 1)
+       else if (gca_is(vs_get(vst, base + 2))) then
           block
             type(gc_value), allocatable :: kk(:), vv(:)
             type(gc_value) :: mm
             integer :: j
-            call gca_entries(vs_get(base + 2), kk, vv)
-            mm = vs_get(base + 1)
+            call gca_entries(vs_get(vst, base + 2), kk, vv)
+            mm = vs_get(vst, base + 1)
             do j = 1, size(kk)
                mm = gca_assoc(mm, kk(j), vv(j), roots)
             end do
             out = mm
           end block
        else
-          out = gca_assoc(vs_get(base + 1), &
-               seq_elem(vs_get(base + 2), 0, roots), &
-               seq_elem(vs_get(base + 2), 1, roots), roots)
+          out = gca_assoc(vs_get(vst, base + 1), &
+               seq_elem(vs_get(vst, base + 2), 0, roots), &
+               seq_elem(vs_get(vst, base + 2), 1, roots), roots)
        end if
     else if (coll%tag == GCT_NIL) then
-       out = gcl_cons(vs_get(base + 2), gcl_empty(roots), roots)
+       out = gcl_cons(vs_get(vst, base + 2), gcl_empty(roots), roots)
     else if (.not. seqable_quiet(coll) .or. coll%tag == GCT_STR .or. gc_kind(coll) == OBJ_ARRAY) then
        ! a string or an array is not a collection to conj onto
        out = gc_nil()
        call raise_class("ClassCastException", class_name_of(coll) // &
             " cannot be cast to clojure.lang.IPersistentCollection", roots)
     else
-       out = gcl_cons(vs_get(base + 2), to_seq(vs_get(base + 1), roots), roots)
+       out = gcl_cons(vs_get(vst, base + 2), to_seq(vs_get(vst, base + 1), roots), roots)
     end if
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end function conj1
 
   ! Which slot holds metadata. A Var keeps it in slot 2, but a
@@ -13984,15 +14149,17 @@ contains
   ! identity, a constant by value. Mixes the entry into the fingerprint
   ! either way, so where it recurs is part of the shape too.
   subroutine pool_add(pb, kind, v, h)
+    type(gc_stack), pointer :: vst
     integer, intent(in) :: pb
     character(len=*), intent(in) :: kind
     type(gc_value), intent(in) :: v
     integer(gc_ip), intent(inout) :: h
     type(gc_value) :: e, pool
     integer :: i, b, at
-    b = vs_enter(3)
-    call vs_set(b + 1, v)
-    pool = vs_get(pb)
+    vst => gc_my_stack()
+    b = vs_enter(vst, 3)
+    call vs_set(vst, b + 1, v)
+    pool = vs_get(vst, pb)
     at = -1
     do i = 0, gcv_count(pool) - 1
        e = gcv_nth(pool, i)
@@ -14021,74 +14188,78 @@ contains
        end if
     end select
     if (at < 0) then
-       e = gcv_empty([vs_get(pb), vs_get(b + 1)])
-       call vs_set(b + 2, e)
-       call vs_set(b + 3, gc_key(kind, [vs_get(pb), vs_get(b + 1), vs_get(b + 2)]))
-       e = gcv_conj(vs_get(b + 2), vs_get(b + 3), [vs_get(pb), vs_get(b + 1), vs_get(b + 2), vs_get(b + 3)])
-       call vs_set(b + 2, e)
-       e = gcv_conj(vs_get(b + 2), vs_get(b + 1), [vs_get(pb), vs_get(b + 1), vs_get(b + 2)])
-       call vs_set(b + 2, e)
-       pool = gcv_conj(vs_get(pb), vs_get(b + 2), [vs_get(pb), vs_get(b + 2)])
-       call vs_set(pb, pool)
+       e = gcv_empty([vs_get(vst, pb), vs_get(vst, b + 1)])
+       call vs_set(vst, b + 2, e)
+       call vs_set(vst, b + 3, gc_key(kind, [vs_get(vst, pb), vs_get(vst, b + 1), vs_get(vst, b + 2)]))
+       e = gcv_conj(vs_get(vst, b + 2), vs_get(vst, b + 3), [vs_get(vst, pb), vs_get(vst, b + 1), vs_get(vst, b + 2), vs_get(vst, b + 3)])
+       call vs_set(vst, b + 2, e)
+       e = gcv_conj(vs_get(vst, b + 2), vs_get(vst, b + 1), [vs_get(vst, pb), vs_get(vst, b + 1), vs_get(vst, b + 2)])
+       call vs_set(vst, b + 2, e)
+       pool = gcv_conj(vs_get(vst, pb), vs_get(vst, b + 2), [vs_get(vst, pb), vs_get(vst, b + 2)])
+       call vs_set(vst, pb, pool)
        at = gcv_count(pool) - 1
     end if
     call fp_mix(h, int(at, gc_ip))
-    call vs_leave(b)
+    call vs_leave(vst, b)
   end subroutine pool_add
 
   recursive subroutine pool_walk(nd, pb, h)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: nd
     integer, intent(in) :: pb
     integer(gc_ip), intent(inout) :: h
     type(gc_value) :: kids
     integer :: b, i, k
+    vst => gc_my_stack()
     if (gc_kind(nd) /= OBJ_AST) then
        call fp_mix_field(h, nd)
        return
     end if
-    b = vs_enter(2)
-    call vs_set(b + 1, nd)
+    b = vs_enter(vst, 2)
+    call vs_set(vst, b + 1, nd)
     k = gc_i1(nd)
     call fp_mix(h, int(k, gc_ip))
     if (.not. pool_compiled_kind(k)) then
-       call pool_add(pb, "node", vs_get(b + 1), h)
+       call pool_add(pb, "node", vs_get(vst, b + 1), h)
     else if (k == N_VAR) then
-       call pool_add(pb, "var", gc_slot(vs_get(b + 1), 2), h)
+       call pool_add(pb, "var", gc_slot(vs_get(vst, b + 1), 2), h)
     else if (k == N_CONST) then
-       if (pool_spellable(gc_slot(vs_get(b + 1), 2))) then
-          call fp_mix_field(h, gc_slot(vs_get(b + 1), 2))
+       if (pool_spellable(gc_slot(vs_get(vst, b + 1), 2))) then
+          call fp_mix_field(h, gc_slot(vs_get(vst, b + 1), 2))
        else
-          call pool_add(pb, "const", gc_slot(vs_get(b + 1), 2), h)
+          call pool_add(pb, "const", gc_slot(vs_get(vst, b + 1), 2), h)
        end if
     else
-       call fp_mix(h, int(gc_i2(vs_get(b + 1)), gc_ip))
-       if (k /= N_LOCAL) call fp_mix_field(h, gc_slot(vs_get(b + 1), 2))
-       call fp_mix_field(h, gc_slot(vs_get(b + 1), 3))
-       kids = gc_slot(vs_get(b + 1), 1)
-       call vs_set(b + 2, kids)
+       call fp_mix(h, int(gc_i2(vs_get(vst, b + 1)), gc_ip))
+       if (k /= N_LOCAL) call fp_mix_field(h, gc_slot(vs_get(vst, b + 1), 2))
+       call fp_mix_field(h, gc_slot(vs_get(vst, b + 1), 3))
+       kids = gc_slot(vs_get(vst, b + 1), 1)
+       call vs_set(vst, b + 2, kids)
        if (gcv_is(kids)) then
           call fp_mix(h, int(gcv_count(kids), gc_ip))
-          do i = 0, gcv_count(vs_get(b + 2)) - 1
-             call pool_walk(gcv_nth(vs_get(b + 2), i), pb, h)
+          do i = 0, gcv_count(vs_get(vst, b + 2)) - 1
+             call pool_walk(gcv_nth(vs_get(vst, b + 2), i), pb, h)
           end do
        end if
     end if
-    if (k == N_LOCAL) call fp_mix(h, int(gc_i2(vs_get(b + 1)), gc_ip))
-    call vs_leave(b)
+    if (k == N_LOCAL) call fp_mix(h, int(gc_i2(vs_get(vst, b + 1)), gc_ip))
+    call vs_leave(vst, b)
   end subroutine pool_walk
 
   ! {:pool [[kind value] ...] :fingerprint n} for the analysed form
   ! `top` -- a top node over a fn -- from every arity's body, in order.
   ! Anything else answers an empty pool.
   recursive function compiled_pool(top, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: top
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, fnode, tmpl, arity, m
     integer(gc_ip) :: h
     integer :: b, ia
-    b = vs_enter(4)
-    call vs_set(b + 1, top)
-    call vs_set(b + 2, gcv_empty([roots, vs_get(b + 1)]))
+    vst => gc_my_stack()
+    b = vs_enter(vst, 4)
+    call vs_set(vst, b + 1, top)
+    call vs_set(vst, b + 2, gcv_empty([roots, vs_get(vst, b + 1)]))
     h = 2166136261_gc_ip
     fnode = top
     if (gc_kind(fnode) == OBJ_AST) then
@@ -14111,79 +14282,81 @@ contains
           end do
        end if
     end if
-    m = gca_empty([roots, vs_get(b + 1), vs_get(b + 2)])
-    call vs_set(b + 3, m)
-    call vs_set(b + 4, gc_key("pool", [roots, vs_get(b + 2), vs_get(b + 3)]))
-    m = gca_assoc(vs_get(b + 3), vs_get(b + 4), vs_get(b + 2), [roots, vs_get(b + 2), vs_get(b + 3), vs_get(b + 4)])
-    call vs_set(b + 3, m)
-    call vs_set(b + 4, gc_key("fingerprint", [roots, vs_get(b + 3)]))
-    m = gca_assoc(vs_get(b + 3), vs_get(b + 4), gc_int(int(h, gc_ip)), [roots, vs_get(b + 3), vs_get(b + 4)])
+    m = gca_empty([roots, vs_get(vst, b + 1), vs_get(vst, b + 2)])
+    call vs_set(vst, b + 3, m)
+    call vs_set(vst, b + 4, gc_key("pool", [roots, vs_get(vst, b + 2), vs_get(vst, b + 3)]))
+    m = gca_assoc(vs_get(vst, b + 3), vs_get(vst, b + 4), vs_get(vst, b + 2), [roots, vs_get(vst, b + 2), vs_get(vst, b + 3), vs_get(vst, b + 4)])
+    call vs_set(vst, b + 3, m)
+    call vs_set(vst, b + 4, gc_key("fingerprint", [roots, vs_get(vst, b + 3)]))
+    m = gca_assoc(vs_get(vst, b + 3), vs_get(vst, b + 4), gc_int(int(h, gc_ip)), [roots, vs_get(vst, b + 3), vs_get(vst, b + 4)])
     out = m
-    call vs_leave(b)
+    call vs_leave(vst, b)
   end function compiled_pool
 
   recursive function ast_data(nd, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: nd
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, kids, v
     integer :: b, i
+    vst => gc_my_stack()
     tctx => ctx_self()
     out = nd
     if (gc_kind(nd) /= OBJ_AST) return
-    b = vs_enter(4)
-    call vs_set(b + 1, nd)
-    out = gca_empty([roots, [vs_get(b + 1)]])
-    call vs_set(b + 2, out)
-    call ast_put(b, roots, "op", gc_key(node_kind_name(gc_i1(vs_get(b + 1))), &
-         [roots, [vs_get(b + 1), vs_get(b + 2)]]))
+    b = vs_enter(vst, 4)
+    call vs_set(vst, b + 1, nd)
+    out = gca_empty([roots, [vs_get(vst, b + 1)]])
+    call vs_set(vst, b + 2, out)
+    call ast_put(b, roots, "op", gc_key(node_kind_name(gc_i1(vs_get(vst, b + 1))), &
+         [roots, [vs_get(vst, b + 1), vs_get(vst, b + 2)]]))
     ! the children, each one exported in turn
-    kids = gc_slot(vs_get(b + 1), 1)
+    kids = gc_slot(vs_get(vst, b + 1), 1)
     if (gcv_is(kids)) then
-       call vs_set(b + 3, kids)
-       v = gcv_empty([roots, [vs_get(b + 1), vs_get(b + 2), vs_get(b + 3)]])
-       call vs_set(b + 4, v)
-       do i = 0, gcv_count(vs_get(b + 3)) - 1
-          v = ast_walk(gcv_nth(vs_get(b + 3), i), &
-               [roots, [vs_get(b + 1), vs_get(b + 2), vs_get(b + 3), vs_get(b + 4)]])
+       call vs_set(vst, b + 3, kids)
+       v = gcv_empty([roots, [vs_get(vst, b + 1), vs_get(vst, b + 2), vs_get(vst, b + 3)]])
+       call vs_set(vst, b + 4, v)
+       do i = 0, gcv_count(vs_get(vst, b + 3)) - 1
+          v = ast_walk(gcv_nth(vs_get(vst, b + 3), i), &
+               [roots, [vs_get(vst, b + 1), vs_get(vst, b + 2), vs_get(vst, b + 3), vs_get(vst, b + 4)]])
           if (tctx%has_error) then
-             call vs_leave(b); return
+             call vs_leave(vst, b); return
           end if
-          v = gcv_conj(vs_get(b + 4), v, &
-               [roots, [vs_get(b + 1), vs_get(b + 2), vs_get(b + 3), vs_get(b + 4), v]])
-          call vs_set(b + 4, v)
+          v = gcv_conj(vs_get(vst, b + 4), v, &
+               [roots, [vs_get(vst, b + 1), vs_get(vst, b + 2), vs_get(vst, b + 3), vs_get(vst, b + 4), v]])
+          call vs_set(vst, b + 4, v)
        end do
-       call ast_put(b, roots, "children", vs_get(b + 4))
+       call ast_put(b, roots, "children", vs_get(vst, b + 4))
     end if
     ! A CONSTANT's value is handed over as it is: it is data, not a
     ! tree, and walking it would rebuild collections and could force a
     ! seq. Every other p-slot is walked, because a fn hides its
     ! arity bodies inside a plain vector template.
-    if (gc_i1(vs_get(b + 1)) == N_CONST) then
-       call ast_put(b, roots, "p1", gc_slot(vs_get(b + 1), 2))
+    if (gc_i1(vs_get(vst, b + 1)) == N_CONST) then
+       call ast_put(b, roots, "p1", gc_slot(vs_get(vst, b + 1), 2))
        ! A folded BUILTIN says which one it is. Analysis puts the
        ! function itself in the head of (+ i 1), and it is a fresh
        ! object each time, so a generator cannot recognise + by
        ! identity; the name in its slot 1 is stable.
-       if (gc_kind(strip_meta(gc_slot(vs_get(b + 1), 2))) == OBJ_BUILTIN) then
+       if (gc_kind(strip_meta(gc_slot(vs_get(vst, b + 1), 2))) == OBJ_BUILTIN) then
           call ast_put(b, roots, "builtin", &
-               gc_slot(strip_meta(gc_slot(vs_get(b + 1), 2)), 1))
+               gc_slot(strip_meta(gc_slot(vs_get(vst, b + 1), 2)), 1))
        end if
     else
-       call ast_put(b, roots, "p1", ast_walk(gc_slot(vs_get(b + 1), 2), &
-            [roots, [vs_get(b + 1), vs_get(b + 2)]]))
+       call ast_put(b, roots, "p1", ast_walk(gc_slot(vs_get(vst, b + 1), 2), &
+            [roots, [vs_get(vst, b + 1), vs_get(vst, b + 2)]]))
     end if
-    call ast_put(b, roots, "p2", ast_walk(gc_slot(vs_get(b + 1), 3), &
-         [roots, [vs_get(b + 1), vs_get(b + 2)]]))
+    call ast_put(b, roots, "p2", ast_walk(gc_slot(vs_get(vst, b + 1), 3), &
+         [roots, [vs_get(vst, b + 1), vs_get(vst, b + 2)]]))
     ! THE NODE ITSELF, so a generator can hand an unhandled subtree
     ! back to the interpreter. The exported map is a copy; without
     ! this the original node is not reachable from Clojure at all,
     ! and the escape hatch would have nothing to run.
-    call ast_put(b, roots, "node", vs_get(b + 1))
-    call ast_put(b, roots, "i2", gc_int(int(gc_i2(vs_get(b + 1)), gc_ip)))
-    call ast_put(b, roots, "pos", gc_slot(vs_get(b + 1), 4))
-    out = vs_get(b + 2)
-    call vs_leave(b)
+    call ast_put(b, roots, "node", vs_get(vst, b + 1))
+    call ast_put(b, roots, "i2", gc_int(int(gc_i2(vs_get(vst, b + 1)), gc_ip)))
+    call ast_put(b, roots, "pos", gc_slot(vs_get(vst, b + 1), 4))
+    out = vs_get(vst, b + 2)
+    call vs_leave(vst, b)
   end function ast_data
 
   ! A node, or a collection that might hold one. N_FN's p1 is the
@@ -14191,12 +14364,14 @@ contains
   ! and each arity's body node sits inside it, so exporting only
   ! direct AST slots showed a function with no body at all.
   recursive function ast_walk(v, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: v
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, e, m
     type(gc_value), allocatable :: ks(:), vls(:)
     integer :: b, i
+    vst => gc_my_stack()
     tctx => ctx_self()
     out = v
     if (gc_kind(v) == OBJ_AST) then
@@ -14204,42 +14379,42 @@ contains
        return
     end if
     if (gcv_is(v)) then
-       b = vs_enter(2)
-       call vs_set(b + 1, v)
-       out = gcv_empty([roots, [vs_get(b + 1)]])
-       call vs_set(b + 2, out)
-       do i = 0, gcv_count(vs_get(b + 1)) - 1
-          e = ast_walk(gcv_nth(vs_get(b + 1), i), &
-               [roots, [vs_get(b + 1), vs_get(b + 2)]])
+       b = vs_enter(vst, 2)
+       call vs_set(vst, b + 1, v)
+       out = gcv_empty([roots, [vs_get(vst, b + 1)]])
+       call vs_set(vst, b + 2, out)
+       do i = 0, gcv_count(vs_get(vst, b + 1)) - 1
+          e = ast_walk(gcv_nth(vs_get(vst, b + 1), i), &
+               [roots, [vs_get(vst, b + 1), vs_get(vst, b + 2)]])
           if (tctx%has_error) then
-             call vs_leave(b); return
+             call vs_leave(vst, b); return
           end if
-          out = gcv_conj(vs_get(b + 2), e, &
-               [roots, [vs_get(b + 1), vs_get(b + 2), e]])
-          call vs_set(b + 2, out)
+          out = gcv_conj(vs_get(vst, b + 2), e, &
+               [roots, [vs_get(vst, b + 1), vs_get(vst, b + 2), e]])
+          call vs_set(vst, b + 2, out)
        end do
-       out = vs_get(b + 2)
-       call vs_leave(b)
+       out = vs_get(vst, b + 2)
+       call vs_leave(vst, b)
        return
     end if
     if (gca_is(v)) then
-       b = vs_enter(3)
-       call vs_set(b + 1, v)
-       call gca_entries(vs_get(b + 1), ks, vls)
-       out = gca_empty([roots, [vs_get(b + 1)]])
-       call vs_set(b + 2, out)
+       b = vs_enter(vst, 3)
+       call vs_set(vst, b + 1, v)
+       call gca_entries(vs_get(vst, b + 1), ks, vls)
+       out = gca_empty([roots, [vs_get(vst, b + 1)]])
+       call vs_set(vst, b + 2, out)
        do i = 1, size(ks)
-          e = ast_walk(vls(i), [roots, [vs_get(b + 1), vs_get(b + 2)]])
+          e = ast_walk(vls(i), [roots, [vs_get(vst, b + 1), vs_get(vst, b + 2)]])
           if (tctx%has_error) then
-             call vs_leave(b); return
+             call vs_leave(vst, b); return
           end if
-          call vs_set(b + 3, e)
-          m = gca_assoc(vs_get(b + 2), ks(i), vs_get(b + 3), &
-               [roots, [vs_get(b + 1), vs_get(b + 2), vs_get(b + 3)]])
-          call vs_set(b + 2, m)
+          call vs_set(vst, b + 3, e)
+          m = gca_assoc(vs_get(vst, b + 2), ks(i), vs_get(vst, b + 3), &
+               [roots, [vs_get(vst, b + 1), vs_get(vst, b + 2), vs_get(vst, b + 3)]])
+          call vs_set(vst, b + 2, m)
        end do
-       out = vs_get(b + 2)
-       call vs_leave(b)
+       out = vs_get(vst, b + 2)
+       call vs_leave(vst, b)
        return
     end if
   end function ast_walk
@@ -14249,20 +14424,22 @@ contains
   ! on the stack before the next allocation, which is the rule two
   ! allocations in one argument list broke (NOTES.md).
   subroutine ast_put(b, roots, k, v)
+    type(gc_stack), pointer :: vst
     integer, intent(in) :: b
     type(gc_value), intent(in) :: roots(:)
     character(len=*), intent(in) :: k
     type(gc_value), intent(in) :: v
     type(gc_value) :: kw, m
     integer :: kb
-    kb = vs_enter(2)
-    call vs_set(kb + 1, v)
-    kw = gc_key(k, [roots, [vs_get(b + 1), vs_get(b + 2), vs_get(kb + 1)]])
-    call vs_set(kb + 2, kw)
-    m = gca_assoc(vs_get(b + 2), vs_get(kb + 2), vs_get(kb + 1), &
-         [roots, [vs_get(b + 1), vs_get(b + 2), vs_get(kb + 1), vs_get(kb + 2)]])
-    call vs_set(b + 2, m)
-    call vs_leave(kb)
+    vst => gc_my_stack()
+    kb = vs_enter(vst, 2)
+    call vs_set(vst, kb + 1, v)
+    kw = gc_key(k, [roots, [vs_get(vst, b + 1), vs_get(vst, b + 2), vs_get(vst, kb + 1)]])
+    call vs_set(vst, kb + 2, kw)
+    m = gca_assoc(vs_get(vst, b + 2), vs_get(vst, kb + 2), vs_get(vst, kb + 1), &
+         [roots, [vs_get(vst, b + 1), vs_get(vst, b + 2), vs_get(vst, kb + 1), vs_get(vst, kb + 2)]])
+    call vs_set(vst, b + 2, m)
+    call vs_leave(vst, kb)
   end subroutine ast_put
 
   ! UUID/fromString and parse-uuid. A UUID is its TEXT here
@@ -14300,21 +14477,23 @@ contains
   ! A SET holding a vector's elements. Same two lines B_SET runs;
   ! a set IS a map from each element to itself.
   function set_of_vector(vec, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: vec
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, mp
     integer :: base, i
-    base = vs_enter(2)
-    call vs_set(base + 1, vec)
-    mp = gca_empty([roots, [vs_get(base + 1)]])
-    call vs_set(base + 2, mp)
-    do i = 0, gcv_count(vs_get(base + 1)) - 1
-       mp = gca_assoc(vs_get(base + 2), gcv_nth(vs_get(base + 1), i), &
-            gcv_nth(vs_get(base + 1), i), [roots, [vs_get(base + 1), vs_get(base + 2)]])
-       call vs_set(base + 2, mp)
+    vst => gc_my_stack()
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, vec)
+    mp = gca_empty([roots, [vs_get(vst, base + 1)]])
+    call vs_set(vst, base + 2, mp)
+    do i = 0, gcv_count(vs_get(vst, base + 1)) - 1
+       mp = gca_assoc(vs_get(vst, base + 2), gcv_nth(vs_get(vst, base + 1), i), &
+            gcv_nth(vs_get(vst, base + 1), i), [roots, [vs_get(vst, base + 1), vs_get(vst, base + 2)]])
+       call vs_set(vst, base + 2, mp)
     end do
-    out = gc_obj(OBJ_SET, [vs_get(base + 2)], [roots, [vs_get(base + 2)]])
-    call vs_leave(base)
+    out = gc_obj(OBJ_SET, [vs_get(vst, base + 2)], [roots, [vs_get(vst, base + 2)]])
+    call vs_leave(vst, base)
   end function set_of_vector
 
   ! Every #tag marker in a value replaced by what its data reader
@@ -14326,135 +14505,137 @@ contains
   ! EDN has built in, then opts :default (called with tag and form).
   ! A tag nothing answers is an error, as EdnReader raises one.
   recursive function resolve_tags(v, opts, roots) result(out)
+    type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: v, opts
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, tag, form, fn, av
     integer :: base, i
+    vst => gc_my_stack()
     tctx => ctx_self()
     out = v
     if (tctx%has_error) return
-    base = vs_enter(6)
-    call vs_set(base + 1, v)
-    call vs_set(base + 2, opts)
-    if (is_tagged_literal(vs_get(base + 1))) then
-       tag = gca_get(vs_get(base + 1), gc_key("tag", [vs_get(base + 1), vs_get(base + 2)]))
-       call vs_set(base + 3, tag)
-       form = gca_get(vs_get(base + 1), gc_key("form", [vs_get(base + 1), vs_get(base + 2)]))
-       call vs_set(base + 4, form)
-       form = resolve_tags(vs_get(base + 4), vs_get(base + 2), &
-            [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 4)])
+    base = vs_enter(vst, 6)
+    call vs_set(vst, base + 1, v)
+    call vs_set(vst, base + 2, opts)
+    if (is_tagged_literal(vs_get(vst, base + 1))) then
+       tag = gca_get(vs_get(vst, base + 1), gc_key("tag", [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+       call vs_set(vst, base + 3, tag)
+       form = gca_get(vs_get(vst, base + 1), gc_key("form", [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+       call vs_set(vst, base + 4, form)
+       form = resolve_tags(vs_get(vst, base + 4), vs_get(vst, base + 2), &
+            [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 4)])
        if (tctx%has_error) then
-          call vs_leave(base); return
+          call vs_leave(vst, base); return
        end if
-       call vs_set(base + 4, form)
-       fn = gca_get(gca_get(vs_get(base + 2), &
-            gc_key("readers", [vs_get(base + 1), vs_get(base + 2)])), vs_get(base + 3))
-       call vs_set(base + 5, fn)
-       if (tag_of(vs_get(base + 5)) /= GCT_NIL) then
-          av = gcv_empty([vs_get(base + 1), vs_get(base + 2), vs_get(base + 4), vs_get(base + 5)])
-          call vs_set(base + 6, av)
-          av = gcv_conj(vs_get(base + 6), vs_get(base + 4), &
-               [vs_get(base + 1), vs_get(base + 2), vs_get(base + 4), vs_get(base + 5), vs_get(base + 6)])
-          call vs_set(base + 6, av)
-          out = apply(vs_get(base + 5), vs_get(base + 6))
-       else if (name_part(vs_get(base + 3)) == "uuid") then
+       call vs_set(vst, base + 4, form)
+       fn = gca_get(gca_get(vs_get(vst, base + 2), &
+            gc_key("readers", [vs_get(vst, base + 1), vs_get(vst, base + 2)])), vs_get(vst, base + 3))
+       call vs_set(vst, base + 5, fn)
+       if (tag_of(vs_get(vst, base + 5)) /= GCT_NIL) then
+          av = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 4), vs_get(vst, base + 5)])
+          call vs_set(vst, base + 6, av)
+          av = gcv_conj(vs_get(vst, base + 6), vs_get(vst, base + 4), &
+               [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 4), vs_get(vst, base + 5), vs_get(vst, base + 6)])
+          call vs_set(vst, base + 6, av)
+          out = apply(vs_get(vst, base + 5), vs_get(vst, base + 6))
+       else if (name_part(vs_get(vst, base + 3)) == "uuid") then
           ! EDN has uuid built in. A UUID is its text here
           ! (DEVIATIONS 12), which is what parse-uuid answers too.
-          out = uuid_of(vs_get(base + 4), [vs_get(base + 1), vs_get(base + 4)])
+          out = uuid_of(vs_get(vst, base + 4), [vs_get(vst, base + 1), vs_get(vst, base + 4)])
        else
-          fn = gca_get(vs_get(base + 2), gc_key("default", [vs_get(base + 1), vs_get(base + 2)]))
-          call vs_set(base + 5, fn)
-          if (tag_of(vs_get(base + 5)) /= GCT_NIL) then
-             av = gcv_empty([vs_get(base + 1), vs_get(base + 2), vs_get(base + 4), vs_get(base + 5)])
-             call vs_set(base + 6, av)
-             av = gcv_conj(vs_get(base + 6), vs_get(base + 3), &
-                  [vs_get(base + 1), vs_get(base + 2), vs_get(base + 4), vs_get(base + 5), vs_get(base + 6)])
-             call vs_set(base + 6, av)
-             av = gcv_conj(vs_get(base + 6), vs_get(base + 4), &
-                  [vs_get(base + 1), vs_get(base + 2), vs_get(base + 4), vs_get(base + 5), vs_get(base + 6)])
-             call vs_set(base + 6, av)
-             out = apply(vs_get(base + 5), vs_get(base + 6))
+          fn = gca_get(vs_get(vst, base + 2), gc_key("default", [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+          call vs_set(vst, base + 5, fn)
+          if (tag_of(vs_get(vst, base + 5)) /= GCT_NIL) then
+             av = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 4), vs_get(vst, base + 5)])
+             call vs_set(vst, base + 6, av)
+             av = gcv_conj(vs_get(vst, base + 6), vs_get(vst, base + 3), &
+                  [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 4), vs_get(vst, base + 5), vs_get(vst, base + 6)])
+             call vs_set(vst, base + 6, av)
+             av = gcv_conj(vs_get(vst, base + 6), vs_get(vst, base + 4), &
+                  [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 4), vs_get(vst, base + 5), vs_get(vst, base + 6)])
+             call vs_set(vst, base + 6, av)
+             out = apply(vs_get(vst, base + 5), vs_get(vst, base + 6))
           else
              call raise_class("RuntimeException", "No reader function for tag " // &
-                  name_part(vs_get(base + 3)), [vs_get(base + 1)])
+                  name_part(vs_get(vst, base + 3)), [vs_get(vst, base + 1)])
              out = gc_nil()
           end if
        end if
-       call vs_leave(base)
+       call vs_leave(vst, base)
        return
     end if
     ! Not a marker: walk the collections, since a tag can be nested.
-    if (gcv_is(vs_get(base + 1))) then
-       av = gcv_empty([vs_get(base + 1), vs_get(base + 2)])
-       call vs_set(base + 6, av)
-       do i = 0, gcv_count(vs_get(base + 1)) - 1
-          av = resolve_tags(gcv_nth(vs_get(base + 1), i), vs_get(base + 2), &
-               [vs_get(base + 1), vs_get(base + 2), vs_get(base + 6)])
+    if (gcv_is(vs_get(vst, base + 1))) then
+       av = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       call vs_set(vst, base + 6, av)
+       do i = 0, gcv_count(vs_get(vst, base + 1)) - 1
+          av = resolve_tags(gcv_nth(vs_get(vst, base + 1), i), vs_get(vst, base + 2), &
+               [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 6)])
           if (tctx%has_error) then
-             call vs_leave(base); return
+             call vs_leave(vst, base); return
           end if
-          call vs_set(base + 5, av)
-          av = gcv_conj(vs_get(base + 6), vs_get(base + 5), &
-               [vs_get(base + 1), vs_get(base + 2), vs_get(base + 5), vs_get(base + 6)])
-          call vs_set(base + 6, av)
+          call vs_set(vst, base + 5, av)
+          av = gcv_conj(vs_get(vst, base + 6), vs_get(vst, base + 5), &
+               [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 5), vs_get(vst, base + 6)])
+          call vs_set(vst, base + 6, av)
        end do
-       out = vs_get(base + 6)
-    else if (gca_is(vs_get(base + 1))) then
+       out = vs_get(vst, base + 6)
+    else if (gca_is(vs_get(vst, base + 1))) then
        block
          type(gc_value), allocatable :: ks(:), vls(:)
          type(gc_value) :: m, kk, vv
-         call gca_entries(vs_get(base + 1), ks, vls)
-         m = gca_empty([vs_get(base + 1), vs_get(base + 2)])
-         call vs_set(base + 6, m)
+         call gca_entries(vs_get(vst, base + 1), ks, vls)
+         m = gca_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
+         call vs_set(vst, base + 6, m)
          do i = 1, size(ks)
-            kk = resolve_tags(ks(i), vs_get(base + 2), &
-                 [vs_get(base + 1), vs_get(base + 2), vs_get(base + 6)])
+            kk = resolve_tags(ks(i), vs_get(vst, base + 2), &
+                 [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 6)])
             if (tctx%has_error) then
-               call vs_leave(base); return
+               call vs_leave(vst, base); return
             end if
-            call vs_set(base + 4, kk)
-            vv = resolve_tags(vls(i), vs_get(base + 2), &
-                 [vs_get(base + 1), vs_get(base + 2), vs_get(base + 4), vs_get(base + 6)])
+            call vs_set(vst, base + 4, kk)
+            vv = resolve_tags(vls(i), vs_get(vst, base + 2), &
+                 [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 4), vs_get(vst, base + 6)])
             if (tctx%has_error) then
-               call vs_leave(base); return
+               call vs_leave(vst, base); return
             end if
-            call vs_set(base + 5, vv)
-            m = gca_assoc(vs_get(base + 6), vs_get(base + 4), vs_get(base + 5), &
-                 [vs_get(base + 1), vs_get(base + 2), vs_get(base + 4), vs_get(base + 5), vs_get(base + 6)])
-            call vs_set(base + 6, m)
+            call vs_set(vst, base + 5, vv)
+            m = gca_assoc(vs_get(vst, base + 6), vs_get(vst, base + 4), vs_get(vst, base + 5), &
+                 [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 4), vs_get(vst, base + 5), vs_get(vst, base + 6)])
+            call vs_set(vst, base + 6, m)
          end do
-         out = vs_get(base + 6)
+         out = vs_get(vst, base + 6)
        end block
-    else if (gc_kind(vs_get(base + 1)) == OBJ_SET .or. &
-         gc_kind(vs_get(base + 1)) == OBJ_CONS) then
+    else if (gc_kind(vs_get(vst, base + 1)) == OBJ_SET .or. &
+         gc_kind(vs_get(vst, base + 1)) == OBJ_CONS) then
        block
          type(gc_value) :: sq, e
-         sq = to_seq(vs_get(base + 1), [vs_get(base + 1), vs_get(base + 2)])
-         call vs_set(base + 3, sq)
-         av = gcv_empty([vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-         call vs_set(base + 6, av)
-         do while (tag_of(vs_get(base + 3)) /= GCT_NIL)
-            e = resolve_tags(sq_first(vs_get(base + 3), [vs_get(base + 3)]), vs_get(base + 2), &
-                 [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 6)])
+         sq = to_seq(vs_get(vst, base + 1), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+         call vs_set(vst, base + 3, sq)
+         av = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+         call vs_set(vst, base + 6, av)
+         do while (tag_of(vs_get(vst, base + 3)) /= GCT_NIL)
+            e = resolve_tags(sq_first(vs_get(vst, base + 3), [vs_get(vst, base + 3)]), vs_get(vst, base + 2), &
+                 [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 6)])
             if (tctx%has_error) then
-               call vs_leave(base); return
+               call vs_leave(vst, base); return
             end if
-            call vs_set(base + 5, e)
-            av = gcv_conj(vs_get(base + 6), vs_get(base + 5), &
-                 [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 5), vs_get(base + 6)])
-            call vs_set(base + 6, av)
-            sq = to_seq(sq_rest(vs_get(base + 3), [vs_get(base + 3)]), [vs_get(base + 3)])
-            call vs_set(base + 3, sq)
+            call vs_set(vst, base + 5, e)
+            av = gcv_conj(vs_get(vst, base + 6), vs_get(vst, base + 5), &
+                 [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 5), vs_get(vst, base + 6)])
+            call vs_set(vst, base + 6, av)
+            sq = to_seq(sq_rest(vs_get(vst, base + 3), [vs_get(vst, base + 3)]), [vs_get(vst, base + 3)])
+            call vs_set(vst, base + 3, sq)
          end do
-         if (gc_kind(vs_get(base + 1)) == OBJ_SET) then
-            out = set_of_vector(vs_get(base + 6), [vs_get(base + 1), vs_get(base + 6)])
+         if (gc_kind(vs_get(vst, base + 1)) == OBJ_SET) then
+            out = set_of_vector(vs_get(vst, base + 6), [vs_get(vst, base + 1), vs_get(vst, base + 6)])
          else
-            out = seq_to_list(vs_get(base + 6), [vs_get(base + 1), vs_get(base + 6)])
+            out = seq_to_list(vs_get(vst, base + 6), [vs_get(vst, base + 1), vs_get(vst, base + 6)])
          end if
        end block
     end if
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end function resolve_tags
 
   ! Compiler.munge: every character CHAR_MAP names replaced by its
@@ -14590,16 +14771,6 @@ contains
     call c_f_pointer(p, c)
   end function ctx_self
 
-  ! A hand-off between threads, under the baton: each thread keeps its own
-  ! context, and only the collector's value stack -- still one per process
-  ! until step 14b.3 -- is switched to the receiver's.
-  subroutine ctx_handoff(from, to)
-    integer, intent(in) :: from, to
-    if (from == to) return
-    call gc_stack_save(from)
-    call gc_stack_restore(to)
-  end subroutine ctx_handoff
-
   ! A fresh context: empty stacks, no error, no bindings, its own root
   ! slots for the thrown value and the binding stack.
   function gce_ctx_new() result(id)
@@ -14647,8 +14818,7 @@ contains
     logical :: ok
     c => ctx_self()
     if (id == c%id .or. id < 1 .or. id > n_ctx) return
-    call gc_stack_save(c%id)
-    call gc_stack_restore(id)
+    call gc_stack_bind(id)
     ok = th_key_set(ctx_key, c_loc(ctxs(id)%c))
   end subroutine gce_ctx_switch
 

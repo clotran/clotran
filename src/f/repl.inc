@@ -21,6 +21,7 @@
   ! Reads, evaluates and prints until EOF or, nested, until a form has
   ! called clotran-resume; answers that command, or :continue at EOF.
   recursive function repl_loop(bm) result(cmd)
+    type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: bm
     type(gc_value) :: cmd, form, result
@@ -30,10 +31,11 @@
     character(len=16) :: dbuf
     integer :: base, ios, size_read
 
+    vst => gc_my_stack()
     tctx => ctx_self()
     repl_depth = repl_depth + 1
-    base = vs_enter(3)
-    call vs_set(base + 1, gc_root_get(global_env_root))
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, gc_root_get(global_env_root))
     if (repl_depth > 1) then
        if (gca_is(bm)) call write_break(bm, 6, 8)
        print '(A)', ";; (clotran-resume :continue | {:continue v} | :step-in | :step-over | :step-out | :abort)"
@@ -67,7 +69,7 @@
           pending = pending // new_line('a') // line
        end if
 
-       form = gcr_read(pending, [vs_get(base + 1)])
+       form = gcr_read(pending, [vs_get(vst, base + 1)])
        if (gcr_has_error()) then
           ! Every unclosed-form message the reader produces begins this
           ! way -- an unclosed list, vector, map, string or regex. Any
@@ -78,19 +80,19 @@
           cycle
        end if
        pending = ""
-       call vs_set(base + 2, form)
+       call vs_set(vst, base + 2, form)
 
        call gce_clear_error()
-       result = gce_analyze(vs_get(base + 2), vs_get(base + 1))
-       if (.not. tctx%has_error) result = gce_eval(result, vs_get(base + 1), none)
-       call vs_set(base + 3, result)
+       result = gce_analyze(vs_get(vst, base + 2), vs_get(vst, base + 1))
+       if (.not. tctx%has_error) result = gce_eval(result, vs_get(vst, base + 1), none)
+       call vs_set(vst, base + 3, result)
        if (resume_pending) exit
        if (tctx%has_error) then
           print '(A,A)', "error: ", gce_error()
           if (len(gce_trace()) > 0) write(*, '(A)', advance='no') gce_trace()
           cycle
        end if
-       print '(A)', gcp_str(vs_get(base + 3), .true.)
+       print '(A)', gcp_str(vs_get(vst, base + 3), .true.)
     end do
     if (resume_pending) then
        resume_pending = .false.
@@ -98,6 +100,6 @@
     else
        cmd = gc_key("continue", none)
     end if
-    call vs_leave(base)
+    call vs_leave(vst, base)
     repl_depth = repl_depth - 1
   end function repl_loop

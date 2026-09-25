@@ -35,19 +35,21 @@
   ! (.submit executor f): a task over f, remembered until it finishes,
   ! and started now.
   recursive function task_submit(f) result(task)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: f
     type(gc_value) :: task, all
     integer :: base
-    base = vs_enter(2)
-    call vs_set(base + 1, f)
-    task = gc_obj(OBJ_TASK, [vs_get(base + 1), gc_nil(), gc_nil(), gc_nil()], [vs_get(base + 1)])
-    call vs_set(base + 2, task)
-    if (.not. gc_root_live(tasks_root)) call gc_global_keep(tasks_root, gcv_empty([vs_get(base + 2)]))
-    all = gcv_conj(gc_root_get(tasks_root), vs_get(base + 2), [vs_get(base + 2)])
+    vst => gc_my_stack()
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, f)
+    task = gc_obj(OBJ_TASK, [vs_get(vst, base + 1), gc_nil(), gc_nil(), gc_nil()], [vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, task)
+    if (.not. gc_root_live(tasks_root)) call gc_global_keep(tasks_root, gcv_empty([vs_get(vst, base + 2)]))
+    all = gcv_conj(gc_root_get(tasks_root), vs_get(vst, base + 2), [vs_get(vst, base + 2)])
     call gc_global_keep(tasks_root, all)
-    call task_step(vs_get(base + 2))
-    task = vs_get(base + 2)
-    call vs_leave(base)
+    call task_step(vs_get(vst, base + 2))
+    task = vs_get(vst, base + 2)
+    call vs_leave(vst, base)
   end function task_submit
 
   ! ---- the baton (PLAN.md step 11, stage 1) --------------------------
@@ -59,10 +61,9 @@
   ! heap and the interpreter's globals stay single-threaded, and every
   ! answer is what it was.
   !
-  ! Each thread owns its context (ctx_self, PLAN.md step 14b), so handing
-  ! over is a wake-up: the holder switches the collector's value stack to
-  ! the next context (ctx_handoff -- the one piece still per process),
-  ! names it in baton_ctx and wakes the waiters; the named thread goes on. Whoever
+  ! Each thread owns its context and its value stack (PLAN.md step 14b),
+  ! so handing over is a wake-up: the holder names the next context in
+  ! baton_ctx and wakes the waiters; the named thread goes on. Whoever
   ! hands a task the baton -- its STEPPER -- gets it back when the task
   ! blocks or ends, so scheduling is what it was under the green threads:
   ! deterministic, a future running when made until it blocks.
@@ -120,7 +121,6 @@
     me = gce_ctx_current()
     call ctx_arrays(max(me, next))
     came_from(next) = me
-    call ctx_handoff(me, next)
     ctxs(next)%c%cur_task = ctx_task(next)
     ok = th_lock_acquire(baton_lock)
     baton_ctx = next
@@ -152,7 +152,6 @@
   subroutine give_baton(next)
     integer, intent(in) :: next
     logical :: ok
-    call ctx_handoff(gce_ctx_current(), next)
     ctxs(next)%c%cur_task = ctx_task(next)
     ok = th_lock_acquire(baton_lock)
     baton_ctx = next
@@ -188,8 +187,7 @@
   end subroutine native_begin
 
   ! After it: say so, wake whoever waits for a native call to end, and
-  ! wait to be stepped -- the stepper switches the collector's stack back
-  ! to `me`.
+  ! wait to be stepped.
   subroutine native_end(me)
     integer, intent(in) :: me
     logical :: ok
@@ -281,9 +279,9 @@
     end do
     ok = th_lock_release(baton_lock)
     ! this thread's context, for good. Set holding the baton: no one grows
-    ! the context table meanwhile. The stepper switched the collector's
-    ! stack to it before handing over.
+    ! the context table meanwhile -- nor the collector's stack table.
     ok = th_key_set(ctx_key, c_loc(ctxs(me)%c))
+    call gc_stack_bind(me)
     tctx => ctx_self()
     task = ctx_task(me)
     call gce_clear_error()
@@ -311,7 +309,6 @@
     call vs_leave(0)
     ! back to the stepper, for good: this context goes back for reuse
     next = came_from(me)
-    call ctx_handoff(me, next)
     ctxs(next)%c%cur_task = ctx_task(next)
     ctx_task(me) = gc_nil()
     ! this thread is done with its context: it goes back for reuse
@@ -469,9 +466,11 @@
   ! ready when it holds one (satisfied); the protocol's send! and
   ! receive are conj and a take (clotran/thread.cljf).
   function task_mailbox(t) result(mb)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: t
     type(gc_value) :: mb, v
     integer :: base
+    vst => gc_my_stack()
     mb = gc_nil()
     if (gc_kind(t) == OBJ_TASK) then
        mb = gc_slot(t, 5)
@@ -479,16 +478,16 @@
        mb = gc_root_get(main_mailbox_root)
     end if
     if (gc_kind(mb) == OBJ_ATOM) return
-    base = vs_enter(1)
+    base = vs_enter(vst, 1)
     v = gcv_empty([t])
-    call vs_set(base + 1, v)
-    mb = gc_obj(OBJ_ATOM, [vs_get(base + 1), gc_nil()], [t, vs_get(base + 1)])
+    call vs_set(vst, base + 1, v)
+    mb = gc_obj(OBJ_ATOM, [vs_get(vst, base + 1), gc_nil()], [t, vs_get(vst, base + 1)])
     if (gc_kind(t) == OBJ_TASK) then
        call gc_set_slot(t, 5, mb)
     else
        call gc_global_keep(main_mailbox_root, mb)
     end if
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end function task_mailbox
 
   ! Done waiting: the running task's wait slots are cleared.
@@ -526,11 +525,13 @@
   ! ponytail: a linear scan per decision; a run queue if task counts
   ! ever make it show.
   function pick_runnable(target, sleeping) result(t)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: target
     logical, intent(out) :: sleeping
     type(gc_value) :: t, all, kept, x, dl
     integer :: i, n, base
     logical :: prune
+    vst => gc_my_stack()
     t = gc_nil()
     sleeping = .false.
     if (runnable_now(target)) then
@@ -559,18 +560,18 @@
        end if
     end do
     if (.not. prune) return
-    base = vs_enter(1)
+    base = vs_enter(vst, 1)
     kept = gcv_empty([all])
-    call vs_set(base + 1, kept)
+    call vs_set(vst, base + 1, kept)
     do i = 0, n - 1
        x = gcv_nth(all, i)
        if (gc_i1(x) < TASK_DONE) then
-          kept = gcv_conj(vs_get(base + 1), x, [vs_get(base + 1), all])
-          call vs_set(base + 1, kept)
+          kept = gcv_conj(vs_get(vst, base + 1), x, [vs_get(vst, base + 1), all])
+          call vs_set(vst, base + 1, kept)
        end if
     end do
-    call gc_global_keep(tasks_root, vs_get(base + 1))
-    call vs_leave(base)
+    call gc_global_keep(tasks_root, vs_get(vst, base + 1))
+    call vs_leave(vst, base)
   end function pick_runnable
 
   function describe_wait(target) result(s)
@@ -598,6 +599,7 @@
   ! nothing runnable and a deadline still to come this spins; sleeping
   ! is the one thing a single thread cannot delegate.
   recursive function block_on(target, deadline0) result(ready)
+    type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: target
     integer(gc_ip), intent(in) :: deadline0
@@ -606,6 +608,7 @@
     type(gc_value) :: t, dl
     logical :: sleeping
     integer :: ngen, nrun
+    vst => gc_my_stack()
     tctx => ctx_self()
     ready = satisfied(target)
     if (ready) then
@@ -625,7 +628,7 @@
     end if
     if (task_trace) write(0, '(A,I0,A,I0,A,I0,A,I0,A,I0,A,I0)') "block_on: cur_task kind=", gc_kind(tctx%cur_task), &
          " ev_depth=", tctx%ev_depth, " loop_depth=", tctx%task_loop_depth, " target kind=", gc_kind(target), &
-         " top node kind=", gc_i1(vs_get(tctx%kst(tctx%ksp)%base + 1)), " ksp=", tctx%ksp
+         " top node kind=", gc_i1(vs_get(vst, tctx%kst(tctx%ksp)%base + 1)), " ksp=", tctx%ksp
     if (gc_kind(tctx%cur_task) == OBJ_TASK) then
        ! A TASK parks right here, on its own thread's stack -- below
        ! compiled code or not -- and gives the baton back to its stepper,
