@@ -140,7 +140,6 @@ module Regex
   type(c_ptr), save :: subject(MAX_HANDLES) = c_null_ptr
   integer, save :: next_slot = 1
 
-  character(len=256), save :: last_error = ""
 
   public :: regex_compile, regex_clone, regex_set_text, regex_matches, &
        regex_release, regex_live_count, &
@@ -212,21 +211,26 @@ contains
     registry(idx) = c_null_ptr
   end subroutine regex_release
 
+  ! What a clone or set_text failure says: ICU refused and gave no
+  ! message. A compile failure answers its own (regex_compile).
   function regex_last_error() result(s)
     character(len=:), allocatable :: s
-    s = trim(last_error)
+    s = "the regex library refused the operation"
   end function regex_last_error
 
   ! Compiles a pattern, returning a POSITIVE handle index, or 0 on
-  ! failure (with regex_last_error() set).
-  function regex_compile(pattern) result(idx)
+  ! failure with ICU's message in err -- answered, not kept, so two
+  ! threads compiling at once each see their own.
+  function regex_compile(pattern, err) result(idx)
     character(len=*), intent(in) :: pattern
+    character(len=:), allocatable, intent(out) :: err
     integer :: idx
     type(c_ptr) :: h
     character(kind=c_char, len=1) :: errbuf(256)
     integer :: i
 
     idx = 0
+    err = ""
     ! ICU rejects a zero-length pattern outright, but #"" is a legal
     ! Clojure regex that matches the empty string at every position.
     ! (?:) is that same pattern spelled in a way ICU accepts. The
@@ -238,10 +242,9 @@ contains
        h = cre_compile_c(pattern // c_null_char, len(pattern), errbuf, 256_c_int32_t)
     end if
     if (.not. c_associated(h)) then
-       last_error = ""
        do i = 1, 256
           if (errbuf(i) == c_null_char) exit
-          last_error = trim(last_error) // errbuf(i)
+          err = err // errbuf(i)
        end do
        return
     end if

@@ -1151,16 +1151,49 @@ b. *Per-thread state into the context.* Mechanical, large, no behaviour
       through the thread's context. `gce_ctx_switch` stops copying; it
       re-points the key -- the debugger's handler is the one context
       that shares a thread with another. Measured with `scripts/bench`
-      before and after.
+      before and after: 1-2%. Done 2026-09-25.
    3. GC's value stack (`vstack`, `vs_top`) per thread, which retires
-      `gc_stack_save`/`gc_stack_restore`.
-   4. The reader's and the regex module's error and scratch state, each
-      module under its own key, so no module reaches up into Eval's.
+      `gc_stack_save`/`gc_stack_restore`. A lookup per `vs_get` cost 20%
+      on plain loops, so `vs_*` also take the stack explicitly and the
+      evaluator fetches it once per procedure: within 3%. Done 2026-09-25.
+   4. The reader's error and scratch state under the reader's own key, so
+      no module reaches up into Eval's; `regex_compile` answers its error
+      instead of keeping it. `anon_seq`, which numbers `#(...)`
+      parameters, stays one counter for every thread, as `RT.nextID` is.
+      Done 2026-09-25: no per-thread module variable is left, and
+      `scripts/state-inventory` now refuses one.
+
+   Found on the way (the dgemm investigation, 2026-09-25): every hand-off
+   broadcast one condition every parked thread waits on, so a hand-off
+   cost grew with the number of tasks (0.17 ms a future at 10, 1.4-1.7 ms
+   at 320). Each context now has its own condition and a hand-off wakes
+   only the thread it names: 0.12-0.13 ms from 10 to 320. The scheduler's
+   per-context arrays went into the context with it -- they grew by
+   reallocation, unlocked, under threads reading them.
 c. *Safepoints.* Collection and pool growth run with every mutator
    stopped at a safepoint -- an allocation, a loop back-edge in
    `run_loop`, a parked task (a parked task is at one already). The
    collector then sees every thread's stacks, as it sees every context's
    now.
+
+   *As designed* (2026-09-25). An allocation is already a safepoint:
+   any allocation can collect today, so the host already keeps every
+   value live across one on its thread's value stack -- or passes it to
+   the allocation itself as `roots` (gc_obj and kin take them for values
+   held in Fortran locals). A thread parking at an allocation poll
+   therefore pushes that call's `roots` and `slots` onto its own value
+   stack first and pops them after, so the collecting thread sees them.
+   A thread that
+   must collect or grow a pool raises a stop request, waits until every
+   other thread RUNNING HEAP CODE is parked at a poll, collects, and
+   releases them. Waiting for the baton, or inside a native call (which
+   touches no heap), is not running heap code. Polls: allocation entry,
+   and `run_loop`'s dispatch, so a loop that allocates nothing cannot
+   hold the world up. With the baton on, at most one thread runs heap
+   code and the collector never waits -- inert until f, as every step
+   must be. The proof comes with d: a host test (`gc_mt_test`) of
+   several threads allocating at once, under torture, while collections
+   stop them.
 d. *Allocation.* Each thread takes a batch of free slots under a lock and
    allocates from it without one (a thread-local allocation buffer);
    pools grow only at a safepoint.

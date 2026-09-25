@@ -7974,13 +7974,13 @@ contains
        ! args(0) is always a plain string.
        block
          type(gc_value) :: src, pv
-         character(len=:), allocatable :: ptext
+         character(len=:), allocatable :: ptext, rerr
          integer :: h
          src = strip_meta(gcv_nth(args, 0))
          ptext = text_of(src)
-         h = regex_compile(ptext)
+         h = regex_compile(ptext, rerr)
          if (h == 0) then
-            call fail("regex: " // regex_last_error())
+            call fail("regex: " // rerr)
          else
             pv = gc_obj(OBJ_REGEX, [gc_str(ptext, [vs_get(vst, base + 1)])], [vs_get(vst, base + 1)])
             call gc_set_i1(pv, h)
@@ -9993,10 +9993,10 @@ contains
             block
               type(gc_value) :: rx, mv
               integer :: h, mh
-              character(len=:), allocatable :: stext
-              h = regex_compile(text_of(gcv_nth(args, 1)))
+              character(len=:), allocatable :: stext, rerr
+              h = regex_compile(text_of(gcv_nth(args, 1)), rerr)
               if (h == 0) then
-                 call fail("regex: " // regex_last_error())
+                 call fail("regex: " // rerr)
               else
                  rx = gc_obj(OBJ_REGEX, [gc_str(text_of(gcv_nth(args, 1)), [vs_get(vst, base + 1)])], [vs_get(vst, base + 1)])
                  call gc_set_i1(rx, h)
@@ -10079,9 +10079,10 @@ contains
             block
               type(gc_value) :: rx
               integer :: h
-              h = regex_compile(text_of(sv))
+              character(len=:), allocatable :: rerr
+              h = regex_compile(text_of(sv), rerr)
               if (h == 0) then
-                 call fail("regex: " // regex_last_error())
+                 call fail("regex: " // rerr)
               else
                  rx = gc_obj(OBJ_REGEX, [gc_str(text_of(sv), [vs_get(vst, base + 1)])], [vs_get(vst, base + 1)])
                  call gc_set_i1(rx, h)

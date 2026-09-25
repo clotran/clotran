@@ -3,7 +3,8 @@
 ;; classified for running interpreter code on several threads at once
 ;; (PLAN.md step 14a):
 ;;
-;;   :thread  one per thread -- belongs in eval_ctx (or GC's saved stacks)
+;;   :thread  one per thread -- refused since step 14b: per-thread state
+;;            lives in a thread's state type (eval_ctx, gc_stack, rd_state)
 ;;   :fixed   shared, set at startup and read-only after
 ;;   :shared  shared and mutable -- needs a lock, or a design change
 ;;
@@ -64,4 +65,7 @@
     (println "module variables:" (count found) "--" (pr-str (into (sorted-map) counts)))
     (doseq [m missing] (println "NOT CLASSIFIED:" m))
     (doseq [s stale] (println "GONE (remove from state.edn):" s))
-    (when (or (seq missing) (seq stale)) (System/exit 1))))
+    (doseq [[k v] (select-keys known found) :when (#{:thread :unclassified} (if (map? v) (:class v) v))]
+      (println "PER-THREAD MODULE VARIABLE:" k "-- put it in the thread's state type instead"))
+    (when (or (seq missing) (seq stale) (some #(#{:thread :unclassified} (if (map? %) (:class %) %)) (vals (select-keys known found))))
+      (System/exit 1))))

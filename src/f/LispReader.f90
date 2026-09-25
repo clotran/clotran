@@ -30,11 +30,10 @@ module LispReader
   use Assoc
   use Regex
   use, intrinsic :: ieee_arithmetic
+  use Threads, only: th_key, th_key_create, th_key_set, th_key_get
+  use iso_c_binding, only: c_ptr, c_loc, c_f_pointer, c_associated
   implicit none
   private
-
-  character(len=:), allocatable :: last_error
-  logical :: has_error = .false.
 
   public :: gcr_read, gcr_read_all, gcr_error, gcr_has_error
   public :: gcr_begin_file, gcr_read_next, gcr_position, gcr_position_parts
@@ -74,46 +73,84 @@ module LispReader
   end type src_file
   type(src_file), save :: files(MAX_FILES)
   integer, save :: n_files = 0
-  integer, save :: cur_file = 0
-  integer, save :: anon_seq = 0   ! the suffix the last #(...) read gave its parameters
-  ! Reader conditionals. A #?(...) that selects nothing is another kind
-  ! of space, like #_ (see skip_ignorables), and #?@ splices a
-  ! collection into the enclosing one. Whoever called read_form --
-  ! read_seq, read_map, the top level -- checks these two flags straight
-  ! after the call and clears them. LispReader.java hands back the
-  ! reader itself as its nothing-sentinel; a flag is the same signal
-  ! without inventing a value for it.
-  logical, save :: rc_nothing = .false., rc_splice = .false.
-  ! True while reading a branch the conditional did not select: a
-  ! tagged literal there is read past rather than resolved, which is
-  ! what *suppress-read* does, so a :cljs branch may hold #js {}.
-  logical, save :: suppress_read = .false.
-  ! When on, #tag form READS as a marker map instead of failing --
-  ! {:clotran/tagged-literal true :tag t :form f}, the same shape
-  ! `tagged-literal` builds. The reader cannot apply a data reader
-  ! itself (it would have to call the evaluator, and Eval uses this
-  ! module, not the other way round), so the caller that turned this
-  ! on resolves the markers afterwards. Off for ordinary source, so
-  ! an unknown tag in a file is still a reader error there.
-  logical, save :: tag_markers = .false.
+  ! the suffix the last #(...) read gave its parameters: one counter for
+  ! every thread, as RT.nextID is, so no two reads name them alike
+  integer, save :: anon_seq = 0
+  ! What a read in progress keeps: one per thread, found through rd_key
+  ! (PLAN.md step 14b), made the first time its thread reads.
+  type :: rd_state
+     character(len=:), allocatable :: last_error
+     logical :: has_error = .false.
+     integer :: cur_file = 0   ! the file being read; 0 is the REPL
+     ! Reader conditionals. A #?(...) that selects nothing is another kind
+     ! of space, like #_ (see skip_ignorables), and #?@ splices a
+     ! collection into the enclosing one. Whoever called read_form --
+     ! read_seq, read_map, the top level -- checks these two flags straight
+     ! after the call and clears them. LispReader.java hands back the
+     ! reader itself as its nothing-sentinel; a flag is the same signal
+     ! without inventing a value for it.
+     logical :: rc_nothing = .false., rc_splice = .false.
+     ! True while reading a branch the conditional did not select: a
+     ! tagged literal there is read past rather than resolved, which is
+     ! what *suppress-read* does, so a :cljs branch may hold #js {}.
+     logical :: suppress_read = .false.
+     ! When on, #tag form READS as a marker map instead of failing --
+     ! {:clotran/tagged-literal true :tag t :form f}, the same shape
+     ! `tagged-literal` builds. The reader cannot apply a data reader
+     ! itself (it would have to call the evaluator, and Eval uses this
+     ! module, not the other way round), so the caller that turned this
+     ! on resolves the markers afterwards. Off for ordinary source, so
+     ! an unknown tag in a file is still a reader error there.
+     logical :: tag_markers = .false.
+  end type rd_state
+  type(th_key), save :: rd_key
+  logical, save :: rd_key_made = .false.
 
 contains
 
+  ! This thread's reader state, made on its first read.
+  ! ponytail: one per thread that ever reads, never freed -- a few dozen
+  ! bytes; a pthread key destructor frees them if threads ever churn.
+  function rd_self() result(r)
+    type(rd_state), pointer :: r
+    type(c_ptr) :: p
+    logical :: ok
+    ! the first read is on the main thread, before any task exists
+    if (.not. rd_key_made) then
+       if (.not. th_key_create(rd_key)) error stop "clotran: no thread key for the reader"
+       rd_key_made = .true.
+    end if
+    p = th_key_get(rd_key)
+    if (c_associated(p)) then
+       call c_f_pointer(p, r)
+    else
+       allocate(r)
+       r%last_error = ""
+       ok = th_key_set(rd_key, c_loc(r))
+    end if
+  end function rd_self
+
   function gcr_has_error() result(yes)
+    type(rd_state), pointer :: rdx
     logical :: yes
-    yes = has_error
+    rdx => rd_self()
+    yes = rdx%has_error
   end function gcr_has_error
 
   function gcr_error() result(s)
+    type(rd_state), pointer :: rdx
     character(len=:), allocatable :: s
+    rdx => rd_self()
     s = ""
-    if (allocated(last_error)) s = last_error
+    if (allocated(rdx%last_error)) s = rdx%last_error
   end function gcr_error
 
   subroutine fail(msg)
+    type(rd_state), pointer :: rdx
     character(len=*), intent(in) :: msg
-    has_error = .true.
-    last_error = msg
+    rdx => rd_self()
+    rdx%has_error = .true.
+    rdx%last_error = msg
   end subroutine fail
 
   ! Names a file and indexes its lines; answers its id, which the
@@ -123,32 +160,34 @@ contains
   ! current one -- so the next form of the OUTER file would otherwise
   ! be stamped with the last inner file's id.
   function gcr_begin_file(text, name) result(fid)
+    type(rd_state), pointer :: rdx
     character(len=*), intent(in) :: text, name
     integer :: fid
     integer :: i, n, k
-    cur_file = 0
+    rdx => rd_self()
+    rdx%cur_file = 0
     do i = 1, n_files
-       if (trim(files(i)%name) == name) cur_file = i
+       if (trim(files(i)%name) == name) rdx%cur_file = i
     end do
-    if (cur_file == 0 .and. n_files < MAX_FILES) then
+    if (rdx%cur_file == 0 .and. n_files < MAX_FILES) then
        n_files = n_files + 1
        files(n_files)%name = name
-       cur_file = n_files
+       rdx%cur_file = n_files
     end if
-    fid = cur_file
-    if (cur_file == 0) return
+    fid = rdx%cur_file
+    if (rdx%cur_file == 0) return
     n = 1
     do i = 1, len(text)
        if (text(i:i) == achar(10)) n = n + 1
     end do
-    if (allocated(files(cur_file)%line_starts)) deallocate(files(cur_file)%line_starts)
-    allocate(files(cur_file)%line_starts(n))
-    files(cur_file)%line_starts(1) = 1
+    if (allocated(files(rdx%cur_file)%line_starts)) deallocate(files(rdx%cur_file)%line_starts)
+    allocate(files(rdx%cur_file)%line_starts(n))
+    files(rdx%cur_file)%line_starts(1) = 1
     k = 1
     do i = 1, len(text)
        if (text(i:i) == achar(10)) then
           k = k + 1
-          files(cur_file)%line_starts(k) = i + 1
+          files(rdx%cur_file)%line_starts(k) = i + 1
        end if
     end do
   end function gcr_begin_file
@@ -158,15 +197,17 @@ contains
   ! read, then evaluate, then read again -- so a form can depend on
   ! what the one before it changed (DEVIATIONS 1, closed).
   function gcr_read_next(text, pos, roots, eof, fid) result(v)
+    type(rd_state), pointer :: rdx
     character(len=*), intent(in) :: text
     integer, intent(inout) :: pos
     type(gc_value), intent(in) :: roots(:)
     logical, intent(out) :: eof
     integer, intent(in) :: fid
     type(gc_value) :: v
-    cur_file = fid
-    has_error = .false.
-    last_error = ""
+    rdx => rd_self()
+    rdx%cur_file = fid
+    rdx%has_error = .false.
+    rdx%last_error = ""
     eof = .false.
     v = gc_nil()
     do
@@ -176,14 +217,14 @@ contains
           return
        end if
        v = read_form(text, pos, roots)
-       if (has_error) return
-       if (rc_splice) then
-          rc_splice = .false.
+       if (rdx%has_error) return
+       if (rdx%rc_splice) then
+          rdx%rc_splice = .false.
           call fail("Reader conditional splicing not allowed at the top level.")
           return
        end if
-       if (.not. rc_nothing) return
-       rc_nothing = .false.
+       if (.not. rdx%rc_nothing) return
+       rdx%rc_nothing = .false.
     end do
   end function gcr_read_next
 
@@ -238,25 +279,27 @@ contains
   ! A REPL form belongs to no file: an error in it reports line:col,
   ! not the file that happened to load last.
   function gcr_read(text, roots) result(v)
+    type(rd_state), pointer :: rdx
     character(len=*), intent(in) :: text
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: v
     integer :: pos
-    has_error = .false.
-    last_error = ""
-    cur_file = 0
+    rdx => rd_self()
+    rdx%has_error = .false.
+    rdx%last_error = ""
+    rdx%cur_file = 0
     pos = 1
     do
        v = read_form(text, pos, roots)
-       if (has_error) return
-       if (rc_splice) then
-          rc_splice = .false.
+       if (rdx%has_error) return
+       if (rdx%rc_splice) then
+          rdx%rc_splice = .false.
           call fail("Reader conditional splicing not allowed at the top level.")
           return
        end if
-       if (.not. rc_nothing) return
+       if (.not. rdx%rc_nothing) return
        ! nothing selected: the next form is the one, as read-string does
-       rc_nothing = .false.
+       rdx%rc_nothing = .false.
        call skip_ignorables(text, pos, roots)
        if (pos > len(text)) then
           call fail("EOF while reading")
@@ -270,13 +313,15 @@ contains
   ! calls instead of restarting, so `(def a 1) (def b 2)` is two forms
   ! rather than one form and some ignored text.
   function gcr_read_all(text, roots) result(v)
+    type(rd_state), pointer :: rdx
     character(len=*), intent(in) :: text
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: v, form
     integer :: pos, base
 
-    has_error = .false.
-    last_error = ""
+    rdx => rd_self()
+    rdx%has_error = .false.
+    rdx%last_error = ""
     pos = 1
     base = vs_enter(1)
     v = gcv_empty(roots)
@@ -285,14 +330,14 @@ contains
        call skip_ignorables(text, pos, [vs_get(base + 1)])
        if (pos > len(text)) exit
        form = read_form(text, pos, [vs_get(base + 1)])
-       if (has_error) exit
-       if (rc_splice) then
-          rc_splice = .false.
+       if (rdx%has_error) exit
+       if (rdx%rc_splice) then
+          rdx%rc_splice = .false.
           call fail("Reader conditional splicing not allowed at the top level.")
           exit
        end if
-       if (rc_nothing) then
-          rc_nothing = .false.
+       if (rdx%rc_nothing) then
+          rdx%rc_nothing = .false.
           cycle
        end if
        v = gcv_conj(vs_get(base + 1), form, roots)
@@ -356,30 +401,34 @@ contains
   ! commented-out assertion exactly that way -- and one reader error
   ! aborts the whole file, so the namespace defined no tests at all.
   recursive subroutine skip_ignorables(text, pos, roots)
+    type(rd_state), pointer :: rdx
     character(len=*), intent(in) :: text
     integer, intent(inout) :: pos
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: ignored
 
+    rdx => rd_self()
     do
        call skip_space(text, pos)
        if (pos + 1 > len(text)) return
        if (text(pos:pos + 1) /= "#_") return
        pos = pos + 2
        ignored = read_form(text, pos, roots)
-       if (has_error) return
+       if (rdx%has_error) return
     end do
   end subroutine skip_ignorables
 
   ! ---- forms ----
 
   recursive function read_form(text, pos, roots) result(v)
+    type(rd_state), pointer :: rdx
     character(len=*), intent(in) :: text
     integer, intent(inout) :: pos
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: v
     character :: c
 
+    rdx => rd_self()
     v = gc_nil()
     call skip_ignorables(text, pos, roots)
     if (pos > len(text)) then
@@ -397,9 +446,9 @@ contains
          v = read_seq(text, pos, ")", .false., roots)
          ! the position, on the head cell of a non-empty list only:
          ! the empty list may be shared
-         if (.not. has_error) then
+         if (.not. rdx%has_error) then
             if (gcl_is(v)) then
-               if (gcl_count(v) > 0) call gc_set_i2(v, cur_file * POS_SHIFT + start)
+               if (gcl_count(v) > 0) call gc_set_i2(v, rdx%cur_file * POS_SHIFT + start)
             end if
          end if
        end block
@@ -459,6 +508,7 @@ contains
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: v, src
     integer :: start, handle
+    character(len=:), allocatable :: rerr
 
     v = gc_nil()
     pos = pos + 1
@@ -472,9 +522,9 @@ contains
        if (text(pos:pos) == achar(92)) pos = pos + 1
        pos = pos + 1
     end do
-    handle = regex_compile(text(start:pos - 1))
+    handle = regex_compile(text(start:pos - 1), rerr)
     if (handle == 0) then
-       call fail("regex: " // regex_last_error())
+       call fail("regex: " // rerr)
        return
     end if
     src = gc_str(text(start:pos - 1), roots)
@@ -499,6 +549,7 @@ contains
   ! waits on auto-gensym in the reader, and the collision is noted
   ! rather than hidden.
   recursive function read_anon_fn(text, pos, roots) result(v)
+    type(rd_state), pointer :: rdx
     character(len=*), intent(in) :: text
     integer, intent(inout) :: pos
     type(gc_value), intent(in) :: roots(:)
@@ -507,10 +558,11 @@ contains
     logical :: has_rest
     character(len=16) :: nm
 
+    rdx => rd_self()
     v = gc_nil()
     base = vs_enter(4)
     body = read_seq(text, pos, ")", .false., roots)
-    if (has_error) then
+    if (rdx%has_error) then
        call vs_leave(base); return
     end if
     call vs_set(base + 1, body)
@@ -712,16 +764,18 @@ contains
   ! #{...} -- elements read like a vector's, then each maps to
   ! itself. Duplicates collapse, as they must.
   recursive function read_set(text, pos, roots) result(v)
+    type(rd_state), pointer :: rdx
     character(len=*), intent(in) :: text
     integer, intent(inout) :: pos
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: v, items, m, item
     integer :: base, i
 
+    rdx => rd_self()
     v = gc_nil()
     base = vs_enter(3)
     items = read_seq(text, pos, "}", .true., roots)
-    if (has_error) then
+    if (rdx%has_error) then
        call vs_leave(base); return
     end if
     call vs_set(base + 1, items)
@@ -756,12 +810,14 @@ contains
   ! must stay a regular character in the MIDDLE of a token and only
   ! dispatch at the start of one.
   recursive function read_dispatch(text, pos, roots) result(v)
+    type(rd_state), pointer :: rdx
     character(len=*), intent(in) :: text
     integer, intent(inout) :: pos
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: v
     character :: c
 
+    rdx => rd_self()
     v = gc_nil()
     if (pos + 1 > len(text)) then
        call fail("EOF after #")
@@ -800,16 +856,16 @@ contains
     case (":")
        v = read_ns_map(text, pos, roots)
     case default
-       if (suppress_read .and. ((c >= "a" .and. c <= "z") .or. (c >= "A" .and. c <= "Z"))) then
+       if (rdx%suppress_read .and. ((c >= "a" .and. c <= "z") .or. (c >= "A" .and. c <= "Z"))) then
           ! #tag form in a branch nobody selected: read past the tag and
           ! the form. A selected branch still has no data readers, and
           ! fails below by tag as before.
           pos = pos + 1
           v = read_form(text, pos, roots)
-          if (has_error) return
+          if (rdx%has_error) return
           v = read_form(text, pos, roots)
           v = gc_nil()
-       else if (tag_markers .and. ((c >= "a" .and. c <= "z") .or. &
+       else if (rdx%tag_markers .and. ((c >= "a" .and. c <= "z") .or. &
             (c >= "A" .and. c <= "Z"))) then
           pos = pos + 1
           v = read_tagged(text, pos, roots)
@@ -823,15 +879,17 @@ contains
   ! form as any form, exactly as LispReader.CtorReader does before it
   ! looks the tag up.
   recursive function read_tagged(text, pos, roots) result(v)
+    type(rd_state), pointer :: rdx
     character(len=*), intent(in) :: text
     integer, intent(inout) :: pos
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: v, tag, form, m, k
     integer :: base
+    rdx => rd_self()
     v = gc_nil()
     base = vs_enter(4)
     tag = read_form(text, pos, roots)
-    if (has_error) then
+    if (rdx%has_error) then
        call vs_leave(base); return
     end if
     call vs_set(base + 1, tag)
@@ -840,7 +898,7 @@ contains
        call vs_leave(base); return
     end if
     form = read_form(text, pos, [roots, [vs_get(base + 1)]])
-    if (has_error) then
+    if (rdx%has_error) then
        call vs_leave(base); return
     end if
     call vs_set(base + 2, form)
@@ -872,9 +930,11 @@ contains
   ! Turns #tag markers on or off, and answers what it was, so the
   ! caller can restore it.
   logical function gcr_set_tag_markers(on) result(was)
+    type(rd_state), pointer :: rdx
     logical, intent(in) :: on
-    was = tag_markers
-    tag_markers = on
+    rdx => rd_self()
+    was = rdx%tag_markers
+    rdx%tag_markers = on
   end function gcr_set_tag_markers
 
   ! ---- reader conditionals ----
@@ -887,6 +947,7 @@ contains
   ! suppress_read and dropped -- LispReader.readCondDelimited, without
   ! the :preserve mode. DEVIATIONS 33.
   recursive function read_cond(text, pos, roots) result(v)
+    type(rd_state), pointer :: rdx
     character(len=*), intent(in) :: text
     integer, intent(inout) :: pos
     type(gc_value), intent(in) :: roots(:)
@@ -894,9 +955,10 @@ contains
     logical :: splicing, chosen, match, saved, chosen_nothing
     integer :: base
 
+    rdx => rd_self()
     v = gc_nil()
-    rc_nothing = .false.
-    rc_splice = .false.
+    rdx%rc_nothing = .false.
+    rdx%rc_splice = .false.
     splicing = .false.
     if (pos <= len(text)) then
        if (text(pos:pos) == "@") then
@@ -920,7 +982,7 @@ contains
     chosen_nothing = .false.
     do
        call skip_ignorables(text, pos, [roots, vs_get(base + 1)])
-       if (has_error) exit
+       if (rdx%has_error) exit
        if (pos > len(text)) then
           call fail("EOF while reading, expected ')'")
           exit
@@ -930,13 +992,13 @@ contains
           exit
        end if
        k = read_form(text, pos, [roots, vs_get(base + 1)])
-       if (has_error) exit
+       if (rdx%has_error) exit
        if (k%tag /= GCT_KEY) then
           call fail("read-cond: feature must be a keyword")
           exit
        end if
        call skip_ignorables(text, pos, [roots, vs_get(base + 1)])
-       if (has_error) exit
+       if (rdx%has_error) exit
        if (pos > len(text)) then
           call fail("EOF while reading, expected ')'")
           exit
@@ -947,27 +1009,27 @@ contains
        end if
        match = (.not. chosen) .and. &
             (gc_ref_is(k%ref, "cljf") .or. gc_ref_is(k%ref, "default"))
-       saved = suppress_read
-       suppress_read = saved .or. .not. match
+       saved = rdx%suppress_read
+       rdx%suppress_read = saved .or. .not. match
        val = read_form(text, pos, [roots, vs_get(base + 1)])
-       suppress_read = saved
-       if (has_error) exit
+       rdx%suppress_read = saved
+       if (rdx%has_error) exit
        if (match) then
           chosen = .true.
-          chosen_nothing = rc_nothing
-          if (.not. rc_nothing) call vs_set(base + 1, val)
+          chosen_nothing = rdx%rc_nothing
+          if (.not. rdx%rc_nothing) call vs_set(base + 1, val)
        end if
-       rc_nothing = .false.
-       rc_splice = .false.
+       rdx%rc_nothing = .false.
+       rdx%rc_splice = .false.
     end do
-    if (.not. has_error) then
+    if (.not. rdx%has_error) then
        if (.not. chosen .or. chosen_nothing) then
-          rc_nothing = .true.
+          rdx%rc_nothing = .true.
        else
           v = vs_get(base + 1)
           if (splicing) then
              if (gcl_is(v) .or. gcv_is(v)) then
-                rc_splice = .true.
+                rdx%rc_splice = .true.
              else
                 v = gc_nil()
                 call fail("Spliced form list in read-cond-splicing must implement java.util.List")
@@ -1027,10 +1089,12 @@ contains
   ! A conditional that produced no form, or a splice, where exactly one
   ! form is required -- after ', ^, @, #' and the rest.
   logical function cond_leaked()
-    cond_leaked = rc_nothing .or. rc_splice
+    type(rd_state), pointer :: rdx
+    rdx => rd_self()
+    cond_leaked = rdx%rc_nothing .or. rdx%rc_splice
     if (cond_leaked) then
-       rc_nothing = .false.
-       rc_splice = .false.
+       rdx%rc_nothing = .false.
+       rdx%rc_splice = .false.
        call fail("reader conditional did not produce a form here")
     end if
   end function cond_leaked
@@ -1079,16 +1143,18 @@ contains
   ! symbol text is interned and a shared pool slot cannot carry
   ! per-occurrence metadata. See OBJ_META in GC.f90.
   recursive function read_meta(text, pos, roots) result(v)
+    type(rd_state), pointer :: rdx
     character(len=*), intent(in) :: text
     integer, intent(inout) :: pos
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: v, m, form, key
     integer :: base
 
+    rdx => rd_self()
     v = gc_nil()
     base = vs_enter(3)
     m = read_form(text, pos, roots)
-    if (has_error) then
+    if (rdx%has_error) then
        call vs_leave(base); return
     end if
     if (cond_leaked()) then
@@ -1128,7 +1194,7 @@ contains
     end if
 
     form = read_form(text, pos, roots)
-    if (has_error) then
+    if (rdx%has_error) then
        call vs_leave(base); return
     end if
     if (cond_leaked()) then
@@ -1141,6 +1207,7 @@ contains
 
   ! (sym form) -- what ', `, @ and ~ expand to.
   recursive function wrap(name, text, pos, roots) result(v)
+    type(rd_state), pointer :: rdx
     character(len=*), intent(in) :: name
     character(len=*), intent(in) :: text
     integer, intent(inout) :: pos
@@ -1148,9 +1215,10 @@ contains
     type(gc_value) :: v, inner, sym
     type(gc_value), allocatable :: r2(:)
 
+    rdx => rd_self()
     v = gc_nil()
     inner = read_form(text, pos, roots)
-    if (has_error) return
+    if (rdx%has_error) return
     if (cond_leaked()) return
     r2 = with(roots, inner)
     sym = gc_sym(name, r2)
@@ -1165,6 +1233,7 @@ contains
   ! be seen by the collector, and a form long enough to trigger one
   ! mid-read would lose its earlier elements.
   recursive function read_seq(text, pos, closer, as_vector, roots) result(v)
+    type(rd_state), pointer :: rdx
     character(len=*), intent(in) :: text
     integer, intent(inout) :: pos
     character, intent(in) :: closer
@@ -1174,6 +1243,7 @@ contains
     type(gc_value), allocatable :: r2(:)
     integer :: i
 
+    rdx => rd_self()
     v = gc_nil()
     acc = gcv_empty(roots)
     do
@@ -1188,13 +1258,13 @@ contains
           exit
        end if
        item = read_form(text, pos, r2)
-       if (has_error) return
-       if (rc_nothing) then
-          rc_nothing = .false.
+       if (rdx%has_error) return
+       if (rdx%rc_nothing) then
+          rdx%rc_nothing = .false.
           cycle
        end if
-       if (rc_splice) then
-          rc_splice = .false.
+       if (rdx%rc_splice) then
+          rdx%rc_splice = .false.
           acc = splice_into(acc, item, roots)
           cycle
        end if
@@ -1214,12 +1284,14 @@ contains
   end function read_seq
 
   recursive function read_map(text, pos, roots) result(v)
+    type(rd_state), pointer :: rdx
     character(len=*), intent(in) :: text
     integer, intent(inout) :: pos
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: v, k, val
     type(gc_value), allocatable :: r2(:)
 
+    rdx => rd_self()
     v = gca_empty(roots)
     do
        r2 = with(roots, v)
@@ -1233,15 +1305,15 @@ contains
           return
        end if
        k = read_form(text, pos, r2)
-       if (has_error) return
-       if (rc_nothing) then
-          rc_nothing = .false.
+       if (rdx%has_error) return
+       if (rdx%rc_nothing) then
+          rdx%rc_nothing = .false.
           cycle
        end if
-       if (rc_splice) then
-          rc_splice = .false.
+       if (rdx%rc_splice) then
+          rdx%rc_splice = .false.
           v = splice_pairs(v, k, r2)
-          if (has_error) return
+          if (rdx%has_error) return
           cycle
        end if
        call skip_ignorables(text, pos, r2)
@@ -1254,10 +1326,10 @@ contains
           return
        end if
        val = read_form(text, pos, with(r2, k))
-       if (has_error) return
-       if (rc_nothing .or. rc_splice) then
-          rc_nothing = .false.
-          rc_splice = .false.
+       if (rdx%has_error) return
+       if (rdx%rc_nothing .or. rdx%rc_splice) then
+          rdx%rc_nothing = .false.
+          rdx%rc_splice = .false.
           call fail("map literal has an odd number of forms")
           return
        end if
@@ -1272,6 +1344,7 @@ contains
   ! through an alias, the same resolver ::keywords use. Symbol keys
   ! qualify too; anything else is a key like any other.
   recursive function read_ns_map(text, pos, roots) result(v)
+    type(rd_state), pointer :: rdx
     character(len=*), intent(in) :: text
     integer, intent(inout) :: pos
     type(gc_value), intent(in) :: roots(:)
@@ -1280,6 +1353,7 @@ contains
     character(len=:), allocatable :: tok, ns
     integer :: start, base, i
 
+    rdx => rd_self()
     v = gc_nil()
     pos = pos + 1            ! past the #, now at the :
     start = pos
@@ -1311,7 +1385,7 @@ contains
     end if
     pos = pos + 1
     m = read_map(text, pos, roots)
-    if (has_error) return
+    if (rdx%has_error) return
 
     base = vs_enter(3)
     call vs_set(base + 1, m)
