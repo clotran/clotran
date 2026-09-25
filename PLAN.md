@@ -899,7 +899,14 @@ order-independent combining; `coarrays` would be fold across images.
    through MinGW's winpthreads, as libgomp does -- to be proven. Proved
    2026-09-24: plain Fortran drives pthreads through iso_c_binding, one
    source, under gfortran and flang both.
-2. Release the baton where no heap is touched: around Fortran package
+2. Release the baton where no heap is touched -- PACKAGE CALLS DONE
+   2026-09-25: a task calling a Fortran package parks as native, gives
+   the baton to its stepper without waiting, and runs the routine on its
+   own thread; eight 400x400 dgemm calls go from 186 ms one after
+   another to 31 ms as eight futures (32 ms through pmap), the same
+   answers. Still to do here: compiled numeric code, and
+   Runtime.availableProcessors answering the real count (it answers 1;
+   sysconf's constant differs between macOS and Linux). Originally: around Fortran package
    calls (`dgemm`, ChemSol), in `do concurrent` loops, and in the typed
    region of compiled numeric code (unboxed locals, raw array pointers).
    A slow path -- overflow, a wrong-typed argument, a hatch -- takes the

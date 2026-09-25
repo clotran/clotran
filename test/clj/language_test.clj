@@ -1001,6 +1001,15 @@
        (vec (for [i (range 2) j (range 2)]
               (reduce + (for [l (range 3)] (* (fb/aget dgA i l) (fb/aget dgB l j)))))))
 (check "dgemm C = A x B, the numbers" (vec (for [i (range 2) j (range 2)] (fb/aget dgC i j))) [58.0 64.0 139.0 154.0])
+;; the same Fortran from eight futures at once -- each gives up the baton
+;; for the call (tasks.inc, native_begin), so the routines run in
+;; parallel -- answers the same matrices as the calls one after another
+(check "dgemm from futures, in parallel, answers what it answers in turn"
+       (let [ms (vec (for [s (range 8)] (let [a (fortran/make-array "real8" 3 3)] (dotimes [i 3] (dotimes [j 3] (fortran/aset a i j (double (+ i (* 3 j) s))))) a)))
+             flat (fn [c] (vec (for [i (range 3) j (range 3)] (fortran/aget c i j))))]
+         (= (mapv #(flat (blas/dgemm % %)) ms)
+            (mapv (comp flat deref) (mapv (fn [m] (future (blas/dgemm m m))) ms))))
+       true)
 (check "dgemm refuses mismatched shapes"
        (try (blas/dgemm dgA dgA) (catch Throwable t :refused)) :refused)
 

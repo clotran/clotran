@@ -86,9 +86,10 @@
     type(gc_value), allocatable :: ct(:)
     integer :: n
     if (.not. allocated(came_from)) then
-       allocate(came_from(16), ctx_dying(16), ctx_task(16))
+       allocate(came_from(16), ctx_dying(16), ctx_task(16), ctx_native(16))
        came_from = 0
        ctx_dying = .false.
+       ctx_native = .false.
        ctx_task = gc_nil()
     end if
     if (id <= size(came_from)) return
@@ -103,6 +104,10 @@
     call move_alloc(ci, came_from)
     call move_alloc(cl, ctx_dying)
     call move_alloc(ct, ctx_task)
+    allocate(cl(n))
+    cl = .false.
+    cl(1:size(ctx_native)) = ctx_native
+    call move_alloc(cl, ctx_native)
   end subroutine ctx_arrays
 
   ! Give the baton to context `next`, and wait -- on this thread's own
@@ -129,6 +134,114 @@
     end do
     ok = th_lock_release(baton_lock)
   end subroutine hand_to
+
+  ! ---- native calls off the baton (PLAN.md step 11, stage 2) ----------
+  !
+  ! A task calling a Fortran package touches no heap while the routine
+  ! runs -- its arrays are buffers that never move, kept alive by the
+  ! task's own parked stack -- so it gives the baton away for the call:
+  ! parks as "native", hands the baton to its stepper WITHOUT waiting,
+  ! and runs the routine. Meanwhile clotran code goes on elsewhere, and
+  ! other tasks' routines run at the same time: (pmap solve molecules)
+  ! with ChemSol behind solve uses every core. When the routine returns
+  ! the task waits to be stepped again, and only then touches the heap.
+  ! The main context keeps the baton through its own native calls: no
+  ! one would be stepped meanwhile.
+
+  ! Give the baton to `next` and go on without waiting for it back.
+  subroutine give_baton(next)
+    integer, intent(in) :: next
+    logical :: ok
+    call gce_ctx_switch(next)
+    cur_task = ctx_task(next)
+    ok = th_lock_acquire(baton_lock)
+    baton_ctx = next
+    ok = th_cond_broadcast(baton_cond)
+    ok = th_lock_release(baton_lock)
+  end subroutine give_baton
+
+  ! Before a native call: a task parks as native and lets its stepper
+  ! go on. `me` is its context; `released` whether the baton was given.
+  subroutine native_begin(me, released)
+    integer, intent(out) :: me
+    logical, intent(out) :: released
+    logical :: ok
+    released = .false.
+    me = 0
+    if (.not. baton_up) return
+    if (gc_kind(cur_task) /= OBJ_TASK) return
+    me = gce_ctx_current()
+    call ctx_arrays(me)
+    ! parked with nothing to wait for but the call itself: runnable as
+    ! soon as it returns (a deadline already past; runnable_now)
+    call gc_set_slot(cur_task, 3, gc_nil())
+    call gc_set_slot(cur_task, 4, gc_int(0_gc_ip))
+    call gc_set_i1(cur_task, TASK_RUNNABLE)
+    ok = th_lock_acquire(baton_lock)
+    ctx_native(me) = .true.
+    natives_running = natives_running + 1
+    ok = th_lock_release(baton_lock)
+    call give_baton(came_from(me))
+    released = .true.
+  end subroutine native_begin
+
+  ! After it: say so, wake whoever waits for a native call to end, and
+  ! wait to be stepped -- the stepper switches the globals back to `me`.
+  subroutine native_end(me)
+    integer, intent(in) :: me
+    logical :: ok
+    ok = th_lock_acquire(baton_lock)
+    ctx_native(me) = .false.
+    natives_running = natives_running - 1
+    native_gen = native_gen + 1
+    ok = th_cond_broadcast(baton_cond)
+    do while (baton_ctx /= me)
+       if (ctx_dying(me)) then
+          ok = th_lock_release(baton_lock)
+          call th_exit()
+       end if
+       ok = th_cond_wait(baton_cond, baton_lock)
+    end do
+    ok = th_lock_release(baton_lock)
+    call clear_wait()
+  end subroutine native_end
+
+  ! Whether context `id` is inside a native call now.
+  logical function in_native(id)
+    integer, intent(in) :: id
+    logical :: ok
+    in_native = .false.
+    if (.not. baton_up) return
+    if (id < 1 .or. .not. allocated(ctx_native)) return
+    if (id > size(ctx_native)) return
+    ok = th_lock_acquire(baton_lock)
+    in_native = ctx_native(id)
+    ok = th_lock_release(baton_lock)
+  end function in_native
+
+  ! The generation of finished native calls, and how many still run.
+  subroutine native_state(gen, running)
+    integer, intent(out) :: gen, running
+    logical :: ok
+    gen = 0
+    running = 0
+    if (.not. baton_up) return
+    ok = th_lock_acquire(baton_lock)
+    gen = native_gen
+    running = natives_running
+    ok = th_lock_release(baton_lock)
+  end subroutine native_state
+
+  ! Wait until a native call that was running at generation `gen` ends.
+  subroutine wait_native(gen)
+    integer, intent(in) :: gen
+    logical :: ok
+    ok = th_lock_acquire(baton_lock)
+    do while (native_gen == gen .and. natives_running > 0)
+       ok = th_cond_wait(baton_cond, baton_lock)
+    end do
+    ok = th_lock_release(baton_lock)
+  end subroutine wait_native
 
   ! A task's thread: wait for the baton, run the task's body to its end,
   ! give its context back and the baton to its stepper, and finish.
@@ -369,6 +482,7 @@
     yes = .false.
     if (gc_kind(x) /= OBJ_TASK) return
     if (gc_i1(x) /= TASK_RUNNABLE) return
+    if (in_native(gc_i2(x))) return
     if (satisfied(gc_slot(x, 3))) then
        yes = .true.
        return
@@ -463,6 +577,7 @@
     integer(gc_ip) :: deadline
     type(gc_value) :: t, dl
     logical :: sleeping
+    integer :: ngen, nrun
     ready = satisfied(target)
     if (ready) then
        call clear_wait()
@@ -500,10 +615,14 @@
        return
     end if
     do
+       call native_state(ngen, nrun)
        t = pick_runnable(target, sleeping)
        if (gc_kind(t) == OBJ_TASK) then
           call task_step(t)
           if (has_error) return
+       else if (nrun > 0) then
+          ! tasks are inside native calls: one of them ending is progress
+          call wait_native(ngen)
        else if (deadline < 0 .and. .not. sleeping) then
           call fail("deadlock: nothing left to run can make " // describe_wait(target) // " ready")
           return

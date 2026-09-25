@@ -359,6 +359,8 @@ module Eval
   integer, allocatable, save :: came_from(:)
   logical, allocatable, save :: ctx_dying(:)
   type(gc_value), allocatable, save :: ctx_task(:)
+  logical, allocatable, save :: ctx_native(:)
+  integer, save :: natives_running = 0, native_gen = 0
   integer(c_size_t), parameter :: TASK_STACK_BYTES = 64_c_size_t * 1024_c_size_t * 1024_c_size_t
   logical, save :: task_trace = .false., task_trace_read = .false.   ! CLOTRAN_TASK_TRACE=1: the scheduler's decisions, on stderr
   logical, save :: rt_loaded = .false.   ! clotran.rt, once (rt_call)
@@ -12454,7 +12456,8 @@ contains
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out
     type(gc_value) :: spec, av, tv, res, k, rt
-    integer :: hi, nspec, ncall, nargv, slot, dslot, i, j, r, d, nout, base
+    integer :: hi, nspec, ncall, nargv, slot, dslot, i, j, r, d, nout, base, nme
+    logical :: nrel
     integer(c_int), allocatable, target :: ti(:), td(:)
     integer(c_long), allocatable, target :: tl(:)
     real(c_double), allocatable, target :: tr(:)
@@ -12626,7 +12629,10 @@ contains
           call fail("call-package*: the package has no " // sym)
           exit once
        end if
+       ! off the baton while the routine runs, if this is a task (tasks.inc)
+       call native_begin(nme, nrel)
        call dl_call_shim(fp, argv)
+       if (nrel) call native_end(nme)
        ! the results
        res = gca_empty([roots, vs_get(base + 1)])
        call vs_set(base + 4, res)
