@@ -393,6 +393,7 @@ module Eval
 
   public :: gce_eval, gce_base_env, gce_has_error, gce_error, gce_clear_error, gce_set_spec_check
   public :: gce_main_bindings, gce_install_compiled, gce_raise_arity_named
+  public :: gce_native_begin, gce_native_end
   public :: gce_analyze, gce_trace
   public :: gce_ctx_new, gce_ctx_switch, gce_ctx_current
   public :: gce_repl

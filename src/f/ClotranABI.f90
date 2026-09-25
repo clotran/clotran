@@ -69,6 +69,7 @@ module ClotranABI
   public :: clotran_eval_node, clotran_pool_register, clotran_pool_get
   public :: clotran_load_compiled, clotran_array_view
   public :: clotran_rest_args, clotran_arity_error
+  public :: clotran_native_begin, clotran_reacquire
 
 contains
 
@@ -476,6 +477,31 @@ contains
        st = 0
     end if
   end function clotran_eval_node
+
+  ! --- off the baton -------------------------------------------------
+  !
+  ! Compiled code gives the baton up around a loop that works only on
+  ! Fortran numbers and array buffers (clotran.compiler, release-around),
+  ! so a task's numeric loop runs while clotran code goes on elsewhere
+  ! (PLAN.md step 11, stage 2). Every runtime call inside such a loop is
+  ! preceded by clotran_reacquire, so none reaches the heap without it.
+  ! Outside a task nothing is given up: rel stays 0.
+  subroutine clotran_native_begin(me, rel) bind(C, name="clotran_native_begin")
+    integer(c_int), intent(out) :: me, rel
+    integer :: m
+    logical :: r
+    call gce_native_begin(m, r)
+    me = int(m, c_int)
+    rel = 0
+    if (r) rel = 1
+  end subroutine clotran_native_begin
+
+  subroutine clotran_reacquire(me, rel) bind(C, name="clotran_reacquire")
+    integer(c_int), value :: me
+    integer(c_int), intent(inout) :: rel
+    if (rel /= 0) call gce_native_end(int(me))
+    rel = 0
+  end subroutine clotran_reacquire
 
   ! --- arities -------------------------------------------------------
   !

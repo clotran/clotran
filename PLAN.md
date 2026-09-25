@@ -904,7 +904,13 @@ order-independent combining; `coarrays` would be fold across images.
    the baton to its stepper without waiting, and runs the routine on its
    own thread; eight 400x400 dgemm calls go from 186 ms one after
    another to 31 ms as eight futures (32 ms through pmap), the same
-   answers. Still to do here: compiled numeric code, and
+   answers. COMPILED NUMERIC CODE DONE 2026-09-25: a loop whose every
+   runtime call is a statement inside a branch -- a slow path, the boxing
+   of its result -- gives the baton up while it runs, each runtime call
+   guarded by clotran_reacquire; the compiler also learned Math/ as
+   Fortran intrinsics, without which such loops called back every time
+   round. A compiled numeric loop over 2M elements in eight futures goes
+   from 90 ms in turn to 12 ms. Still to do here:
    Runtime.availableProcessors answering the real count (it answers 1;
    sysconf's constant differs between macOS and Linux). Originally: around Fortran package
    calls (`dgemm`, ChemSol), in `do concurrent` loops, and in the typed

@@ -206,6 +206,19 @@
     call clear_wait()
   end subroutine native_end
 
+  ! The native section for code outside this module -- compiled code,
+  ! through ClotranABI.
+  subroutine gce_native_begin(me, released)
+    integer, intent(out) :: me
+    logical, intent(out) :: released
+    call native_begin(me, released)
+  end subroutine gce_native_begin
+
+  subroutine gce_native_end(me)
+    integer, intent(in) :: me
+    call native_end(me)
+  end subroutine gce_native_end
+
   ! Whether context `id` is inside a native call now.
   logical function in_native(id)
     integer, intent(in) :: id

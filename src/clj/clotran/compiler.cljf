@@ -133,6 +133,15 @@
        import :: c_int
        integer(c_int), value :: dst, h, i
      end subroutine clotran_pool_get
+     subroutine clotran_native_begin(me, rel) bind(C, name=\"clotran_native_begin\")
+       import :: c_int
+       integer(c_int), intent(out) :: me, rel
+     end subroutine clotran_native_begin
+     subroutine clotran_reacquire(me, rel) bind(C, name=\"clotran_reacquire\")
+       import :: c_int
+       integer(c_int), value :: me
+       integer(c_int), intent(inout) :: rel
+     end subroutine clotran_reacquire
      subroutine clotran_rest_args(dst, argbase, from, nargs) bind(C, name=\"clotran_rest_args\")
        import :: c_int
        integer(c_int), value :: dst, argbase, from, nargs
@@ -273,7 +282,22 @@ end module clotran_rt_decl
     < :cmp, > :cmp, <= :cmp, >= :cmp, == :cmp, = :eq,
     zero? :pred, pos? :pred, neg? :pred,
     aget :aget, aset :aset, alength :alength,
-    int :to-int, long :to-long, double :to-double})
+    int :to-int, long :to-long, double :to-double,
+    ;; Math/ members, as analysis folds them: a double in, a double out
+    clotran-math-sqrt :math1, clotran-math-sin :math1, clotran-math-cos :math1,
+    clotran-math-tan :math1, clotran-math-exp :math1, clotran-math-log :math1,
+    clotran-math-log10 :math1, clotran-math-asin :math1, clotran-math-acos :math1,
+    clotran-math-atan :math1, clotran-math-sinh :math1, clotran-math-cosh :math1,
+    clotran-math-tanh :math1, clotran-math-pow :math2, clotran-math-atan2 :math2})
+
+(def ^:private fortran-math
+  "The Fortran intrinsic for each Math/ member: the same libm answers,
+  bit for bit (scripts/pure-check compares them with the JVM)."
+  '{clotran-math-sqrt "sqrt", clotran-math-sin "sin", clotran-math-cos "cos",
+    clotran-math-tan "tan", clotran-math-exp "exp", clotran-math-log "log",
+    clotran-math-log10 "log10", clotran-math-asin "asin", clotran-math-acos "acos",
+    clotran-math-atan "atan", clotran-math-sinh "sinh", clotran-math-cosh "cosh",
+    clotran-math-tanh "tanh", clotran-math-atan2 "atan2"})
 
 (def ^:private fortran-op
   '{+ "+", - "-", * "*", / "/", < "<", > ">", <= "<=", >= ">=", == "==", = "=="})
@@ -348,6 +372,8 @@ end module clotran_rt_decl
       :alength (if (and (= n 1) (#{:doubles :longs} (ts 0))) :long :any)
       (:to-int :to-long) (if (and (= n 1) (num? (ts 0))) :long :any)
       :to-double (if (and (= n 1) (num? (ts 0))) :double :any)
+      :math1 (if (and (= n 1) (num? (ts 0))) :double :any)
+      :math2 (if (and (= n 2) (every? num? ts)) :double :any)
       :any)))
 
 (defn- bind-types
@@ -553,6 +579,17 @@ end module clotran_rt_decl
       :to-double
       (let [[c a st] (gp (args 0) (ats 0) st)]
         [c (coerce a (ats 0) :double) st])
+
+      :math1
+      (let [[c a st] (gp (args 0) :double st)]
+        [c (str (fortran-math sym) "(" a ")") st])
+
+      :math2
+      (let [[c1 a st] (gp (args 0) :double st)
+            [c2 b st] (gp (args 1) :double st)]
+        [(concat c1 c2)
+         (if (= sym 'clotran-math-pow) (str "(" a " ** " b ")") (str (fortran-math sym) "(" a ", " b ")"))
+         st])
 
       (:to-int :to-long)
       (let [at (ats 0)
@@ -832,6 +869,32 @@ end module clotran_rt_decl
                  st]))
             [[] st] slots)))
 
+(defn- release-around
+  "A loop that gives the baton up while it runs (PLAN.md step 11, stage
+  2), or nil when it cannot. It can when every runtime call in it is a
+  plain statement: each gets a guard that takes the baton back first, so
+  nothing reaches the heap without it -- a slow path, the boxing of the
+  result -- and the loop's own arithmetic and array reads run while
+  clotran code goes on elsewhere. A runtime call inside a condition has
+  no room for a guard, and the loop keeps the baton."
+  [lines]
+  (let [runtime? #(str/includes? % "clotran_")
+        ;; a statement -- an assignment or a call -- has room for a guard
+        ;; in front of it; an if, else or do line does not
+        plain? #(re-find #"^\s*(call |\w+ = )" %)
+        ;; the body of the do is indented by 3; a runtime call there runs
+        ;; every time round, and giving the baton up for it is all cost
+        top-level? #(= 3 (count (re-find #"^ *" %)))]
+    (when (and (some runtime? lines) (every? #(or (not (runtime? %)) (plain? %)) lines)
+               (not-any? #(and (runtime? %) (top-level? %)) lines))
+      (concat ["call clotran_native_begin(nme, nrel)"]
+              (mapcat (fn [l]
+                        (if (runtime? l)
+                          [(str (re-find #"^\s*" l) "if (nrel /= 0) call clotran_reacquire(nme, nrel)") l]
+                          [l]))
+                      lines)
+              ["if (nrel /= 0) call clotran_reacquire(nme, nrel)"]))))
+
 (defn- gen
   "One node, as a VALUE. Answers [code slot state]: the statements that
   compute it, the slot its value lands in, and the state after."
@@ -909,7 +972,9 @@ end module clotran_rt_decl
           ;; implementation. A recur rebinds the loop's slots and raises
           ;; its flag; `recur` is always in TAIL position, so whatever
           ;; statements follow it in its branch are never read.
-          :loop (let [kids (:children nd) n (:i2 nd) base (:p1 nd)
+          :loop (let [outermost? (not (:releasing st))
+                      st (assoc st :releasing true)
+                      kids (:children nd) n (:i2 nd) base (:p1 nd)
                       outer-loop (:loop st)
                       outer-env (:env st)
                       lenv (loop-env nd (:env st))
@@ -921,11 +986,14 @@ end module clotran_rt_decl
                       flag (str "recur" (count (:flags st)))
                       st (update st :flags conj flag)
                       [bc bs st] (gen (nth kids n) (assoc st :loop flag))]
-                  [(concat ic hc
-                           ["do" (str "   " flag " = 0")]
-                           (map #(str "   " %) bc)
-                           [(str "   if (" flag " == 0) exit") "end do"])
-                   bs (assoc st :loop outer-loop :env outer-env :hoisted outer-hoisted)])
+                  (let [loop-lines (concat ["do" (str "   " flag " = 0")]
+                                           (map #(str "   " %) bc)
+                                           [(str "   if (" flag " == 0) exit") "end do"])
+                        released (when outermost? (release-around loop-lines))
+                        st (cond-> (assoc st :loop outer-loop :env outer-env :hoisted outer-hoisted
+                                          :releasing (not outermost?))
+                             released (-> (declare-var "nme" :tag) (declare-var "nrel" :tag)))]
+                    [(concat ic hc (or released loop-lines)) bs st]))
 
           ;; RECUR: every argument is computed BEFORE any slot is
           ;; rebound -- (recur (+ i 1) (+ acc i)) reads the old i twice
