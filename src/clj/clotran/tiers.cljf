@@ -266,7 +266,7 @@ Consumers that fuse: reduce, transduce, run!, every?, some, not-any?, count, int
                          "if the keys are fixed, a defrecord of numbers is a Fortran derived type and a field read is pure")
                 (walk-all args ctx))
 
-          (and b (numeric-builtins b))
+          (and b (or (numeric-builtins b) (str/starts-with? b "clotran-math-")))
           (walk-all args (assoc ctx :consuming false))
 
           ;; a builtin that IS a core function -- core.clj's :inline turns

@@ -1,0 +1,40 @@
+(ns pure-sample
+  "Functions scripts/pure-check lowers to pure Fortran and runs against
+  the interpreter. The cases are in scripts/pure-check.")
+
+(defn total [a]
+  (let [n (alength a)]
+    (loop [i 0 s 0.0] (if (< i n) (recur (inc i) (+ s (aget a i))) s))))
+
+(defn mean [a] (/ (total a) (alength a)))
+
+(defn sum-to [n] (loop [i 0 acc 0] (if (< i n) (recur (inc i) (+ acc i)) acc)))
+
+(defn fact [n] (loop [i 1 acc 1] (if (<= i n) (recur (inc i) (* acc i)) acc)))
+
+(defn hyp [x y] (Math/sqrt (+ (* x x) (* y y))))
+
+(defn clamp [x lo hi] (max lo (min hi x)))
+
+(defn sign-of [x] (cond (pos? x) 1 (neg? x) -1 :else 0))
+
+(defn ratio [a b] (quot a b))
+
+(defn floor-mod [a b] (mod a b))
+
+(defn trunc-rem [a b] (rem a b))
+
+(defn nth-or [a i] (aget a i))
+
+(defn to-long [x] (long x))
+
+(defn scale! [a k]
+  (let [n (alength a)]
+    (loop [i 0] (if (< i n) (do (aset a i (* k (aget a i))) (recur (inc i))) n))))
+
+(defn dist2 [a b]
+  (let [n (alength a)]
+    (loop [i 0 s 0.0]
+      (if (< i n)
+        (let [d (- (aget a i) (aget b i))] (recur (inc i) (+ s (* d d))))
+        s))))

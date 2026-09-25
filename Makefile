@@ -287,6 +287,8 @@ test: $(test-bins) clotran-bin $(B)/libtestpkg.$(SOEXT) $(B)/libsamplelib.$(SOEX
 	scripts/run-library-tests
 	@echo "--- oracle (the same forms through clj and clotran) ---"
 	scripts/oracle
+	@echo "--- pure Fortran (tier A through gfortran and flang, against clj) ---"
+	scripts/pure-check
 
 # What runs before every commit. Ends on the default compiler so the
 # tree is left with the build you actually use.

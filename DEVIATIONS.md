@@ -1533,6 +1533,19 @@ with compiled core in place, for this reason.
 at a time -- so a blocked task's Fortran frames stay where they are.
 That is the threads plan (PLAN.md), and it has to work on Windows.
 
+## 50. Pure Fortran writes a double as Fortran does
+
+Tier-A code compiled to pure Fortran (`clotran.purefort`, PLAN.md step
+13) follows Fortran's conventions for text, not Java's: a double inside
+an error message is written with the `ES` edit descriptor,
+`1.0000000000000000E+030`, where the JVM and clotran's interpreter write
+`1.0E30`. The value is the same; `scripts/pure-check` compares such a
+number by value. `ES` rather than list-directed or `G0` output because
+the standard fixes its layout, so gfortran and flang write the same text.
+
+A decision, not an accident: pure Fortran is meant to read as Fortran
+to the Fortran programs that use it. **Removal** is not planned.
+
 ## 51. Division by zero says "Divide by zero" where the JVM's primitive path says "/ by zero"
 
 On the JVM the message depends on static types: `Numbers.quotient` of

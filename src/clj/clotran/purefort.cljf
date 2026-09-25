@@ -1,0 +1,583 @@
+(ns clotran.purefort
+  "Tier A to pure Fortran (PLAN.md step 13): a namespace's tier-A
+  functions as one ordinary Fortran module, with no clotran runtime --
+  no collector, no frames, no constant pool. Any Fortran program can
+  `use` it.
+
+  TYPES. Pure Fortran needs a static type for every argument. A hinted
+  parameter has one; otherwise its uses propose candidates -- an array
+  for aget/aset/alength, a number otherwise -- and one version is
+  emitted per combination, double and long, under one GENERIC name, so
+  Fortran picks by argument type at compile time. A version that does
+  not type (the division of two longs is a Ratio in Clojure) is left
+  out, and says why.
+
+  SEMANTICS are Clojure's, checked against the interpreter by
+  scripts/pure-check. What Clojure throws, a pure program cannot catch:
+  long overflow, a zero divisor, an index out of bounds and a cast
+  out of range stop the program with Clojure's own message, as an
+  uncaught exception ends a Clojure program."
+  (:require [clojure.string :as str]
+            [clotran.loader :as loader]
+            [clotran.tiers :as tiers]))
+
+;;; ---- the support module ----------------------------------------------
+
+(def support-module
+  "The few checked operations every pure module shares. Plain Fortran."
+  "module clotran_pure
+  use iso_fortran_env, only: int64, real64, error_unit
+  implicit none
+  integer, parameter :: k16 = selected_int_kind(38)
+contains
+  subroutine cl_fail(msg)
+    character(len=*), intent(in) :: msg
+    write(error_unit, '(a)') msg
+    error stop 1
+  end subroutine cl_fail
+  ! Clojure's long arithmetic throws on overflow (Numbers.add, multiply)
+  function cl_add(a, b) result(r)
+    integer(int64), intent(in) :: a, b
+    integer(int64) :: r
+    if ((b > 0 .and. a > huge(a) - b) .or. (b < 0 .and. a < -huge(a) - 1_int64 - b)) &
+         call cl_fail('long overflow')
+    r = a + b
+  end function cl_add
+  function cl_sub(a, b) result(r)
+    integer(int64), intent(in) :: a, b
+    integer(int64) :: r
+    if ((b < 0 .and. a > huge(a) + b) .or. (b > 0 .and. a < -huge(a) - 1_int64 + b)) &
+         call cl_fail('long overflow')
+    r = a - b
+  end function cl_sub
+  function cl_mul(a, b) result(r)
+    integer(int64), intent(in) :: a, b
+    integer(int64) :: r
+    integer(k16) :: p
+    p = int(a, k16) * int(b, k16)
+    if (p > int(huge(a), k16) .or. p < -int(huge(a), k16) - 1) call cl_fail('long overflow')
+    r = int(p, int64)
+  end function cl_mul
+  function cl_neg(a) result(r)
+    integer(int64), intent(in) :: a
+    integer(int64) :: r
+    if (a == -huge(a) - 1_int64) call cl_fail('long overflow')
+    r = -a
+  end function cl_neg
+  function cl_quot(a, b) result(r)
+    integer(int64), intent(in) :: a, b
+    integer(int64) :: r
+    if (b == 0) call cl_fail('Divide by zero')
+    if (a == -huge(a) - 1_int64 .and. b == -1_int64) then
+       r = a
+    else
+       r = a / b
+    end if
+  end function cl_quot
+  function cl_rem(a, b) result(r)
+    integer(int64), intent(in) :: a, b
+    integer(int64) :: r
+    if (b == 0) call cl_fail('Divide by zero')
+    if (b == -1_int64) then
+       r = 0
+    else
+       r = mod(a, b)
+    end if
+  end function cl_rem
+  ! clojure.core/mod: the remainder takes the divisor's sign
+  function cl_mod(a, b) result(r)
+    integer(int64), intent(in) :: a, b
+    integer(int64) :: r
+    r = cl_rem(a, b)
+    if (r /= 0 .and. ((r < 0) .neqv. (b < 0))) r = r + b
+  end function cl_mod
+  ! RT.longCast of a double: in range, truncated toward zero
+  function cl_long_of(x) result(r)
+    real(real64), intent(in) :: x
+    integer(int64) :: r
+    character(len=32) :: buf
+    if (.not. (x >= -9.223372036854775808d18 .and. x < 9.223372036854775808d18)) then
+       ! Fortran's own ES form, the same text from every compiler; the JVM
+       ! writes 1.0E30 (DEVIATIONS 50)
+       write(buf, '(es24.16e3)') x
+       call cl_fail('Value out of range for long: ' // trim(adjustl(buf)))
+    end if
+    r = int(x, int64)
+  end function cl_long_of
+  subroutine cl_bounds(i, n)
+    integer(int64), intent(in) :: i, n
+    character(len=24) :: bi, bn
+    if (i < 0 .or. i >= n) then
+       write(bi, '(i0)') i
+       write(bn, '(i0)') n
+       call cl_fail('Index ' // trim(bi) // ' out of bounds for length ' // trim(bn))
+    end if
+  end subroutine cl_bounds
+end module clotran_pure
+")
+
+;;; ---- types -----------------------------------------------------------
+
+(def ^:private fort-type
+  {:long "integer(int64)" :double "real(real64)" :bool "logical"
+   :doubles "real(real64)" :longs "integer(int64)"})
+
+(def ^:private suffix {:long "l" :double "d" :doubles "vd" :longs "vl"})
+
+(defn- num? [t] (#{:long :double} t))
+
+(defn- decline [why] (throw (ex-info why {::decline why})))
+
+(defn- fort-ident [s] (str/lower-case (str/replace (str s) #"[^A-Za-z0-9]" "_")))
+
+;;; ---- emitting: one version of one function ---------------------------
+;;
+;; emit answers [lines expr type]: the statements that compute a value,
+;; a Fortran expression for it, and its type. :none is a recur's, which
+;; produces nothing. Temporaries and loop labels come from a counter in
+;; the version's state atom, which also collects declarations.
+
+(defn- fresh! [st prefix t]
+  (let [n (:n (swap! st update :n inc))
+        v (str prefix n)]
+    (swap! st update :decls conj [v t])
+    v))
+
+(defn fort-double
+  "A double as an exact Fortran double-precision literal: the shortest
+  decimal that reads back as the same double, with its exponent -- or d0
+  -- marking it double precision. 1.0E200 is 1.0d200, not 1.0E200d0."
+  [v]
+  (let [s (pr-str v)]
+    (if (str/includes? s "E") (str/replace s "E" "d") (str s "d0"))))
+
+(defn- lit [v]
+  (cond
+    (true? v) [[] ".true." :bool]
+    (false? v) [[] ".false." :bool]
+    (and (int? v) (= v Long/MIN_VALUE)) [[] "(-huge(0_int64) - 1_int64)" :long]
+    (int? v) [[] (str v "_int64") :long]
+    (and (double? v) (NaN? v)) (decline "a NaN literal")
+    (and (double? v) (infinite? v)) (decline "an infinite literal")
+    (double? v) [[] (fort-double v) :double]
+    :else (decline (str "the constant " (pr-str v) " is not a number or a boolean"))))
+
+(declare emit)
+
+(defn- as-double [e t] (if (= t :long) (str "real(" e ", real64)") e))
+
+(defn- emit-args [nds env st]
+  (reduce (fn [[ls es ts] nd]
+            (let [[l e t] (emit nd env st)]
+              (when (= t :none) (decline "recur is not in tail position"))
+              [(into ls l) (conj es e) (conj ts t)]))
+          [[] [] []] nds))
+
+(defn- arith2
+  "Two numbers through + - * and friends: longs through the checked
+  helpers, anything with a double as doubles."
+  [op a ta b tb]
+  (if (and (= ta :long) (= tb :long))
+    [(str (case op :+ "cl_add" :- "cl_sub" :* "cl_mul") "(" a ", " b ")") :long]
+    [(str "(" (as-double a ta) " " (name op) " " (as-double b tb) ")") :double]))
+
+(def ^:private math1
+  {"sqrt" "sqrt" "sin" "sin" "cos" "cos" "tan" "tan" "asin" "asin" "acos" "acos" "atan" "atan"
+   "exp" "exp" "log" "log" "log10" "log10" "sinh" "sinh" "cosh" "cosh" "tanh" "tanh"
+   "floor" "real(floor(~, int64), real64)" "ceil" "real(ceiling(~, int64), real64)"})
+
+(defn- op-name
+  "What a call head stands for, as a symbol: a clojure.core function, a
+  Math/ member (math/sqrt), a same-file function (by its ns/name), or a
+  folded builtin by its name."
+  [head]
+  (case (:op head)
+    :var (let [s (#'tiers/var-sym (:p1 head))]
+           (if (= "clojure.core" (namespace s)) (symbol (name s)) s))
+    :const (when-let [b (some-> (:builtin head) str)]
+             (if (str/starts-with? b "clotran-math-")
+               (symbol "math" (subs b (count "clotran-math-")))
+               (symbol b)))
+    nil))
+
+(defn- chain-compare
+  "(< a b c) is (and (< a b) (< b c)), each operand computed once."
+  [fop es ts st]
+  (let [vs (mapv (fn [e t] (let [v (fresh! st "c" t)] [v (str v " = " e)])) es ts)]
+    [(mapv second vs)
+     (str "(" (str/join " .and. "
+                        (for [[[x tx] [y ty]] (partition 2 1 (map vector (map first vs) ts))]
+                          (if (and (= tx :long) (= ty :long))
+                            (str x " " fop " " y)
+                            (str (as-double x tx) " " fop " " (as-double y ty)))))
+          ")")
+     :bool]))
+
+(defn- emit-call [nd env st]
+  (let [[head & args] (:children nd)
+        op (op-name head)
+        [ls es ts] (emit-args args env st)
+        n (count args)
+        done (fn [e t] [ls e t])]
+    (cond
+      ;; an array hint's checkcast: the version's type IS the check
+      (= op 'clotran-array-cast) (done (first es) (first ts))
+
+      (#{'+ '- '*} op)
+      (let [kw (keyword (name op))]
+        (when-not (every? num? ts) (decline (str op " of something that is not a number")))
+        (cond
+          (= n 0) (done (if (= op '*) "1_int64" "0_int64") :long)
+          (and (= n 1) (= op '-)) (if (= (first ts) :long)
+                                    (done (str "cl_neg(" (first es) ")") :long)
+                                    (done (str "(-" (first es) ")") :double))
+          (= n 1) (done (first es) (first ts))
+          :else (let [[e t] (reduce (fn [[a ta] [b tb]] (arith2 kw a ta b tb))
+                                    [(first es) (first ts)] (map vector (rest es) (rest ts)))]
+                  (done e t))))
+
+      (= op '/)
+      (do (when-not (every? num? ts) (decline "/ of something that is not a number"))
+          (when (every? #{:long} ts)
+            (decline "(/ long long) is a Ratio in Clojure: use quot, or make one side a double"))
+          (if (= n 1)
+            (done (str "(1.0d0 / " (as-double (first es) (first ts)) ")") :double)
+            (done (reduce (fn [a [b tb]] (str "(" a " / " (as-double b tb) ")"))
+                          (as-double (first es) (first ts)) (map vector (rest es) (rest ts)))
+                  :double)))
+
+      (#{'inc 'dec} op)
+      (let [t (first ts) e (first es)]
+        (case t
+          :long (done (str (if (= op 'inc) "cl_add(" "cl_sub(") e ", 1_int64)") :long)
+          :double (done (str "(" e (if (= op 'inc) " + " " - ") "1.0d0)") :double)
+          (decline (str op " of something that is not a number"))))
+
+      (#{'quot 'rem 'mod} op)
+      (if (every? #{:long} ts)
+        (done (str (case op quot "cl_quot(" rem "cl_rem(" mod "cl_mod(") (first es) ", " (second es) ")") :long)
+        (decline (str op " of doubles is not lowered yet")))
+
+      (#{'max 'min} op)
+      (if (apply = ts)
+        (done (str (name op) "(" (str/join ", " es) ")") (first ts))
+        (decline (str op " of a long and a double: Clojure answers whichever wins, with its own type")))
+
+      (#{'< '> '<= '>= '==} op)
+      (do (when-not (every? num? ts) (decline (str op " of something that is not a number")))
+          (let [fop (if (= op '==) "==" (name op))
+                [cl e t] (chain-compare fop es ts st)]
+            [(into ls cl) e t]))
+
+      (#{'= 'not=} op)
+      (do (when-not (= 2 n) (decline (str op " of other than two values")))
+          (let [[ta tb] ts
+                eq (cond
+                     ;; Clojure's = on numbers: Long and Double are never equal
+                     (and (num? ta) (num? tb) (not= ta tb)) ".false."
+                     (and (num? ta) (= ta tb)) (str "(" (first es) " == " (second es) ")")
+                     (and (= ta :bool) (= tb :bool)) (str "(" (first es) " .eqv. " (second es) ")")
+                     :else (decline (str op " of " (name ta) " and " (name tb))))]
+            (done (if (= op 'not=) (str "(.not. " eq ")") eq) :bool)))
+
+      (#{'zero? 'pos? 'neg?} op)
+      (let [t (first ts) e (first es)]
+        (when-not (num? t) (decline (str op " of something that is not a number")))
+        (done (str "(" e (case op zero? " == " pos? " > " neg? " < ") (if (= t :long) "0_int64" "0.0d0") ")") :bool))
+
+      (#{'even? 'odd?} op)
+      (if (= (first ts) :long)
+        (done (str "(mod(" (first es) ", 2_int64) " (if (= op 'even?) "==" "/=") " 0_int64)") :bool)
+        (decline (str op " of a double throws in Clojure")))
+
+      (= op 'not)
+      (if (= (first ts) :bool)
+        (done (str "(.not. " (first es) ")") :bool)
+        ;; (not x) of a number is false: a number is truthy
+        (done ".false." :bool))
+
+      (#{'double 'num} op)
+      (if (num? (first ts)) (done (as-double (first es) (first ts)) :double)
+          (decline (str op " of something that is not a number")))
+
+      (#{'long 'int 'unchecked-long} op)
+      (case (first ts)
+        :long (done (first es) :long)
+        :double (done (str "cl_long_of(" (first es) ")") :long)
+        (decline (str op " of something that is not a number")))
+
+      (#{'abs 'math/abs} op)
+      (if (num? (first ts)) (done (str "abs(" (first es) ")") (first ts))
+          (decline "abs of something that is not a number"))
+
+      (and (= "math" (namespace op)) (math1 (name op)))
+      (let [f (math1 (name op)) x (as-double (first es) (first ts))]
+        (done (if (str/includes? f "~") (str/replace f "~" x) (str f "(" x ")")) :double))
+
+      (= op 'math/pow)
+      (done (str "(" (as-double (first es) (first ts)) " ** " (as-double (second es) (second ts)) ")") :double)
+
+      (= op 'math/atan2)
+      (done (str "atan2(" (as-double (first es) (first ts)) ", " (as-double (second es) (second ts)) ")") :double)
+
+      (= op 'alength)
+      (if (#{:doubles :longs} (first ts))
+        (done (str "size(" (first es) ", kind=int64)") :long)
+        (decline "alength of something that is not an array"))
+
+      (= op 'aget)
+      (let [[ta ti] ts [a i] es]
+        (when-not (and (#{:doubles :longs} ta) (= ti :long)) (decline "aget of other than an array and a long index"))
+        (let [iv (fresh! st "i" :long)]
+          [(conj (into ls [(str iv " = " i)]) (str "call cl_bounds(" iv ", size(" a ", kind=int64))"))
+           (str a "(" iv " + 1)") (if (= ta :doubles) :double :long)]))
+
+      (= op 'aset)
+      (let [[ta ti tv] ts [a i v] es]
+        (when-not (and (#{:doubles :longs} ta) (= ti :long)) (decline "aset of other than an array and a long index"))
+        (let [et (if (= ta :doubles) :double :long)
+              _ (when-not (or (= tv et) (and (= et :double) (= tv :long))) (decline "aset of a value of the wrong type"))
+              iv (fresh! st "i" :long) vv (fresh! st "v" et)]
+          (swap! st update :written conj a)
+          [(into ls [(str iv " = " i) (str "call cl_bounds(" iv ", size(" a ", kind=int64))")
+                     (str vv " = " (if (= et :double) (as-double v tv) v))
+                     (str a "(" iv " + 1) = " vv)])
+           vv et]))
+
+      ;; another tier-A function of this file, by its generic name
+      (and (symbol? op) (namespace op) (get-in @st [:sigs op]))
+      (let [sig (get-in @st [:sigs op])
+            rt (get sig ts)]
+        (when-not rt (decline (str "`" op "` has no version for " (pr-str (mapv name ts)))))
+        (done (str (fort-ident (name op)) "(" (str/join ", " es) ")") rt))
+
+      :else (decline (str "calls `" (or op (:op head)) "`, which is not lowered yet")))))
+
+(defn- emit-tail
+  "A node in tail position: its value handed to `finish` (a function
+  from an expression to the statements that deliver it), a recur jumping
+  to its loop."
+  [nd env st finish]
+  (case (:op nd)
+    :if (let [[t th el] (:children nd)]
+          (if (= :const (:op t))
+            ;; a constant test -- cond's :else -- picks its branch here
+            (if (or (nil? (:p1 t)) (false? (:p1 t)))
+              (if el (emit-tail el env st finish) (decline "an if with no else answers nil"))
+              (emit-tail th env st finish))
+          (let [[tl te tt] (emit t env st)]
+          (if (not= tt :bool)
+            ;; a number is truthy, so only the then branch can run
+            (into tl (emit-tail th env st finish))
+            (into tl (concat [(str "if (" te ") then")]
+                             (map #(str "   " %) (emit-tail th env st finish))
+                             ["else"]
+                             (map #(str "   " %) (if el (emit-tail el env st finish)
+                                                      (decline "an if with no else answers nil")))
+                             ["end if"]))))))
+    :do (let [kids (:children nd)]
+          (if (empty? kids)
+            (decline "an empty do answers nil")
+            (into (vec (mapcat #(first (emit % env st)) (butlast kids)))
+                  (emit-tail (last kids) env st finish))))
+    :let (let [[ls env'] (let [kids (:children nd) n (:i2 nd) base (:p1 nd)]
+                           (reduce (fn [[ls env] i]
+                                     (let [[l e t] (emit (nth kids i) env st)
+                                           v (fresh! st "x" t)]
+                                       (when (= t :none) (decline "recur in a let binding"))
+                                       [(-> ls (into l) (conj (str v " = " e)))
+                                        (assoc env (+ base i) [v t])]))
+                                   [[] env] (range n)))]
+           (into ls (emit-tail (nth (:children nd) (:i2 nd)) env' st finish)))
+    :recur (let [{:keys [label vars]} (:loop env)
+                 [ls es ts] (emit-args (:children nd) env st)]
+             (when-not label (decline "a recur with no loop to go to"))
+             (doseq [[[v tv] e t] (map vector vars es ts)]
+               (if (#{:doubles :longs} tv)
+                 ;; an array parameter can only be passed back as it is
+                 (when (not= e v) (decline "recur passes a different array"))
+                 (when-not (or (= t tv) (and (= tv :double) (= t :long)))
+                   (decline "recur changes a loop local's type"))))
+             (let [pairs (remove (fn [[[_ tv]]] (#{:doubles :longs} tv)) (map vector vars es ts))
+                   tmps (mapv (fn [[[_ tv] e t]] (let [v (fresh! st "r" tv)] [v (str v " = " (if (= tv :double) (as-double e t) e))])) pairs)]
+               (-> ls (into (map second tmps))
+                   (into (map (fn [[[v _]] [tmp _]] (str v " = " tmp)) pairs tmps))
+                   (conj (str "cycle " label)))))
+    :loop (let [kids (:children nd) n (:i2 nd) base (:p1 nd)
+                label (str "lp" (:n (swap! st update :n inc)))
+                [ls env' vars] (reduce (fn [[ls env vars] i]
+                                         (let [[l e t] (emit (nth kids i) env st)
+                                               v (fresh! st "q" t)]
+                                           [(-> ls (into l) (conj (str v " = " e)))
+                                            (assoc env (+ base i) [v t])
+                                            (conj vars [v t])]))
+                                       [[] env []] (range n))
+                body (emit-tail (nth kids n) (assoc env' :loop {:label label :vars vars}) st
+                                (fn [e t] (conj (vec (finish e t)) (str "exit " label))))]
+            (into ls (concat [(str label ": do")] (map #(str "   " %) body) [(str "end do " label)])))
+    ;; anything else is a value
+    (let [[l e t] (emit nd env st)]
+      (when (= t :none) (decline "recur is not in tail position"))
+      (into l (finish e t)))))
+
+(defn- emit
+  "A node as a value: [lines expr type]."
+  [nd env st]
+  (case (:op nd)
+    :const (lit (:p1 nd))
+    :local (let [[v t] (get env (:i2 nd))]
+             (when-not v (decline (str "the local `" (:p1 nd) "` is not typed")))
+             [[] v t])
+    :call (emit-call nd env st)
+    (:if :do :let :loop)
+    (let [res (atom nil)
+          lines (emit-tail nd env st
+                           (fn [e & [t]]
+                             (let [t (or t (throw (ex-info "untyped finish" {})))
+                                   r (or @res (reset! res [(fresh! st "v" t) t]))]
+                               (when (not= (second r) t)
+                                 (if (and (num? t) (num? (second r)))
+                                   (decline "the branches answer a long and a double: Clojure keeps each one's type")
+                                   (decline "the branches answer different types")))
+                               [(str (first r) " = " e)])))]
+      (if-let [[v t] @res]
+        [lines v t]
+        [lines "" :none]))
+    :recur [[] "" :none]
+    (decline (str "`" (name (:op nd)) "` is not lowered yet"))))
+
+;;; ---- a function: its versions ----------------------------------------
+
+(defn- param-candidates
+  "The types each parameter could have: its hint, or by its uses -- an
+  array if it is aget/aset/alength's first argument, a number otherwise."
+  [params body start]
+  (let [nodes (tree-seq coll? seq body)
+        array-slots (set (for [nd nodes
+                               :when (and (map? nd) (= :call (:op nd)))
+                               :let [op (op-name (first (:children nd)))
+                                     a (second (:children nd))
+                                     a (if (and (= :call (:op a)) (= 'clotran-array-cast (op-name (first (:children a)))))
+                                         (second (:children a)) a)]
+                               :when (and (#{'aget 'aset 'alength} op) (= :local (:op a)))]
+                           (:i2 a)))]
+    (vec (map-indexed
+          (fn [i p]
+            (if-let [h ('{doubles [:doubles] longs [:longs] double [:double] long [:long]} (:tag (meta p)))]
+              h
+              (if (array-slots (+ start i)) [:doubles :longs] [:double :long])))
+          params))))
+
+(defn- cartesian [colls]
+  (reduce (fn [acc c] (for [a acc x c] (conj a x))) [[]] colls))
+
+(def ^:private version-limit 8)
+
+(defn- emit-version
+  "One version of fname for parameter types ts: {:name :ret :text} or
+  {:declined why}."
+  [fname fnode ts sigs]
+  (try
+    (let [tmpl (:p1 fnode)
+          [[nargs variadic start body]] (second tmpl)
+          _ (when variadic (decline "variadic"))
+          _ (when (> (count (second tmpl)) 1) (decline "more than one arity"))
+          st (atom {:n 0 :decls [] :sigs sigs :written #{}})
+          pnames (mapv #(str "p" %) (range nargs))
+          ;; scalar parameters are copied into locals, so a recur can rebind them
+          locals (mapv (fn [t] (when-not (#{:doubles :longs} t) (fresh! st "a" t))) ts)
+          env (into {} (map-indexed (fn [i t] [(+ start i) [(if (#{:doubles :longs} t) (pnames i) (locals i)) t]]) ts))
+          label (str "top" (:n (swap! st update :n inc)))
+          ret (atom nil)
+          body-lines (emit-tail body (assoc env :loop {:label label
+                                                       :vars (vec (map-indexed (fn [i t] [(if (#{:doubles :longs} t) (pnames i) (locals i)) t]) ts))})
+                                st
+                                (fn [e t]
+                                  (when (and @ret (not= @ret t))
+                                    (decline "the function answers different types on different paths"))
+                                  (reset! ret t)
+                                  [(str "r = " e) (str "exit " label)]))
+          rt @ret
+          _ (when-not rt (decline "no path answers a value"))
+          _ (when (#{:doubles :longs} rt) (decline "answering an array is not lowered yet"))
+          nm (str (fort-ident (name fname)) "__" (str/join "_" (map suffix ts)))
+          {:keys [decls written]} @st
+          decl-lines (for [[v t] (distinct decls)] (str "    " (fort-type t) " :: " v))]
+      {:name nm :ret rt
+       :text (str "  function " nm "(" (str/join ", " pnames) ") result(r)\n"
+                  (apply str (for [[i t] (map-indexed vector ts)]
+                               (str "    " (fort-type t)
+                                    (if (#{:doubles :longs} t)
+                                      (str ", intent(" (if (written (pnames i)) "inout" "in") ") :: " (pnames i) "(:)\n")
+                                      (str ", intent(in) :: " (pnames i) "\n")))))
+                  "    " (fort-type rt) " :: r\n"
+                  (str/join "\n" decl-lines) (when (seq decl-lines) "\n")
+                  (apply str (for [[i t] (map-indexed vector ts) :when (not (#{:doubles :longs} t))]
+                               (str "    " (locals i) " = " (pnames i) "\n")))
+                  "    " label ": do\n"
+                  (apply str (map #(str "       " % "\n") body-lines))
+                  "    end do " label "\n"
+                  "  end function " nm "\n")})
+    (catch Exception e
+      (if-let [why (::decline (ex-data e))]
+        {:declined why}
+        (throw e)))))
+
+;;; ---- a namespace -------------------------------------------------------
+
+(defn generate
+  "The tier-A functions of `src` as Fortran: {:text the file, :emitted
+  {ns/name [versions]}, :skipped {ns/name why}}. Functions are done in
+  file order, so a call to an earlier one sees its versions."
+  [src]
+  (let [cls (tiers/classify src)
+        text (clotran-slurp src)
+        [_ ns-name] (read-string text)
+        forms (binding [*ns* (the-ns ns-name)] (clotran-read-forms src))
+        defns (for [f forms :when (and (seq? f) (#{'defn 'defn-} (first f)))
+                    :let [fnf (loader/fn-form f)] :when fnf]
+                [(symbol (str ns-name) (str (second f))) fnf])
+        result
+        (reduce
+         (fn [{:keys [sigs] :as acc} [s fnf]]
+           (if (not= :A (get-in cls [s :tier]))
+             (assoc-in acc [:skipped s] (str "tier " (name (get-in cls [s :tier] :B)) ": see --report"))
+             (let [top (binding [*ns* (the-ns ns-name)] (clotran-ast fnf))
+                   fnode (:p1 top)
+                   [[nargs _ start body]] (second (:p1 fnode))
+                   params (vec (take nargs (or (first (filter vector? fnf)) (first (first (filter seq? fnf))))))
+                   cands (param-candidates params body start)
+                   combos (cartesian cands)]
+               (if (> (count combos) version-limit)
+                 (assoc-in acc [:skipped s] (str (count combos) " type combinations; hint some parameters (^double, ^doubles, ...) to settle them"))
+                 (let [vs (for [ts combos] (assoc (emit-version s fnode ts sigs) :ts ts))
+                       ok (remove :declined vs)]
+                   (if (empty? ok)
+                     (assoc-in acc [:skipped s] (str/join "; " (distinct (map :declined vs))))
+                     (-> acc
+                         (assoc-in [:emitted s] (vec ok))
+                         (assoc-in [:sigs s] (into {} (map (fn [v] [(:ts v) (:ret v)]) ok)))
+                         (assoc-in [:dropped s] (vec (keep #(when (:declined %) [(:ts %) (:declined %)]) vs))))))))))
+         {:sigs {} :emitted {} :skipped {} :dropped {}}
+         defns)
+        mod-name (str (fort-ident ns-name) "_pure")
+        emitted (:emitted result)]
+    (assoc result
+           :module mod-name
+           :text (str "! GENERATED by clotran.purefort from " src ". Do not edit; regenerate.\n"
+                      "! Pure Fortran: no clotran runtime. The tier-A functions of " ns-name ",\n"
+                      "! one generic name each, one specific procedure per argument type.\n\n"
+                      support-module "\n"
+                      "module " mod-name "\n"
+                      "  use iso_fortran_env, only: int64, real64\n"
+                      "  use clotran_pure\n"
+                      "  implicit none\n"
+                      "  private\n"
+                      (apply str (for [[s vs] (sort-by key emitted)]
+                                   (str "  public :: " (fort-ident (name s)) "\n"
+                                        "  interface " (fort-ident (name s)) "\n"
+                                        "     module procedure " (str/join ", " (map :name vs)) "\n"
+                                        "  end interface\n")))
+                      "contains\n"
+                      (str/join "\n" (for [[_ vs] (sort-by key emitted) v vs] (:text v)))
+                      "end module " mod-name "\n"))))

@@ -1,0 +1,223 @@
+#!/usr/bin/env bb
+;; Differential test for pure Fortran (clotran.purefort, PLAN.md step 13):
+;; the tier-A functions of test/clj/pure_sample.cljf are generated as a
+;; stand-alone Fortran module, built with gfortran AND flang, and every
+;; case below runs three ways -- interpreted, and as each compiler's
+;; binary -- with the answers compared: longs exactly, doubles bit for
+;; bit, errors by message. No expected value is typed in by hand.
+;;
+;;   scripts/pure-check
+(require '[clojure.string :as str]
+         '[clojure.java.io :as io]
+         '[clojure.edn :as edn]
+         '[babashka.process :refer [shell]])
+
+(def repo (-> *file* io/file .getCanonicalFile .getParentFile .getParentFile))
+(def work (io/file (System/getProperty "java.io.tmpdir") "clotran-pure-check"))
+(def src "test/clj/pure_sample.cljf")
+(def ns-name "pure-sample")
+
+(def cases
+  '[(total (double-array [1.5 2.5 3.0]))
+    (total (long-array [1 2 3]))
+    (total (double-array []))
+    (mean (double-array [1.0 2.0 4.0]))
+    (mean (long-array [1 2]))
+    (sum-to 100)
+    (sum-to 100000)
+    (fact 20)
+    (fact 21)
+    (fact 5.0)
+    (hyp 3.0 4.0)
+    (hyp 3 4)
+    (hyp 1.0E200 1.0E200)
+    (clamp 5 0 10)
+    (clamp -3 0 10)
+    (clamp 2.5 0.0 1.0)
+    (sign-of 7)
+    (sign-of -0.5)
+    (sign-of 0)
+    (ratio 7 2)
+    (ratio -7 2)
+    (ratio 7 0)
+    (ratio -9223372036854775808 -1)
+    (floor-mod -7 3)
+    (floor-mod 7 -3)
+    (trunc-rem -7 3)
+    (floor-mod 7 0)
+    (nth-or (double-array [1.0 2.0]) 1)
+    (nth-or (long-array [5 6]) 2)
+    (nth-or (long-array [5 6]) -1)
+    (to-long 3.99)
+    (to-long -3.99)
+    (to-long 1.0E30)
+    (scale! (double-array [1.0 2.0 3.0]) 2.0)
+    (dist2 (double-array [0.0 0.0]) (double-array [3.0 4.0]))
+    (dist2 (long-array [1 2]) (long-array [4 6]))])
+
+(defn arg-type [a]
+  (cond (int? a) :long (double? a) :double
+        (and (seq? a) (= 'double-array (first a))) :doubles
+        (and (seq? a) (= 'long-array (first a))) :longs
+        :else (throw (ex-info "unknown argument form" {:arg a}))))
+
+(defn run-clotran [file]
+  (:out (shell {:out :string :err :string :dir (str repo) :continue true :in ""}
+               "./clotran-bin" "src/clj/clojure/core.clj" "src/clj/clotran/loader.cljf"
+               "src/clj/clotran/tiers.cljf" "src/clj/clotran/purefort.cljf" (str file))))
+
+;; ---- interpreted, and the Fortran generated -------------------------
+
+(.mkdirs work)
+(def f90 (io/file work "pure.f90"))
+(spit (io/file work "drive.clj")
+      (str "(let [r (clotran.purefort/generate \"" src "\")]\n"
+           "  (clotran-spit \"" f90 "\" (:text r))\n"
+           "  (println \"SIGS\" (pr-str (into {} (for [[s vs] (:emitted r)] [(name s) (mapv (juxt :ts :ret) vs)]))))\n"
+           "  (println \"SKIPPED\" (pr-str (into {} (for [[s why] (:skipped r)] [(name s) why])))))\n"
+           "(in-ns '" ns-name ")\n"
+           (apply str (map-indexed
+                       (fn [i c]
+                         (str "(clojure.core/println \"CASE " i "\" (try (clojure.core/pr-str [:val " (pr-str c) "])"
+                              " (catch Throwable e (clojure.core/pr-str [:threw (.getMessage e)]))))\n"))
+                       cases))))
+(def out (run-clotran (io/file work "drive.clj")))
+(def sigs (some #(when (str/starts-with? % "SIGS ") (edn/read-string (subs % 5))) (str/split-lines out)))
+(def skipped (some #(when (str/starts-with? % "SKIPPED ") (edn/read-string (subs % 8))) (str/split-lines out)))
+(when-not sigs (println out) (println "pure-check: the generator did not run") (System/exit 1))
+(defn parse-cases [out]
+  (into {} (for [l (str/split-lines out) :let [m (re-matches #"CASE (\d+) (.*)" l)] :when m]
+             [(parse-long (second m))
+              (let [[k v] (edn/read-string {:readers {'Inf (constantly ##Inf)}} (str/replace (nth m 2) #"##(-?)Inf" "$1##Inf"))]
+                [k (if (string? v) (first (str/split v #"  at ")) v)])])))
+(def interp (parse-cases out))
+
+;; clj, the language oracle, runs the same file and the same cases
+(spit (io/file work "jvm.clj")
+      (str "(load-file \"" src "\")\n(in-ns '" ns-name ")\n"
+           (apply str (map-indexed
+                       (fn [i c]
+                         (str "(clojure.core/println \"CASE " i "\" (try (clojure.core/pr-str [:val " (pr-str c) "])"
+                              " (catch Throwable e (clojure.core/pr-str [:threw (.getMessage e)]))))\n"))
+                       cases))))
+(def jvm (parse-cases (:out (shell {:out :string :err :string :dir (str repo) :continue true} "clj" "-M" (str (io/file work "jvm.clj"))))))
+(when (empty? jvm) (println "pure-check: clj did not run the cases") (System/exit 1))
+
+;; ---- the Fortran driver ------------------------------------------------
+
+(defn ret-type [[f & args]]
+  (let [ts (mapv arg-type args)]
+    (some (fn [[vts rt]] (when (= vts ts) rt)) (get sigs (name f)))))
+
+(defn fort-double [v]
+  (let [s (pr-str v)] (if (str/includes? s "E") (str/replace s "E" "d") (str s "d0"))))
+
+(defn f-lit [a]
+  (case (arg-type a)
+    :long (if (= a Long/MIN_VALUE) "(-huge(0_int64) - 1_int64)" (str a "_int64"))
+    :double (fort-double a)
+    :doubles (str "[real(real64) :: " (str/join ", " (map #(fort-double (double %)) (second a))) "]")
+    :longs (str "[integer(int64) :: " (str/join ", " (map #(str % "_int64") (second a))) "]")))
+
+(defn fort-ident [s] (str/lower-case (str/replace (str s) #"[^A-Za-z0-9]" "_")))
+
+(def driver
+  (str "program pure_driver\n"
+       "  use iso_fortran_env, only: int64, real64\n"
+       "  use " (fort-ident ns-name) "_pure\n"
+       "  implicit none\n"
+       "  integer :: k\n"
+       "  character(len=16) :: arg\n"
+       "  call get_command_argument(1, arg)\n"
+       "  read(arg, *) k\n"
+       "  select case (k)\n"
+       (apply str
+              (for [[i [f & args :as c]] (map-indexed vector cases)
+                    :let [rt (ret-type c)] :when rt]
+                (str "  case (" i ")\n"
+                     "    block\n"
+                     (apply str (for [[j a] (map-indexed vector args) :when (#{:doubles :longs} (arg-type a))]
+                                  (str "      " (if (= :doubles (arg-type a)) "real(real64)" "integer(int64)")
+                                       ", allocatable :: a" j "(:)\n")))
+                     (apply str (for [[j a] (map-indexed vector args) :when (#{:doubles :longs} (arg-type a))]
+                                  (str "      a" j " = " (f-lit a) "\n")))
+                     "      print '(a, " (case rt :long "i0" :double "es26.17e3" :bool "l1") ")', '"
+                     (case rt :long "L " :double "D " :bool "B ") "', "
+                     (fort-ident (name f)) "("
+                     (str/join ", " (for [[j a] (map-indexed vector args)]
+                                      (if (#{:doubles :longs} (arg-type a)) (str "a" j) (f-lit a))))
+                     ")\n"
+                     "    end block\n")))
+       "  end select\n"
+       "end program pure_driver\n"))
+(spit (io/file work "driver.f90") driver)
+
+;; ---- build and run under both compilers ------------------------------
+
+(defn build [fc exe]
+  (let [r (shell {:out :string :err :string :continue true :dir (str work)}
+                 fc "-O2" (if (= fc "gfortran") "-ffree-line-length-none" "-O2")
+                 "pure.f90" "driver.f90" "-o" exe)]
+    (when-not (zero? (:exit r))
+      (println "BUILD FAILED with" fc) (println (:err r)) (System/exit 1))))
+
+(defn run-case [exe i]
+  (let [r (shell {:out :string :err :string :continue true :dir (str work)} (str "./" exe) (str i))]
+    (if (zero? (:exit r))
+      (let [[kind v] (str/split (str/trim (:out r)) #"\s+" 2)]
+        [:val (case kind
+                "L" (parse-long v)
+                "D" (let [s (str/lower-case v)]
+                      (cond (str/includes? s "nan") ##NaN
+                            (str/includes? s "inf") (if (str/starts-with? s "-") ##-Inf ##Inf)
+                            :else (Double/parseDouble v)))
+                "B" (= v "T"))])
+      [:threw (str/trim (first (str/split-lines (str (:err r) "\n"))))])))
+
+(defn- trailing-number
+  "A message split into its text and the number that ends it, if any."
+  [s]
+  (if-let [[_ text num] (and (string? s) (re-matches #"(.*?)(-?[0-9][0-9.]*(?:[eE][-+]?[0-9]+)?)" s))]
+    [text (Double/parseDouble num)]
+    [s nil]))
+
+(defn same? [a b]
+  (let [[ka va] a [kb vb] b]
+    (and (= ka kb)
+         (cond
+           (and (double? va) (double? vb))
+           (= (Double/doubleToLongBits va) (Double/doubleToLongBits vb))
+           ;; pure Fortran writes a double in a message in Fortran's ES form,
+           ;; not Java's (DEVIATIONS 50): the text before it must match, and
+           ;; the number by value
+           (and (= :threw ka) (string? va) (string? vb))
+           (let [[ta na] (trailing-number va) [tb nb] (trailing-number vb)]
+             (and (= ta tb) (= na nb)))
+           :else (= va vb)))))
+
+(def compilers [["gfortran" "pure_g"] ["flang" "pure_f"]])
+(doseq [[fc exe] compilers] (build fc exe))
+
+(def fails (atom 0))
+(def ran (atom 0))
+(def not-emitted (atom []))
+(doseq [[i c] (map-indexed vector cases)]
+  (if-not (ret-type c)
+    (swap! not-emitted conj c)
+    (let [want (jvm i)]
+      (when-not (same? want (interp i))
+        (println "NOTE interpreter differs from clj:" (pr-str c) (pr-str (interp i)) "vs" (pr-str want)))
+      (doseq [[fc exe] compilers]
+        (swap! ran inc)
+        (let [got (run-case exe i)]
+          (when-not (same? want got)
+            (swap! fails inc)
+            (println "DIFFER" fc (pr-str c))
+            (println "   clj (JVM)  :" (pr-str want))
+            (println "   pure       :" (pr-str got))))))))
+
+(println "skipped functions:" (pr-str skipped))
+(when (seq @not-emitted) (println "cases with no pure version:" (pr-str @not-emitted)))
+(println (str "pure-check: " @ran " runs (" (count cases) " cases x " (count compilers)
+              " compilers), " (- @ran @fails) " agree, " @fails " differ"))
+(when (pos? @fails) (System/exit 1))
