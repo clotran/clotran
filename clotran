@@ -19,6 +19,17 @@ bin="$root/clotran-bin"
 core="$root/src/clj/clojure/core.clj"
 [ -x "$bin" ] || { echo "build first: make" >&2; exit 1; }
 
+if [ "$1" = "explain" ]; then
+  # `clotran explain B001`: what a --report code means (clotran.tiers/codes)
+  [ $# -eq 2 ] || { echo "usage: clotran explain CODE" >&2; exit 2; }
+  work=$(mktemp -d) || exit 1
+  trap 'rm -rf "$work"' EXIT
+  printf '(clotran.tiers/explain "%s")\n' "$2" > "$work/explain.clj"
+  "$bin" "$core" "$root/src/clj/clotran/loader.cljf" "$root/src/clj/clotran/tiers.cljf" "$work/explain.clj" </dev/null 2>&1 \
+    | grep -v '^note: skipping\|^user=>\|WARNING: ->Eduction'
+  exit 0
+fi
+
 if [ "$1" = "compile" ] && [ "$2" = "--report" ]; then
   # `clotran compile --report foo.cljf`: each function's tier -- A pure
   # Fortran, B the collector, C the interpreter -- and, at every call

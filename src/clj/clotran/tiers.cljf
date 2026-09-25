@@ -15,6 +15,74 @@
   (:require [clojure.string :as str]
             [clotran.loader :as loader]))
 
+;;; ---- the codes -------------------------------------------------------
+;;;
+;;; Every code a finding can carry, defined HERE, beside the rules that
+;;; emit it, the way Clojure keeps a function's documentation in its
+;;; docstring. `clotran explain B001` prints an entry; language_test checks
+;;; that every code this file emits has one.
+
+(def codes
+  "code -> {:title :tier :explain}. :tier is what the finding does to its
+  function: :B or :C lowers it, :A (a note) leaves it where it was."
+  {"B001" {:title "lazy seq kept" :tier :B
+           :explain "A sequence function (map, filter, range, take, ...) makes a lazy seq: a chain of heap cells, each holding a boxed value. Returned, stored or printed, the seq itself has to exist, and that needs the collector.
+
+Consumed where it is made, it never has to exist: the chain fuses into one loop.
+
+    (defn squares [xs] (map #(* % %) xs))                ; B: the seq is returned
+    (defn sum-squares [xs] (reduce + (map #(* % %) xs))) ; A: one loop, no seq
+
+Consumers that fuse: reduce, transduce, run!, every?, some, not-any?, count, into-array, doall, dorun."}
+   "B002" {:title "calls a function that is not tier A" :tier :B
+           :explain "The called function, defined in the same file, is tier B or C, so this call is too. Its own warnings say why; fix those and this one goes away."}
+   "B003" {:title "a clojure.core function with no pure-Fortran lowering" :tier :B
+           :explain "The function works on Clojure data -- maps, vectors, seqs, strings built up piece by piece -- and has no Fortran equivalent that does without the collector. The help line names the nearest pure alternative where there is one: a primitive array for a vector, a record of numbers for a map, clojure.string/includes? for a fixed-text regex."}
+   "B004" {:title "calls a function from another namespace" :tier :B
+           :explain "The function lives in a namespace this report did not classify, so it cannot be promised pure. Run --report on that namespace; a tier-A function there is called directly."}
+   "B005" {:title "calls a host function" :tier :B
+           :explain "The call reaches a host member (Java's names, clotran's implementation) with no Fortran lowering. Arithmetic, Math/ functions and array operations have one; object methods do not."}
+   "B006" {:title "calls a function held in a local" :tier :B
+           :explain "Which code runs is known only at run time, so the call goes through a function object on the heap. Call a defn by name instead, and the call is linked directly.
+
+    (defn apply-twice [f x] (f (f x)))   ; B: f is a value
+    (defn inc-twice [x] (inc (inc x)))   ; A"}
+   "B007" {:title "uses a function as a value" :tier :B
+           :explain "A function passed around, stored or returned is a heap object. Passed straight into a fused chain -- (reduce + (map inc xs)) -- it is only called in the loop, and costs nothing."}
+   "B010" {:title "a collection literal" :tier :B
+           :explain "A vector, map or set literal is a persistent collection on the heap. If it holds numbers, a primitive array is pure Fortran: (double-array [1.0 2.0]). A later compiler can also keep a small collection that never leaves its function off the heap (escape analysis); this one does not yet."}
+   "B011" {:title "a keyword looked up in a map" :tier :B
+           :explain "(:n m) reads a map, which lives on the heap. If the keys are fixed, a defrecord whose fields are numbers is a Fortran derived type, and reading a field is pure."}
+   "B020" {:title "a closure" :tier :B
+           :explain "An fn inside a function captures its surroundings in a heap object. Passed to map, filter or reduce over an array it fuses away; otherwise lift it into a defn."}
+   "B030" {:title "lazy-seq" :tier :B
+           :explain "lazy-seq builds a heap thunk that runs later. Produce the values in a loop instead, or consume the sequence where it is made (see B001)."}
+   "B040" {:title "exceptions" :tier :B
+           :explain "try and throw need exception objects on the heap and unwinding through the runtime. In a numeric kernel, return a status value -- a number, a keyword -- and let the caller decide."}
+   "B050" {:title "objects and host interop" :tier :B
+           :explain "letfn, deftype, reify, new and method calls make or use heap objects. Keep them out of the kernel and pass their numbers in."}
+   "B060" {:title "a variadic function" :tier :B
+           :explain "The rest arguments of [x & more] arrive as a list on the heap. Take a fixed number of arguments, or one primitive array of them."}
+   "B098" {:title "something this host does not have" :tier :B
+           :explain "The analyser could not resolve a name against clotran's host (DEVIATIONS.md lists what is missing), so running this raises an error."}
+   "B099" {:title "not classified yet" :tier :B
+           :explain "A node kind the classifier has no rule for. It is counted as needing the runtime rather than promised pure; a bug report is welcome."}
+   "C001" {:title "needs the interpreter or dynamic Vars" :tier :C
+           :explain "eval, load-string, require at run time, resolve, alter-var-root and the like run or find code while the program runs, which needs the interpreter. Do that work in the program's setup and pass the result in."}
+   "C002" {:title "reads a dynamic Var" :tier :C
+           :explain "A ^:dynamic Var can be rebound per thread with binding, so reading one needs the Var machinery. Pass its value in as an argument."}
+   "C003" {:title "defines at run time" :tier :C
+           :explain "def or set! inside a function changes Vars while the program runs. Define things at the top level of the file."}
+   "N001" {:title "assumes a primitive array" :tier :A
+           :explain "A sequence function is applied to a parameter or local whose type the report cannot see. The function stays tier A on the assumption that it is a primitive array; passed a vector or a seq, it needs the collector. Once the compiler infers types from the calls in the program (PLAN.md step 13), this note is resolved or turned into a B warning."}})
+
+(defn explain
+  "Print what a code means, as `clotran explain B001` does."
+  [code]
+  (if-let [{:keys [title tier explain]} (codes (str code))]
+    (println (str code ": " title "  (tier " (name tier) ")\n\n" explain))
+    (println (str code ": no such code. Known: " (str/join " " (sort (keys codes)))))))
+
 ;;; ---- what lowers to Fortran ------------------------------------------
 
 (def ^:private core-a
@@ -96,7 +164,12 @@
   (let [s (var-sym v)]
     (when (and s (= "clojure.core" (namespace s))) (symbol (name s)))))
 
-(defn- finding [tier code pos msg help]
+(defn- finding
+  "One finding. A code with no entry in `codes` is refused: nothing is
+  emitted that `clotran explain` cannot explain."
+  [tier code pos msg help]
+  (when-not (contains? codes code)
+    (throw (ex-info (str "clotran.tiers: code " code " has no entry in codes") {:code code})))
   {:tier tier :code code :pos pos :msg msg :help help})
 
 (declare walk)
@@ -123,6 +196,15 @@
   [nd]
   (or (:pos nd) (some first-pos (sub-nodes nd))))
 
+(defn- array-assumed
+  "N001 when the collection handed to a sequence function is a local,
+  whose type the report cannot see."
+  [cn args pos]
+  (let [a (last args)]
+    (when (= :local (:op a))
+      [(finding :A "N001" pos (str "assumes `" (:p1 a) "` is a primitive array: `" cn "` over any other collection needs the collector")
+                "if it is always an array, nothing to do; pass (double-array ...) or (long-array ...), not a vector, and it stays pure")])))
+
 (defn- call-findings [nd {:keys [pos tiers fname consuming] :as ctx}]
   (let [[head & args] (:children nd)
         pos (or (:pos nd) pos)
@@ -139,14 +221,16 @@
 
           (and cn (producers cn))
           (if consuming
-            (walk-all args (assoc ctx :consuming false :fusing true))
+            (concat (array-assumed cn args pos)
+                    (walk-all args (assoc ctx :consuming false :fusing true)))
             (cons (finding :B "B001" pos (str "lazy seq kept: the result of `" cn "` is returned or stored, so it needs the collector")
                            (str "consume it where it is made, so the chain fuses into one loop: "
                                 "(reduce f init (" cn " ...)), (run! f (" cn " ...)), or (into-array (" cn " ...))"))
                   (walk-all args (assoc ctx :fusing true))))
 
           (and cn (consumers cn))
-          (walk-all args (assoc ctx :consuming true :fusing true))
+          (concat (array-assumed cn args pos)
+                  (walk-all args (assoc ctx :consuming true :fusing true)))
 
           (and cn (core-a cn))
           (walk-all args (assoc ctx :consuming false))
@@ -315,7 +399,7 @@
   (let [[file line col] (some-> pos clotran-position)
         src (source-line lines line)
         gutter (apply str (repeat (count (str (or line ""))) " "))]
-    (str (if (= :C tier) "warning" "warning") "[" code "]: " msg "\n"
+    (str (if (= :A tier) "note" "warning") "[" code "]: " msg "\n"
          "  in `" fname "`\n"
          (when line (str gutter " --> " file ":" line ":" col "\n"))
          (when src (str gutter " |\n"
@@ -335,4 +419,7 @@
     (doseq [[s {:keys [findings]}] (sort-by key r)
             f (distinct findings)]
       (println (render s f lines)))
+    (let [used (sort (distinct (map :code (mapcat :findings (vals r)))))]
+      (when (seq used)
+        (println (str "For what a code means: clotran explain " (first used)))))
     r))

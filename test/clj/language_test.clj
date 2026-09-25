@@ -1250,9 +1250,19 @@
 (check "tiers, the reason codes"
        (into (sorted-map) (for [[k v] tier-result :when (not= :A (:tier v))]
                             [(name k) (vec (sort (distinct (map :code (:findings v)))))]))
-       (sorted-map "describe" ["B010"] "many" ["B060"] "parse" ["B003"]
+       (sorted-map "describe" ["B010"] "many" ["B060" "N001"] "parse" ["B003"]
                    "run-it" ["B003" "C001"] "scaled" ["C002"] "spread" ["B003"]
                    "squares" ["B001"] "uses-describe" ["B002" "B011"]))
+(check "a note says what a tier-A verdict assumes"
+       (vec (sort (distinct (map :code (:findings (tier-result 'tiers-sample/sum-squares))))))
+       ["N001"])
+(check "every code the classifier emits is explained"
+       (let [emitted (set (map second (re-seq #"\"([BCN][0-9]{3})\"" (clotran-slurp "src/clj/clotran/tiers.cljf"))))]
+         [(sort (remove (set (keys clotran.tiers/codes)) emitted))
+          (every? #(and (:title %) (:tier %) (:explain %)) (vals clotran.tiers/codes))
+          ;; and the scan saw them at all, or the first answer is vacuous
+          (>= (count emitted) 20)])
+       [[] true true])
 (check "a warning carries its line and its fix"
        (let [f (first (:findings (tier-result 'tiers-sample/squares)))]
          [(second (clotran-position (:pos f))) (boolean (re-find #"reduce" (:help f)))])

@@ -1031,6 +1031,24 @@ merely forgot to consume a seq is told so:
 
 The existing `decline-reason` plumbing is where this starts.
 
+Done 2026-09-24: `clotran compile --report` (src/clj/clotran/tiers.cljf).
+Every code is defined in `clotran.tiers/codes`, beside the rules that
+emit it -- a finding with an undefined code is refused -- and
+`clotran explain B001` prints one, as `rustc --explain` does. A verdict
+that rests on an assumption says so as a NOTE (N001: a sequence function
+over a parameter is assumed to get a primitive array); a note does not
+lower the tier.
+
+**Types for tier A (decided 2026-09-24).** Pure Fortran needs a static
+type for every argument, with no runtime underneath to fall back on. In
+order: (1) infer from the calls in the program; (2) where there are
+none -- a library function -- emit one version per plausible type
+(double and long, arrays of each) under one Fortran GENERIC name, so
+Fortran picks by argument type at compile time; (3) past a limit on
+the versions, the report warns, with a `help:` suggesting the hint
+(`^doubles a`) that settles it. No hints in the common case; a hint
+exactly when the report says one would help.
+
 ## Decisions that still hold
 
 **The value type has no `FINAL`.** Copying a `cons_value` (nine
