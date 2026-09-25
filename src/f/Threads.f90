@@ -25,9 +25,11 @@ module Threads
   public :: th_lock, th_cond, th_thread
   public :: th_lock_init, th_lock_acquire, th_lock_release
   public :: th_cond_init, th_cond_wait, th_cond_broadcast
-  public :: th_start, th_join, th_spawn, th_exit
+  public :: th_start, th_join, th_spawn, th_exit, th_ncpus
 
   integer, parameter :: OPAQUE_WORDS = 16   ! 128 bytes
+  ! the platform's sysconf name for online processors (Makefile)
+  include 'osconst.inc'
 
   type :: th_lock
      integer(c_int64_t) :: raw(OPAQUE_WORDS) = 0
@@ -84,6 +86,11 @@ module Threads
        type(c_ptr), value :: c
        integer(c_int) :: r
      end function pthread_cond_broadcast
+     function sysconf(name) bind(C, name="sysconf") result(r)
+       import :: c_int, c_long
+       integer(c_int), value :: name
+       integer(c_long) :: r
+     end function sysconf
      function pthread_detach(t) bind(C, name="pthread_detach") result(r)
        import :: c_ptr, c_int
        type(c_ptr), value :: t
@@ -177,6 +184,12 @@ contains
     if (pthread_attr_destroy(c_loc(attr)) /= 0) return
     th_spawn = pthread_detach(t) == 0
   end function th_spawn
+
+  ! Processors online now: Runtime.availableProcessors, which sizes
+  ! pmap's look-ahead. At least 1, whatever sysconf answers.
+  integer function th_ncpus()
+    th_ncpus = max(1, int(sysconf(SC_NPROCESSORS_ONLN)))
+  end function th_ncpus
 
   ! End the calling thread here, unwinding nothing.
   subroutine th_exit()

@@ -910,9 +910,11 @@ order-independent combining; `coarrays` would be fold across images.
    guarded by clotran_reacquire; the compiler also learned Math/ as
    Fortran intrinsics, without which such loops called back every time
    round. A compiled numeric loop over 2M elements in eight futures goes
-   from 90 ms in turn to 12 ms. Still to do here:
-   Runtime.availableProcessors answering the real count (it answers 1;
-   sysconf's constant differs between macOS and Linux). Originally: around Fortran package
+   from 90 ms in turn to 12 ms. Runtime.availableProcessors answers
+   the real count (2026-09-25: sysconf through Threads.f90, its constant
+   the Makefile's per OS, 58 on macOS, 84 on Linux): pmap of a compiled
+   numeric function over 40 items goes 20 ms to 11 ms (73 ms serial);
+   pmap of dgemm stays at 75 ms, its ceiling elsewhere. Originally: around Fortran package
    calls (`dgemm`, ChemSol), in `do concurrent` loops, and in the typed
    region of compiled numeric code (unboxed locals, raw array pointers).
    A slow path -- overflow, a wrong-typed argument, a hatch -- takes the

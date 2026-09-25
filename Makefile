@@ -89,6 +89,10 @@ LIBDL =
 # at dlopen time, so those symbols have to be in its dynamic symbol
 # table. Without this the library loads and every call is undefined.
 EXPORTDYN = -Wl,-export_dynamic
+# sysconf's name for the online processor count: an int whose VALUE is
+# the platform's (the macOS SDK's unistd.h). Threads.f90 reads it from
+# $(B)/osconst.inc, generated below.
+SC_NPROCESSORS_ONLN = 58
 else
 ICU_PLATFORM = Linux
 LIBCXX = -lstdc++
@@ -96,7 +100,18 @@ SOEXT = so
 PKGMOD = $(B)/pkgmod
 LIBDL = -ldl
 EXPORTDYN = -rdynamic
+# glibc's bits/confname.h (an enum; its _SC_IOV_MAX is an alias) and
+# musl's unistd.h agree: 84
+SC_NPROCESSORS_ONLN = 84
 endif
+
+# The platform's constants Threads.f90 needs, as Fortran: the OS seam's
+# one generated file (PACKAGES.md). Rewritten only when a value changes.
+$(B)/osconst.inc: Makefile | $(B)
+	printf '  integer(c_int), parameter :: SC_NPROCESSORS_ONLN = %s\n' $(SC_NPROCESSORS_ONLN) > $@.new
+	cmp -s $@.new $@ || mv $@.new $@
+	rm -f $@.new
+$(B)/Threads.o: $(B)/osconst.inc
 
 CC ?= cc
 ICU_SRC = src/c/icu/source

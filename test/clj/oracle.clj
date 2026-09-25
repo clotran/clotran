@@ -2461,3 +2461,7 @@
  (.isArray (class (long-array 1))) (= (class (double-array 1)) (class (double-array 5)))]
 (expect-diff "DEVIATIONS 45: short, byte and char arrays have their storage kind's class")
 [(map #(str (class %)) [(short-array 1) (byte-array 1) (char-array 1)]) (bytes? (byte-array 1))]
+
+;;; Runtime.availableProcessors is the machine's, as the JVM's is
+;;; (sysconf through Threads.f90); pmap's look-ahead is sized by it.
+[(.availableProcessors (Runtime/getRuntime))]

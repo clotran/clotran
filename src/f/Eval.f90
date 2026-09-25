@@ -7709,8 +7709,10 @@ contains
        ! Thread.sleep: the clock, with the other tasks running meanwhile
        hit = block_on(gc_nil(), now_ms() + int(int_of(gcv_nth(args, 0)), gc_ip))
     case (B_NPROCS)
-       ! Runtime.availableProcessors: one OS thread runs everything here
-       out = gc_int(1_gc_ip)
+       ! Runtime.availableProcessors: the processors online (Threads.f90).
+       ! pmap keeps this many plus two futures in flight, and futures
+       ! whose Fortran runs off the baton use them (tasks.inc).
+       out = gc_int(int(th_ncpus(), gc_ip))
     case (B_STUB)
        out = gc_key("clotran/stub", [vs_get(base + 1)])
     case (B_SORTEDMAP, B_SORTEDSET)
