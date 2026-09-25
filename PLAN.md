@@ -1194,9 +1194,30 @@ c. *Safepoints.* Collection and pool growth run with every mutator
    must be. The proof comes with d: a host test (`gc_mt_test`) of
    several threads allocating at once, under torture, while collections
    stop them.
+   *Built* (2026-09-25): GC.f90's heap_enter/world_stop. One heap lock
+   around each allocation; an allocation that must collect or grow (a
+   pool or the arena -- growth moves them) stops the world first; a
+   thread counts as running between gc_mutator_enter and _leave, and
+   only the main thread is registered, so while the baton is on no stop
+   ever waits. The lock is re-entered freely by the thread holding it
+   (a finalizer may allocate). `test/f/gc_mt_test` runs four threads
+   building chains under torture, each allocation stopping the other
+   three, with a new cell held ONLY in the next allocation's roots; it
+   passes under both compilers, and fails when the world is not stopped
+   (642-830 bad cells a thread) or when a parked thread does not publish
+   its roots (38-683). The stack table and the global roots grow outside
+   allocation and cannot take the heap lock (it needs the thread's own
+   stack): both grow only under the baton now, and get their lock in f,
+   with the `run_loop` poll and Eval's enter/leave at each hand-off.
+   The lock costs within noise on `scripts/bench` (`into`: 1906 ms
+   before; 1905-2132 after, three runs).
 d. *Allocation.* Each thread takes a batch of free slots under a lock and
    allocates from it without one (a thread-local allocation buffer);
-   pools grow only at a safepoint.
+   pools grow only at a safepoint. *Deferred* (2026-09-25): the plain
+   lock measured within noise with one thread, so batches wait for f,
+   where contention can be measured. A batch must be emptied at every
+   collection -- the sweep rebuilds the free lists and would hand a
+   batched slot out twice.
 e. *Shared Clojure state.* Namespace maps, Var roots, and the keyword and
    symbol intern tables under locks; an atom under a lock first (correct,
    slower), compare-and-swap once a value fits a machine word (a
@@ -1207,6 +1228,21 @@ f. *The baton comes off interpreter code.* Tested by running the derived
 
 **Not in this step**: a concurrent collector (the world stops for each
 collection), and a compacting one (objects never move, as now).
+
+**Open decision: how long the world stops** (raised 2026-09-25). A stop
+is the correctness baseline; what hurts is its LENGTH -- a full mark of
+the whole heap, about 14 ms at 180k live objects, growing with it. The
+options, cheapest first: (1) generational -- most collections scan only
+the young, so short pauses, and probably faster single-threaded code
+too; (2) parallel marking -- the stopped threads mark instead of idling;
+(3) per-thread young heaps, as OCaml 5 has -- each thread collects its
+own young without stopping anyone, and only shared objects go to a
+common heap (it suits Clojure, whose shared data is immutable, at the
+cost of a write barrier on every store of a young object into shared
+data); (4) concurrent marking -- near-zero pauses, write barriers
+everywhere, the hardest. Leaning (1) then (2), with (3) considered once
+pauses can be MEASURED with the baton off (f). Claims about other
+runtimes here are from memory: read their sources before choosing.
 
 ## Decisions that still hold
 

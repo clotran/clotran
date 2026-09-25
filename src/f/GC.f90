@@ -66,7 +66,8 @@
 ! `gc_value` deliberately has no allocatable components and no FINAL,
 ! which is the entire point: copying one is a flat move.
 module GC
-  use Threads, only: th_key, th_key_create, th_key_set, th_key_get
+  use Threads, only: th_key, th_key_create, th_key_set, th_key_get, th_lock, th_cond, &
+       th_lock_init, th_lock_acquire, th_lock_release, th_cond_init, th_cond_wait, th_cond_broadcast
   use iso_c_binding, only: c_ptr, c_loc, c_f_pointer, c_associated
   use BigInt
   use BigDec
@@ -505,6 +506,7 @@ module GC
   type :: gc_stack
      type(gc_value), allocatable :: vstack(:)
      integer :: vs_top = 0
+     logical :: holds_heap = .false.   ! this thread is inside heap_enter/heap_leave
   end type gc_stack
   type :: gc_stack_ref
      type(gc_stack), pointer :: s => null()
@@ -513,6 +515,24 @@ module GC
   integer :: n_stacks = 0
   type(th_key) :: stack_key
   logical :: stack_key_made = .false.
+
+  ! --- several mutators (PLAN.md step 14c) ---------------------------
+  !
+  ! Every allocation holds heap_lock. One that must collect, or grow a
+  ! pool or the arena -- growth MOVES the pool, and other threads read
+  ! pools outside allocation -- first stops the world: raises stop_world
+  ! and waits until every other RUNNING mutator is parked at a safepoint.
+  ! A safepoint is an allocation's entry: a thread arriving while the
+  ! world is stopped pushes that call's roots and slots onto its own
+  ! value stack, where the collector sees them, and waits. A thread
+  ! counts as running between gc_mutator_enter and gc_mutator_leave;
+  ! the main thread is one from gc_init, and while clotran's baton is on
+  ! nothing else registers, so a stop never waits (step 14f changes that).
+  type(th_lock) :: heap_lock
+  type(th_cond) :: heap_cond
+  logical :: heap_sync_up = .false.
+  logical, volatile :: stop_world = .false.
+  integer :: n_running = 1, n_parked = 0
 
   ! --- marking work list -----------------------------------------
   ! An explicit stack, not recursion: a list is a chain thousands of
@@ -606,6 +626,7 @@ module GC
      module procedure vs_depth_self, vs_depth_on
   end interface vs_depth
   public :: gc_stack_new, gc_stack_bind, gc_stacks_reset
+  public :: gc_mutator_enter, gc_mutator_leave
   public :: gc_arena_stats
   public :: gc_equal, gc_hash
 
@@ -708,6 +729,9 @@ contains
     global_gen = global_gen + 1
     gc_allocs = 0; gc_frees = 0; gc_collections = 0
     gc_no_collect = .false.
+    call heap_sync_init()
+    n_running = 1
+    n_parked = 0
     call gc_stacks_reset()
     call gc_stack_new(1)   ! a fresh heap: stack 1 starts empty
   end subroutine gc_init
@@ -750,6 +774,106 @@ contains
     if (.not. c_associated(p)) error stop "clotran: a value stack used on a thread with none"
     call c_f_pointer(p, s)
   end function my_stack
+
+  subroutine heap_sync_init()
+    if (heap_sync_up) return
+    if (.not. (th_lock_init(heap_lock) .and. th_cond_init(heap_cond))) &
+         error stop "clotran: no lock for the heap"
+    heap_sync_up = .true.
+  end subroutine heap_sync_init
+
+  ! Into the heap: take its lock, and if the world is stopped, park here
+  ! -- a safepoint -- with a and b on this thread's stack until it goes
+  ! on. `entered` says whether this call took the lock: a finalizer that
+  ! allocates, run by a collection this thread started, already holds it.
+  subroutine heap_enter(a, b, entered)
+    type(gc_value), intent(in) :: a(:), b(:)
+    logical, intent(out) :: entered
+    type(gc_stack), pointer :: s
+    integer :: base, i
+    logical :: ok
+    call gc_ensure_init()
+    s => my_stack()
+    entered = .not. s%holds_heap
+    if (.not. entered) return
+    ok = th_lock_acquire(heap_lock)
+    s%holds_heap = .true.
+    if (stop_world) then
+       base = vs_enter_on(s, size(a) + size(b))
+       do i = 1, size(a)
+          s%vstack(base + i) = a(i)
+       end do
+       do i = 1, size(b)
+          s%vstack(base + size(a) + i) = b(i)
+       end do
+       n_parked = n_parked + 1
+       ok = th_cond_broadcast(heap_cond)
+       do while (stop_world)
+          ok = th_cond_wait(heap_cond, heap_lock)
+       end do
+       n_parked = n_parked - 1
+       call vs_leave_on(s, base)
+    end if
+  end subroutine heap_enter
+
+  subroutine heap_leave(entered)
+    logical, intent(in) :: entered
+    type(gc_stack), pointer :: s
+    logical :: ok
+    if (.not. entered) return
+    s => my_stack()
+    s%holds_heap = .false.
+    ok = th_lock_release(heap_lock)
+  end subroutine heap_leave
+
+  ! Every other running mutator parked (heap_lock held throughout, except
+  ! while waiting). `stopped` says whether this call stopped it, so a
+  ! nested stop -- a growth inside a collection's allocation -- is one.
+  subroutine world_stop(stopped)
+    logical, intent(out) :: stopped
+    logical :: ok
+    stopped = .not. stop_world
+    if (.not. stopped) return
+    if (n_running <= 1) then
+       stopped = .false.   ! no one to stop: the common case, the baton on
+       return
+    end if
+    stop_world = .true.
+    do while (n_parked < n_running - 1)
+       ok = th_cond_wait(heap_cond, heap_lock)
+    end do
+  end subroutine world_stop
+
+  subroutine world_start(stopped)
+    logical, intent(in) :: stopped
+    logical :: ok
+    if (.not. stopped) return
+    stop_world = .false.
+    ok = th_cond_broadcast(heap_cond)
+  end subroutine world_start
+
+  ! This thread runs heap code from now on: it allocates, and a stop
+  ! waits for it. Not while the world is stopped.
+  subroutine gc_mutator_enter()
+    logical :: ok
+    call gc_ensure_init()
+    ok = th_lock_acquire(heap_lock)
+    do while (stop_world)
+       ok = th_cond_wait(heap_cond, heap_lock)
+    end do
+    n_running = n_running + 1
+    ok = th_lock_release(heap_lock)
+  end subroutine gc_mutator_enter
+
+  ! ... and no longer: a stop stops waiting for it. It holds nothing the
+  ! collector must see but its value stack, which is scanned regardless.
+  subroutine gc_mutator_leave()
+    logical :: ok
+    ok = th_lock_acquire(heap_lock)
+    n_running = n_running - 1
+    ok = th_cond_broadcast(heap_cond)
+    ok = th_lock_release(heap_lock)
+  end subroutine gc_mutator_leave
 
   ! Every stack but 1 gone, and the calling thread on stack 1 -- kept as
   ! it is: Eval starts its contexts over (ctx_reset) with frames of its
@@ -973,6 +1097,13 @@ contains
     integer, intent(in) :: tag
     type(gc_value) :: v
     integer :: idx
+    logical :: entered, stopped
+    type(gc_value) :: none(0)
+    call heap_enter(roots, none, entered)
+    ! ponytail: the world stops for every allocation that may collect or
+    ! grow -- rare outside torture; the fast path below never stops it
+    stopped = .false.
+    if (gc_torture .or. (str_free_head == 0 .and. str_used >= size(str_pool))) call world_stop(stopped)
     if (gc_no_collect) then
        if (str_free_head == 0 .and. str_used >= size(str_pool)) call grow_str()
     else if (gc_torture .or. (str_free_head == 0 .and. str_used >= size(str_pool))) then
@@ -989,6 +1120,7 @@ contains
           end do
        end if
     end if
+    call world_start(stopped)
     if (str_free_head /= 0) then
        idx = str_free_head
        str_free_head = str_free_next(idx)
@@ -1000,7 +1132,8 @@ contains
     str_pool(idx)%text = text
     v%tag = tag
     v%ref = idx
-    gc_allocs = gc_allocs + 1
+    gc_allocs = gc_allocs + 1   ! statistics: shared, and counted under the lock
+    call heap_leave(entered)
   end function new_text
 
   ! An object of the given kind, with up to OBJ_SLOTS initial slots.
@@ -1010,7 +1143,11 @@ contains
     type(gc_value) :: v
     type(gc_value), allocatable :: all_roots(:)
     integer :: idx, i
+    logical :: entered, stopped
 
+    call heap_enter(roots, slots, entered)
+    stopped = .false.
+    if (gc_torture .or. (obj_free_head == 0 .and. obj_used >= size(obj_pool))) call world_stop(stopped)
     if (gc_no_collect) then
        if (obj_free_head == 0 .and. obj_used >= size(obj_pool)) call grow_obj()
     else if (gc_torture .or. (obj_free_head == 0 .and. obj_used >= size(obj_pool))) then
@@ -1030,6 +1167,7 @@ contains
           end do
        end if
     end if
+    call world_start(stopped)
     if (obj_free_head /= 0) then
        idx = obj_free_head
        obj_free_head = obj_free_next(idx)
@@ -1050,6 +1188,7 @@ contains
     v%tag = GCT_OBJ
     v%ref = idx
     gc_allocs = gc_allocs + 1
+    call heap_leave(entered)
   end function gc_obj
 
   ! A run of n values, all nil.
@@ -1058,7 +1197,13 @@ contains
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: v
     integer :: idx, i
+    logical :: entered, stopped
+    type(gc_value) :: none(0)
 
+    call heap_enter(roots, none, entered)
+    stopped = .false.
+    if (gc_torture .or. (vec_free_head == 0 .and. vec_used >= size(vec_pool)) &
+         .or. arena_alloc_since >= max(2 * arena_live, 262144)) call world_stop(stopped)
     ! Growing the ARENA is a reason to collect first, like filling the
     ! node pool: otherwise every run between two collections comes from
     ! fresh arena and it ends four times the live size (measured: 4.2M
@@ -1093,6 +1238,7 @@ contains
           end do
        end if
     end if
+    call world_start(stopped)
     if (vec_free_head /= 0) then
        idx = vec_free_head
        vec_free_head = vec_free_next(idx)
@@ -1109,6 +1255,7 @@ contains
     v%tag = GCT_VEC
     v%ref = idx
     gc_allocs = gc_allocs + 1
+    call heap_leave(entered)
   end function gc_vec
 
   ! A cons cell is an object of two slots, allocated often enough to
@@ -1174,6 +1321,7 @@ contains
     integer, intent(out) :: off
     type(gc_value), allocatable :: bigger(:)
     integer :: c, l, sz
+    logical :: stopped
     off = 0
     if (n <= 0) return
     c = size_class(n)
@@ -1187,6 +1335,7 @@ contains
     arena_fresh = arena_fresh + 1
     l = ishft(1, c - 1)
     if (store_used + l > size(vec_store)) then
+       call world_stop(stopped)
        sz = size(vec_store)
        do while (store_used + l > sz)
           sz = 2 * sz
@@ -1195,6 +1344,7 @@ contains
        bigger(1:store_used) = vec_store(1:store_used)
        bigger(store_used + 1:) = nilv
        call move_alloc(bigger, vec_store)
+       call world_start(stopped)
     end if
     off = store_used + 1
     store_used = store_used + l

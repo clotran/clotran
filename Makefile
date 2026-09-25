@@ -156,7 +156,7 @@ BT = $(B)/test
 
 unit-tests = gc_test persistent_vector_test persistent_list_test persistent_array_map_test \
 	persistent_hash_map_test env_test assoc_test printer_test reader_test eval_test bigint_test \
-	bigdec_test abi_test native_array_test threads_test
+	bigdec_test abi_test native_array_test threads_test gc_mt_test
 test-bins = $(addprefix $(BT)/,$(unit-tests))
 
 .PHONY: all test crosscheck clean compiled-core
@@ -275,6 +275,11 @@ $(BT)/eval_test: $(eval-objects) $(T)/eval_test.f90 $(ICU_LIBS) | $(BT) $(FCSTAM
 # (PLAN.md step 11, stage 1), pthreads through iso_c_binding.
 $(BT)/threads_test: $(B)/Threads.o $(T)/threads_test.f90 | $(BT) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -c $(T)/threads_test.f90 -o $(BT)/threads_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/Threads.o $(BT)/threads_test.o -lpthread
+
+# gc_mt_test: the collector with several threads allocating at once
+# (PLAN.md step 14c), torture on, every allocation stopping the others.
+$(BT)/gc_mt_test: $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/GC.o $(T)/gc_mt_test.f90 | $(BT) $(FCSTAMP)
+	$(FC) $(FCFLAGS) -c $(T)/gc_mt_test.f90 -o $(BT)/gc_mt_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/GC.o $(BT)/gc_mt_test.o -lpthread
 
 # abi_test declares every entry point itself and uses no clotran
 # module, which is the point of it -- so it compiles with -I nowhere

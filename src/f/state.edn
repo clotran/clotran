@@ -64,6 +64,12 @@
  "Eval.f90/tasks_root" {:class :shared, :note "the task table: under the context-table lock"}
  "Eval.f90/trace_macros" {:class :fixed, :note "read once from the environment"}
  "Eval.f90/types_root" {:class :shared, :note "every deftype, one table as the JVM has one class namespace: additions under a lock"}
+ "GC.f90/heap_cond" {:class :fixed, :note "made at the first gc_init"}
+ "GC.f90/heap_lock" {:class :fixed, :note "made at the first gc_init"}
+ "GC.f90/heap_sync_up" {:class :fixed, :note "with heap_lock"}
+ "GC.f90/n_parked" {:class :shared, :note "the heap's synchronisation itself (step 14c): read and written under heap_lock"}
+ "GC.f90/n_running" {:class :shared, :note "the heap's synchronisation itself (step 14c): read and written under heap_lock"}
+ "GC.f90/stop_world" {:class :shared, :note "written under heap_lock, read by the allocation fast path: volatile"}
  "GC.f90/n_stacks" {:class :shared, :note "the stack table: grown when a context is made, under the baton; safepoint for growth in 14c"}
  "GC.f90/stack_key" {:class :fixed, :note "made once, at the first gc_init, on the main thread"}
  "GC.f90/stack_key_made" {:class :fixed, :note "with stack_key"}
