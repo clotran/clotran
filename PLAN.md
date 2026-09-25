@@ -1254,6 +1254,26 @@ everywhere, the hardest. Leaning (1) then (2), with (3) considered once
 pauses can be MEASURED with the baton off (f). Claims about other
 runtimes here are from memory: read their sources before choosing.
 
+Decided 2026-09-25: (1), then (2), maybe (3) -- without letting it pull
+the compilation plan off course. (1) was chosen first on a profile: the
+collector was 20% of `into`/`map` and 40% of a compiled loop calling a
+small function (a dead frame per call, and every collection re-marked
+the ~150k objects core.clj leaves live).
+
+(1) BUILT 2026-09-25, non-moving, by sticky mark bits (GC.f90,
+"generations"): survivors stay marked and marked is old; a young
+collection marks from the roots and the remembered set, stops at the
+old, and sweeps only the young lists; the barrier is in the only two
+setters that store into an existing object. Growth now reads live
+counts (a young sweep frees little and must not grow a pool for it),
+and growth copies the mark bits, which it used to reset. Explicit
+`gc_collect` stays full. CLOTRAN_GC_FULL=1 turns it off;
+CLOTRAN_GC_VERIFY=1 checks the heap after every young collection --
+five workloads ran clean under it. gc_test 19 fails without the
+barrier. `scripts/bench`: reduce 114 -> 96 ms, loop 319 -> 286,
+into/map 1884 -> 1658, sort 2182 -> 1746, assoc 138 -> 96, str 301 ->
+~272; fib unchanged; a compiled loop calling a small fn 30.7 -> 20.1.
+
 ## Decisions that still hold
 
 **The value type has no `FINAL`.** Copying a `cons_value` (nine

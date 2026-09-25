@@ -30,6 +30,7 @@ program gc_test
   call check_grow_only()
   call check_value_stack()
   call check_global_root_growth()
+  call check_write_barrier()
 
   if (all_ok) then
      print *, ""
@@ -184,6 +185,31 @@ contains
   ! Torture mode collects at EVERY allocation, so anything not passed
   ! as a root is destroyed immediately. A missing root then fails here
   ! and now, deterministically, instead of corrupting memory later.
+  ! The generational write barrier. `old` survives a collection, so it
+  ! is old; a young cell is then stored into it and reachable ONLY
+  ! through it. Young collections trace from roots and stop at old
+  ! objects -- only the barrier's remembered set gets them to the young
+  ! cell. Torture alternates young and full, so both run at every step.
+  subroutine check_write_barrier()
+    type(gc_value) :: old, young, roots(1), c
+    integer :: i
+    call gc_init(8)
+    old = gc_cons(gc_int(1), gc_nil(), no_roots)
+    roots(1) = old
+    call gc_collect(roots)             ! full: old is marked, so old
+    gc_torture = .true.
+    young = gc_cons(gc_int(42), gc_nil(), roots)
+    call gc_set_cdr(old, young)        ! the only reference to young
+    do i = 1, 50
+       c = gc_str("churn", roots)      ! each allocation collects
+    end do
+    gc_torture = .false.
+    c = gc_cdr(old)
+    call ok("19a. a young value stored into an old object survives young collections: ", &
+         gc_kind(c) == OBJ_CONS .and. car_int(c) == 42)
+    call ok("19b. ...and the heap has no dangling reference: ", len(gc_check_heap()) == 0)
+  end subroutine check_write_barrier
+
   subroutine check_torture_keeps_live_data()
     type(gc_value) :: head, roots(1)
     integer :: i

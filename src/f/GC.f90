@@ -400,6 +400,35 @@ module GC
   integer, allocatable :: str_free_next(:)
   integer :: str_free_head = 0, str_used = 0
 
+  ! --- generations ----------------------------------------------
+  !
+  ! Non-moving and generational by STICKY MARK BITS: a full collection
+  ! leaves every survivor marked, and marked MEANS old. A new object
+  ! starts unmarked and goes on its pool's young list. A young collection
+  ! marks from the roots and from the REMEMBERED objects -- old ones a
+  ! young value was stored into since -- and stops at anything already
+  ! marked, so it traces only the young; it sweeps only the young lists,
+  ! and a survivor is old from then on. The write barrier is in the two
+  ! setters that store into an existing object (gc_set_slot, gc_vec_set):
+  ! everything else writes into a new, young, object. A full collection
+  ! runs when the old generation has doubled since the last one.
+  ! CLOTRAN_GC_FULL=1 makes every collection full (to bisect a wrong
+  ! answer to the collector); CLOTRAN_GC_VERIFY=1 checks the whole heap
+  ! after each young collection (gc_check_heap) and stops on a dangling
+  ! reference, which is what a missing barrier or root looks like.
+  logical :: gen_mode = .true., gen_verify = .false., gen_env_read = .false.
+  integer, allocatable :: obj_young(:), vec_young(:), str_young(:)
+  integer :: n_obj_young = 0, n_vec_young = 0, n_str_young = 0
+  logical, allocatable :: obj_rem(:), vec_rem(:)
+  type(gc_value), allocatable :: rem_set(:)
+  integer :: n_rem = 0
+  ! live objects per pool and live arena slots, kept as allocation and
+  ! sweep go: the growth rules read these, not what one sweep freed --
+  ! a young sweep frees little of a pool and must not grow it for that
+  integer :: obj_live = 0, vec_live = 0, str_live = 0, arena_live_now = 0
+  integer :: old_at_full = 0, promoted_since_full = 0
+  integer, public :: gc_young_collections = 0
+
   ! --- global roots ----------------------------------------------
   ! Process-wide and mutable: the registry handle changes whenever the
   ! registry grows, so a global is a SLOT, not a value handed over once.
@@ -721,6 +750,14 @@ contains
     if (allocated(mark_stack)) deallocate(mark_stack)
     allocate(mark_stack(n))
     mark_sp = 0
+
+    if (allocated(obj_young)) deallocate(obj_young, vec_young, str_young, obj_rem, vec_rem, rem_set)
+    allocate(obj_young(1024), vec_young(1024), str_young(1024), rem_set(1024))
+    allocate(obj_rem(n), vec_rem(n))
+    obj_rem = .false.; vec_rem = .false.
+    n_obj_young = 0; n_vec_young = 0; n_str_young = 0; n_rem = 0
+    obj_live = 0; vec_live = 0; str_live = 0; arena_live_now = 0
+    old_at_full = 0; promoted_since_full = 0; gc_young_collections = 0
 
     if (allocated(global_root)) deallocate(global_root)
     allocate(global_root(8))
@@ -1117,15 +1154,14 @@ contains
     if (gc_no_collect) then
        if (str_free_head == 0 .and. str_used >= size(str_pool)) call grow_str()
     else if (gc_torture .or. (str_free_head == 0 .and. str_used >= size(str_pool))) then
-       call gc_collect(roots)
+       call collect_auto(roots)
        if (str_free_head == 0 .and. str_used >= size(str_pool)) call grow_str()
        ! Not under torture: it collects at EVERY allocation, so almost
        ! nothing is garbage per collection and the half-live rule
        ! would double the pool on every allocation until the process
        ! was killed. Torture tests rooting, not the growth policy.
        if (.not. gc_torture) then
-          if (2 * str_swept < size(str_pool)) call grow_str()
-          do while (size(str_pool) < 2 * str_marked)
+          do while (size(str_pool) < 2 * str_live)
              call grow_str()
           end do
        end if
@@ -1139,6 +1175,9 @@ contains
        idx = str_used
     end if
     str_free(idx) = .false.
+    str_mark(idx) = .false.
+    str_live = str_live + 1
+    call young_add(str_young, n_str_young, idx)
     str_pool(idx)%text = text
     v%tag = tag
     v%ref = idx
@@ -1164,15 +1203,14 @@ contains
        allocate(all_roots(size(roots) + size(slots)))
        all_roots(1:size(roots)) = roots
        all_roots(size(roots) + 1:) = slots
-       call gc_collect(all_roots)
+       call collect_auto(all_roots)
        if (obj_free_head == 0 .and. obj_used >= size(obj_pool)) call grow_obj()
        ! Not under torture: it collects at EVERY allocation, so almost
        ! nothing is garbage per collection and the half-live rule
        ! would double the pool on every allocation until the process
        ! was killed. Torture tests rooting, not the growth policy.
        if (.not. gc_torture) then
-          if (2 * obj_swept < size(obj_pool)) call grow_obj()
-          do while (size(obj_pool) < 2 * obj_marked)
+          do while (size(obj_pool) < 2 * obj_live)
              call grow_obj()
           end do
        end if
@@ -1186,6 +1224,9 @@ contains
        idx = obj_used
     end if
     obj_free(idx) = .false.
+    obj_mark(idx) = .false.
+    obj_live = obj_live + 1
+    call young_add(obj_young, n_obj_young, idx)
     obj_pool(idx)%kind = kind
     obj_pool(idx)%i1 = 0
     obj_pool(idx)%i2 = 0
@@ -1233,17 +1274,16 @@ contains
        ! classes makes meaningless. ("Freed less than half" doubled the
        ! arena to 67M slots for 4.6M live.) The node pool's own growth
        ! rule must NOT run here: it doubled the pool on every one of these.
-       call gc_collect(roots)
+       call collect_auto(roots)
     else if (gc_torture .or. (vec_free_head == 0 .and. vec_used >= size(vec_pool))) then
-       call gc_collect(roots)
+       call collect_auto(roots)
        if (vec_free_head == 0 .and. vec_used >= size(vec_pool)) call grow_vec()
        ! Not under torture: it collects at EVERY allocation, so almost
        ! nothing is garbage per collection and the half-live rule
        ! would double the pool on every allocation until the process
        ! was killed. Torture tests rooting, not the growth policy.
        if (.not. gc_torture) then
-          if (2 * vec_swept < size(vec_pool)) call grow_vec()
-          do while (size(vec_pool) < 2 * vec_marked)
+          do while (size(vec_pool) < 2 * vec_live)
              call grow_vec()
           end do
        end if
@@ -1257,6 +1297,10 @@ contains
        idx = vec_used
     end if
     vec_free(idx) = .false.
+    vec_mark(idx) = .false.
+    vec_live = vec_live + 1
+    arena_live_now = arena_live_now + max(n, 0)
+    call young_add(vec_young, n_vec_young, idx)
     call slab_alloc(max(n, 0), vec_pool(idx)%off)
     vec_pool(idx)%len = max(n, 0)
     do i = 1, n
@@ -1294,13 +1338,40 @@ contains
        bigger(i) = obj_pool(i)
     end do
     bmark = .false.; bfree = .false.; bnext = 0
+    bmark(1:n) = obj_mark(1:n)   ! marked is old: growth must not make it young
     bfree(1:n) = obj_free(1:n)
     bnext(1:n) = obj_free_next(1:n)
+    call grow_flags(obj_rem, 2 * n)
     call move_alloc(bigger, obj_pool)
     call move_alloc(bmark, obj_mark)
     call move_alloc(bfree, obj_free)
     call move_alloc(bnext, obj_free_next)
   end subroutine grow_obj
+
+  subroutine grow_flags(f, n)
+    logical, allocatable, intent(inout) :: f(:)
+    integer, intent(in) :: n
+    logical, allocatable :: b(:)
+    allocate(b(n))
+    b = .false.
+    b(1:size(f)) = f
+    call move_alloc(b, f)
+  end subroutine grow_flags
+
+  ! Appends idx to a young list, growing it.
+  subroutine young_add(list, n, idx)
+    integer, allocatable, intent(inout) :: list(:)
+    integer, intent(inout) :: n
+    integer, intent(in) :: idx
+    integer, allocatable :: b(:)
+    if (n >= size(list)) then
+       allocate(b(2 * size(list)))
+       b(1:n) = list(1:n)
+       call move_alloc(b, list)
+    end if
+    n = n + 1
+    list(n) = idx
+  end subroutine young_add
 
   ! The size class of a run of n: the smallest power of two that holds it.
   integer function size_class(n)
@@ -1411,8 +1482,10 @@ contains
     allocate(bigger(2 * n), bmark(2 * n), bfree(2 * n), bnext(2 * n))
     bigger(1:n) = vec_pool(1:n)
     bmark = .false.; bfree = .false.; bnext = 0
+    bmark(1:n) = vec_mark(1:n)
     bfree(1:n) = vec_free(1:n)
     bnext(1:n) = vec_free_next(1:n)
+    call grow_flags(vec_rem, 2 * n)
     call move_alloc(bigger, vec_pool)
     call move_alloc(bmark, vec_mark)
     call move_alloc(bfree, vec_free)
@@ -1430,6 +1503,7 @@ contains
        if (allocated(str_pool(i)%text)) bigger(i)%text = str_pool(i)%text
     end do
     bmark = .false.; bfree = .false.; bnext = 0
+    bmark(1:n) = str_mark(1:n)
     bfree(1:n) = str_free(1:n)
     bnext(1:n) = str_free_next(1:n)
     call move_alloc(bigger, str_pool)
@@ -1467,8 +1541,44 @@ contains
   subroutine gc_set_slot(v, i, x)
     type(gc_value), intent(in) :: v, x
     integer, intent(in) :: i
-    if (v%tag == GCT_OBJ .and. i >= 1 .and. i <= OBJ_SLOTS) obj_pool(v%ref)%slot(i) = x
+    if (v%tag == GCT_OBJ .and. i >= 1 .and. i <= OBJ_SLOTS) then
+       obj_pool(v%ref)%slot(i) = x
+       ! the write barrier: a young value into an old object
+       if (obj_mark(v%ref) .and. .not. obj_rem(v%ref)) then
+          if (is_young(x)) then
+             obj_rem(v%ref) = .true.
+             call remember(v)
+          end if
+       end if
+    end if
   end subroutine gc_set_slot
+
+  ! Whether x is a heap object allocated since the last collection.
+  logical function is_young(x)
+    type(gc_value), intent(in) :: x
+    is_young = .false.
+    if (x%ref == 0) return
+    select case (x%tag)
+    case (GCT_OBJ)
+       is_young = .not. obj_mark(x%ref)
+    case (GCT_VEC)
+       is_young = .not. vec_mark(x%ref)
+    case (GCT_STR, GCT_SYM, GCT_KEY, GCT_BIG, GCT_CLASS, GCT_DEC)
+       is_young = .not. str_mark(x%ref)
+    end select
+  end function is_young
+
+  subroutine remember(v)
+    type(gc_value), intent(in) :: v
+    type(gc_value), allocatable :: b(:)
+    if (n_rem >= size(rem_set)) then
+       allocate(b(2 * size(rem_set)))
+       b(1:n_rem) = rem_set(1:n_rem)
+       call move_alloc(b, rem_set)
+    end if
+    n_rem = n_rem + 1
+    rem_set(n_rem) = v
+  end subroutine remember
 
   function gc_i1(v) result(i)
     type(gc_value), intent(in) :: v
@@ -1519,6 +1629,12 @@ contains
     if (v%tag /= GCT_VEC) return
     if (i < 1 .or. i > gc_vec_len(v)) return
     vec_store(vec_pool(v%ref)%off + i - 1) = x
+    if (vec_mark(v%ref) .and. .not. vec_rem(v%ref)) then
+       if (is_young(x)) then
+          vec_rem(v%ref) = .true.
+          call remember(v)
+       end if
+    end if
   end subroutine gc_vec_set
 
   function gc_car(v) result(out)
@@ -1545,25 +1661,60 @@ contains
 
   ! --- collection ------------------------------------------------
 
+  ! An explicit collection -- System/gc, a test -- frees everything
+  ! unreachable, old included: a full one.
   subroutine gc_collect(roots)
     type(gc_value), intent(in) :: roots(:)
-    integer :: i, k
-
     gc_collections = gc_collections + 1
+    call collect_full(roots)
     arena_alloc_since = 0
-    arena_live = 0
-    last_marked = gc_marked
-    obj_marked = 0; vec_marked = 0; str_marked = 0
-    obj_mark = .false.
-    vec_mark = .false.
-    str_mark = .false.
-    mark_sp = 0
+    arena_live = arena_live_now
+  end subroutine gc_collect
 
+  ! A collection an allocation asked for: young, or full when the old
+  ! generation has doubled since the last full one.
+  subroutine collect_auto(roots)
+    type(gc_value), intent(in) :: roots(:)
+    logical :: full
+    character(len=8) :: e
+    if (.not. gen_env_read) then
+       call get_environment_variable("CLOTRAN_GC_FULL", e)
+       gen_mode = trim(e) /= "1"
+       call get_environment_variable("CLOTRAN_GC_VERIFY", e)
+       gen_verify = trim(e) == "1"
+       gen_env_read = .true.
+    end if
+    gc_collections = gc_collections + 1
+    full = .not. gen_mode .or. promoted_since_full > max(old_at_full, 65536)
+    ! torture: every allocation collects; alternate, so both kinds are
+    ! exercised at every allocation site
+    if (gc_torture) full = .not. gen_mode .or. mod(gc_collections, 2) == 0
+    if (full) then
+       call collect_full(roots)
+    else
+       call collect_young(roots)
+       if (gen_verify) then
+          block
+            character(len=:), allocatable :: p
+            p = gc_check_heap()
+            if (len(p) > 0) then
+               write(0, '(A)') "clotran: a young collection left a dangling reference: " // p
+               error stop 1
+            end if
+          end block
+       end if
+    end if
+    arena_alloc_since = 0
+    arena_live = arena_live_now
+  end subroutine collect_auto
+
+  ! Every root: the global ones, every thread's value stack, and the
+  ! allocation's own.
+  subroutine push_roots(roots)
+    type(gc_value), intent(in) :: roots(:)
+    integer :: i, k
     do i = 1, global_count
        call push_mark(global_root(i))
-    end do
-    do i = 1, 0   ! every stack is below, the running thread's included
-       call push_mark(nilv)
     end do
     do i = 1, n_stacks
        if (.not. associated(stacks(i)%s)) cycle
@@ -1576,10 +1727,83 @@ contains
     do i = 1, size(roots)
        call push_mark(roots(i))
     end do
+  end subroutine push_roots
+
+  subroutine collect_full(roots)
+    type(gc_value), intent(in) :: roots(:)
+    last_marked = gc_marked
+    obj_marked = 0; vec_marked = 0; str_marked = 0
+    obj_mark = .false.
+    vec_mark = .false.
+    str_mark = .false.
+    mark_sp = 0
+    call push_roots(roots)
     call drain_mark_stack()
     last_marked = gc_marked - last_marked
     call sweep()
-  end subroutine gc_collect
+    call forget_young()
+    old_at_full = obj_live + vec_live + str_live
+    promoted_since_full = 0
+  end subroutine collect_full
+
+  ! The young only: marking stops at the old (already marked), and the
+  ! remembered old objects stand in for the old ones that reach the
+  ! young. Survivors are left marked -- old -- by the marking itself.
+  subroutine collect_young(roots)
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: v
+    integer :: i, j, before
+    gc_young_collections = gc_young_collections + 1
+    before = obj_live + vec_live + str_live
+    last_marked = gc_marked
+    obj_marked = 0; vec_marked = 0; str_marked = 0
+    mark_sp = 0
+    call push_roots(roots)
+    do i = 1, n_rem
+       v = rem_set(i)
+       if (v%tag == GCT_OBJ) then
+          do j = 1, OBJ_SLOTS
+             call push_mark(obj_pool(v%ref)%slot(j))
+          end do
+       else if (v%tag == GCT_VEC) then
+          do j = 1, vec_pool(v%ref)%len
+             call push_mark(vec_store(vec_pool(v%ref)%off + j - 1))
+          end do
+       end if
+    end do
+    call drain_mark_stack()
+    last_marked = gc_marked - last_marked
+    obj_swept = 0; vec_swept = 0; str_swept = 0
+    do i = 1, n_obj_young
+       j = obj_young(i)
+       if (.not. (obj_mark(j) .or. obj_free(j))) call free_obj(j)
+    end do
+    do i = 1, n_vec_young
+       j = vec_young(i)
+       if (.not. (vec_mark(j) .or. vec_free(j))) call free_vec(j)
+    end do
+    do i = 1, n_str_young
+       j = str_young(i)
+       if (.not. (str_mark(j) .or. str_free(j))) call free_str(j)
+    end do
+    promoted_since_full = promoted_since_full + (obj_live + vec_live + str_live) - &
+         (before - n_obj_young - n_vec_young - n_str_young)
+    call forget_young()
+  end subroutine collect_young
+
+  ! After any collection: nothing is young and nothing remembered.
+  subroutine forget_young()
+    integer :: i
+    do i = 1, n_rem
+       if (rem_set(i)%tag == GCT_OBJ) then
+          obj_rem(rem_set(i)%ref) = .false.
+       else if (rem_set(i)%tag == GCT_VEC) then
+          vec_rem(rem_set(i)%ref) = .false.
+       end if
+    end do
+    n_rem = 0
+    n_obj_young = 0; n_vec_young = 0; n_str_young = 0
+  end subroutine forget_young
 
   ! Value equality: same tag, and same
   ! scalar or text content. Collections compare by IDENTITY, not
@@ -2062,50 +2286,70 @@ contains
   ! sweep O(free^2), quadratic in exactly the case that matters -- a
   ! heap that is mostly garbage.
   subroutine sweep()
-    integer :: i, j
+    integer :: i
     obj_swept = 0; vec_swept = 0; str_swept = 0
     do i = 1, obj_used
        if (obj_mark(i) .or. obj_free(i)) cycle
-       obj_swept = obj_swept + 1
-       ! Tell the owner before the slot is reused, so a buffer or a
-       ! host handle is released exactly once, here, rather than
-       ! leaking for the life of the process.
-       ! `i2` too: a native array SLICE shares its parent's buffer
-       ! handle rather than owning one, and only the owner may release
-       ! it. i2 is how Eval tells the two apart -- see OBJ_ARRAY there.
-       if (associated(obj_finalizer) .and. obj_pool(i)%kind /= 0) &
-            call obj_finalizer(obj_pool(i)%kind, obj_pool(i)%i1, obj_pool(i)%i2)
-       do j = 1, OBJ_SLOTS
-          obj_pool(i)%slot(j) = nilv
-       end do
-       obj_pool(i)%kind = 0
-       obj_free(i) = .true.
-       obj_free_next(i) = obj_free_head
-       obj_free_head = i
-       gc_frees = gc_frees + 1
+       call free_obj(i)
     end do
     do i = 1, vec_used
        if (vec_mark(i) .or. vec_free(i)) cycle
-       call slab_free(i)
-       vec_swept = vec_swept + 1
-       vec_free(i) = .true.
-       vec_free_next(i) = vec_free_head
-       vec_free_head = i
-       gc_frees = gc_frees + 1
+       call free_vec(i)
     end do
     do i = 1, str_used
        if (str_mark(i) .or. str_free(i)) cycle
-       ! Released here rather than at process exit: this is the one
-       ! place a finalizer genuinely belongs, run once per object by
-       ! sweep instead of once per copy.
-       if (allocated(str_pool(i)%text)) deallocate(str_pool(i)%text)
-       str_swept = str_swept + 1
-       str_free(i) = .true.
-       str_free_next(i) = str_free_head
-       str_free_head = i
-       gc_frees = gc_frees + 1
+       call free_str(i)
     end do
   end subroutine sweep
+
+  subroutine free_obj(i)
+    integer, intent(in) :: i
+    integer :: j
+    obj_swept = obj_swept + 1
+    ! Tell the owner before the slot is reused, so a buffer or a
+    ! host handle is released exactly once, here, rather than
+    ! leaking for the life of the process.
+    ! `i2` too: a native array SLICE shares its parent's buffer
+    ! handle rather than owning one, and only the owner may release
+    ! it. i2 is how Eval tells the two apart -- see OBJ_ARRAY there.
+    if (associated(obj_finalizer) .and. obj_pool(i)%kind /= 0) &
+         call obj_finalizer(obj_pool(i)%kind, obj_pool(i)%i1, obj_pool(i)%i2)
+    do j = 1, OBJ_SLOTS
+       obj_pool(i)%slot(j) = nilv
+    end do
+    obj_pool(i)%kind = 0
+    obj_free(i) = .true.
+    obj_free_next(i) = obj_free_head
+    obj_free_head = i
+    obj_live = obj_live - 1
+    gc_frees = gc_frees + 1
+  end subroutine free_obj
+
+  subroutine free_vec(i)
+    integer, intent(in) :: i
+    arena_live_now = arena_live_now - vec_pool(i)%len
+    call slab_free(i)
+    vec_swept = vec_swept + 1
+    vec_free(i) = .true.
+    vec_free_next(i) = vec_free_head
+    vec_free_head = i
+    vec_live = vec_live - 1
+    gc_frees = gc_frees + 1
+  end subroutine free_vec
+
+  subroutine free_str(i)
+    integer, intent(in) :: i
+    ! Released here rather than at process exit: this is the one
+    ! place a finalizer genuinely belongs, run once per object by
+    ! sweep instead of once per copy.
+    if (allocated(str_pool(i)%text)) deallocate(str_pool(i)%text)
+    str_swept = str_swept + 1
+    str_free(i) = .true.
+    str_free_next(i) = str_free_head
+    str_free_head = i
+    str_live = str_live - 1
+    gc_frees = gc_frees + 1
+  end subroutine free_str
 
   function gc_live_count() result(n)
     integer :: n
