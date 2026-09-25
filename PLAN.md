@@ -1093,7 +1093,15 @@ its hint, else a double -- and a parameter read by a record's fields is
 that record (2026-09-25). amap is a `do concurrent` loop. Several
 fixed arities are one generic name, a version per arity and types,
 longest first so `(f x)` can call `(f x 1)` (2026-09-25). Not yet:
-variadic arities, escape analysis for small collections.
+variadic arities, and escape analysis for small collections -- planned:
+a vector literal of numbers whose length is fixed where it is made and
+which is only destructured, `nth`ed at a constant, `count`ed, or
+returned, is a Fortran array of that length (`real(real64) :: v(2)`,
+a function answering `[x y]` answers one); a map literal with keyword
+keys and number values, read only by those keywords, is a derived type
+as a record is, named from its keys. Anything that lets one escape --
+`conj`, `assoc`, a call outside the file -- keeps it on the heap and
+the function in tier B, with the warning saying which use did it.
 
 
 ### 14. Stage 3: plain Clojure on several threads at once (planned 2026-09-25)
@@ -1122,6 +1130,32 @@ a. *Classify the state.* Every module variable is per-thread (into
 b. *Per-thread state into the context.* Mechanical, large, no behaviour
    change: what is swapped at a hand-off today becomes what each thread
    simply owns.
+
+   *How a thread finds its state* (decided 2026-09-25). Standard Fortran
+   has no thread-local variables and neither compiler adds one, so a
+   thread's slot is a POSIX key (`th_key` in Threads.f90;
+   `TlsAlloc`/`TlsGetValue` behind the same interface on Windows).
+   Measured: a `pthread_getspecific` plus an add costs 1.3 ns under
+   both gfortran and flang at -O2, so a procedure fetches its context
+   once on entry and reads components after that. Passing the context
+   down every call was the alternative; it touches every signature
+   in the evaluator for the same result.
+
+   *The pieces, each gated on its own:*
+   1. Keys in Threads.f90, and contexts that never move: `ctxs` holds a
+      pointer per context, so the table grows without moving one
+      (a thread keeps its context's address). Done 2026-09-25.
+   2. Eval's per-thread variables (state.edn `:thread`, 21 of them;
+      `has_error` alone is 184 uses in Eval.f90 and its .inc files,
+      `kst`/`ksp` about 150 each) read
+      through the thread's context. `gce_ctx_switch` stops copying; it
+      re-points the key -- the debugger's handler is the one context
+      that shares a thread with another. Measured with `scripts/bench`
+      before and after.
+   3. GC's value stack (`vstack`, `vs_top`) per thread, which retires
+      `gc_stack_save`/`gc_stack_restore`.
+   4. The reader's and the regex module's error and scratch state, each
+      module under its own key, so no module reaches up into Eval's.
 c. *Safepoints.* Collection and pool growth run with every mutator
    stopped at a safepoint -- an allocation, a loop back-edge in
    `run_loop`, a parked task (a parked task is at one already). The

@@ -26,6 +26,7 @@ module Threads
   public :: th_lock_init, th_lock_acquire, th_lock_release
   public :: th_cond_init, th_cond_wait, th_cond_broadcast
   public :: th_start, th_join, th_spawn, th_exit, th_ncpus
+  public :: th_key, th_key_create, th_key_set, th_key_get
 
   integer, parameter :: OPAQUE_WORDS = 16   ! 128 bytes
   ! the platform's sysconf name for online processors (Makefile)
@@ -43,6 +44,14 @@ module Threads
      type(c_ptr) :: handle = c_null_ptr
   end type th_thread
 
+  ! A thread-local slot: one pointer per thread under one key. Standard
+  ! Fortran has no thread-local variables, so this is how a thread finds
+  ! its own state (PLAN.md step 14b). pthread_key_t is an unsigned long
+  ! on macOS and an unsigned int in glibc and musl: PTHREAD_KEY_KIND.
+  type :: th_key
+     integer(PTHREAD_KEY_KIND) :: k = 0
+  end type th_key
+
   interface
      function pthread_create(t, attr, fn, arg) bind(C, name="pthread_create") result(r)
        import :: c_ptr, c_funptr, c_int
@@ -51,6 +60,23 @@ module Threads
        type(c_funptr), value :: fn
        integer(c_int) :: r
      end function pthread_create
+     function pthread_key_create(k, d) bind(C, name="pthread_key_create") result(r)
+       import :: c_funptr, c_int, PTHREAD_KEY_KIND
+       integer(PTHREAD_KEY_KIND) :: k
+       type(c_funptr), value :: d
+       integer(c_int) :: r
+     end function pthread_key_create
+     function pthread_setspecific(k, v) bind(C, name="pthread_setspecific") result(r)
+       import :: c_ptr, c_int, PTHREAD_KEY_KIND
+       integer(PTHREAD_KEY_KIND), value :: k
+       type(c_ptr), value :: v
+       integer(c_int) :: r
+     end function pthread_setspecific
+     function pthread_getspecific(k) bind(C, name="pthread_getspecific") result(v)
+       import :: c_ptr, PTHREAD_KEY_KIND
+       integer(PTHREAD_KEY_KIND), value :: k
+       type(c_ptr) :: v
+     end function pthread_getspecific
      function pthread_join(t, ret) bind(C, name="pthread_join") result(r)
        import :: c_ptr, c_int
        type(c_ptr), value :: t, ret
@@ -195,6 +221,25 @@ contains
   subroutine th_exit()
     call pthread_exit(c_null_ptr)
   end subroutine th_exit
+
+  ! A new key; every thread's slot under it starts null.
+  logical function th_key_create(key)
+    type(th_key), intent(inout) :: key
+    th_key_create = pthread_key_create(key%k, c_null_funptr) == 0
+  end function th_key_create
+
+  ! This thread's slot under key -- no other thread's changes.
+  logical function th_key_set(key, p)
+    type(th_key), intent(in) :: key
+    type(c_ptr), intent(in) :: p
+    th_key_set = pthread_setspecific(key%k, p) == 0
+  end function th_key_set
+
+  ! This thread's slot under key: null until this thread sets it.
+  type(c_ptr) function th_key_get(key)
+    type(th_key), intent(in) :: key
+    th_key_get = pthread_getspecific(key%k)
+  end function th_key_get
 
   logical function th_join(t)
     type(th_thread), intent(inout) :: t

@@ -93,6 +93,8 @@ EXPORTDYN = -Wl,-export_dynamic
 # the platform's (the macOS SDK's unistd.h). Threads.f90 reads it from
 # $(B)/osconst.inc, generated below.
 SC_NPROCESSORS_ONLN = 58
+# pthread_key_t: unsigned long (sys/_pthread/_pthread_types.h)
+PTHREAD_KEY_KIND = c_long
 else
 ICU_PLATFORM = Linux
 LIBCXX = -lstdc++
@@ -103,12 +105,16 @@ EXPORTDYN = -rdynamic
 # glibc's bits/confname.h (an enum; its _SC_IOV_MAX is an alias) and
 # musl's unistd.h agree: 84
 SC_NPROCESSORS_ONLN = 84
+# pthread_key_t: unsigned int in glibc's bits/pthreadtypes.h, unsigned
+# in musl's alltypes.h.in
+PTHREAD_KEY_KIND = c_int
 endif
 
 # The platform's constants Threads.f90 needs, as Fortran: the OS seam's
 # one generated file (PACKAGES.md). Rewritten only when a value changes.
 $(B)/osconst.inc: Makefile | $(B)
 	printf '  integer(c_int), parameter :: SC_NPROCESSORS_ONLN = %s\n' $(SC_NPROCESSORS_ONLN) > $@.new
+	printf '  integer, parameter :: PTHREAD_KEY_KIND = %s\n' $(PTHREAD_KEY_KIND) >> $@.new
 	cmp -s $@.new $@ || mv $@.new $@
 	rm -f $@.new
 $(B)/Threads.o: $(B)/osconst.inc

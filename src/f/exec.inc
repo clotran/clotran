@@ -570,7 +570,7 @@
 
     if (handler_ctx == 0) handler_ctx = gce_ctx_new()
     paused = gce_ctx_current()
-    ctxs(handler_ctx)%ev_depth = ev_depth   ! one Fortran stack: the nesting limit counts on
+    ctxs(handler_ctx)%c%ev_depth = ev_depth   ! one Fortran stack: the nesting limit counts on
     ! the handler is not a task, whatever it interrupted was
     saved_task = cur_task
     saved_depth = task_loop_depth

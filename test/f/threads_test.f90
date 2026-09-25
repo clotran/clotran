@@ -1,6 +1,7 @@
 ! threads_test -- the Threads module (src/f/Threads.f90) on its own:
 ! a strict hand-off between two threads, and many threads counting under
-! one lock. Run under both compilers by `make test`.
+! one lock, and a key whose slot each thread sees as its own. Run under
+! both compilers by `make test`.
 module threads_test_work
   use iso_c_binding
   use Threads
@@ -8,7 +9,8 @@ module threads_test_work
   type(th_lock), save :: lk
   type(th_cond), save :: cv
   integer, save :: turn = 0, log_n = 0, log(20) = 0
-  integer(c_int64_t), save :: counter = 0
+  integer(c_int64_t), save :: counter = 0, key_wrong = 0
+  type(th_key), save :: key
 contains
   ! thread 2's half of the hand-off: waits for its turn five times
   function pinger(arg) result(r) bind(C)
@@ -40,6 +42,23 @@ contains
     end do
     r = c_null_ptr
   end function adder
+  ! sets this thread's slot to its own box, then reads it back while
+  ! the other threads do the same with theirs
+  function keyer(arg) result(r) bind(C)
+    type(c_ptr), value :: arg
+    type(c_ptr) :: r
+    integer :: i
+    logical :: ok
+    ok = th_key_set(key, arg)
+    do i = 1, 100000
+       if (.not. c_associated(th_key_get(key), arg)) then
+          ok = th_lock_acquire(lk)
+          key_wrong = key_wrong + 1
+          ok = th_lock_release(lk)
+       end if
+    end do
+    r = c_null_ptr
+  end function keyer
 end module threads_test_work
 
 program threads_test
@@ -48,6 +67,7 @@ program threads_test
   use threads_test_work
   implicit none
   type(th_thread) :: t, ts(4)
+  integer, target :: boxes(0:4)
   integer :: i, fails
   logical :: ok
   fails = 0
@@ -81,6 +101,21 @@ program threads_test
   end do
   if (counter /= 400000) then
      print '(a, i0)', 'FAIL - counted ', counter
+     fails = fails + 1
+  end if
+
+  ! a key: null until set, and each thread's slot its own
+  if (.not. th_key_create(key)) fails = fails + 1
+  if (c_associated(th_key_get(key))) fails = fails + 1
+  ok = th_key_set(key, c_loc(boxes(0)))
+  do i = 1, 4
+     if (.not. th_start(ts(i), c_funloc(keyer), c_loc(boxes(i)))) fails = fails + 1
+  end do
+  do i = 1, 4
+     if (.not. th_join(ts(i))) fails = fails + 1
+  end do
+  if (key_wrong /= 0 .or. .not. c_associated(th_key_get(key), c_loc(boxes(0)))) then
+     print '(a, i0)', 'FAIL - a thread saw another thread''s key slot: ', key_wrong
      fails = fails + 1
   end if
 

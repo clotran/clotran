@@ -472,7 +472,13 @@ module Eval
      character(len=:), allocatable :: last_error, last_trace
      type(gc_root) :: thrown_root, binding_stack_root
   end type eval_ctx
-  type(eval_ctx), allocatable, save :: ctxs(:)
+  ! Each context is allocated on its own and never moves: a thread holds
+  ! its context's address (PLAN.md step 14b), so growing the table copies
+  ! pointers, not contexts.
+  type ctx_ref
+     type(eval_ctx), pointer :: c => null()
+  end type ctx_ref
+  type(ctx_ref), allocatable, save :: ctxs(:)
   integer, save :: cur_ctx = 0, n_ctx = 0
 
   ! The directory the binary lives in: a classpath root, so `clotran`
@@ -14488,6 +14494,7 @@ contains
   subroutine ctx_ensure_main()
     if (n_ctx > 0) return
     allocate(ctxs(8))
+    allocate(ctxs(1)%c)
     n_ctx = 1
     cur_ctx = 1
   end subroutine ctx_ensure_main
@@ -14496,8 +14503,7 @@ contains
   ! slots for the thrown value and the binding stack.
   function gce_ctx_new() result(id)
     integer :: id
-    type(eval_ctx), allocatable :: bigger(:)
-    type(eval_ctx) :: blank   ! default-initialised; flang rejects eval_ctx()
+    type(ctx_ref), allocatable :: bigger(:)
     integer :: n
     call ctx_ensure_main()
     if (n_free_ctx > 0) then
@@ -14514,9 +14520,9 @@ contains
     end if
     n_ctx = n_ctx + 1
     id = n_ctx
-    ctxs(id) = blank
-    ctxs(id)%last_error = ""
-    ctxs(id)%last_trace = ""
+    allocate(ctxs(id)%c)   ! default-initialised
+    ctxs(id)%c%last_error = ""
+    ctxs(id)%c%last_trace = ""
     call gc_stack_new(id)
   end function gce_ctx_new
 
@@ -14537,46 +14543,46 @@ contains
     call ctx_ensure_main()
     if (id == cur_ctx .or. id < 1 .or. id > n_ctx) return
     ! out
-    if (allocated(kst)) call move_alloc(kst, ctxs(cur_ctx)%kst)
-    ctxs(cur_ctx)%ksp = ksp
+    if (allocated(kst)) call move_alloc(kst, ctxs(cur_ctx)%c%kst)
+    ctxs(cur_ctx)%c%ksp = ksp
     if (allocated(fstack_fn)) then
-       call move_alloc(fstack_fn, ctxs(cur_ctx)%fstack_fn)
-       call move_alloc(fstack_site, ctxs(cur_ctx)%fstack_site)
+       call move_alloc(fstack_fn, ctxs(cur_ctx)%c%fstack_fn)
+       call move_alloc(fstack_site, ctxs(cur_ctx)%c%fstack_site)
     end if
-    ctxs(cur_ctx)%fstack_top = fstack_top
-    ctxs(cur_ctx)%pending_site = pending_site
-    ctxs(cur_ctx)%ev_depth = ev_depth
-    ctxs(cur_ctx)%has_error = has_error
+    ctxs(cur_ctx)%c%fstack_top = fstack_top
+    ctxs(cur_ctx)%c%pending_site = pending_site
+    ctxs(cur_ctx)%c%ev_depth = ev_depth
+    ctxs(cur_ctx)%c%has_error = has_error
     if (allocated(last_error)) then
-       ctxs(cur_ctx)%last_error = last_error
+       ctxs(cur_ctx)%c%last_error = last_error
     else
-       ctxs(cur_ctx)%last_error = ""
+       ctxs(cur_ctx)%c%last_error = ""
     end if
     if (allocated(last_trace)) then
-       ctxs(cur_ctx)%last_trace = last_trace
+       ctxs(cur_ctx)%c%last_trace = last_trace
     else
-       ctxs(cur_ctx)%last_trace = ""
+       ctxs(cur_ctx)%c%last_trace = ""
     end if
-    ctxs(cur_ctx)%thrown_root = thrown_root
-    ctxs(cur_ctx)%binding_stack_root = binding_stack_root
+    ctxs(cur_ctx)%c%thrown_root = thrown_root
+    ctxs(cur_ctx)%c%binding_stack_root = binding_stack_root
     call gc_stack_save(cur_ctx)
     ! in
     if (allocated(kst)) deallocate(kst)
-    if (allocated(ctxs(id)%kst)) call move_alloc(ctxs(id)%kst, kst)
-    ksp = ctxs(id)%ksp
+    if (allocated(ctxs(id)%c%kst)) call move_alloc(ctxs(id)%c%kst, kst)
+    ksp = ctxs(id)%c%ksp
     if (allocated(fstack_fn)) deallocate(fstack_fn, fstack_site)
-    if (allocated(ctxs(id)%fstack_fn)) then
-       call move_alloc(ctxs(id)%fstack_fn, fstack_fn)
-       call move_alloc(ctxs(id)%fstack_site, fstack_site)
+    if (allocated(ctxs(id)%c%fstack_fn)) then
+       call move_alloc(ctxs(id)%c%fstack_fn, fstack_fn)
+       call move_alloc(ctxs(id)%c%fstack_site, fstack_site)
     end if
-    fstack_top = ctxs(id)%fstack_top
-    pending_site = ctxs(id)%pending_site
-    ev_depth = ctxs(id)%ev_depth
-    has_error = ctxs(id)%has_error
-    last_error = ctxs(id)%last_error
-    last_trace = ctxs(id)%last_trace
-    thrown_root = ctxs(id)%thrown_root
-    binding_stack_root = ctxs(id)%binding_stack_root
+    fstack_top = ctxs(id)%c%fstack_top
+    pending_site = ctxs(id)%c%pending_site
+    ev_depth = ctxs(id)%c%ev_depth
+    has_error = ctxs(id)%c%has_error
+    last_error = ctxs(id)%c%last_error
+    last_trace = ctxs(id)%c%last_trace
+    thrown_root = ctxs(id)%c%thrown_root
+    binding_stack_root = ctxs(id)%c%binding_stack_root
     call gc_stack_restore(id)
     cur_ctx = id
   end subroutine gce_ctx_switch
@@ -14593,7 +14599,13 @@ contains
   end function gce_home
 
   subroutine ctx_reset()
-    if (allocated(ctxs)) deallocate(ctxs)
+    integer :: i
+    if (allocated(ctxs)) then
+       do i = 1, n_ctx
+          if (associated(ctxs(i)%c)) deallocate(ctxs(i)%c)
+       end do
+       deallocate(ctxs)
+    end if
     n_ctx = 0
     cur_ctx = 0
     handler_ctx = 0
@@ -14614,15 +14626,15 @@ contains
     integer, intent(in) :: id
     integer, allocatable :: bigger(:)
     if (id < 1 .or. id > n_ctx .or. id == cur_ctx) return
-    if (allocated(ctxs(id)%kst)) deallocate(ctxs(id)%kst)
-    if (allocated(ctxs(id)%fstack_fn)) deallocate(ctxs(id)%fstack_fn, ctxs(id)%fstack_site)
-    ctxs(id)%ksp = 0
-    ctxs(id)%fstack_top = 0
-    ctxs(id)%pending_site = 0
-    ctxs(id)%ev_depth = 0
-    ctxs(id)%has_error = .false.
-    ctxs(id)%last_error = ""
-    ctxs(id)%last_trace = ""
+    if (allocated(ctxs(id)%c%kst)) deallocate(ctxs(id)%c%kst)
+    if (allocated(ctxs(id)%c%fstack_fn)) deallocate(ctxs(id)%c%fstack_fn, ctxs(id)%c%fstack_site)
+    ctxs(id)%c%ksp = 0
+    ctxs(id)%c%fstack_top = 0
+    ctxs(id)%c%pending_site = 0
+    ctxs(id)%c%ev_depth = 0
+    ctxs(id)%c%has_error = .false.
+    ctxs(id)%c%last_error = ""
+    ctxs(id)%c%last_trace = ""
     call gc_stack_new(id)
     if (.not. allocated(free_ctx)) allocate(free_ctx(16))
     if (n_free_ctx >= size(free_ctx)) then
