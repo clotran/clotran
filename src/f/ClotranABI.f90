@@ -110,34 +110,36 @@ contains
   ! an embedder; generated code does not use it, since its forms were
   ! analysed at compile time.
   function clotran_eval(src, n, dst) bind(C, name="clotran_eval") result(st)
+    type(gc_stack), pointer :: vst
     character(kind=c_char), intent(in) :: src(*)
     integer(c_int), value :: n, dst
     integer(c_int) :: st
     type(gc_value) :: form, node, env, none(0)
     integer :: base
+    vst => gc_my_stack()
     st = 1
-    call vs_set(int(dst), gc_nil())
+    call vs_set(vst, int(dst), gc_nil())
     env = gce_env()
-    base = vs_enter(3)
-    call vs_set(base + 1, env)
-    form = gcr_read(c_text(src, n), [vs_get(base + 1)])
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, env)
+    form = gcr_read(c_text(src, n), [vs_get(vst, base + 1)])
     if (gcr_has_error()) then
-       call vs_leave(base)
+       call vs_leave(vst, base)
        return
     end if
-    call vs_set(base + 2, form)
-    node = gce_analyze(vs_get(base + 2), vs_get(base + 1))
+    call vs_set(vst, base + 2, form)
+    node = gce_analyze(vs_get(vst, base + 2), vs_get(vst, base + 1))
     if (gce_has_error()) then
-       call vs_leave(base)
+       call vs_leave(vst, base)
        return
     end if
-    call vs_set(base + 3, node)
-    form = gce_eval(vs_get(base + 3), vs_get(base + 1), none)
+    call vs_set(vst, base + 3, node)
+    form = gce_eval(vs_get(vst, base + 3), vs_get(vst, base + 1), none)
     if (.not. gce_has_error()) then
-       call vs_set(int(dst), form)
+       call vs_set(vst, int(dst), form)
        st = 0
     end if
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end function clotran_eval
 
   ! Reads and ANALYSES one form, leaving the node in the slot without
@@ -146,28 +148,30 @@ contains
   ! come from here. Analysis is the same pass the executor uses, so
   ! there is no second front end to disagree with the first.
   function clotran_analyze(src, n, dst) bind(C, name="clotran_analyze") result(st)
+    type(gc_stack), pointer :: vst
     character(kind=c_char), intent(in) :: src(*)
     integer(c_int), value :: n, dst
     integer(c_int) :: st
     type(gc_value) :: form, node, env
     integer :: base
+    vst => gc_my_stack()
     st = 1
-    call vs_set(int(dst), gc_nil())
+    call vs_set(vst, int(dst), gc_nil())
     env = gce_env()
-    base = vs_enter(2)
-    call vs_set(base + 1, env)
-    form = gcr_read(c_text(src, n), [vs_get(base + 1)])
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, env)
+    form = gcr_read(c_text(src, n), [vs_get(vst, base + 1)])
     if (gcr_has_error()) then
-       call vs_leave(base)
+       call vs_leave(vst, base)
        return
     end if
-    call vs_set(base + 2, form)
-    node = gce_analyze(vs_get(base + 2), vs_get(base + 1))
+    call vs_set(vst, base + 2, form)
+    node = gce_analyze(vs_get(vst, base + 2), vs_get(vst, base + 1))
     if (.not. gce_has_error()) then
-       call vs_set(int(dst), node)
+       call vs_set(vst, int(dst), node)
        st = 0
     end if
-    call vs_leave(base)
+    call vs_leave(vst, base)
   end function clotran_analyze
 
   ! --- frames ------------------------------------------------------
@@ -175,67 +179,85 @@ contains
   ! Reserves n slots and answers the base. Slots are base+1 .. base+n,
   ! each starting nil. Pass the base back to clotran_frame_leave.
   function clotran_frame_enter(n) bind(C, name="clotran_frame_enter") result(base)
+    type(gc_stack), pointer :: vst
     integer(c_int), value :: n
     integer(c_int) :: base
-    base = int(vs_enter(int(n)), c_int)
+    vst => gc_my_stack()
+    base = int(vs_enter(vst, int(n)), c_int)
   end function clotran_frame_enter
 
   subroutine clotran_frame_leave(base) bind(C, name="clotran_frame_leave")
+    type(gc_stack), pointer :: vst
     integer(c_int), value :: base
-    call vs_leave(int(base))
+    vst => gc_my_stack()
+    call vs_leave(vst, int(base))
   end subroutine clotran_frame_leave
 
   function clotran_frame_depth() bind(C, name="clotran_frame_depth") result(n)
+    type(gc_stack), pointer :: vst
     integer(c_int) :: n
-    n = int(vs_depth(), c_int)
+    vst => gc_my_stack()
+    n = int(vs_depth(vst), c_int)
   end function clotran_frame_depth
 
   ! --- writing values into slots -----------------------------------
 
   subroutine clotran_set_nil(slot) bind(C, name="clotran_set_nil")
+    type(gc_stack), pointer :: vst
     integer(c_int), value :: slot
-    call vs_set(int(slot), gc_nil())
+    vst => gc_my_stack()
+    call vs_set(vst, int(slot), gc_nil())
   end subroutine clotran_set_nil
 
   subroutine clotran_set_int(slot, n) bind(C, name="clotran_set_int")
+    type(gc_stack), pointer :: vst
     integer(c_int), value :: slot
     integer(c_int64_t), value :: n
-    call vs_set(int(slot), gc_int(int(n, gc_ip)))
+    vst => gc_my_stack()
+    call vs_set(vst, int(slot), gc_int(int(n, gc_ip)))
   end subroutine clotran_set_int
 
   subroutine clotran_set_real(slot, x) bind(C, name="clotran_set_real")
+    type(gc_stack), pointer :: vst
     integer(c_int), value :: slot
     real(c_double), value :: x
-    call vs_set(int(slot), gc_real(real(x, gc_dp)))
+    vst => gc_my_stack()
+    call vs_set(vst, int(slot), gc_real(real(x, gc_dp)))
   end subroutine clotran_set_real
 
   subroutine clotran_set_bool(slot, b) bind(C, name="clotran_set_bool")
+    type(gc_stack), pointer :: vst
     integer(c_int), value :: slot, b
-    call vs_set(int(slot), gc_bool(b /= 0))
+    vst => gc_my_stack()
+    call vs_set(vst, int(slot), gc_bool(b /= 0))
   end subroutine clotran_set_bool
 
   ! The bytes are UTF-8 and are COPIED into the string pool, so the
   ! caller's buffer is its own business afterwards. n is a byte count,
   ! not a character count (DEVIATIONS 41: a string is code points).
   subroutine clotran_set_str(slot, chars, n) bind(C, name="clotran_set_str")
+    type(gc_stack), pointer :: vst
     integer(c_int), value :: slot
     character(kind=c_char), intent(in) :: chars(*)
     integer(c_int), value :: n
     character(len=:), allocatable :: s
     type(gc_value) :: none(0)
     integer :: i
+    vst => gc_my_stack()
     allocate(character(len=max(0, int(n))) :: s)
     do i = 1, int(n)
        s(i:i) = chars(i)
     end do
     ! The shadow stack IS the root set, so an allocation here needs no
     ! roots argument: everything the caller holds is already in a slot.
-    call vs_set(int(slot), gc_str(s, none))
+    call vs_set(vst, int(slot), gc_str(s, none))
   end subroutine clotran_set_str
 
   subroutine clotran_copy(dst, src) bind(C, name="clotran_copy")
+    type(gc_stack), pointer :: vst
     integer(c_int), value :: dst, src
-    call vs_set(int(dst), vs_get(int(src)))
+    vst => gc_my_stack()
+    call vs_set(vst, int(dst), vs_get(vst, int(src)))
   end subroutine clotran_copy
 
   ! --- reading values out of slots ---------------------------------
@@ -243,35 +265,43 @@ contains
   ! The GCT_* constant. Generated code switches on it the way exec.inc
   ! switches on a node kind.
   function clotran_tag(slot) bind(C, name="clotran_tag") result(t)
+    type(gc_stack), pointer :: vst
     integer(c_int), value :: slot
     integer(c_int) :: t
     type(gc_value) :: v
-    v = vs_get(int(slot))
+    vst => gc_my_stack()
+    v = vs_get(vst, int(slot))
     t = int(v%tag, c_int)
   end function clotran_tag
 
   function clotran_int(slot) bind(C, name="clotran_int") result(n)
+    type(gc_stack), pointer :: vst
     integer(c_int), value :: slot
     integer(c_int64_t) :: n
     type(gc_value) :: v
-    v = vs_get(int(slot))
+    vst => gc_my_stack()
+    v = vs_get(vst, int(slot))
     n = int(v%ival, c_int64_t)
   end function clotran_int
 
   function clotran_real(slot) bind(C, name="clotran_real") result(x)
+    type(gc_stack), pointer :: vst
     integer(c_int), value :: slot
     real(c_double) :: x
     type(gc_value) :: v
-    v = vs_get(int(slot))
+    vst => gc_my_stack()
+    v = vs_get(vst, int(slot))
     x = real(v%rval, c_double)
   end function clotran_real
 
   ! Clojure truthiness, not a tag test: everything but nil and false.
   function clotran_bool(slot) bind(C, name="clotran_bool") result(b)
+    type(gc_stack), pointer :: vst
     integer(c_int), value :: slot
     integer(c_int) :: b
     type(gc_value) :: v
-    v = vs_get(int(slot))
+    vst => gc_my_stack()
+    v = vs_get(vst, int(slot))
     b = 1
     if (v%tag == GCT_NIL) b = 0
     if (v%tag == GCT_BOOL .and. v%ival == 0) b = 0
@@ -279,16 +309,19 @@ contains
 
   ! Bytes, so that a caller can size its buffer before copying.
   function clotran_str_len(slot) bind(C, name="clotran_str_len") result(n)
+    type(gc_stack), pointer :: vst
     integer(c_int), value :: slot
     integer(c_int) :: n
     type(gc_value) :: v
-    v = vs_get(int(slot))
+    vst => gc_my_stack()
+    v = vs_get(vst, int(slot))
     n = 0
     if (v%tag == GCT_STR) n = int(len(gc_ref_text(v%ref)), c_int)
   end function clotran_str_len
 
   ! Copies at most n bytes and answers how many were written.
   function clotran_str_copy(slot, buf, n) bind(C, name="clotran_str_copy") result(w)
+    type(gc_stack), pointer :: vst
     integer(c_int), value :: slot
     character(kind=c_char), intent(out) :: buf(*)
     integer(c_int), value :: n
@@ -296,8 +329,9 @@ contains
     type(gc_value) :: v
     character(len=:), allocatable :: s
     integer :: i
+    vst => gc_my_stack()
     w = 0
-    v = vs_get(int(slot))
+    v = vs_get(vst, int(slot))
     if (v%tag /= GCT_STR) return
     s = gc_ref_text(v%ref)
     w = int(min(len(s), int(n)), c_int)
@@ -312,30 +346,38 @@ contains
   ! minimum a call needs. Maps and the rest follow the same shape.
 
   subroutine clotran_vec_empty(slot) bind(C, name="clotran_vec_empty")
+    type(gc_stack), pointer :: vst
     integer(c_int), value :: slot
     type(gc_value) :: none(0)
-    call vs_set(int(slot), gcv_empty(none))
+    vst => gc_my_stack()
+    call vs_set(vst, int(slot), gcv_empty(none))
   end subroutine clotran_vec_empty
 
   ! dst may be the same slot as vec; the result is written last.
   subroutine clotran_vec_conj(dst, vec, x) bind(C, name="clotran_vec_conj")
+    type(gc_stack), pointer :: vst
     integer(c_int), value :: dst, vec, x
     type(gc_value) :: out
     type(gc_value) :: none(0)
-    out = gcv_conj(vs_get(int(vec)), vs_get(int(x)), none)
-    call vs_set(int(dst), out)
+    vst => gc_my_stack()
+    out = gcv_conj(vs_get(vst, int(vec)), vs_get(vst, int(x)), none)
+    call vs_set(vst, int(dst), out)
   end subroutine clotran_vec_conj
 
   function clotran_vec_count(slot) bind(C, name="clotran_vec_count") result(n)
+    type(gc_stack), pointer :: vst
     integer(c_int), value :: slot
     integer(c_int) :: n
-    n = int(gcv_count(vs_get(int(slot))), c_int)
+    vst => gc_my_stack()
+    n = int(gcv_count(vs_get(vst, int(slot))), c_int)
   end function clotran_vec_count
 
   ! Zero-based, as gcv_nth is; out of range gives nil.
   subroutine clotran_vec_nth(dst, vec, i) bind(C, name="clotran_vec_nth")
+    type(gc_stack), pointer :: vst
     integer(c_int), value :: dst, vec, i
-    call vs_set(int(dst), gcv_nth(vs_get(int(vec)), int(i)))
+    vst => gc_my_stack()
+    call vs_set(vst, int(dst), gcv_nth(vs_get(vst, int(vec)), int(i)))
   end subroutine clotran_vec_nth
 
   ! --- vars and calling --------------------------------------------
@@ -345,29 +387,33 @@ contains
   ! ONCE and keeps the handle, which is what makes redefinition at the
   ! REPL still visible to compiled code.
   function clotran_var(slot, ns, nsn, name, namen) bind(C, name="clotran_var") result(ok)
+    type(gc_stack), pointer :: vst
     integer(c_int), value :: slot
     character(kind=c_char), intent(in) :: ns(*), name(*)
     integer(c_int), value :: nsn, namen
     integer(c_int) :: ok
     type(gc_value) :: nsv, sym, var
     integer :: base
+    vst => gc_my_stack()
     ok = 0
-    call vs_set(int(slot), gc_nil())
+    call vs_set(vst, int(slot), gc_nil())
     nsv = gcn_find(c_text(ns, nsn))
     if (gc_kind(nsv) /= OBJ_NS) return
-    base = vs_enter(1)
-    call vs_set(base + 1, nsv)
-    sym = gc_sym(c_text(name, namen), [vs_get(base + 1)])
-    var = gcn_lookup(vs_get(base + 1), sym)
-    call vs_leave(base)
+    base = vs_enter(vst, 1)
+    call vs_set(vst, base + 1, nsv)
+    sym = gc_sym(c_text(name, namen), [vs_get(vst, base + 1)])
+    var = gcn_lookup(vs_get(vst, base + 1), sym)
+    call vs_leave(vst, base)
     if (.not. gcn_is_var(var)) return
-    call vs_set(int(slot), var)
+    call vs_set(vst, int(slot), var)
     ok = 1
   end function clotran_var
 
   subroutine clotran_deref(dst, var) bind(C, name="clotran_deref")
+    type(gc_stack), pointer :: vst
     integer(c_int), value :: dst, var
-    call vs_set(int(dst), gcn_var_value(vs_get(int(var))))
+    vst => gc_my_stack()
+    call vs_set(vst, int(dst), gcn_var_value(vs_get(vst, int(var))))
   end subroutine clotran_deref
 
   ! (apply fn args), with args a vector. 0 when it returned, 1 when it
@@ -376,15 +422,17 @@ contains
   ! unwind through a caller's frames, which is why this reports rather
   ! than throws; the same reason JNI makes you check.
   function clotran_call(dst, fn, args) bind(C, name="clotran_call") result(st)
+    type(gc_stack), pointer :: vst
     integer(c_int), value :: dst, fn, args
     integer(c_int) :: st
     type(gc_value) :: out
-    out = gce_apply(vs_get(int(fn)), vs_get(int(args)))
+    vst => gc_my_stack()
+    out = gce_apply(vs_get(vst, int(fn)), vs_get(vst, int(args)))
     if (gce_has_error()) then
-       call vs_set(int(dst), gc_nil())
+       call vs_set(vst, int(dst), gc_nil())
        st = 1
     else
-       call vs_set(int(dst), out)
+       call vs_set(vst, int(dst), out)
        st = 0
     end if
   end function clotran_call
@@ -401,6 +449,7 @@ contains
   ! procedure check for itself.
   function clotran_def_fn(ns, nsn, name, namen, fp, arity) &
        bind(C, name="clotran_def_fn") result(st)
+    type(gc_stack), pointer :: vst
     character(kind=c_char), intent(in) :: ns(*), name(*)
     integer(c_int), value :: nsn, namen, arity
     type(c_funptr), value :: fp
@@ -408,6 +457,7 @@ contains
     type(gc_value) :: nsv, sym, fnv, var, none(0)
     character(len=:), allocatable :: nsname, fname
     integer :: base, h
+    vst => gc_my_stack()
     st = 1
     if (.not. c_associated(fp)) return
     nsname = c_text(ns, nsn)
@@ -415,20 +465,20 @@ contains
     nsv = gcn_find_or_create(nsname, none)
     if (gc_kind(nsv) /= OBJ_NS) return
     h = cf_register(fp, nsname // "/" // fname)
-    base = vs_enter(3)
-    call vs_set(base + 1, nsv)
-    fnv = gc_str(nsname // "/" // fname, [vs_get(base + 1)])
-    call vs_set(base + 2, fnv)
-    fnv = gc_obj(OBJ_COMPILED, [vs_get(base + 2)], &
-         [vs_get(base + 1), vs_get(base + 2)])
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, nsv)
+    fnv = gc_str(nsname // "/" // fname, [vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, fnv)
+    fnv = gc_obj(OBJ_COMPILED, [vs_get(vst, base + 2)], &
+         [vs_get(vst, base + 1), vs_get(vst, base + 2)])
     call gc_set_i1(fnv, h)
     call gc_set_i2(fnv, int(arity))
-    call vs_set(base + 2, fnv)
-    sym = gc_sym(fname, [vs_get(base + 1), vs_get(base + 2)])
-    call vs_set(base + 3, sym)
-    var = gcn_intern(vs_get(base + 1), vs_get(base + 3), vs_get(base + 2), &
-         [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
-    call vs_leave(base)
+    call vs_set(vst, base + 2, fnv)
+    sym = gc_sym(fname, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 3, sym)
+    var = gcn_intern(vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 2), &
+         [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+    call vs_leave(vst, base)
     if (gcn_is_var(var)) st = 0
   end function clotran_def_fn
 
@@ -445,19 +495,25 @@ contains
   ! later optimisation, with a measurement behind it.
 
   subroutine clotran_frame_new(dst, n) bind(C, name="clotran_frame_new")
+    type(gc_stack), pointer :: vst
     integer(c_int), value :: dst, n
     type(gc_value) :: none(0)
-    call vs_set(int(dst), gc_vec(max(int(n), 0), none))
+    vst => gc_my_stack()
+    call vs_set(vst, int(dst), gc_vec(max(int(n), 0), none))
   end subroutine clotran_frame_new
 
   subroutine clotran_frame_get(dst, fr, i) bind(C, name="clotran_frame_get")
+    type(gc_stack), pointer :: vst
     integer(c_int), value :: dst, fr, i
-    call vs_set(int(dst), gc_vec_get(vs_get(int(fr)), int(i) + 1))
+    vst => gc_my_stack()
+    call vs_set(vst, int(dst), gc_vec_get(vs_get(vst, int(fr)), int(i) + 1))
   end subroutine clotran_frame_get
 
   subroutine clotran_frame_put(fr, i, src) bind(C, name="clotran_frame_put")
+    type(gc_stack), pointer :: vst
     integer(c_int), value :: fr, i, src
-    call gc_vec_set(vs_get(int(fr)), int(i) + 1, vs_get(int(src)))
+    vst => gc_my_stack()
+    call gc_vec_set(vs_get(vst, int(fr)), int(i) + 1, vs_get(vst, int(src)))
   end subroutine clotran_frame_put
 
   ! THE ESCAPE HATCH. Runs an already-analysed node in a frame, which is
@@ -465,15 +521,17 @@ contains
   ! has not learned. It is why the generator is correct from the first
   ! kind it handles: an unhandled construct is slow, not broken.
   function clotran_eval_node(dst, node, fr) bind(C, name="clotran_eval_node") result(st)
+    type(gc_stack), pointer :: vst
     integer(c_int), value :: dst, node, fr
     integer(c_int) :: st
     type(gc_value) :: out
-    out = gce_exec_node(vs_get(int(node)), vs_get(int(fr)))
+    vst => gc_my_stack()
+    out = gce_exec_node(vs_get(vst, int(node)), vs_get(vst, int(fr)))
     if (gce_has_error()) then
-       call vs_set(int(dst), gc_nil())
+       call vs_set(vst, int(dst), gc_nil())
        st = 1
     else
-       call vs_set(int(dst), out)
+       call vs_set(vst, int(dst), out)
        st = 0
     end if
   end function clotran_eval_node
@@ -513,16 +571,18 @@ contains
   ! argbase+from+1 .. argbase+nargs as a list, or nil when there are
   ! none -- nil, not the empty list, as bind_closure binds it.
   subroutine clotran_rest_args(dst, argbase, from, nargs) bind(C, name="clotran_rest_args")
+    type(gc_stack), pointer :: vst
     integer(c_int), value :: dst, argbase, from, nargs
     type(gc_value) :: rest
     integer :: i
-    call vs_set(int(dst), gc_nil())
+    vst => gc_my_stack()
+    call vs_set(vst, int(dst), gc_nil())
     if (nargs <= from) return
-    rest = gcl_empty([vs_get(int(dst))])
-    call vs_set(int(dst), rest)
+    rest = gcl_empty([vs_get(vst, int(dst))])
+    call vs_set(vst, int(dst), rest)
     do i = int(nargs), int(from) + 1, -1
-       rest = gcl_cons(vs_get(int(argbase) + i), vs_get(int(dst)), [vs_get(int(dst))])
-       call vs_set(int(dst), rest)
+       rest = gcl_cons(vs_get(vst, int(argbase) + i), vs_get(vst, int(dst)), [vs_get(vst, int(dst))])
+       call vs_set(vst, int(dst), rest)
     end do
   end subroutine clotran_rest_args
 
@@ -539,14 +599,18 @@ contains
   ! drift apart. A generated procedure cannot spell a map, a Var or a
   ! folded function in Fortran, so those live here and it indexes.
   function clotran_pool_register(slot) bind(C, name="clotran_pool_register") result(h)
+    type(gc_stack), pointer :: vst
     integer(c_int), value :: slot
     integer(c_int) :: h
-    h = int(cf_pool_add(vs_get(int(slot))), c_int)
+    vst => gc_my_stack()
+    h = int(cf_pool_add(vs_get(vst, int(slot))), c_int)
   end function clotran_pool_register
 
   subroutine clotran_pool_get(dst, h, i) bind(C, name="clotran_pool_get")
+    type(gc_stack), pointer :: vst
     integer(c_int), value :: dst, h, i
-    call vs_set(int(dst), cf_pool_get(int(h), int(i)))
+    vst => gc_my_stack()
+    call vs_set(vst, int(dst), cf_pool_get(int(h), int(i)))
   end subroutine clotran_pool_get
 
   ! A call with the arguments already in consecutive slots
@@ -554,15 +618,17 @@ contains
   ! clotran_call, which takes a vector, is the general one.
   function clotran_call_slots(dst, fn, argbase, nargs) &
        bind(C, name="clotran_call_slots") result(st)
+    type(gc_stack), pointer :: vst
     integer(c_int), value :: dst, fn, argbase, nargs
     integer(c_int) :: st
     type(gc_value) :: out
-    out = gce_apply_slots(vs_get(int(fn)), int(argbase), int(nargs))
+    vst => gc_my_stack()
+    out = gce_apply_slots(vs_get(vst, int(fn)), int(argbase), int(nargs))
     if (gce_has_error()) then
-       call vs_set(int(dst), gc_nil())
+       call vs_set(vst, int(dst), gc_nil())
        st = 1
     else
-       call vs_set(int(dst), out)
+       call vs_set(vst, int(dst), out)
        st = 0
     end if
   end function clotran_call_slots
@@ -588,6 +654,7 @@ contains
   ! does not move objects, and the registry keeps each buffer where it
   ! is when it grows.
   function clotran_array_view(slot, kind, ptr, n) bind(C, name="clotran_array_view") result(ok)
+    type(gc_stack), pointer :: vst
     integer(c_int), value :: slot, kind
     type(c_ptr), intent(out) :: ptr
     integer(c_int64_t), intent(out) :: n
@@ -597,10 +664,11 @@ contains
     integer(8), pointer, contiguous :: ip(:)
     logical :: good
     integer :: h
+    vst => gc_my_stack()
     ok = 0
     ptr = c_null_ptr
     n = 0
-    v = vs_get(int(slot))
+    v = vs_get(vst, int(slot))
     if (gc_kind(v) /= OBJ_ARRAY) return
     ! a slice shares its base's buffer at an offset; only an array that
     ! owns its buffer is viewed
