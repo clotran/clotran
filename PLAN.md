@@ -1093,6 +1093,52 @@ its hint, else a double -- and a parameter read by a record's fields is
 that record (2026-09-25). Not yet: multiple arities, escape analysis
 for small collections, parallel loops (`do concurrent`, step 11).
 
+
+### 14. Stage 3: plain Clojure on several threads at once (planned 2026-09-25)
+
+Step 11's stage 3, laid out before any of it is built, because it is the
+largest change since the evaluator and it pays nothing until its LAST
+step: until the baton comes off interpreter code, every step below must
+change no behaviour, and the gate proves each one.
+
+**Measured, 2026-09-25.** A context (`eval_ctx`) holds its continuation
+stack, trace frames, depth, error state, thrown value and binding stack,
+and GC.f90 keeps a value stack per context -- swapped at every baton
+hand-off. Everything else is shared: Eval.f90 alone has 64 saved
+variables and 189 module-level allocatable arrays, the reader 32 more.
+The collector's pools grow by REALLOCATION (`grow_str` and kin), which
+moves every object slot, so a thread reading an object while another
+grows a pool reads freed memory.
+
+**The steps, each landing with the baton still on.**
+
+a. *Classify the state.* Every module variable is per-thread (into
+   `eval_ctx`), shared and fixed after startup (safe as it is), or shared
+   and mutable (a lock, or a design change). The inventory is a file in
+   the repository, checked by a script, so a new global cannot slip in
+   unclassified.
+b. *Per-thread state into the context.* Mechanical, large, no behaviour
+   change: what is swapped at a hand-off today becomes what each thread
+   simply owns.
+c. *Safepoints.* Collection and pool growth run with every mutator
+   stopped at a safepoint -- an allocation, a loop back-edge in
+   `run_loop`, a parked task (a parked task is at one already). The
+   collector then sees every thread's stacks, as it sees every context's
+   now.
+d. *Allocation.* Each thread takes a batch of free slots under a lock and
+   allocates from it without one (a thread-local allocation buffer);
+   pools grow only at a safepoint.
+e. *Shared Clojure state.* Namespace maps, Var roots, and the keyword and
+   symbol intern tables under locks; an atom under a lock first (correct,
+   slower), compare-and-swap once a value fits a machine word (a
+   `gc_value` is 32 bytes; hardware takes 16 at most).
+f. *The baton comes off interpreter code.* Tested by running the derived
+   suite, the oracle and torture-mode GC with many threads at once, before
+   anything else calls it done.
+
+**Not in this step**: a concurrent collector (the world stops for each
+collection), and a compacting one (objects never move, as now).
+
 ## Decisions that still hold
 
 **The value type has no `FINAL`.** Copying a `cons_value` (nine
