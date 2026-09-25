@@ -1084,9 +1084,12 @@ literals inlined with their captures; str and println, Fortran's way
 (DEVIATIONS 50); a function answering nil is a subroutine. Types: a
 hint, else what a same-file function takes where the parameter is
 passed, else by use; a public function keeps every version, a PRIVATE
-one only those reachable from a public one. Not yet: multiple arities,
-records of numbers as derived types, escape analysis for small
-collections, parallel loops (`do concurrent`, step 11).
+one only those reachable from a public one. Records of numbers are
+Fortran derived types (name_t): a field read is rec%field, a
+construction the structure constructor, its types checked -- a field is
+its hint, else a double -- and a parameter read by a record's fields is
+that record (2026-09-25). Not yet: multiple arities, escape analysis
+for small collections, parallel loops (`do concurrent`, step 11).
 
 ## Decisions that still hold
 

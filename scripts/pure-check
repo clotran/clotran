@@ -98,10 +98,17 @@
     (alias-write (double-array [1.0 2.0]))
     (circle-area 2.0)
     (overrun 2)
-    (overrun 3)])
+    (overrun 3)
+    (speed (->Particle 0.0 0.0 3.0 4.0))
+    (step (->Particle 1.0 2.0 0.5 -1.0) 2.0)
+    (step (->Particle 1.0 2.0 0.5 -1.0) 3)
+    (kinetic (->Particle 0.0 0.0 1.0 2.0) 2.0)
+    (bump (->Tally 3 1.5) 2.0)
+    (bump (->Tally 9223372036854775807 0.0) 1.0)])
 
 (defn arg-type [a]
   (cond (int? a) :long (double? a) :double (string? a) :string
+        (and (seq? a) (str/starts-with? (name (first a)) "->")) (keyword "record" (subs (name (first a)) 2))
         (and (seq? a) (= 'double-array (first a))) :doubles
         (and (seq? a) (= 'long-array (first a))) :longs
         :else (throw (ex-info "unknown argument form" {:arg a}))))
@@ -120,11 +127,12 @@
            "  (clotran-spit \"" f90 "\" (:text r))\n"
            "  (println \"SIGS\" (pr-str (into {} (for [[s vs] (:emitted r)] [(name s) (mapv (juxt :ts :ret) vs)]))))\n"
            "  (println \"SKIPPED\" (pr-str (into {} (for [[s why] (:skipped r)] [(name s) why]))))\n"
-           "  (println \"PRUNED\" (pr-str (into {} (for [[s ts] (:pruned r)] [(name s) ts])))))\n"
+           "  (println \"PRUNED\" (pr-str (into {} (for [[s ts] (:pruned r)] [(name s) ts]))))\n"
+           "  (println \"RECORDS\" (pr-str (into {} (for [[n rr] (:records r)] [n (:fields rr)])))))\n"
            "(in-ns '" ns-name ")\n"
            (apply str (map-indexed
                        (fn [i c]
-                         (str "(clojure.core/println \"CASE " i "\" (try (clojure.core/let [v (clojure.core/atom nil) o (clojure.core/with-out-str (clojure.core/reset! v " (pr-str c) "))] (clojure.core/pr-str [:val (clojure.core/let [x @v] (if (clojure.core/instance? (clojure.core/class (clojure.core/double-array 0)) x) (clojure.core/vec x) (if (clojure.core/instance? (clojure.core/class (clojure.core/long-array 0)) x) (clojure.core/vec x) x))) o]))"
+                         (str "(clojure.core/println \"CASE " i "\" (try (clojure.core/let [v (clojure.core/atom nil) o (clojure.core/with-out-str (clojure.core/reset! v " (pr-str c) "))] (clojure.core/pr-str [:val (clojure.core/let [x @v] (if (clojure.core/instance? (clojure.core/class (clojure.core/double-array 0)) x) (clojure.core/vec x) (if (clojure.core/instance? (clojure.core/class (clojure.core/long-array 0)) x) (clojure.core/vec x) (if (clojure.core/record? x) (clojure.core/vec (clojure.core/vals x)) x)))) o]))"
                               " (catch Throwable e (clojure.core/pr-str [:threw (.getMessage e)]))))\n"))
                        cases))))
 (def out (run-clotran (io/file work "drive.clj")))
@@ -146,13 +154,14 @@
               (let [[k v & more] (edn/read-string {:readers {'Inf (constantly ##Inf)}} (str/replace (nth m 2) #"##(-?)Inf" "$1##Inf"))]
                 (into [k (if (and (= k :threw) (string? v)) (first (str/split v #"  at ")) v)] more))])))
 (def interp (parse-cases out))
+(def records (some #(when (str/starts-with? % "RECORDS ") (edn/read-string (subs % 8))) (str/split-lines out)))
 
 ;; clj, the language oracle, runs the same file and the same cases
 (spit (io/file work "jvm.clj")
       (str "(load-file \"" src "\")\n(in-ns '" ns-name ")\n"
            (apply str (map-indexed
                        (fn [i c]
-                         (str "(clojure.core/println \"CASE " i "\" (try (clojure.core/let [v (clojure.core/atom nil) o (clojure.core/with-out-str (clojure.core/reset! v " (pr-str c) "))] (clojure.core/pr-str [:val (clojure.core/let [x @v] (if (clojure.core/instance? (clojure.core/class (clojure.core/double-array 0)) x) (clojure.core/vec x) (if (clojure.core/instance? (clojure.core/class (clojure.core/long-array 0)) x) (clojure.core/vec x) x))) o]))"
+                         (str "(clojure.core/println \"CASE " i "\" (try (clojure.core/let [v (clojure.core/atom nil) o (clojure.core/with-out-str (clojure.core/reset! v " (pr-str c) "))] (clojure.core/pr-str [:val (clojure.core/let [x @v] (if (clojure.core/instance? (clojure.core/class (clojure.core/double-array 0)) x) (clojure.core/vec x) (if (clojure.core/instance? (clojure.core/class (clojure.core/long-array 0)) x) (clojure.core/vec x) (if (clojure.core/record? x) (clojure.core/vec (clojure.core/vals x)) x)))) o]))"
                               " (catch Throwable e (clojure.core/pr-str [:threw (.getMessage e)]))))\n"))
                        cases))))
 (def jvm (parse-cases (:out (shell {:out :string :err :string :dir (str repo) :continue true} "clj" "-M" (str (io/file work "jvm.clj"))))))
@@ -164,6 +173,8 @@
   (let [ts (mapv arg-type args)]
     (some (fn [[vts rt]] (when (= vts ts) rt)) (get sigs (name f)))))
 
+(defn fort-ident [s] (str/lower-case (str/replace (str s) #"[^A-Za-z0-9]" "_")))
+
 (defn fort-double [v]
   (let [s (pr-str v)] (if (str/includes? s "E") (str/replace s "E" "d") (str s "d0"))))
 
@@ -173,9 +184,13 @@
     :double (fort-double a)
     :doubles (str "[real(real64) :: " (str/join ", " (map #(fort-double (double %)) (second a))) "]")
     :longs (str "[integer(int64) :: " (str/join ", " (map #(str % "_int64") (second a))) "]")
-    :string (str "\"" (str/replace a "\"" "\"\"") "\"")))
+    :string (str "\"" (str/replace a "\"" "\"\"") "\"")
+    ;; a record: its structure constructor, name_t(...)
+    (let [t (arg-type a)]
+      (if (= "record" (namespace t))
+        (str (fort-ident (name t)) "_t(" (str/join ", " (map f-lit (rest a))) ")")
+        (throw (ex-info "no literal" {:arg a}))))))
 
-(defn fort-ident [s] (str/lower-case (str/replace (str s) #"[^A-Za-z0-9]" "_")))
 
 (def driver
   (str "program pure_driver\n"
@@ -204,7 +219,10 @@
                        (if (= rt :nil)
                          (str "      call " call "\n      print '(a)', '==R=='\n      print '(a)', 'N'\n")
                          (str "      print '(a)', '==R=='\n"
-                              (case rt
+                              (case (if (= "record" (namespace rt)) :record rt)
+                                :record (str "      print '(a, "
+                                             (str/join ", " (for [[_ ft] (get records (name rt))] (if (= ft :double) "1x, es26.17e3" "1x, i0")))
+                                             ")', 'R', " call "\n")
                                 :doubles (str "      print '(a, *(1x, es26.17e3))', 'A', " call "\n")
                                 :longs (str "      print '(a, *(1x, i0))', 'A', " call "\n")
                                 (str "      print '(a, " (case rt :long "i0" :double "es26.17e3" :bool "l1" :string "a") ")', '"
@@ -231,10 +249,11 @@
             printed (subs out 0 at)
             result (let [s (subs out (+ at 6))] (if (str/ends-with? s "\n") (subs s 0 (dec (count s))) s))
             [kind v] (str/split result #" " 2)
-            kind (if (str/starts-with? result "A") "A" kind)
-            v (if (= kind "A") (str/trim (subs result 1)) v)]
+            kind (cond (str/starts-with? result "A") "A" (str/starts-with? result "R") "R" :else kind)
+            v (if (#{"A" "R"} kind) (str/trim (subs result 1)) v)]
         [:val (case kind
                 "N" nil
+                "R" (mapv #(if (re-find #"[.eE]" %) (Double/parseDouble %) (parse-long %)) (remove str/blank? (str/split (or v "") #"\s+")))
                 "A" (mapv #(if (re-find #"[.eE]" %) (Double/parseDouble %) (parse-long %)) (remove str/blank? (str/split (or v "") #"\s+")))
                 "S" (or v "")
                 "L" (parse-long v)

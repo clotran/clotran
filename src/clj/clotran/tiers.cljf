@@ -73,6 +73,8 @@ Consumers that fuse: reduce, transduce, run!, every?, some, not-any?, count, int
            :explain "A ^:dynamic Var can be rebound per thread with binding, so reading one needs the Var machinery. Pass its value in as an argument."}
    "C003" {:title "defines at run time" :tier :C
            :explain "def or set! inside a function changes Vars while the program runs. Define things at the top level of the file."}
+   "N002" {:title "assumes a record" :tier :A
+           :explain "A keyword that names a field of a record defined in this file is applied to a parameter or local. The function stays tier A on the assumption that it is that record -- in pure Fortran a derived type, and the read a field access. Passed a map instead, it needs the collector."}
    "N001" {:title "assumes a primitive array" :tier :A
            :explain "A sequence function is applied to a parameter or local whose type the report cannot see. The function stays tier A on the assumption that it is a primitive array; passed a vector or a seq, it needs the collector. Once the compiler infers types from the calls in the program (PLAN.md step 13), this note is resolved or turned into a B warning."}})
 
@@ -219,6 +221,10 @@ Consumers that fuse: reduce, transduce, run!, every?, some, not-any?, count, int
       :var
       (let [v (:p1 head) cn (core-name v) vs (var-sym v)]
         (cond
+          ;; a record of this file, constructed: a Fortran derived type
+          (contains? (:factories ctx) vs)
+          (walk-all args (assoc ctx :consuming false))
+
           (and cn (core-c cn))
           (cons (finding :C "C001" pos (str "`" cn "` needs the interpreter or dynamic Vars")
                          (str "`" cn "` runs or finds code at run time; move it out of this function, "
@@ -271,6 +277,12 @@ Consumers that fuse: reduce, transduce, run!, every?, some, not-any?, count, int
             bs (get builtin-aliases bs bs)
             b (some-> bs str)]
         (cond
+          (and (keyword? (:p1 head)) (contains? (:fields ctx) (:p1 head)))
+          (concat (when (= :local (:op (first args)))
+                    [(finding :A "N002" pos (str "assumes `" (:p1 (first args)) "` is a record with the field " (:p1 head))
+                              "pass a record built with its ->Name factory, not a map, and this stays pure")])
+                  (walk-all args ctx))
+
           (keyword? (:p1 head))
           (cons (finding :B "B011" pos (str "looks up " (:p1 head) " in a map, which needs the collector")
                          "if the keys are fixed, a defrecord of numbers is a Fortran derived type and a field read is pure")
@@ -360,6 +372,11 @@ Consumers that fuse: reduce, transduce, run!, every?, some, not-any?, count, int
         (some #(= :B (:tier %)) fs) :B
         :else :A))
 
+(def ^:dynamic ^:private *factories*
+  "The ->Name factories of the file's records." #{})
+(def ^:dynamic ^:private *record-fields*
+  "Every field keyword of the file's records." #{})
+
 (defn- fn-findings
   "Findings for one analysed (fn ...): every arity's body, and each
   variadic arity itself -- its rest arguments arrive as a heap list."
@@ -372,7 +389,8 @@ Consumers that fuse: reduce, transduce, run!, every?, some, not-any?, count, int
           (for [ar arities :when (true? (nth ar 1))]
             (finding :B "B060" pos "is variadic: its rest arguments arrive as a heap list"
                      "take a fixed number of arguments, or one primitive array of them"))
-          (walk-all bodies {:pos pos :tiers tiers :fname fname})))))
+          (walk-all bodies {:pos pos :tiers tiers :fname fname
+                            :factories *factories* :fields *record-fields*})))))
 
 ;;; ---- a file ---------------------------------------------------------
 
@@ -392,6 +410,11 @@ Consumers that fuse: reduce, transduce, run!, every?, some, not-any?, count, int
                 [(symbol (str ns-name) (str (second f))) fnf])
         tops (binding [*ns* (the-ns ns-name)]
                (into {} (for [[s fnf] defns] [s (clotran-ast fnf)])))]
+    (binding [*factories* (set (for [f forms :when (and (seq? f) (= 'defrecord (first f)))]
+                                 (symbol (str ns-name) (str "->" (second f)))))
+              *record-fields* (set (for [f forms :when (and (seq? f) (= 'defrecord (first f)))
+                                        fl (nth f 2)]
+                                    (keyword (name fl))))]
     (loop [tiers (into {} (for [[s] defns] [s :A])) rounds 0]
       (let [result (into {} (for [[s] defns
                                   :let [fs (fn-findings (tops s) tiers s)]]
@@ -399,7 +422,7 @@ Consumers that fuse: reduce, transduce, run!, every?, some, not-any?, count, int
             tiers' (into {} (for [[s r] result] [s (:tier r)]))]
         (if (or (= tiers tiers') (> rounds 20))
           result
-          (recur tiers' (inc rounds)))))))
+          (recur tiers' (inc rounds))))))))
 
 ;;; ---- the report ------------------------------------------------------
 

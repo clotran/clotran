@@ -88,3 +88,17 @@
 (defn circle-area [^double r] (* 3.0 (sq r)))
 
 (defn overrun [n] (let [a (double-array 2)] (loop [i 0] (if (< i n) (do (aset a i 1.0) (recur (inc i))) a))))
+
+(defrecord Particle [x y vx vy])
+
+(defn speed [p] (Math/sqrt (+ (* (:vx p) (:vx p)) (* (:vy p) (:vy p)))))
+
+(defn step [p dt] (->Particle (+ (:x p) (* dt (:vx p))) (+ (:y p) (* dt (:vy p))) (:vx p) (:vy p)))
+
+(defn kinetic [p ^double m] (* 0.5 m (+ (* (:vx p) (:vx p)) (* (:vy p) (:vy p)))))
+
+(defrecord Tally [^long n ^double total])
+
+(defn bump [t x] (->Tally (inc (:n t)) (+ (:total t) x)))
+
+(defn bad-tally [] (->Tally 1.0 2.0))

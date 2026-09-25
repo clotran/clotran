@@ -208,12 +208,42 @@ end module clotran_pure
 
 ;;; ---- types -----------------------------------------------------------
 
-(def ^:private fort-type
-  {:long "integer(int64)" :double "real(real64)" :bool "logical"
-   :doubles "real(real64)" :longs "integer(int64)"
-   :string "character(len=:), allocatable"})
+(defn- record-type? [t] (and (keyword? t) (= "record" (namespace t))))
 
-(def ^:private suffix {:long "l" :double "d" :doubles "vd" :longs "vl" :string "s"})
+(defn- fort-ident* [s] (str/lower-case (str/replace (str s) #"[^A-Za-z0-9]" "_")))
+
+(defn- type-name
+  "A record's Fortran derived type: name_t, since Fortran is
+  case-insensitive and a function particle would collide with a record
+  Particle."
+  [t]
+  (str (fort-ident* (name t)) "_t"))
+
+(defn- fort-type [t]
+  (if (record-type? t)
+    (str "type(" (type-name t) ")")
+    ({:long "integer(int64)" :double "real(real64)" :bool "logical"
+      :doubles "real(real64)" :longs "integer(int64)"
+      :string "character(len=:), allocatable"} t)))
+
+(defn- suffix [t]
+  (if (record-type? t)
+    (str "r" (fort-ident* (name t)))
+    ({:long "l" :double "d" :doubles "vd" :longs "vl" :string "s"} t)))
+
+(defn records-of
+  "The records a file defines: {Name {:type :record/Name :factory ns/->Name
+  :fields [[field type] ...]}}. A field's type is its hint -- ^long,
+  ^double -- or a double: the scientific default, and the check at every
+  construction keeps it honest."
+  [forms ns-name]
+  (into {} (for [f forms :when (and (seq? f) (= 'defrecord (first f)))
+                 :let [nm (second f) fields (nth f 2)]]
+             [(str nm) {:type (keyword "record" (str nm))
+                        :factory (symbol (str ns-name) (str "->" nm))
+                        :fields (mapv (fn [fl] [(keyword (name fl))
+                                               (case (:tag (meta fl)) long :long double :double :double)])
+                                      fields)}])))
 
 (defn- num? [t] (#{:long :double} t))
 
@@ -321,7 +351,7 @@ end module clotran_pure
 ;; form. A source is an array or a range of longs; steps are map, filter
 ;; and remove; the consumer is reduce, count or every?.
 
-(declare emit-call emit-call*)
+(declare emit-call emit-call* emit-call**)
 
 (defn- inline-fn
   "Apply an (fn ...) literal to [expr type] arguments by inlining its
@@ -483,6 +513,34 @@ end module clotran_pure
       (emit-call* nd env st)))
 
 (defn- emit-call* [nd env st]
+  (let [[head & args] (:children nd)]
+    (cond
+      ;; (:field rec): a field of a record, rec%field
+      (and (= :const (:op head)) (keyword? (:p1 head)))
+      (let [[ls es ts] (emit-args args env st)
+            k (:p1 head) t (first ts)
+            r (some #(when (= (:type %) t) %) (vals (:records @st)))]
+        (when-not (and (= 1 (count args)) r) (decline (str "looks up " k " in something that is not a record")))
+        (if-let [ft (some (fn [[f ft]] (when (= f k) ft)) (:fields r))]
+          [ls (str (first es) "%" (fort-ident* (name k))) ft]
+          (decline (str "the record " (name t) " has no field " k))))
+
+      ;; (->Name a b ...): the structure constructor, its types checked --
+      ;; a field is what the record says; Clojure would keep a long a long
+      (and (= :var (:op head))
+           (some #(when (= (:factory %) (op-name head)) %) (vals (:records @st))))
+      (let [r (some #(when (= (:factory %) (op-name head)) %) (vals (:records @st)))
+            [ls es ts] (emit-args args env st)]
+        (when (not= (count args) (count (:fields r))) (decline "a record constructed with the wrong number of fields"))
+        (doseq [[[f ft] t] (map vector (:fields r) ts)]
+          (when (not= ft t)
+            (decline (str "the field " f " of " (name (:type r)) " is a " (name ft) "; this passes a " (name t)
+                          (when (= ft :double) " -- write 1.0, not 1")))))
+        [ls (str (type-name (:type r)) "(" (str/join ", " es) ")") (:type r)])
+
+      :else (emit-call** nd env st))))
+
+(defn- emit-call** [nd env st]
   (let [[head & args] (:children nd)
         op (op-name head)
         [ls es ts] (emit-args args env st)
@@ -860,8 +918,20 @@ end module clotran_pure
   same-file functions it is passed to accept at that position; else by
   its uses -- an array if aget, aset, alength or a sequence function
   reads it, a string if subs or clojure.string does, a number otherwise."
-  [params body start sigs]
+  [params body start sigs records]
   (let [nodes (tree-seq coll? seq body)
+        ;; a parameter read by keywords that are all fields of a record is
+        ;; that record -- each record that has them all is a candidate
+        looked-up (reduce (fn [m [slot k]] (update m slot (fnil conj #{}) k)) {}
+                          (for [nd nodes
+                                :when (and (map? nd) (= :call (:op nd)))
+                                :let [[h a] (:children nd)]
+                                :when (and (= :const (:op h)) (keyword? (:p1 h)) (= :local (:op a)))]
+                            [(:i2 a) (:p1 h)]))
+        record-cands (fn [slot] (when-let [ks (looked-up slot)]
+                                  (seq (for [[_ r] (sort-by key records)
+                                             :when (every? (set (map first (:fields r))) ks)]
+                                         (:type r)))))
         array-slots (set (for [nd nodes
                                :when (and (map? nd) (= :call (:op nd)))
                                :let [op (op-name (first (:children nd)))
@@ -900,6 +970,7 @@ end module clotran_pure
             (if-let [h ('{doubles [:doubles] longs [:longs] double [:double] long [:long] String [:string]} (:tag (meta p)))]
               h
               (cond (callee-types (+ start i)) (vec (callee-types (+ start i)))
+                    (record-cands (+ start i)) (vec (record-cands (+ start i)))
                     (array-slots (+ start i)) [:doubles :longs]
                     (string-slots (+ start i)) [:string]
                     :else [:double :long])))
@@ -913,13 +984,13 @@ end module clotran_pure
 (defn- emit-version
   "One version of fname for parameter types ts: {:name :ret :text} or
   {:declined why}."
-  [fname fnode ts sigs impure-versions]
+  [fname fnode ts sigs impure-versions records]
   (try
     (let [tmpl (:p1 fnode)
           [[nargs variadic start body]] (second tmpl)
           _ (when variadic (decline "variadic"))
           _ (when (> (count (second tmpl)) 1) (decline "more than one arity"))
-          st (atom {:n 0 :decls [] :sigs sigs :written #{} :impure-versions impure-versions})
+          st (atom {:n 0 :decls [] :sigs sigs :written #{} :impure-versions impure-versions :records records})
           pnames (mapv #(str "p" %) (range nargs))
           ;; scalar parameters are copied into locals, so a recur can rebind them
           locals (mapv (fn [t] (when-not (#{:doubles :longs} t) (fresh! st "a" t))) ts)
@@ -989,6 +1060,7 @@ end module clotran_pure
         defns (for [f forms :when (and (seq? f) (#{'defn 'defn-} (first f)))
                     :let [fnf (loader/fn-form f)] :when fnf]
                 [(symbol (str ns-name) (str (second f))) fnf])
+        records (records-of forms ns-name)
         private? (set (for [f forms :when (and (seq? f) (#{'defn 'defn-} (first f))
                                                 (or (= 'defn- (first f)) (:private (meta (second f)))))]
                         (symbol (str ns-name) (str (second f)))))
@@ -1001,11 +1073,11 @@ end module clotran_pure
                    fnode (:p1 top)
                    [[nargs _ start body]] (second (:p1 fnode))
                    params (vec (take nargs (or (first (filter vector? fnf)) (first (first (filter seq? fnf))))))
-                   cands (param-candidates params body start sigs)
+                   cands (param-candidates params body start sigs records)
                    combos (cartesian cands)]
                (if (> (count combos) version-limit)
                  (assoc-in acc [:skipped s] (str (count combos) " type combinations; hint some parameters (^double, ^doubles, ...) to settle them"))
-                 (let [vs (for [ts combos] (assoc (emit-version s fnode ts sigs (:impure acc)) :ts ts))
+                 (let [vs (for [ts combos] (assoc (emit-version s fnode ts sigs (:impure acc) records) :ts ts))
                        ok (remove :declined vs)]
                    (if (empty? ok)
                      (assoc-in acc [:skipped s] (str/join "; " (distinct (map :declined vs))))
@@ -1033,6 +1105,7 @@ end module clotran_pure
                               :when (seq gone)]
                           [s (mapv :ts gone)]))]
     (assoc result
+           :records records
            :emitted emitted
            :pruned pruned
            :module mod-name
@@ -1045,6 +1118,12 @@ end module clotran_pure
                       "  use clotran_pure\n"
                       "  implicit none\n"
                       "  private\n"
+                      (apply str (for [[_ r] (sort-by key records)]
+                                   (str "  public :: " (type-name (:type r)) "\n"
+                                        "  type :: " (type-name (:type r)) "\n"
+                                        (apply str (for [[f ft] (:fields r)]
+                                                     (str "     " (fort-type ft) " :: " (fort-ident* (name f)) "\n")))
+                                        "  end type " (type-name (:type r)) "\n")))
                       (apply str (for [[s vs] (sort-by key emitted)]
                                    (str (when-not (private? s) (str "  public :: " (fort-ident (name s)) "\n"))
                                         "  interface " (fort-ident (name s)) "\n"
