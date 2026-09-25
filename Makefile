@@ -135,7 +135,7 @@ BT = $(B)/test
 
 unit-tests = gc_test persistent_vector_test persistent_list_test persistent_array_map_test \
 	persistent_hash_map_test env_test assoc_test printer_test reader_test eval_test bigint_test \
-	bigdec_test abi_test native_array_test
+	bigdec_test abi_test native_array_test threads_test
 test-bins = $(addprefix $(BT)/,$(unit-tests))
 
 .PHONY: all test crosscheck clean compiled-core
@@ -249,6 +249,11 @@ $(BT)/reader_test: $(data-objects) $(reader-objects) $(T)/reader_test.f90 $(ICU_
 	$(FC) $(FCFLAGS) -c $(T)/reader_test.f90 -o $(BT)/reader_test.o && $(FC) $(LDFLAGS) -o $@ $(data-objects) $(reader-objects) $(BT)/reader_test.o $(LINK_ICU)
 $(BT)/eval_test: $(eval-objects) $(T)/eval_test.f90 $(ICU_LIBS) | $(BT) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -c $(T)/eval_test.f90 -o $(BT)/eval_test.o && $(FC) $(LDFLAGS) -o $@ $(eval-objects) $(BT)/eval_test.o $(LINK_ICU)
+
+# threads_test: the Threads module on its own -- OS threads for tasks
+# (PLAN.md step 11, stage 1), pthreads through iso_c_binding.
+$(BT)/threads_test: $(B)/Threads.o $(T)/threads_test.f90 | $(BT) $(FCSTAMP)
+	$(FC) $(FCFLAGS) -c $(T)/threads_test.f90 -o $(BT)/threads_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/Threads.o $(BT)/threads_test.o -lpthread
 
 # abi_test declares every entry point itself and uses no clotran
 # module, which is the point of it -- so it compiles with -I nowhere
