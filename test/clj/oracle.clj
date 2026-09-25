@@ -2432,3 +2432,16 @@
 ;;; load-file restores *ns*, as Compiler.load binds it: the loaded file's
 ;;; (ns ...) does not leak into the forms after it.
 [(do (load-file "test/clj/load_file_sample.clj") (str *ns*)) @(resolve 'load-file-sample/x)]
+
+;;; Arithmetic errors say what the JVM says. Long overflow is
+;;; Math.addExact's "long overflow" on every path (Numbers.java); an index
+;;; out of range is ArrayIndexOutOfBoundsException naming both numbers --
+;;; for a slice of a multi-dimensional array too, which once answered nil.
+(defn msg-of [f] (try (f) :no-throw (catch Throwable e [(.getSimpleName (class e)) (.getMessage e)])))
+[(msg-of #(+ Long/MAX_VALUE 1)) (msg-of #(* Long/MAX_VALUE 2)) (msg-of #(inc Long/MAX_VALUE))
+ (msg-of #(dec Long/MIN_VALUE)) (msg-of #(- Long/MIN_VALUE)) (msg-of #(int 3000000000))
+ (msg-of #(aget (long-array [5 6]) 2)) (msg-of #(aget (double-array [1.0]) -1))
+ (msg-of #(aset (long-array [5 6]) 2 1)) (msg-of #(long 1.0E30))
+ (let [f (fn [a b] (quot a b))] (msg-of #(f 7 0))) (let [f (fn [a b] (mod a b))] (msg-of #(f 7 0)))]
+(expect-diff "DEVIATIONS 51: literal longs compile to the JVM's primitive quot, whose zero divisor is Java's \"/ by zero\"")
+[(msg-of #(quot 7 0)) (msg-of #(rem 7 0))]

@@ -4426,38 +4426,38 @@ contains
        ! by range, before the add (see mul_overflows)
        if ((ib > 0 .and. ia > huge(ia) - ib) .or. &
             (ib < 0 .and. ia < -huge(ia) - 1_gc_ip - ib)) then
-          call raise_class("ArithmeticException", "integer overflow", [gc_nil()])
+          call raise_class("ArithmeticException", "long overflow", [gc_nil()])
        else
           out = gc_int(ia + ib)
        end if
     case (38)
        if ((ib < 0 .and. ia > huge(ia) + ib) .or. &
             (ib > 0 .and. ia < -huge(ia) - 1_gc_ip + ib)) then
-          call raise_class("ArithmeticException", "integer overflow", [gc_nil()])
+          call raise_class("ArithmeticException", "long overflow", [gc_nil()])
        else
           out = gc_int(ia - ib)
        end if
     case (39)
        if (mul_overflows(ia, ib)) then
-          call raise_class("ArithmeticException", "integer overflow", [gc_nil()])
+          call raise_class("ArithmeticException", "long overflow", [gc_nil()])
        else
           out = gc_int(ia * ib)
        end if
     case (40)
        if (ia == huge(ia)) then
-          call raise_class("ArithmeticException", "integer overflow", [gc_nil()])
+          call raise_class("ArithmeticException", "long overflow", [gc_nil()])
        else
           out = gc_int(ia + 1_gc_ip)
        end if
     case (41)
        if (ia == -huge(ia) - 1_gc_ip) then
-          call raise_class("ArithmeticException", "integer overflow", [gc_nil()])
+          call raise_class("ArithmeticException", "long overflow", [gc_nil()])
        else
           out = gc_int(ia - 1_gc_ip)
        end if
     case (42)
        if (ia == -huge(ia) - 1_gc_ip) then
-          call raise_class("ArithmeticException", "integer overflow", [gc_nil()])
+          call raise_class("ArithmeticException", "long overflow", [gc_nil()])
        else
           out = gc_int(-ia)
        end if
@@ -5979,7 +5979,7 @@ contains
                acc = a%ival
                if (n == 1 .and. op == B_SUB) then
                   if (checked .and. acc == -huge(acc) - 1_gc_ip) then
-                     call raise_class("ArithmeticException", "integer overflow", [vs_get(base + 1)])
+                     call raise_class("ArithmeticException", "long overflow", [vs_get(base + 1)])
                      call vs_leave(base)
                      return
                   end if
@@ -5994,7 +5994,7 @@ contains
                      case (B_MUL); hit = mul_overflows(acc, b%ival)
                      end select
                      if (hit) then
-                        call raise_class("ArithmeticException", "integer overflow", [vs_get(base + 1)])
+                        call raise_class("ArithmeticException", "long overflow", [vs_get(base + 1)])
                         call vs_leave(base)
                         return
                      end if
@@ -7179,6 +7179,25 @@ contains
             call vs_leave(base)
             return
          end if
+
+         ! Out of range is ArrayIndexOutOfBoundsException naming the index
+         ! and the length, as the JVM says it -- for a slice as for an
+         ! element: a bad slice index once answered nil.
+         block
+           integer, allocatable :: ext(:)
+           character(len=24) :: bi, bn
+           ext = array_own_extents(a0)
+           do k = 1, nsub
+              if (subs(k) < 0 .or. subs(k) >= ext(k)) then
+                 write(bi, '(I0)') subs(k)
+                 write(bn, '(I0)') ext(k)
+                 call raise_class("ArrayIndexOutOfBoundsException", "Index " // trim(bi) // &
+                      " out of bounds for length " // trim(bn), [vs_get(base + 1)])
+                 call vs_leave(base)
+                 return
+              end if
+           end do
+         end block
 
          if (nsub < own_rank) then
             ! A SLICE over the remaining dimensions. aset never
@@ -10168,7 +10187,7 @@ contains
        if (a%tag == GCT_INT .and. checked) then
           if ((op == B_INC .and. a%ival == huge(a%ival)) .or. &
                (op == B_DEC .and. a%ival == -huge(a%ival) - 1_gc_ip)) then
-             call raise_class("ArithmeticException", "integer overflow", [vs_get(base + 1)])
+             call raise_class("ArithmeticException", "long overflow", [vs_get(base + 1)])
              call vs_leave(base)
              return
           end if

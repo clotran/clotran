@@ -1532,3 +1532,16 @@ with compiled core in place, for this reason.
 **Removal**: a machine stack per task -- one OS thread per task, run one
 at a time -- so a blocked task's Fortran frames stay where they are.
 That is the threads plan (PLAN.md), and it has to work on Windows.
+
+## 51. Division by zero says "Divide by zero" where the JVM's primitive path says "/ by zero"
+
+On the JVM the message depends on static types: `Numbers.quotient` of
+two boxed values throws "Divide by zero", but `(quot 7 0)` with literal
+longs compiles to Java's primitive `x / y`, whose message is Java's own
+"/ by zero". clotran says "Divide by zero" on every path -- the boxed
+path's answer, which is also what a function of unhinted parameters
+gets on the JVM. Pure Fortran does the same.
+
+**Removal**: track, per value, whether the JVM would have it primitive
+(the compiler's type inference already follows Clojure's rules), and
+choose the message by that.
