@@ -295,8 +295,23 @@ leaves tier A, says why and what would keep it there:
        |                    ^
        = help: consume it where it is made, so the chain fuses into one loop: (reduce f init (map ...)), (run! f (map ...)), or (into-array (map ...))
 
-It classifies; tier A does not yet compile to a stand-alone Fortran
-module. PLAN.md step 13 has the design.
+`clotran compile --pure file.cljf` then writes the tier-A functions as
+one ordinary Fortran module, with no clotran runtime at all -- any
+Fortran program can `use` it. Each function gets one generic name and
+one version per argument type:
+
+    $ ./clotran compile --pure test/clj/tiers_sample.cljf ts_pure.f90
+    module tiers_sample_pure -> ts_pure.f90
+      pure        tiers-sample/count-big (2 versions)
+      pure        tiers-sample/mean (2 versions)
+      ...
+      not lowered tiers-sample/describe -- tier B: see --report
+
+Loops, arithmetic, Math functions, arrays, fused `map`/`filter`/`reduce`
+chains, strings and `println` lower today; `scripts/pure-check` runs
+every case through `clj`, gfortran and flang and compares. Numbers
+become text the Fortran way (DEVIATIONS 50). PLAN.md step 13 has the
+design.
 
 ## What does not
 

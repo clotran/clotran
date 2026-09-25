@@ -30,6 +30,28 @@ if [ "$1" = "explain" ]; then
   exit 0
 fi
 
+if [ "$1" = "compile" ] && [ "$2" = "--pure" ]; then
+  # `clotran compile --pure foo.cljf [out.f90]`: the tier-A functions as one
+  # Fortran module with no clotran runtime (clotran.purefort), written
+  # beside the source unless a path is given. What was not lowered is
+  # listed with why; --report says more.
+  [ $# -eq 3 ] || [ $# -eq 4 ] || { echo "usage: clotran compile --pure file.cljf [out.f90]" >&2; exit 2; }
+  out=${4:-${3%.*}_pure.f90}
+  case "$out" in /*) ;; *) out="$(pwd)/$out" ;; esac
+  work=$(mktemp -d) || exit 1
+  trap 'rm -rf "$work"' EXIT
+  cat > "$work/pure.clj" <<CLJ
+(let [r (clotran.purefort/generate "$3")]
+  (clotran-spit "$out" (:text r))
+  (println "module" (:module r) "->" "$out")
+  (doseq [[s vs] (sort-by key (:emitted r))] (println "  pure       " s (str "(" (count vs) " version" (when (> (count vs) 1) "s") ")")))
+  (doseq [[s why] (sort-by key (:skipped r))] (println "  not lowered" s "--" why)))
+CLJ
+  "$bin" "$core" "$root/src/clj/clotran/loader.cljf" "$root/src/clj/clotran/tiers.cljf" "$root/src/clj/clotran/purefort.cljf" "$work/pure.clj" </dev/null 2>&1 \
+    | grep -v '^note: skipping\|^user=>\|WARNING: ->Eduction'
+  exit 0
+fi
+
 if [ "$1" = "compile" ] && [ "$2" = "--report" ]; then
   # `clotran compile --report foo.cljf`: each function's tier -- A pure
   # Fortran, B the collector, C the interpreter -- and, at every call
