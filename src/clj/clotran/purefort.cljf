@@ -113,6 +113,68 @@ contains
        call cl_fail('Index ' // trim(bi) // ' out of bounds for length ' // trim(bn))
     end if
   end subroutine cl_bounds
+  ! ---- strings: UTF-8 bytes, counted and cut by CHARACTER, as clotran
+  ! counts them (DEVIATIONS 41). A continuation byte is 10xxxxxx.
+  pure function cl_nchars(s) result(n)
+    character(len=*), intent(in) :: s
+    integer(int64) :: n
+    integer :: i
+    n = 0
+    do i = 1, len(s)
+       if (iand(ichar(s(i:i)), 192) /= 128) n = n + 1
+    end do
+  end function cl_nchars
+  ! the byte where character c (0-based) starts; len(s)+1 past the end
+  pure function cl_charpos(s, c) result(p)
+    character(len=*), intent(in) :: s
+    integer(int64), intent(in) :: c
+    integer :: p
+    integer(int64) :: seen
+    seen = -1
+    do p = 1, len(s)
+       if (iand(ichar(s(p:p)), 192) /= 128) then
+          seen = seen + 1
+          if (seen == c) return
+       end if
+    end do
+    p = len(s) + 1
+  end function cl_charpos
+  ! (subs s a b): String.substring's bounds check, then the characters
+  function cl_subs(s, a, b) result(r)
+    character(len=*), intent(in) :: s
+    integer(int64), intent(in) :: a, b
+    character(len=:), allocatable :: r
+    character(len=24) :: ba, bb, bn
+    integer(int64) :: n
+    n = cl_nchars(s)
+    if (a < 0 .or. b > n .or. a > b) then
+       write(ba, '(i0)') a; write(bb, '(i0)') b; write(bn, '(i0)') n
+       call cl_fail('Range [' // trim(ba) // ', ' // trim(bb) // ') out of bounds for length ' // trim(bn))
+    end if
+    r = s(cl_charpos(s, a):cl_charpos(s, b) - 1)
+  end function cl_subs
+  ! numbers and booleans as text, Fortran's way (DEVIATIONS 50)
+  function cl_lstr(x) result(r)
+    integer(int64), intent(in) :: x
+    character(len=:), allocatable :: r
+    character(len=24) :: b
+    write(b, '(i0)') x
+    r = trim(b)
+  end function cl_lstr
+  function cl_dstr(x) result(r)
+    real(real64), intent(in) :: x
+    character(len=:), allocatable :: r
+    character(len=32) :: b
+    write(b, '(es24.16e3)') x
+    r = trim(adjustl(b))
+  end function cl_dstr
+  function cl_bstr(x) result(r)
+    logical, intent(in) :: x
+    character(len=:), allocatable :: r
+    character(len=1) :: b
+    write(b, '(l1)') x
+    r = b
+  end function cl_bstr
 end module clotran_pure
 ")
 
@@ -120,9 +182,10 @@ end module clotran_pure
 
 (def ^:private fort-type
   {:long "integer(int64)" :double "real(real64)" :bool "logical"
-   :doubles "real(real64)" :longs "integer(int64)"})
+   :doubles "real(real64)" :longs "integer(int64)"
+   :string "character(len=:), allocatable"})
 
-(def ^:private suffix {:long "l" :double "d" :doubles "vd" :longs "vl"})
+(def ^:private suffix {:long "l" :double "d" :doubles "vd" :longs "vl" :string "s"})
 
 (defn- num? [t] (#{:long :double} t))
 
@@ -151,6 +214,13 @@ end module clotran_pure
   (let [s (pr-str v)]
     (if (str/includes? s "E") (str/replace s "E" "d") (str s "d0"))))
 
+(defn fort-string
+  "A string as a Fortran expression: a literal with its quotes doubled,
+  a newline as achar(10) -- a Fortran literal cannot hold one."
+  [s]
+  (let [pieces (map #(str "\"" (str/replace % "\"" "\"\"") "\"") (str/split s #"\n" -1))]
+    (str "(" (str/join " // achar(10) // " pieces) ")")))
+
 (defn- lit [v]
   (cond
     (true? v) [[] ".true." :bool]
@@ -160,7 +230,9 @@ end module clotran_pure
     (and (double? v) (NaN? v)) (decline "a NaN literal")
     (and (double? v) (infinite? v)) (decline "an infinite literal")
     (double? v) [[] (fort-double v) :double]
-    :else (decline (str "the constant " (pr-str v) " is not a number or a boolean"))))
+    (string? v) [[] (fort-string v) :string]
+    (nil? v) [[] "" :nil]
+    :else (decline (str "the constant " (pr-str v) " is not a number, a string or a boolean"))))
 
 (declare emit)
 
@@ -446,6 +518,8 @@ end module clotran_pure
                      (and (num? ta) (num? tb) (not= ta tb)) ".false."
                      (and (num? ta) (= ta tb)) (str "(" (first es) " == " (second es) ")")
                      (and (= ta :bool) (= tb :bool)) (str "(" (first es) " .eqv. " (second es) ")")
+                     (and (= ta :string) (= tb :string))
+                     (str "(len(" (first es) ") == len(" (second es) ") .and. " (first es) " == " (second es) ")")
                      :else (decline (str op " of " (name ta) " and " (name tb))))]
             (done (if (= op 'not=) (str "(.not. " eq ")") eq) :bool)))
 
@@ -513,12 +587,58 @@ end module clotran_pure
                      (str a "(" iv " + 1) = " vv)])
            vv et]))
 
+      (#{'str 'print 'println} op)
+      (let [piece (fn [e t]
+                    (case t
+                      :string e
+                      :long (str "cl_lstr(" e ")")
+                      :double (str "cl_dstr(" e ")")
+                      :bool (str "cl_bstr(" e ")")
+                      ;; nil: str makes it \"\", print writes nil
+                      :nil (if (= op 'str) "''" "'nil'")
+                      (decline (str op " of a " (name t)))))
+            parts (map piece es ts)
+            text (cond (empty? parts) "''"
+                       (= op 'str) (str/join " // " parts)
+                       :else (str/join " // ' ' // " parts))]
+        (case op
+          str (done text :string)
+          println [(conj ls (str "write(*, '(a)') " text)) "" :nil]
+          print [(conj ls (str "write(*, '(a)', advance='no') " text)) "" :nil]))
+
+      (= op 'newline) [(conj ls "write(*, '(a)') ''") "" :nil]
+
+      (and (= op 'count) (= 1 n) (= :string (first ts)))
+      (done (str "cl_nchars(" (first es) ")") :long)
+
+      (and (= op 'count) (= 1 n) (#{:doubles :longs} (first ts)))
+      (done (str "size(" (first es) ", kind=int64)") :long)
+
+      (= op 'subs)
+      (do (when-not (and (= :string (first ts)) (every? #{:long} (rest ts)))
+            (decline "subs of other than a string and long indices"))
+          (done (str "cl_subs(" (first es) ", " (second es) ", "
+                     (if (= n 3) (nth es 2) (str "cl_nchars(" (first es) ")")) ")")
+                :string))
+
+      (and ('#{clojure.string/includes? clojure.string/starts-with? clojure.string/ends-with?} op)
+           (= [:string :string] ts))
+      (let [[s x] es]
+        (done (case (name op)
+                "includes?" (str "(index(" s ", " x ") > 0)")
+                "starts-with?" (str "(len(" s ") >= len(" x ") .and. index(" s ", " x ") == 1)")
+                "ends-with?" (str "(len(" s ") >= len(" x ") .and. index(" s ", " x ", back=.true.) == len(" s ") - len(" x ") + 1)"))
+              :bool))
+
       ;; another tier-A function of this file, by its generic name
       (and (symbol? op) (namespace op) (get-in @st [:sigs op]))
       (let [sig (get-in @st [:sigs op])
             rt (get sig ts)]
         (when-not rt (decline (str "`" op "` has no version for " (pr-str (mapv name ts)))))
-        (done (str (fort-ident (name op)) "(" (str/join ", " es) ")") rt))
+        (if (= rt :nil)
+          ;; a function answering nil is a subroutine: called, not evaluated
+          [(conj ls (str "call " (fort-ident (name op)) "(" (str/join ", " es) ")")) "" :nil]
+          (done (str (fort-ident (name op)) "(" (str/join ", " es) ")") rt)))
 
       :else (decline (str "calls `" (or op (:op head)) "`, which is not lowered yet")))))
 
@@ -532,7 +652,7 @@ end module clotran_pure
           (if (= :const (:op t))
             ;; a constant test -- cond's :else -- picks its branch here
             (if (or (nil? (:p1 t)) (false? (:p1 t)))
-              (if el (emit-tail el env st finish) (decline "an if with no else answers nil"))
+              (if el (emit-tail el env st finish) (finish "" :nil))
               (emit-tail th env st finish))
           (let [[tl te tt] (emit t env st)]
           (if (not= tt :bool)
@@ -542,7 +662,7 @@ end module clotran_pure
                              (map #(str "   " %) (emit-tail th env st finish))
                              ["else"]
                              (map #(str "   " %) (if el (emit-tail el env st finish)
-                                                      (decline "an if with no else answers nil")))
+                                                      (finish "" :nil)))
                              ["end if"]))))))
     :do (let [kids (:children nd)]
           (if (empty? kids)
@@ -603,14 +723,14 @@ end module clotran_pure
           lines (emit-tail nd env st
                            (fn [e & [t]]
                              (let [t (or t (throw (ex-info "untyped finish" {})))
-                                   r (or @res (reset! res [(fresh! st "v" t) t]))]
+                                   r (or @res (reset! res [(when (not= t :nil) (fresh! st "v" t)) t]))]
                                (when (not= (second r) t)
                                  (if (and (num? t) (num? (second r)))
                                    (decline "the branches answer a long and a double: Clojure keeps each one's type")
                                    (decline "the branches answer different types")))
-                               [(str (first r) " = " e)])))]
+                               (if (= t :nil) [] [(str (first r) " = " e)]))))]
       (if-let [[v t] @res]
-        [lines v t]
+        [lines (or v "") t]
         [lines "" :none]))
     :recur [[] "" :none]
     (decline (str "`" (name (:op nd)) "` is not lowered yet"))))
@@ -618,9 +738,11 @@ end module clotran_pure
 ;;; ---- a function: its versions ----------------------------------------
 
 (defn- param-candidates
-  "The types each parameter could have: its hint, or by its uses -- an
-  array if it is aget/aset/alength's first argument, a number otherwise."
-  [params body start]
+  "The types each parameter could have: its hint; else what the
+  same-file functions it is passed to accept at that position; else by
+  its uses -- an array if aget, aset, alength or a sequence function
+  reads it, a string if subs or clojure.string does, a number otherwise."
+  [params body start sigs]
   (let [nodes (tree-seq coll? seq body)
         array-slots (set (for [nd nodes
                                :when (and (map? nd) (= :call (:op nd)))
@@ -630,6 +752,23 @@ end module clotran_pure
                                          (second (:children a)) a)]
                                :when (and (#{'aget 'aset 'alength} op) (= :local (:op a)))]
                            (:i2 a)))
+        ;; a parameter passed straight to a same-file function: the types
+        ;; that function's versions take in that position
+        callee-types (reduce (fn [m [slot ts]] (update m slot (fnil into (sorted-set)) ts)) {}
+                             (for [nd nodes
+                                   :when (and (map? nd) (= :call (:op nd)))
+                                   :let [op (op-name (first (:children nd))) sig (get sigs op)]
+                                   :when sig
+                                   [j a] (map-indexed vector (rest (:children nd)))
+                                   :when (= :local (:op a))]
+                               [(:i2 a) (set (map #(nth % j) (keys sig)))]))
+        ;; a parameter subs or clojure.string reads is a string
+        string-slots (set (for [nd nodes
+                                :when (and (map? nd) (= :call (:op nd)))
+                                :let [op (op-name (first (:children nd))) a (second (:children nd))]
+                                :when (and (or (= op 'subs) (and (symbol? op) (= "clojure.string" (namespace op))))
+                                           (= :local (:op a)))]
+                            (:i2 a)))
         ;; ... and so is one a sequence function reads from
         array-slots (into array-slots
                           (for [nd nodes
@@ -640,9 +779,12 @@ end module clotran_pure
                             (:i2 a)))]
     (vec (map-indexed
           (fn [i p]
-            (if-let [h ('{doubles [:doubles] longs [:longs] double [:double] long [:long]} (:tag (meta p)))]
+            (if-let [h ('{doubles [:doubles] longs [:longs] double [:double] long [:long] String [:string]} (:tag (meta p)))]
               h
-              (if (array-slots (+ start i)) [:doubles :longs] [:double :long])))
+              (cond (callee-types (+ start i)) (vec (callee-types (+ start i)))
+                    (array-slots (+ start i)) [:doubles :longs]
+                    (string-slots (+ start i)) [:string]
+                    :else [:double :long])))
           params))))
 
 (defn- cartesian [colls]
@@ -673,28 +815,35 @@ end module clotran_pure
                                   (when (and @ret (not= @ret t))
                                     (decline "the function answers different types on different paths"))
                                   (reset! ret t)
-                                  [(str "r = " e) (str "exit " label)]))
+                                  (if (= t :nil)
+                                    [(str "exit " label)]
+                                    [(str "r = " e) (str "exit " label)])))
           rt @ret
           _ (when-not rt (decline "no path answers a value"))
           _ (when (#{:doubles :longs} rt) (decline "answering an array is not lowered yet"))
           nm (str (fort-ident (name fname)) "__" (str/join "_" (map suffix ts)))
           {:keys [decls written]} @st
-          decl-lines (for [[v t] (distinct decls)] (str "    " (fort-type t) " :: " v))]
+          decl-lines (for [[v t] (distinct decls) :when (fort-type t)] (str "    " (fort-type t) " :: " v))
+          sub? (= rt :nil)]
       {:name nm :ret rt
-       :text (str "  function " nm "(" (str/join ", " pnames) ") result(r)\n"
+       :text (str (if sub?
+                    (str "  subroutine " nm "(" (str/join ", " pnames) ")\n")
+                    (str "  function " nm "(" (str/join ", " pnames) ") result(r)\n"))
                   (apply str (for [[i t] (map-indexed vector ts)]
-                               (str "    " (fort-type t)
-                                    (if (#{:doubles :longs} t)
+                               (str "    " (if (= t :string) "character(len=*), intent(in)" (fort-type t))
+                                    (cond
+                                      (#{:doubles :longs} t)
                                       (str ", intent(" (if (written (pnames i)) "inout" "in") ") :: " (pnames i) "(:)\n")
-                                      (str ", intent(in) :: " (pnames i) "\n")))))
-                  "    " (fort-type rt) " :: r\n"
+                                      (= t :string) (str " :: " (pnames i) "\n")
+                                      :else (str ", intent(in) :: " (pnames i) "\n")))))
+                  (when-not sub? (str "    " (fort-type rt) " :: r\n"))
                   (str/join "\n" decl-lines) (when (seq decl-lines) "\n")
                   (apply str (for [[i t] (map-indexed vector ts) :when (not (#{:doubles :longs} t))]
                                (str "    " (locals i) " = " (pnames i) "\n")))
                   "    " label ": do\n"
                   (apply str (map #(str "       " % "\n") body-lines))
                   "    end do " label "\n"
-                  "  end function " nm "\n")})
+                  (if sub? (str "  end subroutine " nm "\n") (str "  end function " nm "\n")))})
     (catch Exception e
       (if-let [why (::decline (ex-data e))]
         {:declined why}
@@ -723,7 +872,7 @@ end module clotran_pure
                    fnode (:p1 top)
                    [[nargs _ start body]] (second (:p1 fnode))
                    params (vec (take nargs (or (first (filter vector? fnf)) (first (first (filter seq? fnf))))))
-                   cands (param-candidates params body start)
+                   cands (param-candidates params body start sigs)
                    combos (cartesian cands)]
                (if (> (count combos) version-limit)
                  (assoc-in acc [:skipped s] (str (count combos) " type combinations; hint some parameters (^double, ^doubles, ...) to settle them"))

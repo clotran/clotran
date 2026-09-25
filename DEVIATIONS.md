@@ -1543,6 +1543,13 @@ an error message is written with the `ES` edit descriptor,
 number by value. `ES` rather than list-directed or `G0` output because
 the standard fixes its layout, so gfortran and flang write the same text.
 
+The same holds wherever pure code turns a value into text -- `str`,
+`print`, `println`: a long is `I0`, a double `ES24.16E3`, a boolean
+Fortran's `T` or `F` where Clojure writes `true` or `false`. So a
+string that holds a number differs too: `(str 2.5)` is `"2.5"`
+interpreted and `"2.5000000000000000E+000"` as pure Fortran, and
+`(count (str 2.5))` differs with it.
+
 A decision, not an accident: pure Fortran is meant to read as Fortran
 to the Fortran programs that use it. **Removal** is not planned.
 

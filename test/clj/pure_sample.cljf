@@ -54,3 +54,21 @@
 (defn countdown-sum [n] (reduce + 0 (range n 0 -2)))
 
 (defn max-of [xs] (reduce max xs))
+
+(defn show [a] (println "mean:" (mean a)))
+
+(defn label [n] (str "n=" n "!"))
+
+(defn first-three [^String s] (subs s 0 3))
+
+(defn tail-of [^String s] (subs s 1))
+
+(defn has-fe? [^String s] (clojure.string/includes? s "fe"))
+
+(defn same-text? [^String a ^String b] (= a b))
+
+(defn describe-num [x] (println "x is" x (if (pos? x) "positive" "not positive")))
+
+(defn countdown [n] (loop [i n] (when (pos? i) (println i) (recur (dec i)))))
+
+(defn quoted [] (str "say \"hi\"\nbye"))

@@ -73,10 +73,24 @@
     (countdown-sum -1)
     (max-of (long-array [3 9 2]))
     (max-of (double-array [1.5 -2.0]))
-    (max-of (long-array []))])
+    (max-of (long-array []))
+    (show (double-array [1.0 2.0]))
+    (label 42)
+    (label 2.5)
+    (first-three "héllo")
+    (first-three "ab")
+    (tail-of "xyz")
+    (has-fe? "café")
+    (has-fe? "coffee")
+    (same-text? "a" "a ")
+    (same-text? "ab" "ab")
+    (describe-num 3)
+    (describe-num -1.5)
+    (countdown 3)
+    (quoted)])
 
 (defn arg-type [a]
-  (cond (int? a) :long (double? a) :double
+  (cond (int? a) :long (double? a) :double (string? a) :string
         (and (seq? a) (= 'double-array (first a))) :doubles
         (and (seq? a) (= 'long-array (first a))) :longs
         :else (throw (ex-info "unknown argument form" {:arg a}))))
@@ -98,7 +112,7 @@
            "(in-ns '" ns-name ")\n"
            (apply str (map-indexed
                        (fn [i c]
-                         (str "(clojure.core/println \"CASE " i "\" (try (clojure.core/pr-str [:val " (pr-str c) "])"
+                         (str "(clojure.core/println \"CASE " i "\" (try (clojure.core/let [v (clojure.core/atom nil) o (clojure.core/with-out-str (clojure.core/reset! v " (pr-str c) "))] (clojure.core/pr-str [:val @v o]))"
                               " (catch Throwable e (clojure.core/pr-str [:threw (.getMessage e)]))))\n"))
                        cases))))
 (def out (run-clotran (io/file work "drive.clj")))
@@ -108,8 +122,8 @@
 (defn parse-cases [out]
   (into {} (for [l (str/split-lines out) :let [m (re-matches #"CASE (\d+) (.*)" l)] :when m]
              [(parse-long (second m))
-              (let [[k v] (edn/read-string {:readers {'Inf (constantly ##Inf)}} (str/replace (nth m 2) #"##(-?)Inf" "$1##Inf"))]
-                [k (if (string? v) (first (str/split v #"  at ")) v)])])))
+              (let [[k v & more] (edn/read-string {:readers {'Inf (constantly ##Inf)}} (str/replace (nth m 2) #"##(-?)Inf" "$1##Inf"))]
+                (into [k (if (and (= k :threw) (string? v)) (first (str/split v #"  at ")) v)] more))])))
 (def interp (parse-cases out))
 
 ;; clj, the language oracle, runs the same file and the same cases
@@ -117,7 +131,7 @@
       (str "(load-file \"" src "\")\n(in-ns '" ns-name ")\n"
            (apply str (map-indexed
                        (fn [i c]
-                         (str "(clojure.core/println \"CASE " i "\" (try (clojure.core/pr-str [:val " (pr-str c) "])"
+                         (str "(clojure.core/println \"CASE " i "\" (try (clojure.core/let [v (clojure.core/atom nil) o (clojure.core/with-out-str (clojure.core/reset! v " (pr-str c) "))] (clojure.core/pr-str [:val @v o]))"
                               " (catch Throwable e (clojure.core/pr-str [:threw (.getMessage e)]))))\n"))
                        cases))))
 (def jvm (parse-cases (:out (shell {:out :string :err :string :dir (str repo) :continue true} "clj" "-M" (str (io/file work "jvm.clj"))))))
@@ -137,7 +151,8 @@
     :long (if (= a Long/MIN_VALUE) "(-huge(0_int64) - 1_int64)" (str a "_int64"))
     :double (fort-double a)
     :doubles (str "[real(real64) :: " (str/join ", " (map #(fort-double (double %)) (second a))) "]")
-    :longs (str "[integer(int64) :: " (str/join ", " (map #(str % "_int64") (second a))) "]")))
+    :longs (str "[integer(int64) :: " (str/join ", " (map #(str % "_int64") (second a))) "]")
+    :string (str "\"" (str/replace a "\"" "\"\"") "\"")))
 
 (defn fort-ident [s] (str/lower-case (str/replace (str s) #"[^A-Za-z0-9]" "_")))
 
@@ -161,12 +176,15 @@
                                        ", allocatable :: a" j "(:)\n")))
                      (apply str (for [[j a] (map-indexed vector args) :when (#{:doubles :longs} (arg-type a))]
                                   (str "      a" j " = " (f-lit a) "\n")))
-                     "      print '(a, " (case rt :long "i0" :double "es26.17e3" :bool "l1") ")', '"
-                     (case rt :long "L " :double "D " :bool "B ") "', "
-                     (fort-ident (name f)) "("
-                     (str/join ", " (for [[j a] (map-indexed vector args)]
-                                      (if (#{:doubles :longs} (arg-type a)) (str "a" j) (f-lit a))))
-                     ")\n"
+                     (let [call (str (fort-ident (name f)) "("
+                                     (str/join ", " (for [[j a] (map-indexed vector args)]
+                                                      (if (#{:doubles :longs} (arg-type a)) (str "a" j) (f-lit a))))
+                                     ")")]
+                       (if (= rt :nil)
+                         (str "      call " call "\n      print '(a)', '==R=='\n      print '(a)', 'N'\n")
+                         (str "      print '(a)', '==R=='\n"
+                              "      print '(a, " (case rt :long "i0" :double "es26.17e3" :bool "l1" :string "a") ")', '"
+                              (case rt :long "L " :double "D " :bool "B " :string "S ") "', " call "\n")))
                      "    end block\n")))
        "  end select\n"
        "end program pure_driver\n"))
@@ -184,14 +202,21 @@
 (defn run-case [exe i]
   (let [r (shell {:out :string :err :string :continue true :dir (str work)} (str "./" exe) (str i))]
     (if (zero? (:exit r))
-      (let [[kind v] (str/split (str/trim (:out r)) #"\s+" 2)]
+      (let [out (:out r)
+            at (str/last-index-of out "==R==\n")
+            printed (subs out 0 at)
+            result (let [s (subs out (+ at 6))] (if (str/ends-with? s "\n") (subs s 0 (dec (count s))) s))
+            [kind v] (str/split result #" " 2)]
         [:val (case kind
+                "N" nil
+                "S" (or v "")
                 "L" (parse-long v)
                 "D" (let [s (str/lower-case v)]
                       (cond (str/includes? s "nan") ##NaN
                             (str/includes? s "inf") (if (str/starts-with? s "-") ##-Inf ##Inf)
                             :else (Double/parseDouble v)))
-                "B" (= v "T"))])
+                "B" (= v "T"))
+         printed])
       [:threw (str/trim (first (str/split-lines (str (:err r) "\n"))))])))
 
 (defn- trailing-number
@@ -201,15 +226,32 @@
     [text (Double/parseDouble num)]
     [s nil]))
 
+(defn- numbers-as-values
+  "Text with every number replaced by its value as Java prints it: pure
+  Fortran writes 2.5 as 2.5000000000000000E+000 (DEVIATIONS 50)."
+  [s]
+  (str/replace (str s) #"-?[0-9]+\.[0-9]+(?:[eE][-+]?[0-9]+)?" #(pr-str (Double/parseDouble %))))
+
+(defn- same-printed? [a b]
+  (let [toks #(remove str/blank? (str/split (str %) #"[ \n]+"))
+        norm (fn [t] (cond (= t "T") "true" (= t "F") "false"
+                           (re-matches #"-?[0-9][0-9.]*(?:[eE][-+]?[0-9]+)?" t) (Double/parseDouble t)
+                           :else t))]
+    (and (= (count (str/split-lines (str a))) (count (str/split-lines (str b))))
+         (= (map norm (toks a)) (map norm (toks b))))))
+
 (defn same? [a b]
-  (let [[ka va] a [kb vb] b]
+  (let [[ka va oa] a [kb vb ob] b]
     (and (= ka kb)
+         (or (= ka :threw) (same-printed? oa ob))
          (cond
            (and (double? va) (double? vb))
            (= (Double/doubleToLongBits va) (Double/doubleToLongBits vb))
            ;; pure Fortran writes a double in a message in Fortran's ES form,
            ;; not Java's (DEVIATIONS 50): the text before it must match, and
            ;; the number by value
+           (and (= :val ka) (string? va) (string? vb))
+           (= (numbers-as-values va) (numbers-as-values vb))
            (and (= :threw ka) (string? va) (string? vb))
            (let [[ta na] (trailing-number va) [tb nb] (trailing-number vb)]
              (and (= ta tb) (= na nb)))
