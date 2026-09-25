@@ -6641,7 +6641,7 @@ contains
             hi = int(b%ival)
          end if
          if (lo < 0 .or. hi > u8_count(t) .or. lo > hi) then
-            call raise_class("StringIndexOutOfBoundsException", "begin " // trim(itoa(lo)) // ", end " // trim(itoa(hi)) // ", length " // trim(itoa(u8_count(t))), [vs_get(base + 1)])
+            call raise_class("StringIndexOutOfBoundsException", "Range [" // trim(itoa(lo)) // ", " // trim(itoa(hi)) // ") out of bounds for length " // trim(itoa(u8_count(t))), [vs_get(base + 1)])
          else
             out = gc_str(u8_slice(t, lo, hi), [vs_get(base + 1)])
          end if
@@ -7611,7 +7611,7 @@ contains
             hi = int(iv%ival)
          end if
          if (lo < 0 .or. hi > u8_count(t) .or. lo > hi) then
-            call raise_class("StringIndexOutOfBoundsException", "begin " // trim(itoa(lo)) // ", end " // trim(itoa(hi)) // ", length " // trim(itoa(u8_count(t))), [vs_get(base + 1)])
+            call raise_class("StringIndexOutOfBoundsException", "Range [" // trim(itoa(lo)) // ", " // trim(itoa(hi)) // ") out of bounds for length " // trim(itoa(u8_count(t))), [vs_get(base + 1)])
          else
             out = gc_str(u8_slice(t, lo, hi), [vs_get(base + 1)])
          end if
