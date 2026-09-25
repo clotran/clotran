@@ -113,6 +113,30 @@ contains
        call cl_fail('Index ' // trim(bi) // ' out of bounds for length ' // trim(bn))
     end if
   end subroutine cl_bounds
+  ! (double-array n), (long-array n): zeros; a negative size is Java's
+  ! NegativeArraySizeException, whose message is the size
+  function cl_dzeros(n) result(r)
+    integer(int64), intent(in) :: n
+    real(real64), allocatable :: r(:)
+    character(len=24) :: b
+    if (n < 0) then
+       write(b, '(i0)') n
+       call cl_fail(trim(b))
+    end if
+    allocate(r(n))
+    r = 0.0_real64
+  end function cl_dzeros
+  function cl_lzeros(n) result(r)
+    integer(int64), intent(in) :: n
+    integer(int64), allocatable :: r(:)
+    character(len=24) :: b
+    if (n < 0) then
+       write(b, '(i0)') n
+       call cl_fail(trim(b))
+    end if
+    allocate(r(n))
+    r = 0_int64
+  end function cl_lzeros
   ! ---- strings: UTF-8 bytes, counted and cut by CHARACTER, as clotran
   ! counts them (DEVIATIONS 41). A continuation byte is 10xxxxxx.
   pure function cl_nchars(s) result(n)
@@ -269,7 +293,7 @@ end module clotran_pure
     :const (when-let [b (some-> (:builtin head) str)]
              (if (str/starts-with? b "clotran-math-")
                (symbol "math" (subs b (count "clotran-math-")))
-               (symbol b)))
+               (get tiers/builtin-aliases (symbol b) (symbol b))))
     nil))
 
 (defn- chain-compare
@@ -563,6 +587,17 @@ end module clotran_pure
       (= op 'math/atan2)
       (done (str "atan2(" (as-double (first es) (first ts)) ", " (as-double (second es) (second ts)) ")") :double)
 
+      (and ('#{double-array long-array} op) (= 1 n) (= :long (first ts)))
+      (done (str (if (= op 'double-array) "cl_dzeros(" "cl_lzeros(") (first es) ")")
+            (if (= op 'double-array) :doubles :longs))
+
+      ;; a copy: assigned to its own variable, Fortran array assignment copies
+      (and (= op 'aclone) (#{:doubles :longs} (first ts)))
+      (done (first es) (first ts))
+
+      (and ('#{unchecked-inc unchecked-dec} op) (= :long (first ts)))
+      (done (str "(" (first es) (if (= op 'unchecked-inc) " + " " - ") "1_int64)") :long)
+
       (= op 'alength)
       (if (#{:doubles :longs} (first ts))
         (done (str "size(" (first es) ", kind=int64)") :long)
@@ -671,11 +706,15 @@ end module clotran_pure
                   (emit-tail (last kids) env st finish))))
     :let (let [[ls env'] (let [kids (:children nd) n (:i2 nd) base (:p1 nd)]
                            (reduce (fn [[ls env] i]
-                                     (let [[l e t] (emit (nth kids i) env st)
-                                           v (fresh! st "x" t)]
+                                     (let [init (nth kids i)
+                                           [l e t] (emit init env st)]
                                        (when (= t :none) (decline "recur in a let binding"))
-                                       [(-> ls (into l) (conj (str v " = " e)))
-                                        (assoc env (+ base i) [v t])]))
+                                       (if (and (#{:doubles :longs} t) (= :local (:op init)))
+                                         ;; an array is a reference: this local IS that array
+                                         [(into ls l) (assoc env (+ base i) (get env (:i2 init)))]
+                                         (let [v (fresh! st "x" t)]
+                                           [(-> ls (into l) (conj (str v " = " e)))
+                                            (assoc env (+ base i) [v t])]))))
                                    [[] env] (range n)))]
            (into ls (emit-tail (nth (:children nd) (:i2 nd)) env' st finish)))
     :recur (let [{:keys [label vars]} (:loop env)
@@ -696,6 +735,7 @@ end module clotran_pure
                 label (str "lp" (:n (swap! st update :n inc)))
                 [ls env' vars] (reduce (fn [[ls env vars] i]
                                          (let [[l e t] (emit (nth kids i) env st)
+                                               _ (when (#{:doubles :longs} t) (decline "an array as a loop local"))
                                                v (fresh! st "q" t)]
                                            [(-> ls (into l) (conj (str v " = " e)))
                                             (assoc env (+ base i) [v t])
@@ -750,7 +790,7 @@ end module clotran_pure
                                      a (second (:children nd))
                                      a (if (and (= :call (:op a)) (= 'clotran-array-cast (op-name (first (:children a)))))
                                          (second (:children a)) a)]
-                               :when (and (#{'aget 'aset 'alength} op) (= :local (:op a)))]
+                               :when (and (#{'aget 'aset 'alength 'aclone} op) (= :local (:op a)))]
                            (:i2 a)))
         ;; a parameter passed straight to a same-file function: the types
         ;; that function's versions take in that position
@@ -820,10 +860,12 @@ end module clotran_pure
                                     [(str "r = " e) (str "exit " label)])))
           rt @ret
           _ (when-not rt (decline "no path answers a value"))
-          _ (when (#{:doubles :longs} rt) (decline "answering an array is not lowered yet"))
           nm (str (fort-ident (name fname)) "__" (str/join "_" (map suffix ts)))
           {:keys [decls written]} @st
-          decl-lines (for [[v t] (distinct decls) :when (fort-type t)] (str "    " (fort-type t) " :: " v))
+          decl-lines (for [[v t] (distinct decls) :when (fort-type t)]
+                       (if (#{:doubles :longs} t)
+                         (str "    " (fort-type t) ", allocatable :: " v "(:)")
+                         (str "    " (fort-type t) " :: " v)))
           sub? (= rt :nil)]
       {:name nm :ret rt
        :text (str (if sub?
@@ -836,7 +878,9 @@ end module clotran_pure
                                       (str ", intent(" (if (written (pnames i)) "inout" "in") ") :: " (pnames i) "(:)\n")
                                       (= t :string) (str " :: " (pnames i) "\n")
                                       :else (str ", intent(in) :: " (pnames i) "\n")))))
-                  (when-not sub? (str "    " (fort-type rt) " :: r\n"))
+                  (when-not sub? (if (#{:doubles :longs} rt)
+                                   (str "    " (fort-type rt) ", allocatable :: r(:)\n")
+                                   (str "    " (fort-type rt) " :: r\n")))
                   (str/join "\n" decl-lines) (when (seq decl-lines) "\n")
                   (apply str (for [[i t] (map-indexed vector ts) :when (not (#{:doubles :longs} t))]
                                (str "    " (locals i) " = " (pnames i) "\n")))

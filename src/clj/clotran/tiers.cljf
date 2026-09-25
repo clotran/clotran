@@ -140,6 +140,12 @@ Consumers that fuse: reduce, transduce, run!, every?, some, not-any?, count, int
     atom "an atom is shared heap state; in a kernel, thread the value through loop/recur instead"
     swap! "an atom is shared heap state; in a kernel, thread the value through loop/recur instead"})
 
+(def builtin-aliases
+  "Builtins that ARE a clojure.core function under another name: core.clj's
+  :inline turns (double-array n) into clotran's own double-array-of."
+  '{double-array-of double-array long-array-of long-array
+    int-array-of int-array float-array-of float-array})
+
 (def ^:private numeric-builtins
   "Host builtins (folded into call heads) with a Fortran lowering, by the
   name the exporter gives them."
@@ -261,7 +267,9 @@ Consumers that fuse: reduce, transduce, run!, every?, some, not-any?, count, int
 
       :const
       (let [b (some-> (:builtin head) str)
-            bs (some-> b symbol)]
+            bs (some-> b symbol)
+            bs (get builtin-aliases bs bs)
+            b (some-> bs str)]
         (cond
           (keyword? (:p1 head))
           (cons (finding :B "B011" pos (str "looks up " (:p1 head) " in a map, which needs the collector")

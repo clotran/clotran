@@ -72,3 +72,13 @@
 (defn countdown [n] (loop [i n] (when (pos? i) (println i) (recur (dec i)))))
 
 (defn quoted [] (str "say \"hi\"\nbye"))
+
+(defn squares-of [xs] (amap xs i ret (* (aget xs i) (aget xs i))))
+
+(defn zeros [n] (double-array n))
+
+(defn ramp [n] (let [a (long-array n)] (loop [i 0] (if (< i n) (do (aset a i (* i i)) (recur (inc i))) a))))
+
+(defn scaled-copy [xs k] (let [c (aclone xs)] (dotimes [i (alength c)] (aset c i (* k (aget c i)))) c))
+
+(defn alias-write [xs] (let [b xs] (aset b 0 99.0) (aget xs 0)))

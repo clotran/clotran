@@ -87,7 +87,15 @@
     (describe-num 3)
     (describe-num -1.5)
     (countdown 3)
-    (quoted)])
+    (quoted)
+    (squares-of (double-array [1.0 2.0 3.0]))
+    (squares-of (long-array [2 3]))
+    (zeros 3)
+    (zeros 0)
+    (zeros -1)
+    (ramp 4)
+    (scaled-copy (double-array [1.0 2.0]) 2.0)
+    (alias-write (double-array [1.0 2.0]))])
 
 (defn arg-type [a]
   (cond (int? a) :long (double? a) :double (string? a) :string
@@ -112,7 +120,7 @@
            "(in-ns '" ns-name ")\n"
            (apply str (map-indexed
                        (fn [i c]
-                         (str "(clojure.core/println \"CASE " i "\" (try (clojure.core/let [v (clojure.core/atom nil) o (clojure.core/with-out-str (clojure.core/reset! v " (pr-str c) "))] (clojure.core/pr-str [:val @v o]))"
+                         (str "(clojure.core/println \"CASE " i "\" (try (clojure.core/let [v (clojure.core/atom nil) o (clojure.core/with-out-str (clojure.core/reset! v " (pr-str c) "))] (clojure.core/pr-str [:val (clojure.core/let [x @v] (if (clojure.core/instance? (clojure.core/class (clojure.core/double-array 0)) x) (clojure.core/vec x) (if (clojure.core/instance? (clojure.core/class (clojure.core/long-array 0)) x) (clojure.core/vec x) x))) o]))"
                               " (catch Throwable e (clojure.core/pr-str [:threw (.getMessage e)]))))\n"))
                        cases))))
 (def out (run-clotran (io/file work "drive.clj")))
@@ -131,7 +139,7 @@
       (str "(load-file \"" src "\")\n(in-ns '" ns-name ")\n"
            (apply str (map-indexed
                        (fn [i c]
-                         (str "(clojure.core/println \"CASE " i "\" (try (clojure.core/let [v (clojure.core/atom nil) o (clojure.core/with-out-str (clojure.core/reset! v " (pr-str c) "))] (clojure.core/pr-str [:val @v o]))"
+                         (str "(clojure.core/println \"CASE " i "\" (try (clojure.core/let [v (clojure.core/atom nil) o (clojure.core/with-out-str (clojure.core/reset! v " (pr-str c) "))] (clojure.core/pr-str [:val (clojure.core/let [x @v] (if (clojure.core/instance? (clojure.core/class (clojure.core/double-array 0)) x) (clojure.core/vec x) (if (clojure.core/instance? (clojure.core/class (clojure.core/long-array 0)) x) (clojure.core/vec x) x))) o]))"
                               " (catch Throwable e (clojure.core/pr-str [:threw (.getMessage e)]))))\n"))
                        cases))))
 (def jvm (parse-cases (:out (shell {:out :string :err :string :dir (str repo) :continue true} "clj" "-M" (str (io/file work "jvm.clj"))))))
@@ -183,8 +191,11 @@
                        (if (= rt :nil)
                          (str "      call " call "\n      print '(a)', '==R=='\n      print '(a)', 'N'\n")
                          (str "      print '(a)', '==R=='\n"
-                              "      print '(a, " (case rt :long "i0" :double "es26.17e3" :bool "l1" :string "a") ")', '"
-                              (case rt :long "L " :double "D " :bool "B " :string "S ") "', " call "\n")))
+                              (case rt
+                                :doubles (str "      print '(a, *(1x, es26.17e3))', 'A', " call "\n")
+                                :longs (str "      print '(a, *(1x, i0))', 'A', " call "\n")
+                                (str "      print '(a, " (case rt :long "i0" :double "es26.17e3" :bool "l1" :string "a") ")', '"
+                                     (case rt :long "L " :double "D " :bool "B " :string "S ") "', " call "\n")))))
                      "    end block\n")))
        "  end select\n"
        "end program pure_driver\n"))
@@ -206,9 +217,12 @@
             at (str/last-index-of out "==R==\n")
             printed (subs out 0 at)
             result (let [s (subs out (+ at 6))] (if (str/ends-with? s "\n") (subs s 0 (dec (count s))) s))
-            [kind v] (str/split result #" " 2)]
+            [kind v] (str/split result #" " 2)
+            kind (if (str/starts-with? result "A") "A" kind)
+            v (if (= kind "A") (str/trim (subs result 1)) v)]
         [:val (case kind
                 "N" nil
+                "A" (mapv #(if (re-find #"[.eE]" %) (Double/parseDouble %) (parse-long %)) (remove str/blank? (str/split (or v "") #"\s+")))
                 "S" (or v "")
                 "L" (parse-long v)
                 "D" (let [s (str/lower-case v)]
