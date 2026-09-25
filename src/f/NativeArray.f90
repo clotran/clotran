@@ -144,7 +144,13 @@ contains
     total = 1
     do i = 1, size(extents)
        if (extents(i) < 0) then
-          err = "make-array: negative extent"
+          ! the caller raises Java's NegativeArraySizeException, whose
+          ! message is the size
+          block
+            character(len=24) :: nb
+            write(nb, '(I0)') extents(i)
+            err = "negative:" // trim(nb)
+          end block
           return
        end if
        total = total * extents(i)

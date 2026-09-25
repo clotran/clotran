@@ -2446,3 +2446,8 @@
 (expect-diff "DEVIATIONS 51: literal longs compile to the JVM's primitive quot, whose zero divisor is Java's \"/ by zero\"")
 [(msg-of #(quot 7 0)) (msg-of #(rem 7 0))]
 [(msg-of #(subs "ab" 0 3)) (msg-of #(subs "ab" 3)) (msg-of #(subs "ab" 1 0)) (msg-of #(subs "héllo" 1 3))]
+
+;;; Arrays: an array is an instance of its array class, and a negative
+;;; size is Java's NegativeArraySizeException naming the size.
+[(instance? (class (double-array 0)) (double-array 2)) (instance? (class (long-array 0)) (long-array 1))
+ (msg-of #(double-array -1)) (msg-of #(long-array -3))]

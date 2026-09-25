@@ -7035,6 +7035,13 @@ contains
             lows(k) = 0
          end do
          h = gcna_new(kname, ext, lows, err)
+         if (len(err) > 9) then
+            if (err(1:9) == "negative:") then
+               call raise_class("NegativeArraySizeException", err(10:), [vs_get(base + 1)])
+               call vs_leave(base)
+               return
+            end if
+         end if
          if (h == 0) then
             call fail(err)
             call vs_leave(base)
@@ -12707,6 +12714,10 @@ contains
        return
     end if
     select case (c)
+    ! every array has ONE class here (DEVIATIONS 45), so an array is an
+    ! instance of it -- (instance? (class (double-array 0)) a)
+    case ("array")
+       yes = (t == "array")
     case ("Class", "java.lang.Class")
        yes = (t == "class")
     case ("clojure.lang.Symbol");   yes = (t == "symbol")
