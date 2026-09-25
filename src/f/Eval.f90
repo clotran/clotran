@@ -262,8 +262,7 @@ module Eval
   ! SHAPE of their name), so there is nowhere namespace-local to put
   ! it and one global table is what `new` and `instance?` both read.
   !
-  ! Global, and therefore on the list in PLAN.md of what has to move
-  ! into a per-thread context before threads exist.
+  ! Shared between threads, as the JVM's classes are (src/f/state.edn).
   type(gc_root), save :: types_root
   integer, save :: reify_id = 0
   integer, save :: proxy_id = 0

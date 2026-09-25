@@ -309,6 +309,8 @@ test: $(test-bins) clotran-bin $(B)/libtestpkg.$(SOEXT) $(B)/libsamplelib.$(SOEX
 	scripts/oracle
 	@echo "--- pure Fortran (tier A through gfortran and flang, against clj) ---"
 	scripts/pure-check
+	@echo "--- state inventory (every module variable classified, PLAN step 14a) ---"
+	scripts/state-inventory
 
 # What runs before every commit. Ends on the default compiler so the
 # tree is left with the build you actually use.

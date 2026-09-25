@@ -1,0 +1,67 @@
+#!/usr/bin/env bb
+;; Every module-level variable in the Fortran host, and how it is
+;; classified for running interpreter code on several threads at once
+;; (PLAN.md step 14a):
+;;
+;;   :thread  one per thread -- belongs in eval_ctx (or GC's saved stacks)
+;;   :fixed   shared, set at startup and read-only after
+;;   :shared  shared and mutable -- needs a lock, or a design change
+;;
+;; The classification lives in state.edn beside this script's output
+;; target (src/f/state.edn). Run with no argument to check that every
+;; variable is classified and that nothing classified has gone away;
+;; --seed writes new ones in as :unclassified, for a person to decide.
+(require '[clojure.string :as str]
+         '[clojure.java.io :as io]
+         '[clojure.edn :as edn])
+
+(def repo (-> *file* io/file .getCanonicalFile .getParentFile .getParentFile))
+(def state-file (io/file repo "src/f/state.edn"))
+
+(defn spec-part
+  "A module file's lines before its first `contains`, less derived-type
+  definitions and interface blocks: where module variables are declared."
+  [text]
+  (let [lines (take-while #(not (re-matches #"\s*contains\s*" %)) (str/split-lines text))]
+    (loop [[l & more] lines depth 0 out []]
+      (if (nil? l)
+        out
+        (let [opens (or (re-find #"^\s*type\s*(,[^:]*)?::\s*\w+\s*$" l) (re-find #"^\s*type\s+\w+\s*$" l)
+                        (re-find #"^\s*(abstract\s+)?interface\b" l))
+              closes (re-find #"^\s*end\s*(type|interface)\b" l)]
+          (cond opens (recur more (inc depth) out)
+                closes (recur more (dec depth) out)
+                (pos? depth) (recur more depth out)
+                :else (recur more depth (conj out l))))))))
+
+(defn variables
+  "[name file] for each module variable declared in the specification
+  part: a type declaration that is not a PARAMETER."
+  [f]
+  (let [text (slurp f)
+        joined (str/replace (str/join "\n" (spec-part text)) #"&\s*\n\s*&?" " ")]
+    (for [l (str/split-lines joined)
+          :let [l (str/replace l #"!.*$" "")]
+          :when (and (re-find #"^\s+(type\s*\(|integer|logical|character|real|class)" l)
+                     (str/includes? l "::")
+                     (not (re-find #"(?i)parameter" (first (str/split l #"::")))))
+          :let [names (second (str/split l #"::" 2))]
+          nm (map #(str/trim (first (str/split % #"[=(]"))) (str/split names #",(?![^(]*\))"))
+          :when (re-matches #"[A-Za-z_]\w*" nm)]
+      [(str (.getName f) "/" nm)])))
+
+(def found (sort (distinct (map first (mapcat variables (filter #(and (str/ends-with? (.getName %) ".f90") (not= "main.f90" (.getName %)))
+                                                                (.listFiles (io/file repo "src/f"))))))))
+(def known (if (.exists state-file) (edn/read-string (slurp state-file)) {}))
+
+(if (= "--seed" (first *command-line-args*))
+  (let [merged (into (sorted-map) (merge (zipmap found (repeat :unclassified)) (select-keys known found)))]
+    (spit state-file (with-out-str (println "{") (doseq [[k v] merged] (println (str " " (pr-str k) " " (pr-str v)))) (println "}")))
+    (println "wrote" (count merged) "entries to src/f/state.edn"))
+  (let [missing (remove #(contains? known %) found)
+        stale (remove (set found) (keys known))
+        counts (frequencies (map #(if (map? %) (:class %) %) (vals (select-keys known found))))]
+    (println "module variables:" (count found) "--" (pr-str (into (sorted-map) counts)))
+    (doseq [m missing] (println "NOT CLASSIFIED:" m))
+    (doseq [s stale] (println "GONE (remove from state.edn):" s))
+    (when (or (seq missing) (seq stale)) (System/exit 1))))
