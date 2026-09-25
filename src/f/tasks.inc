@@ -74,42 +74,9 @@
     ok = th_lock_init(baton_lock)
     ok = th_cond_init(baton_cond)
     baton_ctx = gce_ctx_current()
-    call ctx_arrays(baton_ctx)
-    ctx_task(baton_ctx) = gc_nil()
+    ctxs(baton_ctx)%c%task = gc_nil()
     baton_up = .true.
   end subroutine baton_setup
-
-  ! The per-context arrays the baton keeps, grown to hold context `id`.
-  subroutine ctx_arrays(id)
-    integer, intent(in) :: id
-    integer, allocatable :: ci(:)
-    logical, allocatable :: cl(:)
-    type(gc_value), allocatable :: ct(:)
-    integer :: n
-    if (.not. allocated(came_from)) then
-       allocate(came_from(16), ctx_dying(16), ctx_task(16), ctx_native(16))
-       came_from = 0
-       ctx_dying = .false.
-       ctx_native = .false.
-       ctx_task = gc_nil()
-    end if
-    if (id <= size(came_from)) return
-    n = max(2 * size(came_from), id)
-    allocate(ci(n), cl(n), ct(n))
-    ci = 0
-    cl = .false.
-    ct = gc_nil()
-    ci(1:size(came_from)) = came_from
-    cl(1:size(came_from)) = ctx_dying
-    ct(1:size(came_from)) = ctx_task
-    call move_alloc(ci, came_from)
-    call move_alloc(cl, ctx_dying)
-    call move_alloc(ct, ctx_task)
-    allocate(cl(n))
-    cl = .false.
-    cl(1:size(ctx_native)) = ctx_native
-    call move_alloc(cl, ctx_native)
-  end subroutine ctx_arrays
 
   ! Give the baton to context `next`, and wait -- on this thread's own
   ! stack -- until it comes back. A context cancelled while it waits
@@ -118,19 +85,20 @@
     integer, intent(in) :: next
     integer :: me
     logical :: ok
-    me = gce_ctx_current()
-    call ctx_arrays(max(me, next))
-    came_from(next) = me
-    ctxs(next)%c%cur_task = ctx_task(next)
+    type(eval_ctx), pointer :: mine
+    mine => ctx_self()
+    me = mine%id
+    ctxs(next)%c%came_from = me
+    ctxs(next)%c%cur_task = ctxs(next)%c%task
     ok = th_lock_acquire(baton_lock)
     baton_ctx = next
-    ok = th_cond_broadcast(baton_cond)
+    ok = th_cond_broadcast(ctxs(next)%c%turn)
     do while (baton_ctx /= me)
-       if (ctx_dying(me)) then
+       if (mine%dying) then
           ok = th_lock_release(baton_lock)
           call th_exit()
        end if
-       ok = th_cond_wait(baton_cond, baton_lock)
+       ok = th_cond_wait(mine%turn, baton_lock)
     end do
     ok = th_lock_release(baton_lock)
   end subroutine hand_to
@@ -152,10 +120,10 @@
   subroutine give_baton(next)
     integer, intent(in) :: next
     logical :: ok
-    ctxs(next)%c%cur_task = ctx_task(next)
+    ctxs(next)%c%cur_task = ctxs(next)%c%task
     ok = th_lock_acquire(baton_lock)
     baton_ctx = next
-    ok = th_cond_broadcast(baton_cond)
+    ok = th_cond_broadcast(ctxs(next)%c%turn)
     ok = th_lock_release(baton_lock)
   end subroutine give_baton
 
@@ -172,17 +140,16 @@
     if (.not. baton_up) return
     if (gc_kind(tctx%cur_task) /= OBJ_TASK) return
     me = gce_ctx_current()
-    call ctx_arrays(me)
     ! parked with nothing to wait for but the call itself: runnable as
     ! soon as it returns (a deadline already past; runnable_now)
     call gc_set_slot(tctx%cur_task, 3, gc_nil())
     call gc_set_slot(tctx%cur_task, 4, gc_int(0_gc_ip))
     call gc_set_i1(tctx%cur_task, TASK_RUNNABLE)
     ok = th_lock_acquire(baton_lock)
-    ctx_native(me) = .true.
+    ctxs(me)%c%native = .true.
     natives_running = natives_running + 1
     ok = th_lock_release(baton_lock)
-    call give_baton(came_from(me))
+    call give_baton(ctxs(me)%c%came_from)
     released = .true.
   end subroutine native_begin
 
@@ -191,17 +158,19 @@
   subroutine native_end(me)
     integer, intent(in) :: me
     logical :: ok
+    type(eval_ctx), pointer :: mine
+    mine => ctx_self()
     ok = th_lock_acquire(baton_lock)
-    ctx_native(me) = .false.
+    mine%native = .false.
     natives_running = natives_running - 1
     native_gen = native_gen + 1
-    ok = th_cond_broadcast(baton_cond)
+    ok = th_cond_broadcast(baton_cond)   ! wait_native's waiters
     do while (baton_ctx /= me)
-       if (ctx_dying(me)) then
+       if (mine%dying) then
           ok = th_lock_release(baton_lock)
           call th_exit()
        end if
-       ok = th_cond_wait(baton_cond, baton_lock)
+       ok = th_cond_wait(mine%turn, baton_lock)
     end do
     ok = th_lock_release(baton_lock)
     call clear_wait()
@@ -226,10 +195,9 @@
     logical :: ok
     in_native = .false.
     if (.not. baton_up) return
-    if (id < 1 .or. .not. allocated(ctx_native)) return
-    if (id > size(ctx_native)) return
+    if (id < 1 .or. id > n_ctx) return
     ok = th_lock_acquire(baton_lock)
-    in_native = ctx_native(id)
+    in_native = ctxs(id)%c%native
     ok = th_lock_release(baton_lock)
   end function in_native
 
@@ -267,23 +235,26 @@
     type(gc_value) :: none(0)
     integer :: me, next, base
     logical :: ok
+    type(eval_ctx), pointer :: mine
     r = c_null_ptr
-    me = int(transfer(arg, 0_c_intptr_t))
+    ! its context by address: the table may grow while this thread waits
+    call c_f_pointer(arg, mine)
+    me = mine%id
     ok = th_lock_acquire(baton_lock)
     do while (baton_ctx /= me)
-       if (ctx_dying(me)) then
+       if (mine%dying) then
           ok = th_lock_release(baton_lock)
           return
        end if
-       ok = th_cond_wait(baton_cond, baton_lock)
+       ok = th_cond_wait(mine%turn, baton_lock)
     end do
     ok = th_lock_release(baton_lock)
     ! this thread's context, for good. Set holding the baton: no one grows
     ! the context table meanwhile -- nor the collector's stack table.
-    ok = th_key_set(ctx_key, c_loc(ctxs(me)%c))
+    ok = th_key_set(ctx_key, c_loc(mine))
     call gc_stack_bind(me)
     tctx => ctx_self()
-    task = ctx_task(me)
+    task = mine%task
     call gce_clear_error()
     val = gc_nil()
     base = vs_enter(1)   ! slot 1 of the fresh stack: run_loop's value slot
@@ -308,15 +279,15 @@
     end if
     call vs_leave(0)
     ! back to the stepper, for good: this context goes back for reuse
-    next = came_from(me)
-    ctxs(next)%c%cur_task = ctx_task(next)
-    ctx_task(me) = gc_nil()
+    next = mine%came_from
+    ctxs(next)%c%cur_task = ctxs(next)%c%task
+    mine%task = gc_nil()
     ! this thread is done with its context: it goes back for reuse
     ok = th_key_set(ctx_key, c_null_ptr)
     call ctx_release(me)
     ok = th_lock_acquire(baton_lock)
     baton_ctx = next
-    ok = th_cond_broadcast(baton_cond)
+    ok = th_cond_broadcast(ctxs(next)%c%turn)
     ok = th_lock_release(baton_lock)
   end function task_thread_main
 
@@ -340,15 +311,14 @@
     if (id == 0) then
        id = gce_ctx_new()
        call gc_set_i2(task, id)
-       call ctx_arrays(id)
-       ctx_task(id) = task
-       ctx_dying(id) = .false.
+       ctxs(id)%c%task = task
+       ctxs(id)%c%dying = .false.
        call gc_set_i1(task, TASK_RUNNING)
-       if (.not. th_spawn(c_funloc(task_thread_main), transfer(int(id, c_intptr_t), c_null_ptr), &
+       if (.not. th_spawn(c_funloc(task_thread_main), c_loc(ctxs(id)%c), &
             TASK_STACK_BYTES)) then
           call gc_set_i1(task, TASK_FAILED)
           call gc_set_slot(task, 2, error_value("could not start a thread for the future", [task]))
-          ctx_task(id) = gc_nil()
+          ctxs(id)%c%task = gc_nil()
           call ctx_release(id)
           call gc_set_i2(task, 0)
           return
@@ -428,10 +398,10 @@
        ! a reused id could run -- so each cancelled parked task keeps one.
        block
          logical :: ok
-         ctx_dying(gc_i2(task)) = .true.
-         ctx_task(gc_i2(task)) = gc_nil()
+         ctxs(gc_i2(task))%c%dying = .true.
+         ctxs(gc_i2(task))%c%task = gc_nil()
          ok = th_lock_acquire(baton_lock)
-         ok = th_cond_broadcast(baton_cond)
+         ok = th_cond_broadcast(ctxs(gc_i2(task))%c%turn)
          ok = th_lock_release(baton_lock)
        end block
        call gc_set_i2(task, 0)
@@ -641,7 +611,7 @@
           call gc_set_slot(tctx%cur_task, 4, gc_nil())
        end if
        call gc_set_i1(tctx%cur_task, TASK_RUNNABLE)
-       call hand_to(came_from(gce_ctx_current()))
+       call hand_to(tctx%came_from)
        ready = satisfied(target)
        call clear_wait()
        return

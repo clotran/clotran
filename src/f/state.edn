@@ -18,11 +18,7 @@
  "Eval.f90/break_path" {:class :fixed, :note "read once from the environment"}
  "Eval.f90/break_root" {:class :shared, :note "the debugger: one break at a time, under a lock"}
  "Eval.f90/break_stderr" {:class :fixed, :note "read once from the environment"}
- "Eval.f90/came_from" {:class :shared, :note "the context table: under a lock (step 14a/b)"}
  "Eval.f90/clotran_home" {:class :fixed, :note "set from argv(0) at startup"}
- "Eval.f90/ctx_dying" {:class :shared, :note "the context table: under a lock (step 14a/b)"}
- "Eval.f90/ctx_native" {:class :shared, :note "the context table: under a lock (step 14a/b)"}
- "Eval.f90/ctx_task" {:class :shared, :note "the context table: under a lock (step 14a/b)"}
  "Eval.f90/ctxs" {:class :shared, :note "the context table: under a lock (step 14a/b)"}
  "Eval.f90/ev_limit" {:class :fixed, :note "read once from the environment"}
  "Eval.f90/free_ctx" {:class :shared, :note "the context table: under a lock (step 14a/b)"}

@@ -345,10 +345,6 @@ module Eval
   type(th_cond), save :: baton_cond
   integer, save :: baton_ctx = 0
   logical, save :: baton_up = .false.
-  integer, allocatable, save :: came_from(:)
-  logical, allocatable, save :: ctx_dying(:)
-  type(gc_value), allocatable, save :: ctx_task(:)
-  logical, allocatable, save :: ctx_native(:)
   integer, save :: natives_running = 0, native_gen = 0
   integer(c_size_t), parameter :: TASK_STACK_BYTES = 64_c_size_t * 1024_c_size_t * 1024_c_size_t
   logical, save :: task_trace = .false., task_trace_read = .false.   ! CLOTRAN_TASK_TRACE=1: the scheduler's decisions, on stderr
@@ -457,6 +453,13 @@ module Eval
      logical :: analyzing_method = .false., yield_flag = .false.
      type(gc_value) :: cur_task
      type(gc_root) :: scratch1_root, scratch2_root, recur_root
+     ! the scheduler's, per context: who stepped it, whether it is to end,
+     ! whether it is in a native call, its task; and the condition its
+     ! thread waits on for the baton -- a hand-off wakes that thread only
+     integer :: came_from = 0
+     logical :: dying = .false., native = .false.
+     type(gc_value) :: task
+     type(th_cond) :: turn
   end type eval_ctx
   ! Each context is allocated on its own and never moves: a thread holds
   ! its context's address (PLAN.md step 14b), so growing the table copies
@@ -14756,6 +14759,7 @@ contains
     allocate(ctxs(8))
     allocate(ctxs(1)%c)
     ctxs(1)%c%id = 1
+    ok = th_cond_init(ctxs(1)%c%turn)
     n_ctx = 1
     ok = th_key_set(ctx_key, c_loc(ctxs(1)%c))
   end subroutine ctx_ensure_main
@@ -14794,6 +14798,7 @@ contains
     id = n_ctx
     allocate(ctxs(id)%c)   ! default-initialised
     ctxs(id)%c%id = id
+    if (.not. th_cond_init(ctxs(id)%c%turn)) error stop "clotran: no condition for a new context"
     ctxs(id)%c%last_error = ""
     ctxs(id)%c%last_trace = ""
     call gc_stack_new(id)
