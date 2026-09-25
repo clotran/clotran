@@ -949,7 +949,7 @@ end module clotran_pure
                                    :when sig
                                    [j a] (map-indexed vector (rest (:children nd)))
                                    :when (= :local (:op a))]
-                               [(:i2 a) (set (map #(nth % j) (keys sig)))]))
+                               [(:i2 a) (set (for [k (keys sig) :when (= (count k) (dec (count (:children nd))))] (nth k j)))]))
         ;; a parameter subs or clojure.string reads is a string
         string-slots (set (for [nd nodes
                                 :when (and (map? nd) (= :call (:op nd)))
@@ -982,14 +982,11 @@ end module clotran_pure
 (def ^:private version-limit 8)
 
 (defn- emit-version
-  "One version of fname for parameter types ts: {:name :ret :text} or
-  {:declined why}."
-  [fname fnode ts sigs impure-versions records]
+  "One version of fname's arity [nargs variadic start body] for
+  parameter types ts: {:name :ret :text} or {:declined why}."
+  [fname [nargs variadic start body] ts sigs impure-versions records]
   (try
-    (let [tmpl (:p1 fnode)
-          [[nargs variadic start body]] (second tmpl)
-          _ (when variadic (decline "variadic"))
-          _ (when (> (count (second tmpl)) 1) (decline "more than one arity"))
+    (let [_ (when variadic (decline "variadic"))
           st (atom {:n 0 :decls [] :sigs sigs :written #{} :impure-versions impure-versions :records records})
           pnames (mapv #(str "p" %) (range nargs))
           ;; scalar parameters are copied into locals, so a recur can rebind them
@@ -1070,22 +1067,39 @@ end module clotran_pure
            (if (not= :A (get-in cls [s :tier]))
              (assoc-in acc [:skipped s] (str "tier " (name (get-in cls [s :tier] :B)) ": see --report"))
              (let [top (binding [*ns* (the-ns ns-name)] (clotran-ast fnf))
-                   fnode (:p1 top)
-                   [[nargs _ start body]] (second (:p1 fnode))
-                   params (vec (take nargs (or (first (filter vector? fnf)) (first (first (filter seq? fnf))))))
-                   cands (param-candidates params body start sigs records)
-                   combos (cartesian cands)]
-               (if (> (count combos) version-limit)
-                 (assoc-in acc [:skipped s] (str (count combos) " type combinations; hint some parameters (^double, ^doubles, ...) to settle them"))
-                 (let [vs (for [ts combos] (assoc (emit-version s fnode ts sigs (:impure acc) records) :ts ts))
-                       ok (remove :declined vs)]
-                   (if (empty? ok)
-                     (assoc-in acc [:skipped s] (str/join "; " (distinct (map :declined vs))))
-                     (-> acc
-                         (assoc-in [:emitted s] (vec ok))
-                         (assoc-in [:sigs s] (into {} (map (fn [v] [(:ts v) (:ret v)]) ok)))
-                         (update :impure into (for [v ok :when (not (:pure v))] [s (:ts v)]))
-                         (assoc-in [:dropped s] (vec (keep #(when (:declined %) [(:ts %) (:declined %)]) vs))))))))))
+                   ;; every fixed arity is its own set of versions under the one
+                   ;; generic name -- Fortran tells them apart by argument count.
+                   ;; Most arguments first: (f x) usually calls (f x 1), so the
+                   ;; longer arity's versions are there to be called.
+                   arities (sort-by #(- (first %)) (second (:p1 (:p1 top))))
+                   pvecs (or (seq (filter vector? fnf)) (map first (filter seq? fnf)))
+                   one (fn [acc [nargs variadic start body :as ar]]
+                         (let [params (vec (or (first (filter #(and (= nargs (count %)) (not-any? #{'&} %)) pvecs))
+                                               (take nargs (first pvecs))))
+                               cands (param-candidates params body start (:sigs acc) records)
+                               combos (cartesian cands)]
+                           (cond
+                             variadic (update-in acc [:why s] (fnil conj []) "variadic: its rest arguments arrive as a heap list")
+                             (> (count combos) version-limit)
+                             (update-in acc [:why s] (fnil conj [])
+                                        (str (count combos) " type combinations; hint some parameters (^double, ^doubles, ...) to settle them"))
+                             :else
+                             (let [vs (for [ts combos] (assoc (emit-version s ar ts (:sigs acc) (:impure acc) records) :ts ts))
+                                   ok (remove :declined vs)]
+                               (-> acc
+                                   (update-in [:why s] (fnil into []) (when (empty? ok) (distinct (map :declined vs))))
+                                   (update-in [:emitted s] (fnil into []) ok)
+                                   (update-in [:sigs s] (fnil into {}) (map (fn [v] [(:ts v) (:ret v)]) ok))
+                                   (update :impure into (for [v ok :when (not (:pure v))] [s (:ts v)]))
+                                   (update-in [:dropped s] (fnil into []) (keep #(when (:declined %) [(:ts %) (:declined %)]) vs)))))))
+                   acc (reduce one acc arities)]
+               (if (seq (get-in acc [:emitted s]))
+                 (update acc :why dissoc s)
+                 (-> acc
+                     (assoc-in [:skipped s] (str/join "; " (distinct (get-in acc [:why s]))))
+                     (update :why dissoc s)
+                     (update :emitted dissoc s)
+                     (update :sigs dissoc s))))))
          {:sigs {} :emitted {} :skipped {} :dropped {} :impure #{}}
          defns)
         mod-name (str (fort-ident ns-name) "_pure")

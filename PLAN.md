@@ -1090,8 +1090,10 @@ one only those reachable from a public one. Records of numbers are
 Fortran derived types (name_t): a field read is rec%field, a
 construction the structure constructor, its types checked -- a field is
 its hint, else a double -- and a parameter read by a record's fields is
-that record (2026-09-25). Not yet: multiple arities, escape analysis
-for small collections, parallel loops (`do concurrent`, step 11).
+that record (2026-09-25). amap is a `do concurrent` loop. Several
+fixed arities are one generic name, a version per arity and types,
+longest first so `(f x)` can call `(f x 1)` (2026-09-25). Not yet:
+variadic arities, escape analysis for small collections.
 
 
 ### 14. Stage 3: plain Clojure on several threads at once (planned 2026-09-25)

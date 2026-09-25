@@ -102,3 +102,12 @@
 (defn bump [t x] (->Tally (inc (:n t)) (+ (:total t) x)))
 
 (defn bad-tally [] (->Tally 1.0 2.0))
+
+;; several arities: one generic name, a version per arity and types
+(defn lerp
+  ([a b] (lerp a b 0.5))
+  ([a b ^double t] (+ a (* t (- b a)))))
+
+(defn add-down
+  ([n] (add-down n 0))
+  ([n acc] (if (zero? n) acc (recur (dec n) (+ acc n)))))
