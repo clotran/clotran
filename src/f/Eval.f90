@@ -59,7 +59,9 @@ module Eval
   use LispReader
   use CompiledFn
   use DynLoad
-  use iso_c_binding, only: c_ptr, c_funptr, c_loc, c_double, c_int, c_long, c_char, c_null_char, c_associated, c_bool, c_int32_t
+  use Threads
+  use iso_c_binding, only: c_ptr, c_funptr, c_loc, c_double, c_int, c_long, c_char, c_null_char, c_associated, c_bool, c_int32_t, &
+       c_null_ptr, c_intptr_t, c_funloc, c_size_t
   implicit none
   private
 
@@ -346,6 +348,18 @@ module Eval
   type(gc_value), save :: cur_task
   integer, save :: task_loop_depth = 0
   logical, save :: yield_flag = .false.
+  ! The baton (tasks.inc): one lock and one condition, the context that
+  ! may run clotran code, and per context who stepped it, whether it was
+  ! cancelled while parked, and its task. A task's thread gets a big
+  ! stack: it runs the interpreter, as the main thread does.
+  type(th_lock), save :: baton_lock
+  type(th_cond), save :: baton_cond
+  integer, save :: baton_ctx = 0
+  logical, save :: baton_up = .false.
+  integer, allocatable, save :: came_from(:)
+  logical, allocatable, save :: ctx_dying(:)
+  type(gc_value), allocatable, save :: ctx_task(:)
+  integer(c_size_t), parameter :: TASK_STACK_BYTES = 64_c_size_t * 1024_c_size_t * 1024_c_size_t
   logical, save :: task_trace = .false., task_trace_read = .false.   ! CLOTRAN_TASK_TRACE=1: the scheduler's decisions, on stderr
   logical, save :: rt_loaded = .false.   ! clotran.rt, once (rt_call)
   logical, save :: mf_loaded = .false.   ! clotran.multifn, once (mf_call)

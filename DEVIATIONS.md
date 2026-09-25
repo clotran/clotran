@@ -1497,41 +1497,19 @@ check needs the primitive kind of each loop local, which
 primitive type, which needs the compiler's type inference in the
 analyser rather than only in `compiler.cljf`.
 
-## 49. A task blocked below compiled code is pinned, not parked
+## 49. (Resolved 2026-09-25) A task blocked below compiled code was pinned
 
-A future that blocks -- `@promise`, `.await`, `Thread/sleep` -- PARKS
-when the interpreter's own run is what blocks: its frames are data, the
-task yields, and whoever started it goes on (tasks.inc). Below a
-COMPILED function there is Fortran on the stack between the block and
-the task's context, and Fortran frames cannot be set aside. So the task
-is pinned, as Loom pins a virtual thread inside `synchronized`: the
-other tasks run right there, nested, until the wait is over.
+A future that blocked below a COMPILED function could not park: there
+was Fortran on the one shared machine stack between the block and the
+task's context, so the task was pinned, and a wait only its starter
+could satisfy was a deadlock error. Every task now runs on its own OS
+thread (Threads.f90, tasks.inc: the baton), so it waits where it
+blocks and is resumed there; only one thread runs clotran code at a
+time, so every answer is what it was. language_test's parking checks
+pass with `make compiled-core` in place, and the compiler no longer
+keeps blocking functions interpreted.
 
-The difference shows only when what the task waits for can be made
-ready by nothing but the context that started it:
-
-    (def p (promise))
-    (def f (future (+ 1 @p)))   ; interpreted: parks, and main goes on
-    (deliver p 1)               ; compiled core: never reached --
-                                ; "deadlock: nothing left to run can
-                                ; make the promise or mailbox ready"
-
-It is an ERROR, never a wrong answer. Before compiled calls counted as
-nested runs, the block below them yielded anyway, the blocking builtin
-answered nil, and compiled code carried on with it.
-
-With `make compiled-core` this is most futures, because `apply`,
-`future-call` and the binding conveyance between a task's start and its
-body are compiled. `deref`, `.get`, `.await`, a queue's take and sleep
-themselves stay interpreted (clotran.compiler, blocking-builtins), so a
-block written directly in an interpreted task still parks. With core
-interpreted, which is the default, only a user's compiled function on
-the task's stack pins it. language_test's two "parked" checks fail
-with compiled core in place, for this reason.
-
-**Removal**: a machine stack per task -- one OS thread per task, run one
-at a time -- so a blocked task's Fortran frames stay where they are.
-That is the threads plan (PLAN.md), and it has to work on Windows.
+Kept, resolved, so the numbers after it stay where they are.
 
 ## 50. Pure Fortran writes a double as Fortran does
 

@@ -25,7 +25,7 @@ module Threads
   public :: th_lock, th_cond, th_thread
   public :: th_lock_init, th_lock_acquire, th_lock_release
   public :: th_cond_init, th_cond_wait, th_cond_broadcast
-  public :: th_start, th_join
+  public :: th_start, th_join, th_spawn, th_exit
 
   integer, parameter :: OPAQUE_WORDS = 16   ! 128 bytes
 
@@ -84,6 +84,31 @@ module Threads
        type(c_ptr), value :: c
        integer(c_int) :: r
      end function pthread_cond_broadcast
+     function pthread_detach(t) bind(C, name="pthread_detach") result(r)
+       import :: c_ptr, c_int
+       type(c_ptr), value :: t
+       integer(c_int) :: r
+     end function pthread_detach
+     subroutine pthread_exit(ret) bind(C, name="pthread_exit")
+       import :: c_ptr
+       type(c_ptr), value :: ret
+     end subroutine pthread_exit
+     function pthread_attr_init(a) bind(C, name="pthread_attr_init") result(r)
+       import :: c_ptr, c_int
+       type(c_ptr), value :: a
+       integer(c_int) :: r
+     end function pthread_attr_init
+     function pthread_attr_destroy(a) bind(C, name="pthread_attr_destroy") result(r)
+       import :: c_ptr, c_int
+       type(c_ptr), value :: a
+       integer(c_int) :: r
+     end function pthread_attr_destroy
+     function pthread_attr_setstacksize(a, n) bind(C, name="pthread_attr_setstacksize") result(r)
+       import :: c_ptr, c_int, c_size_t
+       type(c_ptr), value :: a
+       integer(c_size_t), value :: n
+       integer(c_int) :: r
+     end function pthread_attr_setstacksize
   end interface
 
 contains
@@ -132,6 +157,31 @@ contains
     type(c_ptr), intent(in) :: arg
     th_start = pthread_create(t%handle, c_null_ptr, fn, arg) == 0
   end function th_start
+
+  ! Start a DETACHED thread running fn(arg) on a stack of `bytes`: a
+  ! task's thread runs the interpreter, whose depth the main thread's
+  ! 8 MB bounds, and a secondary thread's default is far smaller (512 KB
+  ! on macOS). Detached by pthread_detach rather than an attribute, whose
+  ! constant differs between macOS and Linux.
+  logical function th_spawn(fn, arg, bytes)
+    type(c_funptr), intent(in) :: fn
+    type(c_ptr), intent(in) :: arg
+    integer(c_size_t), intent(in) :: bytes
+    integer(c_int64_t), target :: attr(OPAQUE_WORDS)
+    type(c_ptr) :: t
+    th_spawn = .false.
+    attr = 0
+    if (pthread_attr_init(c_loc(attr)) /= 0) return
+    if (pthread_attr_setstacksize(c_loc(attr), bytes) /= 0) return
+    if (pthread_create(t, c_loc(attr), fn, arg) /= 0) return
+    if (pthread_attr_destroy(c_loc(attr)) /= 0) return
+    th_spawn = pthread_detach(t) == 0
+  end function th_spawn
+
+  ! End the calling thread here, unwinding nothing.
+  subroutine th_exit()
+    call pthread_exit(c_null_ptr)
+  end subroutine th_exit
 
   logical function th_join(t)
     type(th_thread), intent(inout) :: t

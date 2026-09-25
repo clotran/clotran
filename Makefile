@@ -180,7 +180,7 @@ $(B)/LispReader.o: $(B)/BigInt.o $(B)/BigDec.o $(B)/GC.o $(B)/PersistentList.o $
 $(B)/ClotranABI.o: $(B)/GC.o $(B)/PersistentVector.o $(B)/Namespace.o $(B)/CompiledFn.o $(B)/NativeArray.o $(B)/Eval.o
 
 $(B)/Eval.o: $(B)/BigInt.o $(B)/BigDec.o $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/Env.o \
-	$(B)/Namespace.o $(B)/Printer.o $(B)/Regex.o $(B)/NativeArray.o $(B)/DynLoad.o $(B)/CompiledFn.o $(S)/analyze.inc $(S)/exec.inc $(S)/repl.inc $(S)/tasks.inc $(S)/sorted.inc $(S)/hosttable.inc
+	$(B)/Namespace.o $(B)/Printer.o $(B)/Regex.o $(B)/NativeArray.o $(B)/DynLoad.o $(B)/Threads.o $(B)/CompiledFn.o $(S)/analyze.inc $(S)/exec.inc $(S)/repl.inc $(S)/tasks.inc $(S)/sorted.inc $(S)/hosttable.inc
 
 # The reference BLAS (src/f/blas/PROVENANCE.md), F77 fixed form, as a
 # PACKAGE beside its Clojure in packages/blas, opened at run time; the
@@ -213,7 +213,7 @@ reader-objects = $(B)/LispReader.o $(B)/Regex.o $(B)/regex_shim.o
 # register) need it, so it sits below them.
 compiled-objects = $(B)/CompiledFn.o
 $(B)/CompiledFn.o: $(B)/GC.o $(B)/PersistentVector.o
-eval-objects = $(data-objects) $(B)/Env.o $(B)/Namespace.o $(reader-objects) $(B)/DynLoad.o $(compiled-objects) $(B)/Eval.o \
+eval-objects = $(data-objects) $(B)/Env.o $(B)/Namespace.o $(reader-objects) $(B)/DynLoad.o $(B)/Threads.o $(compiled-objects) $(B)/Eval.o \
 	$(B)/ClotranABI.o
 LINK_ICU = $(ICU_LIBS) $(LIBCXX) -lpthread
 

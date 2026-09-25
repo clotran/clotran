@@ -218,11 +218,6 @@ end module clotran_rt_decl
 
 
 
-(def ^:private blocking-builtins
-  "The host members that call block_on (tasks.inc), by the name the
-  exporter gives a folded builtin."
-  #{"deref" "clotran-dot-get" "clotran-latch-await" "clotran-queue-take" "task-sleep"})
-
 (defn decline-reason
   "Why this function cannot be compiled yet, or nil if it can. A list of
   reasons rather than a boolean, so the next thing to teach the
@@ -234,14 +229,6 @@ end module clotran_rt_decl
     (cond
       (or (empty? bodies) (some nil? bodies)) "no body"
       (seq captures) "closes over an outer local"
-      ;; A task parks only where the interpreter's own run is the one
-      ;; blocking (tasks.inc); below compiled code it is pinned, and a
-      ;; pinned task cannot wait for its parent. So what blocks DIRECTLY
-      ;; -- deref-future's .get, a latch's .await, .deref, a queue's
-      ;; take, sleep -- stays interpreted, and @promise inside a future
-      ;; still parks.
-      (some #(blocking-builtins (some-> (:builtin %) str)) nodes)
-      "blocks, and a task can park only in interpreted code"
       (not= -1 selfslot) "refers to itself by name"
       ;; A recur inside a subtree the interpreter runs would rebind the
       ;; frame and hand back the recur marker as a VALUE; the compiled

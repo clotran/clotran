@@ -889,9 +889,10 @@ order-independent combining; `coarrays` would be fold across images.
 
 **The three stages.**
 
-1. Baton threads. A future is a real OS thread with its own machine
-   stack, so a task blocked below compiled code parks instead of pinning
-   (DEVIATIONS 49 closes). Only one thread runs clotran code at a time --
+1. Baton threads -- DONE 2026-09-25. A future is a real OS thread with its
+   own machine stack, so a task blocked below compiled code parks instead
+   of pinning (DEVIATIONS 49 closed). 3000 futures, and 200 parked at
+   once, run correctly in 2.7 s; language_test passes with compiled core. Only one thread runs clotran code at a time --
    one global lock, the baton -- so the heap stays single-threaded and
    every answer is today's. POSIX (`pthread_*`) covers macOS and Linux;
    Windows is a second file behind the same interface, or the same file

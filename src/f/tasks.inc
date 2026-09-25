@@ -50,18 +50,149 @@
     call vs_leave(base)
   end function task_submit
 
-  ! Runs `task` in its context until it finishes or yields, then comes
-  ! back. The switch is bracketed inside this call, the one safe shape
-  ! (gce_ctx_switch): the caller's run never executes under the task's
-  ! context. The first step binds the closure and pushes its body; a
-  ! later one resumes the loop over the frames parked at the yield,
-  ! which re-executes the node that blocked.
+  ! ---- the baton (PLAN.md step 11, stage 1) --------------------------
+  !
+  ! Every task runs on its OWN OS thread (Threads.f90), so a task that
+  ! blocks -- even below compiled code, with Fortran frames on its stack
+  ! -- waits where it is, and is resumed there. Only one thread runs
+  ! clotran code at a time: the one whose context holds the baton. The
+  ! heap and the interpreter's globals stay single-threaded, and every
+  ! answer is what it was.
+  !
+  ! Handing over is a context switch plus a wake-up: the holder switches
+  ! the interpreter's globals to the next context (gce_ctx_switch, whose
+  ! stacks the collector already scans in every context), names it in
+  ! baton_ctx and wakes the waiters; the named thread goes on. Whoever
+  ! hands a task the baton -- its STEPPER -- gets it back when the task
+  ! blocks or ends, so scheduling is what it was under the green threads:
+  ! deterministic, a future running when made until it blocks.
+
+  subroutine baton_setup()
+    logical :: ok
+    if (baton_up) return
+    ok = th_lock_init(baton_lock)
+    ok = th_cond_init(baton_cond)
+    baton_ctx = gce_ctx_current()
+    call ctx_arrays(baton_ctx)
+    ctx_task(baton_ctx) = gc_nil()
+    baton_up = .true.
+  end subroutine baton_setup
+
+  ! The per-context arrays the baton keeps, grown to hold context `id`.
+  subroutine ctx_arrays(id)
+    integer, intent(in) :: id
+    integer, allocatable :: ci(:)
+    logical, allocatable :: cl(:)
+    type(gc_value), allocatable :: ct(:)
+    integer :: n
+    if (.not. allocated(came_from)) then
+       allocate(came_from(16), ctx_dying(16), ctx_task(16))
+       came_from = 0
+       ctx_dying = .false.
+       ctx_task = gc_nil()
+    end if
+    if (id <= size(came_from)) return
+    n = max(2 * size(came_from), id)
+    allocate(ci(n), cl(n), ct(n))
+    ci = 0
+    cl = .false.
+    ct = gc_nil()
+    ci(1:size(came_from)) = came_from
+    cl(1:size(came_from)) = ctx_dying
+    ct(1:size(came_from)) = ctx_task
+    call move_alloc(ci, came_from)
+    call move_alloc(cl, ctx_dying)
+    call move_alloc(ct, ctx_task)
+  end subroutine ctx_arrays
+
+  ! Give the baton to context `next`, and wait -- on this thread's own
+  ! stack -- until it comes back. A context cancelled while it waits
+  ! (task_cancel) ends its thread here instead.
+  recursive subroutine hand_to(next)
+    integer, intent(in) :: next
+    integer :: me
+    logical :: ok
+    me = gce_ctx_current()
+    call ctx_arrays(max(me, next))
+    came_from(next) = me
+    call gce_ctx_switch(next)
+    cur_task = ctx_task(next)
+    ok = th_lock_acquire(baton_lock)
+    baton_ctx = next
+    ok = th_cond_broadcast(baton_cond)
+    do while (baton_ctx /= me)
+       if (ctx_dying(me)) then
+          ok = th_lock_release(baton_lock)
+          call th_exit()
+       end if
+       ok = th_cond_wait(baton_cond, baton_lock)
+    end do
+    ok = th_lock_release(baton_lock)
+  end subroutine hand_to
+
+  ! A task's thread: wait for the baton, run the task's body to its end,
+  ! give its context back and the baton to its stepper, and finish.
+  recursive function task_thread_main(arg) result(r) bind(C)
+    type(c_ptr), value :: arg
+    type(c_ptr) :: r
+    type(gc_value) :: task, fn, frame, body, val
+    type(gc_value) :: none(0)
+    integer :: me, next, base
+    logical :: ok
+    r = c_null_ptr
+    me = int(transfer(arg, 0_c_intptr_t))
+    ok = th_lock_acquire(baton_lock)
+    do while (baton_ctx /= me)
+       if (ctx_dying(me)) then
+          ok = th_lock_release(baton_lock)
+          return
+       end if
+       ok = th_cond_wait(baton_cond, baton_lock)
+    end do
+    ok = th_lock_release(baton_lock)
+    ! the stepper switched the globals to this context before handing over
+    task = ctx_task(me)
+    call gce_clear_error()
+    val = gc_nil()
+    base = vs_enter(1)   ! slot 1 of the fresh stack: run_loop's value slot
+    fn = gc_slot(task, 1)
+    call push_frame(fn, 0)
+    ok = bind_closure(fn, gcv_empty(none), frame, body)
+    if (ok) then
+       call k_push(body, frame, ior(KF_FNBODY, KF_RESTART), body)
+       call vs_set(kst(ksp)%base + 7, fn)
+       if (task_trace) write(0, '(A,I0)') "task thread: running context ", me
+       if (.not. has_error) val = run_loop(0, 0)
+    else
+       call pop_frame()
+    end if
+    if (has_error) then
+       call gc_set_slot(task, 2, failure_value())
+       if (gc_i1(task) == TASK_RUNNING) call gc_set_i1(task, TASK_FAILED)
+       call gce_clear_error()
+    else if (gc_i1(task) == TASK_RUNNING) then
+       call gc_set_slot(task, 2, val)
+       call gc_set_i1(task, TASK_DONE)
+    end if
+    call vs_leave(0)
+    ! back to the stepper, for good: this context goes back for reuse
+    next = came_from(me)
+    call gce_ctx_switch(next)
+    cur_task = ctx_task(next)
+    ctx_task(me) = gc_nil()
+    call ctx_release(me)
+    ok = th_lock_acquire(baton_lock)
+    baton_ctx = next
+    ok = th_cond_broadcast(baton_cond)
+    ok = th_lock_release(baton_lock)
+  end function task_thread_main
+
+  ! Runs `task` until it finishes or blocks, then comes back: a new one
+  ! gets a context and a thread; a parked one is handed the baton where
+  ! it waits.
   recursive subroutine task_step(task)
     type(gc_value), intent(in) :: task
-    type(gc_value) :: saved_task, frame, body, val, fn
-    type(gc_value) :: none(0)
-    integer :: here, id, saved_depth, base
-    logical :: ok
+    integer :: id
     if (gc_i1(task) >= TASK_DONE .or. gc_i1(task) == TASK_RUNNING) return
     if (.not. task_trace_read) then
        block
@@ -71,61 +202,32 @@
          task_trace_read = .true.
        end block
     end if
-    here = gce_ctx_current()
+    call baton_setup()
     id = gc_i2(task)
     if (id == 0) then
        id = gce_ctx_new()
        call gc_set_i2(task, id)
-    end if
-    saved_task = cur_task
-    saved_depth = task_loop_depth
-    ctxs(id)%ev_depth = ev_depth   ! one Fortran stack: the nesting limit counts on
-    cur_task = task
-    call gce_ctx_switch(id)
-    call gce_clear_error()
-    yield_flag = .false.
-    ev_depth = ev_depth + 1
-    task_loop_depth = ev_depth
-    if (gc_i1(task) == TASK_NEW) then
-       base = vs_enter(1)   ! slot 1 of the fresh stack: run_loop's value slot
-       fn = gc_slot(task, 1)
-       call push_frame(fn, 0)
-       ok = bind_closure(fn, gcv_empty(none), frame, body)
-       if (ok) then
-          call k_push(body, frame, ior(KF_FNBODY, KF_RESTART), body)
-          call vs_set(kst(ksp)%base + 7, fn)
-       else
-          call pop_frame()
+       call ctx_arrays(id)
+       ctx_task(id) = task
+       ctx_dying(id) = .false.
+       call gc_set_i1(task, TASK_RUNNING)
+       if (.not. th_spawn(c_funloc(task_thread_main), transfer(int(id, c_intptr_t), c_null_ptr), &
+            TASK_STACK_BYTES)) then
+          call gc_set_i1(task, TASK_FAILED)
+          call gc_set_slot(task, 2, error_value("could not start a thread for the future", [task]))
+          ctx_task(id) = gc_nil()
+          call ctx_release(id)
+          call gc_set_i2(task, 0)
+          return
        end if
-    end if
-    call gc_set_i1(task, TASK_RUNNING)
-    val = gc_nil()
-    if (task_trace .and. ksp > 0) write(0, '(A,I0,A,I0,A,I0)') "task_step: resume top node kind=", &
-         gc_i1(vs_get(kst(ksp)%base + 1)), " pc=", kst(ksp)%pc, " ksp=", ksp
-    if (.not. has_error) val = run_loop(0, 0)
-    if (task_trace) write(0, '(A,L1,A,L1,A,I0)') "task_step: back yield=", yield_flag, " err=", has_error, " ksp=", ksp
-    ev_depth = ev_depth - 1
-    if (yield_flag) then
-       yield_flag = .false.
-       if (gc_i1(task) == TASK_RUNNING) call gc_set_i1(task, TASK_RUNNABLE)
     else
-       if (has_error) then
-          call gc_set_slot(task, 2, failure_value())
-          if (gc_i1(task) == TASK_RUNNING) call gc_set_i1(task, TASK_FAILED)
-          call gce_clear_error()
-       else if (gc_i1(task) == TASK_RUNNING) then
-          call gc_set_slot(task, 2, val)
-          call gc_set_i1(task, TASK_DONE)
-       end if
-       call vs_leave(0)
+       call gc_set_i1(task, TASK_RUNNING)
     end if
-    call gce_ctx_switch(here)
-    cur_task = saved_task
-    task_loop_depth = saved_depth
-    if (gc_i1(task) >= TASK_DONE) then
-       call ctx_release(id)
-       call gc_set_i2(task, 0)
-    end if
+    if (task_trace) write(0, '(A,I0)') "task_step: handing the baton to context ", id
+    call hand_to(id)
+    ! the baton is back: the task has ended -- its context went back with
+    ! it -- or it is parked, waiting
+    if (gc_i1(task) >= TASK_DONE) call gc_set_i2(task, 0)
   end subroutine task_step
 
   ! A failed task's failure: what it threw, or the host's message.
@@ -186,7 +288,17 @@
     if (gc_i1(task) >= TASK_DONE) return
     yes = .true.
     if (gc_i1(task) /= TASK_RUNNING .and. gc_i2(task) /= 0) then
-       call ctx_release(gc_i2(task))
+       ! its thread waits for the baton: tell it to end, and wake it.
+       ! ponytail: the context id is not reused -- a woken thread checking
+       ! a reused id could run -- so each cancelled parked task keeps one.
+       block
+         logical :: ok
+         ctx_dying(gc_i2(task)) = .true.
+         ctx_task(gc_i2(task)) = gc_nil()
+         ok = th_lock_acquire(baton_lock)
+         ok = th_cond_broadcast(baton_cond)
+         ok = th_lock_release(baton_lock)
+       end block
        call gc_set_i2(task, 0)
     end if
     call gc_set_i1(task, TASK_CANCELLED)
@@ -370,14 +482,21 @@
     if (task_trace) write(0, '(A,I0,A,I0,A,I0,A,I0,A,I0,A,I0)') "block_on: cur_task kind=", gc_kind(cur_task), &
          " ev_depth=", ev_depth, " loop_depth=", task_loop_depth, " target kind=", gc_kind(target), &
          " top node kind=", gc_i1(vs_get(kst(ksp)%base + 1)), " ksp=", ksp
-    if (gc_kind(cur_task) == OBJ_TASK .and. ev_depth == task_loop_depth) then
+    if (gc_kind(cur_task) == OBJ_TASK) then
+       ! A TASK parks right here, on its own thread's stack -- below
+       ! compiled code or not -- and gives the baton back to its stepper,
+       ! who steps it again once what it waits for is ready or its
+       ! deadline has passed (runnable_now).
        call gc_set_slot(cur_task, 3, target)
        if (deadline >= 0) then
           call gc_set_slot(cur_task, 4, gc_int(deadline))
        else
           call gc_set_slot(cur_task, 4, gc_nil())
        end if
-       yield_flag = .true.
+       call gc_set_i1(cur_task, TASK_RUNNABLE)
+       call hand_to(came_from(gce_ctx_current()))
+       ready = satisfied(target)
+       call clear_wait()
        return
     end if
     do
