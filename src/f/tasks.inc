@@ -578,8 +578,8 @@
     type(gc_value) :: t, dl
     logical :: sleeping
     integer :: ngen, nrun
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     ready = satisfied(target)
     if (ready) then
        call clear_wait()

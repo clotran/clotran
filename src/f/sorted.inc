@@ -222,8 +222,8 @@
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, items, mp
     integer :: base, i, step
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     out = gc_nil()
     base = vs_enter(vst, 3)
     if (n >= 2) call vs_set(vst, base + 1, gcv_nth(args, 0))   ! the comparator; nil otherwise

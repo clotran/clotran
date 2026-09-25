@@ -31,8 +31,8 @@
     character(len=16) :: dbuf
     integer :: base, ios, size_read
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     repl_depth = repl_depth + 1
     base = vs_enter(vst, 3)
     call vs_set(vst, base + 1, gc_root_get(global_env_root))

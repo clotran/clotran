@@ -625,7 +625,7 @@ module GC
   interface vs_depth
      module procedure vs_depth_self, vs_depth_on
   end interface vs_depth
-  public :: gc_stack_new, gc_stack_bind, gc_stacks_reset
+  public :: gc_stack_new, gc_stack_bind, gc_stacks_reset, gc_stack_of
   public :: gc_mutator_enter, gc_mutator_leave
   public :: gc_arena_stats
   public :: gc_equal, gc_hash
@@ -765,6 +765,16 @@ contains
     if (.not. associated(stacks(id)%s)) call gc_stack_new(id)
     ok = th_key_set(stack_key, c_loc(stacks(id)%s))
   end subroutine gc_stack_bind
+
+  ! Context `id`'s stack, made if need be. Stacks never move, so a
+  ! context may keep this pointer and skip the key (Eval's eval_ctx%stk).
+  function gc_stack_of(id) result(s)
+    integer, intent(in) :: id
+    type(gc_stack), pointer :: s
+    if (id > n_stacks) call gc_stack_new(id)
+    if (.not. associated(stacks(id)%s)) call gc_stack_new(id)
+    s => stacks(id)%s
+  end function gc_stack_of
 
   ! This thread's stack.
   function my_stack() result(s)

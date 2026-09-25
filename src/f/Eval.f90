@@ -460,6 +460,8 @@ module Eval
      logical :: dying = .false., native = .false.
      type(gc_value) :: task
      type(th_cond) :: turn
+     ! its value stack, the collector's: one lookup finds both
+     type(gc_stack), pointer :: stk => null()
   end type eval_ctx
   ! Each context is allocated on its own and never moves: a thread holds
   ! its context's address (PLAN.md step 14b), so growing the table copies
@@ -509,8 +511,8 @@ contains
     type(gc_value), intent(in) :: v
     type(gc_value) :: fr
     integer :: base
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     call gc_global_keep(tctx%thrown_root, v)
     if (gc_kind(v) == OBJ_ERR) then
        if (tag_of(gc_slot(v, 4)) == GCT_NIL) then
@@ -541,8 +543,8 @@ contains
     type(gc_value) :: out, m, nm
     character(len=:), allocatable :: who, fname
     integer :: i, base, line, col
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     base = vs_enter(vst, 4)
     out = gcv_empty(roots)
     call vs_set(vst, base + 1, out)
@@ -970,8 +972,8 @@ contains
     type(gc_value) :: out, m, argv
     integer :: base
     logical :: via_iter
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     out = gc_nil()
     base = vs_enter(vst, 3)
     call vs_set(vst, base + 1, v)
@@ -1056,8 +1058,8 @@ contains
     type(eval_ctx), pointer :: tctx
     type(gc_value) :: fargs, out
     integer :: base
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     if (spec_loaded) return
     base = vs_enter(vst, 1)
     spec_loading = .true.
@@ -1091,8 +1093,8 @@ contains
     logical :: was_loaded
     character(len=:), allocatable :: vt
     integer :: base
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     if (.not. spec_check .or. spec_loading) return
     base = vs_enter(vst, 4)
     call vs_set(vst, base + 1, mvar)
@@ -1148,8 +1150,8 @@ contains
     type(gc_value) :: args, r
     logical :: there
     integer :: dot, i, base, at
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     dot = index(path, ".", back=.true.)
     if (dot <= index(path, "/", back=.true.)) return
     stem = path(1:dot)
@@ -1187,8 +1189,8 @@ contains
     type(gc_value), intent(in) :: args
     type(gc_value) :: out, fargs, ns, var, sym
     integer :: base
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     out = gc_nil()
     base = vs_enter(vst, 3)
     call vs_set(vst, base + 1, args)
@@ -1304,8 +1306,8 @@ contains
     type(gc_value) :: out, nd
     integer :: base
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     out = gc_nil()
     if (tctx%has_error) return
     if (gc_kind(form) == OBJ_AST) then
@@ -2230,8 +2232,8 @@ contains
     logical :: found
     integer :: base
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     out = gc_nil()
     base = vs_enter(vst, 4)
     call vs_set(vst, base + 1, target0)
@@ -3277,8 +3279,8 @@ contains
     type(gc_value) :: e, cls, txt
     integer :: base
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     base = vs_enter(vst, 2)
     cls = gc_sym(class_name, roots)
     call vs_set(vst, base + 1, cls)
@@ -3397,8 +3399,8 @@ contains
     type(gc_value) :: e
     integer :: base
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     base = vs_enter(vst, 2)
     call vs_set(vst, base + 1, gc_sym(cls, roots))
     call vs_set(vst, base + 2, gc_str(msg, [roots, vs_get(vst, base + 1)]))
@@ -3505,8 +3507,8 @@ contains
     type(gc_value) :: w, fargs, res
     type(gc_value), allocatable :: ks(:), fs(:)
     integer :: base, i
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     if (r%tag /= GCT_OBJ) return
     w = ref_fn_get(r, "watches", roots)
     if (.not. gca_is(w)) return
@@ -3576,8 +3578,8 @@ contains
     logical :: ok
     type(gc_value) :: fargs, res
     integer :: base
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     ok = .true.
     if (f%tag == GCT_NIL) return
     base = vs_enter(vst, 2)
@@ -3614,8 +3616,8 @@ contains
     type(gc_value) :: r, args
     integer :: base
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     if (gc_kind(v) /= OBJ_LAZY) return
     if (gc_i1(v) /= LAZY_PENDING) return
     ! NOT while an error is in flight. `apply` refuses to run anything
@@ -3795,8 +3797,8 @@ contains
     type(gc_value) :: out, args, walk
     integer :: base
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     base = vs_enter(vst, 5)
     call vs_set(vst, base + 1, fn)
     call vs_set(vst, base + 2, form)
@@ -3853,8 +3855,8 @@ contains
     ! allocate -- so under torture the symbol was collected before it
     ! was ever stored, and the accumulated tail went with it. Only the
     ! torture pass showed it; the plain pass was perfectly green.
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     base = vs_enter(vst, 6)
     call vs_set(vst, base + 1, form)
     call vs_set(vst, base + 2, env)
@@ -4131,8 +4133,8 @@ contains
     logical :: ap
     integer :: base, i
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     ap = .false.
     if (present(use_apply)) ap = use_apply
 
@@ -5441,8 +5443,8 @@ contains
     logical :: have, done
     real(gc_dp) :: sd
     ! slots: 1 coll/cell 2 f 3 acc 4 cursor (a range's next value) 5 hi 6 step
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     base = vs_enter(vst, 6)
     call vs_set(vst, base + 1, coll)
     call vs_set(vst, base + 2, f)
@@ -5525,8 +5527,8 @@ contains
     type(eval_ctx), pointer :: tctx
       type(gc_value), intent(in) :: x0
       type(gc_value) :: argv, r
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
       if (.not. have) then
          call vs_set(vst, base + 3, x0)
          have = .true.
@@ -5770,8 +5772,8 @@ contains
     ! (with-meta (cons (quote fn*) decl) (meta &form)), so the value a
     ! caller holds is an OBJ_META around the closure. Metadata never
     ! changes what a value IS.
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     fn = strip_meta(fn0)
     ! A VAR IS CALLABLE. (#'f x) derefs and applies -- core.clj calls
     ! its own private helpers that way, (#'assert-same-protocol ...), so
@@ -5995,8 +5997,8 @@ contains
     logical :: hit, checked, promote
     integer :: op
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     out = gc_nil()
     hit = .false.
     n = gcv_count(args)
@@ -11026,8 +11028,8 @@ contains
     integer :: c
     type(gc_value) :: r, args2, rev
     integer :: base
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     base = vs_enter(vst, 4)
     call vs_set(vst, base + 1, cmp)
     ! A VECTOR, not a list: apply counts its arguments with
@@ -11087,8 +11089,8 @@ contains
     integer :: n, width, i, lo, mid, hi
     type(gc_value), allocatable :: buf(:), src(:)
     integer :: base
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     n = seq_len(arr)
     if (n < 2) return
     base = vs_enter(vst, 2)
@@ -12626,8 +12628,8 @@ contains
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: meth, h, fargs, cache
     integer :: base
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     base = vs_enter(vst, 4)
     call vs_set(vst, base + 1, mf)
     call vs_set(vst, base + 2, dv)
@@ -14304,8 +14306,8 @@ contains
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, kids, v
     integer :: b, i
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     out = nd
     if (gc_kind(nd) /= OBJ_AST) return
     b = vs_enter(vst, 4)
@@ -14375,8 +14377,8 @@ contains
     type(gc_value) :: out, e, m
     type(gc_value), allocatable :: ks(:), vls(:)
     integer :: b, i
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     out = v
     if (gc_kind(v) == OBJ_AST) then
        out = ast_data(v, roots)
@@ -14515,8 +14517,8 @@ contains
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, tag, form, fn, av
     integer :: base, i
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     out = v
     if (tctx%has_error) return
     base = vs_enter(vst, 6)
@@ -14760,6 +14762,7 @@ contains
     allocate(ctxs(8))
     allocate(ctxs(1)%c)
     ctxs(1)%c%id = 1
+    ctxs(1)%c%stk => gc_stack_of(1)
     ok = th_cond_init(ctxs(1)%c%turn)
     n_ctx = 1
     ok = th_key_set(ctx_key, c_loc(ctxs(1)%c))
@@ -14803,6 +14806,7 @@ contains
     ctxs(id)%c%last_error = ""
     ctxs(id)%c%last_trace = ""
     call gc_stack_new(id)
+    ctxs(id)%c%stk => gc_stack_of(id)
   end function gce_ctx_new
 
   integer function gce_ctx_current()

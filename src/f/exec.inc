@@ -60,8 +60,8 @@
     integer, intent(in) :: from
     type(gc_value) :: argv, v
     integer :: base, i
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     base = vs_enter(vst, 3)
     call vs_set(vst, base + 1, kids)
     call vs_set(vst, base + 2, frame)
@@ -142,8 +142,8 @@
     type(gc_value) :: out, frame, body
     integer :: base
     logical :: ok
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     out = gc_nil()
     base = vs_enter(vst, 1)
     call vs_set(vst, base + 1, fn)
@@ -387,8 +387,8 @@
     integer :: base, i, j, b, line, col, slot, lo, hi, pline, pcol
     logical :: have_pos
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     base = vs_enter(vst, 4)
     out = gcv_empty(roots)
     call vs_set(vst, base + 1, out)
@@ -529,8 +529,8 @@
     character(len=*), intent(in) :: reason
     type(gc_value) :: out, fr
     integer :: base
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     base = vs_enter(vst, 2)
     fr = break_frames([gc_nil()])
     call vs_set(vst, base + 1, fr)
@@ -580,8 +580,8 @@
     logical :: failed
     character(len=:), allocatable :: msg, trc
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     out = gc_nil()
     if (in_handler .and. reason /= "break") return
     out = capture_break(reason)
@@ -601,7 +601,7 @@
     in_handler = .true.
     call gce_ctx_switch(handler_ctx)
     tctx => ctx_self()   ! the handler's context now: re-read
-    vst => gc_my_stack()
+    vst => tctx%stk
     tctx%cur_task = gc_nil()
     tctx%task_loop_depth = 0
     call gce_clear_error()
@@ -622,7 +622,7 @@
     call vs_leave(vst, base)
     call gce_ctx_switch(paused)
     tctx => ctx_self()   ! the paused context again
-    vst => gc_my_stack()
+    vst => tctx%stk
     in_handler = .false.
     ! back where the break was taken; the error state is as it was
 
@@ -794,8 +794,8 @@
     integer, intent(in) :: flags
     type(kframe), allocatable :: bigger(:)
     integer :: n, b
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     if (.not. allocated(tctx%kst)) allocate(tctx%kst(1024))
     if (tctx%ksp >= size(tctx%kst)) then
        n = size(tctx%kst)
@@ -830,8 +830,8 @@
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: nd
     integer :: b
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     b = tctx%kst(tctx%ksp)%base
     call vs_set(vst, b + 1, nd)
     call vs_set(vst, b + 3, gc_nil())
@@ -851,8 +851,8 @@
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(inout) :: val
     integer :: b
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     b = tctx%kst(tctx%ksp)%base
     if (iand(tctx%kst(tctx%ksp)%flags, KF_RESTART) /= 0 .and. gc_kind(val) == OBJ_RECUR) then
        call vs_set(vst, b + 1, vs_get(vst, b + 5))
@@ -880,8 +880,8 @@
     integer, intent(in) :: kbot
     type(gc_value) :: nd, exc, catches, cl, fin
     integer :: b, i, n
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     do while (tctx%ksp > kbot)
        b = tctx%kst(tctx%ksp)%base
        nd = vs_get(vst, b + 1)
@@ -952,8 +952,8 @@
     type(gc_value) :: out
     integer :: kbot, vbase
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     out = gc_nil()
     if (tctx%has_error) return
     if (ev_limit == 0) call read_depth_limit()
@@ -991,8 +991,8 @@
     integer :: kind, n, b, site
     logical :: ok
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     val = gc_nil()
     do
        if (tctx%has_error) then
@@ -1354,8 +1354,8 @@
     type(gc_value) :: frame, body, argv
     integer :: b
     logical :: ok
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     b = tctx%kst(tctx%ksp)%base
     call vs_set(vst, b + 3, gc_slot(req, 1))
     argv = gc_slot(req, 2)
@@ -1391,8 +1391,8 @@
     type(gc_value) :: out, kids, v, fnv
     integer :: base, kind
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     out = gc_nil()
     base = vs_enter(vst, 4)
     call vs_set(vst, base + 1, nd)
@@ -1519,8 +1519,8 @@
     character(len=:), allocatable :: qual
     integer :: base, flags
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     out = gc_nil()
     base = vs_enter(vst, 5)
     call vs_set(vst, base + 1, nd)
@@ -1596,8 +1596,8 @@
     type(gc_value), intent(in) :: nd, frame
     type(gc_value) :: out, v
     integer :: base, i, n, start
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     out = gc_nil()
     base = vs_enter(vst, 2)
     call vs_set(vst, base + 1, nd)
@@ -1630,8 +1630,8 @@
     type(gc_value), intent(in) :: nd, frame
     type(gc_value) :: out, argv, rinfo
     integer :: base, i, n, start
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     out = gc_nil()
     base = vs_enter(vst, 3)
     call vs_set(vst, base + 1, nd)
@@ -1660,8 +1660,8 @@
     integer :: base, i, n
     logical :: caught
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     out = gc_nil()
     base = vs_enter(vst, 5)
     call vs_set(vst, base + 1, nd)
@@ -1769,8 +1769,8 @@
     type(gc_value) :: out, spec, methods, names, fns, fnv, ty
     integer :: base, i, n
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     out = gc_nil()
     base = vs_enter(vst, 5)
     call vs_set(vst, base + 1, nd)
@@ -1857,8 +1857,8 @@
     type(gc_value), intent(in) :: nd, frame
     type(gc_value) :: out, tgt, val
     integer :: base
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     out = gc_nil()
     base = vs_enter(vst, 4)
     call vs_set(vst, base + 1, nd)

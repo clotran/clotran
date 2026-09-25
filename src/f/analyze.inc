@@ -389,8 +389,8 @@
     type(gc_value) :: out, nd, walk
     integer :: base, i, n
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     base = vs_enter(vst, 4)
     call vs_set(vst, base + 1, forms)
     call vs_set(vst, base + 2, sc)
@@ -445,8 +445,8 @@
     type(gc_value) :: nd, form, head, kids, expanded, mvar
     integer :: base, slot
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     nd = gc_nil()
     if (tctx%has_error) return
     base = vs_enter(vst, 6)
@@ -553,8 +553,8 @@
     type(gc_value), intent(in) :: vnode, mform, sc
     type(gc_value) :: nd, kids, mn
     integer :: base
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     base = vs_enter(vst, 5)
     call vs_set(vst, base + 1, vnode)
     call vs_set(vst, base + 2, mform)
@@ -589,8 +589,8 @@
     type(gc_value) :: nd, kids, kn, vn
     type(gc_value), allocatable :: ks(:), vls(:)
     integer :: base, i
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     nd = gc_nil()
     base = vs_enter(vst, 4)
     call vs_set(vst, base + 1, form)
@@ -623,8 +623,8 @@
     character(len=:), allocatable :: t
     integer :: base, slot, sl
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     nd = gc_nil()
     base = vs_enter(vst, 3)
     call vs_set(vst, base + 1, sym)
@@ -701,8 +701,8 @@
     integer, intent(in) :: argc
     type(gc_value) :: fn, var, md, pred, ok
     integer :: base
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     fn = gc_nil()
     var = resolve_var(head, gc_nil())
     if (.not. gcn_is_var(var)) return
@@ -755,8 +755,8 @@
     type(gc_value) :: nd, head, mvar, expanded
     integer :: base
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     nd = gc_nil()
     base = vs_enter(vst, 4)
     call vs_set(vst, base + 1, form)
@@ -867,8 +867,8 @@
     type(gc_value), intent(in) :: form, sc
     type(gc_value) :: nd, kids
     integer :: base
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     nd = gc_nil()
     base = vs_enter(vst, 3)
     call vs_set(vst, base + 1, form)
@@ -974,8 +974,8 @@
     logical :: is_call
     integer :: base
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     nd = gc_nil()
     base = vs_enter(vst, 8)
     call vs_set(vst, base + 1, form)
@@ -1118,8 +1118,8 @@
     type(gc_value), intent(in) :: form, sc
     type(gc_value) :: nd, cls, kids, args
     integer :: base
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     nd = gc_nil()
     base = vs_enter(vst, 5)
     call vs_set(vst, base + 1, form)
@@ -1258,8 +1258,8 @@
     type(gc_value), intent(in) :: form, sc
     type(gc_value) :: nd, c, kids
     integer :: base
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     nd = gc_nil()
     base = vs_enter(vst, 3)
     call vs_set(vst, base + 1, form)
@@ -1282,8 +1282,8 @@
     type(gc_value), intent(in) :: rest, sc
     type(gc_value) :: nd, kids
     integer :: base
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     nd = gc_nil()
     base = vs_enter(vst, 3)
     call vs_set(vst, base + 1, rest)
@@ -1312,8 +1312,8 @@
     type(gc_value) :: nd, nm, md, var, kids, c
     integer :: base, flags
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     nd = gc_nil()
     base = vs_enter(vst, 7)
     call vs_set(vst, base + 1, rest)
@@ -1422,8 +1422,8 @@
     type(gc_value) :: nd, binds, blk, kids, c, k, rinfo
     integer :: base, i, n, start
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     nd = gc_nil()
     base = vs_enter(vst, 6)
     call vs_set(vst, base + 1, rest)
@@ -1529,8 +1529,8 @@
     type(gc_value) :: nd, binds, blk, kids, c, k
     integer :: base, i, n, start
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     nd = gc_nil()
     base = vs_enter(vst, 5)
     call vs_set(vst, base + 1, rest)
@@ -1603,8 +1603,8 @@
 
     ! captured ONCE: a method's own clauses are exempt from fn hint
     ! rules, and any fn* nested in its body is not
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     hints = .not. tctx%analyzing_method
     tctx%analyzing_method = .false.
     nd = gc_nil()
@@ -1831,8 +1831,8 @@
     integer :: base, i, n, amp, start, nfixed
     logical :: variadic
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     ar = gc_nil()
     base = vs_enter(vst, 5)
     call vs_set(vst, base + 1, clause)
@@ -1917,8 +1917,8 @@
     type(gc_value), intent(in) :: rest, sc
     type(gc_value) :: nd, kids, rinfo
     integer :: base, n
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     nd = gc_nil()
     base = vs_enter(vst, 3)
     call vs_set(vst, base + 1, rest)
@@ -2014,8 +2014,8 @@
     type(gc_value), intent(in) :: rest, sc
     type(gc_value) :: nd, fnform, fnode
     integer :: base
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     nd = gc_nil()
     base = vs_enter(vst, 4)
     call vs_set(vst, base + 1, rest)
@@ -2043,8 +2043,8 @@
     type(gc_value) :: nd, body, fin, catches, item, cl, blk, cb, kids, cname
     integer :: base, i, n, slot
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     nd = gc_nil()
     base = vs_enter(vst, 8)
     call vs_set(vst, base + 1, rest)
@@ -2126,8 +2126,8 @@
     type(gc_value), allocatable :: ks(:), vls(:)
     integer :: base, i, n
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     nd = gc_nil()
     base = vs_enter(vst, 8)
     call vs_set(vst, base + 1, rest)
@@ -2199,8 +2199,8 @@
     type(gc_value) :: nd, w, cname, k, fields, ifaces, spec
     integer :: base
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     nd = gc_nil()
     base = vs_enter(vst, 6)
     call vs_set(vst, base + 1, rest)
@@ -2254,8 +2254,8 @@
     character(len=24) :: buf
     integer :: base
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     nd = gc_nil()
     base = vs_enter(vst, 6)
     call vs_set(vst, base + 1, rest)
@@ -2319,8 +2319,8 @@
     type(gc_value) :: spec, m, mname, names, fns, seen, clauses, fnform, fnode, tmp, keys
     integer :: base
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     spec = gc_nil()
     base = vs_enter(vst, 10)
     call vs_set(vst, base + 1, fields)
@@ -2385,8 +2385,8 @@
     type(gc_value), intent(in) :: rest, sc
     type(gc_value) :: nd, expanded
     integer :: base
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     nd = gc_nil()
     base = vs_enter(vst, 3)
     call vs_set(vst, base + 1, rest)
@@ -2414,8 +2414,8 @@
     type(gc_value), intent(in) :: rest, sc
     type(gc_value) :: nd, tgt, var, kids, c, objf
     integer :: base
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     nd = gc_nil()
     base = vs_enter(vst, 5)
     call vs_set(vst, base + 1, rest)
@@ -2788,8 +2788,8 @@
     type(gc_value) :: nd, form, head, sc, body
     integer :: base
 
-    vst => gc_my_stack()
     tctx => ctx_self()
+    vst => tctx%stk
     nd = gc_nil()
     base = vs_enter(vst, 4)
     form = form0

@@ -1229,6 +1229,16 @@ f. *The baton comes off interpreter code.* Tested by running the derived
 **Not in this step**: a concurrent collector (the world stops for each
 collection), and a compacting one (objects never move, as now).
 
+**Open: rare huge slowdowns, not reproduced** (2026-09-25). Twice a run
+took hundreds of times its usual time and never did again: one
+`scripts/bench` run of `(count (sort (map #(mod (* % 7919) 10007) (range
+50000))))` took 931 s (usually about 2.2 s; re-run at once, 2182 ms, and
+smaller sizes scale linearly), and one run of the dgemm investigation
+took about 17 minutes instead of 28 s with some 360 tasks piled up in
+dgemm or `native_end`. Both under heavy machine load (average 10-16).
+No cause is known and none is claimed. Next time: `sample` the process
+while it is slow, and CLOTRAN_STATS at exit.
+
 **Open decision: how long the world stops** (raised 2026-09-25). A stop
 is the correctness baseline; what hurts is its LENGTH -- a full mark of
 the whole heap, about 14 ms at 180k live objects, growing with it. The
