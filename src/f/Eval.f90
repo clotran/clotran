@@ -380,7 +380,7 @@ module Eval
   public :: gce_main_bindings, gce_install_compiled, gce_raise_arity_named
   public :: gce_native_begin, gce_native_end
   public :: gce_analyze, gce_trace
-  public :: gce_ctx_new, gce_ctx_switch, gce_ctx_current
+  public :: gce_ctx_new, gce_ctx_switch, gce_ctx_current, gce_current_fn
   public :: gce_repl
   public :: gce_set_home, gce_home
   public :: gce_apply, gce_env, gce_exec_node, gce_apply_slots
@@ -460,6 +460,10 @@ module Eval
      logical :: dying = .false., native = .false.
      type(gc_value) :: task
      type(th_cond) :: turn
+     ! the compiled fn call_compiled is entering: a compiled closure's
+     ! prologue reads its captures from it (clotran_captures). Read at
+     ! once, before anything else runs, so it needs no rooting here.
+     type(gc_value) :: cur_fn
      ! its value stack, the collector's: one lookup finds both
      type(gc_stack), pointer :: stk => null()
   end type eval_ctx
@@ -5670,6 +5674,7 @@ contains
     if (tctx%ev_depth > ev_limit) then
        call fail("stack overflow")
     else
+       tctx%cur_fn = fn
        call cf_call(gc_i1(fn), argbase, nargs, dst)
     end if
     tctx%ev_depth = tctx%ev_depth - 1
@@ -14062,7 +14067,9 @@ contains
 
   logical function pool_compiled_kind(k)
     integer, intent(in) :: k
-    pool_compiled_kind = any(k == [N_CONST, N_LOCAL, N_IF, N_DO, N_CALL, N_VAR, N_LET, N_LOOP, N_RECUR])
+    ! N_FN since compiled closures (PLAN.md step 10, a): its bodies are
+    ! walked, and its constants are the enclosing fn's
+    pool_compiled_kind = any(k == [N_CONST, N_LOCAL, N_IF, N_DO, N_CALL, N_VAR, N_LET, N_LOOP, N_RECUR, N_FN])
   end function pool_compiled_kind
 
   ! A constant the generated code writes into its own source (the
@@ -14227,6 +14234,25 @@ contains
     call fp_mix(h, int(k, gc_ip))
     if (.not. pool_compiled_kind(k)) then
        call pool_add(pb, "node", vs_get(vst, b + 1), h)
+    else if (k == N_FN) then
+       ! a closure: its template's shape, then every arity's body
+       block
+         type(gc_value) :: tmpl, arity
+         integer :: ia
+         tmpl = gc_slot(vs_get(vst, b + 1), 2)
+         call vs_set(vst, b + 2, tmpl)
+         call fp_mix(h, int(gcv_count(gcv_nth(tmpl, 1)), gc_ip))
+         call fp_mix_field(h, gcv_nth(tmpl, 2))
+         call fp_mix_field(h, gcv_nth(tmpl, 3))
+         call fp_mix_field(h, gcv_nth(tmpl, 4))
+         do ia = 0, gcv_count(gcv_nth(vs_get(vst, b + 2), 1)) - 1
+            arity = gcv_nth(gcv_nth(vs_get(vst, b + 2), 1), ia)
+            call fp_mix_field(h, gcv_nth(arity, 0))
+            call fp_mix_field(h, gcv_nth(arity, 1))
+            call fp_mix_field(h, gcv_nth(arity, 2))
+            call pool_walk(gcv_nth(arity, 3), pb, h)
+         end do
+       end block
     else if (k == N_VAR) then
        call pool_add(pb, "var", gc_slot(vs_get(vst, b + 1), 2), h)
     else if (k == N_CONST) then
@@ -14808,6 +14834,14 @@ contains
     call gc_stack_new(id)
     ctxs(id)%c%stk => gc_stack_of(id)
   end function gce_ctx_new
+
+  ! The compiled fn being entered on this thread (see eval_ctx%cur_fn).
+  function gce_current_fn() result(fn)
+    type(gc_value) :: fn
+    type(eval_ctx), pointer :: c
+    c => ctx_self()
+    fn = c%cur_fn
+  end function gce_current_fn
 
   integer function gce_ctx_current()
     type(eval_ctx), pointer :: c

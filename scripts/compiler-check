@@ -32,6 +32,16 @@
 (def cases
   '[["a constant" (fn [] 42) [[]]]
     ["the argument back" (fn [x] x) [[1] ["a"] [nil]]]
+    ;; compiled closures (PLAN.md step 10, a)
+    ["a closure over an argument" (fn [x] (let [f (fn [y] (+ x y))] (f 10))) [[1] [5]]]
+    ["a closure called at once" (fn [x] ((fn [y] (* x y)) 3)) [[2] [-4]]]
+    ["a closure handed to map" (fn [k xs] (vec (map (fn [x] (+ x k)) xs))) [[1 [1 2 3]] [10 []]]]
+    ["an inner fn recurs by its own name" (fn [n] ((fn fact [k] (if (< k 2) 1 (* k (fact (dec k))))) n)) [[5] [10]]]
+    ["nested closures" (fn [a] (let [f (fn [b] (fn [c] (+ a b c)))] ((f 2) 3))) [[1] [100]]]
+    ["a closure over a primitive loop local" (fn [n] (loop [i 0 acc []] (if (< i n) (recur (inc i) (conj acc ((fn [] (* i i))))) acc))) [[4] [0]]]
+    ["a variadic closure" (fn [x] ((fn [& ys] (apply + x ys)) 1 2 3)) [[10]]]
+    ["a multi-arity closure" (fn [x] (let [f (fn ([] x) ([y] (+ x y)))] [(f) (f 1)])) [[5]]]
+    ["a closure kept and called later" (fn [x] (let [fs (mapv (fn [i] (fn [] (+ i x))) (range 3))] (mapv (fn [g] (g)) fs))) [[7]]]
     ["a call to a core fn" (fn [x] (inc x)) [[1] [-1] [0]]]
     ["arithmetic" (fn [x] (* x 2)) [[3] [0] [-4]]]
     ["two arguments" (fn [a b] (+ a b)) [[1 2] [-5 5]]]

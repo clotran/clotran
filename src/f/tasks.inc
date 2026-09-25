@@ -259,6 +259,14 @@
     val = gc_nil()
     base = vs_enter(1)   ! slot 1 of the fresh stack: run_loop's value slot
     fn = gc_slot(task, 1)
+    if (.not. is_node_closure(fn)) then
+       ! a compiled fn -- a compiled closure since PLAN.md step 10a, as
+       ! binding-conveyor-fn's is under compiled core -- or a builtin:
+       ! apply knows every kind, and this thread's own stack is where it
+       ! waits if it blocks
+       if (task_trace) write(0, '(A,I0)') "task thread: applying in context ", me
+       val = apply(fn, gcv_empty(none))
+    else
     call push_frame(fn, 0)
     ok = bind_closure(fn, gcv_empty(none), frame, body)
     if (ok) then
@@ -268,6 +276,7 @@
        if (.not. tctx%has_error) val = run_loop(0, 0)
     else
        call pop_frame()
+    end if
     end if
     if (tctx%has_error) then
        call gc_set_slot(task, 2, failure_value())

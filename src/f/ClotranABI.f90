@@ -70,6 +70,7 @@ module ClotranABI
   public :: clotran_load_compiled, clotran_array_view
   public :: clotran_rest_args, clotran_arity_error
   public :: clotran_native_begin, clotran_reacquire
+  public :: clotran_register_proc, clotran_make_closure, clotran_captures
 
 contains
 
@@ -493,6 +494,81 @@ contains
   ! sees a real frame, which is what makes the debug build cheap.
   ! Raw-slot locals for leaf procedures that never fall back are a
   ! later optimisation, with a measurement behind it.
+
+  ! --- compiled closures (PLAN.md step 10, a) ------------------------
+  !
+  ! An fn written inside a compiled fn is a procedure of its own in the
+  ! same file, registered at install with no Var: its handle is what a
+  ! closure made from it carries. The closure is an OBJ_COMPILED like a
+  ! defn's, plus what it captured: slot 2 the values (read from the
+  ! outer frame when it is made, flat, as the interpreter's closures
+  ! are), slot 3 the inner frame slots they go to, slot 4 its self
+  ! slot or -1. call_compiled records the fn it enters, and the
+  ! procedure's prologue copies these into its new frame first thing.
+
+  function clotran_register_proc(name, namen, fp) bind(C, name="clotran_register_proc") result(h)
+    character(kind=c_char), intent(in) :: name(*)
+    integer(c_int), value :: namen
+    type(c_funptr), value :: fp
+    integer(c_int) :: h
+    h = cf_register(fp, c_text(name, namen))
+  end function clotran_register_proc
+
+  ! pairs(1:2*npairs): (outer slot, inner slot), 0-based, as the
+  ! analyser's template lists them
+  subroutine clotran_make_closure(dst, h, arity, name, namen, fr, pairs, npairs, selfslot) &
+       bind(C, name="clotran_make_closure")
+    type(gc_stack), pointer :: vst
+    integer(c_int), value :: dst, h, arity, namen, fr, npairs, selfslot
+    character(kind=c_char), intent(in) :: name(*)
+    integer(c_int), intent(in) :: pairs(*)
+    type(gc_value) :: v, none(0)
+    integer :: base, k
+    vst => gc_my_stack()
+    base = vs_enter(vst, 3)
+    v = gc_vec(int(npairs), none)
+    call vs_set(vst, base + 1, v)
+    do k = 1, npairs
+       call gc_vec_set(vs_get(vst, base + 1), k, gc_vec_get(vs_get(vst, int(fr)), int(pairs(2 * k - 1)) + 1))
+    end do
+    v = gc_vec(int(npairs), [vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, v)
+    do k = 1, npairs
+       call gc_vec_set(vs_get(vst, base + 2), k, gc_int(int(pairs(2 * k), gc_ip)))
+    end do
+    v = gc_str(c_text(name, namen), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 3, v)
+    v = gc_obj(OBJ_COMPILED, [vs_get(vst, base + 3), vs_get(vst, base + 1), vs_get(vst, base + 2), &
+         gc_int(int(selfslot, gc_ip))], [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+    call gc_set_i1(v, int(h))
+    call gc_set_i2(v, int(arity))
+    call vs_set(vst, int(dst), v)
+    call vs_leave(vst, base)
+  end subroutine clotran_make_closure
+
+  ! The prologue of a closure's procedure: its captures, and itself if
+  ! it is named, into its frame. A defn's own fn has none of either.
+  subroutine clotran_captures(fr) bind(C, name="clotran_captures")
+    type(gc_stack), pointer :: vst
+    integer(c_int), value :: fr
+    type(gc_value) :: fn, vals, inner, self
+    integer :: k
+    vst => gc_my_stack()
+    fn = gce_current_fn()
+    if (gc_kind(fn) /= OBJ_COMPILED) return
+    vals = gc_slot(fn, 2)
+    inner = gc_slot(fn, 3)
+    if (vals%tag == GCT_VEC) then
+       do k = 1, gc_vec_len(vals)
+          self = gc_vec_get(inner, k)
+          call gc_vec_set(vs_get(vst, int(fr)), int(self%ival) + 1, gc_vec_get(vals, k))
+       end do
+    end if
+    self = gc_slot(fn, 4)
+    if (self%tag == GCT_INT) then
+       if (self%ival >= 0) call gc_vec_set(vs_get(vst, int(fr)), int(self%ival) + 1, fn)
+    end if
+  end subroutine clotran_captures
 
   subroutine clotran_frame_new(dst, n) bind(C, name="clotran_frame_new")
     type(gc_stack), pointer :: vst

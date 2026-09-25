@@ -987,6 +987,42 @@ only `defn` forms compile. In order:
    `reify` and protocol dispatch -- and cheaper calls (no heap frame
    for a small function). This is what makes compiled core FASTER, not
    only compiled: map's work is in a lazy-seq, reduce's in a protocol.
+   *Measured 2026-09-25, and designed.* Compiled calls are now FASTER
+   than interpreted ones (a non-tail recursion 2.32 -> 0.97 ms, a loop
+   calling a small fn 182 -> 19 ms); the "compiled core did not pay"
+   above predates the call and collector work. With compiled core
+   installed, sort 1746 -> 1372 ms and reduce 96 -> 85, but into/map
+   does not move (1658 vs 1729): map's per-element loop is inside
+   `(lazy-seq ...)`, which is `(new clojure.lang.LazySeq (fn* [] ...))`
+   -- a `:new` over a closure -- and the loop's `.nth` and `.add` are
+   `:dot` interop nodes, all three handed to the interpreter. In order,
+   each gated and measured on into/map with compiled core:
+   a. `:fn` -- a compiled closure. Each inner fn is its own procedure in
+      the file (fn-procedure, sharing the outer fn's pool), registered
+      at install with no Var (`clotran_register_proc`); its creation
+      site calls `clotran_make_closure` with the template's (outer ->
+      inner) capture pairs, so the closure is an OBJ_COMPILED holding
+      its captured values, inner slots and self slot. `call_compiled`
+      records the fn it calls in the thread's context and the inner
+      procedure's prologue copies its captures from it
+      (`clotran_captures`) before anything else runs. The HOST's pool
+      walk (Eval.f90 pool_walk) must treat N_FN as compiled and descend
+      into its arity bodies in step, or the loader refuses the library.
+      BUILT 2026-09-25: compiler-check 165 of 165 (nine closure cases),
+      and with compiled core installed language_test passes and the
+      derived suite is 2880 of 2880. It found one thing: a future's
+      thread started its fn by bind_closure, interpreted closures only,
+      and under compiled core binding-conveyor-fn's is compiled -- a
+      task now applies anything else. into/map 1729 -> 1679 ms and
+      reduce 85 -> 78 with compiled core: map's closure is still inside
+      the `(new LazySeq ...)` that b is for.
+   b. `(new clojure.lang.LazySeq closure)` -- `clotran_make_lazy`, the
+      OBJ_LAZY the interpreter builds; the forcer calls its thunk
+      through `apply`, which already runs compiled fns.
+   c. `:dot` -- interop calls from compiled code, through the host's
+      own dispatch.
+   And fetching the stack once per generated procedure, passed to every
+   runtime call: the thread-key lookups are ~20% of a compiled call.
 2. The heap image (step 5, stage 3). Saving the heap after compiled
    core loads saves the pool with it, so installing compiled code stops
    re-analysing (half a second for core today) and startup stops being

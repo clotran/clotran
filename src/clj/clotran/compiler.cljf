@@ -124,6 +124,24 @@
        import :: c_int
        integer(c_int), value :: dst, var
      end subroutine clotran_deref
+     function clotran_register_proc(name, namen, fp) bind(C, name=\"clotran_register_proc\") result(h)
+       import :: c_int, c_char, c_funptr
+       character(kind=c_char), intent(in) :: name(*)
+       integer(c_int), value :: namen
+       type(c_funptr), value :: fp
+       integer(c_int) :: h
+     end function clotran_register_proc
+     subroutine clotran_make_closure(dst, h, arity, name, namen, fr, pairs, npairs, selfslot) &
+          bind(C, name=\"clotran_make_closure\")
+       import :: c_int, c_char
+       integer(c_int), value :: dst, h, arity, namen, fr, npairs, selfslot
+       character(kind=c_char), intent(in) :: name(*)
+       integer(c_int), intent(in) :: pairs(*)
+     end subroutine clotran_make_closure
+     subroutine clotran_captures(fr) bind(C, name=\"clotran_captures\")
+       import :: c_int
+       integer(c_int), value :: fr
+     end subroutine clotran_captures
      function clotran_eval_node(dst, node, fr) bind(C, name=\"clotran_eval_node\") result(st)
        import :: c_int
        integer(c_int), value :: dst, node, fr
@@ -205,7 +223,7 @@ end module clotran_rt_decl
 (def ^:private compiled-ops
   "The node kinds the generator emits code for. Everything else goes
   through the escape hatch, which is slower and still correct."
-  #{:const :local :if :do :call :var :let :loop :recur})
+  #{:const :local :if :do :call :var :let :loop :recur :fn})
 
 
 (defn- pooled
@@ -895,6 +913,8 @@ end module clotran_rt_decl
                       lines)
               ["if (nrel /= 0) call clotran_reacquire(nme, nrel)"]))))
 
+(declare fn-procedure)
+
 (defn- gen
   "One node, as a VALUE. Answers [code slot state]: the statements that
   compute it, the slot its value lands in, and the state after."
@@ -961,6 +981,29 @@ end module clotran_rt_decl
                                    (if (zero? n) 1 (dec (first blk))) ", " n "_c_int)")]
                              err-return)
                      r st]))
+
+          ;; A CLOSURE. Its fn is a procedure of its own in this file,
+          ;; sharing this fn's pool, registered at install with no Var;
+          ;; here it is made from its handle and the captured locals --
+          ;; written back to the frame first if a Fortran variable holds
+          ;; them. See ClotranABI's clotran_make_closure.
+          :fn (let [[nm _ caps _ selfslot] (:p1 nd)
+                    n (swap! (:counter st) inc)
+                    isym (str (:prefix st) "_" n)
+                    who (str (:who st) "/" (or nm (str "fn" n)))
+                    proc (fn-procedure isym who (:p1 nd) nil (:offset st) (:pool-list st)
+                                       {:closure? true :counter (:counter st) :prefix (:prefix st)})
+                    [fc st] (flush-typed st)
+                    st (update st :inners (fnil into []) (cons (dissoc proc :inners) (:inners proc)))
+                    [r st] (fresh st)
+                    arr (if (seq caps)
+                          (str "[integer(c_int) :: " (str/join ", " caps) "]")
+                          "[integer(c_int) :: 0]")]
+                [(concat fc
+                         [(str "call clotran_make_closure(b + " r ", h_" isym ", " (:arity proc) "_c_int, ctext("
+                               (fort-str who) "), " (count who) "_c_int, b + 1, " arr ", "
+                               (quot (count caps) 2) "_c_int, " selfslot "_c_int)")])
+                 r st])
 
           :let (let [kids (:children nd) n (:i2 nd) outer (:env st)
                      [bc st] (bind-slots kids n (:p1 nd) {} st)
@@ -1183,14 +1226,17 @@ end module clotran_rt_decl
   count and picks here, as the interpreter's bind_closure does: an
   exact fixed arity first, then the variadic one if enough arguments
   came; failing both, Clojure's ArityException."
-  [sym who tmpl form offset pool]
+  [sym who tmpl form offset pool & [{:keys [closure? counter prefix]}]]
   (let [[_ arities _ nslots _ _] tmpl
-        pvecs (param-vectors form)
+        ;; an inner fn has no form of its own: no hints, boxed parameters
+        pvecs (if form (param-vectors form) (repeat []))
         ;; b+1 is the locals frame, b+2 .. b+1+P hold what the pool
         ;; supplies, and temporaries start after them
         pslots (into {} (map-indexed (fn [i p] [p (+ 2 i)]) pool))
         first-temp (+ 2 (count pool))
-        st0 {:next first-temp :high (dec first-temp) :pool pslots :flags []}
+        st0 {:next first-temp :high (dec first-temp) :pool pslots :flags []
+             :who who :offset offset :pool-list pool :counter (or counter (atom 0))
+             :prefix (or prefix (str "cc_" sym))}
         [branches st]
         (reduce (fn [[bs st] [ar pv]]
                   (let [[c st] (arity-code ar pv st)] [(conj bs [ar c]) st]))
@@ -1214,6 +1260,8 @@ end module clotran_rt_decl
                  (str "   call clotran_arity_error(nargs, ctext(" (fort-str who) "), " (count who) "_c_int)")
                  "end if"]))]
     {:arity (if single? (first (first arities)) -1)
+     :inners (:inners st [])
+     :who who
      :symbol sym
      :pool (mapv :value pool)
      :text
@@ -1225,6 +1273,7 @@ end module clotran_rt_decl
           "    st = 0\n"
           "    b = clotran_frame_enter(" (max 1 (:high st)) "_c_int)\n"
           "    call clotran_frame_new(b + 1, " nslots "_c_int)\n"
+          (when closure? "    call clotran_captures(b + 1)\n")
           (apply str (for [[p s] (sort-by val pslots)]
                        (str "    call clotran_pool_get(b + " s ", cf_pool, "
                             (+ offset (- s 2)) "_c_int)\n"
@@ -1256,7 +1305,8 @@ end module clotran_rt_decl
                      (let [nm (fort-ident (str fn-name))]
                        (str "cf" idx "_" (subs nm 0 (min 50 (count nm)))))
                      (str "cf_" (fort-ident (str ns-name)) "_" (fort-ident (str fn-name))))
-               proc (fn-procedure sym (str ns-name "/" fn-name) tmpl form offset pool)]
+               proc (fn-procedure sym (str ns-name "/" fn-name) tmpl form offset pool
+                                  {:prefix (str "cc" (or idx 0))})]
            (assoc proc :ns ns-name :name fn-name :fingerprint fingerprint)))))))
 
 (defn- manifest-text
@@ -1303,9 +1353,12 @@ end module clotran_rt_decl
        "  integer(c_int), save :: cf_pool = 0\n"
        (when manifest
          "  character(kind=c_char), allocatable, target, save :: manifest_buf(:)\n")
+       ;; each compiled closure's procedure handle, set at install
+       (apply str (for [p procs q (:inners p)]
+                    (str "  integer(c_int), save :: h_" (:symbol q) " = 0\n")))
        "contains\n"
        (when manifest (manifest-text manifest))
-       (str/join "\n" (map :text procs))
+       (str/join "\n" (map :text (concat procs (mapcat :inners procs))))
        "end module " mod-name "\n"
        "\n! The one symbol the loader knows, forever.\n"
        "subroutine clotran_install(pool) bind(C, name=\"clotran_install\")\n"
@@ -1316,6 +1369,10 @@ end module clotran_rt_decl
        "  integer(c_int), value :: pool\n"
        "  integer(c_int) :: st\n"
        "  cf_pool = pool\n"
+       (apply str
+              (for [p procs q (:inners p)]
+                (str "  h_" (:symbol q) " = clotran_register_proc(ctext(" (fort-str (:who q (str (:symbol q)))) "), "
+                     (count (:who q (str (:symbol q)))) "_c_int, c_funloc(" (:symbol q) "))\n")))
        (apply str
               (for [p procs]
                 (str "  st = clotran_def_fn(ctext(" (fort-str (str (:ns p))) "), "
