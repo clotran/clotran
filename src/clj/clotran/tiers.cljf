@@ -221,8 +221,10 @@ Consumers that fuse: reduce, transduce, run!, every?, some, not-any?, count, int
 
           (and cn (producers cn))
           (if consuming
+            ;; a consumed producer consumes its own source: the whole chain fuses
             (concat (array-assumed cn args pos)
-                    (walk-all args (assoc ctx :consuming false :fusing true)))
+                    (walk-all (butlast args) (assoc ctx :consuming false :fusing true))
+                    (walk-all [(last args)] (assoc ctx :consuming true :fusing true)))
             (cons (finding :B "B001" pos (str "lazy seq kept: the result of `" cn "` is returned or stored, so it needs the collector")
                            (str "consume it where it is made, so the chain fuses into one loop: "
                                 "(reduce f init (" cn " ...)), (run! f (" cn " ...)), or (into-array (" cn " ...))"))

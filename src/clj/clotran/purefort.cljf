@@ -213,7 +213,176 @@ end module clotran_pure
           ")")
      :bool]))
 
+;;; ---- fused sequence chains -------------------------------------------
+;;
+;; (reduce f init (map g (filter p xs))) never builds a seq: it is ONE
+;; loop over the source, each step applied to the element in turn --
+;; the fusion Clojure's transducers spell out, done here from the plain
+;; form. A source is an array or a range of longs; steps are map, filter
+;; and remove; the consumer is reduce, count or every?.
+
+(declare emit-call emit-call*)
+
+(defn- inline-fn
+  "Apply an (fn ...) literal to [expr type] arguments by inlining its
+  body: its parameters bound to the arguments, its captured locals to
+  the outer ones they capture."
+  [fnode args env st]
+  (let [[_ arities captures] (:p1 fnode)
+        [nargs variadic start body] (first arities)]
+    (when (or (not= 1 (count arities)) variadic (not= nargs (count args)))
+      (decline "a function literal of other than one fixed arity matching its call"))
+    (when (some #(= :recur (:op %)) (filter map? (tree-seq coll? seq body)))
+      (decline "a function literal that recurs"))
+    (let [binds (map-indexed (fn [i [e t]] (let [v (fresh! st "e" t)] [(+ start i) v t (str v " = " e)])) args)
+          inner (merge (into {} (for [[outer in] (partition 2 captures)] [in (get env outer)]))
+                       (into {} (for [[slot v t] binds] [slot [v t]])))
+          [l e t] (emit body inner st)]
+      [(into (mapv #(nth % 3) binds) l) e t])))
+
+(defn- apply-fn
+  "The value of the function node f applied to [expr type] arguments."
+  [f args env st]
+  (case (:op f)
+    :fn (inline-fn f args env st)
+    (:var :const)
+    (let [slots (map (fn [_] (keyword (str "arg" (:n (swap! st update :n inc))))) args)
+          env2 (into env (map (fn [s [e t]] [s [e t]]) slots args))]
+      (emit-call {:op :call :children (cons f (map (fn [s] {:op :local :i2 s}) slots))} env2 st))
+    (decline "a function value that is not a literal or a name")))
+
+(defn- chain-of
+  "The chain a node is -- {:source [:array var type] or [:range arg-nodes],
+  :steps [[op fnode] ...] in the order they apply} -- or nil."
+  [nd env]
+  (loop [nd nd steps ()]
+    (case (:op nd)
+      :local (let [[v t] (get env (:i2 nd))]
+               (when (#{:doubles :longs} t) {:source [:array v t] :steps (vec steps)}))
+      :call (let [[h & as] (:children nd) op (op-name h)]
+              (cond
+                (and ('#{map filter remove} op) (= 2 (count as)))
+                (recur (second as) (cons [op (first as)] steps))
+                (and (= op 'range) (<= 1 (count as) 3))
+                {:source [:range as] :steps (vec steps)}
+                :else nil))
+      nil)))
+
+(defn- chain-loop
+  "A chain as loop parts: {:pre lines before the loop, :head the loop's
+  opening lines, which set the element and advance, :steps the per-element
+  step lines (a filtered-out element `cycle`s), :cur and :type of the
+  element after the steps, :close, :label}."
+  [{:keys [source steps]} env st]
+  (let [label (str "fz" (:n (swap! st update :n inc)))
+        [pre head elem et]
+        (case (first source)
+          :array (let [[_ v t] source
+                       k (fresh! st "k" :long)
+                       et (if (= t :doubles) :double :long)
+                       e (fresh! st "e" et)]
+                   [[] [(str label ": do " k " = 1, size(" v ", kind=int64)")
+                        (str "   " e " = " v "(" k ")")]
+                    e et])
+          :range (let [[ls es ts] (emit-args (second source) env st)
+                       _ (when-not (every? #{:long} ts) (decline "a range of other than longs"))
+                       [s e step] (case (count es) 1 ["0_int64" (first es) "1_int64"]
+                                    2 [(first es) (second es) "1_int64"]
+                                    es)
+                       _ (when (= step "0_int64") (decline "(range a b 0) never ends"))
+                       k (fresh! st "k" :long) ev (fresh! st "k" :long) sv (fresh! st "k" :long)
+                       el (fresh! st "e" :long)]
+                   ;; ponytail: k + step can overflow at the very ends of long
+                   [(into ls [(str k " = " s) (str ev " = " e) (str sv " = " step)])
+                    [(str label ": do while ((" sv " > 0 .and. " k " < " ev ") .or. (" sv " < 0 .and. " k " > " ev "))")
+                     (str "   " el " = " k)
+                     ;; advance BEFORE the steps, so a filter's `cycle` cannot skip it
+                     (str "   " k " = " k " + " sv)]
+                    el :long]))
+        [step-lines cur ct]
+        (reduce (fn [[ls ce ct] [op f]]
+                  (let [[l e t] (apply-fn f [[ce ct]] env st)]
+                    (if (= op 'map)
+                      (let [v (fresh! st "e" t)]
+                        [(-> ls (into l) (conj (str v " = " e))) v t])
+                      ;; filter keeps and remove drops what is truthy; a number is truthy
+                      (let [truthy (if (= t :bool) e ".true.")
+                            test (if (= op 'filter) (str "(.not. " truthy ")") truthy)]
+                        [(-> ls (into l) (conj (str "if " test " cycle " label))) ce ct]))))
+                [[] elem et] steps)]
+    {:pre pre :head head :steps step-lines :cur cur :type ct
+     :close [(str "end do " label)] :label label}))
+
+(defn- lower-consumer
+  "reduce, count or every? over a chain, as one loop: [lines expr type],
+  or nil when the call is not a consumer of a chain."
+  [op args env st]
+  (let [coll (last args)
+        ch (chain-of coll env)]
+    (when ch
+      (let [{:keys [pre head steps cur type close label]} (chain-loop ch env st)
+            indent #(map (fn [l] (str "   " l)) %)
+            loop-lines (fn [inner] (vec (concat pre head (indent steps) (indent inner) close)))]
+        (case op
+          reduce
+          (let [[f init] (if (= 3 (count args)) [(first args) (second args)] [(first args) nil])]
+            (if init
+              (let [[il ie it] (emit init env st)
+                    acc (fresh! st "s" it)
+                    [fl fe ft] (apply-fn f [[acc it] [cur type]] env st)]
+                (when (not= ft it)
+                  (decline (str "reduce's accumulator starts as a " (name it) " and becomes a " (name ft)
+                                ": start it as a " (name ft) " (0.0, not 0)")))
+                [(into (conj (vec il) (str acc " = " ie)) (loop-lines (conj (vec fl) (str acc " = " fe))))
+                 acc it])
+              ;; no init: the first element is the start, and an empty chain
+              ;; answers (f) -- which must have the elements' type
+              (let [zero (try (apply-fn f [] env st)
+                              (catch Exception e (if (::decline (ex-data e)) nil (throw e))))
+                    ;; (f) that cannot be called is Clojure's ArityException when
+                    ;; the chain is empty -- (reduce max []) -- named as the JVM names it
+                    fname (when (= :var (:op f)) (#'tiers/var-sym (:p1 f)))
+                    _ (when-not (or zero fname)
+                        (decline "reduce with no init over a function literal that takes no zero arguments"))
+                    [zl ze zt] (or zero
+                                   [[] (case type :double "0.0d0" :long "0_int64" (decline "reduce over booleans"))
+                                    type])
+                    ;; only after the loop is it known whether the chain was empty
+                    after (when-not zero
+                            [(str "if (.not. STARTED) call cl_fail('Wrong number of args (0) passed to: " fname "')")])
+                    _ (when (not= zt type)
+                        (decline (str "reduce with no init answers (f), a " (name zt) ", for an empty chain of "
+                                      (name type) "s: give it an init of the elements' type")))
+                    acc (fresh! st "s" type)
+                    started (fresh! st "b" :bool)
+                    [fl fe ft] (apply-fn f [[acc type] [cur type]] env st)]
+                (when (not= ft type) (decline "reduce's function changes the elements' type"))
+                [(-> (conj (vec zl) (str acc " = " ze) (str started " = .false."))
+                     (into (loop-lines (concat [(str "if (" started ") then")]
+                                               (map #(str "   " %) fl)
+                                               [(str "   " acc " = " fe) "else" (str "   " acc " = " cur)
+                                                (str "   " started " = .true.") "end if"])))
+                     (into (map #(str/replace % "STARTED" started) after)))
+                 acc type])))
+          count
+          (let [n (fresh! st "s" :long)]
+            [(into [(str n " = 0_int64")] (loop-lines [(str n " = " n " + 1_int64")])) n :long])
+          every?
+          (let [[pl pe pt] (apply-fn (first args) [[cur type]] env st)
+                r (fresh! st "b" :bool)]
+            [(into [(str r " = .true.")]
+                   (loop-lines (if (= pt :bool)
+                                 (concat pl [(str "if (.not. " pe ") then") (str "   " r " = .false.") (str "   exit " label) "end if"])
+                                 pl)))
+             r :bool])
+          nil)))))
+
 (defn- emit-call [nd env st]
+  (or (let [[head & args] (:children nd) op (op-name head)]
+        (when ('#{reduce count every?} op) (lower-consumer op args env st)))
+      (emit-call* nd env st)))
+
+(defn- emit-call* [nd env st]
   (let [[head & args] (:children nd)
         op (op-name head)
         [ls es ts] (emit-args args env st)
@@ -259,7 +428,7 @@ end module clotran_pure
         (decline (str op " of doubles is not lowered yet")))
 
       (#{'max 'min} op)
-      (if (apply = ts)
+      (if (and (seq ts) (apply = ts))
         (done (str (name op) "(" (str/join ", " es) ")") (first ts))
         (decline (str op " of a long and a double: Clojure answers whichever wins, with its own type")))
 
@@ -460,7 +629,15 @@ end module clotran_pure
                                      a (if (and (= :call (:op a)) (= 'clotran-array-cast (op-name (first (:children a)))))
                                          (second (:children a)) a)]
                                :when (and (#{'aget 'aset 'alength} op) (= :local (:op a)))]
-                           (:i2 a)))]
+                           (:i2 a)))
+        ;; ... and so is one a sequence function reads from
+        array-slots (into array-slots
+                          (for [nd nodes
+                                :when (and (map? nd) (= :call (:op nd))
+                                           ('#{map filter remove reduce count every?} (op-name (first (:children nd)))))
+                                :let [a (last (:children nd))]
+                                :when (= :local (:op a))]
+                            (:i2 a)))]
     (vec (map-indexed
           (fn [i p]
             (if-let [h ('{doubles [:doubles] longs [:longs] double [:double] long [:long]} (:tag (meta p)))]

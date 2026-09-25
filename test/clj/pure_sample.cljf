@@ -38,3 +38,19 @@
       (if (< i n)
         (let [d (- (aget a i) (aget b i))] (recur (inc i) (+ s (* d d))))
         s))))
+
+(defn sum-squares [xs] (reduce + 0.0 (map #(* % %) xs)))
+
+(defn sum-longs [xs] (reduce + xs))
+
+(defn count-big [xs] (count (filter #(> % 10) xs)))
+
+(defn sum-odd-squares [n] (reduce + 0 (map #(* % %) (filter odd? (range n)))))
+
+(defn all-positive? [xs] (every? pos? xs))
+
+(defn scaled-sum [xs k] (reduce + 0.0 (map (fn [x] (* k x)) xs)))
+
+(defn countdown-sum [n] (reduce + 0 (range n 0 -2)))
+
+(defn max-of [xs] (reduce max xs))
