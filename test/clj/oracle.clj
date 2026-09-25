@@ -2451,3 +2451,13 @@
 ;;; size is Java's NegativeArraySizeException naming the size.
 [(instance? (class (double-array 0)) (double-array 2)) (instance? (class (long-array 0)) (long-array 1))
  (msg-of #(double-array -1)) (msg-of #(long-array -3))]
+
+;;; An array's class is the JVM's name for it, one per element type and
+;;; rank, and prints as Clojure prints it (it was one class, and printing
+;;; it crashed).
+[(map #(str (class %)) [(double-array 1) (long-array 1) (int-array 1) (float-array 1) (boolean-array 1) (object-array 1) (make-array Integer/TYPE 2 3)])
+ (pr-str (class (double-array 1))) (pr-str (class (make-array Integer/TYPE 2 3))) (pr-str (class (object-array 1)))
+ (instance? (class (double-array 0)) (double-array 2)) (instance? (class (long-array 0)) (double-array 2))
+ (.isArray (class (long-array 1))) (= (class (double-array 1)) (class (double-array 5)))]
+(expect-diff "DEVIATIONS 45: short, byte and char arrays have their storage kind's class")
+[(map #(str (class %)) [(short-array 1) (byte-array 1) (char-array 1)]) (bytes? (byte-array 1))]

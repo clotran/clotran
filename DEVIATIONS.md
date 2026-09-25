@@ -1364,36 +1364,32 @@ reads it IMMEDIATELY sees an answer Clojure would not have yet.
 **Removal**: the same thing that removes 38 -- real threads. Delivery
 becomes whatever the scheduler does, which is what Clojure's is.
 
-## 45. An array has ONE class, so `bytes?` cannot answer
+## 45. A short, byte or char array has its storage kind's class, so `bytes?` cannot answer
 
-`(class (byte-array 1))` is `array` here, and the same `array` for
-every element type; `(.getComponentType (class (byte-array 1)))` is
-nil. Clojure answers `[B` and `byte`.
+An array's class is the JVM's name for it -- `[D`, `[J`, `[I`, `[F`,
+`[Z`, `[Ljava.lang.Object;`, one `[` per dimension, so
+`(make-array Integer/TYPE 2 3)` is `[[I` -- and prints as Clojure prints
+it, `double/1`, `int/2` (2026-09-25; it was one class, `array`, for
+every array, and printing one crashed).
+
+The class follows the STORAGE kind, and three element types share
+another's: `short-array` and `byte-array` store `int4`, so they answer
+`[I` where the JVM answers `[S` and `[B`; `char-array` stores values, so
+it answers `[Ljava.lang.Object;` where the JVM answers `[C`. Fortran's
+narrow integer kinds buy nothing here and the values are checked on the
+way in.
 
 The consequence is `bytes?`, which core.clj writes as
 
     (-> x class .getComponentType (= Byte/TYPE))
 
-so it is FALSE for a byte array here. It is false for every other
-array too, so nothing is misidentified as bytes -- the answer is a
-wrong no, never a wrong yes.
-
-An array's storage width is real (`int4`, `real8`, `logical`,
-`value`), but it is a WIDTH, not a JVM primitive type: `byte-array` and
-`short-array` both store `int4`, because Fortran's narrow integer kinds
-buy nothing here and the values are checked on the way in. So even the
-width cannot tell `[B` from `[S`.
-
+so it is FALSE for a byte array here -- a wrong no, never a wrong yes.
 `bytes?` is not in the clojure.core/cljs.core intersection --
-ClojureScript has no byte array and no such predicate -- so this is
-Java showing through rather than the language, which is why it is a
-recorded deviation and not a bug.
+ClojureScript has no byte array -- so this is Java showing through.
 
-**Removal**: give OBJ_ARRAY an element-type field distinct from its
-storage width, make `class` answer a class per element type, and give
-those classes a component type. `aset`'s range checks already know the
-type; nothing else does.
-
+**Removal**: give OBJ_ARRAY an element type distinct from its storage
+width, name the class by it, and give classes a component type. `aset`'s
+range checks already know the type; nothing else does.
 
 ## 46. Data readers work in `clojure.edn` and nowhere else
 

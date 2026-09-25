@@ -229,7 +229,7 @@ module Eval
   integer, parameter :: B_LOADCOMPILED = 372, B_ALLNS = 373, B_POOLREG = 374
   integer, parameter :: B_LONGCAST_CHECKED = 375, B_SIMPLENAME = 376
   integer, parameter :: B_NUMLONG = 377, B_ARRAYCAST = 378, B_SPIT = 379
-  integer, parameter :: B_ASTPOOL = 380, B_POSITION = 381, B_READFORMS = 382
+  integer, parameter :: B_ASTPOOL = 380, B_POSITION = 381, B_READFORMS = 382, B_ARRAYTYPESYM = 383
 
   ! Compiler.CHAR_MAP, verbatim from the pinned clone: the characters
   ! a Clojure name may hold that a JVM member name may not. '.' is
@@ -8261,6 +8261,31 @@ contains
             call vs_leave(lb)
          end if
        end block
+    case (B_ARRAYTYPESYM)
+       ! clojure.lang.Util/arrayTypeToSymbol: an array class as the symbol
+       ! Clojure prints it with -- component/dimensions, double/1 for [D.
+       block
+         character(len=:), allocatable :: cn, comp
+         character(len=16) :: db
+         integer :: dims
+         a = strip_meta(gcv_nth(args, 0))
+         cn = gc_ref_text(a%ref)
+         dims = verify(cn, "[") - 1
+         select case (cn(dims + 1:))
+         case ("D"); comp = "double"
+         case ("J"); comp = "long"
+         case ("I"); comp = "int"
+         case ("F"); comp = "float"
+         case ("Z"); comp = "boolean"
+         case ("C"); comp = "char"
+         case ("B"); comp = "byte"
+         case ("S"); comp = "short"
+         case default
+            comp = cn(dims + 2:len(cn) - 1)   ! L<name>;
+         end select
+         write(db, '(I0)') dims
+         out = gc_sym(comp // "/" // trim(db), [vs_get(base + 1)])
+       end block
     case (B_POSITION)
        ! (clotran-position pos): a node's packed source position, as the
        ! analyser recorded it (clotran-ast's :pos), decoded to
@@ -8340,7 +8365,8 @@ contains
        ! (diff [1 2] (into-array [1 2])) say they differ.
        a = strip_meta(gcv_nth(args, 0))
        if (a%tag == GCT_CLASS) then
-          out = gc_bool(short_class_name(gc_ref_text(a%ref)) == "array")
+          out = gc_bool(short_class_name(gc_ref_text(a%ref)) == "array" .or. &
+               index(gc_ref_text(a%ref), "[") == 1)
        else
           out = gc_bool(gc_kind(a) == OBJ_ARRAY)
        end if
@@ -11840,6 +11866,26 @@ contains
     end if
   end function array_own_stride
 
+  ! An array's class, as the JVM names it: [D a double[], [J a long[],
+  ! [[I an int[][] -- one [ per dimension -- and [Ljava.lang.Object; an
+  ! Object[]. short and byte arrays are int4 here (DEVIATIONS 45), so
+  ! they answer [I.
+  function array_class_name(v) result(s)
+    type(gc_value), intent(in) :: v
+    character(len=:), allocatable :: s
+    character(len=:), allocatable :: kind, comp
+    kind = gcna_kind(gc_i1(v))
+    select case (kind)
+    case ("real8");   comp = "D"
+    case ("int8");    comp = "J"
+    case ("int4");    comp = "I"
+    case ("real4");   comp = "F"
+    case ("logical"); comp = "Z"
+    case default;     comp = "Ljava.lang.Object;"
+    end select
+    s = repeat("[", max(1, array_own_rank(v))) // comp
+  end function array_class_name
+
   integer function array_own_rank(arr)
     type(gc_value), intent(in) :: arr
     type(gc_value) :: sl
@@ -12717,6 +12763,14 @@ contains
     ! class -- Object, String, CharSequence -- so java.lang comes off
     ! first. Everything else keeps its package.
     c = short_class_name(gc_ref_text(cls%ref))
+    ! an array class: the same element type and the same rank
+    if (len(c) > 0) then
+       if (c(1:1) == "[") then
+          yes = gc_kind(strip_meta(v)) == OBJ_ARRAY
+          if (yes) yes = (array_class_name(strip_meta(v)) == c)
+          return
+       end if
+    end if
     t = type_name(v)
     ! A deftype/reify instance is an instance of its own class and of
     ! everything its :implements list names -- which is the whole
@@ -13398,7 +13452,7 @@ contains
        case (OBJ_TASK);    s = "java.util.concurrent.FutureTask"
        case (OBJ_VOLATILE); s = "clojure.lang.Volatile"
        case (OBJ_ATOM);    s = "clojure.lang.Atom"
-       case (OBJ_ARRAY);   s = "array"
+       case (OBJ_ARRAY);   s = array_class_name(v)
        case (OBJ_INST);    s = class_text(v)
        case (OBJ_TYPE);    s = "Class"
        case default;       s = "Object"
