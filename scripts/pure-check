@@ -95,7 +95,8 @@
     (zeros -1)
     (ramp 4)
     (scaled-copy (double-array [1.0 2.0]) 2.0)
-    (alias-write (double-array [1.0 2.0]))])
+    (alias-write (double-array [1.0 2.0]))
+    (circle-area 2.0)])
 
 (defn arg-type [a]
   (cond (int? a) :long (double? a) :double (string? a) :string
@@ -116,7 +117,8 @@
       (str "(let [r (clotran.purefort/generate \"" src "\")]\n"
            "  (clotran-spit \"" f90 "\" (:text r))\n"
            "  (println \"SIGS\" (pr-str (into {} (for [[s vs] (:emitted r)] [(name s) (mapv (juxt :ts :ret) vs)]))))\n"
-           "  (println \"SKIPPED\" (pr-str (into {} (for [[s why] (:skipped r)] [(name s) why])))))\n"
+           "  (println \"SKIPPED\" (pr-str (into {} (for [[s why] (:skipped r)] [(name s) why]))))\n"
+           "  (println \"PRUNED\" (pr-str (into {} (for [[s ts] (:pruned r)] [(name s) ts])))))\n"
            "(in-ns '" ns-name ")\n"
            (apply str (map-indexed
                        (fn [i c]
@@ -127,6 +129,15 @@
 (def sigs (some #(when (str/starts-with? % "SIGS ") (edn/read-string (subs % 5))) (str/split-lines out)))
 (def skipped (some #(when (str/starts-with? % "SKIPPED ") (edn/read-string (subs % 8))) (str/split-lines out)))
 (when-not sigs (println out) (println "pure-check: the generator did not run") (System/exit 1))
+;; a private function keeps only the versions its callers use: sq is
+;; called on a double alone, so its long version is gone and it is not public
+(let [pruned (some #(when (str/starts-with? % "PRUNED ") (edn/read-string (subs % 7))) (str/split-lines out))
+      text (slurp f90)]
+  (when-not (and (= (get pruned "sq") [[:long]])
+                 (not (str/includes? text "public :: sq\n"))
+                 (str/includes? text "public :: circle_area"))
+    (println "pure-check: private pruning is wrong:" (pr-str pruned))
+    (System/exit 1)))
 (defn parse-cases [out]
   (into {} (for [l (str/split-lines out) :let [m (re-matches #"CASE (\d+) (.*)" l)] :when m]
              [(parse-long (second m))

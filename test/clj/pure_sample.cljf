@@ -82,3 +82,7 @@
 (defn scaled-copy [xs k] (let [c (aclone xs)] (dotimes [i (alength c)] (aset c i (* k (aget c i)))) c))
 
 (defn alias-write [xs] (let [b xs] (aset b 0 99.0) (aget xs 0)))
+
+(defn- sq [x] (* x x))
+
+(defn circle-area [^double r] (* 3.0 (sq r)))

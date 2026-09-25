@@ -1049,6 +1049,19 @@ the versions, the report warns, with a `help:` suggesting the hint
 (`^doubles a`) that settles it. No hints in the common case; a hint
 exactly when the report says one would help.
 
+Built 2026-09-25 (`clotran compile --pure`, src/clj/clotran/purefort.cljf,
+checked by `scripts/pure-check` against clj under gfortran and flang, in
+`make test`): numbers, booleans, strings, arrays as values and results;
+loop/recur, let, if and cond; checked long arithmetic, casts, Math;
+fused map/filter/remove chains into reduce, count and every?, fn
+literals inlined with their captures; str and println, Fortran's way
+(DEVIATIONS 50); a function answering nil is a subroutine. Types: a
+hint, else what a same-file function takes where the parameter is
+passed, else by use; a public function keeps every version, a PRIVATE
+one only those reachable from a public one. Not yet: multiple arities,
+records of numbers as derived types, escape analysis for small
+collections, parallel loops (`do concurrent`, step 11).
+
 ## Decisions that still hold
 
 **The value type has no `FINAL`.** Copying a `cons_value` (nine
