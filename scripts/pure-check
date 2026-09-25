@@ -96,7 +96,9 @@
     (ramp 4)
     (scaled-copy (double-array [1.0 2.0]) 2.0)
     (alias-write (double-array [1.0 2.0]))
-    (circle-area 2.0)])
+    (circle-area 2.0)
+    (overrun 2)
+    (overrun 3)])
 
 (defn arg-type [a]
   (cond (int? a) :long (double? a) :double (string? a) :string
@@ -214,10 +216,10 @@
 
 ;; ---- build and run under both compilers ------------------------------
 
-(defn build [fc exe]
-  (let [r (shell {:out :string :err :string :continue true :dir (str work)}
-                 fc "-O2" (if (= fc "gfortran") "-ffree-line-length-none" "-O2")
-                 "pure.f90" "driver.f90" "-o" exe)]
+(defn build [fc exe flags]
+  (let [r (apply shell {:out :string :err :string :continue true :dir (str work)}
+                 fc "-O2" (concat (when (= fc "gfortran") ["-ffree-line-length-none"]) flags
+                                  ["pure.f90" "driver.f90" "-o" exe]))]
     (when-not (zero? (:exit r))
       (println "BUILD FAILED with" fc) (println (:err r)) (System/exit 1))))
 
@@ -242,7 +244,10 @@
                             :else (Double/parseDouble v)))
                 "B" (= v "T"))
          printed])
-      [:threw (str/trim (first (str/split-lines (str (:err r) "\n"))))])))
+      ;; the message, without the compiler's error-stop prefix
+      [:threw (-> (first (str/split-lines (str (:err r) "\n")))
+                  (str/replace #"^(Fortran ERROR STOP: |ERROR STOP )" "")
+                  str/trim)])))
 
 (defn- trailing-number
   "A message split into its text and the number that ends it, if any."
@@ -282,8 +287,16 @@
              (and (= ta tb) (= na nb)))
            :else (= va vb)))))
 
-(def compilers [["gfortran" "pure_g"] ["flang" "pure_f"]])
-(doseq [[fc exe] compilers] (build fc exe))
+(def compilers
+  [["gfortran" "pure_g" []]
+   ["flang" "pure_f" []]
+   ;; and threaded: do concurrent run in parallel, the same answers
+   ["flang" "pure_fp" ["-fopenmp" "-fdo-concurrent-to-openmp=host"]]
+   ["gfortran" "pure_gp" ["-fopenmp" "-ftree-parallelize-loops=4"]]])
+(doseq [[fc exe flags] compilers] (build fc exe flags))
+(when-not (re-find #"(?m)^\s*do concurrent \(" (slurp f90))
+  (println "pure-check: no amap came out as do concurrent")
+  (System/exit 1))
 
 (def fails (atom 0))
 (def ran (atom 0))
@@ -294,12 +307,12 @@
     (let [want (jvm i)]
       (when-not (same? want (interp i))
         (println "NOTE interpreter differs from clj:" (pr-str c) (pr-str (interp i)) "vs" (pr-str want)))
-      (doseq [[fc exe] compilers]
+      (doseq [[fc exe _] compilers]
         (swap! ran inc)
         (let [got (run-case exe i)]
           (when-not (same? want got)
             (swap! fails inc)
-            (println "DIFFER" fc (pr-str c))
+            (println "DIFFER" exe (pr-str c))
             (println "   clj (JVM)  :" (pr-str want))
             (println "   pure       :" (pr-str got))))))))
 

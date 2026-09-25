@@ -1565,3 +1565,18 @@ gets on the JVM. Pure Fortran does the same.
 **Removal**: track, per value, whether the JVM would have it primitive
 (the compiler's type inference already follows Clojure's rules), and
 choose the message by that.
+
+## 52. A parallel loop reports whichever failing iteration stops first
+
+`amap`, and a loop of the same shape, compile to `do concurrent` in pure
+Fortran (PLAN.md step 11), and a threaded build runs the iterations at
+once. When more than one iteration would fail -- an index out of bounds,
+a long overflow -- Clojure reports the LOWEST index, because it runs them
+in order; a threaded build reports whichever fails first in time. The
+program stops either way, and a single failing iteration reports the
+same message on every build (`scripts/pure-check` runs each case
+threaded, under flang and gfortran, and compares).
+
+**Removal**: record the failing index per iteration and report the
+lowest after the loop -- which means not stopping at the first failure,
+and a pure procedure cannot defer an `error stop`.

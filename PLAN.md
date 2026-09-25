@@ -934,6 +934,18 @@ ran a test loop 3.2x faster on 10 threads; gfortran's
 `-ftree-parallelize-loops` did not parallelize it at all. The same
 source is the GPU door later (nvfortran `-stdpar=gpu`, flang `=device`).
 
+**Built 2026-09-25**: `amap`, and a loop of its shape -- index from 0,
+one `aset` per iteration at that index, an element expression that is
+pure and does not read the result -- compiles to `do concurrent` in pure
+Fortran, each iteration's temporaries in a `block`. The support module
+and every generated version that does not print or write a parameter
+are `pure`. Measured: a heavy element (four nested sin and cos) over 20
+million doubles, 0.929 s serial to 0.190 s with flang
+`-fopenmp -fdo-concurrent-to-openmp=host` on 8+2 cores, the same sum; a
+light element gains only 2.0x, because the copies around the loop are
+serial. `scripts/pure-check` builds every case threaded under flang and
+gfortran too.
+
 **Floating-point reductions stay explicit.** Addition of doubles is not
 associative in any language: `(+ (+ 0.1 0.2) 0.3)` is
 0.6000000000000001 and `(+ 0.1 (+ 0.2 0.3))` is 0.6, in clj and in both

@@ -86,3 +86,5 @@
 (defn- sq [x] (* x x))
 
 (defn circle-area [^double r] (* 3.0 (sq r)))
+
+(defn overrun [n] (let [a (double-array 2)] (loop [i 0] (if (< i n) (do (aset a i 1.0) (recur (inc i))) a))))

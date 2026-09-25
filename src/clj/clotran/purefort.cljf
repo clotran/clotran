@@ -26,31 +26,35 @@
 (def support-module
   "The few checked operations every pure module shares. Plain Fortran."
   "module clotran_pure
-  use iso_fortran_env, only: int64, real64, error_unit
+  use iso_fortran_env, only: int64, real64
   implicit none
   integer, parameter :: k16 = selected_int_kind(38)
 contains
-  subroutine cl_fail(msg)
+  ! Clojure's exception, as the program's end: error stop with its message.
+  ! Pure (Fortran 2018 allows error stop in a pure procedure), so every
+  ! helper here can be called from inside do concurrent. Each compiler
+  ! prefixes the message its own way (gfortran ERROR STOP, flang Fortran
+  ! ERROR STOP:).
+  pure subroutine cl_fail(msg)
     character(len=*), intent(in) :: msg
-    write(error_unit, '(a)') msg
-    error stop 1
+    error stop msg
   end subroutine cl_fail
   ! Clojure's long arithmetic throws on overflow (Numbers.add, multiply)
-  function cl_add(a, b) result(r)
+  pure function cl_add(a, b) result(r)
     integer(int64), intent(in) :: a, b
     integer(int64) :: r
     if ((b > 0 .and. a > huge(a) - b) .or. (b < 0 .and. a < -huge(a) - 1_int64 - b)) &
          call cl_fail('long overflow')
     r = a + b
   end function cl_add
-  function cl_sub(a, b) result(r)
+  pure function cl_sub(a, b) result(r)
     integer(int64), intent(in) :: a, b
     integer(int64) :: r
     if ((b < 0 .and. a > huge(a) + b) .or. (b > 0 .and. a < -huge(a) - 1_int64 + b)) &
          call cl_fail('long overflow')
     r = a - b
   end function cl_sub
-  function cl_mul(a, b) result(r)
+  pure function cl_mul(a, b) result(r)
     integer(int64), intent(in) :: a, b
     integer(int64) :: r
     integer(k16) :: p
@@ -58,13 +62,13 @@ contains
     if (p > int(huge(a), k16) .or. p < -int(huge(a), k16) - 1) call cl_fail('long overflow')
     r = int(p, int64)
   end function cl_mul
-  function cl_neg(a) result(r)
+  pure function cl_neg(a) result(r)
     integer(int64), intent(in) :: a
     integer(int64) :: r
     if (a == -huge(a) - 1_int64) call cl_fail('long overflow')
     r = -a
   end function cl_neg
-  function cl_quot(a, b) result(r)
+  pure function cl_quot(a, b) result(r)
     integer(int64), intent(in) :: a, b
     integer(int64) :: r
     if (b == 0) call cl_fail('Divide by zero')
@@ -74,7 +78,7 @@ contains
        r = a / b
     end if
   end function cl_quot
-  function cl_rem(a, b) result(r)
+  pure function cl_rem(a, b) result(r)
     integer(int64), intent(in) :: a, b
     integer(int64) :: r
     if (b == 0) call cl_fail('Divide by zero')
@@ -85,14 +89,14 @@ contains
     end if
   end function cl_rem
   ! clojure.core/mod: the remainder takes the divisor's sign
-  function cl_mod(a, b) result(r)
+  pure function cl_mod(a, b) result(r)
     integer(int64), intent(in) :: a, b
     integer(int64) :: r
     r = cl_rem(a, b)
     if (r /= 0 .and. ((r < 0) .neqv. (b < 0))) r = r + b
   end function cl_mod
   ! RT.longCast of a double: in range, truncated toward zero
-  function cl_long_of(x) result(r)
+  pure function cl_long_of(x) result(r)
     real(real64), intent(in) :: x
     integer(int64) :: r
     character(len=32) :: buf
@@ -104,7 +108,7 @@ contains
     end if
     r = int(x, int64)
   end function cl_long_of
-  subroutine cl_bounds(i, n)
+  pure subroutine cl_bounds(i, n)
     integer(int64), intent(in) :: i, n
     character(len=24) :: bi, bn
     if (i < 0 .or. i >= n) then
@@ -115,7 +119,7 @@ contains
   end subroutine cl_bounds
   ! (double-array n), (long-array n): zeros; a negative size is Java's
   ! NegativeArraySizeException, whose message is the size
-  function cl_dzeros(n) result(r)
+  pure function cl_dzeros(n) result(r)
     integer(int64), intent(in) :: n
     real(real64), allocatable :: r(:)
     character(len=24) :: b
@@ -126,7 +130,7 @@ contains
     allocate(r(n))
     r = 0.0_real64
   end function cl_dzeros
-  function cl_lzeros(n) result(r)
+  pure function cl_lzeros(n) result(r)
     integer(int64), intent(in) :: n
     integer(int64), allocatable :: r(:)
     character(len=24) :: b
@@ -164,7 +168,7 @@ contains
     p = len(s) + 1
   end function cl_charpos
   ! (subs s a b): String.substring's bounds check, then the characters
-  function cl_subs(s, a, b) result(r)
+  pure function cl_subs(s, a, b) result(r)
     character(len=*), intent(in) :: s
     integer(int64), intent(in) :: a, b
     character(len=:), allocatable :: r
@@ -178,21 +182,21 @@ contains
     r = s(cl_charpos(s, a):cl_charpos(s, b) - 1)
   end function cl_subs
   ! numbers and booleans as text, Fortran's way (DEVIATIONS 50)
-  function cl_lstr(x) result(r)
+  pure function cl_lstr(x) result(r)
     integer(int64), intent(in) :: x
     character(len=:), allocatable :: r
     character(len=24) :: b
     write(b, '(i0)') x
     r = trim(b)
   end function cl_lstr
-  function cl_dstr(x) result(r)
+  pure function cl_dstr(x) result(r)
     real(real64), intent(in) :: x
     character(len=:), allocatable :: r
     character(len=32) :: b
     write(b, '(es24.16e3)') x
     r = trim(adjustl(b))
   end function cl_dstr
-  function cl_bstr(x) result(r)
+  pure function cl_bstr(x) result(r)
     logical, intent(in) :: x
     character(len=:), allocatable :: r
     character(len=1) :: b
@@ -638,10 +642,10 @@ end module clotran_pure
                        :else (str/join " // ' ' // " parts))]
         (case op
           str (done text :string)
-          println [(conj ls (str "write(*, '(a)') " text)) "" :nil]
-          print [(conj ls (str "write(*, '(a)', advance='no') " text)) "" :nil]))
+          println (do (swap! st assoc :impure true) [(conj ls (str "write(*, '(a)') " text)) "" :nil])
+          print (do (swap! st assoc :impure true) [(conj ls (str "write(*, '(a)', advance='no') " text)) "" :nil])))
 
-      (= op 'newline) [(conj ls "write(*, '(a)') ''") "" :nil]
+      (= op 'newline) (do (swap! st assoc :impure true) [(conj ls "write(*, '(a)') ''") "" :nil])
 
       (and (= op 'count) (= 1 n) (= :string (first ts)))
       (done (str "cl_nchars(" (first es) ")") :long)
@@ -671,12 +675,83 @@ end module clotran_pure
             rt (get sig ts)]
         (when-not rt (decline (str "`" op "` has no version for " (pr-str (mapv name ts)))))
         (swap! st update :calls (fnil conj #{}) [op ts])
+        (when (contains? (:impure-versions @st) [op ts]) (swap! st assoc :impure true))
         (if (= rt :nil)
           ;; a function answering nil is a subroutine: called, not evaluated
           [(conj ls (str "call " (fort-ident (name op)) "(" (str/join ", " es) ")")) "" :nil]
           (done (str (fort-ident (name op)) "(" (str/join ", " es) ")") rt)))
 
       :else (decline (str "calls `" (or op (:op head)) "`, which is not lowered yet")))))
+
+(defn- not-in-fns
+  "Every node under nd, not descending into fn literals -- their slots
+  are their own frame's."
+  [nd]
+  (filter #(and (map? %) (:op %))
+          (tree-seq #(and (coll? %) (not= :fn (:op %))) seq nd)))
+
+(defn- amap-parts
+  "The loop amap expands to (core.clj, verbatim):
+     (loop [idx 0] (if (< idx l) (do (aset ret idx expr) (recur (unchecked-inc idx))) ret))
+  as {:idx :lim :ret :expr}, or nil."
+  [nd]
+  (let [kids (:children nd) base (:p1 nd)]
+    (when (and (= 1 (:i2 nd)) (= :const (:op (first kids))) (= 0 (:p1 (first kids))))
+      (let [;; the loop's body is a do around the if
+            unwrap (fn [n] (if (and (= :do (:op n)) (= 1 (count (:children n)))) (first (:children n)) n))
+            body (unwrap (second kids))
+            [test then else] (:children body)
+            local? (fn [n slot] (and (= :local (:op n)) (= slot (:i2 n))))
+            ;; aset's inline form casts the index: (int i)
+            index? (fn [n slot] (or (local? n slot)
+                                    (and (= :call (:op n)) (= 'int (op-name (first (:children n))))
+                                         (local? (second (:children n)) slot))))]
+        (when (and (= :if (:op body)) (= :call (:op test)) (= '< (op-name (first (:children test))))
+                   (local? (second (:children test)) base)
+                   (= :do (:op then)) (= 2 (count (:children then)))
+                   (= :local (:op else)))
+          (let [[aset-call recur-node] (:children then)
+                [ah r i expr] (:children aset-call)
+                [inc-call] (:children recur-node)]
+            (when (and (= :call (:op aset-call)) (= 'aset (op-name ah))
+                       (local? r (:i2 else)) (index? i base)
+                       (= :recur (:op recur-node)) (= :call (:op inc-call))
+                       ('#{unchecked-inc inc} (op-name (first (:children inc-call))))
+                       (local? (second (:children inc-call)) base)
+                       ;; the element must not read the result array, nor recur
+                       (not-any? #(or (= :recur (:op %)) (local? % (:i2 else))) (not-in-fns expr)))
+              {:idx base :lim (nth (:children test) 2) :ret (:i2 else) :expr expr})))))))
+
+(defn- emit-amap
+  "amap as a DO CONCURRENT: every element independent, each iteration's
+  temporaries its own (declared in a block). Answers [lines ret-var type],
+  or nil when the element is not pure -- then the loop stays serial."
+  [{:keys [idx lim ret expr]} env st]
+  (let [[ll le lt] (emit lim env st)
+        [rv rt] (get env ret)]
+    (when (and (= lt :long) (#{:doubles :longs} rt))
+      (let [k (str "kc" (:n (swap! st update :n inc)))
+            before (count (:decls @st))
+            was-impure (:impure @st)
+            _ (swap! st assoc :impure false)
+            [el ee et] (emit expr (assoc env idx [k :long]) st)
+            inner (subvec (:decls @st) before)
+            impure? (:impure @st)
+            et-ok (or (= et (if (= rt :doubles) :double :long)) (and (= rt :doubles) (= et :long)))]
+        (swap! st (fn [s] (assoc s :impure was-impure :decls (subvec (:decls s) 0 before))))
+        (when (and (not impure?) et-ok)
+          [(concat ll
+                   [(str "do concurrent (integer(int64) :: " k " = 0:" le " - 1)")
+                    "   block"]
+                   (for [[v t] (distinct inner) :when (fort-type t)]
+                     (str "      " (if (#{:doubles :longs} t) (str (fort-type t) ", allocatable :: " v "(:)") (str (fort-type t) " :: " v))))
+                   (map #(str "      " %) el)
+                   ;; a hand-written loop may run past the array: Clojure throws there
+                   [(str "      call cl_bounds(" k ", size(" rv ", kind=int64))")
+                    (str "      " rv "(" k " + 1) = " (if (and (= rt :doubles) (= et :long)) (str "real(" ee ", real64)") ee))
+                    "   end block"
+                    "end do"])
+           rv rt])))))
 
 (defn- emit-tail
   "A node in tail position: its value handed to `finish` (a function
@@ -732,7 +807,9 @@ end module clotran_pure
                (-> ls (into (map second tmps))
                    (into (map (fn [[[v _]] [tmp _]] (str v " = " tmp)) pairs tmps))
                    (conj (str "cycle " label)))))
-    :loop (let [kids (:children nd) n (:i2 nd) base (:p1 nd)
+    :loop (if-let [[al ae at] (some-> (amap-parts nd) (emit-amap env st))]
+            (into (vec al) (finish ae at))
+          (let [kids (:children nd) n (:i2 nd) base (:p1 nd)
                 label (str "lp" (:n (swap! st update :n inc)))
                 [ls env' vars] (reduce (fn [[ls env vars] i]
                                          (let [[l e t] (emit (nth kids i) env st)
@@ -744,7 +821,7 @@ end module clotran_pure
                                        [[] env []] (range n))
                 body (emit-tail (nth kids n) (assoc env' :loop {:label label :vars vars}) st
                                 (fn [e t] (conj (vec (finish e t)) (str "exit " label))))]
-            (into ls (concat [(str label ": do")] (map #(str "   " %) body) [(str "end do " label)])))
+            (into ls (concat [(str label ": do")] (map #(str "   " %) body) [(str "end do " label)]))))
     ;; anything else is a value
     (let [[l e t] (emit nd env st)]
       (when (= t :none) (decline "recur is not in tail position"))
@@ -836,13 +913,13 @@ end module clotran_pure
 (defn- emit-version
   "One version of fname for parameter types ts: {:name :ret :text} or
   {:declined why}."
-  [fname fnode ts sigs]
+  [fname fnode ts sigs impure-versions]
   (try
     (let [tmpl (:p1 fnode)
           [[nargs variadic start body]] (second tmpl)
           _ (when variadic (decline "variadic"))
           _ (when (> (count (second tmpl)) 1) (decline "more than one arity"))
-          st (atom {:n 0 :decls [] :sigs sigs :written #{}})
+          st (atom {:n 0 :decls [] :sigs sigs :written #{} :impure-versions impure-versions})
           pnames (mapv #(str "p" %) (range nargs))
           ;; scalar parameters are copied into locals, so a recur can rebind them
           locals (mapv (fn [t] (when-not (#{:doubles :longs} t) (fresh! st "a" t))) ts)
@@ -867,11 +944,15 @@ end module clotran_pure
                        (if (#{:doubles :longs} t)
                          (str "    " (fort-type t) ", allocatable :: " v "(:)")
                          (str "    " (fort-type t) " :: " v)))
-          sub? (= rt :nil)]
-      {:name nm :ret rt :calls (:calls @st #{})
+          sub? (= rt :nil)
+          ;; PURE, so it can be called inside do concurrent: no printing,
+          ;; no write to a parameter array, nothing impure called
+          pure? (and (not (:impure @st)) (empty? (filter (set pnames) written)))
+          pre (if pure? "pure " "")]
+      {:name nm :ret rt :calls (:calls @st #{}) :pure pure?
        :text (str (if sub?
-                    (str "  subroutine " nm "(" (str/join ", " pnames) ")\n")
-                    (str "  function " nm "(" (str/join ", " pnames) ") result(r)\n"))
+                    (str "  " pre "subroutine " nm "(" (str/join ", " pnames) ")\n")
+                    (str "  " pre "function " nm "(" (str/join ", " pnames) ") result(r)\n"))
                   (apply str (for [[i t] (map-indexed vector ts)]
                                (str "    " (if (= t :string) "character(len=*), intent(in)" (fort-type t))
                                     (cond
@@ -924,15 +1005,16 @@ end module clotran_pure
                    combos (cartesian cands)]
                (if (> (count combos) version-limit)
                  (assoc-in acc [:skipped s] (str (count combos) " type combinations; hint some parameters (^double, ^doubles, ...) to settle them"))
-                 (let [vs (for [ts combos] (assoc (emit-version s fnode ts sigs) :ts ts))
+                 (let [vs (for [ts combos] (assoc (emit-version s fnode ts sigs (:impure acc)) :ts ts))
                        ok (remove :declined vs)]
                    (if (empty? ok)
                      (assoc-in acc [:skipped s] (str/join "; " (distinct (map :declined vs))))
                      (-> acc
                          (assoc-in [:emitted s] (vec ok))
                          (assoc-in [:sigs s] (into {} (map (fn [v] [(:ts v) (:ret v)]) ok)))
+                         (update :impure into (for [v ok :when (not (:pure v))] [s (:ts v)]))
                          (assoc-in [:dropped s] (vec (keep #(when (:declined %) [(:ts %) (:declined %)]) vs))))))))))
-         {:sigs {} :emitted {} :skipped {} :dropped {}}
+         {:sigs {} :emitted {} :skipped {} :dropped {} :impure #{}}
          defns)
         mod-name (str (fort-ident ns-name) "_pure")
         ;; A private function is called only from this file, so only the
