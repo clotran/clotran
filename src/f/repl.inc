@@ -21,6 +21,7 @@
   ! Reads, evaluates and prints until EOF or, nested, until a form has
   ! called clotran-resume; answers that command, or :continue at EOF.
   recursive function repl_loop(bm) result(cmd)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: bm
     type(gc_value) :: cmd, form, result
     type(gc_value) :: none(0)
@@ -29,6 +30,7 @@
     character(len=16) :: dbuf
     integer :: base, ios, size_read
 
+    tctx => ctx_self()
     repl_depth = repl_depth + 1
     base = vs_enter(3)
     call vs_set(base + 1, gc_root_get(global_env_root))
@@ -80,10 +82,10 @@
 
        call gce_clear_error()
        result = gce_analyze(vs_get(base + 2), vs_get(base + 1))
-       if (.not. has_error) result = gce_eval(result, vs_get(base + 1), none)
+       if (.not. tctx%has_error) result = gce_eval(result, vs_get(base + 1), none)
        call vs_set(base + 3, result)
        if (resume_pending) exit
-       if (has_error) then
+       if (tctx%has_error) then
           print '(A,A)', "error: ", gce_error()
           if (len(gce_trace()) > 0) write(*, '(A)', advance='no') gce_trace()
           cycle

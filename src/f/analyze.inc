@@ -366,11 +366,13 @@
 
   ! Analyses every form of a list or vector into a children vector.
   recursive function analyze_all(forms, sc, roots) result(out)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: forms, sc
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, nd, walk
     integer :: base, i, n
 
+    tctx => ctx_self()
     base = vs_enter(4)
     call vs_set(base + 1, forms)
     call vs_set(base + 2, sc)
@@ -380,7 +382,7 @@
        n = gcv_count(forms)
        do i = 0, n - 1
           nd = analyze(gcv_nth(vs_get(base + 1), i), vs_get(base + 2))
-          if (has_error) exit
+          if (tctx%has_error) exit
           out = gcv_conj(vs_get(base + 3), nd, [vs_get(base + 1), vs_get(base + 2), nd])
           call vs_set(base + 3, out)
        end do
@@ -389,7 +391,7 @@
        call vs_set(base + 4, walk)
        do while (gcl_count(vs_get(base + 4)) > 0)
           nd = analyze(gcl_first(vs_get(base + 4)), vs_get(base + 2))
-          if (has_error) exit
+          if (tctx%has_error) exit
           out = gcv_conj(vs_get(base + 3), nd, [vs_get(base + 1), vs_get(base + 2), nd])
           call vs_set(base + 3, out)
           walk = gcl_rest(vs_get(base + 4), [vs_get(base + 3)])
@@ -417,12 +419,14 @@
 
   ! One form to one node, in scope `sc`.
   recursive function analyze(form0, sc) result(nd)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: form0, sc
     type(gc_value) :: nd, form, head, kids, expanded, mvar
     integer :: base, slot
 
+    tctx => ctx_self()
     nd = gc_nil()
-    if (has_error) return
+    if (tctx%has_error) return
     base = vs_enter(6)
     call vs_set(base + 2, sc)
     form = form0
@@ -460,16 +464,16 @@
              nd = const_node(vs_get(base + 1), [vs_get(base + 2)])
           else
              nd = analyze_seq(vs_get(base + 1), vs_get(base + 2))
-             if (has_error) then
+             if (tctx%has_error) then
                 call trace_analysis_failure(vs_get(base + 1))
                 ! an analysis error names the innermost positioned form
-                if (gc_i2(vs_get(base + 1)) /= 0 .and. index(last_error, "  at ") == 0) &
-                     last_error = last_error // "  at " // gcr_position(gc_i2(vs_get(base + 1)))
+                if (gc_i2(vs_get(base + 1)) /= 0 .and. index(tctx%last_error, "  at ") == 0) &
+                     tctx%last_error = tctx%last_error // "  at " // gcr_position(gc_i2(vs_get(base + 1)))
              end if
              ! the source position, if the reader recorded one and the
              ! node has none of its own yet (a macro's expansion keeps
              ! the position of the form that was written)
-             if (.not. has_error .and. gc_kind(nd) == OBJ_AST) then
+             if (.not. tctx%has_error .and. gc_kind(nd) == OBJ_AST) then
                 if (gc_i2(vs_get(base + 1)) /= 0 .and. tag_of(gc_slot(nd, 4)) == GCT_NIL) &
                      call gc_set_slot(nd, 4, gc_int(gc_i2(vs_get(base + 1))))
              end if
@@ -477,7 +481,7 @@
        case (OBJ_VECTOR)
           kids = analyze_all(vs_get(base + 1), vs_get(base + 2), [vs_get(base + 1)])
           call vs_set(base + 3, kids)
-          if (.not. has_error) nd = mk_node(N_VECTOR, vs_get(base + 3), gc_nil(), gc_nil(), 0, &
+          if (.not. tctx%has_error) nd = mk_node(N_VECTOR, vs_get(base + 3), gc_nil(), gc_nil(), 0, &
                [vs_get(base + 1), vs_get(base + 2)])
        case (OBJ_MAP, OBJ_HAMT)
           nd = analyze_map(vs_get(base + 1), vs_get(base + 2))
@@ -485,7 +489,7 @@
           kids = analyze_all(set_elems(vs_get(base + 1), vs_get(base + 2)), vs_get(base + 2), &
                [vs_get(base + 1)])
           call vs_set(base + 3, kids)
-          if (.not. has_error) nd = mk_node(N_SET, vs_get(base + 3), gc_nil(), gc_nil(), 0, &
+          if (.not. tctx%has_error) nd = mk_node(N_SET, vs_get(base + 3), gc_nil(), gc_nil(), 0, &
                [vs_get(base + 1), vs_get(base + 2)])
        case default
           ! closures, builtins, vars, types: self-evaluating
@@ -498,7 +502,7 @@
     ! call to the builtin rather than to the NAME with-meta, so that a
     ! literal carrying metadata analyses the same during core.clj's
     ! bootstrap as after it.
-    if (.not. has_error .and. tag_of(vs_get(base + 5)) /= GCT_NIL &
+    if (.not. tctx%has_error .and. tag_of(vs_get(base + 5)) /= GCT_NIL &
          .and. gc_kind(nd) == OBJ_AST) then
        call vs_set(base + 6, nd)
        nd = meta_call_node(vs_get(base + 6), vs_get(base + 5), vs_get(base + 2))
@@ -522,15 +526,17 @@
   ! (with-meta value-node meta-form): the metadata map is ANALYSED,
   ! so ^{:zip/branch? branch?} closes over the local.
   recursive function meta_call_node(vnode, mform, sc) result(nd)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: vnode, mform, sc
     type(gc_value) :: nd, kids, mn
     integer :: base
+    tctx => ctx_self()
     base = vs_enter(5)
     call vs_set(base + 1, vnode)
     call vs_set(base + 2, mform)
     call vs_set(base + 3, sc)
     mn = analyze(vs_get(base + 2), vs_get(base + 3))
-    if (has_error) then
+    if (tctx%has_error) then
        nd = vs_get(base + 1)
        call vs_leave(base)
        return
@@ -553,10 +559,12 @@
 
   ! A map literal: children alternate key, value.
   recursive function analyze_map(form, sc) result(nd)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: form, sc
     type(gc_value) :: nd, kids, kn, vn
     type(gc_value), allocatable :: ks(:), vls(:)
     integer :: base, i
+    tctx => ctx_self()
     nd = gc_nil()
     base = vs_enter(4)
     call vs_set(base + 1, form)
@@ -566,15 +574,15 @@
     call vs_set(base + 3, kids)
     do i = 1, size(ks)
        kn = analyze(ks(i), vs_get(base + 2))
-       if (has_error) exit
+       if (tctx%has_error) exit
        kids = gcv_conj(vs_get(base + 3), kn, [vs_get(base + 1), vs_get(base + 2), kn])
        call vs_set(base + 3, kids)
        vn = analyze(vls(i), vs_get(base + 2))
-       if (has_error) exit
+       if (tctx%has_error) exit
        kids = gcv_conj(vs_get(base + 3), vn, [vs_get(base + 1), vs_get(base + 2), vn])
        call vs_set(base + 3, kids)
     end do
-    if (.not. has_error) nd = mk_node(N_MAP, vs_get(base + 3), gc_nil(), gc_nil(), 0, &
+    if (.not. tctx%has_error) nd = mk_node(N_MAP, vs_get(base + 3), gc_nil(), gc_nil(), 0, &
          [vs_get(base + 1), vs_get(base + 2)])
     call vs_leave(base)
   end function analyze_map
@@ -582,11 +590,13 @@
   ! A symbol: a local, a static field, a Var, a class literal -- in the
   ! order Compiler.analyzeSymbol tries them.
   recursive function analyze_symbol(sym, sc) result(nd)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: sym, sc
     type(gc_value) :: nd, var, v
     character(len=:), allocatable :: t
     integer :: base, slot, sl
 
+    tctx => ctx_self()
     nd = gc_nil()
     base = vs_enter(3)
     call vs_set(base + 1, sym)
@@ -604,7 +614,7 @@
        t = gc_ref_text(sym%ref)
        sl = index(t, "/")
        v = static_member(t(1:sl-1), t(sl+1:), vs_get(base + 1))
-       if (has_error) then
+       if (tctx%has_error) then
           call gce_clear_error()
           nd = fail_node("no such member: " // t, [vs_get(base + 1), vs_get(base + 2)])
        else
@@ -657,10 +667,12 @@
   ! The :inline fn of the Var `head` names, when its :inline-arities
   ! accept `argc`; nil otherwise. Compiler.isInline.
   recursive function inline_fn(head, argc) result(fn)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: head
     integer, intent(in) :: argc
     type(gc_value) :: fn, var, md, pred, ok
     integer :: base
+    tctx => ctx_self()
     fn = gc_nil()
     var = resolve_var(head, gc_nil())
     if (.not. gcn_is_var(var)) return
@@ -678,7 +690,7 @@
     if (pred%tag /= GCT_NIL) then
        ok = apply(pred, gcv_conj(gcv_empty([vs_get(base + 1), vs_get(base + 2), pred]), gc_int(int(argc, gc_ip)), &
             [vs_get(base + 1), vs_get(base + 2), pred]))
-       if (has_error .or. .not. truthy(ok)) fn = gc_nil()
+       if (tctx%has_error .or. .not. truthy(ok)) fn = gc_nil()
     end if
     if (fn%tag /= GCT_NIL) fn = vs_get(base + 2)
     call vs_leave(base)
@@ -705,10 +717,12 @@
   end function args_vector
 
   recursive function analyze_seq(form, sc) result(nd)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: form, sc
     type(gc_value) :: nd, head, mvar, expanded
     integer :: base
 
+    tctx => ctx_self()
     nd = gc_nil()
     base = vs_enter(4)
     call vs_set(base + 1, form)
@@ -735,14 +749,14 @@
           if (gcn_is_var(mvar)) then
              call vs_set(base + 3, mvar)
              call check_specs(vs_get(base + 3), vs_get(base + 1))
-             if (has_error) then
+             if (tctx%has_error) then
                 call vs_leave(base)
                 return
              end if
              mvar = vs_get(base + 3)
              call vs_set(base + 3, gcn_var_value(mvar))
              expanded = expand_macro(vs_get(base + 3), vs_get(base + 1), gc_nil(), mvar)
-             if (has_error) then
+             if (tctx%has_error) then
                 call vs_leave(base)
                 return
              end if
@@ -761,14 +775,14 @@
           ! in a loop costs no closure call. preserveTag is not done: a
           ! :tag on the form is a hint nothing here reads.
           mvar = inline_fn(head, gcl_count(vs_get(base + 1)) - 1)
-          if (has_error) then
+          if (tctx%has_error) then
              call vs_leave(base)
              return
           end if
           if (mvar%tag /= GCT_NIL) then
              call vs_set(base + 3, mvar)
              expanded = apply(vs_get(base + 3), args_vector(gcl_rest(vs_get(base + 1), [vs_get(base + 3)]), [vs_get(base + 3)]))
-             if (has_error) then
+             if (tctx%has_error) then
                 call vs_leave(base)
                 return
              end if
@@ -814,21 +828,23 @@
 
   ! (f a b) -> N_CALL with children [f a b].
   recursive function analyze_call(form, sc) result(nd)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: form, sc
     type(gc_value) :: nd, kids
     integer :: base
+    tctx => ctx_self()
     nd = gc_nil()
     base = vs_enter(3)
     call vs_set(base + 1, form)
     call vs_set(base + 2, sc)
     kids = analyze_all(vs_get(base + 1), vs_get(base + 2), [vs_get(base + 1)])
     call vs_set(base + 3, kids)
-    if (.not. has_error) then
+    if (.not. tctx%has_error) then
        kids = cast_array_arg(gcl_rest(vs_get(base + 1), [vs_get(base + 1)]), vs_get(base + 3), vs_get(base + 2), &
             [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
        call vs_set(base + 3, kids)
     end if
-    if (.not. has_error) nd = mk_node(N_CALL, vs_get(base + 3), gc_nil(), gc_nil(), 0, &
+    if (.not. tctx%has_error) nd = mk_node(N_CALL, vs_get(base + 3), gc_nil(), gc_nil(), 0, &
          [vs_get(base + 1), vs_get(base + 2)])
     call vs_leave(base)
   end function analyze_call
@@ -908,12 +924,14 @@
   ! evaluated (N_DOT), because eval_dot holds the instance rules: a
   ! deftype answers its own methods before any host member does.
   recursive function analyze_dot(form, sc) result(nd)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: form, sc
     type(gc_value) :: nd, args, target, rest, member, margs, kids, fnv, tn
     character(len=:), allocatable :: mname
     logical :: is_call
     integer :: base
 
+    tctx => ctx_self()
     nd = gc_nil()
     base = vs_enter(8)
     call vs_set(base + 1, form)
@@ -965,7 +983,7 @@
        if (lookup_local(vs_get(base + 2), target) < 0) then
           if (gc_kind(find_type(gc_ref_text(target%ref))) /= OBJ_TYPE .and. is_host_class(target)) then
              fnv = static_member(gc_ref_text(target%ref), mname, vs_get(base + 1))
-             if (has_error) then
+             if (tctx%has_error) then
                 ! Not a static of that class: a member of the CLASS
                 ! OBJECT, (.isAssignableFrom String Object) or (.getName
                 ! String), left to eval_dot below. A member neither has
@@ -987,7 +1005,7 @@
                 call vs_set(base + 7, kids)
                 kids = analyze_all(vs_get(base + 6), vs_get(base + 2), [vs_get(base + 1), vs_get(base + 7)])
                 call vs_set(base + 8, kids)
-                if (has_error) then
+                if (tctx%has_error) then
                    call vs_leave(base)
                    return
                 end if
@@ -1006,7 +1024,7 @@
           if (gc_kind(find_type(gc_ref_text(target%ref))) == OBJ_TYPE .or. is_class_name(target)) then
              kids = analyze_all(vs_get(base + 6), vs_get(base + 2), [vs_get(base + 1)])
              call vs_set(base + 7, kids)
-             if (.not. has_error) then
+             if (.not. tctx%has_error) then
                 nd = mk_node(N_DOT, vs_get(base + 7), vs_get(base + 5), vs_get(base + 4), &
                      merge(1, 0, is_call), [vs_get(base + 1), vs_get(base + 2)])
              end if
@@ -1019,7 +1037,7 @@
     ! An instance member: children [target args...]; the native it
     ! names, if any, cached in slot 3 for the executor's fast path.
     tn = analyze(vs_get(base + 4), vs_get(base + 2))
-    if (has_error) then
+    if (tctx%has_error) then
        call vs_leave(base)
        return
     end if
@@ -1030,14 +1048,14 @@
     call vs_set(base + 7, kids)
     kids = analyze_all(vs_get(base + 6), vs_get(base + 2), [vs_get(base + 1), vs_get(base + 7)])
     call vs_set(base + 8, kids)
-    if (has_error) then
+    if (tctx%has_error) then
        call vs_leave(base)
        return
     end if
     kids = concat_vecs(vs_get(base + 7), vs_get(base + 8), [vs_get(base + 1), vs_get(base + 2)])
     call vs_set(base + 7, kids)
     fnv = instance_member(mname, vs_get(base + 1))
-    if (has_error) then
+    if (tctx%has_error) then
        call gce_clear_error()
        fnv = gc_nil()
     end if
@@ -1051,9 +1069,11 @@
   ! name, looked up at run time so a redefined type is found); a host
   ! class goes to eval_new with its arguments evaluated (N_NEW).
   recursive function analyze_new(form, sc) result(nd)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: form, sc
     type(gc_value) :: nd, cls, kids, args
     integer :: base
+    tctx => ctx_self()
     nd = gc_nil()
     base = vs_enter(5)
     call vs_set(base + 1, form)
@@ -1070,7 +1090,7 @@
     kids = analyze_all(gcl_rest(vs_get(base + 3), [vs_get(base + 1)]), vs_get(base + 2), &
          [vs_get(base + 1), vs_get(base + 4)])
     call vs_set(base + 5, kids)
-    if (has_error) then
+    if (tctx%has_error) then
        call vs_leave(base)
        return
     end if
@@ -1182,16 +1202,18 @@
 
   ! A node of `kind` with one child.
   recursive function analyze_one(kind, form, sc) result(nd)
+    type(eval_ctx), pointer :: tctx
     integer, intent(in) :: kind
     type(gc_value), intent(in) :: form, sc
     type(gc_value) :: nd, c, kids
     integer :: base
+    tctx => ctx_self()
     nd = gc_nil()
     base = vs_enter(3)
     call vs_set(base + 1, form)
     call vs_set(base + 2, sc)
     c = analyze(vs_get(base + 1), vs_get(base + 2))
-    if (has_error) then
+    if (tctx%has_error) then
        call vs_leave(base)
        return
     end if
@@ -1203,9 +1225,11 @@
   end function analyze_one
 
   recursive function analyze_if(rest, sc) result(nd)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: rest, sc
     type(gc_value) :: nd, kids
     integer :: base
+    tctx => ctx_self()
     nd = gc_nil()
     base = vs_enter(3)
     call vs_set(base + 1, rest)
@@ -1217,7 +1241,7 @@
     end if
     kids = analyze_all(vs_get(base + 1), vs_get(base + 2), [vs_get(base + 1)])
     call vs_set(base + 3, kids)
-    if (.not. has_error) nd = mk_node(N_IF, vs_get(base + 3), gc_nil(), gc_nil(), 0, &
+    if (.not. tctx%has_error) nd = mk_node(N_IF, vs_get(base + 3), gc_nil(), gc_nil(), 0, &
          [vs_get(base + 1), vs_get(base + 2)])
     call vs_leave(base)
   end function analyze_if
@@ -1227,11 +1251,13 @@
   ! metadata (evaluated, like Compiler does) and init are children.
   ! i2: bit 1 = has an init, bit 2 = defmacro*.
   recursive function analyze_def(rest, sc, is_macro) result(nd)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: rest, sc
     logical, intent(in) :: is_macro
     type(gc_value) :: nd, nm, md, var, kids, c
     integer :: base, flags
 
+    tctx => ctx_self()
     nd = gc_nil()
     base = vs_enter(7)
     call vs_set(base + 1, rest)
@@ -1308,7 +1334,7 @@
     if (gcl_count(vs_get(base + 7)) > 0) then
        flags = flags + 1
        c = analyze(gcl_first(vs_get(base + 7)), vs_get(base + 2))
-       if (has_error) then
+       if (tctx%has_error) then
           call vs_leave(base)
           return
        end if
@@ -1317,7 +1343,7 @@
     end if
     if (md%tag /= GCT_NIL) then
        c = analyze(vs_get(base + 4), vs_get(base + 2))
-       if (has_error) then
+       if (tctx%has_error) then
           call vs_leave(base)
           return
        end if
@@ -1333,11 +1359,13 @@
   ! Children: [init_0 .. init_{n-1}, body]; slot 3 = the first slot as
   ! an int; i2 = n. A loop is also a recur target for its body.
   recursive function analyze_let(rest, sc, is_loop) result(nd)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: rest, sc
     logical, intent(in) :: is_loop
     type(gc_value) :: nd, binds, blk, kids, c, k, rinfo
     integer :: base, i, n, start
 
+    tctx => ctx_self()
     nd = gc_nil()
     base = vs_enter(6)
     call vs_set(base + 1, rest)
@@ -1367,7 +1395,7 @@
     call vs_set(base + 5, kids)
     do i = 0, n - 1
        c = analyze(gcv_nth(vs_get(base + 3), 2 * i + 1), vs_get(base + 4))
-       if (has_error) then
+       if (tctx%has_error) then
           call vs_leave(base)
           return
        end if
@@ -1404,7 +1432,7 @@
     end do
     c = analyze_body(gcl_rest(vs_get(base + 1), [vs_get(base + 1)]), vs_get(base + 4), &
          [vs_get(base + 1), vs_get(base + 5)])
-    if (has_error) then
+    if (tctx%has_error) then
        call vs_leave(base)
        return
     end if
@@ -1435,10 +1463,12 @@
   ! (letfn* [name (fn* ...) ...] body): every name in scope in every
   ! init. Children: [fn_0 .. fn_{n-1}, body]; slot 2 = first slot; i2 = n.
   recursive function analyze_letfn(rest, sc) result(nd)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: rest, sc
     type(gc_value) :: nd, binds, blk, kids, c, k
     integer :: base, i, n, start
 
+    tctx => ctx_self()
     nd = gc_nil()
     base = vs_enter(5)
     call vs_set(base + 1, rest)
@@ -1473,7 +1503,7 @@
     call vs_set(base + 5, kids)
     do i = 0, n - 1
        c = analyze(gcv_nth(vs_get(base + 3), 2 * i + 1), vs_get(base + 4))
-       if (has_error) then
+       if (tctx%has_error) then
           call vs_leave(base)
           return
        end if
@@ -1482,7 +1512,7 @@
     end do
     c = analyze_body(gcl_rest(vs_get(base + 1), [vs_get(base + 1)]), vs_get(base + 4), &
          [vs_get(base + 1), vs_get(base + 5)])
-    if (has_error) then
+    if (tctx%has_error) then
        call vs_leave(base)
        return
     end if
@@ -1502,6 +1532,7 @@
   ! arity, so nslots is the total. Captures are (outer, inner) slot
   ! pairs, flattened, filled in by lookup_local as the body is analysed.
   recursive function analyze_fn(rest, sc) result(nd)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: rest, sc
     type(gc_value) :: nd, head, name, fsc, arities, clauses, clause, ar, tmpl, walk
     integer :: base, self_slot, nfixed, i
@@ -1509,8 +1540,9 @@
 
     ! captured ONCE: a method's own clauses are exempt from fn hint
     ! rules, and any fn* nested in its body is not
-    hints = .not. analyzing_method
-    analyzing_method = .false.
+    tctx => ctx_self()
+    hints = .not. tctx%analyzing_method
+    tctx%analyzing_method = .false.
     nd = gc_nil()
     base = vs_enter(8)
     call vs_set(base + 1, rest)
@@ -1546,7 +1578,7 @@
     do while (gcl_count(vs_get(base + 8)) > 0)
        clause = norm_form(strip_meta(gcl_first(vs_get(base + 8))), [vs_get(base + 7), vs_get(base + 8)])
        ar = analyze_arity(clause, vs_get(base + 5), hints)
-       if (has_error) then
+       if (tctx%has_error) then
           call vs_leave(base)
           return
        end if
@@ -1725,12 +1757,14 @@
   end function cast_fn
 
   recursive function analyze_arity(clause, fsc, hints) result(ar)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: clause, fsc
     logical, intent(in) :: hints
     type(gc_value) :: ar, params, blk, p, body, rinfo
     integer :: base, i, n, amp, start, nfixed
     logical :: variadic
 
+    tctx => ctx_self()
     ar = gc_nil()
     base = vs_enter(5)
     call vs_set(base + 1, clause)
@@ -1788,14 +1822,14 @@
     body = prim_hint_body(gcl_first(vs_get(base + 1)), vs_get(base + 3), nfixed, variadic, &
          gcl_rest(vs_get(base + 1), [vs_get(base + 1)]), hints, &
          [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 4)])
-    if (has_error) then
+    if (tctx%has_error) then
        call vs_leave(base)
        return
     end if
     call vs_set(base + 5, body)
     body = analyze_body(vs_get(base + 5), vs_get(base + 4), &
          [vs_get(base + 1), vs_get(base + 2), vs_get(base + 5)])
-    if (has_error) then
+    if (tctx%has_error) then
        call vs_leave(base)
        return
     end if
@@ -1810,9 +1844,11 @@
 
   ! (recur args...) -> the nearest loop or fn. Slot 2 = [kind start n].
   recursive function analyze_recur(rest, sc) result(nd)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: rest, sc
     type(gc_value) :: nd, kids, rinfo
     integer :: base, n
+    tctx => ctx_self()
     nd = gc_nil()
     base = vs_enter(3)
     call vs_set(base + 1, rest)
@@ -1831,7 +1867,7 @@
     end if
     kids = analyze_all(vs_get(base + 1), vs_get(base + 2), [vs_get(base + 1)])
     call vs_set(base + 3, kids)
-    if (.not. has_error) nd = mk_node(N_RECUR, vs_get(base + 3), gc_slot(vs_get(base + 2), 4), gc_nil(), n, &
+    if (.not. tctx%has_error) nd = mk_node(N_RECUR, vs_get(base + 3), gc_slot(vs_get(base + 2), 4), gc_nil(), n, &
          [vs_get(base + 1), vs_get(base + 2)])
     call vs_leave(base)
   end function analyze_recur
@@ -1899,9 +1935,11 @@
   ! (lazy-seq* body...) -> a no-argument fn whose closure becomes the
   ! thunk of a pending lazy seq.
   recursive function analyze_lazy(rest, sc) result(nd)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: rest, sc
     type(gc_value) :: nd, fnform, fnode
     integer :: base
+    tctx => ctx_self()
     nd = gc_nil()
     base = vs_enter(4)
     call vs_set(base + 1, rest)
@@ -1910,7 +1948,7 @@
     fnform = gcl_cons(gcv_empty([vs_get(base + 1)]), vs_get(base + 1), [vs_get(base + 1)])
     call vs_set(base + 3, fnform)
     fnode = analyze_fn(vs_get(base + 3), vs_get(base + 2))
-    if (has_error) then
+    if (tctx%has_error) then
        call vs_leave(base)
        return
     end if
@@ -1923,10 +1961,12 @@
   ! Children: [body, finally-or-nil]; slot 2 = catches, each
   ! [class-symbol, slot, body].
   recursive function analyze_try(rest, sc) result(nd)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: rest, sc
     type(gc_value) :: nd, body, fin, catches, item, cl, blk, cb, kids, cname
     integer :: base, i, n, slot
 
+    tctx => ctx_self()
     nd = gc_nil()
     base = vs_enter(8)
     call vs_set(base + 1, rest)
@@ -1946,7 +1986,7 @@
     ! ignored by Clojure too (it is an error there). Simplification: all
     ! non-clause forms are body forms.
     body = analyze_body(vs_get(base + 3), vs_get(base + 2), [vs_get(base + 1)])
-    if (has_error) then
+    if (tctx%has_error) then
        call vs_leave(base)
        return
     end if
@@ -1968,7 +2008,7 @@
           slot = declare_local(vs_get(base + 8), strip_meta(nth_of(vs_get(base + 4), 2)), [vs_get(base + 1)])
           cb = analyze_body(gcl_rest(gcl_rest(gcl_rest(vs_get(base + 4), [vs_get(base + 1)]), &
                [vs_get(base + 1)]), [vs_get(base + 1)]), vs_get(base + 8), [vs_get(base + 1), vs_get(base + 5)])
-          if (has_error) then
+          if (tctx%has_error) then
              call vs_leave(base)
              return
           end if
@@ -1982,7 +2022,7 @@
        else if (is_clause(item, "finally")) then
           fin = analyze_body(gcl_rest(vs_get(base + 4), [vs_get(base + 1)]), vs_get(base + 2), &
                [vs_get(base + 1), vs_get(base + 5)])
-          if (has_error) then
+          if (tctx%has_error) then
              call vs_leave(base)
              return
           end if
@@ -2001,11 +2041,13 @@
   ! Children: [expr, default]; slot 2 = the map with each [test then]
   ! rebuilt as [test then-node]; slot 3 = [shift mask test-type skip].
   recursive function analyze_case(rest, sc) result(nd)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: rest, sc
     type(gc_value) :: nd, kids, c, tbl, entry, ent2, mp, tn, info, skip
     type(gc_value), allocatable :: ks(:), vls(:)
     integer :: base, i, n
 
+    tctx => ctx_self()
     nd = gc_nil()
     base = vs_enter(8)
     call vs_set(base + 1, rest)
@@ -2019,14 +2061,14 @@
     kids = gcv_empty([vs_get(base + 1)])
     call vs_set(base + 3, kids)
     c = analyze(nth_of(vs_get(base + 1), 0), vs_get(base + 2))
-    if (has_error) then
+    if (tctx%has_error) then
        call vs_leave(base)
        return
     end if
     kids = gcv_conj(vs_get(base + 3), c, [vs_get(base + 1), c])
     call vs_set(base + 3, kids)
     c = analyze(nth_of(vs_get(base + 1), 3), vs_get(base + 2))
-    if (has_error) then
+    if (tctx%has_error) then
        call vs_leave(base)
        return
     end if
@@ -2043,7 +2085,7 @@
        call vs_set(base + 6, entry)
        if (.not. (gcv_is(entry) .and. gcv_count(entry) == 2)) cycle
        tn = analyze(gcv_nth(vs_get(base + 6), 1), vs_get(base + 2))
-       if (has_error) then
+       if (tctx%has_error) then
           call vs_leave(base)
           return
        end if
@@ -2071,10 +2113,12 @@
   ! (deftype* tagname classname [fields] :implements [ifaces] opts (method [this args] body)*)
   ! Slot 2 = spec [class-text fields ifaces names fn-nodes]; i2 = 0.
   recursive function analyze_deftype(rest, sc) result(nd)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: rest, sc
     type(gc_value) :: nd, w, cname, k, fields, ifaces, spec
     integer :: base
 
+    tctx => ctx_self()
     nd = gc_nil()
     base = vs_enter(6)
     call vs_set(base + 1, rest)
@@ -2107,7 +2151,7 @@
     end do
     spec = type_spec(class_of_text(vs_get(base + 4)), vs_get(base + 5), vs_get(base + 6), &
          vs_get(base + 3), vs_get(base + 2))
-    if (has_error) then
+    if (tctx%has_error) then
        call vs_leave(base)
        return
     end if
@@ -2120,12 +2164,14 @@
   ! (proxy [supers] [ctor-args] (name [args] body)*): a nameless type,
   ! instantiated on the spot. i2 = 1.
   recursive function analyze_reify(rest, sc, is_proxy) result(nd)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: rest, sc
     logical, intent(in) :: is_proxy
     type(gc_value) :: nd, ifaces, methods, spec
     character(len=24) :: buf
     integer :: base
 
+    tctx => ctx_self()
     nd = gc_nil()
     base = vs_enter(6)
     call vs_set(base + 1, rest)
@@ -2143,7 +2189,7 @@
        methods = gcl_rest(vs_get(base + 4), [vs_get(base + 3), vs_get(base + 4)])   ! past ctor args
        call vs_set(base + 4, methods)
        methods = proxy_methods(vs_get(base + 4), [vs_get(base + 3)])
-       if (has_error) then
+       if (tctx%has_error) then
           call vs_leave(base)
           return
        end if
@@ -2167,7 +2213,7 @@
     end if
     call vs_set(base + 5, gcv_empty([vs_get(base + 3), vs_get(base + 4)]))
     spec = type_spec(trim(buf), vs_get(base + 5), vs_get(base + 3), vs_get(base + 4), vs_get(base + 2))
-    if (has_error) then
+    if (tctx%has_error) then
        call vs_leave(base)
        return
     end if
@@ -2182,11 +2228,13 @@
   ! and that fn* is analysed in the enclosing scope -- which is what
   ! lets a reify body close over its surroundings.
   recursive function type_spec(cname, fields, ifaces, methods, sc) result(spec)
+    type(eval_ctx), pointer :: tctx
     character(len=*), intent(in) :: cname
     type(gc_value), intent(in) :: fields, ifaces, methods, sc
     type(gc_value) :: spec, m, mname, names, fns, seen, clauses, fnform, fnode, tmp, keys
     integer :: base
 
+    tctx => ctx_self()
     spec = gc_nil()
     base = vs_enter(10)
     call vs_set(base + 1, fields)
@@ -2210,9 +2258,9 @@
              clauses = method_clauses(bare_name(mname), vs_get(base + 3), vs_get(base + 1))
              call vs_set(base + 10, clauses)
              fnform = vs_get(base + 10)      ! the clause list IS fn*'s rest
-             analyzing_method = .true.
+             tctx%analyzing_method = .true.
              fnode = analyze_fn(fnform, vs_get(base + 4))
-             if (has_error) then
+             if (tctx%has_error) then
                 call vs_leave(base)
                 return
              end if
@@ -2246,18 +2294,20 @@
   ! rather than at every evaluation of the macro body that contains it
   ! (DEVIATIONS 6 moves from "at eval time" to "at analysis time").
   recursive function analyze_quasiquote(rest, sc) result(nd)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: rest, sc
     type(gc_value) :: nd, expanded
     integer :: base
+    tctx => ctx_self()
     nd = gc_nil()
     base = vs_enter(3)
     call vs_set(base + 1, rest)
     call vs_set(base + 2, sc)
-    if (qq_depth == 0) call gc_global_keep(gensym_root, gca_empty([vs_get(base + 1), vs_get(base + 2)]))
-    qq_depth = qq_depth + 1
+    if (tctx%qq_depth == 0) call gc_global_keep(gensym_root, gca_empty([vs_get(base + 1), vs_get(base + 2)]))
+    tctx%qq_depth = tctx%qq_depth + 1
     expanded = qq_expand(gcl_first(vs_get(base + 1)), gc_nil())
-    qq_depth = qq_depth - 1
-    if (has_error) then
+    tctx%qq_depth = tctx%qq_depth - 1
+    if (tctx%has_error) then
        call vs_leave(base)
        return
     end if
@@ -2271,9 +2321,11 @@
   ! with storage -- a fn's __methodImplCache -- lands in the closure.
   ! i2: 0 = Var in slot 2, 1 = field; children [obj?, value].
   recursive function analyze_setbang(rest, sc) result(nd)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: rest, sc
     type(gc_value) :: nd, tgt, var, kids, c, objf
     integer :: base
+    tctx => ctx_self()
     nd = gc_nil()
     base = vs_enter(5)
     call vs_set(base + 1, rest)
@@ -2287,7 +2339,7 @@
        ! it; the value is evaluated and the write discarded, as for any
        ! other host field.
        c = analyze(gcl_first(gcl_rest(vs_get(base + 1), [vs_get(base + 1)])), vs_get(base + 2))
-       if (has_error) then
+       if (tctx%has_error) then
           call vs_leave(base)
           return
        end if
@@ -2316,7 +2368,7 @@
        end if
        call vs_set(base + 5, var)
        c = analyze(gcl_first(gcl_rest(vs_get(base + 1), [vs_get(base + 1)])), vs_get(base + 2))
-       if (has_error) then
+       if (tctx%has_error) then
           call vs_leave(base)
           return
        end if
@@ -2328,14 +2380,14 @@
        objf = gcl_first(gcl_rest(vs_get(base + 3), [vs_get(base + 1)]))
        call vs_set(base + 5, objf)
        c = analyze(vs_get(base + 5), vs_get(base + 2))
-       if (has_error) then
+       if (tctx%has_error) then
           call vs_leave(base)
           return
        end if
        kids = gcv_conj(vs_get(base + 4), c, [vs_get(base + 1), vs_get(base + 3), c])
        call vs_set(base + 4, kids)
        c = analyze(gcl_first(gcl_rest(vs_get(base + 1), [vs_get(base + 1)])), vs_get(base + 2))
-       if (has_error) then
+       if (tctx%has_error) then
           call vs_leave(base)
           return
        end if
@@ -2640,10 +2692,12 @@
   ! one, each analysed after the previous has run, so an (ns ...) or a
   ! def earlier in the same do is visible to the rest.
   recursive function analyze_top(form0) result(nd)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: form0
     type(gc_value) :: nd, form, head, sc, body
     integer :: base
 
+    tctx => ctx_self()
     nd = gc_nil()
     base = vs_enter(4)
     form = form0
@@ -2669,7 +2723,7 @@
     sc = new_fn_scope(gc_nil(), [vs_get(base + 1)])
     call vs_set(base + 2, sc)
     body = analyze(vs_get(base + 1), vs_get(base + 2))
-    if (has_error) then
+    if (tctx%has_error) then
        call vs_leave(base)
        return
     end if

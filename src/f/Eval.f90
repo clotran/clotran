@@ -60,7 +60,7 @@ module Eval
   use CompiledFn
   use DynLoad
   use Threads
-  use iso_c_binding, only: c_ptr, c_funptr, c_loc, c_double, c_int, c_long, c_char, c_null_char, c_associated, c_bool, c_int32_t, &
+  use iso_c_binding, only: c_ptr, c_funptr, c_loc, c_f_pointer, c_double, c_int, c_long, c_char, c_null_char, c_associated, c_bool, c_int32_t, &
        c_null_ptr, c_intptr_t, c_funloc, c_size_t
   implicit none
   private
@@ -254,7 +254,6 @@ module Eval
   ! module variable plus a depth count is the same scoping here.
   type(gc_root), save :: gensym_root
   integer, save :: gensym_id = 0
-  integer, save :: qq_depth = 0
   ! Every type `deftype*` has created, keyed by the class keyword a
   ! class literal evaluates to. Clojure puts the class in a
   ! classloader and imports the short name into the namespace;
@@ -303,16 +302,12 @@ module Eval
   ! the whole point of a dynamic Var -- and this one is global. With one
   ! thread the two are indistinguishable; with more they are not.
   ! DEVIATIONS.md 10.
-  type(gc_root), save :: binding_stack_root
   ! import* records these; see record_import.
   character(len=64), allocatable, save :: import_full(:), import_short(:)
   integer, save :: n_imports = 0
   type(gc_root), save :: global_env_root
-  integer, save :: ev_depth = 0
   integer, save :: ev_limit = 0
 
-  character(len=:), allocatable :: last_error
-  logical :: has_error = .false.
 
   ! The value a `throw` is carrying, as a GC GLOBAL ROOT rather than a
   ! plain module variable. It has to be: between the throw and the
@@ -320,10 +315,8 @@ module Eval
   ! are unwinding -- so an ordinary variable would be a value the
   ! collector cannot see, and a collection in that window would free
   ! the exception before its handler ever ran.
-  type(gc_root), save :: thrown_root
   ! Reused argument vectors for the numeric builtins (exec.inc, N_CALL
   ! mode 3), and the one recur marker: none of those allocate per call.
-  type(gc_root), save :: scratch1_root, scratch2_root, recur_root
   ! The last paused state, as data; see the break protocol in exec.inc.
   type(gc_root), save :: break_root
   integer, save :: break_mode = 0   ! 0 unread, 1 off, 2 capturing
@@ -344,9 +337,6 @@ module Eval
   ! block may yield; a yield in progress; and the context ids finished
   ! tasks gave back, for the next ones.
   type(gc_root), save :: tasks_root, main_mailbox_root
-  type(gc_value), save :: cur_task
-  integer, save :: task_loop_depth = 0
-  logical, save :: yield_flag = .false.
   ! The baton (tasks.inc): one lock and one condition, the context that
   ! may run clotran code, and per context who stepped it, whether it was
   ! cancelled while parked, and its task. A task's thread gets a big
@@ -407,11 +397,6 @@ module Eval
   ! the stack is rendered into `last_trace` at once, before it unwinds,
   ! so the message can say where it came from. A `recur` does not push;
   ! a deep loop is one frame, which a trace does not pretend otherwise.
-  type(gc_value), allocatable, save :: fstack_fn(:)
-  integer, allocatable, save :: fstack_site(:)
-  integer, save :: fstack_top = 0
-  integer, save :: pending_site = 0
-  character(len=:), allocatable, save :: last_trace
   ! Forms evaluated since startup. CLOTRAN_STATS=1 prints it at exit
   ! next to the collector's counters (main.f90), so a cost can be
   ! split into "more work" and "more collector" before theorising.
@@ -430,7 +415,6 @@ module Eval
   ! through analyze_fn, and read and cleared by it at once: a
   ! method's parameters take their types from the interface, not
   ! from fn's primitive hint rules.
-  logical, save :: analyzing_method = .false.
   integer, save :: keep_locals_mode = 0   ! 0 unread, 1 clear, 2 keep
 
   ! The executor's continuation stack (exec.inc, `run`): one entry per
@@ -447,8 +431,6 @@ module Eval
      integer :: mode = 0, aux = 0, aux2 = 0   ! a call's argument mode, first slot, arity
      character(len=:), allocatable :: msg
   end type kframe
-  type(kframe), allocatable, save :: kst(:)
-  integer, save :: ksp = 0
   integer, parameter :: KF_FNBODY = 1, KF_RESTART = 2, K_SLOTS = 7   ! slot 6: a scalar call's first argument; slot 7: the closure whose body this is
   integer, save :: k_limit = 0
 
@@ -471,6 +453,11 @@ module Eval
      logical :: has_error = .false.
      character(len=:), allocatable :: last_error, last_trace
      type(gc_root) :: thrown_root, binding_stack_root
+     ! the rest of what was one module variable each, now one per thread
+     integer :: id = 0, qq_depth = 0, task_loop_depth = 0
+     logical :: analyzing_method = .false., yield_flag = .false.
+     type(gc_value) :: cur_task
+     type(gc_root) :: scratch1_root, scratch2_root, recur_root
   end type eval_ctx
   ! Each context is allocated on its own and never moves: a thread holds
   ! its context's address (PLAN.md step 14b), so growing the table copies
@@ -479,7 +466,12 @@ module Eval
      type(eval_ctx), pointer :: c => null()
   end type ctx_ref
   type(ctx_ref), allocatable, save :: ctxs(:)
-  integer, save :: cur_ctx = 0, n_ctx = 0
+  integer, save :: n_ctx = 0
+  ! Each thread's own context: the one this key names on that thread
+  ! (PLAN.md step 14b). A same-thread switch -- the debugger's handler --
+  ! re-points it; a hand-off between threads does not touch it.
+  type(th_key), save :: ctx_key
+  logical, save :: ctx_key_made = .false.
 
   ! The directory the binary lives in: a classpath root, so `clotran`
   ! run from anywhere finds src/clj. main.f90 sets it from argv(0).
@@ -494,10 +486,12 @@ contains
   ! wipe an error raised deeper in the same evaluation. A REPL clears,
   ! evaluates, then checks -- which is exactly this shape.
   subroutine gce_clear_error()
-    has_error = .false.
-    last_error = ""
+    type(eval_ctx), pointer :: tctx
+    tctx => ctx_self()
+    tctx%has_error = .false.
+    tctx%last_error = ""
     call set_thrown(gc_nil())
-    if (allocated(last_trace)) last_trace = ""
+    if (allocated(tctx%last_trace)) tctx%last_trace = ""
   end subroutine gce_clear_error
 
   ! Re-checks the slot rather than trusting the index, for the same
@@ -508,10 +502,12 @@ contains
   ! happens in eval_new for a (new SomeException ...) and, failing
   ! that, now, at the throw.
   subroutine set_thrown(v)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: v
     type(gc_value) :: fr
     integer :: base
-    call gc_global_keep(thrown_root, v)
+    tctx => ctx_self()
+    call gc_global_keep(tctx%thrown_root, v)
     if (gc_kind(v) == OBJ_ERR) then
        if (tag_of(gc_slot(v, 4)) == GCT_NIL) then
           base = vs_enter(1)
@@ -535,25 +531,27 @@ contains
   ! conversion to symbol", but only when the heap happened to fill
   ! between the two. The oracle caught it with spec loaded.
   function frames_vec(roots) result(out)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, m, nm
     character(len=:), allocatable :: who, fname
     integer :: i, base, line, col
+    tctx => ctx_self()
     base = vs_enter(4)
     out = gcv_empty(roots)
     call vs_set(base + 1, out)
-    do i = fstack_top, 1, -1
+    do i = tctx%fstack_top, 1, -1
        who = "fn"
-       if (gc_kind(fstack_fn(i)) == OBJ_CLOSURE) then
-          nm = gc_slot(fstack_fn(i), 5)
+       if (gc_kind(tctx%fstack_fn(i)) == OBJ_CLOSURE) then
+          nm = gc_slot(tctx%fstack_fn(i), 5)
           if (nm%tag == GCT_SYM) who = gc_ref_text(nm%ref)
-       else if (gc_kind(fstack_fn(i)) == OBJ_COMPILED) then
-          nm = gc_slot(fstack_fn(i), 1)
+       else if (gc_kind(tctx%fstack_fn(i)) == OBJ_COMPILED) then
+          nm = gc_slot(tctx%fstack_fn(i), 1)
           who = gc_ref_text(nm%ref)
        end if
        fname = ""
        line = 0
-       if (fstack_site(i) /= 0) call gcr_position_parts(fstack_site(i), fname, line, col)
+       if (tctx%fstack_site(i) /= 0) call gcr_position_parts(tctx%fstack_site(i), fname, line, col)
        m = gca_empty([roots, vs_get(base + 1)])
        call vs_set(base + 2, m)
        call frame_put(base, roots, "class", gc_str(who, [roots, vs_get(base + 1), vs_get(base + 2)]))
@@ -584,25 +582,33 @@ contains
   end subroutine frame_put
 
   function thrown_value() result(v)
+    type(eval_ctx), pointer :: tctx
     type(gc_value) :: v
-    v = gc_root_get(thrown_root)
+    tctx => ctx_self()
+    v = gc_root_get(tctx%thrown_root)
   end function thrown_value
 
   function gce_has_error() result(yes)
+    type(eval_ctx), pointer :: tctx
     logical :: yes
-    yes = has_error
+    tctx => ctx_self()
+    yes = tctx%has_error
   end function gce_has_error
 
   function gce_error() result(s)
+    type(eval_ctx), pointer :: tctx
     character(len=:), allocatable :: s
+    tctx => ctx_self()
     s = ""
-    if (allocated(last_error)) s = last_error
+    if (allocated(tctx%last_error)) s = tctx%last_error
   end function gce_error
 
   subroutine fail(msg)
+    type(eval_ctx), pointer :: tctx
     character(len=*), intent(in) :: msg
-    has_error = .true.
-    last_error = msg
+    tctx => ctx_self()
+    tctx%has_error = .true.
+    tctx%last_error = msg
     call capture_trace()
   end subroutine fail
 
@@ -614,29 +620,31 @@ contains
   ! lines, and building them by concatenation was quadratic. The
   ! element array .getStackTrace answers is still the whole stack.
   subroutine capture_trace()
+    type(eval_ctx), pointer :: tctx
     integer :: i
     type(gc_value) :: bm
     type(gc_value) :: nm
     character(len=:), allocatable :: who
     character(len=16) :: more
-    last_trace = ""
-    if (fstack_top > 128) write(more, '(I0)') fstack_top - 128
-    do i = fstack_top, max(1, fstack_top - 127), -1
+    tctx => ctx_self()
+    tctx%last_trace = ""
+    if (tctx%fstack_top > 128) write(more, '(I0)') tctx%fstack_top - 128
+    do i = tctx%fstack_top, max(1, tctx%fstack_top - 127), -1
        who = "fn"
-       if (gc_kind(fstack_fn(i)) == OBJ_CLOSURE) then
-          nm = gc_slot(fstack_fn(i), 5)
+       if (gc_kind(tctx%fstack_fn(i)) == OBJ_CLOSURE) then
+          nm = gc_slot(tctx%fstack_fn(i), 5)
           if (nm%tag == GCT_SYM) who = gc_ref_text(nm%ref)
-       else if (gc_kind(fstack_fn(i)) == OBJ_COMPILED) then
-          nm = gc_slot(fstack_fn(i), 1)
+       else if (gc_kind(tctx%fstack_fn(i)) == OBJ_COMPILED) then
+          nm = gc_slot(tctx%fstack_fn(i), 1)
           who = gc_ref_text(nm%ref)
        end if
-       if (fstack_site(i) /= 0) then
-          last_trace = last_trace // "  at " // who // " (" // gcr_position(fstack_site(i)) // ")" // achar(10)
+       if (tctx%fstack_site(i) /= 0) then
+          tctx%last_trace = tctx%last_trace // "  at " // who // " (" // gcr_position(tctx%fstack_site(i)) // ")" // achar(10)
        else
-          last_trace = last_trace // "  at " // who // achar(10)
+          tctx%last_trace = tctx%last_trace // "  at " // who // achar(10)
        end if
     end do
-    if (fstack_top > 128) last_trace = last_trace // "  ... " // trim(more) // " more" // achar(10)
+    if (tctx%fstack_top > 128) tctx%last_trace = tctx%last_trace // "  ... " // trim(more) // " more" // achar(10)
     ! and the paused state as data, while the frames are still pending,
     ! to the handler if one is bound
     if (break_mode == 0) call read_break_mode()
@@ -645,41 +653,47 @@ contains
 
   ! The trace of the last error, one line per frame, or empty.
   function gce_trace() result(s)
+    type(eval_ctx), pointer :: tctx
     character(len=:), allocatable :: s
+    tctx => ctx_self()
     s = ""
-    if (allocated(last_trace)) s = last_trace
+    if (allocated(tctx%last_trace)) s = tctx%last_trace
   end function gce_trace
 
   subroutine push_frame(fn, site)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: fn
     integer, intent(in) :: site
     type(gc_value), allocatable :: bf(:)
     integer, allocatable :: bs(:)
     integer :: n
-    if (.not. allocated(fstack_fn)) then
-       allocate(fstack_fn(256), fstack_site(256))
-       fstack_top = 0
+    tctx => ctx_self()
+    if (.not. allocated(tctx%fstack_fn)) then
+       allocate(tctx%fstack_fn(256), tctx%fstack_site(256))
+       tctx%fstack_top = 0
     end if
-    if (fstack_top >= size(fstack_fn)) then
-       n = size(fstack_fn)
+    if (tctx%fstack_top >= size(tctx%fstack_fn)) then
+       n = size(tctx%fstack_fn)
        allocate(bf(2 * n), bs(2 * n))
-       bf(1:n) = fstack_fn(1:n)
-       bs(1:n) = fstack_site(1:n)
-       call move_alloc(bf, fstack_fn)
-       call move_alloc(bs, fstack_site)
+       bf(1:n) = tctx%fstack_fn(1:n)
+       bs(1:n) = tctx%fstack_site(1:n)
+       call move_alloc(bf, tctx%fstack_fn)
+       call move_alloc(bs, tctx%fstack_site)
     end if
     if (k_limit == 0) call read_frame_limit()
-    if (fstack_top >= k_limit) then
+    if (tctx%fstack_top >= k_limit) then
        call fail("stack overflow")
        return
     end if
-    fstack_top = fstack_top + 1
-    fstack_fn(fstack_top) = fn
-    fstack_site(fstack_top) = site
+    tctx%fstack_top = tctx%fstack_top + 1
+    tctx%fstack_fn(tctx%fstack_top) = fn
+    tctx%fstack_site(tctx%fstack_top) = site
   end subroutine push_frame
 
   subroutine pop_frame()
-    if (fstack_top > 0) fstack_top = fstack_top - 1
+    type(eval_ctx), pointer :: tctx
+    tctx => ctx_self()
+    if (tctx%fstack_top > 0) tctx%fstack_top = tctx%fstack_top - 1
   end subroutine pop_frame
 
   ! An environment with the primitives bound. Built fresh rather than
@@ -939,11 +953,13 @@ contains
   ! resolving .RT/first through the Var `first` would be a loop.
   ! (seq inst) for a deftype with a `seq` method; nil for one without.
   recursive function inst_seq(v, roots) result(out)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: v
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, m, argv
     integer :: base
     logical :: via_iter
+    tctx => ctx_self()
     out = gc_nil()
     base = vs_enter(3)
     call vs_set(base + 1, v)
@@ -965,14 +981,14 @@ contains
          [roots, vs_get(base + 1), vs_get(base + 2)])
     call vs_set(base + 3, argv)
     out = apply(vs_get(base + 2), vs_get(base + 3))
-    if (.not. has_error .and. via_iter) then
+    if (.not. tctx%has_error .and. via_iter) then
        call vs_set(base + 3, out)
        argv = gcv_conj(gcv_empty([roots, vs_get(base + 1), vs_get(base + 3)]), vs_get(base + 3), &
             [roots, vs_get(base + 1), vs_get(base + 3)])
        call vs_set(base + 3, argv)
        out = rt_call("chunk-iterator-seq", vs_get(base + 3))
     end if
-    if (.not. has_error) then
+    if (.not. tctx%has_error) then
        call vs_set(base + 3, out)
        out = to_seq(vs_get(base + 3), [roots, vs_get(base + 1)])
     end if
@@ -1024,8 +1040,10 @@ contains
   end subroutine gce_main_bindings
 
   recursive subroutine ensure_specs()
+    type(eval_ctx), pointer :: tctx
     type(gc_value) :: fargs, out
     integer :: base
+    tctx => ctx_self()
     if (spec_loaded) return
     base = vs_enter(1)
     spec_loading = .true.
@@ -1034,7 +1052,7 @@ contains
     fargs = gcv_conj(vs_get(base + 1), gc_str("clojure/spec/alpha", [vs_get(base + 1)]), [vs_get(base + 1)])
     call vs_set(base + 1, fargs)
     out = call_builtin(B_RTLOAD, vs_get(base + 1))
-    if (.not. has_error) then
+    if (.not. tctx%has_error) then
        fargs = gcv_empty([gc_nil()])
        call vs_set(base + 1, fargs)
        fargs = gcv_conj(vs_get(base + 1), gc_str("clojure/core/specs/alpha", [vs_get(base + 1)]), [vs_get(base + 1)])
@@ -1052,18 +1070,20 @@ contains
   ! (thrown-with-cause-msg? Exception #"did not conform to spec" ...)
   ! reads.
   recursive subroutine check_specs(mvar, form)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: mvar, form
     type(gc_value) :: fargs, out, e
     logical :: was_loaded
     character(len=:), allocatable :: vt
     integer :: base
+    tctx => ctx_self()
     if (.not. spec_check .or. spec_loading) return
     base = vs_enter(4)
     call vs_set(base + 1, mvar)
     call vs_set(base + 2, form)
     if (.not. spec_loaded) then
        call ensure_specs()
-       if (has_error) then
+       if (tctx%has_error) then
           call vs_leave(base)
           return
        end if
@@ -1077,7 +1097,7 @@ contains
     call vs_set(base + 3, fargs)
     was_loaded = .true.
     out = rt_call_in("clojure/spec/alpha", "clojure.spec.alpha", was_loaded, "macroexpand-check", vs_get(base + 3))
-    if (has_error) then
+    if (tctx%has_error) then
        vt = to_string_text(vs_get(base + 1))
        if (len(vt) > 2) then
           if (vt(1:2) == "#'") vt = vt(3:)
@@ -1089,7 +1109,7 @@ contains
             [vs_get(base + 1), vs_get(base + 3), vs_get(base + 4)])
        call gc_set_slot(e, 5, vs_get(base + 3))
        call set_thrown(e)
-       last_error = "Syntax error macroexpanding " // vt // "."
+       tctx%last_error = "Syntax error macroexpanding " // vt // "."
     end if
     call vs_leave(base)
   end subroutine check_specs
@@ -1104,12 +1124,14 @@ contains
   ! REPORTED and the interpreted definitions stand: the source loaded,
   ! so the program is still right, only slower.
   recursive subroutine gce_install_compiled(path)
+    type(eval_ctx), pointer :: tctx
     character(len=*), intent(in) :: path
     character(len=5), parameter :: exts(2) = [character(len=5) :: "dylib", "so"]
     character(len=:), allocatable :: stem, cand
     type(gc_value) :: args, r
     logical :: there
     integer :: dot, i, base, at
+    tctx => ctx_self()
     dot = index(path, ".", back=.true.)
     if (dot <= index(path, "/", back=.true.)) return
     stem = path(1:dot)
@@ -1130,7 +1152,7 @@ contains
        args = gcv_conj(vs_get(base + 1), gc_str(path, [vs_get(base + 1)]), [vs_get(base + 1)])
        call vs_set(base + 1, args)
        r = rt_call_in("clotran/loader", "clotran.loader", ld_loaded, "install", vs_get(base + 1))
-       if (has_error) then
+       if (tctx%has_error) then
           print '(A,A,A,A)', "note: not using ", cand, ": ", gce_error()
           call gce_clear_error()
        end if
@@ -1140,11 +1162,13 @@ contains
   end subroutine gce_install_compiled
 
   recursive function rt_call_in(lib, nsname, loaded, name, args) result(out)
+    type(eval_ctx), pointer :: tctx
     character(len=*), intent(in) :: lib, nsname, name
     logical, intent(inout) :: loaded
     type(gc_value), intent(in) :: args
     type(gc_value) :: out, fargs, ns, var, sym
     integer :: base
+    tctx => ctx_self()
     out = gc_nil()
     base = vs_enter(3)
     call vs_set(base + 1, args)
@@ -1157,7 +1181,7 @@ contains
        call vs_set(base + 2, fargs)
        out = call_builtin(B_RTLOAD, vs_get(base + 2))
        out = gc_nil()
-       if (has_error) then
+       if (tctx%has_error) then
           call vs_leave(base)
           return
        end if
@@ -1247,13 +1271,15 @@ contains
   ! a node from gce_analyze. A raw form is analysed here first.
   ! `env` and `roots` are unused and kept for the callers' sake.
   recursive function gce_eval(form, env, roots) result(out)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: form, env
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, nd
     integer :: base
 
+    tctx => ctx_self()
     out = gc_nil()
-    if (has_error) return
+    if (tctx%has_error) return
     if (gc_kind(form) == OBJ_AST) then
        out = exec(form, gc_nil())
        return
@@ -1261,7 +1287,7 @@ contains
     base = vs_enter(2)
     call vs_set(base + 1, form)
     nd = analyze_top(vs_get(base + 1))
-    if (.not. has_error) then
+    if (.not. tctx%has_error) then
        call vs_set(base + 2, nd)
        out = exec(vs_get(base + 2), gc_nil())
     end if
@@ -2135,6 +2161,7 @@ contains
   ! class NAME, a symbol never evaluated: a deftype's `create` or a
   ! static member.
   recursive function eval_dot(target0, mname, is_call, argv, class_target) result(out)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: target0, argv
     character(len=*), intent(in) :: mname
     logical, intent(in) :: is_call, class_target
@@ -2142,6 +2169,7 @@ contains
     logical :: found
     integer :: base
 
+    tctx => ctx_self()
     out = gc_nil()
     base = vs_enter(4)
     call vs_set(base + 1, target0)
@@ -2160,7 +2188,7 @@ contains
        end if
        if (is_host_class(target0)) then
           out = static_member(gc_ref_text(target0%ref), mname, vs_get(base + 2))
-          if (.not. has_error) then
+          if (.not. tctx%has_error) then
              if (is_call) out = apply(out, vs_get(base + 2))
              call vs_leave(base)
              return
@@ -2239,7 +2267,7 @@ contains
        end if
     end if
     out = instance_member(mname, vs_get(base + 1))
-    if (.not. has_error) then
+    if (.not. tctx%has_error) then
        ! The target is the first argument, which is all an instance
        ! method is: (.withMeta x m) calls with-meta on x and m.
        call vs_set(base + 4, out)
@@ -2266,7 +2294,7 @@ contains
        ! (cast Number 1.5) work, and any other class held in a
        ! variable with it.
        out = static_member(gc_ref_text(tv%ref), mname, vs_get(base + 2))
-       if (.not. has_error .and. is_call) out = apply(out, vs_get(base + 2))
+       if (.not. tctx%has_error .and. is_call) out = apply(out, vs_get(base + 2))
     else
        ! Reflector's words, class and count included: "No matching
        ! method jump found taking 1 args for class java.lang.String"
@@ -3174,11 +3202,13 @@ contains
   ! catch could not match, and the failure escaped the function that
   ! existed to contain it.
   subroutine fail_as(class_name, msg, roots)
+    type(eval_ctx), pointer :: tctx
     character(len=*), intent(in) :: class_name, msg
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: e, cls, txt
     integer :: base
 
+    tctx => ctx_self()
     base = vs_enter(2)
     cls = gc_sym(class_name, roots)
     call vs_set(base + 1, cls)
@@ -3187,8 +3217,8 @@ contains
     e = gc_obj(OBJ_ERR, [vs_get(base + 1), vs_get(base + 2), gc_nil()], &
          [vs_get(base + 1), vs_get(base + 2)])
     call set_thrown(e)
-    has_error = .true.
-    last_error = gcp_str(e, .true.)
+    tctx%has_error = .true.
+    tctx%last_error = gcp_str(e, .true.)
     call vs_leave(base)
   end subroutine fail_as
 
@@ -3288,19 +3318,21 @@ contains
   ! can match -- so an error clotran raises itself was
   ! uncatchable by name however well the message read.
   subroutine raise_class(cls, msg, roots)
+    type(eval_ctx), pointer :: tctx
     character(len=*), intent(in) :: cls, msg
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: e
     integer :: base
 
+    tctx => ctx_self()
     base = vs_enter(2)
     call vs_set(base + 1, gc_sym(cls, roots))
     call vs_set(base + 2, gc_str(msg, [roots, vs_get(base + 1)]))
     e = gc_obj(OBJ_ERR, [vs_get(base + 1), vs_get(base + 2), gc_nil()], &
          [roots, vs_get(base + 1), vs_get(base + 2)])
     call set_thrown(e)
-    has_error = .true.
-    last_error = msg
+    tctx%has_error = .true.
+    tctx%last_error = msg
     call vs_leave(base)
   end subroutine raise_class
 
@@ -3368,10 +3400,12 @@ contains
   ! that drains the tap queue is a task parked on that queue, and
   ! with one OS thread nothing else would ever wake it.
   recursive subroutine run_ready_tasks(target)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: target
     type(gc_value) :: t
     logical :: sleeping
     integer :: guard
+    tctx => ctx_self()
     guard = 0
     do
        guard = guard + 1
@@ -3379,7 +3413,7 @@ contains
        t = pick_runnable(gc_nil(), sleeping)
        if (gc_kind(t) /= OBJ_TASK) exit
        call task_step(t)
-       if (has_error) exit
+       if (tctx%has_error) exit
     end do
   end subroutine run_ready_tasks
 
@@ -3388,11 +3422,13 @@ contains
   ! AFTER the change is in place, so a watch that reads the reference
   ! sees the new value.
   recursive subroutine notify_watches(r, oldv, newv, roots)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: r, oldv, newv
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: w, fargs, res
     type(gc_value), allocatable :: ks(:), fs(:)
     integer :: base, i
+    tctx => ctx_self()
     if (r%tag /= GCT_OBJ) return
     w = ref_fn_get(r, "watches", roots)
     if (.not. gca_is(w)) return
@@ -3404,7 +3440,7 @@ contains
     call vs_set(base + 4, newv)
     call gca_entries(vs_get(base + 2), ks, fs)
     do i = 1, size(ks)
-       if (has_error) exit
+       if (tctx%has_error) exit
        fargs = gcv_empty([roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 4)])
        fargs = gcv_conj(fargs, ks(i), [roots, vs_get(base + 1), vs_get(base + 3), vs_get(base + 4), fargs])
        fargs = gcv_conj(fargs, vs_get(base + 1), [roots, vs_get(base + 1), vs_get(base + 3), vs_get(base + 4), fargs])
@@ -3453,11 +3489,13 @@ contains
   ! anything else must answer truthy, and a false answer is an
   ! IllegalStateException with Clojure's own wording.
   function validate_ref(r, f, v, roots) result(ok)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: r, f, v
     type(gc_value), intent(in) :: roots(:)
     logical :: ok
     type(gc_value) :: fargs, res
     integer :: base
+    tctx => ctx_self()
     ok = .true.
     if (f%tag == GCT_NIL) return
     base = vs_enter(2)
@@ -3468,7 +3506,7 @@ contains
          [roots, vs_get(base + 1), vs_get(base + 2)])
     call vs_set(base + 2, fargs)
     res = apply(vs_get(base + 1), vs_get(base + 2))
-    if (has_error) then
+    if (tctx%has_error) then
        ok = .false.
     else if (.not. truthy(res)) then
        ok = .false.
@@ -3488,10 +3526,12 @@ contains
   ! so walk down to something concrete, realising as it goes. Each is
   ! memoised in its own node, so this never repeats work.
   recursive subroutine gce_force(v)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: v
     type(gc_value) :: r, args
     integer :: base
 
+    tctx => ctx_self()
     if (gc_kind(v) /= OBJ_LAZY) return
     if (gc_i1(v) /= LAZY_PENDING) return
     ! NOT while an error is in flight. `apply` refuses to run anything
@@ -3502,7 +3542,7 @@ contains
     ! map, printing forced the seq, and the seq was gone. Leave it
     ! pending; whoever forces it after the error is handled gets the
     ! real elements.
-    if (has_error) return
+    if (tctx%has_error) return
 
     base = vs_enter(2)
     call vs_set(base + 1, v)
@@ -3516,7 +3556,7 @@ contains
        args = gc_slot(vs_get(base + 1), 1)
        call vs_set(base + 2, gcv_conj(gcv_empty([vs_get(base + 1)]), gcv_nth(args, 1), [vs_get(base + 1)]))
        r = apply(gcv_nth(gc_slot(vs_get(base + 1), 1), 0), vs_get(base + 2))
-       if (.not. has_error) then
+       if (.not. tctx%has_error) then
           call vs_set(base + 2, r)
           r = iterate_cell(gcv_nth(gc_slot(vs_get(base + 1), 1), 0), vs_get(base + 2), [vs_get(base + 1)])
        end if
@@ -3525,7 +3565,7 @@ contains
        r = apply(gc_slot(vs_get(base + 1), 1), args)
     end select
     call vs_set(base + 2, r)
-    if (has_error) then
+    if (tctx%has_error) then
        ! The thunk threw. Clojure's LazySeq caches nothing in that case --
        ! it keeps the fn, and the next seq call runs it again and throws
        ! again -- so the cell stays PENDING rather than becoming an
@@ -3662,11 +3702,13 @@ contains
   end subroutine macro_arity_fixup
 
   recursive function expand_macro(fn, form, env, mvar) result(out)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: fn, form, env
     type(gc_value), intent(in), optional :: mvar
     type(gc_value) :: out, args, walk
     integer :: base
 
+    tctx => ctx_self()
     base = vs_enter(5)
     call vs_set(base + 1, fn)
     call vs_set(base + 2, form)
@@ -3695,7 +3737,7 @@ contains
        call vs_set(base + 4, walk)
     end do
     out = apply(vs_get(base + 1), vs_get(base + 3))
-    if (has_error .and. present(mvar)) call macro_arity_fixup(mvar)
+    if (tctx%has_error .and. present(mvar)) call macro_arity_fixup(mvar)
     call vs_leave(base)
   end function expand_macro
 
@@ -3710,6 +3752,7 @@ contains
   !
   ! Built right to left so the result comes out in order.
   recursive function qq_expand(form, env) result(out)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: form, env
     type(gc_value) :: out, head, elt, inner, sym
     integer :: base, i, n
@@ -3721,6 +3764,7 @@ contains
     ! allocate -- so under torture the symbol was collected before it
     ! was ever stored, and the accumulated tail went with it. Only the
     ! torture pass showed it; the plain pass was perfectly green.
+    tctx => ctx_self()
     base = vs_enter(6)
     call vs_set(base + 1, form)
     call vs_set(base + 2, env)
@@ -3815,7 +3859,7 @@ contains
           sym = gc_sym("cons", [vs_get(base + 1), vs_get(base + 4), vs_get(base + 5)])
           call vs_set(base + 3, sym)
           inner = qq_expand(vs_get(base + 5), vs_get(base + 2))
-          if (has_error) then
+          if (tctx%has_error) then
              call vs_leave(base); return
           end if
        end if
@@ -3982,6 +4026,7 @@ contains
   !
   ! `vec` and `set` both take a collection, so only the map needs it.
   recursive function qq_rebuild(form, ctor, env, use_apply) result(out)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: form, env
     character(len=*), intent(in) :: ctor
     logical, intent(in), optional :: use_apply
@@ -3989,6 +4034,7 @@ contains
     logical :: ap
     integer :: base, i
 
+    tctx => ctx_self()
     ap = .false.
     if (present(use_apply)) ap = use_apply
 
@@ -4004,7 +4050,7 @@ contains
        call vs_set(base + 3, lst)
     end do
     inner = qq_expand(vs_get(base + 3), vs_get(base + 2))
-    if (has_error) then
+    if (tctx%has_error) then
        out = gc_nil()
        call vs_leave(base)
        return
@@ -4055,9 +4101,11 @@ contains
   ! Analysis: a form to a node tree, symbols resolved, macros expanded,
   ! locals as slots. `env` is unused and kept for the callers' sake.
   recursive function gce_analyze(form, env) result(out)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: form, env
     type(gc_value) :: out
-    ev_depth = 0
+    tctx => ctx_self()
+    tctx%ev_depth = 0
     out = analyze_top(form)
   end function gce_analyze
 
@@ -4534,6 +4582,7 @@ contains
   ! format string that silently keeps its own text is the kind of
   ! plausible wrong answer that survives for a long time.
   function java_format(fmt, argv) result(s)
+    type(eval_ctx), pointer :: tctx
     character(len=*), intent(in) :: fmt
     type(gc_value), intent(in) :: argv
     character(len=:), allocatable :: s, flags, conv, piece
@@ -4541,6 +4590,7 @@ contains
     logical :: has_w, has_prec
     type(gc_value) :: a
 
+    tctx => ctx_self()
     s = ""
     i = 1
     ai = 0
@@ -4605,7 +4655,7 @@ contains
        a = gcv_nth(argv, ai)
        ai = ai + 1
        piece = format_one(conv, a, prec, has_prec)
-       if (has_error) return
+       if (tctx%has_error) return
        s = s // pad(piece, w, has_w, index(flags, "-") > 0, &
             index(flags, "0") > 0)
     end do
@@ -5270,6 +5320,7 @@ contains
   end subroutine fold_seq
 
   recursive function reduce_native(coll, f, has_init, init) result(out)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: coll, f, init
     logical, intent(in) :: has_init
     type(gc_value) :: out, x, cell, spec
@@ -5277,6 +5328,7 @@ contains
     logical :: have, done
     real(gc_dp) :: sd
     ! slots: 1 coll/cell 2 f 3 acc 4 cursor (a range's next value) 5 hi 6 step
+    tctx => ctx_self()
     base = vs_enter(6)
     call vs_set(base + 1, coll)
     call vs_set(base + 2, f)
@@ -5316,7 +5368,7 @@ contains
              exit
           end if
           call gce_force(cell)
-          if (has_error) exit
+          if (tctx%has_error) exit
           cell = vs_get(base + 1)
           if (gc_i1(cell) /= LAZY_CONS) exit
           call step(gc_slot(cell, 2))
@@ -5339,7 +5391,7 @@ contains
           call vs_set(base + 1, to_seq(sq_rest(vs_get(base + 1), [vs_get(base + 2)]), [vs_get(base + 2)]))
        end do
     end select
-    if (.not. has_error .and. .not. done) then
+    if (.not. tctx%has_error .and. .not. done) then
        if (have) then
           out = vs_get(base + 3)
        else
@@ -5355,8 +5407,10 @@ contains
     ! One element: the first is the accumulator when there was no init;
     ! otherwise (f acc x), and a reduced result unwraps and stops.
     subroutine step(x0)
+    type(eval_ctx), pointer :: tctx
       type(gc_value), intent(in) :: x0
       type(gc_value) :: argv, r
+    tctx => ctx_self()
       if (.not. have) then
          call vs_set(base + 3, x0)
          have = .true.
@@ -5367,7 +5421,7 @@ contains
       call gc_vec_set(gc_slot(argv, 1), 1, vs_get(base + 3))
       call gc_vec_set(gc_slot(argv, 1), 2, x)
       r = apply(vs_get(base + 2), argv)
-      if (has_error) then
+      if (tctx%has_error) then
          done = .true.
          return
       end if
@@ -5482,19 +5536,21 @@ contains
   ! Counted as nothing, a block down there yielded anyway: the builtin
   ! answered nil into compiled code that carried on with it.
   recursive subroutine call_compiled(fn, argbase, nargs, dst)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: fn
     integer, intent(in) :: argbase, nargs, dst
+    tctx => ctx_self()
     if (ev_limit == 0) call read_depth_limit()
-    call push_frame(fn, pending_site)
-    pending_site = 0
-    if (has_error) return
-    ev_depth = ev_depth + 1
-    if (ev_depth > ev_limit) then
+    call push_frame(fn, tctx%pending_site)
+    tctx%pending_site = 0
+    if (tctx%has_error) return
+    tctx%ev_depth = tctx%ev_depth + 1
+    if (tctx%ev_depth > ev_limit) then
        call fail("stack overflow")
     else
        call cf_call(gc_i1(fn), argbase, nargs, dst)
     end if
-    ev_depth = ev_depth - 1
+    tctx%ev_depth = tctx%ev_depth - 1
     call pop_frame()
   end subroutine call_compiled
 
@@ -5582,6 +5638,7 @@ contains
   end function gce_apply
 
   recursive function apply(fn0, args) result(out)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: fn0, args
     type(gc_value) :: out, child, body, params, fn
     integer :: base, i, n
@@ -5590,6 +5647,7 @@ contains
     ! (with-meta (cons (quote fn*) decl) (meta &form)), so the value a
     ! caller holds is an OBJ_META around the closure. Metadata never
     ! changes what a value IS.
+    tctx => ctx_self()
     fn = strip_meta(fn0)
     ! A VAR IS CALLABLE. (#'f x) derefs and applies -- core.clj calls
     ! its own private helpers that way, (#'assert-same-protocol ...), so
@@ -5672,13 +5730,13 @@ contains
        block
          type(gc_value) :: dv, meth
          dv = apply(gc_slot(fn, 2), args)
-         if (has_error) then
+         if (tctx%has_error) then
             call vs_leave(base)
             return
          end if
          call vs_set(base + 3, dv)
          meth = mf_lookup(vs_get(base + 1), vs_get(base + 3), [vs_get(base + 1), vs_get(base + 3)])
-         if (has_error) then
+         if (tctx%has_error) then
             call vs_leave(base)
             return
          end if
@@ -5802,6 +5860,7 @@ contains
   end function apply
 
   function call_builtin(id, args) result(out)
+    type(eval_ctx), pointer :: tctx
     integer, intent(in) :: id
     type(gc_value), intent(in) :: args
     type(gc_value) :: out, a, b
@@ -5811,6 +5870,7 @@ contains
     logical :: hit, checked, promote
     integer :: op
 
+    tctx => ctx_self()
     out = gc_nil()
     hit = .false.
     n = gcv_count(args)
@@ -6291,7 +6351,7 @@ contains
                call vs_set(base + 3, one)
                a = inst_invoke(vs_get(base + 2), "cons", vs_get(base + 3), hit)
                if (.not. hit) a = conj1(vs_get(base + 2), gcv_nth(vs_get(base + 1), i), [vs_get(base + 1)])
-               if (has_error) exit
+               if (tctx%has_error) exit
             end do
             out = a
           end block
@@ -6339,7 +6399,7 @@ contains
             s = to_seq(gcv_nth(vs_get(base + 1), n - 1), [vs_get(base + 1), vs_get(base + 2)])
             call vs_set(base + 3, s)
             ! the fixed arguments still wanted come off the front of the seq
-            do while (gcv_count(vs_get(base + 2)) < req .and. s%tag /= GCT_NIL .and. .not. has_error)
+            do while (gcv_count(vs_get(base + 2)) < req .and. s%tag /= GCT_NIL .and. .not. tctx%has_error)
                v = sq_first(vs_get(base + 3), [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
                fargs = gcv_conj(vs_get(base + 2), v, [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), v])
                call vs_set(base + 2, fargs)
@@ -6348,7 +6408,7 @@ contains
                s = to_seq(vs_get(base + 3), [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
                call vs_set(base + 3, s)
             end do
-            if (has_error) then
+            if (tctx%has_error) then
                continue
             else if (gcv_count(vs_get(base + 2)) > req .or. s%tag /= GCT_NIL) then
                ! leading arguments past the fixed ones go onto the seq as it is
@@ -6386,7 +6446,7 @@ contains
             call vs_set(base + 2, fargs)
          end do
          fargs = vs_get(base + 2)
-         if (.not. has_error) out = apply(gcv_nth(vs_get(base + 1), 0), fargs)
+         if (.not. tctx%has_error) out = apply(gcv_nth(vs_get(base + 1), 0), fargs)
          end if
        end block
     case (B_PRN)
@@ -6866,7 +6926,7 @@ contains
                end if
                if (num_dbl(x) /= num_dbl(y)) same = .false.
             end do
-            if (.not. has_error) out = gc_bool(same)
+            if (.not. tctx%has_error) out = gc_bool(same)
          end if
        end block
 
@@ -7370,7 +7430,7 @@ contains
          character(len=:), allocatable :: nm
          type(gc_value) :: full
          full = call_builtin(B_GETNAME, args)
-         if (.not. has_error) then
+         if (.not. tctx%has_error) then
             nm = text_of(full)
             out = gc_str(nm(index(nm, ".", back=.true.) + 1:), [vs_get(base + 1)])
          end if
@@ -7510,7 +7570,7 @@ contains
             call vs_set(base + 3, fargs)
          end do
          out = apply(gcv_nth(args, 1), vs_get(base + 3))
-         if (.not. has_error) then
+         if (.not. tctx%has_error) then
             call gc_set_slot(vs_get(base + 2), meta_slot(vs_get(base + 2)), out)
          end if
        end block
@@ -7562,11 +7622,11 @@ contains
                if (eof) exit
                call vs_set(base + 3, forms)
                f = gce_analyze(vs_get(base + 3), vs_get(base + 2))
-               if (has_error) exit
+               if (tctx%has_error) exit
                out = gce_eval(f, vs_get(base + 2), [vs_get(base + 1), vs_get(base + 3)])
-               if (has_error) exit
+               if (tctx%has_error) exit
             end do
-            if (.not. has_error) call gce_install_compiled(path)
+            if (.not. tctx%has_error) call gce_install_compiled(path)
          end if
          call gcn_set_current(vs_get(nsb + 1))
          call vs_leave(nsb)
@@ -7706,7 +7766,7 @@ contains
        a = strip_meta(gcv_nth(args, 0))
        if (n >= 2) then
           hit = block_on(a, now_ms() + int(int_of(gcv_nth(args, 1)), gc_ip))
-          if (.not. yield_flag .and. .not. has_error) out = gc_bool(hit)
+          if (.not. tctx%yield_flag .and. .not. tctx%has_error) out = gc_bool(hit)
        else
           hit = block_on(a, -1_gc_ip)
        end if
@@ -7732,7 +7792,7 @@ contains
        out = gc_nil()
        if (b%tag /= GCT_NIL) then
           i = gca_sorted_from(b, gcv_nth(args, 1), truthy(gcv_nth(args, 2)))
-          if (.not. has_error) out = sorted_entries(a, i, truthy(gcv_nth(args, 2)), [vs_get(base + 1)])
+          if (.not. tctx%has_error) out = sorted_entries(a, i, truthy(gcv_nth(args, 2)), [vs_get(base + 1)])
        end if
     case (B_ENTRYKEY)
        ! (. sc entryKey e): an entry's key -- the element itself, for a set
@@ -7775,7 +7835,7 @@ contains
     case (B_CURTASK)
        ! (current-task): the task running now, or nil in the main context
        out = gc_nil()
-       if (gc_kind(cur_task) == OBJ_TASK) out = cur_task
+       if (gc_kind(tctx%cur_task) == OBJ_TASK) out = tctx%cur_task
     case (B_GENIFACE)
        out = gc_nil()
     case (B_ALWAYS_FALSE)
@@ -8207,7 +8267,7 @@ contains
          genv = gce_env()
          call vs_set(base + 2, genv)
          node = gce_analyze(strip_meta(gcv_nth(args, 0)), vs_get(base + 2))
-         if (.not. has_error) then
+         if (.not. tctx%has_error) then
             call vs_set(base + 3, node)
             out = ast_data(vs_get(base + 3), [vs_get(base + 1), vs_get(base + 2)])
             ! and the pool and fingerprint of this same analysis, so the
@@ -8264,7 +8324,7 @@ contains
                acc = gcv_conj(vs_get(lb + 1), form, [vs_get(base + 1), vs_get(lb + 1), form])
                call vs_set(lb + 1, acc)
             end do
-            if (.not. has_error) out = vs_get(lb + 1)
+            if (.not. tctx%has_error) out = vs_get(lb + 1)
             call vs_leave(lb)
          end if
        end block
@@ -8330,7 +8390,7 @@ contains
          genv = gce_env()
          call vs_set(base + 2, genv)
          node = gce_analyze(strip_meta(gcv_nth(args, 0)), vs_get(base + 2))
-         if (.not. has_error) then
+         if (.not. tctx%has_error) then
             call vs_set(base + 3, node)
             out = compiled_pool(vs_get(base + 3), [vs_get(base + 1), vs_get(base + 2)])
          end if
@@ -8507,7 +8567,7 @@ contains
          sq = to_seq(gcv_nth(args, 0), [vs_get(base + 1)])
          call vs_set(base + 2, sq)
          sq = vs_get(base + 2)
-         do while (sq%tag /= GCT_NIL .and. .not. has_error)
+         do while (sq%tag /= GCT_NIL .and. .not. tctx%has_error)
             el = sq_first(vs_get(base + 2), [vs_get(base + 1), vs_get(base + 2)])
             if (id == B_HASHORD) then
                acc = 31 * acc + gc_hash(el)
@@ -8667,8 +8727,8 @@ contains
                gcv_nth(args, 0), gc_nil()], [vs_get(base + 1)])
          call vs_set(base + 2, exc)
          call set_thrown(vs_get(base + 2))
-         has_error = .true.
-         last_error = gcp_str(vs_get(base + 2), .true.)
+         tctx%has_error = .true.
+         tctx%last_error = gcp_str(vs_get(base + 2), .true.)
          out = gc_nil()
        end block
     case (B_TOARRAY)
@@ -9037,7 +9097,7 @@ contains
             end do
          end if
          out = apply(gcv_nth(args, 1), vs_get(lb + 2))
-         if (.not. has_error) then
+         if (.not. tctx%has_error) then
             if (.not. validate_ref(vs_get(lb + 1), &
                  ref_fn_get(vs_get(lb + 1), "validator", [vs_get(lb + 1)]), &
                  out, [vs_get(lb + 1)])) then
@@ -9078,7 +9138,7 @@ contains
             end do
          end if
          out = apply(gcv_nth(args, 1), vs_get(base + 3))
-         if (.not. has_error) call gc_set_slot(vs_get(base + 2), var_root_slot(vs_get(base + 2)), out)
+         if (.not. tctx%has_error) call gc_set_slot(vs_get(base + 2), var_root_slot(vs_get(base + 2)), out)
        end block
     case (B_BINDROOT)
        ! Var.bindRoot: the root, wherever a binding in force has put it
@@ -9151,7 +9211,7 @@ contains
          call vs_set(base + 2, genv)
          form = gce_analyze(gcv_nth(args, 0), vs_get(base + 2))
          call vs_set(base + 3, form)
-         if (.not. has_error) &
+         if (.not. tctx%has_error) &
               out = gce_eval(vs_get(base + 3), vs_get(base + 2), [vs_get(base + 1)])
        end block
     case (B_ALWAYS_NIL)
@@ -9183,13 +9243,13 @@ contains
                call gc_set_slot(kk(j), 1, vv(j))
             end if
          end do
-         if (gc_root_live(binding_stack_root)) then
-            stack = gc_root_get(binding_stack_root)
+         if (gc_root_live(tctx%binding_stack_root)) then
+            stack = gc_root_get(tctx%binding_stack_root)
          else
             stack = gcl_empty([vs_get(base + 3)])
          end if
          stack = gcl_cons(vs_get(base + 3), stack, [vs_get(base + 3), stack])
-         call gc_global_keep(binding_stack_root, stack)
+         call gc_global_keep(tctx%binding_stack_root, stack)
          out = gc_nil()
        end block
     case (B_POPTB)
@@ -9198,8 +9258,8 @@ contains
          type(gc_value), allocatable :: kk(:), vv(:)
          integer :: j
          out = gc_nil()
-         if (gc_root_live(binding_stack_root)) then
-            stack = gc_root_get(binding_stack_root)
+         if (gc_root_live(tctx%binding_stack_root)) then
+            stack = gc_root_get(tctx%binding_stack_root)
             call vs_set(base + 2, stack)
             if (gcl_count(vs_get(base + 2)) > 0) then
                frame = gcl_first(vs_get(base + 2))
@@ -9216,7 +9276,7 @@ contains
                      end if
                   end if
                end do
-               call gc_global_keep(binding_stack_root, &
+               call gc_global_keep(tctx%binding_stack_root, &
                     gcl_rest(vs_get(base + 2), [vs_get(base + 2)]))
             end if
          end if
@@ -9463,7 +9523,7 @@ contains
              call vs_set(base + 2, a)
              b = apply(gc_slot(vs_get(base + 2), 1), &
                   gcv_empty([vs_get(base + 1), vs_get(base + 2)]))
-             if (has_error) then
+             if (tctx%has_error) then
                 ! A DELAY THAT THREW STAYS THROWN, with the SAME
                 ! exception object every time -- Delay.deref
                 ! catches the throwable, drops the thunk and
@@ -9665,7 +9725,7 @@ contains
               end do
             end block
             res = apply(gcv_nth(args, 1), vs_get(base + 3))
-            if (has_error) then
+            if (tctx%has_error) then
                call gc_set_slot(vs_get(base + 2), 5, thrown_value())
                hnd = ref_fn_get(vs_get(base + 2), "error-handler", [vs_get(base + 1)])
                call gce_clear_error()
@@ -10008,7 +10068,7 @@ contains
             fargs = gcv_put(vs_get(base + 3), 4, gcv_nth(args, 2), [vs_get(base + 1), vs_get(base + 3)])
             call vs_set(base + 3, fargs)
             pt = mf_call("prefer", vs_get(base + 3))
-            if (.not. has_error) then
+            if (.not. tctx%has_error) then
                call mf_aux_set(vs_get(base + 2), 1, pt)
                call mf_reset_cache(vs_get(base + 2))
             end if
@@ -10035,7 +10095,7 @@ contains
          type(gc_value) :: m, res, k
          type(c_ptr), allocatable :: grown(:)
          path = pkg_library(text_of(gcv_nth(args, 0)))
-         if (has_error) then
+         if (tctx%has_error) then
             call vs_leave(base)
             return
          end if
@@ -10827,10 +10887,12 @@ contains
   ! works -- true means "less", and false asks the reverse question to
   ! tell 0 from 1. Anything else is a number and its sign is the answer.
   recursive function comparator_call(cmp, x, y) result(c)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: cmp, x, y
     integer :: c
     type(gc_value) :: r, args2, rev
     integer :: base
+    tctx => ctx_self()
     base = vs_enter(4)
     call vs_set(base + 1, cmp)
     ! A VECTOR, not a list: apply counts its arguments with
@@ -10850,7 +10912,7 @@ contains
     r = apply(vs_get(base + 1), vs_get(base + 2))
     call vs_set(base + 3, r)
     c = 0
-    if (has_error) then
+    if (tctx%has_error) then
        call vs_leave(base)
        return
     end if
@@ -10865,7 +10927,7 @@ contains
           rev = gcv_conj(vs_get(base + 2), x, [vs_get(base + 1), vs_get(base + 2)])
           call vs_set(base + 2, rev)
           r = apply(vs_get(base + 1), vs_get(base + 2))
-          if (.not. has_error) then
+          if (.not. tctx%has_error) then
              if (truthy(r)) c = 1
           end if
        end if
@@ -10884,10 +10946,12 @@ contains
   ! merge sort rather than a quicksort for exactly that reason; the
   ! extra array is the price of the guarantee.
   recursive subroutine array_sort(arr, cmp)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: arr, cmp
     integer :: n, width, i, lo, mid, hi
     type(gc_value), allocatable :: buf(:), src(:)
     integer :: base
+    tctx => ctx_self()
     n = seq_len(arr)
     if (n < 2) return
     base = vs_enter(2)
@@ -10906,7 +10970,7 @@ contains
           mid = min(lo + width - 1, n)
           hi = min(lo + 2 * width - 1, n)
           call merge_run(src, buf, lo, mid, hi, vs_get(base + 2))
-          if (has_error) then
+          if (tctx%has_error) then
              call vs_leave(base)
              return
           end if
@@ -10922,11 +10986,13 @@ contains
   end subroutine array_sort
 
   recursive subroutine merge_run(src, buf, lo, mid, hi, cmp)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: src(:)
     type(gc_value), intent(inout) :: buf(:)
     integer, intent(in) :: lo, mid, hi
     type(gc_value), intent(in) :: cmp
     integer :: i, j, k
+    tctx => ctx_self()
     i = lo
     j = mid + 1
     k = lo
@@ -10939,7 +11005,7 @@ contains
           buf(k) = src(i)
           i = i + 1
        end if
-       if (has_error) return
+       if (tctx%has_error) return
        k = k + 1
     end do
     do while (i <= mid)
@@ -12397,10 +12463,12 @@ contains
   ! preferences, the default, and the ambiguity error -- and cached.
   ! nil when there is none. (DEVIATIONS 8, resolved.)
   recursive function mf_lookup(mf, dv, roots) result(meth)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: mf, dv
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: meth, h, fargs, cache
     integer :: base
+    tctx => ctx_self()
     base = vs_enter(4)
     call vs_set(base + 1, mf)
     call vs_set(base + 2, dv)
@@ -12435,7 +12503,7 @@ contains
        fargs = gcv_put(vs_get(base + 4), 5, gc_slot(vs_get(base + 1), 3), [vs_get(base + 1), vs_get(base + 4)])
        call vs_set(base + 4, fargs)
        meth = mf_call("find-method", vs_get(base + 4))
-       if (has_error) then
+       if (tctx%has_error) then
           meth = gc_nil()
           call vs_leave(base)
           return
@@ -14055,10 +14123,12 @@ contains
   end function compiled_pool
 
   recursive function ast_data(nd, roots) result(out)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: nd
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, kids, v
     integer :: b, i
+    tctx => ctx_self()
     out = nd
     if (gc_kind(nd) /= OBJ_AST) return
     b = vs_enter(4)
@@ -14076,7 +14146,7 @@ contains
        do i = 0, gcv_count(vs_get(b + 3)) - 1
           v = ast_walk(gcv_nth(vs_get(b + 3), i), &
                [roots, [vs_get(b + 1), vs_get(b + 2), vs_get(b + 3), vs_get(b + 4)]])
-          if (has_error) then
+          if (tctx%has_error) then
              call vs_leave(b); return
           end if
           v = gcv_conj(vs_get(b + 4), v, &
@@ -14121,11 +14191,13 @@ contains
   ! and each arity's body node sits inside it, so exporting only
   ! direct AST slots showed a function with no body at all.
   recursive function ast_walk(v, roots) result(out)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: v
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, e, m
     type(gc_value), allocatable :: ks(:), vls(:)
     integer :: b, i
+    tctx => ctx_self()
     out = v
     if (gc_kind(v) == OBJ_AST) then
        out = ast_data(v, roots)
@@ -14139,7 +14211,7 @@ contains
        do i = 0, gcv_count(vs_get(b + 1)) - 1
           e = ast_walk(gcv_nth(vs_get(b + 1), i), &
                [roots, [vs_get(b + 1), vs_get(b + 2)]])
-          if (has_error) then
+          if (tctx%has_error) then
              call vs_leave(b); return
           end if
           out = gcv_conj(vs_get(b + 2), e, &
@@ -14158,7 +14230,7 @@ contains
        call vs_set(b + 2, out)
        do i = 1, size(ks)
           e = ast_walk(vls(i), [roots, [vs_get(b + 1), vs_get(b + 2)]])
-          if (has_error) then
+          if (tctx%has_error) then
              call vs_leave(b); return
           end if
           call vs_set(b + 3, e)
@@ -14254,12 +14326,14 @@ contains
   ! EDN has built in, then opts :default (called with tag and form).
   ! A tag nothing answers is an error, as EdnReader raises one.
   recursive function resolve_tags(v, opts, roots) result(out)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: v, opts
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, tag, form, fn, av
     integer :: base, i
+    tctx => ctx_self()
     out = v
-    if (has_error) return
+    if (tctx%has_error) return
     base = vs_enter(6)
     call vs_set(base + 1, v)
     call vs_set(base + 2, opts)
@@ -14270,7 +14344,7 @@ contains
        call vs_set(base + 4, form)
        form = resolve_tags(vs_get(base + 4), vs_get(base + 2), &
             [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 4)])
-       if (has_error) then
+       if (tctx%has_error) then
           call vs_leave(base); return
        end if
        call vs_set(base + 4, form)
@@ -14317,7 +14391,7 @@ contains
        do i = 0, gcv_count(vs_get(base + 1)) - 1
           av = resolve_tags(gcv_nth(vs_get(base + 1), i), vs_get(base + 2), &
                [vs_get(base + 1), vs_get(base + 2), vs_get(base + 6)])
-          if (has_error) then
+          if (tctx%has_error) then
              call vs_leave(base); return
           end if
           call vs_set(base + 5, av)
@@ -14336,13 +14410,13 @@ contains
          do i = 1, size(ks)
             kk = resolve_tags(ks(i), vs_get(base + 2), &
                  [vs_get(base + 1), vs_get(base + 2), vs_get(base + 6)])
-            if (has_error) then
+            if (tctx%has_error) then
                call vs_leave(base); return
             end if
             call vs_set(base + 4, kk)
             vv = resolve_tags(vls(i), vs_get(base + 2), &
                  [vs_get(base + 1), vs_get(base + 2), vs_get(base + 4), vs_get(base + 6)])
-            if (has_error) then
+            if (tctx%has_error) then
                call vs_leave(base); return
             end if
             call vs_set(base + 5, vv)
@@ -14363,7 +14437,7 @@ contains
          do while (tag_of(vs_get(base + 3)) /= GCT_NIL)
             e = resolve_tags(sq_first(vs_get(base + 3), [vs_get(base + 3)]), vs_get(base + 2), &
                  [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 6)])
-            if (has_error) then
+            if (tctx%has_error) then
                call vs_leave(base); return
             end if
             call vs_set(base + 5, e)
@@ -14492,12 +14566,39 @@ contains
   ! Context 1 is the one the program started in; it exists as soon as
   ! anything asks.
   subroutine ctx_ensure_main()
+    logical :: ok
     if (n_ctx > 0) return
+    if (.not. ctx_key_made) then
+       if (.not. th_key_create(ctx_key)) error stop "clotran: no thread key for the evaluator's contexts"
+       ctx_key_made = .true.
+    end if
     allocate(ctxs(8))
     allocate(ctxs(1)%c)
+    ctxs(1)%c%id = 1
     n_ctx = 1
-    cur_ctx = 1
+    ok = th_key_set(ctx_key, c_loc(ctxs(1)%c))
   end subroutine ctx_ensure_main
+
+  ! This thread's context. The first call, on the main thread, makes the
+  ! main context; a thread clotran did not start has none.
+  function ctx_self() result(c)
+    type(eval_ctx), pointer :: c
+    type(c_ptr) :: p
+    if (n_ctx == 0) call ctx_ensure_main()
+    p = th_key_get(ctx_key)
+    if (.not. c_associated(p)) error stop "clotran: the evaluator called on a thread with no context"
+    call c_f_pointer(p, c)
+  end function ctx_self
+
+  ! A hand-off between threads, under the baton: each thread keeps its own
+  ! context, and only the collector's value stack -- still one per process
+  ! until step 14b.3 -- is switched to the receiver's.
+  subroutine ctx_handoff(from, to)
+    integer, intent(in) :: from, to
+    if (from == to) return
+    call gc_stack_save(from)
+    call gc_stack_restore(to)
+  end subroutine ctx_handoff
 
   ! A fresh context: empty stacks, no error, no bindings, its own root
   ! slots for the thrown value and the binding stack.
@@ -14521,14 +14622,16 @@ contains
     n_ctx = n_ctx + 1
     id = n_ctx
     allocate(ctxs(id)%c)   ! default-initialised
+    ctxs(id)%c%id = id
     ctxs(id)%c%last_error = ""
     ctxs(id)%c%last_trace = ""
     call gc_stack_new(id)
   end function gce_ctx_new
 
   integer function gce_ctx_current()
-    call ctx_ensure_main()
-    gce_ctx_current = cur_ctx
+    type(eval_ctx), pointer :: c
+    c => ctx_self()
+    gce_ctx_current = c%id
   end function gce_ctx_current
 
   ! Parks the live context and brings `id` in. Only between steps: a
@@ -14540,51 +14643,13 @@ contains
   ! in progress never executes under the other context.
   subroutine gce_ctx_switch(id)
     integer, intent(in) :: id
-    call ctx_ensure_main()
-    if (id == cur_ctx .or. id < 1 .or. id > n_ctx) return
-    ! out
-    if (allocated(kst)) call move_alloc(kst, ctxs(cur_ctx)%c%kst)
-    ctxs(cur_ctx)%c%ksp = ksp
-    if (allocated(fstack_fn)) then
-       call move_alloc(fstack_fn, ctxs(cur_ctx)%c%fstack_fn)
-       call move_alloc(fstack_site, ctxs(cur_ctx)%c%fstack_site)
-    end if
-    ctxs(cur_ctx)%c%fstack_top = fstack_top
-    ctxs(cur_ctx)%c%pending_site = pending_site
-    ctxs(cur_ctx)%c%ev_depth = ev_depth
-    ctxs(cur_ctx)%c%has_error = has_error
-    if (allocated(last_error)) then
-       ctxs(cur_ctx)%c%last_error = last_error
-    else
-       ctxs(cur_ctx)%c%last_error = ""
-    end if
-    if (allocated(last_trace)) then
-       ctxs(cur_ctx)%c%last_trace = last_trace
-    else
-       ctxs(cur_ctx)%c%last_trace = ""
-    end if
-    ctxs(cur_ctx)%c%thrown_root = thrown_root
-    ctxs(cur_ctx)%c%binding_stack_root = binding_stack_root
-    call gc_stack_save(cur_ctx)
-    ! in
-    if (allocated(kst)) deallocate(kst)
-    if (allocated(ctxs(id)%c%kst)) call move_alloc(ctxs(id)%c%kst, kst)
-    ksp = ctxs(id)%c%ksp
-    if (allocated(fstack_fn)) deallocate(fstack_fn, fstack_site)
-    if (allocated(ctxs(id)%c%fstack_fn)) then
-       call move_alloc(ctxs(id)%c%fstack_fn, fstack_fn)
-       call move_alloc(ctxs(id)%c%fstack_site, fstack_site)
-    end if
-    fstack_top = ctxs(id)%c%fstack_top
-    pending_site = ctxs(id)%c%pending_site
-    ev_depth = ctxs(id)%c%ev_depth
-    has_error = ctxs(id)%c%has_error
-    last_error = ctxs(id)%c%last_error
-    last_trace = ctxs(id)%c%last_trace
-    thrown_root = ctxs(id)%c%thrown_root
-    binding_stack_root = ctxs(id)%c%binding_stack_root
+    type(eval_ctx), pointer :: c
+    logical :: ok
+    c => ctx_self()
+    if (id == c%id .or. id < 1 .or. id > n_ctx) return
+    call gc_stack_save(c%id)
     call gc_stack_restore(id)
-    cur_ctx = id
+    ok = th_key_set(ctx_key, c_loc(ctxs(id)%c))
   end subroutine gce_ctx_switch
 
   subroutine gce_set_home(dir)
@@ -14607,16 +14672,12 @@ contains
        deallocate(ctxs)
     end if
     n_ctx = 0
-    cur_ctx = 0
     handler_ctx = 0
     in_handler = .false.
     resume_pending = .false.
     step_at = 0
     repl_depth = 0
     n_free_ctx = 0
-    yield_flag = .false.
-    task_loop_depth = 0
-    cur_task = gc_nil()
     call gc_stacks_reset()
   end subroutine ctx_reset
 
@@ -14625,7 +14686,9 @@ contains
   subroutine ctx_release(id)
     integer, intent(in) :: id
     integer, allocatable :: bigger(:)
-    if (id < 1 .or. id > n_ctx .or. id == cur_ctx) return
+    if (id < 1 .or. id > n_ctx) return
+    ! never the context this thread is running
+    if (c_associated(th_key_get(ctx_key), c_loc(ctxs(id)%c))) return
     if (allocated(ctxs(id)%c%kst)) deallocate(ctxs(id)%c%kst)
     if (allocated(ctxs(id)%c%fstack_fn)) deallocate(ctxs(id)%c%fstack_fn, ctxs(id)%c%fstack_site)
     ctxs(id)%c%ksp = 0

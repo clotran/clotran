@@ -11,9 +11,11 @@
   ! compare when it has none. Keys compare cannot order throw
   ! ClassCastException, as on the JVM, and the search stops on huge(0).
   recursive function compare_via(cmp, a, b) result(c)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: cmp, a, b
     integer :: c
     logical :: ok
+    tctx => ctx_self()
     c = 0
     if (cmp%tag == GCT_NIL) then
        ! A key ADMITTED to a sorted collection is compared with itself
@@ -33,7 +35,7 @@
        end if
     else
        c = comparator_call(cmp, a, b)
-       if (has_error) c = huge(0)
+       if (tctx%has_error) c = huge(0)
     end if
   end function compare_via
 
@@ -212,12 +214,14 @@
   ! PersistentTreeMap/create keyvals | comparator keyvals, and the set's
   ! create over keys: an empty sorted map, then assoc in turn.
   recursive function sorted_create(args, n, as_set, roots) result(out)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: args
     integer, intent(in) :: n
     logical, intent(in) :: as_set
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, items, mp
     integer :: base, i, step
+    tctx => ctx_self()
     out = gc_nil()
     base = vs_enter(3)
     if (n >= 2) call vs_set(base + 1, gcv_nth(args, 0))   ! the comparator; nil otherwise
@@ -235,10 +239,10 @@
           mp = gca_assoc(vs_get(base + 3), gcv_nth(vs_get(base + 2), i), gcv_nth(vs_get(base + 2), i + 1), &
                [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
        end if
-       if (has_error) exit
+       if (tctx%has_error) exit
        call vs_set(base + 3, mp)
     end do
-    if (.not. has_error) then
+    if (.not. tctx%has_error) then
        if (as_set) then
           out = gc_obj(OBJ_SET, [vs_get(base + 3)], [roots, vs_get(base + 3)])
        else

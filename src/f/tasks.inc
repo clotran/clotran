@@ -59,10 +59,10 @@
   ! heap and the interpreter's globals stay single-threaded, and every
   ! answer is what it was.
   !
-  ! Handing over is a context switch plus a wake-up: the holder switches
-  ! the interpreter's globals to the next context (gce_ctx_switch, whose
-  ! stacks the collector already scans in every context), names it in
-  ! baton_ctx and wakes the waiters; the named thread goes on. Whoever
+  ! Each thread owns its context (ctx_self, PLAN.md step 14b), so handing
+  ! over is a wake-up: the holder switches the collector's value stack to
+  ! the next context (ctx_handoff -- the one piece still per process),
+  ! names it in baton_ctx and wakes the waiters; the named thread goes on. Whoever
   ! hands a task the baton -- its STEPPER -- gets it back when the task
   ! blocks or ends, so scheduling is what it was under the green threads:
   ! deterministic, a future running when made until it blocks.
@@ -120,8 +120,8 @@
     me = gce_ctx_current()
     call ctx_arrays(max(me, next))
     came_from(next) = me
-    call gce_ctx_switch(next)
-    cur_task = ctx_task(next)
+    call ctx_handoff(me, next)
+    ctxs(next)%c%cur_task = ctx_task(next)
     ok = th_lock_acquire(baton_lock)
     baton_ctx = next
     ok = th_cond_broadcast(baton_cond)
@@ -152,8 +152,8 @@
   subroutine give_baton(next)
     integer, intent(in) :: next
     logical :: ok
-    call gce_ctx_switch(next)
-    cur_task = ctx_task(next)
+    call ctx_handoff(gce_ctx_current(), next)
+    ctxs(next)%c%cur_task = ctx_task(next)
     ok = th_lock_acquire(baton_lock)
     baton_ctx = next
     ok = th_cond_broadcast(baton_cond)
@@ -163,20 +163,22 @@
   ! Before a native call: a task parks as native and lets its stepper
   ! go on. `me` is its context; `released` whether the baton was given.
   subroutine native_begin(me, released)
+    type(eval_ctx), pointer :: tctx
     integer, intent(out) :: me
     logical, intent(out) :: released
     logical :: ok
+    tctx => ctx_self()
     released = .false.
     me = 0
     if (.not. baton_up) return
-    if (gc_kind(cur_task) /= OBJ_TASK) return
+    if (gc_kind(tctx%cur_task) /= OBJ_TASK) return
     me = gce_ctx_current()
     call ctx_arrays(me)
     ! parked with nothing to wait for but the call itself: runnable as
     ! soon as it returns (a deadline already past; runnable_now)
-    call gc_set_slot(cur_task, 3, gc_nil())
-    call gc_set_slot(cur_task, 4, gc_int(0_gc_ip))
-    call gc_set_i1(cur_task, TASK_RUNNABLE)
+    call gc_set_slot(tctx%cur_task, 3, gc_nil())
+    call gc_set_slot(tctx%cur_task, 4, gc_int(0_gc_ip))
+    call gc_set_i1(tctx%cur_task, TASK_RUNNABLE)
     ok = th_lock_acquire(baton_lock)
     ctx_native(me) = .true.
     natives_running = natives_running + 1
@@ -186,7 +188,8 @@
   end subroutine native_begin
 
   ! After it: say so, wake whoever waits for a native call to end, and
-  ! wait to be stepped -- the stepper switches the globals back to `me`.
+  ! wait to be stepped -- the stepper switches the collector's stack back
+  ! to `me`.
   subroutine native_end(me)
     integer, intent(in) :: me
     logical :: ok
@@ -259,6 +262,7 @@
   ! A task's thread: wait for the baton, run the task's body to its end,
   ! give its context back and the baton to its stepper, and finish.
   recursive function task_thread_main(arg) result(r) bind(C)
+    type(eval_ctx), pointer :: tctx
     type(c_ptr), value :: arg
     type(c_ptr) :: r
     type(gc_value) :: task, fn, frame, body, val
@@ -276,7 +280,11 @@
        ok = th_cond_wait(baton_cond, baton_lock)
     end do
     ok = th_lock_release(baton_lock)
-    ! the stepper switched the globals to this context before handing over
+    ! this thread's context, for good. Set holding the baton: no one grows
+    ! the context table meanwhile. The stepper switched the collector's
+    ! stack to it before handing over.
+    ok = th_key_set(ctx_key, c_loc(ctxs(me)%c))
+    tctx => ctx_self()
     task = ctx_task(me)
     call gce_clear_error()
     val = gc_nil()
@@ -286,13 +294,13 @@
     ok = bind_closure(fn, gcv_empty(none), frame, body)
     if (ok) then
        call k_push(body, frame, ior(KF_FNBODY, KF_RESTART), body)
-       call vs_set(kst(ksp)%base + 7, fn)
+       call vs_set(tctx%kst(tctx%ksp)%base + 7, fn)
        if (task_trace) write(0, '(A,I0)') "task thread: running context ", me
-       if (.not. has_error) val = run_loop(0, 0)
+       if (.not. tctx%has_error) val = run_loop(0, 0)
     else
        call pop_frame()
     end if
-    if (has_error) then
+    if (tctx%has_error) then
        call gc_set_slot(task, 2, failure_value())
        if (gc_i1(task) == TASK_RUNNING) call gc_set_i1(task, TASK_FAILED)
        call gce_clear_error()
@@ -303,9 +311,11 @@
     call vs_leave(0)
     ! back to the stepper, for good: this context goes back for reuse
     next = came_from(me)
-    call gce_ctx_switch(next)
-    cur_task = ctx_task(next)
+    call ctx_handoff(me, next)
+    ctxs(next)%c%cur_task = ctx_task(next)
     ctx_task(me) = gc_nil()
+    ! this thread is done with its context: it goes back for reuse
+    ok = th_key_set(ctx_key, c_null_ptr)
     call ctx_release(me)
     ok = th_lock_acquire(baton_lock)
     baton_ctx = next
@@ -382,13 +392,15 @@
   ! deadline; CancellationException if cancelled -- java.util.concurrent's
   ! names, which core.clj's deref-future catches.
   recursive function task_get(task, deadline) result(out)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: task
     integer(gc_ip), intent(in) :: deadline
     type(gc_value) :: out
     logical :: ready
+    tctx => ctx_self()
     out = gc_nil()
     ready = block_on(task, deadline)
-    if (yield_flag .or. has_error) return
+    if (tctx%yield_flag .or. tctx%has_error) return
     if (.not. ready) then
        call raise_class("java.util.concurrent.TimeoutException", "the future did not finish in time", [task])
        return
@@ -481,9 +493,11 @@
 
   ! Done waiting: the running task's wait slots are cleared.
   subroutine clear_wait()
-    if (gc_kind(cur_task) /= OBJ_TASK) return
-    call gc_set_slot(cur_task, 3, gc_nil())
-    call gc_set_slot(cur_task, 4, gc_nil())
+    type(eval_ctx), pointer :: tctx
+    tctx => ctx_self()
+    if (gc_kind(tctx%cur_task) /= OBJ_TASK) return
+    call gc_set_slot(tctx%cur_task, 3, gc_nil())
+    call gc_set_slot(tctx%cur_task, 4, gc_nil())
   end subroutine clear_wait
 
   ! Parked, and its wait is over: what it waited for is ready, or its
@@ -584,6 +598,7 @@
   ! nothing runnable and a deadline still to come this spins; sleeping
   ! is the one thing a single thread cannot delegate.
   recursive function block_on(target, deadline0) result(ready)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: target
     integer(gc_ip), intent(in) :: deadline0
     logical :: ready
@@ -591,14 +606,15 @@
     type(gc_value) :: t, dl
     logical :: sleeping
     integer :: ngen, nrun
+    tctx => ctx_self()
     ready = satisfied(target)
     if (ready) then
        call clear_wait()
        return
     end if
     deadline = deadline0
-    if (gc_kind(cur_task) == OBJ_TASK) then
-       dl = gc_slot(cur_task, 4)
+    if (gc_kind(tctx%cur_task) == OBJ_TASK) then
+       dl = gc_slot(tctx%cur_task, 4)
        if (dl%tag == GCT_INT) deadline = dl%ival
     end if
     if (deadline >= 0) then
@@ -607,21 +623,21 @@
           return
        end if
     end if
-    if (task_trace) write(0, '(A,I0,A,I0,A,I0,A,I0,A,I0,A,I0)') "block_on: cur_task kind=", gc_kind(cur_task), &
-         " ev_depth=", ev_depth, " loop_depth=", task_loop_depth, " target kind=", gc_kind(target), &
-         " top node kind=", gc_i1(vs_get(kst(ksp)%base + 1)), " ksp=", ksp
-    if (gc_kind(cur_task) == OBJ_TASK) then
+    if (task_trace) write(0, '(A,I0,A,I0,A,I0,A,I0,A,I0,A,I0)') "block_on: cur_task kind=", gc_kind(tctx%cur_task), &
+         " ev_depth=", tctx%ev_depth, " loop_depth=", tctx%task_loop_depth, " target kind=", gc_kind(target), &
+         " top node kind=", gc_i1(vs_get(tctx%kst(tctx%ksp)%base + 1)), " ksp=", tctx%ksp
+    if (gc_kind(tctx%cur_task) == OBJ_TASK) then
        ! A TASK parks right here, on its own thread's stack -- below
        ! compiled code or not -- and gives the baton back to its stepper,
        ! who steps it again once what it waits for is ready or its
        ! deadline has passed (runnable_now).
-       call gc_set_slot(cur_task, 3, target)
+       call gc_set_slot(tctx%cur_task, 3, target)
        if (deadline >= 0) then
-          call gc_set_slot(cur_task, 4, gc_int(deadline))
+          call gc_set_slot(tctx%cur_task, 4, gc_int(deadline))
        else
-          call gc_set_slot(cur_task, 4, gc_nil())
+          call gc_set_slot(tctx%cur_task, 4, gc_nil())
        end if
-       call gc_set_i1(cur_task, TASK_RUNNABLE)
+       call gc_set_i1(tctx%cur_task, TASK_RUNNABLE)
        call hand_to(came_from(gce_ctx_current()))
        ready = satisfied(target)
        call clear_wait()
@@ -632,7 +648,7 @@
        t = pick_runnable(target, sleeping)
        if (gc_kind(t) == OBJ_TASK) then
           call task_step(t)
-          if (has_error) return
+          if (tctx%has_error) return
        else if (nrun > 0) then
           ! tasks are inside native calls: one of them ending is progress
           call wait_native(ngen)

@@ -8,12 +8,12 @@
  "CompiledFn.f90/pool_root" {:class :shared, :note "a registry: additions under a lock"}
  "CompiledFn.f90/tbl" {:class :shared, :note "a registry: additions under a lock"}
  "CompiledFn.f90/used" {:class :shared, :note "a registry: additions under a lock"}
- "Eval.f90/analyzing_method" :thread
+ "Eval.f90/ctx_key" {:class :fixed, :note "made once, on the main thread, before any other thread exists"}
+ "Eval.f90/ctx_key_made" {:class :fixed, :note "with ctx_key"}
  "Eval.f90/baton_cond" {:class :shared, :note "the baton itself, under its own lock"}
  "Eval.f90/baton_ctx" {:class :shared, :note "the baton itself, under its own lock"}
  "Eval.f90/baton_lock" {:class :shared, :note "the baton itself, under its own lock"}
  "Eval.f90/baton_up" {:class :shared, :note "the baton itself, under its own lock"}
- "Eval.f90/binding_stack_root" :thread
  "Eval.f90/break_mode" {:class :fixed, :note "read once from the environment (lazily: the same value from any thread)"}
  "Eval.f90/break_path" {:class :fixed, :note "read once from the environment"}
  "Eval.f90/break_root" {:class :shared, :note "the debugger: one break at a time, under a lock"}
@@ -24,14 +24,8 @@
  "Eval.f90/ctx_native" {:class :shared, :note "the context table: under a lock (step 14a/b)"}
  "Eval.f90/ctx_task" {:class :shared, :note "the context table: under a lock (step 14a/b)"}
  "Eval.f90/ctxs" {:class :shared, :note "the context table: under a lock (step 14a/b)"}
- "Eval.f90/cur_ctx" :thread
- "Eval.f90/cur_task" :thread
- "Eval.f90/ev_depth" :thread
  "Eval.f90/ev_limit" {:class :fixed, :note "read once from the environment"}
  "Eval.f90/free_ctx" {:class :shared, :note "the context table: under a lock (step 14a/b)"}
- "Eval.f90/fstack_fn" :thread
- "Eval.f90/fstack_site" :thread
- "Eval.f90/fstack_top" :thread
  "Eval.f90/gce_evals" {:class :shared, :note "a counter: atomic, or under a lock"}
  "Eval.f90/gensym_id" {:class :shared, :note "a counter: atomic, or under a lock"}
  "Eval.f90/gensym_root" {:class :shared, :note "a counter: atomic, or under a lock"}
@@ -39,16 +33,11 @@
  "Eval.f90/handler_ctx" {:class :shared, :note "the debugger: one break at a time, under a lock"}
  "Eval.f90/handler_fn_root" {:class :shared, :note "the debugger: one break at a time, under a lock"}
  "Eval.f90/handler_var_root" {:class :shared, :note "the debugger: one break at a time, under a lock"}
- "Eval.f90/has_error" :thread
  "Eval.f90/import_full" {:class :shared, :note "a registry: additions under a lock"}
  "Eval.f90/import_short" {:class :shared, :note "a registry: additions under a lock"}
  "Eval.f90/in_handler" {:class :shared, :note "the debugger: one break at a time, under a lock"}
  "Eval.f90/k_limit" {:class :fixed, :note "read once from the environment"}
  "Eval.f90/keep_locals_mode" {:class :fixed, :note "read once from the environment"}
- "Eval.f90/ksp" :thread
- "Eval.f90/kst" :thread
- "Eval.f90/last_error" :thread
- "Eval.f90/last_trace" :thread
  "Eval.f90/ld_loaded" {:class :shared, :note "load once: the first load under a lock, the rest wait"}
  "Eval.f90/main_mailbox_root" {:class :shared, :note "the task table: under the context-table lock"}
  "Eval.f90/math_ctx_root" {:class :fixed, :note "#'*math-context* itself, found once; its binding is per-thread through the Var"}
@@ -58,34 +47,26 @@
  "Eval.f90/n_imports" {:class :shared, :note "a registry: additions under a lock"}
  "Eval.f90/native_gen" {:class :shared, :note "the baton's bookkeeping, under the baton lock"}
  "Eval.f90/natives_running" {:class :shared, :note "the baton's bookkeeping, under the baton lock"}
- "Eval.f90/pending_site" :thread
  "Eval.f90/pk_loaded" {:class :shared, :note "load once: the first load under a lock, the rest wait"}
  "Eval.f90/pkg_count" {:class :shared, :note "a registry: additions under a lock"}
  "Eval.f90/pkg_handles" {:class :shared, :note "a registry: additions under a lock"}
  "Eval.f90/pkg_roots" {:class :shared, :note "a registry: additions under a lock"}
  "Eval.f90/proxy_id" {:class :shared, :note "a counter: atomic, or under a lock"}
- "Eval.f90/qq_depth" :thread
- "Eval.f90/recur_root" :thread
  "Eval.f90/reify_id" {:class :shared, :note "a counter: atomic, or under a lock"}
  "Eval.f90/repl_depth" {:class :shared, :note "the debugger: one break at a time, under a lock"}
  "Eval.f90/repl_fn_root" {:class :shared, :note "the debugger: one break at a time, under a lock"}
  "Eval.f90/resume_pending" {:class :shared, :note "the debugger: one break at a time, under a lock"}
  "Eval.f90/resume_root" {:class :shared, :note "the debugger: one break at a time, under a lock"}
  "Eval.f90/rt_loaded" {:class :shared, :note "load once: the first load under a lock, the rest wait"}
- "Eval.f90/scratch1_root" :thread
- "Eval.f90/scratch2_root" :thread
  "Eval.f90/spec_check" {:class :fixed, :note "set by a flag before evaluation starts"}
  "Eval.f90/spec_loaded" {:class :shared, :note "load once: the first load under a lock, the rest wait"}
  "Eval.f90/spec_loading" {:class :shared, :note "load once: the first load under a lock, the rest wait"}
  "Eval.f90/step_at" {:class :shared, :note "the debugger: one break at a time, under a lock"}
- "Eval.f90/task_loop_depth" :thread
  "Eval.f90/task_trace" {:class :fixed, :note "read once from the environment"}
  "Eval.f90/task_trace_read" {:class :fixed, :note "read once from the environment"}
  "Eval.f90/tasks_root" {:class :shared, :note "the task table: under the context-table lock"}
- "Eval.f90/thrown_root" :thread
  "Eval.f90/trace_macros" {:class :fixed, :note "read once from the environment"}
  "Eval.f90/types_root" {:class :shared, :note "every deftype, one table as the JVM has one class namespace: additions under a lock"}
- "Eval.f90/yield_flag" :thread
  "GC.f90/arena_alloc_since" {:class :shared, :note "the collector: allocation from per-thread batches (14d), collection and growth at a safepoint (14c)"}
  "GC.f90/arena_fresh" {:class :shared, :note "the collector: allocation from per-thread batches (14d), collection and growth at a safepoint (14c)"}
  "GC.f90/arena_live" {:class :shared, :note "the collector: allocation from per-thread batches (14d), collection and growth at a safepoint (14c)"}

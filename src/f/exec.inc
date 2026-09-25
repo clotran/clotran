@@ -54,10 +54,12 @@
 
   ! Evaluates every child into a persistent vector of values.
   recursive function exec_args(kids, from, frame) result(argv)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: kids, frame
     integer, intent(in) :: from
     type(gc_value) :: argv, v
     integer :: base, i
+    tctx => ctx_self()
     base = vs_enter(3)
     call vs_set(base + 1, kids)
     call vs_set(base + 2, frame)
@@ -65,7 +67,7 @@
     call vs_set(base + 3, argv)
     do i = from, gcv_count(vs_get(base + 1)) - 1
        v = exec(gcv_nth(vs_get(base + 1), i), vs_get(base + 2))
-       if (has_error) exit
+       if (tctx%has_error) exit
        argv = gcv_put(vs_get(base + 3), i - from, v, [vs_get(base + 1), vs_get(base + 2), v])
        call vs_set(base + 3, argv)
     end do
@@ -129,16 +131,18 @@
   ! restseq, when given, is the REST argument as it is -- a seq apply
   ! did not realise -- with argv holding only the fixed arguments.
   recursive function invoke_closure(fn, argv, restseq) result(out)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: fn, argv
     type(gc_value), intent(in), optional :: restseq
     type(gc_value) :: out, frame, body
     integer :: base
     logical :: ok
+    tctx => ctx_self()
     out = gc_nil()
     base = vs_enter(1)
     call vs_set(base + 1, fn)
-    call push_frame(fn, pending_site)
-    pending_site = 0
+    call push_frame(fn, tctx%pending_site)
+    tctx%pending_site = 0
     if (present(restseq)) then
        ok = bind_closure(vs_get(base + 1), argv, frame, body, restseq)
     else
@@ -366,6 +370,7 @@
   ! arity, and the others' slots read nil without ever having been
   ! bound, which is not the same thing.
   function break_frames(roots) result(out)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, m, fn, nd, env, names, tmpl, nm, pos
     type(gc_value), allocatable :: ks(:), vls(:)
@@ -373,12 +378,13 @@
     integer :: base, i, j, b, line, col, slot, lo, hi, pline, pcol
     logical :: have_pos
 
+    tctx => ctx_self()
     base = vs_enter(4)
     out = gcv_empty(roots)
     call vs_set(base + 1, out)
     have_pos = .false.
-    do i = ksp, 1, -1
-       b = kst(i)%base
+    do i = tctx%ksp, 1, -1
+       b = tctx%kst(i)%base
        nd = vs_get(b + 1)
        ! Where a fn IS: its innermost pending node's position, the one
        ! a trace line shows -- the call it is waiting on, or the break
@@ -506,9 +512,11 @@
 
   ! The paused state, stored and answered. `reason` is :error or :break.
   function capture_break(reason) result(out)
+    type(eval_ctx), pointer :: tctx
     character(len=*), intent(in) :: reason
     type(gc_value) :: out, fr
     integer :: base
+    tctx => ctx_self()
     base = vs_enter(2)
     fr = break_frames([gc_nil()])
     call vs_set(base + 1, fr)
@@ -516,8 +524,8 @@
     call vs_set(base + 2, out)
     call brk_put(base + 2, "reason", gc_key(reason, [vs_get(base + 1), vs_get(base + 2)]), &
          [vs_get(base + 1)], base)
-    if (allocated(last_error)) then
-       call brk_put(base + 2, "message", gc_str(last_error, [vs_get(base + 1), vs_get(base + 2)]), &
+    if (allocated(tctx%last_error)) then
+       call brk_put(base + 2, "message", gc_str(tctx%last_error, [vs_get(base + 1), vs_get(base + 2)]), &
             [vs_get(base + 1)], base)
     end if
     call brk_put(base + 2, "frames", vs_get(base + 1), [vs_get(base + 1)], base)
@@ -549,13 +557,15 @@
   ! callers make, so it walks this body without descending; out = the
   ! next call made once this frame has returned.
   recursive function take_break(reason) result(out)
+    type(eval_ctx), pointer :: tctx
     character(len=*), intent(in) :: reason
-    type(gc_value) :: out, h, cmd, argv, thrown, saved_task
+    type(gc_value) :: out, h, cmd, argv, thrown
     type(gc_value) :: none(0)
-    integer :: base, paused, depth, saved_depth
+    integer :: base, paused, depth
     logical :: failed
     character(len=:), allocatable :: msg, trc
 
+    tctx => ctx_self()
     out = gc_nil()
     if (in_handler .and. reason /= "break") return
     out = capture_break(reason)
@@ -566,18 +576,17 @@
     if (in_handler .or. h%tag == GCT_NIL) return
     ! read here, in the paused context, where a `binding` of it is in force
     call gc_global_keep(handler_fn_root, h)
-    depth = fstack_top
+    depth = tctx%fstack_top
 
     if (handler_ctx == 0) handler_ctx = gce_ctx_new()
     paused = gce_ctx_current()
-    ctxs(handler_ctx)%c%ev_depth = ev_depth   ! one Fortran stack: the nesting limit counts on
+    ctxs(handler_ctx)%c%ev_depth = tctx%ev_depth   ! one Fortran stack: the nesting limit counts on
     ! the handler is not a task, whatever it interrupted was
-    saved_task = cur_task
-    saved_depth = task_loop_depth
-    cur_task = gc_nil()
-    task_loop_depth = 0
     in_handler = .true.
     call gce_ctx_switch(handler_ctx)
+    tctx => ctx_self()   ! the handler's context now: re-read
+    tctx%cur_task = gc_nil()
+    tctx%task_loop_depth = 0
     call gce_clear_error()
     base = vs_enter(1)
     argv = gcv_build(1, none)
@@ -586,26 +595,25 @@
     call vs_set(base + 1, argv)
     cmd = apply(gc_root_get(handler_fn_root), vs_get(base + 1))
     call gc_global_keep(resume_root, cmd)
-    failed = has_error
+    failed = tctx%has_error
     thrown = gc_nil()
     if (failed) then
-       msg = last_error
-       trc = last_trace
+       msg = tctx%last_error
+       trc = tctx%last_trace
        thrown = thrown_value()   ! stays rooted: the handler context keeps its slot
     end if
     call vs_leave(base)
     call gce_ctx_switch(paused)
+    tctx => ctx_self()   ! the paused context again
     in_handler = .false.
-    cur_task = saved_task
-    task_loop_depth = saved_depth
     ! back where the break was taken; the error state is as it was
 
     out = gc_nil()
     if (failed .and. reason /= "error") then
        ! the handler threw: that is the break's answer, thrown here
-       has_error = .true.
-       last_error = msg
-       last_trace = trc
+       tctx%has_error = .true.
+       tctx%last_error = msg
+       tctx%last_trace = trc
        call set_thrown(thrown)
        return
     end if
@@ -622,9 +630,9 @@
        case ("abort")
           ! set directly, not through fail: an abort is not an error to
           ! take another break on
-          has_error = .true.
-          last_error = "aborted at break"
-          last_trace = ""
+          tctx%has_error = .true.
+          tctx%last_error = "aborted at break"
+          tctx%last_trace = ""
        end select
     else if (gca_is(cmd)) then
        out = gca_get(cmd, gc_key("continue", [cmd]))
@@ -635,8 +643,10 @@
   ! no deeper than step_at. Called once the callee's frame is in place,
   ! so the break shows it at the top with its arguments bound.
   recursive subroutine step_check()
+    type(eval_ctx), pointer :: tctx
     type(gc_value) :: v
-    if (fstack_top > step_at) return
+    tctx => ctx_self()
+    if (tctx%fstack_top > step_at) return
     step_at = 0
     v = take_break("step")
   end subroutine step_check
@@ -737,50 +747,56 @@
 
   ! The scratch vector of n slots (1 or 2), made once.
   function scratch_args(n) result(v)
+    type(eval_ctx), pointer :: tctx
     integer, intent(in) :: n
     type(gc_value) :: v
+    tctx => ctx_self()
     if (n == 1) then
-       if (.not. gc_root_live(scratch1_root)) call gc_global_keep(scratch1_root, gcv_build(1, [gc_nil()]))
-       v = gc_root_get(scratch1_root)
+       if (.not. gc_root_live(tctx%scratch1_root)) call gc_global_keep(tctx%scratch1_root, gcv_build(1, [gc_nil()]))
+       v = gc_root_get(tctx%scratch1_root)
     else
-       if (.not. gc_root_live(scratch2_root)) call gc_global_keep(scratch2_root, gcv_build(2, [gc_nil()]))
-       v = gc_root_get(scratch2_root)
+       if (.not. gc_root_live(tctx%scratch2_root)) call gc_global_keep(tctx%scratch2_root, gcv_build(2, [gc_nil()]))
+       v = gc_root_get(tctx%scratch2_root)
     end if
   end function scratch_args
 
   ! The recur marker, one for the whole process.
   function recur_marker() result(v)
+    type(eval_ctx), pointer :: tctx
     type(gc_value) :: v
-    if (.not. gc_root_live(recur_root)) call gc_global_keep(recur_root, gc_obj(OBJ_RECUR, [gc_nil()], [gc_nil()]))
-    v = gc_root_get(recur_root)
+    tctx => ctx_self()
+    if (.not. gc_root_live(tctx%recur_root)) call gc_global_keep(tctx%recur_root, gc_obj(OBJ_RECUR, [gc_nil()], [gc_nil()]))
+    v = gc_root_get(tctx%recur_root)
   end function recur_marker
 
   subroutine k_push(nd, frame, flags, restart)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: nd, frame, restart
     integer, intent(in) :: flags
     type(kframe), allocatable :: bigger(:)
     integer :: n, b
-    if (.not. allocated(kst)) allocate(kst(1024))
-    if (ksp >= size(kst)) then
-       n = size(kst)
+    tctx => ctx_self()
+    if (.not. allocated(tctx%kst)) allocate(tctx%kst(1024))
+    if (tctx%ksp >= size(tctx%kst)) then
+       n = size(tctx%kst)
        allocate(bigger(2 * n))
-       bigger(1:n) = kst(1:n)
-       call move_alloc(bigger, kst)
+       bigger(1:n) = tctx%kst(1:n)
+       call move_alloc(bigger, tctx%kst)
     end if
     if (k_limit == 0) call read_frame_limit()
-    if (ksp >= k_limit) then
+    if (tctx%ksp >= k_limit) then
        call fail("stack overflow")
        return
     end if
     b = vs_enter(K_SLOTS)
-    ksp = ksp + 1
-    kst(ksp)%base = b
-    kst(ksp)%pc = 0
-    kst(ksp)%i = 0
-    kst(ksp)%flags = flags
-    kst(ksp)%nfr = 0
-    kst(ksp)%mode = 0
-    if (iand(flags, KF_FNBODY) /= 0) kst(ksp)%nfr = 1
+    tctx%ksp = tctx%ksp + 1
+    tctx%kst(tctx%ksp)%base = b
+    tctx%kst(tctx%ksp)%pc = 0
+    tctx%kst(tctx%ksp)%i = 0
+    tctx%kst(tctx%ksp)%flags = flags
+    tctx%kst(tctx%ksp)%nfr = 0
+    tctx%kst(tctx%ksp)%mode = 0
+    if (iand(flags, KF_FNBODY) /= 0) tctx%kst(tctx%ksp)%nfr = 1
     call vs_set(b + 1, nd)
     call vs_set(b + 2, frame)
     call vs_set(b + 5, restart)
@@ -790,16 +806,18 @@
   ! The top frame becomes `nd`, keeping its locals, flags and restart
   ! point: a child in tail position.
   subroutine k_tail(nd)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: nd
     integer :: b
-    b = kst(ksp)%base
+    tctx => ctx_self()
+    b = tctx%kst(tctx%ksp)%base
     call vs_set(b + 1, nd)
     call vs_set(b + 3, gc_nil())
     call vs_set(b + 4, gc_nil())
     call vs_set(b + 6, gc_nil())
-    kst(ksp)%pc = 0
-    kst(ksp)%i = 0
-    kst(ksp)%mode = 0
+    tctx%kst(tctx%ksp)%pc = 0
+    tctx%kst(tctx%ksp)%i = 0
+    tctx%kst(tctx%ksp)%mode = 0
     gce_evals = gce_evals + 1
   end subroutine k_tail
 
@@ -807,42 +825,46 @@
   ! point that received the recur marker runs its body again instead;
   ! a fn body's frame leaves the call stack on the way out.
   subroutine k_finish(val)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(inout) :: val
     integer :: b
-    b = kst(ksp)%base
-    if (iand(kst(ksp)%flags, KF_RESTART) /= 0 .and. gc_kind(val) == OBJ_RECUR) then
+    tctx => ctx_self()
+    b = tctx%kst(tctx%ksp)%base
+    if (iand(tctx%kst(tctx%ksp)%flags, KF_RESTART) /= 0 .and. gc_kind(val) == OBJ_RECUR) then
        call vs_set(b + 1, vs_get(b + 5))
        call vs_set(b + 3, gc_nil())
        call vs_set(b + 4, gc_nil())
-       kst(ksp)%pc = 0
-       kst(ksp)%i = 0
+       tctx%kst(tctx%ksp)%pc = 0
+       tctx%kst(tctx%ksp)%i = 0
        val = gc_nil()
        return
     end if
-    do while (kst(ksp)%nfr > 0)
+    do while (tctx%kst(tctx%ksp)%nfr > 0)
        call pop_frame()
-       kst(ksp)%nfr = kst(ksp)%nfr - 1
+       tctx%kst(tctx%ksp)%nfr = tctx%kst(tctx%ksp)%nfr - 1
     end do
     call vs_leave(b)
-    ksp = ksp - 1
+    tctx%ksp = tctx%ksp - 1
   end subroutine k_finish
 
   ! An error is set: pop frames down to `kbot`, giving each try its
   ! chance. Returns with has_error false and a catch or finally body
   ! pushed, or with has_error true and the stack at kbot.
   subroutine k_unwind(kbot)
+    type(eval_ctx), pointer :: tctx
     integer, intent(in) :: kbot
     type(gc_value) :: nd, exc, catches, cl, fin
     integer :: b, i, n
-    do while (ksp > kbot)
-       b = kst(ksp)%base
+    tctx => ctx_self()
+    do while (tctx%ksp > kbot)
+       b = tctx%kst(tctx%ksp)%base
        nd = vs_get(b + 1)
        call note_position(nd)
-       if (gc_i1(nd) == N_TRY .and. (kst(ksp)%pc == 1 .or. kst(ksp)%pc == 3)) then
+       if (gc_i1(nd) == N_TRY .and. (tctx%kst(tctx%ksp)%pc == 1 .or. tctx%kst(tctx%ksp)%pc == 3)) then
           exc = thrown_value()
           if (exc%tag == GCT_NIL) exc = error_value(gce_error(), [nd])
           call vs_set(b + 3, exc)
-          if (kst(ksp)%pc == 1) then
+          if (tctx%kst(tctx%ksp)%pc == 1) then
              catches = gc_slot(nd, 2)
              n = gcv_count(catches)
              do i = 0, n - 1
@@ -851,7 +873,7 @@
                 if (.not. catch_matches(gcv_nth(vs_get(b + 4), 0), vs_get(b + 3), gc_nil())) cycle
                 call gce_clear_error()
                 call frame_set(vs_get(b + 2), int_of(gcv_nth(vs_get(b + 4), 1)), vs_get(b + 3))
-                kst(ksp)%pc = 3
+                tctx%kst(tctx%ksp)%pc = 3
                 call k_push(gcv_nth(vs_get(b + 4), 2), vs_get(b + 2), 0, gc_nil())
                 return
              end do
@@ -859,19 +881,19 @@
           ! not caught here: a finally still runs, then the error goes on
           fin = gcv_nth(gc_slot(vs_get(b + 1), 1), 1)
           if (gc_kind(fin) == OBJ_AST) then
-             kst(ksp)%msg = last_error
+             tctx%kst(tctx%ksp)%msg = tctx%last_error
              call gce_clear_error()
-             kst(ksp)%pc = 4
+             tctx%kst(tctx%ksp)%pc = 4
              call k_push(fin, vs_get(b + 2), 0, gc_nil())
              return
           end if
        end if
-       do while (kst(ksp)%nfr > 0)
+       do while (tctx%kst(tctx%ksp)%nfr > 0)
           call pop_frame()
-          kst(ksp)%nfr = kst(ksp)%nfr - 1
+          tctx%kst(tctx%ksp)%nfr = tctx%kst(tctx%ksp)%nfr - 1
        end do
        call vs_leave(b)
-       ksp = ksp - 1
+       tctx%ksp = tctx%ksp - 1
     end do
   end subroutine k_unwind
 
@@ -897,32 +919,34 @@
   ! `fn0` is the closure whose body this is, for the debugger: it rides
   ! in kframe slot 7 and is what break_frames reports a frame as.
   recursive function run(nd0, frame0, flags0, restart0, fn0) result(out)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: nd0, frame0, restart0, fn0
     integer, intent(in) :: flags0
     type(gc_value) :: out
     integer :: kbot, vbase
 
+    tctx => ctx_self()
     out = gc_nil()
-    if (has_error) return
+    if (tctx%has_error) return
     if (ev_limit == 0) call read_depth_limit()
-    ev_depth = ev_depth + 1
-    if (ev_depth > ev_limit) then
+    tctx%ev_depth = tctx%ev_depth + 1
+    if (tctx%ev_depth > ev_limit) then
        call fail("stack overflow")
-       ev_depth = ev_depth - 1
+       tctx%ev_depth = tctx%ev_depth - 1
        return
     end if
     vbase = vs_enter(1)
-    kbot = ksp
+    kbot = tctx%ksp
     call k_push(nd0, frame0, flags0, restart0)
-    call vs_set(kst(ksp)%base + 7, fn0)
+    call vs_set(tctx%kst(tctx%ksp)%base + 7, fn0)
     if (step_at /= 0 .and. gc_kind(fn0) == OBJ_CLOSURE) call step_check()
     out = run_loop(kbot, vbase)
-    if (has_error) out = gc_nil()
+    if (tctx%has_error) out = gc_nil()
     call vs_leave(vbase)
     ! the top-level form is over: a step it did not reach does not wait
     ! for the next form's first call
-    if (ev_depth == 1) step_at = 0
-    ev_depth = ev_depth - 1
+    if (tctx%ev_depth == 1) step_at = 0
+    tctx%ev_depth = tctx%ev_depth - 1
   end function run
 
   ! The loop itself, over the frames above `kbot`, with the value in
@@ -932,21 +956,23 @@
   ! stay as they are, the node that blocked is not finished, and the
   ! task scheduler resumes the loop later and re-executes that node.
   recursive function run_loop(kbot, vbase) result(val)
+    type(eval_ctx), pointer :: tctx
     integer, intent(in) :: kbot, vbase
     type(gc_value) :: val, nd, kids, v, fnv, newframe, body
     integer :: kind, n, b, site
     logical :: ok
 
+    tctx => ctx_self()
     val = gc_nil()
     do
-       if (has_error) then
+       if (tctx%has_error) then
           call k_unwind(kbot)
-          if (has_error) exit
+          if (tctx%has_error) exit
           val = gc_nil()
           call vs_set(vbase + 1, val)
        end if
-       if (ksp == kbot) exit
-       b = kst(ksp)%base
+       if (tctx%ksp == kbot) exit
+       b = tctx%kst(tctx%ksp)%base
        nd = vs_get(b + 1)
        kind = gc_i1(nd)
        kids = gc_slot(nd, 1)
@@ -963,8 +989,8 @@
           val = gcn_var_value(gc_slot(nd, 2))
           call k_finish(val)
        case (N_IF)
-          if (kst(ksp)%pc == 0) then
-             kst(ksp)%pc = 1
+          if (tctx%kst(tctx%ksp)%pc == 0) then
+             tctx%kst(tctx%ksp)%pc = 1
              call k_push(gcv_nth(kids, 0), vs_get(b + 2), 0, gc_nil())
           else if (truthy(val)) then
              call k_tail(gcv_nth(kids, 1))
@@ -979,16 +1005,16 @@
           if (n == 0) then
              val = gc_nil()
              call k_finish(val)
-          else if (kst(ksp)%i < n - 1) then
-             kst(ksp)%i = kst(ksp)%i + 1
-             call k_push(gcv_nth(kids, kst(ksp)%i - 1), vs_get(b + 2), 0, gc_nil())
+          else if (tctx%kst(tctx%ksp)%i < n - 1) then
+             tctx%kst(tctx%ksp)%i = tctx%kst(tctx%ksp)%i + 1
+             call k_push(gcv_nth(kids, tctx%kst(tctx%ksp)%i - 1), vs_get(b + 2), 0, gc_nil())
           else
              call k_tail(gcv_nth(kids, n - 1))
           end if
        case (N_CALL)
-          select case (kst(ksp)%pc)
+          select case (tctx%kst(tctx%ksp)%pc)
           case (0)
-             kst(ksp)%pc = 1
+             tctx%kst(tctx%ksp)%pc = 1
              call k_push(gcv_nth(kids, 0), vs_get(b + 2), 0, gc_nil())
           case (1)
              ! The callee is known before its arguments are: a closure
@@ -1000,40 +1026,40 @@
              if (gcn_is_var(fnv)) fnv = gcn_var_value(fnv)
              call vs_set(b + 3, fnv)
              n = gcv_count(kids) - 1
-             kst(ksp)%mode = 1
+             tctx%kst(tctx%ksp)%mode = 1
              if (is_node_closure(vs_get(b + 3))) then
-                kst(ksp)%aux2 = fixed_arity(vs_get(b + 3), n)
-                if (kst(ksp)%aux2 >= 0) then
-                   kst(ksp)%mode = 2
-                   kst(ksp)%aux = int_of(gcv_nth(gcv_nth(gcv_nth(gc_slot(vs_get(b + 3), 1), 1), kst(ksp)%aux2), 2))
+                tctx%kst(tctx%ksp)%aux2 = fixed_arity(vs_get(b + 3), n)
+                if (tctx%kst(tctx%ksp)%aux2 >= 0) then
+                   tctx%kst(tctx%ksp)%mode = 2
+                   tctx%kst(tctx%ksp)%aux = int_of(gcv_nth(gcv_nth(gcv_nth(gc_slot(vs_get(b + 3), 1), 1), tctx%kst(tctx%ksp)%aux2), 2))
                    call vs_set(b + 4, new_frame(int_of(gcv_nth(gc_slot(vs_get(b + 3), 1), 3)), [vs_get(b + 1)]))
                 end if
              end if
-             if (kst(ksp)%mode == 1 .and. n >= 1 .and. n <= 2) then
+             if (tctx%kst(tctx%ksp)%mode == 1 .and. n >= 1 .and. n <= 2) then
                 if (gc_kind(vs_get(b + 3)) == OBJ_BUILTIN) then
-                   if (scalar_builtin(gc_i1(vs_get(b + 3)))) kst(ksp)%mode = 3
+                   if (scalar_builtin(gc_i1(vs_get(b + 3)))) tctx%kst(tctx%ksp)%mode = 3
                 end if
              end if
-             if (kst(ksp)%mode == 1) call vs_set(b + 4, gcv_build(n, [vs_get(b + 1)]))
-             kst(ksp)%i = 1
-             kst(ksp)%pc = 2
+             if (tctx%kst(tctx%ksp)%mode == 1) call vs_set(b + 4, gcv_build(n, [vs_get(b + 1)]))
+             tctx%kst(tctx%ksp)%i = 1
+             tctx%kst(tctx%ksp)%pc = 2
           case (2)
-             if (kst(ksp)%i < gcv_count(kids)) then
-                kst(ksp)%pc = 3
-                call k_push(gcv_nth(kids, kst(ksp)%i), vs_get(b + 2), 0, gc_nil())
+             if (tctx%kst(tctx%ksp)%i < gcv_count(kids)) then
+                tctx%kst(tctx%ksp)%pc = 3
+                call k_push(gcv_nth(kids, tctx%kst(tctx%ksp)%i), vs_get(b + 2), 0, gc_nil())
              else
-                kst(ksp)%pc = 4
+                tctx%kst(tctx%ksp)%pc = 4
              end if
           case (3)
-             if (kst(ksp)%mode == 2) then
-                call frame_set(vs_get(b + 4), kst(ksp)%aux + kst(ksp)%i - 1, val)
-             else if (kst(ksp)%mode == 3) then
-                if (kst(ksp)%i == 1) call vs_set(b + 6, val)
+             if (tctx%kst(tctx%ksp)%mode == 2) then
+                call frame_set(vs_get(b + 4), tctx%kst(tctx%ksp)%aux + tctx%kst(tctx%ksp)%i - 1, val)
+             else if (tctx%kst(tctx%ksp)%mode == 3) then
+                if (tctx%kst(tctx%ksp)%i == 1) call vs_set(b + 6, val)
              else
-                call vs_set(b + 4, gcv_put(vs_get(b + 4), kst(ksp)%i - 1, val, [vs_get(b + 1)]))
+                call vs_set(b + 4, gcv_put(vs_get(b + 4), tctx%kst(tctx%ksp)%i - 1, val, [vs_get(b + 1)]))
              end if
-             kst(ksp)%i = kst(ksp)%i + 1
-             kst(ksp)%pc = 2
+             tctx%kst(tctx%ksp)%i = tctx%kst(tctx%ksp)%i + 1
+             tctx%kst(tctx%ksp)%pc = 2
           case (5)
              ! the callee's body finished; its value is this call's
              call k_finish(val)
@@ -1043,7 +1069,7 @@
              site = 0
              if (v%tag == GCT_INT) site = int(v%ival, kind=4)
              fnv = vs_get(b + 3)
-             if (kst(ksp)%mode == 3) then
+             if (tctx%kst(tctx%ksp)%mode == 3) then
                 ! the numeric fast path: no vector is allocated for the call
                 n = gcv_count(kids) - 1
                 v = scratch_args(n)
@@ -1057,7 +1083,7 @@
                 call k_finish(val)
                 cycle
              end if
-             if (kst(ksp)%mode == 2) then
+             if (tctx%kst(tctx%ksp)%mode == 2) then
                 ! the frame already holds the arguments; captures and the
                 ! fn's own name complete it, and the body runs in a frame
                 ! OF ITS OWN. A call in tail position used to reuse this
@@ -1067,13 +1093,13 @@
                 ! names the caller either way. Clojure eliminates no tail
                 ! call, so keeping the frame is also what it does.
                 call push_frame(fnv, site)
-                if (has_error) cycle
+                if (tctx%has_error) cycle
                 call bind_captures(vs_get(b + 3), vs_get(b + 4))
-                body = gcv_nth(gcv_nth(gcv_nth(gc_slot(vs_get(b + 3), 1), 1), kst(ksp)%aux2), 3)
+                body = gcv_nth(gcv_nth(gcv_nth(gc_slot(vs_get(b + 3), 1), 1), tctx%kst(tctx%ksp)%aux2), 3)
                 call vs_set(b + 5, body)
-                kst(ksp)%pc = 5
+                tctx%kst(tctx%ksp)%pc = 5
                 call k_push(vs_get(b + 5), vs_get(b + 4), ior(KF_FNBODY, KF_RESTART), vs_get(b + 5))
-                call vs_set(kst(ksp)%base + 7, fnv)
+                call vs_set(tctx%kst(tctx%ksp)%base + 7, fnv)
                 if (step_at /= 0) call step_check()
                 cycle
              end if
@@ -1085,24 +1111,24 @@
              if (is_node_closure(fnv)) then
                 ! The callee's body, in a frame of its own (see mode 2).
                 call push_frame(fnv, site)
-                if (has_error) cycle
+                if (tctx%has_error) cycle
                 call vs_set(b + 3, fnv)
                 ok = bind_closure(vs_get(b + 3), v, newframe, body)
                 if (ok) then
                    call vs_set(b + 4, newframe)
                    call vs_set(b + 5, body)
-                   kst(ksp)%pc = 5
+                   tctx%kst(tctx%ksp)%pc = 5
                    call k_push(vs_get(b + 5), vs_get(b + 4), ior(KF_FNBODY, KF_RESTART), vs_get(b + 5))
-                   call vs_set(kst(ksp)%base + 7, vs_get(b + 3))
+                   call vs_set(tctx%kst(tctx%ksp)%base + 7, vs_get(b + 3))
                    if (step_at /= 0) call step_check()
                 else
                    ! no arity fits: the entry pushed above is ours to drop
                    call pop_frame()
                 end if
              else
-                pending_site = site
+                tctx%pending_site = site
                 val = apply(vs_get(b + 3), v)
-                if (yield_flag) then
+                if (tctx%yield_flag) then
                    ! parked here: the vector goes back for the re-dispatch
                    call vs_set(b + 4, v)
                    exit
@@ -1112,23 +1138,23 @@
           end select
        case (N_LET, N_LOOP)
           n = gc_i2(nd)
-          if (kst(ksp)%pc == 1) then
-             call frame_set(vs_get(b + 2), int_of(gc_slot(nd, 2)) + kst(ksp)%i, val)
-             kst(ksp)%i = kst(ksp)%i + 1
-             kst(ksp)%pc = 0
-          else if (kst(ksp)%i < n) then
-             kst(ksp)%pc = 1
-             call k_push(gcv_nth(kids, kst(ksp)%i), vs_get(b + 2), 0, gc_nil())
+          if (tctx%kst(tctx%ksp)%pc == 1) then
+             call frame_set(vs_get(b + 2), int_of(gc_slot(nd, 2)) + tctx%kst(tctx%ksp)%i, val)
+             tctx%kst(tctx%ksp)%i = tctx%kst(tctx%ksp)%i + 1
+             tctx%kst(tctx%ksp)%pc = 0
+          else if (tctx%kst(tctx%ksp)%i < n) then
+             tctx%kst(tctx%ksp)%pc = 1
+             call k_push(gcv_nth(kids, tctx%kst(tctx%ksp)%i), vs_get(b + 2), 0, gc_nil())
           else
              if (kind == N_LOOP) then
                 call vs_set(b + 5, gcv_nth(kids, n))
-                kst(ksp)%flags = ior(kst(ksp)%flags, KF_RESTART)
+                tctx%kst(tctx%ksp)%flags = ior(tctx%kst(tctx%ksp)%flags, KF_RESTART)
              end if
              call k_tail(gcv_nth(kids, n))
           end if
        case (N_CASE)
-          if (kst(ksp)%pc == 0) then
-             kst(ksp)%pc = 1
+          if (tctx%kst(tctx%ksp)%pc == 0) then
+             tctx%kst(tctx%ksp)%pc = 1
              call k_push(gcv_nth(kids, 0), vs_get(b + 2), 0, gc_nil())
           else
              call vs_set(b + 3, val)
@@ -1136,16 +1162,16 @@
              call k_tail(v)
           end if
        case (N_TRY)
-          select case (kst(ksp)%pc)
+          select case (tctx%kst(tctx%ksp)%pc)
           case (0)
-             kst(ksp)%pc = 1
+             tctx%kst(tctx%ksp)%pc = 1
              call k_push(gcv_nth(kids, 0), vs_get(b + 2), 0, gc_nil())
           case (1, 3)
              ! the body, or a catch, finished normally
              call vs_set(b + 3, val)
              v = gcv_nth(kids, 1)
              if (gc_kind(v) == OBJ_AST) then
-                kst(ksp)%pc = 2
+                tctx%kst(tctx%ksp)%pc = 2
                 call k_push(v, vs_get(b + 2), 0, gc_nil())
              else
                 call k_finish(val)
@@ -1155,24 +1181,24 @@
              call k_finish(val)
           case (4)
              ! the finally ran after an uncaught error: the error goes on
-             has_error = .true.
-             last_error = kst(ksp)%msg
+             tctx%has_error = .true.
+             tctx%last_error = tctx%kst(tctx%ksp)%msg
              call set_thrown(vs_get(b + 3))
-             kst(ksp)%pc = 5
+             tctx%kst(tctx%ksp)%pc = 5
           case default
              call k_finish(val)
           end select
        case (N_VECTOR, N_MAP, N_SET)
           ! children collected into slot 4, one frame each, then built
-          select case (kst(ksp)%pc)
+          select case (tctx%kst(tctx%ksp)%pc)
           case (0)
              call vs_set(b + 4, gcv_build(gcv_count(kids), [vs_get(b + 1)]))
-             kst(ksp)%i = 0
-             kst(ksp)%pc = 2
+             tctx%kst(tctx%ksp)%i = 0
+             tctx%kst(tctx%ksp)%pc = 2
           case (2)
-             if (kst(ksp)%i < gcv_count(kids)) then
-                kst(ksp)%pc = 3
-                call k_push(gcv_nth(kids, kst(ksp)%i), vs_get(b + 2), 0, gc_nil())
+             if (tctx%kst(tctx%ksp)%i < gcv_count(kids)) then
+                tctx%kst(tctx%ksp)%pc = 3
+                call k_push(gcv_nth(kids, tctx%kst(tctx%ksp)%i), vs_get(b + 2), 0, gc_nil())
              else
                 select case (kind)
                 case (N_VECTOR); val = vs_get(b + 4)
@@ -1182,19 +1208,19 @@
                 call k_finish(val)
              end if
           case (3)
-             call vs_set(b + 4, gcv_put(vs_get(b + 4), kst(ksp)%i, val, [vs_get(b + 1)]))
-             kst(ksp)%i = kst(ksp)%i + 1
-             kst(ksp)%pc = 2
+             call vs_set(b + 4, gcv_put(vs_get(b + 4), tctx%kst(tctx%ksp)%i, val, [vs_get(b + 1)]))
+             tctx%kst(tctx%ksp)%i = tctx%kst(tctx%ksp)%i + 1
+             tctx%kst(tctx%ksp)%pc = 2
           end select
        case (N_RECUR)
           val = exec_recur(nd, vs_get(b + 2))
-          if (.not. has_error) call k_finish(val)
+          if (.not. tctx%has_error) call k_finish(val)
        case (N_THROW)
           v = exec(gcv_nth(kids, 0), vs_get(b + 2))
-          if (.not. has_error) then
+          if (.not. tctx%has_error) then
              call set_thrown(v)
-             has_error = .true.
-             last_error = gcp_str(v, .true.)
+             tctx%has_error = .true.
+             tctx%last_error = gcp_str(v, .true.)
              call capture_trace()
           end if
        case (N_FN)
@@ -1218,39 +1244,39 @@
           ! local a clearing pass may since have dropped. aux is where
           ! the arguments start among the children: 1 after an evaluated
           ! target, 0 when the target is a class.
-          select case (kst(ksp)%pc)
+          select case (tctx%kst(tctx%ksp)%pc)
           case (0)
              if (tag_of(gc_slot(nd, 3)) == GCT_SYM) then
                 call vs_set(b + 3, gc_slot(nd, 3))
-                kst(ksp)%aux = 0
-                kst(ksp)%i = 0
-                kst(ksp)%pc = 2
+                tctx%kst(tctx%ksp)%aux = 0
+                tctx%kst(tctx%ksp)%i = 0
+                tctx%kst(tctx%ksp)%pc = 2
              else
-                kst(ksp)%pc = 1
+                tctx%kst(tctx%ksp)%pc = 1
                 call k_push(gcv_nth(kids, 0), vs_get(b + 2), 0, gc_nil())
              end if
           case (1)
              call vs_set(b + 3, val)
-             kst(ksp)%aux = 1
-             kst(ksp)%i = 1
-             kst(ksp)%pc = 2
+             tctx%kst(tctx%ksp)%aux = 1
+             tctx%kst(tctx%ksp)%i = 1
+             tctx%kst(tctx%ksp)%pc = 2
           case (2)
-             if (kst(ksp)%i == kst(ksp)%aux) &
-                  call vs_set(b + 4, gcv_build(gcv_count(kids) - kst(ksp)%aux, [vs_get(b + 1)]))
-             if (kst(ksp)%i < gcv_count(kids)) then
-                kst(ksp)%pc = 3
-                call k_push(gcv_nth(kids, kst(ksp)%i), vs_get(b + 2), 0, gc_nil())
+             if (tctx%kst(tctx%ksp)%i == tctx%kst(tctx%ksp)%aux) &
+                  call vs_set(b + 4, gcv_build(gcv_count(kids) - tctx%kst(tctx%ksp)%aux, [vs_get(b + 1)]))
+             if (tctx%kst(tctx%ksp)%i < gcv_count(kids)) then
+                tctx%kst(tctx%ksp)%pc = 3
+                call k_push(gcv_nth(kids, tctx%kst(tctx%ksp)%i), vs_get(b + 2), 0, gc_nil())
              else
-                kst(ksp)%pc = 4
+                tctx%kst(tctx%ksp)%pc = 4
              end if
           case (3)
-             call vs_set(b + 4, gcv_put(vs_get(b + 4), kst(ksp)%i - kst(ksp)%aux, val, [vs_get(b + 1)]))
-             kst(ksp)%i = kst(ksp)%i + 1
-             kst(ksp)%pc = 2
+             call vs_set(b + 4, gcv_put(vs_get(b + 4), tctx%kst(tctx%ksp)%i - tctx%kst(tctx%ksp)%aux, val, [vs_get(b + 1)]))
+             tctx%kst(tctx%ksp)%i = tctx%kst(tctx%ksp)%i + 1
+             tctx%kst(tctx%ksp)%pc = 2
           case (4)
-             val = dot_dispatch(nd, vs_get(b + 3), vs_get(b + 4), kst(ksp)%aux)
-             if (yield_flag) exit
-             if (has_error) cycle
+             val = dot_dispatch(nd, vs_get(b + 3), vs_get(b + 4), tctx%kst(tctx%ksp)%aux)
+             if (tctx%yield_flag) exit
+             if (tctx%has_error) cycle
              if (is_call_request(val)) then
                 v = gc_slot(nd, 4)
                 site = 0
@@ -1262,7 +1288,7 @@
           end select
        case default
           val = exec_other(nd, vs_get(b + 2))
-          if (.not. has_error) call k_finish(val)
+          if (.not. tctx%has_error) call k_finish(val)
        end select
        call vs_set(vbase + 1, val)
     end do
@@ -1291,16 +1317,18 @@
   ! such a method, and it has to be able to yield. The callee also
   ! shows in a break's frames this way.
   subroutine enter_call(req, site)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: req
     integer, intent(in) :: site
     type(gc_value) :: frame, body, argv
     integer :: b
     logical :: ok
-    b = kst(ksp)%base
+    tctx => ctx_self()
+    b = tctx%kst(tctx%ksp)%base
     call vs_set(b + 3, gc_slot(req, 1))
     argv = gc_slot(req, 2)
     call push_frame(vs_get(b + 3), site)
-    if (has_error) return
+    if (tctx%has_error) return
     ok = bind_closure(vs_get(b + 3), argv, frame, body)
     if (.not. ok) then
        call pop_frame()
@@ -1312,23 +1340,25 @@
     call vs_set(b + 5, body)
     call vs_set(b + 6, gc_nil())
     call vs_set(b + 7, vs_get(b + 3))
-    kst(ksp)%pc = 0
-    kst(ksp)%i = 0
-    kst(ksp)%flags = ior(KF_FNBODY, KF_RESTART)
-    kst(ksp)%nfr = 1
-    kst(ksp)%mode = 0
-    kst(ksp)%aux = 0
-    kst(ksp)%aux2 = 0
+    tctx%kst(tctx%ksp)%pc = 0
+    tctx%kst(tctx%ksp)%i = 0
+    tctx%kst(tctx%ksp)%flags = ior(KF_FNBODY, KF_RESTART)
+    tctx%kst(tctx%ksp)%nfr = 1
+    tctx%kst(tctx%ksp)%mode = 0
+    tctx%kst(tctx%ksp)%aux = 0
+    tctx%kst(tctx%ksp)%aux2 = 0
     if (step_at /= 0) call step_check()
   end subroutine enter_call
 
   ! The node kinds the loop leaves to a helper. Each helper evaluates
   ! its children through exec, nesting a run.
   recursive function exec_other(nd, frame) result(out)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: nd, frame
     type(gc_value) :: out, kids, v, fnv
     integer :: base, kind
 
+    tctx => ctx_self()
     out = gc_nil()
     base = vs_enter(4)
     call vs_set(base + 1, nd)
@@ -1344,13 +1374,13 @@
        out = exec_deftype(nd, frame)
     case (N_NEW)
        v = exec_args(kids, 0, frame)
-       if (.not. has_error) then
+       if (.not. tctx%has_error) then
           call vs_set(base + 3, v)
           out = eval_new(sym_text(gc_slot(vs_get(base + 1), 2)), vs_get(base + 3))
        end if
     case (N_NEWTYPE)
        v = exec_args(kids, 0, frame)
-       if (.not. has_error) then
+       if (.not. tctx%has_error) then
           call vs_set(base + 3, v)
           fnv = find_type(sym_text(gc_slot(vs_get(base + 1), 2)))
           if (gc_kind(fnv) /= OBJ_TYPE) then
@@ -1376,16 +1406,16 @@
        call vs_set(base + 3, gc_slot(nd, 2))
        do while (gcl_count(vs_get(base + 3)) > 0)
           v = analyze_top(gcl_first(vs_get(base + 3)))
-          if (has_error) exit
+          if (tctx%has_error) exit
           call vs_set(base + 4, v)
           out = exec(vs_get(base + 4), gc_nil())
-          if (has_error) exit
+          if (tctx%has_error) exit
           call vs_set(base + 3, gcl_rest(vs_get(base + 3), [vs_get(base + 1)]))
        end do
     case default
        call fail("exec: unknown node kind")
     end select
-    if (has_error) call note_position(vs_get(base + 1))
+    if (tctx%has_error) call note_position(vs_get(base + 1))
     call vs_leave(base)
   end function exec_other
 
@@ -1393,12 +1423,14 @@
   ! node that has a position -- the error propagates outward through
   ! every enclosing node, and only the first appends.
   subroutine note_position(nd)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: nd
     type(gc_value) :: p
+    tctx => ctx_self()
     p = gc_slot(nd, 4)
     if (p%tag /= GCT_INT) return
-    if (index(last_error, "  at ") > 0) return
-    last_error = last_error // "  at " // gcr_position(int(p%ival, kind=4))
+    if (index(tctx%last_error, "  at ") > 0) return
+    tctx%last_error = tctx%last_error // "  at " // gcr_position(int(p%ival, kind=4))
   end subroutine note_position
 
   ! Alternating keys and values, as a map literal's children come.
@@ -1442,11 +1474,13 @@
   ! evaluated metadata, and -- if the value is a closure with no name
   ! yet -- the qualified name an arity error will report.
   recursive function exec_def(nd, frame) result(out)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: nd, frame
     type(gc_value) :: out, var, v, md, fnv, nmsym
     character(len=:), allocatable :: qual
     integer :: base, flags
 
+    tctx => ctx_self()
     out = gc_nil()
     base = vs_enter(5)
     call vs_set(base + 1, nd)
@@ -1456,7 +1490,7 @@
     flags = gc_i2(nd)
     if (iand(flags, 1) /= 0) then
        v = exec(gcv_nth(gc_slot(vs_get(base + 1), 1), 0), vs_get(base + 2))
-       if (has_error) then
+       if (tctx%has_error) then
           call vs_leave(base)
           return
        end if
@@ -1469,7 +1503,7 @@
     md = gc_slot(vs_get(base + 1), 3)
     if (gc_kind(md) == OBJ_AST) then
        md = exec(md, vs_get(base + 2))
-       if (has_error) then
+       if (tctx%has_error) then
           call vs_leave(base)
           return
        end if
@@ -1517,9 +1551,11 @@
   ! letfn*: every closure is made, stored, and then has its captures
   ! copied AGAIN, so each one sees the others.
   recursive function exec_letfn(nd, frame) result(out)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: nd, frame
     type(gc_value) :: out, v
     integer :: base, i, n, start
+    tctx => ctx_self()
     out = gc_nil()
     base = vs_enter(2)
     call vs_set(base + 1, nd)
@@ -1528,7 +1564,7 @@
     start = int_of(gc_slot(nd, 2))
     do i = 0, n - 1
        v = exec(gcv_nth(gc_slot(vs_get(base + 1), 1), i), vs_get(base + 2))
-       if (has_error) then
+       if (tctx%has_error) then
           call vs_leave(base)
           return
        end if
@@ -1547,15 +1583,17 @@
   ! the enclosing loop or fn body reads. Into a variadic fn the last
   ! argument is the rest parameter itself, as Clojure's recur binds it.
   recursive function exec_recur(nd, frame) result(out)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: nd, frame
     type(gc_value) :: out, argv, rinfo
     integer :: base, i, n, start
+    tctx => ctx_self()
     out = gc_nil()
     base = vs_enter(3)
     call vs_set(base + 1, nd)
     call vs_set(base + 2, frame)
     argv = exec_args(gc_slot(nd, 1), 0, frame)
-    if (has_error) then
+    if (tctx%has_error) then
        call vs_leave(base)
        return
     end if
@@ -1571,17 +1609,19 @@
   end function exec_recur
 
   recursive function exec_try(nd, frame) result(out)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: nd, frame
     type(gc_value) :: out, exc, catches, cl, fin
     integer :: base, i, n
     logical :: caught
 
+    tctx => ctx_self()
     out = gc_nil()
     base = vs_enter(5)
     call vs_set(base + 1, nd)
     call vs_set(base + 2, frame)
     out = exec(gcv_nth(gc_slot(nd, 1), 0), frame)
-    if (has_error) then
+    if (tctx%has_error) then
        exc = thrown_value()
        if (exc%tag == GCT_NIL) exc = error_value(gce_error(), [vs_get(base + 1)])
        call vs_set(base + 3, exc)
@@ -1605,15 +1645,15 @@
          logical :: had
          type(gc_value) :: saved_exc, fv
          character(len=:), allocatable :: saved_msg
-         had = has_error
-         saved_msg = last_error
+         had = tctx%has_error
+         saved_msg = tctx%last_error
          saved_exc = thrown_value()
          call vs_set(base + 5, saved_exc)
          call gce_clear_error()
          fv = exec(fin, vs_get(base + 2))
-         if (.not. has_error .and. had) then
-            has_error = .true.
-            last_error = saved_msg
+         if (.not. tctx%has_error .and. had) then
+            tctx%has_error = .true.
+            tctx%last_error = saved_msg
             call set_thrown(vs_get(base + 5))
          end if
        end block
@@ -1675,10 +1715,12 @@
   ! over the current frame. i2 = 0 registers the type and answers it;
   ! 1 answers a fresh instance and registers nothing.
   recursive function exec_deftype(nd, frame) result(out)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: nd, frame
     type(gc_value) :: out, spec, methods, names, fns, fnv, ty
     integer :: base, i, n
 
+    tctx => ctx_self()
     out = gc_nil()
     base = vs_enter(5)
     call vs_set(base + 1, nd)
@@ -1692,7 +1734,7 @@
     n = gcv_count(names)
     do i = 0, n - 1
        fnv = exec(gcv_nth(gcv_nth(vs_get(base + 3), 4), i), vs_get(base + 2))
-       if (has_error) then
+       if (tctx%has_error) then
           call vs_leave(base)
           return
        end if
@@ -1758,9 +1800,11 @@
 
 
   recursive function exec_setbang(nd, frame) result(out)
+    type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: nd, frame
     type(gc_value) :: out, tgt, val
     integer :: base
+    tctx => ctx_self()
     out = gc_nil()
     base = vs_enter(4)
     call vs_set(base + 1, nd)
@@ -1768,7 +1812,7 @@
     select case (gc_i2(nd))
     case (0)
        val = exec(gcv_nth(gc_slot(nd, 1), 0), frame)
-       if (.not. has_error) then
+       if (.not. tctx%has_error) then
           call gc_set_slot(gc_slot(vs_get(base + 1), 2), 1, val)
           out = val
        end if
@@ -1776,10 +1820,10 @@
        ! (set! (.__methodImplCache f) cache) -- the one host field with
        ! storage, in the closure slot a fn does not otherwise use.
        tgt = strip_meta(exec(gcv_nth(gc_slot(nd, 1), 0), frame))
-       if (.not. has_error) then
+       if (.not. tctx%has_error) then
           call vs_set(base + 3, tgt)
           val = exec(gcv_nth(gc_slot(vs_get(base + 1), 1), 1), vs_get(base + 2))
-          if (.not. has_error) then
+          if (.not. tctx%has_error) then
              if (gc_kind(vs_get(base + 3)) == OBJ_CLOSURE) call gc_set_slot(vs_get(base + 3), 5, val)
              out = val
           end if
@@ -1787,13 +1831,13 @@
     case (3)
        ! Class/field: the value, discarded
        val = exec(gcv_nth(gc_slot(nd, 1), 0), frame)
-       if (.not. has_error) out = val
+       if (.not. tctx%has_error) out = val
     case default
        ! any other host field: the write is discarded, the value returned
        tgt = exec(gcv_nth(gc_slot(nd, 1), 0), frame)
-       if (.not. has_error) then
+       if (.not. tctx%has_error) then
           val = exec(gcv_nth(gc_slot(vs_get(base + 1), 1), 1), vs_get(base + 2))
-          if (.not. has_error) out = val
+          if (.not. tctx%has_error) out = val
        end if
     end select
     call vs_leave(base)
