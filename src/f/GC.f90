@@ -430,10 +430,16 @@ module GC
   ! sweep go: the growth rules read these, not what one sweep freed --
   ! a young sweep frees little of a pool and must not grow it for that
   integer :: obj_live = 0, vec_live = 0, str_live = 0, arena_live_now = 0
+  ! of the live counts, how much is dead and waiting in pending lists --
+  ! set by a young collection's handoff, spent by the next collection
+  integer :: obj_pend_dead = 0, vec_pend_dead = 0, str_pend_dead = 0
   integer :: old_at_full = 0, promoted_since_full = 0
   integer, public :: gc_young_collections = 0
   ! pause times, for CLOTRAN_STATS: total and longest, young and full, ms
   real(8), public :: gc_young_ms = 0, gc_full_ms = 0, gc_young_max_ms = 0, gc_full_max_ms = 0
+  ! where a pause goes: waiting for the other threads to reach a
+  ! safepoint, and a young collection's mark and sweep
+  real(8), public :: gc_safepoint_ms = 0, gc_ymark_ms = 0, gc_ysweep_ms = 0, gc_finish_ms = 0
 
   ! --- global roots ----------------------------------------------
   ! Process-wide and mutable: the registry handle changes whenever the
@@ -488,6 +494,9 @@ module GC
      end subroutine finalizer_i
   end interface
   procedure(finalizer_i), pointer, save :: obj_finalizer => null()
+  ! the kinds it is called for: a sweep frees hundreds of thousands of
+  ! objects and nearly none of them hold anything outside the heap
+  logical, save :: finalized_kind(0:63) = .false.
 
   ! Hashing and comparing a COLLECTION means walking it, and a
   ! persistent vector is a 32-way trie whose walking logic lives in a
@@ -574,6 +583,21 @@ module GC
      integer :: n_y_obj = 0, n_y_vec = 0, n_y_str = 0
      integer :: d_obj_live = 0, d_vec_live = 0, d_str_live = 0, d_arena_live = 0
      integer(8) :: d_allocs = 0
+     ! PENDING: what this thread allocated in the cycle before the last
+     ! young collection, handed back to it unswept. After that collection
+     ! a survivor is marked and anything else in the list is dead; the
+     ! thread frees the dead into its own batches as it needs slots
+     ! (pend_refill_*), p_*(1:c_*) done, the rest not yet. Whatever is
+     ! left is freed at the next collection's start (finish_pending), so
+     ! between collections nothing else can free, or hand out, a slot here.
+     integer, allocatable :: p_obj(:), p_vec(:), p_str(:)
+     integer :: np_obj = 0, np_vec = 0, np_str = 0, cp_obj = 0, cp_vec = 0, cp_str = 0
+     ! dead objects with a finalizer, freed at the collection instead
+     integer, allocatable :: defer_obj(:)
+     integer :: n_defer = 0
+     ! arena runs of lazily freed vectors that did not fit the run batch
+     integer, allocatable :: loose_off(:), loose_len(:)
+     integer :: n_loose = 0
   end type gc_stack
   type :: gc_stack_ref
      type(gc_stack), pointer :: s => null()
@@ -969,9 +993,15 @@ contains
        return
     end if
     stop_world = .true.
-    do while (n_parked < n_running - 1)
-       ok = th_cond_wait(heap_cond, heap_lock)
-    end do
+    block
+      integer(8) :: t0, t1, rate
+      call system_clock(t0, rate)
+      do while (n_parked < n_running - 1)
+         ok = th_cond_wait(heap_cond, heap_lock)
+      end do
+      call system_clock(t1)
+      gc_safepoint_ms = gc_safepoint_ms + real(t1 - t0, 8) * 1000d0 / real(rate, 8)
+    end block
   end subroutine world_stop
 
   subroutine world_start(stopped)
@@ -1258,6 +1288,7 @@ contains
     type(gc_stack), pointer :: s
     if (batching()) then
        s => my_stack()
+       if (fast_ok(s) .and. s%n_str_b == 0 .and. s%cp_str < s%np_str) call pend_refill_str(s)
        if (fast_ok(s) .and. s%n_str_b > 0) then
           idx = s%str_b(s%n_str_b)
           s%n_str_b = s%n_str_b - 1
@@ -1287,7 +1318,7 @@ contains
        ! would double the pool on every allocation until the process
        ! was killed. Torture tests rooting, not the growth policy.
        if (.not. gc_torture) then
-          do while (size(str_pool) < 2 * str_live)
+          do while (size(str_pool) < 2 * (str_live - str_pend_dead))
              call grow_str()
           end do
        end if
@@ -1317,6 +1348,7 @@ contains
 
     if (batching()) then
        s => my_stack()
+       if (fast_ok(s) .and. s%n_obj_b == 0 .and. s%cp_obj < s%np_obj) call pend_refill_obj(s)
        if (fast_ok(s) .and. s%n_obj_b > 0) then
           idx = s%obj_b(s%n_obj_b)
           s%n_obj_b = s%n_obj_b - 1
@@ -1356,7 +1388,7 @@ contains
        ! would double the pool on every allocation until the process
        ! was killed. Torture tests rooting, not the growth policy.
        if (.not. gc_torture) then
-          do while (size(obj_pool) < 2 * obj_live)
+          do while (size(obj_pool) < 2 * (obj_live - obj_pend_dead))
              call grow_obj()
           end do
        end if
@@ -1396,6 +1428,13 @@ contains
        s => my_stack()
        c = 0
        if (n > 0) c = size_class(n)
+       if (fast_ok(s) .and. s%cp_vec < s%np_vec) then
+          if (s%n_vec_b == 0) then
+             call pend_refill_vec(s)
+          else if (c > 0 .and. c <= RUN_CLASSES) then
+             if (s%n_run_b(c) == 0) call pend_refill_vec(s)
+          end if
+       end if
        if (fast_ok(s) .and. s%n_vec_b > 0 .and. c <= RUN_CLASSES) then
           if (c == 0) then
              ok_fast: block
@@ -1461,7 +1500,7 @@ contains
        ! would double the pool on every allocation until the process
        ! was killed. Torture tests rooting, not the growth policy.
        if (.not. gc_torture) then
-          do while (size(vec_pool) < 2 * vec_live)
+          do while (size(vec_pool) < 2 * (vec_live - vec_pend_dead))
              call grow_vec()
           end do
        end if
@@ -1567,12 +1606,22 @@ contains
 
   ! At a collection, the world stopped: every thread's young and counts
   ! join the heap's, so the young collection sees every young object.
-  subroutine merge_batches()
+  subroutine merge_batches(lists)
+    logical, intent(in) :: lists
     integer :: i, k
     type(gc_stack), pointer :: s
     do i = 1, n_stacks
        if (.not. associated(stacks(i)%s)) cycle
        s => stacks(i)%s
+       if (.not. lists) then
+          obj_live = obj_live + s%d_obj_live
+          vec_live = vec_live + s%d_vec_live
+          str_live = str_live + s%d_str_live
+          arena_live_now = arena_live_now + s%d_arena_live
+          gc_allocs = gc_allocs + s%d_allocs
+          s%d_obj_live = 0; s%d_vec_live = 0; s%d_str_live = 0; s%d_arena_live = 0; s%d_allocs = 0
+          cycle
+       end if
        do k = 1, s%n_y_obj
           call young_add(obj_young, n_obj_young, s%y_obj(k))
        end do
@@ -1592,10 +1641,152 @@ contains
     end do
   end subroutine merge_batches
 
+  ! At a collection's start, the world stopped: every thread's pending
+  ! dead not yet reused is freed as a sweep frees -- finalizers run here,
+  ! on the collector -- and loose runs go back to their class lists. After
+  ! this no pending list exists, so the collection's marks mean what they
+  ! always meant.
+  subroutine finish_pending()
+    integer :: i, k, j
+    type(gc_stack), pointer :: s
+    do i = 1, n_stacks
+       if (.not. associated(stacks(i)%s)) cycle
+       s => stacks(i)%s
+       do k = s%cp_obj + 1, s%np_obj
+          j = s%p_obj(k)
+          if (.not. (obj_mark(j) .or. obj_free(j))) call free_obj(j)
+       end do
+       do k = s%cp_vec + 1, s%np_vec
+          j = s%p_vec(k)
+          if (.not. (vec_mark(j) .or. vec_free(j))) call free_vec(j)
+       end do
+       do k = s%cp_str + 1, s%np_str
+          j = s%p_str(k)
+          if (.not. (str_mark(j) .or. str_free(j))) call free_str(j)
+       end do
+       do k = 1, s%n_defer
+          if (.not. obj_free(s%defer_obj(k))) call free_obj(s%defer_obj(k))
+       end do
+       do k = 1, s%n_loose
+          call slab_push(s%loose_off(k), s%loose_len(k))
+       end do
+       s%np_obj = 0; s%np_vec = 0; s%np_str = 0; s%cp_obj = 0; s%cp_vec = 0; s%cp_str = 0
+       s%n_defer = 0; s%n_loose = 0
+    end do
+    obj_pend_dead = 0; vec_pend_dead = 0; str_pend_dead = 0
+  end subroutine finish_pending
+
+  ! After a young collection's marking, the world stopped: each thread's
+  ! young list becomes its pending list, to be swept by the thread
+  ! itself. The dead in them are counted, for the growth rules: the
+  ! young marked in this collection are the survivors, those of the
+  ! heap's own young list (swept here) are known, and the rest of the
+  ! marked are the pending lists' survivors.
+  subroutine hand_off_young(g_obj, g_vec, g_str)
+    integer, intent(in) :: g_obj, g_vec, g_str   ! the heap's own young survivors
+    integer :: i, t_obj, t_vec, t_str
+    integer, allocatable :: tmp(:)
+    type(gc_stack), pointer :: s
+    t_obj = 0; t_vec = 0; t_str = 0
+    do i = 1, n_stacks
+       if (.not. associated(stacks(i)%s)) cycle
+       s => stacks(i)%s
+       call move_alloc(s%p_obj, tmp); call move_alloc(s%y_obj, s%p_obj); call move_alloc(tmp, s%y_obj)
+       s%np_obj = s%n_y_obj; s%cp_obj = 0; s%n_y_obj = 0
+       call move_alloc(s%p_vec, tmp); call move_alloc(s%y_vec, s%p_vec); call move_alloc(tmp, s%y_vec)
+       s%np_vec = s%n_y_vec; s%cp_vec = 0; s%n_y_vec = 0
+       call move_alloc(s%p_str, tmp); call move_alloc(s%y_str, s%p_str); call move_alloc(tmp, s%y_str)
+       s%np_str = s%n_y_str; s%cp_str = 0; s%n_y_str = 0
+       t_obj = t_obj + s%np_obj; t_vec = t_vec + s%np_vec; t_str = t_str + s%np_str
+    end do
+    obj_pend_dead = max(0, t_obj - (obj_marked - g_obj))
+    vec_pend_dead = max(0, t_vec - (vec_marked - g_vec))
+    str_pend_dead = max(0, t_str - (str_marked - g_str))
+  end subroutine hand_off_young
+
+  ! This thread's batch topped up from its pending list: each dead object
+  ! is freed into the batch -- flagged free, as a batched slot is -- and
+  ! a survivor (marked) is passed over. No lock: only this thread reads
+  ! or writes these entries until the next collection, and a collection
+  ! waits for this thread to reach a safepoint.
+  subroutine pend_refill_obj(s)
+    type(gc_stack), pointer, intent(in) :: s
+    integer :: j
+    do while (s%n_obj_b < ALLOC_BATCH .and. s%cp_obj < s%np_obj)
+       s%cp_obj = s%cp_obj + 1
+       j = s%p_obj(s%cp_obj)
+       if (obj_mark(j) .or. obj_free(j)) cycle
+       if (finalized_kind(obj_pool(j)%kind)) then
+          ! its finalizer runs on the collector, not here
+          if (.not. allocated(s%defer_obj)) allocate(s%defer_obj(64))
+          call young_add(s%defer_obj, s%n_defer, j)
+          cycle
+       end if
+       obj_pool(j)%kind = 0
+       obj_free(j) = .true.
+       s%d_obj_live = s%d_obj_live - 1
+       s%n_obj_b = s%n_obj_b + 1
+       s%obj_b(s%n_obj_b) = j
+    end do
+  end subroutine pend_refill_obj
+
+  subroutine pend_refill_str(s)
+    type(gc_stack), pointer, intent(in) :: s
+    integer :: j
+    do while (s%n_str_b < ALLOC_BATCH .and. s%cp_str < s%np_str)
+       s%cp_str = s%cp_str + 1
+       j = s%p_str(s%cp_str)
+       if (str_mark(j) .or. str_free(j)) cycle
+       ! the text stays allocated: the next assignment reuses or resizes it
+       str_free(j) = .true.
+       s%d_str_live = s%d_str_live - 1
+       s%n_str_b = s%n_str_b + 1
+       s%str_b(s%n_str_b) = j
+    end do
+  end subroutine pend_refill_str
+
+  ! A dead vector's run goes to this thread's run batch of its class if
+  ! there is room, else aside until the collection returns it.
+  subroutine pend_refill_vec(s)
+    type(gc_stack), pointer, intent(in) :: s
+    integer :: j, c, n
+    do while (s%n_vec_b < ALLOC_BATCH .and. s%cp_vec < s%np_vec)
+       s%cp_vec = s%cp_vec + 1
+       j = s%p_vec(s%cp_vec)
+       if (vec_mark(j) .or. vec_free(j)) cycle
+       n = vec_pool(j)%len
+       if (n > 0) then
+          c = size_class(n)
+          if (c <= RUN_CLASSES) then
+             if (s%n_run_b(c) < RUN_BATCH) then
+                s%n_run_b(c) = s%n_run_b(c) + 1
+                s%run_b(s%n_run_b(c), c) = vec_pool(j)%off
+                n = -n
+             end if
+          end if
+          if (n > 0) then
+             if (.not. allocated(s%loose_off)) allocate(s%loose_off(64), s%loose_len(64))
+             call young_add(s%loose_off, s%n_loose, vec_pool(j)%off)
+             s%n_loose = s%n_loose - 1
+             call young_add(s%loose_len, s%n_loose, n)
+          end if
+          s%d_arena_live = s%d_arena_live - abs(n)
+       end if
+       vec_pool(j)%off = 0
+       vec_pool(j)%len = 0
+       vec_free(j) = .true.
+       s%d_vec_live = s%d_vec_live - 1
+       s%n_vec_b = s%n_vec_b + 1
+       s%vec_b(s%n_vec_b) = j
+    end do
+  end subroutine pend_refill_vec
+
   ! A new heap (gc_init): batches name slots of the old one.
   subroutine clear_batches(s)
     type(gc_stack), pointer, intent(in) :: s
     s%n_obj_b = 0; s%n_vec_b = 0; s%n_str_b = 0; s%n_run_b = 0
+    s%np_obj = 0; s%np_vec = 0; s%np_str = 0; s%cp_obj = 0; s%cp_vec = 0; s%cp_str = 0
+    s%n_defer = 0; s%n_loose = 0
     s%n_y_obj = 0; s%n_y_vec = 0; s%n_y_str = 0
     s%d_obj_live = 0; s%d_vec_live = 0; s%d_str_live = 0; s%d_arena_live = 0; s%d_allocs = 0
   end subroutine clear_batches
@@ -1608,6 +1799,8 @@ contains
     type(gc_stack), pointer :: s
     if (batching()) then
        s => my_stack()
+       ! this thread's own dead first: the heap's free slots are everyone's
+       call pend_refill_obj(s)
        do while (s%n_obj_b < ALLOC_BATCH)
           if (obj_free_head /= 0) then
              s%n_obj_b = s%n_obj_b + 1
@@ -1641,6 +1834,7 @@ contains
     type(gc_stack), pointer :: s
     if (batching()) then
        s => my_stack()
+       call pend_refill_vec(s)
        do while (s%n_vec_b < ALLOC_BATCH)
           if (vec_free_head /= 0) then
              s%n_vec_b = s%n_vec_b + 1
@@ -1674,6 +1868,7 @@ contains
     type(gc_stack), pointer :: s
     if (batching()) then
        s => my_stack()
+       call pend_refill_str(s)
        do while (s%n_str_b < ALLOC_BATCH)
           if (str_free_head /= 0) then
              s%n_str_b = s%n_str_b + 1
@@ -1828,16 +2023,22 @@ contains
   ! carries the link.
   subroutine slab_free(idx)
     integer, intent(in) :: idx
-    integer :: c, off
     if (vec_pool(idx)%len <= 0) return
-    c = size_class(vec_pool(idx)%len)
-    off = vec_pool(idx)%off
-    vec_store(off) = nilv
-    vec_store(off)%ival = class_head(c)
-    class_head(c) = off
+    call slab_push(vec_pool(idx)%off, vec_pool(idx)%len)
     vec_pool(idx)%off = 0
     vec_pool(idx)%len = 0
   end subroutine slab_free
+
+  ! The run at off, of a vector of len, onto its class's free list.
+  subroutine slab_push(off, len)
+    integer, intent(in) :: off, len
+    integer :: c
+    if (len <= 0) return
+    c = size_class(len)
+    vec_store(off) = nilv
+    vec_store(off)%ival = class_head(c)
+    class_head(c) = off
+  end subroutine slab_push
 
   ! Arena accounting for CLOTRAN_STATS: capacity, handed out, and the
   ! slots live runs actually use.
@@ -2157,7 +2358,8 @@ contains
 
   subroutine collect_full(roots)
     type(gc_value), intent(in) :: roots(:)
-    call merge_batches()
+    call finish_pending()
+    call merge_batches(.true.)
     last_marked = gc_marked
     obj_marked = 0; vec_marked = 0; str_marked = 0
     obj_mark = .false.
@@ -2179,10 +2381,14 @@ contains
   subroutine collect_young(roots)
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: v
-    integer :: i, j, before
+    integer :: i, j
+    integer(8) :: tm0, tm1, rate
     gc_young_collections = gc_young_collections + 1
-    call merge_batches()
-    before = obj_live + vec_live + str_live
+    call system_clock(tm1, rate)
+    call finish_pending()
+    call system_clock(tm0)
+    gc_finish_ms = gc_finish_ms + real(tm0 - tm1, 8) * 1000d0 / real(rate, 8)
+    call merge_batches(.false.)
     last_marked = gc_marked
     obj_marked = 0; vec_marked = 0; str_marked = 0
     mark_sp = 0
@@ -2200,6 +2406,8 @@ contains
        end if
     end do
     call drain_mark_stack()
+    call system_clock(tm1)
+    gc_ymark_ms = gc_ymark_ms + real(tm1 - tm0, 8) * 1000d0 / real(rate, 8)
     last_marked = gc_marked - last_marked
     obj_swept = 0; vec_swept = 0; str_swept = 0
     do i = 1, n_obj_young
@@ -2214,8 +2422,13 @@ contains
        j = str_young(i)
        if (.not. (str_mark(j) .or. str_free(j))) call free_str(j)
     end do
-    promoted_since_full = promoted_since_full + (obj_live + vec_live + str_live) - &
-         (before - n_obj_young - n_vec_young - n_str_young)
+    ! the threads' young become their pending lists, swept by each
+    ! thread as it allocates (pend_refill_*), not here
+    call hand_off_young(n_obj_young - obj_swept, n_vec_young - vec_swept, n_str_young - str_swept)
+    call system_clock(tm0)
+    gc_ysweep_ms = gc_ysweep_ms + real(tm0 - tm1, 8) * 1000d0 / real(rate, 8)
+    ! promoted: the young this collection marked -- they survived
+    promoted_since_full = promoted_since_full + obj_marked + vec_marked + str_marked
     call forget_young()
   end subroutine collect_young
 
@@ -2875,9 +3088,12 @@ contains
   ! returns.
   ! Registered once at startup by the module that owns out-of-heap
   ! storage. See the finalizer_i interface above.
-  subroutine gc_set_finalizer(f)
+  subroutine gc_set_finalizer(f, kinds)
     procedure(finalizer_i) :: f
+    integer, intent(in) :: kinds(:)
     obj_finalizer => f
+    finalized_kind = .false.
+    finalized_kind(kinds) = .true.
   end subroutine gc_set_finalizer
 
   ! Both at once, deliberately: see the note on the interfaces.
@@ -3040,11 +3256,13 @@ contains
     ! `i2` too: a native array SLICE shares its parent's buffer
     ! handle rather than owning one, and only the owner may release
     ! it. i2 is how Eval tells the two apart -- see OBJ_ARRAY there.
-    if (associated(obj_finalizer) .and. obj_pool(i)%kind /= 0) &
-         call obj_finalizer(obj_pool(i)%kind, obj_pool(i)%i1, obj_pool(i)%i2)
-    do j = 1, OBJ_SLOTS
-       obj_pool(i)%slot(j) = nilv
-    end do
+    if (finalized_kind(obj_pool(i)%kind)) then
+       if (associated(obj_finalizer)) &
+            call obj_finalizer(obj_pool(i)%kind, obj_pool(i)%i1, obj_pool(i)%i2)
+    end if
+    ! the slots are left as they are: nothing reads a free slot's (the
+    ! marker never reaches one, the verifier skips it) and allocation
+    ! writes every one of them
     obj_pool(i)%kind = 0
     obj_free(i) = .true.
     obj_free_next(i) = obj_free_head
@@ -3106,10 +3324,29 @@ contains
   ! whenever the wild pointer is next dereferenced. "" means healthy.
   subroutine gc_check_heap(problem)
     character(len=:), allocatable, intent(out) :: problem
-    integer :: i, j, n
+    integer :: i, j, n, k
+    logical, allocatable :: dead_o(:), dead_v(:)
+    type(gc_stack), pointer :: s
     problem = ""
+    ! the dead waiting in pending lists are unswept on purpose: what they
+    ! point at may already be freed, and nothing live reaches them
+    allocate(dead_o(obj_used), dead_v(vec_used))
+    dead_o = .false.; dead_v = .false.
+    do i = 1, n_stacks
+       if (.not. associated(stacks(i)%s)) cycle
+       s => stacks(i)%s
+       do k = s%cp_obj + 1, s%np_obj
+          if (.not. obj_mark(s%p_obj(k))) dead_o(s%p_obj(k)) = .true.
+       end do
+       do k = 1, s%n_defer
+          dead_o(s%defer_obj(k)) = .true.
+       end do
+       do k = s%cp_vec + 1, s%np_vec
+          if (.not. vec_mark(s%p_vec(k))) dead_v(s%p_vec(k)) = .true.
+       end do
+    end do
     do i = 1, obj_used
-       if (obj_free(i)) cycle
+       if (obj_free(i) .or. dead_o(i)) cycle
        do j = 1, OBJ_SLOTS
           block
              character(len=:), allocatable :: dlr_21
@@ -3120,7 +3357,7 @@ contains
        end do
     end do
     do i = 1, vec_used
-       if (vec_free(i)) cycle
+       if (vec_free(i) .or. dead_v(i)) cycle
        n = vec_pool(i)%len
        do j = 1, n
           block

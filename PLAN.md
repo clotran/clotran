@@ -1316,6 +1316,22 @@ f. *The baton comes off interpreter code.* Tested by running the derived
    allocating futures under CLOTRAN_GC_VERIFY=1 in `make test`; it caught
    a reused context dropping its young list.
 
+   **Then the sweep left the pause (2026-09-26).** Measured first: of a
+   young collection's pause, marking was 13 ms serial / 70 ms with eight
+   threads, waiting for the safepoint 11 ms, and the SWEEP 383 / 678 ms.
+   Parallel marking would have bought nearly nothing, so it was not done.
+   Instead each thread sweeps its own young, lazily: a young collection
+   marks, then hands every thread its young list as a PENDING list; the
+   thread frees the dead in it into its own batches as it needs slots
+   (pend_refill_*), before touching the shared free lists; whatever is
+   left is freed at the next collection's start (finish_pending), so no
+   slot is ever freed twice or handed out while pending. Finalizers of
+   pending dead run there too, on the collector. One mutator: unchanged.
+   Measured, the same 8 futures: 4.1 s -> 2.5 s (serially 8.8 s), young
+   pauses 748 ms -> 95 ms in total. A first version refilled vectors from
+   the shared lists while the thread's own dead waited, which doubled the
+   collections; drawing on pending first fixed it.
+
 **Not in this step**: a concurrent collector (the world stops for each
 collection), and a compacting one (objects never move, as now).
 

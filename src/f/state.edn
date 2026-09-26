@@ -12,6 +12,14 @@
  "Eval.f90/mon_depth" {:class :shared, :note "the monitors locking holds (B_MONENTER): under the state lock"}
  "Eval.f90/mon_obj" {:class :shared, :note "the monitors locking holds (B_MONENTER): under the state lock"}
  "Eval.f90/mon_owner" {:class :shared, :note "the monitors locking holds (B_MONENTER): under the state lock"}
+ "GC.f90/finalized_kind" {:class :fixed, :note "the kinds the finalizer is called for, set once by Eval at startup (gc_set_finalizer)"}
+ "GC.f90/gc_safepoint_ms" {:class :shared, :note "pause statistics (CLOTRAN_STATS): written by the collector with the world stopped"}
+ "GC.f90/gc_ymark_ms" {:class :shared, :note "pause statistics (CLOTRAN_STATS): written by the collector with the world stopped"}
+ "GC.f90/gc_ysweep_ms" {:class :shared, :note "pause statistics (CLOTRAN_STATS): written by the collector with the world stopped"}
+ "GC.f90/gc_finish_ms" {:class :shared, :note "pause statistics (CLOTRAN_STATS): written by the collector with the world stopped"}
+ "GC.f90/obj_pend_dead" {:class :shared, :note "the dead waiting in pending lists: set and cleared by the collector with the world stopped, read by the growth rule under the heap lock"}
+ "GC.f90/vec_pend_dead" {:class :shared, :note "the dead waiting in pending lists: set and cleared by the collector with the world stopped, read by the growth rule under the heap lock"}
+ "GC.f90/str_pend_dead" {:class :shared, :note "the dead waiting in pending lists: set and cleared by the collector with the world stopped, read by the growth rule under the heap lock"}
  "GC.f90/rem_lk" {:class :fixed, :note "the remembered set's lock, made once in heap_sync_init before any other thread exists"}
  "GC.f90/notify_gen" {:class :shared, :note "gc_state_notify's count, so a wait does not miss one: under the state lock"}
  "Regex.f90/reg_lk" {:class :fixed, :note "the regex handle table's lock, made at the first regex (on the main thread)"}

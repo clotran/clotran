@@ -763,7 +763,7 @@ contains
     ! The sweep tells us when an object owning out-of-heap storage
     ! dies, so a native array's buffer is freed exactly once rather
     ! than leaking for the life of the process.
-    call gc_set_finalizer(gce_finalize_obj)
+    call gc_set_finalizer(gce_finalize_obj, [OBJ_ARRAY, OBJ_REGEX, OBJ_MATCHER])
     call gc_set_coll_ops(gce_coll_hash, gce_coll_equal)
     call gcn_reset(roots)
     call ctx_reset()
