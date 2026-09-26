@@ -70,7 +70,7 @@ module ClotranABI
   public :: clotran_load_compiled, clotran_array_view
   public :: clotran_rest_args, clotran_arity_error
   public :: clotran_native_begin, clotran_reacquire
-  public :: clotran_register_proc, clotran_make_closure, clotran_captures, clotran_new, clotran_dot
+  public :: clotran_register_proc, clotran_make_closure, clotran_captures, clotran_new, clotran_dot, clotran_arith
 
 contains
 
@@ -607,6 +607,108 @@ contains
        st = 0
     end if
   end function clotran_dot
+
+  ! A NUMERIC OP ON BOXED OPERANDS -- compiled code whose operands are not
+  ! proven primitive: `x` an unhinted parameter, say. Two longs (the sum
+  ! still a long) or two doubles are answered here, as Numbers does for
+  ! them; anything else -- a ratio, a BigInt, one of each, an overflow,
+  ! nil -- goes to the builtin in slot fn exactly as the call would have,
+  ! so the answer and the error are the interpreter's. op: 1 + 2 - 3 *
+  ! 4 inc 5 dec 6 < 7 > 8 <= 9 >= 10 = 11 == 12 zero? 13 pos? 14 neg?
+  function clotran_arith(dst, op, fn, a, b, n) bind(C, name="clotran_arith") result(st)
+    type(gc_stack), pointer :: vst
+    integer(c_int), value :: dst, op, fn, a, b, n
+    integer(c_int) :: st
+    integer, parameter :: i16 = selected_int_kind(30)
+    integer(i16) :: w
+    type(gc_value) :: x, y, out
+    logical :: ints, reals
+    integer :: base
+    vst => gc_my_stack()
+    st = 0
+    x = vs_get(vst, int(a))
+    y = x
+    if (n == 2) y = vs_get(vst, int(b))
+    ints = x%tag == GCT_INT .and. y%tag == GCT_INT
+    reals = x%tag == GCT_REAL .and. y%tag == GCT_REAL
+    select case (op)
+    case (1, 2, 3)
+       if (n == 2 .and. ints) then
+          select case (op)
+          case (1); w = int(x%ival, i16) + int(y%ival, i16)
+          case (2); w = int(x%ival, i16) - int(y%ival, i16)
+          case default; w = int(x%ival, i16) * int(y%ival, i16)
+          end select
+          if (w >= -huge(x%ival) - 1 .and. w <= huge(x%ival)) then
+             call vs_set(vst, int(dst), gc_int(int(w, gc_ip)))
+             return
+          end if
+       else if (n == 2 .and. reals) then
+          select case (op)
+          case (1); call vs_set(vst, int(dst), gc_real(x%rval + y%rval))
+          case (2); call vs_set(vst, int(dst), gc_real(x%rval - y%rval))
+          case default; call vs_set(vst, int(dst), gc_real(x%rval * y%rval))
+          end select
+          return
+       end if
+    case (4, 5)
+       if (x%tag == GCT_INT) then
+          if ((op == 4 .and. x%ival < huge(x%ival)) .or. (op == 5 .and. x%ival > -huge(x%ival) - 1)) then
+             call vs_set(vst, int(dst), gc_int(x%ival + merge(1_gc_ip, -1_gc_ip, op == 4)))
+             return
+          end if
+       else if (x%tag == GCT_REAL) then
+          call vs_set(vst, int(dst), gc_real(x%rval + merge(1.0_gc_dp, -1.0_gc_dp, op == 4)))
+          return
+       end if
+    case (6, 7, 8, 9, 11)
+       if (n == 2 .and. ints) then
+          select case (op)
+          case (6); call vs_set(vst, int(dst), gc_bool(x%ival < y%ival))
+          case (7); call vs_set(vst, int(dst), gc_bool(x%ival > y%ival))
+          case (8); call vs_set(vst, int(dst), gc_bool(x%ival <= y%ival))
+          case (9); call vs_set(vst, int(dst), gc_bool(x%ival >= y%ival))
+          case default; call vs_set(vst, int(dst), gc_bool(x%ival == y%ival))
+          end select
+          return
+       else if (n == 2 .and. reals) then
+          select case (op)
+          case (6); call vs_set(vst, int(dst), gc_bool(x%rval < y%rval))
+          case (7); call vs_set(vst, int(dst), gc_bool(x%rval > y%rval))
+          case (8); call vs_set(vst, int(dst), gc_bool(x%rval <= y%rval))
+          case (9); call vs_set(vst, int(dst), gc_bool(x%rval >= y%rval))
+          case default; call vs_set(vst, int(dst), gc_bool(x%rval == y%rval))
+          end select
+          return
+       end if
+    case (10)
+       if (n == 2 .and. ints) then
+          call vs_set(vst, int(dst), gc_bool(x%ival == y%ival))
+          return
+       end if
+    case (12, 13, 14)
+       if (x%tag == GCT_INT) then
+          select case (op)
+          case (12); call vs_set(vst, int(dst), gc_bool(x%ival == 0))
+          case (13); call vs_set(vst, int(dst), gc_bool(x%ival > 0))
+          case default; call vs_set(vst, int(dst), gc_bool(x%ival < 0))
+          end select
+          return
+       end if
+    end select
+    ! the general path: the builtin, with the operands in consecutive slots
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, x)
+    call vs_set(vst, base + 2, y)
+    out = gce_apply_slots(vs_get(vst, int(fn)), base, int(n))
+    call vs_leave(vst, base)
+    if (gce_has_error()) then
+       call vs_set(vst, int(dst), gc_nil())
+       st = 1
+    else
+       call vs_set(vst, int(dst), out)
+    end if
+  end function clotran_arith
 
   subroutine clotran_frame_new(dst, n) bind(C, name="clotran_frame_new")
     type(gc_stack), pointer :: vst

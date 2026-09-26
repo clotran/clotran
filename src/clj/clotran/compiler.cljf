@@ -149,6 +149,11 @@
        integer(c_int), value :: dst, node, tv, argbase, nargs, from
        integer(c_int) :: st
      end function clotran_dot
+     function clotran_arith(dst, op, fn, a, b, n) bind(C, name=\"clotran_arith\") result(st)
+       import :: c_int
+       integer(c_int), value :: dst, op, fn, a, b, n
+       integer(c_int) :: st
+     end function clotran_arith
      subroutine clotran_captures(fr) bind(C, name=\"clotran_captures\")
        import :: c_int
        integer(c_int), value :: fr
@@ -347,6 +352,12 @@ end module clotran_rt_decl
     (when-let [k (and s (op-kinds s))] [k s])))
 
 (declare infer)
+
+(def ^:private boxed-ops
+  "The numeric ops clotran_arith answers for boxed operands, by arity:
+  the opcode the runtime switches on."
+  '{[+ 2] 1, [- 2] 2, [* 2] 3, [inc 1] 4, [dec 1] 5, [< 2] 6, [> 2] 7,
+    [<= 2] 8, [>= 2] 9, [= 2] 10, [== 2] 11, [zero? 1] 12, [pos? 1] 13, [neg? 1] 14})
 
 (defn- av-name
   "The Fortran pointer to an array parameter's buffer, one per kind: a
@@ -976,6 +987,23 @@ end module clotran_rt_decl
                   (let [[c e st] (gp-call nd t st)
                         [s st] (fresh st)]
                     [(conj (vec c) (box s t e)) s st])
+                  (if-let [opc (let [[_ s] (head-op (first (:children nd)))]
+                                 (get boxed-ops [s (count (rest (:children nd)))]))]
+                    ;; a numeric op on BOXED operands: answered by the
+                    ;; runtime for two longs or two doubles, the builtin
+                    ;; otherwise (clotran_arith)
+                    (let [kids (:children nd)
+                          [hc hs st] (gen (first kids) st)
+                          n (count (rest kids))
+                          [blk st] (reduce (fn [[bl st] _] (let [[s st'] (fresh st)] [(conj bl s) st'])) [[] st] (range n))
+                          [ac st] (reduce (fn [[code st] [k d]] (let [[c st'] (gen-into k d st)] [(into code c) st']))
+                                          [[] st] (map vector (rest kids) blk))
+                          [r st] (fresh st)]
+                      [(concat hc ac
+                               [(str "st = clotran_arith(b + " r ", " opc "_c_int, b + " hs ", b + " (first blk)
+                                     ", b + " (or (second blk) (first blk)) ", " n "_c_int)")]
+                               err-return)
+                       r st])
                   (let [kids (:children nd)
                         [hc hs st] (gen (first kids) st)
                         n (count (rest kids))
@@ -991,7 +1019,7 @@ end module clotran_rt_decl
                              [(str "st = clotran_call_slots(b + " r ", b + " hs ", b + "
                                    (if (zero? n) 1 (dec (first blk))) ", " n "_c_int)")]
                              err-return)
-                     r st]))
+                     r st])))
 
           ;; A CLOSURE. Its fn is a procedure of its own in this file,
           ;; sharing this fn's pool, registered at install with no Var;
