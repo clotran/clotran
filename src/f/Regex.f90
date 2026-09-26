@@ -16,6 +16,7 @@
 ! is genuinely reusable rather than reimplementable.
 module Regex
   use, intrinsic :: iso_c_binding
+  use Threads, only: th_lock, th_lock_init, th_lock_acquire, th_lock_release
   implicit none
   private
 
@@ -139,6 +140,9 @@ module Regex
   ! free. A Matcher has one; a compiled Pattern has none.
   type(c_ptr), save :: subject(MAX_HANDLES) = c_null_ptr
   integer, save :: next_slot = 1
+  ! handles are claimed by any thread compiling a regex
+  type(th_lock), save :: reg_lk
+  logical, save :: reg_lk_up = .false.
 
 
   public :: regex_compile, regex_clone, regex_set_text, regex_matches, &
@@ -165,14 +169,23 @@ contains
   function alloc_slot(h) result(idx)
     type(c_ptr), intent(in) :: h
     integer :: idx, i
+    logical :: ok
     idx = 0
+    ! ponytail: made unlocked -- the first regex is read on the main thread
+    if (.not. reg_lk_up) then
+       ok = th_lock_init(reg_lk)
+       reg_lk_up = .true.
+    end if
+    ok = th_lock_acquire(reg_lk)
     do i = 1, MAX_HANDLES
        if (.not. c_associated(registry(i))) then
           registry(i) = h
           idx = i
+          ok = th_lock_release(reg_lk)
           return
        end if
     end do
+    ok = th_lock_release(reg_lk)
     ! Full. Close the handle rather than dropping it on the floor: the
     ! caller reads 0 as failure and will never see it again, so this is
     ! the last place that can.

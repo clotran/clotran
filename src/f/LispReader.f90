@@ -102,11 +102,28 @@ module LispReader
      ! on resolves the markers afterwards. Off for ordinary source, so
      ! an unknown tag in a file is still a reader error there.
      logical :: tag_markers = .false.
+     ! the #(...) being read: its suffix, from the shared anon_seq
+     integer :: anon_cur = 0
   end type rd_state
   type(th_key), save :: rd_key
   logical, save :: rd_key_made = .false.
 
 contains
+
+  ! The suffix of the #(...) this thread is reading: numbers come from
+  ! the shared anon_seq, the one in use is the thread's own.
+  integer function anon_cur()
+    type(rd_state), pointer :: r
+    r => rd_self()
+    anon_cur = r%anon_cur
+  end function anon_cur
+
+  subroutine set_anon_cur(k)
+    integer, intent(in) :: k
+    type(rd_state), pointer :: r
+    r => rd_self()
+    r%anon_cur = k
+  end subroutine set_anon_cur
 
   ! This thread's reader state, made on its first read.
   ! ponytail: one per thread that ever reads, never freed -- a few dozen
@@ -166,6 +183,7 @@ contains
     integer :: i, n, k
     rdx => rd_self()
     rdx%cur_file = 0
+    call gc_state_lock()
     do i = 1, n_files
        if (trim(files(i)%name) == name) rdx%cur_file = i
     end do
@@ -174,6 +192,7 @@ contains
        files(n_files)%name = name
        rdx%cur_file = n_files
     end if
+    call gc_state_unlock()
     fid = rdx%cur_file
     if (rdx%cur_file == 0) return
     n = 1
@@ -581,9 +600,9 @@ contains
     ! as Clojure's are (p1__1#) and cannot shadow a `p1` of the
     ! program's own -- every-pred's, for one, whose #() read the
     ! predicate as its own argument.
-    anon_seq = anon_seq + 1
+    call set_anon_cur(gc_next(anon_seq))
     do i = 1, maxn
-       write(nm, '(A,I0,A,I0,A)') "p", i, "__", anon_seq, "#"
+       write(nm, '(A,I0,A,I0,A)') "p", i, "__", anon_cur(), "#"
        sym = gc_sym(trim(nm), roots)
        call vs_set(base + 3, sym)
        params = gcv_conj(vs_get(base + 2), vs_get(base + 3), roots)
@@ -594,7 +613,7 @@ contains
        call vs_set(base + 3, sym)
        params = gcv_conj(vs_get(base + 2), vs_get(base + 3), roots)
        call vs_set(base + 2, params)
-       write(nm, '(A,I0,A)') "rest__", anon_seq, "#"
+       write(nm, '(A,I0,A)') "rest__", anon_cur(), "#"
        sym = gc_sym(trim(nm), roots)
        call vs_set(base + 3, sym)
        params = gcv_conj(vs_get(base + 2), vs_get(base + 3), roots)
@@ -686,15 +705,15 @@ contains
        if (len(t) < 1) return
        if (t(1:1) /= "%") return
        if (t == "%") then
-          write(nm, '(A,I0,A)') "p1__", anon_seq, "#"
+          write(nm, '(A,I0,A)') "p1__", anon_cur(), "#"
           out = gc_sym(trim(nm), roots)
        else if (t == "%&") then
-          write(nm, '(A,I0,A)') "rest__", anon_seq, "#"
+          write(nm, '(A,I0,A)') "rest__", anon_cur(), "#"
           out = gc_sym(trim(nm), roots)
        else
           read(t(2:), *, iostat=ios) num
           if (ios == 0) then
-             write(nm, '(A,I0,A,I0,A)') "p", num, "__", anon_seq, "#"
+             write(nm, '(A,I0,A,I0,A)') "p", num, "__", anon_cur(), "#"
              out = gc_sym(trim(nm), roots)
           end if
        end if

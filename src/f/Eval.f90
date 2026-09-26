@@ -1693,17 +1693,19 @@ contains
   ! The type table. Keyed by the class keyword rather than the raw
   ! name so that a lookup here and an instance? test cannot disagree
   ! about java.lang.
-  subroutine register_type(ty)
+  recursive subroutine register_type(ty)
     type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: ty
     type(gc_value) :: tbl, k
     integer :: base
 
     vst => gc_my_stack()
-    base = vs_enter(vst, 3)
+    base = vs_enter(vst, 4)
     call vs_set(vst, base + 1, ty)
+    ! a snapshot, installed only if no other thread registered meanwhile
+    call vs_set(vst, base + 4, gc_root_get(types_root))
     if (gc_root_live(types_root)) then
-       call vs_set(vst, base + 2, gc_root_get(types_root))
+       call vs_set(vst, base + 2, vs_get(vst, base + 4))
     else
        call vs_set(vst, base + 2, gca_empty([vs_get(vst, base + 1)]))
     end if
@@ -1733,7 +1735,9 @@ contains
          call vs_set(vst, base + 2, tbl)
       end if
     end block
-    call gc_global_keep(types_root, vs_get(vst, base + 2))
+    if (.not. gc_root_cas(types_root, vs_get(vst, base + 4), vs_get(vst, base + 2))) then
+       call register_type(vs_get(vst, base + 1))   ! overtaken: again, from what is there
+    end if
     call vs_leave(vst, base)
   end subroutine register_type
 
@@ -2957,6 +2961,7 @@ contains
           return
        end if
     end do
+    call gc_state_lock()
     if (.not. allocated(import_full)) then
        allocate(import_full(32), import_short(32))
     else if (n_imports == size(import_full)) then
@@ -2969,6 +2974,7 @@ contains
     n_imports = n_imports + 1
     import_full(n_imports) = full
     import_short(n_imports) = full(last_dot + 1:)
+    call gc_state_unlock()
   end subroutine record_import
 
   ! A class name in full: a dotted name is already one, a bare name is
@@ -2979,12 +2985,15 @@ contains
     integer :: i
     c = name
     if (index(name, ".") > 0) return
+    call gc_state_lock()
     do i = 1, n_imports
        if (import_short(i) == name) then
           c = trim(import_full(i))
+          call gc_state_unlock()
           return
        end if
     end do
+    call gc_state_unlock()
     c = "java.lang." // name
   end function canon_class
 
@@ -4004,8 +4013,7 @@ contains
        call vs_leave(vst, base)
        return
     end if
-    gensym_id = gensym_id + 1
-    write(buf, '(I0)') gensym_id
+    write(buf, '(I0)') gc_next(gensym_id)
     out = gc_sym(t(1:len(t)-1) // "__" // trim(buf) // "__auto__", &
          [vs_get(vst, base + 1), vs_get(vst, base + 2)])
     call vs_set(vst, base + 3, out)
@@ -9272,9 +9280,13 @@ contains
          integer :: j
          ref = gcv_nth(args, 0)
          call vs_set(vst, base + 2, ref)
-         fargs = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
-         fargs = gcv_conj(fargs, gc_slot(vs_get(vst, base + 2), var_root_slot(vs_get(vst, base + 2))), &
-              [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+         ! Var.alterRoot: f outside the state lock, the root replaced only
+         ! if it is still what f was given -- else again, as swap! does
+         do
+         call vs_set(vst, base + 4, gc_cell_get(vs_get(vst, base + 2), var_root_slot(vs_get(vst, base + 2))))
+         fargs = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 4)])
+         fargs = gcv_conj(fargs, vs_get(vst, base + 4), &
+              [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 4)])
          call vs_set(vst, base + 3, fargs)
          if (n >= 3) then
             extra = coll_to_vector(gcv_nth(args, 2), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
@@ -9285,7 +9297,9 @@ contains
             end do
          end if
          out = apply(gcv_nth(args, 1), vs_get(vst, base + 3))
-         if (.not. tctx%has_error) call gc_set_slot(vs_get(vst, base + 2), var_root_slot(vs_get(vst, base + 2)), out)
+         if (tctx%has_error) exit
+         if (gc_cell_cas(vs_get(vst, base + 2), var_root_slot(vs_get(vst, base + 2)), vs_get(vst, base + 4), out)) exit
+         end do
        end block
     case (B_BINDROOT)
        ! Var.bindRoot: the root, wherever a binding in force has put it
@@ -9296,11 +9310,11 @@ contains
           call vs_leave(vst, base)
           return
        end if
-       call gc_set_slot(a, var_root_slot(a), out)
+       call gc_cell_set(a, var_root_slot(a), out)
        out = gc_nil()
     case (B_RAWROOT)
        a = gcv_nth(args, 0)
-       out = gc_slot(a, var_root_slot(a))
+       out = gc_cell_get(a, var_root_slot(a))
     case (B_MAPENTRY)
        ! MapEntry/create
        out = value_pair(gcv_nth(args, 0), gcv_nth(args, 1), [vs_get(vst, base + 1)])
@@ -9585,8 +9599,7 @@ contains
          out = vs_get(vst, base + 2)
        end block
     case (B_NEXTID)
-       gensym_id = gensym_id + 1
-       out = gc_int(gensym_id)
+       out = gc_int(gc_next(gensym_id))
     case (B_EXMSG, B_EXDATA)
        a = gcv_nth(args, 0)
        out = gc_nil()
@@ -10260,6 +10273,7 @@ contains
                   call fail("load-package: " // path // ": manifest: " // gcr_error())
                else
                   call vs_set(vst, base + 2, m)
+                  call gc_state_lock()
                   if (.not. allocated(pkg_handles)) allocate(pkg_handles(8))
                   if (pkg_count >= size(pkg_handles)) then
                      allocate(grown(2 * size(pkg_handles)))
@@ -10268,6 +10282,7 @@ contains
                   end if
                   pkg_count = pkg_count + 1
                   pkg_handles(pkg_count) = h
+                  call gc_state_unlock()
                   res = gca_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
                   call vs_set(vst, base + 3, res)
                   k = gc_key("handle", [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
@@ -12928,7 +12943,13 @@ contains
              exit once
           end select
        end if
-       fp = dl_sym(pkg_handles(hi), sym)
+       block
+         type(c_ptr) :: ph
+         call gc_state_lock()
+         ph = pkg_handles(hi)
+         call gc_state_unlock()
+         fp = dl_sym(ph, sym)
+       end block
        if (.not. c_associated(fp)) then
           call fail("call-package*: the package has no " // sym)
           exit once
@@ -14856,10 +14877,14 @@ contains
        return
     end if
     if (n_ctx >= size(ctxs)) then
+       ! other threads index ctxs without a lock (hand-offs, wake-ups):
+       ! it moves with the world stopped
+       call gc_grow_begin()
        n = size(ctxs)
        allocate(bigger(2 * n))
        bigger(1:n) = ctxs(1:n)
        call move_alloc(bigger, ctxs)
+       call gc_grow_end()
     end if
     n_ctx = n_ctx + 1
     id = n_ctx

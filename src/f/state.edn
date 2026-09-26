@@ -6,6 +6,8 @@
 ;;   :fixed   shared, set at startup and read-only after
 ;;   :shared  shared and mutable -- what the note says it needs
 {
+ "Regex.f90/reg_lk" {:class :fixed, :note "the regex handle table's lock, made at the first regex (on the main thread)"}
+ "Regex.f90/reg_lk_up" {:class :fixed, :note "the regex handle table's lock, made at the first regex (on the main thread)"}
  "CompiledFn.f90/flat" {:class :shared, :note "flat copies of the constant pools, filled at a first read: under the baton now, a lock when compiled code runs on several threads (14e/f)"}
  "CompiledFn.f90/pool_root" {:class :shared, :note "a registry: additions under a lock"}
  "CompiledFn.f90/tbl" {:class :shared, :note "a registry: additions under a lock"}

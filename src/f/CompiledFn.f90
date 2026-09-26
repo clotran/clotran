@@ -85,19 +85,29 @@ contains
     character(len=*), intent(in) :: name
     integer :: h
     type(cf_entry), allocatable :: bigger(:)
-    if (.not. allocated(tbl)) then
-       allocate(tbl(16))
-       used = 0
-    end if
-    if (used >= size(tbl)) then
-       allocate(bigger(2 * size(tbl)))
-       bigger(1:used) = tbl(1:used)
-       call move_alloc(bigger, tbl)
-    end if
+    ! every compiled call reads tbl without a lock: it grows with the
+    ! world stopped, and an entry is claimed under the state lock
+    do
+       call gc_state_lock()
+       if (.not. allocated(tbl)) then
+          allocate(tbl(16))
+          used = 0
+       end if
+       if (used < size(tbl)) exit
+       call gc_state_unlock()
+       call gc_grow_begin()
+       if (used >= size(tbl)) then
+          allocate(bigger(2 * size(tbl)))
+          bigger(1:used) = tbl(1:used)
+          call move_alloc(bigger, tbl)
+       end if
+       call gc_grow_end()
+    end do
     used = used + 1
     tbl(used)%fp = fp
     tbl(used)%name = name
     h = used
+    call gc_state_unlock()
   end function cf_register
 
   logical function cf_valid(h)
@@ -131,6 +141,11 @@ contains
     call gc_global_keep(pool_root, pools)
     h = gcv_count(pools)
     call vs_leave(base)
+    ! flatten it now, at install, not at a first read racing another
+    block
+      type(gc_value) :: first
+      first = cf_pool_get(h, 0)
+    end block
   end function cf_pool_add
 
   ! Entry i of pool h, both counted the way their callers count:
@@ -156,12 +171,17 @@ contains
     if (h > gcv_count(pools)) return
     if (.not. allocated(flat)) allocate(flat(max(16, h)))
     if (h > size(flat)) then
-       allocate(bigger(max(2 * size(flat), h)))
-       do k = 1, size(flat)
-          if (allocated(flat(k)%e)) call move_alloc(flat(k)%e, bigger(k)%e)
-          bigger(k)%gen = flat(k)%gen
-       end do
-       call move_alloc(bigger, flat)
+       ! readers index flat without a lock: it moves with the world stopped
+       call gc_grow_begin()
+       if (h > size(flat)) then
+          allocate(bigger(max(2 * size(flat), h)))
+          do k = 1, size(flat)
+             if (allocated(flat(k)%e)) call move_alloc(flat(k)%e, bigger(k)%e)
+             bigger(k)%gen = flat(k)%gen
+          end do
+          call move_alloc(bigger, flat)
+       end if
+       call gc_grow_end()
     end if
     p = gcv_nth(pools, h - 1)
     n = gcv_count(p)

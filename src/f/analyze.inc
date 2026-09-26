@@ -2278,12 +2278,10 @@
           return
        end if
        call vs_set(vst, base + 4, methods)
-       proxy_id = proxy_id + 1
-       write(buf, '(I0)') proxy_id
+       write(buf, '(I0)') gc_next(proxy_id)
        buf = "clotran.proxy__" // trim(buf)
     else
-       reify_id = reify_id + 1
-       write(buf, '(I0)') reify_id
+       write(buf, '(I0)') gc_next(reify_id)
        buf = "clotran.reify__" // trim(buf)
        ! reify always implements IObj: the reify macro does not say so,
        ! NewInstanceExpr adds it, and its meta/withMeta are the

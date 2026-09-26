@@ -229,6 +229,7 @@ packages: packages/chemsol/libchemsol.$(SOEXT) packages/blas/libblas.$(SOEXT)
 data-objects = $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(B)/Assoc.o \
 	$(B)/PersistentList.o $(B)/PersistentVector.o $(B)/NativeArray.o $(B)/Printer.o
 reader-objects = $(B)/LispReader.o $(B)/Regex.o $(B)/regex_shim.o
+$(B)/Regex.o: $(B)/Threads.o
 # The table a compiled namespace registers its procedures in. No
 # dependency of its own, and both Eval (to call) and ClotranABI (to
 # register) need it, so it sits below them.

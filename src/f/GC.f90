@@ -540,6 +540,7 @@ module GC
      integer :: vs_top = 0
      logical :: holds_heap = .false.   ! this thread is inside heap_enter/heap_leave
      integer :: state_depth = 0        ! how deep this thread holds the state lock
+     logical :: grow_entered = .false., grow_stopped = .false.   ! gc_grow_begin's, for gc_grow_end
      ! SPARE FRAMES: a compiled procedure's frame, cleared, once its call
      ! has returned (gc_frame_give) -- nothing keeps a frame after its
      ! call -- by size, a few of each. Not roots: every collection empties
@@ -676,6 +677,7 @@ module GC
   public :: gc_stack_new, gc_stack_bind, gc_stacks_reset, gc_stack_of, gc_generation
   public :: gc_frame_take, gc_frame_give
   public :: gc_state_lock, gc_state_unlock, gc_cell_get, gc_cell_set, gc_cell_cas, gc_identical
+  public :: gc_grow_begin, gc_grow_end, gc_next, gc_root_cas
   public :: gc_mutator_enter, gc_mutator_leave
   public :: gc_arena_stats
   public :: gc_equal, gc_hash
@@ -799,12 +801,19 @@ contains
     integer, intent(in) :: id
     type(gc_stack_ref), allocatable :: bigger(:)
     integer :: n
+    logical :: stop
     if (.not. allocated(stacks)) allocate(stacks(8))
     if (id > size(stacks)) then
+       ! the collector and gc_stack_of read it: it moves with the world
+       ! stopped -- once a thread has a stack; before, there is one thread
+       stop = stack_key_made .and. heap_sync_up
+       if (stop) stop = c_associated(th_key_get(stack_key))
+       if (stop) call gc_grow_begin()
        n = size(stacks)
        allocate(bigger(max(2 * n, id)))
        bigger(1:n) = stacks(1:n)
        call move_alloc(bigger, stacks)
+       if (stop) call gc_grow_end()
     end if
     n_stacks = max(n_stacks, id)
     if (.not. associated(stacks(id)%s)) allocate(stacks(id)%s)
@@ -2142,6 +2151,9 @@ contains
   subroutine gc_state_lock()
     type(gc_stack), pointer :: s
     logical :: ok
+    ! before any thread has a stack the process is one thread: no lock
+    if (.not. stack_key_made) return
+    if (.not. c_associated(th_key_get(stack_key))) return
     s => my_stack()
     if (s%state_depth == 0) ok = th_lock_acquire(state_lk)
     s%state_depth = s%state_depth + 1
@@ -2150,10 +2162,56 @@ contains
   subroutine gc_state_unlock()
     type(gc_stack), pointer :: s
     logical :: ok
+    if (.not. stack_key_made) return
+    if (.not. c_associated(th_key_get(stack_key))) return
     s => my_stack()
     s%state_depth = s%state_depth - 1
     if (s%state_depth == 0) ok = th_lock_release(state_lk)
   end subroutine gc_state_unlock
+
+  ! GROWTH OF A TABLE READ WITHOUT A LOCK -- CompiledFn's procedures,
+  ! read on every compiled call; the context table: with every other
+  ! running thread parked at a safepoint, so none is mid-read when the
+  ! table moves. NEVER under the state lock: a thread blocked on it is
+  ! not parked, and the stop would wait for it forever.
+  subroutine gc_grow_begin()
+    type(gc_stack), pointer :: s
+    type(gc_value) :: none(0)
+    logical :: e, st
+    call heap_enter(none, none, e)
+    call world_stop(st)
+    s => my_stack()
+    s%grow_entered = e
+    s%grow_stopped = st
+  end subroutine gc_grow_begin
+
+  subroutine gc_grow_end()
+    type(gc_stack), pointer :: s
+    s => my_stack()
+    call world_start(s%grow_stopped)
+    call heap_leave(s%grow_entered)
+  end subroutine gc_grow_end
+
+  ! The next number from a counter other threads also count with.
+  integer function gc_next(counter)
+    integer, intent(inout) :: counter
+    call gc_state_lock()
+    counter = counter + 1
+    gc_next = counter
+    call gc_state_unlock()
+  end function gc_next
+
+  ! A root replaced only if it still holds `old` (nil for one never
+  ! set): a read-modify-write of a shared table -- the type registry --
+  ! that another thread's own may have overtaken.
+  logical function gc_root_cas(h, old, x)
+    type(gc_root), intent(inout) :: h
+    type(gc_value), intent(in) :: old, x
+    call gc_state_lock()
+    gc_root_cas = gc_identical(gc_root_get(h), old)
+    if (gc_root_cas) call gc_global_keep(h, x)
+    call gc_state_unlock()
+  end function gc_root_cas
 
   ! Identity, as Eval's same_object: the same object, or the same
   ! immediate (a NaN is itself).
@@ -2239,6 +2297,10 @@ contains
     ! caller holding an UNREGISTERED root: everything worked until the
     ! first collection, which then swept something genuinely live.
     ! There was never a recovery a caller could write.
+    ! under the state lock, as every read is: a root is rewritten while
+    ! other threads read it (types_root, tasks_root), and the table
+    ! grows with no reader able to be inside it
+    call gc_state_lock()
     if (.not. allocated(global_root)) then
        allocate(global_root(8))
        global_root = nilv
@@ -2247,6 +2309,7 @@ contains
     global_count = global_count + 1
     global_root(global_count) = v
     idx = global_count
+    call gc_state_unlock()
   end function gc_global_new
 
   ! Doubles the root table, preserving every claimed slot INDEX --
@@ -2309,12 +2372,14 @@ contains
   subroutine gc_global_keep(h, v)
     type(gc_root), intent(inout) :: h
     type(gc_value), intent(in) :: v
+    call gc_state_lock()
     if (h%gen == global_gen .and. h%idx >= 1 .and. h%idx <= global_count) then
        global_root(h%idx) = v
     else
        h%idx = gc_global_new(v)
        h%gen = global_gen
     end if
+    call gc_state_unlock()
   end subroutine gc_global_keep
 
   ! The value in a claimed slot, or nil if the claim is stale.
@@ -2335,14 +2400,18 @@ contains
   subroutine gc_global_set(idx, v)
     integer, intent(in) :: idx
     type(gc_value), intent(in) :: v
+    call gc_state_lock()
     if (idx >= 1 .and. idx <= global_count) global_root(idx) = v
+    call gc_state_unlock()
   end subroutine gc_global_set
 
   function gc_global_get(idx) result(v)
     integer, intent(in) :: idx
     type(gc_value) :: v
     v = nilv
+    call gc_state_lock()
     if (idx >= 1 .and. idx <= global_count) v = global_root(idx)
+    call gc_state_unlock()
   end function gc_global_get
 
   function gc_global_count() result(n)

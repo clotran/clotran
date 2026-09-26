@@ -429,37 +429,52 @@ contains
   integer function claim()
     integer :: i
     type(na_node), allocatable :: bigger(:)
-    if (.not. allocated(reg)) then
-       allocate(reg(16))
-       reg_used = 0
-    end if
-    do i = 1, reg_used
-       if (.not. reg(i)%used) then
-          reg(i)%used = .true.
-          claim = i
+    ! A SLOT IS CHOSEN UNDER THE STATE LOCK, so two threads never take the
+    ! same free one; a FULL registry grows with the world stopped, since
+    ! every aget reads it without a lock -- and never under the lock
+    ! (GC.f90, gc_grow_begin), so the lock is let go first
+    do
+       call gc_state_lock()
+       if (.not. allocated(reg)) then
+          allocate(reg(16))
+          reg_used = 0
+       end if
+       do i = 1, reg_used
+          if (.not. reg(i)%used) then
+             reg(i)%used = .true.
+             claim = i
+             call gc_state_unlock()
+             return
+          end if
+       end do
+       if (reg_used < size(reg)) then
+          reg_used = reg_used + 1
+          reg(reg_used)%used = .true.
+          claim = reg_used
+          call gc_state_unlock()
           return
        end if
+       call gc_state_unlock()
+       call gc_grow_begin()
+       if (reg_used >= size(reg)) then
+          ! Each component MOVES, it is not copied. An assignment of
+          ! the nodes deep-copies every allocatable component, so
+          ! every array's buffer used to change address whenever the
+          ! registry grew -- and a compiled loop holds a pointer into
+          ! a buffer across allocations. move_alloc hands over the
+          ! allocation itself, so a buffer is where it always was.
+          allocate(bigger(2 * size(reg)))
+          do i = 1, reg_used
+             bigger(i)%used = reg(i)%used
+             if (allocated(reg(i)%elem_kind)) call move_alloc(reg(i)%elem_kind, bigger(i)%elem_kind)
+             if (allocated(reg(i)%extents)) call move_alloc(reg(i)%extents, bigger(i)%extents)
+             if (allocated(reg(i)%lows)) call move_alloc(reg(i)%lows, bigger(i)%lows)
+             if (allocated(reg(i)%buf)) call move_alloc(reg(i)%buf, bigger(i)%buf)
+          end do
+          call move_alloc(bigger, reg)
+       end if
+       call gc_grow_end()
     end do
-    if (reg_used >= size(reg)) then
-       ! Each component MOVES, it is not copied. An assignment of
-       ! the nodes deep-copies every allocatable component, so
-       ! every array's buffer used to change address whenever the
-       ! registry grew -- and a compiled loop holds a pointer into
-       ! a buffer across allocations. move_alloc hands over the
-       ! allocation itself, so a buffer is where it always was.
-       allocate(bigger(2 * size(reg)))
-       do i = 1, reg_used
-          bigger(i)%used = reg(i)%used
-          if (allocated(reg(i)%elem_kind)) call move_alloc(reg(i)%elem_kind, bigger(i)%elem_kind)
-          if (allocated(reg(i)%extents)) call move_alloc(reg(i)%extents, bigger(i)%extents)
-          if (allocated(reg(i)%lows)) call move_alloc(reg(i)%lows, bigger(i)%lows)
-          if (allocated(reg(i)%buf)) call move_alloc(reg(i)%buf, bigger(i)%buf)
-       end do
-       call move_alloc(bigger, reg)
-    end if
-    reg_used = reg_used + 1
-    reg(reg_used)%used = .true.
-    claim = reg_used
   end function claim
 
   ! A fresh array reads as zeros, not as whatever the allocator left.
