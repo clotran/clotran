@@ -1540,7 +1540,7 @@
 (number? (read-string (re-find #"[0-9.]+" (with-out-str (time nil)))))
 
 ;; futures and promises: core.clj's own definitions over the host's
-;; tasks (tasks.inc); one OS thread, so a future runs until it blocks
+;; tasks (tasks.inc), each on a thread of its own (PLAN.md step 14f)
 @(future (+ 1 2))
 
 (let [p (promise)] (deliver p 42) @p)
@@ -1565,7 +1565,6 @@
 
 (try @(future (throw (ex-info "x" {}))) (catch java.util.concurrent.ExecutionException e :ee))
 
-(expect-diff "DEVIATIONS 38: a future runs to completion on the one thread unless it blocks, so a deref with a timeout finds it done")
 (deref (future (reduce + (range 300000)) 1) 1 :t)
 
 (let [p (promise) f (future @p)] (deliver p :v) @f)
@@ -1573,6 +1572,21 @@
 (let [p1 (promise) p2 (promise) f (future (deliver p2 (inc @p1)) :done)] (deliver p1 41) [@p2 @f])
 
 (binding [*print-length* 3] @(future *print-length*))
+
+;; dynamic bindings are per thread (Var.dvals): a future sees its maker's
+;; through binding-conveyor-fn, and a binding in one thread is not seen
+;; by another
+(binding [*print-length* 3] [@(future *print-length*) (thread-bound? #'*print-length*) (get (get-thread-bindings) #'*print-length*)])
+
+(let [p (promise) q (promise)] (future (binding [*print-level* 7] (deliver p *print-level*) @q)) [@p *print-level* (do (deliver q 1) *print-level*)])
+
+(binding [*print-length* 1] (set! *print-length* 2) [*print-length* (binding [*print-length* 3] (set! *print-length* 4) *print-length*) *print-length*])
+
+[((bound-fn [] *print-length*)) (binding [*print-length* 9] ((bound-fn [] *print-length*)))]
+
+(let [fs (mapv (fn [k] (future (with-out-str (dotimes [i 200] (print k))))) (range 8))] (mapv (comp count set deref) fs))
+
+(let [fs (mapv (fn [k] (future (mapv #(str "k" (* k %)) (range 300)))) (range 1 9))] (= (mapv deref fs) (mapv (fn [k] (mapv #(str "k" (* k %)) (range 300))) (range 1 9))))
 
 (let [a (atom 1)] [(compare-and-set! a 1 2) @a (compare-and-set! a 1 3) @a])
 

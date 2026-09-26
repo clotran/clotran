@@ -193,7 +193,11 @@ contains
        call gce_set(e, k, gc_int(i), roots)
     end do
     roots(2) = gc_nil()
-    call ok("7a. the heap audits clean under torture: ", gc_check_heap() == "")
+    block
+       character(len=:), allocatable :: dlr_1
+       call gc_check_heap(problem=dlr_1)
+       call ok("7a. the heap audits clean under torture: ", dlr_1 == "")
+    end block
     bad = 0
     do i = 1, 40
        write(buf, '(A,I0)') "v", i

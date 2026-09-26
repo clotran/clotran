@@ -36,6 +36,7 @@ module Namespace
 
   public :: gcn_reset, gcn_current, gcn_set_current, gcn_find_or_create, gcn_find, gcn_remove
   public :: gcn_intern, gcn_lookup, gcn_var_value, gcn_set_var, gcn_is_var
+  public :: gcn_binding_box, gcn_var_set
   public :: gcn_name, gcn_all
 
 contains
@@ -135,7 +136,7 @@ contains
     ! root, which intern would write under a binding.
     core = gcn_lookup(vs_get(base + 2), sym)
     if (gcn_is_var(core)) then
-       call gc_set_slot(core, 1, vs_get(base + 1))
+       call gcn_var_set(core, vs_get(base + 1))
     else
        core = gcn_intern(vs_get(base + 2), sym, vs_get(base + 1), &
             [vs_get(base + 1), vs_get(base + 2), sym])
@@ -146,15 +147,19 @@ contains
     call vs_leave(base)
   end subroutine gcn_set_current
 
-  function gcn_name(ns) result(s)
+  subroutine gcn_name(ns, s)
     type(gc_value), intent(in) :: ns
-    character(len=:), allocatable :: s
+    character(len=:), allocatable, intent(out) :: s
     type(gc_value) :: nm
     s = ""
     if (gc_kind(ns) /= OBJ_NS) return
     nm = gc_slot(ns, 1)
-    s = gc_ref_text(nm%ref)
-  end function gcn_name
+    block
+       character(len=:), allocatable :: dlr_1
+       call gc_ref_text(nm%ref, s=dlr_1)
+       s = dlr_1
+    end block
+  end subroutine gcn_name
 
   ! Namespace.find: the namespace called name, or nil -- never a new one.
   function gcn_find(name) result(ns)
@@ -217,13 +222,48 @@ contains
     yes = (gc_kind(v) == OBJ_VAR)
   end function gcn_is_var
 
+  ! What a Var shows THIS thread (Var.deref): its binding here if it
+  ! has one, else its root. i2 is Var.threadBound -- set by the Var's
+  ! first binding in any thread and never cleared -- so a Var never
+  ! bound costs no lookup. Cells through the state lock (GC.f90): a root
+  ! being redefined is never half-read.
   function gcn_var_value(v) result(out)
     type(gc_value), intent(in) :: v
-    type(gc_value) :: out
+    type(gc_value) :: out, box
     out = gc_nil()
-    ! the state lock (GC.f90): a root being redefined is never half-read
-    if (gcn_is_var(v)) out = gc_cell_get(v, 1)
+    if (.not. gcn_is_var(v)) return
+    if (gc_i2(v) /= 0) then
+       box = gcn_binding_box(v)
+       if (gc_kind(box) == OBJ_ATOM) then
+          out = gc_cell_get(box, 1)
+          return
+       end if
+    end if
+    out = gc_cell_get(v, 1)
   end function gcn_var_value
+
+  ! This thread's box for v -- Var.getThreadBinding -- or nil.
+  function gcn_binding_box(v) result(box)
+    type(gc_value), intent(in) :: v
+    type(gc_value) :: box, fr
+    box = gc_nil()
+    if (gc_i2(v) == 0) return
+    fr = gc_bindings_get()
+    if (gcv_is(fr)) box = gca_get(gcv_nth(fr, 0), v)
+  end function gcn_binding_box
+
+  ! Var.set, behind set! and var-set: this thread's binding. A Var not
+  ! bound here has its ROOT set, where Clojure throws -- DEVIATIONS.md 10.
+  subroutine gcn_var_set(v, val)
+    type(gc_value), intent(in) :: v, val
+    type(gc_value) :: box
+    box = gcn_binding_box(v)
+    if (gc_kind(box) == OBJ_ATOM) then
+       call gc_cell_set(box, 1, val)
+    else
+       call gcn_set_var(v, val)
+    end if
+  end subroutine gcn_var_set
 
   subroutine gcn_set_var(v, val)
     type(gc_value), intent(in) :: v, val
@@ -269,20 +309,20 @@ contains
          logical :: ours
          owner = gc_slot(var, 3)
          if (gc_kind(owner) == OBJ_NS) then
-            ours = (gcn_name(owner) == gcn_name(vs_get(base + 1)))
+            block
+               character(len=:), allocatable :: dlr_2, dlr_3
+               call gcn_name(owner, s=dlr_2)
+               call gcn_name(vs_get(base + 1), s=dlr_3)
+               ours = (dlr_2 == dlr_3)
+            end block
          else
             ! No owner recorded: a Var from before namespaces carried
             ! one. Treat it as ours, which is what it always was.
             ours = .true.
          end if
          if (ours) then
-            ! the ROOT: slot 5 while a binding of it stands (Eval's
-            ! push-thread-bindings), else the value itself
-            if (gc_i2(var) > 0) then
-               call gc_cell_set(var, 5, vs_get(base + 3))
-            else
-               call gc_cell_set(var, 1, vs_get(base + 3))
-            end if
+            ! the ROOT; a binding in force keeps showing its own value
+            call gc_cell_set(var, 1, vs_get(base + 3))
             call vs_leave(base)
             return
          end if
@@ -293,11 +333,16 @@ contains
          ! did not mean to. A namespace that declares the shadowing up
          ! front, (:refer-clojure :exclude (next)), has nothing left to
          ! replace and so says nothing.
-         write(0, '(A)') "WARNING: " // gc_ref_text(sym%ref) // &
-              " already refers to: #'" // gcn_name(owner) // "/" // &
-              gc_ref_text(sym%ref) // " in namespace: " // &
-              gcn_name(vs_get(base + 1)) // ", being replaced by: #'" // &
-              gcn_name(vs_get(base + 1)) // "/" // gc_ref_text(sym%ref)
+         block
+            character(len=:), allocatable :: dlr_4, dlr_5, dlr_6, dlr_7, dlr_8, dlr_9
+            call gc_ref_text(sym%ref, s=dlr_4)
+            call gcn_name(owner, s=dlr_5)
+            call gc_ref_text(sym%ref, s=dlr_6)
+            call gcn_name(vs_get(base + 1), s=dlr_7)
+            call gcn_name(vs_get(base + 1), s=dlr_8)
+            call gc_ref_text(sym%ref, s=dlr_9)
+            write(0, '(A)') "WARNING: " // dlr_4 //  " already refers to: #'" // dlr_5 // "/" //  dlr_6 // " in namespace: " //  dlr_7 // ", being replaced by: #'" //  dlr_8 // "/" // dlr_9
+         end block
        end block
     end if
 

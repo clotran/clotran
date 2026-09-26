@@ -23,13 +23,17 @@
     tag_of = v%tag
   end function tag_of
 
-  function sym_text(v) result(s)
+  subroutine sym_text(v, s)
     type(gc_value), intent(in) :: v
-    character(len=:), allocatable :: s
+    character(len=:), allocatable, intent(out) :: s
     type(gc_value) :: t
     t = strip_meta(v)
-    s = gc_ref_text(t%ref)
-  end function sym_text
+    block
+       character(len=:), allocatable :: dlr_1
+       call gc_ref_text(t%ref, s=dlr_1)
+       s = dlr_1
+    end block
+  end subroutine sym_text
 
   ! A frame of n nil slots.
   function new_frame(n, roots) result(fr)
@@ -88,8 +92,13 @@
     type(gc_value) :: fn, caps, capv
     integer :: base, ncap, i
     vst => gc_my_stack()
-    if (trace_macros == 1 .and. int_of(gcv_nth(tmpl, 3)) > 64) &
-         write(0, '(A,I0,A,A)') "wide frame: ", int_of(gcv_nth(tmpl, 3)), " slots for ", gcp_str(gcv_nth(tmpl, 0), .false.)
+    if (trace_macros == 1 .and. int_of(gcv_nth(tmpl, 3)) > 64) then
+       block
+          character(len=:), allocatable :: dlr_2
+          call gcp_str(gcv_nth(tmpl, 0), .false., s=dlr_2)
+          write(0, '(A,I0,A,A)') "wide frame: ", int_of(gcv_nth(tmpl, 3)), " slots for ", dlr_2
+       end block
+    end if
     base = vs_enter(vst, 3)
     call vs_set(vst, base + 1, tmpl)
     call vs_set(vst, base + 2, frame)
@@ -326,9 +335,9 @@
   ! A value as a short string, WITHOUT forcing anything: a break may
   ! be taken while an infinite seq is half built, and printing it is
   ! not worth hanging the process that was already in trouble.
-  function safe_str(v) result(s)
+  subroutine safe_str(v, s)
     type(gc_value), intent(in) :: v
-    character(len=:), allocatable :: s
+    character(len=:), allocatable, intent(out) :: s
     character(len=16) :: nbuf
     integer :: k, n
     k = gc_kind(strip_meta(v))
@@ -362,12 +371,26 @@
     end select
     if (n >= 0) then
        write(nbuf, '(I0)') n
-       s = s // trim(nbuf) // ">"
+       block
+          character(len=:), allocatable :: dlw
+          dlw = s // trim(nbuf) // ">"
+          call move_alloc(dlw, s)
+       end block
        return
     end if
-    s = gcp_str(v, .true.)
-    if (len(s) > 120) s = s(1:117) // "..."
-  end function safe_str
+    block
+       character(len=:), allocatable :: dlr_3
+       call gcp_str(v, .true., s=dlr_3)
+       s = dlr_3
+    end block
+    if (len(s) > 120) then
+       block
+          character(len=:), allocatable :: dlw
+          dlw = s(1:117) // "..."
+          call move_alloc(dlw, s)
+       end block
+    end if
+  end subroutine safe_str
 
   ! One map per call still pending, innermost first:
   !   {:fn "user/f" :file "x.clj" :line 12 :col 3 :env {x 3, coll [1 2]}}
@@ -430,7 +453,13 @@
        have_pos = .false.
        who = "fn"
        nm = gc_slot(vs_get(vst, base + 2), 5)
-       if (nm%tag == GCT_SYM) who = gc_ref_text(nm%ref)
+       if (nm%tag == GCT_SYM) then
+          block
+             character(len=:), allocatable :: dlr_4
+             call gc_ref_text(nm%ref, s=dlr_4)
+             who = dlr_4
+          end block
+       end if
 
        env = gca_empty([roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
        call vs_set(vst, base + 3, env)
@@ -638,7 +667,10 @@
     cmd = strip_meta(gc_root_get(resume_root))
     if (cmd%tag == GCT_KEY) then
        if (reason == "error") return
-       select case (gc_ref_text(cmd%ref))
+       block
+          character(len=:), allocatable :: dlr_5
+          call gc_ref_text(cmd%ref, s=dlr_5)
+       select case (dlr_5)
        case ("step-in")
           step_at = huge(step_at)
        case ("step-over")
@@ -652,6 +684,7 @@
           tctx%last_error = "aborted at break"
           tctx%last_trace = ""
        end select
+       end block
     else if (gca_is(cmd)) then
        out = gca_get(cmd, gc_key("continue", [cmd]))
     end if
@@ -714,24 +747,45 @@
     character(len=32) :: nbuf
     character(len=:), allocatable :: where
     integer :: i, j, top
-    write(u, '(A)') "break: " // gcp_str(gca_get(m, gc_key("reason", [m])), .true.) // " " // &
-         text_of(gca_get(m, gc_key("message", [m])))
+    block
+       character(len=:), allocatable :: dlr_6, dlr_7
+       call gcp_str(gca_get(m, gc_key("reason", [m])), .true., s=dlr_6)
+       call text_of(gca_get(m, gc_key("message", [m])), s=dlr_7)
+       write(u, '(A)') "break: " // dlr_6 // " " //  dlr_7
+    end block
     frames = gca_get(m, gc_key("frames", [m]))
     top = gcv_count(frames) - 1
     if (present(limit)) top = min(top, limit - 1)
     do i = 0, top
        f = gcv_nth(frames, i)
        write(nbuf, '(I0)') i
-       where = text_of(gca_get(f, gc_key("file", [f])))
+       block
+          character(len=:), allocatable :: dlr_8
+          call text_of(gca_get(f, gc_key("file", [f])), s=dlr_8)
+          where = dlr_8
+       end block
        if (len(where) > 0) where = where // ":"
-       where = where // trim(int_text(gca_get(f, gc_key("line", [f])))) // ":" // &
-            trim(int_text(gca_get(f, gc_key("col", [f]))))
-       write(u, '(A)') "  " // trim(nbuf) // " " // text_of(gca_get(f, gc_key("fn", [f]))) // " (" // where // ")"
+       block
+          character(len=:), allocatable :: dlr_9, dlr_10
+          call int_text(gca_get(f, gc_key("line", [f])), s=dlr_9)
+          call int_text(gca_get(f, gc_key("col", [f])), s=dlr_10)
+          where = where // trim(dlr_9) // ":" //  trim(dlr_10)
+       end block
+       block
+          character(len=:), allocatable :: dlr_11
+          call text_of(gca_get(f, gc_key("fn", [f])), s=dlr_11)
+          write(u, '(A)') "  " // trim(nbuf) // " " // dlr_11 // " (" // where // ")"
+       end block
        env = gca_get(f, gc_key("env", [f]))
        if (gca_is(env)) then
           call gca_entries(env, ks, vls)
           do j = 1, size(ks)
-             write(u, '(A)') "      " // gcp_str(ks(j), .false.) // " = " // safe_str(vls(j))
+             block
+                character(len=:), allocatable :: dlr_12, dlr_13
+                call gcp_str(ks(j), .false., s=dlr_12)
+                call safe_str(vls(j), s=dlr_13)
+                write(u, '(A)') "      " // dlr_12 // " = " // dlr_13
+             end block
           end do
        end if
     end do
@@ -742,11 +796,13 @@
     flush(u)
   end subroutine write_break
 
-  function int_text(v) result(s)
+  subroutine int_text(v, s)
     type(gc_value), intent(in) :: v
-    character(len=32) :: s
-    write(s, '(I0)') int(v%ival, kind=4)
-  end function int_text
+    character(len=:), allocatable, intent(out) :: s
+    character(len=32) :: buf
+    write(buf, '(I0)') int(v%ival, kind=4)
+    s = trim(buf)
+  end subroutine int_text
 
   ! The builtins a call may hand a REUSED argument vector: numeric, and
   ! none of them keeps its arguments or calls back into Clojure. That
@@ -888,7 +944,13 @@
        call note_position(nd)
        if (gc_i1(nd) == N_TRY .and. (tctx%kst(tctx%ksp)%pc == 1 .or. tctx%kst(tctx%ksp)%pc == 3)) then
           exc = thrown_value()
-          if (exc%tag == GCT_NIL) exc = error_value(gce_error(), [nd])
+          if (exc%tag == GCT_NIL) then
+             block
+                character(len=:), allocatable :: dlr_14
+                call gce_error(s=dlr_14)
+                exc = error_value(dlr_14, [nd])
+             end block
+          end if
           call vs_set(vst, b + 3, exc)
           if (tctx%kst(tctx%ksp)%pc == 1) then
              catches = gc_slot(nd, 2)
@@ -1002,6 +1064,9 @@
           call vs_set(vst, vbase + 1, val)
        end if
        if (tctx%ksp == kbot) exit
+       ! a SAFEPOINT each step (PLAN.md step 14f): a collection elsewhere
+       ! stops this thread here even in a loop that allocates nothing
+       call gc_poll()
        b = tctx%kst(tctx%ksp)%base
        nd = vs_get(vst, b + 1)
        kind = gc_i1(nd)
@@ -1250,7 +1315,11 @@
           if (.not. tctx%has_error) then
              call set_thrown(v)
              tctx%has_error = .true.
-             tctx%last_error = gcp_str(v, .true.)
+             block
+                character(len=:), allocatable :: dlr_15
+                call gcp_str(v, .true., s=dlr_15)
+                tctx%last_error = dlr_15
+             end block
              call capture_trace()
           end if
        case (N_FN)
@@ -1410,15 +1479,27 @@
        v = exec_args(kids, 0, frame)
        if (.not. tctx%has_error) then
           call vs_set(vst, base + 3, v)
-          out = eval_new(sym_text(gc_slot(vs_get(vst, base + 1), 2)), vs_get(vst, base + 3))
+          block
+             character(len=:), allocatable :: dlr_16
+             call sym_text(gc_slot(vs_get(vst, base + 1), 2), s=dlr_16)
+             out = eval_new(dlr_16, vs_get(vst, base + 3))
+          end block
        end if
     case (N_NEWTYPE)
        v = exec_args(kids, 0, frame)
        if (.not. tctx%has_error) then
           call vs_set(vst, base + 3, v)
-          fnv = find_type(sym_text(gc_slot(vs_get(vst, base + 1), 2)))
+          block
+             character(len=:), allocatable :: dlr_17
+             call sym_text(gc_slot(vs_get(vst, base + 1), 2), s=dlr_17)
+             fnv = find_type(dlr_17)
+          end block
           if (gc_kind(fnv) /= OBJ_TYPE) then
-             call fail("no such class: " // sym_text(gc_slot(vs_get(vst, base + 1), 2)))
+             block
+                character(len=:), allocatable :: dlr_18
+                call sym_text(gc_slot(vs_get(vst, base + 1), 2), s=dlr_18)
+                call fail("no such class: " // dlr_18)
+             end block
           else
              call vs_set(vst, base + 4, fnv)
              out = construct_type_vals(vs_get(vst, base + 4), vs_get(vst, base + 3))
@@ -1431,10 +1512,18 @@
        if (gcn_is_var(v)) then
           out = gcn_var_value(v)
        else
-          call fail("Unable to resolve symbol: " // sym_text(gc_slot(vs_get(vst, base + 1), 2)))
+          block
+             character(len=:), allocatable :: dlr_19
+             call sym_text(gc_slot(vs_get(vst, base + 1), 2), s=dlr_19)
+             call fail("Unable to resolve symbol: " // dlr_19)
+          end block
        end if
     case (N_FAIL)
-       call fail(sym_text(gc_slot(nd, 2)))
+       block
+          character(len=:), allocatable :: dlr_20
+          call sym_text(gc_slot(nd, 2), s=dlr_20)
+          call fail(dlr_20)
+       end block
     case (N_TOPDO)
        ! Each subform analysed after the previous one has run.
        call vs_set(vst, base + 3, gc_slot(nd, 2))
@@ -1464,7 +1553,11 @@
     p = gc_slot(nd, 4)
     if (p%tag /= GCT_INT) return
     if (index(tctx%last_error, "  at ") > 0) return
-    tctx%last_error = tctx%last_error // "  at " // gcr_position(int(p%ival, kind=4))
+    block
+       character(len=:), allocatable :: dlr_21
+       call gcr_position(int(p%ival, kind=4), s=dlr_21)
+       tctx%last_error = tctx%last_error // "  at " // dlr_21
+    end block
   end subroutine note_position
 
   ! Alternating keys and values, as a map literal's children come.
@@ -1535,9 +1628,9 @@
           return
        end if
        call vs_set(vst, base + 4, v)
-       ! the ROOT: under a binding of this Var that is slot 5, and the
-       ! binding keeps showing its own value, as DefExpr's bindRoot does
-       call gc_set_slot(vs_get(vst, base + 3), var_root_slot(vs_get(vst, base + 3)), vs_get(vst, base + 4))
+       ! the ROOT; a binding in force keeps showing its own value, as
+       ! DefExpr's bindRoot does
+       call gc_set_slot(vs_get(vst, base + 3), 1, vs_get(vst, base + 4))
        call gc_set_i1(vs_get(vst, base + 3), 1)
     end if
     md = gc_slot(vs_get(vst, base + 1), 3)
@@ -1578,7 +1671,12 @@
        if (tag_of(gc_slot(fnv, 5)) == GCT_NIL) then
           call vs_set(vst, base + 4, fnv)
           nmsym = gc_slot(vs_get(vst, base + 3), 4)
-          qual = gcn_name(gc_slot(vs_get(vst, base + 3), 3)) // "/" // gc_ref_text(nmsym%ref)
+          block
+             character(len=:), allocatable :: dlr_22, dlr_23
+             call gcn_name(gc_slot(vs_get(vst, base + 3), 3), s=dlr_22)
+             call gc_ref_text(nmsym%ref, s=dlr_23)
+             qual = dlr_22 // "/" // dlr_23
+          end block
           call gc_set_slot(vs_get(vst, base + 4), 5, gc_sym(qual, [vs_get(vst, base + 3), vs_get(vst, base + 4)]))
        end if
     end if
@@ -1669,7 +1767,13 @@
     out = exec(gcv_nth(gc_slot(nd, 1), 0), frame)
     if (tctx%has_error) then
        exc = thrown_value()
-       if (exc%tag == GCT_NIL) exc = error_value(gce_error(), [vs_get(vst, base + 1)])
+       if (exc%tag == GCT_NIL) then
+          block
+             character(len=:), allocatable :: dlr_24
+             call gce_error(s=dlr_24)
+             exc = error_value(dlr_24, [vs_get(vst, base + 1)])
+          end block
+       end if
        call vs_set(vst, base + 3, exc)
        catches = gc_slot(vs_get(vst, base + 1), 2)
        n = gcv_count(catches)
@@ -1831,8 +1935,11 @@
          type(gc_value) :: tv2
          tv2 = strip_meta(tv)
          if (tv2%tag == GCT_NIL) then
-            call raise_class("NullPointerException", &
-                 "Cannot invoke ." // sym_text(gc_slot(vs_get(vst, base + 1), 2)) // " on nil", [vs_get(vst, base + 1)])
+            block
+               character(len=:), allocatable :: dlr_25
+               call sym_text(gc_slot(vs_get(vst, base + 1), 2), s=dlr_25)
+               call raise_class("NullPointerException",  "Cannot invoke ." // dlr_25 // " on nil", [vs_get(vst, base + 1)])
+            end block
             call vs_leave(vst, base)
             return
          end if
@@ -1844,8 +1951,11 @@
        call vs_set(vst, base + 3, cons_vec(vs_get(vst, base + 2), vs_get(vst, base + 3), [vs_get(vst, base + 1)]))
        out = apply(native, vs_get(vst, base + 3))
     else
-       out = eval_dot(vs_get(vst, base + 2), sym_text(gc_slot(vs_get(vst, base + 1), 2)), gc_i2(nd) == 1, &
-            vs_get(vst, base + 3), from == 0)
+       block
+          character(len=:), allocatable :: dlr_26
+          call sym_text(gc_slot(vs_get(vst, base + 1), 2), s=dlr_26)
+          out = eval_dot(vs_get(vst, base + 2), dlr_26, gc_i2(nd) == 1,  vs_get(vst, base + 3), from == 0)
+       end block
     end if
     call vs_leave(vst, base)
   end function dot_dispatch
@@ -1867,7 +1977,8 @@
     case (0)
        val = exec(gcv_nth(gc_slot(nd, 1), 0), frame)
        if (.not. tctx%has_error) then
-          call gc_set_slot(gc_slot(vs_get(vst, base + 1), 2), 1, val)
+          ! Var.set: this thread's binding
+          call gcn_var_set(gc_slot(vs_get(vst, base + 1), 2), val)
           out = val
        end if
     case (2)
@@ -1921,7 +2032,11 @@
        else
           write(want, '(I0)') nf
           write(got, '(I0)') na
-          call fail(class_text(vs_get(vst, base + 1)) // " takes " // trim(want) // " fields, given " // trim(got))
+          block
+             character(len=:), allocatable :: dlr_27
+             call class_text(vs_get(vst, base + 1), s=dlr_27)
+             call fail(dlr_27 // " takes " // trim(want) // " fields, given " // trim(got))
+          end block
           call vs_leave(vst, base)
           return
        end if

@@ -230,12 +230,12 @@ contains
     end do
   end function gcna_live_count
 
-  function gcna_kind(handle) result(s)
+  subroutine gcna_kind(handle, s)
     integer, intent(in) :: handle
-    character(len=:), allocatable :: s
+    character(len=:), allocatable, intent(out) :: s
     s = ""
     if (gcna_is(handle)) s = reg(handle)%elem_kind
-  end function gcna_kind
+  end subroutine gcna_kind
 
   integer function gcna_rank(handle)
     integer, intent(in) :: handle
@@ -396,9 +396,9 @@ contains
 
   ! One element as text, for the printer. Kept here because this module
   ! is the only one that knows what the buffer's dynamic type is.
-  function gcna_elem_string(handle, at) result(s)
+  subroutine gcna_elem_string(handle, at, s)
     integer, intent(in) :: handle, at
-    character(len=:), allocatable :: s
+    character(len=:), allocatable, intent(out) :: s
     character(len=48) :: buf
     s = "?"
     if (.not. gcna_is(handle)) return
@@ -419,7 +419,7 @@ contains
        write(buf, '(G0,A,G0)') real(b(at)), " ", aimag(b(at))
        s = trim(buf)
     end select
-  end function gcna_elem_string
+  end subroutine gcna_elem_string
 
   ! --- registry plumbing -------------------------------------------
 

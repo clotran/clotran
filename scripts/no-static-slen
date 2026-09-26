@@ -1,0 +1,26 @@
+#!/usr/bin/env bb
+;; No static string lengths in the host (PLAN.md step 14f).
+;;
+;; gfortran keeps the result length of every call to a FUNCTION returning
+;; character(len=:), allocatable in a static variable, `slen.N` -- whatever
+;; -frecursive says -- so two threads calling one such function read each
+;; other's lengths: (str "k" 12) came back "k 12", "k" or "12" under eight
+;; futures. The host returns deferred-length text through an intent(out)
+;; argument of a SUBROUTINE instead, which has no such static. This fails
+;; if one has come back, and names it. flang never makes them.
+(require '[clojure.java.shell :refer [sh]]
+         '[clojure.string :as str])
+
+(def bins (or (seq *command-line-args*) ["clotran-bin"]))
+(def bad (for [bin bins
+               :let [n (count (filter #(re-find #"(?<![A-Za-z])slen\.\d+" %)
+                                      (str/split-lines (:out (sh "nm" bin)))))]
+               :when (pos? n)]
+           [bin n]))
+(doseq [[bin n] bad]
+  (println n "static string lengths in" bin "-- a function returning"
+           "character(len=:), allocatable is called somewhere; make it a subroutine"
+           "with an intent(out) argument (scripts/no-static-slen)"))
+(if (seq bad)
+  (System/exit 1)
+  (println "no static string lengths in" (str/join ", " bins)))

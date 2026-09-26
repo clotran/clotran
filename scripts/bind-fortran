@@ -171,7 +171,7 @@
                        (str "    " (kinds (:type a)) ", pointer :: " (:name a) (when (pos? (:rank a)) (str "(" (str/join "," (repeat (:rank a) ":")) ")")))))
         ext-decl (fn [a] (when (pos? (:rank a)) (str "    integer(c_int), pointer :: " (str/join ", " (for [d (range (:rank a))] (str "n" (:name a) "_" (inc d)))))))
         unpack (fn [a] (if (= "string" (:type a))
-                         (str "    s_" (:name a) " = cstr(argv(" (:slot a) "))")
+                         (str "    call cstr(argv(" (:slot a) "), s_" (:name a) ")")
                          (if (zero? (:rank a))
                            (str "    call c_f_pointer(argv(" (:slot a) "), " (:name a) ")")
                            (str (str/join "\n" (for [d (range (:rank a))] (str "    call c_f_pointer(argv(" (+ (:slot a) 1 d) "), n" (:name a) "_" (inc d) ")")))
@@ -209,7 +209,7 @@
          "  ! filled at the first call, not initialised: flang will not fold transfer of a long string\n  character(kind=c_char), allocatable, target, save :: manifest_buf(:)\n"
          "contains\n"
          "  function clotran_manifest() bind(C, name=\"clotran_manifest\") result(p)\n    type(c_ptr) :: p\n    integer :: i\n    if (.not. allocated(manifest_buf)) then\n       allocate(manifest_buf(len(manifest)))\n       do i = 1, len(manifest)\n          manifest_buf(i) = manifest(i:i)\n       end do\n    end if\n    p = c_loc(manifest_buf)\n  end function clotran_manifest\n\n"
-         "  ! a null-terminated string as Fortran text\n  function cstr(p) result(s)\n    type(c_ptr), intent(in) :: p\n    character(len=:), allocatable :: s\n    character(kind=c_char), pointer :: c(:)\n    integer :: n\n    call c_f_pointer(p, c, [huge(0)])\n    n = 0\n    do while (c(n + 1) /= c_null_char)\n       n = n + 1\n    end do\n    allocate(character(len=n) :: s)\n    do n = 1, len(s)\n       s(n:n) = c(n)\n    end do\n  end function cstr\n\n"
+         "  ! a null-terminated string as Fortran text\n  ! a subroutine: gfortran keeps a function's deferred result length in a\n  ! static shared by every thread (scripts/no-static-slen)\n  subroutine cstr(p, s)\n    type(c_ptr), intent(in) :: p\n    character(len=:), allocatable, intent(out) :: s\n    character(kind=c_char), pointer :: c(:)\n    integer :: n\n    call c_f_pointer(p, c, [huge(0)])\n    n = 0\n    do while (c(n + 1) /= c_null_char)\n       n = n + 1\n    end do\n    allocate(character(len=n) :: s)\n    do n = 1, len(s)\n       s(n:n) = c(n)\n    end do\n  end subroutine cstr\n\n"
          (str/join "\n" (map #(shim pkg %) ok))
          "end module " pkg "_pkg\n")))
 

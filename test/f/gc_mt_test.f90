@@ -10,7 +10,7 @@ module gc_mt_work
   use GC
   implicit none
   integer, parameter :: NTHREADS = 4, ROUNDS = 6, LEN = 150
-  integer, save :: bad(NTHREADS) = 0
+  integer, save :: bad(NTHREADS) = 0, sbad(NTHREADS) = 0
 contains
   function worker(arg) result(r) bind(C)
     type(c_ptr), value :: arg
@@ -44,6 +44,19 @@ contains
           p = gc_cdr(p)
        end do
        if (n /= LEN) bad(me) = bad(me) + 1
+       ! strings: each one's text is its own, read back at once
+       do i = 1, LEN
+          block
+            character(len=24) :: want
+            write(want, '(A,I0,A,I0)') 't', me, '-', i
+            p = gc_str(trim(want), roots)
+            block
+               character(len=:), allocatable :: dlr_1
+               call gc_text(p, s=dlr_1)
+               if (dlr_1 /= trim(want)) sbad(me) = sbad(me) + 1
+            end block
+          end block
+       end do
     end do
     call vs_leave(base)
     call gc_mutator_leave()
@@ -81,6 +94,12 @@ program gc_mt_test
   do i = 1, NTHREADS
      if (bad(i) /= 0) then
         print '(a, i0, a, i0)', 'FAIL - thread ', i, ': chains wrong ', bad(i)
+        fails = fails + 1
+     end if
+  end do
+  do i = 1, NTHREADS
+     if (sbad(i) /= 0) then
+        print '(a, i0, a, i0)', 'FAIL - thread ', i, ': strings read back wrong ', sbad(i)
         fails = fails + 1
      end if
   end do

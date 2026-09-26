@@ -19,7 +19,11 @@ program clotran
   character(len=8) :: statbuf, tortbuf
 
   call gc_init(65536)
-  call gce_set_home(home_dir())
+  block
+     character(len=:), allocatable :: dlr_1
+     call home_dir(d=dlr_1)
+     call gce_set_home(dlr_1)
+  end block
   base = vs_enter(3)
   env = gce_base_env(none)
   call vs_set(base + 1, env)
@@ -28,7 +32,11 @@ program clotran
   ! because it would ask instance? about Java classes. NOT a core
   ! library: everything else Clojure programs use must come from
   ! the real core.clj, which is the point of the project.
-  call load_file(under_home("src/clj/host.clj"), vs_get(base + 1))
+  block
+     character(len=:), allocatable :: dlr_2
+     call under_home("src/clj/host.clj", p=dlr_2)
+     call load_file(dlr_2, vs_get(base + 1))
+  end block
   ! host.clj leaves clojure.core current, being part of its bootstrap.
 
   ! Any files named on the command line load next, in order, so
@@ -144,14 +152,23 @@ contains
     do
        forms = gcr_read_next(text, pos, [vs_get(lb + 1)], eof, fid)
        if (gcr_has_error()) then
-          print '(A,A,A,A)', "load ", path, ": reader error: ", gcr_error()
+          block
+             character(len=:), allocatable :: dlr_3
+             call gcr_error(s=dlr_3)
+             print '(A,A,A,A)', "load ", path, ": reader error: ", dlr_3
+          end block
           exit
        end if
        if (eof) exit
        i = i + 1
        call vs_set(lb + 2, forms)
        if (trace) then
-          print '(A,I0,A,A)', "[", i, "] ", first_line(gcp_str(vs_get(lb + 2), .true.))
+          block
+             character(len=:), allocatable :: dlr_4, dlr_5
+             call gcp_str(vs_get(lb + 2), .true., s=dlr_4)
+             call first_line(dlr_4, out=dlr_5)
+             print '(A,I0,A,A)', "[", i, "] ", dlr_5
+          end block
           flush(6)
        end if
        call gce_clear_error()
@@ -159,9 +176,25 @@ contains
        if (.not. gce_has_error()) r = gce_eval(r, vs_get(lb + 1), no_roots())
        call vs_set(lb + 3, r)
        if (gce_has_error()) then
-          print '(A,A)', "  ", gce_error()
-          if (len(gce_trace()) > 0) write(*, '(A)', advance='no') gce_trace()
-          print '(A,A)', "    in: ", first_line(gcp_str(vs_get(lb + 2), .true.))
+          block
+             character(len=:), allocatable :: dlr_6
+             call gce_error(s=dlr_6)
+             print '(A,A)', "  ", dlr_6
+          end block
+          block
+             character(len=:), allocatable :: dlr_7, dlr_8
+             call gce_trace(s=dlr_7)
+             if (len(dlr_7) > 0) then
+                call gce_trace(s=dlr_8)
+                write(*, '(A)', advance='no') dlr_8
+             end if
+          end block
+          block
+             character(len=:), allocatable :: dlr_9, dlr_10
+             call gcp_str(vs_get(lb + 2), .true., s=dlr_9)
+             call first_line(dlr_9, out=dlr_10)
+             print '(A,A)', "    in: ", dlr_10
+          end block
           print '(A,A,A,I0)', "load ", path, ": stopped at form ", i
           call vs_leave(lb)
           return
@@ -172,15 +205,21 @@ contains
   end subroutine load_file
 
   ! Just enough of a form to identify it in a report.
-  function first_line(t) result(out)
+  subroutine first_line(t, out)
     character(len=*), intent(in) :: t
-    character(len=:), allocatable :: out
+    character(len=:), allocatable, intent(out) :: out
     integer :: k
     out = t
     k = index(t, achar(10))
     if (k > 0) out = t(1:k-1)
-    if (len(out) > 72) out = out(1:72) // "..."
-  end function first_line
+    if (len(out) > 72) then
+       block
+          character(len=:), allocatable :: dlw
+          dlw = out(1:72) // "..."
+          call move_alloc(dlw, out)
+       end block
+    end if
+  end subroutine first_line
 
   function no_roots() result(r)
     type(gc_value) :: r(0)
@@ -189,24 +228,30 @@ contains
   ! The directory the binary was started from, by argv(0): the repo
   ! root when it is ./clotran, and a classpath root either way (Eval's
   ! classpath_find), so `clotran` works from any directory.
-  function home_dir() result(d)
-    character(len=:), allocatable :: d
+  subroutine home_dir(d)
+    character(len=:), allocatable, intent(out) :: d
     character(len=1024) :: exe
     integer :: n, k
     d = "."
     call get_command_argument(0, exe, n)
     k = index(exe(1:n), "/", back=.true.)
     if (k > 1) d = exe(1:k-1)
-  end function home_dir
+  end subroutine home_dir
 
   ! A file relative to the cwd if it is there, else under home.
-  function under_home(rel) result(p)
+  subroutine under_home(rel, p)
     character(len=*), intent(in) :: rel
-    character(len=:), allocatable :: p
+    character(len=:), allocatable, intent(out) :: p
     logical :: there
     p = rel
     inquire(file=p, exist=there)
-    if (.not. there) p = gce_home() // "/" // rel
-  end function under_home
+    if (.not. there) then
+       block
+          character(len=:), allocatable :: dlr_11
+          call gce_home(h=dlr_11)
+          p = dlr_11 // "/" // rel
+       end block
+    end if
+  end subroutine under_home
 
 end program clotran

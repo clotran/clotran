@@ -67,7 +67,8 @@
 ! which is the entire point: copying one is a flat move.
 module GC
   use Threads, only: th_key, th_key_create, th_key_set, th_key_get, th_lock, th_cond, &
-       th_lock_init, th_lock_acquire, th_lock_release, th_cond_init, th_cond_wait, th_cond_broadcast
+       th_lock_init, th_lock_acquire, th_lock_release, th_cond_init, th_cond_wait, th_cond_broadcast, &
+       th_cond_timedwait
   use iso_c_binding, only: c_ptr, c_loc, c_f_pointer, c_associated
   use BigInt
   use BigDec
@@ -172,6 +173,9 @@ module GC
   ! tail. Slot 2 holds that seq and `seq` answers it, which is what
   ! LazySeq.seq does on the JVM (it returns `s`, it does not wrap it).
   integer, parameter, public :: LAZY_DELEG   = 3
+  ! being realized by the thread whose context id is in slot 4 (Eval's
+  ! gce_force): the others wait for it, so a thunk runs once
+  integer, parameter, public :: LAZY_RUNNING = 4
   integer, parameter, public :: OBJ_ENV     = 7  ! 1=bindings 2=outer; i1=defining ns
   ! A value CARRYING metadata: slot 1 = the value, slot 2 = the
   ! metadata map. A wrapper rather than a field, because gc_value
@@ -547,6 +551,10 @@ module GC
      ! them (forget_spares), so a spare is never one the sweep freed.
      type(gc_value) :: spare(SPARE_DEPTH, SPARE_SIZES)
      integer :: nspare(SPARE_SIZES) = 0
+     ! THIS THREAD'S DYNAMIC BINDINGS (Var.dvals): nil, or the top Frame
+     ! as a vector [bindings prev] -- bindings a map of Var to box, the
+     ! frame below's merged in -- as Var.pushThreadBindings builds it
+     type(gc_root) :: bindings
   end type gc_stack
   type :: gc_stack_ref
      type(gc_stack), pointer :: s => null()
@@ -575,8 +583,14 @@ module GC
   ! Re-entrant per thread. NEVER held across an allocation (a thread
   ! parked at a safepoint holding it could deadlock the collector's
   ! finalizers) nor across Clojure code (swap! calls f outside it).
+  ! the remembered set's own lock: the write barrier runs in any thread's
+  ! store, holding no other lock, and two appending at once lost one
+  ! (PLAN.md step 14f) -- a young value only an old object held was then
+  ! swept and its slot handed out again
+  type(th_lock) :: rem_lk
   type(th_lock) :: state_lk
   type(th_cond) :: state_cv
+  integer :: notify_gen = 0   ! bumped by every gc_state_notify, under the state lock
   type(th_lock) :: heap_lock
   type(th_cond) :: heap_cond
   logical :: heap_sync_up = .false.
@@ -659,6 +673,7 @@ module GC
   public :: gc_set_finalizer
   public :: gc_ensure_init, gc_str_ref, gc_ref_text, gc_ref_is, gc_ref_len
   public :: vs_enter, vs_leave, vs_set, vs_get, vs_depth, gc_stack, gc_my_stack
+  public :: gc_bindings_get, gc_bindings_set
   interface vs_enter
      module procedure vs_enter_self, vs_enter_on
   end interface vs_enter
@@ -678,6 +693,7 @@ module GC
   public :: gc_frame_take, gc_frame_give
   public :: gc_state_lock, gc_state_unlock, gc_cell_get, gc_cell_set, gc_cell_cas, gc_identical
   public :: gc_grow_begin, gc_grow_end, gc_next, gc_root_cas
+  public :: gc_poll, gc_state_wait, gc_state_notify, gc_notify_gen
   public :: gc_mutator_enter, gc_mutator_leave
   public :: gc_arena_stats
   public :: gc_equal, gc_hash
@@ -720,12 +736,17 @@ contains
     ref_ok = allocated(str_pool(ref)%text)
   end function ref_ok
 
-  function gc_ref_text(ref) result(s)
+  subroutine gc_ref_text(ref, s)
     integer, intent(in) :: ref
-    character(len=:), allocatable :: s
+    character(len=:), allocatable, intent(out) :: s
     s = ""
-    if (ref_ok(ref)) s = str_pool(ref)%text
-  end function gc_ref_text
+    if (ref_ok(ref)) then
+       s = str_pool(ref)%text
+    else if (ref > 0) then
+       write(0, '(A,I0)') "TRAP: read of a freed string, ref ", ref
+       call abort()
+    end if
+  end subroutine gc_ref_text
 
   function gc_ref_is(ref, s) result(yes)
     integer, intent(in) :: ref
@@ -862,6 +883,7 @@ contains
     if (heap_sync_up) return
     if (.not. (th_lock_init(heap_lock) .and. th_cond_init(heap_cond))) &
          error stop "clotran: no lock for the heap"
+    if (.not. th_lock_init(rem_lk)) error stop "clotran: no lock for the remembered set"
     if (.not. (th_lock_init(state_lk) .and. th_cond_init(state_cv))) &
          error stop "clotran: no lock for shared state"
     heap_sync_up = .true.
@@ -1050,12 +1072,22 @@ contains
     v = new_text(text, roots, GCT_DEC)
   end function gc_dec
 
-  function gc_dec_text(v) result(s)
+  subroutine gc_dec_text(v, s)
     type(gc_value), intent(in) :: v
-    character(len=:), allocatable :: s
-    s = dec_make("0", 0)
-    if (v%tag == GCT_DEC) s = gc_ref_text(v%ref)
-  end function gc_dec_text
+    character(len=:), allocatable, intent(out) :: s
+    block
+       character(len=:), allocatable :: dlr_1
+       call dec_make("0", 0, o=dlr_1)
+       s = dlr_1
+    end block
+    if (v%tag == GCT_DEC) then
+       block
+          character(len=:), allocatable :: dlr_2
+          call gc_ref_text(v%ref, s=dlr_2)
+          s = dlr_2
+       end block
+    end if
+  end subroutine gc_dec_text
 
   function gc_class(text, roots) result(v)
     character(len=*), intent(in) :: text
@@ -1064,18 +1096,28 @@ contains
     v = new_text(text, roots, GCT_CLASS)
   end function gc_class
 
-  function gc_class_text(v) result(s)
+  subroutine gc_class_text(v, s)
     type(gc_value), intent(in) :: v
-    character(len=:), allocatable :: s
+    character(len=:), allocatable, intent(out) :: s
     s = ""
-    if (v%tag == GCT_CLASS) s = gc_ref_text(v%ref)
-  end function gc_class_text
+    if (v%tag == GCT_CLASS) then
+       block
+          character(len=:), allocatable :: dlr_3
+          call gc_ref_text(v%ref, s=dlr_3)
+          s = dlr_3
+       end block
+    end if
+  end subroutine gc_class_text
 
   function gc_big(text, roots) result(v)
     character(len=*), intent(in) :: text
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: v
-    v = new_text(big_norm(text), roots, GCT_BIG)
+    block
+       character(len=:), allocatable :: dlr_4
+       call big_norm(text, o=dlr_4)
+       v = new_text(dlr_4, roots, GCT_BIG)
+    end block
   end function gc_big
 
   pure function gc_is_big(v) result(yes)
@@ -1084,12 +1126,18 @@ contains
     yes = (v%tag == GCT_BIG)
   end function gc_is_big
 
-  function gc_big_text(v) result(s)
+  subroutine gc_big_text(v, s)
     type(gc_value), intent(in) :: v
-    character(len=:), allocatable :: s
+    character(len=:), allocatable, intent(out) :: s
     s = "0"
-    if (v%tag == GCT_BIG) s = gc_ref_text(v%ref)
-  end function gc_big_text
+    if (v%tag == GCT_BIG) then
+       block
+          character(len=:), allocatable :: dlr_5
+          call gc_ref_text(v%ref, s=dlr_5)
+          s = dlr_5
+       end block
+    end if
+  end subroutine gc_big_text
 
   function gc_ratio(num0, den0) result(v)
     integer(gc_ip), intent(in) :: num0, den0
@@ -1552,13 +1600,13 @@ contains
 
   ! --- accessors -------------------------------------------------
 
-  function gc_text(v) result(s)
+  subroutine gc_text(v, s)
     type(gc_value), intent(in) :: v
-    character(len=:), allocatable :: s
+    character(len=:), allocatable, intent(out) :: s
     s = ""
     if (v%tag /= GCT_STR .and. v%tag /= GCT_SYM .and. v%tag /= GCT_KEY) return
     if (allocated(str_pool(v%ref)%text)) s = str_pool(v%ref)%text
-  end function gc_text
+  end subroutine gc_text
 
   function gc_kind(v) result(k)
     type(gc_value), intent(in) :: v
@@ -1583,10 +1631,7 @@ contains
        obj_pool(v%ref)%slot(i) = x
        ! the write barrier: a young value into an old object
        if (obj_mark(v%ref) .and. .not. obj_rem(v%ref)) then
-          if (is_young(x)) then
-             obj_rem(v%ref) = .true.
-             call remember(v)
-          end if
+          if (is_young(x)) call remember_obj(v)
        end if
     end if
   end subroutine gc_set_slot
@@ -1605,6 +1650,30 @@ contains
        is_young = .not. str_mark(x%ref)
     end select
   end function is_young
+
+  ! The flag is checked again under the lock: another thread may have
+  ! remembered this object between the barrier's check and here.
+  subroutine remember_obj(v)
+    type(gc_value), intent(in) :: v
+    logical :: ok
+    ok = th_lock_acquire(rem_lk)
+    if (.not. obj_rem(v%ref)) then
+       obj_rem(v%ref) = .true.
+       call remember(v)
+    end if
+    ok = th_lock_release(rem_lk)
+  end subroutine remember_obj
+
+  subroutine remember_vec(v)
+    type(gc_value), intent(in) :: v
+    logical :: ok
+    ok = th_lock_acquire(rem_lk)
+    if (.not. vec_rem(v%ref)) then
+       vec_rem(v%ref) = .true.
+       call remember(v)
+    end if
+    ok = th_lock_release(rem_lk)
+  end subroutine remember_vec
 
   subroutine remember(v)
     type(gc_value), intent(in) :: v
@@ -1668,10 +1737,7 @@ contains
     if (i < 1 .or. i > gc_vec_len(v)) return
     vec_store(vec_pool(v%ref)%off + i - 1) = x
     if (vec_mark(v%ref) .and. .not. vec_rem(v%ref)) then
-       if (is_young(x)) then
-          vec_rem(v%ref) = .true.
-          call remember(v)
-       end if
+       if (is_young(x)) call remember_vec(v)
     end if
   end subroutine gc_vec_set
 
@@ -1745,7 +1811,11 @@ contains
        if (gen_verify) then
           block
             character(len=:), allocatable :: p
-            p = gc_check_heap()
+            block
+               character(len=:), allocatable :: dlr_6
+               call gc_check_heap(problem=dlr_6)
+               p = dlr_6
+            end block
             if (len(p) > 0) then
                write(0, '(A)') "clotran: a young collection left a dangling reference: " // p
                error stop 1
@@ -1885,11 +1955,31 @@ contains
     ! (and (= 1N 1.0) is not -- a double is its own category).
     if (a%tag == GCT_BIG .neqv. b%tag == GCT_BIG) then
        if (a%tag == GCT_BIG .and. b%tag == GCT_INT) then
-          eq = big_fits_i64(gc_ref_text(a%ref))
-          if (eq) eq = (big_to_i64(gc_ref_text(a%ref)) == b%ival)
+          block
+             character(len=:), allocatable :: dlr_7
+             call gc_ref_text(a%ref, s=dlr_7)
+             eq = big_fits_i64(dlr_7)
+          end block
+          if (eq) then
+             block
+                character(len=:), allocatable :: dlr_8
+                call gc_ref_text(a%ref, s=dlr_8)
+                eq = (big_to_i64(dlr_8) == b%ival)
+             end block
+          end if
        else if (b%tag == GCT_BIG .and. a%tag == GCT_INT) then
-          eq = big_fits_i64(gc_ref_text(b%ref))
-          if (eq) eq = (big_to_i64(gc_ref_text(b%ref)) == a%ival)
+          block
+             character(len=:), allocatable :: dlr_9
+             call gc_ref_text(b%ref, s=dlr_9)
+             eq = big_fits_i64(dlr_9)
+          end block
+          if (eq) then
+             block
+                character(len=:), allocatable :: dlr_10
+                call gc_ref_text(b%ref, s=dlr_10)
+                eq = (big_to_i64(dlr_10) == a%ival)
+             end block
+          end if
        end if
        return
     end if
@@ -1908,15 +1998,30 @@ contains
        eq = (a%ival == b%ival .and. a%ref == b%ref)
     case (GCT_BIG, GCT_CLASS)
        ! Canonical text, so this is exact.
-       eq = gc_ref_is(a%ref, gc_ref_text(b%ref))
+       block
+          character(len=:), allocatable :: dlr_11
+          call gc_ref_text(b%ref, s=dlr_11)
+          eq = gc_ref_is(a%ref, dlr_11)
+       end block
     case (GCT_DEC)
        ! By VALUE: (= 1M 1.0M) is true although the two print apart.
-       eq = (dec_cmp(gc_ref_text(a%ref), gc_ref_text(b%ref)) == 0)
+       block
+          character(len=:), allocatable :: dlr_12, dlr_13
+          call gc_ref_text(a%ref, s=dlr_12)
+          call gc_ref_text(b%ref, s=dlr_13)
+          eq = (dec_cmp(dlr_12, dlr_13) == 0)
+       end block
     case (GCT_STR, GCT_SYM, GCT_KEY)
        ! Compared by CONTENT, not by pool slot: the same text
        ! allocated twice is two slots but one value.
        eq = (gc_ref_len(a%ref) == gc_ref_len(b%ref))
-       if (eq) eq = gc_ref_is(a%ref, gc_ref_text(b%ref))
+       if (eq) then
+          block
+             character(len=:), allocatable :: dlr_14
+             call gc_ref_text(b%ref, s=dlr_14)
+             eq = gc_ref_is(a%ref, dlr_14)
+          end block
+       end if
     case default
        ! A collection is its CONTENTS, when something above this
        ! module has said how to walk one. Identity was the old answer
@@ -1989,17 +2094,38 @@ contains
        ! values must hash alike: {1N :a} and (get m 1) is the case.
        ! Past the 64-bit range no integer can equal it, so the text's
        ! own hash will do.
-       if (big_fits_i64(gc_ref_text(v%ref))) then
-          bits8 = big_to_i64(gc_ref_text(v%ref))
+       block
+          character(len=:), allocatable :: dlr_15
+          call gc_ref_text(v%ref, s=dlr_15)
+       if (big_fits_i64(dlr_15)) then
+          block
+             character(len=:), allocatable :: dlr_16
+             call gc_ref_text(v%ref, s=dlr_16)
+             bits8 = big_to_i64(dlr_16)
+          end block
           h = mix32(ieor(mix32(int(ieor(bits8, ishft(bits8, -32)), kind=4)), tag_salt(GCT_INT)))
        else
-          h = mix32(ieor(mix32(fnv1a(gc_ref_text(v%ref))), tag_salt(v%tag)))
+          block
+             character(len=:), allocatable :: dlr_17
+             call gc_ref_text(v%ref, s=dlr_17)
+             h = mix32(ieor(mix32(fnv1a(dlr_17)), tag_salt(v%tag)))
+          end block
        end if
+       end block
     case (GCT_DEC)
        ! Over the STRIPPED value, so equal decimals hash alike.
-       h = mix32(ieor(mix32(fnv1a(dec_strip(gc_ref_text(v%ref)))), tag_salt(v%tag)))
+       block
+          character(len=:), allocatable :: dlr_18, dlr_19
+          call gc_ref_text(v%ref, s=dlr_18)
+          call dec_strip(dlr_18, o=dlr_19)
+          h = mix32(ieor(mix32(fnv1a(dlr_19)), tag_salt(v%tag)))
+       end block
     case (GCT_STR, GCT_SYM, GCT_KEY, GCT_CLASS)
-       h = mix32(ieor(mix32(fnv1a(gc_ref_text(v%ref))), tag_salt(v%tag)))
+       block
+          character(len=:), allocatable :: dlr_20
+          call gc_ref_text(v%ref, s=dlr_20)
+          h = mix32(ieor(mix32(fnv1a(dlr_20)), tag_salt(v%tag)))
+       end block
     case default
        ! ...and hashing has to follow equality exactly, or a trie
        ! stores the same key twice and loses lookups.
@@ -2148,6 +2274,27 @@ contains
     n = s%vs_top
   end function vs_depth_on
 
+  ! This thread's binding frame (gc_stack%bindings), and replacing it.
+  function gc_bindings_get() result(v)
+    type(gc_stack), pointer :: s
+    type(gc_value) :: v
+    s => my_stack()
+    v = gc_root_get(s%bindings)
+  end function gc_bindings_get
+
+  subroutine gc_bindings_set(v)
+    type(gc_value), intent(in) :: v
+    type(gc_stack), pointer :: s
+    s => my_stack()
+    call gc_global_keep(s%bindings, v)
+  end subroutine gc_bindings_set
+
+  ! How many notifies there have been -- read under the state lock, to
+  ! tell whether anything was announced between two looks.
+  integer function gc_notify_gen()
+    gc_notify_gen = notify_gen
+  end function gc_notify_gen
+
   subroutine gc_state_lock()
     type(gc_stack), pointer :: s
     logical :: ok
@@ -2191,6 +2338,59 @@ contains
     call world_start(s%grow_stopped)
     call heap_leave(s%grow_entered)
   end subroutine gc_grow_end
+
+  ! A SAFEPOINT that allocates nothing: the interpreter's loop and a
+  ! compiled loop's back-edge call it, so a thread computing without
+  ! allocating still stops when another must collect. One read of a
+  ! volatile flag when nothing is stopping.
+  subroutine gc_poll()
+    type(gc_value) :: none(0)
+    logical :: e
+    if (.not. stop_world) return
+    call heap_enter(none, none, e)
+    call heap_leave(e)
+  end subroutine gc_poll
+
+  ! WAITING (PLAN.md step 14f). Called holding the state lock once (not
+  ! nested): lets it go, steps out of the running mutators -- a stop
+  ! must not wait for a thread that is waiting -- and sleeps until a
+  ! gc_state_notify, or ms milliseconds (negative: no limit). Holds the
+  ! lock again on return. A notify between the caller's last check and
+  ! the sleep is not lost: notify_gen, read before letting go, says so.
+  ! Callers re-check what they wait for: wake-ups can be spurious.
+  subroutine gc_state_wait(ms)
+    integer(8), intent(in) :: ms
+    type(gc_stack), pointer :: s
+    integer :: gen
+    logical :: ok
+    s => my_stack()
+    if (s%state_depth /= 1) error stop "clotran: a wait under a nested state lock"
+    gen = notify_gen
+    s%state_depth = 0
+    ok = th_lock_release(state_lk)
+    call gc_mutator_leave()
+    ok = th_lock_acquire(state_lk)
+    if (notify_gen == gen) then
+       if (ms < 0) then
+          ok = th_cond_wait(state_cv, state_lk)
+       else
+          ok = th_cond_timedwait(state_cv, state_lk, int(ms, kind(0_8)))
+       end if
+    end if
+    ok = th_lock_release(state_lk)
+    call gc_mutator_enter()
+    ok = th_lock_acquire(state_lk)
+    s%state_depth = 1
+  end subroutine gc_state_wait
+
+  ! Something a waiter may be waiting for has happened: wake them all.
+  subroutine gc_state_notify()
+    logical :: ok
+    call gc_state_lock()
+    notify_gen = notify_gen + 1
+    ok = th_cond_broadcast(state_cv)
+    call gc_state_unlock()
+  end subroutine gc_state_notify
 
   ! The next number from a counter other threads also count with.
   integer function gc_next(counter)
@@ -2569,14 +2769,18 @@ contains
   ! This is the payoff of handles over pointers -- the heap can check
   ! itself, and a corruption is caught where it happened rather than
   ! whenever the wild pointer is next dereferenced. "" means healthy.
-  function gc_check_heap() result(problem)
-    character(len=:), allocatable :: problem
+  subroutine gc_check_heap(problem)
+    character(len=:), allocatable, intent(out) :: problem
     integer :: i, j, n
     problem = ""
     do i = 1, obj_used
        if (obj_free(i)) cycle
        do j = 1, OBJ_SLOTS
-          problem = bad_ref(obj_pool(i)%slot(j))
+          block
+             character(len=:), allocatable :: dlr_21
+             call bad_ref(obj_pool(i)%slot(j), problem=dlr_21)
+             problem = dlr_21
+          end block
           if (len(problem) > 0) return
        end do
     end do
@@ -2584,15 +2788,19 @@ contains
        if (vec_free(i)) cycle
        n = vec_pool(i)%len
        do j = 1, n
-          problem = bad_ref(vec_store(vec_pool(i)%off + j - 1))
+          block
+             character(len=:), allocatable :: dlr_22
+             call bad_ref(vec_store(vec_pool(i)%off + j - 1), problem=dlr_22)
+             problem = dlr_22
+          end block
           if (len(problem) > 0) return
        end do
     end do
-  end function gc_check_heap
+  end subroutine gc_check_heap
 
-  function bad_ref(v) result(problem)
+  subroutine bad_ref(v, problem)
     type(gc_value), intent(in) :: v
-    character(len=:), allocatable :: problem
+    character(len=:), allocatable, intent(out) :: problem
     problem = ""
     select case (v%tag)
     case (GCT_OBJ)
@@ -2614,7 +2822,7 @@ contains
           problem = "live object references freed text"
        end if
     end select
-  end function bad_ref
+  end subroutine bad_ref
 
   ! --- UTF-8 -----------------------------------------------------
   !
@@ -2665,12 +2873,12 @@ contains
   end function u8_cpidx
 
   ! Characters cs (inclusive) to ce (exclusive), as their bytes.
-  pure function u8_slice(t, cs, ce) result(s)
+  pure subroutine u8_slice(t, cs, ce, s)
     character(len=*), intent(in) :: t
     integer, intent(in) :: cs, ce
-    character(len=:), allocatable :: s
+    character(len=:), allocatable, intent(out) :: s
     s = t(u8_off(t, cs):u8_off(t, ce) - 1)
-  end function u8_slice
+  end subroutine u8_slice
 
   ! The code point starting at byte p and how many bytes it took. A
   ! byte that is not valid UTF-8 is its own code point, one byte, so
@@ -2716,9 +2924,9 @@ contains
   end function u8_at
 
   ! A code point as UTF-8, one to four bytes.
-  pure function u8_enc(cp) result(s)
+  pure subroutine u8_enc(cp, s)
     integer, intent(in) :: cp
-    character(len=:), allocatable :: s
+    character(len=:), allocatable, intent(out) :: s
     if (cp < 0) then
        s = "?"
     else if (cp < 128) then
@@ -2731,7 +2939,7 @@ contains
        s = achar(240 + cp / 262144) // achar(128 + mod(cp / 4096, 64)) // &
             achar(128 + mod(cp / 64, 64)) // achar(128 + mod(cp, 64))
     end if
-  end function u8_enc
+  end subroutine u8_enc
 
   ! A character from its code point; gc_char takes one byte.
   function gc_char_cp(cp) result(v)

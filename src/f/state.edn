@@ -6,18 +6,22 @@
 ;;   :fixed   shared, set at startup and read-only after
 ;;   :shared  shared and mutable -- what the note says it needs
 {
+ "Eval.f90/blocked_dl" {:class :shared, :note "progress counting for deadlock detection (tasks.inc, block_on): under the state lock"}
+ "Eval.f90/blocked_nodl" {:class :shared, :note "progress counting for deadlock detection (tasks.inc, block_on): under the state lock"}
+ "Eval.f90/live_threads" {:class :shared, :note "progress counting for deadlock detection (tasks.inc, block_on): under the state lock"}
+ "Eval.f90/mon_depth" {:class :shared, :note "the monitors locking holds (B_MONENTER): under the state lock"}
+ "Eval.f90/mon_obj" {:class :shared, :note "the monitors locking holds (B_MONENTER): under the state lock"}
+ "Eval.f90/mon_owner" {:class :shared, :note "the monitors locking holds (B_MONENTER): under the state lock"}
+ "GC.f90/rem_lk" {:class :fixed, :note "the remembered set's lock, made once in heap_sync_init before any other thread exists"}
+ "GC.f90/notify_gen" {:class :shared, :note "gc_state_notify's count, so a wait does not miss one: under the state lock"}
  "Regex.f90/reg_lk" {:class :fixed, :note "the regex handle table's lock, made at the first regex (on the main thread)"}
  "Regex.f90/reg_lk_up" {:class :fixed, :note "the regex handle table's lock, made at the first regex (on the main thread)"}
- "CompiledFn.f90/flat" {:class :shared, :note "flat copies of the constant pools, filled at a first read: under the baton now, a lock when compiled code runs on several threads (14e/f)"}
+ "CompiledFn.f90/flat" {:class :shared, :note "flat copies of the constant pools, filled at a first read: written only with the world stopped (gc_grow_begin), read without a lock"}
  "CompiledFn.f90/pool_root" {:class :shared, :note "a registry: additions under a lock"}
  "CompiledFn.f90/tbl" {:class :shared, :note "a registry: additions under a lock"}
  "CompiledFn.f90/used" {:class :shared, :note "a registry: additions under a lock"}
  "Eval.f90/ctx_key" {:class :fixed, :note "made once, on the main thread, before any other thread exists"}
  "Eval.f90/ctx_key_made" {:class :fixed, :note "with ctx_key"}
- "Eval.f90/baton_cond" {:class :shared, :note "the baton itself, under its own lock"}
- "Eval.f90/baton_ctx" {:class :shared, :note "the baton itself, under its own lock"}
- "Eval.f90/baton_lock" {:class :shared, :note "the baton itself, under its own lock"}
- "Eval.f90/baton_up" {:class :shared, :note "the baton itself, under its own lock"}
  "Eval.f90/break_mode" {:class :fixed, :note "read once from the environment (lazily: the same value from any thread)"}
  "Eval.f90/break_path" {:class :fixed, :note "read once from the environment"}
  "Eval.f90/break_root" {:class :shared, :note "the debugger: one break at a time, under a lock"}
@@ -45,8 +49,6 @@
  "Eval.f90/n_ctx" {:class :shared, :note "the context table: under a lock (step 14a/b)"}
  "Eval.f90/n_free_ctx" {:class :shared, :note "the context table: under a lock (step 14a/b)"}
  "Eval.f90/n_imports" {:class :shared, :note "a registry: additions under a lock"}
- "Eval.f90/native_gen" {:class :shared, :note "the baton's bookkeeping, under the baton lock"}
- "Eval.f90/natives_running" {:class :shared, :note "the baton's bookkeeping, under the baton lock"}
  "Eval.f90/pk_loaded" {:class :shared, :note "load once: the first load under a lock, the rest wait"}
  "Eval.f90/pkg_count" {:class :shared, :note "a registry: additions under a lock"}
  "Eval.f90/pkg_handles" {:class :shared, :note "a registry: additions under a lock"}
@@ -64,7 +66,6 @@
  "Eval.f90/step_at" {:class :shared, :note "the debugger: one break at a time, under a lock"}
  "Eval.f90/task_trace" {:class :fixed, :note "read once from the environment"}
  "Eval.f90/task_trace_read" {:class :fixed, :note "read once from the environment"}
- "Eval.f90/tasks_root" {:class :shared, :note "the task table: under the context-table lock"}
  "Eval.f90/trace_macros" {:class :fixed, :note "read once from the environment"}
  "Eval.f90/types_root" {:class :shared, :note "every deftype, one table as the JVM has one class namespace: additions under a lock"}
  "GC.f90/state_cv" {:class :fixed, :note "the state lock's condition, made at the first gc_init"}

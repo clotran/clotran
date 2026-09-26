@@ -93,7 +93,11 @@ contains
     form = gcr_read(text, [vs_get(base + 1)])
     call vs_set(base + 2, form)
     if (gcr_has_error()) then
-       print '(A,A,A,A)', "FAIL - ", label, "read error: ", gcr_error()
+       block
+          character(len=:), allocatable :: dlr_1
+          call gcr_error(s=dlr_1)
+          print '(A,A,A,A)', "FAIL - ", label, "read error: ", dlr_1
+       end block
        all_ok = .false.
        call vs_leave(base)
        return
@@ -109,12 +113,20 @@ contains
     call vs_set(base + 3, result)
     if (gce_has_error()) then
        gc_torture = .false.
-       print '(A,A,A,A)', "FAIL - ", label, "eval error: ", gce_error()
+       block
+          character(len=:), allocatable :: dlr_2
+          call gce_error(s=dlr_2)
+          print '(A,A,A,A)', "FAIL - ", label, "eval error: ", dlr_2
+       end block
        all_ok = .false.
        call vs_leave(base)
        return
     end if
-    got = gcp_str(vs_get(base + 3), .true.)
+    block
+       character(len=:), allocatable :: dlr_3
+       call gcp_str(vs_get(base + 3), .true., s=dlr_3)
+       got = dlr_3
+    end block
     gc_torture = .false.
     call vs_leave(base)
 
@@ -727,7 +739,11 @@ contains
     gc_torture = torturing
     r = gce_analyze(gcr_read("(dissoc (assoc (assoc (clojure.lang.PersistentTreeMap/create (list 3 :c 1 :a 9 :z)) 2 :b) 0 :zero) 9)", no_roots), gc_nil())
     if (.not. gce_has_error()) r = gce_eval(r, gc_nil(), no_roots)
-    got = gcp_str(r, .true.)
+    block
+       character(len=:), allocatable :: dlr_4
+       call gcp_str(r, .true., s=dlr_4)
+       got = dlr_4
+    end block
     call ok("31a. a sorted map keeps its keys in order through assoc and dissoc: " // got, &
          got == "{0 :zero, 1 :a, 2 :b, 3 :c}" .and. .not. gce_has_error())
     gc_torture = .false.
@@ -753,11 +769,19 @@ contains
     ! allocate a lot in the new context; every allocation collects
     r = gce_analyze(gcr_read("(loop* [i 0 acc []] (if (< i 200) (recur (+ i 1) (conj acc (str i))) (count acc)))", no_roots), gc_nil())
     if (.not. gce_has_error()) r = gce_eval(r, gc_nil(), no_roots)
-    got = gcp_str(r, .true.)
+    block
+       character(len=:), allocatable :: dlr_5
+       call gcp_str(r, .true., s=dlr_5)
+       got = dlr_5
+    end block
     call ok("30a. a form evaluates in a second context: " // got, got == "200" .and. .not. gce_has_error())
     call gce_ctx_switch(c1)
     gc_torture = .false.
-    got = gcp_str(vs_get(base + 2), .true.)
+    block
+       character(len=:), allocatable :: dlr_6
+       call gcp_str(vs_get(base + 2), .true., s=dlr_6)
+       got = dlr_6
+    end block
     call ok("30b. the first context's stack survived the switch: " // got, &
          got == "(list 1 2 3 (str ""a"" ""b"") [4 5] {:k 6})")
     call ok("30c. and it is current again", gce_ctx_current() == c1)
@@ -805,7 +829,11 @@ contains
     if (.not. gce_has_error()) result = gce_eval(vs_get(base + 2), vs_get(base + 1), no_roots)
     call vs_set(base + 3, result)
     call ok("28a. an array claims a buffer: ", gcna_live_count() - before == 1)
-    call ok("28b. ...of the kind asked for: ", gcna_kind(gc_i1(vs_get(base + 3))) == "real8")
+    block
+       character(len=:), allocatable :: dlr_7
+       call gcna_kind(gc_i1(vs_get(base + 3)), s=dlr_7)
+       call ok("28b. ...of the kind asked for: ", dlr_7 == "real8")
+    end block
     call ok("28c. ...with the extent asked for: ", &
          gcna_total(gc_i1(vs_get(base + 3))) == 4)
 
@@ -902,7 +930,11 @@ contains
   ! consistent: no live object referring to a freed or out-of-range
   ! slot.
   subroutine check_heap_sound()
-    call ok("10a. the heap passes its own audit: ", gc_check_heap() == "")
+    block
+       character(len=:), allocatable :: dlr_8
+       call gc_check_heap(problem=dlr_8)
+       call ok("10a. the heap passes its own audit: ", dlr_8 == "")
+    end block
   end subroutine check_heap_sound
 
 end program eval_test

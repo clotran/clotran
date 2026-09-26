@@ -162,7 +162,11 @@ contains
        l = gcl_cons(gc_int(i), l, roots)
     end do
     roots(1) = l
-    call ok("5a. the heap audits clean under torture: ", gc_check_heap() == "")
+    block
+       character(len=:), allocatable :: dlr_1
+       call gc_check_heap(problem=dlr_1)
+       call ok("5a. the heap audits clean under torture: ", dlr_1 == "")
+    end block
     call ok_int("5b. ...with the chain whole: ", gcl_count(l), 120)
     bad = 0
     do i = 120, 1, -1

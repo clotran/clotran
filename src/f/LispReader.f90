@@ -44,10 +44,10 @@ module LispReader
   ! evaluator installs the lookup; a resolver is what LispReader.java
   ! reaches through Compiler.currentNS and namespaceFor.
   abstract interface
-     function ns_resolver_i(alias) result(ns)
+     subroutine ns_resolver_i(alias, ns)
        character(len=*), intent(in) :: alias
-       character(len=:), allocatable :: ns
-     end function ns_resolver_i
+       character(len=:), allocatable, intent(out) :: ns
+     end subroutine ns_resolver_i
   end interface
   procedure(ns_resolver_i), pointer, save :: ns_resolver => null()
 
@@ -154,13 +154,13 @@ contains
     yes = rdx%has_error
   end function gcr_has_error
 
-  function gcr_error() result(s)
+  subroutine gcr_error(s)
     type(rd_state), pointer :: rdx
-    character(len=:), allocatable :: s
+    character(len=:), allocatable, intent(out) :: s
     rdx => rd_self()
     s = ""
     if (allocated(rdx%last_error)) s = rdx%last_error
-  end function gcr_error
+  end subroutine gcr_error
 
   subroutine fail(msg)
     type(rd_state), pointer :: rdx
@@ -248,9 +248,10 @@ contains
   end function gcr_read_next
 
   ! "file:line:col" for a packed position, or "line:col" with no file.
-  function gcr_position(packed) result(s)
+  subroutine gcr_position(packed, s)
     integer, intent(in) :: packed
-    character(len=:), allocatable :: s, fname
+    character(len=:), allocatable, intent(out) :: s
+    character(len=:), allocatable :: fname
     character(len=24) :: lb, cb
     integer :: line, col
     call gcr_position_parts(packed, fname, line, col)
@@ -261,7 +262,7 @@ contains
     else
        s = trim(lb) // ":" // trim(cb)
     end if
-  end function gcr_position
+  end subroutine gcr_position
 
   ! The parts: file name (empty when none), line and column.
   subroutine gcr_position_parts(packed, fname, line, col)
@@ -644,7 +645,11 @@ contains
     integer :: i, num, ios
 
     if (form%tag == GCT_SYM) then
-       t = gc_ref_text(form%ref)
+       block
+          character(len=:), allocatable :: dlr_1
+          call gc_ref_text(form%ref, s=dlr_1)
+          t = dlr_1
+       end block
        if (len(t) >= 1) then
           if (t(1:1) == "%") then
              if (t == "%") then
@@ -701,7 +706,11 @@ contains
 
     out = form
     if (form%tag == GCT_SYM) then
-       t = gc_ref_text(form%ref)
+       block
+          character(len=:), allocatable :: dlr_2
+          call gc_ref_text(form%ref, s=dlr_2)
+          t = dlr_2
+       end block
        if (len(t) < 1) return
        if (t(1:1) /= "%") return
        if (t == "%") then
@@ -1386,7 +1395,11 @@ contains
           call fail("reader: no namespace resolver for " // tok)
           return
        end if
-       ns = ns_resolver(tok(3:))
+       block
+          character(len=:), allocatable :: dlr_3
+          call ns_resolver(tok(3:), ns=dlr_3)
+          ns = dlr_3
+       end block
        if (len(ns) == 0) then
           call fail("Invalid token: " // tok)
           return
@@ -1431,7 +1444,11 @@ contains
     integer :: slash
     out = k
     if (k%tag /= GCT_KEY .and. k%tag /= GCT_SYM) return
-    t = gc_ref_text(k%ref)
+    block
+       character(len=:), allocatable :: dlr_4
+       call gc_ref_text(k%ref, s=dlr_4)
+       t = dlr_4
+    end block
     slash = index(t, "/")
     if (slash == 0) then
        t = ns // "/" // t
@@ -1495,7 +1512,11 @@ contains
                   call fail("Invalid unicode escape: \u" // text(pos+1:pos+4))
                   return
                end if
-               acc = acc // u8_enc(cp)
+               block
+                  character(len=:), allocatable :: dlr_5
+                  call u8_enc(cp, s=dlr_5)
+                  acc = acc // dlr_5
+               end block
                pos = pos + 4
              end block
           case default; acc = acc // text(pos:pos)
@@ -1639,9 +1660,17 @@ contains
          integer :: slash
          slash = index(tok, "/")
          if (slash > 0) then
-            ns = ns_resolver(tok(3:slash-1))
+            block
+               character(len=:), allocatable :: dlr_6
+               call ns_resolver(tok(3:slash-1), ns=dlr_6)
+               ns = dlr_6
+            end block
          else
-            ns = ns_resolver("")
+            block
+               character(len=:), allocatable :: dlr_7
+               call ns_resolver("", ns=dlr_7)
+               ns = dlr_7
+            end block
          end if
          if (len(ns) == 0) then
             call fail("Invalid token: " // tok)
@@ -1768,7 +1797,11 @@ contains
        else
           call parse_int(s(1:n - 1), iv, iok, iclaim)
           if (iok) then
-             val = gc_big(int_text(iv), roots)
+             block
+                character(len=:), allocatable :: dlr_8
+                call int_text(iv, s=dlr_8)
+                val = gc_big(dlr_8, roots)
+             end block
              yes = .true.
           end if
        end if
@@ -1788,13 +1821,13 @@ contains
     if (.false.) val = gc_sym(s, roots)
   end function suffixed_number
 
-  pure function int_text(i) result(s)
+  pure subroutine int_text(i, s)
     integer(gc_ip), intent(in) :: i
-    character(len=:), allocatable :: s
+    character(len=:), allocatable, intent(out) :: s
     character(len=24) :: buf
     write(buf, '(I0)') i
     s = trim(buf)
-  end function int_text
+  end subroutine int_text
 
   ! ratioPat: ([-+]?[0-9]+)/([0-9]+). A denominator of zero is an
   ! error, the same as (/ 1 0) -- Clojure raises rather than reading

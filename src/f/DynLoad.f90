@@ -102,17 +102,21 @@ contains
     p = dlsym(h, name // c_null_char)
   end function dl_sym
 
-  function dl_error() result(s)
-    character(len=:), allocatable :: s
+  subroutine dl_error(s)
+    character(len=:), allocatable, intent(out) :: s
     type(c_ptr) :: p
     p = dlerror()
-    s = dl_c_string(p)
-  end function dl_error
+    block
+       character(len=:), allocatable :: dlr_1
+       call dl_c_string(p, s=dlr_1)
+       s = dlr_1
+    end block
+  end subroutine dl_error
 
   ! A C string as Fortran text ("" for null).
-  function dl_c_string(p) result(s)
+  subroutine dl_c_string(p, s)
     type(c_ptr), intent(in) :: p
-    character(len=:), allocatable :: s
+    character(len=:), allocatable, intent(out) :: s
     character(kind=c_char), pointer :: chars(:)
     integer :: n, i
     s = ""
@@ -125,20 +129,24 @@ contains
     do i = 1, n
        s(i:i) = chars(i)
     end do
-  end function dl_c_string
+  end subroutine dl_c_string
 
   ! The package's manifest, EDN as text; "" when the library exports none.
-  function dl_manifest(h) result(s)
+  subroutine dl_manifest(h, s)
     type(c_ptr), intent(in) :: h
-    character(len=:), allocatable :: s
+    character(len=:), allocatable, intent(out) :: s
     type(c_funptr) :: fp
     procedure(manifest_i), pointer :: f
     s = ""
     fp = dl_sym(h, "clotran_manifest")
     if (.not. c_associated(fp)) return
     call c_f_procpointer(fp, f)
-    s = dl_c_string(f())
-  end function dl_manifest
+    block
+       character(len=:), allocatable :: dlr_2
+       call dl_c_string(f(), s=dlr_2)
+       s = dlr_2
+    end block
+  end subroutine dl_manifest
 
   ! One call through the uniform signature.
   ! Opens a COMPILED NAMESPACE and lets it install itself.
@@ -168,7 +176,11 @@ contains
     err = ""
     h = dl_open(path)
     if (.not. c_associated(h)) then
-       err = dl_error()
+       block
+          character(len=:), allocatable :: dlr_3
+          call dl_error(s=dlr_3)
+          err = dlr_3
+       end block
        if (len(err) == 0) err = "cannot open " // path
        return
     end if

@@ -129,7 +129,11 @@ contains
     call round_up_p(mode, d, sticky, neg, last, up, ok)
     if (.not. ok) return
     if (up) then
-       kept = big_add(kept, "1")
+       block
+          character(len=:), allocatable :: dlr_1
+          call big_add(kept, "1", o=dlr_1)
+          kept = dlr_1
+       end block
        ! 999 + 1 is 1000: one digit too many, and the extra one is a
        ! zero, so it comes off and the scale moves with it.
        if (len(kept) > precision) then
@@ -155,13 +159,26 @@ contains
     o = v
     ok = .true.
     if (precision <= 0) return
-    neg = big_is_neg(dec_unscaled(v))
-    mag = big_abs(dec_unscaled(v))
+    block
+       character(len=:), allocatable :: dlr_2
+       call dec_unscaled(v, u=dlr_2)
+       neg = big_is_neg(dlr_2)
+    end block
+    block
+       character(len=:), allocatable :: dlr_3, dlr_4
+       call dec_unscaled(v, u=dlr_3)
+       call big_abs(dlr_3, o=dlr_4)
+       mag = dlr_4
+    end block
     if (mag == "0") return
     call round_mag(mag, precision, mode, neg, .false., kept, extra, ok)
     if (.not. ok) return
     if (neg) kept = "-" // kept
-    o = dec_make(kept, dec_scale(v) - extra)
+    block
+       character(len=:), allocatable :: dlr_5
+       call dec_make(kept, dec_scale(v) - extra, o=dlr_5)
+       o = dlr_5
+    end block
   end subroutine dec_round
 
   ! Division under a MathContext: the quotient to `precision`
@@ -178,17 +195,40 @@ contains
     logical :: neg
 
     ok = .false.
-    o = dec_make("0", 0)
+    block
+       character(len=:), allocatable :: dlr_6
+       call dec_make("0", 0, o=dlr_6)
+       o = dlr_6
+    end block
     if (precision <= 0) then
        call dec_div(a, b, o, ok)
        return
     end if
-    ua = big_abs(dec_unscaled(a))
-    ub = big_abs(dec_unscaled(b))
+    block
+       character(len=:), allocatable :: dlr_7, dlr_8
+       call dec_unscaled(a, u=dlr_7)
+       call big_abs(dlr_7, o=dlr_8)
+       ua = dlr_8
+    end block
+    block
+       character(len=:), allocatable :: dlr_9, dlr_10
+       call dec_unscaled(b, u=dlr_9)
+       call big_abs(dlr_9, o=dlr_10)
+       ub = dlr_10
+    end block
     if (ub == "0") return
-    neg = (big_is_neg(dec_unscaled(a)) .neqv. big_is_neg(dec_unscaled(b)))
+    block
+       character(len=:), allocatable :: dlr_11, dlr_12
+       call dec_unscaled(a, u=dlr_11)
+       call dec_unscaled(b, u=dlr_12)
+       neg = (big_is_neg(dlr_11) .neqv. big_is_neg(dlr_12))
+    end block
     if (ua == "0") then
-       o = dec_make("0", 0)
+       block
+          character(len=:), allocatable :: dlr_13
+          call dec_make("0", 0, o=dlr_13)
+          o = dlr_13
+       end block
        ok = .true.
        return
     end if
@@ -198,7 +238,12 @@ contains
     ! only rounds when there is no exact answer to give.
     call dec_div(a, b, o, ok)
     if (ok) then
-       if (len(big_abs(dec_unscaled(o))) <= precision) return
+       block
+          character(len=:), allocatable :: dlr_14, dlr_15
+          call dec_unscaled(o, u=dlr_14)
+          call big_abs(dlr_14, o=dlr_15)
+          if (len(dlr_15) <= precision) return
+       end block
        ok = .false.
     end if
     ! Enough digits to round from: one more than asked for, with the
@@ -209,7 +254,11 @@ contains
     end do
     k = 0
     do
-       call big_divmod(shift_up(ua, k), ub, q, r)
+       block
+          character(len=:), allocatable :: dlr_16
+          call shift_up(ua, k, o=dlr_16)
+          call big_divmod(dlr_16, ub, q, r)
+       end block
        if (big_cmp(q, limit) >= 0) exit
        k = k + 1
        if (k > 2 * precision + 64) exit
@@ -217,20 +266,28 @@ contains
     call round_mag(q, precision, mode, neg, r /= "0", kept, extra, ok)
     if (.not. ok) return
     if (neg) kept = "-" // kept
-    o = dec_make(kept, dec_scale(a) - dec_scale(b) + k - extra)
+    block
+       character(len=:), allocatable :: dlr_17
+       call dec_make(kept, dec_scale(a) - dec_scale(b) + k - extra, o=dlr_17)
+       o = dlr_17
+    end block
     ok = .true.
   end subroutine dec_div_mc
 
   ! ---- the pair ---------------------------------------------------
 
-  pure function dec_make(unscaled, scale) result(o)
+  pure subroutine dec_make(unscaled, scale, o)
     character(len=*), intent(in) :: unscaled
     integer, intent(in) :: scale
-    character(len=:), allocatable :: o
+    character(len=:), allocatable, intent(out) :: o
     character(len=16) :: buf
     write(buf, '(I0)') scale
-    o = big_norm(unscaled) // "|" // trim(buf)
-  end function dec_make
+    block
+       character(len=:), allocatable :: dlr_18
+       call big_norm(unscaled, o=dlr_18)
+       o = dlr_18 // "|" // trim(buf)
+    end block
+  end subroutine dec_make
 
   pure function bar_at(v) result(p)
     character(len=*), intent(in) :: v
@@ -245,9 +302,9 @@ contains
     yes = (bar_at(v) > 1)
   end function dec_is_dec
 
-  pure function dec_unscaled(v) result(u)
+  pure subroutine dec_unscaled(v, u)
     character(len=*), intent(in) :: v
-    character(len=:), allocatable :: u
+    character(len=:), allocatable, intent(out) :: u
     integer :: p
     p = bar_at(v)
     if (p > 1) then
@@ -255,7 +312,7 @@ contains
     else
        u = "0"
     end if
-  end function dec_unscaled
+  end subroutine dec_unscaled
 
   pure function dec_scale(v) result(s)
     character(len=*), intent(in) :: v
@@ -271,7 +328,11 @@ contains
   pure function dec_is_zero(v) result(yes)
     character(len=*), intent(in) :: v
     logical :: yes
-    yes = (dec_unscaled(v) == "0")
+    block
+       character(len=:), allocatable :: dlr_19
+       call dec_unscaled(v, u=dlr_19)
+       yes = (dlr_19 == "0")
+    end block
   end function dec_is_zero
 
   ! ---- reading ----------------------------------------------------
@@ -288,7 +349,11 @@ contains
     character :: c
 
     ok = .false.
-    out = dec_make("0", 0)
+    block
+       character(len=:), allocatable :: dlr_20
+       call dec_make("0", 0, o=dlr_20)
+       out = dlr_20
+    end block
     n = len(s)
     if (n == 0) return
 
@@ -333,21 +398,34 @@ contains
        if (seen_point) scale = scale + 1
     end do
     if (.not. seen_digit) return
-    out = dec_make(digits, scale - ex)
+    block
+       character(len=:), allocatable :: dlr_21
+       call dec_make(digits, scale - ex, o=dlr_21)
+       out = dlr_21
+    end block
     ok = .true.
   end subroutine dec_from_text
 
-  pure function dec_from_i64(i) result(o)
+  pure subroutine dec_from_i64(i, o)
     integer(I8), intent(in) :: i
-    character(len=:), allocatable :: o
-    o = dec_make(big_from_i64(i), 0)
-  end function dec_from_i64
+    character(len=:), allocatable, intent(out) :: o
+    block
+       character(len=:), allocatable :: dlr_22, dlr_23
+       call big_from_i64(i, o=dlr_22)
+       call dec_make(dlr_22, 0, o=dlr_23)
+       o = dlr_23
+    end block
+  end subroutine dec_from_i64
 
-  pure function dec_from_big(b) result(o)
+  pure subroutine dec_from_big(b, o)
     character(len=*), intent(in) :: b
-    character(len=:), allocatable :: o
-    o = dec_make(b, 0)
-  end function dec_from_big
+    character(len=:), allocatable, intent(out) :: o
+    block
+       character(len=:), allocatable :: dlr_24
+       call dec_make(b, 0, o=dlr_24)
+       o = dlr_24
+    end block
+  end subroutine dec_from_big
 
   ! ---- printing ---------------------------------------------------
 
@@ -355,13 +433,18 @@ contains
   ! adjusted exponent is at least -6, scientific otherwise. The two
   ! rules are Java's, and they are why 0.001M prints plainly and
   ! 1E-7M does not.
-  pure function dec_to_text(v) result(s)
+  pure subroutine dec_to_text(v, s)
     character(len=*), intent(in) :: v
-    character(len=:), allocatable :: s, u, mag, sign
+    character(len=:), allocatable, intent(out) :: s
+    character(len=:), allocatable :: u, mag, sign
     integer :: scale, prec, adjusted, i
     character(len=16) :: buf
 
-    u = dec_unscaled(v)
+    block
+       character(len=:), allocatable :: dlr_25
+       call dec_unscaled(v, u=dlr_25)
+       u = dlr_25
+    end block
     scale = dec_scale(v)
     sign = ""
     mag = u
@@ -381,9 +464,17 @@ contains
        else
           s = sign // "0."
           do i = 1, scale - prec
-             s = s // "0"
+             block
+                character(len=:), allocatable :: dlw
+                dlw = s // "0"
+                call move_alloc(dlw, s)
+             end block
           end do
-          s = s // mag
+          block
+             character(len=:), allocatable :: dlw
+             dlw = s // mag
+             call move_alloc(dlw, s)
+          end block
        end if
        return
     end if
@@ -395,20 +486,28 @@ contains
     end if
     write(buf, '(I0)') abs(adjusted)
     if (adjusted < 0) then
-       s = s // "E-" // trim(buf)
+       block
+          character(len=:), allocatable :: dlw
+          dlw = s // "E-" // trim(buf)
+          call move_alloc(dlw, s)
+       end block
     else
-       s = s // "E+" // trim(buf)
+       block
+          character(len=:), allocatable :: dlw
+          dlw = s // "E+" // trim(buf)
+          call move_alloc(dlw, s)
+       end block
     end if
-  end function dec_to_text
+  end subroutine dec_to_text
 
   ! ---- scale alignment --------------------------------------------
 
   ! The unscaled value it would have at a LARGER scale: multiply by a
   ! power of ten, which on decimal text is appending zeros.
-  pure function shift_up(u, by) result(o)
+  pure subroutine shift_up(u, by, o)
     character(len=*), intent(in) :: u
     integer, intent(in) :: by
-    character(len=:), allocatable :: o
+    character(len=:), allocatable, intent(out) :: o
     integer :: i
     o = u
     if (by <= 0 .or. u == "0") then
@@ -416,50 +515,89 @@ contains
        return
     end if
     do i = 1, by
-       o = o // "0"
+       block
+          character(len=:), allocatable :: dlw
+          dlw = o // "0"
+          call move_alloc(dlw, o)
+       end block
     end do
-    o = big_norm(o)
-  end function shift_up
+    block
+       character(len=:), allocatable :: dlr_26
+       call big_norm(o, o=dlr_26)
+       o = dlr_26
+    end block
+  end subroutine shift_up
 
   ! ---- arithmetic -------------------------------------------------
 
   ! add and subtract take the LARGER scale, as BigDecimal does.
-  pure function dec_add(a, b) result(o)
+  pure subroutine dec_add(a, b, o)
     character(len=*), intent(in) :: a, b
-    character(len=:), allocatable :: o
+    character(len=:), allocatable, intent(out) :: o
     integer :: sa, sb, s
     sa = dec_scale(a)
     sb = dec_scale(b)
     s = max(sa, sb)
-    o = dec_make(big_add(shift_up(dec_unscaled(a), s - sa), &
-                         shift_up(dec_unscaled(b), s - sb)), s)
-  end function dec_add
+    block
+       character(len=:), allocatable :: dlr_27, dlr_28, dlr_29, dlr_30, dlr_31, dlr_32
+       call dec_unscaled(a, u=dlr_27)
+       call shift_up(dlr_27, s - sa, o=dlr_28)
+       call dec_unscaled(b, u=dlr_29)
+       call shift_up(dlr_29, s - sb, o=dlr_30)
+       call big_add(dlr_28,  dlr_30, o=dlr_31)
+       call dec_make(dlr_31, s, o=dlr_32)
+       o = dlr_32
+    end block
+  end subroutine dec_add
 
-  pure function dec_sub(a, b) result(o)
+  pure subroutine dec_sub(a, b, o)
     character(len=*), intent(in) :: a, b
-    character(len=:), allocatable :: o
-    o = dec_add(a, dec_neg(b))
-  end function dec_sub
+    character(len=:), allocatable, intent(out) :: o
+    block
+       character(len=:), allocatable :: dlr_33, dlr_34
+       call dec_neg(b, o=dlr_33)
+       call dec_add(a, dlr_33, o=dlr_34)
+       o = dlr_34
+    end block
+  end subroutine dec_sub
 
   ! multiply ADDS the scales: 1.5M * 2.25M is 3.375M.
-  pure function dec_mul(a, b) result(o)
+  pure subroutine dec_mul(a, b, o)
     character(len=*), intent(in) :: a, b
-    character(len=:), allocatable :: o
-    o = dec_make(big_mul(dec_unscaled(a), dec_unscaled(b)), &
-                 dec_scale(a) + dec_scale(b))
-  end function dec_mul
+    character(len=:), allocatable, intent(out) :: o
+    block
+       character(len=:), allocatable :: dlr_35, dlr_36, dlr_37, dlr_38
+       call dec_unscaled(a, u=dlr_35)
+       call dec_unscaled(b, u=dlr_36)
+       call big_mul(dlr_35, dlr_36, o=dlr_37)
+       call dec_make(dlr_37,  dec_scale(a) + dec_scale(b), o=dlr_38)
+       o = dlr_38
+    end block
+  end subroutine dec_mul
 
-  pure function dec_neg(a) result(o)
+  pure subroutine dec_neg(a, o)
     character(len=*), intent(in) :: a
-    character(len=:), allocatable :: o
-    o = dec_make(big_neg(dec_unscaled(a)), dec_scale(a))
-  end function dec_neg
+    character(len=:), allocatable, intent(out) :: o
+    block
+       character(len=:), allocatable :: dlr_39, dlr_40, dlr_41
+       call dec_unscaled(a, u=dlr_39)
+       call big_neg(dlr_39, o=dlr_40)
+       call dec_make(dlr_40, dec_scale(a), o=dlr_41)
+       o = dlr_41
+    end block
+  end subroutine dec_neg
 
-  pure function dec_abs(a) result(o)
+  pure subroutine dec_abs(a, o)
     character(len=*), intent(in) :: a
-    character(len=:), allocatable :: o
-    o = dec_make(big_abs(dec_unscaled(a)), dec_scale(a))
-  end function dec_abs
+    character(len=:), allocatable, intent(out) :: o
+    block
+       character(len=:), allocatable :: dlr_42, dlr_43, dlr_44
+       call dec_unscaled(a, u=dlr_42)
+       call big_abs(dlr_42, o=dlr_43)
+       call dec_make(dlr_43, dec_scale(a), o=dlr_44)
+       o = dlr_44
+    end block
+  end subroutine dec_abs
 
   ! EXACT division, as BigDecimal.divide with no MathContext: the
   ! quotient at the smallest scale that divides evenly, and an error
@@ -472,17 +610,38 @@ contains
     character(len=:), allocatable :: q, r, num
     integer :: k, sa, sb
     ok = .false.
-    o = dec_make("0", 0)
-    if (dec_unscaled(b) == "0") return
+    block
+       character(len=:), allocatable :: dlr_45
+       call dec_make("0", 0, o=dlr_45)
+       o = dlr_45
+    end block
+    block
+       character(len=:), allocatable :: dlr_46
+       call dec_unscaled(b, u=dlr_46)
+       if (dlr_46 == "0") return
+    end block
     sa = dec_scale(a)
     sb = dec_scale(b)
     ! One more digit each round: at most as many as a long double
     ! would carry plus room for a repeating check to fail on.
     do k = 0, 64
-       num = shift_up(dec_unscaled(a), k)
-       call big_divmod(num, dec_unscaled(b), q, r)
+       block
+          character(len=:), allocatable :: dlr_47, dlr_48
+          call dec_unscaled(a, u=dlr_47)
+          call shift_up(dlr_47, k, o=dlr_48)
+          num = dlr_48
+       end block
+       block
+          character(len=:), allocatable :: dlr_49
+          call dec_unscaled(b, u=dlr_49)
+          call big_divmod(num, dlr_49, q, r)
+       end block
        if (r == "0") then
-          o = dec_make(q, sa - sb + k)
+          block
+             character(len=:), allocatable :: dlr_50
+             call dec_make(q, sa - sb + k, o=dlr_50)
+             o = dlr_50
+          end block
           ok = .true.
           return
        end if
@@ -492,28 +651,56 @@ contains
   ! divideToIntegralValue: the integer part of the quotient, at the
   ! preferred scale (this scale minus the divisor's, never negative),
   ! so (quot 10.5M 3) is 3.0M.
-  pure function dec_quot(a, b) result(o)
+  pure subroutine dec_quot(a, b, o)
     character(len=*), intent(in) :: a, b
-    character(len=:), allocatable :: o, q, r, ua, ub
+    character(len=:), allocatable, intent(out) :: o
+    character(len=:), allocatable :: q, r, ua, ub
     integer :: sa, sb, s
     sa = dec_scale(a)
     sb = dec_scale(b)
     s = max(sa - sb, 0)
-    ua = dec_unscaled(a)
-    ub = dec_unscaled(b)
+    block
+       character(len=:), allocatable :: dlr_51
+       call dec_unscaled(a, u=dlr_51)
+       ua = dlr_51
+    end block
+    block
+       character(len=:), allocatable :: dlr_52
+       call dec_unscaled(b, u=dlr_52)
+       ub = dlr_52
+    end block
     ! bring both to a common scale so the quotient is the integer one
-    ua = shift_up(ua, max(sb - sa, 0))
-    ub = shift_up(ub, max(sa - sb, 0))
+    block
+       character(len=:), allocatable :: dlr_53
+       call shift_up(ua, max(sb - sa, 0), o=dlr_53)
+       ua = dlr_53
+    end block
+    block
+       character(len=:), allocatable :: dlr_54
+       call shift_up(ub, max(sa - sb, 0), o=dlr_54)
+       ub = dlr_54
+    end block
     call big_divmod(ua, ub, q, r)
-    o = dec_make(shift_up(q, s), s)
-  end function dec_quot
+    block
+       character(len=:), allocatable :: dlr_55, dlr_56
+       call shift_up(q, s, o=dlr_55)
+       call dec_make(dlr_55, s, o=dlr_56)
+       o = dlr_56
+    end block
+  end subroutine dec_quot
 
   ! a - (quot a b) * b, which is what BigDecimal.remainder is.
-  pure function dec_rem(a, b) result(o)
+  pure subroutine dec_rem(a, b, o)
     character(len=*), intent(in) :: a, b
-    character(len=:), allocatable :: o
-    o = dec_sub(a, dec_mul(dec_quot(a, b), b))
-  end function dec_rem
+    character(len=:), allocatable, intent(out) :: o
+    block
+       character(len=:), allocatable :: dlr_57, dlr_58, dlr_59
+       call dec_quot(a, b, o=dlr_57)
+       call dec_mul(dlr_57, b, o=dlr_58)
+       call dec_sub(a, dlr_58, o=dlr_59)
+       o = dlr_59
+    end block
+  end subroutine dec_rem
 
   ! ---- comparison -------------------------------------------------
 
@@ -525,20 +712,35 @@ contains
     sa = dec_scale(a)
     sb = dec_scale(b)
     s = max(sa, sb)
-    c = big_cmp(shift_up(dec_unscaled(a), s - sa), &
-                shift_up(dec_unscaled(b), s - sb))
+    block
+       character(len=:), allocatable :: dlr_60, dlr_61, dlr_62, dlr_63
+       call dec_unscaled(a, u=dlr_60)
+       call shift_up(dlr_60, s - sa, o=dlr_61)
+       call dec_unscaled(b, u=dlr_62)
+       call shift_up(dlr_62, s - sb, o=dlr_63)
+       c = big_cmp(dlr_61,  dlr_63)
+    end block
   end function dec_cmp
 
   ! The same value with no trailing zeros -- what equal decimals share,
   ! so hashing can use it and agree with dec_cmp.
-  pure function dec_strip(v) result(o)
+  pure subroutine dec_strip(v, o)
     character(len=*), intent(in) :: v
-    character(len=:), allocatable :: o, u
+    character(len=:), allocatable, intent(out) :: o
+    character(len=:), allocatable :: u
     integer :: scale
-    u = dec_unscaled(v)
+    block
+       character(len=:), allocatable :: dlr_64
+       call dec_unscaled(v, u=dlr_64)
+       u = dlr_64
+    end block
     scale = dec_scale(v)
     if (u == "0") then
-       o = dec_make("0", 0)
+       block
+          character(len=:), allocatable :: dlr_65
+          call dec_make("0", 0, o=dlr_65)
+          o = dlr_65
+       end block
        return
     end if
     do while (scale > 0)
@@ -546,8 +748,12 @@ contains
        u = u(1:len(u)-1)
        scale = scale - 1
     end do
-    o = dec_make(u, scale)
-  end function dec_strip
+    block
+       character(len=:), allocatable :: dlr_66
+       call dec_make(u, scale, o=dlr_66)
+       o = dlr_66
+    end block
+  end subroutine dec_strip
 
   ! ---- conversions ------------------------------------------------
 
@@ -557,23 +763,38 @@ contains
     integer :: ios
     character(len=:), allocatable :: txt
     ! through a VARIABLE: a function result is not an internal file
-    txt = dec_to_text(v)
+    block
+       character(len=:), allocatable :: dlr_67
+       call dec_to_text(v, s=dlr_67)
+       txt = dlr_67
+    end block
     read(txt, *, iostat=ios) d
     if (ios /= 0) d = 0.0d0
   end function dec_to_dbl
 
   ! TRUNCATING toward zero, which is BigDecimal.toBigInteger.
-  pure function dec_to_big(v) result(o)
+  pure subroutine dec_to_big(v, o)
     character(len=*), intent(in) :: v
-    character(len=:), allocatable :: o, q, r
+    character(len=:), allocatable, intent(out) :: o
+    character(len=:), allocatable :: q, r
     integer :: scale
     scale = dec_scale(v)
     if (scale <= 0) then
-       o = shift_up(dec_unscaled(v), -scale)
+       block
+          character(len=:), allocatable :: dlr_68, dlr_69
+          call dec_unscaled(v, u=dlr_68)
+          call shift_up(dlr_68, -scale, o=dlr_69)
+          o = dlr_69
+       end block
     else
-       call big_divmod(dec_unscaled(v), shift_up("1", scale), q, r)
+       block
+          character(len=:), allocatable :: dlr_70, dlr_71
+          call dec_unscaled(v, u=dlr_70)
+          call shift_up("1", scale, o=dlr_71)
+          call big_divmod(dlr_70, dlr_71, q, r)
+       end block
        o = q
     end if
-  end function dec_to_big
+  end subroutine dec_to_big
 
 end module BigDec

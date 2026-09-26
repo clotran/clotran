@@ -53,10 +53,10 @@ contains
     lazy_forcer => f
   end subroutine gcp_set_forcer
 
-  recursive function gcp_str(v, readable) result(s)
+  recursive subroutine gcp_str(v, readable, s)
     type(gc_value), intent(in) :: v
     logical, intent(in) :: readable
-    character(len=:), allocatable :: s
+    character(len=:), allocatable, intent(out) :: s
     character(len=32) :: buf
 
     select case (v%tag)
@@ -93,49 +93,107 @@ contains
              s = "##-Inf"
           end if
        else
-          s = real_str(v%rval)
+          block
+             character(len=:), allocatable :: dlr_1
+             call real_str(v%rval, s=dlr_1)
+             s = dlr_1
+          end block
        end if
     case (GCT_CHAR)
        if (readable) then
           ! A character is a CODE POINT, which is 32-bit however wide
           ! the integer field is -- narrowing here is exact, not a
           ! truncation.
-          s = char_readable(int(v%ival, kind=4))
+          block
+             character(len=:), allocatable :: dlr_2
+             call char_readable(int(v%ival, kind=4), s=dlr_2)
+             s = dlr_2
+          end block
        else
-          s = u8_enc(int(v%ival, kind=4))
+          block
+             character(len=:), allocatable :: dlr_3
+             call u8_enc(int(v%ival, kind=4), s=dlr_3)
+             s = dlr_3
+          end block
        end if
     case (GCT_DEC)
        ! 1.0M readably, 1.0 as text -- and the SCALE is part of it, so
        ! 1M and 1.0M print apart however equal they are.
-       s = dec_to_text(gc_ref_text(v%ref))
-       if (readable) s = s // "M"
+       block
+          character(len=:), allocatable :: dlr_4, dlr_5
+          call gc_ref_text(v%ref, s=dlr_4)
+          call dec_to_text(dlr_4, s=dlr_5)
+          s = dlr_5
+       end block
+       if (readable) then
+          block
+             character(len=:), allocatable :: dlw
+             dlw = s // "M"
+             call move_alloc(dlw, s)
+          end block
+       end if
     case (GCT_CLASS)
        ! A class prints as its NAME, readably or not: java.lang.Long,
        ! never :Long. (class (class 1)) is java.lang.Class.
-       s = gc_ref_text(v%ref)
+       block
+          character(len=:), allocatable :: dlr_6
+          call gc_ref_text(v%ref, s=dlr_6)
+          s = dlr_6
+       end block
     case (GCT_BIG)
        ! 1N readably, 1 as text: (pr-str 1N) is "1N" and (str 1N) is "1".
-       s = gc_big_text(v)
-       if (readable) s = s // "N"
+       block
+          character(len=:), allocatable :: dlr_7
+          call gc_big_text(v, s=dlr_7)
+          s = dlr_7
+       end block
+       if (readable) then
+          block
+             character(len=:), allocatable :: dlw
+             dlw = s // "N"
+             call move_alloc(dlw, s)
+          end block
+       end if
     case (GCT_STR)
        if (readable) then
-          s = quoted(gc_ref_text(v%ref))
+          block
+             character(len=:), allocatable :: dlr_8, dlr_9
+             call gc_ref_text(v%ref, s=dlr_8)
+             call quoted(dlr_8, s=dlr_9)
+             s = dlr_9
+          end block
        else
-          s = gc_ref_text(v%ref)
+          block
+             character(len=:), allocatable :: dlr_10
+             call gc_ref_text(v%ref, s=dlr_10)
+             s = dlr_10
+          end block
        end if
     case (GCT_SYM)
-       s = gc_ref_text(v%ref)
+       block
+          character(len=:), allocatable :: dlr_11
+          call gc_ref_text(v%ref, s=dlr_11)
+          s = dlr_11
+       end block
     case (GCT_KEY)
-       s = ":" // gc_ref_text(v%ref)
+       block
+          character(len=:), allocatable :: dlr_12
+          call gc_ref_text(v%ref, s=dlr_12)
+          s = ":" // dlr_12
+       end block
     case default
-       s = obj_str(v, readable)
+       block
+          character(len=:), allocatable :: dlr_13
+          call obj_str(v, readable, s=dlr_13)
+          s = dlr_13
+       end block
     end select
-  end function gcp_str
+  end subroutine gcp_str
 
-  recursive function obj_str(v, readable) result(s)
+  recursive subroutine obj_str(v, readable, s)
     type(gc_value), intent(in) :: v
     logical, intent(in) :: readable
-    character(len=:), allocatable :: s
+    character(len=:), allocatable, intent(out) :: s
     type(gc_value) :: p
     type(gc_value), allocatable :: keys(:), vals(:)
     integer :: i, n
@@ -147,20 +205,56 @@ contains
        p = v
        i = 0
        do while (gcl_is(p) .and. gcl_count(p) > 0)
-          if (i > 0) s = s // " "
-          s = s // gcp_str(gcl_first(p), readable)
+          if (i > 0) then
+             block
+                character(len=:), allocatable :: dlw
+                dlw = s // " "
+                call move_alloc(dlw, s)
+             end block
+          end if
+          block
+             character(len=:), allocatable :: dlr_14
+             call gcp_str(gcl_first(p), readable, s=dlr_14)
+             block
+                character(len=:), allocatable :: dlw
+                dlw = s // dlr_14
+                call move_alloc(dlw, s)
+             end block
+          end block
           p = gcl_rest(p, none)
           i = i + 1
        end do
-       s = s // ")"
+       block
+          character(len=:), allocatable :: dlw
+          dlw = s // ")"
+          call move_alloc(dlw, s)
+       end block
     case (OBJ_VECTOR)
        s = "["
        n = gcv_count(v)
        do i = 0, n - 1
-          if (i > 0) s = s // " "
-          s = s // gcp_str(gcv_nth(v, i), readable)
+          if (i > 0) then
+             block
+                character(len=:), allocatable :: dlw
+                dlw = s // " "
+                call move_alloc(dlw, s)
+             end block
+          end if
+          block
+             character(len=:), allocatable :: dlr_15
+             call gcp_str(gcv_nth(v, i), readable, s=dlr_15)
+             block
+                character(len=:), allocatable :: dlw
+                dlw = s // dlr_15
+                call move_alloc(dlw, s)
+             end block
+          end block
        end do
-       s = s // "]"
+       block
+          character(len=:), allocatable :: dlw
+          dlw = s // "]"
+          call move_alloc(dlw, s)
+       end block
     case (OBJ_MAP, OBJ_HAMT)
        ! Both representations print identically -- which is the point
        ! of the promotion being invisible. A map that printed
@@ -169,15 +263,41 @@ contains
        call gca_entries(v, keys, vals)
        s = "{"
        do i = 1, size(keys)
-          if (i > 1) s = s // ", "
+          if (i > 1) then
+             block
+                character(len=:), allocatable :: dlw
+                dlw = s // ", "
+                call move_alloc(dlw, s)
+             end block
+          end if
           ! two statements, not one: gfortran lost characters between the
           ! key and a nested map value when both allocatable-character
           ! results sat in one concatenation -- {:data {:x 1}} printed as
           ! {:da{:x 1}}
-          s = s // gcp_str(keys(i), readable) // " "
-          s = s // gcp_str(vals(i), readable)
+          block
+             character(len=:), allocatable :: dlr_16
+             call gcp_str(keys(i), readable, s=dlr_16)
+             block
+                character(len=:), allocatable :: dlw
+                dlw = s // dlr_16 // " "
+                call move_alloc(dlw, s)
+             end block
+          end block
+          block
+             character(len=:), allocatable :: dlr_17
+             call gcp_str(vals(i), readable, s=dlr_17)
+             block
+                character(len=:), allocatable :: dlw
+                dlw = s // dlr_17
+                call move_alloc(dlw, s)
+             end block
+          end block
        end do
-       s = s // "}"
+       block
+          character(len=:), allocatable :: dlw
+          dlw = s // "}"
+          call move_alloc(dlw, s)
+       end block
     case (OBJ_LAZY)
        ! Printing a lazy seq realises it, one cell at a time, which is
        ! what real Clojure does too -- printing is a use, and a use
@@ -197,17 +317,46 @@ contains
              ! its elements belong inside these parens
              block
                character(len=:), allocatable :: tl
-               tl = inner_of(gcp_str(gc_slot(p, 2), readable))
+               block
+                  character(len=:), allocatable :: dlr_18, dlr_19
+                  call gcp_str(gc_slot(p, 2), readable, s=dlr_18)
+                  call inner_of(dlr_18, out=dlr_19)
+                  tl = dlr_19
+               end block
                if (len(tl) > 0) then
-                  if (i > 0) s = s // " "
-                  s = s // tl
+                  if (i > 0) then
+                     block
+                        character(len=:), allocatable :: dlw
+                        dlw = s // " "
+                        call move_alloc(dlw, s)
+                     end block
+                  end if
+                  block
+                     character(len=:), allocatable :: dlw
+                     dlw = s // tl
+                     call move_alloc(dlw, s)
+                  end block
                end if
              end block
              exit
           end if
           if (gc_i1(p) /= LAZY_CONS) exit
-          if (i > 0) s = s // " "
-          s = s // gcp_str(gc_slot(p, 2), readable)
+          if (i > 0) then
+             block
+                character(len=:), allocatable :: dlw
+                dlw = s // " "
+                call move_alloc(dlw, s)
+             end block
+          end if
+          block
+             character(len=:), allocatable :: dlr_20
+             call gcp_str(gc_slot(p, 2), readable, s=dlr_20)
+             block
+                character(len=:), allocatable :: dlw
+                dlw = s // dlr_20
+                call move_alloc(dlw, s)
+             end block
+          end block
           p = gc_slot(p, 3)
           i = i + 1
           if (.not. (gc_kind(p) == OBJ_LAZY)) then
@@ -217,16 +366,37 @@ contains
              ! because (cons 1 "ab") leaves a string view as the tail.
              if (gc_kind(p) == OBJ_CONS) then
                 do while (gcl_count(p) > 0)
-                   s = s // " " // gcp_str(gcl_first(p), readable)
+                   block
+                      character(len=:), allocatable :: dlr_21
+                      call gcp_str(gcl_first(p), readable, s=dlr_21)
+                      block
+                         character(len=:), allocatable :: dlw
+                         dlw = s // " " // dlr_21
+                         call move_alloc(dlw, s)
+                      end block
+                   end block
                    p = gcl_rest(p, none)
                 end do
              else if (gc_kind(p) == OBJ_SEQ) then
-                s = s // " " // inner_of(gcp_str(p, readable))
+                block
+                   character(len=:), allocatable :: dlr_22, dlr_23
+                   call gcp_str(p, readable, s=dlr_22)
+                   call inner_of(dlr_22, out=dlr_23)
+                   block
+                      character(len=:), allocatable :: dlw
+                      dlw = s // " " // dlr_23
+                      call move_alloc(dlw, s)
+                   end block
+                end block
              end if
              exit
           end if
        end do
-       s = s // ")"
+       block
+          character(len=:), allocatable :: dlw
+          dlw = s // ")"
+          call move_alloc(dlw, s)
+       end block
     case (OBJ_CHUNKSEQ)
        ! A ChunkedCons: its chunk's elements, then whatever follows,
        ! inside the same parens.
@@ -238,19 +408,56 @@ contains
          b = gc_slot(c, 1)
          s = "("
          do k = gc_i1(c), gc_i2(c) - 1
-            if (k > gc_i1(c)) s = s // " "
+            if (k > gc_i1(c)) then
+               block
+                  character(len=:), allocatable :: dlw
+                  dlw = s // " "
+                  call move_alloc(dlw, s)
+               end block
+            end if
             if (b%tag == GCT_VEC) then
-               s = s // gcp_str(gc_vec_get(b, k + 1), readable)
+               block
+                  character(len=:), allocatable :: dlr_24
+                  call gcp_str(gc_vec_get(b, k + 1), readable, s=dlr_24)
+                  block
+                     character(len=:), allocatable :: dlw
+                     dlw = s // dlr_24
+                     call move_alloc(dlw, s)
+                  end block
+               end block
             else
-               s = s // gcp_str(gcv_nth(b, k), readable)
+               block
+                  character(len=:), allocatable :: dlr_25
+                  call gcp_str(gcv_nth(b, k), readable, s=dlr_25)
+                  block
+                     character(len=:), allocatable :: dlw
+                     dlw = s // dlr_25
+                     call move_alloc(dlw, s)
+                  end block
+               end block
             end if
          end do
          more = gc_slot(v, 2)
          if (more%tag /= GCT_NIL) then
-            tl = inner_of(gcp_str(more, readable))
-            if (len(tl) > 0) s = s // " " // tl
+            block
+               character(len=:), allocatable :: dlr_26, dlr_27
+               call gcp_str(more, readable, s=dlr_26)
+               call inner_of(dlr_26, out=dlr_27)
+               tl = dlr_27
+            end block
+            if (len(tl) > 0) then
+               block
+                  character(len=:), allocatable :: dlw
+                  dlw = s // " " // tl
+                  call move_alloc(dlw, s)
+               end block
+            end if
          end if
-         s = s // ")"
+         block
+            character(len=:), allocatable :: dlw
+            dlw = s // ")"
+            call move_alloc(dlw, s)
+         end block
        end block
     case (OBJ_CHUNK)
        s = "#<chunk>"
@@ -273,8 +480,22 @@ contains
          if (gcv_is(src)) then
             total = gcv_count(src)
             do k = at, total - 1
-               if (k > at) s = s // " "
-               s = s // gcp_str(gcv_nth(src, k), readable)
+               if (k > at) then
+                  block
+                     character(len=:), allocatable :: dlw
+                     dlw = s // " "
+                     call move_alloc(dlw, s)
+                  end block
+               end if
+               block
+                  character(len=:), allocatable :: dlr_28
+                  call gcp_str(gcv_nth(src, k), readable, s=dlr_28)
+                  block
+                     character(len=:), allocatable :: dlw
+                     dlw = s // dlr_28
+                     call move_alloc(dlw, s)
+                  end block
+               end block
             end do
          else if (gc_kind(src) == OBJ_ARRAY) then
             ! (seq some-array). Without this the walk found no branch
@@ -283,30 +504,94 @@ contains
             ! value and showing it.
             total = array_len_for_print(src)
             do k = at, total - 1
-               if (k > at) s = s // " "
-               s = s // gcp_str(array_elem_for_print(src, k + 1), readable)
+               if (k > at) then
+                  block
+                     character(len=:), allocatable :: dlw
+                     dlw = s // " "
+                     call move_alloc(dlw, s)
+                  end block
+               end if
+               block
+                  character(len=:), allocatable :: dlr_29
+                  call gcp_str(array_elem_for_print(src, k + 1), readable, s=dlr_29)
+                  block
+                     character(len=:), allocatable :: dlw
+                     dlw = s // dlr_29
+                     call move_alloc(dlw, s)
+                  end block
+               end block
             end do
          else if (gca_is(src)) then
             call gca_entries(src, ks, vls)
             do k = at, size(ks) - 1
-               if (k > at) s = s // " "
-               s = s // "[" // gcp_str(ks(k+1), readable) // " " // &
-                    gcp_str(vls(k+1), readable) // "]"
+               if (k > at) then
+                  block
+                     character(len=:), allocatable :: dlw
+                     dlw = s // " "
+                     call move_alloc(dlw, s)
+                  end block
+               end if
+               block
+                  character(len=:), allocatable :: dlr_30, dlr_31
+                  call gcp_str(ks(k+1), readable, s=dlr_30)
+                  call gcp_str(vls(k+1), readable, s=dlr_31)
+                  block
+                     character(len=:), allocatable :: dlw
+                     dlw = s // "[" // dlr_30 // " " //  dlr_31 // "]"
+                     call move_alloc(dlw, s)
+                  end block
+               end block
             end do
          else if (gc_kind(src) == OBJ_SET) then
             call gca_entries(gc_slot(src, 1), ks, vls)
             do k = at, size(ks) - 1
-               if (k > at) s = s // " "
-               s = s // gcp_str(ks(k+1), readable)
+               if (k > at) then
+                  block
+                     character(len=:), allocatable :: dlw
+                     dlw = s // " "
+                     call move_alloc(dlw, s)
+                  end block
+               end if
+               block
+                  character(len=:), allocatable :: dlr_32
+                  call gcp_str(ks(k+1), readable, s=dlr_32)
+                  block
+                     character(len=:), allocatable :: dlw
+                     dlw = s // dlr_32
+                     call move_alloc(dlw, s)
+                  end block
+               end block
             end do
          else if (src%tag == GCT_STR) then
-            t = gc_ref_text(src%ref)
+            block
+               character(len=:), allocatable :: dlr_33
+               call gc_ref_text(src%ref, s=dlr_33)
+               t = dlr_33
+            end block
             do k = at, len(t) - 1
-               if (k > at) s = s // " "
-               s = s // gcp_str(gc_char(t(k+1:k+1)), readable)
+               if (k > at) then
+                  block
+                     character(len=:), allocatable :: dlw
+                     dlw = s // " "
+                     call move_alloc(dlw, s)
+                  end block
+               end if
+               block
+                  character(len=:), allocatable :: dlr_34
+                  call gcp_str(gc_char(t(k+1:k+1)), readable, s=dlr_34)
+                  block
+                     character(len=:), allocatable :: dlw
+                     dlw = s // dlr_34
+                     call move_alloc(dlw, s)
+                  end block
+               end block
             end do
          end if
-         s = s // ")"
+         block
+            character(len=:), allocatable :: dlw
+            dlw = s // ")"
+            call move_alloc(dlw, s)
+         end block
        end block
     case (OBJ_SET)
        ! #{...}, not the backing map's {k v} pairs -- a set that
@@ -317,10 +602,28 @@ contains
          call gca_entries(gc_slot(v, 1), ks, vls)
          s = "#{"
          do k = 1, size(ks)
-            if (k > 1) s = s // " "
-            s = s // gcp_str(ks(k), readable)
+            if (k > 1) then
+               block
+                  character(len=:), allocatable :: dlw
+                  dlw = s // " "
+                  call move_alloc(dlw, s)
+               end block
+            end if
+            block
+               character(len=:), allocatable :: dlr_35
+               call gcp_str(ks(k), readable, s=dlr_35)
+               block
+                  character(len=:), allocatable :: dlw
+                  dlw = s // dlr_35
+                  call move_alloc(dlw, s)
+               end block
+            end block
          end do
-         s = s // "}"
+         block
+            character(len=:), allocatable :: dlw
+            dlw = s // "}"
+            call move_alloc(dlw, s)
+         end block
        end block
     case (OBJ_CLOSURE)
        s = "#<fn>"
@@ -328,12 +631,20 @@ contains
        ! A compiled one names itself, because a trace that says
        ! #<fn> tells you nothing about which compiled procedure you
        ! are in. Slot 1 is ns/name, set when it was installed.
-       s = "#<compiled " // gcp_str(gc_slot(v, 1), .false.) // ">"
+       block
+          character(len=:), allocatable :: dlr_36
+          call gcp_str(gc_slot(v, 1), .false., s=dlr_36)
+          s = "#<compiled " // dlr_36 // ">"
+       end block
     case (OBJ_REGEX)
        ! A Pattern prints as its own source text, readable or not --
        ! (str #"a.b") and (pr-str #"a.b") both give #"a.b", which is
        ! what real Clojure's Pattern.toString does too.
-       s = '#"' // gcp_str(gc_slot(v, 1), .false.) // '"'
+       block
+          character(len=:), allocatable :: dlr_37
+          call gcp_str(gc_slot(v, 1), .false., s=dlr_37)
+          s = '#"' // dlr_37 // '"'
+       end block
     case (OBJ_MATCHER)
        s = "#<matcher>"
     case (OBJ_WRITER)
@@ -343,51 +654,117 @@ contains
        ! there is nothing to fill in with.
        block
          type(gc_value) :: dat
-         s = "#error {:class " // gcp_str(gc_slot(v, 1), .false.) // &
-              ", :message " // gcp_str(gc_slot(v, 2), .true.)
+         block
+            character(len=:), allocatable :: dlr_38, dlr_39
+            call gcp_str(gc_slot(v, 1), .false., s=dlr_38)
+            call gcp_str(gc_slot(v, 2), .true., s=dlr_39)
+            s = "#error {:class " // dlr_38 //  ", :message " // dlr_39
+         end block
          dat = gc_slot(v, 3)
-         if (dat%tag /= GCT_NIL) s = s // ", :data " // gcp_str(dat, .true.)
-         s = s // "}"
+         if (dat%tag /= GCT_NIL) then
+            block
+               character(len=:), allocatable :: dlr_40
+               call gcp_str(dat, .true., s=dlr_40)
+               block
+                  character(len=:), allocatable :: dlw
+                  dlw = s // ", :data " // dlr_40
+                  call move_alloc(dlw, s)
+               end block
+            end block
+         end if
+         block
+            character(len=:), allocatable :: dlw
+            dlw = s // "}"
+            call move_alloc(dlw, s)
+         end block
        end block
     case (OBJ_META)
        ! Metadata is not printed by default -- *print-meta* is false --
        ! so a wrapped value prints as the value. Without this every
        ! hinted form in core.clj printed as #<object>, which made the
        ! load report name forms nobody could identify.
-       s = gcp_str(gc_slot(v, 1), readable)
+       block
+          character(len=:), allocatable :: dlr_41
+          call gcp_str(gc_slot(v, 1), readable, s=dlr_41)
+          s = dlr_41
+       end block
     case (OBJ_SB)
-       s = gcp_str(gc_slot(v, 1), readable)
+       block
+          character(len=:), allocatable :: dlr_42
+          call gcp_str(gc_slot(v, 1), readable, s=dlr_42)
+          s = dlr_42
+       end block
     case (OBJ_TASK)
        s = "#object[java.util.concurrent.FutureTask]"
     case (OBJ_VOLATILE)
-       s = "#<volatile " // gcp_str(gc_slot(v, 1), readable) // ">"
+       block
+          character(len=:), allocatable :: dlr_43
+          call gcp_str(gc_slot(v, 1), readable, s=dlr_43)
+          s = "#<volatile " // dlr_43 // ">"
+       end block
     case (OBJ_DELAY)
        ! Clojure shows #object[clojure.lang.Delay 0x.. {:status :pending,
        ! :val nil}]. Same two facts, in clotran's own #<...> shape.
        if (gc_i1(v) /= 0) then
-          s = "#<delay " // gcp_str(gc_slot(v, 2), readable) // ">"
+          block
+             character(len=:), allocatable :: dlr_44
+             call gcp_str(gc_slot(v, 2), readable, s=dlr_44)
+             s = "#<delay " // dlr_44 // ">"
+          end block
        else
           s = "#<delay pending>"
        end if
     case (OBJ_TYPE)
-       s = gcp_str(gc_slot(v, 1), .false.)
+       block
+          character(len=:), allocatable :: dlr_45
+          call gcp_str(gc_slot(v, 1), .false., s=dlr_45)
+          s = dlr_45
+       end block
     case (OBJ_INST)
        ! Clojure prints #object[user.Foo 0x1f2e3d "user.Foo@1f2e3d"].
        ! The identity hash is left out: there is no address to print
        ! -- the GC is index-based -- and inventing one would make two
        ! runs of the same program print differently for no reason.
-       s = "#object[" // gcp_str(gc_slot(gc_slot(v, 1), 1), .false.) // "]"
+       block
+          character(len=:), allocatable :: dlr_46
+          call gcp_str(gc_slot(gc_slot(v, 1), 1), .false., s=dlr_46)
+          s = "#object[" // dlr_46 // "]"
+       end block
     case (OBJ_MULTIFN)
-       s = "#<multifn " // gcp_str(gc_slot(v, 1), .false.) // ">"
+       block
+          character(len=:), allocatable :: dlr_47
+          call gcp_str(gc_slot(v, 1), .false., s=dlr_47)
+          s = "#<multifn " // dlr_47 // ">"
+       end block
     case (OBJ_ATOM)
-       s = "#<atom " // gcp_str(gc_slot(v, 1), readable) // ">"
+       block
+          character(len=:), allocatable :: dlr_48
+          call gcp_str(gc_slot(v, 1), readable, s=dlr_48)
+          s = "#<atom " // dlr_48 // ">"
+       end block
     case (OBJ_VAR)
        ! #'ns/name, as Var.toString prints it
        if (gc_kind(gc_slot(v, 3)) == OBJ_NS) then
-          s = "#'" // gcp_str(gc_slot(gc_slot(v, 3), 1), .false.) // "/"
-          s = s // gcp_str(gc_slot(v, 4), .false.)
+          block
+             character(len=:), allocatable :: dlr_49
+             call gcp_str(gc_slot(gc_slot(v, 3), 1), .false., s=dlr_49)
+             s = "#'" // dlr_49 // "/"
+          end block
+          block
+             character(len=:), allocatable :: dlr_50
+             call gcp_str(gc_slot(v, 4), .false., s=dlr_50)
+             block
+                character(len=:), allocatable :: dlw
+                dlw = s // dlr_50
+                call move_alloc(dlw, s)
+             end block
+          end block
        else
-          s = "#'" // gcp_str(gc_slot(v, 4), .false.)
+          block
+             character(len=:), allocatable :: dlr_51
+             call gcp_str(gc_slot(v, 4), .false., s=dlr_51)
+             s = "#'" // dlr_51
+          end block
        end if
     case (OBJ_NS)
        ! The PRINT form, for pr, print, prn and any namespace nested in
@@ -400,25 +777,29 @@ contains
        ! so it is handled in B_TOSTRING. Doing it here on *print-readably*
        ! instead made (str *ns*) right and (pr-str *ns*), (print-str *ns*)
        ! and (str [*ns*]) all wrong.
-       s = "#<ns " // gcp_str(gc_slot(v, 1), .false.) // ">"
+       block
+          character(len=:), allocatable :: dlr_52
+          call gcp_str(gc_slot(v, 1), .false., s=dlr_52)
+          s = "#<ns " // dlr_52 // ">"
+       end block
     case (OBJ_ENV)
        s = "#<env>"
     case default
        s = "#<object>"
     end select
-  end function obj_str
+  end subroutine obj_str
 
   ! The elements of a printed seq, without its parentheses, so a
   ! tail can be spliced into the parens already open rather than
   ! nested inside a second pair.
-  function inner_of(t) result(out)
+  subroutine inner_of(t, out)
     character(len=*), intent(in) :: t
-    character(len=:), allocatable :: out
+    character(len=:), allocatable, intent(out) :: out
     out = t
     if (len(t) >= 2) then
        if (t(1:1) == "(" .and. t(len(t):len(t)) == ")") out = t(2:len(t)-1)
     end if
-  end function inner_of
+  end subroutine inner_of
 
   ! Double.toString: the SHORTEST decimal that reads back as this same
   ! double, laid out the way Java lays it out.
@@ -437,9 +818,10 @@ contains
   ! Java's layout rule, which is not the same as Fortran's: plain
   ! decimal while 1e-3 <= |d| < 1e7, scientific outside that, and
   ! always at least one digit after the point.
-  function real_str(r) result(s)
+  subroutine real_str(r, s)
     real(gc_dp), intent(in) :: r
-    character(len=:), allocatable :: s, digits
+    character(len=:), allocatable, intent(out) :: s
+    character(len=:), allocatable :: digits
     character(len=40) :: buf
     character(len=16) :: fmt
     real(gc_dp) :: back
@@ -464,7 +846,13 @@ contains
     ! and the power of ten the first digit carries.
     s = trim(adjustl(buf))
     neg = (s(1:1) == "-")
-    if (neg) s = s(2:)
+    if (neg) then
+       block
+          character(len=:), allocatable :: dlw
+          dlw = s(2:)
+          call move_alloc(dlw, s)
+       end block
+    end if
     i = index(s, "E")
     read(s(i+1:), *) e10
     digits = s(1:1) // s(3:i-1)
@@ -494,14 +882,24 @@ contains
           s = digits(1:1) // "." // digits(2:)
        end if
        write(buf, '(I0)') e10
-       s = s // "E" // trim(buf)
+       block
+          character(len=:), allocatable :: dlw
+          dlw = s // "E" // trim(buf)
+          call move_alloc(dlw, s)
+       end block
     end if
-    if (neg) s = "-" // s
-  end function real_str
+    if (neg) then
+       block
+          character(len=:), allocatable :: dlw
+          dlw = "-" // s
+          call move_alloc(dlw, s)
+       end block
+    end if
+  end subroutine real_str
 
-  function quoted(t) result(s)
+  subroutine quoted(t, s)
     character(len=*), intent(in) :: t
-    character(len=:), allocatable :: s
+    character(len=:), allocatable, intent(out) :: s
     integer :: i
     s = '"'
     do i = 1, len(t)
@@ -513,8 +911,12 @@ contains
        case default;     s = s // t(i:i)
        end select
     end do
-    s = s // '"'
-  end function quoted
+    block
+       character(len=:), allocatable :: dlw
+       dlw = s // '"'
+       call move_alloc(dlw, s)
+    end block
+  end subroutine quoted
 
   ! The named characters, matching real Clojure's reader so what is
   ! printed can be read back.
@@ -566,7 +968,11 @@ contains
        end if
     end if
     at = off + stride * (k - 1) + 1
-    kn = gcna_kind(h)
+    block
+       character(len=:), allocatable :: dlr_53
+       call gcna_kind(h, s=dlr_53)
+       kn = dlr_53
+    end block
     if (kn == "value") then
        out = gc_vec_get(gc_slot(v, 1), at)
     else if (kn == "logical") then
@@ -581,9 +987,9 @@ contains
     end if
   end function array_elem_for_print
 
-  function char_readable(code) result(s)
+  subroutine char_readable(code, s)
     integer, intent(in) :: code
-    character(len=:), allocatable :: s
+    character(len=:), allocatable, intent(out) :: s
     select case (code)
     case (10); s = achar(92) // "newline"
     case (32); s = achar(92) // "space"
@@ -591,8 +997,13 @@ contains
     case (13); s = achar(92) // "return"
     case (8);  s = achar(92) // "backspace"
     case (12); s = achar(92) // "formfeed"
-    case default; s = achar(92) // u8_enc(code)
+    case default
+    block
+       character(len=:), allocatable :: dlr_54
+       call u8_enc(code, s=dlr_54)
+       s = achar(92) // dlr_54
+    end block
     end select
-  end function char_readable
+  end subroutine char_readable
 
 end module Printer

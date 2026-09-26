@@ -70,7 +70,7 @@ module ClotranABI
   public :: clotran_load_compiled, clotran_array_view
   public :: clotran_rest_args, clotran_arity_error
   public :: clotran_native_begin, clotran_reacquire
-  public :: clotran_register_proc, clotran_make_closure, clotran_captures, clotran_new, clotran_dot, clotran_arith, clotran_frame_done
+  public :: clotran_register_proc, clotran_make_closure, clotran_captures, clotran_new, clotran_dot, clotran_arith, clotran_frame_done, clotran_poll
 
 contains
 
@@ -100,7 +100,11 @@ contains
     integer(c_int) :: st
     type(gc_value) :: none(0), env
     call gc_ensure_init()
-    call gce_set_home(c_text(home, n))
+    block
+       character(len=:), allocatable :: dlr_1
+       call c_text(home, n, s=dlr_1)
+       call gce_set_home(dlr_1)
+    end block
     env = gce_base_env(none)
     st = 0
     if (gce_has_error()) st = 1
@@ -123,7 +127,11 @@ contains
     env = gce_env()
     base = vs_enter(vst, 3)
     call vs_set(vst, base + 1, env)
-    form = gcr_read(c_text(src, n), [vs_get(vst, base + 1)])
+    block
+       character(len=:), allocatable :: dlr_2
+       call c_text(src, n, s=dlr_2)
+       form = gcr_read(dlr_2, [vs_get(vst, base + 1)])
+    end block
     if (gcr_has_error()) then
        call vs_leave(vst, base)
        return
@@ -161,7 +169,11 @@ contains
     env = gce_env()
     base = vs_enter(vst, 2)
     call vs_set(vst, base + 1, env)
-    form = gcr_read(c_text(src, n), [vs_get(vst, base + 1)])
+    block
+       character(len=:), allocatable :: dlr_3
+       call c_text(src, n, s=dlr_3)
+       form = gcr_read(dlr_3, [vs_get(vst, base + 1)])
+    end block
     if (gcr_has_error()) then
        call vs_leave(vst, base)
        return
@@ -331,7 +343,13 @@ contains
     vst => gc_my_stack()
     v = vs_get(vst, int(slot))
     n = 0
-    if (v%tag == GCT_STR) n = int(len(gc_ref_text(v%ref)), c_int)
+    if (v%tag == GCT_STR) then
+       block
+          character(len=:), allocatable :: dlr_4
+          call gc_ref_text(v%ref, s=dlr_4)
+          n = int(len(dlr_4), c_int)
+       end block
+    end if
   end function clotran_str_len
 
   ! Copies at most n bytes and answers how many were written.
@@ -348,7 +366,11 @@ contains
     w = 0
     v = vs_get(vst, int(slot))
     if (v%tag /= GCT_STR) return
-    s = gc_ref_text(v%ref)
+    block
+       character(len=:), allocatable :: dlr_5
+       call gc_ref_text(v%ref, s=dlr_5)
+       s = dlr_5
+    end block
     w = int(min(len(s), int(n)), c_int)
     do i = 1, int(w)
        buf(i) = s(i:i)
@@ -412,11 +434,19 @@ contains
     vst => gc_my_stack()
     ok = 0
     call vs_set(vst, int(slot), gc_nil())
-    nsv = gcn_find(c_text(ns, nsn))
+    block
+       character(len=:), allocatable :: dlr_6
+       call c_text(ns, nsn, s=dlr_6)
+       nsv = gcn_find(dlr_6)
+    end block
     if (gc_kind(nsv) /= OBJ_NS) return
     base = vs_enter(vst, 1)
     call vs_set(vst, base + 1, nsv)
-    sym = gc_sym(c_text(name, namen), [vs_get(vst, base + 1)])
+    block
+       character(len=:), allocatable :: dlr_7
+       call c_text(name, namen, s=dlr_7)
+       sym = gc_sym(dlr_7, [vs_get(vst, base + 1)])
+    end block
     var = gcn_lookup(vs_get(vst, base + 1), sym)
     call vs_leave(vst, base)
     if (.not. gcn_is_var(var)) return
@@ -475,8 +505,16 @@ contains
     vst => gc_my_stack()
     st = 1
     if (.not. c_associated(fp)) return
-    nsname = c_text(ns, nsn)
-    fname = c_text(name, namen)
+    block
+       character(len=:), allocatable :: dlr_8
+       call c_text(ns, nsn, s=dlr_8)
+       nsname = dlr_8
+    end block
+    block
+       character(len=:), allocatable :: dlr_9
+       call c_text(name, namen, s=dlr_9)
+       fname = dlr_9
+    end block
     nsv = gcn_find_or_create(nsname, none)
     if (gc_kind(nsv) /= OBJ_NS) return
     h = cf_register(fp, nsname // "/" // fname)
@@ -525,7 +563,11 @@ contains
     integer(c_int), value :: namen
     type(c_funptr), value :: fp
     integer(c_int) :: h
-    h = cf_register(fp, c_text(name, namen))
+    block
+       character(len=:), allocatable :: dlr_10
+       call c_text(name, namen, s=dlr_10)
+       h = cf_register(fp, dlr_10)
+    end block
   end function clotran_register_proc
 
   ! pairs(1:2*npairs): (outer slot, inner slot), 0-based, as the
@@ -550,7 +592,11 @@ contains
     do k = 1, npairs
        call gc_vec_set(vs_get(vst, base + 2), k, gc_int(int(pairs(2 * k), gc_ip)))
     end do
-    v = gc_str(c_text(name, namen), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    block
+       character(len=:), allocatable :: dlr_11
+       call c_text(name, namen, s=dlr_11)
+       v = gc_str(dlr_11, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    end block
     call vs_set(vst, base + 3, v)
     v = gc_obj(OBJ_COMPILED, [vs_get(vst, base + 3), vs_get(vst, base + 1), vs_get(vst, base + 2), &
          gc_int(int(selfslot, gc_ip))], [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
@@ -593,7 +639,11 @@ contains
     integer(c_int) :: st
     type(gc_value) :: out
     vst => gc_my_stack()
-    out = gce_new_slots(c_text(name, namen), int(argbase), int(nargs))
+    block
+       character(len=:), allocatable :: dlr_12
+       call c_text(name, namen, s=dlr_12)
+       out = gce_new_slots(dlr_12, int(argbase), int(nargs))
+    end block
     if (gce_has_error()) then
        call vs_set(vst, int(dst), gc_nil())
        st = 1
@@ -724,6 +774,12 @@ contains
     end if
   end function clotran_arith
 
+  ! A SAFEPOINT at a compiled loop's back-edge (PLAN.md step 14f): a loop
+  ! that allocates nothing still stops for a collection elsewhere.
+  subroutine clotran_poll() bind(C, name="clotran_poll")
+    call gc_poll()
+  end subroutine clotran_poll
+
   subroutine clotran_frame_new(dst, n) bind(C, name="clotran_frame_new")
     type(gc_stack), pointer :: vst
     integer(c_int), value :: dst, n
@@ -824,7 +880,11 @@ contains
   subroutine clotran_arity_error(nargs, name, n) bind(C, name="clotran_arity_error")
     integer(c_int), value :: nargs, n
     character(kind=c_char), intent(in) :: name(*)
-    call gce_raise_arity_named(int(nargs), c_text(name, n))
+    block
+       character(len=:), allocatable :: dlr_13
+       call c_text(name, n, s=dlr_13)
+       call gce_raise_arity_named(int(nargs), dlr_13)
+    end block
   end subroutine clotran_arity_error
 
   ! A CONSTANT POOL, registered for one compiled namespace. The table
@@ -874,7 +934,11 @@ contains
     integer(c_int) :: st
     character(len=:), allocatable :: err
     st = 1
-    if (dl_install(c_text(path, n), int(pool), err)) st = 0
+    block
+       character(len=:), allocatable :: dlr_14
+       call c_text(path, n, s=dlr_14)
+       if (dl_install(dlr_14, int(pool), err)) st = 0
+    end block
   end function clotran_load_compiled
 
   ! A VIEW of a one-dimensional array: the address of its first element
@@ -935,7 +999,11 @@ contains
 
   function clotran_error_len() bind(C, name="clotran_error_len") result(n)
     integer(c_int) :: n
-    n = int(len(gce_error()), c_int)
+    block
+       character(len=:), allocatable :: dlr_15
+       call gce_error(s=dlr_15)
+       n = int(len(dlr_15), c_int)
+    end block
   end function clotran_error_len
 
   function clotran_error_copy(buf, n) bind(C, name="clotran_error_copy") result(w)
@@ -944,7 +1012,11 @@ contains
     integer(c_int) :: w
     character(len=:), allocatable :: s
     integer :: i
-    s = gce_error()
+    block
+       character(len=:), allocatable :: dlr_16
+       call gce_error(s=dlr_16)
+       s = dlr_16
+    end block
     w = int(min(len(s), int(n)), c_int)
     do i = 1, int(w)
        buf(i) = s(i:i)
@@ -982,16 +1054,16 @@ contains
   ! --- helpers, not exported ---------------------------------------
 
   ! A C character array and a length as a Fortran string.
-  function c_text(chars, n) result(s)
+  subroutine c_text(chars, n, s)
     character(kind=c_char), intent(in) :: chars(*)
     integer(c_int), intent(in) :: n
-    character(len=:), allocatable :: s
+    character(len=:), allocatable, intent(out) :: s
     integer :: i
     allocate(character(len=max(0, int(n))) :: s)
     do i = 1, int(n)
        s(i:i) = chars(i)
     end do
-  end function c_text
+  end subroutine c_text
 
   ! NOTE on roots: every allocation here passes an EMPTY roots array,
   ! on purpose. The shadow stack is the root set, and a caller that did

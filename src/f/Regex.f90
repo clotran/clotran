@@ -226,10 +226,10 @@ contains
 
   ! What a clone or set_text failure says: ICU refused and gave no
   ! message. A compile failure answers its own (regex_compile).
-  function regex_last_error() result(s)
-    character(len=:), allocatable :: s
+  subroutine regex_last_error(s)
+    character(len=:), allocatable, intent(out) :: s
     s = "the regex library refused the operation"
-  end function regex_last_error
+  end subroutine regex_last_error
 
   ! Compiles a pattern, returning a POSITIVE handle index, or 0 on
   ! failure with ICU's message in err -- answered, not kept, so two
@@ -257,7 +257,11 @@ contains
     if (.not. c_associated(h)) then
        do i = 1, 256
           if (errbuf(i) == c_null_char) exit
-          err = err // errbuf(i)
+          block
+             character(len=:), allocatable :: dlw
+             dlw = err // errbuf(i)
+             call move_alloc(dlw, err)
+          end block
        end do
        return
     end if

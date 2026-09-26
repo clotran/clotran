@@ -126,9 +126,9 @@
 
   ! The array hint on a binding form, or "" -- doubles, longs, ints and
   ! the rest, the way Clojure spells them.
-  function array_hint_of(raw) result(h)
+  subroutine array_hint_of(raw, h)
     type(gc_value), intent(in) :: raw
-    character(len=:), allocatable :: h
+    character(len=:), allocatable, intent(out) :: h
     type(gc_value) :: md, tg
     h = ""
     if (gc_kind(raw) /= OBJ_META) return
@@ -136,11 +136,19 @@
     if (.not. gca_is(md)) return
     tg = strip_meta(gca_get(md, gc_key("tag", [raw, md])))
     if (tg%tag /= GCT_SYM) return
-    select case (gc_ref_text(tg%ref))
+    block
+       character(len=:), allocatable :: dlr_1
+       call gc_ref_text(tg%ref, s=dlr_1)
+    select case (dlr_1)
     case ("doubles", "longs", "ints", "floats", "shorts", "bytes", "booleans", "chars", "objects")
-       h = gc_ref_text(tg%ref)
+       block
+          character(len=:), allocatable :: dlr_2
+          call gc_ref_text(tg%ref, s=dlr_2)
+          h = dlr_2
+       end block
     end select
-  end function array_hint_of
+    end block
+  end subroutine array_hint_of
 
   ! Record the binding's array hint, if it has one, in the scope that
   ! binds it.
@@ -152,7 +160,11 @@
     character(len=:), allocatable :: h
     integer :: base
     vst => gc_my_stack()
-    h = array_hint_of(raw)
+    block
+       character(len=:), allocatable :: dlr_3
+       call array_hint_of(raw, h=dlr_3)
+       h = dlr_3
+    end block
     if (len(h) == 0) return
     base = vs_enter(vst, 3)
     call vs_set(vst, base + 1, sc)
@@ -217,12 +229,20 @@
     base = vs_enter(vst, 4)
     call vs_set(vst, base + 1, kids)
     h = gc_nil()
-    if (len(array_hint_of(raw)) > 0) then
-       h = gc_key(array_hint_of(raw), [roots, vs_get(vst, base + 1)])
+    block
+       character(len=:), allocatable :: dlr_4
+       call array_hint_of(raw, h=dlr_4)
+    if (len(dlr_4) > 0) then
+       block
+          character(len=:), allocatable :: dlr_5
+          call array_hint_of(raw, h=dlr_5)
+          h = gc_key(dlr_5, [roots, vs_get(vst, base + 1)])
+       end block
     else
        fv = strip_meta(raw)
        if (fv%tag == GCT_SYM) h = local_array_hint(sc, fv)
     end if
+    end block
     if (tag_of(h) == GCT_NIL) then
        call vs_leave(vst, base)
        return
@@ -489,8 +509,13 @@
              if (tctx%has_error) then
                 call trace_analysis_failure(vs_get(vst, base + 1))
                 ! an analysis error names the innermost positioned form
-                if (gc_i2(vs_get(vst, base + 1)) /= 0 .and. index(tctx%last_error, "  at ") == 0) &
-                     tctx%last_error = tctx%last_error // "  at " // gcr_position(gc_i2(vs_get(vst, base + 1)))
+                if (gc_i2(vs_get(vst, base + 1)) /= 0 .and. index(tctx%last_error, "  at ") == 0) then
+                   block
+                      character(len=:), allocatable :: dlr_6
+                      call gcr_position(gc_i2(vs_get(vst, base + 1)), s=dlr_6)
+                      tctx%last_error = tctx%last_error // "  at " // dlr_6
+                   end block
+                end if
              end if
              ! the source position, if the reader recorded one and the
              ! node has none of its own yet (a macro's expansion keeps
@@ -639,7 +664,11 @@
        ! Class/field in value position: a static FIELD. Resolved now,
        ! since the answer cannot change; an unknown one fails where it
        ! is used rather than where it is written, as before.
-       t = gc_ref_text(sym%ref)
+       block
+          character(len=:), allocatable :: dlr_7
+          call gc_ref_text(sym%ref, s=dlr_7)
+          t = dlr_7
+       end block
        sl = index(t, "/")
        v = static_member(t(1:sl-1), t(sl+1:), vs_get(vst, base + 1))
        if (tctx%has_error) then
@@ -656,19 +685,30 @@
     if (gcn_is_var(var)) then
        ! Compiler.resolveIn: another namespace's private Var is not
        ! reachable by its qualified name; #'ns/x still is
-       if (index(gc_ref_text(sym%ref), "/") > 1) then
+       block
+          character(len=:), allocatable :: dlr_8
+          call gc_ref_text(sym%ref, s=dlr_8)
+       if (index(dlr_8, "/") > 1) then
           if (var_not_public(var)) then
-             call fail("var: " // gc_ref_text(sym%ref) // " is not public")
+             block
+                character(len=:), allocatable :: dlr_9
+                call gc_ref_text(sym%ref, s=dlr_9)
+                call fail("var: " // dlr_9 // " is not public")
+             end block
              call vs_leave(vst, base)
              return
           end if
        end if
+       end block
        call vs_set(vst, base + 3, var)
        nd = mk_node(N_VAR, gc_nil(), vs_get(vst, base + 3), gc_nil(), 0, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
        call vs_leave(vst, base)
        return
     end if
-    if (index(gc_ref_text(sym%ref), "/") > 1) then
+    block
+       character(len=:), allocatable :: dlr_10
+       call gc_ref_text(sym%ref, s=dlr_10)
+    if (index(dlr_10, "/") > 1) then
        ! A QUALIFIED symbol that does not resolve: core.clj's slurp names
        ! jio/reader, and clojure.java.io is skipped by name here. Clojure
        ! would fail to compile; clotran defers to run time, so the
@@ -678,16 +718,26 @@
        call vs_leave(vst, base)
        return
     end if
+    end block
     if (is_class_name(sym)) then
        ! A CLASS LITERAL evaluates to the keyword naming clotran's type
        ! tag, java.lang implicitly imported (Object == java.lang.Object).
-       v = gc_class(class_key(gc_ref_text(sym%ref)), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       block
+          character(len=:), allocatable :: dlr_11, dlr_12
+          call gc_ref_text(sym%ref, s=dlr_11)
+          call class_key(dlr_11, k=dlr_12)
+          v = gc_class(dlr_12, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       end block
        call vs_set(vst, base + 3, v)
        nd = const_node(vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
        call vs_leave(vst, base)
        return
     end if
-    call fail("Unable to resolve symbol: " // gc_ref_text(sym%ref) // " in this context")
+    block
+       character(len=:), allocatable :: dlr_13
+       call gc_ref_text(sym%ref, s=dlr_13)
+       call fail("Unable to resolve symbol: " // dlr_13 // " in this context")
+    end block
     call vs_leave(vst, base)
   end function analyze_symbol
 
@@ -855,7 +905,11 @@
     character(len=:), allocatable :: t
     if (trace_macros == 0) call read_trace_macros()
     if (trace_macros /= 1) return
-    t = gcp_str(form, .true.)
+    block
+       character(len=:), allocatable :: dlr_14
+       call gcp_str(form, .true., s=dlr_14)
+       t = dlr_14
+    end block
     if (len(t) > 300) t = t(1:300) // "..."
     write(0, '(A,A)') "analysis failed in: ", t
   end subroutine trace_analysis_failure
@@ -898,7 +952,11 @@
     base = vs_enter(vst, 4)
     call vs_set(vst, base + 1, form)
     head = gcl_first(form)
-    hname = gc_ref_text(head%ref)
+    block
+       character(len=:), allocatable :: dlr_15
+       call gc_ref_text(head%ref, s=dlr_15)
+       hname = dlr_15
+    end block
     call vs_set(vst, base + 2, gcl_rest(vs_get(vst, base + 1), [vs_get(vst, base + 1)]))
     call vs_set(vst, base + 3, gc_sym(hname(2:), [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
     call vs_set(vst, base + 4, gcl_rest(vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)]))
@@ -921,7 +979,11 @@
     base = vs_enter(vst, 4)
     call vs_set(vst, base + 1, form)
     head = gcl_first(form)
-    t = gc_ref_text(head%ref)
+    block
+       character(len=:), allocatable :: dlr_16
+       call gc_ref_text(head%ref, s=dlr_16)
+       t = dlr_16
+    end block
     slash = index(t, "/")
     call vs_set(vst, base + 2, gc_sym(t(slash+1:), [vs_get(vst, base + 1)]))
     call vs_set(vst, base + 3, gcl_rest(vs_get(vst, base + 1), [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
@@ -948,7 +1010,11 @@
     base = vs_enter(vst, 3)
     call vs_set(vst, base + 1, form)
     head = gcl_first(form)
-    t = gc_ref_text(head%ref)
+    block
+       character(len=:), allocatable :: dlr_17
+       call gc_ref_text(head%ref, s=dlr_17)
+       t = dlr_17
+    end block
     call vs_set(vst, base + 2, gc_sym(t(1:len(t)-1), [vs_get(vst, base + 1)]))
     call vs_set(vst, base + 3, gcl_rest(vs_get(vst, base + 1), [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
     args = gcl_cons(vs_get(vst, base + 2), vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
@@ -1011,7 +1077,11 @@
        call vs_leave(vst, base)
        return
     end if
-    mname = gc_ref_text(member%ref)
+    block
+       character(len=:), allocatable :: dlr_18
+       call gc_ref_text(member%ref, s=dlr_18)
+       mname = dlr_18
+    end block
     ! A member name reached through syntax-quote arrives qualified --
     ! defmethod's template says addMethod and the reader makes it
     ! clojure.core/addMethod. HostExpr.Parser reads sym.name only, and
@@ -1025,8 +1095,15 @@
     ! A host class as the target: a static member, resolved once.
     if (target%tag == GCT_SYM) then
        if (lookup_local(vs_get(vst, base + 2), target) < 0) then
-          if (gc_kind(find_type(gc_ref_text(target%ref))) /= OBJ_TYPE .and. is_host_class(target)) then
-             fnv = static_member(gc_ref_text(target%ref), mname, vs_get(vst, base + 1))
+          block
+             character(len=:), allocatable :: dlr_19
+             call gc_ref_text(target%ref, s=dlr_19)
+          if (gc_kind(find_type(dlr_19)) /= OBJ_TYPE .and. is_host_class(target)) then
+             block
+                character(len=:), allocatable :: dlr_20
+                call gc_ref_text(target%ref, s=dlr_20)
+                fnv = static_member(dlr_20, mname, vs_get(vst, base + 1))
+             end block
              if (tctx%has_error) then
                 ! Not a static of that class: a member of the CLASS
                 ! OBJECT, (.isAssignableFrom String Object) or (.getName
@@ -1063,9 +1140,13 @@
                 return
              end if
           end if
+          end block
           ! A deftype class, or a class name is_host_class does not know:
           ! left to eval_dot, target passed as the symbol, unevaluated.
-          if (gc_kind(find_type(gc_ref_text(target%ref))) == OBJ_TYPE .or. is_class_name(target)) then
+          block
+             character(len=:), allocatable :: dlr_21
+             call gc_ref_text(target%ref, s=dlr_21)
+          if (gc_kind(find_type(dlr_21)) == OBJ_TYPE .or. is_class_name(target)) then
              kids = analyze_all(vs_get(vst, base + 6), vs_get(vst, base + 2), [vs_get(vst, base + 1)])
              call vs_set(vst, base + 7, kids)
              if (.not. tctx%has_error) then
@@ -1075,6 +1156,7 @@
              call vs_leave(vst, base)
              return
           end if
+          end block
        end if
     end if
 
@@ -1140,11 +1222,15 @@
        call vs_leave(vst, base)
        return
     end if
-    if (gc_kind(find_type(gc_ref_text(cls%ref))) == OBJ_TYPE) then
+    block
+       character(len=:), allocatable :: dlr_22
+       call gc_ref_text(cls%ref, s=dlr_22)
+    if (gc_kind(find_type(dlr_22)) == OBJ_TYPE) then
        nd = mk_node(N_NEWTYPE, vs_get(vst, base + 5), vs_get(vst, base + 4), gc_nil(), 0, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
     else
        nd = mk_node(N_NEW, vs_get(vst, base + 5), vs_get(vst, base + 4), gc_nil(), 0, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
     end if
+    end block
     call vs_leave(vst, base)
   end function analyze_new
 
@@ -1228,14 +1314,36 @@
     else if (gc_ref_is(head%ref, "quasiquote")) then
        nd = analyze_quasiquote(vs_get(vst, base + 3), vs_get(vst, base + 2))
     else if (gc_ref_is(head%ref, "monitor-enter") .or. gc_ref_is(head%ref, "monitor-exit")) then
-       ! One thread: the lock expression is evaluated and that is all.
-       nd = analyze_one(N_DO, gcl_first(vs_get(vst, base + 3)), vs_get(vst, base + 2))
+       ! A monitor, held by one thread at a time (PLAN.md step 14f): the
+       ! call (clojure.core/clotran-monitor-enter x), or -exit, analysed
+       ! as any call is
+       block
+         type(gc_value) :: f, s
+         integer :: lb
+         lb = vs_enter(vst, 1)
+         if (gc_ref_is(head%ref, "monitor-enter")) then
+            s = gc_sym("clojure.core/clotran-monitor-enter", [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+         else
+            s = gc_sym("clojure.core/clotran-monitor-exit", [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+         end if
+         call vs_set(vst, lb + 1, s)
+         f = gcl_cons(vs_get(vst, lb + 1), vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+         call vs_set(vst, lb + 1, f)
+         nd = analyze(vs_get(vst, lb + 1), vs_get(vst, base + 2))
+         call vs_leave(vst, lb)
+       end block
     else if (gc_ref_is(head%ref, "clojure.core/import*")) then
        ! Records the short name, at analysis like a def; see record_import.
        block
          type(gc_value) :: cn
          cn = strip_meta(gcl_first(vs_get(vst, base + 3)))
-         if (cn%tag == GCT_STR .or. cn%tag == GCT_SYM) call record_import(gc_ref_text(cn%ref))
+         if (cn%tag == GCT_STR .or. cn%tag == GCT_SYM) then
+            block
+               character(len=:), allocatable :: dlr_23
+               call gc_ref_text(cn%ref, s=dlr_23)
+               call record_import(dlr_23)
+            end block
+         end if
        end block
        nd = const_node(gc_nil(), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
     else if (gc_ref_is(head%ref, "set!")) then
@@ -1245,7 +1353,11 @@
     else if (gc_ref_is(head%ref, ".")) then
        nd = analyze_dot(vs_get(vst, base + 1), vs_get(vst, base + 2))
     else
-       call fail("unknown special form: " // gc_ref_text(head%ref))
+       block
+          character(len=:), allocatable :: dlr_24
+          call gc_ref_text(head%ref, s=dlr_24)
+          call fail("unknown special form: " // dlr_24)
+       end block
     end if
     call vs_leave(vst, base)
   end function analyze_special
@@ -1337,14 +1449,22 @@
     block
       character(len=:), allocatable :: t
       integer :: sl
-      t = gc_ref_text(nm%ref)
+      block
+         character(len=:), allocatable :: dlr_25
+         call gc_ref_text(nm%ref, s=dlr_25)
+         t = dlr_25
+      end block
       sl = index(t, "/")
       if (sl > 1 .and. sl < len(t)) then
-         if (t(1:sl-1) /= gcn_name(gcn_current([vs_get(vst, base + 1)]))) then
+         block
+            character(len=:), allocatable :: dlr_26
+            call gcn_name(gcn_current([vs_get(vst, base + 1)]), s=dlr_26)
+         if (t(1:sl-1) /= dlr_26) then
             call fail("Can't create defs outside of current ns: " // t)
             call vs_leave(vst, base)
             return
          end if
+         end block
          nm = gc_sym(t(sl+1:), [vs_get(vst, base + 1), vs_get(vst, base + 4)])
       end if
     end block
@@ -1357,7 +1477,12 @@
        ! alone; using the referred Var redefined clojure.core/num for the
        ! whole program the first time a package wrote (defn- num ..).
        if (gc_kind(gc_slot(var, 3)) == OBJ_NS) then
-          if (gcn_name(gc_slot(var, 3)) /= gcn_name(gcn_current([vs_get(vst, base + 1)]))) var = gc_nil()
+          block
+             character(len=:), allocatable :: dlr_27, dlr_28
+             call gcn_name(gc_slot(var, 3), s=dlr_27)
+             call gcn_name(gcn_current([vs_get(vst, base + 1)]), s=dlr_28)
+             if (dlr_27 /= dlr_28) var = gc_nil()
+          end block
        end if
     end if
     if (.not. gcn_is_var(var)) then
@@ -1476,7 +1601,11 @@
        block
          character(len=:), allocatable :: kt
          integer :: slash
-         kt = gc_ref_text(k%ref)
+         block
+            character(len=:), allocatable :: dlr_29
+            call gc_ref_text(k%ref, s=dlr_29)
+            kt = dlr_29
+         end block
          slash = index(kt, "/")
          if (slash > 1 .and. slash < len(kt)) then
             call fail("Can't let qualified name: " // kt)
@@ -1696,11 +1825,15 @@
     if (.not. gca_is(md)) return
     tg = strip_meta(gca_get(md, gc_key("tag", [v, md])))
     if (tg%tag /= GCT_SYM) return
-    select case (gc_ref_text(tg%ref))
+    block
+       character(len=:), allocatable :: dlr_30
+       call gc_ref_text(tg%ref, s=dlr_30)
+    select case (dlr_30)
     case ("long");   prim_hint_kind = 1
     case ("double"); prim_hint_kind = 2
     case ("int", "float", "short", "byte", "char", "boolean"); prim_hint_kind = -1
     end select
+    end block
   end function prim_hint_kind
 
   ! Clojure's PRIMITIVE HINTS on a fn, as a rewrite of its body.
@@ -1953,7 +2086,11 @@
     integer :: sl, base
     vst => gc_my_stack()
     var = gc_nil()
-    t = gc_ref_text(sym%ref)
+    block
+       character(len=:), allocatable :: dlr_31
+       call gc_ref_text(sym%ref, s=dlr_31)
+       t = dlr_31
+    end block
     sl = index(t, "/")
     if (sl <= 1 .or. sl >= len(t)) return
     base = vs_enter(vst, 2)
@@ -1996,7 +2133,11 @@
        ! literal fails.
        var = intern_unbound(sym, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
        if (.not. gcn_is_var(var)) then
-          call fail("Unable to resolve var: " // gc_ref_text(sym%ref))
+          block
+             character(len=:), allocatable :: dlr_32
+             call gc_ref_text(sym%ref, s=dlr_32)
+             call fail("Unable to resolve var: " // dlr_32)
+          end block
           call vs_leave(vst, base)
           return
        end if
@@ -2231,8 +2372,11 @@
        w = gcl_rest(vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 6)])
        call vs_set(vst, base + 3, w)
     end do
-    spec = type_spec(class_of_text(vs_get(vst, base + 4)), vs_get(vst, base + 5), vs_get(vst, base + 6), &
-         vs_get(vst, base + 3), vs_get(vst, base + 2))
+    block
+       character(len=:), allocatable :: dlr_33
+       call class_of_text(vs_get(vst, base + 4), s=dlr_33)
+       spec = type_spec(dlr_33, vs_get(vst, base + 5), vs_get(vst, base + 6),  vs_get(vst, base + 3), vs_get(vst, base + 2))
+    end block
     if (tctx%has_error) then
        call vs_leave(vst, base)
        return
@@ -2336,10 +2480,18 @@
        m = norm_form(strip_meta(gcl_first(vs_get(vst, base + 8))), [vs_get(vst, base + 5), vs_get(vst, base + 6), vs_get(vst, base + 7), vs_get(vst, base + 8)])
        mname = strip_meta(gcl_first(m))
        if (mname%tag == GCT_SYM) then
-          tmp = gc_key(bare_name(mname), [vs_get(vst, base + 5), vs_get(vst, base + 6), vs_get(vst, base + 7), vs_get(vst, base + 8)])
+          block
+             character(len=:), allocatable :: dlr_34
+             call bare_name(mname, s=dlr_34)
+             tmp = gc_key(dlr_34, [vs_get(vst, base + 5), vs_get(vst, base + 6), vs_get(vst, base + 7), vs_get(vst, base + 8)])
+          end block
           call vs_set(vst, base + 9, tmp)
           if (.not. gca_contains(vs_get(vst, base + 7), vs_get(vst, base + 9))) then
-             clauses = method_clauses(bare_name(mname), vs_get(vst, base + 3), vs_get(vst, base + 1))
+             block
+                character(len=:), allocatable :: dlr_35
+                call bare_name(mname, s=dlr_35)
+                clauses = method_clauses(dlr_35, vs_get(vst, base + 3), vs_get(vst, base + 1))
+             end block
              call vs_set(vst, base + 10, clauses)
              fnform = vs_get(vst, base + 10)      ! the clause list IS fn*'s rest
              tctx%analyzing_method = .true.
@@ -2442,15 +2594,22 @@
           ! assigning one is refused -- at RUN time, as before, so that
           ! defrecord's hashCode, which does (set! __hash h), still
           ! defines. DEVIATIONS 20.
-          nd = fail_node("Cannot assign to a local: " // gc_ref_text(tgt%ref) // &
-               " (mutable deftype fields are not supported, DEVIATIONS 20)", &
-               [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+          block
+             character(len=:), allocatable :: dlr_36
+             call gc_ref_text(tgt%ref, s=dlr_36)
+             nd = fail_node("Cannot assign to a local: " // dlr_36 // &
+                  " (mutable deftype fields are not supported, DEVIATIONS 20)",  [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+          end block
           call vs_leave(vst, base)
           return
        end if
        var = resolve_var(tgt, gc_nil())
        if (.not. gcn_is_var(var)) then
-          call fail("set! needs a var: " // gc_ref_text(tgt%ref))
+          block
+             character(len=:), allocatable :: dlr_37
+             call gc_ref_text(tgt%ref, s=dlr_37)
+             call fail("set! needs a var: " // dlr_37)
+          end block
           call vs_leave(vst, base)
           return
        end if

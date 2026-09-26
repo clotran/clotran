@@ -182,7 +182,11 @@ contains
        m = gcm_assoc(m, gc_int(i), gc_int(i * 3), roots)
     end do
     roots(1) = m
-    call ok("7a. the heap audits clean under torture: ", gc_check_heap() == "")
+    block
+       character(len=:), allocatable :: dlr_1
+       call gc_check_heap(problem=dlr_1)
+       call ok("7a. the heap audits clean under torture: ", dlr_1 == "")
+    end block
     call ok_int("7b. ...with the count right: ", gcm_count(m), 40)
     bad = 0
     do i = 1, 40

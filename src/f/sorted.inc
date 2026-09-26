@@ -22,15 +22,22 @@
        ! first (Assoc's empty-map case), which is where PersistentTreeMap
        ! refuses a key that is not nil, a Number or Comparable
        if (same_object(a, b) .and. .not. comparable_kind(a)) then
-          call raise_class("ClassCastException", &
-               "Default comparator requires nil, Number, or Comparable: " // gcp_str(a, .true.), [a])
+          block
+             character(len=:), allocatable :: dlr_1
+             call gcp_str(a, .true., s=dlr_1)
+             call raise_class("ClassCastException",  "Default comparator requires nil, Number, or Comparable: " // dlr_1, [a])
+          end block
           c = huge(0)
           return
        end if
        c = compare_values(a, b, ok)
        if (.not. ok) then
-          call raise_class("ClassCastException", &
-               "cannot compare " // class_name_of(a) // " with " // class_name_of(b), [a, b])
+          block
+             character(len=:), allocatable :: dlr_2, dlr_3
+             call class_name_of(a, s=dlr_2)
+             call class_name_of(b, s=dlr_3)
+             call raise_class("ClassCastException",  "cannot compare " // dlr_2 // " with " // dlr_3, [a, b])
+          end block
           c = huge(0)
        end if
     else
@@ -61,8 +68,13 @@
     case default
        yes = .false.
     end select
-    if (.not. yes) call raise_class("IllegalArgumentException", &
-         "Don't know how to create ISeq from: " // class_name_of(v), [v])
+    if (.not. yes) then
+       block
+          character(len=:), allocatable :: dlr_4
+          call class_name_of(v, s=dlr_4)
+          call raise_class("IllegalArgumentException",  "Don't know how to create ISeq from: " // dlr_4, [v])
+       end block
+    end if
   end function seqable
 
   ! (reduced x) is {:clotran/reduced x}, an array map of one entry; the
@@ -84,7 +96,11 @@
     yes = .false.
     s = strip_meta(v)
     if (s%tag /= GCT_STR) return
-    u = gc_ref_text(s%ref)
+    block
+       character(len=:), allocatable :: dlr_5
+       call gc_ref_text(s%ref, s=dlr_5)
+       u = dlr_5
+    end block
     if (len(u) /= 36) return
     do i = 1, 36
        if (i == 9 .or. i == 14 .or. i == 19 .or. i == 24) then
@@ -150,8 +166,11 @@
        x = strip_meta(gcv_nth(args, i))
        if (.not. is_number(x)) then
           ok = .false.
-          call raise_class("ClassCastException", "class " // class_name_of(x) // &
-               " cannot be cast to class java.lang.Number", roots)
+          block
+             character(len=:), allocatable :: dlr_6
+             call class_name_of(x, s=dlr_6)
+             call raise_class("ClassCastException", "class " // dlr_6 //  " cannot be cast to class java.lang.Number", roots)
+          end block
           return
        end if
     end do
@@ -330,7 +349,11 @@
     end if
     m = sorted_backing(a)
     if (m%tag == GCT_NIL) then
-       call fail("rseq: not reversible: " // class_name_of(a))
+       block
+          character(len=:), allocatable :: dlr_7
+          call class_name_of(a, s=dlr_7)
+          call fail("rseq: not reversible: " // dlr_7)
+       end block
        return
     end if
     out = sorted_entries(a, gca_count(m), .false., roots)

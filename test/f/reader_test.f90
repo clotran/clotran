@@ -57,12 +57,20 @@ contains
     v = gcr_read(text, no_roots)
     call vs_set(base + 1, v)
     if (gcr_has_error()) then
-       print '(A,A,A,A)', "FAIL - ", label, "read error: ", gcr_error()
+       block
+          character(len=:), allocatable :: dlr_1
+          call gcr_error(s=dlr_1)
+          print '(A,A,A,A)', "FAIL - ", label, "read error: ", dlr_1
+       end block
        all_ok = .false.
        call vs_leave(base)
        return
     end if
-    got = gcp_str(vs_get(base + 1), .true.)
+    block
+       character(len=:), allocatable :: dlr_2
+       call gcp_str(vs_get(base + 1), .true., s=dlr_2)
+       got = dlr_2
+    end block
     call vs_leave(base)
     if (got == text) then
        print '(A,A,A)', "ok   - ", label, got
@@ -162,8 +170,11 @@ contains
     ! digit is a name, however numeric it looks. floatPat requires a
     ! digit before the dot, so .5 is a symbol in Clojure too.
     v = gcr_read(".5", no_roots)
-    call ok("7j. .5 is a symbol, not 0.5: ", &
-         .not. gcr_has_error() .and. gcp_str(v, .true.) == ".5")
+    block
+       character(len=:), allocatable :: dlr_3
+       call gcp_str(v, .true., s=dlr_3)
+       call ok("7j. .5 is a symbol, not 0.5: ",  .not. gcr_has_error() .and. dlr_3 == ".5")
+    end block
     v = gcr_read("42", no_roots)
     call ok("7k. ...and a good number clears the error: ", .not. gcr_has_error())
   end subroutine check_invalid_numbers
@@ -229,7 +240,11 @@ contains
     text = text // ")"
     gc_torture = .true.
     call trip("6a. a 60-element list under torture: ", text)
-    call ok("6b. ...and the heap audits clean: ", gc_check_heap() == "")
+    block
+       character(len=:), allocatable :: dlr_4
+       call gc_check_heap(problem=dlr_4)
+       call ok("6b. ...and the heap audits clean: ", dlr_4 == "")
+    end block
     gc_torture = .false.
   end subroutine check_big_form_under_torture
 
@@ -259,7 +274,11 @@ contains
     call round("6f. metadata inside a list: ", "(a ^:m b c)", "(a b c)")
     call round("6g. an anonymous fn inside a list: ", "(a #(+ % 1) b)", &
          "(a (fn* [p1__1#] (+ p1__1# 1)) b)")
-    call ok("6h. ...and the heap audits clean: ", gc_check_heap() == "")
+    block
+       character(len=:), allocatable :: dlr_5
+       call gc_check_heap(problem=dlr_5)
+       call ok("6h. ...and the heap audits clean: ", dlr_5 == "")
+    end block
     gc_torture = .false.
   end subroutine check_nested_literals_under_torture
 
@@ -273,7 +292,11 @@ contains
     base = vs_enter(1)
     v = gcr_read(text, no_roots)
     call vs_set(base + 1, v)
-    got = gcp_str(vs_get(base + 1), .true.)
+    block
+       character(len=:), allocatable :: dlr_6
+       call gcp_str(vs_get(base + 1), .true., s=dlr_6)
+       got = dlr_6
+    end block
     call vs_leave(base)
     if (got == expected) then
        print '(A,A,A)', "ok   - ", label, got

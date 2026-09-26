@@ -57,9 +57,9 @@ contains
   ! The canonical form: sign dropped when the value is zero, leading
   ! zeros stripped, "+" removed. Everything else here ASSUMES its
   ! arguments are already canonical, and returns canonical.
-  pure function big_norm(s) result(o)
+  pure subroutine big_norm(s, o)
     character(len=*), intent(in) :: s
-    character(len=:), allocatable :: o
+    character(len=:), allocatable, intent(out) :: o
     integer :: i, start
     logical :: neg
     neg = .false.
@@ -82,13 +82,19 @@ contains
     end if
     o = s(i:)
     if (o == "0") return
-    if (neg) o = "-" // o
-  end function big_norm
+    if (neg) then
+       block
+          character(len=:), allocatable :: dlw
+          dlw = "-" // o
+          call move_alloc(dlw, o)
+       end block
+    end if
+  end subroutine big_norm
 
-  pure function big_zero() result(o)
-    character(len=:), allocatable :: o
+  pure subroutine big_zero(o)
+    character(len=:), allocatable, intent(out) :: o
     o = "0"
-  end function big_zero
+  end subroutine big_zero
 
   pure function big_is_neg(s) result(yes)
     character(len=*), intent(in) :: s
@@ -97,19 +103,19 @@ contains
     if (len(s) >= 1) yes = (s(1:1) == "-")
   end function big_is_neg
 
-  pure function big_abs(s) result(o)
+  pure subroutine big_abs(s, o)
     character(len=*), intent(in) :: s
-    character(len=:), allocatable :: o
+    character(len=:), allocatable, intent(out) :: o
     if (big_is_neg(s)) then
        o = s(2:)
     else
        o = s
     end if
-  end function big_abs
+  end subroutine big_abs
 
-  pure function big_neg(s) result(o)
+  pure subroutine big_neg(s, o)
     character(len=*), intent(in) :: s
-    character(len=:), allocatable :: o
+    character(len=:), allocatable, intent(out) :: o
     if (s == "0") then
        o = "0"
     else if (big_is_neg(s)) then
@@ -117,7 +123,7 @@ contains
     else
        o = "-" // s
     end if
-  end function big_neg
+  end subroutine big_neg
 
   ! ---- comparison ------------------------------------------------
 
@@ -149,7 +155,12 @@ contains
     else if (nb .and. .not. na) then
        c = 1
     else if (na) then
-       c = -cmp_abs(big_abs(a), big_abs(b))
+       block
+          character(len=:), allocatable :: dlr_1, dlr_2
+          call big_abs(a, o=dlr_1)
+          call big_abs(b, o=dlr_2)
+          c = -cmp_abs(dlr_1, dlr_2)
+       end block
     else
        c = cmp_abs(a, b)
     end if
@@ -160,9 +171,9 @@ contains
   ! These three take and return UNSIGNED decimal text. The signed
   ! operations below decide which to call.
 
-  pure function add_abs(a, b) result(o)
+  pure subroutine add_abs(a, b, o)
     character(len=*), intent(in) :: a, b
-    character(len=:), allocatable :: o
+    character(len=:), allocatable, intent(out) :: o
     integer :: la, lb, n, i, da, db, s, carry
     character(len=max(len(a), len(b)) + 1) :: buf
     la = len(a)
@@ -178,13 +189,17 @@ contains
        carry = s / 10
        buf(n - i:n - i) = achar(mod(s, 10) + 48)
     end do
-    o = big_norm(buf(1:n))
-  end function add_abs
+    block
+       character(len=:), allocatable :: dlr_3
+       call big_norm(buf(1:n), o=dlr_3)
+       o = dlr_3
+    end block
+  end subroutine add_abs
 
   ! a - b, where a >= b in magnitude.
-  pure function sub_abs(a, b) result(o)
+  pure subroutine sub_abs(a, b, o)
     character(len=*), intent(in) :: a, b
-    character(len=:), allocatable :: o
+    character(len=:), allocatable, intent(out) :: o
     integer :: la, lb, i, da, db, s, borrow
     character(len=len(a)) :: buf
     la = len(a)
@@ -203,12 +218,16 @@ contains
        end if
        buf(la - i:la - i) = achar(s + 48)
     end do
-    o = big_norm(buf)
-  end function sub_abs
+    block
+       character(len=:), allocatable :: dlr_4
+       call big_norm(buf, o=dlr_4)
+       o = dlr_4
+    end block
+  end subroutine sub_abs
 
-  pure function mul_abs(a, b) result(o)
+  pure subroutine mul_abs(a, b, o)
     character(len=*), intent(in) :: a, b
-    character(len=:), allocatable :: o
+    character(len=:), allocatable, intent(out) :: o
     integer :: la, lb, i, j, carry, cur
     integer, allocatable :: acc(:)
     character(len=len(a) + len(b)) :: buf
@@ -234,8 +253,12 @@ contains
     do i = 1, la + lb
        buf(la + lb - i + 1:la + lb - i + 1) = achar(acc(i) + 48)
     end do
-    o = big_norm(buf)
-  end function mul_abs
+    block
+       character(len=:), allocatable :: dlr_5
+       call big_norm(buf, o=dlr_5)
+       o = dlr_5
+    end block
+  end subroutine mul_abs
 
   ! a / b and a mod b, both unsigned, b /= 0. Schoolbook: bring down
   ! one digit at a time and subtract the divisor while it fits, which
@@ -253,53 +276,123 @@ contains
        else
           rem = rem // a(i:i)
        end if
-       rem = big_norm(rem)
+       block
+          character(len=:), allocatable :: dlr_6
+          call big_norm(rem, o=dlr_6)
+          rem = dlr_6
+       end block
        d = 0
        do while (cmp_abs(rem, b) >= 0)
-          rem = sub_abs(rem, b)
+          block
+             character(len=:), allocatable :: dlr_7
+             call sub_abs(rem, b, o=dlr_7)
+             rem = dlr_7
+          end block
           d = d + 1
        end do
        buf(i:i) = achar(d + 48)
     end do
-    q = big_norm(buf)
+    block
+       character(len=:), allocatable :: dlr_8
+       call big_norm(buf, o=dlr_8)
+       q = dlr_8
+    end block
     r = rem
   end subroutine divmod_abs
 
   ! ---- signed arithmetic -----------------------------------------
 
-  pure function big_add(a, b) result(o)
+  pure subroutine big_add(a, b, o)
     character(len=*), intent(in) :: a, b
-    character(len=:), allocatable :: o
+    character(len=:), allocatable, intent(out) :: o
     integer :: c
     if (big_is_neg(a) .eqv. big_is_neg(b)) then
-       o = add_abs(big_abs(a), big_abs(b))
-       if (big_is_neg(a)) o = big_neg(o)
+       block
+          character(len=:), allocatable :: dlr_9, dlr_10, dlr_11
+          call big_abs(a, o=dlr_9)
+          call big_abs(b, o=dlr_10)
+          call add_abs(dlr_9, dlr_10, o=dlr_11)
+          o = dlr_11
+       end block
+       if (big_is_neg(a)) then
+          block
+             character(len=:), allocatable :: dlr_12
+             call big_neg(o, o=dlr_12)
+             o = dlr_12
+          end block
+       end if
     else
-       c = cmp_abs(big_abs(a), big_abs(b))
+       block
+          character(len=:), allocatable :: dlr_13, dlr_14
+          call big_abs(a, o=dlr_13)
+          call big_abs(b, o=dlr_14)
+          c = cmp_abs(dlr_13, dlr_14)
+       end block
        if (c == 0) then
           o = "0"
        else if (c > 0) then
-          o = sub_abs(big_abs(a), big_abs(b))
-          if (big_is_neg(a)) o = big_neg(o)
+          block
+             character(len=:), allocatable :: dlr_15, dlr_16, dlr_17
+             call big_abs(a, o=dlr_15)
+             call big_abs(b, o=dlr_16)
+             call sub_abs(dlr_15, dlr_16, o=dlr_17)
+             o = dlr_17
+          end block
+          if (big_is_neg(a)) then
+             block
+                character(len=:), allocatable :: dlr_18
+                call big_neg(o, o=dlr_18)
+                o = dlr_18
+             end block
+          end if
        else
-          o = sub_abs(big_abs(b), big_abs(a))
-          if (big_is_neg(b)) o = big_neg(o)
+          block
+             character(len=:), allocatable :: dlr_19, dlr_20, dlr_21
+             call big_abs(b, o=dlr_19)
+             call big_abs(a, o=dlr_20)
+             call sub_abs(dlr_19, dlr_20, o=dlr_21)
+             o = dlr_21
+          end block
+          if (big_is_neg(b)) then
+             block
+                character(len=:), allocatable :: dlr_22
+                call big_neg(o, o=dlr_22)
+                o = dlr_22
+             end block
+          end if
        end if
     end if
-  end function big_add
+  end subroutine big_add
 
-  pure function big_sub(a, b) result(o)
+  pure subroutine big_sub(a, b, o)
     character(len=*), intent(in) :: a, b
-    character(len=:), allocatable :: o
-    o = big_add(a, big_neg(b))
-  end function big_sub
+    character(len=:), allocatable, intent(out) :: o
+    block
+       character(len=:), allocatable :: dlr_23, dlr_24
+       call big_neg(b, o=dlr_23)
+       call big_add(a, dlr_23, o=dlr_24)
+       o = dlr_24
+    end block
+  end subroutine big_sub
 
-  pure function big_mul(a, b) result(o)
+  pure subroutine big_mul(a, b, o)
     character(len=*), intent(in) :: a, b
-    character(len=:), allocatable :: o
-    o = mul_abs(big_abs(a), big_abs(b))
-    if (o /= "0" .and. (big_is_neg(a) .neqv. big_is_neg(b))) o = big_neg(o)
-  end function big_mul
+    character(len=:), allocatable, intent(out) :: o
+    block
+       character(len=:), allocatable :: dlr_25, dlr_26, dlr_27
+       call big_abs(a, o=dlr_25)
+       call big_abs(b, o=dlr_26)
+       call mul_abs(dlr_25, dlr_26, o=dlr_27)
+       o = dlr_27
+    end block
+    if (o /= "0" .and. (big_is_neg(a) .neqv. big_is_neg(b))) then
+       block
+          character(len=:), allocatable :: dlr_28
+          call big_neg(o, o=dlr_28)
+          o = dlr_28
+       end block
+    end if
+  end subroutine big_mul
 
   ! TRUNCATING, as BigInteger.divide and .remainder are: the quotient
   ! rounds toward zero and the remainder takes the DIVIDEND's sign, so
@@ -308,20 +401,41 @@ contains
   pure subroutine big_divmod(a, b, q, r)
     character(len=*), intent(in) :: a, b
     character(len=:), allocatable, intent(out) :: q, r
-    call divmod_abs(big_abs(a), big_abs(b), q, r)
-    if (q /= "0" .and. (big_is_neg(a) .neqv. big_is_neg(b))) q = big_neg(q)
-    if (r /= "0" .and. big_is_neg(a)) r = big_neg(r)
+    block
+       character(len=:), allocatable :: dlr_29, dlr_30
+       call big_abs(a, o=dlr_29)
+       call big_abs(b, o=dlr_30)
+       call divmod_abs(dlr_29, dlr_30, q, r)
+    end block
+    if (q /= "0" .and. (big_is_neg(a) .neqv. big_is_neg(b))) then
+       block
+          character(len=:), allocatable :: dlr_31
+          call big_neg(q, o=dlr_31)
+          q = dlr_31
+       end block
+    end if
+    if (r /= "0" .and. big_is_neg(a)) then
+       block
+          character(len=:), allocatable :: dlr_32
+          call big_neg(r, o=dlr_32)
+          r = dlr_32
+       end block
+    end if
   end subroutine big_divmod
 
   ! ---- conversions -----------------------------------------------
 
-  pure function big_from_i64(i) result(o)
+  pure subroutine big_from_i64(i, o)
     integer(I8), intent(in) :: i
-    character(len=:), allocatable :: o
+    character(len=:), allocatable, intent(out) :: o
     character(len=24) :: buf
     write(buf, '(I0)') i
-    o = big_norm(trim(buf))
-  end function big_from_i64
+    block
+       character(len=:), allocatable :: dlr_33
+       call big_norm(trim(buf), o=dlr_33)
+       o = dlr_33
+    end block
+  end subroutine big_from_i64
 
   ! Whether the value is inside [-2^63, 2^63-1]. Compared as TEXT
   ! against the bounds: reading it into an integer to find out is the

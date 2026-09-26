@@ -135,7 +135,7 @@
        hm("java.math.RoundingMode", "UNNECESSARY", HK_SELFKEY), &
        hm("clojure.lang.Numbers", "unchecked_dec", B_UDEC, "unchecked-dec"), &
        hm("clojure.lang.Numbers", "unchecked_int_dec", B_UDEC, "unchecked-dec") ]
-  type(hm), parameter :: HOST_STATICS_2(82) = [ &
+  type(hm), parameter :: HOST_STATICS_2(83) = [ &
        hm("clojure.lang.Numbers", "remainder", B_REM, "rem"), &
        hm("clojure.lang.Numbers", "unchecked_int_remainder", B_REM, "rem"), &
        hm("clojure.lang.Numbers", "quotient", B_QUOT, "quot"), &
@@ -177,10 +177,10 @@
        hm("clojure.lang.Var", "pushThreadBindings", B_PUSHTB, "push-thread-bindings"), &
        hm("clojure.lang.Var", "popThreadBindings", B_POPTB, "pop-thread-bindings"), &
        hm("clojure.lang.Var", "find", B_FINDVAR, "clotran-find-var"), &
-  ! One binding stack and one thread: a frame has nothing to clone, and the
-  ! form is written with parens, so it must be a call answering nil. DEVIATIONS.md 10.
-       hm("clojure.lang.Var", "cloneThreadBindingFrame", B_ALWAYS_NIL, "clotran-nil"), &
-       hm("clojure.lang.Var", "resetThreadBindingFrame", B_ALWAYS_NIL, "clotran-nil"), &
+  ! a thread's bindings are its own; binding-conveyor-fn carries a frame to another
+       hm("clojure.lang.Var", "cloneThreadBindingFrame", B_CLONETB, "clotran-clone-binding-frame"), &
+       hm("clojure.lang.Var", "resetThreadBindingFrame", B_RESETTB, "clotran-reset-binding-frame"), &
+       hm("clojure.lang.Var", "getThreadBindings", B_GETTBS, "clotran-thread-bindings"), &
   ! Var.intern CREATES the Var; a lookup here lost every protocol method.
        hm("clojure.lang.Var", "intern", B_VARINTERN, "clotran-var-intern"), &
        hm("java.lang.String", "format", B_FORMAT, "format"), &
@@ -398,7 +398,7 @@
        hm("clojure.lang.Numbers", "longs", B_IDENTITY, "identity"), &
        hm("clojure.lang.Numbers", "doubles", B_IDENTITY, "identity"), &
        hm("clojure.lang.Util", "arrayTypeToSymbol", B_ARRAYTYPESYM, "clotran-array-type-symbol") ]
-  type(hm), parameter :: HOST_STATICS(308) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
+  type(hm), parameter :: HOST_STATICS(309) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
   type(hm), parameter :: HOST_METHODS_1(91) = [ &
   ! Instance members. The target becomes the first argument, which is all
@@ -466,11 +466,10 @@
        hm("", "chunkedNext", B_CHUNK_NEXT, "clotran-chunked-next"), &
        hm("", "reduce", B_REDUCEINIT, "clotran-reduce"), &
        hm("", "hasRoot", B_HASROOT, "clotran-has-root"), &
-       ! Var.isBound is hasRoot OR a thread binding; there are no
-       ! thread bindings to ask about here, so the two are one row.
+       ! Var.isBound is hasRoot OR a binding on this thread
        ! (bound? v) is what needs it, and clojure.repl and
        ! clojure.reflect both call it.
-       hm("", "isBound", B_HASROOT, "clotran-has-root"), &
+       hm("", "isBound", B_ISBOUND, "clotran-is-bound"), &
        hm("", "addMethod", B_ADDMETHOD, "clotran-add-method"), &
        hm("", "removeMethod", B_REMOVEMETHOD, "clotran-remove-method"), &
   ! clotran's types form no class hierarchy: nil sends find-protocol-impl to its Object fallback.
@@ -514,10 +513,11 @@
        hm("", "resetMeta", B_RESETMETA, "clotran-reset-meta"), &
        hm("", "setMeta", B_RESETMETA, "clotran-reset-meta"), &
        hm("", "set", B_SETVAL, "clotran-set-val") ]
-  type(hm), parameter :: HOST_METHODS_2(77) = [ &
+  type(hm), parameter :: HOST_METHODS_2(78) = [ &
        hm("", "reset", B_SETVAL, "clotran-set-val"), &
        hm("", "bindRoot", B_BINDROOT, "clotran-bind-root"), &
        hm("", "getRawRoot", B_RAWROOT, "clotran-raw-root"), &
+       hm("", "getThreadBinding", B_GETTB, "clotran-thread-binding"), &
        hm("", "kvreduce", B_RTFN, "kvreduce-of"), &
        hm("", "swap", B_SWAPVAL, "clotran-swap-val"), &
        hm("", "isNaN", B_ISNAN, "clotran-is-nan"), &
@@ -601,4 +601,4 @@
        hm("", "isCancelled", B_TASKCANCELLED, "clotran-task-cancelled"), &
        hm("", "cancel", B_TASKCANCEL, "clotran-task-cancel"), &
        hm("", "availableProcessors", B_NPROCS, "clotran-processors") ]
-  type(hm), parameter :: HOST_METHODS(168) = [HOST_METHODS_1, HOST_METHODS_2]
+  type(hm), parameter :: HOST_METHODS(169) = [HOST_METHODS_1, HOST_METHODS_2]

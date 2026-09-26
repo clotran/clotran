@@ -65,17 +65,27 @@ module chemsol_pkg
        ' {:name "elgvn" :type :real8 :intent :in :rank 0} {:name "ephob" :type :real8 :intent :in :rank 0}' // &
        ' {:name "molname" :type :string :intent :in :rank 0} {:name "ssname" :type :string :intent :in :rank 0}]}]}' // &
        c_null_char
-  character(kind=c_char), target, save :: manifest_buf(len(manifest)) = transfer(manifest, [c_char_'a'], len(manifest))
+  ! filled at the first call, not initialised: flang will not fold transfer of a long string
+  character(kind=c_char), allocatable, target, save :: manifest_buf(:)
 contains
   function clotran_manifest() bind(C, name="clotran_manifest") result(p)
     type(c_ptr) :: p
+    integer :: i
+    if (.not. allocated(manifest_buf)) then
+       allocate(manifest_buf(len(manifest)))
+       do i = 1, len(manifest)
+          manifest_buf(i) = manifest(i:i)
+       end do
+    end if
     p = c_loc(manifest_buf)
   end function clotran_manifest
 
   ! a null-terminated string as Fortran text
-  function cstr(p) result(s)
+  ! a subroutine, not a function: gfortran keeps a function's deferred
+  ! result length in a static, shared by every thread (scripts/no-static-slen)
+  subroutine cstr(p, s)
     type(c_ptr), intent(in) :: p
-    character(len=:), allocatable :: s
+    character(len=:), allocatable, intent(out) :: s
     character(kind=c_char), pointer :: c(:)
     integer :: n
     call c_f_pointer(p, c, [huge(0)])
@@ -87,7 +97,7 @@ contains
     do n = 1, len(s)
        s(n:n) = c(n)
     end do
-  end function cstr
+  end subroutine cstr
 
   subroutine cs_entropy_shim(argc, argv) bind(C, name="cs_entropy_shim")
     integer(c_int), value :: argc
@@ -124,7 +134,7 @@ contains
     call c_f_pointer(argv(31), nq);    call c_f_pointer(argv(30), q, [nq])
     call c_f_pointer(argv(33), nqg);   call c_f_pointer(argv(32), q_gas, [nqg])
     call c_f_pointer(argv(34), n_reg1); call c_f_pointer(argv(35), drg); call c_f_pointer(argv(36), iprint)
-    vdw_path = cstr(argv(37)); input_file = cstr(argv(38))
+    call cstr(argv(37), vdw_path); call cstr(argv(38), input_file)
     call c_f_pointer(argv(39), input_skip)
     ! vdw.par on unit 44, the input on unit 45 positioned past the lines
     ! the caller read; both closed after, as ChemSolBind did
@@ -176,7 +186,7 @@ contains
     call c_f_pointer(argv(37), nvdwc6); call c_f_pointer(argv(36), vdwc6, [nvdwc6])
     call c_f_pointer(argv(38), vdwsl)
     call c_f_pointer(argv(40), xw1); call c_f_pointer(argv(41), xw2); call c_f_pointer(argv(39), xw, [xw1, xw2])
-    names = cstr(argv(42))
+    call cstr(argv(42), names)
     call c_f_pointer(argv(43), n_reg1); call c_f_pointer(argv(44), drg); call c_f_pointer(argv(45), drg_inner)
     call c_f_pointer(argv(46), rdcutl); call c_f_pointer(argv(47), out_cut); call c_f_pointer(argv(48), itl)
     ! the atom names: 8 characters each, n_reg1 of them at least
@@ -203,7 +213,11 @@ contains
     call c_f_pointer(argv(4), evqdq); call c_f_pointer(argv(5), elgwa); call c_f_pointer(argv(6), etds)
     call c_f_pointer(argv(7), evdw); call c_f_pointer(argv(8), ebw); call c_f_pointer(argv(9), elgvn)
     call c_f_pointer(argv(10), ephob)
-    molname = cstr(argv(11)); ssname = cstr(argv(12))
+    block
+      character(len=:), allocatable :: t
+      call cstr(argv(11), t); molname = t
+      call cstr(argv(12), t); ssname = t
+    end block
     call solvout(iterld, iprint, logical(do_gas), evqdq, elgwa, etds, evdw, ebw, elgvn, ephob, molname, ssname)
   end subroutine cs_solvout_shim
 end module chemsol_pkg

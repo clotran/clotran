@@ -29,7 +29,7 @@ Categories:
 | 7 | Recursion depth is ~600 frames, against Clojure's ~11,200 | host | `src/f/Eval.f90` |
 | 8 | RESOLVED -- multimethods dispatch with `isa?` and preferences | -- | `src/clj/clotran/multifn.cljf` |
 | 9 | RESOLVED -- sorted collections | -- | `src/f/Assoc.f90` |
-| 10 | Refs are mutable boxes; dynamic bindings are global | temporary | `src/f/Eval.f90` |
+| 10 | Refs are mutable boxes; `set!` of an unbound Var sets its root | temporary | `src/f/Eval.f90` |
 | 11 | Transients are the persistent collections | host | `src/f/Eval.f90` |
 | 12 | Five JVM-only libs are skipped by name, and not vendored | host | `src/f/Eval.f90` |
 | 13 | Protocol dispatch is uncached | host | `src/f/GC.f90` |
@@ -256,15 +256,27 @@ comparator is called through a hook Eval supplies, since ordering
 may run a Clojure fn; with none it is Clojure's `compare`, and keys
 it cannot order throw ClassCastException as on the JVM.
 
-## 10. Refs are mutable boxes, and dynamic bindings are global
+## 10. Refs are mutable boxes, and `set!` of an unbound Var sets its root
 
 `(ref x)` builds an atom: no transaction, no retry, no isolation.
-`dosync` calls its thunk. `push`/`popThreadBindings` keep one global
-stack where `Var.dvals` is a `ThreadLocal`.
+`dosync` calls its thunk. Single-threaded that is indistinguishable
+from the real thing; with threads it is not, which is why this is
+**temporary**.
 
-Single-threaded all three are indistinguishable from the real thing.
-With threads none of them is, which is why this is **temporary** and why
-PLAN.md step 5 is concurrency.
+Dynamic bindings are no longer part of this entry: since PLAN.md step
+14f each thread has its own, as `Var.dvals` is a `ThreadLocal` -- a
+stack of frames, each a map of Var to box, with the frame below merged
+in (Namespace.f90, `gcn_var_value`; GC.f90, `gc_stack%bindings`).
+`binding-conveyor-fn` carries a frame to a future through
+`cloneThreadBindingFrame`/`resetThreadBindingFrame`, and
+`get-thread-bindings`, `thread-bound?`, `bound-fn` and `var-set` give
+what `clj` gives. What differs: `set!` or `var-set` of a Var with no
+binding on this thread sets its ROOT, where Clojure throws "Can't
+change/establish root binding of: *x* with set". clotran's `load` does
+not bind `*warn-on-reflection*` and the rest the way `Compiler.load`
+does, so a file's `(set! *warn-on-reflection* true)` would otherwise be
+an error. Removal: bind those in `load` as `Compiler.load` does, then
+throw.
 
 ## 11. Transients are the persistent collections
 
@@ -1178,42 +1190,25 @@ a fn with no variadic arity spreads its arguments as before, bounded
 at 1,000,000 -- `(apply + (range))` is an error, not a hang, where the
 JVM would run out of memory.
 
-## 38. A future runs on the one thread there is, until it blocks
+## 38. RESOLVED -- a future runs on a thread of its own
 
-Clojure's `future` starts a thread; here it starts a TASK, a context
-of its own that runs right away, on the same OS thread, until it
-finishes or blocks -- on a promise, another future, or `Thread/sleep`
--- and then parks, to be resumed by whoever next waits (tasks.inc;
-NOTES "Threads over contexts"). Values come out the same and the
-oracle checks twenty of them. What differs:
+Until PLAN.md step 14f a future was a TASK run on the one OS thread
+there was, until it blocked, then parked. Now it starts on a thread of
+its own when it is made and runs beside whoever made it (tasks.inc):
+side effects happen in either order, a wait is a real wait (a condition
+variable, not a spin), and four `(future (clotran.thread/sleep 300))`
+take 306 ms together. Pinning is gone with the baton.
 
-- **Order.** Side effects of a future happen at its creation, up to
-  its first block, so `(do (future (println "a")) (println "b"))`
-  prints `a` then `b`, every time. On the JVM either order can happen.
-- **Pinning.** A future that blocks under a native frame -- inside a
-  callback `map`, `reduce` or `swap!` made -- cannot park: the Fortran
-  below it is not resumable. The other futures run there, nested,
-  but the MAIN context cannot, since it is what the future was
-  started from. Such a wait on something only the main context will
-  deliver is reported as a deadlock. At the top of a future's body, or
-  in a `let`, the same wait parks and works.
-- **Deadlock is an error.** `@(promise)` with nothing left to run
-  throws "deadlock: nothing left to run can make the promise ready"
-  where Clojure blocks forever.
-- **Sleeping spins.** With nothing runnable and a deadline still to
-  come, the waiter busy-waits on the clock; there is no other thread
-  to hand the CPU to.
-- **Bindings are shared.** DEVIATIONS 10 becomes observable: a future
-  sees a `binding` in force when it runs, which is the conveyance
-  Clojure's suite checks, but a parked future resumed after the
-  binding has been popped sees the root.
+What remains, and stays by choice:
+
+- **Deadlock is an error.** `@(promise)` with nothing left that could
+  deliver it throws "deadlock: nothing left to run can make the promise
+  or mailbox ready" where Clojure blocks forever. It is found by
+  counting: every live thread waiting, none with a deadline.
 - **`ExecutionException` carries the text, not the cause.**
-  `.getCause` is nil; the message is the failure's class and message.
-  `availableProcessors` answers 1.
-
-**Removal**: the `:os` impl of the thread protocol (PLAN.md) -- real
-threads over a collector that tolerates them -- for order and
-pinning; the rest are choices that would stay.
+  `.getCause` is nil, and the message is the failure's class and
+  message without ex-info's data map (`clj` says
+  `"clojure.lang.ExceptionInfo: boom {}"`).
 
 ## 39. A map entry's class is PersistentVector
 

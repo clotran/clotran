@@ -1283,6 +1283,26 @@ f. *The baton comes off interpreter code.* Tested by running the derived
    suite, the oracle and torture-mode GC with many threads at once, before
    anything else calls it done.
 
+   **Landed 2026-09-26.** A future starts on a thread of its own and runs
+   beside its maker; a wait is a condition-variable wait out of the
+   running mutators; deadlock is found by counting; lazy seqs and delays
+   run their bodies once across threads; `locking` is a per-object
+   monitor. Three things the baton had been hiding had to go first:
+   - **Dynamic bindings were global** (DEVIATIONS 10): `binding` wrote the
+     Var, so eight futures' `with-out-str` wrote into each other's
+     writers. Each thread now has its own stack of frames, as
+     `Var.dvals` is a ThreadLocal, conveyed by `binding-conveyor-fn`.
+   - **gfortran's static string lengths**: every call to a function
+     returning `character(len=:), allocatable` keeps its result length
+     in a static `slen.N`, whatever -frecursive says; `(str "k" 12)`
+     came back "k 12". All 98 such functions are subroutines with an
+     intent(out) argument now, and `scripts/no-static-slen` (in `make
+     test`) keeps it so. flang never had them.
+   - **A REPL waiting for a line** counted as a running mutator, so a
+     collection another thread needed waited for the keyboard.
+   Still open: d. Eight threads allocating contend on the one heap lock
+   and run slower than one; per-thread batches are next.
+
 **Not in this step**: a concurrent collector (the world stops for each
 collection), and a compacting one (objects never move, as now).
 

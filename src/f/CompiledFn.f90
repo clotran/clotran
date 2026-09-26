@@ -165,43 +165,45 @@ contains
           end if
        end if
     end if
-    ! the first read of pool h in this heap: flatten it
+    ! the first read of pool h in this heap: flatten it. Readers index
+    ! flat without a lock, so every write to it -- the table growing, a
+    ! pool filled -- is made with the world stopped; a second thread that
+    ! wanted the same pool finds it done.
     pools = gc_root_get(pool_root)
     if (.not. gcv_is(pools)) return
     if (h > gcv_count(pools)) return
+    call gc_grow_begin()
     if (.not. allocated(flat)) allocate(flat(max(16, h)))
     if (h > size(flat)) then
-       ! readers index flat without a lock: it moves with the world stopped
-       call gc_grow_begin()
-       if (h > size(flat)) then
-          allocate(bigger(max(2 * size(flat), h)))
-          do k = 1, size(flat)
-             if (allocated(flat(k)%e)) call move_alloc(flat(k)%e, bigger(k)%e)
-             bigger(k)%gen = flat(k)%gen
-          end do
-          call move_alloc(bigger, flat)
-       end if
-       call gc_grow_end()
+       allocate(bigger(max(2 * size(flat), h)))
+       do k = 1, size(flat)
+          if (allocated(flat(k)%e)) call move_alloc(flat(k)%e, bigger(k)%e)
+          bigger(k)%gen = flat(k)%gen
+       end do
+       call move_alloc(bigger, flat)
     end if
-    p = gcv_nth(pools, h - 1)
-    n = gcv_count(p)
-    if (allocated(flat(h)%e)) deallocate(flat(h)%e)
-    allocate(flat(h)%e(n))
-    do k = 1, n
-       flat(h)%e(k) = gcv_nth(p, k - 1)
-    end do
-    flat(h)%gen = gc_generation()
-    if (i >= 0 .and. i < n) v = flat(h)%e(i + 1)
+    if (flat(h)%gen /= gc_generation()) then
+       p = gcv_nth(pools, h - 1)
+       n = gcv_count(p)
+       if (allocated(flat(h)%e)) deallocate(flat(h)%e)
+       allocate(flat(h)%e(n))
+       do k = 1, n
+          flat(h)%e(k) = gcv_nth(p, k - 1)
+       end do
+       flat(h)%gen = gc_generation()
+    end if
+    if (i >= 0 .and. i < size(flat(h)%e)) v = flat(h)%e(i + 1)
+    call gc_grow_end()
   end function cf_pool_get
 
-  function cf_name(h) result(s)
+  subroutine cf_name(h, s)
     integer, intent(in) :: h
-    character(len=:), allocatable :: s
+    character(len=:), allocatable, intent(out) :: s
     s = ""
     if (.not. allocated(tbl)) return
     if (h < 1 .or. h > used) return
     if (allocated(tbl(h)%name)) s = tbl(h)%name
-  end function cf_name
+  end subroutine cf_name
 
   function cf_count() result(k)
     integer :: k

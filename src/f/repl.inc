@@ -47,7 +47,11 @@
           ! it is a request for more input.
           prompt = "#_=> "
        else
-          prompt = gcn_name(gcn_current(none)) // "=> "
+          block
+             character(len=:), allocatable :: dlr_1
+             call gcn_name(gcn_current(none), s=dlr_1)
+             prompt = dlr_1 // "=> "
+          end block
           if (repl_depth > 1) then
              write(dbuf, '(I0)') repl_depth - 1
              prompt = "[" // trim(dbuf) // "] " // prompt
@@ -55,7 +59,11 @@
        end if
        write(*, '(A)', advance='no') prompt
        flush(6)
+       ! out of the running mutators while it waits for a line: a
+       ! collection another thread needs must not wait for the keyboard
+       call gc_mutator_leave()
        read(*, '(A)', iostat=ios, size=size_read, advance='no') buf
+       call gc_mutator_enter()
        ! End of file, or a read error -- gfortran reports a read AFTER
        ! the end as a positive code, and looping on it never ends. An
        ! empty line is end of RECORD with size 0, which is a line.
@@ -74,8 +82,16 @@
           ! Every unclosed-form message the reader produces begins this
           ! way -- an unclosed list, vector, map, string or regex. Any
           ! other reader error is real.
-          if (index(gcr_error(), "EOF while reading") == 1) cycle
-          print '(A,A)', "reader error: ", gcr_error()
+          block
+             character(len=:), allocatable :: dlr_2
+             call gcr_error(s=dlr_2)
+             if (index(dlr_2, "EOF while reading") == 1) cycle
+          end block
+          block
+             character(len=:), allocatable :: dlr_3
+             call gcr_error(s=dlr_3)
+             print '(A,A)', "reader error: ", dlr_3
+          end block
           pending = ""
           cycle
        end if
@@ -88,11 +104,26 @@
        call vs_set(vst, base + 3, result)
        if (resume_pending) exit
        if (tctx%has_error) then
-          print '(A,A)', "error: ", gce_error()
-          if (len(gce_trace()) > 0) write(*, '(A)', advance='no') gce_trace()
+          block
+             character(len=:), allocatable :: dlr_4
+             call gce_error(s=dlr_4)
+             print '(A,A)', "error: ", dlr_4
+          end block
+          block
+             character(len=:), allocatable :: dlr_5, dlr_6
+             call gce_trace(s=dlr_5)
+             if (len(dlr_5) > 0) then
+                call gce_trace(s=dlr_6)
+                write(*, '(A)', advance='no') dlr_6
+             end if
+          end block
           cycle
        end if
-       print '(A)', gcp_str(vs_get(vst, base + 3), .true.)
+       block
+          character(len=:), allocatable :: dlr_7
+          call gcp_str(vs_get(vst, base + 3), .true., s=dlr_7)
+          print '(A)', dlr_7
+       end block
     end do
     if (resume_pending) then
        resume_pending = .false.

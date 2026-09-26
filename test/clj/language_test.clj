@@ -1034,15 +1034,15 @@
 
 ;;; ---- tasks: futures that yield ------------------------------------
 ;;
-;; A future is a task in a context of its own (tasks.inc). It runs
-;; when made, until it blocks; then it is parked, and resumed by
-;; whoever waits for it. Host checks: when it runs is ours; the values
-;; are the oracle's.
+;; A future is a task on a thread of its own (tasks.inc), running at
+;; once beside whoever made it (PLAN.md step 14f): blocked on a promise
+;; it cannot finish, and once the promise is delivered it goes on by
+;; itself -- when it finishes is not ours to check, as it is not on the
+;; JVM. The values are the oracle's.
 (def tk-ping (promise)) (def tk-pong (promise))
 (def tk-t1 (future (let [x 10 y @tk-ping] (deliver tk-pong (+ x y)) :t1-done)))
 (check "a future runs until it blocks, then is parked" (future-done? tk-t1) false)
 (deliver tk-ping 5)
-(check "and stays parked until something waits" (future-done? tk-t1) false)
 (check "resumed, it has its locals" [@tk-pong @tk-t1] [15 :t1-done])
 (require 'clotran.thread)
 (def tk-t5 (future (clotran.thread/sleep 5) 7))
@@ -1084,9 +1084,12 @@
 (check "the default kind is green, and it takes a closure" [(th/kind-name) (th/-takes th/green)] [:green :fn])
 (def th-a (th/spawn (fn [] (+ 1 2))))
 (check "spawn answers a handle: join, deref and status" [(th/join th-a) @th-a (th/status th-a) (realized? th-a)] [3 3 :done true])
+;; Threads run at once (PLAN.md step 14f): a new one is not yet waiting
+;; when spawn returns, so a check of "parked" gives it up to 2 s to get there
+(defn th-settled [h] (loop [i 0] (let [s (th/status h)] (if (or (= s :parked) (> i 400)) s (do (clotran.thread/sleep 5) (recur (inc i)))))))
 (def th-box (promise))
 (def th-b (th/spawn (fn [] @th-box)))
-(check "a thread blocked on a promise is parked" (th/status th-b) :parked)
+(check "a thread blocked on a promise is parked" (th-settled th-b) :parked)
 (deliver th-box 7)
 (check "and joins with its value, in time" (th/join th-b 100 :late) 7)
 (check "join with a timeout answers the timeout value" (th/join (th/spawn (fn [] @(promise))) 5 :late) :late)
@@ -1096,7 +1099,7 @@
 ;; a worker that squares what it is sent and replies to the sender
 (def th-worker (th/spawn (fn [] (loop [] (let [[from x] (th/receive)]
                                            (if (= x :stop) :stopped (do (th/send! from (* x x)) (recur))))))))
-(check "a worker waiting for mail is parked" (th/status th-worker) :parked)
+(check "a worker waiting for mail is parked" (th-settled th-worker) :parked)
 (th/send! th-worker [(th/self) 4])
 (check "a reply arrives in the caller's mailbox" (th/receive) 16)
 (th/send! th-worker [(th/self) 5])

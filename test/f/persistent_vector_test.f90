@@ -164,7 +164,11 @@ contains
        v = gcv_conj(v, gc_int(i), roots)
     end do
     roots(1) = v
-    call ok("6a. the heap audits clean under torture: ", gc_check_heap() == "")
+    block
+       character(len=:), allocatable :: dlr_1
+       call gc_check_heap(problem=dlr_1)
+       call ok("6a. the heap audits clean under torture: ", dlr_1 == "")
+    end block
     bad = 0
     do i = 0, 99
        if (nth_int(v, i) /= i) bad = bad + 1

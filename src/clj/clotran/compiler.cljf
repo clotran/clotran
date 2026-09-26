@@ -158,6 +158,8 @@
        integer(c_int), value :: dst, op, fn, a, b, n
        integer(c_int) :: st
      end function clotran_arith
+     subroutine clotran_poll() bind(C, name=\"clotran_poll\")
+     end subroutine clotran_poll
      subroutine clotran_captures(fr) bind(C, name=\"clotran_captures\")
        import :: c_int
        integer(c_int), value :: fr
@@ -922,7 +924,8 @@ end module clotran_rt_decl
   clotran code goes on elsewhere. A runtime call inside a condition has
   no room for a guard, and the loop keeps the baton."
   [lines]
-  (let [runtime? #(str/includes? % "clotran_")
+  (let [poll? #(str/includes? % "call clotran_poll()")
+        runtime? #(and (str/includes? % "clotran_") (not (poll? %)))
         ;; a statement -- an assignment or a call -- has room for a guard
         ;; in front of it; an if, else or do line does not
         plain? #(re-find #"^\s*(call |\w+ = )" %)
@@ -933,9 +936,10 @@ end module clotran_rt_decl
                (not-any? #(and (runtime? %) (top-level? %)) lines))
       (concat ["call clotran_native_begin(nme, nrel)"]
               (mapcat (fn [l]
-                        (if (runtime? l)
-                          [(str (re-find #"^\s*" l) "if (nrel /= 0) call clotran_reacquire(nme, nrel)") l]
-                          [l]))
+                        (cond
+                          (poll? l) [(str (re-find #"^\s*" l) "if (nrel == 0) call clotran_poll()")]
+                          (runtime? l) [(str (re-find #"^\s*" l) "if (nrel /= 0) call clotran_reacquire(nme, nrel)") l]
+                          :else [l]))
                       lines)
               ["if (nrel /= 0) call clotran_reacquire(nme, nrel)"]))))
 
@@ -1114,7 +1118,7 @@ end module clotran_rt_decl
                       flag (str "recur" (count (:flags st)))
                       st (update st :flags conj flag)
                       [bc bs st] (gen (nth kids n) (assoc st :loop flag))]
-                  (let [loop-lines (concat ["do" (str "   " flag " = 0")]
+                  (let [loop-lines (concat ["do" (str "   " flag " = 0") "   call clotran_poll()"]
                                            (map #(str "   " %) bc)
                                            [(str "   if (" flag " == 0) exit") "end do"])
                         released (when outermost? (release-around loop-lines))
@@ -1297,7 +1301,7 @@ end module clotran_rt_decl
     [(concat (for [i (range nfixed)]
                (str "call clotran_frame_put(b + 1, " (+ start i) "_c_int, argbase + " (inc i) ")"))
              rest-code
-             ["do" (str "   " flag " = 0")]
+             ["do" (str "   " flag " = 0") "   call clotran_poll()"]
              (map #(str "   " %) code)
              [(str "   if (" flag " == 0) exit") "end do"
               (str "call clotran_copy(dst, b + " res ")")])

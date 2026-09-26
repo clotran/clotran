@@ -27,6 +27,7 @@ module Threads
   public :: th_cond_init, th_cond_wait, th_cond_broadcast
   public :: th_start, th_join, th_spawn, th_exit, th_ncpus
   public :: th_key, th_key_create, th_key_set, th_key_get
+  public :: th_cond_timedwait, th_sleep_ms
 
   integer, parameter :: OPAQUE_WORDS = 16   ! 128 bytes
   ! the platform's sysconf name for online processors (Makefile)
@@ -77,6 +78,27 @@ module Threads
        integer(PTHREAD_KEY_KIND), value :: k
        type(c_ptr) :: v
      end function pthread_getspecific
+     ! struct timespec is two C longs on macOS (sys/_types/_timespec.h)
+     ! and on 64-bit glibc; CLOCK_REALTIME is 0 on both (_time.h,
+     ! bits/time.h)
+     function pthread_cond_timedwait(c, m, ts) bind(C, name="pthread_cond_timedwait") result(r)
+       import :: c_ptr, c_int, c_long
+       type(c_ptr), value :: c, m
+       integer(c_long), intent(in) :: ts(2)
+       integer(c_int) :: r
+     end function pthread_cond_timedwait
+     function clock_gettime(id, ts) bind(C, name="clock_gettime") result(r)
+       import :: c_int, c_long
+       integer(c_int), value :: id
+       integer(c_long), intent(out) :: ts(2)
+       integer(c_int) :: r
+     end function clock_gettime
+     function nanosleep(req, rem) bind(C, name="nanosleep") result(r)
+       import :: c_int, c_long, c_ptr
+       integer(c_long), intent(in) :: req(2)
+       type(c_ptr), value :: rem
+       integer(c_int) :: r
+     end function nanosleep
      function pthread_join(t, ret) bind(C, name="pthread_join") result(r)
        import :: c_ptr, c_int
        type(c_ptr), value :: t, ret
@@ -240,6 +262,34 @@ contains
     type(th_key), intent(in) :: key
     th_key_get = pthread_getspecific(key%k)
   end function th_key_get
+
+  ! Wait on c at most ms milliseconds: .true. when woken, .false. when
+  ! the time ran out. Spurious wake-ups happen: callers re-check.
+  logical function th_cond_timedwait(c, l, ms)
+    type(th_cond), target, intent(inout) :: c
+    type(th_lock), target, intent(inout) :: l
+    integer(c_long), intent(in) :: ms
+    integer(c_long) :: ts(2)
+    integer(c_int) :: r
+    r = clock_gettime(0_c_int, ts)
+    ts(1) = ts(1) + ms / 1000_c_long
+    ts(2) = ts(2) + mod(ms, 1000_c_long) * 1000000_c_long
+    if (ts(2) >= 1000000000_c_long) then
+       ts(1) = ts(1) + 1
+       ts(2) = ts(2) - 1000000000_c_long
+    end if
+    th_cond_timedwait = pthread_cond_timedwait(c_loc(c%raw), c_loc(l%raw), ts) == 0
+  end function th_cond_timedwait
+
+  ! Sleep this thread ms milliseconds.
+  subroutine th_sleep_ms(ms)
+    integer(c_long), intent(in) :: ms
+    integer(c_long) :: ts(2)
+    integer(c_int) :: r
+    ts(1) = ms / 1000_c_long
+    ts(2) = mod(ms, 1000_c_long) * 1000000_c_long
+    r = nanosleep(ts, c_null_ptr)
+  end subroutine th_sleep_ms
 
   logical function th_join(t)
     type(th_thread), intent(inout) :: t

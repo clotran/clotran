@@ -174,7 +174,11 @@ contains
     gc_torture = .true.
     m = build(30, no_roots)
     roots(1) = m
-    call ok("7a. the heap audits clean across promotion: ", gc_check_heap() == "")
+    block
+       character(len=:), allocatable :: dlr_1
+       call gc_check_heap(problem=dlr_1)
+       call ok("7a. the heap audits clean across promotion: ", dlr_1 == "")
+    end block
     call ok_int("7b. ...with the count right: ", gca_count(m), 30)
     bad = 0
     do i = 1, 30

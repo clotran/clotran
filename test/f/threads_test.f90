@@ -119,6 +119,30 @@ program threads_test
      fails = fails + 1
   end if
 
+  ! a timed wait nobody signals times out, after about the time asked
+  block
+    integer(8) :: t0, t1, rate
+    ok = th_lock_acquire(lk)
+    call system_clock(t0, rate)
+    if (th_cond_timedwait(cv, lk, 50_c_long)) then
+       print '(a)', 'FAIL - a timed wait nobody signalled did not time out'
+       fails = fails + 1
+    end if
+    call system_clock(t1)
+    ok = th_lock_release(lk)
+    if (real(t1 - t0) * 1000.0 / real(rate) < 45.0) then
+       print '(a)', 'FAIL - a 50 ms timed wait returned early'
+       fails = fails + 1
+    end if
+    call system_clock(t0)
+    call th_sleep_ms(30_c_long)
+    call system_clock(t1)
+    if (real(t1 - t0) * 1000.0 / real(rate) < 28.0) then
+       print '(a)', 'FAIL - a 30 ms sleep returned early'
+       fails = fails + 1
+    end if
+  end block
+
   if (fails == 0) then
      print '(a)', ' THREADS TESTS PASSED'
   else

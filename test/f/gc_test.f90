@@ -177,7 +177,11 @@ contains
     s = gc_str("a string on the heap", no_roots)
     roots(1) = s
     call gc_collect(roots)
-    call ok("8a. a rooted string survives: ", gc_text(s) == "a string on the heap")
+    block
+       character(len=:), allocatable :: dlr_1
+       call gc_text(s, s=dlr_1)
+       call ok("8a. a rooted string survives: ", dlr_1 == "a string on the heap")
+    end block
     call gc_collect(no_roots)
     call ok_int("8b. ...and is released when unreachable: ", gc_live_count(), 0)
   end subroutine check_string_release
@@ -207,7 +211,11 @@ contains
     c = gc_cdr(old)
     call ok("19a. a young value stored into an old object survives young collections: ", &
          gc_kind(c) == OBJ_CONS .and. car_int(c) == 42)
-    call ok("19b. ...and the heap has no dangling reference: ", len(gc_check_heap()) == 0)
+    block
+       character(len=:), allocatable :: dlr_2
+       call gc_check_heap(problem=dlr_2)
+       call ok("19b. ...and the heap has no dangling reference: ", len(dlr_2) == 0)
+    end block
   end subroutine check_write_barrier
 
   subroutine check_torture_keeps_live_data()
@@ -237,8 +245,11 @@ contains
     call gc_init(8)
     gc_torture = .true.
     c = gc_cons(gc_str("inner", roots), gc_int(7), roots)
-    call ok("10a. an argument built at the call site survives: ", &
-         gc_text(gc_car(c)) == "inner")
+    block
+       character(len=:), allocatable :: dlr_3
+       call gc_text(gc_car(c), s=dlr_3)
+       call ok("10a. an argument built at the call site survives: ",  dlr_3 == "inner")
+    end block
     call ok_int("10b. ...and the cell around it is intact: ", cdr_int(c), 7)
     gc_torture = .false.
   end subroutine check_argument_is_rooted
@@ -257,8 +268,16 @@ contains
     roots(1) = clo
     call gc_collect(roots)
     call ok_int("11a. an object reports its kind: ", gc_kind(clo), OBJ_CLOSURE)
-    call ok("11b. ...its slots survive collection: ", gc_text(gc_slot(clo, 1)) == "params")
-    call ok("11c. ...all of them: ", gc_text(gc_slot(clo, 2)) == "body")
+    block
+       character(len=:), allocatable :: dlr_4
+       call gc_text(gc_slot(clo, 1), s=dlr_4)
+       call ok("11b. ...its slots survive collection: ", dlr_4 == "params")
+    end block
+    block
+       character(len=:), allocatable :: dlr_5
+       call gc_text(gc_slot(clo, 2), s=dlr_5)
+       call ok("11c. ...all of them: ", dlr_5 == "body")
+    end block
     call ok_int("11d. ...and its inline integer: ", gc_i1(clo), 1)
     call ok_int("11e. an unset slot is nil: ", slot_tag(clo, 4), GCT_NIL)
   end subroutine check_object_shapes
@@ -283,8 +302,11 @@ contains
     call gc_collect(roots)
     call ok_int("12a. a value run keeps its length: ", gc_vec_len(gc_slot(m, 1)), 3)
     call ok_int("12b. ...and its contents: ", vec_int(gc_slot(m, 2), 2), 20)
-    call ok("12c. ...including heap values inside it: ", &
-         gc_text(gc_vec_get(gc_slot(m, 1), 1)) == "k")
+    block
+       character(len=:), allocatable :: dlr_6
+       call gc_text(gc_vec_get(gc_slot(m, 1), 1), s=dlr_6)
+       call ok("12c. ...including heap values inside it: ",  dlr_6 == "k")
+    end block
     call gc_collect(no_roots)
     call ok_int("12d. the whole map is collected when unreachable: ", gc_live_count(), 0)
   end subroutine check_value_runs
@@ -305,8 +327,11 @@ contains
     call gc_collect(roots)
     ! 1 run + 20 cons cells + 20 strings + 1 outer object.
     call ok_int("13a. object -> run -> object -> text all survive: ", gc_live_count(), 42)
-    call ok("13b. ...and the text is intact: ", &
-         gc_text(gc_car(gc_vec_get(gc_slot(outer, 1), 7))) == "deep")
+    block
+       character(len=:), allocatable :: dlr_7
+       call gc_text(gc_car(gc_vec_get(gc_slot(outer, 1), 7)), s=dlr_7)
+       call ok("13b. ...and the text is intact: ",  dlr_7 == "deep")
+    end block
     call ok_int("13c. ...as are the immediates beside it: ", &
          cdr_int(gc_vec_get(gc_slot(outer, 1), 7)), 7)
   end subroutine check_deep_structure
@@ -324,7 +349,11 @@ contains
        roots(1) = head
        head = gc_cons(gc_str("x", roots), head, roots)
     end do
-    call ok("14a. the heap passes its own audit under torture: ", gc_check_heap() == "")
+    block
+       character(len=:), allocatable :: dlr_8
+       call gc_check_heap(problem=dlr_8)
+       call ok("14a. the heap passes its own audit under torture: ", dlr_8 == "")
+    end block
     call ok_int("14b. ...with the structure still whole: ", chain_length(head), 100)
     gc_torture = .false.
   end subroutine check_heap_self_check
@@ -354,8 +383,11 @@ contains
     reg = gc_global_get(g)
     ns = gc_vec_get(reg, 1)
     var = gc_slot(ns, 2)
-    call ok("15a. a namespace survives on the global root alone: ", &
-         gc_text(gc_slot(ns, 1)) == "user")
+    block
+       character(len=:), allocatable :: dlr_9
+       call gc_text(gc_slot(ns, 1), s=dlr_9)
+       call ok("15a. a namespace survives on the global root alone: ",  dlr_9 == "user")
+    end block
     call ok_int("15b. ...with its Var still reachable through it: ", gc_kind(var), OBJ_VAR)
     call ok_int("15c. ...and the Var's root binding intact: ", slot_int(var, 1), 41)
 
@@ -379,8 +411,11 @@ contains
     call gc_global_set(g, bigger)
     call gc_collect(no_roots)
     ns = gc_vec_get(gc_global_get(g), 1)
-    call ok("15f. a grown registry still roots its namespaces: ", &
-         gc_text(gc_slot(ns, 1)) == "user")
+    block
+       character(len=:), allocatable :: dlr_10
+       call gc_text(gc_slot(ns, 1), s=dlr_10)
+       call ok("15f. a grown registry still roots its namespaces: ",  dlr_10 == "user")
+    end block
 
     ! And it is a root, not a leak: drop the namespace and it goes.
     call gc_vec_set(gc_global_get(g), 1, gc_nil())
@@ -399,7 +434,11 @@ contains
        call gc_vec_set(binds, i, &
             gc_obj(OBJ_VAR, [gc_int(i), gc_nil(), gc_nil(), gc_sym("v", no_roots)], no_roots))
     end do
-    call ok("15h. the heap audits clean rooted only by a global: ", gc_check_heap() == "")
+    block
+       character(len=:), allocatable :: dlr_11
+       call gc_check_heap(problem=dlr_11)
+       call ok("15h. the heap audits clean rooted only by a global: ", dlr_11 == "")
+    end block
     call ok_int("15i. ...and every Var survived every collection: ", var_sum(binds), 1275)
     gc_torture = .false.
   end subroutine check_namespaces
@@ -417,12 +456,20 @@ contains
     end do
     bad = 0
     do i = 1, 200
-       if (gc_text(gc_car(kept(i))) /= "keep") bad = bad + 1
+       block
+          character(len=:), allocatable :: dlr_12
+          call gc_text(gc_car(kept(i)), s=dlr_12)
+          if (dlr_12 /= "keep") bad = bad + 1
+       end block
        if (cdr_int(kept(i)) /= i) bad = bad + 1
     end do
     call ok_int("16a. grow-only keeps every unrooted allocation: ", bad, 0)
     call ok_int("16b. ...and never collected: ", gc_collections, 0)
-    call ok("16c. ...with the heap still sound: ", gc_check_heap() == "")
+    block
+       character(len=:), allocatable :: dlr_13
+       call gc_check_heap(problem=dlr_13)
+       call ok("16c. ...with the heap still sound: ", dlr_13 == "")
+    end block
     gc_no_collect = .false.
   end subroutine check_grow_only
 
@@ -441,8 +488,11 @@ contains
     call vs_set(base + 1, gc_str("alpha", no_roots))
     call vs_set(base + 2, gc_cons(gc_int(1), gc_int(2), no_roots))
     call gc_collect(no_roots)
-    call ok("17a. a frame's slots survive collection: ", &
-         gc_text(vs_get(base + 1)) == "alpha")
+    block
+       character(len=:), allocatable :: dlr_14
+       call gc_text(vs_get(base + 1), s=dlr_14)
+       call ok("17a. a frame's slots survive collection: ",  dlr_14 == "alpha")
+    end block
     call ok_int("17b. ...including structure: ", car_int(vs_get(base + 2)), 1)
     call ok_int("17c. an unset slot is nil: ", vs_tag(base + 3), GCT_NIL)
 
@@ -466,15 +516,22 @@ contains
        if (cdr_int(vs_get(b2 + i)) /= i) bad = bad + 1
     end do
     call ok_int("17f. the stack grows and keeps every slot: ", bad, 0)
-    call ok("17g. ...and the outer frame is untouched: ", &
-         gc_text(vs_get(base + 1)) == "outer")
+    block
+       character(len=:), allocatable :: dlr_15
+       call gc_text(vs_get(base + 1), s=dlr_15)
+       call ok("17g. ...and the outer frame is untouched: ",  dlr_15 == "outer")
+    end block
 
     ! Torture: collect at every allocation, rooted only by the stack.
     gc_torture = .true.
     do i = 1, 100
        call vs_set(b2 + i, gc_cons(gc_str("x", no_roots), gc_int(i * 2), no_roots))
     end do
-    call ok("17h. rooted only by the stack, under torture: ", gc_check_heap() == "")
+    block
+       character(len=:), allocatable :: dlr_16
+       call gc_check_heap(problem=dlr_16)
+       call ok("17h. rooted only by the stack, under torture: ", dlr_16 == "")
+    end block
     call ok_int("17i. ...with values intact: ", cdr_int(vs_get(b2 + 50)), 100)
     gc_torture = .false.
 
@@ -596,7 +653,11 @@ contains
        if (slot_int(gc_global_get(handle(i)), 1) /= i) values_ok = .false.
     end do
     call ok("18c. a root survives the table growing under it: ", values_ok)
-    call ok("18d. ...and the heap is still sound: ", gc_check_heap() == "")
+    block
+       character(len=:), allocatable :: dlr_17
+       call gc_check_heap(problem=dlr_17)
+       call ok("18d. ...and the heap is still sound: ", dlr_17 == "")
+    end block
   end subroutine check_global_root_growth
 
 end program gc_test
