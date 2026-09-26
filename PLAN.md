@@ -1029,6 +1029,19 @@ only `defn` forms compile. In order:
       is c -- the chunk loop's `.nth` and `.add`, `conj!`'s `.conj`.
    c. `:dot` -- interop calls from compiled code, through the host's
       own dispatch.
+      BUILT 2026-09-25: the target and arguments into slots, then
+      dot_dispatch with the node from the pool (the host's pool walk
+      treats N_DOT as both an entry and a compiled subtree).
+      compiler-check 193 of 193. into/map 1493 -> 1474 ms, 61 -> 53
+      interpreted steps an element -- and the rest is found: `map` alone
+      is 8 an element, `into` over a range 4, but REDUCING OVER A LAZY
+      SEQ is 48 (`(reduce + (map inc ...))`; over a vector, 0). It is
+      clojure/core/protocols.clj's internal-reduce for chunked seqs,
+      which is inside `extend-protocol`: not a defn, so never compiled,
+      and with no Var to install a compiled fn into. Next: compile the
+      fn literals of top-level extend / extend-protocol / extend-type
+      forms and put the compiled fns into the protocol's method maps at
+      load -- the loader's second kind of install.
    And fetching the stack once per generated procedure, passed to every
    runtime call: the thread-key lookups are ~20% of a compiled call.
 2. The heap image (step 5, stage 3). Saving the heap after compiled

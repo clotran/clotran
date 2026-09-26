@@ -144,6 +144,11 @@
        character(kind=c_char), intent(in) :: name(*)
        integer(c_int) :: st
      end function clotran_new
+     function clotran_dot(dst, node, tv, argbase, nargs, from) bind(C, name=\"clotran_dot\") result(st)
+       import :: c_int
+       integer(c_int), value :: dst, node, tv, argbase, nargs, from
+       integer(c_int) :: st
+     end function clotran_dot
      subroutine clotran_captures(fr) bind(C, name=\"clotran_captures\")
        import :: c_int
        integer(c_int), value :: fr
@@ -229,7 +234,7 @@ end module clotran_rt_decl
 (def ^:private compiled-ops
   "The node kinds the generator emits code for. Everything else goes
   through the escape hatch, which is slower and still correct."
-  #{:const :local :if :do :call :var :let :loop :recur :fn :new})
+  #{:const :local :if :do :call :var :let :loop :recur :fn :new :dot})
 
 
 (defn- pooled
@@ -1027,6 +1032,29 @@ end module clotran_rt_decl
                  [(concat ac
                           [(str "st = clotran_new(b + " r ", ctext(" (fort-str cname) "), " (count cname)
                                 "_c_int, b + " (if (zero? n) 1 (dec (first blk))) ", " n "_c_int)")]
+                          err-return)
+                  r st])
+
+          ;; INTEROP, (. target member args...): the target -- unless
+          ;; the node names a class -- and the arguments into slots, then
+          ;; the interpreter's own dispatch with the node from the pool
+          :dot (let [kids (:children nd)
+                     cls? (symbol? (:p2 nd))
+                     from (if cls? 0 1)
+                     node-slot (get (:pool st) {:kind :node :value (:node nd)})
+                     [tc ts st] (if cls? [[] 1 st] (gen (first kids) st))
+                     args (drop from kids)
+                     n (count args)
+                     [blk st] (reduce (fn [[bl st] _] (let [[s st'] (fresh st)] [(conj bl s) st']))
+                                      [[] st] (range n))
+                     [ac st] (reduce (fn [[code st] [k d]]
+                                       (let [[c st'] (gen-into k d st)] [(into code c) st']))
+                                     [[] st] (map vector args blk))
+                     [r st] (fresh st)]
+                 (when-not node-slot (throw (ex-info "an interop node missing from the pool" {})))
+                 [(concat tc ac
+                          [(str "st = clotran_dot(b + " r ", b + " node-slot ", b + " ts ", b + "
+                                (if (zero? n) 1 (dec (first blk))) ", " n "_c_int, " from "_c_int)")]
                           err-return)
                   r st])
 

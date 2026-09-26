@@ -380,7 +380,7 @@ module Eval
   public :: gce_main_bindings, gce_install_compiled, gce_raise_arity_named
   public :: gce_native_begin, gce_native_end
   public :: gce_analyze, gce_trace
-  public :: gce_ctx_new, gce_ctx_switch, gce_ctx_current, gce_current_fn, gce_new_slots
+  public :: gce_ctx_new, gce_ctx_switch, gce_ctx_current, gce_current_fn, gce_new_slots, gce_dot_slots
   public :: gce_repl
   public :: gce_set_home, gce_home
   public :: gce_apply, gce_env, gce_exec_node, gce_apply_slots
@@ -14069,7 +14069,7 @@ contains
     integer, intent(in) :: k
     ! N_FN since compiled closures (PLAN.md step 10, a): its bodies are
     ! walked, and its constants are the enclosing fn's
-    pool_compiled_kind = any(k == [N_CONST, N_LOCAL, N_IF, N_DO, N_CALL, N_VAR, N_LET, N_LOOP, N_RECUR, N_FN, N_NEW])
+    pool_compiled_kind = any(k == [N_CONST, N_LOCAL, N_IF, N_DO, N_CALL, N_VAR, N_LET, N_LOOP, N_RECUR, N_FN, N_NEW, N_DOT])
   end function pool_compiled_kind
 
   ! A constant the generated code writes into its own source (the
@@ -14255,6 +14255,17 @@ contains
        end block
     else if (k == N_VAR) then
        call pool_add(pb, "var", gc_slot(vs_get(vst, b + 1), 2), h)
+    else if (k == N_DOT) then
+       ! interop: the node itself for the dispatch, then its children
+       call pool_add(pb, "node", vs_get(vst, b + 1), h)
+       kids = gc_slot(vs_get(vst, b + 1), 1)
+       call vs_set(vst, b + 2, kids)
+       if (gcv_is(kids)) then
+          call fp_mix(h, int(gcv_count(kids), gc_ip))
+          do i = 0, gcv_count(vs_get(vst, b + 2)) - 1
+             call pool_walk(gcv_nth(vs_get(vst, b + 2), i), pb, h)
+          end do
+       end if
     else if (k == N_CONST) then
        if (pool_spellable(gc_slot(vs_get(vst, b + 1), 2))) then
           call fp_mix_field(h, gc_slot(vs_get(vst, b + 1), 2))
@@ -14855,6 +14866,39 @@ contains
     out = eval_new(cname, vs_get(vst, b + 1))
     call vs_leave(vst, b)
   end function gce_new_slots
+
+  ! (. target member args...) for compiled code: the node (it names the
+  ! member and carries the dispatch), the target -- the node's own class
+  ! symbol when `from` is 0 -- and the arguments in slots argbase+1..;
+  ! then the interpreter's own dispatch, dot_dispatch.
+  recursive function gce_dot_slots(node, tv, argbase, nargs, from) result(out)
+    type(gc_stack), pointer :: vst
+    type(gc_value), intent(in) :: node, tv
+    integer, intent(in) :: argbase, nargs, from
+    type(gc_value) :: out, av, none(0)
+    integer :: b, j
+    vst => gc_my_stack()
+    b = vs_enter(vst, 3)
+    call vs_set(vst, b + 1, node)
+    call vs_set(vst, b + 2, tv)
+    if (from == 0) call vs_set(vst, b + 2, gc_slot(node, 3))
+    av = gcv_empty(none)
+    call vs_set(vst, b + 3, av)
+    do j = 1, nargs
+       av = gcv_conj(vs_get(vst, b + 3), vs_get(vst, argbase + j), [vs_get(vst, b + 1), vs_get(vst, b + 2), vs_get(vst, b + 3)])
+       call vs_set(vst, b + 3, av)
+    end do
+    out = dot_dispatch(vs_get(vst, b + 1), vs_get(vst, b + 2), vs_get(vst, b + 3), from)
+    ! A method may answer a CALL REQUEST -- "call this fn" -- which the
+    ! interpreter's loop enters in place (exec.inc, enter_call); a
+    ! future's and a promise's deref do. Compiled code applies it: a
+    ! task is on its own thread, so a deref that blocks waits right here.
+    if (is_call_request(out) .and. .not. gce_has_error()) then
+       call vs_set(vst, b + 1, out)
+       out = apply(gc_slot(vs_get(vst, b + 1), 1), gc_slot(vs_get(vst, b + 1), 2))
+    end if
+    call vs_leave(vst, b)
+  end function gce_dot_slots
 
   ! The compiled fn being entered on this thread (see eval_ctx%cur_fn).
   function gce_current_fn() result(fn)

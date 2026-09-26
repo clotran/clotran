@@ -70,7 +70,7 @@ module ClotranABI
   public :: clotran_load_compiled, clotran_array_view
   public :: clotran_rest_args, clotran_arity_error
   public :: clotran_native_begin, clotran_reacquire
-  public :: clotran_register_proc, clotran_make_closure, clotran_captures, clotran_new
+  public :: clotran_register_proc, clotran_make_closure, clotran_captures, clotran_new, clotran_dot
 
 contains
 
@@ -588,6 +588,25 @@ contains
        st = 0
     end if
   end function clotran_new
+
+  ! (. target member args...): the node in slot `node`, the target in
+  ! slot `tv` (unused when from is 0: the node names a class), the
+  ! arguments in slots argbase+1..; 1 if it raised.
+  function clotran_dot(dst, node, tv, argbase, nargs, from) bind(C, name="clotran_dot") result(st)
+    type(gc_stack), pointer :: vst
+    integer(c_int), value :: dst, node, tv, argbase, nargs, from
+    integer(c_int) :: st
+    type(gc_value) :: out
+    vst => gc_my_stack()
+    out = gce_dot_slots(vs_get(vst, int(node)), vs_get(vst, int(tv)), int(argbase), int(nargs), int(from))
+    if (gce_has_error()) then
+       call vs_set(vst, int(dst), gc_nil())
+       st = 1
+    else
+       call vs_set(vst, int(dst), out)
+       st = 0
+    end if
+  end function clotran_dot
 
   subroutine clotran_frame_new(dst, n) bind(C, name="clotran_frame_new")
     type(gc_stack), pointer :: vst

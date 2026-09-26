@@ -32,6 +32,15 @@
 (def cases
   '[["a constant" (fn [] 42) [[]]]
     ["the argument back" (fn [x] x) [[1] ["a"] [nil]]]
+    ;; interop, (. target member args...) (PLAN.md step 10, c)
+    ["an instance method" (fn [v i] (.nth v i)) [[[10 20 30] 1] [[1] 0]]]
+    ["an instance method out of range" (fn [v i] (.nth v i)) [[[1 2] 5]]]
+    ["a method with arguments" (fn [s a b] (.substring s a b)) [["hello" 1 3]]]
+    ["a class method" (fn [s] (Long/parseLong s)) [["42"] ["-7"]]]
+    ["a transient's conj" (fn [n] (persistent! (loop [i 0 t (transient [])] (if (< i n) (recur (inc i) (.conj t i)) t)))) [[5] [0]]]
+    ["a method that answers a call request: a future's deref" (fn [x] (.deref (future (inc x)))) [[1] [41]]]
+    ["...and a promise's, delivered from a future" (fn [x] (let [p (promise)] (future (deliver p (* 2 x))) (.deref p))) [[4]]]
+    ["a chunk's nth" (fn [n] (let [c (chunk-first (seq (range n)))] [(.nth c 0) (.count c)])) [[3] [40]]]
     ;; `new`, and so lazy-seq (PLAN.md step 10, b)
     ["a lazy seq made and realised" (fn [n] (vec (take n (lazy-seq (cons 1 (lazy-seq (list 2 3))))))) [[0] [2] [5]]]
     ["a lazy seq over an argument" (fn [xs] (doall (lazy-seq (map inc xs)))) [[[1 2 3]] [[]]]]
