@@ -1311,6 +1311,13 @@ everywhere, the hardest. Leaning (1) then (2), with (3) considered once
 pauses can be MEASURED with the baton off (f). Claims about other
 runtimes here are from memory: read their sources before choosing.
 
+Measured 2026-09-26 (CLOTRAN_STATS "pauses"): two or three FULL
+collections a run, 10-26 ms each; the collector's real cost is the
+young collections, about 2 ms each and 7-15% of runtime, which marking
+in parallel would not shorten. So (2) waits until the baton is off
+(14f), when one pause stops every thread -- James's order: threads,
+then parallel marking.
+
 Decided 2026-09-25: (1), then (2), maybe (3) -- without letting it pull
 the compilation plan off course. (1) was chosen first on a profile: the
 collector was 20% of `into`/`map` and 40% of a compiled loop calling a
