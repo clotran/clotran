@@ -44,6 +44,10 @@
        integer(c_int), value :: n
        integer(c_int) :: base
      end function clotran_frame_enter
+     subroutine clotran_frame_done(base) bind(C, name=\"clotran_frame_done\")
+       import :: c_int
+       integer(c_int), value :: base
+     end subroutine clotran_frame_done
      subroutine clotran_frame_leave(base) bind(C, name=\"clotran_frame_leave\")
        import :: c_int
        integer(c_int), value :: base
@@ -535,7 +539,7 @@ end module clotran_rt_decl
     :bool (if v ".true." ".false.")))
 
 (def ^:private err-return
-  ["if (st /= 0) then" "   call clotran_frame_leave(b)" "   return" "end if"])
+  ["if (st /= 0) then" "   call clotran_frame_done(b)" "   return" "end if"])
 
 (declare gen gp)
 
@@ -1361,7 +1365,7 @@ end module clotran_rt_decl
                             (when (= :var (:kind p))
                               (str "    call clotran_deref(b + " s ", b + " s ")\n")))))
           (apply str (map #(str "    " % "\n") body))
-          "    call clotran_frame_leave(b)\n"
+          "    call clotran_frame_done(b)\n"
           "  end subroutine " sym "\n")}))
 
 (defn compile-fn

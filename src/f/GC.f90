@@ -532,10 +532,17 @@ module GC
   ! the table copies pointers; the collector scans every one, so a parked
   ! context keeps what it was holding. Stack 1 is the main thread's, made
   ! and bound by gc_init.
+  integer, parameter :: SPARE_SIZES = 32, SPARE_DEPTH = 8
   type :: gc_stack
      type(gc_value), allocatable :: vstack(:)
      integer :: vs_top = 0
      logical :: holds_heap = .false.   ! this thread is inside heap_enter/heap_leave
+     ! SPARE FRAMES: a compiled procedure's frame, cleared, once its call
+     ! has returned (gc_frame_give) -- nothing keeps a frame after its
+     ! call -- by size, a few of each. Not roots: every collection empties
+     ! them (forget_spares), so a spare is never one the sweep freed.
+     type(gc_value) :: spare(SPARE_DEPTH, SPARE_SIZES)
+     integer :: nspare(SPARE_SIZES) = 0
   end type gc_stack
   type :: gc_stack_ref
      type(gc_stack), pointer :: s => null()
@@ -655,6 +662,7 @@ module GC
      module procedure vs_depth_self, vs_depth_on
   end interface vs_depth
   public :: gc_stack_new, gc_stack_bind, gc_stacks_reset, gc_stack_of, gc_generation
+  public :: gc_frame_take, gc_frame_give
   public :: gc_mutator_enter, gc_mutator_leave
   public :: gc_arena_stats
   public :: gc_equal, gc_hash
@@ -1800,6 +1808,9 @@ contains
   ! After any collection: nothing is young and nothing remembered.
   subroutine forget_young()
     integer :: i
+    do i = 1, n_stacks
+       if (associated(stacks(i)%s)) stacks(i)%s%nspare = 0
+    end do
     do i = 1, n_rem
        if (rem_set(i)%tag == GCT_OBJ) then
           obj_rem(rem_set(i)%ref) = .false.
@@ -2101,6 +2112,35 @@ contains
     integer :: n
     n = s%vs_top
   end function vs_depth_on
+
+  ! A spare frame of n slots, all nil, or nil if there is none.
+  function gc_frame_take(s, n) result(v)
+    type(gc_stack), pointer, intent(in) :: s
+    integer, intent(in) :: n
+    type(gc_value) :: v
+    v = nilv
+    if (n < 1 .or. n > SPARE_SIZES) return
+    if (s%nspare(n) == 0) return
+    v = s%spare(s%nspare(n), n)
+    s%nspare(n) = s%nspare(n) - 1
+  end function gc_frame_take
+
+  ! A frame whose call has returned: cleared -- a stale slot would keep
+  ! its value alive -- and kept for the next call of its size.
+  subroutine gc_frame_give(s, v)
+    type(gc_stack), pointer, intent(in) :: s
+    type(gc_value), intent(in) :: v
+    integer :: n, i
+    if (v%tag /= GCT_VEC) return
+    n = vec_pool(v%ref)%len
+    if (n < 1 .or. n > SPARE_SIZES) return
+    if (s%nspare(n) >= SPARE_DEPTH) return
+    do i = 0, n - 1
+       vec_store(vec_pool(v%ref)%off + i) = nilv
+    end do
+    s%nspare(n) = s%nspare(n) + 1
+    s%spare(s%nspare(n), n) = v
+  end subroutine gc_frame_give
 
   ! This thread's stack, for vs_*_on.
   function gc_my_stack() result(s)

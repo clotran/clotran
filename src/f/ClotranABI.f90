@@ -70,7 +70,7 @@ module ClotranABI
   public :: clotran_load_compiled, clotran_array_view
   public :: clotran_rest_args, clotran_arity_error
   public :: clotran_native_begin, clotran_reacquire
-  public :: clotran_register_proc, clotran_make_closure, clotran_captures, clotran_new, clotran_dot, clotran_arith
+  public :: clotran_register_proc, clotran_make_closure, clotran_captures, clotran_new, clotran_dot, clotran_arith, clotran_frame_done
 
 contains
 
@@ -193,6 +193,20 @@ contains
     vst => gc_my_stack()
     call vs_leave(vst, int(base))
   end subroutine clotran_frame_leave
+
+  ! The end of a GENERATED procedure: its frame (slot base+1, where
+  ! clotran_frame_new put it) is kept for reuse, then the slots go.
+  ! Only generated code calls this -- another caller of frame_enter may
+  ! keep its own vector at base+1 -- and nothing holds a compiled frame
+  ! once its call returns: a break copies locals out, an interpreted
+  ! subtree runs inside the call, a closure copies its captures.
+  subroutine clotran_frame_done(base) bind(C, name="clotran_frame_done")
+    type(gc_stack), pointer :: vst
+    integer(c_int), value :: base
+    vst => gc_my_stack()
+    call gc_frame_give(vst, vs_get(vst, int(base) + 1))
+    call vs_leave(vst, int(base))
+  end subroutine clotran_frame_done
 
   function clotran_frame_depth() bind(C, name="clotran_frame_depth") result(n)
     type(gc_stack), pointer :: vst
@@ -714,8 +728,11 @@ contains
     type(gc_stack), pointer :: vst
     integer(c_int), value :: dst, n
     type(gc_value) :: none(0)
+    type(gc_value) :: v
     vst => gc_my_stack()
-    call vs_set(vst, int(dst), gc_vec(max(int(n), 0), none))
+    v = gc_frame_take(vst, int(n))
+    if (v%tag /= GCT_VEC) v = gc_vec(max(int(n), 0), none)
+    call vs_set(vst, int(dst), v)
   end subroutine clotran_frame_new
 
   subroutine clotran_frame_get(dst, fr, i) bind(C, name="clotran_frame_get")
