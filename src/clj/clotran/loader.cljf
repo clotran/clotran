@@ -85,19 +85,40 @@
   (let [f (:file (meta v))]
     (boolean (and (string? f) (or (str/ends-with? src f) (str/ends-with? f src))))))
 
+(defn- install-extends
+  "The compiled fns of a file's protocol extensions -- each defined by the
+  library under a hidden name in clotran.extends -- into their protocols'
+  method maps, where the source's extends put the interpreted ones.
+  `extend` REPLACES a type's whole map, so each type's is taken as it
+  stands and only the compiled methods are swapped in; a method the
+  source no longer extends for that type is left alone."
+  [ns extends]
+  (binding [*ns* (the-ns (symbol ns))]
+    (doseq [[[proto-form type-form] xs] (group-by (juxt :proto :type) extends)]
+      (let [proto-var (resolve (read-string proto-form))
+            t (eval (read-string type-form))
+            impls (get-in @proto-var [:impls t])
+            compiled (into {} (for [x xs
+                                    :let [f @(find-var (symbol "clotran.extends" (:name x)))]
+                                    :when (contains? impls (:method x))]
+                                [(:method x) f]))]
+        (when (seq compiled)
+          (extend t @proto-var (merge impls compiled)))))))
+
 (defn install
   "Install the compiled library `lib` built from the source file `src`.
   True when it is installed; nil, with a note saying why, when it is
   not."
   [lib src]
-  (let [{:keys [ns source-hash fns]} (:manifest (fortran/load-package* lib))
-        note (fn [why] (println (str "note: not using " lib ": " why)) nil)]
+  (let [{:keys [ns source-hash fns extends]} (:manifest (fortran/load-package* lib))
+        note (fn [why] (println (str "note: not using " lib ": " why)) nil)
+        all (into (vec fns) extends)]
     (if (not= source-hash (hash (clotran-slurp src)))
       (note (str src " has changed since it was compiled; recompile it"))
       (let [built (binding [*ns* (the-ns (symbol ns))]
-                    (mapv #(pool-of (read-string (:form %))) fns))
+                    (mapv #(pool-of (read-string (:form %))) all))
             stale (keep (fn [[f b]] (when (not= (:fingerprint f) (:fingerprint b)) (:name f)))
-                        (map vector fns built))]
+                        (map vector all built))]
         (if (seq stale)
           (note (str "these analyse differently now: " (str/join ", " stale) "; recompile it"))
           ;; A Var some other file defined since -- a later load
@@ -107,6 +128,7 @@
                 keep (into {} (for [v vars :when (not (defined-in? v src))] [v @v]))]
             (clotran-load-compiled lib (clotran-pool-register (vec (mapcat #(map :value (:pool %)) built))))
             (doseq [[v old] keep] (alter-var-root v (constantly old)))
+            (install-extends ns extends)
             true))))))
 
 ;;; ---- compiling what is loaded: a cache, and background builds ------

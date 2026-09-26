@@ -1042,6 +1042,22 @@ only `defn` forms compile. In order:
       fn literals of top-level extend / extend-protocol / extend-type
       forms and put the compiled fns into the protocol's method maps at
       load -- the loader's second kind of install.
+      BUILT 2026-09-26: each fn literal of a top-level extend-protocol,
+      extend-type or extend is compiled as a defn is, defined under a
+      hidden name in clotran.extends, and swapped into the protocol's
+      method map by clotran.loader/install-extends (extend replaces a
+      type's whole map, so the map standing is merged). protocols.clj
+      now compiles 21 functions, core 534. Libraries of files that load
+      while core.clj is still loading (core/protocols) install after
+      core's own: the loader is written in the Clojure core defines.
+      MEASURED, and it does not pay here: reducing over a lazy seq is 1
+      interpreted step an element without it and 0 with it -- the 48 of
+      the note above went with a-c -- and scripts/bench does not move.
+      into/map's time is allocation and path copying (gc_vec,
+      node_assoc, malloc/free, the sweep): transients ARE the persistent
+      collections here (DEVIATIONS 11), so `into []` copies a path of
+      the tree for every element. Real transients are what into/map, vec
+      and mapv are waiting for.
    And fetching the stack once per generated procedure, passed to every
    runtime call: the thread-key lookups are ~20% of a compiled call.
 2. The heap image (step 5, stage 3). Saving the heap after compiled

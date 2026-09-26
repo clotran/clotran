@@ -4,3 +4,10 @@
 (defn sumsq [n] (loop [i 0 acc 0] (if (< i n) (recur (inc i) (+ acc (* i i))) acc)))
 
 (defn words [s] (count (re-seq #"\w+" s)))
+
+(defprotocol Sized (size-of [x]))
+
+(extend-protocol Sized
+  String (size-of [s] (count s))
+  clojure.lang.IPersistentVector (size-of [v] (reduce + (map size-of v)))
+  nil (size-of [_] 0))

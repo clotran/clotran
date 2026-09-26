@@ -1494,6 +1494,36 @@ end module clotran_rt_decl
                       m (tree-seq coll? seq f)))
             {} (map-indexed vector forms))))
 
+(defn- extend-sites
+  "The fns a top-level form gives a protocol for a type: each
+  (extend T P {:m (fn ...) ...}) it comes to once extend-protocol and
+  extend-type are expanded, as [type-form proto-form method fn-form].
+  Only literal maps of literal fns: anything built another way stays
+  interpreted."
+  [form]
+  (let [head (when (and (seq? form) (symbol? (first form))) (symbol (name (first form))))
+        f (if ('#{extend-protocol extend-type} head) (macroexpand-1 form) form)]
+    (cond
+      (and (seq? f) (= 'do (first f))) (mapcat extend-sites (rest f))
+      ('#{extend-protocol extend-type} (when (and (seq? f) (symbol? (first f))) (symbol (name (first f)))))
+      (extend-sites f)
+      (and (seq? f) (symbol? (first f)) (= 'extend (symbol (name (first f)))) (even? (count (drop 2 f))))
+      (let [t (second f)]
+        (for [[p m] (partition 2 (drop 2 f))
+              :when (map? m)
+              [k v] m
+              :when (and (keyword? k) (seq? v) (symbol? (first v)) (= "fn" (name (first v))))]
+          [t p k v]))
+      :else nil)))
+
+(defn- one-arity
+  "(fn ([x] body)) as (fn [x] body), the way loader/fn-form writes a defn's."
+  [f]
+  (let [arities (rest f)]
+    (if (and (= 1 (count arities)) (seq? (first arities)) (vector? (ffirst arities)))
+      (list* 'fn (first arities))
+      (cons 'fn arities))))
+
 (defn compile-file
   "Compiles every top-level defn in the source file `src` to one
   Fortran file, `out`, and answers what it did: {:compiled [names]
@@ -1532,8 +1562,31 @@ end module clotran_rt_decl
                         [procs (assoc declined (str nm) (:declined r))]
                         [(conj procs (assoc r :form f)) declined])))
                   [[] {}] defns))
+        ;; PROTOCOL EXTENSIONS (PLAN.md step 12, 1c): each fn literal of a
+        ;; top-level extend-protocol / extend-type / extend is compiled as a
+        ;; defn is, defined under a hidden name in clotran.extends, and put
+        ;; into the protocol's method map when the library installs
+        ;; (clotran.loader/install)
+        sites (binding [*ns* (the-ns ns-name)] (vec (mapcat extend-sites forms)))
+        [xprocs declined]
+        (binding [*ns* (the-ns ns-name)]
+          (reduce (fn [[xs declined] [i [t p k v]]]
+                    (let [nm (symbol (str ns-name "__" i "__" (name k)))
+                          f (loader/print-form (one-arity v))
+                          r (compile-fn 'clotran.extends nm (read-string f)
+                                        (count (pool-of (into procs xs))) (+ (count procs) (count xs)))]
+                      (if (:declined r)
+                        [xs (assoc declined (str (loader/print-form p) " " (loader/print-form t) " " k) (:declined r))]
+                        [(conj xs (assoc r :form f :extend {:type (loader/print-form t) :proto (loader/print-form p)
+                                                            :method k}))
+                         declined])))
+                  [[] declined] (map-indexed vector sites)))
         manifest {:ns (str ns-name) :source-hash (hash text)
-                  :fns (mapv (fn [p] {:name (str (:name p)) :form (:form p) :fingerprint (:fingerprint p)}) procs)}]
+                  :fns (mapv (fn [p] {:name (str (:name p)) :form (:form p) :fingerprint (:fingerprint p)}) procs)
+                  :extends (mapv (fn [p] (merge {:name (str (:name p)) :form (:form p) :fingerprint (:fingerprint p)}
+                                                (:extend p)))
+                                 xprocs)}
+        procs (into procs xprocs)]
     (clotran-spit out (module-text (str "cm_" (subs (fort-ident (str ns-name)) 0 (min 40 (count (fort-ident (str ns-name))))))
                                    procs (pr-str manifest)))
     {:compiled (mapv #(str (:name %)) procs) :declined declined}))

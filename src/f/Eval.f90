@@ -1213,22 +1213,34 @@ contains
     character(len=:), allocatable :: dlt_1
     tctx => ctx_self()
     vst => tctx%stk
-    if (autocompile_on() .and. .not. auto_ready) then
+    ! A file that loads while core.clj itself is loading -- host.clj,
+    ! the printer, core/protocols -- waits for core to finish: installing
+    ! a library, or building one, runs clotran.loader, which is written in
+    ! the Clojure core defines. When core has loaded, its own library goes
+    ! in first, then the files that waited, in the order they loaded.
+    if (.not. auto_ready) then
        if (len(path) >= 16) then
-          if (path(len(path)-15:) == "clojure/core.clj") auto_ready = .true.
-       end if
-       if (.not. auto_ready) then
-          if (n_auto_waiting < size(auto_waiting)) then
-             n_auto_waiting = n_auto_waiting + 1
-             auto_waiting(n_auto_waiting) = path
+          if (path(len(path)-15:) == "clojure/core.clj") then
+             auto_ready = .true.
+             call gce_install_compiled(path)
+             block
+               integer :: w
+               character(len=512) :: waiting(64)
+               w = n_auto_waiting
+               waiting(1:w) = auto_waiting(1:w)
+               n_auto_waiting = 0
+               do i = 1, w
+                  call gce_install_compiled(trim(waiting(i)))
+               end do
+             end block
+             return
           end if
-          return
        end if
-       ! core has loaded: the files that waited for it first, then core
-       do i = 1, n_auto_waiting
-          call gce_install_compiled(trim(auto_waiting(i)))
-       end do
-       n_auto_waiting = 0
+       if (n_auto_waiting < size(auto_waiting)) then
+          n_auto_waiting = n_auto_waiting + 1
+          auto_waiting(n_auto_waiting) = path
+       end if
+       return
     end if
     dot = index(path, ".", back=.true.)
     if (dot <= index(path, "/", back=.true.)) return
