@@ -22,7 +22,7 @@
        HK_NAN = -5, HK_NIL = -6, HK_EMPTYMAP = -7, HK_SPECIALS = -8, HK_TYPE = -9, &
        HK_TRUE = -10, HK_FALSE = -11, HK_LINEBOX = -12, HK_SELFKEY = -13
 
-  type(hm), parameter :: HOST_STATICS_1(90) = [ &
+  type(hm), parameter :: HOST_STATICS_1(91) = [ &
   ! PersistentList.creator is a static IFn that builds a list from its arguments.
        hm("clojure.lang.PersistentList", "creator", B_LIST, "list"), &
   ! core.clj's own make-array, aget, aset and the aset-int family are
@@ -85,6 +85,7 @@
        hm("clojure.lang.PersistentTreeSet", "create", B_SORTEDSET, "sorted-set"), &
        hm("clojure.lang.PersistentTreeMap", "create", B_SORTEDMAP, "sorted-map"), &
        hm("java.lang.System", "getProperty", B_GETPROP, "clotran-get-property"), &
+       hm("java.lang.System", "getenv", B_GETENV, "clotran-getenv"), &
   ! The clock, so `time` works. ClojureScript has system-time, so this is language.
        hm("java.lang.System", "nanoTime", B_NANOTIME, "clotran-nano-time"), &
        hm("java.lang.System", "identityHashCode", B_IDHASH, "clotran-identity-hash"), &
@@ -398,7 +399,7 @@
        hm("clojure.lang.Numbers", "longs", B_IDENTITY, "identity"), &
        hm("clojure.lang.Numbers", "doubles", B_IDENTITY, "identity"), &
        hm("clojure.lang.Util", "arrayTypeToSymbol", B_ARRAYTYPESYM, "clotran-array-type-symbol") ]
-  type(hm), parameter :: HOST_STATICS(309) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
+  type(hm), parameter :: HOST_STATICS(310) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
   type(hm), parameter :: HOST_METHODS_1(91) = [ &
   ! Instance members. The target becomes the first argument, which is all

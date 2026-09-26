@@ -85,6 +85,8 @@ contains
     integer :: base
     character(len=:), allocatable :: got
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     call gc_init(64)
     gc_torture = .false.          ! reading and setup are not the subject
     base = vs_enter(3)
@@ -94,9 +96,8 @@ contains
     call vs_set(base + 2, form)
     if (gcr_has_error()) then
        block
-          character(len=:), allocatable :: dlr_1
-          call gcr_error(s=dlr_1)
-          print '(A,A,A,A)', "FAIL - ", label, "read error: ", dlr_1
+          call gcr_error(s=dlt_1)
+          print '(A,A,A,A)', "FAIL - ", label, "read error: ", dlt_1
        end block
        all_ok = .false.
        call vs_leave(base)
@@ -114,18 +115,16 @@ contains
     if (gce_has_error()) then
        gc_torture = .false.
        block
-          character(len=:), allocatable :: dlr_2
-          call gce_error(s=dlr_2)
-          print '(A,A,A,A)', "FAIL - ", label, "eval error: ", dlr_2
+          call gce_error(s=dlt_1)
+          print '(A,A,A,A)', "FAIL - ", label, "eval error: ", dlt_1
        end block
        all_ok = .false.
        call vs_leave(base)
        return
     end if
     block
-       character(len=:), allocatable :: dlr_3
-       call gcp_str(vs_get(base + 3), .true., s=dlr_3)
-       got = dlr_3
+       call gcp_str(vs_get(base + 3), .true., s=dlt_1)
+       got = dlt_1
     end block
     gc_torture = .false.
     call vs_leave(base)
@@ -731,6 +730,8 @@ contains
     type(gc_value) :: env, r
     integer :: base
     character(len=:), allocatable :: got
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     call gc_init(64)
     gc_torture = .false.
     base = vs_enter(1)
@@ -740,9 +741,8 @@ contains
     r = gce_analyze(gcr_read("(dissoc (assoc (assoc (clojure.lang.PersistentTreeMap/create (list 3 :c 1 :a 9 :z)) 2 :b) 0 :zero) 9)", no_roots), gc_nil())
     if (.not. gce_has_error()) r = gce_eval(r, gc_nil(), no_roots)
     block
-       character(len=:), allocatable :: dlr_4
-       call gcp_str(r, .true., s=dlr_4)
-       got = dlr_4
+       call gcp_str(r, .true., s=dlt_1)
+       got = dlt_1
     end block
     call ok("31a. a sorted map keeps its keys in order through assoc and dissoc: " // got, &
          got == "{0 :zero, 1 :a, 2 :b, 3 :c}" .and. .not. gce_has_error())
@@ -755,6 +755,8 @@ contains
     integer :: base, c1, c2
     character(len=:), allocatable :: got
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     call gc_init(64)
     gc_torture = .false.
     base = vs_enter(3)
@@ -770,17 +772,15 @@ contains
     r = gce_analyze(gcr_read("(loop* [i 0 acc []] (if (< i 200) (recur (+ i 1) (conj acc (str i))) (count acc)))", no_roots), gc_nil())
     if (.not. gce_has_error()) r = gce_eval(r, gc_nil(), no_roots)
     block
-       character(len=:), allocatable :: dlr_5
-       call gcp_str(r, .true., s=dlr_5)
-       got = dlr_5
+       call gcp_str(r, .true., s=dlt_1)
+       got = dlt_1
     end block
     call ok("30a. a form evaluates in a second context: " // got, got == "200" .and. .not. gce_has_error())
     call gce_ctx_switch(c1)
     gc_torture = .false.
     block
-       character(len=:), allocatable :: dlr_6
-       call gcp_str(vs_get(base + 2), .true., s=dlr_6)
-       got = dlr_6
+       call gcp_str(vs_get(base + 2), .true., s=dlt_1)
+       got = dlt_1
     end block
     call ok("30b. the first context's stack survived the switch: " // got, &
          got == "(list 1 2 3 (str ""a"" ""b"") [4 5] {:k 6})")
@@ -812,6 +812,8 @@ contains
     type(gc_value) :: form, env, result
     integer :: base, before
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     call gc_init(64)
     gc_torture = .false.
     base = vs_enter(3)
@@ -830,9 +832,8 @@ contains
     call vs_set(base + 3, result)
     call ok("28a. an array claims a buffer: ", gcna_live_count() - before == 1)
     block
-       character(len=:), allocatable :: dlr_7
-       call gcna_kind(gc_i1(vs_get(base + 3)), s=dlr_7)
-       call ok("28b. ...of the kind asked for: ", dlr_7 == "real8")
+       call gcna_kind(gc_i1(vs_get(base + 3)), s=dlt_1)
+       call ok("28b. ...of the kind asked for: ", dlt_1 == "real8")
     end block
     call ok("28c. ...with the extent asked for: ", &
          gcna_total(gc_i1(vs_get(base + 3))) == 4)
@@ -930,10 +931,11 @@ contains
   ! consistent: no live object referring to a freed or out-of-range
   ! slot.
   subroutine check_heap_sound()
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     block
-       character(len=:), allocatable :: dlr_8
-       call gc_check_heap(problem=dlr_8)
-       call ok("10a. the heap passes its own audit: ", dlr_8 == "")
+       call gc_check_heap(problem=dlt_1)
+       call ok("10a. the heap passes its own audit: ", dlt_1 == "")
     end block
   end subroutine check_heap_sound
 

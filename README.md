@@ -277,6 +277,29 @@ source and the library is reported stale and not used until it is
 recompiled. `scripts/compiler-check` runs every case both ways and
 compares the answers.
 
+You rarely need to ask. `./clotran` compiles what it loads, in the
+background, into a cache (`~/.cache/clotran`, or `$CLOTRAN_CACHE`), and
+installs a namespace from the cache whenever the same text loads again.
+A namespace you are working on goes around the loop by itself: edit it,
+reload it, and it runs interpreted while its new build compiles; at a
+later prompt the REPL says so and the compiled version is in place, with
+no restart:
+
+    user=> (load-file "demo_impl.cljf")
+    user=> (time (demo-impl/sumsq 300000))
+    "Elapsed time: 716.8 msecs"
+    user=> (clotran.loader/compile-status)
+    {"demo_impl.cljf" :compiling, ...}
+    note: demo_impl.cljf is compiled now
+    user=> (time (demo-impl/sumsq 300000))
+    "Elapsed time: 1.033984 msecs"
+
+`(clotran.loader/compile-now "file.cljf")` builds and installs at once,
+waiting for it; `CLOTRAN_AUTOCOMPILE=0` turns all of this off. What you
+type at the prompt stays interpreted: a build takes seconds, and the
+form you typed takes microseconds -- the time is spent in the
+namespaces it calls, and those are the ones that get compiled.
+
 ### Which code can be pure Fortran
 
 `clotran compile --report file.cljf` sorts every function into a tier --

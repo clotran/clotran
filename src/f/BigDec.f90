@@ -108,6 +108,8 @@ contains
     integer :: digits, drop, d, last, i
     logical :: sticky, up
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     digits = len(mag)
     ok = .true.
     extra = 0
@@ -130,9 +132,8 @@ contains
     if (.not. ok) return
     if (up) then
        block
-          character(len=:), allocatable :: dlr_1
-          call big_add(kept, "1", o=dlr_1)
-          kept = dlr_1
+          call big_add(kept, "1", o=dlt_1)
+          kept = dlt_1
        end block
        ! 999 + 1 is 1000: one digit too many, and the extra one is a
        ! zero, so it comes off and the scale moves with it.
@@ -156,28 +157,27 @@ contains
     character(len=:), allocatable :: mag, kept
     integer :: extra
     logical :: neg
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     o = v
     ok = .true.
     if (precision <= 0) return
     block
-       character(len=:), allocatable :: dlr_2
-       call dec_unscaled(v, u=dlr_2)
-       neg = big_is_neg(dlr_2)
+       call dec_unscaled(v, u=dlt_1)
+       neg = big_is_neg(dlt_1)
     end block
     block
-       character(len=:), allocatable :: dlr_3, dlr_4
-       call dec_unscaled(v, u=dlr_3)
-       call big_abs(dlr_3, o=dlr_4)
-       mag = dlr_4
+       call dec_unscaled(v, u=dlt_1)
+       call big_abs(dlt_1, o=dlt_2)
+       mag = dlt_2
     end block
     if (mag == "0") return
     call round_mag(mag, precision, mode, neg, .false., kept, extra, ok)
     if (.not. ok) return
     if (neg) kept = "-" // kept
     block
-       character(len=:), allocatable :: dlr_5
-       call dec_make(kept, dec_scale(v) - extra, o=dlr_5)
-       o = dlr_5
+       call dec_make(kept, dec_scale(v) - extra, o=dlt_1)
+       o = dlt_1
     end block
   end subroutine dec_round
 
@@ -194,40 +194,37 @@ contains
     integer :: k, extra, i
     logical :: neg
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     ok = .false.
     block
-       character(len=:), allocatable :: dlr_6
-       call dec_make("0", 0, o=dlr_6)
-       o = dlr_6
+       call dec_make("0", 0, o=dlt_1)
+       o = dlt_1
     end block
     if (precision <= 0) then
        call dec_div(a, b, o, ok)
        return
     end if
     block
-       character(len=:), allocatable :: dlr_7, dlr_8
-       call dec_unscaled(a, u=dlr_7)
-       call big_abs(dlr_7, o=dlr_8)
-       ua = dlr_8
+       call dec_unscaled(a, u=dlt_1)
+       call big_abs(dlt_1, o=dlt_2)
+       ua = dlt_2
     end block
     block
-       character(len=:), allocatable :: dlr_9, dlr_10
-       call dec_unscaled(b, u=dlr_9)
-       call big_abs(dlr_9, o=dlr_10)
-       ub = dlr_10
+       call dec_unscaled(b, u=dlt_1)
+       call big_abs(dlt_1, o=dlt_2)
+       ub = dlt_2
     end block
     if (ub == "0") return
     block
-       character(len=:), allocatable :: dlr_11, dlr_12
-       call dec_unscaled(a, u=dlr_11)
-       call dec_unscaled(b, u=dlr_12)
-       neg = (big_is_neg(dlr_11) .neqv. big_is_neg(dlr_12))
+       call dec_unscaled(a, u=dlt_1)
+       call dec_unscaled(b, u=dlt_2)
+       neg = (big_is_neg(dlt_1) .neqv. big_is_neg(dlt_2))
     end block
     if (ua == "0") then
        block
-          character(len=:), allocatable :: dlr_13
-          call dec_make("0", 0, o=dlr_13)
-          o = dlr_13
+          call dec_make("0", 0, o=dlt_1)
+          o = dlt_1
        end block
        ok = .true.
        return
@@ -239,10 +236,9 @@ contains
     call dec_div(a, b, o, ok)
     if (ok) then
        block
-          character(len=:), allocatable :: dlr_14, dlr_15
-          call dec_unscaled(o, u=dlr_14)
-          call big_abs(dlr_14, o=dlr_15)
-          if (len(dlr_15) <= precision) return
+          call dec_unscaled(o, u=dlt_1)
+          call big_abs(dlt_1, o=dlt_2)
+          if (len(dlt_2) <= precision) return
        end block
        ok = .false.
     end if
@@ -255,9 +251,8 @@ contains
     k = 0
     do
        block
-          character(len=:), allocatable :: dlr_16
-          call shift_up(ua, k, o=dlr_16)
-          call big_divmod(dlr_16, ub, q, r)
+          call shift_up(ua, k, o=dlt_1)
+          call big_divmod(dlt_1, ub, q, r)
        end block
        if (big_cmp(q, limit) >= 0) exit
        k = k + 1
@@ -267,9 +262,8 @@ contains
     if (.not. ok) return
     if (neg) kept = "-" // kept
     block
-       character(len=:), allocatable :: dlr_17
-       call dec_make(kept, dec_scale(a) - dec_scale(b) + k - extra, o=dlr_17)
-       o = dlr_17
+       call dec_make(kept, dec_scale(a) - dec_scale(b) + k - extra, o=dlt_1)
+       o = dlt_1
     end block
     ok = .true.
   end subroutine dec_div_mc
@@ -281,11 +275,12 @@ contains
     integer, intent(in) :: scale
     character(len=:), allocatable, intent(out) :: o
     character(len=16) :: buf
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     write(buf, '(I0)') scale
     block
-       character(len=:), allocatable :: dlr_18
-       call big_norm(unscaled, o=dlr_18)
-       o = dlr_18 // "|" // trim(buf)
+       call big_norm(unscaled, o=dlt_1)
+       o = dlt_1 // "|" // trim(buf)
     end block
   end subroutine dec_make
 
@@ -328,10 +323,11 @@ contains
   pure function dec_is_zero(v) result(yes)
     character(len=*), intent(in) :: v
     logical :: yes
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     block
-       character(len=:), allocatable :: dlr_19
-       call dec_unscaled(v, u=dlr_19)
-       yes = (dlr_19 == "0")
+       call dec_unscaled(v, u=dlt_1)
+       yes = (dlt_1 == "0")
     end block
   end function dec_is_zero
 
@@ -348,11 +344,12 @@ contains
     logical :: seen_point, seen_digit
     character :: c
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     ok = .false.
     block
-       character(len=:), allocatable :: dlr_20
-       call dec_make("0", 0, o=dlr_20)
-       out = dlr_20
+       call dec_make("0", 0, o=dlt_1)
+       out = dlt_1
     end block
     n = len(s)
     if (n == 0) return
@@ -399,9 +396,8 @@ contains
     end do
     if (.not. seen_digit) return
     block
-       character(len=:), allocatable :: dlr_21
-       call dec_make(digits, scale - ex, o=dlr_21)
-       out = dlr_21
+       call dec_make(digits, scale - ex, o=dlt_1)
+       out = dlt_1
     end block
     ok = .true.
   end subroutine dec_from_text
@@ -409,21 +405,23 @@ contains
   pure subroutine dec_from_i64(i, o)
     integer(I8), intent(in) :: i
     character(len=:), allocatable, intent(out) :: o
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     block
-       character(len=:), allocatable :: dlr_22, dlr_23
-       call big_from_i64(i, o=dlr_22)
-       call dec_make(dlr_22, 0, o=dlr_23)
-       o = dlr_23
+       call big_from_i64(i, o=dlt_1)
+       call dec_make(dlt_1, 0, o=dlt_2)
+       o = dlt_2
     end block
   end subroutine dec_from_i64
 
   pure subroutine dec_from_big(b, o)
     character(len=*), intent(in) :: b
     character(len=:), allocatable, intent(out) :: o
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     block
-       character(len=:), allocatable :: dlr_24
-       call dec_make(b, 0, o=dlr_24)
-       o = dlr_24
+       call dec_make(b, 0, o=dlt_1)
+       o = dlt_1
     end block
   end subroutine dec_from_big
 
@@ -440,10 +438,11 @@ contains
     integer :: scale, prec, adjusted, i
     character(len=16) :: buf
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     block
-       character(len=:), allocatable :: dlr_25
-       call dec_unscaled(v, u=dlr_25)
-       u = dlr_25
+       call dec_unscaled(v, u=dlt_1)
+       u = dlt_1
     end block
     scale = dec_scale(v)
     sign = ""
@@ -509,6 +508,8 @@ contains
     integer, intent(in) :: by
     character(len=:), allocatable, intent(out) :: o
     integer :: i
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     o = u
     if (by <= 0 .or. u == "0") then
        if (u == "0") o = "0"
@@ -522,9 +523,8 @@ contains
        end block
     end do
     block
-       character(len=:), allocatable :: dlr_26
-       call big_norm(o, o=dlr_26)
-       o = dlr_26
+       call big_norm(o, o=dlt_1)
+       o = dlt_1
     end block
   end subroutine shift_up
 
@@ -535,29 +535,31 @@ contains
     character(len=*), intent(in) :: a, b
     character(len=:), allocatable, intent(out) :: o
     integer :: sa, sb, s
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2, dlt_3, dlt_4, dlt_5, dlt_6
     sa = dec_scale(a)
     sb = dec_scale(b)
     s = max(sa, sb)
     block
-       character(len=:), allocatable :: dlr_27, dlr_28, dlr_29, dlr_30, dlr_31, dlr_32
-       call dec_unscaled(a, u=dlr_27)
-       call shift_up(dlr_27, s - sa, o=dlr_28)
-       call dec_unscaled(b, u=dlr_29)
-       call shift_up(dlr_29, s - sb, o=dlr_30)
-       call big_add(dlr_28,  dlr_30, o=dlr_31)
-       call dec_make(dlr_31, s, o=dlr_32)
-       o = dlr_32
+       call dec_unscaled(a, u=dlt_1)
+       call shift_up(dlt_1, s - sa, o=dlt_2)
+       call dec_unscaled(b, u=dlt_3)
+       call shift_up(dlt_3, s - sb, o=dlt_4)
+       call big_add(dlt_2,  dlt_4, o=dlt_5)
+       call dec_make(dlt_5, s, o=dlt_6)
+       o = dlt_6
     end block
   end subroutine dec_add
 
   pure subroutine dec_sub(a, b, o)
     character(len=*), intent(in) :: a, b
     character(len=:), allocatable, intent(out) :: o
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     block
-       character(len=:), allocatable :: dlr_33, dlr_34
-       call dec_neg(b, o=dlr_33)
-       call dec_add(a, dlr_33, o=dlr_34)
-       o = dlr_34
+       call dec_neg(b, o=dlt_1)
+       call dec_add(a, dlt_1, o=dlt_2)
+       o = dlt_2
     end block
   end subroutine dec_sub
 
@@ -565,37 +567,40 @@ contains
   pure subroutine dec_mul(a, b, o)
     character(len=*), intent(in) :: a, b
     character(len=:), allocatable, intent(out) :: o
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2, dlt_3, dlt_4
     block
-       character(len=:), allocatable :: dlr_35, dlr_36, dlr_37, dlr_38
-       call dec_unscaled(a, u=dlr_35)
-       call dec_unscaled(b, u=dlr_36)
-       call big_mul(dlr_35, dlr_36, o=dlr_37)
-       call dec_make(dlr_37,  dec_scale(a) + dec_scale(b), o=dlr_38)
-       o = dlr_38
+       call dec_unscaled(a, u=dlt_1)
+       call dec_unscaled(b, u=dlt_2)
+       call big_mul(dlt_1, dlt_2, o=dlt_3)
+       call dec_make(dlt_3,  dec_scale(a) + dec_scale(b), o=dlt_4)
+       o = dlt_4
     end block
   end subroutine dec_mul
 
   pure subroutine dec_neg(a, o)
     character(len=*), intent(in) :: a
     character(len=:), allocatable, intent(out) :: o
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2, dlt_3
     block
-       character(len=:), allocatable :: dlr_39, dlr_40, dlr_41
-       call dec_unscaled(a, u=dlr_39)
-       call big_neg(dlr_39, o=dlr_40)
-       call dec_make(dlr_40, dec_scale(a), o=dlr_41)
-       o = dlr_41
+       call dec_unscaled(a, u=dlt_1)
+       call big_neg(dlt_1, o=dlt_2)
+       call dec_make(dlt_2, dec_scale(a), o=dlt_3)
+       o = dlt_3
     end block
   end subroutine dec_neg
 
   pure subroutine dec_abs(a, o)
     character(len=*), intent(in) :: a
     character(len=:), allocatable, intent(out) :: o
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2, dlt_3
     block
-       character(len=:), allocatable :: dlr_42, dlr_43, dlr_44
-       call dec_unscaled(a, u=dlr_42)
-       call big_abs(dlr_42, o=dlr_43)
-       call dec_make(dlr_43, dec_scale(a), o=dlr_44)
-       o = dlr_44
+       call dec_unscaled(a, u=dlt_1)
+       call big_abs(dlt_1, o=dlt_2)
+       call dec_make(dlt_2, dec_scale(a), o=dlt_3)
+       o = dlt_3
     end block
   end subroutine dec_abs
 
@@ -609,16 +614,16 @@ contains
     logical, intent(out) :: ok
     character(len=:), allocatable :: q, r, num
     integer :: k, sa, sb
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     ok = .false.
     block
-       character(len=:), allocatable :: dlr_45
-       call dec_make("0", 0, o=dlr_45)
-       o = dlr_45
+       call dec_make("0", 0, o=dlt_1)
+       o = dlt_1
     end block
     block
-       character(len=:), allocatable :: dlr_46
-       call dec_unscaled(b, u=dlr_46)
-       if (dlr_46 == "0") return
+       call dec_unscaled(b, u=dlt_1)
+       if (dlt_1 == "0") return
     end block
     sa = dec_scale(a)
     sb = dec_scale(b)
@@ -626,21 +631,18 @@ contains
     ! would carry plus room for a repeating check to fail on.
     do k = 0, 64
        block
-          character(len=:), allocatable :: dlr_47, dlr_48
-          call dec_unscaled(a, u=dlr_47)
-          call shift_up(dlr_47, k, o=dlr_48)
-          num = dlr_48
+          call dec_unscaled(a, u=dlt_1)
+          call shift_up(dlt_1, k, o=dlt_2)
+          num = dlt_2
        end block
        block
-          character(len=:), allocatable :: dlr_49
-          call dec_unscaled(b, u=dlr_49)
-          call big_divmod(num, dlr_49, q, r)
+          call dec_unscaled(b, u=dlt_1)
+          call big_divmod(num, dlt_1, q, r)
        end block
        if (r == "0") then
           block
-             character(len=:), allocatable :: dlr_50
-             call dec_make(q, sa - sb + k, o=dlr_50)
-             o = dlr_50
+             call dec_make(q, sa - sb + k, o=dlt_1)
+             o = dlt_1
           end block
           ok = .true.
           return
@@ -656,36 +658,33 @@ contains
     character(len=:), allocatable, intent(out) :: o
     character(len=:), allocatable :: q, r, ua, ub
     integer :: sa, sb, s
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     sa = dec_scale(a)
     sb = dec_scale(b)
     s = max(sa - sb, 0)
     block
-       character(len=:), allocatable :: dlr_51
-       call dec_unscaled(a, u=dlr_51)
-       ua = dlr_51
+       call dec_unscaled(a, u=dlt_1)
+       ua = dlt_1
     end block
     block
-       character(len=:), allocatable :: dlr_52
-       call dec_unscaled(b, u=dlr_52)
-       ub = dlr_52
+       call dec_unscaled(b, u=dlt_1)
+       ub = dlt_1
     end block
     ! bring both to a common scale so the quotient is the integer one
     block
-       character(len=:), allocatable :: dlr_53
-       call shift_up(ua, max(sb - sa, 0), o=dlr_53)
-       ua = dlr_53
+       call shift_up(ua, max(sb - sa, 0), o=dlt_1)
+       ua = dlt_1
     end block
     block
-       character(len=:), allocatable :: dlr_54
-       call shift_up(ub, max(sa - sb, 0), o=dlr_54)
-       ub = dlr_54
+       call shift_up(ub, max(sa - sb, 0), o=dlt_1)
+       ub = dlt_1
     end block
     call big_divmod(ua, ub, q, r)
     block
-       character(len=:), allocatable :: dlr_55, dlr_56
-       call shift_up(q, s, o=dlr_55)
-       call dec_make(dlr_55, s, o=dlr_56)
-       o = dlr_56
+       call shift_up(q, s, o=dlt_1)
+       call dec_make(dlt_1, s, o=dlt_2)
+       o = dlt_2
     end block
   end subroutine dec_quot
 
@@ -693,12 +692,13 @@ contains
   pure subroutine dec_rem(a, b, o)
     character(len=*), intent(in) :: a, b
     character(len=:), allocatable, intent(out) :: o
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2, dlt_3
     block
-       character(len=:), allocatable :: dlr_57, dlr_58, dlr_59
-       call dec_quot(a, b, o=dlr_57)
-       call dec_mul(dlr_57, b, o=dlr_58)
-       call dec_sub(a, dlr_58, o=dlr_59)
-       o = dlr_59
+       call dec_quot(a, b, o=dlt_1)
+       call dec_mul(dlt_1, b, o=dlt_2)
+       call dec_sub(a, dlt_2, o=dlt_3)
+       o = dlt_3
     end block
   end subroutine dec_rem
 
@@ -709,16 +709,17 @@ contains
   pure function dec_cmp(a, b) result(c)
     character(len=*), intent(in) :: a, b
     integer :: c, sa, sb, s
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2, dlt_3, dlt_4
     sa = dec_scale(a)
     sb = dec_scale(b)
     s = max(sa, sb)
     block
-       character(len=:), allocatable :: dlr_60, dlr_61, dlr_62, dlr_63
-       call dec_unscaled(a, u=dlr_60)
-       call shift_up(dlr_60, s - sa, o=dlr_61)
-       call dec_unscaled(b, u=dlr_62)
-       call shift_up(dlr_62, s - sb, o=dlr_63)
-       c = big_cmp(dlr_61,  dlr_63)
+       call dec_unscaled(a, u=dlt_1)
+       call shift_up(dlt_1, s - sa, o=dlt_2)
+       call dec_unscaled(b, u=dlt_3)
+       call shift_up(dlt_3, s - sb, o=dlt_4)
+       c = big_cmp(dlt_2,  dlt_4)
     end block
   end function dec_cmp
 
@@ -729,17 +730,17 @@ contains
     character(len=:), allocatable, intent(out) :: o
     character(len=:), allocatable :: u
     integer :: scale
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     block
-       character(len=:), allocatable :: dlr_64
-       call dec_unscaled(v, u=dlr_64)
-       u = dlr_64
+       call dec_unscaled(v, u=dlt_1)
+       u = dlt_1
     end block
     scale = dec_scale(v)
     if (u == "0") then
        block
-          character(len=:), allocatable :: dlr_65
-          call dec_make("0", 0, o=dlr_65)
-          o = dlr_65
+          call dec_make("0", 0, o=dlt_1)
+          o = dlt_1
        end block
        return
     end if
@@ -749,9 +750,8 @@ contains
        scale = scale - 1
     end do
     block
-       character(len=:), allocatable :: dlr_66
-       call dec_make(u, scale, o=dlr_66)
-       o = dlr_66
+       call dec_make(u, scale, o=dlt_1)
+       o = dlt_1
     end block
   end subroutine dec_strip
 
@@ -763,10 +763,11 @@ contains
     integer :: ios
     character(len=:), allocatable :: txt
     ! through a VARIABLE: a function result is not an internal file
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     block
-       character(len=:), allocatable :: dlr_67
-       call dec_to_text(v, s=dlr_67)
-       txt = dlr_67
+       call dec_to_text(v, s=dlt_1)
+       txt = dlt_1
     end block
     read(txt, *, iostat=ios) d
     if (ios /= 0) d = 0.0d0
@@ -778,20 +779,20 @@ contains
     character(len=:), allocatable, intent(out) :: o
     character(len=:), allocatable :: q, r
     integer :: scale
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     scale = dec_scale(v)
     if (scale <= 0) then
        block
-          character(len=:), allocatable :: dlr_68, dlr_69
-          call dec_unscaled(v, u=dlr_68)
-          call shift_up(dlr_68, -scale, o=dlr_69)
-          o = dlr_69
+          call dec_unscaled(v, u=dlt_1)
+          call shift_up(dlt_1, -scale, o=dlt_2)
+          o = dlt_2
        end block
     else
        block
-          character(len=:), allocatable :: dlr_70, dlr_71
-          call dec_unscaled(v, u=dlr_70)
-          call shift_up("1", scale, o=dlr_71)
-          call big_divmod(dlr_70, dlr_71, q, r)
+          call dec_unscaled(v, u=dlt_1)
+          call shift_up("1", scale, o=dlt_2)
+          call big_divmod(dlt_1, dlt_2, q, r)
        end block
        o = q
     end if

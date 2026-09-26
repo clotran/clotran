@@ -22,7 +22,7 @@ module Threads
   implicit none
   private
 
-  public :: th_lock, th_cond, th_thread
+  public :: th_lock, th_cond, th_thread, th_start_sized
   public :: th_lock_init, th_lock_acquire, th_lock_release
   public :: th_cond_init, th_cond_wait, th_cond_broadcast
   public :: th_start, th_join, th_spawn, th_exit, th_ncpus
@@ -212,6 +212,23 @@ contains
     type(c_ptr), intent(in) :: arg
     th_start = pthread_create(t%handle, c_null_ptr, fn, arg) == 0
   end function th_start
+
+  ! Start a JOINABLE thread running fn(arg) on a stack of `bytes`: the
+  ! program's own body (main.f90), which needs more than the main
+  ! thread's 8 MB.
+  logical function th_start_sized(t, fn, arg, bytes)
+    type(th_thread), intent(inout) :: t
+    type(c_funptr), intent(in) :: fn
+    type(c_ptr), intent(in) :: arg
+    integer(c_size_t), intent(in) :: bytes
+    integer(c_int64_t), target :: attr(OPAQUE_WORDS)
+    th_start_sized = .false.
+    attr = 0
+    if (pthread_attr_init(c_loc(attr)) /= 0) return
+    if (pthread_attr_setstacksize(c_loc(attr), bytes) /= 0) return
+    th_start_sized = pthread_create(t%handle, c_loc(attr), fn, arg) == 0
+    if (pthread_attr_destroy(c_loc(attr)) /= 0) continue
+  end function th_start_sized
 
   ! Start a DETACHED thread running fn(arg) on a stack of `bytes`: a
   ! task's thread runs the interpreter, whose depth the main thread's

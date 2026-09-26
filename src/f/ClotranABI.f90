@@ -99,11 +99,12 @@ contains
     integer(c_int), value :: n
     integer(c_int) :: st
     type(gc_value) :: none(0), env
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     call gc_ensure_init()
     block
-       character(len=:), allocatable :: dlr_1
-       call c_text(home, n, s=dlr_1)
-       call gce_set_home(dlr_1)
+       call c_text(home, n, s=dlt_1)
+       call gce_set_home(dlt_1)
     end block
     env = gce_base_env(none)
     st = 0
@@ -121,6 +122,8 @@ contains
     integer(c_int) :: st
     type(gc_value) :: form, node, env, none(0)
     integer :: base
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     vst => gc_my_stack()
     st = 1
     call vs_set(vst, int(dst), gc_nil())
@@ -128,9 +131,8 @@ contains
     base = vs_enter(vst, 3)
     call vs_set(vst, base + 1, env)
     block
-       character(len=:), allocatable :: dlr_2
-       call c_text(src, n, s=dlr_2)
-       form = gcr_read(dlr_2, [vs_get(vst, base + 1)])
+       call c_text(src, n, s=dlt_1)
+       form = gcr_read(dlt_1, [vs_get(vst, base + 1)])
     end block
     if (gcr_has_error()) then
        call vs_leave(vst, base)
@@ -163,6 +165,8 @@ contains
     integer(c_int) :: st
     type(gc_value) :: form, node, env
     integer :: base
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     vst => gc_my_stack()
     st = 1
     call vs_set(vst, int(dst), gc_nil())
@@ -170,9 +174,8 @@ contains
     base = vs_enter(vst, 2)
     call vs_set(vst, base + 1, env)
     block
-       character(len=:), allocatable :: dlr_3
-       call c_text(src, n, s=dlr_3)
-       form = gcr_read(dlr_3, [vs_get(vst, base + 1)])
+       call c_text(src, n, s=dlt_1)
+       form = gcr_read(dlt_1, [vs_get(vst, base + 1)])
     end block
     if (gcr_has_error()) then
        call vs_leave(vst, base)
@@ -340,14 +343,15 @@ contains
     integer(c_int), value :: slot
     integer(c_int) :: n
     type(gc_value) :: v
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     vst => gc_my_stack()
     v = vs_get(vst, int(slot))
     n = 0
     if (v%tag == GCT_STR) then
        block
-          character(len=:), allocatable :: dlr_4
-          call gc_ref_text(v%ref, s=dlr_4)
-          n = int(len(dlr_4), c_int)
+          call gc_ref_text(v%ref, s=dlt_1)
+          n = int(len(dlt_1), c_int)
        end block
     end if
   end function clotran_str_len
@@ -362,14 +366,15 @@ contains
     type(gc_value) :: v
     character(len=:), allocatable :: s
     integer :: i
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     vst => gc_my_stack()
     w = 0
     v = vs_get(vst, int(slot))
     if (v%tag /= GCT_STR) return
     block
-       character(len=:), allocatable :: dlr_5
-       call gc_ref_text(v%ref, s=dlr_5)
-       s = dlr_5
+       call gc_ref_text(v%ref, s=dlt_1)
+       s = dlt_1
     end block
     w = int(min(len(s), int(n)), c_int)
     do i = 1, int(w)
@@ -431,21 +436,21 @@ contains
     integer(c_int) :: ok
     type(gc_value) :: nsv, sym, var
     integer :: base
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     vst => gc_my_stack()
     ok = 0
     call vs_set(vst, int(slot), gc_nil())
     block
-       character(len=:), allocatable :: dlr_6
-       call c_text(ns, nsn, s=dlr_6)
-       nsv = gcn_find(dlr_6)
+       call c_text(ns, nsn, s=dlt_1)
+       nsv = gcn_find(dlt_1)
     end block
     if (gc_kind(nsv) /= OBJ_NS) return
     base = vs_enter(vst, 1)
     call vs_set(vst, base + 1, nsv)
     block
-       character(len=:), allocatable :: dlr_7
-       call c_text(name, namen, s=dlr_7)
-       sym = gc_sym(dlr_7, [vs_get(vst, base + 1)])
+       call c_text(name, namen, s=dlt_1)
+       sym = gc_sym(dlt_1, [vs_get(vst, base + 1)])
     end block
     var = gcn_lookup(vs_get(vst, base + 1), sym)
     call vs_leave(vst, base)
@@ -502,18 +507,18 @@ contains
     type(gc_value) :: nsv, sym, fnv, var, none(0)
     character(len=:), allocatable :: nsname, fname
     integer :: base, h
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     vst => gc_my_stack()
     st = 1
     if (.not. c_associated(fp)) return
     block
-       character(len=:), allocatable :: dlr_8
-       call c_text(ns, nsn, s=dlr_8)
-       nsname = dlr_8
+       call c_text(ns, nsn, s=dlt_1)
+       nsname = dlt_1
     end block
     block
-       character(len=:), allocatable :: dlr_9
-       call c_text(name, namen, s=dlr_9)
-       fname = dlr_9
+       call c_text(name, namen, s=dlt_1)
+       fname = dlt_1
     end block
     nsv = gcn_find_or_create(nsname, none)
     if (gc_kind(nsv) /= OBJ_NS) return
@@ -563,10 +568,11 @@ contains
     integer(c_int), value :: namen
     type(c_funptr), value :: fp
     integer(c_int) :: h
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     block
-       character(len=:), allocatable :: dlr_10
-       call c_text(name, namen, s=dlr_10)
-       h = cf_register(fp, dlr_10)
+       call c_text(name, namen, s=dlt_1)
+       h = cf_register(fp, dlt_1)
     end block
   end function clotran_register_proc
 
@@ -580,6 +586,8 @@ contains
     integer(c_int), intent(in) :: pairs(*)
     type(gc_value) :: v, none(0)
     integer :: base, k
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     vst => gc_my_stack()
     base = vs_enter(vst, 3)
     v = gc_vec(int(npairs), none)
@@ -593,9 +601,8 @@ contains
        call gc_vec_set(vs_get(vst, base + 2), k, gc_int(int(pairs(2 * k), gc_ip)))
     end do
     block
-       character(len=:), allocatable :: dlr_11
-       call c_text(name, namen, s=dlr_11)
-       v = gc_str(dlr_11, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       call c_text(name, namen, s=dlt_1)
+       v = gc_str(dlt_1, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
     end block
     call vs_set(vst, base + 3, v)
     v = gc_obj(OBJ_COMPILED, [vs_get(vst, base + 3), vs_get(vst, base + 1), vs_get(vst, base + 2), &
@@ -638,11 +645,12 @@ contains
     character(kind=c_char), intent(in) :: name(*)
     integer(c_int) :: st
     type(gc_value) :: out
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     vst => gc_my_stack()
     block
-       character(len=:), allocatable :: dlr_12
-       call c_text(name, namen, s=dlr_12)
-       out = gce_new_slots(dlr_12, int(argbase), int(nargs))
+       call c_text(name, namen, s=dlt_1)
+       out = gce_new_slots(dlt_1, int(argbase), int(nargs))
     end block
     if (gce_has_error()) then
        call vs_set(vst, int(dst), gc_nil())
@@ -880,10 +888,11 @@ contains
   subroutine clotran_arity_error(nargs, name, n) bind(C, name="clotran_arity_error")
     integer(c_int), value :: nargs, n
     character(kind=c_char), intent(in) :: name(*)
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     block
-       character(len=:), allocatable :: dlr_13
-       call c_text(name, n, s=dlr_13)
-       call gce_raise_arity_named(int(nargs), dlr_13)
+       call c_text(name, n, s=dlt_1)
+       call gce_raise_arity_named(int(nargs), dlt_1)
     end block
   end subroutine clotran_arity_error
 
@@ -933,11 +942,12 @@ contains
     integer(c_int), value :: n, pool
     integer(c_int) :: st
     character(len=:), allocatable :: err
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     st = 1
     block
-       character(len=:), allocatable :: dlr_14
-       call c_text(path, n, s=dlr_14)
-       if (dl_install(dlr_14, int(pool), err)) st = 0
+       call c_text(path, n, s=dlt_1)
+       if (dl_install(dlt_1, int(pool), err)) st = 0
     end block
   end function clotran_load_compiled
 
@@ -999,10 +1009,11 @@ contains
 
   function clotran_error_len() bind(C, name="clotran_error_len") result(n)
     integer(c_int) :: n
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     block
-       character(len=:), allocatable :: dlr_15
-       call gce_error(s=dlr_15)
-       n = int(len(dlr_15), c_int)
+       call gce_error(s=dlt_1)
+       n = int(len(dlt_1), c_int)
     end block
   end function clotran_error_len
 
@@ -1012,10 +1023,11 @@ contains
     integer(c_int) :: w
     character(len=:), allocatable :: s
     integer :: i
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     block
-       character(len=:), allocatable :: dlr_16
-       call gce_error(s=dlr_16)
-       s = dlr_16
+       call gce_error(s=dlt_1)
+       s = dlt_1
     end block
     w = int(min(len(s), int(n)), c_int)
     do i = 1, int(w)

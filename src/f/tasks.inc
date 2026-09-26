@@ -167,12 +167,13 @@
   function failure_value() result(v)
     type(gc_value) :: v
     type(gc_value) :: none(0)
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     v = thrown_value()
     if (v%tag == GCT_NIL) then
        block
-          character(len=:), allocatable :: dlr_1
-          call gce_error(s=dlr_1)
-          v = error_value(dlr_1, none)
+          call gce_error(s=dlt_1)
+          v = error_value(dlt_1, none)
        end block
     end if
   end function failure_value
@@ -181,24 +182,23 @@
   subroutine failure_text(e, s)
     type(gc_value), intent(in) :: e
     character(len=:), allocatable, intent(out) :: s
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     if (gc_kind(e) == OBJ_ERR) then
        block
-          character(len=:), allocatable :: dlr_2, dlr_3
-          call class_name_of(e, s=dlr_2)
-          call text_of(gc_slot(e, 2), s=dlr_3)
-          s = dlr_2 // ": " // dlr_3
+          call class_name_of(e, s=dlt_1)
+          call text_of(gc_slot(e, 2), s=dlt_2)
+          s = dlt_1 // ": " // dlt_2
        end block
     else if (gca_is(e)) then
        block
-          character(len=:), allocatable :: dlr_4
-          call text_of(gca_get(e, gc_key("error", [e])), s=dlr_4)
-          s = dlr_4
+          call text_of(gca_get(e, gc_key("error", [e])), s=dlt_1)
+          s = dlt_1
        end block
     else
        block
-          character(len=:), allocatable :: dlr_5
-          call gcp_str(e, .true., s=dlr_5)
-          s = dlr_5
+          call gcp_str(e, .true., s=dlt_1)
+          s = dlt_1
        end block
     end if
   end subroutine failure_text
@@ -213,6 +213,8 @@
     integer(gc_ip), intent(in) :: deadline
     type(gc_value) :: out
     logical :: ready
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     tctx => ctx_self()
     out = gc_nil()
     ready = block_on(task, deadline)
@@ -228,9 +230,8 @@
        call raise_class("java.util.concurrent.CancellationException", "the future was cancelled", [task])
     case default
        block
-          character(len=:), allocatable :: dlr_6
-          call failure_text(gc_slot(task, 2), s=dlr_6)
-          call raise_class("java.util.concurrent.ExecutionException", dlr_6, [task])
+          call failure_text(gc_slot(task, 2), s=dlt_1)
+          call raise_class("java.util.concurrent.ExecutionException", dlt_1, [task])
        end block
     end select
   end function task_get
@@ -336,6 +337,8 @@
     logical :: ready, dead, cancelled, suspect
     integer(gc_ip) :: left
     integer :: seen
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     tctx => ctx_self()
     ready = .false.
     dead = .false.
@@ -396,9 +399,8 @@
     call gc_state_notify()
     if (dead) then
        block
-          character(len=:), allocatable :: dlr_7
-          call describe_wait(target, s=dlr_7)
-          call fail("deadlock: nothing left to run can make " // dlr_7 // " ready")
+          call describe_wait(target, s=dlt_1)
+          call fail("deadlock: nothing left to run can make " // dlt_1 // " ready")
        end block
     end if
   end function block_on

@@ -27,11 +27,12 @@
     type(gc_value), intent(in) :: v
     character(len=:), allocatable, intent(out) :: s
     type(gc_value) :: t
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     t = strip_meta(v)
     block
-       character(len=:), allocatable :: dlr_1
-       call gc_ref_text(t%ref, s=dlr_1)
-       s = dlr_1
+       call gc_ref_text(t%ref, s=dlt_1)
+       s = dlt_1
     end block
   end subroutine sym_text
 
@@ -91,12 +92,13 @@
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: fn, caps, capv
     integer :: base, ncap, i
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     vst => gc_my_stack()
     if (trace_macros == 1 .and. int_of(gcv_nth(tmpl, 3)) > 64) then
        block
-          character(len=:), allocatable :: dlr_2
-          call gcp_str(gcv_nth(tmpl, 0), .false., s=dlr_2)
-          write(0, '(A,I0,A,A)') "wide frame: ", int_of(gcv_nth(tmpl, 3)), " slots for ", dlr_2
+          call gcp_str(gcv_nth(tmpl, 0), .false., s=dlt_1)
+          write(0, '(A,I0,A,A)') "wide frame: ", int_of(gcv_nth(tmpl, 3)), " slots for ", dlt_1
        end block
     end if
     base = vs_enter(vst, 3)
@@ -340,6 +342,8 @@
     character(len=:), allocatable, intent(out) :: s
     character(len=16) :: nbuf
     integer :: k, n
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     k = gc_kind(strip_meta(v))
     n = -1
     select case (k)
@@ -379,9 +383,8 @@
        return
     end if
     block
-       character(len=:), allocatable :: dlr_3
-       call gcp_str(v, .true., s=dlr_3)
-       s = dlr_3
+       call gcp_str(v, .true., s=dlt_1)
+       s = dlt_1
     end block
     if (len(s) > 120) then
        block
@@ -410,6 +413,8 @@
     integer :: base, i, j, b, line, col, slot, lo, hi, pline, pcol
     logical :: have_pos
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     tctx => ctx_self()
     vst => tctx%stk
     base = vs_enter(vst, 4)
@@ -455,9 +460,8 @@
        nm = gc_slot(vs_get(vst, base + 2), 5)
        if (nm%tag == GCT_SYM) then
           block
-             character(len=:), allocatable :: dlr_4
-             call gc_ref_text(nm%ref, s=dlr_4)
-             who = dlr_4
+             call gc_ref_text(nm%ref, s=dlt_1)
+             who = dlt_1
           end block
        end if
 
@@ -609,6 +613,8 @@
     logical :: failed
     character(len=:), allocatable :: msg, trc
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     tctx => ctx_self()
     vst => tctx%stk
     out = gc_nil()
@@ -668,9 +674,8 @@
     if (cmd%tag == GCT_KEY) then
        if (reason == "error") return
        block
-          character(len=:), allocatable :: dlr_5
-          call gc_ref_text(cmd%ref, s=dlr_5)
-       select case (dlr_5)
+          call gc_ref_text(cmd%ref, s=dlt_1)
+       select case (dlt_1)
        case ("step-in")
           step_at = huge(step_at)
        case ("step-over")
@@ -747,11 +752,12 @@
     character(len=32) :: nbuf
     character(len=:), allocatable :: where
     integer :: i, j, top
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     block
-       character(len=:), allocatable :: dlr_6, dlr_7
-       call gcp_str(gca_get(m, gc_key("reason", [m])), .true., s=dlr_6)
-       call text_of(gca_get(m, gc_key("message", [m])), s=dlr_7)
-       write(u, '(A)') "break: " // dlr_6 // " " //  dlr_7
+       call gcp_str(gca_get(m, gc_key("reason", [m])), .true., s=dlt_1)
+       call text_of(gca_get(m, gc_key("message", [m])), s=dlt_2)
+       write(u, '(A)') "break: " // dlt_1 // " " //  dlt_2
     end block
     frames = gca_get(m, gc_key("frames", [m]))
     top = gcv_count(frames) - 1
@@ -760,31 +766,27 @@
        f = gcv_nth(frames, i)
        write(nbuf, '(I0)') i
        block
-          character(len=:), allocatable :: dlr_8
-          call text_of(gca_get(f, gc_key("file", [f])), s=dlr_8)
-          where = dlr_8
+          call text_of(gca_get(f, gc_key("file", [f])), s=dlt_1)
+          where = dlt_1
        end block
        if (len(where) > 0) where = where // ":"
        block
-          character(len=:), allocatable :: dlr_9, dlr_10
-          call int_text(gca_get(f, gc_key("line", [f])), s=dlr_9)
-          call int_text(gca_get(f, gc_key("col", [f])), s=dlr_10)
-          where = where // trim(dlr_9) // ":" //  trim(dlr_10)
+          call int_text(gca_get(f, gc_key("line", [f])), s=dlt_1)
+          call int_text(gca_get(f, gc_key("col", [f])), s=dlt_2)
+          where = where // trim(dlt_1) // ":" //  trim(dlt_2)
        end block
        block
-          character(len=:), allocatable :: dlr_11
-          call text_of(gca_get(f, gc_key("fn", [f])), s=dlr_11)
-          write(u, '(A)') "  " // trim(nbuf) // " " // dlr_11 // " (" // where // ")"
+          call text_of(gca_get(f, gc_key("fn", [f])), s=dlt_1)
+          write(u, '(A)') "  " // trim(nbuf) // " " // dlt_1 // " (" // where // ")"
        end block
        env = gca_get(f, gc_key("env", [f]))
        if (gca_is(env)) then
           call gca_entries(env, ks, vls)
           do j = 1, size(ks)
              block
-                character(len=:), allocatable :: dlr_12, dlr_13
-                call gcp_str(ks(j), .false., s=dlr_12)
-                call safe_str(vls(j), s=dlr_13)
-                write(u, '(A)') "      " // dlr_12 // " = " // dlr_13
+                call gcp_str(ks(j), .false., s=dlt_1)
+                call safe_str(vls(j), s=dlt_2)
+                write(u, '(A)') "      " // dlt_1 // " = " // dlt_2
              end block
           end do
        end if
@@ -934,6 +936,8 @@
     integer, intent(in) :: kbot
     type(gc_value) :: nd, exc, catches, cl, fin
     integer :: b, i, n
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     tctx => ctx_self()
     vst => tctx%stk
     do while (tctx%ksp > kbot)
@@ -944,9 +948,8 @@
           exc = thrown_value()
           if (exc%tag == GCT_NIL) then
              block
-                character(len=:), allocatable :: dlr_14
-                call gce_error(s=dlr_14)
-                exc = error_value(dlr_14, [nd])
+                call gce_error(s=dlt_1)
+                exc = error_value(dlt_1, [nd])
              end block
           end if
           call vs_set(vst, b + 3, exc)
@@ -1051,6 +1054,8 @@
     integer :: kind, n, b, site
     logical :: ok
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     tctx => ctx_self()
     vst => tctx%stk
     val = gc_nil()
@@ -1314,9 +1319,8 @@
              call set_thrown(v)
              tctx%has_error = .true.
              block
-                character(len=:), allocatable :: dlr_15
-                call gcp_str(v, .true., s=dlr_15)
-                tctx%last_error = dlr_15
+                call gcp_str(v, .true., s=dlt_1)
+                tctx%last_error = dlt_1
              end block
              call capture_trace()
           end if
@@ -1458,6 +1462,8 @@
     type(gc_value) :: out, kids, v, fnv
     integer :: base, kind
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     tctx => ctx_self()
     vst => tctx%stk
     out = gc_nil()
@@ -1478,9 +1484,8 @@
        if (.not. tctx%has_error) then
           call vs_set(vst, base + 3, v)
           block
-             character(len=:), allocatable :: dlr_16
-             call sym_text(gc_slot(vs_get(vst, base + 1), 2), s=dlr_16)
-             out = eval_new(dlr_16, vs_get(vst, base + 3))
+             call sym_text(gc_slot(vs_get(vst, base + 1), 2), s=dlt_1)
+             out = eval_new(dlt_1, vs_get(vst, base + 3))
           end block
        end if
     case (N_NEWTYPE)
@@ -1488,15 +1493,13 @@
        if (.not. tctx%has_error) then
           call vs_set(vst, base + 3, v)
           block
-             character(len=:), allocatable :: dlr_17
-             call sym_text(gc_slot(vs_get(vst, base + 1), 2), s=dlr_17)
-             fnv = find_type(dlr_17)
+             call sym_text(gc_slot(vs_get(vst, base + 1), 2), s=dlt_1)
+             fnv = find_type(dlt_1)
           end block
           if (gc_kind(fnv) /= OBJ_TYPE) then
              block
-                character(len=:), allocatable :: dlr_18
-                call sym_text(gc_slot(vs_get(vst, base + 1), 2), s=dlr_18)
-                call fail("no such class: " // dlr_18)
+                call sym_text(gc_slot(vs_get(vst, base + 1), 2), s=dlt_1)
+                call fail("no such class: " // dlt_1)
              end block
           else
              call vs_set(vst, base + 4, fnv)
@@ -1511,16 +1514,14 @@
           out = gcn_var_value(v)
        else
           block
-             character(len=:), allocatable :: dlr_19
-             call sym_text(gc_slot(vs_get(vst, base + 1), 2), s=dlr_19)
-             call fail("Unable to resolve symbol: " // dlr_19)
+             call sym_text(gc_slot(vs_get(vst, base + 1), 2), s=dlt_1)
+             call fail("Unable to resolve symbol: " // dlt_1)
           end block
        end if
     case (N_FAIL)
        block
-          character(len=:), allocatable :: dlr_20
-          call sym_text(gc_slot(nd, 2), s=dlr_20)
-          call fail(dlr_20)
+          call sym_text(gc_slot(nd, 2), s=dlt_1)
+          call fail(dlt_1)
        end block
     case (N_TOPDO)
        ! Each subform analysed after the previous one has run.
@@ -1547,14 +1548,15 @@
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: nd
     type(gc_value) :: p
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     tctx => ctx_self()
     p = gc_slot(nd, 4)
     if (p%tag /= GCT_INT) return
     if (index(tctx%last_error, "  at ") > 0) return
     block
-       character(len=:), allocatable :: dlr_21
-       call gcr_position(int(p%ival, kind=4), s=dlr_21)
-       tctx%last_error = tctx%last_error // "  at " // dlr_21
+       call gcr_position(int(p%ival, kind=4), s=dlt_1)
+       tctx%last_error = tctx%last_error // "  at " // dlt_1
     end block
   end subroutine note_position
 
@@ -1610,6 +1612,8 @@
     character(len=:), allocatable :: qual
     integer :: base, flags
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     tctx => ctx_self()
     vst => tctx%stk
     out = gc_nil()
@@ -1670,10 +1674,9 @@
           call vs_set(vst, base + 4, fnv)
           nmsym = gc_slot(vs_get(vst, base + 3), 4)
           block
-             character(len=:), allocatable :: dlr_22, dlr_23
-             call gcn_name(gc_slot(vs_get(vst, base + 3), 3), s=dlr_22)
-             call gc_ref_text(nmsym%ref, s=dlr_23)
-             qual = dlr_22 // "/" // dlr_23
+             call gcn_name(gc_slot(vs_get(vst, base + 3), 3), s=dlt_1)
+             call gc_ref_text(nmsym%ref, s=dlt_2)
+             qual = dlt_1 // "/" // dlt_2
           end block
           call gc_set_slot(vs_get(vst, base + 4), 5, gc_sym(qual, [vs_get(vst, base + 3), vs_get(vst, base + 4)]))
        end if
@@ -1756,6 +1759,8 @@
     integer :: base, i, n
     logical :: caught
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     tctx => ctx_self()
     vst => tctx%stk
     out = gc_nil()
@@ -1767,9 +1772,8 @@
        exc = thrown_value()
        if (exc%tag == GCT_NIL) then
           block
-             character(len=:), allocatable :: dlr_24
-             call gce_error(s=dlr_24)
-             exc = error_value(dlr_24, [vs_get(vst, base + 1)])
+             call gce_error(s=dlt_1)
+             exc = error_value(dlt_1, [vs_get(vst, base + 1)])
           end block
        end if
        call vs_set(vst, base + 3, exc)
@@ -1919,6 +1923,8 @@
     type(gc_value) :: out, native
     integer :: base
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     vst => gc_my_stack()
     out = gc_nil()
     base = vs_enter(vst, 3)
@@ -1934,9 +1940,8 @@
          tv2 = strip_meta(tv)
          if (tv2%tag == GCT_NIL) then
             block
-               character(len=:), allocatable :: dlr_25
-               call sym_text(gc_slot(vs_get(vst, base + 1), 2), s=dlr_25)
-               call raise_class("NullPointerException",  "Cannot invoke ." // dlr_25 // " on nil", [vs_get(vst, base + 1)])
+               call sym_text(gc_slot(vs_get(vst, base + 1), 2), s=dlt_1)
+               call raise_class("NullPointerException",  "Cannot invoke ." // dlt_1 // " on nil", [vs_get(vst, base + 1)])
             end block
             call vs_leave(vst, base)
             return
@@ -1950,9 +1955,8 @@
        out = apply(native, vs_get(vst, base + 3))
     else
        block
-          character(len=:), allocatable :: dlr_26
-          call sym_text(gc_slot(vs_get(vst, base + 1), 2), s=dlr_26)
-          out = eval_dot(vs_get(vst, base + 2), dlr_26, gc_i2(nd) == 1,  vs_get(vst, base + 3), from == 0)
+          call sym_text(gc_slot(vs_get(vst, base + 1), 2), s=dlt_1)
+          out = eval_dot(vs_get(vst, base + 2), dlt_1, gc_i2(nd) == 1,  vs_get(vst, base + 3), from == 0)
        end block
     end if
     call vs_leave(vst, base)
@@ -2015,6 +2019,8 @@
     character(len=24) :: want, got
     integer :: base, nf, na, drops
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     vst => gc_my_stack()
     out = gc_nil()
     base = vs_enter(vst, 2)
@@ -2031,9 +2037,8 @@
           write(want, '(I0)') nf
           write(got, '(I0)') na
           block
-             character(len=:), allocatable :: dlr_27
-             call class_text(vs_get(vst, base + 1), s=dlr_27)
-             call fail(dlr_27 // " takes " // trim(want) // " fields, given " // trim(got))
+             call class_text(vs_get(vst, base + 1), s=dlt_1)
+             call fail(dlt_1 // " takes " // trim(want) // " fields, given " // trim(got))
           end block
           call vs_leave(vst, base)
           return

@@ -1,0 +1,6 @@
+(ns autocompile-demo
+  "A namespace for test/clj/autocompile_test.clj to build into a cache.")
+
+(defn sumsq [n] (loop [i 0 acc 0] (if (< i n) (recur (inc i) (+ acc (* i i))) acc)))
+
+(defn words [s] (count (re-seq #"\w+" s)))

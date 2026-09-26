@@ -170,14 +170,15 @@ contains
   subroutine check_torture()
     type(gc_value) :: m, roots(1)
     integer :: i, bad
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     call gc_init(8)
     gc_torture = .true.
     m = build(30, no_roots)
     roots(1) = m
     block
-       character(len=:), allocatable :: dlr_1
-       call gc_check_heap(problem=dlr_1)
-       call ok("7a. the heap audits clean across promotion: ", dlr_1 == "")
+       call gc_check_heap(problem=dlt_1)
+       call ok("7a. the heap audits clean across promotion: ", dlt_1 == "")
     end block
     call ok_int("7b. ...with the count right: ", gca_count(m), 30)
     bad = 0

@@ -151,13 +151,14 @@ contains
     type(gc_value), intent(in) :: ns
     character(len=:), allocatable, intent(out) :: s
     type(gc_value) :: nm
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     s = ""
     if (gc_kind(ns) /= OBJ_NS) return
     nm = gc_slot(ns, 1)
     block
-       character(len=:), allocatable :: dlr_1
-       call gc_ref_text(nm%ref, s=dlr_1)
-       s = dlr_1
+       call gc_ref_text(nm%ref, s=dlt_1)
+       s = dlt_1
     end block
   end subroutine gcn_name
 
@@ -279,6 +280,8 @@ contains
     type(gc_value) :: var, binds
     integer :: base
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2, dlt_3, dlt_4, dlt_5, dlt_6
     var = gc_nil()
     if (gc_kind(ns) /= OBJ_NS) return
     base = vs_enter(5)
@@ -310,10 +313,9 @@ contains
          owner = gc_slot(var, 3)
          if (gc_kind(owner) == OBJ_NS) then
             block
-               character(len=:), allocatable :: dlr_2, dlr_3
-               call gcn_name(owner, s=dlr_2)
-               call gcn_name(vs_get(base + 1), s=dlr_3)
-               ours = (dlr_2 == dlr_3)
+               call gcn_name(owner, s=dlt_1)
+               call gcn_name(vs_get(base + 1), s=dlt_2)
+               ours = (dlt_1 == dlt_2)
             end block
          else
             ! No owner recorded: a Var from before namespaces carried
@@ -334,14 +336,13 @@ contains
          ! front, (:refer-clojure :exclude (next)), has nothing left to
          ! replace and so says nothing.
          block
-            character(len=:), allocatable :: dlr_4, dlr_5, dlr_6, dlr_7, dlr_8, dlr_9
-            call gc_ref_text(sym%ref, s=dlr_4)
-            call gcn_name(owner, s=dlr_5)
-            call gc_ref_text(sym%ref, s=dlr_6)
-            call gcn_name(vs_get(base + 1), s=dlr_7)
-            call gcn_name(vs_get(base + 1), s=dlr_8)
-            call gc_ref_text(sym%ref, s=dlr_9)
-            write(0, '(A)') "WARNING: " // dlr_4 //  " already refers to: #'" // dlr_5 // "/" //  dlr_6 // " in namespace: " //  dlr_7 // ", being replaced by: #'" //  dlr_8 // "/" // dlr_9
+            call gc_ref_text(sym%ref, s=dlt_1)
+            call gcn_name(owner, s=dlt_2)
+            call gc_ref_text(sym%ref, s=dlt_3)
+            call gcn_name(vs_get(base + 1), s=dlt_4)
+            call gcn_name(vs_get(base + 1), s=dlt_5)
+            call gc_ref_text(sym%ref, s=dlt_6)
+            write(0, '(A)') "WARNING: " // dlt_1 //  " already refers to: #'" // dlt_2 // "/" //  dlt_3 // " in namespace: " //  dlt_4 // ", being replaced by: #'" //  dlt_5 // "/" // dlt_6
          end block
        end block
     end if

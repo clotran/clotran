@@ -53,23 +53,23 @@ contains
     type(gc_value) :: v
     integer :: base
     character(len=:), allocatable :: got
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     base = vs_enter(1)
     v = gcr_read(text, no_roots)
     call vs_set(base + 1, v)
     if (gcr_has_error()) then
        block
-          character(len=:), allocatable :: dlr_1
-          call gcr_error(s=dlr_1)
-          print '(A,A,A,A)', "FAIL - ", label, "read error: ", dlr_1
+          call gcr_error(s=dlt_1)
+          print '(A,A,A,A)', "FAIL - ", label, "read error: ", dlt_1
        end block
        all_ok = .false.
        call vs_leave(base)
        return
     end if
     block
-       character(len=:), allocatable :: dlr_2
-       call gcp_str(vs_get(base + 1), .true., s=dlr_2)
-       got = dlr_2
+       call gcp_str(vs_get(base + 1), .true., s=dlt_1)
+       got = dlt_1
     end block
     call vs_leave(base)
     if (got == text) then
@@ -146,6 +146,8 @@ contains
   ! assertion after it would never run.
   subroutine check_invalid_numbers()
     type(gc_value) :: v
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     call gc_init(512)
     v = gcr_read("08", no_roots)
     call ok("7a. a leading zero with an 8 is not 8.0: ", gcr_has_error())
@@ -171,9 +173,8 @@ contains
     ! digit before the dot, so .5 is a symbol in Clojure too.
     v = gcr_read(".5", no_roots)
     block
-       character(len=:), allocatable :: dlr_3
-       call gcp_str(v, .true., s=dlr_3)
-       call ok("7j. .5 is a symbol, not 0.5: ",  .not. gcr_has_error() .and. dlr_3 == ".5")
+       call gcp_str(v, .true., s=dlt_1)
+       call ok("7j. .5 is a symbol, not 0.5: ",  .not. gcr_has_error() .and. dlt_1 == ".5")
     end block
     v = gcr_read("42", no_roots)
     call ok("7k. ...and a good number clears the error: ", .not. gcr_has_error())
@@ -230,6 +231,8 @@ contains
     character(len=:), allocatable :: text
     character(len=16) :: buf
     integer :: i
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     call gc_init(8)
     text = "("
     do i = 1, 60
@@ -241,9 +244,8 @@ contains
     gc_torture = .true.
     call trip("6a. a 60-element list under torture: ", text)
     block
-       character(len=:), allocatable :: dlr_4
-       call gc_check_heap(problem=dlr_4)
-       call ok("6b. ...and the heap audits clean: ", dlr_4 == "")
+       call gc_check_heap(problem=dlt_1)
+       call ok("6b. ...and the heap audits clean: ", dlt_1 == "")
     end block
     gc_torture = .false.
   end subroutine check_big_form_under_torture
@@ -264,6 +266,8 @@ contains
   ! read_map threaded roots correctly throughout and is the shape the
   ! other three now copy.
   subroutine check_nested_literals_under_torture()
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     call gc_init(8)
     gc_torture = .true.
     call trip("6c. a set inside a list: ", "(a #{1} b)")
@@ -275,9 +279,8 @@ contains
     call round("6g. an anonymous fn inside a list: ", "(a #(+ % 1) b)", &
          "(a (fn* [p1__1#] (+ p1__1# 1)) b)")
     block
-       character(len=:), allocatable :: dlr_5
-       call gc_check_heap(problem=dlr_5)
-       call ok("6h. ...and the heap audits clean: ", dlr_5 == "")
+       call gc_check_heap(problem=dlt_1)
+       call ok("6h. ...and the heap audits clean: ", dlt_1 == "")
     end block
     gc_torture = .false.
   end subroutine check_nested_literals_under_torture
@@ -289,13 +292,14 @@ contains
     type(gc_value) :: v
     integer :: base
     character(len=:), allocatable :: got
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     base = vs_enter(1)
     v = gcr_read(text, no_roots)
     call vs_set(base + 1, v)
     block
-       character(len=:), allocatable :: dlr_6
-       call gcp_str(vs_get(base + 1), .true., s=dlr_6)
-       got = dlr_6
+       call gcp_str(vs_get(base + 1), .true., s=dlt_1)
+       got = dlt_1
     end block
     call vs_leave(base)
     if (got == expected) then

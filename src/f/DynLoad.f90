@@ -105,11 +105,12 @@ contains
   subroutine dl_error(s)
     character(len=:), allocatable, intent(out) :: s
     type(c_ptr) :: p
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     p = dlerror()
     block
-       character(len=:), allocatable :: dlr_1
-       call dl_c_string(p, s=dlr_1)
-       s = dlr_1
+       call dl_c_string(p, s=dlt_1)
+       s = dlt_1
     end block
   end subroutine dl_error
 
@@ -137,14 +138,15 @@ contains
     character(len=:), allocatable, intent(out) :: s
     type(c_funptr) :: fp
     procedure(manifest_i), pointer :: f
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     s = ""
     fp = dl_sym(h, "clotran_manifest")
     if (.not. c_associated(fp)) return
     call c_f_procpointer(fp, f)
     block
-       character(len=:), allocatable :: dlr_2
-       call dl_c_string(f(), s=dlr_2)
-       s = dlr_2
+       call dl_c_string(f(), s=dlt_1)
+       s = dlt_1
     end block
   end subroutine dl_manifest
 
@@ -172,14 +174,15 @@ contains
     type(c_ptr) :: h
     type(c_funptr) :: fp
     procedure(install_i), pointer :: f
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     ok = .false.
     err = ""
     h = dl_open(path)
     if (.not. c_associated(h)) then
        block
-          character(len=:), allocatable :: dlr_3
-          call dl_error(s=dlr_3)
-          err = dlr_3
+          call dl_error(s=dlt_1)
+          err = dlt_1
        end block
        if (len(err) == 0) err = "cannot open " // path
        return

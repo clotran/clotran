@@ -108,3 +108,123 @@
             (clotran-load-compiled lib (clotran-pool-register (vec (mapcat #(map :value (:pool %)) built))))
             (doseq [[v old] keep] (alter-var-root v (constantly old)))
             true))))))
+
+;;; ---- compiling what is loaded: a cache, and background builds ------
+;;
+;; With CLOTRAN_AUTOCOMPILE=1 (the ./clotran launcher sets it) every
+;; file that loads is also compiled, in a separate process, into a cache;
+;; the next load of the same text installs the library, and so does the
+;; running session when the build finishes (poll, at each REPL prompt
+;; and each load). Editing a file makes its library stale -- the source
+;; hash is in the name -- so a namespace being worked on is loaded
+;; interpreted, compiled in the background, and picked up when the
+;; build is done, without a restart. CLOTRAN_AUTOCOMPILE=use installs
+;; from the cache but starts nothing (the compiling process itself);
+;; unset, nothing here runs.
+;;
+;; A library is named by the source's hash and a nonce, never reused:
+;; a process cannot load a second library from a path it has loaded,
+;; and a library it refused was still opened to read its manifest. A
+;; pointer file, KEY-HASH.ptr, names the current one ("none": nothing
+;; in the file compiles).
+
+(defonce ^:private builds (atom {}))   ; src -> {:state :lib :hash :log}
+
+(defn- mode [] (System/getenv "CLOTRAN_AUTOCOMPILE"))
+
+(defn- cache-dir []
+  (or (System/getenv "CLOTRAN_CACHE") (str (System/getenv "HOME") "/.cache/clotran")))
+
+(def ^:private ext
+  (delay (if (zero? (clotran-sh "[ \"$(uname -s)\" = Darwin ]")) "dylib" "so")))
+
+(defn- q
+  "`s` quoted for /bin/sh."
+  [s]
+  (str "'" (str/replace s "'" "'\\''") "'"))
+
+(defn- key-of [src] (str/replace src #"[^A-Za-z0-9._-]" "_"))
+
+(defn- hash-of [src] (str/replace (str (hash (clotran-slurp src))) "-" "m"))
+
+(defn- ptr-path [src h] (str (cache-dir) "/" (key-of src) "-" h ".ptr"))
+
+(defn- current
+  "The cached library for this text of `src`: its path, :none, or nil."
+  [src h]
+  (let [p (ptr-path src h)]
+    (when (clotran-file-exists? p)
+      (let [t (str/trim (clotran-slurp p))]
+        (cond (= t "none") :none
+              (clotran-file-exists? t) t)))))
+
+(defn- start!
+  "A build of `src` as it is now, in the background unless `wait?`; the
+  file's old libraries are removed when it succeeds."
+  [src h & [wait?]]
+  (let [dir (cache-dir)
+        k (key-of src)
+        lib (str dir "/" k "-" h "-" (System/nanoTime) "." @ext)
+        log (str dir "/" k "-" h ".log")
+        ptr (ptr-path src h)
+        cmd (str "mkdir -p " (q dir) " && "
+                 "CLOTRAN_AUTOCOMPILE=use " (q (str (System/getProperty "clotran.home") "/clotran"))
+                 " compile " (q src) " " (q lib) " > " (q log) " 2>&1; "
+                 "if [ -f " (q lib) " ]; then "
+                 "printf %s " (q lib) " > " (q (str ptr ".part")) " && mv -f " (q (str ptr ".part")) " " (q ptr) "; "
+                 "for f in " (q dir) "/" (q k) "-*; do "
+                 "[ \"$f\" = " (q lib) " ] || [ \"$f\" = " (q ptr) " ] || [ \"$f\" = " (q log) " ] || rm -f \"$f\"; done; "
+                 "elif grep -q 'no Fortran was written' " (q log) "; then printf none > " (q ptr) "; fi; "
+                 ": > " (q (str lib ".done")))]
+    (swap! builds assoc src {:state :compiling :lib lib :hash h :log log})
+    (clotran-sh cmd (boolean wait?))
+    lib))
+
+(defn auto
+  "After `src` loads with no library beside it: install the cached
+  library for this text, or start building one."
+  [src]
+  (when (#{"1" "use"} (mode))
+    (let [h (hash-of src)
+          lib (current src h)]
+      (cond
+        (= :none lib) nil
+        (string? lib) (when (install lib src) (swap! builds assoc src {:state :installed :lib lib :hash h}))
+        (not= "1" (mode)) nil
+        (and (= :compiling (:state (@builds src))) (= h (:hash (@builds src)))) nil
+        :else (do (start! src h) nil)))))
+
+(defn poll
+  "Builds that have finished since the last look: installed if the source
+  is still the text they were built from, rebuilt if it is not."
+  []
+  (doseq [[src {:keys [state lib log] h :hash}] @builds
+          :when (and (= :compiling state) (clotran-file-exists? (str lib ".done")))]
+    (clotran-sh (str "rm -f " (q (str lib ".done"))))
+    (cond
+      (not (clotran-file-exists? lib))
+      (if (= :none (current src h))
+        (swap! builds assoc-in [src :state] :none)
+        (do (swap! builds assoc-in [src :state] :failed)
+            (println (str "note: " src " did not compile; see " log))))
+      (not= h (hash-of src))
+      (start! src (hash-of src))   ; edited while it built
+      (install lib src)
+      (do (swap! builds assoc-in [src :state] :installed)
+          (println (str "note: " src " is compiled now")))
+      :else (swap! builds assoc-in [src :state] :refused))))
+
+(defn compile-now
+  "Build `src` now and install it, waiting for it -- for a benchmark, or
+  after a library was refused."
+  [src]
+  (start! src (hash-of src) true)
+  (poll)
+  (:state (@builds src)))
+
+(defn compile-status
+  "Each file this session loaded or built: :compiling, :installed,
+  :none (nothing in it compiles), :failed, :refused."
+  []
+  (poll)
+  (into (sorted-map) (map (fn [[src b]] [src (:state b)]) @builds)))

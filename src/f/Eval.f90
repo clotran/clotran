@@ -232,6 +232,7 @@ module Eval
   integer, parameter :: B_ASTPOOL = 380, B_POSITION = 381, B_READFORMS = 382, B_ARRAYTYPESYM = 383
   integer, parameter :: B_MONENTER = 384, B_MONEXIT = 385
   integer, parameter :: B_CLONETB = 386, B_RESETTB = 387, B_GETTBS = 388, B_GETTB = 389, B_ISBOUND = 390
+  integer, parameter :: B_GETENV = 391, B_FILEEXISTS = 392, B_SH = 393
 
   ! Compiler.CHAR_MAP, verbatim from the pinned clone: the characters
   ! a Clojure name may hold that a JVM member name may not. '.' is
@@ -354,7 +355,7 @@ module Eval
   integer, parameter :: MAX_MONITORS = 256
   type(gc_value), save :: mon_obj(MAX_MONITORS)
   integer, save :: mon_owner(MAX_MONITORS) = 0, mon_depth(MAX_MONITORS) = 0
-  integer(c_size_t), parameter :: TASK_STACK_BYTES = 64_c_size_t * 1024_c_size_t * 1024_c_size_t
+  integer(c_size_t), parameter :: TASK_STACK_BYTES = 256_c_size_t * 1024_c_size_t * 1024_c_size_t
   logical, save :: task_trace = .false., task_trace_read = .false.   ! CLOTRAN_TASK_TRACE=1: the scheduler's decisions, on stderr
   logical, save :: rt_loaded = .false.   ! clotran.rt, once (rt_call)
   logical, save :: mf_loaded = .false.   ! clotran.multifn, once (mf_call)
@@ -367,6 +368,14 @@ module Eval
   logical, save :: spec_loading = .false.
   logical, save :: pk_loaded = .false.   ! clotran.package, once (B_PKGFN)
   logical, save :: ld_loaded = .false.   ! clotran.loader, once (gce_install_compiled)
+  ! CLOTRAN_AUTOCOMPILE, read once: 0 unset, 1 set (clotran.loader/auto)
+  integer, save :: autocompile = -1
+  ! files loaded while core.clj itself was loading -- host.clj, the
+  ! printer, protocols -- wait for core to finish: clotran.loader is
+  ! written in the Clojure core defines
+  logical, save :: auto_ready = .false.
+  character(len=512), save :: auto_waiting(64)
+  integer, save :: n_auto_waiting = 0
   ! The packages opened (DynLoad.f90), by handle: a package's fns carry
   ! the index, never the pointer.
   type(c_ptr), allocatable, save :: pkg_handles(:)
@@ -555,6 +564,8 @@ contains
     type(gc_value) :: out, m, nm
     character(len=:), allocatable :: who, fname
     integer :: i, base, line, col
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     tctx => ctx_self()
     vst => tctx%stk
     base = vs_enter(vst, 4)
@@ -566,17 +577,15 @@ contains
           nm = gc_slot(tctx%fstack_fn(i), 5)
           if (nm%tag == GCT_SYM) then
              block
-                character(len=:), allocatable :: dlr_1
-                call gc_ref_text(nm%ref, s=dlr_1)
-                who = dlr_1
+                call gc_ref_text(nm%ref, s=dlt_1)
+                who = dlt_1
              end block
           end if
        else if (gc_kind(tctx%fstack_fn(i)) == OBJ_COMPILED) then
           nm = gc_slot(tctx%fstack_fn(i), 1)
           block
-             character(len=:), allocatable :: dlr_2
-             call gc_ref_text(nm%ref, s=dlr_2)
-             who = dlr_2
+             call gc_ref_text(nm%ref, s=dlt_1)
+             who = dlt_1
           end block
        end if
        fname = ""
@@ -658,6 +667,8 @@ contains
     type(gc_value) :: nm
     character(len=:), allocatable :: who
     character(len=16) :: more
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     tctx => ctx_self()
     tctx%last_trace = ""
     if (tctx%fstack_top > 128) write(more, '(I0)') tctx%fstack_top - 128
@@ -667,24 +678,21 @@ contains
           nm = gc_slot(tctx%fstack_fn(i), 5)
           if (nm%tag == GCT_SYM) then
              block
-                character(len=:), allocatable :: dlr_3
-                call gc_ref_text(nm%ref, s=dlr_3)
-                who = dlr_3
+                call gc_ref_text(nm%ref, s=dlt_1)
+                who = dlt_1
              end block
           end if
        else if (gc_kind(tctx%fstack_fn(i)) == OBJ_COMPILED) then
           nm = gc_slot(tctx%fstack_fn(i), 1)
           block
-             character(len=:), allocatable :: dlr_4
-             call gc_ref_text(nm%ref, s=dlr_4)
-             who = dlr_4
+             call gc_ref_text(nm%ref, s=dlt_1)
+             who = dlt_1
           end block
        end if
        if (tctx%fstack_site(i) /= 0) then
           block
-             character(len=:), allocatable :: dlr_5
-             call gcr_position(tctx%fstack_site(i), s=dlr_5)
-             tctx%last_trace = tctx%last_trace // "  at " // who // " (" // dlr_5 // ")" // achar(10)
+             call gcr_position(tctx%fstack_site(i), s=dlt_1)
+             tctx%last_trace = tctx%last_trace // "  at " // who // " (" // dlt_1 // ")" // achar(10)
           end block
        else
           tctx%last_trace = tctx%last_trace // "  at " // who // achar(10)
@@ -796,6 +804,9 @@ contains
     call bind_builtin(core, "clotran-thread-bindings", B_GETTBS)
     call bind_builtin(core, "clotran-thread-binding", B_GETTB)
     call bind_builtin(core, "clotran-is-bound", B_ISBOUND)
+    call bind_builtin(core, "clotran-getenv", B_GETENV)
+    call bind_builtin(core, "clotran-file-exists?", B_FILEEXISTS)
+    call bind_builtin(core, "clotran-sh", B_SH)
     call bind_builtin(core, "clotran-position", B_POSITION)
     call bind_builtin(core, "clotran-read-forms", B_READFORMS)
     call bind_builtin(core, "clotran-load-compiled", B_LOADCOMPILED)
@@ -1136,6 +1147,8 @@ contains
     logical :: was_loaded
     character(len=:), allocatable :: vt
     integer :: base
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     tctx => ctx_self()
     vst => tctx%stk
     if (.not. spec_check .or. spec_loading) return
@@ -1160,9 +1173,8 @@ contains
     out = rt_call_in("clojure/spec/alpha", "clojure.spec.alpha", was_loaded, "macroexpand-check", vs_get(vst, base + 3))
     if (tctx%has_error) then
        block
-          character(len=:), allocatable :: dlr_6
-          call to_string_text(vs_get(vst, base + 1), s=dlr_6)
-          vt = dlr_6
+          call to_string_text(vs_get(vst, base + 1), s=dlt_1)
+          vt = dlt_1
        end block
        if (len(vt) > 2) then
           if (vt(1:2) == "#'") vt = vt(3:)
@@ -1197,8 +1209,27 @@ contains
     type(gc_value) :: args, r
     logical :: there
     integer :: dot, i, base, at
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     tctx => ctx_self()
     vst => tctx%stk
+    if (autocompile_on() .and. .not. auto_ready) then
+       if (len(path) >= 16) then
+          if (path(len(path)-15:) == "clojure/core.clj") auto_ready = .true.
+       end if
+       if (.not. auto_ready) then
+          if (n_auto_waiting < size(auto_waiting)) then
+             n_auto_waiting = n_auto_waiting + 1
+             auto_waiting(n_auto_waiting) = path
+          end if
+          return
+       end if
+       ! core has loaded: the files that waited for it first, then core
+       do i = 1, n_auto_waiting
+          call gce_install_compiled(trim(auto_waiting(i)))
+       end do
+       n_auto_waiting = 0
+    end if
     dot = index(path, ".", back=.true.)
     if (dot <= index(path, "/", back=.true.)) return
     stem = path(1:dot)
@@ -1221,16 +1252,84 @@ contains
        r = rt_call_in("clotran/loader", "clotran.loader", ld_loaded, "install", vs_get(vst, base + 1))
        if (tctx%has_error) then
           block
-             character(len=:), allocatable :: dlr_7
-             call gce_error(s=dlr_7)
-             print '(A,A,A,A)', "note: not using ", cand, ": ", dlr_7
+             call gce_error(s=dlt_1)
+             print '(A,A,A,A)', "note: not using ", cand, ": ", dlt_1
           end block
           call gce_clear_error()
        end if
        call vs_leave(vst, base)
        return
     end do
+    ! Nothing beside it: with CLOTRAN_AUTOCOMPILE, the cache -- install
+    ! what was built from this text, or build it (clotran.loader/auto)
+    if (autocompile_on()) then
+       base = vs_enter(vst, 1)
+       args = gcv_empty([gc_nil()])
+       call vs_set(vst, base + 1, args)
+       args = gcv_conj(vs_get(vst, base + 1), gc_str(path, [vs_get(vst, base + 1)]), [vs_get(vst, base + 1)])
+       call vs_set(vst, base + 1, args)
+       r = rt_call_in("clotran/loader", "clotran.loader", ld_loaded, "auto", vs_get(vst, base + 1))
+       if (tctx%has_error) then
+          block
+             character(len=:), allocatable :: dlr_e
+             call gce_error(s=dlr_e)
+             if (index(dlr_e, "clotran.loader has no auto") > 0) then
+                ! a file the loader itself requires, loading before the
+                ! loader is defined: it waits, and goes with the next file
+                if (n_auto_waiting < size(auto_waiting)) then
+                   n_auto_waiting = n_auto_waiting + 1
+                   auto_waiting(n_auto_waiting) = path
+                end if
+             else
+                print '(A,A,A,A)', "note: not compiling ", path, ": ", dlr_e
+             end if
+          end block
+          call gce_clear_error()
+       else if (n_auto_waiting > 0) then
+          block
+            integer :: w
+            character(len=512) :: waiting(64)
+            w = n_auto_waiting
+            waiting(1:w) = auto_waiting(1:w)
+            n_auto_waiting = 0
+            do i = 1, w
+               call gce_install_compiled(trim(waiting(i)))
+            end do
+          end block
+       end if
+       call vs_leave(vst, base)
+    end if
   end subroutine gce_install_compiled
+
+  logical function autocompile_on()
+    character(len=8) :: e
+    integer :: st
+    if (autocompile < 0) then
+       call get_environment_variable("CLOTRAN_AUTOCOMPILE", e, status=st)
+       autocompile = 0
+       if (st == 0 .and. len_trim(e) > 0 .and. trim(e) /= "0") autocompile = 1
+    end if
+    autocompile_on = autocompile == 1
+  end function autocompile_on
+
+  ! At a REPL prompt: builds that finished meanwhile are installed now
+  ! (clotran.loader/poll), so a namespace being worked on turns compiled
+  ! without a restart. Only once the loader has been read.
+  recursive subroutine gce_poll_compiled()
+    type(gc_stack), pointer :: vst
+    type(eval_ctx), pointer :: tctx
+    type(gc_value) :: args, r
+    integer :: base
+    if (.not. (ld_loaded .and. autocompile_on())) return
+    tctx => ctx_self()
+    vst => tctx%stk
+    base = vs_enter(vst, 1)
+    args = gcv_empty([gc_nil()])
+    call vs_set(vst, base + 1, args)
+    r = rt_call_in("clotran/loader", "clotran.loader", ld_loaded, "poll", vs_get(vst, base + 1))
+    if (tctx%has_error) call gce_clear_error()
+    call vs_leave(vst, base)
+  end subroutine gce_poll_compiled
 
   recursive function rt_call_in(lib, nsname, loaded, name, args) result(out)
     type(gc_stack), pointer :: vst
@@ -1568,6 +1667,8 @@ contains
     type(gc_value) :: out, s, tmp
     integer :: base, i
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     vst => gc_my_stack()
     base = vs_enter(vst, 2)
     call vs_set(vst, base + 1, ifaces)
@@ -1578,10 +1679,9 @@ contains
           s = strip_meta(gcv_nth(vs_get(vst, base + 1), i))
           if (s%tag /= GCT_SYM) cycle
           block
-             character(len=:), allocatable :: dlr_8, dlr_9
-             call gc_ref_text(s%ref, s=dlr_8)
-             call class_key(dlr_8, k=dlr_9)
-             tmp = gc_class(dlr_9,  [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+             call gc_ref_text(s%ref, s=dlt_1)
+             call class_key(dlt_1, k=dlt_2)
+             tmp = gc_class(dlt_2,  [vs_get(vst, base + 1), vs_get(vst, base + 2)])
           end block
           call vs_set(vst, base + 2, gcv_conj(vs_get(vst, base + 2), tmp, &
                [vs_get(vst, base + 1), vs_get(vst, base + 2), tmp]))
@@ -1600,6 +1700,8 @@ contains
     type(gc_value) :: out, m, mname, tmp
     integer :: base
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     vst => gc_my_stack()
     base = vs_enter(vst, 5)
     call vs_set(vst, base + 1, methods)
@@ -1613,9 +1715,8 @@ contains
        mname = strip_meta(gcl_first(m))
        if (mname%tag == GCT_SYM) then
           block
-             character(len=:), allocatable :: dlr_10
-             call bare_name(mname, s=dlr_10)
-          if (dlr_10 == name) then
+             call bare_name(mname, s=dlt_1)
+          if (dlt_1 == name) then
              tmp = bind_fields(gcl_rest(m, [vs_get(vst, base + 2), vs_get(vst, base + 3)]), &
                   vs_get(vst, base + 2))
              call vs_set(vst, base + 5, tmp)
@@ -1650,6 +1751,8 @@ contains
     type(gc_value) :: out, params, this, f, tmp
     integer :: base, i
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     vst => gc_my_stack()
     out = clause
     if (.not. gcv_is(fields)) return
@@ -1672,16 +1775,14 @@ contains
        f = strip_meta(gcv_nth(vs_get(vst, base + 2), i))
        if (f%tag /= GCT_SYM) cycle
        block
-          character(len=:), allocatable :: dlr_11
-          call gc_ref_text(f%ref, s=dlr_11)
-          if (params_bind(vs_get(vst, base + 3), dlr_11)) cycle
+          call gc_ref_text(f%ref, s=dlt_1)
+          if (params_bind(vs_get(vst, base + 3), dlt_1)) cycle
        end block
        tmp = gcv_conj(vs_get(vst, base + 5), f, [vs_get(vst, base + 5), f])
        call vs_set(vst, base + 5, tmp)
        block
-          character(len=:), allocatable :: dlr_12
-          call gc_ref_text(f%ref, s=dlr_12)
-          tmp = field_read(vs_get(vst, base + 4), dlr_12,  [vs_get(vst, base + 4), vs_get(vst, base + 5)])
+          call gc_ref_text(f%ref, s=dlt_1)
+          tmp = field_read(vs_get(vst, base + 4), dlt_1,  [vs_get(vst, base + 4), vs_get(vst, base + 5)])
        end block
        call vs_set(vst, base + 6, tmp)
        tmp = gcv_conj(vs_get(vst, base + 5), vs_get(vst, base + 6), &
@@ -1761,6 +1862,8 @@ contains
     type(gc_value) :: tbl, k
     integer :: base
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     vst => gc_my_stack()
     base = vs_enter(vst, 4)
     call vs_set(vst, base + 1, ty)
@@ -1772,10 +1875,9 @@ contains
        call vs_set(vst, base + 2, gca_empty([vs_get(vst, base + 1)]))
     end if
     block
-       character(len=:), allocatable :: dlr_13, dlr_14
-       call class_text(vs_get(vst, base + 1), s=dlr_13)
-       call short_class_name(dlr_13, s=dlr_14)
-       k = gc_class(dlr_14,  [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       call class_text(vs_get(vst, base + 1), s=dlt_1)
+       call short_class_name(dlt_1, s=dlt_2)
+       k = gc_class(dlt_2,  [vs_get(vst, base + 1), vs_get(vst, base + 2)])
     end block
     call vs_set(vst, base + 3, k)
     tbl = gca_assoc(vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 1), &
@@ -1789,9 +1891,8 @@ contains
       character(len=:), allocatable :: full
       integer :: i, last_dot
       block
-         character(len=:), allocatable :: dlr_15
-         call class_text(vs_get(vst, base + 1), s=dlr_15)
-         full = dlr_15
+         call class_text(vs_get(vst, base + 1), s=dlt_1)
+         full = dlt_1
       end block
       last_dot = 0
       do i = 1, len(full)
@@ -1818,6 +1919,8 @@ contains
     type(gc_value) :: out, tbl
     integer :: base
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     vst => gc_my_stack()
     out = gc_nil()
     if (.not. gc_root_live(types_root)) return
@@ -1825,9 +1928,8 @@ contains
     tbl = gc_root_get(types_root)
     call vs_set(vst, base + 1, tbl)
     block
-       character(len=:), allocatable :: dlr_16
-       call class_key(cname, k=dlr_16)
-       out = gca_get(vs_get(vst, base + 1),  gc_class(dlr_16, [vs_get(vst, base + 1)]))
+       call class_key(cname, k=dlt_1)
+       out = gca_get(vs_get(vst, base + 1),  gc_class(dlt_1, [vs_get(vst, base + 1)]))
     end block
     ! A deftype is registered under its own name and under the bare
     ! last segment, and class_key qualifies a bare name with java.lang
@@ -2107,6 +2209,8 @@ contains
     type(gc_value) :: out, fields, f, k, rest, vals, tmp
     integer :: base, i, declared
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     vst => gc_my_stack()
     base = vs_enter(vst, 5)
     call vs_set(vst, base + 1, ty)
@@ -2121,9 +2225,8 @@ contains
     do i = 0, declared - 1
        f = strip_meta(gcv_nth(vs_get(vst, base + 3), i))
        block
-          character(len=:), allocatable :: dlr_17
-          call gc_ref_text(f%ref, s=dlr_17)
-          k = gc_key(dlr_17, [vs_get(vst, base + 3), vs_get(vst, base + 4), vs_get(vst, base + 5)])
+          call gc_ref_text(f%ref, s=dlt_1)
+          k = gc_key(dlt_1, [vs_get(vst, base + 3), vs_get(vst, base + 4), vs_get(vst, base + 5)])
        end block
        tmp = gcv_conj(vs_get(vst, base + 4), gca_get(vs_get(vst, base + 2), k), &
             [vs_get(vst, base + 3), vs_get(vst, base + 4), vs_get(vst, base + 5), k])
@@ -2317,6 +2420,8 @@ contains
     logical :: found
     integer :: base
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     tctx => ctx_self()
     vst => tctx%stk
     out = gc_nil()
@@ -2328,9 +2433,8 @@ contains
        ! A DEFTYPE CLASS in member position. The only static one has
        ! is a record's `create`, which is what map->Name calls.
        block
-          character(len=:), allocatable :: dlr_18
-          call gc_ref_text(target0%ref, s=dlr_18)
-          dty = find_type(dlr_18)
+          call gc_ref_text(target0%ref, s=dlt_1)
+          dty = find_type(dlt_1)
        end block
        if (gc_kind(dty) == OBJ_TYPE .and. mname == "create") then
           call vs_set(vst, base + 3, dty)
@@ -2341,9 +2445,8 @@ contains
        end if
        if (is_host_class(target0)) then
           block
-             character(len=:), allocatable :: dlr_19
-             call gc_ref_text(target0%ref, s=dlr_19)
-             out = static_member(dlr_19, mname, vs_get(vst, base + 2))
+             call gc_ref_text(target0%ref, s=dlt_1)
+             out = static_member(dlt_1, mname, vs_get(vst, base + 2))
           end block
           if (.not. tctx%has_error) then
              if (is_call) out = apply(out, vs_get(vst, base + 2))
@@ -2358,10 +2461,9 @@ contains
        ! A class literal is_host_class does not know evaluates to the
        ! keyword naming its type tag; the retry below sees it as one.
        block
-          character(len=:), allocatable :: dlr_20, dlr_21
-          call gc_ref_text(target0%ref, s=dlr_20)
-          call class_key(dlr_20, k=dlr_21)
-          call vs_set(vst, base + 1, gc_class(dlr_21, [vs_get(vst, base + 2)]))
+          call gc_ref_text(target0%ref, s=dlt_1)
+          call class_key(dlt_1, k=dlt_2)
+          call vs_set(vst, base + 1, gc_class(dlt_2, [vs_get(vst, base + 2)]))
        end block
     end if
 
@@ -2382,9 +2484,8 @@ contains
           out = inst_field(vs_get(vst, base + 3), mname(2:), found)
           if (.not. found) then
              block
-                character(len=:), allocatable :: dlr_22
-                call class_text(vs_get(vst, base + 3), s=dlr_22)
-                call fail("no such field: " //  dlr_22 // "." // mname(2:))
+                call class_text(vs_get(vst, base + 3), s=dlt_1)
+                call fail("no such field: " //  dlt_1 // "." // mname(2:))
              end block
           end if
           call vs_leave(vst, base)
@@ -2461,9 +2562,8 @@ contains
        ! (cast Number 1.5) work, and any other class held in a
        ! variable with it.
        block
-          character(len=:), allocatable :: dlr_23
-          call gc_ref_text(tv%ref, s=dlr_23)
-          out = static_member(dlr_23, mname, vs_get(vst, base + 2))
+          call gc_ref_text(tv%ref, s=dlt_1)
+          out = static_member(dlt_1, mname, vs_get(vst, base + 2))
        end block
        if (.not. tctx%has_error .and. is_call) out = apply(out, vs_get(vst, base + 2))
     else
@@ -2473,10 +2573,9 @@ contains
          character(len=16) :: cbuf
          write(cbuf, '(I0)') gcv_count(vs_get(vst, base + 2))
          block
-            character(len=:), allocatable :: dlr_24
-            call class_name_of(tv, s=dlr_24)
+            call class_name_of(tv, s=dlt_1)
             call raise_class("IllegalArgumentException", &
-                 "No matching method " // mname //  " found taking " // trim(cbuf) // " args for class " // dlr_24, &
+                 "No matching method " // mname //  " found taking " // trim(cbuf) // " args for class " // dlt_1, &
                  [vs_get(vst, base + 1)])
          end block
        end block
@@ -2524,12 +2623,13 @@ contains
   logical function is_member_sym(sym)
     type(gc_value), intent(in) :: sym
     character(len=:), allocatable :: t
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     is_member_sym = .false.
     if (sym%tag /= GCT_SYM) return
     block
-       character(len=:), allocatable :: dlr_25
-       call gc_ref_text(sym%ref, s=dlr_25)
-       t = dlr_25
+       call gc_ref_text(sym%ref, s=dlt_1)
+       t = dlt_1
     end block
     if (len(t) < 2) return
     ! `..` IS NOT A MEMBER ACCESS, it is core.clj's threading
@@ -2569,12 +2669,13 @@ contains
     type(gc_value), intent(in) :: sym
     character(len=:), allocatable :: t
     integer :: i, last_dot
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     is_class_name = .false.
     if (sym%tag /= GCT_SYM) return
     block
-       character(len=:), allocatable :: dlr_26
-       call gc_ref_text(sym%ref, s=dlr_26)
-       t = dlr_26
+       call gc_ref_text(sym%ref, s=dlt_1)
+       t = dlt_1
     end block
     if (len(t) < 1) return
     if (index(t, "/") > 0) return
@@ -2595,12 +2696,13 @@ contains
   logical function is_ctor_sym(sym)
     type(gc_value), intent(in) :: sym
     character(len=:), allocatable :: t
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     is_ctor_sym = .false.
     if (sym%tag /= GCT_SYM) return
     block
-       character(len=:), allocatable :: dlr_27
-       call gc_ref_text(sym%ref, s=dlr_27)
-       t = dlr_27
+       call gc_ref_text(sym%ref, s=dlt_1)
+       t = dlt_1
     end block
     if (len(t) < 2) return
     if (t(len(t):len(t)) /= ".") return
@@ -2614,12 +2716,13 @@ contains
     character(len=:), allocatable :: t
     integer :: slash
     type(gc_value) :: qual
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     is_static_call = .false.
     if (sym%tag /= GCT_SYM) return
     block
-       character(len=:), allocatable :: dlr_28
-       call gc_ref_text(sym%ref, s=dlr_28)
-       t = dlr_28
+       call gc_ref_text(sym%ref, s=dlt_1)
+       t = dlt_1
     end block
     slash = index(t, "/")
     if (slash <= 1 .or. slash >= len(t)) return
@@ -2987,14 +3090,15 @@ contains
     integer(gc_ip) :: iv
     real(gc_dp) :: dv
     integer :: st
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     v = strip_meta(v0)
     out = v
     select case (cname)
     case ("String", "java.lang.String")
        block
-          character(len=:), allocatable :: dlr_29
-          call text_of(v, s=dlr_29)
-          out = gc_str(dlr_29, roots)
+          call text_of(v, s=dlt_1)
+          out = gc_str(dlt_1, roots)
        end block
     case ("Boolean", "java.lang.Boolean")
        if (v%tag == GCT_STR) then
@@ -3007,9 +3111,8 @@ contains
     case ("Double", "java.lang.Double", "Float", "java.lang.Float")
        if (v%tag == GCT_STR) then
           block
-             character(len=:), allocatable :: dlr_30
-             call gc_ref_text(v%ref, s=dlr_30)
-             t = dlr_30
+             call gc_ref_text(v%ref, s=dlt_1)
+             t = dlt_1
           end block
           read(t, *, iostat=st) dv
           if (st == 0) then
@@ -3024,9 +3127,8 @@ contains
        ! The integer boxes.
        if (v%tag == GCT_STR) then
           block
-             character(len=:), allocatable :: dlr_31
-             call gc_ref_text(v%ref, s=dlr_31)
-             t = dlr_31
+             call gc_ref_text(v%ref, s=dlt_1)
+             t = dlt_1
           end block
           read(t, *, iostat=st) iv
           if (st == 0) then
@@ -3142,10 +3244,11 @@ contains
   subroutine class_key(name, k)
     character(len=*), intent(in) :: name
     character(len=:), allocatable, intent(out) :: k
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     block
-       character(len=:), allocatable :: dlr_32
-       call canon_class(name, c=dlr_32)
-       k = dlr_32
+       call canon_class(name, c=dlt_1)
+       k = dlt_1
     end block
   end subroutine class_key
 
@@ -3159,6 +3262,8 @@ contains
   ! class while a made-up package answers nil.
   logical function known_class_name(t) result(yes)
     character(len=*), intent(in) :: t
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     yes = .true.
     ! By TEXT, allocating nothing: this runs inside analysis, where a
     ! fresh symbol would be a value the collector cannot see. The
@@ -3166,14 +3271,12 @@ contains
     ! qualifies every bare name with java.lang, and the prefix rule
     ! below would then accept anything at all.
     block
-       character(len=:), allocatable :: dlr_33
-       call canon_class(t, c=dlr_33)
-       if (any(HOST_STATICS(:)%cls == dlr_33)) return
+       call canon_class(t, c=dlt_1)
+       if (any(HOST_STATICS(:)%cls == dlt_1)) return
     end block
     block
-       character(len=:), allocatable :: dlr_34
-       call canon_class(t, c=dlr_34)
-       if (any(HOST_METHODS(:)%cls == dlr_34)) return
+       call canon_class(t, c=dlt_1)
+       if (any(HOST_METHODS(:)%cls == dlt_1)) return
     end block
     if (gc_kind(find_type(t)) == OBJ_TYPE) return
     if (index(t, "clojure.lang.") == 1) return
@@ -3187,13 +3290,14 @@ contains
   logical function is_host_class(sym)
     type(gc_value), intent(in) :: sym
     character(len=:), allocatable :: c
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     is_host_class = .false.
     if (sym%tag /= GCT_SYM) return
     block
-       character(len=:), allocatable :: dlr_35, dlr_36
-       call gc_ref_text(sym%ref, s=dlr_35)
-       call canon_class(dlr_35, c=dlr_36)
-       c = dlr_36
+       call gc_ref_text(sym%ref, s=dlt_1)
+       call canon_class(dlt_1, c=dlt_2)
+       c = dlt_2
     end block
     is_host_class = any(HOST_STATICS(:)%cls == c)
   end function is_host_class
@@ -3203,6 +3307,8 @@ contains
     type(hm), intent(in) :: row
     type(gc_value), intent(in) :: roots
     type(gc_value) :: out
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     out = gc_nil()
     select case (row%id)
     case (1:);          out = native(row%id, trim(row%name), [roots])
@@ -3219,9 +3325,8 @@ contains
     case (HK_SPECIALS); out = specials_map([roots])
     case (HK_TYPE)
     block
-       character(len=:), allocatable :: dlr_37
-       call short_class_name(trim(row%cls), s=dlr_37)
-       out = gc_key(dlr_37 // "/TYPE", [roots])
+       call short_class_name(trim(row%cls), s=dlt_1)
+       out = gc_key(dlt_1 // "/TYPE", [roots])
     end block
     case (HK_SELFKEY);  out = gc_key(trim(row%mem), [roots])
     end select
@@ -3234,11 +3339,12 @@ contains
     type(gc_value) :: out
     character(len=:), allocatable :: c
     integer :: i
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     out = gc_nil()
     block
-       character(len=:), allocatable :: dlr_38
-       call canon_class(cls, c=dlr_38)
-       c = dlr_38
+       call canon_class(cls, c=dlt_1)
+       c = dlt_1
     end block
     ! ponytail: a linear scan of ~300 rows, at analysis time; sort and
     ! bisect if it ever shows in a profile.
@@ -3327,15 +3433,16 @@ contains
     character(len=:), allocatable :: t
     integer :: slash
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     var = gc_nil()
     if (sym%tag /= GCT_SYM) return
     var = gcn_lookup(gcn_current([roots]), sym)
     if (gcn_is_var(var)) return
 
     block
-       character(len=:), allocatable :: dlr_39
-       call gc_ref_text(sym%ref, s=dlr_39)
-       t = dlr_39
+       call gc_ref_text(sym%ref, s=dlt_1)
+       t = dlt_1
     end block
     slash = index(t, "/")
     if (slash > 1 .and. slash < len(t)) then
@@ -3454,6 +3561,8 @@ contains
     type(gc_value) :: e, cls, txt
     integer :: base
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     tctx => ctx_self()
     vst => tctx%stk
     base = vs_enter(vst, 2)
@@ -3466,9 +3575,8 @@ contains
     call set_thrown(e)
     tctx%has_error = .true.
     block
-       character(len=:), allocatable :: dlr_40
-       call gcp_str(e, .true., s=dlr_40)
-       tctx%last_error = dlr_40
+       call gcp_str(e, .true., s=dlt_1)
+       tctx%last_error = dlt_1
     end block
     call vs_leave(vst, base)
   end subroutine fail_as
@@ -3499,6 +3607,8 @@ contains
     character(len=*), intent(in) :: want
     type(gc_value), intent(in) :: exc
     type(gc_value) :: got
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     exc_class_matches = .true.
     if (want == "Throwable" .or. want == "java.lang.Throwable" .or. &
          want == "Exception" .or. want == "java.lang.Exception") return
@@ -3511,9 +3621,8 @@ contains
     ! the Errors stand outside it.
     if (want == "RuntimeException" .or. want == "java.lang.RuntimeException") then
        block
-          character(len=:), allocatable :: dlr_41
-          call gc_ref_text(got%ref, s=dlr_41)
-          exc_class_matches = is_runtime_class(dlr_41)
+          call gc_ref_text(got%ref, s=dlt_1)
+          exc_class_matches = is_runtime_class(dlt_1)
        end block
        return
     end if
@@ -3524,10 +3633,9 @@ contains
     ! clojure.lang.ExceptionInfo. class_matches knows the rule
     ! but only in one direction, so it is asked both ways.
     block
-       character(len=:), allocatable :: dlr_42, dlr_43
-       call gc_ref_text(got%ref, s=dlr_42)
-       call gc_ref_text(got%ref, s=dlr_43)
-       exc_class_matches = class_matches(dlr_42, want) .or.  class_matches(want, dlr_43)
+       call gc_ref_text(got%ref, s=dlt_1)
+       call gc_ref_text(got%ref, s=dlt_2)
+       exc_class_matches = class_matches(dlt_1, want) .or.  class_matches(want, dlt_2)
     end block
     ! The other fact of hierarchy, because Clojure's own suite relies
     ! on it: ArityException extends IllegalArgumentException, so
@@ -3543,12 +3651,13 @@ contains
   recursive function catch_matches(cls, exc, env) result(yes)
     type(gc_value), intent(in) :: cls, exc, env
     logical :: yes
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     yes = .true.
     if (cls%tag /= GCT_SYM) return
     block
-       character(len=:), allocatable :: dlr_44
-       call gc_ref_text(cls%ref, s=dlr_44)
-       yes = exc_class_matches(dlr_44, exc)
+       call gc_ref_text(cls%ref, s=dlt_1)
+       yes = exc_class_matches(dlt_1, exc)
     end block
   end function catch_matches
 
@@ -3633,15 +3742,16 @@ contains
     type(gc_value) :: nm
     character(len=16) :: buf
     character(len=:), allocatable :: who
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     write(buf, '(I0)') got
     who = "fn"
     if (gc_kind(fn) == OBJ_CLOSURE) then
        nm = gc_slot(fn, 5)
        if (nm%tag == GCT_SYM) then
           block
-             character(len=:), allocatable :: dlr_45
-             call gc_ref_text(nm%ref, s=dlr_45)
-             who = dlr_45
+             call gc_ref_text(nm%ref, s=dlt_1)
+             who = dlt_1
           end block
        end if
     end if
@@ -4001,6 +4111,8 @@ contains
     character(len=:), allocatable :: msg, name
     character(len=16) :: cbuf
     integer :: p, q, n, st
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     e = thrown_value()
     if (gc_kind(e) /= OBJ_ERR) return
     cls = gc_slot(e, 1)
@@ -4010,15 +4122,13 @@ contains
     sym = gc_slot(mvar, 4)
     if (gc_kind(ns) /= OBJ_NS .or. sym%tag /= GCT_SYM) return
     block
-       character(len=:), allocatable :: dlr_46, dlr_47
-       call gcn_name(ns, s=dlr_46)
-       call gc_ref_text(sym%ref, s=dlr_47)
-       name = dlr_46 // "/" // dlr_47
+       call gcn_name(ns, s=dlt_1)
+       call gc_ref_text(sym%ref, s=dlt_2)
+       name = dlt_1 // "/" // dlt_2
     end block
     block
-       character(len=:), allocatable :: dlr_48
-       call text_of(gc_slot(e, 2), s=dlr_48)
-       msg = dlr_48
+       call text_of(gc_slot(e, 2), s=dlt_1)
+       msg = dlt_1
     end block
     q = index(msg, "passed to: ")
     if (q == 0) return
@@ -4041,6 +4151,8 @@ contains
     type(gc_value) :: out, args, walk
     integer :: base
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     tctx => ctx_self()
     vst => tctx%stk
     base = vs_enter(vst, 5)
@@ -4054,9 +4166,8 @@ contains
     if (trace_macros == 0) call read_trace_macros()
     if (trace_macros == 1) then
        block
-          character(len=:), allocatable :: dlr_49
-          call first_form_name(form, s=dlr_49)
-          write(0, '(A,A)') "macro: ", dlr_49
+          call first_form_name(form, s=dlt_1)
+          write(0, '(A,A)') "macro: ", dlt_1
        end block
     end if
     ! The two HIDDEN PARAMETERS every macro takes: the whole form and
@@ -4231,13 +4342,14 @@ contains
     character(len=24) :: buf
     integer :: base
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     vst => gc_my_stack()
     out = sym
     if (sym%tag /= GCT_SYM) return
     block
-       character(len=:), allocatable :: dlr_50
-       call gc_ref_text(sym%ref, s=dlr_50)
-       t = dlr_50
+       call gc_ref_text(sym%ref, s=dlt_1)
+       t = dlt_1
     end block
     if (len(t) < 2) return
     if (t(len(t):len(t)) /= "#") return
@@ -4283,12 +4395,13 @@ contains
     character(len=:), allocatable :: t
     integer :: slash, n
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     out = sym
     if (sym%tag /= GCT_SYM) return
     block
-       character(len=:), allocatable :: dlr_51
-       call gc_ref_text(sym%ref, s=dlr_51)
-       t = dlr_51
+       call gc_ref_text(sym%ref, s=dlt_1)
+       t = dlt_1
     end block
     n = len(t)
     if (n == 0) return
@@ -4299,9 +4412,8 @@ contains
        tgt = alias_in(nsv, t(1:slash-1), [sym])
        if (gc_kind(tgt) /= OBJ_NS) return
        block
-          character(len=:), allocatable :: dlr_52
-          call gcn_name(tgt, s=dlr_52)
-          out = gc_sym(dlr_52 // "/" // t(slash+1:), [sym])
+          call gcn_name(tgt, s=dlt_1)
+          out = gc_sym(dlt_1 // "/" // t(slash+1:), [sym])
        end block
        return
     end if
@@ -4324,17 +4436,15 @@ contains
     if (gcn_is_var(var)) then
        if (gc_kind(gc_slot(var, 3)) == OBJ_NS) then
           block
-             character(len=:), allocatable :: dlr_53
-             call gcn_name(gc_slot(var, 3), s=dlr_53)
-             out = gc_sym(dlr_53 // "/" // t, [sym])
+             call gcn_name(gc_slot(var, 3), s=dlt_1)
+             out = gc_sym(dlt_1 // "/" // t, [sym])
           end block
           return
        end if
     end if
     block
-       character(len=:), allocatable :: dlr_54
-       call gcn_name(nsv, s=dlr_54)
-       out = gc_sym(dlr_54 // "/" // t, [sym])
+       call gcn_name(nsv, s=dlt_1)
+       out = gc_sym(dlt_1 // "/" // t, [sym])
     end block
   end function qq_alias
 
@@ -4509,13 +4619,14 @@ contains
     type(gc_value), intent(in) :: v
     character(len=:), allocatable, intent(out) :: s
     type(gc_value) :: h
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     s = "?"
     h = strip_meta(v)
     if (h%tag == GCT_SYM) then
        block
-          character(len=:), allocatable :: dlr_55
-          call gc_ref_text(h%ref, s=dlr_55)
-          s = dlr_55
+          call gc_ref_text(h%ref, s=dlt_1)
+          s = dlt_1
        end block
        return
     end if
@@ -4524,9 +4635,8 @@ contains
     h = strip_meta(gcl_first(h))
     if (h%tag == GCT_SYM) then
        block
-          character(len=:), allocatable :: dlr_56
-          call gc_ref_text(h%ref, s=dlr_56)
-          s = dlr_56
+          call gc_ref_text(h%ref, s=dlt_1)
+          s = dlt_1
        end block
     end if
   end subroutine first_form_name
@@ -4549,6 +4659,8 @@ contains
     character(len=:), allocatable :: t
     integer :: base, i, n
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     vst => gc_my_stack()
     base = vs_enter(vst, 3)
     call vs_set(vst, base + 1, form0)
@@ -4582,9 +4694,8 @@ contains
     ! is so that macroexpand-1 REPORTS the rewrite, which is what a
     ! code walker like pprint's is looking at.
     block
-       character(len=:), allocatable :: dlr_57
-       call gc_ref_text(head%ref, s=dlr_57)
-       t = dlr_57
+       call gc_ref_text(head%ref, s=dlt_1)
+       t = dlt_1
     end block
     if (is_member_sym(head) .and. n >= 2) then
        ! (.foo target args...) -> (. target foo args...)
@@ -4978,6 +5089,8 @@ contains
     logical :: has_w, has_prec
     type(gc_value) :: a
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     tctx => ctx_self()
     s = ""
     i = 1
@@ -5055,17 +5168,15 @@ contains
        a = gcv_nth(argv, ai)
        ai = ai + 1
        block
-          character(len=:), allocatable :: dlr_58
-          call format_one(conv, a, prec, has_prec, p=dlr_58)
-          piece = dlr_58
+          call format_one(conv, a, prec, has_prec, p=dlt_1)
+          piece = dlt_1
        end block
        if (tctx%has_error) return
        block
-          character(len=:), allocatable :: dlr_59
-          call pad(piece, w, has_w, index(flags, "-") > 0,  index(flags, "0") > 0, p=dlr_59)
+          call pad(piece, w, has_w, index(flags, "-") > 0,  index(flags, "0") > 0, p=dlt_1)
           block
              character(len=:), allocatable :: dlw
-             dlw = s // dlr_59
+             dlw = s // dlt_1
              call move_alloc(dlw, s)
           end block
        end block
@@ -5090,27 +5201,26 @@ contains
     integer :: mh, base, from, gs, ge, nparts, last
     logical :: ok
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     vst => gc_my_stack()
     out = gc_nil()
     block
-       character(len=:), allocatable :: dlr_60
-       call text_of(subj, s=dlr_60)
-       s = dlr_60
+       call text_of(subj, s=dlt_1)
+       s = dlt_1
     end block
     mh = regex_clone(gc_i1(pat))
     if (mh == 0) then
        block
-          character(len=:), allocatable :: dlr_61
-          call regex_last_error(s=dlr_61)
-          call fail("regex: " // dlr_61)
+          call regex_last_error(s=dlt_1)
+          call fail("regex: " // dlt_1)
        end block
        return
     end if
     if (.not. regex_set_text(mh, s)) then
        block
-          character(len=:), allocatable :: dlr_62
-          call regex_last_error(s=dlr_62)
-          call fail("regex: " // dlr_62)
+          call regex_last_error(s=dlt_1)
+          call fail("regex: " // dlt_1)
        end block
        call regex_release(mh)
        return
@@ -5130,9 +5240,8 @@ contains
        ! loop forever and produce nothing; Java skips it too.
        if (ge == gs .and. gs == from .and. from == 0) cycle
        block
-          character(len=:), allocatable :: dlr_63
-          call u8_slice(s, from, gs, s=dlr_63)
-          piece = gc_str(dlr_63, [roots, vs_get(vst, base + 1)])
+          call u8_slice(s, from, gs, s=dlt_1)
+          piece = gc_str(dlt_1, [roots, vs_get(vst, base + 1)])
        end block
        call vs_set(vst, base + 2, piece)
        out = gcv_conj(vs_get(vst, base + 1), vs_get(vst, base + 2), &
@@ -5155,9 +5264,8 @@ contains
        last = gcv_count(vs_get(vst, base + 1))
        do while (last > 0)
           block
-             character(len=:), allocatable :: dlr_64
-             call text_of(gcv_nth(vs_get(vst, base + 1), last - 1), s=dlr_64)
-             if (len(dlr_64) > 0) exit
+             call text_of(gcv_nth(vs_get(vst, base + 1), last - 1), s=dlt_1)
+             if (len(dlt_1) > 0) exit
           end block
           last = last - 1
        end do
@@ -5257,6 +5365,8 @@ contains
     character(len=:), allocatable, intent(out) :: s
     integer :: i, gnum, gs, ge
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     s = ""
     i = 1
     do while (i <= len(repl))
@@ -5273,11 +5383,10 @@ contains
           gnum = iachar(repl(i+1:i+1)) - iachar("0")
           if (regex_group_span(mh, gnum, gs, ge)) then
              block
-                character(len=:), allocatable :: dlr_65
-                call u8_slice(subj, gs, ge, s=dlr_65)
+                call u8_slice(subj, gs, ge, s=dlt_1)
                 block
                    character(len=:), allocatable :: dlw
-                   dlw = s // dlr_65
+                   dlw = s // dlt_1
                    call move_alloc(dlw, s)
                 end block
              end block
@@ -5304,10 +5413,11 @@ contains
     character(len=:), allocatable :: subj, acc
     integer :: mh, from, gs, ge
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     block
-       character(len=:), allocatable :: dlr_66
-       call text_of(gc_slot(mv, 2), s=dlr_66)
-       subj = dlr_66
+       call text_of(gc_slot(mv, 2), s=dlt_1)
+       subj = dlt_1
     end block
     mh = gc_i1(mv)
     acc = ""
@@ -5316,10 +5426,9 @@ contains
        if (regex_find_next(mh) /= 1) exit
        if (.not. regex_group_span(mh, 0, gs, ge)) exit
        block
-          character(len=:), allocatable :: dlr_67, dlr_68
-          call u8_slice(subj, from, gs, s=dlr_67)
-          call expand_replacement(repl, mh, subj, s=dlr_68)
-          acc = acc // dlr_67 // dlr_68
+          call u8_slice(subj, from, gs, s=dlt_1)
+          call expand_replacement(repl, mh, subj, s=dlt_2)
+          acc = acc // dlt_1 // dlt_2
        end block
        from = ge
        if (only_first) exit
@@ -5327,9 +5436,8 @@ contains
        if (ge == gs) then
           if (ge >= u8_count(subj)) exit
           block
-             character(len=:), allocatable :: dlr_69
-             call u8_slice(subj, ge, ge + 1, s=dlr_69)
-             acc = acc // dlr_69
+             call u8_slice(subj, ge, ge + 1, s=dlt_1)
+             acc = acc // dlt_1
           end block
           from = ge + 1
        end if
@@ -5347,6 +5455,8 @@ contains
     character(len=64) :: buf
     type(gc_value) :: a
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     a = strip_meta(a0)
     p = ""
     select case (conv)
@@ -5357,9 +5467,8 @@ contains
           p = "null"
        else
           block
-             character(len=:), allocatable :: dlr_70
-             call gcp_str(a, .false., s=dlr_70)
-             p = dlr_70
+             call gcp_str(a, .false., s=dlt_1)
+             p = dlt_1
           end block
        end if
        if (has_prec) then
@@ -5376,9 +5485,8 @@ contains
           p = "null"
        else
           block
-             character(len=:), allocatable :: dlr_71
-             call gcp_str(a, .false., s=dlr_71)
-             p = dlr_71
+             call gcp_str(a, .false., s=dlt_1)
+             p = dlt_1
           end block
        end if
        call upcase_in_place(p)
@@ -6187,6 +6295,8 @@ contains
     ! (with-meta (cons (quote fn*) decl) (meta &form)), so the value a
     ! caller holds is an OBJ_META around the closure. Metadata never
     ! changes what a value IS.
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     tctx => ctx_self()
     vst => tctx%stk
     fn = strip_meta(fn0)
@@ -6207,9 +6317,8 @@ contains
             type(gc_value) :: nm
             nm = gc_slot(fn, 1)
             block
-               character(len=:), allocatable :: dlr_72
-               call gc_ref_text(nm%ref, s=dlr_72)
-               out = rt_call(dlr_72, args)
+               call gc_ref_text(nm%ref, s=dlt_1)
+               out = rt_call(dlt_1, args)
             end block
           end block
        else
@@ -6239,10 +6348,9 @@ contains
          nmv = gc_slot(vs_get(vst, base + 1), 1)
          if (gc_i2(vs_get(vst, base + 1)) >= 0 .and. gc_i2(vs_get(vst, base + 1)) /= cn) then
             block
-               character(len=:), allocatable :: dlr_73, dlr_74
-               call itoa(cn, s=dlr_73)
-               call gc_ref_text(nmv%ref, s=dlr_74)
-               call raise_class("ArityException",  "Wrong number of args (" // dlr_73 // ") passed to: " //  dlr_74, &
+               call itoa(cn, s=dlt_1)
+               call gc_ref_text(nmv%ref, s=dlt_2)
+               call raise_class("ArityException",  "Wrong number of args (" // dlt_1 // ") passed to: " //  dlt_2, &
                     [vs_get(vst, base + 1)])
             end block
          else
@@ -6270,9 +6378,8 @@ contains
             out = apply(vs_get(vst, base + 3), vs_get(vst, base + 2))
          else
             block
-               character(len=:), allocatable :: dlr_75
-               call gcp_str(fn, .true., s=dlr_75)
-               call fail("not a function: " // dlr_75)
+               call gcp_str(fn, .true., s=dlt_1)
+               call fail("not a function: " // dlt_1)
             end block
          end if
        end block
@@ -6295,11 +6402,10 @@ contains
          end if
          if (meth%tag == GCT_NIL) then
             block
-               character(len=:), allocatable :: dlr_76, dlr_77
-               call gcp_str(gc_slot(vs_get(vst, base + 1), 1), .false., s=dlr_76)
-               call gcp_str(vs_get(vst, base + 3), .true., s=dlr_77)
+               call gcp_str(gc_slot(vs_get(vst, base + 1), 1), .false., s=dlt_1)
+               call gcp_str(vs_get(vst, base + 3), .true., s=dlt_2)
                call raise_class("IllegalArgumentException", &
-                    "No method in multimethod '" //  dlr_76 //  "' for dispatch value: " // dlr_77, [vs_get(vst, base + 1)])
+                    "No method in multimethod '" //  dlt_1 //  "' for dispatch value: " // dlt_2, [vs_get(vst, base + 1)])
             end block
          else
             out = apply(meth, args)
@@ -6321,9 +6427,8 @@ contains
                write(cbuf, '(I0)') gcv_count(args)
             end if
             block
-               character(len=:), allocatable :: dlr_78
-               call gcp_str(fn, .true., s=dlr_78)
-               call raise_class("ArityException", "Wrong number of args (" // trim(cbuf) //  ") passed to: " // dlr_78, &
+               call gcp_str(fn, .true., s=dlt_1)
+               call raise_class("ArityException", "Wrong number of args (" // trim(cbuf) //  ") passed to: " // dlt_1, &
                     [vs_get(vst, base + 1)])
             end block
           end block
@@ -6414,9 +6519,8 @@ contains
           end if
        else
           block
-             character(len=:), allocatable :: dlr_79
-             call gcp_str(fn, .true., s=dlr_79)
-             call fail("not a function: " // dlr_79)
+             call gcp_str(fn, .true., s=dlt_1)
+             call fail("not a function: " // dlt_1)
           end block
        end if
     end select
@@ -6436,6 +6540,8 @@ contains
     logical :: hit, checked, promote
     integer :: op
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2, dlt_3, dlt_4
     tctx => ctx_self()
     vst => tctx%stk
     out = gc_nil()
@@ -6513,43 +6619,37 @@ contains
                ! rule is BigDecimal's (BigDec.f90): add and subtract
                ! take the larger scale, multiply adds them.
                block
-                  character(len=:), allocatable :: dlr_80
-                  call dec_operand(strip_meta(a), dok, s=dlr_80)
-                  dacc = dlr_80
+                  call dec_operand(strip_meta(a), dok, s=dlt_1)
+                  dacc = dlt_1
                end block
                if (dok .and. n == 1 .and. op == B_SUB) then
                   block
-                     character(len=:), allocatable :: dlr_81
-                     call dec_neg(dacc, o=dlr_81)
-                     dacc = dlr_81
+                     call dec_neg(dacc, o=dlt_1)
+                     dacc = dlt_1
                   end block
                end if
                do i = 1, n - 1
                   if (.not. dok) exit
                   block
-                     character(len=:), allocatable :: dlr_82
-                     call dec_operand(strip_meta(gcv_nth(args, i)), dok, s=dlr_82)
-                     dopn = dlr_82
+                     call dec_operand(strip_meta(gcv_nth(args, i)), dok, s=dlt_1)
+                     dopn = dlt_1
                   end block
                   if (.not. dok) exit
                   select case (op)
                   case (B_ADD)
                   block
-                     character(len=:), allocatable :: dlr_83
-                     call dec_add(dacc, dopn, o=dlr_83)
-                     dacc = dlr_83
+                     call dec_add(dacc, dopn, o=dlt_1)
+                     dacc = dlt_1
                   end block
                   case (B_SUB)
                   block
-                     character(len=:), allocatable :: dlr_84
-                     call dec_sub(dacc, dopn, o=dlr_84)
-                     dacc = dlr_84
+                     call dec_sub(dacc, dopn, o=dlt_1)
+                     dacc = dlt_1
                   end block
                   case (B_MUL)
                   block
-                     character(len=:), allocatable :: dlr_85
-                     call dec_mul(dacc, dopn, o=dlr_85)
-                     dacc = dlr_85
+                     call dec_mul(dacc, dopn, o=dlt_1)
+                     dacc = dlt_1
                   end block
                   end select
                end do
@@ -6623,9 +6723,8 @@ contains
                ! answer a BigInt when it comes out integral.
                if (any_big .and. out%tag == GCT_INT) then
                   block
-                     character(len=:), allocatable :: dlr_86
-                     call big_from_i64(out%ival, o=dlr_86)
-                     out = gc_big(dlr_86, [vs_get(vst, base + 1)])
+                     call big_from_i64(out%ival, o=dlt_1)
+                     out = gc_big(dlt_1, [vs_get(vst, base + 1)])
                   end block
                end if
             else if (any_real) then
@@ -6645,15 +6744,13 @@ contains
                ! makes the answer a BigInt -- (+ 1N 1) is 2N -- and a
                ! promoting operator narrows back to a long below.
                block
-                  character(len=:), allocatable :: dlr_87
-                  call big_of(strip_meta(a), s=dlr_87)
-                  bacc = dlr_87
+                  call big_of(strip_meta(a), s=dlt_1)
+                  bacc = dlt_1
                end block
                if (n == 1 .and. op == B_SUB) then
                   block
-                     character(len=:), allocatable :: dlr_88
-                     call big_neg(bacc, o=dlr_88)
-                     bacc = dlr_88
+                     call big_neg(bacc, o=dlt_1)
+                     bacc = dlt_1
                   end block
                end if
                do i = 1, n - 1
@@ -6661,24 +6758,21 @@ contains
                   select case (op)
                   case (B_ADD)
                   block
-                     character(len=:), allocatable :: dlr_89, dlr_90
-                     call big_of(b, s=dlr_89)
-                     call big_add(bacc, dlr_89, o=dlr_90)
-                     bacc = dlr_90
+                     call big_of(b, s=dlt_1)
+                     call big_add(bacc, dlt_1, o=dlt_2)
+                     bacc = dlt_2
                   end block
                   case (B_SUB)
                   block
-                     character(len=:), allocatable :: dlr_91, dlr_92
-                     call big_of(b, s=dlr_91)
-                     call big_sub(bacc, dlr_91, o=dlr_92)
-                     bacc = dlr_92
+                     call big_of(b, s=dlt_1)
+                     call big_sub(bacc, dlt_1, o=dlt_2)
+                     bacc = dlt_2
                   end block
                   case (B_MUL)
                   block
-                     character(len=:), allocatable :: dlr_93, dlr_94
-                     call big_of(b, s=dlr_93)
-                     call big_mul(bacc, dlr_93, o=dlr_94)
-                     bacc = dlr_94
+                     call big_of(b, s=dlt_1)
+                     call big_mul(bacc, dlt_1, o=dlt_2)
+                     bacc = dlt_2
                   end block
                   end select
                end do
@@ -6751,9 +6845,8 @@ contains
              out = gc_bool(gc_ref_len(a%ref) == gc_ref_len(b%ref))
              if (truthy(out)) then
                 block
-                   character(len=:), allocatable :: dlr_95
-                   call gc_ref_text(b%ref, s=dlr_95)
-                   out = gc_bool(gc_ref_is(a%ref, dlr_95))
+                   call gc_ref_text(b%ref, s=dlt_1)
+                   out = gc_bool(gc_ref_is(a%ref, dlt_1))
                 end block
              end if
           case default; out = gc_bool(a%ref == b%ref)
@@ -6855,9 +6948,8 @@ contains
          acc2 = ""
          do i = 0, n - 1
             block
-               character(len=:), allocatable :: dlr_96
-               call to_string_text(gcv_nth(vs_get(vst, base + 1), i), s=dlr_96)
-               acc2 = acc2 // dlr_96
+               call to_string_text(gcv_nth(vs_get(vst, base + 1), i), s=dlt_1)
+               acc2 = acc2 // dlt_1
             end block
          end do
          out = gc_str(acc2, [vs_get(vst, base + 1)])
@@ -7093,9 +7185,8 @@ contains
        do i = 0, n - 1
           if (i > 0) write(*, '(A)', advance='no') " "
           block
-             character(len=:), allocatable :: dlr_97
-             call gcp_str(gcv_nth(vs_get(vst, base + 1), i), .true., s=dlr_97)
-             write(*, '(A)', advance='no') dlr_97
+             call gcp_str(gcv_nth(vs_get(vst, base + 1), i), .true., s=dlt_1)
+             write(*, '(A)', advance='no') dlt_1
           end block
        end do
        write(*, '(A)') ""
@@ -7118,9 +7209,8 @@ contains
           call fail("ns needs a symbol name")
        else
           block
-             character(len=:), allocatable :: dlr_98
-             call gc_ref_text(a%ref, s=dlr_98)
-             out = gcn_find_or_create(dlr_98, [vs_get(vst, base + 1)])
+             call gc_ref_text(a%ref, s=dlt_1)
+             out = gcn_find_or_create(dlt_1, [vs_get(vst, base + 1)])
           end block
           call gcn_set_current(out)
        end if
@@ -7132,9 +7222,8 @@ contains
           call fail("in-ns needs a symbol")
        else
           block
-             character(len=:), allocatable :: dlr_99
-             call gc_ref_text(a%ref, s=dlr_99)
-             out = gcn_find_or_create(dlr_99, [vs_get(vst, base + 1)])
+             call gc_ref_text(a%ref, s=dlt_1)
+             out = gcn_find_or_create(dlt_1, [vs_get(vst, base + 1)])
           end block
           call gcn_set_current(out)
        end if
@@ -7193,25 +7282,22 @@ contains
        ! (quot 10.5M 3) is 3.0M and (rem 10.5M 3) is 1.5M.
        if ((a%tag == GCT_DEC .or. b%tag == GCT_DEC) .and. exact_num(a) .and. exact_num(b)) then
           block
-             character(len=:), allocatable :: dlr_100
-             call dec_of(b, s=dlr_100)
-          if (dec_is_zero(dlr_100)) then
+             call dec_of(b, s=dlt_1)
+          if (dec_is_zero(dlt_1)) then
              call raise_class("ArithmeticException", "Divide by zero", [vs_get(vst, base + 1)])
           else if (id == B_QUOT) then
              block
-                character(len=:), allocatable :: dlr_101, dlr_102, dlr_103
-                call dec_of(a, s=dlr_101)
-                call dec_of(b, s=dlr_102)
-                call dec_quot(dlr_101, dlr_102, o=dlr_103)
-                out = gc_dec(dlr_103, [vs_get(vst, base + 1)])
+                call dec_of(a, s=dlt_2)
+                call dec_of(b, s=dlt_3)
+                call dec_quot(dlt_2, dlt_3, o=dlt_4)
+                out = gc_dec(dlt_4, [vs_get(vst, base + 1)])
              end block
           else
              block
-                character(len=:), allocatable :: dlr_104, dlr_105, dlr_106
-                call dec_of(a, s=dlr_104)
-                call dec_of(b, s=dlr_105)
-                call dec_rem(dlr_104, dlr_105, o=dlr_106)
-                out = gc_dec(dlr_106, [vs_get(vst, base + 1)])
+                call dec_of(a, s=dlt_2)
+                call dec_of(b, s=dlt_3)
+                call dec_rem(dlt_2, dlt_3, o=dlt_4)
+                out = gc_dec(dlt_4, [vs_get(vst, base + 1)])
              end block
           end if
           end block
@@ -7225,16 +7311,14 @@ contains
           block
             character(len=:), allocatable :: bq, br
             block
-               character(len=:), allocatable :: dlr_107
-               call big_of(b, s=dlr_107)
-            if (dlr_107 == "0") then
+               call big_of(b, s=dlt_1)
+            if (dlt_1 == "0") then
                call raise_class("ArithmeticException", "Divide by zero", [vs_get(vst, base + 1)])
             else
                block
-                  character(len=:), allocatable :: dlr_108, dlr_109
-                  call big_of(a, s=dlr_108)
-                  call big_of(b, s=dlr_109)
-                  call big_divmod(dlr_108, dlr_109, bq, br)
+                  call big_of(a, s=dlt_2)
+                  call big_of(b, s=dlt_3)
+                  call big_divmod(dlt_2, dlt_3, bq, br)
                end block
                if (id == B_QUOT) then
                   out = gc_big(bq, [vs_get(vst, base + 1)])
@@ -7324,9 +7408,8 @@ contains
        ! "b". Returning the whole text made every qualified symbol
        ! answer with its qualifier still attached.
        block
-          character(len=:), allocatable :: dlr_110
-          call name_part(gcv_nth(args, 0), s=dlr_110)
-          out = gc_str(dlr_110, [vs_get(vst, base + 1)])
+          call name_part(gcv_nth(args, 0), s=dlt_1)
+          out = gc_str(dlt_1, [vs_get(vst, base + 1)])
        end block
     case (B_GETNAME)
        ! .getName answers in the type the host uses: a Namespace gives
@@ -7336,15 +7419,13 @@ contains
        a = strip_meta(gcv_nth(args, 0))
        if (gc_kind(a) == OBJ_NS) then
           block
-             character(len=:), allocatable :: dlr_111
-             call gcn_name(a, s=dlr_111)
-             out = gc_sym(dlr_111, [vs_get(vst, base + 1)])
+             call gcn_name(a, s=dlt_1)
+             out = gc_sym(dlt_1, [vs_get(vst, base + 1)])
           end block
        else
           block
-             character(len=:), allocatable :: dlr_112
-             call name_part(a, s=dlr_112)
-             out = gc_str(dlr_112, [vs_get(vst, base + 1)])
+             call name_part(a, s=dlt_1)
+             out = gc_str(dlt_1, [vs_get(vst, base + 1)])
           end block
        end if
     case (B_KEYWORD, B_SYMBOL2)
@@ -7362,16 +7443,14 @@ contains
             q = strip_meta(gcv_nth(args, 0))
             if (q%tag == GCT_NIL) then
                block
-                  character(len=:), allocatable :: dlr_113
-                  call name_part(gcv_nth(args, 1), s=dlr_113)
-                  t = dlr_113
+                  call name_part(gcv_nth(args, 1), s=dlt_1)
+                  t = dlt_1
                end block
             else
                block
-                  character(len=:), allocatable :: dlr_114, dlr_115
-                  call name_part(q, s=dlr_114)
-                  call name_part(gcv_nth(args, 1), s=dlr_115)
-                  t = dlr_114 // "/" // dlr_115
+                  call name_part(q, s=dlt_1)
+                  call name_part(gcv_nth(args, 1), s=dlt_2)
+                  t = dlt_1 // "/" // dlt_2
                end block
             end if
          else
@@ -7390,15 +7469,13 @@ contains
               if (a0%tag == GCT_STR .or. a0%tag == GCT_SYM .or. &
                    a0%tag == GCT_KEY .or. a0%tag == GCT_CLASS) then
                  block
-                    character(len=:), allocatable :: dlr_116
-                    call class_of_text(a0, s=dlr_116)
-                    t = dlr_116
+                    call class_of_text(a0, s=dlt_1)
+                    t = dlt_1
                  end block
               else
                  block
-                    character(len=:), allocatable :: dlr_117
-                    call name_part(a0, s=dlr_117)
-                    t = dlr_117
+                    call name_part(a0, s=dlt_1)
+                    t = dlt_1
                  end block
               end if
             end block
@@ -7421,9 +7498,8 @@ contains
             return
          end if
          block
-            character(len=:), allocatable :: dlr_118
-            call gc_ref_text(a%ref, s=dlr_118)
-            t = dlr_118
+            call gc_ref_text(a%ref, s=dlt_1)
+            t = dlt_1
          end block
          b = as_index(gcv_nth(args, 1))
          lo = int(b%ival)
@@ -7434,19 +7510,17 @@ contains
          end if
          if (lo < 0 .or. hi > u8_count(t) .or. lo > hi) then
             block
-               character(len=:), allocatable :: dlr_119, dlr_120, dlr_121
-               call itoa(lo, s=dlr_119)
-               call itoa(hi, s=dlr_120)
-               call itoa(u8_count(t), s=dlr_121)
+               call itoa(lo, s=dlt_1)
+               call itoa(hi, s=dlt_2)
+               call itoa(u8_count(t), s=dlt_3)
                call raise_class("StringIndexOutOfBoundsException", &
-                    "Range [" // trim(dlr_119) // ", " // trim(dlr_120) // ") out of bounds for length " // trim(dlr_121), &
+                    "Range [" // trim(dlt_1) // ", " // trim(dlt_2) // ") out of bounds for length " // trim(dlt_3), &
                     [vs_get(vst, base + 1)])
             end block
          else
             block
-               character(len=:), allocatable :: dlr_122
-               call u8_slice(t, lo, hi, s=dlr_122)
-               out = gc_str(dlr_122, [vs_get(vst, base + 1)])
+               call u8_slice(t, lo, hi, s=dlt_1)
+               out = gc_str(dlt_1, [vs_get(vst, base + 1)])
             end block
          end if
        end block
@@ -7494,9 +7568,8 @@ contains
        a = strip_meta(gcv_nth(args, 0)); b = strip_meta(gcv_nth(args, 1))
        if (a%tag /= GCT_INT .or. (n >= 2 .and. b%tag /= GCT_INT)) then
           block
-             character(len=:), allocatable :: dlr_123
-             call class_name_of(merge(b, a, a%tag == GCT_INT), s=dlr_123)
-             call raise_class("IllegalArgumentException", "bit operation not supported for: " //  dlr_123, [vs_get(vst, &
+             call class_name_of(merge(b, a, a%tag == GCT_INT), s=dlt_1)
+             call raise_class("IllegalArgumentException", "bit operation not supported for: " //  dlt_1, [vs_get(vst, &
                   base + 1)])
           end block
           call vs_leave(vst, base)
@@ -7542,11 +7615,10 @@ contains
                call raise_class("ArithmeticException", "integer overflow", [vs_get(vst, base + 1)])
             else
                block
-                  character(len=:), allocatable :: dlr_124, dlr_125
-                  call cast_width_name(id, s=dlr_124)
-                  call to_string_text(a, s=dlr_125)
+                  call cast_width_name(id, s=dlt_1)
+                  call to_string_text(a, s=dlt_2)
                   call raise_class("IllegalArgumentException", &
-                       "Value out of range for " // trim(dlr_124) // ": " // dlr_125,  [vs_get(vst, base + 1)])
+                       "Value out of range for " // trim(dlt_1) // ": " // dlt_2,  [vs_get(vst, base + 1)])
                end block
             end if
          else
@@ -7576,10 +7648,9 @@ contains
        if (a%tag == GCT_DEC) then
           ! truncating, as BigDecimal.longValue is
           block
-             character(len=:), allocatable :: dlr_126, dlr_127
-             call gc_dec_text(a, s=dlr_126)
-             call dec_to_big(dlr_126, o=dlr_127)
-             out = gc_int(big_to_i64(dlr_127))
+             call gc_dec_text(a, s=dlt_1)
+             call dec_to_big(dlt_1, o=dlt_2)
+             out = gc_int(big_to_i64(dlt_2))
           end block
        else if (a%tag == GCT_BIG) then
           ! TRUNCATING, which is uncheckedLongCast's rule and not
@@ -7590,32 +7661,27 @@ contains
             character(len=:), allocatable :: bq, br
             integer(gc_ip) :: lv
             block
-               character(len=:), allocatable :: dlr_128
-               call gc_big_text(a, s=dlr_128)
-            if (big_fits_i64(dlr_128)) then
+               call gc_big_text(a, s=dlt_1)
+            if (big_fits_i64(dlt_1)) then
                block
-                  character(len=:), allocatable :: dlr_129
-                  call gc_big_text(a, s=dlr_129)
-                  out = gc_int(big_to_i64(dlr_129))
+                  call gc_big_text(a, s=dlt_2)
+                  out = gc_int(big_to_i64(dlt_2))
                end block
             else
                block
-                  character(len=:), allocatable :: dlr_130
-                  call gc_big_text(a, s=dlr_130)
-                  call big_divmod(dlr_130, "18446744073709551616", bq, br)
+                  call gc_big_text(a, s=dlt_2)
+                  call big_divmod(dlt_2, "18446744073709551616", bq, br)
                end block
                if (big_cmp(br, "9223372036854775807") > 0) then
                   block
-                     character(len=:), allocatable :: dlr_131
-                     call big_sub(br, "18446744073709551616", o=dlr_131)
-                     br = dlr_131
+                     call big_sub(br, "18446744073709551616", o=dlt_2)
+                     br = dlt_2
                   end block
                end if
                if (big_cmp(br, "-9223372036854775808") < 0) then
                   block
-                     character(len=:), allocatable :: dlr_132
-                     call big_add(br, "18446744073709551616", o=dlr_132)
-                     br = dlr_132
+                     call big_add(br, "18446744073709551616", o=dlt_2)
+                     br = dlt_2
                   end block
                end if
                lv = big_to_i64(br)
@@ -7656,9 +7722,8 @@ contains
             out = gcv_nth(args, 0)
          else
             block
-               character(len=:), allocatable :: dlr_133
-               call type_name(v, s=dlr_133)
-               call fail("Cannot cast " // dlr_133 // " to java.lang.Number")
+               call type_name(v, s=dlt_1)
+               call fail("Cannot cast " // dlt_1 // " to java.lang.Number")
             end block
          end if
        end block
@@ -7703,17 +7768,15 @@ contains
             out = gc_ratio(abs(gc_numerator(x)), gc_denominator(x))
          else if (x%tag == GCT_BIG) then
             block
-               character(len=:), allocatable :: dlr_134, dlr_135
-               call gc_big_text(x, s=dlr_134)
-               call big_abs(dlr_134, o=dlr_135)
-               out = gc_big(dlr_135, [vs_get(vst, base + 1)])
+               call gc_big_text(x, s=dlt_1)
+               call big_abs(dlt_1, o=dlt_2)
+               out = gc_big(dlt_2, [vs_get(vst, base + 1)])
             end block
          else if (x%tag == GCT_DEC) then
             block
-               character(len=:), allocatable :: dlr_136, dlr_137
-               call gc_dec_text(x, s=dlr_136)
-               call dec_abs(dlr_136, o=dlr_137)
-               out = gc_dec(dlr_137, [vs_get(vst, base + 1)])
+               call gc_dec_text(x, s=dlt_1)
+               call dec_abs(dlt_1, o=dlt_2)
+               out = gc_dec(dlt_2, [vs_get(vst, base + 1)])
             end block
          else
             out = gc_int(abs(x%ival))
@@ -7806,9 +7869,8 @@ contains
                  end do
               else
                  block
-                    character(len=:), allocatable :: dlr_138
-                    call gcp_str(last, .true., s=dlr_138)
-                    call raise_class("IllegalArgumentException", "No value supplied for key: " //  dlr_138, [vs_get(vst, &
+                    call gcp_str(last, .true., s=dlt_1)
+                    call raise_class("IllegalArgumentException", "No value supplied for key: " //  dlt_1, [vs_get(vst, &
                          base + 1)])
                  end block
               end if
@@ -7839,9 +7901,8 @@ contains
          call vs_set(vst, base + 2, a0)
          h = gc_i1(vs_get(vst, base + 2))
          block
-            character(len=:), allocatable :: dlr_139
-            call gcna_kind(h, s=dlr_139)
-            kn = dlr_139
+            call gcna_kind(h, s=dlt_1)
+            kn = dlt_1
          end block
          ! The clone has the shape of the VIEW, not of the buffer
          ! behind it: (aclone (aget m 0)) on a 2x3 is a fresh length-3
@@ -7891,9 +7952,8 @@ contains
             return
          end if
          block
-            character(len=:), allocatable :: dlr_140
-            call text_of(a0, s=dlr_140)
-            kname = dlr_140
+            call text_of(a0, s=dlt_1)
+            kname = dlt_1
          end block
          allocate(ext(nd), lows(nd))
          do k = 1, nd
@@ -7932,14 +7992,12 @@ contains
          character(len=:), allocatable :: path, text
          integer :: u, st
          block
-            character(len=:), allocatable :: dlr_141
-            call text_of(gcv_nth(args, 0), s=dlr_141)
-            path = dlr_141
+            call text_of(gcv_nth(args, 0), s=dlt_1)
+            path = dlt_1
          end block
          block
-            character(len=:), allocatable :: dlr_142
-            call text_of(gcv_nth(args, 1), s=dlr_142)
-            text = dlr_142
+            call text_of(gcv_nth(args, 1), s=dlt_1)
+            text = dlt_1
          end block
          open(newunit=u, file=path, access="stream", form="unformatted", &
               status="replace", action="write", iostat=st)
@@ -7956,9 +8014,8 @@ contains
          character(len=:), allocatable :: path, text
          integer :: u, st, fsize
          block
-            character(len=:), allocatable :: dlr_143
-            call text_of(gcv_nth(args, 0), s=dlr_143)
-            path = dlr_143
+            call text_of(gcv_nth(args, 0), s=dlt_1)
+            path = dlt_1
          end block
          open(newunit=u, file=path, access="stream", form="unformatted", &
               status="old", action="read", iostat=st)
@@ -7999,9 +8056,8 @@ contains
             call fail("array-kind: not an array")
          else
             block
-               character(len=:), allocatable :: dlr_144
-               call gcna_kind(gc_i1(a0), s=dlr_144)
-               out = gc_str(dlr_144, [vs_get(vst, base + 1)])
+               call gcna_kind(gc_i1(a0), s=dlt_1)
+               out = gc_str(dlt_1, [vs_get(vst, base + 1)])
             end block
          end if
        end block
@@ -8115,9 +8171,8 @@ contains
          at = foff + 1
 
          block
-            character(len=:), allocatable :: dlr_145
-            call gcna_kind(h, s=dlr_145)
-            kn = dlr_145
+            call gcna_kind(h, s=dlt_1)
+            kn = dlt_1
          end block
          if (kn == "value") then
             ! The run is the storage. gc_vec_set is O(1) and the
@@ -8196,9 +8251,8 @@ contains
             out = gc_real(real(a0%ival, gc_dp))
          else
             block
-               character(len=:), allocatable :: dlr_146
-               call text_of(a0, s=dlr_146)
-               t = trim(adjustl(dlr_146))
+               call text_of(a0, s=dlt_1)
+               t = trim(adjustl(dlt_1))
             end block
             read(t, *, iostat=st) dv
             if (st /= 0) then
@@ -8241,9 +8295,8 @@ contains
          full = call_builtin(B_GETNAME, args)
          if (.not. tctx%has_error) then
             block
-               character(len=:), allocatable :: dlr_147
-               call text_of(full, s=dlr_147)
-               nm = dlr_147
+               call text_of(full, s=dlt_1)
+               nm = dlt_1
             end block
             out = gc_str(nm(index(nm, ".", back=.true.) + 1:), [vs_get(vst, base + 1)])
          end if
@@ -8261,9 +8314,8 @@ contains
          a = strip_meta(gcv_nth(args, 0))
          hv = strip_meta(gcv_nth(args, 1))
          block
-            character(len=:), allocatable :: dlr_148
-            call gc_ref_text(hv%ref, s=dlr_148)
-         select case (dlr_148)
+            call gc_ref_text(hv%ref, s=dlt_1)
+         select case (dlt_1)
          case ("doubles");  want = "real8";   desc = "[D"
          case ("longs");    want = "int8";    desc = "[J"
          case ("ints");     want = "int4";    desc = "[I"
@@ -8279,9 +8331,8 @@ contains
             call raise_class("NullPointerException", "Cannot use a null array", [vs_get(vst, base + 1)])
          else if (gc_kind(a) == OBJ_ARRAY) then
             block
-               character(len=:), allocatable :: dlr_149
-               call gcna_kind(gc_i1(a), s=dlr_149)
-               kind = dlr_149
+               call gcna_kind(gc_i1(a), s=dlt_1)
+               kind = dlt_1
             end block
             if (kind == want .and. gcna_rank(gc_i1(a)) == 1) then
                out = a
@@ -8300,9 +8351,8 @@ contains
             end if
          else
             block
-               character(len=:), allocatable :: dlr_150
-               call class_name_of(a, s=dlr_150)
-               call raise_class("ClassCastException", "class " // dlr_150 //  " cannot be cast to class " // desc, &
+               call class_name_of(a, s=dlt_1)
+               call raise_class("ClassCastException", "class " // dlt_1 //  " cannot be cast to class " // desc, &
                     [vs_get(vst, base + 1)])
             end block
          end if
@@ -8330,19 +8380,16 @@ contains
           out = gc_int(a%ival)
        else if (a%tag == GCT_BIG) then
           block
-             character(len=:), allocatable :: dlr_151
-             call gc_big_text(a, s=dlr_151)
-          if (big_fits_i64(dlr_151)) then
+             call gc_big_text(a, s=dlt_1)
+          if (big_fits_i64(dlt_1)) then
              block
-                character(len=:), allocatable :: dlr_152
-                call gc_big_text(a, s=dlr_152)
-                out = gc_int(big_to_i64(dlr_152))
+                call gc_big_text(a, s=dlt_2)
+                out = gc_int(big_to_i64(dlt_2))
              end block
           else
              block
-                character(len=:), allocatable :: dlr_153
-                call gcp_str(a, .false., s=dlr_153)
-                call raise_class("IllegalArgumentException", "Value out of range for long: " //  dlr_153, [vs_get(vst, &
+                call gcp_str(a, .false., s=dlt_2)
+                call raise_class("IllegalArgumentException", "Value out of range for long: " //  dlt_2, [vs_get(vst, &
                      base + 1)])
              end block
           end if
@@ -8357,9 +8404,8 @@ contains
             ! MAX_VALUE become in RT's comparison
             if (d < -9223372036854775808.0_gc_dp .or. d > 9223372036854775808.0_gc_dp) then
                block
-                  character(len=:), allocatable :: dlr_154
-                  call gcp_str(gc_real(d), .false., s=dlr_154)
-                  call raise_class("IllegalArgumentException", "Value out of range for long: " //  dlr_154, [vs_get(vst, &
+                  call gcp_str(gc_real(d), .false., s=dlt_1)
+                  call raise_class("IllegalArgumentException", "Value out of range for long: " //  dlt_1, [vs_get(vst, &
                        base + 1)])
                end block
             else
@@ -8421,9 +8467,8 @@ contains
        ! throwing, and alias to it succeed.
        a = strip_meta(gcv_nth(args, 0))
        block
-          character(len=:), allocatable :: dlr_155
-          call gc_ref_text(a%ref, s=dlr_155)
-          out = gcn_find(dlr_155)
+          call gc_ref_text(a%ref, s=dlt_1)
+          out = gcn_find(dlt_1)
        end block
     case (B_LOADFILE)
        ! Read the whole file, then analyse and evaluate each form. The
@@ -8438,9 +8483,8 @@ contains
          logical :: eof
          out = gc_nil()
          block
-            character(len=:), allocatable :: dlr_156
-            call text_of(gcv_nth(args, 0), s=dlr_156)
-            path = dlr_156
+            call text_of(gcv_nth(args, 0), s=dlt_1)
+            path = dlt_1
          end block
          nsb = vs_enter(vst, 1)
          call vs_set(vst, nsb + 1, gcn_current([vs_get(vst, base + 1)]))
@@ -8466,9 +8510,8 @@ contains
                forms = gcr_read_next(text, j, [vs_get(vst, base + 1), vs_get(vst, base + 2)], eof, fid)
                if (gcr_has_error()) then
                   block
-                     character(len=:), allocatable :: dlr_157
-                     call gcr_error(s=dlr_157)
-                     call fail("load-file " // path // ": " // dlr_157)
+                     call gcr_error(s=dlt_1)
+                     call fail("load-file " // path // ": " // dlt_1)
                   end block
                   exit
                end if
@@ -8488,14 +8531,12 @@ contains
        block
          character(len=:), allocatable :: hay, ned
          block
-            character(len=:), allocatable :: dlr_158
-            call text_of(gcv_nth(args, 0), s=dlr_158)
-            hay = dlr_158
+            call text_of(gcv_nth(args, 0), s=dlt_1)
+            hay = dlt_1
          end block
          block
-            character(len=:), allocatable :: dlr_159
-            call text_of(gcv_nth(args, 1), s=dlr_159)
-            ned = dlr_159
+            call text_of(gcv_nth(args, 1), s=dlt_1)
+            ned = dlt_1
          end block
          if (len(ned) > len(hay)) then
             out = gc_bool(.false.)
@@ -8509,19 +8550,16 @@ contains
          character(len=:), allocatable :: t, frm, too, acc
          integer :: at
          block
-            character(len=:), allocatable :: dlr_160
-            call text_of(gcv_nth(args, 0), s=dlr_160)
-            t = dlr_160
+            call text_of(gcv_nth(args, 0), s=dlt_1)
+            t = dlt_1
          end block
          block
-            character(len=:), allocatable :: dlr_161
-            call text_of(gcv_nth(args, 1), s=dlr_161)
-            frm = dlr_161
+            call text_of(gcv_nth(args, 1), s=dlt_1)
+            frm = dlt_1
          end block
          block
-            character(len=:), allocatable :: dlr_162
-            call text_of(gcv_nth(args, 2), s=dlr_162)
-            too = dlr_162
+            call text_of(gcv_nth(args, 2), s=dlt_1)
+            too = dlt_1
          end block
          acc = ""
          do
@@ -8537,14 +8575,12 @@ contains
        block
          character(len=:), allocatable :: hay, ned
          block
-            character(len=:), allocatable :: dlr_163
-            call text_of(gcv_nth(args, 0), s=dlr_163)
-            hay = dlr_163
+            call text_of(gcv_nth(args, 0), s=dlt_1)
+            hay = dlt_1
          end block
          block
-            character(len=:), allocatable :: dlr_164
-            call text_of(gcv_nth(args, 1), s=dlr_164)
-            ned = dlr_164
+            call text_of(gcv_nth(args, 1), s=dlt_1)
+            ned = dlt_1
          end block
          if (len(ned) > len(hay)) then
             out = gc_bool(.false.)
@@ -8558,18 +8594,16 @@ contains
          cv = strip_meta(gcv_nth(args, 0))
          if (cv%tag == GCT_STR) then
             block
-               character(len=:), allocatable :: dlr_165
-               call gc_ref_text(cv%ref, s=dlr_165)
-               out = gc_int(u8_count(dlr_165))
+               call gc_ref_text(cv%ref, s=dlt_1)
+               out = gc_int(u8_count(dlt_1))
             end block
          else if (gc_kind(cv) == OBJ_SB) then
             ! A StringBuilder IS a CharSequence, so .length is its
             ! text's. Answering the seq count (0) made clojure.string's
             ! trim -- which loops down from .length -- answer "".
             block
-               character(len=:), allocatable :: dlr_166
-               call text_of(cv, s=dlr_166)
-               out = gc_int(u8_count(dlr_166))
+               call text_of(cv, s=dlt_1)
+               out = gc_int(u8_count(dlt_1))
             end block
          else
             out = gc_int(sq_count(cv, [vs_get(vst, base + 1)]))
@@ -8581,9 +8615,8 @@ contains
          type(gc_value) :: iv
          integer :: lo, hi
          block
-            character(len=:), allocatable :: dlr_167
-            call text_of(gcv_nth(args, 0), s=dlr_167)
-            t = dlr_167
+            call text_of(gcv_nth(args, 0), s=dlt_1)
+            t = dlt_1
          end block
          iv = as_index(gcv_nth(args, 1))
          lo = int(iv%ival)
@@ -8594,19 +8627,17 @@ contains
          end if
          if (lo < 0 .or. hi > u8_count(t) .or. lo > hi) then
             block
-               character(len=:), allocatable :: dlr_168, dlr_169, dlr_170
-               call itoa(lo, s=dlr_168)
-               call itoa(hi, s=dlr_169)
-               call itoa(u8_count(t), s=dlr_170)
+               call itoa(lo, s=dlt_1)
+               call itoa(hi, s=dlt_2)
+               call itoa(u8_count(t), s=dlt_3)
                call raise_class("StringIndexOutOfBoundsException", &
-                    "Range [" // trim(dlr_168) // ", " // trim(dlr_169) // ") out of bounds for length " // trim(dlr_170), &
+                    "Range [" // trim(dlt_1) // ", " // trim(dlt_2) // ") out of bounds for length " // trim(dlt_3), &
                     [vs_get(vst, base + 1)])
             end block
          else
             block
-               character(len=:), allocatable :: dlr_171
-               call u8_slice(t, lo, hi, s=dlr_171)
-               out = gc_str(dlr_171, [vs_get(vst, base + 1)])
+               call u8_slice(t, lo, hi, s=dlt_1)
+               out = gc_str(dlt_1, [vs_get(vst, base + 1)])
             end block
          end if
        end block
@@ -8759,9 +8790,8 @@ contains
          integer :: h
          src = strip_meta(gcv_nth(args, 0))
          block
-            character(len=:), allocatable :: dlr_172
-            call text_of(src, s=dlr_172)
-            ptext = dlr_172
+            call text_of(src, s=dlt_1)
+            ptext = dlt_1
          end block
          h = regex_compile(ptext, rerr)
          if (h == 0) then
@@ -8790,21 +8820,18 @@ contains
             mh = regex_clone(ph)
             if (mh == 0) then
                block
-                  character(len=:), allocatable :: dlr_173
-                  call regex_last_error(s=dlr_173)
-                  call fail("regex: " // dlr_173)
+                  call regex_last_error(s=dlt_1)
+                  call fail("regex: " // dlt_1)
                end block
             else
                block
-                  character(len=:), allocatable :: dlr_174
-                  call text_of(subj, s=dlr_174)
-                  stext = dlr_174
+                  call text_of(subj, s=dlt_1)
+                  stext = dlt_1
                end block
                if (.not. regex_set_text(mh, stext)) then
                   block
-                     character(len=:), allocatable :: dlr_175
-                     call regex_last_error(s=dlr_175)
-                     call fail("regex: " // dlr_175)
+                     call regex_last_error(s=dlt_1)
+                     call fail("regex: " // dlt_1)
                   end block
                else
                   mv = gc_obj(OBJ_MATCHER, [pat, gc_str(stext, [vs_get(vst, base + 1), pat])], &
@@ -8848,44 +8875,37 @@ contains
             out = bv
          case (GCT_INT, GCT_CHAR)
             block
-               character(len=:), allocatable :: dlr_176
-               call big_from_i64(bv%ival, o=dlr_176)
-               out = gc_big(dlr_176, [vs_get(vst, base + 1)])
+               call big_from_i64(bv%ival, o=dlt_1)
+               out = gc_big(dlt_1, [vs_get(vst, base + 1)])
             end block
          case (GCT_RATIO)
             block
-               character(len=:), allocatable :: dlr_177
-               call big_from_i64(gc_numerator(bv) / gc_denominator(bv), o=dlr_177)
-               out = gc_big(dlr_177, [vs_get(vst, base + 1)])
+               call big_from_i64(gc_numerator(bv) / gc_denominator(bv), o=dlt_1)
+               out = gc_big(dlt_1, [vs_get(vst, base + 1)])
             end block
          case (GCT_REAL)
             block
-               character(len=:), allocatable :: dlr_178
-               call big_from_i64(int(aint(bv%rval), gc_ip), o=dlr_178)
-               out = gc_big(dlr_178, [vs_get(vst, base + 1)])
+               call big_from_i64(int(aint(bv%rval), gc_ip), o=dlt_1)
+               out = gc_big(dlt_1, [vs_get(vst, base + 1)])
             end block
          case (GCT_DEC)
             block
-               character(len=:), allocatable :: dlr_179, dlr_180
-               call gc_dec_text(bv, s=dlr_179)
-               call dec_to_big(dlr_179, o=dlr_180)
-               out = gc_big(dlr_180, [vs_get(vst, base + 1)])
+               call gc_dec_text(bv, s=dlt_1)
+               call dec_to_big(dlt_1, o=dlt_2)
+               out = gc_big(dlt_2, [vs_get(vst, base + 1)])
             end block
          case (GCT_STR)
             block
-               character(len=:), allocatable :: dlr_181
-               call text_of(bv, s=dlr_181)
-            if (big_valid(dlr_181)) then
+               call text_of(bv, s=dlt_1)
+            if (big_valid(dlt_1)) then
                block
-                  character(len=:), allocatable :: dlr_182
-                  call text_of(bv, s=dlr_182)
-                  out = gc_big(dlr_182, [vs_get(vst, base + 1)])
+                  call text_of(bv, s=dlt_2)
+                  out = gc_big(dlt_2, [vs_get(vst, base + 1)])
                end block
             else
                block
-                  character(len=:), allocatable :: dlr_183
-                  call text_of(bv, s=dlr_183)
-                  call raise_class("NumberFormatException", "For input string: " // dlr_183, [vs_get(vst, base + 1)])
+                  call text_of(bv, s=dlt_2)
+                  call raise_class("NumberFormatException", "For input string: " // dlt_2, [vs_get(vst, base + 1)])
                end block
             end if
             end block
@@ -8908,41 +8928,36 @@ contains
             out = dv2
          case (GCT_INT, GCT_CHAR)
             block
-               character(len=:), allocatable :: dlr_184
-               call dec_from_i64(dv2%ival, o=dlr_184)
-               out = gc_dec(dlr_184, [vs_get(vst, base + 1)])
+               call dec_from_i64(dv2%ival, o=dlt_1)
+               out = gc_dec(dlt_1, [vs_get(vst, base + 1)])
             end block
          case (GCT_BIG)
             block
-               character(len=:), allocatable :: dlr_185, dlr_186
-               call gc_big_text(dv2, s=dlr_185)
-               call dec_from_big(dlr_185, o=dlr_186)
-               out = gc_dec(dlr_186, [vs_get(vst, base + 1)])
+               call gc_big_text(dv2, s=dlt_1)
+               call dec_from_big(dlt_1, o=dlt_2)
+               out = gc_dec(dlt_2, [vs_get(vst, base + 1)])
             end block
          case (GCT_REAL, GCT_STR, GCT_RATIO)
             if (dv2%tag == GCT_RATIO) then
                block
-                  character(len=:), allocatable :: dlr_187, dlr_188, dlr_189, dlr_190
-                  call big_from_i64(gc_numerator(dv2), o=dlr_187)
-                  call dec_from_big(dlr_187, o=dlr_188)
-                  call big_from_i64(gc_denominator(dv2), o=dlr_189)
-                  call dec_from_big(dlr_189, o=dlr_190)
-                  call dec_div(dlr_188,  dlr_190, dt, dok2)
+                  call big_from_i64(gc_numerator(dv2), o=dlt_1)
+                  call dec_from_big(dlt_1, o=dlt_2)
+                  call big_from_i64(gc_denominator(dv2), o=dlt_3)
+                  call dec_from_big(dlt_3, o=dlt_4)
+                  call dec_div(dlt_2,  dlt_4, dt, dok2)
                end block
             else
                block
-                  character(len=:), allocatable :: dlr_191
-                  call to_string_text(dv2, s=dlr_191)
-                  call dec_from_text(dlr_191, dt, dok2)
+                  call to_string_text(dv2, s=dlt_1)
+                  call dec_from_text(dlt_1, dt, dok2)
                end block
             end if
             if (dok2) then
                out = gc_dec(dt, [vs_get(vst, base + 1)])
             else
                block
-                  character(len=:), allocatable :: dlr_192
-                  call to_string_text(dv2, s=dlr_192)
-                  call raise_class("NumberFormatException",  "not a decimal: " // dlr_192, [vs_get(vst, base + 1)])
+                  call to_string_text(dv2, s=dlt_1)
+                  call raise_class("NumberFormatException",  "not a decimal: " // dlt_1, [vs_get(vst, base + 1)])
                end block
             end if
          case default
@@ -9011,18 +9026,16 @@ contains
             out = gc_char_cp(case_cp(int(v%ival), up))
          else
             block
-               character(len=:), allocatable :: dlr_193
-               call text_of(v, s=dlr_193)
-               t = dlr_193
+               call text_of(v, s=dlt_1)
+               t = dlt_1
             end block
             r = ""
             p = 1
             do while (p <= len(t))
                call u8_dec(t, p, cp, nb)
                block
-                  character(len=:), allocatable :: dlr_194
-                  call u8_enc(case_cp(cp, up), s=dlr_194)
-                  r = r // dlr_194
+                  call u8_enc(case_cp(cp, up), s=dlt_1)
+                  r = r // dlt_1
                end block
                p = p + nb
             end do
@@ -9039,9 +9052,8 @@ contains
          iv = strip_meta(gcv_nth(args, 1))
          out = gc_nil()
          block
-            character(len=:), allocatable :: dlr_195
-            call text_of(sv, s=dlr_195)
-            t = dlr_195
+            call text_of(sv, s=dlt_1)
+            t = dlt_1
          end block
          if (iv%tag == GCT_INT) then
             if (iv%ival >= 0 .and. iv%ival < u8_count(t)) out = gc_char_cp(u8_at(t, int(iv%ival)))
@@ -9062,18 +9074,16 @@ contains
             piece = achar(int(x%ival))
          else
             block
-               character(len=:), allocatable :: dlr_196
-               call text_of(x, s=dlr_196)
-               piece = dlr_196
+               call text_of(x, s=dlt_1)
+               piece = dlt_1
             end block
          end if
          if (gc_kind(w) == OBJ_WRITER) then
             write(gc_i1(w), '(A)', advance='no') piece
          else if (gc_kind(w) == OBJ_SB) then
             block
-               character(len=:), allocatable :: dlr_197
-               call text_of(gc_slot(w, 1), s=dlr_197)
-               call gc_set_slot(w, 1, gc_str(dlr_197 // piece, [vs_get(vst, base + 1)]))
+               call text_of(gc_slot(w, 1), s=dlt_1)
+               call gc_set_slot(w, 1, gc_str(dlt_1 // piece, [vs_get(vst, base + 1)]))
             end block
          end if
          out = gc_nil()
@@ -9089,9 +9099,8 @@ contains
        ! the classpath root beside the binary, so getResourceAsStream
        ! finds clojure/version.properties from any directory
        block
-          character(len=:), allocatable :: dlr_198
-          call gce_home(h=dlr_198)
-          out = gc_str(dlr_198 // "/src/clj", [vs_get(vst, base + 1)])
+          call gce_home(h=dlt_1)
+          out = gc_str(dlt_1 // "/src/clj", [vs_get(vst, base + 1)])
        end block
     case (B_RESOURCE)
        ! Java answers null for a resource that is not there, and
@@ -9101,10 +9110,9 @@ contains
          integer :: u, st, fsize
          out = gc_nil()
          block
-            character(len=:), allocatable :: dlr_199, dlr_200
-            call text_of(gcv_nth(args, 0), s=dlr_199)
-            call text_of(gcv_nth(args, 1), s=dlr_200)
-            path = dlr_199 // "/" // dlr_200
+            call text_of(gcv_nth(args, 0), s=dlt_1)
+            call text_of(gcv_nth(args, 1), s=dlt_2)
+            path = dlt_1 // "/" // dlt_2
          end block
          open(newunit=u, file=path, access="stream", form="unformatted", &
               status="old", action="read", iostat=st)
@@ -9130,9 +9138,8 @@ contains
          lb = vs_enter(vst, 4)
          call vs_set(vst, lb + 1, strip_meta(gcv_nth(args, 0)))
          block
-            character(len=:), allocatable :: dlr_201
-            call text_of(gcv_nth(args, 1), s=dlr_201)
-            txt = dlr_201
+            call text_of(gcv_nth(args, 1), s=dlt_1)
+            txt = dlt_1
          end block
          m = gca_empty([vs_get(vst, lb + 1)])
          call vs_set(vst, lb + 2, m)
@@ -9198,9 +9205,8 @@ contains
             out = a0
          else
             block
-               character(len=:), allocatable :: dlr_202
-               call text_of(a0, s=dlr_202)
-               t = trim(adjustl(dlr_202))
+               call text_of(a0, s=dlt_1)
+               t = trim(adjustl(dlt_1))
             end block
             ! Long.valueOf's grammar, not list-directed input's: an
             ! optional sign and digits and nothing else. "1 2" and
@@ -9233,10 +9239,9 @@ contains
          ckey = strip_meta(gcv_nth(args, 1))
          if (coll%tag == GCT_STR .and. ckey%tag /= GCT_INT) then
             block
-               character(len=:), allocatable :: dlr_203, dlr_204
-               call text_of(coll, s=dlr_203)
-               call text_of(gcv_nth(args, 1), s=dlr_204)
-               out = gc_bool(index(dlr_203, dlr_204) > 0)
+               call text_of(coll, s=dlt_1)
+               call text_of(gcv_nth(args, 1), s=dlt_2)
+               out = gc_bool(index(dlt_1, dlt_2) > 0)
             end block
          else if (gc_kind(coll) == OBJ_INST) then
             ! THE path contains? takes: core.clj's contains? is
@@ -9265,9 +9270,8 @@ contains
        block
          character(len=:), allocatable :: lerr
          block
-            character(len=:), allocatable :: dlr_205
-            call text_of(strip_meta(gcv_nth(args, 0)), s=dlr_205)
-         if (dl_install(dlr_205,  int(int_of_number(strip_meta(gcv_nth(args, 1)))), lerr)) then
+            call text_of(strip_meta(gcv_nth(args, 0)), s=dlt_1)
+         if (dl_install(dlt_1,  int(int_of_number(strip_meta(gcv_nth(args, 1)))), lerr)) then
             out = gc_bool(.true.)
          else
             call raise_class("RuntimeException", lerr, [vs_get(vst, base + 1)])
@@ -9320,9 +9324,8 @@ contains
          integer :: u, st, fsize, j, fid, lb
          logical :: eof
          block
-            character(len=:), allocatable :: dlr_206
-            call text_of(gcv_nth(args, 0), s=dlr_206)
-            path = dlr_206
+            call text_of(gcv_nth(args, 0), s=dlt_1)
+            path = dlt_1
          end block
          open(newunit=u, file=path, access="stream", form="unformatted", &
               status="old", action="read", iostat=st)
@@ -9341,9 +9344,8 @@ contains
                form = gcr_read_next(text, j, [vs_get(vst, base + 1), vs_get(vst, lb + 1)], eof, fid)
                if (gcr_has_error()) then
                   block
-                     character(len=:), allocatable :: dlr_207
-                     call gcr_error(s=dlr_207)
-                     call fail("clotran-read-forms " // path // ": " // dlr_207)
+                     call gcr_error(s=dlt_1)
+                     call fail("clotran-read-forms " // path // ": " // dlt_1)
                   end block
                   exit
                end if
@@ -9388,9 +9390,8 @@ contains
                if (free == 0) then
                   call gc_state_unlock()
                   block
-                     character(len=:), allocatable :: dlr_208
-                     call itoa(MAX_MONITORS, s=dlr_208)
-                     call fail("monitor-enter: more than " // dlr_208 // " monitors held at once")
+                     call itoa(MAX_MONITORS, s=dlt_1)
+                     call fail("monitor-enter: more than " // dlt_1 // " monitors held at once")
                   end block
                   call vs_leave(vst, base)
                   return
@@ -9427,9 +9428,8 @@ contains
          integer :: dims
          a = strip_meta(gcv_nth(args, 0))
          block
-            character(len=:), allocatable :: dlr_209
-            call gc_ref_text(a%ref, s=dlr_209)
-            cn = dlr_209
+            call gc_ref_text(a%ref, s=dlt_1)
+            cn = dlt_1
          end block
          dims = verify(cn, "[") - 1
          select case (cn(dims + 1:))
@@ -9509,16 +9509,14 @@ contains
          else
             was = gcr_set_tag_markers(.true.)
             block
-               character(len=:), allocatable :: dlr_210
-               call gc_ref_text(sv%ref, s=dlr_210)
-               form = gcr_read(dlr_210, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+               call gc_ref_text(sv%ref, s=dlt_1)
+               form = gcr_read(dlt_1, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
             end block
             was = gcr_set_tag_markers(was)
             if (gcr_has_error()) then
                block
-                  character(len=:), allocatable :: dlr_211
-                  call gcr_error(s=dlr_211)
-                  call fail(dlr_211)
+                  call gcr_error(s=dlt_1)
+                  call fail(dlt_1)
                end block
             else
                call vs_set(vst, base + 3, form)
@@ -9535,11 +9533,10 @@ contains
        a = strip_meta(gcv_nth(args, 0))
        if (a%tag == GCT_CLASS) then
           block
-             character(len=:), allocatable :: dlr_212, dlr_213, dlr_214
-             call gc_ref_text(a%ref, s=dlr_212)
-             call short_class_name(dlr_212, s=dlr_213)
-             call gc_ref_text(a%ref, s=dlr_214)
-             out = gc_bool(dlr_213 == "array" .or.  index(dlr_214, "[") == 1)
+             call gc_ref_text(a%ref, s=dlt_1)
+             call short_class_name(dlt_1, s=dlt_2)
+             call gc_ref_text(a%ref, s=dlt_3)
+             out = gc_bool(dlt_2 == "array" .or.  index(dlt_3, "[") == 1)
           end block
        else
           out = gc_bool(gc_kind(a) == OBJ_ARRAY)
@@ -9548,17 +9545,15 @@ contains
        a = strip_meta(gcv_nth(args, 0))
        if (id == B_MUNGE) then
           block
-             character(len=:), allocatable :: dlr_215, dlr_216
-             call gc_ref_text(a%ref, s=dlr_215)
-             call munge_text(dlr_215, o=dlr_216)
-             out = gc_str(dlr_216, [vs_get(vst, base + 1)])
+             call gc_ref_text(a%ref, s=dlt_1)
+             call munge_text(dlt_1, o=dlt_2)
+             out = gc_str(dlt_2, [vs_get(vst, base + 1)])
           end block
        else
           block
-             character(len=:), allocatable :: dlr_217, dlr_218
-             call gc_ref_text(a%ref, s=dlr_217)
-             call demunge_text(dlr_217, o=dlr_218)
-             out = gc_str(dlr_218, [vs_get(vst, base + 1)])
+             call gc_ref_text(a%ref, s=dlt_1)
+             call demunge_text(dlt_1, o=dlt_2)
+             out = gc_str(dlt_2, [vs_get(vst, base + 1)])
           end block
        end if
     case (B_NSUNMAP)
@@ -9740,14 +9735,12 @@ contains
             if (participated) then
                subj = gc_slot(mt, 2)
                block
-                  character(len=:), allocatable :: dlr_219
-                  call text_of(subj, s=dlr_219)
-                  stext = dlr_219
+                  call text_of(subj, s=dlt_1)
+                  stext = dlt_1
                end block
                block
-                  character(len=:), allocatable :: dlr_220
-                  call u8_slice(stext, gstart, gend, s=dlr_220)
-                  out = gc_str(dlr_220, [vs_get(vst, base + 1)])
+                  call u8_slice(stext, gstart, gend, s=dlt_1)
+                  out = gc_str(dlt_1, [vs_get(vst, base + 1)])
                end block
             end if
          end if
@@ -9798,10 +9791,9 @@ contains
          if (gcn_is_var(vv)) then
             nm2 = gc_slot(vv, 4)
             block
-               character(len=:), allocatable :: dlr_221, dlr_222
-               call gcn_name(gc_slot(vv, 3), s=dlr_221)
-               call name_part(nm2, s=dlr_222)
-               out = gc_sym(dlr_221 // "/" // dlr_222,  [vs_get(vst, base + 1)])
+               call gcn_name(gc_slot(vv, 3), s=dlt_1)
+               call name_part(nm2, s=dlt_2)
+               out = gc_sym(dlt_1 // "/" // dlt_2,  [vs_get(vst, base + 1)])
             end block
          end if
        end block
@@ -9835,9 +9827,8 @@ contains
           block
             character(len=:), allocatable :: cn
             block
-               character(len=:), allocatable :: dlr_223
-               call gc_ref_text(a%ref, s=dlr_223)
-               cn = dlr_223
+               call gc_ref_text(a%ref, s=dlt_1)
+               cn = dlt_1
             end block
             if (len(cn) > 0) then
                if (cn(1:1) == "[") then
@@ -9862,9 +9853,8 @@ contains
          call set_thrown(vs_get(vst, base + 2))
          tctx%has_error = .true.
          block
-            character(len=:), allocatable :: dlr_224
-            call gcp_str(vs_get(vst, base + 2), .true., s=dlr_224)
-            tctx%last_error = dlr_224
+            call gcp_str(vs_get(vst, base + 2), .true., s=dlt_1)
+            tctx%last_error = dlt_1
          end block
          out = gc_nil()
        end block
@@ -10037,9 +10027,8 @@ contains
          else
             call vs_set(vst, base + 2, nsv)
             block
-               character(len=:), allocatable :: dlr_225
-               call gc_ref_text(sym2%ref, s=dlr_225)
-               t = dlr_225
+               call gc_ref_text(sym2%ref, s=dlt_1)
+               t = dlt_1
             end block
             slash = index(t, "/")
             if (slash > 1 .and. slash < len(t)) then
@@ -10066,9 +10055,8 @@ contains
                   ! (resolve 'NonExistentClass.Name) is nil on the JVM.
                   if (is_class_name(sym2) .and. known_class_name(t)) then
                      block
-                        character(len=:), allocatable :: dlr_226
-                        call class_key(t, k=dlr_226)
-                        out = gc_class(dlr_226, [vs_get(vst, base + 1)])
+                        call class_key(t, k=dlt_1)
+                        out = gc_class(dlt_1, [vs_get(vst, base + 1)])
                      end block
                   end if
                end if
@@ -10104,9 +10092,8 @@ contains
             ! not a stack: IPersistentStack is a vector or a list, and a
             ! seq, a set or a map is refused as on the JVM
             block
-               character(len=:), allocatable :: dlr_227
-               call class_name_of(coll, s=dlr_227)
-               call raise_class("ClassCastException", dlr_227 //  " cannot be cast to clojure.lang.IPersistentStack", &
+               call class_name_of(coll, s=dlt_1)
+               call raise_class("ClassCastException", dlt_1 //  " cannot be cast to clojure.lang.IPersistentStack", &
                     [vs_get(vst, base + 1)])
             end block
          else if (coll%tag /= GCT_NIL) then
@@ -10131,9 +10118,8 @@ contains
          a = strip_meta(gcv_nth(args, 0))
          if (a%tag == GCT_SYM .or. a%tag == GCT_KEY) then
             block
-               character(len=:), allocatable :: dlr_228
-               call gc_ref_text(a%ref, s=dlr_228)
-               t = dlr_228
+               call gc_ref_text(a%ref, s=dlt_1)
+               t = dlt_1
             end block
             sl = index(t, "/")
             if (sl > 1) out = gc_str(t(1:sl-1), [vs_get(vst, base + 1)])
@@ -10356,9 +10342,8 @@ contains
        ! Namespace.findOrCreate, behind create-ns: the one that makes one
        a = strip_meta(gcv_nth(args, 0))
        block
-          character(len=:), allocatable :: dlr_229
-          call gc_ref_text(a%ref, s=dlr_229)
-          out = gcn_find_or_create(dlr_229, [vs_get(vst, base + 1)])
+          call gc_ref_text(a%ref, s=dlt_1)
+          out = gcn_find_or_create(dlt_1, [vs_get(vst, base + 1)])
        end block
     case (B_NSREMOVE)
        ! Namespace.remove, which refuses clojure.core as it does there
@@ -10369,9 +10354,8 @@ contains
              call raise_class("IllegalArgumentException", "Cannot remove clojure namespace", [vs_get(vst, base + 1)])
           else
              block
-                character(len=:), allocatable :: dlr_230
-                call gc_ref_text(a%ref, s=dlr_230)
-                out = gcn_remove(dlr_230)
+                call gc_ref_text(a%ref, s=dlt_1)
+                out = gcn_remove(dlt_1)
              end block
           end if
        end if
@@ -10492,14 +10476,12 @@ contains
          character(len=:), allocatable :: hay, ned
          integer :: j, hit
          block
-            character(len=:), allocatable :: dlr_231
-            call text_of(gcv_nth(args, 0), s=dlr_231)
-            hay = dlr_231
+            call text_of(gcv_nth(args, 0), s=dlt_1)
+            hay = dlt_1
          end block
          block
-            character(len=:), allocatable :: dlr_232
-            call needle_text(gcv_nth(args, 1), s=dlr_232)
-            ned = dlr_232
+            call needle_text(gcv_nth(args, 1), s=dlt_1)
+            ned = dlt_1
          end block
          hit = 0
          if (len(ned) > 0 .and. len(ned) <= len(hay)) then
@@ -10526,9 +10508,8 @@ contains
          character(len=:), allocatable :: rel
          type(gc_value) :: fargs
          block
-            character(len=:), allocatable :: dlr_233
-            call text_of(gcv_nth(args, 0), s=dlr_233)
-            rel = dlr_233
+            call text_of(gcv_nth(args, 0), s=dlt_1)
+            rel = dlt_1
          end block
          ! The two libs that ARE the JVM are skipped BY NAME, and
          ! loudly. core_proxy and genclass emit bytecode through
@@ -10595,9 +10576,8 @@ contains
          fargs = gcv_empty([vs_get(vst, base + 1)])
          call vs_set(vst, base + 2, fargs)
          block
-            character(len=:), allocatable :: dlr_234
-            call classpath_find(rel, path=dlr_234)
-            call vs_set(vst, base + 3, gc_str(dlr_234, [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+            call classpath_find(rel, path=dlt_1)
+            call vs_set(vst, base + 3, gc_str(dlt_1, [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
          end block
          fargs = gcv_conj(vs_get(vst, base + 2), vs_get(vst, base + 3), [vs_get(vst, base + 1)])
          call vs_set(vst, base + 2, fargs)
@@ -10621,14 +10601,12 @@ contains
          character(len=:), allocatable :: hay, ned
          integer :: from1, hit1, fb
          block
-            character(len=:), allocatable :: dlr_235
-            call text_of(gcv_nth(args, 0), s=dlr_235)
-            hay = dlr_235
+            call text_of(gcv_nth(args, 0), s=dlt_1)
+            hay = dlt_1
          end block
          block
-            character(len=:), allocatable :: dlr_236
-            call needle_text(gcv_nth(args, 1), s=dlr_236)
-            ned = dlr_236
+            call needle_text(gcv_nth(args, 1), s=dlt_1)
+            ned = dlt_1
          end block
          from1 = 0
          if (n >= 3) from1 = max(0, int(strip_int(gcv_nth(args, 2))))
@@ -10711,23 +10689,20 @@ contains
        out = a
        if (gc_kind(a) == OBJ_SB) then
           block
-             character(len=:), allocatable :: dlr_237, dlr_238
-             call text_of(gc_slot(a, 1), s=dlr_237)
-             call text_of(gcv_nth(args, 1), s=dlr_238)
-             call gc_set_slot(a, 1, gc_str(  dlr_237 // dlr_238,  [vs_get(vst, base + 1)]))
+             call text_of(gc_slot(a, 1), s=dlt_1)
+             call text_of(gcv_nth(args, 1), s=dlt_2)
+             call gc_set_slot(a, 1, gc_str(  dlt_1 // dlt_2,  [vs_get(vst, base + 1)]))
           end block
        else if (gc_kind(a) == OBJ_WRITER) then
           block
-             character(len=:), allocatable :: dlr_239
-             call text_of(gcv_nth(args, 1), s=dlr_239)
-             write(gc_i1(a), '(A)', advance='no') dlr_239
+             call text_of(gcv_nth(args, 1), s=dlt_1)
+             write(gc_i1(a), '(A)', advance='no') dlt_1
           end block
        end if
     case (B_TOSTRING)
        block
-          character(len=:), allocatable :: dlr_240
-          call to_string_text(gcv_nth(args, 0), s=dlr_240)
-          out = gc_str(dlr_240, [vs_get(vst, base + 1)])
+          call to_string_text(gcv_nth(args, 0), s=dlt_1)
+          out = gc_str(dlt_1, [vs_get(vst, base + 1)])
        end block
     case (B_NANOTIME, B_MILLIS)
        block
@@ -10749,7 +10724,52 @@ contains
        out = gc_nil()
        if (a%tag == GCT_STR) then
           if (gc_ref_is(a%ref, "line.separator")) out = gc_str(achar(10), [vs_get(vst, base + 1)])
+          ! where this clotran lives: the launcher, src/clj, build/
+          if (gc_ref_is(a%ref, "clotran.home") .and. allocated(clotran_home)) &
+               out = gc_str(clotran_home, [vs_get(vst, base + 1)])
        end if
+    case (B_GETENV)
+       ! System.getenv: the variable's value, or nil when it is not set
+       block
+         character(len=:), allocatable :: nm
+         character(len=4096) :: val
+         integer :: ln, st
+         call text_of(gcv_nth(args, 0), s=nm)
+         call get_environment_variable(nm, val, length=ln, status=st)
+         out = gc_nil()
+         if (st == 0) out = gc_str(val(1:min(ln, len(val))), [vs_get(vst, base + 1)])
+       end block
+    case (B_FILEEXISTS)
+       block
+         character(len=:), allocatable :: p
+         logical :: there
+         call text_of(gcv_nth(args, 0), s=p)
+         inquire(file=p, exist=there)
+         out = gc_bool(there)
+       end block
+    case (B_SH)
+       ! (clotran-sh cmd) runs cmd with /bin/sh and waits, answering its
+       ! exit status; (clotran-sh cmd false) starts it and returns nil at
+       ! once -- the background compiles of clotran.loader. Out of the
+       ! running mutators while it waits: a collection must not wait for it.
+       block
+         character(len=:), allocatable :: cmd
+         integer :: ex, cs
+         logical :: wait_for
+         call text_of(gcv_nth(args, 0), s=cmd)
+         wait_for = .true.
+         if (n >= 2) wait_for = truthy(gcv_nth(args, 1))
+         ex = -1
+         if (wait_for) then
+            call gc_mutator_leave()
+            call execute_command_line(cmd, wait=.true., exitstat=ex, cmdstat=cs)
+            call gc_mutator_enter()
+            out = gc_int(int(ex, gc_ip))
+         else
+            call execute_command_line(cmd, wait=.false., cmdstat=cs)
+            out = gc_nil()
+         end if
+       end block
     case (B_DEREF)
        ! A Var, an atom and a delay all deref the same way here: the
        ! thing in slot 1.
@@ -10797,9 +10817,8 @@ contains
                 ! (identical? r (deref-again)) false.
                 call gc_set_slot(vs_get(vst, base + 2), 2, thrown_value())
                 block
-                   character(len=:), allocatable :: dlr_241
-                   call gce_error(s=dlr_241)
-                   call gc_set_slot(vs_get(vst, base + 2), 3,  gc_str(dlr_241, [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+                   call gce_error(s=dlt_1)
+                   call gc_set_slot(vs_get(vst, base + 2), 3,  gc_str(dlt_1, [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
                 end block
                 call gc_state_lock()
                 call gc_set_i1(vs_get(vst, base + 2), 2)
@@ -10819,9 +10838,8 @@ contains
           if (gc_i1(a) == 2) then
              call set_thrown(gc_slot(a, 2))
              block
-                character(len=:), allocatable :: dlr_242
-                call text_of(gc_slot(a, 3), s=dlr_242)
-                call fail(dlr_242)
+                call text_of(gc_slot(a, 3), s=dlt_1)
+                call fail(dlt_1)
              end block
              call vs_leave(vst, base)
              return
@@ -10882,10 +10900,9 @@ contains
             if (n >= 2) av = coll_to_vector(gcv_nth(args, 1), [vs_get(vst, base + 1)])
             call vs_set(vst, base + 2, av)
             block
-               character(len=:), allocatable :: dlr_243, dlr_244
-               call gc_ref_text(fv%ref, s=dlr_243)
-               call java_format(dlr_243, vs_get(vst, base + 2), s=dlr_244)
-               out = gc_str(dlr_244,  [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+               call gc_ref_text(fv%ref, s=dlt_1)
+               call java_format(dlt_1, vs_get(vst, base + 2), s=dlt_2)
+               out = gc_str(dlt_2,  [vs_get(vst, base + 1), vs_get(vst, base + 2)])
             end block
          end if
        end block
@@ -10894,18 +10911,16 @@ contains
          type(gc_value) :: w
          character(len=:), allocatable :: txt
          block
-            character(len=:), allocatable :: dlr_245
-            call gcp_str(gcv_nth(args, 0), .true., s=dlr_245)
-            txt = dlr_245
+            call gcp_str(gcv_nth(args, 0), .true., s=dlt_1)
+            txt = dlt_1
          end block
          out = gc_nil()
          if (n >= 2) then
             w = strip_meta(gcv_nth(args, 1))
             if (gc_kind(w) == OBJ_SB) then
                block
-                  character(len=:), allocatable :: dlr_246
-                  call text_of(gc_slot(w, 1), s=dlr_246)
-                  call gc_set_slot(w, 1, gc_str(dlr_246 // txt,  [vs_get(vst, base + 1)]))
+                  call text_of(gc_slot(w, 1), s=dlt_1)
+                  call gc_set_slot(w, 1, gc_str(dlt_1 // txt,  [vs_get(vst, base + 1)]))
                end block
             else if (gc_kind(w) == OBJ_WRITER) then
                write(gc_i1(w), '(A)', advance='no') txt
@@ -11084,10 +11099,9 @@ contains
               character(len=:), allocatable :: list
               integer :: p, q
               block
-                 character(len=:), allocatable :: dlr_247, dlr_248
-                 call gc_ref_text(cv%ref, s=dlr_247)
-                 call iface_supers(dlr_247, supers=dlr_248)
-                 list = dlr_248
+                 call gc_ref_text(cv%ref, s=dlt_1)
+                 call iface_supers(dlt_1, supers=dlt_2)
+                 list = dlt_2
               end block
               p = 2
               do while (p <= len(list))
@@ -11166,9 +11180,8 @@ contains
          mt = strip_meta(gcv_nth(args, 0))
          if (gc_kind(mt) == OBJ_MATCHER) then
             block
-               character(len=:), allocatable :: dlr_249
-               call text_of(gcv_nth(args, 1), s=dlr_249)
-               out = regex_replace(mt, dlr_249,  id == B_RE_REPLACEFIRST, [vs_get(vst, base + 1)])
+               call text_of(gcv_nth(args, 1), s=dlt_1)
+               out = regex_replace(mt, dlt_1,  id == B_RE_REPLACEFIRST, [vs_get(vst, base + 1)])
             end block
          else if (mt%tag == GCT_STR .and. n >= 3) then
             ! String.replaceAll(regex, replacement) and replaceFirst: the
@@ -11179,37 +11192,32 @@ contains
               integer :: h, mh
               character(len=:), allocatable :: stext, rerr
               block
-                 character(len=:), allocatable :: dlr_250
-                 call text_of(gcv_nth(args, 1), s=dlr_250)
-                 h = regex_compile(dlr_250, rerr)
+                 call text_of(gcv_nth(args, 1), s=dlt_1)
+                 h = regex_compile(dlt_1, rerr)
               end block
               if (h == 0) then
                  call fail("regex: " // rerr)
               else
                  block
-                    character(len=:), allocatable :: dlr_251
-                    call text_of(gcv_nth(args, 1), s=dlr_251)
-                    rx = gc_obj(OBJ_REGEX, [gc_str(dlr_251, [vs_get(vst, base + 1)])], [vs_get(vst, base + 1)])
+                    call text_of(gcv_nth(args, 1), s=dlt_1)
+                    rx = gc_obj(OBJ_REGEX, [gc_str(dlt_1, [vs_get(vst, base + 1)])], [vs_get(vst, base + 1)])
                  end block
                  call gc_set_i1(rx, h)
                  call vs_set(vst, base + 2, rx)
                  mh = regex_clone(h)
                  block
-                    character(len=:), allocatable :: dlr_252
-                    call text_of(mt, s=dlr_252)
-                    stext = dlr_252
+                    call text_of(mt, s=dlt_1)
+                    stext = dlt_1
                  end block
                  if (mh == 0) then
                     block
-                       character(len=:), allocatable :: dlr_253
-                       call regex_last_error(s=dlr_253)
-                       call fail("regex: " // dlr_253)
+                       call regex_last_error(s=dlt_1)
+                       call fail("regex: " // dlt_1)
                     end block
                  else if (.not. regex_set_text(mh, stext)) then
                     block
-                       character(len=:), allocatable :: dlr_254
-                       call regex_last_error(s=dlr_254)
-                       call fail("regex: " // dlr_254)
+                       call regex_last_error(s=dlt_1)
+                       call fail("regex: " // dlt_1)
                     end block
                  else
                     mv = gc_obj(OBJ_MATCHER, [vs_get(vst, base + 2), gc_str(stext, [vs_get(vst, base + 1), vs_get(vst, base + 2)])], &
@@ -11217,9 +11225,8 @@ contains
                     call gc_set_i1(mv, mh)
                     call vs_set(vst, base + 3, mv)
                     block
-                       character(len=:), allocatable :: dlr_255
-                       call text_of(gcv_nth(args, 2), s=dlr_255)
-                       out = regex_replace(vs_get(vst, base + 3), dlr_255,  id == B_RE_REPLACEFIRST, [vs_get(vst, base + 1)])
+                       call text_of(gcv_nth(args, 2), s=dlt_1)
+                       out = regex_replace(vs_get(vst, base + 3), dlt_1,  id == B_RE_REPLACEFIRST, [vs_get(vst, base + 1)])
                     end block
                  end if
               end if
@@ -11243,9 +11250,8 @@ contains
             call fail("appendReplacement needs a Matcher")
          else
             block
-               character(len=:), allocatable :: dlr_256
-               call text_of(gc_slot(mt, 2), s=dlr_256)
-               subj = dlr_256
+               call text_of(gc_slot(mt, 2), s=dlt_1)
+               subj = dlt_1
             end block
             mh2 = gc_i1(mt)
             apos = gc_i2(mt)
@@ -11253,11 +11259,10 @@ contains
                piece = subj(u8_off(subj, apos):)
             else if (regex_group_span(mh2, 0, gs2, ge2)) then
                block
-                  character(len=:), allocatable :: dlr_257, dlr_258, dlr_259
-                  call u8_slice(subj, apos, gs2, s=dlr_257)
-                  call text_of(gcv_nth(args, 2), s=dlr_258)
-                  call expand_replacement(dlr_258, mh2, subj, s=dlr_259)
-                  piece = dlr_257 //  dlr_259
+                  call u8_slice(subj, apos, gs2, s=dlt_1)
+                  call text_of(gcv_nth(args, 2), s=dlt_2)
+                  call expand_replacement(dlt_2, mh2, subj, s=dlt_3)
+                  piece = dlt_1 //  dlt_3
                end block
                call gc_set_i2(mt, ge2)
             else
@@ -11265,9 +11270,8 @@ contains
             end if
             if (gc_kind(bufv) == OBJ_SB) then
                block
-                  character(len=:), allocatable :: dlr_260
-                  call text_of(gc_slot(bufv, 1), s=dlr_260)
-                  call gc_set_slot(bufv, 1, gc_str(  dlr_260 // piece, [vs_get(vst, base + 1)]))
+                  call text_of(gc_slot(bufv, 1), s=dlt_1)
+                  call gc_set_slot(bufv, 1, gc_str(  dlt_1 // piece, [vs_get(vst, base + 1)]))
                end block
             end if
          end if
@@ -11300,17 +11304,15 @@ contains
               integer :: h
               character(len=:), allocatable :: rerr
               block
-                 character(len=:), allocatable :: dlr_261
-                 call text_of(sv, s=dlr_261)
-                 h = regex_compile(dlr_261, rerr)
+                 call text_of(sv, s=dlt_1)
+                 h = regex_compile(dlt_1, rerr)
               end block
               if (h == 0) then
                  call fail("regex: " // rerr)
               else
                  block
-                    character(len=:), allocatable :: dlr_262
-                    call text_of(sv, s=dlr_262)
-                    rx = gc_obj(OBJ_REGEX, [gc_str(dlr_262, [vs_get(vst, base + 1)])], [vs_get(vst, base + 1)])
+                    call text_of(sv, s=dlt_1)
+                    rx = gc_obj(OBJ_REGEX, [gc_str(dlt_1, [vs_get(vst, base + 1)])], [vs_get(vst, base + 1)])
                  end block
                  call gc_set_i1(rx, h)
                  call vs_set(vst, base + 3, rx)
@@ -11323,10 +11325,9 @@ contains
        end block
     case (B_QUOTEREPL)
        block
-          character(len=:), allocatable :: dlr_263, dlr_264
-          call text_of(gcv_nth(args, 0), s=dlr_263)
-          call quote_replacement(dlr_263, s=dlr_264)
-          out = gc_str(dlr_264,  [vs_get(vst, base + 1)])
+          call text_of(gcv_nth(args, 0), s=dlt_1)
+          call quote_replacement(dlt_1, s=dlt_2)
+          out = gc_str(dlt_2,  [vs_get(vst, base + 1)])
        end block
     case (B_SBREVERSE)
        ! Mutates and returns the builder, like append.
@@ -11336,16 +11337,14 @@ contains
          a = gcv_nth(args, 0)
          out = a
          block
-            character(len=:), allocatable :: dlr_265
-            call text_of(a, s=dlr_265)
-            bt = dlr_265
+            call text_of(a, s=dlt_1)
+            bt = dlt_1
          end block
          rt = ""
          do bi = u8_count(bt) - 1, 0, -1
             block
-               character(len=:), allocatable :: dlr_266
-               call u8_slice(bt, bi, bi + 1, s=dlr_266)
-               rt = rt // dlr_266
+               call u8_slice(bt, bi, bi + 1, s=dlt_1)
+               rt = rt // dlt_1
             end block
          end do
          if (gc_kind(a) == OBJ_SB) then
@@ -11362,15 +11361,13 @@ contains
             call fail("read-string wants a string")
          else
             block
-               character(len=:), allocatable :: dlr_267
-               call gc_ref_text(sv%ref, s=dlr_267)
-               out = gcr_read(dlr_267, [vs_get(vst, base + 1)])
+               call gc_ref_text(sv%ref, s=dlt_1)
+               out = gcr_read(dlt_1, [vs_get(vst, base + 1)])
             end block
             if (gcr_has_error()) then
                block
-                  character(len=:), allocatable :: dlr_268
-                  call gcr_error(s=dlr_268)
-                  call fail(dlr_268)
+                  call gcr_error(s=dlt_1)
+                  call fail(dlt_1)
                end block
             end if
          end if
@@ -11471,10 +11468,9 @@ contains
          type(gc_value) :: m, res, k
          type(c_ptr), allocatable :: grown(:)
          block
-            character(len=:), allocatable :: dlr_269, dlr_270
-            call text_of(gcv_nth(args, 0), s=dlr_269)
-            call pkg_library(dlr_269, path=dlr_270)
-            path = dlr_270
+            call text_of(gcv_nth(args, 0), s=dlt_1)
+            call pkg_library(dlt_1, path=dlt_2)
+            path = dlt_2
          end block
          if (tctx%has_error) then
             call vs_leave(vst, base)
@@ -11483,15 +11479,13 @@ contains
          h = dl_open(path)
          if (.not. c_associated(h)) then
             block
-               character(len=:), allocatable :: dlr_271
-               call dl_error(s=dlr_271)
-               call fail("load-package: " // path // ": " // dlr_271)
+               call dl_error(s=dlt_1)
+               call fail("load-package: " // path // ": " // dlt_1)
             end block
          else
             block
-               character(len=:), allocatable :: dlr_272
-               call dl_manifest(h, s=dlr_272)
-               text = dlr_272
+               call dl_manifest(h, s=dlt_1)
+               text = dlt_1
             end block
             if (len(text) == 0) then
                call fail("load-package: " // path // " exports no clotran_manifest")
@@ -11499,9 +11493,8 @@ contains
                m = gcr_read(text, [vs_get(vst, base + 1)])
                if (gcr_has_error()) then
                   block
-                     character(len=:), allocatable :: dlr_273
-                     call gcr_error(s=dlr_273)
-                     call fail("load-package: " // path // ": manifest: " // dlr_273)
+                     call gcr_error(s=dlt_1)
+                     call fail("load-package: " // path // ": manifest: " // dlt_1)
                   end block
                else
                   call vs_set(vst, base + 2, m)
@@ -11577,9 +11570,8 @@ contains
             logical :: dok
             integer :: mcp, mcm
             block
-               character(len=:), allocatable :: dlr_274
-               call dec_of(b, s=dlr_274)
-            if (dec_is_zero(dlr_274)) then
+               call dec_of(b, s=dlt_1)
+            if (dec_is_zero(dlt_1)) then
                call raise_class("ArithmeticException", "Divide by zero", [vs_get(vst, base + 1)])
             else
                ! With a precision the quotient is rounded to it; with
@@ -11588,17 +11580,15 @@ contains
                call math_context(mcp, mcm)
                if (mcp > 0) then
                   block
-                     character(len=:), allocatable :: dlr_275, dlr_276
-                     call dec_of(a, s=dlr_275)
-                     call dec_of(b, s=dlr_276)
-                     call dec_div_mc(dlr_275, dlr_276, mcp, mcm, dq, dok)
+                     call dec_of(a, s=dlt_2)
+                     call dec_of(b, s=dlt_3)
+                     call dec_div_mc(dlt_2, dlt_3, mcp, mcm, dq, dok)
                   end block
                else
                   block
-                     character(len=:), allocatable :: dlr_277, dlr_278
-                     call dec_of(a, s=dlr_277)
-                     call dec_of(b, s=dlr_278)
-                     call dec_div(dlr_277, dlr_278, dq, dok)
+                     call dec_of(a, s=dlt_2)
+                     call dec_of(b, s=dlt_3)
+                     call dec_div(dlt_2, dlt_3, dq, dok)
                   end block
                end if
                if (dok) then
@@ -11625,26 +11615,23 @@ contains
           block
             character(len=:), allocatable :: bq, br
             block
-               character(len=:), allocatable :: dlr_279
-               call big_of(b, s=dlr_279)
-            if (dlr_279 == "0") then
+               call big_of(b, s=dlt_1)
+            if (dlt_1 == "0") then
                call raise_class("ArithmeticException", "Divide by zero", [vs_get(vst, base + 1)])
             else
                block
-                  character(len=:), allocatable :: dlr_280, dlr_281
-                  call big_of(a, s=dlr_280)
-                  call big_of(b, s=dlr_281)
-                  call big_divmod(dlr_280, dlr_281, bq, br)
+                  call big_of(a, s=dlt_2)
+                  call big_of(b, s=dlt_3)
+                  call big_divmod(dlt_2, dlt_3, bq, br)
                end block
                if (br == "0") then
                   out = gc_big(bq, [vs_get(vst, base + 1)])
                else
                   block
-                     character(len=:), allocatable :: dlr_282, dlr_283
-                     call big_of(a, s=dlr_282)
-                     call big_of(b, s=dlr_283)
-                     if (big_fits_i64(dlr_282) .and. big_fits_i64(dlr_283)) then
-                        out = gc_ratio(big_to_i64(dlr_282), big_to_i64(dlr_283))
+                     call big_of(a, s=dlt_2)
+                     call big_of(b, s=dlt_3)
+                     if (big_fits_i64(dlt_2) .and. big_fits_i64(dlt_3)) then
+                        out = gc_ratio(big_to_i64(dlt_2), big_to_i64(dlt_3))
                      else
                         call raise_class("ArithmeticException", &
                              "a Ratio of BigInts is not supported (DEVIATIONS 26)", [vs_get(vst, base + 1)])
@@ -11697,19 +11684,17 @@ contains
        if (a%tag == GCT_DEC) then
           if (op == B_INC) then
              block
-                character(len=:), allocatable :: dlr_284, dlr_285, dlr_286
-                call gc_dec_text(a, s=dlr_284)
-                call dec_from_big("1", o=dlr_285)
-                call dec_add(dlr_284, dlr_285, o=dlr_286)
-                out = gc_dec(dlr_286, [vs_get(vst, base + 1)])
+                call gc_dec_text(a, s=dlt_1)
+                call dec_from_big("1", o=dlt_2)
+                call dec_add(dlt_1, dlt_2, o=dlt_3)
+                out = gc_dec(dlt_3, [vs_get(vst, base + 1)])
              end block
           else
              block
-                character(len=:), allocatable :: dlr_287, dlr_288, dlr_289
-                call gc_dec_text(a, s=dlr_287)
-                call dec_from_big("1", o=dlr_288)
-                call dec_sub(dlr_287, dlr_288, o=dlr_289)
-                out = gc_dec(dlr_289, [vs_get(vst, base + 1)])
+                call gc_dec_text(a, s=dlt_1)
+                call dec_from_big("1", o=dlt_2)
+                call dec_sub(dlt_1, dlt_2, o=dlt_3)
+                out = gc_dec(dlt_3, [vs_get(vst, base + 1)])
              end block
           end if
           call vs_leave(vst, base)
@@ -11722,17 +11707,15 @@ contains
             character(len=:), allocatable :: bt
             if (op == B_INC) then
                block
-                  character(len=:), allocatable :: dlr_290, dlr_291
-                  call big_of(a, s=dlr_290)
-                  call big_add(dlr_290, "1", o=dlr_291)
-                  bt = dlr_291
+                  call big_of(a, s=dlt_1)
+                  call big_add(dlt_1, "1", o=dlt_2)
+                  bt = dlt_2
                end block
             else
                block
-                  character(len=:), allocatable :: dlr_292, dlr_293
-                  call big_of(a, s=dlr_292)
-                  call big_sub(dlr_292, "1", o=dlr_293)
-                  bt = dlr_293
+                  call big_of(a, s=dlt_1)
+                  call big_sub(dlt_1, "1", o=dlt_2)
+                  bt = dlt_2
                end block
             end if
             if (a%tag /= GCT_BIG .and. big_fits_i64(bt)) then
@@ -11788,10 +11771,9 @@ contains
          else
             ! what the JVM throws when neither is Comparable to the other
             block
-               character(len=:), allocatable :: dlr_294, dlr_295
-               call type_name(strip_meta(gcv_nth(args, 0)), s=dlr_294)
-               call type_name(strip_meta(gcv_nth(args, 1)), s=dlr_295)
-               call raise_class("ClassCastException", "compare: cannot compare " //  dlr_294 // " with " //  dlr_295, &
+               call type_name(strip_meta(gcv_nth(args, 0)), s=dlt_1)
+               call type_name(strip_meta(gcv_nth(args, 1)), s=dlt_2)
+               call raise_class("ClassCastException", "compare: cannot compare " //  dlt_1 // " with " //  dlt_2, &
                     [vs_get(vst, base + 1)])
             end block
          end if
@@ -11825,9 +11807,8 @@ contains
        a = strip_meta(gcv_nth(args, 0))
        if (gc_kind(a) /= OBJ_CHUNKBUF) then
           block
-             character(len=:), allocatable :: dlr_296
-             call class_name_of(a, s=dlr_296)
-             call fail("no such member: " // dlr_296 // ".add")
+             call class_name_of(a, s=dlt_1)
+             call fail("no such member: " // dlt_1 // ".add")
           end block
        else
           block
@@ -11854,9 +11835,8 @@ contains
        a = strip_meta(gcv_nth(args, 0))
        if (gc_kind(a) /= OBJ_CHUNKBUF) then
           block
-             character(len=:), allocatable :: dlr_297
-             call class_name_of(a, s=dlr_297)
-             call fail("no such member: " // dlr_297 // ".chunk")
+             call class_name_of(a, s=dlt_1)
+             call fail("no such member: " // dlt_1 // ".chunk")
           end block
        else
           out = make_chunk(gc_slot(a, 1), 0, gc_i1(a), [vs_get(vst, base + 1)])
@@ -11867,9 +11847,8 @@ contains
          a = strip_meta(gcv_nth(args, 0))
          if (.not. is_chunked_seq(a)) then
             block
-               character(len=:), allocatable :: dlr_298
-               call class_name_of(a, s=dlr_298)
-               call fail("no such member: " // dlr_298 // ".chunkedFirst")
+               call class_name_of(a, s=dlt_1)
+               call fail("no such member: " // dlt_1 // ".chunkedFirst")
             end block
          else
             call chunked_parts(a, ch, mo, [vs_get(vst, base + 1)])
@@ -11888,9 +11867,8 @@ contains
        a = strip_meta(gcv_nth(args, 0))
        if (gc_kind(a) /= OBJ_CHUNK) then
           block
-             character(len=:), allocatable :: dlr_299
-             call class_name_of(a, s=dlr_299)
-             call fail("no such member: " // dlr_299 // ".dropFirst")
+             call class_name_of(a, s=dlt_1)
+             call fail("no such member: " // dlt_1 // ".dropFirst")
           end block
        else
           out = make_chunk(gc_slot(a, 1), gc_i1(a) + 1, gc_i2(a), [vs_get(vst, base + 1)])
@@ -11950,9 +11928,8 @@ contains
           out = gc_nil()
        else
           block
-             character(len=:), allocatable :: dlr_300
-             call class_name_of(a, s=dlr_300)
-             out = gc_class(dlr_300, [vs_get(vst, base + 1)])
+             call class_name_of(a, s=dlt_1)
+             out = gc_class(dlt_1, [vs_get(vst, base + 1)])
           end block
        end if
     case (B_TYPE)
@@ -11961,9 +11938,8 @@ contains
        ! does it too (instance? plus defns).
        a = gcv_nth(args, 0)
        block
-          character(len=:), allocatable :: dlr_301
-          call type_name(a, s=dlr_301)
-          out = gc_key(dlr_301, [vs_get(vst, base + 1)])
+          call type_name(a, s=dlt_1)
+          out = gc_key(dlt_1, [vs_get(vst, base + 1)])
        end block
     case (B_CONCAT)
        ! Right to left, so the result comes out in order without a
@@ -12214,6 +12190,8 @@ contains
     type(gc_value) :: a, b
     character(len=:), allocatable :: sa, sb
     integer :: i, na, nb
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     a = strip_meta(a0)
     b = strip_meta(b0)
     ok = .true.
@@ -12264,14 +12242,12 @@ contains
     if (a%tag == b%tag .and. &
          (a%tag == GCT_STR .or. a%tag == GCT_SYM .or. a%tag == GCT_KEY)) then
        block
-          character(len=:), allocatable :: dlr_302
-          call gc_ref_text(a%ref, s=dlr_302)
-          sa = dlr_302
+          call gc_ref_text(a%ref, s=dlt_1)
+          sa = dlt_1
        end block
        block
-          character(len=:), allocatable :: dlr_303
-          call gc_ref_text(b%ref, s=dlr_303)
-          sb = dlr_303
+          call gc_ref_text(b%ref, s=dlt_1)
+          sb = dlt_1
        end block
        if (sa < sb) then
           c = -1
@@ -12613,6 +12589,8 @@ contains
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, basis, kvs, tmp
     integer :: i, n, base
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     vst => gc_my_stack()
     base = vs_enter(vst, 3)
     basis = strip_meta(gcv_nth(args, 0))
@@ -12622,9 +12600,8 @@ contains
     n = gcv_count(vs_get(vst, base + 2))
     if (mod(n, 2) /= 0) then
        block
-          character(len=:), allocatable :: dlr_304
-          call gcp_str(gcv_nth(vs_get(vst, base + 2), n - 1), .true., s=dlr_304)
-          call fail("No value supplied for key: " //  dlr_304)
+          call gcp_str(gcv_nth(vs_get(vst, base + 2), n - 1), .true., s=dlt_1)
+          call fail("No value supplied for key: " //  dlt_1)
        end block
        call vs_leave(vst, base)
        out = gc_nil()
@@ -12997,6 +12974,8 @@ contains
   function seq_len(v) result(n)
     type(gc_value), intent(in) :: v
     integer :: n
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     n = 0
     if (gcv_is(v)) then
        n = gcv_count(v)
@@ -13008,9 +12987,8 @@ contains
        n = gca_count(v)
     else if (v%tag == GCT_STR) then
        block
-          character(len=:), allocatable :: dlr_305
-          call gc_ref_text(v%ref, s=dlr_305)
-          n = u8_count(dlr_305)
+          call gc_ref_text(v%ref, s=dlt_1)
+          n = u8_count(dlt_1)
        end block
     else if (gc_kind(v) == OBJ_ARRAY) then
        ! An array seqs as its elements, so `sort` can hand the array
@@ -13036,6 +13014,8 @@ contains
     type(gc_value), allocatable :: ks(:), vls(:)
     integer :: base
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     vst => gc_my_stack()
     out = gc_nil()
     if (gcv_is(v)) then
@@ -13059,9 +13039,8 @@ contains
        block
          character(len=:), allocatable :: t
          block
-            character(len=:), allocatable :: dlr_306
-            call gc_ref_text(v%ref, s=dlr_306)
-            t = dlr_306
+            call gc_ref_text(v%ref, s=dlt_1)
+            t = dlt_1
          end block
          if (i >= 0 .and. i < u8_count(t)) out = gc_char_cp(u8_at(t, i))
        end block
@@ -13212,11 +13191,12 @@ contains
     ! Ours is a wrapper, which would otherwise make every hinted name
     ! in core.clj answer :object and fail (instance? Symbol name).
     ! Transparent here; only `meta` looks at the wrapper.
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     if (gc_kind(v) == OBJ_META) then
        block
-          character(len=:), allocatable :: dlr_307
-          call type_name(gc_slot(v, 1), s=dlr_307)
-          s = dlr_307
+          call type_name(gc_slot(v, 1), s=dlt_1)
+          s = dlt_1
        end block
        return
     end if
@@ -13277,9 +13257,8 @@ contains
        case (OBJ_ARRAY);   s = "array"
        case (OBJ_INST)
        block
-          character(len=:), allocatable :: dlr_308
-          call class_text(v, s=dlr_308)
-          s = dlr_308
+          call class_text(v, s=dlt_1)
+          s = dlt_1
        end block
        case (OBJ_TYPE);    s = "class"
        case default;       s = "object"
@@ -13319,33 +13298,31 @@ contains
     type(gc_value) :: inner
     ! Class.toString is "class java.lang.Long" while print-method
     ! writes the NAME, so (str Long) and (pr-str Long) differ.
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     if (v%tag == GCT_CLASS) then
        block
-          character(len=:), allocatable :: dlr_309
-          call gc_class_text(v, s=dlr_309)
-          s = "class " // dlr_309
+          call gc_class_text(v, s=dlt_1)
+          s = "class " // dlt_1
        end block
     else if (gc_kind(v) == OBJ_SB .or. gc_kind(v) == OBJ_REGEX .or. &
          gc_kind(v) == OBJ_NS) then
        inner = gc_slot(v, 1)
        block
-          character(len=:), allocatable :: dlr_310
-          call gcp_str(inner, .false., s=dlr_310)
-          s = dlr_310
+          call gcp_str(inner, .false., s=dlt_1)
+          s = dlt_1
        end block
     else if (sequential_p(v) .or. gca_is(strip_meta(v)) .or. gc_kind(strip_meta(v)) == OBJ_SET) then
        ! a collection's toString is its READABLE form -- RT.printString
        ! -- so (str ["a" \b]) is ["a" \b], not [a b]
        block
-          character(len=:), allocatable :: dlr_311
-          call gcp_str(v, .true., s=dlr_311)
-          s = dlr_311
+          call gcp_str(v, .true., s=dlt_1)
+          s = dlt_1
        end block
     else
        block
-          character(len=:), allocatable :: dlr_312
-          call gcp_str(v, .false., s=dlr_312)
-          s = dlr_312
+          call gcp_str(v, .false., s=dlt_1)
+          s = dlt_1
        end block
     end if
   end subroutine to_string_text
@@ -13367,13 +13344,14 @@ contains
     character(len=:), allocatable, intent(out) :: kind
     character(len=:), allocatable :: t
     type(gc_value) :: v
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     v = strip_meta(tv)
     kind = "value"
     if (v%tag /= GCT_KEY) return
     block
-       character(len=:), allocatable :: dlr_313
-       call gc_ref_text(v%ref, s=dlr_313)
-       t = dlr_313
+       call gc_ref_text(v%ref, s=dlt_1)
+       t = dlt_1
     end block
     select case (t)
     case ("Integer/TYPE", "int");      kind = "int4"
@@ -13403,11 +13381,12 @@ contains
     integer :: nd, k, h
     type(gc_value) :: run
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     out = gc_nil()
     block
-       character(len=:), allocatable :: dlr_314
-       call array_kind_for(gcv_nth(args, 0), kind=dlr_314)
-       kind = dlr_314
+       call array_kind_for(gcv_nth(args, 0), kind=dlt_1)
+       kind = dlt_1
     end block
     dimv = strip_meta(gcv_nth(args, 1))
 
@@ -13502,10 +13481,11 @@ contains
     type(gc_value), intent(in) :: v
     character(len=:), allocatable, intent(out) :: s
     character(len=:), allocatable :: kind, comp
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     block
-       character(len=:), allocatable :: dlr_315
-       call gcna_kind(gc_i1(v), s=dlr_315)
-       kind = dlr_315
+       call gcna_kind(gc_i1(v), s=dlt_1)
+       kind = dlt_1
     end block
     select case (kind)
     case ("real8");   comp = "D"
@@ -13640,13 +13620,14 @@ contains
     type(gc_value) :: v
     integer :: h, real_at
     logical :: ok
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     if (gc_kind(arr) /= OBJ_ARRAY) return
     h = gc_i1(arr)
     real_at = array_own_offset(arr) + array_own_stride(arr) * (at - 1) + 1
     block
-       character(len=:), allocatable :: dlr_316
-       call gcna_kind(h, s=dlr_316)
-       kn = dlr_316
+       call gcna_kind(h, s=dlt_1)
+       kn = dlt_1
     end block
     v = strip_meta(val)
     if (kn == "value") then
@@ -13671,14 +13652,15 @@ contains
     integer(8) :: iv
     real(gc_dp) :: rv
     logical :: lv, ok
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     out = gc_nil()
     if (gc_kind(arr) /= OBJ_ARRAY) return
     h = gc_i1(arr)
     real_at = array_own_offset(arr) + array_own_stride(arr) * (at - 1) + 1
     block
-       character(len=:), allocatable :: dlr_317
-       call gcna_kind(h, s=dlr_317)
-       kn = dlr_317
+       call gcna_kind(h, s=dlt_1)
+       kn = dlt_1
     end block
     if (kn == "value") then
        out = gc_vec_get(gc_slot(arr, 1), real_at)
@@ -13701,13 +13683,14 @@ contains
     type(gc_value), intent(in) :: v
     character(len=:), allocatable, intent(out) :: s
     type(gc_value) :: t
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     t = v
     if (gc_kind(t) == OBJ_INST) t = gc_slot(t, 1)
     t = gc_slot(t, 1)
     block
-       character(len=:), allocatable :: dlr_318
-       call gc_ref_text(t%ref, s=dlr_318)
-       s = dlr_318
+       call gc_ref_text(t%ref, s=dlt_1)
+       s = dlt_1
     end block
   end subroutine class_text
 
@@ -13716,11 +13699,12 @@ contains
     type(gc_value), intent(in) :: v
     character(len=:), allocatable, intent(out) :: s
     type(gc_value) :: t
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     t = v
     block
-       character(len=:), allocatable :: dlr_319
-       call gc_ref_text(t%ref, s=dlr_319)
-       s = dlr_319
+       call gc_ref_text(t%ref, s=dlt_1)
+       s = dlt_1
     end block
   end subroutine class_of_text
 
@@ -13785,18 +13769,18 @@ contains
     character(len=:), allocatable :: a, b
     type(gc_value) :: k
     integer :: i
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     yes = .false.
     if (av%tag /= GCT_CLASS .and. av%tag /= GCT_SYM) return
     if (bv%tag /= GCT_CLASS .and. bv%tag /= GCT_SYM) return
     block
-       character(len=:), allocatable :: dlr_320
-       call gc_ref_text(av%ref, s=dlr_320)
-       a = dlr_320
+       call gc_ref_text(av%ref, s=dlt_1)
+       a = dlt_1
     end block
     block
-       character(len=:), allocatable :: dlr_321
-       call gc_ref_text(bv%ref, s=dlr_321)
-       b = dlr_321
+       call gc_ref_text(bv%ref, s=dlt_1)
+       b = dlt_1
     end block
     yes = class_matches(a, b) .or. class_matches(b, a) .or. a == "Object" .or. a == "java.lang.Object"
     if (yes) return
@@ -13805,10 +13789,9 @@ contains
        k = host_super(bv, i, av)
        if (k%tag /= GCT_CLASS) exit
        block
-          character(len=:), allocatable :: dlr_322, dlr_323
-          call gc_ref_text(k%ref, s=dlr_322)
-          call gc_ref_text(k%ref, s=dlr_323)
-       if (class_matches(dlr_322, a) .or. class_matches(a, dlr_323)) then
+          call gc_ref_text(k%ref, s=dlt_1)
+          call gc_ref_text(k%ref, s=dlt_2)
+       if (class_matches(dlt_1, a) .or. class_matches(a, dlt_2)) then
           yes = .true.
           return
        end if
@@ -13836,6 +13819,8 @@ contains
     integer :: h, i, cp, nb
     integer(gc_ip) :: iv, acc
     character(len=:), allocatable :: t
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     v = strip_meta(v0)
     select case (v%tag)
     case (GCT_NIL)
@@ -13853,13 +13838,11 @@ contains
        ! long, which is what keeps (hash 1N) and (hash 1) equal -- and
        ! they must be, because (= 1N 1).
        block
-          character(len=:), allocatable :: dlr_324
-          call gc_big_text(v, s=dlr_324)
-       if (big_fits_i64(dlr_324)) then
+          call gc_big_text(v, s=dlt_1)
+       if (big_fits_i64(dlt_1)) then
           block
-             character(len=:), allocatable :: dlr_325
-             call gc_big_text(v, s=dlr_325)
-             h = fold_long(big_to_i64(dlr_325))
+             call gc_big_text(v, s=dlt_2)
+             h = fold_long(big_to_i64(dlt_2))
           end block
        else
           h = gc_hash(v)
@@ -13870,9 +13853,8 @@ contains
        h = fold_long(iv)
     case (GCT_STR)
        block
-          character(len=:), allocatable :: dlr_326
-          call gc_ref_text(v%ref, s=dlr_326)
-          t = dlr_326
+          call gc_ref_text(v%ref, s=dlt_1)
+          t = dlt_1
        end block
        acc = 0_gc_ip
        i = 1
@@ -13901,14 +13883,15 @@ contains
   logical function var_not_public(var)
     type(gc_value), intent(in) :: var
     type(gc_value) :: md, owner, p
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     var_not_public = .false.
     owner = gc_slot(var, 3)
     if (gc_kind(owner) /= OBJ_NS) return
     block
-       character(len=:), allocatable :: dlr_327, dlr_328
-       call gcn_name(owner, s=dlr_327)
-       call gcn_name(gcn_current([var]), s=dlr_328)
-       if (dlr_327 == dlr_328) return
+       call gcn_name(owner, s=dlt_1)
+       call gcn_name(gcn_current([var]), s=dlt_2)
+       if (dlt_1 == dlt_2) return
     end block
     md = gc_slot(var, 2)
     if (.not. gca_is(md)) return
@@ -13926,14 +13909,15 @@ contains
     character(len=*), intent(in) :: want
     type(gc_value) :: k
     integer :: i
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     iface_in_vector = .false.
     do i = 0, gcv_count(vec) - 1
        k = gcv_nth(vec, i)
        if (k%tag /= GCT_CLASS) cycle
        block
-          character(len=:), allocatable :: dlr_329
-          call gc_ref_text(k%ref, s=dlr_329)
-       if (iface_extends(dlr_329, want)) then
+          call gc_ref_text(k%ref, s=dlt_1)
+       if (iface_extends(dlt_1, want)) then
           iface_in_vector = .true.
           return
        end if
@@ -13947,11 +13931,12 @@ contains
     logical :: yes
     character(len=:), allocatable :: supers
     integer :: p, q
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     yes = .false.
     block
-       character(len=:), allocatable :: dlr_330
-       call iface_supers(iface, supers=dlr_330)
-       supers = dlr_330
+       call iface_supers(iface, supers=dlt_1)
+       supers = dlt_1
     end block
     if (len(supers) == 0) return
     yes = (index(supers, " " // want // " ") > 0)
@@ -14206,6 +14191,8 @@ contains
     logical :: ok, has_ret
     character(len=16) :: cbuf1, cbuf2
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     vst => gc_my_stack()
     out = gc_nil()
     base = vs_enter(vst, 5)
@@ -14219,15 +14206,13 @@ contains
        end if
        k = gc_key("symbol", [roots, vs_get(vst, base + 1)])
        block
-          character(len=:), allocatable :: dlr_331
-          call text_of(gca_get(vs_get(vst, base + 1), k), s=dlr_331)
-          sym = dlr_331
+          call text_of(gca_get(vs_get(vst, base + 1), k), s=dlt_1)
+          sym = dlt_1
        end block
        k = gc_key("name", [roots, vs_get(vst, base + 1)])
        block
-          character(len=:), allocatable :: dlr_332
-          call text_of(gca_get(vs_get(vst, base + 1), k), s=dlr_332)
-          rname = dlr_332
+          call text_of(gca_get(vs_get(vst, base + 1), k), s=dlt_1)
+          rname = dlt_1
        end block
        k = gc_key("args", [roots, vs_get(vst, base + 1)])
        spec = strip_meta(gca_get(vs_get(vst, base + 1), k))
@@ -14238,9 +14223,8 @@ contains
        rty = ""
        if (has_ret) then
           block
-             character(len=:), allocatable :: dlr_333
-             call gc_ref_text(rt%ref, s=dlr_333)
-             rty = dlr_333
+             call gc_ref_text(rt%ref, s=dlt_1)
+             rty = dlt_1
           end block
        end if
        nspec = gcv_count(vs_get(vst, base + 3))
@@ -14254,9 +14238,8 @@ contains
           ty(i) = ""
           if (tv%tag == GCT_KEY) then
              block
-                character(len=:), allocatable :: dlr_334
-                call gc_ref_text(tv%ref, s=dlr_334)
-                ty(i) = dlr_334
+                call gc_ref_text(tv%ref, s=dlt_1)
+                ty(i) = dlt_1
              end block
           end if
           k = gc_key("intent", [roots, av])
@@ -14264,9 +14247,8 @@ contains
           it(i) = "in"
           if (tv%tag == GCT_KEY) then
              block
-                character(len=:), allocatable :: dlr_335
-                call gc_ref_text(tv%ref, s=dlr_335)
-                it(i) = dlr_335
+                call gc_ref_text(tv%ref, s=dlt_1)
+                it(i) = dlt_1
              end block
           end if
           k = gc_key("rank", [roots, av])
@@ -14326,9 +14308,8 @@ contains
                    exit once
                 end if
                 block
-                   character(len=:), allocatable :: dlr_336
-                   call text_of(tv, s=dlr_336)
-                   text = dlr_336
+                   call text_of(tv, s=dlt_1)
+                   text = dlt_1
                 end block
                 allocate(ts(i)%s(len(text) + 1))
                 do d = 1, len(text)
@@ -14366,10 +14347,9 @@ contains
              end select
              if (.not. ok) then
                 block
-                   character(len=:), allocatable :: dlr_337
-                   call gcna_kind(gc_i1(tv), s=dlr_337)
+                   call gcna_kind(gc_i1(tv), s=dlt_1)
                    call fail("call-package*: " // sym // ": argument " // trim(cbuf_of(i)) // " is not a " // trim(ty(i)) // &
-                        " array (it is a " // dlr_337 // " array; fortran/make-array makes typed ones)")
+                        " array (it is a " // dlt_1 // " array; fortran/make-array makes typed ones)")
                 end block
                 exit once
              end if
@@ -14418,9 +14398,8 @@ contains
           k = gc_key("name", [roots, av])
           tv = strip_meta(gca_get(av, k))
           block
-             character(len=:), allocatable :: dlr_338
-             call text_of(tv, s=dlr_338)
-             k = gc_key(dlr_338, [roots, vs_get(vst, base + 4)])
+             call text_of(tv, s=dlt_1)
+             k = gc_key(dlt_1, [roots, vs_get(vst, base + 4)])
           end block
           call vs_set(vst, base + 5, k)
           res = gca_assoc(vs_get(vst, base + 4), vs_get(vst, base + 5), temp_value(i), [roots, vs_get(vst, base + 5), vs_get(vst, base + 4)])
@@ -14473,14 +14452,15 @@ contains
     character(len=*), intent(in) :: name
     type(gc_value) :: k
     integer :: i
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     key_in_vector = .false.
     do i = 0, gcv_count(vec) - 1
        k = gcv_nth(vec, i)
        if (k%tag /= GCT_CLASS) cycle
        block
-          character(len=:), allocatable :: dlr_339
-          call gc_ref_text(k%ref, s=dlr_339)
-       if (class_matches(dlr_339, name)) then
+          call gc_ref_text(k%ref, s=dlt_1)
+       if (class_matches(dlt_1, name)) then
           key_in_vector = .true.
           return
        end if
@@ -14492,6 +14472,8 @@ contains
     type(gc_value), intent(in) :: cls, v
     logical :: yes
     character(len=:), allocatable :: c, t
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     yes = .false.
     if (cls%tag /= GCT_CLASS) return
     ! SHORTENED: a class value carries its canonical name, and the
@@ -14499,10 +14481,9 @@ contains
     ! class -- Object, String, CharSequence -- so java.lang comes off
     ! first. Everything else keeps its package.
     block
-       character(len=:), allocatable :: dlr_340, dlr_341
-       call gc_ref_text(cls%ref, s=dlr_340)
-       call short_class_name(dlr_340, s=dlr_341)
-       c = dlr_341
+       call gc_ref_text(cls%ref, s=dlt_1)
+       call short_class_name(dlt_1, s=dlt_2)
+       c = dlt_2
     end block
     ! an array class: the same element type and the same rank
     if (len(c) > 0) then
@@ -14510,18 +14491,16 @@ contains
           yes = gc_kind(strip_meta(v)) == OBJ_ARRAY
           if (yes) then
              block
-                character(len=:), allocatable :: dlr_342
-                call array_class_name(strip_meta(v), s=dlr_342)
-                yes = (dlr_342 == c)
+                call array_class_name(strip_meta(v), s=dlt_1)
+                yes = (dlt_1 == c)
              end block
           end if
           return
        end if
     end if
     block
-       character(len=:), allocatable :: dlr_343
-       call type_name(v, s=dlr_343)
-       t = dlr_343
+       call type_name(v, s=dlt_1)
+       t = dlt_1
     end block
     ! A deftype/reify instance is an instance of its own class and of
     ! everything its :implements list names -- which is the whole
@@ -14770,15 +14749,16 @@ contains
   ! because a double cannot tell 2^63 from 2^63 + 1.
   logical function num_lt(a, b)
     type(gc_value), intent(in) :: a, b
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     if (a%tag == GCT_INT .and. b%tag == GCT_INT) then
        num_lt = (a%ival < b%ival)
     else if ((a%tag == GCT_INT .or. a%tag == GCT_BIG) .and. &
              (b%tag == GCT_INT .or. b%tag == GCT_BIG)) then
        block
-          character(len=:), allocatable :: dlr_344, dlr_345
-          call big_of(a, s=dlr_344)
-          call big_of(b, s=dlr_345)
-          num_lt = (big_cmp(dlr_344, dlr_345) < 0)
+          call big_of(a, s=dlt_1)
+          call big_of(b, s=dlt_2)
+          num_lt = (big_cmp(dlt_1, dlt_2) < 0)
        end block
     else if (exact_num(a) .and. exact_num(b) .and. &
              (a%tag == GCT_DEC .or. b%tag == GCT_DEC)) then
@@ -14786,10 +14766,9 @@ contains
        ! integer or a BigInt -- a double would lose the difference
        ! between 1M and 1.0000000000000000001M.
        block
-          character(len=:), allocatable :: dlr_346, dlr_347
-          call dec_of(a, s=dlr_346)
-          call dec_of(b, s=dlr_347)
-          num_lt = (dec_cmp(dlr_346, dlr_347) < 0)
+          call dec_of(a, s=dlt_1)
+          call dec_of(b, s=dlt_2)
+          num_lt = (dec_cmp(dlt_1, dlt_2) < 0)
        end block
     else
        num_lt = (num_dbl(a) < num_dbl(b))
@@ -14808,14 +14787,15 @@ contains
   function as_int(v0) result(o)
     type(gc_value), intent(in) :: v0
     type(gc_value) :: o
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     o = strip_meta(v0)
     if (o%tag /= GCT_BIG) return
     block
-       character(len=:), allocatable :: dlr_348, dlr_349
-       call gc_big_text(o, s=dlr_348)
-       if (big_fits_i64(dlr_348)) then
-          call gc_big_text(o, s=dlr_349)
-          o = gc_int(big_to_i64(dlr_349))
+       call gc_big_text(o, s=dlt_1)
+       if (big_fits_i64(dlt_1)) then
+          call gc_big_text(o, s=dlt_2)
+          o = gc_int(big_to_i64(dlt_2))
        end if
     end block
   end function as_int
@@ -14840,19 +14820,19 @@ contains
     type(gc_value), intent(in) :: v
     logical, intent(out) :: ok
     type(gc_value) :: o
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     ok = .true.
     o = v
     if (v%tag /= GCT_BIG) return
     block
-       character(len=:), allocatable :: dlr_350
-       call gc_big_text(v, s=dlr_350)
-       ok = big_fits_i64(dlr_350)
+       call gc_big_text(v, s=dlt_1)
+       ok = big_fits_i64(dlt_1)
     end block
     if (ok) then
        block
-          character(len=:), allocatable :: dlr_351
-          call gc_big_text(v, s=dlr_351)
-          o = gc_int(big_to_i64(dlr_351))
+          call gc_big_text(v, s=dlt_1)
+          o = gc_int(big_to_i64(dlt_1))
        end block
     end if
   end function rat_operand
@@ -14889,6 +14869,8 @@ contains
   subroutine math_context(prec, mode)
     integer, intent(out) :: prec, mode
     type(gc_value) :: var, mc, pv, rv, none(0)
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     prec = 0
     mode = DEC_HALF_UP
     if (.not. gc_root_live(math_ctx_root)) return
@@ -14902,11 +14884,10 @@ contains
     rv = strip_meta(gca_get(mc, gc_key("rounding", [mc])))
     if (rv%tag == GCT_KEY) then
        block
-          character(len=:), allocatable :: dlr_352, dlr_353
-          call gc_ref_text(rv%ref, s=dlr_352)
-          if (dec_mode_of(dlr_352) /= 0) then
-             call gc_ref_text(rv%ref, s=dlr_353)
-             mode = dec_mode_of(dlr_353)
+          call gc_ref_text(rv%ref, s=dlt_1)
+          if (dec_mode_of(dlt_1) /= 0) then
+             call gc_ref_text(rv%ref, s=dlt_2)
+             mode = dec_mode_of(dlt_2)
           end if
        end block
     end if
@@ -14927,20 +14908,20 @@ contains
   function int_of_number(v) result(i)
     type(gc_value), intent(in) :: v
     integer(gc_ip) :: i
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     if (v%tag == GCT_REAL) then
        i = int(v%rval, gc_ip)
     else if (v%tag == GCT_BIG) then
        block
-          character(len=:), allocatable :: dlr_354
-          call gc_big_text(v, s=dlr_354)
-          i = big_to_i64(dlr_354)
+          call gc_big_text(v, s=dlt_1)
+          i = big_to_i64(dlt_1)
        end block
     else if (v%tag == GCT_DEC) then
        block
-          character(len=:), allocatable :: dlr_355, dlr_356
-          call gc_dec_text(v, s=dlr_355)
-          call dec_to_big(dlr_355, o=dlr_356)
-          i = big_to_i64(dlr_356)
+          call gc_dec_text(v, s=dlt_1)
+          call dec_to_big(dlt_1, o=dlt_2)
+          i = big_to_i64(dlt_2)
        end block
     else if (v%tag == GCT_RATIO) then
        i = gc_numerator(v) / gc_denominator(v)
@@ -14962,18 +14943,18 @@ contains
   subroutine dec_of(v, s)
     type(gc_value), intent(in) :: v
     character(len=:), allocatable, intent(out) :: s
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     if (v%tag == GCT_DEC) then
        block
-          character(len=:), allocatable :: dlr_357
-          call gc_dec_text(v, s=dlr_357)
-          s = dlr_357
+          call gc_dec_text(v, s=dlt_1)
+          s = dlt_1
        end block
     else
        block
-          character(len=:), allocatable :: dlr_358, dlr_359
-          call big_of(v, s=dlr_358)
-          call dec_from_big(dlr_358, o=dlr_359)
-          s = dlr_359
+          call big_of(v, s=dlt_1)
+          call dec_from_big(dlt_1, o=dlt_2)
+          s = dlt_2
        end block
     end if
   end subroutine dec_of
@@ -14985,21 +14966,21 @@ contains
     type(gc_value), intent(in) :: v
     logical, intent(out) :: ok
     character(len=:), allocatable, intent(out) :: s
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2, dlt_3, dlt_4
     ok = .true.
     if (v%tag == GCT_RATIO) then
        block
-          character(len=:), allocatable :: dlr_360, dlr_361, dlr_362, dlr_363
-          call big_from_i64(gc_numerator(v), o=dlr_360)
-          call dec_from_big(dlr_360, o=dlr_361)
-          call big_from_i64(gc_denominator(v), o=dlr_362)
-          call dec_from_big(dlr_362, o=dlr_363)
-          call dec_div(dlr_361,  dlr_363, s, ok)
+          call big_from_i64(gc_numerator(v), o=dlt_1)
+          call dec_from_big(dlt_1, o=dlt_2)
+          call big_from_i64(gc_denominator(v), o=dlt_3)
+          call dec_from_big(dlt_3, o=dlt_4)
+          call dec_div(dlt_2,  dlt_4, s, ok)
        end block
     else
        block
-          character(len=:), allocatable :: dlr_364
-          call dec_of(v, s=dlr_364)
-          s = dlr_364
+          call dec_of(v, s=dlt_1)
+          s = dlt_1
        end block
     end if
   end subroutine dec_operand
@@ -15007,17 +14988,17 @@ contains
   subroutine big_of(v, s)
     type(gc_value), intent(in) :: v
     character(len=:), allocatable, intent(out) :: s
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     if (v%tag == GCT_BIG) then
        block
-          character(len=:), allocatable :: dlr_365
-          call gc_big_text(v, s=dlr_365)
-          s = dlr_365
+          call gc_big_text(v, s=dlt_1)
+          s = dlt_1
        end block
     else
        block
-          character(len=:), allocatable :: dlr_366
-          call big_from_i64(v%ival, o=dlr_366)
-          s = dlr_366
+          call big_from_i64(v%ival, o=dlt_1)
+          s = dlt_1
        end block
     end if
   end subroutine big_of
@@ -15045,14 +15026,15 @@ contains
   subroutine raise_number_cast(v, roots)
     type(gc_value), intent(in) :: v
     type(gc_value), intent(in) :: roots(:)
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     if (v%tag == GCT_NIL) then
        call raise_class("NullPointerException", &
             'Cannot invoke "java.lang.Number.doubleValue()" because "x" is null', roots)
     else
        block
-          character(len=:), allocatable :: dlr_367
-          call class_name_of(v, s=dlr_367)
-          call raise_class("ClassCastException", "class " // dlr_367 //  " cannot be cast to class java.lang.Number", roots)
+          call class_name_of(v, s=dlt_1)
+          call raise_class("ClassCastException", "class " // dlt_1 //  " cannot be cast to class java.lang.Number", roots)
        end block
     end if
   end subroutine raise_number_cast
@@ -15060,19 +15042,19 @@ contains
   function num_dbl(v) result(d)
     type(gc_value), intent(in) :: v
     real(gc_dp) :: d
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     if (v%tag == GCT_REAL) then
        d = v%rval
     else if (v%tag == GCT_BIG) then
        block
-          character(len=:), allocatable :: dlr_368
-          call gc_big_text(v, s=dlr_368)
-          d = big_to_dbl(dlr_368)
+          call gc_big_text(v, s=dlt_1)
+          d = big_to_dbl(dlt_1)
        end block
     else if (v%tag == GCT_DEC) then
        block
-          character(len=:), allocatable :: dlr_369
-          call gc_dec_text(v, s=dlr_369)
-          d = dec_to_dbl(dlr_369)
+          call gc_dec_text(v, s=dlt_1)
+          d = dec_to_dbl(dlt_1)
        end block
     else if (v%tag == GCT_RATIO) then
        ! Every comparison goes through here, so without this a ratio
@@ -15110,6 +15092,8 @@ contains
     type(gc_value) :: k
     character(len=:), allocatable :: t
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     k = gc_nil()
     if (dv%tag /= GCT_CLASS) return
     ! The chain table below is written in SHORT names for the java.lang
@@ -15118,10 +15102,9 @@ contains
     ! a class value is its canonical name, and Number must come back as
     ! java.lang.Number or print-method Number will not match a Long.
     block
-       character(len=:), allocatable :: dlr_370, dlr_371
-       call gc_ref_text(dv%ref, s=dlr_370)
-       call short_class_name(dlr_370, s=dlr_371)
-       t = dlr_371
+       call gc_ref_text(dv%ref, s=dlt_1)
+       call short_class_name(dlt_1, s=dlt_2)
+       t = dlt_2
     end block
 
     ! A DEFTYPE'S SUPERTYPES ARE THE INTERFACES IT DECLARED. The
@@ -15232,9 +15215,8 @@ contains
       end if
       if (i >= 1 .and. i <= cnt) then
          block
-            character(len=:), allocatable :: dlr_372
-            call class_key(trim(chain(i)), k=dlr_372)
-            k = gc_class(dlr_372, [roots])
+            call class_key(trim(chain(i)), k=dlt_1)
+            k = gc_class(dlt_1, [roots])
          end block
       end if
     end block
@@ -15252,11 +15234,12 @@ contains
     type(gc_value), intent(in) :: v
     character(len=:), allocatable, intent(out) :: s
     type(gc_value) :: c
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     if (gc_kind(v) == OBJ_META) then
        block
-          character(len=:), allocatable :: dlr_373
-          call class_name_of(gc_slot(v, 1), s=dlr_373)
-          s = dlr_373
+          call class_name_of(gc_slot(v, 1), s=dlt_1)
+          s = dlt_1
        end block
        return
     end if
@@ -15294,10 +15277,9 @@ contains
           ! core.clj writes (ExceptionInfo. ...) under an import.
           c = gc_slot(v, 1)
           block
-             character(len=:), allocatable :: dlr_374, dlr_375
-             call gc_ref_text(c%ref, s=dlr_374)
-             call class_key(dlr_374, k=dlr_375)
-             s = dlr_375
+             call gc_ref_text(c%ref, s=dlt_1)
+             call class_key(dlt_1, k=dlt_2)
+             s = dlt_2
           end block
        case (OBJ_LAZY)
           s = "clojure.lang.LazySeq"
@@ -15324,15 +15306,13 @@ contains
        case (OBJ_ATOM);    s = "clojure.lang.Atom"
        case (OBJ_ARRAY)
        block
-          character(len=:), allocatable :: dlr_376
-          call array_class_name(v, s=dlr_376)
-          s = dlr_376
+          call array_class_name(v, s=dlt_1)
+          s = dlt_1
        end block
        case (OBJ_INST)
        block
-          character(len=:), allocatable :: dlr_377
-          call class_text(v, s=dlr_377)
-          s = dlr_377
+          call class_text(v, s=dlt_1)
+          s = dlt_1
        end block
        case (OBJ_TYPE);    s = "Class"
        case default;       s = "Object"
@@ -15360,18 +15340,18 @@ contains
     logical :: there
     integer :: i, e
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     roots(1) = "src/clj"
     roots(2) = "test/clj"
     roots(3) = "."
     block
-       character(len=:), allocatable :: dlr_378
-       call gce_home(h=dlr_378)
-       roots(4) = dlr_378 // "/src/clj"
+       call gce_home(h=dlt_1)
+       roots(4) = dlt_1 // "/src/clj"
     end block
     block
-       character(len=:), allocatable :: dlr_379
-       call gce_home(h=dlr_379)
-       roots(5) = dlr_379 // "/test/clj"
+       call gce_home(h=dlt_1)
+       roots(5) = dlt_1 // "/test/clj"
     end block
     ! a loaded package's directory is a root too (pkg_library)
     if (allocated(pkg_roots)) then
@@ -15435,6 +15415,8 @@ contains
     character(len=:), allocatable, intent(out) :: ns
     type(gc_value) :: nsv
     type(gc_value) :: none(0)
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     ns = ""
     if (len(alias) == 0) then
        nsv = gcn_current(none)
@@ -15443,9 +15425,8 @@ contains
     end if
     if (gc_kind(nsv) == OBJ_NS) then
        block
-          character(len=:), allocatable :: dlr_380
-          call gcn_name(nsv, s=dlr_380)
-          ns = dlr_380
+          call gcn_name(nsv, s=dlt_1)
+          ns = dlt_1
        end block
     end if
   end subroutine kw_ns_of
@@ -15461,19 +15442,19 @@ contains
   subroutine text_of(v, s)
     type(gc_value), intent(in) :: v
     character(len=:), allocatable, intent(out) :: s
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     if (v%tag == GCT_STR) then
        block
-          character(len=:), allocatable :: dlr_381
-          call gc_ref_text(v%ref, s=dlr_381)
-          s = dlr_381
+          call gc_ref_text(v%ref, s=dlt_1)
+          s = dlt_1
        end block
     else if (v%tag == GCT_NIL) then
        s = ""
     else
        block
-          character(len=:), allocatable :: dlr_382
-          call gcp_str(v, .false., s=dlr_382)
-          s = dlr_382
+          call gcp_str(v, .false., s=dlt_1)
+          s = dlt_1
        end block
     end if
   end subroutine text_of
@@ -15490,6 +15471,8 @@ contains
     type(gc_value), intent(in) :: coll0, k
     type(gc_value) :: out, coll, kk
     character(len=:), allocatable :: t
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     coll = strip_meta(coll0)
     ! as_int, not strip_meta: an index may be a BigInt, and every
     ! branch below reads %ival (which a BigInt leaves at 0).
@@ -15508,9 +15491,8 @@ contains
     else if (coll%tag == GCT_STR .and. kk%tag == GCT_INT) then
        out = gc_nil()
        block
-          character(len=:), allocatable :: dlr_383
-          call gc_ref_text(coll%ref, s=dlr_383)
-          t = dlr_383
+          call gc_ref_text(coll%ref, s=dlt_1)
+          t = dlt_1
        end block
        if (kk%ival >= 0 .and. kk%ival < int(u8_count(t), gc_ip)) &
             out = gc_char_cp(u8_at(t, int(kk%ival)))
@@ -15524,6 +15506,8 @@ contains
     type(gc_value), intent(in) :: coll0, k
     type(gc_value) :: coll, kk
     logical :: yes
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     coll = strip_meta(coll0)
     kk = as_int(k)
     if (gc_kind(coll) == OBJ_SET) then
@@ -15537,9 +15521,8 @@ contains
        yes = (kk%tag == GCT_INT)
        if (yes) then
           block
-             character(len=:), allocatable :: dlr_384
-             call gc_ref_text(coll%ref, s=dlr_384)
-             yes = (kk%ival >= 0 .and.  kk%ival < int(u8_count(dlr_384), gc_ip))
+             call gc_ref_text(coll%ref, s=dlt_1)
+             yes = (kk%ival >= 0 .and.  kk%ival < int(u8_count(dlt_1), gc_ip))
           end block
        end if
     else
@@ -15572,18 +15555,18 @@ contains
     type(gc_value), intent(in) :: v0
     character(len=:), allocatable, intent(out) :: s
     type(gc_value) :: v
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     v = strip_meta(v0)
     if (v%tag == GCT_INT .or. v%tag == GCT_CHAR) then
        block
-          character(len=:), allocatable :: dlr_385
-          call u8_enc(int(v%ival, kind=4), s=dlr_385)
-          s = dlr_385
+          call u8_enc(int(v%ival, kind=4), s=dlt_1)
+          s = dlt_1
        end block
     else
        block
-          character(len=:), allocatable :: dlr_386
-          call text_of(v, s=dlr_386)
-          s = dlr_386
+          call text_of(v, s=dlt_1)
+          s = dlt_1
        end block
     end if
   end subroutine needle_text
@@ -15609,6 +15592,8 @@ contains
     type(gc_value) :: out, coll
     integer :: base
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     vst => gc_my_stack()
     coll = strip_meta(coll0)
     base = vs_enter(vst, 2)
@@ -15653,9 +15638,8 @@ contains
        ! a string or an array is not a collection to conj onto
        out = gc_nil()
        block
-          character(len=:), allocatable :: dlr_387
-          call class_name_of(coll, s=dlr_387)
-          call raise_class("ClassCastException", dlr_387 //  " cannot be cast to clojure.lang.IPersistentCollection", roots)
+          call class_name_of(coll, s=dlt_1)
+          call raise_class("ClassCastException", dlt_1 //  " cannot be cast to clojure.lang.IPersistentCollection", roots)
        end block
     else
        out = gcl_cons(vs_get(vst, base + 2), to_seq(vs_get(vst, base + 1), roots), roots)
@@ -15841,6 +15825,8 @@ contains
     integer(gc_ip), intent(inout) :: h
     type(gc_value) :: e, pool
     integer :: i, b, at
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     vst => gc_my_stack()
     b = vs_enter(vst, 3)
     call vs_set(vst, b + 1, v)
@@ -15849,9 +15835,8 @@ contains
     do i = 0, gcv_count(pool) - 1
        e = gcv_nth(pool, i)
        block
-          character(len=:), allocatable :: dlr_388
-          call text_of(gcv_nth(e, 0), s=dlr_388)
-          if (dlr_388 /= kind) cycle
+          call text_of(gcv_nth(e, 0), s=dlt_1)
+          if (dlt_1 /= kind) cycle
        end block
        e = gcv_nth(e, 1)
        if (kind == "const") then
@@ -15865,27 +15850,24 @@ contains
     select case (kind)
     case ("var")
        block
-          character(len=:), allocatable :: dlr_389
-          call gcp_str(v, .true., s=dlr_389)
-          call fp_mix_text(h, dlr_389)
+          call gcp_str(v, .true., s=dlt_1)
+          call fp_mix_text(h, dlt_1)
        end block
     case ("node")
        call fp_mix(h, int(gc_i1(v), gc_ip))
     case default
        if (gc_kind(strip_meta(v)) == OBJ_BUILTIN) then
           block
-             character(len=:), allocatable :: dlr_390
-             call text_of(gc_slot(strip_meta(v), 1), s=dlr_390)
-             call fp_mix_text(h, dlr_390)
+             call text_of(gc_slot(strip_meta(v), 1), s=dlt_1)
+             call fp_mix_text(h, dlt_1)
           end block
        else if (gc_kind(strip_meta(v)) == OBJ_CLOSURE) then
           call fp_mix_text(h, "fn")
        else
           block
-             character(len=:), allocatable :: dlr_391, dlr_392
-             call gcp_str(v, .true., s=dlr_391)
-             call without_gensym_counters(dlr_391, t=dlr_392)
-             call fp_mix_text(h, dlr_392)
+             call gcp_str(v, .true., s=dlt_1)
+             call without_gensym_counters(dlt_1, t=dlt_2)
+             call fp_mix_text(h, dlt_2)
           end block
        end if
     end select
@@ -16032,6 +16014,8 @@ contains
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, kids, v
     integer :: b, i
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     tctx => ctx_self()
     vst => tctx%stk
     out = nd
@@ -16041,9 +16025,8 @@ contains
     out = gca_empty([roots, [vs_get(vst, b + 1)]])
     call vs_set(vst, b + 2, out)
     block
-       character(len=:), allocatable :: dlr_393
-       call node_kind_name(gc_i1(vs_get(vst, b + 1)), s=dlr_393)
-       call ast_put(b, roots, "op", gc_key(dlr_393,  [roots, [vs_get(vst, b + 1), vs_get(vst, b + 2)]]))
+       call node_kind_name(gc_i1(vs_get(vst, b + 1)), s=dlt_1)
+       call ast_put(b, roots, "op", gc_key(dlt_1,  [roots, [vs_get(vst, b + 1), vs_get(vst, b + 2)]]))
     end block
     ! the children, each one exported in turn
     kids = gc_slot(vs_get(vst, b + 1), 1)
@@ -16188,11 +16171,12 @@ contains
     character(len=:), allocatable :: u
     integer :: i
     logical :: okuuid
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     out = gc_nil()
     block
-       character(len=:), allocatable :: dlr_394
-       call text_of(strip_meta(v), s=dlr_394)
-       u = dlr_394
+       call text_of(strip_meta(v), s=dlt_1)
+       u = dlt_1
     end block
     okuuid = (len(u) == 36)
     if (okuuid) then
@@ -16250,6 +16234,8 @@ contains
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, tag, form, fn, av
     integer :: base, i
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     tctx => ctx_self()
     vst => tctx%stk
     out = v
@@ -16297,9 +16283,8 @@ contains
              out = apply(vs_get(vst, base + 5), vs_get(vst, base + 6))
           else
              block
-                character(len=:), allocatable :: dlr_395
-                call name_part(vs_get(vst, base + 3), s=dlr_395)
-                call raise_class("RuntimeException", "No reader function for tag " //  dlr_395, [vs_get(vst, base + 1)])
+                call name_part(vs_get(vst, base + 3), s=dlt_1)
+                call raise_class("RuntimeException", "No reader function for tag " //  dlt_1, [vs_get(vst, base + 1)])
              end block
              out = gc_nil()
           end if
@@ -16478,27 +16463,26 @@ contains
     character(len=:), allocatable :: t
     type(gc_value) :: v
     integer :: sl
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     v = strip_meta(v0)
     if (gc_kind(v) == OBJ_NS) then
        block
-          character(len=:), allocatable :: dlr_396
-          call gcn_name(v, s=dlr_396)
-          s = dlr_396
+          call gcn_name(v, s=dlt_1)
+          s = dlt_1
        end block
        return
     end if
     if (gcn_is_var(v)) then
        block
-          character(len=:), allocatable :: dlr_397
-          call name_part(gc_slot(v, 4), s=dlr_397)
-          s = dlr_397
+          call name_part(gc_slot(v, 4), s=dlt_1)
+          s = dlt_1
        end block
        return
     end if
     block
-       character(len=:), allocatable :: dlr_398
-       call gc_ref_text(v%ref, s=dlr_398)
-       t = dlr_398
+       call gc_ref_text(v%ref, s=dlt_1)
+       t = dlt_1
     end block
     sl = index(t, "/")
     if (sl > 1 .and. sl < len(t)) then
@@ -16523,10 +16507,11 @@ contains
     type(gc_value), intent(in) :: sym
     character(len=:), allocatable, intent(out) :: s
     integer :: sl
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     block
-       character(len=:), allocatable :: dlr_399
-       call gc_ref_text(sym%ref, s=dlr_399)
-       s = dlr_399
+       call gc_ref_text(sym%ref, s=dlt_1)
+       s = dlt_1
     end block
     sl = index(s, "/")
     if (sl > 1 .and. sl < len(s)) then

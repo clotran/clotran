@@ -148,6 +148,8 @@ contains
     character(len=*), intent(in) :: a, b
     integer :: c
     logical :: na, nb
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     na = big_is_neg(a)
     nb = big_is_neg(b)
     if (na .and. .not. nb) then
@@ -156,10 +158,9 @@ contains
        c = 1
     else if (na) then
        block
-          character(len=:), allocatable :: dlr_1, dlr_2
-          call big_abs(a, o=dlr_1)
-          call big_abs(b, o=dlr_2)
-          c = -cmp_abs(dlr_1, dlr_2)
+          call big_abs(a, o=dlt_1)
+          call big_abs(b, o=dlt_2)
+          c = -cmp_abs(dlt_1, dlt_2)
        end block
     else
        c = cmp_abs(a, b)
@@ -176,6 +177,8 @@ contains
     character(len=:), allocatable, intent(out) :: o
     integer :: la, lb, n, i, da, db, s, carry
     character(len=max(len(a), len(b)) + 1) :: buf
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     la = len(a)
     lb = len(b)
     n = max(la, lb) + 1
@@ -190,9 +193,8 @@ contains
        buf(n - i:n - i) = achar(mod(s, 10) + 48)
     end do
     block
-       character(len=:), allocatable :: dlr_3
-       call big_norm(buf(1:n), o=dlr_3)
-       o = dlr_3
+       call big_norm(buf(1:n), o=dlt_1)
+       o = dlt_1
     end block
   end subroutine add_abs
 
@@ -202,6 +204,8 @@ contains
     character(len=:), allocatable, intent(out) :: o
     integer :: la, lb, i, da, db, s, borrow
     character(len=len(a)) :: buf
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     la = len(a)
     lb = len(b)
     borrow = 0
@@ -219,9 +223,8 @@ contains
        buf(la - i:la - i) = achar(s + 48)
     end do
     block
-       character(len=:), allocatable :: dlr_4
-       call big_norm(buf, o=dlr_4)
-       o = dlr_4
+       call big_norm(buf, o=dlt_1)
+       o = dlt_1
     end block
   end subroutine sub_abs
 
@@ -231,6 +234,8 @@ contains
     integer :: la, lb, i, j, carry, cur
     integer, allocatable :: acc(:)
     character(len=len(a) + len(b)) :: buf
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     la = len(a)
     lb = len(b)
     allocate(acc(la + lb))
@@ -254,9 +259,8 @@ contains
        buf(la + lb - i + 1:la + lb - i + 1) = achar(acc(i) + 48)
     end do
     block
-       character(len=:), allocatable :: dlr_5
-       call big_norm(buf, o=dlr_5)
-       o = dlr_5
+       call big_norm(buf, o=dlt_1)
+       o = dlt_1
     end block
   end subroutine mul_abs
 
@@ -269,6 +273,8 @@ contains
     character(len=:), allocatable :: rem
     character(len=len(a)) :: buf
     integer :: i, d
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     rem = "0"
     do i = 1, len(a)
        if (rem == "0") then
@@ -277,25 +283,22 @@ contains
           rem = rem // a(i:i)
        end if
        block
-          character(len=:), allocatable :: dlr_6
-          call big_norm(rem, o=dlr_6)
-          rem = dlr_6
+          call big_norm(rem, o=dlt_1)
+          rem = dlt_1
        end block
        d = 0
        do while (cmp_abs(rem, b) >= 0)
           block
-             character(len=:), allocatable :: dlr_7
-             call sub_abs(rem, b, o=dlr_7)
-             rem = dlr_7
+             call sub_abs(rem, b, o=dlt_1)
+             rem = dlt_1
           end block
           d = d + 1
        end do
        buf(i:i) = achar(d + 48)
     end do
     block
-       character(len=:), allocatable :: dlr_8
-       call big_norm(buf, o=dlr_8)
-       q = dlr_8
+       call big_norm(buf, o=dlt_1)
+       q = dlt_1
     end block
     r = rem
   end subroutine divmod_abs
@@ -306,58 +309,53 @@ contains
     character(len=*), intent(in) :: a, b
     character(len=:), allocatable, intent(out) :: o
     integer :: c
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2, dlt_3
     if (big_is_neg(a) .eqv. big_is_neg(b)) then
        block
-          character(len=:), allocatable :: dlr_9, dlr_10, dlr_11
-          call big_abs(a, o=dlr_9)
-          call big_abs(b, o=dlr_10)
-          call add_abs(dlr_9, dlr_10, o=dlr_11)
-          o = dlr_11
+          call big_abs(a, o=dlt_1)
+          call big_abs(b, o=dlt_2)
+          call add_abs(dlt_1, dlt_2, o=dlt_3)
+          o = dlt_3
        end block
        if (big_is_neg(a)) then
           block
-             character(len=:), allocatable :: dlr_12
-             call big_neg(o, o=dlr_12)
-             o = dlr_12
+             call big_neg(o, o=dlt_1)
+             o = dlt_1
           end block
        end if
     else
        block
-          character(len=:), allocatable :: dlr_13, dlr_14
-          call big_abs(a, o=dlr_13)
-          call big_abs(b, o=dlr_14)
-          c = cmp_abs(dlr_13, dlr_14)
+          call big_abs(a, o=dlt_1)
+          call big_abs(b, o=dlt_2)
+          c = cmp_abs(dlt_1, dlt_2)
        end block
        if (c == 0) then
           o = "0"
        else if (c > 0) then
           block
-             character(len=:), allocatable :: dlr_15, dlr_16, dlr_17
-             call big_abs(a, o=dlr_15)
-             call big_abs(b, o=dlr_16)
-             call sub_abs(dlr_15, dlr_16, o=dlr_17)
-             o = dlr_17
+             call big_abs(a, o=dlt_1)
+             call big_abs(b, o=dlt_2)
+             call sub_abs(dlt_1, dlt_2, o=dlt_3)
+             o = dlt_3
           end block
           if (big_is_neg(a)) then
              block
-                character(len=:), allocatable :: dlr_18
-                call big_neg(o, o=dlr_18)
-                o = dlr_18
+                call big_neg(o, o=dlt_1)
+                o = dlt_1
              end block
           end if
        else
           block
-             character(len=:), allocatable :: dlr_19, dlr_20, dlr_21
-             call big_abs(b, o=dlr_19)
-             call big_abs(a, o=dlr_20)
-             call sub_abs(dlr_19, dlr_20, o=dlr_21)
-             o = dlr_21
+             call big_abs(b, o=dlt_1)
+             call big_abs(a, o=dlt_2)
+             call sub_abs(dlt_1, dlt_2, o=dlt_3)
+             o = dlt_3
           end block
           if (big_is_neg(b)) then
              block
-                character(len=:), allocatable :: dlr_22
-                call big_neg(o, o=dlr_22)
-                o = dlr_22
+                call big_neg(o, o=dlt_1)
+                o = dlt_1
              end block
           end if
        end if
@@ -367,29 +365,30 @@ contains
   pure subroutine big_sub(a, b, o)
     character(len=*), intent(in) :: a, b
     character(len=:), allocatable, intent(out) :: o
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     block
-       character(len=:), allocatable :: dlr_23, dlr_24
-       call big_neg(b, o=dlr_23)
-       call big_add(a, dlr_23, o=dlr_24)
-       o = dlr_24
+       call big_neg(b, o=dlt_1)
+       call big_add(a, dlt_1, o=dlt_2)
+       o = dlt_2
     end block
   end subroutine big_sub
 
   pure subroutine big_mul(a, b, o)
     character(len=*), intent(in) :: a, b
     character(len=:), allocatable, intent(out) :: o
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2, dlt_3
     block
-       character(len=:), allocatable :: dlr_25, dlr_26, dlr_27
-       call big_abs(a, o=dlr_25)
-       call big_abs(b, o=dlr_26)
-       call mul_abs(dlr_25, dlr_26, o=dlr_27)
-       o = dlr_27
+       call big_abs(a, o=dlt_1)
+       call big_abs(b, o=dlt_2)
+       call mul_abs(dlt_1, dlt_2, o=dlt_3)
+       o = dlt_3
     end block
     if (o /= "0" .and. (big_is_neg(a) .neqv. big_is_neg(b))) then
        block
-          character(len=:), allocatable :: dlr_28
-          call big_neg(o, o=dlr_28)
-          o = dlr_28
+          call big_neg(o, o=dlt_1)
+          o = dlt_1
        end block
     end if
   end subroutine big_mul
@@ -401,24 +400,23 @@ contains
   pure subroutine big_divmod(a, b, q, r)
     character(len=*), intent(in) :: a, b
     character(len=:), allocatable, intent(out) :: q, r
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     block
-       character(len=:), allocatable :: dlr_29, dlr_30
-       call big_abs(a, o=dlr_29)
-       call big_abs(b, o=dlr_30)
-       call divmod_abs(dlr_29, dlr_30, q, r)
+       call big_abs(a, o=dlt_1)
+       call big_abs(b, o=dlt_2)
+       call divmod_abs(dlt_1, dlt_2, q, r)
     end block
     if (q /= "0" .and. (big_is_neg(a) .neqv. big_is_neg(b))) then
        block
-          character(len=:), allocatable :: dlr_31
-          call big_neg(q, o=dlr_31)
-          q = dlr_31
+          call big_neg(q, o=dlt_1)
+          q = dlt_1
        end block
     end if
     if (r /= "0" .and. big_is_neg(a)) then
        block
-          character(len=:), allocatable :: dlr_32
-          call big_neg(r, o=dlr_32)
-          r = dlr_32
+          call big_neg(r, o=dlt_1)
+          r = dlt_1
        end block
     end if
   end subroutine big_divmod
@@ -429,11 +427,12 @@ contains
     integer(I8), intent(in) :: i
     character(len=:), allocatable, intent(out) :: o
     character(len=24) :: buf
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     write(buf, '(I0)') i
     block
-       character(len=:), allocatable :: dlr_33
-       call big_norm(trim(buf), o=dlr_33)
-       o = dlr_33
+       call big_norm(trim(buf), o=dlt_1)
+       o = dlt_1
     end block
   end subroutine big_from_i64
 

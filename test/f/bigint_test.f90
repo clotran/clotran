@@ -52,60 +52,51 @@ contains
   end subroutine eqi
 
   subroutine check_norm()
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     block
-       character(len=:), allocatable :: dlr_1
-       call big_norm("007", o=dlr_1)
-       call eq("1a. leading zeros: ", dlr_1, "7")
+       call big_norm("007", o=dlt_1)
+       call eq("1a. leading zeros: ", dlt_1, "7")
     end block
     block
-       character(len=:), allocatable :: dlr_2
-       call big_norm("0000", o=dlr_2)
-       call eq("1b. all zeros: ", dlr_2, "0")
+       call big_norm("0000", o=dlt_1)
+       call eq("1b. all zeros: ", dlt_1, "0")
     end block
     block
-       character(len=:), allocatable :: dlr_3
-       call big_norm("-0", o=dlr_3)
-       call eq("1c. negative zero is zero: ", dlr_3, "0")
+       call big_norm("-0", o=dlt_1)
+       call eq("1c. negative zero is zero: ", dlt_1, "0")
     end block
     block
-       character(len=:), allocatable :: dlr_4
-       call big_norm("-000", o=dlr_4)
-       call eq("1d. negative zeros: ", dlr_4, "0")
+       call big_norm("-000", o=dlt_1)
+       call eq("1d. negative zeros: ", dlt_1, "0")
     end block
     block
-       character(len=:), allocatable :: dlr_5
-       call big_norm("+12", o=dlr_5)
-       call eq("1e. a plus sign goes: ", dlr_5, "12")
+       call big_norm("+12", o=dlt_1)
+       call eq("1e. a plus sign goes: ", dlt_1, "12")
     end block
     block
-       character(len=:), allocatable :: dlr_6
-       call big_norm("-0042", o=dlr_6)
-       call eq("1f. negative, leading zeros: ", dlr_6, "-42")
+       call big_norm("-0042", o=dlt_1)
+       call eq("1f. negative, leading zeros: ", dlt_1, "-42")
     end block
     block
-       character(len=:), allocatable :: dlr_7
-       call big_norm("-42", o=dlr_7)
-       call eq("1g. already canonical: ", dlr_7, "-42")
+       call big_norm("-42", o=dlt_1)
+       call eq("1g. already canonical: ", dlt_1, "-42")
     end block
     block
-       character(len=:), allocatable :: dlr_8
-       call big_neg("42", o=dlr_8)
-       call eq("1h. negate: ", dlr_8, "-42")
+       call big_neg("42", o=dlt_1)
+       call eq("1h. negate: ", dlt_1, "-42")
     end block
     block
-       character(len=:), allocatable :: dlr_9
-       call big_neg("-42", o=dlr_9)
-       call eq("1i. negate back: ", dlr_9, "42")
+       call big_neg("-42", o=dlt_1)
+       call eq("1i. negate back: ", dlt_1, "42")
     end block
     block
-       character(len=:), allocatable :: dlr_10
-       call big_neg("0", o=dlr_10)
-       call eq("1j. negate zero: ", dlr_10, "0")
+       call big_neg("0", o=dlt_1)
+       call eq("1j. negate zero: ", dlt_1, "0")
     end block
     block
-       character(len=:), allocatable :: dlr_11
-       call big_abs("-42", o=dlr_11)
-       call eq("1k. abs: ", dlr_11, "42")
+       call big_abs("-42", o=dlt_1)
+       call eq("1k. abs: ", dlt_1, "42")
     end block
     ! Validity is about SHAPE: what the reader is allowed to hand over.
     call eqi("1l. digits are valid: ", merge(1, 0, big_valid("123")), 1)
@@ -127,94 +118,81 @@ contains
   end subroutine check_cmp
 
   subroutine check_add_sub()
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     block
-       character(len=:), allocatable :: dlr_12
-       call big_add("999", "1", o=dlr_12)
-       call eq("3a. carry: ", dlr_12, "1000")
+       call big_add("999", "1", o=dlt_1)
+       call eq("3a. carry: ", dlt_1, "1000")
     end block
     block
-       character(len=:), allocatable :: dlr_13
-       call big_sub("1000", "1", o=dlr_13)
-       call eq("3b. borrow: ", dlr_13, "999")
+       call big_sub("1000", "1", o=dlt_1)
+       call eq("3b. borrow: ", dlt_1, "999")
     end block
     block
-       character(len=:), allocatable :: dlr_14
-       call big_add("42", "-42", o=dlr_14)
-       call eq("3c. to zero: ", dlr_14, "0")
+       call big_add("42", "-42", o=dlt_1)
+       call eq("3c. to zero: ", dlt_1, "0")
     end block
     block
-       character(len=:), allocatable :: dlr_15
-       call big_sub("1", "2", o=dlr_15)
-       call eq("3d. negative result: ", dlr_15, "-1")
+       call big_sub("1", "2", o=dlt_1)
+       call eq("3d. negative result: ", dlt_1, "-1")
     end block
     block
-       character(len=:), allocatable :: dlr_16
-       call big_add("-2", "-3", o=dlr_16)
-       call eq("3e. two negatives: ", dlr_16, "-5")
+       call big_add("-2", "-3", o=dlt_1)
+       call eq("3e. two negatives: ", dlt_1, "-5")
     end block
     block
-       character(len=:), allocatable :: dlr_17
-       call big_sub("-2", "-3", o=dlr_17)
-       call eq("3f. minus a negative: ", dlr_17, "1")
+       call big_sub("-2", "-3", o=dlt_1)
+       call eq("3f. minus a negative: ", dlt_1, "1")
     end block
     block
-       character(len=:), allocatable :: dlr_18
-       call big_add("9223372036854775807", "1", o=dlr_18)
-       call eq("3g. past 2^63: ", dlr_18, "9223372036854775808")
+       call big_add("9223372036854775807", "1", o=dlt_1)
+       call eq("3g. past 2^63: ", dlt_1, "9223372036854775808")
     end block
     block
-       character(len=:), allocatable :: dlr_19
-       call big_sub("-9223372036854775808", "1", o=dlr_19)
-       call eq("3h. below -2^63: ", dlr_19, "-9223372036854775809")
+       call big_sub("-9223372036854775808", "1", o=dlt_1)
+       call eq("3h. below -2^63: ", dlt_1, "-9223372036854775809")
     end block
     block
-       character(len=:), allocatable :: dlr_20
-       call big_add("42", "0", o=dlr_20)
-       call eq("3i. adding zero: ", dlr_20, "42")
+       call big_add("42", "0", o=dlt_1)
+       call eq("3i. adding zero: ", dlt_1, "42")
     end block
     block
-       character(len=:), allocatable :: dlr_21
-       call big_add("1", "99999999999999999999", o=dlr_21)
-       call eq("3j. different lengths: ", dlr_21, "100000000000000000000")
+       call big_add("1", "99999999999999999999", o=dlt_1)
+       call eq("3j. different lengths: ", dlt_1, "100000000000000000000")
     end block
   end subroutine check_add_sub
 
   subroutine check_mul()
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     block
-       character(len=:), allocatable :: dlr_22
-       call big_mul("6", "7", o=dlr_22)
-       call eq("4a. small: ", dlr_22, "42")
+       call big_mul("6", "7", o=dlt_1)
+       call eq("4a. small: ", dlt_1, "42")
     end block
     block
-       character(len=:), allocatable :: dlr_23
-       call big_mul("99999999999999999999", "0", o=dlr_23)
-       call eq("4b. by zero: ", dlr_23, "0")
+       call big_mul("99999999999999999999", "0", o=dlt_1)
+       call eq("4b. by zero: ", dlt_1, "0")
     end block
     block
-       character(len=:), allocatable :: dlr_24
-       call big_mul("42", "1", o=dlr_24)
-       call eq("4c. by one: ", dlr_24, "42")
+       call big_mul("42", "1", o=dlt_1)
+       call eq("4c. by one: ", dlt_1, "42")
     end block
     block
-       character(len=:), allocatable :: dlr_25
-       call big_mul("-6", "7", o=dlr_25)
-       call eq("4d. signs: ", dlr_25, "-42")
+       call big_mul("-6", "7", o=dlt_1)
+       call eq("4d. signs: ", dlt_1, "-42")
     end block
     block
-       character(len=:), allocatable :: dlr_26
-       call big_mul("-6", "-7", o=dlr_26)
-       call eq("4e. both negative: ", dlr_26, "42")
+       call big_mul("-6", "-7", o=dlt_1)
+       call eq("4e. both negative: ", dlt_1, "42")
     end block
     block
-       character(len=:), allocatable :: dlr_27
-       call big_mul("4611686018427387904", "4", o=dlr_27)
-       call eq("4f. past 2^63: ", dlr_27, "18446744073709551616")
+       call big_mul("4611686018427387904", "4", o=dlt_1)
+       call eq("4f. past 2^63: ", dlt_1, "18446744073709551616")
     end block
     ! 99999999999999999999^2, which is (10^20 - 1)^2 = 10^40 - 2*10^20 + 1
     block
-       character(len=:), allocatable :: dlr_28
-       call big_mul("99999999999999999999", "99999999999999999999", o=dlr_28)
-       call eq("4g. twenty digits squared: ",  dlr_28,  "9999999999999999999800000000000000000001")
+       call big_mul("99999999999999999999", "99999999999999999999", o=dlt_1)
+       call eq("4g. twenty digits squared: ",  dlt_1,  "9999999999999999999800000000000000000001")
     end block
   end subroutine check_mul
 
@@ -245,20 +223,19 @@ contains
   end subroutine check_divmod
 
   subroutine check_conversions()
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     block
-       character(len=:), allocatable :: dlr_29
-       call big_from_i64(42_I8, o=dlr_29)
-       call eq("6a. from an integer: ", dlr_29, "42")
+       call big_from_i64(42_I8, o=dlt_1)
+       call eq("6a. from an integer: ", dlt_1, "42")
     end block
     block
-       character(len=:), allocatable :: dlr_30
-       call big_from_i64(-42_I8, o=dlr_30)
-       call eq("6b. from a negative: ", dlr_30, "-42")
+       call big_from_i64(-42_I8, o=dlt_1)
+       call eq("6b. from a negative: ", dlt_1, "-42")
     end block
     block
-       character(len=:), allocatable :: dlr_31
-       call big_from_i64(9223372036854775807_I8, o=dlr_31)
-       call eq("6c. from the biggest: ", dlr_31, "9223372036854775807")
+       call big_from_i64(9223372036854775807_I8, o=dlt_1)
+       call eq("6c. from the biggest: ", dlt_1, "9223372036854775807")
     end block
     call eqi("6d. it fits: ", merge(1, 0, big_fits_i64("9223372036854775807")), 1)
     call eqi("6e. one more does not: ", merge(1, 0, big_fits_i64("9223372036854775808")), 0)
@@ -274,23 +251,23 @@ contains
   subroutine check_big()
     character(len=:), allocatable :: acc
     integer :: i
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     acc = "1"
     do i = 2, 20
        block
-          character(len=:), allocatable :: dlr_32, dlr_33
-          call big_from_i64(int(i, I8), o=dlr_32)
-          call big_mul(acc, dlr_32, o=dlr_33)
-          acc = dlr_33
+          call big_from_i64(int(i, I8), o=dlt_1)
+          call big_mul(acc, dlt_1, o=dlt_2)
+          acc = dlt_2
        end block
     end do
     call eq("7a. 20 factorial: ", acc, "2432902008176640000")
     call eqi("7b. which still fits: ", merge(1, 0, big_fits_i64(acc)), 1)
     do i = 21, 25
        block
-          character(len=:), allocatable :: dlr_34, dlr_35
-          call big_from_i64(int(i, I8), o=dlr_34)
-          call big_mul(acc, dlr_34, o=dlr_35)
-          acc = dlr_35
+          call big_from_i64(int(i, I8), o=dlt_1)
+          call big_mul(acc, dlt_1, o=dlt_2)
+          acc = dlt_2
        end block
     end do
     call eq("7c. 25 factorial: ", acc, "15511210043330985984000000")
@@ -298,9 +275,8 @@ contains
     ! and back down again, exactly
     do i = 25, 2, -1
        block
-          character(len=:), allocatable :: dlr_36
-          call big_from_i64(int(i, I8), o=dlr_36)
-          call big_divmod(acc, dlr_36, q, r)
+          call big_from_i64(int(i, I8), o=dlt_1)
+          call big_divmod(acc, dlt_1, q, r)
        end block
        call eq("7e. divides exactly: ", r, "0")
        acc = q

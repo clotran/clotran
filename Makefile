@@ -315,6 +315,12 @@ test: $(test-bins) clotran-bin $(B)/libtestpkg.$(SOEXT) $(B)/libsamplelib.$(SOEX
 	@echo "--- eight futures allocating at once, the heap checked at every young collection (step 14d) ---"
 	CLOTRAN_GC_VERIFY=1 ./clotran-bin src/clj/clojure/core.clj test/clj/threads_heap.clj </dev/null \
 	  | grep -q "^THREADS HEAP PASSED"
+	@echo "--- a loaded namespace built into a cache and installed from it (clotran.loader) ---"
+	rm -rf $(B)/autocache
+	AUTOCOMPILE_STEP=build CLOTRAN_AUTOCOMPILE=use CLOTRAN_CACHE=$(B)/autocache \
+	  ./clotran-bin src/clj/clojure/core.clj test/clj/autocompile_test.clj </dev/null | grep -q "^AUTOCOMPILE PASSED"
+	AUTOCOMPILE_STEP=cached CLOTRAN_AUTOCOMPILE=use CLOTRAN_CACHE=$(B)/autocache \
+	  ./clotran-bin src/clj/clojure/core.clj test/clj/autocompile_test.clj </dev/null | grep -q "^AUTOCOMPILE PASSED"
 	@echo "--- a break pauses into a nested REPL, and clotran-resume answers it ---"
 	printf '((fn [x] (clotran-break)) 1)\n(clotran-resume {:continue (* 42 (get (:env (first (:frames (clotran-last-break)))) (quote x)))})\n' \
 	  | ./clotran-bin src/clj/clojure/core.clj | grep -q '42$$'

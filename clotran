@@ -90,11 +90,24 @@ if [ "$1" = "compile" ]; then
   # once read in place of the one this file defines, and every new
   # runtime entry became an unresolved implicit external.
   case "$lib" in /*) out="$lib" ;; *) out="$(pwd)/$lib" ;; esac
-  (cd "$work" && ${FC:-gfortran} -O2 -shared -fPIC -ffree-line-length-none $undef \
-    -o "$out" out.f90) || exit 1
+  # written under another name and moved into place: a background compile
+  # (clotran.loader) looks for the library, and must never find half of one
+  # gfortran limits a free-form line to 132 columns unless told otherwise;
+  # flang has no such limit, and refuses the flag
+  fc=${FC:-gfortran}
+  case "$(basename "$fc")" in flang*) long="" ;; *) long="-ffree-line-length-none" ;; esac
+  (cd "$work" && $fc -O2 -shared -fPIC $long $undef \
+    -o "$out.part" out.f90) || exit 1
+  mv -f "$out.part" "$out" || exit 1
   echo "wrote $lib"
   exit 0
 fi
+
+# What loads is compiled in the background and cached, and installed
+# from the cache on later loads -- and mid-session, at a REPL prompt,
+# when a build finishes (clotran.loader). CLOTRAN_AUTOCOMPILE=0 turns it
+# off; CLOTRAN_CACHE moves the cache (default ~/.cache/clotran).
+export CLOTRAN_AUTOCOMPILE="${CLOTRAN_AUTOCOMPILE-1}"
 
 if [ -t 0 ] && type rlwrap >/dev/null 2>&1; then
   exec rlwrap -m -r -q '"' -b "(){}[],^%#@\";:'" "$bin" "$core" "$@"

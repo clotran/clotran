@@ -17,6 +17,8 @@ contains
     type(c_ptr) :: r
     integer :: me, round, i, n, base
     type(gc_value) :: head, roots(1), p, v
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     me = int(transfer(arg, 0_c_intptr_t))
     call gc_stack_bind(me + 1)          ! stack 1 is the main thread's
     call gc_mutator_enter()
@@ -51,9 +53,8 @@ contains
             write(want, '(A,I0,A,I0)') 't', me, '-', i
             p = gc_str(trim(want), roots)
             block
-               character(len=:), allocatable :: dlr_1
-               call gc_text(p, s=dlr_1)
-               if (dlr_1 /= trim(want)) sbad(me) = sbad(me) + 1
+               call gc_text(p, s=dlt_1)
+               if (dlt_1 /= trim(want)) sbad(me) = sbad(me) + 1
             end block
           end block
        end do

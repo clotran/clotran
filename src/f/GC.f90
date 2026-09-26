@@ -1128,16 +1128,16 @@ contains
   subroutine gc_dec_text(v, s)
     type(gc_value), intent(in) :: v
     character(len=:), allocatable, intent(out) :: s
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     block
-       character(len=:), allocatable :: dlr_1
-       call dec_make("0", 0, o=dlr_1)
-       s = dlr_1
+       call dec_make("0", 0, o=dlt_1)
+       s = dlt_1
     end block
     if (v%tag == GCT_DEC) then
        block
-          character(len=:), allocatable :: dlr_2
-          call gc_ref_text(v%ref, s=dlr_2)
-          s = dlr_2
+          call gc_ref_text(v%ref, s=dlt_1)
+          s = dlt_1
        end block
     end if
   end subroutine gc_dec_text
@@ -1152,12 +1152,13 @@ contains
   subroutine gc_class_text(v, s)
     type(gc_value), intent(in) :: v
     character(len=:), allocatable, intent(out) :: s
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     s = ""
     if (v%tag == GCT_CLASS) then
        block
-          character(len=:), allocatable :: dlr_3
-          call gc_ref_text(v%ref, s=dlr_3)
-          s = dlr_3
+          call gc_ref_text(v%ref, s=dlt_1)
+          s = dlt_1
        end block
     end if
   end subroutine gc_class_text
@@ -1166,10 +1167,11 @@ contains
     character(len=*), intent(in) :: text
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: v
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     block
-       character(len=:), allocatable :: dlr_4
-       call big_norm(text, o=dlr_4)
-       v = new_text(dlr_4, roots, GCT_BIG)
+       call big_norm(text, o=dlt_1)
+       v = new_text(dlt_1, roots, GCT_BIG)
     end block
   end function gc_big
 
@@ -1182,12 +1184,13 @@ contains
   subroutine gc_big_text(v, s)
     type(gc_value), intent(in) :: v
     character(len=:), allocatable, intent(out) :: s
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     s = "0"
     if (v%tag == GCT_BIG) then
        block
-          character(len=:), allocatable :: dlr_5
-          call gc_ref_text(v%ref, s=dlr_5)
-          s = dlr_5
+          call gc_ref_text(v%ref, s=dlt_1)
+          s = dlt_1
        end block
     end if
   end subroutine gc_big_text
@@ -2291,6 +2294,8 @@ contains
     integer(8) :: t0, t1, rate
     real(8) :: dt
     character(len=8) :: e
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     if (.not. gen_env_read) then
        call get_environment_variable("CLOTRAN_GC_FULL", e)
        gen_mode = trim(e) /= "1"
@@ -2320,9 +2325,8 @@ contains
           block
             character(len=:), allocatable :: p
             block
-               character(len=:), allocatable :: dlr_6
-               call gc_check_heap(problem=dlr_6)
-               p = dlr_6
+               call gc_check_heap(problem=dlt_1)
+               p = dlt_1
             end block
             if (len(p) > 0) then
                write(0, '(A)') "clotran: a young collection left a dangling reference: " // p
@@ -2463,6 +2467,8 @@ contains
     type(gc_value), intent(in) :: a0, b0
     type(gc_value) :: a, b
     logical :: eq
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     a = a0
     b = b0
     do while (gc_kind(a) == OBJ_META)
@@ -2478,28 +2484,24 @@ contains
     if (a%tag == GCT_BIG .neqv. b%tag == GCT_BIG) then
        if (a%tag == GCT_BIG .and. b%tag == GCT_INT) then
           block
-             character(len=:), allocatable :: dlr_7
-             call gc_ref_text(a%ref, s=dlr_7)
-             eq = big_fits_i64(dlr_7)
+             call gc_ref_text(a%ref, s=dlt_1)
+             eq = big_fits_i64(dlt_1)
           end block
           if (eq) then
              block
-                character(len=:), allocatable :: dlr_8
-                call gc_ref_text(a%ref, s=dlr_8)
-                eq = (big_to_i64(dlr_8) == b%ival)
+                call gc_ref_text(a%ref, s=dlt_1)
+                eq = (big_to_i64(dlt_1) == b%ival)
              end block
           end if
        else if (b%tag == GCT_BIG .and. a%tag == GCT_INT) then
           block
-             character(len=:), allocatable :: dlr_9
-             call gc_ref_text(b%ref, s=dlr_9)
-             eq = big_fits_i64(dlr_9)
+             call gc_ref_text(b%ref, s=dlt_1)
+             eq = big_fits_i64(dlt_1)
           end block
           if (eq) then
              block
-                character(len=:), allocatable :: dlr_10
-                call gc_ref_text(b%ref, s=dlr_10)
-                eq = (big_to_i64(dlr_10) == a%ival)
+                call gc_ref_text(b%ref, s=dlt_1)
+                eq = (big_to_i64(dlt_1) == a%ival)
              end block
           end if
        end if
@@ -2521,17 +2523,15 @@ contains
     case (GCT_BIG, GCT_CLASS)
        ! Canonical text, so this is exact.
        block
-          character(len=:), allocatable :: dlr_11
-          call gc_ref_text(b%ref, s=dlr_11)
-          eq = gc_ref_is(a%ref, dlr_11)
+          call gc_ref_text(b%ref, s=dlt_1)
+          eq = gc_ref_is(a%ref, dlt_1)
        end block
     case (GCT_DEC)
        ! By VALUE: (= 1M 1.0M) is true although the two print apart.
        block
-          character(len=:), allocatable :: dlr_12, dlr_13
-          call gc_ref_text(a%ref, s=dlr_12)
-          call gc_ref_text(b%ref, s=dlr_13)
-          eq = (dec_cmp(dlr_12, dlr_13) == 0)
+          call gc_ref_text(a%ref, s=dlt_1)
+          call gc_ref_text(b%ref, s=dlt_2)
+          eq = (dec_cmp(dlt_1, dlt_2) == 0)
        end block
     case (GCT_STR, GCT_SYM, GCT_KEY)
        ! Compared by CONTENT, not by pool slot: the same text
@@ -2539,9 +2539,8 @@ contains
        eq = (gc_ref_len(a%ref) == gc_ref_len(b%ref))
        if (eq) then
           block
-             character(len=:), allocatable :: dlr_14
-             call gc_ref_text(b%ref, s=dlr_14)
-             eq = gc_ref_is(a%ref, dlr_14)
+             call gc_ref_text(b%ref, s=dlt_1)
+             eq = gc_ref_is(a%ref, dlt_1)
           end block
        end if
     case default
@@ -2575,6 +2574,8 @@ contains
     type(gc_value) :: v
     integer :: h
     integer(kind=8) :: bits8
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     v = v0
     do while (gc_kind(v) == OBJ_META)
        v = gc_slot(v, 1)
@@ -2617,36 +2618,31 @@ contains
        ! Past the 64-bit range no integer can equal it, so the text's
        ! own hash will do.
        block
-          character(len=:), allocatable :: dlr_15
-          call gc_ref_text(v%ref, s=dlr_15)
-       if (big_fits_i64(dlr_15)) then
+          call gc_ref_text(v%ref, s=dlt_1)
+       if (big_fits_i64(dlt_1)) then
           block
-             character(len=:), allocatable :: dlr_16
-             call gc_ref_text(v%ref, s=dlr_16)
-             bits8 = big_to_i64(dlr_16)
+             call gc_ref_text(v%ref, s=dlt_2)
+             bits8 = big_to_i64(dlt_2)
           end block
           h = mix32(ieor(mix32(int(ieor(bits8, ishft(bits8, -32)), kind=4)), tag_salt(GCT_INT)))
        else
           block
-             character(len=:), allocatable :: dlr_17
-             call gc_ref_text(v%ref, s=dlr_17)
-             h = mix32(ieor(mix32(fnv1a(dlr_17)), tag_salt(v%tag)))
+             call gc_ref_text(v%ref, s=dlt_2)
+             h = mix32(ieor(mix32(fnv1a(dlt_2)), tag_salt(v%tag)))
           end block
        end if
        end block
     case (GCT_DEC)
        ! Over the STRIPPED value, so equal decimals hash alike.
        block
-          character(len=:), allocatable :: dlr_18, dlr_19
-          call gc_ref_text(v%ref, s=dlr_18)
-          call dec_strip(dlr_18, o=dlr_19)
-          h = mix32(ieor(mix32(fnv1a(dlr_19)), tag_salt(v%tag)))
+          call gc_ref_text(v%ref, s=dlt_1)
+          call dec_strip(dlt_1, o=dlt_2)
+          h = mix32(ieor(mix32(fnv1a(dlt_2)), tag_salt(v%tag)))
        end block
     case (GCT_STR, GCT_SYM, GCT_KEY, GCT_CLASS)
        block
-          character(len=:), allocatable :: dlr_20
-          call gc_ref_text(v%ref, s=dlr_20)
-          h = mix32(ieor(mix32(fnv1a(dlr_20)), tag_salt(v%tag)))
+          call gc_ref_text(v%ref, s=dlt_1)
+          h = mix32(ieor(mix32(fnv1a(dlt_1)), tag_salt(v%tag)))
        end block
     case default
        ! ...and hashing has to follow equality exactly, or a trie
@@ -3327,6 +3323,8 @@ contains
     integer :: i, j, n, k
     logical, allocatable :: dead_o(:), dead_v(:)
     type(gc_stack), pointer :: s
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     problem = ""
     ! the dead waiting in pending lists are unswept on purpose: what they
     ! point at may already be freed, and nothing live reaches them
@@ -3349,9 +3347,8 @@ contains
        if (obj_free(i) .or. dead_o(i)) cycle
        do j = 1, OBJ_SLOTS
           block
-             character(len=:), allocatable :: dlr_21
-             call bad_ref(obj_pool(i)%slot(j), problem=dlr_21)
-             problem = dlr_21
+             call bad_ref(obj_pool(i)%slot(j), problem=dlt_1)
+             problem = dlt_1
           end block
           if (len(problem) > 0) return
        end do
@@ -3361,9 +3358,8 @@ contains
        n = vec_pool(i)%len
        do j = 1, n
           block
-             character(len=:), allocatable :: dlr_22
-             call bad_ref(vec_store(vec_pool(i)%off + j - 1), problem=dlr_22)
-             problem = dlr_22
+             call bad_ref(vec_store(vec_pool(i)%off + j - 1), problem=dlt_1)
+             problem = dlt_1
           end block
           if (len(problem) > 0) return
        end do

@@ -644,11 +644,12 @@ contains
     character(len=:), allocatable :: t
     integer :: i, num, ios
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     if (form%tag == GCT_SYM) then
        block
-          character(len=:), allocatable :: dlr_1
-          call gc_ref_text(form%ref, s=dlr_1)
-          t = dlr_1
+          call gc_ref_text(form%ref, s=dlt_1)
+          t = dlt_1
        end block
        if (len(t) >= 1) then
           if (t(1:1) == "%") then
@@ -704,12 +705,13 @@ contains
     character(len=16) :: nm
     integer :: base, i, num, ios
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     out = form
     if (form%tag == GCT_SYM) then
        block
-          character(len=:), allocatable :: dlr_2
-          call gc_ref_text(form%ref, s=dlr_2)
-          t = dlr_2
+          call gc_ref_text(form%ref, s=dlt_1)
+          t = dlt_1
        end block
        if (len(t) < 1) return
        if (t(1:1) /= "%") return
@@ -1381,6 +1383,8 @@ contains
     character(len=:), allocatable :: tok, ns
     integer :: start, base, i
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     rdx => rd_self()
     v = gc_nil()
     pos = pos + 1            ! past the #, now at the :
@@ -1396,9 +1400,8 @@ contains
           return
        end if
        block
-          character(len=:), allocatable :: dlr_3
-          call ns_resolver(tok(3:), ns=dlr_3)
-          ns = dlr_3
+          call ns_resolver(tok(3:), ns=dlt_1)
+          ns = dlt_1
        end block
        if (len(ns) == 0) then
           call fail("Invalid token: " // tok)
@@ -1442,12 +1445,13 @@ contains
     type(gc_value) :: out
     character(len=:), allocatable :: t
     integer :: slash
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     out = k
     if (k%tag /= GCT_KEY .and. k%tag /= GCT_SYM) return
     block
-       character(len=:), allocatable :: dlr_4
-       call gc_ref_text(k%ref, s=dlr_4)
-       t = dlr_4
+       call gc_ref_text(k%ref, s=dlt_1)
+       t = dlt_1
     end block
     slash = index(t, "/")
     if (slash == 0) then
@@ -1472,6 +1476,8 @@ contains
     character(len=:), allocatable :: acc
     character :: c
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     v = gc_nil()
     pos = pos + 1 ! consume the opening quote
     acc = ""
@@ -1513,9 +1519,8 @@ contains
                   return
                end if
                block
-                  character(len=:), allocatable :: dlr_5
-                  call u8_enc(cp, s=dlr_5)
-                  acc = acc // dlr_5
+                  call u8_enc(cp, s=dlt_1)
+                  acc = acc // dlt_1
                end block
                pos = pos + 4
              end block
@@ -1592,6 +1597,8 @@ contains
     type(gc_value) :: rval
     character(len=:), allocatable :: tok
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     start = pos
     do while (pos <= len(text))
        if (is_space(text(pos:pos)) .or. is_delim(text(pos:pos))) exit
@@ -1661,15 +1668,13 @@ contains
          slash = index(tok, "/")
          if (slash > 0) then
             block
-               character(len=:), allocatable :: dlr_6
-               call ns_resolver(tok(3:slash-1), ns=dlr_6)
-               ns = dlr_6
+               call ns_resolver(tok(3:slash-1), ns=dlt_1)
+               ns = dlt_1
             end block
          else
             block
-               character(len=:), allocatable :: dlr_7
-               call ns_resolver("", ns=dlr_7)
-               ns = dlr_7
+               call ns_resolver("", ns=dlt_1)
+               ns = dlt_1
             end block
          end if
          if (len(ns) == 0) then
@@ -1779,6 +1784,8 @@ contains
     logical :: yes, iok, iclaim
     integer :: n, start
     integer(gc_ip) :: iv
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     yes = .false.
     val = gc_nil()
     n = len(s)
@@ -1798,9 +1805,8 @@ contains
           call parse_int(s(1:n - 1), iv, iok, iclaim)
           if (iok) then
              block
-                character(len=:), allocatable :: dlr_8
-                call int_text(iv, s=dlr_8)
-                val = gc_big(dlr_8, roots)
+                call int_text(iv, s=dlt_1)
+                val = gc_big(dlt_1, roots)
              end block
              yes = .true.
           end if

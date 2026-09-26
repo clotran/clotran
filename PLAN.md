@@ -1052,6 +1052,27 @@ only `defn` forms compile. In order:
    core, the program's compiled namespaces, the image -- with `-main`
    receiving `*command-line-args*`. Packages still load at run time.
 
+**Compiling what is loaded, landed 2026-09-26.** Compiling had to be asked
+for: `clotran compile`, or `make compiled-core` (4 min 12 s for core's 529
+functions, removed by `make clean`), so in practice nobody ran compiled
+code. Now `./clotran` (CLOTRAN_AUTOCOMPILE=1) builds every namespace it
+loads in a separate background process, into a cache (~/.cache/clotran),
+and installs from the cache when the same text loads again -- the source
+hash is in the library's name, and a pointer file per hash names the
+build, since a process cannot load a second library from one path. A
+build that finishes during a session is installed at the next REPL
+prompt (clotran.loader/poll), so a namespace being worked on -- edit,
+reload, test -- runs interpreted right after the edit and compiled a
+few seconds later, without a restart. Measured, a namespace with one
+loop: 622 ms interpreted, 0.76 ms from the cache. And compiled core,
+the benchmark forms: reduce 101 -> 48 ms, into/map 1027 -> 766, str of a
+vector 312 -> 232, sort 1819 -> 1465; fib and a plain loop do not move --
+they are the typed form, which stays interpreted. Files loaded while
+core.clj itself loads wait for it (the loader is written in the Clojure
+core defines). Tests and the gate leave CLOTRAN_AUTOCOMPILE unset;
+test/clj/autocompile_test.clj builds and reinstalls one namespace
+through a fresh cache.
+
 What stays interpreted is `eval`: the REPL, `load-string`, source never
 compiled. JVM Clojure keeps its compiler at run time for the same
 reason. `.cljc` compiles once it has `:cljf` or `:default` branches; a

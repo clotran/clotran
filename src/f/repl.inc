@@ -31,6 +31,8 @@
     character(len=16) :: dbuf
     integer :: base, ios, size_read
 
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     tctx => ctx_self()
     vst => tctx%stk
     repl_depth = repl_depth + 1
@@ -42,15 +44,15 @@
     end if
     pending = ""
     do
+       if (len(pending) == 0) call gce_poll_compiled()
        if (len(pending) > 0) then
           ! A line that does not close what it opened is not an error,
           ! it is a request for more input.
           prompt = "#_=> "
        else
           block
-             character(len=:), allocatable :: dlr_1
-             call gcn_name(gcn_current(none), s=dlr_1)
-             prompt = dlr_1 // "=> "
+             call gcn_name(gcn_current(none), s=dlt_1)
+             prompt = dlt_1 // "=> "
           end block
           if (repl_depth > 1) then
              write(dbuf, '(I0)') repl_depth - 1
@@ -83,14 +85,12 @@
           ! way -- an unclosed list, vector, map, string or regex. Any
           ! other reader error is real.
           block
-             character(len=:), allocatable :: dlr_2
-             call gcr_error(s=dlr_2)
-             if (index(dlr_2, "EOF while reading") == 1) cycle
+             call gcr_error(s=dlt_1)
+             if (index(dlt_1, "EOF while reading") == 1) cycle
           end block
           block
-             character(len=:), allocatable :: dlr_3
-             call gcr_error(s=dlr_3)
-             print '(A,A)', "reader error: ", dlr_3
+             call gcr_error(s=dlt_1)
+             print '(A,A)', "reader error: ", dlt_1
           end block
           pending = ""
           cycle
@@ -105,24 +105,21 @@
        if (resume_pending) exit
        if (tctx%has_error) then
           block
-             character(len=:), allocatable :: dlr_4
-             call gce_error(s=dlr_4)
-             print '(A,A)', "error: ", dlr_4
+             call gce_error(s=dlt_1)
+             print '(A,A)', "error: ", dlt_1
           end block
           block
-             character(len=:), allocatable :: dlr_5, dlr_6
-             call gce_trace(s=dlr_5)
-             if (len(dlr_5) > 0) then
-                call gce_trace(s=dlr_6)
-                write(*, '(A)', advance='no') dlr_6
+             call gce_trace(s=dlt_1)
+             if (len(dlt_1) > 0) then
+                call gce_trace(s=dlt_2)
+                write(*, '(A)', advance='no') dlt_2
              end if
           end block
           cycle
        end if
        block
-          character(len=:), allocatable :: dlr_7
-          call gcp_str(vs_get(vst, base + 3), .true., s=dlr_7)
-          print '(A)', dlr_7
+          call gcp_str(vs_get(vst, base + 3), .true., s=dlt_1)
+          print '(A)', dlt_1
        end block
     end do
     if (resume_pending) then

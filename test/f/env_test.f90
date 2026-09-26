@@ -182,6 +182,8 @@ contains
     character(len=16) :: buf
     integer :: i, bad
     logical :: found
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     call gc_init(8)
     gc_torture = .true.
     e = gce_new(gc_nil(), no_roots)
@@ -194,9 +196,8 @@ contains
     end do
     roots(2) = gc_nil()
     block
-       character(len=:), allocatable :: dlr_1
-       call gc_check_heap(problem=dlr_1)
-       call ok("7a. the heap audits clean under torture: ", dlr_1 == "")
+       call gc_check_heap(problem=dlt_1)
+       call ok("7a. the heap audits clean under torture: ", dlt_1 == "")
     end block
     bad = 0
     do i = 1, 40

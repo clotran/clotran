@@ -46,42 +46,37 @@ contains
   end subroutine eq
 
   subroutine check_immediates()
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     call gc_init(256)
     block
-       character(len=:), allocatable :: dlr_1
-       call gcp_str(gc_nil(), .true., s=dlr_1)
-       call eq("1a. nil: ", dlr_1, "nil")
+       call gcp_str(gc_nil(), .true., s=dlt_1)
+       call eq("1a. nil: ", dlt_1, "nil")
     end block
     block
-       character(len=:), allocatable :: dlr_2
-       call gcp_str(gc_bool(.true.), .true., s=dlr_2)
-       call eq("1b. true: ", dlr_2, "true")
+       call gcp_str(gc_bool(.true.), .true., s=dlt_1)
+       call eq("1b. true: ", dlt_1, "true")
     end block
     block
-       character(len=:), allocatable :: dlr_3
-       call gcp_str(gc_bool(.false.), .true., s=dlr_3)
-       call eq("1c. false: ", dlr_3, "false")
+       call gcp_str(gc_bool(.false.), .true., s=dlt_1)
+       call eq("1c. false: ", dlt_1, "false")
     end block
     block
-       character(len=:), allocatable :: dlr_4
-       call gcp_str(gc_int(42), .true., s=dlr_4)
-       call eq("1d. an integer: ", dlr_4, "42")
+       call gcp_str(gc_int(42), .true., s=dlt_1)
+       call eq("1d. an integer: ", dlt_1, "42")
     end block
     block
-       character(len=:), allocatable :: dlr_5
-       call gcp_str(gc_int(-7), .true., s=dlr_5)
-       call eq("1e. a negative integer: ", dlr_5, "-7")
+       call gcp_str(gc_int(-7), .true., s=dlt_1)
+       call eq("1e. a negative integer: ", dlt_1, "-7")
     end block
     ! A double must not print as an integer, or it reads back wrong.
     block
-       character(len=:), allocatable :: dlr_6
-       call gcp_str(gc_real(2.0_gc_dp), .true., s=dlr_6)
-       call eq("1f. a double keeps its point: ", dlr_6, "2.0")
+       call gcp_str(gc_real(2.0_gc_dp), .true., s=dlt_1)
+       call eq("1f. a double keeps its point: ", dlt_1, "2.0")
     end block
     block
-       character(len=:), allocatable :: dlr_7
-       call gcp_str(gc_real(1.5_gc_dp), .true., s=dlr_7)
-       call eq("1g. ...and its fraction: ", dlr_7, "1.5")
+       call gcp_str(gc_real(1.5_gc_dp), .true., s=dlt_1)
+       call eq("1g. ...and its fraction: ", dlt_1, "1.5")
     end block
   end subroutine check_immediates
 
@@ -89,90 +84,85 @@ contains
   ! and getting it wrong is how (println "a") starts printing quotes.
   subroutine check_text()
     type(gc_value) :: s, k, sy, c, roots(1)
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     call gc_init(256)
     s = gc_str("hi", no_roots)
     roots(1) = s
     block
-       character(len=:), allocatable :: dlr_8
-       call gcp_str(s, .true., s=dlr_8)
-       call eq("2a. a string, readably: ", dlr_8, '"hi"')
+       call gcp_str(s, .true., s=dlt_1)
+       call eq("2a. a string, readably: ", dlt_1, '"hi"')
     end block
     block
-       character(len=:), allocatable :: dlr_9
-       call gcp_str(s, .false., s=dlr_9)
-       call eq("2b. ...and not: ", dlr_9, "hi")
+       call gcp_str(s, .false., s=dlt_1)
+       call eq("2b. ...and not: ", dlt_1, "hi")
     end block
     k = gc_key("kw", roots)
     roots(1) = k
     block
-       character(len=:), allocatable :: dlr_10
-       call gcp_str(k, .true., s=dlr_10)
-       call eq("2c. a keyword: ", dlr_10, ":kw")
+       call gcp_str(k, .true., s=dlt_1)
+       call eq("2c. a keyword: ", dlt_1, ":kw")
     end block
     sy = gc_sym("sym", roots)
     roots(1) = sy
     block
-       character(len=:), allocatable :: dlr_11
-       call gcp_str(sy, .true., s=dlr_11)
-       call eq("2d. a symbol: ", dlr_11, "sym")
+       call gcp_str(sy, .true., s=dlt_1)
+       call eq("2d. a symbol: ", dlt_1, "sym")
     end block
     c = gc_char("a")
     block
-       character(len=:), allocatable :: dlr_12
-       call gcp_str(c, .true., s=dlr_12)
-       call eq("2e. a character, readably: ", dlr_12, achar(92) // "a")
+       call gcp_str(c, .true., s=dlt_1)
+       call eq("2e. a character, readably: ", dlt_1, achar(92) // "a")
     end block
     block
-       character(len=:), allocatable :: dlr_13
-       call gcp_str(c, .false., s=dlr_13)
-       call eq("2f. ...and not: ", dlr_13, "a")
+       call gcp_str(c, .false., s=dlt_1)
+       call eq("2f. ...and not: ", dlt_1, "a")
     end block
     block
-       character(len=:), allocatable :: dlr_14
-       call gcp_str(gc_char(achar(10)), .true., s=dlr_14)
-       call eq("2g. a named character: ", dlr_14,  achar(92) // "newline")
+       call gcp_str(gc_char(achar(10)), .true., s=dlt_1)
+       call eq("2g. a named character: ", dlt_1,  achar(92) // "newline")
     end block
   end subroutine check_text
 
   subroutine check_list()
     type(gc_value) :: l, roots(1)
     integer :: i
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     call gc_init(256)
     l = gcl_empty(no_roots)
     block
-       character(len=:), allocatable :: dlr_15
-       call gcp_str(l, .true., s=dlr_15)
-       call eq("3a. the empty list: ", dlr_15, "()")
+       call gcp_str(l, .true., s=dlt_1)
+       call eq("3a. the empty list: ", dlt_1, "()")
     end block
     do i = 3, 1, -1
        roots(1) = l
        l = gcl_cons(gc_int(i), l, roots)
     end do
     block
-       character(len=:), allocatable :: dlr_16
-       call gcp_str(l, .true., s=dlr_16)
-       call eq("3b. a list, in order: ", dlr_16, "(1 2 3)")
+       call gcp_str(l, .true., s=dlt_1)
+       call eq("3b. a list, in order: ", dlt_1, "(1 2 3)")
     end block
   end subroutine check_list
 
   subroutine check_vector()
     type(gc_value) :: v, roots(1)
     integer :: i
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     call gc_init(256)
     v = gcv_empty(no_roots)
     block
-       character(len=:), allocatable :: dlr_17
-       call gcp_str(v, .true., s=dlr_17)
-       call eq("4a. the empty vector: ", dlr_17, "[]")
+       call gcp_str(v, .true., s=dlt_1)
+       call eq("4a. the empty vector: ", dlt_1, "[]")
     end block
     do i = 1, 3
        roots(1) = v
        v = gcv_conj(v, gc_int(i), roots)
     end do
     block
-       character(len=:), allocatable :: dlr_18
-       call gcp_str(v, .true., s=dlr_18)
-       call eq("4b. a vector, in order: ", dlr_18, "[1 2 3]")
+       call gcp_str(v, .true., s=dlt_1)
+       call eq("4b. a vector, in order: ", dlt_1, "[1 2 3]")
     end block
   end subroutine check_vector
 
@@ -182,20 +172,20 @@ contains
   subroutine check_map_both_representations()
     type(gc_value) :: m, roots(1)
     integer :: i
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     call gc_init(256)
     m = gca_empty(no_roots)
     block
-       character(len=:), allocatable :: dlr_19
-       call gcp_str(m, .true., s=dlr_19)
-       call eq("5a. the empty map: ", dlr_19, "{}")
+       call gcp_str(m, .true., s=dlt_1)
+       call eq("5a. the empty map: ", dlt_1, "{}")
     end block
     roots(1) = m
     m = gca_assoc(m, gc_key("a", roots), gc_int(1), roots)
     call ok("5b. one entry is an array map: ", gca_is_array_map(m))
     block
-       character(len=:), allocatable :: dlr_20
-       call gcp_str(m, .true., s=dlr_20)
-       call eq("5c. ...printing plainly: ", dlr_20, "{:a 1}")
+       call gcp_str(m, .true., s=dlt_1)
+       call eq("5c. ...printing plainly: ", dlt_1, "{:a 1}")
     end block
 
     ! Push it over the threshold, then remove everything else, so the
@@ -210,14 +200,15 @@ contains
     end do
     call ok("5d. the same entry is now in a trie: ", .not. gca_is_array_map(m))
     block
-       character(len=:), allocatable :: dlr_21
-       call gcp_str(m, .true., s=dlr_21)
-       call eq("5e. ...and prints identically: ", dlr_21, "{:a 1}")
+       call gcp_str(m, .true., s=dlt_1)
+       call eq("5e. ...and prints identically: ", dlt_1, "{:a 1}")
     end block
   end subroutine check_map_both_representations
 
   subroutine check_nested()
     type(gc_value) :: v, inner, roots(2)
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     call gc_init(256)
     inner = gcv_empty(no_roots)
     roots(1) = inner
@@ -231,14 +222,12 @@ contains
     roots(2) = v
     v = gcl_cons(gc_key("tag", roots), v, roots)
     block
-       character(len=:), allocatable :: dlr_22
-       call gcp_str(v, .true., s=dlr_22)
-       call eq("6a. nested structures print through: ", dlr_22,  '(:tag [1 "x"])')
+       call gcp_str(v, .true., s=dlt_1)
+       call eq("6a. nested structures print through: ", dlt_1,  '(:tag [1 "x"])')
     end block
     block
-       character(len=:), allocatable :: dlr_23
-       call gcp_str(v, .false., s=dlr_23)
-       call eq("6b. ...and not-readably inside too: ", dlr_23,  "(:tag [1 x])")
+       call gcp_str(v, .false., s=dlt_1)
+       call eq("6b. ...and not-readably inside too: ", dlt_1,  "(:tag [1 x])")
     end block
   end subroutine check_nested
 
@@ -247,6 +236,8 @@ contains
   subroutine check_under_collection()
     type(gc_value) :: v, roots(1)
     integer :: base, i
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     call gc_init(16)
     v = gcv_empty(no_roots)
     do i = 1, 12
@@ -257,9 +248,8 @@ contains
     call vs_set(base + 1, v)
     call gc_collect(no_roots)
     block
-       character(len=:), allocatable :: dlr_24
-       call gcp_str(vs_get(base + 1), .true., s=dlr_24)
-       call eq("7a. a vector rooted only by the stack prints: ",  dlr_24, "[1 2 3 4 5 6 7 8 9 10 11 12]")
+       call gcp_str(vs_get(base + 1), .true., s=dlt_1)
+       call eq("7a. a vector rooted only by the stack prints: ",  dlt_1, "[1 2 3 4 5 6 7 8 9 10 11 12]")
     end block
     call vs_leave(base)
   end subroutine check_under_collection

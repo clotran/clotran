@@ -15,6 +15,8 @@
     type(gc_value), intent(in) :: cmp, a, b
     integer :: c
     logical :: ok
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     tctx => ctx_self()
     c = 0
     if (cmp%tag == GCT_NIL) then
@@ -23,9 +25,8 @@
        ! refuses a key that is not nil, a Number or Comparable
        if (same_object(a, b) .and. .not. comparable_kind(a)) then
           block
-             character(len=:), allocatable :: dlr_1
-             call gcp_str(a, .true., s=dlr_1)
-             call raise_class("ClassCastException",  "Default comparator requires nil, Number, or Comparable: " // dlr_1, [a])
+             call gcp_str(a, .true., s=dlt_1)
+             call raise_class("ClassCastException",  "Default comparator requires nil, Number, or Comparable: " // dlt_1, [a])
           end block
           c = huge(0)
           return
@@ -33,10 +34,9 @@
        c = compare_values(a, b, ok)
        if (.not. ok) then
           block
-             character(len=:), allocatable :: dlr_2, dlr_3
-             call class_name_of(a, s=dlr_2)
-             call class_name_of(b, s=dlr_3)
-             call raise_class("ClassCastException",  "cannot compare " // dlr_2 // " with " // dlr_3, [a, b])
+             call class_name_of(a, s=dlt_1)
+             call class_name_of(b, s=dlt_2)
+             call raise_class("ClassCastException",  "cannot compare " // dlt_1 // " with " // dlt_2, [a, b])
           end block
           c = huge(0)
        end if
@@ -54,6 +54,8 @@
     type(gc_value), intent(in) :: v0
     logical :: yes
     type(gc_value) :: v
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     v = strip_meta(v0)
     yes = .true.
     select case (v%tag)
@@ -70,9 +72,8 @@
     end select
     if (.not. yes) then
        block
-          character(len=:), allocatable :: dlr_4
-          call class_name_of(v, s=dlr_4)
-          call raise_class("IllegalArgumentException",  "Don't know how to create ISeq from: " // dlr_4, [v])
+          call class_name_of(v, s=dlt_1)
+          call raise_class("IllegalArgumentException",  "Don't know how to create ISeq from: " // dlt_1, [v])
        end block
     end if
   end function seqable
@@ -93,13 +94,14 @@
     type(gc_value) :: s
     character(len=:), allocatable :: u
     integer :: i
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     yes = .false.
     s = strip_meta(v)
     if (s%tag /= GCT_STR) return
     block
-       character(len=:), allocatable :: dlr_5
-       call gc_ref_text(s%ref, s=dlr_5)
-       u = dlr_5
+       call gc_ref_text(s%ref, s=dlt_1)
+       u = dlt_1
     end block
     if (len(u) /= 36) return
     do i = 1, 36
@@ -161,15 +163,16 @@
     logical :: ok
     type(gc_value) :: x
     integer :: i
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     ok = .true.
     do i = 0, n - 1
        x = strip_meta(gcv_nth(args, i))
        if (.not. is_number(x)) then
           ok = .false.
           block
-             character(len=:), allocatable :: dlr_6
-             call class_name_of(x, s=dlr_6)
-             call raise_class("ClassCastException", "class " // dlr_6 //  " cannot be cast to class java.lang.Number", roots)
+             call class_name_of(x, s=dlt_1)
+             call raise_class("ClassCastException", "class " // dlt_1 //  " cannot be cast to class java.lang.Number", roots)
           end block
           return
        end if
@@ -331,6 +334,8 @@
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, acc, m
     integer :: base, i
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     vst => gc_my_stack()
     out = gc_nil()
     if (gcv_is(a)) then
@@ -350,9 +355,8 @@
     m = sorted_backing(a)
     if (m%tag == GCT_NIL) then
        block
-          character(len=:), allocatable :: dlr_7
-          call class_name_of(a, s=dlr_7)
-          call fail("rseq: not reversible: " // dlr_7)
+          call class_name_of(a, s=dlt_1)
+          call fail("rseq: not reversible: " // dlt_1)
        end block
        return
     end if

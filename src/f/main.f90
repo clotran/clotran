@@ -3,7 +3,13 @@
 !
 ! Reads a form per line, evaluates, prints. No line editing of its own
 ! -- the launcher supplies rlwrap.
-program clotran
+! The program is run on a thread of its own with a large stack: the
+! evaluator recurses in Fortran (a builtin calling apply calling a
+! builtin), and under flang call_builtin's frame is about 176 KB, which
+! the main thread's 8 MB ran out of while loading the compiler. The JVM
+! gives its main thread a stack of its choosing for the same reason.
+module clotran_main
+  use iso_c_binding
   use GC
   use LispReader
   use Printer
@@ -11,86 +17,100 @@ program clotran
   use Namespace
   use PersistentVector
   implicit none
-
-  type(gc_value) :: env
-  type(gc_value) :: none(0)
-  integer :: base, i, arglen, st
-  character(len=1024) :: argbuf
-  character(len=8) :: statbuf, tortbuf
-
-  call gc_init(65536)
-  block
-     character(len=:), allocatable :: dlr_1
-     call home_dir(d=dlr_1)
-     call gce_set_home(dlr_1)
-  end block
-  base = vs_enter(3)
-  env = gce_base_env(none)
-  call vs_set(base + 1, env)
-
-  ! The host shim -- type predicates that core.clj cannot supply,
-  ! because it would ask instance? about Java classes. NOT a core
-  ! library: everything else Clojure programs use must come from
-  ! the real core.clj, which is the point of the project.
-  block
-     character(len=:), allocatable :: dlr_2
-     call under_home("src/clj/host.clj", p=dlr_2)
-     call load_file(dlr_2, vs_get(base + 1))
-  end block
-  ! host.clj leaves clojure.core current, being part of its bootstrap.
-
-  ! Any files named on the command line load next, in order, so
-  ! that `clotran some.clj` is how a file gets tried against
-  ! this evaluator. Loading real core.clj is the point: the first
-  ! error it reports IS the next thing to build.
-  do i = 1, command_argument_count()
-     call get_command_argument(i, argbuf, arglen)
-     call load_file(argbuf(1:arglen), vs_get(base + 1))
-     ! RT.CHECK_SPECS: once core.clj -- the first file -- has loaded,
-     ! every macro call is checked against clojure.core.specs.alpha,
-     ! unless CLOTRAN_SPEC_SKIP_MACROS is set (clojure.spec.skip-macros)
-     if (i == 1) then
-        call gce_main_bindings()
-        ! CLOTRAN_GC_TORTURE=1 collects at EVERY allocation from here on --
-        ! what test/f's torture pass does, and the only way a rooting bug
-        ! shows reliably: a value that is not on the shadow stack is
-        ! collected the moment the next allocation happens. It starts
-        ! AFTER the first file (core.clj takes minutes under it), so the
-        ! form under suspicion runs tortured and the bootstrap does not.
-        call get_environment_variable("CLOTRAN_GC_TORTURE", tortbuf)
-        gc_torture = (trim(tortbuf) == "1")
-        call get_environment_variable("CLOTRAN_SPEC_SKIP_MACROS", status=st)
-        call gce_set_spec_check(st /= 0)
-     end if
-  end do
-
-  ! The REPL starts in user, as Clojure's does -- AFTER the files on the
-  ! command line, because core.clj's own (ns clojure.core) leaves that
-  ! namespace current and anything typed at the prompt would otherwise
-  ! be defined into clojure.core.
-  call gcn_set_current(gcn_find_or_create("user", none))
-
-  ! The loop itself is Eval's (repl.inc): the same loop runs nested at
-  ! a break, where it is the debugger's default handler.
-  call gce_repl()
-  print *, ""
-  call get_environment_variable("CLOTRAN_STATS", statbuf)
-  if (trim(statbuf) == "1") then
-     write(0, '(A,I0,A,I0,A,I0,A,I0,A,I0)') "stats: evals=", gce_evals, " allocs=", gc_allocs, &
-          " collections=", gc_collections, " marked=", gc_marked, " obj_capacity=", gc_obj_capacity()
-     block
-       integer :: cap, used, live
-       call gc_arena_stats(cap, used, live)
-       write(0, '(A,I0,A,I0,A,I0)') "arena: capacity=", cap, " used=", used, " live=", live
-     end block
-     write(0, '(A,I0,A,F0.1,A,F0.2,A,I0,A,F0.1,A,F0.2)') "pauses: young ", gc_young_collections, &
-          " total_ms=", gc_young_ms, " max_ms=", gc_young_max_ms, &
-          " full ", gc_collections - gc_young_collections, " total_ms=", gc_full_ms, " max_ms=", gc_full_max_ms
-     write(0, '(A,F0.1,A,F0.1,A,F0.1,A,F0.1)') "pause parts: safepoint_ms=", gc_safepoint_ms, &
-          " young mark_ms=", gc_ymark_ms, " young sweep_ms=", gc_ysweep_ms, " pending finish_ms=", gc_finish_ms
-  end if
+  private
+  public :: main_body, main_thread
+  ! address space, not memory: pages are committed as they are touched
+  integer(c_size_t), parameter, public :: MAIN_STACK_BYTES = 1024_c_size_t * 1024_c_size_t * 1024_c_size_t
 
 contains
+
+  function main_thread(arg) result(r) bind(C)
+    type(c_ptr), value :: arg
+    type(c_ptr) :: r
+    call main_body()
+    r = c_null_ptr
+  end function main_thread
+
+  subroutine main_body()
+
+    type(gc_value) :: env
+    type(gc_value) :: none(0)
+    integer :: base, i, arglen, st
+    character(len=1024) :: argbuf
+    character(len=8) :: statbuf, tortbuf
+
+    call gc_init(65536)
+    block
+       character(len=:), allocatable :: dlr_1
+       call home_dir(d=dlr_1)
+       call gce_set_home(dlr_1)
+    end block
+    base = vs_enter(3)
+    env = gce_base_env(none)
+    call vs_set(base + 1, env)
+
+    ! The host shim -- type predicates that core.clj cannot supply,
+    ! because it would ask instance? about Java classes. NOT a core
+    ! library: everything else Clojure programs use must come from
+    ! the real core.clj, which is the point of the project.
+    block
+       character(len=:), allocatable :: dlr_2
+       call under_home("src/clj/host.clj", p=dlr_2)
+       call load_file(dlr_2, vs_get(base + 1))
+    end block
+    ! host.clj leaves clojure.core current, being part of its bootstrap.
+
+    ! Any files named on the command line load next, in order, so
+    ! that `clotran some.clj` is how a file gets tried against
+    ! this evaluator. Loading real core.clj is the point: the first
+    ! error it reports IS the next thing to build.
+    do i = 1, command_argument_count()
+       call get_command_argument(i, argbuf, arglen)
+       call load_file(argbuf(1:arglen), vs_get(base + 1))
+       ! RT.CHECK_SPECS: once core.clj -- the first file -- has loaded,
+       ! every macro call is checked against clojure.core.specs.alpha,
+       ! unless CLOTRAN_SPEC_SKIP_MACROS is set (clojure.spec.skip-macros)
+       if (i == 1) then
+          call gce_main_bindings()
+          ! CLOTRAN_GC_TORTURE=1 collects at EVERY allocation from here on --
+          ! what test/f's torture pass does, and the only way a rooting bug
+          ! shows reliably: a value that is not on the shadow stack is
+          ! collected the moment the next allocation happens. It starts
+          ! AFTER the first file (core.clj takes minutes under it), so the
+          ! form under suspicion runs tortured and the bootstrap does not.
+          call get_environment_variable("CLOTRAN_GC_TORTURE", tortbuf)
+          gc_torture = (trim(tortbuf) == "1")
+          call get_environment_variable("CLOTRAN_SPEC_SKIP_MACROS", status=st)
+          call gce_set_spec_check(st /= 0)
+       end if
+    end do
+
+    ! The REPL starts in user, as Clojure's does -- AFTER the files on the
+    ! command line, because core.clj's own (ns clojure.core) leaves that
+    ! namespace current and anything typed at the prompt would otherwise
+    ! be defined into clojure.core.
+    call gcn_set_current(gcn_find_or_create("user", none))
+
+    ! The loop itself is Eval's (repl.inc): the same loop runs nested at
+    ! a break, where it is the debugger's default handler.
+    call gce_repl()
+    print *, ""
+    call get_environment_variable("CLOTRAN_STATS", statbuf)
+    if (trim(statbuf) == "1") then
+       write(0, '(A,I0,A,I0,A,I0,A,I0,A,I0)') "stats: evals=", gce_evals, " allocs=", gc_allocs, &
+            " collections=", gc_collections, " marked=", gc_marked, " obj_capacity=", gc_obj_capacity()
+       block
+         integer :: cap, used, live
+         call gc_arena_stats(cap, used, live)
+         write(0, '(A,I0,A,I0,A,I0)') "arena: capacity=", cap, " used=", used, " live=", live
+       end block
+       write(0, '(A,I0,A,F0.1,A,F0.2,A,I0,A,F0.1,A,F0.2)') "pauses: young ", gc_young_collections, &
+            " total_ms=", gc_young_ms, " max_ms=", gc_young_max_ms, &
+            " full ", gc_collections - gc_young_collections, " total_ms=", gc_full_ms, " max_ms=", gc_full_max_ms
+       write(0, '(A,F0.1,A,F0.1,A,F0.1,A,F0.1)') "pause parts: safepoint_ms=", gc_safepoint_ms, &
+            " young mark_ms=", gc_ymark_ms, " young sweep_ms=", gc_ysweep_ms, " pending finish_ms=", gc_finish_ms
+    end if
+  end subroutine main_body
 
   ! Reads a whole file and evaluates every form in it.
   !
@@ -126,6 +146,8 @@ contains
     ! whole new string -- and on an 8000-line file that is not slow,
     ! it is indistinguishable from a hang. An earlier reader carried the
     ! same warning for the same reason; this repeated the mistake.
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1, dlt_2
     open(newunit=u, file=path, access="stream", form="unformatted", &
          status="old", action="read", iostat=st)
     if (st /= 0) then
@@ -155,9 +177,8 @@ contains
        forms = gcr_read_next(text, pos, [vs_get(lb + 1)], eof, fid)
        if (gcr_has_error()) then
           block
-             character(len=:), allocatable :: dlr_3
-             call gcr_error(s=dlr_3)
-             print '(A,A,A,A)', "load ", path, ": reader error: ", dlr_3
+             call gcr_error(s=dlt_1)
+             print '(A,A,A,A)', "load ", path, ": reader error: ", dlt_1
           end block
           exit
        end if
@@ -166,10 +187,9 @@ contains
        call vs_set(lb + 2, forms)
        if (trace) then
           block
-             character(len=:), allocatable :: dlr_4, dlr_5
-             call gcp_str(vs_get(lb + 2), .true., s=dlr_4)
-             call first_line(dlr_4, out=dlr_5)
-             print '(A,I0,A,A)', "[", i, "] ", dlr_5
+             call gcp_str(vs_get(lb + 2), .true., s=dlt_1)
+             call first_line(dlt_1, out=dlt_2)
+             print '(A,I0,A,A)', "[", i, "] ", dlt_2
           end block
           flush(6)
        end if
@@ -179,23 +199,20 @@ contains
        call vs_set(lb + 3, r)
        if (gce_has_error()) then
           block
-             character(len=:), allocatable :: dlr_6
-             call gce_error(s=dlr_6)
-             print '(A,A)', "  ", dlr_6
+             call gce_error(s=dlt_1)
+             print '(A,A)', "  ", dlt_1
           end block
           block
-             character(len=:), allocatable :: dlr_7, dlr_8
-             call gce_trace(s=dlr_7)
-             if (len(dlr_7) > 0) then
-                call gce_trace(s=dlr_8)
-                write(*, '(A)', advance='no') dlr_8
+             call gce_trace(s=dlt_1)
+             if (len(dlt_1) > 0) then
+                call gce_trace(s=dlt_2)
+                write(*, '(A)', advance='no') dlt_2
              end if
           end block
           block
-             character(len=:), allocatable :: dlr_9, dlr_10
-             call gcp_str(vs_get(lb + 2), .true., s=dlr_9)
-             call first_line(dlr_9, out=dlr_10)
-             print '(A,A)', "    in: ", dlr_10
+             call gcp_str(vs_get(lb + 2), .true., s=dlt_1)
+             call first_line(dlt_1, out=dlt_2)
+             print '(A,A)', "    in: ", dlt_2
           end block
           print '(A,A,A,I0)', "load ", path, ": stopped at form ", i
           call vs_leave(lb)
@@ -245,15 +262,30 @@ contains
     character(len=*), intent(in) :: rel
     character(len=:), allocatable, intent(out) :: p
     logical :: there
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     p = rel
     inquire(file=p, exist=there)
     if (.not. there) then
        block
-          character(len=:), allocatable :: dlr_11
-          call gce_home(h=dlr_11)
-          p = dlr_11 // "/" // rel
+          call gce_home(h=dlt_1)
+          p = dlt_1 // "/" // rel
        end block
     end if
   end subroutine under_home
 
+end module clotran_main
+
+program clotran
+  use clotran_main
+  use Threads
+  use iso_c_binding
+  implicit none
+  type(th_thread) :: t
+  logical :: ok
+  if (th_start_sized(t, c_funloc(main_thread), c_null_ptr, MAIN_STACK_BYTES)) then
+     ok = th_join(t)
+  else
+     call main_body()   ! no thread: the main thread's stack, as before
+  end if
 end program clotran

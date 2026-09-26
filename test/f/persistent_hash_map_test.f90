@@ -182,6 +182,8 @@ contains
   subroutine check_torture()
     type(gc_value) :: t, roots(1)
     integer :: i, bad
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
     call gc_init(8)
     gc_torture = .true.
     t = gch_empty(no_roots)
@@ -191,9 +193,8 @@ contains
     end do
     roots(1) = t
     block
-       character(len=:), allocatable :: dlr_1
-       call gc_check_heap(problem=dlr_1)
-       call ok("6a. the heap audits clean under torture: ", dlr_1 == "")
+       call gc_check_heap(problem=dlt_1)
+       call ok("6a. the heap audits clean under torture: ", dlt_1 == "")
     end block
     call ok_int("6b. ...with the count right: ", gch_count(t), 60)
     bad = 0
