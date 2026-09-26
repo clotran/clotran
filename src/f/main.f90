@@ -75,6 +75,9 @@ program clotran
        call gc_arena_stats(cap, used, live)
        write(0, '(A,I0,A,I0,A,I0)') "arena: capacity=", cap, " used=", used, " live=", live
      end block
+     write(0, '(A,I0,A,F0.1,A,F0.2,A,I0,A,F0.1,A,F0.2)') "pauses: young ", gc_young_collections, &
+          " total_ms=", gc_young_ms, " max_ms=", gc_young_max_ms, &
+          " full ", gc_collections - gc_young_collections, " total_ms=", gc_full_ms, " max_ms=", gc_full_max_ms
   end if
 
 contains

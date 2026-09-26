@@ -428,6 +428,8 @@ module GC
   integer :: obj_live = 0, vec_live = 0, str_live = 0, arena_live_now = 0
   integer :: old_at_full = 0, promoted_since_full = 0
   integer, public :: gc_young_collections = 0
+  ! pause times, for CLOTRAN_STATS: total and longest, young and full, ms
+  real(8), public :: gc_young_ms = 0, gc_full_ms = 0, gc_young_max_ms = 0, gc_full_max_ms = 0
 
   ! --- global roots ----------------------------------------------
   ! Process-wide and mutable: the registry handle changes whenever the
@@ -1690,6 +1692,8 @@ contains
   subroutine collect_auto(roots)
     type(gc_value), intent(in) :: roots(:)
     logical :: full
+    integer(8) :: t0, t1, rate
+    real(8) :: dt
     character(len=8) :: e
     if (.not. gen_env_read) then
        call get_environment_variable("CLOTRAN_GC_FULL", e)
@@ -1703,10 +1707,19 @@ contains
     ! torture: every allocation collects; alternate, so both kinds are
     ! exercised at every allocation site
     if (gc_torture) full = .not. gen_mode .or. mod(gc_collections, 2) == 0
+    call system_clock(t0, rate)
     if (full) then
        call collect_full(roots)
+       call system_clock(t1)
+       dt = real(t1 - t0, 8) * 1000d0 / real(rate, 8)
+       gc_full_ms = gc_full_ms + dt
+       gc_full_max_ms = max(gc_full_max_ms, dt)
     else
        call collect_young(roots)
+       call system_clock(t1)
+       dt = real(t1 - t0, 8) * 1000d0 / real(rate, 8)
+       gc_young_ms = gc_young_ms + dt
+       gc_young_max_ms = max(gc_young_max_ms, dt)
        if (gen_verify) then
           block
             character(len=:), allocatable :: p

@@ -65,6 +65,10 @@
  "Eval.f90/tasks_root" {:class :shared, :note "the task table: under the context-table lock"}
  "Eval.f90/trace_macros" {:class :fixed, :note "read once from the environment"}
  "Eval.f90/types_root" {:class :shared, :note "every deftype, one table as the JVM has one class namespace: additions under a lock"}
+ "GC.f90/gc_full_max_ms" {:class :shared, :note "pause statistics for CLOTRAN_STATS: written by the collecting thread with the world stopped"}
+ "GC.f90/gc_full_ms" {:class :shared, :note "pause statistics for CLOTRAN_STATS: written by the collecting thread with the world stopped"}
+ "GC.f90/gc_young_max_ms" {:class :shared, :note "pause statistics for CLOTRAN_STATS: written by the collecting thread with the world stopped"}
+ "GC.f90/gc_young_ms" {:class :shared, :note "pause statistics for CLOTRAN_STATS: written by the collecting thread with the world stopped"}
  "GC.f90/arena_live_now" {:class :shared, :note "the generational collector (sticky marks): written by allocation under heap_lock and by collection with the world stopped; the write barrier (gc_set_slot, gc_vec_set) writes the remembered set -- under a lock when stores run in parallel (14e/f)"}
  "GC.f90/gc_young_collections" {:class :shared, :note "the generational collector (sticky marks): written by allocation under heap_lock and by collection with the world stopped; the write barrier (gc_set_slot, gc_vec_set) writes the remembered set -- under a lock when stores run in parallel (14e/f)"}
  "GC.f90/gen_env_read" {:class :fixed, :note "read once from the environment, at the first collection"}
