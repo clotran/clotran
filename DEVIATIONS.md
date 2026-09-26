@@ -1095,7 +1095,14 @@ What still differs from a `java.lang.Class`:
   `clojure.lang.AFunction`. An array is `array`.
 - `supers` answers the short chain `host_super` lists -- the
   interfaces `core_print` and `core_deftype` dispatch on -- not the
-  two dozen a JVM class implements.
+  two dozen a JVM class implements. It must include every interface a
+  protocol in the loaded code is extended to, or `find-protocol-impl`
+  picks a different implementation: until 2026-09-25 the chunked seqs
+  lacked `IChunkedSeq`, so InternalReduce fell to Object and a reduce
+  over `(map f (range n))` walked element by element (the oracle now
+  checks the pick). With no superclass chain (below), CollReduce picks
+  Object where Clojure picks ASeq for a ChunkedCons -- the same body,
+  `(seq-reduce coll f val)`, so the same answer.
 - there is no `Class` object graph: no `getSuperclass`, no
   `getDeclaredMethods`, nothing reflective. A class here is a NAME
   with the runtime's own answers behind it.

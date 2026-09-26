@@ -2465,3 +2465,17 @@
 ;;; Runtime.availableProcessors is the machine's, as the JVM's is
 ;;; (sysconf through Threads.f90); pmap's look-ahead is sized by it.
 [(.availableProcessors (Runtime/getRuntime))]
+
+;; protocol dispatch picks the implementation Clojure picks: a chunked
+;; seq reduces through InternalReduce's IChunkedSeq implementation
+(let [p clojure.core.protocols/InternalReduce, ic (get (:impls p) clojure.lang.IChunkedSeq)]
+  [(= ic (find-protocol-impl p (seq (map inc (range 3)))))
+   (= ic (find-protocol-impl p (seq (range 3))))
+   (= ic (find-protocol-impl p (cons 1 nil)))])
+(reduce + (map inc (range 1000)))
+;; a seq that is NOT chunked reduces too (it once looped forever)
+[(reduce conj [:init] (seq {1 1 2 2})) (reduce conj [:init] (seq "ab")) (reduce conj [:init] (seq (sorted-map 1 1)))]
+(reduce (fn [a x] (if (> x 5) (reduced a) (+ a x))) 0 (map inc (range 100)))
+;; a chunk's .reduce hands back a Reduced as it is, as ArrayChunk.reduce does
+(let [c (chunk-first (seq [1 2 3]))] [(reduced? (.reduce c (fn [a x] (reduced a)) 0)) (.reduce c + 0)])
+(transduce (take 5) + (cycle [1]))

@@ -5438,6 +5438,7 @@ contains
   end subroutine fold_seq
 
   recursive function reduce_native(coll, f, has_init, init) result(out)
+    logical :: keep_reduced
     type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: coll, f, init
@@ -5455,6 +5456,9 @@ contains
     have = has_init
     if (has_init) call vs_set(vst, base + 3, init)
     done = .false.
+    ! ArrayChunk.reduce hands a Reduced back AS IT IS -- internal-reduce
+    ! checks it and stops -- where LongRange's and a vector's unwrap it
+    keep_reduced = (gc_kind(coll) == OBJ_CHUNK)
     select case (gc_kind(coll))
     case (OBJ_VECTOR)
        do i = 0, gcv_count(vs_get(vst, base + 1)) - 1
@@ -5549,7 +5553,7 @@ contains
       end if
       call vs_set(vst, base + 3, r)
       if (is_reduced(r)) then
-         call vs_set(vst, base + 3, gca_get(strip_meta(vs_get(vst, base + 3)), gc_key("clotran/reduced", [vs_get(vst, base + 3)])))
+         if (.not. keep_reduced) call vs_set(vst, base + 3, gca_get(strip_meta(vs_get(vst, base + 3)), gc_key("clotran/reduced", [vs_get(vst, base + 3)])))
          done = .true.
       end if
     end subroutine step
@@ -13590,10 +13594,22 @@ contains
          chain(1:3) = [character(len=36) :: "clojure.lang.IPersistentList", "clojure.lang.ISeq", &
               "clojure.lang.IPersistentCollection"]
          cnt = 3
-      case ("clojure.lang.LazySeq", "clojure.lang.PersistentVector$ChunkedSeq", "clojure.lang.Cons", &
-            "clojure.lang.LongRange", "clojure.lang.Range", "clojure.lang.ChunkedCons")
+      ! PersistentVector$ChunkedSeq is the class EVERY seq view answers
+      ! here (DEVIATIONS 34) -- a map's and a string's too, which are not
+      ! chunked -- so it may not claim IChunkedSeq: InternalReduce's
+      ! IChunkedSeq body recurs on a seq that is not chunked, and the
+      ! dispatch sent it straight back, forever
+      case ("clojure.lang.LazySeq", "clojure.lang.Cons", "clojure.lang.PersistentVector$ChunkedSeq")
          chain(1:2) = [character(len=36) :: "clojure.lang.ISeq", "clojure.lang.IPersistentCollection"]
          cnt = 2
+      ! THE CHUNKED ONES say so, as the JVM's do: InternalReduce is
+      ! extended to IChunkedSeq, and without it a reduce over (map f
+      ! (range n)) dispatched to Object and walked element by element --
+      ! 40 interpreted steps an element where the chunk's own .reduce
+      ! does the work
+      case ("clojure.lang.LongRange", "clojure.lang.Range", "clojure.lang.ChunkedCons")
+         chain(1:3) = [character(len=36) :: "clojure.lang.IChunkedSeq", "clojure.lang.ISeq", "clojure.lang.IPersistentCollection"]
+         cnt = 3
       case ("clojure.lang.Var", "clojure.lang.Atom", "clojure.lang.Delay")
          chain(1) = "clojure.lang.IDeref"
          cnt = 1
