@@ -1338,6 +1338,29 @@ barrier. `scripts/bench`: reduce 114 -> 96 ms, loop 319 -> 286,
 into/map 1884 -> 1658, sort 2182 -> 1746, assoc 138 -> 96, str 301 ->
 ~272; fib unchanged; a compiled loop calling a small fn 30.7 -> 20.1.
 
+### 15. Binary data (noted 2026-09-26, James: "binary analysis is key to scientific software")
+
+Binary manipulation works as it does in Clojure, each item checked against
+clj in `test/clj/oracle.clj`:
+
+**Arrays and types.**
+- `byte-array`, `short-array` and `char-array` with their own classes
+  `[B`, `[S` and `[C` -- closing what is left of DEVIATIONS 45, whose
+  visible symptom is `(bytes? (byte-array [1 0]))`: `true` in clj,
+  `false` here.
+- `bytes?`, `aget`/`aset`, `alength` and `aclone` on them.
+- Clojure's signed semantics: a byte is -128..127 and `(byte 200)`
+  throws; `unchecked-byte`, `unchecked-short` and `unchecked-char` wrap.
+
+**Bit operations on longs (64-bit).**
+- `bit-and`, `bit-or`, `bit-xor`, `bit-not`, `bit-and-not`;
+- `bit-shift-left`, `bit-shift-right`, `unsigned-bit-shift-right`;
+- (the rest of the list as James extends it: bit-set, bit-clear,
+  bit-flip, bit-test, and reading/writing raw bytes from files belong
+  here too, each against clj).
+
+Order: after threads (14e/f) and parallel marking, unless moved up.
+
 ## Decisions that still hold
 
 **The value type has no `FINAL`.** Copying a `cons_value` (nine

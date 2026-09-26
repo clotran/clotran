@@ -1394,6 +1394,14 @@ so it is FALSE for a byte array here -- a wrong no, never a wrong yes.
 `bytes?` is not in the clojure.core/cljs.core intersection --
 ClojureScript has no byte array -- so this is Java showing through.
 
+**To be removed -- PLAN.md step 15, binary data** (James, 2026-09-26:
+"binary analysis is key to scientific software"). Checked with clj:
+`(bytes? (byte-array [1 0]))` is `true` there, `false` here, and the
+three classes are `[B`, `[S`, `[C` there, `[I`, `[I`,
+`[Ljava.lang.Object;` here. "Narrow integer kinds buy nothing" above
+was wrong for binary data: a byte array read from a file should be one
+byte an element and wrap as a byte does.
+
 **Removal**: give OBJ_ARRAY an element type distinct from its storage
 width, name the class by it, and give classes a component type. `aset`'s
 range checks already know the type; nothing else does.
