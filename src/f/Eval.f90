@@ -9196,8 +9196,10 @@ contains
             call vs_leave(vst, base)
             return
          end if
+         call gc_state_lock()
          prev = gc_slot(a, 1)
          call gc_set_slot(a, 1, out)
+         call gc_state_unlock()
          call notify_watches(a, prev, out, [vs_get(vst, base + 1)])
          if (id == B_RESETVALS) out = value_pair(prev, out, [a, args])
        end block
@@ -9209,50 +9211,58 @@ contains
        ! (swap! a conj 1) called (conj @a) with no 1 at all, and
        ! answered the unchanged value instead of erroring. Every
        ! (swap! acc conj x) in the tree silently did nothing.
+       ! ATOM.SWAP'S LOOP (PLAN.md step 14e): read, call f OUTSIDE the state
+       ! lock, and store only if the atom still holds what f was given --
+       ! another thread's swap! in between means going round again with
+       ! its value, so no update is lost.
        block
-         type(gc_value) :: fargs
+         type(gc_value) :: fargs, pair
          integer :: lb, j
-         lb = vs_enter(vst, 3)
+         lb = vs_enter(vst, 4)
          call vs_set(vst, lb + 1, strip_meta(gcv_nth(args, 0)))
-         fargs = gcv_empty([vs_get(vst, lb + 1)])
-         fargs = gcv_conj(fargs, gc_slot(vs_get(vst, lb + 1), 1), [vs_get(vst, lb + 1)])
-         call vs_set(vst, lb + 2, fargs)
-         ! indices 2 and 3 are values
-         do j = 2, min(n, 4) - 1
-            fargs = gcv_conj(vs_get(vst, lb + 2), gcv_nth(args, j), &
-                 [vs_get(vst, lb + 1), vs_get(vst, lb + 2)])
+         do
+            call vs_set(vst, lb + 4, gc_cell_get(vs_get(vst, lb + 1), 1))
+            fargs = gcv_empty([vs_get(vst, lb + 1), vs_get(vst, lb + 4)])
+            fargs = gcv_conj(fargs, vs_get(vst, lb + 4), [vs_get(vst, lb + 1), vs_get(vst, lb + 4)])
             call vs_set(vst, lb + 2, fargs)
-         end do
-         ! index 4, when present, is a seq to splice
-         if (n >= 5) then
-            call vs_set(vst, lb + 3, coll_to_vector(gcv_nth(args, 4), &
-                 [vs_get(vst, lb + 1), vs_get(vst, lb + 2)]))
-            do j = 0, gcv_count(vs_get(vst, lb + 3)) - 1
-               fargs = gcv_conj(vs_get(vst, lb + 2), gcv_nth(vs_get(vst, lb + 3), j), &
-                    [vs_get(vst, lb + 1), vs_get(vst, lb + 2), vs_get(vst, lb + 3)])
+            ! indices 2 and 3 are values
+            do j = 2, min(n, 4) - 1
+               fargs = gcv_conj(vs_get(vst, lb + 2), gcv_nth(args, j), &
+                    [vs_get(vst, lb + 1), vs_get(vst, lb + 2), vs_get(vst, lb + 4)])
                call vs_set(vst, lb + 2, fargs)
             end do
-         end if
-         out = apply(gcv_nth(args, 1), vs_get(vst, lb + 2))
-         if (.not. tctx%has_error) then
+            ! index 4, when present, is a seq to splice
+            if (n >= 5) then
+               call vs_set(vst, lb + 3, coll_to_vector(gcv_nth(args, 4), &
+                    [vs_get(vst, lb + 1), vs_get(vst, lb + 2), vs_get(vst, lb + 4)]))
+               do j = 0, gcv_count(vs_get(vst, lb + 3)) - 1
+                  fargs = gcv_conj(vs_get(vst, lb + 2), gcv_nth(vs_get(vst, lb + 3), j), &
+                       [vs_get(vst, lb + 1), vs_get(vst, lb + 2), vs_get(vst, lb + 3), vs_get(vst, lb + 4)])
+                  call vs_set(vst, lb + 2, fargs)
+               end do
+            end if
+            out = apply(gcv_nth(args, 1), vs_get(vst, lb + 2))
+            if (tctx%has_error) exit
             if (.not. validate_ref(vs_get(vst, lb + 1), &
                  ref_fn_get(vs_get(vst, lb + 1), "validator", [vs_get(vst, lb + 1)]), &
-                 out, [vs_get(vst, lb + 1)])) then
+                 out, [vs_get(vst, lb + 1), vs_get(vst, lb + 4)])) then
                call vs_leave(vst, lb)
                call vs_leave(vst, base)
                return
             end if
-            if (id == B_SWAPVALS) then
-               out = value_pair(gc_slot(vs_get(vst, lb + 1), 1), out, &
-                    [vs_get(vst, lb + 1), vs_get(vst, lb + 2)])
-               call gc_set_slot(vs_get(vst, lb + 1), 1, gcv_nth(out, 1))
-               call notify_watches(vs_get(vst, lb + 1), gcv_nth(out, 0), gcv_nth(out, 1), [vs_get(vst, lb + 2)])
-            else
-               call vs_set(vst, lb + 3, gc_slot(vs_get(vst, lb + 1), 1))
-               call gc_set_slot(vs_get(vst, lb + 1), 1, out)
-               call notify_watches(vs_get(vst, lb + 1), vs_get(vst, lb + 3), out, [vs_get(vst, lb + 2)])
+            if (gc_cell_cas(vs_get(vst, lb + 1), 1, vs_get(vst, lb + 4), out)) then
+               call vs_set(vst, lb + 3, out)
+               call notify_watches(vs_get(vst, lb + 1), vs_get(vst, lb + 4), vs_get(vst, lb + 3), &
+                    [vs_get(vst, lb + 2), vs_get(vst, lb + 3)])
+               out = vs_get(vst, lb + 3)
+               if (id == B_SWAPVALS) then
+                  pair = value_pair(vs_get(vst, lb + 4), vs_get(vst, lb + 3), &
+                       [vs_get(vst, lb + 1), vs_get(vst, lb + 3), vs_get(vst, lb + 4)])
+                  out = pair
+               end if
+               exit
             end if
-         end if
+         end do
          call vs_leave(vst, lb)
        end block
     case (B_ALTERVAL)
@@ -9688,7 +9698,7 @@ contains
           end if
           out = gc_slot(a, 2)
        else if (gcn_is_var(a) .or. gc_kind(a) == OBJ_ATOM .or. gc_kind(a) == OBJ_VOLATILE) then
-          out = gc_slot(a, 1)
+          out = gc_cell_get(a, 1)   ! never half of a concurrent write
        else if (is_reduced(a)) then
           ! Unwrapping a (reduced x) is a deref in Clojure too.
           out = gca_get(a, gc_key("clotran/reduced", [vs_get(vst, base + 1)]))
@@ -9775,11 +9785,13 @@ contains
           if (id == B_LATCHDOWN) then
              block
                type(gc_value) :: cur
+               call gc_state_lock()
                cur = gc_slot(a, 1)
                if (cur%tag == GCT_INT) call gc_set_slot(a, 1, gc_int(max(0_gc_ip, cur%ival - 1)))
+               call gc_state_unlock()
              end block
           else
-             out = gc_slot(a, 1)
+             out = gc_cell_get(a, 1)
           end if
        end if
     case (B_CAS)
@@ -9789,10 +9801,8 @@ contains
        a = strip_meta(gcv_nth(args, 0))
        out = gc_bool(.false.)
        if (gc_kind(a) == OBJ_ATOM .and. n >= 3) then
-          b = gc_slot(a, 1)
-          if (same_object(b, gcv_nth(args, 1))) then
-             call gc_set_slot(a, 1, gcv_nth(args, 2))
-             call notify_watches(a, b, gcv_nth(args, 2), [vs_get(vst, base + 1)])
+          if (gc_cell_cas(a, 1, gcv_nth(args, 1), gcv_nth(args, 2))) then
+             call notify_watches(a, gcv_nth(args, 1), gcv_nth(args, 2), [vs_get(vst, base + 1)])
              out = gc_bool(.true.)
           end if
        end if

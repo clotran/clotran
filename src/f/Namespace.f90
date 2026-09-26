@@ -221,18 +221,19 @@ contains
     type(gc_value), intent(in) :: v
     type(gc_value) :: out
     out = gc_nil()
-    if (gcn_is_var(v)) out = gc_slot(v, 1)
+    ! the state lock (GC.f90): a root being redefined is never half-read
+    if (gcn_is_var(v)) out = gc_cell_get(v, 1)
   end function gcn_var_value
 
   subroutine gcn_set_var(v, val)
     type(gc_value), intent(in) :: v, val
-    if (gcn_is_var(v)) call gc_set_slot(v, 1, val)
+    if (gcn_is_var(v)) call gc_cell_set(v, 1, val)
   end subroutine gcn_set_var
 
   ! Interns `sym` in `ns`. An existing Var is MUTATED rather than
   ! replaced -- that is the whole reason Vars exist, and it is what
   ! lets a closure built before a redefinition see the new value.
-  function gcn_intern(ns, sym, val, roots) result(var)
+  recursive function gcn_intern(ns, sym, val, roots) result(var)
     type(gc_value), intent(in) :: ns, sym, val
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: var, binds
@@ -240,12 +241,14 @@ contains
 
     var = gc_nil()
     if (gc_kind(ns) /= OBJ_NS) return
-    base = vs_enter(4)
+    base = vs_enter(5)
     call vs_set(base + 1, ns)
     call vs_set(base + 2, sym)
     call vs_set(base + 3, val)
 
-    binds = gc_slot(vs_get(base + 1), 2)
+    ! a snapshot: the new mapping goes in only if nothing changed since
+    binds = gc_cell_get(vs_get(base + 1), 2)
+    call vs_set(base + 5, binds)
     var = gca_get(binds, sym)
     if (gcn_is_var(var)) then
        ! Mutate it only if THIS namespace owns it. Redefining a Var in
@@ -276,9 +279,9 @@ contains
             ! the ROOT: slot 5 while a binding of it stands (Eval's
             ! push-thread-bindings), else the value itself
             if (gc_i2(var) > 0) then
-               call gc_set_slot(var, 5, vs_get(base + 3))
+               call gc_cell_set(var, 5, vs_get(base + 3))
             else
-               call gc_set_slot(var, 1, vs_get(base + 3))
+               call gc_cell_set(var, 1, vs_get(base + 3))
             end if
             call vs_leave(base)
             return
@@ -302,10 +305,15 @@ contains
          vs_get(base + 2)], &
          [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
     call vs_set(base + 4, var)
-    binds = gca_assoc(gc_slot(vs_get(base + 1), 2), vs_get(base + 2), &
-         vs_get(base + 4), [vs_get(base + 1), vs_get(base + 2), vs_get(base + 4)])
-    call gc_set_slot(vs_get(base + 1), 2, binds)
-    var = vs_get(base + 4)
+    binds = gca_assoc(vs_get(base + 5), vs_get(base + 2), &
+         vs_get(base + 4), [vs_get(base + 1), vs_get(base + 2), vs_get(base + 4), vs_get(base + 5)])
+    if (gc_cell_cas(vs_get(base + 1), 2, vs_get(base + 5), binds)) then
+       var = vs_get(base + 4)
+    else
+       ! another thread changed the mappings meanwhile -- perhaps
+       ! interning this very name: start again from what is there now
+       var = gcn_intern(vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), roots)
+    end if
     call vs_leave(base)
   end function gcn_intern
 
@@ -342,7 +350,7 @@ contains
     type(gc_value) :: var
     var = gc_nil()
     if (gc_kind(ns) /= OBJ_NS) return
-    var = gca_get(gc_slot(ns, 2), sym)
+    var = gca_get(gc_cell_get(ns, 2), sym)
   end function gcn_lookup
 
 end module Namespace

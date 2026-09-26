@@ -65,6 +65,8 @@
  "Eval.f90/tasks_root" {:class :shared, :note "the task table: under the context-table lock"}
  "Eval.f90/trace_macros" {:class :fixed, :note "read once from the environment"}
  "Eval.f90/types_root" {:class :shared, :note "every deftype, one table as the JVM has one class namespace: additions under a lock"}
+ "GC.f90/state_cv" {:class :fixed, :note "the state lock's condition, made at the first gc_init"}
+ "GC.f90/state_lk" {:class :fixed, :note "the state lock (step 14e), made at the first gc_init"}
  "GC.f90/gc_full_max_ms" {:class :shared, :note "pause statistics for CLOTRAN_STATS: written by the collecting thread with the world stopped"}
  "GC.f90/gc_full_ms" {:class :shared, :note "pause statistics for CLOTRAN_STATS: written by the collecting thread with the world stopped"}
  "GC.f90/gc_young_max_ms" {:class :shared, :note "pause statistics for CLOTRAN_STATS: written by the collecting thread with the world stopped"}

@@ -539,6 +539,7 @@ module GC
      type(gc_value), allocatable :: vstack(:)
      integer :: vs_top = 0
      logical :: holds_heap = .false.   ! this thread is inside heap_enter/heap_leave
+     integer :: state_depth = 0        ! how deep this thread holds the state lock
      ! SPARE FRAMES: a compiled procedure's frame, cleared, once its call
      ! has returned (gc_frame_give) -- nothing keeps a frame after its
      ! call -- by size, a few of each. Not roots: every collection empties
@@ -566,6 +567,15 @@ module GC
   ! counts as running between gc_mutator_enter and gc_mutator_leave;
   ! the main thread is one from gc_init, and while clotran's baton is on
   ! nothing else registers, so a stop never waits (step 14f changes that).
+  ! THE STATE LOCK (PLAN.md step 14e): every read and write of a cell
+  ! Clojure code mutates after other threads can see it -- a Var's root,
+  ! an atom's value, a registry -- goes through it, because a gc_value is
+  ! four words and a reader racing a writer would see half of each.
+  ! Re-entrant per thread. NEVER held across an allocation (a thread
+  ! parked at a safepoint holding it could deadlock the collector's
+  ! finalizers) nor across Clojure code (swap! calls f outside it).
+  type(th_lock) :: state_lk
+  type(th_cond) :: state_cv
   type(th_lock) :: heap_lock
   type(th_cond) :: heap_cond
   logical :: heap_sync_up = .false.
@@ -665,6 +675,7 @@ module GC
   end interface vs_depth
   public :: gc_stack_new, gc_stack_bind, gc_stacks_reset, gc_stack_of, gc_generation
   public :: gc_frame_take, gc_frame_give
+  public :: gc_state_lock, gc_state_unlock, gc_cell_get, gc_cell_set, gc_cell_cas, gc_identical
   public :: gc_mutator_enter, gc_mutator_leave
   public :: gc_arena_stats
   public :: gc_equal, gc_hash
@@ -842,6 +853,8 @@ contains
     if (heap_sync_up) return
     if (.not. (th_lock_init(heap_lock) .and. th_cond_init(heap_cond))) &
          error stop "clotran: no lock for the heap"
+    if (.not. (th_lock_init(state_lk) .and. th_cond_init(state_cv))) &
+         error stop "clotran: no lock for shared state"
     heap_sync_up = .true.
   end subroutine heap_sync_init
 
@@ -2125,6 +2138,58 @@ contains
     integer :: n
     n = s%vs_top
   end function vs_depth_on
+
+  subroutine gc_state_lock()
+    type(gc_stack), pointer :: s
+    logical :: ok
+    s => my_stack()
+    if (s%state_depth == 0) ok = th_lock_acquire(state_lk)
+    s%state_depth = s%state_depth + 1
+  end subroutine gc_state_lock
+
+  subroutine gc_state_unlock()
+    type(gc_stack), pointer :: s
+    logical :: ok
+    s => my_stack()
+    s%state_depth = s%state_depth - 1
+    if (s%state_depth == 0) ok = th_lock_release(state_lk)
+  end subroutine gc_state_unlock
+
+  ! Identity, as Eval's same_object: the same object, or the same
+  ! immediate (a NaN is itself).
+  logical function gc_identical(a, b)
+    type(gc_value), intent(in) :: a, b
+    gc_identical = a%tag == b%tag .and. a%ref == b%ref .and. a%ival == b%ival
+    if (gc_identical .and. a%rval /= b%rval) gc_identical = (a%rval /= a%rval .and. b%rval /= b%rval)
+  end function gc_identical
+
+  ! Slot i of a shared mutable object, read whole.
+  function gc_cell_get(v, i) result(x)
+    type(gc_value), intent(in) :: v
+    integer, intent(in) :: i
+    type(gc_value) :: x
+    call gc_state_lock()
+    x = gc_slot(v, i)
+    call gc_state_unlock()
+  end function gc_cell_get
+
+  subroutine gc_cell_set(v, i, x)
+    type(gc_value), intent(in) :: v, x
+    integer, intent(in) :: i
+    call gc_state_lock()
+    call gc_set_slot(v, i, x)
+    call gc_state_unlock()
+  end subroutine gc_cell_set
+
+  ! Compare-and-set: x goes in only if slot i still holds `old`.
+  logical function gc_cell_cas(v, i, old, x)
+    type(gc_value), intent(in) :: v, old, x
+    integer, intent(in) :: i
+    call gc_state_lock()
+    gc_cell_cas = gc_identical(gc_slot(v, i), old)
+    if (gc_cell_cas) call gc_set_slot(v, i, x)
+    call gc_state_unlock()
+  end function gc_cell_cas
 
   ! A spare frame of n slots, all nil, or nil if there is none.
   function gc_frame_take(s, n) result(v)
