@@ -1019,6 +1019,14 @@ only `defn` forms compile. In order:
    b. `(new clojure.lang.LazySeq closure)` -- `clotran_make_lazy`, the
       OBJ_LAZY the interpreter builds; the forcer calls its thunk
       through `apply`, which already runs compiled fns.
+      BUILT 2026-09-25, and for every class, not LazySeq alone: a
+      compiled `new` puts its arguments in slots and calls
+      `clotran_new`, the interpreter's own constructor path, so it makes
+      what an interpreted one makes. compiler-check 183 of 183; with
+      compiled core language_test passes and derived is 2880 of 2880.
+      into/map 1679 -> 1493 ms, sort 1383 -> 1304. Interpreted steps per
+      element of into/map 90 -> 61, allocations still 51: what is left
+      is c -- the chunk loop's `.nth` and `.add`, `conj!`'s `.conj`.
    c. `:dot` -- interop calls from compiled code, through the host's
       own dispatch.
    And fetching the stack once per generated procedure, passed to every

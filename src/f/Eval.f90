@@ -380,7 +380,7 @@ module Eval
   public :: gce_main_bindings, gce_install_compiled, gce_raise_arity_named
   public :: gce_native_begin, gce_native_end
   public :: gce_analyze, gce_trace
-  public :: gce_ctx_new, gce_ctx_switch, gce_ctx_current, gce_current_fn
+  public :: gce_ctx_new, gce_ctx_switch, gce_ctx_current, gce_current_fn, gce_new_slots
   public :: gce_repl
   public :: gce_set_home, gce_home
   public :: gce_apply, gce_env, gce_exec_node, gce_apply_slots
@@ -14069,7 +14069,7 @@ contains
     integer, intent(in) :: k
     ! N_FN since compiled closures (PLAN.md step 10, a): its bodies are
     ! walked, and its constants are the enclosing fn's
-    pool_compiled_kind = any(k == [N_CONST, N_LOCAL, N_IF, N_DO, N_CALL, N_VAR, N_LET, N_LOOP, N_RECUR, N_FN])
+    pool_compiled_kind = any(k == [N_CONST, N_LOCAL, N_IF, N_DO, N_CALL, N_VAR, N_LET, N_LOOP, N_RECUR, N_FN, N_NEW])
   end function pool_compiled_kind
 
   ! A constant the generated code writes into its own source (the
@@ -14834,6 +14834,27 @@ contains
     call gc_stack_new(id)
     ctxs(id)%c%stk => gc_stack_of(id)
   end function gce_ctx_new
+
+  ! (new Class args...) for compiled code: the arguments in consecutive
+  ! value-stack slots argbase+1.., and the interpreter's own constructor
+  ! path, so a compiled `new` makes exactly what an interpreted one does.
+  recursive function gce_new_slots(cname, argbase, nargs) result(out)
+    type(gc_stack), pointer :: vst
+    character(len=*), intent(in) :: cname
+    integer, intent(in) :: argbase, nargs
+    type(gc_value) :: out, av, none(0)
+    integer :: b, j
+    vst => gc_my_stack()
+    b = vs_enter(vst, 1)
+    av = gcv_empty(none)
+    call vs_set(vst, b + 1, av)
+    do j = 1, nargs
+       av = gcv_conj(vs_get(vst, b + 1), vs_get(vst, argbase + j), [vs_get(vst, b + 1)])
+       call vs_set(vst, b + 1, av)
+    end do
+    out = eval_new(cname, vs_get(vst, b + 1))
+    call vs_leave(vst, b)
+  end function gce_new_slots
 
   ! The compiled fn being entered on this thread (see eval_ctx%cur_fn).
   function gce_current_fn() result(fn)

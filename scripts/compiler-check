@@ -32,6 +32,16 @@
 (def cases
   '[["a constant" (fn [] 42) [[]]]
     ["the argument back" (fn [x] x) [[1] ["a"] [nil]]]
+    ;; `new`, and so lazy-seq (PLAN.md step 10, b)
+    ["a lazy seq made and realised" (fn [n] (vec (take n (lazy-seq (cons 1 (lazy-seq (list 2 3))))))) [[0] [2] [5]]]
+    ["a lazy seq over an argument" (fn [xs] (doall (lazy-seq (map inc xs)))) [[[1 2 3]] [[]]]]
+    ["a recursive lazy seq" (fn [n] (letfn [] (take n ((fn step [i] (lazy-seq (cons i (step (inc i))))) 0)))) [[5] [0]]]
+    ["new of a host class" (fn [s] (str (new StringBuilder s))) [["abc"] [""]]]
+    ;; `new`, and so lazy-seq (PLAN.md step 10, b)
+    ["a lazy seq made and realised" (fn [n] (vec (take n (lazy-seq (cons 1 (lazy-seq (list 2 3))))))) [[0] [2] [5]]]
+    ["a lazy seq over an argument" (fn [xs] (doall (lazy-seq (map inc xs)))) [[[1 2 3]] [[]]]]
+    ["a recursive lazy seq" (fn [n] (take n ((fn step [i] (lazy-seq (cons i (step (inc i))))) 0))) [[5] [0]]]
+    ["new of a host class" (fn [s] (str (new StringBuilder s))) [["abc"] [""]]]
     ;; compiled closures (PLAN.md step 10, a)
     ["a closure over an argument" (fn [x] (let [f (fn [y] (+ x y))] (f 10))) [[1] [5]]]
     ["a closure called at once" (fn [x] ((fn [y] (* x y)) 3)) [[2] [-4]]]

@@ -70,7 +70,7 @@ module ClotranABI
   public :: clotran_load_compiled, clotran_array_view
   public :: clotran_rest_args, clotran_arity_error
   public :: clotran_native_begin, clotran_reacquire
-  public :: clotran_register_proc, clotran_make_closure, clotran_captures
+  public :: clotran_register_proc, clotran_make_closure, clotran_captures, clotran_new
 
 contains
 
@@ -569,6 +569,25 @@ contains
        if (self%ival >= 0) call gc_vec_set(vs_get(vst, int(fr)), int(self%ival) + 1, fn)
     end if
   end subroutine clotran_captures
+
+  ! (new Class args...): the arguments in slots argbase+1.., the answer
+  ! in dst; 1 if it raised, as clotran_call_slots answers.
+  function clotran_new(dst, name, namen, argbase, nargs) bind(C, name="clotran_new") result(st)
+    type(gc_stack), pointer :: vst
+    integer(c_int), value :: dst, namen, argbase, nargs
+    character(kind=c_char), intent(in) :: name(*)
+    integer(c_int) :: st
+    type(gc_value) :: out
+    vst => gc_my_stack()
+    out = gce_new_slots(c_text(name, namen), int(argbase), int(nargs))
+    if (gce_has_error()) then
+       call vs_set(vst, int(dst), gc_nil())
+       st = 1
+    else
+       call vs_set(vst, int(dst), out)
+       st = 0
+    end if
+  end function clotran_new
 
   subroutine clotran_frame_new(dst, n) bind(C, name="clotran_frame_new")
     type(gc_stack), pointer :: vst
