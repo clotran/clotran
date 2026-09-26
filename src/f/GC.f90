@@ -654,7 +654,7 @@ module GC
   interface vs_depth
      module procedure vs_depth_self, vs_depth_on
   end interface vs_depth
-  public :: gc_stack_new, gc_stack_bind, gc_stacks_reset, gc_stack_of
+  public :: gc_stack_new, gc_stack_bind, gc_stacks_reset, gc_stack_of, gc_generation
   public :: gc_mutator_enter, gc_mutator_leave
   public :: gc_arena_stats
   public :: gc_equal, gc_hash
@@ -802,6 +802,12 @@ contains
     if (.not. associated(stacks(id)%s)) call gc_stack_new(id)
     ok = th_key_set(stack_key, c_loc(stacks(id)%s))
   end subroutine gc_stack_bind
+
+  ! Which heap this is: gc_init starts a new one. A cache of heap values
+  ! outside the heap (CompiledFn's flat pools) is good for one generation.
+  integer function gc_generation()
+    gc_generation = global_gen
+  end function gc_generation
 
   ! Context `id`'s stack, made if need be. Stacks never move, so a
   ! context may keep this pointer and skip the key (Eval's eval_ctx%stk).

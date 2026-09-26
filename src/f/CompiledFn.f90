@@ -65,6 +65,17 @@ module CompiledFn
   ! by a handle it is told at install time.
   type(gc_root), save :: pool_root
 
+  ! Each pool as a flat array, filled at its first read: a compiled
+  ! procedure reads its constants on every call, and two persistent-
+  ! vector walks an entry was half the cost of its prologue. The values
+  ! stay alive through the pool vector (a global root) and never move,
+  ! so a copy stays good -- for this heap: gc_init starts another.
+  type :: flat_pool
+     type(gc_value), allocatable :: e(:)
+     integer :: gen = -1
+  end type flat_pool
+  type(flat_pool), allocatable, save :: flat(:)
+
 contains
 
   ! Adds a procedure and answers its handle, 1-based. The name is for
@@ -126,12 +137,41 @@ contains
   ! the handle from one, the index from zero.
   function cf_pool_get(h, i) result(v)
     integer, intent(in) :: h, i
-    type(gc_value) :: v, pools
+    type(gc_value) :: v, pools, p
+    type(flat_pool), allocatable :: bigger(:)
+    integer :: k, n
     v = gc_nil()
+    if (h < 1) return
+    if (allocated(flat)) then
+       if (h <= size(flat)) then
+          if (flat(h)%gen == gc_generation()) then
+             if (i >= 0 .and. i < size(flat(h)%e)) v = flat(h)%e(i + 1)
+             return
+          end if
+       end if
+    end if
+    ! the first read of pool h in this heap: flatten it
     pools = gc_root_get(pool_root)
     if (.not. gcv_is(pools)) return
-    if (h < 1 .or. h > gcv_count(pools)) return
-    v = gcv_nth(gcv_nth(pools, h - 1), i)
+    if (h > gcv_count(pools)) return
+    if (.not. allocated(flat)) allocate(flat(max(16, h)))
+    if (h > size(flat)) then
+       allocate(bigger(max(2 * size(flat), h)))
+       do k = 1, size(flat)
+          if (allocated(flat(k)%e)) call move_alloc(flat(k)%e, bigger(k)%e)
+          bigger(k)%gen = flat(k)%gen
+       end do
+       call move_alloc(bigger, flat)
+    end if
+    p = gcv_nth(pools, h - 1)
+    n = gcv_count(p)
+    if (allocated(flat(h)%e)) deallocate(flat(h)%e)
+    allocate(flat(h)%e(n))
+    do k = 1, n
+       flat(h)%e(k) = gcv_nth(p, k - 1)
+    end do
+    flat(h)%gen = gc_generation()
+    if (i >= 0 .and. i < n) v = flat(h)%e(i + 1)
   end function cf_pool_get
 
   function cf_name(h) result(s)
