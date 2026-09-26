@@ -15553,9 +15553,7 @@ contains
   subroutine itoa(i, s)
     integer, intent(in) :: i
     character(len=:), allocatable, intent(out) :: s
-    character(len=24) :: buf
-    write(buf, '(I0)') i
-    s = trim(buf)
+    call gc_int_text(int(i, gc_ip), s)
   end subroutine itoa
 
   ! One code point through ICU's simple case map.

@@ -799,9 +799,7 @@
   subroutine int_text(v, s)
     type(gc_value), intent(in) :: v
     character(len=:), allocatable, intent(out) :: s
-    character(len=32) :: buf
-    write(buf, '(I0)') int(v%ival, kind=4)
-    s = trim(buf)
+    call gc_int_text(int(int(v%ival, kind=4), gc_ip), s)
   end subroutine int_text
 
   ! The builtins a call may hand a REUSED argument vector: numeric, and

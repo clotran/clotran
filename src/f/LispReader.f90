@@ -1824,9 +1824,7 @@ contains
   pure subroutine int_text(i, s)
     integer(gc_ip), intent(in) :: i
     character(len=:), allocatable, intent(out) :: s
-    character(len=24) :: buf
-    write(buf, '(I0)') i
-    s = trim(buf)
+    call gc_int_text(i, s)
   end subroutine int_text
 
   ! ratioPat: ([-+]?[0-9]+)/([0-9]+). A denominator of zero is an

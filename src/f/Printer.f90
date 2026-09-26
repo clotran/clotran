@@ -69,15 +69,19 @@ contains
           s = "false"
        end if
     case (GCT_INT)
-       write(buf, '(I0)') v%ival
-       s = trim(buf)
+       call gc_int_text(v%ival, s)
     case (GCT_RATIO)
        ! n/d, the same spelling the reader takes. Always in normal
        ! form, so there is nothing to reduce here.
        block
          character(len=32) :: dbuf
-         write(buf, '(I0)') gc_numerator(v)
-         write(dbuf, '(I0)') gc_denominator(v)
+         block
+           character(len=:), allocatable :: nt, dt
+           call gc_int_text(int(gc_numerator(v), gc_ip), nt)
+           call gc_int_text(int(gc_denominator(v), gc_ip), dt)
+           buf = nt
+           dbuf = dt
+         end block
          s = trim(buf) // "/" // trim(dbuf)
        end block
     case (GCT_REAL)

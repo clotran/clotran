@@ -1300,8 +1300,21 @@ f. *The baton comes off interpreter code.* Tested by running the derived
      test`) keeps it so. flang never had them.
    - **A REPL waiting for a line** counted as a running mutator, so a
      collection another thread needed waited for the keyboard.
-   Still open: d. Eight threads allocating contend on the one heap lock
-   and run slower than one; per-thread batches are next.
+   **d landed 2026-09-26.** With more than one mutator, a thread takes
+   free slots (256 per pool) and small arena runs (64 per size class up
+   to 128 slots) under the heap lock a batch at a time and allocates from
+   them without it; a batched slot stays flagged free, so the sweep skips
+   it. Young lists and live counts are per thread and merged at each
+   collection, the world stopped. One mutator: unchanged. Integers are
+   formatted without Fortran I/O (gc_int_text): an internal write takes
+   libgfortran's unit-table lock, the next wait behind the heap's.
+   Measured, 8 futures of string-building work against the same work
+   serially: 22 s -> 4.1-4.4 s, serially 8.7-9.3 s (about 2.1x). What
+   is left is the stop-the-world collection itself -- about a third of
+   thread time goes to waiting at safepoints and pauses -- which is what
+   parallel marking is for. `test/clj/threads_heap.clj` runs eight
+   allocating futures under CLOTRAN_GC_VERIFY=1 in `make test`; it caught
+   a reused context dropping its young list.
 
 **Not in this step**: a concurrent collector (the world stops for each
 collection), and a compacting one (objects never move, as now).

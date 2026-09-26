@@ -312,6 +312,9 @@ test: $(test-bins) clotran-bin $(B)/libtestpkg.$(SOEXT) $(B)/libsamplelib.$(SOEX
 	@echo "--- language_test (with core.clj) ---"
 	./clotran-bin src/clj/clojure/core.clj test/clj/language_test.clj </dev/null \
 	  | tee /dev/stderr | grep -q "^LANGUAGE TESTS PASSED"
+	@echo "--- eight futures allocating at once, the heap checked at every young collection (step 14d) ---"
+	CLOTRAN_GC_VERIFY=1 ./clotran-bin src/clj/clojure/core.clj test/clj/threads_heap.clj </dev/null \
+	  | grep -q "^THREADS HEAP PASSED"
 	@echo "--- a break pauses into a nested REPL, and clotran-resume answers it ---"
 	printf '((fn [x] (clotran-break)) 1)\n(clotran-resume {:continue (* 42 (get (:env (first (:frames (clotran-last-break)))) (quote x)))})\n' \
 	  | ./clotran-bin src/clj/clojure/core.clj | grep -q '42$$'

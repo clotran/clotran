@@ -539,6 +539,9 @@ module GC
   ! context keeps what it was holding. Stack 1 is the main thread's, made
   ! and bound by gc_init.
   integer, parameter :: SPARE_SIZES = 32, SPARE_DEPTH = 8
+  ! allocation batches (PLAN.md step 14d): slots per pool, and runs per
+  ! size class for the classes up to 2**(RUN_CLASSES-1) slots
+  integer, parameter :: ALLOC_BATCH = 256, RUN_BATCH = 64, RUN_CLASSES = 8
   type :: gc_stack
      type(gc_value), allocatable :: vstack(:)
      integer :: vs_top = 0
@@ -555,6 +558,22 @@ module GC
      ! as a vector [bindings prev] -- bindings a map of Var to box, the
      ! frame below's merged in -- as Var.pushThreadBindings builds it
      type(gc_root) :: bindings
+     ! THIS THREAD'S ALLOCATION BATCHES (PLAN.md step 14d): free slots of
+     ! each pool, and free arena runs of the small size classes, taken
+     ! under the heap lock a batch at a time and handed out here without
+     ! it. A batched slot stays flagged FREE -- the sweep skips it and
+     ! nothing else can hand it out -- until this thread allocates it.
+     ! What this thread allocated since the last collection, and what that
+     ! did to the live counts, is kept here and merged at the collection
+     ! (merge_batches), with the world stopped.
+     integer :: obj_b(ALLOC_BATCH), n_obj_b = 0
+     integer :: vec_b(ALLOC_BATCH), n_vec_b = 0
+     integer :: str_b(ALLOC_BATCH), n_str_b = 0
+     integer :: run_b(RUN_BATCH, RUN_CLASSES), n_run_b(RUN_CLASSES) = 0
+     integer, allocatable :: y_obj(:), y_vec(:), y_str(:)
+     integer :: n_y_obj = 0, n_y_vec = 0, n_y_str = 0
+     integer :: d_obj_live = 0, d_vec_live = 0, d_str_live = 0, d_arena_live = 0
+     integer(8) :: d_allocs = 0
   end type gc_stack
   type :: gc_stack_ref
      type(gc_stack), pointer :: s => null()
@@ -673,7 +692,7 @@ module GC
   public :: gc_set_finalizer
   public :: gc_ensure_init, gc_str_ref, gc_ref_text, gc_ref_is, gc_ref_len
   public :: vs_enter, vs_leave, vs_set, vs_get, vs_depth, gc_stack, gc_my_stack
-  public :: gc_bindings_get, gc_bindings_set
+  public :: gc_bindings_get, gc_bindings_set, gc_int_text
   interface vs_enter
      module procedure vs_enter_self, vs_enter_on
   end interface vs_enter
@@ -815,6 +834,7 @@ contains
     n_parked = 0
     call gc_stacks_reset()
     call gc_stack_new(1)   ! a fresh heap: stack 1 starts empty
+    call clear_batches(stacks(1)%s)   ! and its batches name slots of the old heap
   end subroutine gc_init
 
   ! Context `id`'s stack, empty -- made, or emptied for reuse.
@@ -842,6 +862,9 @@ contains
     allocate(stacks(id)%s%vstack(64))
     stacks(id)%s%vstack = nilv
     stacks(id)%s%vs_top = 0
+    ! NOT the batches: Eval empties a reused context's stack here, and its
+    ! batches and young list must survive -- dropping the young list lost
+    ! live young objects from the next young collection's view
   end subroutine gc_stack_new
 
   ! The calling thread runs on context `id`'s stack from now on: at a
@@ -1232,6 +1255,23 @@ contains
     integer :: idx
     logical :: entered, stopped
     type(gc_value) :: none(0)
+    type(gc_stack), pointer :: s
+    if (batching()) then
+       s => my_stack()
+       if (fast_ok(s) .and. s%n_str_b > 0) then
+          idx = s%str_b(s%n_str_b)
+          s%n_str_b = s%n_str_b - 1
+          str_free(idx) = .false.
+          str_mark(idx) = .false.
+          s%d_str_live = s%d_str_live + 1
+          s%d_allocs = s%d_allocs + 1
+          call y_add(s%y_str, s%n_y_str, idx)
+          str_pool(idx)%text = text
+          v%tag = tag
+          v%ref = idx
+          return
+       end if
+    end if
     call heap_enter(roots, none, entered)
     ! ponytail: the world stops for every allocation that may collect or
     ! grow -- rare outside torture; the fast path below never stops it
@@ -1253,13 +1293,7 @@ contains
        end if
     end if
     call world_start(stopped)
-    if (str_free_head /= 0) then
-       idx = str_free_head
-       str_free_head = str_free_next(idx)
-    else
-       str_used = str_used + 1
-       idx = str_used
-    end if
+    idx = str_take()
     str_free(idx) = .false.
     str_mark(idx) = .false.
     str_live = str_live + 1
@@ -1279,6 +1313,32 @@ contains
     type(gc_value), allocatable :: all_roots(:)
     integer :: idx, i
     logical :: entered, stopped
+    type(gc_stack), pointer :: s
+
+    if (batching()) then
+       s => my_stack()
+       if (fast_ok(s) .and. s%n_obj_b > 0) then
+          idx = s%obj_b(s%n_obj_b)
+          s%n_obj_b = s%n_obj_b - 1
+          obj_free(idx) = .false.
+          obj_mark(idx) = .false.
+          s%d_obj_live = s%d_obj_live + 1
+          s%d_allocs = s%d_allocs + 1
+          call y_add(s%y_obj, s%n_y_obj, idx)
+          obj_pool(idx)%kind = kind
+          obj_pool(idx)%i1 = 0
+          obj_pool(idx)%i2 = 0
+          do i = 1, OBJ_SLOTS
+             obj_pool(idx)%slot(i) = nilv
+          end do
+          do i = 1, min(size(slots), OBJ_SLOTS)
+             obj_pool(idx)%slot(i) = slots(i)
+          end do
+          v%tag = GCT_OBJ
+          v%ref = idx
+          return
+       end if
+    end if
 
     call heap_enter(roots, slots, entered)
     stopped = .false.
@@ -1302,13 +1362,7 @@ contains
        end if
     end if
     call world_start(stopped)
-    if (obj_free_head /= 0) then
-       idx = obj_free_head
-       obj_free_head = obj_free_next(idx)
-    else
-       obj_used = obj_used + 1
-       idx = obj_used
-    end if
+    idx = obj_take()
     obj_free(idx) = .false.
     obj_mark(idx) = .false.
     obj_live = obj_live + 1
@@ -1333,9 +1387,47 @@ contains
     integer, intent(in) :: n
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: v
-    integer :: idx, i
+    integer :: idx, i, c
     logical :: entered, stopped
     type(gc_value) :: none(0)
+    type(gc_stack), pointer :: s
+
+    if (batching()) then
+       s => my_stack()
+       c = 0
+       if (n > 0) c = size_class(n)
+       if (fast_ok(s) .and. s%n_vec_b > 0 .and. c <= RUN_CLASSES) then
+          if (c == 0) then
+             ok_fast: block
+               idx = s%vec_b(s%n_vec_b)
+               s%n_vec_b = s%n_vec_b - 1
+               vec_pool(idx)%off = 0
+             end block ok_fast
+          else if (s%n_run_b(c) > 0) then
+             idx = s%vec_b(s%n_vec_b)
+             s%n_vec_b = s%n_vec_b - 1
+             vec_pool(idx)%off = s%run_b(s%n_run_b(c), c)
+             s%n_run_b(c) = s%n_run_b(c) - 1
+          else
+             idx = 0
+          end if
+          if (idx /= 0) then
+             vec_free(idx) = .false.
+             vec_mark(idx) = .false.
+             s%d_vec_live = s%d_vec_live + 1
+             s%d_arena_live = s%d_arena_live + max(n, 0)
+             s%d_allocs = s%d_allocs + 1
+             call y_add(s%y_vec, s%n_y_vec, idx)
+             vec_pool(idx)%len = max(n, 0)
+             do i = 1, n
+                vec_store(vec_pool(idx)%off + i - 1) = nilv
+             end do
+             v%tag = GCT_VEC
+             v%ref = idx
+             return
+          end if
+       end if
+    end if
 
     call heap_enter(roots, none, entered)
     stopped = .false.
@@ -1375,19 +1467,13 @@ contains
        end if
     end if
     call world_start(stopped)
-    if (vec_free_head /= 0) then
-       idx = vec_free_head
-       vec_free_head = vec_free_next(idx)
-    else
-       vec_used = vec_used + 1
-       idx = vec_used
-    end if
+    idx = vec_take()
     vec_free(idx) = .false.
     vec_mark(idx) = .false.
     vec_live = vec_live + 1
     arena_live_now = arena_live_now + max(n, 0)
     call young_add(vec_young, n_vec_young, idx)
-    call slab_alloc(max(n, 0), vec_pool(idx)%off)
+    call run_take(max(n, 0), vec_pool(idx)%off)
     vec_pool(idx)%len = max(n, 0)
     do i = 1, n
        vec_store(vec_pool(idx)%off + i - 1) = nilv
@@ -1445,6 +1531,227 @@ contains
   end subroutine grow_flags
 
   ! Appends idx to a young list, growing it.
+  ! ---- per-thread allocation (PLAN.md step 14d) ------------------------
+  !
+  ! One heap lock serialised every allocation; eight threads allocating
+  ! spent their time waiting for it (sampled: 10,673 of ~17,000 samples
+  ! in the mutex, all under gc_obj, gc_vec and new_text) and ran 2.5x
+  ! slower than one. So with more than one mutator running, a thread
+  ! takes free slots a batch at a time and allocates from its batch
+  ! without the lock. With one mutator -- every test, torture, the REPL
+  ! alone -- nothing changes: batching() is false and the one slot comes
+  ! off the free list as always.
+  !
+  ! The fast path runs outside heap_enter, so it is not a safepoint; it
+  ! only writes slots it owns, and a stop (collection, growth) waits for a
+  ! running thread to reach its next one. It is not taken when a stop is
+  ! already asked for, nor from inside the heap.
+
+  logical function batching()
+    batching = n_running > 1 .and. .not. gc_torture .and. .not. gc_no_collect
+  end function batching
+
+  ! Whether this thread may allocate from its batches right now.
+  logical function fast_ok(s)
+    type(gc_stack), pointer, intent(in) :: s
+    fast_ok = batching() .and. .not. stop_world .and. .not. s%holds_heap
+  end function fast_ok
+
+  subroutine y_add(list, n, idx)
+    integer, allocatable, intent(inout) :: list(:)
+    integer, intent(inout) :: n
+    integer, intent(in) :: idx
+    if (.not. allocated(list)) allocate(list(256))
+    call young_add(list, n, idx)
+  end subroutine y_add
+
+  ! At a collection, the world stopped: every thread's young and counts
+  ! join the heap's, so the young collection sees every young object.
+  subroutine merge_batches()
+    integer :: i, k
+    type(gc_stack), pointer :: s
+    do i = 1, n_stacks
+       if (.not. associated(stacks(i)%s)) cycle
+       s => stacks(i)%s
+       do k = 1, s%n_y_obj
+          call young_add(obj_young, n_obj_young, s%y_obj(k))
+       end do
+       do k = 1, s%n_y_vec
+          call young_add(vec_young, n_vec_young, s%y_vec(k))
+       end do
+       do k = 1, s%n_y_str
+          call young_add(str_young, n_str_young, s%y_str(k))
+       end do
+       s%n_y_obj = 0; s%n_y_vec = 0; s%n_y_str = 0
+       obj_live = obj_live + s%d_obj_live
+       vec_live = vec_live + s%d_vec_live
+       str_live = str_live + s%d_str_live
+       arena_live_now = arena_live_now + s%d_arena_live
+       gc_allocs = gc_allocs + s%d_allocs
+       s%d_obj_live = 0; s%d_vec_live = 0; s%d_str_live = 0; s%d_arena_live = 0; s%d_allocs = 0
+    end do
+  end subroutine merge_batches
+
+  ! A new heap (gc_init): batches name slots of the old one.
+  subroutine clear_batches(s)
+    type(gc_stack), pointer, intent(in) :: s
+    s%n_obj_b = 0; s%n_vec_b = 0; s%n_str_b = 0; s%n_run_b = 0
+    s%n_y_obj = 0; s%n_y_vec = 0; s%n_y_str = 0
+    s%d_obj_live = 0; s%d_vec_live = 0; s%d_str_live = 0; s%d_arena_live = 0; s%d_allocs = 0
+  end subroutine clear_batches
+
+  ! Under the heap lock, a slot for the caller: with batching, this
+  ! thread's batch is filled from the free list and the unused end of
+  ! the pool first -- each slot flagged free while it waits -- and the
+  ! slot comes from it.
+  integer function obj_take()
+    type(gc_stack), pointer :: s
+    if (batching()) then
+       s => my_stack()
+       do while (s%n_obj_b < ALLOC_BATCH)
+          if (obj_free_head /= 0) then
+             s%n_obj_b = s%n_obj_b + 1
+             s%obj_b(s%n_obj_b) = obj_free_head
+             obj_free_head = obj_free_next(obj_free_head)
+          else if (obj_used < size(obj_pool)) then
+             obj_used = obj_used + 1
+             obj_free(obj_used) = .true.
+             s%n_obj_b = s%n_obj_b + 1
+             s%obj_b(s%n_obj_b) = obj_used
+          else
+             exit
+          end if
+       end do
+       if (s%n_obj_b > 0) then
+          obj_take = s%obj_b(s%n_obj_b)
+          s%n_obj_b = s%n_obj_b - 1
+          return
+       end if
+    end if
+    if (obj_free_head /= 0) then
+       obj_take = obj_free_head
+       obj_free_head = obj_free_next(obj_take)
+    else
+       obj_used = obj_used + 1
+       obj_take = obj_used
+    end if
+  end function obj_take
+
+  integer function vec_take()
+    type(gc_stack), pointer :: s
+    if (batching()) then
+       s => my_stack()
+       do while (s%n_vec_b < ALLOC_BATCH)
+          if (vec_free_head /= 0) then
+             s%n_vec_b = s%n_vec_b + 1
+             s%vec_b(s%n_vec_b) = vec_free_head
+             vec_free_head = vec_free_next(vec_free_head)
+          else if (vec_used < size(vec_pool)) then
+             vec_used = vec_used + 1
+             vec_free(vec_used) = .true.
+             s%n_vec_b = s%n_vec_b + 1
+             s%vec_b(s%n_vec_b) = vec_used
+          else
+             exit
+          end if
+       end do
+       if (s%n_vec_b > 0) then
+          vec_take = s%vec_b(s%n_vec_b)
+          s%n_vec_b = s%n_vec_b - 1
+          return
+       end if
+    end if
+    if (vec_free_head /= 0) then
+       vec_take = vec_free_head
+       vec_free_head = vec_free_next(vec_take)
+    else
+       vec_used = vec_used + 1
+       vec_take = vec_used
+    end if
+  end function vec_take
+
+  integer function str_take()
+    type(gc_stack), pointer :: s
+    if (batching()) then
+       s => my_stack()
+       do while (s%n_str_b < ALLOC_BATCH)
+          if (str_free_head /= 0) then
+             s%n_str_b = s%n_str_b + 1
+             s%str_b(s%n_str_b) = str_free_head
+             str_free_head = str_free_next(str_free_head)
+          else if (str_used < size(str_pool)) then
+             str_used = str_used + 1
+             str_free(str_used) = .true.
+             s%n_str_b = s%n_str_b + 1
+             s%str_b(s%n_str_b) = str_used
+          else
+             exit
+          end if
+       end do
+       if (s%n_str_b > 0) then
+          str_take = s%str_b(s%n_str_b)
+          s%n_str_b = s%n_str_b - 1
+          return
+       end if
+    end if
+    if (str_free_head /= 0) then
+       str_take = str_free_head
+       str_free_head = str_free_next(str_take)
+    else
+       str_used = str_used + 1
+       str_take = str_used
+    end if
+  end function str_take
+
+  ! Under the heap lock: this thread's runs of class c topped up from the
+  ! class's free list, then fresh arena if it fits WITHOUT growing (growth
+  ! stays slab_alloc's, with the world stopped). Counted as handed out
+  ! when batched, which is what the arena's collection rule counts.
+  subroutine runs_fill(s, c)
+    type(gc_stack), pointer, intent(in) :: s
+    integer, intent(in) :: c
+    integer :: l, off
+    l = ishft(1, c - 1)
+    do while (s%n_run_b(c) < RUN_BATCH)
+       if (class_head(c) /= 0) then
+          off = class_head(c)
+          class_head(c) = int(vec_store(off)%ival)
+          arena_reused = arena_reused + 1
+       else if (store_used + l <= size(vec_store)) then
+          off = store_used + 1
+          store_used = store_used + l
+          arena_fresh = arena_fresh + 1
+       else
+          exit
+       end if
+       arena_alloc_since = arena_alloc_since + l
+       s%n_run_b(c) = s%n_run_b(c) + 1
+       s%run_b(s%n_run_b(c), c) = off
+    end do
+  end subroutine runs_fill
+
+  ! A run of n for a vector, under the heap lock: from this thread's
+  ! batch of its class when batching and the class is a small one.
+  subroutine run_take(n, off)
+    integer, intent(in) :: n
+    integer, intent(out) :: off
+    type(gc_stack), pointer :: s
+    integer :: c
+    off = 0
+    if (n <= 0) return
+    c = size_class(n)
+    if (batching() .and. c <= RUN_CLASSES) then
+       s => my_stack()
+       if (s%n_run_b(c) == 0) call runs_fill(s, c)
+       if (s%n_run_b(c) > 0) then
+          off = s%run_b(s%n_run_b(c), c)
+          s%n_run_b(c) = s%n_run_b(c) - 1
+          return
+       end if
+    end if
+    call slab_alloc(n, off)
+  end subroutine run_take
+
   subroutine young_add(list, n, idx)
     integer, allocatable, intent(inout) :: list(:)
     integer, intent(inout) :: n
@@ -1850,6 +2157,7 @@ contains
 
   subroutine collect_full(roots)
     type(gc_value), intent(in) :: roots(:)
+    call merge_batches()
     last_marked = gc_marked
     obj_marked = 0; vec_marked = 0; str_marked = 0
     obj_mark = .false.
@@ -1873,6 +2181,7 @@ contains
     type(gc_value) :: v
     integer :: i, j, before
     gc_young_collections = gc_young_collections + 1
+    call merge_batches()
     before = obj_live + vec_live + str_live
     last_marked = gc_marked
     obj_marked = 0; vec_marked = 0; str_marked = 0
@@ -2273,6 +2582,32 @@ contains
     integer :: n
     n = s%vs_top
   end function vs_depth_on
+
+  ! An integer's decimal text WITHOUT Fortran I/O: an internal write takes
+  ! libgfortran's unit-table lock, and every thread formatting a number
+  ! queued on it (PLAN.md step 14d: sampled, the lock behind the heap's).
+  ! Digits are taken from the value made non-positive, so -huge-1 works.
+  pure subroutine gc_int_text(i, s)
+    integer(gc_ip), intent(in) :: i
+    character(len=:), allocatable, intent(out) :: s
+    character(len=20) :: buf
+    integer(gc_ip) :: m
+    integer :: p
+    p = 21
+    m = i
+    if (m > 0) m = -m
+    do
+       p = p - 1
+       buf(p:p) = achar(iachar('0') - int(mod(m, 10_gc_ip)))
+       m = m / 10_gc_ip
+       if (m == 0) exit
+    end do
+    if (i < 0) then
+       p = p - 1
+       buf(p:p) = '-'
+    end if
+    s = buf(p:20)
+  end subroutine gc_int_text
 
   ! This thread's binding frame (gc_stack%bindings), and replacing it.
   function gc_bindings_get() result(v)
