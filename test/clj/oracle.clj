@@ -2586,3 +2586,9 @@
 (try (contains? 1 :a) (catch IllegalArgumentException e :iae))
 
 [(count nil) (contains? nil :a) (contains? (to-array [1 2]) 1) (get 1 :a :d) (System/getenv "")]
+
+(let [xs (map #(mod (* % 7919) 10007) (range 3000)) s (into (sorted-set) xs) s2 (reduce disj s (range 0 10007 3))] [(count s) (first s) (last s) (take 5 (rseq s)) (nth (seq s) 1234) (count s2) (take 5 s2) (take 5 (rseq s2)) (subseq s >= 100 < 110) (rsubseq s > 100 <= 110) (count (reduce disj s xs))])
+
+(let [m (into (sorted-map) (map (fn [x] [x (* x x)]) (range 2000)))] [(get m 500) (find m 42) (take 3 (subseq m > 1990)) (take 3 (rsubseq m < 10)) (count (reduce dissoc m (range 0 2000 2))) (first (into (sorted-map-by >) m))])
+
+[(get (sorted-map nil 1) nil) (contains? (sorted-map nil 1) nil) (find (sorted-map nil 1) nil) (sorted-map nil 1 0 2) (dissoc (sorted-map 1 1 2 2) 3) (assoc (sorted-map 1 1) 1 2)]

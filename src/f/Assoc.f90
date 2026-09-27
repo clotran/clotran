@@ -29,12 +29,8 @@ module Assoc
   ! The threshold real Clojure uses. Crossing it is what triggers the
   ! one-way promotion.
   integer, parameter, public :: GCA_ARRAY_MAX = 8
-  ! Sorted maps: the array map with its keys in comparator order. i2 = 1
-  ! marks one and slot 3 holds its comparator (nil: Clojure's compare);
-  ! it is never promoted, its keys are found by binary search, and each
-  ! edit is a positional copy of the two runs -- O(n) per assoc, which
-  ! is the ponytail ceiling; a balanced tree if a sorted map of many
-  ! thousands ever matters. Ordering may run a Clojure fn, so it goes
+  ! Sorted maps: an OBJ_MAP with i2 = 1 over a counted B+-tree (see
+  ! "sorted maps" below), never promoted. Ordering may run a Clojure fn, so it goes
   ! through `comparer`, which Eval supplies (compare_via); a comparer
   ! that fails answers huge(0) and the search stops.
   abstract interface
@@ -45,6 +41,8 @@ module Assoc
      end function cmp_i
   end interface
   procedure(cmp_i), pointer, save :: comparer => null()
+  ! the most entries in a leaf, and children under an internal node
+  integer, parameter :: ST_MAX = 32
   public :: gca_find_key
   public :: gca_set_comparer, gca_sorted_empty, gca_is_sorted, gca_comparator, &
        gca_key_at, gca_val_at, gca_sorted_from
@@ -68,10 +66,9 @@ contains
   function gca_sorted_empty(comparator, roots) result(m)
     type(gc_value), intent(in) :: comparator
     type(gc_value), intent(in) :: roots(:)
-    type(gc_value) :: m
-    m = gcm_empty(with(roots, comparator))
-    call gc_set_i2(m, 1)
-    call gc_set_slot(m, 3, comparator)
+    type(gc_value) :: m, root
+    root = gc_vec(0, with(roots, comparator))
+    m = st_make(root, 0, 0, comparator, with(with(roots, comparator), root))
   end function gca_sorted_empty
 
   function gca_is_sorted(m) result(yes)
@@ -92,14 +89,22 @@ contains
     type(gc_value), intent(in) :: m
     integer, intent(in) :: i
     type(gc_value) :: k
-    k = gcm_key_at(m, i)
+    if (gca_is_sorted(m)) then
+       k = st_at(m, i, .true.)
+    else
+       k = gcm_key_at(m, i)
+    end if
   end function gca_key_at
 
   function gca_val_at(m, i) result(v)
     type(gc_value), intent(in) :: m
     integer, intent(in) :: i
     type(gc_value) :: v
-    v = gcm_val_at(m, i)
+    if (gca_is_sorted(m)) then
+       v = st_at(m, i, .false.)
+    else
+       v = gcm_val_at(m, i)
+    end if
   end function gca_val_at
 
   ! Binary search: `pos` is the first position whose key is not before
@@ -109,34 +114,7 @@ contains
     type(gc_value), intent(in) :: m, k
     integer, intent(out) :: pos
     logical, intent(out) :: found
-    integer :: lo, hi, mid, c, base
-    found = .false.
-    base = vs_enter(2)
-    call vs_set(base + 1, m)
-    call vs_set(base + 2, k)
-    lo = 1
-    hi = gcm_count(m)
-    pos = hi + 1
-    do while (lo <= hi)
-       mid = (lo + hi) / 2
-       c = comparer(gc_slot(vs_get(base + 1), 3), gcm_key_at(vs_get(base + 1), mid), vs_get(base + 2))
-       if (c == huge(0)) then
-          pos = gcm_count(m) + 1
-          found = .false.
-          exit
-       end if
-       if (c < 0) then
-          lo = mid + 1
-       else
-          pos = mid
-          hi = mid - 1
-          if (c == 0) then
-             found = .true.
-             exit
-          end if
-       end if
-    end do
-    call vs_leave(base)
+    call st_rank(m, k, pos, found)
   end subroutine sorted_search
 
   ! For seqFrom: the first position at or after k, ascending, or the
@@ -184,7 +162,7 @@ contains
     if (gca_is_sorted(m)) then
        v = gc_nil()
        call sorted_search(m, k, pos, found)
-       if (found) v = gcm_val_at(m, pos)
+       if (found) v = gca_val_at(m, pos)
     else if (gcm_is(m)) then
        v = gcm_get(m, k)
     else if (gch_is(m)) then
@@ -222,28 +200,7 @@ contains
     end if
     if (.not. gcm_is(m)) return
     if (gca_is_sorted(m)) then
-       ! in place of an equal key, or before the first key after it;
-       ! the first key of all is compared with itself, which is where
-       ! the comparer refuses one it cannot order (compare_via)
-       block
-         integer :: at
-         logical :: found
-         if (gcm_count(m) == 0) then
-            if (comparer(gc_slot(m, 3), k, k) == huge(0)) then
-               out = m
-               return
-            end if
-         end if
-         call sorted_search(m, k, at, found)
-         r2 = with(with(roots, m), gc_slot(m, 3))
-         if (found) then
-            out = gcm_replace_at(m, at, v, r2)
-         else
-            out = gcm_insert_at(m, at, k, v, r2)
-         end if
-         call gc_set_i2(out, 1)
-         call gc_set_slot(out, 3, gc_slot(m, 3))
-       end block
+       out = st_assoc(m, k, v, roots)
        return
     end if
 
@@ -266,16 +223,7 @@ contains
     type(gc_value) :: out
     out = m
     if (gca_is_sorted(m)) then
-       block
-         integer :: at
-         logical :: found
-         call sorted_search(m, k, at, found)
-         if (found) then
-            out = gcm_remove_at(m, at, with(with(roots, m), gc_slot(m, 3)))
-            call gc_set_i2(out, 1)
-            call gc_set_slot(out, 3, gc_slot(m, 3))
-         end if
-       end block
+       out = st_dissoc(m, k, roots)
     else if (gcm_is(m)) then
        out = gcm_dissoc(m, k, roots)
     else if (gch_is(m)) then
@@ -312,7 +260,11 @@ contains
     type(gc_value), intent(in) :: m
     type(gc_value), allocatable, intent(out) :: keys(:), vals(:)
     integer :: i
-    if (gch_is(m)) then
+    if (gca_is_sorted(m)) then
+       allocate(keys(gc_i1(m)), vals(gc_i1(m)))
+       i = 0
+       call st_fill(gc_slot(m, 1), st_height(m), keys, vals, i)
+    else if (gch_is(m)) then
        call gch_entries(m, keys, vals)
     else if (gcm_is(m)) then
        allocate(keys(gcm_count(m)), vals(gcm_count(m)))
@@ -341,6 +293,468 @@ contains
        t = gch_assoc(t, gcm_key_at(m, i), gcm_val_at(m, i), with(r2, t))
     end do
   end function promote
+
+  ! ---- sorted maps: a counted B+-tree ------------------------------
+  !
+  ! A sorted map is an OBJ_MAP with i2 = 1: i1 its count, slot 1 the
+  ! root node, slot 3 its comparator (nil: Clojure's compare), slot 4
+  ! the height (0: the root is a leaf). A LEAF is a raw vec k1 v1 k2 v2
+  ! ...; an INTERNAL node a raw vec of triples: a child, the count of
+  ! its subtree, and the first key under it. An edit copies one path
+  ! from the root, so assoc is O(log n) where the sorted array this
+  ! replaced copied every entry: into a sorted-set of 100,000 took
+  ! minutes. The counts make position i, and the position of the first
+  ! key at or past k, O(log n) as well -- what seqs and subseq ask.
+  ! ponytail: dissoc drops an emptied node but never merges thin
+  ! siblings; heavy deletion leaves a shallow, sparse tree, still
+  ! correct. Merge on underflow if that ever shows.
+  !
+  ! The comparer may run a Clojure fn and so collect: every node below
+  ! is reachable from the map, which the entry points root, and every
+  ! node made here is rooted before the next allocation.
+
+  function st_make(root, n, height, comparator, roots) result(m)
+    type(gc_value), intent(in) :: root, comparator
+    integer, intent(in) :: n, height
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: m
+    m = gc_obj(OBJ_MAP, [root, gc_nil(), comparator, gc_int(height)], roots)
+    call gc_set_i1(m, n)
+    call gc_set_i2(m, 1)
+  end function st_make
+
+  integer function st_height(m)
+    type(gc_value), intent(in) :: m
+    type(gc_value) :: h
+    h = gc_slot(m, 4)
+    st_height = int(h%ival)
+  end function st_height
+
+  integer function st_len(node, h)
+    type(gc_value), intent(in) :: node
+    integer, intent(in) :: h
+    if (h == 0) then
+       st_len = gc_vec_len(node) / 2
+    else
+       st_len = gc_vec_len(node) / 3
+    end if
+  end function st_len
+
+  integer function st_cnt(node, i)
+    type(gc_value), intent(in) :: node
+    integer, intent(in) :: i
+    type(gc_value) :: c
+    c = gc_vec_get(node, 3 * i - 1)
+    st_cnt = int(c%ival)
+  end function st_cnt
+
+  ! the number of entries under a node
+  integer function st_total(node, h) result(n)
+    type(gc_value), intent(in) :: node
+    integer, intent(in) :: h
+    integer :: i
+    if (h == 0) then
+       n = gc_vec_len(node) / 2
+    else
+       n = 0
+       do i = 1, gc_vec_len(node) / 3
+          n = n + st_cnt(node, i)
+       end do
+    end if
+  end function st_total
+
+  function st_first_key(node, h) result(k)
+    type(gc_value), intent(in) :: node
+    integer, intent(in) :: h
+    type(gc_value) :: k
+    if (h == 0) then
+       k = gc_vec_get(node, 1)
+    else
+       k = gc_vec_get(node, 3)
+    end if
+  end function st_first_key
+
+  ! In a leaf: pos is the first entry whose key is not before k (n + 1
+  ! when all are), found when it is equal; fail when the comparer could
+  ! not order them.
+  subroutine st_leaf_search(cmpv, leaf, k, pos, found, fail)
+    type(gc_value), intent(in) :: cmpv, leaf, k
+    integer, intent(out) :: pos
+    logical, intent(out) :: found, fail
+    integer :: lo, hi, mid, c
+    found = .false.; fail = .false.
+    lo = 1
+    hi = gc_vec_len(leaf) / 2
+    pos = hi + 1
+    do while (lo <= hi)
+       mid = (lo + hi) / 2
+       c = comparer(cmpv, gc_vec_get(leaf, 2 * mid - 1), k)
+       if (c == huge(0)) then
+          fail = .true.
+          return
+       end if
+       if (c < 0) then
+          lo = mid + 1
+       else
+          pos = mid
+          hi = mid - 1
+          if (c == 0) then
+             found = .true.
+             return
+          end if
+       end if
+    end do
+  end subroutine st_leaf_search
+
+  ! In an internal node: the last child whose first key is not after k
+  ! (the first child when none is).
+  integer function st_pick(cmpv, node, k, fail) result(i)
+    type(gc_value), intent(in) :: cmpv, node, k
+    logical, intent(out) :: fail
+    integer :: lo, hi, mid, c
+    fail = .false.
+    i = 1
+    lo = 2
+    hi = gc_vec_len(node) / 3
+    do while (lo <= hi)
+       mid = (lo + hi) / 2
+       c = comparer(cmpv, gc_vec_get(node, 3 * mid), k)
+       if (c == huge(0)) then
+          fail = .true.
+          return
+       end if
+       if (c <= 0) then
+          i = mid
+          lo = mid + 1
+       else
+          hi = mid - 1
+       end if
+    end do
+  end function st_pick
+
+  ! The position (1-based) of the first key not before k, count + 1 when
+  ! every key is; found when that key is equal to k.
+  subroutine st_rank(m, k, pos, found)
+    type(gc_value), intent(in) :: m, k
+    integer, intent(out) :: pos
+    logical, intent(out) :: found
+    type(gc_value) :: node
+    integer :: h, i, j, before, lp, base
+    logical :: fail
+    base = vs_enter(2)
+    call vs_set(base + 1, m)
+    call vs_set(base + 2, k)
+    node = gc_slot(m, 1)
+    before = 0
+    found = .false.
+    fail = .false.
+    do h = st_height(m), 1, -1
+       i = st_pick(gc_slot(m, 3), node, k, fail)
+       if (fail) exit
+       do j = 1, i - 1
+          before = before + st_cnt(node, j)
+       end do
+       node = gc_vec_get(node, 3 * i - 2)
+    end do
+    if (.not. fail) call st_leaf_search(gc_slot(m, 3), node, k, lp, found, fail)
+    if (fail) then
+       pos = gc_i1(m) + 1
+       found = .false.
+    else
+       pos = before + lp
+    end if
+    call vs_leave(base)
+  end subroutine st_rank
+
+  ! Entry i (1-based): its key when want_key, else its value.
+  function st_at(m, i0, want_key) result(x)
+    type(gc_value), intent(in) :: m
+    integer, intent(in) :: i0
+    logical, intent(in) :: want_key
+    type(gc_value) :: x, node
+    integer :: h, i, j
+    x = gc_nil()
+    i = i0
+    if (i < 1 .or. i > gc_i1(m)) return
+    node = gc_slot(m, 1)
+    do h = st_height(m), 1, -1
+       do j = 1, gc_vec_len(node) / 3
+          if (i <= st_cnt(node, j)) exit
+          i = i - st_cnt(node, j)
+       end do
+       node = gc_vec_get(node, 3 * j - 2)
+    end do
+    if (want_key) then
+       x = gc_vec_get(node, 2 * i - 1)
+    else
+       x = gc_vec_get(node, 2 * i)
+    end if
+  end function st_at
+
+  ! An internal node from `n` triples of children (child, its height
+  ! below), counted and keyed from the children themselves.
+  function st_internal(kids, n, h, roots) result(node)
+    type(gc_value), intent(in) :: kids(:)
+    integer, intent(in) :: n, h
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: node
+    integer :: j
+    node = gc_vec(3 * n, [roots, kids(1:n)])
+    do j = 1, n
+       call gc_vec_set(node, 3 * j - 2, kids(j))
+       call gc_vec_set(node, 3 * j - 1, gc_int(st_total(kids(j), h - 1)))
+       call gc_vec_set(node, 3 * j, st_first_key(kids(j), h - 1))
+    end do
+  end function st_internal
+
+  ! Insert or replace k under `node` of height h. `out` is its new
+  ! version and `sib` a second node when it split (nil otherwise);
+  ! `added` when k was not there before.
+  recursive subroutine st_ins(cmpv, node, h, k, v, out, sib, added, fail, roots)
+    type(gc_value), intent(in) :: cmpv, node, k, v
+    integer, intent(in) :: h
+    type(gc_value), intent(out) :: out, sib
+    logical, intent(out) :: added, fail
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value), allocatable :: kids(:)
+    type(gc_value) :: c_out, c_sib
+    integer :: n, pos, i, j, base, half
+    logical :: found
+    out = node
+    sib = gc_nil()
+    added = .false.
+    base = vs_enter(4)
+    call vs_set(base + 1, node)
+    if (h == 0) then
+       call st_leaf_search(cmpv, node, k, pos, found, fail)
+       if (fail) then
+          call vs_leave(base)
+          return
+       end if
+       n = gc_vec_len(node) / 2
+       if (found) then
+          out = gc_vec(2 * n, [roots, node, k, v])
+          do i = 1, 2 * n
+             call gc_vec_set(out, i, gc_vec_get(node, i))
+          end do
+          call gc_vec_set(out, 2 * pos, v)
+       else
+          added = .true.
+          ! entries 1..n+1 with (k, v) at pos; a leaf over ST_MAX halves
+          half = n + 1
+          if (n + 1 > ST_MAX) half = (n + 1) / 2
+          out = gc_vec(2 * half, [roots, node, k, v])
+          call vs_set(base + 2, out)
+          if (half < n + 1) then
+             sib = gc_vec(2 * (n + 1 - half), [roots, node, k, v, out])
+             call vs_set(base + 3, sib)
+          end if
+          do j = 1, n + 1
+             block
+               type(gc_value) :: ek, ev
+               if (j < pos) then
+                  ek = gc_vec_get(node, 2 * j - 1); ev = gc_vec_get(node, 2 * j)
+               else if (j == pos) then
+                  ek = k; ev = v
+               else
+                  ek = gc_vec_get(node, 2 * j - 3); ev = gc_vec_get(node, 2 * j - 2)
+               end if
+               if (j <= half) then
+                  call gc_vec_set(out, 2 * j - 1, ek); call gc_vec_set(out, 2 * j, ev)
+               else
+                  call gc_vec_set(sib, 2 * (j - half) - 1, ek); call gc_vec_set(sib, 2 * (j - half), ev)
+               end if
+             end block
+          end do
+       end if
+       call vs_leave(base)
+       return
+    end if
+    i = st_pick(cmpv, node, k, fail)
+    if (fail) then
+       call vs_leave(base)
+       return
+    end if
+    call st_ins(cmpv, gc_vec_get(node, 3 * i - 2), h - 1, k, v, c_out, c_sib, added, fail, [roots, node])
+    if (fail) then
+       call vs_leave(base)
+       return
+    end if
+    call vs_set(base + 2, c_out)
+    call vs_set(base + 3, c_sib)
+    n = gc_vec_len(node) / 3
+    allocate(kids(n + 1))
+    j = 0
+    do pos = 1, n
+       if (pos == i) then
+          j = j + 1; kids(j) = c_out
+          if (c_sib%tag /= GCT_NIL) then
+             j = j + 1; kids(j) = c_sib
+          end if
+       else
+          j = j + 1; kids(j) = gc_vec_get(node, 3 * pos - 2)
+       end if
+    end do
+    if (j <= ST_MAX) then
+       out = st_internal(kids, j, h, [roots, node, c_out, c_sib])
+    else
+       half = j / 2
+       out = st_internal(kids(1:half), half, h, [roots, node, c_out, c_sib])
+       call vs_set(base + 4, out)
+       sib = st_internal(kids(half + 1:j), j - half, h, [roots, node, c_out, c_sib, out])
+    end if
+    call vs_leave(base)
+  end subroutine st_ins
+
+  ! Remove k from under `node`: `out` its new version, `emptied` when
+  ! nothing is left in it, `removed` when k was there.
+  recursive subroutine st_del(cmpv, node, h, k, out, emptied, removed, roots)
+    type(gc_value), intent(in) :: cmpv, node, k
+    integer, intent(in) :: h
+    type(gc_value), intent(out) :: out
+    logical, intent(out) :: emptied, removed
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value), allocatable :: kids(:)
+    type(gc_value) :: c_out
+    integer :: n, pos, i, j, base
+    logical :: found, fail, c_empty
+    out = node
+    emptied = .false.
+    removed = .false.
+    base = vs_enter(2)
+    call vs_set(base + 1, node)
+    if (h == 0) then
+       call st_leaf_search(cmpv, node, k, pos, found, fail)
+       if (found .and. .not. fail) then
+          removed = .true.
+          n = gc_vec_len(node) / 2
+          emptied = (n == 1)
+          out = gc_vec(2 * (n - 1), [roots, node])
+          j = 0
+          do i = 1, n
+             if (i == pos) cycle
+             j = j + 1
+             call gc_vec_set(out, 2 * j - 1, gc_vec_get(node, 2 * i - 1))
+             call gc_vec_set(out, 2 * j, gc_vec_get(node, 2 * i))
+          end do
+       end if
+       call vs_leave(base)
+       return
+    end if
+    i = st_pick(cmpv, node, k, fail)
+    if (fail) then
+       call vs_leave(base)
+       return
+    end if
+    call st_del(cmpv, gc_vec_get(node, 3 * i - 2), h - 1, k, c_out, c_empty, removed, [roots, node])
+    if (.not. removed) then
+       call vs_leave(base)
+       return
+    end if
+    call vs_set(base + 2, c_out)
+    n = gc_vec_len(node) / 3
+    allocate(kids(n))
+    j = 0
+    do pos = 1, n
+       if (pos == i) then
+          if (c_empty) cycle
+          j = j + 1; kids(j) = c_out
+       else
+          j = j + 1; kids(j) = gc_vec_get(node, 3 * pos - 2)
+       end if
+    end do
+    emptied = (j == 0)
+    if (emptied) then
+       out = gc_vec(0, [roots, node])
+    else
+       out = st_internal(kids, j, h, [roots, node, c_out])
+    end if
+    call vs_leave(base)
+  end subroutine st_del
+
+  function st_assoc(m, k, v, roots) result(out)
+    type(gc_value), intent(in) :: m, k, v
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, nroot, sib, top
+    integer :: base, h
+    logical :: added, fail
+    out = m
+    base = vs_enter(5)
+    call vs_set(base + 1, m); call vs_set(base + 2, k); call vs_set(base + 3, v)
+    ! an empty map still asks the comparer about its first key, which is
+    ! where one it cannot order is refused (compare_via)
+    if (gc_i1(m) == 0) then
+       if (comparer(gc_slot(m, 3), k, k) == huge(0)) then
+          call vs_leave(base)
+          return
+       end if
+    end if
+    h = st_height(m)
+    call st_ins(gc_slot(m, 3), gc_slot(m, 1), h, k, v, nroot, sib, added, fail, [roots, m, k, v])
+    if (fail) then
+       call vs_leave(base)
+       return
+    end if
+    call vs_set(base + 4, nroot)
+    call vs_set(base + 5, sib)
+    if (sib%tag /= GCT_NIL) then
+       ! the root split: a new root over the two halves
+       top = st_internal([nroot, sib], 2, h + 1, [roots, m, nroot, sib])
+       call vs_set(base + 4, top)
+       h = h + 1
+    end if
+    out = st_make(vs_get(base + 4), gc_i1(m) + merge(1, 0, added), h, gc_slot(m, 3), &
+         [roots, m, vs_get(base + 4)])
+    call vs_leave(base)
+  end function st_assoc
+
+  function st_dissoc(m, k, roots) result(out)
+    type(gc_value), intent(in) :: m, k
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, nroot
+    integer :: base, h
+    logical :: emptied, removed
+    out = m
+    base = vs_enter(3)
+    call vs_set(base + 1, m); call vs_set(base + 2, k)
+    h = st_height(m)
+    call st_del(gc_slot(m, 3), gc_slot(m, 1), h, k, nroot, emptied, removed, [roots, m, k])
+    if (removed) then
+       if (emptied) then
+          nroot = gc_vec(0, [roots, m])
+          h = 0
+       end if
+       ! a root with one child is that child
+       do while (h > 0)
+          if (gc_vec_len(nroot) /= 3) exit
+          nroot = gc_vec_get(nroot, 1)
+          h = h - 1
+       end do
+       call vs_set(base + 3, nroot)
+       out = st_make(nroot, gc_i1(m) - 1, h, gc_slot(m, 3), [roots, m, nroot])
+    end if
+    call vs_leave(base)
+  end function st_dissoc
+
+  ! Every entry, in order.
+  recursive subroutine st_fill(node, h, keys, vals, n)
+    type(gc_value), intent(in) :: node
+    integer, intent(in) :: h
+    type(gc_value), intent(inout) :: keys(:), vals(:)
+    integer, intent(inout) :: n
+    integer :: i
+    if (h == 0) then
+       do i = 1, gc_vec_len(node) / 2
+          n = n + 1
+          keys(n) = gc_vec_get(node, 2 * i - 1)
+          vals(n) = gc_vec_get(node, 2 * i)
+       end do
+    else
+       do i = 1, gc_vec_len(node) / 3
+          call st_fill(gc_vec_get(node, 3 * i - 2), h - 1, keys, vals, n)
+       end do
+    end if
+  end subroutine st_fill
 
   function with(roots, v) result(out)
     type(gc_value), intent(in) :: roots(:), v
