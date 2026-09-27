@@ -168,7 +168,12 @@
     ok = .true.
     do i = 0, n - 1
        x = strip_meta(gcv_nth(args, i))
-       if (.not. is_number(x)) then
+       if (x%tag == GCT_NIL) then
+          ! unboxing nil, as the JVM does it
+          ok = .false.
+          call raise_class("NullPointerException", "", roots)
+          return
+       else if (.not. is_number(x)) then
           ok = .false.
           block
              call class_name_of(x, s=dlt_1)
@@ -251,6 +256,11 @@
     if (n >= 2) call vs_set(vst, base + 1, gcv_nth(args, 0))   ! the comparator; nil otherwise
     items = coll_to_vector(gcv_nth(args, n - 1), [roots, vs_get(vst, base + 1)])
     call vs_set(vst, base + 2, items)
+    if (.not. as_set .and. mod(gcv_count(items), 2) /= 0) then
+       call no_value_for_key(items, [roots, vs_get(vst, base + 2)])
+       call vs_leave(vst, base)
+       return
+    end if
     mp = gca_sorted_empty(vs_get(vst, base + 1), [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
     call vs_set(vst, base + 3, mp)
     step = 2

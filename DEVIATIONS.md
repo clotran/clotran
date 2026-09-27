@@ -1595,3 +1595,17 @@ a NaN is identical to itself.
 
 Removal would mean boxing numbers, which is the cost this representation
 exists to avoid (PLAN.md, the calling convention's step 3). Not planned.
+
+## 54. A name built with a slash in its namespace splits at the first slash
+
+A symbol or keyword is kept as one text, and its namespace is the part
+before the FIRST slash -- which is what the reader does: `:a/b/c` is
+namespace `"a"`, name `"b/c"`, on both hosts. Clojure's two-argument
+`keyword` and `symbol` keep the two halves as given, so
+`(keyword "a/b" "c")` prints `:a/b/c` on both but answers namespace
+`"a/b"` and name `"c"` in `clj`, and `"a"` and `"b/c"` here. clojuredocs
+itself calls such names non-conformant; `(keyword "a" "b/c")`, the
+reader's split, is identical on both.
+
+**Removal**: store where the namespace ends beside the text, and have
+`namespace`, `name`, `=` and hashing read it.

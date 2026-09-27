@@ -618,7 +618,6 @@
 [(min 1/2 1/3) (max 1/2 1/3)]
 
 ;; ratio quot rem
-(expect-diff "DEVIATIONS 30: no BigInt, so quot of a ratio is a long not 3N")
 [(quot 7/2 1) (rem 7/2 1) (mod 7/2 1)]
 
 ;; ratio coerce
@@ -2525,3 +2524,65 @@
 (count (doall (for [i (range 5000)] (re-find (re-pattern (str "b \\+ " i "\\b")) (str "b + " (* 2 i))))))
 
 (let [tv (transient [1 2 3])] [(get tv 0) (get tv 4 :foo) (contains? tv 0) (contains? tv 3) (find tv 0) (find tv -1) (counted? tv) (empty? tv) (empty? (transient [])) (instance? clojure.lang.Indexed tv)])
+
+[(/ 3/4 5) (/ 3/4 1/5) (/ 5 3/4) (/ 3/4 5.0) (/ 1 3/4) (/ 1/2 1/2) (* 8 1/2) (+ 1/2 1/2) (- 3/2 1/2) (* 0 1/2) (/ 2 1/2) (/ 4 2) (rem 1 1/2) (quot -7/2 2)]
+
+[(conj (range 3) 9) (conj (concat [1 2] [3 4]) 5) (conj (map inc [1 2]) 0) (list? (conj '(1 2) 0)) (apply map * [[1 2] [1 2] [1 2] [1 2]]) (apply interleave [[:a :b] [1 2] ["x" "y"]])]
+
+[(nth [nil] 0 :d) (nth nil 5 :d) (nth nil 5) (nth '(1 nil) 1 :d) (nth [1] 5 :d)]
+
+(try (nth [1 2] 5) (catch IndexOutOfBoundsException e :oob))
+
+(try (nth (range 3) 5) (catch IndexOutOfBoundsException e :oob))
+
+(try (nth {:a 1} 0) (catch UnsupportedOperationException e :unsupported))
+
+[(conj {} (seq {:a 1 :b 2})) (conj {} (first {:z 9})) (conj {} nil) (conj {} ()) (into {} [[:a 1] (first {:b 2})])]
+
+(try (conj {} [:a 1 :b]) (catch IllegalArgumentException e :iae))
+
+(try (conj {:a 1} '(:b 2)) (catch ClassCastException e :cce))
+
+(try (into {} ['(:a "a")]) (catch ClassCastException e :cce))
+
+[(int \a) (byte \a) (pos? 1N) (neg? -1.5M) (zero? 0/1)]
+
+(try (zero? nil) (catch NullPointerException e :npe))
+
+(try (pos? {}) (catch ClassCastException e :cce))
+
+(try (int "1") (catch ClassCastException e :cce))
+
+(try (unchecked-int "1") (catch ClassCastException e :cce))
+
+[(let [k (keyword "a" "b/c")] [k (namespace k) (name k) (= k :a/b/c)]) (let [s (symbol "a" "b/c")] [s (namespace s) (name s)]) (symbol :a/b) (symbol :dog) (keyword nil "x") (symbol nil "x")]
+
+(try (keyword 'user "abc") (catch ClassCastException e :cce))
+
+(try (name 2) (catch ClassCastException e :cce))
+
+(try (namespace "a/b") (catch ClassCastException e :cce))
+
+[(compare "abc" "abf") (compare "ab" "abcd") (compare "ab" (str "ab" (char 1))) (compare "é" "e") (compare :a/b :b) (compare :z/a :a/z) (compare (quote a/b) (quote a/c)) (sort ["b" "ab" "a"])]
+
+[(realized? (lazy-seq [1])) (realized? (delay 1)) (realized? (iterate inc 1))]
+
+(try (realized? [1]) (catch ClassCastException e :cce))
+
+(try (realized? (range 5)) (catch ClassCastException e :cce))
+
+(try (merge-with + 1 {:a 1}) (catch IllegalArgumentException e :iae))
+
+(try (hash-map :a) (catch IllegalArgumentException e :iae))
+
+(try (sorted-map :a) (catch IllegalArgumentException e :iae))
+
+(try (subseq [1 2 3 4] > 2) (catch ClassCastException e :cce))
+
+(try (create-ns "my-ns") (catch ClassCastException e :cce))
+
+(try (count 1) (catch UnsupportedOperationException e :uoe))
+
+(try (contains? 1 :a) (catch IllegalArgumentException e :iae))
+
+[(count nil) (contains? nil :a) (contains? (to-array [1 2]) 1) (get 1 :a :d) (System/getenv "")]

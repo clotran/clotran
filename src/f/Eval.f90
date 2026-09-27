@@ -6955,6 +6955,17 @@ contains
              return
           end if
        end if
+       ! RT.count: nil is 0, and a thing with no count THROWS -- (count 1)
+       ! answered 0
+       if (a%tag /= GCT_NIL .and. .not. seqable_quiet(a) .and. gc_kind(a) /= OBJ_INST) then
+          block
+             call class_name_of(a, s=dlt_1)
+             call raise_class("UnsupportedOperationException", "count not supported on this type: " // dlt_1, &
+                  [vs_get(vst, base + 1)])
+          end block
+          call vs_leave(vst, base)
+          return
+       end if
        out = gc_int(sq_count(gcv_nth(vs_get(vst, base + 1), 0), [vs_get(vst, base + 1)]))
     case (B_FIRST)
        if (seqable(gcv_nth(vs_get(vst, base + 1), 0))) &
@@ -7500,7 +7511,13 @@ contains
     case (B_NAME)
        ! The NAME PART, without the namespace: (name (quote a/b)) is
        ! "b". Returning the whole text made every qualified symbol
-       ! answer with its qualifier still attached.
+       ! answer with its qualifier still attached. A string is its own
+       ! name; anything else is not a Named, and throws.
+       a = strip_meta(gcv_nth(args, 0))
+       if (.not. named_or_throw(a, [vs_get(vst, base + 1)])) then
+          call vs_leave(vst, base)
+          return
+       end if
        block
           call name_part(gcv_nth(args, 0), s=dlt_1)
           out = gc_str(dlt_1, [vs_get(vst, base + 1)])
@@ -7516,6 +7533,13 @@ contains
              call gcn_name(a, s=dlt_1)
              out = gc_sym(dlt_1, [vs_get(vst, base + 1)])
           end block
+       else if (a%tag == GCT_NIL .or. is_number(a) .or. a%tag == GCT_CHAR .or. a%tag == GCT_BOOL .or. &
+            gcv_is(a) .or. gca_is(a) .or. gcl_is(a) .or. gc_kind(a) == OBJ_SET) then
+          ! nothing with no name: (name 2) answered ""
+          if (.not. named_or_throw(a, [vs_get(vst, base + 1)])) then
+             call vs_leave(vst, base)
+             return
+          end if
        else
           block
              call name_part(a, s=dlt_1)
@@ -7534,18 +7558,30 @@ contains
             ! A NIL namespace means unqualified: core.clj calls
             ! (symbol (namespace b) (name b)) on names that have no
             ! namespace, and gluing an empty qualifier on produced /x.
+            ! Keyword.intern(String, String) and Symbol.intern: two
+            ! STRINGS (a nil namespace allowed), and the name is kept
+            ! WHOLE -- (keyword "a" "b/c") is :a/b/c, not :a/c.
             q = strip_meta(gcv_nth(args, 0))
+            a = strip_meta(gcv_nth(args, 1))
+            if ((q%tag /= GCT_NIL .and. q%tag /= GCT_STR) .or. a%tag /= GCT_STR) then
+               block
+                  if (a%tag /= GCT_STR) then
+                     call class_name_of(a, s=dlt_1)
+                  else
+                     call class_name_of(q, s=dlt_1)
+                  end if
+                  call raise_class("ClassCastException", "class " // dlt_1 // &
+                       " cannot be cast to class java.lang.String", [vs_get(vst, base + 1)])
+               end block
+               call vs_leave(vst, base)
+               return
+            end if
+            call gc_ref_text(a%ref, s=dlt_2)
             if (q%tag == GCT_NIL) then
-               block
-                  call name_part(gcv_nth(args, 1), s=dlt_1)
-                  t = dlt_1
-               end block
+               t = dlt_2
             else
-               block
-                  call name_part(q, s=dlt_1)
-                  call name_part(gcv_nth(args, 1), s=dlt_2)
-                  t = dlt_1 // "/" // dlt_2
-               end block
+               call gc_ref_text(q%ref, s=dlt_1)
+               t = dlt_1 // "/" // dlt_2
             end if
          else
             ! ONE argument keeps the WHOLE name, qualifier and all:
@@ -7628,6 +7664,13 @@ contains
          integer :: i2
          items = coll_to_vector(gcv_nth(args, 0), [vs_get(vst, base + 1)])
          call vs_set(vst, base + 2, items)
+         if (mod(gcv_count(items), 2) /= 0) then
+            ! an odd count throws, naming the key with no value; a map
+            ! of what pairs there were hid the mistake
+            call no_value_for_key(items, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+            call vs_leave(vst, base)
+            return
+         end if
          mp = gca_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
          call vs_set(vst, base + 3, mp)
          do i2 = 0, gcv_count(vs_get(vst, base + 2)) - 2, 2
@@ -7685,6 +7728,14 @@ contains
        a = gcv_nth(args, 0)
        out = gc_int(not(a%ival))
     case (B_CHKSHORT, B_CHKBYTE, B_CHKINT)
+       ! a number or a character, or it throws: (int \"1\") answered 0
+       a = strip_meta(gcv_nth(args, 0))
+       if (a%tag /= GCT_CHAR) then
+          if (.not. numbers_ok(args, 1, [vs_get(vst, base + 1)])) then
+             call vs_leave(vst, base)
+             return
+          end if
+       end if
        ! (int 5000000000) is an ERROR in Clojure, not a truncation:
        ! RT.intCast checks the range and throws. The unchecked- ones
        ! below truncate, and pointing both at the same builtin made
@@ -7720,6 +7771,13 @@ contains
          end if
        end block
     case (B_SHORTCAST, B_BYTECAST, B_INTCAST)
+       a = strip_meta(gcv_nth(args, 0))
+       if (a%tag /= GCT_CHAR) then
+          if (.not. numbers_ok(args, 1, [vs_get(vst, base + 1)])) then
+             call vs_leave(vst, base)
+             return
+          end if
+       end if
        ! uncheckedShortCast and friends TRUNCATE to the width, which
        ! is what makes (unchecked-byte 300) 44 and not 300. They went
        ! through longCast, which is the whole 64 bits.
@@ -8316,10 +8374,23 @@ contains
        block
          type(gc_value) :: a0
          a0 = strip_meta(gcv_nth(args, 0))
+         ! Only an IPending answers: a collection, a number, a range is
+         ! not one and throws, where answering true hid the mistake. (A
+         ! range cell is an OBJ_LAZY with i2 = 1, and a LongRange is not
+         ! IPending; iterate's, i2 = 2, is.)
          if (gc_kind(a0) == OBJ_DELAY) then
             out = gc_bool(gc_i1(a0) /= 0)
-         else if (gc_kind(a0) == OBJ_LAZY) then
+         else if (gc_kind(a0) == OBJ_LAZY .and. gc_i2(a0) /= 1) then
             out = gc_bool(gc_i1(a0) /= LAZY_PENDING)
+         else if (a0%tag == GCT_NIL) then
+            call raise_class("NullPointerException", "", [vs_get(vst, base + 1)])
+         else if (gc_kind(a0) == OBJ_LAZY .or. a0%tag /= GCT_OBJ .or. gcv_is(a0) .or. gca_is(a0) &
+              .or. gcl_is(a0) .or. gc_kind(a0) == OBJ_SET) then
+            block
+               call class_name_of(a0, s=dlt_1)
+               call raise_class("ClassCastException", "class " // dlt_1 // &
+                    " cannot be cast to class clojure.lang.IPending", [vs_get(vst, base + 1)])
+            end block
          else
             out = gc_bool(.true.)
          end if
@@ -8822,7 +8893,9 @@ contains
        a = strip_meta(gcv_nth(args, 0))
        b = sorted_backing(a)
        out = gc_nil()
-       if (b%tag /= GCT_NIL) then
+       if (b%tag == GCT_NIL) then
+          call not_sorted(a, [vs_get(vst, base + 1)])
+       else
           i = gca_sorted_from(b, gcv_nth(args, 1), truthy(gcv_nth(args, 2)))
           if (.not. tctx%has_error) out = sorted_entries(a, i, truthy(gcv_nth(args, 2)), [vs_get(vst, base + 1)])
        end if
@@ -8836,7 +8909,15 @@ contains
        end if
     case (B_COMPARATOR)
        ! (.comparator sc): its comparator, or compare itself
-       out = gca_comparator(sorted_backing(gcv_nth(args, 0)))
+       b = sorted_backing(gcv_nth(args, 0))
+       if (b%tag == GCT_NIL) then
+          ! (subseq [1 2 3] > 2) asks a vector for its comparator: it has
+          ! none, and answering compare made subseq answer nil
+          call not_sorted(strip_meta(gcv_nth(args, 0)), [vs_get(vst, base + 1)])
+          call vs_leave(vst, base)
+          return
+       end if
+       out = gca_comparator(b)
        if (out%tag == GCT_NIL) out = native(B_COMPARE, "compare", [vs_get(vst, base + 1)])
     case (B_RSEQ)
        ! (rseq coll): a vector or a sorted collection, last first; nil when empty
@@ -9343,7 +9424,7 @@ contains
             ! here rather than on the contains? builtin.
             out = inst_invoke(coll, "containsKey", rest_args(args, 1), hit)
             if (.not. hit) out = gc_bool(coll_has(coll, gcv_nth(args, 1)))
-         else
+         else if (contains_supported(coll, [vs_get(vst, base + 1)])) then
             out = gc_bool(coll_has(coll, gcv_nth(args, 1)))
          end if
        end block
@@ -9858,6 +9939,13 @@ contains
                  call vs_leave(vst, base)
                  return
               end if
+              ! Keyword.sym: its symbol, which is how (symbol :dog) is dog
+              if (tv2%tag == GCT_KEY) then
+                 call gc_ref_text(tv2%ref, s=dlt_1)
+                 out = gc_sym(dlt_1, [vs_get(vst, base + 1)])
+                 call vs_leave(vst, base)
+                 return
+              end if
             end block
             fk = "sym"
          case (B_FLD_PROTOCOL); fk = "protocol"
@@ -10210,7 +10298,12 @@ contains
          integer :: sl
          out = gc_nil()
          a = strip_meta(gcv_nth(args, 0))
-         if (a%tag == GCT_SYM .or. a%tag == GCT_KEY) then
+         if (a%tag == GCT_STR) then
+            ! a String is not a Named
+            call raise_class("ClassCastException", "class java.lang.String cannot be cast to class clojure.lang.Named", &
+                 [vs_get(vst, base + 1)])
+         else if (named_or_throw(a, [vs_get(vst, base + 1)])) then
+            ! a symbol or a keyword: the part before the first slash
             block
                call gc_ref_text(a%ref, s=dlt_1)
                t = dlt_1
@@ -10240,7 +10333,7 @@ contains
              return
           end if
          end if
-         out = gc_bool(coll_has(coll, gcv_nth(args, 1)))
+         if (contains_supported(coll, [vs_get(vst, base + 1)])) out = gc_bool(coll_has(coll, gcv_nth(args, 1)))
        end block
     case (B_FIND)
        ! A map entry is a two-element vector, which is what makes
@@ -10435,10 +10528,17 @@ contains
     case (B_NSCREATE)
        ! Namespace.findOrCreate, behind create-ns: the one that makes one
        a = strip_meta(gcv_nth(args, 0))
-       block
+       if (a%tag /= GCT_SYM) then
+          ! a Symbol or it throws: a string made a namespace of it
+          block
+             call class_name_of(a, s=dlt_1)
+             call raise_class("ClassCastException", "class " // dlt_1 // &
+                  " cannot be cast to class clojure.lang.Symbol", [vs_get(vst, base + 1)])
+          end block
+       else
           call gc_ref_text(a%ref, s=dlt_1)
           out = gcn_find_or_create(dlt_1, [vs_get(vst, base + 1)])
-       end block
+       end if
     case (B_NSREMOVE)
        ! Namespace.remove, which refuses clojure.core as it does there
        a = strip_meta(gcv_nth(args, 0))
@@ -10751,6 +10851,11 @@ contains
           end if
        end if
     case (B_ZERO, B_POS, B_NEG)
+       ! a number or it throws: (zero? nil) answered true
+       if (.not. numbers_ok(args, 1, [vs_get(vst, base + 1)])) then
+          call vs_leave(vst, base)
+          return
+       end if
        block
          type(gc_value) :: z
          z = gc_int(0)
@@ -12340,10 +12445,26 @@ contains
           call gc_ref_text(b%ref, s=dlt_1)
           sb = dlt_1
        end block
-       if (sa < sb) then
-          c = -1
-       else if (sa > sb) then
-          c = 1
+       if (a%tag == GCT_STR) then
+          c = java_compare_to(sa, sb)
+       else
+          ! Symbol.compareTo: no namespace first, then namespace, then name
+          block
+            integer :: pa, pb
+            pa = index(sa, "/"); pb = index(sb, "/")
+            if (len(sa) == 1) pa = 0
+            if (len(sb) == 1) pb = 0
+            if (pa <= 1 .and. pb > 1) then
+               c = -1
+            else if (pa > 1 .and. pb <= 1) then
+               c = 1
+            else if (pa > 1) then
+               c = java_compare_to(sa(1:pa-1), sb(1:pb-1))
+               if (c == 0) c = java_compare_to(sa(pa+1:), sb(pb+1:))
+            else
+               c = java_compare_to(sa, sb)
+            end if
+          end block
        end if
        return
     end if
@@ -12470,6 +12591,100 @@ contains
        h = regex_clone(p)
     end do
   end function rx_clone
+
+  ! RT.contains answers for these; anything else is an
+  ! IllegalArgumentException -- (contains? 1 :a) was false, which is how
+  ! (merge-with + 1 {:a 1}) quietly answered nil.
+  logical function contains_supported(coll, roots) result(ok)
+    type(gc_value), intent(in) :: coll
+    type(gc_value), intent(in) :: roots(:)
+    character(len=:), allocatable :: cn
+    ok = coll%tag == GCT_NIL .or. coll%tag == GCT_STR .or. gcv_is(coll) .or. gca_is(coll) &
+         .or. gc_kind(coll) == OBJ_SET .or. gc_kind(coll) == OBJ_TVECTOR .or. gc_kind(coll) == OBJ_ARRAY &
+         .or. gc_kind(coll) == OBJ_INST
+    if (ok) return
+    call class_name_of(coll, s=cn)
+    call raise_class("IllegalArgumentException", "contains? not supported on type: " // cn, roots)
+  end function contains_supported
+
+  ! A ClassCastException for asking something unsorted a sorted
+  ! collection's question (subseq, rsubseq).
+  subroutine not_sorted(v, roots)
+    type(gc_value), intent(in) :: v
+    type(gc_value), intent(in) :: roots(:)
+    character(len=:), allocatable :: cn
+    call class_name_of(v, s=cn)
+    call raise_class("ClassCastException", "class " // cn // " cannot be cast to class clojure.lang.Sorted", roots)
+  end subroutine not_sorted
+
+  ! IllegalArgumentException for keyvals of odd count, naming the last
+  ! key, as PersistentHashMap.create and PersistentTreeMap.create do.
+  subroutine no_value_for_key(items, roots)
+    type(gc_value), intent(in) :: items
+    type(gc_value), intent(in) :: roots(:)
+    character(len=:), allocatable :: kt
+    call to_string_text(gcv_nth(items, gcv_count(items) - 1), s=kt)
+    call raise_class("IllegalArgumentException", "No value supplied for key: " // kt, roots)
+  end subroutine no_value_for_key
+
+  ! Whether v can answer `name`: a symbol, a keyword, or a string (which
+  ! is its own). nil is a NullPointerException, anything else a
+  ! ClassCastException, as `name` throws on the JVM -- answering ""
+  ! for (name 2) hid a wrong argument.
+  logical function named_or_throw(v, roots) result(ok)
+    type(gc_value), intent(in) :: v
+    type(gc_value), intent(in) :: roots(:)
+    character(len=:), allocatable :: cn
+    ok = (v%tag == GCT_SYM .or. v%tag == GCT_KEY .or. v%tag == GCT_STR)
+    if (ok) return
+    if (v%tag == GCT_NIL) then
+       call raise_class("NullPointerException", "", roots)
+    else
+       call class_name_of(v, s=cn)
+       call raise_class("ClassCastException", "class " // cn // " cannot be cast to class clojure.lang.Named", roots)
+    end if
+  end function named_or_throw
+
+  ! String.compareTo: the difference of the first UTF-16 units that
+  ! differ, else of the lengths -- (compare "abc" "abf") is -3. The
+  ! intrinsic < pads the shorter string with blanks, which put "ab"
+  ! after "ab\u0001".
+  integer function java_compare_to(sa, sb) result(c)
+    character(len=*), intent(in) :: sa, sb
+    integer, allocatable :: ua(:), ub(:)
+    integer :: i
+    call utf16_units(sa, ua)
+    call utf16_units(sb, ub)
+    do i = 1, min(size(ua), size(ub))
+       if (ua(i) /= ub(i)) then
+          c = ua(i) - ub(i)
+          return
+       end if
+    end do
+    c = size(ua) - size(ub)
+  end function java_compare_to
+
+  subroutine utf16_units(t, u)
+    character(len=*), intent(in) :: t
+    integer, allocatable, intent(out) :: u(:)
+    integer :: p, cp, nb, k
+    allocate(u(2 * len(t)))
+    k = 0
+    p = 1
+    do while (p <= len(t))
+       call u8_dec(t, p, cp, nb)
+       if (cp >= 65536) then
+          u(k + 1) = 55296 + (cp - 65536) / 1024
+          u(k + 2) = 56320 + mod(cp - 65536, 1024)
+          k = k + 2
+       else
+          u(k + 1) = cp
+          k = k + 1
+       end if
+       p = p + max(nb, 1)
+    end do
+    u = u(1:k)
+  end subroutine utf16_units
 
   ! One comparator call, following AFunction.compare (AFunction.java):
   ! a function that answers a BOOLEAN is a predicate, so (sort > coll)
@@ -15842,6 +16057,10 @@ contains
        ! range, which is the question its keys answer.
        yes = (kk%tag == GCT_INT)
        if (yes) yes = (kk%ival >= 0 .and. kk%ival < int(gcv_count(coll), gc_ip))
+    else if (gc_kind(coll) == OBJ_ARRAY) then
+       ! an array, by index, as RT.contains asks one
+       yes = (kk%tag == GCT_INT)
+       if (yes) yes = (kk%ival >= 0 .and. kk%ival < int(seq_len(coll), gc_ip))
     else if (gc_kind(coll) == OBJ_TVECTOR) then
        ! a transient vector, the same question (TransientVector.containsKey)
        yes = (kk%tag == GCT_INT)
