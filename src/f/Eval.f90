@@ -10824,14 +10824,21 @@ contains
        end if
     case (B_GETENV)
        ! System.getenv: the variable's value, or nil when it is not set
+       ! An EMPTY name is no variable (the runtime stops the process on
+       ! one), and a value is read at its own length, not cut at 4096.
        block
-         character(len=:), allocatable :: nm
-         character(len=4096) :: val
+         character(len=:), allocatable :: nm, val
          integer :: ln, st
          call text_of(gcv_nth(args, 0), s=nm)
-         call get_environment_variable(nm, val, length=ln, status=st)
          out = gc_nil()
-         if (st == 0) out = gc_str(val(1:min(ln, len(val))), [vs_get(vst, base + 1)])
+         if (len(nm) > 0) then
+            call get_environment_variable(nm, length=ln, status=st)
+            if (st == 0) then
+               allocate(character(len=ln) :: val)
+               if (ln > 0) call get_environment_variable(nm, val, status=st)
+               out = gc_str(val, [vs_get(vst, base + 1)])
+            end if
+         end if
        end block
     case (B_FILEEXISTS)
        block
