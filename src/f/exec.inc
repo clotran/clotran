@@ -1068,8 +1068,17 @@
        end if
        if (tctx%ksp == kbot) exit
        ! a SAFEPOINT each step (PLAN.md step 14f): a collection elsewhere
-       ! stops this thread here even in a loop that allocates nothing
-       call gc_poll()
+       ! stops this thread here even in a loop that allocates nothing.
+       ! `val` -- what the last step handed on, a callee's answer on its
+       ! way to the frame that asked -- is only a local here, so it goes
+       ! into the loop's value slot while the world is stopped. It did
+       ! not, and a value collected here was stored into its frame just
+       ! after, freed under it (found by test/clj/threads_heap.clj).
+       if (gc_stop_pending()) then
+          call vs_set(vst, vbase + 1, val)
+          call gc_poll()
+          val = vs_get(vst, vbase + 1)
+       end if
        b = tctx%kst(tctx%ksp)%base
        nd = vs_get(vst, b + 1)
        kind = gc_i1(nd)
@@ -1138,6 +1147,15 @@
                    if (scalar_builtin(gc_i1(vs_get(vst, b + 3)))) tctx%kst(tctx%ksp)%mode = 3
                 end if
              end if
+             ! a builtin that keeps no argument: a spare vector (mode 4)
+             if (tctx%kst(tctx%ksp)%mode == 1 .and. n >= 1 .and. n <= ARG_SPARE_MAX) then
+                if (gc_kind(vs_get(vst, b + 3)) == OBJ_BUILTIN) then
+                   if (args_reusable(gc_i1(vs_get(vst, b + 3)))) then
+                      tctx%kst(tctx%ksp)%mode = 4
+                      call vs_set(vst, b + 4, args_take(n, [vs_get(vst, b + 1), vs_get(vst, b + 3)]))
+                   end if
+                end if
+             end if
              if (tctx%kst(tctx%ksp)%mode == 1) call vs_set(vst, b + 4, gcv_build(n, [vs_get(vst, b + 1)]))
              tctx%kst(tctx%ksp)%i = 1
              tctx%kst(tctx%ksp)%pc = 2
@@ -1167,6 +1185,17 @@
              site = 0
              if (v%tag == GCT_INT) site = int(v%ival, kind=4)
              fnv = vs_get(vst, b + 3)
+             if (tctx%kst(tctx%ksp)%mode == 4) then
+                ! a builtin that keeps no argument, in a spare vector
+                n = gcv_count(kids) - 1
+                tctx%pending_site = site
+                v = vs_get(vst, b + 4)
+                val = call_builtin(gc_i1(fnv), v)
+                call args_give(vs_get(vst, b + 4), n)
+                call vs_set(vst, b + 4, gc_nil())
+                call k_finish(val)
+                cycle
+             end if
              if (tctx%kst(tctx%ksp)%mode == 3) then
                 ! the numeric fast path: no vector is allocated for the call
                 n = gcv_count(kids) - 1

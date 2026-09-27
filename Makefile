@@ -332,6 +332,8 @@ test: $(test-bins) clotran-bin $(B)/libtestpkg.$(SOEXT) $(B)/libsamplelib.$(SOEX
 	scripts/pure-check
 	@echo "--- state inventory (every module variable classified, PLAN step 14a) ---"
 	scripts/state-inventory
+	@echo "--- the builtins that may reuse an argument vector (argsafe.inc) are current ---"
+	scripts/argsafe --check
 	@echo "--- no static string lengths (gfortran slen: shared by every thread, step 14f) ---"
 	scripts/no-static-slen clotran-bin packages/chemsol/libchemsol.$(SOEXT) packages/blas/libblas.$(SOEXT)
 

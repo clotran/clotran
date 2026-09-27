@@ -434,6 +434,8 @@ module GC
   ! of the live counts, how much is dead and waiting in pending lists --
   ! set by a young collection's handoff, spent by the next collection
   integer :: obj_pend_dead = 0, vec_pend_dead = 0, str_pend_dead = 0
+  ! gc_check_heap's view of the pending dead while it runs (bad_ref)
+  logical, allocatable :: chk_dead_o(:), chk_dead_v(:), chk_dead_s(:)
   integer :: old_at_full = 0, promoted_since_full = 0
   integer, public :: gc_young_collections = 0
   ! pause times, for CLOTRAN_STATS: total and longest, young and full, ms
@@ -548,10 +550,12 @@ module GC
   ! the table copies pointers; the collector scans every one, so a parked
   ! context keeps what it was holding. Stack 1 is the main thread's, made
   ! and bound by gc_init.
-  integer, parameter :: SPARE_SIZES = 32, SPARE_DEPTH = 8
+  integer, parameter, public :: SPARE_SIZES = 32, SPARE_DEPTH = 8
   ! allocation batches (PLAN.md step 14d): slots per pool, and runs per
   ! size class for the classes up to 2**(RUN_CLASSES-1) slots
   integer, parameter :: ALLOC_BATCH = 256, RUN_BATCH = 64, RUN_CLASSES = 8
+  ! spare ARGUMENT VECTORS of 1..ARG_SPARE_MAX elements (Eval, args_take)
+  integer, parameter, public :: ARG_SPARE_MAX = 8
   type :: gc_stack
      type(gc_value), allocatable :: vstack(:)
      integer :: vs_top = 0
@@ -564,6 +568,12 @@ module GC
      ! them (forget_spares), so a spare is never one the sweep freed.
      type(gc_value) :: spare(SPARE_DEPTH, SPARE_SIZES)
      integer :: nspare(SPARE_SIZES) = 0
+     ! SPARE ARGUMENT VECTORS: a builtin that touches its arguments only
+     ! by element (argsafe.inc) is handed one of these and it comes back
+     ! after the call, so a call allocates none. Forgotten at every
+     ! collection, as the spare frames are: they are not roots.
+     type(gc_value) :: aspare(SPARE_DEPTH, ARG_SPARE_MAX)
+     integer :: naspare(ARG_SPARE_MAX) = 0
      ! THIS THREAD'S DYNAMIC BINDINGS (Var.dvals): nil, or the top Frame
      ! as a vector [bindings prev] -- bindings a map of Var to box, the
      ! frame below's merged in -- as Var.pushThreadBindings builds it
@@ -737,7 +747,7 @@ module GC
   public :: gc_frame_take, gc_frame_give
   public :: gc_state_lock, gc_state_unlock, gc_cell_get, gc_cell_set, gc_cell_cas, gc_identical
   public :: gc_grow_begin, gc_grow_end, gc_next, gc_root_cas
-  public :: gc_poll, gc_state_wait, gc_state_notify, gc_notify_gen
+  public :: gc_poll, gc_state_wait, gc_state_notify, gc_notify_gen, gc_stop_pending
   public :: gc_mutator_enter, gc_mutator_leave
   public :: gc_arena_stats
   public :: gc_equal, gc_hash
@@ -1789,6 +1799,7 @@ contains
   subroutine clear_batches(s)
     type(gc_stack), pointer, intent(in) :: s
     s%n_obj_b = 0; s%n_vec_b = 0; s%n_str_b = 0; s%n_run_b = 0
+    s%naspare = 0
     s%np_obj = 0; s%np_vec = 0; s%np_str = 0; s%cp_obj = 0; s%cp_vec = 0; s%cp_str = 0
     s%n_defer = 0; s%n_loose = 0
     s%n_y_obj = 0; s%n_y_vec = 0; s%n_y_str = 0
@@ -2442,6 +2453,7 @@ contains
     integer :: i
     do i = 1, n_stacks
        if (associated(stacks(i)%s)) stacks(i)%s%nspare = 0
+       if (associated(stacks(i)%s)) stacks(i)%s%naspare = 0
     end do
     do i = 1, n_rem
        if (rem_set(i)%tag == GCT_OBJ) then
@@ -2888,6 +2900,12 @@ contains
   ! compiled loop's back-edge call it, so a thread computing without
   ! allocating still stops when another must collect. One read of a
   ! volatile flag when nothing is stopping.
+  ! Whether a stop is asked for: a caller holding a value outside the
+  ! stack roots it before gc_poll only then (exec.inc's run_loop).
+  logical function gc_stop_pending()
+    gc_stop_pending = stop_world
+  end function gc_stop_pending
+
   subroutine gc_poll()
     type(gc_value) :: none(0)
     logical :: e
@@ -3322,49 +3340,68 @@ contains
   subroutine gc_check_heap(problem)
     character(len=:), allocatable, intent(out) :: problem
     integer :: i, j, n, k
-    logical, allocatable :: dead_o(:), dead_v(:)
     type(gc_stack), pointer :: s
-    ! temporaries for the deferred-length calls below (share.clj)
-    character(len=:), allocatable :: dlt_1
+    character(len=:), allocatable :: p
     problem = ""
-    ! the dead waiting in pending lists are unswept on purpose: what they
-    ! point at may already be freed, and nothing live reaches them
-    allocate(dead_o(obj_used), dead_v(vec_used))
-    dead_o = .false.; dead_v = .false.
+    ! The dead waiting in pending lists are unswept on purpose: what THEY
+    ! point at may already be freed, so they are not checked. But a live
+    ! object pointing AT one is as wrong as pointing at a freed one --
+    ! the owning thread will free it under it (pend_refill) -- and
+    ! bad_ref reports that too, through these masks.
+    allocate(chk_dead_o(obj_used), chk_dead_v(vec_used), chk_dead_s(str_used))
+    chk_dead_o = .false.; chk_dead_v = .false.; chk_dead_s = .false.
     do i = 1, n_stacks
        if (.not. associated(stacks(i)%s)) cycle
        s => stacks(i)%s
        do k = s%cp_obj + 1, s%np_obj
-          if (.not. obj_mark(s%p_obj(k))) dead_o(s%p_obj(k)) = .true.
+          if (.not. (obj_mark(s%p_obj(k)) .or. obj_free(s%p_obj(k)))) chk_dead_o(s%p_obj(k)) = .true.
        end do
        do k = 1, s%n_defer
-          dead_o(s%defer_obj(k)) = .true.
+          chk_dead_o(s%defer_obj(k)) = .true.
        end do
        do k = s%cp_vec + 1, s%np_vec
-          if (.not. vec_mark(s%p_vec(k))) dead_v(s%p_vec(k)) = .true.
+          if (.not. (vec_mark(s%p_vec(k)) .or. vec_free(s%p_vec(k)))) chk_dead_v(s%p_vec(k)) = .true.
+       end do
+       do k = s%cp_str + 1, s%np_str
+          if (.not. (str_mark(s%p_str(k)) .or. str_free(s%p_str(k)))) chk_dead_s(s%p_str(k)) = .true.
        end do
     end do
-    do i = 1, obj_used
-       if (obj_free(i) .or. dead_o(i)) cycle
-       do j = 1, OBJ_SLOTS
-          block
-             call bad_ref(obj_pool(i)%slot(j), problem=dlt_1)
-             problem = dlt_1
-          end block
-          if (len(problem) > 0) return
-       end do
-    end do
-    do i = 1, vec_used
-       if (vec_free(i) .or. dead_v(i)) cycle
-       n = vec_pool(i)%len
-       do j = 1, n
-          block
-             call bad_ref(vec_store(vec_pool(i)%off + j - 1), problem=dlt_1)
-             problem = dlt_1
-          end block
-          if (len(problem) > 0) return
-       end do
-    end do
+    outer: block
+      do i = 1, obj_used
+         if (obj_free(i) .or. chk_dead_o(i)) cycle
+         do j = 1, OBJ_SLOTS
+            call bad_ref(obj_pool(i)%slot(j), p)
+            if (len(p) > 0) then
+               block
+                 character(len=160) :: w
+                 write(w, '(A,I0,A,I0,A,L1,A,I0,A,I0,A,I0,A,L1)') " (object #", i, " kind ", obj_pool(i)%kind, &
+                      " marked ", obj_mark(i), " slot ", j, " -> tag ", obj_pool(i)%slot(j)%tag, " #", &
+                      obj_pool(i)%slot(j)%ref, " rem ", obj_rem(i)
+                 problem = p // trim(w)
+               end block
+               exit outer
+            end if
+         end do
+      end do
+      do i = 1, vec_used
+         if (vec_free(i) .or. chk_dead_v(i)) cycle
+         n = vec_pool(i)%len
+         do j = 1, n
+            call bad_ref(vec_store(vec_pool(i)%off + j - 1), p)
+            if (len(p) > 0) then
+               block
+                 character(len=160) :: w
+                 write(w, '(A,I0,A,I0,A,L1,A,I0,A,I0,A,I0,A,L1)') " (vec #", i, " len ", n, &
+                      " marked ", vec_mark(i), " at ", j, " -> tag ", vec_store(vec_pool(i)%off + j - 1)%tag, " #", &
+                      vec_store(vec_pool(i)%off + j - 1)%ref, " rem ", vec_rem(i)
+                 problem = p // trim(w)
+               end block
+               exit outer
+            end if
+         end do
+      end do
+    end block outer
+    deallocate(chk_dead_o, chk_dead_v, chk_dead_s)
   end subroutine gc_check_heap
 
   subroutine bad_ref(v, problem)
@@ -3377,18 +3414,24 @@ contains
           problem = "object reference out of range"
        else if (obj_free(v%ref)) then
           problem = "live object references a freed object"
+       else if (allocated(chk_dead_o)) then
+          if (chk_dead_o(v%ref)) problem = "live object references an object a young collection found dead"
        end if
     case (GCT_VEC)
        if (v%ref < 1 .or. v%ref > vec_used) then
           problem = "vec reference out of range"
        else if (vec_free(v%ref)) then
           problem = "live object references a freed vec"
+       else if (allocated(chk_dead_v)) then
+          if (chk_dead_v(v%ref)) problem = "live object references a vec a young collection found dead"
        end if
     case (GCT_STR, GCT_SYM, GCT_KEY)
        if (v%ref < 1 .or. v%ref > str_used) then
           problem = "text reference out of range"
        else if (str_free(v%ref)) then
           problem = "live object references freed text"
+       else if (allocated(chk_dead_s)) then
+          if (chk_dead_s(v%ref)) problem = "live object references text a young collection found dead"
        end if
     end select
   end subroutine bad_ref

@@ -1089,6 +1089,24 @@ core defines). Tests and the gate leave CLOTRAN_AUTOCOMPILE unset;
 test/clj/autocompile_test.clj builds and reinstalls one namespace
 through a fresh cache.
 
+**The calling convention allocated (found 2026-09-26).** Counting
+allocations per element against the JVM's one or two: `(map inc (range
+n))` 32, `into` over it 31, a `conj!` 10, one fn call 3 more -- every
+call built its arguments as a heap vector (an object and a node), and an
+interop call built one per argument and consed the target on. Laziness
+and collections felt fundamentally slow because they are made of calls.
+Step 1 of three (then interpreted frames reused, then 16-byte values):
+a builtin that touches its arguments only by element -- 323 of 337, by
+scripts/argsafe's reading of call_builtin, kept current by `make test`
+-- is handed one of the thread's SPARE argument vectors, returned after
+the call, on the interpreter's call path, compiled code's, and compiled
+interop (`.nth`, `.conj` ...), where the target goes into the same
+vector. coll_to_vector (vec and friends) builds through a transient.
+Measured with compiled core, allocations per element before -> after:
+map 32 -> 9, into/map 31 -> 4, conj! 10 -> 2, (inc i) in a loop 4 -> 2,
+a fn call 7 -> 5, vec 13 -> 9; into/map 713 -> 202 ms, sort 1381 ->
+1018.
+
 What stays interpreted is `eval`: the REPL, `load-string`, source never
 compiled. JVM Clojure keeps its compiler at run time for the same
 reason. `.cljc` compiles once it has `:cljf` or `:default` branches; a

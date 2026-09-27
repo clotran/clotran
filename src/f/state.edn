@@ -24,6 +24,9 @@
  "Eval.f90/auto_ready" {:class :shared, :note "the files that loaded before core.clj finished, recorded and replayed on the main thread during startup (gce_install_compiled)"}
  "Eval.f90/auto_waiting" {:class :shared, :note "the files that loaded before core.clj finished, recorded and replayed on the main thread during startup (gce_install_compiled)"}
  "Eval.f90/n_auto_waiting" {:class :shared, :note "the files that loaded before core.clj finished, recorded and replayed on the main thread during startup (gce_install_compiled)"}
+ "GC.f90/chk_dead_o" {:class :shared, :note "gc_check_heap's scratch (CLOTRAN_GC_VERIFY), used by the collector with the world stopped"}
+ "GC.f90/chk_dead_v" {:class :shared, :note "gc_check_heap's scratch (CLOTRAN_GC_VERIFY), used by the collector with the world stopped"}
+ "GC.f90/chk_dead_s" {:class :shared, :note "gc_check_heap's scratch (CLOTRAN_GC_VERIFY), used by the collector with the world stopped"}
  "GC.f90/rem_lk" {:class :fixed, :note "the remembered set's lock, made once in heap_sync_init before any other thread exists"}
  "GC.f90/notify_gen" {:class :shared, :note "gc_state_notify's count, so a wait does not miss one: under the state lock"}
  "Regex.f90/reg_lk" {:class :fixed, :note "the regex handle table's lock, made at the first regex (on the main thread)"}
