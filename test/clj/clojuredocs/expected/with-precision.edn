@@ -1,0 +1,1 @@
+{:timeout false, :lines {"with-precision#example0" {0 "0.1666666667M", 1 "0.16666667"}, "with-precision#example1" {0 "!error", 1 "0.67M"}, "with-precision#example2" {0 "2M", 7 "-2M", 1 "2M", 4 "1M", 15 "-1M", 13 "1M", 6 "-1M", 17 "2M", 3 "-1M", 12 "2M", 2 "-2M", 11 "-2M", 9 "2M", 5 "1M", 14 "-2M", 16 "!error", 10 "-2M", 8 "2M"}}}

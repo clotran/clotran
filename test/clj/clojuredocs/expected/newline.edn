@@ -1,0 +1,1 @@
+{:timeout false, :lines {"newline#example0" {0 "nil ;;out \"\\n\"", 1 "nil ;;out \"\\n\""}}}

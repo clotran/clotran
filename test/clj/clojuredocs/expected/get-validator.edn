@@ -1,0 +1,1 @@
+{:timeout false, :lines {"get-validator#example0" {0 "nil", 1 "#var", 2 "nil", 3 "nil", 4 "core/pos?", 5 "!error", 6 "nil"}}}

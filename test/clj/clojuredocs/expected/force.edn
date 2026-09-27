@@ -1,0 +1,1 @@
+{:timeout false, :lines {"force#example0" {0 "ok", 7 "ok", 1 "!error", 4 "ok", 15 "ok", 13 "!error", 6 "ok", 3 "!error", 12 "ok", 2 "ok", 11 "ok", 9 "!error", 5 "ok", 14 "ok", 16 "ok", 10 "ok", 8 "ok"}, "force#example1" {0 "!error", 1 "!error"}, "force#example2" {0 "#var", 1 "5 ;;out \"I only print once\\n\"", 2 "5", 3 "nil ;;out \"\\\\O\\n\"", 4 ":field"}}}

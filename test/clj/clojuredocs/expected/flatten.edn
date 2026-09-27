@@ -1,0 +1,1 @@
+{:timeout false, :lines {"flatten#example0" {0 "(1 2 3)", 1 "(1 2 3)", 2 "(1 2 3 4 5)", 3 "()", 4 "()", 5 "()", 6 "(:name \"Hubert\" :age 23)"}, "flatten#example1" {0 "[{:a \"hi\"} {:b \"hey\"} {:c \"yo\"} {:d \"hiya\"} {:e [\"hola\" \"bonjour\"]}]"}}}

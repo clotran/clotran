@@ -1,0 +1,1 @@
+{:timeout false, :lines {"class#example0" {0 "java.lang.Long", 1 "clojure.lang.PersistentVector", 2 "java.lang.String"}, "class#example1" {0 "clojure.core$class"}, "class#example2" {0 "nil"}, "class#example3" {0 "!error"}}}

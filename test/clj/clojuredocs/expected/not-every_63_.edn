@@ -1,0 +1,1 @@
+{:timeout false, :lines {"not-every?#example0" {0 "true", 1 "false"}}}

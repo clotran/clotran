@@ -1,0 +1,1 @@
+{:timeout false, :lines {"second#example0" {0 ":bravo", 1 "2", 2 "[:b 2]", 3 "3", 4 "2", 5 "nil", 6 "nil", 7 "nil"}}}

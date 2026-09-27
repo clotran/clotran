@@ -1,0 +1,1 @@
+{:timeout false, :lines {"satisfies?#example0" {0 "nil", 7 "false", 1 "Foo", 4 "nil", 6 "true", 3 "nil", 2 "Bar", 5 "true", 8 "true"}, "satisfies?#example1" {0 "nil", 1 "Foo", 2 "nil", 3 "!error", 4 "false"}}}

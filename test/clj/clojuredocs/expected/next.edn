@@ -1,0 +1,1 @@
+{:timeout false, :lines {"next#example0" {0 "(:bravo :charlie)", 1 "(:three)", 2 "nil"}, "next#example1" {0 "#var"}, "next#example2" {0 "nil", 1 "()", 2 "nil", 3 "()", 4 "nil", 5 "()"}}}

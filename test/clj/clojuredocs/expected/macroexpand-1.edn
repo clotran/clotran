@@ -1,0 +1,1 @@
+{:timeout false, :lines {"macroexpand-1#example0" {0 "(def mystruct (clojure.core/create-struct [a b]))"}, "macroexpand-1#example1" {0 "(* (+ c 3) 2)"}, "macroexpand-1#example2" {0 "#var", 1 "!error"}}}

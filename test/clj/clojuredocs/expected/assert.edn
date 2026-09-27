@@ -1,0 +1,1 @@
+{:timeout false, :lines {"assert#example0" {0 "nil", 1 "!error", 2 "!error", 3 "nil", 4 "nil", 5 "nil"}, "assert#example1" {0 "!error"}, "assert#example2" {0 "\"AssertionError caught.\"", 1 "!error"}}}

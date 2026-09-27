@@ -1,0 +1,1 @@
+{:timeout false, :lines {"with-open#example0" {0 "!error"}, "with-open#example1" {0 "!error"}, "with-open#example2" {0 "!error", 1 "!error"}, "with-open#example3" {0 "!error", 1 "#var", 2 "!error"}}}

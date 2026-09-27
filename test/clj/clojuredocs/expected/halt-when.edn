@@ -1,0 +1,1 @@
+{:timeout false, :lines {"halt-when#example0" {0 "#var", 1 "#var", 2 "\"hll\"", 3 "\"hll\"", 4 "\\space"}, "halt-when#example1" {0 "#var", 1 "#var", 2 ":x", 3 ":x", 4 "(1 2 3 4 5)"}, "halt-when#example2" {0 "435"}, "halt-when#example3" {0 "45", 1 "45", 2 "!error", 3 "[0 1 2 3 4 5 6 7 8 9 10]"}, "halt-when#example4" {0 ":cd.e4/invalid"}}}

@@ -1,0 +1,1 @@
+{:timeout true, :lines {"set-error-handler!#example0" {0 "#var", 7 "#object[clojure.lang.Agent {:status :ready, :val 7}]", 1 "#var", 4 "#object[clojure.lang.Agent {:status :ready, :val 7}]", 6 "!error", 3 "#object[clojure.lang.Agent {:status :ready, :val 7}] ;;out \"evil error occured:  #error {\\n :cause \"", 2 "nil", 5 "7", 8 "7"}, "set-error-handler!#example1" {0 "!error"}}}

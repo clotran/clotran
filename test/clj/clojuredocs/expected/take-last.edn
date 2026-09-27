@@ -1,0 +1,1 @@
+{:timeout false, :lines {"take-last#example0" {0 "(3 4)", 1 "(4)", 2 "nil", 3 "nil", 4 "nil", 5 "nil"}, "take-last#example1" {0 "#var", 1 "!error", 2 "!error", 3 "!error", 4 "!error", 5 "#var", 6 "!error"}}}

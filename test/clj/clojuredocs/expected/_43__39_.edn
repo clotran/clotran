@@ -1,0 +1,1 @@
+{:timeout false, :lines {"+'#example0" {0 "0", 1 "1", 2 "-10", 3 "3", 4 "6", 5 "10000000000499500", 6 "10000000000499500"}, "+'#example1" {0 "java.lang.Long", 1 "!error", 2 "9223372036854775808N", 3 "clojure.lang.BigInt"}}}

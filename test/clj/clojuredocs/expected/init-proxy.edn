@@ -1,0 +1,1 @@
+{:timeout false, :lines {"init-proxy#example0" {0 "clojure.lang.IDeref", 1 "#var", 2 "#var", 3 "\"Cause: error\"", 4 "\"Root: caused by root\""}}}

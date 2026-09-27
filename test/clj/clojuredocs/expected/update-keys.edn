@@ -1,0 +1,1 @@
+{:timeout false, :lines {"update-keys#example0" {0 "{:bar 1337, :foo 42}", 1 "{\"bar\" 1337, \"foo\" 42}", 2 "{:bar 1337, :foo {\"qux\" 404}}", 3 "{:bar 1337, :foo {:qux 404}}", 4 "{\"bar\" 1337, \"foo\" {\"qux\" 404}}"}}}

@@ -1,0 +1,1 @@
+{:timeout false, :lines {"inc#example0" {0 "2", 1 "2.0", 2 "3/2", 3 "0"}, "inc#example1" {0 "(2 3 4 5 6)", 1 "[2 3 4 5 6]"}, "inc#example2" {0 "!error", 1 "2", 2 "!error", 3 "0"}, "inc#example3" {0 "!error", 1 "!error"}}}

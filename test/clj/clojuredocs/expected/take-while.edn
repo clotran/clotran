@@ -1,0 +1,1 @@
+{:timeout false, :lines {"take-while#example0" {0 "499500"}, "take-while#example1" {0 "(-2 -1)", 1 "(-2 -1)", 2 "()", 3 "()", 4 "()"}, "take-while#example2" {0 "([1 2])", 1 "([3 4])", 2 "()", 3 "()"}, "take-while#example3" {0 "#var", 1 "#var", 2 "({:month 1, :val 12} {:month 2, :val 3} {:month 3, :val 32})"}, "take-while#example4" {0 "ok"}}}

@@ -1,0 +1,1 @@
+{:timeout false, :lines {"prefers#example0" {0 "#var", 1 "#var", 2 "#object[clojure.lang.MultiFn \"clojure.lang.MultiFn@3b582111\"]", 3 "nil", 4 "#object[clojure.lang.MultiFn \"clojure.lang.MultiFn@3b582111\"]", 5 "nil", 6 "#object[clojure.lang.MultiFn \"clojure.lang.MultiFn@3b582111\"]", 7 "{:cd.e0/unix #{:cd.e0/bsd}}"}}}

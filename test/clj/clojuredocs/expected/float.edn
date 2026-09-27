@@ -1,0 +1,1 @@
+{:timeout false, :lines {"float#example0" {0 "1.0", 1 "1.11", 2 "1.1111112", 3 "!error", 4 "##Inf"}, "float#example1" {0 "!error", 1 "123.456"}}}

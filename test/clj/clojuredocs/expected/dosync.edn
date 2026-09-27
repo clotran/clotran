@@ -1,0 +1,1 @@
+{:timeout false, :lines {"dosync#example0" {0 "#var"}, "dosync#example1" {0 "#var", 1 "#var", 2 "nil ;;out \"100 200\\n\"", 3 "#var", 4 "20", 5 "nil ;;out \"80 220\\n\""}}}

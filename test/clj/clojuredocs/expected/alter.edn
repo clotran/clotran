@@ -1,0 +1,1 @@
+{:timeout false, :lines {"alter#example0" {0 "#var", 1 "#var", 2 "[\"zack\"]", 3 "[\"zack\" \"shelley\"]", 4 "nil ;;out \"#object[clojure.lang.Ref {:status :ready, :val [zack shelley]}]\\n\"", 5 "nil ;;out \"[zack shelley]\\n\"", 6 "nil ;;out \"[zack shelley]\\n\""}}}

@@ -1,0 +1,1 @@
+{:timeout false, :lines {"split-at#example0" {0 "[(1 2) (3 4 5)]", 1 "[(1 2) ()]"}, "split-at#example1" {0 "(1 2 3)"}, "split-at#example2" {0 "[(:a :b) (:c :d)]"}}}

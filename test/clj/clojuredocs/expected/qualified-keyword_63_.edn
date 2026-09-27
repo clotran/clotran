@@ -1,0 +1,1 @@
+{:timeout false, :lines {"qualified-keyword?#example0" {0 "true", 1 "true", 2 "false", 3 "false", 4 "false", 5 "false"}}}

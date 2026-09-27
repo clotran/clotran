@@ -1,0 +1,1 @@
+{:timeout false, :lines {"every-pred#example0" {0 "true"}, "every-pred#example1" {0 "(2/3 1/4)"}, "every-pred#example2" {0 "true", 1 "true", 2 "false", 3 "false"}}}

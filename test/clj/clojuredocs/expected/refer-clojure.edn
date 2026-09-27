@@ -1,0 +1,1 @@
+{:timeout false, :lines {"refer-clojure#example0" {0 "ok"}, "refer-clojure#example1" {0 "[#fn]", 1 "[#fn]", 2 "!error"}}}

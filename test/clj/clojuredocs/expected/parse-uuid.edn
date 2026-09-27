@@ -1,0 +1,1 @@
+{:timeout false, :lines {"parse-uuid#example0" {0 "#uuid \"b6883c0a-0342-4007-9966-bc2dfa6b109e\"", 1 "#uuid \"b6883c0a-0342-6007-9966-bc2dfa6b109e\"", 2 "nil", 3 "nil"}, "parse-uuid#note0" {0 "nil", 1 "#uuid \"17392216-6ca5-491a-b38c-0000000920ba\""}}}

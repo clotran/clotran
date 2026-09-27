@@ -1,0 +1,1 @@
+{:timeout false, :lines {"definterface#example0" {0 "cd.e0.IBody"}, "definterface#example1" {0 "cd.e1.I", 7 "!error", 1 "!error", 4 "cd.e1.Irec", 6 "\"foo\"", 3 "!error", 2 "P", 9 "\"foo\"", 5 "cd.e1.Prec", 8 "\"foo\""}}}

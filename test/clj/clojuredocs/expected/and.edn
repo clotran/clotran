@@ -1,0 +1,1 @@
+{:timeout false, :lines {"and#example0" {0 "true", 1 "false", 2 "false", 3 "()", 4 "[]", 5 "1", 6 "0"}, "and#example2" {0 "false", 1 "nil", 2 "false", 3 "nil ;;out \"foo\\n\"", 4 "nil"}, "and#example3" {0 "true", 1 "true"}}}

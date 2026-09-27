@@ -1,0 +1,1 @@
+{:timeout false, :lines {"nfirst#example0" {0 "nil", 1 "(b c)", 2 "(1)", 3 "!error"}}}

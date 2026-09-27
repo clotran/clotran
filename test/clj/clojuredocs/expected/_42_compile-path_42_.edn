@@ -1,0 +1,1 @@
+{:timeout false, :lines {"*compile-path*#example0" {0 "!error"}}}

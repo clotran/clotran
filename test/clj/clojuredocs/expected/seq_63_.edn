@@ -1,0 +1,1 @@
+{:timeout false, :lines {"seq?#example0" {0 "false", 1 "false", 2 "true"}, "seq?#example1" {0 "true", 1 "false", 2 "false", 3 "true", 4 "false", 5 "false"}, "seq?#example2" {0 "#var", 1 "\"Seq ok\"", 2 "\"No Seqing here\""}}}

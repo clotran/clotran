@@ -1,0 +1,1 @@
+{:timeout false, :lines {"with-out-str#example0" {0 "\"this should return as a string\\n\""}, "with-out-str#example1" {0 "ok", 1 "ok"}, "with-out-str#example2" {0 "#var", 1 "{:result 2, :str \"Clojure is the best!\\n\"}"}, "with-out-str#example3" {0 "!unreadable"}}}

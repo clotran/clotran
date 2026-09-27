@@ -1,0 +1,1 @@
+{:timeout false, :lines {"compile#example0" {0 "clojure.java.io", 1 "!error"}, "compile#example1" {0 "{:aliases {:aot {:main-opts [\"-e\" \"(compile,(symbol,:demo-app.main)\"]}, :demo-app {:extra-paths [\"classes\"], :main-opts [\"-m\" \"demo-app.main\"]}}}"}}}

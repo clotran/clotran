@@ -1,0 +1,1 @@
+{:timeout false, :lines {"not#example0" {0 "false", 1 "true", 2 "true", 3 "true", 4 "false", 5 "true", 6 "false"}, "not#example1" {0 "true"}}}

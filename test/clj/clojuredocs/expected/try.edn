@@ -1,0 +1,1 @@
+{:timeout false, :lines {"try#example0" {0 "!unreadable"}, "try#example1" {0 "!error"}, "try#example2" {0 "!error"}, "try#example3" {0 "\"caught exception: Divide by zero\""}, "try#example4" {0 "nil ;;out \"expression 1\\nexpression 2\\nexpression 3 throws\\n\""}, "try#example5" {0 "\"I will be returned\"", 1 "\"I will be returned\""}, "try#example6" {0 "!error", 1 ":caught"}}}

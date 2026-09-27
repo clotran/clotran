@@ -1,0 +1,1 @@
+{:timeout false, :lines {"extend#example0" {0 "Dateable", 1 "nil", 2 "nil", 3 "nil"}, "extend#example1" {0 "IBaz", 1 "#var", 2 "cd.e1.MyBaz", 3 "nil", 4 "#var", 5 "\"MyBaz::foo\"", 6 "nil", 7 "\"NEW\""}, "extend#note0" {0 "!error", 1 "IBar", 2 "!error"}, "extend#note1" {0 "!error", 1 "IBar", 2 "!error"}}}

@@ -1,0 +1,1 @@
+{:timeout false, :lines {"with-local-vars#example0" {0 "#var", 1 "5040"}, "with-local-vars#example1" {0 "nil ;;out \"#<Var: --unnamed-->\\nvalue\\nvalue\\nvalue\\n\""}, "with-local-vars#example2" {0 "nil ;;out \"1\\n2\\n3\\n\""}}}

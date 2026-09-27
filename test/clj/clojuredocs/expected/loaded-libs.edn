@@ -1,0 +1,1 @@
+{:timeout false, :lines {"loaded-libs#example0" {0 "nil", 1 "nil", 2 "true", 3 "#object[clojure.lang.Namespace \"x\"]", 4 "#object[clojure.lang.Namespace \"y\"]", 5 "true"}}}

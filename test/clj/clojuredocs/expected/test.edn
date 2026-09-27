@@ -1,0 +1,1 @@
+{:timeout false, :lines {"test#example0" {0 "#var", 1 ":ok", 2 "!error", 3 "#var", 4 "!error", 5 "!error", 6 "#var", 7 ":no-test"}}}

@@ -1,0 +1,1 @@
+{:timeout false, :lines {"load-file#example0" {0 "!error"}, "load-file#example1" {0 "!error"}, "load-file#example2" {0 "nil", 1 "#var", 2 "46", 3 "#var"}}}

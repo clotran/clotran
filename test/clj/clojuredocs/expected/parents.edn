@@ -1,0 +1,1 @@
+{:timeout false, :lines {"parents#example0" {0 "nil", 1 "#{:cd.e0/poodle}", 2 "nil", 3 "#{:cd.e0/poodle :cd.e0/toy_dogs}"}, "parents#example1" {0 "!error", 1 "!error"}}}

@@ -1,0 +1,1 @@
+{:timeout false, :lines {"reverse#example0" {0 "(3 2 1)"}, "reverse#example1" {0 "(\\e \\r \\u \\j \\o \\l \\c)", 1 "\"erujolc\""}, "reverse#example2" {0 "ok", 1 "ok", 2 "ok"}}}

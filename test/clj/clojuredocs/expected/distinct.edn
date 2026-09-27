@@ -1,0 +1,1 @@
+{:timeout false, :lines {"distinct#example0" {0 "(1 2 3 4 5)"}, "distinct#example1" {0 "!error", 1 "!error", 2 "!error"}, "distinct#example2" {0 "(1/2)", 1 "(1/2 0.5)"}, "distinct#example3" {0 "\"tao\""}}}

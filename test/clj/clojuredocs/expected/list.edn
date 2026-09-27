@@ -1,0 +1,1 @@
+{:timeout false, :lines {"list#example0" {0 "(a b c d e f g)", 1 "(1 2 3)"}, "list#example1" {0 "((:1 1) (:2 2) (:3 3) (:4 4))"}, "list#example2" {0 "(1 2)", 1 "(x y)", 2 "(1 2)"}}}

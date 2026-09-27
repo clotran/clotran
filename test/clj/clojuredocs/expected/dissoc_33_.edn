@@ -1,0 +1,1 @@
+{:timeout false, :lines {"dissoc!#example0" {0 "{:y 2, :z 3}", 1 "{:y 2, :z 3}"}}}

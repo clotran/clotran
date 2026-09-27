@@ -1,0 +1,1 @@
+{:timeout false, :lines {"ref-min-history#example0" {0 "#var", 1 "0", 2 "#object[clojure.lang.Ref {:status :ready, :val 0}]", 3 "1"}, "ref-min-history#example1" {0 "ok", 1 "ok", 2 "ok", 3 "ok", 4 "ok", 5 "ok", 6 "ok"}}}

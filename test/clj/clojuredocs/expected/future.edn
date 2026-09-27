@@ -1,0 +1,1 @@
+{:timeout false, :lines {"future#example0" {0 "ok", 1 "ok"}, "future#example1" {0 "ok", 1 "ok", 2 "ok", 3 "ok", 4 "ok", 5 "ok", 6 "ok", 7 "ok"}, "future#example2" {0 "java.lang.ArithmeticException", 1 "!error", 2 "!error", 3 "!error", 4 "!error"}, "future#example3" {0 "!error"}, "future#example4" {0 "!unreadable"}, "future#example5" {0 "!error", 1 "!error"}}}

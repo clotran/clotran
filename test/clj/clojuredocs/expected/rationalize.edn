@@ -1,0 +1,1 @@
+{:timeout false, :lines {"rationalize#example0" {0 "3/2"}, "rationalize#example1" {0 "3141592653589793/1000000000000000", 1 "14142135623730951/10000000000000000"}, "rationalize#example2" {0 "1/2", 1 "2", 2 "2", 3 "2N"}, "rationalize#example3" {0 "true"}}}

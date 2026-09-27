@@ -1,0 +1,1 @@
+{:timeout false, :lines {"short#example0" {0 "java.lang.Short"}, "short#example1" {0 "123", 1 "1", 2 "1", 3 "-1", 4 "!error", 5 "123"}}}

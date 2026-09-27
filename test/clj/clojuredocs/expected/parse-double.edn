@@ -1,0 +1,1 @@
+{:timeout false, :lines {"parse-double#example0" {0 "4.2", 1 "-42000.0", 2 "4.0", 3 "##NaN", 4 "##Inf", 5 "nil", 6 "nil"}}}

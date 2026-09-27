@@ -1,0 +1,1 @@
+{:timeout false, :lines {"number?#example0" {0 "true", 1 "true", 2 "false", 3 "false", 4 "false"}, "number?#example1" {0 "(true true true true)", 1 "(true true true true)"}, "number?#example2" {0 "true"}, "number?#example3" {0 "true", 1 "(0 1.1 ##NaN)"}}}

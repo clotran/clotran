@@ -1,0 +1,1 @@
+{:timeout false, :lines {"finally#example0" {0 "\"caught exception: Divide by zero\" ;;out \"\\\"final exception.\\\"\\n\"", 1 "\"final exception.\"", 2 "\"caught exception: Divide by zero\""}, "finally#example1" {0 "2 ;;out \"\\\"final print.\\\"\\n\"", 1 "\"final print.\"", 2 "2"}}}

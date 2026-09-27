@@ -1,0 +1,1 @@
+{:timeout false, :lines {"*print-readably*#example0" {0 "nil ;;out \"a\\nb\\nc\"", 1 "nil ;;out \"a\\nb\\nc\""}}}

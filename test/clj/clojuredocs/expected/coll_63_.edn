@@ -1,0 +1,1 @@
+{:timeout false, :lines {"coll?#example0" {0 "true", 7 "false", 1 "true", 4 "false", 6 "true", 3 "true", 2 "true", 5 "false", 8 "false"}, "coll?#example1" {0 "true"}, "coll?#example2" {0 "true", 1 "true", 2 "true", 3 "false", 4 "true", 5 "true", 6 "false"}, "coll?#example3" {0 "false", 1 "true"}}}

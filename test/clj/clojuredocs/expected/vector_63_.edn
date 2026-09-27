@@ -1,0 +1,1 @@
+{:timeout false, :lines {"vector?#example0" {0 "true", 1 "false", 2 "true", 3 "false", 4 "false", 5 "[:a 1]", 6 "true"}, "vector?#example1" {0 "true"}, "vector?#example2" {0 "true", 1 "true", 2 "!error", 3 "{:a #{1 2 3}}"}}}

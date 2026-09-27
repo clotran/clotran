@@ -1,0 +1,1 @@
+{:timeout false, :lines {"byte-array#example0" {0 "#var", 1 "(0 1 4 9 16 25 36 49 64 81)", 2 "[0 1 4 9 16 25 36 49 64 81]", 3 "nil", 4 "[122 122 122 122 122 122 122 122 122 122]"}, "byte-array#example1" {0 "#var", 1 "\"Clojure!\""}, "byte-array#example2" {0 "false", 1 "true", 2 "#var", 3 "#var", 4 "false", 5 "true"}}}

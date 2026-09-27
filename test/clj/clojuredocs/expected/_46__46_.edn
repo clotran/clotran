@@ -1,0 +1,1 @@
+{:timeout false, :lines {"..#example0" {0 "true", 1 "(. (. \"fooBAR\" (toLowerCase)) (contains \"ooba\"))"}, "..#example1" {0 "true"}, "..#example2" {0 "true", 1 "true"}}}

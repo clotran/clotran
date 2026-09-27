@@ -1,0 +1,1 @@
+{:timeout false, :lines {"the-ns#example0" {0 "#var", 1 "#object[clojure.lang.Namespace \"my-namespace\"]", 2 "#object[clojure.lang.Namespace \"my-namespace\"]", 3 "!error", 4 "!error"}}}

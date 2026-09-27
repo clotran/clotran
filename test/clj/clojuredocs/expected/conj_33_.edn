@@ -1,0 +1,1 @@
+{:timeout false, :lines {"conj!#example0" {0 "!error"}, "conj!#example1" {0 "#var", 1 "{:a 1, :b 2, :c 3, :d 4, :e 5}", 2 "{:a 1, :b 2, :c 3, :d 4, :e 5, :f 6, :g 7, :h 8}", 3 "#var", 4 "{:a 1, :b 2, :c 3, :d 4, :e 5}", 5 "{:a 1, :b 2, :c 3, :d 4, :e 5, :f 6, :g 7, :h 8, :i 9}"}}}

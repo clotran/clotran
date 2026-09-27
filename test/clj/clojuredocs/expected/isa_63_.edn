@@ -1,0 +1,1 @@
+{:timeout false, :lines {"isa?#example0" {0 "java.util.PriorityQueue", 1 "(java.util.AbstractQueue java.io.Serializable)", 2 "java.util.AbstractQueue", 3 "true", 4 "(java.util.AbstractCollection java.util.Queue)", 5 "true", 6 "true", 7 "false"}, "isa?#example1" {0 "nil", 1 "nil", 2 "nil", 3 "true", 4 "true", 5 "false"}, "isa?#example2" {0 "nil", 1 "nil", 2 "true"}}}

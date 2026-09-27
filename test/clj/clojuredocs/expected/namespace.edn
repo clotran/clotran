@@ -1,0 +1,1 @@
+{:timeout false, :lines {"namespace#example0" {0 "#var", 1 "\"user\""}, "namespace#example1" {0 "\"admin\"", 1 "nil"}, "namespace#note0" {0 "\"no-such-name\"", 1 "#var", 2 "nil"}}}

@@ -1,0 +1,1 @@
+{:timeout false, :lines {"print-str#example0" {0 "#var", 1 "true", 2 "\"1 foo b a r {:a 2}\""}}}

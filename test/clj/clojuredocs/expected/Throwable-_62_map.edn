@@ -1,0 +1,1 @@
+{:timeout false, :lines {"Throwable->map#example0" {0 "#var", 1 "(:via :trace :cause)", 2 "\"Divide by zero\"", 3 "28"}}}

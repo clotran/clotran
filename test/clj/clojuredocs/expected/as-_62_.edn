@@ -1,0 +1,1 @@
+{:timeout false, :lines {"as->#example0" {0 "#var", 1 ":hamster"}, "as->#example1" {0 "2"}, "as->#example2" {0 "(11 9 7)"}, "as->#example3" {0 "13", 1 "!error"}, "as->#example4" {0 "{:coord [15.1 84.2], :host \"//mysite.com\", :path \"/a/123\", :url \"//mysite.com/a/123\", :x \"15.1\", :y \"84.2\"}"}}}

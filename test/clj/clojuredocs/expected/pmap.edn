@@ -1,0 +1,1 @@
+{:timeout false, :lines {"pmap#example0" {0 "(2 3 4 5 6)"}, "pmap#example1" {0 "!error", 1 "!error"}, "pmap#example3" {0 "!unreadable"}}}

@@ -1,0 +1,1 @@
+{:timeout false, :lines {"find#example0" {0 "[:a 1]", 1 "[:a nil]", 2 "nil"}, "find#example1" {0 "[2 :c]", 1 "nil", 2 "[4294967296 1]"}, "find#example2" {0 "6", 1 "!error"}}}

@@ -1,0 +1,1 @@
+{:timeout false, :lines {"bit-and-not#example0" {0 "4"}, "bit-and-not#example1" {0 "\"100\"", 1 "\"11111111111111111111111111110111\"", 2 "true"}, "bit-and-not#example2" {0 "(254 253 252 251 250 249 248 247 246)"}}}

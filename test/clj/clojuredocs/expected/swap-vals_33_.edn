@@ -1,0 +1,1 @@
+{:timeout false, :lines {"swap-vals!#example0" {0 "#var", 1 "nil ;;out \"1\\n(2 3)\\n\""}}}

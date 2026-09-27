@@ -1,0 +1,1 @@
+{:timeout false, :lines {"atom#example0" {0 "#var", 1 "0", 2 "1", 3 "1", 4 "4", 5 "0", 6 "0"}, "atom#example1" {0 "#var", 1 "#{:tag}", 2 "#{:tag}"}, "atom#example2" {0 "#var", 1 "0", 2 "!error", 3 "2", 4 "2"}, "atom#example3" {0 "#var", 1 "{:make \"Audi\", :model \"Q3\"}", 2 "{:make \"Audi\", :model \"Q5\"}", 3 "{:make \"\", :model \"\"}"}, "atom#example4" {0 "#var", 1 "true"}}}

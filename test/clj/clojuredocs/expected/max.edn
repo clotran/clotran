@@ -1,0 +1,1 @@
+{:timeout false, :lines {"max#example0" {0 "5", 1 "5", 2 "100"}, "max#example1" {0 "4", 1 "6"}, "max#example2" {0 "7"}, "max#note0" {0 "\"foo\"", 1 "!error"}, "max#note100" {0 "!error"}}}

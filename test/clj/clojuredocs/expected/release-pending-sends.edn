@@ -1,0 +1,1 @@
+{:timeout true, :lines {"release-pending-sends#example0" {0 "nil", 7 "nil", 1 "#var", 4 "#var", 6 "#object[clojure.lang.Agent {:status :ready, :val {}}]", 3 "#var", 2 "#var", 5 "#var", 8 "(0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)"}}}

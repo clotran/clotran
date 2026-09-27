@@ -1,0 +1,1 @@
+{:timeout false, :lines {"dec'#example0" {0 "-0.9", 1 "0", 2 "0.0"}, "dec'#example1" {0 "-9223372036854775809N", 1 "!error"}}}

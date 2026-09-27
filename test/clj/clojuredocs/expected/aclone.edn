@@ -1,0 +1,1 @@
+{:timeout false, :lines {"aclone#example0" {0 "#var", 1 "#var", 2 "23", 3 "[23 2 3 4]", 4 "[1 2 3 4]"}}}

@@ -1,0 +1,1 @@
+{:timeout false, :lines {"*data-readers*#example0" {0 "java.net.URL", 1 "#object[java.net.URL \"file:/etc/hosts\"]"}}}

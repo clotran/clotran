@@ -1,0 +1,1 @@
+{:timeout false, :lines {"*ns*#example0" {0 "#object[clojure.lang.Namespace \"cd.e0\"]"}, "*ns*#example1" {0 "nil", 1 "#object[clojure.lang.Namespace \"foo.bar\"]"}, "*ns*#example2" {0 "nil", 1 "#object[clojure.lang.Namespace \"my.namespace\"]", 2 "#var", 3 "#object[clojure.lang.Namespace \"other.ns\"]"}}}

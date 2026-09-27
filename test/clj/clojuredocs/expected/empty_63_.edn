@@ -1,0 +1,1 @@
+{:timeout false, :lines {"empty?#example0" {0 "true", 1 "false"}, "empty?#example1" {0 "true", 1 "true"}, "empty?#example2" {0 "(\"foobar\")"}, "empty?#example3" {0 "true"}, "empty?#example4" {0 "true", 1 "true"}, "empty?#note200" {0 "!error"}, "empty?#note500" {0 "false", 1 "nil"}}}

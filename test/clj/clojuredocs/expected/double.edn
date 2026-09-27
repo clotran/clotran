@@ -1,0 +1,1 @@
+{:timeout false, :lines {"double#example0" {0 "1.0"}, "double#example1" {0 "0.3333333333333333"}, "double#example2" {0 "!error", 1 "123.456"}}}

@@ -1,0 +1,1 @@
+{:timeout false, :lines {"set-error-mode!#example0" {0 "#var", 1 "nil", 2 "#object[clojure.lang.Agent {:status :ready, :val 2}]", 3 "2"}}}

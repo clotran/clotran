@@ -1,0 +1,1 @@
+{:timeout false, :lines {"remove-watch#example0" {0 "#var", 1 "#object[clojure.lang.Atom {:status :ready, :val nil}]", 2 "[1 2 3] ;;out \"[1 2 3]\\n\"", 3 "#object[clojure.lang.Atom {:status :ready, :val [1 2 3]}]"}}}

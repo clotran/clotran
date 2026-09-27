@@ -1,0 +1,1 @@
+{:timeout false, :lines {"when-first#example0" {0 "1", 1 "nil", 2 "nil"}, "when-first#example1" {0 "nil ;;out \"Picked: nil\\n\""}, "when-first#example2" {0 "#var", 1 "0 ;;out \".\""}}}

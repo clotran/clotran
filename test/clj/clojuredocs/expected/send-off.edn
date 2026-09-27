@@ -1,0 +1,1 @@
+{:timeout false, :lines {"send-off#example0" {0 "#var", 1 "\"\"", 2 "#object[clojure.lang.Agent {:status :failed, :val \"\"}]", 3 "\"\""}}}

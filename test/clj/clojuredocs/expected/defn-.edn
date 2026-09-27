@@ -1,0 +1,1 @@
+{:timeout false, :lines {"defn-#example0" {0 "nil", 1 "#var", 2 "#var", 3 "\"World!\"", 4 "\"Hello World!\"", 5 "nil", 6 "\"Hello World!\"", 7 "!error"}, "defn-#example1" {0 "!unreadable"}}}

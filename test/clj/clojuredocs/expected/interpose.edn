@@ -1,0 +1,1 @@
+{:timeout false, :lines {"interpose#example0" {0 "#var", 1 "(\"one\" \", \" \"two\" \", \" \"three\")", 2 "\"one, two, three\"", 3 "\"one, two, three\""}, "interpose#example1" {0 "!unreadable"}}}

@@ -1,0 +1,1 @@
+{:timeout true, :lines {"agent#example0" {0 "#var", 1 "#object[clojure.lang.Agent {:status :ready, :val 1}]", 2 "1", 3 "#var", 4 "#object[clojure.lang.Agent {:status :ready, :val {}}]", 5 "{:act-one \"PROLOGUE\"}", 6 "#object[clojure.lang.Agent {:status :ready, :val {:act-one \"PROLOGUE\"}}]", 7 "{:act-one \"PROLOGUE\", :act-two \"VINCENT VEGA & MARSELLUS WALLACE'S WIFE\"}"}}}

@@ -1,0 +1,1 @@
+{:timeout false, :lines {"quote#example0" {0 "true", 1 "(println \"foo\")"}, "quote#example1" {0 "(quote (1 2 3))"}, "quote#example2" {0 "true", 1 "true", 2 "true", 3 "true"}, "quote#example3" {0 "org.clojure/clojure", 1 "{org.clojure/clojure 3}", 2 "{:k 8, org.clojure/clojure 3}", 3 "!error"}}}

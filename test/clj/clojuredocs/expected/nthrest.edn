@@ -1,0 +1,1 @@
+{:timeout false, :lines {"nthrest#example0" {0 "(5 6 7 8 9)", 1 "(5 6 7 8 9)", 2 "()", 3 "nil", 4 "(5 6 7)"}, "nthrest#example1" {0 "(5 6 7 8 9)", 1 "(5 6 7 8 9)", 2 "()", 3 "()"}, "nthrest#example2" {0 "#var ;;out \"...........\"", 1 "#var"}}}

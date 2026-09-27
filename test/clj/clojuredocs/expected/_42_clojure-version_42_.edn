@@ -1,0 +1,1 @@
+{:timeout false, :lines {"*clojure-version*#example0" {0 "{:incremental 0, :major 1, :minor 12, :qualifier nil}"}}}

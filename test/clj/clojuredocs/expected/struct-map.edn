@@ -1,0 +1,1 @@
+{:timeout false, :lines {"struct-map#example0" {0 "!error", 1 "!error", 2 "!error", 3 "!error", 4 "!error"}, "struct-map#example1" {0 "#var", 1 "{:db \"db\", :name \"Grut\"}"}}}

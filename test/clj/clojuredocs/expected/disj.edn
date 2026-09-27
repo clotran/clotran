@@ -1,0 +1,1 @@
+{:timeout false, :lines {"disj#example0" {0 "#{1 2 3}", 1 "#{1 3}", 2 "#{1 2 3}", 3 "#{2}"}, "disj#example1" {0 "#{2}"}}}

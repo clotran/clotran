@@ -1,0 +1,1 @@
+{:timeout false, :lines {"list?#example0" {0 "true", 1 "false", 2 "false", 3 "false", 4 "false"}, "list?#example1" {0 "(1 2 3)", 1 "true", 2 "false", 3 "true", 4 "false"}}}

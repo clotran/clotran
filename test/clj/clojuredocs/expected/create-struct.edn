@@ -1,0 +1,1 @@
+{:timeout false, :lines {"create-struct#example0" {0 "#var", 1 "{:age 23, :name \"Brad Cypert\"}", 2 "{:age 23, :name \"Brad Cypert\"}"}}}

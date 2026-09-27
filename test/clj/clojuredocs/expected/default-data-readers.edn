@@ -1,0 +1,1 @@
+{:timeout false, :lines {"default-data-readers#example0" {0 "{inst #var, uuid #var}", 1 "java.util.Date", 2 "java.util.UUID", 3 "\"374c8c4-fd89-4f1b-a11f-42e334ccf5ce\"", 4 "nil", 5 ":nope"}}}

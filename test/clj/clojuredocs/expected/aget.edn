@@ -1,0 +1,1 @@
+{:timeout false, :lines {"aget#example0" {0 "#var", 1 "#var", 2 "3.0", 3 "6", 4 "#var", 5 "0"}, "aget#example1" {0 "!error", 1 "!error"}}}

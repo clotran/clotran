@@ -1,0 +1,1 @@
+{:timeout false, :lines {"name#example0" {0 "\"x\"", 1 "\"x\"", 2 "\"x\"", 3 "\"x\"", 4 "!error", 5 "!error"}, "name#example1" {0 "!unreadable"}, "name#example2" {0 "#var", 1 "\"ns/key\"", 2 "\"ns/deep/key\"", 3 "!error"}, "name#example3" {0 "\"c\"", 1 "\"b/c\""}, "name#example4" {0 "\"a/b\""}, "name#example5" {0 "\"pageQuery\""}}}

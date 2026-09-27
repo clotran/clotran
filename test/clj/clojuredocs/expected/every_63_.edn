@@ -1,0 +1,1 @@
+{:timeout false, :lines {"every?#example0" {0 "true", 1 "false"}, "every?#example1" {0 "false", 1 "true", 2 "true", 3 "false"}, "every?#example2" {0 "true", 1 "true", 2 "true", 3 "true", 4 "true", 5 "true", 6 "true"}, "every?#example3" {0 "!error", 1 "true", 2 "!error", 3 "false", 4 "!error", 5 "false"}}}

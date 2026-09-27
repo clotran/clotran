@@ -1,0 +1,1 @@
+{:timeout false, :lines {"symbol#example0" {0 "foo", 1 "foo", 2 "clojure.core/foo"}, "symbol#example1" {0 "!error", 1 "!error", 2 "!error", 3 "abc def", 4 "123def", 5 "/123/def/ghi", 6 "/abc/def/ghi"}, "symbol#example2" {0 "!error", 1 "dog"}}}

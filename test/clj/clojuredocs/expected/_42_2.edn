@@ -1,0 +1,1 @@
+{:timeout false, :lines {"*2#example0" {0 "\"Hello!\"", 1 "\"Hello World!\"", 2 "[nil nil]"}}}

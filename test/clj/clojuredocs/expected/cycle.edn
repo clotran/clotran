@@ -1,0 +1,1 @@
+{:timeout false, :lines {"cycle#example0" {0 "(\"a\" \"b\" \"a\" \"b\" \"a\")", 1 "(0 1 2 0 1 2 0 1 2 0)"}, "cycle#example1" {0 "[[:a 1] [:b 2] [:c 3] [:d 4] [:e 1] [:f 2] [:g 3] [:h 4] [:i 1] [:j 2] [:k 3] [:l 4]]"}}}

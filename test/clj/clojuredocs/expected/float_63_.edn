@@ -1,0 +1,1 @@
+{:timeout false, :lines {"float?#example0" {0 "false", 1 "true"}, "float?#example1" {0 "([java.lang.Float true] [java.lang.Double true])", 1 "([java.lang.Float true] [java.lang.Double false])"}, "float?#example2" {0 "false"}}}

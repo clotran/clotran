@@ -1,0 +1,1 @@
+{:timeout false, :lines {"*allow-unresolved-vars*#example0" {0 "!error", 1 "#object[clojure.lang.Compiler$StaticMethodExpr \"clojure.lang.Compiler$StaticMethodExpr@2899a8db\"]"}}}

@@ -1,0 +1,1 @@
+{:timeout false, :lines {"make-array#example0" {0 "#object[\"[I\" \"[I@3d9fc57a\"]"}, "make-array#example1" {0 "!error", 1 "!error", 2 "#var", 3 "!error", 4 "java.lang.Thread/1"}}}

@@ -1,0 +1,1 @@
+{:timeout false, :lines {"frequencies#example0" {0 "{a 3, b 1}"}, "frequencies#example1" {0 "(:a :a :b :c :c :c)"}, "frequencies#example2" {0 "#var", 1 "{:female 3, :male 2}", 2 "{21 1, 22 2, 23 2}"}, "frequencies#note300" {0 "#var"}}}

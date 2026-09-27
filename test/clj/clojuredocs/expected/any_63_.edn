@@ -1,0 +1,1 @@
+{:timeout false, :lines {"any?#example0" {0 "!error"}, "any?#example1" {0 "true", 1 "true", 2 "true", 3 "true", 4 "true"}, "any?#example2" {0 "6"}, "any?#note0" {0 "#var"}}}

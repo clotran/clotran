@@ -1,0 +1,1 @@
+{:timeout false, :lines {"tap>#example1" {0 "!error", 1 "true"}, "tap>#example2" {0 "#var", 1 "[{:team-name \"SK\"} {:team-name \"LG\"}]"}}}

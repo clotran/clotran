@@ -1,0 +1,1 @@
+{:timeout false, :lines {"re-pattern#example0" {0 "#\"\\d+\"", 1 "\"123\"", 2 "\"123\"", 3 "\"\\\\5 here\"", 4 "\"\\\\5 here\"", 5 "\"\\\\5 here\"", 6 "(\"Test\" \"test\")"}}}

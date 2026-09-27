@@ -1,0 +1,1 @@
+{:timeout false, :lines {"bigdec#example0" {0 "3.0M", 1 "5M", 2 "-1M", 3 "-1.0M"}, "bigdec#example1" {0 "123.45M", 1 "!error", 2 "123.45M"}, "bigdec#example2" {0 "!error", 1 "!error", 2 "0.5M"}, "bigdec#example3" {0 "0.30000000000000004", 1 "#var", 2 "0.3M"}}}

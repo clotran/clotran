@@ -1,0 +1,1 @@
+{:timeout false, :lines {"reset-meta!#example0" {0 "#var", 1 "{:column 1, :file \"/Users/james/jborden/clotran/build/clojuredocs/cases/reset-meta_33_.clj\", :key \"val\", :line 27, :name my-var, :ns #object[clojure.lang.Namespace \"cd.e0\"]}", 2 "{:new-key \"new-val\"}", 3 "{:new-key \"new-val\"}"}}}

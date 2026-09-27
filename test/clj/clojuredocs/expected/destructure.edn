@@ -1,0 +1,1 @@
+{:timeout false, :lines {"destructure#example0" {0 "!error", 1 "!error"}, "destructure#example1" {0 "#var", 7 "#var", 1 "(#var #var #var)", 4 "\"abc\"", 6 "[\"vec__242\" \"a\" \"b\"]", 3 "[\"vec__229\" \"u\" \"s\" \"v\" \"foo\" \"vec__232\" \"a\" \"b\"]", 2 "#var", 9 "#var", 5 "!error", 8 "#var"}}}

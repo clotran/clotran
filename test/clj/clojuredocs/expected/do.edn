@@ -1,0 +1,1 @@
+{:timeout false, :lines {"do#example0" {0 "!unreadable"}, "do#example1" {0 "!unreadable"}, "do#example2" {0 "true ;;out \"2 greater than 1\""}}}

@@ -1,0 +1,1 @@
+{:timeout false, :lines {"PrintWriter-on#example0" {0 "nil ;;out \"Flushing: 'Hello'\\nAbout to finish...\\nFlushing: 'World!'\\nClosing.\\n\""}}}

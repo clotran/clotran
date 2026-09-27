@@ -1,0 +1,1 @@
+{:timeout false, :lines {"nat-int?#example0" {0 "true", 1 "true", 2 "false", 3 "!error", 4 "!error", 5 "!error", 6 "!error"}, "nat-int?#example1" {0 "true", 7 "false", 1 "true", 4 "false", 6 "false", 3 "false", 2 "true", 9 "false", 5 "false", 8 "false"}}}

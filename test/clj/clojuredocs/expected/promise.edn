@@ -1,0 +1,1 @@
+{:timeout false, :lines {"promise#example0" {0 "#var", 1 "#object[clojure.core$promise$reify__8621 {:status :ready, :val 100}]", 2 "100"}, "promise#example1" {0 "#var", 1 "false", 2 "#object[clojure.core$promise$reify__8621 {:status :ready, :val 42}]", 3 "true", 4 "42", 5 "42"}, "promise#example2" {0 "ok", 1 "ok", 2 "ok", 3 "ok", 4 "ok", 5 "ok"}}}

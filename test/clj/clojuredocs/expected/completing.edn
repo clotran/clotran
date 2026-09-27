@@ -1,0 +1,1 @@
+{:timeout false, :lines {"completing#example0" {0 "55", 1 "-55"}, "completing#example1" {0 "nil", 1 "{\"ha\" 2, \"hello\" 2, \"hi\" 2, \"ho\" 1, \"hoi\" 1}"}, "completing#example2" {0 "4"}}}

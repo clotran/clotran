@@ -1,0 +1,1 @@
+{:timeout false, :lines {"if-not#example0" {0 "#var", 1 "nil", 2 "true"}, "if-not#example1" {0 ":else"}}}

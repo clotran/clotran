@@ -1,0 +1,1 @@
+{:timeout false, :lines {"update-vals#example0" {0 "{:a 2, :b 3}", 1 "{:a 7, :b 8, :c 9}", 2 "{:a {:y 100}, :b {:y 150}, :c {:y 200}}", 3 "{:a {:x 8, :y 100}, :b {:x 9, :y 150}, :c {:x 10, :y 200}}"}}}

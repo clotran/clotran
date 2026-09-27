@@ -1,0 +1,1 @@
+{:timeout false, :lines {"print-simple#example0" {0 "\"Hello!\"", 1 "\"Hello!\""}}}

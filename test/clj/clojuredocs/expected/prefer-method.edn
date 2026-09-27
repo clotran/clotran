@@ -1,0 +1,1 @@
+{:timeout false, :lines {"prefer-method#example0" {0 "#var", 7 "!error", 1 "#var", 4 "\"unix\"", 6 "nil", 3 "nil", 2 "#object[clojure.lang.MultiFn \"clojure.lang.MultiFn@3b582111\"]", 9 "\"unix\"", 5 "#object[clojure.lang.MultiFn \"clojure.lang.MultiFn@3b582111\"]", 8 "#object[clojure.lang.MultiFn \"clojure.lang.MultiFn@3b582111\"]"}}}

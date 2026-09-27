@@ -1,0 +1,1 @@
+{:timeout false, :lines {"set-agent-send-off-executor!#example0" {0 "java.util.concurrent.Executors", 1 "#var", 2 "#object[java.util.concurrent.ForkJoinPool \"java.util.concurrent.ForkJoinPool@515f4131[Running, parallelism = 20, size = 0, active = 0, running = 0, steals = 0, tasks = 0, submissions = 0]\"]"}}}

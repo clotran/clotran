@@ -1,0 +1,1 @@
+{:timeout false, :lines {"unchecked-multiply#example0" {0 "10000000000000", 1 "10000000000000", 2 "!error", 3 "-9223372036709301616"}}}

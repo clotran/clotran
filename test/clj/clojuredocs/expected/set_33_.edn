@@ -1,0 +1,1 @@
+{:timeout false, :lines {"set!#example0" {0 "!error"}, "set!#example1" {0 "true"}, "set!#example2" {0 "{:class java.awt.Point, :location #object[java.awt.Point \"java.awt.Point[x=1,y=8]\"], :x 1.0, :y 8.0}"}, "set!#example3" {0 "cd.e3.Counter", 1 "#var", 2 "1", 3 "2"}}}

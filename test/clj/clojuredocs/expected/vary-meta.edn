@@ -1,0 +1,1 @@
+{:timeout false, :lines {"vary-meta#example0" {0 "{:a 1}"}, "vary-meta#example1" {0 "#var", 1 "[1 2 3]", 2 "{:my \"meta\"}", 3 "#var", 4 "[1 2 3]", 5 "{:my \"meta\", :your \"new meta\"}"}}}

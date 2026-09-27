@@ -1,0 +1,1 @@
+{:timeout false, :lines {"seq-to-map-for-destructuring#example0" {0 "{:a 1, :b 2}", 1 "{:a 99, :b 2, :c 3}"}}}

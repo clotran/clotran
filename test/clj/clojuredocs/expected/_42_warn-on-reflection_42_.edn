@@ -1,0 +1,1 @@
+{:timeout false, :lines {"*warn-on-reflection*#example0" {0 "#var", 7 "\"23\"", 1 "#var", 4 "\"123\"", 6 "false", 3 "\"23\"", 2 "true", 5 "\"123\"", 8 "\"123\""}, "*warn-on-reflection*#example1" {0 "true", 1 "#var", 2 "\"abc\"", 3 "\"abc\"", 4 "\"abc\"", 5 "false"}, "*warn-on-reflection*#example2" {0 "\"abc\"", 1 "nil ;;out \"false\\n\""}}}

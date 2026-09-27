@@ -1,0 +1,1 @@
+{:timeout false, :lines {"prn#example0" {0 "nil ;;out \"\\\"fred\\\" 1\\n\"", 1 "#var", 2 "nil ;;out \"[\\\"hello\\\" :a 1 (:b 2) \\\\c {:d 4} #{7 6 5}]\\n\"", 3 "nil ;;out \"[hello :a 1 (:b 2) c {:d 4} #{7 6 5}]\\n\"", 4 "nil ;;out \"[\\\"hello\\\" :a 1 (:b 2) \\\\c {:d 4} #{7 6 5}]\\n\""}}}

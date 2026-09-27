@@ -1,0 +1,1 @@
+{:timeout false, :lines {"read-line#example0" {0 "nil"}, "read-line#example1" {0 "nil ;;out \"What's your name? \""}, "read-line#example2" {0 "nil ;;out \"Enter something> \\n\"", 1 "#var", 2 "nil ;;out \"You typed \\\"\\\"\\n\""}, "read-line#example3" {0 "!error", 1 "nil", 2 "#var"}}}

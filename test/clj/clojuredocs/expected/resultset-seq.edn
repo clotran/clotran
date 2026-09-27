@@ -1,0 +1,1 @@
+{:timeout false, :lines {"resultset-seq#example0" {0 "java.sql.ResultSet", 1 "#var", 2 "!error"}}}

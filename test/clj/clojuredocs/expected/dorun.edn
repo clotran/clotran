@@ -1,0 +1,1 @@
+{:timeout false, :lines {"dorun#example0" {0 "ok"}, "dorun#example1" {0 "ok"}, "dorun#example2" {0 "nil ;;out \"hi mum\\nhi dad\\nhi sister\\n\""}, "dorun#example3" {0 "!error", 1 "!error"}}}

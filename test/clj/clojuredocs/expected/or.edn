@@ -1,0 +1,1 @@
+{:timeout false, :lines {"or#example0" {0 "true", 7 "true ;;out \"foo\\n\"", 1 "true", 4 "nil", 6 "true", 3 "nil", 2 "false", 9 "42", 5 "true", 10 "42", 8 "42"}, "or#example2" {0 "false", 1 "nil"}, "or#example3" {0 "\"crazy default value\"", 1 "\"value\""}, "or#example4" {0 "true ;;out \"Clojure\\n\"", 1 "!error"}, "or#example5" {0 "!error", 1 "(true false)"}}}

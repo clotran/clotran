@@ -1,0 +1,1 @@
+{:timeout false, :lines {"nnext#example0" {0 "(3)", 1 "nil", 2 "((c b a) (a c b))", 3 "([:c 3] [:d 4])", 4 "(:a)"}}}

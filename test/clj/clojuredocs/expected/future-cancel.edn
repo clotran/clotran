@@ -1,0 +1,1 @@
+{:timeout false, :lines {"future-cancel#example0" {0 "ok", 1 "ok", 2 "ok"}, "future-cancel#example1" {0 "#var", 1 "false", 2 "false"}, "future-cancel#example2" {0 "ok"}}}

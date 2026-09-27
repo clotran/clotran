@@ -1,0 +1,1 @@
+{:timeout false, :lines {"contains?#example0" {0 "true", 7 "false", 1 "true", 4 "true", 13 "false", 6 "true", 3 "false", 12 "true", 2 "false", 11 "true", 9 "java.util.HashSet", 5 "false", 14 "false", 10 "true", 8 "!error"}, "contains?#example1" {0 "#var", 1 "true", 2 "false"}, "contains?#example2" {0 "true"}}}

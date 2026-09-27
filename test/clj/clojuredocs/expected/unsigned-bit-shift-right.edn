@@ -1,0 +1,1 @@
+{:timeout false, :lines {"unsigned-bit-shift-right#example0" {0 "\"ffffffffffffffff\"", 1 "\"ffffffffffffffff\"", 2 "\"003fffffffffffff\""}, "unsigned-bit-shift-right#example1" {0 "\"0x80\"", 1 "\"0x7fffffffffffffc0\"", 2 "\"0xffffffffffffffc0\"", 3 "\"0x40\""}, "unsigned-bit-shift-right#example2" {0 "#var"}}}

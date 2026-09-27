@@ -1,0 +1,1 @@
+{:timeout false, :lines {"reduced#example0" {0 "45", 1 "45", 2 ":big", 3 ":big"}, "reduced#example1" {0 "#var"}, "reduced#example2" {0 "nil ;;out \"2\\n3\\n4\\n5\\n\"", 1 "\"Done early!\" ;;out \"2\\n\""}}}

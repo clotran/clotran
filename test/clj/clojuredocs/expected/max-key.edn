@@ -1,0 +1,1 @@
+{:timeout false, :lines {"max-key#example0" {0 "\"long word\""}, "max-key#example1" {0 ":c"}, "max-key#example2" {0 "2"}, "max-key#example3" {0 "#var", 1 "{:name \"r\", :timestamp 3}", 2 "3", 3 "#var", 4 "[\"lola\" {:name \"r\", :timestamp 3}]"}, "max-key#example4" {0 "#var", 1 "{:a 1, :b 2, :c 3, :d 4}"}}}

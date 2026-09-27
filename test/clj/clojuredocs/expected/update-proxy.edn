@@ -1,0 +1,1 @@
+{:timeout false, :lines {"update-proxy#example0" {0 "java.util.Date", 1 "#var", 2 "#inst \"2026-09-27T17:14:55.324-00:00\"", 3 "\"hello\"", 4 "\"27 Sep 2026 17:14:55 GMT\"", 5 "#inst \"2026-09-27T17:14:55.324-00:00\"", 6 "\"goodbye\""}}}

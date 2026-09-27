@@ -1,0 +1,1 @@
+{:timeout false, :lines {"*print-namespace-maps*#example0" {0 "nil ;;out \"#:num{:val 1, :name \\\"one\\\"}\\n\"", 1 "nil ;;out \"{:num/val 1, :num/name \\\"one\\\"}\\n\""}, "*print-namespace-maps*#note0" {0 "#object[clojure.lang.MultiFn \"clojure.lang.MultiFn@4c432866\"]"}}}

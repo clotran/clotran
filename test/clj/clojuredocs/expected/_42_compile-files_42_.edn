@@ -1,0 +1,1 @@
+{:timeout false, :lines {"*compile-files*#example0" {0 "!error"}, "*compile-files*#example1" {0 "#var", 1 "#var ;;out \"This won't happen during AOT compile\\n\""}}}

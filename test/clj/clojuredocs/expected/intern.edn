@@ -1,0 +1,1 @@
+{:timeout false, :lines {"intern#example0" {0 "#var", 1 "!error"}, "intern#example1" {0 "#var", 1 "!error"}, "intern#example2" {0 "!error", 1 "!error", 2 "!error", 3 "!error", 4 "!error"}, "intern#example3" {0 "#object[clojure.lang.Namespace \"other-ns\"]", 1 "#var", 2 "43"}}}

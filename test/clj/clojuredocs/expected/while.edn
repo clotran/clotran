@@ -1,0 +1,1 @@
+{:timeout false, :lines {"while#example0" {0 "#var", 1 "nil ;;out \"10\\n9\\n8\\n7\\n6\\n5\\n4\\n3\\n2\\n1\\n\""}, "while#example1" {0 "!error", 1 "nil", 2 "!error", 3 "!error"}}}

@@ -1,0 +1,1 @@
+{:timeout false, :lines {"rest#example0" {0 "(2 3 4 5)", 1 "(\"b\" \"c\" \"d\" \"e\")"}, "rest#example1" {0 "()"}, "rest#example2" {0 "()"}, "rest#example3" {0 "#var", 1 "(4 9 25 49 121 169)"}, "rest#example4" {0 "(2 3 4 5)", 1 "(2 3 4 5)", 2 "(4 3 2 5)", 3 "([2 nil] [3 nil] [4 nil] [5 nil])"}, "rest#example5" {0 "()", 1 "nil", 2 "()", 3 "nil", 4 "()", 5 "nil"}}}

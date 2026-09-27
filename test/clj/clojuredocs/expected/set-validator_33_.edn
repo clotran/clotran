@@ -1,0 +1,1 @@
+{:timeout false, :lines {"set-validator!#example0" {0 "#var", 1 "nil", 2 "!error", 3 "nil", 4 "[2 5]"}, "set-validator!#example1" {0 "#var", 1 "nil", 2 "2", 3 "!error", 4 "2"}}}

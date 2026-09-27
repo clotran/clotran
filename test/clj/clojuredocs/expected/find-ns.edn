@@ -1,0 +1,1 @@
+{:timeout false, :lines {"find-ns#example0" {0 "#object[clojure.lang.Namespace \"clojure.string\"]", 1 "nil", 2 "#object[clojure.lang.Namespace \"clojure.string\"]"}}}

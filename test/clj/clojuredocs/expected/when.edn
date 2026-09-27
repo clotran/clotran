@@ -1,0 +1,1 @@
+{:timeout false, :lines {"when#example0" {0 "true", 1 "nil"}, "when#example1" {0 "#var ;;out \"Hello World\\n\"", 1 "\"Returned Value\""}, "when#example3" {0 "(if 1 (do 2 3 4))", 1 "4"}}}

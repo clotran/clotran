@@ -1,0 +1,1 @@
+{:timeout false, :lines {"unchecked-negate#example0" {0 "true", 1 "true", 2 "!error", 3 "-9223372036854775808", 4 "true"}}}

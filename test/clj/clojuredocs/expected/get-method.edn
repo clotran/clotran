@@ -1,0 +1,1 @@
+{:timeout false, :lines {"get-method#example0" {0 "#var", 1 "#var", 2 "#var", 3 "#object[clojure.lang.MultiFn \"clojure.lang.MultiFn@199e4c2b\"]", 4 "#object[clojure.lang.MultiFn \"clojure.lang.MultiFn@199e4c2b\"]", 5 "nil ;;out \"Circle:[2 3]3.3\\n\"", 6 "nil ;;out \"Line:[1 1][0 0]\\n\"", 7 "nil ;;out \"Line:[1 2][3 4]\\n\""}}}

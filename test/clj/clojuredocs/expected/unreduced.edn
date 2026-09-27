@@ -1,0 +1,1 @@
+{:timeout false, :lines {"unreduced#example0" {0 ":foo", 1 ":foo", 2 ":foo"}, "unreduced#example1" {0 "#var", 1 "#var", 2 "#object[clojure.lang.Reduced {:status :ready, :val [2 4 6 8 10 7]}]", 3 "#var", 4 "[2 4 6 8 10 7]"}}}

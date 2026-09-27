@@ -1,0 +1,1 @@
+{:timeout false, :lines {"unchecked-negate-int#example0" {0 "-4", 1 "0", 2 "7", 3 "-2147483647", 4 "-2147483648"}}}

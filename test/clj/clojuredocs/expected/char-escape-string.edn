@@ -1,0 +1,1 @@
+{:timeout false, :lines {"char-escape-string#example0" {0 "\"\\\\n\"", 1 "nil", 2 "\"\\\\t\"", 3 "\"\\\\b\""}, "char-escape-string#example1" {0 "nil", 1 "#var", 2 "nil ;;out \"Type backslash-t '\\t' followed by backslash-n '\\n'\\n\"", 3 "nil ;;out \"Type backslash-t '\\\\t' followed by backslash-n '\\\\n'\\n\""}}}

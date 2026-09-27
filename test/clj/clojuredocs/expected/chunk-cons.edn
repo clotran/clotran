@@ -1,0 +1,1 @@
+{:timeout false, :lines {"chunk-cons#example0" {0 "clojure.lang.LongRange"}, "chunk-cons#example1" {0 "java.io.InputStream", 1 "#var", 2 "\"A\\na\\naa\\naal\\naalii\\naam\""}}}

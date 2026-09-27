@@ -1,0 +1,1 @@
+{:timeout false, :lines {"booleans#example0" {0 "true", 1 "#var", 2 "#var"}, "booleans#example1" {0 "true", 1 "#var"}}}

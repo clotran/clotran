@@ -1,0 +1,1 @@
+{:timeout false, :lines {"*print-dup*#example0" {0 "!error"}}}

@@ -1,0 +1,1 @@
+{:timeout false, :lines {"last#example0" {0 "5", 1 "\"e\"", 2 "[:three 3]", 3 "nil", 4 "[:a 1]"}, "last#example1" {0 "#var"}, "last#example2" {0 "ok", 1 "ok", 2 "ok", 3 "ok"}, "last#example3" {0 "ok", 1 "ok", 2 "ok", 3 "ok", 4 "ok"}, "last#example4" {0 "ok", 7 "ok", 1 "ok", 4 "ok", 6 "ok", 3 "ok", 2 "ok", 11 "ok", 9 "ok", 5 "ok", 10 "ok", 8 "ok"}}}

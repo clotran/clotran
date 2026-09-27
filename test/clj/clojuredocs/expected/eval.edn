@@ -1,0 +1,1 @@
+{:timeout false, :lines {"eval#example0" {0 "#var", 1 "\"(println [1 2 3])\"", 2 "\"(println [1 2 3])\"", 3 "nil ;;out \"[1 2 3]\\n\""}, "eval#example1" {0 "17"}, "eval#example2" {0 "#var", 1 "nil ;;out \"(+ 2 3)\\n\"", 2 "nil ;;out \"5\\n\""}}}

@@ -1,0 +1,1 @@
+{:timeout false, :lines {"tagged-literal#example0" {0 "#var", 1 "{:name \"Foo\"}", 2 "user"}, "tagged-literal#example1" {0 "nil", 1 "#js [1 2 3]"}}}

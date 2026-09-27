@@ -1,0 +1,1 @@
+{:timeout false, :lines {"butlast#example0" {0 "(1 2)", 1 "(1)", 2 "nil"}, "butlast#example1" {0 "#var"}, "butlast#example2" {0 "#var", 1 "[0 1 2 3 4 5 6 7 8 9]", 2 "[1 2 3 4 5 6 7 8 9 10]", 3 "[1 3 5 7 9]"}, "butlast#example3" {0 "ok", 1 "ok", 2 "ok", 3 "ok", 4 "ok", 5 "ok", 6 "ok", 7 "ok"}}}

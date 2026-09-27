@@ -1,0 +1,1 @@
+{:timeout false, :lines {".#example0" {0 "#var", 1 "8"}, ".#example1" {0 "\"ABC\"", 1 "\"ABC\""}, ".#example2" {0 "ok", 7 "!error", 1 "ok", 4 "ok", 13 "ok", 6 "ok", 3 "ok", 12 "ok", 2 "ok", 11 "ok", 9 "ok", 5 "ok", 10 "ok", 8 "ok"}}}

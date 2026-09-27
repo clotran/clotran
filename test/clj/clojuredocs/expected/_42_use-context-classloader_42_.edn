@@ -1,0 +1,1 @@
+{:timeout false, :lines {"*use-context-classloader*#example0" {0 "clojure.lang.DynamicClassLoader", 1 "#var", 2 "nil", 3 "false", 4 "false"}}}

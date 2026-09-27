@@ -1,0 +1,1 @@
+{:timeout false, :lines {"bytes#example0" {0 "#object[\"[B\" \"[B@3b4ef7\"]", 1 "#var", 2 "true", 3 "#var", 4 "#var", 5 "!error"}, "bytes#example1" {0 "#object[\"[B\" \"[B@6e0d4a8\"]", 1 "\"class clojure.lang.PersistentVector cannot be cast to class [B (clojure.lang.PersistentVector is in unnamed module of loader 'app'; [B is in module java.base of loader 'bootstrap')\""}}}

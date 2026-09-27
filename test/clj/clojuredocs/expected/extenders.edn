@@ -1,0 +1,1 @@
+{:timeout false, :lines {"extenders#example0" {0 "P", 1 "nil", 2 "(java.lang.String clojure.lang.Symbol clojure.lang.Keyword)"}}}

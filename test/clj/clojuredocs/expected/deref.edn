@@ -1,0 +1,1 @@
+{:timeout true, :lines {"deref#example0" {0 "#var", 7 "2", 1 "0", 4 "1", 6 "#var", 3 "#var", 2 "0", 11 "3", 9 "#var", 5 "1", 10 "3", 8 "2"}, "deref#example1" {0 "#var"}}}

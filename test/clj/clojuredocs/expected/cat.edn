@@ -1,0 +1,1 @@
+{:timeout false, :lines {"cat#example0" {0 "[2 3 4 5]"}, "cat#example1" {0 "#var", 1 "\"nick\""}, "cat#example2" {0 "[1 2 2 3 3 3 4 4 4 4]"}, "cat#example3" {0 "[1 2 3 4 5 6 7]", 1 "#var", 2 "[1 2 3 4 5]", 3 "true"}}}

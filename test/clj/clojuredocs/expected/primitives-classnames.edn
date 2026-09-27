@@ -1,0 +1,1 @@
+{:timeout false, :lines {"primitives-classnames#example0" {0 "nil", 1 "nil ;;out \"{float \\\"Float/TYPE\\\",\\n int \\\"Integer/TYPE\\\",\\n long \\\"Long/TYPE\\\",\\n boolean \\\"Boolean/TYPE\\\",\\n char \\\"Character/TYPE\\\",\\n double \\\"Double/TYPE\\\",\\n byte \\\"Byte/TYPE\\\",\\n short \\\"Short/TYPE\\\"}\\n\""}}}

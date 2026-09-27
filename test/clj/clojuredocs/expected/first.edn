@@ -1,0 +1,1 @@
+{:timeout false, :lines {"first#example0" {0 ":alpha"}, "first#example1" {0 "nil", 1 "nil", 2 "nil"}, "first#example2" {0 "1", 1 "[1 2]"}, "first#example3" {0 "\\j", 1 "106"}}}

@@ -1,0 +1,1 @@
+{:timeout false, :lines {"*out*#example0" {0 "#var", 1 "nil ;;out \"Hello?\\n\"", 2 "nil"}}}

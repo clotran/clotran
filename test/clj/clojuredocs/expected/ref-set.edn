@@ -1,0 +1,1 @@
+{:timeout false, :lines {"ref-set#example0" {0 "#var", 1 "{:foo \"bar\"}", 2 "{:foo \"bar\"}"}}}

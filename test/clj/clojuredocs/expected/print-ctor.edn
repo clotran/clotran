@@ -1,0 +1,1 @@
+{:timeout false, :lines {"print-ctor#example0" {0 "cd.e0.Point", 1 "!error", 2 "\"#cd.e0.Point[1, 2]\"", 3 "!error"}}}

@@ -1,0 +1,1 @@
+{:timeout false, :lines {"drop#example0" {0 "(1 2 3 4)", 1 "(1 2 3 4)", 2 "(3 4)", 3 "()"}, "drop#example1" {0 "(6 7 8)"}}}

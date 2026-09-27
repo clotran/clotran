@@ -1,0 +1,1 @@
+{:timeout false, :lines {"instance?#example0" {0 "true", 1 "false", 2 "true", 3 "false", 4 "true"}, "instance?#example1" {0 "#var", 1 "true", 2 "true", 3 "false"}, "instance?#example2" {0 "true", 1 "true", 2 "true", 3 "true"}, "instance?#example3" {0 "nil", 1 "foo_bar.Box", 2 "#var", 3 "!error", 4 "true", 5 "foo_bar.My-Box", 6 "#var", 7 "true"}}}

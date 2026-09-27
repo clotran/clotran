@@ -1,0 +1,1 @@
+{:timeout false, :lines {"biginteger#example0" {0 "#var", 1 "java.math.BigInteger"}, "biginteger#example1" {0 "clojure.lang.BigInt", 1 "clojure.lang.BigInt", 2 "java.math.BigInteger", 3 "!error", 4 "3"}, "biginteger#example2" {0 "12345", 1 "!error", 2 "12345"}, "biginteger#example3" {0 "1", 1 "2"}}}

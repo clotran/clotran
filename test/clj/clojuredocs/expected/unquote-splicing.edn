@@ -1,0 +1,1 @@
+{:timeout false, :lines {"unquote-splicing#example0" {0 "(1 (2 3))", 1 "(1 2 3)"}, "unquote-splicing#example1" {0 "(1 2 (3 4))", 1 "(1 2 3 4)"}, "unquote-splicing#example2" {0 "!unreadable"}}}

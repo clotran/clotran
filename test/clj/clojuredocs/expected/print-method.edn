@@ -1,0 +1,1 @@
+{:timeout false, :lines {"print-method#example0" {0 "!error", 1 "!error"}, "print-method#example1" {0 "java.io.File", 1 "#object[clojure.lang.MultiFn \"clojure.lang.MultiFn@51671b08\"]", 2 "\"#url \\\"file:/etc/hosts\\\"\""}}}

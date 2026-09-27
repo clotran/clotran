@@ -1,0 +1,1 @@
+{:timeout false, :lines {"sorted-set-by#example0" {0 "#{1 2 3 5 8}"}, "sorted-set-by#example1" {0 "#var", 7 "#var", 1 "#{[:a 1]}", 4 "#{[:a 1] [:b 1] [:c 1]}", 6 "nil", 3 "#var", 2 "#var", 11 "[:c 1]", 9 "#{[:a 1] [:b 1] [:c 1]}", 5 "false", 10 "true", 8 "#var"}, "sorted-set-by#example2" {0 "#{[1 :c] [3 :a] [:a] [:b] [:v]}"}}}

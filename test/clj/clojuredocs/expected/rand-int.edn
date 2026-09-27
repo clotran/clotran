@@ -1,0 +1,1 @@
+{:timeout false, :lines {"rand-int#example0" {0 "ok", 1 "ok", 2 "ok"}, "rand-int#example1" {0 "!error"}, "rand-int#example2" {0 "ok", 7 "ok", 20 "ok", 1 "!error", 4 "ok", 15 "ok", 21 "ok", 13 "ok", 22 "ok", 6 "!error", 17 "ok", 3 "ok", 12 "ok", 2 "!error", 19 "ok", 11 "ok", 9 "!error", 5 "ok", 14 "ok", 16 "ok", 10 "ok", 18 "ok", 8 "!error"}}}

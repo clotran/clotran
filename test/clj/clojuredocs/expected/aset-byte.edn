@@ -1,0 +1,1 @@
+{:timeout false, :lines {"aset-byte#example0" {0 "#var", 1 "[0 0 0 0 0 0 0 0 0 0]", 2 "127", 3 "[0 0 127 0 0 0 0 0 0 0]"}}}

@@ -1,0 +1,1 @@
+{:timeout false, :lines {"doall#example0" {0 "#var", 1 "#var ;;out \"1\\n2\\n3\\n\""}, "doall#example1" {0 "!error", 1 "!error"}, "doall#example2" {0 "!error", 1 "!error"}, "doall#example3" {0 "!unreadable"}}}

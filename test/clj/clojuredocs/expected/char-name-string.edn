@@ -1,0 +1,1 @@
+{:timeout false, :lines {"char-name-string#example0" {0 "\"newline\""}, "char-name-string#example1" {0 "(\"backspace\" \"tab\" \"newline\" \"formfeed\" \"return\" \"space\")"}}}

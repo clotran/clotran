@@ -1,0 +1,1 @@
+{:timeout false, :lines {"print#example0" {0 "nil ;;out \"foo\""}, "print#example1" {0 "nil ;;out \"> \"", 1 "!error", 2 "nil ;;out \"> \"", 3 "nil", 4 "!error"}, "print#example2" {0 "nil ;;out \"foo foo\""}}}

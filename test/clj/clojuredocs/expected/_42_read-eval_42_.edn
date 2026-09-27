@@ -1,0 +1,1 @@
+{:timeout false, :lines {"*read-eval*#example0" {0 "!error", 1 "!error", 2 "(def x 3)", 3 "#var", 4 "3"}, "*read-eval*#note0" {0 "!error"}, "*read-eval*#note1" {0 "!error"}, "*read-eval*#note2" {0 "6"}, "*read-eval*#note3" {0 "!unreadable"}}}

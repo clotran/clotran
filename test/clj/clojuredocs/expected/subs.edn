@@ -1,0 +1,1 @@
+{:timeout false, :lines {"subs#example0" {0 "\"lojure\"", 1 "\"lo\"", 2 "!error"}, "subs#example2" {0 "#var", 1 "\"cdef\"", 2 "\"\""}, "subs#example3" {0 "#var", 1 "\"/my/dir/path\""}}}

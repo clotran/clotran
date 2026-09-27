@@ -1,0 +1,1 @@
+{:timeout false, :lines {"future-done?#example0" {0 "ok", 1 "ok", 2 "ok", 3 "ok"}, "future-done?#example1" {0 "ok", 1 "ok", 2 "ok", 3 "ok", 4 "!error"}}}

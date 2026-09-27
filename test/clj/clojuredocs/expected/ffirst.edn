@@ -1,0 +1,1 @@
+{:timeout false, :lines {"ffirst#example0" {0 "nil", 1 "a", 2 "a"}, "ffirst#example1" {0 "[:b 2]", 1 ":b"}, "ffirst#example2" {0 "1", 1 "1"}}}

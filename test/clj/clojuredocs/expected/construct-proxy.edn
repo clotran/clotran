@@ -1,0 +1,1 @@
+{:timeout false, :lines {"construct-proxy#example0" {0 "#var", 1 "#var", 2 "\"Thread[#33,Thread-0,5,main]\"", 3 "\"Thread[#34,***MYTHREAD***,5,main]\""}}}

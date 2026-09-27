@@ -1,0 +1,1 @@
+{:timeout false, :lines {"rand#example0" {0 "ok"}, "rand#example1" {0 "ok", 1 "ok"}}}

@@ -1,0 +1,1 @@
+{:timeout false, :lines {"struct#example0" {0 "#var", 1 "{:bar \"pizza\", :foo \"eggplant\"}"}, "struct#example1" {0 "{:bar \"fizz\", :foo \"pop\"}"}}}

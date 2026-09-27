@@ -1,0 +1,1 @@
+{:timeout false, :lines {"ns-publics#example0" {0 "#object[clojure.lang.Namespace \"demo.ns\"]", 1 "nil", 2 "#var", 3 "#var", 4 "#var", 5 "#object[clojure.lang.Namespace \"user\"]", 6 "{private-fn #var, public-fn1 #var, public-fn2 #var}", 7 "{public-fn1 #var, public-fn2 #var}"}}}

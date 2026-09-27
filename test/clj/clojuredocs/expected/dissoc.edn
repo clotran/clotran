@@ -1,0 +1,1 @@
+{:timeout false, :lines {"dissoc#example0" {0 "{:a 1, :b 2, :c 3}", 1 "{:a 1, :c 3}", 2 "{:a 1, :b 2, :c 3}", 3 "{:a 1}"}, "dissoc#example1" {0 "{:a {:b {}, :c 1}}"}, "dissoc#example2" {0 "cd.e2.Widget", 1 "#var", 2 "cd.e2.Widget", 3 "clojure.lang.PersistentArrayMap"}, "dissoc#example3" {0 "{:a {:b {}, :c 1}}"}, "dissoc#example4" {0 "{:a 1}", 1 "{:a 1}"}}}

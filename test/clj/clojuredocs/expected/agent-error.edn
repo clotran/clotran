@@ -1,0 +1,1 @@
+{:timeout true, :lines {"agent-error#example0" {0 "#var", 1 "#inst \"2026-09-27T17:05:53.485-00:00\"", 2 "#object[clojure.lang.Agent {:status :failed, :val #inst \"2026-09-27T17:05:53.485-00:00\"}]", 3 "#error {"}}}

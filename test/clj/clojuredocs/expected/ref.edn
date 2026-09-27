@@ -1,0 +1,1 @@
+{:timeout false, :lines {"ref#example0" {0 "#object[clojure.lang.Ref {:status :ready, :val []}]", 1 "#object[clojure.lang.Ref {:status :ready, :val 1}]"}, "ref#example1" {0 "#var", 1 "(1 2 3)", 2 "(3 2 1)", 3 "(3 2 1)"}, "ref#example2" {0 "!unreadable"}, "ref#example3" {0 "#var", 1 "1", 2 "#var", 3 "#var", 4 "#var", 5 "(10 12 1)"}}}

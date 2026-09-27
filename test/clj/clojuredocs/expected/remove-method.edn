@@ -1,0 +1,1 @@
+{:timeout false, :lines {"remove-method#example0" {0 "#var", 7 "\"Circle:[2 3]3.3\"", 1 "#var", 4 "#object[clojure.lang.MultiFn \"clojure.lang.MultiFn@199e4c2b\"]", 6 "#var", 3 "#object[clojure.lang.MultiFn \"clojure.lang.MultiFn@199e4c2b\"]", 2 "#var", 9 "#object[clojure.lang.MultiFn \"clojure.lang.MultiFn@199e4c2b\"]", 5 "#var", 10 "!error", 8 "\"Line:[1 1][0 0]\""}}}

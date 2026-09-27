@@ -1,0 +1,1 @@
+{:timeout false, :lines {"constantly#example0" {0 "#var", 1 "10", 2 "10", 3 "10"}, "constantly#example1" {0 "3"}, "constantly#example2" {0 "!error", 1 "!error"}, "constantly#example3" {0 ":O"}, "constantly#note600" {0 "!error"}, "constantly#note800" {0 "#fn ;;out \":hello\\n\"", 1 "#fn"}}}

@@ -1,0 +1,1 @@
+{:timeout false, :lines {"var?#example0" {0 "#var", 1 "true", 2 "true", 3 "true"}, "var?#example1" {0 "!unreadable"}}}

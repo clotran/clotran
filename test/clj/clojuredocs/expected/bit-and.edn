@@ -1,0 +1,1 @@
+{:timeout false, :lines {"bit-and#example0" {0 "8", 1 "8"}, "bit-and#example1" {0 "8", 1 "\"108\""}, "bit-and#example2" {0 "\"11101011\"", 1 "\"11000111\"", 2 "195", 3 "\"11000011\""}, "bit-and#example3" {0 "\"1000\""}}}

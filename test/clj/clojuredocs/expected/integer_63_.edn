@@ -1,0 +1,1 @@
+{:timeout false, :lines {"integer?#example0" {0 "true", 1 "false"}, "integer?#example1" {0 "true"}, "integer?#example2" {0 "true", 1 "false"}}}

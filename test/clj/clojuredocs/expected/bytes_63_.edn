@@ -1,0 +1,1 @@
+{:timeout false, :lines {"bytes?#example0" {0 "true", 1 "true", 2 "false"}}}
