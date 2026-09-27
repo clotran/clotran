@@ -2523,3 +2523,5 @@
 [(seq "héllo") (count (seq (apply str (repeat 3000 "é")))) (nth (seq "abç") 2) (rest "ab") (map int "aé") (seq "") (first "ç") (reduce str (seq "xyz"))]
 
 (count (doall (for [i (range 5000)] (re-find (re-pattern (str "b \\+ " i "\\b")) (str "b + " (* 2 i))))))
+
+(let [tv (transient [1 2 3])] [(get tv 0) (get tv 4 :foo) (contains? tv 0) (contains? tv 3) (find tv 0) (find tv -1) (counted? tv) (empty? tv) (empty? (transient [])) (instance? clojure.lang.Indexed tv)])

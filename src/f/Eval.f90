@@ -6601,7 +6601,7 @@ contains
     if (n >= 1) then
        if (gc_kind(gcv_nth(args, 0)) == OBJ_TVECTOR) then
           select case (id)
-          case (B_CONJ, B_ASSOC, B_POP, B_COUNT, B_NTH, B_GET, B_PERSISTENT)
+          case (B_CONJ, B_ASSOC, B_POP, B_COUNT, B_NTH, B_GET, B_PERSISTENT, B_FIND)
              out = tvec_op(id, vs_get(vst, base + 1), n)
              call vs_leave(vst, base)
              return
@@ -14748,7 +14748,9 @@ contains
        yes = (t == "error")
     case ("clojure.lang.ISeq");     yes = (t == "list" .or. t == "lazy-seq" .or. t == "seq")
     case ("clojure.lang.IPersistentList"); yes = (t == "list")
-    case ("clojure.lang.IPersistentVector", "clojure.lang.Indexed"); yes = (t == "vector")
+    case ("clojure.lang.IPersistentVector"); yes = (t == "vector")
+    ! a TransientVector is Indexed and Counted too (PersistentVector.java:670)
+    case ("clojure.lang.Indexed"); yes = (t == "vector" .or. t == "transient-vector")
     case ("clojure.lang.IPersistentMap", "java.util.Map"); yes = (t == "map")
     case ("clojure.lang.IPersistentSet"); yes = (t == "set")
     case ("java.util.Map$Entry", "clojure.lang.IMapEntry", "clojure.lang.MapEntry"); yes = is_map_entry(v)
@@ -14760,7 +14762,7 @@ contains
     ! one, but (counted? "ab") is false there, so bounded-count walks it.
     case ("clojure.lang.Counted"); &
          yes = (t == "list" .or. t == "vector" .or. t == "map" .or. t == "set" .or. &
-                (t == "lazy-seq" .and. gc_i2(strip_meta(v)) == 1))
+                t == "transient-vector" .or. (t == "lazy-seq" .and. gc_i2(strip_meta(v)) == 1))
     case ("clojure.lang.Sequential"); &
          yes = (t == "list" .or. t == "vector" .or. t == "lazy-seq" .or. t == "seq")
     case ("clojure.lang.IPersistentCollection", "clojure.lang.Seqable"); &
@@ -15739,6 +15741,23 @@ contains
        else if (id == B_NTH) then
           call raise_class("IndexOutOfBoundsException", "", [vs_get(vst, base + 1)])
        end if
+    case (B_FIND)
+       ! associative by index, as the vector it came from is
+       ! (TransientVector.entryAt)
+       x = as_int(gcv_nth(args, 1))
+       k = -1
+       if (x%tag == GCT_INT) then
+          if (x%ival >= 0 .and. x%ival < int(gcv_tcount(t), gc_ip)) k = int(x%ival)
+       end if
+       if (k >= 0) then
+          out = gcv_empty([vs_get(vst, base + 1)])
+          call vs_set(vst, base + 2, out)
+          out = gcv_conj(vs_get(vst, base + 2), x, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+          call vs_set(vst, base + 2, out)
+          out = gcv_conj(vs_get(vst, base + 2), gcv_tnth(gcv_nth(vs_get(vst, base + 1), 0), k), &
+               [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+          call mark_entry(out)
+       end if
     case (B_PERSISTENT)
        out = gcv_persistent(t, [vs_get(vst, base + 1)])
     end select
@@ -15795,6 +15814,10 @@ contains
        ! range, which is the question its keys answer.
        yes = (kk%tag == GCT_INT)
        if (yes) yes = (kk%ival >= 0 .and. kk%ival < int(gcv_count(coll), gc_ip))
+    else if (gc_kind(coll) == OBJ_TVECTOR) then
+       ! a transient vector, the same question (TransientVector.containsKey)
+       yes = (kk%tag == GCT_INT)
+       if (yes) yes = (kk%ival >= 0 .and. kk%ival < int(gcv_tcount(coll), gc_ip))
     else if (coll%tag == GCT_STR) then
        yes = (kk%tag == GCT_INT)
        if (yes) then
