@@ -1777,25 +1777,31 @@
     type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: nd, frame
-    type(gc_value) :: out, argv, rinfo
-    integer :: base, i, n, start
+    type(gc_value) :: out, rinfo, v
+    integer :: base, i, n, nk, start
     tctx => ctx_self()
     vst => tctx%stk
     out = gc_nil()
-    base = vs_enter(vst, 3)
+    ! Every new value is computed before any slot is rebound, into stack
+    ! slots base+3.. -- not a vector: that was an allocation per turn of
+    ! every interpreted loop.
+    nk = gcv_count(gc_slot(nd, 1))
+    base = vs_enter(vst, 2 + nk)
     call vs_set(vst, base + 1, nd)
     call vs_set(vst, base + 2, frame)
-    argv = exec_args(gc_slot(nd, 1), 0, frame)
-    if (tctx%has_error) then
-       call vs_leave(vst, base)
-       return
-    end if
-    call vs_set(vst, base + 3, argv)
+    do i = 0, nk - 1
+       v = exec(gcv_nth(gc_slot(vs_get(vst, base + 1), 1), i), vs_get(vst, base + 2))
+       if (tctx%has_error) then
+          call vs_leave(vst, base)
+          return
+       end if
+       call vs_set(vst, base + 3 + i, v)
+    end do
     rinfo = gc_slot(vs_get(vst, base + 1), 2)
     start = int_of(gcv_nth(rinfo, 1))
     n = int_of(gcv_nth(rinfo, 2))
-    do i = 0, n - 1
-       call frame_set(vs_get(vst, base + 2), start + i, gcv_nth(vs_get(vst, base + 3), i))
+    do i = 0, min(n, nk) - 1
+       call frame_set(vs_get(vst, base + 2), start + i, vs_get(vst, base + 3 + i))
     end do
     out = recur_marker()
     call vs_leave(vst, base)
