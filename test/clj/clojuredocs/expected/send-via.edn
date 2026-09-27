@@ -1,1 +1,1 @@
-{:timeout true, :lines {"send-via#example0" {0 "java.util.concurrent.Executors", 1 "#var", 2 "#var", 3 "#var", 4 "#object[clojure.lang.Agent {:status :ready, :val 2}]", 5 "nil", 6 "2"}}}
+{:timeout false, :lines {"send-via#example0" {0 "java.util.concurrent.Executors", 1 "#var", 2 "#var", 3 "#var", 4 "#object[clojure.lang.Agent 0x420745d7 {:status :ready, :val 2}]", 5 "nil", 6 "2"}}}

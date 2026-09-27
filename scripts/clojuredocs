@@ -130,7 +130,7 @@
 
 (def nondet-syms
   '#{rand rand-int rand-nth shuffle random-sample random-uuid gensym time System/currentTimeMillis
-     System/nanoTime Thread/sleep hash-ordinal repeatedly})
+     System/nanoTime Thread/sleep hash-ordinal repeatedly pmap pcalls pvalues future})
 
 (defn tags [var-name portable-var? code]
   (let [syms (try (->> (e/parse-string-all code {:all true :read-cond :allow :features #{:clj}
@@ -220,7 +220,9 @@
                          "(clotran.cd/run-case " (pr-str (case-id c)) " " (boolean (:nondet (:tags c))) " "
                          (pr-str (:code c)) ")\n"))
                   cases))
-       "\n"))
+       ;; clj does not exit while the agent pool lives: every agent example
+       ;; timed out there, and went unjudged
+       "\n(clojure.core/shutdown-agents)\n"))
 
 (defn load-cases [] (edn/read-string (slurp examples-file)))
 
@@ -250,15 +252,30 @@
 
 (defn by-var [cases] (sort-by key (group-by :var cases)))
 
+(defn answers-for
+  "One var's cases run by `cmd`, as {:timeout :lines}. When the var runs out
+  of time, every case of it runs again ALONE with its own budget: one slow
+  example (printing 10^8 numbers) used to leave the rest of its var
+  unanswered, counted as clotran stopping."
+  [cmd v cs]
+  (let [f (io/file work "cases" (str (munge-var v) ".clj"))
+        _ (spit f (script-for cs))
+        {:keys [out timeout]} (run-file cmd f 120)]
+    (if-not timeout
+      {:timeout false :lines (parse-out out)}
+      {:timeout true
+       :lines (apply merge
+                     (for [[k c] (map-indexed vector cs)]
+                       (let [g (io/file work "cases" (str (munge-var v) "--" k ".clj"))]
+                         (spit g (script-for [c]))
+                         (parse-out (:out (run-file cmd g 120))))))})))
+
 (defn expect [only]
   (.mkdirs expected-dir) (.mkdirs (io/file work "cases"))
   (pmap-n 6 (fn [[v cs]]
-              (let [f (io/file work "cases" (str (munge-var v) ".clj"))
-                    _ (spit f (script-for cs))
-                    {:keys [out timeout]} (run-file ["clj" "-M"] f 120)]
-                (spit (io/file expected-dir (str (munge-var v) ".edn"))
-                      (pr-str {:timeout (boolean timeout) :lines (parse-out out)}))
-                (print ".") (flush)))
+              (spit (io/file expected-dir (str (munge-var v) ".edn"))
+                    (pr-str (answers-for ["clj" "-M"] v cs)))
+              (print ".") (flush))
           (cond->> (by-var (load-cases)) (seq only) (filter #(contains? only (key %)))))
   (println))
 
@@ -272,11 +289,8 @@
   (let [groups (cond->> (by-var (load-cases)) (seq only) (filter #(contains? only (key %))))]
     (pmap-n (parse-long (or (System/getenv "CLOTRAN_TEST_JOBS") "6"))
             (fn [[v cs]]
-              (let [f (io/file work "cases" (str (munge-var v) ".clj"))
-                    _ (spit f (script-for cs))
-                    {:keys [out timeout]} (run-file [(str repo "/clotran-bin") (str repo "/src/clj/clojure/core.clj")] f 120)]
-                (spit (io/file got-dir (str (munge-var v) ".edn"))
-                      (pr-str {:timeout (boolean timeout) :lines (parse-out out)}))))
+              (spit (io/file got-dir (str (munge-var v) ".edn"))
+                    (pr-str (answers-for [(str repo "/clotran-bin") (str repo "/src/clj/clojure/core.clj")] v cs))))
             groups)))
 
 (defn norm

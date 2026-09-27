@@ -1,1 +1,1 @@
-{:timeout true, :lines {"send#example0" {0 "#var", 1 "100", 2 "#object[clojure.lang.Agent {:status :ready, :val 200}]", 3 "200"}, "send#example1" {0 "!unreadable"}}}
+{:timeout false, :lines {"send#example0" {0 "#var", 1 "100", 2 "#object[clojure.lang.Agent 0x30272916 {:status :ready, :val 200}]", 3 "200"}, "send#example1" {0 "!unreadable"}}}
