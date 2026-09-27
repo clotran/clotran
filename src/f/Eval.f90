@@ -7027,27 +7027,49 @@ contains
        ! Indexed where the collection is indexable, a seq walk where it
        ! is not -- (nth (range 5) 2) has to work, and a range has no
        ! index. Same fallback Clojure has.
+       ! FOUND is kept apart from the value: a nil element is found, and
+       ! (nth [nil] 0 :d) is nil. Out of range, with no default, THROWS
+       ! (RT.nthFrom) -- answering nil made every off-by-one silent.
        block
          type(gc_value) :: coll, idx, walk
          integer :: want, k
-         coll = gcv_nth(vs_get(vst, base + 1), 0)
+         logical :: found
+         coll = strip_meta(gcv_nth(vs_get(vst, base + 1), 0))
          idx = as_index(gcv_nth(vs_get(vst, base + 1), 1))
          want = int(idx%ival)
          out = gc_nil()
-         if (gc_kind(coll) == OBJ_CHUNK) then
-            out = chunk_nth(coll, want)
+         found = .false.
+         if (gc_kind(coll) == OBJ_SET .or. gca_is(coll)) then
+            block
+              call class_name_of(coll, s=dlt_1)
+              call raise_class("UnsupportedOperationException", "nth not supported on this type: " // dlt_1, &
+                   [vs_get(vst, base + 1)])
+            end block
+            call vs_leave(vst, base)
+            return
+         else if (gc_kind(coll) == OBJ_CHUNK) then
+            found = (want >= 0 .and. want < chunk_count(coll))
+            if (found) out = chunk_nth(coll, want)
          else if (gcv_is(coll) .or. coll%tag == GCT_STR) then
-            if (want >= 0 .and. want < seq_len(coll)) &
-                 out = seq_elem(coll, want, [vs_get(vst, base + 1)])
+            found = (want >= 0 .and. want < seq_len(coll))
+            if (found) out = seq_elem(coll, want, [vs_get(vst, base + 1)])
          else if (want >= 0) then
             walk = to_seq(coll, [vs_get(vst, base + 1)])
             do k = 1, want
+               if (walk%tag == GCT_NIL) exit
                walk = sq_rest(walk, [vs_get(vst, base + 1)])
                walk = to_seq(walk, [vs_get(vst, base + 1)])
             end do
-            if (walk%tag /= GCT_NIL) out = sq_first(walk, [vs_get(vst, base + 1)])
+            found = (walk%tag /= GCT_NIL)
+            if (found) out = sq_first(walk, [vs_get(vst, base + 1)])
          end if
-         if (out%tag == GCT_NIL .and. n >= 3) out = gcv_nth(vs_get(vst, base + 1), 2)
+         if (.not. found) then
+            if (n >= 3) then
+               out = gcv_nth(vs_get(vst, base + 1), 2)
+            else if (coll%tag /= GCT_NIL .and. .not. tctx%has_error) then
+               call raise_class("IndexOutOfBoundsException", "", [vs_get(vst, base + 1)])
+            end if
+         end if
        end block
     case (B_GET)
        a = strip_meta(gcv_nth(args, 0))
