@@ -15928,10 +15928,48 @@ contains
             end do
             out = mm
           end block
+       else if (gcv_is(vs_get(vst, base + 2))) then
+          ! APersistentMap.cons: a vector must be a PAIR. Taking its first
+          ! two made (conj {:a 1} [:b 2 :c 3]) quietly {:a 1, :b 2}.
+          if (gcv_count(vs_get(vst, base + 2)) /= 2) then
+             out = gc_nil()
+             call raise_class("IllegalArgumentException", "Vector arg to map conj must be a pair", roots)
+          else
+             out = gca_assoc(vs_get(vst, base + 1), gcv_nth(vs_get(vst, base + 2), 0), &
+                  gcv_nth(vs_get(vst, base + 2), 1), roots)
+          end if
        else
-          out = gca_assoc(vs_get(vst, base + 1), &
-               seq_elem(vs_get(vst, base + 2), 0, roots), &
-               seq_elem(vs_get(vst, base + 2), 1, roots), roots)
+          ! anything else is a seq of MAP ENTRIES; an element that is not
+          ! one is a ClassCastException, where reading its first two made
+          ! (conj {:a 1} '(:b 2)) {:a 1, nil nil}
+          block
+            type(gc_value) :: walk, e
+            type(eval_ctx), pointer :: cx
+            integer :: wb
+            cx => ctx_self()
+            wb = vs_enter(vst, 2)
+            call vs_set(vst, wb + 1, vs_get(vst, base + 1))
+            walk = to_seq(vs_get(vst, base + 2), [roots, vs_get(vst, wb + 1)])
+            call vs_set(vst, wb + 2, walk)
+            do while (walk%tag /= GCT_NIL)
+               e = sq_first(vs_get(vst, wb + 2), [roots, vs_get(vst, wb + 1)])
+               if (cx%has_error) exit
+               if (.not. (gcv_is(e) .and. is_map_entry(e))) then
+                  block
+                    call class_name_of(e, s=dlt_1)
+                    call raise_class("ClassCastException", dlt_1 // " cannot be cast to java.util.Map$Entry", roots)
+                  end block
+                  exit
+               end if
+               out = gca_assoc(vs_get(vst, wb + 1), gcv_nth(e, 0), gcv_nth(e, 1), [roots, e])
+               call vs_set(vst, wb + 1, out)
+               walk = sq_rest(vs_get(vst, wb + 2), [roots, vs_get(vst, wb + 1)])
+               walk = to_seq(walk, [roots, vs_get(vst, wb + 1)])
+               call vs_set(vst, wb + 2, walk)
+            end do
+            out = vs_get(vst, wb + 1)
+            call vs_leave(vst, wb)
+          end block
        end if
     else if (coll%tag == GCT_NIL) then
        out = gcl_cons(vs_get(vst, base + 2), gcl_empty(roots), roots)
@@ -15943,7 +15981,19 @@ contains
           call raise_class("ClassCastException", dlt_1 //  " cannot be cast to clojure.lang.IPersistentCollection", roots)
        end block
     else
-       out = gcl_cons(vs_get(vst, base + 2), to_seq(vs_get(vst, base + 1), roots), roots)
+       ! a seq: (cons x coll), which keeps a lazy or viewed tail as it is.
+       ! gcl_cons started a fresh list on any tail that was not one, so
+       ! (conj (range 3) 9) was (9) -- and map with four collections,
+       ! which conjes onto its rest args, lost the fourth under apply.
+       block
+         type(gc_value) :: av
+         av = gcv_empty(roots)
+         av = gcv_conj(av, vs_get(vst, base + 2), [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+         call vs_set(vst, base + 2, av)
+         av = gcv_conj(av, vs_get(vst, base + 1), [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+         call vs_set(vst, base + 2, av)
+         out = call_builtin(B_CONS, vs_get(vst, base + 2))
+       end block
     end if
     call vs_leave(vst, base)
   end function conj1
