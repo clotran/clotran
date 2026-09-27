@@ -6782,9 +6782,10 @@ contains
                   qd = qd / g
                end do
                out = gc_ratio(qn, qd)
-               ! (* 2N 1/2) is 1N, not 1: a BigInt anywhere keeps the
-               ! answer a BigInt when it comes out integral.
-               if (any_big .and. out%tag == GCT_INT) then
+               ! A Ratio's arithmetic answers a BigInt when it comes out
+               ! integral -- (* 8 1/2) is 4N, (+ 1/2 1/2) is 1N -- as
+               ! Numbers' RatioOps do (checked against clj).
+               if (out%tag == GCT_INT) then
                   block
                      call big_from_i64(out%ival, o=dlt_1)
                      out = gc_big(dlt_1, [vs_get(vst, base + 1)])
@@ -7412,6 +7413,14 @@ contains
                else
                   ! rem is a - b*quot, kept exact.
                   out = gc_ratio(an * bd - qi * bn * ad, ad * bd)
+               end if
+               ! a Ratio's quotient, and an integral remainder, are BigInts:
+               ! (quot 7/2 1) is 3N (RatioOps, checked against clj)
+               if (out%tag == GCT_INT) then
+                  block
+                     call big_from_i64(out%ival, o=dlt_1)
+                     out = gc_big(dlt_1, [vs_get(vst, base + 1)])
+                  end block
                end if
             end if
           end block
@@ -11707,28 +11716,10 @@ contains
           call vs_leave(vst, base)
           return
        end if
-       if (is_ratio(a) .or. is_ratio(b)) then
-          ! Exact, and the integer arm below would have read a ratio
-          ! as its numerator: (quot 7/2 1) would answer 7, not 3.
-          ! a/b is (an*bd)/(ad*bn), and quot truncates that toward
-          ! zero -- which is what Fortran's integer division does.
-          block
-            integer(gc_ip) :: an, ad, bn, bd, qi
-            an = gc_numerator(a); ad = gc_denominator(a)
-            bn = gc_numerator(b); bd = gc_denominator(b)
-            if (bn == 0) then
-               call raise_class("ArithmeticException", "Divide by zero", [gc_nil()])
-            else
-               qi = (an * bd) / (ad * bn)
-               if (id == B_QUOT) then
-                  out = gc_int(qi)
-               else
-                  ! rem is a - b*quot, kept exact.
-                  out = gc_ratio(an * bd - qi * bn * ad, ad * bd)
-               end if
-            end if
-          end block
-       else if (a%tag == GCT_REAL .or. b%tag == GCT_REAL) then
+       ! (A copy of quot/rem's ratio arm stood here and answered the
+       ! REMAINDER for every division with a ratio in it: (/ 3/4 5) was
+       ! 3/4, (/ 1/2 1/2) was 0.)
+       if (a%tag == GCT_REAL .or. b%tag == GCT_REAL) then
           ! (/ 1.0 0) is ##Inf, NOT an error -- only the exact path
           ! raises. Verified against clj.
           out = gc_real(num_dbl(a) / num_dbl(b))
@@ -11737,6 +11728,14 @@ contains
        else
           out = gc_ratio(gc_numerator(a) * gc_denominator(b), &
                          gc_denominator(a) * gc_numerator(b))
+          ! with a Ratio in it, an integral answer is a BigInt: (/ 1/2
+          ! 1/2) is 1N, where (/ 4 2) of two longs is 2
+          if ((is_ratio(a) .or. is_ratio(b)) .and. out%tag == GCT_INT) then
+             block
+                call big_from_i64(out%ival, o=dlt_1)
+                out = gc_big(dlt_1, [vs_get(vst, base + 1)])
+             end block
+          end if
        end if
     case (B_INC, B_DEC, B_UINC, B_UDEC, B_PINC, B_PDEC)
        checked = (id == B_INC .or. id == B_DEC)
