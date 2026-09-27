@@ -33,8 +33,8 @@
 
 (check "a break says why" (:reason brk) :break)
 (check "a break has a frame per call" (count (:frames brk)) 2)
-(check "the innermost call is first" (:fn (first (:frames brk))) "clojure.core/brk-inner")
-(check "its caller is under it" (:fn (second (:frames brk))) "clojure.core/brk-outer")
+(check "the innermost call is first" (:fn (first (:frames brk))) "user/brk-inner")
+(check "its caller is under it" (:fn (second (:frames brk))) "user/brk-outer")
 ;; Where each is: the call it is waiting on -- (clotran-break) on line
 ;; 30 and (brk-inner n 41) on line 31 of this file -- not its body.
 (check "a frame is where its pending call is" (map (juxt :line :col) (:frames brk)) [[30 54] [31 46]])
@@ -46,7 +46,7 @@
                                             :break (if @brk-entry :continue :step-in)))]
   ((fn [] (clotran-break) (brk-inner 1 2))))
 (check "a frame just entered is where its body begins" (map (juxt :fn :line :col) (take 1 (:frames @brk-entry)))
-       [["clojure.core/brk-inner" 30 23]])
+       [["user/brk-inner" 30 23]])
 ;; One frame serves every arity of a fn, so the other arities' slots
 ;; exist and read nil; they are not this frame's locals.
 (defn brk-arity ([a] (clotran-break)) ([a b] (clotran-break)))
@@ -77,7 +77,7 @@
 (check "the error was still caught" brk-caught :caught)
 (check "an error breaks too" (:reason brk-err) :error)
 (check "with the message" (string? (:message brk-err)) true)
-(check "and the failing frame" (:fn (first (:frames brk-err))) "clojure.core/brk-boom")
+(check "and the failing frame" (:fn (first (:frames brk-err))) "user/brk-boom")
 (check "with its locals named" (contains? (:env (first (:frames brk-err))) (quote doubled)) true)
 
 ;; The resuming half. A handler Var gets the state and answers a
@@ -118,14 +118,14 @@
     @seen))
 (check ":step-in stops at every call, the callee on top with its argument"
        (st-run [:step-in :step-in :step-in :step-in])
-       [[:break "clojure.core/st-top" nil] [:step "clojure.core/st-mid" 1] [:step "clojure.core/st-leaf" 1]
-        [:step "clojure.core/st-leaf" 2] [:step "clojure.core/st-leaf" 5]])
+       [[:break "user/st-top" nil] [:step "user/st-mid" 1] [:step "user/st-leaf" 1]
+        [:step "user/st-leaf" 2] [:step "user/st-leaf" 5]])
 (check ":step-over at st-mid's entry walks st-mid's own calls"
        (st-run [:step-in :step-over])
-       [[:break "clojure.core/st-top" nil] [:step "clojure.core/st-mid" 1] [:step "clojure.core/st-leaf" 1]])
+       [[:break "user/st-top" nil] [:step "user/st-mid" 1] [:step "user/st-leaf" 1]])
 (check ":step-out at st-mid's entry stops at st-top's next call"
        (st-run [:step-in :step-out])
-       [[:break "clojure.core/st-top" nil] [:step "clojure.core/st-mid" 1] [:step "clojure.core/st-leaf" 5]])
+       [[:break "user/st-top" nil] [:step "user/st-mid" 1] [:step "user/st-leaf" 5]])
 (def st-stray (atom nil))
 (binding [*clotran-break-handler* (fn [b] :step-in)] ((fn [] (clotran-break))))
 (binding [*clotran-break-handler* (fn [b] (reset! st-stray (:reason b)) :continue)] (st-leaf 1))
@@ -139,7 +139,7 @@
 (def eb-result (binding [*clotran-break-handler* (fn [b] (reset! eb-seen [(:reason b) (:fn (first (:frames b)))]) :step-in)]
                  (try (brk-boom 21) (catch Throwable t :caught))))
 (clotran-break-on! false)
-(check "an error break reaches the handler" @eb-seen [:error "clojure.core/brk-boom"])
+(check "an error break reaches the handler" @eb-seen [:error "user/brk-boom"])
 (check "and the error still goes on to its catch" eb-result :caught)
 
 ;;; ---- reader conditionals ------------------------------------------

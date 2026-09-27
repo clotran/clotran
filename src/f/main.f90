@@ -66,6 +66,11 @@ contains
     ! error it reports IS the next thing to build.
     do i = 1, command_argument_count()
        call get_command_argument(i, argbuf, arglen)
+       ! Every file after core.clj starts in user, as a script run by
+       ! clojure.main does. Inheriting core.clj's own (ns clojure.core)
+       ! put a script's defs INTO clojure.core -- (def map ...) in a
+       ! script replaced map for everything.
+       if (i > 1) call gcn_set_current(gcn_find_or_create("user", none))
        call load_file(argbuf(1:arglen), vs_get(base + 1))
        ! RT.CHECK_SPECS: once core.clj -- the first file -- has loaded,
        ! every macro call is checked against clojure.core.specs.alpha,
