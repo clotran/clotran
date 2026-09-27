@@ -38,7 +38,20 @@
   "module clotran_rt_decl
   use iso_c_binding
   implicit none
+  ! a value as the runtime lays it out (GC.f90 gc_value; ClotranABI
+  ! clotran_slots checks it): generated code reads and writes stack
+  ! slots as these directly
+  type, bind(C) :: clotran_val
+     integer(c_int32_t) :: tag, ref
+     integer(c_int64_t) :: ival
+  end type clotran_val
   interface
+     function clotran_slots(cs, n) bind(C, name=\"clotran_slots\") result(p)
+       import :: c_ptr, c_int
+       type(c_ptr), value :: cs
+       integer(c_int), intent(out) :: n
+       type(c_ptr) :: p
+     end function clotran_slots
      function clotran_stack() bind(C, name=\"clotran_stack\") result(cs)
        import :: c_ptr
        type(c_ptr) :: cs
@@ -576,6 +589,51 @@ end module clotran_rt_decl
 
 (declare gen gp)
 
+(defn- arith-inline
+  "A boxed numeric op done in Fortran when its operands are two longs or
+  two doubles, read straight from their slots; `slow` -- clotran_arith,
+  which also throws a long's overflow as Clojure does -- for anything
+  else, and for a long op that would overflow -- a guard Fortran may
+  evaluate whatever the tags, so nothing in it can itself overflow. A
+  result of one op is
+  the same value clotran_arith gives: a long, a double, or a boolean."
+  [opc a b r slow]
+  (let [x (str "sv(b + " a ")") y (str "sv(b + " b ")") out (str "sv(b + " r ")")
+        xi (str x "%ival") yi (str y "%ival")
+        xd (str "transfer(" xi ", 0.0_c_double)") yd (str "transfer(" yi ", 0.0_c_double)")
+        h "huge(0_c_int64_t)"
+        long (fn [e] (str out " = clotran_val(2, 0, " e ")"))
+        dbl (fn [e] (str out " = clotran_val(3, 0, transfer(" e ", 0_c_int64_t))"))
+        bool (fn [e] (str out " = clotran_val(1, 0, merge(1_c_int64_t, 0_c_int64_t, " e "))"))
+        ;; [long guard (beyond both tags 2), long result, double result]
+        [g lr dr] (case (int opc)
+                    1 [(str "(" xi " <= " h " - max(" yi ", 0_c_int64_t) .and. " xi " >= -" h " - 1_c_int64_t - min(" yi ", 0_c_int64_t))")
+                       (long (str xi " + " yi)) (dbl (str xd " + " yd))]
+                    2 [(str "(" xi " <= " h " + min(" yi ", 0_c_int64_t) .and. " xi " >= -" h " - 1_c_int64_t + max(" yi ", 0_c_int64_t))")
+                       (long (str xi " - " yi)) (dbl (str xd " - " yd))]
+                    3 [(str "(" xi " > -2147483648_c_int64_t .and. " xi " < 2147483648_c_int64_t .and. " yi " > -2147483648_c_int64_t .and. " yi " < 2147483648_c_int64_t)")
+                       (long (str xi " * " yi)) (dbl (str xd " * " yd))]
+                    4 [(str "(" xi " /= " h ")") (long (str xi " + 1_c_int64_t")) (dbl (str xd " + 1.0_c_double"))]
+                    5 [(str "(" xi " /= -" h " - 1_c_int64_t)") (long (str xi " - 1_c_int64_t")) (dbl (str xd " - 1.0_c_double"))]
+                    6 [".true." (bool (str xi " < " yi)) (bool (str xd " < " yd))]
+                    7 [".true." (bool (str xi " > " yi)) (bool (str xd " > " yd))]
+                    8 [".true." (bool (str xi " <= " yi)) (bool (str xd " <= " yd))]
+                    9 [".true." (bool (str xi " >= " yi)) (bool (str xd " >= " yd))]
+                    10 [".true." (bool (str xi " == " yi)) (bool (str xd " == " yd))]
+                    11 [".true." (bool (str xi " == " yi)) (bool (str xd " == " yd))]
+                    12 [".true." (bool (str xi " == 0_c_int64_t")) (bool (str xd " == 0.0_c_double"))]
+                    13 [".true." (bool (str xi " > 0_c_int64_t")) (bool (str xd " > 0.0_c_double"))]
+                    14 [".true." (bool (str xi " < 0_c_int64_t")) (bool (str xd " < 0.0_c_double"))])
+        ;; a and b are the same slot for a one-argument op
+        tags (fn [t] (if (= a b) (str x "%tag == " t) (str x "%tag == " t " .and. " y "%tag == " t)))]
+    (concat [(str "if (" (tags 2) (when (not= g ".true.") (str " .and. " g)) ") then")
+             (str "   " lr)
+             (str "else if (" (tags 3) ") then")
+             (str "   " dr)
+             "else"]
+            (map #(str "   " %) slow)
+            ["end if"])))
+
 (defn- slow-call
   "The GENERIC call, for when the fast path cannot answer: an overflow
   about to happen, or an operand whose tag is not a number. It is the
@@ -1032,16 +1090,26 @@ end module clotran_rt_decl
                     ;; runtime for two longs or two doubles, the builtin
                     ;; otherwise (clotran_arith)
                     (let [kids (:children nd)
-                          [hc hs st] (gen (first kids) st)
+                          ;; the op's own fn is needed only when the inline
+                          ;; path cannot answer: fetched (and a Var derefed)
+                          ;; there, not in the prologue of every call
+                          p (pooled (first kids))
+                          [hc hs st] (if p (let [[t st] (fresh st)] [nil t st]) (gen (first kids) st))
+                          fetch (when p
+                                  (cond-> [(str "call clotran_pool_get(b + " hs ", cf_pool, "
+                                                (+ (:offset st) (- (get (:pool st) p) 2)) "_c_int)")]
+                                    (= :var (:kind p)) (conj (str "call clotran_deref(b + " hs ", b + " hs ")"))))
                           n (count (rest kids))
                           [blk st] (reduce (fn [[bl st] _] (let [[s st'] (fresh st)] [(conj bl s) st'])) [[] st] (range n))
                           [ac st] (reduce (fn [[code st] [k d]] (let [[c st'] (gen-into k d st)] [(into code c) st']))
                                           [[] st] (map vector (rest kids) blk))
                           [r st] (fresh st)]
                       [(concat hc ac
-                               [(str "st = clotran_arith(b + " r ", " opc "_c_int, b + " hs ", b + " (first blk)
-                                     ", b + " (or (second blk) (first blk)) ", " n "_c_int)")]
-                               err-return)
+                               (arith-inline opc (first blk) (or (second blk) (first blk)) r
+                                             (concat fetch
+                                                     [(str "st = clotran_arith(b + " r ", " opc "_c_int, b + " hs ", b + " (first blk)
+                                                           ", b + " (or (second blk) (first blk)) ", " n "_c_int)")]
+                                                     err-return)))
                        r st])
                   (let [kids (:children nd)
                         [hc hs st] (gen (first kids) st)
@@ -1343,6 +1411,33 @@ end module clotran_rt_decl
   argument (ClotranABI, clotran_stack)."
   #{"arith" "array_view" "bool" "call_slots" "captures" "copy" "deref" "dot" "eval_node" "frame_done" "frame_enter" "frame_get" "frame_leave" "frame_new" "frame_put" "int" "make_closure" "new" "pool_get" "real" "rest_args" "set_bool" "set_int" "set_nil" "set_real" "set_str" "tag"})
 
+(defn- direct-slots
+  "A procedure's text with the entries that only read or write one slot
+  replaced by the Fortran that does it on sv, the stack's slots viewed
+  as clotran_val (ClotranABI, clotran_slots): a copy is an assignment, a
+  tag or payload a load. Each was a call into the runtime; a compiled
+  (+ a b) made ten. The readers go first: a write's value can hold one."
+  [text]
+  (let [slot "([^,()]+)"
+        rd (fn [nm] (re-pattern (str "clotran_" nm "\\(cs, " slot "\\)")))
+        wr (fn [nm] (re-pattern (str "(?m)call clotran_" nm "\\(cs, " slot ", (.*)\\)$")))]
+    (-> text
+        (str/replace (rd "tag") (fn [[_ a]] (str "sv(" a ")%tag")))
+        (str/replace (rd "int") (fn [[_ a]] (str "sv(" a ")%ival")))
+        (str/replace (rd "real") (fn [[_ a]] (str "transfer(sv(" a ")%ival, 0.0_c_double)")))
+        (str/replace (rd "bool")
+                     (fn [[_ a]] (str "merge(0_c_int, 1_c_int, sv(" a ")%tag == 0 .or. (sv(" a
+                                      ")%tag == 1 .and. sv(" a ")%ival == 0))")))
+        (str/replace (re-pattern (str "call clotran_copy\\(cs, " slot ", " slot "\\)"))
+                     (fn [[_ d src]] (str "sv(" d ") = sv(" src ")")))
+        (str/replace (re-pattern (str "call clotran_set_nil\\(cs, " slot "\\)"))
+                     (fn [[_ d]] (str "sv(" d ") = clotran_val(0, 0, 0_c_int64_t)")))
+        (str/replace (wr "set_int") (fn [[_ d e]] (str "sv(" d ") = clotran_val(2, 0, int(" e ", c_int64_t))")))
+        (str/replace (wr "set_real")
+                     (fn [[_ d e]] (str "sv(" d ") = clotran_val(3, 0, transfer(real(" e ", c_double), 0_c_int64_t))")))
+        (str/replace (wr "set_bool")
+                     (fn [[_ d e]] (str "sv(" d ") = clotran_val(1, 0, merge(1_c_int64_t, 0_c_int64_t, (" e ") /= 0))"))))))
+
 (defn- with-stack
   "A procedure's text fetching the thread's stack once, into cs, and
   passing it to every entry that takes it: each entry fetching its own
@@ -1351,7 +1446,11 @@ end module clotran_rt_decl
   (-> text
       (str/replace #"\bclotran_(\w+)\("
                    (fn [[m nm]] (if (stack-entries nm) (str "clotran_" nm "(cs, ") m)))
-      (str/replace-first "    st = 0\n" "    type(c_ptr) :: cs\n    st = 0\n    cs = clotran_stack()\n")))
+      direct-slots
+      (str/replace-first "    st = 0\n"
+                         (str "    type(c_ptr) :: cs\n    type(clotran_val), pointer :: sv(:)\n    integer(c_int) :: nsv\n"
+                              "    st = 0\n    cs = clotran_stack()\n"
+                              "    call c_f_pointer(clotran_slots(cs, nsv), sv, [nsv])\n"))))
 
 (defn- frameless
   "A procedure's text with its locals in stack slots rather than a heap
@@ -1431,7 +1530,10 @@ end module clotran_rt_decl
           "    b = clotran_frame_enter(" (max 1 (:high st)) "_c_int)\n"
           "    call clotran_frame_new(b + 1, " nslots "_c_int)\n"
           (when closure? "    call clotran_captures(b + 1)\n")
-          (apply str (for [[p s] (sort-by val pslots)]
+          ;; an entry the body never reads is not fetched: the head of an
+          ;; inline numeric op fetches its own, on the slow path
+          (apply str (for [[p s] (sort-by val pslots)
+                           :when (some #(re-find (re-pattern (str "b \\+ " s "\\b")) %) body)]
                        (str "    call clotran_pool_get(b + " s ", cf_pool, "
                             (+ offset (- s 2)) "_c_int)\n"
                             (when (= :var (:kind p))

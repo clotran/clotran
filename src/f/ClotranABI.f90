@@ -56,7 +56,7 @@ module ClotranABI
 
   ! Everything public here is public BECAUSE it is bind(C); the module
   ! is never `use`d by generated code, only linked against.
-  public :: clotran_stack
+  public :: clotran_stack, clotran_slots
   public :: clotran_init, clotran_boot, clotran_eval, clotran_analyze, clotran_frame_enter, clotran_frame_leave, clotran_frame_depth
   public :: clotran_set_nil, clotran_set_int, clotran_set_real, clotran_set_bool
   public :: clotran_set_str, clotran_copy
@@ -203,6 +203,29 @@ contains
     vst => gc_my_stack()
     cs = c_loc(vst)
   end function clotran_stack
+
+  ! The stack's slots themselves, for generated code to read and write
+  ! directly as clotran_val (compiler.cljf): the address of slot 1 and
+  ! how many there are. The stack never moves (GC.f90, vstack_make), so
+  ! the view holds for the thread's life. The layout is checked once:
+  ! a 32-bit tag, a 32-bit pool index, a 64-bit payload.
+  function clotran_slots(cs, n) bind(C, name="clotran_slots") result(p)
+    type(c_ptr), value :: cs
+    integer(c_int), intent(out) :: n
+    type(c_ptr) :: p
+    type(gc_stack), pointer :: vst
+    logical, save :: checked = .false.
+    integer(c_int64_t) :: w(2)
+    if (.not. checked) then
+       w = transfer(gc_value(tag=7, ref=9, ival=-5_gc_ip), w)
+       if (storage_size(gc_value()) /= 128 .or. w(1) /= 7 + 9 * 4294967296_c_int64_t .or. w(2) /= -5) &
+            error stop "clotran: a value is not laid out as compiled code reads it"
+       checked = .true.
+    end if
+    call c_f_pointer(cs, vst)
+    n = int(size(vst%vstack), c_int)
+    p = c_loc(vst%vstack(1))
+  end function clotran_slots
 
   ! Reserves n slots and answers the base. Slots are base+1 .. base+n,
   ! each starting nil. Pass the base back to clotran_frame_leave.

@@ -177,8 +177,17 @@ every call and the count is what overflows. `recur` is the loop. What still
 nests on the Fortran stack is a native calling back into Clojure --
 forcing a lazy seq, a multimethod's dispatch, a def's value -- and
 `CLOTRAN_MAX_DEPTH` (2200) still bounds that. A rendered trace stops
-at 128 frames with `... N more`; `.getStackTrace` has them all. The
-original entry follows.
+at 128 frames with `... N more`; `.getStackTrace` has them all.
+
+Since 2026-09-27 the VALUE stack is fixed, not grown: compiled code
+holds a view of it across calls, so it may never move. 4,194,304 slots
+per thread (64 MB of address space, calloc'd, so real only where
+touched), `CLOTRAN_STACK_SLOTS` to change it. The frame limit trips
+first -- its deepest case, a one-line fn at 200,000 frames, used
+1,400,000 slots -- but a deep recursion through frames with many
+temporaries could fill the stack before it, and that stops the process
+("the value stack is full") where the JVM throws a catchable
+StackOverflowError. The original entry follows.
 
 Both runtimes stop somewhere; the JVM raises `StackOverflowError` and we
 report `stack overflow near (f ...)`. What differs is how soon.

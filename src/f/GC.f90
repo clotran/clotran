@@ -69,7 +69,7 @@ module GC
   use Threads, only: th_key, th_key_create, th_key_set, th_key_get, th_lock, th_cond, &
        th_lock_init, th_lock_acquire, th_lock_release, th_cond_init, th_cond_wait, th_cond_broadcast, &
        th_cond_timedwait
-  use iso_c_binding, only: c_ptr, c_loc, c_f_pointer, c_associated
+  use iso_c_binding, only: c_ptr, c_loc, c_f_pointer, c_associated, c_size_t
   use BigInt
   use BigDec
   implicit none
@@ -561,7 +561,11 @@ module GC
   ! spare ARGUMENT VECTORS of 1..ARG_SPARE_MAX elements (Eval, args_take)
   integer, parameter, public :: ARG_SPARE_MAX = 8
   type :: gc_stack
-     type(gc_value), allocatable :: vstack(:)
+     ! FIXED, never moved: compiled code holds a view of it across calls
+     ! (ClotranABI, clotran_slots). calloc'd, so its pages are real only
+     ! once touched; vstack_make.
+     type(gc_value), pointer, contiguous :: vstack(:) => null()
+     integer :: vs_hi = 0   ! the highest top reached; above it, untouched
      integer :: vs_top = 0
      logical :: holds_heap = .false.   ! this thread is inside heap_enter/heap_leave
      integer :: state_depth = 0        ! how deep this thread holds the state lock
@@ -908,10 +912,13 @@ contains
     end if
     n_stacks = max(n_stacks, id)
     if (.not. associated(stacks(id)%s)) allocate(stacks(id)%s)
-    if (allocated(stacks(id)%s%vstack)) deallocate(stacks(id)%s%vstack)
-    allocate(stacks(id)%s%vstack(64))
-    stacks(id)%s%vstack = nilv
+    if (associated(stacks(id)%s%vstack)) then
+       stacks(id)%s%vstack(1:stacks(id)%s%vs_hi) = nilv
+    else
+       call vstack_make(stacks(id)%s)
+    end if
     stacks(id)%s%vs_top = 0
+    stacks(id)%s%vs_hi = 0
     ! NOT the batches: Eval empties a reused context's stack here, and its
     ! batches and young list must survive -- dropping the young list lost
     ! live young objects from the next young collection's view
@@ -919,6 +926,51 @@ contains
 
   ! The calling thread runs on context `id`'s stack from now on: at a
   ! thread's start, and for the debugger's same-thread switch.
+  ! A stack's slots: CLOTRAN_STACK_SLOTS of them, 4,194,304 (64 MB of
+  ! address space) unless set. calloc hands back zeroes, which is nil, and
+  ! maps a page only when it is first written, so a thread pays for the
+  ! depth it reaches. The interpreter's deepest -- CLOTRAN_MAX_FRAMES of
+  ! a one-line fn -- reached 1,400,000.
+  subroutine vstack_make(s)
+    type(gc_stack), intent(inout) :: s
+    interface
+       function calloc(n, sz) bind(C, name="calloc") result(p)
+         import :: c_size_t, c_ptr
+         integer(c_size_t), value :: n, sz
+         type(c_ptr) :: p
+       end function calloc
+    end interface
+    integer, save :: slots = 0
+    character(len=24) :: buf
+    integer :: st, n
+    type(c_ptr) :: p
+    if (slots == 0) then
+       n = 4194304
+       call get_environment_variable("CLOTRAN_STACK_SLOTS", buf)
+       if (len_trim(buf) > 0) then
+          read(buf, *, iostat=st) n
+          if (st /= 0 .or. n < 1024) n = 4194304
+       end if
+       slots = n
+    end if
+    p = calloc(int(slots, c_size_t), int(storage_size(nilv) / 8, c_size_t))
+    if (.not. c_associated(p)) error stop "clotran: no memory for a value stack"
+    call c_f_pointer(p, s%vstack, [slots])
+  end subroutine vstack_make
+
+  subroutine vstack_free(s)
+    type(gc_stack), intent(inout) :: s
+    interface
+       subroutine free(p) bind(C, name="free")
+         import :: c_ptr
+         type(c_ptr), value :: p
+       end subroutine free
+    end interface
+    if (.not. associated(s%vstack)) return
+    call free(c_loc(s%vstack(1)))
+    nullify(s%vstack)
+  end subroutine vstack_free
+
   subroutine gc_stack_bind(id)
     integer, intent(in) :: id
     logical :: ok
@@ -1071,7 +1123,10 @@ contains
        stack_key_made = .true.
     end if
     do i = 2, n_stacks
-       if (associated(stacks(i)%s)) deallocate(stacks(i)%s)
+       if (associated(stacks(i)%s)) then
+          call vstack_free(stacks(i)%s)
+          deallocate(stacks(i)%s)
+       end if
     end do
     n_stacks = min(n_stacks, 1)
     call gc_stack_bind(1)
@@ -2383,7 +2438,7 @@ contains
     end do
     do i = 1, n_stacks
        if (.not. associated(stacks(i)%s)) cycle
-       if (allocated(stacks(i)%s%vstack)) then
+       if (associated(stacks(i)%s%vstack)) then
           do k = 1, stacks(i)%s%vs_top
              call push_mark(stacks(i)%s%vstack(k))
           end do
@@ -2754,18 +2809,14 @@ contains
     type(gc_stack), pointer, intent(in) :: s
     integer, intent(in) :: n
     integer :: base
-    type(gc_value), allocatable :: bigger(:)
-    do while (s%vs_top + n > size(s%vstack))
-       allocate(bigger(2 * size(s%vstack)))
-       bigger = nilv
-       bigger(1:s%vs_top) = s%vstack(1:s%vs_top)
-       call move_alloc(bigger, s%vstack)
-    end do
+    if (s%vs_top + n > size(s%vstack)) &
+         error stop "clotran: the value stack is full; CLOTRAN_STACK_SLOTS raises it"
     ! Not cleared here: every slot above the top is already nil -- a new
     ! stack starts nil, growing fills with nil, and vs_leave clears what
     ! it pops. Clearing twice was a fifth of a compiled call (dtrace).
     base = s%vs_top
     s%vs_top = base + n
+    if (s%vs_top > s%vs_hi) s%vs_hi = s%vs_top
   end function vs_enter_on
 
   ! Pops back to base. Clearing on the way out is not tidiness: a stale
@@ -2779,10 +2830,15 @@ contains
   subroutine vs_leave_on(s, base)
     type(gc_stack), pointer, intent(in) :: s
     integer, intent(in) :: base
+    type(gc_value), pointer, contiguous :: v(:)
     integer :: i
     if (base < 0 .or. base > s%vs_top) return
+    ! through a local contiguous pointer: on the component itself every
+    ! slot reloaded the stride from the descriptor and multiplied (lldb),
+    ! and this is a sixth of a compiled call
+    v => s%vstack
     do i = base + 1, s%vs_top
-       s%vstack(i) = nilv
+       v(i) = nilv
     end do
     s%vs_top = base
   end subroutine vs_leave_on
@@ -3394,7 +3450,7 @@ contains
     do i = 1, n_stacks
        if (.not. associated(stacks(i)%s)) cycle
        s => stacks(i)%s
-       if (any(s%vstack(s%vs_top + 1:)%tag /= GCT_NIL)) then
+       if (any(s%vstack(s%vs_top + 1:s%vs_hi)%tag /= GCT_NIL)) then
           problem = "a value above a stack's top, which vs_enter would hand out as nil"
           return
        end if

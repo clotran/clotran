@@ -1150,6 +1150,20 @@ cheap. It can come out. What is left is structural: the interpreter reads its tr
 through `gc_slot`/`gcv_nth` on heap vectors (half the loop's samples),
 and a compiled call still crosses ~10 runtime entries.
 
+**Direct slots, 2026-09-27.** Generated code reads and writes the value
+stack itself: the stack is fixed and never moves (GC.f90 vstack_make;
+DEVIATIONS 7), `clotran_slots` hands a procedure its address once, and
+a copy, a tag or payload read, a set of a long, double, bool or nil is
+Fortran on `sv(...)` instead of a runtime call. A boxed numeric op on
+two longs or two doubles is done inline, overflow-guarded, falling to
+`clotran_arith` otherwise; its fn is fetched from the pool only on that
+slow path, and the prologue fetches only pool entries the body reads.
+`vs_leave` clears through a local contiguous pointer (lldb showed a
+stride reload and multiply per slot). compiler-check 249 of 249.
+Measured: reduce 10.2 -> 8.5 ms, str of a vector 201 -> 158; into/map
+and sort do not move -- their time is in the lazy-seq and interop
+machinery, not in arithmetic.
+
 What stays interpreted is `eval`: the REPL, `load-string`, source never
 compiled. JVM Clojure keeps its compiler at run time for the same
 reason. `.cljc` compiles once it has `:cljf` or `:default` branches; a
