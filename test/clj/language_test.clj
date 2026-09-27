@@ -1280,6 +1280,20 @@
          [(second (clotran-position (:pos f))) (boolean (re-find #"reduce" (:help f)))])
        [17 true])
 
+;;; ---- the call stack is balanced: a call leaves nothing on it. A
+;;; protocol fn dispatching to a reify method lost its own entry (the
+;;; method took over its body frame), so every spec conform -- and every
+;;; macro spec check -- left frames that showed in later traces.
+(defprotocol LeakP (leak-m [x]))
+(deftype LeakT [] LeakP (leak-m [this] 1))
+(defn stack-depth [] (count (.getStackTrace (Exception.))))
+(check "a protocol call to an inline method leaves no frame"
+       (let [d (stack-depth)] (dotimes [_ 5] (leak-m (LeakT.)) (leak-m (reify LeakP (leak-m [_] 2)))) (- (stack-depth) d))
+       0)
+(check "a caught throw leaves no frame"
+       (let [d (stack-depth)] (dotimes [_ 5] (try (leak-m 1) (catch Exception e nil))) (- (stack-depth) d))
+       0)
+
 ;;; ---- the verdict: LAST, so every check above counts. It once sat
 ;;; 140 lines early, and the package and tier checks after it could fail
 ;;; without the gate hearing of it.

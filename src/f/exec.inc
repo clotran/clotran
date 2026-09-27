@@ -979,6 +979,10 @@
                 call vs_set(vst, b + 4, cl)
                 if (.not. catch_matches(gcv_nth(vs_get(vst, b + 4), 0), vs_get(vst, b + 3), gc_nil())) cycle
                 call gce_clear_error()
+                ! the calls the error unwound out of are gone: a call
+                ! pushed by a native and never popped on the way out
+                ! stayed on the stack and showed in every later trace
+                tctx%fstack_top = min(tctx%fstack_top, tctx%kst(tctx%ksp)%ftop)
                 call frame_set(vs_get(vst, b + 2), int_of(gcv_nth(vs_get(vst, b + 4), 1)), vs_get(vst, b + 3))
                 tctx%kst(tctx%ksp)%pc = 3
                 call k_push(gcv_nth(vs_get(vst, b + 4), 2), vs_get(vst, b + 2), 0, gc_nil())
@@ -990,6 +994,7 @@
           if (gc_kind(fin) == OBJ_AST) then
              tctx%kst(tctx%ksp)%msg = tctx%last_error
              call gce_clear_error()
+             tctx%fstack_top = min(tctx%fstack_top, tctx%kst(tctx%ksp)%ftop)
              tctx%kst(tctx%ksp)%pc = 4
              call k_push(fin, vs_get(vst, b + 2), 0, gc_nil())
              return
@@ -1313,6 +1318,7 @@
           select case (tctx%kst(tctx%ksp)%pc)
           case (0)
              tctx%kst(tctx%ksp)%pc = 1
+             tctx%kst(tctx%ksp)%ftop = tctx%fstack_top
              call k_push(gcv_nth(kids, 0), vs_get(vst, b + 2), 0, gc_nil())
           case (1, 3)
              ! the body, or a catch, finished normally
@@ -1496,7 +1502,12 @@
     tctx%kst(tctx%ksp)%pc = 0
     tctx%kst(tctx%ksp)%i = 0
     tctx%kst(tctx%ksp)%flags = ior(KF_FNBODY, KF_RESTART)
-    tctx%kst(tctx%ksp)%nfr = 1
+    ! ONE MORE call to pop when this frame finishes, not one: a method
+    ! that is a fn's whole body -- a protocol fn dispatching to a reify
+    ! -- turns that fn's own body frame into the callee's, and setting
+    ! the count to 1 lost the fn's entry. Every spec conform leaked one,
+    ! and every macro's spec check left dozens on the call stack.
+    tctx%kst(tctx%ksp)%nfr = tctx%kst(tctx%ksp)%nfr + 1
     tctx%kst(tctx%ksp)%mode = 0
     tctx%kst(tctx%ksp)%aux = 0
     tctx%kst(tctx%ksp)%aux2 = 0
@@ -1812,7 +1823,7 @@
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: nd, frame
     type(gc_value) :: out, exc, catches, cl, fin
-    integer :: base, i, n
+    integer :: base, i, n, ftop
     logical :: caught
 
     ! temporaries for the deferred-length calls below (share.clj)
@@ -1823,8 +1834,11 @@
     base = vs_enter(vst, 5)
     call vs_set(vst, base + 1, nd)
     call vs_set(vst, base + 2, frame)
+    ftop = tctx%fstack_top
     out = exec(gcv_nth(gc_slot(nd, 1), 0), frame)
     if (tctx%has_error) then
+       ! the calls the error unwound out of are gone (see k_unwind)
+       tctx%fstack_top = min(tctx%fstack_top, ftop)
        exc = thrown_value()
        if (exc%tag == GCT_NIL) then
           block

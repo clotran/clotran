@@ -443,6 +443,7 @@ module Eval
   type kframe
      integer :: base = 0, pc = 0, i = 0, flags = 0, nfr = 0
      integer :: mode = 0, aux = 0, aux2 = 0   ! a call's argument mode, first slot, arity
+     integer :: ftop = 0   ! a try's call-stack depth, restored when it catches
      character(len=:), allocatable :: msg
   end type kframe
   integer, parameter :: KF_FNBODY = 1, KF_RESTART = 2, K_SLOTS = 7   ! slot 6: a scalar call's first argument; slot 7: the closure whose body this is
