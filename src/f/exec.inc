@@ -175,7 +175,7 @@
     out = gc_nil()
     base = vs_enter(vst, 1)
     call vs_set(vst, base + 1, fn)
-    call push_frame(fn, tctx%pending_site)
+    call push_frame(tctx, fn, tctx%pending_site)
     tctx%pending_site = 0
     if (present(restseq)) then
        ok = bind_closure(vs_get(vst, base + 1), argv, frame, body, restseq)
@@ -186,7 +186,7 @@
        out = run(body, frame, ior(KF_FNBODY, KF_RESTART), body, vs_get(vst, base + 1))
        call give_frame(frame)
     else
-       call pop_frame()
+       call pop_frame(tctx)
     end if
     call vs_leave(vst, base)
   end function invoke_closure
@@ -938,7 +938,7 @@
        return
     end if
     do while (tctx%kst(tctx%ksp)%nfr > 0)
-       call pop_frame()
+       call pop_frame(tctx)
        tctx%kst(tctx%ksp)%nfr = tctx%kst(tctx%ksp)%nfr - 1
     end do
     call vs_leave(vst, b)
@@ -996,7 +996,7 @@
           end if
        end if
        do while (tctx%kst(tctx%ksp)%nfr > 0)
-          call pop_frame()
+          call pop_frame(tctx)
           tctx%kst(tctx%ksp)%nfr = tctx%kst(tctx%ksp)%nfr - 1
        end do
        call vs_leave(vst, b)
@@ -1240,7 +1240,7 @@
                 ! exactly what a break has to show, and the call stack
                 ! names the caller either way. Clojure eliminates no tail
                 ! call, so keeping the frame is also what it does.
-                call push_frame(fnv, site)
+                call push_frame(tctx, fnv, site)
                 if (tctx%has_error) cycle
                 call bind_captures(vs_get(vst, b + 3), vs_get(vst, b + 4))
                 body = gcv_nth(gcv_nth(gcv_nth(gc_slot(vs_get(vst, b + 3), 1), 1), tctx%kst(tctx%ksp)%aux2), 3)
@@ -1258,7 +1258,7 @@
              call vs_set(vst, b + 4, gc_nil())
              if (is_node_closure(fnv)) then
                 ! The callee's body, in a frame of its own (see mode 2).
-                call push_frame(fnv, site)
+                call push_frame(tctx, fnv, site)
                 if (tctx%has_error) cycle
                 call vs_set(vst, b + 3, fnv)
                 ok = bind_closure(vs_get(vst, b + 3), v, newframe, body)
@@ -1271,7 +1271,7 @@
                    if (step_at /= 0) call step_check()
                 else
                    ! no arity fits: the entry pushed above is ours to drop
-                   call pop_frame()
+                   call pop_frame(tctx)
                 end if
              else
                 tctx%pending_site = site
@@ -1480,11 +1480,11 @@
     b = tctx%kst(tctx%ksp)%base
     call vs_set(vst, b + 3, gc_slot(req, 1))
     argv = gc_slot(req, 2)
-    call push_frame(vs_get(vst, b + 3), site)
+    call push_frame(tctx, vs_get(vst, b + 3), site)
     if (tctx%has_error) return
     ok = bind_closure(vs_get(vst, b + 3), argv, frame, body)
     if (.not. ok) then
-       call pop_frame()
+       call pop_frame(tctx)
        return
     end if
     call vs_set(vst, b + 1, body)

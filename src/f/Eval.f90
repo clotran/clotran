@@ -715,14 +715,15 @@ contains
     if (allocated(tctx%last_trace)) s = tctx%last_trace
   end subroutine gce_trace
 
-  subroutine push_frame(fn, site)
-    type(eval_ctx), pointer :: tctx
+  ! tctx passed, not fetched: a thread-key lookup per call, and every
+  ! call makes one of these and a pop_frame
+  subroutine push_frame(tctx, fn, site)
+    type(eval_ctx), pointer, intent(in) :: tctx
     type(gc_value), intent(in) :: fn
     integer, intent(in) :: site
     type(gc_value), allocatable :: bf(:)
     integer, allocatable :: bs(:)
     integer :: n
-    tctx => ctx_self()
     if (.not. allocated(tctx%fstack_fn)) then
        allocate(tctx%fstack_fn(256), tctx%fstack_site(256))
        tctx%fstack_top = 0
@@ -745,9 +746,8 @@ contains
     tctx%fstack_site(tctx%fstack_top) = site
   end subroutine push_frame
 
-  subroutine pop_frame()
-    type(eval_ctx), pointer :: tctx
-    tctx => ctx_self()
+  subroutine pop_frame(tctx)
+    type(eval_ctx), pointer, intent(in) :: tctx
     if (tctx%fstack_top > 0) tctx%fstack_top = tctx%fstack_top - 1
   end subroutine pop_frame
 
@@ -6082,7 +6082,7 @@ contains
            ab = vs_enter(vst, 2)
            call vs_set(vst, ab + 1, vs_get(vst, base + 3))
            call vs_set(vst, ab + 2, x)
-           r = gce_apply_slots(vs_get(vst, base + 2), ab, 2)
+           r = gce_apply_slots(vst, vs_get(vst, base + 2), ab, 2)
            call vs_leave(vst, ab)
          end block
       else
@@ -6215,7 +6215,7 @@ contains
     integer, intent(in) :: argbase, nargs, dst
     tctx => ctx_self()
     if (ev_limit == 0) call read_depth_limit()
-    call push_frame(fn, tctx%pending_site)
+    call push_frame(tctx, fn, tctx%pending_site)
     tctx%pending_site = 0
     if (tctx%has_error) return
     tctx%ev_depth = tctx%ev_depth + 1
@@ -6226,16 +6226,16 @@ contains
        call cf_call(gc_i1(fn), argbase, nargs, dst)
     end if
     tctx%ev_depth = tctx%ev_depth - 1
-    call pop_frame()
+    call pop_frame(tctx)
   end subroutine call_compiled
 
-  recursive function gce_apply_slots(fn0, argbase, nargs) result(out)
-    type(gc_stack), pointer :: vst
+  ! vst is the calling thread's stack, passed rather than looked up.
+  recursive function gce_apply_slots(vst, fn0, argbase, nargs) result(out)
+    type(gc_stack), pointer, intent(in) :: vst
     type(gc_value), intent(in) :: fn0
     integer, intent(in) :: argbase, nargs
     type(gc_value) :: out, fn, av
     integer :: base, j
-    vst => gc_my_stack()
     out = gc_nil()
     fn = strip_meta(fn0)
     if (gcn_is_var(fn)) fn = gcn_var_value(fn)
@@ -6243,13 +6243,8 @@ contains
     call vs_set(vst, base + 1, fn)
     if (gc_kind(vs_get(vst, base + 1)) == OBJ_COMPILED .and. &
          (gc_i2(vs_get(vst, base + 1)) < 0 .or. gc_i2(vs_get(vst, base + 1)) == nargs)) then
-       block
-         integer :: rb
-         rb = vs_enter(vst, 1)
-         call call_compiled(vs_get(vst, base + 1), argbase, nargs, rb + 1)
-         out = vs_get(vst, rb + 1)
-         call vs_leave(vst, rb)
-       end block
+       call call_compiled(vs_get(vst, base + 1), argbase, nargs, base + 2)
+       out = vs_get(vst, base + 2)
        call vs_leave(vst, base)
        return
     end if
@@ -12424,27 +12419,17 @@ contains
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: cmp, x, y
     integer :: c
-    type(gc_value) :: r, args2, rev
+    type(gc_value) :: r
     integer :: base
     tctx => ctx_self()
     vst => tctx%stk
     base = vs_enter(vst, 4)
     call vs_set(vst, base + 1, cmp)
-    ! A VECTOR, not a list: apply counts its arguments with
-    ! gcv_count to pick an arity, and a list counts as zero --
-    ! which is how a two-argument comparator produced
-    ! "no matching arity".
-    !
-    ! Each conj is rooted before the next allocation: two
-    ! allocations as arguments to one call means the second can
-    ! collect the first.
-    args2 = gcv_empty([vs_get(vst, base + 1)])
-    call vs_set(vst, base + 2, args2)
-    args2 = gcv_conj(vs_get(vst, base + 2), x, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
-    call vs_set(vst, base + 2, args2)
-    args2 = gcv_conj(vs_get(vst, base + 2), y, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
-    call vs_set(vst, base + 2, args2)
-    r = apply(vs_get(vst, base + 1), vs_get(vst, base + 2))
+    ! From two stack slots (gce_apply_slots): a compiled comparator is
+    ! entered with no vector at all, and a sort makes n log n of these.
+    call vs_set(vst, base + 2, x)
+    call vs_set(vst, base + 3, y)
+    r = gce_apply_slots(vst, vs_get(vst, base + 1), base + 1, 2)
     call vs_set(vst, base + 3, r)
     c = 0
     if (tctx%has_error) then
@@ -12455,13 +12440,9 @@ contains
        if (truthy(r)) then
           c = -1
        else
-          rev = gcv_empty([vs_get(vst, base + 1)])
-          call vs_set(vst, base + 2, rev)
-          rev = gcv_conj(vs_get(vst, base + 2), y, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
-          call vs_set(vst, base + 2, rev)
-          rev = gcv_conj(vs_get(vst, base + 2), x, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
-          call vs_set(vst, base + 2, rev)
-          r = apply(vs_get(vst, base + 1), vs_get(vst, base + 2))
+          call vs_set(vst, base + 2, y)
+          call vs_set(vst, base + 3, x)
+          r = gce_apply_slots(vst, vs_get(vst, base + 1), base + 1, 2)
           if (.not. tctx%has_error) then
              if (truthy(r)) c = 1
           end if

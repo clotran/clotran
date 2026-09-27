@@ -2753,7 +2753,7 @@ contains
   function vs_enter_on(s, n) result(base)
     type(gc_stack), pointer, intent(in) :: s
     integer, intent(in) :: n
-    integer :: base, i
+    integer :: base
     type(gc_value), allocatable :: bigger(:)
     do while (s%vs_top + n > size(s%vstack))
        allocate(bigger(2 * size(s%vstack)))
@@ -2761,10 +2761,10 @@ contains
        bigger(1:s%vs_top) = s%vstack(1:s%vs_top)
        call move_alloc(bigger, s%vstack)
     end do
+    ! Not cleared here: every slot above the top is already nil -- a new
+    ! stack starts nil, growing fills with nil, and vs_leave clears what
+    ! it pops. Clearing twice was a fifth of a compiled call (dtrace).
     base = s%vs_top
-    do i = base + 1, base + n
-       s%vstack(i) = nilv
-    end do
     s%vs_top = base + n
   end function vs_enter_on
 
@@ -3389,6 +3389,16 @@ contains
     type(gc_stack), pointer :: s
     character(len=:), allocatable :: p
     problem = ""
+    ! vs_enter hands slots out without clearing them, trusting that
+    ! everything above a stack's top is nil
+    do i = 1, n_stacks
+       if (.not. associated(stacks(i)%s)) cycle
+       s => stacks(i)%s
+       if (any(s%vstack(s%vs_top + 1:)%tag /= GCT_NIL)) then
+          problem = "a value above a stack's top, which vs_enter would hand out as nil"
+          return
+       end if
+    end do
     ! The dead waiting in pending lists are unswept on purpose: what THEY
     ! point at may already be freed, so they are not checked. But a live
     ! object pointing AT one is as wrong as pointing at a freed one --

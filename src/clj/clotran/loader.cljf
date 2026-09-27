@@ -77,6 +77,13 @@
 
 ;;; ---- installing ------------------------------------------------------
 
+(def abi
+  "The version of the runtime entries generated code calls (ClotranABI).
+  A library built against another is refused rather than loaded: its
+  calls would pass arguments where the entries no longer expect them.
+  Bump it with any change to those entries' arguments."
+  2)
+
 (defn defined-in?
   "Whether Var `v` was last defined by the file `src`, by its :file
   metadata. The two may be spelled differently -- relative at one
@@ -110,11 +117,15 @@
   True when it is installed; nil, with a note saying why, when it is
   not."
   [lib src]
-  (let [{:keys [ns source-hash fns extends]} (:manifest (fortran/load-package* lib))
+  (let [{:keys [ns source-hash fns extends] :as manifest} (:manifest (fortran/load-package* lib))
         note (fn [why] (println (str "note: not using " lib ": " why)) nil)
         all (into (vec fns) extends)]
-    (if (not= source-hash (hash (clotran-slurp src)))
+    (cond
+      (not= abi (:abi manifest))
+      (note (str "it was built for another clotran (runtime ABI " (:abi manifest 1) ", this is " abi "); recompile it"))
+      (not= source-hash (hash (clotran-slurp src)))
       (note (str src " has changed since it was compiled; recompile it"))
+      :else
       (let [built (binding [*ns* (the-ns (symbol ns))]
                     (mapv #(pool-of (read-string (:form %))) all))
             stale (keep (fn [[f b]] (when (not= (:fingerprint f) (:fingerprint b)) (:name f)))
@@ -167,7 +178,11 @@
 
 (defn- key-of [src] (str/replace src #"[^A-Za-z0-9._-]" "_"))
 
-(defn- hash-of [src] (str/replace (str (hash (clotran-slurp src))) "-" "m"))
+(defn- hash-of
+  "What names a file's cached library: its text, and the runtime ABI, so a
+  clotran with other entries builds its own."
+  [src]
+  (str/replace (str (hash [abi (clotran-slurp src)])) "-" "m"))
 
 (defn- ptr-path [src h] (str (cache-dir) "/" (key-of src) "-" h ".ptr"))
 

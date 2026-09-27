@@ -39,93 +39,116 @@
   use iso_c_binding
   implicit none
   interface
-     function clotran_frame_enter(n) bind(C, name=\"clotran_frame_enter\") result(base)
-       import :: c_int
+     function clotran_stack() bind(C, name=\"clotran_stack\") result(cs)
+       import :: c_ptr
+       type(c_ptr) :: cs
+     end function clotran_stack
+     function clotran_frame_enter(cs, n) bind(C, name=\"clotran_frame_enter\") result(base)
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: n
        integer(c_int) :: base
      end function clotran_frame_enter
-     subroutine clotran_frame_done(base) bind(C, name=\"clotran_frame_done\")
-       import :: c_int
+     subroutine clotran_frame_done(cs, base) bind(C, name=\"clotran_frame_done\")
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: base
      end subroutine clotran_frame_done
-     subroutine clotran_frame_leave(base) bind(C, name=\"clotran_frame_leave\")
-       import :: c_int
+     subroutine clotran_frame_leave(cs, base) bind(C, name=\"clotran_frame_leave\")
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: base
      end subroutine clotran_frame_leave
-     subroutine clotran_set_nil(slot) bind(C, name=\"clotran_set_nil\")
-       import :: c_int
+     subroutine clotran_set_nil(cs, slot) bind(C, name=\"clotran_set_nil\")
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: slot
      end subroutine clotran_set_nil
-     subroutine clotran_set_int(slot, n) bind(C, name=\"clotran_set_int\")
-       import :: c_int, c_int64_t
+     subroutine clotran_set_int(cs, slot, n) bind(C, name=\"clotran_set_int\")
+       import :: c_int, c_int64_t, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: slot
        integer(c_int64_t), value :: n
      end subroutine clotran_set_int
-     subroutine clotran_set_real(slot, x) bind(C, name=\"clotran_set_real\")
-       import :: c_int, c_double
+     subroutine clotran_set_real(cs, slot, x) bind(C, name=\"clotran_set_real\")
+       import :: c_int, c_double, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: slot
        real(c_double), value :: x
      end subroutine clotran_set_real
-     subroutine clotran_set_bool(slot, b) bind(C, name=\"clotran_set_bool\")
-       import :: c_int
+     subroutine clotran_set_bool(cs, slot, b) bind(C, name=\"clotran_set_bool\")
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: slot, b
      end subroutine clotran_set_bool
-     subroutine clotran_set_str(slot, chars, n) bind(C, name=\"clotran_set_str\")
-       import :: c_int, c_char
+     subroutine clotran_set_str(cs, slot, chars, n) bind(C, name=\"clotran_set_str\")
+       import :: c_int, c_char, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: slot
        character(kind=c_char), intent(in) :: chars(*)
        integer(c_int), value :: n
      end subroutine clotran_set_str
-     subroutine clotran_copy(dst, src) bind(C, name=\"clotran_copy\")
-       import :: c_int
+     subroutine clotran_copy(cs, dst, src) bind(C, name=\"clotran_copy\")
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: dst, src
      end subroutine clotran_copy
-     function clotran_tag(slot) bind(C, name=\"clotran_tag\") result(t)
-       import :: c_int
+     function clotran_tag(cs, slot) bind(C, name=\"clotran_tag\") result(t)
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: slot
        integer(c_int) :: t
      end function clotran_tag
-     function clotran_int(slot) bind(C, name=\"clotran_int\") result(n)
-       import :: c_int, c_int64_t
+     function clotran_int(cs, slot) bind(C, name=\"clotran_int\") result(n)
+       import :: c_int, c_int64_t, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: slot
        integer(c_int64_t) :: n
      end function clotran_int
-     function clotran_real(slot) bind(C, name=\"clotran_real\") result(x)
-       import :: c_int, c_double
+     function clotran_real(cs, slot) bind(C, name=\"clotran_real\") result(x)
+       import :: c_int, c_double, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: slot
        real(c_double) :: x
      end function clotran_real
-     function clotran_array_view(slot, kind, ptr, n) bind(C, name=\"clotran_array_view\") result(ok)
+     function clotran_array_view(cs, slot, kind, ptr, n) bind(C, name=\"clotran_array_view\") result(ok)
        import :: c_int, c_ptr, c_int64_t
+       type(c_ptr), value :: cs
        integer(c_int), value :: slot, kind
        type(c_ptr), intent(out) :: ptr
        integer(c_int64_t), intent(out) :: n
        integer(c_int) :: ok
      end function clotran_array_view
-     function clotran_bool(slot) bind(C, name=\"clotran_bool\") result(b)
-       import :: c_int
+     function clotran_bool(cs, slot) bind(C, name=\"clotran_bool\") result(b)
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: slot
        integer(c_int) :: b
      end function clotran_bool
-     subroutine clotran_frame_new(dst, n) bind(C, name=\"clotran_frame_new\")
-       import :: c_int
+     subroutine clotran_frame_new(cs, dst, n) bind(C, name=\"clotran_frame_new\")
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: dst, n
      end subroutine clotran_frame_new
-     subroutine clotran_frame_get(dst, fr, i) bind(C, name=\"clotran_frame_get\")
-       import :: c_int
+     subroutine clotran_frame_get(cs, dst, fr, i) bind(C, name=\"clotran_frame_get\")
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: dst, fr, i
      end subroutine clotran_frame_get
-     subroutine clotran_frame_put(fr, i, src) bind(C, name=\"clotran_frame_put\")
-       import :: c_int
+     subroutine clotran_frame_put(cs, fr, i, src) bind(C, name=\"clotran_frame_put\")
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: fr, i, src
      end subroutine clotran_frame_put
-     function clotran_call_slots(dst, fn, argbase, nargs) bind(C, name=\"clotran_call_slots\") result(st)
-       import :: c_int
+     function clotran_call_slots(cs, dst, fn, argbase, nargs) bind(C, name=\"clotran_call_slots\") result(st)
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: dst, fn, argbase, nargs
        integer(c_int) :: st
      end function clotran_call_slots
-     subroutine clotran_deref(dst, var) bind(C, name=\"clotran_deref\")
-       import :: c_int
+     subroutine clotran_deref(cs, dst, var) bind(C, name=\"clotran_deref\")
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: dst, var
      end subroutine clotran_deref
      function clotran_register_proc(name, namen, fp) bind(C, name=\"clotran_register_proc\") result(h)
@@ -135,42 +158,49 @@
        type(c_funptr), value :: fp
        integer(c_int) :: h
      end function clotran_register_proc
-     subroutine clotran_make_closure(dst, h, arity, name, namen, fr, pairs, npairs, selfslot) &
+     subroutine clotran_make_closure(cs, dst, h, arity, name, namen, fr, pairs, npairs, selfslot) &
           bind(C, name=\"clotran_make_closure\")
-       import :: c_int, c_char
+       import :: c_int, c_char, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: dst, h, arity, namen, fr, npairs, selfslot
        character(kind=c_char), intent(in) :: name(*)
        integer(c_int), intent(in) :: pairs(*)
      end subroutine clotran_make_closure
-     function clotran_new(dst, name, namen, argbase, nargs) bind(C, name=\"clotran_new\") result(st)
-       import :: c_int, c_char
+     function clotran_new(cs, dst, name, namen, argbase, nargs) bind(C, name=\"clotran_new\") result(st)
+       import :: c_int, c_char, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: dst, namen, argbase, nargs
        character(kind=c_char), intent(in) :: name(*)
        integer(c_int) :: st
      end function clotran_new
-     function clotran_dot(dst, node, tv, argbase, nargs, from) bind(C, name=\"clotran_dot\") result(st)
-       import :: c_int
+     function clotran_dot(cs, dst, node, tv, argbase, nargs, from) bind(C, name=\"clotran_dot\") result(st)
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: dst, node, tv, argbase, nargs, from
        integer(c_int) :: st
      end function clotran_dot
-     function clotran_arith(dst, op, fn, a, b, n) bind(C, name=\"clotran_arith\") result(st)
-       import :: c_int
+     function clotran_arith(cs, dst, op, fn, a, b, n) bind(C, name=\"clotran_arith\") result(st)
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: dst, op, fn, a, b, n
        integer(c_int) :: st
      end function clotran_arith
      subroutine clotran_poll() bind(C, name=\"clotran_poll\")
      end subroutine clotran_poll
-     subroutine clotran_captures(fr) bind(C, name=\"clotran_captures\")
-       import :: c_int
+     subroutine clotran_captures(cs, fr) bind(C, name=\"clotran_captures\")
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: fr
      end subroutine clotran_captures
-     function clotran_eval_node(dst, node, fr) bind(C, name=\"clotran_eval_node\") result(st)
-       import :: c_int
+     function clotran_eval_node(cs, dst, node, fr) bind(C, name=\"clotran_eval_node\") result(st)
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: dst, node, fr
        integer(c_int) :: st
      end function clotran_eval_node
-     subroutine clotran_pool_get(dst, h, i) bind(C, name=\"clotran_pool_get\")
-       import :: c_int
+     subroutine clotran_pool_get(cs, dst, h, i) bind(C, name=\"clotran_pool_get\")
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: dst, h, i
      end subroutine clotran_pool_get
      subroutine clotran_native_begin(me, rel) bind(C, name=\"clotran_native_begin\")
@@ -182,8 +212,9 @@
        integer(c_int), value :: me
        integer(c_int), intent(inout) :: rel
      end subroutine clotran_reacquire
-     subroutine clotran_rest_args(dst, argbase, from, nargs) bind(C, name=\"clotran_rest_args\")
-       import :: c_int
+     subroutine clotran_rest_args(cs, dst, argbase, from, nargs) bind(C, name=\"clotran_rest_args\")
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: dst, argbase, from, nargs
      end subroutine clotran_rest_args
      subroutine clotran_arity_error(nargs, name, n) bind(C, name=\"clotran_arity_error\")
@@ -1307,6 +1338,42 @@ end module clotran_rt_decl
               (str "call clotran_copy(dst, b + " res ")")])
      st]))
 
+(def ^:private stack-entries
+  "The runtime entries that take this thread's stack as their first
+  argument (ClotranABI, clotran_stack)."
+  #{"arith" "array_view" "bool" "call_slots" "captures" "copy" "deref" "dot" "eval_node" "frame_done" "frame_enter" "frame_get" "frame_leave" "frame_new" "frame_put" "int" "make_closure" "new" "pool_get" "real" "rest_args" "set_bool" "set_int" "set_nil" "set_real" "set_str" "tag"})
+
+(defn- with-stack
+  "A procedure's text fetching the thread's stack once, into cs, and
+  passing it to every entry that takes it: each entry fetching its own
+  was a thread-key lookup per call, ~20 per compiled (+ a b)."
+  [text]
+  (-> text
+      (str/replace #"\bclotran_(\w+)\("
+                   (fn [[m nm]] (if (stack-entries nm) (str "clotran_" nm "(cs, ") m)))
+      (str/replace-first "    st = 0\n" "    type(c_ptr) :: cs\n    st = 0\n    cs = clotran_stack()\n")))
+
+(defn- frameless
+  "A procedure's text with its locals in stack slots rather than a heap
+  frame, when nothing but frame_get and frame_put reads the frame at b+1:
+  no closure made or entered, no node handed to the interpreter. Local i
+  is then slot b+high+1+i, and a read or write is a copy between slots --
+  no frame allocated per call, no vector touched per local."
+  [high nslots text]
+  (let [get-re #"call clotran_frame_get\((b \+ \d+), b \+ 1, (\d+)_c_int\)"
+        put-re #"call clotran_frame_put\(b \+ 1, (\d+)_c_int, ([^)]+)\)"
+        new-re #"    call clotran_frame_new\(b \+ 1, \d+_c_int\)\n"
+        slot #(str "b + " (+ high 1 (parse-long %)))
+        left (-> text (str/replace get-re "") (str/replace put-re "") (str/replace new-re ""))]
+    (if (re-find #"b \+ 1\b" left)
+      text
+      (-> text
+          (str/replace get-re (fn [[_ d i]] (str "call clotran_copy(" d ", " (slot i) ")")))
+          (str/replace put-re (fn [[_ i src]] (str "call clotran_copy(" (slot i) ", " src ")")))
+          (str/replace new-re "")
+          (str/replace (str "clotran_frame_enter(" (max 1 high) "_c_int)")
+                       (str "clotran_frame_enter(" (+ (max 1 high) nslots) "_c_int)"))))))
+
 (defn- fn-procedure
   "One function, every arity of it, as a Fortran subroutine.
 
@@ -1354,6 +1421,7 @@ end module clotran_rt_decl
      :symbol sym
      :pool (mapv :value pool)
      :text
+     (with-stack (frameless (:high st) nslots
      (str "  subroutine " sym "(argbase, nargs, dst) bind(C, name=\"" sym "\")\n"
           "    integer(c_int), value :: argbase, nargs, dst\n"
           "    integer(c_int) :: b, st\n"
@@ -1370,7 +1438,7 @@ end module clotran_rt_decl
                               (str "    call clotran_deref(b + " s ", b + " s ")\n")))))
           (apply str (map #(str "    " % "\n") body))
           "    call clotran_frame_done(b)\n"
-          "  end subroutine " sym "\n")}))
+          "  end subroutine " sym "\n")))}))
 
 (defn compile-fn
   "Compiles one function to Fortran. Answers a map with :text, :symbol,
@@ -1581,7 +1649,7 @@ end module clotran_rt_decl
                                                             :method k}))
                          declined])))
                   [[] declined] (map-indexed vector sites)))
-        manifest {:ns (str ns-name) :source-hash (hash text)
+        manifest {:ns (str ns-name) :source-hash (hash text) :abi loader/abi
                   :fns (mapv (fn [p] {:name (str (:name p)) :form (:form p) :fingerprint (:fingerprint p)}) procs)
                   :extends (mapv (fn [p] (merge {:name (str (:name p)) :form (:form p) :fingerprint (:fingerprint p)}
                                                 (:extend p)))

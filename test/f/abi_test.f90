@@ -32,48 +32,61 @@ module clotran_abi_decl
        integer(c_int), value :: n, dst
        integer(c_int) :: st
      end function clotran_eval
-     function clotran_frame_enter(n) bind(C, name="clotran_frame_enter") result(base)
-       import :: c_int
+     function clotran_stack() bind(C, name="clotran_stack") result(cs)
+       import :: c_ptr
+       type(c_ptr) :: cs
+     end function clotran_stack
+     function clotran_frame_enter(cs, n) bind(C, name="clotran_frame_enter") result(base)
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: n
        integer(c_int) :: base
      end function clotran_frame_enter
-     subroutine clotran_frame_leave(base) bind(C, name="clotran_frame_leave")
-       import :: c_int
+     subroutine clotran_frame_leave(cs, base) bind(C, name="clotran_frame_leave")
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: base
      end subroutine clotran_frame_leave
-     subroutine clotran_set_int(slot, n) bind(C, name="clotran_set_int")
-       import :: c_int, c_int64_t
+     subroutine clotran_set_int(cs, slot, n) bind(C, name="clotran_set_int")
+       import :: c_int, c_int64_t, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: slot
        integer(c_int64_t), value :: n
      end subroutine clotran_set_int
-     subroutine clotran_set_real(slot, x) bind(C, name="clotran_set_real")
-       import :: c_int, c_double
+     subroutine clotran_set_real(cs, slot, x) bind(C, name="clotran_set_real")
+       import :: c_int, c_double, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: slot
        real(c_double), value :: x
      end subroutine clotran_set_real
-     subroutine clotran_set_str(slot, chars, n) bind(C, name="clotran_set_str")
-       import :: c_int, c_char
+     subroutine clotran_set_str(cs, slot, chars, n) bind(C, name="clotran_set_str")
+       import :: c_int, c_char, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: slot
        character(kind=c_char), intent(in) :: chars(*)
        integer(c_int), value :: n
      end subroutine clotran_set_str
-     function clotran_tag(slot) bind(C, name="clotran_tag") result(t)
-       import :: c_int
+     function clotran_tag(cs, slot) bind(C, name="clotran_tag") result(t)
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: slot
        integer(c_int) :: t
      end function clotran_tag
-     function clotran_int(slot) bind(C, name="clotran_int") result(n)
-       import :: c_int, c_int64_t
+     function clotran_int(cs, slot) bind(C, name="clotran_int") result(n)
+       import :: c_int, c_int64_t, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: slot
        integer(c_int64_t) :: n
      end function clotran_int
-     function clotran_real(slot) bind(C, name="clotran_real") result(x)
-       import :: c_int, c_double
+     function clotran_real(cs, slot) bind(C, name="clotran_real") result(x)
+       import :: c_int, c_double, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: slot
        real(c_double) :: x
      end function clotran_real
-     function clotran_bool(slot) bind(C, name="clotran_bool") result(b)
-       import :: c_int
+     function clotran_bool(cs, slot) bind(C, name="clotran_bool") result(b)
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: slot
        integer(c_int) :: b
      end function clotran_bool
@@ -95,20 +108,24 @@ module clotran_abi_decl
        integer(c_int), value :: n, dst
        integer(c_int) :: st
      end function clotran_analyze
-     subroutine clotran_frame_new(dst, n) bind(C, name="clotran_frame_new")
-       import :: c_int
+     subroutine clotran_frame_new(cs, dst, n) bind(C, name="clotran_frame_new")
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: dst, n
      end subroutine clotran_frame_new
-     subroutine clotran_frame_get(dst, fr, i) bind(C, name="clotran_frame_get")
-       import :: c_int
+     subroutine clotran_frame_get(cs, dst, fr, i) bind(C, name="clotran_frame_get")
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: dst, fr, i
      end subroutine clotran_frame_get
-     subroutine clotran_frame_put(fr, i, src) bind(C, name="clotran_frame_put")
-       import :: c_int
+     subroutine clotran_frame_put(cs, fr, i, src) bind(C, name="clotran_frame_put")
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: fr, i, src
      end subroutine clotran_frame_put
-     function clotran_eval_node(dst, node, fr) bind(C, name="clotran_eval_node") result(st)
-       import :: c_int
+     function clotran_eval_node(cs, dst, node, fr) bind(C, name="clotran_eval_node") result(st)
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: dst, node, fr
        integer(c_int) :: st
      end function clotran_eval_node
@@ -117,12 +134,14 @@ module clotran_abi_decl
        integer(c_int), value :: slot
        integer(c_int) :: h
      end function clotran_pool_register
-     subroutine clotran_pool_get(dst, h, i) bind(C, name="clotran_pool_get")
-       import :: c_int
+     subroutine clotran_pool_get(cs, dst, h, i) bind(C, name="clotran_pool_get")
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: dst, h, i
      end subroutine clotran_pool_get
-     subroutine clotran_copy(dst, src) bind(C, name="clotran_copy")
-       import :: c_int
+     subroutine clotran_copy(cs, dst, src) bind(C, name="clotran_copy")
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: dst, src
      end subroutine clotran_copy
      subroutine clotran_vec_empty(slot) bind(C, name="clotran_vec_empty")
@@ -149,8 +168,9 @@ module clotran_abi_decl
        integer(c_int), value :: nsn, namen
        integer(c_int) :: ok
      end function clotran_var
-     subroutine clotran_deref(dst, var) bind(C, name="clotran_deref")
-       import :: c_int
+     subroutine clotran_deref(cs, dst, var) bind(C, name="clotran_deref")
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
        integer(c_int), value :: dst, var
      end subroutine clotran_deref
      function clotran_call(dst, fn, args) bind(C, name="clotran_call") result(st)
@@ -203,12 +223,15 @@ module abi_test_fns
   implicit none
   ! the pool handle the test registers before calling abi_fallback
   integer(c_int), save :: test_pool = 0
+  ! the one thread's stack, which the entries generated code calls take
+  ! first (ClotranABI, clotran_stack); set once, after clotran_init
+  type(c_ptr), save :: cs = c_null_ptr
 contains
 
   ! (defn add2 [a b] (+ a b)) at its simplest: no allocation, no call.
   subroutine abi_add2(argbase, nargs, dst) bind(C, name="abi_add2")
     integer(c_int), value :: argbase, nargs, dst
-    call clotran_set_int(dst, clotran_int(argbase + 1) + clotran_int(argbase + 2))
+    call clotran_set_int(cs, dst, clotran_int(cs, argbase + 1) + clotran_int(cs, argbase + 2))
   end subroutine abi_add2
 
   ! (defn pair [a b] [a b]) -- it ALLOCATES, so the collector is in the
@@ -218,12 +241,12 @@ contains
   subroutine abi_pair(argbase, nargs, dst) bind(C, name="abi_pair")
     integer(c_int), value :: argbase, nargs, dst
     integer(c_int) :: b
-    b = clotran_frame_enter(1_c_int)
+    b = clotran_frame_enter(cs, 1_c_int)
     call clotran_vec_empty(b + 1)
     call clotran_vec_conj(b + 1, b + 1, argbase + 1)
     call clotran_vec_conj(b + 1, b + 1, argbase + 2)
-    call clotran_copy(dst, b + 1)
-    call clotran_frame_leave(b)
+    call clotran_copy(cs, dst, b + 1)
+    call clotran_frame_leave(cs, b)
   end subroutine abi_pair
 
   ! THE ESCAPE HATCH, as a generated procedure will use it. It makes a
@@ -234,29 +257,29 @@ contains
   subroutine abi_fallback(argbase, nargs, dst) bind(C, name="abi_fallback")
     integer(c_int), value :: argbase, nargs, dst
     integer(c_int) :: b, st
-    b = clotran_frame_enter(2_c_int)
-    call clotran_frame_new(b + 1, 2_c_int)
-    call clotran_frame_put(b + 1, 0_c_int, argbase + 1)
-    call clotran_pool_get(b + 2, test_pool, 0_c_int)
-    st = clotran_eval_node(dst, b + 2, b + 1)
-    call clotran_frame_leave(b)
+    b = clotran_frame_enter(cs, 2_c_int)
+    call clotran_frame_new(cs, b + 1, 2_c_int)
+    call clotran_frame_put(cs, b + 1, 0_c_int, argbase + 1)
+    call clotran_pool_get(cs, b + 2, test_pool, 0_c_int)
+    st = clotran_eval_node(cs, dst, b + 2, b + 1)
+    call clotran_frame_leave(cs, b)
   end subroutine abi_fallback
 
   ! Frames on their own: in, out, and the value is the one that went in.
   subroutine abi_frame_echo(argbase, nargs, dst) bind(C, name="abi_frame_echo")
     integer(c_int), value :: argbase, nargs, dst
     integer(c_int) :: b
-    b = clotran_frame_enter(1_c_int)
-    call clotran_frame_new(b + 1, 4_c_int)
-    call clotran_frame_put(b + 1, 3_c_int, argbase + 1)
-    call clotran_frame_get(dst, b + 1, 3_c_int)
-    call clotran_frame_leave(b)
+    b = clotran_frame_enter(cs, 1_c_int)
+    call clotran_frame_new(cs, b + 1, 4_c_int)
+    call clotran_frame_put(cs, b + 1, 3_c_int, argbase + 1)
+    call clotran_frame_get(cs, dst, b + 1, 3_c_int)
+    call clotran_frame_leave(cs, b)
   end subroutine abi_frame_echo
 
   ! What a RECOMPILE installs: the same name, a different procedure.
   subroutine abi_add2b(argbase, nargs, dst) bind(C, name="abi_add2b")
     integer(c_int), value :: argbase, nargs, dst
-    call clotran_set_int(dst, clotran_int(argbase + 1) + clotran_int(argbase + 2) + 100_c_int64_t)
+    call clotran_set_int(cs, dst, clotran_int(cs, argbase + 1) + clotran_int(cs, argbase + 2) + 100_c_int64_t)
   end subroutine abi_add2b
 
   ! A compiled procedure CALLING BACK into the language: it looks the
@@ -265,14 +288,14 @@ contains
   subroutine abi_twice(argbase, nargs, dst) bind(C, name="abi_twice")
     integer(c_int), value :: argbase, nargs, dst
     integer(c_int) :: b, found, st
-    b = clotran_frame_enter(3_c_int)
+    b = clotran_frame_enter(cs, 3_c_int)
     found = clotran_var(b + 1, ctext("clojure.core"), 12_c_int, ctext("+"), 1_c_int)
-    call clotran_deref(b + 2, b + 1)
+    call clotran_deref(cs, b + 2, b + 1)
     call clotran_vec_empty(b + 3)
     call clotran_vec_conj(b + 3, b + 3, argbase + 1)
     call clotran_vec_conj(b + 3, b + 3, argbase + 1)
     st = clotran_call(dst, b + 2, b + 3)
-    call clotran_frame_leave(b)
+    call clotran_frame_leave(cs, b)
   end subroutine abi_twice
 
   ! the (chars, n) pair, again, because a module cannot see the
@@ -297,6 +320,7 @@ program abi_test
   failures = 0
 
   call clotran_init()
+  cs = clotran_stack()
   call check_boot()
   call check_scalars()
   call check_strings()
@@ -384,13 +408,13 @@ contains
 
   subroutine check_scalars()
     integer(c_int) :: b
-    b = clotran_frame_enter(2_c_int)
-    call clotran_set_int(b + 1, 42_c_int64_t)
-    call clotran_set_real(b + 2, 1.5_c_double)
-    call ok("an integer goes into a slot and comes back", clotran_int(b + 1) == 42)
-    call ok("and a double", abs(clotran_real(b + 2) - 1.5_c_double) < 1.0e-12_c_double)
-    call ok("the tags differ", clotran_tag(b + 1) /= clotran_tag(b + 2))
-    call clotran_frame_leave(b)
+    b = clotran_frame_enter(cs, 2_c_int)
+    call clotran_set_int(cs, b + 1, 42_c_int64_t)
+    call clotran_set_real(cs, b + 2, 1.5_c_double)
+    call ok("an integer goes into a slot and comes back", clotran_int(cs, b + 1) == 42)
+    call ok("and a double", abs(clotran_real(cs, b + 2) - 1.5_c_double) < 1.0e-12_c_double)
+    call ok("the tags differ", clotran_tag(cs, b + 1) /= clotran_tag(cs, b + 2))
+    call clotran_frame_leave(cs, b)
   end subroutine check_scalars
 
   subroutine check_strings()
@@ -398,8 +422,8 @@ contains
     character(kind=c_char) :: buf(16)
     character(len=16) :: got
     integer :: i
-    b = clotran_frame_enter(1_c_int)
-    call clotran_set_str(b + 1, cbuf("hello"), 5_c_int)
+    b = clotran_frame_enter(cs, 1_c_int)
+    call clotran_set_str(cs, b + 1, cbuf("hello"), 5_c_int)
     n = clotran_str_len(b + 1)
     call ok("a string knows its byte length", n == 5)
     w = clotran_str_copy(b + 1, buf, 16_c_int)
@@ -408,22 +432,22 @@ contains
        got(i:i) = buf(i)
     end do
     call ok("and copies back out", w == 5 .and. got(1:5) == "hello")
-    call clotran_frame_leave(b)
+    call clotran_frame_leave(cs, b)
   end subroutine check_strings
 
   subroutine check_vectors()
     integer(c_int) :: b
-    b = clotran_frame_enter(3_c_int)
+    b = clotran_frame_enter(cs, 3_c_int)
     call clotran_vec_empty(b + 1)
     call ok("an empty vector counts zero", clotran_vec_count(b + 1) == 0)
-    call clotran_set_int(b + 2, 10_c_int64_t)
+    call clotran_set_int(cs, b + 2, 10_c_int64_t)
     call clotran_vec_conj(b + 1, b + 1, b + 2)
-    call clotran_set_int(b + 2, 20_c_int64_t)
+    call clotran_set_int(cs, b + 2, 20_c_int64_t)
     call clotran_vec_conj(b + 1, b + 1, b + 2)
     call ok("conj grows it", clotran_vec_count(b + 1) == 2)
     call clotran_vec_nth(b + 3, b + 1, 1_c_int)
-    call ok("nth is zero-based", clotran_int(b + 3) == 20)
-    call clotran_frame_leave(b)
+    call ok("nth is zero-based", clotran_int(cs, b + 3) == 20)
+    call clotran_frame_leave(cs, b)
   end subroutine check_vectors
 
   ! THE CLAIM. A value held ONLY in a slot survives a collection. If the
@@ -432,10 +456,10 @@ contains
   ! crash.
   subroutine check_survives_collection()
     integer(c_int) :: b, i
-    b = clotran_frame_enter(2_c_int)
+    b = clotran_frame_enter(cs, 2_c_int)
     call clotran_vec_empty(b + 1)
     do i = 1, 100
-       call clotran_set_int(b + 2, int(i, c_int64_t))
+       call clotran_set_int(cs, b + 2, int(i, c_int64_t))
        call clotran_vec_conj(b + 1, b + 1, b + 2)
     end do
     ! under torture every one of those conjs already collected
@@ -444,16 +468,16 @@ contains
     call ok("a vector held only in a slot survives collection", &
          clotran_vec_count(b + 1) == 100)
     call clotran_vec_nth(b + 2, b + 1, 99_c_int)
-    call ok("and its elements are intact", clotran_int(b + 2) == 100)
-    call clotran_frame_leave(b)
+    call ok("and its elements are intact", clotran_int(cs, b + 2) == 100)
+    call clotran_frame_leave(cs, b)
   end subroutine check_survives_collection
 
   subroutine check_eval()
     integer(c_int) :: b, st
-    b = clotran_frame_enter(1_c_int)
+    b = clotran_frame_enter(cs, 1_c_int)
     st = ev("(+ 1 2)", b + 1)
-    call ok("eval through the surface answers", st == 0 .and. clotran_int(b + 1) == 3)
-    call clotran_frame_leave(b)
+    call ok("eval through the surface answers", st == 0 .and. clotran_int(cs, b + 1) == 3)
+    call clotran_frame_leave(cs, b)
   end subroutine check_eval
 
   ! What a compiled call site does: look the Var up once, deref it,
@@ -461,19 +485,19 @@ contains
   ! builtins gce_base_env binds into clojure.core are enough.
   subroutine check_call_a_var()
     integer(c_int) :: b, found, st
-    b = clotran_frame_enter(4_c_int)
+    b = clotran_frame_enter(cs, 4_c_int)
     found = clotran_var(b + 1, cbuf("clojure.core"), 12_c_int, cbuf("+"), 1_c_int)
     call ok("a Var resolves by namespace and name", found == 1)
-    call clotran_deref(b + 2, b + 1)
+    call clotran_deref(cs, b + 2, b + 1)
     call clotran_vec_empty(b + 3)
-    call clotran_set_int(b + 4, 40_c_int64_t)
+    call clotran_set_int(cs, b + 4, 40_c_int64_t)
     call clotran_vec_conj(b + 3, b + 3, b + 4)
-    call clotran_set_int(b + 4, 2_c_int64_t)
+    call clotran_set_int(cs, b + 4, 2_c_int64_t)
     call clotran_vec_conj(b + 3, b + 3, b + 4)
     st = clotran_call(b + 4, b + 2, b + 3)
     call ok("and calling it through the surface gives 42", &
-         st == 0 .and. clotran_int(b + 4) == 42)
-    call clotran_frame_leave(b)
+         st == 0 .and. clotran_int(cs, b + 4) == 42)
+    call clotran_frame_leave(cs, b)
   end subroutine check_call_a_var
 
   ! An error must be REPORTED, not thrown: it cannot unwind through a
@@ -481,11 +505,11 @@ contains
   ! cleared, after which the surface still works.
   subroutine check_error_is_reported_not_thrown()
     integer(c_int) :: b, found, st
-    b = clotran_frame_enter(4_c_int)
+    b = clotran_frame_enter(cs, 4_c_int)
     found = clotran_var(b + 1, cbuf("clojure.core"), 12_c_int, cbuf("+"), 1_c_int)
-    call clotran_deref(b + 2, b + 1)
+    call clotran_deref(cs, b + 2, b + 1)
     call clotran_vec_empty(b + 3)
-    call clotran_set_str(b + 4, cbuf("not a number"), 12_c_int)
+    call clotran_set_str(cs, b + 4, cbuf("not a number"), 12_c_int)
     call clotran_vec_conj(b + 3, b + 3, b + 4)
     st = clotran_call(b + 4, b + 2, b + 3)
     call ok("a raising call returns a status", st == 1)
@@ -494,8 +518,8 @@ contains
     call ok("which clears", clotran_has_error() == 0)
     st = ev("(+ 2 3)", b + 1)
     call ok("and the surface still works afterwards", &
-         st == 0 .and. clotran_int(b + 1) == 5)
-    call clotran_frame_leave(b)
+         st == 0 .and. clotran_int(cs, b + 1) == 5)
+    call clotran_frame_leave(cs, b)
   end subroutine check_error_is_reported_not_thrown
 
   ! Allocation pressure with the only roots being slots. A generated
@@ -503,25 +527,25 @@ contains
   ! garbage made and dropped between collections.
   subroutine check_many_allocations_under_collection()
     integer(c_int) :: b, i, live_before, live_after
-    b = clotran_frame_enter(3_c_int)
+    b = clotran_frame_enter(cs, 3_c_int)
     call clotran_vec_empty(b + 1)
-    call clotran_set_int(b + 2, 7_c_int64_t)
+    call clotran_set_int(cs, b + 2, 7_c_int64_t)
     call clotran_vec_conj(b + 1, b + 1, b + 2)
     live_before = clotran_live_count()
     do i = 1, 2000
        ! a vector built and dropped every iteration: garbage on purpose
        call clotran_vec_empty(b + 3)
-       call clotran_set_int(b + 2, int(i, c_int64_t))
+       call clotran_set_int(cs, b + 2, int(i, c_int64_t))
        call clotran_vec_conj(b + 3, b + 3, b + 2)
     end do
     call clotran_collect()
     live_after = clotran_live_count()
     call clotran_vec_nth(b + 2, b + 1, 0_c_int)
     call ok("the kept vector is still right after 2000 allocations", &
-         clotran_vec_count(b + 1) == 1 .and. clotran_int(b + 2) == 7)
+         clotran_vec_count(b + 1) == 1 .and. clotran_int(cs, b + 2) == 7)
     call ok("and the garbage was actually collected", &
          live_after < live_before + 2000)
-    call clotran_frame_leave(b)
+    call clotran_frame_leave(cs, b)
   end subroutine check_many_allocations_under_collection
 
   subroutine show_error()
@@ -544,31 +568,31 @@ contains
   ! anything: an unhandled node kind costs speed, not correctness.
   subroutine check_escape_hatch()
     integer(c_int) :: b, st
-    b = clotran_frame_enter(3_c_int)
+    b = clotran_frame_enter(cs, 3_c_int)
     st = clotran_analyze(cbuf("(+ 20 22)"), 9_c_int, b + 1)
     call ok("a form analyses to a node without running", st == 0)
     call clotran_vec_empty(b + 2)
     call clotran_vec_conj(b + 2, b + 2, b + 1)
     test_pool = clotran_pool_register(b + 2)
     call ok("a constant pool registers", test_pool > 0)
-    call clotran_pool_get(b + 3, test_pool, 0_c_int)
-    st = clotran_eval_node(b + 3, b + 3, b + 1)
-    call ok("and a node out of it runs", st == 0 .and. clotran_int(b + 3) == 42)
+    call clotran_pool_get(cs, b + 3, test_pool, 0_c_int)
+    st = clotran_eval_node(cs, b + 3, b + 3, b + 1)
+    call ok("and a node out of it runs", st == 0 .and. clotran_int(cs, b + 3) == 42)
     st = deffn("compiled.test", "fallback", c_funloc(abi_fallback), 1_c_int)
     st = ev("(compiled.test/fallback 99)", b + 1)
     call ok("a compiled procedure falls back to the interpreter", &
-         st == 0 .and. clotran_int(b + 1) == 42)
+         st == 0 .and. clotran_int(cs, b + 1) == 42)
     st = deffn("compiled.test", "echo", c_funloc(abi_frame_echo), 1_c_int)
     st = ev("(compiled.test/echo 7)", b + 1)
     call ok("and keeps its locals in a real frame", &
-         st == 0 .and. clotran_int(b + 1) == 7)
+         st == 0 .and. clotran_int(cs, b + 1) == 7)
     ! the pool must survive collection: nothing but the root holds it
     call clotran_collect()
     call clotran_collect()
     st = ev("(compiled.test/fallback 1)", b + 1)
     call ok("the pool survives collection", &
-         st == 0 .and. clotran_int(b + 1) == 42)
-    call clotran_frame_leave(b)
+         st == 0 .and. clotran_int(cs, b + 1) == 42)
+    call clotran_frame_leave(cs, b)
   end subroutine check_escape_hatch
 
   ! WITH THE LANGUAGE LOADED. Everything above runs on the builtins
@@ -580,23 +604,23 @@ contains
   ! would take the rest of the afternoon.
   subroutine check_language_sees_compiled_fns()
     integer(c_int) :: b, st
-    b = clotran_frame_enter(1_c_int)
+    b = clotran_frame_enter(cs, 1_c_int)
     st = ev("(load-file ""src/clj/clojure/core.clj"")", b + 1)
     call ok("core.clj loads through the surface", st == 0)
     if (st /= 0) then
        call show_error()
-       call clotran_frame_leave(b)
+       call clotran_frame_leave(cs, b)
        return
     end if
     st = ev("(fn? compiled.test/add2)", b + 1)
     call ok("and core calls a compiled procedure a fn?", &
-         st == 0 .and. clotran_bool(b + 1) == 1)
+         st == 0 .and. clotran_bool(cs, b + 1) == 1)
     st = ev("(ifn? compiled.test/add2)", b + 1)
-    call ok("and an ifn?", st == 0 .and. clotran_bool(b + 1) == 1)
+    call ok("and an ifn?", st == 0 .and. clotran_bool(cs, b + 1) == 1)
     st = ev("(reduce + (map compiled.test/add2 [1 2] [10 20]))", b + 1)
     call ok("and map takes it like any other function", &
-         st == 0 .and. clotran_int(b + 1) == 33)
-    call clotran_frame_leave(b)
+         st == 0 .and. clotran_int(cs, b + 1) == 33)
+    call clotran_frame_leave(cs, b)
   end subroutine check_language_sees_compiled_fns
 
   ! THE CALL PATH, end to end. A hand-written Fortran procedure is
@@ -610,18 +634,18 @@ contains
     call ok("a compiled procedure installs as a Var", st == 0)
     st = deffn("compiled.test", "pair", c_funloc(abi_pair), 2_c_int)
     st = deffn("compiled.test", "twice", c_funloc(abi_twice), 1_c_int)
-    b = clotran_frame_enter(2_c_int)
+    b = clotran_frame_enter(cs, 2_c_int)
     st = ev("(compiled.test/add2 40 2)", b + 1)
     if (st /= 0) call show_error()
-    call ok("and Clojure source calls it", st == 0 .and. clotran_int(b + 1) == 42)
+    call ok("and Clojure source calls it", st == 0 .and. clotran_int(cs, b + 1) == 42)
     st = ev("(count (compiled.test/pair 1 2))", b + 1)
     call ok("one that allocates answers a real collection", &
-         st == 0 .and. clotran_int(b + 1) == 2)
+         st == 0 .and. clotran_int(cs, b + 1) == 2)
     st = ev("(compiled.test/twice 21)", b + 1)
     call ok("and one that calls back through a Var", &
-         st == 0 .and. clotran_int(b + 1) == 42)
+         st == 0 .and. clotran_int(cs, b + 1) == 42)
     st = ev("(apply compiled.test/add2 [3 4])", b + 1)
-    call ok("apply reaches it too", st == 0 .and. clotran_int(b + 1) == 7)
+    call ok("apply reaches it too", st == 0 .and. clotran_int(cs, b + 1) == 7)
     st = ev("(compiled.test/add2 1)", b + 1)
     call ok("and the wrong arity is an error, not a crash", st == 1)
     call clotran_clear_error()
@@ -631,7 +655,7 @@ contains
     st = ev("(def add2 (fn* [a b] 0))", b + 1)
     st = ev("(compiled.test/add2 1 2)", b + 1)
     call ok("an unrelated def leaves the compiled Var alone", &
-         st == 0 .and. clotran_int(b + 1) == 3)
+         st == 0 .and. clotran_int(cs, b + 1) == 3)
     ! RECOMPILATION: installing a different procedure under the same
     ! name repoints the Var, and everything that calls through it
     ! reaches the new one on its next call. This is what makes
@@ -639,7 +663,7 @@ contains
     st = deffn("compiled.test", "add2", c_funloc(abi_add2b), 2_c_int)
     st = ev("(compiled.test/add2 1 2)", b + 1)
     call ok("recompiling the same name reaches the new procedure", &
-         st == 0 .and. clotran_int(b + 1) == 103)
+         st == 0 .and. clotran_int(cs, b + 1) == 103)
     st = deffn("compiled.test", "add2", c_funloc(abi_add2), 2_c_int)
     ! It has to BE a function to the language, not just be callable:
     ! core asks fn? and ifn? of things it is handed, and a compiled
@@ -652,7 +676,7 @@ contains
     call ok("a compiled procedure names itself when printed", &
          st == 0 .and. clotran_str_len(b + 1) > 10)
     call clotran_clear_error()
-    call clotran_frame_leave(b)
+    call clotran_frame_leave(cs, b)
   end subroutine check_compiled_functions
 
 end program abi_test

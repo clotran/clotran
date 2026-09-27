@@ -118,7 +118,7 @@
        if (task_trace) write(0, '(A,I0)') "task thread: applying in context ", me
        val = apply(fn, gcv_empty(none))
     else
-       call push_frame(fn, 0)
+       call push_frame(tctx, fn, 0)
        ok = bind_closure(fn, gcv_empty(none), frame, body)
        if (ok) then
           call k_push(body, frame, ior(KF_FNBODY, KF_RESTART), body)
@@ -126,7 +126,7 @@
           if (task_trace) write(0, '(A,I0)') "task thread: running context ", me
           if (.not. tctx%has_error) val = run_loop(0, 0)
        else
-          call pop_frame()
+          call pop_frame(tctx)
        end if
     end if
     task = vs_get(base + 2)

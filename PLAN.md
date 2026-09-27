@@ -1060,6 +1060,12 @@ only `defn` forms compile. In order:
       and mapv are waiting for.
    And fetching the stack once per generated procedure, passed to every
    runtime call: the thread-key lookups are ~20% of a compiled call.
+   BUILT 2026-09-27: the 27 entries generated code calls take the
+   stack first (`clotran_stack()` once per procedure), and a library
+   records the runtime ABI it was built for (clotran.loader/abi, now
+   2): one built for another is refused with a note instead of being
+   called with its arguments shifted -- which is what a stale
+   compiled core did to abi_test the first time.
 2. The heap image (step 5, stage 3). Saving the heap after compiled
    core loads saves the pool with it, so installing compiled code stops
    re-analysing (half a second for core today) and startup stops being
@@ -1120,6 +1126,29 @@ scan halves: peak memory on a vector of 300,000 and a map of 50,000 went
 38 ms, loop 322 -> 220, into/map 225 -> 152 (39x the JVM), fib 31 -> 21.5,
 sort 1050 -> 679, assoc 98 -> 67. `identical?` on equal numbers being true
 was already so, and is now written down (DEVIATIONS.md 53).
+
+**Profiled, 2026-09-27 (dtrace, `profile-997` on the pid).** What the
+samples said, and what each fix bought, compiled core, scripts/bench:
+- sort: `comparator_call` built its two arguments as a vector by
+  `gcv_empty` + two `gcv_conj` per comparison; from two stack slots
+  now. 679 -> 240 ms.
+- reduce: ~20 thread-key lookups an element (29% of samples) -- each
+  ABI entry, `push_frame`, `pop_frame` and `gce_apply_slots` fetched
+  its own; now passed. A seqlock makes Var reads lock-free, and
+  `vs_enter` no longer clears (above the top is nil already; the heap
+  verifier checks it). 38 -> 10.2 ms.
+- the plain loop: `recur` evaluated its arguments into a fresh vector
+  every turn; into stack slots now. 220 -> 176 ms.
+- startup: a third was `first` on a hash map's seq -- `seq_elem`
+  built EVERY entry to return one, so walking a map, set or string was
+  quadratic. `to_seq` now views a snapshot vector of them, made once.
+  1.7 -> 1.27 s.
+Measured as nothing, and in anyway: a compiled fn keeps its locals in
+stack slots instead of a frame vector when nothing else reads the frame
+(compiler.cljf, frameless) -- frame reuse had already made the frame
+cheap. It can come out. What is left is structural: the interpreter reads its tree
+through `gc_slot`/`gcv_nth` on heap vectors (half the loop's samples),
+and a compiled call still crosses ~10 runtime entries.
 
 What stays interpreted is `eval`: the REPL, `load-string`, source never
 compiled. JVM Clojure keeps its compiler at run time for the same
