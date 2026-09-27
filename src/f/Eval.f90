@@ -3152,7 +3152,7 @@ contains
              call fail("For input string: " // t)
           end if
        else if (v%tag == GCT_REAL) then
-          out = gc_int(int(v%rval, gc_ip))
+          out = gc_int(int(gc_rval(v), gc_ip))
        end if
     end select
   end function box_convert
@@ -3732,8 +3732,8 @@ contains
   function same_object(a, b) result(yes)
     type(gc_value), intent(in) :: a, b
     logical :: yes
-    yes = a%tag == b%tag .and. a%ref == b%ref .and. a%ival == b%ival
-    if (yes .and. a%rval /= b%rval) yes = (a%rval /= a%rval .and. b%rval /= b%rval)
+    ! one rule with the collector (GC.f90): reals by value, NaN itself
+    yes = gc_identical(a, b)
   end function same_object
 
   ! raise_arity for a function known by name -- a compiled one, whose
@@ -6885,7 +6885,7 @@ contains
           select case (a%tag)
           case (GCT_NIL); out = gc_bool(.true.)
           case (GCT_BOOL, GCT_INT, GCT_CHAR); out = gc_bool(a%ival == b%ival)
-          case (GCT_REAL); out = gc_bool(a%rval == b%rval)
+          case (GCT_REAL); out = gc_bool(gc_rval(a) == gc_rval(b))
           case (GCT_STR, GCT_SYM, GCT_KEY, GCT_CLASS, GCT_BIG)
              ! By TEXT, not by pool slot. clotran does not intern
              ! text -- gc_equal says so: the same text allocated
@@ -7746,7 +7746,7 @@ contains
           ! Java's (long) of a double: truncation, SATURATING at the
           ! ends and 0 for NaN. int() at the default kind gave
           ! 2147483647 for 1e30.
-          out = gc_int(long_of_double(a%rval))
+          out = gc_int(long_of_double(gc_rval(a)))
        else if (is_ratio(a)) then
           ! (int 1/2) is 0 -- truncation toward zero, the same as for
           ! a double. The else branch would have handed the ratio
@@ -7816,7 +7816,7 @@ contains
          type(gc_value) :: x
          x = strip_meta(gcv_nth(args, 0))
          if (x%tag == GCT_REAL) then
-            out = gc_real(abs(x%rval))
+            out = gc_real(abs(gc_rval(x)))
          else if (is_ratio(x)) then
             out = gc_ratio(abs(gc_numerator(x)), gc_denominator(x))
          else if (x%tag == GCT_BIG) then
@@ -8938,7 +8938,7 @@ contains
             end block
          case (GCT_REAL)
             block
-               call big_from_i64(int(aint(bv%rval), gc_ip), o=dlt_1)
+               call big_from_i64(int(aint(gc_rval(bv)), gc_ip), o=dlt_1)
                out = gc_big(dlt_1, [vs_get(vst, base + 1)])
             end block
          case (GCT_DEC)
@@ -13903,7 +13903,7 @@ contains
        end if
        end block
     case (GCT_REAL)
-       iv = transfer(v%rval, iv)
+       iv = transfer(gc_rval(v), iv)
        h = fold_long(iv)
     case (GCT_STR)
        block
@@ -14972,7 +14972,7 @@ contains
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1, dlt_2
     if (v%tag == GCT_REAL) then
-       i = int(v%rval, gc_ip)
+       i = int(gc_rval(v), gc_ip)
     else if (v%tag == GCT_BIG) then
        block
           call gc_big_text(v, s=dlt_1)
@@ -15106,7 +15106,7 @@ contains
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1
     if (v%tag == GCT_REAL) then
-       d = v%rval
+       d = gc_rval(v)
     else if (v%tag == GCT_BIG) then
        block
           call gc_big_text(v, s=dlt_1)
@@ -15926,7 +15926,7 @@ contains
     case (GCT_INT)
        pool_spellable = (v%ival /= -huge(v%ival) - 1)
     case (GCT_REAL)
-       pool_spellable = (v%rval == v%rval .and. abs(v%rval) <= huge(v%rval))
+       pool_spellable = (gc_rval(v) == gc_rval(v) .and. abs(gc_rval(v)) <= huge(gc_rval(v)))
     case default
        pool_spellable = .false.
     end select
@@ -15988,7 +15988,7 @@ contains
     case (GCT_BOOL, GCT_INT)
        call fp_mix(h, int(v%ival, gc_ip))
     case (GCT_REAL)
-       call fp_mix(h, transfer(v%rval, 0_gc_ip))
+       call fp_mix(h, transfer(gc_rval(v), 0_gc_ip))
     case default
        if (gcv_is(v)) then
           do i = 0, gcv_count(v) - 1

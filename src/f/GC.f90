@@ -345,11 +345,15 @@ module GC
      integer :: gen = -1
   end type gc_root
 
+  ! SIXTEEN BYTES (the calling convention's step 3, PLAN.md): a tag, a
+  ! pool index, and one 64-bit payload -- an integer, a character's code
+  ! point, a boolean, or a real's BITS (gc_rval/gc_real). It was 32: a
+  ! separate real beside the integer, never both used, doubled every
+  ! slot, stack entry and vector element in the heap.
   type, public :: gc_value
      integer :: tag = GCT_NIL
-     integer(gc_ip) :: ival = 0
-     real(gc_dp) :: rval = 0.0_gc_dp
      integer :: ref = 0 ! index into this tag's pool; 0 for immediates
+     integer(gc_ip) :: ival = 0
   end type gc_value
   ! nil, as a constant: every slot the pools and stacks clear is set
   ! to this rather than through a call.
@@ -727,7 +731,7 @@ module GC
   public :: gc_set_finalizer
   public :: gc_ensure_init, gc_str_ref, gc_ref_text, gc_ref_is, gc_ref_len
   public :: vs_enter, vs_leave, vs_set, vs_get, vs_depth, gc_stack, gc_my_stack
-  public :: gc_bindings_get, gc_bindings_set, gc_int_text
+  public :: gc_bindings_get, gc_bindings_set, gc_int_text, gc_rval
   interface vs_enter
      module procedure vs_enter_self, vs_enter_on
   end interface vs_enter
@@ -1253,8 +1257,15 @@ contains
     real(gc_dp), intent(in) :: r
     type(gc_value) :: v
     v%tag = GCT_REAL
-    v%rval = r
+    v%ival = transfer(r, v%ival)
   end function gc_real
+
+  ! A real value's double: its bits are the payload.
+  elemental function gc_rval(v) result(r)
+    type(gc_value), intent(in) :: v
+    real(gc_dp) :: r
+    r = transfer(v%ival, r)
+  end function gc_rval
 
   function gc_char(c) result(v)
     character, intent(in) :: c
@@ -2527,7 +2538,7 @@ contains
     case (GCT_BOOL, GCT_INT, GCT_CHAR)
        eq = (a%ival == b%ival)
     case (GCT_REAL)
-       eq = (a%rval == b%rval)
+       eq = (gc_rval(a) == gc_rval(b))
     case (GCT_RATIO)
        ! Both fields. Normal form is what makes this correct without
        ! cross-multiplying, and the default branch below would have
@@ -2619,7 +2630,7 @@ contains
        h = mix32(ieor(mix32(int(ieor(bits8, ishft(bits8, -32)), kind=4)), &
             tag_salt(v%tag)))
     case (GCT_REAL)
-       bits8 = transfer(v%rval, bits8)
+       bits8 = transfer(gc_rval(v), bits8)
        h = mix32(int(ieor(bits8, ishft(bits8, -32)), kind=4))
     case (GCT_RATIO)
        bits8 = v%ival
@@ -2980,8 +2991,14 @@ contains
   ! immediate (a NaN is itself).
   logical function gc_identical(a, b)
     type(gc_value), intent(in) :: a, b
-    gc_identical = a%tag == b%tag .and. a%ref == b%ref .and. a%ival == b%ival
-    if (gc_identical .and. a%rval /= b%rval) gc_identical = (a%rval /= a%rval .and. b%rval /= b%rval)
+    gc_identical = a%tag == b%tag .and. a%ref == b%ref
+    if (.not. gc_identical) return
+    if (a%tag == GCT_REAL) then
+       ! by value, as before: 0.0 and -0.0 are one, and a NaN is itself
+       gc_identical = gc_rval(a) == gc_rval(b) .or. (gc_rval(a) /= gc_rval(a) .and. gc_rval(b) /= gc_rval(b))
+    else
+       gc_identical = a%ival == b%ival
+    end if
   end function gc_identical
 
   ! Slot i of a shared mutable object, read whole.

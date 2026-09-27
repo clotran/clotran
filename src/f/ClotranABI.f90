@@ -321,7 +321,7 @@ contains
     type(gc_value) :: v
     vst => gc_my_stack()
     v = vs_get(vst, int(slot))
-    x = real(v%rval, c_double)
+    x = real(gc_rval(v), c_double)
   end function clotran_real
 
   ! Clojure truthiness, not a tag test: everything but nil and false.
@@ -717,9 +717,9 @@ contains
           end if
        else if (n == 2 .and. reals) then
           select case (op)
-          case (1); call vs_set(vst, int(dst), gc_real(x%rval + y%rval))
-          case (2); call vs_set(vst, int(dst), gc_real(x%rval - y%rval))
-          case default; call vs_set(vst, int(dst), gc_real(x%rval * y%rval))
+          case (1); call vs_set(vst, int(dst), gc_real(gc_rval(x) + gc_rval(y)))
+          case (2); call vs_set(vst, int(dst), gc_real(gc_rval(x) - gc_rval(y)))
+          case default; call vs_set(vst, int(dst), gc_real(gc_rval(x) * gc_rval(y)))
           end select
           return
        end if
@@ -730,7 +730,7 @@ contains
              return
           end if
        else if (x%tag == GCT_REAL) then
-          call vs_set(vst, int(dst), gc_real(x%rval + merge(1.0_gc_dp, -1.0_gc_dp, op == 4)))
+          call vs_set(vst, int(dst), gc_real(gc_rval(x) + merge(1.0_gc_dp, -1.0_gc_dp, op == 4)))
           return
        end if
     case (6, 7, 8, 9, 11)
@@ -745,11 +745,11 @@ contains
           return
        else if (n == 2 .and. reals) then
           select case (op)
-          case (6); call vs_set(vst, int(dst), gc_bool(x%rval < y%rval))
-          case (7); call vs_set(vst, int(dst), gc_bool(x%rval > y%rval))
-          case (8); call vs_set(vst, int(dst), gc_bool(x%rval <= y%rval))
-          case (9); call vs_set(vst, int(dst), gc_bool(x%rval >= y%rval))
-          case default; call vs_set(vst, int(dst), gc_bool(x%rval == y%rval))
+          case (6); call vs_set(vst, int(dst), gc_bool(gc_rval(x) < gc_rval(y)))
+          case (7); call vs_set(vst, int(dst), gc_bool(gc_rval(x) > gc_rval(y)))
+          case (8); call vs_set(vst, int(dst), gc_bool(gc_rval(x) <= gc_rval(y)))
+          case (9); call vs_set(vst, int(dst), gc_bool(gc_rval(x) >= gc_rval(y)))
+          case default; call vs_set(vst, int(dst), gc_bool(gc_rval(x) == gc_rval(y)))
           end select
           return
        end if

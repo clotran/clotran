@@ -1110,7 +1110,16 @@ spares when its body finishes (exec.inc, give_frame) and new_frame takes
 one -- nothing keeps a frame after its call: closures copy what they
 capture, letfn copies again, a break copies each local. A fn call 5 ->
 4, map 9 -> 7 (compiled core); into/map is 47x the JVM on scripts/bench,
-199x before step 1.
+199x before step 1. Step 3: a value is 16 bytes, not 32 -- a tag, a pool
+index and one 64-bit payload that holds a real's bits (GC.f90, gc_rval),
+where a separate real sat beside the integer and was never used with it.
+Thirty reads of the real changed; identity keeps comparing reals by value
+(0.0 is -0.0, NaN is itself). Every slot, stack entry, vector element and
+scan halves: peak memory on a vector of 300,000 and a map of 50,000 went
+2.7 GB -> 1.3 GB, and with compiled core scripts/bench went reduce 50 ->
+38 ms, loop 322 -> 220, into/map 225 -> 152 (39x the JVM), fib 31 -> 21.5,
+sort 1050 -> 679, assoc 98 -> 67. `identical?` on equal numbers being true
+was already so, and is now written down (DEVIATIONS.md 53).
 
 What stays interpreted is `eval`: the REPL, `load-string`, source never
 compiled. JVM Clojure keeps its compiler at run time for the same

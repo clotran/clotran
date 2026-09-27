@@ -90,17 +90,17 @@ contains
        ! The symbolic values print as the reader macro that makes
        ! them, since they have no literal spelling otherwise --
        ! anything else would not read back.
-       if (ieee_is_nan(v%rval)) then
+       if (ieee_is_nan(gc_rval(v))) then
           s = "##NaN"
-       else if (.not. ieee_is_finite(v%rval)) then
-          if (v%rval > 0.0d0) then
+       else if (.not. ieee_is_finite(gc_rval(v))) then
+          if (gc_rval(v) > 0.0d0) then
              s = "##Inf"
           else
              s = "##-Inf"
           end if
        else
           block
-             call real_str(v%rval, s=dlt_1)
+             call real_str(gc_rval(v), s=dlt_1)
              s = dlt_1
           end block
        end if

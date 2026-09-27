@@ -1570,3 +1570,19 @@ threaded, under flang and gfortran, and compares).
 **Removal**: record the failing index per iteration and report the
 lowest after the loop -- which means not stopping at the first failure,
 and a pure procedure cannot defer an `error stop`.
+
+## 53. `identical?` on equal numbers is true
+
+Numbers are immediate values here -- a tag and a 64-bit payload in the
+value itself -- so two equal numbers are the same value, and
+`(identical? 1.5 1.5)`, `(identical? 1000 1000)` and
+`(let [x 1.5] (identical? x x))` are all true. On the JVM each is a boxed
+object: `clj` answers false for all three (the last because each use of
+`x` boxes the primitive again), and true for `(identical? 100 100)` only
+because Long caches -128..127. So the JVM's answer depends on boxing
+decisions no Clojure program can rely on; clotran's is value identity.
+Reals compare by value, as `==` does: `0.0` and `-0.0` are identical, and
+a NaN is identical to itself.
+
+Removal would mean boxing numbers, which is the cost this representation
+exists to avoid (PLAN.md, the calling convention's step 3). Not planned.
