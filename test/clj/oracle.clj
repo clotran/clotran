@@ -2521,3 +2521,5 @@
 (let [s (set (range 2000))] [(reduce + (seq s)) (count (rest (seq s))) (count (next (next (seq s))))])
 
 [(seq "héllo") (count (seq (apply str (repeat 3000 "é")))) (nth (seq "abç") 2) (rest "ab") (map int "aé") (seq "") (first "ç") (reduce str (seq "xyz"))]
+
+(count (doall (for [i (range 5000)] (re-find (re-pattern (str "b \\+ " i "\\b")) (str "b + " (* 2 i))))))

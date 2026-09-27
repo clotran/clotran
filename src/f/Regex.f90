@@ -131,7 +131,8 @@ module Regex
   ! lives in this module's own registry, addressed from gc_value by a
   ! plain integer index in i1, exactly like every other native resource
   ! this project keeps outside the heap.
-  integer, parameter :: MAX_HANDLES = 4096
+  integer, parameter, public :: REGEX_MAX_HANDLES = 4096
+  integer, parameter :: MAX_HANDLES = REGEX_MAX_HANDLES
   type(c_ptr), save :: registry(MAX_HANDLES) = c_null_ptr
   ! The subject-text buffer each handle was given, if any. OURS to free
   ! -- ICU keeps only a shallow reference and never copies it -- and

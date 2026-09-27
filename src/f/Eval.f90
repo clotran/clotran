@@ -5224,7 +5224,7 @@ contains
        call text_of(subj, s=dlt_1)
        s = dlt_1
     end block
-    mh = regex_clone(gc_i1(pat))
+    mh = rx_clone(gc_i1(pat))
     if (mh == 0) then
        block
           call regex_last_error(s=dlt_1)
@@ -8856,7 +8856,7 @@ contains
             call text_of(src, s=dlt_1)
             ptext = dlt_1
          end block
-         h = regex_compile(ptext, rerr)
+         h = rx_compile(ptext, rerr)
          if (h == 0) then
             call fail("regex: " // rerr)
          else
@@ -8880,7 +8880,7 @@ contains
             call fail("matcher needs a Pattern")
          else
             ph = gc_i1(pat)
-            mh = regex_clone(ph)
+            mh = rx_clone(ph)
             if (mh == 0) then
                block
                   call regex_last_error(s=dlt_1)
@@ -11256,7 +11256,7 @@ contains
               character(len=:), allocatable :: stext, rerr
               block
                  call text_of(gcv_nth(args, 1), s=dlt_1)
-                 h = regex_compile(dlt_1, rerr)
+                 h = rx_compile(dlt_1, rerr)
               end block
               if (h == 0) then
                  call fail("regex: " // rerr)
@@ -11267,7 +11267,7 @@ contains
                  end block
                  call gc_set_i1(rx, h)
                  call vs_set(vst, base + 2, rx)
-                 mh = regex_clone(h)
+                 mh = rx_clone(h)
                  block
                     call text_of(mt, s=dlt_1)
                     stext = dlt_1
@@ -11368,7 +11368,7 @@ contains
               character(len=:), allocatable :: rerr
               block
                  call text_of(sv, s=dlt_1)
-                 h = regex_compile(dlt_1, rerr)
+                 h = rx_compile(dlt_1, rerr)
               end block
               if (h == 0) then
                  call fail("regex: " // rerr)
@@ -12409,6 +12409,39 @@ contains
     end do
     call vs_leave(vst, base)
   end function value_array_of
+
+  ! regex_compile and regex_clone, collecting when the handle table is
+  ! full and trying again. A handle is freed only when the collector
+  ! finalizes the dead Pattern or Matcher holding it, and a handle puts
+  ! no pressure on the heap: compiling 4096 patterns between collections
+  ! filled the table with garbage and failed (the compiler, testing a
+  ! pattern per pool slot, did). Twice: a finalizable object dead at one
+  ! collection may be finalized by the next.
+  recursive function rx_compile(text, err) result(h)
+    character(len=*), intent(in) :: text
+    character(len=:), allocatable, intent(out) :: err
+    integer :: h, k
+    type(gc_value) :: none(0)
+    h = regex_compile(text, err)
+    do k = 1, 2
+       if (h /= 0 .or. regex_live_count() < REGEX_MAX_HANDLES) return
+       call gc_collect(none)
+       h = regex_compile(text, err)
+    end do
+    if (h == 0 .and. len(err) == 0) err = "more than 4096 live Patterns and Matchers"
+  end function rx_compile
+
+  recursive function rx_clone(p) result(h)
+    integer, intent(in) :: p
+    integer :: h, k
+    type(gc_value) :: none(0)
+    h = regex_clone(p)
+    do k = 1, 2
+       if (h /= 0 .or. regex_live_count() < REGEX_MAX_HANDLES) return
+       call gc_collect(none)
+       h = regex_clone(p)
+    end do
+  end function rx_clone
 
   ! One comparator call, following AFunction.compare (AFunction.java):
   ! a function that answers a BOOLEAN is a predicate, so (sort > coll)
