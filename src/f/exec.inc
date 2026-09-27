@@ -36,13 +36,30 @@
     end block
   end subroutine sym_text
 
-  ! A frame of n nil slots.
+  ! A frame of n nil slots: one this thread gave back (give_frame), or a
+  ! new one. The calling convention's step 2 (PLAN.md): a frame was
+  ! allocated per interpreted call and dropped after it.
   function new_frame(n, roots) result(fr)
+    type(gc_stack), pointer :: vst
     integer, intent(in) :: n
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: fr
-    fr = gc_vec(max(n, 0), roots)
+    vst => gc_my_stack()
+    fr = gc_frame_take(vst, n)
+    if (fr%tag /= GCT_VEC) fr = gc_vec(max(n, 0), roots)
   end function new_frame
+
+  ! A frame whose call has returned, back for the next call of its size.
+  ! Nothing keeps a frame after its call: a closure COPIES what it
+  ! captures (make_closure_from), letfn copies again (refresh_captures),
+  ! and a break copies each local into a map (take_break).
+  subroutine give_frame(fr)
+    type(gc_value), intent(in) :: fr
+    type(gc_stack), pointer :: vst
+    if (fr%tag /= GCT_VEC) return
+    vst => gc_my_stack()
+    call gc_frame_give(vst, fr)
+  end subroutine give_frame
 
   function frame_get(fr, slot) result(v)
     type(gc_value), intent(in) :: fr
@@ -167,6 +184,7 @@
     end if
     if (ok) then
        out = run(body, frame, ior(KF_FNBODY, KF_RESTART), body, vs_get(vst, base + 1))
+       call give_frame(frame)
     else
        call pop_frame()
     end if
@@ -1177,7 +1195,10 @@
              tctx%kst(tctx%ksp)%i = tctx%kst(tctx%ksp)%i + 1
              tctx%kst(tctx%ksp)%pc = 2
           case (5)
-             ! the callee's body finished; its value is this call's
+             ! the callee's body finished; its value is this call's, and
+             ! its frame is free for the next call
+             call give_frame(vs_get(vst, b + 4))
+             call vs_set(vst, b + 4, gc_nil())
              call k_finish(val)
           case (4)
              ! where this call is, for the call stack

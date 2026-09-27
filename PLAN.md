@@ -1105,7 +1105,12 @@ vector. coll_to_vector (vec and friends) builds through a transient.
 Measured with compiled core, allocations per element before -> after:
 map 32 -> 9, into/map 31 -> 4, conj! 10 -> 2, (inc i) in a loop 4 -> 2,
 a fn call 7 -> 5, vec 13 -> 9; into/map 713 -> 202 ms, sort 1381 ->
-1018.
+1018. Step 2: an interpreted call's frame goes back to the thread's
+spares when its body finishes (exec.inc, give_frame) and new_frame takes
+one -- nothing keeps a frame after its call: closures copy what they
+capture, letfn copies again, a break copies each local. A fn call 5 ->
+4, map 9 -> 7 (compiled core); into/map is 47x the JVM on scripts/bench,
+199x before step 1.
 
 What stays interpreted is `eval`: the REPL, `load-string`, source never
 compiled. JVM Clojure keeps its compiler at run time for the same
