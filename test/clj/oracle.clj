@@ -2515,3 +2515,9 @@
 [(mapv inc (range 40)) (filterv even? (range 20)) (meta (into (with-meta [1] {:m 1}) [2]))]
 
 (let [v (persistent! (reduce conj! (transient []) (range 1100)))] [(count v) (nth v 0) (nth v 1023) (nth v 1024) (nth v 1099) (count (conj v :n)) (peek (pop v))])
+
+(let [m (zipmap (range 3000) (range 3000))] [(reduce + (map val m)) (count (seq m)) (every? map-entry? m) (= (set (keys m)) (set (range 3000))) (count (rest (seq m)))])
+
+(let [s (set (range 2000))] [(reduce + (seq s)) (count (rest (seq s))) (count (next (next (seq s))))])
+
+[(seq "héllo") (count (seq (apply str (repeat 3000 "é")))) (nth (seq "abç") 2) (rest "ab") (map int "aé") (seq "") (first "ç") (reduce str (seq "xyz"))]

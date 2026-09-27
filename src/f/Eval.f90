@@ -5796,7 +5796,9 @@ contains
     case (OBJ_CHUNKSEQ)
        is_chunked_seq = .true.
     case (OBJ_SEQ)
-       is_chunked_seq = gcv_is(gc_slot(v, 1))
+       ! i2 = 1: a snapshot of a map, set or string (to_seq), whose seq
+       ! is not chunked in Clojure
+       is_chunked_seq = gcv_is(gc_slot(v, 1)) .and. gc_i2(v) /= 1
     case (OBJ_LAZY)
        is_chunked_seq = (gc_i2(v) == 1 .and. gc_i1(v) == LAZY_CONS)
     end select
@@ -13029,10 +13031,73 @@ contains
     if (seq_len(v) == 0) return
     base = vs_enter(vst, 1)
     call vs_set(vst, base + 1, v)
+    ! A map, a set or a string is viewed through a vector of its
+    ! elements, made once here: seq_elem reads by position, and for
+    ! these that built every entry (decoded the whole string) per
+    ! element, so walking one was quadratic -- a third of startup.
+    if (gca_is(v) .or. gc_kind(v) == OBJ_SET .or. v%tag == GCT_STR) then
+       out = seq_snapshot(vs_get(vst, base + 1), roots)
+       call vs_set(vst, base + 1, out)
+    end if
     out = gc_obj(OBJ_SEQ, [vs_get(vst, base + 1)], roots)
     call gc_set_i1(out, 0)
+    if (gca_is(v) .or. gc_kind(v) == OBJ_SET .or. v%tag == GCT_STR) call gc_set_i2(out, 1)
     call vs_leave(vst, base)
   end function to_seq
+
+  ! A map's entries, a set's members or a string's characters, in the
+  ! order seq_elem gives them, as a vector.
+  recursive function seq_snapshot(v, roots) result(out)
+    type(gc_stack), pointer :: vst
+    type(gc_value), intent(in) :: v
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, e
+    type(gc_value), allocatable :: ks(:), vls(:)
+    character(len=:), allocatable :: t
+    integer :: base, i, p, cp, nb
+    vst => gc_my_stack()
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, v)
+    out = gcv_empty(roots)
+    call vs_set(vst, base + 2, out)
+    out = gcv_transient(vs_get(vst, base + 2), [roots, vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, out)
+    if (gc_kind(v) == OBJ_SET) then
+       ! ks are v's own members, reachable through base+1
+       call gca_entries(gc_slot(v, 1), ks, vls)
+       do i = 1, size(ks)
+          call gcv_tconj(vs_get(vst, base + 2), ks(i), [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       end do
+    else if (gca_is(v)) then
+       call gca_entries(v, ks, vls)
+       do i = 1, size(ks)
+          e = gcv_empty([roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+          call vs_set(vst, base + 3, e)
+          e = gcv_conj(vs_get(vst, base + 3), ks(i), [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+          call vs_set(vst, base + 3, e)
+          e = gcv_conj(vs_get(vst, base + 3), vls(i), [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+          call mark_entry(e)
+          call vs_set(vst, base + 3, e)
+          call gcv_tconj(vs_get(vst, base + 2), vs_get(vst, base + 3), &
+               [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+       end do
+    else if (v%tag == GCT_STR) then
+       call gc_ref_text(v%ref, s=t)
+       p = 1
+       do while (p <= len(t))
+          ! by lead bytes, as u8_off counts them
+          if (ichar(t(p:p)) >= 128 .and. ichar(t(p:p)) < 192) then
+             p = p + 1
+             cycle
+          end if
+          call u8_dec(t, p, cp, nb)
+          call gcv_tconj(vs_get(vst, base + 2), gc_char_cp(cp), [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+          p = p + 1
+       end do
+    end if
+    out = gcv_persistent(vs_get(vst, base + 2), [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_leave(vst, base)
+  end function seq_snapshot
 
   ! How many elements an indexable value has. The only other place
   ! that needs to know concrete types, and deliberately next to
@@ -13175,6 +13240,7 @@ contains
        out = gc_obj(OBJ_SEQ, [gc_slot(vs_get(vst, base + 1), 1)], &
             [vs_get(vst, base + 1)])
        call gc_set_i1(out, gc_i1(vs_get(vst, base + 1)) + 1)
+       call gc_set_i2(out, gc_i2(vs_get(vst, base + 1)))
     else if (gc_kind(vs_get(vst, base + 1)) == OBJ_CHUNKSEQ) then
        ! ChunkedCons.more: the chunk less its first while that leaves
        ! any, else what follows (or () when nothing does)
