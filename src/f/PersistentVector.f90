@@ -31,6 +31,7 @@ module PersistentVector
   integer, parameter :: VMASK = 31
 
   public :: gcv_empty, gcv_count, gcv_nth, gcv_conj, gcv_assoc, gcv_is, gcv_build, gcv_put
+  public :: gcv_transient, gcv_tcount, gcv_tnth, gcv_tconj, gcv_tassoc, gcv_tdrop, gcv_persistent
 
 contains
 
@@ -122,6 +123,158 @@ contains
   ! executor fills it with gcv_put as a call's arguments arrive, where
   ! n conj calls copied n nodes. Beyond VBRANCH it is the empty vector
   ! and gcv_put falls back to conj.
+  ! ---- transient vectors (DEVIATIONS.md 11) ---------------------------
+  !
+  ! OBJ_TVECTOR: slot 1 the vector it was made from, never changed;
+  ! slot 2 a buffer of what was conj'd since, a run grown by doubling;
+  ! i1 how many are buffered; i2 1 while it may be edited, 0 once
+  ! persistent! has made its vector. Making one is O(1) and shares the
+  ! whole vector, as Clojure's does; conj! is an append into the buffer,
+  ! with an allocation only when it doubles; persistent! builds the new
+  ! vector's tree bottom-up, one node per 32 elements, unless what was
+  ! added is small beside what was there, when it conjs the few onto
+  ! the old tree and shares the rest. It replaces conj per element, which
+  ! copied a path from the root (a 32-slot node per level) every time.
+
+  function gcv_transient(v, roots) result(t)
+    type(gc_value), intent(in) :: v
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: t
+    t = gc_obj(OBJ_TVECTOR, [v, gc_nil()], [roots, v])
+    call gc_set_i1(t, 0)
+    call gc_set_i2(t, 1)
+  end function gcv_transient
+
+  integer function gcv_tcount(t)
+    type(gc_value), intent(in) :: t
+    gcv_tcount = gcv_count(gc_slot(t, 1)) + gc_i1(t)
+  end function gcv_tcount
+
+  ! Element i, 0-based; the caller checks the range.
+  function gcv_tnth(t, i) result(x)
+    type(gc_value), intent(in) :: t
+    integer, intent(in) :: i
+    type(gc_value) :: x
+    integer :: cb
+    cb = gcv_count(gc_slot(t, 1))
+    if (i < cb) then
+       x = gcv_nth(gc_slot(t, 1), i)
+    else
+       x = gc_vec_get(gc_slot(t, 2), i - cb + 1)
+    end if
+  end function gcv_tnth
+
+  subroutine gcv_tconj(t, x, roots)
+    type(gc_value), intent(in) :: t, x
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: buf, nb
+    integer :: k, j
+    k = gc_i1(t)
+    buf = gc_slot(t, 2)
+    if (buf%tag /= GCT_VEC) then
+       nb = gc_vec(32, [roots, t, x])
+       call gc_set_slot(t, 2, nb)
+    else if (k >= gc_vec_len(buf)) then
+       nb = gc_vec(2 * gc_vec_len(buf), [roots, t, x])
+       buf = gc_slot(t, 2)
+       do j = 1, k
+          call gc_vec_set(nb, j, gc_vec_get(buf, j))
+       end do
+       call gc_set_slot(t, 2, nb)
+    end if
+    call gc_vec_set(gc_slot(t, 2), k + 1, x)
+    call gc_set_i1(t, k + 1)
+  end subroutine gcv_tconj
+
+  ! assoc! at index i, 0-based, where 0 <= i <= count (count appends).
+  subroutine gcv_tassoc(t, i, x, roots)
+    type(gc_value), intent(in) :: t, x
+    integer, intent(in) :: i
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: nv
+    integer :: cb
+    cb = gcv_count(gc_slot(t, 1))
+    if (i < cb) then
+       nv = gcv_assoc(gc_slot(t, 1), i, x, [roots, t, x])
+       call gc_set_slot(t, 1, nv)
+    else if (i < cb + gc_i1(t)) then
+       call gc_vec_set(gc_slot(t, 2), i - cb + 1, x)
+    else
+       call gcv_tconj(t, x, roots)
+    end if
+  end subroutine gcv_tassoc
+
+  ! pop! of a buffered element; the caller pops the vector itself when
+  ! nothing is buffered. False when nothing was buffered.
+  logical function gcv_tdrop(t)
+    type(gc_value), intent(in) :: t
+    integer :: k
+    k = gc_i1(t)
+    gcv_tdrop = k > 0
+    if (.not. gcv_tdrop) return
+    call gc_vec_set(gc_slot(t, 2), k, gc_nil())
+    call gc_set_i1(t, k - 1)
+  end function gcv_tdrop
+
+  ! persistent!: the vector, and the transient is spent.
+  function gcv_persistent(t, roots) result(v)
+    type(gc_value), intent(in) :: t
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: v, leaf, node, up
+    integer :: cb, k, n, nl, m, nm, l, j, p, shift, bs
+    call gc_set_i2(t, 0)
+    v = gc_slot(t, 1)
+    cb = gcv_count(v)
+    k = gc_i1(t)
+    if (k == 0) return
+    n = cb + k
+    bs = vs_enter(3)
+    call vs_set(bs + 1, t)
+    if (cb > 4 * k) then
+       ! a few onto many: conj them, sharing the tree that was there
+       call vs_set(bs + 2, v)
+       do j = 1, k
+          v = gcv_conj(vs_get(bs + 2), gc_vec_get(gc_slot(vs_get(bs + 1), 2), j), [roots, vs_get(bs + 1)])
+          call vs_set(bs + 2, v)
+       end do
+       v = vs_get(bs + 2)
+       call vs_leave(bs)
+       return
+    end if
+    ! the leaves, then each level up, until one node is left
+    nl = (n + VBRANCH - 1) / VBRANCH
+    up = gc_vec(nl, [roots, vs_get(bs + 1)])
+    call vs_set(bs + 2, up)
+    do l = 0, nl - 1
+       leaf = gc_vec(VBRANCH, [roots, vs_get(bs + 1), vs_get(bs + 2)])
+       do j = 0, min(VBRANCH, n - l * VBRANCH) - 1
+          call gc_vec_set(leaf, j + 1, gcv_tnth(vs_get(bs + 1), l * VBRANCH + j))
+       end do
+       call gc_vec_set(vs_get(bs + 2), l + 1, leaf)
+    end do
+    shift = 0
+    m = nl
+    do while (m > 1)
+       nm = (m + VBRANCH - 1) / VBRANCH
+       up = gc_vec(nm, [roots, vs_get(bs + 1), vs_get(bs + 2)])
+       call vs_set(bs + 3, up)
+       do p = 0, nm - 1
+          node = gc_vec(VBRANCH, [roots, vs_get(bs + 1), vs_get(bs + 2), vs_get(bs + 3)])
+          do j = 0, min(VBRANCH, m - p * VBRANCH) - 1
+             call gc_vec_set(node, j + 1, gc_vec_get(vs_get(bs + 2), p * VBRANCH + j + 1))
+          end do
+          call gc_vec_set(vs_get(bs + 3), p + 1, node)
+       end do
+       call vs_set(bs + 2, vs_get(bs + 3))
+       m = nm
+       shift = shift + VBITS
+    end do
+    v = gc_obj(OBJ_VECTOR, [gc_vec_get(vs_get(bs + 2), 1)], [roots, vs_get(bs + 1), vs_get(bs + 2)])
+    call gc_set_i1(v, n)
+    call gc_set_i2(v, shift)
+    call vs_leave(bs)
+  end function gcv_persistent
+
   function gcv_build(n, roots) result(v)
     integer, intent(in) :: n
     type(gc_value), intent(in) :: roots(:)

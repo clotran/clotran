@@ -560,8 +560,8 @@
        hm("", "equiv", B_EQ, "="), &
        hm("", "equals", B_EQ, "="), &
   ! Transients are the persistent collections here. DEVIATIONS.md 11.
-       hm("", "asTransient", B_IDENTITY, "identity"), &
-       hm("", "persistent", B_IDENTITY, "identity"), &
+       hm("", "asTransient", B_ASTRANSIENT, "clotran-as-transient"), &
+       hm("", "persistent", B_PERSISTENT, "clotran-persistent"), &
        hm("", "empty", B_COLLEMPTY, "clotran-coll-empty"), &
        hm("", "conj", B_CONJ, "conj"), &
        hm("", "assoc", B_ASSOC, "assoc"), &

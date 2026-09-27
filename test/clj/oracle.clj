@@ -2493,3 +2493,25 @@
 ;; a chunk's .reduce hands back a Reduced as it is, as ArrayChunk.reduce does
 (let [c (chunk-first (seq [1 2 3]))] [(reduced? (.reduce c (fn [a x] (reduced a)) 0)) (.reduce c + 0)])
 (transduce (take 5) + (cycle [1]))
+
+;; transient vectors (PersistentVector.f90): made in O(1) over the vector
+;; they come from, appended to in place, built into a tree by persistent!
+[(instance? clojure.lang.IEditableCollection []) (class (transient [])) (instance? clojure.lang.ITransientVector (transient []))]
+
+(persistent! (reduce conj! (transient []) (range 70)))
+
+(let [v (vec (range 40)) t (transient v)] (conj! t :a) (assoc! t 0 :z 41 :end) [(persistent! t) v])
+
+(let [t (transient [1 2 3])] [(count t) (nth t 1) (get t 5 :nf) (nth t 9 :d) (count (pop! t)) (persistent! (pop! (pop! t)))])
+
+(try (let [t (transient [1])] (persistent! t) (conj! t 2)) (catch Throwable e [(.getName (class e)) (.getMessage e)]))
+
+(try (pop! (transient [])) (catch Throwable e [(.getName (class e)) (.getMessage e)]))
+
+(try (assoc! (transient [1]) :k 2) (catch Throwable e [(.getName (class e)) (.getMessage e)]))
+
+[(into [] (map inc (range 5))) (into [1 2] [3 4]) (into (vec (range 100)) [:x]) (= (into [] (range 5000)) (range 5000))]
+
+[(mapv inc (range 40)) (filterv even? (range 20)) (meta (into (with-meta [1] {:m 1}) [2]))]
+
+(let [v (persistent! (reduce conj! (transient []) (range 1100)))] [(count v) (nth v 0) (nth v 1023) (nth v 1024) (nth v 1099) (count (conj v :n)) (peek (pop v))])

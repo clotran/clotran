@@ -30,7 +30,7 @@ Categories:
 | 8 | RESOLVED -- multimethods dispatch with `isa?` and preferences | -- | `src/clj/clotran/multifn.cljf` |
 | 9 | RESOLVED -- sorted collections | -- | `src/f/Assoc.f90` |
 | 10 | Refs are mutable boxes; `set!` of an unbound Var sets its root | temporary | `src/f/Eval.f90` |
-| 11 | Transients are the persistent collections | host | `src/f/Eval.f90` |
+| 11 | Transient maps and sets are the persistent collections (vectors are real) | host | `src/f/Eval.f90` |
 | 12 | Five JVM-only libs are skipped by name, and not vendored | host | `src/f/Eval.f90` |
 | 13 | Protocol dispatch is uncached | host | `src/f/GC.f90` |
 | 14 | Regex is ICU under java.util.regex's names; `\w` and `(?i)` are Unicode | host | `src/f/Regex.f90` |
@@ -278,14 +278,20 @@ does, so a file's `(set! *warn-on-reflection* true)` would otherwise be
 an error. Removal: bind those in `load` as `Compiler.load` does, then
 throw.
 
-## 11. Transients are the persistent collections
+## 11. Transient maps and sets are the persistent collections
 
-`asTransient` and `persistent` are identity; `conj!` and `assoc!` are
-`conj` and `assoc`. A transient is an optimisation, not a semantic: used
+A VECTOR's transient is real since 2026-09-26 (PersistentVector.f90):
+`(transient v)` is a `PersistentVector$TransientVector` made in O(1) over
+`v`, `conj!` appends in place, `persistent!` builds the tree, and using
+it after `persistent!` throws Clojure's IllegalAccessError. Vectors are
+`IEditableCollection`, so `into`, `mapv` and `filterv` take the
+transient path, as on the JVM.
+
+For MAPS and SETS, `asTransient` and `persistent` are still identity;
+`assoc!`, `dissoc!`, `conj!` and `disj!` are the persistent operations,
+and they are not `IEditableCollection`, so `into {}` conjs. Used
 correctly -- single-threaded and linearly -- the two give the same value.
-
-What is lost is the speed, and the error Clojure raises when a transient
-is used after being persisted.
+What is lost is the speed, and the use-after-persistent! error.
 
 ## 12. Four JVM-only libs are skipped by name
 

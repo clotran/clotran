@@ -233,6 +233,7 @@ module Eval
   integer, parameter :: B_MONENTER = 384, B_MONEXIT = 385
   integer, parameter :: B_CLONETB = 386, B_RESETTB = 387, B_GETTBS = 388, B_GETTB = 389, B_ISBOUND = 390
   integer, parameter :: B_GETENV = 391, B_FILEEXISTS = 392, B_SH = 393
+  integer, parameter :: B_ASTRANSIENT = 394, B_PERSISTENT = 395
 
   ! Compiler.CHAR_MAP, verbatim from the pinned clone: the characters
   ! a Clojure name may hold that a JVM member name may not. '.' is
@@ -807,6 +808,8 @@ contains
     call bind_builtin(core, "clotran-getenv", B_GETENV)
     call bind_builtin(core, "clotran-file-exists?", B_FILEEXISTS)
     call bind_builtin(core, "clotran-sh", B_SH)
+    call bind_builtin(core, "clotran-as-transient", B_ASTRANSIENT)
+    call bind_builtin(core, "clotran-persistent", B_PERSISTENT)
     call bind_builtin(core, "clotran-position", B_POSITION)
     call bind_builtin(core, "clotran-read-forms", B_READFORMS)
     call bind_builtin(core, "clotran-load-compiled", B_LOADCOMPILED)
@@ -6569,7 +6572,32 @@ contains
     base = vs_enter(vst, 4)
     call vs_set(vst, base + 1, args)
 
+    ! A TRANSIENT VECTOR (PersistentVector.f90) answers the handful of
+    ! operations Clojure's TransientVector has, here, before anything
+    ! that would treat it as a collection of another kind
+    if (n >= 1) then
+       if (gc_kind(gcv_nth(args, 0)) == OBJ_TVECTOR) then
+          select case (id)
+          case (B_CONJ, B_ASSOC, B_POP, B_COUNT, B_NTH, B_GET, B_PERSISTENT)
+             out = tvec_op(id, vs_get(vst, base + 1), n)
+             call vs_leave(vst, base)
+             return
+          end select
+       end if
+    end if
+
     select case (id)
+    case (B_ASTRANSIENT)
+       ! (transient v): a vector's is a real one; the other collections
+       ! are still their own transients (DEVIATIONS.md 11)
+       a = strip_meta(gcv_nth(args, 0))
+       if (gcv_is(a)) then
+          out = gcv_transient(a, [vs_get(vst, base + 1)])
+       else
+          out = gcv_nth(args, 0)
+       end if
+    case (B_PERSISTENT)
+       out = gcv_nth(args, 0)
     case (B_ADD, B_SUB, B_MUL, B_UADD, B_USUB, B_UMUL, B_PADD, B_PSUB, B_PMUL)
        ! Long arithmetic THROWS on overflow, as Numbers.add and friends
        ! do; the unchecked- variants wrap, as theirs do.
@@ -13229,6 +13257,7 @@ contains
        select case (gc_kind(v))
        case (OBJ_CONS);    s = "list"
        case (OBJ_VECTOR);  s = "vector"
+       case (OBJ_TVECTOR); s = "transient-vector"
        case (OBJ_MAP, OBJ_HAMT); s = "map"
        case (OBJ_SET);     s = "set"
        ! A compiled procedure IS a function: fn?, ifn?, the IFn
@@ -14561,6 +14590,10 @@ contains
     ! The concrete classes `class` answers (class_name_of), so that
     ! (instance? (class x) x) holds and a condp on them can ask.
     case ("clojure.lang.PersistentVector"); yes = (t == "vector")
+    case ("clojure.lang.IEditableCollection"); yes = (t == "vector")
+    case ("clojure.lang.PersistentVector$TransientVector", "clojure.lang.ITransientVector", &
+         "clojure.lang.ITransientCollection", "clojure.lang.ITransientAssociative")
+       yes = (t == "transient-vector")
     case ("clojure.lang.PersistentArrayMap", "clojure.lang.PersistentHashMap"); yes = (t == "map")
     case ("clojure.lang.PersistentHashSet"); yes = (t == "set")
     case ("clojure.lang.PersistentTreeMap"); yes = (t == "map") .and. is_sorted_coll(v)
@@ -15158,9 +15191,10 @@ contains
       ! RandomAccess, Map, Set, Collection) were here for core_print.clj
       ! and data.clj, which clotran no longer runs verbatim (B_RTLOAD).
       case ("clojure.lang.PersistentVector")
-         chain(1:3) = [character(len=36) :: "clojure.lang.IPersistentVector", &
-              "clojure.lang.IKVReduce", "clojure.lang.IPersistentCollection"]
-         cnt = 3
+         chain(1:4) = [character(len=36) :: "clojure.lang.IPersistentVector", &
+              "clojure.lang.IKVReduce", "clojure.lang.IPersistentCollection", &
+              "clojure.lang.IEditableCollection"]
+         cnt = 4
       case ("clojure.lang.PersistentArrayMap")
          chain(1:2) = [character(len=36) :: "clojure.lang.IPersistentMap", "clojure.lang.IPersistentCollection"]
          cnt = 2
@@ -15272,6 +15306,7 @@ contains
        select case (gc_kind(v))
        case (OBJ_CONS);    s = "clojure.lang.PersistentList"
        case (OBJ_VECTOR);  s = "clojure.lang.PersistentVector"
+       case (OBJ_TVECTOR); s = "clojure.lang.PersistentVector$TransientVector"
        case (OBJ_MAP, OBJ_HAMT)
           s = "clojure.lang.PersistentArrayMap"
           if (gca_is_sorted(v)) s = "clojure.lang.PersistentTreeMap"
@@ -15479,6 +15514,85 @@ contains
   ! unwrapped them. cl_format.clj asks exactly that of its
   ! allowed-flags set for every directive it compiles, so every
   ! flag looked illegal and clojure.pprint would not load.
+  ! The operations of a transient vector (call_builtin's hook): conj!,
+  ! assoc!, pop!, count, nth, get and persistent!, each refused once
+  ! persistent! has run, as TransientVector.ensureEditable refuses them.
+  recursive function tvec_op(id, args, n) result(out)
+    type(gc_stack), pointer :: vst
+    integer, intent(in) :: id, n
+    type(gc_value), intent(in) :: args
+    type(gc_value) :: out, t, x
+    integer :: base, i, k
+    vst => gc_my_stack()
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, args)
+    t = gcv_nth(args, 0)
+    out = gc_nil()
+    if (gc_i2(t) /= 1) then
+       call raise_class("IllegalAccessError", "Transient used after persistent! call", [vs_get(vst, base + 1)])
+       call vs_leave(vst, base)
+       return
+    end if
+    select case (id)
+    case (B_CONJ)
+       do i = 1, n - 1
+          call gcv_tconj(gcv_nth(vs_get(vst, base + 1), 0), gcv_nth(vs_get(vst, base + 1), i), [vs_get(vst, base + 1)])
+       end do
+       out = gcv_nth(vs_get(vst, base + 1), 0)
+    case (B_ASSOC)
+       do i = 1, n - 2, 2
+          x = gcv_nth(vs_get(vst, base + 1), i)
+          if (x%tag /= GCT_INT) then
+             call raise_class("IllegalArgumentException", "Key must be integer", [vs_get(vst, base + 1)])
+             exit
+          end if
+          k = int(x%ival)
+          if (k < 0 .or. k > gcv_tcount(gcv_nth(vs_get(vst, base + 1), 0))) then
+             call raise_class("IndexOutOfBoundsException", "", [vs_get(vst, base + 1)])
+             exit
+          end if
+          call gcv_tassoc(gcv_nth(vs_get(vst, base + 1), 0), k, gcv_nth(vs_get(vst, base + 1), i + 1), &
+               [vs_get(vst, base + 1)])
+       end do
+       out = gcv_nth(vs_get(vst, base + 1), 0)
+    case (B_POP)
+       t = gcv_nth(vs_get(vst, base + 1), 0)
+       if (.not. gcv_tdrop(t)) then
+          if (gcv_count(gc_slot(t, 1)) == 0) then
+             call raise_class("IllegalStateException", "Can't pop empty vector", [vs_get(vst, base + 1)])
+          else
+             ! nothing buffered: the vector it came from, popped
+             block
+               type(gc_value) :: pa
+               pa = gcv_empty([vs_get(vst, base + 1)])
+               call vs_set(vst, base + 2, pa)
+               pa = gcv_conj(vs_get(vst, base + 2), gc_slot(t, 1), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+               call vs_set(vst, base + 2, pa)
+               pa = call_builtin(B_POP, vs_get(vst, base + 2))
+               if (gcv_is(pa)) call gc_set_slot(gcv_nth(vs_get(vst, base + 1), 0), 1, pa)
+             end block
+          end if
+       end if
+       out = gcv_nth(vs_get(vst, base + 1), 0)
+    case (B_COUNT)
+       out = gc_int(int(gcv_tcount(t), gc_ip))
+    case (B_NTH, B_GET)
+       x = gcv_nth(args, 1)
+       k = -1
+       if (x%tag == GCT_INT) k = int(x%ival)
+       if (k >= 0 .and. k < gcv_tcount(t)) then
+          out = gcv_tnth(t, k)
+       else if (n >= 3) then
+          out = gcv_nth(args, 2)
+       else if (id == B_NTH) then
+          call raise_class("IndexOutOfBoundsException", "", [vs_get(vst, base + 1)])
+       end if
+    case (B_PERSISTENT)
+       out = gcv_persistent(t, [vs_get(vst, base + 1)])
+    end select
+    call vs_leave(vst, base)
+  end function tvec_op
+
   function coll_get(coll0, k) result(out)
     type(gc_value), intent(in) :: coll0, k
     type(gc_value) :: out, coll, kk
