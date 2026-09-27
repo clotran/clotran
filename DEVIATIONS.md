@@ -1609,3 +1609,22 @@ reader's split, is identical on both.
 
 **Removal**: store where the namespace ends beside the text, and have
 `namespace`, `name`, `=` and hashing read it.
+
+## 55. clojure.core is not direct-linked: redefining a core fn reaches core's own callers
+
+Clojure compiles `clojure.core` with direct linking: one core function
+calls another directly, not through its Var, so `with-redefs`,
+`alter-var-root` or a `def` of a core name changes what USER code sees
+and leaves core's own calls alone. Here every call goes through the Var.
+`(with-redefs [first last] (first [1 2]))` answers 2 in `clj`; here
+`last` itself calls the redefined `first`, which is `last`, and it never
+returns. Redefining a core fn to wrap it (logging, a stub in a test)
+therefore also changes every core function that calls it.
+
+**Removal**: bind calls between clojure.core functions at analysis time
+while core.clj loads, as `:direct-linking` does -- except to Vars marked
+`^:dynamic` or `^:redef` -- and have the compiled core's install
+(clotran.loader) rebind them, since it replaces Var roots after the
+fact. Not done: core.clj redefines some functions part way through
+(`reduce` after its protocols load), which a binding taken early would
+miss.
