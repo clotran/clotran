@@ -366,7 +366,7 @@ module GC
      type(gc_value) :: slot(OBJ_SLOTS)
   end type obj_node
 
-  type(obj_node), allocatable :: obj_pool(:)
+  type(obj_node), allocatable, target :: obj_pool(:)
   logical, allocatable :: obj_mark(:), obj_free(:)
   integer, allocatable :: obj_free_next(:)
   integer :: obj_free_head = 0, obj_used = 0
@@ -752,6 +752,17 @@ module GC
   public :: gc_state_lock, gc_state_unlock, gc_cell_get, gc_cell_set, gc_cell_cas, gc_identical
   public :: gc_grow_begin, gc_grow_end, gc_next, gc_root_cas
   public :: gc_poll, gc_state_wait, gc_state_notify, gc_notify_gen, gc_stop_pending
+
+  interface
+     subroutine clotran_seq_begin() bind(C, name="clotran_seq_begin")
+     end subroutine clotran_seq_begin
+     subroutine clotran_seq_end() bind(C, name="clotran_seq_end")
+     end subroutine clotran_seq_end
+     subroutine clotran_seq_read16(src, dst) bind(C, name="clotran_seq_read16")
+       import :: c_ptr
+       type(c_ptr), value :: src, dst
+     end subroutine clotran_seq_read16
+  end interface
   public :: gc_mutator_enter, gc_mutator_leave
   public :: gc_arena_stats
   public :: gc_equal, gc_hash
@@ -2870,7 +2881,10 @@ contains
     if (.not. stack_key_made) return
     if (.not. c_associated(th_key_get(stack_key))) return
     s => my_stack()
-    if (s%state_depth == 0) ok = th_lock_acquire(state_lk)
+    if (s%state_depth == 0) then
+       ok = th_lock_acquire(state_lk)
+       call clotran_seq_begin()   ! lock-free readers retry while it is held
+    end if
     s%state_depth = s%state_depth + 1
   end subroutine gc_state_lock
 
@@ -2881,7 +2895,10 @@ contains
     if (.not. c_associated(th_key_get(stack_key))) return
     s => my_stack()
     s%state_depth = s%state_depth - 1
-    if (s%state_depth == 0) ok = th_lock_release(state_lk)
+    if (s%state_depth == 0) then
+       call clotran_seq_end()
+       ok = th_lock_release(state_lk)
+    end if
   end subroutine gc_state_unlock
 
   ! GROWTH OF A TABLE READ WITHOUT A LOCK -- CompiledFn's procedures,
@@ -2941,6 +2958,9 @@ contains
     if (s%state_depth /= 1) error stop "clotran: a wait under a nested state lock"
     gen = notify_gen
     s%state_depth = 0
+    ! the sequence counter is even whenever the lock is not held -- a
+    ! condition wait lets it go too -- or lock-free readers would spin
+    call clotran_seq_end()
     ok = th_lock_release(state_lk)
     call gc_mutator_leave()
     ok = th_lock_acquire(state_lk)
@@ -2954,6 +2974,7 @@ contains
     ok = th_lock_release(state_lk)
     call gc_mutator_enter()
     ok = th_lock_acquire(state_lk)
+    call clotran_seq_begin()
     s%state_depth = 1
   end subroutine gc_state_wait
 
@@ -3001,14 +3022,22 @@ contains
     end if
   end function gc_identical
 
-  ! Slot i of a shared mutable object, read whole.
+  ! Slot i of a shared mutable object, read whole -- WITHOUT the lock:
+  ! a consistent copy under the state lock's sequence counter
+  ! (src/c/seqlock.c). The pool it reads moves only with the world
+  ! stopped, never under a running reader.
   function gc_cell_get(v, i) result(x)
     type(gc_value), intent(in) :: v
     integer, intent(in) :: i
-    type(gc_value) :: x
-    call gc_state_lock()
-    x = gc_slot(v, i)
-    call gc_state_unlock()
+    type(gc_value), target :: x
+    x = nilv
+    if (v%tag /= GCT_OBJ .or. i < 1 .or. i > OBJ_SLOTS) return
+    if (v%ref < 1 .or. v%ref > size(obj_pool)) return
+    if (.not. stack_key_made) then
+       x = obj_pool(v%ref)%slot(i)
+       return
+    end if
+    call clotran_seq_read16(c_loc(obj_pool(v%ref)%slot(i)), c_loc(x))
   end function gc_cell_get
 
   subroutine gc_cell_set(v, i, x)
