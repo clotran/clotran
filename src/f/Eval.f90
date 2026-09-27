@@ -6058,24 +6058,37 @@ contains
     call vs_leave(vst, base)
   contains
     ! One element: the first is the accumulator when there was no init;
-    ! otherwise (f acc x), and a reduced result unwraps and stops.
+    ! otherwise (f acc x), and a reduced result unwraps and stops. The host's tctx and vst, not fetched again:
+    ! each fetch is a thread-key lookup, and this runs per element. A
+    ! builtin keeping no argument gets a spare vector (argsafe.inc); a fn
+    ! gets its own, since a variadic one may keep its arguments.
     subroutine step(x0)
-    type(gc_stack), pointer :: vst
-    type(eval_ctx), pointer :: tctx
       type(gc_value), intent(in) :: x0
-      type(gc_value) :: argv, r
-    tctx => ctx_self()
-    vst => tctx%stk
+      type(gc_value) :: argv, r, f
       if (.not. have) then
          call vs_set(vst, base + 3, x0)
          have = .true.
          return
       end if
       x = x0
-      argv = gcv_build(2, [vs_get(vst, base + 3), x])
-      call gc_vec_set(gc_slot(argv, 1), 1, vs_get(vst, base + 3))
-      call gc_vec_set(gc_slot(argv, 1), 2, x)
-      r = apply(vs_get(vst, base + 2), argv)
+      f = strip_meta(vs_get(vst, base + 2))
+      if (gc_kind(f) == OBJ_BUILTIN .or. gc_kind(f) == OBJ_COMPILED) then
+         ! from two stack slots: a compiled fn is entered from them with no
+         ! vector at all, a builtin keeping none gets a spare (apply_slots)
+         block
+           integer :: ab
+           ab = vs_enter(vst, 2)
+           call vs_set(vst, ab + 1, vs_get(vst, base + 3))
+           call vs_set(vst, ab + 2, x)
+           r = gce_apply_slots(vs_get(vst, base + 2), ab, 2)
+           call vs_leave(vst, ab)
+         end block
+      else
+         argv = gcv_build(2, [vs_get(vst, base + 3), x])
+         call gc_vec_set(gc_slot(argv, 1), 1, vs_get(vst, base + 3))
+         call gc_vec_set(gc_slot(argv, 1), 2, x)
+         r = apply(vs_get(vst, base + 2), argv)
+      end if
       if (tctx%has_error) then
          done = .true.
          return
