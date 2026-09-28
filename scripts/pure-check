@@ -13,7 +13,9 @@
          '[babashka.process :refer [shell]])
 
 (def repo (-> *file* io/file .getCanonicalFile .getParentFile .getParentFile))
-(def work (io/file (System/getProperty "java.io.tmpdir") "clotran-pure-check"))
+;; under this checkout's build/, not the shared temp directory: make
+;; crosscheck runs two checkouts at once
+(def work (io/file repo "build" "pure-check"))
 (def src "test/clj/pure_sample.cljf")
 (def ns-name "pure-sample")
 

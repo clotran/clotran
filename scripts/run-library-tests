@@ -19,19 +19,31 @@
 # clojure.datafy are covered by test/clj/oracle.clj instead.
 #
 # A GATE: any failure or error is a non-zero exit.
+#
+# The five run AT ONCE, each in a process of its own writing its own
+# files under build/libtests -- not /tmp, which two checkouts testing
+# at the same time (make crosscheck's two halves) would share -- and
+# are reported in order once all have finished.
 set -e
 cd "$(dirname "$0")/.."
 NSS="clojure_set clojure_walk string math pprint"
+W=build/libtests
+mkdir -p $W
+for f in $NSS; do
+  src="test/clj/clojure/test_clojure/$f.clj"
+  ns=$(sed -n 's/^(ns \([a-zA-Z0-9._-]*\).*/\1/p' "$src" | head -1)
+  printf "(require 'clojure.test)\n(load-file \"test/clj/clojure/test_helper.clj\")\n(load-file \"%s\")\n(clojure.test/run-tests '%s)\n" "$src" "$ns" > $W/$f.clj
+  ( ./clotran-bin src/clj/clojure/core.clj < $W/$f.clj > $W/$f.out 2>&1 || true ) &
+done
+wait
 total_pass=0; total_fail=0; total_err=0; total_test=0; bad=0
 for f in $NSS; do
   src="test/clj/clojure/test_clojure/$f.clj"
   ns=$(sed -n 's/^(ns \([a-zA-Z0-9._-]*\).*/\1/p' "$src" | head -1)
-  printf "(require 'clojure.test)\n(load-file \"test/clj/clojure/test_helper.clj\")\n(load-file \"%s\")\n(clojure.test/run-tests '%s)\n" "$src" "$ns" > /tmp/clotran-lib.clj
-  ./clotran-bin src/clj/clojure/core.clj < /tmp/clotran-lib.clj > /tmp/clotran-lib.out 2>&1 || true
-  sum=$(grep -o '{:test [0-9]*, :pass [0-9]*, :fail [0-9]*, :error [0-9]*' /tmp/clotran-lib.out | head -1)
+  sum=$(grep -o '{:test [0-9]*, :pass [0-9]*, :fail [0-9]*, :error [0-9]*' $W/$f.out | head -1)
   if [ -z "$sum" ]; then
     printf "%-44s NO SUMMARY -- the file did not load\n" "$ns"
-    tail -5 /tmp/clotran-lib.out
+    tail -5 $W/$f.out
     bad=1
     continue
   fi
@@ -43,7 +55,7 @@ for f in $NSS; do
   total_test=$((total_test + t)); total_pass=$((total_pass + p))
   total_fail=$((total_fail + fl)); total_err=$((total_err + e))
   if [ "$fl" != "0" ] || [ "$e" != "0" ]; then
-    grep -A3 -E '^(FAIL|ERROR)' /tmp/clotran-lib.out | head -20
+    grep -A3 -E '^(FAIL|ERROR)' $W/$f.out | head -20
     bad=1
   fi
 done

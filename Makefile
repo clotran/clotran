@@ -182,7 +182,7 @@ unit-tests = gc_test persistent_vector_test persistent_list_test persistent_arra
 	bigdec_test abi_test native_array_test threads_test gc_mt_test
 test-bins = $(addprefix $(BT)/,$(unit-tests))
 
-.PHONY: all test crosscheck crosscheck-here clean compiled-core embed image
+.PHONY: all crosscheck crosscheck-here clean compiled-core embed image
 all: clotran-bin $(test-bins) $(B)/core.image
 
 $(B) $(BT):
@@ -356,35 +356,57 @@ $(B)/libsamplelib.$(SOEXT): $(T)/samplelib.f90 $(B)/samplelib_shims.f90 | $(B) $
 	mkdir -p $(PKGMOD)
 	$(FC) $(filter-out -frecursive -J$(B),$(FCFLAGS)) -J$(PKGMOD) -shared -fPIC -o $@ $^
 
-test: $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(B)/libsamplelib.$(SOEXT) packages examples/embed/heat
+# The checks are separate targets so `make -j test` runs them side by
+# side; each writes only its own files (the library runner and
+# pure-check under build/, the autocompile pair in build/autocache, one
+# after the other within its target). Plain `make test` runs them in
+# order, as before.
+TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(B)/libsamplelib.$(SOEXT) packages examples/embed/heat
+TEST_CHECKS = check-unit check-embed check-language check-banner check-torture check-threads \
+	check-autocompile check-break check-libraries check-oracle check-pure check-static
+.PHONY: test $(TEST_CHECKS)
+test: $(TEST_CHECKS)
+$(TEST_CHECKS): $(TEST_DEPS)
+check-unit:
 	for t in $(unit-tests); do echo "--- $$t ---"; $(BT)/$$t || exit 1; done
+check-embed:
 	@echo "--- a Fortran solver with clotran embedded, its strategy in Clojure on its own grid (examples/embed) ---"
 	examples/embed/heat | grep -v "^note:" | diff - examples/embed/expected.txt
+check-language:
 	@echo "--- language_test (with core.clj, loaded from source: the one run without the image) ---"
-	CLOTRAN_IMAGE=0 ./clotran-bin src/clj/clojure/core.clj test/clj/language_test.clj </dev/null \
-	  | tee /dev/stderr | grep -q "^LANGUAGE TESTS PASSED"
+	CLOTRAN_IMAGE=0 ./clotran-bin src/clj/clojure/core.clj test/clj/language_test.clj </dev/null > $(B)/language_test.out 2>&1; \
+	  grep -q "^LANGUAGE TESTS PASSED" $(B)/language_test.out || { grep -E "FAIL|FAILED" $(B)/language_test.out | head -20; exit 1; }
+check-banner:
 	@echo "--- the REPL's banner is for a terminal only: a pipe must never see it ---"
 	! (printf '(+ 1 2)\n' | ./clotran-bin src/clj/clojure/core.clj 2>&1 | grep -q 'based on Clojure')
+check-torture:
 	@echo "--- a few forms with a collection at every object allocation: the read-string shape included ---"
 	CLOTRAN_GC_EVERY=1 ./clotran-bin src/clj/clojure/core.clj test/clj/torture_check.clj </dev/null | grep -q "^TORTURE CHECK PASSED"
+check-threads:
 	@echo "--- eight futures allocating at once, the heap checked at every young collection (step 14d) ---"
 	CLOTRAN_GC_VERIFY=1 ./clotran-bin src/clj/clojure/core.clj test/clj/threads_heap.clj </dev/null \
 	  | grep -q "^THREADS HEAP PASSED"
+check-autocompile:
 	@echo "--- a loaded namespace built into a cache and installed from it (clotran.loader) ---"
 	rm -rf $(B)/autocache
 	AUTOCOMPILE_STEP=build CLOTRAN_AUTOCOMPILE=use CLOTRAN_CACHE=$(B)/autocache \
 	  ./clotran-bin src/clj/clojure/core.clj test/clj/autocompile_test.clj </dev/null | grep -q "^AUTOCOMPILE PASSED"
 	AUTOCOMPILE_STEP=cached CLOTRAN_AUTOCOMPILE=use CLOTRAN_CACHE=$(B)/autocache \
 	  ./clotran-bin src/clj/clojure/core.clj test/clj/autocompile_test.clj </dev/null | grep -q "^AUTOCOMPILE PASSED"
+check-break:
 	@echo "--- a break pauses into a nested REPL, and clotran-resume answers it ---"
 	printf '((fn [x] (clotran-break)) 1)\n(clotran-resume {:continue (* 42 (get (:env (first (:frames (clotran-last-break)))) (quote x)))})\n' \
 	  | ./clotran-bin src/clj/clojure/core.clj | grep -q '42$$'
+check-libraries:
 	@echo "--- the portable libraries, on Clojure's OWN tests, verbatim ---"
 	scripts/run-library-tests
+check-oracle:
 	@echo "--- oracle (the same forms through clj and clotran) ---"
 	scripts/oracle
+check-pure:
 	@echo "--- pure Fortran (tier A through gfortran and flang, against clj) ---"
 	scripts/pure-check
+check-static:
 	@echo "--- state inventory (every module variable classified, PLAN step 14a) ---"
 	scripts/state-inventory
 	@echo "--- the builtins that may reuse an argument vector (argsafe.inc) are current ---"
@@ -401,14 +423,27 @@ test: $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(B)/lib
 # twice in one day. rsync copies what changed since the last gate, and
 # the verdict is the same EXIT line.
 XC_DIR ?= $(or $(TMPDIR),/tmp)/clotran-crosscheck
+#
+# The two halves run AT ONCE, each in a copy of its own (XC_DIR/flang,
+# XC_DIR/gfortran), each building and testing with -j; each half's
+# output is its own log, printed whole once both have finished, and the
+# gate fails if either did.
+XC_JOBS ?= 4
+XC_SYNC = rsync -a --delete --exclude .git --exclude /build --exclude /clotran-bin \
+	  --exclude /clotran-bin.dSYM --exclude /examples/embed/heat ./
 crosscheck:
-	mkdir -p $(XC_DIR)
-	rsync -a --delete --exclude .git --exclude /build --exclude /clotran-bin \
-	  --exclude /clotran-bin.dSYM --exclude /examples/embed/heat ./ $(XC_DIR)/
-	$(MAKE) -C $(XC_DIR) crosscheck-here
+	mkdir -p $(XC_DIR)/flang $(XC_DIR)/gfortran
+	$(XC_SYNC) $(XC_DIR)/flang/
+	$(XC_SYNC) $(XC_DIR)/gfortran/
+	( $(MAKE) -C $(XC_DIR)/flang crosscheck-here FC=flang > $(XC_DIR)/flang.log 2>&1; echo $$? > $(XC_DIR)/flang.rc ) & \
+	( $(MAKE) -C $(XC_DIR)/gfortran crosscheck-here FC=gfortran > $(XC_DIR)/gfortran.log 2>&1; echo $$? > $(XC_DIR)/gfortran.rc ) & \
+	wait; \
+	echo "======== flang ========"; cat $(XC_DIR)/flang.log; \
+	echo "======== gfortran ========"; cat $(XC_DIR)/gfortran.log; \
+	echo "flang: exit $$(cat $(XC_DIR)/flang.rc), gfortran: exit $$(cat $(XC_DIR)/gfortran.rc)"; \
+	[ "$$(cat $(XC_DIR)/flang.rc)" = 0 ] && [ "$$(cat $(XC_DIR)/gfortran.rc)" = 0 ]
 crosscheck-here:
-	$(MAKE) clean && $(MAKE) FC=flang test
-	$(MAKE) clean && $(MAKE) test
+	$(MAKE) clean && $(MAKE) -j$(XC_JOBS) FC=$(FC) test
 
 # THE IMAGE (main.f90, image_save): the heap after core.clj and spec
 # have loaded, written once and read back by every start in place of

@@ -1564,7 +1564,13 @@
 
 (try @(future (throw (ex-info "x" {}))) (catch java.util.concurrent.ExecutionException e :ee))
 
-(deref (future (reduce + (range 300000)) 1) 1 :t)
+;; a timed deref: the value when it comes in time, the default when it
+;; cannot -- each with a certain answer. It was (deref (future (reduce +
+;; (range 300000)) 1) 1 :t), whose answer was whether the sum beat 1 ms
+;; on the machine that day: 1 until the gate ran its halves at once.
+(deref (future 1) 10000 :t)
+
+(deref (future (Thread/sleep 5000) 1) 10 :t)
 
 (let [p (promise) f (future @p)] (deliver p :v) @f)
 
@@ -2609,7 +2615,10 @@
 
 (let [calls (atom [])] (sorted-map-by (fn [a b] (swap! calls conj [a b]) (compare a b)) "a" 1 "b" 2) @calls)
 
-(do (spit "/tmp/clotran-oracle-io.txt" "hello\nworld\n") (spit "/tmp/clotran-oracle-io.txt" "more" :append true) [(slurp "/tmp/clotran-oracle-io.txt") (with-open [r (clojure.java.io/reader "/tmp/clotran-oracle-io.txt")] (vec (line-seq r)))])
+;; a file of each side's own, under this checkout's build/: the two sides
+;; run at once (scripts/oracle), and so do make crosscheck's two halves;
+;; the answer is the contents, never the path
+(let [p (str "build/oracle-io-" (System/getProperty "java.vm.name") ".txt")] (spit p "hello\nworld\n") (spit p "more" :append true) [(slurp p) (with-open [r (clojure.java.io/reader p)] (vec (line-seq r)))])
 
 (try (require 'oracle.no-such-lib) (catch java.io.IOException e :io))
 

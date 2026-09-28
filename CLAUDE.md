@@ -169,11 +169,14 @@ it up.
 
 ## Gotchas that have cost real time
 
-- **`make crosscheck` runs in a copy** (`XC_DIR`, a temp directory):
-  it copies the sources, then cleans and builds both compilers there, so
-  building or running `./clotran` in the working tree meanwhile is safe.
-  An EDIT made after the copy is not in the verdict -- the gate judges
-  the tree as it was when it started. (A
+- **`make crosscheck` runs in two copies** (`XC_DIR/flang`,
+  `XC_DIR/gfortran`, under the temp directory): it copies the sources,
+  then cleans, builds and tests both compilers there AT ONCE, each with
+  -j4, about 95 s. Building or running `./clotran` in the working tree
+  meanwhile is safe. An EDIT made after the copy is not in the verdict
+  -- the gate judges the tree as it was when it started. `make -j test`
+  runs the checks side by side in the working tree; a new check gets a
+  `check-*` target and writes only under build/. (A
   crosscheck interrupted between its halves used to leave flang's
   `.mod` files for gfortran to choke on; `build/.built-with-<fc>` now
   makes a compiler change empty the directory first.)
