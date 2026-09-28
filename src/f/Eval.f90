@@ -1141,7 +1141,7 @@ contains
   ! scan that decides whether clotran.reader/resolve-tags runs on it.
   recursive function has_unread(v0) result(yes)
     type(gc_value), intent(in) :: v0
-    type(gc_value) :: v, s, k
+    type(gc_value) :: v, s, k, r
     logical :: yes
     integer :: i
     yes = .false.
@@ -1175,7 +1175,10 @@ contains
              yes = .true.
              return
           end if
-          s = to_seq(sq_rest(s, [v, s]), [v])
+          ! two allocations in one argument list: the rest is rooted
+          ! before the seq over it is made
+          r = sq_rest(s, [v, s])
+          s = to_seq(r, [v, r])
        end do
     else if (gc_kind(v) == OBJ_SET .or. gc_kind(v) == OBJ_HAMT) then
        s = to_seq(v, [v])
@@ -1184,7 +1187,8 @@ contains
              yes = .true.
              return
           end if
-          s = to_seq(sq_rest(s, [v, s]), [v])
+          r = sq_rest(s, [v, s])
+          s = to_seq(r, [v, r])
        end do
     end if
   end function has_unread
@@ -1197,10 +1201,18 @@ contains
     type(gc_value) :: out
     integer :: base
     out = form
-    if (.not. has_unread(form)) return
     vst => gc_my_stack()
+    ! the form is on the stack BEFORE the scan: has_unread allocates
+    ! (a keyword, a seq over each map literal), and read-string's
+    ! fresh result was a plain local here -- a collection landing in the
+    ! scan freed the forms just read and read-string answered a reused
+    ! vector, silently, and only when the timing was right
     base = vs_enter(vst, 2)
     call vs_set(vst, base + 1, form)
+    if (.not. has_unread(vs_get(vst, base + 1))) then
+       call vs_leave(vst, base)
+       return
+    end if
     call vs_set(vst, base + 2, gcv_build(1, [vs_get(vst, base + 1)]))
     call vs_set(vst, base + 2, gcv_put(vs_get(vst, base + 2), 0, vs_get(vst, base + 1), [vs_get(vst, base + 1)]))
     out = reader_call("resolve-tags", vs_get(vst, base + 2))
