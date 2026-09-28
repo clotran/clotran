@@ -164,13 +164,17 @@ per-Matcher buffer leak in DEVIATIONS 14. We pay that cost for Java's API
 shape, not for Clojure's semantics.
 
 The iterator pieces are bucket B done the other way: `RT/iter`,
-`RT/chunkIteratorSeq`, `TransformerIterator`, `ArrayList` and
-`Eduction` are what `sequence`, `iterator-seq`, `eduction` and the
-buffering transducers name, ClojureScript writes every one of them in
-Clojure, and so `src/clj/clotran/rt.cljf` does here: a host-table
-row whose id is `B_RTFN` calls the var of that name in `clotran.rt`,
-loaded on first use. The JVM member is the seam; the code behind it
-is the language's.
+`RT/chunkIteratorSeq`, `TransformerIterator` and `ArrayList` are what
+`sequence`, `iterator-seq`, `eduction` and the buffering transducers
+name, ClojureScript writes every one of them in Clojure, and so
+`src/clj/clotran/rt.cljf` does here: a host-table row whose id is
+`B_RTFN` calls the var of that name in `clotran.rt`, loaded on first
+use. The JVM member is the seam; the code behind it is the language's.
+`Eduction` itself needs none of this: core.clj's own `(deftype Eduction
+..)` at 8016 runs as written, its `iterator` reaching
+`TransformerIterator/create` through the row above (a copy in
+`clotran.rt` stood in for it until 2026-09-28, and `(class (eduction
+..))` said so).
 
 `future`, `promise`, `pmap` and `Thread/sleep` are the other worked
 example, and the larger one: ClojureScript has none of them -- no

@@ -8,10 +8,7 @@
   through rows in hosttable.inc that call the vars named here (Eval.f90
   rt_call), and this file loads the first time one is reached. A
   deftype's fields cannot be set! here (DEVIATIONS 20), so each mutable
-  one holds an atom."
-  ;; core.clj has its own (deftype Eduction ..) and this one replaces it,
-  ;; which Clojure would warn about on every load
-  (:refer-clojure :exclude [->Eduction]))
+  one holds an atom.")
 
 ;;; ---- iterators ------------------------------------------------------
 
@@ -118,31 +115,6 @@
                  (recur (assoc v i (nth v j) j (nth v i)) (dec i)))
                v))))
   nil)
-
-;;; ---- Eduction --------------------------------------------------------
-
-(deftype Eduction [xform coll]
-  Object
-  (iterator [_] (ti-create xform (iter coll)))
-  (seq [_] (seq (chunk-iterator-seq (ti-create xform (iter coll)))))
-  clojure.lang.Sequential
-  clojure.lang.IReduceInit
-  (reduce [_ f init] (transduce xform (completing f) init coll)))
-
-(extend-protocol clojure.core.protocols/CollReduce
-  Eduction
-  (coll-reduce
-    ;; protocols.clj's iter-reduce: an Eduction is Iterable, and the first
-    ;; element is the seed, one element pulled at a time
-    ([e f] (let [it (.iterator e)]
-             (if (.hasNext it)
-               (loop [ret (.next it)]
-                 (if (.hasNext it)
-                   (let [ret (f ret (.next it))]
-                     (if (reduced? ret) @ret (recur ret)))
-                   ret))
-               (f))))
-    ([e f init] (.reduce e f init))))
 
 ;;; ---- agents -----------------------------------------------------------
 ;; An agent's actions run on a thread of the agent's own, in order, one

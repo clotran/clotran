@@ -3244,6 +3244,11 @@ before it became an oracle case:
   `chunk-iterator-seq`. With that, `(= [2 3] (eduction (map inc) [1
   2]))` compares element by element, one instance to one sequence --
   two eductions stay unequal, as Object's equals leaves them.
+  Since 2026-09-28 that Eduction is the only one: `clotran.rt`'s copy
+  and the `Eduction.` intercept in `eval_new` are gone, so `(class
+  (eduction ..))` is `clojure.core.Eduction`, and `count` of one is
+  RT.countFrom's refusal -- an instance with no `count` is counted
+  through its seq only when it is an IPersistentCollection.
 - **`reduce-kv` on a vector.** The vector claims `IKVReduce` in its
   supers, so the protocol reaches `.kvreduce`, a row to
   clotran.rt's `kvreduce-of`: index and element, stopping at a

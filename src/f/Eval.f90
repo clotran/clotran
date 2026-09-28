@@ -3206,8 +3206,6 @@ contains
     else if (cname == "ArrayList" .or. cname == "java.util.ArrayList") then
        ! Clojure on this host: clotran.rt's ArrayList (rt_call)
        out = rt_call("array-list", vs_get(vst, base + 1))
-    else if (cname == "Eduction" .or. cname == "clojure.lang.Eduction") then
-       out = rt_call("->Eduction", vs_get(vst, base + 1))
     else if (cname == "java.io.StringReader" .or. cname == "StringReader") then
        ! a reader over a string is the string: load-string builds one
        ! and hands it to load-reader (Compiler.load, B_LOADREADER)
@@ -7305,12 +7303,18 @@ contains
           end if
        end if
        ! RT.count: nil is 0, and a thing with no count THROWS -- (count 1)
-       ! answered 0
-       if (a%tag /= GCT_NIL .and. .not. seqable_quiet(a) .and. gc_kind(a) /= OBJ_INST) then
+       ! answered 0. An instance with no count method is counted through
+       ! its seq only when it is an IPersistentCollection (RT.countFrom);
+       ! a Seqable or an Iterable alone -- core.clj's Eduction -- is not
+       ! (clj: "count not supported on this type: Eduction"; it was 0)
+       if (a%tag /= GCT_NIL .and. ((gc_kind(a) /= OBJ_INST .and. .not. seqable_quiet(a)) .or. &
+            (gc_kind(a) == OBJ_INST .and. .not. is_instance(gc_class("clojure.lang.IPersistentCollection", &
+            [vs_get(vst, base + 1)]), a)))) then
           block
              call class_name_of(a, s=dlt_1)
-             call raise_class("UnsupportedOperationException", "count not supported on this type: " // dlt_1, &
-                  [vs_get(vst, base + 1)])
+             ! getSimpleName: the class after its package
+             call raise_class("UnsupportedOperationException", "count not supported on this type: " // &
+                  dlt_1(index(dlt_1, '.', back=.true.) + 1:), [vs_get(vst, base + 1)])
           end block
           call vs_leave(vst, base)
           return
@@ -7319,6 +7323,8 @@ contains
        ! vector is its only root and goes before the count starts;
        ! sq_count roots the value itself before it allocates
        a = gcv_nth(vs_get(vst, base + 1), 0)
+       ! an IPersistentCollection instance with no count: its seq is counted
+       if (gc_kind(strip_meta(a)) == OBJ_INST) a = to_seq(strip_meta(a), [vs_get(vst, base + 1)])
        call drop_arg0(vs_get(vst, base + 1))
        call vs_set(vst, base + 1, gc_nil())
        out = gc_int(sq_count(a, [gc_value ::]))
