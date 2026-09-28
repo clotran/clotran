@@ -1,1 +1,1 @@
-{:timeout false, :lines {"future?#example0" {0 "#var", 1 "true", 2 "false"}}}
+{:timeout false, :lines {"future?#example0" {0 "ok", 1 "ok", 2 "ok"}}}

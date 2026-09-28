@@ -238,6 +238,8 @@ module Eval
   ! a byte[] takes only a Byte. fortran/aset (B_ASET) converts.
   integer, parameter :: B_JASET = 398, B_FLOATCAST = 399, B_UFLOATCAST = 400
   integer, parameter :: B_INTEGERVALUE = 401, B_LOADREADER = 403, B_UUIDFN = 404
+  integer, parameter :: B_AGENTPOP = 405, B_AGENTRUN1 = 406, B_TOUCH = 407, B_TXRUNNING = 408
+  integer, parameter :: B_REFHISTCOUNT = 409, B_REFMINHIST = 410, B_REFMAXHIST = 411, B_REFSETHIST = 412
   ! A number's WIDTH, in an integer's or a real's otherwise unused ref:
   ! what it boxes as on the JVM. Equality and hashing never read it.
   integer, parameter :: W_LONG = 0, W_BYTE = 1, W_SHORT = 2, W_INT = 3, W_FLOAT = 1
@@ -374,6 +376,9 @@ module Eval
   logical, save :: mf_loaded = .false.   ! clotran.multifn, once (mf_call)
   logical, save :: uuid_loaded = .false.   ! clotran.uuid, once (uuid_call)
   logical, save :: rdr_loaded = .false.   ! clotran.reader, once (reader_call)
+  ! STM: transactions are SERIALIZED under this one lock (DEVIATIONS 10)
+  type(th_lock), save :: tx_lk
+  logical, save :: tx_lk_made = .false.
   ! DIRECT LINKING (DEVIATIONS 55): a call site in a clojure.* namespace
   ! keeps the callee it found at its first call, stamped with this epoch;
   ! installing a compiled namespace re-roots its Vars and bumps it, so
@@ -503,6 +508,10 @@ module Eval
      ! prologue reads its captures from it (clotran_captures). Read at
      ! once, before anything else runs, so it needs no rooting here.
      type(gc_value) :: cur_fn
+     ! STM (DEVIATIONS 10): how deep in dosync this thread is, and its
+     ! transaction's log, a map of ref to in-transaction value
+     integer :: tx_depth = 0
+     type(gc_root) :: tx_root
      ! its value stack, the collector's: one lookup finds both
      type(gc_stack), pointer :: stk => null()
   end type eval_ctx
@@ -892,6 +901,9 @@ contains
     call bind_builtin(core, "clotran-spit", B_SPIT)
     call bind_builtin(core, "count", B_COUNT)
     call bind_builtin(core, "first", B_FIRST)
+    ! an agent's queue, drained on its own thread by clotran.rt/agent-drain
+    call bind_builtin(core, "clotran-agent-pop!", B_AGENTPOP)
+    call bind_builtin(core, "clotran-agent-run1", B_AGENTRUN1)
     call bind_builtin(core, "rest", B_REST)
     call bind_builtin(core, "next", B_NEXT)
     call bind_builtin(core, "cons", B_CONS)
@@ -10636,7 +10648,42 @@ contains
          end if
        end block
     case (B_RUNTX)
-       out = apply(gcv_nth(args, 0), gcv_empty([vs_get(vst, base + 1)]))
+       ! LockingTransaction.runInTransaction, behind dosync: transactions
+       ! are SERIALIZED under one lock -- a valid schedule, which is what
+       ! STM promises -- with a log per transaction of ref -> new value
+       ! (alter, commute, ref-set write it; deref of a ref reads it), and
+       ! a commit at the end that validates every ref first, then sets
+       ! each and runs its watches. An error discards the log. A dosync
+       ! inside a dosync is the same transaction. DEVIATIONS 10.
+       block
+         logical :: ok
+         if (tctx%tx_depth == 0) then
+            call tx_lock_init()
+            ok = th_lock_acquire(tx_lk)
+            call gc_global_keep(tctx%tx_root, gca_empty([vs_get(vst, base + 1)]))
+         end if
+         tctx%tx_depth = tctx%tx_depth + 1
+         out = apply(gcv_nth(args, 0), gcv_empty([vs_get(vst, base + 1)]))
+         tctx%tx_depth = tctx%tx_depth - 1
+         if (tctx%tx_depth == 0) then
+            call vs_set(vst, base + 2, out)
+            if (.not. tctx%has_error) call tx_commit()
+            out = vs_get(vst, base + 2)
+            call gc_global_keep(tctx%tx_root, gc_nil())
+            ok = th_lock_release(tx_lk)
+         end if
+       end block
+    case (B_TOUCH)
+       ! Ref.touch, behind ensure: a serialized transaction needs no mark
+       out = gc_nil()
+    case (B_TXRUNNING)
+       out = gc_bool(tctx%tx_depth > 0)
+    case (B_REFHISTCOUNT, B_REFMINHIST)
+       out = gc_int(0_gc_ip)   ! no history is kept: no retries, no faults
+    case (B_REFMAXHIST)
+       out = gc_int(10_gc_ip)
+    case (B_REFSETHIST)
+       out = gcv_nth(args, 0)
     case (B_VARNS)
        a = strip_meta(gcv_nth(args, 0))
        out = gc_nil()
@@ -10883,6 +10930,19 @@ contains
           return
        end if
        out = gcv_nth(args, 1)
+       ! a REF's set (ref-set): into the transaction's log, or an error
+       ! outside one; validated at the commit
+       if (gc_kind(strip_meta(a)) == OBJ_ATOM .and. id == B_SETVAL) then
+          if (gc_i1(strip_meta(a)) == 1) then
+             if (tctx%tx_depth == 0) then
+                call raise_class("IllegalStateException", "No transaction running", [vs_get(vst, base + 1)])
+             else
+                call tx_log(strip_meta(a), out)
+             end if
+             call vs_leave(vst, base)
+             return
+          end if
+       end if
        block
          type(gc_value) :: prev
          ! THE VALIDATOR RUNS BEFORE THE WRITE, and a refusal
@@ -10976,6 +11036,33 @@ contains
          integer :: j
          ref = gcv_nth(args, 0)
          call vs_set(vst, base + 2, ref)
+         ! a REF: only inside a transaction, and into its log -- (alter r
+         ! f args) is (apply f in-tx-value args), the ref itself untouched
+         ! until the commit (B_RUNTX)
+         if (gc_kind(strip_meta(ref)) == OBJ_ATOM) then
+            if (gc_i1(strip_meta(ref)) == 1) then
+               if (tctx%tx_depth == 0) then
+                  call raise_class("IllegalStateException", "No transaction running", [vs_get(vst, base + 1)])
+                  call vs_leave(vst, base)
+                  return
+               end if
+               call vs_set(vst, base + 4, tx_value(strip_meta(ref)))
+               fargs = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 4)])
+               fargs = gcv_conj(fargs, vs_get(vst, base + 4), [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 4)])
+               call vs_set(vst, base + 3, fargs)
+               if (n >= 3) then
+                  extra = coll_to_vector(gcv_nth(args, 2), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
+                  do j = 0, gcv_count(extra) - 1
+                     fargs = gcv_conj(vs_get(vst, base + 3), gcv_nth(extra, j), [vs_get(vst, base + 1), vs_get(vst, base + 3), extra])
+                     call vs_set(vst, base + 3, fargs)
+                  end do
+               end if
+               out = apply(gcv_nth(args, 1), vs_get(vst, base + 3))
+               if (.not. tctx%has_error) call tx_log(strip_meta(vs_get(vst, base + 2)), out)
+               call vs_leave(vst, base)
+               return
+            end if
+         end if
          ! Var.alterRoot: f outside the state lock, the root replaced only
          ! if it is still what f was given -- else again, as swap! does
          do
@@ -11606,6 +11693,10 @@ contains
           out = gcn_var_value(a)
        else if (gc_kind(a) == OBJ_ATOM .or. gc_kind(a) == OBJ_VOLATILE) then
           out = gc_cell_get(a, 1)   ! never half of a concurrent write
+          ! a ref inside a transaction: the in-transaction value
+          if (gc_kind(a) == OBJ_ATOM .and. tctx%tx_depth > 0) then
+             if (gc_i1(a) == 1) out = tx_value(a)
+          end if
        else if (is_reduced(a)) then
           ! Unwrapping a (reduced x) is a deref in Clojure too.
           out = gc_slot(strip_meta(a), 1)
@@ -11758,11 +11849,120 @@ contains
           out = gc_slot(a, 1)
        end if
     case (B_AGENTDISPATCH)
-       ! (.dispatch a f args executor) -- SYNCHRONOUS here, so the
-       ! action runs before dispatch returns. A failed agent
-       ! refuses the action; an action that throws records the
-       ! error, calls the handler if there is one, and under
-       ! :fail leaves the agent failed with its old value.
+       ! (.dispatch a f args executor): the action is QUEUED on the agent
+       ! -- "queue" and "running" in its fns map, slot 4, replaced by
+       ! compare-and-swap -- and runs on a thread of the agent's own, in
+       ! order, one at a time, as Agent.dispatch's executor runs it: if
+       ! none is running, clotran.rt/agent-run starts one that drains the
+       ! queue (B_AGENTPOP, B_AGENTRUN1). A failed agent refuses at send.
+       block
+         type(gc_value) :: ag, act, m0, q, prior
+         logical :: start
+         integer :: ab
+         ag = strip_meta(gcv_nth(args, 0))
+         out = ag
+         prior = gc_slot(ag, 5)
+         if (gc_kind(ag) /= OBJ_ATOM) then
+            call fail("dispatch: not an agent")
+         else if (prior%tag /= GCT_NIL) then
+            call raise_class("RuntimeException", &
+                 "Agent is failed, needs restart", [vs_get(vst, base + 1)])
+         else
+            call vs_set(vst, base + 2, ag)
+            act = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
+            call vs_set(vst, base + 3, act)
+            act = gcv_conj(vs_get(vst, base + 3), gcv_nth(args, 1), [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+            call vs_set(vst, base + 3, act)
+            call vs_set(vst, base + 4, coll_to_vector(gcv_nth(args, 2), [vs_get(vst, base + 1), vs_get(vst, base + 3)]))
+            act = gcv_conj(vs_get(vst, base + 3), vs_get(vst, base + 4), [vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+            call vs_set(vst, base + 3, act)
+            ab = vs_enter(vst, 3)
+            start = .false.
+            do
+               m0 = gc_slot(vs_get(vst, base + 2), 4)
+               call vs_set(vst, ab + 1, m0)
+               q = gc_nil()
+               start = .true.
+               if (gca_is(m0)) then
+                  q = gca_get(vs_get(vst, ab + 1), gc_key("queue", [vs_get(vst, ab + 1)]))
+                  start = .not. truthy(gca_get(vs_get(vst, ab + 1), gc_key("running", [vs_get(vst, ab + 1)])))
+               end if
+               if (.not. gcv_is(q)) q = gcv_empty([vs_get(vst, ab + 1)])
+               call vs_set(vst, ab + 2, q)
+               q = gcv_conj(vs_get(vst, ab + 2), vs_get(vst, base + 3), [vs_get(vst, ab + 1), vs_get(vst, ab + 2)])
+               call vs_set(vst, ab + 2, q)
+               if (gca_is(vs_get(vst, ab + 1))) then
+                  call vs_set(vst, ab + 3, vs_get(vst, ab + 1))
+               else
+                  call vs_set(vst, ab + 3, gca_empty([vs_get(vst, ab + 1), vs_get(vst, ab + 2)]))
+               end if
+               call vs_set(vst, ab + 3, gca_assoc(vs_get(vst, ab + 3), gc_key("queue", [vs_get(vst, ab + 2), vs_get(vst, ab + 3)]), &
+                    vs_get(vst, ab + 2), [vs_get(vst, ab + 2), vs_get(vst, ab + 3)]))
+               call vs_set(vst, ab + 3, gca_assoc(vs_get(vst, ab + 3), gc_key("running", [vs_get(vst, ab + 2), vs_get(vst, ab + 3)]), &
+                    gc_bool(.true.), [vs_get(vst, ab + 2), vs_get(vst, ab + 3)]))
+               if (gc_cell_cas(vs_get(vst, base + 2), 4, m0, vs_get(vst, ab + 3))) exit
+            end do
+            call vs_leave(vst, ab)
+            if (start) then
+               call vs_set(vst, base + 3, gcv_build(1, [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+               call vs_set(vst, base + 3, gcv_put(vs_get(vst, base + 3), 0, vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+               out = rt_call("agent-run", vs_get(vst, base + 3))
+            end if
+            out = vs_get(vst, base + 2)
+         end if
+       end block
+    case (B_AGENTPOP)
+       ! (clotran-agent-pop! a): the next queued action, [f args], or nil
+       ! -- and then the agent is not running, in the same swap, so a
+       ! send arriving after sees it and starts a new drain
+       block
+         type(gc_value) :: ag, m0, q, rest
+         integer :: ab, k
+         ag = strip_meta(gcv_nth(args, 0))
+         out = gc_nil()
+         call vs_set(vst, base + 2, ag)
+         ab = vs_enter(vst, 4)
+         call vs_set(vst, ab + 4, gc_nil())
+         do
+            m0 = gc_slot(vs_get(vst, base + 2), 4)
+            call vs_set(vst, ab + 1, m0)
+            if (.not. gca_is(m0)) exit
+            q = gca_get(vs_get(vst, ab + 1), gc_key("queue", [vs_get(vst, ab + 1)]))
+            call vs_set(vst, ab + 2, q)
+            if (gcv_is(q)) then
+               if (gcv_count(q) == 0) call vs_set(vst, ab + 2, gc_nil())
+            else
+               call vs_set(vst, ab + 2, gc_nil())
+            end if
+            if (tag_of(vs_get(vst, ab + 2)) == GCT_NIL) then
+               call vs_set(vst, ab + 3, gca_assoc(vs_get(vst, ab + 1), gc_key("running", [vs_get(vst, ab + 1)]), &
+                    gc_bool(.false.), [vs_get(vst, ab + 1)]))
+               call vs_set(vst, ab + 4, gc_nil())
+               if (gc_cell_cas(vs_get(vst, base + 2), 4, m0, vs_get(vst, ab + 3))) exit
+            else
+               call vs_set(vst, ab + 4, gcv_nth(vs_get(vst, ab + 2), 0))
+               rest = gcv_empty([vs_get(vst, ab + 1), vs_get(vst, ab + 2), vs_get(vst, ab + 4)])
+               call vs_set(vst, ab + 3, rest)
+               do k = 1, gcv_count(vs_get(vst, ab + 2)) - 1
+                  rest = gcv_conj(vs_get(vst, ab + 3), gcv_nth(vs_get(vst, ab + 2), k), &
+                       [vs_get(vst, ab + 1), vs_get(vst, ab + 2), vs_get(vst, ab + 3), vs_get(vst, ab + 4)])
+                  call vs_set(vst, ab + 3, rest)
+               end do
+               call vs_set(vst, ab + 3, gca_assoc(vs_get(vst, ab + 1), gc_key("queue", [vs_get(vst, ab + 1), vs_get(vst, ab + 3), vs_get(vst, ab + 4)]), &
+                    vs_get(vst, ab + 3), [vs_get(vst, ab + 1), vs_get(vst, ab + 3), vs_get(vst, ab + 4)]))
+               if (gc_cell_cas(vs_get(vst, base + 2), 4, m0, vs_get(vst, ab + 3))) exit
+            end if
+         end do
+         out = vs_get(vst, ab + 4)
+         call vs_leave(vst, ab)
+       end block
+    case (B_AGENTRUN1)
+       ! (clotran-agent-run1 a f args): ONE action, on the agent's thread
+       ! (clotran.rt/agent-drain). An action that throws records the
+       ! error, calls the handler if there is one, and under :fail
+       ! leaves the agent failed with its old value; a FAILED agent's
+       ! queued actions are dropped, quietly -- the drain goes on to
+       ! empty the queue, so the agent is not left marked running.
        block
          type(gc_value) :: ag, fargs, res, hnd, prior
          integer :: j
@@ -11772,8 +11972,7 @@ contains
          if (gc_kind(ag) /= OBJ_ATOM) then
             call fail("dispatch: not an agent")
          else if (prior%tag /= GCT_NIL) then
-            call raise_class("RuntimeException", &
-                 "Agent is failed, needs restart", [vs_get(vst, base + 1)])
+            continue
          else
             call vs_set(vst, base + 2, ag)
             fargs = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
@@ -11791,11 +11990,9 @@ contains
                  call vs_set(vst, base + 3, fargs)
               end do
             end block
-            ! The action runs HERE, synchronously (DEVIATIONS 29), where
-            ! Clojure runs it on a pool thread: binding-conveyor-fn
-            ! installs the sender's frame, *agent* bound, and never puts
-            ! the old one back -- so this thread's frame is kept aside and
-            ! restored, as if the action had run elsewhere.
+            ! binding-conveyor-fn installs the sender's frame, *agent*
+            ! bound, and never puts the old one back -- so this thread's
+            ! frame is kept aside and restored around the action.
             call vs_set(vst, base + 4, gc_bindings_get())
             res = apply(gcv_nth(args, 1), vs_get(vst, base + 3))
             if (tctx%has_error) then
@@ -11829,7 +12026,11 @@ contains
                     gc_key("fail", [vs_get(vst, base + 1)]))) &
                     call gc_set_slot(vs_get(vst, base + 2), 5, gc_nil())
             else
+               ! the new state, and the agent's watches, as Agent.setState
+               ! notifies them
+               call vs_set(vst, base + 3, gc_slot(vs_get(vst, base + 2), 1))
                call gc_set_slot(vs_get(vst, base + 2), 1, res)
+               call notify_watches(vs_get(vst, base + 2), vs_get(vst, base + 3), res, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
             end if
             call gc_bindings_set(vs_get(vst, base + 4))
             out = vs_get(vst, base + 2)
@@ -14249,6 +14450,88 @@ contains
     call gcp_str(fn, .true., s=t)
     call fail("not a function: " // t)
   end subroutine not_a_function
+
+  ! The transaction lock, made once (DEVIATIONS 10).
+  subroutine tx_lock_init()
+    logical :: ok
+    call gc_state_lock()
+    if (.not. tx_lk_made) then
+       ok = th_lock_init(tx_lk)
+       tx_lk_made = .true.
+    end if
+    call gc_state_unlock()
+  end subroutine tx_lock_init
+
+  ! A ref's value as this thread's transaction sees it: the log's, if
+  ! the transaction wrote it, else the committed one.
+  function tx_value(r) result(v)
+    type(eval_ctx), pointer :: tctx
+    type(gc_value), intent(in) :: r
+    type(gc_value) :: v, lg
+    tctx => ctx_self()
+    v = gc_cell_get(r, 1)
+    if (tctx%tx_depth == 0) return
+    if (.not. gc_root_live(tctx%tx_root)) return
+    lg = gc_root_get(tctx%tx_root)
+    if (.not. gca_is(lg)) return
+    if (gca_contains(lg, r)) v = gca_get(lg, r)
+  end function tx_value
+
+  ! A write into this thread's transaction log.
+  subroutine tx_log(r, v)
+    type(gc_stack), pointer :: vst
+    type(eval_ctx), pointer :: tctx
+    type(gc_value), intent(in) :: r, v
+    type(gc_value) :: lg
+    integer :: base
+    tctx => ctx_self()
+    vst => gc_my_stack()
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, r)
+    call vs_set(vst, base + 2, v)
+    lg = gc_nil()
+    if (gc_root_live(tctx%tx_root)) lg = gc_root_get(tctx%tx_root)
+    if (.not. gca_is(lg)) lg = gca_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    lg = gca_assoc(lg, vs_get(vst, base + 1), vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 2), lg])
+    call gc_global_keep(tctx%tx_root, lg)
+    call vs_leave(vst, base)
+  end subroutine tx_log
+
+  ! The commit: every ref in the log validated first -- a refusal fails
+  ! the whole transaction, nothing written -- then each set, under the
+  ! state lock, and its watches run with the old and new values.
+  recursive subroutine tx_commit()
+    type(gc_stack), pointer :: vst
+    type(eval_ctx), pointer :: tctx
+    type(gc_value) :: lg
+    type(gc_value), allocatable :: ks(:), vs(:)
+    integer :: base, i
+    tctx => ctx_self()
+    vst => gc_my_stack()
+    if (.not. gc_root_live(tctx%tx_root)) return
+    lg = gc_root_get(tctx%tx_root)
+    if (.not. gca_is(lg)) return
+    if (gca_count(lg) == 0) return
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, lg)
+    call gca_entries(vs_get(vst, base + 1), ks, vs)
+    do i = 1, size(ks)
+       if (.not. validate_ref(ks(i), ref_fn_get(ks(i), "validator", [vs_get(vst, base + 1)]), vs(i), &
+            [vs_get(vst, base + 1)])) then
+          call vs_leave(vst, base)
+          return
+       end if
+    end do
+    do i = 1, size(ks)
+       if (tctx%has_error) exit
+       call vs_set(vst, base + 2, gc_cell_get(ks(i), 1))
+       call gc_state_lock()
+       call gc_set_slot(ks(i), 1, vs(i))
+       call gc_state_unlock()
+       call notify_watches(ks(i), vs_get(vst, base + 2), vs(i), [vs_get(vst, base + 1)])
+    end do
+    call vs_leave(vst, base)
+  end subroutine tx_commit
 
   ! Clojure's truthiness: everything except nil and false.
   ! The type of a value, as a keyword. Everything else that asks

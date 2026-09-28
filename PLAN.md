@@ -1468,6 +1468,15 @@ f. *The baton comes off interpreter code.* Tested by running the derived
    the shared lists while the thread's own dead waited, which doubled the
    collections; drawing on pending first fixed it.
 
+**Agents and STM landed 2026-09-28** (feat/threads): an agent's
+actions run in order on a thread of the agent's own, started when it
+has work and gone when it has none (DEVIATIONS 29 resolved); `dosync`
+is a transaction with a per-thread log and a commit, transactions
+serialized under one lock -- a valid STM schedule, no retries, no
+history (DEVIATIONS 10 resolved for refs). Not done: a thread pool for
+agents, `*agent*` bound during an action, nested sends held until the
+action ends.
+
 **Not in this step**: a concurrent collector (the world stops for each
 collection), and a compacting one (objects never move, as now).
 

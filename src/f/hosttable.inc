@@ -22,7 +22,7 @@
        HK_NAN = -5, HK_NIL = -6, HK_EMPTYMAP = -7, HK_SPECIALS = -8, HK_TYPE = -9, &
        HK_TRUE = -10, HK_FALSE = -11, HK_LINEBOX = -12, HK_SELFKEY = -13
 
-  type(hm), parameter :: HOST_STATICS_1(92) = [ &
+  type(hm), parameter :: HOST_STATICS_1(93) = [ &
   ! PersistentList.creator is a static IFn that builds a list from its arguments.
        hm("clojure.lang.PersistentList", "creator", B_LIST, "list"), &
   ! core.clj's own make-array, aget, aset and the aset-int family are
@@ -89,6 +89,8 @@
   ! The clock, so `time` works. ClojureScript has system-time, so this is language.
        hm("java.lang.System", "nanoTime", B_NANOTIME, "clotran-nano-time"), &
        hm("java.lang.System", "currentTimeMillis", B_MILLIS, "clotran-current-time-millis"), &
+  ! Thread/sleep is what every example writes; the same wait as clotran.thread/sleep
+       hm("java.lang.Thread", "sleep", B_SLEEP, "clotran-sleep"), &
        hm("java.lang.System", "identityHashCode", B_IDHASH, "clotran-identity-hash"), &
        hm("clojure.lang.Numbers", "add", B_ADD, "+"), &
        hm("clojure.lang.Numbers", "addP", B_PADD, "+'"), &
@@ -171,9 +173,9 @@
        hm("clojure.lang.LongRange", "create", B_RANGE, "range"), &
        hm("java.util.regex.Matcher", "quoteReplacement", B_QUOTEREPL, "re-quote-replacement"), &
        hm("java.util.regex.Pattern", "compile", B_RE_COMPILE, "re-pattern"), &
-  ! dosync with no transaction calls the thunk; nothing is ever running one. DEVIATIONS.md 11.
+  ! dosync: a serialized transaction with a log (B_RUNTX, DEVIATIONS 10)
        hm("clojure.lang.LockingTransaction", "runInTransaction", B_RUNTX, "clotran-run-tx"), &
-       hm("clojure.lang.LockingTransaction", "isRunning", B_ALWAYS_FALSE, "clotran-false"), &
+       hm("clojure.lang.LockingTransaction", "isRunning", B_TXRUNNING, "clotran-tx-running"), &
        hm("clojure.lang.Namespace", "find", B_FINDNS, "find-ns"), &
        hm("clojure.lang.Namespace", "findOrCreate", B_NSCREATE, "create-ns"), &
        hm("clojure.lang.Var", "pushThreadBindings", B_PUSHTB, "push-thread-bindings"), &
@@ -406,9 +408,9 @@
        hm("clojure.lang.Numbers", "longs", B_IDENTITY, "identity"), &
        hm("clojure.lang.Numbers", "doubles", B_IDENTITY, "identity"), &
        hm("clojure.lang.Util", "arrayTypeToSymbol", B_ARRAYTYPESYM, "clotran-array-type-symbol") ]
-  type(hm), parameter :: HOST_STATICS(315) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
+  type(hm), parameter :: HOST_STATICS(316) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
-  type(hm), parameter :: HOST_METHODS_1(91) = [ &
+  type(hm), parameter :: HOST_METHODS_1(97) = [ &
   ! Instance members. The target becomes the first argument, which is all
   ! an instance method is: (.withMeta x m) calls with-meta on x and m.
        hm("", "meta", B_META, "meta"), &
@@ -520,7 +522,14 @@
        hm("", "alterMeta", B_ALTERMETA, "clotran-alter-meta"), &
        hm("", "resetMeta", B_RESETMETA, "clotran-reset-meta"), &
        hm("", "setMeta", B_RESETMETA, "clotran-reset-meta"), &
-       hm("", "set", B_SETVAL, "clotran-set-val") ]
+       hm("", "set", B_SETVAL, "clotran-set-val"), &
+  ! a Ref's transaction members (DEVIATIONS 10): touch behind ensure, and the history a serialized STM never keeps
+       hm("", "touch", B_TOUCH, "clotran-touch"), &
+       hm("", "getHistoryCount", B_REFHISTCOUNT, "clotran-ref-history-count"), &
+       hm("", "getMinHistory", B_REFMINHIST, "clotran-ref-min-history"), &
+       hm("", "getMaxHistory", B_REFMAXHIST, "clotran-ref-max-history"), &
+       hm("", "setMinHistory", B_REFSETHIST, "clotran-ref-set-history"), &
+       hm("", "setMaxHistory", B_REFSETHIST, "clotran-ref-set-history") ]
   type(hm), parameter :: HOST_METHODS_2(79) = [ &
        hm("", "reset", B_SETVAL, "clotran-set-val"), &
        hm("", "bindRoot", B_BINDROOT, "clotran-bind-root"), &
@@ -610,4 +619,4 @@
        hm("", "isCancelled", B_TASKCANCELLED, "clotran-task-cancelled"), &
        hm("", "cancel", B_TASKCANCEL, "clotran-task-cancel"), &
        hm("", "availableProcessors", B_NPROCS, "clotran-processors") ]
-  type(hm), parameter :: HOST_METHODS(170) = [HOST_METHODS_1, HOST_METHODS_2]
+  type(hm), parameter :: HOST_METHODS(176) = [HOST_METHODS_1, HOST_METHODS_2]

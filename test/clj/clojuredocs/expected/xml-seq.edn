@@ -1,1 +1,1 @@
-{:timeout false, :lines {"xml-seq#example0" {0 "!error"}, "xml-seq#example1" {0 "!error"}, "xml-seq#example2" {0 "nil", 1 "nil", 2 "#var", 3 "!error"}}}
+{:timeout false, :lines {"xml-seq#example0" {0 "!error"}, "xml-seq#example1" {0 "!error"}, "xml-seq#example2" {0 "ok", 1 "ok", 2 "ok", 3 "!error"}}}

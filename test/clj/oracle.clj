@@ -2668,3 +2668,6 @@
 (defrecord OracleMP [a b])
 
 [(map->OracleMP {:a 1 :b 2 :z 9}) (OracleMP/create (with-meta {:a 1 :b 2} {:m 1})) (meta (with-meta {:a 1} nil)) (str (class (with-meta {:a 1} nil))) (instance? clojure.lang.MapEquivalence {}) (instance? clojure.lang.MapEquivalence (sorted-map)) (instance? clojure.lang.MapEquivalence (->OracleMP 1 2)) [((transient {:a 1}) :a) (:a (transient {:a 1})) ((transient #{:a}) :b 2) (get (transient #{:a}) :a)]]
+
+[(let [r (ref 0)] (dosync (alter r inc) (alter r inc)) @r) (try (alter (ref 0) inc) (catch IllegalStateException e :no-tx)) (try (ref-set (ref 0) 5) (catch IllegalStateException e :no-tx)) (try (dosync (io! 1)) (catch IllegalStateException e :io-in-tx)) (let [r (ref 1)] (try (dosync (ref-set r 5) (throw (ex-info "x" {}))) (catch Exception e @r))) (let [r (ref 1)] (dosync (ref-set r 5) [@r (ensure r)])) (let [r (ref 1) w (atom [])] (add-watch r :k (fn [k _ o n] (swap! w conj [o n]))) (dosync (alter r + 10) (commute r * 2)) [@r @w]) (let [r (ref 1 :validator pos?)] [(try (dosync (ref-set r -1)) (catch IllegalStateException e :invalid)) @r]) (let [a (ref 100) b (ref 0)] (dosync (alter a - 30) (alter b + 30)) [@a @b]) (ref-history-count (ref 1)) (ref-min-history (ref 1)) (ref-max-history (ref 1))]
+

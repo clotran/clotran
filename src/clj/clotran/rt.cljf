@@ -8,7 +8,10 @@
   through rows in hosttable.inc that call the vars named here (Eval.f90
   rt_call), and this file loads the first time one is reached. A
   deftype's fields cannot be set! here (DEVIATIONS 20), so each mutable
-  one holds an atom.")
+  one holds an atom."
+  ;; core.clj has its own (deftype Eduction ..) and this one replaces it,
+  ;; which Clojure would warn about on every load
+  (:refer-clojure :exclude [->Eduction]))
 
 ;;; ---- iterators ------------------------------------------------------
 
@@ -140,6 +143,23 @@
                    ret))
                (f))))
     ([e f init] (.reduce e f init))))
+
+;;; ---- agents -----------------------------------------------------------
+;; An agent's actions run on a thread of the agent's own, in order, one
+;; at a time, as Agent.dispatch's executor runs them: send queues the
+;; action (Eval.f90, B_AGENTDISPATCH) and, if none is running, starts
+;; agent-run, whose thread drains the queue until clotran-agent-pop!
+;; answers nil -- which also marks the agent not running, in one step.
+
+(defn agent-drain [a]
+  (loop []
+    (when-let [act (clotran-agent-pop! a)]
+      (clotran-agent-run1 a (nth act 0) (nth act 1))
+      (recur))))
+
+(defn agent-run [a]
+  (future (agent-drain a))
+  nil)
 
 ;;; ---- small members the language suite named ---------------------------
 

@@ -29,7 +29,7 @@ Categories:
 | 7 | Recursion depth is ~600 frames, against Clojure's ~11,200 | host | `src/f/Eval.f90` |
 | 8 | RESOLVED -- multimethods dispatch with `isa?` and preferences | -- | `src/clj/clotran/multifn.cljf` |
 | 9 | RESOLVED -- sorted collections | -- | `src/f/Assoc.f90` |
-| 10 | Refs are mutable boxes; `set!` of an unbound Var sets its root | temporary | `src/f/Eval.f90` |
+| 10 | RESOLVED for refs -- transactions, serialized; `set!` of an unbound Var sets its root | temporary | `src/f/Eval.f90` |
 | 11 | RESOLVED -- transient maps and sets are boxes mutated in place; vectors are real transients | -- | `src/f/Eval.f90` |
 | 12 | Three JVM-only libs are skipped by name, and not vendored | host | `src/f/Eval.f90` |
 | 13 | Protocol dispatch is uncached | host | `src/f/GC.f90` |
@@ -279,12 +279,27 @@ comparator is called through a hook Eval supplies, since ordering
 may run a Clojure fn; with none it is Clojure's `compare`, and keys
 it cannot order throw ClassCastException as on the JVM.
 
-## 10. Refs are mutable boxes, and `set!` of an unbound Var sets its root
+## 10. RESOLVED -- refs are transactional; `set!` of an unbound Var still sets its root
 
-`(ref x)` builds an atom: no transaction, no retry, no isolation.
-`dosync` calls its thunk. Single-threaded that is indistinguishable
-from the real thing; with threads it is not, which is why this is
-**temporary**.
+**RESOLVED for refs 2026-09-28** (feat/threads). `dosync` is a
+transaction: `alter`, `commute` and `ref-set` write a per-transaction
+log (Eval.f90, `tx_log`), a `deref` inside the transaction reads it
+(`tx_value`), and the commit (`tx_commit`) validates every written ref
+first -- one refusal and nothing is written -- then sets each and runs
+its watches with the old and new values. An exception discards the
+log. `alter` or `ref-set` outside a transaction is Clojure's
+IllegalStateException "No transaction running"; `io!` inside one throws,
+since `LockingTransaction/isRunning` answers. A `dosync` inside a
+`dosync` is the same transaction.
+
+What is NOT the JVM's: transactions are SERIALIZED under one lock
+(`tx_lk`) rather than run optimistically with retries. Every schedule
+this produces is a serial one, which is exactly what STM guarantees,
+so no program can tell the difference by its values; what differs is
+throughput under contention (none, here) and the history that retries
+produce: `ref-history-count` is always 0, `ref-min-history` 0,
+`ref-max-history` 10. `commute` is `alter` under serialization, which
+is one of the orders commute permits.
 
 Dynamic bindings are no longer part of this entry: since PLAN.md step
 14f each thread has its own, as `Var.dvals` is a `ThreadLocal` -- a
@@ -992,39 +1007,23 @@ superclass method to call through to.
 this means giving clotran real classes, which is the same work
 deviation 4 names.
 
-## 29. An agent's action runs on the calling thread, before `send` returns
+## 29. RESOLVED -- an agent's actions run on a thread of the agent's own
 
-Clojure's `send` queues an action onto a thread pool and returns
-immediately; the agent's value changes some time later, and `await`
-blocks until the queue drains. clotran has one thread, so `.dispatch`
-runs the action on the spot and `send` returns an agent whose value has
-already changed.
+**RESOLVED 2026-09-28** (feat/threads). `send` and `send-off` queue the
+action on the agent (`"queue"` and `"running"` in its fns map, replaced
+by compare-and-swap) and, if no thread is draining it, start one
+(`clotran.rt/agent-run`, a future); the thread runs the queued actions
+in order, one at a time, each with the sender's binding frame and the
+validator, watches, error handler and `:fail`/`:continue` modes as
+before (`clotran-agent-run1`), and stops when the queue is empty -- in
+the same swap that marks the agent not running, so a later `send`
+starts a new drain. `send` returns at once, as Agent.dispatch does;
+`await` and `await-for` wait through core.clj's own latch action.
 
-Everything built on that is real: the error mode (`:fail` or
-`:continue`), the error handler, `agent-error`, `restart-agent` and
-validators all behave as Clojure describes them. What differs is *when*:
-
-    (send a slow-fn)
-    @a          ;; clj      the OLD value, for a while
-                ;; clotran  the new one, always
-
-    (await a)   ;; clj      blocks
-                ;; clotran  returns at once, there is nothing in flight
-
-`await` is written around a `CountDownLatch`, which is here a plain
-counter for the same reason: the count is already zero by the time
-anything waits on it.
-
-The difference is visible in exactly one place a single-threaded program
-can see it -- an action that throws surfaces its exception at the `send`
-call rather than on the agent's own thread. `send` still returns the
-agent rather than rethrowing, so the failure is observed through
-`agent-error` as Clojure intends.
-
-**Removal**: threads. This is the same seam as deviation 10 (refs are
-mutable boxes) and 11 (transients are the persistent collections) --
-every one of them is single-threadedness showing through, and none of
-them can go until Fortran here has somewhere to put a second thread.
+Not the JVM's: there is no thread pool -- a drain is a thread while an
+agent has work and none when it has not; `send` and `send-off` are the
+same; `*agent*` is not bound during an action, and a `send` made inside
+an action is queued at once rather than held until the action ends.
 
 ## 30. RESOLVED -- BigDecimal, except for rounding
 

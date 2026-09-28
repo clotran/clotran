@@ -347,8 +347,7 @@ design.
 | debugger | steps count calls, not lines, since a call is the event the executor has; one level, so a break inside the handler is a snapshot; no socket. What it does is under "What works" |
 | `BigDecimal` | real: `1M`, scale kept, `with-precision` and all eight rounding modes. `(/ 1M 3)` ANSWERS at decimal128 rather than throwing, as MATLAB, Octave and Julia do (DEVIATIONS 43) |
 | mutable deftype fields | `(set! afield v)` is refused, loudly; DEVIATIONS 20 |
-| `tap>`, agents that run apart | queues; an agent's action runs at `send`, on the one thread there is |
-| futures | run on the one OS thread, at creation until they first block; a wait under a `map` or `reduce` callback cannot park, and a wait nothing can satisfy is an error, not a hang; DEVIATIONS 38 |
+| threads | a future runs on a thread of its own beside its maker (PLAN.md 14f); an agent's actions run in order on a thread of the agent's own, started when it has work; `dosync` is a transaction with a log and a commit, transactions serialized under one lock (a valid schedule, no retries; DEVIATIONS 10); a wait nothing can satisfy is an error, not a hang (DEVIATIONS 38) |
 | the five JVM-only sibling libs | bytecode generation; see `src/clj/clojure/PROVENANCE.md` |
 | regex | ICU over UTF-8; its `\w` and `(?i)` are Unicode where Java's are ASCII |
 | `clojure.spec.alpha` | vendored and consulted before every macro expansion, as the Compiler does; `s/check-asserts` cannot be turned on (DEVIATIONS 42) |

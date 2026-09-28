@@ -1,1 +1,1 @@
-{:timeout false, :lines {"chunk#example0" {0 "(32 33 34 35 36 37 38 39 40 41)", 1 "(32 33 34 35 36 37 38 39 40 41)"}, "chunk#example1" {0 "#var", 1 "!error", 2 "#var", 3 "nil ;;out \"0\\n1\\n2\\n\"", 4 "nil", 5 "nil", 6 "nil ;;out \"3\\n4\\n5\\n\""}}}
+{:timeout false, :lines {"chunk#example0" {0 "(32 33 34 35 36 37 38 39 40 41)", 1 "(32 33 34 35 36 37 38 39 40 41)"}, "chunk#example1" {0 "ok", 1 "!error", 2 "ok", 3 "ok", 4 "ok", 5 "ok", 6 "ok"}}}

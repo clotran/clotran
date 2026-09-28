@@ -830,9 +830,12 @@
 
 ;;; ---- agents, validators and latches ------------------------------
 ;; core.clj's `agent` sets an error mode on its very first line, so
-;; nothing about agents worked at all. Dispatch here is SYNCHRONOUS --
-;; the action runs before send returns -- which is DEVIATIONS 29; the
-;; error bookkeeping around it is Clojure's. Values from `clj`.
+;; nothing about agents worked at all. An action runs on the agent's
+;; own thread (DEVIATIONS 29 resolved), so a check waits with `await`,
+;; or `await-for` where the agent is about to fail (await on a failed
+;; agent is Clojure's error). Values from `clj`. These live here and
+;; not in oracle.clj because a `send` keeps clj's agent pool alive and
+;; scripts/oracle would never see clj exit.
 
 (let [a (agent 1)]
   (check "a new agent fails by default" (error-mode a) :fail)
@@ -845,6 +848,7 @@
 
 (let [b (agent 1)]
   (send b (fn [x] (throw (Exception. "boom"))))
+  (await-for 500 b)
   (check "a failed agent keeps its value" @b 1)
   (check "and records the error"          (.getMessage (agent-error b)) "boom")
   (check "and refuses more work"
@@ -859,10 +863,27 @@
 (let [c (agent 1 :error-handler (fn [ag e] nil))]
   (check "a handler means continue" (error-mode c) :continue)
   (send c (fn [x] (throw (Exception. "oops"))))
-  (check "a continuing agent is not failed" [@c (agent-error c)] [1 nil])
   (send c inc) (await c)
+  (check "a continuing agent is not failed" (agent-error c) nil)
   (check "and takes more work"      @c 2))
 
+(let [d (agent 0 :error-mode :continue)]
+  (send d (fn [_] (throw (ex-info "boom" {}))))
+  (send d + 5) (await d)
+  (check ":error-mode :continue skips the failure" [@d (agent-error d)] [5 nil]))
+
+;; Actions run in send order, one at a time, and watches see each one
+;; -- Agent.doRun notifies them whether or not the state changed, so
+;; await's own latch action fires them too (clj: [11 [1 11 11]]).
+(let [e (agent 0) seen (atom [])]
+  (add-watch e :w (fn [_ _ o n] (swap! seen conj n)))
+  (send e inc) (send e + 10) (await e)
+  (check "watches fire per action, in order" [@e @seen] [11 [1 11 11]]))
+
+(let [g (agent [])]
+  (dotimes [i 20] (send g conj i))
+  (await g)
+  (check "twenty sends land in order" @g (vec (range 20))))
 
 ;; A latch is a counter when there is one thread.
 

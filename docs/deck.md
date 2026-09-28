@@ -73,7 +73,8 @@ Everything is weighed against these four. The pure Clojure language is reproduce
 - `scripts/bind-fortran` writes the binding from the library's own signatures
 - `examples/chemsol.cljf` replaces a Fortran main program: same output, byte for byte
 - Arrays of every primitive kind, `aget`/`aset` checked value by value against Clojure
-- Missing: several threads running Clojure at once (next major step), sockets
+- Futures on their own threads; agents on theirs; `dosync` a real transaction, serialized
+- Missing: sockets, parallel marking in the collector
 
 ## B. Legacy solvers -- today
 
@@ -157,7 +158,7 @@ Everything is weighed against these four. The pure Clojure language is reproduce
 ## The road
 
 1. **Tests** -- clojuredocs to 100% of portable examples: deviations, performance, the long tail
-2. **Threads** -- plain Clojure on several threads; STM, agents, `pmap` as Clojure means them
+2. **Threads** -- futures, agents and transactions run as Clojure means them; next, the collector's pauses with many threads
 3. **Everything works** -- compiler node kinds, pure-Fortran tier, binaries, sockets, embedding
 
 ## Why Fortran as the host

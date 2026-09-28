@@ -117,11 +117,13 @@ no copy and no bridge.
   they are Clojure's -- 2880 of 2880 assertions in the derived language
   suite, 94.8% of clojuredocs.org's portable examples agreeing with
   real Clojure.
-- Threads: a future is a real OS thread, but one **baton** lets one
-  thread run Clojure code at a time (PLAN.md step 11). Running plain
-  Clojure on several threads at once is step 14 and is the next major
-  work after the test suites. STM: refs are boxes today
-  (DEVIATIONS 10); real STM comes with step 14.
+- Threads: a future runs on a thread of its own beside its maker
+  (PLAN.md 14f, 2026-09-26); an agent's actions run in order on a
+  thread of the agent's own; `dosync` is a transaction -- a log, a
+  commit that validates then writes, watches notified -- with
+  transactions serialized under one lock, which is a valid STM
+  schedule without the retries (DEVIATIONS 10). Not yet: a thread
+  pool for agents, parallel marking in the collector.
 - Not there: sockets and streaming network input.
 
 ### B. Dynamic scripting for legacy solvers
@@ -297,10 +299,10 @@ a pass rate is over assertions that executed.
 1. **The test suites.** The clojuredocs suite to 100% of portable
    examples: known deviations, then performance (constant-space lazy
    walks, `count` of a range in O(1)), then the long tail.
-2. **Threads.** Plain Clojure on several threads at once (PLAN.md
-   step 14): per-thread state into the context, a heap that does not
-   move under a reader, the baton removed. STM, agents and `pmap` then
-   mean what they mean in Clojure.
+2. **Threads.** Futures, agents and transactions run as Clojure means
+   them (PLAN.md step 14, landed 2026-09-26 and 2026-09-28). What is
+   left is speed: parallel marking in the collector, a thread pool
+   for agents, and the collector's pauses measured with many threads.
 3. **Everything else works.** The compiler's remaining node kinds, the
    pure-Fortran tier, standalone binaries, sockets, an embedding
    example -- each weighed against the four scenarios.
