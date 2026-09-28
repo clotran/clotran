@@ -874,16 +874,70 @@
 
 ;; Actions run in send order, one at a time, and watches see each one
 ;; -- Agent.doRun notifies them whether or not the state changed, so
-;; await's own latch action fires them too (clj: [11 [1 11 11]]).
+;; await's own latch action fires them too, but only after the latch
+;; has let await return, so the two we can count on are the first two.
 (let [e (agent 0) seen (atom [])]
   (add-watch e :w (fn [_ _ o n] (swap! seen conj n)))
   (send e inc) (send e + 10) (await e)
-  (check "watches fire per action, in order" [@e @seen] [11 [1 11 11]]))
+  (check "watches fire per action, in order" [@e (subvec @seen 0 2)] [11 [1 11]]))
 
 (let [g (agent [])]
   (dotimes [i 20] (send g conj i))
   (await g)
   (check "twenty sends land in order" @g (vec (range 20))))
+
+;; Agent.dispatchAction: a send made INSIDE an action is held until the
+;; action ends -- released when it succeeds, dropped when it throws --
+;; and one made inside a transaction is held until the commit and
+;; dropped by an abort. An error handler's own sends go out at once.
+;; Values from clj -M on the same forms, with (shutdown-agents) after.
+(defn- wait-fail [a] (loop [i 0] (when (and (nil? (agent-error a)) (< i 300)) (Thread/sleep 10) (recur (inc i)))))
+(let [a (agent 0) b (agent 0)]
+  (send a (fn [x] (send b inc) (throw (ex-info "x" {}))))
+  (wait-fail a) (Thread/sleep 100)
+  (check "a send from an action that throws is dropped" [@b (some? (agent-error a))] [0 true]))
+(let [a (agent 0) b (agent 0)]
+  (send a (fn [x] (send b inc) (inc x)))
+  (await a) (await b)
+  (check "a send from an action that succeeds goes out after it" [@a @b] [1 1]))
+(let [a (agent 0) inside (atom nil)]
+  (dosync (send a inc) (Thread/sleep 50) (reset! inside @a))
+  (await a)
+  (check "a send inside dosync waits for the commit" [@inside @a] [0 1]))
+(let [a (agent 0)]
+  (try (dosync (send a inc) (throw (ex-info "abort" {}))) (catch Exception e nil))
+  (Thread/sleep 100)
+  (check "and an aborted transaction drops it" @a 0))
+(let [a (agent 0) b (agent 0)]
+  (let [c (agent 0 :error-handler (fn [ag e] (send b + 10)))]
+    (send c (fn [_] (throw (ex-info "y" {}))))
+    (Thread/sleep 200) (await b)
+    (check "an error handler's send goes out at once" @b 10)))
+
+;; Agent.restart: the actions queued behind a failure are kept and
+;; resume on restart unless :clear-actions; an agent that has not
+;; failed refuses, and the validator judges the new state first.
+(let [a (agent 0)]
+  (send a (fn [x] (Thread/sleep 200) (throw (ex-info "x" {}))))
+  (send a + 5)
+  (wait-fail a)
+  (restart-agent a 10) (await a)
+  (check "restart resumes the queued actions" @a 15))
+(let [a (agent 0)]
+  (send a (fn [x] (Thread/sleep 200) (throw (ex-info "x" {}))))
+  (send a + 5)
+  (wait-fail a)
+  (restart-agent a 10 :clear-actions true) (await a)
+  (check ":clear-actions drops them" @a 10))
+(check "restart of a working agent refuses"
+       (try (restart-agent (agent 0) 1) (catch RuntimeException e (.getMessage e)))
+       "Agent does not need a restart")
+(let [a (agent 1 :validator pos?)]
+  (send a (fn [_] (throw (ex-info "x" {}))))
+  (wait-fail a)
+  (check "restart validates the new state and keeps the failure"
+         [(try (restart-agent a -1) (catch Exception e (.getMessage e))) (some? (agent-error a)) @a]
+         ["Invalid reference state" true 1]))
 
 ;; A latch is a counter when there is one thread.
 

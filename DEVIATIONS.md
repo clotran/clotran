@@ -1020,10 +1020,21 @@ the same swap that marks the agent not running, so a later `send`
 starts a new drain. `send` returns at once, as Agent.dispatch does;
 `await` and `await-for` wait through core.clj's own latch action.
 
+`*agent*` is bound during an action (core.clj's binding-conveyor-fn
+carries the sender's frame, `*agent*` in it). A `send` made inside an
+action is HELD until the action ends, as Agent.dispatchAction holds it
+in `nested`: released if the action succeeds, dropped if it throws, an
+error handler's own sends going out at once; one made inside `dosync`
+waits for the commit and an abort drops it (LockingTransaction's
+`enqueue`). A failed agent keeps the actions queued behind the
+failure, and `restart-agent` resumes them unless `:clear-actions`,
+refuses an agent that has not failed ("Agent does not need a restart")
+and runs the validator on the new state first, as Agent.restart does.
+
 Not the JVM's: there is no thread pool -- a drain is a thread while an
-agent has work and none when it has not; `send` and `send-off` are the
-same; `*agent*` is not bound during an action, and a `send` made inside
-an action is queued at once rather than held until the action ends.
+agent has work and none when it has not -- and `send` and `send-off`
+are the same, so there is no pool to exhaust; `set-agent-send-executor!`
+and `set-agent-send-off-executor!` are accepted and set nothing.
 
 ## 30. RESOLVED -- BigDecimal, except for rounding
 

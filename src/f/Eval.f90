@@ -512,6 +512,11 @@ module Eval
      ! transaction's log, a map of ref to in-transaction value
      integer :: tx_depth = 0
      type(gc_root) :: tx_root
+     ! sends HELD (Agent.dispatchAction): a vector of [agent action]
+     ! while an action runs on this thread (Agent.nested; nil when none
+     ! does) and another for the open transaction; released when the
+     ! action ends or the transaction commits, dropped when either fails
+     type(gc_root) :: nested_root, tx_sends_root
      ! its value stack, the collector's: one lookup finds both
      type(gc_stack), pointer :: stk => null()
   end type eval_ctx
@@ -4070,6 +4075,134 @@ contains
     t = target
     sleeping = .false.
   end subroutine run_ready_tasks
+
+  ! Agent.dispatchAction: a send inside a transaction is held until the
+  ! commit, one inside an action until the action ends (Agent.nested);
+  ! otherwise the action is queued and a drain started if none runs.
+  recursive subroutine agent_dispatch(ag, act)
+    type(gc_value), intent(in) :: ag, act
+    type(eval_ctx), pointer :: tctx
+    type(gc_value) :: held
+    tctx => ctx_self()
+    held = gc_nil()
+    if (gc_root_live(tctx%nested_root)) held = gc_root_get(tctx%nested_root)
+    if (tctx%tx_depth > 0) then
+       call hold_send(tctx%tx_sends_root, ag, act)
+    else if (gcv_is(held)) then
+       call hold_send(tctx%nested_root, ag, act)
+    else
+       call agent_enqueue(ag, act)
+    end if
+  end subroutine agent_dispatch
+
+  ! [ag act] onto the vector a root holds (a vector from here on)
+  recursive subroutine hold_send(root, ag, act)
+    type(gc_root), intent(inout) :: root
+    type(gc_value), intent(in) :: ag, act
+    type(gc_stack), pointer :: vst
+    type(gc_value) :: v
+    integer :: base
+    vst => gc_my_stack()
+    base = vs_enter(vst, 4)
+    call vs_set(vst, base + 1, ag)
+    call vs_set(vst, base + 2, act)
+    v = gc_nil()
+    if (gc_root_live(root)) v = gc_root_get(root)
+    if (.not. gcv_is(v)) v = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 3, v)
+    v = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+    call vs_set(vst, base + 4, v)
+    v = gcv_conj(vs_get(vst, base + 4), vs_get(vst, base + 1), &
+         [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+    call vs_set(vst, base + 4, v)
+    v = gcv_conj(vs_get(vst, base + 4), vs_get(vst, base + 2), &
+         [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+    call vs_set(vst, base + 4, v)
+    v = gcv_conj(vs_get(vst, base + 3), vs_get(vst, base + 4), &
+         [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+    call gc_global_keep(root, v)
+    call vs_leave(vst, base)
+  end subroutine hold_send
+
+  ! Every held send dispatched, in order, and the root emptied first so
+  ! that a dispatch from here is not held again by the same root
+  recursive subroutine release_sends(root)
+    type(gc_root), intent(inout) :: root
+    type(gc_stack), pointer :: vst
+    type(gc_value) :: held
+    integer :: base, i
+    if (.not. gc_root_live(root)) return
+    held = gc_root_get(root)
+    call gc_global_keep(root, gc_nil())
+    if (.not. gcv_is(held)) return
+    vst => gc_my_stack()
+    base = vs_enter(vst, 1)
+    call vs_set(vst, base + 1, held)
+    do i = 0, gcv_count(vs_get(vst, base + 1)) - 1
+       call agent_dispatch(gcv_nth(gcv_nth(vs_get(vst, base + 1), i), 0), &
+            gcv_nth(gcv_nth(vs_get(vst, base + 1), i), 1))
+    end do
+    call vs_leave(vst, base)
+  end subroutine release_sends
+
+  ! Agent.enqueue: the action (if any) onto the agent's queue and, if no
+  ! drain is running, one started (clotran.rt/agent-run, a thread) --
+  ! both in one compare-and-swap of the fns map. `clear` empties the
+  ! queue instead (restart-agent :clear-actions).
+  recursive subroutine agent_enqueue(ag, act, clear)
+    type(gc_value), intent(in) :: ag
+    type(gc_value), intent(in), optional :: act
+    logical, intent(in), optional :: clear
+    type(gc_stack), pointer :: vst
+    type(gc_value) :: m0, q, r
+    logical :: start, wipe
+    integer :: base, ab
+    wipe = .false.
+    if (present(clear)) wipe = clear
+    vst => gc_my_stack()
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, ag)
+    call vs_set(vst, base + 2, ag)
+    call vs_set(vst, base + 3, gc_nil())
+    if (present(act)) call vs_set(vst, base + 3, act)
+    ab = vs_enter(vst, 3)
+    start = .false.
+    do
+       m0 = gc_slot(vs_get(vst, base + 2), 4)
+       call vs_set(vst, ab + 1, m0)
+       q = gc_nil()
+       start = .true.
+       if (gca_is(m0)) then
+          q = gca_get(vs_get(vst, ab + 1), gc_key("queue", [vs_get(vst, ab + 1)]))
+          start = .not. truthy(gca_get(vs_get(vst, ab + 1), gc_key("running", [vs_get(vst, ab + 1)])))
+       end if
+       if (.not. gcv_is(q) .or. wipe) q = gcv_empty([vs_get(vst, ab + 1)])
+       call vs_set(vst, ab + 2, q)
+       if (present(act)) then
+          q = gcv_conj(vs_get(vst, ab + 2), vs_get(vst, base + 3), [vs_get(vst, ab + 1), vs_get(vst, ab + 2)])
+          call vs_set(vst, ab + 2, q)
+       end if
+       ! nothing to run: no drain
+       if (gcv_count(vs_get(vst, ab + 2)) == 0) start = .false.
+       if (gca_is(vs_get(vst, ab + 1))) then
+          call vs_set(vst, ab + 3, vs_get(vst, ab + 1))
+       else
+          call vs_set(vst, ab + 3, gca_empty([vs_get(vst, ab + 1), vs_get(vst, ab + 2)]))
+       end if
+       call vs_set(vst, ab + 3, gca_assoc(vs_get(vst, ab + 3), gc_key("queue", [vs_get(vst, ab + 2), vs_get(vst, ab + 3)]), &
+            vs_get(vst, ab + 2), [vs_get(vst, ab + 2), vs_get(vst, ab + 3)]))
+       if (start) call vs_set(vst, ab + 3, gca_assoc(vs_get(vst, ab + 3), gc_key("running", [vs_get(vst, ab + 2), vs_get(vst, ab + 3)]), &
+            gc_bool(.true.), [vs_get(vst, ab + 2), vs_get(vst, ab + 3)]))
+       if (gc_cell_cas(vs_get(vst, base + 2), 4, m0, vs_get(vst, ab + 3))) exit
+    end do
+    call vs_leave(vst, ab)
+    if (start) then
+       call vs_set(vst, base + 3, gcv_build(1, [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+       call vs_set(vst, base + 3, gcv_put(vs_get(vst, base + 3), 0, vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+       r = rt_call("agent-run", vs_get(vst, base + 3))
+    end if
+    call vs_leave(vst, base)
+  end subroutine agent_enqueue
 
   ! Every watch on a reference, called with the key, the reference,
   ! the old value and the new one -- IRef.notifyWatches, which runs
@@ -10667,6 +10800,7 @@ contains
             call tx_lock_init()
             ok = th_lock_acquire(tx_lk)
             call gc_global_keep(tctx%tx_root, gca_empty([vs_get(vst, base + 1)]))
+            call gc_global_keep(tctx%tx_sends_root, gc_nil())
          end if
          tctx%tx_depth = tctx%tx_depth + 1
          out = apply(gcv_nth(args, 0), gcv_empty([vs_get(vst, base + 1)]))
@@ -10677,6 +10811,13 @@ contains
             out = vs_get(vst, base + 2)
             call gc_global_keep(tctx%tx_root, gc_nil())
             ok = th_lock_release(tx_lk)
+            ! sends made inside: dispatched after the commit, dropped
+            ! by an abort (LockingTransaction.run)
+            if (tctx%has_error) then
+               call gc_global_keep(tctx%tx_sends_root, gc_nil())
+            else
+               call release_sends(tctx%tx_sends_root)
+            end if
          end if
        end block
     case (B_TOUCH)
@@ -11850,9 +11991,20 @@ contains
        a = strip_meta(gcv_nth(args, 0))
        out = gc_nil()
        if (gc_kind(a) == OBJ_ATOM) then
-          call gc_set_slot(a, 5, gc_nil())
-          if (n >= 2) call gc_set_slot(a, 1, gcv_nth(args, 1))
-          out = gc_slot(a, 1)
+          if (tag_of(gc_slot(a, 5)) == GCT_NIL) then
+             call raise_class("RuntimeException", "Agent does not need a restart", [vs_get(vst, base + 1)])
+          else if (n >= 2 .and. .not. validate_ref(a, ref_fn_get(a, "validator", [vs_get(vst, base + 1)]), &
+               gcv_nth(args, 1), [vs_get(vst, base + 1)])) then
+             continue   ! the validator's refusal stands and the agent stays failed
+          else
+             call gc_set_slot(a, 5, gc_nil())
+             if (n >= 2) call gc_set_slot(a, 1, gcv_nth(args, 1))
+             out = gc_slot(a, 1)
+             ! the actions queued behind the failure were kept (B_AGENTPOP
+             ! stops at a failed agent): :clear-actions drops them, else
+             ! they resume now
+             call agent_enqueue(a, clear=(n >= 3 .and. truthy(gcv_nth(args, 2))))
+          end if
        end if
     case (B_AGENTDISPATCH)
        ! (.dispatch a f args executor): the action is QUEUED on the agent
@@ -11862,9 +12014,7 @@ contains
        ! none is running, clotran.rt/agent-run starts one that drains the
        ! queue (B_AGENTPOP, B_AGENTRUN1). A failed agent refuses at send.
        block
-         type(gc_value) :: ag, act, m0, q, prior
-         logical :: start
-         integer :: ab
+         type(gc_value) :: ag, act, prior
          ag = strip_meta(gcv_nth(args, 0))
          out = ag
          prior = gc_slot(ag, 5)
@@ -11882,38 +12032,7 @@ contains
             call vs_set(vst, base + 4, coll_to_vector(gcv_nth(args, 2), [vs_get(vst, base + 1), vs_get(vst, base + 3)]))
             act = gcv_conj(vs_get(vst, base + 3), vs_get(vst, base + 4), [vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)])
             call vs_set(vst, base + 3, act)
-            ab = vs_enter(vst, 3)
-            start = .false.
-            do
-               m0 = gc_slot(vs_get(vst, base + 2), 4)
-               call vs_set(vst, ab + 1, m0)
-               q = gc_nil()
-               start = .true.
-               if (gca_is(m0)) then
-                  q = gca_get(vs_get(vst, ab + 1), gc_key("queue", [vs_get(vst, ab + 1)]))
-                  start = .not. truthy(gca_get(vs_get(vst, ab + 1), gc_key("running", [vs_get(vst, ab + 1)])))
-               end if
-               if (.not. gcv_is(q)) q = gcv_empty([vs_get(vst, ab + 1)])
-               call vs_set(vst, ab + 2, q)
-               q = gcv_conj(vs_get(vst, ab + 2), vs_get(vst, base + 3), [vs_get(vst, ab + 1), vs_get(vst, ab + 2)])
-               call vs_set(vst, ab + 2, q)
-               if (gca_is(vs_get(vst, ab + 1))) then
-                  call vs_set(vst, ab + 3, vs_get(vst, ab + 1))
-               else
-                  call vs_set(vst, ab + 3, gca_empty([vs_get(vst, ab + 1), vs_get(vst, ab + 2)]))
-               end if
-               call vs_set(vst, ab + 3, gca_assoc(vs_get(vst, ab + 3), gc_key("queue", [vs_get(vst, ab + 2), vs_get(vst, ab + 3)]), &
-                    vs_get(vst, ab + 2), [vs_get(vst, ab + 2), vs_get(vst, ab + 3)]))
-               call vs_set(vst, ab + 3, gca_assoc(vs_get(vst, ab + 3), gc_key("running", [vs_get(vst, ab + 2), vs_get(vst, ab + 3)]), &
-                    gc_bool(.true.), [vs_get(vst, ab + 2), vs_get(vst, ab + 3)]))
-               if (gc_cell_cas(vs_get(vst, base + 2), 4, m0, vs_get(vst, ab + 3))) exit
-            end do
-            call vs_leave(vst, ab)
-            if (start) then
-               call vs_set(vst, base + 3, gcv_build(1, [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
-               call vs_set(vst, base + 3, gcv_put(vs_get(vst, base + 3), 0, vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
-               out = rt_call("agent-run", vs_get(vst, base + 3))
-            end if
+            call agent_dispatch(vs_get(vst, base + 2), vs_get(vst, base + 3))
             out = vs_get(vst, base + 2)
          end if
        end block
@@ -11940,7 +12059,9 @@ contains
             else
                call vs_set(vst, ab + 2, gc_nil())
             end if
-            if (tag_of(vs_get(vst, ab + 2)) == GCT_NIL) then
+            ! a FAILED agent keeps its queue for restart-agent, so the
+            ! drain ends as if it were empty
+            if (tag_of(vs_get(vst, ab + 2)) == GCT_NIL .or. tag_of(gc_slot(vs_get(vst, base + 2), 5)) /= GCT_NIL) then
                call vs_set(vst, ab + 3, gca_assoc(vs_get(vst, ab + 1), gc_key("running", [vs_get(vst, ab + 1)]), &
                     gc_bool(.false.), [vs_get(vst, ab + 1)]))
                call vs_set(vst, ab + 4, gc_nil())
@@ -12000,8 +12121,13 @@ contains
             ! bound, and never puts the old one back -- so this thread's
             ! frame is kept aside and restored around the action.
             call vs_set(vst, base + 4, gc_bindings_get())
+            ! sends made by the action are held (Agent.nested) until it
+            ! ends: released if it succeeds, dropped if it throws -- and
+            ! the error handler's own sends go out at once
+            call gc_global_keep(tctx%nested_root, gcv_empty([vs_get(vst, base + 1)]))
             res = apply(gcv_nth(args, 1), vs_get(vst, base + 3))
             if (tctx%has_error) then
+               call gc_global_keep(tctx%nested_root, gc_nil())
                call gc_set_slot(vs_get(vst, base + 2), 5, thrown_value())
                hnd = ref_fn_get(vs_get(vst, base + 2), "error-handler", [vs_get(vst, base + 1)])
                call gce_clear_error()
@@ -12026,6 +12152,7 @@ contains
                  res, [vs_get(vst, base + 1)])) then
                ! A REJECTED STATE IS AN AGENT ERROR, handled the
                ! same way a thrown action is.
+               call gc_global_keep(tctx%nested_root, gc_nil())
                call gc_set_slot(vs_get(vst, base + 2), 5, thrown_value())
                call gce_clear_error()
                if (.not. gc_equal(gc_slot(vs_get(vst, base + 2), 3), &
@@ -12037,6 +12164,7 @@ contains
                call vs_set(vst, base + 3, gc_slot(vs_get(vst, base + 2), 1))
                call gc_set_slot(vs_get(vst, base + 2), 1, res)
                call notify_watches(vs_get(vst, base + 2), vs_get(vst, base + 3), res, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+               call release_sends(tctx%nested_root)
             end if
             call gc_bindings_set(vs_get(vst, base + 4))
             out = vs_get(vst, base + 2)
