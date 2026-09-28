@@ -66,7 +66,7 @@ module NativeArray
        gcna_extents, gcna_lows, gcna_total, gcna_index, &
        gcna_get_real, gcna_get_int, gcna_get_logical, &
        gcna_set_real, gcna_set_int, gcna_set_logical, gcna_elem_string, &
-       gcna_live_count, gcna_real8_ptr, gcna_int4_ptr, gcna_int8_ptr
+       gcna_live_count, gcna_real8_ptr, gcna_int4_ptr, gcna_int8_ptr, gcna_int1_ptr
 
 contains
 
@@ -103,6 +103,23 @@ contains
        ok = .true.
     end select
   end subroutine gcna_int8_ptr
+
+  ! A byte buffer as it is, for a routine that takes bytes (a codec, a
+  ! protocol, a C library's uint8_t*)
+  subroutine gcna_int1_ptr(handle, p, ok)
+    integer, intent(in) :: handle
+    integer(1), pointer, contiguous, intent(out) :: p(:)
+    logical, intent(out) :: ok
+    ok = .false.
+    p => null()
+    if (.not. gcna_is(handle)) return
+    if (.not. allocated(reg(handle)%buf)) return
+    select type (b => reg(handle)%buf)
+    type is (integer(1))
+       p => b
+       ok = .true.
+    end select
+  end subroutine gcna_int1_ptr
 
   subroutine gcna_int4_ptr(handle, p, ok)
     integer, intent(in) :: handle
@@ -166,6 +183,12 @@ contains
     case ("real4");    allocate(real(4)      :: reg(handle)%buf(total))
     case ("int4");     allocate(integer(4)   :: reg(handle)%buf(total))
     case ("int8");     allocate(integer(8)   :: reg(handle)%buf(total))
+    ! REAL bytes and shorts, one and two bytes an element, as Java's
+    ! byte[] and short[] are: a buffer a binary protocol or a C library
+    ! can take as it is. char2 is Java's char[] -- unsigned 16-bit UTF-16
+    ! units -- held in the same 16 bits and read back unsigned.
+    case ("int1");     allocate(integer(1)   :: reg(handle)%buf(total))
+    case ("int2", "char2"); allocate(integer(2) :: reg(handle)%buf(total))
     case ("logical");  allocate(logical      :: reg(handle)%buf(total))
     case ("complex8"); allocate(complex(dp)  :: reg(handle)%buf(total))
     case ("value")     ! storage is a GC run, held by the caller
@@ -314,6 +337,8 @@ contains
     type is (real(4));     val = real(b(at), dp); ok = .true.
     type is (integer(4));  val = real(b(at), dp); ok = .true.
     type is (integer(8));  val = real(b(at), dp); ok = .true.
+    type is (integer(1));  val = real(b(at), dp); ok = .true.
+    type is (integer(2));  val = real(b(at), dp); ok = .true.
     end select
   end subroutine gcna_get_real
 
@@ -329,6 +354,12 @@ contains
     select type (b => reg(handle)%buf)
     type is (integer(4));  val = int(b(at), 8); ok = .true.
     type is (integer(8));  val = b(at); ok = .true.
+    type is (integer(1));  val = int(b(at), 8); ok = .true.
+    type is (integer(2))
+       val = int(b(at), 8)
+       ! a char[] unit is unsigned
+       if (reg(handle)%elem_kind == "char2" .and. val < 0) val = val + 65536_8
+       ok = .true.
     end select
   end subroutine gcna_get_int
 
@@ -359,6 +390,8 @@ contains
     type is (real(4));    b(at) = real(val, 4); ok = .true.
     type is (integer(4)); b(at) = int(val, 4); ok = .true.
     type is (integer(8)); b(at) = int(val, 8); ok = .true.
+    type is (integer(1)); b(at) = narrow1(int(val, 8)); ok = .true.
+    type is (integer(2)); b(at) = narrow2(int(val, 8)); ok = .true.
     end select
   end subroutine gcna_set_real
 
@@ -378,8 +411,31 @@ contains
     type is (integer(8)); b(at) = int(val, 8); ok = .true.
     type is (real(dp));   b(at) = real(val, dp); ok = .true.
     type is (real(4));    b(at) = real(val, 4); ok = .true.
+    type is (integer(1)); b(at) = narrow1(val); ok = .true.
+    type is (integer(2)); b(at) = narrow2(val); ok = .true.
     end select
   end subroutine gcna_set_int
+
+  ! The low 8 or 16 bits as a signed byte or short, two's complement --
+  ! Java's (byte) and (short). int(val, 1) of a value out of range is
+  ! processor-dependent in Fortran, so the wrap is done first.
+  pure function narrow1(val) result(b)
+    integer(8), intent(in) :: val
+    integer(1) :: b
+    integer(8) :: w
+    w = modulo(val, 256_8)
+    if (w >= 128_8) w = w - 256_8
+    b = int(w, 1)
+  end function narrow1
+
+  pure function narrow2(val) result(b)
+    integer(8), intent(in) :: val
+    integer(2) :: b
+    integer(8) :: w
+    w = modulo(val, 65536_8)
+    if (w >= 32768_8) w = w - 65536_8
+    b = int(w, 2)
+  end function narrow2
 
   subroutine gcna_set_logical(handle, at, val, ok)
     integer, intent(in) :: handle, at
@@ -409,6 +465,8 @@ contains
     type is (real(4));     write(buf, '(G0)') b(at); s = trim(buf)
     type is (integer(4));  write(buf, '(I0)') b(at); s = trim(buf)
     type is (integer(8));  write(buf, '(I0)') b(at); s = trim(buf)
+    type is (integer(1));  write(buf, '(I0)') b(at); s = trim(buf)
+    type is (integer(2));  write(buf, '(I0)') b(at); s = trim(buf)
     type is (logical)
        if (b(at)) then
           s = "true"
@@ -486,6 +544,8 @@ contains
     select type (b => reg(handle)%buf)
     type is (real(dp));    b = 0.0_dp
     type is (real(4));     b = 0.0_4
+    type is (integer(1));  b = 0_1
+    type is (integer(2));  b = 0_2
     type is (integer(4));  b = 0
     type is (integer(8));  b = 0
     type is (logical);     b = .false.

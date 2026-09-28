@@ -273,7 +273,7 @@
     fv = strip_meta(gc_slot(head, 2))
     if (gc_kind(fv) /= OBJ_BUILTIN) return
     id = gc_i1(fv)
-    if (id /= B_AGET .and. id /= B_ASET .and. id /= B_ALENGTH) return
+    if (id /= B_AGET .and. id /= B_ASET .and. id /= B_JASET .and. id /= B_ALENGTH) return
     raw = gcl_first(rawargs)
     base = vs_enter(vst, 4)
     call vs_set(vst, base + 1, kids)

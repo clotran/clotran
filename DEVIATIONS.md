@@ -1405,40 +1405,23 @@ reads it IMMEDIATELY sees an answer Clojure would not have yet.
 **Removal**: the same thing that removes 38 -- real threads. Delivery
 becomes whatever the scheduler does, which is what Clojure's is.
 
-## 45. A short, byte or char array has its storage kind's class, so `bytes?` cannot answer
+## 45. RESOLVED -- a short, byte or char array had its storage kind's class
 
-An array's class is the JVM's name for it -- `[D`, `[J`, `[I`, `[F`,
-`[Z`, `[Ljava.lang.Object;`, one `[` per dimension, so
-`(make-array Integer/TYPE 2 3)` is `[[I` -- and prints as Clojure prints
-it, `double/1`, `int/2` (2026-09-25; it was one class, `array`, for
-every array, and printing one crashed).
-
-The class follows the STORAGE kind, and three element types share
-another's: `short-array` and `byte-array` store `int4`, so they answer
-`[I` where the JVM answers `[S` and `[B`; `char-array` stores values, so
-it answers `[Ljava.lang.Object;` where the JVM answers `[C`. Fortran's
-narrow integer kinds buy nothing here and the values are checked on the
-way in.
-
-The consequence is `bytes?`, which core.clj writes as
-
-    (-> x class .getComponentType (= Byte/TYPE))
-
-so it is FALSE for a byte array here -- a wrong no, never a wrong yes.
-`bytes?` is not in the clojure.core/cljs.core intersection --
-ClojureScript has no byte array -- so this is Java showing through.
-
-**To be removed -- PLAN.md step 15, binary data** (James, 2026-09-26:
-"binary analysis is key to scientific software"). Checked with clj:
-`(bytes? (byte-array [1 0]))` is `true` there, `false` here, and the
-three classes are `[B`, `[S`, `[C` there, `[I`, `[I`,
-`[Ljava.lang.Object;` here. "Narrow integer kinds buy nothing" above
-was wrong for binary data: a byte array read from a file should be one
-byte an element and wrap as a byte does.
-
-**Removal**: give OBJ_ARRAY an element type distinct from its storage
-width, name the class by it, and give classes a component type. `aset`'s
-range checks already know the type; nothing else does.
+**RESOLVED 2026-09-27.** `byte-array`, `short-array` and `char-array`
+are one and two bytes an element -- Fortran's `integer(1)` and
+`integer(2)`, the char array read unsigned -- and are `[B`, `[S` and
+`[C`. A store wraps as the JVM's narrowing does: `(vec (byte-array [1
+200 -129]))` is `[1 -56 127]` on both. What is read back is boxed as
+Java boxes it -- `(class (aget (byte-array 1) 0))` is `java.lang.Byte`
+-- and so are `(byte 1)`, `(short 1)`, `(int 1)` and `(float 1)`: an
+integer or double carries its width, arithmetic answers a Long or
+Double as Clojure's does, and `=` and `hash` ignore the width as
+Clojure's do. `aset` takes what `RT.aset`'s overloads take -- a byte
+array a Byte, a char array a Character -- and anything else is the
+Reflector's IllegalArgumentException; `aset-byte` and friends cast
+first. `.getComponentType` answers the element type, so `bytes?` is
+true for a byte array. Checked value by value against clj in
+test/clj/oracle.clj.
 
 ## 46. Data readers work in `clojure.edn` and nowhere else
 
@@ -1527,11 +1510,9 @@ What differs is everything the JVM decides by its static types:
 - `(let [^long x 1.5] x)` is an UnsupportedOperationException there
   ("Can't type hint a local with a primitive initializer"); here the
   hint on a let local is ignored.
-- `(aset ^doubles a 0 2)` with a long value finds no method there; here
-  the store converts.
 - `*unchecked-math*` does not switch a parameter's conversion to
   `uncheckedLongCast`; the checked cast is always used.
-- `aget`/`alength` on an UNHINTED non-array is a reflection
+- `aget`/`alength` (not `aset`, which answers as the Reflector does) on an UNHINTED non-array is a reflection
   IllegalArgumentException there (and on a literal `nil`, a compile
   error); here it is a RuntimeException "not an array". A hinted nil is
   a NullPointerException on both, with a different message.

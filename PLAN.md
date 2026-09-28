@@ -1502,7 +1502,8 @@ into/map 1884 -> 1658, sort 2182 -> 1746, assoc 138 -> 96, str 301 ->
 ### 15. Binary data (noted 2026-09-26, James: "binary analysis is key to scientific software")
 
 Binary manipulation works as it does in Clojure, each item checked against
-clj in `test/clj/oracle.clj`:
+clj in `test/clj/oracle.clj`. The arrays and types LANDED 2026-09-27
+(DEVIATIONS 45 resolved); the bit operations were already there.
 
 **Arrays and types.**
 - `byte-array`, `short-array` and `char-array` with their own classes

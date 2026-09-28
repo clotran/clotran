@@ -2426,7 +2426,6 @@
 [(hint-t #((fn [^long n acc] (if (< n 1) acc (recur (- n 0.5) (conj acc n)))) 2 []))]
 (expect-diff "DEVIATIONS 48: a primitive hint on a let local is an UnsupportedOperationException on the JVM")
 [(hint-t #(let [^long x 1.5] x))]
-(expect-diff "DEVIATIONS 48: aset on a ^doubles array with a long finds no method on the JVM")
 [(hint-t #((fn [^doubles a] (aset a 0 2)) (double-array 1)))]
 
 ;;; Regex past the Basic Multilingual Plane. ICU reports offsets in
@@ -2472,7 +2471,6 @@
  (pr-str (class (double-array 1))) (pr-str (class (make-array Integer/TYPE 2 3))) (pr-str (class (object-array 1)))
  (instance? (class (double-array 0)) (double-array 2)) (instance? (class (long-array 0)) (double-array 2))
  (.isArray (class (long-array 1))) (= (class (double-array 1)) (class (double-array 5)))]
-(expect-diff "DEVIATIONS 45: short, byte and char arrays have their storage kind's class")
 [(map #(str (class %)) [(short-array 1) (byte-array 1) (char-array 1)]) (bytes? (byte-array 1))]
 
 ;;; Runtime.availableProcessors is the machine's, as the JVM's is
@@ -2620,3 +2618,12 @@
 (do (def oracle-v 1) (set-validator! #'oracle-v (fn [x] (< x 3))) (alter-var-root #'oracle-v inc) (try (alter-var-root #'oracle-v inc) (catch IllegalStateException e [:invalid oracle-v])))
 
 [(keys (seq {:a 1 :b 2})) (vals (take 1 {:a 1})) (keys ())]
+
+[(let [a (byte-array 2)] (aset a 0 (byte 5)) (vec a)) (let [a (short-array 2)] (aset a 0 (short 5)) (vec a)) (let [a (char-array 2)] (aset a 0 \x) (vec a)) (let [a (float-array 2)] (aset a 0 (float 1.5)) (vec a))]
+
+[(try (let [a (byte-array 2)] (aset a 0 5)) (catch IllegalArgumentException e :iae)) (try (let [a (short-array 2)] (aset a 0 (byte 5))) (catch IllegalArgumentException e :iae)) (let [a (int-array 2)] (aset a 0 (short 5)) (vec a))]
+
+[(let [a (byte-array 2)] (aset-byte a 0 1) (aset-byte a 1 -1) (vec a)) (vec (byte-array [1 200 -129 127 128 255 256])) (vec (short-array [1 70000 -32769])) (vec (map #(bit-and % 0xff) (byte-array [-128 -1 0 127]))) (seq (byte-array 3)) (try (byte 200) (catch IllegalArgumentException e :iae)) (unchecked-byte 200) (unchecked-short 70000) (vec (aclone (byte-array [1 -1])))]
+
+[(str (class (aget (byte-array 1) 0))) (str (class (aget (short-array 1) 0))) (str (class (aget (char-array 1) 0))) (str (class (aget (float-array 1) 0))) (str (class (byte 1))) (str (class (short 1))) (str (class (int 1))) (str (class (+ (byte 1) 1))) (= (byte 1) 1) (hash (byte 1)) (instance? Byte (byte 1)) (instance? Long (byte 1)) (instance? Number (short 1)) (instance? Float (float 1))]
+

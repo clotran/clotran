@@ -234,6 +234,13 @@ module Eval
   integer, parameter :: B_CLONETB = 386, B_RESETTB = 387, B_GETTBS = 388, B_GETTB = 389, B_ISBOUND = 390
   integer, parameter :: B_GETENV = 391, B_FILEEXISTS = 392, B_SH = 393
   integer, parameter :: B_ASTRANSIENT = 394, B_PERSISTENT = 395, B_VARCREATE = 396, B_SETDYNAMIC = 397
+  ! Clojure's aset (RT.aset, Array.setX): typed as reflection types it --
+  ! a byte[] takes only a Byte. fortran/aset (B_ASET) converts.
+  integer, parameter :: B_JASET = 398, B_FLOATCAST = 399, B_UFLOATCAST = 400
+  integer, parameter :: B_INTEGERVALUE = 401
+  ! A number's WIDTH, in an integer's or a real's otherwise unused ref:
+  ! what it boxes as on the JVM. Equality and hashing never read it.
+  integer, parameter :: W_LONG = 0, W_BYTE = 1, W_SHORT = 2, W_INT = 3, W_FLOAT = 1
 
   ! Compiler.CHAR_MAP, verbatim from the pinned clone: the characters
   ! a Clojure name may hold that a JVM member name may not. '.' is
@@ -250,7 +257,7 @@ module Eval
        "_LBRACE_", "_RBRACE_", "_LBRACK_", "_RBRACK_", "_SLASH_", &
        "_BSLASH_", "_QMARK_" ]
   integer, parameter :: B_ARRSORT = 178, B_CMPCALL = 179
-  integer, parameter :: B_COMPTYPE = 173
+  integer, parameter :: B_COMPTYPE = 402
 
   ! The auto-gensym map for the syntax-quote currently being expanded,
   ! and the counter that makes each name unique. GENSYM_ENV in
@@ -7876,7 +7883,7 @@ contains
                end block
             end if
          else
-            out = gc_int(w)
+            out = gc_int_w(w, cast_width(id))
          end if
        end block
     case (B_SHORTCAST, B_BYTECAST, B_INTCAST)
@@ -7905,7 +7912,7 @@ contains
          half = m / 2
          w = modulo(w, m)
          if (w >= half) w = w - m
-         out = gc_int(w)
+         out = gc_int_w(w, cast_width(id))
        end block
     case (B_LONGCAST)
        a = strip_meta(gcv_nth(args, 0))
@@ -8346,7 +8353,7 @@ contains
          end if
        end block
 
-    case (B_AGET, B_ASET)
+    case (B_AGET, B_ASET, B_JASET)
        ! (aget a i j ...) and (aset a i j ... v). FEWER subscripts than
        ! the array's own rank is not an error: Clojure's own aget/aset
        ! always pass exactly one index and recur --
@@ -8365,13 +8372,23 @@ contains
          character(len=:), allocatable :: kn
          a0 = strip_meta(gcv_nth(args, 0))
          if (gc_kind(a0) /= OBJ_ARRAY) then
-            call fail("aget/aset: not an array")
+            ! RT.aset has no overload for a non-array: the Reflector's words
+            if (id == B_JASET) then
+               block
+                 character(len=16) :: cbuf
+                 write(cbuf, '(I0)') n
+                 call raise_class("IllegalArgumentException", "No matching method aset found taking " // &
+                      trim(cbuf) // " args", [vs_get(vst, base + 1)])
+               end block
+            else
+               call fail("aget/aset: not an array")
+            end if
             call vs_leave(vst, base)
             return
          end if
          h = gc_i1(a0)
          nsub = n - 1
-         if (id == B_ASET) nsub = n - 2
+         if (id /= B_AGET) nsub = n - 2
          if (nsub < 1) then
             call fail("aget/aset: needs at least one index")
             call vs_leave(vst, base)
@@ -8414,7 +8431,7 @@ contains
             ! assigns a whole sub-array at once -- core.clj's own
             ! multi-arg aset always slices down to a full index before
             ! writing -- so this path is aget-only.
-            if (id == B_ASET) then
+            if (id /= B_AGET) then
                call fail("aset: not enough indices")
                call vs_leave(vst, base)
                return
@@ -8449,29 +8466,18 @@ contains
                out = val
             end if
          else if (id == B_AGET) then
-            if (kn == "logical") then
-               block
-                 logical :: lv
-                 call gcna_get_logical(h, at, lv, ok)
-                 out = gc_bool(lv)
-               end block
-            else if (kn == "int4" .or. kn == "int8") then
-               call gcna_get_int(h, at, iv, ok)
-               out = gc_int(iv)
-            else
-               call gcna_get_real(h, at, rv, ok)
-               out = gc_real(rv)
-            end if
+            call array_read(h, at, kn, out, ok)
             if (.not. ok) call fail("aget: unreadable element kind '" // kn // "'")
          else
             val = strip_meta(gcv_nth(args, n - 1))
-            if (kn == "logical") then
-               call gcna_set_logical(h, at, truthy(val), ok)
-            else if (val%tag == GCT_INT) then
-               call gcna_set_int(h, at, val%ival, ok)
-            else
-               call gcna_set_real(h, at, num_dbl(val), ok)
+            if (id == B_JASET .and. .not. aset_accepts(kn, val)) then
+               ! Reflector finds no aset for this element type and value
+               call raise_class("IllegalArgumentException", "No matching method aset found taking 3 args " // &
+                    "for class clojure.lang.RT", [vs_get(vst, base + 1)])
+               call vs_leave(vst, base)
+               return
             end if
+            call array_write(h, at, kn, val, ok)
             if (.not. ok) then
                call fail("aset: cannot store that in a '" // kn // "' array")
             else
@@ -8596,11 +8602,11 @@ contains
          case ("doubles");  want = "real8";   desc = "[D"
          case ("longs");    want = "int8";    desc = "[J"
          case ("ints");     want = "int4";    desc = "[I"
-         case ("shorts");   want = "int4";    desc = "[S"
-         case ("bytes");    want = "int4";    desc = "[B"
+         case ("shorts");   want = "int2";    desc = "[S"
+         case ("bytes");    want = "int1";    desc = "[B"
          case ("floats");   want = "real4";   desc = "[F"
          case ("booleans"); want = "logical"; desc = "[Z"
-         case ("chars");    want = "value";   desc = "[C"
+         case ("chars");    want = "char2";   desc = "[C"
          case default;      want = "value";   desc = "[Ljava.lang.Object;"
          end select
          end block
@@ -8618,6 +8624,9 @@ contains
                case ("real8");   have = "[D"
                case ("int8");    have = "[J"
                case ("int4");    have = "[I"
+               case ("int1");    have = "[B"
+               case ("int2");    have = "[S"
+               case ("char2");   have = "[C"
                case ("real4");   have = "[F"
                case ("logical"); have = "[Z"
                case default;     have = "[Ljava.lang.Object;"
@@ -8699,6 +8708,29 @@ contains
        a = strip_meta(gcv_nth(args, 0))
        if (is_number(a)) then
           out = gc_real(num_dbl(a))
+       else
+          call raise_number_cast(a, [vs_get(vst, base + 1)])
+       end if
+    case (B_FLOATCAST, B_UFLOATCAST)
+       ! a Float: the double rounded to single precision, and boxed as one;
+       ! RT.floatCast refuses one past Float.MAX_VALUE, the unchecked cast
+       ! lets it go to infinity
+       a = strip_meta(gcv_nth(args, 0))
+       if (id == B_FLOATCAST .and. is_number(a)) then
+          if (abs(num_dbl(a)) > real(huge(1.0_4), gc_dp) .and. num_dbl(a) == num_dbl(a) &
+               .and. abs(num_dbl(a)) <= huge(1.0_gc_dp)) then
+             block
+                call to_string_text(a, s=dlt_1)
+                call raise_class("IllegalArgumentException", "Value out of range for float: " // dlt_1, &
+                     [vs_get(vst, base + 1)])
+             end block
+             call vs_leave(vst, base)
+             return
+          end if
+       end if
+       if (is_number(a)) then
+          out = gc_real(real(real(num_dbl(a), 4), gc_dp))
+          out%ref = W_FLOAT
        else
           call raise_number_cast(a, [vs_get(vst, base + 1)])
        end if
@@ -9469,7 +9501,7 @@ contains
        end block
     case (B_CLOSE)
        out = gc_nil()
-    case (B_INTVALUE)
+    case (B_INTVALUE, B_INTEGERVALUE)
        ! Long.valueOf and parseLong take one argument; any other count
        ! fails in the Reflector's words, as the static call does there
        if (n /= 1) then
@@ -9509,6 +9541,16 @@ contains
                     [vs_get(vst, base + 1)])
             else
                out = gc_int(iv)
+            end if
+         end if
+         ! Integer.valueOf and parseInt box an Integer: cl-format's
+         ! parameters are checked with (instance? Integer p)
+         if (id == B_INTEGERVALUE .and. out%tag == GCT_INT) then
+            if (allocated(t) .and. (out%ival < -2147483648_gc_ip .or. out%ival > 2147483647_gc_ip)) then
+               call fail_as("NumberFormatException", "For input string: """ // t // """", &
+                    [vs_get(vst, base + 1)])
+            else
+               out%ref = W_INT
             end if
          end if
        end block
@@ -9827,6 +9869,34 @@ contains
           end block
        else
           out = gc_bool(gc_kind(a) == OBJ_ARRAY)
+       end if
+    case (B_COMPTYPE)
+       ! Class.getComponentType: an array class's element type -- the
+       ! primitive's TYPE (a keyword here, as Byte/TYPE is), the element
+       ! class, or the inner array class -- and nil for any other class.
+       ! bytes? is (= (.getComponentType (class x)) Byte/TYPE).
+       a = strip_meta(gcv_nth(args, 0))
+       out = gc_nil()
+       if (a%tag == GCT_CLASS) then
+          block
+             call gc_ref_text(a%ref, s=dlt_1)
+             if (len(dlt_1) >= 2 .and. dlt_1(1:1) == "[") then
+                dlt_2 = dlt_1(2:)
+                select case (dlt_2)
+                case ("B"); out = gc_key("Byte/TYPE", [a])
+                case ("S"); out = gc_key("Short/TYPE", [a])
+                case ("C"); out = gc_key("Character/TYPE", [a])
+                case ("I"); out = gc_key("Integer/TYPE", [a])
+                case ("J"); out = gc_key("Long/TYPE", [a])
+                case ("F"); out = gc_key("Float/TYPE", [a])
+                case ("D"); out = gc_key("Double/TYPE", [a])
+                case ("Z"); out = gc_key("Boolean/TYPE", [a])
+                case default
+                   if (dlt_2(1:1) == "L") dlt_2 = dlt_2(2:len(dlt_2) - 1)
+                   out = gc_class(dlt_2, [a])
+                end select
+             end if
+          end block
        end if
     case (B_MUNGE, B_DEMUNGE)
        a = strip_meta(gcv_nth(args, 0))
@@ -13912,7 +13982,9 @@ contains
     case ("Double/TYPE", "double");    kind = "real8"
     case ("Float/TYPE", "float");      kind = "real4"
     case ("Boolean/TYPE", "boolean");  kind = "logical"
-    case ("Short/TYPE", "Byte/TYPE");  kind = "int4"
+    case ("Short/TYPE", "short");      kind = "int2"
+    case ("Byte/TYPE", "byte");        kind = "int1"
+    case ("Character/TYPE", "char");   kind = "char2"
     end select
   end subroutine array_kind_for
 
@@ -14028,8 +14100,7 @@ contains
 
   ! An array's class, as the JVM names it: [D a double[], [J a long[],
   ! [[I an int[][] -- one [ per dimension -- and [Ljava.lang.Object; an
-  ! Object[]. short and byte arrays are int4 here (DEVIATIONS 45), so
-  ! they answer [I.
+  ! Object[]; [B, [S and [C the byte, short and char arrays.
   subroutine array_class_name(v, s)
     type(gc_value), intent(in) :: v
     character(len=:), allocatable, intent(out) :: s
@@ -14044,6 +14115,9 @@ contains
     case ("real8");   comp = "D"
     case ("int8");    comp = "J"
     case ("int4");    comp = "I"
+    case ("int1");    comp = "B"
+    case ("int2");    comp = "S"
+    case ("char2");   comp = "C"
     case ("real4");   comp = "F"
     case ("logical"); comp = "Z"
     case default;     comp = "Ljava.lang.Object;"
@@ -14185,14 +14259,112 @@ contains
     v = strip_meta(val)
     if (kn == "value") then
        call gc_vec_set(gc_slot(arr, 1), real_at, v)
-    else if (kn == "logical") then
-       call gcna_set_logical(h, real_at, truthy(v), ok)
-    else if (v%tag == GCT_INT) then
-       call gcna_set_int(h, real_at, v%ival, ok)
     else
-       call gcna_set_real(h, real_at, num_dbl(v), ok)
+       call array_write(h, real_at, kn, v, ok)
     end if
   end subroutine array_put
+
+  ! Element `at` of registry buffer h, as the JVM boxes it: a byte[]'s
+  ! is a Byte, a short[]'s a Short, an int[]'s an Integer, a float[]'s a
+  ! Float (the width in ref), a char[]'s a Character.
+  subroutine array_read(h, at, kn, out, ok)
+    integer, intent(in) :: h, at
+    character(len=*), intent(in) :: kn
+    type(gc_value), intent(out) :: out
+    logical, intent(out) :: ok
+    integer(8) :: iv
+    real(gc_dp) :: rv
+    logical :: lv
+    out = gc_nil()
+    select case (kn)
+    case ("logical")
+       call gcna_get_logical(h, at, lv, ok)
+       if (ok) out = gc_bool(lv)
+    case ("int1", "int2", "int4", "int8", "char2")
+       call gcna_get_int(h, at, iv, ok)
+       if (.not. ok) return
+       select case (kn)
+       case ("char2"); out = gc_char_cp(int(iv))
+       case ("int1"); out = gc_int_w(iv, W_BYTE)
+       case ("int2"); out = gc_int_w(iv, W_SHORT)
+       case ("int4"); out = gc_int_w(iv, W_INT)
+       case default; out = gc_int(iv)
+       end select
+    case default
+       call gcna_get_real(h, at, rv, ok)
+       if (.not. ok) return
+       out = gc_real(rv)
+       if (kn == "real4") out%ref = W_FLOAT
+    end select
+  end subroutine array_read
+
+  ! Store v, converting as Java's casts do: into a byte[] or short[] its
+  ! low bits (NativeArray, narrow1/2), a character by its code.
+  subroutine array_write(h, at, kn, v, ok)
+    integer, intent(in) :: h, at
+    character(len=*), intent(in) :: kn
+    type(gc_value), intent(in) :: v
+    logical, intent(out) :: ok
+    if (kn == "logical") then
+       call gcna_set_logical(h, at, truthy(v), ok)
+    else if (v%tag == GCT_INT .or. v%tag == GCT_CHAR) then
+       call gcna_set_int(h, at, v%ival, ok)
+    else if (is_number(v)) then
+       if (kn == "int1" .or. kn == "int2" .or. kn == "int4" .or. kn == "int8") then
+          call gcna_set_int(h, at, int_of_number(v), ok)
+       else
+          call gcna_set_real(h, at, num_dbl(v), ok)
+       end if
+    else
+       ok = .false.
+    end if
+  end subroutine array_write
+
+  ! Whether RT.aset takes v into an array of kind kn: Reflector's own
+  ! rule (paramArgTypeMatch) -- a byte[] a Byte, a short[] a Short, a
+  ! char[] a Character, an int[] or long[] an integer, a float[] or
+  ! double[] a floating point number, a boolean[] a Boolean.
+  logical function aset_accepts(kn, v) result(yes)
+    character(len=*), intent(in) :: kn
+    type(gc_value), intent(in) :: v
+    select case (kn)
+    case ("int1"); yes = v%tag == GCT_INT .and. v%ref == W_BYTE
+    case ("int2"); yes = v%tag == GCT_INT .and. v%ref == W_SHORT
+    case ("int4", "int8"); yes = v%tag == GCT_INT
+    case ("char2"); yes = v%tag == GCT_CHAR
+    case ("real4", "real8"); yes = v%tag == GCT_REAL
+    case ("logical"); yes = v%tag == GCT_BOOL
+    case default; yes = .true.
+    end select
+  end function aset_accepts
+
+  ! The width a number boxes as (W_*): an integer's or a real's ref
+  integer function value_width(v0) result(w)
+    type(gc_value), intent(in) :: v0
+    type(gc_value) :: v
+    v = strip_meta(v0)
+    w = W_LONG
+    if (v%tag == GCT_INT .or. v%tag == GCT_REAL) w = v%ref
+  end function value_width
+
+  ! The width a narrowing cast's result boxes as
+  integer function cast_width(id) result(w)
+    integer, intent(in) :: id
+    select case (id)
+    case (B_CHKBYTE, B_BYTECAST); w = W_BYTE
+    case (B_CHKSHORT, B_SHORTCAST); w = W_SHORT
+    case default; w = W_INT
+    end select
+  end function cast_width
+
+  ! An integer that boxes as a Byte, Short or Integer
+  function gc_int_w(i, w) result(v)
+    integer(8), intent(in) :: i
+    integer, intent(in) :: w
+    type(gc_value) :: v
+    v = gc_int(i)
+    v%ref = w
+  end function gc_int_w
 
   ! One element, by a 1-based index into the array's OWN shape -- see
   ! array_put, its partner.
@@ -14217,15 +14389,8 @@ contains
     end block
     if (kn == "value") then
        out = gc_vec_get(gc_slot(arr, 1), real_at)
-    else if (kn == "logical") then
-       call gcna_get_logical(h, real_at, lv, ok)
-       if (ok) out = gc_bool(lv)
-    else if (kn == "int4" .or. kn == "int8") then
-       call gcna_get_int(h, real_at, iv, ok)
-       if (ok) out = gc_int(iv)
     else
-       call gcna_get_real(h, real_at, rv, ok)
-       if (ok) out = gc_real(rv)
+       call array_read(h, real_at, kn, out, ok)
     end if
   end function array_elem
 
@@ -15072,8 +15237,8 @@ contains
        return
     end if
     select case (c)
-    ! every array has ONE class here (DEVIATIONS 45), so an array is an
-    ! instance of it -- (instance? (class (double-array 0)) a)
+    ! "array" is the name clotran's own code asks with -- any array is
+    ! an instance of it
     case ("array")
        yes = (t == "array")
     case ("Class", "java.lang.Class")
@@ -15226,13 +15391,18 @@ contains
     case ("CharSequence"); yes = (t == "string" .or. t == "string-builder")
     case ("Character", "java.lang.Character"); yes = (t == "char")
     case ("Boolean", "java.lang.Boolean"); yes = (t == "boolean")
-    case ("Long", "java.lang.Long", "Integer", "java.lang.Integer"); yes = (t == "int")
+    ! each integer class by the width the value boxes as (W_*)
+    case ("Long", "java.lang.Long"); yes = (t == "int" .and. value_width(v) == W_LONG)
+    case ("Integer", "java.lang.Integer"); yes = (t == "int" .and. value_width(v) == W_INT)
+    case ("Short", "java.lang.Short"); yes = (t == "int" .and. value_width(v) == W_SHORT)
+    case ("Byte", "java.lang.Byte"); yes = (t == "int" .and. value_width(v) == W_BYTE)
     ! int? is Long/Integer/Short/Byte and answers FALSE for a BigInt;
     ! integer? asks for this one as well, so (integer? 1N) is true.
     case ("clojure.lang.BigInt", "BigInt", "BigInteger", "java.math.BigInteger"); yes = (t == "bigint")
     ! decimal? is (instance? BigDecimal x), and nothing else answers it
     case ("BigDecimal", "java.math.BigDecimal"); yes = (t == "bigdec")
-    case ("Double", "java.lang.Double", "Float"); yes = (t == "double")
+    case ("Double", "java.lang.Double"); yes = (t == "double" .and. value_width(v) /= W_FLOAT)
+    case ("Float", "java.lang.Float"); yes = (t == "double" .and. value_width(v) == W_FLOAT)
     case ("Ratio", "clojure.lang.Ratio"); yes = (t == "ratio")
     case ("Number", "java.lang.Number")
        ! A Ratio is a Number on the JVM too, so (number? 1/2) is true.
@@ -15769,7 +15939,7 @@ contains
       case ("String")
          chain(1) = "CharSequence"
          cnt = 1
-      case ("Long", "Double", "clojure.lang.Ratio")
+      case ("Long", "Double", "Byte", "Short", "Integer", "Float", "clojure.lang.Ratio")
          chain(1) = "Number"
          cnt = 1
       case ("clojure.lang.Keyword", "clojure.lang.Symbol", "Character", "Boolean", &
@@ -15826,8 +15996,16 @@ contains
     select case (v%tag)
     case (GCT_NIL);   s = ""
     case (GCT_BOOL);  s = "java.lang.Boolean"
-    case (GCT_INT);   s = "java.lang.Long"
-    case (GCT_REAL);  s = "java.lang.Double"
+    case (GCT_INT)
+       select case (v%ref)
+       case (W_BYTE); s = "java.lang.Byte"
+       case (W_SHORT); s = "java.lang.Short"
+       case (W_INT); s = "java.lang.Integer"
+       case default; s = "java.lang.Long"
+       end select
+    case (GCT_REAL)
+       s = "java.lang.Double"
+       if (v%ref == W_FLOAT) s = "java.lang.Float"
     case (GCT_RATIO); s = "clojure.lang.Ratio"
     case (GCT_CHAR);  s = "java.lang.Character"
     case (GCT_CLASS); s = "java.lang.Class"

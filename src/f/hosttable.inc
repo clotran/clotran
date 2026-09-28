@@ -38,15 +38,15 @@
        hm("java.lang.reflect.Array", "getChar", B_AGET, "aget"), &
        hm("java.lang.reflect.Array", "getByte", B_AGET, "aget"), &
        hm("java.lang.reflect.Array", "getShort", B_AGET, "aget"), &
-       hm("java.lang.reflect.Array", "set", B_ASET, "aset"), &
-       hm("java.lang.reflect.Array", "setInt", B_ASET, "aset"), &
-       hm("java.lang.reflect.Array", "setLong", B_ASET, "aset"), &
-       hm("java.lang.reflect.Array", "setDouble", B_ASET, "aset"), &
-       hm("java.lang.reflect.Array", "setFloat", B_ASET, "aset"), &
-       hm("java.lang.reflect.Array", "setBoolean", B_ASET, "aset"), &
-       hm("java.lang.reflect.Array", "setChar", B_ASET, "aset"), &
-       hm("java.lang.reflect.Array", "setByte", B_ASET, "aset"), &
-       hm("java.lang.reflect.Array", "setShort", B_ASET, "aset"), &
+       hm("java.lang.reflect.Array", "set", B_JASET, "aset"), &
+       hm("java.lang.reflect.Array", "setInt", B_JASET, "aset"), &
+       hm("java.lang.reflect.Array", "setLong", B_JASET, "aset"), &
+       hm("java.lang.reflect.Array", "setDouble", B_JASET, "aset"), &
+       hm("java.lang.reflect.Array", "setFloat", B_JASET, "aset"), &
+       hm("java.lang.reflect.Array", "setBoolean", B_JASET, "aset"), &
+       hm("java.lang.reflect.Array", "setChar", B_JASET, "aset"), &
+       hm("java.lang.reflect.Array", "setByte", B_JASET, "aset"), &
+       hm("java.lang.reflect.Array", "setShort", B_JASET, "aset"), &
        hm("java.lang.reflect.Array", "getLength", B_ALENGTH, "alength"), &
   ! prepRet unboxes on the JVM; nothing is boxed here.
        hm("clojure.lang.Reflector", "prepRet", B_PREPRET, "clotran-prep-ret"), &
@@ -259,7 +259,7 @@
        hm("clojure.lang.RT", "baseLoader", B_BASELOADER, "clotran-base-loader"), &
        hm("clojure.lang.RT", "alength", B_ALENGTH, "alength"), &
        hm("clojure.lang.RT", "aget", B_AGET, "aget"), &
-       hm("clojure.lang.RT", "aset", B_ASET, "aset"), &
+       hm("clojure.lang.RT", "aset", B_JASET, "aset"), &
        hm("clojure.lang.RT", "aclone", B_ACLONE, "aclone"), &
   ! The primitive casts: one integer kind and one real kind, so the width-named casts land on two conversions.
        hm("clojure.lang.RT", "longCast", B_LONGCAST_CHECKED, "long"), &
@@ -272,8 +272,8 @@
        hm("clojure.lang.RT", "uncheckedByteCast", B_BYTECAST, "unchecked-byte"), &
        hm("clojure.lang.RT", "doubleCast", B_DBLCAST, "double"), &
        hm("clojure.lang.RT", "uncheckedDoubleCast", B_DBLCAST, "double"), &
-       hm("clojure.lang.RT", "floatCast", B_DBLCAST, "double"), &
-       hm("clojure.lang.RT", "uncheckedFloatCast", B_DBLCAST, "double"), &
+       hm("clojure.lang.RT", "floatCast", B_FLOATCAST, "float"), &
+       hm("clojure.lang.RT", "uncheckedFloatCast", B_UFLOATCAST, "unchecked-float"), &
        hm("clojure.lang.RT", "booleanCast", B_BOOLCAST, "boolean"), &
        hm("clojure.lang.RT", "charCast", B_CHARCAST, "char"), &
        hm("clojure.lang.RT", "uncheckedCharCast", B_CHARCAST, "char"), &
@@ -327,8 +327,8 @@
        hm("java.lang.Float", "POSITIVE_INFINITY", HK_PINF), &
        hm("java.lang.Float", "NEGATIVE_INFINITY", HK_NINF), &
   ! Number.compare is the TOTAL order Java puts on doubles: -0.0 below 0.0, NaN above everything.
-       hm("java.lang.Integer", "valueOf", B_INTVALUE, "clotran-int-value"), &
-       hm("java.lang.Integer", "parseInt", B_INTVALUE, "clotran-int-value"), &
+       hm("java.lang.Integer", "valueOf", B_INTEGERVALUE, "clotran-int-value"), &
+       hm("java.lang.Integer", "parseInt", B_INTEGERVALUE, "clotran-int-value"), &
        hm("java.lang.Long", "valueOf", B_INTVALUE, "clotran-int-value"), &
        hm("java.lang.Long", "parseLong", B_INTVALUE, "clotran-int-value"), &
   ! parse-double is (Double/valueOf s), reached after core.clj's own regex: this converts, it does not validate.
@@ -437,8 +437,8 @@
        hm("", "getNamespace", B_NAMESPACE, "namespace"), &
   ! .getClass is clotran-type, which is what protocol dispatch keys on.
        hm("", "getClass", B_CLASSOF, "clotran-class"), &
-  ! No boxing, no classpath, no class loader: nil is the honest answer for each.
-       hm("", "getComponentType", B_ALWAYS_NIL, "clotran-nil"), &
+       hm("", "getComponentType", B_COMPTYPE, "clotran-component-type"), &
+  ! No classpath, no class loader: nil is the honest answer for each.
        hm("", "getClassLoader", B_STUB, "clotran-stub"), &
        hm("", "getContextClassLoader", B_STUB, "clotran-stub"), &
        hm("", "getResources", B_ALWAYS_NIL, "clotran-nil"), &
