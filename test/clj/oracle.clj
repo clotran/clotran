@@ -2682,3 +2682,8 @@
 
 
 [(str (class (eduction (map inc) [1 2]))) (instance? clojure.core.Eduction (eduction [1])) (pr-str (eduction (map inc) [1 2])) (try (count (eduction (map inc) [1 2])) (catch UnsupportedOperationException e (.getMessage e))) (count (reify clojure.lang.IPersistentCollection clojure.lang.Seqable (seq [_] (seq [1 2 3])))) (try (count (reify clojure.lang.Seqable (seq [_] (seq [1 2 3])))) (catch UnsupportedOperationException e :unsupported)) (count (reify clojure.lang.Counted (count [_] 7))) (reduce + (eduction (map inc) [1 2])) (reduce + 10 (eduction (map inc) [1 2])) (into [] (eduction (map inc) (filter even?) (range 10))) (seq (eduction (map inc) [1 2])) (sequential? (eduction [1 2]))]
+
+;; the promoting operators on machine integers: a long stays a long
+;; and the big path is for the one value that overflows (inc' went
+;; through decimal strings for every element of (range))
+[(-' -9223372036854775808) (*' -9223372036854775808 -1) (+' 1 2 3) (-' 10 3 2) (*' 2 3 4) (inc' 5) (dec' 5) (class (inc' 5)) (class (+' 1 2)) (class (+' 9223372036854775807 1)) (+' 1N 1) (+' 1.5 1) (-' 1/2 1) (+' 9223372036854775807 -1) (*' 3037000500 3037000500) (*' 3037000499 3037000499)]

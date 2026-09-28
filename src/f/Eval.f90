@@ -5327,6 +5327,37 @@ contains
   ! in Fortran as in C, and at -O2 a check that multiplies first and
   ! divides back is folded away -- (multiply-exact Long/MAX_VALUE 2)
   ! stopped throwing the day optimisation was turned on.
+  ! Whether folding the n machine integers in args with op leaves
+  ! int64: the promoting operators' test for taking the big path
+  logical function int_overflows(args, n, op) result(bad)
+    type(gc_value), intent(in) :: args
+    integer, intent(in) :: n, op
+    type(gc_value) :: b
+    integer(gc_ip) :: acc
+    integer :: i
+    bad = .false.
+    b = strip_meta(gcv_nth(args, 0))
+    acc = b%ival
+    if (n == 1 .and. op == B_SUB) then
+       bad = acc == -huge(acc) - 1_gc_ip
+       return
+    end if
+    do i = 1, n - 1
+       b = strip_meta(gcv_nth(args, i))
+       select case (op)
+       case (B_ADD); bad = add_overflows(acc, b%ival)
+       case (B_SUB); bad = add_overflows(acc, -b%ival) .or. b%ival == -huge(acc) - 1_gc_ip
+       case (B_MUL); bad = mul_overflows(acc, b%ival)
+       end select
+       if (bad) return
+       select case (op)
+       case (B_ADD); acc = acc + b%ival
+       case (B_SUB); acc = acc - b%ival
+       case (B_MUL); acc = acc * b%ival
+       end select
+    end do
+  end function int_overflows
+
   logical function mul_overflows(a, b) result(bad)
     integer(gc_ip), intent(in) :: a, b
     integer(gc_ip), parameter :: big = huge(0_gc_ip), small = -huge(0_gc_ip) - 1_gc_ip
@@ -7361,10 +7392,12 @@ contains
                   end select
                end do
                out = gc_real(racc)
-            else if (any_big .or. promote) then
+            else if (any_big .or. (promote .and. int_overflows(args, n, op))) then
                ! Exact, in decimal text (BigInt.f90). A BigInt anywhere
                ! makes the answer a BigInt -- (+ 1N 1) is 2N -- and a
-               ! promoting operator narrows back to a long below.
+               ! promoting operator comes here only when the machine
+               ! integers would overflow (it came for every +', and
+               ! narrowed back to a long below).
                block
                   call big_of(strip_meta(a), s=dlt_1)
                   bacc = dlt_1
@@ -12868,7 +12901,11 @@ contains
        end if
        ! A BigInt counts exactly, and inc'/dec' promote rather than
        ! throw at the edge of the 64-bit range.
-       if (a%tag == GCT_BIG .or. ((id == B_PINC .or. id == B_PDEC) .and. a%tag == GCT_INT)) then
+       ! inc' and dec' on a machine integer stay one: the big path -- a
+       ! decimal string added to, then parsed back -- is for the one value
+       ! that overflows (it ran for every element of (range))
+       if (a%tag == GCT_BIG .or. ((id == B_PINC .or. id == B_PDEC) .and. a%tag == GCT_INT .and. &
+            ((op == B_INC .and. a%ival == huge(a%ival)) .or. (op == B_DEC .and. a%ival == -huge(a%ival) - 1_gc_ip)))) then
           block
             character(len=:), allocatable :: bt
             if (op == B_INC) then
