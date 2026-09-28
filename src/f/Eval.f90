@@ -274,6 +274,11 @@ module Eval
   !
   ! Shared between threads, as the JVM's classes are (src/f/state.edn).
   type(gc_root), save :: types_root
+  ! the class names deftype* forms have DECLARED at analysis, before the
+  ! type is built: a deftype's expansion names its own class in the
+  ! forms after deftype*, and on the JVM the class exists as soon as
+  ! deftype* is compiled (known_class_name, declare_type_name)
+  type(gc_root), save :: declared_root
   integer, save :: reify_id = 0
   integer, save :: proxy_id = 0
   ! EVALUATION DEPTH, and the limit that turns a stack overflow into a
@@ -1991,6 +1996,38 @@ contains
   ! The type table. Keyed by the class keyword rather than the raw
   ! name so that a lookup here and an instance? test cannot disagree
   ! about java.lang.
+  ! A class name a deftype* is about to define, recorded at analysis.
+  recursive subroutine declare_type_name(name)
+    type(gc_stack), pointer :: vst
+    character(len=*), intent(in) :: name
+    type(gc_value) :: tbl, k
+    integer :: base
+    vst => gc_my_stack()
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 3, gc_root_get(declared_root))
+    if (gc_root_live(declared_root)) then
+       call vs_set(vst, base + 1, vs_get(vst, base + 3))
+    else
+       call vs_set(vst, base + 1, gca_empty([gc_nil()]))
+    end if
+    k = gc_class(name, [vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, k)
+    tbl = gca_assoc(vs_get(vst, base + 1), vs_get(vst, base + 2), gc_bool(.true.), &
+         [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 1, tbl)
+    if (.not. gc_root_cas(declared_root, vs_get(vst, base + 3), vs_get(vst, base + 1))) then
+       call declare_type_name(name)   ! overtaken: again, from what is there
+    end if
+    call vs_leave(vst, base)
+  end subroutine declare_type_name
+
+  logical function declared_type_name(name)
+    character(len=*), intent(in) :: name
+    declared_type_name = .false.
+    if (.not. gc_root_live(declared_root)) return
+    declared_type_name = truthy(gca_get(gc_root_get(declared_root), gc_class(name, [gc_nil()])))
+  end function declared_type_name
+
   recursive subroutine register_type(ty)
     type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: ty
@@ -3422,9 +3459,38 @@ contains
        if (any(HOST_METHODS(:)%cls == dlt_1)) return
     end block
     if (gc_kind(find_type(t)) == OBJ_TYPE) return
+    if (declared_type_name(t)) return
     if (index(t, "clojure.lang.") == 1) return
     if (index(t, "clojure.asm.") == 1) return
     if (index(t, "java.") == 1) return
+    ! a protocol's interface -- clojure.core.protocols.CollReduce, which
+    ! defprotocol generates as a class on the JVM -- is known by the
+    ! protocol's Var: the namespace exists and holds the last segment
+    block
+       integer :: d
+       type(gc_value) :: nsv
+       d = index(t, ".", back=.true.)
+       if (d > 1 .and. d < len(t)) then
+          nsv = gcn_find(t(1:d - 1))
+          ! a class name is MUNGED -- clojure.test_clojure.protocols for
+          ! the namespace clojure.test-clojure.protocols -- so the
+          ! namespace is looked for under both spellings
+          if (gc_kind(nsv) /= OBJ_NS) then
+             block
+                character(len=:), allocatable :: dm
+                integer :: j
+                dm = t(1:d - 1)
+                do j = 1, len(dm)
+                   if (dm(j:j) == "_") dm(j:j) = "-"
+                end do
+                nsv = gcn_find(dm)
+             end block
+          end if
+          if (gc_kind(nsv) == OBJ_NS) then
+             if (gcn_is_var(gcn_lookup(nsv, gc_sym(t(d + 1:), [nsv])))) return
+          end if
+       end if
+    end block
     yes = .false.
   end function known_class_name
 

@@ -2661,3 +2661,5 @@
 [(do (defmacro oracle-mac [] 1) (with-redefs [oracle-mac (constantly 2)] (oracle-mac))) (do (defn oracle-inl {:inline (fn [_] 1)} [_] 1) (with-redefs [oracle-inl (constantly 2)] (oracle-inl :foo))) (with-redefs [oracle-inl (constantly 2)] (vec (map oracle-inl [:a :b])))]
 
 [(:file (meta #'map)) (:file (meta #'clojure.string/join)) *1 *2 *3 *e (bound? #'*1) (read-string "\\\\\\\\") (map str (read-string "[\\\\\\\\ \\newline \\ ]")) (str (class (clojure.java.io/file "x"))) (instance? java.io.File (clojure.java.io/file "x"))]
+
+[(try (eval 'user.OracleNoSuch) (catch Throwable e :err)) (try (eval 'no.such.Klass) (catch Throwable e :err)) (do (defrecord OracleRec [a]) (str (eval 'user.OracleRec))) (some? (eval 'clojure.core.protocols.CollReduce)) (str java.util.Date)]

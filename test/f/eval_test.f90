@@ -649,7 +649,7 @@ contains
     call ev('24f. ', &
          '(do (deftype* t/U t.U [] :implements [some.IFace])' // &
          ' [(instance? t.U (new t.U)) (instance? some.IFace (new t.U))' // &
-         '  (instance? other.Thing (new t.U))])', '[true true false]')
+         '  (instance? java.util.Date (new t.U))])', '[true true false]')
     ! type/class answer with the full class name, which is the key a
     ! protocol's :impls map is keyed by.
     call ev('24g. ', &

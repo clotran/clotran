@@ -92,6 +92,17 @@ cannot be honoured by a rule with no record of what was referred.
 `create` statics, and a list of instance members -- all in `static_member`
 and `instance_member`. Clojure reaches any Java class by reflection.
 
+A CLASS SYMBOL in code (2026-09-28): a qualified one -- `user.Person`,
+`no.such.Klass` -- must name a class that exists, as `Class.forName`
+must on the JVM, or it is Compiler's "Unable to resolve classname".
+What exists here: a class with a row in the tables, a deftype or
+defrecord (from the moment its `deftype*` is analysed, as the JVM has
+the class from compiling it), an interface a type implements, a
+protocol's interface (its namespace, munged or not, holds the Var), and
+anything under `java.`, `clojure.lang.` or `clojure.asm.`. A bare name
+is taken as `java.lang`'s, or a type of the current namespace, without
+the JVM's check that it was imported.
+
 This one is **host**, not temporary: there is no Fortran reflection to
 reach, and the classes core.clj names do not exist here. What the table
 holds is clotran's own primitives under the host's names -- `RT.more` is

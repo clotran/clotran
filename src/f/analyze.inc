@@ -840,8 +840,20 @@
     if (is_class_name(sym)) then
        ! A CLASS LITERAL evaluates to the keyword naming clotran's type
        ! tag, java.lang implicitly imported (Object == java.lang.Object).
+       ! A QUALIFIED name must name a class that exists -- a host row, a
+       ! registered type, or the JVM's own packages -- as Class.forName
+       ! must: user.Person from another namespace, or no.such.Klass, is
+       ! Compiler's "Unable to resolve classname". A bare name is taken
+       ! as java.lang's, as before.
        block
           call gc_ref_text(sym%ref, s=dlt_1)
+          if (index(dlt_1, ".") > 0) then
+             if (.not. known_class_name(dlt_1)) then
+                call fail("Unable to resolve classname: " // dlt_1)
+                call vs_leave(vst, base)
+                return
+             end if
+          end if
           call class_key(dlt_1, k=dlt_2)
           v = gc_class(dlt_2, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
        end block
@@ -2529,6 +2541,17 @@
        return
     end if
     call vs_set(vst, base + 4, cname)
+    ! the class name is KNOWN from here (known_class_name): the forms
+    ! after this deftype* in the same expansion name it
+    block
+       character(len=:), allocatable :: cn, nsn
+       call gc_ref_text(cname%ref, s=cn)
+       if (index(cn, ".") == 0) then
+          call gcn_name(gcn_current([vs_get(vst, base + 1)]), s=nsn)
+          cn = nsn // "." // cn
+       end if
+       call declare_type_name(cn)
+    end block
     w = gcl_rest(vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 4)])
     call vs_set(vst, base + 3, w)
     fields = strip_meta(gcl_first(vs_get(vst, base + 3)))
@@ -2642,6 +2665,21 @@
     base = vs_enter(vst, 10)
     call vs_set(vst, base + 1, fields)
     call vs_set(vst, base + 2, ifaces)
+    ! an interface a type implements is a class from here: nominal, as
+    ! every interface is here, and (instance? some.IFace x) resolves it
+    block
+       integer :: ii
+       type(gc_value) :: isym
+       character(len=:), allocatable :: itext
+       if (gcv_is(vs_get(vst, base + 2))) then
+          do ii = 0, gcv_count(vs_get(vst, base + 2)) - 1
+             isym = strip_meta(gcv_nth(vs_get(vst, base + 2), ii))
+             if (isym%tag /= GCT_SYM) cycle
+             call gc_ref_text(isym%ref, s=itext)
+             if (index(itext, ".") > 0) call declare_type_name(itext)
+          end do
+       end if
+    end block
     call vs_set(vst, base + 3, methods)
     call vs_set(vst, base + 4, sc)
     names = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 3)])
