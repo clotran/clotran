@@ -2592,3 +2592,31 @@
 (let [m (into (sorted-map) (map (fn [x] [x (* x x)]) (range 2000)))] [(get m 500) (find m 42) (take 3 (subseq m > 1990)) (take 3 (rsubseq m < 10)) (count (reduce dissoc m (range 0 2000 2))) (first (into (sorted-map-by >) m))])
 
 [(get (sorted-map nil 1) nil) (contains? (sorted-map nil 1) nil) (find (sorted-map nil 1) nil) (sorted-map nil 1 0 2) (dissoc (sorted-map 1 1 2 2) 3) (assoc (sorted-map 1 1) 1 2)]
+
+(mapv hash [nil true 0 1 -1 42 9223372036854775807 1.5 -0.0 ##NaN 1/2 -3/4 1N 100000000000000000000N 1.50M 100M 0M \a "" "a" "héllo" "日本" :a :a/b 'x 'ns/x [] [1 2] '(1 2) () {} {:a 1} #{} #{1 2 3} (first {:a 1})])
+
+[(seq #{7 6 5}) (seq (set (range 10))) (keys (zipmap (range 12) (range 12))) (seq (hash-map :a 1 :b 2 :c 3)) (seq #{:a :b :c :d}) (vec (set ["x" "y" "z" "w"])) (= (hash (zipmap (range 20) (range 20))) (hash (into {} (map vector (range 20) (range 20)))))]
+
+[(boolean (re-find #"#object\[clojure.lang.Reduced 0x[0-9a-f]+ \{:status :ready, :val 1\}\]" (pr-str (reduced 1)))) (class (reduced 1)) (map? (reduced 1)) (pr-str (tagged-literal 'js [1 2])) (class (ref 1)) (class (agent 1)) (instance? clojure.lang.Atom (ref 1)) (list? (cons 1 '(2))) (list? (cons 1 nil)) (list? (conj '(2) 1)) (class (cons 1 '(2)))]
+
+(with-local-vars [w 0 z 5] (dotimes [_ 3] (var-set w (inc @w))) [@w @z])
+
+(do (defmacro oracle-locals [] (vec (sort (map str (keys &env))))) [(let [x 1 y 2] (oracle-locals)) ((fn [a] (let [b 2] (oracle-locals))) 1)])
+
+(try ({:a 1}) (catch clojure.lang.ArityException e :arity))
+
+(try ([1] 0 1) (catch clojure.lang.ArityException e :arity))
+
+(try (transient '(1 2)) (catch ClassCastException e :cce))
+
+[(unchecked-int 1e10) (unchecked-int -1e10) (unchecked-long 1e30) (unchecked-byte 1e10) (quote @x) (quote ~x) (quote ~@x) (ns-unmap *ns* 'oracle-nope)]
+
+(let [calls (atom [])] (sorted-map-by (fn [a b] (swap! calls conj [a b]) (compare a b)) "a" 1 "b" 2) @calls)
+
+(do (spit "/tmp/clotran-oracle-io.txt" "hello\nworld\n") (spit "/tmp/clotran-oracle-io.txt" "more" :append true) [(slurp "/tmp/clotran-oracle-io.txt") (with-open [r (clojure.java.io/reader "/tmp/clotran-oracle-io.txt")] (vec (line-seq r)))])
+
+(try (require 'oracle.no-such-lib) (catch java.io.IOException e :io))
+
+(do (def oracle-v 1) (set-validator! #'oracle-v (fn [x] (< x 3))) (alter-var-root #'oracle-v inc) (try (alter-var-root #'oracle-v inc) (catch IllegalStateException e [:invalid oracle-v])))
+
+[(keys (seq {:a 1 :b 2})) (vals (take 1 {:a 1})) (keys ())]

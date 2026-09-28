@@ -393,6 +393,29 @@ contains
     end if
   end function st_first_key
 
+  ! How `key` (in the map) orders against `k`, asked as Clojure asks it:
+  ! the key being added or looked up FIRST, (cmp k key), and the sign
+  ! turned round. A comparator fn can see the difference.
+  integer function st_cmp(cmpv, key, k) result(c)
+    type(gc_value), intent(in) :: cmpv, key, k
+    integer :: c2
+    c2 = comparer(cmpv, k, key)
+    if (c2 == huge(0)) then
+       c = huge(0)
+    else if (c2 < 0) then
+       c = 1
+    else if (c2 > 0) then
+       c = -1
+    else
+       c = 0
+    end if
+  end function st_cmp
+
+  logical function tag_of_nil(v)
+    type(gc_value), intent(in) :: v
+    tag_of_nil = v%tag == GCT_NIL
+  end function tag_of_nil
+
   ! In a leaf: pos is the first entry whose key is not before k (n + 1
   ! when all are), found when it is equal; fail when the comparer could
   ! not order them.
@@ -407,7 +430,7 @@ contains
     pos = hi + 1
     do while (lo <= hi)
        mid = (lo + hi) / 2
-       c = comparer(cmpv, gc_vec_get(leaf, 2 * mid - 1), k)
+       c = st_cmp(cmpv, gc_vec_get(leaf, 2 * mid - 1), k)
        if (c == huge(0)) then
           fail = .true.
           return
@@ -437,7 +460,7 @@ contains
     hi = gc_vec_len(node) / 3
     do while (lo <= hi)
        mid = (lo + hi) / 2
-       c = comparer(cmpv, gc_vec_get(node, 3 * mid), k)
+       c = st_cmp(cmpv, gc_vec_get(node, 3 * mid), k)
        if (c == huge(0)) then
           fail = .true.
           return
@@ -700,9 +723,11 @@ contains
     out = m
     base = vs_enter(5)
     call vs_set(base + 1, m); call vs_set(base + 2, k); call vs_set(base + 3, v)
-    ! an empty map still asks the comparer about its first key, which is
-    ! where one it cannot order is refused (compare_via)
-    if (gc_i1(m) == 0) then
+    ! an empty map with the DEFAULT order still asks compare about its
+    ! first key, where one it cannot order is refused (compare_via), as
+    ! (sorted-set (atom 1)) throws in clj; a comparator fn is not called
+    ! for a first key, which its side effects would show
+    if (gc_i1(m) == 0 .and. tag_of_nil(gc_slot(m, 3))) then
        if (comparer(gc_slot(m, 3), k, k) == huge(0)) then
           call vs_leave(base)
           return

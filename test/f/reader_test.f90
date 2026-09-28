@@ -121,8 +121,9 @@ contains
     call trip("3a. ", "(quote x)")
     call trip("3b. ", "(deref a)")
     call trip("3c. ", "(quasiquote (a (unquote b)))")
-    call round("3d. '@x reads as nested forms: ", "'@x", "(quote (deref x))")
-    call round("3e. ~@x is splice-unquote: ", "~@x", "(splice-unquote x)")
+    ! qualified, as clj reads them
+    call round("3d. '@x reads as nested forms: ", "'@x", "(quote (clojure.core/deref x))")
+    call round("3e. ~@x is unquote-splicing: ", "~@x", "(clojure.core/unquote-splicing x)")
   end subroutine check_reader_macros
 
   subroutine check_whitespace_and_comments()

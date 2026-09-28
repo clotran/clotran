@@ -76,6 +76,52 @@
     call vs_leave(vst, base)
   end function child_scope
 
+  ! Every local visible in scope sc, name -> slot, the innermost binding
+  ! of a name winning: this fn's blocks, what it captured, and the fns
+  ! around it.
+  recursive function locals_env(sc, roots) result(env)
+    type(gc_stack), pointer :: vst
+    type(gc_value), intent(in) :: sc
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: env, blk, info
+    type(gc_value), allocatable :: ks(:), vls(:)
+    integer :: base, i
+    vst => gc_my_stack()
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, sc)
+    env = gca_empty([roots, vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, env)
+    blk = sc
+    do while (gc_kind(blk) == OBJ_AST)
+       call add_names(gc_slot(blk, 1))
+       blk = gc_slot(blk, 2)
+    end do
+    if (gc_kind(sc) == OBJ_AST) then
+       info = scope_info(sc)
+       if (gc_kind(info) /= GCT_NIL .and. info%tag == GCT_OBJ) then
+          call add_names(gc_slot(info, 3))
+          if (gc_kind(gc_slot(info, 2)) == OBJ_AST) then
+             blk = locals_env(gc_slot(info, 2), [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+             call add_names(blk)
+          end if
+       end if
+    end if
+    env = vs_get(vst, base + 2)
+    call vs_leave(vst, base)
+  contains
+    subroutine add_names(m)
+      type(gc_value), intent(in) :: m
+      type(gc_value) :: e
+      if (.not. gca_is(m)) return
+      call gca_entries(m, ks, vls)
+      do i = 1, size(ks)
+         if (gca_contains(vs_get(vst, base + 2), ks(i))) cycle
+         e = gca_assoc(vs_get(vst, base + 2), ks(i), vls(i), [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), m])
+         call vs_set(vst, base + 2, e)
+      end do
+    end subroutine add_names
+  end function locals_env
+
   function scope_info(sc) result(info)
     type(gc_value), intent(in) :: sc
     type(gc_value) :: info
@@ -837,7 +883,12 @@
              end if
              mvar = vs_get(vst, base + 3)
              call vs_set(vst, base + 3, gcn_var_value(mvar))
-             expanded = expand_macro(vs_get(vst, base + 3), vs_get(vst, base + 1), gc_nil(), mvar)
+             ! &env: the locals in scope, as LOCAL_ENV holds them -- a map
+             ! from each name to something truthy (Clojure's LocalBinding;
+             ! the slot here). nil answered (contains? &env 'x) false for
+             ! every local, and a macro could not tell one from a Var.
+             call vs_set(vst, base + 4, locals_env(vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 3)]))
+             expanded = expand_macro(vs_get(vst, base + 3), vs_get(vst, base + 1), vs_get(vst, base + 4), mvar)
              if (tctx%has_error) then
                 call vs_leave(vst, base)
                 return
@@ -1113,6 +1164,12 @@
                 call gce_clear_error()
              else
                 call vs_set(vst, base + 7, fnv)
+                ! (. Class member) with no arguments is a FIELD if there is
+                ! one, else the zero-argument METHOD, as the Reflector
+                ! decides: (. clojure.lang.Var create) makes a Var, where
+                ! it answered the builtin itself. PersistentList/creator
+                ! is the one field here whose value is a function.
+                if (.not. is_call .and. gc_kind(fnv) == OBJ_BUILTIN .and. mname /= "creator") is_call = .true.
                 if (.not. is_call) then
                    nd = const_node(vs_get(vst, base + 7), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
                    call vs_leave(vst, base)

@@ -61,7 +61,7 @@ module Eval
   use DynLoad
   use Threads
   use iso_c_binding, only: c_ptr, c_funptr, c_loc, c_f_pointer, c_double, c_int, c_long, c_char, c_null_char, c_associated, c_bool, c_int32_t, &
-       c_null_ptr, c_intptr_t, c_funloc, c_size_t
+       c_null_ptr, c_intptr_t, c_funloc, c_size_t, c_int64_t
   implicit none
   private
 
@@ -233,7 +233,7 @@ module Eval
   integer, parameter :: B_MONENTER = 384, B_MONEXIT = 385
   integer, parameter :: B_CLONETB = 386, B_RESETTB = 387, B_GETTBS = 388, B_GETTB = 389, B_ISBOUND = 390
   integer, parameter :: B_GETENV = 391, B_FILEEXISTS = 392, B_SH = 393
-  integer, parameter :: B_ASTRANSIENT = 394, B_PERSISTENT = 395
+  integer, parameter :: B_ASTRANSIENT = 394, B_PERSISTENT = 395, B_VARCREATE = 396, B_SETDYNAMIC = 397
 
   ! Compiler.CHAR_MAP, verbatim from the pinned clone: the characters
   ! a Clojure name may hold that a JVM member name may not. '.' is
@@ -2807,16 +2807,13 @@ contains
        out = gcv_conj(vs_get(vst, base + 3), nth_or_nil(vs_get(vst, base + 1), 1), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
        call mark_entry(out)
     else if (cname == "clojure.lang.Reduced") then
-       ! (reduced x) wraps a value to say "stop reducing". A
-       ! one-key map is enough to carry the mark and the value,
-       ! and the key is one no Clojure program can write.
+       ! (reduced x) wraps a value to say "stop reducing": a box, as
+       ! an atom is, marked i1 = 3 -- so it is a clojure.lang.Reduced,
+       ! derefs, and prints as one. (A one-key map printed as a map and
+       ! answered map? true.)
        call vs_set(vst, base + 3, nth_or_nil(vs_get(vst, base + 1), 0))
-       ! Two allocations in one argument list -- see range_cell.
-       call vs_set(vst, base + 4, gca_empty([vs_get(vst, base + 3)]))
-       call vs_set(vst, base + 5, gc_key("clotran/reduced", &
-            [vs_get(vst, base + 3), vs_get(vst, base + 4)]))
-       out = gca_assoc(vs_get(vst, base + 4), vs_get(vst, base + 5), &
-            vs_get(vst, base + 3), [vs_get(vst, base + 3), vs_get(vst, base + 4), vs_get(vst, base + 5)])
+       out = gc_obj(OBJ_ATOM, [vs_get(vst, base + 3), gc_nil()], [vs_get(vst, base + 3)])
+       call gc_set_i1(out, 3)
     else if (cname == "clojure.lang.MethodImplCache" .or. &
          cname == "clojure.lang.MethodImplCache$Entry") then
        ! The protocol dispatch cache, as a MAP with named fields:
@@ -2870,9 +2867,13 @@ contains
          cname == "clojure.lang.Agent") then
        ! A Ref IS an atom here: a mutable box, with no transaction
        ! around it. Single-threaded that is indistinguishable; the
-       ! moment threads arrive it is not. DEVIATIONS.md 9.
+       ! moment threads arrive it is not. DEVIATIONS.md 9. Which of the
+       ! three it is sits in i1 (0 atom, 1 ref, 2 agent), so it answers
+       ! to its own class and prints as one.
        call vs_set(vst, base + 3, nth_or_nil(vs_get(vst, base + 1), 0))
        out = gc_obj(OBJ_ATOM, [vs_get(vst, base + 3), gc_nil()], [vs_get(vst, base + 3)])
+       if (cname == "clojure.lang.Ref") call gc_set_i1(out, 1)
+       if (cname == "clojure.lang.Agent") call gc_set_i1(out, 2)
     else if (cname == "java.util.Properties" .or. cname == "Properties") then
        thunk = gca_empty([vs_get(vst, base + 1)])
        call vs_set(vst, base + 3, thunk)
@@ -4333,7 +4334,7 @@ contains
     if (gcl_count(form) == 2) then
        head = gcl_first(form)
        if (head%tag == GCT_SYM) then
-          if (gc_ref_is(head%ref, "unquote")) then
+          if (gc_ref_is(head%ref, "clojure.core/unquote") .or. gc_ref_is(head%ref, "unquote")) then
              out = nth_of(vs_get(vst, base + 1), 1)
              call vs_leave(vst, base)
              return
@@ -4351,7 +4352,8 @@ contains
        if (gcl_is(elt)) then
           if (gcl_count(elt) == 2) then
              head = gcl_first(elt)
-             if (head%tag == GCT_SYM) spliced = gc_ref_is(head%ref, "splice-unquote")
+             if (head%tag == GCT_SYM) spliced = gc_ref_is(head%ref, "clojure.core/unquote-splicing") &
+                  .or. gc_ref_is(head%ref, "splice-unquote")
           end if
        end if
        if (spliced) then
@@ -4480,7 +4482,8 @@ contains
     end if
     if (is_special(sym)) return
     if (gc_ref_is(sym%ref, "catch") .or. gc_ref_is(sym%ref, "finally") .or. &
-         gc_ref_is(sym%ref, "unquote") .or. gc_ref_is(sym%ref, "splice-unquote")) return
+         gc_ref_is(sym%ref, "unquote") .or. gc_ref_is(sym%ref, "splice-unquote") .or. &
+         gc_ref_is(sym%ref, "clojure.core/unquote") .or. gc_ref_is(sym%ref, "clojure.core/unquote-splicing")) return
     if (is_class_name(sym)) return
     var = resolve_var(sym, gc_nil())
     if (gcn_is_var(var)) then
@@ -6132,7 +6135,7 @@ contains
       end if
       call vs_set(vst, base + 3, r)
       if (is_reduced(r)) then
-         if (.not. keep_reduced) call vs_set(vst, base + 3, gca_get(strip_meta(vs_get(vst, base + 3)), gc_key("clotran/reduced", [vs_get(vst, base + 3)])))
+         if (.not. keep_reduced) call vs_set(vst, base + 3, gc_slot(strip_meta(vs_get(vst, base + 3)), 1))
          done = .true.
       end if
     end subroutine step
@@ -6505,6 +6508,18 @@ contains
                     [vs_get(vst, base + 1)])
             end block
           end block
+       else if (((gca_is(fn) .or. gc_kind(fn) == OBJ_SET .or. fn%tag == GCT_SYM) .and. &
+            (gcv_count(args) == 0 .or. gcv_count(args) > 2)) .or. &
+            (gcv_is(fn) .and. gcv_count(args) /= 1)) then
+          ! a map, a set or a symbol takes one or two; a vector one: ({:a 1})
+          ! answered nil where APersistentMap.invoke has no such arity
+          block
+            character(len=16) :: cbuf
+            write(cbuf, '(I0)') gcv_count(args)
+            call class_name_of(fn, s=dlt_1)
+            call raise_class("ArityException", "Wrong number of args (" // trim(cbuf) // ") passed to: " // dlt_1, &
+                 [vs_get(vst, base + 1)])
+          end block
        else if (fn%tag == GCT_SYM) then
           ! A SYMBOL IS CALLABLE too, the same lookup as a keyword's
           if (gcv_count(args) >= 1) then
@@ -6651,8 +6666,17 @@ contains
        a = strip_meta(gcv_nth(args, 0))
        if (gcv_is(a)) then
           out = gcv_transient(a, [vs_get(vst, base + 1)])
-       else
+       else if ((gca_is(a) .and. .not. gca_is_sorted(a)) .or. &
+            (gc_kind(a) == OBJ_SET .and. .not. gca_is_sorted(gc_slot(a, 1)))) then
           out = gcv_nth(args, 0)
+       else
+          ! only an IEditableCollection has a transient: a list, a seq or
+          ! a sorted collection throws, where it answered itself
+          block
+             call class_name_of(a, s=dlt_1)
+             call raise_class("ClassCastException", "class " // dlt_1 // &
+                  " cannot be cast to class clojure.lang.IEditableCollection", [vs_get(vst, base + 1)])
+          end block
        end if
     case (B_PERSISTENT)
        out = gcv_nth(args, 0)
@@ -7044,6 +7068,10 @@ contains
          if (tl%tag == GCT_NIL) tl = gcl_empty([vs_get(vst, base + 1)])
          if (gcl_is(tl)) then
             out = gcl_cons(gcv_nth(vs_get(vst, base + 1), 0), tl, [vs_get(vst, base + 1), tl])
+            ! a cell cons makes is a clojure.lang.Cons, not a list: i2 = 1
+            ! says so to list? and class, and changes nothing else. Onto
+            ! nil it IS a list, as RT.cons makes it.
+            if (tag_of(gcv_nth(vs_get(vst, base + 1), 1)) /= GCT_NIL) call gc_set_i2(out, 1)
          else
             out = gc_obj(OBJ_LAZY, &
                  [gc_nil(), gcv_nth(vs_get(vst, base + 1), 0), tl], &
@@ -7179,6 +7207,52 @@ contains
              call vs_leave(vst, base)
              return
           end if
+       end if
+       if (a%tag /= GCT_NIL .and. .not. gca_is(a)) then
+          ! RT.keys of anything else is KeySeq over its seq: each element
+          ! a map entry -- (keys (take 2 m)) is their keys. It answered nil.
+          block
+            type(gc_value) :: w, e
+            integer :: kb
+            kb = vs_enter(vst, 2)
+            w = to_seq(a, [vs_get(vst, base + 1)])
+            call vs_set(vst, kb + 1, w)
+            out = gc_nil()
+            do while (w%tag /= GCT_NIL .and. .not. tctx%has_error)
+               e = sq_first(vs_get(vst, kb + 1), [vs_get(vst, base + 1), vs_get(vst, kb + 2)])
+               if (.not. (gcv_is(e) .and. is_map_entry(e))) then
+                  block
+                    call class_name_of(e, s=dlt_1)
+                    call raise_class("ClassCastException", "class " // dlt_1 // &
+                         " cannot be cast to class java.util.Map$Entry", [vs_get(vst, base + 1)])
+                  end block
+                  exit
+               end if
+               if (id == B_KEYS) then
+                  e = seq_elem(e, 0, [vs_get(vst, base + 1), vs_get(vst, kb + 2)])
+               else
+                  e = seq_elem(e, 1, [vs_get(vst, base + 1), vs_get(vst, kb + 2)])
+               end if
+               out = gcl_cons(e, vs_get(vst, kb + 2), [vs_get(vst, base + 1), vs_get(vst, kb + 1), vs_get(vst, kb + 2)])
+               call vs_set(vst, kb + 2, out)
+               w = to_seq(sq_rest(vs_get(vst, kb + 1), [vs_get(vst, base + 1), vs_get(vst, kb + 2)]), &
+                    [vs_get(vst, base + 1), vs_get(vst, kb + 2)])
+               call vs_set(vst, kb + 1, w)
+            end do
+            ! consed backwards; turned round, nil when there were none
+            w = vs_get(vst, kb + 2)
+            call vs_set(vst, kb + 1, gc_nil())
+            do while (gcl_is(w) .and. gcl_count(w) > 0)
+               out = gcl_cons(gcl_first(w), vs_get(vst, kb + 1), [vs_get(vst, base + 1), vs_get(vst, kb + 1), vs_get(vst, kb + 2)])
+               call vs_set(vst, kb + 1, out)
+               w = gcl_rest(w, [vs_get(vst, base + 1), vs_get(vst, kb + 1), vs_get(vst, kb + 2)])
+               call vs_set(vst, kb + 2, w)
+            end do
+            out = vs_get(vst, kb + 1)
+            call vs_leave(vst, kb)
+          end block
+          call vs_leave(vst, base)
+          return
        end if
        block
          type(gc_value), allocatable :: ks(:), vls(:)
@@ -7820,6 +7894,9 @@ contains
          integer(gc_ip) :: w, m, half
          a = strip_meta(gcv_nth(args, 0))
          w = int_of_number(a)
+         ! a DOUBLE goes through Java's (int) first, which SATURATES --
+         ! (unchecked-int 1e10) is 2147483647, not the low 32 bits
+         if (a%tag == GCT_REAL) w = max(-2147483648_gc_ip, min(2147483647_gc_ip, w))
          select case (id)
          case (B_BYTECAST);  m = 256_gc_ip
          case (B_SHORTCAST); m = 65536_gc_ip
@@ -8877,7 +8954,7 @@ contains
           else if (gc_kind(a) == OBJ_ATOM) then
              out = gc_slot(a, 1)
           else if (is_reduced(a)) then
-             out = gca_get(a, gc_key("clotran/reduced", [vs_get(vst, base + 1)]))
+             out = gc_slot(strip_meta(a), 1)
           else
              out = a
           end if
@@ -9766,6 +9843,17 @@ contains
              out = gc_str(dlt_2, [vs_get(vst, base + 1)])
           end block
        end if
+    case (B_VARCREATE)
+       ! Var.create: a Var in no namespace, its root the argument (or
+       ! unbound) -- what with-local-vars binds its names to
+       if (n >= 1) then
+          out = gc_obj(OBJ_VAR, [gcv_nth(args, 0), gc_nil(), gc_nil(), gc_nil()], [vs_get(vst, base + 1)])
+       else
+          out = gc_obj(OBJ_VAR, [gc_nil(), gc_nil(), gc_nil(), gc_nil()], [vs_get(vst, base + 1)])
+       end if
+    case (B_SETDYNAMIC)
+       ! .setDynamic answers the Var; dynamic binding is not policed here
+       out = gcv_nth(args, 0)
     case (B_NSUNMAP)
        ! (.unmap ns sym): the mapping goes, the Var itself stays
        ! wherever else it is referred from. Namespace.unmap.
@@ -9778,7 +9866,7 @@ contains
             m = gca_dissoc(gc_slot(vs_get(vst, base + 2), 2), strip_meta(gcv_nth(args, 1)), &
                  [vs_get(vst, base + 1), vs_get(vst, base + 2)])
             call gc_set_slot(vs_get(vst, base + 2), 2, m)
-            out = vs_get(vst, base + 2)
+            ! Namespace.unmap is void: ns-unmap answers nil
          end if
        end block
     case (B_QOFFER, B_QTAKE)
@@ -10522,6 +10610,13 @@ contains
          end if
          out = apply(gcv_nth(args, 1), vs_get(vst, base + 3))
          if (tctx%has_error) exit
+         ! the validator sees the new root first, as Var.alterRoot's
+         ! validate does -- it was only asked at bindRoot
+         call vs_set(vst, base + 3, out)
+         if (.not. validate_ref(vs_get(vst, base + 2), ref_fn_get(vs_get(vst, base + 2), "validator", &
+              [vs_get(vst, base + 1), vs_get(vst, base + 3)]), vs_get(vst, base + 3), &
+              [vs_get(vst, base + 1), vs_get(vst, base + 3)])) exit
+         out = vs_get(vst, base + 3)
          if (gc_cell_cas(vs_get(vst, base + 2), 1, vs_get(vst, base + 4), out)) exit
          end do
        end block
@@ -10960,12 +11055,28 @@ contains
        block
          integer(8) :: c, r
          real(gc_dp) :: secs
-         call system_clock(c, r)
-         secs = real(c, gc_dp) / real(r, gc_dp)
          if (id == B_NANOTIME) then
+            ! a monotonic clock from an arbitrary start, as nanoTime is
+            call system_clock(c, r)
+            secs = real(c, gc_dp) / real(r, gc_dp)
             out = gc_int(int(secs * 1.0d9, 8))
          else
-            out = gc_int(int(secs * 1.0d3, 8))
+            ! currentTimeMillis is the WALL clock since the epoch:
+            ! clock_gettime(CLOCK_REALTIME), 0 on macOS and Linux both,
+            ! a timespec of two 64-bit fields on both
+            block
+              interface
+                 function clock_gettime(clk, ts) bind(C, name="clock_gettime") result(rc)
+                   import :: c_int, c_int64_t
+                   integer(c_int), value :: clk
+                   integer(c_int64_t), intent(out) :: ts(2)
+                   integer(c_int) :: rc
+                 end function clock_gettime
+              end interface
+              integer(c_int64_t) :: ts(2)
+              if (clock_gettime(0_c_int, ts) /= 0) ts = 0
+              out = gc_int(ts(1) * 1000_c_int64_t + ts(2) / 1000000_c_int64_t)
+            end block
          end if
        end block
     case (B_GETPROP)
@@ -11110,7 +11221,7 @@ contains
           out = gc_cell_get(a, 1)   ! never half of a concurrent write
        else if (is_reduced(a)) then
           ! Unwrapping a (reduced x) is a deref in Clojure too.
-          out = gca_get(a, gc_key("clotran/reduced", [vs_get(vst, base + 1)]))
+          out = gc_slot(strip_meta(a), 1)
        else
           out = a
        end if
@@ -14999,7 +15110,7 @@ contains
     case ("clojure.lang.PersistentHashSet"); yes = (t == "set")
     case ("clojure.lang.PersistentTreeMap"); yes = (t == "map") .and. is_sorted_coll(v)
     case ("clojure.lang.PersistentTreeSet"); yes = (t == "set") .and. is_sorted_coll(v)
-    case ("clojure.lang.PersistentList"); yes = (t == "list")
+    case ("clojure.lang.PersistentList"); yes = (t == "list" .and. gc_i2(strip_meta(v)) /= 1)
     case ("clojure.lang.LazySeq"); yes = (t == "lazy-seq" .and. gc_i2(strip_meta(v)) /= 1)
     case ("clojure.lang.LongRange", "clojure.lang.Range"); yes = (t == "lazy-seq" .and. gc_i2(strip_meta(v)) == 1)
     ! What reduce hands to a host .reduce rather than walking as a seq:
@@ -15011,7 +15122,9 @@ contains
     case ("clojure.lang.ChunkBuffer"); yes = (gc_kind(strip_meta(v)) == OBJ_CHUNKBUF)
     case ("clojure.lang.ChunkedCons"); yes = (gc_kind(strip_meta(v)) == OBJ_CHUNKSEQ)
     case ("clojure.lang.PersistentVector$ChunkedSeq", "clojure.lang.Cons"); yes = (t == "seq")
-    case ("clojure.lang.Atom"); yes = (t == "atom")
+    case ("clojure.lang.Atom"); yes = (t == "atom" .and. gc_i1(strip_meta(v)) == 0)
+    case ("clojure.lang.Ref"); yes = (t == "atom" .and. gc_i1(strip_meta(v)) == 1)
+    case ("clojure.lang.Agent"); yes = (t == "atom" .and. gc_i1(strip_meta(v)) == 2)
     case ("clojure.lang.AFunction", "clojure.lang.AFn"); yes = (t == "fn")
     case ("StringBuilder", "java.lang.StringBuilder"); yes = (t == "string-builder")
     case ("java.io.PrintWriter", "java.io.Writer"); yes = (t == "writer")
@@ -15042,7 +15155,7 @@ contains
           "ExceptionInfo", "clojure.lang.ExceptionInfo")
        yes = (t == "error")
     case ("clojure.lang.ISeq");     yes = (t == "list" .or. t == "lazy-seq" .or. t == "seq")
-    case ("clojure.lang.IPersistentList"); yes = (t == "list")
+    case ("clojure.lang.IPersistentList"); yes = (t == "list" .and. gc_i2(strip_meta(v)) /= 1)
     case ("clojure.lang.IPersistentVector"); yes = (t == "vector")
     ! a TransientVector is Indexed and Counted too (PersistentVector.java:670)
     case ("clojure.lang.Indexed"); yes = (t == "vector" .or. t == "transient-vector")
@@ -15362,7 +15475,21 @@ contains
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1, dlt_2
     if (v%tag == GCT_REAL) then
-       i = int(gc_rval(v), gc_ip)
+       ! Java's d2l: NaN is 0 and a double past the range saturates --
+       ! Fortran's int() of one is undefined
+       block
+         real(gc_dp) :: d
+         d = gc_rval(v)
+         if (d /= d) then
+            i = 0
+         else if (d >= 9.223372036854775807e18_gc_dp) then
+            i = huge(0_gc_ip)
+         else if (d <= -9.223372036854775808e18_gc_dp) then
+            i = -huge(0_gc_ip) - 1_gc_ip
+         else
+            i = int(d, gc_ip)
+         end if
+       end block
     else if (v%tag == GCT_BIG) then
        block
           call gc_big_text(v, s=dlt_1)
@@ -15635,7 +15762,8 @@ contains
       case ("clojure.lang.LongRange", "clojure.lang.Range", "clojure.lang.ChunkedCons")
          chain(1:3) = [character(len=36) :: "clojure.lang.IChunkedSeq", "clojure.lang.ISeq", "clojure.lang.IPersistentCollection"]
          cnt = 3
-      case ("clojure.lang.Var", "clojure.lang.Atom", "clojure.lang.Delay")
+      case ("clojure.lang.Var", "clojure.lang.Atom", "clojure.lang.Delay", "clojure.lang.Ref", "clojure.lang.Agent", &
+         "clojure.lang.Reduced")
          chain(1) = "clojure.lang.IDeref"
          cnt = 1
       case ("String")
@@ -15710,12 +15838,17 @@ contains
     case (GCT_KEY);   s = "clojure.lang.Keyword"
     case default
        select case (gc_kind(v))
-       case (OBJ_CONS);    s = "clojure.lang.PersistentList"
+       case (OBJ_CONS)
+          s = "clojure.lang.PersistentList"
+          if (gc_i2(v) == 1) s = "clojure.lang.Cons"
        case (OBJ_VECTOR);  s = "clojure.lang.PersistentVector"
        case (OBJ_TVECTOR); s = "clojure.lang.PersistentVector$TransientVector"
        case (OBJ_MAP, OBJ_HAMT)
           s = "clojure.lang.PersistentArrayMap"
           if (gca_is_sorted(v)) s = "clojure.lang.PersistentTreeMap"
+          ! a tagged literal is a marked map (sorted.inc); it prints #tag form
+          ! through print-method only if it says what it is
+          if (is_tagged_literal(v)) s = "clojure.lang.TaggedLiteral"
        case (OBJ_SET)
           s = "clojure.lang.PersistentHashSet"
           if (gca_is_sorted(gc_slot(v, 1))) s = "clojure.lang.PersistentTreeSet"
@@ -15756,7 +15889,13 @@ contains
        case (OBJ_DELAY);   s = "clojure.lang.Delay"
        case (OBJ_TASK);    s = "java.util.concurrent.FutureTask"
        case (OBJ_VOLATILE); s = "clojure.lang.Volatile"
-       case (OBJ_ATOM);    s = "clojure.lang.Atom"
+       case (OBJ_ATOM)
+          select case (gc_i1(v))
+          case (1); s = "clojure.lang.Ref"
+          case (2); s = "clojure.lang.Agent"
+          case (3); s = "clojure.lang.Reduced"
+          case default; s = "clojure.lang.Atom"
+          end select
        case (OBJ_ARRAY)
        block
           call array_class_name(v, s=dlt_1)
@@ -16279,6 +16418,9 @@ contains
           call class_name_of(coll, s=dlt_1)
           call raise_class("ClassCastException", dlt_1 //  " cannot be cast to clojure.lang.IPersistentCollection", roots)
        end block
+    else if (gcl_is(coll) .and. gc_i2(coll) /= 1) then
+       ! a LIST conses onto itself and stays one: (conj '(2) 1) is a list
+       out = gcl_cons(vs_get(vst, base + 2), vs_get(vst, base + 1), roots)
     else
        ! a seq: (cons x coll), which keeps a lazy or viewed tail as it is.
        ! gcl_cons started a fresh list on any tail that was not one, so

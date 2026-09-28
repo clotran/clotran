@@ -93,25 +93,27 @@
        args_reusable = .true.
     case (B_RTPRINT, B_RUNTX, B_SBREVERSE, B_SECOND, B_SEQ, B_SEQFROM)
        args_reusable = .true.
-    case (B_SETERRHANDLER, B_SETERRMODE, B_SETMACRO, B_SETVAL, B_SETVALIDATOR, B_SH)
+    case (B_SETDYNAMIC, B_SETERRHANDLER, B_SETERRMODE, B_SETMACRO, B_SETVAL, B_SETVALIDATOR)
        args_reusable = .true.
-    case (B_SHL, B_SHORTCAST, B_SHR, B_SLEEP, B_SLURP, B_SPIT)
+    case (B_SH, B_SHL, B_SHORTCAST, B_SHR, B_SLEEP, B_SLURP)
        args_reusable = .true.
-    case (B_STACKTRACE, B_STARTSWITH, B_STE_CLASS, B_STE_FILE, B_STE_LINE, B_STE_METHOD)
+    case (B_SPIT, B_STACKTRACE, B_STARTSWITH, B_STE_CLASS, B_STE_FILE, B_STE_LINE)
        args_reusable = .true.
-    case (B_STR, B_STRCONTAINS, B_STRLEN, B_STUB, B_SUB, B_SUBMIT)
+    case (B_STE_METHOD, B_STR, B_STRCONTAINS, B_STRLEN, B_STUB, B_SUB)
        args_reusable = .true.
-    case (B_SUBS, B_SUBSTRING, B_SUBVEC, B_SWAPVAL, B_SWAPVALS, B_SYMBOL2)
+    case (B_SUBMIT, B_SUBS, B_SUBSTRING, B_SUBVEC, B_SWAPVAL, B_SWAPVALS)
        args_reusable = .true.
-    case (B_TAGGEDLIT, B_TASKCANCEL, B_TASKCANCELLED, B_TASKDONE, B_TASKSTATUS, B_THREADDAEMON)
+    case (B_SYMBOL2, B_TAGGEDLIT, B_TASKCANCEL, B_TASKCANCELLED, B_TASKDONE, B_TASKSTATUS)
        args_reusable = .true.
-    case (B_THREADSTART, B_TOARRAY, B_TOBIG, B_TODEC, B_TOSTRING, B_TYPE)
+    case (B_THREADDAEMON, B_THREADSTART, B_TOARRAY, B_TOBIG, B_TODEC, B_TOSTRING)
        args_reusable = .true.
-    case (B_UADD, B_UDEC, B_UINC, B_UMUL, B_UPCASE, B_USHR)
+    case (B_TYPE, B_UADD, B_UDEC, B_UINC, B_UMUL, B_UPCASE)
        args_reusable = .true.
-    case (B_USUB, B_UUIDOF, B_VAL, B_VALS, B_VARINTERN, B_VARNS)
+    case (B_USHR, B_USUB, B_UUIDOF, B_VAL, B_VALS, B_VARCREATE)
        args_reusable = .true.
-    case (B_VARSYM, B_VEC, B_WITHMETA, B_WRITE, B_ZERO)
+    case (B_VARINTERN, B_VARNS, B_VARSYM, B_VEC, B_WITHMETA, B_WRITE)
+       args_reusable = .true.
+    case (B_ZERO)
        args_reusable = .true.
     case default
        args_reusable = .false.

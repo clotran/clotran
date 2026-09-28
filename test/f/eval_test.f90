@@ -310,7 +310,7 @@ contains
     ! answers user/x here too; this asserted bare x while syntax-quote
     ! qualified nothing.
     call ev("12b. ", "(do (def x 9) (quasiquote x))", "user/x")
-    ! ~x evaluates; the reader turns it into (unquote x).
+    ! ~x evaluates; the reader turns it into (clojure.core/unquote x).
     call ev("12c. ", "(do (def x 9) `~x)", "9")
     call ev("12d. ", "(do (def x 9) `(a ~x))", "(user/a 9)")
     call ev("12e. ", "`(1 2 3)", "(1 2 3)")

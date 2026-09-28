@@ -22,7 +22,7 @@
        HK_NAN = -5, HK_NIL = -6, HK_EMPTYMAP = -7, HK_SPECIALS = -8, HK_TYPE = -9, &
        HK_TRUE = -10, HK_FALSE = -11, HK_LINEBOX = -12, HK_SELFKEY = -13
 
-  type(hm), parameter :: HOST_STATICS_1(91) = [ &
+  type(hm), parameter :: HOST_STATICS_1(92) = [ &
   ! PersistentList.creator is a static IFn that builds a list from its arguments.
        hm("clojure.lang.PersistentList", "creator", B_LIST, "list"), &
   ! core.clj's own make-array, aget, aset and the aset-int family are
@@ -88,6 +88,7 @@
        hm("java.lang.System", "getenv", B_GETENV, "clotran-getenv"), &
   ! The clock, so `time` works. ClojureScript has system-time, so this is language.
        hm("java.lang.System", "nanoTime", B_NANOTIME, "clotran-nano-time"), &
+       hm("java.lang.System", "currentTimeMillis", B_MILLIS, "clotran-current-time-millis"), &
        hm("java.lang.System", "identityHashCode", B_IDHASH, "clotran-identity-hash"), &
        hm("clojure.lang.Numbers", "add", B_ADD, "+"), &
        hm("clojure.lang.Numbers", "addP", B_PADD, "+'"), &
@@ -136,7 +137,7 @@
        hm("java.math.RoundingMode", "UNNECESSARY", HK_SELFKEY), &
        hm("clojure.lang.Numbers", "unchecked_dec", B_UDEC, "unchecked-dec"), &
        hm("clojure.lang.Numbers", "unchecked_int_dec", B_UDEC, "unchecked-dec") ]
-  type(hm), parameter :: HOST_STATICS_2(83) = [ &
+  type(hm), parameter :: HOST_STATICS_2(84) = [ &
        hm("clojure.lang.Numbers", "remainder", B_REM, "rem"), &
        hm("clojure.lang.Numbers", "unchecked_int_remainder", B_REM, "rem"), &
        hm("clojure.lang.Numbers", "quotient", B_QUOT, "quot"), &
@@ -184,6 +185,7 @@
        hm("clojure.lang.Var", "getThreadBindings", B_GETTBS, "clotran-thread-bindings"), &
   ! Var.intern CREATES the Var; a lookup here lost every protocol method.
        hm("clojure.lang.Var", "intern", B_VARINTERN, "clotran-var-intern"), &
+       hm("clojure.lang.Var", "create", B_VARCREATE, "clotran-var-create"), &
        hm("java.lang.String", "format", B_FORMAT, "format"), &
        hm("java.lang.Math", "E", HK_REAL, "", 0_gc_ip, exp(1.0_gc_dp)), &
        hm("java.lang.Math", "PI", HK_REAL, "", 0_gc_ip, acos(-1.0_gc_dp)), &
@@ -399,7 +401,7 @@
        hm("clojure.lang.Numbers", "longs", B_IDENTITY, "identity"), &
        hm("clojure.lang.Numbers", "doubles", B_IDENTITY, "identity"), &
        hm("clojure.lang.Util", "arrayTypeToSymbol", B_ARRAYTYPESYM, "clotran-array-type-symbol") ]
-  type(hm), parameter :: HOST_STATICS(310) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
+  type(hm), parameter :: HOST_STATICS(312) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
   type(hm), parameter :: HOST_METHODS_1(91) = [ &
   ! Instance members. The target becomes the first argument, which is all
@@ -514,7 +516,7 @@
        hm("", "resetMeta", B_RESETMETA, "clotran-reset-meta"), &
        hm("", "setMeta", B_RESETMETA, "clotran-reset-meta"), &
        hm("", "set", B_SETVAL, "clotran-set-val") ]
-  type(hm), parameter :: HOST_METHODS_2(78) = [ &
+  type(hm), parameter :: HOST_METHODS_2(79) = [ &
        hm("", "reset", B_SETVAL, "clotran-set-val"), &
        hm("", "bindRoot", B_BINDROOT, "clotran-bind-root"), &
        hm("", "getRawRoot", B_RAWROOT, "clotran-raw-root"), &
@@ -531,6 +533,7 @@
        hm("", "removeWatch", B_REMWATCH, "remove-watch"), &
        hm("", "getWatches", B_GETWATCHES, "clotran-get-watches"), &
        hm("", "unmap", B_NSUNMAP, "ns-unmap"), &
+       hm("", "setDynamic", B_SETDYNAMIC, "clotran-set-dynamic"), &
        ! the tap queue and the loop that drains it
        hm("", "offer", B_QOFFER, "clotran-queue-offer"), &
        hm("", "take", B_QTAKE, "clotran-queue-take"), &
@@ -602,4 +605,4 @@
        hm("", "isCancelled", B_TASKCANCELLED, "clotran-task-cancelled"), &
        hm("", "cancel", B_TASKCANCEL, "clotran-task-cancel"), &
        hm("", "availableProcessors", B_NPROCS, "clotran-processors") ]
-  type(hm), parameter :: HOST_METHODS(169) = [HOST_METHODS_1, HOST_METHODS_2]
+  type(hm), parameter :: HOST_METHODS(170) = [HOST_METHODS_1, HOST_METHODS_2]

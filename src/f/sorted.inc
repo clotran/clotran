@@ -78,11 +78,9 @@
     end if
   end function seqable
 
-  ! (reduced x) is {:clotran/reduced x}, an array map of one entry; the
-  ! probe for it must not reach a sorted map's comparator, which would
-  ! compare the marker key against whatever keys it holds.
   ! A TAGGED LITERAL -- #inst "..." as data -- is a map of :tag and
-  ! :form under a marker key, the same shape a Reduced uses, so that
+  ! :form under a marker key (the probe must not reach a sorted map's
+  ! comparator, which would compare the marker against its keys), so that
   ! (:tag x) and (:form x) are ordinary lookups and equality is the
   ! map's. class_name_of answers clojure.lang.TaggedLiteral for it,
   ! which is what instance? and print-method dispatch on.
@@ -127,15 +125,14 @@
     yes = gca_contains(m, gc_key("clotran/tagged-literal", [m]))
   end function is_tagged_literal
 
+  ! (reduced x): an atom-shaped box marked i1 = 3 (Eval, clojure.lang.Reduced)
   function is_reduced(v) result(yes)
     type(gc_value), intent(in) :: v
     logical :: yes
     type(gc_value) :: m
-    yes = .false.
     m = strip_meta(v)
-    if (.not. gca_is(m)) return
-    if (gca_is_sorted(m)) return
-    yes = gca_contains(m, gc_key("clotran/reduced", [m]))
+    yes = gc_kind(m) == OBJ_ATOM
+    if (yes) yes = gc_i1(m) == 3
   end function is_reduced
 
   ! A collection operation answers with the metadata its argument had:

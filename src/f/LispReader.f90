@@ -495,17 +495,18 @@ contains
        v = wrap("quasiquote", text, pos, roots)
     case ("@")
        pos = pos + 1
-       v = wrap("deref", text, pos, roots)
+       ! qualified, as LispReader reads them: @x is (clojure.core/deref x)
+       v = wrap("clojure.core/deref", text, pos, roots)
     case ("~")
        pos = pos + 1
        if (pos <= len(text)) then
           if (text(pos:pos) == "@") then
              pos = pos + 1
-             v = wrap("splice-unquote", text, pos, roots)
+             v = wrap("clojure.core/unquote-splicing", text, pos, roots)
              return
           end if
        end if
-       v = wrap("unquote", text, pos, roots)
+       v = wrap("clojure.core/unquote", text, pos, roots)
     case default
        if (c == achar(92)) then
           v = read_char(text, pos, roots)
