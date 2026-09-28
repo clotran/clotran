@@ -16,8 +16,13 @@ module clotran_main
   use Eval
   use Namespace
   use PersistentVector
+  use NativeArray
+  use PersistentList
+  use CompiledFn
   implicit none
   private
+  include 'stamp.inc'
+  character(len=*), parameter :: IMAGE_MAGIC = "CLOTRAN IMAGE 1 "
   public :: main_body, main_thread
   ! address space, not memory: pages are committed as they are touched
   integer(c_size_t), parameter, public :: MAIN_STACK_BYTES = 1024_c_size_t * 1024_c_size_t * 1024_c_size_t
@@ -36,6 +41,7 @@ contains
     type(gc_value) :: env
     type(gc_value) :: none(0)
     integer :: base, i, arglen, st
+    logical :: imaged
     character(len=1024) :: argbuf
     character(len=8) :: statbuf, tortbuf
 
@@ -45,19 +51,33 @@ contains
        call home_dir(d=dlr_1)
        call gce_set_home(dlr_1)
     end block
+    ! THE IMAGE (image_load below): the heap after core.clj and spec,
+    ! in place of loading them; the sources when there is none
+    imaged = .false.
+    block
+       character(len=:), allocatable :: ipath
+       call image_path(p=ipath)
+       if (len(ipath) > 0) call image_load(ipath, imaged)
+    end block
     base = vs_enter(3)
-    env = gce_base_env(none)
-    call vs_set(base + 1, env)
+    if (imaged) then
+       call vs_set(base + 1, gce_env())
+    else
+       env = gce_base_env(none)
+       call vs_set(base + 1, env)
+    end if
 
     ! The host shim -- type predicates that core.clj cannot supply,
     ! because it would ask instance? about Java classes. NOT a core
     ! library: everything else Clojure programs use must come from
     ! the real core.clj, which is the point of the project.
-    block
-       character(len=:), allocatable :: dlr_2
-       call under_home("src/clj/host.clj", p=dlr_2)
-       call load_file(dlr_2, vs_get(base + 1))
-    end block
+    if (.not. imaged) then
+       block
+          character(len=:), allocatable :: dlr_2
+          call under_home("src/clj/host.clj", p=dlr_2)
+          call load_file(dlr_2, vs_get(base + 1))
+       end block
+    end if
     ! host.clj leaves clojure.core current, being part of its bootstrap.
 
     ! Any files named on the command line load next, in order, so
@@ -71,6 +91,15 @@ contains
        ! put a script's defs INTO clojure.core -- (def map ...) in a
        ! script replaced map for everything.
        if (i > 1) call gcn_set_current(gcn_find_or_create("user", none))
+       if (imaged .and. i == 1 .and. index(argbuf(1:arglen), "clojure/core.clj") > 0) then
+          ! core.clj is in the image, and so is everything the first
+          ! file's load switches on; torture is this process's own
+          call get_environment_variable("CLOTRAN_GC_TORTURE", tortbuf)
+          gc_torture = (trim(tortbuf) == "1")
+          call get_environment_variable("CLOTRAN_GC_EVERY", tortbuf)
+          if (len_trim(tortbuf) > 0) read(tortbuf, *) gc_every
+          cycle
+       end if
        call load_file(argbuf(1:arglen), vs_get(base + 1))
        ! clojure.main binds the REPL's *1 *2 *3 *e to nil around a
        ! script (with-bindings), so a script that reads *1 sees nil,
@@ -89,10 +118,19 @@ contains
           ! form under suspicion runs tortured and the bootstrap does not.
           call get_environment_variable("CLOTRAN_GC_TORTURE", tortbuf)
           gc_torture = (trim(tortbuf) == "1")
+          call get_environment_variable("CLOTRAN_GC_EVERY", tortbuf)
+          if (len_trim(tortbuf) > 0) read(tortbuf, *) gc_every
           call get_environment_variable("CLOTRAN_SPEC_SKIP_MACROS", status=st)
           call gce_set_spec_check(st /= 0)
        end if
     end do
+
+    ! `make image`: the heap as it now stands, and no REPL
+    call get_environment_variable("CLOTRAN_IMAGE_SAVE", argbuf, arglen, st)
+    if (st == 0 .and. arglen > 0) then
+       call image_save(argbuf(1:arglen))
+       return
+    end if
 
     ! The REPL starts in user, as Clojure's does -- AFTER the files on the
     ! command line, because core.clj's own (ns clojure.core) leaves that
@@ -256,6 +294,141 @@ contains
   ! The directory the binary was started from, by argv(0): the repo
   ! root when it is ./clotran, and a classpath root either way (Eval's
   ! classpath_find), so `clotran` works from any directory.
+  ! --- the image -----------------------------------------------------
+  !
+  ! build/core.image is the heap as it stood once core.clj and spec had
+  ! loaded, read back in place of reading and analysing them again --
+  ! 1.4 s of every start, which for a suite of 648 processes was most of
+  ! the run. `make image` writes it (CLOTRAN_IMAGE_SAVE=path, after the
+  ! files on the command line load); a start finds it under home, or
+  ! where CLOTRAN_IMAGE says, and CLOTRAN_IMAGE=0 refuses it. An image
+  ! belongs to one build of the binary (the stamp main.f90 is compiled
+  ! with) and to the sources it holds (each file's size); either
+  ! differing, it is left alone and the sources load, with a note.
+  subroutine image_path(p)
+    character(len=:), allocatable, intent(out) :: p
+    character(len=1024) :: buf
+    integer :: n, st
+    logical :: there
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
+    p = ""
+    call get_environment_variable("CLOTRAN_IMAGE", buf, n, st)
+    if (st == 0) then
+       if (buf(1:n) == "0") return
+       p = buf(1:n)
+       return
+    end if
+    block
+       call gce_home(h=dlt_1)
+       p = dlt_1 // "/build/core.image"
+    end block
+    inquire(file=p, exist=there)
+    if (.not. there) p = ""
+  end subroutine image_path
+
+  ! A file of the image, by its classpath name: every one loaded before
+  ! the image is taken lives under src/clj.
+  subroutine source_path(name, p)
+    character(len=*), intent(in) :: name
+    character(len=:), allocatable, intent(out) :: p
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
+    block
+       call gce_home(h=dlt_1)
+       p = dlt_1 // "/src/clj/" // name
+    end block
+  end subroutine source_path
+
+  subroutine image_save(path)
+    character(len=*), intent(in) :: path
+    integer :: u, i, sz, st
+    character(len=:), allocatable :: nm, p
+    open(newunit=u, file=path, access="stream", form="unformatted", &
+         status="replace", action="write", iostat=st)
+    if (st /= 0) then
+       print '(A,A)', "image: cannot write ", path
+       stop 1
+    end if
+    write(u) IMAGE_MAGIC
+    write(u) len(BUILD_STAMP)
+    write(u) BUILD_STAMP
+    write(u) gcr_file_count()
+    do i = 1, gcr_file_count()
+       call gcr_file_name(i, nm)
+       call source_path(nm, p)
+       sz = -1
+       inquire(file=p, size=sz)
+       write(u) len(nm)
+       write(u) nm
+       write(u) sz
+    end do
+    call gc_image_write(u)
+    call gcna_image_write(u)
+    call gcr_image_write(u)
+    call gcn_image_write(u)
+    call gcl_image_write(u)
+    call cf_image_write(u)
+    call gce_image_write(u)
+    close(u)
+  end subroutine image_save
+
+  subroutine image_load(path, ok)
+    character(len=*), intent(in) :: path
+    logical, intent(out) :: ok
+    integer :: u, i, n, k, sz, have, st
+    character(len=len(IMAGE_MAGIC)) :: magic
+    character(len=:), allocatable :: stamp, nm, p
+    ok = .false.
+    open(newunit=u, file=path, access="stream", form="unformatted", &
+         status="old", action="read", iostat=st)
+    if (st /= 0) return
+    read(u, iostat=st) magic
+    if (st /= 0 .or. magic /= IMAGE_MAGIC) then
+       print '(A,A)', "note: not an image, loading the sources: ", path
+       close(u)
+       return
+    end if
+    read(u) k
+    allocate(character(len=k) :: stamp)
+    read(u) stamp
+    if (stamp /= BUILD_STAMP) then
+       print '(A,A)', "note: the image is from another build of clotran, loading the sources: ", path
+       close(u)
+       return
+    end if
+    read(u) n
+    do i = 1, n
+       read(u) k
+       allocate(character(len=k) :: nm)
+       read(u) nm
+       read(u) sz
+       call source_path(nm, p)
+       have = -1
+       inquire(file=p, size=have)
+       if (have /= sz) then
+          print '(A,A,A,A)', "note: ", nm, " changed since the image was made, loading the sources: ", path
+          close(u)
+          return
+       end if
+       deallocate(nm)
+    end do
+    call gc_image_read(u, ok)
+    if (.not. ok) then
+       print '(A,A)', "note: the image is of another heap layout, loading the sources: ", path
+       close(u)
+       call gc_init(65536)
+       return
+    end if
+    call gcna_image_read(u)
+    call gcr_image_read(u)
+    call gcn_image_read(u)
+    call gcl_image_read(u)
+    call cf_image_read(u)
+    call gce_image_read(u)
+    close(u)
+  end subroutine image_load
+
   subroutine home_dir(d)
     character(len=:), allocatable, intent(out) :: d
     character(len=1024) :: exe

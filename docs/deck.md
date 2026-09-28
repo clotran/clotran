@@ -147,6 +147,7 @@ Everything is weighed against these four. The pure Clojure language is reproduce
 | clojuredocs.org examples | 1233 / 1264 portable agree (97.5%) |
 | deviations | 57 recorded, 18 resolved, none unrecorded |
 | speed | 23x -- 514x the JVM's time, interpreted |
+| startup | 0.2 s from the heap image (clj: 0.4 s) |
 
 ## How we keep ourselves honest
 

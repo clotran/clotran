@@ -38,6 +38,7 @@ module Namespace
   public :: gcn_intern, gcn_lookup, gcn_var_value, gcn_set_var, gcn_is_var
   public :: gcn_binding_box, gcn_var_set
   public :: gcn_name, gcn_all
+  public :: gcn_image_write, gcn_image_read
 
 contains
 
@@ -51,6 +52,16 @@ contains
   end function roots_live
 
   ! Starts (or restarts) with a single namespace, `user`, current.
+  subroutine gcn_image_write(u)
+    integer, intent(in) :: u
+    write(u) registry_root, current_root, ns_var_root
+  end subroutine gcn_image_write
+
+  subroutine gcn_image_read(u)
+    integer, intent(in) :: u
+    read(u) registry_root, current_root, ns_var_root
+  end subroutine gcn_image_read
+
   subroutine gcn_reset(roots)
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: reg, ns

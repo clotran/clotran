@@ -162,8 +162,8 @@ unit-tests = gc_test persistent_vector_test persistent_list_test persistent_arra
 	bigdec_test abi_test native_array_test threads_test gc_mt_test
 test-bins = $(addprefix $(BT)/,$(unit-tests))
 
-.PHONY: all test crosscheck clean compiled-core embed
-all: clotran-bin $(test-bins)
+.PHONY: all test crosscheck clean compiled-core embed image
+all: clotran-bin $(test-bins) $(B)/core.image
 
 $(B) $(BT):
 	mkdir -p $@
@@ -243,6 +243,7 @@ eval-objects = $(data-objects) $(B)/Env.o $(B)/Namespace.o $(reader-objects) $(B
 LINK_ICU = $(ICU_LIBS) $(LIBCXX) -lpthread
 
 clotran-bin: $(eval-objects) $(S)/main.f90 $(ICU_LIBS)
+	printf 'character(len=*), parameter :: BUILD_STAMP = "%s"\n' "$$(date +%s)-$$$$" > $(B)/stamp.inc
 	$(FC) $(FCFLAGS) -c $(S)/main.f90 -o $(B)/main.o
 	$(FC) $(LDFLAGS) $(EXPORTDYN) -o $@ $(eval-objects) $(B)/main.o $(LINK_ICU) $(LIBDL)
 
@@ -318,13 +319,15 @@ $(B)/libsamplelib.$(SOEXT): $(T)/samplelib.f90 $(B)/samplelib_shims.f90 | $(B) $
 	mkdir -p $(PKGMOD)
 	$(FC) $(filter-out -frecursive -J$(B),$(FCFLAGS)) -J$(PKGMOD) -shared -fPIC -o $@ $^
 
-test: $(test-bins) clotran-bin $(B)/libtestpkg.$(SOEXT) $(B)/libsamplelib.$(SOEXT) packages examples/embed/heat
+test: $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(B)/libsamplelib.$(SOEXT) packages examples/embed/heat
 	for t in $(unit-tests); do echo "--- $$t ---"; $(BT)/$$t || exit 1; done
 	@echo "--- a Fortran solver with clotran embedded, its strategy in Clojure on its own grid (examples/embed) ---"
 	examples/embed/heat | grep -v "^note:" | diff - examples/embed/expected.txt
-	@echo "--- language_test (with core.clj) ---"
-	./clotran-bin src/clj/clojure/core.clj test/clj/language_test.clj </dev/null \
+	@echo "--- language_test (with core.clj, loaded from source: the one run without the image) ---"
+	CLOTRAN_IMAGE=0 ./clotran-bin src/clj/clojure/core.clj test/clj/language_test.clj </dev/null \
 	  | tee /dev/stderr | grep -q "^LANGUAGE TESTS PASSED"
+	@echo "--- a few forms with a collection at every object allocation: the read-string shape included ---"
+	CLOTRAN_GC_EVERY=1 ./clotran-bin src/clj/clojure/core.clj test/clj/torture_check.clj </dev/null | grep -q "^TORTURE CHECK PASSED"
 	@echo "--- eight futures allocating at once, the heap checked at every young collection (step 14d) ---"
 	CLOTRAN_GC_VERIFY=1 ./clotran-bin src/clj/clojure/core.clj test/clj/threads_heap.clj </dev/null \
 	  | grep -q "^THREADS HEAP PASSED"
@@ -355,6 +358,14 @@ test: $(test-bins) clotran-bin $(B)/libtestpkg.$(SOEXT) $(B)/libsamplelib.$(SOEX
 crosscheck:
 	$(MAKE) clean && $(MAKE) FC=flang test
 	$(MAKE) clean && $(MAKE) test
+
+# THE IMAGE (main.f90, image_save): the heap after core.clj and spec
+# have loaded, written once and read back by every start in place of
+# loading them -- 1.4 s a process. Tied to this build of the binary and
+# to the sources it holds; CLOTRAN_IMAGE=0 loads from source instead.
+$(B)/core.image: clotran-bin $(wildcard src/clj/*.clj) $(wildcard src/clj/clojure/*.clj) $(wildcard src/clj/clojure/*/*.clj) $(wildcard src/clj/clotran/*.cljf)
+	CLOTRAN_IMAGE=0 CLOTRAN_IMAGE_SAVE=$@ ./clotran-bin src/clj/clojure/core.clj </dev/null
+image: $(B)/core.image
 
 # clojure.core, compiled (clotran compile). Opt-in: generating it takes
 # about 100 s, and `clean` -- so the gate -- removes it. When present,

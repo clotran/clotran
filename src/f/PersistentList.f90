@@ -24,8 +24,19 @@ module PersistentList
   type(gc_root), save :: empty_root
 
   public :: gcl_empty, gcl_cons, gcl_first, gcl_rest, gcl_count, gcl_is
+  public :: gcl_image_write, gcl_image_read
 
 contains
+  subroutine gcl_image_write(u)
+    integer, intent(in) :: u
+    write(u) empty_root
+  end subroutine gcl_image_write
+
+  subroutine gcl_image_read(u)
+    integer, intent(in) :: u
+    read(u) empty_root
+  end subroutine gcl_image_read
+
 
   ! Re-checks the slot rather than trusting the cached index: gc_init
   ! clears the global-root registry, but this module variable survives

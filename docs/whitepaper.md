@@ -293,7 +293,7 @@ linked binaries -- is on the road in PLAN.md.
 | Clojure's own library tests | set, walk, string, math, pprint verbatim: 859 assertions, 0 failures |
 | libraries loading | 35 of 40 vendored namespaces `require` |
 | deviations | 57 recorded in DEVIATIONS.md, 18 resolved; every known difference has an entry |
-| startup | about 1 s, core.clj re-read each launch; 190 MB resident |
+| startup | 0.2 s from the heap image (`make image`); 1.4 s from source; 125 MB resident |
 | speed | 23x to 514x the JVM's time, interpreted |
 
 The denominators matter: "portable" excludes examples that name a Java

@@ -113,6 +113,10 @@
  "Eval.f90/tx_lk" {:class :shared, :note "the STM's one lock (DEVIATIONS 10): transactions serialize on it; made once under the state lock (tx_lock_init)"}
  "Eval.f90/tx_lk_made" {:class :shared, :note "whether tx_lk is made yet, read and set under the state lock"}
  "Eval.f90/link_epoch" {:class :shared, :note "direct linking (DEVIATIONS 55): the epoch a call site's cached callee was taken in; bumped by gce_install_compiled on the main thread, read by every call site -- a stale read only costs one extra lookup"}
+ "Eval.f90/out_trace" {:class :fixed, :note "CLOTRAN_TRACE_OUT, read once (debugging)"}
+ "Eval.f90/out_trace_read" {:class :fixed, :note "with out_trace"}
+ "GC.f90/gc_every" {:class :fixed, :note "CLOTRAN_GC_EVERY, read once by main after the first file"}
+ "GC.f90/every_count" {:class :shared, :note "the allocation count behind CLOTRAN_GC_EVERY, a debugging knob: under the heap lock"}
  "GC.f90/obj_aged" {:class :shared, :note "aging (PLAN.md step 16): the young that survived one collection, kept unmarked one more round; written by collection with the world stopped, read by the pending sweeps under the owning thread and by the write barrier's is_young (unmarked)"}
  "GC.f90/vec_aged" {:class :shared, :note "aging (PLAN.md step 16): the young that survived one collection, kept unmarked one more round; written by collection with the world stopped, read by the pending sweeps under the owning thread and by the write barrier's is_young (unmarked)"}
  "GC.f90/obj_aged_list" {:class :shared, :note "aging (PLAN.md step 16): the young that survived one collection, kept unmarked one more round; written by collection with the world stopped, read by the pending sweeps under the owning thread and by the write barrier's is_young (unmarked)"}

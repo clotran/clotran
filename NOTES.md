@@ -4072,3 +4072,51 @@ Wiring `read-string` and `load` the same way is DEVIATIONS 46's removal
 note, and it needs two more things first: `clojure.uuid` un-skipped,
 because `default-data-readers` names a Var from it, and a date type for
 `#inst`.
+
+## The image, and the bug it shook loose
+
+**The image (2026-09-28).** `build/core.image` is the heap as it stands
+once core.clj and spec have loaded: the pools, the roots and every
+module's own state, written to a stream after a full collection
+(`gc_image_write`, `main.f90` image_save) and read back by every start
+in place of loading the sources (`image_load`). It is possible because
+a handle is an index into a pool and a `gc_value` carries no pointer,
+so the arrays go out as they are; what is not in the pools goes typed
+(a native array's buffer), is rebuilt on the way in (a regex's ICU
+object, from the source text the OBJ_REGEX keeps), or is refused (a
+compiled procedure, an open package). The sticky marks travel with the
+pools: after the full collection every live object is marked, which is
+what "old" means to the young collector, so a fresh process starts with
+an all-old heap, an empty remembered set and one fresh stack. The image
+is tied to the build (a stamp compiled into main.f90 at link time) and
+to the size of every file it holds; either differing, it is left alone
+with a note. A start went from 1.4 s to 0.2 s and 196 MB to 125 MB.
+
+**Why the suite took 55 minutes.** `scripts/clojuredocs time` (new)
+clocks every case on both sides. Of clotran's 3315 process-seconds,
+1720 were 648 starts at 1.4 s, 1081 were nine hanging examples at the
+120 s limit each and rerun per case, and 515 were the cases -- of
+which 424 were twenty cases (`clojure.pprint` loading from source at
+7 s, five times; a 10^7 loop; `into` over `take` at 14 us an element).
+The median case is 3.9 ms against clj's 3.3. Startup was the suite's
+cost, not the interpreter; the image removes it.
+
+**The bug the image shook loose.** On the image one case in 2060 lost
+its forms, in about four runs of six: `read-string` answered an empty
+vector, without an error, and only for the case whose forms held map
+literals and only when a collection landed inside the #tag scan.
+`B_READSTRING` held the reader's fresh result in a plain local while
+`resolve_unread` walked it, and `has_unread` allocates for a map
+literal (a keyword, a seq over the map) -- so a collection there freed
+the forms just read and the local named a reused slot. The image did
+not cause it; it moved the collection points onto it, as any change to
+allocation would have. The verifier could not see it (a dangling local
+is not in the heap), torture at every allocation was too slow on core's
+heap to reach it, and `CLOTRAN_GC_EVERY=n` (new: a collection at every
+nth object allocation, so collection points depend on the allocation
+count alone) reproduced it. `CLOTRAN_TRACE_OUT=1` (new: every write to
+a writer, on stderr) showed the prints never happened, which separated
+"lost output" from "lost forms". The fix roots the form before the scan
+and splits a two-allocation argument list in the scan;
+`test/clj/torture_check.clj` reads map literals with a collection at
+every object allocation, in `make test`.

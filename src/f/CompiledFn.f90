@@ -38,6 +38,7 @@ module CompiledFn
   private
   public :: compiled_i, cf_register, cf_call, cf_count, cf_name, cf_valid
   public :: cf_pool_add, cf_pool_get
+  public :: cf_image_write, cf_image_read
 
   abstract interface
      subroutine compiled_i(argbase, nargs, dst) bind(C)
@@ -204,6 +205,20 @@ contains
     if (h < 1 .or. h > used) return
     if (allocated(tbl(h)%name)) s = tbl(h)%name
   end subroutine cf_name
+
+  ! The image holds no compiled procedure -- a procedure pointer is not
+  ! data -- so it is taken with none registered; the constant pool root
+  ! goes with the heap.
+  subroutine cf_image_write(u)
+    integer, intent(in) :: u
+    if (used > 0) error stop "clotran: an image cannot hold compiled procedures (CLOTRAN_AUTOCOMPILE must be unset)"
+    write(u) pool_root
+  end subroutine cf_image_write
+
+  subroutine cf_image_read(u)
+    integer, intent(in) :: u
+    read(u) pool_root
+  end subroutine cf_image_read
 
   function cf_count() result(k)
     integer :: k

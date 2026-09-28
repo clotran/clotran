@@ -38,6 +38,7 @@ module LispReader
   public :: gcr_read, gcr_read_all, gcr_error, gcr_has_error
   public :: gcr_begin_file, gcr_read_next, gcr_position, gcr_position_parts
   public :: gcr_set_ns_resolver, gcr_set_tag_markers, gcr_current_file
+  public :: gcr_image_write, gcr_image_read, gcr_file_count, gcr_file_name
 
   ! ::x is resolved at READ time against the current namespace, and
   ! ::a/x against its aliases -- which the reader does not know. The
@@ -176,6 +177,51 @@ contains
   ! middle of a file loads other files, each of which becomes the
   ! current one -- so the next form of the OUTER file would otherwise
   ! be stamped with the last inner file's id.
+  ! --- the image: the file table, so a position inside core.clj is still
+  ! a line and a column after a restart -----------------------------------
+  subroutine gcr_image_write(u)
+    integer, intent(in) :: u
+    integer :: i
+    write(u) n_files, anon_seq
+    do i = 1, n_files
+       write(u) files(i)%name
+       if (allocated(files(i)%line_starts)) then
+          write(u) size(files(i)%line_starts)
+          write(u) files(i)%line_starts
+       else
+          write(u) -1
+       end if
+    end do
+  end subroutine gcr_image_write
+
+  subroutine gcr_image_read(u)
+    integer, intent(in) :: u
+    integer :: i, k
+    read(u) n_files, anon_seq
+    do i = 1, n_files
+       read(u) files(i)%name
+       read(u) k
+       if (allocated(files(i)%line_starts)) deallocate(files(i)%line_starts)
+       if (k >= 0) then
+          allocate(files(i)%line_starts(k))
+          read(u) files(i)%line_starts
+       end if
+    end do
+  end subroutine gcr_image_read
+
+  ! The files read so far, by classpath name, for the image's staleness check
+  function gcr_file_count() result(n)
+    integer :: n
+    n = n_files
+  end function gcr_file_count
+
+  subroutine gcr_file_name(i, name)
+    integer, intent(in) :: i
+    character(len=:), allocatable, intent(out) :: name
+    name = ""
+    if (i >= 1 .and. i <= n_files) name = trim(files(i)%name)
+  end subroutine gcr_file_name
+
   function gcr_begin_file(text, name) result(fid)
     type(rd_state), pointer :: rdx
     character(len=*), intent(in) :: text, name

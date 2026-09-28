@@ -304,8 +304,19 @@ Staged so each step is checkable:
    stage: intermediates move to the operand stack; `roots(:)` leaves every
    signature; module globals move into a context type; source
    positions on nodes.
-3. snapshot the heap after core.clj and start from the image. The
-   baseline after loading core.clj is 152 MB; a 100000-element reduce
+3. snapshot the heap after core.clj and start from the image. **Landed
+   2026-09-28**: `build/core.image` (main.f90 image_save, `make image`)
+   is the pools, the roots and every module's own state as they stand
+   once core.clj and spec have loaded, written to a stream after a full
+   collection and read back in place of loading them -- a handle is an
+   index and a value carries no pointer, so the arrays go out as they
+   are; native array buffers go typed, a regex is compiled again from
+   its text, and compiled procedures and open packages are refused. A
+   start is 0.2 s instead of 1.4 s and 125 MB instead of 196; the
+   clojuredocs suite's 648 processes stopped paying 1.4 s each. The
+   image is tied to the build (a stamp compiled into main.f90) and to
+   the sizes of the files it holds; either differing, the sources load
+   with a note. The baseline after loading core.clj was 152 MB; a 100000-element reduce
    no longer adds to it, because locals are cleared after their last
    read (a backwards liveness pass in analyze.inc, as Clojure's
    compiler does) and a call's argument vector is handed to the
@@ -1092,10 +1103,11 @@ only `defn` forms compile. In order:
    2): one built for another is refused with a note instead of being
    called with its arguments shifted -- which is what a stale
    compiled core did to abi_test the first time.
-2. The heap image (step 5, stage 3). Saving the heap after compiled
-   core loads saves the pool with it, so installing compiled code stops
-   re-analysing (half a second for core today) and startup stops being
-   2.3 s and 348 MB of rebuilding.
+2. The heap image (step 5, stage 3): landed 2026-09-28 for the
+   interpreted core (0.2 s, 125 MB). Not yet: an image WITH compiled
+   core in it -- a compiled procedure is a pointer into a library, so
+   the image would have to name the libraries and reopen them in the
+   same order.
 3. `clotran build app.cljf -o app`: one executable -- runtime, compiled
    core, the program's compiled namespaces, the image -- with `-main`
    receiving `*command-line-args*`. Packages still load at run time.
@@ -1480,6 +1492,24 @@ an action; a send made inside an action or a transaction is held until
 it ends, as Agent.nested and LockingTransaction.enqueue hold it, and
 restart-agent resumes a failed agent's kept queue. Not done: a thread
 pool for agents (a drain is a thread per busy agent).
+
+**Open: a thread-timing flake in the oracle (2026-09-28).** The oracle's
+script, run nine times on one binary, gave identical output eight
+times and once a burst of !error from case 918 on -- reduce, into and
+seq over ordinary collections, all failing from one point onward, a
+shared thing corrupted once. Without the 37 cases that start threads
+the script is byte-for-byte deterministic; with them, one run in nine.
+The suspects are the futures that outlive their case (a future with a
+1 ms deref timeout keeps summing 300000 numbers beside the next
+cases; pmap over an infinite range) and a race between that thread's
+allocation and a collection: the multi-threaded collector's domain
+(14c/14d), not a rooting gap the verifier or CLOTRAN_GC_EVERY finds
+(neither did, nor did 25 repetitions of those cases under both). It
+predates the image; the image only made the oracle fast enough to run
+nine times. A red gate whose one difference is a burst of !error after
+a thread case is this, and is rerun. Next: a stress run of the thread
+cases alone with the verifier, and the collector's stop-the-world
+handshake read against a thread that is mid-allocation.
 
 **Not in this step**: a concurrent collector (the world stops for each
 collection), and a compacting one (objects never move, as now).

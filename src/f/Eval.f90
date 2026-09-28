@@ -373,6 +373,7 @@ module Eval
   integer(c_size_t), parameter :: TASK_STACK_BYTES = 256_c_size_t * 1024_c_size_t * 1024_c_size_t
   logical, save :: task_trace = .false., task_trace_read = .false.   ! CLOTRAN_TASK_TRACE=1: the scheduler's decisions, on stderr
   logical, save :: rt_loaded = .false.   ! clotran.rt, once (rt_call)
+  logical, save :: out_trace = .false., out_trace_read = .false.   ! CLOTRAN_TRACE_OUT=1: every write to a writer, on stderr
   logical, save :: mf_loaded = .false.   ! clotran.multifn, once (mf_call)
   logical, save :: uuid_loaded = .false.   ! clotran.uuid, once (uuid_call)
   logical, save :: rdr_loaded = .false.   ! clotran.reader, once (reader_call)
@@ -426,6 +427,7 @@ module Eval
   public :: gce_ctx_new, gce_ctx_switch, gce_ctx_current, gce_current_fn, gce_new_slots, gce_dot_slots
   public :: gce_repl
   public :: gce_set_home, gce_home
+  public :: gce_image_write, gce_image_read
   public :: gce_apply, gce_env, gce_exec_node, gce_apply_slots
 
   ! THE CALL STACK. One entry per closure invocation in progress: the
@@ -1242,6 +1244,70 @@ contains
   ! whose keys share a namespace prints as #:ns{...}. The Var's ROOT is
   ! false (core_print.cljf, Rich's value); this is the launcher's
   ! binding, set once core.clj has loaded.
+  ! --- the image: the evaluator's own state ------------------------------
+  ! The roots into the heap, the counters, which of the clotran.* libs
+  ! have loaded, and the import registry. Nothing that is a lock, a
+  ! thread key or a context: those are this process's, made again.
+  subroutine gce_image_write(u)
+    integer, intent(in) :: u
+    if (pkg_count > 0) error stop "clotran: an image cannot hold an open package"
+    if (n_ctx > 1) error stop "clotran: an image is taken with one context"
+    write(u) gensym_root, types_root, declared_root, global_env_root, math_ctx_root, main_mailbox_root, &
+         break_root, handler_var_root, handler_fn_root, resume_root, repl_fn_root
+    write(u) gensym_id, reify_id, proxy_id, link_epoch
+    write(u) rt_loaded, mf_loaded, uuid_loaded, rdr_loaded, spec_loaded, pk_loaded, ld_loaded, spec_check
+    write(u) n_imports
+    if (n_imports > 0) write(u) import_full(1:n_imports), import_short(1:n_imports)
+  end subroutine gce_image_write
+
+  subroutine gce_image_read(u)
+    integer, intent(in) :: u
+    type(eval_ctx), pointer :: tctx
+    type(gc_value) :: v, t
+    character(len=:), allocatable :: err
+    integer :: i, h
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
+    read(u) gensym_root, types_root, declared_root, global_env_root, math_ctx_root, main_mailbox_root, &
+         break_root, handler_var_root, handler_fn_root, resume_root, repl_fn_root
+    read(u) gensym_id, reify_id, proxy_id, link_epoch
+    read(u) rt_loaded, mf_loaded, uuid_loaded, rdr_loaded, spec_loaded, pk_loaded, ld_loaded, spec_check
+    read(u) n_imports
+    if (allocated(import_full)) deallocate(import_full, import_short)
+    allocate(import_full(max(32, n_imports)), import_short(max(32, n_imports)))
+    if (n_imports > 0) read(u) import_full(1:n_imports), import_short(1:n_imports)
+    ! core.clj is loaded, which is what the autocompile loader waits
+    ! for before it runs clotran.loader (gce_install_compiled)
+    auto_ready = .true.
+    n_auto_waiting = 0
+    ! what gce_base_env installs on a fresh heap
+    call gcp_set_forcer(gce_force)
+    call gca_set_comparer(compare_via)
+    call gcr_set_ns_resolver(kw_ns_of)
+    call gc_set_finalizer(gce_finalize_obj, [OBJ_ARRAY, OBJ_REGEX, OBJ_MATCHER])
+    call gc_set_coll_ops(gce_coll_hash, gce_coll_equal)
+    call ctx_reset()
+    tctx => ctx_self()
+    ! A regex's ICU object is not data: each is compiled again from its
+    ! source text. A matcher's subject is gone with it; none is live at
+    ! startup, and one found is left with no handle rather than a stale one.
+    do i = 1, gc_obj_capacity()
+       select case (gc_obj_kind_at(i))
+       case (OBJ_REGEX)
+          v = gc_value(GCT_OBJ, i, 0_gc_ip)
+          block
+             t = gc_slot(v, 1)
+             call gc_ref_text(t%ref, s=dlt_1)
+             h = regex_compile(dlt_1, err)
+          end block
+          call gc_set_i1(v, h)
+       case (OBJ_MATCHER)
+          v = gc_value(GCT_OBJ, i, 0_gc_ip)
+          call gc_set_i1(v, 0)
+       end select
+    end do
+  end subroutine gce_image_read
+
   subroutine gce_main_bindings()
     type(gc_value) :: var, none(0)
     var = gcn_lookup(gcn_find_or_create("clojure.core", none), gc_sym("*print-namespace-maps*", none))
@@ -9866,6 +9932,7 @@ contains
                piece = dlt_1
             end block
          end if
+         call trace_out(w, piece)
          if (gc_kind(w) == OBJ_WRITER) then
             write(gc_i1(w), '(A)', advance='no') piece
          else if (gc_kind(w) == OBJ_SB) then
@@ -11932,6 +11999,7 @@ contains
             else if (gc_kind(w) == OBJ_WRITER) then
                write(gc_i1(w), '(A)', advance='no') txt
             end if
+            call trace_out(w, txt)
          end if
        end block
     case (B_SETVALIDATOR, B_GETVALIDATOR)
@@ -17113,6 +17181,19 @@ contains
        end block
     end if
   end subroutine kw_ns_of
+
+  subroutine trace_out(w, txt)
+    type(gc_value), intent(in) :: w
+    character(len=*), intent(in) :: txt
+    character(len=8) :: e
+    if (.not. out_trace_read) then
+       call get_environment_variable("CLOTRAN_TRACE_OUT", e)
+       out_trace = trim(e) == "1"
+       out_trace_read = .true.
+    end if
+    if (.not. out_trace) return
+    write(0, '(A,I0,A,I0,A,I0,A,A)') "[out kind=", gc_kind(w), " ref=", w%ref, " unit=", gc_i1(w), "] ", txt(1:min(50, len(txt)))
+  end subroutine trace_out
 
   function make_writer(unit, roots) result(w)
     integer, intent(in) :: unit

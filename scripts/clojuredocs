@@ -8,6 +8,7 @@
 ;;   scripts/clojuredocs extract      export -> test/clj/clojuredocs/examples.edn
 ;;   scripts/clojuredocs expect       run every example through clj, keep the answers
 ;;   scripts/clojuredocs run [var..]  run through clotran, compare, report
+;;   scripts/clojuredocs time [var..] the same through clj AND clotran, every case clocked
 ;;
 ;; The site renders its examples with JavaScript, so a page fetch has
 ;; none; the export (clojuredocs-export.json) has them all. The pinned
@@ -218,19 +219,24 @@
 (defn munge-var [v]
   (-> v (str/replace #"[^A-Za-z0-9_-]" (fn [m] (str "_" (int (first m)) "_")))))
 
-(defn script-for [cases]
+(declare timed-prelude)
+(defn script-for
+  ([cases] (script-for cases false))
+  ([cases timed?]
   (str prelude
+       (when timed? timed-prelude)
        (str/join "\n"
                  (map-indexed
                   (fn [k c]
                     (str "(in-ns 'cd.e" k ")\n(clojure.core/refer-clojure)\n"
                          "(clojure.core/require '[clojure.string :as str] '[clojure.set :as set])\n"
-                         "(clotran.cd/run-case " (pr-str (case-id c)) " " (boolean (:nondet (:tags c))) " "
+                         (if timed? "(clotran.cd/timed-case " "(clotran.cd/run-case ")
+                         (pr-str (case-id c)) " " (boolean (:nondet (:tags c))) " "
                          (pr-str (:code c)) ")\n"))
                   cases))
        ;; clj does not exit while the agent pool lives: every agent example
        ;; timed out there, and went unjudged
-       "\n(clojure.core/shutdown-agents)\n"))
+       "\n(clojure.core/shutdown-agents)\n")))
 
 (defn load-cases [] (edn/read-string (slurp examples-file)))
 
@@ -262,21 +268,25 @@
 
 (defn answers-for
   "One var's cases run by `cmd`, as {:timeout :lines}. When the var runs out
-  of time, every case of it runs again ALONE with its own budget: one slow
-  example (printing 10^8 numbers) used to leave the rest of its var
-  unanswered, counted as clotran stopping."
+  of time, the cases it did not answer run again ALONE, each with a
+  short budget of its own: one slow example (printing 10^8 numbers) used
+  to leave the rest of its var unanswered, counted as clotran stopping --
+  and rerunning every case with the full budget cost more than the
+  hang itself."
   [cmd v cs]
   (let [f (io/file work "cases" (str (munge-var v) ".clj"))
         _ (spit f (script-for cs))
-        {:keys [out timeout]} (run-file cmd f 120)]
+        {:keys [out timeout]} (run-file cmd f 120)
+        got (parse-out out)]
     (if-not timeout
-      {:timeout false :lines (parse-out out)}
+      {:timeout false :lines got}
       {:timeout true
-       :lines (apply merge
-                     (for [[k c] (map-indexed vector cs)]
+       :lines (apply merge got
+                     (for [[k c] (map-indexed vector cs)
+                           :when (not (contains? got (case-id c)))]
                        (let [g (io/file work "cases" (str (munge-var v) "--" k ".clj"))]
                          (spit g (script-for [c]))
-                         (parse-out (:out (run-file cmd g 120))))))})))
+                         (parse-out (:out (run-file cmd g 30))))))})))
 
 (defn expect [only]
   (.mkdirs expected-dir) (.mkdirs (io/file work "cases"))
@@ -300,6 +310,91 @@
               (spit (io/file got-dir (str (munge-var v) ".edn"))
                     (pr-str (answers-for [(str repo "/clotran-bin") (str repo "/src/clj/clojure/core.clj")] v cs))))
             groups)))
+
+;; `time`: the same scripts through clj and through clotran with a clock
+;; around every case, so a slow suite can be read case by case rather
+;; than guessed at: build/clojuredocs/TIMING.txt has every case's
+;; microseconds on both sides, and the wall time of each var's process
+;; minus its cases is what starting the process costs.
+(def timed-prelude "
+(in-ns 'clotran.cd)
+(defn timed-case [id nondet text]
+  (let [t0 (System/nanoTime)]
+    (run-case id nondet text)
+    (println (str \"@@t \" id \" \" (quot (- (System/nanoTime) t0) 1000)))))
+")
+
+(defn time-side [cmd v cs]
+  (let [f (io/file work "cases" (str (munge-var v) "-timed.clj"))
+        _ (spit f (script-for cs true))
+        t0 (System/nanoTime)
+        {:keys [out timeout]} (run-file cmd f 120)
+        wall (quot (- (System/nanoTime) t0) 1000)]
+    {:wall wall :timeout (boolean timeout)
+     :cases (into {} (for [l (str/split-lines (or out ""))
+                           :let [[_ id us] (re-matches #"@@t (\S+) (\d+)" l)]
+                           :when id]
+                       [id (parse-long us)]))}))
+
+(defn time-suite [only]
+  (.mkdirs (io/file work "cases"))
+  (let [jobs (parse-long (or (System/getenv "CLOTRAN_TEST_JOBS") "4"))
+        groups (cond->> (by-var (load-cases)) (seq only) (filter #(contains? only (key %))))
+        clj-cmd ["clj" "-M"]
+        ct-cmd [(str repo "/clotran-bin") (str repo "/src/clj/clojure/core.clj")]
+        rows (pmap-n jobs (fn [[v cs]]
+                            (let [r {:var v :ids (mapv case-id cs)
+                                     :clj (time-side clj-cmd v cs) :clotran (time-side ct-cmd v cs)}]
+                              (print ".") (flush) r))
+                     groups)
+        ms (fn [us] (format "%9.1f" (/ us 1000.0)))
+        sum (fn [k] (reduce + (map #(get-in % [k :wall]) rows)))
+        csum (fn [k] (reduce + (map #(reduce + (vals (get-in % [k :cases]))) rows)))
+        cases (for [r rows id (:ids r)
+                    :let [a (get-in r [:clj :cases id]) b (get-in r [:clotran :cases id])]]
+                {:id id :clj a :clotran b
+                 :ratio (when (and a b (pos? a)) (/ (double b) a))})
+        both (filter #(and (:clj %) (:clotran %)) cases)
+        nvar (count rows)
+        summary
+        (with-out-str
+          (println (format "%d vars, %d cases; wall time is one process per var, %d at a time" nvar (count cases) jobs))
+          (println (format "  %-12s %12s %12s %12s %8s" "" "wall ms" "in cases ms" "startup ms" "timeouts"))
+          (doseq [[label k] [["clj" :clj] ["clotran" :clotran]]]
+            (println (format "  %-12s %12.0f %12.0f %12.0f %8d" label (/ (sum k) 1000.0) (/ (csum k) 1000.0)
+                             (/ (- (sum k) (csum k)) 1000.0 (max 1 nvar))
+                             (count (filter #(get-in % [k :timeout]) rows)))))
+          (println (format "  cases timed on both sides: %d; clotran/clj on their sum: %.1fx"
+                           (count both)
+                           (/ (double (reduce + (map :clotran both))) (max 1 (reduce + (map :clj both))))))
+          (println "  cases answered by clj alone (clotran hung or died in the var):"
+                   (count (filter #(and (:clj %) (nil? (:clotran %))) cases)))
+          (println)
+          (println "slowest 30 on clotran (ms: clj, clotran, ratio):")
+          (doseq [c (take 30 (sort-by :clotran > both))]
+            (println (format "  %s %s %8.1fx  %s" (ms (:clj c)) (ms (:clotran c)) (:ratio c) (:id c))))
+          (println)
+          (println "worst 30 ratios among cases clj takes over 1 ms:")
+          (doseq [c (take 30 (sort-by :ratio > (filter #(> (:clj %) 1000) both)))]
+            (println (format "  %s %s %8.1fx  %s" (ms (:clj c)) (ms (:clotran c)) (:ratio c) (:id c)))))]
+    (println)
+    (print summary)
+    (with-open [w (io/writer (io/file work "TIMING.txt"))]
+      (binding [*out* w]
+        (print summary)
+        (println)
+        (println "every var (ms: clj wall, clotran wall; T = timed out):")
+        (doseq [r (sort-by #(- (get-in % [:clotran :wall])) rows)]
+          (println (format "  %s %s %s %s" (ms (get-in r [:clj :wall])) (ms (get-in r [:clotran :wall]))
+                           (str (when (get-in r [:clj :timeout]) "T") (when (get-in r [:clotran :timeout]) "t"))
+                           (:var r))))
+        (println)
+        (println "every case (ms: clj, clotran, ratio; - = no time):")
+        (doseq [c (sort-by #(- (or (:clotran %) Long/MAX_VALUE)) cases)]
+          (println (format "  %s %s %s  %s"
+                           (if (:clj c) (ms (:clj c)) "        -") (if (:clotran c) (ms (:clotran c)) "        -")
+                           (if (:ratio c) (format "%8.1fx" (:ratio c)) "        -") (:id c))))))
+    (println "every var and case: build/clojuredocs/TIMING.txt")))
 
 (defn norm
   "What is compared of an answer line: an object's identity hash and its
@@ -368,4 +463,5 @@
     "expect" (expect (set args))
     "run" (do (run (set args)) (score))
     "score" (score)
-    (println "usage: scripts/clojuredocs fetch|extract|expect|run [var ...]")))
+    "time" (time-suite (set args))
+    (println "usage: scripts/clojuredocs fetch|extract|expect|run|time [var ...]")))

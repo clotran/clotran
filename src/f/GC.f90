@@ -716,6 +716,11 @@ module GC
   ! timing-dependent corruption into an immediate, deterministic
   ! failure; the test suite runs under it.
   logical, public :: gc_torture = .false.
+  ! Collect at every Nth object allocation (CLOTRAN_GC_EVERY=N): the
+  ! collection points then depend on the allocation count alone, so a
+  ! failure that moves with timing is pinned to one place. 0 is off.
+  integer, public :: gc_every = 0
+  integer :: every_count = 0
 
   ! Grow-only mode: the pools never collect. Left over from the
   ! migration, when payloads moved into this heap before anything
@@ -723,6 +728,8 @@ module GC
   logical, public :: gc_no_collect = .false.
 
   public :: gc_init, gc_collect
+  public :: gc_image_write, gc_image_read, gc_obj_kind_at
+  integer, parameter, public :: GC_IMAGE_VERSION = 1
   public :: gc_nil, gc_bool, gc_int, gc_real, gc_char, gc_str, gc_sym, gc_key
   public :: gc_char_cp, u8_count, u8_off, u8_cpidx, u8_slice, u8_dec, u8_at, u8_enc
 
@@ -908,6 +915,122 @@ contains
   end subroutine gc_init
 
   ! Context `id`'s stack, empty -- made, or emptied for reuse.
+  ! --- the heap image -------------------------------------------------
+  !
+  ! The heap as it stands, written to a stream and read back. A handle
+  ! is an index and a value carries no pointer (gc_value), so the pools
+  ! go out as the arrays they are and come back the same. The image is
+  ! taken after a full collection with one thread: the sticky marks say
+  ! which objects are old, the young, remembered and aged sets are
+  ! empty, and no stack holds pending work. What is not in these arrays
+  ! -- a native array's buffer, a regex's ICU object, a compiled
+  ! procedure -- each module writes after this or rebuilds on the way in
+  ! (main.f90, image_save and image_load).
+  subroutine gc_image_write(u)
+    integer, intent(in) :: u
+    integer :: i
+    call gc_collect([gc_value ::])
+    if (n_stacks > 1) error stop "clotran: an image is taken with one thread"
+    write(u) GC_IMAGE_VERSION
+    write(u) size(obj_pool), obj_free_head, obj_used
+    write(u) obj_pool, obj_mark, obj_free, obj_free_next
+    write(u) size(vec_pool), vec_free_head, vec_used
+    write(u) vec_pool, vec_mark, vec_free, vec_free_next
+    write(u) size(vec_store), store_used, arena_alloc_since, arena_live, arena_reused, arena_fresh
+    write(u) vec_store(1:store_used), class_head
+    write(u) size(str_pool), str_free_head, str_used
+    write(u) str_mark, str_free, str_free_next
+    do i = 1, size(str_pool)
+       if (allocated(str_pool(i)%text)) then
+          write(u) len(str_pool(i)%text)
+          if (len(str_pool(i)%text) > 0) write(u) str_pool(i)%text
+       else
+          write(u) -1
+       end if
+    end do
+    write(u) size(global_root), global_count, global_gen
+    write(u) global_root
+    write(u) obj_live, vec_live, str_live, arena_live_now, old_at_full, promoted_since_full
+    write(u) gc_root_get(stacks(1)%s%bindings)
+  end subroutine gc_image_write
+
+  ! The pools replaced by the image's; the young, remembered and aged
+  ! sets sized to them and empty; stack 1 fresh and bound to this
+  ! thread, holding the binding frame the image was taken with.
+  subroutine gc_image_read(u, ok)
+    integer, intent(in) :: u
+    logical, intent(out) :: ok
+    integer :: ver, n, i, k, st
+    type(gc_value) :: b
+    ok = .false.
+    read(u, iostat=st) ver
+    if (st /= 0 .or. ver /= GC_IMAGE_VERSION) return
+    read(u) n, obj_free_head, obj_used
+    if (allocated(obj_pool)) deallocate(obj_pool, obj_mark, obj_free, obj_free_next)
+    allocate(obj_pool(n), obj_mark(n), obj_free(n), obj_free_next(n))
+    read(u) obj_pool, obj_mark, obj_free, obj_free_next
+    read(u) n, vec_free_head, vec_used
+    if (allocated(vec_pool)) deallocate(vec_pool, vec_mark, vec_free, vec_free_next)
+    allocate(vec_pool(n), vec_mark(n), vec_free(n), vec_free_next(n))
+    read(u) vec_pool, vec_mark, vec_free, vec_free_next
+    read(u) n, store_used, arena_alloc_since, arena_live, arena_reused, arena_fresh
+    if (allocated(vec_store)) deallocate(vec_store)
+    allocate(vec_store(n))
+    read(u) vec_store(1:store_used), class_head
+    if (store_used < n) vec_store(store_used + 1:n) = nilv
+    read(u) n, str_free_head, str_used
+    if (allocated(str_pool)) deallocate(str_pool, str_mark, str_free, str_free_next)
+    allocate(str_pool(n), str_mark(n), str_free(n), str_free_next(n))
+    read(u) str_mark, str_free, str_free_next
+    do i = 1, n
+       read(u) k
+       if (k >= 0) then
+          allocate(character(len=k) :: str_pool(i)%text)
+          if (k > 0) read(u) str_pool(i)%text
+       end if
+    end do
+    read(u) n, global_count, global_gen
+    if (allocated(global_root)) deallocate(global_root)
+    allocate(global_root(n))
+    read(u) global_root
+    read(u) obj_live, vec_live, str_live, arena_live_now, old_at_full, promoted_since_full
+    if (allocated(obj_young)) deallocate(obj_young, vec_young, str_young, obj_rem, vec_rem, rem_set)
+    allocate(obj_young(1024), vec_young(1024), str_young(1024), rem_set(1024))
+    allocate(obj_rem(size(obj_pool)), vec_rem(size(vec_pool)))
+    obj_rem = .false.; vec_rem = .false.
+    if (allocated(obj_aged)) deallocate(obj_aged, vec_aged, obj_aged_list, vec_aged_list)
+    allocate(obj_aged(size(obj_pool)), vec_aged(size(vec_pool)), obj_aged_list(1024), vec_aged_list(1024))
+    obj_aged = .false.; vec_aged = .false.
+    n_obj_young = 0; n_vec_young = 0; n_str_young = 0; n_rem = 0; n_obj_aged = 0; n_vec_aged = 0
+    obj_pend_dead = 0; vec_pend_dead = 0; str_pend_dead = 0
+    if (allocated(mark_stack)) deallocate(mark_stack)
+    allocate(mark_stack(size(obj_pool)))
+    mark_sp = 0
+    gc_allocs = 0; gc_frees = 0; gc_collections = 0; gc_young_collections = 0
+    gc_no_collect = .false.
+    call heap_sync_init()
+    n_running = 1
+    n_parked = 0
+    call gc_stacks_reset()
+    call gc_stack_new(1)
+    call clear_batches(stacks(1)%s)
+    read(u) b
+    call gc_global_keep(stacks(1)%s%bindings, b)
+    ok = .true.
+  end subroutine gc_image_read
+
+  ! The kind of the object at a pool index, 0 when the slot is free:
+  ! how the image loader finds the objects whose native resource it
+  ! must rebuild (a regex's ICU object).
+  function gc_obj_kind_at(i) result(k)
+    integer, intent(in) :: i
+    integer :: k
+    k = 0
+    if (i < 1 .or. i > size(obj_pool)) return
+    if (obj_free(i)) return
+    k = obj_pool(i)%kind
+  end function gc_obj_kind_at
+
   subroutine gc_stack_new(id)
     integer, intent(in) :: id
     type(gc_stack_ref), allocatable :: bigger(:)
@@ -1453,6 +1576,20 @@ contains
     logical :: entered, stopped
     type(gc_stack), pointer :: s
 
+    if (gc_every > 0 .and. .not. gc_no_collect) then
+       every_count = every_count + 1
+       if (mod(every_count, gc_every) == 0) then
+          call heap_enter(roots, slots, entered)
+          call world_stop(stopped)
+          allocate(all_roots(size(roots) + size(slots)))
+          all_roots(1:size(roots)) = roots
+          all_roots(size(roots) + 1:) = slots
+          call collect_auto(all_roots)
+          deallocate(all_roots)
+          call world_start(stopped)
+          call heap_leave(entered)
+       end if
+    end if
     if (batching()) then
        s => my_stack()
        if (fast_ok(s) .and. s%n_obj_b == 0 .and. s%cp_obj < s%np_obj) call pend_refill_obj(s)

@@ -68,6 +68,7 @@ module NativeArray
        gcna_set_real, gcna_set_int, gcna_set_logical, gcna_elem_string, &
        gcna_live_count, gcna_real8_ptr, gcna_int4_ptr, gcna_int8_ptr, gcna_int1_ptr
 
+  public :: gcna_image_write, gcna_image_read
 contains
 
   ! A contiguous pointer to a real8 buffer, or ok = false. This is how
@@ -484,6 +485,80 @@ contains
   ! Reuses a released slot before growing, so a program that allocates
   ! and drops arrays in a loop does not grow the registry without
   ! bound.
+  ! --- the image: every buffer, typed by its element kind ---------------
+  subroutine gcna_image_write(u)
+    integer, intent(in) :: u
+    integer :: i
+    write(u) reg_used
+    do i = 1, reg_used
+       write(u) reg(i)%used
+       if (.not. reg(i)%used) cycle
+       write(u) len(reg(i)%elem_kind)
+       write(u) reg(i)%elem_kind
+       write(u) size(reg(i)%extents)
+       write(u) reg(i)%extents, reg(i)%lows
+       if (allocated(reg(i)%buf)) then
+          write(u) size(reg(i)%buf)
+          select type (b => reg(i)%buf)
+          type is (real(dp));    write(u) b
+          type is (real(4));     write(u) b
+          type is (integer(4));  write(u) b
+          type is (integer(8));  write(u) b
+          type is (integer(1));  write(u) b
+          type is (integer(2));  write(u) b
+          type is (logical);     write(u) b
+          type is (complex(dp)); write(u) b
+          end select
+       else
+          write(u) -1
+       end if
+    end do
+  end subroutine gcna_image_write
+
+  subroutine gcna_image_read(u)
+    integer, intent(in) :: u
+    integer :: i, n, k, total
+    call gcna_reset()
+    read(u) n
+    if (allocated(reg)) deallocate(reg)
+    allocate(reg(max(n, 16)))
+    reg_used = n
+    do i = 1, n
+       read(u) reg(i)%used
+       if (.not. reg(i)%used) cycle
+       read(u) k
+       allocate(character(len=k) :: reg(i)%elem_kind)
+       read(u) reg(i)%elem_kind
+       read(u) k
+       allocate(reg(i)%extents(k), reg(i)%lows(k))
+       read(u) reg(i)%extents, reg(i)%lows
+       read(u) total
+       if (total < 0) cycle
+       select case (reg(i)%elem_kind)
+       case ("real8");    allocate(real(dp)     :: reg(i)%buf(total))
+       case ("real4");    allocate(real(4)      :: reg(i)%buf(total))
+       case ("int4");     allocate(integer(4)   :: reg(i)%buf(total))
+       case ("int8");     allocate(integer(8)   :: reg(i)%buf(total))
+       case ("int1");     allocate(integer(1)   :: reg(i)%buf(total))
+       case ("int2", "char2"); allocate(integer(2) :: reg(i)%buf(total))
+       case ("logical");  allocate(logical      :: reg(i)%buf(total))
+       case ("complex8"); allocate(complex(dp)  :: reg(i)%buf(total))
+       case default
+          error stop "clotran: an array of an unknown kind in the image"
+       end select
+       select type (b => reg(i)%buf)
+       type is (real(dp));    read(u) b
+       type is (real(4));     read(u) b
+       type is (integer(4));  read(u) b
+       type is (integer(8));  read(u) b
+       type is (integer(1));  read(u) b
+       type is (integer(2));  read(u) b
+       type is (logical);     read(u) b
+       type is (complex(dp)); read(u) b
+       end select
+    end do
+  end subroutine gcna_image_read
+
   integer function claim()
     integer :: i
     type(na_node), allocatable :: bigger(:)
