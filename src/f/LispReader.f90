@@ -181,15 +181,22 @@ contains
     character(len=*), intent(in) :: text, name
     integer :: fid
     integer :: i, n, k
+    character(len=:), allocatable :: rel
     rdx => rd_self()
     rdx%cur_file = 0
+    ! a file of the vendored tree is known by its CLASSPATH name, as the
+    ! JVM knows it: (:file (meta #'map)) is "clojure/core.clj" there, and
+    ! a stack frame reads (clojure/core.clj:270:13)
+    rel = name
+    k = index(name, "src/clj/", back=.true.)
+    if (k > 0) rel = name(k + 8:)
     call gc_state_lock()
     do i = 1, n_files
-       if (trim(files(i)%name) == name) rdx%cur_file = i
+       if (trim(files(i)%name) == rel) rdx%cur_file = i
     end do
     if (rdx%cur_file == 0 .and. n_files < MAX_FILES) then
        n_files = n_files + 1
-       files(n_files)%name = name
+       files(n_files)%name = rel
        rdx%cur_file = n_files
     end if
     call gc_state_unlock()
@@ -1576,8 +1583,12 @@ contains
        call fail("EOF after a backslash")
        return
     end if
+    ! the token runs to whitespace or a MACRO-TERMINATING character, as
+    ! LispReader.readToken's does -- a backslash among them, so \\\\ is
+    ! two backslash characters, not one token of three
     do while (pos <= len(text))
        if (is_space(text(pos:pos)) .or. is_delim(text(pos:pos))) exit
+       if (index('\";@^`~', text(pos:pos)) > 0) exit
        pos = pos + 1
     end do
     name = text(start + 1:pos - 1)

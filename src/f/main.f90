@@ -72,6 +72,10 @@ contains
        ! script replaced map for everything.
        if (i > 1) call gcn_set_current(gcn_find_or_create("user", none))
        call load_file(argbuf(1:arglen), vs_get(base + 1))
+       ! clojure.main binds the REPL's *1 *2 *3 *e to nil around a
+       ! script (with-bindings), so a script that reads *1 sees nil,
+       ! not an unbound Var
+       if (i == 1) call gce_bind_repl_vars()
        ! RT.CHECK_SPECS: once core.clj -- the first file -- has loaded,
        ! every macro call is checked against clojure.core.specs.alpha,
        ! unless CLOTRAN_SPEC_SKIP_MACROS is set (clojure.spec.skip-macros)

@@ -29,20 +29,23 @@
   java.io.Closeable
   (close [_] nil))
 
+;; under the JVM's name, so (class (io/file "x")) is java.io.File
+(ns java.io)
 (deftype File [path]
   Object
   (toString [_] path))
+(in-ns 'clojure.java.io)
 
 (defn- path-of [x]
   (cond (string? x) x
-        (instance? File x) (.-path x)
+        (instance? java.io.File x) (.-path x)
         :else (throw (IllegalArgumentException.
                       (str "Cannot open <" (pr-str x) "> as a file")))))
 
 (defn file
   "A File for the path, or for the parent and children joined with /."
-  ([arg] (File. (path-of arg)))
-  ([parent child] (File. (str (path-of parent) "/" (path-of child))))
+  ([arg] (java.io.File. (path-of arg)))
+  ([parent child] (java.io.File. (str (path-of parent) "/" (path-of child))))
   ([parent child & more] (reduce file (file parent child) more)))
 
 (defn as-file [x] (when (some? x) (file x)))
@@ -95,7 +98,7 @@
   (let [text (cond (string? input) input
                    (instance? TextReader input) (.readAll input)
                    :else (clotran-slurp (path-of input)))]
-    (if (or (string? output) (instance? File output))
+    (if (or (string? output) (instance? java.io.File output))
       (with-open [w (writer output)] (.write w text))
       (.write output text))
     nil))

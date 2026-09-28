@@ -409,6 +409,7 @@ module Eval
        TASK_DONE = 3, TASK_FAILED = 4, TASK_CANCELLED = 5
 
   public :: gce_eval, gce_base_env, gce_has_error, gce_error, gce_clear_error, gce_set_spec_check
+  public :: gce_bind_repl_vars
   public :: gce_main_bindings, gce_install_compiled, gce_raise_arity_named
   public :: gce_native_begin, gce_native_end
   public :: gce_analyze, gce_trace
@@ -1512,6 +1513,19 @@ contains
 
   ! Interns a plain value as a Var in clojure.core. Same shape as
   ! bind_builtin, for the things RT interns that are not functions.
+  ! clojure.main binds the REPL's *1 *2 *3 *e to nil around a script
+  ! (with-bindings): a script that reads *1 sees nil, not an unbound
+  ! Var. Called by main once core.clj has loaded.
+  subroutine gce_bind_repl_vars()
+    type(gc_value) :: core
+    core = gcn_find("clojure.core")
+    if (gc_kind(core) /= OBJ_NS) return
+    call bind_var(core, "*1", gc_nil())
+    call bind_var(core, "*2", gc_nil())
+    call bind_var(core, "*3", gc_nil())
+    call bind_var(core, "*e", gc_nil())
+  end subroutine gce_bind_repl_vars
+
   subroutine bind_var(ns, name, val, var_out)
     type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: ns, val

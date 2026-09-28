@@ -401,7 +401,7 @@
     ! the JVM compiled into its jar is: a (ns clojure.zz) of the user's
     ! stays late-bound, as it does there
     call gcr_current_file(s=nm)
-    if (index(nm, "src/clj/clojure/") == 0) return
+    if (index(nm, "clojure/") /= 1) return
     call gcn_name(gcn_current([var]), s=here)
     if (index(here, "clojure.") /= 1) return
     nsv = gc_slot(var, 3)

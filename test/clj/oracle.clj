@@ -2659,3 +2659,5 @@
 [(with-redefs [first last] (first [1 2])) ((with-redefs [first last] #(first [1 2]))) (do (defn oracle-ten [] 10) (with-redefs [oracle-ten (fn [] 11)] (oracle-ten))) (oracle-ten) (with-redefs [first last] (last [1 2 3])) (with-redefs [rest butlast] (vec (map inc [1 2 3])))]
 
 [(do (defmacro oracle-mac [] 1) (with-redefs [oracle-mac (constantly 2)] (oracle-mac))) (do (defn oracle-inl {:inline (fn [_] 1)} [_] 1) (with-redefs [oracle-inl (constantly 2)] (oracle-inl :foo))) (with-redefs [oracle-inl (constantly 2)] (vec (map oracle-inl [:a :b])))]
+
+[(:file (meta #'map)) (:file (meta #'clojure.string/join)) *1 *2 *3 *e (bound? #'*1) (read-string "\\\\\\\\") (map str (read-string "[\\\\\\\\ \\newline \\ ]")) (str (class (clojure.java.io/file "x"))) (instance? java.io.File (clojure.java.io/file "x"))]
