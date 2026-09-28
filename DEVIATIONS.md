@@ -107,9 +107,12 @@ The exception classes have no hierarchy either, with two edges and a
 ceiling: `Throwable` and `Exception` catch everything; `RuntimeException`
 catches every runtime class clotran throws (`is_runtime_class` lists them,
 and a host failure is one); `ArityException` is an
-`IllegalArgumentException`. A class caught under any other parent --
-`(catch IndexOutOfBoundsException e ..)` for an
-`ArrayIndexOutOfBoundsException` -- is not caught.
+`IllegalArgumentException`. Since 2026-09-27 a few more parents that
+code catches by are known (Eval.f90, exc_parent): `NumberFormatException`
+is an `IllegalArgumentException`, `FileNotFoundException` and
+`EOFException` are `IOException`s, and the array and string index
+exceptions are `IndexOutOfBoundsException`s. A class caught under any
+other parent is not caught.
 
 ## 5. Metadata is a wrapper object
 
@@ -1258,7 +1261,14 @@ class; `map-entry?` is what it asks, and that is answered.
 `host_super` giving that name the vector chain plus `IMapEntry` and
 `Map$Entry`.
 
-## 40. `core_print.clj` and `data.clj` are clotran's own
+## 40. `core_print.clj`, `data.clj` and `clojure.java.io` are clotran's own
+
+`clojure.java.io` joined them on 2026-09-27: skipped as JVM-only, it left
+core.clj's `slurp` and `spit` -- written against `jio/reader` and
+`jio/writer` -- unable to run at all. `src/clj/clotran/java_io.cljf`
+defines the namespace over clotran's whole-file primitives: `reader`
+(with `.readLine`, so `line-seq` works), `writer` (`:append`), `copy`,
+`file`, `make-parents`, `delete-file`; TEXT only, and `resource` is nil.
 
 Two of the vendored files are Clojure written against `java.util`:
 `core_print.clj` dispatches `print-method` and `print-dup` on

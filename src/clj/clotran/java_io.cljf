@@ -1,0 +1,122 @@
+(ns clojure.java.io
+  "clojure.java.io, as clotran provides it: loaded in place of the JVM's
+  (Eval.f90, RT.load), as clotran/core_print is (DEVIATIONS 40).
+
+  core.clj's slurp and spit are written against this namespace --
+  (jio/reader f) copied into a StringWriter, (jio/writer f) written to --
+  and skipping it as JVM-only left both unable to resolve jio/reader, so
+  neither worked at all. What is here is TEXT files: a reader reads the
+  whole file once and hands it out a line or all at once; a writer
+  gathers what is written and writes the file when it is closed.
+  Streams of bytes, URLs and classpath resources are not here.")
+
+(definterface IReader
+  (readLine [])
+  (readAll []))
+
+(deftype TextReader [text pos]
+  IReader
+  (readLine [_]
+    (let [p @pos]
+      (when (< p (count text))
+        (let [i (or (clojure.string/index-of text "\n" p) (count text))]
+          (reset! pos (inc i))
+          (subs text p (if (and (> i p) (= \return (nth text (dec i)))) (dec i) i))))))
+  (readAll [_]
+    (let [p @pos]
+      (reset! pos (count text))
+      (if (< p (count text)) (subs text p) "")))
+  java.io.Closeable
+  (close [_] nil))
+
+(deftype File [path]
+  Object
+  (toString [_] path))
+
+(defn- path-of [x]
+  (cond (string? x) x
+        (instance? File x) (.-path x)
+        :else (throw (IllegalArgumentException.
+                      (str "Cannot open <" (pr-str x) "> as a file")))))
+
+(defn file
+  "A File for the path, or for the parent and children joined with /."
+  ([arg] (File. (path-of arg)))
+  ([parent child] (File. (str (path-of parent) "/" (path-of child))))
+  ([parent child & more] (reduce file (file parent child) more)))
+
+(defn as-file [x] (when (some? x) (file x)))
+
+(defn as-relative-path
+  [x]
+  (let [p (path-of x)]
+    (if (clojure.string/starts-with? p "/")
+      (throw (IllegalArgumentException. (str p " is not a relative path")))
+      p)))
+
+(defn reader
+  "A reader over a file, a path, or text already a reader."
+  [x & opts]
+  (if (instance? TextReader x)
+    x
+    (TextReader. (clotran-slurp (path-of x)) (atom 0))))
+
+(defn input-stream [x & opts] (apply reader x opts))
+
+(deftype TextWriter [path append buf]
+  Object
+  (toString [_] (apply str @buf))
+  java.io.Closeable
+  (close [this] (.flush this))
+  java.io.Flushable
+  (flush [_]
+    (let [text (apply str @buf)]
+      (reset! buf [])
+      (clotran-spit path (if (and @append (clotran-file-exists? path)) (str (clotran-slurp path) text) text))
+      ;; later flushes add to what this one wrote
+      (reset! append true)
+      nil))
+  java.io.Writer
+  (write [_ x] (swap! buf conj (str x)) nil)
+  (append [this x] (.write this x) this))
+
+(defn writer
+  "A writer to a file; :append true adds to what is there."
+  [x & opts]
+  (let [{:keys [append]} (apply hash-map opts)]
+    (TextWriter. (path-of x) (atom (boolean append)) (atom []))))
+
+(defn output-stream [x & opts] (apply writer x opts))
+
+(defn copy
+  "Everything from input -- text, a file, a path or a reader -- written to
+  output, a writer or a file."
+  [input output & opts]
+  (let [text (cond (string? input) input
+                   (instance? TextReader input) (.readAll input)
+                   :else (clotran-slurp (path-of input)))]
+    (if (or (string? output) (instance? File output))
+      (with-open [w (writer output)] (.write w text))
+      (.write output text))
+    nil))
+
+(defn make-parents
+  "Makes the directories a file's path needs."
+  [f & more]
+  (let [p (path-of (apply file f more))
+        i (clojure.string/last-index-of p "/")]
+    (when (and i (pos? i))
+      (zero? (clotran-sh (str "mkdir -p '" (clojure.string/replace (subs p 0 i) "'" "'\\''") "'"))))))
+
+(defn delete-file
+  "Deletes the file; throws if it cannot, unless silently."
+  [f & [silently]]
+  (let [p (path-of f)]
+    (if (and (clotran-file-exists? p)
+             (zero? (clotran-sh (str "rm -f '" (clojure.string/replace p "'" "'\\''") "'"))))
+      true
+      (or silently (throw (java.io.IOException. (str "Couldn't delete " p)))))))
+
+(defn resource
+  "Classpath resources are not here: nil, as for one that is missing."
+  [n & _] nil)

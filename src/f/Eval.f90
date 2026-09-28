@@ -3658,11 +3658,45 @@ contains
     ! (thrown? IllegalArgumentException (f)) catches a bad-arity
     ! call. Beyond these two edges clotran's classes form no
     ! hierarchy (DEVIATIONS 4).
+    ! The parents code catches by, up the chain: ArityException and
+    ! NumberFormatException are IllegalArgumentExceptions, a missing
+    ! file an IOException, an array's bad index an IndexOutOfBounds.
     if (.not. exc_class_matches) then
-       if (gc_ref_is(got%ref, "ArityException")) &
-            exc_class_matches = class_matches("IllegalArgumentException", want)
+       block
+         character(len=:), allocatable :: c, pc
+         call gc_ref_text(got%ref, s=c)
+         do
+            ! through a temporary: p is intent(out), and passing c as both
+            ! would free the class name being read
+            call exc_parent(c, p=pc)
+            c = pc
+            if (len(c) == 0) exit
+            if (class_matches(c, want) .or. class_matches(want, c)) then
+               exc_class_matches = .true.
+               exit
+            end if
+         end do
+       end block
     end if
   end function exc_class_matches
+
+  ! The superclass that matters for catching, by the short name, or "".
+  ! A subroutine, not a character function: gfortran keeps a function's
+  ! deferred result length in a static (scripts/no-static-slen).
+  subroutine exc_parent(cls, p)
+    character(len=*), intent(in) :: cls
+    character(len=:), allocatable, intent(out) :: p
+    character(len=:), allocatable :: short
+    integer :: d
+    d = index(cls, ".", back=.true.)
+    short = cls(d + 1:)
+    select case (short)
+    case ("ArityException", "NumberFormatException"); p = "IllegalArgumentException"
+    case ("FileNotFoundException", "EOFException", "UnsupportedEncodingException"); p = "java.io.IOException"
+    case ("ArrayIndexOutOfBoundsException", "StringIndexOutOfBoundsException"); p = "IndexOutOfBoundsException"
+    case default; p = ""
+    end select
+  end subroutine exc_parent
 
   recursive function catch_matches(cls, exc, env) result(yes)
     type(gc_value), intent(in) :: cls, exc, env
@@ -10734,8 +10768,7 @@ contains
          if (rel == "clojure/core_proxy" .or. &
               rel == "clojure/genclass" .or. &
               rel == "clojure/gvec" .or. &
-              rel == "clojure/uuid" .or. &
-              rel == "clojure/java/io") then
+              rel == "clojure/uuid") then
             print '(A,A,A)', "note: skipping ", rel, &
                  " (JVM-only)"
             ! The namespace exists, empty: require checks that a lib
@@ -10764,6 +10797,9 @@ contains
          ! DEVIATIONS.md 40.
          if (rel == "clojure/core_print") rel = "clotran/core_print"
          if (rel == "clojure/data") rel = "clotran/data"
+         ! clojure.java.io: text files over clotran-slurp and clotran-spit,
+         ! which core.clj's slurp and spit are written against
+         if (rel == "clojure/java/io") rel = "clotran/java_io"
          ! each value on the stack before the next allocation: the path's
          ! gc_str inside the conj's arguments could collect the fresh empty
          ! vector, which only a Fortran local held (found by torture with
@@ -10771,7 +10807,23 @@ contains
          fargs = gcv_empty([vs_get(vst, base + 1)])
          call vs_set(vst, base + 2, fargs)
          block
+            logical :: there
             call classpath_find(rel, path=dlt_1)
+            inquire(file=dlt_1, exist=there)
+            if (.not. there) then
+               ! RT.load's own words, and its class: a missing library is
+               ! a FileNotFoundException, not a failure to open a path
+               if (index(rel, "_") > 0) then
+                  call fail_as("java.io.FileNotFoundException", "Could not locate " // rel // "__init.class, " // rel // &
+                       ".clj or " // rel // ".cljc on classpath. Please check that namespaces with dashes use " // &
+                       "underscores in the Clojure file name.", [vs_get(vst, base + 1)])
+               else
+                  call fail_as("java.io.FileNotFoundException", "Could not locate " // rel // "__init.class, " // rel // &
+                       ".clj or " // rel // ".cljc on classpath.", [vs_get(vst, base + 1)])
+               end if
+               call vs_leave(vst, base)
+               return
+            end if
             call vs_set(vst, base + 3, gc_str(dlt_1, [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
          end block
          fargs = gcv_conj(vs_get(vst, base + 2), vs_get(vst, base + 3), [vs_get(vst, base + 1)])
