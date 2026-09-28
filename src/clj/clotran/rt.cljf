@@ -129,7 +129,16 @@
 (extend-protocol clojure.core.protocols/CollReduce
   Eduction
   (coll-reduce
-    ([e f] (let [r (.reduce e (fn ([] (f)) ([acc x] (f acc x))) (f))] r))
+    ;; protocols.clj's iter-reduce: an Eduction is Iterable, and the first
+    ;; element is the seed, one element pulled at a time
+    ([e f] (let [it (.iterator e)]
+             (if (.hasNext it)
+               (loop [ret (.next it)]
+                 (if (.hasNext it)
+                   (let [ret (f ret (.next it))]
+                     (if (reduced? ret) @ret (recur ret)))
+                   ret))
+               (f))))
     ([e f init] (.reduce e f init))))
 
 ;;; ---- small members the language suite named ---------------------------

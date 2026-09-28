@@ -57,61 +57,63 @@
        args_reusable = .true.
     case (B_KEYWORD, B_LASTBREAK, B_LASTINDEXOF, B_LATCHCOUNT, B_LATCHDOWN, B_LATCHWAIT)
        args_reusable = .true.
-    case (B_LIST, B_LOADCOMPILED, B_LOADFILE, B_LONGCAST, B_LONGCAST_CHECKED, B_LT)
+    case (B_LIST, B_LOADCOMPILED, B_LOADFILE, B_LOADREADER, B_LONGCAST, B_LONGCAST_CHECKED)
        args_reusable = .true.
-    case (B_LTE, B_MACROEXP1, B_MAILBOX, B_MAKE_ARRAY, B_MAPENTRY, B_MAX)
+    case (B_LT, B_LTE, B_MACROEXP1, B_MAILBOX, B_MAKE_ARRAY, B_MAPENTRY)
        args_reusable = .true.
-    case (B_META, B_METHODTABLE, B_MILLIS, B_MIN, B_MONENTER, B_MONEXIT)
+    case (B_MAX, B_META, B_METHODTABLE, B_MILLIS, B_MIN, B_MONENTER)
        args_reusable = .true.
-    case (B_MUL, B_MUNGE, B_NAME, B_NAMESPACE, B_NANOTIME, B_NEG)
+    case (B_MONEXIT, B_MUL, B_MUNGE, B_NAME, B_NAMESPACE, B_NANOTIME)
        args_reusable = .true.
-    case (B_NEXT, B_NEXTID, B_NILP, B_NOT, B_NPROCS, B_NS)
+    case (B_NEG, B_NEXT, B_NEXTID, B_NILP, B_NOT, B_NPROCS)
        args_reusable = .true.
-    case (B_NSADDALIAS, B_NSALIASES, B_NSCREATE, B_NSMAP, B_NSREFER, B_NSREMOVE)
+    case (B_NS, B_NSADDALIAS, B_NSALIASES, B_NSCREATE, B_NSMAP, B_NSREFER)
        args_reusable = .true.
-    case (B_NSUNMAP, B_NUMCAST, B_NUMCOMPARE, B_NUMEQ, B_NUMER, B_NUMLONG)
+    case (B_NSREMOVE, B_NSUNMAP, B_NUMCAST, B_NUMCOMPARE, B_NUMEQ, B_NUMER)
        args_reusable = .true.
-    case (B_PADD, B_PDEC, B_PEEK, B_PERSISTENT, B_PINC, B_PKGCALL)
+    case (B_NUMLONG, B_PADD, B_PDEC, B_PEEK, B_PERSISTENT, B_PINC)
        args_reusable = .true.
-    case (B_PKGLOAD, B_PMUL, B_POOLREG, B_POP, B_POPTB, B_POS)
+    case (B_PKGCALL, B_PKGLOAD, B_PMUL, B_POOLREG, B_POP, B_POPTB)
        args_reusable = .true.
-    case (B_POSITION, B_PREFERMETHOD, B_PREFERTABLE, B_PREPRET, B_PRN, B_PROPGET)
+    case (B_POS, B_POSITION, B_PREFERMETHOD, B_PREFERTABLE, B_PREPRET, B_PRN)
        args_reusable = .true.
-    case (B_PROPLOAD, B_PSUB, B_PUSHTB, B_QOFFER, B_QTAKE, B_QUOT)
+    case (B_PROPGET, B_PROPLOAD, B_PSUB, B_PUSHTB, B_QOFFER, B_QTAKE)
        args_reusable = .true.
-    case (B_QUOTEREPL, B_RANDOMUUID, B_RANGE, B_RAWROOT, B_READFORMS, B_READSTRING)
+    case (B_QUOT, B_QUOTEREPL, B_RANDOMUUID, B_RANGE, B_RAWROOT, B_READFORMS)
        args_reusable = .true.
-    case (B_REDUCEINIT, B_REM, B_REMOVEMETHOD, B_REMWATCH, B_REPEAT, B_REPL)
+    case (B_READSTRING, B_REDUCEINIT, B_REM, B_REMOVEMETHOD, B_REMWATCH, B_REPEAT)
        args_reusable = .true.
-    case (B_REPLACE, B_RESETMETA, B_RESETTB, B_RESETVALS, B_RESOURCE, B_REST)
+    case (B_REPL, B_REPLACE, B_RESETMETA, B_RESETTB, B_RESETVALS, B_RESOURCE)
        args_reusable = .true.
-    case (B_RESUME, B_RE_APPENDREPL, B_RE_APPENDTAIL, B_RE_COMPILE, B_RE_END, B_RE_FIND)
+    case (B_REST, B_RESUME, B_RE_APPENDREPL, B_RE_APPENDTAIL, B_RE_COMPILE, B_RE_END)
        args_reusable = .true.
-    case (B_RE_GROUP, B_RE_GROUPCOUNT, B_RE_MATCHER, B_RE_MATCHES, B_RE_REPLACEALL, B_RE_REPLACEFIRST)
+    case (B_RE_FIND, B_RE_GROUP, B_RE_GROUPCOUNT, B_RE_MATCHER, B_RE_MATCHES, B_RE_REPLACEALL)
        args_reusable = .true.
-    case (B_RE_SPLIT, B_RE_START, B_RSEQ, B_RTLOAD, B_RTPRINT, B_RUNTX)
+    case (B_RE_REPLACEFIRST, B_RE_SPLIT, B_RE_START, B_RSEQ, B_RTLOAD, B_RTPRINT)
        args_reusable = .true.
-    case (B_SBREVERSE, B_SECOND, B_SEQ, B_SEQFROM, B_SETDYNAMIC, B_SETERRHANDLER)
+    case (B_RUNTX, B_SBREVERSE, B_SECOND, B_SEQ, B_SEQFROM, B_SETDYNAMIC)
        args_reusable = .true.
-    case (B_SETERRMODE, B_SETMACRO, B_SETVAL, B_SETVALIDATOR, B_SH, B_SHL)
+    case (B_SETERRHANDLER, B_SETERRMODE, B_SETMACRO, B_SETVAL, B_SETVALIDATOR, B_SH)
        args_reusable = .true.
-    case (B_SHORTCAST, B_SHR, B_SLEEP, B_SLURP, B_SPIT, B_STACKTRACE)
+    case (B_SHL, B_SHORTCAST, B_SHR, B_SLEEP, B_SLURP, B_SPIT)
        args_reusable = .true.
-    case (B_STARTSWITH, B_STE_CLASS, B_STE_FILE, B_STE_LINE, B_STE_METHOD, B_STR)
+    case (B_STACKTRACE, B_STARTSWITH, B_STE_CLASS, B_STE_FILE, B_STE_LINE, B_STE_METHOD)
        args_reusable = .true.
-    case (B_STRCONTAINS, B_STRLEN, B_STUB, B_SUB, B_SUBMIT, B_SUBS)
+    case (B_STR, B_STRCONTAINS, B_STRLEN, B_STUB, B_SUB, B_SUBMIT)
        args_reusable = .true.
-    case (B_SUBSTRING, B_SUBVEC, B_SWAPVAL, B_SWAPVALS, B_SYMBOL2, B_TAGGEDLIT)
+    case (B_SUBS, B_SUBSTRING, B_SUBVEC, B_SWAPVAL, B_SWAPVALS, B_SYMBOL2)
        args_reusable = .true.
-    case (B_TASKCANCEL, B_TASKCANCELLED, B_TASKDONE, B_TASKSTATUS, B_THREADDAEMON, B_THREADSTART)
+    case (B_TAGGEDLIT, B_TASKCANCEL, B_TASKCANCELLED, B_TASKDONE, B_TASKSTATUS, B_THREADDAEMON)
        args_reusable = .true.
-    case (B_TOARRAY, B_TOBIG, B_TODEC, B_TOSTRING, B_TYPE, B_UADD)
+    case (B_THREADSTART, B_TOARRAY, B_TOBIG, B_TODEC, B_TOSTRING, B_TYPE)
        args_reusable = .true.
-    case (B_UDEC, B_UFLOATCAST, B_UINC, B_UMUL, B_UPCASE, B_USHR)
+    case (B_UADD, B_UDEC, B_UFLOATCAST, B_UINC, B_UMUL, B_UPCASE)
        args_reusable = .true.
-    case (B_USUB, B_UUIDOF, B_VAL, B_VALS, B_VARCREATE, B_VARINTERN)
+    case (B_USHR, B_USUB, B_UUIDOF, B_VAL, B_VALS, B_VARCREATE)
        args_reusable = .true.
-    case (B_VARNS, B_VARSYM, B_VEC, B_WITHMETA, B_WRITE, B_ZERO)
+    case (B_VARINTERN, B_VARNS, B_VARSYM, B_VEC, B_WITHMETA, B_WRITE)
+       args_reusable = .true.
+    case (B_ZERO)
        args_reusable = .true.
     case default
        args_reusable = .false.

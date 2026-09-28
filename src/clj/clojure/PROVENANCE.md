@@ -30,15 +30,16 @@ the reason is not effort, it is that they are the JVM:
 | `genclass.clj`   | the same, for named AOT classes |
 | `gvec.clj`       | `java.util.Collection`, `java.util.concurrent` |
 | `instant.clj`    | `java.sql.Timestamp`, `java.text.SimpleDateFormat` |
-| `uuid.clj`       | `java.util.UUID` |
 
 `proxy` and `gen-class` generate classes; there is nothing for them to
 generate here.
 
-Those five, plus `java/`, are the only files from upstream's `src/clj`
+Those four, plus `java/`, are the only files from upstream's `src/clj`
 that are NOT here. Everything else is, whether or not it currently
 loads -- `set`, `data`, `edn`, `datafy`, `walk`, `uuid` and `template`
-already do.
+already do. `uuid.clj` is here and runs VERBATIM (2026-09-28): its
+`java.util.UUID` is a record clotran.rt defines under that name, behind
+`UUID/fromString` and `UUID/randomUUID`.
 
 Skip them BY NAME, never by absence. core.clj says `(load
 "core_proxy")` and clotran skips that by name. An earlier evaluator

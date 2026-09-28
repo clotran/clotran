@@ -879,7 +879,7 @@
     end if
     if (k_limit == 0) call read_frame_limit()
     if (tctx%ksp >= k_limit) then
-       call fail("stack overflow")
+       call raise_class("StackOverflowError", "stack overflow", [gc_value ::])
        return
     end if
     b = vs_enter(vst, K_SLOTS)
@@ -1045,7 +1045,7 @@
     if (ev_limit == 0) call read_depth_limit()
     tctx%ev_depth = tctx%ev_depth + 1
     if (tctx%ev_depth > ev_limit) then
-       call fail("stack overflow")
+       call raise_class("StackOverflowError", "stack overflow", [gc_value ::])
        tctx%ev_depth = tctx%ev_depth - 1
        return
     end if
@@ -1116,7 +1116,7 @@
           if (tag_of(gc_slot(nd, 3)) == GCT_BOOL) call frame_set(vs_get(vst, b + 2), gc_i2(nd), gc_nil())
           call k_finish(val)
        case (N_VAR)
-          val = gcn_var_value(gc_slot(nd, 2))
+          val = var_deref(gc_slot(nd, 2), [gc_slot(nd, 2)])
           call k_finish(val)
        case (N_IF)
           if (tctx%kst(tctx%ksp)%pc == 0) then

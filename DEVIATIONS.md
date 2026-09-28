@@ -31,7 +31,7 @@ Categories:
 | 9 | RESOLVED -- sorted collections | -- | `src/f/Assoc.f90` |
 | 10 | Refs are mutable boxes; `set!` of an unbound Var sets its root | temporary | `src/f/Eval.f90` |
 | 11 | Transient maps and sets are the persistent collections (vectors are real) | host | `src/f/Eval.f90` |
-| 12 | Five JVM-only libs are skipped by name, and not vendored | host | `src/f/Eval.f90` |
+| 12 | Three JVM-only libs are skipped by name, and not vendored | host | `src/f/Eval.f90` |
 | 13 | Protocol dispatch is uncached | host | `src/f/GC.f90` |
 | 14 | Regex is ICU under java.util.regex's names; `\w` and `(?i)` are Unicode | host | `src/f/Regex.f90` |
 | 15 | `hash` values are gc_hash's, not the JVM's murmur3 | host | `src/f/GC.f90` |
@@ -305,11 +305,14 @@ and they are not `IEditableCollection`, so `into {}` conjs. Used
 correctly -- single-threaded and linearly -- the two give the same value.
 What is lost is the speed, and the use-after-persistent! error.
 
-## 12. Four JVM-only libs are skipped by name
+## 12. Three JVM-only libs are skipped by name
 
-`core_proxy`, `genclass`, `gvec` and `uuid`, plus `clojure.java.io`.
-The first two import `clojure.asm`, `ClassWriter` and
-`DynamicClassLoader` to emit bytecode; the rest want `java.util`.
+`core_proxy`, `genclass` and `gvec`, plus `clojure.java.io`, which
+clotran replaces with its own (DEVIATIONS 40). The first two import
+`clojure.asm`, `ClassWriter` and `DynamicClassLoader` to emit bytecode;
+`gvec` wants `java.util.concurrent`. `uuid` was skipped until
+2026-09-28; it now runs verbatim on a `java.util.UUID` that clotran.rt
+defines as a record under that name.
 
 Named individually rather than tolerating any missing file, so a real
 typo in a load path is still an error. `instant` needs no entry: it is
@@ -1075,13 +1078,14 @@ so failing at analysis would stop core.clj at that form. Deferring keeps
 the file loading and moves the failure to the call, which is where the
 old walker reported it too.
 
-The var-quote has the same rule. `#'clojure.uuid/default-uuid-reader`
+The var-quote is NARROWER (2026-09-28). `#'clojure.instant/read-instant-date`
 in core.clj's `default-data-readers` names a Var in a library that is
-skipped, and Clojure would refuse the form; here a qualified name that
-does not resolve is interned UNBOUND in its namespace, created if
-need be, so the map loads and only reading a `#uuid` literal fails.
-(That form's init was never analysed before `def` learned its
-docstring form, which is how this stayed hidden.)
+never loaded here, and Clojure would refuse the form; so a qualified
+name whose NAMESPACE DOES NOT EXIST is interned unbound in a namespace
+made for it and marked `:clotran/placeholder`, and the map loads. A
+namespace that exists -- `user` from another namespace, say -- refuses
+as `Compiler.lookupVar` does: "Unable to resolve var: user/x in this
+context". (`resolve_var` no longer creates a namespace to look in.)
 
 **Removal**: either load those libraries (they are JVM-bound) or
 accept the form as-is; the honest end state is that `slurp` is defined
@@ -1423,44 +1427,22 @@ first. `.getComponentType` answers the element type, so `bytes?` is
 true for a byte array. Checked value by value against clj in
 test/clj/oracle.clj.
 
-## 46. Data readers work in `clojure.edn` and nowhere else
+## 46. RESOLVED -- data readers work in `clojure.edn` and nowhere else
 
-`clojure.edn` reads `#tag form` exactly as Clojure's EdnReader does:
-the tag is looked for in the opts `:readers` map, then among the
-readers EDN has built in (`uuid`), then in `:default`, and a tag
-nothing answers raises `No reader function for tag x` -- the same
-message, so a program that catches on it catches here.
-
-Everywhere else, `#tag form` is a reader error: "reader: no dispatch
-for #u". `read-string`, `read` and a loaded source file do not consult
-`*data-readers*`, `default-data-readers` or `*default-data-reader-fn*`,
-and `#inst` and `#uuid` are therefore not readable in source.
-
-**Why the split.** The reader cannot apply a data reader itself: it
-would have to call the evaluator, and `Eval.f90` uses `LispReader`
-rather than the other way round. So the reader leaves `#tag form` as
-a MARKER -- `{:clotran/tagged-literal true :tag t :form f}`, the same
-shape `tagged-literal` builds -- and whoever turned markers on
-resolves them afterwards. `EdnReader/readString` is the one caller
-that does. Markers are off for ordinary source, so an unknown tag in
-a file is still an error there rather than a map nobody expected.
-
-Two other things keep `#inst` and `#uuid` out of `read-string` even
-once that is wired: `default-data-readers` names
-`clojure.uuid/default-uuid-reader`, and `clojure.uuid` is a lib
-DEVIATIONS 12 skips by name; and `#inst` wants a date type, which
-`instant.clj` would bring if `Class/forName` answered for
-`java.sql.Timestamp`.
-
-What works regardless of the reader: `parse-uuid`, `uuid?`,
-`random-uuid`, `tagged-literal` and `tagged-literal?` all answer as
-Clojure's do. `inst?` answers false for everything, having nothing to
-be true of, and `inst-ms` has no value to take.
-
-**Removal**: call the same resolution from `read-string`, `read` and
-`load`, with `*data-readers*` over `default-data-readers` as the map
-and `*default-data-reader-fn*` as the fallback. `#uuid` then needs
-`clojure.uuid` to stop being skipped; `#inst` needs a date type.
+**RESOLVED 2026-09-28.** `#tag form` is readable everywhere. The reader
+still cannot apply a data reader -- it would have to call the
+evaluator -- so it leaves the literal as a marker,
+`{:clotran/tagged-literal true :clotran/unread true :tag t :form f}`,
+and `clotran.reader/resolve-tags` resolves the markers in a form before
+it is analysed (`gce_analyze`) or answered by `read-string`, exactly as
+`LispReader.CtorReader` does at read time: `*data-readers*`, then
+`default-data-readers`, then `*default-data-reader-fn*`, and otherwise
+Clojure's own "No reader function for tag x". Innermost first, quoted
+data included, metadata kept. A `tagged-literal` a program built has no
+`:clotran/unread` and is left alone. `clojure.edn` resolves its own
+markers against its opts, as before. `#uuid` reads because
+`clojure.uuid` now runs verbatim (DEVIATIONS 12); `#inst` still wants a
+date type.
 
 ## 47. `all-ns` answers a namespace per host class name as well
 
@@ -1633,3 +1615,31 @@ while core.clj loads, as `:direct-linking` does -- except to Vars marked
 fact. Not done: core.clj redefines some functions part way through
 (`reduce` after its protocols load), which a binding taken early would
 miss.
+
+## 56. An index is 64-bit; the JVM truncates a vector's to 32
+
+`(get ["a" "b" "c"] 4294967296)` is `"a"` on the JVM, `(contains? [1 2
+3] 4294967296)` true and `(find [1 2 3] 4294967296)` `[4294967296 1]`:
+`RT.get`, `RT.contains` and `RT.find` take a vector's key through
+`Number.intValue()`, which keeps the low 32 bits, so 2^32 is index 0.
+Here an index is a 64-bit integer and 2^32 is out of range: nil, false,
+nil. ClojureScript answers as clotran does. Checked with clj 2026-09-28
+(clojuredocs `contains?#example2`, `find#example1`, `get#example6`).
+
+**Removal**: truncate the way `intValue` does, in `get`, `contains?`
+and `find` on vectors -- three lines, and a wrong answer copied on
+purpose. Not done.
+
+## 57. `vec`, `sort` and `to-array` copy an array; the JVM aliases it
+
+On the JVM `(vec an-object-array)` shares the array
+(`LazilyPersistentVector.createOwning`), so an `aset` afterwards shows
+in the vector; `(sort an-array)` and `(sort-by f an-array)` sort the
+array in place; `(to-array an-object-array)` is the array itself,
+`identical?` to it. Here each makes a copy, as ClojureScript does.
+Checked with clj 2026-09-28 (clojuredocs `vec#example1`,
+`sort-by#example5`, `to-array#example1`).
+
+**Removal**: a vector over a native array's buffer, and sorting the
+buffer in place. Aliasing a mutable array under a persistent vector is
+the JVM's shortcut, not the language's; not done.

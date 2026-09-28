@@ -67,7 +67,8 @@
 
 (def prelude "
 (defn clotran-oracle-canon [x]
-  (cond (map? x) (str \"{\" (clojure.string/join \", \" (sort (map (fn [e] (str (clotran-oracle-canon (key e)) \" \" (clotran-oracle-canon (val e)))) x))) \"}\")
+  (cond (or (uuid? x) (tagged-literal? x)) (pr-str x)
+        (map? x) (str \"{\" (clojure.string/join \", \" (sort (map (fn [e] (str (clotran-oracle-canon (key e)) \" \" (clotran-oracle-canon (val e)))) x))) \"}\")
         (set? x) (str \"#{\" (clojure.string/join \" \" (sort (map clotran-oracle-canon x))) \"}\")
         (vector? x) (str \"[\" (clojure.string/join \" \" (map clotran-oracle-canon x)) \"]\")
         (sequential? x) (str \"(\" (clojure.string/join \" \" (map clotran-oracle-canon x)) \")\")

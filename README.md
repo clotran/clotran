@@ -36,10 +36,11 @@ clotran does not implement those, core.clj does.
 `template`, `zip`, `stacktrace`, `test`, `inspector`, `reflect`,
 `parallel`, `pprint`, `math`, `core.protocols` and `core.reducers`.
 Loaded means a var of theirs RESOLVES afterwards, not merely that
-`require` returned without complaint: `clojure.uuid` and
-`clojure.java.io` are skipped by name, so requiring them succeeds and
-defines nothing, and counting that as a load is how this number was
-once too high. The eight that fail -- `repl`, `main`, `instant`,
+`require` returned without complaint: `clojure.java.io` is clotran's
+own (DEVIATIONS 40), and `clojure.uuid` was once skipped by name so that
+requiring it succeeded and defined nothing -- counting that as a load
+is how this number was once too high. (`uuid` runs verbatim now, on a
+`java.util.UUID` clotran.rt defines under that name.) The eight that fail -- `repl`, `main`, `instant`,
 `xml`, `java.shell`, `java.browse`, `core.server`, `process` -- each
 want a JVM class (`Thread`, `Socket`, `SimpleDateFormat`, a SAX
 parser).

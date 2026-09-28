@@ -101,7 +101,7 @@ module LispReader
      ! module, not the other way round), so the caller that turned this
      ! on resolves the markers afterwards. Off for ordinary source, so
      ! an unknown tag in a file is still a reader error there.
-     logical :: tag_markers = .false.
+     logical :: tag_markers = .true.   ! #tag form is a marker, resolved before analysis (clotran.reader)
      ! the #(...) being read: its suffix, from the shared anon_seq
      integer :: anon_cur = 0
   end type rd_state
@@ -955,7 +955,16 @@ contains
     k = gc_key("form", [roots, [vs_get(base + 1), vs_get(base + 2), &
          vs_get(base + 3)]])
     call vs_set(base + 4, k)
-    v = gca_assoc(vs_get(base + 3), vs_get(base + 4), vs_get(base + 2), &
+    m = gca_assoc(vs_get(base + 3), vs_get(base + 4), vs_get(base + 2), &
+         [roots, [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), &
+         vs_get(base + 4)]])
+    call vs_set(base + 3, m)
+    ! the reader's own, to be resolved: a tagged-literal a program
+    ! built has the same shape without this key
+    k = gc_key("clotran/unread", [roots, [vs_get(base + 1), vs_get(base + 2), &
+         vs_get(base + 3)]])
+    call vs_set(base + 4, k)
+    v = gca_assoc(vs_get(base + 3), vs_get(base + 4), gc_bool(.true.), &
          [roots, [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), &
          vs_get(base + 4)]])
     call vs_leave(base)

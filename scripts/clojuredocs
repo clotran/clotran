@@ -192,6 +192,7 @@
 (defn canon [x d]
   (let [lim (fn [xs] (let [v (vec (take 101 xs))] (if (> (count v) 100) (conj (subvec v 0 100) '...) v)))]
     (cond (> d 12) \"...\"
+          (or (uuid? x) (tagged-literal? x)) (pr-str x)
           (map? x) (str \"{\" (clojure.string/join \", \" (sort (map (fn [e] (str (canon (key e) (inc d)) \" \" (canon (val e) (inc d)))) (lim x)))) \"}\")
           (set? x) (str \"#{\" (clojure.string/join \" \" (sort (map #(canon % (inc d)) (lim x)))) \"}\")
           (vector? x) (str \"[\" (clojure.string/join \" \" (map #(canon % (inc d)) (lim x))) \"]\")
@@ -307,7 +308,10 @@
   [l]
   (some-> l
           (str/replace #"(#object\[\S+) 0x[0-9a-f]+" "$1")
-          (str/replace #"(#object\[\S+) \"(?:[^\"\\\\]|\\\\.)*\"\]" "$1]")))
+          (str/replace #"(#object\[\S+) \"(?:[^\"\\\\]|\\\\.)*\"\]" "$1]")
+          ;; Object.toString inside a string -- (str (map inc [1 2])) is
+          ;; "clojure.lang.LazySeq@1b554e1" -- carries an identity hash too
+          (str/replace #"([A-Za-z][A-Za-z0-9_.$]*)@[0-9a-f]{4,8}\b" "$1@")))
 
 (defn judge
   "Each case with its status: :agree, :differ, :clotran-stopped, or not

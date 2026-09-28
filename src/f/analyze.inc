@@ -747,6 +747,22 @@
           end if
        end if
        end block
+       ! Compiler.analyzeSymbol: a macro has no value to take --
+       ! (apply and xs) and (map or a b) are errors, not nil
+       block
+          type(gc_value) :: md
+          md = gc_slot(var, 2)
+          if (gca_is(md)) then
+             if (truthy(gca_get(md, gc_key("macro", [var])))) then
+                block
+                   call gcp_str(var, .false., s=dlt_1)
+                   call fail("Can't take value of a macro: " // dlt_1)
+                end block
+                call vs_leave(vst, base)
+                return
+             end if
+          end if
+       end block
        call vs_set(vst, base + 3, var)
        nd = mk_node(N_VAR, gc_nil(), vs_get(vst, base + 3), gc_nil(), 0, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
        call vs_leave(vst, base)
@@ -2154,7 +2170,17 @@
     sl = index(t, "/")
     if (sl <= 1 .or. sl >= len(t)) return
     base = vs_enter(vst, 2)
-    ns = gcn_find_or_create(t(1:sl-1), roots)
+    ns = gcn_find(t(1:sl-1))
+    if (gc_kind(ns) /= OBJ_NS) then
+       ! a namespace made HERE stands for a skipped library: marked, so
+       ! that (var ns/x) keeps interning into it and refuses a real one
+       ns = gcn_find_or_create(t(1:sl-1), roots)
+       call vs_set(vst, base + 1, ns)
+       call vs_set(vst, base + 2, gca_empty([roots, vs_get(vst, base + 1)]))
+       call vs_set(vst, base + 2, gca_assoc(vs_get(vst, base + 2), gc_key("clotran/placeholder", [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)]), &
+            gc_bool(.true.), [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+       call gc_set_slot(vs_get(vst, base + 1), 4, vs_get(vst, base + 2))
+    end if
     call vs_set(vst, base + 1, ns)
     nm = gc_sym(t(sl+1:), [roots, vs_get(vst, base + 1)])
     call vs_set(vst, base + 2, nm)
@@ -2187,13 +2213,42 @@
     end if
     var = resolve_var(sym, gc_nil())
     if (.not. gcn_is_var(var)) then
+       ! ... but a namespace that EXISTS and has no such var is
+       ! Compiler.lookupVar's error: #'user/x from another namespace
+       ! must not create user/x. A namespace that does not exist is the
+       ! skipped-library case below.
+       block
+          integer :: slash
+          type(gc_value) :: nsv
+          call gc_ref_text(sym%ref, s=dlt_1)
+          slash = index(dlt_1, "/")
+          if (slash > 1 .and. slash < len(dlt_1)) then
+             nsv = gcn_find(dlt_1(1:slash - 1))
+             if (gc_kind(nsv) == OBJ_NS) then
+                if (gca_is(gc_slot(nsv, 4))) then
+                   ! a placeholder for a skipped library (intern_unbound): not real
+                   if (truthy(gca_get(gc_slot(nsv, 4), gc_key("clotran/placeholder", [nsv])))) nsv = gc_nil()
+                end if
+             end if
+             if (gc_kind(nsv) == OBJ_NS) then
+                ! the namespace's own interns, private ones included:
+                ! #'clojure.uuid/default-uuid-reader is a defn-
+                var = gca_get(gc_slot(nsv, 2), gc_sym(dlt_1(slash + 1:), [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+                if (.not. gcn_is_var(var)) then
+                   call fail("Unable to resolve var: " // dlt_1 // " in this context")
+                   call vs_leave(vst, base)
+                   return
+                end if
+             end if
+          end if
+       end block
        ! A QUALIFIED name that does not resolve is interned unbound, in
        ! its namespace, created if need be -- the var-quote's half of
        ! deviation 32. core.clj's default-data-readers holds
        ! #'clojure.uuid/default-uuid-reader, and clojure.uuid is a
        ! skipped library: the map loads, and only reading a #uuid
        ! literal fails.
-       var = intern_unbound(sym, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       if (.not. gcn_is_var(var)) var = intern_unbound(sym, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
        if (.not. gcn_is_var(var)) then
           block
              call gc_ref_text(sym%ref, s=dlt_1)

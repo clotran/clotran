@@ -1,0 +1,41 @@
+(ns clotran.reader
+  "Tagged literals in source. The reader cannot apply a data reader --
+  it would have to call the evaluator -- so it leaves #tag form as a
+  marker, {:clotran/tagged-literal true :clotran/unread true :tag t
+  :form f}, and this resolves the markers in a form before it is
+  analysed (gce_analyze) or answered by read-string (B_READSTRING), as
+  LispReader.CtorReader does at read time: *data-readers*, then
+  default-data-readers, then *default-data-reader-fn*, and otherwise
+  Clojure's own 'No reader function for tag'. A tagged-literal a program
+  built has no :clotran/unread and is left as it is. DEVIATIONS 46.")
+
+(defn- unread? [x]
+  (and (map? x) (:clotran/unread x)))
+
+(defn resolve-tags
+  "The form with every reader-made tagged literal in it replaced by what
+  its data reader answers, innermost first; collections rebuilt only on
+  the path to one, metadata kept."
+  [form]
+  (cond
+    (unread? form)
+    (let [tag (:tag form)
+          inner (resolve-tags (:form form))
+          rdr (or (get *data-readers* tag) (get default-data-readers tag))]
+      (cond rdr (rdr inner)
+            *default-data-reader-fn* (*default-data-reader-fn* tag inner)
+            :else (throw (RuntimeException. (str "No reader function for tag " tag)))))
+
+    (seq? form)
+    (with-meta (apply list (map resolve-tags form)) (meta form))
+
+    (vector? form)
+    (with-meta (mapv resolve-tags form) (meta form))
+
+    (map? form)
+    (with-meta (into (empty form) (map (fn [[k v]] [(resolve-tags k) (resolve-tags v)])) form) (meta form))
+
+    (set? form)
+    (with-meta (into (empty form) (map resolve-tags) form) (meta form))
+
+    :else form))

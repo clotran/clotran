@@ -2397,7 +2397,6 @@
  (clojure.edn/read-string "1/2") (clojure.edn/read-string "3.5M")
  (clojure.edn/read-string "7N") (clojure.edn/read-string ":a/b")
  (clojure.edn/read-string "\"a\nb\"")]
-(expect-diff "DEVIATIONS 12: java.util.UUID is not a type here, so a uuid IS its text -- the same answer parse-uuid gives")
 [(clojure.edn/read-string "#uuid \"00000000-0000-0000-0000-000000000000\"")]
 
 ;;; Type hints change behaviour, not only speed. A ^long or ^double
@@ -2630,3 +2629,29 @@
 [(count (range 5)) (count (range 0 10 3)) (count (range 10 0 -3)) (count (range 1.0 2.0 0.3)) (count (rest (range 100))) (count (drop 40 (range 100))) (count (range 5 5)) (count (range -3)) (count (range 0 10 4)) (count (range 0 -10 -4)) (count (range 1/2 3 1/2)) (count (take 70 (range 100))) (count (range 1000000)) (bounded-count 10 (range 1000000)) (count (map inc (range 100000)))]
 
 [(nth (iterate inc 0) 100000) (take 3 (iterate inc 0)) (nth (iterate #(* 2 %) 1) 62) (count (take 1000 (iterate inc 0))) (last (range 100000)) (nth (map inc (range 100000)) 99999) (nth (range 10) 3 :d) (nth (iterate inc 0) 5 :d) (nth '(1 2) 5 :d) (realized? (rest (iterate inc 0)))]
+
+[(boolean (re-find #"^clojure\.lang\.LazySeq@[0-9a-f]+$" (str (map inc [1 2])))) (str (range 3)) (str (cons 1 nil)) (boolean (re-find #"LazySeq@" (str (take 2 (iterate inc 0))))) (boolean (re-find #"LazySeq@" (str (lazy-seq [1]))))]
+
+[(format "%x" (byte -128)) (format "%x" (short -1)) (format "%X" (int -1)) (format "%o" (byte -1)) (format "%x" -1) (format "%d" (byte 5))]
+
+[(try (hash-ordered-coll 1) (catch ClassCastException e :cce)) (try (hash-unordered-coll "12") (catch ClassCastException e :cce)) (try (hash-ordered-coll nil) (catch Throwable e :npe)) (hash-ordered-coll [1 2]) (hash-unordered-coll #{1 2}) (hash-ordered-coll (list 1 2))]
+
+[(:author (meta (find-ns 'clojure.core))) (:doc (meta (find-ns 'clojure.core)))]
+
+[(reduce (fn [a b] (+ a b)) (eduction (map inc) (range 3))) (reduce (fn [a b] (+ a b)) (eduction (map inc) [7])) (reduce (fn [a b] (if (> b 2) (reduced a) (+ a b))) (eduction (map inc) (range 10)))]
+
+[(str (parse-uuid "B6883C0A-0342-4007-9966-BC2DFA6B109E")) (uuid? (parse-uuid "b6883c0a-0342-4007-9966-bc2dfa6b109e")) (uuid? "x") (parse-uuid "foo") (parse-uuid "") (= (parse-uuid "b6883c0a-0342-4007-9966-bc2dfa6b109e") #uuid "b6883c0a-0342-4007-9966-bc2dfa6b109e") (pr-str #uuid "17392216-6ca5-491a-b38c-0000000920ba") (uuid? (random-uuid)) (count (str (random-uuid))) (instance? java.util.UUID (random-uuid))]
+
+[(read-string "#uuid \"17392216-6ca5-491a-b38c-0000000920ba\"") (binding [*data-readers* {'oracle-dbl (fn [x] (* 2 x))}] (read-string "#oracle-dbl 21")) (try (read-string "#oracle-nope [1]") (catch Throwable e :no-reader)) '[#uuid "17392216-6ca5-491a-b38c-0000000920ba" {:k #uuid "17392216-6ca5-491a-b38c-0000000920ba"}] (tagged-literal 'js [1 2]) (tagged-literal? (tagged-literal 'js [1 2]))]
+
+[(do (def oracle-unb) (str (class oracle-unb))) (str oracle-unb) (try (oracle-unb) (catch IllegalStateException e :unbound-call)) (bound? #'oracle-unb) (do (def ^:dynamic oracle-dyn) (binding [oracle-dyn 1] oracle-dyn))]
+
+[(load-string "(+ 1 2)") (load-string "(def oracle-ls 5) oracle-ls") (load-string "")]
+
+[(try (eval '(apply and [true])) (catch Throwable e :macro-value)) (try (eval '(map or [true] [false])) (catch Throwable e :macro-value)) (try (eval '(var user/oracle-no-such-var)) (catch Throwable e :no-var))]
+
+[(:a (meta (with-meta (reify Object) {:a 1}))) (try (with-meta (clojure.java.io/file ".") {:a 1}) (catch ClassCastException e :cce))]
+
+(try (let [f (fn f [n] (f (inc n)))] (f 0)) (catch StackOverflowError e :so))
+
+[(= (hash [1 2 3]) (hash-ordered-coll [1 2 3])) (= (hash #{1 2}) (hash-unordered-coll #{1 2})) (= (hash {:a 1}) (hash-unordered-coll {:a 1})) (hash-ordered-coll (map inc [1 2])) (hash-unordered-coll [1 1])]

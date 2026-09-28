@@ -163,15 +163,22 @@ contains
   end subroutine gcn_name
 
   ! Namespace.find: the namespace called name, or nil -- never a new one.
-  function gcn_find(name) result(ns)
+  ! `roots`: what the caller holds only in locals while the key is
+  ! allocated -- a collection at that allocation would free it
+  function gcn_find(name, roots) result(ns)
     character(len=*), intent(in) :: name
+    type(gc_value), intent(in), optional :: roots(:)
     type(gc_value) :: ns, key
     type(gc_value) :: none(0)
     integer :: base
     ns = gc_nil()
     if (.not. roots_live()) return
     base = vs_enter(1)
-    key = gc_str(name, none)
+    if (present(roots)) then
+       key = gc_str(name, roots)
+    else
+       key = gc_str(name, none)
+    end if
     call vs_set(base + 1, key)
     ns = gca_get(gc_root_get(registry_root), vs_get(base + 1))
     if (gc_kind(ns) /= OBJ_NS) ns = gc_nil()

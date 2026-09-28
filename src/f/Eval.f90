@@ -237,7 +237,7 @@ module Eval
   ! Clojure's aset (RT.aset, Array.setX): typed as reflection types it --
   ! a byte[] takes only a Byte. fortran/aset (B_ASET) converts.
   integer, parameter :: B_JASET = 398, B_FLOATCAST = 399, B_UFLOATCAST = 400
-  integer, parameter :: B_INTEGERVALUE = 401
+  integer, parameter :: B_INTEGERVALUE = 401, B_LOADREADER = 403, B_UUIDFN = 404
   ! A number's WIDTH, in an integer's or a real's otherwise unused ref:
   ! what it boxes as on the JVM. Equality and hashing never read it.
   integer, parameter :: W_LONG = 0, W_BYTE = 1, W_SHORT = 2, W_INT = 3, W_FLOAT = 1
@@ -367,6 +367,8 @@ module Eval
   logical, save :: task_trace = .false., task_trace_read = .false.   ! CLOTRAN_TASK_TRACE=1: the scheduler's decisions, on stderr
   logical, save :: rt_loaded = .false.   ! clotran.rt, once (rt_call)
   logical, save :: mf_loaded = .false.   ! clotran.multifn, once (mf_call)
+  logical, save :: uuid_loaded = .false.   ! clotran.uuid, once (uuid_call)
+  logical, save :: rdr_loaded = .false.   ! clotran.reader, once (reader_call)
   ! Compiler.checkSpecs: clojure.spec.alpha/macroexpand-check before a
   ! macro expands. RT.CHECK_SPECS comes on once core.clj has loaded
   ! (main.f90); the two spec libs load at the first check, and no check
@@ -746,7 +748,7 @@ contains
     end if
     if (k_limit == 0) call read_frame_limit()
     if (tctx%fstack_top >= k_limit) then
-       call fail("stack overflow")
+       call raise_class("StackOverflowError", "stack overflow", [gc_value ::])
        return
     end if
     tctx%fstack_top = tctx%fstack_top + 1
@@ -1089,6 +1091,94 @@ contains
 
   ! clotran.multifn: the multimethod's method selection, a file of its
   ! own because it is first needed while core.clj is still loading
+  ! java.util.UUID and its two statics (clotran/uuid.cljf): its own
+  ! loader because core.clj reaches (load "uuid") before clotran.rt can
+  ! load, and a hosttable row (B_UUIDFN) reaches it from anywhere.
+  recursive function uuid_call(name, args) result(out)
+    character(len=*), intent(in) :: name
+    type(gc_value), intent(in) :: args
+    type(gc_value) :: out
+    out = rt_call_in("clotran/uuid", "clotran.uuid", uuid_loaded, name, args)
+  end function uuid_call
+
+  ! clotran.reader resolves the reader's #tag markers (DEVIATIONS 46)
+  recursive function reader_call(name, args) result(out)
+    character(len=*), intent(in) :: name
+    type(gc_value), intent(in) :: args
+    type(gc_value) :: out
+    out = rt_call_in("clotran/reader", "clotran.reader", rdr_loaded, name, args)
+  end function reader_call
+
+  ! Whether a form the reader made holds a #tag marker anywhere: the
+  ! scan that decides whether clotran.reader/resolve-tags runs on it.
+  recursive function has_unread(v0) result(yes)
+    type(gc_value), intent(in) :: v0
+    type(gc_value) :: v, s, k
+    logical :: yes
+    integer :: i
+    yes = .false.
+    v = strip_meta(v0)
+    if (v%tag /= GCT_OBJ) return
+    if (gcl_is(v)) then
+       s = v
+       do while (gcl_count(s) > 0)
+          if (has_unread(gcl_first(s))) then
+             yes = .true.
+             return
+          end if
+          s = gcl_rest(s, [gc_value ::])
+       end do
+    else if (gcv_is(v)) then
+       do i = 0, gcv_count(v) - 1
+          if (has_unread(gcv_nth(v, i))) then
+             yes = .true.
+             return
+          end if
+       end do
+    else if (gca_is(v)) then
+       k = gc_key("clotran/unread", [v])
+       if (truthy(gca_get(v, k))) then
+          yes = .true.
+          return
+       end if
+       s = to_seq(v, [v])
+       do while (s%tag /= GCT_NIL)
+          if (has_unread(sq_first(s, [v, s]))) then
+             yes = .true.
+             return
+          end if
+          s = to_seq(sq_rest(s, [v, s]), [v])
+       end do
+    else if (gc_kind(v) == OBJ_SET .or. gc_kind(v) == OBJ_HAMT) then
+       s = to_seq(v, [v])
+       do while (s%tag /= GCT_NIL)
+          if (has_unread(sq_first(s, [v, s]))) then
+             yes = .true.
+             return
+          end if
+          s = to_seq(sq_rest(s, [v, s]), [v])
+       end do
+    end if
+  end function has_unread
+
+  ! The form with the reader's #tag markers resolved (clotran.reader),
+  ! or the form itself when it has none.
+  recursive function resolve_unread(form) result(out)
+    type(gc_stack), pointer :: vst
+    type(gc_value), intent(in) :: form
+    type(gc_value) :: out
+    integer :: base
+    out = form
+    if (.not. has_unread(form)) return
+    vst => gc_my_stack()
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, form)
+    call vs_set(vst, base + 2, gcv_build(1, [vs_get(vst, base + 1)]))
+    call vs_set(vst, base + 2, gcv_put(vs_get(vst, base + 2), 0, vs_get(vst, base + 1), [vs_get(vst, base + 1)]))
+    out = reader_call("resolve-tags", vs_get(vst, base + 2))
+    call vs_leave(vst, base)
+  end function resolve_unread
+
   recursive function mf_call(name, args) result(out)
     character(len=*), intent(in) :: name
     type(gc_value), intent(in) :: args
@@ -3045,6 +3135,13 @@ contains
        out = rt_call("array-list", vs_get(vst, base + 1))
     else if (cname == "Eduction" .or. cname == "clojure.lang.Eduction") then
        out = rt_call("->Eduction", vs_get(vst, base + 1))
+    else if (cname == "java.io.StringReader" .or. cname == "StringReader") then
+       ! a reader over a string is the string: load-string builds one
+       ! and hands it to load-reader (Compiler.load, B_LOADREADER)
+       out = nth_or_nil(vs_get(vst, base + 1), 0)
+    else if (cname == "clojure.lang.LineNumberingPushbackReader" .or. cname == "java.io.PushbackReader" .or. &
+         cname == "java.io.BufferedReader") then
+       out = nth_or_nil(vs_get(vst, base + 1), 0)
     else if (cname == "Object" .or. cname == "java.lang.Object") then
        ! (Object.), a sentinel equal only to itself
        out = rt_call("object", vs_get(vst, base + 1))
@@ -3476,7 +3573,23 @@ contains
           var = gcn_lookup(ans, bare)
           if (gcn_is_var(var)) return
        end if
-       var = gcn_lookup(gcn_find_or_create(t(1:slash-1), [roots, bare]), bare)
+       ! the namespace looked up, never MADE: a qualified name in a
+       ! namespace that does not exist does not resolve (Compiler.resolveIn),
+       ! and making one here left (var ns/x) unable to tell a real
+       ! namespace from a skipped library's placeholder (analyze_varq)
+       block
+         type(gc_value) :: nsv
+         nsv = gcn_find(t(1:slash-1), [roots, bare])
+         ! clojure.core alone is made on demand: before core.clj loads
+         ! (the host's own tests) the builtins are reached through it
+         if (gc_kind(nsv) /= OBJ_NS .and. t(1:slash-1) == "clojure.core") &
+              nsv = gcn_find_or_create(t(1:slash-1), [roots, bare])
+         if (gc_kind(nsv) == OBJ_NS) then
+            var = gcn_lookup(nsv, bare)
+         else
+            var = gc_nil()
+         end if
+       end block
        if (.not. gcn_is_var(var)) var = gc_nil()
        return
     end if
@@ -3702,6 +3815,8 @@ contains
     case ("ArityException", "NumberFormatException"); p = "IllegalArgumentException"
     case ("FileNotFoundException", "EOFException", "UnsupportedEncodingException"); p = "java.io.IOException"
     case ("ArrayIndexOutOfBoundsException", "StringIndexOutOfBoundsException"); p = "IndexOutOfBoundsException"
+    case ("StackOverflowError", "OutOfMemoryError"); p = "VirtualMachineError"
+    case ("VirtualMachineError", "AssertionError"); p = "Error"
     case default; p = ""
     end select
   end subroutine exc_parent
@@ -4653,6 +4768,20 @@ contains
     type(gc_value) :: out
     tctx => ctx_self()
     tctx%ev_depth = 0
+    ! a #tag literal in the form is resolved first, as the reader would
+    ! have on the JVM (clotran.reader, DEVIATIONS 46)
+    if (has_unread(form)) then
+       block
+         type(gc_stack), pointer :: vst
+         integer :: base
+         vst => gc_my_stack()
+         base = vs_enter(vst, 1)
+         call vs_set(vst, base + 1, resolve_unread(form))
+         if (.not. tctx%has_error) out = analyze_top(vs_get(vst, base + 1))
+         call vs_leave(vst, base)
+       end block
+       return
+    end if
     out = analyze_top(form)
   end function gce_analyze
 
@@ -5587,11 +5716,22 @@ contains
           call fail("format: " // conv // " wants an integer")
           return
        end if
-       if (conv == "o") then
-          write(buf, '(O0)') a%ival
-       else
-          write(buf, '(Z0)') a%ival
-       end if
+       block
+         integer(gc_ip) :: iv
+         iv = a%ival
+         ! a Byte, Short or Integer prints in its own width, as
+         ! Formatter does: (format "%x" (byte -128)) is "80"
+         select case (a%ref)
+         case (W_BYTE);  iv = iand(iv, 255_gc_ip)
+         case (W_SHORT); iv = iand(iv, 65535_gc_ip)
+         case (W_INT);   iv = iand(iv, 4294967295_gc_ip)
+         end select
+         if (conv == "o") then
+            write(buf, '(O0)') iv
+         else
+            write(buf, '(Z0)') iv
+         end if
+       end block
        p = trim(buf)
        if (conv == "x") call downcase_in_place(p)
     case ("f", "e", "E", "g")
@@ -6270,7 +6410,7 @@ contains
     if (tctx%has_error) return
     tctx%ev_depth = tctx%ev_depth + 1
     if (tctx%ev_depth > ev_limit) then
-       call fail("stack overflow")
+       call raise_class("StackOverflowError", "stack overflow", [gc_value ::])
     else
        tctx%cur_fn = fn
        call cf_call(gc_i1(fn), argbase, nargs, dst)
@@ -6409,6 +6549,16 @@ contains
                out = rt_call(dlt_1, args)
             end block
           end block
+       else if (gc_i1(fn) == B_UUIDFN) then
+          ! java.util.UUID's statics: clotran.uuid's vars (uuid_call)
+          block
+            type(gc_value) :: nm
+            nm = gc_slot(fn, 1)
+            block
+               call gc_ref_text(nm%ref, s=dlt_1)
+               out = uuid_call(dlt_1, args)
+            end block
+          end block
        else
           ! handed over, not kept, as a closure's are below: call_builtin
           ! roots args itself before it allocates, and a builtin that
@@ -6470,10 +6620,7 @@ contains
             call vs_set(vst, base + 2, cons_vec(vs_get(vst, base + 1), vs_get(vst, base + 2), [vs_get(vst, base + 3)]))
             out = apply(vs_get(vst, base + 3), vs_get(vst, base + 2))
          else
-            block
-               call gcp_str(fn, .true., s=dlt_1)
-               call fail("not a function: " // dlt_1)
-            end block
+            call not_a_function(fn)
          end if
        end block
     case (OBJ_MULTIFN)
@@ -6623,10 +6770,7 @@ contains
              end block
           end if
        else
-          block
-             call gcp_str(fn, .true., s=dlt_1)
-             call fail("not a function: " // dlt_1)
-          end block
+          call not_a_function(fn)
        end if
     end select
 
@@ -7452,6 +7596,12 @@ contains
              call gc_ref_text(a%ref, s=dlt_1)
              out = gcn_find_or_create(dlt_1, [vs_get(vst, base + 1)])
           end block
+          ! a new namespace takes the symbol's metadata, as Namespace's
+          ! constructor does: clojure.core's :author comes from its ns form
+          if (gc_kind(gcv_nth(vs_get(vst, base + 1), 2)) == OBJ_META) then
+             b = gc_slot(out, 4)
+             if (b%tag == GCT_NIL) call gc_set_slot(out, 4, gc_slot(gcv_nth(vs_get(vst, base + 1), 2), 2))
+          end if
           call gcn_set_current(out)
        end if
     case (B_INNS)
@@ -7465,6 +7615,11 @@ contains
              call gc_ref_text(a%ref, s=dlt_1)
              out = gcn_find_or_create(dlt_1, [vs_get(vst, base + 1)])
           end block
+          ! as the ns bootstrap above: a new namespace takes its symbol's metadata
+          if (gc_kind(gcv_nth(vs_get(vst, base + 1), 0)) == OBJ_META) then
+             b = gc_slot(out, 4)
+             if (b%tag == GCT_NIL) call gc_set_slot(out, 4, gc_slot(gcv_nth(vs_get(vst, base + 1), 0), 2))
+          end if
           call gcn_set_current(out)
        end if
     case (B_META)
@@ -7496,8 +7651,16 @@ contains
           ! a record carries its own metadata: its withMeta, not a wrapper
           out = inst_invoke(a, "withMeta", rest_args(vs_get(vst, base + 1), 1), hit)
           if (.not. hit) then
-             ! a reify (or any deftype instance): the same type and
-             ! fields under the new metadata, in slot 3
+             ! a reify implements IObj; a deftype instance does not
+             call gcp_str(gc_slot(gc_slot(a, 1), 1), .false., s=dlt_1)
+             if (index(dlt_1, "clotran.reify__") /= 1) then
+                call raise_class("ClassCastException", "class " // dlt_1 // " cannot be cast to class clojure.lang.IObj", &
+                     [vs_get(vst, base + 1)])
+                call vs_leave(vst, base)
+                return
+             end if
+             ! a reify: the same type and fields under the new metadata,
+             ! in slot 3
              out = gc_obj(OBJ_INST, [gc_slot(a, 1), gc_slot(a, 2), gcv_nth(vs_get(vst, base + 1), 1)], &
                   [vs_get(vst, base + 1)])
           end if
@@ -8833,35 +8996,26 @@ contains
             allocate(character(len=fsize) :: text)
             read(u, iostat=st) text
             close(u)
-            if (gc_root_live(global_env_root)) then
-               genv = gc_root_get(global_env_root)
-            else
-               genv = gc_nil()
-            end if
-            call vs_set(vst, base + 2, genv)
-            ! one form at a time, as main.f90's load_file and Compiler.load
-            fid = gcr_begin_file(text, path)
-            j = 1
-            do
-               forms = gcr_read_next(text, j, [vs_get(vst, base + 1), vs_get(vst, base + 2)], eof, fid)
-               if (gcr_has_error()) then
-                  block
-                     call gcr_error(s=dlt_1)
-                     call fail("load-file " // path // ": " // dlt_1)
-                  end block
-                  exit
-               end if
-               if (eof) exit
-               call vs_set(vst, base + 3, forms)
-               f = gce_analyze(vs_get(vst, base + 3), vs_get(vst, base + 2))
-               if (tctx%has_error) exit
-               out = gce_eval(f, vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
-               if (tctx%has_error) exit
-            end do
+            call load_text(text, path, out)
             if (.not. tctx%has_error) call gce_install_compiled(path)
          end if
          call gcn_set_current(vs_get(vst, nsb + 1))
          call vs_leave(vst, nsb)
+       end block
+    case (B_LOADREADER)
+       ! Compiler.load over a reader -- load-reader, and load-string
+       ! through it. A reader is the text itself (java.io.StringReader.
+       ! is its string) or clojure.java.io's TextReader, read to its end.
+       block
+         character(len=:), allocatable :: text
+         a = strip_meta(gcv_nth(args, 0))
+         if (gc_kind(a) == OBJ_INST) then
+            b = inst_invoke0(a, "readAll", hit)
+            if (hit) a = b
+         end if
+         call text_of(a, s=dlt_1)
+         text = dlt_1
+         call load_text(text, "NO_SOURCE_PATH", out)
        end block
     case (B_ENDSWITH)
        block
@@ -10062,35 +10216,43 @@ contains
          end select
        end block
     case (B_HASHORD, B_HASHUNORD)
-       ! The SAME folds gce_coll_hash uses, so a collection and the
-       ! hash of its elements agree: ordered multiplies by 31 as a
-       ! vector does, unordered sums as a set does. The numbers are
-       ! not murmur3's (DEVIATIONS 15); what matters is that equal
-       ! collections hash alike and that these agree with `hash`.
+       ! Murmur3.hashOrdered and hashUnordered exactly, as `hash` is
+       ! (DEVIATIONS 15 resolved): (hash-ordered-coll [1 2]) is (hash
+       ! [1 2]), the fold 31 * h + x from 1 mixed with the count, and
+       ! unordered the sum from 0.
        block
          type(gc_value) :: sq, el
-         integer :: acc
+         integer :: acc, cnt
          acc = 0
+         cnt = 0
+         if (id == B_HASHORD) acc = 1
+         ! Murmur3.hashOrdered takes an Iterable: a number, a string, an
+         ! array or nil is a ClassCastException, not a hash
+         el = strip_meta(gcv_nth(args, 0))
+         if (el%tag == GCT_NIL .or. el%tag == GCT_STR .or. gc_kind(el) == OBJ_ARRAY .or. .not. seqable_quiet(el)) then
+            call class_name_of(el, s=dlt_1)
+            call raise_class("ClassCastException", "class " // dlt_1 // " cannot be cast to class java.lang.Iterable", &
+                 [vs_get(vst, base + 1)])
+            call vs_leave(vst, base)
+            return
+         end if
          sq = to_seq(gcv_nth(args, 0), [vs_get(vst, base + 1)])
          call vs_set(vst, base + 2, sq)
          sq = vs_get(vst, base + 2)
          do while (sq%tag /= GCT_NIL .and. .not. tctx%has_error)
             el = sq_first(vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
             if (id == B_HASHORD) then
-               acc = 31 * acc + gc_hash(el)
+               acc = m3_ordered_step(acc, gc_hash(el))
             else
-               acc = acc + gc_hash(el)
+               acc = m3_add(acc, gc_hash(el))
             end if
+            cnt = cnt + 1
             sq = sq_rest(vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
             call vs_set(vst, base + 2, sq)
             sq = to_seq(vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
             call vs_set(vst, base + 2, sq)
          end do
-         if (id == B_HASHORD) then
-            out = gc_int(mix32(acc))
-         else
-            out = gc_int(mix32(ieor(acc, OBJ_SET)))
-         end if
+         out = gc_int(int(m3_mix_coll(acc, cnt), gc_ip))
        end block
     case (B_HASHCOMB)
        ! Util.hashCombine: seed ^ (hash + 0x9e3779b9 + (seed<<6) + (seed>>2))
@@ -10957,10 +11119,13 @@ contains
             call vs_leave(vst, base)
             return
          end if
+         ! clojure/uuid runs verbatim on clotran.rt's java.util.UUID,
+         ! which must exist before its print-method names the class
+         if (rel == "clojure/uuid" .and. .not. uuid_loaded) &
+              out = uuid_call("identity-uuid", gcv_empty([vs_get(vst, base + 1)]))
          if (rel == "clojure/core_proxy" .or. &
               rel == "clojure/genclass" .or. &
-              rel == "clojure/gvec" .or. &
-              rel == "clojure/uuid") then
+              rel == "clojure/gvec") then
             print '(A,A,A)', "note: skipping ", rel, &
                  " (JVM-only)"
             ! The namespace exists, empty: require checks that a lib
@@ -11836,6 +12001,10 @@ contains
                   call gcr_error(s=dlt_1)
                   call fail(dlt_1)
                end block
+            else
+               ! a #tag literal resolved, as LispReader would have at
+               ! read time (clotran.reader, DEVIATIONS 46)
+               out = resolve_unread(out)
             end if
          end if
        end block
@@ -13838,6 +14007,51 @@ contains
     call vs_leave(vst, base)
   end function sq_count
 
+  ! Every form of `text` read, analysed and evaluated in turn, the
+  ! first error ending it, as Compiler.load does -- one form at a time,
+  ! as main.f90's load_file -- and *ns* saved and restored around it,
+  ! as Compiler.load pushes a binding for it. `path` is what the reader
+  ! records as the source. load-file, load-reader and load-string.
+  recursive subroutine load_text(text, path, out)
+    type(gc_stack), pointer :: vst
+    type(eval_ctx), pointer :: tctx
+    character(len=*), intent(in) :: text, path
+    type(gc_value), intent(out) :: out
+    type(gc_value) :: forms, genv, f
+    integer :: base, j, fid
+    logical :: eof
+    character(len=:), allocatable :: dlt_1
+    tctx => ctx_self()
+    vst => gc_my_stack()
+    out = gc_nil()
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, gcn_current([gc_value ::]))
+    if (gc_root_live(global_env_root)) then
+       genv = gc_root_get(global_env_root)
+    else
+       genv = gc_nil()
+    end if
+    call vs_set(vst, base + 2, genv)
+    fid = gcr_begin_file(text, path)
+    j = 1
+    do
+       forms = gcr_read_next(text, j, [vs_get(vst, base + 1), vs_get(vst, base + 2)], eof, fid)
+       if (gcr_has_error()) then
+          call gcr_error(s=dlt_1)
+          call fail("load-file " // path // ": " // dlt_1)
+          exit
+       end if
+       if (eof) exit
+       call vs_set(vst, base + 3, forms)
+       f = gce_analyze(vs_get(vst, base + 3), vs_get(vst, base + 2))
+       if (tctx%has_error) exit
+       out = gce_eval(f, vs_get(vst, base + 2), [vs_get(vst, base + 2), vs_get(vst, base + 3)])
+       if (tctx%has_error) exit
+    end do
+    call gcn_set_current(vs_get(vst, base + 1))
+    call vs_leave(vst, base)
+  end subroutine load_text
+
   ! The first argument taken out of a builtin's argument vector, in
   ! place, so a walk over it holds no head: the vector is private to the
   ! call (fresh, a spare, or apply's own copy) but a frame above the
@@ -13875,6 +14089,41 @@ contains
     end if
     ok = .true.
   end function range_count
+
+  ! A Var's value as evaluating its name gives it: the root, the thread
+  ! binding, or -- unbound -- a clojure.lang.Var$Unbound, the box an
+  ! atom is with i1 = 4 and the Var in slot 1. Var.deref answers that
+  ! object rather than nil; calling it is the "Attempting to call
+  ! unbound fn" error, and it prints as #object[clojure.lang.Var$Unbound
+  ! ... "Unbound: #'ns/name"].
+  function var_deref(v, roots) result(out)
+    type(gc_value), intent(in) :: v
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out
+    ! bound: flagged so by def (i1 = 1), bound in this thread, or a
+    ! root that is not nil -- bind_builtin sets no flag
+    out = gcn_var_value(v)
+    if (out%tag /= GCT_NIL) return
+    if (gc_i1(v) == 1 .or. gc_kind(gcn_binding_box(v)) == OBJ_ATOM) return
+    out = gc_obj(OBJ_ATOM, [v, gc_nil()], [roots, v])
+    call gc_set_i1(out, 4)
+  end function var_deref
+
+  ! The error for calling what is not a function: an unbound Var's
+  ! value names the Var, as Var.Unbound.throwArity does.
+  subroutine not_a_function(fn)
+    type(gc_value), intent(in) :: fn
+    character(len=:), allocatable :: t
+    if (gc_kind(fn) == OBJ_ATOM) then
+       if (gc_i1(fn) == 4) then
+          call gcp_str(gc_slot(fn, 1), .true., s=t)
+          call raise_class("IllegalStateException", "Attempting to call unbound fn: " // t, [fn])
+          return
+       end if
+    end if
+    call gcp_str(fn, .true., s=t)
+    call fail("not a function: " // t)
+  end subroutine not_a_function
 
   ! Clojure's truthiness: everything except nil and false.
   ! The type of a value, as a keyword. Everything else that asks
@@ -13990,6 +14239,15 @@ contains
   ! #object[clojure.lang.Namespace ...]. Doing it in the PRINTER on
   ! *print-readably* instead got (str *ns*) right and (str [*ns*])
   ! wrong, because a collection's toString prints its elements.
+  logical function is_lazy_seq_class(v)
+    type(gc_value), intent(in) :: v
+    character(len=:), allocatable :: c
+    is_lazy_seq_class = .false.
+    if (gc_kind(strip_meta(v)) /= OBJ_LAZY) return
+    call class_name_of(v, s=c)
+    is_lazy_seq_class = (c == "clojure.lang.LazySeq")
+  end function is_lazy_seq_class
+
   subroutine to_string_text(v, s)
     type(gc_value), intent(in) :: v
     character(len=:), allocatable, intent(out) :: s
@@ -14009,6 +14267,18 @@ contains
        block
           call gcp_str(inner, .false., s=dlt_1)
           s = dlt_1
+       end block
+    else if (is_lazy_seq_class(v)) then
+       ! LazySeq has no toString of its own on the JVM -- it is not an
+       ! ASeq -- so (str (map inc [1 2])) is "clojure.lang.LazySeq@402"
+       ! there, Object's, with the identity hash in hex. A Cons, a range
+       ! or an iterate prints its elements.
+       block
+         character(len=20) :: hb
+         write(hb, '(Z0)') iand(int(gc_hash(v), gc_ip), 4294967295_gc_ip)
+         dlt_1 = trim(hb)
+         call downcase_in_place(dlt_1)
+         s = "clojure.lang.LazySeq@" // dlt_1
        end block
     else if (sequential_p(v) .or. gca_is(strip_meta(v)) .or. gc_kind(strip_meta(v)) == OBJ_SET) then
        ! a collection's toString is its READABLE form -- RT.printString
@@ -16147,6 +16417,7 @@ contains
           case (1); s = "clojure.lang.Ref"
           case (2); s = "clojure.lang.Agent"
           case (3); s = "clojure.lang.Reduced"
+          case (4); s = "clojure.lang.Var$Unbound"
           case default; s = "clojure.lang.Atom"
           end select
        case (OBJ_ARRAY)
@@ -17310,9 +17581,11 @@ contains
           call vs_set(vst, base + 6, av)
           out = apply(vs_get(vst, base + 5), vs_get(vst, base + 6))
        else if (name_part_is(vs_get(vst, base + 3), "uuid")) then
-          ! EDN has uuid built in. A UUID is its text here
-          ! (DEVIATIONS 12), which is what parse-uuid answers too.
-          out = uuid_of(vs_get(vst, base + 4), [vs_get(vst, base + 1), vs_get(vst, base + 4)])
+          ! EDN has uuid built in: java.util.UUID, as UUID/fromString makes it
+          call vs_set(vst, base + 6, gcv_build(1, [vs_get(vst, base + 1), vs_get(vst, base + 4)]))
+          call vs_set(vst, base + 6, gcv_put(vs_get(vst, base + 6), 0, vs_get(vst, base + 4), &
+               [vs_get(vst, base + 1), vs_get(vst, base + 4)]))
+          out = uuid_call("uuid-from-string", vs_get(vst, base + 6))
        else
           fn = gca_get(vs_get(vst, base + 2), gc_key("default", [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
           call vs_set(vst, base + 5, fn)

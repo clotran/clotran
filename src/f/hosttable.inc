@@ -229,7 +229,7 @@
        hm("java.lang.Math", "subtractExact", B_MATH0 + 38, "clotran-math-subtractExact"), &
        hm("java.lang.Math", "multiplyExact", B_MATH0 + 39, "clotran-math-multiplyExact"), &
        hm("java.lang.Math", "incrementExact", B_MATH0 + 40, "clotran-math-incrementExact") ]
-  type(hm), parameter :: HOST_STATICS_3(72) = [ &
+  type(hm), parameter :: HOST_STATICS_3(75) = [ &
        hm("java.lang.Math", "decrementExact", B_MATH0 + 41, "clotran-math-decrementExact"), &
        hm("java.lang.Math", "negateExact", B_MATH0 + 42, "clotran-math-negateExact"), &
        hm("java.lang.Math", "floorDiv", B_MATH0 + 43, "clotran-math-floorDiv"), &
@@ -283,6 +283,11 @@
   ! RT.nextID is the counter gensym counts on, shared with the auto-gensym counter.
        hm("clojure.lang.RT", "nextID", B_NEXTID, "clotran-next-id"), &
        hm("clojure.lang.RT", "load", B_RTLOAD, "clotran-rt-load"), &
+  ! java.util.UUID is clotran.rt's record under that name; clojure/uuid.clj runs verbatim on it
+       hm("java.util.UUID", "fromString", B_UUIDFN, "uuid-from-string"), &
+       hm("java.util.UUID", "randomUUID", B_UUIDFN, "uuid-random"), &
+  ! load-reader and load-string: Compiler.load over a reader (B_LOADREADER)
+       hm("clojure.lang.Compiler", "load", B_LOADREADER, "clotran-load-reader"), &
        hm("clojure.lang.RT", "subvec", B_SUBVEC, "subvec"), &
        hm("clojure.lang.RT", "first", B_FIRST, "first"), &
        hm("clojure.lang.RT", "next", B_NEXT, "next"), &
@@ -401,7 +406,7 @@
        hm("clojure.lang.Numbers", "longs", B_IDENTITY, "identity"), &
        hm("clojure.lang.Numbers", "doubles", B_IDENTITY, "identity"), &
        hm("clojure.lang.Util", "arrayTypeToSymbol", B_ARRAYTYPESYM, "clotran-array-type-symbol") ]
-  type(hm), parameter :: HOST_STATICS(312) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
+  type(hm), parameter :: HOST_STATICS(315) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
   type(hm), parameter :: HOST_METHODS_1(91) = [ &
   ! Instance members. The target becomes the first argument, which is all

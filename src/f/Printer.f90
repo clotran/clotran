@@ -705,10 +705,18 @@ contains
           s = "#<multifn " // dlt_1 // ">"
        end block
     case (OBJ_ATOM)
-       block
-          call gcp_str(gc_slot(v, 1), readable, s=dlt_1)
-          s = "#<atom " // dlt_1 // ">"
-       end block
+       if (gc_i1(v) == 4) then
+          ! Var$Unbound.toString: "Unbound: #'ns/name"
+          block
+             call gcp_str(gc_slot(v, 1), .false., s=dlt_1)
+             s = "Unbound: " // dlt_1
+          end block
+       else
+          block
+             call gcp_str(gc_slot(v, 1), readable, s=dlt_1)
+             s = "#<atom " // dlt_1 // ">"
+          end block
+       end if
     case (OBJ_VAR)
        ! #'ns/name, as Var.toString prints it
        if (gc_kind(gc_slot(v, 3)) == OBJ_NS) then

@@ -60,6 +60,8 @@
  "Eval.f90/ld_loaded" {:class :shared, :note "load once: the first load under a lock, the rest wait"}
  "Eval.f90/main_mailbox_root" {:class :shared, :note "the task table: under the context-table lock"}
  "Eval.f90/math_ctx_root" {:class :fixed, :note "#'*math-context* itself, found once; its binding is per-thread through the Var"}
+ "Eval.f90/uuid_loaded" {:class :shared, :note "load once: the first load under a lock, the rest wait"}
+ "Eval.f90/rdr_loaded" {:class :shared, :note "load once: the first load under a lock, the rest wait"}
  "Eval.f90/mf_loaded" {:class :shared, :note "load once: the first load under a lock, the rest wait"}
  "Eval.f90/n_ctx" {:class :shared, :note "the context table: under a lock (step 14a/b)"}
  "Eval.f90/n_free_ctx" {:class :shared, :note "the context table: under a lock (step 14a/b)"}
