@@ -14,3 +14,5 @@
 *.mod
 /docs/*.pdf
 /docs/*.html
+/examples/embed/heat
+/examples/embed/heat.dSYM/

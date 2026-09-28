@@ -15,8 +15,10 @@ where clotran stands today, measured:
   arrays, no copy, no glue. Packages, `bind-fortran` and ChemSol are
   this; several threads at once is what is missing.
 - **B. Dynamic scripting for legacy solvers** -- a REPL driving a
-  running solver. Package routines from the REPL are this; an embedded
-  REPL inside a Fortran program is the missing example.
+  running solver. Package routines from the REPL are this, and
+  `examples/embed` is a Fortran solver with the runtime linked in and
+  its strategy in Clojure on its own grid (2026-09-28); a socket into
+  it is what is missing.
 - **C. Financial models** -- functional code compiled to lean,
   deterministic binaries. Per-namespace AOT compilation is this;
   standalone binaries and `repro` are missing.
@@ -1473,9 +1475,11 @@ actions run in order on a thread of the agent's own, started when it
 has work and gone when it has none (DEVIATIONS 29 resolved); `dosync`
 is a transaction with a per-thread log and a commit, transactions
 serialized under one lock -- a valid STM schedule, no retries, no
-history (DEVIATIONS 10 resolved for refs). Not done: a thread pool for
-agents, `*agent*` bound during an action, nested sends held until the
-action ends.
+history (DEVIATIONS 10 resolved for refs). `*agent*` is bound during
+an action; a send made inside an action or a transaction is held until
+it ends, as Agent.nested and LockingTransaction.enqueue hold it, and
+restart-agent resumes a failed agent's kept queue. Not done: a thread
+pool for agents (a drain is a thread per busy agent).
 
 **Not in this step**: a concurrent collector (the world stops for each
 collection), and a compacting one (objects never move, as now).

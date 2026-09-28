@@ -81,7 +81,7 @@ Everything is weighed against these four. The pure Clojure language is reproduce
 - The REPL calls package routines on clotran arrays: load, call, inspect, change, call again
 - A C ABI (`ClotranABI`) is the surface an embedding host would use
 - Text files in and out: `slurp`, `spit`, `line-seq`
-- Missing: an embedded-REPL example inside a running solver
+- `examples/embed`: a Fortran heat solver with clotran linked in; its initial condition, a mid-run source and the stopping rule are Clojure, on the solver's own grid, no copy
 
 ## C. Finance -- today
 
@@ -134,18 +134,18 @@ Everything is weighed against these four. The pure Clojure language is reproduce
 - **FEA and CFD** -- the constitutive model is written and tested at a REPL against real arrays, then compiled to Fortran for the solver
 - **Python stack** -- the Fortran SciPy is dropping runs unchanged as packages, with Clojure's data structures in front
 - **Finance** -- the legacy model stays; a compiled Clojure namespace sits beside it in one binary, no JVM to certify
-- Not yet: sockets, an embedded REPL inside a vendor solver, standalone linked binaries -- each on the road in PLAN.md
+- Not yet: sockets, standalone linked binaries -- each on the road in PLAN.md
 
-## Measured, 2026-09-27
+## Measured, 2026-09-28
 
 | | |
 |---|---|
 | core.clj | 724 / 724 forms load |
 | our tests | 100% on gfortran **and** flang -- the gate |
-| oracle vs real Clojure | 1015 forms, 0 unexpected differences |
+| oracle vs real Clojure | 1039 forms, 0 unexpected differences |
 | derived language suite | 2880 / 2880 assertions |
-| clojuredocs.org examples | 1198 / 1264 portable agree (94.8%) |
-| deviations | 55 recorded, 13 resolved, none unrecorded |
+| clojuredocs.org examples | 1233 / 1264 portable agree (97.5%) |
+| deviations | 57 recorded, 18 resolved, none unrecorded |
 | speed | 23x -- 514x the JVM's time, interpreted |
 
 ## How we keep ourselves honest
@@ -159,7 +159,7 @@ Everything is weighed against these four. The pure Clojure language is reproduce
 
 1. **Tests** -- clojuredocs to 100% of portable examples: deviations, performance, the long tail
 2. **Threads** -- futures, agents and transactions run as Clojure means them; next, the collector's pauses with many threads
-3. **Everything works** -- compiler node kinds, pure-Fortran tier, binaries, sockets, embedding
+3. **Everything works** -- compiler node kinds, pure-Fortran tier, binaries, sockets
 
 ## Why Fortran as the host
 

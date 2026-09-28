@@ -1,0 +1,15 @@
+clojure  wrote a pulse            total  100.000  peak  100.000
+fortran  read it back              total  100.000  peak  100.000
+clojure  step  100                 total   99.998  peak    5.635
+clojure  step  200                 total   99.671  peak    3.987
+clojure  switched a source on at cell 8
+clojure  step  300                 total  137.964  peak   40.462
+clojure  step  400                 total  124.429  peak    2.910
+clojure  step  500                 total  113.725  peak    2.656
+clojure  step  600                 total  105.609  peak    2.575
+clojure  step  700                 total   98.636  peak    2.444
+clojure  step  800                 total   92.366  peak    2.303
+clojure  step  900                 total   86.619  peak    2.165
+clojure  step 1000                 total   81.295  peak    2.032
+clojure  step 1100                 total   76.337  peak    1.908
+fortran  stopped at step 1100      total   76.337  peak    1.908

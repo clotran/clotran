@@ -115,15 +115,16 @@ no copy and no bridge.
   are one and two bytes an element, for binary data.
 - Immutable data, the seq library and transducers are core.clj's, so
   they are Clojure's -- 2880 of 2880 assertions in the derived language
-  suite, 94.8% of clojuredocs.org's portable examples agreeing with
+  suite, 97.5% of clojuredocs.org's portable examples agreeing with
   real Clojure.
 - Threads: a future runs on a thread of its own beside its maker
   (PLAN.md 14f, 2026-09-26); an agent's actions run in order on a
   thread of the agent's own; `dosync` is a transaction -- a log, a
   commit that validates then writes, watches notified -- with
   transactions serialized under one lock, which is a valid STM
-  schedule without the retries (DEVIATIONS 10). Not yet: a thread
-  pool for agents, parallel marking in the collector.
+  schedule without the retries (DEVIATIONS 10); a send inside an
+  action or a transaction is held until it ends, as the JVM holds it.
+  Not yet: a thread pool for agents, parallel marking in the collector.
 - Not there: sockets and streaming network input.
 
 ### B. Dynamic scripting for legacy solvers
@@ -141,13 +142,19 @@ Fortran runtime.
   routines with clotran arrays, inspect the results, change a value,
   call again. ChemSol is exactly this shape today.
 - The runtime has a C ABI (`src/f/ClotranABI.f90`) through which
-  compiled code and packages reach the heap; it is the surface an
-  embedding host program would use. Embedding a REPL *inside* a running
-  Fortran program is a direction, not yet an example.
+  compiled code and packages reach the heap, and `examples/embed` is a
+  Fortran program embedding it: a heat solver that owns `main` and its
+  time loop, links the runtime in, loads core.clj and takes its control
+  strategy from Clojure -- the initial condition, a source switched on
+  mid-run, the stopping rule -- on the solver's own grid. Fortran
+  integrates `u(:)` in place and Clojure's `aget`/`aset` read and write
+  the same buffer; nothing is copied. `make test` runs it under both
+  compilers and diffs its output.
 - Text files: `slurp`, `spit`, `line-seq`, `clojure.java.io` for text;
   a namelist reader would be a small library on top.
-- Not there: attaching to a solver's own arrays without going through
-  a package boundary.
+- Not there: a REPL socket into the running program, so the strategy
+  can be changed from outside while it runs; today the program
+  evaluates the forms it is given.
 
 ### C. High-throughput financial modelling
 
@@ -264,9 +271,8 @@ rather than a parser over text; the code becomes a package whose arrays
 cross at the same address; the constitutive model is developed at a REPL
 against real arrays and compiled to Fortran for the solver; the legacy
 financial model stays where it is with a compiled Clojure namespace
-beside it in one binary. What is not there yet -- sockets, an embedded
-REPL inside a vendor solver, standalone linked binaries -- is on the
-road in PLAN.md.
+beside it in one binary. What is not there yet -- sockets, standalone
+linked binaries -- is on the road in PLAN.md.
 
 ### Sources
 
@@ -281,12 +287,12 @@ road in PLAN.md.
 | measure | value |
 |---|---|
 | core.clj | 724 of 724 forms load, unmodified, pinned to `71b4623d` |
-| our tests | 100% on gfortran and flang, the commit gate; 1015 oracle forms value-compared against `clj`, 0 unexpected differences |
+| our tests | 100% on gfortran and flang, the commit gate; 1039 oracle forms value-compared against `clj`, 0 unexpected differences |
 | derived language suite | 2880 pass / 0 fail / 0 error over 321 tests |
-| clojuredocs.org examples | 1198 of 1264 portable examples agree with real Clojure (94.8%) |
+| clojuredocs.org examples | 1233 of 1264 portable examples agree with real Clojure (97.5%) |
 | Clojure's own library tests | set, walk, string, math, pprint verbatim: 859 assertions, 0 failures |
 | libraries loading | 35 of 40 vendored namespaces `require` |
-| deviations | 55 recorded in DEVIATIONS.md, 13 resolved; every known difference has an entry |
+| deviations | 57 recorded in DEVIATIONS.md, 18 resolved; every known difference has an entry |
 | startup | about 1 s, core.clj re-read each launch; 190 MB resident |
 | speed | 23x to 514x the JVM's time, interpreted |
 
@@ -304,7 +310,7 @@ a pass rate is over assertions that executed.
    left is speed: parallel marking in the collector, a thread pool
    for agents, and the collector's pauses measured with many threads.
 3. **Everything else works.** The compiler's remaining node kinds, the
-   pure-Fortran tier, standalone binaries, sockets, an embedding
+   pure-Fortran tier, standalone binaries, sockets, a REPL socket into an embedding
    example -- each weighed against the four scenarios.
 
 ## What clotran is not

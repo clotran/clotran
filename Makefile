@@ -162,7 +162,7 @@ unit-tests = gc_test persistent_vector_test persistent_list_test persistent_arra
 	bigdec_test abi_test native_array_test threads_test gc_mt_test
 test-bins = $(addprefix $(BT)/,$(unit-tests))
 
-.PHONY: all test crosscheck clean compiled-core
+.PHONY: all test crosscheck clean compiled-core embed
 all: clotran-bin $(test-bins)
 
 $(B) $(BT):
@@ -292,6 +292,14 @@ $(BT)/gc_mt_test: $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)
 $(BT)/abi_test: $(eval-objects) $(T)/abi_test.f90 $(ICU_LIBS) | $(BT) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -c $(T)/abi_test.f90 -o $(BT)/abi_test.o && $(FC) $(LDFLAGS) -o $@ $(eval-objects) $(BT)/abi_test.o $(LINK_ICU)
 
+# An EMBEDDER (examples/embed): a Fortran program that owns main and
+# its time loop, boots the runtime through the C surface, loads core.clj
+# and runs its control strategy from Clojure on its own grid -- one
+# array, both sides. Linked from the same objects as clotran-bin.
+examples/embed/heat: $(eval-objects) examples/embed/heat.f90 $(ICU_LIBS) | $(FCSTAMP)
+	$(FC) $(FCFLAGS) -c examples/embed/heat.f90 -o $(B)/embed_heat.o && $(FC) $(LDFLAGS) -o $@ $(eval-objects) $(B)/embed_heat.o $(LINK_ICU)
+embed: examples/embed/heat
+
 # The gate. Three layers (CLAUDE.md): the host tests, the host-level
 # checks that need core.clj loaded, and the differential oracle against
 # real Clojure. clotran is built here so main.f90 and its link line are
@@ -310,8 +318,10 @@ $(B)/libsamplelib.$(SOEXT): $(T)/samplelib.f90 $(B)/samplelib_shims.f90 | $(B) $
 	mkdir -p $(PKGMOD)
 	$(FC) $(filter-out -frecursive -J$(B),$(FCFLAGS)) -J$(PKGMOD) -shared -fPIC -o $@ $^
 
-test: $(test-bins) clotran-bin $(B)/libtestpkg.$(SOEXT) $(B)/libsamplelib.$(SOEXT) packages
+test: $(test-bins) clotran-bin $(B)/libtestpkg.$(SOEXT) $(B)/libsamplelib.$(SOEXT) packages examples/embed/heat
 	for t in $(unit-tests); do echo "--- $$t ---"; $(BT)/$$t || exit 1; done
+	@echo "--- a Fortran solver with clotran embedded, its strategy in Clojure on its own grid (examples/embed) ---"
+	examples/embed/heat | grep -v "^note:" | diff - examples/embed/expected.txt
 	@echo "--- language_test (with core.clj) ---"
 	./clotran-bin src/clj/clojure/core.clj test/clj/language_test.clj </dev/null \
 	  | tee /dev/stderr | grep -q "^LANGUAGE TESTS PASSED"
@@ -355,7 +365,7 @@ compiled-core: clotran-bin
 	./clotran compile src/clj/clojure/core.clj $(B)/compiled/clojure/core.$(SOEXT)
 
 clean:
-	rm -rf $(B) clotran-bin clotran-bin.dSYM
+	rm -rf $(B) clotran-bin clotran-bin.dSYM examples/embed/heat examples/embed/heat.dSYM
 
 # --- docs: the north star, generated from markdown ---------------------
 # pandoc writes HTML; a headless Chrome or Chromium prints it to PDF. No

@@ -1,0 +1,28 @@
+;; examples/embed/control.cljf -- the control strategy of the Fortran
+;; solver in examples/embed/heat.f90, written in Clojure.
+;;
+;; `u` is the solver's grid. It is one buffer: the Fortran time loop
+;; integrates u(:) in place, and aget and aset here read and write
+;; that same memory. Nothing is copied in either direction, so the
+;; initial condition, a source switched on mid-run and the stopping
+;; rule are code, changed without recompiling the solver.
+(ns embed.control)
+
+(defn total [^doubles u] (areduce u i acc 0.0 (+ acc (aget u i))))
+(defn peak  [^doubles u] (areduce u i m 0.0 (max m (aget u i))))
+
+(defn init!
+  "The initial condition: a pulse in the middle of the grid."
+  [^doubles u]
+  (aset u (quot (alength u) 2) 100.0)
+  (println (format "clojure  wrote a pulse            total %8.3f  peak %8.3f" (total u) (peak u))))
+
+(defn on-step
+  "Called by the solver every hundred steps: reports, adds a source at
+  step 300, and answers whether to go on -- while the peak is sharp."
+  [^doubles u step]
+  (when (= step 300)
+    (aset u 8 (+ (aget u 8) 40.0))
+    (println "clojure  switched a source on at cell 8"))
+  (println (format "clojure  step %4d                 total %8.3f  peak %8.3f" step (total u) (peak u)))
+  (< 2.0 (peak u)))

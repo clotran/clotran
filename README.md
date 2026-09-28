@@ -107,8 +107,32 @@ function keyed by the routine's own argument names:
 `scripts/chemsol-check` runs it on ChemSol's three reference inputs and
 diffs against the original program's output: all three match byte for
 byte. The arrays cross as the same buffers the Fortran writes into,
-with no copy. `scripts/bind-fortran` writes the shims and manifest for a library from its own signatures, so a package is declared rather than hand-bound.md step 7 records
-what the library dictated for it.
+with no copy. `scripts/bind-fortran` writes the shims and manifest for a library from its own signatures, so a package is declared rather than hand-bound. PLAN.md step 7
+records what the library dictated for it.
+
+**A Fortran program can embed clotran.** `examples/embed/heat.f90` is
+a heat solver that owns `main` and its time loop and links the runtime
+in (the same objects as `clotran-bin`), booting it through the C
+surface with no clotran module used. It loads core.clj and
+`examples/embed/control.cljf`, asks Clojure for the grid, and takes a
+pointer to it: the Fortran loop integrates `u(:)` in place while the
+strategy -- initial condition, a source switched on at step 300, the
+stopping rule -- is Clojure reading and writing the same buffer with
+`aget` and `aset`. `make embed && examples/embed/heat` prints
+
+```
+clojure  wrote a pulse            total  100.000  peak  100.000
+fortran  read it back              total  100.000  peak  100.000
+clojure  step  100                 total   99.998  peak    5.635
+clojure  step  200                 total   99.671  peak    3.987
+clojure  switched a source on at cell 8
+clojure  step  300                 total  137.964  peak   40.462
+...
+clojure  step 1100                 total   76.337  peak    1.908
+fortran  stopped at step 1100      total   76.337  peak    1.908
+```
+
+and `make test` diffs that output under both compilers.
 
 **`pprint` works.** Through Clojure's own `clojure.pprint`, verbatim:
 the pretty writer is a `proxy` over `Writer` and `IDeref`, the column
@@ -347,7 +371,7 @@ design.
 | debugger | steps count calls, not lines, since a call is the event the executor has; one level, so a break inside the handler is a snapshot; no socket. What it does is under "What works" |
 | `BigDecimal` | real: `1M`, scale kept, `with-precision` and all eight rounding modes. `(/ 1M 3)` ANSWERS at decimal128 rather than throwing, as MATLAB, Octave and Julia do (DEVIATIONS 43) |
 | mutable deftype fields | `(set! afield v)` is refused, loudly; DEVIATIONS 20 |
-| threads | a future runs on a thread of its own beside its maker (PLAN.md 14f); an agent's actions run in order on a thread of the agent's own, started when it has work; `dosync` is a transaction with a log and a commit, transactions serialized under one lock (a valid schedule, no retries; DEVIATIONS 10); a wait nothing can satisfy is an error, not a hang (DEVIATIONS 38) |
+| threads | a future runs on a thread of its own beside its maker (PLAN.md 14f); an agent's actions run in order on a thread of the agent's own, started when it has work, a send inside an action or a transaction held until it ends and a failed agent's queue kept for `restart-agent` (DEVIATIONS 29); `dosync` is a transaction with a log and a commit, transactions serialized under one lock (a valid schedule, no retries; DEVIATIONS 10); a wait nothing can satisfy is an error, not a hang (DEVIATIONS 38) |
 | the five JVM-only sibling libs | bytecode generation; see `src/clj/clojure/PROVENANCE.md` |
 | regex | ICU over UTF-8; its `\w` and `(?i)` are Unicode where Java's are ASCII |
 | `clojure.spec.alpha` | vendored and consulted before every macro expansion, as the Compiler does; `s/check-asserts` cannot be turned on (DEVIATIONS 42) |
