@@ -132,6 +132,11 @@
   '#{rand rand-int rand-nth shuffle random-sample random-uuid gensym time System/currentTimeMillis
      System/nanoTime Thread/sleep hash-ordinal repeatedly pmap pcalls pvalues future})
 
+;; What asks the JVM about itself: the class of a value, its supertypes
+;; and the names the compiler gives -- JVM class names are not the
+;; language, and are counted apart (:host) rather than chased.
+(def host-syms '#{class type bases supers ancestors munge instance? ns-imports ns-interns})
+
 (defn tags [var-name portable-var? code]
   (let [syms (try (->> (e/parse-string-all code {:all true :read-cond :allow :features #{:clj}
                                                   :auto-resolve name :readers (fn [_] identity)})
@@ -147,12 +152,14 @@
                                    (and (str/ends-with? n ".") (> (count n) 1) (not= n ".."))
                                    (and (nil? ns) (Character/isUpperCase (.charAt n 0))))))
                            syms)
-            nondet? (some nondet-syms syms)]
+            nondet? (some nondet-syms syms)
+            host? (some host-syms syms)]
         (cond-> #{}
           (str/includes? code "#?") (conj :reader-cond)
           interop? (conj :interop)
+          host? (conj :host)
           nondet? (conj :nondet)
-          (and portable-var? (not interop?)) (conj :portable))))))
+          (and portable-var? (not interop?) (not host?)) (conj :portable))))))
 
 (defn extract []
   (when-not (.exists cache) (fetch))
@@ -342,8 +349,9 @@
     (line "all" identity)
     (line "portable (cljs intersection)" #(and (:portable (:tags %)) (not (:reader-cond (:tags %)))))
     (line "uses #? (clotran reads :cljf)" #(:reader-cond (:tags %)))
+    (line "host (asks the JVM's classes)" #(and (:host (:tags %)) (not (:interop (:tags %)))))
     (line "interop (names Java)" #(:interop (:tags %)))
-    (line "other clojure-only" #(not (or (:portable (:tags %)) (:interop (:tags %)))))
+    (line "other clojure-only" #(not (or (:portable (:tags %)) (:interop (:tags %)) (:host (:tags %)))))
     (println (format "  not judged: %d cases clj gave no answer for" (- (count results) (count judged))))
     (println (format "  of the failures, clotran stopped before answering: %d"
                      (count (filter #(= :clotran-stopped (:status %)) judged))))
