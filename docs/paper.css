@@ -1,0 +1,13 @@
+@page { size: A4; margin: 22mm 20mm; }
+body { font-family: Georgia, "Times New Roman", serif; font-size: 11pt; line-height: 1.45;
+  color: #1a1a1a; max-width: 100%; margin: 0; }
+header h1.title { font-size: 26pt; margin-bottom: 0; color: #1f3a5f; }
+header p.subtitle { font-size: 14pt; margin-top: 2pt; color: #444; }
+header p.date { color: #666; }
+h2 { font-size: 16pt; color: #1f3a5f; margin-top: 22pt; border-bottom: 1px solid #1f3a5f; }
+h3 { font-size: 12.5pt; margin-top: 16pt; }
+table { border-collapse: collapse; width: 100%; font-size: 10pt; }
+th, td { border-bottom: 1px solid #ccc; padding: 4pt 6pt; text-align: left; vertical-align: top; }
+th { color: #1f3a5f; }
+code { font-family: Menlo, Consolas, monospace; font-size: 9.5pt; }
+pre { background: #f3f5f8; padding: 8pt; border-left: 3px solid #1f3a5f; }

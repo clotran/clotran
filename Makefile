@@ -356,3 +356,17 @@ compiled-core: clotran-bin
 
 clean:
 	rm -rf $(B) clotran-bin clotran-bin.dSYM
+
+# --- docs: the north star, generated from markdown ---------------------
+# pandoc writes HTML; a headless Chrome or Chromium prints it to PDF. No
+# LaTeX. CHROME=/path/to/it overrides the browser found here.
+CHROME ?= $(shell for c in "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" google-chrome chromium chromium-browser chrome; do \
+  command -v "$$c" >/dev/null 2>&1 && { echo "$$c"; break; }; done)
+.PHONY: docs
+docs: docs/whitepaper.pdf docs/pitch-deck.pdf
+docs/%.html: docs/%.md docs/deck.css docs/paper.css
+	pandoc -s --section-divs -t html5 --css $(if $(findstring deck,$<),deck.css,paper.css) $< -o $@
+docs/whitepaper.pdf: docs/whitepaper.html
+	"$(CHROME)" --headless=new --disable-gpu --no-pdf-header-footer --print-to-pdf=$(abspath $@) $(abspath $<) 2>/dev/null
+docs/pitch-deck.pdf: docs/deck.html
+	"$(CHROME)" --headless=new --disable-gpu --no-pdf-header-footer --print-to-pdf=$(abspath $@) $(abspath $<) 2>/dev/null

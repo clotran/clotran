@@ -5,6 +5,30 @@ records how things came to be; this records where they are going.
 Rewritten 2026-09-19 after a review of the whole tree; the previous
 plan's decision records that still hold are kept at the bottom.
 
+## The north star (James, 2026-09-27)
+
+Four consulting scenarios, kept as a white paper and a pitch deck in
+`docs/` (`make docs` regenerates the PDFs from the markdown), each with
+where clotran stands today, measured:
+
+- **A. Python/Fortran pipelines** -- Clojure orchestration over Fortran
+  arrays, no copy, no glue. Packages, `bind-fortran` and ChemSol are
+  this; several threads at once is what is missing.
+- **B. Dynamic scripting for legacy solvers** -- a REPL driving a
+  running solver. Package routines from the REPL are this; an embedded
+  REPL inside a Fortran program is the missing example.
+- **C. Financial models** -- functional code compiled to lean,
+  deterministic binaries. Per-namespace AOT compilation is this;
+  standalone binaries and `repro` are missing.
+- **D. DSLs for scientists** -- macros that compile math to clean,
+  vectorizable Fortran. The macro system is Clojure's own; the
+  pure-Fortran tier (step 13) is the missing half.
+
+The order from here: the test suites (clojuredocs to 100% of portable
+examples), then threads (step 14), then everything else works -- each
+item weighed by which scenario it serves. "We want something this
+powerful to use as consultants."
+
 ## The goals, in order
 
 1. **Complete Clojure/Fortran interoperability.** A clotran array is a

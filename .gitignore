@@ -12,3 +12,5 @@
 # gfortran drops a .mod beside itself; a compiled namespace built in the
 # working directory leaves one here
 *.mod
+/docs/*.pdf
+/docs/*.html
