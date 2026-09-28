@@ -429,6 +429,18 @@ module GC
   integer, allocatable :: obj_young(:), vec_young(:), str_young(:)
   integer :: n_obj_young = 0, n_vec_young = 0, n_str_young = 0
   logical, allocatable :: obj_rem(:), vec_rem(:)
+  ! AGING (PLAN.md step 16). A young object that survives one collection
+  ! is not promoted: it stays young -- unmarked, so the barrier and the
+  ! marking treat it as young -- on the aged list for one more round,
+  ! and is old only after surviving twice. Without this the cell a walk
+  ! had just passed was promoted, died at once, and as an unswept old
+  ! object kept every later cell alive until a full collection:
+  ! (dorun (range 10^6)) held 780 MB. The remembered set keeps, across
+  ! a collection, the old objects that still point at an aged one.
+  ! Strings hold no references and are promoted as before.
+  integer, allocatable :: obj_aged_list(:), vec_aged_list(:)
+  integer :: n_obj_aged = 0, n_vec_aged = 0
+  logical, allocatable :: obj_aged(:), vec_aged(:)
   type(gc_value), allocatable :: rem_set(:)
   integer :: n_rem = 0
   ! live objects per pool and live arena slots, kept as allocation and
@@ -872,6 +884,9 @@ contains
     allocate(obj_young(1024), vec_young(1024), str_young(1024), rem_set(1024))
     allocate(obj_rem(n), vec_rem(n))
     obj_rem = .false.; vec_rem = .false.
+    if (allocated(obj_aged)) deallocate(obj_aged, vec_aged, obj_aged_list, vec_aged_list)
+    allocate(obj_aged(n), vec_aged(n), obj_aged_list(1024), vec_aged_list(1024))
+    obj_aged = .false.; vec_aged = .false.; n_obj_aged = 0; n_vec_aged = 0
     n_obj_young = 0; n_vec_young = 0; n_str_young = 0; n_rem = 0
     obj_live = 0; vec_live = 0; str_live = 0; arena_live_now = 0
     old_at_full = 0; promoted_since_full = 0; gc_young_collections = 0
@@ -1644,6 +1659,7 @@ contains
     bfree(1:n) = obj_free(1:n)
     bnext(1:n) = obj_free_next(1:n)
     call grow_flags(obj_rem, 2 * n)
+    call grow_flags(obj_aged, 2 * n)
     call move_alloc(bigger, obj_pool)
     call move_alloc(bmark, obj_mark)
     call move_alloc(bfree, obj_free)
@@ -1745,11 +1761,11 @@ contains
        s => stacks(i)%s
        do k = s%cp_obj + 1, s%np_obj
           j = s%p_obj(k)
-          if (.not. (obj_mark(j) .or. obj_free(j))) call free_obj(j)
+          if (.not. (obj_mark(j) .or. obj_free(j) .or. obj_aged(j))) call free_obj(j)
        end do
        do k = s%cp_vec + 1, s%np_vec
           j = s%p_vec(k)
-          if (.not. (vec_mark(j) .or. vec_free(j))) call free_vec(j)
+          if (.not. (vec_mark(j) .or. vec_free(j) .or. vec_aged(j))) call free_vec(j)
        end do
        do k = s%cp_str + 1, s%np_str
           j = s%p_str(k)
@@ -1773,8 +1789,8 @@ contains
   ! young marked in this collection are the survivors, those of the
   ! heap's own young list (swept here) are known, and the rest of the
   ! marked are the pending lists' survivors.
-  subroutine hand_off_young(g_obj, g_vec, g_str)
-    integer, intent(in) :: g_obj, g_vec, g_str   ! the heap's own young survivors
+  subroutine hand_off_young(sa_obj, sa_vec, sa_str)
+    integer, intent(in) :: sa_obj, sa_vec, sa_str   ! survivors on the threads' lists
     integer :: i, t_obj, t_vec, t_str
     integer, allocatable :: tmp(:)
     type(gc_stack), pointer :: s
@@ -1790,9 +1806,9 @@ contains
        s%np_str = s%n_y_str; s%cp_str = 0; s%n_y_str = 0
        t_obj = t_obj + s%np_obj; t_vec = t_vec + s%np_vec; t_str = t_str + s%np_str
     end do
-    obj_pend_dead = max(0, t_obj - (obj_marked - g_obj))
-    vec_pend_dead = max(0, t_vec - (vec_marked - g_vec))
-    str_pend_dead = max(0, t_str - (str_marked - g_str))
+    obj_pend_dead = max(0, t_obj - sa_obj)
+    vec_pend_dead = max(0, t_vec - sa_vec)
+    str_pend_dead = max(0, t_str - sa_str)
   end subroutine hand_off_young
 
   ! This thread's batch topped up from its pending list: each dead object
@@ -1806,7 +1822,7 @@ contains
     do while (s%n_obj_b < ALLOC_BATCH .and. s%cp_obj < s%np_obj)
        s%cp_obj = s%cp_obj + 1
        j = s%p_obj(s%cp_obj)
-       if (obj_mark(j) .or. obj_free(j)) cycle
+       if (obj_mark(j) .or. obj_free(j) .or. obj_aged(j)) cycle
        if (finalized_kind(obj_pool(j)%kind)) then
           ! its finalizer runs on the collector, not here
           if (.not. allocated(s%defer_obj)) allocate(s%defer_obj(64))
@@ -1844,7 +1860,7 @@ contains
     do while (s%n_vec_b < ALLOC_BATCH .and. s%cp_vec < s%np_vec)
        s%cp_vec = s%cp_vec + 1
        j = s%p_vec(s%cp_vec)
-       if (vec_mark(j) .or. vec_free(j)) cycle
+       if (vec_mark(j) .or. vec_free(j) .or. vec_aged(j)) cycle
        n = vec_pool(j)%len
        if (n > 0) then
           c = size_class(n)
@@ -2172,6 +2188,7 @@ contains
     bfree(1:n) = vec_free(1:n)
     bnext(1:n) = vec_free_next(1:n)
     call grow_flags(vec_rem, 2 * n)
+    call grow_flags(vec_aged, 2 * n)
     call move_alloc(bigger, vec_pool)
     call move_alloc(bmark, vec_mark)
     call move_alloc(bfree, vec_free)
@@ -2462,11 +2479,65 @@ contains
     call push_roots(roots)
     call drain_mark_stack()
     last_marked = gc_marked - last_marked
+    call census()
     call sweep()
+    call unage_all()
     call forget_young()
     old_at_full = obj_live + vec_live + str_live
     promoted_since_full = 0
   end subroutine collect_full
+
+  ! CLOTRAN_STATS=2: after a full collection's marking, what is live, by
+  ! object kind and by run length -- the instrument for "what is holding
+  ! this seq" (a walk over (range 10^6) retained 3 objects an element).
+  subroutine census()
+    integer :: i, k, b, n
+    integer :: kinds(0:40), runs(8)
+    character(len=8), parameter :: kname(37) = [character(len=8) :: &
+         "cons", "vector", "map", "closure", "atom", "lazy", "env", "meta", "ns", "var", &
+         "hamt", "hamtleaf", "builtin", "recur", "seq", "set", "multifn", "sb", "err", "regex", &
+         "matcher", "writer", "type", "inst", "delay", "array", "?27", "?28", "?29", "ast", &
+         "chunk", "chunkbuf", "chunkseq", "task", "volatile", "compiled", "tvector"]
+    character(len=8), parameter :: rname(8) = [character(len=8) :: &
+         "0-1", "2", "3", "4", "5-8", "9-16", "17-32", "33+"]
+    character(len=8) :: e
+    logical, save :: on = .false., read = .false.
+    if (.not. read) then
+       call get_environment_variable("CLOTRAN_STATS", e)
+       on = trim(e) == "2"
+       read = .true.
+    end if
+    if (.not. on) return
+    kinds = 0; runs = 0
+    do i = 1, obj_used
+       if (.not. obj_mark(i) .or. obj_free(i)) cycle
+       k = obj_pool(i)%kind
+       if (k < 0 .or. k > 40) k = 0
+       kinds(k) = kinds(k) + 1
+    end do
+    do i = 1, vec_used
+       if (.not. vec_mark(i) .or. vec_free(i)) cycle
+       n = vec_pool(i)%len
+       if (n <= 1) then; b = 1
+       else if (n <= 4) then; b = n
+       else if (n <= 8) then; b = 5
+       else if (n <= 16) then; b = 6
+       else if (n <= 32) then; b = 7
+       else; b = 8
+       end if
+       runs(b) = runs(b) + 1
+    end do
+    write(0, '(A)', advance="no") "census objs:"
+    do k = 1, 37
+       if (kinds(k) > 0) write(0, '(A,A,A,I0)', advance="no") " ", trim(kname(k)), "=", kinds(k)
+    end do
+    write(0, '(A,I0)') " other=", kinds(0) + sum(kinds(38:40))
+    write(0, '(A)', advance="no") "census runs:"
+    do b = 1, 8
+       if (runs(b) > 0) write(0, '(A,A,A,I0)', advance="no") " ", trim(rname(b)), "=", runs(b)
+    end do
+    write(0, '(A)') ""
+  end subroutine census
 
   ! The young only: marking stops at the old (already marked), and the
   ! remembered old objects stand in for the old ones that reach the
@@ -2474,7 +2545,10 @@ contains
   subroutine collect_young(roots)
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: v
-    integer :: i, j
+    integer :: i, j, k, a_obj, a_vec, ta_obj, ta_vec, n
+    type(gc_stack), pointer :: s
+    type(gc_value) :: pv
+    integer, allocatable :: prom_obj(:), prom_vec(:)
     integer(8) :: tm0, tm1, rate
     gc_young_collections = gc_young_collections + 1
     call system_clock(tm1, rate)
@@ -2503,43 +2577,188 @@ contains
     gc_ymark_ms = gc_ymark_ms + real(tm1 - tm0, 8) * 1000d0 / real(rate, 8)
     last_marked = gc_marked - last_marked
     obj_swept = 0; vec_swept = 0; str_swept = 0
+    ! the aged: marked has survived twice and is old from here; unmarked
+    ! is dead, and nothing else will sweep it
+    ! the promoted are kept aside for a moment: once the young
+    ! survivors below are aged, a promoted object that points at one of
+    ! them is an old object pointing at a young one, and must be
+    ! remembered -- no barrier saw that write, since it was made into
+    ! an object that was young at the time
+    a_obj = 0; a_vec = 0
+    allocate(prom_obj(max(1, n_obj_aged)), prom_vec(max(1, n_vec_aged)))
+    do i = 1, n_obj_aged
+       j = obj_aged_list(i)
+       obj_aged(j) = .false.
+       if (obj_mark(j)) then
+          a_obj = a_obj + 1
+          prom_obj(a_obj) = j
+       else if (.not. obj_free(j)) then
+          call free_obj(j)
+       end if
+    end do
+    do i = 1, n_vec_aged
+       j = vec_aged_list(i)
+       vec_aged(j) = .false.
+       if (vec_mark(j)) then
+          a_vec = a_vec + 1
+          prom_vec(a_vec) = j
+       else if (.not. vec_free(j)) then
+          call free_vec(j)
+       end if
+    end do
+    n_obj_aged = 0; n_vec_aged = 0
+    ! the heap's own young: a survivor is aged, not promoted
     do i = 1, n_obj_young
        j = obj_young(i)
-       if (.not. (obj_mark(j) .or. obj_free(j))) call free_obj(j)
+       if (obj_free(j)) cycle
+       if (obj_mark(j)) then
+          call age_obj(j)
+       else
+          call free_obj(j)
+       end if
     end do
     do i = 1, n_vec_young
        j = vec_young(i)
-       if (.not. (vec_mark(j) .or. vec_free(j))) call free_vec(j)
+       if (vec_free(j)) cycle
+       if (vec_mark(j)) then
+          call age_vec(j)
+       else
+          call free_vec(j)
+       end if
     end do
     do i = 1, n_str_young
        j = str_young(i)
        if (.not. (str_mark(j) .or. str_free(j))) call free_str(j)
     end do
-    ! the threads' young become their pending lists, swept by each
+    ! the threads' young: survivors aged here; the dead stay on the
+    ! lists, which become the threads' pending lists, swept by each
     ! thread as it allocates (pend_refill_*), not here
-    call hand_off_young(n_obj_young - obj_swept, n_vec_young - vec_swept, n_str_young - str_swept)
+    ta_obj = 0; ta_vec = 0
+    do i = 1, n_stacks
+       if (.not. associated(stacks(i)%s)) cycle
+       s => stacks(i)%s
+       do k = 1, s%n_y_obj
+          j = s%y_obj(k)
+          if (obj_mark(j) .and. .not. obj_free(j)) then
+             call age_obj(j)
+             ta_obj = ta_obj + 1
+          end if
+       end do
+       do k = 1, s%n_y_vec
+          j = s%y_vec(k)
+          if (vec_mark(j) .and. .not. vec_free(j)) then
+             call age_vec(j)
+             ta_vec = ta_vec + 1
+          end if
+       end do
+    end do
+    ! the promoted that point at an aged object are remembered now
+    do i = 1, a_obj
+       j = prom_obj(i)
+       if (any_aged_slot(j)) then
+          pv%tag = GCT_OBJ; pv%ref = j
+          if (.not. obj_rem(j)) call remember_obj(pv)
+       end if
+    end do
+    do i = 1, a_vec
+       j = prom_vec(i)
+       if (any_aged_run(j)) then
+          pv%tag = GCT_VEC; pv%ref = j
+          if (.not. vec_rem(j)) call remember_vec(pv)
+       end if
+    end do
+    call hand_off_young(ta_obj, ta_vec, str_marked - (n_str_young - str_swept))
     call system_clock(tm0)
     gc_ysweep_ms = gc_ysweep_ms + real(tm0 - tm1, 8) * 1000d0 / real(rate, 8)
-    ! promoted: the young this collection marked -- they survived
-    promoted_since_full = promoted_since_full + obj_marked + vec_marked + str_marked
+    ! promoted: what survived its second collection, and every string
+    promoted_since_full = promoted_since_full + a_obj + a_vec + str_marked
     call forget_young()
   end subroutine collect_young
 
-  ! After any collection: nothing is young and nothing remembered.
-  subroutine forget_young()
+  subroutine age_obj(j)
+    integer, intent(in) :: j
+    obj_mark(j) = .false.
+    obj_aged(j) = .true.
+    call young_add(obj_aged_list, n_obj_aged, j)
+  end subroutine age_obj
+
+  subroutine age_vec(j)
+    integer, intent(in) :: j
+    vec_mark(j) = .false.
+    vec_aged(j) = .true.
+    call young_add(vec_aged_list, n_vec_aged, j)
+  end subroutine age_vec
+
+  logical function any_aged_slot(j)
+    integer, intent(in) :: j
+    integer :: k
+    any_aged_slot = .false.
+    do k = 1, OBJ_SLOTS
+       if (aged_ref(obj_pool(j)%slot(k))) any_aged_slot = .true.
+    end do
+  end function any_aged_slot
+
+  logical function any_aged_run(j)
+    integer, intent(in) :: j
+    integer :: k
+    any_aged_run = .false.
+    do k = 1, vec_pool(j)%len
+       if (aged_ref(vec_store(vec_pool(j)%off + k - 1))) any_aged_run = .true.
+    end do
+  end function any_aged_run
+
+  logical function aged_ref(x)
+    type(gc_value), intent(in) :: x
+    aged_ref = .false.
+    if (x%ref == 0) return
+    if (x%tag == GCT_OBJ) aged_ref = obj_aged(x%ref)
+    if (x%tag == GCT_VEC) aged_ref = vec_aged(x%ref)
+  end function aged_ref
+
+  ! After a full collection every survivor is marked, so nothing is aged.
+  subroutine unage_all()
     integer :: i
+    do i = 1, n_obj_aged
+       obj_aged(obj_aged_list(i)) = .false.
+    end do
+    do i = 1, n_vec_aged
+       vec_aged(vec_aged_list(i)) = .false.
+    end do
+    n_obj_aged = 0; n_vec_aged = 0
+  end subroutine unage_all
+
+  ! After any collection: nothing is young, and only the old that point
+  ! at an aged object stay remembered.
+  subroutine forget_young()
+    integer :: i, j, m
+    logical :: keep
     do i = 1, n_stacks
        if (associated(stacks(i)%s)) stacks(i)%s%nspare = 0
        if (associated(stacks(i)%s)) stacks(i)%s%naspare = 0
     end do
+    ! an old object still pointing at an aged one stays remembered:
+    ! the aged object is unmarked and must be re-proven next time, and
+    ! this edge is the only way the marking reaches it
+    m = 0
     do i = 1, n_rem
+       keep = .false.
        if (rem_set(i)%tag == GCT_OBJ) then
-          obj_rem(rem_set(i)%ref) = .false.
+          do j = 1, OBJ_SLOTS
+             if (aged_ref(obj_pool(rem_set(i)%ref)%slot(j))) keep = .true.
+          end do
+          if (.not. keep) obj_rem(rem_set(i)%ref) = .false.
        else if (rem_set(i)%tag == GCT_VEC) then
-          vec_rem(rem_set(i)%ref) = .false.
+          do j = 1, vec_pool(rem_set(i)%ref)%len
+             if (aged_ref(vec_store(vec_pool(rem_set(i)%ref)%off + j - 1))) keep = .true.
+          end do
+          if (.not. keep) vec_rem(rem_set(i)%ref) = .false.
+       end if
+       if (keep) then
+          m = m + 1
+          rem_set(m) = rem_set(i)
        end if
     end do
-    n_rem = 0
+    n_rem = m
     n_obj_young = 0; n_vec_young = 0; n_str_young = 0
   end subroutine forget_young
 
@@ -3705,13 +3924,13 @@ contains
        if (.not. associated(stacks(i)%s)) cycle
        s => stacks(i)%s
        do k = s%cp_obj + 1, s%np_obj
-          if (.not. (obj_mark(s%p_obj(k)) .or. obj_free(s%p_obj(k)))) chk_dead_o(s%p_obj(k)) = .true.
+          if (.not. (obj_mark(s%p_obj(k)) .or. obj_free(s%p_obj(k)) .or. obj_aged(s%p_obj(k)))) chk_dead_o(s%p_obj(k)) = .true.
        end do
        do k = 1, s%n_defer
           chk_dead_o(s%defer_obj(k)) = .true.
        end do
        do k = s%cp_vec + 1, s%np_vec
-          if (.not. (vec_mark(s%p_vec(k)) .or. vec_free(s%p_vec(k)))) chk_dead_v(s%p_vec(k)) = .true.
+          if (.not. (vec_mark(s%p_vec(k)) .or. vec_free(s%p_vec(k)) .or. vec_aged(s%p_vec(k)))) chk_dead_v(s%p_vec(k)) = .true.
        end do
        do k = s%cp_str + 1, s%np_str
           if (.not. (str_mark(s%p_str(k)) .or. str_free(s%p_str(k)))) chk_dead_s(s%p_str(k)) = .true.

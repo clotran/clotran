@@ -1523,6 +1523,76 @@ clj in `test/clj/oracle.clj`. The arrays and types LANDED 2026-09-27
 
 Order: after threads (14e/f) and parallel marking, unless moved up.
 
+### 16. Lazy walks in constant space (found 2026-09-27)
+
+Running the clojuredocs suite made the machine unusable: not CPU --
+one clotran is 1.2 s and 190 MB at startup -- but memory. Walking a
+lazy seq of 10^6 elements took 780 MB (`last`, `dorun`), 2.4 GB
+(`nth` over `iterate`) and 3.1 GB (`bounded-count` over a range) where
+the JVM stays at its baseline; the suite's 10^8-element examples then
+swapped. Measured with `CLOTRAN_STATS=1`, `CLOTRAN_GC_FULL=1` and the
+census `CLOTRAN_STATS=2` (GC.f90 `census`, what is live by kind at a
+full collection). Three separate causes, in the order they were found:
+
+1. **Generational nepotism.** A young collection promotes the cell
+   being walked; that cell dies at once but, being old, is not swept
+   until a full collection, and its `next` keeps every later cell
+   alive. A full collection happens only when the promoted count
+   exceeds the old generation (~4×10^5 objects after core.clj), so up
+   to that many dead cells accumulate. With every collection full,
+   `(dorun (range 10^6))` is 194 MB -- the baseline -- at no time
+   cost. The fix is a survival-rate trigger: a young collection that
+   kept most of what was allocated since the last one asks for a full
+   collection next. Aging (survive two young collections before
+   promotion) is the upgrade path if that trigger costs too much on a
+   program that legitimately builds a large live heap.
+2. **A builtin holds its arguments for the walk.** `nth` and `count`
+   walk with the args vector rooted on the value stack, so the head is
+   reachable for the whole walk; HotSpot's frames have precise
+   liveness and drop it. Retention only, measured under full GC: `nth`
+   2.8 GB, `count` of a mapped seq 780 MB; `last`, `dorun` and
+   `reduce` do not retain. The fix: the walk roots its cursor, not the
+   arguments.
+3. **`count` of a range realises it.** `(count (range 10^6))` is 2.7 s
+   here and 0.02 ms on the JVM (LongRange.count is arithmetic). The
+   pending range cell holds `[lo hi step]`; count is computable.
+
+**Landed 2026-09-27**, each checked under `CLOTRAN_GC_VERIFY=1`:
+
+| walk of 10^6 elements | before | after |
+|---|---|---|
+| `(last (range n))`, `(dorun (range n))` | 780 MB | 196 MB (the baseline) |
+| `(nth (iterate inc 0) n)` | 2.4 GB | 199 MB |
+| `(count (range n))`, `(bounded-count 10 (range n))` | 3.1 GB, 2.7 s | 194 MB, 1.2 s |
+| `(count (map inc (range n)))` | 780 MB | 197 MB |
+
+1. *Aging* (GC.f90): a young survivor stays young -- unmarked, on the
+   aged list, skipped by the pending sweeps -- and is old only after a
+   second survival; a promoted object that points at an aged one is
+   remembered, and `forget_young` keeps the remembered old objects that
+   still point at an aged one. The survival-rate trigger tried first
+   did not fire: the retained chain was only 3 of the 12 allocations an
+   element makes.
+2. The head let go on every path a builtin's argument takes: `apply`
+   hands the vector over as it does for a closure; `drop_arg0` takes
+   the first argument out of the vector in place (N_CALL's spare vector
+   and N_DOT keep the vector itself); and the executor clears its
+   last-value slot `vbase + 1` when it invokes a builtin -- the last
+   argument evaluated was the seq, and that slot rooted it for the
+   whole call, which is why `nth` (last argument: the index) was fine
+   and `count` was not.
+3. `sq_count` is one loop; it recursed once per chunk cell, and the
+   Fortran frames were the chain.
+4. A pending range cell counts arithmetically (`range_count`).
+5. An `iterate` cell keeps `f` and `x` in its slots, not a `[f x]`
+   vector, and a realised cell lets its thunk go, as `LazySeq.sval`
+   nulls its fn.
+
+Still to do: a vector of one or two elements is given a 32-slot root
+run (512 bytes, `gcv_build` and `gcv_conj`), and a walk makes ~12
+allocations an element; both are size and speed, not retention, and
+touch PersistentVector.f90.
+
 ## Decisions that still hold
 
 **The value type has no `FINAL`.** Copying a `cons_value` (nine

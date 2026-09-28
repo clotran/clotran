@@ -342,7 +342,7 @@ design.
 |---|---|
 | speed | measured by `scripts/bench`, the same forms on a warmed JVM and on clotran: a function call ~1.3 µs, a loop/recur iteration ~1.7 µs, a reduce step over a range ~1.3 µs. Against the JVM that is 23x on plain recursion, 39x on a reduce building a map, 40x on fib, 120x on loop/recur, 454x on `(reduce + (range n))` and 514x on `into` over a mapped range. Between one and a half and two and a half orders of magnitude, an AST interpreter's honest number; PLAN.md step 8 has the JIT decision |
 | startup | 0.6s: core.clj is re-read and re-analysed every launch; there is no image yet |
-| memory | 168 MB after loading core.clj, and a 100000-element reduce stays there since locals are cleared after their last read; the image (PLAN.md step 5, stage 3) is what would shrink the baseline |
+| memory | 196 MB after loading core.clj, and a walk over a lazy seq stays there: `last`, `nth`, `count` and `dorun` over 10^6 elements of a range, an `iterate` or a mapped seq run at the baseline (PLAN.md step 16: the collector ages survivors before promoting them, and a builtin lets go of its arguments before it walks); the image (PLAN.md step 5, stage 3) is what would shrink the baseline |
 | debugger | steps count calls, not lines, since a call is the event the executor has; one level, so a break inside the handler is a snapshot; no socket. What it does is under "What works" |
 | `BigDecimal` | real: `1M`, scale kept, `with-precision` and all eight rounding modes. `(/ 1M 3)` ANSWERS at decimal128 rather than throwing, as MATLAB, Octave and Julia do (DEVIATIONS 43) |
 | mutable deftype fields | `(set! afield v)` is refused, loudly; DEVIATIONS 20 |

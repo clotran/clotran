@@ -2627,3 +2627,6 @@
 
 [(str (class (aget (byte-array 1) 0))) (str (class (aget (short-array 1) 0))) (str (class (aget (char-array 1) 0))) (str (class (aget (float-array 1) 0))) (str (class (byte 1))) (str (class (short 1))) (str (class (int 1))) (str (class (+ (byte 1) 1))) (= (byte 1) 1) (hash (byte 1)) (instance? Byte (byte 1)) (instance? Long (byte 1)) (instance? Number (short 1)) (instance? Float (float 1))]
 
+[(count (range 5)) (count (range 0 10 3)) (count (range 10 0 -3)) (count (range 1.0 2.0 0.3)) (count (rest (range 100))) (count (drop 40 (range 100))) (count (range 5 5)) (count (range -3)) (count (range 0 10 4)) (count (range 0 -10 -4)) (count (range 1/2 3 1/2)) (count (take 70 (range 100))) (count (range 1000000)) (bounded-count 10 (range 1000000)) (count (map inc (range 100000)))]
+
+[(nth (iterate inc 0) 100000) (take 3 (iterate inc 0)) (nth (iterate #(* 2 %) 1) 62) (count (take 1000 (iterate inc 0))) (last (range 100000)) (nth (map inc (range 100000)) 99999) (nth (range 10) 3 :d) (nth (iterate inc 0) 5 :d) (nth '(1 2) 5 :d) (realized? (rest (iterate inc 0)))]

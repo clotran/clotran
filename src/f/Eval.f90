@@ -4041,13 +4041,16 @@ contains
        args = gc_slot(vs_get(vst, base + 1), 1)
        r = range_cell(gcv_nth(args, 0), gcv_nth(args, 1), gcv_nth(args, 2), [vs_get(vst, base + 1)])
     case (2)
-       ! a native iterate tail: slot 1 = [f x]; the next head is (f x)
-       args = gc_slot(vs_get(vst, base + 1), 1)
-       call vs_set(vst, base + 2, gcv_conj(gcv_empty([vs_get(vst, base + 1)]), gcv_nth(args, 1), [vs_get(vst, base + 1)]))
-       r = apply(gcv_nth(gc_slot(vs_get(vst, base + 1), 1), 0), vs_get(vst, base + 2))
+       ! a native iterate tail: f in slot 1 (the thunk's slot; slot 4
+       ! is the owner's while running) and x in slot 5 -- not a [f x]
+       ! vector, which a realised cell kept, 512 bytes each; the next
+       ! head is (f x)
+       call vs_set(vst, base + 2, gcv_build(1, [vs_get(vst, base + 1)]))
+       call vs_set(vst, base + 2, gcv_put(vs_get(vst, base + 2), 0, gc_slot(vs_get(vst, base + 1), 5), [vs_get(vst, base + 1)]))
+       r = apply(gc_slot(vs_get(vst, base + 1), 1), vs_get(vst, base + 2))
        if (.not. tctx%has_error) then
           call vs_set(vst, base + 2, r)
-          r = iterate_cell(gcv_nth(gc_slot(vs_get(vst, base + 1), 1), 0), vs_get(vst, base + 2), [vs_get(vst, base + 1)])
+          r = iterate_cell(gc_slot(vs_get(vst, base + 1), 1), vs_get(vst, base + 2), [vs_get(vst, base + 1)])
        end if
     case default
        args = gcv_empty([vs_get(vst, base + 1)])
@@ -4062,6 +4065,11 @@ contains
        call vs_leave(vst, base)
        return
     end if
+    ! realised: the thunk -- or iterate's f and x -- is let go, as
+    ! LazySeq.sval nulls its fn. A realised cell that kept its closure
+    ! kept every frame the closure had captured.
+    call gc_set_slot(vs_get(vst, base + 1), 1, gc_nil())
+    call gc_set_slot(vs_get(vst, base + 1), 5, gc_nil())
 
     do while (gc_kind(vs_get(vst, base + 2)) == OBJ_LAZY)
        call gce_force(vs_get(vst, base + 2))
@@ -6205,24 +6213,21 @@ contains
   end function num_add2
 
   ! One cell of (iterate f x): head x, and a native pending tail
-  ! (OBJ_LAZY, i2 = 2) holding [f x]; gce_force applies f and builds the
-  ! next cell.
+  ! (OBJ_LAZY, i2 = 2) holding f in slot 1 and x in slot 5; gce_force
+  ! applies f and builds the next cell.
   recursive function iterate_cell(f, x, roots) result(out)
     type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: f, x
     type(gc_value), intent(in) :: roots(:)
-    type(gc_value) :: out, spec, tail
+    type(gc_value) :: out, tail
     integer :: base
 
     vst => gc_my_stack()
     base = vs_enter(vst, 3)
     call vs_set(vst, base + 1, f)
     call vs_set(vst, base + 2, x)
-    spec = gcv_empty([roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
-    spec = gcv_conj(spec, vs_get(vst, base + 1), [roots, vs_get(vst, base + 2), spec])
-    spec = gcv_conj(spec, vs_get(vst, base + 2), [roots, vs_get(vst, base + 1), spec])
-    call vs_set(vst, base + 3, spec)
-    tail = gc_obj(OBJ_LAZY, [vs_get(vst, base + 3), gc_nil(), gc_nil()], [roots, vs_get(vst, base + 2), vs_get(vst, base + 3)])
+    tail = gc_obj(OBJ_LAZY, [vs_get(vst, base + 1), gc_nil(), gc_nil(), gc_nil(), vs_get(vst, base + 2)], &
+         [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
     call gc_set_i1(tail, LAZY_PENDING)
     call gc_set_i2(tail, 2)
     call vs_set(vst, base + 3, tail)
@@ -6405,6 +6410,11 @@ contains
             end block
           end block
        else
+          ! handed over, not kept, as a closure's are below: call_builtin
+          ! roots args itself before it allocates, and a builtin that
+          ! walks a seq (nth, count) lets go of the head only if no
+          ! frame above it still holds the vector (PLAN.md step 16)
+          call vs_set(vst, base + 2, gc_nil())
           out = call_builtin(gc_i1(fn), args)
        end if
     case (OBJ_CLOSURE)
@@ -7032,7 +7042,13 @@ contains
           call vs_leave(vst, base)
           return
        end if
-       out = gc_int(sq_count(gcv_nth(vs_get(vst, base + 1), 0), [vs_get(vst, base + 1)]))
+       ! the walk must not keep the head (PLAN.md step 16): the args
+       ! vector is its only root and goes before the count starts;
+       ! sq_count roots the value itself before it allocates
+       a = gcv_nth(vs_get(vst, base + 1), 0)
+       call drop_arg0(vs_get(vst, base + 1))
+       call vs_set(vst, base + 1, gc_nil())
+       out = gc_int(sq_count(a, [gc_value ::]))
     case (B_FIRST)
        if (seqable(gcv_nth(vs_get(vst, base + 1), 0))) &
             out = sq_first(gcv_nth(vs_get(vst, base + 1), 0), [vs_get(vst, base + 1)])
@@ -7120,6 +7136,8 @@ contains
          want = int(idx%ival)
          out = gc_nil()
          found = .false.
+         ! the default, kept apart: the walk below lets the args go
+         if (n >= 3) call vs_set(vst, base + 3, gcv_nth(vs_get(vst, base + 1), 2))
          if (gc_kind(coll) == OBJ_SET .or. gca_is(coll)) then
             block
               call class_name_of(coll, s=dlt_1)
@@ -7135,18 +7153,27 @@ contains
             found = (want >= 0 .and. want < seq_len(coll))
             if (found) out = seq_elem(coll, want, [vs_get(vst, base + 1)])
          else if (want >= 0) then
-            walk = to_seq(coll, [vs_get(vst, base + 1)])
+            ! the head must not be kept for the walk (PLAN.md step 16):
+            ! the default is saved, the args vector let go, and the
+            ! cursor is the only root
+            call drop_arg0(vs_get(vst, base + 1))
+            call vs_set(vst, base + 1, gc_nil())
+            call vs_set(vst, base + 2, coll)
+            walk = to_seq(vs_get(vst, base + 2), [vs_get(vst, base + 2)])
+            call vs_set(vst, base + 2, walk)
             do k = 1, want
                if (walk%tag == GCT_NIL) exit
-               walk = sq_rest(walk, [vs_get(vst, base + 1)])
-               walk = to_seq(walk, [vs_get(vst, base + 1)])
+               walk = sq_rest(vs_get(vst, base + 2), [vs_get(vst, base + 2)])
+               call vs_set(vst, base + 2, walk)
+               walk = to_seq(vs_get(vst, base + 2), [vs_get(vst, base + 2)])
+               call vs_set(vst, base + 2, walk)
             end do
             found = (walk%tag /= GCT_NIL)
-            if (found) out = sq_first(walk, [vs_get(vst, base + 1)])
+            if (found) out = sq_first(walk, [vs_get(vst, base + 2)])
          end if
          if (.not. found) then
             if (n >= 3) then
-               out = gcv_nth(vs_get(vst, base + 1), 2)
+               out = vs_get(vst, base + 3)
             else if (coll%tag /= GCT_NIL .and. .not. tctx%has_error) then
                call raise_class("IndexOutOfBoundsException", "", [vs_get(vst, base + 1)])
             end if
@@ -13757,49 +13784,97 @@ contains
     integer :: base, n
 
     vst => gc_my_stack()
-    v = strip_meta(v0)
     n = 0
-    if (v%tag == GCT_NIL) return
-    if (gcl_is(v)) then
-       n = gcl_count(v)
-       return
-    end if
-    if (gc_kind(v) == OBJ_SEQ) then
-       n = seq_len(gc_slot(v, 1)) - gc_i1(v)
-       return
-    end if
-    if (gc_kind(v) == OBJ_CHUNK) then
-       n = chunk_count(v)
-       return
-    end if
-    if (gc_kind(v) == OBJ_LAZY) then
-       if (gc_i1(v) == LAZY_DELEG) then
-          n = sq_count(gc_slot(v, 2), roots)
-          return
-       end if
-    end if
-    if (gc_kind(v) == OBJ_CHUNKSEQ) then
-       n = chunk_count(gc_slot(v, 1)) + sq_count(gc_slot(v, 2), roots)
-       return
-    end if
-    if (gc_kind(v) /= OBJ_LAZY) then
-       n = seq_len(v)
-       return
-    end if
+    ! ONE LOOP, not a recursion: a chunked seq of 10^6 elements is
+    ! 3 x 10^4 chunk cells, and recursing once per cell held every
+    ! cell on the Fortran stack until the count came back -- the whole
+    ! seq retained by the counting of it (PLAN.md step 16). The slot
+    ! holds only the cell being counted.
     base = vs_enter(vst, 1)
-    call vs_set(vst, base + 1, v)
+    call vs_set(vst, base + 1, strip_meta(v0))
     do
+       v = vs_get(vst, base + 1)
+       if (v%tag == GCT_NIL) exit
+       if (gcl_is(v)) then
+          n = n + gcl_count(v)
+          exit
+       end if
+       select case (gc_kind(v))
+       case (OBJ_SEQ)
+          n = n + seq_len(gc_slot(v, 1)) - gc_i1(v)
+          exit
+       case (OBJ_CHUNK)
+          n = n + chunk_count(v)
+          exit
+       case (OBJ_CHUNKSEQ)
+          n = n + chunk_count(gc_slot(v, 1))
+          call vs_set(vst, base + 1, strip_meta(gc_slot(v, 2)))
+          cycle
+       case (OBJ_LAZY)
+          if (gc_i1(v) == LAZY_DELEG) then
+             call vs_set(vst, base + 1, strip_meta(gc_slot(v, 2)))
+             cycle
+          end if
+          ! a pending range cell is [lo hi step]: its count is arithmetic,
+          ! as LongRange.count is, not a realisation of 10^6 cells
+          if (gc_i1(v) == LAZY_PENDING .and. gc_i2(v) == 1) then
+             if (range_count(gc_slot(v, 1), n)) exit
+          end if
+       case default
+          n = n + seq_len(v)
+          exit
+       end select
+       ! a lazy cell: realised, counted, and on to its rest -- unless
+       ! what it realised to is a kind the select above counts faster
        s = to_seq(vs_get(vst, base + 1), roots)
        call vs_set(vst, base + 1, s)
-       ! s, not vs_get(...)%tag: neither compiler will take a
-       ! component off a function result (NOTES.md gotcha).
        if (s%tag == GCT_NIL) exit
+       if (gc_kind(s) /= OBJ_LAZY) cycle
+       if (gc_i1(s) == LAZY_DELEG) cycle
        n = n + 1
        s = sq_rest(vs_get(vst, base + 1), roots)
        call vs_set(vst, base + 1, s)
     end do
     call vs_leave(vst, base)
   end function sq_count
+
+  ! The first argument taken out of a builtin's argument vector, in
+  ! place, so a walk over it holds no head: the vector is private to the
+  ! call (fresh, a spare, or apply's own copy) but a frame above the
+  ! builtin keeps it -- N_CALL's spare-vector path has to give it back,
+  ! N_DOT may re-dispatch with it after a yield -- so nil-ing a slot of
+  ! our own is not enough (PLAN.md step 16).
+  subroutine drop_arg0(args)
+    type(gc_value), intent(in) :: args
+    if (.not. gcv_is(args)) return
+    if (gc_i1(args) < 1 .or. gc_i2(args) /= 0) return
+    call gc_vec_set(gc_slot(args, 1), 1, gc_nil())
+  end subroutine drop_arg0
+
+  ! How many elements a pending range [lo hi step] has left, added to
+  ! n; false when the step is 0 (Clojure's infinite range), so the
+  ! caller walks -- and hangs -- as Clojure would.
+  function range_count(spec, n) result(ok)
+    type(gc_value), intent(in) :: spec
+    integer, intent(inout) :: n
+    logical :: ok
+    type(gc_value) :: lo, hi, st
+    integer(gc_ip) :: a, b, c
+    real(gc_dp) :: d
+    lo = gcv_nth(spec, 0); hi = gcv_nth(spec, 1); st = gcv_nth(spec, 2)
+    ok = .false.
+    if (lo%tag == GCT_INT .and. hi%tag == GCT_INT .and. st%tag == GCT_INT) then
+       a = lo%ival; b = hi%ival; c = st%ival
+       if (c == 0) return
+       if (c > 0 .and. b > a) n = n + int((b - a + c - 1) / c)
+       if (c < 0 .and. b < a) n = n + int((a - b - c - 1) / (-c))
+    else
+       if (num_dbl(st) == 0.0_gc_dp) return
+       d = (num_dbl(hi) - num_dbl(lo)) / num_dbl(st)
+       if (d > 0.0_gc_dp) n = n + ceiling(d)
+    end if
+    ok = .true.
+  end function range_count
 
   ! Clojure's truthiness: everything except nil and false.
   ! The type of a value, as a keyword. Everything else that asks

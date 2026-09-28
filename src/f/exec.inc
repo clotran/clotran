@@ -1216,6 +1216,13 @@
                 n = gcv_count(kids) - 1
                 tctx%pending_site = site
                 v = vs_get(vst, b + 4)
+                ! the loop's last-value slot (vbase + 1) still holds the
+                ! last ARGUMENT evaluated; a builtin that walks it (count
+                ! over a seq) must not find the head rooted there for the
+                ! whole call (PLAN.md step 16). Not before the arguments
+                ! are in a vector: on the numeric path the last one is
+                ! still only in `val`, and that slot was its root.
+                call vs_set(vst, vbase + 1, gc_nil())
                 val = call_builtin(gc_i1(fnv), v)
                 call args_give(vs_get(vst, b + 4), n)
                 call vs_set(vst, b + 4, gc_nil())
@@ -1232,6 +1239,7 @@
                    call gc_vec_set(gc_slot(v, 1), 1, vs_get(vst, b + 6))
                    call gc_vec_set(gc_slot(v, 1), 2, val)
                 end if
+                call vs_set(vst, vbase + 1, gc_nil())
                 val = call_builtin(gc_i1(fnv), v)
                 call k_finish(val)
                 cycle
@@ -1280,6 +1288,7 @@
                 end if
              else
                 tctx%pending_site = site
+                call vs_set(vst, vbase + 1, gc_nil())
                 val = apply(vs_get(vst, b + 3), v)
                 if (tctx%yield_flag) then
                    ! parked here: the vector goes back for the re-dispatch
@@ -1431,6 +1440,7 @@
              tctx%kst(tctx%ksp)%i = tctx%kst(tctx%ksp)%i + 1
              tctx%kst(tctx%ksp)%pc = 2
           case (4)
+             call vs_set(vst, vbase + 1, gc_nil())   ! see N_CALL's case (4)
              val = dot_dispatch(nd, vs_get(vst, b + 3), vs_get(vst, b + 4), tctx%kst(tctx%ksp)%aux)
              if (tctx%yield_flag) exit
              if (tctx%has_error) cycle
