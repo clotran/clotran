@@ -268,11 +268,11 @@
 
 (defn answers-for
   "One var's cases run by `cmd`, as {:timeout :lines}. When the var runs out
-  of time, the cases it did not answer run again ALONE, each with a
-  short budget of its own: one slow example (printing 10^8 numbers) used
-  to leave the rest of its var unanswered, counted as clotran stopping --
-  and rerunning every case with the full budget cost more than the
-  hang itself."
+  of time, the cases it did not answer run again ALONE, each with the
+  full budget: one slow example (printing 10^8 numbers) used to leave
+  the rest of its var unanswered, counted as clotran stopping -- and
+  rerunning the answered ones too cost more than the hang itself (a
+  30 s budget lost a slow-but-right case; the budget stays 120)."
   [cmd v cs]
   (let [f (io/file work "cases" (str (munge-var v) ".clj"))
         _ (spit f (script-for cs))
@@ -286,7 +286,7 @@
                            :when (not (contains? got (case-id c)))]
                        (let [g (io/file work "cases" (str (munge-var v) "--" k ".clj"))]
                          (spit g (script-for [c]))
-                         (parse-out (:out (run-file cmd g 30))))))})))
+                         (parse-out (:out (run-file cmd g 120))))))})))
 
 (defn expect [only]
   (.mkdirs expected-dir) (.mkdirs (io/file work "cases"))

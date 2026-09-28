@@ -4099,7 +4099,9 @@ clocks every case on both sides. Of clotran's 3315 process-seconds,
 which 424 were twenty cases (`clojure.pprint` loading from source at
 7 s, five times; a 10^7 loop; `into` over `take` at 14 us an element).
 The median case is 3.9 ms against clj's 3.3. Startup was the suite's
-cost, not the interpreter; the image removes it.
+cost, not the interpreter; the image removes it: the suite on the image
+is 592 s wall at 4 jobs, against clj's 628 s at 6, the same 1233 of
+1264 portable cases agreeing.
 
 **The bug the image shook loose.** On the image one case in 2060 lost
 its forms, in about four runs of six: `read-string` answered an empty
