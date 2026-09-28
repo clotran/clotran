@@ -357,7 +357,10 @@ $(B)/libsamplelib.$(SOEXT): $(T)/samplelib.f90 $(B)/samplelib_shims.f90 | $(B) $
 	$(FC) $(filter-out -frecursive -J$(B),$(FCFLAGS)) -J$(PKGMOD) -shared -fPIC -o $@ $^
 
 # The checks are separate targets so `make -j test` runs them side by
-# side; each writes only its own files (the library runner and
+# side; each writes only its own files, and each grep reads a FILE the
+# run wrote rather than a pipe -- grep -q leaves at its first match and
+# a clotran still writing then dies of EPIPE with "fatal Fortran runtime
+# error" in the log (the library runner and
 # pure-check under build/, the autocompile pair in build/autocache, one
 # after the other within its target). Plain `make test` runs them in
 # order, as before.
@@ -381,22 +384,22 @@ check-banner:
 	! (printf '(+ 1 2)\n' | ./clotran-bin src/clj/clojure/core.clj 2>&1 | grep -q 'based on Clojure')
 check-torture:
 	@echo "--- a few forms with a collection at every object allocation: the read-string shape included ---"
-	CLOTRAN_GC_EVERY=1 ./clotran-bin src/clj/clojure/core.clj test/clj/torture_check.clj </dev/null | grep -q "^TORTURE CHECK PASSED"
+	CLOTRAN_GC_EVERY=1 ./clotran-bin src/clj/clojure/core.clj test/clj/torture_check.clj </dev/null > $(B)/torture_check.out 2>&1; grep -q "^TORTURE CHECK PASSED" $(B)/torture_check.out
 check-threads:
 	@echo "--- eight futures allocating at once, the heap checked at every young collection (step 14d) ---"
-	CLOTRAN_GC_VERIFY=1 ./clotran-bin src/clj/clojure/core.clj test/clj/threads_heap.clj </dev/null \
-	  | grep -q "^THREADS HEAP PASSED"
+	CLOTRAN_GC_VERIFY=1 ./clotran-bin src/clj/clojure/core.clj test/clj/threads_heap.clj </dev/null > $(B)/threads_heap.out 2>&1; \
+	  grep -q "^THREADS HEAP PASSED" $(B)/threads_heap.out
 check-autocompile:
 	@echo "--- a loaded namespace built into a cache and installed from it (clotran.loader) ---"
 	rm -rf $(B)/autocache
 	AUTOCOMPILE_STEP=build CLOTRAN_AUTOCOMPILE=use CLOTRAN_CACHE=$(B)/autocache \
-	  ./clotran-bin src/clj/clojure/core.clj test/clj/autocompile_test.clj </dev/null | grep -q "^AUTOCOMPILE PASSED"
+	  ./clotran-bin src/clj/clojure/core.clj test/clj/autocompile_test.clj </dev/null > $(B)/autocompile1.out 2>&1; grep -q "^AUTOCOMPILE PASSED" $(B)/autocompile1.out
 	AUTOCOMPILE_STEP=cached CLOTRAN_AUTOCOMPILE=use CLOTRAN_CACHE=$(B)/autocache \
-	  ./clotran-bin src/clj/clojure/core.clj test/clj/autocompile_test.clj </dev/null | grep -q "^AUTOCOMPILE PASSED"
+	  ./clotran-bin src/clj/clojure/core.clj test/clj/autocompile_test.clj </dev/null > $(B)/autocompile2.out 2>&1; grep -q "^AUTOCOMPILE PASSED" $(B)/autocompile2.out
 check-break:
 	@echo "--- a break pauses into a nested REPL, and clotran-resume answers it ---"
 	printf '((fn [x] (clotran-break)) 1)\n(clotran-resume {:continue (* 42 (get (:env (first (:frames (clotran-last-break)))) (quote x)))})\n' \
-	  | ./clotran-bin src/clj/clojure/core.clj | grep -q '42$$'
+	  | ./clotran-bin src/clj/clojure/core.clj > $(B)/break_check.out 2>&1; grep -q '42$$' $(B)/break_check.out
 check-libraries:
 	@echo "--- the portable libraries, on Clojure's OWN tests, verbatim ---"
 	scripts/run-library-tests

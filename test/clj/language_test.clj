@@ -832,8 +832,12 @@
 ;; core.clj's `agent` sets an error mode on its very first line, so
 ;; nothing about agents worked at all. An action runs on the agent's
 ;; own thread (DEVIATIONS 29 resolved), so a check waits with `await`,
-;; or `await-for` where the agent is about to fail (await on a failed
-;; agent is Clojure's error). Values from `clj`. These live here and
+;; or polls agent-error where the agent is about to fail: await on a
+;; failed agent is Clojure's error, and so is the send await-for makes
+;; when the action has already failed -- which it had, under the gate's
+;; load. Values from `clj`. These live here and
+
+(defn- wait-fail [a] (loop [i 0] (when (and (nil? (agent-error a)) (< i 300)) (Thread/sleep 10) (recur (inc i)))))
 ;; not in oracle.clj because a `send` keeps clj's agent pool alive and
 ;; scripts/oracle would never see clj exit.
 
@@ -848,7 +852,7 @@
 
 (let [b (agent 1)]
   (send b (fn [x] (throw (Exception. "boom"))))
-  (await-for 500 b)
+  (wait-fail b)
   (check "a failed agent keeps its value" @b 1)
   (check "and records the error"          (.getMessage (agent-error b)) "boom")
   (check "and refuses more work"
@@ -891,7 +895,6 @@
 ;; and one made inside a transaction is held until the commit and
 ;; dropped by an abort. An error handler's own sends go out at once.
 ;; Values from clj -M on the same forms, with (shutdown-agents) after.
-(defn- wait-fail [a] (loop [i 0] (when (and (nil? (agent-error a)) (< i 300)) (Thread/sleep 10) (recur (inc i)))))
 (let [a (agent 0) b (agent 0)]
   (send a (fn [x] (send b inc) (throw (ex-info "x" {}))))
   (wait-fail a) (Thread/sleep 100)
