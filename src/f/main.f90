@@ -10,6 +10,7 @@
 ! gives its main thread a stack of its choosing for the same reason.
 module clotran_main
   use iso_c_binding
+  use iso_fortran_env, only: compiler_version
   use GC
   use LispReader
   use Printer
@@ -42,6 +43,7 @@ contains
     type(gc_value) :: none(0)
     integer :: base, i, arglen, st
     logical :: imaged
+    integer(8) :: image_id
     character(len=1024) :: argbuf
     character(len=8) :: statbuf, tortbuf
 
@@ -57,7 +59,8 @@ contains
     block
        character(len=:), allocatable :: ipath
        call image_path(p=ipath)
-       if (len(ipath) > 0) call image_load(ipath, imaged)
+       image_id = 0
+       if (len(ipath) > 0) call image_load(ipath, imaged, image_id)
     end block
     base = vs_enter(3)
     if (imaged) then
@@ -140,6 +143,16 @@ contains
 
     ! The loop itself is Eval's (repl.inc): the same loop runs nested at
     ! a break, where it is the debugger's default handler.
+    block
+      interface
+         function isatty(fd) bind(C, name="isatty") result(r)
+           import :: c_int
+           integer(c_int), value :: fd
+           integer(c_int) :: r
+         end function isatty
+      end interface
+      if (isatty(0_c_int) == 1) call print_banner(imaged, image_id)
+    end block
     call gce_repl()
     print *, ""
     call get_environment_variable("CLOTRAN_STATS", statbuf)
@@ -371,11 +384,21 @@ contains
     call cf_image_write(u)
     call gce_image_write(u)
     close(u)
+    ! its identity, appended: the banner's `using image`
+    block
+      integer(8) :: h
+      h = image_hash(path)
+      open(newunit=u, file=path, access="stream", form="unformatted", &
+           status="old", position="append", action="write")
+      write(u) h
+      close(u)
+    end block
   end subroutine image_save
 
-  subroutine image_load(path, ok)
+  subroutine image_load(path, ok, id)
     character(len=*), intent(in) :: path
     logical, intent(out) :: ok
+    integer(8), intent(out) :: id
     integer :: u, i, n, k, sz, have, st
     character(len=len(IMAGE_MAGIC)) :: magic
     character(len=:), allocatable :: stamp, nm, p
@@ -426,8 +449,83 @@ contains
     call gcl_image_read(u)
     call cf_image_read(u)
     call gce_image_read(u)
+    ! the identity image_save appended: its last eight bytes
+    inquire(unit=u, size=sz)
+    id = 0
+    read(u, pos=sz - 7, iostat=st) id
     close(u)
   end subroutine image_load
+
+  ! --- the banner -------------------------------------------------------
+  !
+  ! What this is, printed once before the first prompt, and only when
+  ! stdin is a terminal -- as clj prints "Clojure 1.12.0" -- so a script,
+  ! a pipe, the test harnesses and anything else feeding forms in see
+  ! none of it. Emacs's comint runs the process on a pty and sees it the
+  ! way it sees clj's line; its prompt matching is on `user=>`, which
+  ! this does not touch. The pins are the language this is: Clojure's
+  ! core.clj at one commit, and the part of it ClojureScript agrees on
+  ! at another (test/clj/derived/PROVENANCE.md, written by the deriver).
+  subroutine print_banner(imaged, image_id)
+    logical, intent(in) :: imaged
+    integer(8), intent(in) :: image_id
+    character(len=:), allocatable :: cv, tail
+    character(len=8) :: hex
+    integer :: k
+    ! "GCC version 16.2.0", "Homebrew flang version 23.1.1 (https://...)"
+    ! -> "GCC 16.2.0", "flang 23.1.1"
+    cv = trim(adjustl(compiler_version()))
+    k = index(cv, " (")
+    if (k > 0) cv = cv(1:k - 1)
+    if (index(cv, "Homebrew ") == 1) cv = cv(10:)
+    k = index(cv, " version ")
+    if (k > 0) cv = cv(1:k) // cv(k + 9:)
+    if (imaged) then
+       write(hex, '(Z8.8)') image_id
+       tail = "clotran image " // to_lower(hex)
+    else
+       tail = "clotran from source (no image)"
+    end if
+    print '(A)', "clotran " // CLOTRAN_VERSION // " " // achar(194) // achar(183) // &
+         " based on Clojure " // CLOJURE_PIN // " and ClojureScript " // CLJS_PIN
+    print '(A)', cv // " " // BUILD_ARCH // " build"
+    print '(A)', tail
+  end subroutine print_banner
+
+  function to_lower(s) result(t)
+    character(len=*), intent(in) :: s
+    character(len=len(s)) :: t
+    integer :: i
+    t = s
+    do i = 1, len(s)
+       if (s(i:i) >= "A" .and. s(i:i) <= "Z") t(i:i) = achar(iachar(s(i:i)) + 32)
+    end do
+  end function to_lower
+
+  ! The image's identity: FNV-1a over its bytes, 32 bits held in 64 so
+  ! the multiply never overflows. Computed once, when the image is made,
+  ! and kept as its last eight bytes; a start reads those eight only.
+  function image_hash(path) result(h)
+    character(len=*), intent(in) :: path
+    integer(8) :: h
+    integer, parameter :: CHUNK = 1048576
+    character(len=CHUNK) :: buf
+    integer :: u, st, sz, pos, n, i
+    h = 2166136261_8
+    open(newunit=u, file=path, access="stream", form="unformatted", status="old", action="read", iostat=st)
+    if (st /= 0) return
+    inquire(unit=u, size=sz)
+    pos = 1
+    do while (pos <= sz)
+       n = min(CHUNK, sz - pos + 1)
+       read(u, pos=pos) buf(1:n)
+       do i = 1, n
+          h = iand(ieor(h, int(iachar(buf(i:i)), 8)) * 16777619_8, 4294967295_8)
+       end do
+       pos = pos + n
+    end do
+    close(u)
+  end function image_hash
 
   subroutine home_dir(d)
     character(len=:), allocatable, intent(out) :: d

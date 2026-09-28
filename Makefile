@@ -272,8 +272,15 @@ eval-objects = $(data-objects) $(B)/Env.o $(B)/Namespace.o $(reader-objects) $(B
 	$(B)/ClotranABI.o
 LINK_ICU = $(ICU_LIBS) $(LIBCXX) -lpthread
 
-clotran-bin: $(eval-objects) $(S)/main.f90 $(ICU_LIBS)
+# The build's identity, for main.f90: a stamp an image is tied to, and
+# what the REPL's banner says -- VERSION, the pins the deriver recorded
+# (test/clj/derived/PROVENANCE.md), and the machine.
+clotran-bin: $(eval-objects) $(S)/main.f90 $(ICU_LIBS) VERSION test/clj/derived/PROVENANCE.md
 	printf 'character(len=*), parameter :: BUILD_STAMP = "%s"\n' "$$(date +%s)-$$$$" > $(B)/stamp.inc
+	printf 'character(len=*), parameter :: CLOTRAN_VERSION = "%s"\n' "$$(cat VERSION)" >> $(B)/stamp.inc
+	printf 'character(len=*), parameter :: CLOJURE_PIN = "%s"\n' "$$(sed -n 's/^clojure //p' test/clj/derived/PROVENANCE.md)" >> $(B)/stamp.inc
+	printf 'character(len=*), parameter :: CLJS_PIN = "%s"\n' "$$(sed -n 's/^clojurescript //p' test/clj/derived/PROVENANCE.md)" >> $(B)/stamp.inc
+	printf 'character(len=*), parameter :: BUILD_ARCH = "%s"\n' "$$(uname -m)-$$(uname -s | tr A-Z a-z)" >> $(B)/stamp.inc
 	$(FC) $(FCFLAGS) -c $(S)/main.f90 -o $(B)/main.o
 	$(FC) $(LDFLAGS) $(EXPORTDYN) -o $@ $(eval-objects) $(B)/main.o $(LINK_ICU) $(LIBDL)
 
@@ -356,6 +363,8 @@ test: $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(B)/lib
 	@echo "--- language_test (with core.clj, loaded from source: the one run without the image) ---"
 	CLOTRAN_IMAGE=0 ./clotran-bin src/clj/clojure/core.clj test/clj/language_test.clj </dev/null \
 	  | tee /dev/stderr | grep -q "^LANGUAGE TESTS PASSED"
+	@echo "--- the REPL's banner is for a terminal only: a pipe must never see it ---"
+	! (printf '(+ 1 2)\n' | ./clotran-bin src/clj/clojure/core.clj 2>&1 | grep -q 'based on Clojure')
 	@echo "--- a few forms with a collection at every object allocation: the read-string shape included ---"
 	CLOTRAN_GC_EVERY=1 ./clotran-bin src/clj/clojure/core.clj test/clj/torture_check.clj </dev/null | grep -q "^TORTURE CHECK PASSED"
 	@echo "--- eight futures allocating at once, the heap checked at every young collection (step 14d) ---"
