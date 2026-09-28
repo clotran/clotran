@@ -2386,7 +2386,9 @@ contains
     vst => gc_my_stack()
     base = vs_enter(vst, 5)
     call vs_set(vst, base + 1, ty)
-    call vs_set(vst, base + 2, m)
+    ! the map itself, whatever metadata it carries: Person/create of
+    ! (with-meta m x) read the WRAPPER and every field was nil
+    call vs_set(vst, base + 2, strip_meta(m))
     fields = gc_slot(vs_get(vst, base + 1), 2)
     call vs_set(vst, base + 3, fields)
     declared = gcv_count(vs_get(vst, base + 3)) - alt_ctor_drops(vs_get(vst, base + 3))
@@ -6825,6 +6827,20 @@ contains
                 if (.not. coll_has(strip_meta(gcv_nth(args, 0)), fn)) out = gcv_nth(args, 1)
              end if
           end if
+       else if (gc_kind(fn) == OBJ_TMAP) then
+          ! a transient map or set is callable as the persistent one is
+          if (gcv_count(args) >= 1) then
+             call vs_set(vst, base + 2, gcv_assoc(gcv_empty([vs_get(vst, base + 2)]), 0, gc_slot(fn, 1), [vs_get(vst, base + 2)]))
+             block
+               type(gc_value) :: inner
+               inner = gc_slot(fn, 1)
+               if (gc_kind(inner) == OBJ_SET) inner = gc_slot(inner, 1)
+               out = gca_get(inner, gcv_nth(args, 0))
+               if (gcv_count(args) >= 2 .and. out%tag == GCT_NIL) then
+                  if (.not. gca_contains(inner, gcv_nth(args, 0))) out = gcv_nth(args, 1)
+               end if
+             end block
+          end if
        else if (gca_is(fn)) then
           ! (m k) and (m k not-found)
           if (gcv_count(args) >= 1) out = gca_get(fn, gcv_nth(args, 0))
@@ -6906,6 +6922,15 @@ contains
              return
           end select
        end if
+       ! a transient map or set likewise (tmap_op)
+       if (gc_kind(gcv_nth(args, 0)) == OBJ_TMAP) then
+          select case (id)
+          case (B_CONJ, B_ASSOC, B_DISSOC, B_DISJ, B_COUNT, B_GET, B_CONTAINS, B_STRCONTAINS, B_FIND, B_PERSISTENT)
+             out = tmap_op(id, vs_get(vst, base + 1), n)
+             call vs_leave(vst, base)
+             return
+          end select
+       end if
     end if
 
     select case (id)
@@ -6917,7 +6942,11 @@ contains
           out = gcv_transient(a, [vs_get(vst, base + 1)])
        else if ((gca_is(a) .and. .not. gca_is_sorted(a)) .or. &
             (gc_kind(a) == OBJ_SET .and. .not. gca_is_sorted(gc_slot(a, 1)))) then
-          out = gcv_nth(args, 0)
+          ! a map's or a set's: a BOX over the persistent value, mutated
+          ! in place by conj! assoc! dissoc! disj! (tmap_op)
+          out = gc_obj(OBJ_TMAP, [a], [vs_get(vst, base + 1)])
+          call gc_set_i1(out, merge(2, 1, gc_kind(a) == OBJ_SET))
+          call gc_set_i2(out, 1)
        else
           ! only an IEditableCollection has a transient: a list, a seq or
           ! a sorted collection throws, where it answered itself
@@ -7755,9 +7784,17 @@ contains
           call vs_leave(vst, base)
           return
        end if
-       out = gc_obj(OBJ_META, &
-            [strip_meta(gcv_nth(vs_get(vst, base + 1), 0)), gcv_nth(vs_get(vst, base + 1), 1)], &
-            [vs_get(vst, base + 1)])
+       ! (with-meta x nil) is x with no metadata -- no wrapper: `into`
+       ! ends in (with-meta ret (meta to)), and a wrapper over nil made
+       ! a record's create see a map it could not read
+       b = gcv_nth(vs_get(vst, base + 1), 1)
+       if (b%tag == GCT_NIL) then
+          out = strip_meta(gcv_nth(vs_get(vst, base + 1), 0))
+       else
+          out = gc_obj(OBJ_META, &
+               [strip_meta(gcv_nth(vs_get(vst, base + 1), 0)), gcv_nth(vs_get(vst, base + 1), 1)], &
+               [vs_get(vst, base + 1)])
+       end if
     case (B_QUOT, B_REM)
        ! Both used to read %ival only, so (quot 7.0 2) answered 0
        ! rather than 3.0 -- the same silent discard that + - * had.
@@ -14252,6 +14289,7 @@ contains
        case (OBJ_CONS);    s = "list"
        case (OBJ_VECTOR);  s = "vector"
        case (OBJ_TVECTOR); s = "transient-vector"
+       case (OBJ_TMAP);    s = "transient-map"
        case (OBJ_MAP, OBJ_HAMT); s = "map"
        case (OBJ_SET);     s = "set"
        ! A compiled procedure IS a function: fn?, ifn?, the IFn
@@ -15700,11 +15738,15 @@ contains
     ! The concrete classes `class` answers (class_name_of), so that
     ! (instance? (class x) x) holds and a condp on them can ask.
     case ("clojure.lang.PersistentVector"); yes = (t == "vector")
-    case ("clojure.lang.IEditableCollection"); yes = (t == "vector")
+    case ("clojure.lang.IEditableCollection")
+       ! a vector, a hash map or a hash set: what has a transient
+       yes = (t == "vector") .or. (t == "map" .and. .not. is_sorted_coll(v)) .or. (t == "set" .and. .not. is_sorted_coll(v))
     case ("clojure.lang.PersistentVector$TransientVector", "clojure.lang.ITransientVector", &
          "clojure.lang.ITransientCollection", "clojure.lang.ITransientAssociative")
-       yes = (t == "transient-vector")
+       yes = (t == "transient-vector") .or. (t == "transient-map" .and. c /= "clojure.lang.ITransientVector" &
+            .and. c /= "clojure.lang.PersistentVector$TransientVector")
     case ("clojure.lang.PersistentArrayMap", "clojure.lang.PersistentHashMap"); yes = (t == "map")
+    case ("clojure.lang.MapEquivalence"); yes = (t == "map")
     case ("clojure.lang.PersistentHashSet"); yes = (t == "set")
     case ("clojure.lang.PersistentTreeMap"); yes = (t == "map") .and. is_sorted_coll(v)
     case ("clojure.lang.PersistentTreeSet"); yes = (t == "set") .and. is_sorted_coll(v)
@@ -15768,7 +15810,7 @@ contains
     ! one, but (counted? "ab") is false there, so bounded-count walks it.
     case ("clojure.lang.Counted"); &
          yes = (t == "list" .or. t == "vector" .or. t == "map" .or. t == "set" .or. &
-                t == "transient-vector" .or. (t == "lazy-seq" .and. gc_i2(strip_meta(v)) == 1))
+                t == "transient-vector" .or. t == "transient-map" .or. (t == "lazy-seq" .and. gc_i2(strip_meta(v)) == 1))
     case ("clojure.lang.Sequential"); &
          yes = (t == "list" .or. t == "vector" .or. t == "lazy-seq" .or. t == "seq")
     case ("clojure.lang.IPersistentCollection", "clojure.lang.Seqable"); &
@@ -16454,6 +16496,14 @@ contains
           if (gc_i2(v) == 1) s = "clojure.lang.Cons"
        case (OBJ_VECTOR);  s = "clojure.lang.PersistentVector"
        case (OBJ_TVECTOR); s = "clojure.lang.PersistentVector$TransientVector"
+       case (OBJ_TMAP)
+          if (gc_i1(v) == 2) then
+             s = "clojure.lang.PersistentHashSet$TransientHashSet"
+          else if (gc_kind(gc_slot(v, 1)) == OBJ_HAMT) then
+             s = "clojure.lang.PersistentHashMap$TransientHashMap"
+          else
+             s = "clojure.lang.PersistentArrayMap$TransientArrayMap"
+          end if
        case (OBJ_MAP, OBJ_HAMT)
           s = "clojure.lang.PersistentArrayMap"
           if (gca_is_sorted(v)) s = "clojure.lang.PersistentTreeMap"
@@ -16717,6 +16767,49 @@ contains
   ! The operations of a transient vector (call_builtin's hook): conj!,
   ! assoc!, pop!, count, nth, get and persistent!, each refused once
   ! persistent! has run, as TransientVector.ensureEditable refuses them.
+  ! A TRANSIENT MAP OR SET (OBJ_TMAP): a box over the persistent value.
+  ! conj! assoc! dissoc! disj! are the persistent operation on what is
+  ! inside, stored back, and answer the box; count, get, contains? and
+  ! find read through; persistent! seals it and answers the value, and
+  ! any use after that is Clojure's IllegalAccessError. DEVIATIONS 11.
+  recursive function tmap_op(id, args, n) result(out)
+    type(gc_stack), pointer :: vst
+    type(eval_ctx), pointer :: tctx
+    integer, intent(in) :: id, n
+    type(gc_value), intent(in) :: args
+    type(gc_value) :: out, t, av
+    integer :: base
+    tctx => ctx_self()
+    vst => gc_my_stack()
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, args)
+    t = gcv_nth(args, 0)
+    out = gc_nil()
+    if (gc_i2(t) /= 1) then
+       call raise_class("IllegalAccessError", "Transient used after persistent! call", [vs_get(vst, base + 1)])
+       call vs_leave(vst, base)
+       return
+    end if
+    if (id == B_PERSISTENT) then
+       call gc_set_i2(t, 0)
+       out = gc_slot(t, 1)
+       call vs_leave(vst, base)
+       return
+    end if
+    ! the same arguments with the value inside in place of the box
+    av = gcv_assoc(vs_get(vst, base + 1), 0, gc_slot(gcv_nth(vs_get(vst, base + 1), 0), 1), [vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, av)
+    out = call_builtin(id, vs_get(vst, base + 2))
+    select case (id)
+    case (B_CONJ, B_ASSOC, B_DISSOC, B_DISJ)
+       if (.not. tctx%has_error) then
+          call gc_set_slot(gcv_nth(vs_get(vst, base + 1), 0), 1, out)
+          out = gcv_nth(vs_get(vst, base + 1), 0)
+       end if
+    end select
+    call vs_leave(vst, base)
+  end function tmap_op
+
   recursive function tvec_op(id, args, n) result(out)
     type(gc_stack), pointer :: vst
     integer, intent(in) :: id, n
@@ -16817,6 +16910,8 @@ contains
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1
     coll = strip_meta(coll0)
+    ! a transient map or set reads as what is inside it
+    if (gc_kind(coll) == OBJ_TMAP) coll = gc_slot(coll, 1)
     ! as_int, not strip_meta: an index may be a BigInt, and every
     ! branch below reads %ival (which a BigInt leaves at 0).
     kk = as_int(k)

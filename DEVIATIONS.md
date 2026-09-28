@@ -30,7 +30,7 @@ Categories:
 | 8 | RESOLVED -- multimethods dispatch with `isa?` and preferences | -- | `src/clj/clotran/multifn.cljf` |
 | 9 | RESOLVED -- sorted collections | -- | `src/f/Assoc.f90` |
 | 10 | Refs are mutable boxes; `set!` of an unbound Var sets its root | temporary | `src/f/Eval.f90` |
-| 11 | Transient maps and sets are the persistent collections (vectors are real) | host | `src/f/Eval.f90` |
+| 11 | RESOLVED -- transient maps and sets are boxes mutated in place; vectors are real transients | -- | `src/f/Eval.f90` |
 | 12 | Three JVM-only libs are skipped by name, and not vendored | host | `src/f/Eval.f90` |
 | 13 | Protocol dispatch is uncached | host | `src/f/GC.f90` |
 | 14 | Regex is ICU under java.util.regex's names; `\w` and `(?i)` are Unicode | host | `src/f/Regex.f90` |
@@ -301,20 +301,27 @@ does, so a file's `(set! *warn-on-reflection* true)` would otherwise be
 an error. Removal: bind those in `load` as `Compiler.load` does, then
 throw.
 
-## 11. Transient maps and sets are the persistent collections
+## 11. RESOLVED -- transient maps and sets are boxes, mutated in place
 
-A VECTOR's transient is real since 2026-09-26 (PersistentVector.f90):
-`(transient v)` is a `PersistentVector$TransientVector` made in O(1) over
-`v`, `conj!` appends in place, `persistent!` builds the tree, and using
-it after `persistent!` throws Clojure's IllegalAccessError. Vectors are
-`IEditableCollection`, so `into`, `mapv` and `filterv` take the
-transient path, as on the JVM.
+**RESOLVED 2026-09-28.** `(transient m)` on a hash map or a hash set is
+a box over the persistent value (`OBJ_TMAP`); `conj!`, `assoc!`,
+`dissoc!` and `disj!` are the persistent operation on what is inside,
+stored back into the box, which they answer; `count`, `get`,
+`contains?` and `find` read through; `persistent!` seals the box and
+answers the value, and any use after that is Clojure's
+IllegalAccessError "Transient used after persistent! call". So
+`(let [t (transient {:x 1 :y 2})] (dissoc! t :x) (persistent! t))` is
+`{:y 2}` here as there, where it used to be `{:x 1 :y 2}`, and
+`(persistent! (dissoc! t :x))` still is. Hash maps and hash sets are
+`IEditableCollection`, so `into` takes the transient path as on the
+JVM; sorted collections have no transient there or here. The class is
+`PersistentHashMap$TransientHashMap`, `PersistentArrayMap$TransientArrayMap`
+or `PersistentHashSet$TransientHashSet` by what is inside. A vector's
+transient was real since 2026-09-26 (PersistentVector.f90).
 
-For MAPS and SETS, `asTransient` and `persistent` are still identity;
-`assoc!`, `dissoc!`, `conj!` and `disj!` are the persistent operations,
-and they are not `IEditableCollection`, so `into {}` conjs. Used
-correctly -- single-threaded and linearly -- the two give the same value.
-What is lost is the speed, and the use-after-persistent! error.
+What is NOT the JVM's: the box does no in-place editing of the
+structure itself, so `assoc!` costs what `assoc` costs -- the speed a
+transient buys on the JVM is not bought here, only the semantics.
 
 ## 12. Three JVM-only libs are skipped by name
 

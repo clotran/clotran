@@ -2314,7 +2314,6 @@
 [(let [f (fn [x] x)] [(add-tap f) (tap> :hello) (remove-tap f)])]
 [(re-pattern "a+") (str (re-pattern "a+")) (vec (re-seq (re-pattern "a+") "aa b aaa"))]
 [(vector? (destructure '[[a b] [1 2]])) (reduced? (ensure-reduced 1)) (unreduced (reduced 1)) (unreduced 1)]
-(expect-diff "DEVIATIONS 11: a transient IS the persistent collection, so assoc! does not mutate in place")
 [(let [t (transient [1 2])] (assoc! t 0 9) (persistent! t)) (let [t (transient {:a 1})] (dissoc! t :a) (persistent! t))]
 [(do (defprotocol OP (om [x])) (extend-type String OP (om [_] :s)) (extend-protocol OP Long (om [_] :l)) [(om "x") (om 1)])]
 [(let [a (double-array [1.0 2.0])] (areduce a i ret 0.0 (+ ret (aget a i))))]
@@ -2663,3 +2662,9 @@
 [(:file (meta #'map)) (:file (meta #'clojure.string/join)) *1 *2 *3 *e (bound? #'*1) (read-string "\\\\\\\\") (map str (read-string "[\\\\\\\\ \\newline \\ ]")) (str (class (clojure.java.io/file "x"))) (instance? java.io.File (clojure.java.io/file "x"))]
 
 [(try (eval 'user.OracleNoSuch) (catch Throwable e :err)) (try (eval 'no.such.Klass) (catch Throwable e :err)) (do (defrecord OracleRec [a]) (str (eval 'user.OracleRec))) (some? (eval 'clojure.core.protocols.CollReduce)) (str java.util.Date)]
+
+[(let [m (transient {:x 1 :y 2 :z 3})] (dissoc! m :x) (persistent! m)) (persistent! (reduce conj! (transient {}) [[:a 1] [:b 2]])) (persistent! (assoc! (transient {}) :k 7)) (persistent! (disj! (conj! (transient #{1 2}) 3) 1)) (let [t (transient #{1 2})] [(count t) (contains? t 1) (get t 2) (find (transient {:a 1}) :a) (get (transient {:a 1}) :a)]) (str (class (transient {:a 1}))) (str (class (transient (hash-map :a 1)))) (str (class (transient #{1}))) (try (let [t (transient {})] (persistent! t) (assoc! t :a 1)) (catch IllegalAccessError e :used-after)) (instance? clojure.lang.IEditableCollection {}) (instance? clojure.lang.IEditableCollection (sorted-map)) (try (transient (sorted-set)) (catch ClassCastException e :cce))]
+
+(defrecord OracleMP [a b])
+
+[(map->OracleMP {:a 1 :b 2 :z 9}) (OracleMP/create (with-meta {:a 1 :b 2} {:m 1})) (meta (with-meta {:a 1} nil)) (str (class (with-meta {:a 1} nil))) (instance? clojure.lang.MapEquivalence {}) (instance? clojure.lang.MapEquivalence (sorted-map)) (instance? clojure.lang.MapEquivalence (->OracleMP 1 2)) [((transient {:a 1}) :a) (:a (transient {:a 1})) ((transient #{:a}) :b 2) (get (transient #{:a}) :a)]]

@@ -317,6 +317,7 @@ module GC
   ! pointer component and that is what keeps a copy at 4 ns.
   integer, parameter, public :: OBJ_COMPILED = 36 ! 1=name; i1=handle i2=arity
   integer, parameter, public :: OBJ_TVECTOR  = 37 ! 1=vector it came from 2=append buffer; i1=buffered i2=1 editable
+  integer, parameter, public :: OBJ_TMAP     = 38 ! a transient map or set: 1=the persistent value; i1=1 map 2 set, i2=1 editable
   integer, parameter, public :: OBJ_HAMT      = 11 ! 1=root run; i1=count
   integer, parameter, public :: OBJ_HAMT_LEAF = 12 ! 1=key 2=val
   ! Slot 3 was reserved for a per-Var dynamic stack; the dynamic
@@ -2493,11 +2494,11 @@ contains
   subroutine census()
     integer :: i, k, b, n
     integer :: kinds(0:40), runs(8)
-    character(len=8), parameter :: kname(37) = [character(len=8) :: &
+    character(len=8), parameter :: kname(38) = [character(len=8) :: &
          "cons", "vector", "map", "closure", "atom", "lazy", "env", "meta", "ns", "var", &
          "hamt", "hamtleaf", "builtin", "recur", "seq", "set", "multifn", "sb", "err", "regex", &
          "matcher", "writer", "type", "inst", "delay", "array", "?27", "?28", "?29", "ast", &
-         "chunk", "chunkbuf", "chunkseq", "task", "volatile", "compiled", "tvector"]
+         "chunk", "chunkbuf", "chunkseq", "task", "volatile", "compiled", "tvector", "tmap"]
     character(len=8), parameter :: rname(8) = [character(len=8) :: &
          "0-1", "2", "3", "4", "5-8", "9-16", "17-32", "33+"]
     character(len=8) :: e
@@ -2528,10 +2529,10 @@ contains
        runs(b) = runs(b) + 1
     end do
     write(0, '(A)', advance="no") "census objs:"
-    do k = 1, 37
+    do k = 1, 38
        if (kinds(k) > 0) write(0, '(A,A,A,I0)', advance="no") " ", trim(kname(k)), "=", kinds(k)
     end do
-    write(0, '(A,I0)') " other=", kinds(0) + sum(kinds(38:40))
+    write(0, '(A,I0)') " other=", kinds(0) + sum(kinds(39:40))
     write(0, '(A)', advance="no") "census runs:"
     do b = 1, 8
        if (runs(b) > 0) write(0, '(A,A,A,I0)', advance="no") " ", trim(rname(b)), "=", runs(b)
