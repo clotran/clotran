@@ -1651,7 +1651,7 @@
     vst => gc_my_stack()
     base = vs_enter(vst, 2)
     call vs_set(vst, base + 1, vals)
-    mp = gca_empty([roots, vs_get(vst, base + 1)])
+    mp = gca_hash_empty([roots, vs_get(vst, base + 1)])
     call vs_set(vst, base + 2, mp)
     do i = 0, gcv_count(vals) - 1
        mp = gca_assoc(vs_get(vst, base + 2), gcv_nth(vs_get(vst, base + 1), i), gcv_nth(vs_get(vst, base + 1), i), &

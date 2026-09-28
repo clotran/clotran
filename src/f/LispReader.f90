@@ -786,6 +786,8 @@ contains
     else if (gc_kind(form) == OBJ_SET) then
        item = rewrite_percent(gc_slot(vs_get(base + 1), 1), roots)
        call vs_set(base + 2, item)
+       item = gca_hashed(vs_get(base + 2), [roots, vs_get(base + 2)])
+       call vs_set(base + 2, item)
        out = gc_obj(OBJ_SET, [vs_get(base + 2)], [roots, vs_get(base + 2)])
     end if
     call vs_leave(base)
@@ -817,7 +819,8 @@ contains
     ! it: (case* ... #{2}) read back as (), silently, with no error.
     !
     ! read_map threads roots correctly and is the shape to copy.
-    m = gca_empty(roots)
+    ! a set is hashed at every size, as PersistentHashSet is
+    m = gca_hash_empty(roots)
     call vs_set(base + 2, m)
     do i = 0, gcv_count(vs_get(base + 1)) - 1
        item = gcv_nth(vs_get(base + 1), i)

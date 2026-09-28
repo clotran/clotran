@@ -4778,7 +4778,7 @@ contains
        if (gca_is_sorted(gc_slot(vs_get(vst, base + 1), 1))) then
           inner = gca_sorted_empty(gca_comparator(gc_slot(vs_get(vst, base + 1), 1)), [roots, vs_get(vst, base + 1)])
        else
-          inner = gca_empty([roots, vs_get(vst, base + 1)])
+          inner = gca_hash_empty([roots, vs_get(vst, base + 1)])
        end if
        call vs_set(vst, base + 2, inner)
        out = gc_obj(OBJ_SET, [vs_get(vst, base + 2)], [roots, vs_get(vst, base + 2)])
@@ -5931,9 +5931,9 @@ contains
   ! The unmixed fold of a seq's elements into h, for the hash of a
   ! ChunkedCons: it must equal a list's. No allocation. An unrealised
   ! tail stops the fold, as an unrealised lazy seq is not hashable here.
-  recursive subroutine fold_seq(v, h)
+  recursive subroutine fold_seq(v, h, n)
     type(gc_value), intent(in) :: v
-    integer, intent(inout) :: h
+    integer, intent(inout) :: h, n
     type(gc_value) :: cur
     integer :: i
     cur = v
@@ -5941,18 +5941,18 @@ contains
        select case (gc_kind(cur))
        case (OBJ_CHUNKSEQ)
           do i = 0, chunk_count(gc_slot(cur, 1)) - 1
-             h = 31 * h + gc_hash(chunk_nth(gc_slot(cur, 1), i))
+             h = m3_ordered_step(h, gc_hash(chunk_nth(gc_slot(cur, 1), i))); n = n + 1
           end do
           cur = gc_slot(cur, 2)
        case (OBJ_CONS)
           do while (gcl_is(cur) .and. gcl_count(cur) > 0)
-             h = 31 * h + gc_hash(gc_slot(cur, 1))
+             h = m3_ordered_step(h, gc_hash(gc_slot(cur, 1))); n = n + 1
              cur = gc_slot(cur, 2)
           end do
           return
        case (OBJ_SEQ)
           do i = gc_i1(cur), seq_len(gc_slot(cur, 1)) - 1
-             h = 31 * h + gc_hash(seq_elem(gc_slot(cur, 1), i, [cur]))
+             h = m3_ordered_step(h, gc_hash(seq_elem(gc_slot(cur, 1), i, [cur]))); n = n + 1
           end do
           return
        case (OBJ_LAZY)
@@ -5961,7 +5961,7 @@ contains
              cycle
           end if
           if (gc_i1(cur) /= LAZY_CONS) return
-          h = 31 * h + gc_hash(gc_slot(cur, 2))
+          h = m3_ordered_step(h, gc_hash(gc_slot(cur, 2))); n = n + 1
           cur = gc_slot(cur, 3)
        case default
           return
@@ -7672,7 +7672,7 @@ contains
             call vs_leave(vst, base)
             return
          end if
-         mp = gca_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
+         mp = gca_hash_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
          call vs_set(vst, base + 3, mp)
          do i2 = 0, gcv_count(vs_get(vst, base + 2)) - 2, 2
             mp = gca_assoc(vs_get(vst, base + 3), gcv_nth(vs_get(vst, base + 2), i2), &
@@ -7688,7 +7688,7 @@ contains
          integer :: i2
          items = coll_to_vector(gcv_nth(args, 0), [vs_get(vst, base + 1)])
          call vs_set(vst, base + 2, items)
-         mp = gca_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
+         mp = gca_hash_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
          call vs_set(vst, base + 3, mp)
          do i2 = 0, gcv_count(vs_get(vst, base + 2)) - 1
             mp = gca_assoc(vs_get(vst, base + 3), gcv_nth(vs_get(vst, base + 2), i2), &
@@ -12262,7 +12262,7 @@ contains
     eq = .false.
     if (ka == OBJ_SET .and. kb == OBJ_SET) then
        eq = deep_equal(a, b, [a, b])
-    else if (ka == OBJ_MAP .and. kb == OBJ_MAP) then
+    else if ((ka == OBJ_MAP .or. ka == OBJ_HAMT) .and. (kb == OBJ_MAP .or. kb == OBJ_HAMT)) then
        eq = deep_equal(a, b, [a, b])
     else if (is_seq_kind(ka) .and. is_seq_kind(kb)) then
        ! A list and a vector of the same elements ARE equal in
@@ -12302,64 +12302,63 @@ contains
     integer :: i, n, k
     type(gc_value), allocatable :: ks(:), vs_(:)
     type(gc_value) :: cur, item
+    ! Murmur3.hashOrdered for the sequential kinds -- 1, then 31 * h + x
+    ! for each, finished with the count -- and hashUnordered, a sum, for
+    ! sets and maps, whose entries hash as the vector [k v] does
+    ! (APersistentVector, APersistentSet, APersistentMap)
     k = gc_kind(v)
-    h = 0
+    h = 1
+    n = 0
     select case (k)
     case (OBJ_VECTOR)
        n = gcv_count(v)
        do i = 0, n - 1
-          h = 31 * h + gc_hash(gcv_nth(v, i))
+          h = m3_ordered_step(h, gc_hash(gcv_nth(v, i)))
        end do
-       h = mix32(h)
+       h = m3_mix_coll(h, n)
     case (OBJ_CONS)
        ! Walked through the slots rather than the seq interface: car
        ! and cdr are already there, and sq_first/sq_rest can allocate.
-       !
-       ! THE EMPTY TAIL IS ITSELF AN OBJ_CONS, so a walk that stops
-       ! only on kind hashes one extra nil and (hash '(1)) came out
-       ! equal to (hash [1 2]) rather than to (hash [1]). Clojure
-       ! guarantees (= a b) implies (= (hash a) (hash b)), and a
-       ! list IS equal to a vector of the same elements -- so this
-       ! broke the guarantee for every list. `case` is where it
-       ! showed: it dispatches on the hash, so
-       ! (case (list 1 2) [1 2] :vec :d) answered :d.
+       ! THE EMPTY TAIL IS ITSELF AN OBJ_CONS: the walk stops on count,
+       ! or (hash '(1)) folds one extra nil and differs from (hash [1]).
        cur = v
        do while (gcl_is(cur) .and. gcl_count(cur) > 0)
           item = gc_slot(cur, 1)
-          h = 31 * h + gc_hash(item)
+          h = m3_ordered_step(h, gc_hash(item))
+          n = n + 1
           cur = gc_slot(cur, 2)
        end do
-       h = mix32(h)
+       h = m3_mix_coll(h, n)
     case (OBJ_SEQ)
-       ! Same fold as a vector, over the view's own elements.
-       ! Read THROUGH the view: seq_elem indexes a source collection,
-       ! and a seq is slot 1 plus the offset in i1.
+       ! over the view's own elements: slot 1 plus the offset in i1
        n = sq_count(v, [v])
        do i = 0, n - 1
-          h = 31 * h + gc_hash(seq_elem(gc_slot(v, 1), gc_i1(v) + i, [v]))
+          h = m3_ordered_step(h, gc_hash(seq_elem(gc_slot(v, 1), gc_i1(v) + i, [v])))
        end do
-       h = mix32(h)
+       h = m3_mix_coll(h, n)
     case (OBJ_CHUNKSEQ)
        if (seq_realised_p(v)) then
-          call fold_seq(v, h)
-          h = mix32(h)
+          call fold_seq(v, h, n)
+          h = m3_mix_coll(h, n)
        else
           ! not realised to the end: identity, as an unrealised lazy seq
           ! gets (DEVIATIONS 35)
           h = mix32(ieor(mix32(v%ref), OBJ_CHUNKSEQ))
        end if
-    case (OBJ_MAP)
+    case (OBJ_MAP, OBJ_HAMT)
        call gca_entries(v, ks, vs_)
+       h = 0
        do i = 1, size(ks)
-          h = h + ieor(gc_hash(ks(i)), gc_hash(vs_(i)))
+          h = m3_add(h, m3_mix_coll(m3_ordered_step(m3_ordered_step(1, gc_hash(ks(i))), gc_hash(vs_(i))), 2))
        end do
-       h = mix32(ieor(h, OBJ_MAP))
+       h = m3_mix_coll(h, size(ks))
     case (OBJ_SET)
        call gca_entries(gc_slot(v, 1), ks, vs_)
+       h = 0
        do i = 1, size(ks)
-          h = h + gc_hash(ks(i))
+          h = m3_add(h, gc_hash(ks(i)))
        end do
-       h = mix32(ieor(h, OBJ_SET))
+       h = m3_mix_coll(h, size(ks))
     case default
        h = mix32(ieor(v%ref, v%tag))
     end select
@@ -16807,7 +16806,7 @@ contains
     vst => gc_my_stack()
     base = vs_enter(vst, 2)
     call vs_set(vst, base + 1, vec)
-    mp = gca_empty([roots, [vs_get(vst, base + 1)]])
+    mp = gca_hash_empty([roots, [vs_get(vst, base + 1)]])
     call vs_set(vst, base + 2, mp)
     do i = 0, gcv_count(vs_get(vst, base + 1)) - 1
        mp = gca_assoc(vs_get(vst, base + 2), gcv_nth(vs_get(vst, base + 1), i), &

@@ -47,6 +47,7 @@ module Assoc
   public :: gca_set_comparer, gca_sorted_empty, gca_is_sorted, gca_comparator, &
        gca_key_at, gca_val_at, gca_sorted_from
 
+  public :: gca_hashed, gca_hash_empty
   public :: gca_empty, gca_is, gca_count, gca_get, gca_contains, &
        gca_assoc, gca_dissoc, gca_is_array_map, gca_entries
 
@@ -57,6 +58,24 @@ contains
     type(gc_value) :: m
     m = gcm_empty(roots)
   end function gca_empty
+
+  ! A set's backing, or what hash-map builds: HASHED whatever its size,
+  ! as PersistentHashSet and PersistentHashMap are -- an array map
+  ! iterates in insertion order, and #{7 6 5} came back (5 6 7) where
+  ! clj answers (7 6 5). A sorted map, or a trie already, stays as it is.
+  function gca_hashed(m, roots) result(out)
+    type(gc_value), intent(in) :: m
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out
+    out = m
+    if (gcm_is(m) .and. .not. gca_is_sorted(m)) out = promote(m, roots)
+  end function gca_hashed
+
+  function gca_hash_empty(roots) result(m)
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: m
+    m = gch_empty(roots)
+  end function gca_hash_empty
 
   subroutine gca_set_comparer(f)
     procedure(cmp_i) :: f

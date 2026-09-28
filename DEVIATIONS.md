@@ -459,7 +459,21 @@ every other host member in this file did.
 
 ---
 
-## 15. `hash` answers different numbers than the JVM does
+## 15. RESOLVED -- `hash` answers different numbers than the JVM does
+
+**RESOLVED 2026-09-27.** `gc_hash` is `Util.hasheq`, bit for bit:
+`Murmur3.hashLong` for integers, `hashInt` of the Java string hash for
+strings, `Symbol.hasheq` and `Keyword.hasheq`, `Double.hashCode` with
+-0.0 as 0.0, a Ratio's and a BigInt's `BigInteger.hashCode`, BigDecimal's
+after `stripTrailingZeros`, and `hashOrdered`/`hashUnordered` for
+collections (GC.f90, "Clojure's hashes"; Eval.f90, gce_coll_hash). The
+trie iterates in hash order the way PersistentHashMap does, and sets and
+`hash-map` are hashed at every size, as PersistentHashSet and
+PersistentHashMap are, so a set or a map past eight entries seqs in the
+order clj's does. `case` is unaffected: its macroexpansion and `case*`
+still share one hash. Left different: a lazy seq, which hashes by identity
+until realised (deviation 35), a class object, and a record. The
+original entry follows.
 
 Clojure specifies `hash` as `Util.hasheq`, a murmur3 mix, and exposes the
 algorithm through `hash-ordered-coll` and `hash-unordered-coll`. clotran

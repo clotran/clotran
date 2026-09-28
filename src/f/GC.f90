@@ -723,7 +723,7 @@ module GC
   public :: gc_set_coll_ops
   ! The hash mixer, so the collection walkers installed through
   ! gc_set_coll_ops finish with the same one every other hash uses.
-  public :: mix32
+  public :: mix32, m3_mix_coll, m3_ordered_step, m3_add, gc_utf16
   public :: gc_obj, gc_vec, gc_cons
   public :: gc_text, gc_slot, gc_set_slot, gc_kind
   public :: gc_i1, gc_i2, gc_set_i1, gc_set_i2
@@ -2679,57 +2679,47 @@ contains
        else
           h = 1237
        end if
-    case (GCT_INT, GCT_CHAR)
-       ! The integer is 64 bits and the hash is 32, so fold the high
-       ! half onto the low one before mixing -- the same shape as the
-       ! real case below, and as Long.hashCode. Truncating instead
-       ! would collide every pair differing only above bit 32.
-       bits8 = v%ival
-       ! THE TAG IS MIXED IN AFTER, not XORed into the value. The
-       ! tags are small integers, so XORing one straight onto the
-       ! value made every integer equal to its own tag collapse to
-       ! zero -- (hash 2) was 0, the same as (hash nil), because
-       ! GCT_INT is 2. `case` dispatches on the hash and then has
-       ! to insert a condp for every collision, so a case holding
-       ! the constant 2 and the constant nil compiled to a table
-       ! where they shared a bucket.
-       h = mix32(ieor(mix32(int(ieor(bits8, ishft(bits8, -32)), kind=4)), &
-            tag_salt(v%tag)))
+    ! Clojure's hasheq for each (Util.hasheq, Numbers.hasheq, Symbol,
+    ! Keyword, Ratio, BigInt, BigDecimal): see "Clojure's hashes" below.
+    case (GCT_INT)
+       h = m3_hash_long(v%ival)
+    case (GCT_CHAR)
+       h = int(v%ival)                  ! Character.hashCode
     case (GCT_REAL)
-       bits8 = transfer(gc_rval(v), bits8)
-       h = mix32(int(ieor(bits8, ishft(bits8, -32)), kind=4))
+       h = double_hasheq(gc_rval(v))
     case (GCT_RATIO)
-       bits8 = v%ival
-       h = mix32(ieor(mix32(ieor(int(ieor(bits8, ishft(bits8, -32)), kind=4), &
-            ishft(v%ref, 16))), tag_salt(v%tag)))
+       h = ieor(big_hash_i64(gc_numerator(v)), big_hash_i64(gc_denominator(v)))
     case (GCT_BIG)
-       ! HASHES AS THE INTEGER it equals when it is one, because equal
-       ! values must hash alike: {1N :a} and (get m 1) is the case.
-       ! Past the 64-bit range no integer can equal it, so the text's
-       ! own hash will do.
+       ! the value it equals when it fits a long, as BigInt.hasheq
        block
           call gc_ref_text(v%ref, s=dlt_1)
-       if (big_fits_i64(dlt_1)) then
-          block
-             call gc_ref_text(v%ref, s=dlt_2)
-             bits8 = big_to_i64(dlt_2)
-          end block
-          h = mix32(ieor(mix32(int(ieor(bits8, ishft(bits8, -32)), kind=4)), tag_salt(GCT_INT)))
-       else
-          block
-             call gc_ref_text(v%ref, s=dlt_2)
-             h = mix32(ieor(mix32(fnv1a(dlt_2)), tag_salt(v%tag)))
-          end block
-       end if
+          if (big_fits_i64(dlt_1)) then
+             h = m3_hash_long(big_to_i64(dlt_1))
+          else
+             h = big_hash_text(dlt_1)
+          end if
        end block
     case (GCT_DEC)
-       ! Over the STRIPPED value, so equal decimals hash alike.
        block
           call gc_ref_text(v%ref, s=dlt_1)
-          call dec_strip(dlt_1, o=dlt_2)
-          h = mix32(ieor(mix32(fnv1a(dlt_2)), tag_salt(v%tag)))
+          h = dec_hasheq(dlt_1)   ! stripped inside
        end block
-    case (GCT_STR, GCT_SYM, GCT_KEY, GCT_CLASS)
+    case (GCT_STR)
+       block
+          call gc_ref_text(v%ref, s=dlt_1)
+          h = m3_hash_int(java_string_hash(dlt_1))
+       end block
+    case (GCT_SYM)
+       block
+          call gc_ref_text(v%ref, s=dlt_1)
+          h = sym_hasheq(dlt_1)
+       end block
+    case (GCT_KEY)
+       block
+          call gc_ref_text(v%ref, s=dlt_1)
+          h = wrap32(int(sym_hasheq(dlt_1), 8) - 1640531527_8)   ! + 0x9e3779b9
+       end block
+    case (GCT_CLASS)
        block
           call gc_ref_text(v%ref, s=dlt_1)
           h = mix32(ieor(mix32(fnv1a(dlt_1)), tag_salt(v%tag)))
@@ -2780,6 +2770,253 @@ contains
     h = wrap32(int(h, 8) * (-1028477387_8)) ! 0xc2b2ae35 as signed 32-bit
     h = ieor(h, ishft(h, -16))
   end function mix32
+
+
+  ! ---- Clojure's hashes: Murmur3.java and Util.hasheq -----------------
+  !
+  ! (hash x) and every hash map's iteration order come from these, so
+  ! they are Clojure's own, bit for bit, where they were a mix of our
+  ! own before: a set or a map past 8 entries iterated in another
+  ! order than clj's, and (hash "a") answered another number. Java's
+  ! int arithmetic wraps; every step here goes through wrap32 because
+  ! a signed overflow in Fortran is undefined.
+
+  pure function m3_mixk1(k0) result(k)
+    integer, intent(in) :: k0
+    integer :: k
+    k = wrap32(int(k0, 8) * (-862048943_8))    ! 0xcc9e2d51
+    k = ishftc(k, 15)
+    k = wrap32(int(k, 8) * 461845907_8)        ! 0x1b873593
+  end function m3_mixk1
+
+  pure function m3_mixh1(h0, k1) result(h)
+    integer, intent(in) :: h0, k1
+    integer :: h
+    h = ieor(h0, k1)
+    h = ishftc(h, 13)
+    h = wrap32(int(h, 8) * 5_8 - 430675100_8)  ! + 0xe6546b64
+  end function m3_mixh1
+
+  pure function m3_fmix(h0, length) result(h)
+    integer, intent(in) :: h0, length
+    integer :: h
+    h = ieor(h0, length)
+    h = ieor(h, ishft(h, -16))
+    h = wrap32(int(h, 8) * (-2048144789_8))    ! 0x85ebca6b
+    h = ieor(h, ishft(h, -13))
+    h = wrap32(int(h, 8) * (-1028477387_8))    ! 0xc2b2ae35
+    h = ieor(h, ishft(h, -16))
+  end function m3_fmix
+
+  pure function m3_hash_int(i) result(h)
+    integer, intent(in) :: i
+    integer :: h
+    h = 0
+    if (i /= 0) h = m3_fmix(m3_mixh1(0, m3_mixk1(i)), 4)
+  end function m3_hash_int
+
+  pure function m3_hash_long(x) result(h)
+    integer(kind=8), intent(in) :: x
+    integer :: h
+    h = 0
+    if (x == 0) return
+    h = m3_mixh1(0, m3_mixk1(wrap32(x)))
+    h = m3_mixh1(h, m3_mixk1(wrap32(ishft(x, -32))))
+    h = m3_fmix(h, 8)
+  end function m3_hash_long
+
+  ! Murmur3.mixCollHash: the fold of an ordered or unordered collection
+  ! and its count, finished
+  pure function m3_mix_coll(hash, count) result(h)
+    integer, intent(in) :: hash, count
+    integer :: h
+    h = m3_fmix(m3_mixh1(0, m3_mixk1(hash)), count)
+  end function m3_mix_coll
+
+  ! One step of hashOrdered's fold, 31 * h + x, wrapped
+  pure function m3_ordered_step(h, x) result(r)
+    integer, intent(in) :: h, x
+    integer :: r
+    r = wrap32(31_8 * int(h, 8) + int(x, 8))
+  end function m3_ordered_step
+
+  pure function m3_add(h, x) result(r)
+    integer, intent(in) :: h, x
+    integer :: r
+    r = wrap32(int(h, 8) + int(x, 8))
+  end function m3_add
+
+  ! A string as Java holds it: UTF-16 code units
+  subroutine gc_utf16(t, u, n)
+    character(len=*), intent(in) :: t
+    integer, allocatable, intent(out) :: u(:)
+    integer, intent(out) :: n
+    integer :: p, cp, nb
+    allocate(u(2 * len(t) + 1))
+    n = 0
+    p = 1
+    do while (p <= len(t))
+       if (ichar(t(p:p)) >= 128 .and. ichar(t(p:p)) < 192) then
+          p = p + 1
+          cycle
+       end if
+       call u8_dec(t, p, cp, nb)
+       if (cp >= 65536) then
+          u(n + 1) = 55296 + (cp - 65536) / 1024
+          u(n + 2) = 56320 + mod(cp - 65536, 1024)
+          n = n + 2
+       else
+          n = n + 1
+          u(n) = cp
+       end if
+       p = p + 1
+    end do
+  end subroutine gc_utf16
+
+  ! String.hashCode
+  function java_string_hash(t) result(h)
+    character(len=*), intent(in) :: t
+    integer :: h, n, i
+    integer, allocatable :: u(:)
+    call gc_utf16(t, u, n)
+    h = 0
+    do i = 1, n
+       h = m3_ordered_step(h, u(i))
+    end do
+  end function java_string_hash
+
+  ! Murmur3.hashUnencodedChars
+  function m3_hash_chars(t) result(h)
+    character(len=*), intent(in) :: t
+    integer :: h, n, i
+    integer, allocatable :: u(:)
+    call gc_utf16(t, u, n)
+    h = 0
+    do i = 2, n, 2
+       h = m3_mixh1(h, m3_mixk1(wrap32(int(u(i - 1), 8) + int(u(i), 8) * 65536_8)))
+    end do
+    if (mod(n, 2) == 1) h = ieor(h, m3_mixk1(u(n)))
+    h = m3_fmix(h, 2 * n)
+  end function m3_hash_chars
+
+  ! Util.hashCombine
+  pure function hash_combine(seed, hash) result(s)
+    integer, intent(in) :: seed, hash
+    integer :: s
+    s = ieor(seed, wrap32(int(hash, 8) - 1640531527_8 + int(wrap32(int(seed, 8) * 64_8), 8) &
+         + int(shifta(seed, 2), 8)))
+  end function hash_combine
+
+  ! Symbol.hasheq over its text: the name by Murmur3, the namespace by
+  ! String.hashCode
+  function sym_hasheq(t) result(h)
+    character(len=*), intent(in) :: t
+    integer :: h, sl
+    sl = index(t, "/")
+    if (len(t) > 1 .and. sl > 1) then
+       h = hash_combine(m3_hash_chars(t(sl + 1:)), java_string_hash(t(1:sl - 1)))
+    else
+       h = hash_combine(m3_hash_chars(t), 0)
+    end if
+  end function sym_hasheq
+
+  ! BigInteger.hashCode of a 64-bit value: its magnitude's 32-bit words,
+  ! high first, times its sign
+  pure function big_hash_i64(v) result(h)
+    integer(kind=8), intent(in) :: v
+    integer :: h
+    integer(kind=8) :: hi, lo
+    if (v == 0) then
+       h = 0
+       return
+    end if
+    if (v == -huge(v) - 1) then
+       hi = 2147483648_8; lo = 0     ! 2^63: its magnitude overflows a long
+    else
+       hi = ishft(abs(v), -32); lo = iand(abs(v), 4294967295_8)
+    end if
+    h = 0
+    if (hi /= 0) h = wrap32(31_8 * int(h, 8) + hi)
+    h = wrap32(31_8 * int(h, 8) + lo)
+    if (v < 0) h = wrap32(-int(h, 8))
+  end function big_hash_i64
+
+  ! BigInteger.hashCode of a decimal integer of any size
+  function big_hash_text(t0) result(h)
+    character(len=*), intent(in) :: t0
+    integer :: h, nw, i
+    character(len=:), allocatable :: t, q, r
+    integer(kind=8) :: w(64)
+    logical :: neg
+    neg = (len(t0) > 0 .and. t0(1:1) == "-")
+    if (neg) then
+       t = t0(2:)
+    else
+       t = t0
+    end if
+    nw = 0
+    do while (t /= "0" .and. len(t) > 0 .and. nw < 64)
+       call big_divmod(t, "4294967296", q, r)
+       nw = nw + 1
+       w(nw) = big_to_i64(r)
+       t = q
+    end do
+    h = 0
+    do i = nw, 1, -1
+       h = wrap32(31_8 * int(h, 8) + w(i))
+    end do
+    if (neg) h = wrap32(-int(h, 8))
+  end function big_hash_text
+
+  ! BigDecimal.hashCode after stripTrailingZeros: 31 * the unscaled
+  ! value's hash + the scale, over BigDec's "unscaled|scale"; zero is 0
+  function dec_hasheq(t0) result(h)
+    character(len=*), intent(in) :: t0
+    integer :: h, bar, scale, i
+    logical :: neg
+    character(len=:), allocatable :: t
+    call dec_strip(t0, o=t)
+    bar = index(t, "|")
+    h = 0
+    if (bar < 2) return
+    if (t(1:bar - 1) == "0" .or. t(1:bar - 1) == "-0") return
+    ! the scale by hand: an internal read takes libgfortran's unit lock
+    scale = 0
+    neg = .false.
+    do i = bar + 1, len(t)
+       if (t(i:i) == "-") then
+          neg = .true.
+       else if (t(i:i) >= "0" .and. t(i:i) <= "9") then
+          scale = scale * 10 + (ichar(t(i:i)) - ichar("0"))
+       end if
+    end do
+    if (neg) scale = -scale
+    ! and past the point, as stripTrailingZeros goes: 100 is 1E+2
+    t = t(1:bar - 1)
+    do while (len(t) > 1 .and. t(len(t):len(t)) == "0")
+       t = t(1:len(t) - 1)
+       scale = scale - 1
+    end do
+    bar = len(t) + 1
+    h = wrap32(31_8 * int(big_hash_text(t(1:bar - 1)), 8) + int(scale, 8))
+  end function dec_hasheq
+
+  ! Double.hashCode, with -0.0 as 0.0 (Numbers.hasheq)
+  pure function double_hasheq(d) result(h)
+    real(kind=8), intent(in) :: d
+    integer :: h
+    integer(kind=8) :: bits
+    if (d == 0.0d0) then
+       h = 0
+       return
+    end if
+    if (d /= d) then
+       bits = 9221120237041090560_8   ! doubleToLongBits' one NaN
+    else
+       bits = transfer(d, bits)
+    end if
+    h = wrap32(ieor(bits, ishft(bits, -32)))
+  end function double_hasheq
 
   function fnv1a(s) result(h)
     character(len=*), intent(in) :: s
@@ -3233,8 +3470,10 @@ contains
     ! two stay in step.
     ! A ChunkedCons IS here: its own chunk is already realised, and the
     ! hook checks whether the rest is before folding (DEVIATIONS 35).
+    ! OBJ_HAMT too: a map past 8 entries is one, and hashing it by
+    ! identity gave two equal maps two hashes -- a set held both
     is_structural_kind = (k == OBJ_CONS .or. k == OBJ_VECTOR .or. &
-         k == OBJ_MAP .or. k == OBJ_SET .or. k == OBJ_SEQ .or. k == OBJ_CHUNKSEQ)
+         k == OBJ_MAP .or. k == OBJ_HAMT .or. k == OBJ_SET .or. k == OBJ_SEQ .or. k == OBJ_CHUNKSEQ)
   end function is_structural_kind
 
   subroutine gc_global_keep(h, v)
