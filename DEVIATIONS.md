@@ -1597,24 +1597,38 @@ reader's split, is identical on both.
 **Removal**: store where the namespace ends beside the text, and have
 `namespace`, `name`, `=` and hashing read it.
 
-## 55. clojure.core is not direct-linked: redefining a core fn reaches core's own callers
+## 55. RESOLVED -- clojure.core is direct-linked, as Clojure compiles it
 
-Clojure compiles `clojure.core` with direct linking: one core function
-calls another directly, not through its Var, so `with-redefs`,
-`alter-var-root` or a `def` of a core name changes what USER code sees
-and leaves core's own calls alone. Here every call goes through the Var.
-`(with-redefs [first last] (first [1 2]))` answers 2 in `clj`; here
-`last` itself calls the redefined `first`, which is `last`, and it never
-returns. Redefining a core fn to wrap it (logging, a stub in a test)
-therefore also changes every core function that calls it.
+**RESOLVED 2026-09-28.** Clojure compiles its own namespaces with direct
+linking: one core function calls another without going through the
+Var, so `with-redefs`, `alter-var-root` or a `def` of a core name
+changes what USER code sees and leaves core's own calls alone. Here the
+analyser, for a call head in a `clojure.*` namespace read from the
+vendored tree (`src/clj/clojure/`) that names a `clojure.*` Var, binds
+the site to the closure the Var holds AT ANALYSIS (analyze.inc,
+`direct_link_flag`), as the JVM binds at compile time, and the site
+never reads the Var again (exec.inc, N_CALL). A Var bound to a host
+builtin at that moment stays late-bound: the host binds builtins into
+clojure.core before core.clj defines the real thing, and the JVM has no
+such placeholder. Installing a compiled namespace re-roots its Vars and
+bumps an epoch; a site then reads its Var once more and takes only a
+compiled fn from it. `(with-redefs [first last] (first [1 2]))` is 2 on
+both, `((with-redefs [first last] #(first [1 2])))` 1, and a user's own
+`(ns clojure.zz)` is not linked, as it is not there.
 
-**Removal**: bind calls between clojure.core functions at analysis time
-while core.clj loads, as `:direct-linking` does -- except to Vars marked
-`^:dynamic` or `^:redef` -- and have the compiled core's install
-(clotran.loader) rebind them, since it replaces Var roots after the
-fact. Not done: core.clj redefines some functions part way through
-(`reduce` after its protocols load), which a binding taken early would
-miss.
+What stays late-bound, as on the JVM: a Var marked `^:dynamic`,
+`^:redef` or `^:protocol` (a protocol fn is re-rooted by every
+`extend`; on the JVM its closure has no static entry point to link
+to), a macro, a multimethod (re-rooted when its `defmulti` is
+evaluated again), an earmuffed name, and every call from a namespace
+outside `clojure.*`.
+
+The one difference from the JVM is WHEN the binding is taken: at the
+first call here, at compile time there. core.clj redefines `reduce`
+part way through (after its protocols load); a JVM caller compiled
+before that links the early `reduce` for good, a caller here that
+first runs after it takes the later one. The two answers are the same;
+the later one is faster.
 
 ## 56. An index is 64-bit; the JVM truncates a vector's to 32
 

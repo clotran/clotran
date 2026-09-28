@@ -369,6 +369,11 @@ module Eval
   logical, save :: mf_loaded = .false.   ! clotran.multifn, once (mf_call)
   logical, save :: uuid_loaded = .false.   ! clotran.uuid, once (uuid_call)
   logical, save :: rdr_loaded = .false.   ! clotran.reader, once (reader_call)
+  ! DIRECT LINKING (DEVIATIONS 55): a call site in a clojure.* namespace
+  ! keeps the callee it found at its first call, stamped with this epoch;
+  ! installing a compiled namespace re-roots its Vars and bumps it, so
+  ! every site looks again
+  integer, save :: link_epoch = 1
   ! Compiler.checkSpecs: clojure.spec.alpha/macroexpand-check before a
   ! macro expands. RT.CHECK_SPECS comes on once core.clj has loaded
   ! (main.f90); the two spec libs load at the first check, and no check
@@ -1363,6 +1368,9 @@ contains
        args = gcv_conj(vs_get(vst, base + 1), gc_str(path, [vs_get(vst, base + 1)]), [vs_get(vst, base + 1)])
        call vs_set(vst, base + 1, args)
        r = rt_call_in("clotran/loader", "clotran.loader", ld_loaded, "install", vs_get(vst, base + 1))
+       ! the install re-rooted this namespace's Vars: the direct-linked
+       ! call sites look again, once (link_epoch, DEVIATIONS 55)
+       link_epoch = link_epoch + 1
        if (tctx%has_error) then
           block
              call gce_error(s=dlt_1)

@@ -37,7 +37,7 @@ module LispReader
 
   public :: gcr_read, gcr_read_all, gcr_error, gcr_has_error
   public :: gcr_begin_file, gcr_read_next, gcr_position, gcr_position_parts
-  public :: gcr_set_ns_resolver, gcr_set_tag_markers
+  public :: gcr_set_ns_resolver, gcr_set_tag_markers, gcr_current_file
 
   ! ::x is resolved at READ time against the current namespace, and
   ! ::a/x against its aliases -- which the reader does not know. The
@@ -969,6 +969,17 @@ contains
          vs_get(base + 4)]])
     call vs_leave(base)
   end function read_tagged
+
+  ! The name of the file being read on this thread, "" at the REPL:
+  ! the analyser asks whether a form came from the vendored tree
+  ! (direct linking, DEVIATIONS 55).
+  subroutine gcr_current_file(s)
+    type(rd_state), pointer :: rdx
+    character(len=:), allocatable, intent(out) :: s
+    rdx => rd_self()
+    s = ""
+    if (rdx%cur_file > 0) s = trim(files(rdx%cur_file)%name)
+  end subroutine gcr_current_file
 
   ! Turns #tag markers on or off, and answers what it was, so the
   ! caller can restore it.

@@ -1145,6 +1145,28 @@
           select case (tctx%kst(tctx%ksp)%pc)
           case (0)
              tctx%kst(tctx%ksp)%pc = 1
+             ! a direct-linked head (N_VAR, i2 = 1, DEVIATIONS 55): the fn
+             ! bound at analysis is the callee, and the Var is not read.
+             ! After an epoch change -- a compiled namespace installed,
+             ! every Var re-rooted -- the Var is read ONCE more, and only
+             ! a compiled fn found there replaces the binding: anything
+             ! else (a with-redefs in force at this site's first call, say)
+             ! is not what the install put there, and the binding stands.
+             v = gcv_nth(kids, 0)
+             if (gc_kind(v) == OBJ_AST) then
+                if (gc_i1(v) == N_VAR .and. gc_i2(v) == 1) then
+                   fnv = gc_slot(v, 5)   ! slot 4 is the node's source position
+                   if (fnv%tag == GCT_INT) then
+                      if (fnv%ival /= link_epoch) then
+                         fnv = gcn_var_value(gc_slot(v, 2))
+                         if (gc_kind(fnv) == OBJ_COMPILED) call gc_set_slot(v, 3, fnv)
+                         call gc_set_slot(v, 5, gc_int(int(link_epoch, gc_ip)))
+                      end if
+                      val = gc_slot(v, 3)
+                      cycle
+                   end if
+                end if
+             end if
              call k_push(gcv_nth(kids, 0), vs_get(vst, b + 2), 0, gc_nil())
           case (1)
              ! The callee is known before its arguments are: a closure

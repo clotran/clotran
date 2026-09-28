@@ -2655,3 +2655,7 @@
 (try (let [f (fn f [n] (f (inc n)))] (f 0)) (catch StackOverflowError e :so))
 
 [(= (hash [1 2 3]) (hash-ordered-coll [1 2 3])) (= (hash #{1 2}) (hash-unordered-coll #{1 2})) (= (hash {:a 1}) (hash-unordered-coll {:a 1})) (hash-ordered-coll (map inc [1 2])) (hash-unordered-coll [1 1])]
+
+[(with-redefs [first last] (first [1 2])) ((with-redefs [first last] #(first [1 2]))) (do (defn oracle-ten [] 10) (with-redefs [oracle-ten (fn [] 11)] (oracle-ten))) (oracle-ten) (with-redefs [first last] (last [1 2 3])) (with-redefs [rest butlast] (vec (map inc [1 2 3])))]
+
+[(do (defmacro oracle-mac [] 1) (with-redefs [oracle-mac (constantly 2)] (oracle-mac))) (do (defn oracle-inl {:inline (fn [_] 1)} [_] 1) (with-redefs [oracle-inl (constantly 2)] (oracle-inl :foo))) (with-redefs [oracle-inl (constantly 2)] (vec (map oracle-inl [:a :b])))]

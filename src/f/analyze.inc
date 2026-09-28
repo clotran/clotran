@@ -389,6 +389,37 @@
 
   ! --- nodes ---------------------------------------------------------
 
+  ! 1 when a call through this Var from the namespace being analysed
+  ! may bind to the callee at its first call (DEVIATIONS 55), else 0.
+  integer function direct_link_flag(var) result(flag)
+    type(gc_value), intent(in) :: var
+    type(gc_value) :: md, nsv
+    character(len=:), allocatable :: here, there, nm
+    flag = 0
+    if (.not. gcn_is_var(var)) return
+    ! only what the vendored tree defines is direct-linked, as only what
+    ! the JVM compiled into its jar is: a (ns clojure.zz) of the user's
+    ! stays late-bound, as it does there
+    call gcr_current_file(s=nm)
+    if (index(nm, "src/clj/clojure/") == 0) return
+    call gcn_name(gcn_current([var]), s=here)
+    if (index(here, "clojure.") /= 1) return
+    nsv = gc_slot(var, 3)
+    if (gc_kind(nsv) /= OBJ_NS) return
+    call gcn_name(nsv, s=there)
+    if (index(there, "clojure.") /= 1) return
+    call gcp_str(gc_slot(var, 4), .false., s=nm)
+    if (index(nm, "*") == 1) return
+    md = gc_slot(var, 2)
+    if (gca_is(md)) then
+       if (truthy(gca_get(md, gc_key("dynamic", [var])))) return
+       if (truthy(gca_get(md, gc_key("redef", [var])))) return
+       if (truthy(gca_get(md, gc_key("protocol", [var])))) return
+       if (truthy(gca_get(md, gc_key("macro", [var])))) return
+    end if
+    flag = 1
+  end function direct_link_flag
+
   function mk_node(kind, children, p1, p2, i2, roots) result(nd)
     integer, intent(in) :: kind, i2
     type(gc_value), intent(in) :: children, p1, p2
@@ -764,7 +795,32 @@
           end if
        end block
        call vs_set(vst, base + 3, var)
-       nd = mk_node(N_VAR, gc_nil(), vs_get(vst, base + 3), gc_nil(), 0, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       ! i2 = 1: DIRECT-LINKED (DEVIATIONS 55). Clojure compiles its own
+       ! namespaces with direct linking: a call from one core fn to
+       ! another binds, when the caller is COMPILED, to the fn its Var
+       ! holds then, and never goes through the Var again. The same
+       ! here, at analysis: the fn goes in slot 3, the epoch in slot 5
+       ! (exec.inc, N_CALL). A Var not yet bound to a fn -- a forward
+       ! declaration -- stays late-bound, as on the JVM; so does one bound
+       ! to a BUILTIN: the host binds Fortran builtins into clojure.core
+       ! before core.clj defines the real thing (map, list, ...), and
+       ! `declare`, analysed before core's `map`, must not keep the
+       ! builtin -- the JVM has no such placeholder to link to. Taking the fn
+       ! at the FIRST CALL instead was tried and is wrong: (with-redefs
+       ! [first last] (first [1 2])) calls last for the first time inside
+       ! the redefinition, and last's own `first` would have bound to it.
+       nd = mk_node(N_VAR, gc_nil(), vs_get(vst, base + 3), gc_nil(), direct_link_flag(vs_get(vst, base + 3)), &
+            [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       if (gc_i2(nd) == 1) then
+          block
+             type(gc_value) :: fv
+             fv = gcn_var_value(vs_get(vst, base + 3))
+             if (gc_kind(fv) == OBJ_CLOSURE .or. gc_kind(fv) == OBJ_COMPILED) then
+                call gc_set_slot(nd, 3, fv)
+                call gc_set_slot(nd, 5, gc_int(int(link_epoch, gc_ip)))
+             end if
+          end block
+       end if
        call vs_leave(vst, base)
        return
     end if
