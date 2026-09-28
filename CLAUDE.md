@@ -169,9 +169,11 @@ it up.
 
 ## Gotchas that have cost real time
 
-- **Do not build while `make crosscheck` runs.** It does `make clean` and
-  compiles from source; an edit mid-run lands in the second compiler's
-  pass, and a rebuild deletes the binary another job is using. (A
+- **`make crosscheck` runs in a copy** (`XC_DIR`, a temp directory):
+  it copies the sources, then cleans and builds both compilers there, so
+  building or running `./clotran` in the working tree meanwhile is safe.
+  An EDIT made after the copy is not in the verdict -- the gate judges
+  the tree as it was when it started. (A
   crosscheck interrupted between its halves used to leave flang's
   `.mod` files for gfortran to choke on; `build/.built-with-<fc>` now
   makes a compiler change empty the directory first.)

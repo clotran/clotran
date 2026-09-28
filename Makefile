@@ -21,6 +21,7 @@ B = build
 .DEFAULT_GOAL := all
 FCFLAGS = -g -O2 -I$(B) -Isrc/f -J$(B) $(FCFLAGS_$(notdir $(FC)))
 LDFLAGS = $(FCFLAGS_$(notdir $(FC)))
+TESTLDFLAGS = $(TESTLDFLAGS_$(notdir $(FC)))
 
 # Fortran 2018 made every procedure recursive by default. flang follows
 # it; gfortran still defaults to F2008, where a procedure not marked
@@ -42,8 +43,27 @@ LDFLAGS = $(FCFLAGS_$(notdir $(FC)))
 # gc_kind) called out of line from Eval.f90, which no compiler can
 # inline across files without link-time optimisation. Measured on
 # 2026-09-23: 13% on the interpreter, 21% on compiled code.
-FCFLAGS_gfortran = -frecursive -flto
-FCFLAGS_flang = -flto
+#
+# But ONLY clotran-bin needs it, and it is where the build's time went:
+# one optimised link of the evaluator took 34 s, and `make` did four
+# (clotran-bin, eval_test, abi_test, the embed example) plus one per
+# small test. So (2026-09-28): =auto runs the link-time optimiser on
+# every core -- 10.7 s, and fib, reduce and into ran at the same speed
+# to the millisecond -- and -ffat-lto-objects keeps ordinary code in
+# each object beside the optimiser's, so the tests (TESTLDFLAGS) link
+# that in under a second. Without LTO the same three forms were 11 to
+# 24% slower, which is why clotran-bin keeps it.
+#
+# flang gets NONE: its build is the correctness oracle (make crosscheck),
+# never the binary anyone runs for speed, and its LTO objects are LLVM
+# bitcode that link only through the optimiser -- one link of the
+# evaluator took over two minutes, four of them per gate.
+FCFLAGS_gfortran = -frecursive -flto=auto -ffat-lto-objects
+FCFLAGS_flang =
+# -fno-lto, not merely no -flto: gfortran sees the optimiser's code in a
+# fat object and runs it anyway -- 12 s an abi_test link, 0.1 s without
+TESTLDFLAGS_gfortran = -frecursive -fno-lto
+TESTLDFLAGS_flang =
 
 # Pinned, not just "whatever's on PATH": subtle compiler-specific
 # behaviour (FINAL, defined assignment, unlimited polymorphic) means a
@@ -162,7 +182,7 @@ unit-tests = gc_test persistent_vector_test persistent_list_test persistent_arra
 	bigdec_test abi_test native_array_test threads_test gc_mt_test
 test-bins = $(addprefix $(BT)/,$(unit-tests))
 
-.PHONY: all test crosscheck clean compiled-core embed image
+.PHONY: all test crosscheck crosscheck-here clean compiled-core embed image
 all: clotran-bin $(test-bins) $(B)/core.image
 
 $(B) $(BT):
@@ -175,9 +195,19 @@ $(B) $(BT):
 # other compiler empties the directory first. Every object and test
 # binary depends on it, order-only, so nothing is compiled against a
 # module the other compiler wrote.
+#
+# The emptying happens while the Makefile is READ, not in a recipe. As
+# a recipe it ran after make had already judged the objects up to date,
+# so the first build after a compiler switch deleted bigint.mod and then
+# compiled BigDec against it ("Cannot open module file"); the second
+# build worked. Done here, make judges an empty directory.
 FCSTAMP = $(B)/.built-with-$(FCNAME)
+ifeq ($(filter clean,$(MAKECMDGOALS)),)
+ifeq ($(wildcard $(FCSTAMP)),)
+$(shell rm -rf $(B)/*.o $(B)/*.mod $(B)/.built-with-* $(BT); mkdir -p $(BT); touch $(FCSTAMP))
+endif
+endif
 $(FCSTAMP): | $(B)
-	rm -rf $(B)/*.o $(B)/*.mod $(B)/.built-with-* $(BT)
 	mkdir -p $(BT)
 	touch $@
 
@@ -250,55 +280,55 @@ clotran-bin: $(eval-objects) $(S)/main.f90 $(ICU_LIBS)
 # Test binaries: each links exactly the modules it exercises, so a
 # module's test cannot pass by accident through something above it.
 $(BT)/bigint_test: $(B)/BigInt.o $(T)/bigint_test.f90 | $(BT) $(FCSTAMP)
-	$(FC) $(FCFLAGS) -c $(T)/bigint_test.f90 -o $(BT)/bigint_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/BigInt.o $(BT)/bigint_test.o
+	$(FC) $(FCFLAGS) -c $(T)/bigint_test.f90 -o $(BT)/bigint_test.o && $(FC) $(TESTLDFLAGS) -o $@ $(B)/BigInt.o $(BT)/bigint_test.o
 $(BT)/bigdec_test: $(B)/BigInt.o $(B)/BigDec.o $(T)/bigdec_test.f90 | $(BT) $(FCSTAMP)
-	$(FC) $(FCFLAGS) -c $(T)/bigdec_test.f90 -o $(BT)/bigdec_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/BigInt.o $(B)/BigDec.o $(BT)/bigdec_test.o
+	$(FC) $(FCFLAGS) -c $(T)/bigdec_test.f90 -o $(BT)/bigdec_test.o && $(FC) $(TESTLDFLAGS) -o $@ $(B)/BigInt.o $(B)/BigDec.o $(BT)/bigdec_test.o
 $(BT)/native_array_test: $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(B)/NativeArray.o $(T)/native_array_test.f90 | $(BT) $(FCSTAMP)
-	$(FC) $(FCFLAGS) -c $(T)/native_array_test.f90 -o $(BT)/native_array_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(B)/NativeArray.o $(BT)/native_array_test.o
+	$(FC) $(FCFLAGS) -c $(T)/native_array_test.f90 -o $(BT)/native_array_test.o && $(FC) $(TESTLDFLAGS) -o $@ $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(B)/NativeArray.o $(BT)/native_array_test.o
 $(BT)/gc_test: $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(T)/gc_test.f90 | $(BT) $(FCSTAMP)
-	$(FC) $(FCFLAGS) -c $(T)/gc_test.f90 -o $(BT)/gc_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(BT)/gc_test.o
+	$(FC) $(FCFLAGS) -c $(T)/gc_test.f90 -o $(BT)/gc_test.o && $(FC) $(TESTLDFLAGS) -o $@ $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(BT)/gc_test.o
 $(BT)/persistent_vector_test: $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(B)/PersistentVector.o $(T)/persistent_vector_test.f90 | $(BT) $(FCSTAMP)
-	$(FC) $(FCFLAGS) -c $(T)/persistent_vector_test.f90 -o $(BT)/persistent_vector_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(B)/PersistentVector.o $(BT)/persistent_vector_test.o
+	$(FC) $(FCFLAGS) -c $(T)/persistent_vector_test.f90 -o $(BT)/persistent_vector_test.o && $(FC) $(TESTLDFLAGS) -o $@ $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(B)/PersistentVector.o $(BT)/persistent_vector_test.o
 $(BT)/persistent_list_test: $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(B)/PersistentList.o $(T)/persistent_list_test.f90 | $(BT) $(FCSTAMP)
-	$(FC) $(FCFLAGS) -c $(T)/persistent_list_test.f90 -o $(BT)/persistent_list_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(B)/PersistentList.o $(BT)/persistent_list_test.o
+	$(FC) $(FCFLAGS) -c $(T)/persistent_list_test.f90 -o $(BT)/persistent_list_test.o && $(FC) $(TESTLDFLAGS) -o $@ $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(B)/PersistentList.o $(BT)/persistent_list_test.o
 $(BT)/persistent_array_map_test: $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(B)/PersistentArrayMap.o $(T)/persistent_array_map_test.f90 | $(BT) $(FCSTAMP)
-	$(FC) $(FCFLAGS) -c $(T)/persistent_array_map_test.f90 -o $(BT)/persistent_array_map_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(B)/PersistentArrayMap.o $(BT)/persistent_array_map_test.o
+	$(FC) $(FCFLAGS) -c $(T)/persistent_array_map_test.f90 -o $(BT)/persistent_array_map_test.o && $(FC) $(TESTLDFLAGS) -o $@ $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(B)/PersistentArrayMap.o $(BT)/persistent_array_map_test.o
 $(BT)/persistent_hash_map_test: $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(T)/persistent_hash_map_test.f90 | $(BT) $(FCSTAMP)
-	$(FC) $(FCFLAGS) -c $(T)/persistent_hash_map_test.f90 -o $(BT)/persistent_hash_map_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(BT)/persistent_hash_map_test.o
+	$(FC) $(FCFLAGS) -c $(T)/persistent_hash_map_test.f90 -o $(BT)/persistent_hash_map_test.o && $(FC) $(TESTLDFLAGS) -o $@ $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(BT)/persistent_hash_map_test.o
 $(BT)/env_test: $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/Env.o $(T)/env_test.f90 | $(BT) $(FCSTAMP)
-	$(FC) $(FCFLAGS) -c $(T)/env_test.f90 -o $(BT)/env_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/Env.o $(BT)/env_test.o
+	$(FC) $(FCFLAGS) -c $(T)/env_test.f90 -o $(BT)/env_test.o && $(FC) $(TESTLDFLAGS) -o $@ $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/Env.o $(BT)/env_test.o
 $(BT)/assoc_test: $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(B)/Assoc.o $(T)/assoc_test.f90 | $(BT) $(FCSTAMP)
-	$(FC) $(FCFLAGS) -c $(T)/assoc_test.f90 -o $(BT)/assoc_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(B)/Assoc.o $(BT)/assoc_test.o
+	$(FC) $(FCFLAGS) -c $(T)/assoc_test.f90 -o $(BT)/assoc_test.o && $(FC) $(TESTLDFLAGS) -o $@ $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(B)/Assoc.o $(BT)/assoc_test.o
 $(BT)/printer_test: $(data-objects) $(T)/printer_test.f90 | $(BT) $(FCSTAMP)
-	$(FC) $(FCFLAGS) -c $(T)/printer_test.f90 -o $(BT)/printer_test.o && $(FC) $(LDFLAGS) -o $@ $(data-objects) $(BT)/printer_test.o
+	$(FC) $(FCFLAGS) -c $(T)/printer_test.f90 -o $(BT)/printer_test.o && $(FC) $(TESTLDFLAGS) -o $@ $(data-objects) $(BT)/printer_test.o
 $(BT)/reader_test: $(data-objects) $(reader-objects) $(T)/reader_test.f90 $(ICU_LIBS) | $(BT) $(FCSTAMP)
-	$(FC) $(FCFLAGS) -c $(T)/reader_test.f90 -o $(BT)/reader_test.o && $(FC) $(LDFLAGS) -o $@ $(data-objects) $(reader-objects) $(BT)/reader_test.o $(LINK_ICU)
+	$(FC) $(FCFLAGS) -c $(T)/reader_test.f90 -o $(BT)/reader_test.o && $(FC) $(TESTLDFLAGS) -o $@ $(data-objects) $(reader-objects) $(BT)/reader_test.o $(LINK_ICU)
 $(BT)/eval_test: $(eval-objects) $(T)/eval_test.f90 $(ICU_LIBS) | $(BT) $(FCSTAMP)
-	$(FC) $(FCFLAGS) -c $(T)/eval_test.f90 -o $(BT)/eval_test.o && $(FC) $(LDFLAGS) -o $@ $(eval-objects) $(BT)/eval_test.o $(LINK_ICU)
+	$(FC) $(FCFLAGS) -c $(T)/eval_test.f90 -o $(BT)/eval_test.o && $(FC) $(TESTLDFLAGS) -o $@ $(eval-objects) $(BT)/eval_test.o $(LINK_ICU)
 
 # threads_test: the Threads module on its own -- OS threads for tasks
 # (PLAN.md step 11, stage 1), pthreads through iso_c_binding.
 $(BT)/threads_test: $(B)/Threads.o $(T)/threads_test.f90 | $(BT) $(FCSTAMP)
-	$(FC) $(FCFLAGS) -c $(T)/threads_test.f90 -o $(BT)/threads_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/Threads.o $(BT)/threads_test.o -lpthread
+	$(FC) $(FCFLAGS) -c $(T)/threads_test.f90 -o $(BT)/threads_test.o && $(FC) $(TESTLDFLAGS) -o $@ $(B)/Threads.o $(BT)/threads_test.o -lpthread
 
 # gc_mt_test: the collector with several threads allocating at once
 # (PLAN.md step 14c), torture on, every allocation stopping the others.
 $(BT)/gc_mt_test: $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(T)/gc_mt_test.f90 | $(BT) $(FCSTAMP)
-	$(FC) $(FCFLAGS) -c $(T)/gc_mt_test.f90 -o $(BT)/gc_mt_test.o && $(FC) $(LDFLAGS) -o $@ $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(BT)/gc_mt_test.o -lpthread
+	$(FC) $(FCFLAGS) -c $(T)/gc_mt_test.f90 -o $(BT)/gc_mt_test.o && $(FC) $(TESTLDFLAGS) -o $@ $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(BT)/gc_mt_test.o -lpthread
 
 # abi_test declares every entry point itself and uses no clotran
 # module, which is the point of it -- so it compiles with -I nowhere
 # near build/. It still LINKS the objects, the way a generated
 # namespace linked into a binary will.
 $(BT)/abi_test: $(eval-objects) $(T)/abi_test.f90 $(ICU_LIBS) | $(BT) $(FCSTAMP)
-	$(FC) $(FCFLAGS) -c $(T)/abi_test.f90 -o $(BT)/abi_test.o && $(FC) $(LDFLAGS) -o $@ $(eval-objects) $(BT)/abi_test.o $(LINK_ICU)
+	$(FC) $(FCFLAGS) -c $(T)/abi_test.f90 -o $(BT)/abi_test.o && $(FC) $(TESTLDFLAGS) -o $@ $(eval-objects) $(BT)/abi_test.o $(LINK_ICU)
 
 # An EMBEDDER (examples/embed): a Fortran program that owns main and
 # its time loop, boots the runtime through the C surface, loads core.clj
 # and runs its control strategy from Clojure on its own grid -- one
 # array, both sides. Linked from the same objects as clotran-bin.
 examples/embed/heat: $(eval-objects) examples/embed/heat.f90 $(ICU_LIBS) | $(FCSTAMP)
-	$(FC) $(FCFLAGS) -c examples/embed/heat.f90 -o $(B)/embed_heat.o && $(FC) $(LDFLAGS) -o $@ $(eval-objects) $(B)/embed_heat.o $(LINK_ICU)
+	$(FC) $(FCFLAGS) -c examples/embed/heat.f90 -o $(B)/embed_heat.o && $(FC) $(TESTLDFLAGS) -o $@ $(eval-objects) $(B)/embed_heat.o $(LINK_ICU)
 embed: examples/embed/heat
 
 # The gate. Three layers (CLAUDE.md): the host tests, the host-level
@@ -355,7 +385,19 @@ test: $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(B)/lib
 
 # What runs before every commit. Ends on the default compiler so the
 # tree is left with the build you actually use.
+# The gate runs in a PRIVATE COPY of the sources (XC_DIR), never in this
+# tree: it cleans and builds twice, and in the working tree that deleted
+# the clotran-bin a REPL was about to start and collided with any `make`
+# run meanwhile -- one compiler's .mod files under the other's build,
+# twice in one day. rsync copies what changed since the last gate, and
+# the verdict is the same EXIT line.
+XC_DIR ?= $(or $(TMPDIR),/tmp)/clotran-crosscheck
 crosscheck:
+	mkdir -p $(XC_DIR)
+	rsync -a --delete --exclude .git --exclude /build --exclude /clotran-bin \
+	  --exclude /clotran-bin.dSYM --exclude /examples/embed/heat ./ $(XC_DIR)/
+	$(MAKE) -C $(XC_DIR) crosscheck-here
+crosscheck-here:
 	$(MAKE) clean && $(MAKE) FC=flang test
 	$(MAKE) clean && $(MAKE) test
 
