@@ -1527,7 +1527,7 @@ it ends, as Agent.nested and LockingTransaction.enqueue hold it, and
 restart-agent resumes a failed agent's kept queue. Not done: a thread
 pool for agents (a drain is a thread per busy agent).
 
-**Open: a thread-timing flake in the oracle (2026-09-28).** Now step 20, first on the road. The oracle's
+**Open: a thread-timing flake in the oracle (2026-09-28).** RESOLVED 2026-09-29, step 20: a missed root in read_regex, not threads. The oracle's
 script, run nine times on one binary, gave identical output eight
 times and once a burst of !error from case 918 on -- reduce, into and
 seq over ordinary collections, all failing from one point onward, a
@@ -2005,6 +2005,36 @@ theory; (3) fix it at the root; (4) a check in the gate that runs the
 thread cases enough times to catch it, bounded in time. Done when the
 oracle is byte-identical across a run of repetitions large enough to
 have caught the one-in-nine.
+
+**Resolved 2026-09-29: not threads -- a missed root.** Reproduced on
+the 2026-09-28 binary: its own oracle script, run under eight CPU
+burners, failed 1 run in 87, one case answering !error:
+`(with-out-str (clojure.pprint/pprint ...))`. No thread was running
+then (no future, pmap or send comes earlier), so the variable was not
+scheduling but WHERE COLLECTIONS FELL: identity hashes differ run to
+run (the heap's layout moves with shuffles, random uuids and times in
+earlier cases), and with it which allocation a collection lands on.
+CLOTRAN_GC_EVERY=1 made it deterministic -- clojure.pprint would not
+load ("Unable to resolve symbol: param-pattern") -- and the smallest
+case was `(def p #"a")`: a form holding a regex literal read as
+nothing. `read_regex` made the regex object with only its own text as
+a root, not the caller's, so a collection there freed the form being
+read around the literal and later allocations reused it. One argument
+fixed it (4690cc3).
+
+The same shape was elsewhere: 71 allocations in 20 procedures that are
+given `roots` and did not pass them on (sq_rest, deep_equal,
+coll_to_vector, mf_lookup, namespace creation, the #tag resolver ...),
+all fixed (a832d69). `scripts/root-check` finds the shape and runs in
+check-static.
+
+Kept caught by `check-oracle-gc` (ORACLE_GC=97 scripts/oracle): the
+whole oracle script through clotran as it is and collecting every 97
+allocations, the answers compared -- 55 s, in the gfortran half only.
+The old binary differs on 50 lines under it, among them a silent wrong
+answer (a regex case answering `()` for "aXc"); with read_regex's bug
+put back, today's differs on one. Today's binary is identical across
+collection intervals 13 to 509.
 
 ### 21. Sockets, and a REPL into a running process
 

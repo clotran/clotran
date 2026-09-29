@@ -377,7 +377,7 @@ $(B)/libsamplelib.$(SOEXT): $(T)/samplelib.f90 $(B)/samplelib_shims.f90 | $(B) $
 # order, as before.
 TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(B)/libsamplelib.$(SOEXT) packages examples/embed/heat
 TEST_CHECKS = check-unit check-embed check-language check-tree check-banner check-torture check-threads \
-	check-autocompile check-break check-libraries check-oracle check-pure check-static
+	check-autocompile check-break check-libraries check-oracle check-oracle-gc check-pure check-static
 .PHONY: test $(TEST_CHECKS)
 test: $(TEST_CHECKS)
 $(TEST_CHECKS): $(TEST_DEPS)
@@ -421,6 +421,16 @@ check-libraries:
 check-oracle:
 	@echo "--- oracle (the same forms through clj and clotran) ---"
 	scripts/oracle
+# One half of the crosscheck is enough: a value the collector frees
+# early is the runtime's mistake, not a compiler's, and this is the
+# gate's longest check under flang.
+check-oracle-gc:
+ifeq ($(notdir $(FC)),gfortran)
+	@echo "--- the oracle's script collecting every 97 allocations, against itself (PLAN step 20) ---"
+	ORACLE_GC=97 scripts/oracle
+else
+	@echo "--- oracle-gc: run in the gfortran half ---"
+endif
 check-pure:
 	@echo "--- pure Fortran (tier A through gfortran and flang, against clj) ---"
 	scripts/pure-check

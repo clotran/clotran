@@ -95,6 +95,40 @@
          (remove #(or (str/starts-with? % "note:") (str/starts-with? % "user=>") (str/blank? %)))
          vec)))
 
+;; ORACLE_GC=n: no clj. The same script through clotran twice -- as it
+;; is, and collecting every n allocations -- and the answers compared.
+;; A value the collector frees while it is still in use shows up only
+;; when a collection lands on the wrong allocation, which is where the
+;; heap's layout put it that run: one oracle run in a hundred (PLAN step
+;; 20). Collecting every n allocations lands one on every n-th, the same
+;; places each time. Run in a directory of its own under build/, so the
+;; file case's build/oracle-io-*.txt is not the plain oracle's.
+(when-let [every (System/getenv "ORACLE_GC")]
+  (let [cs (cases (read-forms (slurp (io/file repo forms-file))))
+        dir (io/file repo "build" "oracle-gc")
+        _ (.mkdirs (io/file dir "build"))
+        gen (io/file dir "gen.clj")
+        _ (spit gen (script cs))
+        bin (str repo "/clotran-bin")
+        core (str repo "/src/clj/clojure/core.clj")
+        go (fn [env] (let [r (p/shell {:dir (str dir) :in "" :out :string :err :string :continue true :extra-env env}
+                                      bin core (str gen))]
+                       (->> (str/split-lines (:out r))
+                            (remove #(or (str/starts-with? % "note:") (str/starts-with? % "user=>") (str/blank? %)))
+                            (mapv #(str/replace % #"0x[0-9a-f]+" "0x")))))
+        plain (go {})
+        tortured (go {"CLOTRAN_GC_EVERY" every})
+        diffs (keep-indexed (fn [i c] (let [a (nth plain i ::missing) b (nth tortured i ::missing)]
+                                        (when (not= a b) [c a b])))
+                            cs)]
+    (doseq [[c a b] (take 10 diffs)]
+      (println "DIFFER   " (:text c))
+      (println "   plain:  " a)
+      (println "   every" every ":" b))
+    (println (str "oracle-gc: " (count cs) " cases, collecting every " every " allocations: "
+                  (count diffs) " differ from the plain run"))
+    (System/exit (if (seq diffs) 1 0))))
+
 (let [cs (cases (read-forms (slurp (io/file repo forms-file))))
       gen (io/file repo "test/clj/.oracle-gen.clj")
       _ (spit gen (script cs))
