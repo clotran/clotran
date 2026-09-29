@@ -1741,6 +1741,59 @@ per node. The two roads, not exclusive:
 Neither reaches 82 ms: that is compiled code with escape analysis.
 Both together are the road the white paper names.
 
+### 18. A flat instruction form for fn bodies (started 2026-09-28)
+
+Step 17's first road, taken. What it means:
+
+Today a fn body is a TREE of nodes, and running it is a walk: every
+node -- a constant, a local, an `if` -- gets a seven-slot continuation
+frame pushed, its children fetched out of a persistent vector, and the
+frame popped when it answers. `(< i n)` is four frames. That is where
+the 60 ns a step goes, and a loop turn is eleven steps.
+
+The flat form is the same fn as a LIST of instructions over numbered
+registers, made once when the fn is analysed:
+
+    (loop [i 0] (if (< i n) (recur (inc i)) i))
+
+    1  CONST  r0 <- 0
+    2  CALL   r2 <- < r0 r1      ; builtin, operands by register
+    3  JMPF   r2 -> 6
+    4  CALL   r3 <- inc r0
+    5  RECUR  r0 <- r3, goto 2
+    6  RET    r0
+
+One dispatch per instruction, operands read by index, no frame per
+node. The registers are the fn's frame vector itself -- its locals,
+plus temporaries above them -- so closures, captures, locals clearing,
+the debugger's view of locals and the collector's rooting all see what
+they see today. A CALL to another interpreted fn still pushes one
+continuation frame, for the callee, and the caller waits in it with
+its instruction counter: so a suspended context is still data, a
+future still yields, a break still shows every fn on the stack.
+
+Measured before building (a standalone gfortran -O3 program, the loop
+above over clotran's gc_value, 10^8 turns): 6.8 ns a turn with `<` and
+`inc` inline, 9.3 ns with both as general builtin calls. Today's
+`dotimes` turn is 530 ns. The real thing adds rooting, error checks and
+safepoints; 15-25 ns is the expectation, 20x and more on interpreted
+loops.
+
+Stages, each gated and each leaving the tree walker able to run
+everything (`CLOTRAN_FLAT=0` runs trees only, and the gate compares):
+
+1. Compile an arity when every node in it is one of: const, local,
+   var, if, do, let, loop, recur, call, fn, lazy-seq, vector/map/set
+   literals, throw -- or a node the tree itself runs nested (def,
+   set!, letfn, new ...), run through the tree as one instruction. An
+   arity with anything else -- try, case, host `.` calls -- stays a
+   tree. The arity keeps its tree (the AOT compiler and the analysis
+   passes read it); the code sits beside it.
+2. try/catch/finally, case, `.` calls, so nearly every arity compiles.
+3. Top-level forms too (a `dotimes` typed at the REPL is a top form).
+4. Forcing a lazy seq inside the loop, not in a nested run.
+5. The AOT compiler reads the flat form instead of the tree.
+
 ## Decisions that still hold
 
 **The value type has no `FINAL`.** Copying a `cons_value` (nine
