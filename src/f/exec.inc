@@ -157,6 +157,31 @@
     if (is_node_closure) is_node_closure = (gcv_count(gc_slot(fn, 1)) >= 5)
   end function is_node_closure
 
+  ! The builtin a wrapper fn stands for (analyze.inc wrapper_builtin),
+  ! when fn is one and n is its arity; nil otherwise
+  function wrapper_of(fn, n) result(wb)
+    type(gc_value), intent(in) :: fn
+    integer, intent(in) :: n
+    type(gc_value) :: wb, tmpl, bs, arities
+    integer :: i
+    wb = gc_nil()
+    ! a pending step stops at every call, core's wrappers included
+    if (step_at /= 0) return
+    if (.not. is_node_closure(fn)) return
+    tmpl = gc_slot(fn, 1)
+    if (gcv_count(tmpl) < 7) return
+    bs = gcv_nth(tmpl, 6)
+    if (bs%tag == GCT_NIL) return
+    ! the arity with exactly n fixed parameters, if it is a wrapper
+    arities = gcv_nth(tmpl, 1)
+    do i = 0, gcv_count(arities) - 1
+       if (int_of(gcv_nth(gcv_nth(arities, i), 0)) == n .and. .not. truthy(gcv_nth(gcv_nth(arities, i), 1))) then
+          wb = gcv_nth(bs, i)
+          return
+       end if
+    end do
+  end function wrapper_of
+
   ! Calls a closure from outside the loop -- a native, a multimethod.
   ! The body runs in a nested run; a call the loop itself makes does
   ! not come here (see run, N_CALL).
@@ -1193,8 +1218,12 @@
              ! per argument either way.
              fnv = strip_meta(val)
              if (gcn_is_var(fnv)) fnv = gcn_var_value(fnv)
-             call vs_set(vst, b + 3, fnv)
              n = gcv_count(kids) - 1
+             ! a fn that only wraps a builtin, called with its arity: the
+             ! builtin is the callee (analyze.inc wrapper_builtin)
+             v = wrapper_of(fnv, n)
+             if (v%tag /= GCT_NIL) fnv = v
+             call vs_set(vst, b + 3, fnv)
              tctx%kst(tctx%ksp)%mode = 1
              if (is_node_closure(vs_get(vst, b + 3))) then
                 tctx%kst(tctx%ksp)%aux2 = fixed_arity(vs_get(vst, b + 3), n)
@@ -1480,7 +1509,13 @@
              tctx%kst(tctx%ksp)%pc = 2
           case (4)
              call vs_set(vst, vbase + 1, gc_nil())   ! see N_CALL's case (4)
-             val = dot_dispatch(nd, vs_get(vst, b + 3), vs_get(vst, b + 4), tctx%kst(tctx%ksp)%aux)
+             ! the argument vector is handed over, as N_CALL's is:
+             ! dot_dispatch roots it first thing, and this frame kept
+             ! (. f (applyTo s)) -- core's apply -- holding the head of s
+             ! for the whole call, every cell of (apply + (take n (range)))
+             v = vs_get(vst, b + 4)
+             call vs_set(vst, b + 4, gc_nil())
+             val = dot_dispatch(nd, vs_get(vst, b + 3), v, tctx%kst(tctx%ksp)%aux)
              if (tctx%yield_flag) exit
              if (tctx%has_error) cycle
              if (is_call_request(val)) then

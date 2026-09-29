@@ -1695,6 +1695,29 @@ What moved, and by how much:
 - the run loop passing its context to k_push/k_tail/k_finish instead
   of a thread-local lookup each time: 3%.
 
+- core's one-line wrappers -- `first`, `rest`, `next`, `seq`, `cons`
+  are `(fn [coll] (. clojure.lang.RT (first coll)))` -- ran a whole
+  interpreted call (470 ns) around an 80 ns builtin. Analysis now
+  marks an arity whose body is exactly a builtin applied to its own
+  parameters, and a call with that arity calls the builtin. clojure.core
+  fns only, and not while a step is pending, so a user's fn keeps its
+  frame for a break's call stack and for stepping. Compiled `(first c)`
+  570 -> 120 ns.
+- `lazy-seq` expands to `(new clojure.lang.LazySeq (fn* [] ...))`,
+  which took the generic `new` path (680 ns); it is the lazy node now.
+- `apply` HELD THE SEQ. core's `apply` is `(. f (applyTo s))`, and the
+  dot call's frame kept its argument vector -- the head of s -- for
+  the whole call, so every cell walked stayed live: 452 MB at 10^6
+  elements, 129 MB now, the same as `reduce`. Found by watching which
+  stack slot received a vector holding a lazy cell; per-root reach
+  counts were no help, every root reaching core's shared structure.
+
+`(apply + (take 1000000 (range)))`: 15.2 s -> 6.6 s, 452 -> 129 MB.
+Still about 80x the JVM, and the per-element anatomy says where:
+forcing a lazy cell nests a whole `run` (1.2-1.9 us), `iterate` builds
+an argument vector per step, and `reduce`'s protocol dispatch is 2.7
+us. Those are the executor's shape, below.
+
 What is left is the shape of the executor: an AST walked with a frame
 per node. The two roads, not exclusive:
 

@@ -2687,3 +2687,15 @@
 ;; and the big path is for the one value that overflows (inc' went
 ;; through decimal strings for every element of (range))
 [(-' -9223372036854775808) (*' -9223372036854775808 -1) (+' 1 2 3) (-' 10 3 2) (*' 2 3 4) (inc' 5) (dec' 5) (class (inc' 5)) (class (+' 1 2)) (class (+' 9223372036854775807 1)) (+' 1N 1) (+' 1.5 1) (-' 1/2 1) (+' 9223372036854775807 -1) (*' 3037000500 3037000500) (*' 3037000499 3037000499)]
+
+;; core's one-line wrappers ((fn [coll] (. RT (first coll)))) are called
+;; as their builtin when the arity matches; a wrong arity is still the
+;; fn's error, and a wrapper passed as a value still works
+[(try (first) (catch clojure.lang.ArityException e :arity)) (try (first [1] [2]) (catch clojure.lang.ArityException e :arity)) (try (next) (catch clojure.lang.ArityException e :arity)) (map first [[1] [2 3] nil]) (apply first [[5 6]]) (reduce (fn [a x] (conj a (first x))) [] [[1] [2]]) (let [f rest] (f [1 2 3])) ((comp first rest) [1 2 3]) (apply cons 0 [[1 2]])]
+
+;; apply over a long lazy take: the dot call's argument vector no
+;; longer holds the head (it held every cell, 452 MB at 1e6)
+[(apply + (take 300000 (range))) (apply (fn [& more] (reduce + more)) (take 300000 (range))) (apply max (take 1000 (iterate inc 0))) (apply str (take 5 (cycle "ab")))]
+
+;; lazy-seq's expansion (new LazySeq (fn* [] ...)) is the lazy node
+[(take 5 ((fn step [i] (lazy-seq (cons i (step (inc i))))) 0)) (realized? (lazy-seq nil)) (let [s (lazy-seq [1 2])] [(realized? s) (first s) (realized? s)]) (seq (lazy-seq (lazy-seq nil))) (let [n (atom 0) s (lazy-seq (swap! n inc) [1])] (doall s) (doall s) @n) (try (doall (lazy-seq (throw (ex-info "t" {})))) (catch Exception e (ex-message e))) (seq (clojure.lang.LazySeq. (fn [] [1 2])))]

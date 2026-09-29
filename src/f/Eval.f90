@@ -3023,7 +3023,14 @@ contains
     base = vs_enter(vst, 5)
     call vs_set(vst, base + 1, argv)
 
-    if (cname == "java.util.concurrent.ArrayBlockingQueue" .or. cname == "ArrayBlockingQueue") then
+    ! LazySeq first: the constructor compiled code reaches most by far
+    ! (every lazy-seq is one), and this chain is compared in order
+    if (cname == "clojure.lang.LazySeq") then
+       call vs_set(vst, base + 3, nth_or_nil(vs_get(vst, base + 1), 0))
+       out = gc_obj(OBJ_LAZY, [vs_get(vst, base + 3), gc_nil(), gc_nil()], &
+            [vs_get(vst, base + 3)])
+       call gc_set_i1(out, LAZY_PENDING)
+    else if (cname == "java.util.concurrent.ArrayBlockingQueue" .or. cname == "ArrayBlockingQueue") then
        ! A queue is a task mailbox: an atom holding a vector. The
        ! capacity argument is read and ignored -- nothing here drops.
        call vs_set(vst, base + 3, gcv_empty([vs_get(vst, base + 1)]))
@@ -3246,11 +3253,6 @@ contains
        thunk = gcv_empty([vs_get(vst, base + 1)])
        call vs_set(vst, base + 3, thunk)
        out = gc_obj(OBJ_ATOM, [vs_get(vst, base + 3), gc_nil()], [vs_get(vst, base + 3)])
-    else if (cname == "clojure.lang.LazySeq") then
-       call vs_set(vst, base + 3, nth_or_nil(vs_get(vst, base + 1), 0))
-       out = gc_obj(OBJ_LAZY, [vs_get(vst, base + 3), gc_nil(), gc_nil()], &
-            [vs_get(vst, base + 3)])
-       call gc_set_i1(out, LAZY_PENDING)
     else if (is_throwable_class(cname)) then
        ! Every exception class core.clj names takes a message, and
        ! ex-info adds a data map. Anything else about a Java exception
@@ -4419,6 +4421,11 @@ contains
     integer :: st
     tctx => ctx_self()
     if (gc_kind(v) /= OBJ_LAZY) return
+    ! realised already: no lock to say so. The lock below is for two
+    ! threads reaching one pending cell; a realised cell's state is
+    ! read once and never changes back
+    st = gc_i1(v)
+    if (st /= LAZY_PENDING .and. st /= LAZY_RUNNING) return
     call gc_state_lock()
     do
        st = gc_i1(v)
@@ -5336,6 +5343,27 @@ contains
   ! in Fortran as in C, and at -O2 a check that multiplies first and
   ! divides back is folded away -- (multiply-exact Long/MAX_VALUE 2)
   ! stopped throwing the day optimisation was turned on.
+  ! apply lets go of everything before it invokes: the seq it was
+  ! handed stayed in its argument vector and its working slots for the
+  ! whole call, so (apply + (take n (range))) kept every cell walked --
+  ! 428 MB for a million against 122 for the same walk under reduce
+  ! (PLAN step 16). The callee roots what it is passed at once.
+  subroutine let_go_apply(args, n, base)
+    type(gc_value), intent(in) :: args
+    integer, intent(in) :: n, base
+    type(gc_stack), pointer :: vst
+    type(gc_value) :: a
+    integer :: j
+    vst => gc_my_stack()
+    a = args
+    do j = 0, n - 1
+       a = gcv_put(a, j, gc_nil(), [a])
+    end do
+    do j = 1, 4
+       call vs_set(vst, base + j, gc_nil())
+    end do
+  end subroutine let_go_apply
+
   ! Whether folding the n machine integers in args with op leaves
   ! int64: the promoting operators' test for taking the big path
   logical function int_overflows(args, n, op) result(bad)
@@ -6781,6 +6809,10 @@ contains
     fn = strip_meta(fn0)
     if (gcn_is_var(fn)) fn = gcn_var_value(fn)
     base = vs_enter(vst, 2)
+    ! a fn that only wraps a builtin, called with its arity: the builtin
+    ! is the callee (analyze.inc wrapper_builtin)
+    av = wrapper_of(fn, nargs)
+    if (av%tag /= GCT_NIL) fn = av
     call vs_set(vst, base + 1, fn)
     if (gc_kind(vs_get(vst, base + 1)) == OBJ_COMPILED .and. &
          (gc_i2(vs_get(vst, base + 1)) < 0 .or. gc_i2(vs_get(vst, base + 1)) == nargs)) then
@@ -6922,10 +6954,16 @@ contains
        ! handed over, not kept (see exec's N_CALL): the callee roots
        ! args itself, immediately, and nothing allocates in between
        block
-         type(gc_value) :: argl
+         type(gc_value) :: argl, wb
          argl = vs_get(vst, base + 2)
+         ! a fn that only wraps a builtin, with its arity: the builtin
+         wb = wrapper_of(vs_get(vst, base + 1), gcv_count(argl))
          call vs_set(vst, base + 2, gc_nil())
-         out = invoke_closure(vs_get(vst, base + 1), argl)
+         if (wb%tag /= GCT_NIL) then
+            out = call_builtin(gc_i1(wb), argl)
+         else
+            out = invoke_closure(vs_get(vst, base + 1), argl)
+         end if
        end block
     case (OBJ_COMPILED)
        ! A compiled procedure. The arguments go into CONSECUTIVE
@@ -7928,7 +7966,14 @@ contains
                        [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 4)])
                   call vs_set(vst, base + 4, fargs)
                end do
-               out = invoke_closure(f, vs_get(vst, base + 4), vs_get(vst, base + 3))
+               ! the rest seq is HANDED OVER, not kept: its head stayed in
+               ! this frame's slots -- and in the args vector -- for the
+               ! whole call, so (apply + (take n (range))) held every cell
+               ! it had walked, 428 MB for a million (PLAN step 16)
+               s = vs_get(vst, base + 3)
+               v = vs_get(vst, base + 4)
+               call let_go_apply(vs_get(vst, base + 1), n, base)
+               out = invoke_closure(f, v, s)
             else
                ! too few for the variadic arity: spread, and a fixed arity may match
                fargs = vs_get(vst, base + 2)
@@ -7950,7 +7995,9 @@ contains
             call vs_set(vst, base + 2, fargs)
          end do
          fargs = vs_get(vst, base + 2)
-         if (.not. tctx%has_error) out = apply(gcv_nth(vs_get(vst, base + 1), 0), fargs)
+         f = gcv_nth(vs_get(vst, base + 1), 0)
+         call let_go_apply(vs_get(vst, base + 1), n, base)
+         if (.not. tctx%has_error) out = apply(f, fargs)
          end if
        end block
     case (B_PRN)

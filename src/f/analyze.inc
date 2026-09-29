@@ -430,6 +430,82 @@
     call gc_set_i2(nd, i2)
   end function mk_node
 
+  ! A fn that only hands its parameters, in order, to one host builtin
+  ! -- (fn [coll] (. clojure.lang.RT (first coll))), which is what
+  ! first, rest, next, seq, cons, inc, dec, pos? and most of core's
+  ! primitives are -- answers that builtin, else nil; analyze_fn keeps
+  ! the answer as the template's seventh element. A call to such a fn
+  ! with its fixed arity then calls the builtin itself (exec.inc's
+  ! N_CALL, gce_apply_slots, apply). Measured from compiled code, the
+  ! closure was an interpreter entry of 470 ns around an 80 ns builtin,
+  ! paid on every seq operation; the JVM inlines the static call to
+  ! nothing. The fn VALUE stays the closure, so fn?, class, meta and a
+  ! wrong-arity call are exactly what they were.
+  ! Per ARITY: + = < conj assoc get nth are multi-arity, and their
+  ! two-argument arity is the wrapper every hot call takes, so the
+  ! answer is a vector with one entry per arity, nil where that arity
+  ! is not a wrapper, or nil when none is.
+  function wrapper_builtin(arities, captures) result(bs)
+    type(gc_value), intent(in) :: arities, captures
+    type(gc_value) :: bs, b
+    integer :: i
+    logical :: any
+    bs = gc_nil()
+    if (.not. gcv_is(arities) .or. .not. gcv_is(captures)) return
+    if (gcv_count(captures) /= 0) return
+    ! core's own wrappers only: a user's (defn f [x] (inc x)) keeps its
+    ! frame, for the call stack a break shows and for stepping into it
+    block
+      type(gc_value) :: cur, core
+      cur = gcn_current([arities, captures])
+      core = gcn_find("clojure.core")
+      if (cur%tag /= core%tag .or. cur%ref /= core%ref) return
+    end block
+    any = .false.
+    bs = gcv_build(gcv_count(arities), [arities, captures])
+    do i = 0, gcv_count(arities) - 1
+       b = arity_builtin(gcv_nth(arities, i))
+       if (b%tag /= GCT_NIL) any = .true.
+       bs = gcv_put(bs, i, b, [arities, captures, bs])
+    end do
+    if (.not. any) bs = gc_nil()
+  end function wrapper_builtin
+
+  function arity_builtin(ar) result(b)
+    type(gc_value), intent(in) :: ar
+    type(gc_value) :: b, body, kids, head, kid
+    integer :: nfixed, start, k
+    b = gc_nil()
+    if (truthy(gcv_nth(ar, 1))) return
+    nfixed = int_of(gcv_nth(ar, 0))
+    start = int_of(gcv_nth(ar, 2))
+    body = gcv_nth(ar, 3)
+    if (gc_kind(body) /= OBJ_AST) return
+    if (gc_i1(body) == N_DO) then
+       if (.not. gcv_is(gc_slot(body, 1))) return
+       if (gcv_count(gc_slot(body, 1)) /= 1) return
+       body = gcv_nth(gc_slot(body, 1), 0)
+       if (gc_kind(body) /= OBJ_AST) return
+    end if
+    if (gc_i1(body) /= N_CALL) return
+    kids = gc_slot(body, 1)
+    if (.not. gcv_is(kids)) return
+    if (gcv_count(kids) /= nfixed + 1) return
+    head = gcv_nth(kids, 0)
+    if (gc_kind(head) /= OBJ_AST) return
+    if (gc_i1(head) /= N_CONST) return
+    head = gc_slot(head, 2)
+    if (gc_kind(head) /= OBJ_BUILTIN) return
+    if (gc_i1(head) == B_RTFN .or. gc_i1(head) == B_UUIDFN) return
+    do k = 0, nfixed - 1
+       kid = gcv_nth(kids, k + 1)
+       if (gc_kind(kid) /= OBJ_AST) return
+       if (gc_i1(kid) /= N_LOCAL) return
+       if (gc_i2(kid) /= start + k) return
+    end do
+    b = head
+  end function arity_builtin
+
   function const_node(v, roots) result(nd)
     type(gc_value), intent(in) :: v
     type(gc_value), intent(in) :: roots(:)
@@ -1358,6 +1434,35 @@
        return
     end if
     call vs_set(vst, base + 4, cls)
+    ! (new clojure.lang.LazySeq (fn* [] body...)) is what the lazy-seq
+    ! macro writes, and it is the N_LAZY node, not a generic new: the
+    ! generic path evaluated the fn outside the run loop and then found
+    ! LazySeq by comparing its name down a chain of constructors --
+    ! 680 ns for every lazy cell core.clj makes, against 200
+    if (gc_ref_is(cls%ref, "clojure.lang.LazySeq")) then
+       block
+         type(gc_value) :: ctor, fhead, fparams
+         ctor = gcl_rest(vs_get(vst, base + 3), [vs_get(vst, base + 1)])
+         if (gcl_count(ctor) == 1) then
+            ctor = strip_meta(gcl_first(ctor))
+            if (gcl_is(ctor)) then
+               if (gcl_count(ctor) >= 2) then
+                  fhead = strip_meta(gcl_first(ctor))
+                  fparams = strip_meta(gcl_first(gcl_rest(ctor, [vs_get(vst, base + 1)])))
+                  if (fhead%tag == GCT_SYM .and. gcv_is(fparams)) then
+                     if (gc_ref_is(fhead%ref, "fn*") .and. gcv_count(fparams) == 0) then
+                        call vs_set(vst, base + 5, ctor)
+                        nd = analyze_lazy(gcl_rest(gcl_rest(vs_get(vst, base + 5), [vs_get(vst, base + 1)]), &
+                             [vs_get(vst, base + 1), vs_get(vst, base + 5)]), vs_get(vst, base + 2))
+                        call vs_leave(vst, base)
+                        return
+                     end if
+                  end if
+               end if
+            end if
+         end if
+       end block
+    end if
     kids = analyze_all(gcl_rest(vs_get(vst, base + 3), [vs_get(vst, base + 1)]), vs_get(vst, base + 2), &
          [vs_get(vst, base + 1), vs_get(vst, base + 4)])
     call vs_set(vst, base + 5, kids)
@@ -1948,6 +2053,13 @@
       nm = gc_slot(scope_info(vs_get(vst, base + 5)), 4)
       if (.not. gca_is(nm)) nm = gca_empty([vs_get(vst, base + 5), vs_get(vst, base + 8)])
       tmpl = gcv_conj(vs_get(vst, base + 8), nm, [vs_get(vst, base + 5)])
+      call vs_set(vst, base + 8, tmpl)
+    end block
+    ! the builtin this fn only wraps, or nil (wrapper_builtin)
+    block
+      type(gc_value) :: wb
+      wb = wrapper_builtin(vs_get(vst, base + 7), gc_slot(scope_info(vs_get(vst, base + 5)), 1))
+      tmpl = gcv_conj(vs_get(vst, base + 8), wb, [vs_get(vst, base + 5), wb])
       call vs_set(vst, base + 8, tmpl)
     end block
     nd = mk_node(N_FN, gc_nil(), vs_get(vst, base + 8), gc_nil(), 0, [vs_get(vst, base + 1), vs_get(vst, base + 2)])

@@ -1685,3 +1685,18 @@ Checked with clj 2026-09-28 (clojuredocs `vec#example1`,
 **Removal**: a vector over a native array's buffer, and sorting the
 buffer in place. Aliasing a mutable array under a persistent vector is
 the JVM's shortcut, not the language's; not done.
+
+## 58. core's one-line wrappers are not on a break's call stack
+
+`first`, `rest`, `next`, `seq`, `cons` and the other clojure.core fns
+whose body is one host call on their own parameters -- `(fn [coll]
+(. clojure.lang.RT (first coll)))` -- are called as that host call
+when the arity matches (analyze.inc `wrapper_builtin`). A break inside
+one, `(first 5)`, shows the caller and not `clojure.core/first`; on
+the JVM `clojure.core$first.invokeStatic` is in the trace. The error,
+its class and its message are the same. Not done for user fns, and
+not while a step is pending, so stepping still stops in them.
+
+**Removal**: push a call-stack entry for the elided fn, about 20 ns a
+call; or keep it as the price of `(first c)` costing 120 ns and not
+570.
