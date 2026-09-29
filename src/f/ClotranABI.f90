@@ -898,7 +898,9 @@ contains
   ! so a task's numeric loop runs while clotran code goes on elsewhere
   ! (PLAN.md step 11, stage 2). Every runtime call inside such a loop is
   ! preceded by clotran_reacquire, so none reaches the heap without it.
-  ! Outside a task nothing is given up: rel stays 0.
+  ! An EMBEDDER brackets its own long computation the same way
+  ! (examples/embed/heat.f90), so a thread serving a REPL into it is
+  ! never held up by a collection waiting on the solver.
   subroutine clotran_native_begin(me, rel) bind(C, name="clotran_native_begin")
     integer(c_int), intent(out) :: me, rel
     integer :: m

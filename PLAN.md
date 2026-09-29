@@ -2117,7 +2117,10 @@ c. *`clotran.server`*: a socket REPL (done 2026-09-29: `start-server`,
    `stop-server`, a thread a connection, clj's prompt and error shape,
    driven by `nc`) and a prepl (done 2026-09-29: `io-prepl`'s messages
    match clj's own for the same input, :ms and JVM stack frames aside),
-   then `start-server` from `examples/embed`.
+   then `start-server` from `examples/embed` (done 2026-09-29: with
+   HEAT_REPL=<port> the Fortran solver serves a REPL, its time loop runs
+   outside the running mutators, and scripts/embed-repl-check reads the
+   live grid, writes into it and stops the run, in the gate).
 d. *nREPL, as a package*: what CIDER speaks (bencode, eval, load-file,
    describe, completions), on the model of babashka's compact server.
 

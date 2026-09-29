@@ -1,0 +1,49 @@
+#!/usr/bin/env bb
+;; scripts/embed-repl-check -- the REPL into a running Fortran solver
+;; (PLAN step 21): examples/embed/heat with HEAT_REPL=0 serves on a free
+;; port and says which; this connects mid-run, reads the live grid, writes
+;; into it, and stops the run, then checks the solver saw all three.
+;; Port 0, so the gate's two halves at once cannot collide.
+(require '[babashka.process :as p]
+         '[clojure.java.io :as io]
+         '[clojure.string :as str])
+
+(def proc (p/process ["examples/embed/heat"]
+                     {:extra-env {"HEAT_REPL" "0" "HEAT_PAUSE_MS" "200"} :err :string}))
+(def out (io/reader (:out proc)))
+
+(defn fail [& msg]
+  (binding [*out* *err*] (apply println "embed-repl-check:" msg))
+  (p/destroy-tree proc)
+  (System/exit 1))
+
+(def seen (atom []))
+(def port
+  (loop []
+    (if-let [l (.readLine out)]
+      (do (swap! seen conj l)
+          (if-let [[_ n] (re-find #"a REPL on port (\d+)" l)] (parse-long n) (recur)))
+      (fail "the solver ended without serving:" (pr-str @seen)))))
+
+(def replies
+  (with-open [s (java.net.Socket. "127.0.0.1" (int port))]
+    (let [w (io/writer (.getOutputStream s))
+          r (io/reader (.getInputStream s))]
+      (.write w (str "(embed.control/peak embed.control/grid)\n"
+                     "(aset embed.control/grid 20 500.0)\n"
+                     "(swap! embed.control/steer assoc :stop true)\n"
+                     ":repl/quit\n"))
+      (.flush w)
+      (vec (line-seq r)))))
+
+(def rest-out (vec (concat @seen (line-seq out))))
+(def exit (:exit @proc))
+(def stopped (some #(re-find #"fortran  stopped at step +(\d+) +total +([\d.]+)" %) rest-out))
+
+(when-not (zero? exit) (fail "the solver exited" exit (:err @proc)))
+(when-not (re-matches #"user=> [\d.]+" (first replies)) (fail "no live peak read:" (pr-str replies)))
+(when-not (= "user=> 500.0" (second replies)) (fail "the grid was not written:" (pr-str replies)))
+(when-not stopped (fail "no stop line:" (pr-str rest-out)))
+(when-not (< (parse-long (nth stopped 1)) 2000) (fail "the run was not stopped early:" (first stopped)))
+(when-not (> (parse-double (nth stopped 2)) 400.0) (fail "the write did not reach the solver:" (first stopped)))
+(println "embed-repl-check: read the live grid, wrote it, stopped the run at step" (nth stopped 1))

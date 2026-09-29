@@ -17,6 +17,13 @@
 ! The runtime is linked in, as a solver would link it; the same
 ! objects make clotran-bin. `make test` runs this and compares the
 ! output with examples/embed/expected.txt.
+!
+! With HEAT_REPL=<port> (0: any free one) it also serves a REPL into the
+! run (control.cljf's serve!, clotran.server): `nc localhost <port>`, then
+! (embed.control/peak embed.control/grid) reads the live grid, and
+! (swap! embed.control/steer assoc :stop true) ends the run. The time loop
+! runs outside the running mutators (clotran_native_begin), stepping back
+! in only to call Clojure, so the REPL's thread never waits on the solver.
 module embed_abi
   use iso_c_binding
   implicit none
@@ -60,7 +67,7 @@ module embed_abi
        import :: c_ptr, c_int
        type(c_ptr), value :: cs
        integer(c_int), value :: slot
-       integer(c_int) :: b
+       integer(c_int) :: b, me, rel
      end function clotran_bool
      subroutine clotran_vec_empty(slot) bind(C, name="clotran_vec_empty")
        import :: c_int
@@ -95,6 +102,15 @@ module embed_abi
        integer(c_int64_t), intent(out) :: n
        integer(c_int) :: ok
      end function clotran_array_view
+     subroutine clotran_native_begin(me, rel) bind(C, name="clotran_native_begin")
+       import :: c_int
+       integer(c_int), intent(out) :: me, rel
+     end subroutine clotran_native_begin
+     subroutine clotran_reacquire(me, rel) bind(C, name="clotran_reacquire")
+       import :: c_int
+       integer(c_int), value :: me
+       integer(c_int), intent(inout) :: rel
+     end subroutine clotran_reacquire
      function clotran_error_copy(buf, n) bind(C, name="clotran_error_copy") result(w)
        import :: c_int, c_char
        character(kind=c_char), intent(out) :: buf(*)
@@ -112,7 +128,7 @@ program heat
   ! dt/dx^2; explicit diffusion is stable below one half
   real(c_double), parameter :: r = 0.25_c_double
   type(c_ptr) :: cs, p
-  integer(c_int) :: b
+  integer(c_int) :: b, me, rel
   integer(c_int64_t) :: n
   real(c_double), pointer, contiguous :: u(:)
   real(c_double) :: lap(nx)
@@ -139,7 +155,12 @@ program heat
   ! Clojure writes the initial condition into u(:)
   call control("init!", 0)
   print '(a,f8.3,a,f8.3)', "fortran  read it back              total ", sum(u), "  peak ", maxval(u)
+  ! a REPL into the run, if HEAT_REPL names a port
+  call control("serve!", 0)
 
+  ! the solver's own work runs outside the heap; it steps back in to call
+  ! Clojure, and out again after
+  call clotran_native_begin(me, rel)
   do step = 1, nsteps
      do i = 2, nx - 1
         lap(i) = u(i - 1) - 2.0_c_double * u(i) + u(i + 1)
@@ -149,10 +170,13 @@ program heat
      end do
      if (mod(step, every) == 0) then
         ! the strategy: reads the grid, may write it, says whether to go on
+        call clotran_reacquire(me, rel)
         call control("on-step", step)
         if (clotran_bool(cs, b + 4) == 0) exit
+        call clotran_native_begin(me, rel)
      end if
   end do
+  call clotran_reacquire(me, rel)
   print '(a,i4,a,f8.3,a,f8.3)', "fortran  stopped at step ", min(step, nsteps), "      total ", sum(u), "  peak ", maxval(u)
   call clotran_frame_leave(cs, b)
 

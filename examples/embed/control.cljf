@@ -17,12 +17,34 @@
   (aset u (quot (alength u) 2) 100.0)
   (println (format "clojure  wrote a pulse            total %8.3f  peak %8.3f" (total u) (peak u))))
 
+(defonce ^{:doc "What a REPL into the run may change: :stop ends it at the next
+  report, :pause-ms slows each report down enough to watch."}
+  steer (atom {:stop false :pause-ms 0}))
+
+(def grid "The solver's grid, once serve! has run: the same memory as u(:)." nil)
+
+(defn serve!
+  "With HEAT_REPL=<port> in the environment, a REPL into the running
+  solver on that port (0: any free one, which is printed)."
+  [^doubles u]
+  (when-let [p (System/getenv "HEAT_REPL")]
+    (require 'clotran.server)
+    (alter-var-root #'grid (constantly u))
+    (when-let [ms (System/getenv "HEAT_PAUSE_MS")]
+      (swap! steer assoc :pause-ms (parse-long ms)))
+    (let [s ((resolve 'clotran.server/start-server) {:name "heat" :port (parse-long p)})]
+      (println "clojure  a REPL on port" (:port s))
+      (flush))))
+
 (defn on-step
   "Called by the solver every hundred steps: reports, adds a source at
-  step 300, and answers whether to go on -- while the peak is sharp."
+  step 300, and answers whether to go on -- while the peak is sharp, and
+  until a REPL says stop."
   [^doubles u step]
   (when (= step 300)
     (aset u 8 (+ (aget u 8) 40.0))
     (println "clojure  switched a source on at cell 8"))
   (println (format "clojure  step %4d                 total %8.3f  peak %8.3f" step (total u) (peak u)))
-  (< 2.0 (peak u)))
+  (let [{:keys [stop pause-ms]} @steer]
+    (when (pos? pause-ms) (flush) (Thread/sleep pause-ms))
+    (and (not stop) (< 2.0 (peak u)))))

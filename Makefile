@@ -382,7 +382,7 @@ $(B)/libsamplelib.$(SOEXT): $(T)/samplelib.f90 $(B)/samplelib_shims.f90 | $(B) $
 # after the other within its target). Plain `make test` runs them in
 # order, as before.
 TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(B)/libsamplelib.$(SOEXT) packages examples/embed/heat
-TEST_CHECKS = check-unit check-embed check-language check-tree check-banner check-torture check-threads \
+TEST_CHECKS = check-unit check-embed check-embed-repl check-language check-tree check-banner check-torture check-threads \
 	check-autocompile check-break check-libraries check-oracle check-oracle-gc check-pure check-static
 .PHONY: test $(TEST_CHECKS)
 test: $(TEST_CHECKS)
@@ -392,6 +392,9 @@ check-unit:
 check-embed:
 	@echo "--- a Fortran solver with clotran embedded, its strategy in Clojure on its own grid (examples/embed) ---"
 	examples/embed/heat | grep -v "^note:" | diff - examples/embed/expected.txt
+check-embed-repl:
+	@echo "--- a REPL into the running solver: read its grid, write it, stop it (PLAN step 21) ---"
+	scripts/embed-repl-check
 check-language:
 	@echo "--- language_test (with core.clj, loaded from source: the one run without the image) ---"
 	CLOTRAN_IMAGE=0 ./clotran-bin src/clj/clojure/core.clj test/clj/language_test.clj </dev/null > $(B)/language_test.out 2>&1; \
