@@ -110,6 +110,27 @@ if [ "$1" = "compile" ]; then
   exit 0
 fi
 
+# A PROJECT: run in a directory with a deps.edn, clotran asks the package
+# manager, clotran-deps (PACKAGES.md), for the project's source path and
+# sets CLOTRAN_PATH -- as clj asks tools.deps for a classpath. The answer
+# is cached beside the deps.edn, so an unchanged project costs a checksum.
+# A leading -A:alias[:alias] goes to it. Not when CLOTRAN_PATH is already
+# set (clotran-deps' own run sets it, which is also what stops a loop), and
+# not in this checkout, whose deps.edn pins the oracle's clj. clotran-deps
+# is found on PATH, else beside this checkout.
+deps_aliases=""
+case "$1" in -A*) deps_aliases="$1"; shift ;; esac
+if [ -z "$CLOTRAN_PATH" ] && [ -f deps.edn ] && [ "$(pwd)" != "$root" ]; then
+  deps=$(command -v clotran-deps 2>/dev/null)
+  [ -n "$deps" ] || deps="$root/../clotran-deps/bin/clotran-deps"
+  if [ -x "$deps" ]; then
+    CLOTRAN_PATH=$("$deps" $deps_aliases) || exit 1
+    export CLOTRAN_PATH
+  else
+    echo "clotran: there is a deps.edn here, but no clotran-deps to read it (PACKAGES.md)" >&2
+  fi
+fi
+
 # What loads is compiled in the background and cached, and installed
 # from the cache on later loads -- and mid-session, at a REPL prompt,
 # when a build finishes (clotran.loader). CLOTRAN_AUTOCOMPILE=0 turns it

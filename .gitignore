@@ -17,3 +17,4 @@
 /examples/embed/heat
 /examples/embed/heat.dSYM/
 .cpcache/
+.clotran-cache/
