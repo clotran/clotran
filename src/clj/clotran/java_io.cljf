@@ -10,24 +10,9 @@
   gathers what is written and writes the file when it is closed.
   Streams of bytes, URLs and classpath resources are not here.")
 
-(definterface IReader
-  (readLine [])
-  (readAll []))
-
-(deftype TextReader [text pos]
-  IReader
-  (readLine [_]
-    (let [p @pos]
-      (when (< p (count text))
-        (let [i (or (clojure.string/index-of text "\n" p) (count text))]
-          (reset! pos (inc i))
-          (subs text p (if (and (> i p) (= \return (nth text (dec i)))) (dec i) i))))))
-  (readAll [_]
-    (let [p @pos]
-      (reset! pos (count text))
-      (if (< p (count text)) (subs text p) "")))
-  java.io.Closeable
-  (close [_] nil))
+;; clotran.io loads on first use: core.clj requires this namespace at its
+;; form 640, before the macros clotran.io is written with exist
+(defn- io [f] (require (quote clotran.io)) (ns-resolve (quote clotran.io) (symbol f)))
 
 ;; under the JVM's name, so (class (io/file "x")) is java.io.File
 (ns java.io)
@@ -60,9 +45,9 @@
 (defn reader
   "A reader over a file, a path, or text already a reader."
   [x & opts]
-  (if (instance? TextReader x)
+  (if ((io "reader?") x)
     x
-    (TextReader. (clotran-slurp (path-of x)) (atom 0))))
+    ((io "text-reader") (clotran-slurp (path-of x)))))
 
 (defn input-stream [x & opts] (apply reader x opts))
 
@@ -96,7 +81,7 @@
   output, a writer or a file."
   [input output & opts]
   (let [text (cond (string? input) input
-                   (instance? TextReader input) (.readAll input)
+                   ((io "reader?") input) ((io "read-all") input)
                    :else (clotran-slurp (path-of input)))]
     (if (or (string? output) (instance? java.io.File output))
       (with-open [w (writer output)] (.write w text))

@@ -2096,11 +2096,32 @@ The language already has this as source: `clojure.core.server`
 (vendored) is Clojure's socket REPL. It reaches for `java.net`'s
 ServerSocket, Socket, InetAddress and SocketException, `java.io`
 readers and writers over a socket's streams, `Thread.` with a name, and
-a ReentrantLock. So the step is those as a host seam -- a socket is a
-file descriptor, as a writer already is -- and `clojure.core.server`
-loading unmodified, then `start-server` from `examples/embed`. SEAMS.md
-gets the entry: ClojureScript has no socket server in cljs.core, so
-this is the host's.
+a ReentrantLock.
+
+**Decided 2026-09-29: clotran's own server, not `server.clj`.** clotran
+is its own host -- Fortran and C -- and does not emulate the JVM; a JVM
+name appears only where vendored Clojure literally writes it, as a thin
+mapping onto a clotran type. `server.clj` would need a pile of
+`java.net`/`java.util.concurrent` classes emulated, so it stays vendored
+and unloaded, and the step is instead, in order:
+
+a. *Character streams* (done 2026-09-29): `clotran.io`'s readers, with
+   `read` over a stream taking one form's characters. core.clj's
+   `with-in-str`, `read-line`, `read`, `read+string` and `line-seq` work
+   on them; DEVIATIONS 65.
+b. *Sockets*: a C shim (POSIX and Winsock behind one small interface --
+   macOS's `sin_len`, Windows' `WSAStartup` and `SOCKET` are the shim's
+   business) reached through iso_c_binding. A blocked accept or read waits
+   outside the running mutators, as `block_on` does.
+c. *`clotran.server`*: a socket REPL and a prepl, one thread a
+   connection, `start-server` from `examples/embed`.
+d. *nREPL, as a package*: what CIDER speaks (bencode, eval, load-file,
+   describe, completions), on the model of babashka's compact server.
+
+Windows is built with a mingw-w64 cross toolchain and run under Wine for
+quick checks; a real Windows runner is the authority, as flang is for
+the gate. SEAMS.md gets the entry: ClojureScript has no socket server in
+cljs.core either, so this is the host's.
 
 ### 22. Standalone binaries
 

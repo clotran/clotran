@@ -2861,3 +2861,25 @@
 ;; & is an ordinary local in let* and loop* at 1.12.6 (LetExpr.Parser
 ;; has no rule against it; only the interim branch added one)
 [(let* [& 42] &) (loop* [& 1] &)]
+
+;; read over a stream takes one form's characters and no more (clotran.io
+;; lisp-read): a token stops at whitespace or a macro character, which is
+;; pushed back; strings, regexes and collections end at their closers
+(defn forms-of [s]
+  (let [r (java.io.PushbackReader. (java.io.StringReader. s))]
+    (loop [acc []]
+      (let [x (try (read r false :oracle-eof) (catch Exception e [:threw (.getMessage e)]))]
+        (if (or (= x :oracle-eof) (and (vector? x) (= :threw (first x)))) (conj acc x) (recur (conj acc x)))))))
+[(forms-of "(+ 1 2) [3 4] {:a 1}") (forms-of "abc,def ;comment\n  :kw 12N 1.5M 3/4 ##Inf")]
+(forms-of "\"str (with) \\\" quote\" \\( \\) \\space \\a")
+(mapv str (forms-of "#\"re\\\"g\" #\"x\""))
+(forms-of "'x @d ^:m [e] #'f")
+[(forms-of "#_ skipped kept #_#_ a b c [1 #_2 3]") (forms-of "#{1 2} #:ns{:a 1}") (forms-of "#! shebang line\n(x)") (forms-of "a(b)c")]
+[(forms-of "(unclosed") (forms-of ")") (forms-of "\"open string")]
+[(let [r (java.io.PushbackReader. (java.io.StringReader. "sym rest"))] [(read r) (slurp r)]) (let [r (java.io.PushbackReader. (java.io.StringReader. "(a) rest"))] [(read r) (slurp r)]) (read {:eof :done} (java.io.PushbackReader. (java.io.StringReader. "  ")))]
+(with-in-str "1 2\n3" [(read) (read-line) (read-line)])
+(with-in-str "a\nb" [(read-line) (read-line) (read-line)])
+[(line-seq (java.io.BufferedReader. (java.io.StringReader. "x\ny"))) (slurp (java.io.StringReader. "abc")) (load-string "(+ 1 2) (* 2 3)")]
+(let [r (clojure.lang.LineNumberingPushbackReader. (java.io.StringReader. "a\r\nb\nc"))] [(read r) (.getLineNumber r) (read r) (.getLineNumber r) (read r)])
+(let [r (clojure.lang.LineNumberingPushbackReader. (java.io.StringReader. "  (+ 1\n 2) tail"))] (read+string r))
+[(.trim "\u0001 a b \t\n") (.trim "") (.trim "   ")]

@@ -1857,3 +1857,30 @@ the docstring calls wrong can tell.
 
 **Removal**: an array-map transient that hands back a different object
 past eight entries and leaves the old one frozen. Not planned.
+
+## 65. Character streams are clotran's own types
+
+core.clj writes `(java.io.StringReader. s)` in `with-in-str`, wraps it in
+`clojure.lang.LineNumberingPushbackReader.`, and reads with
+`clojure.lang.LispReader/read`. Those names are mapped onto clotran.io's
+own readers (`src/clj/clotran/io.cljf`: a text reader, a pushback reader,
+a line-numbering reader), which have the methods vendored Clojure calls --
+`.read`, `.unread`, `.readLine`, `.getLineNumber`, `.captureString` --
+and nothing else of java.io:
+
+    (class (java.io.StringReader. "x"))
+    ;; clj     java.io.StringReader
+    ;; clotran clotran.io.TextReader
+
+A `java.io.BufferedReader` over a clotran reader is that reader, since
+every clotran reader already reads a line at a time. clotran is its own
+host, and a JVM name appears only where vendored Clojure writes it.
+
+`read` over a stream takes one form's characters off it by LispReader's
+rules -- a token ends at whitespace or a terminating macro character,
+pushed back; a string, regex or collection at its closer -- and hands the
+text to clotran's reader, so the two cannot disagree about what a form
+means. A list read from a line-numbering reader does not carry the
+`{:line :column}` metadata clj gives it.
+
+**Removal**: not planned; it is the design.

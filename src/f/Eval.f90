@@ -3530,12 +3530,15 @@ contains
        ! Clojure on this host: clotran.rt's ArrayList (rt_call)
        out = rt_call("array-list", vs_get(vst, base + 1))
     else if (cname == "java.io.StringReader" .or. cname == "StringReader") then
-       ! a reader over a string is the string: load-string builds one
-       ! and hands it to load-reader (Compiler.load, B_LOADREADER)
-       out = nth_or_nil(vs_get(vst, base + 1), 0)
-    else if (cname == "clojure.lang.LineNumberingPushbackReader" .or. cname == "java.io.PushbackReader" .or. &
-         cname == "java.io.BufferedReader") then
-       out = nth_or_nil(vs_get(vst, base + 1), 0)
+       ! the names vendored Clojure writes for a character stream, mapped
+       ! onto clotran.io's own readers (through clotran.rt)
+       out = rt_call("string-reader", vs_get(vst, base + 1))
+    else if (cname == "java.io.PushbackReader" .or. cname == "PushbackReader") then
+       out = rt_call("pushback-reader", vs_get(vst, base + 1))
+    else if (cname == "clojure.lang.LineNumberingPushbackReader" .or. cname == "LineNumberingPushbackReader") then
+       out = rt_call("line-numbering-reader", vs_get(vst, base + 1))
+    else if (cname == "java.io.BufferedReader" .or. cname == "BufferedReader") then
+       out = rt_call("buffered-reader", vs_get(vst, base + 1))
     else if (cname == "Object" .or. cname == "java.lang.Object") then
        ! (Object.), a sentinel equal only to itself
        out = rt_call("object", vs_get(vst, base + 1))
@@ -9935,10 +9938,7 @@ contains
        block
          character(len=:), allocatable :: text
          a = strip_meta(gcv_nth(args, 0))
-         if (gc_kind(a) == OBJ_INST) then
-            b = inst_invoke0(a, "readAll", hit)
-            if (hit) a = b
-         end if
+         if (gc_kind(a) == OBJ_INST) a = rt_call("read-all", args)
          call text_of(a, s=dlt_1)
          text = dlt_1
          call load_text(text, "NO_SOURCE_PATH", out)

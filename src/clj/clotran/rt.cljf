@@ -205,3 +205,27 @@
         (if (reduced? r) @r (recur (inc i) r)))
       acc)))
 
+
+;;; ---- the JVM names vendored Clojure writes for character streams ----
+;;
+;; (java.io.StringReader. s), clojure.lang.LineNumberingPushbackReader and
+;; LispReader/read, in core.clj and clojure.main, reach clotran.io's own
+;; readers through these (Eval.f90 eval_new, hosttable.inc).
+
+(defn- io [f] (require (quote clotran.io)) (ns-resolve (quote clotran.io) (symbol f)))
+(defn string-reader [& args] (apply (io "text-reader") args))
+(defn pushback-reader [& args] (apply (io "pushback-reader") args))
+(defn line-numbering-reader [& args] (apply (io "line-numbering-reader") args))
+(defn buffered-reader [& args] (apply (io "buffered-reader") args))
+(defn lisp-read [& args] (apply (io "lisp-read") args))
+(defn read-all [r] ((io "read-all") r))
+
+(defn string-trim
+  "String.trim, which core.clj's read+string calls: the characters at or
+  below space dropped from both ends -- not clojure.string/trim's
+  whitespace, so a control character goes and a non-breaking space stays."
+  [s]
+  (let [n (count s)
+        i (loop [i 0] (if (and (< i n) (<= (int (nth s i)) 32)) (recur (inc i)) i))
+        j (loop [j n] (if (and (> j i) (<= (int (nth s (dec j))) 32)) (recur (dec j)) j))]
+    (subs s i j)))

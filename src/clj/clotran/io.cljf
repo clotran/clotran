@@ -1,0 +1,230 @@
+(ns clotran.io
+  "clotran's character streams: a reader hands out one character at a time
+  (.read, -1 at the end), takes one back (.unread), and reads a line or the
+  rest at once. A reader over text, a pushback reader over any reader, and
+  a line-numbering one that counts lines and columns and can capture what
+  it read (read+string). These are clotran's own types. The JVM names that
+  vendored Clojure writes -- core.clj's (java.io.StringReader. s) in
+  with-in-str, clojure.lang.LineNumberingPushbackReader, LispReader/read --
+  are mapped onto them in Eval.f90 and hosttable.inc, and nothing else of
+  java.io is modelled. A deftype's fields cannot be set! (DEVIATIONS 20),
+  so each mutable one holds an atom.")
+
+(defprotocol CharReader
+  (read-all [r] "The rest of the text, at once."))
+
+(defn reader? [x] (satisfies? CharReader x))
+
+(defn- line-from
+  "The text to the next \\n, \\r or \\r\\n, that terminator dropped; nil at
+  the end."
+  [r]
+  (let [sb (StringBuilder.)]
+    (loop [c (.read r) any false]
+      (cond (neg? c) (when any (str sb))
+            (= c 10) (str sb)
+            (= c 13) (let [d (.read r)]
+                       (when-not (or (neg? d) (= d 10)) (.unread r d))
+                       (str sb))
+            :else (do (.append sb (char c)) (recur (.read r) true))))))
+
+(defn- all-from [r]
+  (let [sb (StringBuilder.)]
+    (loop [c (.read r)]
+      (if (neg? c) (str sb) (do (.append sb (char c)) (recur (.read r)))))))
+
+(deftype TextReader [s pos]
+  CharReader
+  (read-all [_] (let [p (min @pos (count s))] (reset! pos (count s)) (subs s p)))
+  Object
+  (read [_]
+    (let [p @pos]
+      (if (< p (count s)) (do (reset! pos (inc p)) (int (nth s p))) -1)))
+  (unread [_ c] (swap! pos dec) nil)
+  (ready [_] true)
+  (readLine [this] (line-from this))
+  (close [_] nil))
+
+(deftype PushbackReader [in buf]
+  CharReader
+  (read-all [this] (all-from this))
+  Object
+  (read [_] (if-let [c (peek @buf)] (do (swap! buf pop) c) (.read in)))
+  (unread [_ c] (swap! buf conj (int c)) nil)
+  (ready [_] (or (boolean (seq @buf)) (.ready in)))
+  (readLine [this] (line-from this))
+  (close [_] (.close in)))
+
+;; Counts lines and columns as LineNumberingPushbackReader does: a line
+;; when the underlying reader delivers a \n -- \r and \r\n read as one --
+;; and never given back by .unread, which steps back only the column and
+;; whether the reader is at a line start. st holds :line :col :at-start
+;; :prev (at-start before the last read) and :capture, the characters
+;; read since captureString.
+(deftype LineNumberingReader [in buf ahead st]
+  CharReader
+  (read-all [this] (all-from this))
+  Object
+  (read [_]
+    (let [c (if-let [c (peek @buf)]
+              (do (swap! buf pop) c)
+              (let [c (if-let [a @ahead] (do (reset! ahead nil) a) (.read in))
+                    c (if (= c 13)
+                        (let [d (.read in)] (when-not (or (neg? d) (= d 10)) (reset! ahead d)) 10)
+                        c)]
+                (when (= c 10) (swap! st update :line inc))
+                c))]
+      (swap! st (fn [m]
+                  (cond-> (assoc m :prev (:at-start m))
+                    (or (= c 10) (neg? c)) (assoc :at-start true :col 1)
+                    (not (or (= c 10) (neg? c))) (-> (assoc :at-start false) (update :col inc))
+                    (and (:capture m) (not (neg? c))) (update :capture conj (char c)))))
+      c))
+  (unread [_ c]
+    (swap! buf conj (int c))
+    (swap! st (fn [m]
+                (cond-> (-> m (assoc :at-start (:prev m)) (update :col dec))
+                  (seq (:capture m)) (update :capture pop))))
+    nil)
+  (ready [_] (or (boolean (seq @buf)) (some? @ahead) (.ready in)))
+  (readLine [this] (line-from this))
+  (getLineNumber [_] (:line @st))
+  (setLineNumber [_ n] (swap! st assoc :line n) nil)
+  (getColumnNumber [_] (:col @st))
+  (atLineStart [_] (:at-start @st))
+  (captureString [_] (swap! st assoc :capture []) nil)
+  (getString [_] (let [s (apply str (:capture @st))] (swap! st assoc :capture nil) s))
+  (close [_] (.close in)))
+
+(defn text-reader [s] (TextReader. (str s) (atom 0)))
+(defn pushback-reader ([in] (PushbackReader. in (atom []))) ([in _size] (pushback-reader in)))
+(defn line-numbering-reader
+  ([in] (LineNumberingReader. in (atom []) (atom nil)
+                              (atom {:line 1 :col 1 :at-start true :prev true :capture nil})))
+  ([in _size] (line-numbering-reader in)))
+(defn buffered-reader
+  "A clotran reader already reads a line at a time: the reader itself."
+  ([in] in) ([in _size] in))
+
+;;; ---- LispReader.read over a stream --------------------------------------
+;;
+;; One form's characters taken off the stream and no more, by LispReader's
+;; own rules: a token ends at whitespace or a terminating macro character,
+;; which is pushed back; a string, a regex or a collection ends at its
+;; closer. The text is then read by clotran's reader (read-string), so the
+;; two cannot disagree about what a form means -- this only decides where
+;; it ends, which is all a stream adds.
+
+(def ^:private ws-chars #{9 10 11 12 13 28 29 30 31 32 44})
+(def ^:private terminating (set (map int "\";@^`~()[]{}\\")))
+(def ^:private closers {40 41, 91 93, 123 125})
+
+(defn- eof! [what]
+  (throw (RuntimeException. (str "EOF while reading" what))))
+
+(defn- skip-ws
+  "The first character past whitespace, commas and ; comments, or -1."
+  [r]
+  (loop [c (.read r)]
+    (cond (neg? c) c
+          (ws-chars c) (recur (.read r))
+          (= c 59) (recur (loop [d (.read r)] (if (or (neg? d) (= d 10)) d (recur (.read r)))))
+          :else c)))
+
+(defn- token-rest [r ^StringBuilder sb]
+  (loop [c (.read r)]
+    (cond (neg? c) nil
+          (or (ws-chars c) (terminating c)) (.unread r c)
+          :else (do (.append sb (char c)) (recur (.read r))))))
+
+(defn- quoted-rest
+  "Through the closing \", a backslash taking the next character with it."
+  [r ^StringBuilder sb what]
+  (loop []
+    (let [c (.read r)]
+      (when (neg? c) (eof! what))
+      (.append sb (char c))
+      (cond (= c 92) (let [d (.read r)] (when (neg? d) (eof! what)) (.append sb (char d)) (recur))
+            (= c 34) nil
+            :else (recur)))))
+
+(declare read-form)
+
+(defn- form-after
+  "The next form, past whitespace and any #_ discards, appended to sb."
+  [r sb]
+  (loop []
+    (let [c (skip-ws r)]
+      (when (neg? c) (eof! ""))
+      (when (= :discard (read-form r sb c)) (.append sb " ") (recur)))))
+
+(defn- delimited [r ^StringBuilder sb closer]
+  (loop []
+    (let [c (skip-ws r)]
+      (cond (neg? c) (eof! "")
+            (= c closer) (.append sb (char c))
+            (#{41 93 125} c) (throw (RuntimeException. (str "Unmatched delimiter: " (char c))))
+            :else (do (read-form r sb c) (.append sb " ") (recur))))))
+
+(defn- read-form
+  "Appends the form whose first character, c, is already read. :discard
+  for a #_ form or a #! comment, which read on past."
+  [r ^StringBuilder sb c]
+  (cond
+    (closers c) (do (.append sb (char c)) (delimited r sb (closers c)))
+    (#{41 93 125} c) (throw (RuntimeException. (str "Unmatched delimiter: " (char c))))
+    (= c 34) (do (.append sb \") (quoted-rest r sb " string"))
+    (= c 92) (let [d (.read r)]
+               (when (neg? d) (eof! " character"))
+               (.append sb \\) (.append sb (char d)) (token-rest r sb))
+    (#{39 96 64} c) (do (.append sb (char c)) (form-after r sb))
+    (= c 126) (let [d (.read r)]
+                (.append sb \~)
+                (if (= d 64) (.append sb \@) (when-not (neg? d) (.unread r d)))
+                (form-after r sb))
+    (= c 94) (do (.append sb \^) (form-after r sb) (.append sb " ") (form-after r sb))
+    (= c 35)
+    (let [d (.read r)]
+      (when (neg? d) (eof! ""))
+      (case (char d)
+        \! (do (loop [e (.read r)] (when-not (or (neg? e) (= e 10)) (recur (.read r)))) :discard)
+        \_ (do (.append sb "#_") (form-after r sb) :discard)
+        (\( \{) (do (.append sb \#) (.append sb (char d)) (delimited r sb (closers d)))
+        \" (do (.append sb "#\"") (quoted-rest r sb " regex"))
+        (\' \=) (do (.append sb \#) (.append sb (char d)) (form-after r sb))
+        \^ (do (.append sb "#^") (form-after r sb) (.append sb " ") (form-after r sb))
+        \? (let [e (.read r)
+                 e (if (= e 64) (do (.append sb "#?@") (.read r)) (do (.append sb "#?") e))]
+             (when-not (= e 40) (throw (RuntimeException. "read-cond body must be a list")))
+             (.append sb \() (delimited r sb 41))
+        \: (do (.append sb "#:")
+               (loop [e (.read r)]
+                 (cond (neg? e) (eof! "")
+                       (or (ws-chars e) (= e 123)) (.unread r e)
+                       :else (do (.append sb (char e)) (recur (.read r)))))
+               (let [e (skip-ws r)]
+                 (when-not (= e 123) (throw (RuntimeException. "Namespaced map must specify a map")))
+                 (.append sb \{) (delimited r sb 125)))
+        \# (do (.append sb "##") (token-rest r sb))
+        ;; a tag, then the form it tags
+        (do (.append sb \#) (.append sb (char d)) (token-rest r sb) (.append sb " ") (form-after r sb))))
+    :else (do (.append sb (char c)) (token-rest r sb))))
+
+(defn- lisp-read* [r opts eof-error? eof-value]
+  (loop []
+    (let [c (skip-ws r)]
+      (if (neg? c)
+        (if eof-error? (eof! "") eof-value)
+        (let [sb (StringBuilder.)]
+          (if (= :discard (read-form r sb c))
+            (recur)
+            (read-string opts (str sb))))))))
+
+(defn lisp-read
+  "LispReader.read: (read stream eof-error? eof-value recursive?) and
+  (read opts stream), whose :eof is the value at the end unless it is
+  :eofthrow or absent."
+  ([r eof-error? eof-value _recursive?] (lisp-read* r {} eof-error? eof-value))
+  ([r opts]
+   (let [e (get opts :eof :eofthrow)]
+     (lisp-read* r (dissoc opts :eof) (= e :eofthrow) e))))
