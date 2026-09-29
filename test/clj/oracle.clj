@@ -2699,3 +2699,16 @@
 
 ;; lazy-seq's expansion (new LazySeq (fn* [] ...)) is the lazy node
 [(take 5 ((fn step [i] (lazy-seq (cons i (step (inc i))))) 0)) (realized? (lazy-seq nil)) (let [s (lazy-seq [1 2])] [(realized? s) (first s) (realized? s)]) (seq (lazy-seq (lazy-seq nil))) (let [n (atom 0) s (lazy-seq (swap! n inc) [1])] (doall s) (doall s) @n) (try (doall (lazy-seq (throw (ex-info "t" {})))) (catch Exception e (ex-message e))) (seq (clojure.lang.LazySeq. (fn [] [1 2])))]
+
+;; fn bodies run as flat instructions (flat.inc): builtin calls by
+;; register, the integer fast path and its overflow, a three-argument
+;; host call on locals (it was handed nil while the fast path was
+;; being written), clearing, loops and arities
+(defn flat-rt3 [m k v] (clojure.lang.RT/assoc m k v))
+(defn flat-mix [x y] [(+ x y) (- x 1) (< x y) (inc x) (dec y) (* x y) (= x x) (zero? (- x x)) (pos? y) (neg? (- x y))])
+(defn flat-ovf [x] [(try (inc x) (catch ArithmeticException e :ovf)) (try (+ x 1) (catch ArithmeticException e :ovf)) (try (* x 2) (catch ArithmeticException e :ovf)) (try (- (- x) 2) (catch ArithmeticException e :ovf))])
+(defn flat-clear [s] [(first s) (count s) (vec (rest s))])
+(defn flat-loop [n] (loop [i 0 acc []] (if (< i n) (recur (inc i) (conj acc (* i i))) acc)))
+(defn flat-var ([] (flat-var 1)) ([a] (flat-var a 2)) ([a b & more] [a b more]))
+
+[(flat-rt3 {} :a 1) (flat-mix 3 4) (flat-mix 2.5 1) (flat-ovf Long/MAX_VALUE) (flat-ovf 5) (flat-clear (map inc [1 2 3])) (flat-loop 5) (flat-var) (flat-var 1 2 3 4)]

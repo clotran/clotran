@@ -747,7 +747,7 @@ module GC
   public :: gc_obj, gc_vec, gc_cons
   public :: gc_text, gc_slot, gc_set_slot, gc_kind
   public :: gc_i1, gc_i2, gc_set_i1, gc_set_i2
-  public :: gc_vec_len, gc_vec_get, gc_vec_set, gc_vec_word
+  public :: gc_vec_len, gc_vec_get, gc_vec_set, gc_vec_word, gc_reg, gc_reg_set
   public :: gc_car, gc_cdr, gc_set_car, gc_set_cdr
   public :: gc_live_count, gc_obj_capacity, gc_check_heap
   public :: gc_global_new, gc_global_set, gc_global_get, gc_global_count
@@ -2485,20 +2485,42 @@ contains
     out = vec_store(vec_pool(v%ref)%off + i - 1)
   end function gc_vec_get
 
-  ! Six integer elements from i on, as one instruction of a flat body
-  ! (Eval flat.inc): one call and one offset lookup per instruction
-  ! rather than six. The caller guarantees v is a vector of integers
-  ! at least i + 5 long -- the code the flat compiler wrote.
+  ! size(w) integer elements from i on, as one instruction of a flat
+  ! body (Eval flat.inc): one call and one offset lookup per
+  ! instruction. The caller guarantees v is a vector of integers long
+  ! enough -- the code the flat compiler wrote.
   subroutine gc_vec_word(v, i, w)
     type(gc_value), intent(in) :: v
     integer, intent(in) :: i
-    integer, intent(out) :: w(6)
+    integer, intent(out) :: w(:)
     integer :: o, k
     o = vec_pool(v%ref)%off + i - 1
-    do k = 1, 6
+    do k = 1, size(w)
        w(k) = int(vec_store(o + k - 1)%ival)
     end do
   end subroutine gc_vec_word
+
+  ! Element i of a raw vector with no checks: a flat body's registers,
+  ! every index fixed when it was compiled against the frame's size.
+  function gc_reg(v, i) result(out)
+    type(gc_value), intent(in) :: v
+    integer, intent(in) :: i
+    type(gc_value) :: out
+    out = vec_store(vec_pool(v%ref)%off + i - 1)
+  end function gc_reg
+
+  ! The same, stored; the write barrier only for a reference, since an
+  ! immediate (a number, a boolean, nil) is never young
+  subroutine gc_reg_set(v, i, x)
+    type(gc_value), intent(in) :: v, x
+    integer, intent(in) :: i
+    vec_store(vec_pool(v%ref)%off + i - 1) = x
+    if (x%ref /= 0) then
+       if (vec_mark(v%ref) .and. .not. vec_rem(v%ref)) then
+          if (is_young(x)) call remember_vec(v)
+       end if
+    end if
+  end subroutine gc_reg_set
 
   subroutine gc_vec_set(v, i, x)
     type(gc_value), intent(in) :: v, x

@@ -1814,6 +1814,28 @@ loop turn is six instructions, and each `<` or `inc` is a CALL that
 resolves its head, looks for a wrapper and fills a scratch vector.
 Measuring that is the next thing, before stage 2.
 
+**Then the per-instruction cost (2026-09-28).** A sample of the loop
+put the time in resolving each call's head and filling a vector for
+`<` and `inc`, and in checked frame accessors with the write barrier.
+Now a call whose head is a builtin constant compiles to `F_CALLB`,
+two machine integers go through `+ - * < > <= >= = inc dec zero? pos?
+neg?` inline (anything else, and every overflow, to the builtin, which
+throws as before), a one- or two-argument builtin reads a local in
+place when nothing after it in the call could clear it, and registers
+go through unchecked accessors (`gc_reg`, `gc_reg_set`: the barrier
+only for a reference).
+
+| | trees | flat, stage 1 | now |
+|---|---|---|---|
+| counting `loop` in a fn, 10^6 turns | 514 ms | 195 ms | 36 ms |
+| `(fib 25)` | 209 ms | 120 ms | 59 ms |
+| `reduce + take`, 10^5 | 717 ms | | 468 ms |
+| `(apply + (take 10^6 (range)))` | 6.6 s | | 5.5 s |
+
+36 ns a turn against the standalone program's 7-9. The seq library
+moves least: its arities mostly hold a `.` call (stage 2) and a top
+form typed at the REPL is still a tree (stage 3).
+
 ## Decisions that still hold
 
 **The value type has no `FINAL`.** Copying a `cons_value` (nine

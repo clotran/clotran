@@ -466,10 +466,10 @@ module Eval
      logical :: has_eval = .false., has_recur = .false.
   end type flat_buf
   ! a flat instruction: FW integers, the opcode first (flat.inc)
-  integer, parameter :: FW = 6
+  integer, parameter :: FW = 8
   integer, parameter :: F_CONST = 1, F_NIL = 2, F_MOVE = 3, F_MOVEC = 4, F_VAR = 5, &
        F_DLVAR = 6, F_JMPF = 7, F_JMP = 8, F_CALL = 9, F_RET = 10, F_RECUR = 11, &
-       F_FN = 12, F_LAZY = 13, F_COLL = 14, F_THROW = 15, F_EVAL = 16
+       F_FN = 12, F_LAZY = 13, F_COLL = 14, F_THROW = 15, F_EVAL = 16, F_CALLB = 17
   ! CLOTRAN_FLAT: 0 unread, 1 compile fn bodies flat, 2 trees only
   integer, save :: flat_mode = 0
   integer, parameter :: K_SCOPE = 100, K_FNINFO = 101
