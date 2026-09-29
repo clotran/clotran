@@ -817,6 +817,24 @@
        call vs_leave(vst, base)
        return
     end if
+    ! String/1: an array class (CLJ-2807), not a static field or a Var
+    block
+       logical :: ok_arr
+       call gc_ref_text(sym%ref, s=dlt_1)
+       call array_class_key(dlt_1, dlt_2, ok_arr)
+       if (ok_arr) then
+          v = gc_class(dlt_2, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+          call vs_set(vst, base + 3, v)
+          nd = const_node(vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+          call vs_leave(vst, base)
+          return
+       else if (len(dlt_2) > 0) then
+          call raise_class("ClassNotFoundException", dlt_2, &
+               [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+          call vs_leave(vst, base)
+          return
+       end if
+    end block
     if (is_static_call(sym)) then
        ! Class/field in value position: a static FIELD. Resolved now,
        ! since the answer cannot change; an unknown one fails where it

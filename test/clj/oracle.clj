@@ -2850,3 +2850,7 @@
 
 ;; the tokens LispReader.matchSymbol refuses, and the ones it takes
 (mapv #(try (read-string %) (catch Exception e :invalid)) ["://" ":a/" ":/a" "a/" "/a" "a//" ":a//" ":///" "///" "a///" "a/b/" "a:" ":a:" "a::b" "a:/b" "a/:b" ":1a" "a/1" ":a/1" "String/1" "/" ":/" "clojure.core//" ":a:b" "a:b:c/d" "abc/de:f" "a/b:"])
+
+;; array classes by symbol: CLJ-2807's Sym/N, and the JVM descriptor
+(let [e (comp eval read-string)] [(mapv e ["int/1" "double/2" "String/1" "(= int/1 (class (int-array 1)))" "(instance? long/1 (long-array 2))"]) (mapv #(resolve (symbol %)) ["int/1" "[I" "[[D" "[Ljava.lang.String;" "long/3" "[Lno.Such;" "[Q"])])
+(try (resolve (symbol "no.such.Klass/1")) (catch ClassNotFoundException e (.getMessage e)))

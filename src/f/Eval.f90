@@ -3768,6 +3768,61 @@ contains
   end subroutine class_key
 
 
+  ! An array class written as a symbol: String/1 or int/2 (CLJ-2807's
+  ! Sym/N), or the JVM's own descriptor, [I, [[D, [Ljava.lang.String;,
+  ! which maybeResolveIn hands to Class.forName. k is the class key,
+  ! spelled as array_class_name spells one; ok is false for anything
+  ! else. A Sym/N whose Sym is no class this runtime knows answers ok
+  ! false with k the message of the ClassNotFoundException Clojure
+  ! throws (Compiler.buildArrayClassDescriptor; a dotted name is
+  ! Class.forName's, whose message is the name).
+  subroutine array_class_key(t, k, ok)
+    character(len=*), intent(in) :: t
+    character(len=:), allocatable, intent(out) :: k
+    logical, intent(out) :: ok
+    character(len=:), allocatable :: comp, full
+    integer :: n, d, slash
+    n = len(t)
+    ok = .false.
+    k = ""
+    if (n >= 2 .and. t(1:min(1,n)) == "[") then
+       d = verify(t, "[")
+       if (d == 0) return
+       comp = t(d:)
+       if (len(comp) == 1) then
+          ok = index("IJDFBSCZ", comp) > 0
+       else if (comp(1:1) == "L" .and. comp(len(comp):) == ";" .and. len(comp) > 2) then
+          ok = known_class_name(comp(2:len(comp)-1))
+       end if
+       if (ok) k = t
+       return
+    end if
+    slash = index(t, "/", back=.true.)
+    if (slash < 2 .or. slash /= n - 1) return
+    if (index("123456789", t(n:n)) == 0) return
+    comp = t(1:slash-1)
+    select case (comp)
+    case ("int");     full = "I"
+    case ("long");    full = "J"
+    case ("double");  full = "D"
+    case ("float");   full = "F"
+    case ("byte");    full = "B"
+    case ("short");   full = "S"
+    case ("char");    full = "C"
+    case ("boolean"); full = "Z"
+    case default
+       if (.not. known_class_name(comp)) then
+          k = comp
+          if (index(comp, ".") == 0) k = "Unable to resolve component classname: " // comp
+          return
+       end if
+       call class_key(comp, k=full)
+       full = "L" // full // ";"
+    end select
+    k = repeat("[", index("123456789", t(n:n))) // full
+    ok = .true.
+  end subroutine array_class_key
+
   ! Whether a name is a class this runtime KNOWS -- what
   ! Compiler.maybeClass answers by asking the class loader, and what
   ! (resolve (quote NonExistentClass.Name)) must answer nil for. A row
@@ -11543,6 +11598,7 @@ contains
          type(gc_value) :: sym2, nsv, tgt
          character(len=:), allocatable :: t
          integer :: slash
+         logical :: ok_arr
          sym2 = strip_meta(gcv_nth(args, n - 1))
          nsv = gc_nil()
          if (n >= 2) nsv = strip_meta(gcv_nth(args, 0))
@@ -11558,7 +11614,13 @@ contains
                t = dlt_1
             end block
             slash = index(t, "/")
-            if (slash > 1 .and. slash < len(t)) then
+            call array_class_key(t, dlt_1, ok_arr)
+            if (ok_arr) then
+               out = gc_class(dlt_1, [vs_get(vst, base + 1)])
+            else if (len(dlt_1) > 0) then
+               call raise_class("ClassNotFoundException", dlt_1, &
+                    [vs_get(vst, base + 1)])
+            else if (slash > 1 .and. slash < len(t)) then
                tgt = alias_in(vs_get(vst, base + 2), t(1:slash-1), [vs_get(vst, base + 1)])
                if (gc_kind(tgt) /= OBJ_NS) tgt = gcn_find(t(1:slash-1))
                if (gc_kind(tgt) == OBJ_NS) then

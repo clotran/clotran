@@ -1802,3 +1802,22 @@ as failures in its scorecard.
 
 **Removal**: one helper taking a key to its signed low 32 bits, called
 from each of the vector key paths above. Not planned.
+
+## 62. An array of references does not know its element class
+
+Every array of references is an `Object[]` here: a `value`-kind native
+array, whose class is `[Ljava.lang.Object;` whatever it was made for.
+
+    [(class (make-array String 1)) (class (into-array ["a"]))
+     (instance? (Class/forName "[Ljava.lang.String;") (make-array String 1))]
+    ;; clj     [java.lang.String/1 java.lang.String/1 true]
+    ;; clotran [java.lang.Object/1 java.lang.Object/1 false]
+
+Primitive arrays are not affected (`int/1`, `double/2` are right), and
+the array class SYMBOLS resolve: `String/1`, `int/2` and `[I` name
+the classes they name in clj.
+
+**Removal**: an element class beside `elem_kind` in NativeArray's
+registry, set by `make-array` and `into-array` (from its type argument,
+or the first element's class as `into-array` infers it), copied by
+`aclone`, and read by `array_class_name`. Not planned yet.
