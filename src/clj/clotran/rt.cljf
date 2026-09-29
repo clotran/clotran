@@ -135,6 +135,17 @@
 
 ;;; ---- small members the language suite named ---------------------------
 
+(defn map-equals
+  "APersistentMap.mapEquals, behind a record's .equals: the same object,
+  or a map of the same size holding every key of m with an equal value.
+  Values compare with = where Java's is Util.equals, which differs only
+  on mixed numeric types (1 against 1N)."
+  [m o]
+  (or (identical? m o)
+      (and (map? o)
+           (= (count m) (count o))
+           (every? (fn [[k v]] (and (contains? o k) (= v (get o k)))) m))))
+
 (defn req
   "RT.req, behind :keys! destructuring: the value, or an error when the
   key is absent."

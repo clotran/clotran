@@ -1737,3 +1737,28 @@ in a once-only fn, as locals clearing already does for locals. The JVM
 behaviour is an optimisation leaking through (the retry's error is an
 NPE about the compiler's own field), so matching it buys nothing a
 program could want; not done.
+
+## 60. A deftype's own equals and hasheq are not consulted
+
+A deftype that defines `equals` (Object) or `hasheq` (IHashEq) is still
+compared and hashed by identity: `=` does not call its `equals`, and a
+map or set does not call its `hasheq`.
+
+    (deftype VP [x] Object (equals [_ o] (and (instance? VP o) (= x (.-x o))))
+                    clojure.lang.IHashEq (hasheq [_] (hash x)))
+    [(= (VP. 1) (VP. 1)) (count (set [(VP. 1) (VP. 1)]))]
+    ;; clj: [true 1]    clotran: [false 2]
+
+Records are NOT affected (2026-09-29): a record is equal by type and
+values and hashes as emit-defrecord's hasheq does -- the class symbol's
+hash xor the unordered hash of its map view -- computed in Fortran from
+the field names (Eval.f90 `gce_coll_hash`, `gce_coll_equal`). Before
+that, records were identity-hashed and identity-compared inside maps
+and sets: a set of twenty equal records had twenty members, and a map
+keyed by a record could not find it again.
+
+**Removal**: call the instance's own methods from gce_coll_equal and
+gce_coll_hash. They run inside a map insert, where an allocation was
+unsafe while a callee could drop its caller's roots; with
+scripts/root-check in the gate that is now checkable, but every caller
+of gc_hash and gc_equal would have to be audited first. Not done.

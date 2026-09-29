@@ -743,7 +743,7 @@ module GC
   public :: gc_set_coll_ops
   ! The hash mixer, so the collection walkers installed through
   ! gc_set_coll_ops finish with the same one every other hash uses.
-  public :: mix32, m3_mix_coll, m3_ordered_step, m3_add, gc_utf16
+  public :: mix32, m3_mix_coll, m3_ordered_step, m3_add, gc_utf16, gc_text_hasheq
   public :: gc_obj, gc_vec, gc_cons
   public :: gc_text, gc_slot, gc_set_slot, gc_kind
   public :: gc_i1, gc_i2, gc_set_i1, gc_set_i2
@@ -3169,8 +3169,8 @@ contains
        ! and it made (get {[1] 2} [1]) nil: the lookup key is a
        ! different object from the stored one, however equal.
        if (associated(obj_coll_equal) .and. &
-            is_structural_kind(gc_kind(a)) .and. &
-            is_structural_kind(gc_kind(b))) then
+            ((is_structural_kind(gc_kind(a)) .and. is_structural_kind(gc_kind(b))) .or. &
+             (gc_kind(a) == OBJ_INST .and. gc_kind(b) == OBJ_INST))) then
           eq = obj_coll_equal(a, b)
        else
           eq = (a%ref == b%ref)
@@ -3257,7 +3257,9 @@ contains
     case default
        ! ...and hashing has to follow equality exactly, or a trie
        ! stores the same key twice and loses lookups.
-       if (associated(obj_coll_hash) .and. is_structural_kind(gc_kind(v))) then
+       ! an instance too: a RECORD hashes by value (Eval's gce_coll_hash),
+       ! anything else by identity there
+       if (associated(obj_coll_hash) .and. (is_structural_kind(gc_kind(v)) .or. gc_kind(v) == OBJ_INST)) then
           h = obj_coll_hash(v)
        else
           h = mix32(ieor(mix32(v%ref), tag_salt(v%tag)))
@@ -3439,6 +3441,17 @@ contains
 
   ! Symbol.hasheq over its text: the name by Murmur3, the namespace by
   ! String.hashCode
+  ! The hash of the symbol -- or, keyword true, the keyword -- whose
+  ! name is t, computed from the text with nothing allocated: a
+  ! record's field names hashed as the keys (:a) of its map view.
+  function gc_text_hasheq(t, keyword) result(h)
+    character(len=*), intent(in) :: t
+    logical, intent(in) :: keyword
+    integer :: h
+    h = sym_hasheq(t)
+    if (keyword) h = wrap32(int(h, 8) - 1640531527_8)   ! + 0x9e3779b9, as gc_hash
+  end function gc_text_hasheq
+
   function sym_hasheq(t) result(h)
     character(len=*), intent(in) :: t
     integer :: h, sl

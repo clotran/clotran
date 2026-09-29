@@ -2412,6 +2412,53 @@ contains
     call vs_leave(vst, base)
   end function rest_args
 
+  ! The 0-based index of a record's DECLARED field named by keyword k,
+  ! or -1: -1 too when inst is not a record. A record is the type whose
+  ! fields end __meta __extmap __hash __hasheq (emit-defrecord adds
+  ! them); the declared ones are those before, and a hidden one is never
+  ! a key (it is looked up in the __extmap). Read by inst_lookup and by
+  ! assoc, which answer for a declared field what defrecord's own valAt
+  ! and assoc answer, without the nested call of the method.
+  ! How many fields a RECORD declares -- the position of its __meta,
+  ! which __extmap follows -- or -1 when inst is not a record.
+  integer function record_meta_index(inst) result(m)
+    type(gc_value), intent(in) :: inst
+    type(gc_value) :: fields, f
+    integer :: i
+    m = -1
+    if (gc_kind(inst) /= OBJ_INST) return
+    fields = gc_slot(gc_slot(inst, 1), 2)
+    do i = 0, gcv_count(fields) - 2
+       f = strip_meta(gcv_nth(fields, i))
+       if (f%tag /= GCT_SYM) cycle
+       if (gc_ref_is(f%ref, "__meta")) then
+          f = strip_meta(gcv_nth(fields, i + 1))
+          if (f%tag == GCT_SYM) then
+             if (gc_ref_is(f%ref, "__extmap")) m = i
+          end if
+          return
+       end if
+    end do
+  end function record_meta_index
+
+  integer function record_field_index(inst, k) result(idx)
+    type(gc_value), intent(in) :: inst, k
+    type(gc_value) :: fields, f
+    integer :: i, m
+    idx = -1
+    if (k%tag /= GCT_KEY .or. gc_kind(inst) /= OBJ_INST) return
+    fields = gc_slot(gc_slot(inst, 1), 2)
+    m = record_meta_index(inst)
+    do i = 0, m - 1
+       f = strip_meta(gcv_nth(fields, i))
+       if (f%tag /= GCT_SYM) cycle
+       if (gc_ref_same(f%ref, k%ref)) then
+          idx = i
+          return
+       end if
+    end do
+  end function record_field_index
+
   ! (get inst k) and (get inst k not-found) through the instance's own
   ! valAt. Both arities are real -- core_deftype defines valAt for each
   ! -- and the three-argument one is what makes a record distinguish a
@@ -13591,7 +13638,26 @@ contains
     ka = gc_kind(a)
     kb = gc_kind(b)
     eq = .false.
-    if (ka == OBJ_SET .and. kb == OBJ_SET) then
+    if (ka == OBJ_INST .and. kb == OBJ_INST) then
+       ! A RECORD is its type and its values -- emit-defrecord's equiv:
+       ! the same class, each declared field =, the __extmap = -- and
+       ! metadata is not part of it. Any other instance is itself.
+       eq = a%ref == b%ref
+       if (eq) return
+       block
+         type(gc_value) :: ta, tb
+         integer :: m, i
+         ta = gc_slot(a, 1)
+         tb = gc_slot(b, 1)
+         if (ta%ref /= tb%ref) return
+         m = record_meta_index(a)
+         if (m < 0) return
+         do i = 0, m - 1
+            if (.not. deep_equal(gcv_nth(gc_slot(a, 2), i), gcv_nth(gc_slot(b, 2), i), [a, b])) return
+         end do
+         eq = deep_equal(gcv_nth(gc_slot(a, 2), m + 1), gcv_nth(gc_slot(b, 2), m + 1), [a, b])
+       end block
+    else if (ka == OBJ_SET .and. kb == OBJ_SET) then
        eq = deep_equal(a, b, [a, b])
     else if ((ka == OBJ_MAP .or. ka == OBJ_HAMT) .and. (kb == OBJ_MAP .or. kb == OBJ_HAMT)) then
        eq = deep_equal(a, b, [a, b])
@@ -13690,6 +13756,45 @@ contains
           h = m3_add(h, gc_hash(ks(i)))
        end do
        h = m3_mix_coll(h, size(ks))
+    case (OBJ_INST)
+       ! A RECORD, as emit-defrecord's hasheq: (bit-xor (hash classname)
+       ! (APersistentMap/mapHasheq this)) -- the class symbol's hash, and
+       ! the unordered hash of the map view, each declared field an
+       ! entry [:field value] and then the __extmap's entries. Computed
+       ! here from the field NAMES, allocating nothing: calling the
+       ! record's own method would allocate in the middle of a map
+       ! insert. Any other instance hashes by identity.
+       block
+         type(gc_value) :: fields, f, ext
+         integer :: m
+         character(len=:), allocatable :: nm
+         m = record_meta_index(v)
+         if (m < 0) then
+            h = mix32(ieor(v%ref, v%tag))
+         else
+            fields = gc_slot(gc_slot(v, 1), 2)
+            h = 0
+            do i = 0, m - 1
+               f = strip_meta(gcv_nth(fields, i))
+               call gc_ref_text(f%ref, s=nm)
+               h = m3_add(h, m3_mix_coll(m3_ordered_step(m3_ordered_step(1, gc_text_hasheq(nm, .true.)), &
+                    gc_hash(gcv_nth(gc_slot(v, 2), i))), 2))
+            end do
+            n = m
+            ext = gcv_nth(gc_slot(v, 2), m + 1)
+            if (gca_is(ext)) then
+               call gca_entries(ext, ks, vs_)
+               do i = 1, size(ks)
+                  h = m3_add(h, m3_mix_coll(m3_ordered_step(m3_ordered_step(1, gc_hash(ks(i))), gc_hash(vs_(i))), 2))
+               end do
+               n = n + size(ks)
+            end if
+            h = m3_mix_coll(h, n)
+            f = gc_slot(gc_slot(v, 1), 1)
+            call gc_ref_text(f%ref, s=nm)
+            h = ieor(gc_text_hasheq(nm, .false.), h)
+         end if
+       end block
     case default
        h = mix32(ieor(v%ref, v%tag))
     end select

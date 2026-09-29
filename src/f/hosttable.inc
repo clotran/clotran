@@ -22,7 +22,7 @@
        HK_NAN = -5, HK_NIL = -6, HK_EMPTYMAP = -7, HK_SPECIALS = -8, HK_TYPE = -9, &
        HK_TRUE = -10, HK_FALSE = -11, HK_LINEBOX = -12, HK_SELFKEY = -13
 
-  type(hm), parameter :: HOST_STATICS_1(93) = [ &
+  type(hm), parameter :: HOST_STATICS_1(95) = [ &
   ! PersistentList.creator is a static IFn that builds a list from its arguments.
        hm("clojure.lang.PersistentList", "creator", B_LIST, "list"), &
   ! core.clj's own make-array, aget, aset and the aset-int family are
@@ -70,6 +70,11 @@
        hm("clojure.lang.Util", "hashCombine", B_HASHCOMB, "hash-combine"), &
        hm("clojure.lang.Murmur3", "hashOrdered", B_HASHORD, "hash-ordered-coll"), &
        hm("clojure.lang.Murmur3", "hashUnordered", B_HASHUNORD, "hash-unordered-coll"), &
+  ! a record's generated hasheq is (bit-xor type-hash (APersistentMap/mapHasheq this)): the unordered
+  ! hash of its map view, which is hashUnordered over it
+       hm("clojure.lang.APersistentMap", "mapHasheq", B_HASHUNORD, "hash-unordered-coll"), &
+  ! and its .equals is (APersistentMap/mapEquals this o): clotran.rt's map-equals
+       hm("clojure.lang.APersistentMap", "mapEquals", B_RTFN, "map-equals"), &
   ! Util.classOf and .getClass are `class`: the canonical class keyword
   ! (class_name_of). clotran-type, the internal tag, is host.clj's.
        hm("clojure.lang.Util", "classOf", B_CLASSOF, "clotran-class"), &
@@ -408,7 +413,7 @@
        hm("clojure.lang.Numbers", "longs", B_IDENTITY, "identity"), &
        hm("clojure.lang.Numbers", "doubles", B_IDENTITY, "identity"), &
        hm("clojure.lang.Util", "arrayTypeToSymbol", B_ARRAYTYPESYM, "clotran-array-type-symbol") ]
-  type(hm), parameter :: HOST_STATICS(316) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
+  type(hm), parameter :: HOST_STATICS(318) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
   type(hm), parameter :: HOST_METHODS_1(97) = [ &
   ! Instance members. The target becomes the first argument, which is all

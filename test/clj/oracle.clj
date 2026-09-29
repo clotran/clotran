@@ -2802,3 +2802,14 @@
 (defrecord KR [a])
 [(:a {:a 1}) (:z {:a 1}) (:a nil) (:a #{:a}) (:a (sorted-map :a 3)) (:a (->KR 5)) (:q (assoc (->KR 5) :q 6)) (:a (transient {:a 7})) (:a [1 2]) (:a "s") (:a (with-meta {:a 9} {:m 1})) (map :a [{:a 1} nil {:b 2}]) (try (:a) (catch clojure.lang.ArityException e :arity))]
 [(persistent! (assoc! (transient {}) :a 1)) (persistent! (reduce (fn [m i] (assoc! m i (* i i))) (transient {}) (range 20))) (frequencies [1 2 1 3 1]) (group-by odd? (range 6)) (let [t (transient {:a 1})] (persistent! t) (try (assoc! t :b 2) (catch Throwable e (class e)))) (persistent! (assoc! (transient {:a nil}) :a 1 :b 2))]
+
+;; records by value in maps and sets, their hash the JVM's, assoc on a
+;; declared field without the method (record_field_index)
+(defrecord RA [a b])
+(def r (with-meta (->RA 1 2) {:m 1}))
+[(assoc r :a 9) (meta (assoc r :a 9)) (assoc r :c 3) (:c (assoc r :c 3)) (assoc (assoc r :c 3) :b 5) (= (assoc r :a 1) r) (= (hash (assoc r :a 7)) (hash (->RA 7 2))) (class (assoc r :a 9)) (record? (assoc r :b nil)) (assoc r :user/a 1) (dissoc (assoc r :a 9) :a) (update r :a inc) (assoc-in {:x r} [:x :b] 0) (into {} (assoc r :a 3))]
+(let [big (into {} (map (fn [i] [(->RA i 0) i]) (range 20))) small {(->RA 5 0) 5} s (set (map #(->RA % 0) (range 20)))] [(get big (->RA 5 0)) (get small (->RA 5 0)) (contains? s (->RA 7 0)) (count (set [(->RA 1 1) (->RA 1 1)])) (count (into #{} (map (fn [_] (->RA 1 1)) (range 20))))])
+[(hash (->RA 7 2)) (hash (assoc (->RA 1 2) :a 7)) (hash (with-meta (->RA 7 2) {:m 1})) (.equals (->RA 7 2) (->RA 7 2))]
+
+(expect-diff "DEVIATIONS 60: a deftype's own equals and hasheq are not consulted")
+(do (deftype VP [x] Object (equals [_ o] (and (instance? VP o) (= x (.-x o)))) (hashCode [_] (hash x)) clojure.lang.IHashEq (hasheq [_] (hash x))) [(= (VP. 1) (VP. 1)) (count (set [(VP. 1) (VP. 1)]))])
