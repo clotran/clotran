@@ -6823,7 +6823,9 @@ contains
       end if
       x = x0
       f = strip_meta(vs_get(vst, base + 2))
-      if (gc_kind(f) == OBJ_BUILTIN .or. gc_kind(f) == OBJ_COMPILED) then
+      ! every fn from two stack slots now: an interpreted one too is
+      ! entered through its call table with no vector (gce_apply_slots)
+      if (gc_kind(f) == OBJ_BUILTIN .or. gc_kind(f) == OBJ_COMPILED .or. gc_kind(f) == OBJ_CLOSURE) then
          ! from two stack slots: a compiled fn is entered from them with no
          ! vector at all, a builtin keeping none gets a spare (apply_slots)
          block
@@ -6986,7 +6988,7 @@ contains
     out = gc_nil()
     fn = strip_meta(fn0)
     if (gcn_is_var(fn)) fn = gcn_var_value(fn)
-    base = vs_enter(vst, 2)
+    base = vs_enter(vst, 3)
     ! a fn that only wraps a builtin, called with its arity: the builtin
     ! is the callee (analyze.inc wrapper_builtin)
     av = wrapper_of(fn, nargs)
@@ -7006,6 +7008,43 @@ contains
        out = vs_get(vst, base + 2)
        call vs_leave(vst, base)
        return
+    end if
+    ! AN INTERPRETED FN'S FIXED ARITY, through its call table: the frame
+    ! filled straight from the slots and the body run -- invoke_closure
+    ! without the argument vector bind_closure takes, which a native
+    ! reduce built for every element (a callback cost 460 ns over a
+    ! builtin's)
+    if (gc_kind(vs_get(vst, base + 1)) == OBJ_CLOSURE) then
+       av = call_table_of(vs_get(vst, base + 1))
+       if (av%tag == GCT_VEC) then
+          if (nargs <= ct_int(av, 4)) then
+             if (ct_int(av, 5 + 4 * nargs) >= 0) then
+                call vs_set(vst, base + 2, av)
+                block
+                  type(eval_ctx), pointer :: tctx
+                  type(gc_value) :: frame, body
+                  integer :: p, start
+                  tctx => ctx_self()
+                  p = 5 + 4 * nargs
+                  start = ct_int(vs_get(vst, base + 2), p)
+                  frame = ct_frame(vs_get(vst, base + 1), vs_get(vst, base + 2), [gc_value ::])
+                  call vs_set(vst, base + 3, frame)
+                  do j = 0, nargs - 1
+                     call reg_set(vs_get(vst, base + 3), start + j, vs_get(vst, argbase + j + 1))
+                  end do
+                  body = ct_body(vs_get(vst, base + 2), p)
+                  call push_frame(tctx, vs_get(vst, base + 1), tctx%pending_site)
+                  tctx%pending_site = 0
+                  if (.not. tctx%has_error) then
+                     out = run(body, vs_get(vst, base + 3), ior(KF_FNBODY, KF_RESTART), body, vs_get(vst, base + 1))
+                     call give_frame(vs_get(vst, base + 3))
+                  end if
+                end block
+                call vs_leave(vst, base)
+                return
+             end if
+          end if
+       end if
     end if
     ! A NUMERIC BUILTIN reuses the interpreter's scratch vector and
     ! allocates nothing, by the same rule exec.inc's N_CALL uses
@@ -17695,6 +17734,22 @@ contains
        out = gc_slot(t, 1)
        call vs_leave(vst, base)
        return
+    end if
+    ! (assoc! m k v) on a map, the common case -- frequencies, group-by,
+    ! into {} -- is the map's assoc on what is inside, directly: the road
+    ! below copies the argument vector to put the value in place of the
+    ! box and dispatches through the assoc builtin
+    if (id == B_ASSOC .and. n == 3 .and. gc_i1(t) == 1) then
+       if (gca_is(gc_slot(t, 1))) then
+          out = gca_assoc(gc_slot(t, 1), gcv_nth(vs_get(vst, base + 1), 1), gcv_nth(vs_get(vst, base + 1), 2), &
+               [vs_get(vst, base + 1)])
+          if (.not. tctx%has_error) then
+             call gc_set_slot(gcv_nth(vs_get(vst, base + 1), 0), 1, out)
+             out = gcv_nth(vs_get(vst, base + 1), 0)
+          end if
+          call vs_leave(vst, base)
+          return
+       end if
     end if
     ! the same arguments with the value inside in place of the box
     av = gcv_assoc(vs_get(vst, base + 1), 0, gc_slot(gcv_nth(vs_get(vst, base + 1), 0), 1), [vs_get(vst, base + 1)])

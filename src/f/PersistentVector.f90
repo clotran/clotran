@@ -86,36 +86,32 @@ contains
     integer, intent(in) :: shift, i
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, child, sub
-    type(gc_value), allocatable :: r2(:)
-    integer :: idx, k
+    integer :: idx, base
 
-    ! Root the caller's roots plus the node and value we are handed:
-    ! a freshly built node is live but cannot be in the caller's list,
-    ! which is the same hazard gc_obj's own argument rooting covers.
-    allocate(r2(size(roots) + 2))
-    r2(1:size(roots)) = roots
-    r2(size(roots) + 1) = node
-    r2(size(roots) + 2) = x
-
-    out = gc_vec(VBRANCH, r2)
-    do k = 1, VBRANCH
-       call gc_vec_set(out, k, gc_vec_get(node, k))
-    end do
+    ! The node and value on the value stack, the caller's roots passed
+    ! on as they are: root lists grown per level were heap arrays, two
+    ! per level of every assoc and conj.
+    base = vs_enter(3)
+    call vs_set(base + 1, node)
+    call vs_set(base + 2, x)
+    ! an unset child (nil) becomes a fresh node, as the rest of the
+    ! trie expects
+    if (node%tag == GCT_VEC) then
+       out = gc_vec_clone(node, roots)
+    else
+       out = gc_vec(VBRANCH, roots)
+    end if
+    call vs_set(base + 3, out)
 
     if (shift == 0) then
        call gc_vec_set(out, iand(i, VMASK) + 1, x)
     else
        idx = iand(ishft(i, -shift), VMASK) + 1
        child = gc_vec_get(out, idx)
-       block
-         type(gc_value), allocatable :: r3(:)
-         allocate(r3(size(r2) + 1))
-         r3(1:size(r2)) = r2
-         r3(size(r2) + 1) = out
-         sub = node_assoc(child, shift - VBITS, i, x, r3)
-       end block
+       sub = node_assoc(child, shift - VBITS, i, x, roots)
        call gc_vec_set(out, idx, sub)
     end if
+    call vs_leave(base)
   end function node_assoc
 
   ! Appends x, growing the trie by a level once the current one fills.

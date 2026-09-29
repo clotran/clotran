@@ -747,7 +747,7 @@ module GC
   public :: gc_obj, gc_vec, gc_cons
   public :: gc_text, gc_slot, gc_set_slot, gc_kind
   public :: gc_i1, gc_i2, gc_set_i1, gc_set_i2
-  public :: gc_vec_len, gc_vec_get, gc_vec_set, gc_vec_word, gc_reg, gc_reg_set
+  public :: gc_vec_len, gc_vec_get, gc_vec_set, gc_vec_word, gc_reg, gc_reg_set, gc_vec_clone
   public :: gc_car, gc_cdr, gc_set_car, gc_set_cdr
   public :: gc_live_count, gc_obj_capacity, gc_check_heap
   public :: gc_global_new, gc_global_set, gc_global_get, gc_global_count
@@ -2614,6 +2614,27 @@ contains
        w(k) = int(vec_store(o + k - 1)%ival)
     end do
   end subroutine gc_vec_word
+
+  ! A new vector holding what src holds, copied as one block: the node
+  ! a persistent trie path-copies on every assoc, 32 slots through a
+  ! checked accessor and a barrier test each. The copy is young -- made
+  ! just now, nothing allocated since -- so no write barrier is owed.
+  function gc_vec_clone(src, roots) result(v)
+    type(gc_value), intent(in) :: src
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: v
+    integer :: n, o1, o2, k
+    n = gc_vec_len(src)
+    v = gc_vec(n, [roots, src])
+    if (n == 0) return
+    o1 = vec_pool(src%ref)%off
+    o2 = vec_pool(v%ref)%off
+    ! element by element: two sections of one array are a possible
+    ! overlap to the compiler, and it copied through a temporary
+    do k = 0, n - 1
+       vec_store(o2 + k) = vec_store(o1 + k)
+    end do
+  end function gc_vec_clone
 
   ! Element i of a raw vector with no checks: a flat body's registers,
   ! every index fixed when it was compiled against the frame's size.

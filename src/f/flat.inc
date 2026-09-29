@@ -938,6 +938,24 @@
           fnv = strip_meta(v)
           if (gcn_is_var(fnv)) fnv = gcn_var_value(fnv)
           call vs_set(vst, b + 3, fnv)
+          ! (:k x): what apply's keyword road does -- a record's own
+          ! lookup, else coll_get -- from the register, where the road
+          ! through apply built an argument vector first
+          if (fnv%tag == GCT_KEY .and. n == 1) then
+             v = reg_get(fr, w(4))
+             argv = strip_meta(v)
+             ok = .false.
+             if (gc_kind(argv) == OBJ_INST) then
+                newframe = inst_lookup(argv, fnv, .false., gc_nil(), ok)
+             end if
+             if (.not. ok) newframe = coll_get(v, fnv)
+             call reg_set(fr, w(4), gc_nil())
+             call vs_set(vst, b + 3, gc_nil())
+             if (tctx%has_error) exit
+             call reg_set(fr, w(2), newframe)
+             pc = pc + FW
+             cycle
+          end if
           ! an interpreted fn's fixed arity, through its call table
           if (gc_kind(fnv) == OBJ_CLOSURE) then
              ar = call_table_of(fnv)

@@ -2796,3 +2796,9 @@
 ;; keep the counted road
 [(re-seq #"\d+" "a1 22 333 b") (re-seq #"(\w)(\d)" "a1 b2 c3") (re-find #"é(.)" "xxéy") (re-seq #"." "aé😀b") (re-find #"(x)?y" "y") (let [m (re-matcher #"(\d)(\d)?" "1 23")] [(re-find m) (re-find m) (re-find m)]) (re-matches #"(a)(b)" "ab") (clojure.string/replace "a1b22" #"\d+" "#") (clojure.string/split "a,b,,c" #",") (count (re-seq #"\d+" (clojure.string/join " " (range 1000))))]
 [(clojure.string/replace "a1b22c333" #"(\d)(\d)?" "<$1|$2>") (clojure.string/replace-first "aXbXc" #"X" "-") (clojure.string/replace "abc" #"" "-") (clojure.string/replace "日本語" #"本" "x") (clojure.string/split "a1b2c3" #"\d") (clojure.string/split "a1b2c3" #"\d" 2) (clojure.string/split "é,ü,,x" #",") (let [m (re-matcher #"(\d)" "a1b2") sb (StringBuffer.)] (while (.find m) (.appendReplacement m sb "<$1>")) (.appendTail m sb) (str sb)) (clojure.string/replace "x.y" #"\." "\\$")]
+
+;; (:k x) from the register (flat.inc), and assoc! on a transient map
+;; straight to the map's assoc (tmap_op)
+(defrecord KR [a])
+[(:a {:a 1}) (:z {:a 1}) (:a nil) (:a #{:a}) (:a (sorted-map :a 3)) (:a (->KR 5)) (:q (assoc (->KR 5) :q 6)) (:a (transient {:a 7})) (:a [1 2]) (:a "s") (:a (with-meta {:a 9} {:m 1})) (map :a [{:a 1} nil {:b 2}]) (try (:a) (catch clojure.lang.ArityException e :arity))]
+[(persistent! (assoc! (transient {}) :a 1)) (persistent! (reduce (fn [m i] (assoc! m i (* i i))) (transient {}) (range 20))) (frequencies [1 2 1 3 1]) (group-by odd? (range 6)) (let [t (transient {:a 1})] (persistent! t) (try (assoc! t :b 2) (catch Throwable e (class e)))) (persistent! (assoc! (transient {:a nil}) :a 1 :b 2))]

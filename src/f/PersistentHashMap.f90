@@ -35,16 +35,21 @@ module PersistentHashMap
 
 contains
 
+  ! Rooting, throughout this module: a procedure's own values go on the
+  ! value stack (vs_enter), and the caller's `roots` are passed on as
+  ! they are. Root lists grown with with() -- an allocatable array made
+  ! one element longer and copied, four of them per trie level -- were
+  ! most of what an assoc cost (2.3 us into a 50000-entry map).
   function gch_empty(roots) result(t)
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: t, root
+    integer :: base
     root = gc_vec(HBRANCH, roots)
-    block
-      type(gc_value), allocatable :: r2(:)
-      r2 = with(roots, root)
-      t = gc_obj(OBJ_HAMT, [root], r2)
-    end block
+    base = vs_enter(1)
+    call vs_set(base + 1, root)
+    t = gc_obj(OBJ_HAMT, [root], roots)
     call gc_set_i1(t, 0)
+    call vs_leave(base)
   end function gch_empty
 
   function gch_is(t) result(yes)
@@ -149,26 +154,26 @@ contains
     type(gc_value), intent(in) :: t, k, v
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, new_root
-    type(gc_value), allocatable :: r2(:)
     logical :: added
+    integer :: base
 
     out = gc_nil()
     if (.not. gch_is(t)) return
 
-    r2 = with(with(with(roots, t), k), v)
+    base = vs_enter(4)
+    call vs_set(base + 1, t)
+    call vs_set(base + 2, k)
+    call vs_set(base + 3, v)
     added = .false.
-    new_root = node_assoc(gc_slot(t, 1), gc_hash(k), 0, k, v, added, r2)
-
-    block
-      type(gc_value), allocatable :: r3(:)
-      r3 = with(r2, new_root)
-      out = gc_obj(OBJ_HAMT, [new_root], r3)
-    end block
+    new_root = node_assoc(gc_slot(t, 1), gc_hash(k), 0, k, v, added, roots)
+    call vs_set(base + 4, new_root)
+    out = gc_obj(OBJ_HAMT, [new_root], roots)
     if (added) then
        call gc_set_i1(out, gc_i1(t) + 1)
     else
        call gc_set_i1(out, gc_i1(t))
     end if
+    call vs_leave(base)
   end function gch_assoc
 
   ! Path-copies the one node on the way to k's slot and shares every
@@ -181,15 +186,14 @@ contains
     logical, intent(inout) :: added
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, slot, leaf, sub
-    type(gc_value), allocatable :: r2(:)
-    integer :: idx, i
+    integer :: idx, i, base
 
-    r2 = with(with(with(roots, node), k), v)
-    out = gc_vec(HBRANCH, r2)
-    do i = 1, HBRANCH
-       call gc_vec_set(out, i, gc_vec_get(node, i))
-    end do
-    r2 = with(r2, out)
+    base = vs_enter(4)
+    call vs_set(base + 1, node)
+    call vs_set(base + 2, k)
+    call vs_set(base + 3, v)
+    out = gc_vec_clone(node, roots)
+    call vs_set(base + 4, out)
 
     idx = iand(ishft(h, -shift), HMASK) + 1
     slot = gc_vec_get(out, idx)
@@ -198,28 +202,31 @@ contains
     case (OBJ_HAMT_LEAF)
        if (gc_equal(gc_slot(slot, 1), k)) then
           ! Same key: replace the value, count unchanged.
-          leaf = gc_obj(OBJ_HAMT_LEAF, [k, v], r2)
+          leaf = gc_obj(OBJ_HAMT_LEAF, [k, v], roots)
           call gc_vec_set(out, idx, leaf)
        else
-          call gc_vec_set(out, idx, split(slot, h, shift, k, v, r2))
+          sub = split(slot, h, shift, k, v, roots)
+          call gc_vec_set(out, idx, sub)
           added = .true.
        end if
     case (OBJ_MAP)
        ! A bucket already: adding to it is an array-map assoc, and the
        ! count only grows if the key was not already in there.
        if (.not. gcm_contains(slot, k)) added = .true.
-       call gc_vec_set(out, idx, gcm_assoc(slot, k, v, r2))
+       sub = gcm_assoc(slot, k, v, roots)
+       call gc_vec_set(out, idx, sub)
     case default
        if (slot%tag == GCT_VEC) then
-          sub = node_assoc(slot, h, shift + HBITS, k, v, added, r2)
+          sub = node_assoc(slot, h, shift + HBITS, k, v, added, roots)
           call gc_vec_set(out, idx, sub)
        else
           ! Empty: a fresh leaf.
-          leaf = gc_obj(OBJ_HAMT_LEAF, [k, v], r2)
+          leaf = gc_obj(OBJ_HAMT_LEAF, [k, v], roots)
           call gc_vec_set(out, idx, leaf)
           added = .true.
        end if
     end select
+    call vs_leave(base)
   end function node_assoc
 
   ! Two different keys wanting the same slot. Push both down a level
@@ -230,29 +237,36 @@ contains
     integer, intent(in) :: h, shift
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, ok_, ov
-    type(gc_value), allocatable :: r2(:)
-    integer :: oh
+    integer :: oh, base
     logical :: ignored
 
+    base = vs_enter(4)
+    call vs_set(base + 1, old_leaf)
+    call vs_set(base + 2, k)
+    call vs_set(base + 3, v)
     ok_ = gc_slot(old_leaf, 1)
     ov = gc_slot(old_leaf, 2)
     oh = gc_hash(ok_)
-    r2 = with(with(with(with(roots, old_leaf), k), v), ok_)
 
     if (oh == h .or. shift >= HMAX_SHIFT) then
        ! True collision: a bucket, which is just a tiny linear map.
-       out = gcm_empty(r2)
-       out = gcm_assoc(out, ok_, ov, with(r2, out))
-       out = gcm_assoc(out, k, v, with(r2, out))
+       out = gcm_empty(roots)
+       call vs_set(base + 4, out)
+       out = gcm_assoc(out, ok_, ov, roots)
+       call vs_set(base + 4, out)
+       out = gcm_assoc(out, k, v, roots)
+       call vs_leave(base)
        return
     end if
 
-    out = gc_vec(HBRANCH, r2)
-    r2 = with(r2, out)
+    out = gc_vec(HBRANCH, roots)
+    call vs_set(base + 4, out)
     ignored = .false.
-    out = node_assoc(out, oh, shift + HBITS, ok_, ov, ignored, r2)
+    out = node_assoc(out, oh, shift + HBITS, ok_, ov, ignored, roots)
+    call vs_set(base + 4, out)
     ignored = .false.
-    out = node_assoc(out, h, shift + HBITS, k, v, ignored, with(r2, out))
+    out = node_assoc(out, h, shift + HBITS, k, v, ignored, roots)
+    call vs_leave(base)
   end function split
 
   ! Removes k. Nodes are NOT collapsed when they empty out: an empty
@@ -266,24 +280,24 @@ contains
     type(gc_value), intent(in) :: t, k
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, new_root
-    type(gc_value), allocatable :: r2(:)
     logical :: removed
+    integer :: base
 
     out = t
     if (.not. gch_is(t)) return
     if (.not. gch_contains(t, k)) return
 
-    r2 = with(with(roots, t), k)
+    base = vs_enter(3)
+    call vs_set(base + 1, t)
+    call vs_set(base + 2, k)
     removed = .false.
-    new_root = node_dissoc(gc_slot(t, 1), gc_hash(k), 0, k, removed, r2)
-    if (.not. removed) return
-
-    block
-      type(gc_value), allocatable :: r3(:)
-      r3 = with(r2, new_root)
-      out = gc_obj(OBJ_HAMT, [new_root], r3)
-    end block
-    call gc_set_i1(out, gc_i1(t) - 1)
+    new_root = node_dissoc(gc_slot(t, 1), gc_hash(k), 0, k, removed, roots)
+    if (removed) then
+       call vs_set(base + 3, new_root)
+       out = gc_obj(OBJ_HAMT, [new_root], roots)
+       call gc_set_i1(out, gc_i1(t) - 1)
+    end if
+    call vs_leave(base)
   end function gch_dissoc
 
   recursive function node_dissoc(node, h, shift, k, removed, roots) result(out)
@@ -292,15 +306,13 @@ contains
     logical, intent(inout) :: removed
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, slot, sub
-    type(gc_value), allocatable :: r2(:)
-    integer :: idx, i
+    integer :: idx, i, base
 
-    r2 = with(with(roots, node), k)
-    out = gc_vec(HBRANCH, r2)
-    do i = 1, HBRANCH
-       call gc_vec_set(out, i, gc_vec_get(node, i))
-    end do
-    r2 = with(r2, out)
+    base = vs_enter(3)
+    call vs_set(base + 1, node)
+    call vs_set(base + 2, k)
+    out = gc_vec_clone(node, roots)
+    call vs_set(base + 3, out)
 
     idx = iand(ishft(h, -shift), HMASK) + 1
     slot = gc_vec_get(out, idx)
@@ -313,15 +325,17 @@ contains
        end if
     case (OBJ_MAP)
        if (gcm_contains(slot, k)) then
-          call gc_vec_set(out, idx, gcm_dissoc(slot, k, r2))
+          sub = gcm_dissoc(slot, k, roots)
+          call gc_vec_set(out, idx, sub)
           removed = .true.
        end if
     case default
        if (slot%tag == GCT_VEC) then
-          sub = node_dissoc(slot, h, shift + HBITS, k, removed, r2)
+          sub = node_dissoc(slot, h, shift + HBITS, k, removed, roots)
           call gc_vec_set(out, idx, sub)
        end if
     end select
+    call vs_leave(base)
   end function node_dissoc
 
   ! Every key/value pair, in trie order (which is hash order, i.e.
@@ -371,12 +385,5 @@ contains
 
   ! --- helpers ---
 
-  function with(roots, v) result(out)
-    type(gc_value), intent(in) :: roots(:), v
-    type(gc_value), allocatable :: out(:)
-    allocate(out(size(roots) + 1))
-    out(1:size(roots)) = roots
-    out(size(roots) + 1) = v
-  end function with
 
 end module PersistentHashMap
