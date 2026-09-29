@@ -3,7 +3,8 @@
   port, and every connection gets a thread of its own running an accept
   function -- repl by default -- with *in* and *out* bound to the
   connection. `nc localhost 5555` is then a prompt inside the program,
-  and so is Emacs's inf-clojure.
+  and so is Emacs's inf-clojure. With :accept clotran.server/io-prepl it
+  answers in data instead, one map a line, for editor plugins and programs.
 
   clotran's own, not clojure.core.server: that one is written against
   java.net and clojure.main, whose error reporting reads JVM stack traces.
@@ -101,3 +102,92 @@
     false))
 
 (defn stop-servers [] (doseq [n (keys @servers)] (stop-server n)))
+
+;;; ---- prepl: the same REPL, answering in data --------------------------
+;;
+;; clojure.core.server's contract, for editor plugins and programs: out-fn
+;; is handed {:tag :ret :val :ns :ms :form} for each evaluation (with
+;; :exception true and the error as Throwable->map data if it threw),
+;; {:tag :out :val} and {:tag :err :val} for what the evaluation printed,
+;; and {:tag :tap :val} for tap>. :repl/quit or the end of the stream
+;; ends it.
+
+;; A writer handing each finished line -- and whatever is left at a flush
+;; -- to f. Text with no newline waits for one, or for a flush, as it does
+;; in clj's PrintWriter-on: (print "a") alone sends no :out.
+(deftype FnWriter [f pending]
+  Object
+  (write [this x]
+    (let [s (if (integer? x) (str (char x)) (str x))]
+      (swap! pending str s)
+      (when (str/includes? s "\n") (.flush this))
+      nil))
+  (append [this x] (.write this x) this)
+  (flush [_]
+    (let [s @pending]
+      (reset! pending "")
+      (when (pos? (count s)) (f s))
+      nil))
+  (close [this] (.flush this)))
+
+(defn- ex->data [ex phase] (assoc (Throwable->map ex) :phase phase))
+
+(defn prepl
+  "Reads forms from in-reader (a line-numbering reader) and calls out-fn
+  with what each did, as data. :stdin, if given, is what *in* reads during
+  an evaluation."
+  [in-reader out-fn & {:keys [stdin]}]
+  (let [eof (Object.)
+        tapfn #(out-fn {:tag :tap :val %})
+        out (FnWriter. #(out-fn {:tag :out :val %}) (atom ""))
+        err (FnWriter. #(out-fn {:tag :err :val %}) (atom ""))]
+    (binding [*ns* (the-ns 'user) *1 nil *2 nil *3 nil *e nil
+              *in* (or stdin in-reader) *out* out *err* err]
+      (try
+        (add-tap tapfn)
+        (loop []
+          (when (try
+                  (let [[form s] (read+string {:eof eof :read-cond :allow} in-reader)]
+                    (try
+                      (when-not (identical? form eof)
+                        (let [start (System/nanoTime)
+                              ret (eval form)
+                              ms (quot (- (System/nanoTime) start) 1000000)]
+                          (when-not (= :repl/quit ret)
+                            (set! *3 *2) (set! *2 *1) (set! *1 ret)
+                            (out-fn {:tag :ret
+                                     :val (if (instance? Throwable ret) (Throwable->map ret) ret)
+                                     :ns (str (ns-name *ns*)) :ms ms :form s})
+                            true)))
+                      (catch Throwable ex
+                        (set! *e ex)
+                        (out-fn {:tag :ret :val (ex->data ex (or (-> ex ex-data :clojure.error/phase) :execution))
+                                 :ns (str (ns-name *ns*)) :form s :exception true})
+                        true)))
+                  (catch Throwable ex
+                    (set! *e ex)
+                    (out-fn {:tag :ret :val (ex->data ex :read-source)
+                             :ns (str (ns-name *ns*)) :exception true})
+                    true))
+            (recur)))
+        (finally (remove-tap tapfn))))))
+
+(defn io-prepl
+  "prepl over *in* and *out*, one message a line, printed with prn: the
+  accept function for a prepl server. :ret and :tap values are passed
+  through valf first (default pr-str), so a client reads them back as
+  text."
+  [& {:keys [valf] :or {valf pr-str}}]
+  (let [valf (resolve-fn valf)
+        out *out*
+        lock (Object.)]
+    (prepl *in*
+           (fn [m]
+             (binding [*out* out *print-readably* true]
+               (locking lock
+                 (prn (if (#{:ret :tap} (:tag m))
+                        (try (assoc m :val (valf (:val m)))
+                             (catch Throwable ex
+                               (assoc m :val (valf (ex->data ex :print-eval-result)) :exception true)))
+                        m))
+                 (flush)))))))

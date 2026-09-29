@@ -1443,7 +1443,14 @@ differences, so the day either changes, the ledger says so.
 **Removal**: bind the Var to nil at bootstrap (`gce_base_env`). One
 line, and everything else about the decimal stays as it is.
 
-## 44. `tap>` delivers on the calling thread, before it returns
+## 44. RESOLVED -- `tap>` delivers on the calling thread, before it returns
+
+**RESOLVED** (found 2026-09-29; it went with DEVIATIONS 38, when every
+task got an OS thread of its own). The tap thread is a real thread now,
+so `(do (tap> 1) @seen)` is `[]` here as in clj, and the tap has run a
+moment later. The prepl check in language_test sees a `:tap` message
+both before and after its `:ret`, as clj can. What follows is the entry
+as it was.
 
 Clojure's tap set is fed by an `ArrayBlockingQueue` with a daemon
 thread draining it, so `(tap> x)` puts the value on the queue and
@@ -1881,6 +1888,8 @@ rules -- a token ends at whitespace or a terminating macro character,
 pushed back; a string, regex or collection at its closer -- and hands the
 text to clotran's reader, so the two cannot disagree about what a form
 means. A list read from a line-numbering reader does not carry the
-`{:line :column}` metadata clj gives it.
+`{:line :column}` metadata clj gives it, and a read that fails there
+throws the error itself, where clj wraps it in a
+`LispReader$ReaderException` whose data holds the line and column.
 
 **Removal**: not planned; it is the design.

@@ -2115,8 +2115,9 @@ b. *Sockets* (done 2026-09-29): a C shim (POSIX and Winsock behind one small int
    outside the running mutators, as `block_on` does.
 c. *`clotran.server`*: a socket REPL (done 2026-09-29: `start-server`,
    `stop-server`, a thread a connection, clj's prompt and error shape,
-   driven by `nc`) and a prepl (not yet), then `start-server` from
-   `examples/embed`.
+   driven by `nc`) and a prepl (done 2026-09-29: `io-prepl`'s messages
+   match clj's own for the same input, :ms and JVM stack frames aside),
+   then `start-server` from `examples/embed`.
 d. *nREPL, as a package*: what CIDER speaks (bencode, eval, load-file,
    describe, completions), on the model of babashka's compact server.
 
