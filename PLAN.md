@@ -31,6 +31,40 @@ examples), then threads (step 14), then everything else works -- each
 item weighed by which scenario it serves. "We want something this
 powerful to use as consultants."
 
+## The road from here (2026-09-29)
+
+The white paper and deck (`docs/`, as of 2026-09-28) make promises this
+plan did not list as steps; they are steps now, in this order. Each
+names the scenario or goal it serves. docs/ is not being updated in
+the meantime, and its numbers are those of 2026-09-28.
+
+1. **The thread flake (step 20). First.** One oracle run in nine
+   corrupts something shared after a thread case. A wrong answer that
+   depends on timing undermines every scenario and goal 3, and a gate
+   that has to be rerun is not a gate.
+2. **Road item 1, finished: correctness, then speed.** Steps 18 and 19
+   are its performance half, and they go on: step 18's stage 5 (the AOT
+   compiler reading the flat form) and the last arities that stay trees;
+   step 19's constant factors (making a record, a comparison called from
+   Fortran). Then the clojuredocs suite re-scored -- 1233 of 1264
+   portable examples (97.5%) before the flat work -- toward 100%.
+3. **Sockets and a REPL into a running process (step 21).** Scenario B's
+   headline, "REPL-driven control of a running solver", and goal 2's
+   debugger over a live run. The target is `clojure.core.server`,
+   vendored, loading unmodified.
+4. **Standalone binaries (step 22).** Scenario C: `clotran build
+   app.cljf -o app`, and a heap image that holds compiled core.
+5. **`repro`, reproducible reductions (step 23).** Scenario C's
+   "deterministic".
+6. **Threads, the rest (step 24).** A thread pool for agents; parallel
+   marking only if a measurement asks for it (step 14's did not).
+7. **Network clients (step 25).** Scenario C's event streams, on
+   step 21's sockets.
+
+Already there, though the deck says missing: `do concurrent` is emitted
+by the pure-Fortran tier for loops of `amap`'s shape (2026-09-25).
+Scenario D's remaining work is the rest of step 13.
+
 ## The goals, in order
 
 1. **Complete Clojure/Fortran interoperability.** A clotran array is a
@@ -1493,7 +1527,7 @@ it ends, as Agent.nested and LockingTransaction.enqueue hold it, and
 restart-agent resumes a failed agent's kept queue. Not done: a thread
 pool for agents (a drain is a thread per busy agent).
 
-**Open: a thread-timing flake in the oracle (2026-09-28).** The oracle's
+**Open: a thread-timing flake in the oracle (2026-09-28).** Now step 20, first on the road. The oracle's
 script, run nine times on one binary, gave identical output eight
 times and once a burst of !error from case 918 on -- reduce, into and
 seq over ordinary collections, all failing from one point onward, a
@@ -1946,6 +1980,79 @@ is the constant factor, spread thin: records still cost 1.6 us to make
 (eval_new looks the type up by name), a sort comparison is a Clojure
 call from Fortran (a nested run, about 0.5 us), and the flat executor
 itself. The median ratio of the thirty is about 50x; `fib` is 8x.
+
+### 20. The thread flake (opened 2026-09-28, a step 2026-09-29)
+
+Step 14's open note: the oracle's script, run nine times on one binary,
+once gave a burst of !error from case 918 on -- reduce, into and seq
+over ordinary collections failing from one point onward. Deterministic
+without the 37 thread cases. The suspects: futures that outlive their
+case (a 1 ms timed deref leaves a sum of 300000 numbers running beside
+the next cases; pmap over an infinite range), allocating while the
+next cases run and collections happen.
+
+What 2026-09-29 changed that bears on it: the agent error race (an
+error written onto the agent before its handler ran) is fixed, the
+allocator now takes per-call temporaries off the stack
+(`-fstack-arrays`), and lazy cells are forced in the flat loop under
+gce_force's claim protocol. None of that is known to be the cause.
+
+The order: (1) make it reproduce on demand -- the thread cases alone,
+in a loop, under CLOTRAN_GC_VERIFY=1 and CLOTRAN_GC_EVERY, and the
+full oracle N times with the failing run's output kept; (2) find the
+shared thing corrupted, with a watchpoint or the verifier, not a
+theory; (3) fix it at the root; (4) a check in the gate that runs the
+thread cases enough times to catch it, bounded in time. Done when the
+oracle is byte-identical across a run of repetitions large enough to
+have caught the one-in-nine.
+
+### 21. Sockets, and a REPL into a running process
+
+Scenario B: a Fortran solver with clotran linked in (`examples/embed`),
+driven from a REPL while it runs -- inspect the grid, change the
+strategy, go on. Goal 2 wants the same thing for its debugger: a break
+in a running program answered from outside it.
+
+The language already has this as source: `clojure.core.server`
+(vendored) is Clojure's socket REPL. It reaches for `java.net`'s
+ServerSocket, Socket, InetAddress and SocketException, `java.io`
+readers and writers over a socket's streams, `Thread.` with a name, and
+a ReentrantLock. So the step is those as a host seam -- a socket is a
+file descriptor, as a writer already is -- and `clojure.core.server`
+loading unmodified, then `start-server` from `examples/embed`. SEAMS.md
+gets the entry: ClojureScript has no socket server in cljs.core, so
+this is the host's.
+
+### 22. Standalone binaries
+
+Scenario C: one executable, no runtime to install. Step 12 laid out
+`clotran build app.cljf -o app` -- the runtime, compiled core, the
+program's compiled namespaces and the heap image in one file, `-main`
+getting `*command-line-args*`, packages still opened at run time.
+Missing first: an image that holds compiled core (a compiled procedure
+is a pointer into a library, so the image has to name the libraries
+and reopen them in the same order).
+
+### 23. `repro`: reproducible reductions
+
+Scenario C's "deterministic". PACKAGES.md has the design: binned
+summation (Demmel and Nguyen), `(repro/sum xs)` bit-identical across
+orders, threads and machines. Blocked on ReproBLAS's licence, which
+was not found; the alternative is to write the binned accumulator
+ourselves from the paper, which is small.
+
+### 24. Threads, the rest
+
+A thread pool for agents (today a busy agent's drain is a thread of its
+own). Parallel marking in the collector only when a measurement shows
+marking in the pause -- step 14's showed the sweep, which was fixed by
+lazy per-thread sweeping instead.
+
+### 25. Network clients
+
+Scenario C's event streams, on step 21's sockets: a TCP client first,
+protocol clients (HTTP, Kafka) as packages after, weighed against the
+scenario when step 21 is done.
 
 ## Decisions that still hold
 
