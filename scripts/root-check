@@ -1,0 +1,51 @@
+#!/usr/bin/env bb
+;; scripts/root-check -- a procedure that takes `roots` from its caller
+;; must hand them to every allocation it makes: the caller passed them
+;; because those values are rooted nowhere else. read_regex did not,
+;; and a collection landing on its allocation freed the form being read
+;; around a regex literal (PLAN step 20). A heuristic over call lines --
+;; a [..] root list closing a call without `roots` in it, inside a
+;; procedure with a `roots` argument -- so it can miss a case, but not
+;; that one. Prints each suspect; exits 1 if there are any.
+(require '[clojure.string :as str])
+
+(def files (->> (file-seq (java.io.File. "src/f"))
+                (map str)
+                (filter #(re-find #"\.(f90|inc)$" %))
+                sort))
+
+(def alloc #"\b(gc_obj|gc_vec|gc_str|gc_sym|gc_key|gc_class|gc_big|gc_dec|gcv_\w+|gcl_\w+|gca_\w+|gch_\w+|gcm_\w+|new_frame|make_\w+|to_seq|sq_\w+|seq_\w+|cons_vec|concat_vecs|range_cell|iterate_cell)\s*\(")
+
+(def proc-start #"^\s*(?:recursive\s+|pure\s+|elemental\s+)*(?:(?:type\([^)]*\)|integer|logical|real\([^)]*\))\s+)?(?:function|subroutine)\s+(\w+)\s*\(([^)]*)\)")
+
+(defn statement [lines i]
+  (loop [j i acc (nth lines i)]
+    (if (and (str/ends-with? (str/trim acc) "&") (< (inc j) (count lines)))
+      (recur (inc j) (str acc (nth lines (inc j))))
+      acc)))
+
+(def suspects
+  (for [f files
+        :let [lines (vec (str/split-lines (slurp f)))]
+        [i proc] (loop [i 0 proc nil roots? false acc []]
+                   (if (>= i (count lines))
+                     acc
+                     (let [l (nth lines i)]
+                       (if-let [[_ name args] (re-find proc-start l)]
+                         (recur (inc i) name (boolean (re-find #"\broots\b" args)) acc)
+                         (if (re-find #"^\s*end\s+(function|subroutine)" l)
+                           (recur (inc i) nil false acc)
+                           (let [bad? (and roots?
+                                           (re-find alloc l)
+                                           (not (re-find #"^\s*!" l))
+                                           (let [lists (re-seq #"\[([^\[\]]*)\]\s*\)" (statement lines i))]
+                                             (and (seq lists)
+                                                  (not-any? #(re-find #"\broots\b" (second %)) lists))))]
+                             (recur (inc i) proc roots? (if bad? (conj acc [i proc]) acc))))))))]
+    (str f ":" (inc i) " (" proc ") " (str/trim (let [t (statement (vec (str/split-lines (slurp f))) i)] (subs t 0 (min 150 (count t))))))))
+
+(doseq [s suspects] (println s))
+(when (seq suspects)
+  (println (count suspects) "allocations drop their caller's roots")
+  (System/exit 1))
+(println "root-check: every allocation in a procedure given roots passes them on")

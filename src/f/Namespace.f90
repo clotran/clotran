@@ -71,7 +71,7 @@ contains
     reg = gca_empty(roots)
     call vs_set(base + 1, reg)
     call gc_global_keep(registry_root, vs_get(base + 1))
-    ns = make_ns("user", [vs_get(base + 1)])
+    ns = make_ns("user", [roots, vs_get(base + 1)])
     call vs_set(base + 2, ns)
     call register(ns)
     call gc_global_keep(current_root, vs_get(base + 2))
@@ -86,10 +86,10 @@ contains
     base = vs_enter(2)
     nm = gc_str(name, roots)
     call vs_set(base + 1, nm)
-    binds = gca_empty([vs_get(base + 1)])
+    binds = gca_empty([roots, vs_get(base + 1)])
     call vs_set(base + 2, binds)
     ns = gc_obj(OBJ_NS, [vs_get(base + 1), vs_get(base + 2), gc_nil()], &
-         [vs_get(base + 1), vs_get(base + 2)])
+         [roots, vs_get(base + 1), vs_get(base + 2)])
     call vs_leave(base)
   end function make_ns
 
@@ -229,7 +229,7 @@ contains
     call vs_set(base + 2, reg)
     ns = gca_get(vs_get(base + 2), vs_get(base + 1))
     if (gc_kind(ns) /= OBJ_NS) then
-       ns = make_ns(name, [vs_get(base + 1), vs_get(base + 2)])
+       ns = make_ns(name, [roots, vs_get(base + 1), vs_get(base + 2)])
        call register(ns)
     end if
     call vs_leave(base)
@@ -367,10 +367,10 @@ contains
 
     var = gc_obj(OBJ_VAR, [vs_get(base + 3), gc_nil(), vs_get(base + 1), &
          vs_get(base + 2)], &
-         [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+         [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
     call vs_set(base + 4, var)
     binds = gca_assoc(vs_get(base + 5), vs_get(base + 2), &
-         vs_get(base + 4), [vs_get(base + 1), vs_get(base + 2), vs_get(base + 4), vs_get(base + 5)])
+         vs_get(base + 4), [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 4), vs_get(base + 5)])
     if (gc_cell_cas(vs_get(base + 1), 2, vs_get(base + 5), binds)) then
        var = vs_get(base + 4)
     else

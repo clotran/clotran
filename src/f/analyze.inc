@@ -575,7 +575,7 @@
        do i = 0, n - 1
           nd = analyze(gcv_nth(vs_get(vst, base + 1), i), vs_get(vst, base + 2))
           if (tctx%has_error) exit
-          out = gcv_conj(vs_get(vst, base + 3), nd, [vs_get(vst, base + 1), vs_get(vst, base + 2), nd])
+          out = gcv_conj(vs_get(vst, base + 3), nd, [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), nd])
           call vs_set(vst, base + 3, out)
        end do
     else
@@ -584,9 +584,9 @@
        do while (gcl_count(vs_get(vst, base + 4)) > 0)
           nd = analyze(gcl_first(vs_get(vst, base + 4)), vs_get(vst, base + 2))
           if (tctx%has_error) exit
-          out = gcv_conj(vs_get(vst, base + 3), nd, [vs_get(vst, base + 1), vs_get(vst, base + 2), nd])
+          out = gcv_conj(vs_get(vst, base + 3), nd, [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), nd])
           call vs_set(vst, base + 3, out)
-          walk = gcl_rest(vs_get(vst, base + 4), [vs_get(vst, base + 3)])
+          walk = gcl_rest(vs_get(vst, base + 4), [roots, vs_get(vst, base + 3)])
           call vs_set(vst, base + 4, walk)
        end do
     end if

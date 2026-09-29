@@ -429,6 +429,8 @@ check-static:
 	scripts/state-inventory
 	@echo "--- the builtins that may reuse an argument vector (argsafe.inc) are current ---"
 	scripts/argsafe --check
+	@echo "--- every procedure given roots passes them to what it allocates (PLAN step 20) ---"
+	scripts/root-check
 	@echo "--- no static string lengths (gfortran slen: shared by every thread, step 14f) ---"
 	scripts/no-static-slen clotran-bin packages/chemsol/libchemsol.$(SOEXT) packages/blas/libblas.$(SOEXT)
 

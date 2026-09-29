@@ -567,8 +567,8 @@
 
        m = gca_empty([roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
        call vs_set(vst, base + 4, m)
-       call brk_put(base + 4, "fn", gc_str(who, [vs_get(vst, base + 4)]), roots, base)
-       call brk_put(base + 4, "file", gc_str(fname, [vs_get(vst, base + 4)]), roots, base)
+       call brk_put(base + 4, "fn", gc_str(who, [roots, vs_get(vst, base + 4)]), roots, base)
+       call brk_put(base + 4, "file", gc_str(fname, [roots, vs_get(vst, base + 4)]), roots, base)
        call brk_put(base + 4, "line", gc_int(int(line, gc_ip)), roots, base)
        call brk_put(base + 4, "col", gc_int(int(col, gc_ip)), roots, base)
        call brk_put(base + 4, "env", vs_get(vst, base + 3), roots, base)
