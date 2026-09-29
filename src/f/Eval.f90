@@ -2280,6 +2280,16 @@ contains
     call vs_set(vst, base + 1, given)
     call vs_set(vst, base + 2, fields)
     call vs_set(vst, base + 3, vs_get(vst, base + 1))
+    if (gcv_count(vs_get(vst, base + 1)) < gcv_count(vs_get(vst, base + 2))) then
+       ! sized once and filled: conj copied a 32-slot node per hidden
+       ! field, four of them per record made
+       tmp = gcv_build(gcv_count(vs_get(vst, base + 2)), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       call vs_set(vst, base + 3, tmp)
+       do i = 0, gcv_count(vs_get(vst, base + 1)) - 1
+          tmp = gcv_put(vs_get(vst, base + 3), i, gcv_nth(vs_get(vst, base + 1), i), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+          call vs_set(vst, base + 3, tmp)
+       end do
+    end if
     do i = gcv_count(vs_get(vst, base + 1)), gcv_count(vs_get(vst, base + 2)) - 1
        f = strip_meta(gcv_nth(vs_get(vst, base + 2), i))
        fill = gc_nil()
@@ -2287,7 +2297,7 @@ contains
           if (gc_ref_is(f%ref, "__hash") .or. gc_ref_is(f%ref, "__hasheq")) &
                fill = gc_int(0)
        end if
-       tmp = gcv_conj(vs_get(vst, base + 3), fill, [vs_get(vst, base + 2), vs_get(vst, base + 3)])
+       tmp = gcv_put(vs_get(vst, base + 3), i, fill, [vs_get(vst, base + 2)])
        call vs_set(vst, base + 3, tmp)
     end do
     out = vs_get(vst, base + 3)
@@ -2415,6 +2425,41 @@ contains
     integer :: base
 
     vst => gc_my_stack()
+    ! A RECORD'S DECLARED FIELD, by its keyword: what defrecord's own
+    ! valAt answers -- (case k :a a :b b (get __extmap k else)) -- read
+    ! straight from the field, where the road below is a nested call of
+    ! valAt and a host dispatch inside it, 5 us. A record is the type
+    ! whose fields end __meta __extmap ... (emit-defrecord adds them);
+    ! the declared ones are those before, and a hidden one is never a
+    ! key (it is looked up in the __extmap, as there).
+    if (k%tag == GCT_KEY .and. gc_kind(inst) == OBJ_INST) then
+       block
+         type(gc_value) :: fields, f
+         integer :: i, m
+         fields = gc_slot(gc_slot(inst, 1), 2)
+         m = -1
+         do i = 0, gcv_count(fields) - 2
+            f = strip_meta(gcv_nth(fields, i))
+            if (f%tag /= GCT_SYM) cycle
+            if (gc_ref_is(f%ref, "__meta")) then
+               f = strip_meta(gcv_nth(fields, i + 1))
+               if (f%tag == GCT_SYM) then
+                  if (gc_ref_is(f%ref, "__extmap")) m = i
+               end if
+               exit
+            end if
+         end do
+         do i = 0, m - 1
+            f = strip_meta(gcv_nth(fields, i))
+            if (f%tag /= GCT_SYM) cycle
+            if (gc_ref_same(f%ref, k%ref)) then
+               out = gcv_nth(gc_slot(inst, 2), i)
+               found = .true.
+               return
+            end if
+         end do
+       end block
+    end if
     base = vs_enter(vst, 4)
     call vs_set(vst, base + 1, inst)
     call vs_set(vst, base + 2, k)

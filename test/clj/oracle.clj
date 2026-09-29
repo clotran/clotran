@@ -2775,3 +2775,8 @@
 (def r2 (mapv fp [1 2 "a"]))
 (def r3 [(fp2 1 2) (fp2 "x" 1) (fp2 (->FR 5) 6) (fm 1) (fm (with-meta [1] {(quote user/fm) (fn [_] :via-meta)})) (try (fm "x") (catch IllegalArgumentException e :no-impl))])
 [r1 r2 r3]
+
+;; a record's declared field by keyword is read from the field (inst_lookup);
+;; hidden fields, extension keys, qualified keys and defaults as valAt
+(defrecord BR [a b])
+[(:__extmap (->BR 1 2)) (:__meta (->BR 1 2)) (:a (assoc (->BR 1 2) :c 3)) (:c (assoc (->BR 1 2) :c 3)) (get (->BR 1 nil) :b :nf) (get (->BR 1 2) :z :nf) (:user/a (->BR 1 2)) (:a (with-meta (->BR 1 2) {:m 1}))]

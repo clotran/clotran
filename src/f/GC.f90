@@ -753,7 +753,7 @@ module GC
   public :: gc_global_new, gc_global_set, gc_global_get, gc_global_count
   public :: gc_global_keep, gc_root_get, gc_root_live
   public :: gc_set_finalizer
-  public :: gc_ensure_init, gc_str_ref, gc_ref_text, gc_ref_is, gc_ref_len
+  public :: gc_ensure_init, gc_str_ref, gc_ref_text, gc_ref_is, gc_ref_len, gc_ref_same
   public :: vs_enter, vs_leave, vs_set, vs_get, vs_depth, gc_stack, gc_my_stack
   public :: gc_bindings_get, gc_bindings_set, gc_int_text, gc_rval
   interface vs_enter
@@ -848,6 +848,18 @@ contains
     yes = .false.
     if (ref_ok(ref)) yes = (str_pool(ref)%text == s)
   end function gc_ref_is
+
+  ! Whether two texts are the same text, compared in place: a symbol's
+  ! name against a keyword's, with no copy. Lengths first: Fortran's ==
+  ! pads the shorter with blanks.
+  function gc_ref_same(r1, r2) result(yes)
+    integer, intent(in) :: r1, r2
+    logical :: yes
+    yes = .false.
+    if (.not. (ref_ok(r1) .and. ref_ok(r2))) return
+    if (len(str_pool(r1)%text) /= len(str_pool(r2)%text)) return
+    yes = str_pool(r1)%text == str_pool(r2)%text
+  end function gc_ref_same
 
   function gc_ref_len(ref) result(n)
     integer, intent(in) :: ref
