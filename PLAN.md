@@ -1836,6 +1836,15 @@ only for a reference).
 moves least: its arities mostly hold a `.` call (stage 2) and a top
 form typed at the REPL is still a tree (stage 3).
 
+**Stage 2, host calls (2026-09-28).** `.` calls compile (`F_DOT`,
+dispatched as the tree's N_DOT: a value, a closure to enter in a frame
+of its own, or a park that dispatches again with the same target and
+arguments). 3329 of 3434 arities now (97%); `try` (69), a nested node
+holding a `recur` (22) and `case` (14) are what is left. The original
+expression, `(apply + (take 10^6 (range)))`: 15.2 s at the start of
+the day, 4.55 s now. What a lazy element still costs is the forcing:
+`gce_force` runs the thunk in a nested run from Fortran (stage 4).
+
 ## Decisions that still hold
 
 **The value type has no `FINAL`.** Copying a `cons_value` (nine

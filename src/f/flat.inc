@@ -298,6 +298,23 @@
           call fc(fb, gcv_nth(kids, i), a + i)
        end do
        call fb_emit(fb, F_COLL, d, a, n, kind, 0)
+    case (N_DOT)
+       ! (. target member args...): the target in a (unless it is a
+       ! class, which the node holds), the arguments after it
+       n = gcv_count(kids)
+       a = fb%tbase + fb%ntemp
+       do i = 0, n - 1
+          t = fb_temp(fb)
+       end do
+       do i = 0, n - 1
+          call fc(fb, gcv_nth(kids, i), a + i)
+       end do
+       f = 1
+       if (tag_of(gc_slot(nd, 3)) == GCT_SYM) f = 0
+       v = gc_slot(nd, 4)
+       site = 0
+       if (v%tag == GCT_INT) site = int(v%ival, kind=4)
+       call fb_emit(fb, F_DOT, d, fb_const(fb, nd), a, n - f, f, site)
     case (N_THROW)
        t = fb_temp(fb)
        call fc(fb, gcv_nth(kids, 0), t)
@@ -307,7 +324,7 @@
        fb%has_eval = .true.
        call fb_emit(fb, F_EVAL, d, fb_const(fb, nd), 0, 0, 0)
     case default
-       ! try, case, a host `.` call: stage 2
+       ! try, case: stage 2
        fb%ok = .false.
     end select
     fb%ntemp = mark
@@ -625,6 +642,64 @@
           wb = gc_nil()
           call vs_set(vst, b + 3, fnv)
           if (.not. flat_builtin()) exit
+       case (F_DOT)
+          ! w: F_DOT d k a n from site -- dispatched as exec.inc's N_DOT;
+          ! the target (or the class) in slot 3, the arguments in slot 6
+          ! while it runs, and both kept there if it parks, to dispatch
+          ! again as it was
+          tctx%kst(ks)%aux2 = w(7)
+          tctx%kst(ks)%pc = pc
+          v = gc_vec_get(consts, w(3) + 1)
+          if (tctx%kst(ks)%i == -1) then
+             tctx%kst(ks)%i = 0
+             argv = vs_get(vst, b + 6)
+          else
+             if (w(6) == 1) then
+                call vs_set(vst, b + 3, reg_get(fr, w(4)))
+                call reg_set(fr, w(4), gc_nil())
+             else
+                call vs_set(vst, b + 3, gc_slot(v, 3))
+             end if
+             argv = flat_args(fr, w(4) + w(6), w(5), b)
+             do j = 0, w(5) - 1
+                call reg_set(fr, w(4) + w(6) + j, gc_nil())
+             end do
+          end if
+          call vs_set(vst, b + 6, gc_nil())
+          call vs_set(vst, vbase + 1, gc_nil())
+          val = dot_dispatch(v, vs_get(vst, b + 3), argv, w(6))
+          if (tctx%yield_flag) then
+             call vs_set(vst, b + 6, argv)
+             tctx%kst(ks)%i = -1
+             val = gc_nil()
+             exit
+          end if
+          call vs_set(vst, b + 3, gc_nil())
+          if (tctx%has_error) exit
+          if (is_call_request(val)) then
+             ! a method that is a closure: its body in a frame of its own,
+             ! as a call's (enter_call, for the tree)
+             call vs_set(vst, b + 3, val)
+             call push_frame(tctx, gc_slot(vs_get(vst, b + 3), 1), w(7))
+             if (tctx%has_error) exit
+             ok = bind_closure(gc_slot(vs_get(vst, b + 3), 1), gc_slot(vs_get(vst, b + 3), 2), newframe, body)
+             if (.not. ok) then
+                call pop_frame(tctx)
+                exit
+             end if
+             call vs_set(vst, b + 4, newframe)
+             fnv = gc_slot(vs_get(vst, b + 3), 1)
+             call vs_set(vst, b + 3, gc_nil())
+             val = gc_nil()
+             tctx%kst(ks)%pc = pc + FW
+             tctx%kst(ks)%aux = w(2) + 1
+             call k_push(body, vs_get(vst, b + 4), ior(KF_FNBODY, KF_RESTART), body, tctx)
+             call vs_set(vst, tctx%kst(tctx%ksp)%base + 7, fnv)
+             if (step_at /= 0) call step_check()
+             return
+          end if
+          call reg_set(fr, w(2), val)
+          val = gc_nil()
        case default
           call raise_class("IllegalStateException", "flat: bad instruction", [gc_value ::])
           exit
