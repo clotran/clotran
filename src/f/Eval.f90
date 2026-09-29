@@ -450,7 +450,28 @@ module Eval
        N_CALL = 6, N_VECTOR = 7, N_MAP = 8, N_SET = 9, N_DEF = 10, N_LET = 11, &
        N_LOOP = 12, N_LETFN = 13, N_FN = 14, N_LAZY = 15, N_RECUR = 16, N_THROW = 17, &
        N_TRY = 18, N_CASE = 19, N_DEFTYPE = 20, N_DOT = 21, N_NEW = 22, N_NEWTYPE = 23, &
-       N_SETBANG = 24, N_FAIL = 25, N_TOP = 26, N_TOPDO = 27, N_LATEVAR = 28
+       N_SETBANG = 24, N_FAIL = 25, N_TOP = 26, N_TOPDO = 27, N_LATEVAR = 28, &
+       N_FLAT = 29   ! a fn body as flat instructions (flat.inc)
+  ! flat.inc's compiler state, one per arity being compiled
+  type :: flat_buf
+     integer, allocatable :: code(:)
+     integer :: n = 0            ! integers written
+     integer :: tbase = 0        ! the first temporary register: the fn's slot count
+     integer :: ntemp = 0        ! temporaries in use
+     integer :: maxtemp = 0
+     integer :: loops(64) = 0    ! enclosing loop heads, innermost last
+     integer :: nloop = 0
+     integer :: cslot = 0        ! the value-stack slot holding the constants
+     logical :: ok = .true.
+     logical :: has_eval = .false., has_recur = .false.
+  end type flat_buf
+  ! a flat instruction: FW integers, the opcode first (flat.inc)
+  integer, parameter :: FW = 6
+  integer, parameter :: F_CONST = 1, F_NIL = 2, F_MOVE = 3, F_MOVEC = 4, F_VAR = 5, &
+       F_DLVAR = 6, F_JMPF = 7, F_JMP = 8, F_CALL = 9, F_RET = 10, F_RECUR = 11, &
+       F_FN = 12, F_LAZY = 13, F_COLL = 14, F_THROW = 15, F_EVAL = 16
+  ! CLOTRAN_FLAT: 0 unread, 1 compile fn bodies flat, 2 trees only
+  integer, save :: flat_mode = 0
   integer, parameter :: K_SCOPE = 100, K_FNINFO = 101
   integer, save :: trace_macros = 0   ! 0 unread, 1 on, 2 off
   ! Set by deftype* and reify* just before a method's clauses go
@@ -18207,6 +18228,12 @@ contains
     vst => tctx%stk
     out = v
     if (gc_kind(v) == OBJ_AST) then
+       ! an arity's flat form is how it runs, not what it is: the tree
+       ! beside it is the export (flat.inc)
+       if (gc_i1(v) == N_FLAT) then
+          out = gc_nil()
+          return
+       end if
        out = ast_data(v, roots)
        return
     end if
@@ -18895,6 +18922,7 @@ contains
 
   include "analyze.inc"
   include "exec.inc"
+  include "flat.inc"
   include "repl.inc"
   include "tasks.inc"
   include "sorted.inc"

@@ -1974,7 +1974,7 @@
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: rest, sc
     type(gc_value) :: nd, head, name, fsc, arities, clauses, clause, ar, tmpl, walk
-    integer :: base, self_slot, nfixed, i
+    integer :: base, self_slot, nfixed, i, nflat
     logical :: hints
 
     ! captured ONCE: a method's own clauses are exempt from fn hint
@@ -2033,6 +2033,26 @@
        call apply_clears(gcv_nth(gcv_nth(vs_get(vst, base + 7), i), 3), gc_i1(scope_info(vs_get(vst, base + 5))))
     end do
 
+    ! the flat form of each arity, beside its tree (flat.inc); its
+    ! temporaries widen the frame past the named slots
+    nflat = 0
+    do i = 0, gcv_count(vs_get(vst, base + 7)) - 1
+       block
+         type(gc_value) :: fl, ar2
+         integer :: nt
+         fl = flat_compile(gcv_nth(vs_get(vst, base + 7), i), gc_i1(scope_info(vs_get(vst, base + 5))), nt, &
+              [vs_get(vst, base + 5), vs_get(vst, base + 7)])
+         if (fl%tag /= GCT_NIL) then
+            call vs_set(vst, base + 8, fl)
+            ar2 = gcv_conj(gcv_nth(vs_get(vst, base + 7), i), vs_get(vst, base + 8), [vs_get(vst, base + 5), vs_get(vst, base + 7)])
+            call vs_set(vst, base + 8, ar2)
+            arities = gcv_assoc(vs_get(vst, base + 7), i, vs_get(vst, base + 8), [vs_get(vst, base + 5)])
+            call vs_set(vst, base + 7, arities)
+            nflat = max(nflat, nt)
+         end if
+       end block
+    end do
+
     ! [name arities captures nslots selfslot slotnames]
     tmpl = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 5), vs_get(vst, base + 7)])
     call vs_set(vst, base + 8, tmpl)
@@ -2042,7 +2062,7 @@
     call vs_set(vst, base + 8, tmpl)
     tmpl = gcv_conj(vs_get(vst, base + 8), gc_slot(scope_info(vs_get(vst, base + 5)), 1), [vs_get(vst, base + 5)])
     call vs_set(vst, base + 8, tmpl)
-    tmpl = gcv_conj(vs_get(vst, base + 8), gc_int(gc_i1(scope_info(vs_get(vst, base + 5)))), [vs_get(vst, base + 5)])
+    tmpl = gcv_conj(vs_get(vst, base + 8), gc_int(gc_i1(scope_info(vs_get(vst, base + 5))) + nflat), [vs_get(vst, base + 5)])
     call vs_set(vst, base + 8, tmpl)
     tmpl = gcv_conj(vs_get(vst, base + 8), gc_int(self_slot), [vs_get(vst, base + 5)])
     call vs_set(vst, base + 8, tmpl)

@@ -113,6 +113,7 @@
  "Eval.f90/tx_lk" {:class :shared, :note "the STM's one lock (DEVIATIONS 10): transactions serialize on it; made once under the state lock (tx_lock_init)"}
  "Eval.f90/tx_lk_made" {:class :shared, :note "whether tx_lk is made yet, read and set under the state lock"}
  "Eval.f90/link_epoch" {:class :shared, :note "direct linking (DEVIATIONS 55): the epoch a call site's cached callee was taken in; bumped by gce_install_compiled on the main thread, read by every call site -- a stale read only costs one extra lookup"}
+ "Eval.f90/flat_mode" {:class :fixed, :note "CLOTRAN_FLAT, read once from the environment (lazily: the same value from any thread)"}
  "Eval.f90/no_install" {:class :fixed, :note "set by main before any file loads when an image is being taken"}
  "Eval.f90/out_trace" {:class :fixed, :note "CLOTRAN_TRACE_OUT, read once (debugging)"}
  "Eval.f90/out_trace_read" {:class :fixed, :note "with out_trace"}

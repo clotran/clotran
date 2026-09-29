@@ -1794,6 +1794,26 @@ everything (`CLOTRAN_FLAT=0` runs trees only, and the gate compares):
 4. Forcing a lazy seq inside the loop, not in a nested run.
 5. The AOT compiler reads the flat form instead of the tree.
 
+**Stage 1 landed (2026-09-28).** `flat.inc`: the compiler (`fc`, per
+arity, run from analyze_fn after locals clearing) and the executor
+(`flat_run`, the run loop's N_FLAT case). 2727 of the 3434 arities
+analysed while core loads compile (79%); the rest are held back by a
+host `.` call (641), `try` (47), `case` (11), and a nested node holding
+a `recur` (8) -- so stage 2 is mostly `.`. The gate runs
+language_test a second time with `CLOTRAN_FLAT=0` (check-tree), and
+the derived suite gives 2880 of 2880 both ways, identical per
+namespace (26.0 s flat, 29.3 s trees, 4 jobs).
+
+| | trees | flat |
+|---|---|---|
+| a counting `loop`, 10^6 turns, in a fn | 503 ms | 195 ms |
+| `(fib 25)` | 209 ms | 120 ms |
+
+195 ns a turn is not the 15-25 the standalone program promised: a
+loop turn is six instructions, and each `<` or `inc` is a CALL that
+resolves its head, looks for a wrapper and fills a scratch vector.
+Measuring that is the next thing, before stage 2.
+
 ## Decisions that still hold
 
 **The value type has no `FINAL`.** Copying a `cons_value` (nine

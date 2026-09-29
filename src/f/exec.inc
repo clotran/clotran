@@ -335,7 +335,7 @@
     end if
     call bind_captures(vs_get(vst, base + 1), vs_get(vst, base + 5))
     frame = vs_get(vst, base + 5)
-    body = gcv_nth(vs_get(vst, base + 4), 3)
+    body = arity_body(vs_get(vst, base + 4))
     ok = .true.
     call vs_leave(vst, base)
   end function bind_closure
@@ -474,6 +474,16 @@
        ! from the top; reset at each fn frame.
        if (.not. have_pos) then
           pos = gc_slot(nd, 4)
+          ! a flat body is where its current call is (flat_run keeps
+          ! the site in aux2); just entered, where its tree begins
+          if (gc_i1(nd) == N_FLAT) then
+             if (tctx%kst(i)%pc /= 0 .and. tctx%kst(i)%aux2 > 0) then
+                pos = gc_int(int(tctx%kst(i)%aux2, gc_ip))
+             else
+                nd = gc_slot(nd, 5)
+                pos = gc_slot(nd, 4)
+             end if
+          end if
           ! a body just entered (a step stops there) is a `do` the
           ! analyser made, with no position of its own: it is where its
           ! first form is
@@ -553,7 +563,7 @@
   subroutine arity_slots(tmpl, body, lo, hi)
     type(gc_value), intent(in) :: tmpl, body
     integer, intent(out) :: lo, hi
-    type(gc_value) :: ars, ar, bd
+    type(gc_value) :: ars, ar, bd, fl
     integer :: i, n
     ars = gcv_nth(tmpl, 1)
     n = gcv_count(ars)
@@ -562,6 +572,11 @@
     do i = 0, n - 1
        ar = gcv_nth(ars, i)
        bd = gcv_nth(ar, 3)
+       ! the body running may be the arity's flat form (flat.inc)
+       if (gcv_count(ar) >= 5) then
+          fl = gcv_nth(ar, 4)
+          if (fl%tag == body%tag .and. fl%ref == body%ref) bd = body
+       end if
        if (bd%tag == body%tag .and. bd%ref == body%ref) then
           lo = int_of(gcv_nth(ar, 2))
           if (i + 1 < n) hi = int_of(gcv_nth(gcv_nth(ars, i + 1), 2))
@@ -1150,6 +1165,9 @@
        kids = gc_slot(nd, 1)
 
        select case (kind)
+       case (N_FLAT)
+          call flat_run(tctx, vbase, val)
+          if (tctx%yield_flag) exit
        case (N_CONST)
           val = gc_slot(nd, 2)
           call k_finish(val, tctx)
@@ -1339,7 +1357,7 @@
                 call push_frame(tctx, fnv, site)
                 if (tctx%has_error) cycle
                 call bind_captures(vs_get(vst, b + 3), vs_get(vst, b + 4))
-                body = gcv_nth(gcv_nth(gcv_nth(gc_slot(vs_get(vst, b + 3), 1), 1), tctx%kst(tctx%ksp)%aux2), 3)
+                body = arity_body(gcv_nth(gcv_nth(gc_slot(vs_get(vst, b + 3), 1), 1), tctx%kst(tctx%ksp)%aux2))
                 call vs_set(vst, b + 5, body)
                 tctx%kst(tctx%ksp)%pc = 5
                 call k_push(vs_get(vst, b + 5), vs_get(vst, b + 4), ior(KF_FNBODY, KF_RESTART), vs_get(vst, b + 5), tctx)

@@ -747,7 +747,7 @@ module GC
   public :: gc_obj, gc_vec, gc_cons
   public :: gc_text, gc_slot, gc_set_slot, gc_kind
   public :: gc_i1, gc_i2, gc_set_i1, gc_set_i2
-  public :: gc_vec_len, gc_vec_get, gc_vec_set
+  public :: gc_vec_len, gc_vec_get, gc_vec_set, gc_vec_word
   public :: gc_car, gc_cdr, gc_set_car, gc_set_cdr
   public :: gc_live_count, gc_obj_capacity, gc_check_heap
   public :: gc_global_new, gc_global_set, gc_global_get, gc_global_count
@@ -2484,6 +2484,21 @@ contains
     if (i < 1 .or. i > gc_vec_len(v)) return
     out = vec_store(vec_pool(v%ref)%off + i - 1)
   end function gc_vec_get
+
+  ! Six integer elements from i on, as one instruction of a flat body
+  ! (Eval flat.inc): one call and one offset lookup per instruction
+  ! rather than six. The caller guarantees v is a vector of integers
+  ! at least i + 5 long -- the code the flat compiler wrote.
+  subroutine gc_vec_word(v, i, w)
+    type(gc_value), intent(in) :: v
+    integer, intent(in) :: i
+    integer, intent(out) :: w(6)
+    integer :: o, k
+    o = vec_pool(v%ref)%off + i - 1
+    do k = 1, 6
+       w(k) = int(vec_store(o + k - 1)%ival)
+    end do
+  end subroutine gc_vec_word
 
   subroutine gc_vec_set(v, i, x)
     type(gc_value), intent(in) :: v, x
