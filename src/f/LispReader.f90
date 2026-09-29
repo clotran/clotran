@@ -1260,10 +1260,11 @@ contains
     integer, intent(inout) :: pos
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: v, m, form, key
-    integer :: base
+    integer :: base, caret
 
     rdx => rd_self()
     v = gc_nil()
+    caret = pos - 1   ! the ^, whichever spelling reached here
     base = vs_enter(3)
     m = read_form(text, pos, roots)
     if (rdx%has_error) then
@@ -1313,6 +1314,23 @@ contains
        call vs_leave(base); return
     end if
     call vs_set(base + 2, form)
+    ! On a list read from a file, MetaReader adds the ^'s own line and
+    ! column to the map, over any the map gave.
+    if (gcl_is(vs_get(base + 2)) .and. rdx%cur_file /= 0) then
+       block
+         character(len=:), allocatable :: pf
+         integer :: pl, pc
+         call gcr_position_parts(rdx%cur_file * POS_SHIFT + caret, pf, pl, pc)
+         key = gc_key("line", roots)
+         call vs_set(base + 3, key)
+         m = gca_assoc(vs_get(base + 1), vs_get(base + 3), gc_int(pl), roots)
+         call vs_set(base + 1, m)
+         key = gc_key("column", roots)
+         call vs_set(base + 3, key)
+         m = gca_assoc(vs_get(base + 1), vs_get(base + 3), gc_int(pc), roots)
+         call vs_set(base + 1, m)
+       end block
+    end if
     v = gc_obj(OBJ_META, [vs_get(base + 2), vs_get(base + 1)], roots)
     call vs_leave(base)
   end function read_meta

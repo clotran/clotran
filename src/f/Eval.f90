@@ -8472,6 +8472,25 @@ contains
           out = gc_slot(a, meta_slot(a))
        else if (gc_kind(a) == OBJ_META) then
           out = gc_slot(a, 2)
+       else if (gc_kind(a) == OBJ_CONS .and. gc_i2(a) /= 0) then
+          ! A list read from a file carries its position (the reader's
+          ! i2), and LispReader puts that in a list's metadata:
+          ! {:line :column} of the opening paren. Built when asked.
+          block
+            character(len=:), allocatable :: pf
+            integer :: pl, pc
+            type(gc_value) :: pk
+            call gcr_position_parts(gc_i2(a), pf, pl, pc)
+            if (len(pf) > 0) then
+               out = gca_empty([vs_get(vst, base + 1)])
+               call vs_set(vst, base + 2, out)
+               pk = gc_key("line", [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+               out = gca_assoc(vs_get(vst, base + 2), pk, gc_int(pl), [vs_get(vst, base + 1), vs_get(vst, base + 2), pk])
+               call vs_set(vst, base + 2, out)
+               pk = gc_key("column", [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+               out = gca_assoc(vs_get(vst, base + 2), pk, gc_int(pc), [vs_get(vst, base + 1), vs_get(vst, base + 2), pk])
+            end if
+          end block
        else if (gc_kind(a) == OBJ_INST) then
           ! a record answers its own meta; a reify keeps it in slot 3
           out = inst_invoke(a, "meta", gcv_empty([vs_get(vst, base + 1)]), hit)

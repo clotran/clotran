@@ -2839,3 +2839,8 @@
 (let [h (to-array "Hello") x (to-array [32 -5 4 11]) y (sort-by - x)] [(identical? (to-array h) h) (seq y) (seq x) (identical? (to-array (int-array 2)) (int-array 2))])
 ;; assoc on a vector throws the JVM's classes
 (mapv #(try (assoc [1 2 3] % 0) (catch Exception e (class e))) [0 3 4 -1 :a])
+
+;; a list read from a file has {:line :column} metadata (LispReader),
+;; merged into any ^ gave it; a vector does not, nor a read-string list
+[(meta '(a b)) (meta '^:foo (a b)) (meta (second '(x ^{:k 1} (a b)))) (meta '[a b]) (meta (read-string "(a b)")) (meta (macroexpand-1 '(-> 1 (+ 2))))]
+(binding [*print-meta* true] (pr-str (:arglists (meta #'defmacro))))
