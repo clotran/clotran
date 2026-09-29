@@ -347,7 +347,18 @@
        t = fb_temp(fb)
        call fc(fb, gcv_nth(kids, 0), t)
        call fb_emit(fb, F_THROW, t, 0, 0, 0, 0)
-    case (N_DEF, N_DEFTYPE, N_LATEVAR, N_LETFN, N_NEW, N_NEWTYPE, N_SETBANG, N_FAIL)
+    case (N_NEW, N_NEWTYPE)
+       ! the arguments in registers, then new_cached with the node
+       n = gcv_count(kids)
+       a = fb%tbase + fb%ntemp
+       do i = 0, n - 1
+          t = fb_temp(fb)
+       end do
+       do i = 0, n - 1
+          call fc(fb, gcv_nth(kids, i), a + i)
+       end do
+       call fb_emit(fb, F_NEW, d, fb_const(fb, nd), a, n, 0)
+    case (N_DEF, N_DEFTYPE, N_LATEVAR, N_LETFN, N_SETBANG, N_FAIL)
        ! what the tree itself runs nested (exec_other), run the same way
        fb%has_eval = .true.
        call fb_emit(fb, F_EVAL, d, fb_const(fb, nd), 0, 0, 0)
@@ -1143,6 +1154,17 @@
           wb = gc_nil()
           call vs_set(vst, b + 3, fnv)
           if (.not. flat_builtin(w(6))) exit
+       case (F_NEW)
+          ! w: F_NEW d k a n
+          argv = flat_args(fr, w(4), w(5), b)
+          call vs_set(vst, b + 6, argv)
+          do j = 0, w(5) - 1
+             call reg_set(fr, w(4) + j, gc_nil())
+          end do
+          v = new_cached(gc_vec_get(consts, w(3) + 1), vs_get(vst, b + 6))
+          call vs_set(vst, b + 6, gc_nil())
+          if (tctx%has_error) exit
+          call reg_set(fr, w(2), v)
        case (F_CASE)
           ! w: F_CASE t k kb m kl
           v = reg_get(fr, w(2))

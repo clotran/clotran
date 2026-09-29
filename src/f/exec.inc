@@ -1688,6 +1688,64 @@
     if (step_at /= 0) call step_check()
   end subroutine enter_call
 
+  ! (new C args...) with its arguments evaluated. The first time, the
+  ! whole of eval_new (or, for N_NEWTYPE, the type by name); when that
+  ! made an instance of the deftype registered under C, the type is kept
+  ! in the node's slot 3 and every later time constructs from it
+  ! -- the name no longer compared against eval_new's chain of host
+  ! classes and looked up in the type table on every call (a record cost
+  ! 1.7 us to make). A compiled `new` keeps the class it was compiled
+  ! against on the JVM too, so a record redefined later is not what an
+  ! older call site makes, there as here.
+  recursive function new_cached(nd, argv) result(out)
+    type(gc_stack), pointer :: vst
+    type(eval_ctx), pointer :: tctx
+    type(gc_value), intent(in) :: nd, argv
+    type(gc_value) :: out, ty
+    integer :: base
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
+    tctx => ctx_self()
+    vst => tctx%stk
+    out = gc_nil()
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, nd)
+    call vs_set(vst, base + 2, argv)
+    ty = gc_slot(nd, 3)
+    if (gc_kind(ty) == OBJ_TYPE) then
+       call vs_set(vst, base + 3, ty)
+       out = construct_type_vals(vs_get(vst, base + 3), vs_get(vst, base + 2))
+       call vs_leave(vst, base)
+       return
+    end if
+    call sym_text(gc_slot(nd, 2), s=dlt_1)
+    if (gc_i1(nd) == N_NEWTYPE) then
+       ty = find_type(dlt_1)
+       if (gc_kind(ty) /= OBJ_TYPE) then
+          call fail("no such class: " // dlt_1)
+          call vs_leave(vst, base)
+          return
+       end if
+       call vs_set(vst, base + 3, ty)
+       out = construct_type_vals(vs_get(vst, base + 3), vs_get(vst, base + 2))
+    else
+       out = eval_new(dlt_1, vs_get(vst, base + 2))
+    end if
+    if (.not. tctx%has_error) then
+       call vs_set(vst, base + 2, out)
+       ty = find_type(dlt_1)
+       if (gc_kind(ty) == OBJ_TYPE .and. gc_kind(vs_get(vst, base + 2)) == OBJ_INST) then
+          block
+            type(gc_value) :: t1
+            t1 = gc_slot(vs_get(vst, base + 2), 1)
+            if (t1%tag == ty%tag .and. t1%ref == ty%ref) call gc_set_slot(vs_get(vst, base + 1), 3, ty)
+          end block
+       end if
+       out = vs_get(vst, base + 2)
+    end if
+    call vs_leave(vst, base)
+  end function new_cached
+
   ! The node kinds the loop leaves to a helper. Each helper evaluates
   ! its children through exec, nesting a run.
   recursive function exec_other(nd, frame) result(out)
@@ -1714,32 +1772,11 @@
        out = exec_letfn(nd, frame)
     case (N_DEFTYPE)
        out = exec_deftype(nd, frame)
-    case (N_NEW)
+    case (N_NEW, N_NEWTYPE)
        v = exec_args(kids, 0, frame)
        if (.not. tctx%has_error) then
           call vs_set(vst, base + 3, v)
-          block
-             call sym_text(gc_slot(vs_get(vst, base + 1), 2), s=dlt_1)
-             out = eval_new(dlt_1, vs_get(vst, base + 3))
-          end block
-       end if
-    case (N_NEWTYPE)
-       v = exec_args(kids, 0, frame)
-       if (.not. tctx%has_error) then
-          call vs_set(vst, base + 3, v)
-          block
-             call sym_text(gc_slot(vs_get(vst, base + 1), 2), s=dlt_1)
-             fnv = find_type(dlt_1)
-          end block
-          if (gc_kind(fnv) /= OBJ_TYPE) then
-             block
-                call sym_text(gc_slot(vs_get(vst, base + 1), 2), s=dlt_1)
-                call fail("no such class: " // dlt_1)
-             end block
-          else
-             call vs_set(vst, base + 4, fnv)
-             out = construct_type_vals(vs_get(vst, base + 4), vs_get(vst, base + 3))
-          end if
+          out = new_cached(vs_get(vst, base + 1), vs_get(vst, base + 3))
        end if
     case (N_SETBANG)
        out = exec_setbang(nd, frame)

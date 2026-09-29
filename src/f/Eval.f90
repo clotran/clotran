@@ -474,7 +474,7 @@ module Eval
        F_DLVAR = 6, F_JMPF = 7, F_JMP = 8, F_CALL = 9, F_RET = 10, F_RECUR = 11, &
        F_FN = 12, F_LAZY = 13, F_COLL = 14, F_THROW = 15, F_EVAL = 16, F_CALLB = 17, &
        F_DOT = 18, F_CASE = 19, F_TRY = 20, F_ENDTRY = 21, F_HANDLER = 22, F_CATCH = 23, &
-       F_RETHROW = 24
+       F_RETHROW = 24, F_NEW = 25
   ! the largest fixed arity a fn's call table covers (flat.inc)
   integer, parameter :: CT_MAXFIX = 31
   ! CLOTRAN_FLAT: 0 unread, 1 compile fn bodies flat, 2 trees only
@@ -2472,41 +2472,17 @@ contains
     integer :: base
 
     vst => gc_my_stack()
-    ! A RECORD'S DECLARED FIELD, by its keyword: what defrecord's own
-    ! valAt answers -- (case k :a a :b b (get __extmap k else)) -- read
-    ! straight from the field, where the road below is a nested call of
-    ! valAt and a host dispatch inside it, 5 us. A record is the type
-    ! whose fields end __meta __extmap ... (emit-defrecord adds them);
-    ! the declared ones are those before, and a hidden one is never a
-    ! key (it is looked up in the __extmap, as there).
-    if (k%tag == GCT_KEY .and. gc_kind(inst) == OBJ_INST) then
-       block
-         type(gc_value) :: fields, f
-         integer :: i, m
-         fields = gc_slot(gc_slot(inst, 1), 2)
-         m = -1
-         do i = 0, gcv_count(fields) - 2
-            f = strip_meta(gcv_nth(fields, i))
-            if (f%tag /= GCT_SYM) cycle
-            if (gc_ref_is(f%ref, "__meta")) then
-               f = strip_meta(gcv_nth(fields, i + 1))
-               if (f%tag == GCT_SYM) then
-                  if (gc_ref_is(f%ref, "__extmap")) m = i
-               end if
-               exit
-            end if
-         end do
-         do i = 0, m - 1
-            f = strip_meta(gcv_nth(fields, i))
-            if (f%tag /= GCT_SYM) cycle
-            if (gc_ref_same(f%ref, k%ref)) then
-               out = gcv_nth(gc_slot(inst, 2), i)
-               found = .true.
-               return
-            end if
-         end do
-       end block
-    end if
+    ! a record's declared field, by its keyword: what defrecord's own
+    ! valAt answers, read straight from the field (record_field_index)
+    block
+      integer :: fi
+      fi = record_field_index(inst, k)
+      if (fi >= 0) then
+         out = gcv_nth(gc_slot(inst, 2), fi)
+         found = .true.
+         return
+      end if
+    end block
     base = vs_enter(vst, 4)
     call vs_set(vst, base + 1, inst)
     call vs_set(vst, base + 2, k)
@@ -8044,6 +8020,35 @@ contains
        ! made (assoc-in {} [:impls t] m) produce {:impls nil}, so every
        ! protocol extension was silently discarded.
        a = strip_meta(gcv_nth(vs_get(vst, base + 1), 0))
+       ! a record's declared field: emit-defrecord's assoc is (new R ...)
+       ! of every field but the two hashes, that one replaced -- the
+       ! constructor zeroes the hashes -- so build that and construct,
+       ! where the method was a nested call and a condp (4.7 us)
+       if (n == 3 .and. gc_kind(a) == OBJ_INST) then
+          block
+            integer :: fi, nf, j
+            type(gc_value) :: av
+            fi = record_field_index(a, gcv_nth(vs_get(vst, base + 1), 1))
+            if (fi >= 0) then
+               call vs_set(vst, base + 2, a)
+               nf = gcv_count(gc_slot(a, 2))
+               av = gcv_build(nf - 2, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+               call vs_set(vst, base + 3, av)
+               do j = 0, nf - 3
+                  if (j == fi) then
+                     av = gcv_put(vs_get(vst, base + 3), j, gcv_nth(vs_get(vst, base + 1), 2), [vs_get(vst, base + 1)])
+                  else
+                     av = gcv_put(vs_get(vst, base + 3), j, gcv_nth(gc_slot(vs_get(vst, base + 2), 2), j), &
+                          [vs_get(vst, base + 1)])
+                  end if
+                  call vs_set(vst, base + 3, av)
+               end do
+               out = construct_type_vals(gc_slot(vs_get(vst, base + 2), 1), vs_get(vst, base + 3))
+               call vs_leave(vst, base)
+               return
+            end if
+          end block
+       end if
        if (gc_kind(a) == OBJ_INST) then
           out = inst_invoke(a, "assoc", rest_args(vs_get(vst, base + 1), 1), hit)
           if (hit) then
@@ -14135,6 +14140,25 @@ contains
     integer :: base
     tctx => ctx_self()
     vst => tctx%stk
+    ! clojure.core/compare itself -- sort's default -- is compare_values:
+    ! the same answer, where the call went through the wrapper, a call
+    ! frame and the builtin's dispatch for every one of n log n
+    ! comparisons. What compare_values cannot order goes the long way,
+    ! to throw the builtin's own error.
+    block
+      type(gc_value) :: wb
+      logical :: cok
+      wb = wrapper_of(strip_meta(cmp), 2)
+      if (gc_kind(wb) == OBJ_BUILTIN) then
+         if (gc_i1(wb) == B_COMPARE) then
+            c = compare_values(x, y, cok)
+            if (cok) then
+               c = max(-1, min(1, c))
+               return
+            end if
+         end if
+      end if
+    end block
     base = vs_enter(vst, 4)
     call vs_set(vst, base + 1, cmp)
     ! From two stack slots (gce_apply_slots): a compiled comparator is
