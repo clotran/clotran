@@ -2735,3 +2735,9 @@
 (defn flat-throwing [] (let [n (atom 0) s (lazy-seq (swap! n inc) (throw (ex-info "t" {})))] [(try (first s) (catch Exception e (ex-message e))) (try (next s) (catch Exception e (ex-message e))) (try (seq s) (catch Exception e :again)) @n]))
 (expect-diff "DEVIATIONS 59: a lazy-seq thunk keeps its captures after it throws")
 (flat-throwing)
+
+;; chunked-seq?, seq? and reduced? on every kind (is_instance answers
+;; these three from the value's kind), a deftype implementing ISeq
+;; among them
+(deftype FlatSeqT [] clojure.lang.ISeq (first [_] 1) (next [_] nil) (more [_] ()) (cons [this x] this) (seq [this] this) (count [_] 1) (empty [_] ()) (equiv [_ o] false))
+(for [x [nil 1 "s" [1] '(1) () (list) (lazy-seq nil) (lazy-seq [1]) (seq [1 2]) (seq (range 3)) (range 3) (map inc [1]) (seq {:a 1}) (cons 1 nil) (cons 1 [2]) (reduced 1) {:a 1} #{1} (with-meta '(1) {:m 1}) (->FlatSeqT)]] [(chunked-seq? x) (seq? x) (reduced? x)])

@@ -2896,11 +2896,22 @@ contains
     base = vs_enter(vst, 3)
     call vs_set(vst, base + 1, x)
     call vs_set(vst, base + 2, v)
-    out = gcv_empty([roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
-    call vs_set(vst, base + 3, out)
-    out = gcv_conj(vs_get(vst, base + 3), vs_get(vst, base + 1), [roots, vs_get(vst, base + 2)])
-    call vs_set(vst, base + 3, out)
-    out = concat_vecs(vs_get(vst, base + 3), vs_get(vst, base + 2), [roots, vs_get(vst, base + 1)])
+    ! sized once and filled in place: built by conj, every element
+    ! copied a 32-slot node (node_assoc) -- 1 us of every host call
+    ! through dot_dispatch, (instance? c x) among them
+    block
+      integer :: i, n
+      n = gcv_count(vs_get(vst, base + 2))
+      out = gcv_build(n + 1, roots)
+      call vs_set(vst, base + 3, out)
+      out = gcv_put(vs_get(vst, base + 3), 0, vs_get(vst, base + 1), roots)
+      call vs_set(vst, base + 3, out)
+      do i = 0, n - 1
+         out = gcv_put(vs_get(vst, base + 3), i + 1, gcv_nth(vs_get(vst, base + 2), i), roots)
+         call vs_set(vst, base + 3, out)
+      end do
+    end block
+    out = vs_get(vst, base + 3)
     call vs_leave(vst, base)
   end function cons_vec
 
@@ -16328,6 +16339,28 @@ contains
     character(len=:), allocatable :: dlt_1, dlt_2
     yes = .false.
     if (cls%tag /= GCT_CLASS) return
+    ! THE HOT ONES FIRST. core's seq functions ask these per element --
+    ! chunked-seq? in reduce1, map, filter and doseq, seq?, reduced? in
+    ! every reduce loop -- and the road below builds three strings and
+    ! compares against a hundred names: 1.3 us a call, half of what
+    ! (apply + s) spent on each element. Matched on the class's text in
+    ! place and answered from the value's kind; a deftype or reify
+    ! instance takes the road below, which knows what it implements.
+    if (gc_kind(strip_meta(v)) /= OBJ_INST) then
+       if (gc_ref_is(cls%ref, "clojure.lang.IChunkedSeq")) then
+          yes = is_chunked_seq(strip_meta(v))
+          return
+       else if (gc_ref_is(cls%ref, "clojure.lang.ISeq")) then
+          select case (gc_kind(strip_meta(v)))
+          case (OBJ_CONS, OBJ_LAZY, OBJ_SEQ, OBJ_CHUNKSEQ)
+             yes = .true.
+          end select
+          return
+       else if (gc_ref_is(cls%ref, "clojure.lang.Reduced")) then
+          yes = is_reduced(v)
+          return
+       end if
+    end if
     ! SHORTENED: a class value carries its canonical name, and the
     ! cases below are written the way a Clojure program writes the
     ! class -- Object, String, CharSequence -- so java.lang comes off

@@ -1894,6 +1894,19 @@ finding it realised. A thunk that throws is released by k_unwind
 (pending again, waiters woken). `dorun take` 155 -> 135 ms per 10^5,
 a hand-written lazy loop 213 -> 174.
 
+**Host calls (2026-09-29).** `(apply + s)` walks s in core's reduce1,
+whose `chunked-seq?` is `instance?`, whose body is `(. c (isInstance
+x))`: 1.3 us a call, half of each element. Three things, largest
+first: dot_dispatch prepended the target with `cons_vec`, built by
+conj -- every element a copied 32-slot node (now sized once and filled);
+a flat `.` call on an evaluated target with a native member goes to
+the builtin straight from its registers, as dispatch would (nil, a
+deftype instance and a Var still dispatch); and is_instance answers
+IChunkedSeq, ISeq and Reduced from the value's kind before building
+any string. `instance?` 1296 -> 281 ns, reduce1 2.97 -> 1.89 us an
+element, `(apply + (take 10^6 (range)))` 3.1 -> 1.9 s (15.2 s at the
+start of 2026-09-28).
+
 ## Decisions that still hold
 
 **The value type has no `FINAL`.** Copying a `cons_value` (nine

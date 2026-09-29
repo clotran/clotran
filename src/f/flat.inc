@@ -734,7 +734,7 @@
                             end if
                          end if
                          fnv = wb
-                         if (.not. flat_builtin()) exit
+                         if (.not. flat_builtin(w(6))) exit
                          pc = pc + FW
                          cycle
                       end if
@@ -768,7 +768,7 @@
           wb = wrapper_of(fnv, n)
           if (wb%tag /= GCT_NIL) fnv = wb
           if (gc_kind(fnv) == OBJ_BUILTIN .and. gc_i1(fnv) /= B_RTFN .and. gc_i1(fnv) /= B_UUIDFN) then
-             if (.not. flat_builtin()) exit
+             if (.not. flat_builtin(w(6))) exit
           else if (is_node_closure(fnv)) then
              ! an interpreted fn: its body in a frame of its own, this
              ! one waiting at the next instruction for the answer
@@ -868,7 +868,7 @@
           end if
           wb = gc_nil()
           call vs_set(vst, b + 3, fnv)
-          if (.not. flat_builtin()) exit
+          if (.not. flat_builtin(w(6))) exit
        case (F_DOT)
           ! w: F_DOT d k a n from site -- dispatched as exec.inc's N_DOT;
           ! the target (or the class) in slot 3, the arguments in slot 6
@@ -877,6 +877,48 @@
           tctx%kst(ks)%aux2 = w(7)
           tctx%kst(ks)%pc = pc
           v = gc_vec_get(consts, w(3) + 1)
+          if (tctx%kst(ks)%i == -2) then
+             ! a native call below parked: its builtin again, on the
+             ! same vector (the target first)
+             tctx%kst(ks)%i = 0
+             argv = vs_get(vst, b + 6)
+             call vs_set(vst, b + 6, gc_nil())
+             tctx%pending_site = w(7)
+             v = apply(vs_get(vst, b + 3), argv)
+             if (tctx%yield_flag) then
+                call vs_set(vst, b + 6, argv)
+                tctx%kst(ks)%i = -2
+                exit
+             end if
+             call vs_set(vst, b + 3, gc_nil())
+             if (tctx%has_error) exit
+             call reg_set(fr, w(2), v)
+             pc = pc + FW
+             cycle
+          end if
+          ! A NATIVE MEMBER on an evaluated target: what dot_dispatch
+          ! would do -- the native with (target args...) -- straight from
+          ! the registers, which hold them in a row already; no vector
+          ! built and another built from it. nil, a deftype instance and
+          ! a Var take dispatch's road.
+          if (tctx%kst(ks)%i /= -1 .and. w(6) == 1) then
+             fnv = gc_slot(v, 3)
+             argv = strip_meta(reg_get(fr, w(4)))
+             if (gc_kind(fnv) == OBJ_BUILTIN .and. argv%tag /= GCT_NIL) then
+                if (gc_i1(fnv) /= B_RTFN .and. gc_i1(fnv) /= B_UUIDFN .and. &
+                     gc_kind(argv) /= OBJ_INST .and. .not. gcn_is_var(argv)) then
+                   n = w(5) + 1
+                   wb = gc_nil()
+                   call vs_set(vst, b + 3, fnv)
+                   if (.not. flat_builtin(w(7))) then
+                      if (tctx%yield_flag) tctx%kst(ks)%i = -2
+                      exit
+                   end if
+                   pc = pc + FW
+                   cycle
+                end if
+             end if
+          end if
           if (tctx%kst(ks)%i == -1) then
              tctx%kst(ks)%i = 0
              argv = vs_get(vst, b + 6)
@@ -945,7 +987,8 @@
     ! into w(2); with wb set, fnv is a wrapper's builtin and the
     ! wrapper (slot 3) is on the call stack while it runs. False when
     ! the body must stop here: an error, or the call parked.
-    logical function flat_builtin() result(go)
+    logical function flat_builtin(site) result(go)
+      integer, intent(in) :: site
       go = .false.
       id = gc_i1(fnv)
       scalar = n >= 1 .and. n <= 2 .and. scalar_builtin(id)
@@ -967,17 +1010,17 @@
          call reg_set(fr, w(4) + j, gc_nil())
       end do
       if (wb%tag /= GCT_NIL) then
-         call push_frame(tctx, vs_get(vst, b + 3), w(6))
+         call push_frame(tctx, vs_get(vst, b + 3), site)
          if (tctx%has_error) return
       end if
       if (scalar .or. spare) then
          call vs_set(vst, b + 6, argv)
-         tctx%pending_site = w(6)
+         tctx%pending_site = site
          v = call_builtin(id, argv)
          if (spare) call args_give(vs_get(vst, b + 6), n)
          call vs_set(vst, b + 6, gc_nil())
       else
-         tctx%pending_site = w(6)
+         tctx%pending_site = site
          v = apply(fnv, argv)
          if (tctx%yield_flag) then
             if (wb%tag /= GCT_NIL) call pop_frame(tctx)
