@@ -1958,6 +1958,55 @@ jump out of a try leaves that arity a tree (Clojure refuses it anyway).
 nested with a recur inside. `dorun (map inc (range 10^5))` 279 -> 121
 ms, now that map's chunked branch compiles.
 
+
+**Steps 18 and 19, continued (2026-09-29).** Every arity core loads now
+compiles flat: a nested tree node beside a recur no longer refuses an
+arity, only a recur inside one (node_has_recur). Measured against the
+start of the day, per call or element:
+
+| | before | after |
+|---|---|---|
+| `(:k m)`, a small map | 379 ns | 192 ns |
+| a native reduce calling a fn | 736 ns | 143 ns |
+| `(assoc m k v)` into 5 x 10^4 entries | 2.3 us | 1.35 us |
+| `(assoc! t k v)`, transient map | 2.7 us | 1.3 us |
+| `sort`, per element | 2.3 us | 1.2 us |
+| `(R. a b)`, a record | 1.7 us | 640 ns |
+| `(assoc r :a v)`, a record | 4.7 us | 800 ns |
+| `frequencies`, per element | 3.3 us | 2.4 us |
+
+How: a keyword call from the register; gce_apply_slots entering a fn
+through its call table with no argument vector (native reduce, sort,
+swap! all call back that way); the hash map and vector rooting on the
+value stack instead of growing heap root arrays per level; a `new`
+compiled flat that keeps the type it resolved; record field assoc
+and lookup built directly, as emit-defrecord's methods would.
+
+Found on the way and fixed (c14b20d): records were hashed and compared
+by identity inside maps and sets -- a set of twenty equal records had
+twenty members. DEVIATIONS 60 keeps the case not fixed: a deftype's own
+equals and hasheq.
+
+**Stage 5 (the AOT compiler reading the flat form): measured, not
+started.** Compiled code against flat, 2026-09-29:
+
+| | flat | compiled |
+|---|---|---|
+| a loop calling a small fn, 10^6 | 221 ms | 34 ms |
+| non-tail recursion, 2000 deep x 50 | 47 ms | 8 ms |
+| `(fib 25)` | 48 ms | 14 ms |
+| `(reduce + (map inc (range 10^5)))` | 101 ms | 106 ms |
+
+Compiling still pays 3-6x on scalar code and nothing on seq code, whose
+time is the runtime's (allocation, forcing). Stage 5 would widen WHAT
+compiles -- closures, lazy-seq, try, case, protocol calls -- and those
+are the constructs whose cost is in the runtime, so it buys little
+speed for a rewrite of the compiler's front end (1762 lines, plus the
+pure-Fortran tier's 1148). Deferred until a measurement says the
+interpreted remainder of compiled code is what is slow. Compiled
+recursion stops near 2,200 deep (DEVIATIONS 7), the interpreter's at
+100,000.
+
 ### 19. Slow spots, surveyed against the JVM (2026-09-29)
 
 Thirty everyday forms timed on a warmed JVM (best of 5) and on

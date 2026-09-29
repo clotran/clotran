@@ -193,6 +193,13 @@ forcing a lazy seq, a multimethod's dispatch, a def's value -- and
 `CLOTRAN_MAX_DEPTH` (2200) still bounds that. A rendered trace stops
 at 128 frames with `... N more`; `.getStackTrace` has them all.
 
+COMPILED code nests too: a compiled fn calling a compiled fn is a
+Fortran call, counted against `CLOTRAN_MAX_DEPTH`, so compiled
+recursion stops at about 2,200 deep where the interpreter's reaches
+100,000 and the JVM's about 11,000 (measured 2026-09-29: a non-tail
+recursion of 5,000 overflows compiled, runs interpreted). Raising it
+means a Fortran stack sized for it; not done.
+
 Since 2026-09-27 the VALUE stack is fixed, not grown: compiled code
 holds a view of it across calls, so it may never move. 4,194,304 slots
 per thread (64 MB of address space, calloc'd, so real only where
