@@ -187,6 +187,18 @@ launcher, run in a directory holding a `deps.edn`, asks
 **First users.** `~/jborden/clotran-nrepl`, the nREPL server (PLAN step
 21 d), as a `:local/root`, then over git.
 
+**Status (2026-09-29).** clotran has `CLOTRAN_PATH` (check-path in the
+gate) and exits 1 when a script fails to load. `~/jborden/clotran-deps`
+resolves `:paths`, `:local/root`, `:git/url` + full `:git/sha` (cached
+under `~/.cache/clotran/gitlibs`), aliases, the provided Clojure
+libraries and refused jars, transitively, with conflicts an error unless
+the project settles them; its `test/run.sh` checks each. It resolves and
+loads the `clotran-nrepl` stub both ways. Not yet: caching the resolved
+path, the `clotran` launcher calling it in a directory with a
+`deps.edn`, `:git/tag`, native packages with a build recipe, and `-main`
+with `*command-line-args*` (PLAN step 22), which replaces the one-line
+driver its `bin/clotran-deps` writes.
+
 What the rules above add up to. The decisions made earlier (PLAN.md
 step 9), which this keeps:
 

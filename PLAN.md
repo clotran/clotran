@@ -60,6 +60,11 @@ the meantime, and its numbers are those of 2026-09-28.
    marking only if a measurement asks for it (step 14's did not).
 7. **Network clients (step 25).** Scenario C's event streams, on
    step 21's sockets.
+8. **The package manager.** `clotran-deps`, its own repository, reading a
+   project's `deps.edn` (PACKAGES.md): the first slice resolves and
+   fetches (2026-09-29); next, the launcher using it, a cached path, and
+   native packages built from a recipe. Its first real package is
+   `clotran-nrepl` (step 21 d).
 
 Already there, though the deck says missing: `do concurrent` is emitted
 by the pure-Fortran tier for loops of `amap`'s shape (2026-09-25).
