@@ -64,7 +64,12 @@ TESTLDFLAGS = $(TESTLDFLAGS_$(notdir $(FC)))
 # take 2330 -> 1909, a call 1052 -> 813 -- the inlining of the one-line
 # accessors that -O2 left out of line. Raising the inline parameters
 # further changed nothing.
-FCFLAGS_gfortran = -frecursive -flto=auto -ffat-lto-objects -O3
+# -fstack-arrays: an array temporary on the stack, not the heap. The
+# roots lists passed to every allocation -- [roots, x] -- are such
+# temporaries, grown element by element with malloc and realloc and
+# freed after, on every call: malloc, realloc and free were a tenth of
+# a lazy walk's time, and a lazy cell cost 287 ns to make, now 134.
+FCFLAGS_gfortran = -frecursive -flto=auto -ffat-lto-objects -O3 -fstack-arrays
 FCFLAGS_flang =
 # -fno-lto, not merely no -flto: gfortran sees the optimiser's code in a
 # fat object and runs it anyway -- 12 s an abi_test link, 0.1 s without

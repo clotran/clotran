@@ -123,14 +123,15 @@
     call vs_set(vst, base + 2, frame)
     capv = gcv_nth(tmpl, 2)
     ncap = gcv_count(capv) / 2
-    caps = gc_vec(ncap, [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    ! roots as they are: tmpl and frame are on the stack, and a
+    ! [roots, ...] list is a heap temporary on every closure made
+    caps = gc_vec(ncap, roots)
     call vs_set(vst, base + 3, caps)
     do i = 0, ncap - 1
        call gc_vec_set(vs_get(vst, base + 3), i + 1, &
             frame_get(vs_get(vst, base + 2), int_of(gcv_nth(gcv_nth(vs_get(vst, base + 1), 2), 2 * i))))
     end do
-    fn = gc_obj(OBJ_CLOSURE, [vs_get(vst, base + 1), vs_get(vst, base + 3), gc_nil(), gc_nil(), gc_nil()], &
-         [roots, vs_get(vst, base + 1), vs_get(vst, base + 3)])
+    fn = gc_obj(OBJ_CLOSURE, [vs_get(vst, base + 1), vs_get(vst, base + 3), gc_nil(), gc_nil(), gc_nil()], roots)
     call vs_leave(vst, base)
   end function make_closure_from
 
