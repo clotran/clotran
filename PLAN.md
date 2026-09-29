@@ -1845,6 +1845,13 @@ expression, `(apply + (take 10^6 (range)))`: 15.2 s at the start of
 the day, 4.55 s now. What a lazy element still costs is the forcing:
 `gce_force` runs the thunk in a nested run from Fortran (stage 4).
 
+**Stage 3, top-level forms (2026-09-28).** analyze_top compiles the
+form's body too (`flat_compile_body`), kept in the N_TOP node's p2, so
+a loop typed at the REPL runs as one in a fn does; `unchecked-inc` and
+`unchecked-dec` joined the inline integers (dotimes counts with them).
+Per 10^6, at the top level: an empty `dotimes` 549 -> 44 ms, `(+ i 1)`
+in one 798 -> 60 ms, `(f s)` with f bound to `first` 855 -> 253 ms.
+
 ## Decisions that still hold
 
 **The value type has no `FINAL`.** Copying a `cons_value` (nine

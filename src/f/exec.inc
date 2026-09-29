@@ -1502,7 +1502,10 @@
        case (N_TOP)
           v = new_frame(gc_i2(nd), [vs_get(vst, b + 1)])
           call vs_set(vst, b + 2, v)
-          call k_tail(gc_slot(vs_get(vst, b + 1), 2), tctx)
+          ! its flat form when it has one (analyze_top)
+          v = gc_slot(vs_get(vst, b + 1), 3)
+          if (v%tag == GCT_NIL .or. .not. flat_enabled()) v = gc_slot(vs_get(vst, b + 1), 2)
+          call k_tail(v, tctx)
        case (N_DOT)
           ! (. target member args...): the target, then the arguments,
           ! into this frame -- slot 3 and slot 4 -- and then the dispatch,

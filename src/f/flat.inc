@@ -28,12 +28,23 @@
   ! does not compile. `tbase` is the fn's slot count: temporaries go
   ! above it, and `ntemp` answers how many this arity needed.
   function flat_compile(ar, tbase, ntemp, roots) result(fl)
-    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: ar
     integer, intent(in) :: tbase
     integer, intent(out) :: ntemp
     type(gc_value), intent(in) :: roots(:)
-    type(gc_value) :: fl, body, code, consts, c
+    type(gc_value) :: fl
+    fl = flat_compile_body(gcv_nth(ar, 3), tbase, ntemp, [roots, ar])
+  end function flat_compile
+
+  ! The same for any body over a frame of tbase slots: an arity's, or
+  ! a top-level form's (analyze_top), which is the REPL's.
+  function flat_compile_body(body0, tbase, ntemp, roots) result(fl)
+    type(gc_stack), pointer :: vst
+    type(gc_value), intent(in) :: body0
+    integer, intent(in) :: tbase
+    integer, intent(out) :: ntemp
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: fl, code, consts, c
     type(flat_buf) :: fb
     integer :: base, i, n
     vst => gc_my_stack()
@@ -41,9 +52,7 @@
     ntemp = 0
     if (.not. flat_enabled()) return
     base = vs_enter(vst, 4)
-    call vs_set(vst, base + 1, ar)
-    body = gcv_nth(ar, 3)
-    call vs_set(vst, base + 2, body)
+    call vs_set(vst, base + 2, body0)
     call vs_set(vst, base + 3, gcv_empty([roots, vs_get(vst, base + 1)]))
     fb%cslot = base + 3
     fb%tbase = tbase
@@ -79,7 +88,7 @@
     call gc_set_slot(fl, 5, vs_get(vst, base + 2))
     ntemp = fb%maxtemp
     call vs_leave(vst, base)
-  end function flat_compile
+  end function flat_compile_body
 
   ! CLOTRAN_FLAT=0 compiles nothing, so every body runs as a tree: the
   ! gate's comparison, and the way to rule this file out of a bug.
@@ -799,10 +808,12 @@
        end select
     else
        select case (id)
-       case (B_INC)
+       case (B_INC, B_UINC)
+          ! unchecked-inc wraps at the top; that one value goes to the
+          ! builtin, which knows how (dotimes counts with it)
           if (a == huge(a)) return
           out = gc_int(a + 1_gc_ip)
-       case (B_DEC)
+       case (B_DEC, B_UDEC)
           if (a == -huge(a) - 1_gc_ip) return
           out = gc_int(a - 1_gc_ip)
        case (B_ZERO); out = gc_bool(a == 0)

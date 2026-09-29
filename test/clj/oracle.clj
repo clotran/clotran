@@ -2712,3 +2712,7 @@
 (defn flat-var ([] (flat-var 1)) ([a] (flat-var a 2)) ([a b & more] [a b more]))
 
 [(flat-rt3 {} :a 1) (flat-mix 3 4) (flat-mix 2.5 1) (flat-ovf Long/MAX_VALUE) (flat-ovf 5) (flat-clear (map inc [1 2 3])) (flat-loop 5) (flat-var) (flat-var 1 2 3 4)]
+
+;; unchecked-inc/dec wrap; the flat fast path leaves the one wrapping
+;; value to the builtin
+[(unchecked-inc Long/MAX_VALUE) (unchecked-dec Long/MIN_VALUE) (let [x 5] (unchecked-inc x)) (let [f (fn [x] (unchecked-dec x))] (f Long/MIN_VALUE)) (let [n 3] (loop [i 0 acc []] (if (< i n) (recur (unchecked-inc i) (conj acc i)) acc)))]

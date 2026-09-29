@@ -3321,7 +3321,17 @@
     end if
     call vs_set(vst, base + 3, body)
     call apply_clears(vs_get(vst, base + 3), gc_i1(scope_info(vs_get(vst, base + 2))))
-    nd = mk_node(N_TOP, gc_nil(), vs_get(vst, base + 3), gc_nil(), gc_i1(scope_info(vs_get(vst, base + 2))), &
-         [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    ! the flat form beside the tree (flat.inc): a loop typed at the
+    ! REPL runs as one in a fn does; its temporaries widen the frame
+    block
+      type(gc_value) :: fl
+      integer :: nt
+      fl = flat_compile_body(vs_get(vst, base + 3), gc_i1(scope_info(vs_get(vst, base + 2))), nt, &
+           [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+      call vs_set(vst, base + 4, fl)
+      nd = mk_node(N_TOP, gc_nil(), vs_get(vst, base + 3), vs_get(vst, base + 4), &
+           gc_i1(scope_info(vs_get(vst, base + 2))) + nt, &
+           [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 4)])
+    end block
     call vs_leave(vst, base)
   end function analyze_top
