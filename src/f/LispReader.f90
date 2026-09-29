@@ -602,7 +602,12 @@ contains
        return
     end if
     src = gc_str(text(start:pos - 1), roots)
-    v = gc_obj(OBJ_REGEX, [src], [src])
+    ! the CALLER'S roots too: they hold the form being read around this
+    ! literal, and with only src rooted a collection here freed it --
+    ! (def p #"a") read as nothing, silently, when a collection landed
+    ! on this allocation. The oracle's one-in-a-hundred flake (PLAN
+    ! step 20), found with CLOTRAN_GC_EVERY=1.
+    v = gc_obj(OBJ_REGEX, [src], [roots, src])
     call gc_set_i1(v, handle)
     pos = pos + 1
   end function read_regex
