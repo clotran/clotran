@@ -2741,3 +2741,8 @@
 ;; among them
 (deftype FlatSeqT [] clojure.lang.ISeq (first [_] 1) (next [_] nil) (more [_] ()) (cons [this x] this) (seq [this] this) (count [_] 1) (empty [_] ()) (equiv [_ o] false))
 (for [x [nil 1 "s" [1] '(1) () (list) (lazy-seq nil) (lazy-seq [1]) (seq [1 2]) (seq (range 3)) (range 3) (map inc [1]) (seq {:a 1}) (cons 1 nil) (cons 1 [2]) (reduced 1) {:a 1} #{1} (with-meta '(1) {:m 1}) (->FlatSeqT)]] [(chunked-seq? x) (seq? x) (reduced? x)])
+
+;; (instance? C x) with a class literal is the type test, not a call
+;; through the Var (InstanceOfExpr): with-redefs does not reach it, and
+;; a class in a local still calls the Var
+[(with-redefs [instance? (fn [c x] :redef)] (instance? String "a")) (with-redefs [instance? (fn [c x] :redef)] (let [c String] (instance? c "a"))) (instance? String 1) (let [f instance?] (f Number 1))]

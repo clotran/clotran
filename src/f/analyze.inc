@@ -1144,10 +1144,52 @@
             [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
        call vs_set(vst, base + 3, kids)
     end if
+    if (.not. tctx%has_error) call instance_of_head(base + 3)
     if (.not. tctx%has_error) nd = mk_node(N_CALL, vs_get(vst, base + 3), gc_nil(), gc_nil(), 0, &
          [vs_get(vst, base + 1), vs_get(vst, base + 2)])
     call vs_leave(vst, base)
   end function analyze_call
+
+  ! (instance? C x), C a class literal, is the type test itself, as the
+  ! JVM compiler makes it (Compiler.java, InvokeExpr.parse: a head that
+  ! is the Var clojure.core/instance?, two arguments, the first a Class
+  ! constant -> InstanceOfExpr): the isInstance builtin becomes the
+  ! head, and the Var is not called. It was two interpreted calls and a
+  ! host dispatch -- chunked-seq? cost 400 ns, per element of every
+  ! reduce1 and map.
+  subroutine instance_of_head(slot)
+    integer, intent(in) :: slot
+    type(gc_stack), pointer :: vst
+    type(gc_value) :: kids, h, var, nm, ns, core, c, b
+    integer :: base
+    vst => gc_my_stack()
+    kids = vs_get(vst, slot)
+    if (gcv_count(kids) /= 3) return
+    h = gcv_nth(kids, 0)
+    if (gc_kind(h) /= OBJ_AST) return
+    if (gc_i1(h) /= N_VAR) return
+    var = gc_slot(h, 2)
+    if (gc_kind(var) /= OBJ_VAR) return
+    nm = gc_slot(var, 4)
+    if (nm%tag /= GCT_SYM) return
+    if (.not. gc_ref_is(nm%ref, "instance?")) return
+    ns = gc_slot(var, 3)
+    core = gcn_find("clojure.core")
+    if (ns%tag /= core%tag .or. ns%ref /= core%ref) return
+    c = gcv_nth(kids, 1)
+    if (gc_kind(c) /= OBJ_AST) return
+    if (gc_i1(c) /= N_CONST) return
+    if (tag_of(strip_meta(gc_slot(c, 2))) /= GCT_CLASS) return
+    base = vs_enter(vst, 1)
+    b = native(B_INSTANCE, "instance?", [kids])
+    call vs_set(vst, base + 1, b)
+    b = const_node(vs_get(vst, base + 1), [kids])
+    call vs_set(vst, base + 1, b)
+    kids = gcv_assoc(vs_get(vst, slot), 0, vs_get(vst, base + 1), [vs_get(vst, base + 1)])
+    call vs_set(vst, slot, kids)
+    call vs_leave(vst, base)
+  end subroutine instance_of_head
+
 
   ! --- host sugar, rewritten into the canonical forms ----------------
 

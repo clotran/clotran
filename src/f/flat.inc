@@ -709,6 +709,20 @@
                          ! a core wrapper: its builtin, the wrapper's
                          ! call-stack entry around it -- none needed when
                          ! the answer is a slot already there
+                         ! two machine integers through + < inc ..., as a
+                         ! builtin head's are (F_CALLB): nothing to fail
+                         if (n >= 1 .and. n <= 2) then
+                            argv = gc_nil()
+                            if (n == 2) argv = reg_get(fr, w(4) + 1)
+                            if (flat_int_op(gc_i1(wb), n, reg_get(fr, w(4)), argv, newframe)) then
+                               call reg_set(fr, w(4), gc_nil())
+                               if (n == 2) call reg_set(fr, w(4) + 1, gc_nil())
+                               call vs_set(vst, b + 3, gc_nil())
+                               call reg_set(fr, w(2), newframe)
+                               pc = pc + FW
+                               cycle
+                            end if
+                         end if
                          if (n == 1) then
                             if (flat_seq_op(gc_i1(wb), reg_get(fr, w(4)), newframe)) then
                                call reg_set(fr, w(4), gc_nil())
