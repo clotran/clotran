@@ -2129,7 +2129,9 @@ c. *`clotran.server`*: a socket REPL (done 2026-09-29: `start-server`,
    Bytes for binary protocols (done 2026-09-29): `clotran.net/read-bytes`
    and `write-bytes` into and out of a byte array, nothing allocated, and
    `clotran.io/utf8-bytes` / `utf8-string`, what bencode needs.
-d. *nREPL, as a package*: what CIDER speaks (bencode, eval, load-file,
+d. *nREPL, as a package* (serving 2026-09-29, `~/jborden/clotran-nrepl`:
+   the eleven ops below, tested against its own client and the reference
+   client nrepl/nrepl 1.3.0; CIDER itself not yet tried): what CIDER speaks (bencode, eval, load-file,
    describe, completions), on the model of babashka's compact server.
 
 Windows is built with a mingw-w64 cross toolchain and run under Wine for

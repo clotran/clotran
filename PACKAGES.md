@@ -193,9 +193,10 @@ resolves `:paths`, `:local/root`, `:git/url` + full `:git/sha` (cached
 under `~/.cache/clotran/gitlibs`), aliases, the provided Clojure
 libraries and refused jars, transitively, with conflicts an error unless
 the project settles them; its `test/run.sh` checks each. It resolves and
-loads the `clotran-nrepl` stub both ways. Not yet: caching the resolved
-path, the `clotran` launcher calling it in a directory with a
-`deps.edn`, `:git/tag`, native packages with a build recipe, and `-main`
+loads `clotran-nrepl` both ways, and the `clotran` launcher runs it
+itself in a directory with a `deps.edn`, the answer cached in
+`.clotran-cache/` while no `deps.edn` it read has changed.
+`clotran-nrepl` serves (PLAN step 21 d). Not yet: `:git/tag`, native packages with a build recipe, and `-main`
 with `*command-line-args*` (PLAN step 22), which replaces the one-line
 driver its `bin/clotran-deps` writes.
 
