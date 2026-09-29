@@ -488,13 +488,13 @@
        hm("", "getInterfaces", B_GETIFACES, "clotran-get-interfaces"), &
        hm("", "isAssignableFrom", B_ISASSIGN, "clotran-assignable"), &
        hm("", "isArray", B_ISARRAY, "clotran-is-array"), &
-  ! The protocol dispatch cache is a map with named fields, and fnFor answers nil: a permanently cold cache. DEVIATIONS.md 13.
+  ! The protocol dispatch cache is a map with named fields; fnFor reads its class-to-entry map (B_FNFOR).
        hm("", "sym", B_FLD_SYM, "clotran-sym"), &
        hm("", "protocol", B_FLD_PROTOCOL, "clotran-protocol"), &
        hm("", "methodk", B_FLD_METHODK, "clotran-methodk"), &
        hm("", "map", B_FLD_MAP, "clotran-map"), &
        hm("", "table", B_FLD_MAP, "clotran-map"), &
-       hm("", "fnFor", B_ALWAYS_NIL, "clotran-nil"), &
+       hm("", "fnFor", B_FNFOR, "clotran-fn-for"), &
        hm("", "__methodImplCache", B_FLD_CACHE, "clotran-cache"), &
   ! preferMethod resolves an ambiguity exact-match dispatch never has. DEVIATIONS.md 8.
        hm("", "preferMethod", B_PREFERMETHOD, "clotran-prefer-method"), &

@@ -240,6 +240,7 @@ module Eval
   integer, parameter :: B_INTEGERVALUE = 401, B_LOADREADER = 403, B_UUIDFN = 404
   integer, parameter :: B_AGENTPOP = 405, B_AGENTRUN1 = 406, B_TOUCH = 407, B_TXRUNNING = 408
   integer, parameter :: B_REFHISTCOUNT = 409, B_REFMINHIST = 410, B_REFMAXHIST = 411, B_REFSETHIST = 412
+  integer, parameter :: B_FNFOR = 413
   ! A number's WIDTH, in an integer's or a real's otherwise unused ref:
   ! what it boxes as on the JVM. Equality and hashing never read it.
   integer, parameter :: W_LONG = 0, W_BYTE = 1, W_SHORT = 2, W_INT = 3, W_FLOAT = 1
@@ -3127,11 +3128,8 @@ contains
        ! (MethodImplCache. sym protocol methodk) and its 4-argument
        ! form, read back through .sym .protocol .methodk .map.
        !
-       ! .fnFor always answers nil -- a permanently cold cache --
-       ! which sends every protocol call down -cache-protocol-fn and
-       ! find-protocol-method. That is the CORRECT path, just not
-       ! the fast one, and it is what makes protocol dispatch work
-       ! at all without a class to key on. DEVIATIONS.md 13.
+       ! .fnFor reads the map back (B_FNFOR): the class dispatched on
+       ! to its entry, the entry's fn under :protocol.
        block
          type(gc_value) :: mp
          integer :: fi
@@ -10820,6 +10818,31 @@ contains
        end block
     case (B_ISREDUCED)
        out = gc_bool(is_reduced(gcv_nth(args, 0)))
+    case (B_FNFOR)
+       ! (.fnFor cache c): MethodImplCache.findFnFor's map branch -- the
+       ! entry the cache's map holds for class c, and that entry's fn.
+       ! core's -cache-protocol-fn puts (MethodImplCache$Entry. c f) there
+       ! the first time a class is dispatched on, so the second call finds
+       ! it: a protocol call costs two lookups, not find-protocol-method
+       ! every time. The cache and an entry are maps with named fields
+       ! (eval_new): an entry's c is under :sym and its f under :protocol.
+       block
+         type(gc_value) :: cache, m, e
+         cache = strip_meta(gcv_nth(args, 0))
+         out = gc_nil()
+         if (gca_is(cache)) then
+            call vs_set(vst, base + 2, gc_key("map", [vs_get(vst, base + 1)]))
+            m = gca_get(cache, vs_get(vst, base + 2))
+            if (gca_is(m)) then
+               e = gca_get(m, gcv_nth(args, 1))
+               if (gca_is(e)) then
+                  call vs_set(vst, base + 3, e)
+                  call vs_set(vst, base + 2, gc_key("protocol", [vs_get(vst, base + 1), vs_get(vst, base + 3)]))
+                  out = gca_get(vs_get(vst, base + 3), vs_get(vst, base + 2))
+               end if
+            end if
+         end if
+       end block
     case (B_FLD_SYM, B_FLD_PROTOCOL, B_FLD_METHODK, B_FLD_MAP)
        ! (.field x) on a map-shaped host object: the field name IS
        ! a keyword in the map.

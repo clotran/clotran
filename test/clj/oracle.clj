@@ -2761,3 +2761,17 @@
 (defn flat-case [x] (case x 1 :one 2 :two (3 4) :three-four "s" :str :k :kw [1 2] :vec nil :nil :default))
 (defn flat-case2 [x] (case x (1 2 3) :small 100 :hundred -1 :neg))
 [(flat-try1 nil) (flat-try1 1) (flat-try2) (flat-try3) (flat-try4 6) (flat-try5) (flat-try6) (flat-try7) (mapv flat-case [1 2 3 4 "s" :k [1 2] nil 9 "t"]) (mapv flat-case2 [1 3 100 -1]) (try (flat-case2 7) (catch IllegalArgumentException e (.getMessage e)))]
+
+;; protocol dispatch through the cache (DEVIATIONS 13, resolved): per
+;; class, nil and Object, records and types, re-extension, via metadata
+(defprotocol FP (fp [x]) (fp2 [x y]))
+(extend-protocol FP Long (fp [x] [:long x]) (fp2 [x y] [:long2 x y]) String (fp [x] [:str x]) (fp2 [x y] :s2) nil (fp [x] :nil) (fp2 [x y] :nil2) Object (fp [x] :obj) (fp2 [x y] :obj2))
+(defrecord FR [a] FP (fp [_] [:rec a]) (fp2 [_ y] [:rec2 a y]))
+(deftype FT [] FP (fp [_] :type) (fp2 [_ y] :type2))
+(defprotocol FM :extend-via-metadata true (fm [x]))
+(extend-protocol FM Long (fm [x] :long-fm))
+(def r1 (mapv fp [1 "a" nil :k 2 "b" (->FR 1) (FT.) 1.5 [1] nil 3]))
+(extend-protocol FP Long (fp [x] [:long-again x]) (fp2 [x y] [:long2-again x y]))
+(def r2 (mapv fp [1 2 "a"]))
+(def r3 [(fp2 1 2) (fp2 "x" 1) (fp2 (->FR 5) 6) (fm 1) (fm (with-meta [1] {(quote user/fm) (fn [_] :via-meta)})) (try (fm "x") (catch IllegalArgumentException e :no-impl))])
+[r1 r2 r3]

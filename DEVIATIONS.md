@@ -352,12 +352,20 @@ typo in a load path is still an error. `instant` needs no entry: it is
 guarded by `when-class`, and since `Class/forName` throws
 `ClassNotFoundException` here, core.clj declines to load it on its own.
 
-## 13. Protocol dispatch is uncached
+## 13. RESOLVED -- protocol dispatch is cached
 
-`MethodImplCache` is a map with the right fields, and `fnFor` always
-answers nil -- a permanently cold cache. Every protocol call therefore
-goes through `-cache-protocol-fn` and `find-protocol-method`, which is
-the CORRECT path and not the fast one.
+`MethodImplCache` is a map with the right fields, and `fnFor` read
+nothing: it always answered nil, a permanently cold cache, so every
+protocol call went through `-cache-protocol-fn` and
+`find-protocol-method` -- the correct path, at 13 us a call. Since
+2026-09-29 `fnFor` is MethodImplCache.findFnFor's map branch
+(Eval.f90 `B_FNFOR`): the entry the cache's map holds for the class,
+and its fn. core.clj's own `-cache-protocol-fn` fills the map on the
+first call for a class, as it does on the JVM, and re-extending a
+protocol resets the caches the same way, so nothing else changed: a
+protocol call is two map lookups, 0.95 us. The `mre` (most recent
+entry) shortcut and the hashed-table form are not modelled; the map
+form answers the same.
 
 The cache is stored on the function object itself, which is why
 `OBJ_SLOTS` is 5 rather than 4: a closure's four slots are params, body,
