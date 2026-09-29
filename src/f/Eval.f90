@@ -6812,7 +6812,15 @@ contains
     ! a fn that only wraps a builtin, called with its arity: the builtin
     ! is the callee (analyze.inc wrapper_builtin)
     av = wrapper_of(fn, nargs)
-    if (av%tag /= GCT_NIL) fn = av
+    if (av%tag /= GCT_NIL) then
+       ! the wrapper is still on the call stack, as it is on the JVM's
+       call vs_set(vst, base + 1, fn)
+       call push_frame(ctx_self(), vs_get(vst, base + 1), 0)
+       out = gce_apply_slots(vst, av, argbase, nargs)
+       call pop_frame(ctx_self())
+       call vs_leave(vst, base)
+       return
+    end if
     call vs_set(vst, base + 1, fn)
     if (gc_kind(vs_get(vst, base + 1)) == OBJ_COMPILED .and. &
          (gc_i2(vs_get(vst, base + 1)) < 0 .or. gc_i2(vs_get(vst, base + 1)) == nargs)) then
@@ -6960,7 +6968,11 @@ contains
          wb = wrapper_of(vs_get(vst, base + 1), gcv_count(argl))
          call vs_set(vst, base + 2, gc_nil())
          if (wb%tag /= GCT_NIL) then
+            ! the wrapper stays on the call stack
+            call push_frame(tctx, vs_get(vst, base + 1), tctx%pending_site)
+            tctx%pending_site = 0
             out = call_builtin(gc_i1(wb), argl)
+            call pop_frame(tctx)
          else
             out = invoke_closure(vs_get(vst, base + 1), argl)
          end if

@@ -1699,10 +1699,11 @@ What moved, and by how much:
   are `(fn [coll] (. clojure.lang.RT (first coll)))` -- ran a whole
   interpreted call (470 ns) around an 80 ns builtin. Analysis now
   marks an arity whose body is exactly a builtin applied to its own
-  parameters, and a call with that arity calls the builtin. clojure.core
-  fns only, and not while a step is pending, so a user's fn keeps its
-  frame for a break's call stack and for stepping. Compiled `(first c)`
-  570 -> 120 ns.
+  parameters, and a call with that arity calls the builtin, the
+  wrapper's call-stack entry pushed around it as the JVM's trace has
+  it. clojure.core fns only, and not while a step is pending, so a
+  user's fn keeps its whole frame and stepping stops in core's.
+  Compiled `(first c)` 570 -> 120 ns.
 - `lazy-seq` expands to `(new clojure.lang.LazySeq (fn* [] ...))`,
   which took the generic `new` path (680 ns); it is the lazy node now.
 - `apply` HELD THE SEQ. core's `apply` is `(. f (applyTo s))`, and the

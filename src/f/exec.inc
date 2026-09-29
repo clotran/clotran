@@ -1221,8 +1221,13 @@
              n = gcv_count(kids) - 1
              ! a fn that only wraps a builtin, called with its arity: the
              ! builtin is the callee (analyze.inc wrapper_builtin)
+             ! b + 6 keeps the wrapper for the call stack (case 4)
              v = wrapper_of(fnv, n)
-             if (v%tag /= GCT_NIL) fnv = v
+             call vs_set(vst, b + 6, gc_nil())
+             if (v%tag /= GCT_NIL) then
+                call vs_set(vst, b + 6, fnv)
+                fnv = v
+             end if
              call vs_set(vst, b + 3, fnv)
              tctx%kst(tctx%ksp)%mode = 1
              if (is_node_closure(vs_get(vst, b + 3))) then
@@ -1261,7 +1266,7 @@
              if (tctx%kst(tctx%ksp)%mode == 2) then
                 call frame_set(vs_get(vst, b + 4), tctx%kst(tctx%ksp)%aux + tctx%kst(tctx%ksp)%i - 1, val)
              else if (tctx%kst(tctx%ksp)%mode == 3) then
-                if (tctx%kst(tctx%ksp)%i == 1) call vs_set(vst, b + 6, val)
+                if (tctx%kst(tctx%ksp)%i == 1) call vs_set(vst, b + 4, val)
              else
                 call vs_set(vst, b + 4, gcv_put(vs_get(vst, b + 4), tctx%kst(tctx%ksp)%i - 1, val, [vs_get(vst, b + 1)]))
              end if
@@ -1279,6 +1284,15 @@
              site = 0
              if (v%tag == GCT_INT) site = int(v%ival, kind=4)
              fnv = vs_get(vst, b + 3)
+             ! an elided wrapper (case 1) is on the call stack while its
+             ! builtin runs, as on the JVM; nfr has k_finish, or an
+             ! unwinding error, pop it
+             if (tctx%kst(tctx%ksp)%mode /= 2 .and. tag_of(vs_get(vst, b + 6)) /= GCT_NIL) then
+                call push_frame(tctx, vs_get(vst, b + 6), site)
+                if (tctx%has_error) cycle
+                tctx%kst(tctx%ksp)%nfr = tctx%kst(tctx%ksp)%nfr + 1
+                call vs_set(vst, b + 6, gc_nil())
+             end if
              if (tctx%kst(tctx%ksp)%mode == 4) then
                 ! a builtin that keeps no argument, in a spare vector
                 n = gcv_count(kids) - 1
@@ -1304,7 +1318,8 @@
                 if (n == 1) then
                    call gc_vec_set(gc_slot(v, 1), 1, val)
                 else
-                   call gc_vec_set(gc_slot(v, 1), 1, vs_get(vst, b + 6))
+                   call gc_vec_set(gc_slot(v, 1), 1, vs_get(vst, b + 4))
+                   call vs_set(vst, b + 4, gc_nil())
                    call gc_vec_set(gc_slot(v, 1), 2, val)
                 end if
                 call vs_set(vst, vbase + 1, gc_nil())

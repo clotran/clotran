@@ -1372,6 +1372,17 @@
        (let [d (stack-depth)] (dotimes [_ 5] (try (leak-m 1) (catch Exception e nil))) (- (stack-depth) d))
        0)
 
+;;; core's one-line wrappers run as their builtin but keep their entry,
+;;; as clojure.core$first is in the JVM's trace -- whichever way called
+(defn wr-direct [x] (first x))
+(defn wr-local [x] (let [f first] (f x)))
+(defn wr-apply [x] (apply first [x]))
+(defn wr-trace [g] (try (g 5) (catch Exception e (boolean (some #(clojure.string/includes? (str %) "clojure.core/first") (.getStackTrace e))))))
+(check "an elided core wrapper is on the trace" (mapv wr-trace [wr-direct wr-local wr-apply]) [true true true])
+(check "an elided core wrapper leaves no frame"
+       (let [d (stack-depth)] (dotimes [_ 5] (first [1]) (wr-local [1]) (wr-apply [1]) (try (wr-direct 5) (catch Exception e nil))) (- (stack-depth) d))
+       0)
+
 ;;; ---- the verdict: LAST, so every check above counts. It once sat
 ;;; 140 lines early, and the package and tier checks after it could fail
 ;;; without the gate hearing of it.
