@@ -2844,3 +2844,6 @@
 ;; merged into any ^ gave it; a vector does not, nor a read-string list
 [(meta '(a b)) (meta '^:foo (a b)) (meta (second '(x ^{:k 1} (a b)))) (meta '[a b]) (meta (read-string "(a b)")) (meta (macroexpand-1 '(-> 1 (+ 2))))]
 (binding [*print-meta* true] (pr-str (:arglists (meta #'defmacro))))
+;; a def evaluated from a form with no file position takes the
+;; top-level form's line and file (DefExpr's LINE and SOURCE_PATH)
+(let [m (meta (eval (read-string "(def oracle-def-pos 1)")))] [(:line m) (:column m) (string? (:file m))])

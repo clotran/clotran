@@ -1929,6 +1929,10 @@
       character(len=:), allocatable :: fname
       integer :: line, col
       pos = gc_slot(vs_get(vst, base + 1), 4)
+      ! a def whose form was not read from a file takes the top-level
+      ! form being loaded (tctx%top_pos), as DefExpr takes LINE
+      if (pos%tag /= GCT_INT) pos = gc_int(0_gc_ip)
+      if (pos%ival < POS_SHIFT .and. tctx%top_pos >= POS_SHIFT) pos = gc_int(int(tctx%top_pos, gc_ip))
       if (pos%tag == GCT_INT) then
          if (pos%ival > 0) then
             call gcr_position_parts(int(pos%ival, kind=4), fname, line, col)

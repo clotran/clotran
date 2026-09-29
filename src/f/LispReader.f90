@@ -36,7 +36,7 @@ module LispReader
   private
 
   public :: gcr_read, gcr_read_all, gcr_error, gcr_has_error
-  public :: gcr_begin_file, gcr_read_next, gcr_position, gcr_position_parts
+  public :: gcr_begin_file, gcr_read_next, gcr_position, gcr_position_parts, POS_SHIFT
   public :: gcr_set_ns_resolver, gcr_set_tag_markers, gcr_current_file
   public :: gcr_image_write, gcr_image_read, gcr_file_count, gcr_file_name
 

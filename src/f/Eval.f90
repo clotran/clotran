@@ -520,6 +520,10 @@ module Eval
      type(gc_value), allocatable :: fstack_fn(:)
      integer, allocatable :: fstack_site(:)
      integer :: fstack_top = 0, pending_site = 0, ev_depth = 0
+     ! the packed position of the top-level form being loaded: a def
+     ! whose own form has none (read-string, eval) takes it, as DefExpr
+     ! takes the compiler's LINE and SOURCE_PATH
+     integer :: top_pos = 0
      logical :: has_error = .false.
      character(len=:), allocatable :: last_error, last_trace
      type(gc_root) :: thrown_root
@@ -5341,6 +5345,9 @@ contains
     type(gc_value) :: out
     tctx => ctx_self()
     tctx%ev_depth = 0
+    if (gc_kind(form) == OBJ_CONS) then
+       if (gc_i2(form) >= POS_SHIFT) tctx%top_pos = gc_i2(form)
+    end if
     ! a #tag literal in the form is resolved first, as the reader would
     ! have on the JVM (clotran.reader, DEVIATIONS 46)
     if (has_unread(form)) then
@@ -15207,7 +15214,7 @@ contains
     character(len=*), intent(in) :: text, path
     type(gc_value), intent(out) :: out
     type(gc_value) :: forms, genv, f
-    integer :: base, j, fid
+    integer :: base, j, fid, saved_top
     logical :: eof
     character(len=:), allocatable :: dlt_1
     tctx => ctx_self()
@@ -15222,6 +15229,7 @@ contains
     end if
     call vs_set(vst, base + 2, genv)
     fid = gcr_begin_file(text, path)
+    saved_top = tctx%top_pos
     j = 1
     do
        forms = gcr_read_next(text, j, [vs_get(vst, base + 1), vs_get(vst, base + 2)], eof, fid)
@@ -15238,6 +15246,7 @@ contains
        if (tctx%has_error) exit
     end do
     call gcn_set_current(vs_get(vst, base + 1))
+    tctx%top_pos = saved_top
     call vs_leave(vst, base)
   end subroutine load_text
 

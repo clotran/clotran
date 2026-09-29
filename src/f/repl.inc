@@ -99,6 +99,7 @@
        call vs_set(vst, base + 2, form)
 
        call gce_clear_error()
+       tctx%top_pos = 0   ! a REPL form has no file, whatever was loaded before
        result = gce_analyze(vs_get(vst, base + 2), vs_get(vst, base + 1))
        if (.not. tctx%has_error) result = gce_eval(result, vs_get(vst, base + 1), none)
        call vs_set(vst, base + 3, result)
