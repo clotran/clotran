@@ -237,7 +237,7 @@ module GC
   ! of n pieces is O(n^2) -- a real StringBuilder amortises it. Fine for
   ! (str a b c); a growable text buffer in GC.f90 is what to write if
   ! anything ever appends in a loop.
-  integer, parameter, public :: OBJ_SB        = 18 ! 1=text
+  integer, parameter, public :: OBJ_SB        = 18 ! 1=text 2=pieces appended since; i1=how many (gc_sb_append)
   ! A THROWN THING: slot 1 = the class name it was constructed with,
   ! slot 2 = its message, slot 3 = its data (what ex-info carries).
   !
@@ -754,6 +754,7 @@ module GC
   public :: gc_global_keep, gc_root_get, gc_root_live
   public :: gc_set_finalizer
   public :: gc_ensure_init, gc_str_ref, gc_ref_text, gc_ref_is, gc_ref_len, gc_ref_same
+  public :: gc_sb_append, gc_sb_flush
   public :: vs_enter, vs_leave, vs_set, vs_get, vs_depth, gc_stack, gc_my_stack
   public :: gc_bindings_get, gc_bindings_set, gc_int_text, gc_rval
   interface vs_enter
@@ -860,6 +861,85 @@ contains
     if (len(str_pool(r1)%text) /= len(str_pool(r2)%text)) return
     yes = str_pool(r1)%text == str_pool(r2)%text
   end function gc_ref_same
+
+  ! --- StringBuilder text, appended in amortised O(1) ------------------
+  !
+  ! An OBJ_SB's slot 1 is its text so far, slot 2 a buffer of pieces
+  ! appended since, i1 how many. An append copied the whole text out and
+  ! back with the piece on the end, so building a string of n pieces was
+  ! O(n^2): clojure.string/join and pr-str of 2 x 10^4 elements cost 28
+  ! and 30 us an element, 6 and 9 at 2 x 10^3. Now an append puts the
+  ! piece in the buffer (doubling it when full) and a READ -- anything
+  ! that looks at slot 1, through gc_sb_flush -- joins the pieces once.
+  subroutine gc_sb_append(sb, piece, roots)
+    type(gc_value), intent(in) :: sb
+    character(len=*), intent(in) :: piece
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_stack), pointer :: s
+    type(gc_value) :: p, buf, nb
+    integer :: n, cap, i, base
+    if (len(piece) == 0) return
+    s => my_stack()
+    base = vs_enter_on(s, 2)
+    s%vstack(base + 1) = sb
+    p = gc_str(piece, roots)
+    s%vstack(base + 2) = p
+    buf = gc_slot(sb, 2)
+    n = gc_i1(sb)
+    cap = gc_vec_len(buf)
+    if (n >= cap) then
+       nb = gc_vec(max(16, 2 * cap), roots)
+       do i = 1, n
+          call gc_vec_set(nb, i, gc_vec_get(buf, i))
+       end do
+       call gc_set_slot(sb, 2, nb)
+       buf = nb
+    end if
+    call gc_vec_set(buf, n + 1, s%vstack(base + 2))
+    call gc_set_i1(sb, n + 1)
+    call vs_leave_on(s, base)
+  end subroutine gc_sb_append
+
+  ! The pieces appended since the last read, joined onto slot 1.
+  subroutine gc_sb_flush(sb, roots)
+    type(gc_value), intent(in) :: sb
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_stack), pointer :: s
+    type(gc_value) :: t, buf, p
+    character(len=:), allocatable :: all
+    integer :: n, i, total, at, base, l
+    n = gc_i1(sb)
+    if (n <= 0) return
+    buf = gc_slot(sb, 2)
+    t = gc_slot(sb, 1)
+    total = 0
+    if (t%tag == GCT_STR) total = gc_ref_len(t%ref)
+    do i = 1, n
+       p = gc_vec_get(buf, i)
+       total = total + gc_ref_len(p%ref)
+    end do
+    allocate(character(len=total) :: all)
+    at = 0
+    if (t%tag == GCT_STR) then
+       l = gc_ref_len(t%ref)
+       if (l > 0) all(1:l) = str_pool(t%ref)%text
+       at = l
+    end if
+    do i = 1, n
+       p = gc_vec_get(buf, i)
+       l = gc_ref_len(p%ref)
+       if (l > 0) all(at + 1:at + l) = str_pool(p%ref)%text
+       at = at + l
+       call gc_vec_set(buf, i, nilv)
+    end do
+    s => my_stack()
+    base = vs_enter_on(s, 1)
+    s%vstack(base + 1) = sb
+    t = gc_str(all, roots)
+    call gc_set_slot(sb, 1, t)
+    call gc_set_i1(sb, 0)
+    call vs_leave_on(s, base)
+  end subroutine gc_sb_flush
 
   function gc_ref_len(ref) result(n)
     integer, intent(in) :: ref

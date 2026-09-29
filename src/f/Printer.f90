@@ -663,6 +663,8 @@ contains
           s = dlt_1
        end block
     case (OBJ_SB)
+       ! what was appended since the last read, joined first
+       call gc_sb_flush(v, [v])
        block
           call gcp_str(gc_slot(v, 1), readable, s=dlt_1)
           s = dlt_1

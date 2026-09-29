@@ -2780,3 +2780,9 @@
 ;; hidden fields, extension keys, qualified keys and defaults as valAt
 (defrecord BR [a b])
 [(:__extmap (->BR 1 2)) (:__meta (->BR 1 2)) (:a (assoc (->BR 1 2) :c 3)) (:c (assoc (->BR 1 2) :c 3)) (get (->BR 1 nil) :b :nf) (get (->BR 1 2) :z :nf) (:user/a (->BR 1 2)) (:a (with-meta (->BR 1 2) {:m 1}))]
+
+;; StringBuilder appends are buffered and joined on a read
+;; (gc_sb_append/gc_sb_flush): reads between appends, reverse, str,
+;; join, with-out-str, pr-str
+(defn sbt [] (let [sb (StringBuilder. "ab")] (.append sb "cd") (.append sb 1) (let [l1 (.length sb) s1 (str sb)] (.append sb \x) (.append sb [1 2]) [l1 s1 (.toString sb) (.length sb) (str (.reverse (StringBuilder. "héllo"))) (str (doto (StringBuilder.) (.append "a") (.append "b")))])))
+[(sbt) (str "a" 1 nil :k [1] "é") (clojure.string/join "," (range 12)) (clojure.string/join [1 2 3]) (with-out-str (print "x") (println "y" 1) (pr [1 "a"])) (pr-str {:a [1 2] :b "s"}) (count (pr-str (vec (range 3000)))) (apply str (repeat 40 "ab")) (format "%s-%d" "x" 3) (str (reduce (fn [sb i] (.append sb i)) (StringBuilder.) (range 20)))]

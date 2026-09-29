@@ -10140,10 +10140,7 @@ contains
          if (gc_kind(w) == OBJ_WRITER) then
             write(gc_i1(w), '(A)', advance='no') piece
          else if (gc_kind(w) == OBJ_SB) then
-            block
-               call text_of(gc_slot(w, 1), s=dlt_1)
-               call gc_set_slot(w, 1, gc_str(dlt_1 // piece, [vs_get(vst, base + 1)]))
-            end block
+            call gc_sb_append(w, piece, [vs_get(vst, base + 1)])
          end if
          out = gc_nil()
        end block
@@ -11965,9 +11962,8 @@ contains
        out = a
        if (gc_kind(a) == OBJ_SB) then
           block
-             call text_of(gc_slot(a, 1), s=dlt_1)
              call text_of(gcv_nth(args, 1), s=dlt_2)
-             call gc_set_slot(a, 1, gc_str(  dlt_1 // dlt_2,  [vs_get(vst, base + 1)]))
+             call gc_sb_append(a, dlt_2, [vs_get(vst, base + 1)])
           end block
        else if (gc_kind(a) == OBJ_WRITER) then
           block
@@ -12221,10 +12217,7 @@ contains
          if (n >= 2) then
             w = strip_meta(gcv_nth(args, 1))
             if (gc_kind(w) == OBJ_SB) then
-               block
-                  call text_of(gc_slot(w, 1), s=dlt_1)
-                  call gc_set_slot(w, 1, gc_str(dlt_1 // txt,  [vs_get(vst, base + 1)]))
-               end block
+               call gc_sb_append(w, txt, [vs_get(vst, base + 1)])
             else if (gc_kind(w) == OBJ_WRITER) then
                write(gc_i1(w), '(A)', advance='no') txt
             end if
@@ -12685,10 +12678,7 @@ contains
                piece = ""
             end if
             if (gc_kind(bufv) == OBJ_SB) then
-               block
-                  call text_of(gc_slot(bufv, 1), s=dlt_1)
-                  call gc_set_slot(bufv, 1, gc_str(  dlt_1 // piece, [vs_get(vst, base + 1)]))
-               end block
+               call gc_sb_append(bufv, piece, [vs_get(vst, base + 1)])
             end if
          end if
        end block
@@ -15134,6 +15124,7 @@ contains
        end block
     else if (gc_kind(v) == OBJ_SB .or. gc_kind(v) == OBJ_REGEX .or. &
          gc_kind(v) == OBJ_NS) then
+       if (gc_kind(v) == OBJ_SB) call gc_sb_flush(v, [v])
        inner = gc_slot(v, 1)
        block
           call gcp_str(inner, .false., s=dlt_1)
