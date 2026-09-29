@@ -6,5 +6,5 @@ The tests here are Clojure's own (`test/clj/clojure/`), kept where
 every symbol they use lies in the intersection of clojure.core and
 cljs.core: the language, as the two implementations agree on it.
 
-clojure 71b4623d
+clojure d4bb93f0
 clojurescript b45dff9f

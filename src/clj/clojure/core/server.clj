@@ -13,7 +13,7 @@
             [clojure.edn :as edn]
             [clojure.main :as m])
   (:import
-   [clojure.lang LineNumberingPushbackReader DynamicClassLoader]
+   [clojure.lang LineNumberingPushbackReader]
    [java.net InetAddress Socket ServerSocket SocketException]
    [java.io Reader Writer PrintWriter BufferedWriter BufferedReader InputStreamReader OutputStreamWriter]
    [java.util Properties]
@@ -218,14 +218,11 @@
   Alpha, subject to change."
   {:added "1.10"}
   [in-reader out-fn & {:keys [stdin]}]
-  (let [cl (.getContextClassLoader (Thread/currentThread))]
-    (.setContextClassLoader (Thread/currentThread) (DynamicClassLoader. cl)))
   (let [EOF (Object.)
         tapfn #(out-fn {:tag :tap :val %1})]
     (m/with-bindings
       (in-ns 'user)
-      (binding [*repl* true
-                *in* (or stdin in-reader)
+      (binding [*in* (or stdin in-reader)
                 *out* (PrintWriter-on #(out-fn {:tag :out :val %1}) nil true)
                 *err* (PrintWriter-on #(out-fn {:tag :err :val %1}) nil true)]
         (try

@@ -146,15 +146,6 @@
            (= (count m) (count o))
            (every? (fn [[k v]] (and (contains? o k) (= v (get o k)))) m))))
 
-(defn req
-  "RT.req, behind :keys! destructuring: the value, or an error when the
-  key is absent."
-  [m k]
-  (let [v (get m k ::absent)]
-    (if (identical? v ::absent)
-      (throw (IllegalArgumentException. (str "Key not found: " k)))
-      v)))
-
 (defn object
   "(Object.): a fresh object equal only to itself -- a sentinel."
   []

@@ -6,7 +6,7 @@
 ;   the terms of this license.
 ;   You must not remove this notice, or any other, from this software.
 
-;; clotran's clojure.data: clojure/data.clj at 71b4623d, loaded in its
+;; clotran's clojure.data: clojure/data.clj at 1.12.0, loaded in its
 ;; place (Eval.f90 B_RTLOAD), with the protocol extensions keyed on
 ;; clojure.lang interfaces rather than java.util ones: IPersistentSet for
 ;; Set, IPersistentVector and ISeq for List, IPersistentMap for Map.

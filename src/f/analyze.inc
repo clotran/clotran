@@ -1903,14 +1903,9 @@
           call vs_leave(vst, base)
           return
        end if
-       ! Compiler.LetExpr.Parser: & is the rest marker, not a name,
-       ! and a qualified symbol names a Var, not a local -- it was
-       ! bound as written, and the body's x then resolved to nothing
-       if (gc_ref_is(k%ref, "&")) then
-          call fail("Can't use & as a local binding")
-          call vs_leave(vst, base)
-          return
-       end if
+       ! Compiler.LetExpr.Parser: a qualified symbol names a Var, not a
+       ! local -- it was bound as written, and the body's x then
+       ! resolved to nothing. (& is an ordinary local at 1.12.0.)
        block
          character(len=:), allocatable :: kt
          integer :: slash

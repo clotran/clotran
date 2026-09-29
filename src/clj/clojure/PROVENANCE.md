@@ -1,7 +1,16 @@
 # Vendored Clojure source
 
 Every `.clj` file here is Rich Hickey's, unmodified, from
-`github.com/clojure/clojure` at commit `71b4623d` (master, 2026-09-07).
+`github.com/clojure/clojure` at commit `d4bb93f0` -- the `clojure-1.12.0`
+release tag, the version the `clj` on this machine runs.
+
+Until 2026-09-29 these came from master at `71b4623d` (1.13 interim),
+whose core.clj carries experimental map-destructuring directives
+(`:select`, `:excess`, `:all`, `:keys!`, marked WIP upstream) that no
+release has. Running an unreleased core against a 1.12 oracle meant the
+two disagreed on `*clojure-version*` and on anything the interim
+branch changed, so everything moved back to the release: this tree, the
+test tree, the spec jars, and the clone.
 
 Do not edit them. If clotran cannot load one, that is clotran's bug --
 the whole point of the project is that these files run as written.
@@ -60,10 +69,10 @@ in core.clj itself, above that line.
     version=${version}
 
 -- a Maven template, filled in at build time from `pom.xml`, which at
-`71b4623d` says `1.13.0-master-SNAPSHOT`. There is no Maven here, so the
+`clojure-1.12.0` says `1.12.0`. There is no Maven here, so the
 filled-in value is committed instead:
 
-    version=1.13.0-master-SNAPSHOT
+    version=1.12.0
 
 core.clj's form 656 reads it off the classloader and parses it with
 `re-matches` into `*clojure-version*`. Bump it whenever the vendored
@@ -83,8 +92,8 @@ from the jars the pinned clone's own `pom.xml` names:
 
 | library | version | jar sha1 |
 |---|---|---|
-| org.clojure/spec.alpha | 0.6.249 | `adc033378b9f8b8760c4b239e15ac46ec2cdf803` |
-| org.clojure/core.specs.alpha | 0.6.127-alpha9 | `0182816f52211ffabcb06d8fad6f10567eeb3d7f` |
+| org.clojure/spec.alpha | 0.5.238 | `4eb5dea521c4e6e1f68c2c47517f14a922003e60` |
+| org.clojure/core.specs.alpha | 0.4.74 | `d56a8d4c666ff8140e6d0a62d41263134be39254` |
 
 The Compiler loads the first two (`spec/alpha`, `core/specs/alpha`) at
 the first macro expansion after core.clj (`Compiler.ensureMacroCheck`),

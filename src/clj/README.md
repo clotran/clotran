@@ -3,7 +3,7 @@
 Clojure source loaded at startup.
 
 - `clojure/` -- Rich Hickey's, vendored unmodified from
-  `clojure/clojure` at `71b4623d`. See `clojure/PROVENANCE.md`. Never
+  `clojure/clojure` at `clojure-1.12.0`. See `clojure/PROVENANCE.md`. Never
   edited; if clotran cannot load one of these files, that is clotran's
   bug.
 - `host.clj` -- the one file of ours. Loaded BEFORE core.clj, it holds

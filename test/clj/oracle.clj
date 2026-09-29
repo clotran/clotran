@@ -1779,8 +1779,7 @@
 
 [(+ 1 2 3) (- 10 1 2) (* 2 3 4) (- 5) (inc 1) (dec 1) (+ 1.5 2) (* 2 1/3)]
 
-;; the small members the language suite named: :keys! destructuring,
-;; (Object.) as a sentinel, the bit tests, long-array and double-array
+;; the small members the language suite named: (Object.) as a sentinel, the bit tests, long-array and double-array
 (let [o (Object.)] [(= o o) (= o (Object.)) (instance? Object o)])
 
 (get-in {:a {:b 1}} [:a :c] :nope)
@@ -2858,3 +2857,7 @@
 ;; fn? answered from the value's kind (trampoline asks it every bounce)
 (mapv fn? [inc (fn []) #(identity 1) :k {} #{} [] (with-meta (fn []) {:a 1}) print-method 'x nil (var inc) (reify clojure.lang.IFn (invoke [_] 1))])
 (trampoline (fn f [n] (if (pos? n) #(f (dec n)) n)) 10000)
+
+;; & is an ordinary local in let* and loop* at 1.12.0 (LetExpr.Parser
+;; has no rule against it; only the interim branch added one)
+[(let* [& 42] &) (loop* [& 1] &)]

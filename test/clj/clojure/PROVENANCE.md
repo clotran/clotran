@@ -1,8 +1,8 @@
 # Vendored Clojure test suite
 
 `test_clojure/` and `test_helper.clj` are Clojure's own tests, unmodified,
-from `github.com/clojure/clojure` at commit `71b4623d` -- the SAME commit
-as the vendored core.clj (see `src/clj/clojure/PROVENANCE.md`).
+from `github.com/clojure/clojure` at commit `d4bb93f0` (`clojure-1.12.0`) --
+the SAME release as the vendored core.clj (see `src/clj/clojure/PROVENANCE.md`).
 
 Do not edit them. They are the conformance measure: `test/f/*_test.f90`
 covers the Fortran host, which upstream cannot test, and everything about

@@ -56,17 +56,7 @@
   (let [{:a/syms [b c d] :or {d 3}} {'a/b 1 'a/c 2}]
     (is (= [1 2 3] [b c d]))))
 
-;; special.clj:70 [language]
-(deftest binding-types-not-allowed
-  (doseq [directive [:a1/keys :a1/syms :a1/keys! :a1/syms!]
-          binding ['b/c :c :b1/c]]
-    (let [val {(if (= (name directive) "keys")
-                 (keyword (namespace directive) "c")
-                 (symbol (namespace directive) "c")) 1}]
-      (is (thrown-with-cause-msg? Exception #"did not conform to spec"
-            (eval `(let [{~directive ~(vector binding)} ~val] ~'c)))))))
-
-;; special.clj:79 [language]
+;; special.clj:69 [language]
 (deftest keywords-not-allowed-in-let-bindings
   (is (thrown-with-cause-msg? Exception #"did not conform to spec"
                         (eval '(let [:a 1] a))))
@@ -77,25 +67,19 @@
   (is (thrown-with-cause-msg? Exception #"did not conform to spec"
                         (eval '(let [[:a/b] [1]] b)))))
 
-;; special.clj:89 [language]
+;; special.clj:79 [language]
 (deftest namespaced-syms-only-allowed-in-map-destructuring
   (is (thrown-with-cause-msg? Exception #"did not conform to spec"
                         (eval '(let [a/x 1, [y] [1]] x))))
   (is (thrown-with-cause-msg? Exception #"did not conform to spec"
                         (eval '(let [[a/x] [1]] x)))))
 
-;; special.clj:95 [language]
+;; special.clj:85 [language]
 (deftest or-doesnt-create-bindings
   (is (thrown-with-cause-msg? Exception #"Unable to resolve symbol: b"
                         (eval '(let [{:keys [a] :or {b 2}} {:a 1}] [a b])))))
 
-;; special.clj:99 [language]
-(deftest amp-not-allowed-as-let-or-loop*-binding-name
-  (is (thrown? Exception (eval '(let [& 42] &))))
-  (is (thrown? Exception (eval '(let* [& 42] &))))
-  (is (thrown? Exception (eval '(loop* [& 42] &)))))
-
-;; special.clj:105 [language]
+;; special.clj:90 [language]
 (deftest resolve-keyword-ns-alias-in-destructuring
   (let [{:keys [::s/x ::s/y ::s/z] :or {z 3}} {:clojure.string/x 1 :clojure.string/y 2}]
     (is (= [1 2 3] [x y z]))))

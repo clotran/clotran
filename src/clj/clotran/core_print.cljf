@@ -6,7 +6,7 @@
 ;   the terms of this license.
 ;   You must not remove this notice, or any other, from this software.
 
-;; clotran's printing: clojure/core_print.clj at 71b4623d, loaded in its
+;; clotran's printing: clojure/core_print.clj at 1.12.0, loaded in its
 ;; place (Eval.f90 B_RTLOAD), with what was the JVM taken out -- the
 ;; print-method and print-dup methods keyed on java.util.List, Map, Set,
 ;; Collection and RandomAccess and the preferences among them, and the
@@ -500,8 +500,6 @@
   (print-method (:tag o) w)
   (.write w " ")
   (print-method (:form o) w))
-
-(defmethod print-dup clojure.lang.TaggedLiteral [o w] (print-method o w))
 
 (defmethod print-method clojure.lang.ReaderConditional [o ^Writer w]
   (.write w "#?")

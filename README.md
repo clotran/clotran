@@ -3,7 +3,7 @@
 Clojure, hosted on Fortran.
 
 It runs Rich Hickey's actual `clojure/core.clj` -- the file, unmodified,
-vendored from `clojure/clojure` at `71b4623d`. Not a Clojure-like
+vendored from `clojure/clojure` at the `clojure-1.12.0` release. Not a Clojure-like
 language implemented in Fortran: the Fortran is the *host*, standing
 where the JVM stands, and the language comes from Clojure's own source.
 
@@ -17,7 +17,7 @@ user=> (greet "world")
 user=> (->> (range 20) (filter odd?) (partition-all 3) (map vec))
 ([1 3 5] [7 9 11] [13 15 17] [19])
 user=> (clojure-version)
-"1.13.0-master-SNAPSHOT"
+"1.12.0"
 ```
 
 That version string is real: core.clj reads it off the classloader and

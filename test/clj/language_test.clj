@@ -1147,12 +1147,6 @@
 (check "sequence reaches clotran.rt" (sequence (map inc) [1 2]) [2 3])
 (check "which is then loaded" (some? (find-ns 'clotran.rt)) true)
 
-;;; ---- :keys! destructuring -------------------------------------------
-;; core.clj here is newer than the clj the oracle runs: :keys! is
-;; :added "1.13", and 1.12 cannot read it, so the check lives here.
-(check ":keys! binds what is there" (let [{:keys! [a b]} {:a 1 :b 2}] [a b]) [1 2])
-(check "and throws for what is not" (try (let [{:keys! [a b]} {:a 1}] a) (catch IllegalArgumentException e :missing)) :missing)
-
 ;;; ---- clotran.thread: the protocol, and green as its default ---------
 ;;
 ;; One API over pluggable kinds of thread; green is a task. Host check:
@@ -1196,13 +1190,6 @@
 (check "::alias/x goes through the alias" (namespace ::lt-s/x) "clojure.string")
 (check "a namespace name is not an alias" (try (read-string "::clojure.core/x") (catch Exception e :invalid)) :invalid)
 (check "an alias nobody made is an invalid token" (try (read-string "::nope/x") (catch Exception e (boolean (re-find #"Invalid token" (.getMessage e))))) true)
-
-;;; ---- & is the rest marker, never a local: Compiler.java LetExpr.Parser
-;;; at 71b4623d says "Can't use & as a local binding". The clj on this
-;;; machine is 1.12.0 and answers 42, so it is a language-test case,
-;;; not an oracle one.
-(check "& is not a let* binding" (try (eval '(let* [& 42] &)) (catch Exception e :threw)) :threw)
-(check "nor a loop* binding" (try (eval '(loop* [& 42] &)) (catch Exception e :threw)) :threw)
 
 ;;; ---- an agent's error handler is handed the error itself -- an oracle
 ;;; case would leave clj's agent pool running and its JVM never exiting

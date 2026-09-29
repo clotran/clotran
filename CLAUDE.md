@@ -88,7 +88,8 @@ examples. The docstring is still worth the fetch, and `clj` supplies
 the values either way.
 
 **`~/jborden/clojure`** -- a clone of `clojure/clojure` pinned to
-`71b4623d`, the SAME commit as the vendored `core.clj`. Cite file and
+the `clojure-1.12.0` tag (`d4bb93f0`), the SAME release as the vendored
+`core.clj` and the one `clj` runs. Cite file and
 method. Reading the Java of one version while running the core.clj of
 another is the same mistake as citing memory, and it nearly happened:
 the clone was first taken three hunks newer than what we run.

@@ -66,16 +66,6 @@
   (let [{:a/syms [b c d] :or {d 3}} {'a/b 1 'a/c 2}]
     (is (= [1 2 3] [b c d]))))
 
-;; CLJ-2968 - only simple symbols allowed in namespaced destructuring directives
-(deftest binding-types-not-allowed
-  (doseq [directive [:a1/keys :a1/syms :a1/keys! :a1/syms!]
-          binding ['b/c :c :b1/c]]
-    (let [val {(if (= (name directive) "keys")
-                 (keyword (namespace directive) "c")
-                 (symbol (namespace directive) "c")) 1}]
-      (is (thrown-with-cause-msg? Exception #"did not conform to spec"
-            (eval `(let [{~directive ~(vector binding)} ~val] ~'c)))))))
-
 (deftest keywords-not-allowed-in-let-bindings
   (is (thrown-with-cause-msg? Exception #"did not conform to spec"
                         (eval '(let [:a 1] a))))
@@ -95,11 +85,6 @@
 (deftest or-doesnt-create-bindings
   (is (thrown-with-cause-msg? Exception #"Unable to resolve symbol: b"
                         (eval '(let [{:keys [a] :or {b 2}} {:a 1}] [a b])))))
-
-(deftest amp-not-allowed-as-let-or-loop*-binding-name
-  (is (thrown? Exception (eval '(let [& 42] &))))
-  (is (thrown? Exception (eval '(let* [& 42] &))))
-  (is (thrown? Exception (eval '(loop* [& 42] &)))))
 
 (require '[clojure.string :as s])
 (deftest resolve-keyword-ns-alias-in-destructuring
