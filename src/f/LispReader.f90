@@ -1760,6 +1760,9 @@ contains
           call fail("Invalid number: " // tok)
           v = gc_nil()
        end if
+    else if (.not. symbol_token_ok(tok)) then
+       call fail("Invalid token: " // tok)
+       v = gc_nil()
     else if (len(tok) > 2 .and. tok(1:2) == "::" .and. associated(ns_resolver)) then
        ! ::name is :current-ns/name and ::alias/name goes through
        ! the alias, as LispReader.matchSymbol reads them; an alias
@@ -1796,6 +1799,63 @@ contains
        v = gc_sym(tok, roots)
     end if
   end function read_atom
+
+  ! Is tok a symbol or keyword LispReader.matchSymbol accepts? Its
+  ! symbolPat, [:]?([\D&&[^/]].*/)?(/|[\D&&[^/]][^/]*), tried in the
+  ! order Java's backtracking tries it -- the colon taken, then the
+  ! longest namespace, then none -- and the first match checked for a
+  ! namespace ending ":/", a name ending ":" or a "::" past the start.
+  ! Failing the pattern, arraySymbolPat ([\D&&[^/:]].*)/([1-9]) is
+  ! String/1, an array class (CLJ-2807).
+  logical function symbol_token_ok(tok) result(ok)
+    character(len=*), intent(in) :: tok
+    integer :: c0, p, n
+    n = len(tok)
+    ok = .false.
+    do c0 = min(1, merge(1, 0, n > 0 .and. tok(1:min(1,n)) == ":")), 0, -1
+       do p = n, c0 + 2, -1
+          if (tok(p:p) /= "/") cycle
+          if (.not. ns_start(tok(c0+1:c0+1))) cycle
+          if (.not. name_ok(tok(p+1:))) cycle
+          ok = checks(tok(c0+1:p), tok(p+1:))
+          return
+       end do
+       if (name_ok(tok(c0+1:))) then
+          ok = checks("", tok(c0+1:))
+          return
+       end if
+    end do
+    ! String/1
+    if (n >= 3) then
+       if (tok(n-1:n-1) == "/" .and. index("123456789", tok(n:n)) > 0 .and. &
+            ns_start(tok(1:1)) .and. tok(1:1) /= ":") ok = .true.
+    end if
+  contains
+    logical function ns_start(c)
+      character(len=1), intent(in) :: c
+      ns_start = index("0123456789/", c) == 0
+    end function ns_start
+    logical function name_ok(s)
+      character(len=*), intent(in) :: s
+      if (s == "/" .and. len(s) == 1) then
+         name_ok = .true.
+      else
+         name_ok = len(s) >= 1
+         if (name_ok) name_ok = ns_start(s(1:1)) .and. index(s, "/") == 0
+      end if
+    end function name_ok
+    logical function checks(ns, nm)
+      character(len=*), intent(in) :: ns, nm
+      checks = .true.
+      if (len(ns) >= 2) then
+         if (ns(len(ns)-1:) == ":/") checks = .false.
+      end if
+      if (nm(len(nm):len(nm)) == ":") checks = .false.
+      if (len(tok) > 1) then
+         if (index(tok(2:), "::") > 0) checks = .false.
+      end if
+    end function checks
+  end function symbol_token_ok
 
   subroutine gcr_set_ns_resolver(f)
     procedure(ns_resolver_i) :: f

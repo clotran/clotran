@@ -2847,3 +2847,6 @@
 ;; a def evaluated from a form with no file position takes the
 ;; top-level form's line and file (DefExpr's LINE and SOURCE_PATH)
 (let [m (meta (eval (read-string "(def oracle-def-pos 1)")))] [(:line m) (:column m) (string? (:file m))])
+
+;; the tokens LispReader.matchSymbol refuses, and the ones it takes
+(mapv #(try (read-string %) (catch Exception e :invalid)) ["://" ":a/" ":/a" "a/" "/a" "a//" ":a//" ":///" "///" "a///" "a/b/" "a:" ":a:" "a::b" "a:/b" "a/:b" ":1a" "a/1" ":a/1" "String/1" "/" ":/" "clojure.core//" ":a:b" "a:b:c/d" "abc/de:f" "a/b:"])
