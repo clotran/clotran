@@ -98,8 +98,17 @@ native code upward costs speed and buys nothing.
 
 The heap and `gc_value` itself, the evaluator, the reader, integer and float
 arithmetic, character and string primitives, symbol and keyword identity, Var
-roots, I/O, and regex (ICU). ClojureScript reaches for `js/` at exactly these
-points too, which is the confirmation that they are real.
+roots, I/O, regex (ICU) and sockets. ClojureScript reaches for `js/` at
+exactly these points too, which is the confirmation that they are real.
+
+Sockets (2026-09-29) are the first of these built the way the vocabulary
+section below argues for: a C shim for what differs between POSIX and
+Winsock (`src/c/socket_shim.c`), `Socket.f90` over it, and clotran's own
+namespaces on top -- `clotran.io` readers, `clotran.net`, `clotran.server`
+-- naming no Java. cljs.core has no socket server either; its REPLs are
+the host's. JVM names survive only where vendored Clojure writes them
+(`java.io.StringReader.` in core.clj's `with-in-str`), as a mapping onto
+clotran's type (DEVIATIONS 65).
 
 ### B. Native by choice -- cljs writes these in Clojure, we write them in Fortran
 

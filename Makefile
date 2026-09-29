@@ -179,6 +179,9 @@ $(ICU_LIBS): $(ICU_STAMP)
 $(B)/seqlock.o: src/c/seqlock.c | $(B) $(FCSTAMP)
 	$(CC) -O2 -c $< -o $@
 
+$(B)/socket_shim.o: src/c/socket_shim.c src/c/socket_shim.h | $(B) $(FCSTAMP)
+	$(CC) -O2 -c $< -o $@
+
 $(B)/regex_shim.o: src/c/regex_shim.c src/c/regex_shim.h | $(B) $(FCSTAMP)
 	$(CC) -c $(ICU_INC) $< -o $@
 
@@ -245,7 +248,7 @@ $(B)/LispReader.o: $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B
 $(B)/ClotranABI.o: $(B)/GC.o $(B)/PersistentVector.o $(B)/Namespace.o $(B)/CompiledFn.o $(B)/NativeArray.o $(B)/Eval.o
 
 $(B)/Eval.o: $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/Env.o \
-	$(B)/Namespace.o $(B)/Printer.o $(B)/Regex.o $(B)/NativeArray.o $(B)/DynLoad.o $(B)/Threads.o $(B)/CompiledFn.o $(S)/analyze.inc $(S)/exec.inc $(S)/flat.inc $(S)/repl.inc $(S)/tasks.inc $(S)/sorted.inc $(S)/hosttable.inc
+	$(B)/Namespace.o $(B)/Printer.o $(B)/Regex.o $(B)/NativeArray.o $(B)/DynLoad.o $(B)/Threads.o $(B)/CompiledFn.o $(B)/Socket.o $(S)/analyze.inc $(S)/exec.inc $(S)/flat.inc $(S)/repl.inc $(S)/tasks.inc $(S)/sorted.inc $(S)/hosttable.inc
 
 # The reference BLAS (src/f/blas/PROVENANCE.md), F77 fixed form, as a
 # PACKAGE beside its Clojure in packages/blas, opened at run time; the
@@ -279,7 +282,10 @@ $(B)/Regex.o: $(B)/Threads.o
 # register) need it, so it sits below them.
 compiled-objects = $(B)/CompiledFn.o
 $(B)/CompiledFn.o: $(B)/GC.o $(B)/PersistentVector.o
-eval-objects = $(data-objects) $(B)/Env.o $(B)/Namespace.o $(reader-objects) $(B)/DynLoad.o $(compiled-objects) $(B)/Eval.o \
+# TCP sockets: the shim holds what differs between POSIX and Winsock
+socket-objects = $(B)/Socket.o $(B)/socket_shim.o
+$(B)/Socket.o: $(B)/GC.o
+eval-objects = $(data-objects) $(B)/Env.o $(B)/Namespace.o $(reader-objects) $(B)/DynLoad.o $(compiled-objects) $(socket-objects) $(B)/Eval.o \
 	$(B)/ClotranABI.o
 LINK_ICU = $(ICU_LIBS) $(LIBCXX) -lpthread
 

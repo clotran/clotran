@@ -1,0 +1,103 @@
+(ns clotran.server
+  "A REPL over a socket, into a running clotran: start-server listens on a
+  port, and every connection gets a thread of its own running an accept
+  function -- repl by default -- with *in* and *out* bound to the
+  connection. `nc localhost 5555` is then a prompt inside the program,
+  and so is Emacs's inf-clojure.
+
+  clotran's own, not clojure.core.server: that one is written against
+  java.net and clojure.main, whose error reporting reads JVM stack traces.
+  The shape is the same -- start-server with :name :port :accept, stop-server
+  by name -- so a program that starts one reads alike (PLAN.md step 21)."
+  (:require [clotran.net :as net]
+            [clojure.string :as str]))
+
+(defonce ^:private servers (atom {}))
+
+(defn- class-name [x]
+  (let [s (pr-str (class x))] (subs s (inc (str/last-index-of s ".")))))
+
+(defn- report [phase e]
+  (binding [*out* *err*]
+    (println (str phase " (" (class-name e) ")."))
+    (println (or (ex-message e) (pr-str e)))
+    (flush)))
+
+(defn repl
+  "Read, evaluate, print, until the stream ends or :repl/quit is read.
+  The prompt is the namespace's name, as clj's; *1 *2 *3 and *e are the
+  connection's own."
+  []
+  (binding [*ns* (the-ns 'user) *1 nil *2 nil *3 nil *e nil]
+    (loop []
+      (print (str (ns-name *ns*) "=> "))
+      (flush)
+      (let [form (try (read {:eof ::eof :read-cond :allow} *in*)
+                      (catch Throwable e
+                        (report "Syntax error reading source" e)
+                        ;; the rest of the line is not a form to try again
+                        (.readLine *in*)
+                        ::skip))]
+        (cond (#{::eof :repl/quit} form) nil
+              (= ::skip form) (recur)
+              :else
+              (do (try (let [v (eval form)]
+                         (set! *3 *2) (set! *2 *1) (set! *1 v)
+                         (prn v))
+                       (catch Throwable e
+                         (set! *e e)
+                         (report "Execution error" e)))
+                  (flush)
+                  (recur)))))))
+
+(defn- resolve-fn [f]
+  (if (symbol? f)
+    (do (some-> (namespace f) symbol require)
+        (or (resolve f) (throw (ex-info (str "No accept function " f) {:accept f}))))
+    f))
+
+(defn- serve [name conn accept args]
+  (let [r (net/reader conn) w (net/writer conn)]
+    (try
+      (binding [*in* r *out* w *err* w]
+        (apply accept args))
+      (catch Throwable _ nil)
+      (finally
+        (try (.flush w) (catch Throwable _ nil))
+        (net/close conn)
+        (swap! servers update-in [name :conns] disj conn)))))
+
+(defn start-server
+  "Starts a server named :name on :port (0 picks one; the answer's :port
+  says which), listening on :host (default 127.0.0.1 -- say \"0.0.0.0\" to
+  be reachable from elsewhere). Each connection runs (apply accept args),
+  accept a function or a qualified symbol, clotran.server/repl if none.
+  Answers the server, whose :port is the one bound."
+  [{:keys [name port host accept args] :or {host "127.0.0.1" accept 'clotran.server/repl}}]
+  (let [f (resolve-fn accept)
+        srv (net/listen port {:host host})
+        running (atom true)
+        loop-thread
+        (future
+          (loop []
+            (when @running
+              (when-let [conn (try (net/accept srv 250) (catch Throwable _ nil))]
+                (swap! servers update-in [name :conns] (fnil conj #{}) conn)
+                (future (serve name conn f args)))
+              (recur))))]
+    (swap! servers assoc name {:server srv :running running :thread loop-thread :conns #{}})
+    srv))
+
+(defn stop-server
+  "Stops the server named name and closes its connections; true if there
+  was one."
+  [name]
+  (if-let [{:keys [server running conns]} (get @servers name)]
+    (do (reset! running false)
+        (net/close server)
+        (doseq [c conns] (net/close c))
+        (swap! servers dissoc name)
+        true)
+    false))
+
+(defn stop-servers [] (doseq [n (keys @servers)] (stop-server n)))

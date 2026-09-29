@@ -59,6 +59,7 @@ module Eval
   use LispReader
   use CompiledFn
   use DynLoad
+  use Socket
   use Threads
   use iso_c_binding, only: c_ptr, c_funptr, c_loc, c_f_pointer, c_double, c_int, c_long, c_char, c_null_char, c_associated, c_bool, c_int32_t, &
        c_null_ptr, c_intptr_t, c_funloc, c_size_t, c_int64_t
@@ -241,6 +242,8 @@ module Eval
   integer, parameter :: B_AGENTPOP = 405, B_AGENTRUN1 = 406, B_TOUCH = 407, B_TXRUNNING = 408
   integer, parameter :: B_REFHISTCOUNT = 409, B_REFMINHIST = 410, B_REFMAXHIST = 411, B_REFSETHIST = 412
   integer, parameter :: B_FNFOR = 413
+  integer, parameter :: B_SOCKLISTEN = 414, B_SOCKPORT = 415, B_SOCKACCEPT = 416, B_SOCKCONNECT = 417
+  integer, parameter :: B_SOCKREAD = 418, B_SOCKWRITE = 419, B_SOCKCLOSE = 420
   ! A number's WIDTH, in an integer's or a real's otherwise unused ref:
   ! what it boxes as on the JVM. Equality and hashing never read it.
   integer, parameter :: W_LONG = 0, W_BYTE = 1, W_SHORT = 2, W_INT = 3, W_FLOAT = 1
@@ -939,6 +942,13 @@ contains
     ! java.io, which is not here; this is the host's reader for it.
     call bind_builtin(core, "clotran-slurp", B_SLURP)
     call bind_builtin(core, "clotran-spit", B_SPIT)
+    call bind_builtin(core, "clotran-socket-listen", B_SOCKLISTEN)
+    call bind_builtin(core, "clotran-socket-port", B_SOCKPORT)
+    call bind_builtin(core, "clotran-socket-accept", B_SOCKACCEPT)
+    call bind_builtin(core, "clotran-socket-connect", B_SOCKCONNECT)
+    call bind_builtin(core, "clotran-socket-read", B_SOCKREAD)
+    call bind_builtin(core, "clotran-socket-write", B_SOCKWRITE)
+    call bind_builtin(core, "clotran-socket-close", B_SOCKCLOSE)
     call bind_builtin(core, "count", B_COUNT)
     call bind_builtin(core, "first", B_FIRST)
     ! an agent's queue, drained on its own thread by clotran.rt/agent-drain
@@ -9399,6 +9409,76 @@ contains
             out = gc_nil()
          end if
        end block
+    ! TCP sockets (Socket.f90, over src/c/socket_shim.c), for clotran.net.
+    ! A socket is its integer handle; a failure is an IOException with the
+    ! OS's message. accept and read wait up to ms (negative: no limit),
+    ! outside the running mutators: accept answers nil at the timeout,
+    ! read :timeout, and read answers nil at the end of the stream.
+    case (B_SOCKLISTEN, B_SOCKCONNECT)
+       block
+         character(len=:), allocatable :: host, msg
+         integer(8) :: h
+         type(gc_value) :: hv
+         hv = strip_meta(gcv_nth(args, 0))
+         host = ""
+         if (hv%tag /= GCT_NIL) then
+            call text_of(hv, s=dlt_1)
+            host = dlt_1
+         end if
+         if (id == B_SOCKLISTEN) then
+            call sock_listen(host, int(int_of_number(gcv_nth(args, 1))), int(int_of_number(gcv_nth(args, 2))), h, msg)
+         else
+            call sock_connect(host, int(int_of_number(gcv_nth(args, 1))), h, msg)
+         end if
+         if (h < 0) then
+            call fail_as("java.io.IOException", msg, [vs_get(vst, base + 1)])
+         else
+            out = gc_int(h)
+         end if
+       end block
+    case (B_SOCKPORT)
+       out = gc_int(int(sock_local_port(int_of_number(gcv_nth(args, 0))), gc_ip))
+    case (B_SOCKACCEPT)
+       block
+         character(len=:), allocatable :: msg
+         integer(8) :: c
+         call sock_accept(int_of_number(gcv_nth(args, 0)), int(int_of_number(gcv_nth(args, 1))), c, msg)
+         if (c == SOCK_TIMEOUT) then
+            out = gc_nil()
+         else if (c < 0) then
+            call fail_as("java.io.IOException", msg, [vs_get(vst, base + 1)])
+         else
+            out = gc_int(c)
+         end if
+       end block
+    case (B_SOCKREAD)
+       block
+         character(len=:), allocatable :: msg
+         character(len=SOCK_BUF) :: buf
+         integer :: n
+         call sock_read(int_of_number(gcv_nth(args, 0)), int(int_of_number(gcv_nth(args, 1))), buf, n, msg)
+         if (n > 0) then
+            out = gc_str(buf(1:n), [vs_get(vst, base + 1)])
+         else if (n == 0) then
+            out = gc_nil()
+         else if (n == SOCK_TIMEOUT) then
+            out = gc_key("timeout", [vs_get(vst, base + 1)])
+         else
+            call fail_as("java.io.IOException", msg, [vs_get(vst, base + 1)])
+         end if
+       end block
+    case (B_SOCKWRITE)
+       block
+         character(len=:), allocatable :: text, msg
+         logical :: ok
+         ! a copy: the shim reads it outside the running mutators
+         call text_of(gcv_nth(args, 1), s=dlt_1)
+         text = dlt_1
+         call sock_write(int_of_number(gcv_nth(args, 0)), text, ok, msg)
+         if (.not. ok) call fail_as("java.io.IOException", msg, [vs_get(vst, base + 1)])
+       end block
+    case (B_SOCKCLOSE)
+       call sock_close(int_of_number(gcv_nth(args, 0)))
     case (B_SLURP)
        block
          character(len=:), allocatable :: path, text

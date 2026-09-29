@@ -1370,6 +1370,39 @@
        (let [d (stack-depth)] (dotimes [_ 5] (first [1]) (wr-local [1]) (wr-apply [1]) (try (wr-direct 5) (catch Exception e nil))) (- (stack-depth) d))
        0)
 
+;;; ---- sockets and the socket REPL (PLAN step 21): loopback only, a
+;;; port the OS picks, so two gate halves at once cannot collide
+(require '[clotran.net :as net] '[clotran.server :as srv])
+(check "a server on port 0 is given one" (let [s (net/listen 0 {:host "127.0.0.1"})] (try (pos? (:port s)) (finally (net/close s)))) true)
+(check "accept answers nil when nobody comes" (let [s (net/listen 0 {:host "127.0.0.1"})] (try (net/accept s 50) (finally (net/close s)))) nil)
+(check "text both ways, UTF-8 intact, one form read off the stream"
+       (let [s (net/listen 0 {:host "127.0.0.1"})
+             served (future (let [c (net/accept s 5000)]
+                              (binding [*in* (net/reader c) *out* (net/writer c)]
+                                (let [f (read)] (println (pr-str (eval f)) "λ") (flush)))
+                              (net/close c) :done))
+             c (net/connect "127.0.0.1" (:port s))]
+         (try (let [w (net/writer c)] (.write w "(+ 1 2 (* 3 4)) rest\n") (.flush w))
+              [(.readLine (net/reader c)) (deref served 5000 :timeout)]
+              (finally (net/close c) (net/close s))))
+       ["15 λ" :done])
+(check "connecting to nothing is an IOException"
+       (let [s (net/listen 0 {:host "127.0.0.1"}) p (:port s)] (net/close s)
+         (try (net/connect "127.0.0.1" p) :connected (catch java.io.IOException e :refused)))
+       :refused)
+(defn repl-says [lines]
+  (let [s (srv/start-server {:name "lt" :port 0})
+        c (net/connect "127.0.0.1" (:port s)) w (net/writer c) r (net/reader c)]
+    (try (.write w (apply str (map #(str % "\n") lines))) (.flush w)
+         (loop [acc []] (if-let [l (.readLine r)] (recur (conj acc l)) acc))
+         (finally (net/close c) (srv/stop-server "lt")))))
+(check "the socket REPL: values, *1, errors, a bad read, the namespace, quit"
+       (repl-says ["(+ 1 2)" "(inc *1)" "(/ 1 0)" "(oops ]" "(ns lt-other)" "(str (ns-name *ns*))" ":repl/quit" "(never)"])
+       ["user=> 3" "user=> 4" "user=> Execution error (ArithmeticException)." "Divide by zero"
+        "user=> Syntax error reading source (RuntimeException)." "Unmatched delimiter: ]"
+        "user=> nil" "lt-other=> \"lt-other\"" "lt-other=> "])
+(check "stopping a server that is not there" (srv/stop-server "nope") false)
+
 ;;; ---- the verdict: LAST, so every check above counts. It once sat
 ;;; 140 lines early, and the package and tier checks after it could fail
 ;;; without the gate hearing of it.

@@ -2109,12 +2109,14 @@ a. *Character streams* (done 2026-09-29): `clotran.io`'s readers, with
    `read` over a stream taking one form's characters. core.clj's
    `with-in-str`, `read-line`, `read`, `read+string` and `line-seq` work
    on them; DEVIATIONS 65.
-b. *Sockets*: a C shim (POSIX and Winsock behind one small interface --
+b. *Sockets* (done 2026-09-29): a C shim (POSIX and Winsock behind one small interface --
    macOS's `sin_len`, Windows' `WSAStartup` and `SOCKET` are the shim's
    business) reached through iso_c_binding. A blocked accept or read waits
    outside the running mutators, as `block_on` does.
-c. *`clotran.server`*: a socket REPL and a prepl, one thread a
-   connection, `start-server` from `examples/embed`.
+c. *`clotran.server`*: a socket REPL (done 2026-09-29: `start-server`,
+   `stop-server`, a thread a connection, clj's prompt and error shape,
+   driven by `nc`) and a prepl (not yet), then `start-server` from
+   `examples/embed`.
 d. *nREPL, as a package*: what CIDER speaks (bencode, eval, load-file,
    describe, completions), on the model of babashka's compact server.
 

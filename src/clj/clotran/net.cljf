@@ -1,0 +1,82 @@
+(ns clotran.net
+  "TCP sockets. A server listens on a port; accept hands out a connection;
+  connect makes one. A connection reads and writes TEXT (UTF-8) through a
+  clotran.io reader and a writer, so read, read-line and binding *in* and
+  *out* work on it as on anything else. Underneath are the clotran-socket-*
+  builtins (src/f/Socket.f90, src/c/socket_shim.c), which wait outside the
+  running mutators, so a thread blocked on the network never holds up a
+  collection."
+  (:require [clotran.io :as io]))
+
+(defrecord Server [handle port])
+(defrecord Connection [handle])
+
+(defn listen
+  "A server on port (0 picks a free one; the record's :port says which),
+  on every interface unless :host names one."
+  ([port] (listen port {}))
+  ([port {:keys [host backlog] :or {backlog 50}}]
+   (let [h (clotran-socket-listen host port backlog)]
+     (->Server h (clotran-socket-port h)))))
+
+(defn accept
+  "The next connection to server, or nil if none came within ms
+  (negative, or none given: wait for one)."
+  ([server] (accept server -1))
+  ([server ms]
+   (when-let [h (clotran-socket-accept (:handle server) ms)]
+     (->Connection h))))
+
+(defn connect [host port] (->Connection (clotran-socket-connect host port)))
+
+(defn close
+  "Closes a server or a connection; a thread blocked reading the
+  connection wakes to the end of its stream."
+  [x]
+  (clotran-socket-close (:handle x))
+  nil)
+
+;; A connection's text a character at a time, a chunk read whenever the
+;; last is used up. buf holds the chunk, pos the next character in it.
+(deftype SocketReader [h buf pos]
+  io/CharReader
+  (read-all [this] (#'io/all-from this))
+  Object
+  (read [_]
+    (loop []
+      (let [b @buf p @pos]
+        (cond (nil? b) -1
+              (< p (count b)) (do (reset! pos (inc p)) (int (nth b p)))
+              :else (let [chunk (clotran-socket-read h -1)]
+                      (reset! buf chunk)
+                      (reset! pos 0)
+                      (recur))))))
+  (unread [_ c] (swap! pos dec) nil)
+  (ready [_] (let [b @buf] (and (some? b) (< @pos (count b)))))
+  (readLine [this] (#'io/line-from this))
+  (close [_] nil))
+
+;; Text gathered until flush sends it, as a buffered writer does.
+(deftype SocketWriter [h pending]
+  Object
+  (write [_ x]
+    (swap! pending conj (if (integer? x) (str (char x)) (str x)))
+    nil)
+  (append [this x] (.write this x) this)
+  (flush [_]
+    (let [s (apply str @pending)]
+      (reset! pending [])
+      (when (pos? (count s)) (clotran-socket-write h s))
+      nil))
+  (close [this] (.flush this) nil))
+
+(defn reader
+  "A line-numbering reader over the connection's text, for read and
+  read-line."
+  [conn]
+  (io/line-numbering-reader (SocketReader. (:handle conn) (atom "") (atom 0))))
+
+(defn writer
+  "A writer to the connection; what is written goes out at flush."
+  [conn]
+  (SocketWriter. (:handle conn) (atom [])))
