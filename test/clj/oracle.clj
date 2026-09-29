@@ -2716,3 +2716,9 @@
 ;; unchecked-inc/dec wrap; the flat fast path leaves the one wrapping
 ;; value to the builtin
 [(unchecked-inc Long/MAX_VALUE) (unchecked-dec Long/MIN_VALUE) (let [x 5] (unchecked-inc x)) (let [f (fn [x] (unchecked-dec x))] (f Long/MIN_VALUE)) (let [n 3] (loop [i 0 acc []] (if (< i n) (recur (unchecked-inc i) (conj acc i)) acc)))]
+
+;; first/next/rest/seq answered inline where the slot is already there
+;; (flat.inc flat_seq_op): nil, lists, realised, empty and delegating cells
+(defn flat-seqops [x] [(first x) (next x) (rest x) (seq x)])
+(defn flat-realized [s] (doall s) (flat-seqops s))
+[(flat-seqops nil) (flat-seqops '()) (flat-seqops '(1)) (flat-seqops '(1 2)) (flat-realized (lazy-seq nil)) (flat-realized (lazy-seq (cons 1 nil))) (flat-realized (map inc [1 2 3])) (flat-realized (take 2 (range))) (flat-realized (lazy-seq (lazy-seq [1 2]))) (let [[f n r s] (flat-seqops (iterate inc 0))] [f (take 3 n) (take 3 r) (take 3 s)]) (let [s (map inc [1 2])] [(identical? (seq s) (seq s)) (class (seq s))])]

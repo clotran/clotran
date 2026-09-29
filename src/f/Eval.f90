@@ -471,6 +471,8 @@ module Eval
        F_DLVAR = 6, F_JMPF = 7, F_JMP = 8, F_CALL = 9, F_RET = 10, F_RECUR = 11, &
        F_FN = 12, F_LAZY = 13, F_COLL = 14, F_THROW = 15, F_EVAL = 16, F_CALLB = 17, &
        F_DOT = 18
+  ! the largest fixed arity a fn's call table covers (flat.inc)
+  integer, parameter :: CT_MAXFIX = 31
   ! CLOTRAN_FLAT: 0 unread, 1 compile fn bodies flat, 2 trees only
   integer, save :: flat_mode = 0
   integer, parameter :: K_SCOPE = 100, K_FNINFO = 101
@@ -521,7 +523,7 @@ module Eval
      integer :: id = 0, qq_depth = 0, task_loop_depth = 0
      logical :: analyzing_method = .false., yield_flag = .false.
      type(gc_value) :: cur_task
-     type(gc_root) :: scratch1_root, scratch2_root, recur_root
+     type(gc_root) :: scratch1_root, scratch2_root, recur_root, noargs_root
      ! the scheduler's, per context: who stepped it, whether it is to end,
      ! whether it is in a native call, its task; and the condition its
      ! thread waits on for the baton -- a hand-off wakes that thread only
@@ -4509,16 +4511,16 @@ contains
        ! is the owner's while running) and x in slot 5 -- not a [f x]
        ! vector, which a realised cell kept, 512 bytes each; the next
        ! head is (f x)
-       call vs_set(vst, base + 2, gcv_build(1, [vs_get(vst, base + 1)]))
-       call vs_set(vst, base + 2, gcv_put(vs_get(vst, base + 2), 0, gc_slot(vs_get(vst, base + 1), 5), [vs_get(vst, base + 1)]))
-       r = apply(gc_slot(vs_get(vst, base + 1), 1), vs_get(vst, base + 2))
+       ! (f x) with x in a stack slot: a builtin or a core wrapper --
+       ! inc', for (range) -- then takes no argument vector at all
+       call vs_set(vst, base + 2, gc_slot(vs_get(vst, base + 1), 5))
+       r = gce_apply_slots(vst, gc_slot(vs_get(vst, base + 1), 1), base + 1, 1)
        if (.not. tctx%has_error) then
           call vs_set(vst, base + 2, r)
           r = iterate_cell(gc_slot(vs_get(vst, base + 1), 1), vs_get(vst, base + 2), [vs_get(vst, base + 1)])
        end if
     case default
-       args = gcv_empty([vs_get(vst, base + 1)])
-       r = apply(gc_slot(vs_get(vst, base + 1), 1), args)
+       r = apply(gc_slot(vs_get(vst, base + 1), 1), no_args())
     end select
     call vs_set(vst, base + 2, r)
     if (tctx%has_error) then
@@ -6767,12 +6769,13 @@ contains
     base = vs_enter(vst, 3)
     call vs_set(vst, base + 1, f)
     call vs_set(vst, base + 2, x)
-    tail = gc_obj(OBJ_LAZY, [vs_get(vst, base + 1), gc_nil(), gc_nil(), gc_nil(), vs_get(vst, base + 2)], &
-         [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    ! roots as they are: f and x are on the stack, and [roots, ...]
+    ! is a heap temporary grown per element
+    tail = gc_obj(OBJ_LAZY, [vs_get(vst, base + 1), gc_nil(), gc_nil(), gc_nil(), vs_get(vst, base + 2)], roots)
     call gc_set_i1(tail, LAZY_PENDING)
     call gc_set_i2(tail, 2)
     call vs_set(vst, base + 3, tail)
-    out = gc_obj(OBJ_LAZY, [gc_nil(), vs_get(vst, base + 2), vs_get(vst, base + 3)], [roots, vs_get(vst, base + 2), vs_get(vst, base + 3)])
+    out = gc_obj(OBJ_LAZY, [gc_nil(), vs_get(vst, base + 2), vs_get(vst, base + 3)], roots)
     call gc_set_i1(out, LAZY_CONS)
     call vs_leave(vst, base)
   end function iterate_cell

@@ -274,6 +274,30 @@
     base = vs_enter(vst, 5)
     call vs_set(vst, base + 1, fn)
     call vs_set(vst, base + 2, argv)
+    ! a fixed arity through the fn's call table (flat.inc): what a
+    ! lazy seq's thunk, forced from Fortran, is called by
+    if (.not. present(restseq)) then
+       call vs_set(vst, base + 3, call_table_of(fn))
+       if (tag_of(vs_get(vst, base + 3)) == GCT_VEC) then
+          argc = gcv_count(argv)
+          if (argc <= ct_int(vs_get(vst, base + 3), 4)) then
+             i = 5 + 4 * argc
+             start = ct_int(vs_get(vst, base + 3), i)
+             if (start >= 0) then
+                frame = ct_frame(vs_get(vst, base + 1), vs_get(vst, base + 3), [vs_get(vst, base + 2)])
+                call vs_set(vst, base + 5, frame)
+                do n = 0, argc - 1
+                   call reg_set(vs_get(vst, base + 5), start + n, gcv_nth(vs_get(vst, base + 2), n))
+                end do
+                body = ct_body(vs_get(vst, base + 3), i)
+                frame = vs_get(vst, base + 5)
+                ok = .true.
+                call vs_leave(vst, base)
+                return
+             end if
+          end if
+       end if
+    end if
     tmpl = gc_slot(fn, 1)
     call vs_set(vst, base + 3, tmpl)
     arities = gcv_nth(tmpl, 1)
@@ -892,6 +916,20 @@
     end if
   end function scratch_args
 
+  ! An empty argument vector, one per context: a thunk's call (a lazy
+  ! seq forced) allocated one per cell. Nothing writes into it.
+  function no_args() result(v)
+    type(eval_ctx), pointer :: tctx
+    type(gc_value) :: v
+    tctx => ctx_self()
+    if (.not. gc_root_live(tctx%noargs_root)) call gc_global_keep(tctx%noargs_root, gcv_build(0, [gc_nil()]))
+    v = gc_root_get(tctx%noargs_root)
+    if (.not. gcv_is(v)) then
+       call gc_global_keep(tctx%noargs_root, gcv_empty([gc_nil()]))
+       v = gc_root_get(tctx%noargs_root)
+    end if
+  end function no_args
+
   ! The recur marker, one for the whole process.
   function recur_marker() result(v)
     type(eval_ctx), pointer :: tctx
@@ -1166,7 +1204,7 @@
 
        select case (kind)
        case (N_FLAT)
-          call flat_run(tctx, vbase, val)
+          call flat_run(tctx, kbot, vbase, val)
           if (tctx%yield_flag) exit
        case (N_CONST)
           val = gc_slot(nd, 2)

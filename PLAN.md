@@ -1852,6 +1852,38 @@ a loop typed at the REPL runs as one in a fn does; `unchecked-inc` and
 Per 10^6, at the top level: an empty `dotimes` 549 -> 44 ms, `(+ i 1)`
 in one 798 -> 60 ms, `(f s)` with f bound to `first` 855 -> 253 ms.
 
+**Stage 4 begun: what a call and a lazy element cost (2026-09-29).**
+Measured first: a plain call was 215 ns, a core wrapper call (`first`)
+209, an allocation about 100, and one element of `(dorun (take n
+(range)))` 2.3 us with 9 allocations and two thunks forced through a
+nested run. Taken so far:
+- a CALL TABLE per fn template (flat.inc `call_table`, the template's
+  eighth element): frame size, self slot, captures and, per fixed
+  arity, first slot, bodies and wrapper builtin, as one raw vector --
+  the flat call and `bind_closure` read it instead of walking the
+  persistent template (18% of a loop of calls);
+- flat_run is a TRAMPOLINE over flat frames: a call into a flat body
+  and a return to a flat caller go on in place, not through run_loop;
+- `first`, `rest`, `next`, `seq` answered inline where the answer is a
+  slot already there (nil, a list, a realised cell) -- no argument
+  vector, no dispatch, and no call-stack entry, since nothing can fail;
+- `[roots, x]` root lists where x is already on the stack were heap
+  temporaries grown element by element (malloc, realloc, free on every
+  call): gone from the call path and iterate;
+- iterate calls f through the value stack (no argument vector) and a
+  thunk gets a shared empty argument vector: 9 -> 6 allocations an
+  element.
+
+| | before | now |
+|---|---|---|
+| a fn call in a loop | 215 ns | 159 ns |
+| `(fib 25)` | 59 ms | 46 ms |
+| `dorun take`, 10^5 | 242 ms | 155 ms |
+| `(apply + (take 10^6 (range)))` | 4.55 s | 3.4 s |
+
+Tried and reverted: allocating from per-thread batches with one thread
+(the heap lock is not where an allocation's 100 ns goes).
+
 ## Decisions that still hold
 
 **The value type has no `FINAL`.** Copying a `cons_value` (nine

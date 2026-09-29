@@ -374,6 +374,115 @@
     if (fl%tag /= GCT_NIL) body = fl
   end function arity_body
 
+  ! --- the call table ------------------------------------------------
+  !
+  ! A fn template's eighth element (analyze_fn): what a call needs, as
+  ! a raw vector read by index, where the template itself is persistent
+  ! vectors walked one gcv_nth at a time -- ten to fifteen of them per
+  ! call, 18% of a loop of calls. 1-based:
+  !   1 slots in the frame   2 the self slot or -1   3 captures
+  !   4 K, the largest fixed arity in the table
+  !   5 + 4n .. 8 + 4n, for n = 0..K arguments: the fixed arity's first
+  !     parameter slot or -1, its tree, its flat body or nil, the
+  !     builtin it only wraps or nil
+  !   then each capture's slot in the frame
+  ! Variadic arities and anything past K (CT_MAXFIX, Eval.f90) take
+  ! the general road.
+
+  function call_table(tmpl, roots) result(ct)
+    type(gc_value), intent(in) :: tmpl
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: ct, ars, ar, caps, wbs, fl
+    integer :: k, i, nf, ncap, p, sz
+    ars = gcv_nth(tmpl, 1)
+    caps = gcv_nth(tmpl, 2)
+    wbs = gcv_nth(tmpl, 6)
+    ncap = gcv_count(caps) / 2
+    k = -1
+    do i = 0, gcv_count(ars) - 1
+       ar = gcv_nth(ars, i)
+       if (.not. truthy(gcv_nth(ar, 1))) k = max(k, int_of(gcv_nth(ar, 0)))
+    end do
+    k = min(k, CT_MAXFIX)
+    sz = 4 + 4 * (k + 1) + ncap
+    ct = gc_vec(sz, [roots, tmpl])
+    call gc_vec_set(ct, 1, gcv_nth(tmpl, 3))
+    call gc_vec_set(ct, 2, gcv_nth(tmpl, 4))
+    call gc_vec_set(ct, 3, gc_int(ncap))
+    call gc_vec_set(ct, 4, gc_int(k))
+    do i = 0, k
+       call gc_vec_set(ct, 5 + 4 * i, gc_int(-1))
+    end do
+    do i = 0, gcv_count(ars) - 1
+       ar = gcv_nth(ars, i)
+       if (truthy(gcv_nth(ar, 1))) cycle
+       nf = int_of(gcv_nth(ar, 0))
+       if (nf > k) cycle
+       p = 5 + 4 * nf
+       call gc_vec_set(ct, p, gcv_nth(ar, 2))
+       call gc_vec_set(ct, p + 1, gcv_nth(ar, 3))
+       fl = gc_nil()
+       if (gcv_count(ar) >= 5) fl = gcv_nth(ar, 4)
+       call gc_vec_set(ct, p + 2, fl)
+       if (gcv_is(wbs)) call gc_vec_set(ct, p + 3, gcv_nth(wbs, i))
+    end do
+    do i = 0, ncap - 1
+       call gc_vec_set(ct, 5 + 4 * (k + 1) + i, gcv_nth(caps, 2 * i + 1))
+    end do
+  end function call_table
+
+  ! fn's call table, or nil for a fn made some other way
+  function call_table_of(fn) result(ct)
+    type(gc_value), intent(in) :: fn
+    type(gc_value) :: ct, tm
+    ct = gc_nil()
+    tm = gc_slot(fn, 1)
+    if (.not. gcv_is(tm)) return
+    if (gcv_count(tm) < 8) return
+    if (gc_kind(gc_slot(fn, 3)) == OBJ_ENV) return
+    ct = gcv_nth(tm, 7)
+  end function call_table_of
+
+  integer function ct_int(ct, i)
+    type(gc_value), intent(in) :: ct
+    integer, intent(in) :: i
+    type(gc_value) :: t
+    t = gc_reg(ct, i)
+    ct_int = int(t%ival)
+  end function ct_int
+
+  ! A frame for fn's fixed arity at table position p, its captures and
+  ! its own name bound; the parameters are the caller's to set. fn and
+  ! ct must be rooted by the caller (on its value stack): roots is
+  ! passed on as it is, since [roots, fn, ct] is a heap temporary
+  ! grown element by element, on every call.
+  function ct_frame(fn, ct, roots) result(fr)
+    type(gc_value), intent(in) :: fn, ct
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: fr, caps
+    integer :: i, ncap, cb, self
+    fr = new_frame(ct_int(ct, 1), roots)
+    ncap = ct_int(ct, 3)
+    if (ncap > 0) then
+       caps = gc_slot(fn, 2)
+       cb = 5 + 4 * (ct_int(ct, 4) + 1)
+       do i = 0, ncap - 1
+          call reg_set(fr, ct_int(ct, cb + i), gc_reg(caps, i + 1))
+       end do
+    end if
+    self = ct_int(ct, 2)
+    if (self >= 0) call reg_set(fr, self, fn)
+  end function ct_frame
+
+  ! The body table position p runs: flat unless CLOTRAN_FLAT=0
+  function ct_body(ct, p) result(body)
+    type(gc_value), intent(in) :: ct
+    integer, intent(in) :: p
+    type(gc_value) :: body
+    body = gc_reg(ct, p + 2)
+    if (body%tag == GCT_NIL .or. .not. flat_enabled()) body = gc_reg(ct, p + 1)
+  end function ct_body
+
   ! --- the executor --------------------------------------------------
 
   ! Register r (a 0-based frame slot) of a flat body's frame.
@@ -399,18 +508,29 @@
   ! kst%pc is the next instruction; kst%aux, when set, is 1 + the
   ! register a pending callee's answer goes to; kst%i = -1 says the
   ! call at pc yielded and is dispatched again.
-  recursive subroutine flat_run(tctx, vbase, val)
+  recursive subroutine flat_run(tctx, kbot, vbase, val)
     type(eval_ctx), pointer, intent(in) :: tctx
-    integer, intent(in) :: vbase
+    integer, intent(in) :: kbot, vbase
     type(gc_value), intent(inout) :: val
     type(gc_stack), pointer :: vst
     type(gc_value) :: nd, code, consts, fr, v, fnv, argv, body, newframe, wb, ar
     integer :: b, ks, pc, j, n, start, w(FW), id
-    logical :: ok, spare, scalar
+    logical :: ok, spare, scalar, done
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1
 
     vst => tctx%stk
+    ! A TRAMPOLINE over flat frames: a call into a flat body, and a
+    ! return to a flat body waiting on one, go on here rather than back
+    ! through the run loop -- never below kbot, the run loop's own floor
+    outer: do
+    ! the run loop's safepoint, per frame entered; the answer in flight
+    ! rooted in its slot while the world is stopped
+    if (gc_stop_pending()) then
+       call vs_set(vst, vbase + 1, val)
+       call gc_poll()
+       val = vs_get(vst, vbase + 1)
+    end if
     ks = tctx%ksp
     b = tctx%kst(ks)%base
     nd = vs_get(vst, b + 1)
@@ -477,6 +597,10 @@
           val = reg_get(fr, w(2))
           call reg_set(fr, w(2), gc_nil())
           call k_finish(val, tctx)
+          ! a flat caller waiting on this answer takes it here
+          if (flat_top(tctx, kbot)) then
+             if (tctx%kst(tctx%ksp)%aux > 0) cycle outer
+          end if
           return
        case (F_RECUR)
           do j = 0, w(3) - 1
@@ -560,6 +684,57 @@
           fnv = strip_meta(v)
           if (gcn_is_var(fnv)) fnv = gcn_var_value(fnv)
           call vs_set(vst, b + 3, fnv)
+          ! an interpreted fn's fixed arity, through its call table
+          if (gc_kind(fnv) == OBJ_CLOSURE) then
+             ar = call_table_of(fnv)
+             if (ar%tag == GCT_VEC) then
+                if (n <= ct_int(ar, 4)) then
+                   j = 5 + 4 * n
+                   start = ct_int(ar, j)
+                   if (start >= 0) then
+                      wb = gc_reg(ar, j + 3)
+                      if (wb%tag /= GCT_NIL .and. step_at == 0) then
+                         ! a core wrapper: its builtin, the wrapper's
+                         ! call-stack entry around it -- none needed when
+                         ! the answer is a slot already there
+                         if (n == 1) then
+                            if (flat_seq_op(gc_i1(wb), reg_get(fr, w(4)), newframe)) then
+                               call reg_set(fr, w(4), gc_nil())
+                               call vs_set(vst, b + 3, gc_nil())
+                               call reg_set(fr, w(2), newframe)
+                               pc = pc + FW
+                               cycle
+                            end if
+                         end if
+                         fnv = wb
+                         if (.not. flat_builtin()) exit
+                         pc = pc + FW
+                         cycle
+                      end if
+                      call vs_set(vst, b + 6, ar)
+                      newframe = ct_frame(vs_get(vst, b + 3), ar, [vs_get(vst, b + 6)])
+                      call vs_set(vst, b + 4, newframe)
+                      do id = 0, n - 1
+                         call reg_set(newframe, start + id, reg_get(fr, w(4) + id))
+                         call reg_set(fr, w(4) + id, gc_nil())
+                      end do
+                      body = ct_body(vs_get(vst, b + 6), j)
+                      call vs_set(vst, b + 6, gc_nil())
+                      call push_frame(tctx, vs_get(vst, b + 3), w(6))
+                      if (tctx%has_error) exit
+                      tctx%kst(ks)%pc = pc + FW
+                      tctx%kst(ks)%aux = w(2) + 1
+                      fnv = vs_get(vst, b + 3)
+                      call vs_set(vst, b + 3, gc_nil())
+                      call k_push(body, vs_get(vst, b + 4), ior(KF_FNBODY, KF_RESTART), body, tctx)
+                      call vs_set(vst, tctx%kst(tctx%ksp)%base + 7, fnv)
+                      if (step_at /= 0) call step_check()
+                      if (flat_top(tctx, kbot)) cycle outer
+                      return
+                   end if
+                end if
+             end if
+          end if
           ! a core wrapper called with its arity: its builtin, with the
           ! wrapper's call-stack entry around it (analyze.inc
           ! wrapper_builtin)
@@ -605,6 +780,7 @@
              call k_push(body, vs_get(vst, b + 4), ior(KF_FNBODY, KF_RESTART), body, tctx)
              call vs_set(vst, tctx%kst(tctx%ksp)%base + 7, fnv)
              if (step_at /= 0) call step_check()
+             if (flat_top(tctx, kbot)) cycle outer
              return
           else
              ! anything else callable: a keyword, a map, a compiled fn,
@@ -636,7 +812,10 @@
              v = reg_get(fr, w(7))
              argv = gc_nil()
              if (n == 2) argv = reg_get(fr, w(8))
-             if (flat_int_op(gc_i1(fnv), n, v, argv, newframe)) then
+             done = .false.
+             if (n == 1) done = flat_seq_op(gc_i1(fnv), v, newframe)
+             if (.not. done) done = flat_int_op(gc_i1(fnv), n, v, argv, newframe)
+             if (done) then
                 ! a temporary is cleared; a local read in place is not
                 if (w(7) == w(4)) call reg_set(fr, w(4), gc_nil())
                 if (n == 2 .and. w(8) == w(4) + 1) call reg_set(fr, w(4) + 1, gc_nil())
@@ -705,6 +884,7 @@
              call k_push(body, vs_get(vst, b + 4), ior(KF_FNBODY, KF_RESTART), body, tctx)
              call vs_set(vst, tctx%kst(tctx%ksp)%base + 7, fnv)
              if (step_at /= 0) call step_check()
+             if (flat_top(tctx, kbot)) cycle outer
              return
           end if
           call reg_set(fr, w(2), val)
@@ -717,6 +897,8 @@
     end do
     ! failed or parked: the instruction stays where it was
     tctx%kst(ks)%pc = pc
+    return
+    end do outer
 
   contains
 
@@ -774,6 +956,88 @@
     end function flat_builtin
   end subroutine flat_run
 
+  ! first, rest, next and seq where the answer is a slot already there:
+  ! nil, a list, a lazy cell already realised. What call_builtin
+  ! answers for them (sq_first, sq_rest, to_seq), without its argument
+  ! vector or its dispatch; false for anything else -- a pending cell
+  ! to force, a vector to view -- and the builtin decides. Nothing
+  ! here can fail, so a wrapper needs no call-stack entry around it.
+  logical function flat_seq_op(id, x0, out) result(done)
+    integer, intent(in) :: id
+    type(gc_value), intent(in) :: x0
+    type(gc_value), intent(inout) :: out
+    type(gc_value) :: x, t
+    integer :: st
+    done = .false.
+    x = x0
+    if (x%tag == GCT_NIL) then
+       select case (id)
+       case (B_FIRST, B_NEXT, B_SEQ)
+          out = gc_nil()
+          done = .true.
+       end select
+       return
+    end if
+    if (gcl_is(x)) then
+       select case (id)
+       case (B_FIRST)
+          out = gc_nil()
+          if (gcl_count(x) > 0) out = gcl_first(x)
+          done = .true.
+       case (B_SEQ)
+          out = gc_nil()
+          if (gcl_count(x) > 0) out = x
+          done = .true.
+       end select
+       return
+    end if
+    if (gc_kind(x) /= OBJ_LAZY) return
+    st = gc_i1(x)
+    select case (id)
+    case (B_SEQ)
+       select case (st)
+       case (LAZY_CONS);  out = x
+       case (LAZY_EMPTY); out = gc_nil()
+       case (LAZY_DELEG); out = gc_slot(x, 2)
+       case default; return
+       end select
+    case (B_FIRST)
+       if (st /= LAZY_CONS .and. st /= LAZY_EMPTY) return
+       out = gc_nil()
+       if (st == LAZY_CONS) out = gc_slot(x, 2)
+    case (B_REST)
+       if (st /= LAZY_CONS) return
+       out = gc_slot(x, 3)
+    case (B_NEXT)
+       if (st == LAZY_EMPTY) then
+          out = gc_nil()
+       else if (st == LAZY_CONS) then
+          ! (seq (rest x)), when that needs nothing done
+          t = gc_slot(x, 3)
+          if (t%tag == GCT_NIL) then
+             out = gc_nil()
+          else if (gcl_is(t)) then
+             out = gc_nil()
+             if (gcl_count(t) > 0) out = t
+          else if (gc_kind(t) == OBJ_LAZY) then
+             select case (gc_i1(t))
+             case (LAZY_CONS);  out = t
+             case (LAZY_EMPTY); out = gc_nil()
+             case (LAZY_DELEG); out = gc_slot(t, 2)
+             case default; return
+             end select
+          else
+             return
+          end if
+       else
+          return
+       end if
+    case default
+       return
+    end select
+    done = .true.
+  end function flat_seq_op
+
   ! One or two machine integers through the commonest builtins, as
   ! call_builtin answers them. False for anything else -- a real, a
   ! big number, an overflow, which throws -- and the builtin decides.
@@ -824,6 +1088,20 @@
     end if
     done = .true.
   end function flat_int_op
+
+  ! Whether the frame on top, above kbot, is a flat body flat_run can
+  ! go on with: no error, nothing parked, no step to take in the loop.
+  logical function flat_top(tctx, kbot) result(yes)
+    type(eval_ctx), pointer, intent(in) :: tctx
+    integer, intent(in) :: kbot
+    type(gc_value) :: nd
+    yes = .false.
+    if (tctx%has_error .or. tctx%yield_flag) return
+    if (tctx%ksp <= kbot) return
+    nd = vs_get(tctx%stk, tctx%kst(tctx%ksp)%base + 1)
+    if (gc_kind(nd) /= OBJ_AST) return
+    yes = gc_i1(nd) == N_FLAT
+  end function flat_top
 
   ! A call's n arguments, registers a.. of fr, as a vector (rooted in
   ! the body's frame slot 6 while it is filled).
