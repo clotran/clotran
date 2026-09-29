@@ -2054,6 +2054,38 @@ Scenario C's event streams, on step 21's sockets: a TCP client first,
 protocol clients (HTTP, Kafka) as packages after, weighed against the
 scenario when step 21 is done.
 
+**Deferred (2026-09-29): Fortran values in the debugger and the REPL.**
+Looked at, not started. What was found, so it is not re-derived:
+- A running program's MODULE variables can be read and written by name
+  with no debug information: gfortran exports each as the data symbol
+  `__<module>_MOD_<name>`, found with dlsym from Fortran (bind(C), as
+  DynLoad does), an allocatable one as gfortran's array descriptor
+  (data address, rank, bounds). Tried on a small solver: a scalar, a
+  fixed array and an allocatable with bounds -2:4 read, `dt` written
+  between steps and used by the next one. Main-program variables are
+  not exported; flang's descriptor has another layout.
+- With `-g`, gfortran 16's DWARF describes everything at -O0: each
+  local's frame offset, derived types' member offsets, and an
+  allocatable's data location, allocation status, bounds and stride as
+  expressions over the descriptor. So goal 2's "DWARF describes only
+  indirectly and late" is too pessimistic for gfortran. At -O2 the
+  locations are lists, a value readable only where it is live. flang 23
+  describes types and its descriptor but gives locals NO location.
+- lldb, the only native debugger on macOS arm64, shows no Fortran
+  locals at all (`frame variable` is empty); gdb does not run there.
+- What building it would take: find the DWARF (in the ELF on Linux, a
+  .dSYM on macOS), parse it (Clojure over byte arrays -- step 15), walk
+  the frames when the solver calls clotran's hook, evaluate location
+  expressions (a small stack machine), present scalars as numbers,
+  arrays as clotran arrays over the solver's memory, derived types as
+  maps -- so "every obj%val" is `(map :val cells)`. Fortran frames would
+  sit in the break protocol's :frames beside Clojure's. Weeks, mostly
+  the parser. A CIDER front end needs step 21's sockets and an nREPL
+  server, and cider-nrepl's middleware read first.
+- An atom holding a program's control state is the opt-in variant:
+  consistent snapshots, watches, validators, but the program must be
+  written for it. Arrays already work this way (examples/embed).
+
 ## Decisions that still hold
 
 **The value type has no `FINAL`.** Copying a `cons_value` (nine
