@@ -126,6 +126,13 @@ manager, because the library changes, moves or disappears under them.
    edit vendored source).
 5. A package carries its compiler's Fortran runtime. One process holding
    two, gfortran's and flang's, is a case to test, not to assume.
+6. A ported `.cljc` library is its upstream file, pinned as in rule 1,
+   plus a PATCH that adds `:cljf` branches where it has `:clj` ones
+   (DEVIATIONS 33), applied when the package is built. The patch is the
+   whole port: it is reviewed on its own, it can be sent upstream, and
+   rule 4 still holds for the file it applies to. `:clj` is never
+   claimed in its place -- that branch is the JVM. Nothing under
+   `src/clj/clojure/**` is ever patched this way.
 
 ## The package manager (later)
 
