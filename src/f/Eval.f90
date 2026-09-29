@@ -12330,36 +12330,51 @@ contains
             res = apply(gcv_nth(args, 1), vs_get(vst, base + 3))
             if (tctx%has_error) then
                call gc_global_keep(tctx%nested_root, gc_nil())
-               call gc_set_slot(vs_get(vst, base + 2), 5, thrown_value())
-               hnd = ref_fn_get(vs_get(vst, base + 2), "error-handler", [vs_get(vst, base + 1)])
-               call gce_clear_error()
-               if (hnd%tag /= GCT_NIL) then
-                  fargs = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
-                  fargs = gcv_conj(fargs, vs_get(vst, base + 2), &
-                       [vs_get(vst, base + 1), vs_get(vst, base + 2)])
-                  call vs_set(vst, base + 3, fargs)
-                  fargs = gcv_conj(vs_get(vst, base + 3), &
-                       gc_slot(vs_get(vst, base + 2), 5), &
-                       [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
-                  call vs_set(vst, base + 3, fargs)
-                  res = apply(hnd, vs_get(vst, base + 3))
-                  call gce_clear_error()
-               end if
-               ! :continue forgets the failure; :fail keeps it.
-               if (.not. gc_equal(gc_slot(vs_get(vst, base + 2), 3), &
-                    gc_key("fail", [vs_get(vst, base + 1)]))) &
-                    call gc_set_slot(vs_get(vst, base + 2), 5, gc_nil())
+               ! The error is held HERE while the handler runs, and is the
+               ! agent's only after it, under :fail -- Agent.doRun's local
+               ! `error`. Written onto the agent first and cleared after,
+               ! a send from another thread in between found a :continue
+               ! agent failed ("Agent is failed, needs restart"; 2 runs
+               ! in 300 of language_test's check, 6 with flat bodies).
+               block
+                 integer :: eb
+                 eb = vs_enter(vst, 1)
+                 call vs_set(vst, eb + 1, thrown_value())
+                 hnd = ref_fn_get(vs_get(vst, base + 2), "error-handler", [vs_get(vst, base + 1), vs_get(vst, eb + 1)])
+                 call gce_clear_error()
+                 if (hnd%tag /= GCT_NIL) then
+                    call vs_set(vst, base + 3, hnd)
+                    fargs = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, eb + 1)])
+                    fargs = gcv_conj(fargs, vs_get(vst, base + 2), &
+                         [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, eb + 1)])
+                    fargs = gcv_conj(fargs, vs_get(vst, eb + 1), &
+                         [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, eb + 1), fargs])
+                    res = apply(vs_get(vst, base + 3), fargs)
+                    call gce_clear_error()
+                 end if
+                 ! :continue forgets the failure; :fail keeps it
+                 if (gc_equal(gc_slot(vs_get(vst, base + 2), 3), &
+                      gc_key("fail", [vs_get(vst, base + 1), vs_get(vst, eb + 1)]))) &
+                      call gc_set_slot(vs_get(vst, base + 2), 5, vs_get(vst, eb + 1))
+                 call vs_leave(vst, eb)
+               end block
             else if (.not. validate_ref(vs_get(vst, base + 2), &
                  ref_fn_get(vs_get(vst, base + 2), "validator", [vs_get(vst, base + 1)]), &
                  res, [vs_get(vst, base + 1)])) then
                ! A REJECTED STATE IS AN AGENT ERROR, handled the
                ! same way a thrown action is.
                call gc_global_keep(tctx%nested_root, gc_nil())
-               call gc_set_slot(vs_get(vst, base + 2), 5, thrown_value())
-               call gce_clear_error()
-               if (.not. gc_equal(gc_slot(vs_get(vst, base + 2), 3), &
-                    gc_key("fail", [vs_get(vst, base + 1)]))) &
-                    call gc_set_slot(vs_get(vst, base + 2), 5, gc_nil())
+               ! recorded only under :fail, never written and cleared (above)
+               block
+                 integer :: eb
+                 eb = vs_enter(vst, 1)
+                 call vs_set(vst, eb + 1, thrown_value())
+                 call gce_clear_error()
+                 if (gc_equal(gc_slot(vs_get(vst, base + 2), 3), &
+                      gc_key("fail", [vs_get(vst, base + 1), vs_get(vst, eb + 1)]))) &
+                      call gc_set_slot(vs_get(vst, base + 2), 5, vs_get(vst, eb + 1))
+                 call vs_leave(vst, eb)
+               end block
             else
                ! the new state, and the agent's watches, as Agent.setState
                ! notifies them
