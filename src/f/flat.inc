@@ -218,6 +218,7 @@
           end if
           fb%nloop = fb%nloop + 1
           fb%loops(fb%nloop) = fb%n + 1
+          fb%looptry(fb%nloop) = fb%ntry
        end if
        call fc(fb, gcv_nth(kids, n), d)
        if (kind == N_LOOP) fb%nloop = fb%nloop - 1
@@ -238,8 +239,17 @@
              fb%ok = .false.
              return
           end if
+          ! a jump out of a try would leave its handler installed
+          if (fb%looptry(fb%nloop) /= fb%ntry) then
+             fb%ok = .false.
+             return
+          end if
           lbl = fb%loops(fb%nloop)
        else
+          if (fb%ntry /= 0) then
+             fb%ok = .false.
+             return
+          end if
           lbl = 1   ! the fn's own recur: its parameters, then the body again
        end if
        call fb_emit(fb, F_RECUR, start, min(n, int_of(gcv_nth(rinfo, 2))), a, lbl, 0)
@@ -324,6 +334,15 @@
        site = 0
        if (v%tag == GCT_INT) site = int(v%ival, kind=4)
        call fb_emit(fb, F_DOT, d, fb_const(fb, nd), a, n - f, f, site)
+    case (N_CASE)
+       ! the test, then the table's answer (case_branch, the tree's own
+       ! walk) as a jump: every distinct branch compiled here with its
+       ! label, the labels in the constants beside the branch nodes
+       t = fb_temp(fb)
+       call fc(fb, gcv_nth(kids, 0), t)
+       call fc_case(fb, nd, t, d)
+    case (N_TRY)
+       call fc_try(fb, nd, d)
     case (N_THROW)
        t = fb_temp(fb)
        call fc(fb, gcv_nth(kids, 0), t)
@@ -333,7 +352,7 @@
        fb%has_eval = .true.
        call fb_emit(fb, F_EVAL, d, fb_const(fb, nd), 0, 0, 0)
     case default
-       ! try, case: stage 2
+       ! what is left: the top-level forms, which are not in a body
        fb%ok = .false.
     end select
     fb%ntemp = mark
@@ -361,6 +380,229 @@
        if (.not. quiet) return
     end do
   end function flat_quiet_after
+
+  ! v's index among the constants, reusing one already there when it
+  ! is the same object (a case table names a branch under many keys)
+  integer function fb_const_same(fb, v, from) result(k)
+    type(flat_buf), intent(inout) :: fb
+    type(gc_value), intent(in) :: v
+    integer, intent(in) :: from
+    type(gc_stack), pointer :: vst
+    type(gc_value) :: c
+    integer :: i
+    vst => gc_my_stack()
+    do i = from, gcv_count(vs_get(vst, fb%cslot)) - 1
+       c = gcv_nth(vs_get(vst, fb%cslot), i)
+       if (c%tag == v%tag .and. c%ref == v%ref) then
+          k = i
+          return
+       end if
+    end do
+    k = fb_const(fb, v)
+  end function fb_const_same
+
+  ! constant k replaced (a label known only once its code is written)
+  subroutine fb_const_set(fb, k, v)
+    type(flat_buf), intent(inout) :: fb
+    integer, intent(in) :: k
+    type(gc_value), intent(in) :: v
+    type(gc_stack), pointer :: vst
+    type(gc_value) :: cs
+    vst => gc_my_stack()
+    cs = gcv_assoc(vs_get(vst, fb%cslot), k, v, [v])
+    call vs_set(vst, fb%cslot, cs)
+  end subroutine fb_const_set
+
+  ! case*: F_CASE t k kb m kl -- the node at k, its m distinct branch
+  ! nodes at kb.., their labels at kl..
+  recursive subroutine fc_case(fb, nd, t, d)
+    type(flat_buf), intent(inout) :: fb
+    type(gc_value), intent(in) :: nd
+    integer, intent(in) :: t, d
+    type(gc_value) :: e
+    type(gc_value), allocatable :: ks(:), vls(:)
+    integer :: kc, kb, kl, m, i, j, ends(4096), nends
+    kc = fb_const(fb, nd)
+    ! the default first, then the table's, each once
+    kb = fb_const(fb, gcv_nth(gc_slot(nd, 1), 1))
+    m = 1
+    call gca_entries(gc_slot(nd, 2), ks, vls)
+    do i = 1, size(ks)
+       e = strip_meta(vls(i))
+       if (.not. gcv_is(e)) cycle
+       if (gcv_count(e) /= 2) cycle
+       j = fb_const_same(fb, gcv_nth(e, 1), kb)
+       if (j == kb + m) m = m + 1
+    end do
+    if (m > size(ends)) then
+       fb%ok = .false.
+       return
+    end if
+    kl = fb%n   ! placeholder: the label constants follow
+    kl = fb_const(fb, gc_int(0))
+    do i = 2, m
+       j = fb_const(fb, gc_int(0))
+    end do
+    call fb_emit(fb, F_CASE, t, kc, kb, m, kl)
+    nends = 0
+    do i = 0, m - 1
+       block
+         type(gc_stack), pointer :: vst
+         vst => gc_my_stack()
+         call fb_const_set(fb, kl + i, gc_int(fb%n + 1))
+         call fc(fb, gcv_nth(vs_get(vst, fb%cslot), kb + i), d)
+       end block
+       if (.not. fb%ok) return
+       nends = nends + 1
+       ends(nends) = fb%n + 1
+       call fb_emit(fb, F_JMP, 0, 0, 0, 0, 0)
+    end do
+    do i = 1, nends
+       fb%code(ends(i) + 1) = fb%n + 1
+    end do
+  end subroutine fc_case
+
+  ! try/catch/finally in the frame itself. F_TRY sv L saves the
+  ! frame's handler (kst%mode) and the call-stack depth in sv, sv+1 and
+  ! installs L; an error unwinding to this frame lands at L with the
+  ! exception in sv+2 and its message in sv+3 (flat_catch). There each
+  ! catch is tried in turn (F_CATCH); with a finally, the catches run
+  ! under a second handler so a catch that throws still runs it; an
+  ! exception no catch takes runs the finally and goes on (F_RETHROW).
+  recursive subroutine fc_try(fb, nd, d)
+    type(flat_buf), intent(inout) :: fb
+    type(gc_value), intent(in) :: nd
+    integer, intent(in) :: d
+    type(gc_value) :: kids, fin, catches, cl
+    integer :: sv, sv2, t, jt, jt2, jn, i, nc, ends(256), nends, k
+    logical :: hasfin
+    kids = gc_slot(nd, 1)
+    fin = gcv_nth(kids, 1)
+    hasfin = gc_kind(fin) == OBJ_AST
+    catches = gc_slot(nd, 2)
+    nc = gcv_count(catches)
+    if (nc + 2 > size(ends)) then
+       fb%ok = .false.
+       return
+    end if
+    sv = fb_temp(fb)
+    k = fb_temp(fb)
+    k = fb_temp(fb)
+    k = fb_temp(fb)
+    t = fb_temp(fb)
+    nends = 0
+    jt = fb%n + 1
+    call fb_emit(fb, F_TRY, sv, 0, 0, 0, 0)
+    fb%ntry = fb%ntry + 1
+    call fc(fb, gcv_nth(kids, 0), d)
+    fb%ntry = fb%ntry - 1
+    call fb_emit(fb, F_ENDTRY, sv, 0, 0, 0, 0)
+    if (hasfin) then
+       call fc(fb, fin, t)
+       call fb_emit(fb, F_NIL, t, 0, 0, 0, 0)
+    end if
+    nends = nends + 1
+    ends(nends) = fb%n + 1
+    call fb_emit(fb, F_JMP, 0, 0, 0, 0, 0)
+    ! the handler
+    fb%code(jt + 2) = fb%n + 1
+    call fb_emit(fb, F_HANDLER, sv, 0, 0, 0, 0)
+    sv2 = -1
+    jt2 = 0
+    if (hasfin .and. nc > 0) then
+       sv2 = fb_temp(fb)
+       k = fb_temp(fb)
+       k = fb_temp(fb)
+       k = fb_temp(fb)
+       jt2 = fb%n + 1
+       call fb_emit(fb, F_TRY, sv2, 0, 0, 0, 0)
+       fb%ntry = fb%ntry + 1
+    end if
+    do i = 0, nc - 1
+       cl = gcv_nth(catches, i)
+       jn = fb%n + 1
+       call fb_emit(fb, F_CATCH, sv + 2, fb_const(fb, gcv_nth(cl, 0)), int_of(gcv_nth(cl, 1)), 0, 0)
+       call fc(fb, gcv_nth(cl, 2), d)
+       if (sv2 >= 0) then
+          call fb_emit(fb, F_ENDTRY, sv2, 0, 0, 0, 0)
+          call fc(fb, fin, t)
+          call fb_emit(fb, F_NIL, t, 0, 0, 0, 0)
+       end if
+       nends = nends + 1
+       ends(nends) = fb%n + 1
+       call fb_emit(fb, F_JMP, 0, 0, 0, 0, 0)
+       fb%code(jn + 4) = fb%n + 1
+    end do
+    ! no catch took it
+    if (sv2 >= 0) then
+       call fb_emit(fb, F_ENDTRY, sv2, 0, 0, 0, 0)
+       fb%ntry = fb%ntry - 1
+    end if
+    if (hasfin) then
+       call fc(fb, fin, t)
+       call fb_emit(fb, F_NIL, t, 0, 0, 0, 0)
+    end if
+    call fb_emit(fb, F_RETHROW, sv + 2, sv + 3, 0, 0, 0)
+    ! a catch that threw, with a finally to run
+    if (sv2 >= 0) then
+       fb%code(jt2 + 2) = fb%n + 1
+       call fb_emit(fb, F_HANDLER, sv2, 0, 0, 0, 0)
+       call fc(fb, fin, t)
+       call fb_emit(fb, F_NIL, t, 0, 0, 0, 0)
+       call fb_emit(fb, F_RETHROW, sv2 + 2, sv2 + 3, 0, 0, 0)
+    end if
+    do i = 1, nends
+       fb%code(ends(i) + 1) = fb%n + 1
+    end do
+  end subroutine fc_try
+
+  ! An error unwinding to a flat frame with a handler (kst%mode, the
+  ! label of its F_HANDLER): the frame is not popped but lands there,
+  ! the exception and its message in the try's registers, the outer
+  ! handler and the call-stack depth put back, anything the frame was
+  ! waiting on let go, and the error cleared -- what k_unwind does for
+  ! the tree's N_TRY frame, before its catches are tried.
+  subroutine flat_catch(tctx, b)
+    type(eval_ctx), pointer, intent(in) :: tctx
+    integer, intent(in) :: b
+    type(gc_stack), pointer :: vst
+    type(gc_value) :: nd, fr, exc, v
+    integer :: ks, l, sv, w(FW)
+    character(len=:), allocatable :: msg
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
+    vst => tctx%stk
+    ks = tctx%ksp
+    l = tctx%kst(ks)%mode
+    nd = vs_get(vst, b + 1)
+    fr = vs_get(vst, b + 2)
+    call gc_vec_word(gc_slot(nd, 2), l, w)
+    sv = w(2)
+    msg = tctx%last_error
+    exc = thrown_value()
+    if (exc%tag == GCT_NIL) then
+       call gce_error(s=dlt_1)
+       exc = error_value(dlt_1, [nd])
+    end if
+    call reg_set(fr, sv + 2, exc)
+    v = gc_str(msg, [nd])
+    call reg_set(fr, sv + 3, v)
+    v = reg_get(fr, sv)
+    tctx%kst(ks)%mode = int(v%ival)
+    v = reg_get(fr, sv + 1)
+    tctx%fstack_top = min(tctx%fstack_top, int(v%ival))
+    call reg_set(fr, sv, gc_nil())
+    call reg_set(fr, sv + 1, gc_nil())
+    if (tctx%kst(ks)%aux == -1) call flat_release(vs_get(vst, b + 6))
+    tctx%kst(ks)%aux = 0
+    tctx%kst(ks)%i = 0
+    call give_frame(vs_get(vst, b + 4))
+    call vs_set(vst, b + 3, gc_nil())
+    call vs_set(vst, b + 4, gc_nil())
+    call vs_set(vst, b + 6, gc_nil())
+    call gce_clear_error()
+    tctx%kst(ks)%pc = l
+  end subroutine flat_catch
 
   ! The body a closure's arity runs: its flat form when it has one.
   function arity_body(ar) result(body)
@@ -883,6 +1125,66 @@
           wb = gc_nil()
           call vs_set(vst, b + 3, fnv)
           if (.not. flat_builtin(w(6))) exit
+       case (F_CASE)
+          ! w: F_CASE t k kb m kl
+          v = reg_get(fr, w(2))
+          call reg_set(fr, w(2), gc_nil())
+          body = case_branch(gc_vec_get(consts, w(3) + 1), v)
+          if (tctx%has_error) exit
+          done = .false.
+          do j = 0, w(5) - 1
+             argv = gc_vec_get(consts, w(4) + j + 1)
+             if (argv%tag == body%tag .and. argv%ref == body%ref) then
+                argv = gc_vec_get(consts, w(6) + j + 1)
+                pc = int(argv%ival)
+                done = .true.
+                exit
+             end if
+          end do
+          if (.not. done) then
+             call raise_class("IllegalStateException", "flat: case branch not compiled", [gc_value ::])
+             exit
+          end if
+          cycle
+       case (F_TRY)
+          ! w: F_TRY sv L
+          call reg_set(fr, w(2), gc_int(int(tctx%kst(ks)%mode, gc_ip)))
+          call reg_set(fr, w(2) + 1, gc_int(int(tctx%fstack_top, gc_ip)))
+          tctx%kst(ks)%mode = w(3)
+       case (F_ENDTRY)
+          v = reg_get(fr, w(2))
+          tctx%kst(ks)%mode = int(v%ival)
+          call reg_set(fr, w(2), gc_nil())
+          call reg_set(fr, w(2) + 1, gc_nil())
+       case (F_HANDLER)
+          ! landed here by flat_catch, which did the work
+       case (F_CATCH)
+          ! w: F_CATCH ex kcls slot Lnext
+          if (.not. catch_matches(gc_vec_get(consts, w(3) + 1), reg_get(fr, w(2)), gc_nil())) then
+             if (tctx%has_error) exit
+             pc = w(5)
+             cycle
+          end if
+          call reg_set(fr, w(4), reg_get(fr, w(2)))
+          call reg_set(fr, w(2), gc_nil())
+          call reg_set(fr, w(2) + 1, gc_nil())
+       case (F_RETHROW)
+          ! the exception no catch took, on its way as it was: its
+          ! message and trace are the ones it was raised with
+          v = reg_get(fr, w(2))
+          argv = reg_get(fr, w(3))
+          call reg_set(fr, w(2), gc_nil())
+          call reg_set(fr, w(3), gc_nil())
+          call set_thrown(v)
+          tctx%has_error = .true.
+          tctx%last_error = ""
+          if (argv%tag == GCT_STR) then
+             block
+                call gc_ref_text(argv%ref, s=dlt_1)
+                tctx%last_error = dlt_1
+             end block
+          end if
+          exit
        case (F_DOT)
           ! w: F_DOT d k a n from site -- dispatched as exec.inc's N_DOT;
           ! the target (or the class) in slot 3, the arguments in slot 6

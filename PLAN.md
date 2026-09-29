@@ -1907,6 +1907,23 @@ any string. `instance?` 1296 -> 281 ns, reduce1 2.97 -> 1.89 us an
 element, `(apply + (take 10^6 (range)))` 3.1 -> 1.9 s (15.2 s at the
 start of 2026-09-28).
 
+**Stage 2 done: try and case (2026-09-29).** `case*` compiles to the
+test, `case_branch` (the tree's own table walk) and a jump to the
+branch's label (`F_CASE`). `try` runs in the frame: `F_TRY` saves the
+frame's handler (its kst%mode, otherwise unused by a flat frame) and
+the call-stack depth and installs the handler's label; k_unwind, on
+reaching a flat frame with a handler, lands it there (`flat_catch`:
+exception and message in the try's registers, outer handler and depth
+restored, anything waited on let go, error cleared) rather than popping
+it; catches are tried in order (`F_CATCH`, catch_matches as the tree);
+with a finally the catches run under a second handler, so a catch that
+throws still runs it; an exception nothing takes runs the finally and
+goes on with its message and trace (`F_RETHROW`). A recur that would
+jump out of a try leaves that arity a tree (Clojure refuses it anyway).
+5181 of 5203 arities (99.6%); the rest hold a node the tree runs
+nested with a recur inside. `dorun (map inc (range 10^5))` 279 -> 121
+ms, now that map's chunked branch compiles.
+
 ## Decisions that still hold
 
 **The value type has no `FINAL`.** Copying a `cons_value` (nine

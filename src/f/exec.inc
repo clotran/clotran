@@ -1058,6 +1058,11 @@
        b = tctx%kst(tctx%ksp)%base
        nd = vs_get(vst, b + 1)
        call note_position(nd)
+       ! a flat body inside a try of its own lands in its handler
+       if (gc_i1(nd) == N_FLAT .and. tctx%kst(tctx%ksp)%mode > 0) then
+          call flat_catch(tctx, b)
+          return
+       end if
        if (gc_i1(nd) == N_TRY .and. (tctx%kst(tctx%ksp)%pc == 1 .or. tctx%kst(tctx%ksp)%pc == 3)) then
           exc = thrown_value()
           if (exc%tag == GCT_NIL) then

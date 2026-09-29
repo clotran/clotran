@@ -2746,3 +2746,18 @@
 ;; through the Var (InstanceOfExpr): with-redefs does not reach it, and
 ;; a class in a local still calls the Var
 [(with-redefs [instance? (fn [c x] :redef)] (instance? String "a")) (with-redefs [instance? (fn [c x] :redef)] (let [c String] (instance? c "a"))) (instance? String 1) (let [f instance?] (f Number 1))]
+
+;; try/catch/finally and case compiled flat (flat.inc fc_try, fc_case):
+;; catch order, finally on every road, a catch that throws, nesting, a
+;; try in a loop, errors from callees and host calls, case tables
+(defn flat-try1 [x] (let [log (atom [])] [(try (swap! log conj :body) (when x (throw (ex-info "boom" {:x x}))) :ok (catch clojure.lang.ExceptionInfo e (swap! log conj :ei) [:ei (ex-message e) (ex-data e)]) (catch Exception e (swap! log conj :ex) :ex) (finally (swap! log conj :fin))) @log]))
+(defn flat-try2 [] (let [log (atom [])] [(try (try (/ 1 0) (catch ArithmeticException e (swap! log conj :inner) (throw (ex-info "again" {}))) (finally (swap! log conj :inner-fin))) (catch Exception e (swap! log conj :outer) (ex-message e))) @log]))
+(defn flat-try3 [] (let [log (atom [])] [(try (try (throw (IllegalStateException. "no")) (finally (swap! log conj :fin))) (catch IllegalStateException e (.getMessage e))) @log]))
+(defn flat-try4 [n] (loop [i 0 acc []] (if (< i n) (recur (inc i) (conj acc (try (if (odd? i) (throw (Exception. (str i))) i) (catch Exception e (keyword (.getMessage e)))))) acc)))
+(defn flat-thrower [x] (throw (ex-info "from callee" {:v x})))
+(defn flat-try5 [] [(try (flat-thrower 1) (catch Exception e (:v (ex-data e)))) (try (nth [1 2] 5) (catch IndexOutOfBoundsException e :oob)) (try (.substring "abc" 5) (catch Exception e :sub)) (try (first 5) (catch IllegalArgumentException e :iae))])
+(defn flat-try6 [] (try (try (throw (ex-info "kept" {:k 1})) (catch ArithmeticException e :wrong)) (catch Exception e [(ex-message e) (ex-data e)])))
+(defn flat-try7 [] (let [a (atom 0)] [(try 1 (finally (swap! a inc))) (try (try (throw (Exception. "x")) (catch Exception e (throw (Exception. "y"))) (finally (swap! a + 10))) (catch Exception e (.getMessage e))) @a]))
+(defn flat-case [x] (case x 1 :one 2 :two (3 4) :three-four "s" :str :k :kw [1 2] :vec nil :nil :default))
+(defn flat-case2 [x] (case x (1 2 3) :small 100 :hundred -1 :neg))
+[(flat-try1 nil) (flat-try1 1) (flat-try2) (flat-try3) (flat-try4 6) (flat-try5) (flat-try6) (flat-try7) (mapv flat-case [1 2 3 4 "s" :k [1 2] nil 9 "t"]) (mapv flat-case2 [1 3 100 -1]) (try (flat-case2 7) (catch IllegalArgumentException e (.getMessage e)))]
