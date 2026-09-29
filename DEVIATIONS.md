@@ -879,6 +879,9 @@ What is NOT closed, and is the rest of this entry:
 - **One big integer type, not two.** `biginteger` answers the same
   BigInt, which prints `1N` where Clojure's `java.math.BigInteger`
   prints `1`.
+  So `(instance? clojure.lang.BigInt x)` and `(instance?
+  java.math.BigInteger x)` are both true of `1N` and of `(biginteger
+  1)`, where the JVM answers one of each.
 - **`long` of a BigInt truncates** rather than throwing when the value
   is out of range: the row is shared with `uncheckedLongCast`, and
   `even?` needs the truncating one.

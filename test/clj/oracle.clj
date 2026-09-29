@@ -2786,3 +2786,7 @@
 ;; join, with-out-str, pr-str
 (defn sbt [] (let [sb (StringBuilder. "ab")] (.append sb "cd") (.append sb 1) (let [l1 (.length sb) s1 (str sb)] (.append sb \x) (.append sb [1 2]) [l1 s1 (.toString sb) (.length sb) (str (.reverse (StringBuilder. "héllo"))) (str (doto (StringBuilder.) (.append "a") (.append "b")))])))
 [(sbt) (str "a" 1 nil :k [1] "é") (clojure.string/join "," (range 12)) (clojure.string/join [1 2 3]) (with-out-str (print "x") (println "y" 1) (pr [1 "a"])) (pr-str {:a [1 2] :b "s"}) (count (pr-str (vec (range 3000)))) (apply str (repeat 40 "ab")) (format "%s-%d" "x" 3) (str (reduce (fn [sb i] (.append sb i)) (StringBuilder.) (range 20)))]
+
+;; instance? on the scalar classes, answered from tag and width; the two
+;; big integers are one type here (DEVIATIONS: one big integer type)
+(for [x [nil 1 (int 1) (short 1) (byte 1) 1.5 (float 1.5) 1M 1/2 "s" \c :k 'sym true [1] (with-meta 'm {:a 1})]]   [(instance? Long x) (instance? Integer x) (instance? Short x) (instance? Byte x) (instance? clojure.lang.BigInt x) (instance? java.math.BigInteger x) (instance? String x) (instance? Number x) (instance? Double x) (instance? Character x) (instance? clojure.lang.Keyword x) (instance? clojure.lang.Symbol x) (integer? x) (number? x) (string? x) (int? x) (double? x)]) 

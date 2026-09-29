@@ -16422,6 +16422,50 @@ contains
           yes = is_reduced(v)
           return
        end if
+       ! the scalar classes -- integer?, number?, string?, even? ask
+       ! these per element -- from the value's tag and boxed width, as
+       ! the cases below answer them, both spellings of each
+       block
+         type(gc_value) :: sv
+         integer :: tg
+         sv = strip_meta(v)
+         tg = sv%tag
+         if (gc_ref_is(cls%ref, "java.lang.Long") .or. gc_ref_is(cls%ref, "Long")) then
+            yes = tg == GCT_INT .and. value_width(v) == W_LONG
+            return
+         else if (gc_ref_is(cls%ref, "java.lang.Integer") .or. gc_ref_is(cls%ref, "Integer")) then
+            yes = tg == GCT_INT .and. value_width(v) == W_INT
+            return
+         else if (gc_ref_is(cls%ref, "java.lang.Short") .or. gc_ref_is(cls%ref, "Short")) then
+            yes = tg == GCT_INT .and. value_width(v) == W_SHORT
+            return
+         else if (gc_ref_is(cls%ref, "java.lang.Byte") .or. gc_ref_is(cls%ref, "Byte")) then
+            yes = tg == GCT_INT .and. value_width(v) == W_BYTE
+            return
+         else if (gc_ref_is(cls%ref, "clojure.lang.BigInt") .or. gc_ref_is(cls%ref, "java.math.BigInteger") &
+              .or. gc_ref_is(cls%ref, "BigInt") .or. gc_ref_is(cls%ref, "BigInteger")) then
+            yes = tg == GCT_BIG
+            return
+         else if (gc_ref_is(cls%ref, "java.lang.String") .or. gc_ref_is(cls%ref, "String")) then
+            yes = tg == GCT_STR
+            return
+         else if (gc_ref_is(cls%ref, "java.lang.Number") .or. gc_ref_is(cls%ref, "Number")) then
+            yes = tg == GCT_INT .or. tg == GCT_REAL .or. tg == GCT_RATIO .or. tg == GCT_BIG .or. tg == GCT_DEC
+            return
+         else if (gc_ref_is(cls%ref, "java.lang.Double") .or. gc_ref_is(cls%ref, "Double")) then
+            yes = tg == GCT_REAL .and. value_width(v) /= W_FLOAT
+            return
+         else if (gc_ref_is(cls%ref, "java.lang.Character") .or. gc_ref_is(cls%ref, "Character")) then
+            yes = tg == GCT_CHAR
+            return
+         else if (gc_ref_is(cls%ref, "clojure.lang.Keyword")) then
+            yes = tg == GCT_KEY
+            return
+         else if (gc_ref_is(cls%ref, "clojure.lang.Symbol")) then
+            yes = tg == GCT_SYM
+            return
+         end if
+       end block
     end if
     ! SHORTENED: a class value carries its canonical name, and the
     ! cases below are written the way a Clojure program writes the
