@@ -2854,3 +2854,7 @@
 ;; array classes by symbol: CLJ-2807's Sym/N, and the JVM descriptor
 (let [e (comp eval read-string)] [(mapv e ["int/1" "double/2" "String/1" "(= int/1 (class (int-array 1)))" "(instance? long/1 (long-array 2))"]) (mapv #(resolve (symbol %)) ["int/1" "[I" "[[D" "[Ljava.lang.String;" "long/3" "[Lno.Such;" "[Q"])])
 (try (resolve (symbol "no.such.Klass/1")) (catch ClassNotFoundException e (.getMessage e)))
+
+;; fn? answered from the value's kind (trampoline asks it every bounce)
+(mapv fn? [inc (fn []) #(identity 1) :k {} #{} [] (with-meta (fn []) {:a 1}) print-method 'x nil (var inc) (reify clojure.lang.IFn (invoke [_] 1))])
+(trampoline (fn f [n] (if (pos? n) #(f (dec n)) n)) 10000)

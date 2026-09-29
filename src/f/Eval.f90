@@ -16903,6 +16903,13 @@ contains
        else if (gc_ref_is(cls%ref, "clojure.lang.Reduced")) then
           yes = is_reduced(v)
           return
+       else if (gc_ref_is(cls%ref, "clojure.lang.Fn")) then
+          ! fn?, which trampoline asks at every bounce
+          select case (gc_kind(strip_meta(v)))
+          case (OBJ_CLOSURE, OBJ_BUILTIN, OBJ_COMPILED)
+             yes = .true.
+          end select
+          return
        end if
        ! the scalar classes -- integer?, number?, string?, even? ask
        ! these per element -- from the value's tag and boxed width, as
