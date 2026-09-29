@@ -94,7 +94,7 @@ method. Reading the Java of one version while running the core.clj of
 another is the same mistake as citing memory, and it nearly happened:
 the clone was first taken three hunks newer than what we run.
 
-**`~/jborden/clojurescript`** -- pinned to `b45dff9f`. A second
+**`~/jborden/clojurescript`** -- pinned to the `r1.12.145` release. A second
 implementation of the same language on a completely different host. Not
 a porting source: it is how we tell which parts of `clojure.lang.*` are
 the LANGUAGE and which are JVM artifacts. If ClojureScript writes

@@ -10,7 +10,7 @@ ledgers is how you end up defending an accident.
 
 - `~/jborden/clojure` at `clojure-1.12.6` -- the same commit as our vendored
   core.clj (src/clj/clojure/PROVENANCE.md). This is what we must satisfy.
-- `~/jborden/clojurescript` at `b45dff9f` -- a second implementation of the
+- `~/jborden/clojurescript` at `r1.12.145` -- a second implementation of the
   same language on a completely different host. This is what tells us which
   parts of the first one were ever really the language.
 

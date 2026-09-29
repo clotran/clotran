@@ -10,7 +10,7 @@
 # and spec had loaded (make image), so the prompt is up in about 0.2 s;
 # CLOTRAN_IMAGE=0 loads it from source instead. On a terminal the REPL
 # opens with a banner naming the build: clotran's VERSION, the Clojure
-# and ClojureScript commits the language is pinned to, the compiler,
+# and ClojureScript releases the language is pinned to, the compiler,
 # the machine and the image.
 #
 # `clotran compile foo.cljf` compiles the namespace to foo.dylib (foo.so
