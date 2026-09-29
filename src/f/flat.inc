@@ -59,10 +59,8 @@
     allocate(fb%code(256))
     call fc(fb, vs_get(vst, base + 2), fb_temp(fb))
     if (fb%ok) call fb_emit(fb, F_RET, fb%tbase, 0, 0, 0, 0)
-    ! a recur out of a node the tree runs nested would come back to
-    ! this frame as the recur marker, which the flat body has no
-    ! answer for: such an arity stays a tree
-    if (fb%has_eval .and. fb%has_recur) fb%ok = .false.
+    ! (a recur out of a node the tree runs nested is refused where that
+    ! node is compiled: node_has_recur)
     if (.not. fb%ok) then
        call vs_leave(vst, base)
        return
@@ -359,8 +357,13 @@
        end do
        call fb_emit(fb, F_NEW, d, fb_const(fb, nd), a, n, 0)
     case (N_DEF, N_DEFTYPE, N_LATEVAR, N_LETFN, N_SETBANG, N_FAIL)
-       ! what the tree itself runs nested (exec_other), run the same way
+       ! what the tree itself runs nested (exec_other), run the same way --
+       ! unless a recur of this body is inside it (node_has_recur)
        fb%has_eval = .true.
+       if (node_has_recur(nd)) then
+          fb%ok = .false.
+          return
+       end if
        call fb_emit(fb, F_EVAL, d, fb_const(fb, nd), 0, 0, 0)
     case default
        ! what is left: the top-level forms, which are not in a body
@@ -614,6 +617,56 @@
     call gce_clear_error()
     tctx%kst(ks)%pc = l
   end subroutine flat_catch
+
+  ! Whether a node holds a recur of ITS OWN fn or loop somewhere beneath
+  ! it: a nested fn's or lazy-seq's recurs are that fn's, so their
+  ! templates are not entered, and a constant is data. A node the tree
+  ! runs nested (F_EVAL) holding one would answer the recur marker to a
+  ! flat body with no answer for it, so such an arity stays a tree; a
+  ! set!, def or var read beside a loop's recur does not.
+  recursive logical function node_has_recur(v) result(yes)
+    type(gc_value), intent(in) :: v
+    type(gc_value) :: s
+    type(gc_value), allocatable :: ks(:), vls(:)
+    integer :: i, j
+    yes = .false.
+    if (gcv_is(v)) then
+       do i = 0, gcv_count(v) - 1
+          if (node_has_recur(gcv_nth(v, i))) then
+             yes = .true.
+             return
+          end if
+       end do
+       return
+    end if
+    if (gca_is(v)) then
+       call gca_entries(v, ks, vls)
+       do i = 1, size(vls)
+          if (node_has_recur(strip_meta(vls(i)))) then
+             yes = .true.
+             return
+          end if
+       end do
+       return
+    end if
+    if (gc_kind(v) /= OBJ_AST) return
+    select case (gc_i1(v))
+    case (N_RECUR)
+       yes = .true.
+    case (N_FN, N_LAZY, N_CONST, N_FLAT)
+       continue
+    case default
+       do j = 1, 3
+          s = gc_slot(v, j)
+          if (gc_kind(s) == OBJ_AST .or. gcv_is(s) .or. gca_is(s)) then
+             if (node_has_recur(s)) then
+                yes = .true.
+                return
+             end if
+          end if
+       end do
+    end select
+  end function node_has_recur
 
   ! The body a closure's arity runs: its flat form when it has one.
   function arity_body(ar) result(body)

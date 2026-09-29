@@ -2813,3 +2813,9 @@
 
 (expect-diff "DEVIATIONS 60: a deftype's own equals and hasheq are not consulted")
 (do (deftype VP [x] Object (equals [_ o] (and (instance? VP o) (= x (.-x o)))) (hashCode [_] (hash x)) clojure.lang.IHashEq (hasheq [_] (hash x))) [(= (VP. 1) (VP. 1)) (count (set [(VP. 1) (VP. 1)]))])
+
+;; a def, a swap! and a letfn beside a loop's recur (node_has_recur: only
+;; a recur INSIDE a nested node keeps an arity a tree)
+(defn lr [n] (loop [i 0 acc []] (if (< i n) (do (def lr-last i) (recur (inc i) (conj acc i))) acc)))
+(defn lf [n] (loop [i 0] (if (< i n) (letfn [(g [x] (* 2 x))] (recur (+ i (g 1)))) i)))
+[(lr 3) lr-last (lf 3) (let [a (atom 0)] (loop [i 0] (when (< i 3) (swap! a inc) (recur (inc i)))) @a)]
