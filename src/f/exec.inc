@@ -1096,6 +1096,12 @@
              return
           end if
        end if
+       ! a flat body waiting on a thunk it forced in the loop: the thunk
+       ! threw, so its cell is pending again (flat.inc flat_force)
+       if (gc_i1(nd) == N_FLAT .and. tctx%kst(tctx%ksp)%aux == -1) then
+          tctx%kst(tctx%ksp)%aux = 0
+          call flat_release(vs_get(vst, b + 6))
+       end if
        do while (tctx%kst(tctx%ksp)%nfr > 0)
           call pop_frame(tctx)
           tctx%kst(tctx%ksp)%nfr = tctx%kst(tctx%ksp)%nfr - 1

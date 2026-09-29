@@ -539,6 +539,18 @@
     fr = vs_get(vst, b + 2)
     ! a fresh entry: k_push does not reset aux
     if (tctx%kst(ks)%pc == 0) tctx%kst(ks)%aux = 0
+    if (tctx%kst(ks)%aux == -1) then
+       ! a thunk flat_force ran answered: the cell settled, and the
+       ! instruction that wanted it runs again
+       tctx%kst(ks)%aux = 0
+       call give_frame(vs_get(vst, b + 4))
+       call vs_set(vst, b + 4, gc_nil())
+       call force_settle(vs_get(vst, b + 6), val)
+       call flat_release(vs_get(vst, b + 6))
+       call vs_set(vst, b + 6, gc_nil())
+       val = gc_nil()
+       if (tctx%has_error) return
+    end if
     if (tctx%kst(ks)%aux > 0) then
        ! an interpreted callee answered
        call give_frame(vs_get(vst, b + 4))
@@ -705,6 +717,21 @@
                                pc = pc + FW
                                cycle
                             end if
+                            newframe = flat_force_target(gc_i1(wb), reg_get(fr, w(4)))
+                            if (newframe%tag /= GCT_NIL) then
+                               ! the call runs again once the cell is
+                               ! settled: its argument register is still
+                               ! set, and its head goes back into its own
+                               fnv = vs_get(vst, b + 3)
+                               call reg_set(fr, w(3), fnv)
+                               if (flat_force(newframe, w(6))) then
+                                  if (tctx%has_error) exit
+                                  if (step_at /= 0) call step_check()
+                                  if (flat_top(tctx, kbot)) cycle outer
+                                  return
+                               end if
+                               call reg_set(fr, w(3), gc_nil())
+                            end if
                          end if
                          fnv = wb
                          if (.not. flat_builtin()) exit
@@ -822,6 +849,18 @@
                 call reg_set(fr, w(2), newframe)
                 pc = pc + FW
                 cycle
+             end if
+             ! a pending cell whose thunk can run here, in the loop
+             if (n == 1) then
+                newframe = flat_force_target(gc_i1(fnv), v)
+                if (newframe%tag /= GCT_NIL) then
+                   if (flat_force(newframe, w(6))) then
+                      if (tctx%has_error) exit
+                      if (step_at /= 0) call step_check()
+                      if (flat_top(tctx, kbot)) cycle outer
+                      return
+                   end if
+                end if
              end if
              ! the general road wants its arguments in a row
              if (w(7) /= w(4)) call reg_set(fr, w(4), v)
@@ -954,6 +993,49 @@
       call reg_set(fr, w(2), v)
       go = .true.
     end function flat_builtin
+
+    ! Claims the pending cell c (as gce_force does) and pushes its
+    ! thunk's body as a callee, this frame waiting AT the instruction
+    ! that wanted it, aux -1: on the answer the cell is settled and the
+    ! instruction runs again, finding it realised. False when another
+    ! thread holds c -- the builtin waits for it -- or it is no longer
+    ! pending.
+    logical function flat_force(c, site) result(started)
+      type(gc_value), intent(in) :: c
+      integer, intent(in) :: site
+      type(gc_value) :: owner
+      started = .false.
+      call gc_state_lock()
+      if (gc_i1(c) /= LAZY_PENDING) then
+         call gc_state_unlock()
+         return
+      end if
+      owner = gc_int(int(tctx%id, gc_ip))
+      call gc_set_i1(c, LAZY_RUNNING)
+      call gc_set_slot(c, 4, owner)
+      call gc_state_unlock()
+      started = .true.
+      call vs_set(vst, b + 6, c)
+      call vs_set(vst, b + 3, gc_slot(c, 1))
+      call vs_set(vst, b + 4, call_table_of(vs_get(vst, b + 3)))
+      newframe = ct_frame(vs_get(vst, b + 3), vs_get(vst, b + 4), [vs_get(vst, b + 6)])
+      body = ct_body(vs_get(vst, b + 4), 5)
+      call vs_set(vst, b + 4, newframe)
+      call push_frame(tctx, vs_get(vst, b + 3), site)
+      if (tctx%has_error) then
+         call give_frame(vs_get(vst, b + 4))
+         call vs_set(vst, b + 4, gc_nil())
+         call flat_release(vs_get(vst, b + 6))
+         call vs_set(vst, b + 6, gc_nil())
+         return
+      end if
+      tctx%kst(ks)%pc = pc
+      tctx%kst(ks)%aux = -1
+      fnv = vs_get(vst, b + 3)
+      call vs_set(vst, b + 3, gc_nil())
+      call k_push(body, vs_get(vst, b + 4), ior(KF_FNBODY, KF_RESTART), body, tctx)
+      call vs_set(vst, tctx%kst(tctx%ksp)%base + 7, fnv)
+    end function flat_force
   end subroutine flat_run
 
   ! first, rest, next and seq where the answer is a slot already there:
@@ -1037,6 +1119,47 @@
     end select
     done = .true.
   end function flat_seq_op
+
+  ! The pending cell a one-argument first, rest, next or seq would
+  ! force -- next forces x's tail once x itself is realised -- when its
+  ! thunk is an interpreted fn with a fixed no-argument arity, which
+  ! flat_run can then run as a callee in the loop rather than in a
+  ! nested run (flat_force). nil otherwise, and the builtin forces it.
+  function flat_force_target(id, x) result(c)
+    integer, intent(in) :: id
+    type(gc_value), intent(in) :: x
+    type(gc_value) :: c, t, ct
+    c = gc_nil()
+    select case (id)
+    case (B_FIRST, B_REST, B_SEQ, B_NEXT)
+    case default
+       return
+    end select
+    if (step_at /= 0) return
+    if (gc_kind(x) /= OBJ_LAZY) return
+    t = x
+    if (id == B_NEXT .and. gc_i1(x) == LAZY_CONS) t = gc_slot(x, 3)
+    if (gc_kind(t) /= OBJ_LAZY) return
+    if (gc_i1(t) /= LAZY_PENDING .or. gc_i2(t) /= 0) return
+    if (gc_kind(gc_slot(t, 1)) /= OBJ_CLOSURE) return
+    ct = call_table_of(gc_slot(t, 1))
+    if (ct%tag /= GCT_VEC) return
+    if (ct_int(ct, 4) < 0) return
+    if (ct_int(ct, 5) < 0) return
+    c = t
+  end function flat_force_target
+
+  ! A cell flat_force claimed, given back: pending again if its thunk
+  ! did not finish (it threw, and the unwinding came through), and
+  ! anyone waiting for it woken -- gce_force's closing steps.
+  subroutine flat_release(c)
+    type(gc_value), intent(in) :: c
+    if (gc_kind(c) /= OBJ_LAZY) return
+    call gc_state_lock()
+    if (gc_i1(c) == LAZY_RUNNING) call gc_set_i1(c, LAZY_PENDING)
+    call gc_state_unlock()
+    call gc_state_notify()
+  end subroutine flat_release
 
   ! One or two machine integers through the commonest builtins, as
   ! call_builtin answers them. False for anything else -- a real, a

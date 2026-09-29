@@ -4522,6 +4522,27 @@ contains
     case default
        r = apply(gc_slot(vs_get(vst, base + 1), 1), no_args())
     end select
+    ! the answer settled into the cell (force_settle), rooted there
+    call force_settle(vs_get(vst, base + 1), r)
+    call vs_leave(vst, base)
+  end subroutine force_run
+
+  ! A thunk's answer r made the cell v's state: the head and tail of
+  ! a cons or a list, a chunk kept whole, empty, or whatever a lazy
+  ! answer comes to when forced in turn. force_run's second half, and
+  ! flat.inc's, whose thunk ran in the loop rather than in a nested
+  ! run. With an error in flight the cell is left as it is.
+  recursive subroutine force_settle(v, r0)
+    type(gc_stack), pointer :: vst
+    type(eval_ctx), pointer :: tctx
+    type(gc_value), intent(in) :: v, r0
+    type(gc_value) :: r
+    integer :: base
+    tctx => ctx_self()
+    vst => tctx%stk
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, v)
+    r = r0
     call vs_set(vst, base + 2, r)
     if (tctx%has_error) then
        ! The thunk threw. Clojure's LazySeq caches nothing in that case --
@@ -4609,7 +4630,7 @@ contains
        end block
     end if
     call vs_leave(vst, base)
-  end subroutine force_run
+  end subroutine force_settle
 
   ! Everything but the first element of a vector, as a list.
   function as_list_rest(v, roots) result(out)

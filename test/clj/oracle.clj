@@ -2722,3 +2722,12 @@
 (defn flat-seqops [x] [(first x) (next x) (rest x) (seq x)])
 (defn flat-realized [s] (doall s) (flat-seqops s))
 [(flat-seqops nil) (flat-seqops '()) (flat-seqops '(1)) (flat-seqops '(1 2)) (flat-realized (lazy-seq nil)) (flat-realized (lazy-seq (cons 1 nil))) (flat-realized (map inc [1 2 3])) (flat-realized (take 2 (range))) (flat-realized (lazy-seq (lazy-seq [1 2]))) (let [[f n r s] (flat-seqops (iterate inc 0))] [f (take 3 n) (take 3 r) (take 3 s)]) (let [s (map inc [1 2])] [(identical? (seq s) (seq s)) (class (seq s))])]
+
+;; forcing in the loop (flat.inc flat_force): a self-referential seq,
+;; one seq forced from four futures, a thunk answering a lazy seq, a
+;; thunk run once however often it is walked
+(def flat-fibs (lazy-cat [0 1] (map + flat-fibs (rest flat-fibs))))
+(defn flat-shared [] (let [s (map (fn [x] (Thread/sleep 1) (* x x)) (range 20)) fs (doall (for [_ (range 4)] (future (reduce + s))))] (mapv deref fs)))
+(defn flat-nested [] (let [s ((fn step [i] (lazy-seq (when (< i 5) (lazy-seq (cons i (step (inc i))))))) 0)] [(first s) (next s) (seq s) (rest (rest s))]))
+(defn flat-once [] (let [n (atom 0) s ((fn step [i] (lazy-seq (swap! n inc) (when (< i 3) (cons i (step (inc i)))))) 0)] (dorun s) (dorun s) [(vec s) @n]))
+[(take 10 flat-fibs) (flat-shared) (flat-nested) (flat-once)]

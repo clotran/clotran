@@ -1884,6 +1884,16 @@ nested run. Taken so far:
 Tried and reverted: allocating from per-thread batches with one thread
 (the heap lock is not where an allocation's 100 ns goes).
 
+**Forcing in the loop (2026-09-29).** When a flat body's `first`,
+`rest`, `next` or `seq` meets a pending cell whose thunk is an
+interpreted fn, the cell is claimed as gce_force claims it and the
+thunk runs as a callee in the loop (`flat_force`), the body waiting
+AT that instruction; on the answer the cell is settled (`force_settle`,
+force_run's second half, now shared) and the instruction runs again,
+finding it realised. A thunk that throws is released by k_unwind
+(pending again, waiters woken). `dorun take` 155 -> 135 ms per 10^5,
+a hand-written lazy loop 213 -> 174.
+
 ## Decisions that still hold
 
 **The value type has no `FINAL`.** Copying a `cons_value` (nine
