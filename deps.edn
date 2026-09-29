@@ -1,0 +1,5 @@
+;; The Clojure the oracle runs: the SAME release as the vendored
+;; src/clj/clojure (see its PROVENANCE.md). `clj` in this directory picks
+;; it up; scripts/oracle, clojuredocs, bench and pure-check pass this file
+;; with -Sdeps, since some run clj from another directory.
+{:deps {org.clojure/clojure {:mvn/version "1.12.6"}}}

@@ -609,7 +609,7 @@ contains
          '(let* [p (new java.util.Properties)] ' // &
          '(.load p (.getResourceAsStream (clojure.lang.RT/baseLoader) ' // &
          '"clojure/version.properties")) (.getProperty p "version"))', &
-         '"1.12.0"')
+         '"1.12.6"')
   end subroutine check_resources
 
 

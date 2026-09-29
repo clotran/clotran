@@ -1905,7 +1905,7 @@
        end if
        ! Compiler.LetExpr.Parser: a qualified symbol names a Var, not a
        ! local -- it was bound as written, and the body's x then
-       ! resolved to nothing. (& is an ordinary local at 1.12.0.)
+       ! resolved to nothing. (& is an ordinary local at 1.12.6.)
        block
          character(len=:), allocatable :: kt
          integer :: slash

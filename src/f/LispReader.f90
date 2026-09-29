@@ -1865,7 +1865,7 @@ contains
   ! ---- number recognition ----
   !
   ! Clojure's reader decides this with three regexes -- LispReader.java
-  ! lines 70-74 at clojure-1.12.0, the release the vendored core.clj
+  ! lines 70-74 at clojure-1.12.6, the release the vendored core.clj
   ! comes from:
   !
   !   intPat   ([-+]?)(?:(0)|([1-9][0-9]*)|0[xX]([0-9A-Fa-f]+)

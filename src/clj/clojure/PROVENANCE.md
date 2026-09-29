@@ -1,8 +1,10 @@
 # Vendored Clojure source
 
 Every `.clj` file here is Rich Hickey's, unmodified, from
-`github.com/clojure/clojure` at commit `d4bb93f0` -- the `clojure-1.12.0`
-release tag, the version the `clj` on this machine runs.
+`github.com/clojure/clojure` at commit `31a3138a` -- the `clojure-1.12.6`
+release tag. `deps.edn` at the repo root pins `clj` to the same release,
+and every harness that runs `clj` passes it, so the oracle and these
+files cannot drift apart again.
 
 Until 2026-09-29 these came from master at `71b4623d` (1.13 interim),
 whose core.clj carries experimental map-destructuring directives
@@ -69,10 +71,10 @@ in core.clj itself, above that line.
     version=${version}
 
 -- a Maven template, filled in at build time from `pom.xml`, which at
-`clojure-1.12.0` says `1.12.0`. There is no Maven here, so the
+`clojure-1.12.6` says `1.12.6`. There is no Maven here, so the
 filled-in value is committed instead:
 
-    version=1.12.0
+    version=1.12.6
 
 core.clj's form 656 reads it off the classloader and parses it with
 `re-matches` into `*clojure-version*`. Bump it whenever the vendored

@@ -133,7 +133,7 @@
       gen (io/file repo "test/clj/.oracle-gen.clj")
       _ (spit gen (script cs))
       ;; the two sides at once: neither reads what the other writes
-      want-f (future (run "clj" "-M" (str gen)))
+      want-f (future (run "clj" "-Sdeps" (slurp (io/file repo "deps.edn")) "-M" (str gen)))
       got (run "./clotran-bin" "src/clj/clojure/core.clj" (str gen))
       want @want-f
       _ (when (System/getenv "ORACLE_KEEP") nil) _ (when-not (System/getenv "ORACLE_KEEP") (.delete gen))

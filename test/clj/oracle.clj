@@ -2858,6 +2858,6 @@
 (mapv fn? [inc (fn []) #(identity 1) :k {} #{} [] (with-meta (fn []) {:a 1}) print-method 'x nil (var inc) (reify clojure.lang.IFn (invoke [_] 1))])
 (trampoline (fn f [n] (if (pos? n) #(f (dec n)) n)) 10000)
 
-;; & is an ordinary local in let* and loop* at 1.12.0 (LetExpr.Parser
+;; & is an ordinary local in let* and loop* at 1.12.6 (LetExpr.Parser
 ;; has no rule against it; only the interim branch added one)
 [(let* [& 42] &) (loop* [& 1] &)]

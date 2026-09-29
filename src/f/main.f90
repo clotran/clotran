@@ -496,7 +496,7 @@ contains
   ! --- the banner -------------------------------------------------------
   !
   ! What this is, printed once before the first prompt, and only when
-  ! stdin is a terminal -- as clj prints "Clojure 1.12.0" -- so a script,
+  ! stdin is a terminal -- as clj prints "Clojure 1.12.6" -- so a script,
   ! a pipe, the test harnesses and anything else feeding forms in see
   ! none of it. Emacs's comint runs the process on a pty and sees it the
   ! way it sees clj's line; its prompt matching is on `user=>`, which

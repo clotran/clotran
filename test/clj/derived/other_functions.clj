@@ -88,9 +88,13 @@
     (are [x] (= 10 (c0 x))
          nil
          42
+         "foo")
+    (are [x] (= 10 (c0 x :a :b :c))
+         nil
+         42
          "foo")))
 
-;; other_functions.clj:110 [language]
+;; other_functions.clj:114 [language]
 (deftest test-juxt
   ;; juxt for colls
   (let [m0 {:a 1 :b 2}
@@ -102,7 +106,7 @@
         b1 (fn [b] (* 2 b))]
     (is (= [5 6] ((juxt a1 b1) 3)))))
 
-;; other_functions.clj:123 [language]
+;; other_functions.clj:127 [language]
 (deftest test-partial
   (let [p0 (partial inc)
         p1 (partial + 20)
@@ -111,7 +115,7 @@
     (is (= 40 (p1 20)))
     (is (= [1 2 3] (p2 3)))))
 
-;; other_functions.clj:132 [language]
+;; other_functions.clj:136 [language]
 (deftest test-every-pred
   (are [result expr] (= result expr)
    ;; 1 pred
@@ -210,7 +214,7 @@
                       (apply (apply every-pred (repeat i identity))
                              (range i))))))
 
-;; other_functions.clj:232 [language]
+;; other_functions.clj:236 [language]
 (deftest test-some-fn
   (are [result] (identity result)
    ;; 1 pred
@@ -312,7 +316,7 @@
                  (apply (apply some-fn (repeat i (comp not boolean))) (range i))))
                  true))))
 
-;; other_functions.clj:334 [language]
+;; other_functions.clj:338 [language]
 (deftest test-max-min-key
   (are [k coll min-item max-item] (and (= min-item (apply min-key k coll))
                                        (= max-item (apply max-key k coll)))
@@ -324,7 +328,7 @@
     min-key :x [{:x 1000} {:x 1001} {:x 1002} {:x 1000 :second true}] {:x 1000 :second true}
     max-key :x [{:x 1000} {:x 999} {:x 998} {:x 1000 :second true}] {:x 1000 :second true}))
 
-;; other_functions.clj:368 [language]
+;; other_functions.clj:372 [language]
 (deftest test-update
   (are [result expr] (= result expr)
     {:a [1 2]}   (update {:a [1]} :a conj 2)
@@ -342,7 +346,7 @@
     {:a 5} (update {:a 1} :a + 1 1 1 1)
     {:a 6} (update {:a 1} :a + 1 1 1 1 1)))
 
-;; other_functions.clj:385 [language]
+;; other_functions.clj:389 [language]
 (deftest test-update-vals
   (let [inm  (with-meta {:a 1 :b 2} {:has :meta})]
     (are [result expr] (= result expr)
@@ -352,7 +356,7 @@
       {0 2 2 4}     (update-vals (array-map 0 1 2 3) inc)
       {0 2 2 4}     (update-vals (sorted-map 2 3 0 1) inc))))
 
-;; other_functions.clj:394 [language]
+;; other_functions.clj:398 [language]
 (deftest test-update-keys
   (let [inm  (with-meta {:a 1 :b 2} {:has :meta})]
     (are [result expr] (= result expr)

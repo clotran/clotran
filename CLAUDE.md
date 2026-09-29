@@ -29,8 +29,8 @@ with a form, run it:
 
     clj -M -e '(pr-str `x)'
 
-This is the authority. It IS the implementation `~/jborden/clojure` is
-the source of, so it cannot disagree with the Java the way a
+This is the authority. `deps.edn` pins it to the vendored release, so
+it IS the implementation `~/jborden/clojure` is the source of, so it cannot disagree with the Java the way a
 reimplementation can.
 
 **babashka (`bb`) -- the SCRIPTING language.** All file rewriting, source
@@ -88,7 +88,7 @@ examples. The docstring is still worth the fetch, and `clj` supplies
 the values either way.
 
 **`~/jborden/clojure`** -- a clone of `clojure/clojure` pinned to
-the `clojure-1.12.0` tag (`d4bb93f0`), the SAME release as the vendored
+the `clojure-1.12.6` tag (`31a3138a`), the SAME release as the vendored
 `core.clj` and the one `clj` runs. Cite file and
 method. Reading the Java of one version while running the core.clj of
 another is the same mistake as citing memory, and it nearly happened:

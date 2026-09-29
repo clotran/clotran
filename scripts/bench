@@ -33,7 +33,7 @@
       cl-file (str repo "/test/clj/.bench-clotran.clj")]
   (spit jvm-file (timed-script true))
   (spit cl-file (timed-script false))
-  (let [jvm (run-lines "clj" "-M" jvm-file)
+  (let [jvm (run-lines "clj" "-Sdeps" (slurp (str repo "/deps.edn")) "-M" jvm-file)
         cl (run-lines "./clotran-bin" "src/clj/clojure/core.clj" cl-file)]
     (.delete (java.io.File. jvm-file)) (.delete (java.io.File. cl-file))
     (println (format "%-72s %10s %10s %8s" "form" "jvm ms" "clotran ms" "ratio"))
