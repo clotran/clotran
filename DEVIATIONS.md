@@ -812,6 +812,11 @@ column-major block. Every row is the same length because there are no
 rows, only a shape. A ragged array cannot be represented and will not
 be.
 
+The same goes for a row's IDENTITY: `(aget m 0)` is a fresh view of
+row 0 each time, so `(identical? (aget m 0) (aget m 0))` is false here
+and true in clj, and `to-array` -- which answers an `Object[]` as
+itself -- copies a row.
+
 This is a deliberate trade, not an omission. Contiguity is the entire
 reason the representation is worth having -- the block can be handed to
 a BLAS routine as a flat `buf(*)` argument, which `[[I` cannot be at any
@@ -1773,3 +1778,27 @@ gce_coll_hash. They run inside a map insert, where an allocation was
 unsafe while a callee could drop its caller's roots; with
 scripts/root-check in the gate that is now checkable, but every caller
 of gc_hash and gc_equal would have to be audited first. Not done.
+
+## 61. A vector key past 32 bits is out of range, not wrapped
+
+The JVM's vector takes a key's `.intValue()` (APersistentVector
+`valAt`, `containsKey`, `entryAt`, `assoc`, `invoke`), so a Long key
+wraps to its low 32 bits. clotran compares the whole 64-bit value:
+
+    (let [v [1 2 3] b 4294967296]
+      [(get v b) (contains? v b) (find v b) (assoc v b 9)])
+    ;; clj     [1 true [4294967296 1] [9 2 3]]
+    ;; clotran [nil false nil <IndexOutOfBoundsException>]
+
+(and `([1 2 3] 4294967296)` throws IndexOutOfBoundsException where clj
+answers 1).
+
+Deliberate. This is Java's `int` showing through, not the language:
+ClojureScript's PersistentVector `-lookup` checks `(number? k)` and
+then the bounds, with no truncation (cljs/core.cljs, `ILookup`), and
+answers as clotran does. clojuredocs has three examples that exist to
+warn about the JVM behaviour (`get`, `find`, `contains?`); they count
+as failures in its scorecard.
+
+**Removal**: one helper taking a key to its signed low 32 bits, called
+from each of the vector key paths above. Not planned.

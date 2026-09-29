@@ -8189,14 +8189,14 @@ contains
             type(gc_value) :: ix
             ix = strip_meta(gcv_nth(vs_get(vst, base + 1), 1))
             if (ix%tag /= GCT_INT) then
-               call fail("assoc: a vector takes an integer key")
+               call raise_class("IllegalArgumentException", "Key must be integer", [vs_get(vst, base + 1)])
             else if (ix%ival == int(gcv_count(a), gc_ip)) then
                out = gcv_conj(a, gcv_nth(vs_get(vst, base + 1), 2), [vs_get(vst, base + 1)])
             else if (ix%ival >= 0 .and. ix%ival < int(gcv_count(a), gc_ip)) then
                out = gcv_assoc(a, int(ix%ival), &
                     gcv_nth(vs_get(vst, base + 1), 2), [vs_get(vst, base + 1)])
             else
-               call fail("Index out of bounds")
+               call raise_class("IndexOutOfBoundsException", "index out of bounds", [vs_get(vst, base + 1)])
             end if
           end block
        else
@@ -11306,7 +11306,23 @@ contains
        ! `sort`: it is (let [a (to-array coll)] (. Arrays (sort a cmp))
        ! (seq a)) -- the array is sorted IN PLACE and then read back,
        ! and a persistent vector cannot be mutated.
-       out = value_array_of(gcv_nth(args, 0), [vs_get(vst, base + 1)])
+       !
+       ! An Object[] is answered as itself, not copied (RT.toArray), so
+       ! (sort-by f arr) sorts arr in place, as on the JVM.
+       block
+         type(gc_value) :: a0
+         character(len=:), allocatable :: kn
+         a0 = strip_meta(gcv_nth(args, 0))
+         kn = ""
+         if (gc_kind(a0) == OBJ_ARRAY) then
+            if (gc_i2(a0) == -1 .and. gcna_rank(gc_i1(a0)) == 1) call gcna_kind(gc_i1(a0), kn)
+         end if
+         if (kn == "value") then
+            out = a0
+         else
+            out = value_array_of(gcv_nth(args, 0), [vs_get(vst, base + 1)])
+         end if
+       end block
     case (B_ITERATE)
        ! (iterate f x) -- x, (f x), (f (f x)) ... unbounded, so a
        ! LAZY cell whose thunk is built by the evaluator. Realised

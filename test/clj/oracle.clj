@@ -2833,3 +2833,9 @@
 (with-out-str (prn (clojure.pprint/pprint {:a 1})))
 (import 'java.util.Date)
 (import '[java.util Date UUID] '(java.io Writer))
+
+;; to-array answers an Object[] as itself (RT.toArray), so sort-by on
+;; an array sorts it in place
+(let [h (to-array "Hello") x (to-array [32 -5 4 11]) y (sort-by - x)] [(identical? (to-array h) h) (seq y) (seq x) (identical? (to-array (int-array 2)) (int-array 2))])
+;; assoc on a vector throws the JVM's classes
+(mapv #(try (assoc [1 2 3] % 0) (catch Exception e (class e))) [0 3 4 -1 :a])
