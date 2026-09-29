@@ -1549,7 +1549,11 @@
              v = vs_get(vst, b + 4)
              call vs_set(vst, b + 4, gc_nil())
              val = dot_dispatch(nd, vs_get(vst, b + 3), v, tctx%kst(tctx%ksp)%aux)
-             if (tctx%yield_flag) exit
+             ! parked: the vector goes back for the re-dispatch
+             if (tctx%yield_flag) then
+                call vs_set(vst, b + 4, v)
+                exit
+             end if
              if (tctx%has_error) cycle
              if (is_call_request(val)) then
                 v = gc_slot(nd, 4)
