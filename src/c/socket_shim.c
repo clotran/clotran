@@ -212,6 +212,15 @@ int32_t cs_read(int64_t h, char *buf, int32_t cap, int32_t ms, char *err, int32_
     return n;
 }
 
+int32_t cs_read_raw(int64_t h, char *buf, int32_t cap, int32_t ms, char *err, int32_t errcap) {
+    int w = wait_readable((sock_t)h, ms);
+    if (w == 0) return -2;
+    if (w < 0) { say(err, errcap, "read", last_err()); return -1; }
+    int n = recv_some((sock_t)h, buf, cap);
+    if (n < 0) { say(err, errcap, "read", last_err()); return -1; }
+    return n;
+}
+
 int32_t cs_write(int64_t h, const char *buf, int32_t len, char *err, int32_t errcap) {
     int32_t done = 0;
     while (done < len) {

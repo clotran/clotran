@@ -97,23 +97,25 @@
        args_reusable = .true.
     case (B_SHL, B_SHORTCAST, B_SHR, B_SLEEP, B_SLURP, B_SOCKACCEPT)
        args_reusable = .true.
-    case (B_SOCKCLOSE, B_SOCKCONNECT, B_SOCKLISTEN, B_SOCKPORT, B_SOCKREAD, B_SOCKWRITE)
+    case (B_SOCKCLOSE, B_SOCKCONNECT, B_SOCKLISTEN, B_SOCKPORT, B_SOCKREAD, B_SOCKREADB)
        args_reusable = .true.
-    case (B_SPIT, B_STACKTRACE, B_STARTSWITH, B_STE_CLASS, B_STE_FILE, B_STE_LINE)
+    case (B_SOCKWRITE, B_SOCKWRITEB, B_SPIT, B_STACKTRACE, B_STARTSWITH, B_STE_CLASS)
        args_reusable = .true.
-    case (B_STE_METHOD, B_STR, B_STRCONTAINS, B_STRLEN, B_STUB, B_SUBMIT)
+    case (B_STE_FILE, B_STE_LINE, B_STE_METHOD, B_STR, B_STRCONTAINS, B_STRLEN)
        args_reusable = .true.
-    case (B_SUBS, B_SUBSTRING, B_SUBVEC, B_SWAPVAL, B_SWAPVALS, B_SYMBOL2)
+    case (B_STUB, B_SUBMIT, B_SUBS, B_SUBSTRING, B_SUBVEC, B_SWAPVAL)
        args_reusable = .true.
-    case (B_TAGGEDLIT, B_TASKCANCEL, B_TASKCANCELLED, B_TASKDONE, B_TASKSTATUS, B_THREADDAEMON)
+    case (B_SWAPVALS, B_SYMBOL2, B_TAGGEDLIT, B_TASKCANCEL, B_TASKCANCELLED, B_TASKDONE)
        args_reusable = .true.
-    case (B_THREADSTART, B_TOARRAY, B_TOBIG, B_TODEC, B_TOSTRING, B_TOUCH)
+    case (B_TASKSTATUS, B_THREADDAEMON, B_THREADSTART, B_TOARRAY, B_TOBIG, B_TODEC)
        args_reusable = .true.
-    case (B_TXRUNNING, B_TYPE, B_UDEC, B_UFLOATCAST, B_UINC, B_UPCASE)
+    case (B_TOSTRING, B_TOUCH, B_TXRUNNING, B_TYPE, B_UDEC, B_UFLOATCAST)
        args_reusable = .true.
-    case (B_USHR, B_UUIDOF, B_VAL, B_VALS, B_VARCREATE, B_VARINTERN)
+    case (B_UINC, B_UPCASE, B_USHR, B_UTF8BYTES, B_UTF8STRING, B_UUIDOF)
        args_reusable = .true.
-    case (B_VARNS, B_VARSYM, B_VEC, B_WITHMETA, B_WRITE, B_ZERO)
+    case (B_VAL, B_VALS, B_VARCREATE, B_VARINTERN, B_VARNS, B_VARSYM)
+       args_reusable = .true.
+    case (B_VEC, B_WITHMETA, B_WRITE, B_ZERO)
        args_reusable = .true.
     case default
        args_reusable = .false.

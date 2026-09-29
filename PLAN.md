@@ -2126,6 +2126,9 @@ c. *`clotran.server`*: a socket REPL (done 2026-09-29: `start-server`,
    HEAT_REPL=<port> the Fortran solver serves a REPL, its time loop runs
    outside the running mutators, and scripts/embed-repl-check reads the
    live grid, writes into it and stops the run, in the gate).
+   Bytes for binary protocols (done 2026-09-29): `clotran.net/read-bytes`
+   and `write-bytes` into and out of a byte array, nothing allocated, and
+   `clotran.io/utf8-bytes` / `utf8-string`, what bencode needs.
 d. *nREPL, as a package*: what CIDER speaks (bencode, eval, load-file,
    describe, completions), on the model of babashka's compact server.
 

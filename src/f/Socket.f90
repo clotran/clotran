@@ -11,7 +11,8 @@ module Socket
   implicit none
   private
   public :: sock_listen, sock_local_port, sock_accept, sock_connect, &
-       sock_read, sock_write, sock_close, SOCK_TIMEOUT, SOCK_BUF
+       sock_read, sock_write, sock_close, SOCK_TIMEOUT, SOCK_BUF, &
+       sock_read_bytes, sock_write_bytes
 
   integer(8), parameter :: SOCK_TIMEOUT = -2_8
   integer, parameter :: SOCK_BUF = 65536
@@ -52,6 +53,22 @@ module Socket
        character(kind=c_char), intent(out) :: err(*)
        integer(c_int32_t) :: n
      end function cs_read
+     function cs_read_raw(h, buf, cap, ms, err, errcap) result(n) bind(C, name="cs_read_raw")
+       import :: c_char, c_int8_t, c_int32_t, c_int64_t
+       integer(c_int64_t), value :: h
+       integer(c_int8_t), intent(out) :: buf(*)
+       integer(c_int32_t), value :: cap, ms, errcap
+       character(kind=c_char), intent(out) :: err(*)
+       integer(c_int32_t) :: n
+     end function cs_read_raw
+     function cs_write_raw(h, buf, len, err, errcap) result(n) bind(C, name="cs_write")
+       import :: c_char, c_int8_t, c_int32_t, c_int64_t
+       integer(c_int64_t), value :: h
+       integer(c_int8_t), intent(in) :: buf(*)
+       integer(c_int32_t), value :: len, errcap
+       character(kind=c_char), intent(out) :: err(*)
+       integer(c_int32_t) :: n
+     end function cs_write_raw
      function cs_write(h, buf, len, err, errcap) result(n) bind(C, name="cs_write")
        import :: c_char, c_int32_t, c_int64_t
        integer(c_int64_t), value :: h
@@ -165,6 +182,42 @@ contains
     ok = n >= 0
     if (.not. ok) call c_message(err, msg)
   end subroutine sock_write
+
+  ! Up to size(buf) bytes straight into buf -- a byte array's own buffer,
+  ! which the collector never moves: n, 0 at the end of the stream,
+  ! SOCK_TIMEOUT, or < 0 an error.
+  subroutine sock_read_bytes(h, ms, buf, n, msg)
+    integer(8), intent(in) :: h
+    integer, intent(in) :: ms
+    integer(1), intent(inout), contiguous :: buf(:)
+    integer, intent(out) :: n
+    character(len=:), allocatable, intent(out) :: msg
+    character(kind=c_char) :: err(ERR_CAP)
+    msg = ""
+    n = 0
+    if (size(buf) == 0) return
+    call gc_mutator_leave()
+    n = cs_read_raw(h, buf, int(size(buf), c_int32_t), int(ms, c_int32_t), err, int(ERR_CAP, c_int32_t))
+    call gc_mutator_enter()
+    if (n < 0 .and. n /= SOCK_TIMEOUT) call c_message(err, msg)
+  end subroutine sock_read_bytes
+
+  subroutine sock_write_bytes(h, buf, ok, msg)
+    integer(8), intent(in) :: h
+    integer(1), intent(in), contiguous :: buf(:)
+    logical, intent(out) :: ok
+    character(len=:), allocatable, intent(out) :: msg
+    character(kind=c_char) :: err(ERR_CAP)
+    integer(c_int32_t) :: n
+    msg = ""
+    ok = .true.
+    if (size(buf) == 0) return
+    call gc_mutator_leave()
+    n = cs_write_raw(h, buf, int(size(buf), c_int32_t), err, int(ERR_CAP, c_int32_t))
+    call gc_mutator_enter()
+    ok = n >= 0
+    if (.not. ok) call c_message(err, msg)
+  end subroutine sock_write_bytes
 
   subroutine sock_close(h)
     integer(8), intent(in) :: h

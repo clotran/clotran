@@ -244,6 +244,7 @@ module Eval
   integer, parameter :: B_FNFOR = 413
   integer, parameter :: B_SOCKLISTEN = 414, B_SOCKPORT = 415, B_SOCKACCEPT = 416, B_SOCKCONNECT = 417
   integer, parameter :: B_SOCKREAD = 418, B_SOCKWRITE = 419, B_SOCKCLOSE = 420, B_EXIT = 421
+  integer, parameter :: B_SOCKREADB = 422, B_SOCKWRITEB = 423, B_UTF8BYTES = 424, B_UTF8STRING = 425
   ! A number's WIDTH, in an integer's or a real's otherwise unused ref:
   ! what it boxes as on the JVM. Equality and hashing never read it.
   integer, parameter :: W_LONG = 0, W_BYTE = 1, W_SHORT = 2, W_INT = 3, W_FLOAT = 1
@@ -950,6 +951,10 @@ contains
     call bind_builtin(core, "clotran-socket-write", B_SOCKWRITE)
     call bind_builtin(core, "clotran-socket-close", B_SOCKCLOSE)
     call bind_builtin(core, "clotran-exit", B_EXIT)
+    call bind_builtin(core, "clotran-socket-read-bytes", B_SOCKREADB)
+    call bind_builtin(core, "clotran-socket-write-bytes", B_SOCKWRITEB)
+    call bind_builtin(core, "clotran-utf8-bytes", B_UTF8BYTES)
+    call bind_builtin(core, "clotran-utf8-string", B_UTF8STRING)
     call bind_builtin(core, "count", B_COUNT)
     call bind_builtin(core, "first", B_FIRST)
     ! an agent's queue, drained on its own thread by clotran.rt/agent-drain
@@ -3625,7 +3630,14 @@ contains
     out = v
     select case (cname)
     case ("String", "java.lang.String")
+       ! An array is not text: an array here used to become the text of the
+       ! object ("#<object>"), silently. Bytes are decoded by clotran.io.
        block
+          if (gc_kind(v) == OBJ_ARRAY) then
+             call raise_class("IllegalArgumentException", "an array is not text: " // &
+                  "clotran.io/utf8-string decodes bytes, (apply str cs) joins chars", roots)
+             return
+          end if
           call text_of(v, s=dlt_1)
           out = gc_str(dlt_1, roots)
        end block
@@ -9477,6 +9489,102 @@ contains
          text = dlt_1
          call sock_write(int_of_number(gcv_nth(args, 0)), text, ok, msg)
          if (.not. ok) call fail_as("java.io.IOException", msg, [vs_get(vst, base + 1)])
+       end block
+    case (B_UTF8BYTES)
+       ! A string's UTF-8 bytes as a fresh byte array: a clotran string is
+       ! stored as UTF-8, so this is a copy (clotran.io/utf8-bytes).
+       block
+         character(len=:), allocatable :: text, err
+         integer(1), pointer, contiguous :: p(:)
+         integer :: h, k
+         logical :: ok
+         call text_of(gcv_nth(args, 0), s=dlt_1)
+         text = dlt_1
+         h = gcna_new("int1", [len(text)], [0], err)
+         if (h == 0) then
+            call fail(err)
+         else
+            out = gc_obj(OBJ_ARRAY, [gc_nil()], [vs_get(vst, base + 1)])
+            call gc_set_i1(out, h)
+            call gc_set_i2(out, -1)
+            call gcna_int1_ptr(h, p, ok)
+            do k = 1, len(text)
+               p(k) = int(transfer(text(k:k), 0_1), 1)
+            end do
+         end if
+       end block
+    case (B_UTF8STRING)
+       ! (clotran-utf8-string bytes off len): those bytes, UTF-8, as a
+       ! string (clotran.io/utf8-string)
+       block
+         type(gc_value) :: arr
+         integer(1), pointer, contiguous :: p(:)
+         character(len=:), allocatable :: text, kn
+         integer :: off, ln, k
+         logical :: ok
+         arr = strip_meta(gcv_nth(args, 0))
+         off = int(int_of_number(gcv_nth(args, 1)))
+         ln = int(int_of_number(gcv_nth(args, 2)))
+         ok = gc_kind(arr) == OBJ_ARRAY
+         if (ok) then
+            call gcna_kind(gc_i1(arr), kn)
+            ok = kn == "int1" .and. gc_i2(arr) == -1
+         end if
+         if (ok) call gcna_int1_ptr(gc_i1(arr), p, ok)
+         if (.not. ok) then
+            call raise_class("IllegalArgumentException", "not a byte array", [vs_get(vst, base + 1)])
+         else if (off < 0 .or. ln < 0 .or. off + ln > size(p)) then
+            call raise_class("IndexOutOfBoundsException", "offset and length outside the array", [vs_get(vst, base + 1)])
+         else
+            allocate(character(len=ln) :: text)
+            do k = 1, ln
+               text(k:k) = transfer(p(off + k), 'a')
+            end do
+            out = gc_str(text, [vs_get(vst, base + 1)])
+         end if
+       end block
+    case (B_SOCKREADB, B_SOCKWRITEB)
+       ! (clotran-socket-read-bytes h bytes off len ms): up to len bytes into
+       ! the byte array from off, answering how many, -1 at the end of the
+       ! stream, :timeout; (clotran-socket-write-bytes h bytes off len)
+       ! sends them all. As a stream's read(buf, off, len), with nothing
+       ! allocated: the array is the buffer.
+       block
+         type(gc_value) :: arr
+         integer(1), pointer, contiguous :: p(:)
+         logical :: ok
+         character(len=:), allocatable :: msg
+         character(len=:), allocatable :: kn
+         integer :: off, ln, n
+         arr = strip_meta(gcv_nth(args, 1))
+         off = int(int_of_number(gcv_nth(args, 2)))
+         ln = int(int_of_number(gcv_nth(args, 3)))
+         ok = gc_kind(arr) == OBJ_ARRAY
+         if (ok) then
+            call gcna_kind(gc_i1(arr), kn)
+            ok = kn == "int1" .and. gc_i2(arr) == -1
+         end if
+         if (ok) call gcna_int1_ptr(gc_i1(arr), p, ok)
+         if (.not. ok) then
+            call raise_class("IllegalArgumentException", "not a byte array", [vs_get(vst, base + 1)])
+         else if (off < 0 .or. ln < 0 .or. off + ln > size(p)) then
+            call raise_class("IndexOutOfBoundsException", "offset and length outside the array", [vs_get(vst, base + 1)])
+         else if (id == B_SOCKREADB) then
+            call sock_read_bytes(int_of_number(gcv_nth(args, 0)), int(int_of_number(gcv_nth(args, 4))), &
+                 p(off + 1:off + ln), n, msg)
+            if (n > 0) then
+               out = gc_int(int(n, gc_ip))
+            else if (n == 0) then
+               out = gc_int(-1_gc_ip)
+            else if (n == SOCK_TIMEOUT) then
+               out = gc_key("timeout", [vs_get(vst, base + 1)])
+            else
+               call fail_as("java.io.IOException", msg, [vs_get(vst, base + 1)])
+            end if
+         else
+            call sock_write_bytes(int_of_number(gcv_nth(args, 0)), p(off + 1:off + ln), ok, msg)
+            if (.not. ok) call fail_as("java.io.IOException", msg, [vs_get(vst, base + 1)])
+         end if
        end block
     case (B_SOCKCLOSE)
        call sock_close(int_of_number(gcv_nth(args, 0)))

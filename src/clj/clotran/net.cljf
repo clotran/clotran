@@ -80,3 +80,25 @@
   "A writer to the connection; what is written goes out at flush."
   [conn]
   (SocketWriter. (:handle conn) (atom [])))
+
+;;; ---- bytes, for binary protocols ---------------------------------------
+;;
+;; A connection read as bytes, not text: a protocol that counts bytes
+;; (bencode, for nREPL) reads into a byte array of its own. Not mixed with
+;; the text reader on one connection -- that reader keeps what it read
+;; ahead.
+
+(defn read-bytes
+  "Up to len bytes into buf from off (all of buf by default), waiting up to
+  ms (none given, or negative: no limit): how many came, -1 at the end of
+  the stream, nil at the timeout."
+  ([conn buf] (read-bytes conn buf 0 (alength buf) -1))
+  ([conn buf off len] (read-bytes conn buf off len -1))
+  ([conn buf off len ms]
+   (let [n (clotran-socket-read-bytes (:handle conn) buf off len ms)]
+     (when-not (= n :timeout) n))))
+
+(defn write-bytes
+  "All of buf, or len bytes of it from off, sent."
+  ([conn buf] (write-bytes conn buf 0 (alength buf)))
+  ([conn buf off len] (clotran-socket-write-bytes (:handle conn) buf off len) nil))

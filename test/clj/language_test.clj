@@ -1402,6 +1402,27 @@
         "user=> Syntax error reading source (RuntimeException)." "Unmatched delimiter: ]"
         "user=> nil" "lt-other=> \"lt-other\"" "lt-other=> "])
 (check "stopping a server that is not there" (srv/stop-server "nope") false)
+(check "text to UTF-8 bytes and back"
+       (let [b (clotran.io/utf8-bytes "aλ€𝄞")] [(vec b) (clotran.io/utf8-string b) (clotran.io/utf8-string b 1 2)])
+       [[97 -50 -69 -30 -126 -84 -16 -99 -124 -98] "aλ€𝄞" "λ"])
+(check "bytes both ways over a socket, counted as bytes"
+       (let [s (net/listen 0 {:host "127.0.0.1"})
+             served (future (let [c (net/accept s 5000) buf (byte-array 16)
+                                  n (net/read-bytes c buf 0 16 5000)]
+                              (net/write-bytes c buf 0 n)
+                              (net/close c) n))
+             c (net/connect "127.0.0.1" (:port s))]
+         (try (net/write-bytes c (clotran.io/utf8-bytes "5:λλ"))
+              (let [buf (byte-array 16) n (net/read-bytes c buf 0 16 5000)]
+                [(deref served 5000 :timeout) n (clotran.io/utf8-string buf 0 n) (net/read-bytes c buf 0 16 5000)])
+              (finally (net/close c) (net/close s))))
+       [6 6 "5:λλ" -1])
+(check "an array is not text: String. refuses it rather than printing the object"
+       (mapv #(try (String. %) (catch IllegalArgumentException e :refused)) [(byte-array [97]) (char-array "ab")])
+       [:refused :refused])
+(check "a read-bytes past the array is refused"
+       (try (clotran-socket-read-bytes 0 (byte-array 2) 1 5 0) (catch IndexOutOfBoundsException e :refused))
+       :refused)
 (defn prepl-says [lines]
   (let [s (srv/start-server {:name "lt-prepl" :port 0 :accept 'clotran.server/io-prepl})
         c (net/connect "127.0.0.1" (:port s)) w (net/writer c) r (net/reader c)]

@@ -38,6 +38,10 @@ int64_t cs_connect(const char *host, int32_t port, char *err, int32_t errcap);
  * the caller can decode each read on its own (cap must be at least 4). */
 int32_t cs_read(int64_t h, char *buf, int32_t cap, int32_t ms, char *err, int32_t errcap);
 
+/* Up to cap bytes, as they came -- no character completed: for a binary
+ * protocol (bencode counts bytes). Otherwise as cs_read. */
+int32_t cs_read_raw(int64_t h, char *buf, int32_t cap, int32_t ms, char *err, int32_t errcap);
+
 /* All len bytes, or an error. */
 int32_t cs_write(int64_t h, const char *buf, int32_t len, char *err, int32_t errcap);
 

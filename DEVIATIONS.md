@@ -1893,3 +1893,20 @@ throws the error itself, where clj wraps it in a
 `LispReader$ReaderException` whose data holds the line and column.
 
 **Removal**: not planned; it is the design.
+
+## 66. `(String. array)` is refused
+
+clj builds a string from a char array, `(String. (char-array "ab"))` is
+`"ab"`, and from bytes with a charset, `(String. bytes "UTF-8")`. Both
+are the JVM's String constructors, and vendored Clojure writes neither.
+clotran refuses an array there with an IllegalArgumentException naming
+what to use instead -- `clotran.io/utf8-string` decodes bytes,
+`(apply str cs)` joins chars -- and `clotran.io/utf8-bytes` is the other
+direction.
+
+Before 2026-09-29 an array there became the text of the OBJECT,
+`"#<object>"`: a silent wrong answer, which this replaces with a loud one.
+
+**Removal**: not planned; clotran does not model the JVM's constructors
+(no-JVM-emulation, SEAMS.md). If ported code needs it, map `(String. cs)`
+for a char array onto `(apply str cs)` -- a mapping, not a String class.

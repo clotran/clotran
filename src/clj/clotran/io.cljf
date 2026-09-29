@@ -228,3 +228,16 @@
   ([r opts]
    (let [e (get opts :eof :eofthrow)]
      (lisp-read* r (dissoc opts :eof) (= e :eofthrow) e))))
+
+;;; ---- text and its bytes ------------------------------------------------
+
+(defn utf8-bytes
+  "The string's UTF-8 bytes, as a byte array."
+  [s]
+  (clotran-utf8-bytes (str s)))
+
+(defn utf8-string
+  "The UTF-8 bytes of a byte array -- all of them, or len from off -- as
+  a string."
+  ([bytes] (clotran-utf8-string bytes 0 (alength bytes)))
+  ([bytes off len] (clotran-utf8-string bytes off len)))
