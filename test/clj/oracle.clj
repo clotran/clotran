@@ -2731,3 +2731,7 @@
 (defn flat-nested [] (let [s ((fn step [i] (lazy-seq (when (< i 5) (lazy-seq (cons i (step (inc i))))))) 0)] [(first s) (next s) (seq s) (rest (rest s))]))
 (defn flat-once [] (let [n (atom 0) s ((fn step [i] (lazy-seq (swap! n inc) (when (< i 3) (cons i (step (inc i)))))) 0)] (dorun s) (dorun s) [(vec s) @n]))
 [(take 10 flat-fibs) (flat-shared) (flat-nested) (flat-once)]
+
+(defn flat-throwing [] (let [n (atom 0) s (lazy-seq (swap! n inc) (throw (ex-info "t" {})))] [(try (first s) (catch Exception e (ex-message e))) (try (next s) (catch Exception e (ex-message e))) (try (seq s) (catch Exception e :again)) @n]))
+(expect-diff "DEVIATIONS 59: a lazy-seq thunk keeps its captures after it throws")
+(flat-throwing)

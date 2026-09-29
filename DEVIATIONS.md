@@ -1700,3 +1700,29 @@ entry while its builtin runs (exec.inc N_CALL, `apply`,
 entry is there by each road and that none is left behind. Not done
 for user fns, and not while a step is pending, so stepping still stops
 in them.
+
+## 59. A lazy seq's thunk keeps its closed-over locals after it runs
+
+`lazy-seq` makes its thunk `(fn* ^{:once true} [] body)`, and the JVM
+compiler clears a once-only fn's closed-over locals at their last read
+(Compiler.java, `ObjExpr.emitLocal`: `onceOnly && clear &&
+lb.canBeCleared` stores null into the field). So a thunk that throws,
+run again by the next access -- LazySeq keeps the fn when it throws --
+finds those locals null:
+
+    (let [n (atom 0) s (lazy-seq (swap! n inc) (throw (ex-info "t" {})))]
+      [(try (first s) (catch Exception e (ex-message e)))
+       (try (next s) (catch Exception e (ex-message e)))])
+    ;; clj:     ["t" "Cannot invoke \"...IAtom.swap...\" because \"atom\" is null"]
+    ;; clotran: ["t" "t"]
+
+clotran runs the thunk again with its captures intact and it throws
+what it threw the first time. Found 2026-09-29 while checking in-loop
+forcing (flat.inc), which it predates: the tree walker answers the same.
+test/clj/oracle.clj carries the case under expect-diff.
+
+**Removal**: honour `:once` on fn* -- clear a capture at its last read
+in a once-only fn, as locals clearing already does for locals. The JVM
+behaviour is an optimisation leaking through (the retry's error is an
+NPE about the compiler's own field), so matching it buys nothing a
+program could want; not done.
