@@ -58,7 +58,13 @@ TESTLDFLAGS = $(TESTLDFLAGS_$(notdir $(FC)))
 # never the binary anyone runs for speed, and its LTO objects are LLVM
 # bitcode that link only through the optimiser -- one link of the
 # evaluator took over two minutes, four of them per gate.
-FCFLAGS_gfortran = -frecursive -flto=auto -ffat-lto-objects
+#
+# -O3 on top of the -O2 in FCFLAGS (the later flag wins): measured
+# 2026-09-28 on the interpreter, an empty loop 1959 -> 1617 ms, a lazy
+# take 2330 -> 1909, a call 1052 -> 813 -- the inlining of the one-line
+# accessors that -O2 left out of line. Raising the inline parameters
+# further changed nothing.
+FCFLAGS_gfortran = -frecursive -flto=auto -ffat-lto-objects -O3
 FCFLAGS_flang =
 # -fno-lto, not merely no -flto: gfortran sees the optimiser's code in a
 # fat object and runs it anyway -- 12 s an abi_test link, 0.1 s without

@@ -1660,6 +1660,63 @@ run (512 bytes, `gcv_build` and `gcv_conj`), and a walk makes ~12
 allocations an element; both are size and speed, not retention, and
 touch PersistentVector.f90.
 
+### 17. What a node costs (found 2026-09-28)
+
+`(apply + (take 1000000 (range)))`: 15.2 s here, 82 ms on a warmed
+JVM. Measured to the piece, one million times each:
+
+| form | clotran | evaluator steps | allocations | clj, warm |
+|---|---|---|---|---|
+| an empty `dotimes` iteration | 0.66 us | 11 | 0 | 0.001 us |
+| `(f i)`, f the identity | 1.0 us | 15 | 0 | 0.005 us |
+| `(seq (lazy-seq (list i)))` | 2.6 us | 22 | 7 | 0.05 us |
+| one element of `(take n (range))` | 8.9 us | 71 | 11 | 0.08 us |
+
+The yardstick that says this is design and not "an interpreter's
+number": CPython's empty loop iteration is about 20 ns. Ours is 660
+ns -- 30x an interpreter, before the JVM is in the picture. A step is
+60 ns, and the profile of the empty loop says what it buys: the
+dispatch and node decoding (29%); reading the node's fields and
+children through out-of-line accessors, the children being a
+persistent VECTOR so each read is a trie walk (22%); pushing and
+popping a seven-slot continuation frame for every node, leaves
+included (18%); a thread-local lookup of the context on each push and
+pop (10%). Nothing is silly on its own; the design pays all of them
+per node.
+
+What moved, and by how much:
+
+- `inc'`, `+'`, `-'`, `*'` went through big-integer TEXT on every
+  call (a decimal string added to and parsed back); `(range)` is
+  `(iterate inc' 0)`, so every element paid 0.8 us. Fixed: the big
+  path only on overflow. 15.2 s -> 12.4 s.
+- `-O3` (the accessors inlined): the empty loop 1959 -> 1617 ms, a lazy
+  take 2330 -> 1909, a call 1052 -> 813, about 20%.
+- the run loop passing its context to k_push/k_tail/k_finish instead
+  of a thread-local lookup each time: 3%.
+
+What is left is the shape of the executor: an AST walked with a frame
+per node. The two roads, not exclusive:
+
+1. **A flat instruction form per function body.** Analysis emits a
+   linear code vector with an operand stack and register locals; a
+   node is one dispatch, no frame, its operands by direct index; the
+   continuation stack stays for calls and suspension (a paused context
+   is still data, the debugger and green threads keep what they have).
+   This is stage 2 of step 5 made concrete ("intermediates move to the
+   operand stack"). Expected: a step from 60 ns toward 10-15, so 3-5x
+   on everything interpreted -- the REPL, macro expansion, spec, every
+   library that the compiler cannot take. Weeks: it replaces exec.inc's
+   node loop and analyze.inc's output.
+2. **The compiler emitting closures and `lazy-seq`** (step 12). The
+   seq library is nothing but those, so today `take`, `iterate`, `map`
+   never compile; with them, compiled core runs the seq library as
+   Fortran procedures. The small-fn loop that compiles today is 10x
+   its interpreted self. Days to weeks.
+
+Neither reaches 82 ms: that is compiled code with escape analysis.
+Both together are the road the white paper names.
+
 ## Decisions that still hold
 
 **The value type has no `FINAL`.** Copying a `cons_value` (nine

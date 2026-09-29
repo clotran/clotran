@@ -861,14 +861,21 @@
     v = gc_root_get(tctx%recur_root)
   end function recur_marker
 
-  subroutine k_push(nd, frame, flags, restart)
+  ! `ctx`: the run loop passes its context; a thread-local lookup for
+  ! it on every push, tail and finish was a tenth of a step
+  subroutine k_push(nd, frame, flags, restart, ctx)
     type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: nd, frame, restart
     integer, intent(in) :: flags
+    type(eval_ctx), pointer, intent(in), optional :: ctx
     type(kframe), allocatable :: bigger(:)
     integer :: n, b
-    tctx => ctx_self()
+    if (present(ctx)) then
+       tctx => ctx
+    else
+       tctx => ctx_self()
+    end if
     vst => tctx%stk
     if (.not. allocated(tctx%kst)) allocate(tctx%kst(1024))
     if (tctx%ksp >= size(tctx%kst)) then
@@ -899,12 +906,17 @@
 
   ! The top frame becomes `nd`, keeping its locals, flags and restart
   ! point: a child in tail position.
-  subroutine k_tail(nd)
+  subroutine k_tail(nd, ctx)
     type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: nd
+    type(eval_ctx), pointer, intent(in), optional :: ctx
     integer :: b
-    tctx => ctx_self()
+    if (present(ctx)) then
+       tctx => ctx
+    else
+       tctx => ctx_self()
+    end if
     vst => tctx%stk
     b = tctx%kst(tctx%ksp)%base
     call vs_set(vst, b + 1, nd)
@@ -920,12 +932,17 @@
   ! Pops the top frame, delivering `val` to the one below. A restart
   ! point that received the recur marker runs its body again instead;
   ! a fn body's frame leaves the call stack on the way out.
-  subroutine k_finish(val)
+  subroutine k_finish(val, ctx)
     type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(inout) :: val
+    type(eval_ctx), pointer, intent(in), optional :: ctx
     integer :: b
-    tctx => ctx_self()
+    if (present(ctx)) then
+       tctx => ctx
+    else
+       tctx => ctx_self()
+    end if
     vst => tctx%stk
     b = tctx%kst(tctx%ksp)%base
     if (iand(tctx%kst(tctx%ksp)%flags, KF_RESTART) /= 0 .and. gc_kind(val) == OBJ_RECUR) then
@@ -1110,36 +1127,36 @@
        select case (kind)
        case (N_CONST)
           val = gc_slot(nd, 2)
-          call k_finish(val)
+          call k_finish(val, tctx)
        case (N_LOCAL)
           val = frame_get(vs_get(vst, b + 2), gc_i2(nd))
           if (tag_of(gc_slot(nd, 3)) == GCT_BOOL) call frame_set(vs_get(vst, b + 2), gc_i2(nd), gc_nil())
-          call k_finish(val)
+          call k_finish(val, tctx)
        case (N_VAR)
           val = var_deref(gc_slot(nd, 2), [gc_slot(nd, 2)])
-          call k_finish(val)
+          call k_finish(val, tctx)
        case (N_IF)
           if (tctx%kst(tctx%ksp)%pc == 0) then
              tctx%kst(tctx%ksp)%pc = 1
-             call k_push(gcv_nth(kids, 0), vs_get(vst, b + 2), 0, gc_nil())
+             call k_push(gcv_nth(kids, 0), vs_get(vst, b + 2), 0, gc_nil(), tctx)
           else if (truthy(val)) then
-             call k_tail(gcv_nth(kids, 1))
+             call k_tail(gcv_nth(kids, 1), tctx)
           else if (gcv_count(kids) > 2) then
-             call k_tail(gcv_nth(kids, 2))
+             call k_tail(gcv_nth(kids, 2), tctx)
           else
              val = gc_nil()
-             call k_finish(val)
+             call k_finish(val, tctx)
           end if
        case (N_DO)
           n = gcv_count(kids)
           if (n == 0) then
              val = gc_nil()
-             call k_finish(val)
+             call k_finish(val, tctx)
           else if (tctx%kst(tctx%ksp)%i < n - 1) then
              tctx%kst(tctx%ksp)%i = tctx%kst(tctx%ksp)%i + 1
-             call k_push(gcv_nth(kids, tctx%kst(tctx%ksp)%i - 1), vs_get(vst, b + 2), 0, gc_nil())
+             call k_push(gcv_nth(kids, tctx%kst(tctx%ksp)%i - 1), vs_get(vst, b + 2), 0, gc_nil(), tctx)
           else
-             call k_tail(gcv_nth(kids, n - 1))
+             call k_tail(gcv_nth(kids, n - 1), tctx)
           end if
        case (N_CALL)
           select case (tctx%kst(tctx%ksp)%pc)
@@ -1167,7 +1184,7 @@
                    end if
                 end if
              end if
-             call k_push(gcv_nth(kids, 0), vs_get(vst, b + 2), 0, gc_nil())
+             call k_push(gcv_nth(kids, 0), vs_get(vst, b + 2), 0, gc_nil(), tctx)
           case (1)
              ! The callee is known before its arguments are: a closure
              ! with a fixed arity of the right count gets its FRAME now
@@ -1207,7 +1224,7 @@
           case (2)
              if (tctx%kst(tctx%ksp)%i < gcv_count(kids)) then
                 tctx%kst(tctx%ksp)%pc = 3
-                call k_push(gcv_nth(kids, tctx%kst(tctx%ksp)%i), vs_get(vst, b + 2), 0, gc_nil())
+                call k_push(gcv_nth(kids, tctx%kst(tctx%ksp)%i), vs_get(vst, b + 2), 0, gc_nil(), tctx)
              else
                 tctx%kst(tctx%ksp)%pc = 4
              end if
@@ -1226,7 +1243,7 @@
              ! its frame is free for the next call
              call give_frame(vs_get(vst, b + 4))
              call vs_set(vst, b + 4, gc_nil())
-             call k_finish(val)
+             call k_finish(val, tctx)
           case (4)
              ! where this call is, for the call stack
              v = gc_slot(nd, 4)
@@ -1248,7 +1265,7 @@
                 val = call_builtin(gc_i1(fnv), v)
                 call args_give(vs_get(vst, b + 4), n)
                 call vs_set(vst, b + 4, gc_nil())
-                call k_finish(val)
+                call k_finish(val, tctx)
                 cycle
              end if
              if (tctx%kst(tctx%ksp)%mode == 3) then
@@ -1263,7 +1280,7 @@
                 end if
                 call vs_set(vst, vbase + 1, gc_nil())
                 val = call_builtin(gc_i1(fnv), v)
-                call k_finish(val)
+                call k_finish(val, tctx)
                 cycle
              end if
              if (tctx%kst(tctx%ksp)%mode == 2) then
@@ -1281,7 +1298,7 @@
                 body = gcv_nth(gcv_nth(gcv_nth(gc_slot(vs_get(vst, b + 3), 1), 1), tctx%kst(tctx%ksp)%aux2), 3)
                 call vs_set(vst, b + 5, body)
                 tctx%kst(tctx%ksp)%pc = 5
-                call k_push(vs_get(vst, b + 5), vs_get(vst, b + 4), ior(KF_FNBODY, KF_RESTART), vs_get(vst, b + 5))
+                call k_push(vs_get(vst, b + 5), vs_get(vst, b + 4), ior(KF_FNBODY, KF_RESTART), vs_get(vst, b + 5), tctx)
                 call vs_set(vst, tctx%kst(tctx%ksp)%base + 7, fnv)
                 if (step_at /= 0) call step_check()
                 cycle
@@ -1301,7 +1318,7 @@
                    call vs_set(vst, b + 4, newframe)
                    call vs_set(vst, b + 5, body)
                    tctx%kst(tctx%ksp)%pc = 5
-                   call k_push(vs_get(vst, b + 5), vs_get(vst, b + 4), ior(KF_FNBODY, KF_RESTART), vs_get(vst, b + 5))
+                   call k_push(vs_get(vst, b + 5), vs_get(vst, b + 4), ior(KF_FNBODY, KF_RESTART), vs_get(vst, b + 5), tctx)
                    call vs_set(vst, tctx%kst(tctx%ksp)%base + 7, vs_get(vst, b + 3))
                    if (step_at /= 0) call step_check()
                 else
@@ -1317,7 +1334,7 @@
                    call vs_set(vst, b + 4, v)
                    exit
                 end if
-                call k_finish(val)
+                call k_finish(val, tctx)
              end if
           end select
        case (N_LET, N_LOOP)
@@ -1328,42 +1345,42 @@
              tctx%kst(tctx%ksp)%pc = 0
           else if (tctx%kst(tctx%ksp)%i < n) then
              tctx%kst(tctx%ksp)%pc = 1
-             call k_push(gcv_nth(kids, tctx%kst(tctx%ksp)%i), vs_get(vst, b + 2), 0, gc_nil())
+             call k_push(gcv_nth(kids, tctx%kst(tctx%ksp)%i), vs_get(vst, b + 2), 0, gc_nil(), tctx)
           else
              if (kind == N_LOOP) then
                 call vs_set(vst, b + 5, gcv_nth(kids, n))
                 tctx%kst(tctx%ksp)%flags = ior(tctx%kst(tctx%ksp)%flags, KF_RESTART)
              end if
-             call k_tail(gcv_nth(kids, n))
+             call k_tail(gcv_nth(kids, n), tctx)
           end if
        case (N_CASE)
           if (tctx%kst(tctx%ksp)%pc == 0) then
              tctx%kst(tctx%ksp)%pc = 1
-             call k_push(gcv_nth(kids, 0), vs_get(vst, b + 2), 0, gc_nil())
+             call k_push(gcv_nth(kids, 0), vs_get(vst, b + 2), 0, gc_nil(), tctx)
           else
              call vs_set(vst, b + 3, val)
              v = case_branch(vs_get(vst, b + 1), vs_get(vst, b + 3))
-             call k_tail(v)
+             call k_tail(v, tctx)
           end if
        case (N_TRY)
           select case (tctx%kst(tctx%ksp)%pc)
           case (0)
              tctx%kst(tctx%ksp)%pc = 1
              tctx%kst(tctx%ksp)%ftop = tctx%fstack_top
-             call k_push(gcv_nth(kids, 0), vs_get(vst, b + 2), 0, gc_nil())
+             call k_push(gcv_nth(kids, 0), vs_get(vst, b + 2), 0, gc_nil(), tctx)
           case (1, 3)
              ! the body, or a catch, finished normally
              call vs_set(vst, b + 3, val)
              v = gcv_nth(kids, 1)
              if (gc_kind(v) == OBJ_AST) then
                 tctx%kst(tctx%ksp)%pc = 2
-                call k_push(v, vs_get(vst, b + 2), 0, gc_nil())
+                call k_push(v, vs_get(vst, b + 2), 0, gc_nil(), tctx)
              else
-                call k_finish(val)
+                call k_finish(val, tctx)
              end if
           case (2)
              val = vs_get(vst, b + 3)
-             call k_finish(val)
+             call k_finish(val, tctx)
           case (4)
              ! the finally ran after an uncaught error: the error goes on
              tctx%has_error = .true.
@@ -1371,7 +1388,7 @@
              call set_thrown(vs_get(vst, b + 3))
              tctx%kst(tctx%ksp)%pc = 5
           case default
-             call k_finish(val)
+             call k_finish(val, tctx)
           end select
        case (N_VECTOR, N_MAP, N_SET)
           ! children collected into slot 4, one frame each, then built
@@ -1383,14 +1400,14 @@
           case (2)
              if (tctx%kst(tctx%ksp)%i < gcv_count(kids)) then
                 tctx%kst(tctx%ksp)%pc = 3
-                call k_push(gcv_nth(kids, tctx%kst(tctx%ksp)%i), vs_get(vst, b + 2), 0, gc_nil())
+                call k_push(gcv_nth(kids, tctx%kst(tctx%ksp)%i), vs_get(vst, b + 2), 0, gc_nil(), tctx)
              else
                 select case (kind)
                 case (N_VECTOR); val = vs_get(vst, b + 4)
                 case (N_SET);    val = vec_to_set(vs_get(vst, b + 4), [vs_get(vst, b + 1)])
                 case default;    val = vec_to_map(vs_get(vst, b + 4), [vs_get(vst, b + 1)])
                 end select
-                call k_finish(val)
+                call k_finish(val, tctx)
              end if
           case (3)
              call vs_set(vst, b + 4, gcv_put(vs_get(vst, b + 4), tctx%kst(tctx%ksp)%i, val, [vs_get(vst, b + 1)]))
@@ -1399,7 +1416,7 @@
           end select
        case (N_RECUR)
           val = exec_recur(nd, vs_get(vst, b + 2))
-          if (.not. tctx%has_error) call k_finish(val)
+          if (.not. tctx%has_error) call k_finish(val, tctx)
        case (N_THROW)
           v = exec(gcv_nth(kids, 0), vs_get(vst, b + 2))
           if (.not. tctx%has_error) then
@@ -1413,17 +1430,17 @@
           end if
        case (N_FN)
           val = make_closure_from(gc_slot(nd, 2), vs_get(vst, b + 2), [vs_get(vst, b + 1)])
-          call k_finish(val)
+          call k_finish(val, tctx)
        case (N_LAZY)
           v = make_closure_from(gc_slot(nd, 2), vs_get(vst, b + 2), [vs_get(vst, b + 1)])
           call vs_set(vst, b + 3, v)
           val = gc_obj(OBJ_LAZY, [vs_get(vst, b + 3), gc_nil(), gc_nil()], [vs_get(vst, b + 3)])
           call gc_set_i1(val, LAZY_PENDING)
-          call k_finish(val)
+          call k_finish(val, tctx)
        case (N_TOP)
           v = new_frame(gc_i2(nd), [vs_get(vst, b + 1)])
           call vs_set(vst, b + 2, v)
-          call k_tail(gc_slot(vs_get(vst, b + 1), 2))
+          call k_tail(gc_slot(vs_get(vst, b + 1), 2), tctx)
        case (N_DOT)
           ! (. target member args...): the target, then the arguments,
           ! into this frame -- slot 3 and slot 4 -- and then the dispatch,
@@ -1441,7 +1458,7 @@
                 tctx%kst(tctx%ksp)%pc = 2
              else
                 tctx%kst(tctx%ksp)%pc = 1
-                call k_push(gcv_nth(kids, 0), vs_get(vst, b + 2), 0, gc_nil())
+                call k_push(gcv_nth(kids, 0), vs_get(vst, b + 2), 0, gc_nil(), tctx)
              end if
           case (1)
              call vs_set(vst, b + 3, val)
@@ -1453,7 +1470,7 @@
                   call vs_set(vst, b + 4, gcv_build(gcv_count(kids) - tctx%kst(tctx%ksp)%aux, [vs_get(vst, b + 1)]))
              if (tctx%kst(tctx%ksp)%i < gcv_count(kids)) then
                 tctx%kst(tctx%ksp)%pc = 3
-                call k_push(gcv_nth(kids, tctx%kst(tctx%ksp)%i), vs_get(vst, b + 2), 0, gc_nil())
+                call k_push(gcv_nth(kids, tctx%kst(tctx%ksp)%i), vs_get(vst, b + 2), 0, gc_nil(), tctx)
              else
                 tctx%kst(tctx%ksp)%pc = 4
              end if
@@ -1472,12 +1489,12 @@
                 if (v%tag == GCT_INT) site = int(v%ival, kind=4)
                 call enter_call(val, site)
              else
-                call k_finish(val)
+                call k_finish(val, tctx)
              end if
           end select
        case default
           val = exec_other(nd, vs_get(vst, b + 2))
-          if (.not. tctx%has_error) call k_finish(val)
+          if (.not. tctx%has_error) call k_finish(val, tctx)
        end select
        call vs_set(vst, vbase + 1, val)
     end do
