@@ -28,6 +28,10 @@ module clotran_main
   public :: main_body, main_thread
   ! address space, not memory: pages are committed as they are touched
   integer(c_size_t), parameter, public :: MAIN_STACK_BYTES = 1024_c_size_t * 1024_c_size_t * 1024_c_size_t
+  ! A file named on the command line failed to load: the process ends with
+  ! status 1, as clj's does on an uncaught exception, after every file has
+  ! had its turn (split-forms reads every failure in one pass).
+  logical :: load_failed = .false.
 
 contains
 
@@ -174,6 +178,10 @@ contains
        write(0, '(A,F0.1,A,F0.1,A,F0.1,A,F0.1)') "pause parts: safepoint_ms=", gc_safepoint_ms, &
             " young mark_ms=", gc_ymark_ms, " young sweep_ms=", gc_ysweep_ms, " pending finish_ms=", gc_finish_ms
     end if
+    if (load_failed) then
+       flush(6)
+       stop 1, quiet=.true.
+    end if
   end subroutine main_body
 
   ! Reads a whole file and evaluates every form in it.
@@ -216,6 +224,7 @@ contains
          status="old", action="read", iostat=st)
     if (st /= 0) then
        print '(A,A)', "load: cannot open ", path
+       load_failed = .true.
        return
     end if
     inquire(unit=u, size=fsize)
@@ -243,6 +252,7 @@ contains
           block
              call gcr_error(s=dlt_1)
              print '(A,A,A,A)', "load ", path, ": reader error: ", dlt_1
+             load_failed = .true.
           end block
           exit
        end if
@@ -279,6 +289,7 @@ contains
              print '(A,A)', "    in: ", dlt_2
           end block
           print '(A,A,A,I0)', "load ", path, ": stopped at form ", i
+          load_failed = .true.
           call vs_leave(lb)
           return
        end if

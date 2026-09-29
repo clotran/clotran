@@ -243,7 +243,7 @@ module Eval
   integer, parameter :: B_REFHISTCOUNT = 409, B_REFMINHIST = 410, B_REFMAXHIST = 411, B_REFSETHIST = 412
   integer, parameter :: B_FNFOR = 413
   integer, parameter :: B_SOCKLISTEN = 414, B_SOCKPORT = 415, B_SOCKACCEPT = 416, B_SOCKCONNECT = 417
-  integer, parameter :: B_SOCKREAD = 418, B_SOCKWRITE = 419, B_SOCKCLOSE = 420
+  integer, parameter :: B_SOCKREAD = 418, B_SOCKWRITE = 419, B_SOCKCLOSE = 420, B_EXIT = 421
   ! A number's WIDTH, in an integer's or a real's otherwise unused ref:
   ! what it boxes as on the JVM. Equality and hashing never read it.
   integer, parameter :: W_LONG = 0, W_BYTE = 1, W_SHORT = 2, W_INT = 3, W_FLOAT = 1
@@ -949,6 +949,7 @@ contains
     call bind_builtin(core, "clotran-socket-read", B_SOCKREAD)
     call bind_builtin(core, "clotran-socket-write", B_SOCKWRITE)
     call bind_builtin(core, "clotran-socket-close", B_SOCKCLOSE)
+    call bind_builtin(core, "clotran-exit", B_EXIT)
     call bind_builtin(core, "count", B_COUNT)
     call bind_builtin(core, "first", B_FIRST)
     ! an agent's queue, drained on its own thread by clotran.rt/agent-drain
@@ -9479,6 +9480,16 @@ contains
        end block
     case (B_SOCKCLOSE)
        call sock_close(int_of_number(gcv_nth(args, 0)))
+    case (B_EXIT)
+       ! The process ends now with this status: clojure.main writes it as
+       ! System/exit, which maps here. Output written so far goes out first.
+       flush(6)
+       flush(0)
+       block
+         integer :: code
+         code = int(int_of_number(gcv_nth(args, 0)))
+         stop code, quiet=.true.
+       end block
     case (B_SLURP)
        block
          character(len=:), allocatable :: path, text

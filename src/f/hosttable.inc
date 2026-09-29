@@ -324,7 +324,7 @@
   ! Long's bounds are clotran's own: an integer here IS a 64-bit one.
        hm("java.lang.Long", "MAX_VALUE", HK_INT, "", huge(0_gc_ip)), &
        hm("java.lang.Long", "MIN_VALUE", HK_INT, "", -huge(0_gc_ip) - 1_gc_ip) ]
-  type(hm), parameter :: HOST_STATICS_4(64) = [ &
+  type(hm), parameter :: HOST_STATICS_4(65) = [ &
   ! Double.compare, NOT clojure.core/compare: a total order in which
   ! -0.0 is below 0.0. clojure.math's tests are written on it.
        hm("java.lang.Double", "compare", B_NUMCOMPARE, "clotran-num-compare"), &
@@ -387,6 +387,7 @@
        hm("clojure.lang.TransformerIterator", "createMulti", B_RTFN, "ti-create-multi"), &
        hm("java.util.Collections", "shuffle", B_RTFN, "shuffle!"), &
        hm("clojure.lang.LispReader", "read", B_RTFN, "lisp-read"), &
+       hm("java.lang.System", "exit", B_EXIT, "clotran-exit"), &
        hm("clojure.lang.RT", "vector", B_VEC, "vec"), &
   ! and the small members the language suite named, Clojure too
        hm("clojure.lang.Numbers", "testBit", B_RTFN, "test-bit"), &
@@ -413,7 +414,7 @@
        hm("clojure.lang.Numbers", "longs", B_IDENTITY, "identity"), &
        hm("clojure.lang.Numbers", "doubles", B_IDENTITY, "identity"), &
        hm("clojure.lang.Util", "arrayTypeToSymbol", B_ARRAYTYPESYM, "clotran-array-type-symbol") ]
-  type(hm), parameter :: HOST_STATICS(318) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
+  type(hm), parameter :: HOST_STATICS(319) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
   type(hm), parameter :: HOST_METHODS_1(98) = [ &
   ! Instance members. The target becomes the first argument, which is all
