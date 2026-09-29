@@ -1625,17 +1625,22 @@
        end block
     else if (gc_ref_is(head%ref, "clojure.core/import*")) then
        ! Records the short name, at analysis like a def; see record_import.
+       ! Answers the class, as ImportExpr does, so (import ...) and
+       ! definterface are the last class named.
        block
          type(gc_value) :: cn
+         character(len=:), allocatable :: ck
          cn = strip_meta(gcl_first(vs_get(vst, base + 3)))
          if (cn%tag == GCT_STR .or. cn%tag == GCT_SYM) then
-            block
-               call gc_ref_text(cn%ref, s=dlt_1)
-               call record_import(dlt_1)
-            end block
+            call gc_ref_text(cn%ref, s=dlt_1)
+            call record_import(dlt_1)
+            call class_key(dlt_1, k=ck)
+            cn = gc_class(ck, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+         else
+            cn = gc_nil()
          end if
+         nd = const_node(cn, [vs_get(vst, base + 1), vs_get(vst, base + 2), cn])
        end block
-       nd = const_node(gc_nil(), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
     else if (gc_ref_is(head%ref, "set!")) then
        nd = analyze_setbang(vs_get(vst, base + 3), vs_get(vst, base + 2))
     else if (gc_ref_is(head%ref, "new")) then
@@ -2835,7 +2840,7 @@
     type(eval_ctx), pointer :: tctx
     character(len=*), intent(in) :: cname
     type(gc_value), intent(in) :: fields, ifaces, methods, sc
-    type(gc_value) :: spec, m, mname, names, fns, seen, clauses, fnform, fnode, tmp, keys
+    type(gc_value) :: spec, m, mname, names, fns, seen, clauses, fnform, fnode, tmp
     integer :: base
 
     ! temporaries for the deferred-length calls below (share.clj)
@@ -2843,9 +2848,10 @@
     tctx => ctx_self()
     vst => tctx%stk
     spec = gc_nil()
-    base = vs_enter(vst, 10)
+    base = vs_enter(vst, 11)
     call vs_set(vst, base + 1, fields)
     call vs_set(vst, base + 2, ifaces)
+    call vs_set(vst, base + 11, iface_keys(vs_get(vst, base + 2)))
     ! an interface a type implements is a class from here: nominal, as
     ! every interface is here, and (instance? some.IFace x) resolves it
     block
@@ -2885,6 +2891,12 @@
                 clauses = method_clauses(dlt_1, vs_get(vst, base + 3), vs_get(vst, base + 1))
              end block
              call vs_set(vst, base + 10, clauses)
+             ! a method an interface declares ^void answers nil, as on the JVM
+             if (method_is_void(vs_get(vst, base + 11), vs_get(vst, base + 9))) then
+                clauses = void_clauses(vs_get(vst, base + 10), [vs_get(vst, base + 5), vs_get(vst, base + 6), &
+                     vs_get(vst, base + 7), vs_get(vst, base + 8), vs_get(vst, base + 9), vs_get(vst, base + 11)])
+                call vs_set(vst, base + 10, clauses)
+             end if
              fnform = vs_get(vst, base + 10)      ! the clause list IS fn*'s rest
              tctx%analyzing_method = .true.
              fnode = analyze_fn(fnform, vs_get(vst, base + 4))
@@ -2905,8 +2917,7 @@
        tmp = gcl_rest(vs_get(vst, base + 8), [vs_get(vst, base + 5), vs_get(vst, base + 6), vs_get(vst, base + 7)])
        call vs_set(vst, base + 8, tmp)
     end do
-    keys = iface_keys(vs_get(vst, base + 2))
-    call vs_set(vst, base + 8, keys)
+    call vs_set(vst, base + 8, vs_get(vst, base + 11))
     tmp = gc_str(cname, [vs_get(vst, base + 1), vs_get(vst, base + 5), vs_get(vst, base + 6), vs_get(vst, base + 8)])
     call vs_set(vst, base + 9, tmp)
     spec = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 5), vs_get(vst, base + 6), vs_get(vst, base + 8), vs_get(vst, base + 9)])

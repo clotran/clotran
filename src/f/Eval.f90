@@ -1963,6 +1963,122 @@ contains
     call vs_leave(vst, base)
   end function iface_keys
 
+  ! (gen-interface :name n :methods [[m [arg-tags] ret arg-metas]*]), as
+  ! definterface expands. There is no interface to generate, but a
+  ! method declared ^void answers nil on the JVM whatever its body
+  ! returns, so those names are recorded, under the interface's class
+  ! key in the declared table, for type_spec to honour. args holds
+  ! &form and &env ahead of the macro's own.
+  recursive subroutine record_void_methods(args)
+    type(gc_stack), pointer :: vst
+    type(gc_value), intent(in) :: args
+    type(gc_value) :: kw, m, r, tmp
+    character(len=:), allocatable :: t, iname
+    integer :: base, i
+
+    vst => gc_my_stack()
+    base = vs_enter(vst, 5)
+    call vs_set(vst, base + 1, args)
+    iname = ""
+    do i = 2, gcv_count(vs_get(vst, base + 1)) - 2, 2
+       kw = strip_meta(gcv_nth(vs_get(vst, base + 1), i))
+       if (kw%tag /= GCT_KEY) cycle
+       call gc_ref_text(kw%ref, s=t)
+       if (t == "name") then
+          r = strip_meta(gcv_nth(vs_get(vst, base + 1), i + 1))
+          if (r%tag == GCT_SYM) call gc_ref_text(r%ref, s=iname)
+       else if (t == "methods") then
+          call vs_set(vst, base + 2, strip_meta(gcv_nth(vs_get(vst, base + 1), i + 1)))
+       end if
+    end do
+    if (len(iname) == 0 .or. .not. gcv_is(vs_get(vst, base + 2))) then
+       call vs_leave(vst, base)
+       return
+    end if
+    call vs_set(vst, base + 3, gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+    do i = 0, gcv_count(vs_get(vst, base + 2)) - 1
+       m = strip_meta(gcv_nth(vs_get(vst, base + 2), i))
+       if (.not. gcv_is(m)) cycle
+       if (gcv_count(m) < 3) cycle
+       r = strip_meta(gcv_nth(m, 2))
+       if (r%tag /= GCT_SYM) cycle
+       if (.not. gc_ref_is(r%ref, "void")) cycle
+       r = strip_meta(gcv_nth(m, 0))
+       if (r%tag /= GCT_SYM) cycle
+       call gc_ref_text(r%ref, s=t)
+       tmp = gc_key(t, [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+       call vs_set(vst, base + 4, tmp)
+       call vs_set(vst, base + 3, gcv_conj(vs_get(vst, base + 3), vs_get(vst, base + 4), &
+            [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 4)]))
+    end do
+    if (gcv_count(vs_get(vst, base + 3)) > 0) then
+       do
+          call vs_set(vst, base + 5, gc_root_get(declared_root))
+          if (gc_root_live(declared_root)) then
+             call vs_set(vst, base + 2, vs_get(vst, base + 5))
+          else
+             call vs_set(vst, base + 2, gca_empty([vs_get(vst, base + 3)]))
+          end if
+          block
+            call class_key(iname, k=t)
+          end block
+          tmp = gc_class(t, [vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 5)])
+          call vs_set(vst, base + 4, tmp)
+          tmp = gca_assoc(vs_get(vst, base + 2), vs_get(vst, base + 4), vs_get(vst, base + 3), &
+               [vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 4), vs_get(vst, base + 5)])
+          call vs_set(vst, base + 2, tmp)
+          if (gc_root_cas(declared_root, vs_get(vst, base + 5), vs_get(vst, base + 2))) exit
+       end do
+    end if
+    call vs_leave(vst, base)
+  end subroutine record_void_methods
+
+  ! Is the method keyed mkey declared ^void by any of the interface
+  ! class keys ikeys (record_void_methods)?
+  logical function method_is_void(ikeys, mkey)
+    type(gc_value), intent(in) :: ikeys, mkey
+    type(gc_value) :: v
+    integer :: i, j
+    method_is_void = .false.
+    if (.not. gc_root_live(declared_root)) return
+    do i = 0, gcv_count(ikeys) - 1
+       v = gca_get(gc_root_get(declared_root), gcv_nth(ikeys, i))
+       if (.not. gcv_is(v)) cycle
+       do j = 0, gcv_count(v) - 1
+          if (gc_equal(gcv_nth(v, j), mkey)) then
+             method_is_void = .true.
+             return
+          end if
+       end do
+    end do
+  end function method_is_void
+
+  ! A void method's clauses, each ending in nil: (params body... nil).
+  recursive function void_clauses(clauses, roots) result(out)
+    type(gc_stack), pointer :: vst
+    type(gc_value), intent(in) :: clauses
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, tmp
+    integer :: base, i
+
+    vst => gc_my_stack()
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, coll_to_vector(clauses, [roots, clauses]))
+    call vs_set(vst, base + 2, gcv_empty([roots, vs_get(vst, base + 1)]))
+    do i = 0, gcv_count(vs_get(vst, base + 1)) - 1
+       tmp = coll_to_vector(gcv_nth(vs_get(vst, base + 1), i), [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       call vs_set(vst, base + 3, tmp)
+       tmp = gcv_conj(vs_get(vst, base + 3), gc_nil(), [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+       call vs_set(vst, base + 3, tmp)
+       tmp = seq_to_list(vs_get(vst, base + 3), [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+       call vs_set(vst, base + 3, tmp)
+       call vs_set(vst, base + 2, gcv_conj(vs_get(vst, base + 2), vs_get(vst, base + 3), &
+            [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)]))
+    end do
+    out = seq_to_list(vs_get(vst, base + 2), [roots, vs_get(vst, base + 2)])
+    call vs_leave(vst, base)
+  end function void_clauses
+
   ! Every clause for one method name, in order, each with the type's
   ! fields bound around its body.
   recursive function method_clauses(name, methods, fields) result(out)
@@ -2144,6 +2260,11 @@ contains
     end if
     k = gc_class(name, [vs_get(vst, base + 1)])
     call vs_set(vst, base + 2, k)
+    ! an interface's ^void methods may be there already (record_void_methods)
+    if (gca_contains(vs_get(vst, base + 1), vs_get(vst, base + 2))) then
+       call vs_leave(vst, base)
+       return
+    end if
     tbl = gca_assoc(vs_get(vst, base + 1), vs_get(vst, base + 2), gc_bool(.true.), &
          [vs_get(vst, base + 1), vs_get(vst, base + 2)])
     call vs_set(vst, base + 1, tbl)
@@ -10000,6 +10121,7 @@ contains
        if (gc_kind(tctx%cur_task) == OBJ_TASK) out = tctx%cur_task
     case (B_GENIFACE)
        out = gc_nil()
+       call record_void_methods(vs_get(vst, base + 1))
     case (B_ALWAYS_FALSE)
        out = gc_bool(.false.)
     case (B_EMPTYVEC)

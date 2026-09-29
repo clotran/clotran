@@ -2824,3 +2824,12 @@
 ;; :rename can refer a var under another name
 (require '[clojure.repl :as r :refer [doc] :rename {doc d}])
 [(resolve 'd) (resolve 'r/dir-fn) (sort (clojure.repl/dir-fn 'clojure.set))]
+
+;; a method an interface declares ^void answers nil wherever it is
+;; implemented (record_void_methods); pprint's ppflush is one, so pprint is nil
+(definterface IV (^void f [x]) (g [x]))
+(deftype TV [a] IV (f [_ x] (+ a x)) (g [_ x] (+ a x)))
+[(.f (TV. 1) 2) (.g (TV. 1) 2) (.f (reify IV (f [_ x] x) (g [_ x] x)) 3) (.f (proxy [IV] [] (f [x] x)) 4) (instance? IV (TV. 1))]
+(with-out-str (prn (clojure.pprint/pprint {:a 1})))
+(import 'java.util.Date)
+(import '[java.util Date UUID] '(java.io Writer))
