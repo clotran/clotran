@@ -1,1 +1,1 @@
-{:timeout false, :lines {"agent-error#example0" {0 "#var", 1 "#inst \"2026-09-27T20:49:03.460-00:00\"", 2 "#object[clojure.lang.Agent 0x64d7b720 {:status :failed, :val #inst \"2026-09-27T20:49:03.460-00:00\"}]", 3 "#error {"}}}
+{:timeout false, :lines {"agent-error#example0" {0 "#var", 1 "#inst \"2026-09-29T19:21:50.709-00:00\"", 2 "#object[clojure.lang.Agent {:status :failed, :val #inst \"2026-09-29T19:21:50.709-00:00\"}]", 3 "#error {"}}}

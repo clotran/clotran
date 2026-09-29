@@ -1,1 +1,1 @@
-{:timeout false, :lines {"bean#example0" {0 "java.util.Date", 1 "{:class java.util.Date, :date 27, :day 0, :hours 13, :minutes 6, :month 8, :seconds 0, :time 1790528760965, :timezoneOffset 240, :year 126}"}}}
+{:timeout false, :lines {"bean#example0" {0 "java.util.Date", 1 "{:class java.util.Date, :date 29, :day 2, :hours 15, :minutes 21, :month 8, :seconds 57, :time 1790709717040, :timezoneOffset 240, :year 126}"}}}

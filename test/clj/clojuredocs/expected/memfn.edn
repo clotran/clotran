@@ -1,1 +1,1 @@
-{:timeout false, :lines {"memfn#example0" {0 "#var", 1 "1299", 2 "1299", 3 "1299"}, "memfn#example1" {0 "!error", 1 "#var", 2 "true", 3 "false"}, "memfn#example2" {0 "ok", 1 "ok", 2 "ok"}}}
+{:timeout false, :lines {"memfn#example0" {0 "#var", 1 "1246", 2 "1246", 3 "1246"}, "memfn#example1" {0 "!error", 1 "#var", 2 "true", 3 "false"}, "memfn#example2" {0 "ok", 1 "ok", 2 "ok"}}}

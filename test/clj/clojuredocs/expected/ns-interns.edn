@@ -1,1 +1,1 @@
-{:timeout false, :lines {"ns-interns#example0" {0 "([primitives-classnames #var] [+' #var])", 1 "(Coercions IOFactory append? as-file as-relative-path)", 2 "794"}}}
+{:timeout false, :lines {"ns-interns#example0" {0 "([primitives-classnames #var] [+' #var])", 1 "(Coercions IOFactory append? as-file as-relative-path)", 2 "796"}}}
