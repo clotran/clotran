@@ -754,7 +754,7 @@ module GC
   public :: gc_global_keep, gc_root_get, gc_root_live
   public :: gc_set_finalizer
   public :: gc_ensure_init, gc_str_ref, gc_ref_text, gc_ref_is, gc_ref_len, gc_ref_same
-  public :: gc_sb_append, gc_sb_flush
+  public :: gc_sb_append, gc_sb_flush, gc_ref_slice, gc_ref_ascii
   public :: vs_enter, vs_leave, vs_set, vs_get, vs_depth, gc_stack, gc_my_stack
   public :: gc_bindings_get, gc_bindings_set, gc_int_text, gc_rval
   interface vs_enter
@@ -940,6 +940,29 @@ contains
     call gc_set_i1(sb, 0)
     call vs_leave_on(s, base)
   end subroutine gc_sb_flush
+
+  ! Bytes from+1 .. to of a text, cut in place rather than after
+  ! copying the whole text out.
+  subroutine gc_ref_slice(ref, from, to, s)
+    integer, intent(in) :: ref, from, to
+    character(len=:), allocatable, intent(out) :: s
+    s = ""
+    if (.not. ref_ok(ref)) return
+    if (from < 0 .or. to > len(str_pool(ref)%text) .or. to < from) return
+    s = str_pool(ref)%text(from + 1:to)
+  end subroutine gc_ref_slice
+
+  ! Whether a text is all ASCII: a byte is then a character.
+  logical function gc_ref_ascii(ref) result(yes)
+    integer, intent(in) :: ref
+    integer :: i
+    yes = .false.
+    if (.not. ref_ok(ref)) return
+    do i = 1, len(str_pool(ref)%text)
+       if (ichar(str_pool(ref)%text(i:i)) > 127) return
+    end do
+    yes = .true.
+  end function gc_ref_ascii
 
   function gc_ref_len(ref) result(n)
     integer, intent(in) :: ref

@@ -67,6 +67,7 @@ int32_t cre_group_count(void *handle);
  * optional group that did not match -- Java's .group(n) is null there),
  * -1 on error or if idx is out of range. */
 int32_t cre_group_span(void *handle, int32_t idx, int32_t *start, int32_t *end);
+int32_t cre_group_span_units(void *handle, int32_t idx, int32_t *start, int32_t *end);
 
 /* java.lang.Character over a code point: 1/0 answers, and the simple
  * case maps. See the C file. */

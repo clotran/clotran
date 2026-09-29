@@ -179,6 +179,25 @@ int32_t cre_group_span(void *handle, int32_t idx, int32_t *start, int32_t *end) 
   return 1;
 }
 
+/* The same span as ICU's UTF-16 units, uncounted: for a subject that
+ * is all ASCII, where a unit is a character is a byte, the caller asks
+ * this instead -- counting the units before each offset scanned the
+ * subject from its start for every match, so (re-seq re s) was
+ * quadratic in s. */
+int32_t cre_group_span_units(void *handle, int32_t idx, int32_t *start, int32_t *end) {
+  UErrorCode status = U_ZERO_ERROR;
+  int32_t s, e;
+  if (!handle) return -1;
+  s = uregex_start((URegularExpression *)handle, idx, &status);
+  if (U_FAILURE(status)) return -1;
+  e = uregex_end((URegularExpression *)handle, idx, &status);
+  if (U_FAILURE(status)) return -1;
+  if (s < 0) return 0;
+  *start = s;
+  *end = e;
+  return 1;
+}
+
 /* --- Character ----------------------------------------------------
  * java.lang.Character's predicates and case maps over a code point,
  * answered by ICU (unicode/uchar.h). u_isWhitespace is documented as

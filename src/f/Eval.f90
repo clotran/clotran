@@ -5877,7 +5877,7 @@ contains
     type(gc_value) :: out, piece
     character(len=:), allocatable :: s
     integer :: mh, base, from, gs, ge, nparts, last
-    logical :: ok
+    logical :: ok, ascii
 
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1
@@ -5909,16 +5909,22 @@ contains
     call vs_set(vst, base + 1, out)
     from = 0
     nparts = 0
+    ! all ASCII: spans are bytes, and each piece is cut directly
+    ascii = all_ascii(s)
     do
        if (limit > 0 .and. nparts == limit - 1) exit
        if (regex_find_next(mh) /= 1) exit
-       ok = regex_group_span(mh, 0, gs, ge)
+       ok = regex_group_span(mh, 0, gs, ge, ascii=ascii)
        if (.not. ok) exit
        ! A zero-width match at the position we are already at would
        ! loop forever and produce nothing; Java skips it too.
        if (ge == gs .and. gs == from .and. from == 0) cycle
        block
-          call u8_slice(s, from, gs, s=dlt_1)
+          if (ascii) then
+             dlt_1 = s(from + 1:gs)
+          else
+             call u8_slice(s, from, gs, s=dlt_1)
+          end if
           piece = gc_str(dlt_1, [roots, vs_get(vst, base + 1)])
        end block
        call vs_set(vst, base + 2, piece)
@@ -6037,14 +6043,46 @@ contains
   ! $1..$9 name groups; a backslash escapes the next character. This is
   ! the one place a replacement string is not literal, which is why
   ! Matcher/quoteReplacement exists at all.
-  subroutine expand_replacement(repl, mh, subj, s)
+  ! A matcher whose subject is all ASCII says so in slot 3: ICU's spans
+  ! over it are then bytes, and nothing counts or scans to reach them.
+  ! (i2 is appendReplacement's position, so not there.)
+  subroutine matcher_mark_ascii(mv)
+    type(gc_value), intent(in) :: mv
+    type(gc_value) :: st
+    st = gc_slot(mv, 2)
+    if (st%tag == GCT_STR) then
+       if (gc_ref_ascii(st%ref)) call gc_set_slot(mv, 3, gc_bool(.true.))
+    end if
+  end subroutine matcher_mark_ascii
+
+  logical function matcher_ascii(mv)
+    type(gc_value), intent(in) :: mv
+    matcher_ascii = tag_of(gc_slot(mv, 3)) == GCT_BOOL
+  end function matcher_ascii
+
+  ! Whether every byte of s is ASCII
+  pure logical function all_ascii(s) result(yes)
+    character(len=*), intent(in) :: s
+    integer :: i
+    yes = .false.
+    do i = 1, len(s)
+       if (iachar(s(i:i)) > 127) return
+    end do
+    yes = .true.
+  end function all_ascii
+
+  subroutine expand_replacement(repl, mh, subj, s, ascii)
     character(len=*), intent(in) :: repl, subj
     integer, intent(in) :: mh
     character(len=:), allocatable, intent(out) :: s
+    logical, intent(in), optional :: ascii
+    logical :: asc
     integer :: i, gnum, gs, ge
 
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1
+    asc = .false.
+    if (present(ascii)) asc = ascii
     s = ""
     i = 1
     do while (i <= len(repl))
@@ -6059,9 +6097,13 @@ contains
             repl(min(i+1, len(repl)):min(i+1, len(repl))) >= "0" .and. &
             repl(min(i+1, len(repl)):min(i+1, len(repl))) <= "9") then
           gnum = iachar(repl(i+1:i+1)) - iachar("0")
-          if (regex_group_span(mh, gnum, gs, ge)) then
+          if (regex_group_span(mh, gnum, gs, ge, ascii=asc)) then
              block
-                call u8_slice(subj, gs, ge, s=dlt_1)
+                if (asc) then
+                   dlt_1 = subj(gs + 1:ge)
+                else
+                   call u8_slice(subj, gs, ge, s=dlt_1)
+                end if
                 block
                    character(len=:), allocatable :: dlw
                    dlw = s // dlt_1
@@ -6089,7 +6131,8 @@ contains
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out
     character(len=:), allocatable :: subj, acc
-    integer :: mh, from, gs, ge
+    integer :: mh, from, gs, ge, nacc, nchars
+    logical :: ascii
 
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1, dlt_2
@@ -6098,29 +6141,61 @@ contains
        subj = dlt_1
     end block
     mh = gc_i1(mv)
-    acc = ""
+    ! all ASCII: ICU's spans are bytes, sliced directly; and the answer
+    ! grows in a doubling buffer. Scanning to each offset from the start
+    ! and re-copying the answer at every match were each O(n) a match.
+    ascii = matcher_ascii(mv)
+    nchars = u8_count(subj)
+    allocate(character(len=max(64, len(subj))) :: acc)
+    nacc = 0
     from = 0
     do
        if (regex_find_next(mh) /= 1) exit
-       if (.not. regex_group_span(mh, 0, gs, ge)) exit
+       if (.not. regex_group_span(mh, 0, gs, ge, ascii=ascii)) exit
        block
-          call u8_slice(subj, from, gs, s=dlt_1)
-          call expand_replacement(repl, mh, subj, s=dlt_2)
-          acc = acc // dlt_1 // dlt_2
+          if (ascii) then
+             call acc_add(subj(from + 1:gs))
+          else
+             call u8_slice(subj, from, gs, s=dlt_1)
+             call acc_add(dlt_1)
+          end if
+          call expand_replacement(repl, mh, subj, s=dlt_2, ascii=ascii)
+          call acc_add(dlt_2)
        end block
        from = ge
        if (only_first) exit
        ! A zero-width match cannot advance on its own.
        if (ge == gs) then
-          if (ge >= u8_count(subj)) exit
+          if (ge >= nchars) exit
           block
-             call u8_slice(subj, ge, ge + 1, s=dlt_1)
-             acc = acc // dlt_1
+             if (ascii) then
+                call acc_add(subj(ge + 1:ge + 1))
+             else
+                call u8_slice(subj, ge, ge + 1, s=dlt_1)
+                call acc_add(dlt_1)
+             end if
           end block
           from = ge + 1
        end if
     end do
-    out = gc_str(acc // subj(u8_off(subj, from):), roots)
+    if (ascii) then
+       call acc_add(subj(from + 1:))
+    else
+       call acc_add(subj(u8_off(subj, from):))
+    end if
+    out = gc_str(acc(1:nacc), roots)
+  contains
+    subroutine acc_add(p)
+      character(len=*), intent(in) :: p
+      character(len=:), allocatable :: bigger
+      if (nacc + len(p) > len(acc)) then
+         allocate(character(len=max(2 * len(acc), nacc + len(p))) :: bigger)
+         bigger(1:nacc) = acc(1:nacc)
+         call move_alloc(bigger, acc)
+      end if
+      acc(nacc + 1:nacc + len(p)) = p
+      nacc = nacc + len(p)
+    end subroutine acc_add
   end function regex_replace
 
   ! One conversion, before padding.
@@ -9895,6 +9970,7 @@ contains
                   mv = gc_obj(OBJ_MATCHER, [pat, gc_str(stext, [vs_get(vst, base + 1), pat])], &
                        [vs_get(vst, base + 1), pat])
                   call gc_set_i1(mv, mh)
+                  call matcher_mark_ascii(mv)
                   out = mv
                end if
             end if
@@ -10844,17 +10920,25 @@ contains
                iv = gcv_nth(args, 1)
                gnum = int(iv%ival)
             end if
-            participated = regex_group_span(mh, gnum, gstart, gend)
+            participated = regex_group_span(mh, gnum, gstart, gend, ascii=matcher_ascii(mt))
             if (participated) then
                subj = gc_slot(mt, 2)
-               block
-                  call text_of(subj, s=dlt_1)
-                  stext = dlt_1
-               end block
-               block
-                  call u8_slice(stext, gstart, gend, s=dlt_1)
+               if (matcher_ascii(mt) .and. subj%tag == GCT_STR) then
+                  ! ASCII: the span is bytes; cut it in place, where copying
+                  ! the subject out and scanning to the offsets was O(n)
+                  ! for every match
+                  call gc_ref_slice(subj%ref, gstart, gend, s=dlt_1)
                   out = gc_str(dlt_1, [vs_get(vst, base + 1)])
-               end block
+               else
+                  block
+                     call text_of(subj, s=dlt_1)
+                     stext = dlt_1
+                  end block
+                  block
+                     call u8_slice(stext, gstart, gend, s=dlt_1)
+                     out = gc_str(dlt_1, [vs_get(vst, base + 1)])
+                  end block
+               end if
             end if
          end if
        end block
@@ -12632,6 +12716,7 @@ contains
                     mv = gc_obj(OBJ_MATCHER, [vs_get(vst, base + 2), gc_str(stext, [vs_get(vst, base + 1), vs_get(vst, base + 2)])], &
                          [vs_get(vst, base + 1), vs_get(vst, base + 2)])
                     call gc_set_i1(mv, mh)
+                    call matcher_mark_ascii(mv)
                     call vs_set(vst, base + 3, mv)
                     block
                        call text_of(gcv_nth(args, 2), s=dlt_1)

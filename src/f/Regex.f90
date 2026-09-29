@@ -83,6 +83,15 @@ module Regex
        integer(c_int32_t), intent(out) :: start, endp
        integer(c_int32_t) :: r
      end function cre_group_span_c
+
+     function cre_group_span_units_c(handle, idx, start, endp) result(r) &
+          bind(C, name="cre_group_span_units")
+       import :: c_ptr, c_int32_t
+       type(c_ptr), value :: handle
+       integer(c_int32_t), value :: idx
+       integer(c_int32_t), intent(out) :: start, endp
+       integer(c_int32_t) :: r
+     end function cre_group_span_units_c
      function cu_isws(cp) result(r) bind(C, name="cu_isws")
        import :: c_int32_t
        integer(c_int32_t), value :: cp
@@ -329,16 +338,23 @@ contains
   ! to slice a Fortran substring as text(start+1:endp)) if group `gnum`
   ! participated in the last match; .false. otherwise (including "no
   ! match yet" and "index out of range").
-  function regex_group_span(idx, gnum, start, endp) result(participated)
+  ! ascii: the subject is all ASCII, so ICU's units are the characters
+  ! (and the bytes) already, and are not counted from the start.
+  function regex_group_span(idx, gnum, start, endp, ascii) result(participated)
     integer, intent(in) :: idx, gnum
     integer, intent(out) :: start, endp
+    logical, intent(in), optional :: ascii
     logical :: participated
     integer(c_int32_t) :: r, s, e
     participated = .false.
     start = 0
     endp = 0
     if (idx < 1 .or. idx > MAX_HANDLES) return
-    r = cre_group_span_c(registry(idx), gnum, s, e)
+    r = -1
+    if (present(ascii)) then
+       if (ascii) r = cre_group_span_units_c(registry(idx), gnum, s, e)
+    end if
+    if (r == -1) r = cre_group_span_c(registry(idx), gnum, s, e)
     if (r /= 1) return
     start = s
     endp = e

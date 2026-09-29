@@ -2790,3 +2790,9 @@
 ;; instance? on the scalar classes, answered from tag and width; the two
 ;; big integers are one type here (DEVIATIONS: one big integer type)
 (for [x [nil 1 (int 1) (short 1) (byte 1) 1.5 (float 1.5) 1M 1/2 "s" \c :k 'sym true [1] (with-meta 'm {:a 1})]]   [(instance? Long x) (instance? Integer x) (instance? Short x) (instance? Byte x) (instance? clojure.lang.BigInt x) (instance? java.math.BigInteger x) (instance? String x) (instance? Number x) (instance? Double x) (instance? Character x) (instance? clojure.lang.Keyword x) (instance? clojure.lang.Symbol x) (integer? x) (number? x) (string? x) (int? x) (double? x)]) 
+
+;; regex over an all-ASCII subject by byte spans (matcher_ascii): re-seq,
+;; groups, replace with $n, split, appendReplacement; non-ASCII subjects
+;; keep the counted road
+[(re-seq #"\d+" "a1 22 333 b") (re-seq #"(\w)(\d)" "a1 b2 c3") (re-find #"é(.)" "xxéy") (re-seq #"." "aé😀b") (re-find #"(x)?y" "y") (let [m (re-matcher #"(\d)(\d)?" "1 23")] [(re-find m) (re-find m) (re-find m)]) (re-matches #"(a)(b)" "ab") (clojure.string/replace "a1b22" #"\d+" "#") (clojure.string/split "a,b,,c" #",") (count (re-seq #"\d+" (clojure.string/join " " (range 1000))))]
+[(clojure.string/replace "a1b22c333" #"(\d)(\d)?" "<$1|$2>") (clojure.string/replace-first "aXbXc" #"X" "-") (clojure.string/replace "abc" #"" "-") (clojure.string/replace "日本語" #"本" "x") (clojure.string/split "a1b2c3" #"\d") (clojure.string/split "a1b2c3" #"\d" 2) (clojure.string/split "é,ü,,x" #",") (let [m (re-matcher #"(\d)" "a1b2") sb (StringBuffer.)] (while (.find m) (.appendReplacement m sb "<$1>")) (.appendTail m sb) (str sb)) (clojure.string/replace "x.y" #"\." "\\$")]
