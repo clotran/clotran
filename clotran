@@ -6,6 +6,9 @@
 #
 # Files named on the command line load after core.clj, in order, so
 # `clotran some.cljf` runs a program and `clotran` alone is the REPL.
+# CLOTRAN_PATH adds source roots (: separated, ; on Windows), searched
+# after clotran's own for require and load: what clotran-deps computes
+# from a project's deps.edn (PACKAGES.md).
 # core.clj comes from build/core.image, the heap as it stood once core
 # and spec had loaded (make image), so the prompt is up in about 0.2 s;
 # CLOTRAN_IMAGE=0 loads it from source instead. On a terminal the REPL

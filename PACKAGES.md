@@ -134,10 +134,61 @@ manager, because the library changes, moves or disappears under them.
    claimed in its place -- that branch is the JVM. Nothing under
    `src/clj/clojure/**` is ever patched this way.
 
-## The package manager (later)
+## The package manager: `clotran-deps` (designed 2026-09-29)
 
-What the rules above add up to, once the language work is done. The
-decisions already made (PLAN.md step 9):
+**The split, as the JVM and tools.deps have it.** clotran itself knows
+one thing: a list of source roots, `CLOTRAN_PATH` (as the JVM knows
+`-cp`), searched after its own `src/clj` for `name.cljf`, `.cljc`, `.clj`
+(DEVIATIONS 33). Everything else -- reading a project's file, fetching
+what it names, pinning it, walking its dependencies' own files, working
+out the path -- is a separate program in its own repository,
+`~/jborden/clotran-deps`, written in Clojure and run BY clotran, as
+tools.deps is run by the JVM.
+
+**The project file is `deps.edn`, the same file, with the same keys:**
+
+    {:paths ["src"]
+     :deps  {io.github.jborden/clotran-nrepl {:local/root "../clotran-nrepl"}
+             some/lib {:git/url "https://github.com/some/lib"
+                       :git/sha "4a1b2c3d..."}}
+     :aliases {:test {:extra-paths ["test"]}}}
+
+One file for both hosts, as a Clojure project already has it. What a
+`deps.edn` can name that clotran cannot load is handled by name, not
+ignored: `org.clojure/clojure`, `org.clojure/spec.alpha` and
+`org.clojure/core.specs.alpha` are PROVIDED -- clotran is the Clojure,
+and ships those (src/clj/clojure/PROVENANCE.md) -- so this repository's
+own `deps.edn`, which pins the oracle's `clj`, reads as having no
+dependencies at all.
+
+**Coordinates.**
+- `:local/root` -- a directory with its own `deps.edn`.
+- `:git/url` + `:git/sha` -- the full sha is REQUIRED (vendoring rule 1:
+  pinned), `:git/tag` optional and checked against it. Checked out once
+  into `~/.cache/clotran/gitlibs/<lib>/<sha>`, never modified after.
+- `:mvn/version` -- refused, naming the library, unless it is one of
+  the three provided above: a jar is JVM bytecode. A project that needs
+  one on the JVM and something else here says so with an alias.
+- A native package (a Fortran or C library with a manifest, above) is a
+  dependency like any other whose `deps.edn` says how to build it
+  (`:build` -- a recipe run on the target, rule 3); later.
+
+**Resolution.** Breadth-first from the project, as tools.deps does; a
+library named twice at two different shas is an ERROR naming both
+paths, not a silent pick -- the choice is the project's, written in its
+own `:deps`, which always wins.
+
+**Caching.** The resolved path is written to `.clotran-cache/path`,
+keyed by a hash of every `deps.edn` that went into it, so an
+unchanged project starts with no resolution at all. The `clotran`
+launcher, run in a directory holding a `deps.edn`, asks
+`clotran-deps` for the path (cached) and sets `CLOTRAN_PATH`.
+
+**First users.** `~/jborden/clotran-nrepl`, the nREPL server (PLAN step
+21 d), as a `:local/root`, then over git.
+
+What the rules above add up to. The decisions made earlier (PLAN.md
+step 9), which this keeps:
 
 - a package is source plus a recipe, built on the target;
 - manifests are versioned, and record the compiler and the target;

@@ -18004,6 +18004,39 @@ contains
           end if
        end do
     end do
+    ! CLOTRAN_PATH: the source roots a project's packages add, as the JVM's
+    ! -cp, computed by clotran-deps (PACKAGES.md). Entries are separated
+    ! by : -- or by ; when there is one, as on Windows, where : is part of
+    ! a drive letter.
+    block
+      character(len=4096) :: cp
+      character(len=1) :: sep
+      integer :: n, st, a, z
+      call get_environment_variable("CLOTRAN_PATH", cp, length=n, status=st)
+      if (st /= 0 .or. n == 0) return
+      sep = ":"
+      if (index(cp(1:n), ";") > 0) sep = ";"
+      a = 1
+      do while (a <= n)
+         z = index(cp(a:n), sep)
+         if (z == 0) then
+            z = n + 1
+         else
+            z = a + z - 1
+         end if
+         if (z > a) then
+            do e = 1, 3
+               cand = cp(a:z-1) // "/" // rel // "." // trim(exts(e))
+               inquire(file=cand, exist=there)
+               if (there) then
+                  path = cand
+                  return
+               end if
+            end do
+         end if
+         a = z + 1
+      end do
+    end block
   end subroutine classpath_find
 
   ! The namespace an alias names in the CURRENT namespace, or nil.

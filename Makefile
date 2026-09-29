@@ -382,7 +382,7 @@ $(B)/libsamplelib.$(SOEXT): $(T)/samplelib.f90 $(B)/samplelib_shims.f90 | $(B) $
 # after the other within its target). Plain `make test` runs them in
 # order, as before.
 TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(B)/libsamplelib.$(SOEXT) packages examples/embed/heat
-TEST_CHECKS = check-unit check-embed check-embed-repl check-language check-tree check-banner check-torture check-threads \
+TEST_CHECKS = check-unit check-embed check-embed-repl check-path check-language check-tree check-banner check-torture check-threads \
 	check-autocompile check-break check-libraries check-oracle check-oracle-gc check-pure check-static
 .PHONY: test $(TEST_CHECKS)
 test: $(TEST_CHECKS)
@@ -392,6 +392,13 @@ check-unit:
 check-embed:
 	@echo "--- a Fortran solver with clotran embedded, its strategy in Clojure on its own grid (examples/embed) ---"
 	examples/embed/heat | grep -v "^note:" | diff - examples/embed/expected.txt
+check-path:
+	@echo "--- CLOTRAN_PATH: source roots a package manager adds (PACKAGES.md) ---"
+	@mkdir -p $(B)/cp1/cpt $(B)/cp2/cpt
+	@echo "(ns cpt.one) (def v :one)" > $(B)/cp1/cpt/one.cljf
+	@echo "(ns cpt.two) (def v :two)" > $(B)/cp2/cpt/two.cljc
+	@echo "(require (quote cpt.one) (quote cpt.two)) (println :path-says cpt.one/v cpt.two/v)" > $(B)/cpt.clj
+	CLOTRAN_PATH=$(B)/cp1:$(B)/cp2 ./clotran-bin src/clj/clojure/core.clj $(B)/cpt.clj </dev/null 2>&1 | grep -q ":path-says :one :two"
 check-embed-repl:
 	@echo "--- a REPL into the running solver: read its grid, write it, stop it (PLAN step 21) ---"
 	scripts/embed-repl-check
