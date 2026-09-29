@@ -24,6 +24,7 @@ module clotran_main
   private
   include 'stamp.inc'
   character(len=*), parameter :: IMAGE_MAGIC = "CLOTRAN IMAGE 1 "
+  character(len=*), parameter :: IMAGE_END = "CLOTRAN IMAGE END "
   public :: main_body, main_thread
   ! address space, not memory: pages are committed as they are touched
   integer(c_size_t), parameter, public :: MAIN_STACK_BYTES = 1024_c_size_t * 1024_c_size_t * 1024_c_size_t
@@ -62,6 +63,9 @@ contains
        image_id = 0
        if (len(ipath) > 0) call image_load(ipath, imaged, image_id)
     end block
+    ! taking an image: no compiled library is installed on the way
+    call get_environment_variable("CLOTRAN_IMAGE_SAVE", argbuf, arglen, st)
+    if (st == 0 .and. arglen > 0) call gce_set_no_install()
     base = vs_enter(3)
     if (imaged) then
        call vs_set(base + 1, gce_env())
@@ -353,11 +357,23 @@ contains
     end block
   end subroutine source_path
 
+  ! Written to a temporary name and renamed once complete, so a save
+  ! that stops halfway (an error stop in a module's writer: compiled
+  ! procedures loaded, say) leaves no image for the next start to read
+  ! to its end. The trailer -- an end marker and the hash -- is what
+  ! image_load checks before reading anything.
   subroutine image_save(path)
     character(len=*), intent(in) :: path
     integer :: u, i, sz, st
     character(len=:), allocatable :: nm, p
-    open(newunit=u, file=path, access="stream", form="unformatted", &
+    interface
+       function c_rename(old, new) bind(C, name="rename") result(r)
+         import :: c_char, c_int
+         character(kind=c_char), intent(in) :: old(*), new(*)
+         integer(c_int) :: r
+       end function c_rename
+    end interface
+    open(newunit=u, file=path // ".tmp", access="stream", form="unformatted", &
          status="replace", action="write", iostat=st)
     if (st /= 0) then
        print '(A,A)', "image: cannot write ", path
@@ -384,14 +400,20 @@ contains
     call cf_image_write(u)
     call gce_image_write(u)
     close(u)
-    ! its identity, appended: the banner's `using image`
+    ! the trailer: an end marker, then its identity (the banner's
+    ! `clotran image`), then the rename that makes it the image
     block
       integer(8) :: h
-      h = image_hash(path)
-      open(newunit=u, file=path, access="stream", form="unformatted", &
+      h = image_hash(path // ".tmp")
+      open(newunit=u, file=path // ".tmp", access="stream", form="unformatted", &
            status="old", position="append", action="write")
+      write(u) IMAGE_END
       write(u) h
       close(u)
+      if (c_rename(path // ".tmp" // c_null_char, path // c_null_char) /= 0) then
+         print '(A,A)', "image: cannot rename into place: ", path
+         stop 1
+      end if
     end block
   end subroutine image_save
 
@@ -412,6 +434,21 @@ contains
        close(u)
        return
     end if
+    ! complete? the end marker sits before the trailing hash
+    block
+      character(len=len(IMAGE_END)) :: tail
+      integer :: here
+      inquire(unit=u, size=sz, pos=here)
+      tail = ""
+      if (sz > len(IMAGE_END) + 8) read(u, pos=sz - 7 - len(IMAGE_END), iostat=st) tail
+      if (st /= 0 .or. tail /= IMAGE_END) then
+         print '(A,A)', "note: an incomplete image, loading the sources: ", path
+         close(u)
+         return
+      end if
+      ! back to where the stamp starts: a positioned read moved the file
+      read(u, pos=here)
+    end block
     read(u) k
     allocate(character(len=k) :: stamp)
     read(u) stamp

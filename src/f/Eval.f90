@@ -396,6 +396,7 @@ module Eval
   logical, save :: ld_loaded = .false.   ! clotran.loader, once (gce_install_compiled)
   ! CLOTRAN_AUTOCOMPILE, read once: 0 unset, 1 set (clotran.loader/auto)
   integer, save :: autocompile = -1
+  logical, save :: no_install = .false.   ! gce_set_no_install: an image is being taken, no library installs
   ! files loaded while core.clj itself was loading -- host.clj, the
   ! printer, protocols -- wait for core to finish: clotran.loader is
   ! written in the Clojure core defines
@@ -427,7 +428,7 @@ module Eval
   public :: gce_ctx_new, gce_ctx_switch, gce_ctx_current, gce_current_fn, gce_new_slots, gce_dot_slots
   public :: gce_repl
   public :: gce_set_home, gce_home
-  public :: gce_image_write, gce_image_read
+  public :: gce_image_write, gce_image_read, gce_set_no_install
   public :: gce_apply, gce_env, gce_exec_node, gce_apply_slots
 
   ! THE CALL STACK. One entry per closure invocation in progress: the
@@ -1407,6 +1408,13 @@ contains
   ! clotran.loader is never read. A library that will not install is
   ! REPORTED and the interpreted definitions stand: the source loaded,
   ! so the program is still right, only slower.
+  ! An image holds no compiled procedure (cf_image_write refuses), so
+  ! the run that takes one installs no library: main.f90 says so before
+  ! the first file loads
+  subroutine gce_set_no_install()
+    no_install = .true.
+  end subroutine gce_set_no_install
+
   recursive subroutine gce_install_compiled(path)
     type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
@@ -1418,6 +1426,7 @@ contains
     integer :: dot, i, base, at
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1
+    if (no_install) return
     tctx => ctx_self()
     vst => tctx%stk
     ! A file that loads while core.clj itself is loading -- host.clj,
