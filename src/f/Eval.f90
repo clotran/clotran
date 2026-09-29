@@ -11962,8 +11962,8 @@ contains
          ! which must exist before its print-method names the class
          if (rel == "clojure/uuid" .and. .not. uuid_loaded) &
               out = uuid_call("identity-uuid", gcv_empty([vs_get(vst, base + 1)]))
-         if (rel == "clojure/core_proxy" .or. &
-              rel == "clojure/genclass" .or. &
+         ! core_proxy is clotran's own, below; proxy is a special form
+         if (rel == "clojure/genclass" .or. &
               rel == "clojure/gvec") then
             print '(A,A,A)', "note: skipping ", rel, &
                  " (JVM-only)"
@@ -11993,6 +11993,7 @@ contains
          ! DEVIATIONS.md 40.
          if (rel == "clojure/core_print") rel = "clotran/core_print"
          if (rel == "clojure/data") rel = "clotran/data"
+         if (rel == "clojure/core_proxy") rel = "clotran/core_proxy"
          ! clojure.java.io: text files over clotran-slurp and clotran-spit,
          ! which core.clj's slurp and spit are written against
          if (rel == "clojure/java/io") rel = "clotran/java_io"

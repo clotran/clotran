@@ -2819,3 +2819,8 @@
 (defn lr [n] (loop [i 0 acc []] (if (< i n) (do (def lr-last i) (recur (inc i) (conj acc i))) acc)))
 (defn lf [n] (loop [i 0] (if (< i n) (letfn [(g [x] (* 2 x))] (recur (+ i (g 1)))) i)))
 [(lr 3) lr-last (lf 3) (let [a (atom 0)] (loop [i 0] (when (< i 3) (swap! a inc) (recur (inc i)))) @a)]
+
+;; clojure.repl loads (its source-fn names proxy-super), so require's
+;; :rename can refer a var under another name
+(require '[clojure.repl :as r :refer [doc] :rename {doc d}])
+[(resolve 'd) (resolve 'r/dir-fn) (sort (clojure.repl/dir-fn 'clojure.set))]

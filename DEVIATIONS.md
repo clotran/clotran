@@ -1017,8 +1017,12 @@ rather than an error.
 **The constructor arguments are read and discarded.** `(proxy [C] [a b]
 ...)` has no superclass to construct.
 
-**`proxy-super` does not exist**, for the same reason -- there is no
-superclass method to call through to.
+**`proxy-super` throws.** There is no superclass method to call
+through to, so `(proxy-super m ...)` expands to a throw of
+UnsupportedOperationException naming `m` (`src/clj/clotran/core_proxy.cljf`,
+loaded in place of `core_proxy.clj`). Until 2026-09-29 the macro did not
+exist at all, and `clojure.repl` -- whose `source-fn` builds a proxy that
+calls it -- could not load.
 
 **Removal**: vendoring `core_proxy.clj` does not help; it needs
 `Class/forName`, `.getDeclaredMethods` and a class loader. Removing

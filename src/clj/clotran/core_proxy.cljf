@@ -1,0 +1,16 @@
+;; clotran's core_proxy: loaded in place of clojure/core_proxy.clj
+;; (Eval.f90 B_RTLOAD), which generates classes through a class loader
+;; clotran does not have. `proxy` itself is a special form (DEVIATIONS.md
+;; 28). This file holds the rest of core_proxy's surface that can exist.
+
+(in-ns 'clojure.core)
+
+(defmacro proxy-super
+  "Use to call a superclass method in the body of a proxy method.
+  clotran's proxies have no superclass (DEVIATIONS.md 28), so the call
+  throws UnsupportedOperationException when it runs; a proxy that
+  mentions it still compiles."
+  {:added "1.0"}
+  [meth & args]
+  `(throw (UnsupportedOperationException.
+           ~(str "proxy-super " meth ": clotran proxies have no superclass (DEVIATIONS.md 28)"))))
