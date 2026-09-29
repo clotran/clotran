@@ -1821,3 +1821,39 @@ the classes they name in clj.
 registry, set by `make-array` and `into-array` (from its type argument,
 or the first element's class as `into-array` infers it), copied by
 `aclone`, and read by `array_class_name`. Not planned yet.
+
+## 63. `vec` of an array copies it
+
+`vec` of an array aliases it in both Clojure (`LazilyPersistentVector
+.createOwning`, up to 32 elements) and ClojureScript (`.fromArray
+PersistentVector coll true`), and both docstrings say the array "will be
+aliased and should not be modified". clotran copies it, so modifying the
+array afterwards does not show through the vector:
+
+    (let [a (to-array [0 0 0]) v (vec a)] (aset a 1 9) v)
+    ;; clj [0 9 0]    clotran [0 0 0]
+
+Only a program doing what the docstring says not to can tell.
+
+**Removal**: a vector leaf would have to share storage with a native
+array, which the persistent vector's nodes do not model. Not planned.
+
+## 64. A transient used in place keeps what was added to it
+
+`conj!` and `assoc!` "must be used for their return value"; a transient
+bashed in place instead is unspecified. On the JVM the ninth entry of a
+transient array map makes a NEW transient hash map and returns it, so a
+program that ignores the return value loses that entry. clotran's
+transient map is one object throughout, so nothing is lost:
+
+    (let [t (transient {:a 1 :b 2 :c 3 :d 4 :e 5 :f 6 :g 7 :h 8})]
+      (conj! t [:i 9]) (persistent! t))
+    ;; clj     8 entries, no :i
+    ;; clotran 9 entries
+
+ClojureScript switches the same way at the same size (TransientArrayMap
+`-assoc!`, `HASHMAP-THRESHOLD` 8, in cljs/core.cljs). Only a program
+the docstring calls wrong can tell.
+
+**Removal**: an array-map transient that hands back a different object
+past eight entries and leaves the old one frozen. Not planned.
