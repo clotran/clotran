@@ -1924,6 +1924,29 @@ jump out of a try leaves that arity a tree (Clojure refuses it anyway).
 nested with a recur inside. `dorun (map inc (range 10^5))` 279 -> 121
 ms, now that map's chunked branch compiles.
 
+### 19. Slow spots, surveyed against the JVM (2026-09-29)
+
+Thirty everyday forms timed on a warmed JVM (best of 5) and on
+clotran (best of 2), ranked by the ratio. The worst, before and after
+the fixes of this day:
+
+| form | before | after | what it was |
+|---|---|---|---|
+| records: `(:a (->R i 1))` | 506x | 176x | keyword lookup went through the record's valAt as a nested call; the hidden fields were conj'd |
+| protocol call | 377x | 110x | `fnFor` always nil: every call re-found the method (DEVIATIONS 13, resolved) |
+| `clojure.string/join` | 350x | 81x | StringBuilder append copied the whole text: O(n^2) |
+| `re-seq` over a long subject | 323x | 35x | offsets counted, and the subject scanned, from its start at every match |
+| `pr-str` of a vector | 235x | 63x | the same StringBuilder |
+| `filterv even?` | 215x | 154x | `integer?`'s instance? checks built strings |
+
+Also found on the way: `instance?` with a class literal is now the
+builtin (the JVM's InstanceOfExpr), and regex `replace` and `split`
+were quadratic too. Every row is now linear in its input; what is left
+is the constant factor, spread thin: records still cost 1.6 us to make
+(eval_new looks the type up by name), a sort comparison is a Clojure
+call from Fortran (a nested run, about 0.5 us), and the flat executor
+itself. The median ratio of the thirty is about 50x; `fib` is 8x.
+
 ## Decisions that still hold
 
 **The value type has no `FINAL`.** Copying a `cons_value` (nine
