@@ -7,12 +7,10 @@
 (require '[clojure.string :as str] '[babashka.process :as p])
 (load-file (str (.getParentFile (.getAbsoluteFile (clojure.java.io/file *file*))) "/names.clj"))
 
-(def covered
-  ;; what has been cleared so far; the rest joins as it is
-  #"^(src|test/f|examples|packages|scripts)/|^test/clj/(?!clojuredocs/)|^(Makefile|clotran|deps.edn)$")
+(def covered #".")
 
 (def skip #"^(upstream/|docs/|src/c/icu/)")
-(def word #"(?i)java|jvm|clojure\.lang")
+(def word #"(?i)java(?!script)|jvm|clojure\.lang")
 
 (def root (.getParentFile (.getParentFile (.getAbsoluteFile (clojure.java.io/file *file*)))))
 (def files (->> (file-seq root)

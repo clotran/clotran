@@ -131,19 +131,19 @@ manager, because the library changes, moves or disappears under them.
    (DEVIATIONS 33), applied when the package is built. The patch is the
    whole port: it is reviewed on its own, it can be sent upstream, and
    rule 4 still holds for the file it applies to. `:clj` is never
-   claimed in its place -- that branch is the JVM. Nothing under
+   claimed in its place -- that branch is clj. Nothing under
    `src/clj/clojure/**` is ever patched this way.
 
 ## The package manager: `clotran-deps` (designed 2026-09-29)
 
-**The split, as the JVM and tools.deps have it.** clotran itself knows
-one thing: a list of source roots, `CLOTRAN_PATH` (as the JVM knows
+**The split, as clj and tools.deps have it.** clotran itself knows
+one thing: a list of source roots, `CLOTRAN_PATH` (as clj knows
 `-cp`), searched after its own `src/clj` for `name.cljf`, `.cljc`, `.clj`
 (DEVIATIONS 33). Everything else -- reading a project's file, fetching
 what it names, pinning it, walking its dependencies' own files, working
 out the path -- is a separate program in its own repository,
 `~/jborden/clotran-deps`, written in Clojure and run BY clotran, as
-tools.deps is run by the JVM.
+tools.deps is run by clj.
 
 **The project file is `deps.edn`, the same file, with the same keys:**
 
@@ -167,8 +167,8 @@ dependencies at all.
   pinned), `:git/tag` optional and checked against it. Checked out once
   into `~/.cache/clotran/gitlibs/<lib>/<sha>`, never modified after.
 - `:mvn/version` -- refused, naming the library, unless it is one of
-  the three provided above: a jar is JVM bytecode. A project that needs
-  one on the JVM and something else here says so with an alias.
+  the three provided above: a jar is clj bytecode. A project that needs
+  one in clj and something else here says so with an alias.
 - A native package (a Fortran or C library with a manifest, above) is a
   dependency like any other whose `deps.edn` says how to build it
   (`:build` -- a recipe run on the target, rule 3); later.

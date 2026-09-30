@@ -48,14 +48,14 @@ real macro without changing how it's used once macros exist.
 
 ## Real namespaces, not a flat global env -- and eventually real .cljc
 
-James wants Clojure's actual namespace system (`clojure.lang.Namespace`),
+James wants Clojure's actual namespace system (`Namespace`),
 not mal's single flat global env, built properly rather than deferred:
 it's genuinely one of Clojure's better ideas, and it's what will let
 this project cleanly separate "our own Fortran-native primitives" from
 "ported Clojure library code" from "user code" -- three different
 namespaces, not one bag of symbols. The longer-term idea this unlocks:
 real Clojure library source (`.cljc` files, which are meant to be
-portable across JVM/JS/etc. already) could eventually be loaded more
+portable across clj/JS/etc. already) could eventually be loaded more
 or less as-is against this implementation, once enough of the language
 exists underneath it, rather than reimplementing library code by hand.
 This is why native builtins live in a namespace literally named
@@ -72,7 +72,7 @@ worth being honest about):
    (`#?(:clj ... :cljs ...)`). That last one matters most for the
    "pull `.cljc` directly" goal: this needs its own feature key
    (something like `:cljf`) rather than pretending to be `:clj`, since
-   real JVM-specific branches won't run here anyway.
+   real clj-specific branches won't run here anyway.
 2. **Macros (step8) plus a self-hosted core.** Most of what makes
    `.clj` source look like `.clj` -- `defn`, `defmacro`, `cond`,
    `->`/`->>`, destructuring in `let`/`fn` args, multi-arity fns --
@@ -288,7 +288,7 @@ one was failing -- which is where most of the remaining failures were
 concentrated, since everything those files define (`defprotocol`,
 `deftype`, and all of `print-method`'s methods) went missing with them.
 
-`(load "core_print")` reaches the host as `(clojure.lang.RT/load
+`(load "core_print")` reaches the host as `(RT/load
 "clojure/core_print")`: core.clj's own `load` builds a classpath-
 relative path out of `root-directory` and strips the leading slash.
 There is no classpath here, so `RT/load` maps that straight to a file
@@ -336,11 +336,11 @@ where it belonged rather than papered over:
 ## Multimethod dispatch over host types: the hierarchy is declared, not reflected
 
 core_print.clj dispatches `print-method` on *interfaces* --
-`clojure.lang.ISeq`, `java.util.Map`, `Object` -- and leans on
+`ISeq`, `Map`, `Object` -- and leans on
 `prefer-method` to break ties. Exact-match dispatch can do none of
 that, so multimethods needed the rest of their semantics.
 
-What the JVM gets from `Class.isAssignableFrom` has to come from
+What clj gets from `Class.isAssignableFrom` has to come from
 somewhere else here, and the cheap answer turned out to be the right
 one: **class names are keywords** (a bare class name in source
 evaluates to the keyword of the same name), so the relationships
@@ -356,23 +356,23 @@ else every method key the dispatch value `isa?`, with `dominates`
 error rather than an arbitrary choice. `dominates` falling back to
 `isa?` is what keeps a catch-all `Object` method from making every
 dispatch ambiguous. `prefers` recurses through `(parents x)` and
-`(parents y)`, same as MultiFn.java: core_print.clj prefers `ISeq` over
-`java.util.Collection` and never mentions `java.util.List`, yet a list
-matches both the `ISeq` method and the `java.util.List` one, and the
+`(parents y)`, same as MultiFn: core_print.clj prefers `ISeq` over
+`Collection` and never mentions `List`, yet a list
+matches both the `ISeq` method and the `List` one, and the
 preference only reaches the latter through `List`'s parent
 `Collection`.
 
 Two smaller decisions fell out of this:
 
-- **`java.lang` is the implicit package**, so `Double` and
-  `java.lang.Double` are one class -- and core_print.clj really does
+- **clj's implicit package is the implicit package**, so `Double` and
+  `Double` are one class -- and core_print.clj really does
   use both spellings, sometimes for the same type. As keywords those
   would be different dispatch values, so one spelling wins: the bare
   one (`class_keyword_name` strips the prefix), since it is what the
   source mostly writes and what reads best out of `(class x)`.
 - **Any unresolved class-shaped name evaluates to its own keyword**,
-  not just `clojure.lang.*` as before -- `Object`, `java.util.Map`,
-  `Throwable`. The test is Java's own naming convention (dotted, or
+  not just clj's runtime classes as before -- `Object`, `Map`,
+  `Throwable`. The test is clj's own naming convention (dotted, or
   leading capital), the same one syntax-quote uses. The cost is that a
   mistyped capitalized symbol reads as a keyword instead of erroring;
   the alternative is failing every host-class reference in core.clj.
@@ -461,7 +461,7 @@ others. Language semantics are judged by Clojure's own assertions; the
 hand-written checks in `test/f/*_test.f90` belong to the *host* -- the
 collector, native arrays, the Fortran gotchas catalog -- which upstream
 cannot test. PLAN.md step 2 is the plan to DERIVE a language suite from
-this tree rather than run all 67 files against a JVM-shaped
+this tree rather than run all 67 files against a clj-shaped
 denominator.
 
 **A Fortran gotcha worth its own line**: `.and.` does not short-circuit.
@@ -520,7 +520,7 @@ Two Fortran gotchas for the catalog:
 ## Concurrency: the direction, and what already blocks it
 
 Recorded here because the intent changed. Earlier notes said the
-concurrency model would be "Rust-inspired, not a JVM-thread port";
+concurrency model would be "Rust-inspired, not a clj-thread port";
 the decision is now **Clojure's own model** -- immutable values,
 explicit mutable references (atoms, refs, agents), and STM for
 coordinated change. The reason is that Clojure's model is built on
@@ -570,7 +570,7 @@ not from the armchair.
 **Two things that will not come free:**
 
 - **core.async.** The `go` macro is a CPS/state-machine transform that
-  depends on `tools.analyzer`, and the impl namespaces use Java
+  depends on `tools.analyzer`, and the impl namespaces use clj
   executors and locks. The macro layer is portable in principle, the
   runtime under it is not, and `go` is among the hairiest macros in the
   ecosystem. The blocking operations (`chan`, `>!!`, `<!!`, `thread`)
@@ -605,7 +605,7 @@ something that is not a map, and `print-meta` skipped it because
 
 Normalising it immediately woke up code that had never run: `defn`'s
 `resolve-tag` (core.clj:243) inspects `(:tag m)` and, finding one for
-the first time, called `clojure.lang.Compiler$HostExpr/maybeSpecialTag`
+the first time, called `Compiler$HostExpr/maybeSpecialTag`
 and `maybeClass`. Both are answered nil by the host --
 there are no classes here, so `defn` leaves the tag exactly as written,
 which is right, since a type hint is advisory. Bootstrap failures went
@@ -1379,7 +1379,7 @@ absence for a 1-in-6 bug.
 
       So host.clj holds ONLY what core.clj cannot supply: the type
       predicates. Real Clojure asks `instance?` about
-      `java.lang.String` and `clojure.lang.PersistentVector`; clotran
+      `String` and `PersistentVector`; clotran
       has neither, so the host answers with `clotran-type` and the
       predicates are written over it. Three macros (`defn`, `fn`,
       `let`) come with them only because the predicates cannot be
@@ -1655,7 +1655,7 @@ to change to make `(deftype Point [x y] ...)` work, four were bugs that
 had been in the tree the whole time, invisible because nothing had ever
 asked the question.
 
-**A type is not a class.** Clojure generates a JVM class; ClojureScript
+**A type is not a class.** Clojure generates a clj class; ClojureScript
 generates a JavaScript constructor; both host compilers have a case for
 `deftype*` (cited in SEAMS.md). clotran generates nothing. A type is an
 object holding a name, its field names, a map from method-name keyword
@@ -1671,7 +1671,7 @@ a type, and `find-protocol-impl` asks it first:
 A list of names answers that. A hierarchy would let us answer it for
 names nobody declared, and nothing needs that yet.
 
-**Method bodies see fields as plain names.** On the JVM they are real
+**Method bodies see fields as plain names.** In clj they are real
 fields on a real class, so `(area [this] (* w h))` compiles to field
 loads. Here the clause is rewritten at definition time to
 
@@ -1757,8 +1757,8 @@ splices that symbol in verbatim.
 **What it did not move.** Neither scorecard. Clojure's own suite went
 653 -> 655 passing assertions, and the 14 libraries that load are the
 same 14: the three vendored libs that use `deftype` or `reify`
-(`core/reducers`, `reflect/java`, `pprint/pretty_writer`) each fail on
-something else first -- `clojure.lang.Delay`, a `0x0001` literal, and
+(`core/reducers`, `reflect/clj`, `pprint/pretty_writer`) each fail on
+something else first -- `Delay`, a `0x0001` literal, and
 `PersistentStructMap`. What moved is core.clj, 691 -> 707 forms, and
 the fact that `deftype` and `reify` exist at all. `defrecord` still does
 not: it expands through `letfn`, so it waits on `letfn*`.
@@ -1766,7 +1766,7 @@ not: it expands through `letfn`, so it waits on `letfn*`.
 ## `letfn*`, and the four bugs that stood between a record and working
 
 `letfn*` itself is `let*` with one difference: every name is in scope in
-every init, so the functions can call each other. Compiler.java's
+every init, so the functions can call each other. Compiler's
 LetFnExpr calls that "pre-seed env (like Lisp labels)" -- it registers
 all the locals before analysing any init. Here that is one frame, seeded
 with every name bound to nil, and each init evaluated in that same frame
@@ -1807,7 +1807,7 @@ the gotchas list, learned again.
 
 The replacement compares by TEXT for strings, symbols and keywords
 rather than by pool slot, because clotran does not intern text while the
-JVM interns those three. Ref equality made `(identical? :a :a)` false,
+clj interns those three. Ref equality made `(identical? :a :a)` false,
 and a record's equiv compares `(identical? (class this) (class other))`
 -- exactly two keywords of the same name.
 
@@ -1819,16 +1819,16 @@ therefore lost the class it was calling, which is how defrecord's
 `map->Name` factory came out as `(create m)`.
 
 **Multimethod dispatch did not know a deftype's declared interfaces.**
-`print-method` has a method on `clojure.lang.IRecord`; a record
+`print-method` has a method on `IRecord`; a record
 dispatches as `:clojure.core.P`; nothing connected the two. So dispatch
-fell to `:default`, which asks `(instance? clojure.lang.IObj o)` -- which
+fell to `:default`, which asks `(instance? IObj o)` -- which
 a record IS, since IObj is in its `:implements` -- and re-entered
 `print-method` on the same object. `host_super` now reads a type's own
 interface list, and the walk is 24 deep rather than 4, because a record
 declares a dozen where a built-in type declares two.
 
 **Record constructors have three arities,** and the rule is stated
-exactly in Compiler.java: trailing fields named `__meta`, `__extmap`,
+exactly in Compiler: trailing fields named `__meta`, `__extmap`,
 `__hash` or `__hasheq` are counted into `altCtorDrops`, and when that is
 non-zero the class gets one ctor dropping all of them and one dropping
 the last two. The omitted fields are filled ACONST_NULL, ACONST_NULL,
@@ -1980,7 +1980,7 @@ and the form succeeds.
 **Form 711 was `ArrayBlockingQueue`, and `Delay` behind it.** A delay is
 a new object kind -- thunk, cached value, forced flag -- because
 `delay` in core.clj is literally
-`(new clojure.lang.Delay (fn [] body))`, and OBJ_LAZY could not stand in
+`(new Delay (fn [] body))`, and OBJ_LAZY could not stand in
 for it: that caches a first and a rest and its forcing expects a seq.
 The queue is a mutable box holding a vector, capacity accepted and
 ignored, because a bound exists to make a producer wait and nothing here
@@ -2125,7 +2125,7 @@ would have claimed they were the same thing. SEAMS asked for
 this is the first thing in it.
 
 Clojure's own `aget`/`alength` over these are deliberately NOT done:
-they route through `clojure.lang.RT/alength` and `Reflector/prepRet`,
+they route through `RT/alength` and `Reflector/prepRet`,
 which is compatibility rather than interop, and a different job.
 
 **The check that matters** is `28e` in `eval_test`: allocate an
@@ -2255,7 +2255,7 @@ had not renamed. Each had been latent for the life of the project.
 ## dgemm: the premise, tested
 
 The project's claim is that hosting Clojure ON Fortran makes calling a
-Fortran library an ordinary call, where bridging from the JVM makes it
+Fortran library an ordinary call, where bridging from clj makes it
 a descriptor to fabricate and a copy to pay for. Until 2026-09-19 no
 Fortran library had been called at all. `fortran/dgemm` is the first.
 
@@ -2410,23 +2410,23 @@ charge-consistency and atom-type checks are two small functions.
 
 **What did not need doing.** No clotran bug was hit. The one addition
 to the host is `clotran-slurp`, since core.clj's `slurp` is written
-over `java.io`.
+over `clj's io`.
 
-## The JVM surface, as data
+## Clj surface, as data
 
 `static_member` was 550 lines of `if (cls == ...) ... case (mname)`,
 `instance_member` 300 more, and `is_host_class` a third list of class
 names that had to agree with the first by hand. It did not always:
 `Ratio` was a host class with no members, `Boolean/TYPE` worked only
 through the run-time keyword path because `Boolean` was not in the
-list, and `Integer/TYPE` and `java.lang.Integer/TYPE` evaluated to
+list, and `Integer/TYPE` and `Integer/TYPE` evaluated to
 two different keywords depending on which spelling a file used.
 
 Now `src/f/hosttable.inc` holds a `parameter` array of rows -- class,
 member, builtin id (or a constant kind and its value), print name --
 and the three functions are lookups over it. The class list IS the
 set of classes with rows. A name is canonicalised once (`host_canon`:
-`java.lang.` prefixed onto a bare name, the five short names the
+clj's implicit package prefixed onto a bare name, the five short names the
 libs import mapped), so both spellings land on one row.
 
 The audit that decides what is a row is `scripts/audit-host`. The
@@ -2448,7 +2448,7 @@ has shown it in a profile.
 
 `#?` came in as a request to make `.cljc` libraries portable to
 clotran, and the design question was only what the nothing-case is.
-LispReader.java returns the reader itself as a sentinel when no
+LispReader returns the reader itself as a sentinel when no
 branch matches, and every collection loop skips it -- the same trick
 `#_` uses. This reader already treats `#_` as "another kind of space"
 in `skip_ignorables`, so a conditional could not go there (it may
@@ -2460,15 +2460,15 @@ levels -- checks and clears them. Any other caller (`'`, `^`, `@`)
 requires exactly one form and fails through `cond_leaked`.
 
 Unselected branches are read under `suppress_read`, which is where
-`*suppress-read*` lives on the JVM: a `#js {}` in a `:cljs` branch is
+`*suppress-read*` lives in clj: a `#js {}` in a `:cljs` branch is
 read past instead of failing on the tag. That was the difference
 between "reads .cljc" and "reads the .cljc files people actually
 write".
 
 The feature is `:cljf`, matching the extension, the way `:cljs`
 matches `.cljs` and `:cljr` matches `.cljr`. `:clj` is not claimed:
-it means the JVM, and a `:clj` branch that reaches for
-`java.util.concurrent` is exactly the one clotran must not take.
+it means clj, and a `:clj` branch that reaches for
+clj's collection library is exactly the one clotran must not take.
 `classpath_find` looks for `.cljf`, `.cljc`, `.clj` in that order; the
 reasoning is in DEVIATIONS 33.
 
@@ -2476,14 +2476,14 @@ reasoning is in DEVIATIONS 33.
 
 (A class was a KEYWORD when this was written; it is its own kind since
 2026-09-21, and the section below reads `:String` for what is now
-`java.lang.String`. The argument it records is unchanged.)
+`String`. The argument it records is unchanged.)
 
 The open question was whether `(class x)` should answer the type tag
 (`:string`) or the thing a class literal evaluates to (`:String`).
 core.clj decided it: `(condp = (class x) String ...)` in pprint,
 `(defmethod print-method String ...)`, `(extend-type String ...)` all
 compare `class` against the literal, and they only work if the two are
-the same value. So `class_name_of` maps each tag to the JVM class the
+the same value. So `class_name_of` maps each tag to clj class the
 literal names, the tag went behind `clotran-type` where host.clj reads
 it, and `host_super` is keyed by those names. There is no class
 SYSTEM in this: 25 lines of table, and Fortran has no classes to
@@ -2493,8 +2493,8 @@ we run core.clj unmodified.
 Two bugs came out from under it, both of the same shape: a name
 written SHORT under an import. `(ExceptionInfo. ...)` in core.clj gave
 an error whose class printed as `:ExceptionInfo`, unequal to the
-literal `clojure.lang.ExceptionInfo`; and pprint's pretty writer,
-`(proxy [Writer IDeref PrettyFlush] ...)` under `(import [clojure.lang
+literal `ExceptionInfo`; and pprint's pretty writer,
+`(proxy [Writer IDeref PrettyFlush] ...)` under `(import [clj's runtime
 IDeref])`, was not an `IDeref`, so `deref` handed the proxy back
 instead of its fields, and `(alter @*out* assoc ...)` then wrote a map
 into the proxy's TYPE slot. That last one presented as a run-time
@@ -2521,7 +2521,7 @@ each on a host contract the pretty writer assumed:
    replaceFirst.
 3. `(newline)` is `(.append *out* ...)`, and the pretty writer is a
    `(proxy [Writer IDeref PrettyFlush] ...)` that defines `write` and
-   not `append`. On the JVM `Writer.append` is a concrete method of
+   not `append`. In clj `Writer.append` is a concrete method of
    the superclass that calls `write`, so the proxy inherits it. Here
    an unknown member on an instance fell through to the host native,
    `clotran-append`, which knows StringBuilders and Fortran units and
@@ -2538,7 +2538,7 @@ each on a host contract the pretty writer assumed:
 Each was a silent wrong answer before it was an error, which is the
 order CLAUDE.md warns about. The oracle now holds six `with-out-str`
 pprint cases against `clj`; the seventh, a 12-entry map, was dropped
-because a JVM hash map iterates in its own order and the text cannot
+because a clj hash map iterates in its own order and the text cannot
 be compared, only the values.
 
 ## The executor is a loop
@@ -2565,7 +2565,7 @@ as a restart point, which runs its body again in the same locals.
 The call stack the debugger sees is deliberately NOT the continuation
 stack. A tail call reuses the kframe but pushes the callee onto the
 call stack and leaves the caller there (`nfr` counts what the frame
-owes on exit), so a trace names every call the way the JVM's does,
+owes on exit), so a trace names every call the way clj's does,
 and a tail-recursive function without `recur` overflows at the frame
 limit rather than looping in constant space. Being faithful to
 Clojure won over free tail calls; `recur` is the loop.
@@ -2608,7 +2608,7 @@ defined everywhere and what Math.addExact's own source does too.
 `scripts/bench` runs the same forms through a warmed `clj` and
 through clotran and prints the ratio, because James was right that
 "two orders slower" was a guess: it is two to four, and the biggest
-gap, `(reduce + (range n))` at 8,800x, is the JVM's specialised
+gap, `(reduce + (range n))` at 8,800x, is clj's specialised
 range reduce against our seq walk, not the interpreter alone.
 
 What the profile says is next, in order: every call builds its
@@ -2649,7 +2649,7 @@ is structural: a malloc per raw vector (`allocate(items(n))` in
 frame itself, and 79 node evaluations, which is what interpreting
 core.clj's seq-reduce loop costs with no inlining. A slab under
 `gc_vec` and a native reduce over native ranges and vectors (which is
-what LongRange.reduce and PersistentVector.reduce are on the JVM)
+what LongRange.reduce and PersistentVector.reduce are in clj)
 are the next two constant factors; past them the gap is the JIT's.
 
 ## The slab, and the 101 slots every frame carried
@@ -2703,14 +2703,14 @@ core.clj gives 129 definitions `:inline` metadata -- `+`, `-`, `<`,
 forms to a replacement form, with `:inline-arities` saying which
 counts it covers. Compiler.analyzeSeq applies it right after
 macroexpansion (`isInline`): `(+ a b)` never calls `+`, it becomes
-`(. clojure.lang.Numbers (add a b))` at compile time. clotran ran
+`(. Numbers (add a b))` at compile time. clotran ran
 every one of those as a closure call: frame, call stack entry, a
 second call from the body to the static native.
 
 `inline_fn` in analyze.inc is `isInline`: resolve the head to a Var,
 read `:inline` and `:inline-arities` from its metadata (the metadata
 is evaluated at def time, so the fns are real), apply the predicate
-to the argument count -- a set, `#{2}`, is callable, as on the JVM
+to the argument count -- a set, `#{2}`, is callable, as in clj
 -- and if it passes, apply the inline fn to the argument forms and
 analyse what comes back. The static call it produces resolves to the
 native at analysis (analyze_dot), so the arithmetic in a loop is one
@@ -2720,19 +2720,19 @@ node. `preserveTag` is skipped: a :tag is a hint nothing here reads.
 94x -> 58x, plain recursion 69x -> 44x, the map-building reduce
 115x -> 100x. `(reduce + (range n))` stayed near 4,600x, because its
 cost is `first`, `next` and the range cell per element, not the add:
-that is where the JVM runs LongRange.reduce in Java, and where a
+that is where clj runs LongRange.reduce in clj, and where a
 native reduce over native ranges and vectors is the faithful next
 step.
 
-## reduce is host code on the JVM too
+## reduce is host code in clj too
 
 `(reduce + (range n))` stayed at 4,600x after everything else because
 none of it was arithmetic: per element, core.clj's seq-reduce called
 `first`, `next` and `reduced?` as Clojure functions and the range
-cell was realised into a lazy cons. On the JVM `(range n)` is a
+cell was realised into a lazy cons. In clj `(range n)` is a
 LongRange, which implements IReduceInit, and `reduce` opens with
-`(if (instance? clojure.lang.IReduceInit coll) (.reduce coll f val)
-...)` -- a Java loop over longs, no seq at all. PersistentVector and
+`(if (instance? IReduceInit coll) (.reduce coll f val)
+...)` -- a clj loop over longs, no seq at all. PersistentVector and
 PersistentList reduce the same way. So a native `.reduce` is not a
 shortcut around Clojure; it is where Clojure itself puts the loop.
 
@@ -2740,7 +2740,7 @@ shortcut around Clojure; it is where Clojure itself puts the loop.
 by its arithmetic without allocating a cell, a vector by index, a
 list by cells; a range that was partly realised continues from its
 pending tail. A reduced value stops it and is unwrapped, as
-Java's does. `instance?` answers IReduceInit for exactly those three,
+clj's does. `instance?` answers IReduceInit for exactly those three,
 a realised range cell now carries the mark that says it is one, and
 `(class (range 3))` is LongRange. Nineteen oracle cases pin the
 values against clj, reduced-early ones included.
@@ -2776,7 +2776,7 @@ global root; nothing reads anything out of it.
 -> 26x. What is left in the loop is the interpretation itself --
 k_push and k_finish per node, the frame reads -- and in `into` over
 a lazy seq it is the seq: `map` makes a lazy cell, a thunk closure
-and a cons per element where the JVM's chunked seqs do 32 at a time
+and a cons per element where clj's chunked seqs do 32 at a time
 through a chunk buffer. Chunked seqs are the next faithful step for
 pipelines; `sort` at 616x is a comparator call per comparison.
 
@@ -2787,7 +2787,7 @@ chunked branch: ask `chunked-seq?`, take 32 elements through a chunk
 buffer, and hand back `(chunk-cons (chunk b) (recur-on (chunk-rest
 s)))`. Without the host types behind it that branch is dead and every
 element costs a lazy cell, a thunk closure and a cons -- which is why
-`into` over a mapped range was 1,000x the JVM when everything else had
+`into` over a mapped range was 1,000x clj when everything else had
 come down to 30x.
 
 The host side is four kinds and six members: OBJ_CHUNK (a window
@@ -2805,12 +2805,12 @@ whatever the thunk returned into the lazy cell's head and tail slots.
 A ChunkedCons split that way is a plain cons: `chunked-seq?` on it is
 false, so the next stage of the pipeline took the one-at-a-time
 branch and chunking never propagated past the first collection. On
-the JVM `LazySeq.seq()` returns the realised seq ITSELF -- it
+clj `LazySeq.seq()` returns the realised seq ITSELF -- it
 delegates rather than wrapping -- so a lazy seq over a ChunkedCons IS
 a ChunkedCons to everything downstream. LAZY_DELEG is that: slot 2
 holds the realised seq and `to_seq` answers it.
 
-Measured, against a warmed JVM: `(count (into [] (map inc (range
+Measured, against a warmed clj: `(count (into [] (map inc (range
 100000))))` 1,014x -> 514x, `(sort (map ...))` 616x -> 332x, plain
 recursion 32x -> 23x. The derived suite did NOT move -- 2170 pass,
 235 fail, 370 error, exactly as before -- because what chunking
@@ -2867,7 +2867,7 @@ were unreachable, while the call stack named `outer` in the trace
 either way. Now the callee's body is pushed rather than swapped in.
 It costs about 5% on call-heavy benchmarks and some value-stack
 memory per pending call, and it is also what Clojure does: there is
-no tail-call elimination on the JVM, so the caller's frame is
+no tail-call elimination in clj, so the caller's frame is
 genuinely still there.
 
 `CLOTRAN_KEEP_LOCALS=1` turns the locals-clearing pass off, so a frame
@@ -2992,7 +2992,7 @@ PLAN.md's decision: a thread is an evaluator context, and the kinds
 of thread are impls of one protocol. This is the primitive and the
 first impl, `:green`: a TASK is a closure run in a context of its
 own, on the one OS thread, and core.clj's `future`, `promise`,
-`pmap`, `pcalls`, `pvalues` and `deref` run verbatim over the Java
+`pmap`, `pcalls`, `pvalues` and `deref` run verbatim over clj
 objects they expect. `Agent/soloExecutor.submit` answers a task; a
 task answers `.get`, `.isDone`, `.isCancelled`, `.cancel`; a
 `CountDownLatch` was already an atom holding its count, and `.await`
@@ -3087,8 +3087,8 @@ Not here: `:process`, which is the reason the contract has `-takes`.
 
 "Let's just finish out the language." The language suite's errors
 were counted by message: 200 of sequences' 222 were one missing
-member on sorted sets, 61 were `clojure.lang.Volatile`, 28 were
-`RT/chunkIteratorSeq`, 9 were `java.util.ArrayList`. This is the
+member on sorted sets, 61 were `Volatile`, 28 were
+`RT/chunkIteratorSeq`, 9 were `ArrayList`. This is the
 three small ones.
 
 `Volatile` is a new box kind, `OBJ_VOLATILE`: `deref` reads it,
@@ -3118,7 +3118,7 @@ Why not Fortran: a lazy seq over an iterator needs a thunk that
 closes over the iterator, and the host cannot make a closure; the
 transducer's reducing function likewise closes over its buffer. In
 Clojure both are one `fn`. The premise holds: core.clj is untouched,
-and it reaches these by the JVM names it always used.
+and it reaches these by clj names it always used.
 
 ## Sorted collections: the array map, in order
 
@@ -3139,7 +3139,7 @@ Ordering may run a Clojure fn -- `sorted-map-by` -- and Assoc.f90
 cannot call Eval, so it goes through a comparer procedure pointer Eval
 installs, as the printer's forcer is installed: `compare_via` applies
 the map's comparator, or Clojure's `compare` when it has none, and
-throws ClassCastException for keys `compare` cannot order, as the JVM
+throws ClassCastException for keys `compare` cannot order, as clj
 does. A comparer that failed answers `huge(0)` and the search stops;
 the value it would have produced is discarded with the error.
 
@@ -3204,7 +3204,7 @@ was nil, and `(= ::b :user/b)` was false. core.clj uses `::` nine
 times and every use compares a `::x` to another `::x`, so nothing
 broke; the first thing that asked the keyword what it was named was
 the multimethods suite's "Cyclic derivation: ::child has ::ancestor-1
-as ancestor". LispReader.java resolves at READ time through
+as ancestor". LispReader resolves at READ time through
 `Compiler.currentNS` and `namespaceFor` -- the current namespace for
 `::x`, the alias -- an alias only, `lookupAlias`, so `::clojure.core/y`
 is an invalid token even there -- for `::a/x`, and "Invalid token" for
@@ -3213,7 +3213,7 @@ evaluator installs a resolver the way it installs the sorted map's
 comparer (`gcr_set_ns_resolver`, `kw_ns_of`). One
 consequence worth knowing: a `::alias/x` is read when its FORM is
 read, so the `require` that makes the alias has to be an earlier
-top-level form, exactly as on the JVM -- a `(do (require ..) ::a/x)`
+top-level form, exactly as in clj -- a `(do (require ..) ::a/x)`
 is an invalid token there too.
 
 **A host failure was a map.** `fail` threw `{:error "message"}`, so
@@ -3224,7 +3224,7 @@ error the host raised. `error_value` now builds the same OBJ_ERR that
 fact of class hierarchy after ArityException's: `RuntimeException`
 catches every runtime class clotran throws (`is_runtime_class` lists
 them), and nothing else -- `(catch RuntimeException e ..)` does not
-take an `Exception.` someone threw, as on the JVM.
+take an `Exception.` someone threw, as in clj.
 
 The rest were the suite's own findings, each checked against `clj`
 before it became an oracle case:
@@ -3254,7 +3254,7 @@ before it became an oracle case:
   clotran.rt's `kvreduce-of`: index and element, stopping at a
   reduced value.
 - **Callable things.** A keyword called with no argument or with
-  three is `ArityException` with the JVM's count and its `(> 20)`;
+  three is `ArityException` with clj's count and its `(> 20)`;
   a symbol is callable, the same lookup as a keyword's;
   `createAsIfByAssoc` merges a trailing map, which is what `(f :a 1
   {:b 2})` with `& {:keys ..}` means since 1.11.
@@ -3278,23 +3278,23 @@ The suite's next failures were three things Clojure keeps and clotran
 had flattened away.
 
 **A map entry was a plain vector.** `(first {1 2})` IS a vector on the
-JVM too -- `MapEntry` extends `APersistentVector` -- but it is also a
+clj too -- `MapEntry` extends `APersistentVector` -- but it is also a
 `Map$Entry`, and `clojure.walk` tells the two apart: `postwalk` rebuilds
 a vector it is handed and leaves an entry alone, so a walker that turned
 vectors into lists turned every map into `{nil nil}`. The mark lives in
 a slot the vector never uses (slot 5; the trie root is slot 1 and `i2`
 is the shift), set where entries are built -- the seq of a map, `find`,
 a sorted map's seq, `MapEntry/create` -- and read by `map-entry?`
-through `instance?` on `java.util.Map$Entry`. `conj` and `assoc` on an
+through `instance?` on `Map$Entry`. `conj` and `assoc` on an
 entry build a fresh vector, so the mark falls off exactly where the
-JVM's type does; `=` never looked at the slot, so `(= [1 2] (first {1
+clj's type does; `=` never looked at the slot, so `(= [1 2] (first {1
 2}))` stays true. `class` still says PersistentVector: changing it would
 change protocol dispatch on entries, and nothing asked for that.
 
 **A Var's root and its binding were one slot.** `push-thread-bindings`
 saved the value and overwrote it, so `with-redefs` inside a `binding` of
 the same Var replaced the binding, and `def` under a binding did too;
-the JVM's `bindRoot`, `alterRoot` and `DefExpr` all write the root
+clj's `bindRoot`, `alterRoot` and `DefExpr` all write the root
 while a binding keeps showing its own value. The first binding of a Var
 now parks the root in slot 5 and `i2` counts the bindings; `bindRoot`,
 `alter-var-root`, `def` and `intern` write slot 5 while that count is
@@ -3332,11 +3332,11 @@ oracle case:
   into one bucket, and makes the merged test the int hash itself. Both
   rows pointed at clotran's `hash`, so `(case 1 1 :long
   -9223372034707292159 :big :else)` -- the suite's own collision --
-  answered `:else`. `java_hashcode` is `Long.hashCode` for every
+  answered `:else`. `hash_code` is `Long.hashCode` for every
   integer (Clojure's are all longs there), `Double.hashCode`,
   `String.hashCode`, 1231 and 1237; `.hashCode` and `Util/hash` reach
   it, and `case_branch` hashes the value the same way. A merged
-  bucket's key is the hash of its hash, which the JVM's boxed Integer
+  bucket's key is the hash of its hash, which clj's boxed Integer
   makes the same number and a negative long does not, so `case_branch`
   probes that second key on a miss and lets skip-check say it was a
   merge.
@@ -3355,9 +3355,9 @@ oracle case:
   namespace, `alias` to one nobody made succeeded, and `require`'s
   "namespace not found after loading" could never fire. It is
   `Namespace.find` now; `create-ns` has `findOrCreate` to itself,
-  `remove-ns` exists, and a skipped JVM-only lib (DEVIATIONS 12) leaves
+  `remove-ns` exists, and a skipped host-bound lib (DEVIATIONS 12) leaves
   an empty namespace behind so that `require` of it still succeeds --
-  core.clj's own `(require '[clojure.java.io :as jio])` is form 645.
+  core.clj's own `(require '[clotran.files :as jio])` is form 645.
 - **`find` answers the map's own key**, metadata and all, as
   `MapEntry(key, val)` does; it answered the lookup key.
 - **A record's `conj`, `with-meta` and `meta` are its own methods.**
@@ -3366,7 +3366,7 @@ oracle case:
   and `meta` are what the defrecord expansion wrote, so they are called.
   And a deftype is an instance of what its interfaces EXTEND:
   `IPersistentMap` is an `IPersistentCollection`, `Counted`, `Seqable`
-  and a `java.util.Map`, which is what `coll?`, `counted?`, `seqable?`
+  and a `Map`, which is what `coll?`, `counted?`, `seqable?`
   and `clojure.walk` ask (`iface_extends`); `seqable?` itself is
   `RT.canSeq`, which had no row.
 - **Math edges:** `pow` of 1 or -1 to an infinite power is NaN,
@@ -3410,14 +3410,14 @@ extends (`iface_supers`, which `getInterfaces` also answers, so
 `parents` and `bases` of an interface are not empty). Two things came
 out of walking that: `Throwable`'s chain named itself, so `supers` of an
 exception went round forever and printing one never returned; and where
-two of print-dup's methods each dominate the other, the JVM's answer is
+two of print-dup's methods each dominate the other, clj's answer is
 whichever its table yields last -- clotran takes the more specific by
-`isa?`, which is the JVM's answer for a map and is recorded in
+`isa?`, which is clj's answer for a map and is recorded in
 DEVIATIONS 8's closing note.
 
 **Two things the suite found on the way.** The interface table has to
-be DIRECT, as `clojure.lang` declares it: a transitive list that gave
-`IPersistentVector` a `java.util.List` parent let print-method's
+be DIRECT, as `clj's runtime` declares it: a transitive list that gave
+`IPersistentVector` a `List` parent let print-method's
 RandomAccess method -- preferred to List -- dominate the vector's own,
 and `print-str` of a vector answered `#object[..]`; `supers` takes the
 closure itself. And syntax-quote qualified `clojure.core` as
@@ -3429,17 +3429,17 @@ syntax-quote, asked `require` for a namespace nobody had, and with
 
 ## The table pruned to what the language asks for
 
-James's reading of the position, 2026-09-21: the JVM and JS are
+James's reading of the position, 2026-09-21: clj and JS are
 implementation details of Clojure; clotran reproduces the language that
-is pure Clojure and owes the JVM nothing beyond what core.clj itself
+is pure Clojure and owes clj nothing beyond what core.clj itself
 reaches for. Two days of suite-driven work had drifted from that --
-rows added because a test named a JVM member, and a model of Java's
+rows added because a test named a clj member, and a model of clj's
 interface inheritance built so that `core_print.clj` could run
 verbatim.
 
 The first correction is the table. `scripts/audit-host` justified a row
 by anything under `src/clj` or the tests; now only `src/clj` and the
-examples count -- a test naming a JVM member is not the language asking
+examples count -- a test naming a clj member is not the language asking
 for it -- and it reports every row nothing justifies. It printed 78.
 Twenty-three of those the runtime reaches in ways a static read cannot
 see: `cast` calls `(. c (cast x))` with the class in a variable,
@@ -3452,43 +3452,43 @@ oracle answer. The other 53 went: the `Float`, `Byte` and `Short`
 constants and comparators, `Double/compare`, `.hashCode`,
 `Boolean/TRUE`, `Thread/sleep`, `RT/print`, `Numbers/equal`, and the
 rest of the list. 477 rows became 424. Sleeping is a clotran facility
-now, `clotran.thread/sleep`, on the same host call the JVM name used to
+now, `clotran.thread/sleep`, on the same host call clj name used to
 reach; the oracle cases that existed only to exercise the removed rows
 went with them. And `hosttable.inc` was not a dependency of `Eval.o`
 in the Makefile, so an edit to the table did not rebuild -- the gate's
 `make clean` had always hidden that; it is one now.
 
 The second correction, next: `core_print.clj` and `data.clj` dispatch
-on `java.util.Map`, `Collection`, `List`, `RandomAccess` and `Set`, and
+on `Map`, `Collection`, `List`, `RandomAccess` and `Set`, and
 ClojureScript's answer to those two files is its own versions. So is
-clotran's, and the Java interface model that ran them verbatim goes
+clotran's, and clj interface model that ran them verbatim goes
 with the change.
 
 ## core_print and data are clotran's own, as ClojureScript's are
 
 The second correction from the 21st. `core_print.clj` is Clojure written
-against `java.util`: `print-method` and `print-dup` keyed on `Map`,
+against clj's collection library: `print-method` and `print-dup` keyed on `Map`,
 `Collection`, `List`, `RandomAccess` and `Set`, with preferences among
 them, and `data.clj` extends `EqualityPartition` and `Diff` to three of
-those. Running them verbatim is what put Java's interface inheritance
+those. Running them verbatim is what put clj's interface inheritance
 into Fortran: a `Class` that is a keyword, `isAssignableFrom`,
-`getInterfaces`, a table of what `java.util.List` extends, and
-`java.util` entries in every supertype chain. Two files, one model.
+`getInterfaces`, a table of what `List` extends, and
+clj's collection library entries in every supertype chain. Two files, one model.
 
 ClojureScript never ran them: its printing is on `IPrintWithWriter` in
 core.cljs and it ships `data.cljs`. So `src/clj/clotran/core_print.cljf`
-and `data.cljf` are Rich's files with the JVM keys taken out (a script
+and `data.cljf` are Rich's files with host keys taken out (a script
 did the taking, and the header of each says what went), and `B_RTLOAD`
 loads them when core.clj says `(load "core_print")` and when `require`
 asks for `clojure.data`. The vendored files stay in the tree, unread,
 as `core_proxy.clj` does; PROVENANCE.md says so.
 
-With that, the supertype chains are `clojure.lang` only -- what
+With that, the supertype chains are `clj's runtime` only -- what
 cljs.core's types also declare -- and the interface table is the
-`clojure.lang` graph. The `java.util.Map` and `Map$Entry` instance
+`clj's runtime` graph. The `Map` and `Map$Entry` instance
 checks stay, because `reducers.clj` and `map-entry?` ask them; they are
-the seam, and they cost no model. What the JVM's class machinery still
-does here is `isa?` over `clojure.lang` interfaces for multimethods,
+the seam, and they cost no model. What clj's class machinery still
+does here is `isa?` over `clj's runtime` interfaces for multimethods,
 which is the language's own type hierarchy and cljs has it too.
 
 ## apply hands the rest over unrealised
@@ -3528,11 +3528,11 @@ against real Clojure form by form, plus the language test for the one
 part Clojure has no answer to compare with.
 
 The implementation is `dec_round` and `dec_div_mc` in BigDec.f90 --
-Java's eight RoundingModes, decided from the first dropped digit, a
+clj's eight RoundingModes, decided from the first dropped digit, a
 sticky bit for everything after it, the sign, and the last kept digit
-for HALF_EVEN's tie. `java.math.MathContext` is a map of `:precision`
+for HALF_EVEN's tie. `MathContext` is a map of `:precision`
 and `:rounding` (the shape MethodImplCache already uses), and
-`java.math.RoundingMode`'s constants are the keywords of their own
+`RoundingMode`'s constants are the keywords of their own
 names, so Rich's macro runs as written.
 
 Division under a context tries the EXACT quotient first and only
@@ -3560,7 +3560,7 @@ own transducer tests:
     (= (transduce (dedupe) conj [1 1.0 1.0M 1N]) [1 1.0 1.0M 1N])
 
 `dedupe` drops a value equal to the one before it, and all four of
-those survive on the JVM because no two of them are `=`. Reading `1.0M`
+those survive in clj because no two of them are `=`. Reading `1.0M`
 as a double made the third element equal to the second and the vector
 came back one short. There was no way to pass it without the type.
 
@@ -3579,11 +3579,11 @@ expansion", which is what BigDecimal.divide does with no MathContext.
 `with-precision` is where that MathContext would come from and is the
 piece still missing (DEVIATIONS 30).
 
-Printing is Java's `toString`, scientific notation included: plain
+Printing is clj's `toString`, scientific notation included: plain
 while the scale is not negative and the adjusted exponent is at least
 -6, so `0.001M` prints plainly and `1E-7M` does not. The two rules are
 worth having exactly, because a decimal that prints differently from
-the JVM's is a decimal nobody can check against it.
+clj's is a decimal nobody can check against it.
 
 The two `print-method` methods for BigDecimal came back into
 `clotran/core_print.cljf` with the type. They had been taken out on the
@@ -3594,13 +3594,13 @@ grounds that clotran never produces one, which was true until now.
 A class was a KEYWORD for a long time, and it worked: `(= (class x)
 String)` held because the literal and the answer were the same
 keyword. What it cost was everything printed -- `:Long` where Clojure
-says `java.lang.Long` -- and `(class (class 1))` answering
-`clojure.lang.Keyword`.
+says `Long` -- and `(class (class 1))` answering
+`Keyword`.
 
 A class is now `GCT_CLASS`, its canonical name in the string pool: the
 same shape as a BigInt, so the collector, equality and hashing needed
 one case each. The spelling rule moved with it. `class_key` used to
-STRIP `java.lang` (`Long`, `String`) so that a class value would match
+STRIP clj's implicit package (`Long`, `String`) so that a class value would match
 the way a program writes the literal; now it keeps the canonical name
 in full, and the shortening happens where a NAME is matched instead --
 `is_instance` and `host_super` shorten on the way in, because their
@@ -3608,7 +3608,7 @@ tables are written the way a Clojure program writes a class.
 
 Three things broke on the way, and each says something:
 
-- **Every number printed as `#object[java.lang.Long ...]`.**
+- **Every number printed as `#object[Long ...]`.**
   `print-method` has a method on `Number`, and dispatch reaches it
   through `host_super`, whose supertype table is keyed by the SHORT
   name. With full names nothing matched, `Object` won, and
@@ -3621,7 +3621,7 @@ Three things broke on the way, and each says something:
   compare there by text too.
 - **`clojure.string/replace` stopped working.** Its dispatch asks
   `(instance? CharSequence match)`, and `CharSequence` canonicalises
-  to `java.lang.CharSequence`, which was not one of the names
+  to `CharSequence`, which was not one of the names
   `is_instance` listed. Shortening at the top of `is_instance` fixed
   that class of bug once rather than one label at a time.
 
@@ -3630,7 +3630,7 @@ failure, which is `1.0M` and belongs to BigDecimal.
 
 ## BigInt is decimal text, and the hash bug it uncovered
 
-`clojure.lang.BigInt` is a type in the LANGUAGE -- ClojureScript has
+`BigInt` is a type in the LANGUAGE -- ClojureScript has
 one, `1N` reads as one, and `+'` has nowhere to promote into without
 it -- so it is reproduced rather than approximated. `src/f/BigInt.f90`
 is the arithmetic: add, subtract, multiply, truncating divmod and
@@ -3666,7 +3666,7 @@ undefined in Fortran -- and gfortran folded it at compile time for a
 constant tag and computed it at run time for a variable one, with
 different answers. Every mixing step in `GC.f90` now multiplies in 64
 bits and wraps explicitly (`wrap32`). The hashes changed value; they
-were never the JVM's (DEVIATIONS 15) and nothing reads them but the
+were never clj's (DEVIATIONS 15) and nothing reads them but the
 maps themselves.
 
 ## #:ns{...} and what the launcher binds
@@ -3753,7 +3753,7 @@ widening. ICU's character predicates and simple case maps stand behind
 case folds, eight one-line wrappers at the end of `regex_shim.c`.
 
 Two things are recorded rather than matched: ICU's `\w` and `(?i)` are
-Unicode where java.util.regex's are ASCII by default (DEVIATIONS 14),
+Unicode where clj's regex's are ASCII by default (DEVIATIONS 14),
 and a code point off the BMP is one character here and a surrogate
 pair there (DEVIATIONS 41).
 
@@ -3761,7 +3761,7 @@ pair there (DEVIATIONS 41).
 
 Twenty-six of the derived suite's failures were `thrown-with-cause-msg?
 Exception #"did not conform to spec"` around `(eval '(fn "a" a))`,
-`(let [:a 1] a)` and the like. On the JVM those messages come from
+`(let [:a 1] a)` and the like. In clj those messages come from
 clojure.spec.alpha, a separate library the Compiler loads lazily and
 consults before every macro expansion (`Compiler.checkSpecs`, called
 from `macroexpand1` right after `isMacro`). So spec.alpha 0.6.249 and
@@ -3798,12 +3798,12 @@ none of them about spec:
   are all `IFn`; `instance?` said only functions were. `Fn` is still
   functions only, so `fn?` is unchanged.
 
-Also `(clojure.lang.MapEntry. k v)` (spec's `tagged-ret`) and
-`java.util.UUID/randomUUID`, which spec uses only as a unique tag for
+Also `(MapEntry. k v)` (spec's `tagged-ret`) and
+`UUID/randomUUID`, which spec uses only as a unique tag for
 `or`, `alt` and `rep` specs: a fresh string is what it needs and what
 the row answers.
 
-The cost is real and it is the JVM's cost too: spec's own load is
+The cost is real and it is clj's cost too: spec's own load is
 about 1.6 seconds here, and conforming every `fn`, `let`, `defn` and
 `ns` through the interpreter roughly triples the language test's time
 (2.7s to 9.1s). `CLOTRAN_SPEC_SKIP_MACROS=1` turns the checks off, as
@@ -3943,7 +3943,7 @@ vars `*1 *2 *3 *e`, the protocols `Inst`, `IKVReduce` and `Eduction`,
 the private helpers (`spread`, `chunk-append`, `chunk-buffer`,
 `mk-bound-fn`, `some-vals`), the namespace forms `import` and
 `refer-clojure`, `bases` (whose answer is our own class hierarchy, not
-the JVM's), and `inst-ms`, which has nothing to take an instant from
+clj's), and `inst-ms`, which has nothing to take an instant from
 (DEVIATIONS 46).
 
 `int-array` and `object-array` sat in that gap, and both were broken --
@@ -3968,7 +3968,7 @@ Two more came out of the same sweep afterwards: `munge` was wired to
 `identity`, so `(munge "a-b")` answered `"a-b"`; and `reset-meta!` on
 an atom wrote a slot `meta` never read, because `type_name` had no
 case for `OBJ_ATOM` and an atom therefore answered no to
-`(instance? clojure.lang.IMeta x)`. The dead `t == "atom"` branches in
+`(instance? IMeta x)`. The dead `t == "atom"` branches in
 `is_instance` had been sitting there waiting for a name nothing
 produced.
 

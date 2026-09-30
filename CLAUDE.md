@@ -2,7 +2,7 @@
 
 Clojure, hosted on Fortran. It runs Rich Hickey's actual `clojure/core.clj`,
 with one mechanical change: every class is written in clotran's name
-(`upstream/derive`). The Fortran is the HOST, standing where the JVM
+(`upstream/derive`). The Fortran is the HOST, standing where clj's host
 stands; the language comes from Clojure's own source.
 
 That premise decides most arguments. When clotran and Clojure disagree,
@@ -11,7 +11,7 @@ clotran is wrong until proven otherwise.
 ## Do not trust memory. Use the oracles.
 
 Claims get cited to these rather than recalled. The rule exists because a
-deviation once traced back to a misremembered Java detail, and because "I
+deviation once traced back to a misremembered detail of clj's host, and because "I
 think Clojure does X" has been wrong here more than once.
 
 Note which tool answers which question: `clj` decides language behaviour,
@@ -24,14 +24,14 @@ correctness oracle. `make crosscheck` builds and tests under both and
 they must agree. This is the gate: it runs before every commit, and a
 red crosscheck means nothing gets staged.
 
-**`clj` -- the LANGUAGE oracle.** Real JVM Clojure, and startup is ~0.7s,
+**`clj` -- the LANGUAGE oracle.** Real Clojure, and startup is ~0.7s,
 so there is no excuse for not running it. To find out what Clojure does
 with a form, run it:
 
     clj -M -e '(pr-str `x)'
 
 This is the authority. `deps.edn` pins it to the vendored release, so
-it IS the implementation `~/jborden/clojure` is the source of, so it cannot disagree with the Java the way a
+it IS the implementation `~/jborden/clojure` is the source of, so it cannot disagree with its own source the way a
 reimplementation can.
 
 **babashka (`bb`) -- the SCRIPTING language.** All file rewriting, source
@@ -91,19 +91,19 @@ the values either way.
 **`~/jborden/clojure`** -- a clone of `clojure/clojure` pinned to
 the `clojure-1.12.6` tag (`31a3138a`), the SAME release as the vendored
 `core.clj` and the one `clj` runs. Cite file and
-method. Reading the Java of one version while running the core.clj of
+method. Reading the source of one version while running the core.clj of
 another is the same mistake as citing memory, and it nearly happened:
 the clone was first taken three hunks newer than what we run.
 
 **`~/jborden/clojurescript`** -- pinned to the `r1.12.145` release. A second
 implementation of the same language on a completely different host. Not
-a porting source: it is how we tell which parts of `clojure.lang.*` are
-the LANGUAGE and which are JVM artifacts. If ClojureScript writes
+a porting source: it is how we tell which parts of clj's runtime are
+the LANGUAGE and which are artifacts of its host. If ClojureScript writes
 something in Clojure, it is not host-bound and our putting it in Fortran
 is a choice we should be able to justify. If ClojureScript cannot write
 it in Clojure either, it is a real seam. And if ClojureScript does not
 have it at all -- `re-matcher`, `re-groups` -- it was never Clojure, it
-was Java showing through. `SEAMS.md` carries the argument.
+was the host showing through. `SEAMS.md` carries the argument.
 
 ## Never edit vendored source
 
@@ -112,7 +112,8 @@ was Java showing through. `SEAMS.md` carries the argument.
 are GENERATED from `upstream/` by `upstream/derive`, which writes each
 class in clotran's name by `upstream/class-names.edn` -- edit the
 renaming and re-run it, never the output (`make test` checks the two
-agree). No JVM name appears anywhere else: `upstream/` is the only place
+agree). No name of clj's host appears anywhere else
+(`upstream/check-names` enforces it): `upstream/` is the only place
 that knows them, and `scripts/oracle` reads its table to talk to clj.
 If clotran cannot load a derived file, that is clotran's bug -- the
 whole point is that these files run as Clojure wrote them.
@@ -159,7 +160,7 @@ it up.
   This is how "the wall is form 656" became "5 forms fail and 63 behind
   them already work".
 - `scripts/audit-host` -- every host class and member the loaded
-  Clojure mentions. `src/f/hosttable.inc` is the JVM surface as data;
+  Clojure mentions. `src/f/hosttable.inc` is the host surface as data;
   a member the audit does not find has no business being a row.
 - `scripts/run-clojure-tests` -- Clojure's own suite, one namespace per
   run so a hard failure cannot hide the others.
@@ -170,7 +171,7 @@ it up.
   When you make something work, add the form there, not a hand-typed
   check: 14 of the 477 hand-typed expectations turned out to be
   clotran's answer, not Clojure's.
-- `scripts/bench` -- the same forms timed on a warmed JVM (`clj`) and on
+- `scripts/bench` -- the same forms timed on a warmed `clj` and on
   clotran, with the ratio. Speed claims cite this, not a feeling.
 - `make crosscheck` -- the gate.
 

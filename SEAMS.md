@@ -23,7 +23,7 @@ Two implementations of one language, counted:
 |                          | core.clj | core.cljs |
 |--------------------------|---------:|----------:|
 | lines                    |    8,371 |    13,193 |
-| host references          |      578 `clojure.lang.*` + 115 `java.*` | 208 `js/` |
+| host references          |      578 clj's runtime classes + 115 clj's host library | 208 `js/` |
 | ...of which are throws   |        - | 131 `js/Error` |
 | distinct host classes    |       81 |       ~20 |
 | `deftype`                |        1 |        87 |
@@ -39,10 +39,10 @@ the ratio does not mean what it looks like.)
 
 The extra five thousand lines are `PersistentVector`, `PersistentHashMap`,
 `BitmapIndexedNode`, `Subvec`, `ChunkedSeq`, `LazySeq`, `MultiFn`, `Atom`,
-`Var`, `Namespace`, `Range` -- written *in Clojure*, as deftypes. On the JVM
-those are Java files that core.clj merely calls.
+`Var`, `Namespace`, `Range` -- written *in Clojure*, as deftypes. In clj
+those are clj files that core.clj merely calls.
 
-So `clojure.lang.*` is not the host boundary. It is the runtime, and which
+So clj's runtime classes is not the host boundary. It is the runtime, and which
 language the runtime is written in is an implementation decision, not a
 semantic one. ClojureScript proves this by having made the decision
 differently.
@@ -67,8 +67,8 @@ underneath everything else that runs.
 
 ClojureScript can afford to put the line very high because its host compiles
 what is above it. We interpret what is above it, so our line has to sit much
-lower. This is the same tradeoff Rich made in the other direction: JVM
-Clojure keeps `PersistentVector` in Java precisely because bytecode beats
+lower. This is the same tradeoff Rich made in the other direction: clj
+Clojure keeps `PersistentVector` in clj precisely because bytecode beats
 anything he could have written in Clojure-on-Clojure.
 
 We have no bytecode. In that specific sense we are closer to ClojureScript
@@ -105,9 +105,9 @@ Sockets (2026-09-29) are the first of these built the way the vocabulary
 section below argues for: a C shim for what differs between POSIX and
 Winsock (`src/c/socket_shim.c`), `Socket.f90` over it, and clotran's own
 namespaces on top -- `clotran.io` readers, `clotran.net`, `clotran.server`
--- naming no Java. cljs.core has no socket server either; its REPLs are
-the host's. JVM names survive only where vendored Clojure writes them
-(`java.io.StringReader.` in core.clj's `with-in-str`), as a mapping onto
+-- naming no clj. cljs.core has no socket server either; its REPLs are
+the host's. clj names survive only where vendored Clojure writes them
+(`StringReader.` in core.clj's `with-in-str`), as a mapping onto
 clotran's type (DEVIATIONS 65).
 
 ### B. Native by choice -- cljs writes these in Clojure, we write them in Fortran
@@ -132,8 +132,8 @@ ClojureScript writes in Clojure what we write in Fortran.
 
 It is not. Those 87 are `deftype` the MACRO, and the macro expands to
 `deftype*` the SPECIAL FORM, which neither implementation writes in
-Clojure. Clojure interns it as a special form -- `Compiler.java:67`,
-`Symbol.intern("deftype*")`, parsed at `Compiler.java:8516` under the
+Clojure. Clojure interns it as a special form -- `Compiler:67`,
+`Symbol.intern("deftype*")`, parsed at `Compiler:8516` under the
 comment `(deftype* tagname classname [fields] :implements [interfaces]
 :tag tagname methods*)`. ClojureScript lists it among its specials at
 `analyzer.cljc:1509` and parses it at `analyzer.cljc:3678`,
@@ -158,7 +158,7 @@ Everything built on A and B: the seq library, destructuring, the macros,
 `reduce` / `into` / `mapv` / `sort`, and `re-seq` / `re-find` / `re-matches`.
 Each of these we do *not* write is a place we cannot be subtly wrong.
 
-### D. JVM leakage -- API shape that exists only because Java
+### D. clj leakage -- API shape that exists only because clj
 
 Reproduced faithfully because core.clj calls it, but not part of the
 language. The detector is simple: if ClojureScript does not have it, it was
@@ -167,9 +167,9 @@ never Clojure.
 Worked example -- `re-matcher` and `re-groups` occur **zero times** in all of
 ClojureScript. Its entire regex API is four functions and 21 lines, and
 `re-find` is single-arity. Clojure's `re-find` takes a second arity whose
-argument is a stateful `java.util.regex.Matcher`. That statefulness is why we
+argument is a stateful `Matcher`. That statefulness is why we
 carry `OBJ_MATCHER` at all, and it is the sole cause of the bounded
-per-Matcher buffer leak in DEVIATIONS 14. We pay that cost for Java's API
+per-Matcher buffer leak in DEVIATIONS 14. We pay that cost for clj's API
 shape, not for Clojure's semantics.
 
 The iterator pieces are bucket B done the other way: `RT/iter`,
@@ -178,7 +178,7 @@ The iterator pieces are bucket B done the other way: `RT/iter`,
 name, ClojureScript writes every one of them in Clojure, and so
 `src/clj/clotran/rt.cljf` does here: a host-table row whose id is
 `B_RTFN` calls the var of that name in `clotran.rt`, loaded on first
-use. The JVM member is the seam; the code behind it is the language's.
+use. Clj member is the seam; the code behind it is the language's.
 `Eduction` itself needs none of this: core.clj's own `(deftype Eduction
 ..)` at 8016 runs as written, its `iterator` reaching
 `TransformerIterator/create` through the row above (a copy in
@@ -187,13 +187,13 @@ use. The JVM member is the seam; the code behind it is the language's.
 
 `future`, `promise`, `pmap` and `Thread/sleep` are the other worked
 example, and the larger one: ClojureScript has none of them -- no
-threads in a browser -- so by the detector they are Java showing
+threads in a browser -- so by the detector they are clj showing
 through. core.clj writes them against `Agent/soloExecutor.submit`, a
 `Future`'s `get`/`isDone`/`cancel`, a `CountDownLatch` and
 `TimeUnit`. We supply exactly those objects (tasks.inc) and the
 definitions run verbatim, which is the premise; what is ours is the
-thread underneath them, a context (PLAN.md), not a JVM thread. The
-seam is the Java object surface; the primitive behind it is the
+thread underneath them, a context (PLAN.md), not a clj thread. The
+seam is clj object surface; the primitive behind it is the
 language's to define, and ClojureScript's silence says so.
 
 ---
@@ -204,9 +204,9 @@ Not a porting source. Three uses:
 
 1. **The interface spec.** core.cljs declares 59 protocols -- `ISeq`,
    `IIndexed`, `ILookup`, `IReduce`, `IChunkedSeq`, `IDrop`, `IKVReduce`,
-   `IEditableCollection` and the rest -- in Clojure, in one file. On the JVM
-   the same information is scattered across Java interfaces you reverse
-   engineer out of `RT.java`. This is the shape our bucket-B Fortran owes.
+   `IEditableCollection` and the rest -- in Clojure, in one file. In clj
+   the same information is scattered across clj interfaces you reverse
+   engineer out of `RT`. This is the shape our bucket-B Fortran owes.
 
 2. **A host-boundness test.** If cljs writes it in Clojure, it is bucket B,
    not bucket A, and our putting it in Fortran is a choice we should be able
@@ -228,17 +228,17 @@ Not a porting source. Three uses:
 ## The big one: Clojure compiles, clotran interprets
 
 Worth stating plainly because it is easy to get backwards: **Clojure is not
-an interpreted language.** There is no interpreter in Clojure-on-JVM. Every
+an interpreted language.** There is no interpreter in Clojure-on-clj. Every
 form, including one typed at a REPL prompt, goes
 
-    read -> Compiler.analyze -> emit JVM bytecode -> load class -> invoke
+    read -> Compiler.analyze -> emit clj bytecode -> load class -> invoke
 
 `Compiler.eval` does exactly that and nothing else. ClojureScript is a
 compiler too, to JavaScript, and `cljs.analyzer` is 5,185 lines of Clojure
 doing the same job.
 
 clotran is a tree-walking interpreter. It is the odd one out, and that is
-the deepest seam in the project -- deeper than Fortran-versus-JVM, because
+the deepest seam in the project -- deeper than Fortran-versus-clj, because
 it changes *when* things are known, not just what they are written in.
 
 ### What that costs, concretely
@@ -251,7 +251,7 @@ Both real implementations resolve names **lexically, at analysis time**:
 | ClojureScript | `cljs.analyzer/resolve-var` | `env`, carrying `:ns` and `:requires` |
 | clotran | `gce_eval`, at call time | whatever `*ns*` happens to be |
 
-So `` `(temp/do-template ...) `` inside `clojure.test` is, on the JVM,
+So `` `(temp/do-template ...) `` inside `clojure.test` is, in clj,
 already `clojure.template/do-template` by the time anything runs -- the
 alias was consumed while reading, in the namespace that wrote it. clotran
 still has the bare `temp/` at call time, in a namespace that never heard of
@@ -286,10 +286,10 @@ asking at the wrong time.**
 
 ---
 
-## The vocabulary problem: we speak Java, and we are not the JVM
+## The vocabulary problem: we speak clj, and we are not clj
 
-Counted in `src/f`: **59 distinct `clojure.lang.*` names and 29 distinct
-`java.*` names**, as string literals in Fortran. `is_host_class` is a
+Counted in `src/f`: **59 distinct clj's runtime classes names and 29 distinct
+clj's host library names**, as string literals in Fortran. `is_host_class` is a
 list of them. `static_member` dispatches on them. `is_instance` is a
 table keyed by them. `host_super` maps clotran's own type keywords TO
 them.
@@ -297,42 +297,42 @@ them.
 ClojureScript is the control group, and it is unambiguous. core.cljs
 names its host types **131 times as `js/Error`, 8 as `js/Number`, 7 as
 `js/Date`, 6 as `js/RegExp`** -- its own host. It contains
-`clojure.lang.` exactly three times: twice in a COMMENT ("a la
-clojure.lang.APersistentMap") and once in `(.type js/Java
-"java.lang.System")`, which is a GraalVM call explicitly reaching into
-Java as a FOREIGN host.
+clj's runtime classes exactly three times: twice in a COMMENT ("a la
+APersistentMap") and once in `(.type js/clj
+"System")`, which is a GraalVM call explicitly reaching into
+clj as a FOREIGN host.
 
 So naming your host's types is not the problem -- every implementation
 does it. Naming *somebody else's* host is. clotran is Fortran, and it
-answers to `java.lang.Double`.
+answers to `Double`.
 
 ### The distinction that keeps this honest
 
 Not all 88 are the same thing, and the fix is different for each:
 
 **Names we must READ.** `core.clj` literally contains
-`(Double/valueOf s)`, `(clojure.lang.Util/hash x)`,
-`(clojure.lang.RT/seq coll)`. Running that file unmodified is the
+`(Double/valueOf s)`, `(Util/hash x)`,
+`(RT/seq coll)`. Running that file unmodified is the
 premise of the project, so recognising those strings is FORCED. This is
 not a wart; it is the interop surface, and it is the same surface
-`(.type js/Java "java.lang.System")` is for ClojureScript. Keep it, and
+`(.type js/clj "System")` is for ClojureScript. Keep it, and
 keep it in ONE place rather than scattered across a dozen `select case`
 blocks.
 
 **Names we WRITE.** Everything else, and this is the part that is a
 choice we got wrong:
 
-- `test/f` asserts them **27 times** -- `(instance? java.util.regex.Pattern p)`,
-  `(clojure.lang.Util/hash x)`. Those tests are asserting that a
-  JVM-shaped shim exists, not that clotran hashes or matches correctly.
+- `test/f` asserts them **27 times** -- `(instance? Pattern p)`,
+  `(Util/hash x)`. Those tests are asserting that a
+  clj-shaped shim exists, not that clotran hashes or matches correctly.
   They should assert clotran's own vocabulary and would then keep
-  passing if every Java name were renamed tomorrow.
-- `host_super` answers `clojure.lang.IPersistentVector` for a vector
-  so a multimethod registered on the Java name dispatches, and `class`
-  itself answers `clojure.lang.PersistentVector` (DEVIATIONS 34).
+  passing if every clj name were renamed tomorrow.
+- `host_super` answers `IPersistentVector` for a vector
+  so a multimethod registered in clj name dispatches, and `class`
+  itself answers `PersistentVector` (DEVIATIONS 34).
   Necessary at the boundary, but it means clotran's INTERNAL dispatch
-  graph is spelled in Java.
-- `instance?` accepts only Java names. `(instance? Regex p)` is not a
+  graph is spelled in clj.
+- `instance?` accepts only clj names. `(instance? Regex p)` is not a
   thing anyone can write, even though `regex` is exactly what
   `clotran-type` answers.
 
@@ -353,10 +353,10 @@ one has to look it up:
 | --- | --- | --- |
 | `clotran.*` | our own type, our own vocabulary | `clotran.vector`, `clotran.regex`, `clotran.delay` |
 | `fortran.*` | a REAL host thing -- an actual Fortran object crossing an actual boundary | `fortran.array`, a `dgemm` binding |
-| `java.*`, `clojure.lang.*` | READ-ONLY compatibility, present only because `core.clj` writes it | `java.lang.Double`, `clojure.lang.Util` |
+| clj's host library, clj's runtime classes | READ-ONLY compatibility, present only because `core.clj` writes it | `Double`, `Util` |
 
 The point is not tidiness. Today a reader cannot tell, from
-`clojure.lang.PersistentVector` appearing in `Eval.f90`, whether that
+`PersistentVector` appearing in `Eval.f90`, whether that
 is a seam we are obliged to have or a habit we picked up. Under this
 scheme they are distinguishable by sight, and `fortran.*` is the only
 one that describes THIS host.
@@ -391,16 +391,16 @@ handed to `dgemm`. Borrowing Clojure's names would have said they were
 the same thing.
 
 Clojure's own `aget`/`alength` remain unimplemented over these, which is
-a separate decision: those route through `clojure.lang.RT/alength` and
+a separate decision: those route through `RT/alength` and
 `Reflector/prepRet`, and making them work is compatibility, not
 interop. Worth 23 errors in Clojure's suite -- `RT/alength` (14) and
 `RT/seqToTypedArray` (9) -- and not the same job as this.
 
 ### The rule this suggests
 
-Java names are a vocabulary clotran must READ, never one it should
+clj names are a vocabulary clotran must READ, never one it should
 WRITE. A test, an error message, a dispatch table or a type answer
-that says `java.lang.Double` is describing a host we are not -- and
+that says `Double` is describing a host we are not -- and
 `fortran.*` is the prefix that describes the one we ARE, which now has
 native arrays in it and should collect everything else that genuinely
 crosses into Fortran.

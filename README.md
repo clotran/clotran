@@ -6,7 +6,7 @@ It runs Rich Hickey's actual `clojure/core.clj`, vendored from
 `clojure/clojure` at the `clojure-1.12.6` release, with every class
 written in clotran's name -- a mechanical rewrite, `upstream/derive`. Not a Clojure-like
 language implemented in Fortran: the Fortran is the *host*, standing
-where the JVM stands, and the language comes from Clojure's own source.
+where clj stands, and the language comes from Clojure's own source.
 
 ```
 $ make && ./clotran
@@ -60,20 +60,20 @@ clotran does not implement those, core.clj does.
 `template`, `zip`, `stacktrace`, `test`, `inspector`, `reflect`,
 `parallel`, `pprint`, `math`, `core.protocols` and `core.reducers`.
 Loaded means a var of theirs RESOLVES afterwards, not merely that
-`require` returned without complaint: `clojure.java.io` is clotran's
+`require` returned without complaint: `clotran.files` is clotran's
 own (DEVIATIONS 40), and `clojure.uuid` was once skipped by name so that
 requiring it succeeded and defined nothing -- counting that as a load
 is how this number was once too high. (`uuid` runs verbatim now, on a
-`java.util.UUID` clotran.rt defines under that name.) The eight that fail -- `repl`, `main`, `instant`,
-`xml`, `java.shell`, `java.browse`, `core.server`, `process` -- each
-want a JVM class (`Thread`, `Socket`, `SimpleDateFormat`, a SAX
+`UUID` clotran.rt defines under that name.) The eight that fail -- `repl`, `main`, `instant`,
+`xml`, `clj's shell`, `clj's browse`, `core.server`, `process` -- each
+want a clj class (`Thread`, `Socket`, `SimpleDateFormat`, a SAX
 parser).
 
 `clojure.test` running means Clojure's own tests run. The suite
 clotran is measured by is DERIVED from them: `upstream/derive-tests`
 keeps every `deftest` whose symbols lie in the intersection of
 `clojure.core` and `cljs.core` -- the language, as two implementations
-agree on it -- and leaves out the ones that name a Java class, a
+agree on it -- and leaves out the ones that name a clj class, a
 member call or a `clojure.core` function ClojureScript never had.
 That keeps 314 of 578 tests, in 39 files that all load. **2170
 passing assertions** against 235 failures and 370 errors, so **78% of
@@ -82,11 +82,11 @@ the assertions that executed** (measured 2026-09-19).
 That denominator is assertions that executed, not assertions that
 exist: a test that errors part-way contributes only what ran. The 67
 vendored namespaces also run verbatim, for reference, at 53% of
-executed assertions; the JVM-shaped half of them is why that number is
+executed assertions; clj-shaped half of them is why that number is
 not the one to watch.
 
 **Real Fortran arrays**, which is the one thing this host has that the
-JVM does not:
+clj does not:
 
 ```clojure
 (alias (quote f) (quote fortran))
@@ -172,7 +172,7 @@ character.
 `fortran` namespace and is looked for first. `.cljc` is portable
 Clojure; clotran reads its `#?` branches with the feature `:cljf`
 (and `:default`), so porting a `.cljc` library is adding a `:cljf`
-branch beside each `:clj` one. `.clj` is JVM Clojure, which clotran
+branch beside each `:clj` one. `.clj` is clj, which clotran
 loads as written -- that being the point. `require` looks for the
 three in that order.
 
@@ -187,7 +187,7 @@ is `(2 3)`, and `(into (sorted-set) (range 20 0 -1))` counts up.
 `iterator-seq`, `volatile!`, `shuffle` and the transducers that buffer
 (`partition-all`, `partition-by`) are core.clj's own definitions, which
 name `RT/iter`, `RT/chunkIteratorSeq`, `TransformerIterator`,
-`java.util.ArrayList` and `Eduction`. ClojureScript writes those in
+`ArrayList` and `Eduction`. ClojureScript writes those in
 Clojure, so clotran does too: `src/clj/clotran/rt.cljf` holds them,
 the host table's rows for those members call its vars, and the file
 loads the first time one is reached. `Volatile` is a box the host
@@ -197,19 +197,19 @@ supplies. Verified: `(sequence (comp (take 3) (map inc)) (range))` is
 
 Clojure's OWN array functions run over the same representation -- not
 reimplemented, the definitions in `core.clj`, which are written against
-`java.lang.reflect.Array` and `clojure.lang.RT`:
+`Array` and `RT`:
 
 ```clojure
-(def m (make-array Integer/TYPE 2 3))
+(def m (make-array clotran.host.int4/TYPE 2 3))
 (aset-int m 1 2 22)
 (aget m 1 2)                          ;=> 22
 (alength m)                           ;=> 2   ; the OUTER length
 (alength (aget m 1))                  ;=> 3   ; a row is an array
 ```
 
-A Java `[[I` is two separate row objects; ours is one rank-2 block, so
+A clj `[[I` is two separate row objects; ours is one rank-2 block, so
 `(aget m 1)` hands back a strided VIEW over the same buffer -- writing
-through it is visible in the parent, as it is on the JVM. The cost is
+through it is visible in the parent, as it is in clj. The cost is
 that rows cannot differ in length; the gain is that the whole thing is
 one contiguous column-major block a BLAS routine can take, which `[[I`
 cannot be at any price. `DEVIATIONS.md` 24 and 25 carry both.
@@ -270,7 +270,7 @@ user=> :nobody-delivered
 
 There is one OS thread, so this is concurrency without parallelism;
 what it buys is that pipeline code reads as straight-line Clojure.
-DEVIATIONS 38 lists what differs from a JVM thread.
+DEVIATIONS 38 lists what differs from a clj thread.
 
 **A thread is a contract, and green is its default.** `clotran.thread`
 is the protocol a kind of thread implements -- `spawn`, `join`,
@@ -293,7 +293,7 @@ user=> :done
 ```
 
 Four oracles keep it honest: gfortran and flang must agree
-(`make crosscheck`), `clj` -- real JVM Clojure --
+(`make crosscheck`), `clj` -- real clj --
 answers what Clojure actually does rather than what anyone remembers,
 and pinned clones of Clojure and ClojureScript are cited rather than
 recalled. See `CLAUDE.md`.
@@ -319,7 +319,7 @@ functions in place of the interpreted ones. No hints needed:
     wrote stats.dylib
 
 `(stats/total (double-array (range 200000)))` takes 558 ms
-interpreted and 0.199 ms compiled; a warmed JVM takes 0.192 ms with a
+interpreted and 0.199 ms compiled; a warmed clj takes 0.192 ms with a
 `^doubles` hint and 526 ms without one. What the compiler declines --
 here a variadic function -- stays interpreted and says why. Edit the
 source and the library is reported stale and not used until it is
@@ -389,15 +389,15 @@ design.
 
 | | |
 |---|---|
-| speed | measured by `scripts/bench`, the same forms on a warmed JVM and on clotran: a function call ~1.3 µs, a loop/recur iteration ~1.7 µs, a reduce step over a range ~1.3 µs. Against the JVM that is 23x on plain recursion, 39x on a reduce building a map, 40x on fib, 120x on loop/recur, 454x on `(reduce + (range n))` and 514x on `into` over a mapped range. Between one and a half and two and a half orders of magnitude, an AST interpreter's honest number; PLAN.md step 8 has the JIT decision |
+| speed | measured by `scripts/bench`, the same forms on a warmed clj and on clotran: a function call ~1.3 µs, a loop/recur iteration ~1.7 µs, a reduce step over a range ~1.3 µs. Against clj that is 23x on plain recursion, 39x on a reduce building a map, 40x on fib, 120x on loop/recur, 454x on `(reduce + (range n))` and 514x on `into` over a mapped range. Between one and a half and two and a half orders of magnitude, an AST interpreter's honest number; PLAN.md step 8 has the JIT decision |
 | startup | 0.2 s from the image, and on a terminal the REPL opens by naming the build -- clotran's `VERSION`, the Clojure and ClojureScript commits the language is pinned to (`test/clj/derived/PROVENANCE.md`, written by the deriver), the compiler, the machine and the image's hash; a pipe gets no banner: `build/core.image` is the heap as it stood once core.clj and spec had loaded (`make image`, built with the binary), read back in place of loading them; from source, 1.4 s. An image belongs to one build of the binary and to the sources it holds, and is left alone with a note when either has changed; `CLOTRAN_IMAGE=0` loads from source |
 | memory | 125 MB after starting from the image (196 MB after loading core.clj from source), and a walk over a lazy seq stays there: `last`, `nth`, `count` and `dorun` over 10^6 elements of a range, an `iterate` or a mapped seq run at the baseline (PLAN.md step 16: the collector ages survivors before promoting them, and a builtin lets go of its arguments before it walks); the baseline is the heap core.clj and spec leave behind |
 | debugger | steps count calls, not lines, since a call is the event the executor has; one level, so a break inside the handler is a snapshot; no socket. What it does is under "What works" |
 | `BigDecimal` | real: `1M`, scale kept, `with-precision` and all eight rounding modes. `(/ 1M 3)` ANSWERS at decimal128 rather than throwing, as MATLAB, Octave and Julia do (DEVIATIONS 43) |
 | mutable deftype fields | `(set! afield v)` is refused, loudly; DEVIATIONS 20 |
 | threads | a future runs on a thread of its own beside its maker (PLAN.md 14f); an agent's actions run in order on a thread of the agent's own, started when it has work, a send inside an action or a transaction held until it ends and a failed agent's queue kept for `restart-agent` (DEVIATIONS 29); `dosync` is a transaction with a log and a commit, transactions serialized under one lock (a valid schedule, no retries; DEVIATIONS 10); a wait nothing can satisfy is an error, not a hang (DEVIATIONS 38) |
-| the five JVM-only sibling libs | bytecode generation; see `src/clj/clojure/PROVENANCE.md` |
-| regex | ICU over UTF-8; its `\w` and `(?i)` are Unicode where Java's are ASCII |
+| the five host-bound sibling libs | bytecode generation; see `src/clj/clojure/PROVENANCE.md` |
+| regex | ICU over UTF-8; its `\w` and `(?i)` are Unicode where clj's are ASCII |
 | `clojure.spec.alpha` | vendored and consulted before every macro expansion, as the Compiler does; `s/check-asserts` cannot be turned on (DEVIATIONS 42) |
 | calling a Fortran library | one routine, `dgemm`, hand-bound; the generator that would do it for any routine is PLAN.md step 7 |
 
@@ -453,7 +453,7 @@ is what the scripts and the Makefile use, passing core.clj explicitly.
 
 ## Why host it on Fortran rather than bridge to it
 
-Clojure on the JVM can already call Fortran, and for linear algebra it
+Clojure in clj can already call Fortran, and for linear algebra it
 does it well -- core.matrix and Neanderthal reach BLAS/LAPACK through
 JNA or Panama, and if what you want is fast matrix math from Clojure,
 use those. They are less work than this and they are finished.
@@ -491,7 +491,7 @@ implemented.
 
 [clojure-fortran](https://github.com/memmett/clojure-fortran) shows
 the shape of the workaround honestly: mark each routine `bind(c)`,
-write a C header for it, run `jextract`, call the generated Java from
+write a C header for it, run `jextract`, call the generated clj from
 Clojure. That works -- but `bind(c)` is precisely a promise *not* to
 use assumed-shape arrays, allocatable or optional arguments, derived
 types with allocatable components, generic interfaces, or polymorphism.
@@ -543,7 +543,7 @@ DWARF to depend on.
   tracked by hand behind a `void*`.
 - Kinds, `complex`, IEEE control, whole-array operations: the reasons
   anyone calls a Fortran library in the first place.
-- It runs where Fortran runs. No JVM, which matters on the clusters
+- It runs where Fortran runs. No clj, which matters on the clusters
   where the libraries being called actually live.
 
 ### Why the arrays are fast

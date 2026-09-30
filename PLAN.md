@@ -66,7 +66,7 @@ the meantime, and its numbers are those of 2026-09-28.
    native packages built from a recipe. Its first real package is
    `clotran-nrepl` (step 21 d).
 
-Order from 2026-09-30 (James): first the JVM's names out of everything
+Order from 2026-09-30 (James): first clj's names out of everything
 clotran prints (DEVIATIONS 67), then step 22, then step 24, then step
 25; step 23 waits. Windows is deferred until about v1.0: macOS and Linux
 until then.
@@ -96,7 +96,7 @@ Scenario D's remaining work is the rest of step 13.
 Every item below is weighed against those four, not against a count
 from Clojure's test suite. The suite is a measure, not the work queue;
 using it as the work queue is how two days produced 2,810 lines of
-JVM-shaped `case` arms in one file.
+clj-shaped `case` arms in one file.
 
 ## Where we are (measured 2026-09-22)
 
@@ -104,13 +104,13 @@ JVM-shaped `case` arms in one file.
 |---|---|
 | core.clj | 724 of 724 forms load |
 | our tests | 100% on both compilers; the gate. 914 oracle cases value-compared against `clj`, 23 expected differences |
-| the derived language suite | 38 files, every file loads, 321 tests execute: 2880 pass / 0 fail / 0 error -- ALL of them, and the suite is a gate now rather than a score (2170 / 235 / 370 on 2026-09-19). The deriver was corrected on 2026-09-21: a class named in a type hint, a syntax-quoted helper macro, a quoted namespace name or code handed to `eval` now makes a test host, which took out 7 tests that were JVM tests in disguise (static interface methods, `*unchecked-math*` boxing warnings, `import` of a record class, reflection warnings, an interface's error message) and let the three metadata tests execute (their helper enumerated clojure.java.browse's publics). Nothing is failing. The 26 spec-conformance messages went when clojure.spec.alpha was vendored and hooked into macroexpansion, `1N` when BigInt became a real type, the last compilation failure when a class became a value of its own kind, and `1.0M` when BigDecimal did -- all on 2026-09-21. What the suite does NOT cover is named in its own row: it is the clojure.core/cljs.core intersection, so nothing JVM-shaped is in it |
-| the portable libraries, on Clojure's OWN tests | `scripts/run-library-tests`, a gate since 2026-09-22 and part of `make test`: clojure.set, clojure.walk, clojure.string, clojure.math and clojure.pprint run VERBATIM, 109 tests and 859 assertions, 0 fail / 0 error. Not derived and mostly underivable -- the pprint tests are fragments loaded into one namespace through a macro of their own, and Clojure's clojure.zip file has no deftest at all. What the denominator EXCLUDES: clojure.data's one deftest imports java.util.HashSet, clojure.edn's tests need clojure.test.generative (not vendored), and clojure.zip and clojure.core.reducers have no deftest upstream. Those five libraries are covered by `test/clj/oracle.clj` instead |
-| libraries loading | 35 of the 40 vendored namespaces `require` (set, string, walk, zip, data, edn, pprint, test, main, math, template, datafy, reflect, inspector, stacktrace, the four spec ones, ...). Loading, not running: reflect and inspector load because nothing touches the host until a call. The five that do not are each one named JVM thing -- `clojure.repl` wants `proxy-super` (DEVIATIONS 28), `clojure.xml` wants `clojure.lang.XMLHandler`, `clojure.core.server` wants `ReentrantLock`, and `clojure.repl.deps` and `clojure.tools.deps.interop` want `clojure/java/basis.clj` and `process.clj`, which are not vendored |
-| Clojure's suite, verbatim (for reference) | 2002 pass / 111 fail / 274 error over 346 tests, 84% of executed (2029 / 143 / 246 on 2026-09-19); 37 of 66 namespaces produce a passing assertion -- three more than before, and the errors rose with them: a namespace that crashes before reporting contributes NOTHING, so getting further shows up as errors. Most of the new ones are `with-precision`, which needs a MathContext (DEVIATIONS 30). The rest is the JVM: rt, array-symbols, java-interop, serialization, reflect, streams, clearing, param-tags, method thunks and the generated adapters; and the suppliers (delays, atoms), BigInt and BigDecimal (vars, logic, pprint). The verbatim number predates spec being vendored; it is a reference, and it is re-measured when something moves it |
+| the derived language suite | 38 files, every file loads, 321 tests execute: 2880 pass / 0 fail / 0 error -- ALL of them, and the suite is a gate now rather than a score (2170 / 235 / 370 on 2026-09-19). The deriver was corrected on 2026-09-21: a class named in a type hint, a syntax-quoted helper macro, a quoted namespace name or code handed to `eval` now makes a test host, which took out 7 tests that were clj tests in disguise (static interface methods, `*unchecked-math*` boxing warnings, `import` of a record class, reflection warnings, an interface's error message) and let the three metadata tests execute (their helper enumerated clotran.browse's publics). Nothing is failing. The 26 spec-conformance messages went when clojure.spec.alpha was vendored and hooked into macroexpansion, `1N` when BigInt became a real type, the last compilation failure when a class became a value of its own kind, and `1.0M` when BigDecimal did -- all on 2026-09-21. What the suite does NOT cover is named in its own row: it is the clojure.core/cljs.core intersection, so nothing clj-shaped is in it |
+| the portable libraries, on Clojure's OWN tests | `scripts/run-library-tests`, a gate since 2026-09-22 and part of `make test`: clojure.set, clojure.walk, clojure.string, clojure.math and clojure.pprint run VERBATIM, 109 tests and 859 assertions, 0 fail / 0 error. Not derived and mostly underivable -- the pprint tests are fragments loaded into one namespace through a macro of their own, and Clojure's clojure.zip file has no deftest at all. What the denominator EXCLUDES: clojure.data's one deftest imports HashSet, clojure.edn's tests need clojure.test.generative (not vendored), and clojure.zip and clojure.core.reducers have no deftest upstream. Those five libraries are covered by `test/clj/oracle.clj` instead |
+| libraries loading | 35 of the 40 vendored namespaces `require` (set, string, walk, zip, data, edn, pprint, test, main, math, template, datafy, reflect, inspector, stacktrace, the four spec ones, ...). Loading, not running: reflect and inspector load because nothing touches the host until a call. The five that do not are each one named clj thing -- `clojure.repl` wants `proxy-super` (DEVIATIONS 28), `clojure.xml` wants `XMLHandler`, `clojure.core.server` wants `ReentrantLock`, and `clojure.repl.deps` and `clojure.tools.deps.interop` want `clojure/clj/basis.clj` and `process.clj`, which are not vendored |
+| Clojure's suite, verbatim (for reference) | 2002 pass / 111 fail / 274 error over 346 tests, 84% of executed (2029 / 143 / 246 on 2026-09-19); 37 of 66 namespaces produce a passing assertion -- three more than before, and the errors rose with them: a namespace that crashes before reporting contributes NOTHING, so getting further shows up as errors. Most of the new ones are `with-precision`, which needs a MathContext (DEVIATIONS 30). The rest is clj: rt, array-symbols, clj-interop, serialization, reflect, streams, clearing, param-tags, method thunks and the generated adapters; and the suppliers (delays, atoms), BigInt and BigDecimal (vars, logic, pprint). The verbatim number predates spec being vendored; it is a reference, and it is re-measured when something moves it |
 | startup | 0.75s (7.2s before step 4, 2.3s at the start of stage 2), core.clj re-read every launch |
 | `(reduce + (range n))` | LINEAR since step 4: n=100000 in 0.16s, ~1.6 µs per element through the host's own IReduceInit reduce (17s and 170 µs at the end of step 4). Before: n=16000 took 161s and n=100000 did not finish in 15 minutes |
-| `loop`/`recur` | ~1.7 µs per iteration, linear; a function call ~1.3 µs. `scripts/bench` has the JVM ratios: 23x to 514x depending on the form. Seqs are chunked, as on the JVM |
+| `loop`/`recur` | ~1.7 µs per iteration, linear; a function call ~1.3 µs. `scripts/bench` has clj ratios: 23x to 514x depending on the form. Seqs are chunked, as in clj |
 | memory | 168 MB after core.clj; recursion 100,000 deep works |
 | Fortran library calls made through clotran | two PACKAGES, `packages/blas` and `packages/chemsol` (and `scripts/bind-fortran` binds a library from its own signatures) -- shared libraries opened at run time by the unchanged binary, `dgemm` and ChemSol's `readopt`, `dg_ld`, `solvout` and `entropy` through one shim signature; the base binary links no BLAS and no ChemSol; `examples/chemsol.cljf` reproduces the original program's output byte for byte on its three reference inputs (`scripts/chemsol-check`) |
 
@@ -144,8 +144,8 @@ each of which has been treated as its own bug:
 
 The second problem is the host boundary: five hand-synchronised Fortran
 tables (`static_member`, `instance_member`, `eval_new`, `is_instance`,
-`host_super`) holding 57 `clojure.lang.*` and 36 `java.*` names. Each
-new JVM member is a few hundred lines of Fortran and a rebuild.
+`host_super`) holding 57 clj's runtime classes and 36 clj's host library names. Each
+new clj member is a few hundred lines of Fortran and a rebuild.
 
 ## The work, in order
 
@@ -193,12 +193,12 @@ Three layers, each answering a different question:
   symbols it uses -- LANGUAGE if they all fall inside that set plus the
   special forms, the portable libs and a short exception allowlist;
   CONCURRENCY if the only outsiders are refs, agents, futures and STM
-  (Clojure-only, but goal 3); HOST otherwise (a Java class, a member
+  (Clojure-only, but goal 3); HOST otherwise (a clj class, a member
   call, a constructor, a clojure.core name ClojureScript never had) --
   and writes the kept tests to `test/clj/derived/` with the source
   file and line of each. Of 578 deftests it can read, 306 are language,
   8 concurrency, 264 host; 7 files it cannot read at all (method
-  values, param-tags, record literals) are all JVM-shaped. A helper a
+  values, param-tags, record literals) are all clj-shaped. A helper a
   kept test needs travels with it; a test whose helper is host goes
   with the helper; a top-level form with a head nobody defines
   (test.check's `defspec`) goes; a require of a non-portable library
@@ -206,7 +206,7 @@ Three layers, each answering a different question:
   makes its test host, where "defines" is approximated by the
   binding positions of the form (its vector literals, `catch` names,
   `as->`), so `(vector-of :int)` and `(doc x)` are recognised as the
-  JVM's without a list of them. The two hand
+  clj's without a list of them. The two hand
   lists it does contain, the exception allowlist and the concurrency
   vocabulary, are printed by `--report` so they can be argued with.
   `scripts/run-clojure-tests-parallel test/clj/derived` runs it.
@@ -216,12 +216,12 @@ with the denominator stated -- see "Where we are".
 
 ### 3. Freeze host-member work; one table, as data -- DONE
 
-`src/f/hosttable.inc` is the JVM surface: 293 static rows (class,
+`src/f/hosttable.inc` is clj surface: 293 static rows (class,
 member, builtin id or constant) and 139 instance rows, as Fortran
 `parameter` data. `static_member`, `instance_member` and
 `is_host_class` are three lookups over it, so the class list and the
 member list can no longer disagree, and a bare class name is
-canonicalised once (`java.lang.` added, the libs' short imports
+canonicalised once (clj's implicit package added, the libs' short imports
 mapped). The 900 lines of `case` arms are gone, along with
 `math_index` and the one builtin the audit found unreachable.
 
@@ -288,7 +288,7 @@ fn invocation, with flat closures that copy their captured values.
 `__defining-ns__` is gone, DEVIATIONS 16 is resolved, 6 moved to
 analysis time, and 32 records the one new deviation (a qualified
 symbol that does not resolve is deferred to run time, for the skipped
-JVM libraries' sake). Measured against the step-4 numbers:
+clj libraries' sake). Measured against the step-4 numbers:
 
 | | before | after |
 |---|---|---|
@@ -344,7 +344,7 @@ Staged so each step is checkable:
    Same speed or better: reduce over 100000 9.9s -> 6.6s, `into`
    17s -> 12.8s, loop/recur unchanged at 25 us -- and then -O2 (the
    build had none) took each by 2.7x again; `scripts/bench` has the
-   JVM ratios. Still to do in this
+   clj ratios. Still to do in this
    stage: intermediates move to the operand stack; `roots(:)` leaves every
    signature; module globals move into a context type; source
    positions on nodes.
@@ -446,7 +446,7 @@ Three things the library dictated, worth knowing for the generator:
   the same process continues the random sequence. Not hidden.
 
 Also added on the way: `clotran-slurp`, a host reader for a whole file
-(core.clj's `slurp` is written over `java.io`).
+(core.clj's `slurp` is written over `clj's io`).
 
 ### 8. Then, each now cheap because of step 5
 
@@ -542,7 +542,7 @@ here; it is, but what we are building is not one, and the section is
 renamed to stop the word doing damage.
 
 **It is ahead of time, per namespace, and you ask for it.** Clojure on
-the JVM compiles every form to bytecode, `(+ 1 1)` at the REPL
+clj compiles every form to bytecode, `(+ 1 1)` at the REPL
 included, because a class loads in microseconds. Invoking gfortran
 costs 100 ms to 1 s, so compiling a typed form would take a thousand
 times longer than interpreting it at about a microsecond a node. So:
@@ -551,7 +551,7 @@ interpreted.
 
 That still gets the speed, because the expensive thing is almost never
 the form you typed. `(count (into [] (map inc (range 100000))))` is
-705x the JVM on `scripts/bench`, and the five nodes of the form cost
+705x clj on `scripts/bench`, and the five nodes of the form cost
 five microseconds; all of it is inside `map`, `into` and the lazy seq
 machinery, which is Clojure source in `clojure.core`. **So the first
 namespace worth compiling is `clojure.core` itself**, which also takes
@@ -614,7 +614,7 @@ before the generator exists.
 regression to measure.* Deviation 7 is resolved because the executor
 stopped using the Fortran stack: it is a loop over a heap continuation
 stack, which is why a non-tail-recursive function reaches 100,000 deep
-where the JVM stops near 11,000. Compile that to a Fortran procedure
+where clj stops near 11,000. Compile that to a Fortran procedure
 calling itself and it is back on the machine stack, where the existing
 native-nesting bound is 2,200 (`CLOTRAN_MAX_DEPTH`). `recur` is a loop
 either way, because Clojure guarantees constant stack for it, not
@@ -663,7 +663,7 @@ A recompile LEAKS the old shared library, on purpose. It cannot be
 closed while a compiled function object still points into it, and
 closing it would crash; each compile gets a distinct name instead. A
 session recompiling fifty times leaks a few megabytes, the same
-bargain the JVM makes with class loaders.
+bargain clj makes with class loaders.
 
 Optimisation flags and a tree shaker for dependencies are wanted
 eventually and are not now.
@@ -775,7 +775,7 @@ agree under the gate first.
 The rest is the generic numeric path: `call_builtin`'s dispatch and the
 tag checks in `numbers_ok`. Unboxed arithmetic removes all of it for a
 value the analyser can prove is a number, and that is where the
-remaining distance to the JVM's 2.77 ms is.
+remaining distance to clj's 2.77 ms is.
 
 Two GC knobs were tried and did NOTHING: keeping the heap at 4x or 8x
 the live set instead of 2x, and collecting at 8x live slots allocated
@@ -798,7 +798,7 @@ index was ever typed.
 |---|---|
 | interpreted | 554 ms |
 | compiled | 0.191 ms |
-| warmed JVM, same function | 0.192 ms |
+| warmed clj, same function | 0.192 ms |
 
 Two things the check got wrong, both now fixed in it:
 
@@ -820,10 +820,10 @@ than hoping to catch a read of freed memory, which depends on the
 allocator and on the platform.
 
 **Unboxed arithmetic landed, and it is the orders of magnitude.** The
-same functions on a warmed JVM, called 100 times after 200 warm-up
+same functions on a warmed clj, called 100 times after 200 warm-up
 calls, against the compiled procedures:
 
-| 200,000 iterations | interpreted | compiled | warmed JVM |
+| 200,000 iterations | interpreted | compiled | warmed clj |
 |---|---|---|---|
 | sum to a parameter `n` | 340 ms | 0.14 ms | 0.075 ms |
 | sum to a literal bound, every local primitive | 318 ms | 0.075 ms | 0.075 ms |
@@ -852,7 +852,7 @@ Four things the measurement taught, each fixed:
   on every iteration, three runtime calls a time round: 1.26 ms. A
   boxed local the loop cannot change -- a parameter, or anything bound
   outside the loop -- is now read and unboxed ONCE before it: 0.14 ms.
-  That is what the JVM's JIT does by speculation; here it is known.
+  That is what clj's JIT does by speculation; here it is known.
 - `compiler-check` reported success when the generator threw part-way
   and silently left later cases unrun. It now fails unless every case
   is compiled or declined.
@@ -963,7 +963,7 @@ followed by a `reduce` -- and it is the one shape that reaches every
 level: a `do concurrent` loop (`reduce(+:s)`), threads in one process
 (combine at the join), and, later, images across machines (`co_sum`,
 `co_reduce`). A shared atom hammered by many workers is NOT the shape:
-it is slow even on the JVM (contention, retries), and machines share no
+it is slow even in clj (contention, retries), and machines share no
 memory to put it in. Atoms keep the job Clojure gave them, coordination.
 Every parallel package keeps this shape: `repro/*` is fold with
 order-independent combining; `coarrays` would be fold across images.
@@ -1074,7 +1074,7 @@ only `defn` forms compile. In order:
    above predates the call and collector work. With compiled core
    installed, sort 1746 -> 1372 ms and reduce 96 -> 85, but into/map
    does not move (1658 vs 1729): map's per-element loop is inside
-   `(lazy-seq ...)`, which is `(new clojure.lang.LazySeq (fn* [] ...))`
+   `(lazy-seq ...)`, which is `(new LazySeq (fn* [] ...))`
    -- a `:new` over a closure -- and the loop's `.nth` and `.add` are
    `:dot` interop nodes, all three handed to the interpreter. In order,
    each gated and measured on into/map with compiled core:
@@ -1097,7 +1097,7 @@ only `defn` forms compile. In order:
       task now applies anything else. into/map 1729 -> 1679 ms and
       reduce 85 -> 78 with compiled core: map's closure is still inside
       the `(new LazySeq ...)` that b is for.
-   b. `(new clojure.lang.LazySeq closure)` -- `clotran_make_lazy`, the
+   b. `(new LazySeq closure)` -- `clotran_make_lazy`, the
       OBJ_LAZY the interpreter builds; the forcer calls its thunk
       through `apply`, which already runs compiled fns.
       BUILT 2026-09-25, and for every class, not LazySeq alone: a
@@ -1178,7 +1178,7 @@ test/clj/autocompile_test.clj builds and reinstalls one namespace
 through a fresh cache.
 
 **The calling convention allocated (found 2026-09-26).** Counting
-allocations per element against the JVM's one or two: `(map inc (range
+allocations per element against clj's one or two: `(map inc (range
 n))` 32, `into` over it 31, a `conj!` 10, one fn call 3 more -- every
 call built its arguments as a heap vector (an object and a node), and an
 interop call built one per argument and consed the target on. Laziness
@@ -1197,7 +1197,7 @@ a fn call 7 -> 5, vec 13 -> 9; into/map 713 -> 202 ms, sort 1381 ->
 spares when its body finishes (exec.inc, give_frame) and new_frame takes
 one -- nothing keeps a frame after its call: closures copy what they
 capture, letfn copies again, a break copies each local. A fn call 5 ->
-4, map 9 -> 7 (compiled core); into/map is 47x the JVM on scripts/bench,
+4, map 9 -> 7 (compiled core); into/map is 47x clj on scripts/bench,
 199x before step 1. Step 3: a value is 16 bytes, not 32 -- a tag, a pool
 index and one 64-bit payload that holds a real's bits (GC.f90, gc_rval),
 where a separate real sat beside the integer and was never used with it.
@@ -1205,7 +1205,7 @@ Thirty reads of the real changed; identity keeps comparing reals by value
 (0.0 is -0.0, NaN is itself). Every slot, stack entry, vector element and
 scan halves: peak memory on a vector of 300,000 and a map of 50,000 went
 2.7 GB -> 1.3 GB, and with compiled core scripts/bench went reduce 50 ->
-38 ms, loop 322 -> 220, into/map 225 -> 152 (39x the JVM), fib 31 -> 21.5,
+38 ms, loop 322 -> 220, into/map 225 -> 152 (39x clj), fib 31 -> 21.5,
 sort 1050 -> 679, assoc 98 -> 67. `identical?` on equal numbers being true
 was already so, and is now written down (DEVIATIONS.md 53).
 
@@ -1247,7 +1247,7 @@ and sort do not move -- their time is in the lazy-seq and interop
 machinery, not in arithmetic.
 
 What stays interpreted is `eval`: the REPL, `load-string`, source never
-compiled. JVM Clojure keeps its compiler at run time for the same
+compiled. clj keeps its compiler at run time for the same
 reason. `.cljc` compiles once it has `:cljf` or `:default` branches; a
 library with only `:clj` and `:cljs` reads as nothing here.
 
@@ -1263,7 +1263,7 @@ behave the same. What needs data is emoji properties (ICU feature
 Locales, collation and legacy charsets are never reached by
 clojure.core. So: ship the ~300 KB of Unicode data clojure.core needs
 inside the binary, and the full ICU archive BESIDE it as an optional
-package -- Java's own layout (`java.base` holds Unicode data, standard
+package -- clj's own layout (`clj's base` holds Unicode data, standard
 charsets and English; `jdk.localedata` and `jdk.charsets` are optional
 modules `jlink` can drop). ICU supports it: `--with-data-packaging=archive`
 and the Data Build Tool's feature filters.
@@ -1281,7 +1281,7 @@ A tier-A function written as the generator would emit it -- `stats/total`
   `reduce`/`range` chains FUSED into a loop (Clojure's own transducers
   say the same thing), and `def`/`defn` direct-linked -- Clojure 1.8's
   direct linking, under which clojure.core itself is compiled, excluding
-  `^:dynamic` and `^:redef` (the pinned changes.md 1.1; Compiler.java
+  `^:dynamic` and `^:redef` (the pinned changes.md 1.1; Compiler
   `directLinkingKey`). A tier-A namespace is an ordinary Fortran module,
   usable from any Fortran program, and it is exactly the code that can
   release the baton, run in `do concurrent`, and go to a GPU.
@@ -1640,7 +1640,7 @@ Running the clojuredocs suite made the machine unusable: not CPU --
 one clotran is 1.2 s and 190 MB at startup -- but memory. Walking a
 lazy seq of 10^6 elements took 780 MB (`last`, `dorun`), 2.4 GB
 (`nth` over `iterate`) and 3.1 GB (`bounded-count` over a range) where
-the JVM stays at its baseline; the suite's 10^8-element examples then
+clj stays at its baseline; the suite's 10^8-element examples then
 swapped. Measured with `CLOTRAN_STATS=1`, `CLOTRAN_GC_FULL=1` and the
 census `CLOTRAN_STATS=2` (GC.f90 `census`, what is live by kind at a
 full collection). Three separate causes, in the order they were found:
@@ -1665,7 +1665,7 @@ full collection). Three separate causes, in the order they were found:
    `reduce` do not retain. The fix: the walk roots its cursor, not the
    arguments.
 3. **`count` of a range realises it.** `(count (range 10^6))` is 2.7 s
-   here and 0.02 ms on the JVM (LongRange.count is arithmetic). The
+   here and 0.02 ms in clj (LongRange.count is arithmetic). The
    pending range cell holds `[lo hi step]`; count is computable.
 
 **Landed 2026-09-27**, each checked under `CLOTRAN_GC_VERIFY=1`:
@@ -1707,7 +1707,7 @@ touch PersistentVector.f90.
 ### 17. What a node costs (found 2026-09-28)
 
 `(apply + (take 1000000 (range)))`: 15.2 s here, 82 ms on a warmed
-JVM. Measured to the piece, one million times each:
+clj. Measured to the piece, one million times each:
 
 | form | clotran | evaluator steps | allocations | clj, warm |
 |---|---|---|---|---|
@@ -1718,7 +1718,7 @@ JVM. Measured to the piece, one million times each:
 
 The yardstick that says this is design and not "an interpreter's
 number": CPython's empty loop iteration is about 20 ns. Ours is 660
-ns -- 30x an interpreter, before the JVM is in the picture. A step is
+ns -- 30x an interpreter, before clj is in the picture. A step is
 60 ns, and the profile of the empty loop says what it buys: the
 dispatch and node decoding (29%); reading the node's fields and
 children through out-of-line accessors, the children being a
@@ -1740,15 +1740,15 @@ What moved, and by how much:
   of a thread-local lookup each time: 3%.
 
 - core's one-line wrappers -- `first`, `rest`, `next`, `seq`, `cons`
-  are `(fn [coll] (. clojure.lang.RT (first coll)))` -- ran a whole
+  are `(fn [coll] (. RT (first coll)))` -- ran a whole
   interpreted call (470 ns) around an 80 ns builtin. Analysis now
   marks an arity whose body is exactly a builtin applied to its own
   parameters, and a call with that arity calls the builtin, the
-  wrapper's call-stack entry pushed around it as the JVM's trace has
+  wrapper's call-stack entry pushed around it as clj's trace has
   it. clojure.core fns only, and not while a step is pending, so a
   user's fn keeps its whole frame and stepping stops in core's.
   Compiled `(first c)` 570 -> 120 ns.
-- `lazy-seq` expands to `(new clojure.lang.LazySeq (fn* [] ...))`,
+- `lazy-seq` expands to `(new LazySeq (fn* [] ...))`,
   which took the generic `new` path (680 ns); it is the lazy node now.
 - `apply` HELD THE SEQ. core's `apply` is `(. f (applyTo s))`, and the
   dot call's frame kept its argument vector -- the head of s -- for
@@ -1758,7 +1758,7 @@ What moved, and by how much:
   counts were no help, every root reaching core's shared structure.
 
 `(apply + (take 1000000 (range)))`: 15.2 s -> 6.6 s, 452 -> 129 MB.
-Still about 80x the JVM, and the per-element anatomy says where:
+Still about 80x clj, and the per-element anatomy says where:
 forcing a lazy cell nests a whole `run` (1.2-1.9 us), `iterate` builds
 an argument vector per step, and `reduce`'s protocol dispatch is 2.7
 us. Those are the executor's shape, below.
@@ -2017,9 +2017,9 @@ interpreted remainder of compiled code is what is slow. Compiled
 recursion stops near 2,200 deep (DEVIATIONS 7), the interpreter's at
 100,000.
 
-### 19. Slow spots, surveyed against the JVM (2026-09-29)
+### 19. Slow spots, surveyed against clj (2026-09-29)
 
-Thirty everyday forms timed on a warmed JVM (best of 5) and on
+Thirty everyday forms timed on a warmed clj (best of 5) and on
 clotran (best of 2), ranked by the ratio. The worst, before and after
 the fixes of this day:
 
@@ -2033,7 +2033,7 @@ the fixes of this day:
 | `filterv even?` | 215x | 154x | `integer?`'s instance? checks built strings |
 
 Also found on the way: `instance?` with a class literal is now the
-builtin (the JVM's InstanceOfExpr), and regex `replace` and `split`
+builtin (clj's InstanceOfExpr), and regex `replace` and `split`
 were quadratic too. Every row is now linear in its input; what is left
 is the constant factor, spread thin: records still cost 1.6 us to make
 (eval_new looks the type up by name), a sort comparison is a Clojure
@@ -2103,16 +2103,16 @@ strategy, go on. Goal 2 wants the same thing for its debugger: a break
 in a running program answered from outside it.
 
 The language already has this as source: `clojure.core.server`
-(vendored) is Clojure's socket REPL. It reaches for `java.net`'s
-ServerSocket, Socket, InetAddress and SocketException, `java.io`
+(vendored) is Clojure's socket REPL. It reaches for `clj's networking library`'s
+ServerSocket, Socket, InetAddress and SocketException, `clj's io`
 readers and writers over a socket's streams, `Thread.` with a name, and
 a ReentrantLock.
 
 **Decided 2026-09-29: clotran's own server, not `server.clj`.** clotran
-is its own host -- Fortran and C -- and does not emulate the JVM; a JVM
+is its own host -- Fortran and C -- and does not emulate clj; a clj
 name appears only where vendored Clojure literally writes it, as a thin
 mapping onto a clotran type. `server.clj` would need a pile of
-`java.net`/`java.util.concurrent` classes emulated, so it stays vendored
+`clj's networking library`/clj's collection library classes emulated, so it stays vendored
 and unloaded, and the step is instead, in order:
 
 a. *Character streams* (done 2026-09-29): `clotran.io`'s readers, with
@@ -2126,7 +2126,7 @@ b. *Sockets* (done 2026-09-29): a C shim (POSIX and Winsock behind one small int
 c. *`clotran.server`*: a socket REPL (done 2026-09-29: `start-server`,
    `stop-server`, a thread a connection, clj's prompt and error shape,
    driven by `nc`) and a prepl (done 2026-09-29: `io-prepl`'s messages
-   match clj's own for the same input, :ms and JVM stack frames aside),
+   match clj's own for the same input, :ms and clj stack frames aside),
    then `start-server` from `examples/embed` (done 2026-09-29: with
    HEAT_REPL=<port> the Fortran solver serves a REPL, its time loop runs
    outside the running mutators, and scripts/embed-repl-check reads the
@@ -2139,7 +2139,7 @@ d. *nREPL, as a package* (serving 2026-09-29, `~/jborden/clotran-nrepl`:
    client nrepl/nrepl 1.3.0; CIDER itself not yet tried): what CIDER speaks (bencode, eval, load-file,
    describe, completions), on the model of babashka's compact server.
 e. *CIDER's debugger, queued (2026-09-29)*: CIDER's debugger UI is its
-   Emacs side (`cider-debug.el`); the instrumenting is the JVM middleware
+   Emacs side (`cider-debug.el`); the instrumenting is clj middleware
    cider-nrepl. clotran-nrepl answering that protocol from clotran's own
    break protocol (`clotran-break`, frames with locals) puts CIDER's
    debugger over clotran with no fork. Emacs support is its own tool,
@@ -2277,7 +2277,7 @@ either way.
 **Interop syntax is Clojure's, written with ClojureScript's discipline.**
 `(.method obj args)`, `(.-field obj)`, `(Type/static args)`,
 `Type/CONSTANT`, `(Type. args)` and `(set! (.-field obj) v)` -- all of
-which the JVM reader also accepts (`.-` since Clojure 1.4), so code
+which clj reader also accepts (`.-` since Clojure 1.4), so code
 written this way stays `.cljc`-portable. Fortran's object model maps
 onto it directly: a derived type is the class; a type-bound
 `procedure` is an instance method and one declared `nopass` is a
@@ -2295,14 +2295,14 @@ which is step 7's generator.
 **Files: `.cljf`, `.cljc`, `.clj`.** A clotran source file is `.cljf`
 (the feature `:cljf` in reader conditionals is the same word);
 `.cljc` is portable Clojure, which clotran reads with `:cljf` and
-`:default` branches taken; `.clj` is JVM Clojure, loaded as written
+`:default` branches taken; `.clj` is clj, loaded as written
 because that is the premise. `require` looks in that order.
 DEVIATIONS 33.
 
 **A thread is an evaluator context; the kinds of thread are impls of
 one protocol.** Three things not to conflate: `fork` is a process,
 a green thread is a context the runtime multiplexes on one OS
-thread at points it chooses (Erlang, Go, Java virtual threads,
+thread at points it chooses (Erlang, Go, clj virtual threads,
 core.async), an OS thread is real parallelism over a shared heap.
 Stage 2 moves the evaluator's state into a context type; a green
 thread is then a context the evaluator loop switches between, on one
@@ -2324,7 +2324,7 @@ cannot be shipped, and `spawn` must say which it was given. A GPU is
 not an impl of this: it runs kernels over arrays and arrives as
 array operations under the `fortran` namespace.
 
-Java's virtual threads (Loom) are this model and show where the work
+clj's virtual threads (Loom) are this model and show where the work
 has to go: executors and pools were always a library, but a thread
 that parks and resumes needed the runtime, because only the runtime
 can capture its stack. Here the context type is the host's part and
@@ -2334,7 +2334,7 @@ and a subprocess wait yield to the scheduler, so pipeline code is
 straight-line Clojure. The limit: on one OS thread a blocking
 Fortran call (dgemm, ChemSol's dg_ld) holds every green thread until
 it returns; carrier threads are the `:os` impl. Clojure itself has
-not moved: at our commit Agent.java builds soloExecutor with
+not moved: at our commit Agent builds soloExecutor with
 newCachedThreadPool. Prior art: Erlang, Loom, Julia's Distributed
 with ClusterManagers, core.async, bordeaux-threads, core.matrix's
 implementation protocol, and Fortran's own coarrays, which are the
@@ -2367,7 +2367,7 @@ DEVIATIONS 24 and 25.
 ## Open
 
 **RESOLVED: `class` and a class literal answer the same value.**
-`(class "a")` and `String` are both the class `java.lang.String`
+`(class "a")` and `String` are both the class `String`
 (`class_name_of`, `class_key`; a KEYWORD until 2026-09-21, when a
 class became a kind of its own -- DEVIATIONS 34); the tag stays behind `clotran-type`; `host_super` is
 keyed by class name; `import*` records short names. The derived suite
