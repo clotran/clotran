@@ -1729,11 +1729,9 @@
        call vs_set(vst, base + 3, ty)
        out = construct_type_vals(vs_get(vst, base + 3), vs_get(vst, base + 2))
     else
-       out = eval_new(dlt_1, vs_get(vst, base + 2), gc_i2(nd) == 1)
+       out = eval_new(dlt_1, vs_get(vst, base + 2))
     end if
-    ! not for a JVM name (i2 = 1): its constructor is the JVM's, which the
-    ! instance made from its fields would skip
-    if (.not. tctx%has_error .and. gc_i2(nd) /= 1) then
+    if (.not. tctx%has_error) then
        call vs_set(vst, base + 2, out)
        ty = find_type(dlt_1)
        if (gc_kind(ty) == OBJ_TYPE .and. gc_kind(vs_get(vst, base + 2)) == OBJ_INST) then

@@ -66,8 +66,8 @@
            sary (into-array clotran.host.string ["a" "b" "c"])]
        (is (= 4 (^[longs long] clotran.host.arrays/binarySearch lary (long 99))))
        (is (= 4 (^[objects _] clotran.host.arrays/binarySearch oary 99)))
-       (is (= 4 (^["[Lclotran.host.value;" _] clotran.host.arrays/binarySearch oary 99)))
-       (is (= 1 (^["[Lclotran.host.value;" _] clotran.host.arrays/binarySearch sary "b")))))
+       (is (= 4 (^["[Lhost.lang.Object;" _] clotran.host.arrays/binarySearch oary 99)))
+       (is (= 1 (^["[Lhost.lang.Object;" _] clotran.host.arrays/binarySearch sary "b")))))
   (testing "bad method names"
     (is (thrown? clotran.host.exception (eval '(^[] clotran.host.string/foo "a"))))
     (is (thrown? clotran.host.exception (eval '(^[] clotran.host.string/.foo "a"))))
@@ -90,17 +90,17 @@
                                          :arg-type "(long-array [1 2])"
                                          :arg-tag "long*"}
                                 'int<><> {:parameter-type (clotran.host.class/forName "[[I")
-                                          :arg-type "(make-array Integer/TYPE 1 2)"
+                                          :arg-type "(make-array clotran.host.int4/TYPE 1 2)"
                                           :arg-tag "int**"}
-                                'clotran.host.object<> {:parameter-type (clotran.host.class/forName "[Lclotran.host.value;")
+                                'clotran.host.object<> {:parameter-type (clotran.host.class/forName "[Lhost.lang.Object;")
                                                      :arg-type "(into-array [1 2])"
                                                      :arg-tag "\"[Lclotran.host.value;\""}
-                                'clotran.host.string<> {:parameter-type (clotran.host.class/forName "[Lclotran.host.string;")
+                                'clotran.host.string<> {:parameter-type (clotran.host.class/forName "[Lhost.lang.String;")
                                                      :arg-type "(into-array [\"a\" \"b\"])"
                                                      :arg-tag "\"[Lclotran.host.string;\""}})
 
 (defn is-static-method? [class method-name params]
-  (let [method (.getDeclaredMethod ^clotran.host.class class ^clotran.host.string (name method-name) ^"[Lclotran.host.value;" params)]
+  (let [method (.getDeclaredMethod ^clotran.host.class class ^clotran.host.string (name method-name) ^"[Lhost.lang.Object;" params)]
     (clotran.host.modifier/isStatic (.getModifiers method))))
 
 (defn get-methods

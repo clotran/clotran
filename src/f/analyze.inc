@@ -932,23 +932,26 @@
     end if
     end block
     if (is_class_name(sym)) then
-       ! A CLASS LITERAL evaluates to the keyword naming clotran's type
-       ! tag, java.lang implicitly imported (Object == java.lang.Object).
-       ! A QUALIFIED name must name a class that exists -- a host row, a
-       ! registered type, or the JVM's own packages -- as Class.forName
-       ! must: user.Person from another namespace, or no.such.Klass, is
-       ! Compiler's "Unable to resolve classname". A bare name is taken
-       ! as java.lang's, as before.
+       ! A CLASS LITERAL evaluates to the class. A QUALIFIED name must name
+       ! a class that exists -- a host row, a registered type, clotran's
+       ! own -- as Class.forName must: user.Person from another namespace,
+       ! or no.such.Klass, is Compiler's "Unable to resolve classname".
+       ! A bare name is a class only as an import or a type clotran knows;
+       ! any other capitalized name is an unresolved symbol, as in clj.
        block
           call gc_ref_text(sym%ref, s=dlt_1)
+          call class_key(dlt_1, k=dlt_2)
           if (index(dlt_1, ".") > 0) then
              if (.not. known_class_name(dlt_1)) then
                 call fail("Unable to resolve classname: " // dlt_1)
                 call vs_leave(vst, base)
                 return
              end if
+          else if (.not. known_class_name(dlt_2)) then
+             call fail("Unable to resolve symbol: " // dlt_1 // " in this context")
+             call vs_leave(vst, base)
+             return
           end if
-          call class_key(dlt_1, k=dlt_2)
           v = gc_class(dlt_2, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
        end block
        call vs_set(vst, base + 3, v)
@@ -1477,13 +1480,11 @@
     type(gc_value), intent(in) :: form, sc
     type(gc_value) :: nd, cls, kids, args
     integer :: base
-    logical :: aliased
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1
     tctx => ctx_self()
     vst => tctx%stk
     nd = gc_nil()
-    aliased = .false.
     base = vs_enter(vst, 5)
     call vs_set(vst, base + 1, form)
     call vs_set(vst, base + 2, sc)
@@ -1495,14 +1496,12 @@
        call vs_leave(vst, base)
        return
     end if
-    ! the class by clotran's name for it, once, here: a JVM or clojure.lang
-    ! name as written -- clojure.lang.LazySeq -- is an alias (canon_class)
+    ! the class in full, once, here: a bare name through the imports
     block
       character(len=:), allocatable :: written, canonical
       call gc_ref_text(cls%ref, s=written)
       call canon_class(written, c=canonical)
-      aliased = canonical /= written
-      if (aliased) cls = gc_sym(canonical, [vs_get(vst, base + 1), vs_get(vst, base + 3)])
+      if (canonical /= written) cls = gc_sym(canonical, [vs_get(vst, base + 1), vs_get(vst, base + 3)])
     end block
     call vs_set(vst, base + 4, cls)
     ! (new clojure.lang.LazySeq (fn* [] body...)) is what the lazy-seq
@@ -1543,16 +1542,10 @@
     end if
     block
        call gc_ref_text(cls%ref, s=dlt_1)
-    ! a JVM name that aliases a clotran type -- java.util.ArrayList,
-    ! java.io.StringReader -- takes the JVM constructor's arguments, which
-    ! eval_new turns into the type's; only a type named as itself is
-    ! built from its fields directly
-    if (.not. aliased .and. gc_kind(find_type(dlt_1)) == OBJ_TYPE) then
+    if (gc_kind(find_type(dlt_1)) == OBJ_TYPE) then
        nd = mk_node(N_NEWTYPE, vs_get(vst, base + 5), vs_get(vst, base + 4), gc_nil(), 0, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
     else
-       ! i2 = 1: the class was written under a JVM name (eval_new, aliased)
-       nd = mk_node(N_NEW, vs_get(vst, base + 5), vs_get(vst, base + 4), gc_nil(), merge(1, 0, aliased), &
-            [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       nd = mk_node(N_NEW, vs_get(vst, base + 5), vs_get(vst, base + 4), gc_nil(), 0, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
     end if
     end block
     call vs_leave(vst, base)

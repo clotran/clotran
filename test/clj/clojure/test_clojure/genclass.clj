@@ -142,16 +142,16 @@
                "returnsBooleanArray" :booleans))))))
 
 (deftest gen-interface-source-file
-  (let [classReader (clojure.asm.ClassReader. "clojure.test_clojure.genclass.examples.ArrayGenInterface")
+  (let [classReader (clotran.host.class_reader. "clojure.test_clojure.genclass.examples.ArrayGenInterface")
         sourceFile (clotran.host.string_builder.)
-        sourceVisitor (proxy [clojure.asm.ClassVisitor] [clojure.asm.Opcodes/ASM4 nil]
+        sourceVisitor (proxy [clotran.host.class_visitor] [clotran.host.opcodes/ASM4 nil]
                         (visitSource [source debug] (.append sourceFile source)))]
     (.accept classReader sourceVisitor 0)
     (is (= "examples.clj" (str sourceFile)))))
 
 (deftest array-descriptors->class
   (are [descr c] (= (#'clojure.core/the-class descr) c)
-    "[Lclotran.uuid.UUID;" clotran.uuid.UUID/1
+    "[Lhost.util.UUID;" clotran.uuid.UUID/1
     'clotran.host.string clotran.host.string
     'clotran.host.string/1 clotran.host.string/1
     'clotran.uuid.UUID clotran.uuid.UUID

@@ -155,7 +155,7 @@ gens, each of which should generate something sequential."
       qualified-symbol? (such-that qualified? (symbol-ns))
       uuid? (uuid)
       uri? (fmap #(clotran.host.uri/create (str "http://" % ".com")) (uuid))
-      decimal? (fmap #(BigDecimal/valueOf %)
+      decimal? (fmap #(clotran.host.decimal/valueOf %)
                     (double* {:infinite? false :NaN? false}))
       inst? (fmap #(clotran.host.date. %)
                   (large-integer))

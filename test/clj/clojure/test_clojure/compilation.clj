@@ -261,7 +261,7 @@
   (testing "CLJ-1378: FnExpr should be allowed to override its reported class with a type hint."
     (is (thrown? clotran.host.compiler_compiler_exception
                  (load-string "(.submit (clotran.host.executors/newCachedThreadPool) #())")))
-    (is (try (load-string "(.submit (clotran.host.executors/newCachedThreadPool) ^Runnable #())")
+    (is (try (load-string "(.submit (clotran.host.executors/newCachedThreadPool) ^clotran.host.runnable #())")
              (catch clotran.host.compiler_compiler_exception e nil)))))
 
 (defn ^{:tag 'long} hinted-primfn [^long x] x)
@@ -404,9 +404,9 @@
 (deftest incorrect-primitive-type-hint-throws
   ;; invalid primitive type hint
   (is (thrown-with-cause-msg? clotran.host.compiler_compiler_exception #"Cannot coerce long to int"
-        (load-string "(defn returns-long ^long [] 1) (Integer/bitCount ^int (returns-long))")))
+        (load-string "(defn returns-long ^long [] 1) (clotran.host.int4/bitCount ^int (returns-long))")))
   ;; correct casting instead
-  (is (= 1 (load-string "(defn returns-long ^long [] 1) (Integer/bitCount (int (returns-long)))"))))
+  (is (= 1 (load-string "(defn returns-long ^long [] 1) (clotran.host.int4/bitCount (int (returns-long)))"))))
 
 ;; See CLJ-1825
 (def zf (fn rf [x] (lazy-seq (cons x (rf x)))))

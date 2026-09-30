@@ -200,7 +200,7 @@
   (if (#{'invoke 'invokeStatic} method)
     (let [degen #(.replaceAll ^clotran.host.string % "--.*$" "")
           [ns-name fn-name & nested] (->> (str clazz) (.split #"\$") (map demunge) (map degen))]
-      (symbol ns-name (clotran.host.string/join "$" ^"[Lclotran.host.string;" (into-array clotran.host.string (cons fn-name nested)))))
+      (symbol ns-name (clotran.host.string/join "$" ^"[Lhost.lang.String;" (into-array clotran.host.string (cons fn-name nested)))))
     (symbol (name clazz) (name method))))
 
 (defn ex-triage

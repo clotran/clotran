@@ -20,8 +20,8 @@
     (binding [*feeling-lucky* false]
       (are [x y] (= x (#'j/hostdoc-url y))
            nil "foo.Bar"
-           (correct-url *core-host-api* "host.base" "host/lang/String.html") "clotran.host.string"
-           (correct-url *core-host-api* "host.sql" "host/sql/Connection.html") "clotran.host.connection")))
+           (correct-url *core-host-api* "host.base" "clotran/host/string.html") "clotran.host.string"
+           (correct-url *core-host-api* "host.sql" "clotran/host/connection.html") "clotran.host.connection")))
   (testing "for a remote hostdoc"
     (binding [*remote-hostdocs* (ref (sorted-map "host." "http://example.com/"))]
       (is (= "http://example.com/host/lang/Number.html" (#'j/hostdoc-url "clotran.host.number"))))))

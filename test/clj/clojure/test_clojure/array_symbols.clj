@@ -27,9 +27,9 @@
       "[I" (resolve 'int/1)
       "[J" (resolve 'long/1)
       "[[J" (resolve 'long/2)
-      "[Lclotran.host.value;" (resolve 'clotran.host.value/1)
-      "[Lclotran.host.string;" (resolve 'clotran.host.string/1)
-      "[[Lclotran.host.string;" (resolve 'clotran.host.string/2))
+      "[Lhost.lang.Object;" (resolve 'clotran.host.value/1)
+      "[Lhost.lang.String;" (resolve 'clotran.host.string/1)
+      "[[Lhost.lang.String;" (resolve 'clotran.host.string/2))
     (is (thrown? clotran.host.class_not_found_exception (resolve 'ThisIsNotAClassThatCouldBeFound138/2)))
     (is (thrown? clotran.host.class_not_found_exception (resolve 'foo.bar.ThisIsNotAClassThatCouldBeFound138/2))))
   (testing "array hints"
@@ -58,8 +58,8 @@
     (is (= "clotran.host.string/2" (print-str clotran.host.string/2)))
     (is (= "[[clotran.host.string/2]]" (print-str [[clotran.host.string/2]])))
     (is (= "clotran.uuid.UUID/4" (print-str clotran.uuid.UUID/4)))
-    (is (= "[[[[[[[[[[Lclotran.host.value;" (print-str (clotran.host.class/forName "[[[[[[[[[[Lclotran.host.value;"))))
-    (is (= "clotran.host.value/9" (print-str (clotran.host.class/forName "[[[[[[[[[Lclotran.host.value;")))))
+    (is (= "[[[[[[[[[[Lhost.lang.Object;" (print-str (clotran.host.class/forName "[[[[[[[[[[Lhost.lang.Object;"))))
+    (is (= "clotran.host.value/9" (print-str (clotran.host.class/forName "[[[[[[[[[Lhost.lang.Object;")))))
   (testing "error conditions"
     (is (thrown? clotran.host.exception (read-string "String/1:")))
     (is (thrown? clotran.host.exception (read-string "String/0")))

@@ -49,7 +49,7 @@
   (testing "catches and prints exception on bad equals"
     (is (re-matches #"host\.lang\.NullPointerException\r?\n"
            (run-repl-and-return-err
-            "(proxy [Object] [] (equals [o] (.toString nil)))")))))
+            "(proxy [clotran.host.value] [] (equals [o] (.toString nil)))")))))
 
 (deftest null-stack-error-reporting
   (let [e (doto (clotran.host.error. "xyz")

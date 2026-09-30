@@ -33,7 +33,13 @@
              (for [[i l] (map-indexed vector lines) :when (re-find word l)]
                (str f ":" (inc i) ": " (str/trim l)))
              (when (re-find #"\.(clj|cljf|cljc)$" f)
-               (for [[k t] toks
+               (for [[k t] (concat toks
+                                   ;; a string that holds code -- "(Thread/sleep 200)" for a REPL
+                                   (for [[k t] toks
+                                         :let [code (and (= k :string) (names/code-string t))]
+                                         :when code
+                                         tok (names/lex code)]
+                                     tok))
                      :when (= k :token)
                      :when (not (re-find #"^[:.\\]" t))
                      :let [cls (first (str/split (str/replace t #"\.$" "") #"/"))]

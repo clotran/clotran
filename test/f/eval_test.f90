@@ -346,31 +346,31 @@ contains
   ! guaranteed collection, which is why the thrown value is a GC
   ! global root rather than a plain module variable.
   subroutine check_try_catch()
-    call ev("14a. ", "(try 1 (catch Throwable e 2))", "1")
-    call ev("14b. ", "(try (throw 7) (catch Throwable e e))", "7")
-    call ev("14c. ", "(try (throw :boom) (catch Throwable e e))", ":boom")
+    call ev("14a. ", "(try 1 (catch clotran.host.throwable e 2))", "1")
+    call ev("14b. ", "(try (throw 7) (catch clotran.host.throwable e e))", "7")
+    call ev("14c. ", "(try (throw :boom) (catch clotran.host.throwable e e))", ":boom")
     ! A thrown collection: the value has to be traced, not just copied.
-    call ev("14d. ", "(try (throw (list 1 2 3)) (catch Throwable e (count e)))", "3")
+    call ev("14d. ", "(try (throw (list 1 2 3)) (catch clotran.host.throwable e (count e)))", "3")
     ! An internal error is catchable too, and arrives as a MAP rather
     ! than a bare string -- so a handler can tell it from a value the
     ! program itself threw. 14i is that distinction.
     ! A compile error is not a thrown value: try cannot catch an
     ! unresolved symbol, in Clojure or here. Checked against clj.
-    call ev_err("14e. ", "(try undefined-thing (catch Throwable e :caught))")
+    call ev_err("14e. ", "(try undefined-thing (catch clotran.host.throwable e :caught))")
     ! The handler runs in a scope where e is bound, and the outer
     ! environment is still visible.
-    call ev("14f. ", "(do (def x 10) (try (throw 5) (catch Throwable e (+ e x))))", "15")
+    call ev("14f. ", "(do (def x 10) (try (throw 5) (catch clotran.host.throwable e (+ e x))))", "15")
     ! Nothing thrown: the catch clause must not run.
-    call ev("14g. ", "(try (+ 1 1) (catch Throwable e :no))", "2")
+    call ev("14g. ", "(try (+ 1 1) (catch clotran.host.throwable e :no))", "2")
     ! Nested: the inner catch handles it, the outer does not fire.
     call ev("14h. ", &
-         "(try (try (throw 1) (catch Throwable e (+ e 10))) (catch Throwable e :outer))", "11")
+         "(try (try (throw 1) (catch clotran.host.throwable e (+ e 10))) (catch clotran.host.throwable e :outer))", "11")
     ! A thrown string stays a string; an internal error is a map. If
     ! internal errors were strings too, these two would be
     ! indistinguishable to a handler that wants to re-raise what it
     ! does not recognise.
-    call ev("14i. ", '(try (throw "x") (catch Throwable e e))', '"x"')
-    call ev_err("14j. ", "(try nope (catch Throwable e (count e)))")
+    call ev("14i. ", '(try (throw "x") (catch clotran.host.throwable e e))', '"x"')
+    call ev_err("14j. ", "(try nope (catch clotran.host.throwable e (count e)))")
   end subroutine check_try_catch
 
   subroutine check_multi_arity()
@@ -400,7 +400,7 @@ contains
     call ev("16e. ", "(do (def s (lazy-seq* (throw :boom))) :made-it)", ":made-it")
     ! ...and asking DOES run it.
     call ev("16f. ", &
-         "(try (first (lazy-seq* (throw :boom))) (catch Throwable e e))", ":boom")
+         "(try (first (lazy-seq* (throw :boom))) (catch clotran.host.throwable e e))", ":boom")
     ! An INFINITE seq, taken finitely. Without laziness this does not
     ! terminate; with it, only three cells are ever realised.
     call ev("16g. ", &
@@ -441,7 +441,7 @@ contains
          " (def target (fn* [] :new)) (caller))", ":new")
     ! #'x is the Var itself, not its value.
     call ev("17g. ", "(do (def q 3) (var q))", "#'user/q")
-    call ev_err("17h. ", "(try (var nosuch) (catch Throwable e :unresolved))")
+    call ev_err("17h. ", "(try (var nosuch) (catch clotran.host.throwable e :unresolved))")
     ! A second namespace has its own bindings.
     call ev("17i. ", &
          "(do (def a 1) (in-ns (quote other)) (def a 2) a)", "2")
@@ -516,8 +516,8 @@ contains
     ! A pattern prints as its own source text, same as real Clojure's
     ! Pattern.toString -- this is also the read/print round trip.
     call ev('21a. ', '#"a(b)c"', '#"a(b)c"')
-    call ev('21b. ', '(instance? java.util.regex.Pattern #"x")', 'true')
-    call ev('21c. ', '(instance? java.util.regex.Matcher (.matcher #"x" "y"))', &
+    call ev('21b. ', '(instance? clotran.host.pattern #"x")', 'true')
+    call ev('21c. ', '(instance? clotran.host.matcher (.matcher #"x" "y"))', &
          'true')
     ! .find advances the SAME matcher's search position -- two calls in
     ! one let* body, both against the one Matcher object.
@@ -550,14 +550,14 @@ contains
     ! hash is gc_hash under the JVM's name. Its VALUES are ours, so
     ! what is checked is the only property case* relies on: equal
     ! things hash equal, unequal things generally do not.
-    call ev('22a. ', '(= (clojure.lang.Util/hash "ab") (clojure.lang.Util/hash "ab"))', &
+    call ev('22a. ', '(= (clotran.host.util/hash "ab") (clotran.host.util/hash "ab"))', &
          'true')
-    call ev('22b. ', '(= (clojure.lang.Util/hash :a) (clojure.lang.Util/hash :b))', &
+    call ev('22b. ', '(= (clotran.host.util/hash :a) (clotran.host.util/hash :b))', &
          'false')
     ! The bounds `case` reads to decide whether its tests fit an int
     ! dispatch. clotran ints ARE Fortran default integers.
-    call ev('22c. ', 'Integer/MAX_VALUE', '2147483647')
-    call ev('22d. ', 'Integer/MIN_VALUE', '-2147483648')
+    call ev('22c. ', 'clotran.host.int4/MAX_VALUE', '2147483647')
+    call ev('22d. ', 'clotran.host.int4/MIN_VALUE', '-2147483648')
 
     ! case* below the `case` macro, so these test OUR dispatch rather
     ! than core.clj's expansion of it. The shape is
@@ -588,26 +588,26 @@ contains
     ! (.contains version-string "SNAPSHOT") included.
     call ev('23a. ', '(.contains "abc" "b")', 'true')
     call ev('23b. ', '(.contains "abc" "z")', 'false')
-    call ev('23c. ', '(Integer/valueOf "12")', '12')
+    call ev('23c. ', '(clotran.host.int4/valueOf "12")', '12')
     ! with-open closes what it opened; our streams are strings.
     call ev('23d. ', '(.close "anything")', 'nil')
     ! A missing resource is nil, as ClassLoader.getResourceAsStream
     ! answers null rather than throwing.
     call ev('23e. ', &
-         '(.getResourceAsStream (clojure.lang.RT/baseLoader) "clojure/nope")', &
+         '(.getResourceAsStream (clotran.host.rt/baseLoader) "clojure/nope")', &
          'nil')
     ! java.util.Properties is an atom over a map, because .load fills
     ! it in place.
     call ev('23f. ', &
-         '(let* [p (new java.util.Properties)] (.load p "version=9") ' // &
+         '(let* [p (new clotran.host.properties)] (.load p "version=9") ' // &
          '(.getProperty p "version"))', &
          '"9"')
     ! The whole of core.clj form 656 on one line: a ClassLoader that is
     ! a directory, a resource read off it, and Properties parsing what
     ! came back. Pinned by the vendored version.properties.
     call ev('23g. ', &
-         '(let* [p (new java.util.Properties)] ' // &
-         '(.load p (.getResourceAsStream (clojure.lang.RT/baseLoader) ' // &
+         '(let* [p (new clotran.host.properties)] ' // &
+         '(.load p (.getResourceAsStream (clotran.host.rt/baseLoader) ' // &
          '"clojure/version.properties")) (.getProperty p "version"))', &
          '"1.12.6"')
   end subroutine check_resources
@@ -649,7 +649,7 @@ contains
     call ev('24f. ', &
          '(do (deftype* t/U t.U [] :implements [some.IFace])' // &
          ' [(instance? t.U (new t.U)) (instance? some.IFace (new t.U))' // &
-         '  (instance? java.util.Date (new t.U))])', '[true true false]')
+         '  (instance? clotran.host.date (new t.U))])', '[true true false]')
     ! type/class answer with the full class name, which is the key a
     ! protocol's :impls map is keyed by.
     call ev('24g. ', &
@@ -738,7 +738,7 @@ contains
     env = gce_base_env(no_roots)
     call vs_set(base + 1, env)
     gc_torture = torturing
-    r = gce_analyze(gcr_read("(dissoc (assoc (assoc (clojure.lang.PersistentTreeMap/create (list 3 :c 1 :a 9 :z)) 2 :b) 0 :zero) 9)", no_roots), gc_nil())
+    r = gce_analyze(gcr_read("(dissoc (assoc (assoc (clotran.host.persistent_tree_map/create (list 3 :c 1 :a 9 :z)) 2 :b) 0 :zero) 9)", no_roots), gc_nil())
     if (.not. gce_has_error()) r = gce_eval(r, gc_nil(), no_roots)
     block
        call gcp_str(r, .true., s=dlt_1)

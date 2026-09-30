@@ -7,7 +7,8 @@
 ;;              not listed takes clotran.host.<snake_case simple name>.
 ;;              Written in Fortran: clotran.host, snake_case, a scalar its
 ;;              Fortran kind; written in Clojure: its deftype's own name.
-;; :implicit    names every upstream file may write bare, unimported
+;; :implicit    what every namespace imports: a name upstream writes bare,
+;;              unimported (clj's (ns-imports 'user))
 ;; :constructors a class whose clotran type is built from its fields, not
 ;;              from the arguments upstream passes: its factory instead
 ;; :namespaces  upstream namespaces clotran provides under its own name
@@ -289,52 +290,110 @@
   "java.util.regex.Pattern" "clotran.host.pattern",
   "java.util.stream.BaseStream" "clotran.host.base_stream"},
  :implicit
- ["AbstractMethodError"
-  "ArithmeticException"
-  "AssertionError"
-  "Boolean"
-  "Byte"
-  "CharSequence"
-  "Character"
-  "Class"
-  "ClassCastException"
-  "ClassLoader"
-  "ClassNotFoundException"
-  "Deprecated"
-  "Double"
-  "Error"
-  "Exception"
-  "Float"
-  "IllegalAccessError"
-  "IllegalArgumentException"
-  "IllegalStateException"
-  "IndexOutOfBoundsException"
-  "Integer"
-  "Iterable"
-  "Long"
-  "Math"
-  "NegativeArraySizeException"
-  "NullPointerException"
-  "Number"
-  "NumberFormatException"
-  "Object"
-  "Override"
-  "Runnable"
-  "Runtime"
-  "RuntimeException"
-  "Short"
-  "StackOverflowError"
-  "StackTraceElement"
-  "String"
-  "StringBuffer"
-  "StringBuilder"
-  "StringIndexOutOfBoundsException"
-  "SuppressWarnings"
-  "System"
-  "Thread"
-  "ThreadLocal"
-  "Throwable"
-  "UnsupportedOperationException"],
+ {"Cloneable" "java.lang.Cloneable",
+ "Byte" "java.lang.Byte",
+ "IllegalAccessError" "java.lang.IllegalAccessError",
+ "ClassCircularityError" "java.lang.ClassCircularityError",
+ "Double" "java.lang.Double",
+ "VirtualMachineError" "java.lang.VirtualMachineError",
+ "Iterable" "java.lang.Iterable",
+ "UnknownError" "java.lang.UnknownError",
+ "IllegalThreadStateException" "java.lang.IllegalThreadStateException",
+ "BigInteger" "java.math.BigInteger",
+ "Void" "java.lang.Void",
+ "Comparable" "java.lang.Comparable",
+ "IndexOutOfBoundsException" "java.lang.IndexOutOfBoundsException",
+ "CloneNotSupportedException" "java.lang.CloneNotSupportedException",
+ "StringBuffer" "java.lang.StringBuffer",
+ "Thread" "java.lang.Thread",
+ "AbstractMethodError" "java.lang.AbstractMethodError",
+ "ClassFormatError" "java.lang.ClassFormatError",
+ "Callable" "java.util.concurrent.Callable",
+ "InternalError" "java.lang.InternalError",
+ "Package" "java.lang.Package",
+ "Override" "java.lang.Override",
+ "SecurityException" "java.lang.SecurityException",
+ "IncompatibleClassChangeError"
+ "java.lang.IncompatibleClassChangeError",
+ "Class" "java.lang.Class",
+ "Object" "java.lang.Object",
+ "Number" "java.lang.Number",
+ "Short" "java.lang.Short",
+ "CharSequence" "java.lang.CharSequence",
+ "Runtime" "java.lang.Runtime",
+ "EnumConstantNotPresentException"
+ "java.lang.EnumConstantNotPresentException",
+ "RuntimeException" "java.lang.RuntimeException",
+ "Runnable" "java.lang.Runnable",
+ "IllegalAccessException" "java.lang.IllegalAccessException",
+ "Character" "java.lang.Character",
+ "NoSuchMethodException" "java.lang.NoSuchMethodException",
+ "StringIndexOutOfBoundsException"
+ "java.lang.StringIndexOutOfBoundsException",
+ "RuntimePermission" "java.lang.RuntimePermission",
+ "NoSuchMethodError" "java.lang.NoSuchMethodError",
+ "ClassLoader" "java.lang.ClassLoader",
+ "SecurityManager" "java.lang.SecurityManager",
+ "NullPointerException" "java.lang.NullPointerException",
+ "StringBuilder" "java.lang.StringBuilder",
+ "IllegalStateException" "java.lang.IllegalStateException",
+ "NumberFormatException" "java.lang.NumberFormatException",
+ "InstantiationException" "java.lang.InstantiationException",
+ "UnsupportedClassVersionError"
+ "java.lang.UnsupportedClassVersionError",
+ "NegativeArraySizeException" "java.lang.NegativeArraySizeException",
+ "ThreadLocal" "java.lang.ThreadLocal",
+ "NoSuchFieldException" "java.lang.NoSuchFieldException",
+ "LinkageError" "java.lang.LinkageError",
+ "BigDecimal" "java.math.BigDecimal",
+ "Math" "java.lang.Math",
+ "UnsupportedOperationException"
+ "java.lang.UnsupportedOperationException",
+ "StackOverflowError" "java.lang.StackOverflowError",
+ "ThreadDeath" "java.lang.ThreadDeath",
+ "ClassNotFoundException" "java.lang.ClassNotFoundException",
+ "ArrayIndexOutOfBoundsException"
+ "java.lang.ArrayIndexOutOfBoundsException",
+ "StackTraceElement" "java.lang.StackTraceElement",
+ "ThreadGroup" "java.lang.ThreadGroup",
+ "Integer" "java.lang.Integer",
+ "ArithmeticException" "java.lang.ArithmeticException",
+ "ClassCastException" "java.lang.ClassCastException",
+ "String" "java.lang.String",
+ "Readable" "java.lang.Readable",
+ "InstantiationError" "java.lang.InstantiationError",
+ "StrictMath" "java.lang.StrictMath",
+ "TypeNotPresentException" "java.lang.TypeNotPresentException",
+ "NoSuchFieldError" "java.lang.NoSuchFieldError",
+ "ExceptionInInitializerError" "java.lang.ExceptionInInitializerError",
+ "IllegalMonitorStateException"
+ "java.lang.IllegalMonitorStateException",
+ "ArrayStoreException" "java.lang.ArrayStoreException",
+ "Long" "java.lang.Long",
+ "Enum" "java.lang.Enum",
+ "InheritableThreadLocal" "java.lang.InheritableThreadLocal",
+ "AssertionError" "java.lang.AssertionError",
+ "Appendable" "java.lang.Appendable",
+ "Process" "java.lang.Process",
+ "Throwable" "java.lang.Throwable",
+ "Error" "java.lang.Error",
+ "OutOfMemoryError" "java.lang.OutOfMemoryError",
+ "SuppressWarnings" "java.lang.SuppressWarnings",
+ "ProcessBuilder" "java.lang.ProcessBuilder",
+ "InterruptedException" "java.lang.InterruptedException",
+ "System" "java.lang.System",
+ "Deprecated" "java.lang.Deprecated",
+ "Float" "java.lang.Float",
+ "VerifyError" "java.lang.VerifyError",
+ "Exception" "java.lang.Exception",
+ "NoClassDefFoundError" "java.lang.NoClassDefFoundError",
+ "IllegalArgumentException" "java.lang.IllegalArgumentException",
+ "Compiler" "clojure.lang.Compiler",
+ "UnsatisfiedLinkError" "java.lang.UnsatisfiedLinkError",
+ "Boolean" "java.lang.Boolean",
+ "Thread$State" "java.lang.Thread$State",
+ "Thread$UncaughtExceptionHandler"
+ "java.lang.Thread$UncaughtExceptionHandler"}
  :constructors
  {"java.io.StringReader" "clotran.io/text-reader",
   "java.io.PushbackReader" "clotran.io/pushback-reader",

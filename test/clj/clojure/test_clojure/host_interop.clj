@@ -186,9 +186,9 @@
 
 ;https://clojure.atlassian.net/browse/CLJ-1973
 (deftest test-proxy-method-order
-  (let [class-reader (clojure.asm.ClassReader. proxy-examples/proxy1-class-name)
+  (let [class-reader (clotran.host.class_reader. proxy-examples/proxy1-class-name)
         method-order (atom [])
-        method-visitor (proxy [clojure.asm.ClassVisitor] [clojure.asm.Opcodes/ASM4 nil]
+        method-visitor (proxy [clotran.host.class_visitor] [clotran.host.opcodes/ASM4 nil]
                          (visitMethod [access name descriptor signature exceptions]
                            (swap! method-order conj {:name name :descriptor descriptor})
                            nil))
@@ -202,16 +202,16 @@
                   {:name "toString", :descriptor "()Lhost/lang/String;"}
                   {:name "equals", :descriptor "(Lhost/lang/Object;)Z"}
                   {:name "a", :descriptor "(Lhost/io/File;)Z"}
-                  {:name "a", :descriptor "(Lhost/lang/Boolean;)Lhost/lang/Object;"}
+                  {:name "a", :descriptor "(Lhost/lang/Boolean;)Lclotran/host/value;"}
                   {:name "a", :descriptor "(Lhost/lang/Runnable;)Z"}
                   {:name "a", :descriptor "(Lhost/lang/String;)I"}
-                  {:name "b", :descriptor "(Lhost/lang/String;)Lhost/lang/Object;"}
-                  {:name "c", :descriptor "(Lhost/lang/String;)Lhost/lang/Object;"}
-                  {:name "d", :descriptor "(Lhost/lang/String;)Lhost/lang/Object;"}
-                  {:name "a", :descriptor "(Lhost/lang/Boolean;Lhost/lang/String;)I"}
-                  {:name "a", :descriptor "(Lhost/lang/String;Lhost/io/File;)Z"}
-                  {:name "a", :descriptor "(Lhost/lang/String;Lhost/lang/Runnable;)Z"}
-                  {:name "a", :descriptor "(Lhost/lang/String;Lhost/lang/String;)I"}]
+                  {:name "b", :descriptor "(Lhost/lang/String;)Lclotran/host/value;"}
+                  {:name "c", :descriptor "(Lhost/lang/String;)Lclotran/host/value;"}
+                  {:name "d", :descriptor "(Lhost/lang/String;)Lclotran/host/value;"}
+                  {:name "a", :descriptor "(Lhost/lang/Boolean;Lclotran/host/string;)I"}
+                  {:name "a", :descriptor "(Lhost/lang/String;Lclotran/io/File;)Z"}
+                  {:name "a", :descriptor "(Lhost/lang/String;Lclotran/host/runnable;)Z"}
+                  {:name "a", :descriptor "(Lhost/lang/String;Lclotran/host/string;)I"}]
         actual @method-order]
     (is (= expected actual)
         (with-out-str (pp/pprint (data/diff expected actual))))))

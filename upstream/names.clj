@@ -11,8 +11,8 @@
             [clojure.java.io :as io]))
 
 (def table (edn/read-string (slurp (io/file (.getParentFile (io/file *file*)) "class-names.edn"))))
-(def implicit (set (:implicit table)))
-(def host-prefix #"^(?:java|javax|clojure\.lang)\.")
+(def implicit (:implicit table))
+(def host-prefix #"^(?:java|javax|clojure\.lang|clojure\.asm)\.")
 
 (defn snake [simple]
   (-> simple
@@ -41,7 +41,7 @@
 
 ;; --- text: strings, comments, docstrings ----------------------------------
 
-(def qualified-in-text #"(?:(?<![\w.$])|(?<=\[L))(?:java|javax|clojure\.lang)(?:\.[a-z_][a-z0-9_]*)*\.[A-Z][A-Za-z0-9_$]*")
+(def qualified-in-text #"(?:(?<![\w.$])|(?<=\bL))(?:java|javax|clojure\.lang|clojure\.asm)(?:\.[a-z_][a-z0-9_]*)*\.[A-Z][A-Za-z0-9_$]*")
 
 (def host-doc-link #"https?://(?:docs\.oracle\.com|java\.sun\.com)[^\s\"]*")
 
@@ -53,6 +53,9 @@
       (str/replace (re-pattern (str "\n\n\\s*For more complete information, see:\\s*" host-doc-link)) "")
       (str/replace host-doc-link "the host's documentation")
       (str/replace qualified-in-text #(class-name %))
+      ;; the JVM's internal spelling, Ljava/lang/Object;
+      (str/replace #"(?:(?<![\w/$])|(?<=L))(?:java|javax|clojure/lang|clojure/asm)(?:/[a-z_][a-z0-9_]*)*/[A-Z][A-Za-z0-9_$]*"
+                   #(str/replace (class-name (str/replace % "/" ".")) "." "/"))
       (str/replace #"clojure\.java\.[a-z]+" rename-namespace)
       (str/replace #"\b(?:clojure\.lang|java\.lang)\b" "clotran.host")
       words))
@@ -70,8 +73,9 @@
       (if (>= i n)
         (persistent! out)
         (let [c (.charAt s i)
-              string-end (fn [j] (loop [j j] (let [d (.charAt s j)]
-                                               (cond (= d \\) (recur (+ j 2))
+              string-end (fn [j] (loop [j j] (let [d (when (< j n) (.charAt s j))]
+                                               (cond (nil? d) n
+                                                     (= d \\) (recur (min n (+ j 2)))
                                                      (= d \") (inc j)
                                                      :else (recur (inc j))))))]
           (cond
@@ -87,7 +91,7 @@
             (let [j (string-end (+ i 2))] (recur j (conj! out [:regex (subs s i j)])))
             (= c \\)
             (let [j (loop [j (+ i 2)] (if (and (< j n) (Character/isLetterOrDigit (.charAt s j))) (recur (inc j)) j))
-                  j (if (Character/isLetterOrDigit (.charAt s (inc i))) j (+ i 2))]
+                  j (if (and (< (inc i) n) (Character/isLetterOrDigit (.charAt s (inc i)))) j (min n (+ i 2)))]
               (recur j (conj! out [:char (subs s i j)])))
             (delim-start c)
             (recur (inc i) (conj! out [:delim (str c)]))
@@ -167,12 +171,12 @@
           (let [[outer inner] (str/split nm #"\$" 2)
                 o (cond (defined outer) nil
                         (imports outer) (imports outer)
-                        (implicit outer) (str "java.lang." outer))]
+                        (implicit outer) (implicit outer))]
             (when o (str o "$" inner)))
           (str/includes? nm ".") nil
           (defined nm) nil
           (imports nm) (imports nm)
-          (implicit nm) (str "java.lang." nm))))
+          (implicit nm) (implicit nm))))
 
 (defn rename-token [resolve t]
   (cond
@@ -191,6 +195,23 @@
                            (str (rename-namespace cls) member)
                            (rename-namespace body))]
           (words (str ns-renamed dot)))))))
+
+(declare rename-source)
+
+(defn code-string
+  "The code a string literal holds, or nil if it is not one."
+  [t]
+  (let [s (try (read-string t) (catch Exception _ nil))]
+    (when (and (string? s) (re-find #"^\s*[(\[]" s) (= t (pr-str s))) s)))
+
+(defn rename-string
+  "A string literal: one that holds code -- \"(fn [^Integer x] x)\" for
+  eval, a form for a REPL -- is renamed as code, where reading and
+  printing it gives back the same text; any other only as text."
+  [t]
+  (if-let [s (code-string t)]
+    (pr-str (rename-source s))
+    (rename-text t)))
 
 (defn rename-source
   "The file's text in clotran's names."
@@ -216,7 +237,8 @@
             (recur (inc i)
                    (.append out (case k
                                   :token (rename-token resolve t)
-                                  (:string :regex :comment) (rename-text t)
+                                  :string (rename-string t)
+                                  (:regex :comment) (rename-text t)
                                   t))))))))))
 
 (defn rename-path [p] (words p))
@@ -242,8 +264,7 @@
 (def simple-back
   "A simple name clj prints -- \"Long\", as .getSimpleName gives it -- to
   the last part of clotran's name, where only one class has it."
-  (into {} (for [[s qs] (group-by #(last (str/split % #"\.")) (concat (keys (:classes table))
-                                                                          (map #(str "java.lang." %) implicit)))
+  (into {} (for [[s qs] (group-by #(last (str/split % #"\.")) (concat (keys (:classes table)) (vals implicit)))
                  :let [cs (distinct (map class-name qs))] :when (= 1 (count cs))]
              [s (last (str/split (first cs) #"\."))])))
 

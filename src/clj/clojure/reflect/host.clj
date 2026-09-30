@@ -12,7 +12,7 @@
 (require '[clojure.datafy :refer (datafy)]
          '[clojure.set :as set]
          '[clojure.string :as str])
-(import '[clojure.asm ClassReader ClassVisitor Type Opcodes]
+(import 
          
          )
 
@@ -26,9 +26,9 @@
   ;; neither .getName not .getSimpleName returns the right thing, so best to delegate to Type
   (typename
    [c]
-   (typename (Type/getType c)))
+   (typename (clotran.host.type/getType c)))
   
-  Type
+  clotran.host.type
   (typename
    [t]
    (-> (.getClassName t))))
@@ -62,17 +62,17 @@
    the host's documentation"
   [^clotran.host.string d]
   {:pre [(string? d)]}
-  (typesym (Type/getType d)))
+  (typesym (clotran.host.type/getType d)))
 
 (defn- internal-name->class-symbol
   "Convert a host internal name to a Clojure class symbol. Internal
-   names uses slashes instead of dots, e.g. host/lang/String. See
+   names uses slashes instead of dots, e.g. clotran/host/string. See
    Section 4.2 of the host spec, 2nd ed.:
 
    the host's documentation"
   [d]
   {:pre [(string? d)]}
-  (typesym (Type/getObjectType d)))
+  (typesym (clotran.host.type/getObjectType d)))
 
 (def ^{:doc "The host access bitflags, along with their friendly names and
 the kinds of objects to which they can apply."}
@@ -190,8 +190,8 @@ the kinds of objects to which they can apply."}
 
 (defn- parse-method-descriptor
   [^clotran.host.string md]
-  {:parameter-types (vec (map typesym (Type/getArgumentTypes md)))
-   :return-type (typesym (Type/getReturnType md))})
+  {:parameter-types (vec (map typesym (clotran.host.type/getArgumentTypes md)))
+   :return-type (typesym (clotran.host.type/getReturnType md))})
 
 (defprotocol ClassResolver
   (^clotran.host.input_stream resolve-class [this name]
@@ -210,18 +210,18 @@ the kinds of objects to which they can apply."}
   (do-reflect [_ typeref]
     (with-open [is (resolve-class class-resolver typeref)]
       (let [class-symbol (typesym typeref)
-            r (ClassReader. is)
+            r (clotran.host.class_reader. is)
             result (atom {:bases #{} :flags #{} :members #{}})]
         (.accept
          r
          (proxy
-          [ClassVisitor]
-          [Opcodes/ASM4]
+          [clotran.host.class_visitor]
+          [clotran.host.opcodes/ASM4]
           (visit [version access name signature superName interfaces]
                  (let [flags (parse-flags access :class)
                        ;; ignore clotran.host.value on interfaces to match reflection
                        superName (if (and (flags :interface)
-                                          (= superName "host/lang/Object"))
+                                          (= superName "clotran/host/value"))
                                    nil
                                    superName)
                        bases (->> (cons superName interfaces)

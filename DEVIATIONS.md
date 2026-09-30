@@ -1934,18 +1934,28 @@ what they are written in:
                                    ;; clj java.lang.Object/1   clotran clotran.host.value/1
     Double/TYPE                    ;; clj double               clotran :real8
 
-The JVM names are still READ, because vendored Clojure writes them:
-`(instance? clojure.lang.IPersistentMap x)`, `(catch ArithmeticException e ...)`,
-`(java.util.ArrayList.)` and `(Class/forName "[Ljava.lang.Object;")` all
-work, each resolving through one table, `src/clj/clotran/class-aliases.edn`
-(generated into `src/f/classalias.inc` by `scripts/class-names`). A JVM
-name is input only; nothing clotran prints contains one. Several JVM
-classes share a clotran class where clotran has one implementation --
-`clojure.lang.BigInt` and `java.math.BigInteger` are both
-`clotran.host.bigint`.
+clotran reads only its own names. A JVM name -- `String`, `java.io.Writer`,
+`clojure.lang.RT` -- is an unknown class, as a made-up one is:
 
-The oracle compares through the same table: clj's answer has its class
-names translated before it is compared, and is accepted as it stands
-where the name was only a symbol (`` `java.util.Map ``).
+    (instance? String "x")        ;; clj true   clotran: Unable to resolve symbol: String
+
+Clojure's own source writes JVM names, so it is not loaded as it comes:
+`upstream/` holds it unmodified and `upstream/derive` writes
+`src/clj/clojure` and `test/clj/clojure` from it with every class in
+clotran's name, resolving each file's bare names through its imports and
+Clojure's default ones (`upstream/class-names.edn`, `upstream/names.clj`).
+Where a clotran type is built from its fields but upstream passes the
+host constructor's arguments, the renamed code calls clotran's factory
+instead: `(java.io.StringReader. s)` becomes `(clotran.io/text-reader s)`.
+Several JVM classes share a clotran class where clotran has one
+implementation -- `clojure.lang.BigInt` and `java.math.BigInteger` are
+both `clotran.host.bigint`.
+
+Code ported from the JVM needs the same renaming; `upstream/names.clj`
+does it for any file. The oracle uses it in both directions: each case
+goes to clj in upstream's names, and clj's answer comes back in
+clotran's, accepted as it stands where a name was only a symbol
+(`` `java.util.Map ``). `upstream/check-names` keeps JVM names out of
+everything else.
 
 **Removal**: not planned; it is the design.

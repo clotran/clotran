@@ -592,7 +592,7 @@
 ;; big-pos-ratio is a ratio value that is larger than
 ;; Double/MAX_VALUE, and has a non-terminating decimal representation
 ;; if you attempt to represent it exactly.
-(def big-pos-ratio (/ (* 4 (bigint (. BigDecimal valueOf clotran.host.real8/MAX_VALUE))) 3))
+(def big-pos-ratio (/ (* 4 (bigint (. clotran.host.decimal valueOf clotran.host.real8/MAX_VALUE))) 3))
 (def big-neg-ratio (- big-pos-ratio))
 ;; tiny-pos-ratio is a ratio between 0 and Double/MIN_VALUE.
 (def tiny-pos-ratio (/ 1 (bigint (apply str (cons "1" (repeat 340 "0"))))))

@@ -30,7 +30,7 @@
 (deftest Coerced-BigDecimal
   (doseq [v [(bigdec 3) (bigdec (inc (bigint clotran.host.int8/MAX_VALUE)))]]
     (are [x] (true? x)
-     (instance? BigDecimal v)
+     (instance? clotran.host.decimal v)
      (number? v)
      (decimal? v)
      (not (float? v)))))

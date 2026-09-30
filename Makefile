@@ -248,7 +248,7 @@ $(B)/LispReader.o: $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B
 $(B)/ClotranABI.o: $(B)/GC.o $(B)/PersistentVector.o $(B)/Namespace.o $(B)/CompiledFn.o $(B)/NativeArray.o $(B)/Eval.o
 
 $(B)/Eval.o: $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/Env.o \
-	$(B)/Namespace.o $(B)/Printer.o $(B)/Regex.o $(B)/NativeArray.o $(B)/DynLoad.o $(B)/Threads.o $(B)/CompiledFn.o $(B)/Socket.o $(S)/analyze.inc $(S)/exec.inc $(S)/flat.inc $(S)/repl.inc $(S)/tasks.inc $(S)/sorted.inc $(S)/hosttable.inc $(S)/classalias.inc
+	$(B)/Namespace.o $(B)/Printer.o $(B)/Regex.o $(B)/NativeArray.o $(B)/DynLoad.o $(B)/Threads.o $(B)/CompiledFn.o $(B)/Socket.o $(S)/analyze.inc $(S)/exec.inc $(S)/flat.inc $(S)/repl.inc $(S)/tasks.inc $(S)/sorted.inc $(S)/hosttable.inc
 
 # The reference BLAS (src/f/blas/PROVENANCE.md), F77 fixed form, as a
 # PACKAGE beside its Clojure in packages/blas, opened at run time; the
@@ -477,8 +477,6 @@ check-static:
 	scripts/state-inventory
 	@echo "--- the builtins that may reuse an argument vector (argsafe.inc) are current ---"
 	scripts/argsafe --check
-	@echo "--- the class-name aliases (classalias.inc) match their table ---"
-	scripts/class-names --check
 	@echo "--- src/clj/clojure and test/clj/clojure are what upstream/derive writes; no JVM name outside upstream/ ---"
 	upstream/derive --check
 	upstream/check-names

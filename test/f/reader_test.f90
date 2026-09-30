@@ -187,7 +187,7 @@ contains
     call gc_init(512)
     call round("9a. #? keeps the :cljf branch: ", "#?(:clj 1 :cljf 2)", "2")
     call round("9b. ...or :default: ", "#?(:clj 1 :default 3)", "3")
-    call round("9c. :clj is the JVM, not us: ", "(a #?(:clj 1) b)", "(a b)")
+    call round("9c. :clj is clj's branch, not ours: ", "(a #?(:clj 1) b)", "(a b)")
     call round("9d. no branch at the end of a list: ", "(a #?(:cljs 1))", "(a)")
     call round("9e. #?@ splices a vector: ", "[1 #?@(:cljf [2 3]) 4]", "[1 2 3 4]")
     call round("9f. ...and a list: ", "(f #?@(:cljf (x y)))", "(f x y)")

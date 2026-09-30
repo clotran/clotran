@@ -21,7 +21,7 @@
 
 (def pool (delay (clotran.host.fork_join_pool.)))
 
-(defn fjtask [^Callable f]
+(defn fjtask [^clotran.host.callable f]
   (clotran.host.fork_join_task/adapt f))
 
 (defn- fjinvoke [f]

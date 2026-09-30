@@ -581,7 +581,6 @@ module Eval
   include "hosttable.inc"
   ! the JVM and clojure.lang class names taken as input, and clotran's name
   ! for each (scripts/class-names, src/clj/clotran/class-aliases.edn)
-  include "classalias.inc"
 
 contains
 
@@ -1998,10 +1997,8 @@ contains
   ! and this runs once per deftype rather than once per call.
 
 
-  ! Each interface symbol as its class keyword. java.lang is
-  ! implicitly imported, so short_class_name is what makes Object and
-  ! java.lang.Object the same entry -- the same rule a class literal
-  ! in value position follows.
+  ! Each interface symbol as its class keyword, the same rule a class
+  ! literal in value position follows.
   recursive function iface_keys(ifaces) result(out)
     type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: ifaces
@@ -2370,7 +2367,7 @@ contains
     end if
     block
        call class_text(vs_get(vst, base + 1), s=dlt_1)
-       call short_class_name(dlt_1, s=dlt_2)
+       dlt_2 = dlt_1
        k = gc_class(dlt_2,  [vs_get(vst, base + 1), vs_get(vst, base + 2)])
     end block
     call vs_set(vst, base + 3, k)
@@ -3228,17 +3225,6 @@ contains
   !
   ! Only ever reached once a symbol has failed to resolve as a local
   ! and as a Var, so it shadows nothing.
-  ! A class name with an implicit java.lang qualifier removed.
-  subroutine short_class_name(t, s)
-    character(len=*), intent(in) :: t
-    character(len=:), allocatable, intent(out) :: s
-    s = t
-    if (len(t) > 10) then
-       if (t(1:10) == "java.lang.") then
-          if (index(t(11:), ".") == 0) s = t(11:)
-       end if
-    end if
-  end subroutine short_class_name
 
   logical function is_class_name(sym)
     type(gc_value), intent(in) :: sym
@@ -3314,15 +3300,10 @@ contains
 
 
   ! (new cname args...) once the executor has evaluated the arguments.
-  ! aliased: the program wrote a JVM name for a type clotran writes in
-  ! Clojure -- (java.util.ArrayList.) -- which is the JVM's constructor and
-  ! takes the JVM's arguments; the type's own name, (clotran.rt.ArrayList.
-  ! items), is built from its fields
-  recursive function eval_new(cname, argv, aliased) result(out)
+  recursive function eval_new(cname, argv) result(out)
     type(gc_stack), pointer :: vst
     character(len=*), intent(in) :: cname
     type(gc_value), intent(in) :: argv
-    logical, intent(in) :: aliased
     type(gc_value) :: out, thunk
     integer :: base
 
@@ -3602,17 +3583,6 @@ contains
        ! validators or watches
        call vs_set(vst, base + 3, nth_or_nil(vs_get(vst, base + 1), 0))
        out = gc_obj(OBJ_VOLATILE, [vs_get(vst, base + 3)], [vs_get(vst, base + 3)])
-    else if (aliased .and. cname == "clotran.rt.ArrayList") then
-       ! Clojure on this host: clotran.rt's ArrayList (rt_call)
-       out = rt_call("array-list", vs_get(vst, base + 1))
-    else if (aliased .and. cname == "clotran.io.TextReader") then
-       ! the names vendored Clojure writes for a character stream, mapped
-       ! onto clotran.io's own readers (through clotran.rt)
-       out = rt_call("string-reader", vs_get(vst, base + 1))
-    else if (aliased .and. cname == "clotran.io.PushbackReader") then
-       out = rt_call("pushback-reader", vs_get(vst, base + 1))
-    else if (aliased .and. cname == "clotran.io.LineNumberingReader") then
-       out = rt_call("line-numbering-reader", vs_get(vst, base + 1))
     else if (cname == "clotran.host.buffered_reader" .or. cname == "clotran.host.buffered_reader") then
        out = rt_call("buffered-reader", vs_get(vst, base + 1))
     else if (cname == "clotran.host.value" .or. cname == "clotran.host.value") then
@@ -3811,87 +3781,23 @@ contains
     call gc_state_unlock()
   end subroutine record_import
 
-  ! A class name in full: a dotted name is already one, a bare name is
-  ! the import it names, or java.lang's.
-  ! clotran's name for a class, from what a program wrote: a clotran name
-  ! as it is; a JVM or clojure.lang name -- which vendored Clojure writes --
-  ! as the alias table says (classalias.inc); a bare name through the
-  ! imports, then as java.lang's, which is implicitly imported on the JVM.
-  ! A bare name that is none of those stays bare: a deftype's own name.
+  ! A class name in full: a dotted name is already one; a bare name is
+  ! the import it names, or, imported by nothing, a deftype's own name.
   subroutine canon_class(name, c)
     character(len=*), intent(in) :: name
     character(len=:), allocatable, intent(out) :: c
     integer :: i
-    logical :: found
     c = name
-    if (index(name, ".") > 0) then
-       call class_alias(name, c, found)
-       return
-    end if
+    if (index(name, ".") > 0) return
     call gc_state_lock()
     do i = 1, n_imports
        if (import_short(i) == name) then
-          call gc_state_unlock()
-          call class_alias(trim(import_full(i)), c, found)
-          return
+          c = trim(import_full(i))
+          exit
        end if
     end do
     call gc_state_unlock()
-    call class_alias("java.lang." // name, c, found)
-    if (found) return
-    call simple_alias(name, c, found)
   end subroutine canon_class
-
-  ! A bare simple name that names exactly one clotran class (classalias.inc)
-  subroutine simple_alias(name, c, found)
-    character(len=*), intent(in) :: name
-    character(len=:), allocatable, intent(out) :: c
-    logical, intent(out) :: found
-    integer :: lo, hi, mid
-    found = .false.
-    lo = 1
-    hi = N_CLASS_SIMPLE
-    do while (lo <= hi)
-       mid = (lo + hi) / 2
-       if (trim(CLASS_SIMPLE_FROM(mid)) == name) then
-          c = trim(CLASS_SIMPLE_TO(mid))
-          found = .true.
-          return
-       else if (llt(trim(CLASS_SIMPLE_FROM(mid)), name)) then
-          lo = mid + 1
-       else
-          hi = mid - 1
-       end if
-    end do
-    c = name
-  end subroutine simple_alias
-
-  ! The clotran name an input class name aliases, by binary search of the
-  ! sorted table; the name itself, and found false, when it is not there.
-  subroutine class_alias(name, c, found)
-    character(len=*), intent(in) :: name
-    character(len=:), allocatable, intent(out) :: c
-    logical, intent(out) :: found
-    integer :: lo, hi, mid
-    character(len=len(name)) :: n
-    n = name
-    found = .false.
-    lo = 1
-    hi = N_CLASS_ALIASES
-    do while (lo <= hi)
-       mid = (lo + hi) / 2
-       if (trim(CLASS_ALIAS_FROM(mid)) == n) then
-          c = trim(CLASS_ALIAS_TO(mid))
-          found = .true.
-          return
-       else if (llt(trim(CLASS_ALIAS_FROM(mid)), n)) then
-          lo = mid + 1
-       else
-          hi = mid - 1
-       end if
-    end do
-    c = n
-  end subroutine class_alias
 
   ! The ONE spelling a class has, wherever it is built: the canonical
   ! name IN FULL, so String and java.lang.String are both
@@ -3999,9 +3905,6 @@ contains
     ! clotran's own: the host's classes, and a type a clotran namespace
     ! defines, named before that namespace is loaded
     if (index(t, "clotran.") == 1) return
-    if (index(t, "clojure.lang.") == 1) return
-    if (index(t, "clojure.asm.") == 1) return
-    if (index(t, "java.") == 1) return
     ! a protocol's interface -- clojure.core.protocols.CollReduce, which
     ! defprotocol generates as a class on the JVM -- is known by the
     ! protocol's Var: the namespace exists and holds the last segment
@@ -11348,7 +11251,7 @@ contains
        if (a%tag == GCT_CLASS) then
           block
              call gc_ref_text(a%ref, s=dlt_1)
-             call short_class_name(dlt_1, s=dlt_2)
+             dlt_2 = dlt_1
              call gc_ref_text(a%ref, s=dlt_3)
              out = gc_bool(dlt_2 == "array" .or.  index(dlt_3, "[") == 1)
           end block
@@ -12577,7 +12480,7 @@ contains
          if (rel == "clojure/genclass" .or. &
               rel == "clojure/gvec") then
             print '(A,A,A)', "note: skipping ", rel, &
-                 " (JVM-only)"
+                 " (it generates host classes)"
             ! The namespace exists, empty: require checks that a lib
             ! defined its namespace after loading, and find-ns no
             ! longer creates one on the way to answering.
@@ -17349,7 +17252,7 @@ contains
     ! first. Everything else keeps its package.
     block
        call gc_ref_text(cls%ref, s=dlt_1)
-       call short_class_name(dlt_1, s=dlt_2)
+       dlt_2 = dlt_1
        c = dlt_2
     end block
     ! an array class: the same element type and the same rank
@@ -18003,7 +17906,7 @@ contains
     ! java.lang.Number or print-method Number will not match a Long.
     block
        call gc_ref_text(dv%ref, s=dlt_1)
-       call short_class_name(dlt_1, s=dlt_2)
+       dlt_2 = dlt_1
        t = dlt_2
     end block
 
@@ -19865,7 +19768,7 @@ contains
     block
       character(len=:), allocatable :: canonical
       call canon_class(cname, c=canonical)
-      out = eval_new(canonical, vs_get(vst, b + 1), canonical /= cname)
+      out = eval_new(canonical, vs_get(vst, b + 1))
     end block
     call vs_leave(vst, b)
   end function gce_new_slots

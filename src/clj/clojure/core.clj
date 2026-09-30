@@ -340,7 +340,7 @@
 (defn to-array
   "Returns an array of Objects containing the contents of coll, which
   can be any Collection.  Maps to clotran.host.collection.toArray()."
-  {:tag "[Lclotran.host.value;"
+  {:tag "[Lhost.lang.Object;"
    :added "1.0"
    :static true}
   [coll] (. clotran.host.rt (toArray coll)))
@@ -1393,7 +1393,7 @@
   (or (instance? clotran.host.int4 n)
       (instance? clotran.host.int8 n)
       (instance? clotran.host.bigint n)
-      (instance? BigInteger n)
+      (instance? clotran.host.bigint n)
       (instance? clotran.host.int2 n)
       (instance? clotran.host.int1 n)))
 
@@ -3611,7 +3611,7 @@
 
 (defn numerator
   "Returns the numerator part of a Ratio."
-  {:tag BigInteger
+  {:tag clotran.host.bigint
    :added "1.2"
    :static true}
   [r]
@@ -3619,7 +3619,7 @@
 
 (defn denominator
   "Returns the denominator part of a Ratio."
-  {:tag BigInteger
+  {:tag clotran.host.bigint
    :added "1.2"
    :static true}
   [r]
@@ -3629,7 +3629,7 @@
   "Returns true if n is a BigDecimal"
   {:added "1.0"
    :static true}
-  [n] (instance? BigDecimal n))
+  [n] (instance? clotran.host.decimal n))
 
 (defn float?
   "Returns true if n is a floating point number"
@@ -3653,40 +3653,40 @@
    :added "1.3"}
   [x] (cond
        (instance? clotran.host.bigint x) x
-       (instance? BigInteger x) (clotran.host.bigint/fromBigInteger x)
-       (decimal? x) (bigint (.toBigInteger ^BigDecimal x))
-       (float? x)  (bigint (. BigDecimal valueOf (double x)))
+       (instance? clotran.host.bigint x) (clotran.host.bigint/fromBigInteger x)
+       (decimal? x) (bigint (.toBigInteger ^clotran.host.decimal x))
+       (float? x)  (bigint (. clotran.host.decimal valueOf (double x)))
        (ratio? x) (bigint (.bigIntegerValue ^clotran.host.ratio x))
        (number? x) (clotran.host.bigint/valueOf (long x))
-       :else (bigint (BigInteger. x))))
+       :else (bigint (clotran.host.bigint. x))))
 
 (defn biginteger
   "Coerce to BigInteger"
-  {:tag BigInteger
+  {:tag clotran.host.bigint
    :added "1.0"
    :static true}
   [x] (cond
-       (instance? BigInteger x) x
+       (instance? clotran.host.bigint x) x
        (instance? clotran.host.bigint x) (.toBigInteger ^clotran.host.bigint x)
-       (decimal? x) (.toBigInteger ^BigDecimal x)
-       (float? x) (.toBigInteger (. BigDecimal valueOf (double x)))
+       (decimal? x) (.toBigInteger ^clotran.host.decimal x)
+       (float? x) (.toBigInteger (. clotran.host.decimal valueOf (double x)))
        (ratio? x) (.bigIntegerValue ^clotran.host.ratio x)
-       (number? x) (BigInteger/valueOf (long x))
-       :else (BigInteger. x)))
+       (number? x) (clotran.host.bigint/valueOf (long x))
+       :else (clotran.host.bigint. x)))
 
 (defn bigdec
   "Coerce to BigDecimal"
-  {:tag BigDecimal
+  {:tag clotran.host.decimal
    :added "1.0"
    :static true}
   [x] (cond
        (decimal? x) x
-       (float? x) (. BigDecimal valueOf (double x))
-       (ratio? x) (/ (BigDecimal. (.numerator ^clotran.host.ratio x)) (.denominator ^clotran.host.ratio x))
+       (float? x) (. clotran.host.decimal valueOf (double x))
+       (ratio? x) (/ (clotran.host.decimal. (.numerator ^clotran.host.ratio x)) (.denominator ^clotran.host.ratio x))
        (instance? clotran.host.bigint x) (.toBigDecimal ^clotran.host.bigint x)
-       (instance? BigInteger x) (BigDecimal. ^BigInteger x)
-       (number? x) (BigDecimal/valueOf (long x))
-       :else (BigDecimal. x)))
+       (instance? clotran.host.bigint x) (clotran.host.decimal. ^clotran.host.bigint x)
+       (number? x) (clotran.host.decimal/valueOf (long x))
+       :else (clotran.host.decimal. x)))
 
 (def ^:dynamic ^{:private true} print-initialized false)
 
@@ -4034,11 +4034,11 @@
   "Returns a (potentially-ragged) 2-dimensional array of Objects
   containing the contents of coll, which can be any Collection of any
   Collection."
-  {:tag "[[Lclotran.host.value;"
+  {:tag "[[Lhost.lang.Object;"
    :added "1.0"
    :static true}
   [^clotran.host.collection coll]
-    (let [ret (make-array (. clotran.host.class (forName "[Lclotran.host.value;")) (. coll (size)))]
+    (let [ret (make-array (. clotran.host.class (forName "[Lhost.lang.Object;")) (. coll (size)))]
       (loop [i 0 xs (seq coll)]
         (when xs
           (aset ret i (to-array (first xs)))
@@ -5514,10 +5514,10 @@
                    (.getAnnotation c clotran.host.retention)] 
           (= (.value r) clotran.host.retention_policy/RUNTIME)))))
 
-(defn- descriptor [^clotran.host.class c] (clojure.asm.Type/getDescriptor c))
+(defn- descriptor [^clotran.host.class c] (clotran.host.type/getDescriptor c))
 
 (declare process-annotation)
-(defn- add-annotation [^clojure.asm.AnnotationVisitor av name v]
+(defn- add-annotation [^clotran.host.annotation_visitor av name v]
   (cond
    (vector? v) (let [avec (.visitArray av name)]
                  (doseq [vval v]
@@ -5527,7 +5527,7 @@
                  (cond 
                   (instance? clotran.host.enum ev)
                   (.visitEnum av name (descriptor (class ev)) (str ev))
-                  (class? ev) (.visit av name (clojure.asm.Type/getType ev))
+                  (class? ev) (.visit av name (clotran.host.type/getType ev))
                   :else (throw (clotran.host.illegal_argument_exception. 
                                 (str "Unsupported annotation value: " v " of class " (class ev))))))
    (seq? v) (let [[nested nv] v
@@ -7119,7 +7119,7 @@ fails, attempts to require sym's namespace and retries."
    :static true}
   [f]
   (let [f (binding-conveyor-fn f)
-        fut (.submit clotran.host.agent/soloExecutor ^Callable f)]
+        fut (.submit clotran.host.agent/soloExecutor ^clotran.host.callable f)]
     (reify 
      clotran.host.i_deref 
      (deref [_] (deref-future fut))

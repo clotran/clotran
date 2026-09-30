@@ -147,7 +147,7 @@
            (every? (fn [[k v]] (and (contains? o k) (= v (get o k)))) m))))
 
 (defn object
-  "(Object.): a fresh object equal only to itself -- a sentinel."
+  "(clotran.host.value.): a fresh object equal only to itself -- a sentinel."
   []
   (reify))
 

@@ -81,13 +81,13 @@
         (sequential? x) (str \"(\" (clojure.string/join \" \" (map clotran-oracle-canon x)) \")\")
         :else (pr-str x)))
 (defn clotran-oracle-case [s]
-  (println (try (clotran-oracle-canon (eval (read-string s))) (catch Throwable t \"!error\"))))
+  (println (try (clotran-oracle-canon (eval (read-string s))) (catch clotran.host.throwable t \"!error\"))))
 (defn clotran-oracle-setup [s]
-  (println (try (do (eval (read-string s)) \"#setup\") (catch Throwable t \"!error\"))))
+  (println (try (do (eval (read-string s)) \"#setup\") (catch clotran.host.throwable t \"!error\"))))
 ")
 
 (defn script [cs & [translate]]
-  (str "(in-ns 'user)\n(require 'clojure.string)\n" prelude
+  (str "(in-ns 'user)\n(require 'clojure.string)\n" ((or translate identity) prelude)
        (str/join "\n" (for [c cs]
                         ;; qualified: a setup form may (ns elsewhere)
                         (str (if (:setup? c) "(user/clotran-oracle-setup " "(user/clotran-oracle-case ")

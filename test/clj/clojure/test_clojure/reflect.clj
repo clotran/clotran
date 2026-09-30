@@ -26,13 +26,13 @@
 
 (deftest field-descriptor->class-symbol-test
   (are [s d] (= s (@#'reflect/field-descriptor->class-symbol d))
-       'clojure.asm.Type<><> "[[Lclojure/asm/Type;"
+       'clotran.host.type<><> "[[Lclojure/asm/Type;"
        'int "I"
-       'clotran.host.value "Lhost.lang.Object;"))
+       'clotran.host.value "Lclotran.host.value;"))
 
 (deftest internal-name->class-symbol-test
   (are [s n] (= s (@#'reflect/internal-name->class-symbol n))
-       'clotran.host.exception "host/lang/Exception"))
+       'clotran.host.exception "clotran/host/exception"))
 
 (def inst (IBar$Factory/get))
 (deftest invoking-nonpublic-super

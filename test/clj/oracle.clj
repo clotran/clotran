@@ -2851,7 +2851,7 @@
 (mapv #(try (read-string %) (catch clotran.host.exception e :invalid)) ["://" ":a/" ":/a" "a/" "/a" "a//" ":a//" ":///" "///" "a///" "a/b/" "a:" ":a:" "a::b" "a:/b" "a/:b" ":1a" "a/1" ":a/1" "String/1" "/" ":/" "clojure.core//" ":a:b" "a:b:c/d" "abc/de:f" "a/b:"])
 
 ;; array classes by symbol: CLJ-2807's Sym/N, and clj descriptor
-(let [e (comp eval read-string)] [(mapv e ["int/1" "double/2" "String/1" "(= int/1 (class (int-array 1)))" "(instance? long/1 (long-array 2))"]) (mapv #(resolve (symbol %)) ["int/1" "[I" "[[D" "[Lclotran.host.string;" "long/3" "[Lno.Such;" "[Q"])])
+(let [e (comp eval read-string)] [(mapv e ["int/1" "double/2" "clotran.host.string/1" "(= int/1 (class (int-array 1)))" "(instance? long/1 (long-array 2))"]) (mapv #(resolve (symbol %)) ["int/1" "[I" "[[D" "[Lclotran.host.string;" "long/3" "[Lno.Such;" "[Q"])])
 (try (resolve (symbol "no.such.Klass/1")) (catch clotran.host.class_not_found_exception e (.getMessage e)))
 
 ;; fn? answered from the value's kind (trampoline asks it every bounce)
@@ -2883,3 +2883,7 @@
 (let [r (clotran.io/line-numbering-reader (clotran.io/text-reader "a\r\nb\nc"))] [(read r) (.getLineNumber r) (read r) (.getLineNumber r) (read r)])
 (let [r (clotran.io/line-numbering-reader (clotran.io/text-reader "  (+ 1\n 2) tail"))] (read+string r))
 [(.trim "\u0001 a b \t\n") (.trim "") (.trim "   ")]
+
+;; a capitalized name that is no class and no Var is unresolved, not a class
+[(try (eval '(instance? Nonexistent 1)) (catch clotran.host.throwable e :unresolved))
+ (try (eval 'Nonexistent) (catch clotran.host.throwable e :unresolved))]
