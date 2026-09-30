@@ -135,7 +135,8 @@ fi
 
 # What loads is compiled in the background and cached, and installed
 # from the cache on later loads -- and mid-session, at a REPL prompt,
-# when a build finishes (clotran.loader). CLOTRAN_AUTOCOMPILE=0 turns it
+# when a build finishes (clotran.loader), quietly unless
+# CLOTRAN_AUTOCOMPILE_VERBOSE=1. CLOTRAN_AUTOCOMPILE=0 turns it
 # off; CLOTRAN_CACHE moves the cache (default ~/.cache/clotran).
 export CLOTRAN_AUTOCOMPILE="${CLOTRAN_AUTOCOMPILE-1}"
 

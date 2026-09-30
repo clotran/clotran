@@ -231,6 +231,14 @@
         (and (= :compiling (:state (@builds src))) (= h (:hash (@builds src)))) nil
         :else (do (start! src h) nil)))))
 
+(defn- say
+  "A note about a background build, printed only with
+  CLOTRAN_AUTOCOMPILE_VERBOSE=1: a build finishing or failing changes nothing
+  a program must act on -- it runs interpreted until then, or for good -- and
+  a note appearing mid-REPL, for a library it never asked about, is noise."
+  [msg]
+  (when (= "1" (System/getenv "CLOTRAN_AUTOCOMPILE_VERBOSE")) (println msg)))
+
 (defn poll
   "Builds that have finished since the last look: installed if the source
   is still the text they were built from, rebuilt if it is not."
@@ -243,12 +251,12 @@
       (if (= :none (current src h))
         (swap! builds assoc-in [src :state] :none)
         (do (swap! builds assoc-in [src :state] :failed)
-            (println (str "note: " src " did not compile; see " log))))
+            (say (str "note: " src " did not compile; see " log))))
       (not= h (hash-of src))
       (start! src (hash-of src))   ; edited while it built
       (install lib src)
       (do (swap! builds assoc-in [src :state] :installed)
-          (println (str "note: " src " is compiled now")))
+          (say (str "note: " src " is compiled now")))
       :else (swap! builds assoc-in [src :state] :refused))))
 
 (defn compile-now
