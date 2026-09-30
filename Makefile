@@ -284,7 +284,8 @@ $(B)/Regex.o: $(B)/Threads.o
 # dependency of its own, and both Eval (to call) and ClotranABI (to
 # register) need it, so it sits below them.
 compiled-objects = $(B)/CompiledFn.o
-$(B)/CompiledFn.o: $(B)/GC.o $(B)/PersistentVector.o
+$(B)/DynLoad.o: $(B)/GC.o
+$(B)/CompiledFn.o: $(B)/GC.o $(B)/PersistentVector.o $(B)/DynLoad.o
 # TCP sockets: the shim holds what differs between POSIX and Winsock
 socket-objects = $(B)/Socket.o $(B)/socket_shim.o $(B)/fs_shim.o
 $(B)/Socket.o: $(B)/GC.o
@@ -420,7 +421,7 @@ check-program: $(B)/core.image
 	@echo "--- a program: a script's *command-line-args*, -m NS's -main, status 1 on an error, clotran test's status (PLAN step 22) ---"
 	@rm -rf $(B)/program && mkdir -p $(B)/program/src/p $(B)/program/test/p
 	@printf '(prn *command-line-args*)\n' > $(B)/program/s.cljf
-	@printf '(ns p.core)\n(defn -main [& args] (prn :main args) (when (= "boom" (first args)) (/ 1 0)))\n' > $(B)/program/src/p/core.cljf
+	@printf '(ns p.core (:gen-class))\n(defn -main [& args] (prn :main args) (when (= "boom" (first args)) (/ 1 0)) (when (= "how" (first args)) (println (pr-str p.core/-main))))\n' > $(B)/program/src/p/core.cljf
 	@printf '(ns p.core-test (:require [clojure.test :refer [deftest is]]))\n(deftest t (is (= 1 2)))\n' > $(B)/program/test/p/core_test.cljf
 	cd $(B)/program && $(CURDIR)/clotran s.cljf a "b c" </dev/null | grep -qx '("a" "b c")'
 	cd $(B)/program && $(CURDIR)/clotran s.cljf </dev/null | grep -qx 'nil'
@@ -428,10 +429,11 @@ check-program: $(B)/core.image
 	cd $(B)/program && ! CLOTRAN_PATH=src $(CURDIR)/clotran -m p.core boom </dev/null >/dev/null 2>err.txt && grep -q 'Divide by zero' err.txt
 	cd $(B)/program && ! CLOTRAN_PATH=src:test $(CURDIR)/clotran test </dev/null >/dev/null 2>&1
 	@echo "--- clotran build: one executable that runs where there are no sources (PLAN step 22) ---"
-	cd $(B)/program && CLOTRAN_PATH=src $(CURDIR)/clotran build -m p.core -o prog >/dev/null
+	cd $(B)/program && CLOTRAN_CACHE=$(CURDIR)/$(B)/program/cache CLOTRAN_PATH=src $(CURDIR)/clotran build -m p.core -o prog >/dev/null
 	mkdir -p $(B)/program/elsewhere && mv $(B)/program/prog $(B)/program/elsewhere/
-	cd $(B)/program/elsewhere && env -i ./prog y </dev/null | grep -qx ':main ("y")'
-	cd $(B)/program/elsewhere && ! env -i ./prog boom </dev/null >/dev/null 2>&1
+	cd $(B)/program/elsewhere && env -i TMPDIR=$(CURDIR)/$(B)/program ./prog y </dev/null | grep -qx ':main ("y")'
+	cd $(B)/program/elsewhere && ! env -i TMPDIR=$(CURDIR)/$(B)/program ./prog boom </dev/null >/dev/null 2>&1
+	cd $(B)/program/elsewhere && env -i TMPDIR=$(CURDIR)/$(B)/program ./prog how </dev/null | grep -q '#<compiled p.core/-main>'
 	@rm -f $(B)/program/elsewhere/prog
 check-embed-repl:
 	@echo "--- a REPL into the running solver: read its grid, write it, stop it (PLAN step 21) ---"

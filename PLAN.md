@@ -2173,10 +2173,24 @@ the heap once NS has loaded -- and the clotran namespaces otherwise
 loaded on first use from the sources -- and its entry appended, with a
 trailer main.f90 finds by reading its own file (fs_shim.c
 clotran_exe_path). Every argument is *command-line-args*. 131 MB, 0.18 s
-warm. `(:gen-class)` works (clotran/genclass.cljf). Not yet: compiled
-code in the image (the libraries named and reopened in order), so a
-built program runs interpreted; and packages opened at run time are
-untried in a built program.
+warm. `(:gen-class)` works (clotran/genclass.cljf).
+
+LANDED 2026-09-30: compiled code in an image. DynLoad logs every
+install -- the library by its real path, and the constant pool it was
+given -- and the image holds the log and the procedure count; reading it
+opens the same libraries in the same order and calls their
+clotran_install again with the Vars left alone (dl_replaying), so every
+handle the heap holds names its procedure again, and a different count
+stops the start. A library's manifest is read without opening it as a
+package (clotran-library-manifest). `clotran build` builds what the
+program loads into the cache (a first pass that waits for the builds),
+takes the image from a second load that installs from the cache and
+builds nothing, and appends the libraries; the program writes them once
+under TMPDIR/clotran-app-<image hash> and opens them from there. The
+program's loop 165 -> 8.5 ms. Not yet: compiled CORE in a built program
+-- the base image is interpreted, and core's library is per-path in the
+cache -- so core's functions stay interpreted there; packages opened at
+run time are untried in a built program.
 
 ### 23. `repro`: reproducible reductions
 

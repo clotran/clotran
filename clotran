@@ -225,11 +225,15 @@ if [ "$1" = "build" ]; then
   # APP_MAGIC). It runs NS's -main with every argument as
   # *command-line-args*, needing no clotran installed and no sources. A
   # file is loaded at build time, and must be a namespace with a -main.
+  # What the program loads is compiled (the autocompile cache, built now
+  # where it has nothing) and carried in the executable, which writes the
+  # libraries out on its first start; --interpreted leaves them out.
   shift
-  ns="" file="" out=""
+  ns="" file="" out="" compiled=1
   while [ $# -gt 0 ]; do
     case "$1" in
       -m) ns=$2; shift 2 ;;
+      --interpreted) compiled=0; shift ;;
       -o) out=$2; shift 2 ;;
       *) file=$1; shift ;;
     esac
@@ -240,7 +244,7 @@ if [ "$1" = "build" ]; then
   fi
   case "$out" in /*) ;; *) out="$(pwd)/$out" ;; esac
   work=$(mktemp -d) || exit 1
-  trap 'rm -rf "$work"' EXIT
+  [ -n "$CLOTRAN_BUILD_KEEP" ] || trap 'rm -rf "$work"' EXIT
   # what clotran otherwise loads on first use, from its sources: a built
   # program has none, so it is in the image
   printf '(require (quote clotran.rt) (quote clotran.io) (quote clotran.files) (quote clotran.uuid) (quote clotran.reader) (quote clotran.multifn) (quote clotran.thread) (quote clotran.net) (quote clotran.data))\n' > "$work/driver.clj"
@@ -250,13 +254,33 @@ if [ "$1" = "build" ]; then
     case "$file" in /*) ;; *) file="$(pwd)/$file" ;; esac
     printf '(def clotran-build-ns (let [f (read-string (slurp "%s"))] (when (and (seq? f) (= (quote ns) (first f))) (second f))))\n(when-not clotran-build-ns (throw (ex-info "clotran build: the file must start with (ns ...)" {})))\n(load-file "%s")\n' "$file" "$file" >> "$work/driver.clj"
   fi
-  printf '(when-not (ns-resolve clotran-build-ns (quote -main)) (throw (ex-info (str "clotran build: " clotran-build-ns " has no -main") {})))\n(clotran-spit "%s" (str "m " clotran-build-ns "\\n"))\n' "$work/entry" >> "$work/driver.clj"
-  CLOTRAN_AUTOCOMPILE=0 CLOTRAN_IMAGE_SAVE="$work/app.image" "$bin" "$core" "$work/driver.clj" </dev/null 2>&1 \
+  printf '(when-not (ns-resolve clotran-build-ns (quote -main)) (throw (ex-info (str "clotran build: " clotran-build-ns " has no -main") {})))\n' >> "$work/driver.clj"
+  if [ "$compiled" = 1 ]; then
+    # first, everything the program loads built into the cache: the load
+    # starts the builds (autocompile), and this waits for them to finish
+    cp "$work/driver.clj" "$work/warm.clj"
+    printf '(loop [n 0] (when (and (< n 6000) (some #{:compiling} (vals (clotran.loader/compile-status)))) (clotran.host.thread/sleep 100) (recur (inc n))))\n' >> "$work/warm.clj"
+    CLOTRAN_AUTOCOMPILE=1 "$bin" "$core" "$work/warm.clj" </dev/null 2>&1 | grep -v '^note: skipping\|^user=>'
+    # then the image, from a load that installs them all from the cache
+    # and builds nothing: what it installed is what the program carries
+    printf '(clotran-spit "%s" (apply str (map #(str %% "\\n") (clotran-installed-libraries))))\n' "$work/libs" >> "$work/driver.clj"
+  fi
+  printf '(clotran-spit "%s" (str "m " clotran-build-ns "\\n"))\n' "$work/entry" >> "$work/driver.clj"
+  auto=0; [ "$compiled" = 1 ] && auto=use
+  CLOTRAN_AUTOCOMPILE=$auto CLOTRAN_IMAGE_COMPILED=$compiled CLOTRAN_IMAGE_SAVE="$work/app.image" "$bin" "$core" "$work/driver.clj" </dev/null 2>&1 \
     | grep -v '^note: skipping\|^user=>'
   [ -s "$work/entry" ] && [ -s "$work/app.image" ] || { echo "clotran build: the program did not load" >&2; exit 1; }
   cp "$bin" "$out.part" || exit 1
   ioff=$(( $(wc -c < "$out.part") )); ilen=$(( $(wc -c < "$work/app.image") ))
   cat "$work/app.image" >> "$out.part"
+  # the libraries, each a line of the entry: where it lies in the file
+  if [ -s "$work/libs" ]; then
+    while IFS= read -r lib; do
+      loff=$(( $(wc -c < "$out.part") )); llen=$(( $(wc -c < "$lib") ))
+      cat "$lib" >> "$out.part"
+      printf 'lib %s %s\n' "$loff" "$llen" >> "$work/entry"
+    done < "$work/libs"
+  fi
   eoff=$(( $(wc -c < "$out.part") )); elen=$(( $(wc -c < "$work/entry") ))
   cat "$work/entry" >> "$out.part"
   printf '%-16s%020d%020d%020d%020d' "CLOTRAN APP 1" "$ioff" "$ilen" "$eoff" "$elen" >> "$out.part"

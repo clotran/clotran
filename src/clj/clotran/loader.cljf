@@ -117,7 +117,7 @@
   True when it is installed; nil, with a note saying why, when it is
   not."
   [lib src]
-  (let [{:keys [ns source-hash fns extends] :as manifest} (:manifest (fortran/load-package* lib))
+  (let [{:keys [ns source-hash fns extends] :as manifest} (clotran-library-manifest lib)
         note (fn [why] (println (str "note: not using " lib ": " why)) nil)
         all (into (vec fns) extends)]
     (cond

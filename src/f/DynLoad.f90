@@ -23,10 +23,27 @@
 ! its callers.
 module DynLoad
   use iso_c_binding
+  use GC, only: gc_state_lock, gc_state_unlock
   implicit none
   private
   public :: dl_open, dl_sym, dl_error, dl_c_string, dl_call_shim, dl_manifest, shim_i
   public :: dl_install, install_i
+  public :: dl_log_count, dl_log_get, dl_replay, dl_replaying
+
+  ! EVERY INSTALL, in order: the library and the constant pool it was
+  ! given. An image cannot hold a procedure pointer, so it holds this
+  ! instead, and a start from the image opens the same libraries in the
+  ! same order and calls their clotran_install again (dl_replay): each
+  ! registers its procedures in the order it did, so every handle the heap
+  ! holds names the same procedure again. While replaying, the Vars are
+  ! not defined again -- the heap already has them (ClotranABI).
+  type :: install_note
+     character(len=:), allocatable :: path
+     integer :: pool = 0
+  end type install_note
+  type(install_note), allocatable, save :: log(:)
+  integer, save :: n_log = 0
+  logical, save :: dl_replaying = .false.
 
   interface
      function dlopen(path, mode) bind(C, name="dlopen") result(h)
@@ -195,7 +212,86 @@ contains
     call c_f_procpointer(fp, f)
     call f(int(pool, c_int))
     ok = .true.
+    if (.not. dl_replaying) call note_install(path, pool)
   end function dl_install
+
+  ! by its real path: an image is read from another directory
+  subroutine note_install(path, pool)
+    character(len=*), intent(in) :: path
+    integer, intent(in) :: pool
+    type(install_note), allocatable :: bigger(:)
+    integer :: i, k
+    interface
+       function c_realpath(p, resolved) bind(C, name="realpath") result(r)
+         import :: c_char, c_ptr
+         character(kind=c_char), intent(in) :: p(*)
+         character(kind=c_char), intent(out) :: resolved(*)
+         type(c_ptr) :: r
+       end function c_realpath
+    end interface
+    character(kind=c_char) :: buf(4096)
+    character(len=:), allocatable :: real
+    call gc_state_lock()
+    if (.not. allocated(log)) allocate(log(16))
+    if (n_log == size(log)) then
+       allocate(bigger(2 * size(log)))
+       do i = 1, n_log
+          call move_alloc(log(i)%path, bigger(i)%path)
+          bigger(i)%pool = log(i)%pool
+       end do
+       call move_alloc(bigger, log)
+    end if
+    n_log = n_log + 1
+    real = path
+    if (c_associated(c_realpath(path // c_null_char, buf))) then
+       k = 0
+       do while (k < size(buf))
+          if (buf(k + 1) == c_null_char) exit
+          k = k + 1
+       end do
+       real = repeat(" ", k)
+       do i = 1, k
+          real(i:i) = buf(i)
+       end do
+    end if
+    log(n_log)%path = real
+    log(n_log)%pool = pool
+    call gc_state_unlock()
+  end subroutine note_install
+
+  integer function dl_log_count()
+    dl_log_count = n_log
+  end function dl_log_count
+
+  subroutine dl_log_get(i, path, pool)
+    integer, intent(in) :: i
+    character(len=:), allocatable, intent(out) :: path
+    integer, intent(out) :: pool
+    path = log(i)%path
+    pool = log(i)%pool
+  end subroutine dl_log_get
+
+  ! The installs an image recorded, again, in order, from where each
+  ! library is now; the log becomes theirs. False, with why, on the
+  ! first that fails.
+  function dl_replay(paths, pools, err) result(ok)
+    character(len=*), intent(in) :: paths(:)
+    integer, intent(in) :: pools(:)
+    character(len=:), allocatable, intent(out) :: err
+    logical :: ok
+    integer :: i
+    ok = .true.
+    err = ""
+    dl_replaying = .true.
+    do i = 1, size(paths)
+       if (.not. dl_install(trim(paths(i)), pools(i), err)) then
+          ok = .false.
+          exit
+       end if
+       call note_install(trim(paths(i)), pools(i))
+    end do
+    dl_replaying = .false.
+  end function dl_replay
 
   subroutine dl_call_shim(fp, argv)
     type(c_funptr), intent(in) :: fp

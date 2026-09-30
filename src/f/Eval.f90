@@ -245,7 +245,7 @@ module Eval
   integer, parameter :: B_SOCKLISTEN = 414, B_SOCKPORT = 415, B_SOCKACCEPT = 416, B_SOCKCONNECT = 417
   integer, parameter :: B_SOCKREAD = 418, B_SOCKWRITE = 419, B_SOCKCLOSE = 420, B_EXIT = 421
   integer, parameter :: B_SOCKREADB = 422, B_SOCKWRITEB = 423, B_UTF8BYTES = 424, B_UTF8STRING = 425
-  integer, parameter :: B_REALPATH = 426, B_FSKIND = 427, B_FSLIST = 428
+  integer, parameter :: B_REALPATH = 426, B_FSKIND = 427, B_FSLIST = 428, B_INSTALLED = 429, B_LIBMANIFEST = 430
   ! A number's WIDTH, in an integer's or a real's otherwise unused ref:
   ! what it boxes as in clj. Equality and hashing never read it.
   integer, parameter :: W_LONG = 0, W_BYTE = 1, W_SHORT = 2, W_INT = 3, W_FLOAT = 1
@@ -958,6 +958,8 @@ contains
     call bind_builtin(core, "clotran-real-path", B_REALPATH)
     call bind_builtin(core, "clotran-file-kind", B_FSKIND)
     call bind_builtin(core, "clotran-list-dir", B_FSLIST)
+    call bind_builtin(core, "clotran-installed-libraries", B_INSTALLED)
+    call bind_builtin(core, "clotran-library-manifest", B_LIBMANIFEST)
     call bind_builtin(core, "count", B_COUNT)
     call bind_builtin(core, "first", B_FIRST)
     ! an agent's queue, drained on its own thread by clotran.rt/agent-drain
@@ -9589,6 +9591,54 @@ contains
               out = gc_str(s, [vs_get(vst, base + 1)])
             end block
          end if
+       end block
+    case (B_LIBMANIFEST)
+       ! (clotran-library-manifest path): a compiled library's manifest,
+       ! read as data. The library is opened -- it will be installed next --
+       ! but not kept as a package, which it is not: an image may be taken
+       ! with it installed (clotran build), and never with a package open
+       block
+         type(c_ptr) :: h
+         character(len=:), allocatable :: text
+         call text_of(gcv_nth(args, 0), s=dlt_1)
+         h = dl_open(dlt_1)
+         if (.not. c_associated(h)) then
+            block
+               character(len=:), allocatable :: why
+               call dl_error(s=why)
+               call fail("clotran-library-manifest: " // dlt_1 // ": " // why)
+            end block
+         else
+            call dl_manifest(h, s=text)
+            if (len(text) == 0) then
+               call fail("clotran-library-manifest: " // dlt_1 // " exports no clotran_manifest")
+            else
+               out = gcr_read(text, [vs_get(vst, base + 1)])
+               if (gcr_has_error()) then
+                  block
+                     character(len=:), allocatable :: why
+                     call gcr_error(s=why)
+                     call fail("clotran-library-manifest: " // dlt_1 // ": " // why)
+                  end block
+               end if
+            end if
+         end if
+       end block
+    case (B_INSTALLED)
+       ! (clotran-installed-libraries): each compiled library installed,
+       ! in order -- what an image taken now would open again (DynLoad)
+       block
+         character(len=:), allocatable :: p
+         integer :: i, pool
+         out = gcv_empty([vs_get(vst, base + 1)])
+         call vs_set(vst, base + 2, out)
+         do i = 1, dl_log_count()
+            call dl_log_get(i, p, pool)
+            call vs_set(vst, base + 3, gc_str(p, [vs_get(vst, base + 2)]))
+            out = gcv_conj(vs_get(vst, base + 2), vs_get(vst, base + 3), [vs_get(vst, base + 3)])
+            call vs_set(vst, base + 2, out)
+         end do
+         out = vs_get(vst, base + 2)
        end block
     case (B_FSKIND)
        ! (clotran-file-kind p): :directory, :file, or nil when there is no

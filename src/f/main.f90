@@ -74,6 +74,7 @@ contains
       logical :: found
       call app_payload(exe, ioff, ilen, eoff, elen, found)
       if (found) then
+         call app_libraries(exe, ioff, ilen, eoff, elen)
          call image_load(exe, imaged, image_id, ioff, ilen)
          if (.not. imaged) then
             write(0, '(A,A)') "clotran: this program's image cannot be read: ", exe
@@ -94,9 +95,15 @@ contains
        image_id = 0
        if (len(ipath) > 0) call image_load(ipath, imaged, image_id)
     end block
-    ! taking an image: no compiled library is installed on the way
+    ! taking an image: no compiled library is installed on the way, unless
+    ! CLOTRAN_IMAGE_COMPILED=1 asks for them in it -- `clotran build`,
+    ! whose program carries its libraries; `make image` stays interpreted,
+    ! since a library in the cache belongs to this machine
     call get_environment_variable("CLOTRAN_IMAGE_SAVE", argbuf, arglen, st)
-    if (st == 0 .and. arglen > 0) call gce_set_no_install()
+    if (st == 0 .and. arglen > 0) then
+       call get_environment_variable("CLOTRAN_IMAGE_COMPILED", tortbuf)
+       if (trim(tortbuf) /= "1") call gce_set_no_install()
+    end if
     base = vs_enter(3)
     if (imaged) then
        call vs_set(base + 1, gce_env())
@@ -396,6 +403,92 @@ contains
     end if
     close(u)
   end subroutine app_payload
+
+  ! A built program's compiled libraries: each "lib OFF LEN" line of its
+  ! entry is a library it carries. They are written out once, under a
+  ! directory named for the image's hash in TMPDIR (or /tmp), and reused
+  ! by every later start; the image opens them from there
+  ! (cf_set_library_paths) in the order they were installed.
+  subroutine app_libraries(exe, ioff, ilen, eoff, elen)
+    character(len=*), intent(in) :: exe
+    integer(8), intent(in) :: ioff, ilen, eoff, elen
+    character(len=:), allocatable :: entry, dir, line, rest, p, ext
+    character(len=4096), allocatable :: paths(:)
+    character(len=1), allocatable :: bytes(:)
+    character(len=1024) :: tmp
+    integer(8) :: id, off, n
+    integer :: u, v, st, nl, count, have, tl
+    logical :: there
+    interface
+       function c_mkdir(path, mode) bind(C, name="mkdir") result(r)
+         import :: c_char, c_int
+         character(kind=c_char), intent(in) :: path(*)
+         integer(c_int), value :: mode
+         integer(c_int) :: r
+       end function c_mkdir
+       function c_rename(old, new) bind(C, name="rename") result(r)
+         import :: c_char, c_int
+         character(kind=c_char), intent(in) :: old(*), new(*)
+         integer(c_int) :: r
+       end function c_rename
+    end interface
+    allocate(character(len=int(elen)) :: entry)
+    open(newunit=u, file=exe, access="stream", form="unformatted", status="old", action="read", iostat=st)
+    if (st /= 0) return
+    read(u, pos=eoff + 1, iostat=st) entry
+    read(u, pos=ioff + ilen - 7, iostat=st) id
+    count = 0
+    rest = entry
+    allocate(paths(0))
+    call get_environment_variable("TMPDIR", tmp, tl)
+    if (tl == 0) then
+       dir = "/tmp"
+    else
+       dir = tmp(1:tl)
+    end if
+    if (dir(len(dir):len(dir)) == "/") dir = dir(1:len(dir) - 1)
+    block
+      character(len=16) :: hex
+      write(hex, '(Z16.16)') id
+      dir = dir // "/clotran-app-" // hex
+    end block
+    ! dlopen goes by the file, not its name
+    ext = ".lib"
+    do
+       nl = index(rest, achar(10))
+       if (nl == 0) exit
+       line = rest(1:nl - 1)
+       rest = rest(nl + 1:)
+       if (len(line) < 5) cycle
+       if (line(1:4) /= "lib ") cycle
+       read(line(5:), *, iostat=st) off, n
+       if (st /= 0) cycle
+       if (count == 0) st = c_mkdir(dir // c_null_char, int(o'700', c_int))
+       count = count + 1
+       block
+         character(len=12) :: num
+         write(num, '(I0)') count
+         p = dir // "/lib" // trim(num) // ext
+       end block
+       have = -1
+       inquire(file=p, exist=there, size=have)
+       if (.not. there .or. have /= n) then
+          allocate(bytes(n))
+          read(u, pos=off + 1, iostat=st) bytes
+          open(newunit=v, file=p // ".part", access="stream", form="unformatted", status="replace", &
+               action="write", iostat=st)
+          if (st == 0) then
+             write(v) bytes
+             close(v)
+             st = c_rename(p // ".part" // c_null_char, p // c_null_char)
+          end if
+          deallocate(bytes)
+       end if
+       paths = [paths, [character(len=4096) :: p]]
+    end do
+    close(u)
+    if (count > 0) call cf_set_library_paths(paths)
+  end subroutine app_libraries
 
   ! A built program's entry: "m NS" on its first line runs NS's -main;
   ! "s NAME" runs the text after that line as the file NAME. Every

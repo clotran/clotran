@@ -33,6 +33,10 @@
  "Regex.f90/reg_lk_up" {:class :fixed, :note "the regex handle table's lock, made at the first regex (on the main thread)"}
  "CompiledFn.f90/flat" {:class :shared, :note "flat copies of the constant pools, filled at a first read: written only with the world stopped (gc_grow_begin), read without a lock"}
  "CompiledFn.f90/pool_root" {:class :shared, :note "a registry: additions under a lock"}
+ "CompiledFn.f90/moved_to" {:class :fixed, :note "where a built program's libraries are, set at startup before the image is read"}
+ "DynLoad.f90/dl_replaying" {:class :fixed, :note "true only while an image's installs are replayed, at startup on the main thread"}
+ "DynLoad.f90/log" {:class :shared, :note "every install, in order: additions under the state lock (note_install)"}
+ "DynLoad.f90/n_log" {:class :shared, :note "the install log's length: changed under the state lock (note_install)"}
  "CompiledFn.f90/tbl" {:class :shared, :note "a registry: additions under a lock"}
  "CompiledFn.f90/used" {:class :shared, :note "a registry: additions under a lock"}
  "Eval.f90/ctx_key" {:class :fixed, :note "made once, on the main thread, before any other thread exists"}

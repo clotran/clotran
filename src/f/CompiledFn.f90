@@ -34,9 +34,11 @@ module CompiledFn
   use iso_c_binding
   use GC
   use PersistentVector
+  use DynLoad
   implicit none
   private
   public :: compiled_i, cf_register, cf_call, cf_count, cf_name, cf_valid
+  public :: cf_set_library_paths
   public :: cf_pool_add, cf_pool_get
   public :: cf_image_write, cf_image_read
 
@@ -76,6 +78,11 @@ module CompiledFn
      integer :: gen = -1
   end type flat_pool
   type(flat_pool), allocatable, save :: flat(:)
+
+  ! Where an image's libraries are now, when not where they were when it
+  ! was taken: a program `clotran build` made carries them, and opens
+  ! them from where it wrote them (main.f90). The i-th replaces the i-th.
+  character(len=4096), allocatable, save :: moved_to(:)
 
 contains
 
@@ -206,19 +213,64 @@ contains
     if (allocated(tbl(h)%name)) s = tbl(h)%name
   end subroutine cf_name
 
-  ! The image holds no compiled procedure -- a procedure pointer is not
-  ! data -- so it is taken with none registered; the constant pool root
-  ! goes with the heap.
+  ! A procedure pointer is not data, so the image holds how the
+  ! procedures came to be instead: each library installed, in order, with
+  ! its constant pool (DynLoad's log), and how many procedures that made.
+  ! Reading it installs them again in the same order, so each handle in
+  ! the heap names its procedure again; a different count means the
+  ! libraries are not the ones the image was taken with, and it stops.
   subroutine cf_image_write(u)
     integer, intent(in) :: u
-    if (used > 0) error stop "clotran: an image cannot hold compiled procedures (CLOTRAN_AUTOCOMPILE must be unset)"
+    integer :: i, pool
+    character(len=:), allocatable :: p
     write(u) pool_root
+    write(u) used
+    write(u) dl_log_count()
+    do i = 1, dl_log_count()
+       call dl_log_get(i, p, pool)
+       write(u) len(p)
+       write(u) p
+       write(u) pool
+    end do
   end subroutine cf_image_write
 
   subroutine cf_image_read(u)
     integer, intent(in) :: u
+    integer :: i, n, k, want
+    character(len=4096), allocatable :: paths(:)
+    integer, allocatable :: pools(:)
+    character(len=:), allocatable :: p, err
     read(u) pool_root
+    read(u) want
+    read(u) n
+    allocate(paths(n), pools(n))
+    do i = 1, n
+       read(u) k
+       allocate(character(len=k) :: p)
+       read(u) p
+       paths(i) = p
+       deallocate(p)
+       read(u) pools(i)
+       if (allocated(moved_to)) then
+          if (i <= size(moved_to)) paths(i) = moved_to(i)
+       end if
+    end do
+    if (n == 0) return
+    if (.not. dl_replay(paths, pools, err)) then
+       write(0, '(A,A)') "clotran: the image's compiled code cannot be opened: ", err
+       error stop 1
+    end if
+    if (used /= want) then
+       write(0, '(A,I0,A,I0)') "clotran: the image's libraries made ", used, " procedures, not ", want
+       error stop 1
+    end if
   end subroutine cf_image_read
+
+  subroutine cf_set_library_paths(paths)
+    character(len=*), intent(in) :: paths(:)
+    allocate(moved_to(size(paths)))
+    moved_to = paths
+  end subroutine cf_set_library_paths
 
   function cf_count() result(k)
     integer :: k

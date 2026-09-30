@@ -569,6 +569,13 @@ contains
        call c_text(name, namen, s=dlt_1)
        fname = dlt_1
     end block
+    ! from an image: the procedure again, at the handle the heap already
+    ! names; the Var is the image's (DynLoad dl_replay)
+    if (dl_replaying) then
+       h = cf_register(fp, nsname // "/" // fname)
+       st = 0
+       return
+    end if
     nsv = gcn_find_or_create(nsname, none)
     if (gc_kind(nsv) /= OBJ_NS) return
     h = cf_register(fp, nsname // "/" // fname)
