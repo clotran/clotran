@@ -263,7 +263,17 @@
   "Build `src` now and install it, waiting for it -- for a benchmark, or
   after a library was refused."
   [src]
-  (start! src (hash-of src) true)
+  (let [h (hash-of src)
+        {:keys [state lib] bh :hash} (@builds src)]
+    ;; a build of this very text already running -- the one a load started
+    ;; -- is waited for: a second build shares its file names, and each
+    ;; one's cleanup deleted the other's library
+    (if (and (= :compiling state) (= h bh))
+      (loop [n 0]
+        (when (and (< n 3000) (not (clotran-file-exists? (str lib ".done"))))
+          (Thread/sleep 100)
+          (recur (inc n))))
+      (start! src h true)))
   (poll)
   (:state (@builds src)))
 

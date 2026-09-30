@@ -435,6 +435,10 @@ check-autocompile:
 	  ./clotran-bin src/clj/clojure/core.clj test/clj/autocompile_test.clj </dev/null > $(B)/autocompile1.out 2>&1; grep -q "^AUTOCOMPILE PASSED" $(B)/autocompile1.out
 	AUTOCOMPILE_STEP=cached CLOTRAN_AUTOCOMPILE=use CLOTRAN_CACHE=$(B)/autocache \
 	  ./clotran-bin src/clj/clojure/core.clj test/clj/autocompile_test.clj </dev/null > $(B)/autocompile2.out 2>&1; grep -q "^AUTOCOMPILE PASSED" $(B)/autocompile2.out
+	@echo "--- compile-now while the load's own background build of the file is running: it waits for that build ---"
+	rm -rf $(B)/autocache
+	AUTOCOMPILE_STEP=build CLOTRAN_AUTOCOMPILE=1 CLOTRAN_CACHE=$(B)/autocache \
+	  ./clotran-bin src/clj/clojure/core.clj test/clj/autocompile_test.clj </dev/null > $(B)/autocompile3.out 2>&1; grep -q "^AUTOCOMPILE PASSED" $(B)/autocompile3.out
 check-break:
 	@echo "--- a break pauses into a nested REPL, and clotran-resume answers it ---"
 	printf '((fn [x] (clotran-break)) 1)\n(clotran-resume {:continue (* 42 (get (:env (first (:frames (clotran-last-break)))) (quote x)))})\n' \
