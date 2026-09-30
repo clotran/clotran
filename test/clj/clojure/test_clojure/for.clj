@@ -62,7 +62,7 @@
   help detecting over-eagerness in lazy seq consumers."
   [n]
   (lazy-cat (range n)
-            (throw (Exception. "consumer went too far in lazy seq"))))
+            (throw (clotran.host.exception. "consumer went too far in lazy seq"))))
 
 (deftest-both While
   (is (= (for [x (only 6) :while (< x 5)] x) '(0 1 2 3 4)))
@@ -101,7 +101,7 @@
                :when (do (if (< x 5) (odd? x)))] x) '(1 3)))
   (is (= (for [a (range -2 5)
                :when (not= a 0) ; :when may guard :while
-               :while (> (Math/abs (/ 1.0 a)) 1/3)] a) '(-2 -1 1 2))))
+               :while (> (clotran.host.math/abs (/ 1.0 a)) 1/3)] a) '(-2 -1 1 2))))
 
 (deftest-both Nesting
   (is (= (for [x '(a b) y (interpose x '(1 2)) z (list x y)] [x y z])
@@ -113,7 +113,7 @@
 (deftest-both Destructuring
   (is (= (for [{:syms [a b c]} (map #(zipmap '(a b c) (range % 5)) (range 3))
                x [a b c]]
-           (Integer. (str a b c x)))
+           (clotran.host.int4. (str a b c x)))
          '(120 121 122 1231 1232 1233 2342 2343 2344))))
 
 (deftest-both Let

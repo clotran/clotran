@@ -1,4 +1,4 @@
-;; DERIVED from test/clj/clojure/test_clojure/numbers.clj by scripts/derive-tests -- do not edit.
+;; DERIVED from upstream/clojure/test/clojure/test_clojure/numbers.clj by upstream/derive-tests -- do not edit.
 ;; Kept: tests whose symbols lie in the clojure.core/cljs.core intersection (plus concurrency).
 
 (ns clojure.test-clojure.numbers (:use clojure.test clojure.template) (:require [clojure.test-helper :as helper]))
@@ -10,7 +10,7 @@
   (try
    (long n)
    true
-   (catch Exception _)))
+   (catch clotran.host.exception _)))
 
 ;; numbers.clj:154 [language]
 (deftest unchecked-cast-char
@@ -42,12 +42,12 @@
       (+ 1.1 2.4) 3.5
       (+ 1.1 2.2 3.3) 6.6 )
 
-  (is (> (+ Integer/MAX_VALUE 10) Integer/MAX_VALUE))  ; no overflow
-  (is (thrown? ClassCastException (+ "ab" "cd"))) )    ; no string concatenation
+  (is (> (+ clotran.host.int4/MAX_VALUE 10) clotran.host.int4/MAX_VALUE))  ; no overflow
+  (is (thrown? clotran.host.class_cast_exception (+ "ab" "cd"))) )    ; no string concatenation
 
 ;; numbers.clj:221 [language]
 (deftest test-subtract
-  (is (thrown? IllegalArgumentException (-)))
+  (is (thrown? clotran.host.illegal_argument_exception (-)))
   (are [x y] (= x y)
       (- 1) -1
       (- 1 2) -1
@@ -69,7 +69,7 @@
       (- 2.2 1.1) 1.1
       (- 6.6 2.2 1.1) 3.3 )
 
-  (is (< (- Integer/MIN_VALUE 10) Integer/MIN_VALUE)) )  ; no underflow
+  (is (< (- clotran.host.int4/MIN_VALUE 10) clotran.host.int4/MIN_VALUE)) )  ; no underflow
 
 ;; numbers.clj:247 [language]
 (deftest test-multiply
@@ -92,7 +92,7 @@
       (* 2.0 1.2) 2.4
       (* 3.5 2.0 1.2) 8.4 )
 
-  (is (> (* 3 (int (/ Integer/MAX_VALUE 2.0))) Integer/MAX_VALUE)) )  ; no overflow
+  (is (> (* 3 (int (/ clotran.host.int4/MAX_VALUE 2.0))) clotran.host.int4/MAX_VALUE)) )  ; no overflow
 
 ;; numbers.clj:280 [language]
 (deftest test-ratios-simplify-to-ints-where-appropriate
@@ -120,9 +120,9 @@
       (/ 4.5 3) 1.5
       (/ 4.5 3.0 3.0) 0.5 )
 
-  (is (thrown? ArithmeticException (/ 0)))
-  (is (thrown? ArithmeticException (/ 2 0)))
-  (is (thrown? IllegalArgumentException (/))) )
+  (is (thrown? clotran.host.arithmetic_exception (/ 0)))
+  (is (thrown? clotran.host.arithmetic_exception (/ 2 0)))
+  (is (thrown? clotran.host.illegal_argument_exception (/))) )
 
 ;; numbers.clj:327 [language]
 (deftest test-mod
@@ -132,8 +132,8 @@
 ;  (is (thrown? IllegalArgumentException (mod 3 2 1)))
 
   ; divide by zero
-  (is (thrown? ArithmeticException (mod 9 0)))
-  (is (thrown? ArithmeticException (mod 0 0)))
+  (is (thrown? clotran.host.arithmetic_exception (mod 9 0)))
+  (is (thrown? clotran.host.arithmetic_exception (mod 0 0)))
 
   (are [x y] (= x y)
     (mod 4 2) 0
@@ -183,8 +183,8 @@
 ;  (is (thrown? IllegalArgumentException (rem 3 2 1)))
 
   ; divide by zero
-  (is (thrown? ArithmeticException (rem 9 0)))
-  (is (thrown? ArithmeticException (rem 0 0)))
+  (is (thrown? clotran.host.arithmetic_exception (rem 9 0)))
+  (is (thrown? clotran.host.arithmetic_exception (rem 0 0)))
   
   (are [x y] (= x y)
     (rem 4 2) 0
@@ -231,8 +231,8 @@
 ;  (is (thrown? IllegalArgumentException (quot 3 2 1)))
 
   ; divide by zero
-  (is (thrown? ArithmeticException (quot 9 0)))
-  (is (thrown? ArithmeticException (quot 0 0)))
+  (is (thrown? clotran.host.arithmetic_exception (quot 9 0)))
+  (is (thrown? clotran.host.arithmetic_exception (quot 0 0)))
   
   (are [x y] (= x y)
     (quot 4 2) 2
@@ -279,8 +279,8 @@
     (even? 0)
     (not (even? 5))
     (even? 8))
-  (is (thrown? IllegalArgumentException (even? 1/2)))
-  (is (thrown? IllegalArgumentException (even? (double 10)))))
+  (is (thrown? clotran.host.illegal_argument_exception (even? 1/2)))
+  (is (thrown? clotran.host.illegal_argument_exception (even? (double 10)))))
 
 ;; numbers.clj:510 [language]
 (deftest test-odd?
@@ -290,8 +290,8 @@
     (not (odd? 0))
     (odd? 5)
     (not (odd? 8)))
-  (is (thrown? IllegalArgumentException (odd? 1/2)))
-  (is (thrown? IllegalArgumentException (odd? (double 10)))))
+  (is (thrown? clotran.host.illegal_argument_exception (odd? 1/2)))
+  (is (thrown? clotran.host.illegal_argument_exception (odd? (double 10)))))
 
 ;; numbers.clj:568 [language]
 (deftest test-bit-clear
@@ -318,7 +318,7 @@
   (are [in ex] (= ex (abs in))
     -1 1
     1 1
-    Long/MIN_VALUE Long/MIN_VALUE ;; special case!
+    clotran.host.int8/MIN_VALUE clotran.host.int8/MIN_VALUE ;; special case!
     -1.0 1.0
     -0.0 0.0
     ##-Inf ##Inf

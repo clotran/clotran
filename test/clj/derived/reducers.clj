@@ -1,4 +1,4 @@
-;; DERIVED from test/clj/clojure/test_clojure/reducers.clj by scripts/derive-tests -- do not edit.
+;; DERIVED from upstream/clojure/test/clojure/test_clojure/reducers.clj by upstream/derive-tests -- do not edit.
 ;; Kept: tests whose symbols lie in the clojure.core/cljs.core intersection (plus concurrency).
 
 (ns clojure.test-clojure.reducers (:use clojure.test))

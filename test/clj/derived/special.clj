@@ -1,4 +1,4 @@
-;; DERIVED from test/clj/clojure/test_clojure/special.clj by scripts/derive-tests -- do not edit.
+;; DERIVED from upstream/clojure/test/clojure/test_clojure/special.clj by upstream/derive-tests -- do not edit.
 ;; Kept: tests whose symbols lie in the clojure.core/cljs.core intersection (plus concurrency).
 
 (ns clojure.test-clojure.special (:use clojure.test) (:require [clojure.test-helper :refer [should-not-reflect]]))
@@ -58,25 +58,25 @@
 
 ;; special.clj:69 [language]
 (deftest keywords-not-allowed-in-let-bindings
-  (is (thrown-with-cause-msg? Exception #"did not conform to spec"
+  (is (thrown-with-cause-msg? clotran.host.exception #"did not conform to spec"
                         (eval '(let [:a 1] a))))
-  (is (thrown-with-cause-msg? Exception #"did not conform to spec"
+  (is (thrown-with-cause-msg? clotran.host.exception #"did not conform to spec"
                         (eval '(let [:a/b 1] b))))
-  (is (thrown-with-cause-msg? Exception #"did not conform to spec"
+  (is (thrown-with-cause-msg? clotran.host.exception #"did not conform to spec"
                         (eval '(let [[:a] [1]] a))))
-  (is (thrown-with-cause-msg? Exception #"did not conform to spec"
+  (is (thrown-with-cause-msg? clotran.host.exception #"did not conform to spec"
                         (eval '(let [[:a/b] [1]] b)))))
 
 ;; special.clj:79 [language]
 (deftest namespaced-syms-only-allowed-in-map-destructuring
-  (is (thrown-with-cause-msg? Exception #"did not conform to spec"
+  (is (thrown-with-cause-msg? clotran.host.exception #"did not conform to spec"
                         (eval '(let [a/x 1, [y] [1]] x))))
-  (is (thrown-with-cause-msg? Exception #"did not conform to spec"
+  (is (thrown-with-cause-msg? clotran.host.exception #"did not conform to spec"
                         (eval '(let [[a/x] [1]] x)))))
 
 ;; special.clj:85 [language]
 (deftest or-doesnt-create-bindings
-  (is (thrown-with-cause-msg? Exception #"Unable to resolve symbol: b"
+  (is (thrown-with-cause-msg? clotran.host.exception #"Unable to resolve symbol: b"
                         (eval '(let [{:keys [a] :or {b 2}} {:a 1}] [a b])))))
 
 ;; special.clj:90 [language]

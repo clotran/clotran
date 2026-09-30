@@ -1,4 +1,4 @@
-;; DERIVED from test/clj/clojure/test_clojure/protocols.clj by scripts/derive-tests -- do not edit.
+;; DERIVED from upstream/clojure/test/clojure/test_clojure/protocols.clj by upstream/derive-tests -- do not edit.
 ;; Kept: tests whose symbols lie in the clojure.core/cljs.core intersection (plus concurrency).
 
 (ns clojure.test-clojure.protocols (:use clojure.test clojure.test-clojure.protocols.examples) (:require [clojure.test-clojure.protocols.more-examples :as other] [clojure.set :as set] clojure.test-helper))

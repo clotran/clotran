@@ -1,10 +1,10 @@
-(ns clojure.java.io
-  "clojure.java.io, as clotran provides it: loaded in place of the JVM's
+(ns clotran.files
+  "clotran.files, as clotran provides it: loaded in place of clj's
   (Eval.f90, RT.load), as clotran/core_print is (DEVIATIONS 40).
 
   core.clj's slurp and spit are written against this namespace --
   (jio/reader f) copied into a StringWriter, (jio/writer f) written to --
-  and skipping it as JVM-only left both unable to resolve jio/reader, so
+  and skipping it as host-bound left both unable to resolve jio/reader, so
   neither worked at all. What is here is TEXT files: a reader reads the
   whole file once and hands it out a line or all at once; a writer
   gathers what is written and writes the file when it is closed.
@@ -18,7 +18,7 @@
 (defn- path-of [x]
   (cond (string? x) x
         ((io "file?") x) (.-path x)
-        :else (throw (IllegalArgumentException.
+        :else (throw (clotran.host.illegal_argument_exception.
                       (str "Cannot open <" (pr-str x) "> as a file")))))
 
 (defn file
@@ -33,7 +33,7 @@
   [x]
   (let [p (path-of x)]
     (if (clojure.string/starts-with? p "/")
-      (throw (IllegalArgumentException. (str p " is not a relative path")))
+      (throw (clotran.host.illegal_argument_exception. (str p " is not a relative path")))
       p)))
 
 (defn reader
@@ -46,7 +46,7 @@
 (defn input-stream [x & opts] (apply reader x opts))
 
 (deftype TextWriter [path append buf]
-  Object
+  clotran.host.value
   (toString [_] (apply str @buf))
   clotran.host.closeable
   (close [this] (.flush this))

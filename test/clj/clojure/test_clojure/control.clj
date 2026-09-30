@@ -233,10 +233,10 @@
        (condp + 1
          1 :>> #(if (= % 3) :fail :pass))
        )
-  (is (thrown? IllegalArgumentException
+  (is (thrown? clotran.host.illegal_argument_exception
                (condp = 1)
                ))
-  (is (thrown? IllegalArgumentException
+  (is (thrown? clotran.host.illegal_argument_exception
                (condp = 1
                  2 :fail)
                ))
@@ -270,7 +270,7 @@
   )
 
 (deftest test-while
-  (is (= nil (while nil (throw (Exception. "never")))))
+  (is (= nil (while nil (throw (clotran.host.exception. "never")))))
   (is (= [0 nil]
          ;; a will dec to 0
          ;; while always returns nil
@@ -278,7 +278,7 @@
                w (while (pos? @a)
                    (swap! a dec))]
            [@a w])))
-  (is (thrown? Exception (while true (throw (Exception. "expected to throw")))))
+  (is (thrown? clotran.host.exception (while true (throw (clotran.host.exception. "expected to throw")))))
   )
 
 ; locking, monitor-enter, monitor-exit
@@ -325,7 +325,7 @@
            :default :anything-not-appearing-above)))
   (testing "throws IllegalArgumentException if no match"
     (is (thrown-with-msg?
-          IllegalArgumentException #"No matching clause: 2"
+          clotran.host.illegal_argument_exception #"No matching clause: 2"
           (case 2 1 :ok))))
   (testing "sorting doesn't matter"
     (let [test-fn
@@ -343,7 +343,7 @@
   (testing "test warn when boxing/hashing expr for all-ints case"
     (should-print-err-message
       #"Performance warning, .*:\d+ - case has int tests, but tested expression is not primitive..*\r?\n"
-      (let [x (Object.)] (case x 1 1 2))))
+      (let [x (clotran.host.value.)] (case x 1 1 2))))
   (testing "test correct behavior on sparse ints"
     (are [result input] (= result (case input
                                     2r1000000000000000000000000000000 :big
@@ -360,8 +360,8 @@
          :big 1073741824
          :else 2))
   (testing "test emits return types"
-    (should-not-reflect (Long. (case 1 1 1))) ; new Long(long)
-    (should-not-reflect (Long. (case 1 1 "1")))) ; new Long(String)
+    (should-not-reflect (clotran.host.int8. (case 1 1 1))) ; new Long(long)
+    (should-not-reflect (clotran.host.int8. (case 1 1 "1")))) ; new Long(String)
   (testing "short or byte expr compiles and matches"
     (is (= 3 (case (short 4) 1 2 3)))
     (is (= 3 (case (byte 4) 1 2 3))))
@@ -376,16 +376,16 @@
       :a (char 97)))
   (testing "test error on duplicate test constants"
     (is (thrown-with-cause-msg?
-          clojure.lang.Compiler$CompilerException
+          clotran.host.compiler_compiler_exception
           #"Duplicate case test constant: 1"
           (eval `(case 0 1 :x 1 :y)))))
   (testing "test correct behaviour on Number truncation"
-    (let [^Object x (Long. 8589934591)  ; force bindings to not be emitted as a primitive long
-          ^Object y (Long. -1)]
+    (let [^clotran.host.value x (clotran.host.int8. 8589934591)  ; force bindings to not be emitted as a primitive long
+          ^clotran.host.value y (clotran.host.int8. -1)]
       (is (= :diff (case x -1 :oops :diff)))
       (is (= :same (case y -1 :same :oops)))))
   (testing "test correct behavior on hash collision"
-    ;; case uses Java .hashCode to put values into hash buckets.
+    ;; case uses host .hashCode to put values into hash buckets.
     (is (== (.hashCode 1) (.hashCode 9223372039002259457N)))
     (are [result input] (= result (case input
                                     1 :long
@@ -437,9 +437,9 @@
     (let [test-fn
           ;; never write code like this...
           #(case %
-                 (throw (RuntimeException. "boom")) :piece-of-throw-expr
+                 (throw (clotran.host.runtime_exception. "boom")) :piece-of-throw-expr
                  :no-match)]
       (are [result input] (= result (test-fn input))
            :piece-of-throw-expr 'throw
-           :piece-of-throw-expr '[RuntimeException. "boom"]
+           :piece-of-throw-expr '[clotran.host.runtime_exception. "boom"]
            :no-match nil))))

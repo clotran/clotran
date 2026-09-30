@@ -64,7 +64,7 @@
 
 (deftest test-intersection
   ; at least one argument is needed
-  (is (thrown? IllegalArgumentException (set/intersection)))
+  (is (thrown? clotran.host.illegal_argument_exception (set/intersection)))
   
   (are [x y] (= x y)
       ; identity

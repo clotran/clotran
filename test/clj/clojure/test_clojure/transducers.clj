@@ -49,14 +49,14 @@
   (if (number? n) (pos? n) false))
 
 (defn- empty?$ [s]
-  (if (instance? clojure.lang.Seqable s) (empty? s) false))
+  (if (instance? clotran.host.seqable s) (empty? s) false))
 
 (def gen-mapfn
   (pickfn inc$ dec$))
 
 (def gen-mapcatfn
   (pickfn vector
-          #(if (instance? clojure.lang.Seqable %) (partition-all 3 %) (vector %))))
+          #(if (instance? clotran.host.seqable %) (partition-all 3 %) (vector %))))
 
 (def gen-predfn
   (pickfn odd?$ pos?$ empty?$ sequential?))
@@ -124,7 +124,7 @@
   (transduce (apply comp (map :xf actions)) conj coll))
 
 (defmacro return-exc [& forms]
-  `(try ~@forms (catch Throwable e# e#)))
+  `(try ~@forms (catch clotran.host.throwable e# e#)))
 
 (defn build-results
   [coll actions]
@@ -175,12 +175,12 @@
         avec (into [] arange)
         alist (into () arange)
         obj-array (into-array arange)
-        int-array (into-array Integer/TYPE (map #(Integer. (int %)) arange))
-        long-array (into-array Long/TYPE arange)
-        float-array (into-array Float/TYPE arange)
-        char-array (into-array Character/TYPE (map char arange))
-        double-array (into-array Double/TYPE arange)
-        byte-array (into-array Byte/TYPE (map byte arange))
+        int-array (into-array clotran.host.int4/TYPE (map #(clotran.host.int4. (int %)) arange))
+        long-array (into-array clotran.host.int8/TYPE arange)
+        float-array (into-array clotran.host.real4/TYPE arange)
+        char-array (into-array clotran.host.char/TYPE (map char arange))
+        double-array (into-array clotran.host.real8/TYPE arange)
+        byte-array (into-array clotran.host.int1/TYPE (map byte arange))
         int-vec (into (vector-of :int) arange)
         long-vec (into (vector-of :long) arange)
         float-vec (into (vector-of :float) arange)

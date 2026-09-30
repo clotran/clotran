@@ -41,7 +41,7 @@ Consumers that fuse: reduce, transduce, run!, every?, some, not-any?, count, int
    "B004" {:title "calls a function from another namespace" :tier :B
            :explain "The function lives in a namespace this report did not classify, so it cannot be promised pure. Run --report on that namespace; a tier-A function there is called directly."}
    "B005" {:title "calls a host function" :tier :B
-           :explain "The call reaches a host member (Java's names, clotran's implementation) with no Fortran lowering. Arithmetic, Math/ functions and array operations have one; object methods do not."}
+           :explain "The call reaches a host member (clj's names, clotran's implementation) with no Fortran lowering. Arithmetic, Math/ functions and array operations have one; object methods do not."}
    "B006" {:title "calls a function held in a local" :tier :B
            :explain "Which code runs is known only at run time, so the call goes through a function object on the heap. Call a defn by name instead, and the call is linked directly.
 

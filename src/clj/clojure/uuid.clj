@@ -10,11 +10,11 @@
 
 (defn- default-uuid-reader [form]
   (if (string? form)
-    (java.util.UUID/fromString form)
-    (throw (IllegalArgumentException. "#uuid data reader expected string"))))
+    (clotran.uuid.UUID/fromString form)
+    (throw (clotran.host.illegal_argument_exception. "#uuid data reader expected string"))))
 
-(defmethod print-method java.util.UUID [uuid ^java.io.Writer w]
+(defmethod print-method clotran.uuid.UUID [uuid ^clotran.host.writer w]
   (.write w (str "#uuid \"" (str uuid) "\"")))
 
-(defmethod print-dup java.util.UUID [o w]
+(defmethod print-dup clotran.uuid.UUID [o w]
   (print-method o w))

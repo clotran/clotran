@@ -10,11 +10,11 @@
        :author "Rich Hickey"}
     clojure.inspector
     (:import
-     (java.awt BorderLayout)
-     (java.awt.event ActionEvent ActionListener)
-     (javax.swing.tree TreeModel)
-     (javax.swing.table TableModel AbstractTableModel)
-     (javax.swing JPanel JTree JTable JScrollPane JFrame JToolBar JButton SwingUtilities)))
+     
+     
+     
+     
+     ))
 
 (defn atom? [x]
   (not (coll? x)))
@@ -22,10 +22,10 @@
 (defn collection-tag [x]
   (cond 
    (map-entry? x) :entry
-   (instance? java.util.Map x) :seqable
-   (instance? java.util.Set x) :seqable
+   (instance? clotran.host.map x) :seqable
+   (instance? clotran.host.set x) :seqable
    (sequential? x) :seq
-   (instance? clojure.lang.Seqable x) :seqable
+   (instance? clotran.host.seqable x) :seqable
    :else :atom))
 
 (defmulti is-leaf collection-tag)
@@ -54,7 +54,7 @@
   (count (seq parent)))
 
 (defn tree-model [data]
-  (proxy [TreeModel] []
+  (proxy [clotran.host.tree_model] []
     (getRoot [] data)
     (addTreeModelListener [treeModelListener])
     (getChild [parent index]
@@ -74,9 +74,9 @@
 	colcnt (count row1)
 	cnt (count data)
 	vals (if (map? row1) vals identity)]
-    (proxy [TableModel] []
+    (proxy [clotran.host.table_model] []
       (addTableModelListener [tableModelListener])
-      (getColumnClass [columnIndex] Object)
+      (getColumnClass [columnIndex] clotran.host.value)
       (getColumnCount [] colcnt)
       (getColumnName [columnIndex]
 	(if (map? row1)
@@ -92,8 +92,8 @@
   "creates a graphical (Swing) inspector on the supplied hierarchical data"
   {:added "1.0"}
   [data]
-  (doto (JFrame. "Clojure Inspector")
-    (.add (JScrollPane. (JTree. (tree-model data))))
+  (doto (clotran.host.j_frame. "Clojure Inspector")
+    (.add (clotran.host.j_scroll_pane. (clotran.host.j_tree. (tree-model data))))
     (.setSize 400 600)
     (.setVisible true)))
 
@@ -103,8 +103,8 @@
   of equal length"
   {:added "1.0"}
     [data]
-  (doto (JFrame. "Clojure Inspector")
-    (.add (JScrollPane. (JTable. (old-table-model data))))
+  (doto (clotran.host.j_frame. "Clojure Inspector")
+    (.add (clotran.host.j_scroll_pane. (clotran.host.j_table. (old-table-model data))))
     (.setSize 400 600)
     (.setVisible true)))
 
@@ -114,13 +114,13 @@
 (defmethod list-provider :default [x]
   {:nrows 1 :get-value (fn [i] x) :get-label (fn [i] (.getName (class x)))})
 
-(defmethod list-provider java.util.List [c]
+(defmethod list-provider clotran.host.list [c]
   (let [v (if (vector? c) c (vec c))]
     {:nrows (count v) 
      :get-value (fn [i] (v i)) 
      :get-label (fn [i] i)}))
 
-(defmethod list-provider java.util.Map [c]
+(defmethod list-provider clotran.host.map [c]
   (let [v (vec (sort (map (fn [[k v]] (vector k v)) c)))]
     {:nrows (count v) 
      :get-value (fn [i] ((v i) 1)) 
@@ -128,7 +128,7 @@
 
 (defn list-model [provider]
   (let [{:keys [nrows get-value get-label]} provider]
-    (proxy [AbstractTableModel] []
+    (proxy [clotran.host.abstract_table_model] []
       (getColumnCount [] 2)
       (getRowCount [] nrows)
       (getValueAt [rowIndex columnIndex]
@@ -139,7 +139,7 @@
 (defmulti table-model class)
 
 (defmethod table-model :default [x]
-  (proxy [AbstractTableModel] []
+  (proxy [clotran.host.abstract_table_model] []
     (getColumnCount [] 2)
     (getRowCount [] 1)
     (getValueAt [rowIndex columnIndex]
@@ -155,26 +155,26 @@
   "creates a graphical (Swing) inspector on the supplied object"
   {:added "1.0"}
   [x]
-  (doto (JFrame. "Clojure Inspector")
+  (doto (clotran.host.j_frame. "Clojure Inspector")
     (.add
-      (doto (JPanel. (BorderLayout.))
-        (.add (doto (JToolBar.)
-                (.add (JButton. "Back"))
+      (doto (clotran.host.j_panel. (clotran.host.border_layout.))
+        (.add (doto (clotran.host.j_tool_bar.)
+                (.add (clotran.host.j_button. "Back"))
                 (.addSeparator)
-                (.add (JButton. "List"))
-                (.add (JButton. "Table"))
-                (.add (JButton. "Bean"))
-                (.add (JButton. "Line"))
-                (.add (JButton. "Bar"))
+                (.add (clotran.host.j_button. "List"))
+                (.add (clotran.host.j_button. "Table"))
+                (.add (clotran.host.j_button. "Bean"))
+                (.add (clotran.host.j_button. "Line"))
+                (.add (clotran.host.j_button. "Bar"))
                 (.addSeparator)
-                (.add (JButton. "Prev"))
-                (.add (JButton. "Next")))
-              BorderLayout/NORTH)
+                (.add (clotran.host.j_button. "Prev"))
+                (.add (clotran.host.j_button. "Next")))
+              clotran.host.border_layout/NORTH)
         (.add
-          (JScrollPane. 
-            (doto (JTable. (list-model (list-provider x)))
-              (.setAutoResizeMode JTable/AUTO_RESIZE_LAST_COLUMN)))
-          BorderLayout/CENTER)))
+          (clotran.host.j_scroll_pane. 
+            (doto (clotran.host.j_table. (list-model (list-provider x)))
+              (.setAutoResizeMode clotran.host.j_table/AUTO_RESIZE_LAST_COLUMN)))
+          clotran.host.border_layout/CENTER)))
     (.setSize 400 400)
     (.setVisible true)))
 

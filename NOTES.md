@@ -3921,7 +3921,7 @@ thirteen arguments; `blas/dgemm` wraps it as before.
 
 ## The intersection is a list of NAMES, and the deriver never walked it
 
-`scripts/derive-tests` picks Clojure's own deftests whose symbols lie
+`upstream/derive-tests` picks Clojure's own deftests whose symbols lie
 in the clojure.core/cljs.core intersection. That is a FILTER over the
 tests that exist, not an enumeration of the intersection, and the
 difference is the whole story: a name Clojure's suite never exercises
@@ -3975,7 +3975,7 @@ produced.
 **What to do with this.** The gap is a measurement, so re-measure it
 rather than trusting this table:
 
-    bb scripts/derive-tests --coverage
+    bb upstream/derive-tests --coverage
 
 which prints the four counts and then names the gap. It reuses the
 deriver's own intersection -- the two pinned clones, read with

@@ -1,4 +1,4 @@
-;; DERIVED from test/clj/clojure/test_clojure/for.clj by scripts/derive-tests -- do not edit.
+;; DERIVED from upstream/clojure/test/clojure/test_clojure/for.clj by upstream/derive-tests -- do not edit.
 ;; Kept: tests whose symbols lie in the clojure.core/cljs.core intersection (plus concurrency).
 
 (ns clojure.test-clojure.for (:use clojure.test))
@@ -32,7 +32,7 @@
   help detecting over-eagerness in lazy seq consumers."
   [n]
   (lazy-cat (range n)
-            (throw (Exception. "consumer went too far in lazy seq"))))
+            (throw (clotran.host.exception. "consumer went too far in lazy seq"))))
 
 (deftest-both While
   (is (= (for [x (only 6) :while (< x 5)] x) '(0 1 2 3 4)))

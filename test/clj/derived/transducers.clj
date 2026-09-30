@@ -1,4 +1,4 @@
-;; DERIVED from test/clj/clojure/test_clojure/transducers.clj by scripts/derive-tests -- do not edit.
+;; DERIVED from upstream/clojure/test/clojure/test_clojure/transducers.clj by upstream/derive-tests -- do not edit.
 ;; Kept: tests whose symbols lie in the clojure.core/cljs.core intersection (plus concurrency).
 
 (ns clojure.test-clojure.transducers (:require [clojure.string :as s] [clojure.test :refer :all]))
@@ -40,7 +40,7 @@
   (transduce (apply comp (map :xf actions)) conj coll))
 
 (defmacro return-exc [& forms]
-  `(try ~@forms (catch Throwable e# e#)))
+  `(try ~@forms (catch clotran.host.throwable e# e#)))
 
 (defn build-results
   [coll actions]

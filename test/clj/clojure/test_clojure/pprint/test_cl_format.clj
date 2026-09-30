@@ -536,7 +536,7 @@
 (cl-format true "~%;; ~{~<~%;; ~:; ~A~>~}.~%" (into [] (.split "This function computes the circular thermodynamic coefficient of the thrombulator angle for use in determining the reaction distance." "\\s"))))
 
 (defn list-to-table [aseq column-width]
-  (let [stream (get-pretty-writer (java.io.StringWriter.))]
+  (let [stream (get-pretty-writer (clotran.host.string_writer.))]
     (binding [*out* stream]
      (doseq [row aseq]
        (doseq [col row]
@@ -592,7 +592,7 @@
 ;; big-pos-ratio is a ratio value that is larger than
 ;; Double/MAX_VALUE, and has a non-terminating decimal representation
 ;; if you attempt to represent it exactly.
-(def big-pos-ratio (/ (* 4 (bigint (. BigDecimal valueOf Double/MAX_VALUE))) 3))
+(def big-pos-ratio (/ (* 4 (bigint (. BigDecimal valueOf clotran.host.real8/MAX_VALUE))) 3))
 (def big-neg-ratio (- big-pos-ratio))
 ;; tiny-pos-ratio is a ratio between 0 and Double/MIN_VALUE.
 (def tiny-pos-ratio (/ 1 (bigint (apply str (cons "1" (repeat 340 "0"))))))
@@ -600,13 +600,13 @@
 
 (simple-tests cltl-F-tests
   (cl-format false "~10,3f" 4/5) "     0.800"
-  (binding [*math-context* java.math.MathContext/DECIMAL128]
+  (binding [*math-context* clotran.host.math_context/DECIMAL128]
     (cl-format false "~10,3f" big-pos-ratio)) "239692417981642093333333333333333300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000.000"
-  (binding [*math-context* java.math.MathContext/DECIMAL128]
+  (binding [*math-context* clotran.host.math_context/DECIMAL128]
     (cl-format false "~10,3f" big-neg-ratio)) "-239692417981642093333333333333333300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000.000"
-  (binding [*math-context* java.math.MathContext/DECIMAL128]
+  (binding [*math-context* clotran.host.math_context/DECIMAL128]
     (cl-format false "~10,3f" tiny-pos-ratio)) "     0.000"
-  (binding [*math-context* java.math.MathContext/DECIMAL128]
+  (binding [*math-context* clotran.host.math_context/DECIMAL128]
     (cl-format false "~10,3f" tiny-neg-ratio)) "    -0.000"
   (foo 3.14159)  "  3.14| 31.42|  3.14|3.1416|3.14|3.14159" 
   (foo 314159/100000)
@@ -624,13 +624,13 @@
 ;; Clojure doesn't support float/double differences in representation
 (simple-tests cltl-E-tests
   (cl-format false "~10,3e" 4/5) "  8.000E-1"
-  (binding [*math-context* java.math.MathContext/DECIMAL128]
+  (binding [*math-context* clotran.host.math_context/DECIMAL128]
     (cl-format false "~10,3e" big-pos-ratio)) "2.397E+308"
-  (binding [*math-context* java.math.MathContext/DECIMAL128]
+  (binding [*math-context* clotran.host.math_context/DECIMAL128]
     (cl-format false "~10,3e" big-neg-ratio)) "-2.397E+308"
-  (binding [*math-context* java.math.MathContext/DECIMAL128]
+  (binding [*math-context* clotran.host.math_context/DECIMAL128]
     (cl-format false "~10,3e" tiny-pos-ratio)) "1.000E-340"
-  (binding [*math-context* java.math.MathContext/DECIMAL128]
+  (binding [*math-context* clotran.host.math_context/DECIMAL128]
     (cl-format false "~10,3e" tiny-neg-ratio)) "-1.000E-340"
   (foo-e 0.0314159) "  3.14E-2| 31.42$-03|+.003E+01|  3.14E-2"  ; Added this one 
   (foo-e 314159/10000000)
@@ -673,13 +673,13 @@
 ;; Clojure doesn't support float/double differences in representation
 (simple-tests cltl-G-tests
   (cl-format false "~10,3g" 4/5)  " 0.800    "
-  (binding [*math-context* java.math.MathContext/DECIMAL128]
+  (binding [*math-context* clotran.host.math_context/DECIMAL128]
     (cl-format false "~10,3g" big-pos-ratio)) "2.397E+308"
-  (binding [*math-context* java.math.MathContext/DECIMAL128]
+  (binding [*math-context* clotran.host.math_context/DECIMAL128]
     (cl-format false "~10,3g" big-neg-ratio)) "-2.397E+308"
-  (binding [*math-context* java.math.MathContext/DECIMAL128]
+  (binding [*math-context* clotran.host.math_context/DECIMAL128]
     (cl-format false "~10,3g" tiny-pos-ratio)) "1.000E-340"
-  (binding [*math-context* java.math.MathContext/DECIMAL128]
+  (binding [*math-context* clotran.host.math_context/DECIMAL128]
     (cl-format false "~10,3g" tiny-neg-ratio)) "-1.000E-340"
   (foo-g 0.0314159) "  3.14E-2|314.2$-04|0.314E-01|  3.14E-2" 
   (foo-g 314159/10000000)

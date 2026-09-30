@@ -198,7 +198,7 @@
    All the test reporting functions write to the var *test-out*.  By
    default, this is the same as *out*, but you can rebind it to any
    PrintWriter.  For example, it could be a file opened with
-   clojure.java.io/writer.
+   clotran.files/writer.
 
 
    EXTENDING TEST-IS (ADVANCED)
@@ -288,7 +288,7 @@
   {:added "1.1"
    :deprecated "1.2"}
   [n]
-  (let [^StackTraceElement s (nth (.getStackTrace (new java.lang.Throwable)) n)]
+  (let [^clotran.host.stack_trace_element s (nth (.getStackTrace (new clotran.host.throwable)) n)]
     [(.getFileName s) (.getLineNumber s)]))
 
 (defn testing-vars-str
@@ -334,17 +334,17 @@
 
 (defn- file-and-line
   {:deprecated "1.8"}
-  [^Throwable exception depth]
+  [^clotran.host.throwable exception depth]
   (let [stacktrace (.getStackTrace exception)]
     (if (< depth (count stacktrace))
-      (let [^StackTraceElement s (nth stacktrace depth)]
+      (let [^clotran.host.stack_trace_element s (nth stacktrace depth)]
         {:file (.getFileName s) :line (.getLineNumber s)})
       {:file nil :line nil})))
 
 (defn- stacktrace-file-and-line
   [stacktrace]
   (if (seq stacktrace)
-    (let [^StackTraceElement s (first stacktrace)]
+    (let [^clotran.host.stack_trace_element s (first stacktrace)]
       {:file (.getFileName s) :line (.getLineNumber s)})
     {:file nil :line nil}))
 
@@ -358,12 +358,12 @@
    (case
     (:type m)
     :fail (merge (stacktrace-file-and-line (drop-while
-                                             #(let [cl-name (.getClassName ^StackTraceElement %)]
-                                                (or (str/starts-with? cl-name "java.lang.")
+                                             #(let [cl-name (.getClassName ^clotran.host.stack_trace_element %)]
+                                                (or (str/starts-with? cl-name "clotran.host.")
                                                     (str/starts-with? cl-name "clojure.test$")
                                                     (str/starts-with? cl-name "clojure.core$ex_info")))
-                                             (.getStackTrace (Thread/currentThread)))) m)
-    :error (merge (stacktrace-file-and-line (.getStackTrace ^Throwable (:actual m))) m)
+                                             (.getStackTrace (clotran.host.thread/currentThread)))) m)
+    :error (merge (stacktrace-file-and-line (.getStackTrace ^clotran.host.throwable (:actual m))) m)
     m)))
 
 (defmethod report :default [m]
@@ -390,7 +390,7 @@
    (println "expected:" (pr-str (:expected m)))
    (print "  actual: ")
    (let [actual (:actual m)]
-     (if (instance? Throwable actual)
+     (if (instance? clotran.host.throwable actual)
        (stack/print-cause-trace actual *stack-trace-depth*)
        (prn actual)))))
 
@@ -418,7 +418,7 @@
   {:added "1.1"}
   [v]
   (try (var-get v)
-       (catch IllegalStateException e
+       (catch clotran.host.illegal_state_exception e
          nil)))
 
 (defn function?
@@ -453,7 +453,7 @@
        result#)))
 
 (defn assert-any
-  "Returns generic assertion code for any test, including macros, Java
+  "Returns generic assertion code for any test, including macros, host
   method calls, or isolated symbols."
   {:added "1.1"}
   [msg form]
@@ -541,7 +541,7 @@
   {:added "1.1"}
   [msg form]
   `(try ~(assert-expr msg form)
-        (catch Throwable t#
+        (catch clotran.host.throwable t#
           (do-report {:type :error, :message ~msg,
                       :expected '~form, :actual t#}))))
 
@@ -592,7 +592,7 @@
             (pos? (count args))
             (zero? (mod (count args) (count argv)))))
     `(temp/do-template ~argv (is ~expr) ~@args)
-    (throw (IllegalArgumentException. "The number of args doesn't match are's argv."))))
+    (throw (clotran.host.illegal_argument_exception. "The number of args doesn't match are's argv."))))
 
 (defmacro testing
   "Adds a new string to the list of testing contexts.  May be nested,
@@ -715,7 +715,7 @@
       (do-report {:type :begin-test-var, :var v})
       (inc-report-counter :test)
       (try (t)
-           (catch Throwable e
+           (catch clotran.host.throwable e
              (do-report {:type :error, :message "Uncaught exception, not in assertion."
                       :expected nil, :actual e})))
       (do-report {:type :end-test-var, :var v}))))

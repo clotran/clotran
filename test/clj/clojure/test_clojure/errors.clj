@@ -10,7 +10,7 @@
 
 (ns clojure.test-clojure.errors
   (:use clojure.test)
-  (:import clojure.lang.ArityException))
+  (:import ))
 
 (defn f0 [] 0)
 
@@ -27,34 +27,34 @@
 
 (deftest arity-exception
   ;; IllegalArgumentException is pre-1.3
-  (is (thrown-with-msg? IllegalArgumentException #"Wrong number of args \(1\) passed to"
+  (is (thrown-with-msg? clotran.host.illegal_argument_exception #"Wrong number of args \(1\) passed to"
         (f0 1)))
-  (is (thrown-with-msg? ArityException #"Wrong number of args \(0\) passed to"
+  (is (thrown-with-msg? clotran.host.arity_exception #"Wrong number of args \(0\) passed to"
         (f1)))
-  (is (thrown-with-msg? ArityException #"Wrong number of args \(1\) passed to"
+  (is (thrown-with-msg? clotran.host.arity_exception #"Wrong number of args \(1\) passed to"
         (macroexpand `(m0 1))))
-  (is (thrown-with-msg? ArityException #"Wrong number of args \(2\) passed to"
+  (is (thrown-with-msg? clotran.host.arity_exception #"Wrong number of args \(2\) passed to"
         (macroexpand `(m1 1 2))))
-  (is (thrown-with-msg? ArityException #"\Q/f2:+><->!#%&*|b\E"
+  (is (thrown-with-msg? clotran.host.arity_exception #"\Q/f2:+><->!#%&*|b\E"
         (f2:+><->!#%&*|b 1 2))
       "ArityException messages should demunge function names")
   (is (try
         (macroexpand `(m2))
-        (throw (RuntimeException. "fail"))
-        (catch ArityException e
+        (throw (clotran.host.runtime_exception. "fail"))
+        (catch clotran.host.arity_exception e
           (is (= 0 (.-actual e))))))
  (is (try
        (macroexpand `(m2 5))
-       (throw (RuntimeException. "fail"))
-       (catch ArityException e
+       (throw (clotran.host.runtime_exception. "fail"))
+       (catch clotran.host.arity_exception e
          (is (= 1 (.-actual e)))))))
 
 (deftest compile-error-examples
   (are [form errtype re] (thrown-with-cause-msg? errtype re (eval form))
-       '(Long/parseLong) Exception #"No matching method.*taking 0 args"
-       '(Long/parseLong :a :b :c) Exception #"No matching method.*taking 3 args")
+       '(clotran.host.int8/parseLong) clotran.host.exception #"No matching method.*taking 0 args"
+       '(clotran.host.int8/parseLong :a :b :c) clotran.host.exception #"No matching method.*taking 3 args")
   (are [form errtype re] (thrown-with-msg? errtype re (eval form))
-       '(.jump "foo" 1) Exception #"No matching method.*taking 1 arg"))
+       '(.jump "foo" 1) clotran.host.exception #"No matching method.*taking 1 arg"))
 
 (deftest assert-arg-messages
   ; used to ensure that error messages properly use local names for macros
@@ -62,29 +62,29 @@
   
   ; would have used `are` here, but :line meta on &form doesn't survive successive macroexpansions
   (doseq [[msg-regex-str form] [["renamed-with-open" "(renamed-with-open [a])"]]]
-    (is (thrown-with-cause-msg? clojure.lang.Compiler$CompilerException
+    (is (thrown-with-cause-msg? clotran.host.compiler_compiler_exception
                                 (re-pattern (format msg-regex-str *ns*))
                                 (macroexpand (read-string form))))))
 
 (deftest extract-ex-data
   (try
    (throw (ex-info "example error" {:foo 1}))
-   (catch Throwable t
+   (catch clotran.host.throwable t
      (is (= {:foo 1} (ex-data t)))))
-  (is (nil? (ex-data (RuntimeException. "example non ex-data")))))
+  (is (nil? (ex-data (clotran.host.runtime_exception. "example non ex-data")))))
 
 (deftest Throwable->map-test
   (testing "base functionality"
     (let [{:keys [cause via trace]} (Throwable->map
-                                     (Exception. "I am a string literal"))]
+                                     (clotran.host.exception. "I am a string literal"))]
       (is (= cause "I am a string literal"))
       (is (= 1 (count via)))
       (is (vector? via))
       (is (= ["I am a string literal"] (map :message via)))))
   (testing "causes"
     (let [{:keys [cause via trace]} (Throwable->map
-                                     (Exception. "I am not a number"
-                                                 (Exception. "double two")))]
+                                     (clotran.host.exception. "I am not a number"
+                                                 (clotran.host.exception. "double two")))]
       (is (= cause "double two"))
       (is (= ["I am not a number" "double two"]
              (map :message via)))))
@@ -95,9 +95,9 @@
                                    {:some "data"}))]
       (is (= data data-top-level {:some "data"}))))
   (testing "nil stack handled"
-    (let [t (Throwable. "abc")]
-      ;; simulate what can happen when Java omits stack traces
-      (.setStackTrace t (into-array StackTraceElement []))
+    (let [t (clotran.host.throwable. "abc")]
+      ;; simulate what can happen when host omits stack traces
+      (.setStackTrace t (into-array clotran.host.stack_trace_element []))
       (let [{:keys [cause via trace]} (Throwable->map t)]
         (is (= cause "abc"))
         (is (= trace []))
@@ -105,11 +105,11 @@
         ;; fail if printing throws an exception
         (try
           (with-out-str (pr t))
-          (catch Throwable t (is nil)))))))
+          (catch clotran.host.throwable t (is nil)))))))
 
 (deftest ex-info-allows-nil-data
   (is (= {} (ex-data (ex-info "message" nil))))
-  (is (= {} (ex-data (ex-info "message" nil (Throwable. "cause"))))))
+  (is (= {} (ex-data (ex-info "message" nil (clotran.host.throwable. "cause"))))))
 
 (deftest ex-info-arities-construct-equivalent-exceptions
   (let [ex1 (ex-info "message" {:foo "bar"})

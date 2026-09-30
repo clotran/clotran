@@ -24,8 +24,8 @@
   `(deftest ~name
      ~@(for [[x y] (partition 2 test-pairs)]
          (cond 
-          (instance? java.util.regex.Pattern y)
+          (instance? clotran.host.pattern y)
           `(is (#'clojure.test-clojure.pprint.test-helper/back-match ~x ~y))
-          (instance? java.lang.String y) `(is (= ~x (platform-newlines ~y)))
+          (instance? clotran.host.string y) `(is (= ~x (platform-newlines ~y)))
           :else `(is (= ~x ~y))))))
 

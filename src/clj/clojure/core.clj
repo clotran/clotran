@@ -17,7 +17,7 @@
  ^{:arglists '([& items])
    :doc "Creates a new list containing the items."
    :added "1.0"}
-  list (. clojure.lang.PersistentList creator))
+  list (. clotran.host.persistent_list creator))
 
 (def
  ^{:arglists '([x seq])
@@ -26,7 +26,7 @@
    :added "1.0"
    :static true}
 
- cons (fn* ^:static cons [x seq] (. clojure.lang.RT (cons x seq))))
+ cons (fn* ^:static cons [x seq] (. clotran.host.rt (cons x seq))))
 
 ;during bootstrap we don't have destructuring let, loop or fn, will redefine later
 (def
@@ -43,8 +43,8 @@
  ^{:macro true
    :added "1.0"}
  fn (fn* fn [&form &env & decl] 
-         (.withMeta ^clojure.lang.IObj (cons 'fn* decl) 
-                    (.meta ^clojure.lang.IMeta &form))))
+         (.withMeta ^clotran.host.i_obj (cons 'fn* decl) 
+                    (.meta ^clotran.host.i_meta &form))))
 
 (def
  ^{:arglists '([coll])
@@ -52,25 +52,25 @@
     argument. If coll is nil, returns nil."
    :added "1.0"
    :static true}
- first (fn ^:static first [coll] (. clojure.lang.RT (first coll))))
+ first (fn ^:static first [coll] (. clotran.host.rt (first coll))))
 
 (def
  ^{:arglists '([coll])
-   :tag clojure.lang.ISeq
+   :tag clotran.host.i_seq
    :doc "Returns a seq of the items after the first. Calls seq on its
   argument.  If there are no more items, returns nil."
    :added "1.0"
    :static true}  
- next (fn ^:static next [x] (. clojure.lang.RT (next x))))
+ next (fn ^:static next [x] (. clotran.host.rt (next x))))
 
 (def
  ^{:arglists '([coll])
-   :tag clojure.lang.ISeq
+   :tag clotran.host.i_seq
    :doc "Returns a possibly empty seq of the items after the first. Calls seq on its
   argument."
    :added "1.0"
    :static true}  
- rest (fn ^:static rest [x] (. clojure.lang.RT (more x))))
+ rest (fn ^:static rest [x] (. clotran.host.rt (more x))))
 
 (def
  ^{:arglists '([] [coll] [coll x] [coll x & xs])
@@ -84,11 +84,11 @@
  conj (fn ^:static conj
         ([] [])
         ([coll] coll)
-        ([coll x] (clojure.lang.RT/conj coll x))
+        ([coll x] (clotran.host.rt/conj coll x))
         ([coll x & xs]
          (if xs
-           (recur (clojure.lang.RT/conj coll x) (first xs) (next xs))
-           (clojure.lang.RT/conj coll x)))))
+           (recur (clotran.host.rt/conj coll x) (first xs) (next xs))
+           (clotran.host.rt/conj coll x)))))
 
 (def
  ^{:doc "Same as (first (next x))"
@@ -126,59 +126,59 @@
  nnext (fn ^:static nnext [x] (next (next x))))
 
 (def
- ^{:arglists '(^clojure.lang.ISeq [coll])
+ ^{:arglists '(^clotran.host.i_seq [coll])
    :doc "Returns a seq on the collection. If the collection is
     empty, returns nil.  (seq nil) returns nil. seq also works on
-    Strings, native Java arrays (of reference types) and any objects
+    Strings, native host arrays (of reference types) and any objects
     that implement Iterable. Note that seqs cache values, thus seq
     should not be used on any Iterable whose iterator repeatedly
     returns the same mutable object."
-   :tag clojure.lang.ISeq
+   :tag clotran.host.i_seq
    :added "1.0"
    :static true}
- seq (fn ^:static seq ^clojure.lang.ISeq [coll] (. clojure.lang.RT (seq coll))))
+ seq (fn ^:static seq ^clotran.host.i_seq [coll] (. clotran.host.rt (seq coll))))
 
 (def
- ^{:arglists '([^Class c x])
+ ^{:arglists '([^clotran.host.class c x])
    :doc "Evaluates x and tests if it is an instance of the class
     c. Returns true or false"
    :added "1.0"}
- instance? (fn instance? [^Class c x] (. c (isInstance x))))
+ instance? (fn instance? [^clotran.host.class c x] (. c (isInstance x))))
 
 (def
  ^{:arglists '([x])
    :doc "Return true if x implements ISeq"
    :added "1.0"
    :static true}
- seq? (fn ^:static seq? [x] (instance? clojure.lang.ISeq x)))
+ seq? (fn ^:static seq? [x] (instance? clotran.host.i_seq x)))
 
 (def
  ^{:arglists '([x])
    :doc "Return true if x is a Character"
    :added "1.0"
    :static true}
- char? (fn ^:static char? [x] (instance? Character x)))
+ char? (fn ^:static char? [x] (instance? clotran.host.char x)))
 
 (def
  ^{:arglists '([x])
    :doc "Return true if x is a String"
    :added "1.0"
    :static true}
- string? (fn ^:static string? [x] (instance? String x)))
+ string? (fn ^:static string? [x] (instance? clotran.host.string x)))
 
 (def
  ^{:arglists '([x])
    :doc "Return true if x implements IPersistentMap"
    :added "1.0"
    :static true}
- map? (fn ^:static map? [x] (instance? clojure.lang.IPersistentMap x)))
+ map? (fn ^:static map? [x] (instance? clotran.host.i_persistent_map x)))
 
 (def
  ^{:arglists '([x])
    :doc "Return true if x implements IPersistentVector"
    :added "1.0"
    :static true}
- vector? (fn ^:static vector? [x] (instance? clojure.lang.IPersistentVector x)))
+ vector? (fn ^:static vector? [x] (instance? clotran.host.i_persistent_vector x)))
 
 (def
  ^{:arglists '([map key val] [map key val & kvs])
@@ -190,13 +190,13 @@
    :static true}
  assoc
  (fn ^:static assoc
-   ([map key val] (clojure.lang.RT/assoc map key val))
+   ([map key val] (clotran.host.rt/assoc map key val))
    ([map key val & kvs]
-    (let [ret (clojure.lang.RT/assoc map key val)]
+    (let [ret (clotran.host.rt/assoc map key val)]
       (if kvs
         (if (next kvs)
           (recur ret (first kvs) (second kvs) (nnext kvs))
-          (throw (IllegalArgumentException.
+          (throw (clotran.host.illegal_argument_exception.
                   "assoc expects even number of arguments after map/vector, found odd number")))
         ret)))))
 
@@ -207,16 +207,16 @@
    :added "1.0"
    :static true}
  meta (fn ^:static meta [x]
-        (if (instance? clojure.lang.IMeta x)
-          (. ^clojure.lang.IMeta x (meta)))))
+        (if (instance? clotran.host.i_meta x)
+          (. ^clotran.host.i_meta x (meta)))))
 
 (def
- ^{:arglists '([^clojure.lang.IObj obj m])
+ ^{:arglists '([^clotran.host.i_obj obj m])
    :doc "Returns an object of the same type and value as obj, with
     map m as its metadata."
    :added "1.0"
    :static true}
- with-meta (fn ^:static with-meta [^clojure.lang.IObj x m]
+ with-meta (fn ^:static with-meta [^clotran.host.i_obj x m]
              (. x (withMeta m))))
 
 (def ^{:private true :dynamic true}
@@ -231,8 +231,8 @@
          (fn [fdecl]
            (let [arglist (first fdecl)
                  ;elide implicit macro args
-                 arglist (if (clojure.lang.Util/equals '&form (first arglist)) 
-                           (clojure.lang.RT/subvec arglist 2 (clojure.lang.RT/count arglist))
+                 arglist (if (clotran.host.util/equals '&form (first arglist)) 
+                           (clotran.host.rt/subvec arglist 2 (clotran.host.rt/count arglist))
                            arglist)
                  body (next fdecl)]
              (if (map? (first body))
@@ -242,13 +242,13 @@
                arglist)))
          resolve-tag (fn [argvec]
                         (let [m (meta argvec)
-                              ^clojure.lang.Symbol tag (:tag m)]
-                          (if (instance? clojure.lang.Symbol tag)
-                            (if (clojure.lang.Util/equiv (.indexOf (.getName tag) ".") -1)
-                              (if (clojure.lang.Util/equals nil (clojure.lang.Compiler$HostExpr/maybeSpecialTag tag))
-                                (let [c (clojure.lang.Compiler$HostExpr/maybeClass tag false)]
+                              ^clotran.host.symbol tag (:tag m)]
+                          (if (instance? clotran.host.symbol tag)
+                            (if (clotran.host.util/equiv (.indexOf (.getName tag) ".") -1)
+                              (if (clotran.host.util/equals nil (clotran.host.compiler_host_expr/maybeSpecialTag tag))
+                                (let [c (clotran.host.compiler_host_expr/maybeClass tag false)]
                                   (if c
-                                    (with-meta argvec (assoc m :tag (clojure.lang.Symbol/intern (.getName c))))
+                                    (with-meta argvec (assoc m :tag (clotran.host.symbol/intern (.getName c))))
                                     argvec))
                                 argvec)
                               argvec)
@@ -293,9 +293,9 @@
    :added "1.0"}
  defn (fn defn [&form &env name & fdecl]
         ;; Note: Cannot delegate this check to def because of the call to (with-meta name ..)
-        (if (instance? clojure.lang.Symbol name)
+        (if (instance? clotran.host.symbol name)
           nil
-          (throw (IllegalArgumentException. "First argument to defn must be a symbol")))
+          (throw (clotran.host.illegal_argument_exception. "First argument to defn must be a symbol")))
         (let [m (if (string? (first fdecl))
                   {:doc (first fdecl)}
                   {})
@@ -322,10 +322,10 @@
                       ifn (first inline)
                       iname (second inline)]
                   ;; same as: (if (and (= 'fn ifn) (not (symbol? iname))) ...)
-                  (if (if (clojure.lang.Util/equiv 'fn ifn)
-                        (if (instance? clojure.lang.Symbol iname) false true))
+                  (if (if (clotran.host.util/equiv 'fn ifn)
+                        (if (instance? clotran.host.symbol iname) false true))
                     ;; inserts the same fn name to the inline fn if it does not have one
-                    (assoc m :inline (cons ifn (cons (clojure.lang.Symbol/intern (.concat (.getName ^clojure.lang.Symbol name) "__inliner"))
+                    (assoc m :inline (cons ifn (cons (clotran.host.symbol/intern (.concat (.getName ^clotran.host.symbol name) "__inliner"))
                                                      (next inline))))
                     m))
               m (conj (if (meta name) (meta name) {}) m)]
@@ -339,17 +339,17 @@
 
 (defn to-array
   "Returns an array of Objects containing the contents of coll, which
-  can be any Collection.  Maps to java.util.Collection.toArray()."
-  {:tag "[Ljava.lang.Object;"
+  can be any Collection.  Maps to clotran.host.collection.toArray()."
+  {:tag "[Lclotran.host.value;"
    :added "1.0"
    :static true}
-  [coll] (. clojure.lang.RT (toArray coll)))
+  [coll] (. clotran.host.rt (toArray coll)))
 
 (defn cast
   "Throws a ClassCastException if x is not a c, else returns x."
   {:added "1.0"
    :static true}
-  [^Class c x] 
+  [^clotran.host.class c x] 
   (. c (cast x)))
  
 (defn vector
@@ -364,19 +364,19 @@
 	([a b c d e] [a b c d e])
 	([a b c d e f] [a b c d e f])
   ([a b c d e f & args]
-     (. clojure.lang.LazilyPersistentVector (create (cons a (cons b (cons c (cons d (cons e (cons f args))))))))))
+     (. clotran.host.lazily_persistent_vector (create (cons a (cons b (cons c (cons d (cons e (cons f args))))))))))
 
 (defn vec
-  "Creates a new vector containing the contents of coll. Java arrays
+  "Creates a new vector containing the contents of coll. host arrays
   will be aliased and should not be modified."
   {:added "1.0"
    :static true}
   ([coll]
    (if (vector? coll)
-     (if (instance? clojure.lang.IObj coll)
+     (if (instance? clotran.host.i_obj coll)
        (with-meta coll nil)
-       (clojure.lang.LazilyPersistentVector/create coll))
-     (clojure.lang.LazilyPersistentVector/create coll))))
+       (clotran.host.lazily_persistent_vector/create coll))
+     (clotran.host.lazily_persistent_vector/create coll))))
 
 (defn hash-map
   "keyval => key val
@@ -386,7 +386,7 @@
    :static true}
   ([] {})
   ([& keyvals]
-   (. clojure.lang.PersistentHashMap (create keyvals))))
+   (. clotran.host.persistent_hash_map (create keyvals))))
 
 (defn hash-set
   "Returns a new hash set with supplied keys.  Any equal keys are
@@ -395,7 +395,7 @@
    :static true}
   ([] #{})
   ([& keys]
-   (clojure.lang.PersistentHashSet/create keys)))
+   (clotran.host.persistent_hash_set/create keys)))
 
 (defn sorted-map
   "keyval => key val
@@ -404,7 +404,7 @@
   {:added "1.0"
    :static true}
   ([& keyvals]
-   (clojure.lang.PersistentTreeMap/create keyvals)))
+   (clotran.host.persistent_tree_map/create keyvals)))
 
 (defn sorted-map-by
   "keyval => key val
@@ -414,7 +414,7 @@
   {:added "1.0"
    :static true}
   ([comparator & keyvals]
-   (clojure.lang.PersistentTreeMap/create comparator keyvals)))
+   (clotran.host.persistent_tree_map/create comparator keyvals)))
 
 (defn sorted-set
   "Returns a new sorted set with supplied keys.  Any equal keys are
@@ -422,7 +422,7 @@
   {:added "1.0"
    :static true}
   ([& keys]
-   (clojure.lang.PersistentTreeSet/create keys)))
+   (clotran.host.persistent_tree_set/create keys)))
 
 (defn sorted-set-by
   "Returns a new sorted set with supplied keys, using the supplied
@@ -431,17 +431,17 @@
   {:added "1.1"
    :static true} 
   ([comparator & keys]
-   (clojure.lang.PersistentTreeSet/create comparator keys)))
+   (clotran.host.persistent_tree_set/create comparator keys)))
 
  
 ;;;;;;;;;;;;;;;;;;;;
 (defn nil?
   "Returns true if x is nil, false otherwise."
-  {:tag Boolean
+  {:tag clotran.host.logical
    :added "1.0"
    :static true
-   :inline (fn [x] (list 'clojure.lang.Util/identical x nil))}
-  [x] (clojure.lang.Util/identical x nil))
+   :inline (fn [x] (list 'clotran.host.util/identical x nil))}
+  [x] (clotran.host.util/identical x nil))
 
 (def
 
@@ -506,40 +506,40 @@
 
 (defn false?
   "Returns true if x is the value false, false otherwise."
-  {:tag Boolean,
+  {:tag clotran.host.logical,
    :added "1.0"
    :static true}
-  [x] (clojure.lang.Util/identical x false))
+  [x] (clotran.host.util/identical x false))
 
 (defn true?
   "Returns true if x is the value true, false otherwise."
-  {:tag Boolean,
+  {:tag clotran.host.logical,
    :added "1.0"
    :static true}
-  [x] (clojure.lang.Util/identical x true))
+  [x] (clotran.host.util/identical x true))
 
 (defn boolean?
   "Return true if x is a Boolean"
   {:added "1.9"}
-  [x] (instance? Boolean x))
+  [x] (instance? clotran.host.logical x))
 
 (defn not
   "Returns true if x is logical false, false otherwise."
-  {:tag Boolean
+  {:tag clotran.host.logical
    :added "1.0"
    :static true}
   [x] (if x false true))
 
 (defn some?
   "Returns true if x is not nil, false otherwise."
-  {:tag Boolean
+  {:tag clotran.host.logical
    :added "1.6"
    :static true}
   [x] (not (nil? x)))
 
 (defn any?
   "Returns true given any argument."
-  {:tag Boolean
+  {:tag clotran.host.logical
    :added "1.9"}
   [x] true)
 
@@ -547,31 +547,31 @@
   "With no args, returns the empty string. With one arg x, returns
   x.toString().  (str nil) returns the empty string. With more than
   one arg, returns the concatenation of the str values of the args."
-  {:tag String
+  {:tag clotran.host.string
    :added "1.0"
    :static true}
-  (^String [] "")
-  (^String [^Object x]
+  (^clotran.host.string [] "")
+  (^clotran.host.string [^clotran.host.value x]
    (if (nil? x) "" (. x (toString))))
-  (^String [x & ys]
-     ((fn [^StringBuilder sb more]
+  (^clotran.host.string [x & ys]
+     ((fn [^clotran.host.string_builder sb more]
           (if more
             (recur (. sb  (append (str (first more)))) (next more))
             (str sb)))
-      (new StringBuilder (str x)) ys)))
+      (new clotran.host.string_builder (str x)) ys)))
 
 
 (defn symbol?
   "Return true if x is a Symbol"
   {:added "1.0"
    :static true}
-  [x] (instance? clojure.lang.Symbol x))
+  [x] (instance? clotran.host.symbol x))
 
 (defn keyword?
   "Return true if x is a Keyword"
   {:added "1.0"
    :static true}
-  [x] (instance? clojure.lang.Keyword x))
+  [x] (instance? clotran.host.keyword x))
 
 (defmacro cond
   "Takes a set of test/expr pairs. It evaluates each test one at a
@@ -584,24 +584,24 @@
       (list 'if (first clauses)
             (if (next clauses)
                 (second clauses)
-                (throw (IllegalArgumentException.
+                (throw (clotran.host.illegal_argument_exception.
                          "cond requires an even number of forms")))
             (cons 'clojure.core/cond (next (next clauses))))))
 
 (defn symbol
   "Returns a Symbol with the given namespace and name. Arity-1 works
   on strings, keywords, and vars."
-  {:tag clojure.lang.Symbol
+  {:tag clotran.host.symbol
    :added "1.0"
    :static true}
   ([name]
      (cond
       (symbol? name) name
-      (instance? String name) (clojure.lang.Symbol/intern name)
-      (instance? clojure.lang.Var name) (.toSymbol ^clojure.lang.Var name)
-      (instance? clojure.lang.Keyword name) (.sym ^clojure.lang.Keyword name)
-      :else (throw (IllegalArgumentException. "no conversion to symbol"))))
-  ([ns name] (clojure.lang.Symbol/intern ns name)))
+      (instance? clotran.host.string name) (clotran.host.symbol/intern name)
+      (instance? clotran.host.var name) (.toSymbol ^clotran.host.var name)
+      (instance? clotran.host.keyword name) (.sym ^clotran.host.keyword name)
+      :else (throw (clotran.host.illegal_argument_exception. "no conversion to symbol"))))
+  ([ns name] (clotran.host.symbol/intern ns name)))
 
 (defn gensym
   "Returns a new symbol with a unique name. If a prefix string is
@@ -610,32 +610,32 @@
   {:added "1.0"
    :static true}
   ([] (gensym "G__"))
-  ([prefix-string] (. clojure.lang.Symbol (intern (str prefix-string (str (. clojure.lang.RT (nextID))))))))
+  ([prefix-string] (. clotran.host.symbol (intern (str prefix-string (str (. clotran.host.rt (nextID))))))))
 
 
 (defn keyword
   "Returns a Keyword with the given namespace and name.  Do not use :
   in the keyword strings, it will be added automatically."
-  {:tag clojure.lang.Keyword
+  {:tag clotran.host.keyword
    :added "1.0"
    :static true}
   ([name] (cond (keyword? name) name
-                (symbol? name) (clojure.lang.Keyword/intern ^clojure.lang.Symbol name)
-                (string? name) (clojure.lang.Keyword/intern ^String name)))
-  ([ns name] (clojure.lang.Keyword/intern ns name)))
+                (symbol? name) (clotran.host.keyword/intern ^clotran.host.symbol name)
+                (string? name) (clotran.host.keyword/intern ^clotran.host.string name)))
+  ([ns name] (clotran.host.keyword/intern ns name)))
 
 (defn find-keyword
   "Returns a Keyword with the given namespace and name if one already
   exists.  This function will not intern a new keyword. If the keyword
   has not already been interned, it will return nil.  Do not use :
   in the keyword strings, it will be added automatically."
-  {:tag clojure.lang.Keyword
+  {:tag clotran.host.keyword
    :added "1.3"
    :static true}
   ([name] (cond (keyword? name) name
-                (symbol? name) (clojure.lang.Keyword/find ^clojure.lang.Symbol name)
-                (string? name) (clojure.lang.Keyword/find ^String name)))
-  ([ns name] (clojure.lang.Keyword/find ns name)))
+                (symbol? name) (clotran.host.keyword/find ^clotran.host.symbol name)
+                (string? name) (clotran.host.keyword/find ^clotran.host.string name)))
+  ([ns name] (clotran.host.keyword/find ns name)))
 
 
 (defn spread
@@ -663,15 +663,15 @@
   "Applies fn f to the argument list formed by prepending intervening arguments to args."
   {:added "1.0"
    :static true}
-  ([^clojure.lang.IFn f args]
+  ([^clotran.host.i_fn f args]
      (. f (applyTo (seq args))))
-  ([^clojure.lang.IFn f x args]
+  ([^clotran.host.i_fn f x args]
      (. f (applyTo (list* x args))))
-  ([^clojure.lang.IFn f x y args]
+  ([^clotran.host.i_fn f x y args]
      (. f (applyTo (list* x y args))))
-  ([^clojure.lang.IFn f x y z args]
+  ([^clotran.host.i_fn f x y z args]
      (. f (applyTo (list* x y z args))))
-  ([^clojure.lang.IFn f a b c d & args]
+  ([^clotran.host.i_fn f a b c d & args]
      (. f (applyTo (cons a (cons b (cons c (cons d (spread args)))))))))
 
 (defn vary-meta
@@ -689,33 +689,33 @@
   seq calls. See also - realized?"
   {:added "1.0"}
   [& body]
-  (list 'new 'clojure.lang.LazySeq (list* '^{:once true} fn* [] body)))    
+  (list 'new 'clotran.host.lazy_seq (list* '^{:once true} fn* [] body)))    
 
-(defn ^:static ^clojure.lang.ChunkBuffer chunk-buffer ^clojure.lang.ChunkBuffer [capacity]
-  (clojure.lang.ChunkBuffer. capacity))
+(defn ^:static ^clotran.host.chunk_buffer chunk-buffer ^clotran.host.chunk_buffer [capacity]
+  (clotran.host.chunk_buffer. capacity))
 
-(defn ^:static chunk-append [^clojure.lang.ChunkBuffer b x]
+(defn ^:static chunk-append [^clotran.host.chunk_buffer b x]
   (.add b x))
 
-(defn ^:static ^clojure.lang.IChunk chunk [^clojure.lang.ChunkBuffer b]
+(defn ^:static ^clotran.host.i_chunk chunk [^clotran.host.chunk_buffer b]
   (.chunk b))
 
-(defn ^:static  ^clojure.lang.IChunk chunk-first ^clojure.lang.IChunk [^clojure.lang.IChunkedSeq s]
+(defn ^:static  ^clotran.host.i_chunk chunk-first ^clotran.host.i_chunk [^clotran.host.i_chunked_seq s]
   (.chunkedFirst s))
 
-(defn ^:static ^clojure.lang.ISeq chunk-rest ^clojure.lang.ISeq [^clojure.lang.IChunkedSeq s]
+(defn ^:static ^clotran.host.i_seq chunk-rest ^clotran.host.i_seq [^clotran.host.i_chunked_seq s]
   (.chunkedMore s))
 
-(defn ^:static ^clojure.lang.ISeq chunk-next ^clojure.lang.ISeq [^clojure.lang.IChunkedSeq s]
+(defn ^:static ^clotran.host.i_seq chunk-next ^clotran.host.i_seq [^clotran.host.i_chunked_seq s]
   (.chunkedNext s))
 
 (defn ^:static chunk-cons [chunk rest]
-  (if (clojure.lang.Numbers/isZero (clojure.lang.RT/count chunk))
+  (if (clotran.host.numbers/isZero (clotran.host.rt/count chunk))
     rest
-    (clojure.lang.ChunkedCons. chunk rest)))
+    (clotran.host.chunked_cons. chunk rest)))
   
 (defn ^:static chunked-seq? [s]
-  (instance? clojure.lang.IChunkedSeq s))
+  (instance? clotran.host.i_chunked_seq s))
 
 (defn concat
   "Returns a lazy seq representing the concatenation of the elements in the supplied colls."
@@ -752,19 +752,19 @@
   calls. See also - realized?"
   {:added "1.0"}
   [& body]
-    (list 'new 'clojure.lang.Delay (list* `^{:once true} fn* [] body)))
+    (list 'new 'clotran.host.delay (list* `^{:once true} fn* [] body)))
 
 (defn delay?
   "returns true if x is a Delay created with delay"
   {:added "1.0"
    :static true}
-  [x] (instance? clojure.lang.Delay x))
+  [x] (instance? clotran.host.delay x))
 
 (defn force
   "If x is a Delay, returns the (possibly cached) value of its expression, else returns x"
   {:added "1.0"
    :static true}
-  [x] (. clojure.lang.Delay (force x)))
+  [x] (. clotran.host.delay (force x)))
 
 (defmacro if-not
   "Evaluates test. If logical false, evaluates and returns then expr, 
@@ -776,41 +776,41 @@
 
 (defn identical?
   "Tests if 2 arguments are the same object"
-  {:inline (fn [x y] `(. clojure.lang.Util identical ~x ~y))
+  {:inline (fn [x y] `(. clotran.host.util identical ~x ~y))
    :inline-arities #{2}
    :added "1.0"}
-  ([x y] (clojure.lang.Util/identical x y)))
+  ([x y] (clotran.host.util/identical x y)))
 
 ;equiv-based
 (defn =
   "Equality. Returns true if x equals y, false if not. Same as
-  Java x.equals(y) except it also works for nil, and compares
+  host x.equals(y) except it also works for nil, and compares
   numbers and collections in a type-independent manner.  Clojure's immutable data
   structures define equals() (and thus =) as a value, not an identity,
   comparison."
-  {:inline (fn [x y] `(. clojure.lang.Util equiv ~x ~y))
+  {:inline (fn [x y] `(. clotran.host.util equiv ~x ~y))
    :inline-arities #{2}
    :added "1.0"}
   ([x] true)
-  ([x y] (clojure.lang.Util/equiv x y))
+  ([x y] (clotran.host.util/equiv x y))
   ([x y & more]
-   (if (clojure.lang.Util/equiv x y)
+   (if (clotran.host.util/equiv x y)
      (if (next more)
        (recur y (first more) (next more))
-       (clojure.lang.Util/equiv y (first more)))
+       (clotran.host.util/equiv y (first more)))
      false)))
 
 ;equals-based
 #_(defn =
-  "Equality. Returns true if x equals y, false if not. Same as Java
+  "Equality. Returns true if x equals y, false if not. Same as host
   x.equals(y) except it also works for nil. Boxed numbers must have
   same type. Clojure's immutable data structures define equals() (and
   thus =) as a value, not an identity, comparison."
-  {:inline (fn [x y] `(. clojure.lang.Util equals ~x ~y))
+  {:inline (fn [x y] `(. clotran.host.util equals ~x ~y))
    :inline-arities #{2}
    :added "1.0"}
   ([x] true)
-  ([x y] (clojure.lang.Util/equals x y))
+  ([x y] (clotran.host.util/equals x y))
   ([x y & more]
    (if (= x y)
      (if (next more)
@@ -820,7 +820,7 @@
 
 (defn not=
   "Same as (not (= obj1 obj2))"
-  {:tag Boolean
+  {:tag clotran.host.logical
    :added "1.0"
    :static true}
   ([x] false)
@@ -833,13 +833,13 @@
 (defn compare
   "Comparator. Returns a negative number, zero, or a positive number
   when x is logically 'less than', 'equal to', or 'greater than'
-  y. Same as Java x.compareTo(y) except it also works for nil, and
+  y. Same as host x.compareTo(y) except it also works for nil, and
   compares numbers and collections in a type-independent manner. x
   must implement Comparable"
   {
-   :inline (fn [x y] `(. clojure.lang.Util compare ~x ~y))
+   :inline (fn [x y] `(. clotran.host.util compare ~x ~y))
    :added "1.0"}
-  [x y] (. clojure.lang.Util (compare x y)))
+  [x y] (. clotran.host.util (compare x y)))
 
 (defmacro and
   "Evaluates exprs one at a time, from left to right. If a form
@@ -869,44 +869,44 @@
 (defn zero?
   "Returns true if num is zero, else false"
   {
-   :inline (fn [num] `(. clojure.lang.Numbers (isZero ~num)))
+   :inline (fn [num] `(. clotran.host.numbers (isZero ~num)))
    :added "1.0"}
-  [num] (. clojure.lang.Numbers (isZero num)))
+  [num] (. clotran.host.numbers (isZero num)))
 
 (defn count
   "Returns the number of items in the collection. (count nil) returns
-  0.  Also works on strings, arrays, and Java Collections and Maps"
+  0.  Also works on strings, arrays, and host Collections and Maps"
   {
-   :inline (fn  [x] `(. clojure.lang.RT (count ~x)))
+   :inline (fn  [x] `(. clotran.host.rt (count ~x)))
    :added "1.0"}
-  [coll] (clojure.lang.RT/count coll))
+  [coll] (clotran.host.rt/count coll))
 
 (defn int
   "Coerce to int"
   {
-   :inline (fn  [x] `(. clojure.lang.RT (~(if *unchecked-math* 'uncheckedIntCast 'intCast) ~x)))
+   :inline (fn  [x] `(. clotran.host.rt (~(if *unchecked-math* 'uncheckedIntCast 'intCast) ~x)))
    :added "1.0"}
-  [x] (. clojure.lang.RT (intCast x)))
+  [x] (. clotran.host.rt (intCast x)))
 
 (defn nth
   "Returns the value at the index. get returns nil if index out of
   bounds, nth throws an exception unless not-found is supplied.  nth
-  also works for strings, Java arrays, regex Matchers and Lists, and,
+  also works for strings, host arrays, regex Matchers and Lists, and,
   in O(n) time, for sequences."
-  {:inline (fn  [c i & nf] `(. clojure.lang.RT (nth ~c ~i ~@nf)))
+  {:inline (fn  [c i & nf] `(. clotran.host.rt (nth ~c ~i ~@nf)))
    :inline-arities #{2 3}
    :added "1.0"}
-  ([coll index] (. clojure.lang.RT (nth coll index)))
-  ([coll index not-found] (. clojure.lang.RT (nth coll index not-found))))
+  ([coll index] (. clotran.host.rt (nth coll index)))
+  ([coll index not-found] (. clotran.host.rt (nth coll index not-found))))
 
 (defn <
   "Returns non-nil if nums are in monotonically increasing order,
   otherwise false."
-  {:inline (fn [x y] `(. clojure.lang.Numbers (lt ~x ~y)))
+  {:inline (fn [x y] `(. clotran.host.numbers (lt ~x ~y)))
    :inline-arities #{2}
    :added "1.0"}
   ([x] true)
-  ([x y] (. clojure.lang.Numbers (lt x y)))
+  ([x y] (. clotran.host.numbers (lt x y)))
   ([x y & more]
    (if (< x y)
      (if (next more)
@@ -917,16 +917,16 @@
 (defn inc'
   "Returns a number one greater than num. Supports arbitrary precision.
   See also: inc"
-  {:inline (fn [x] `(. clojure.lang.Numbers (incP ~x)))
+  {:inline (fn [x] `(. clotran.host.numbers (incP ~x)))
    :added "1.0"}
-  [x] (. clojure.lang.Numbers (incP x)))
+  [x] (. clotran.host.numbers (incP x)))
 
 (defn inc
   "Returns a number one greater than num. Does not auto-promote
   longs, will throw on overflow. See also: inc'"
-  {:inline (fn [x] `(. clojure.lang.Numbers (~(if *unchecked-math* 'unchecked_inc 'inc) ~x)))
+  {:inline (fn [x] `(. clotran.host.numbers (~(if *unchecked-math* 'unchecked_inc 'inc) ~x)))
    :added "1.2"}
-  [x] (. clojure.lang.Numbers (inc x)))
+  [x] (. clotran.host.numbers (inc x)))
 
 ;; reduce is defined again later after InternalReduce loads
 (defn ^:private ^:static
@@ -959,17 +959,17 @@
   ([op unchecked-op]
      (fn
        ([x] (let [op (if *unchecked-math* unchecked-op op)]
-              `(. clojure.lang.Numbers (~op ~x))))
+              `(. clotran.host.numbers (~op ~x))))
        ([x y] (let [op (if *unchecked-math* unchecked-op op)]
-                `(. clojure.lang.Numbers (~op ~x ~y))))
+                `(. clotran.host.numbers (~op ~x ~y))))
        ([x y & more]
           (let [op (if *unchecked-math* unchecked-op op)]
             (reduce1
-             (fn [a b] `(. clojure.lang.Numbers (~op ~a ~b)))
-             `(. clojure.lang.Numbers (~op ~x ~y)) more))))))
+             (fn [a b] `(. clotran.host.numbers (~op ~a ~b)))
+             `(. clotran.host.numbers (~op ~x ~y)) more))))))
 
-(defn ^:private >1? [n] (clojure.lang.Numbers/gt n 1))
-(defn ^:private >0? [n] (clojure.lang.Numbers/gt n 0))
+(defn ^:private >1? [n] (clotran.host.numbers/gt n 1))
+(defn ^:private >0? [n] (clotran.host.numbers/gt n 0))
 
 (defn +'
   "Returns the sum of nums. (+') returns 0. Supports arbitrary precision.
@@ -978,8 +978,8 @@
    :inline-arities >1?
    :added "1.0"}
   ([] 0)
-  ([x] (cast Number x))
-  ([x y] (. clojure.lang.Numbers (addP x y)))
+  ([x] (cast clotran.host.number x))
+  ([x y] (. clotran.host.numbers (addP x y)))
   ([x y & more]
    (reduce1 +' (+' x y) more)))
 
@@ -990,8 +990,8 @@
    :inline-arities >1?
    :added "1.2"}
   ([] 0)
-  ([x] (cast Number x))
-  ([x y] (. clojure.lang.Numbers (add x y)))
+  ([x] (cast clotran.host.number x))
+  ([x y] (. clotran.host.numbers (add x y)))
   ([x y & more]
      (reduce1 + (+ x y) more)))
 
@@ -1002,8 +1002,8 @@
    :inline-arities >1?
    :added "1.0"}
   ([] 1)
-  ([x] (cast Number x))
-  ([x y] (. clojure.lang.Numbers (multiplyP x y)))
+  ([x] (cast clotran.host.number x))
+  ([x y] (. clotran.host.numbers (multiplyP x y)))
   ([x y & more]
    (reduce1 *' (*' x y) more)))
 
@@ -1014,8 +1014,8 @@
    :inline-arities >1?
    :added "1.2"}
   ([] 1)
-  ([x] (cast Number x))
-  ([x y] (. clojure.lang.Numbers (multiply x y)))
+  ([x] (cast clotran.host.number x))
+  ([x y] (. clotran.host.numbers (multiply x y)))
   ([x y & more]
      (reduce1 * (* x y) more)))
 
@@ -1026,7 +1026,7 @@
    :inline-arities >1?
    :added "1.0"}
   ([x] (/ 1 x))
-  ([x y] (. clojure.lang.Numbers (divide x y)))
+  ([x y] (. clotran.host.numbers (divide x y)))
   ([x y & more]
    (reduce1 / (/ x y) more)))
 
@@ -1037,8 +1037,8 @@
   {:inline (nary-inline 'minusP)
    :inline-arities >0?
    :added "1.0"}
-  ([x] (. clojure.lang.Numbers (minusP x)))
-  ([x y] (. clojure.lang.Numbers (minusP x y)))
+  ([x] (. clotran.host.numbers (minusP x)))
+  ([x y] (. clotran.host.numbers (minusP x y)))
   ([x y & more]
    (reduce1 -' (-' x y) more)))
 
@@ -1049,19 +1049,19 @@
   {:inline (nary-inline 'minus 'unchecked_minus)
    :inline-arities >0?
    :added "1.2"}
-  ([x] (. clojure.lang.Numbers (minus x)))
-  ([x y] (. clojure.lang.Numbers (minus x y)))
+  ([x] (. clotran.host.numbers (minus x)))
+  ([x y] (. clotran.host.numbers (minus x y)))
   ([x y & more]
      (reduce1 - (- x y) more)))
 
 (defn <=
   "Returns non-nil if nums are in monotonically non-decreasing order,
   otherwise false."
-  {:inline (fn [x y] `(. clojure.lang.Numbers (lte ~x ~y)))
+  {:inline (fn [x y] `(. clotran.host.numbers (lte ~x ~y)))
    :inline-arities #{2}
    :added "1.0"}
   ([x] true)
-  ([x y] (. clojure.lang.Numbers (lte x y)))
+  ([x y] (. clotran.host.numbers (lte x y)))
   ([x y & more]
    (if (<= x y)
      (if (next more)
@@ -1072,11 +1072,11 @@
 (defn >
   "Returns non-nil if nums are in monotonically decreasing order,
   otherwise false."
-  {:inline (fn [x y] `(. clojure.lang.Numbers (gt ~x ~y)))
+  {:inline (fn [x y] `(. clotran.host.numbers (gt ~x ~y)))
    :inline-arities #{2}
    :added "1.0"}
   ([x] true)
-  ([x y] (. clojure.lang.Numbers (gt x y)))
+  ([x y] (. clotran.host.numbers (gt x y)))
   ([x y & more]
    (if (> x y)
      (if (next more)
@@ -1087,11 +1087,11 @@
 (defn >=
   "Returns non-nil if nums are in monotonically non-increasing order,
   otherwise false."
-  {:inline (fn [x y] `(. clojure.lang.Numbers (gte ~x ~y)))
+  {:inline (fn [x y] `(. clotran.host.numbers (gte ~x ~y)))
    :inline-arities #{2}
    :added "1.0"}
   ([x] true)
-  ([x y] (. clojure.lang.Numbers (gte x y)))
+  ([x y] (. clotran.host.numbers (gte x y)))
   ([x y & more]
    (if (>= x y)
      (if (next more)
@@ -1102,11 +1102,11 @@
 (defn ==
   "Returns non-nil if nums all have the equivalent
   value (type-independent), otherwise false"
-  {:inline (fn [x y] `(. clojure.lang.Numbers (equiv ~x ~y)))
+  {:inline (fn [x y] `(. clotran.host.numbers (equiv ~x ~y)))
    :inline-arities #{2}
    :added "1.0"}
   ([x] true)
-  ([x y] (. clojure.lang.Numbers (equiv x y)))
+  ([x y] (. clotran.host.numbers (equiv x y)))
   ([x y & more]
    (if (== x y)
      (if (next more)
@@ -1120,7 +1120,7 @@
    :inline-arities >1?
    :inline (nary-inline 'max)}
   ([x] x)
-  ([x y] (. clojure.lang.Numbers (max x y)))
+  ([x y] (. clotran.host.numbers (max x y)))
   ([x y & more]
    (reduce1 max (max x y) more)))
 
@@ -1130,7 +1130,7 @@
    :inline-arities >1?
    :inline (nary-inline 'min)}
   ([x] x)
-  ([x y] (. clojure.lang.Numbers (min x y)))
+  ([x y] (. clotran.host.numbers (min x y)))
   ([x y & more]
    (reduce1 min (min x y) more)))
 
@@ -1141,167 +1141,167 @@
   If a is a double and ##Inf or ##-Inf => ##Inf
   If a is a double and ##NaN => ##NaN"
    :inline-arities #{1}
-   :inline (fn [a] `(clojure.lang.Numbers/abs ~a))
+   :inline (fn [a] `(clotran.host.numbers/abs ~a))
    :added "1.11"}
   [a]
-  (clojure.lang.Numbers/abs a))
+  (clotran.host.numbers/abs a))
 
 (defn dec'
   "Returns a number one less than num. Supports arbitrary precision.
   See also: dec"
-  {:inline (fn [x] `(. clojure.lang.Numbers (decP ~x)))
+  {:inline (fn [x] `(. clotran.host.numbers (decP ~x)))
    :added "1.0"}
-  [x] (. clojure.lang.Numbers (decP x)))
+  [x] (. clotran.host.numbers (decP x)))
 
 (defn dec
   "Returns a number one less than num. Does not auto-promote
   longs, will throw on overflow. See also: dec'"
-  {:inline (fn [x] `(. clojure.lang.Numbers (~(if *unchecked-math* 'unchecked_dec 'dec) ~x)))
+  {:inline (fn [x] `(. clotran.host.numbers (~(if *unchecked-math* 'unchecked_dec 'dec) ~x)))
    :added "1.2"}
-  [x] (. clojure.lang.Numbers (dec x)))
+  [x] (. clotran.host.numbers (dec x)))
 
 (defn unchecked-inc-int
   "Returns a number one greater than x, an int.
   Note - uses a primitive operator subject to overflow."
-  {:inline (fn [x] `(. clojure.lang.Numbers (unchecked_int_inc ~x)))
+  {:inline (fn [x] `(. clotran.host.numbers (unchecked_int_inc ~x)))
    :added "1.0"}
-  [x] (. clojure.lang.Numbers (unchecked_int_inc x)))
+  [x] (. clotran.host.numbers (unchecked_int_inc x)))
 
 (defn unchecked-inc
   "Returns a number one greater than x, a long.
   Note - uses a primitive operator subject to overflow."
-  {:inline (fn [x] `(. clojure.lang.Numbers (unchecked_inc ~x)))
+  {:inline (fn [x] `(. clotran.host.numbers (unchecked_inc ~x)))
    :added "1.0"}
-  [x] (. clojure.lang.Numbers (unchecked_inc x)))
+  [x] (. clotran.host.numbers (unchecked_inc x)))
 
 (defn unchecked-dec-int
   "Returns a number one less than x, an int.
   Note - uses a primitive operator subject to overflow."
-  {:inline (fn [x] `(. clojure.lang.Numbers (unchecked_int_dec ~x)))
+  {:inline (fn [x] `(. clotran.host.numbers (unchecked_int_dec ~x)))
    :added "1.0"}
-  [x] (. clojure.lang.Numbers (unchecked_int_dec x)))
+  [x] (. clotran.host.numbers (unchecked_int_dec x)))
 
 (defn unchecked-dec
   "Returns a number one less than x, a long.
   Note - uses a primitive operator subject to overflow."
-  {:inline (fn [x] `(. clojure.lang.Numbers (unchecked_dec ~x)))
+  {:inline (fn [x] `(. clotran.host.numbers (unchecked_dec ~x)))
    :added "1.0"}
-  [x] (. clojure.lang.Numbers (unchecked_dec x)))
+  [x] (. clotran.host.numbers (unchecked_dec x)))
 
 (defn unchecked-negate-int
   "Returns the negation of x, an int.
   Note - uses a primitive operator subject to overflow."
-  {:inline (fn [x] `(. clojure.lang.Numbers (unchecked_int_negate ~x)))
+  {:inline (fn [x] `(. clotran.host.numbers (unchecked_int_negate ~x)))
    :added "1.0"}
-  [x] (. clojure.lang.Numbers (unchecked_int_negate x)))
+  [x] (. clotran.host.numbers (unchecked_int_negate x)))
 
 (defn unchecked-negate
   "Returns the negation of x, a long.
   Note - uses a primitive operator subject to overflow."
-  {:inline (fn [x] `(. clojure.lang.Numbers (unchecked_minus ~x)))
+  {:inline (fn [x] `(. clotran.host.numbers (unchecked_minus ~x)))
    :added "1.0"}
-  [x] (. clojure.lang.Numbers (unchecked_minus x)))
+  [x] (. clotran.host.numbers (unchecked_minus x)))
 
 (defn unchecked-add-int
   "Returns the sum of x and y, both int.
   Note - uses a primitive operator subject to overflow."
-  {:inline (fn [x y] `(. clojure.lang.Numbers (unchecked_int_add ~x ~y)))
+  {:inline (fn [x y] `(. clotran.host.numbers (unchecked_int_add ~x ~y)))
    :added "1.0"}
-  [x y] (. clojure.lang.Numbers (unchecked_int_add x y)))
+  [x y] (. clotran.host.numbers (unchecked_int_add x y)))
 
 (defn unchecked-add
   "Returns the sum of x and y, both long.
   Note - uses a primitive operator subject to overflow."
-  {:inline (fn [x y] `(. clojure.lang.Numbers (unchecked_add ~x ~y)))
+  {:inline (fn [x y] `(. clotran.host.numbers (unchecked_add ~x ~y)))
    :added "1.0"}
-  [x y] (. clojure.lang.Numbers (unchecked_add x y)))
+  [x y] (. clotran.host.numbers (unchecked_add x y)))
 
 (defn unchecked-subtract-int
   "Returns the difference of x and y, both int.
   Note - uses a primitive operator subject to overflow."
-  {:inline (fn [x y] `(. clojure.lang.Numbers (unchecked_int_subtract ~x ~y)))
+  {:inline (fn [x y] `(. clotran.host.numbers (unchecked_int_subtract ~x ~y)))
    :added "1.0"}
-  [x y] (. clojure.lang.Numbers (unchecked_int_subtract x y)))
+  [x y] (. clotran.host.numbers (unchecked_int_subtract x y)))
 
 (defn unchecked-subtract
   "Returns the difference of x and y, both long.
   Note - uses a primitive operator subject to overflow."
-  {:inline (fn [x y] `(. clojure.lang.Numbers (unchecked_minus ~x ~y)))
+  {:inline (fn [x y] `(. clotran.host.numbers (unchecked_minus ~x ~y)))
    :added "1.0"}
-  [x y] (. clojure.lang.Numbers (unchecked_minus x y)))
+  [x y] (. clotran.host.numbers (unchecked_minus x y)))
 
 (defn unchecked-multiply-int
   "Returns the product of x and y, both int.
   Note - uses a primitive operator subject to overflow."
-  {:inline (fn [x y] `(. clojure.lang.Numbers (unchecked_int_multiply ~x ~y)))
+  {:inline (fn [x y] `(. clotran.host.numbers (unchecked_int_multiply ~x ~y)))
    :added "1.0"}
-  [x y] (. clojure.lang.Numbers (unchecked_int_multiply x y)))
+  [x y] (. clotran.host.numbers (unchecked_int_multiply x y)))
 
 (defn unchecked-multiply
   "Returns the product of x and y, both long.
   Note - uses a primitive operator subject to overflow."
-  {:inline (fn [x y] `(. clojure.lang.Numbers (unchecked_multiply ~x ~y)))
+  {:inline (fn [x y] `(. clotran.host.numbers (unchecked_multiply ~x ~y)))
    :added "1.0"}
-  [x y] (. clojure.lang.Numbers (unchecked_multiply x y)))
+  [x y] (. clotran.host.numbers (unchecked_multiply x y)))
 
 (defn unchecked-divide-int
   "Returns the division of x by y, both int.
   Note - uses a primitive operator subject to truncation."
-  {:inline (fn [x y] `(. clojure.lang.Numbers (unchecked_int_divide ~x ~y)))
+  {:inline (fn [x y] `(. clotran.host.numbers (unchecked_int_divide ~x ~y)))
    :added "1.0"}
-  [x y] (. clojure.lang.Numbers (unchecked_int_divide x y)))
+  [x y] (. clotran.host.numbers (unchecked_int_divide x y)))
 
 (defn unchecked-remainder-int
   "Returns the remainder of division of x by y, both int.
   Note - uses a primitive operator subject to truncation."
-  {:inline (fn [x y] `(. clojure.lang.Numbers (unchecked_int_remainder ~x ~y)))
+  {:inline (fn [x y] `(. clotran.host.numbers (unchecked_int_remainder ~x ~y)))
    :added "1.0"}
-  [x y] (. clojure.lang.Numbers (unchecked_int_remainder x y)))
+  [x y] (. clotran.host.numbers (unchecked_int_remainder x y)))
 
 (defn pos?
   "Returns true if num is greater than zero, else false"
   {
-   :inline (fn [num] `(. clojure.lang.Numbers (isPos ~num)))
+   :inline (fn [num] `(. clotran.host.numbers (isPos ~num)))
    :added "1.0"}
-  [num] (. clojure.lang.Numbers (isPos num)))
+  [num] (. clotran.host.numbers (isPos num)))
 
 (defn neg?
   "Returns true if num is less than zero, else false"
   {
-   :inline (fn [num] `(. clojure.lang.Numbers (isNeg ~num)))
+   :inline (fn [num] `(. clotran.host.numbers (isNeg ~num)))
    :added "1.0"}
-  [num] (. clojure.lang.Numbers (isNeg num)))
+  [num] (. clotran.host.numbers (isNeg num)))
 
 (defn quot
   "quot[ient] of dividing numerator by denominator."
   {:added "1.0"
    :static true
-   :inline (fn [x y] `(. clojure.lang.Numbers (quotient ~x ~y)))}
+   :inline (fn [x y] `(. clotran.host.numbers (quotient ~x ~y)))}
   [num div]
-    (. clojure.lang.Numbers (quotient num div)))
+    (. clotran.host.numbers (quotient num div)))
 
 (defn rem
   "remainder of dividing numerator by denominator."
   {:added "1.0"
    :static true
-   :inline (fn [x y] `(. clojure.lang.Numbers (remainder ~x ~y)))}
+   :inline (fn [x y] `(. clotran.host.numbers (remainder ~x ~y)))}
   [num div]
-    (. clojure.lang.Numbers (remainder num div)))
+    (. clotran.host.numbers (remainder num div)))
 
 (defn rationalize
   "returns the rational value of num"
   {:added "1.0"
    :static true}
   [num]
-  (. clojure.lang.Numbers (rationalize num)))
+  (. clotran.host.numbers (rationalize num)))
 
 ;;Bit ops
 
 (defn bit-not
   "Bitwise complement"
-  {:inline (fn [x] `(. clojure.lang.Numbers (not ~x)))
+  {:inline (fn [x] `(. clotran.host.numbers (not ~x)))
    :added "1.0"}
-  [x] (. clojure.lang.Numbers not x))
+  [x] (. clotran.host.numbers not x))
 
 
 (defn bit-and
@@ -1309,7 +1309,7 @@
    {:inline (nary-inline 'and)
     :inline-arities >1?
     :added "1.0"}
-   ([x y] (. clojure.lang.Numbers and x y))
+   ([x y] (. clotran.host.numbers and x y))
    ([x y & more]
       (reduce1 bit-and (bit-and x y) more)))
 
@@ -1318,7 +1318,7 @@
   {:inline (nary-inline 'or)
    :inline-arities >1?
    :added "1.0"}
-  ([x y] (. clojure.lang.Numbers or x y))
+  ([x y] (. clotran.host.numbers or x y))
   ([x y & more]
     (reduce1 bit-or (bit-or x y) more)))
 
@@ -1327,7 +1327,7 @@
   {:inline (nary-inline 'xor)
    :inline-arities >1?
    :added "1.0"}
-  ([x y] (. clojure.lang.Numbers xor x y))
+  ([x y] (. clotran.host.numbers xor x y))
   ([x y & more]
     (reduce1 bit-xor (bit-xor x y) more)))
 
@@ -1337,7 +1337,7 @@
    :inline-arities >1?
    :added "1.0"
    :static true}
-  ([x y] (. clojure.lang.Numbers andNot x y))
+  ([x y] (. clotran.host.numbers andNot x y))
   ([x y & more]
     (reduce1 bit-and-not (bit-and-not x y) more)))
 
@@ -1346,64 +1346,64 @@
   "Clear bit at index n"
   {:added "1.0"
    :static true}
-  [x n] (. clojure.lang.Numbers clearBit x n))
+  [x n] (. clotran.host.numbers clearBit x n))
 
 (defn bit-set
   "Set bit at index n"
   {:added "1.0"
    :static true}
-  [x n] (. clojure.lang.Numbers setBit x n))
+  [x n] (. clotran.host.numbers setBit x n))
 
 (defn bit-flip
   "Flip bit at index n"
   {:added "1.0"
    :static true}
-  [x n] (. clojure.lang.Numbers flipBit x n))
+  [x n] (. clotran.host.numbers flipBit x n))
 
 (defn bit-test
   "Test bit at index n"
   {:added "1.0"
    :static true}
-  [x n] (. clojure.lang.Numbers testBit x n))
+  [x n] (. clotran.host.numbers testBit x n))
 
 
 (defn bit-shift-left
   "Bitwise shift left"
-  {:inline (fn [x n] `(. clojure.lang.Numbers (shiftLeft ~x ~n)))
+  {:inline (fn [x n] `(. clotran.host.numbers (shiftLeft ~x ~n)))
    :added "1.0"}
-  [x n] (. clojure.lang.Numbers shiftLeft x n))
+  [x n] (. clotran.host.numbers shiftLeft x n))
 
 (defn bit-shift-right
   "Bitwise shift right"
-  {:inline (fn [x n] `(. clojure.lang.Numbers (shiftRight ~x ~n)))
+  {:inline (fn [x n] `(. clotran.host.numbers (shiftRight ~x ~n)))
    :added "1.0"}
-  [x n] (. clojure.lang.Numbers shiftRight x n))
+  [x n] (. clotran.host.numbers shiftRight x n))
 
 (defn unsigned-bit-shift-right
   "Bitwise shift right, without sign-extension."
-  {:inline (fn [x n] `(. clojure.lang.Numbers (unsignedShiftRight ~x ~n)))
+  {:inline (fn [x n] `(. clotran.host.numbers (unsignedShiftRight ~x ~n)))
    :added "1.6"}
-  [x n] (. clojure.lang.Numbers unsignedShiftRight x n))
+  [x n] (. clotran.host.numbers unsignedShiftRight x n))
 
 (defn integer?
   "Returns true if n is an integer"
   {:added "1.0"
    :static true}
   [n]
-  (or (instance? Integer n)
-      (instance? Long n)
-      (instance? clojure.lang.BigInt n)
+  (or (instance? clotran.host.int4 n)
+      (instance? clotran.host.int8 n)
+      (instance? clotran.host.bigint n)
       (instance? BigInteger n)
-      (instance? Short n)
-      (instance? Byte n)))
+      (instance? clotran.host.int2 n)
+      (instance? clotran.host.int1 n)))
 
 (defn even?
   "Returns true if n is even, throws an exception if n is not an integer"
   {:added "1.0"
    :static true}
    [n] (if (integer? n)
-        (zero? (bit-and (clojure.lang.RT/uncheckedLongCast n) 1))
-        (throw (IllegalArgumentException. (str "Argument must be an integer: " n)))))
+        (zero? (bit-and (clotran.host.rt/uncheckedLongCast n) 1))
+        (throw (clotran.host.illegal_argument_exception. (str "Argument must be an integer: " n)))))
 
 (defn odd?
   "Returns true if n is odd, throws an exception if n is not an integer"
@@ -1414,10 +1414,10 @@
 (defn int?
   "Return true if x is a fixed precision integer"
   {:added "1.9"}
-  [x] (or (instance? Long x)
-          (instance? Integer x)
-          (instance? Short x)
-          (instance? Byte x)))
+  [x] (or (instance? clotran.host.int8 x)
+          (instance? clotran.host.int4 x)
+          (instance? clotran.host.int2 x)
+          (instance? clotran.host.int1 x)))
 
 (defn pos-int?
   "Return true if x is a positive fixed precision integer"
@@ -1440,7 +1440,7 @@
 (defn double?
   "Return true if x is a Double"
   {:added "1.9"}
-  [x] (instance? Double x))
+  [x] (instance? clotran.host.real8 x))
 
 ;;
 
@@ -1480,7 +1480,7 @@
   more efficient than, last. If the collection is empty, returns nil."
   {:added "1.0"
    :static true}
-  [coll] (. clojure.lang.RT (peek coll)))
+  [coll] (. clotran.host.rt (peek coll)))
 
 (defn pop
   "For a list or queue, returns a new list/queue without the first
@@ -1489,7 +1489,7 @@
   as next/butlast."
   {:added "1.0"
    :static true}
-  [coll] (. clojure.lang.RT (pop coll)))
+  [coll] (. clotran.host.rt (pop coll)))
 
 ;;map stuff
 
@@ -1497,28 +1497,28 @@
   "Return true if x is a map entry"
   {:added "1.8"}
   [x]
-	(instance? java.util.Map$Entry x))
+	(instance? clotran.host.map_entry x))
 
 (defn contains?
   "Returns true if key is present in the given collection, otherwise
   returns false.  Note that for numerically indexed collections like
-  vectors and Java arrays, this tests if the numeric key is within the
+  vectors and host arrays, this tests if the numeric key is within the
   range of indexes. 'contains?' operates constant or logarithmic time;
   it will not perform a linear search for a value.  See also 'some'."
   {:added "1.0"
    :static true}
-  [coll key] (. clojure.lang.RT (contains coll key)))
+  [coll key] (. clotran.host.rt (contains coll key)))
 
 (defn get
   "Returns the value mapped to key, not-found or nil if key not present
   in associative collection, set, string, array, or ILookup instance."
-  {:inline (fn  [m k & nf] `(. clojure.lang.RT (get ~m ~k ~@nf)))
+  {:inline (fn  [m k & nf] `(. clotran.host.rt (get ~m ~k ~@nf)))
    :inline-arities #{2 3}
    :added "1.0"}
   ([map key]
-   (. clojure.lang.RT (get map key)))
+   (. clotran.host.rt (get map key)))
   ([map key not-found]
-   (. clojure.lang.RT (get map key not-found))))
+   (. clotran.host.rt (get map key not-found))))
 
 (defn dissoc
   "dissoc[iate]. Returns a new map of the same (hashed/sorted) type,
@@ -1527,7 +1527,7 @@
    :static true}
   ([map] map)
   ([map key]
-   (. clojure.lang.RT (dissoc map key)))
+   (. clotran.host.rt (dissoc map key)))
   ([map key & ks]
    (let [ret (dissoc map key)]
      (if ks
@@ -1540,7 +1540,7 @@
   {:added "1.0"
    :static true}
   ([set] set)
-  ([^clojure.lang.IPersistentSet set key]
+  ([^clotran.host.i_persistent_set set key]
    (when set
      (. set (disjoin key))))
   ([set key & ks]
@@ -1554,7 +1554,7 @@
   "Returns the map entry for key, or nil if key not present."
   {:added "1.0"
    :static true}
-  [map key] (. clojure.lang.RT (find map key)))
+  [map key] (. clotran.host.rt (find map key)))
 
 (defn select-keys
   "Returns a map containing only those entries in map whose key is in keys"
@@ -1563,7 +1563,7 @@
   [map keyseq]
     (loop [ret {} keys (seq keyseq)]
       (if keys
-        (let [entry (. clojure.lang.RT (find map (first keys)))]
+        (let [entry (. clotran.host.rt (find map (first keys)))]
           (recur
            (if entry
              (conj ret entry)
@@ -1575,26 +1575,26 @@
   "Returns a sequence of the map's keys, in the same order as (seq map)."
   {:added "1.0"
    :static true}
-  [map] (. clojure.lang.RT (keys map)))
+  [map] (. clotran.host.rt (keys map)))
 
 (defn vals
   "Returns a sequence of the map's values, in the same order as (seq map)."
   {:added "1.0"
    :static true}
-  [map] (. clojure.lang.RT (vals map)))
+  [map] (. clotran.host.rt (vals map)))
 
 (defn key
   "Returns the key of the map entry."
   {:added "1.0"
    :static true}
-  [^java.util.Map$Entry e]
+  [^clotran.host.map_entry e]
     (. e (getKey)))
 
 (defn val
   "Returns the value in the map entry."
   {:added "1.0"
    :static true}
-  [^java.util.Map$Entry e]
+  [^clotran.host.map_entry e]
     (. e (getValue)))
 
 (defn rseq
@@ -1602,31 +1602,31 @@
   can be a vector or sorted-map), in reverse order. If rev is empty returns nil"
   {:added "1.0"
    :static true}
-  [^clojure.lang.Reversible rev]
+  [^clotran.host.reversible rev]
     (. rev (rseq)))
 
 (defn name
   "Returns the name String of a string, symbol or keyword."
-  {:tag String
+  {:tag clotran.host.string
    :added "1.0"
    :static true}
   [x]
-  (if (string? x) x (. ^clojure.lang.Named x (getName))))
+  (if (string? x) x (. ^clotran.host.named x (getName))))
 
 (defn namespace
   "Returns the namespace String of a symbol or keyword, or nil if not present."
-  {:tag String
+  {:tag clotran.host.string
    :added "1.0"
    :static true}
-  [^clojure.lang.Named x]
+  [^clotran.host.named x]
     (. x (getNamespace)))
 
 (defn boolean
   "Coerce to boolean"
   {
-   :inline (fn  [x] `(. clojure.lang.RT (booleanCast ~x)))
+   :inline (fn  [x] `(. clotran.host.rt (booleanCast ~x)))
    :added "1.0"}
-  [x] (clojure.lang.RT/booleanCast x))
+  [x] (clotran.host.rt/booleanCast x))
 
 (defn ident?
   "Return true if x is a symbol or keyword"
@@ -1735,7 +1735,7 @@
   [options & valid-keys]
   (when (seq (apply disj (apply hash-set (keys options)) valid-keys))
     (throw
-      (IllegalArgumentException.
+      (clotran.host.illegal_argument_exception.
         (apply str "Only these options are valid: "
           (first valid-keys)
           (map #(str ", " %) (rest valid-keys)))))))
@@ -1791,34 +1791,34 @@
                       m)
         mm-name (with-meta mm-name m)]
     (when (= (count options) 1)
-      (throw (Exception. "The syntax for defmulti has changed. Example: (defmulti name dispatch-fn :default dispatch-value)")))
+      (throw (clotran.host.exception. "The syntax for defmulti has changed. Example: (defmulti name dispatch-fn :default dispatch-value)")))
     (let [options   (apply hash-map options)
           default   (get options :default :default)
           hierarchy (get options :hierarchy #'global-hierarchy)]
       (check-valid-options options :default :hierarchy)
       `(let [v# (def ~mm-name)]
-         (when-not (and (.hasRoot v#) (instance? clojure.lang.MultiFn (deref v#)))
+         (when-not (and (.hasRoot v#) (instance? clotran.host.multi_fn (deref v#)))
            (def ~mm-name
-                (new clojure.lang.MultiFn ~(name mm-name) ~dispatch-fn ~default ~hierarchy)))))))
+                (new clotran.host.multi_fn ~(name mm-name) ~dispatch-fn ~default ~hierarchy)))))))
 
 (defmacro defmethod
   "Creates and installs a new method of multimethod associated with dispatch-value. "
   {:added "1.0"}
   [multifn dispatch-val & fn-tail]
-  `(. ~(with-meta multifn {:tag 'clojure.lang.MultiFn}) addMethod ~dispatch-val (fn ~@fn-tail)))
+  `(. ~(with-meta multifn {:tag 'clotran.host.multi_fn}) addMethod ~dispatch-val (fn ~@fn-tail)))
 
 (defn remove-all-methods
   "Removes all of the methods of multimethod."
   {:added "1.2"
    :static true} 
- [^clojure.lang.MultiFn multifn]
+ [^clotran.host.multi_fn multifn]
  (.reset multifn))
 
 (defn remove-method
   "Removes the method of multimethod associated with dispatch-value."
   {:added "1.0"
    :static true}
- [^clojure.lang.MultiFn multifn dispatch-val]
+ [^clotran.host.multi_fn multifn dispatch-val]
  (. multifn removeMethod dispatch-val))
 
 (defn prefer-method
@@ -1826,34 +1826,34 @@
    when there is a conflict"
   {:added "1.0"
    :static true}
-  [^clojure.lang.MultiFn multifn dispatch-val-x dispatch-val-y]
+  [^clotran.host.multi_fn multifn dispatch-val-x dispatch-val-y]
   (. multifn preferMethod dispatch-val-x dispatch-val-y))
 
 (defn methods
   "Given a multimethod, returns a map of dispatch values -> dispatch fns"
   {:added "1.0"
    :static true}
-  [^clojure.lang.MultiFn multifn] (.getMethodTable multifn))
+  [^clotran.host.multi_fn multifn] (.getMethodTable multifn))
 
 (defn get-method
   "Given a multimethod and a dispatch value, returns the dispatch fn
   that would apply to that value, or nil if none apply and no default"
   {:added "1.0"
    :static true}
-  [^clojure.lang.MultiFn multifn dispatch-val] (.getMethod multifn dispatch-val))
+  [^clotran.host.multi_fn multifn dispatch-val] (.getMethod multifn dispatch-val))
 
 (defn prefers
   "Given a multimethod, returns a map of preferred value -> set of other values"
   {:added "1.0"
    :static true}
-  [^clojure.lang.MultiFn multifn] (.getPreferTable multifn))
+  [^clotran.host.multi_fn multifn] (.getPreferTable multifn))
 
 ;;;;;;;;; var stuff
 
 (defmacro ^{:private true} assert-args
   [& pairs]
   `(do (when-not ~(first pairs)
-         (throw (IllegalArgumentException.
+         (throw (clotran.host.illegal_argument_exception.
                   (str (first ~'&form) " requires " ~(second pairs) " in " ~'*ns* ":" (:line (meta ~'&form))))))
      ~(let [more (nnext pairs)]
         (when more
@@ -1947,7 +1947,7 @@
   {:added "1.1"
    :static true} 
   [bindings]
-  (clojure.lang.Var/pushThreadBindings bindings))
+  (clotran.host.var/pushThreadBindings bindings))
 
 (defn pop-thread-bindings
   "Pop one set of bindings pushed with push-binding before. It is an error to
@@ -1955,7 +1955,7 @@
   {:added "1.1"
    :static true}
   []
-  (clojure.lang.Var/popThreadBindings))
+  (clotran.host.var/popThreadBindings))
 
 (defn get-thread-bindings
   "Get a map with the Var/value pairs which is currently in effect for the
@@ -1963,7 +1963,7 @@
   {:added "1.1"
    :static true}
   []
-  (clojure.lang.Var/getThreadBindings))
+  (clotran.host.var/getThreadBindings))
 
 (defmacro binding
   "binding => var-symbol init-expr
@@ -2038,33 +2038,33 @@
   nil if no var with that name."
   {:added "1.0"
    :static true}
-  [sym] (. clojure.lang.Var (find sym)))
+  [sym] (. clotran.host.var (find sym)))
 
 (defn binding-conveyor-fn
   {:private true
    :added "1.3"}
   [f]
-  (let [frame (clojure.lang.Var/cloneThreadBindingFrame)]
+  (let [frame (clotran.host.var/cloneThreadBindingFrame)]
     (fn 
       ([]
-         (clojure.lang.Var/resetThreadBindingFrame frame)
+         (clotran.host.var/resetThreadBindingFrame frame)
          (f))
       ([x]
-         (clojure.lang.Var/resetThreadBindingFrame frame)
+         (clotran.host.var/resetThreadBindingFrame frame)
          (f x))
       ([x y]
-         (clojure.lang.Var/resetThreadBindingFrame frame)
+         (clotran.host.var/resetThreadBindingFrame frame)
          (f x y))
       ([x y z]
-         (clojure.lang.Var/resetThreadBindingFrame frame)
+         (clotran.host.var/resetThreadBindingFrame frame)
          (f x y z))
       ([x y z & args] 
-         (clojure.lang.Var/resetThreadBindingFrame frame)
+         (clotran.host.var/resetThreadBindingFrame frame)
          (apply f x y z args)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Refs ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (defn ^{:private true}
-  setup-reference [^clojure.lang.ARef r options]
+  setup-reference [^clotran.host.a_ref r options]
   (let [opts (apply hash-map options)]
     (when (:meta opts)
       (.resetMeta r (:meta opts)))
@@ -2098,7 +2098,7 @@
    :static true
    }
   ([state & options]
-     (let [a (new clojure.lang.Agent state)
+     (let [a (new clotran.host.agent state)
            opts (apply hash-map options)]
        (setup-reference a options)
        (when (:error-handler opts)
@@ -2111,13 +2111,13 @@
   "Sets the ExecutorService to be used by send"
   {:added "1.5"}
   [executor]
-  (set! clojure.lang.Agent/pooledExecutor executor))
+  (set! clotran.host.agent/pooledExecutor executor))
 
 (defn set-agent-send-off-executor!
   "Sets the ExecutorService to be used by send-off"
   {:added "1.5"}
   [executor]
-  (set! clojure.lang.Agent/soloExecutor executor))
+  (set! clotran.host.agent/soloExecutor executor))
 
 (defn send-via
   "Dispatch an action to an agent. Returns the agent immediately.
@@ -2126,7 +2126,7 @@
 
   (apply action-fn state-of-agent args)"
   {:added "1.5"}
-  [executor ^clojure.lang.Agent a f & args]
+  [executor ^clotran.host.agent a f & args]
   (.dispatch a (binding [*agent* a] (binding-conveyor-fn f)) args executor))
 
 (defn send
@@ -2137,8 +2137,8 @@
   (apply action-fn state-of-agent args)"
   {:added "1.0"
    :static true}
-  [^clojure.lang.Agent a f & args]
-  (apply send-via clojure.lang.Agent/pooledExecutor a f args))
+  [^clotran.host.agent a f & args]
+  (apply send-via clotran.host.agent/pooledExecutor a f args))
 
 (defn send-off
   "Dispatch a potentially blocking action to an agent. Returns the
@@ -2148,8 +2148,8 @@
   (apply action-fn state-of-agent args)"
   {:added "1.0"
    :static true}
-  [^clojure.lang.Agent a f & args]
-  (apply send-via clojure.lang.Agent/soloExecutor a f args))
+  [^clotran.host.agent a f & args]
+  (apply send-via clotran.host.agent/soloExecutor a f args))
 
 (defn release-pending-sends
   "Normally, actions sent directly or indirectly during another action
@@ -2160,7 +2160,7 @@
   occurring, does nothing. Returns the number of actions dispatched."
   {:added "1.0"
    :static true}
-  [] (clojure.lang.Agent/releasePendingSends))
+  [] (clotran.host.agent/releasePendingSends))
 
 (defn add-watch
   "Adds a watch function to an agent/atom/var/ref reference. The watch
@@ -2178,13 +2178,13 @@
   the watch mechanism."
   {:added "1.0"
    :static true}
-  [^clojure.lang.IRef reference key fn] (.addWatch reference key fn))
+  [^clotran.host.i_ref reference key fn] (.addWatch reference key fn))
 
 (defn remove-watch
   "Removes a watch (set by add-watch) from a reference"
   {:added "1.0"
    :static true}
-  [^clojure.lang.IRef reference key]
+  [^clotran.host.i_ref reference key]
   (.removeWatch reference key))
 
 (defn agent-error
@@ -2193,7 +2193,7 @@
   failed."
   {:added "1.2"
    :static true}
-  [^clojure.lang.Agent a] (.getError a))
+  [^clotran.host.agent a] (.getError a))
 
 (defn restart-agent
   "When an agent is failed, changes the agent state to new-state and
@@ -2208,7 +2208,7 @@
   {:added "1.2"
    :static true
    }
-  [^clojure.lang.Agent a, new-state & options]
+  [^clotran.host.agent a, new-state & options]
   (let [opts (apply hash-map options)]
     (.restart a new-state (if (:clear-actions opts) true false))))
 
@@ -2219,7 +2219,7 @@
   agent and the exception."
   {:added "1.2"
    :static true}
-  [^clojure.lang.Agent a, handler-fn]
+  [^clotran.host.agent a, handler-fn]
   (.setErrorHandler a handler-fn))
 
 (defn error-handler
@@ -2227,7 +2227,7 @@
   See set-error-handler!"
   {:added "1.2"
    :static true}
-  [^clojure.lang.Agent a]
+  [^clotran.host.agent a]
   (.getErrorHandler a))
 
 (defn set-error-mode!
@@ -2244,14 +2244,14 @@
   still work, returning the state of the agent before the error."
   {:added "1.2"
    :static true}
-  [^clojure.lang.Agent a, mode-keyword]
+  [^clotran.host.agent a, mode-keyword]
   (.setErrorMode a mode-keyword))
 
 (defn error-mode
   "Returns the error-mode of agent a.  See set-error-mode!"
   {:added "1.2"
    :static true}
-  [^clojure.lang.Agent a]
+  [^clotran.host.agent a]
   (.getErrorMode a))
 
 (defn agent-errors
@@ -2270,7 +2270,7 @@
   agent, allowing subsequent actions to occur."
   {:added "1.0"
    :deprecated "1.2"}
-  [^clojure.lang.Agent a] (restart-agent a (.deref a)))
+  [^clotran.host.agent a] (restart-agent a (.deref a)))
 
 (defn shutdown-agents
   "Initiates a shutdown of the thread pools that back the agent
@@ -2278,7 +2278,7 @@
   accepted"
   {:added "1.0"
    :static true}
-  [] (. clojure.lang.Agent shutdown))
+  [] (. clotran.host.agent shutdown))
 
 (defn ref
   "Creates and returns a Ref with an initial value of x and zero or
@@ -2306,9 +2306,9 @@
   {:added "1.0"
    :static true
    }
-  ([x] (new clojure.lang.Ref x))
+  ([x] (new clotran.host.ref x))
   ([x & options] 
-   (let [r  ^clojure.lang.Ref (setup-reference (ref x) options)
+   (let [r  ^clotran.host.ref (setup-reference (ref x) options)
          opts (apply hash-map options)]
     (when (:max-history opts)
       (.setMaxHistory r (:max-history opts)))
@@ -2317,11 +2317,11 @@
     r)))
 
 (defn ^:private deref-future
-  ([^java.util.concurrent.Future fut]
+  ([^clotran.host.future fut]
      (.get fut))
-  ([^java.util.concurrent.Future fut timeout-ms timeout-val]
-     (try (.get fut timeout-ms java.util.concurrent.TimeUnit/MILLISECONDS)
-          (catch java.util.concurrent.TimeoutException e
+  ([^clotran.host.future fut timeout-ms timeout-val]
+     (try (.get fut timeout-ms clotran.host.time_unit/MILLISECONDS)
+          (catch clotran.host.timeout_exception e
             timeout-val))))
      
 (defn deref
@@ -2337,12 +2337,12 @@
   value is available. See also - realized?."
   {:added "1.0"
    :static true}
-  ([ref] (if (instance? clojure.lang.IDeref ref)
-           (.deref ^clojure.lang.IDeref ref)
+  ([ref] (if (instance? clotran.host.i_deref ref)
+           (.deref ^clotran.host.i_deref ref)
            (deref-future ref)))
   ([ref timeout-ms timeout-val]
-     (if (instance? clojure.lang.IBlockingDeref ref)
-       (.deref ^clojure.lang.IBlockingDeref ref timeout-ms timeout-val)
+     (if (instance? clotran.host.i_blocking_deref ref)
+       (.deref ^clotran.host.i_blocking_deref ref timeout-ms timeout-val)
        (deref-future ref timeout-ms timeout-val))))
 
 (defn atom
@@ -2360,7 +2360,7 @@
   return false or throw an exception."
   {:added "1.0"
    :static true}
-  ([x] (new clojure.lang.Atom x))
+  ([x] (new clotran.host.atom x))
   ([x & options] (setup-reference (atom x) options)))
 
 (defn swap!
@@ -2370,10 +2370,10 @@
   the value that was swapped in."
   {:added "1.0"
    :static true}
-  ([^clojure.lang.IAtom atom f] (.swap atom f))
-  ([^clojure.lang.IAtom atom f x] (.swap atom f x))
-  ([^clojure.lang.IAtom atom f x y] (.swap atom f x y))
-  ([^clojure.lang.IAtom atom f x y & args] (.swap atom f x y args)))
+  ([^clotran.host.i_atom atom f] (.swap atom f))
+  ([^clotran.host.i_atom atom f x] (.swap atom f x))
+  ([^clotran.host.i_atom atom f x y] (.swap atom f x y))
+  ([^clotran.host.i_atom atom f x y & args] (.swap atom f x y args)))
 
 (defn swap-vals!
   "Atomically swaps the value of atom to be:
@@ -2381,10 +2381,10 @@
   multiple times, and thus should be free of side effects.
   Returns [old new], the value of the atom before and after the swap."
   {:added "1.9"}
-  (^clojure.lang.IPersistentVector [^clojure.lang.IAtom2 atom f] (.swapVals atom f))
-  (^clojure.lang.IPersistentVector [^clojure.lang.IAtom2 atom f x] (.swapVals atom f x))
-  (^clojure.lang.IPersistentVector [^clojure.lang.IAtom2 atom f x y] (.swapVals atom f x y))
-  (^clojure.lang.IPersistentVector [^clojure.lang.IAtom2 atom f x y & args] (.swapVals atom f x y args)))
+  (^clotran.host.i_persistent_vector [^clotran.host.i_atom2 atom f] (.swapVals atom f))
+  (^clotran.host.i_persistent_vector [^clotran.host.i_atom2 atom f x] (.swapVals atom f x))
+  (^clotran.host.i_persistent_vector [^clotran.host.i_atom2 atom f x y] (.swapVals atom f x y))
+  (^clotran.host.i_persistent_vector [^clotran.host.i_atom2 atom f x y & args] (.swapVals atom f x y args)))
 
 (defn compare-and-set!
   "Atomically sets the value of atom to newval if and only if the
@@ -2392,20 +2392,20 @@
   set happened, else false"
   {:added "1.0"
    :static true}
-  [^clojure.lang.IAtom atom oldval newval] (.compareAndSet atom oldval newval))
+  [^clotran.host.i_atom atom oldval newval] (.compareAndSet atom oldval newval))
 
 (defn reset!
   "Sets the value of atom to newval without regard for the
   current value. Returns newval."
   {:added "1.0"
    :static true}
-  [^clojure.lang.IAtom atom newval] (.reset atom newval))
+  [^clotran.host.i_atom atom newval] (.reset atom newval))
 
 (defn reset-vals!
   "Sets the value of atom to newval. Returns [old new], the value of the
    atom before and after the reset."
   {:added "1.9"}
-  ^clojure.lang.IPersistentVector [^clojure.lang.IAtom2 atom newval] (.resetVals atom newval))
+  ^clotran.host.i_persistent_vector [^clotran.host.i_atom2 atom newval] (.resetVals atom newval))
 
 (defn set-validator!
   "Sets the validator-fn for a var/ref/agent/atom. validator-fn must be nil or a
@@ -2416,13 +2416,13 @@
   will be thrown and the validator will not be changed."
   {:added "1.0"
    :static true}
-  [^clojure.lang.IRef iref validator-fn] (. iref (setValidator validator-fn)))
+  [^clotran.host.i_ref iref validator-fn] (. iref (setValidator validator-fn)))
 
 (defn get-validator
   "Gets the validator-fn for a var/ref/agent/atom."
   {:added "1.0"
    :static true}
- [^clojure.lang.IRef iref] (. iref (getValidator)))
+ [^clotran.host.i_ref iref] (. iref (getValidator)))
 
 (defn alter-meta!
   "Atomically sets the metadata for a namespace/var/ref/agent/atom to be:
@@ -2432,13 +2432,13 @@
   f must be free of side-effects"
   {:added "1.0"
    :static true}
- [^clojure.lang.IReference iref f & args] (.alterMeta iref f args))
+ [^clotran.host.i_reference iref f & args] (.alterMeta iref f args))
 
 (defn reset-meta!
   "Atomically resets the metadata for a namespace/var/ref/agent/atom"
   {:added "1.0"
    :static true}
- [^clojure.lang.IReference iref metadata-map] (.resetMeta iref metadata-map))
+ [^clotran.host.i_reference iref metadata-map] (.resetMeta iref metadata-map))
 
 (defn commute
   "Must be called in a transaction. Sets the in-transaction-value of
@@ -2458,7 +2458,7 @@
   {:added "1.0"
    :static true}
 
-  [^clojure.lang.Ref ref fun & args]
+  [^clotran.host.ref ref fun & args]
     (. ref (commute fun args)))
 
 (defn alter
@@ -2470,7 +2470,7 @@
   and returns the in-transaction-value of ref."
   {:added "1.0"
    :static true}
-  [^clojure.lang.Ref ref fun & args]
+  [^clotran.host.ref ref fun & args]
     (. ref (alter fun args)))
 
 (defn ref-set
@@ -2478,32 +2478,32 @@
   Returns val."
   {:added "1.0"
    :static true}
-  [^clojure.lang.Ref ref val]
+  [^clotran.host.ref ref val]
     (. ref (set val)))
 
 (defn ref-history-count
   "Returns the history count of a ref"
   {:added "1.1"
    :static true}
-  [^clojure.lang.Ref ref]
+  [^clotran.host.ref ref]
     (.getHistoryCount ref))
 
 (defn ref-min-history
   "Gets the min-history of a ref, or sets it and returns the ref"
   {:added "1.1"
    :static true}
-  ([^clojure.lang.Ref ref]
+  ([^clotran.host.ref ref]
     (.getMinHistory ref))
-  ([^clojure.lang.Ref ref n]
+  ([^clotran.host.ref ref n]
     (.setMinHistory ref n)))
 
 (defn ref-max-history
   "Gets the max-history of a ref, or sets it and returns the ref"
   {:added "1.1"
    :static true}
-  ([^clojure.lang.Ref ref]
+  ([^clotran.host.ref ref]
     (.getMaxHistory ref))
-  ([^clojure.lang.Ref ref n]
+  ([^clotran.host.ref ref n]
     (.setMaxHistory ref n)))
 
 (defn ensure
@@ -2512,7 +2512,7 @@
   ref. Allows for more concurrency than (ref-set ref @ref)"
   {:added "1.0"
    :static true}
-  [^clojure.lang.Ref ref]
+  [^clotran.host.ref ref]
     (. ref (touch))
     (. ref (deref)))
 
@@ -2526,7 +2526,7 @@
   once, but any effects on Refs will be atomic."
   {:added "1.0"}
   [flags-ignored-for-now & body]
-  `(. clojure.lang.LockingTransaction
+  `(. clotran.host.locking_transaction
       (runInTransaction (fn [] ~@body))))
 
 
@@ -2539,22 +2539,22 @@
   [& body]
   (let [message (when (string? (first body)) (first body))
         body (if message (next body) body)]
-    `(if (clojure.lang.LockingTransaction/isRunning)
-       (throw (new IllegalStateException ~(or message "I/O in transaction")))
+    `(if (clotran.host.locking_transaction/isRunning)
+       (throw (new clotran.host.illegal_state_exception ~(or message "I/O in transaction")))
        (do ~@body))))
 
 (defn volatile!
   "Creates and returns a Volatile with an initial value of val."
   {:added "1.7"
-   :tag clojure.lang.Volatile}
+   :tag clotran.host.volatile}
   [val]
-  (clojure.lang.Volatile. val))
+  (clotran.host.volatile. val))
 
 (defn vreset!
   "Sets the value of volatile to newval without regard for the
    current value. Returns newval."
   {:added "1.7"}
-  [^clojure.lang.Volatile vol newval]
+  [^clotran.host.volatile vol newval]
   (.reset vol newval))
 
 (defmacro vswap!
@@ -2563,14 +2563,14 @@
    was swapped in."
   {:added "1.7"}
   [vol f & args]
-  (let [v (with-meta vol {:tag 'clojure.lang.Volatile})]
+  (let [v (with-meta vol {:tag 'clotran.host.volatile})]
     `(.reset ~v (~f (.deref ~v) ~@args))))
 
 (defn volatile?
   "Returns true if x is a volatile."
   {:added "1.7"}
   [x]
-  (instance? clojure.lang.Volatile x))
+  (instance? clotran.host.volatile x))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; fn stuff ;;;;;;;;;;;;;;;;
 
@@ -2680,20 +2680,20 @@
      (if (seq? coll) coll
          (or (seq coll) ())))
   ([xform coll]
-     (or (clojure.lang.RT/chunkIteratorSeq
-         (clojure.lang.TransformerIterator/create xform (clojure.lang.RT/iter coll)))
+     (or (clotran.host.rt/chunkIteratorSeq
+         (clotran.rt.TransformerIterator/create xform (clotran.host.rt/iter coll)))
        ()))
   ([xform coll & colls]
-     (or (clojure.lang.RT/chunkIteratorSeq
-         (clojure.lang.TransformerIterator/createMulti
+     (or (clotran.host.rt/chunkIteratorSeq
+         (clotran.rt.TransformerIterator/createMulti
            xform
-           (map #(clojure.lang.RT/iter %) (cons coll colls))))
+           (map #(clotran.host.rt/iter %) (cons coll colls))))
        ())))
 
 (defn every?
   "Returns true if (pred x) is logical true for every x in coll, else
   false."
-  {:tag Boolean
+  {:tag clotran.host.logical
    :added "1.0"
    :static true}
   [pred coll]
@@ -2703,7 +2703,7 @@
    :else false))
 
 (def
- ^{:tag Boolean
+ ^{:tag clotran.host.logical
    :doc "Returns false if (pred x) is logical true for every x in
   coll, else true."
    :arglists '([pred coll])
@@ -2722,7 +2722,7 @@
       (or (pred (first s)) (recur pred (next s)))))
 
 (def
- ^{:tag Boolean
+ ^{:tag clotran.host.logical
    :doc "Returns false if (pred x) is logical true for any x in coll,
   else true."
    :arglists '([pred coll])
@@ -2739,7 +2739,7 @@
   [bindings & body]
   (let [i (first bindings)
         n (second bindings)]
-    `(let [n# (clojure.lang.RT/longCast ~n)]
+    `(let [n# (clotran.host.rt/longCast ~n)]
        (loop [~i 0]
          (when (< ~i n#)
            ~@body
@@ -2858,14 +2858,14 @@
   "Wraps x in a way such that a reduce will terminate with the value x"
   {:added "1.5"}
   [x]
-  (clojure.lang.Reduced. x))
+  (clotran.host.reduced. x))
 
 (defn reduced?
   "Returns true if x is the result of a call to reduced"
-  {:inline (fn [x] `(clojure.lang.RT/isReduced ~x ))
+  {:inline (fn [x] `(clotran.host.rt/isReduced ~x ))
    :inline-arities #{1}
    :added "1.5"}
-  ([x] (clojure.lang.RT/isReduced x)))
+  ([x] (clotran.host.rt/isReduced x)))
 
 (defn ensure-reduced
   "If x is already reduced?, returns it, else returns (reduced x)"
@@ -2945,10 +2945,10 @@
                   result
                   (rf result input))))))))
   ([n coll]
-     (if (instance? clojure.lang.IDrop coll)
+     (if (instance? clotran.host.i_drop coll)
        (or
         (if (pos? n)
-          (.drop ^clojure.lang.IDrop coll (if (int? n) n (Math/ceil n)))
+          (.drop ^clotran.host.i_drop coll (if (int? n) n (clotran.host.math/ceil n)))
           (seq coll))
         ())
        (let [step (fn [n coll]
@@ -3007,7 +3007,7 @@
   "Returns a lazy (infinite!) sequence of repetitions of the items in coll."
   {:added "1.0"
    :static true}
-  [coll] (clojure.lang.Cycle/create (seq coll)))
+  [coll] (clotran.host.cycle/create (seq coll)))
 
 (defn split-at
   "Returns a vector of [(take n coll) (drop n coll)]"
@@ -3027,8 +3027,8 @@
   "Returns a lazy (infinite!, or length n if supplied) sequence of xs."
   {:added "1.0"
    :static true}
-  ([x] (clojure.lang.Repeat/create x))
-  ([n x] (clojure.lang.Repeat/create n x)))
+  ([x] (clotran.host.repeat/create x))
+  ([n x] (clotran.host.repeat/create n x)))
 
 (defn replicate
   "DEPRECATED: Use 'repeat' instead.
@@ -3042,7 +3042,7 @@
   f must be free of side-effects"
   {:added "1.0"
    :static true}
-  [f x] (clojure.lang.Iterate/create f x) )
+  [f x] (clotran.host.iterate/create f x) )
 
 (defn range
   "Returns a lazy seq of nums from start (inclusive) to end
@@ -3055,16 +3055,16 @@
    (iterate inc' 0))
   ([end]
    (if (int? end)
-     (clojure.lang.LongRange/create end)
-     (clojure.lang.Range/create end)))
+     (clotran.host.long_range/create end)
+     (clotran.host.range/create end)))
   ([start end]
    (if (and (int? start) (int? end))
-     (clojure.lang.LongRange/create start end)
-     (clojure.lang.Range/create start end)))
+     (clotran.host.long_range/create start end)
+     (clotran.host.range/create start end)))
   ([start end step]
    (if (and (int? start) (int? end) (int? step))
-     (clojure.lang.LongRange/create start end step)
-     (clojure.lang.Range/create start end step))))
+     (clotran.host.long_range/create start end step)
+     (clotran.host.range/create start end step))))
 
 (defn merge
   "Returns a map that consists of the rest of the maps conj-ed onto
@@ -3096,15 +3096,15 @@
 
 (defn line-seq
   "Returns the lines of text from rdr as a lazy sequence of strings.
-  rdr must implement java.io.BufferedReader."
+  rdr must implement clotran.host.buffered_reader."
   {:added "1.0"
    :static true}
-  [^java.io.BufferedReader rdr]
+  [^clotran.host.buffered_reader rdr]
   (when-let [line (.readLine rdr)]
     (cons line (lazy-seq (line-seq rdr)))))
 
 (defn comparator
-  "Returns an implementation of java.util.Comparator based upon pred."
+  "Returns an implementation of clotran.host.comparator based upon pred."
   {:added "1.0"
    :static true}
   [pred]
@@ -3114,17 +3114,17 @@
 (defn sort
   "Returns a sorted sequence of the items in coll. If no comparator is
   supplied, uses compare.  comparator must implement
-  java.util.Comparator.  Guaranteed to be stable: equal elements will
-  not be reordered.  If coll is a Java array, it will be modified.  To
+  clotran.host.comparator.  Guaranteed to be stable: equal elements will
+  not be reordered.  If coll is a host array, it will be modified.  To
   avoid this, sort a copy of the array."
   {:added "1.0"
    :static true}
   ([coll]
    (sort compare coll))
-  ([^java.util.Comparator comp coll]
+  ([^clotran.host.comparator comp coll]
    (if (seq coll)
      (let [a (to-array coll)]
-       (. java.util.Arrays (sort a comp))
+       (. clotran.host.arrays (sort a comp))
        (with-meta (seq a) (meta coll)))
      ())))
 
@@ -3132,14 +3132,14 @@
   "Returns a sorted sequence of the items in coll, where the sort
   order is determined by comparing (keyfn item).  If no comparator is
   supplied, uses compare.  comparator must implement
-  java.util.Comparator.  Guaranteed to be stable: equal elements will
-  not be reordered.  If coll is a Java array, it will be modified.  To
+  clotran.host.comparator.  Guaranteed to be stable: equal elements will
+  not be reordered.  If coll is a host array, it will be modified.  To
   avoid this, sort a copy of the array."
   {:added "1.0"
    :static true}
   ([keyfn coll]
    (sort-by keyfn compare coll))
-  ([keyfn ^java.util.Comparator comp coll]
+  ([keyfn ^clotran.host.comparator comp coll]
    (sort (fn [x y] (. comp (compare (keyfn x) (keyfn y)))) coll)))
 
 (defn dorun
@@ -3178,9 +3178,9 @@
   {:added "1.0"
    :static true}
   [coll n]
-  (if (instance? clojure.lang.IDrop coll)
+  (if (instance? clotran.host.i_drop coll)
     (if (pos? n)
-      (.drop ^clojure.lang.IDrop coll (if (int? n) n (Math/ceil n)))
+      (.drop ^clotran.host.i_drop coll (if (int? n) n (clotran.host.math/ceil n)))
       (seq coll))
     (loop [n n xs (seq coll)]
       (if (and xs (pos? n))
@@ -3194,8 +3194,8 @@
   [coll n]
   (if (pos? n)
     (or
-      (if (instance? clojure.lang.IDrop coll)
-        (.drop ^clojure.lang.IDrop coll (if (int? n) n (Math/ceil n)))
+      (if (instance? clotran.host.i_drop coll)
+        (.drop ^clotran.host.i_drop coll (if (int? n) n (clotran.host.math/ceil n)))
         (loop [n n xs coll]
           (if-let [xs (and (pos? n) (seq xs))]
             (recur (dec n) (rest xs))
@@ -3233,7 +3233,7 @@
   "Evaluates the form data structure (not text!) and returns the result."
   {:added "1.0"
    :static true}
-  [form] (. clojure.lang.Compiler (eval form)))
+  [form] (. clotran.host.compiler (eval form)))
 
 (defmacro doseq
   "Repeatedly executes body (presumably for side-effects) with
@@ -3265,7 +3265,7 @@
                                                ~recform)]))
                      (let [seq- (gensym "seq_")
                            chunk- (with-meta (gensym "chunk_")
-                                             {:tag 'clojure.lang.IChunk})
+                                             {:tag 'clotran.host.i_chunk})
                            count- (gensym "count_")
                            i- (gensym "i_")
                            recform `(recur (next ~seq-) nil 0 0)
@@ -3303,14 +3303,14 @@
   [& agents]
   (io! "await in transaction"
     (when *agent*
-      (throw (new Exception "Can't await in agent action")))
-    (let [latch (new java.util.concurrent.CountDownLatch (count agents))
+      (throw (new clotran.host.exception "Can't await in agent action")))
+    (let [latch (new clotran.host.count_down_latch (count agents))
           count-down (fn [agent] (. latch (countDown)) agent)]
       (doseq [agent agents]
         (send agent count-down))
       (. latch (await)))))
 
-(defn ^:static await1 [^clojure.lang.Agent a]
+(defn ^:static await1 [^clotran.host.agent a]
   (when (pos? (.getQueueCount a))
     (await a))
     a)
@@ -3325,12 +3325,12 @@
   [timeout-ms & agents]
     (io! "await-for in transaction"
      (when *agent*
-       (throw (new Exception "Can't await in agent action")))
-     (let [latch (new java.util.concurrent.CountDownLatch (count agents))
+       (throw (new clotran.host.exception "Can't await in agent action")))
+     (let [latch (new clotran.host.count_down_latch (count agents))
            count-down (fn [agent] (. latch (countDown)) agent)]
        (doseq [agent agents]
            (send agent count-down))
-       (. latch (await  timeout-ms (. java.util.concurrent.TimeUnit MILLISECONDS))))))
+       (. latch (await  timeout-ms (. clotran.host.time_unit MILLISECONDS))))))
 
 (defmacro dotimes
   "bindings => name n
@@ -3373,7 +3373,7 @@
   the same code structure as the functional persistent code they replace."
   {:added "1.1"
    :static true}
-  [^clojure.lang.IEditableCollection coll] 
+  [^clotran.host.i_editable_collection coll] 
   (.asTransient coll))
 
 (defn persistent! 
@@ -3382,7 +3382,7 @@
   call, any such use will throw an exception."
   {:added "1.1"
    :static true}
-  [^clojure.lang.ITransientCollection coll]
+  [^clotran.host.i_transient_collection coll]
   (.persistent coll))
 
 (defn conj!
@@ -3392,7 +3392,7 @@
    :static true}
   ([] (transient []))
   ([coll] coll)
-  ([^clojure.lang.ITransientCollection coll x]
+  ([^clotran.host.i_transient_collection coll x]
      (.conj coll x)))
 
 (defn assoc!
@@ -3401,8 +3401,8 @@
   Note - index must be <= (count vector). Returns coll."
   {:added "1.1"
    :static true}
-  ([^clojure.lang.ITransientAssociative coll key val] (.assoc coll key val))
-  ([^clojure.lang.ITransientAssociative coll key val & kvs]
+  ([^clotran.host.i_transient_associative coll key val] (.assoc coll key val))
+  ([^clotran.host.i_transient_associative coll key val & kvs]
    (let [ret (.assoc coll key val)]
      (if kvs
        (recur ret (first kvs) (second kvs) (nnext kvs))
@@ -3412,8 +3412,8 @@
   "Returns a transient map that doesn't contain a mapping for key(s)."
   {:added "1.1"
    :static true}
-  ([^clojure.lang.ITransientMap map key] (.without map key))
-  ([^clojure.lang.ITransientMap map key & ks]
+  ([^clotran.host.i_transient_map map key] (.without map key))
+  ([^clotran.host.i_transient_map map key & ks]
    (let [ret (.without map key)]
      (if ks
        (recur ret (first ks) (next ks))
@@ -3424,7 +3424,7 @@
   the collection is empty, throws an exception. Returns coll"
   {:added "1.1"
    :static true}
-  [^clojure.lang.ITransientVector coll] 
+  [^clotran.host.i_transient_vector coll] 
   (.pop coll)) 
 
 (defn disj!
@@ -3433,9 +3433,9 @@
   {:added "1.1"
    :static true}
   ([set] set)
-  ([^clojure.lang.ITransientSet set key]
+  ([^clotran.host.i_transient_set set key]
    (. set (disjoin key)))
-  ([^clojure.lang.ITransientSet set key & ks]
+  ([^clotran.host.i_transient_set set key & ks]
    (let [ret (. set (disjoin key))]
      (if ks
        (recur ret (first ks) (next ks))
@@ -3448,7 +3448,7 @@
   {:added "1.0"
    :static true}
   [to from]
-  (if (instance? clojure.lang.IEditableCollection to)
+  (if (instance? clotran.host.i_editable_collection to)
     (persistent! (reduce1 conj! (transient to) from))
     (reduce1 conj to from)))
 
@@ -3479,9 +3479,9 @@
   {:added "1.0"
    :static true}
   ([aseq]
-     (clojure.lang.RT/seqToTypedArray (seq aseq)))
+     (clotran.host.rt/seqToTypedArray (seq aseq)))
   ([type aseq]
-     (clojure.lang.RT/seqToTypedArray type (seq aseq))))
+     (clotran.host.rt/seqToTypedArray type (seq aseq))))
 
 (defn ^{:private true}
   array [& items]
@@ -3491,7 +3491,7 @@
   "Returns the Class of x"
   {:added "1.0"
    :static true}
-  ^Class [^Object x] (if (nil? x) x (. x (getClass))))
+  ^clotran.host.class [^clotran.host.value x] (if (nil? x) x (. x (getClass))))
 
 (defn type 
   "Returns the :type metadata of x, or its Class if none"
@@ -3502,88 +3502,88 @@
 
 (defn num
   "Coerce to Number"
-  {:tag Number
-   :inline (fn  [x] `(. clojure.lang.Numbers (num ~x)))
+  {:tag clotran.host.number
+   :inline (fn  [x] `(. clotran.host.numbers (num ~x)))
    :added "1.0"}
-  [x] (. clojure.lang.Numbers (num x)))
+  [x] (. clotran.host.numbers (num x)))
 
 (defn long
   "Coerce to long"
-  {:inline (fn  [x] `(. clojure.lang.RT (longCast ~x)))
+  {:inline (fn  [x] `(. clotran.host.rt (longCast ~x)))
    :added "1.0"}
-  [^Number x] (clojure.lang.RT/longCast x))
+  [^clotran.host.number x] (clotran.host.rt/longCast x))
 
 (defn float
   "Coerce to float"
-  {:inline (fn  [x] `(. clojure.lang.RT (~(if *unchecked-math* 'uncheckedFloatCast 'floatCast) ~x)))
+  {:inline (fn  [x] `(. clotran.host.rt (~(if *unchecked-math* 'uncheckedFloatCast 'floatCast) ~x)))
    :added "1.0"}
-  [^Number x] (clojure.lang.RT/floatCast x))
+  [^clotran.host.number x] (clotran.host.rt/floatCast x))
 
 (defn double
   "Coerce to double"
-  {:inline (fn  [x] `(. clojure.lang.RT (doubleCast ~x)))
+  {:inline (fn  [x] `(. clotran.host.rt (doubleCast ~x)))
    :added "1.0"}
-  [^Number x] (clojure.lang.RT/doubleCast x))
+  [^clotran.host.number x] (clotran.host.rt/doubleCast x))
 
 (defn short
   "Coerce to short"
-  {:inline (fn  [x] `(. clojure.lang.RT (~(if *unchecked-math* 'uncheckedShortCast 'shortCast) ~x)))
+  {:inline (fn  [x] `(. clotran.host.rt (~(if *unchecked-math* 'uncheckedShortCast 'shortCast) ~x)))
    :added "1.0"}
-  [^Number x] (clojure.lang.RT/shortCast x))
+  [^clotran.host.number x] (clotran.host.rt/shortCast x))
 
 (defn byte
   "Coerce to byte"
-  {:inline (fn  [x] `(. clojure.lang.RT (~(if *unchecked-math* 'uncheckedByteCast 'byteCast) ~x)))
+  {:inline (fn  [x] `(. clotran.host.rt (~(if *unchecked-math* 'uncheckedByteCast 'byteCast) ~x)))
    :added "1.0"}
-  [^Number x] (clojure.lang.RT/byteCast x))
+  [^clotran.host.number x] (clotran.host.rt/byteCast x))
 
 (defn char
   "Coerce to char"
-  {:inline (fn  [x] `(. clojure.lang.RT (~(if *unchecked-math* 'uncheckedCharCast 'charCast) ~x)))
+  {:inline (fn  [x] `(. clotran.host.rt (~(if *unchecked-math* 'uncheckedCharCast 'charCast) ~x)))
    :added "1.1"}
-  [x] (. clojure.lang.RT (charCast x)))
+  [x] (. clotran.host.rt (charCast x)))
 
 (defn unchecked-byte
   "Coerce to byte. Subject to rounding or truncation."
-  {:inline (fn  [x] `(. clojure.lang.RT (uncheckedByteCast ~x)))
+  {:inline (fn  [x] `(. clotran.host.rt (uncheckedByteCast ~x)))
    :added "1.3"}
-  [^Number x] (clojure.lang.RT/uncheckedByteCast x))
+  [^clotran.host.number x] (clotran.host.rt/uncheckedByteCast x))
 
 (defn unchecked-short
   "Coerce to short. Subject to rounding or truncation."
-  {:inline (fn  [x] `(. clojure.lang.RT (uncheckedShortCast ~x)))
+  {:inline (fn  [x] `(. clotran.host.rt (uncheckedShortCast ~x)))
    :added "1.3"}
-  [^Number x] (clojure.lang.RT/uncheckedShortCast x))
+  [^clotran.host.number x] (clotran.host.rt/uncheckedShortCast x))
 
 (defn unchecked-char
   "Coerce to char. Subject to rounding or truncation."
-  {:inline (fn  [x] `(. clojure.lang.RT (uncheckedCharCast ~x)))
+  {:inline (fn  [x] `(. clotran.host.rt (uncheckedCharCast ~x)))
    :added "1.3"}
-  [x] (. clojure.lang.RT (uncheckedCharCast x)))
+  [x] (. clotran.host.rt (uncheckedCharCast x)))
 
 (defn unchecked-int
   "Coerce to int. Subject to rounding or truncation."
-  {:inline (fn  [x] `(. clojure.lang.RT (uncheckedIntCast ~x)))
+  {:inline (fn  [x] `(. clotran.host.rt (uncheckedIntCast ~x)))
    :added "1.3"}
-  [^Number x] (clojure.lang.RT/uncheckedIntCast x))
+  [^clotran.host.number x] (clotran.host.rt/uncheckedIntCast x))
 
 (defn unchecked-long
   "Coerce to long. Subject to rounding or truncation."
-  {:inline (fn  [x] `(. clojure.lang.RT (uncheckedLongCast ~x)))
+  {:inline (fn  [x] `(. clotran.host.rt (uncheckedLongCast ~x)))
    :added "1.3"}
-  [^Number x] (clojure.lang.RT/uncheckedLongCast x))
+  [^clotran.host.number x] (clotran.host.rt/uncheckedLongCast x))
 
 (defn unchecked-float
   "Coerce to float. Subject to rounding."
-  {:inline (fn  [x] `(. clojure.lang.RT (uncheckedFloatCast ~x)))
+  {:inline (fn  [x] `(. clotran.host.rt (uncheckedFloatCast ~x)))
    :added "1.3"}
-  [^Number x] (clojure.lang.RT/uncheckedFloatCast x))
+  [^clotran.host.number x] (clotran.host.rt/uncheckedFloatCast x))
 
 (defn unchecked-double
   "Coerce to double. Subject to rounding."
-  {:inline (fn  [x] `(. clojure.lang.RT (uncheckedDoubleCast ~x)))
+  {:inline (fn  [x] `(. clotran.host.rt (uncheckedDoubleCast ~x)))
    :added "1.3"}
-  [^Number x] (clojure.lang.RT/uncheckedDoubleCast x))
+  [^clotran.host.number x] (clotran.host.rt/uncheckedDoubleCast x))
 
 
 (defn number?
@@ -3591,7 +3591,7 @@
   {:added "1.0"
    :static true}
   [x]
-  (instance? Number x))
+  (instance? clotran.host.number x))
 
 (defn mod
   "Modulus of num and div. Truncates toward negative infinity."
@@ -3607,7 +3607,7 @@
   "Returns true if n is a Ratio"
   {:added "1.0"
    :static true}
-  [n] (instance? clojure.lang.Ratio n))
+  [n] (instance? clotran.host.ratio n))
 
 (defn numerator
   "Returns the numerator part of a Ratio."
@@ -3615,7 +3615,7 @@
    :added "1.2"
    :static true}
   [r]
-  (.numerator ^clojure.lang.Ratio r))
+  (.numerator ^clotran.host.ratio r))
 
 (defn denominator
   "Returns the denominator part of a Ratio."
@@ -3623,7 +3623,7 @@
    :added "1.2"
    :static true}
   [r]
-  (.denominator ^clojure.lang.Ratio r))
+  (.denominator ^clotran.host.ratio r))
 
 (defn decimal?
   "Returns true if n is a BigDecimal"
@@ -3636,8 +3636,8 @@
   {:added "1.0"
    :static true}
   [n]
-  (or (instance? Double n)
-      (instance? Float n)))
+  (or (instance? clotran.host.real8 n)
+      (instance? clotran.host.real4 n)))
 
 (defn rational? 
   "Returns true if n is a rational number"
@@ -3648,16 +3648,16 @@
 
 (defn bigint
   "Coerce to BigInt"
-  {:tag clojure.lang.BigInt
+  {:tag clotran.host.bigint
    :static true
    :added "1.3"}
   [x] (cond
-       (instance? clojure.lang.BigInt x) x
-       (instance? BigInteger x) (clojure.lang.BigInt/fromBigInteger x)
+       (instance? clotran.host.bigint x) x
+       (instance? BigInteger x) (clotran.host.bigint/fromBigInteger x)
        (decimal? x) (bigint (.toBigInteger ^BigDecimal x))
        (float? x)  (bigint (. BigDecimal valueOf (double x)))
-       (ratio? x) (bigint (.bigIntegerValue ^clojure.lang.Ratio x))
-       (number? x) (clojure.lang.BigInt/valueOf (long x))
+       (ratio? x) (bigint (.bigIntegerValue ^clotran.host.ratio x))
+       (number? x) (clotran.host.bigint/valueOf (long x))
        :else (bigint (BigInteger. x))))
 
 (defn biginteger
@@ -3667,10 +3667,10 @@
    :static true}
   [x] (cond
        (instance? BigInteger x) x
-       (instance? clojure.lang.BigInt x) (.toBigInteger ^clojure.lang.BigInt x)
+       (instance? clotran.host.bigint x) (.toBigInteger ^clotran.host.bigint x)
        (decimal? x) (.toBigInteger ^BigDecimal x)
        (float? x) (.toBigInteger (. BigDecimal valueOf (double x)))
-       (ratio? x) (.bigIntegerValue ^clojure.lang.Ratio x)
+       (ratio? x) (.bigIntegerValue ^clotran.host.ratio x)
        (number? x) (BigInteger/valueOf (long x))
        :else (BigInteger. x)))
 
@@ -3682,8 +3682,8 @@
   [x] (cond
        (decimal? x) x
        (float? x) (. BigDecimal valueOf (double x))
-       (ratio? x) (/ (BigDecimal. (.numerator ^clojure.lang.Ratio x)) (.denominator ^clojure.lang.Ratio x))
-       (instance? clojure.lang.BigInt x) (.toBigDecimal ^clojure.lang.BigInt x)
+       (ratio? x) (/ (BigDecimal. (.numerator ^clotran.host.ratio x)) (.denominator ^clotran.host.ratio x))
+       (instance? clotran.host.bigint x) (.toBigDecimal ^clotran.host.bigint x)
        (instance? BigInteger x) (BigDecimal. ^BigInteger x)
        (number? x) (BigDecimal/valueOf (long x))
        :else (BigDecimal. x)))
@@ -3721,8 +3721,8 @@
      (recur (first more) nmore)
      (apply pr more))))
 
-(def ^:private ^String system-newline
-     (System/getProperty "line.separator"))
+(def ^:private ^clotran.host.string system-newline
+     (clotran.host.system/getProperty "line.separator"))
 
 (defn newline
   "Writes a platform-specific newline to *out*"
@@ -3770,7 +3770,7 @@
 
 (defn read
   "Reads the next object from stream, which must be an instance of
-  java.io.PushbackReader or some derivee.  stream defaults to the
+  clotran.io.PushbackReader or some derivee.  stream defaults to the
   current value of *in*.
 
   Opts is a persistent map with valid keys:
@@ -3793,9 +3793,9 @@
   ([stream eof-error? eof-value]
    (read stream eof-error? eof-value false))
   ([stream eof-error? eof-value recursive?]
-   (. clojure.lang.LispReader (read stream (boolean eof-error?) eof-value recursive?)))
+   (. clotran.host.lisp_reader (read stream (boolean eof-error?) eof-value recursive?)))
   ([opts stream]
-   (. clojure.lang.LispReader (read stream opts))))
+   (. clotran.host.lisp_reader (read stream opts))))
 
 (defn read+string
   "Like read, and taking the same args. stream must be a LineNumberingPushbackReader.
@@ -3804,22 +3804,22 @@
   ([] (read+string *in*))
   ([stream] (read+string stream true nil))
   ([stream eof-error? eof-value] (read+string stream eof-error? eof-value false))
-  ([^clojure.lang.LineNumberingPushbackReader stream eof-error? eof-value recursive?]
+  ([^clotran.io.LineNumberingReader stream eof-error? eof-value recursive?]
    (try
      (.captureString stream)
      (let [o (read stream eof-error? eof-value recursive?)
            s (.trim (.getString stream))]
        [o s])
-     (catch Throwable ex
+     (catch clotran.host.throwable ex
        (.getString stream)
        (throw ex))))
-  ([opts ^clojure.lang.LineNumberingPushbackReader stream]
+  ([opts ^clotran.io.LineNumberingReader stream]
    (try
      (.captureString stream)
      (let [o (read opts stream)
            s (.trim (.getString stream))]
        [o s])
-     (catch Throwable ex
+     (catch clotran.host.throwable ex
        (.getString stream)
        (throw ex)))))
 
@@ -3828,9 +3828,9 @@
   {:added "1.0"
    :static true}
   []
-  (if (instance? clojure.lang.LineNumberingPushbackReader *in*)
-    (.readLine ^clojure.lang.LineNumberingPushbackReader *in*)
-    (.readLine ^java.io.BufferedReader *in*)))
+  (if (instance? clotran.io.LineNumberingReader *in*)
+    (.readLine ^clotran.io.LineNumberingReader *in*)
+    (.readLine ^clotran.host.buffered_reader *in*)))
 
 (defn read-string
   "Reads one object from the string s. Optionally include reader
@@ -3842,8 +3842,8 @@
   For data structure interop use clojure.edn/read-string"
   {:added "1.0"
    :static true}
-  ([s] (clojure.lang.RT/readString s))
-  ([opts s] (clojure.lang.RT/readString s opts)))
+  ([s] (clotran.host.rt/readString s))
+  ([opts s] (clotran.host.rt/readString s opts)))
 
 (defn subvec
   "Returns a persistent vector of the items in vector from
@@ -3856,7 +3856,7 @@
   ([v start]
    (subvec v start (count v)))
   ([v start end]
-   (. clojure.lang.RT (subvec v start end))))
+   (. clotran.host.rt (subvec v start end))))
 
 (defmacro with-open
   "bindings => [name init ...]
@@ -3876,7 +3876,7 @@
                                 (with-open ~(subvec bindings 2) ~@body)
                                 (finally
                                   (. ~(bindings 0) ~'close))))
-    :else (throw (IllegalArgumentException.
+    :else (throw (clotran.host.illegal_argument_exception.
                    "with-open only allows Symbols in bindings"))))
 
 (defmacro doto
@@ -3884,7 +3884,7 @@
   value of x supplied at the front of the given arguments.  The forms
   are evaluated in order.  Returns x.
 
-  (doto (new java.util.HashMap) (.put \"a\" 1) (.put \"b\" 2))"
+  (doto (new clotran.host.hash_map) (.put \"a\" 1) (.put \"b\" 2))"
   {:added "1.0"}
   [x & forms]
     (let [gx (gensym)]
@@ -3901,7 +3901,7 @@
 (defmacro memfn
   "Expands into code that creates a fn that expects to be passed an
   object and any args and calls the named instance method on the
-  object passing the args. Use when you want to treat a Java method as
+  object passing the args. Use when you want to treat a host method as
   a first-class fn. name may be type-hinted with the method receiver's
   type in order to avoid reflective calls."
   {:added "1.0"}
@@ -3916,48 +3916,48 @@
  expr."
   {:added "1.0"}
   [expr]
-  `(let [start# (. System (nanoTime))
+  `(let [start# (. clotran.host.system (nanoTime))
          ret# ~expr]
-     (prn (str "Elapsed time: " (/ (double (- (. System (nanoTime)) start#)) 1000000.0) " msecs"))
+     (prn (str "Elapsed time: " (/ (double (- (. clotran.host.system (nanoTime)) start#)) 1000000.0) " msecs"))
      ret#))
 
 
 
-(import '(java.lang.reflect Array))
+(import )
 
 (defn alength
-  "Returns the length of the Java array. Works on arrays of all
+  "Returns the length of the host array. Works on arrays of all
   types."
-  {:inline (fn [a] `(. clojure.lang.RT (alength ~a)))
+  {:inline (fn [a] `(. clotran.host.rt (alength ~a)))
    :added "1.0"}
-  [array] (. clojure.lang.RT (alength array)))
+  [array] (. clotran.host.rt (alength array)))
 
 (defn aclone
-  "Returns a clone of the Java array. Works on arrays of known
+  "Returns a clone of the host array. Works on arrays of known
   types."
-  {:inline (fn [a] `(. clojure.lang.RT (aclone ~a)))
+  {:inline (fn [a] `(. clotran.host.rt (aclone ~a)))
    :added "1.0"}
-  [array] (. clojure.lang.RT (aclone array)))
+  [array] (. clotran.host.rt (aclone array)))
 
 (defn aget
-  "Returns the value at the index/indices. Works on Java arrays of all
+  "Returns the value at the index/indices. Works on host arrays of all
   types."
-  {:inline (fn [a i] `(. clojure.lang.RT (aget ~a (int ~i))))
+  {:inline (fn [a i] `(. clotran.host.rt (aget ~a (int ~i))))
    :inline-arities #{2}
    :added "1.0"}
   ([array idx]
-   (clojure.lang.Reflector/prepRet (.getComponentType (class array)) (. Array (get array idx))))
+   (clotran.host.reflector/prepRet (.getComponentType (class array)) (. clotran.host.array (get array idx))))
   ([array idx & idxs]
    (apply aget (aget array idx) idxs)))
 
 (defn aset
-  "Sets the value at the index/indices. Works on Java arrays of
+  "Sets the value at the index/indices. Works on host arrays of
   reference types. Returns val."
-  {:inline (fn [a i v] `(. clojure.lang.RT (aset ~a (int ~i) ~v)))
+  {:inline (fn [a i v] `(. clotran.host.rt (aset ~a (int ~i) ~v)))
    :inline-arities #{3}
    :added "1.0"}
   ([array idx val]
-   (. Array (set array idx val))
+   (. clotran.host.array (set array idx val))
    val)
   ([array idx idx2 & idxv]
    (apply aset (aget array idx) idx2 idxv)))
@@ -3968,7 +3968,7 @@
     `(defn ~name
        {:arglists '([~'array ~'idx ~'val] [~'array ~'idx ~'idx2 & ~'idxv])}
        ([array# idx# val#]
-        (. Array (~method array# idx# (~coerce val#)))
+        (. clotran.host.array (~method array# idx# (~coerce val#)))
         val#)
        ([array# idx# idx2# & idxv#]
         (apply ~name (aget array# idx#) idx2# idxv#))))
@@ -4021,24 +4021,24 @@
   obtained using, e.g., Integer/TYPE."
   {:added "1.0"
    :static true}
-  ([^Class type len]
-   (. Array (newInstance type (int len))))
-  ([^Class type dim & more-dims]
+  ([^clotran.host.class type len]
+   (. clotran.host.array (newInstance type (int len))))
+  ([^clotran.host.class type dim & more-dims]
    (let [dims (cons dim more-dims)
-         ^"[I" dimarray (make-array (. Integer TYPE)  (count dims))]
+         ^"[I" dimarray (make-array (. clotran.host.int4 TYPE)  (count dims))]
      (dotimes [i (alength dimarray)]
        (aset-int dimarray i (nth dims i)))
-     (. Array (newInstance type dimarray)))))
+     (. clotran.host.array (newInstance type dimarray)))))
 
 (defn to-array-2d
   "Returns a (potentially-ragged) 2-dimensional array of Objects
   containing the contents of coll, which can be any Collection of any
   Collection."
-  {:tag "[[Ljava.lang.Object;"
+  {:tag "[[Lclotran.host.value;"
    :added "1.0"
    :static true}
-  [^java.util.Collection coll]
-    (let [ret (make-array (. Class (forName "[Ljava.lang.Object;")) (. coll (size)))]
+  [^clotran.host.collection coll]
+    (let [ret (make-array (. clotran.host.class (forName "[Lclotran.host.value;")) (. coll (size)))]
       (loop [i 0 xs (seq coll)]
         (when xs
           (aset ret i (to-array (first xs)))
@@ -4051,7 +4051,7 @@
   {:added "1.0"
    :static true}
   [form]
-    (. clojure.lang.Compiler (macroexpand1 form)))
+    (. clotran.host.compiler (macroexpand1 form)))
 
 (defn macroexpand
   "Repeatedly calls macroexpand-1 on form until it no longer
@@ -4070,7 +4070,7 @@
   {:added "1.0"
    :static true}
   [& keys]
-    (. clojure.lang.PersistentStructMap (createSlotMap keys)))
+    (. clotran.host.persistent_struct_map (createSlotMap keys)))
 
 (defmacro defstruct
   "Same as (def name (create-struct keys...))"
@@ -4087,7 +4087,7 @@
   {:added "1.0"
    :static true}
   [s & inits]
-    (. clojure.lang.PersistentStructMap (create s inits)))
+    (. clotran.host.persistent_struct_map (create s inits)))
 
 (defn struct
   "Returns a new structmap instance with the keys of the
@@ -4096,7 +4096,7 @@
   {:added "1.0"
    :static true}
   [s & vals]
-    (. clojure.lang.PersistentStructMap (construct s vals)))
+    (. clotran.host.persistent_struct_map (construct s vals)))
 
 (defn accessor
   "Returns a fn that, given an instance of a structmap with the basis,
@@ -4107,14 +4107,14 @@
   {:added "1.0"
    :static true}
   [s key]
-    (. clojure.lang.PersistentStructMap (getAccessor s key)))
+    (. clotran.host.persistent_struct_map (getAccessor s key)))
 
 (defn load-reader
   "Sequentially read and evaluate the set of forms contained in the
   stream/file"
   {:added "1.0"
    :static true}
-  [rdr] (. clojure.lang.Compiler (load rdr)))
+  [rdr] (. clotran.host.compiler (load rdr)))
 
 (defn load-string
   "Sequentially read and evaluate the set of forms contained in the
@@ -4122,15 +4122,15 @@
   {:added "1.0"
    :static true}
   [s]
-  (let [rdr (-> (java.io.StringReader. s)
-                (clojure.lang.LineNumberingPushbackReader.))]
+  (let [rdr (-> (clotran.io/text-reader s)
+                (clotran.io/line-numbering-reader))]
     (load-reader rdr)))
 
 (defn set?
   "Returns true if x implements IPersistentSet"
   {:added "1.0"
    :static true}
-  [x] (instance? clojure.lang.IPersistentSet x))
+  [x] (instance? clotran.host.i_persistent_set x))
 
 (defn set
   "Returns a set of the distinct elements of coll."
@@ -4139,8 +4139,8 @@
   [coll]
   (if (set? coll)
     (with-meta coll nil)
-    (if (instance? clojure.lang.IReduceInit coll)
-      (persistent! (.reduce ^clojure.lang.IReduceInit coll conj! (transient #{})))
+    (if (instance? clotran.host.i_reduce_init coll)
+      (persistent! (.reduce ^clotran.host.i_reduce_init coll conj! (transient #{})))
       (persistent! (reduce1 conj! (transient #{}) coll)))))
 
 (defn ^{:private true
@@ -4157,7 +4157,7 @@
   "Returns the namespace named by the symbol or nil if it doesn't exist."
   {:added "1.0"
    :static true}
-  [sym] (clojure.lang.Namespace/find sym))
+  [sym] (clotran.host.namespace/find sym))
 
 (defn create-ns
   "Create a new namespace named by the symbol if one doesn't already
@@ -4165,20 +4165,20 @@
   name."
   {:added "1.0"
    :static true}
-  [sym] (clojure.lang.Namespace/findOrCreate sym))
+  [sym] (clotran.host.namespace/findOrCreate sym))
 
 (defn remove-ns
   "Removes the namespace named by the symbol. Use with caution.
   Cannot be used to remove the clojure namespace."
   {:added "1.0"
    :static true}
-  [sym] (clojure.lang.Namespace/remove sym))
+  [sym] (clotran.host.namespace/remove sym))
 
 (defn all-ns
   "Returns a sequence of all namespaces."
   {:added "1.0"
    :static true}
-  [] (clojure.lang.Namespace/all))
+  [] (clotran.host.namespace/all))
 
 (defn the-ns
   "If passed a namespace, returns it. Else, when passed a symbol,
@@ -4186,10 +4186,10 @@
   found."
   {:added "1.0"
    :static true}
-  ^clojure.lang.Namespace [x]
-  (if (instance? clojure.lang.Namespace x)
+  ^clotran.host.namespace [x]
+  (if (instance? clotran.host.namespace x)
     x
-    (or (find-ns x) (throw (Exception. (str "No namespace: " x " found"))))))
+    (or (find-ns x) (throw (clotran.host.exception. (str "No namespace: " x " found"))))))
 
 (defn ns-name
   "Returns the name of the namespace, a symbol."
@@ -4222,7 +4222,7 @@
    :static true}
   [ns]
   (let [ns (the-ns ns)]
-    (filter-key val (fn [^clojure.lang.Var v] (and (instance? clojure.lang.Var v)
+    (filter-key val (fn [^clotran.host.var v] (and (instance? clotran.host.var v)
                                  (= ns (.ns v))
                                  (.isPublic v)))
                 (ns-map ns))))
@@ -4232,7 +4232,7 @@
   {:added "1.0"
    :static true}
   [ns]
-  (filter-key val (partial instance? Class) (ns-map ns)))
+  (filter-key val (partial instance? clotran.host.class) (ns-map ns)))
 
 (defn ns-interns
   "Returns a map of the intern mappings for the namespace."
@@ -4240,7 +4240,7 @@
    :static true}
   [ns]
   (let [ns (the-ns ns)]
-    (filter-key val (fn [^clojure.lang.Var v] (and (instance? clojure.lang.Var v)
+    (filter-key val (fn [^clotran.host.var v] (and (instance? clotran.host.var v)
                                  (= ns (.ns v))))
                 (ns-map ns))))
 
@@ -4261,7 +4261,7 @@
   clashes. Use :use in the ns macro in preference to calling this directly."
   {:added "1.0"}
   [ns-sym & filters]
-    (let [ns (or (find-ns ns-sym) (throw (new Exception (str "No namespace: " ns-sym))))
+    (let [ns (or (find-ns ns-sym) (throw (new clotran.host.exception (str "No namespace: " ns-sym))))
           fs (apply hash-map filters)
           nspublics (ns-publics ns)
           rename (or (:rename fs) {})
@@ -4269,13 +4269,13 @@
           to-do (if (= :all (:refer fs))
                   (keys nspublics)
                   (or (:refer fs) (:only fs) (keys nspublics)))]
-      (when (and to-do (not (instance? clojure.lang.Sequential to-do)))
-        (throw (new Exception ":only/:refer value must be a sequential collection of symbols")))
+      (when (and to-do (not (instance? clotran.host.sequential to-do)))
+        (throw (new clotran.host.exception ":only/:refer value must be a sequential collection of symbols")))
       (doseq [sym to-do]
         (when-not (exclude sym)
           (let [v (nspublics sym)]
             (when-not v
-              (throw (new java.lang.IllegalAccessError
+              (throw (new clotran.host.illegal_access_error
                           (if (get (ns-interns ns) sym)
                             (str sym " is not public")
                             (str sym " does not exist")))))
@@ -4287,7 +4287,7 @@
    :static true}
   [ns]
   (let [ns (the-ns ns)]
-    (filter-key val (fn [^clojure.lang.Var v] (and (instance? clojure.lang.Var v)
+    (filter-key val (fn [^clotran.host.var v] (and (instance? clotran.host.var v)
                                  (not= ns (.ns v))))
                 (ns-map ns))))
 
@@ -4358,14 +4358,14 @@
   "Gets the value in the var object"
   {:added "1.0"
    :static true}
-  [^clojure.lang.Var x] (. x (get)))
+  [^clotran.host.var x] (. x (get)))
 
 (defn var-set
   "Sets the value in the var object to val. The var must be
  thread-locally bound."
   {:added "1.0"
    :static true}
-  [^clojure.lang.Var x val] (. x (set val)))
+  [^clotran.host.var x val] (. x (set val)))
 
 (defmacro with-local-vars
   "varbinding=> symbol init-expr
@@ -4380,11 +4380,11 @@
      (vector? name-vals-vec) "a vector for its binding"
      (even? (count name-vals-vec)) "an even number of forms in binding vector")
   `(let [~@(interleave (take-nth 2 name-vals-vec)
-                       (repeat '(.. clojure.lang.Var create setDynamic)))]
-     (. clojure.lang.Var (pushThreadBindings (hash-map ~@name-vals-vec)))
+                       (repeat '(.. clotran.host.var create setDynamic)))]
+     (. clotran.host.var (pushThreadBindings (hash-map ~@name-vals-vec)))
      (try
       ~@body
-      (finally (. clojure.lang.Var (popThreadBindings))))))
+      (finally (. clotran.host.var (popThreadBindings))))))
 
 (defn ns-resolve
   "Returns the var or Class to which a symbol will be resolved in the
@@ -4397,7 +4397,7 @@
     (ns-resolve ns nil sym))
   ([ns env sym]
     (when-not (contains? env sym)
-      (clojure.lang.Compiler/maybeResolveIn (the-ns ns) sym))))
+      (clotran.host.compiler/maybeResolveIn (the-ns ns) sym))))
 
 (defn resolve
   "same as (ns-resolve *ns* symbol) or (ns-resolve *ns* &env symbol)"
@@ -4411,12 +4411,12 @@
   if by repeated uses of assoc."
   {:added "1.0"
    :static true}
-  ([] (. clojure.lang.PersistentArrayMap EMPTY))
+  ([] (. clotran.host.persistent_array_map EMPTY))
   ([& keyvals]
      (let [ary (to-array keyvals)]
        (if (odd? (alength ary))
-         (throw (IllegalArgumentException. (str "No value supplied for key: " (last keyvals))))
-         (clojure.lang.PersistentArrayMap/createAsIfByAssoc ary)))))
+         (throw (clotran.host.illegal_argument_exception. (str "No value supplied for key: " (last keyvals))))
+         (clotran.host.persistent_array_map/createAsIfByAssoc ary)))))
 
 (defn seq-to-map-for-destructuring
   "Builds a map from a seq as described in
@@ -4424,8 +4424,8 @@
   {:added "1.11"}
   [s]
   (if (next s)
-    (clojure.lang.PersistentArrayMap/createAsIfByAssoc (to-array s))
-    (if (seq s) (first s) clojure.lang.PersistentArrayMap/EMPTY)))
+    (clotran.host.persistent_array_map/createAsIfByAssoc (to-array s))
+    (if (seq s) (first s) clotran.host.persistent_array_map/EMPTY)))
 
 ;;redefine let and loop  with destructuring
 (defn destructure [bindings]
@@ -4453,7 +4453,7 @@
                                                    true)
                               (= firstb :as) (pb ret (second bs) gvec)
                               :else (if seen-rest?
-                                      (throw (new Exception "Unsupported binding form, only :as can follow & parameter"))
+                                      (throw (new clotran.host.exception "Unsupported binding form, only :as can follow & parameter"))
                                       (recur (pb (if has-rest
                                                    (conj ret
                                                          gfirst `(first ~gseq)
@@ -4470,13 +4470,13 @@
                    pmap
                    (fn [bvec b v]
                      (let [gmap (gensym "map__")
-                           gmapseq (with-meta gmap {:tag 'clojure.lang.ISeq})
+                           gmapseq (with-meta gmap {:tag 'clotran.host.i_seq})
                            defaults (:or b)]
                        (loop [ret (-> bvec (conj gmap) (conj v)
                                       (conj gmap) (conj `(if (seq? ~gmap)
                                                            (if (next ~gmapseq)
-                                                             (clojure.lang.PersistentArrayMap/createAsIfByAssoc (to-array ~gmapseq))
-                                                             (if (seq ~gmapseq) (first ~gmapseq) clojure.lang.PersistentArrayMap/EMPTY))
+                                                             (clotran.host.persistent_array_map/createAsIfByAssoc (to-array ~gmapseq))
+                                                             (if (seq ~gmapseq) (first ~gmapseq) clotran.host.persistent_array_map/EMPTY))
                                                            ~gmap))
                                       ((fn [ret]
                                          (if (:as b)
@@ -4505,7 +4505,7 @@
                          (if (seq bes)
                            (let [bb (key (first bes))
                                  bk (val (first bes))
-                                 local (if (instance? clojure.lang.Named bb) (with-meta (symbol nil (name bb)) (meta bb)) bb)
+                                 local (if (instance? clotran.host.named bb) (with-meta (symbol nil (name bb)) (meta bb)) bb)
                                  bv (if (contains? defaults local)
                                       (list `get gmap bk (defaults local))
                                       (list `get gmap bk))]
@@ -4518,7 +4518,7 @@
                 (symbol? b) (-> bvec (conj b) (conj v))
                 (vector? b) (pvec bvec b v)
                 (map? b) (pmap bvec b v)
-                :else (throw (new Exception (str "Unsupported binding form: " b))))))
+                :else (throw (new clotran.host.exception (str "Unsupported binding form: " b))))))
         process-entry (fn [bvec b] (pb bvec (first b) (second b)))]
     (if (every? symbol? (map first bents))
       bindings
@@ -4580,7 +4580,7 @@
                  (if (seq? (first sigs))
                    sigs
                    ;; Assume single arity syntax
-                   (throw (IllegalArgumentException. 
+                   (throw (clotran.host.illegal_argument_exception. 
                             (if (seq sigs)
                               (str "Parameter declaration " 
                                    (first sigs)
@@ -4589,12 +4589,12 @@
           psig (fn* [sig]
                  ;; Ensure correct type before destructuring sig
                  (when (not (seq? sig))
-                   (throw (IllegalArgumentException.
+                   (throw (clotran.host.illegal_argument_exception.
                             (str "Invalid signature " sig
                                  " should be a list"))))
                  (let [[params & body] sig
                        _ (when (not (vector? params))
-                           (throw (IllegalArgumentException. 
+                           (throw (clotran.host.illegal_argument_exception. 
                                     (if (seq? (first sigs))
                                       (str "Parameter declaration " params
                                            " should be a vector")
@@ -4695,7 +4695,7 @@
                                 (conj (pop groups) (conj (peek groups) [k v]))
                                 (conj groups [k v])))
                             [] (partition 2 seq-exprs)))
-        err (fn [& msg] (throw (IllegalArgumentException. ^String (apply str msg))))
+        err (fn [& msg] (throw (clotran.host.illegal_argument_exception. ^clotran.host.string (apply str msg))))
         emit-bind (fn emit-bind [[[bind expr & mod-pairs]
                                   & [[_ next-expr] :as next-groups]]]
                     (let [giter (gensym "iter__")
@@ -4772,7 +4772,7 @@
   calls."
   {:added "1.0"}
   [& body]
-  `(let [s# (new java.io.StringWriter)]
+  `(let [s# (new clotran.host.string_writer)]
      (binding [*out* s#]
        ~@body
        (str s#))))
@@ -4782,13 +4782,13 @@
   StringReader initialized with the string s."
   {:added "1.0"}
   [s & body]
-  `(with-open [s# (-> (java.io.StringReader. ~s) clojure.lang.LineNumberingPushbackReader.)]
+  `(with-open [s# (-> (clotran.io/text-reader ~s) clotran.io/line-numbering-reader)]
      (binding [*in* s#]
        ~@body)))
 
 (defn pr-str
   "pr to a string, returning it"
-  {:tag String
+  {:tag clotran.host.string
    :added "1.0"
    :static true}
   [& xs]
@@ -4797,7 +4797,7 @@
 
 (defn prn-str
   "prn to a string, returning it"
-  {:tag String
+  {:tag clotran.host.string
    :added "1.0"
    :static true}
   [& xs]
@@ -4806,7 +4806,7 @@
 
 (defn print-str
   "print to a string, returning it"
-  {:tag String
+  {:tag clotran.host.string
    :added "1.0"
    :static true}
   [& xs]
@@ -4815,57 +4815,57 @@
 
 (defn println-str
   "println to a string, returning it"
-  {:tag String
+  {:tag clotran.host.string
    :added "1.0"
    :static true}
   [& xs]
     (with-out-str
      (apply println xs)))
 
-(import clojure.lang.ExceptionInfo clojure.lang.IExceptionInfo)
+(import  )
 
 (defn ^:private elide-top-frames
-  [^Throwable ex class-name]
+  [^clotran.host.throwable ex class-name]
   (let [tr (.getStackTrace ex)]
     (doto ex
       (.setStackTrace
         (when tr
-          (into-array StackTraceElement
-            (drop-while #(= class-name (.getClassName ^StackTraceElement %1)) tr)))))))
+          (into-array clotran.host.stack_trace_element
+            (drop-while #(= class-name (.getClassName ^clotran.host.stack_trace_element %1)) tr)))))))
 
 (defn ex-info
   "Create an instance of ExceptionInfo, a RuntimeException subclass
    that carries a map of additional data."
   {:added "1.4"}
   ([msg map]
-    (elide-top-frames (ExceptionInfo. msg map) "clojure.core$ex_info"))
+    (elide-top-frames (clotran.host.exception_info. msg map) "clojure.core$ex_info"))
   ([msg map cause]
-    (elide-top-frames (ExceptionInfo. msg map cause) "clojure.core$ex_info")))
+    (elide-top-frames (clotran.host.exception_info. msg map cause) "clojure.core$ex_info")))
 
 (defn ex-data
   "Returns exception data (a map) if ex is an IExceptionInfo.
    Otherwise returns nil."
   {:added "1.4"}
   [ex]
-  (when (instance? IExceptionInfo ex)
-    (.getData ^IExceptionInfo ex)))
+  (when (instance? clotran.host.i_exception_info ex)
+    (.getData ^clotran.host.i_exception_info ex)))
 
 (defn ex-message
   "Returns the message attached to ex if ex is a Throwable.
   Otherwise returns nil."
   {:added "1.10"}
   [ex]
-  (when (instance? Throwable ex)
-    (.getMessage ^Throwable ex)))
+  (when (instance? clotran.host.throwable ex)
+    (.getMessage ^clotran.host.throwable ex)))
 
 (defn ex-cause
   "Returns the cause of ex if ex is a Throwable.
   Otherwise returns nil."
-  {:tag Throwable
+  {:tag clotran.host.throwable
    :added "1.10"}
   [ex]
-  (when (instance? Throwable ex)
-    (.getCause ^Throwable ex)))
+  (when (instance? clotran.host.throwable ex)
+    (.getCause ^clotran.host.throwable ex)))
 
 (defmacro assert
   "Evaluates expression x and throws an AssertionError with optional
@@ -4877,11 +4877,11 @@
   ([x]
      (when *assert*
        `(when-not ~x
-          (throw (new AssertionError (str "Assert failed: " (pr-str '~x)))))))
+          (throw (new clotran.host.assertion_error (str "Assert failed: " (pr-str '~x)))))))
   ([x message]
      (when *assert*
        `(when-not ~x
-          (throw (new AssertionError (str "Assert failed: " ~message "\n" (pr-str '~x))))))))
+          (throw (new clotran.host.assertion_error (str "Assert failed: " ~message "\n" (pr-str '~x))))))))
 
 (defn test
   "test [v] finds fn at key :test in var metadata and calls it,
@@ -4894,22 +4894,22 @@
         :no-test)))
 
 (defn re-pattern
-  "Returns an instance of java.util.regex.Pattern, for use, e.g. in
+  "Returns an instance of clotran.host.pattern, for use, e.g. in
   re-matcher."
-  {:tag java.util.regex.Pattern
+  {:tag clotran.host.pattern
    :added "1.0"
    :static true}
-  [s] (if (instance? java.util.regex.Pattern s)
+  [s] (if (instance? clotran.host.pattern s)
         s
-        (. java.util.regex.Pattern (compile s))))
+        (. clotran.host.pattern (compile s))))
 
 (defn re-matcher
-  "Returns an instance of java.util.regex.Matcher, for use, e.g. in
+  "Returns an instance of clotran.host.matcher, for use, e.g. in
   re-find."
-  {:tag java.util.regex.Matcher
+  {:tag clotran.host.matcher
    :added "1.0"
    :static true}
-  [^java.util.regex.Pattern re s]
+  [^clotran.host.pattern re s]
     (. re (matcher s)))
 
 (defn re-groups
@@ -4919,7 +4919,7 @@
   being the entire match."
   {:added "1.0"
    :static true}
-  [^java.util.regex.Matcher m]
+  [^clotran.host.matcher m]
     (let [gc  (. m (groupCount))]
       (if (zero? gc)
         (. m (group))
@@ -4930,11 +4930,11 @@
 
 (defn re-seq
   "Returns a lazy sequence of successive matches of pattern in string,
-  using java.util.regex.Matcher.find(), each such match processed with
+  using clotran.host.matcher.find(), each such match processed with
   re-groups."
   {:added "1.0"
    :static true}
-  [^java.util.regex.Pattern re s]
+  [^clotran.host.pattern re s]
   (let [m (re-matcher re s)]
     ((fn step []
        (when (. m (find))
@@ -4942,11 +4942,11 @@
 
 (defn re-matches
   "Returns the match, if any, of string to pattern, using
-  java.util.regex.Matcher.matches().  Uses re-groups to return the
+  clotran.host.matcher.matches().  Uses re-groups to return the
   groups."
   {:added "1.0"
    :static true}
-  [^java.util.regex.Pattern re s]
+  [^clotran.host.pattern re s]
     (let [m (re-matcher re s)]
       (when (. m (matches))
         (re-groups m))))
@@ -4954,14 +4954,14 @@
 
 (defn re-find
   "Returns the next regex match, if any, of string to pattern, using
-  java.util.regex.Matcher.find().  Uses re-groups to return the
+  clotran.host.matcher.find().  Uses re-groups to return the
   groups."
   {:added "1.0"
    :static true}
-  ([^java.util.regex.Matcher m]
+  ([^clotran.host.matcher m]
    (when (. m (find))
      (re-groups m)))
-  ([^java.util.regex.Pattern re s]
+  ([^clotran.host.pattern re s]
    (let [m (re-matcher re s)]
      (re-find m))))
 
@@ -4970,7 +4970,7 @@
   n (default 1) (exclusive)."
   {:added "1.0"
    :static true}
-  ([] (. Math (random)))
+  ([] (. clotran.host.math (random)))
   ([n] (* n (rand))))
 
 (defn rand-int
@@ -5003,13 +5003,13 @@
      (walk root)))
 
 (defn file-seq
-  "A tree seq on java.io.Files"
+  "A tree seq on clotran.host.files"
   {:added "1.0"
    :static true}
   [dir]
     (tree-seq
-     (fn [^java.io.File f] (. f (isDirectory)))
-     (fn [^java.io.File d] (seq (. d (listFiles))))
+     (fn [^clotran.io.File f] (. f (isDirectory)))
+     (fn [^clotran.io.File d] (seq (. d (listFiles))))
      dir))
 
 (defn xml-seq
@@ -5027,21 +5027,21 @@
   {:added "1.0"
    :static true}
   [s]
-    (contains? (. clojure.lang.Compiler specials) s))
+    (contains? (. clotran.host.compiler specials) s))
 
 (defn var?
-  "Returns true if v is of type clojure.lang.Var"
+  "Returns true if v is of type clotran.host.var"
   {:added "1.0"
    :static true}
-  [v] (instance? clojure.lang.Var v))
+  [v] (instance? clotran.host.var v))
 
 (defn subs
   "Returns the substring of s beginning at start inclusive, and ending
   at end (defaults to length of string), exclusive."
   {:added "1.0"
    :static true}
-  (^String [^String s start] (. s (substring start)))
-  (^String [^String s start end] (. s (substring start end))))
+  (^clotran.host.string [^clotran.host.string s start] (. s (substring start)))
+  (^clotran.host.string [^clotran.host.string s start end] (. s (substring start end))))
 
 (defn max-key
   "Returns the x for which (k x), a number, is greatest.
@@ -5152,14 +5152,14 @@
   [precision & exprs]
     (let [[body rm] (if (= (first exprs) :rounding)
                       [(next (next exprs))
-                       `((. java.math.RoundingMode ~(second exprs)))]
+                       `((. clotran.host.rounding_mode ~(second exprs)))]
                       [exprs nil])]
-      `(binding [*math-context* (java.math.MathContext. ~precision ~@rm)]
+      `(binding [*math-context* (clotran.host.math_context. ~precision ~@rm)]
          ~@body)))
 
 (defn mk-bound-fn
   {:private true}
-  [^clojure.lang.Sorted sc test key]
+  [^clotran.host.sorted sc test key]
   (fn [e]
     (test (.. sc comparator (compare (. sc entryKey e) key)) 0)))
 
@@ -5169,13 +5169,13 @@
   which (test (.. sc comparator (compare ek key)) 0) is true"
   {:added "1.0"
    :static true}
-  ([^clojure.lang.Sorted sc test key]
+  ([^clotran.host.sorted sc test key]
    (let [include (mk-bound-fn sc test key)]
      (if (#{> >=} test)
        (when-let [[e :as s] (. sc seqFrom key true)]
          (if (include e) s (next s)))
        (take-while include (. sc seq true)))))
-  ([^clojure.lang.Sorted sc start-test start-key end-test end-key]
+  ([^clotran.host.sorted sc start-test start-key end-test end-key]
    (when-let [[e :as s] (. sc seqFrom start-key true)]
      (take-while (mk-bound-fn sc end-test end-key)
                  (if ((mk-bound-fn sc start-test start-key) e) s (next s))))))
@@ -5186,13 +5186,13 @@
   which (test (.. sc comparator (compare ek key)) 0) is true"
   {:added "1.0"
    :static true}
-  ([^clojure.lang.Sorted sc test key]
+  ([^clotran.host.sorted sc test key]
    (let [include (mk-bound-fn sc test key)]
      (if (#{< <=} test)
        (when-let [[e :as s] (. sc seqFrom key false)]
          (if (include e) s (next s)))
        (take-while include (. sc seq false)))))
-  ([^clojure.lang.Sorted sc start-test start-key end-test end-key]
+  ([^clotran.host.sorted sc start-test start-key end-test end-key]
    (when-let [[e :as s] (. sc seqFrom end-key false)]
      (take-while (mk-bound-fn sc start-test start-key)
                  (if ((mk-bound-fn sc end-test end-key) e) s (next s))))))
@@ -5215,7 +5215,7 @@
    :deprecated "1.1"}
   [url]
   (println "WARNING: add-classpath is deprecated")
-  (clojure.lang.RT/addURL url))
+  (clotran.host.rt/addURL url))
 
 
 
@@ -5226,7 +5226,7 @@
 
   {:added "1.0"
    :static true}
-  [x] (. clojure.lang.Util (hasheq x)))
+  [x] (. clotran.host.util (hasheq x)))
 
 
 (defn mix-collection-hash
@@ -5238,7 +5238,7 @@
   {:added "1.6"
    :static true}
   ^long
-  [^long hash-basis ^long count] (clojure.lang.Murmur3/mixCollHash hash-basis count))
+  [^long hash-basis ^long count] (clotran.host.murmur3/mixCollHash hash-basis count))
 
 (defn hash-ordered-coll
   "Returns the hash code, consistent with =, for an external ordered
@@ -5247,7 +5247,7 @@
   {:added "1.6"
    :static true}
   ^long
-  [coll] (clojure.lang.Murmur3/hashOrdered coll))
+  [coll] (clotran.host.murmur3/hashOrdered coll))
 
 (defn hash-unordered-coll
   "Returns the hash code, consistent with =, for an external unordered
@@ -5258,7 +5258,7 @@
   {:added "1.6"
    :static true}
   ^long
-  [coll] (clojure.lang.Murmur3/hashUnordered coll))
+  [coll] (clotran.host.murmur3/hashUnordered coll))
 
 (defn interpose
   "Returns a lazy seq of the elements of coll separated by sep.
@@ -5300,8 +5300,8 @@
   {:added "1.0"
    :static true}
   [coll]
-  (when (instance? clojure.lang.IPersistentCollection coll)
-    (.empty ^clojure.lang.IPersistentCollection coll)))
+  (when (instance? clotran.host.i_persistent_collection coll)
+    (.empty ^clotran.host.i_persistent_collection coll)))
 
 (defmacro amap
   "Maps an expression across an array a, using an index named idx, and
@@ -5333,139 +5333,139 @@
 
 (defn float-array
   "Creates an array of floats"
-  {:inline (fn [& args] `(. clojure.lang.Numbers float_array ~@args))
+  {:inline (fn [& args] `(. clotran.host.numbers float_array ~@args))
    :inline-arities #{1 2}
    :added "1.0"}
-  ([size-or-seq] (. clojure.lang.Numbers float_array size-or-seq))
-  ([size init-val-or-seq] (. clojure.lang.Numbers float_array size init-val-or-seq)))
+  ([size-or-seq] (. clotran.host.numbers float_array size-or-seq))
+  ([size init-val-or-seq] (. clotran.host.numbers float_array size init-val-or-seq)))
 
 (defn boolean-array
   "Creates an array of booleans"
-  {:inline (fn [& args] `(. clojure.lang.Numbers boolean_array ~@args))
+  {:inline (fn [& args] `(. clotran.host.numbers boolean_array ~@args))
    :inline-arities #{1 2}
    :added "1.1"}
-  ([size-or-seq] (. clojure.lang.Numbers boolean_array size-or-seq))
-  ([size init-val-or-seq] (. clojure.lang.Numbers boolean_array size init-val-or-seq)))
+  ([size-or-seq] (. clotran.host.numbers boolean_array size-or-seq))
+  ([size init-val-or-seq] (. clotran.host.numbers boolean_array size init-val-or-seq)))
 
 (defn byte-array
   "Creates an array of bytes"
-  {:inline (fn [& args] `(. clojure.lang.Numbers byte_array ~@args))
+  {:inline (fn [& args] `(. clotran.host.numbers byte_array ~@args))
    :inline-arities #{1 2}
    :added "1.1"}
-  ([size-or-seq] (. clojure.lang.Numbers byte_array size-or-seq))
-  ([size init-val-or-seq] (. clojure.lang.Numbers byte_array size init-val-or-seq)))
+  ([size-or-seq] (. clotran.host.numbers byte_array size-or-seq))
+  ([size init-val-or-seq] (. clotran.host.numbers byte_array size init-val-or-seq)))
 
 (defn char-array
   "Creates an array of chars"
-  {:inline (fn [& args] `(. clojure.lang.Numbers char_array ~@args))
+  {:inline (fn [& args] `(. clotran.host.numbers char_array ~@args))
    :inline-arities #{1 2}
    :added "1.1"}
-  ([size-or-seq] (. clojure.lang.Numbers char_array size-or-seq))
-  ([size init-val-or-seq] (. clojure.lang.Numbers char_array size init-val-or-seq)))
+  ([size-or-seq] (. clotran.host.numbers char_array size-or-seq))
+  ([size init-val-or-seq] (. clotran.host.numbers char_array size init-val-or-seq)))
 
 (defn short-array
   "Creates an array of shorts"
-  {:inline (fn [& args] `(. clojure.lang.Numbers short_array ~@args))
+  {:inline (fn [& args] `(. clotran.host.numbers short_array ~@args))
    :inline-arities #{1 2}
    :added "1.1"}
-  ([size-or-seq] (. clojure.lang.Numbers short_array size-or-seq))
-  ([size init-val-or-seq] (. clojure.lang.Numbers short_array size init-val-or-seq)))
+  ([size-or-seq] (. clotran.host.numbers short_array size-or-seq))
+  ([size init-val-or-seq] (. clotran.host.numbers short_array size init-val-or-seq)))
 
 (defn double-array
   "Creates an array of doubles"
-  {:inline (fn [& args] `(. clojure.lang.Numbers double_array ~@args))
+  {:inline (fn [& args] `(. clotran.host.numbers double_array ~@args))
    :inline-arities #{1 2}
    :added "1.0"}
-  ([size-or-seq] (. clojure.lang.Numbers double_array size-or-seq))
-  ([size init-val-or-seq] (. clojure.lang.Numbers double_array size init-val-or-seq)))
+  ([size-or-seq] (. clotran.host.numbers double_array size-or-seq))
+  ([size init-val-or-seq] (. clotran.host.numbers double_array size init-val-or-seq)))
 
 (defn object-array
   "Creates an array of objects"
-  {:inline (fn [arg] `(. clojure.lang.RT object_array ~arg))
+  {:inline (fn [arg] `(. clotran.host.rt object_array ~arg))
    :inline-arities #{1}
    :added "1.2"}
-  ([size-or-seq] (. clojure.lang.RT object_array size-or-seq)))
+  ([size-or-seq] (. clotran.host.rt object_array size-or-seq)))
 
 (defn int-array
   "Creates an array of ints"
-  {:inline (fn [& args] `(. clojure.lang.Numbers int_array ~@args))
+  {:inline (fn [& args] `(. clotran.host.numbers int_array ~@args))
    :inline-arities #{1 2}
    :added "1.0"}
-  ([size-or-seq] (. clojure.lang.Numbers int_array size-or-seq))
-  ([size init-val-or-seq] (. clojure.lang.Numbers int_array size init-val-or-seq)))
+  ([size-or-seq] (. clotran.host.numbers int_array size-or-seq))
+  ([size init-val-or-seq] (. clotran.host.numbers int_array size init-val-or-seq)))
 
 (defn long-array
   "Creates an array of longs"
-  {:inline (fn [& args] `(. clojure.lang.Numbers long_array ~@args))
+  {:inline (fn [& args] `(. clotran.host.numbers long_array ~@args))
    :inline-arities #{1 2}
    :added "1.0"}
-  ([size-or-seq] (. clojure.lang.Numbers long_array size-or-seq))
-  ([size init-val-or-seq] (. clojure.lang.Numbers long_array size init-val-or-seq)))
+  ([size-or-seq] (. clotran.host.numbers long_array size-or-seq))
+  ([size init-val-or-seq] (. clotran.host.numbers long_array size init-val-or-seq)))
 
 (definline booleans
   "Casts to boolean[]"
   {:added "1.1"}
-  [xs] `(. clojure.lang.Numbers booleans ~xs))
+  [xs] `(. clotran.host.numbers booleans ~xs))
 
 (definline bytes
   "Casts to bytes[]"
   {:added "1.1"}
-  [xs] `(. clojure.lang.Numbers bytes ~xs))
+  [xs] `(. clotran.host.numbers bytes ~xs))
 
 (definline chars
   "Casts to chars[]"
   {:added "1.1"}
-  [xs] `(. clojure.lang.Numbers chars ~xs))
+  [xs] `(. clotran.host.numbers chars ~xs))
 
 (definline shorts
   "Casts to shorts[]"
   {:added "1.1"}
-  [xs] `(. clojure.lang.Numbers shorts ~xs))
+  [xs] `(. clotran.host.numbers shorts ~xs))
 
 (definline floats
   "Casts to float[]"
   {:added "1.0"}
-  [xs] `(. clojure.lang.Numbers floats ~xs))
+  [xs] `(. clotran.host.numbers floats ~xs))
 
 (definline ints
   "Casts to int[]"
   {:added "1.0"}
-  [xs] `(. clojure.lang.Numbers ints ~xs))
+  [xs] `(. clotran.host.numbers ints ~xs))
 
 (definline doubles
   "Casts to double[]"
   {:added "1.0"}
-  [xs] `(. clojure.lang.Numbers doubles ~xs))
+  [xs] `(. clotran.host.numbers doubles ~xs))
 
 (definline longs
   "Casts to long[]"
   {:added "1.0"}
-  [xs] `(. clojure.lang.Numbers longs ~xs))
+  [xs] `(. clotran.host.numbers longs ~xs))
 
 (defn bytes?
   "Return true if x is a byte array"
   {:added "1.9"}
   [x] (if (nil? x)
         false
-        (-> x class .getComponentType (= Byte/TYPE))))
+        (-> x class .getComponentType (= clotran.host.int1/TYPE))))
 
-(import '(java.util.concurrent BlockingQueue LinkedBlockingQueue))
+(import )
 
 (defn seque
   "Creates a queued seq on another (presumably lazy) seq s. The queued
   seq will produce a concrete seq in the background, and can get up to
   n items ahead of the consumer. n-or-q can be an integer n buffer
-  size, or an instance of java.util.concurrent BlockingQueue. Note
+  size, or an instance of host.util.concurrent BlockingQueue. Note
   that reading from a seque can block if the reader gets ahead of the
   producer."
   {:added "1.0"
    :static true}
   ([s] (seque 100 s))
   ([n-or-q s]
-   (let [^BlockingQueue q (if (instance? BlockingQueue n-or-q)
+   (let [^clotran.host.blocking_queue q (if (instance? clotran.host.blocking_queue n-or-q)
                              n-or-q
-                             (LinkedBlockingQueue. (int n-or-q)))
-         NIL (Object.) ;nil sentinel since LBQ doesn't support nils
+                             (clotran.host.linked_blocking_queue. (int n-or-q)))
+         NIL (clotran.host.value.) ;nil sentinel since LBQ doesn't support nils
          agt (agent (lazy-seq s)) ; never start with nil; that signifies we've already put eos
          log-error (fn [q e]
                      (if (.offer q q)
@@ -5473,7 +5473,7 @@
                        e))
          fill (fn [s]
                 (when s
-                  (if (instance? Exception s) ; we failed to .offer an error earlier
+                  (if (instance? clotran.host.exception s) ; we failed to .offer an error earlier
                     (log-error q s)
                     (try
                       (loop [[x & xs :as s] (seq s)]
@@ -5483,7 +5483,7 @@
                             s)
                           (when-not (.offer q q) ; q itself is eos sentinel
                             ()))) ; empty seq, not nil, so we know to put eos next time
-                      (catch Exception e
+                      (catch clotran.host.exception e
                         (log-error q e))))))
          drain (fn drain []
                  (lazy-seq
@@ -5501,20 +5501,20 @@
   "Returns true if x is an instance of Class"
   {:added "1.0"
    :static true}
-  [x] (instance? Class x))
+  [x] (instance? clotran.host.class x))
 
 (defn- is-annotation? [c]
   (and (class? c)
-       (.isAssignableFrom java.lang.annotation.Annotation c)))
+       (.isAssignableFrom clotran.host.annotation c)))
 
-(defn- is-runtime-annotation? [^Class c]
+(defn- is-runtime-annotation? [^clotran.host.class c]
   (boolean 
    (and (is-annotation? c)
-        (when-let [^java.lang.annotation.Retention r 
-                   (.getAnnotation c java.lang.annotation.Retention)] 
-          (= (.value r) java.lang.annotation.RetentionPolicy/RUNTIME)))))
+        (when-let [^clotran.host.retention r 
+                   (.getAnnotation c clotran.host.retention)] 
+          (= (.value r) clotran.host.retention_policy/RUNTIME)))))
 
-(defn- descriptor [^Class c] (clojure.asm.Type/getDescriptor c))
+(defn- descriptor [^clotran.host.class c] (clojure.asm.Type/getDescriptor c))
 
 (declare process-annotation)
 (defn- add-annotation [^clojure.asm.AnnotationVisitor av name v]
@@ -5525,10 +5525,10 @@
                  (.visitEnd avec))
    (symbol? v) (let [ev (eval v)]
                  (cond 
-                  (instance? java.lang.Enum ev)
+                  (instance? clotran.host.enum ev)
                   (.visitEnum av name (descriptor (class ev)) (str ev))
                   (class? ev) (.visit av name (clojure.asm.Type/getType ev))
-                  :else (throw (IllegalArgumentException. 
+                  :else (throw (clotran.host.illegal_argument_exception. 
                                 (str "Unsupported annotation value: " v " of class " (class ev))))))
    (seq? v) (let [[nested nv] v
                   c (resolve nested)
@@ -5564,7 +5564,7 @@
   current value plus any args"
   {:added "1.0"
    :static true}
-  [^clojure.lang.Var v f & args] (.alterRoot v f args))
+  [^clotran.host.var v f & args] (.alterRoot v f args))
 
 (defn bound?
   "Returns true if all of the vars provided as arguments have any bound value, root or thread-local.
@@ -5572,7 +5572,7 @@
   {:added "1.2"
    :static true}
   [& vars]
-  (every? #(.isBound ^clojure.lang.Var %) vars))
+  (every? #(.isBound ^clotran.host.var %) vars))
 
 (defn thread-bound?
   "Returns true if all of the vars provided as arguments have thread-local bindings.
@@ -5580,7 +5580,7 @@
   {:added "1.2"
    :static true}
   [& vars]
-  (every? #(.getThreadBinding ^clojure.lang.Var %) vars))
+  (every? #(.getThreadBinding ^clotran.host.var %) vars))
 
 (defn make-hierarchy
   "Creates a hierarchy object for use with derive, isa? etc."
@@ -5601,7 +5601,7 @@
   "Returns the immediate superclass and direct interfaces of c, if any"
   {:added "1.0"
    :static true}
-  [^Class c]
+  [^clotran.host.class c]
   (when c
     (let [i (seq (.getInterfaces c))
           s (.getSuperclass c)]
@@ -5611,7 +5611,7 @@
   "Returns the immediate and indirect superclasses and interfaces of c, if any"
   {:added "1.0"
    :static true}
-  [^Class class]
+  [^clotran.host.class class]
   (loop [ret (set (bases class)) cs ret]
     (if (seq cs)
       (let [c (first cs) bs (bases c)]
@@ -5620,7 +5620,7 @@
 
 (defn isa?
   "Returns true if (= child parent), or child is directly or indirectly derived from
-  parent, either via a Java type inheritance relationship or a
+  parent, either via a host type inheritance relationship or a
   relationship established via derive. h must be a hierarchy obtained
   from make-hierarchy, if not supplied defaults to the global
   hierarchy"
@@ -5629,7 +5629,7 @@
   ([h child parent]
    (or (= child parent)
        (and (class? parent) (class? child)
-            (. ^Class parent isAssignableFrom child))
+            (. ^clotran.host.class parent isAssignableFrom child))
        (contains? ((:ancestors h) child) parent)
        (and (class? child) (some #(contains? ((:ancestors h) %) parent) (supers child)))
        (and (vector? parent) (vector? child)
@@ -5640,7 +5640,7 @@
                 (recur (isa? h (child i) (parent i)) (inc i))))))))
 
 (defn parents
-  "Returns the immediate parents of tag, either via a Java type
+  "Returns the immediate parents of tag, either via a host type
   inheritance relationship or a relationship established via derive. h
   must be a hierarchy obtained from make-hierarchy, if not supplied
   defaults to the global hierarchy"
@@ -5653,7 +5653,7 @@
                 tp)))))
 
 (defn ancestors
-  "Returns the immediate and indirect parents of tag, either via a Java type
+  "Returns the immediate and indirect parents of tag, either via a host type
   inheritance relationship or a relationship established via derive. h
   must be a hierarchy obtained from make-hierarchy, if not supplied
   defaults to the global hierarchy"
@@ -5672,12 +5672,12 @@
   "Returns the immediate and indirect children of tag, through a
   relationship established via derive. h must be a hierarchy obtained
   from make-hierarchy, if not supplied defaults to the global
-  hierarchy. Note: does not work on Java type inheritance
+  hierarchy. Note: does not work on host type inheritance
   relationships."
   {:added "1.0"}
   ([tag] (descendants global-hierarchy tag))
   ([h tag] (if (class? tag)
-             (throw (java.lang.UnsupportedOperationException. "Can't get descendants of classes"))
+             (throw (clotran.host.unsupported_operation_exception. "Can't get descendants of classes"))
              (not-empty (get (:descendants h) tag)))))
 
 (defn derive
@@ -5689,13 +5689,13 @@
   {:added "1.0"}
   ([tag parent]
    (assert (namespace parent))
-   (assert (or (class? tag) (and (instance? clojure.lang.Named tag) (namespace tag))))
+   (assert (or (class? tag) (and (instance? clotran.host.named tag) (namespace tag))))
 
    (alter-var-root #'global-hierarchy derive tag parent) nil)
   ([h tag parent]
    (assert (not= tag parent))
-   (assert (or (class? tag) (instance? clojure.lang.Named tag)))
-   (assert (instance? clojure.lang.Named parent))
+   (assert (or (class? tag) (instance? clotran.host.named tag)))
+   (assert (instance? clotran.host.named parent))
 
    (let [tp (:parents h)
          td (:descendants h)
@@ -5708,9 +5708,9 @@
      (or
       (when-not (contains? (tp tag) parent)
         (when (contains? (ta tag) parent)
-          (throw (Exception. (print-str tag "already has" parent "as ancestor"))))
+          (throw (clotran.host.exception. (print-str tag "already has" parent "as ancestor"))))
         (when (contains? (ta parent) tag)
-          (throw (Exception. (print-str "Cyclic derivation:" parent "has" tag "as ancestor"))))
+          (throw (clotran.host.exception. (print-str "Cyclic derivation:" parent "has" tag "as ancestor"))))
         {:parents (assoc (:parents h) tag (conj (get tp tag #{}) parent))
          :ancestors (tf (:ancestors h) tag td parent ta)
          :descendants (tf (:descendants h) parent ta tag td)})
@@ -5741,7 +5741,7 @@
 
 (defn distinct?
   "Returns true if no two of the arguments are ="
-  {:tag Boolean
+  {:tag clotran.host.logical
    :added "1.0"
    :static true}
   ([x] true)
@@ -5758,47 +5758,47 @@
 
 (defn resultset-seq
   "Creates and returns a lazy sequence of structmaps corresponding to
-  the rows in the java.sql.ResultSet rs"
+  the rows in the clotran.host.result_set rs"
   {:added "1.0"}
-  [^java.sql.ResultSet rs]
+  [^clotran.host.result_set rs]
     (let [rsmeta (. rs (getMetaData))
           idxs (range 1 (inc (. rsmeta (getColumnCount))))
-          keys (map (comp keyword #(.toLowerCase ^String %))
+          keys (map (comp keyword #(.toLowerCase ^clotran.host.string %))
                     (map (fn [i] (. rsmeta (getColumnLabel i))) idxs))
           check-keys
                 (or (apply distinct? keys)
-                    (throw (Exception. "ResultSet must have unique column labels")))
+                    (throw (clotran.host.exception. "ResultSet must have unique column labels")))
           row-struct (apply create-struct keys)
-          row-values (fn [] (map (fn [^Integer i] (. rs (getObject i))) idxs))
+          row-values (fn [] (map (fn [^clotran.host.int4 i] (. rs (getObject i))) idxs))
           rows (fn thisfn []
                  (when (. rs (next))
                    (cons (apply struct row-struct (row-values)) (lazy-seq (thisfn)))))]
       (rows)))
 
 (defn iterator-seq
-  "Returns a seq on a java.util.Iterator. Note that most collections
+  "Returns a seq on a clotran.host.iterator. Note that most collections
   providing iterators implement Iterable and thus support seq directly.
   Seqs cache values, thus iterator-seq should not be used on any
   iterator that repeatedly returns the same mutable object."
   {:added "1.0"
    :static true}
   [iter]
-  (clojure.lang.RT/chunkIteratorSeq iter))
+  (clotran.host.rt/chunkIteratorSeq iter))
 
 (defn enumeration-seq
-  "Returns a seq on a java.util.Enumeration"
+  "Returns a seq on a clotran.host.enumeration"
   {:added "1.0"
    :static true}
   [e]
-  (clojure.lang.EnumerationSeq/create e))
+  (clotran.host.enumeration_seq/create e))
 
 (defn format
-  "Formats a string using java.lang.String.format, see java.util.Formatter for format
+  "Formats a string using clotran.host.string.format, see clotran.host.formatter for format
   string syntax"
   {:added "1.0"
    :static true}
-  ^String [fmt & args]
-  (String/format fmt (to-array args)))
+  ^clotran.host.string [fmt & args]
+  (clotran.host.string/format fmt (to-array args)))
 
 (defn printf
   "Prints formatted output, as per format"
@@ -5811,12 +5811,12 @@
 
 (defmacro with-loading-context [& body]
   `((fn loading# [] 
-        (. clojure.lang.Var (pushThreadBindings {clojure.lang.Compiler/LOADER  
-                                                 (.getClassLoader (.getClass ^Object loading#))}))
+        (. clotran.host.var (pushThreadBindings {clotran.host.compiler/LOADER  
+                                                 (.getClassLoader (.getClass ^clotran.host.value loading#))}))
         (try
          ~@body
          (finally
-          (. clojure.lang.Var (popThreadBindings)))))))
+          (. clotran.host.var (popThreadBindings)))))))
 
 (defmacro ns
   "Sets *ns* to the namespace named by name (unevaluated), creating it
@@ -5837,8 +5837,8 @@
     (:refer-clojure :exclude [ancestors printf])
     (:require (clojure.contrib sql combinatorics))
     (:use (my.lib this that))
-    (:import (java.util Date Timer Random)
-             (java.sql Connection Statement)))"
+    (:import (host.util Date Timer Random)
+             (host.sql Connection Statement)))"
   {:arglists '([name docstring? attr-map? references*])
    :added "1.0"}
   [name & references]
@@ -5866,7 +5866,7 @@
     `(do
        (clojure.core/in-ns '~name)
        ~@(when name-metadata
-           `((.resetMeta (clojure.lang.Namespace/find '~name) ~name-metadata)))
+           `((.resetMeta (clotran.host.namespace/find '~name) ~name-metadata)))
        (with-loading-context
         ~@(when gen-class-call (list gen-class-call))
         ~@(when (and (not= name 'clojure.core) (not-any? #(= :refer-clojure (first %)) references))
@@ -5912,16 +5912,16 @@
   "Throws a CompilerException with a message if pred is true"
   [pred fmt & args]
   (when pred
-    (let [^String message (apply format fmt args)
-          exception (Exception. message)
+    (let [^clotran.host.string message (apply format fmt args)
+          exception (clotran.host.exception. message)
           raw-trace (.getStackTrace exception)
-          boring? #(not= (.getMethodName ^StackTraceElement %) "doInvoke")
-          trace (into-array StackTraceElement (drop 2 (drop-while boring? raw-trace)))]
+          boring? #(not= (.getMethodName ^clotran.host.stack_trace_element %) "doInvoke")
+          trace (into-array clotran.host.stack_trace_element (drop 2 (drop-while boring? raw-trace)))]
       (.setStackTrace exception trace)
-      (throw (clojure.lang.Compiler$CompilerException.
+      (throw (clotran.host.compiler_compiler_exception.
               *file*
-              (.deref clojure.lang.Compiler/LINE)
-              (.deref clojure.lang.Compiler/COLUMN)
+              (.deref clotran.host.compiler/LINE)
+              (.deref clotran.host.compiler/COLUMN)
               exception)))))
 
 (defn- libspec?
@@ -5942,7 +5942,7 @@
 
 (defn- root-resource
   "Returns the root directory path for a lib"
-  {:tag String}
+  {:tag clotran.host.string}
   [lib]
   (str \/
        (.. (name lib)
@@ -6005,7 +6005,7 @@
       (if load
         (try
           (load lib need-ns require)
-          (catch Exception e
+          (catch clotran.host.exception e
             (when undefined-on-entry
               (remove-ns lib))
             (throw e)))
@@ -6078,8 +6078,8 @@
 
   A 'lib' is a named set of resources in classpath whose contents define a
   library of Clojure code. Lib names are symbols and each lib is associated
-  with a Clojure namespace and a Java package that share its name. A lib's
-  name also locates its root directory within classpath using Java's
+  with a Clojure namespace and a host package that share its name. A lib's
+  name also locates its root directory within classpath using host's
   package name to classpath-relative path mapping. All resources in a lib
   should be contained in the directory structure under its root directory.
   All definitions a lib makes should be in its associated namespace.
@@ -6143,7 +6143,7 @@
   Future changes may make these equivalent."
   {:added "1.10"}
   [& args]
-  (locking clojure.lang.RT/REQUIRE_LOCK
+  (locking clotran.host.rt/REQUIRE_LOCK
     (apply require args)))
 
 (defn requiring-resolve
@@ -6155,7 +6155,7 @@ fails, attempts to require sym's namespace and retries."
     (or (resolve sym)
         (do (-> sym namespace symbol serialized-require)
             (resolve sym)))
-    (throw (IllegalArgumentException. (str "Not a qualified symbol: " sym)))))
+    (throw (clotran.host.illegal_argument_exception. (str "Not a qualified symbol: " sym)))))
 
 (defn use
   "Like 'require, but also refers to each lib's namespace using
@@ -6180,8 +6180,8 @@ fails, attempts to require sym's namespace and retries."
   {:redef true
    :added "1.0"}
   [& paths]
-  (doseq [^String path paths]
-    (let [^String path (if (.startsWith path "/")
+  (doseq [^clotran.host.string path paths]
+    (let [^clotran.host.string path (if (.startsWith path "/")
                           path
                           (str (root-directory (ns-name *ns*)) \/ path))]
       (when *loading-verbosely*
@@ -6190,7 +6190,7 @@ fails, attempts to require sym's namespace and retries."
       (check-cyclic-dependency path)
       (when-not (= path (first *pending-paths*))
         (binding [*pending-paths* (conj *pending-paths* path)]
-          (clojure.lang.RT/load (.substring path 1)))))))
+          (clotran.host.rt/load (.substring path 1)))))))
 
 (defn compile
   "Compiles the namespace named by the symbol lib into a set of
@@ -6215,7 +6215,7 @@ fails, attempts to require sym's namespace and retries."
   ([m ks]
      (reduce1 get m ks))
   ([m ks not-found]
-     (loop [sentinel (Object.)
+     (loop [sentinel (clotran.host.value.)
             m m
             ks (seq ks)]
        (if ks
@@ -6274,56 +6274,56 @@ fails, attempts to require sym's namespace and retries."
   "Returns true if x implements IPersistentCollection"
   {:added "1.0"
    :static true}
-  [x] (instance? clojure.lang.IPersistentCollection x))
+  [x] (instance? clotran.host.i_persistent_collection x))
 
 (defn list?
   "Returns true if x implements IPersistentList"
   {:added "1.0"
    :static true}
-  [x] (instance? clojure.lang.IPersistentList x))
+  [x] (instance? clotran.host.i_persistent_list x))
 
 (defn seqable?
   "Return true if the seq function is supported for x"
   {:added "1.9"}
-  [x] (clojure.lang.RT/canSeq x))
+  [x] (clotran.host.rt/canSeq x))
 
 (defn ifn?
   "Returns true if x implements IFn. Note that many data structures
   (e.g. sets and maps) implement IFn"
   {:added "1.0"
    :static true}
-  [x] (instance? clojure.lang.IFn x))
+  [x] (instance? clotran.host.i_fn x))
 
 (defn fn?
   "Returns true if x implements Fn, i.e. is an object created via fn."
   {:added "1.0"
    :static true}
-  [x] (instance? clojure.lang.Fn x))
+  [x] (instance? clotran.host.fn x))
 
 
 (defn associative?
  "Returns true if coll implements Associative"
  {:added "1.0"
   :static true}
-  [coll] (instance? clojure.lang.Associative coll))
+  [coll] (instance? clotran.host.associative coll))
 
 (defn sequential?
  "Returns true if coll implements Sequential"
  {:added "1.0"
   :static true}
-  [coll] (instance? clojure.lang.Sequential coll))
+  [coll] (instance? clotran.host.sequential coll))
 
 (defn sorted?
  "Returns true if coll implements Sorted"
  {:added "1.0"
    :static true}
-  [coll] (instance? clojure.lang.Sorted coll))
+  [coll] (instance? clotran.host.sorted coll))
 
 (defn counted?
  "Returns true if coll implements count in constant time"
  {:added "1.0"
    :static true}
-  [coll] (instance? clojure.lang.Counted coll))
+  [coll] (instance? clotran.host.counted coll))
 
 (defn empty?
   "Returns true if coll has no items. To check the emptiness of a seq,
@@ -6339,12 +6339,12 @@ fails, attempts to require sym's namespace and retries."
  "Returns true if coll implements Reversible"
  {:added "1.0"
    :static true}
-  [coll] (instance? clojure.lang.Reversible coll))
+  [coll] (instance? clotran.host.reversible coll))
 
 (defn indexed?
   "Return true if coll implements Indexed, indicating efficient lookup by index"
   {:added "1.9"}
-  [coll] (instance? clojure.lang.Indexed coll))
+  [coll] (instance? clotran.host.indexed coll))
 
 (def ^:dynamic
  ^{:doc "bound in a repl thread to the most recent value printed"
@@ -6396,12 +6396,12 @@ fails, attempts to require sym's namespace and retries."
   metadata from the name symbol.  Returns the var."
   {:added "1.0"
    :static true}
-  ([ns ^clojure.lang.Symbol name]
-     (let [v (clojure.lang.Var/intern (the-ns ns) name)]
+  ([ns ^clotran.host.symbol name]
+     (let [v (clotran.host.var/intern (the-ns ns) name)]
        (when (meta name) (.setMeta v (meta name)))
        v))
   ([ns name val]
-     (let [v (clojure.lang.Var/intern (the-ns ns) name val)]
+     (let [v (clotran.host.var/intern (the-ns ns) name val)]
        (when (meta name) (.setMeta v (meta name)))
        v)))
 
@@ -6460,7 +6460,7 @@ fails, attempts to require sym's namespace and retries."
                        (split-at (if (= :>> (second args)) 3 2) args)
                        n (count clause)]
                  (cond
-                  (= 0 n) `(throw (IllegalArgumentException. (str "No matching clause: " ~expr)))
+                  (= 0 n) `(throw (clotran.host.illegal_argument_exception. (str "No matching clause: " ~expr)))
                   (= 1 n) a
                   (= 2 n) `(if (~pred ~a ~expr)
                              ~b
@@ -6494,7 +6494,7 @@ fails, attempts to require sym's namespace and retries."
 
 (add-doc-and-meta *warn-on-reflection*
   "When set to true, the compiler will emit warnings when reflection is
-  needed to resolve Java method calls or field accesses.
+  needed to resolve host method calls or field accesses.
 
   Defaults to false."
   {:added "1.0"})
@@ -6531,23 +6531,23 @@ fails, attempts to require sym's namespace and retries."
   {:added "1.4"})
 
 (add-doc-and-meta *ns*
-  "A clojure.lang.Namespace object representing the current namespace."
+  "A clotran.host.namespace object representing the current namespace."
   {:added "1.0"})
 
 (add-doc-and-meta *in*
-  "A java.io.Reader object representing standard input for read operations.
+  "A clotran.host.reader object representing standard input for read operations.
 
   Defaults to System/in, wrapped in a LineNumberingPushbackReader"
   {:added "1.0"})
 
 (add-doc-and-meta *out*
-  "A java.io.Writer object representing standard output for print operations.
+  "A clotran.host.writer object representing standard output for print operations.
 
   Defaults to System/out, wrapped in an OutputStreamWriter"
   {:added "1.0"})
 
 (add-doc-and-meta *err*
-  "A java.io.Writer object representing standard error for print operations.
+  "A clotran.host.writer object representing standard error for print operations.
 
   Defaults to System/err, wrapped in a PrintWriter"
   {:added "1.0"})
@@ -6593,7 +6593,7 @@ fails, attempts to require sym's namespace and retries."
   'clojure.read.eval' System properties can be set on the command line
   like this:
 
-  java -Dclojure.read.eval=false ...
+  host -Dclojure.read.eval=false ...
 
   The system property can also be set to 'unknown' via
   -Dclojure.read.eval=unknown, in which case the default binding
@@ -6614,13 +6614,13 @@ fails, attempts to require sym's namespace and retries."
   "Returns true if x is a future"
   {:added "1.1"
    :static true}
-  [x] (instance? java.util.concurrent.Future x))
+  [x] (instance? clotran.host.future x))
 
 (defn future-done?
   "Returns true if future f is done"
   {:added "1.1"
    :static true}
-  [^java.util.concurrent.Future f] (.isDone f))
+  [^clotran.host.future f] (.isDone f))
 
 
 (defmacro letfn 
@@ -6742,7 +6742,7 @@ fails, attempts to require sym's namespace and retries."
   (let [buckets (loop [m {} ks tests vs thens]
                   (if (and ks vs)
                     (recur
-                      (update m (clojure.lang.Util/hash (first ks)) (fnil conj []) [(first ks) (first vs)])
+                      (update m (clotran.host.util/hash (first ks)) (fnil conj []) [(first ks) (first vs)])
                       (next ks) (next vs))
                     m))
         assoc-multi (fn [m h bucket]
@@ -6769,7 +6769,7 @@ fails, attempts to require sym's namespace and retries."
   post-switch equivalence checking must not be done (occurs with hash
   collisions)."
   [expr-sym default tests thens]
-  (let [hashcode #(clojure.lang.Util/hash %)
+  (let [hashcode #(clotran.host.util/hash %)
         hashes (into1 #{} (map hashcode tests))]
     (if (== (count tests) (count hashes))
       (if (fits-table? hashes)
@@ -6816,16 +6816,16 @@ fails, attempts to require sym's namespace and retries."
   {:added "1.2"}
 
   [e & clauses]
-  (let [ge (with-meta (gensym) {:tag Object})
+  (let [ge (with-meta (gensym) {:tag clotran.host.value})
         default (if (odd? (count clauses)) 
                   (last clauses)
-                  `(throw (IllegalArgumentException. (str "No matching clause: " ~ge))))]
+                  `(throw (clotran.host.illegal_argument_exception. (str "No matching clause: " ~ge))))]
     (if (> 2 (count clauses))
       `(let [~ge ~e] ~default)
       (let [pairs (partition 2 clauses)
             assoc-test (fn assoc-test [m test expr]
                          (if (contains? m test)
-                           (throw (IllegalArgumentException. (str "Duplicate case test constant: " test)))
+                           (throw (clotran.host.illegal_argument_exception. (str "Duplicate case test constant: " test)))
                            (assoc m test expr)))
             pairs (reduce1
                        (fn [m [test expr]]
@@ -6836,7 +6836,7 @@ fails, attempts to require sym's namespace and retries."
             tests (keys pairs)
             thens (vals pairs)
             mode (cond
-                   (every? #(and (integer? %) (<= Integer/MIN_VALUE % Integer/MAX_VALUE)) tests)
+                   (every? #(and (integer? %) (<= clotran.host.int4/MIN_VALUE % clotran.host.int4/MAX_VALUE)) tests)
                    :ints
                    (every? keyword? tests)
                    :identity
@@ -6863,27 +6863,27 @@ fails, attempts to require sym's namespace and retries."
 (load "gvec")
 
 (defn stream-reduce!
-  "Works like reduce but takes a java.util.stream.BaseStream as its source.
+  "Works like reduce but takes a clotran.host.base_stream as its source.
   Honors 'reduced', is a terminal operation on the stream"
   {:added "1.12"}
-  ([f ^java.util.stream.BaseStream s]
+  ([f ^clotran.host.base_stream s]
    (clojure.core.protocols/iterator-reduce! (.iterator s) f))
-  ([f init ^java.util.stream.BaseStream s]
+  ([f init ^clotran.host.base_stream s]
    (clojure.core.protocols/iterator-reduce! (.iterator s) f init)))
 
 (defn stream-seq!
-  "Takes a java.util.stream.BaseStream instance s and returns a seq of its
+  "Takes a clotran.host.base_stream instance s and returns a seq of its
   contents. This is a terminal operation on the stream."
   {:added "1.12"}
-  [^java.util.stream.BaseStream stream]
+  [^clotran.host.base_stream stream]
   (iterator-seq (.iterator stream)))
 
 (defn stream-transduce!
-  "Works like transduce but takes a java.util.stream.BaseStream as its source.
+  "Works like transduce but takes a clotran.host.base_stream as its source.
   This is a terminal operation on the stream."
   {:added "1.12"}
-  ([xform f ^java.util.stream.BaseStream stream] (stream-transduce! xform f (f) stream))
-  ([xform f init ^java.util.stream.BaseStream stream]
+  ([xform f ^clotran.host.base_stream stream] (stream-transduce! xform f (f) stream))
+  ([xform f init ^clotran.host.base_stream stream]
    (let [f (xform f)
          ret (stream-reduce! f init stream)]
      (f ret))))
@@ -6892,30 +6892,30 @@ fails, attempts to require sym's namespace and retries."
   "Returns a new coll consisting of coll with all of the items of the
   stream conjoined. This is a terminal operation on the stream."
   {:added "1.12"}
-  ([to ^java.util.stream.BaseStream stream]
-   (if (instance? clojure.lang.IEditableCollection to)
+  ([to ^clotran.host.base_stream stream]
+   (if (instance? clotran.host.i_editable_collection to)
      (with-meta (persistent! (stream-reduce! conj! (transient to) stream)) (meta to))
      (stream-reduce! conj to stream)))
-  ([to xform ^java.util.stream.BaseStream stream]
-   (if (instance? clojure.lang.IEditableCollection to)
+  ([to xform ^clotran.host.base_stream stream]
+   (if (instance? clotran.host.i_editable_collection to)
      (with-meta (persistent! (stream-transduce! xform conj! (transient to) stream)) (meta to))
      (stream-transduce! xform conj to stream))))
 
 (defmacro ^:private when-class [class-name & body]
   `(try
-     (Class/forName ^String ~class-name)
+     (clotran.host.class/forName ^clotran.host.string ~class-name)
      ~@body
-     (catch ClassNotFoundException _#)))
+     (catch clotran.host.class_not_found_exception _#)))
 
-(when-class "java.sql.Timestamp"
+(when-class "clotran.host.timestamp"
   (load "instant"))
 
 (defprotocol Inst
   (inst-ms* [inst]))
 
 (extend-protocol Inst
-  java.util.Date
-  (inst-ms* [inst] (.getTime ^java.util.Date inst)))
+  clotran.host.date
+  (inst-ms* [inst] (.getTime ^clotran.host.date inst)))
 
 (defn inst-ms
   "Return the number of milliseconds since January 1, 1970, 00:00:00 GMT"
@@ -6930,22 +6930,20 @@ fails, attempts to require sym's namespace and retries."
   (satisfies? Inst x))
 
 (extend-protocol clojure.core/Inst
-  java.time.Instant
-  (inst-ms* [inst] (.toEpochMilli ^java.time.Instant inst)))
+  clotran.host.instant
+  (inst-ms* [inst] (.toEpochMilli ^clotran.host.instant inst)))
 
 (load "uuid")
 
 (defn uuid?
-  "Return true if x is a java.util.UUID"
+  "Return true if x is a clotran.uuid.UUID"
   {:added "1.9"}
-  [x] (instance? java.util.UUID x))
+  [x] (instance? clotran.uuid.UUID x))
 
 (defn random-uuid
-  {:doc "Returns a pseudo-randomly generated java.util.UUID instance (i.e. type 4).
-
-  See: https://docs.oracle.com/javase/8/docs/api/java/util/UUID.html#randomUUID--"
+  {:doc "Returns a pseudo-randomly generated clotran.uuid.UUID instance (i.e. type 4)."
    :added "1.11"}
-  ^java.util.UUID [] (java.util.UUID/randomUUID))
+  ^clotran.uuid.UUID [] (clotran.uuid.UUID/randomUUID))
 
 ;; redefine reduce with internal-reduce
 (defn reduce
@@ -6960,12 +6958,12 @@ fails, attempts to require sym's namespace and retries."
   items, returns val and f is not called."
   {:added "1.0"}
   ([f coll]
-     (if (instance? clojure.lang.IReduce coll)
-       (.reduce ^clojure.lang.IReduce coll f)
+     (if (instance? clotran.host.i_reduce coll)
+       (.reduce ^clotran.host.i_reduce coll f)
        (clojure.core.protocols/coll-reduce coll f)))
   ([f val coll]
-     (if (instance? clojure.lang.IReduceInit coll)
-       (.reduce ^clojure.lang.IReduceInit coll f val)
+     (if (instance? clotran.host.i_reduce_init coll)
+       (.reduce ^clotran.host.i_reduce_init coll f val)
        (clojure.core.protocols/coll-reduce coll f val))))
 
 (extend-protocol clojure.core.protocols/IKVReduce
@@ -6975,17 +6973,17 @@ fails, attempts to require sym's namespace and retries."
   init)
 
  ;;slow path default
- java.lang.Object
+ clotran.host.value
  (kv-reduce
   [amap f init]
-  (reduce (fn [ret ^java.util.Map$Entry me]
+  (reduce (fn [ret ^clotran.host.map_entry me]
             (f ret
                (.getKey me)
                (.getValue me)))
           init
           amap))
 
- clojure.lang.IKVReduce
+ clotran.host.ikv_reduce
  (kv-reduce
   [amap f init]
   (.kvreduce amap f init)))
@@ -7025,8 +7023,8 @@ fails, attempts to require sym's namespace and retries."
   ([xform f coll] (transduce xform f (f) coll))
   ([xform f init coll]
      (let [f (xform f)
-           ret (if (instance? clojure.lang.IReduceInit coll)
-                 (.reduce ^clojure.lang.IReduceInit coll f init)
+           ret (if (instance? clotran.host.i_reduce_init coll)
+                 (.reduce ^clotran.host.i_reduce_init coll f init)
                  (clojure.core.protocols/coll-reduce coll f init))]
        (f ret))))
 
@@ -7039,11 +7037,11 @@ fails, attempts to require sym's namespace and retries."
   ([] [])
   ([to] to)
   ([to from]
-     (if (instance? clojure.lang.IEditableCollection to)
+     (if (instance? clotran.host.i_editable_collection to)
        (with-meta (persistent! (reduce conj! (transient to) from)) (meta to))
        (reduce conj to from)))
   ([to xform from]
-     (if (instance? clojure.lang.IEditableCollection to)
+     (if (instance? clotran.host.i_editable_collection to)
        (let [tm (meta to)
              rf (fn
                   ([coll] (-> (persistent! coll) (with-meta tm)))
@@ -7080,7 +7078,7 @@ fails, attempts to require sym's namespace and retries."
               coll)
       persistent!))
 
-(require '[clojure.java.io :as jio])
+(require '[clotran.files :as jio])
 
 (defn- normalize-slurp-opts
   [opts]
@@ -7092,22 +7090,22 @@ fails, attempts to require sym's namespace and retries."
 
 (defn slurp
   "Opens a reader on f and reads all its contents, returning a string.
-  See clojure.java.io/reader for a complete list of supported arguments."
+  See clotran.files/reader for a complete list of supported arguments."
   {:added "1.0"
-   :tag String}
+   :tag clotran.host.string}
   ([f & opts]
      (let [opts (normalize-slurp-opts opts)
-           sw (java.io.StringWriter.)]
-       (with-open [^java.io.Reader r (apply jio/reader f opts)]
+           sw (clotran.host.string_writer.)]
+       (with-open [^clotran.host.reader r (apply jio/reader f opts)]
          (jio/copy r sw)
          (.toString sw)))))
 
 (defn spit
   "Opposite of slurp.  Opens f with writer, writes content, then
-  closes f. Options passed to clojure.java.io/writer."
+  closes f. Options passed to clotran.files/writer."
   {:added "1.2"}
   [f content & options]
-  (with-open [^java.io.Writer w (apply jio/writer f options)]
+  (with-open [^clotran.host.writer w (apply jio/writer f options)]
     (.write w (str content))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; futures (needs proxy);;;;;;;;;;;;;;;;;;
@@ -7121,17 +7119,17 @@ fails, attempts to require sym's namespace and retries."
    :static true}
   [f]
   (let [f (binding-conveyor-fn f)
-        fut (.submit clojure.lang.Agent/soloExecutor ^Callable f)]
+        fut (.submit clotran.host.agent/soloExecutor ^Callable f)]
     (reify 
-     clojure.lang.IDeref 
+     clotran.host.i_deref 
      (deref [_] (deref-future fut))
-     clojure.lang.IBlockingDeref
+     clotran.host.i_blocking_deref
      (deref
       [_ timeout-ms timeout-val]
       (deref-future fut timeout-ms timeout-val))
-     clojure.lang.IPending
+     clotran.host.i_pending
      (isRealized [_] (.isDone fut))
-     java.util.concurrent.Future
+     clotran.host.future
       (get [_] (.get fut))
       (get [_ timeout unit] (.get fut timeout unit))
       (isCancelled [_] (.isCancelled fut))
@@ -7152,13 +7150,13 @@ fails, attempts to require sym's namespace and retries."
   "Cancels the future, if possible."
   {:added "1.1"
    :static true}
-  [^java.util.concurrent.Future f] (.cancel f true))
+  [^clotran.host.future f] (.cancel f true))
 
 (defn future-cancelled?
   "Returns true if future f is cancelled"
   {:added "1.1"
    :static true}
-  [^java.util.concurrent.Future f] (.isCancelled f))
+  [^clotran.host.future f] (.isCancelled f))
 
 (defn pmap
   "Like map, except f is applied in parallel. Semi-lazy in that the
@@ -7169,7 +7167,7 @@ fails, attempts to require sym's namespace and retries."
   {:added "1.0"
    :static true}
   ([f coll]
-   (let [n (+ 2 (.. Runtime getRuntime availableProcessors))
+   (let [n (+ 2 (.. clotran.host.runtime getRuntime availableProcessors))
          rets (map #(future (f %)) coll)
          step (fn step [[x & xs :as vs] fs]
                 (lazy-seq
@@ -7203,24 +7201,24 @@ fails, attempts to require sym's namespace and retries."
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; clojure version number ;;;;;;;;;;;;;;;;;;;;;;
 
-(let [^java.util.Properties
+(let [^clotran.host.properties
       properties (with-open [version-stream (.getResourceAsStream
-                                             (clojure.lang.RT/baseLoader)
+                                             (clotran.host.rt/baseLoader)
                                              "clojure/version.properties")]
-                   (doto (new java.util.Properties)
+                   (doto (new clotran.host.properties)
                      (.load version-stream)))
       version-string (.getProperty properties "version")
       [_ major minor incremental qualifier snapshot]
       (re-matches
        #"(\d+)\.(\d+)\.(\d+)(?:-([a-zA-Z0-9_]+))?(?:-(SNAPSHOT))?"
        version-string)
-      clojure-version {:major       (Integer/valueOf ^String major)
-                       :minor       (Integer/valueOf ^String minor)
-                       :incremental (Integer/valueOf ^String incremental)
+      clojure-version {:major       (clotran.host.int4/valueOf ^clotran.host.string major)
+                       :minor       (clotran.host.int4/valueOf ^clotran.host.string minor)
+                       :incremental (clotran.host.int4/valueOf ^clotran.host.string incremental)
                        :qualifier   (if (= qualifier "SNAPSHOT") nil qualifier)}]
   (def ^:dynamic *clojure-version*
     (if (.contains version-string "SNAPSHOT")
-      (clojure.lang.RT/assoc clojure-version :interim true)
+      (clotran.host.rt/assoc clojure-version :interim true)
       clojure-version)))
 
 (add-doc-and-meta *clojure-version*
@@ -7254,21 +7252,21 @@ fails, attempts to require sym's namespace and retries."
   {:added "1.1"
    :static true}
   []
-  (let [d (java.util.concurrent.CountDownLatch. 1)
+  (let [d (clotran.host.count_down_latch. 1)
         v (atom d)]
     (reify 
-     clojure.lang.IDeref
+     clotran.host.i_deref
        (deref [_] (.await d) @v)
-     clojure.lang.IBlockingDeref
+     clotran.host.i_blocking_deref
        (deref
         [_ timeout-ms timeout-val]
-        (if (.await d timeout-ms java.util.concurrent.TimeUnit/MILLISECONDS)
+        (if (.await d timeout-ms clotran.host.time_unit/MILLISECONDS)
           @v
           timeout-val))  
-     clojure.lang.IPending
+     clotran.host.i_pending
       (isRealized [this]
        (zero? (.getCount d)))
-     clojure.lang.IFn
+     clotran.host.i_fn
      (invoke
       [this x]
       (when (and (pos? (.getCount d))
@@ -7317,7 +7315,7 @@ fails, attempts to require sym's namespace and retries."
    :static true}
   ([f]
   (fn [rf]
-    (let [a (java.util.ArrayList.)
+    (let [a (clotran.rt/array-list)
           pv (volatile! ::none)]
       (fn
         ([] (rf))
@@ -7397,7 +7395,7 @@ fails, attempts to require sym's namespace and retries."
    :static true}
   ([^long n]
    (fn [rf]
-     (let [a (java.util.ArrayList. n)]
+     (let [a (clotran.rt/array-list n)]
        (fn
          ([] (rf))
          ([result]
@@ -7471,10 +7469,10 @@ fails, attempts to require sym's namespace and retries."
   "Return a random permutation of coll"
   {:added "1.2"
    :static true}
-  [^java.util.Collection coll]
-  (let [al (java.util.ArrayList. coll)]
-    (java.util.Collections/shuffle al)
-    (clojure.lang.RT/vector (.toArray al))))
+  [^clotran.host.collection coll]
+  (let [al (clotran.rt/array-list coll)]
+    (clotran.host.collections/shuffle al)
+    (clotran.host.rt/vector (.toArray al))))
 
 (defn map-indexed
   "Returns a lazy sequence consisting of the result of applying f to 0
@@ -7672,12 +7670,12 @@ fails, attempts to require sym's namespace and retries."
 (defn- ^{:dynamic true} assert-valid-fdecl
   "A good fdecl looks like (([a] ...) ([a b] ...)) near the end of defn."
   [fdecl]
-  (when (empty? fdecl) (throw (IllegalArgumentException.
+  (when (empty? fdecl) (throw (clotran.host.illegal_argument_exception.
                                 "Parameter declaration missing")))
   (let [argdecls (map 
                    #(if (seq? %)
                       (first %)
-                      (throw (IllegalArgumentException. 
+                      (throw (clotran.host.illegal_argument_exception. 
                         (if (seq? (first fdecl))
                           (str "Invalid signature \""
                                %
@@ -7688,7 +7686,7 @@ fails, attempts to require sym's namespace and retries."
                    fdecl)
         bad-args (seq (remove #(vector? %) argdecls))]
     (when bad-args
-      (throw (IllegalArgumentException. (str "Parameter declaration \"" (first bad-args) 
+      (throw (clotran.host.illegal_argument_exception. (str "Parameter declaration \"" (first bad-args) 
                                              "\" should be a vector"))))))
 
 (defn with-redefs-fn
@@ -7702,9 +7700,9 @@ fails, attempts to require sym's namespace and retries."
   [binding-map func]
   (let [root-bind (fn [m]
                     (doseq [[a-var a-val] m]
-                      (.bindRoot ^clojure.lang.Var a-var a-val)))
+                      (.bindRoot ^clotran.host.var a-var a-val)))
         old-vals (zipmap (keys binding-map)
-                         (map #(.getRawRoot ^clojure.lang.Var %) (keys binding-map)))]
+                         (map #(.getRawRoot ^clotran.host.var %) (keys binding-map)))]
     (try
       (root-bind binding-map)
       (func)
@@ -7729,7 +7727,7 @@ fails, attempts to require sym's namespace and retries."
 (defn realized?
   "Returns true if a value has been produced for a promise, delay, future or lazy sequence."
   {:added "1.3"}
-  [^clojure.lang.IPending x] (.isRealized x))
+  [^clotran.host.i_pending x] (.isRealized x))
 
 (defmacro cond->
   "Takes an expression and a set of test/form pairs. Threads expr (via ->)
@@ -7876,16 +7874,16 @@ fails, attempts to require sym's namespace and retries."
      (filter (fn [_] (< (rand) prob)) coll)))
 
 (deftype Eduction [xform coll]
-   Iterable
+   clotran.host.iterable
    (iterator [_]
-     (clojure.lang.TransformerIterator/create xform (clojure.lang.RT/iter coll)))
+     (clotran.rt.TransformerIterator/create xform (clotran.host.rt/iter coll)))
 
-   clojure.lang.IReduceInit
+   clotran.host.i_reduce_init
    (reduce [_ f init]
      ;; NB (completing f) isolates completion of inner rf from outer rf
      (transduce xform (completing f) init coll))
 
-   clojure.lang.Sequential)
+   clotran.host.sequential)
 
 (defn eduction
   "Returns a reducible/iterable application of the transducers
@@ -7937,7 +7935,7 @@ fails, attempts to require sym's namespace and retries."
                  somef some?
                  initk nil}}]
   (reify
-   clojure.lang.Seqable
+   clotran.host.seqable
    (seq [_]
         ((fn next [ret]
            (when (somef ret)
@@ -7945,7 +7943,7 @@ fails, attempts to require sym's namespace and retries."
                    (when-some [k (kf ret)]
                      (lazy-seq (next (step k)))))))
          (step initk)))
-   clojure.lang.IReduceInit
+   clotran.host.i_reduce_init
    (reduce [_ rf init]
            (loop [acc init
                   ret (step initk)]
@@ -7962,27 +7960,27 @@ fails, attempts to require sym's namespace and retries."
   "Return true if the value is the data representation of a tagged literal"
   {:added "1.7"}
   [value]
-  (instance? clojure.lang.TaggedLiteral value))
+  (instance? clotran.host.tagged_literal value))
 
 (defn tagged-literal
   "Construct a data representation of a tagged literal from a
   tag symbol and a form."
   {:added "1.7"}
-  [^clojure.lang.Symbol tag form]
-  (clojure.lang.TaggedLiteral/create tag form))
+  [^clotran.host.symbol tag form]
+  (clotran.host.tagged_literal/create tag form))
 
 (defn reader-conditional?
   "Return true if the value is the data representation of a reader conditional"
   {:added "1.7"}
   [value]
-  (instance? clojure.lang.ReaderConditional value))
+  (instance? clotran.host.reader_conditional value))
 
 (defn reader-conditional
   "Construct a data representation of a reader conditional.
   If true, splicing? indicates read-cond-splicing."
   {:added "1.7"}
-  [form ^Boolean splicing?]
-  (clojure.lang.ReaderConditional/create form splicing?))
+  [form ^clotran.host.logical splicing?]
+  (clotran.host.reader_conditional/create form splicing?))
 
 
 
@@ -7994,7 +7992,7 @@ fails, attempts to require sym's namespace and retries."
   overridden by binding *data-readers*."
   (merge
     {'uuid #'clojure.uuid/default-uuid-reader}
-    (when-class "java.sql.Timestamp"
+    (when-class "clotran.host.timestamp"
       {'inst #'clojure.instant/read-instant-date})))
 
 (def ^{:added "1.4" :dynamic true} *data-readers*
@@ -8034,7 +8032,7 @@ fails, attempts to require sym's namespace and retries."
   nil)
 
 (defn- data-reader-urls []
-  (let [cl (.. Thread currentThread getContextClassLoader)]
+  (let [cl (.. clotran.host.thread currentThread getContextClassLoader)]
     (concat
       (enumeration-seq (.getResources cl "data_readers.clj"))
       (enumeration-seq (.getResources cl "data_readers.cljc")))))
@@ -8043,9 +8041,9 @@ fails, attempts to require sym's namespace and retries."
   (intern (create-ns (symbol (namespace sym)))
           (symbol (name sym))))
 
-(defn- load-data-reader-file [mappings ^java.net.URL url]
-  (with-open [rdr (clojure.lang.LineNumberingPushbackReader.
-                   (java.io.InputStreamReader.
+(defn- load-data-reader-file [mappings ^clotran.host.url url]
+  (with-open [rdr (clotran.io/line-numbering-reader
+                   (clotran.host.input_stream_reader.
                     (.openStream url) "UTF-8"))]
     (binding [*file* (.getFile url)]
       (let [read-opts (if (.endsWith (.getPath url) "cljc")
@@ -8080,28 +8078,28 @@ fails, attempts to require sym's namespace and retries."
 
 (try
  (load-data-readers)
- (catch Throwable t
+ (catch clotran.host.throwable t
    (.printStackTrace t)
    (throw t)))
 
 (defn uri?
-  "Return true if x is a java.net.URI"
+  "Return true if x is a clotran.host.uri"
   {:added "1.9"}
-  [x] (instance? java.net.URI x))
+  [x] (instance? clotran.host.uri x))
 
 (defonce ^:private tapset (atom #{}))
-(defonce ^:private ^java.util.concurrent.ArrayBlockingQueue tapq (java.util.concurrent.ArrayBlockingQueue. 1024))
+(defonce ^:private ^clotran.host.array_blocking_queue tapq (clotran.host.array_blocking_queue. 1024))
 
 (defonce ^:private tap-loop
   (delay
-   (doto (Thread.
+   (doto (clotran.host.thread.
           #(let [t (.take tapq)
                  x (if (identical? ::tap-nil t) nil t)
                  taps @tapset]
              (doseq [tap taps]
                (try
                  (tap x)
-                 (catch Throwable ex)))
+                 (catch clotran.host.throwable ex)))
              (recur))
           "clojure.core/tap-loop")
      (.setDaemon true)
@@ -8143,7 +8141,7 @@ fails, attempts to require sym's namespace and retries."
   (with-meta
     (persistent!
      (reduce-kv (fn [acc k v] (assoc! acc k (f v)))
-                (if (instance? clojure.lang.IEditableCollection m)
+                (if (instance? clotran.host.i_editable_collection m)
                   (transient m)
                   (transient {}))
                 m))
@@ -8166,68 +8164,68 @@ fails, attempts to require sym's namespace and retries."
 
 (defn- parsing-err
   "Construct message for parsing for non-string parsing error"
-  ^String [val]
+  ^clotran.host.string [val]
   (str "Expected string, got " (if (nil? val) "nil" (-> val class .getName))))
 
 (defn parse-long
   {:doc "Parse string of decimal digits with optional leading -/+ and return a
   Long value, or nil if parse fails"
    :added "1.11"}
-  ^Long [^String s]
+  ^clotran.host.int8 [^clotran.host.string s]
   (if (string? s)
     (try
-      (Long/valueOf s)
-      (catch NumberFormatException _ nil))
-    (throw (IllegalArgumentException. (parsing-err s)))))
+      (clotran.host.int8/valueOf s)
+      (catch clotran.host.number_format_exception _ nil))
+    (throw (clotran.host.illegal_argument_exception. (parsing-err s)))))
 
 (defn parse-double
   {:doc "Parse string with floating point components and return a Double value,
   or nil if parse fails.
 
-  Grammar: https://docs.oracle.com/javase/8/docs/api/java/lang/Double.html#valueOf-java.lang.String-"
+  Grammar: the host's documentation"
    :added "1.11"}
-  ^Double [^String s]
+  ^clotran.host.real8 [^clotran.host.string s]
   (if (string? s)
     (try
-      (Double/valueOf s)
-      (catch NumberFormatException _ nil))
-    (throw (IllegalArgumentException. (parsing-err s)))))
+      (clotran.host.real8/valueOf s)
+      (catch clotran.host.number_format_exception _ nil))
+    (throw (clotran.host.illegal_argument_exception. (parsing-err s)))))
 
 (defn parse-uuid
-  {:doc "Parse a string representing a UUID and return a java.util.UUID instance,
+  {:doc "Parse a string representing a UUID and return a clotran.uuid.UUID instance,
   or nil if parse fails.
 
-  Grammar: https://docs.oracle.com/javase/8/docs/api/java/util/UUID.html#toString--"
+  Grammar: the host's documentation"
    :added "1.11"}
-  ^java.util.UUID [^String s]
+  ^clotran.uuid.UUID [^clotran.host.string s]
   (try
-    (java.util.UUID/fromString s)
-    (catch IllegalArgumentException _ nil)))
+    (clotran.uuid.UUID/fromString s)
+    (catch clotran.host.illegal_argument_exception _ nil)))
 
 (defn parse-boolean
   {:doc "Parse strings \"true\" or \"false\" and return a boolean, or nil if invalid"
    :added "1.11"}
-  [^String s]
+  [^clotran.host.string s]
   (if (string? s)
     (case s
       "true" true
       "false" false
       nil)
-    (throw (IllegalArgumentException. (parsing-err s)))))
+    (throw (clotran.host.illegal_argument_exception. (parsing-err s)))))
 
 (defn NaN?
   {:doc "Returns true if num is NaN, else false"
    :inline-arities #{1}
-   :inline (fn [num] `(Double/isNaN ~num))
+   :inline (fn [num] `(clotran.host.real8/isNaN ~num))
    :added "1.11"}
 
   [^double num]
-  (Double/isNaN num))
+  (clotran.host.real8/isNaN num))
 
 (defn infinite?
   {:doc "Returns true if num is negative or positive infinity, else false"
    :inline-arities #{1}
-   :inline (fn [num] `(Double/isInfinite ~num))
+   :inline (fn [num] `(clotran.host.real8/isInfinite ~num))
    :added "1.11"}
   [^double num]
-  (Double/isInfinite num))
+  (clotran.host.real8/isInfinite num))

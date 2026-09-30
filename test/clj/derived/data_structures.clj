@@ -1,4 +1,4 @@
-;; DERIVED from test/clj/clojure/test_clojure/data_structures.clj by scripts/derive-tests -- do not edit.
+;; DERIVED from upstream/clojure/test/clojure/test_clojure/data_structures.clj by upstream/derive-tests -- do not edit.
 ;; Kept: tests whose symbols lie in the clojure.core/cljs.core intersection (plus concurrency).
 
 (ns clojure.test-clojure.data-structures (:use clojure.test) (:require [clojure.string :as string]))
@@ -27,8 +27,8 @@
 ;; data_structures.clj:269 [language]
 (deftest test-conj
   ; doesn't work on strings or arrays
-  (is (thrown? ClassCastException (conj "" \a)))
-  (is (thrown? ClassCastException (conj (into-array []) 1)))
+  (is (thrown? clotran.host.class_cast_exception (conj "" \a)))
+  (is (thrown? clotran.host.class_cast_exception (conj (into-array []) 1)))
 
   (are [x y] (= x y)
       (conj nil 1) '(1)
@@ -105,8 +105,8 @@
 ;; data_structures.clj:349 [language]
 (deftest test-peek
   ; doesn't work for sets and maps
-  (is (thrown? ClassCastException (peek #{1})))
-  (is (thrown? ClassCastException (peek {:a 1})))
+  (is (thrown? clotran.host.class_cast_exception (peek #{1})))
+  (is (thrown? clotran.host.class_cast_exception (peek {:a 1})))
 
   (are [x y] (= x y)
       (peek nil) nil
@@ -138,12 +138,12 @@
 ;; data_structures.clj:382 [language]
 (deftest test-pop
   ; doesn't work for sets and maps
-  (is (thrown? ClassCastException (pop #{1})))
-  (is (thrown? ClassCastException (pop #{:a 1})))
+  (is (thrown? clotran.host.class_cast_exception (pop #{1})))
+  (is (thrown? clotran.host.class_cast_exception (pop #{:a 1})))
 
   ; collection cannot be empty
-  (is (thrown? IllegalStateException (pop ())))
-  (is (thrown? IllegalStateException (pop [])))
+  (is (thrown? clotran.host.illegal_state_exception (pop ())))
+  (is (thrown? clotran.host.illegal_state_exception (pop [])))
 
   (are [x y] (= x y)
       (pop nil) nil
@@ -239,18 +239,18 @@
       (keys "") nil )
 
   (are [x y] (= x y)
-      ; (class {:a 1}) => clojure.lang.PersistentArrayMap
+      ; (class {:a 1}) => clotran.host.persistent_array_map
       (keys {}) nil
       (keys {:a 1}) '(:a)
       (keys {nil 1}) '(nil)
       (diff (keys {:a 1 :b 2}) '(:a :b)) nil              ; (keys {:a 1 :b 2}) '(:a :b)
 
-      ; (class (sorted-map :a 1)) => clojure.lang.PersistentTreeMap
+      ; (class (sorted-map :a 1)) => clotran.host.persistent_tree_map
       (keys (sorted-map)) nil
       (keys (sorted-map :a 1)) '(:a)
       (diff (keys (sorted-map :a 1 :b 2)) '(:a :b)) nil   ; (keys (sorted-map :a 1 :b 2)) '(:a :b)
 
-      ; (class (hash-map :a 1)) => clojure.lang.PersistentHashMap
+      ; (class (hash-map :a 1)) => clotran.host.persistent_hash_map
       (keys (hash-map)) nil
       (keys (hash-map :a 1)) '(:a)
       (diff (keys (hash-map :a 1 :b 2)) '(:a :b)) nil )   ; (keys (hash-map :a 1 :b 2)) '(:a :b)
@@ -268,18 +268,18 @@
       (vals "") nil )
 
   (are [x y] (= x y)
-      ; (class {:a 1}) => clojure.lang.PersistentArrayMap
+      ; (class {:a 1}) => clotran.host.persistent_array_map
       (vals {}) nil
       (vals {:a 1}) '(1)
       (vals {nil 1}) '(1)
       (diff (vals {:a 1 :b 2}) '(1 2)) nil              ; (vals {:a 1 :b 2}) '(1 2)
 
-      ; (class (sorted-map :a 1)) => clojure.lang.PersistentTreeMap
+      ; (class (sorted-map :a 1)) => clotran.host.persistent_tree_map
       (vals (sorted-map)) nil
       (vals (sorted-map :a 1)) '(1)
       (diff (vals (sorted-map :a 1 :b 2)) '(1 2)) nil   ; (vals (sorted-map :a 1 :b 2)) '(1 2)
 
-      ; (class (hash-map :a 1)) => clojure.lang.PersistentHashMap
+      ; (class (hash-map :a 1)) => clotran.host.persistent_hash_map
       (vals (hash-map)) nil
       (vals (hash-map :a 1)) '(1)
       (diff (vals (hash-map :a 1 :b 2)) '(1 2)) nil )   ; (vals (hash-map :a 1 :b 2)) '(1 2)
@@ -290,13 +290,13 @@
 
 ;; data_structures.clj:631 [language]
 (deftest test-sorted-map-keys
-  (is (thrown? ClassCastException (sorted-map () 1)))
-  (is (thrown? ClassCastException (sorted-map #{} 1)))
-  (is (thrown? ClassCastException (sorted-map {} 1)))
+  (is (thrown? clotran.host.class_cast_exception (sorted-map () 1)))
+  (is (thrown? clotran.host.class_cast_exception (sorted-map #{} 1)))
+  (is (thrown? clotran.host.class_cast_exception (sorted-map {} 1)))
 
-  (is (thrown? ClassCastException (assoc (sorted-map) () 1)))
-  (is (thrown? ClassCastException (assoc (sorted-map) #{} 1)))
-  (is (thrown? ClassCastException (assoc (sorted-map) {} 1)))
+  (is (thrown? clotran.host.class_cast_exception (assoc (sorted-map) () 1)))
+  (is (thrown? clotran.host.class_cast_exception (assoc (sorted-map) #{} 1)))
+  (is (thrown? clotran.host.class_cast_exception (assoc (sorted-map) {} 1)))
 
   ;; doesn't throw
   (let [cmp #(compare (count %1) (count %2))]
@@ -343,7 +343,7 @@
 ;; data_structures.clj:682 [language]
 (deftest test-get
   (let [m {:a 1, :b 2, :c {:d 3, :e 4}, :f nil, :g false, nil {:h 5}}]
-    (is (thrown? IllegalArgumentException (get-in {:a 1} 5)))
+    (is (thrown? clotran.host.illegal_argument_exception (get-in {:a 1} 5)))
     (are [x y] (= x y)
          (get m :a) 1
          (get m :e) nil
@@ -389,8 +389,8 @@
 ;; data_structures.clj:789 [language]
 (deftest test-sorted-set
   ; only compatible types can be used
-  (is (thrown? ClassCastException (sorted-set 1 "a")))
-  (is (thrown? ClassCastException (sorted-set '(1 2) [3 4])))
+  (is (thrown? clotran.host.class_cast_exception (sorted-set 1 "a")))
+  (is (thrown? clotran.host.class_cast_exception (sorted-set '(1 2) [3 4])))
 
   ; creates set?
   (are [x] (set? x)
@@ -412,13 +412,13 @@
       :kw
       [] [1 2]
   )
-  ; cannot be cast to java.lang.Comparable
-  (is (thrown? ClassCastException (sorted-set ())))
-  (is (thrown? ClassCastException (sorted-set {})))
-  (is (thrown? ClassCastException (sorted-set #{})))
-  (is (thrown? ClassCastException (sorted-set '(1 2) '(1 2))))
-  (is (thrown? ClassCastException (sorted-set {:a 1 :b 2} {:a 1 :b 2})))
-  (is (thrown? ClassCastException (sorted-set #{1 2} #{1 2})))
+  ; cannot be cast to clotran.host.comparable
+  (is (thrown? clotran.host.class_cast_exception (sorted-set ())))
+  (is (thrown? clotran.host.class_cast_exception (sorted-set {})))
+  (is (thrown? clotran.host.class_cast_exception (sorted-set #{})))
+  (is (thrown? clotran.host.class_cast_exception (sorted-set '(1 2) '(1 2))))
+  (is (thrown? clotran.host.class_cast_exception (sorted-set {:a 1 :b 2} {:a 1 :b 2})))
+  (is (thrown? clotran.host.class_cast_exception (sorted-set #{1 2} #{1 2})))
 
   (are [x y] (= x y)
       ; generating
@@ -440,8 +440,8 @@
   ; only compatible types can be used
   ; NB: not a ClassCastException, but a RuntimeException is thrown,
   ; requires discussion on whether this should be symmetric with test-sorted-set
-  (is (thrown? Exception (sorted-set-by < 1 "a")))
-  (is (thrown? Exception (sorted-set-by < '(1 2) [3 4])))
+  (is (thrown? clotran.host.exception (sorted-set-by < 1 "a")))
+  (is (thrown? clotran.host.exception (sorted-set-by < '(1 2) [3 4])))
 
   ; creates set?
   (are [x] (set? x)
@@ -466,12 +466,12 @@
       {}  ; {:a 1 :b 2}
       #{} ; #{1 2}
   )
-  ; cannot be cast to java.lang.Comparable
+  ; cannot be cast to clotran.host.comparable
   ; NB: not a ClassCastException, but a RuntimeException is thrown,
   ; requires discussion on whether this should be symmetric with test-sorted-set
-  (is (thrown? Exception (sorted-set-by compare '(1 2) '(1 2))))
-  (is (thrown? Exception (sorted-set-by compare {:a 1 :b 2} {:a 1 :b 2})))
-  (is (thrown? Exception (sorted-set-by compare #{1 2} #{1 2})))
+  (is (thrown? clotran.host.exception (sorted-set-by compare '(1 2) '(1 2))))
+  (is (thrown? clotran.host.exception (sorted-set-by compare {:a 1 :b 2} {:a 1 :b 2})))
+  (is (thrown? clotran.host.exception (sorted-set-by compare #{1 2} #{1 2})))
 
   (are [x y] (= x y)
       ; generating
@@ -538,7 +538,7 @@
 
 ;; data_structures.clj:1094 [language]
 (deftest test-array-map-arity
-  (is (thrown? IllegalArgumentException
+  (is (thrown? clotran.host.illegal_argument_exception
                (array-map 1 2 3))))
 
 ;; data_structures.clj:1098 [language]
@@ -549,8 +549,8 @@
        {:a 1} (assoc {} :a 1)
        {nil 1} (assoc {} nil 1)
        {:a 2 :b -2} (assoc {} :b -2 :a 2))
-  (is (thrown? IllegalArgumentException (assoc [] 0 5 1)))
-  (is (thrown? IllegalArgumentException (assoc {} :b -2 :a))))
+  (is (thrown? clotran.host.illegal_argument_exception (assoc [] 0 5 1)))
+  (is (thrown? clotran.host.illegal_argument_exception (assoc {} :b -2 :a))))
 
 ;; data_structures.clj:1334 [language]
 (deftest singleton-map-in-destructure-context

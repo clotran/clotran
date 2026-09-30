@@ -62,7 +62,7 @@
   (let [s (str s)]
     (if (>= (count s) n) (subs s 0 n) (str s (apply str (repeat (- n (count s)) " "))))))
 
-(defn- num [s] (Double/parseDouble (str/trim s)))
+(defn- num [s] (clotran.host.real8/parseDouble (str/trim s)))
 
 (defn- parse-atom-line
   "atom zan q x y z -- list-directed, so whitespace-separated; the atom
@@ -78,7 +78,7 @@
   [path]
   (let [lines (str/split-lines (clotran-slurp path))
         molname (fixed (nth lines 0) 13)
-        [n ngeom] (map #(Long/parseLong %) (str/split (str/trim (nth lines 1)) #"\s+"))
+        [n ngeom] (map #(clotran.host.int8/parseLong %) (str/split (str/trim (nth lines 1)) #"\s+"))
         ssname (fixed (nth lines 2 "") 4)
         atoms (mapv parse-atom-line (subvec lines 3 (+ 3 n)))
         after (drop (+ 3 n) lines)
@@ -110,7 +110,7 @@
   "main.f90's consistency check: the total is within 0.012 of an integer
    between 0 and 9."
   [qsum]
-  (boolean (some #(< (Math/abs (- (Math/abs qsum) (double %))) 0.012) (range 0 10))))
+  (boolean (some #(< (clotran.host.math/abs (- (clotran.host.math/abs qsum) (double %))) 0.012) (range 0 10))))
 
 (defn- real8 [& extents] (apply f/make-array "real8" extents))
 

@@ -1,4 +1,4 @@
-;; DERIVED from test/clj/clojure/test_clojure/test.clj by scripts/derive-tests -- do not edit.
+;; DERIVED from upstream/clojure/test/clojure/test_clojure/test.clj by upstream/derive-tests -- do not edit.
 ;; Kept: tests whose symbols lie in the clojure.core/cljs.core intersection (plus concurrency).
 
 (ns clojure.test-clojure.test (:use clojure.test))
@@ -51,25 +51,25 @@
 
 ;; test.clj:43 [language]
 (deftest can-test-thrown
-  (is (thrown? ArithmeticException (/ 1 0)) "Should pass")
+  (is (thrown? clotran.host.arithmetic_exception (/ 1 0)) "Should pass")
   ;; No exception is thrown:
-  (is (thrown? Exception (+ 1 1)) "Should fail")
+  (is (thrown? clotran.host.exception (+ 1 1)) "Should fail")
   ;; Wrong class of exception is thrown:
-  (is (thrown? ArithmeticException (throw (RuntimeException.))) "Should error"))
+  (is (thrown? clotran.host.arithmetic_exception (throw (clotran.host.runtime_exception.))) "Should error"))
 
 ;; test.clj:50 [language]
 (deftest can-test-thrown-with-msg
-  (is (thrown-with-msg? ArithmeticException #"Divide by zero" (/ 1 0)) "Should pass")
+  (is (thrown-with-msg? clotran.host.arithmetic_exception #"Divide by zero" (/ 1 0)) "Should pass")
   ;; Wrong message string:
-  (is (thrown-with-msg? ArithmeticException #"Something else" (/ 1 0)) "Should fail")
+  (is (thrown-with-msg? clotran.host.arithmetic_exception #"Something else" (/ 1 0)) "Should fail")
   ;; No exception is thrown:
-  (is (thrown? Exception (+ 1 1)) "Should fail")
+  (is (thrown? clotran.host.exception (+ 1 1)) "Should fail")
   ;; Wrong class of exception is thrown:
-  (is (thrown-with-msg? IllegalArgumentException #"Divide by zero" (/ 1 0)) "Should error"))
+  (is (thrown-with-msg? clotran.host.illegal_argument_exception #"Divide by zero" (/ 1 0)) "Should error"))
 
 ;; test.clj:59 [language]
 (deftest can-catch-unexpected-exceptions
-  (is (= 1 (throw (Exception.))) "Should error"))
+  (is (= 1 (throw (clotran.host.exception.))) "Should error"))
 
 ;; test.clj:70 [language]
 (deftest can-test-regexps

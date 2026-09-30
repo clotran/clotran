@@ -15,11 +15,11 @@
 
 (defn neg-zero?
   [^double d]
-  (and (zero? d) (< (Double/compare d 0.0) 0)))
+  (and (zero? d) (< (clotran.host.real8/compare d 0.0) 0)))
 
 (defn pos-zero?
   [^double d]
-  (and (zero? d) (not (< (Double/compare d 0.0) 0))))
+  (and (zero? d) (not (< (clotran.host.real8/compare d 0.0) 0))))
 
 (defn ulp=
   "Tests that y = x +/- m*ulp(x)"
@@ -177,57 +177,57 @@
 
 (deftest test-round
   (is (= 0 (m/round ##NaN)))
-  (is (= Long/MIN_VALUE (m/round ##-Inf)))
-  (is (= Long/MIN_VALUE (m/round (- Long/MIN_VALUE 2.0))))
-  (is (= Long/MAX_VALUE (m/round ##Inf)))
-  (is (= Long/MAX_VALUE (m/round (+ Long/MAX_VALUE 2.0))))
+  (is (= clotran.host.int8/MIN_VALUE (m/round ##-Inf)))
+  (is (= clotran.host.int8/MIN_VALUE (m/round (- clotran.host.int8/MIN_VALUE 2.0))))
+  (is (= clotran.host.int8/MAX_VALUE (m/round ##Inf)))
+  (is (= clotran.host.int8/MAX_VALUE (m/round (+ clotran.host.int8/MAX_VALUE 2.0))))
   (is (= 4 (m/round 3.5))))
 
 (deftest test-add-exact
   (try
-    (m/add-exact Long/MAX_VALUE 1)
+    (m/add-exact clotran.host.int8/MAX_VALUE 1)
     (is false)
-    (catch ArithmeticException _
+    (catch clotran.host.arithmetic_exception _
       (is true))))
 
 (deftest test-subtract-exact
   (try
-    (m/subtract-exact Long/MIN_VALUE 1)
+    (m/subtract-exact clotran.host.int8/MIN_VALUE 1)
     (is false)
-    (catch ArithmeticException _
+    (catch clotran.host.arithmetic_exception _
       (is true))))
 
 (deftest test-multiply-exact
   (try
-    (m/multiply-exact Long/MAX_VALUE 2)
+    (m/multiply-exact clotran.host.int8/MAX_VALUE 2)
     (is false)
-    (catch ArithmeticException _
+    (catch clotran.host.arithmetic_exception _
       (is true))))
 
 (deftest test-increment-exact
   (try
-    (m/increment-exact Long/MAX_VALUE)
+    (m/increment-exact clotran.host.int8/MAX_VALUE)
     (is false)
-    (catch ArithmeticException _
+    (catch clotran.host.arithmetic_exception _
       (is true))))
 
 (deftest test-decrement-exact
   (try
-    (m/decrement-exact Long/MIN_VALUE)
+    (m/decrement-exact clotran.host.int8/MIN_VALUE)
     (is false)
-    (catch ArithmeticException _
+    (catch clotran.host.arithmetic_exception _
       (is true))))
 
 (deftest test-negate-exact
-  (is (= (inc Long/MIN_VALUE) (m/negate-exact Long/MAX_VALUE)))
+  (is (= (inc clotran.host.int8/MIN_VALUE) (m/negate-exact clotran.host.int8/MAX_VALUE)))
   (try
-    (m/negate-exact Long/MIN_VALUE)
+    (m/negate-exact clotran.host.int8/MIN_VALUE)
     (is false)
-    (catch ArithmeticException _
+    (catch clotran.host.arithmetic_exception _
       (is true))))
 
 (deftest test-floor-div
-  (is (= Long/MIN_VALUE (m/floor-div Long/MIN_VALUE -1)))
+  (is (= clotran.host.int8/MIN_VALUE (m/floor-div clotran.host.int8/MIN_VALUE -1)))
   (is (= -1 (m/floor-div -2 5))))
 
 (deftest test-floor-mod
@@ -237,9 +237,9 @@
   (is (NaN? (m/ulp ##NaN)))
   (is (= ##Inf (m/ulp ##Inf)))
   (is (= ##Inf (m/ulp ##-Inf)))
-  (is (= Double/MIN_VALUE (m/ulp 0.0)))
-  (is (= (m/pow 2 971) (m/ulp Double/MAX_VALUE)))
-  (is (= (m/pow 2 971) (m/ulp (- Double/MAX_VALUE)))))
+  (is (= clotran.host.real8/MIN_VALUE (m/ulp 0.0)))
+  (is (= (m/pow 2 971) (m/ulp clotran.host.real8/MAX_VALUE)))
+  (is (= (m/pow 2 971) (m/ulp (- clotran.host.real8/MAX_VALUE)))))
 
 (deftest test-signum
   (is (NaN? (m/signum ##NaN)))
@@ -292,10 +292,10 @@
   (is (= -1.0 (m/copy-sign 1.0 ##-Inf))))
 
 (deftest test-get-exponent
-  (is (= (inc Double/MAX_EXPONENT) (m/get-exponent ##NaN)))
-  (is (= (inc Double/MAX_EXPONENT) (m/get-exponent ##Inf)))
-  (is (= (inc Double/MAX_EXPONENT) (m/get-exponent ##-Inf)))
-  (is (= (dec Double/MIN_EXPONENT) (m/get-exponent 0.0)))
+  (is (= (inc clotran.host.real8/MAX_EXPONENT) (m/get-exponent ##NaN)))
+  (is (= (inc clotran.host.real8/MAX_EXPONENT) (m/get-exponent ##Inf)))
+  (is (= (inc clotran.host.real8/MAX_EXPONENT) (m/get-exponent ##-Inf)))
+  (is (= (dec clotran.host.real8/MIN_EXPONENT) (m/get-exponent 0.0)))
   (is (= 0 (m/get-exponent 1.0)))
   (is (= 13 (m/get-exponent 12345.678))))
 
@@ -304,18 +304,18 @@
   (is (NaN? (m/next-after 1 ##NaN)))
   (is (pos-zero? (m/next-after 0.0 0.0)))
   (is (neg-zero? (m/next-after -0.0 -0.0)))
-  (is (= Double/MAX_VALUE (m/next-after ##Inf 1.0)))
-  (is (pos-zero? (m/next-after Double/MIN_VALUE -1.0))))
+  (is (= clotran.host.real8/MAX_VALUE (m/next-after ##Inf 1.0)))
+  (is (pos-zero? (m/next-after clotran.host.real8/MIN_VALUE -1.0))))
 
 (deftest test-next-up
   (is (NaN? (m/next-up ##NaN)))
   (is (= ##Inf (m/next-up ##Inf)))
-  (is (= Double/MIN_VALUE (m/next-up 0.0))))
+  (is (= clotran.host.real8/MIN_VALUE (m/next-up 0.0))))
 
 (deftest test-next-down
   (is (NaN? (m/next-down ##NaN)))
   (is (= ##-Inf (m/next-down ##-Inf)))
-  (is (= (- Double/MIN_VALUE) (m/next-down 0.0))))
+  (is (= (- clotran.host.real8/MIN_VALUE) (m/next-down 0.0))))
 
 (deftest test-scalb
   (is (NaN? (m/scalb ##NaN 1)))

@@ -11,14 +11,13 @@
 
 (ns clojure.test-clojure.serialization
   (:use clojure.test)
-  (:import (java.io ObjectOutputStream ObjectInputStream
-             ByteArrayOutputStream ByteArrayInputStream)))
+  (:import ))
 
 (defn- serialize
   "Serializes a single object, returning a byte array."
   [v]
-  (with-open [bout (ByteArrayOutputStream.)
-              oos (ObjectOutputStream. bout)]
+  (with-open [bout (clotran.host.byte_array_output_stream.)
+              oos (clotran.host.object_output_stream. bout)]
     (.writeObject oos v)
     (.flush oos)
     (.toByteArray bout)))
@@ -26,7 +25,7 @@
 (defn- deserialize
   "Deserializes and returns a single object from the given byte array."
   [bytes]
-  (with-open [ois (-> bytes ByteArrayInputStream. ObjectInputStream.)]
+  (with-open [ois (-> bytes clotran.host.byte_array_input_stream. clotran.host.object_input_stream.)]
     (.readObject ois)))
 
 (defrecord SerializationRecord [a b c])
@@ -53,7 +52,7 @@
     (list)
     (apply list (range 10))
     (cons 0 nil)
-    (clojure.lang.Cons. 0 nil)
+    (clotran.host.cons. 0 nil)
 
     ; vectors
     []
@@ -86,8 +85,8 @@
     (apply sorted-set (reverse (range 1000)))
 
     ; queues
-    clojure.lang.PersistentQueue/EMPTY
-    (into clojure.lang.PersistentQueue/EMPTY (range 50))
+    clotran.host.persistent_queue/EMPTY
+    (into clotran.host.persistent_queue/EMPTY (range 50))
 
     ; lazy seqs
     (lazy-seq nil)
@@ -100,14 +99,14 @@
     (build-via-transient #{})
 
     ; array-seqs
-    (seq (make-array Object 10))
-    (seq (make-array Boolean/TYPE 10))
-    (seq (make-array Byte/TYPE 10))
-    (seq (make-array Character/TYPE 10))
-    (seq (make-array Double/TYPE 10))
-    (seq (make-array Float/TYPE 10))
-    (seq (make-array Integer/TYPE 10))
-    (seq (make-array Long/TYPE 10))
+    (seq (make-array clotran.host.value 10))
+    (seq (make-array clotran.host.logical/TYPE 10))
+    (seq (make-array clotran.host.int1/TYPE 10))
+    (seq (make-array clotran.host.char/TYPE 10))
+    (seq (make-array clotran.host.real8/TYPE 10))
+    (seq (make-array clotran.host.real4/TYPE 10))
+    (seq (make-array clotran.host.int4/TYPE 10))
+    (seq (make-array clotran.host.int8/TYPE 10))
 
     ; "records"
     (SerializationRecord. 0 :foo (range 20))
@@ -143,7 +142,7 @@
 
 (deftest interned-serializations
   (are [v] (identical? v (-> v serialize deserialize))
-    clojure.lang.RT/DEFAULT_COMPARATOR
+    clotran.host.rt/DEFAULT_COMPARATOR
 
     ; namespaces just get deserialized back into the same-named ns in the present runtime
     ; (they're referred to by defrecord instances)
@@ -171,7 +170,7 @@
       #(do capture))))
 
 (deftest check-unserializable-objects
-  (are [t] (thrown? java.io.NotSerializableException (serialize t))
+  (are [t] (thrown? clotran.host.not_serializable_exception (serialize t))
     ;; transients
     (transient [])
     (transient {})
@@ -183,14 +182,14 @@
     (agent nil)
 
     ;; stateful seqs
-    (enumeration-seq (java.util.Collections/enumeration (range 50)))))
+    (enumeration-seq (clotran.host.collections/enumeration (range 50)))))
 
 ;; necessary for CVE-2024-22871
 (deftest CLJ-2839
-  (are [e] (thrown? Exception (.hashCode ^Object (-> e serialize deserialize)))
+  (are [e] (thrown? clotran.host.exception (.hashCode ^clotran.host.value (-> e serialize deserialize)))
     (repeat 1)
     (iterate identity nil)
     (cycle [1])))
 
 (deftest cant-serialize-FnLoaderThunk
-  (is (thrown? Exception (serialize (clojure.lang.FnLoaderThunk. nil nil)))))
+  (is (thrown? clotran.host.exception (serialize (clotran.host.fn_loader_thunk. nil nil)))))

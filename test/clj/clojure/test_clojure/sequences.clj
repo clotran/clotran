@@ -14,7 +14,7 @@
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
             [clojure.test.check.clojure-test :refer (defspec)])
-  (:import clojure.lang.IReduce))
+  (:import ))
 
 ;; *** Tests ***
 
@@ -31,23 +31,23 @@
         avec (into [] arange)
         alist (into () arange)
         obj-array (into-array arange)
-        int-array (into-array Integer/TYPE (map #(Integer. (int %)) arange))
-        long-array (into-array Long/TYPE arange)
-        float-array (into-array Float/TYPE arange)
-        char-array (into-array Character/TYPE (map char arange))
-        double-array (into-array Double/TYPE arange)
-        byte-array (into-array Byte/TYPE (map byte arange))
+        int-array (into-array clotran.host.int4/TYPE (map #(clotran.host.int4. (int %)) arange))
+        long-array (into-array clotran.host.int8/TYPE arange)
+        float-array (into-array clotran.host.real4/TYPE arange)
+        char-array (into-array clotran.host.char/TYPE (map char arange))
+        double-array (into-array clotran.host.real8/TYPE arange)
+        byte-array (into-array clotran.host.int1/TYPE (map byte arange))
         int-vec (into (vector-of :int) arange)
         long-vec (into (vector-of :long) arange)
         float-vec (into (vector-of :float) arange)
         char-vec (into (vector-of :char) (map char arange))
         double-vec (into (vector-of :double) arange)
         byte-vec (into (vector-of :byte) (map byte arange))
-        all-true (into-array Boolean/TYPE (repeat 10 true))]
+        all-true (into-array clotran.host.logical/TYPE (repeat 10 true))]
     (is (== 4950
            (reduce + arange)
            (reduce + avec)
-           (.reduce ^IReduce avec +)
+           (.reduce ^clotran.host.i_reduce avec +)
            (reduce + alist)
            (reduce + obj-array)
            (reduce + int-array)
@@ -65,7 +65,7 @@
     (is (== 4951
            (reduce + 1 arange)
            (reduce + 1 avec)
-           (.reduce ^IReduce avec + 1)
+           (.reduce ^clotran.host.i_reduce avec + 1)
            (reduce + 1 alist)
            (reduce + 1 obj-array)
            (reduce + 1 int-array)
@@ -85,7 +85,7 @@
            (reduce #(and %1 %2) true all-true)))))
 
 (deftest test-into-IReduceInit
-  (let [iri (reify clojure.lang.IReduceInit
+  (let [iri (reify clotran.host.i_reduce_init
               (reduce [_ f start]
                 (reduce f start (range 5))))]
     (is (= [0 1 2 3 4] (into [] iri)))))
@@ -99,7 +99,7 @@
 
   (is (= 4500000
          (->> (range 100000)
-              (mapcat (fn [_] (java.util.ArrayList. (range 10))))
+              (mapcat (fn [_] (clotran.rt/array-list (range 10))))
               (reduce +)))))
 
 (deftest test-equality
@@ -170,7 +170,7 @@
 
 
 (deftest test-cons
-  (is (thrown? IllegalArgumentException (cons 1 2)))
+  (is (thrown? clotran.host.illegal_argument_exception (cons 1 2)))
   (are [x y] (= x y)
     (cons 1 nil) '(1)
     (cons nil nil) '(nil)
@@ -275,13 +275,13 @@
 
 (deftest test-first
   ;(is (thrown? Exception (first)))
-  (is (thrown? IllegalArgumentException (first true)))
-  (is (thrown? IllegalArgumentException (first false)))
-  (is (thrown? IllegalArgumentException (first 1)))
+  (is (thrown? clotran.host.illegal_argument_exception (first true)))
+  (is (thrown? clotran.host.illegal_argument_exception (first false)))
+  (is (thrown? clotran.host.illegal_argument_exception (first 1)))
   ;(is (thrown? IllegalArgumentException (first 1 2)))
-  (is (thrown? IllegalArgumentException (first \a)))
-  (is (thrown? IllegalArgumentException (first 's)))
-  (is (thrown? IllegalArgumentException (first :k)))
+  (is (thrown? clotran.host.illegal_argument_exception (first \a)))
+  (is (thrown? clotran.host.illegal_argument_exception (first 's)))
+  (is (thrown? clotran.host.illegal_argument_exception (first :k)))
   (are [x y] (= x y)
     (first nil) nil
 
@@ -342,13 +342,13 @@
 
 (deftest test-next
  ; (is (thrown? IllegalArgumentException (next)))
-  (is (thrown? IllegalArgumentException (next true)))
-  (is (thrown? IllegalArgumentException (next false)))
-  (is (thrown? IllegalArgumentException (next 1)))
+  (is (thrown? clotran.host.illegal_argument_exception (next true)))
+  (is (thrown? clotran.host.illegal_argument_exception (next false)))
+  (is (thrown? clotran.host.illegal_argument_exception (next 1)))
   ;(is (thrown? IllegalArgumentException (next 1 2)))
-  (is (thrown? IllegalArgumentException (next \a)))
-  (is (thrown? IllegalArgumentException (next 's)))
-  (is (thrown? IllegalArgumentException (next :k)))
+  (is (thrown? clotran.host.illegal_argument_exception (next \a)))
+  (is (thrown? clotran.host.illegal_argument_exception (next 's)))
+  (is (thrown? clotran.host.illegal_argument_exception (next :k)))
   (are [x y] (= x y)
     (next nil) nil
 
@@ -610,36 +610,36 @@
 
 (deftest test-nth
   ; maps, sets are not supported
-  (is (thrown? UnsupportedOperationException (nth {} 0)))
-  (is (thrown? UnsupportedOperationException (nth {:a 1 :b 2} 0)))
-  (is (thrown? UnsupportedOperationException (nth #{} 0)))
-  (is (thrown? UnsupportedOperationException (nth #{1 2 3} 0)))
+  (is (thrown? clotran.host.unsupported_operation_exception (nth {} 0)))
+  (is (thrown? clotran.host.unsupported_operation_exception (nth {:a 1 :b 2} 0)))
+  (is (thrown? clotran.host.unsupported_operation_exception (nth #{} 0)))
+  (is (thrown? clotran.host.unsupported_operation_exception (nth #{1 2 3} 0)))
 
   ; out of bounds
-  (is (thrown? IndexOutOfBoundsException (nth '() 0)))
-  (is (thrown? IndexOutOfBoundsException (nth '(1 2 3) 5)))
-  (is (thrown? IndexOutOfBoundsException (nth '() -1)))
-  (is (thrown? IndexOutOfBoundsException (nth '(1 2 3) -1)))
+  (is (thrown? clotran.host.index_out_of_bounds_exception (nth '() 0)))
+  (is (thrown? clotran.host.index_out_of_bounds_exception (nth '(1 2 3) 5)))
+  (is (thrown? clotran.host.index_out_of_bounds_exception (nth '() -1)))
+  (is (thrown? clotran.host.index_out_of_bounds_exception (nth '(1 2 3) -1)))
 
-  (is (thrown? IndexOutOfBoundsException (nth [] 0)))
-  (is (thrown? IndexOutOfBoundsException (nth [1 2 3] 5)))
-  (is (thrown? IndexOutOfBoundsException (nth [] -1)))
-  (is (thrown? IndexOutOfBoundsException (nth [1 2 3] -1)))  ; ???
+  (is (thrown? clotran.host.index_out_of_bounds_exception (nth [] 0)))
+  (is (thrown? clotran.host.index_out_of_bounds_exception (nth [1 2 3] 5)))
+  (is (thrown? clotran.host.index_out_of_bounds_exception (nth [] -1)))
+  (is (thrown? clotran.host.index_out_of_bounds_exception (nth [1 2 3] -1)))  ; ???
 
-  (is (thrown? IndexOutOfBoundsException (nth (into-array []) 0)))
-  (is (thrown? IndexOutOfBoundsException (nth (into-array [1 2 3]) 5)))
-  (is (thrown? IndexOutOfBoundsException (nth (into-array []) -1)))
-  (is (thrown? IndexOutOfBoundsException (nth (into-array [1 2 3]) -1)))
+  (is (thrown? clotran.host.index_out_of_bounds_exception (nth (into-array []) 0)))
+  (is (thrown? clotran.host.index_out_of_bounds_exception (nth (into-array [1 2 3]) 5)))
+  (is (thrown? clotran.host.index_out_of_bounds_exception (nth (into-array []) -1)))
+  (is (thrown? clotran.host.index_out_of_bounds_exception (nth (into-array [1 2 3]) -1)))
 
-  (is (thrown? StringIndexOutOfBoundsException (nth "" 0)))
-  (is (thrown? StringIndexOutOfBoundsException (nth "abc" 5)))
-  (is (thrown? StringIndexOutOfBoundsException (nth "" -1)))
-  (is (thrown? StringIndexOutOfBoundsException (nth "abc" -1)))
+  (is (thrown? clotran.host.string_index_out_of_bounds_exception (nth "" 0)))
+  (is (thrown? clotran.host.string_index_out_of_bounds_exception (nth "abc" 5)))
+  (is (thrown? clotran.host.string_index_out_of_bounds_exception (nth "" -1)))
+  (is (thrown? clotran.host.string_index_out_of_bounds_exception (nth "abc" -1)))
 
-  (is (thrown? IndexOutOfBoundsException (nth (java.util.ArrayList. []) 0)))
-  (is (thrown? IndexOutOfBoundsException (nth (java.util.ArrayList. [1 2 3]) 5)))
-  (is (thrown? IndexOutOfBoundsException (nth (java.util.ArrayList. []) -1)))       ; ???
-  (is (thrown? IndexOutOfBoundsException (nth (java.util.ArrayList. [1 2 3]) -1)))  ; ???
+  (is (thrown? clotran.host.index_out_of_bounds_exception (nth (clotran.rt/array-list []) 0)))
+  (is (thrown? clotran.host.index_out_of_bounds_exception (nth (clotran.rt/array-list [1 2 3]) 5)))
+  (is (thrown? clotran.host.index_out_of_bounds_exception (nth (clotran.rt/array-list []) -1)))       ; ???
+  (is (thrown? clotran.host.index_out_of_bounds_exception (nth (clotran.rt/array-list [1 2 3]) -1)))  ; ???
 
   (are [x y] (= x y)
       (nth '(1) 0) 1
@@ -666,11 +666,11 @@
       (nth "abcde" 4) \e
       (nth "abc" 5 :not-found) :not-found
 
-      (nth (java.util.ArrayList. [1]) 0) 1
-      (nth (java.util.ArrayList. [1 2 3]) 0) 1
-      (nth (java.util.ArrayList. [1 2 3 4 5]) 1) 2
-      (nth (java.util.ArrayList. [1 2 3 4 5]) 4) 5
-      (nth (java.util.ArrayList. [1 2 3]) 5 :not-found) :not-found )
+      (nth (clotran.rt/array-list [1]) 0) 1
+      (nth (clotran.rt/array-list [1 2 3]) 0) 1
+      (nth (clotran.rt/array-list [1 2 3 4 5]) 1) 2
+      (nth (clotran.rt/array-list [1 2 3 4 5]) 4) 5
+      (nth (clotran.rt/array-list [1 2 3]) 5 :not-found) :not-found )
 
   ; regex Matchers
   (let [m (re-matcher #"(a)(b)" "ababaa")]
@@ -681,8 +681,8 @@
         (nth m 2) "b"
         (nth m 3 :not-found) :not-found
         (nth m -1 :not-found) :not-found )
-    (is (thrown? IndexOutOfBoundsException (nth m 3)))
-    (is (thrown? IndexOutOfBoundsException (nth m -1))))
+    (is (thrown? clotran.host.index_out_of_bounds_exception (nth m 3)))
+    (is (thrown? clotran.host.index_out_of_bounds_exception (nth m -1))))
 
   (let [m (re-matcher #"c" "ababaa")]
     (re-find m) ; => nil
@@ -690,9 +690,9 @@
         (nth m 0 :not-found) :not-found
         (nth m 2 :not-found) :not-found
         (nth m -1 :not-found) :not-found )
-    (is (thrown? IllegalStateException (nth m 0)))
-    (is (thrown? IllegalStateException (nth m 2)))
-    (is (thrown? IllegalStateException (nth m -1)))))
+    (is (thrown? clotran.host.illegal_state_exception (nth m 0)))
+    (is (thrown? clotran.host.illegal_state_exception (nth m 2)))
+    (is (thrown? clotran.host.illegal_state_exception (nth m -1)))))
 
 
 ; distinct was broken for nil & false:
@@ -870,7 +870,7 @@
 
       ;; test other fns
       (is (= '(:foo 42 :foo 42) (take 4 (iterate #(if (= % :foo) 42 :foo) :foo))))
-      (is (= '(1 false true true) (take 4 (iterate #(instance? Boolean %) 1))))
+      (is (= '(1 false true true) (take 4 (iterate #(instance? clotran.host.logical %) 1))))
       (is (= '(256 128 64 32 16 8 4 2 1 0) (take 10 (iterate #(quot % 2) 256))))
       (is (= '(0 true) (take 2 (iterate zero? 0))))
       (is (= 2 (first (next (next (iterate inc 0))))))
@@ -1107,8 +1107,8 @@
   (prop/for-all [start gen/int
                  end gen/int
                  step gen/s-pos-int]
-                (= (clojure.lang.Range/create start end step)
-                   (clojure.lang.LongRange/create start end step))))
+                (= (clotran.host.range/create start end step)
+                   (clotran.host.long_range/create start end step))))
 
 (deftest test-range
   (are [x y] (= x y)
@@ -1161,7 +1161,7 @@
       (range 1/2 5 1/3) '(1/2 5/6 7/6 3/2 11/6 13/6 5/2 17/6 19/6 7/2 23/6 25/6 9/2 29/6)
       (range 0.5 8 1.2) '(0.5 1.7 2.9 4.1 5.3 6.5 7.7)
       (range 0.5 -4 -2) '(0.5 -1.5 -3.5)
-      (take 3 (range Long/MAX_VALUE Double/POSITIVE_INFINITY)) '(9223372036854775807 9223372036854775808N 9223372036854775809N)
+      (take 3 (range clotran.host.int8/MAX_VALUE clotran.host.real8/POSITIVE_INFINITY)) '(9223372036854775807 9223372036854775808N 9223372036854775809N)
 
       (reduce + (take 100 (range))) 4950
       (reduce + 0 (take 100 (range))) 4950
@@ -1203,23 +1203,23 @@
 (defn unlimited-range-create [& args]
   (let [[arg1 arg2 arg3] args]
     (case (count args)
-      1 (clojure.lang.Range/create arg1)
-      2 (clojure.lang.Range/create arg1 arg2)
-      3 (clojure.lang.Range/create arg1 arg2 arg3))))
+      1 (clotran.host.range/create arg1)
+      2 (clotran.host.range/create arg1 arg2)
+      3 (clotran.host.range/create arg1 arg2 arg3))))
 
 (deftest test-longrange-corners
-  (let [lmax Long/MAX_VALUE
-        lmax-1 (- Long/MAX_VALUE 1)
-        lmax-2 (- Long/MAX_VALUE 2)
-        lmax-31 (- Long/MAX_VALUE 31)
-        lmax-32 (- Long/MAX_VALUE 32)
-        lmax-33 (- Long/MAX_VALUE 33)
-        lmin Long/MIN_VALUE
-        lmin+1 (+ Long/MIN_VALUE 1)
-        lmin+2 (+ Long/MIN_VALUE 2)
-        lmin+31 (+ Long/MIN_VALUE 31)
-        lmin+32 (+ Long/MIN_VALUE 32)
-        lmin+33 (+ Long/MIN_VALUE 33)]
+  (let [lmax clotran.host.int8/MAX_VALUE
+        lmax-1 (- clotran.host.int8/MAX_VALUE 1)
+        lmax-2 (- clotran.host.int8/MAX_VALUE 2)
+        lmax-31 (- clotran.host.int8/MAX_VALUE 31)
+        lmax-32 (- clotran.host.int8/MAX_VALUE 32)
+        lmax-33 (- clotran.host.int8/MAX_VALUE 33)
+        lmin clotran.host.int8/MIN_VALUE
+        lmin+1 (+ clotran.host.int8/MIN_VALUE 1)
+        lmin+2 (+ clotran.host.int8/MIN_VALUE 2)
+        lmin+31 (+ clotran.host.int8/MIN_VALUE 31)
+        lmin+32 (+ clotran.host.int8/MIN_VALUE 32)
+        lmin+33 (+ clotran.host.int8/MIN_VALUE 33)]
     (doseq [range-args [ [lmax-2 lmax]
                          [lmax-33 lmax]
                          [lmax-33 lmax-31]
@@ -1474,7 +1474,7 @@
 
 (deftest test-ArrayIter
   (are [arr expected]
-    (let [iter (clojure.lang.ArrayIter/createFromObject arr)]
+    (let [iter (clotran.host.array_iter/createFromObject arr)]
       (loop [accum []]
         (if (.hasNext iter)
           (recur (conj accum (.next iter)))
@@ -1512,13 +1512,13 @@
                 (sorted-map :a 1 :b 2 :c 3)
                 #{1 2 3}
                 (sorted-set 1 2 3)
-                (into clojure.lang.PersistentQueue/EMPTY [1 2 3])]]
-    (is (= true (instance? clojure.lang.IMeta coll)))
+                (into clotran.host.persistent_queue/EMPTY [1 2 3])]]
+    (is (= true (instance? clotran.host.i_meta coll)))
     (is (= {:a true} (meta (with-meta coll {:a true}))))
-    (is (= true (instance? clojure.lang.IMeta (seq coll))))
+    (is (= true (instance? clotran.host.i_meta (seq coll))))
     (is (= {:a true} (meta (with-meta (seq coll) {:a true}))))
     (when (reversible? coll)
-      (is (= true (instance? clojure.lang.IMeta (rseq coll))))
+      (is (= true (instance? clotran.host.i_meta (rseq coll))))
       (is (= {:a true} (meta (with-meta (rseq coll) {:a true})))))))
 
 (deftest test-iteration-opts
@@ -1561,7 +1561,7 @@
 
 (deftest test-iteration
   ;; equivalence to line-seq
-  (let [readme #(java.nio.file.Files/newBufferedReader (.toPath (java.io.File. "readme.txt")))]
+  (let [readme #(clotran.host.files/newBufferedReader (.toPath (clotran.io.File. "readme.txt")))]
     (is (= (with-open [r (readme)]
              (vec (iteration (fn [_] (.readLine r)))))
            (with-open [r (readme)]
@@ -1569,7 +1569,7 @@
 
   ;; paginated API
   (let [items 12 pgsize 5
-        src (vec (repeatedly items #(java.util.UUID/randomUUID)))
+        src (vec (repeatedly items #(clotran.uuid.UUID/randomUUID)))
         api (fn [tok]
               (let [tok (or tok 0)]
                 (when (< tok items)
@@ -1631,11 +1631,11 @@
     (range 1 3) 3 103))
 
 (deftest infinite-seq-hash
-  (are [e] (thrown? Exception (.hashCode ^Object e))
+  (are [e] (thrown? clotran.host.exception (.hashCode ^clotran.host.value e))
     (iterate identity nil)
     (cycle [1])
     (repeat 1))
-  (are [e] (thrown? Exception (.hasheq ^clojure.lang.IHashEq e))
+  (are [e] (thrown? clotran.host.exception (.hasheq ^clotran.host.i_hash_eq e))
     (iterate identity nil)
     (cycle [1])
     (repeat 1)))
@@ -1644,7 +1644,7 @@
   (prop/for-all [initk gen/int
                  seed gen/int]
     (let [src (fn []
-                (let [rng (java.util.Random. seed)]
+                (let [rng (clotran.host.random. seed)]
                   (iteration #(unchecked-add % (.nextLong rng))
                              :somef (complement #(zero? (mod % 1000)))
                              :vf str

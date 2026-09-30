@@ -163,10 +163,10 @@
 
 (defonce ^:private builds (atom {}))   ; src -> {:state :lib :hash :log}
 
-(defn- mode [] (System/getenv "CLOTRAN_AUTOCOMPILE"))
+(defn- mode [] (clotran.host.system/getenv "CLOTRAN_AUTOCOMPILE"))
 
 (defn- cache-dir []
-  (or (System/getenv "CLOTRAN_CACHE") (str (System/getenv "HOME") "/.cache/clotran")))
+  (or (clotran.host.system/getenv "CLOTRAN_CACHE") (str (clotran.host.system/getenv "HOME") "/.cache/clotran")))
 
 (def ^:private ext
   (delay (if (zero? (clotran-sh "[ \"$(uname -s)\" = Darwin ]")) "dylib" "so")))
@@ -201,11 +201,11 @@
   [src h & [wait?]]
   (let [dir (cache-dir)
         k (key-of src)
-        lib (str dir "/" k "-" h "-" (System/nanoTime) "." @ext)
+        lib (str dir "/" k "-" h "-" (clotran.host.system/nanoTime) "." @ext)
         log (str dir "/" k "-" h ".log")
         ptr (ptr-path src h)
         cmd (str "mkdir -p " (q dir) " && "
-                 "CLOTRAN_AUTOCOMPILE=use " (q (str (System/getProperty "clotran.home") "/clotran"))
+                 "CLOTRAN_AUTOCOMPILE=use " (q (str (clotran.host.system/getProperty "clotran.home") "/clotran"))
                  " compile " (q src) " " (q lib) " > " (q log) " 2>&1; "
                  "if [ -f " (q lib) " ]; then "
                  "printf %s " (q lib) " > " (q (str ptr ".part")) " && mv -f " (q (str ptr ".part")) " " (q ptr) "; "
@@ -244,7 +244,7 @@
   a program must act on -- it runs interpreted until then, or for good -- and
   a note appearing mid-REPL, for a library it never asked about, is noise."
   [msg]
-  (when (= "1" (System/getenv "CLOTRAN_AUTOCOMPILE_VERBOSE")) (println msg)))
+  (when (= "1" (clotran.host.system/getenv "CLOTRAN_AUTOCOMPILE_VERBOSE")) (println msg)))
 
 (defn poll
   "Builds that have finished since the last look: installed if the source
@@ -279,7 +279,7 @@
     (if (and (= :compiling state) (= h bh))
       (loop [n 0]
         (when (and (< n 3000) (not (clotran-file-exists? (str lib ".done"))))
-          (Thread/sleep 100)
+          (clotran.host.thread/sleep 100)
           (recur (inc n))))
       (start! src h true)))
   (poll)

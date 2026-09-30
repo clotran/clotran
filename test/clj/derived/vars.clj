@@ -1,4 +1,4 @@
-;; DERIVED from test/clj/clojure/test_clojure/vars.clj by scripts/derive-tests -- do not edit.
+;; DERIVED from upstream/clojure/test/clojure/test_clojure/vars.clj by upstream/derive-tests -- do not edit.
 ;; Kept: tests whose symbols lie in the clojure.core/cljs.core intersection (plus concurrency).
 
 (ns clojure.test-clojure.vars (:use clojure.test))
@@ -21,10 +21,10 @@
 ;; vars.clj:84 [concurrency]
 (deftest test-with-redefs-throw
   (let [p (promise)]
-    (is (thrown? Exception
+    (is (thrown? clotran.host.exception
       (with-redefs [stub-me :temp]
         (deliver p stub-me)
-        (throw (Exception. "simulated failure in with-redefs")))))
+        (throw (clotran.host.exception. "simulated failure in with-redefs")))))
     (is (= :temp @p))
     (is (= :original stub-me))))
 

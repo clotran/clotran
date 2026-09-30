@@ -1,4 +1,4 @@
-;; DERIVED from test/clj/clojure/test_clojure/string.clj by scripts/derive-tests -- do not edit.
+;; DERIVED from upstream/clojure/test/clojure/test_clojure/string.clj by upstream/derive-tests -- do not edit.
 ;; Kept: tests whose symbols lie in the clojure.core/cljs.core intersection (plus concurrency).
 
 (ns clojure.test-clojure.string (:require [clojure.string :as s]) (:use clojure.test))
@@ -102,7 +102,7 @@
 
 ;; string.clj:90 [language]
 (deftest nil-handling
-  (are [f args] (thrown? NullPointerException (apply f args))
+  (are [f args] (thrown? clotran.host.null_pointer_exception (apply f args))
        s/reverse [nil]
        s/replace [nil #"foo" "bar"]
        s/replace-first [nil #"foo" "bar"]

@@ -479,6 +479,9 @@ check-static:
 	scripts/argsafe --check
 	@echo "--- the class-name aliases (classalias.inc) match their table ---"
 	scripts/class-names --check
+	@echo "--- src/clj/clojure and test/clj/clojure are what upstream/derive writes; no JVM name outside upstream/ ---"
+	upstream/derive --check
+	upstream/check-names
 	@echo "--- every procedure given roots passes them to what it allocates (PLAN step 20) ---"
 	scripts/root-check
 	@echo "--- no static string lengths (gfortran slen: shared by every thread, step 14f) ---"

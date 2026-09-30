@@ -18,13 +18,13 @@
   (is (nil? (source-fn 'non-existent-fn))))
 
 (deftest test-source-read-eval-unknown
-  (is (thrown? IllegalStateException (binding [*read-eval* :unknown] (source reduce)))))
+  (is (thrown? clotran.host.illegal_state_exception (binding [*read-eval* :unknown] (source reduce)))))
 
 (deftest test-source-read-eval-false
   (is (binding [*read-eval* false] (with-out-str (source reduce)))))
 
 (deftest test-dir
-  (is (thrown? Exception (dir-fn 'non-existent-ns)))
+  (is (thrown? clotran.host.exception (dir-fn 'non-existent-ns)))
   (is (= '[bar foo] (dir-fn 'clojure.test-clojure.repl.example)))
   (binding [*ns* (the-ns 'clojure.test-clojure.repl)]
     (is (= (dir-fn 'clojure.string) (dir-fn 'str))))

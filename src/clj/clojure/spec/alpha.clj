@@ -73,7 +73,7 @@
   [k]
   (if (ident? k)
     (c/or (reg-resolve k)
-          (throw (Exception. (str "Unable to resolve spec: " k))))
+          (throw (clotran.host.exception. (str "Unable to resolve spec: " k))))
     k))
 
 (defn spec?
@@ -92,7 +92,7 @@
    (ident? spec) spec
    (regex? spec) (assoc spec ::name name)
 
-   (instance? clojure.lang.IObj spec)
+   (instance? clotran.host.i_obj spec)
    (with-meta spec (assoc (meta spec) ::name name))))
 
 (defn- spec-name [spec]
@@ -101,7 +101,7 @@
 
    (regex? spec) (::name spec)
    
-   (instance? clojure.lang.IObj spec)
+   (instance? clotran.host.i_obj spec)
    (-> (meta spec) ::name)))
 
 (declare spec-impl)
@@ -123,31 +123,31 @@
   [spec-or-k]
   (c/or (maybe-spec spec-or-k)
         (when (ident? spec-or-k)
-          (throw (Exception. (str "Unable to resolve spec: " spec-or-k))))))
+          (throw (clotran.host.exception. (str "Unable to resolve spec: " spec-or-k))))))
 
 (defprotocol Specize
   (specize* [_] [_ form]))
 
-(defn- fn-sym [^Object f]
+(defn- fn-sym [^clotran.host.value f]
   (let [[_ f-ns f-n] (re-matches #"(.*)\$(.*?)(__[0-9]+)?" (.. f getClass getName))]
     ;; check for anonymous function
     (when (not= "fn" f-n)
-      (symbol (clojure.lang.Compiler/demunge f-ns) (clojure.lang.Compiler/demunge f-n)))))
+      (symbol (clotran.host.compiler/demunge f-ns) (clotran.host.compiler/demunge f-n)))))
 
 (extend-protocol Specize
-  clojure.lang.Keyword
+  clotran.host.keyword
   (specize* ([k] (specize* (reg-resolve! k)))
             ([k _] (specize* (reg-resolve! k))))
 
-  clojure.lang.Symbol
+  clotran.host.symbol
   (specize* ([s] (specize* (reg-resolve! s)))
             ([s _] (specize* (reg-resolve! s))))
 
-  clojure.lang.IPersistentSet
+  clotran.host.i_persistent_set
   (specize* ([s] (spec-impl s s nil nil))
             ([s form] (spec-impl form s nil nil)))
 
-  Object
+  clotran.host.value
   (specize* ([o] (if (c/and (not (map? o)) (ifn? o))
                    (if-let [s (fn-sym o)]
                      (spec-impl s o nil nil)
@@ -271,7 +271,7 @@
 
 (defn explain-str
   "Given a spec and a value that fails to conform, returns an explanation as a string."
-  ^String [spec x]
+  ^clotran.host.string [spec x]
   (with-out-str (explain spec x)))
 
 (declare valid?)
@@ -559,7 +559,7 @@
                        (c/or min-count max-count)
                        (conj `(<= (c/or ~min-count 0)
                                    (bounded-count (if ~max-count (inc ~max-count) ~min-count) ~gx)
-                                   (c/or ~max-count Integer/MAX_VALUE)))
+                                   (c/or ~max-count clotran.host.int4/MAX_VALUE)))
 
                        distinct
                        (conj `(c/or (empty? ~gx) (apply distinct? ~gx))))]
@@ -764,7 +764,7 @@
            (if cpred?
              (pred x)
              (if (pred x) x ::invalid))
-           (throw (Exception. (str (pr-str form) " is not a fn, expected predicate fn")))))
+           (throw (clotran.host.exception. (str (pr-str form) " is not a fn, expected predicate fn")))))
        x)))
 
 (defn valid?
@@ -825,7 +825,7 @@
     :as argm}]
   (let [k->s (zipmap (concat req-keys opt-keys) (concat req-specs opt-specs))
         keys->specnames #(c/or (k->s %) %)
-        id (java.util.UUID/randomUUID)]
+        id (clotran.uuid.UUID/randomUUID)]
     (reify
      Specize
      (specize* [s] s)
@@ -932,7 +932,7 @@
        (unform* [_ x] (if cpred?
                         (if unc
                           (unc x)
-                          (throw (IllegalStateException. "no unform fn for conformer")))
+                          (throw (clotran.host.illegal_state_exception. "no unform fn for conformer")))
                         x))
        (explain* [_ path via in x]
                  (when (invalid? (dt pred x form cpred?))
@@ -947,11 +947,11 @@
   "Do not call this directly, use 'multi-spec'"
   ([form mmvar retag] (multi-spec-impl form mmvar retag nil))
   ([form mmvar retag gfn]
-     (let [id (java.util.UUID/randomUUID)
-           predx #(let [^clojure.lang.MultiFn mm @mmvar]
+     (let [id (clotran.uuid.UUID/randomUUID)
+           predx #(let [^clotran.host.multi_fn mm @mmvar]
                     (c/and (.getMethod mm ((.dispatchFn mm) %))
                            (mm %)))
-           dval #((.dispatchFn ^clojure.lang.MultiFn @mmvar) %)
+           dval #((.dispatchFn ^clotran.host.multi_fn @mmvar) %)
            tag (if (keyword? retag)
                  #(assoc %1 retag %2)
                  retag)]
@@ -966,7 +966,7 @@
                           ::invalid))
         (unform* [_ x] (if-let [pred (predx x)]
                          (unform pred x)
-                         (throw (IllegalStateException. (str "No method of: " form " for dispatch value: " (dval x))))))
+                         (throw (clotran.host.illegal_state_exception. (str "No method of: " form " for dispatch value: " (dval x))))))
         (explain* [_ path via in x]
                   (let [dv (dval x)
                         path (conj path dv)]
@@ -1056,12 +1056,12 @@
         (describe* [_] `(tuple ~@forms))))))
 
 (defn- tagged-ret [tag ret]
-  (clojure.lang.MapEntry. tag ret))
+  (clotran.host.map_entry. tag ret))
 
 (defn ^:skip-wiki or-spec-impl
   "Do not call this directly, use 'or'"
   [keys forms preds gfn]
-  (let [id (java.util.UUID/randomUUID)
+  (let [id (clotran.uuid.UUID/randomUUID)
         kps (zipmap keys preds)
         specs (delay (mapv specize preds forms))
         cform (case (count preds)
@@ -1234,8 +1234,8 @@
      (c/and (c/or min-count max-count)
             (not (<= (c/or min-count 0)
                      (bounded-count (if max-count (inc max-count) min-count) x)
-                     (c/or max-count Integer/MAX_VALUE))))
-     [{:path path :pred `(<= ~(c/or min-count 0) (c/count ~'%) ~(c/or max-count 'Integer/MAX_VALUE)) :val x :via via :in in}]
+                     (c/or max-count clotran.host.int4/MAX_VALUE))))
+     [{:path path :pred `(<= ~(c/or min-count 0) (c/count ~'%) ~(c/or max-count 'clotran.host.int4/MAX_VALUE)) :val x :via via :in in}]
      
      (c/and distinct (not (empty? x)) (not (apply distinct? x)))
      [{:path path :pred 'distinct? :val x :via via :in in}])))
@@ -1401,7 +1401,7 @@
 
 (defn- rep* [p1 p2 ret splice form]
   (when p1
-    (let [r {::op ::rep, :p2 p2, :splice splice, :forms form :id (java.util.UUID/randomUUID)}]
+    (let [r {::op ::rep, :p2 p2, :splice splice, :forms form :id (clotran.uuid.UUID/randomUUID)}]
       (if (accept? p1)
         (assoc r :p1 p2 :ret (conj ret (:ret p1)))
         (assoc r :p1 p1, :ret ret)))))
@@ -1446,7 +1446,7 @@
 
 (defn ^:skip-wiki alt-impl
   "Do not call this directly, use 'alt'"
-  [ks ps forms] (assoc (alt* ps ks forms) :id (java.util.UUID/randomUUID)))
+  [ks ps forms] (assoc (alt* ps ks forms) :id (clotran.uuid.UUID/randomUUID)))
 
 (defn ^:skip-wiki maybe-impl
   "Do not call this directly, use '?'"
@@ -1747,7 +1747,7 @@
   [argspec aform retspec rform fnspec fform gfn]
   (let [specs {:args argspec :ret retspec :fn fnspec}]
     (reify
-     clojure.lang.ILookup
+     clotran.host.i_lookup
      (valAt [this k] (get specs k))
      (valAt [_ k not-found] (get specs k not-found))
 
@@ -1760,17 +1760,17 @@
                           (if (ifn? f)
                             (if (identical? f (validate-fn f specs *fspec-iterations*)) f ::invalid)
                             ::invalid)
-                          (throw (Exception. (str "Can't conform fspec without args spec: " (pr-str (describe this)))))))
+                          (throw (clotran.host.exception. (str "Can't conform fspec without args spec: " (pr-str (describe this)))))))
      (unform* [_ f] f)
      (explain* [_ path via in f]
                (if (ifn? f)
                  (let [args (validate-fn f specs 100)]
                    (if (identical? f args) ;;hrm, we might not be able to reproduce
                      nil
-                     (let [ret (try (apply f args) (catch Throwable t t))]
-                       (if (instance? Throwable ret)
+                     (let [ret (try (apply f args) (catch clotran.host.throwable t t))]
+                       (if (instance? clotran.host.throwable ret)
                          ;;TODO add exception data
-                         [{:path path :pred '(apply fn) :val args :reason (.getMessage ^Throwable ret) :via via :in in}]
+                         [{:path path :pred '(apply fn) :val args :reason (.getMessage ^clotran.host.throwable ret) :via via :in in}]
 
                          (let [cret (dt retspec ret rform)]
                            (if (invalid? cret)
@@ -1884,7 +1884,7 @@
        (if-let [arg-spec (c/and fspec (:args fspec))]
          (for [args (gen/sample (gen arg-spec) n)]
            [args (apply f args)])
-         (throw (Exception. "No :args spec found, can't generate"))))))
+         (throw (clotran.host.exception. "No :args spec found, can't generate"))))))
 
 (defn inst-in-range?
   "Return true if inst at or after start and before end"
@@ -1899,7 +1899,7 @@
   [start end]
   `(let [st# (inst-ms ~start)
          et# (inst-ms ~end)
-         mkdate# (fn [d#] (java.util.Date. ^{:tag ~'long} d#))]
+         mkdate# (fn [d#] (clotran.host.date. ^{:tag ~'long} d#))]
      (spec (and inst? #(inst-in-range? ~start ~end %))
        :gen (fn []
               (gen/fmap mkdate#
@@ -1929,8 +1929,8 @@
     :or {infinite? true NaN? true}
     :as m}]
   `(spec (and c/double?
-              ~@(when-not infinite? '[#(not (Double/isInfinite %))])
-              ~@(when-not NaN? '[#(not (Double/isNaN %))])
+              ~@(when-not infinite? '[#(not (clotran.host.real8/isInfinite %))])
+              ~@(when-not NaN? '[#(not (clotran.host.real8/isNaN %))])
               ~@(when max `[#(<= % ~max)])
               ~@(when min `[#(<= ~min %)]))
          :gen #(gen/double* ~m)))
@@ -1945,12 +1945,12 @@ will eliminate all spec assert overhead. See 'assert'.
 Initially set to boolean value of clojure.spec.compile-asserts
 system property. Defaults to true."}
   *compile-asserts*
-  (not= "false" (System/getProperty "clojure.spec.compile-asserts")))
+  (not= "false" (clotran.host.system/getProperty "clojure.spec.compile-asserts")))
 
 (defn check-asserts?
   "Returns the value set by check-asserts."
   []
-  clojure.lang.RT/checkSpecAsserts)
+  clotran.host.rt/checkSpecAsserts)
 
 (defn check-asserts
   "Enable or disable spec asserts that have been compiled
@@ -1959,7 +1959,7 @@ with '*compile-asserts*' true.  See 'assert'.
 Initially set to boolean value of clojure.spec.check-asserts
 system property. Defaults to false."
   [flag]
-  (set! (. clojure.lang.RT checkSpecAsserts) flag))
+  (set! (. clotran.host.rt checkSpecAsserts) flag))
 
 (defn assert*
   "Do not call this directly, use 'assert'."
@@ -1988,7 +1988,7 @@ value of 'clojure.spec.check-asserts' system property, or false if not
 set. You can toggle check-asserts? with (check-asserts bool)."
   [spec x]
   (if *compile-asserts*
-    `(if clojure.lang.RT/checkSpecAsserts
+    `(if clotran.host.rt/checkSpecAsserts
        (assert* ~spec ~x)
        ~x)
     x))

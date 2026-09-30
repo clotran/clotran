@@ -67,23 +67,23 @@
     (is (= [1 2 3] [b c d]))))
 
 (deftest keywords-not-allowed-in-let-bindings
-  (is (thrown-with-cause-msg? Exception #"did not conform to spec"
+  (is (thrown-with-cause-msg? clotran.host.exception #"did not conform to spec"
                         (eval '(let [:a 1] a))))
-  (is (thrown-with-cause-msg? Exception #"did not conform to spec"
+  (is (thrown-with-cause-msg? clotran.host.exception #"did not conform to spec"
                         (eval '(let [:a/b 1] b))))
-  (is (thrown-with-cause-msg? Exception #"did not conform to spec"
+  (is (thrown-with-cause-msg? clotran.host.exception #"did not conform to spec"
                         (eval '(let [[:a] [1]] a))))
-  (is (thrown-with-cause-msg? Exception #"did not conform to spec"
+  (is (thrown-with-cause-msg? clotran.host.exception #"did not conform to spec"
                         (eval '(let [[:a/b] [1]] b)))))
 
 (deftest namespaced-syms-only-allowed-in-map-destructuring
-  (is (thrown-with-cause-msg? Exception #"did not conform to spec"
+  (is (thrown-with-cause-msg? clotran.host.exception #"did not conform to spec"
                         (eval '(let [a/x 1, [y] [1]] x))))
-  (is (thrown-with-cause-msg? Exception #"did not conform to spec"
+  (is (thrown-with-cause-msg? clotran.host.exception #"did not conform to spec"
                         (eval '(let [[a/x] [1]] x)))))
 
 (deftest or-doesnt-create-bindings
-  (is (thrown-with-cause-msg? Exception #"Unable to resolve symbol: b"
+  (is (thrown-with-cause-msg? clotran.host.exception #"Unable to resolve symbol: b"
                         (eval '(let [{:keys [a] :or {b 2}} {:a 1}] [a b])))))
 
 (require '[clojure.string :as s])
@@ -92,7 +92,7 @@
     (is (= [1 2 3] [x y z]))))
 
 (deftest quote-with-multiple-args
-  (let [ex (is (thrown? clojure.lang.Compiler$CompilerException
+  (let [ex (is (thrown? clotran.host.compiler_compiler_exception
                         (eval '(quote 1 2 3))))]
     (is (= '(quote 1 2 3)
            (-> ex
@@ -103,5 +103,5 @@
 (deftest typehints-retained-destructuring
   (should-not-reflect
     (defn foo
-      [{:keys [^String s]}]
+      [{:keys [^clotran.host.string s]}]
       (.indexOf s "boo"))))

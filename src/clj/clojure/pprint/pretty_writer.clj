@@ -12,13 +12,13 @@
 ;; April 3, 2009
 ;; Revised to use proxy instead of gen-class April 2010
 
-;; This module implements a wrapper around a java.io.Writer which implements the
+;; This module implements a wrapper around a clotran.host.writer which implements the
 ;; core of the XP algorithm.
 
 (in-ns 'clojure.pprint)
 
-(import [clojure.lang IDeref]
-        [java.io Writer])
+(import 
+        )
 
 ;; TODO: Support for tab directives
 
@@ -61,7 +61,7 @@
   "Call .write on Writer (getf :base) with proper type-hinting to
   avoid reflection."
   [& args]
-  `(let [^Writer w# (getf :base)]
+  `(let [^clotran.host.writer w# (getf :base)]
      (.write w# ~@args)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -105,27 +105,27 @@
 ;;; Functions to write tokens in the output buffer
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(def ^:private pp-newline (memoize #(System/getProperty "line.separator")))
+(def ^:private pp-newline (memoize #(clotran.host.system/getProperty "line.separator")))
 
 (declare emit-nl)
 
 (defmulti ^{:private true} write-token #(:type-tag %2))
-(defmethod write-token :start-block-t [^Writer this token]
+(defmethod write-token :start-block-t [^clotran.host.writer this token]
    (when-let [cb (getf :logical-block-callback)] (cb :start))
    (let [lb (:logical-block token)]
     (dosync
-     (when-let [^String prefix (:prefix lb)] 
+     (when-let [^clotran.host.string prefix (:prefix lb)] 
        (write-to-base prefix))
      (let [col (get-column (getf :base))]
        (ref-set (:start-col lb) col)
        (ref-set (:indent lb) col)))))
 
-(defmethod write-token :end-block-t [^Writer this token]
+(defmethod write-token :end-block-t [^clotran.host.writer this token]
   (when-let [cb (getf :logical-block-callback)] (cb :end))
-  (when-let [^String suffix (:suffix (:logical-block token))] 
+  (when-let [^clotran.host.string suffix (:suffix (:logical-block token))] 
     (write-to-base suffix)))
 
-(defmethod write-token :indent-t [^Writer this token]
+(defmethod write-token :indent-t [^clotran.host.writer this token]
   (let [lb (:logical-block token)]
     (ref-set (:indent lb) 
              (+ (:offset token)
@@ -133,28 +133,28 @@
 		  :block @(:start-col lb)
 		  :current (get-column (getf :base)))))))
 
-(defmethod write-token :buffer-blob [^Writer this token]
-  (write-to-base ^String (:data token)))
+(defmethod write-token :buffer-blob [^clotran.host.writer this token]
+  (write-to-base ^clotran.host.string (:data token)))
 
-(defmethod write-token :nl-t [^Writer this token]
+(defmethod write-token :nl-t [^clotran.host.writer this token]
 ;  (prlabel wt @(:done-nl (:logical-block token)))
 ;  (prlabel wt (:type token) (= (:type token) :mandatory))
   (if (or (= (:type token) :mandatory)
            (and (not (= (:type token) :fill))
                 @(:done-nl (:logical-block token))))
     (emit-nl this token)
-    (if-let [^String tws (getf :trailing-white-space)]
+    (if-let [^clotran.host.string tws (getf :trailing-white-space)]
       (write-to-base tws)))
   (dosync (setf :trailing-white-space nil)))
 
-(defn- write-tokens [^Writer this tokens force-trailing-whitespace]
+(defn- write-tokens [^clotran.host.writer this tokens force-trailing-whitespace]
   (doseq [token tokens]
     (if-not (= (:type-tag token) :nl-t)
-      (if-let [^String tws (getf :trailing-white-space)]
+      (if-let [^clotran.host.string tws (getf :trailing-white-space)]
 	(write-to-base tws)))
     (write-token this token)
     (setf :trailing-white-space (:trailing-white-space token)))
-  (let [^String tws (getf :trailing-white-space)] 
+  (let [^clotran.host.string tws (getf :trailing-white-space)] 
     (when (and force-trailing-whitespace tws)
       (write-to-base tws)
       (setf :trailing-white-space nil))))
@@ -165,7 +165,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 
-(defn- tokens-fit? [^Writer this tokens]
+(defn- tokens-fit? [^clotran.host.writer this tokens]
 ;;;  (prlabel tf? (get-column (getf :base) (buffer-length tokens))
   (let [maxcol (get-max-column (getf :base))]
     (or 
@@ -177,7 +177,7 @@
   (or @(:done-nl lb)
       (not (tokens-fit? this section))))
 
-(defn- miser-nl? [^Writer this lb section]
+(defn- miser-nl? [^clotran.host.writer this lb section]
   (let [miser-width (get-miser-width this)
         maxcol (get-max-column (getf :base))]
     (and miser-width maxcol
@@ -233,14 +233,14 @@
            (ref-set (:intra-block-nl lb) true)
            (recur (:parent lb)))))))
 
-(defn- emit-nl [^Writer this nl]
-  (write-to-base ^String (pp-newline))
+(defn- emit-nl [^clotran.host.writer this nl]
+  (write-to-base ^clotran.host.string (pp-newline))
   (dosync (setf :trailing-white-space nil))
   (let [lb (:logical-block nl)
-        ^String prefix (:per-line-prefix lb)] 
+        ^clotran.host.string prefix (:per-line-prefix lb)] 
     (if prefix 
       (write-to-base prefix))
-    (let [^String istr (apply str (repeat (- @(:indent lb) (count prefix))
+    (let [^clotran.host.string istr (apply str (repeat (- @(:indent lb) (count prefix))
 					  \space))] 
       (write-to-base istr))
     (update-nl-state lb)))
@@ -293,7 +293,7 @@
               ] 
           result)))))
 
-(defn- write-line [^Writer this]
+(defn- write-line [^clotran.host.writer this]
   (dosync
    (loop [buffer (getf :buffer)]
 ;;     (prlabel wl1 (toks buffer))
@@ -306,7 +306,7 @@
 
 ;;; Add a buffer token to the buffer and see if it's time to start
 ;;; writing
-(defn- add-to-buffer [^Writer this token]
+(defn- add-to-buffer [^clotran.host.writer this token]
 ;  (prlabel a2b token)
   (dosync
    (setf :buffer (conj (getf :buffer) token))
@@ -314,15 +314,15 @@
      (write-line this))))
 
 ;;; Write all the tokens that have been buffered
-(defn- write-buffered-output [^Writer this]
+(defn- write-buffered-output [^clotran.host.writer this]
   (write-line this)
   (if-let [buf (getf :buffer)]
     (do
       (write-tokens this buf true)
       (setf :buffer []))))
 
-(defn- write-white-space [^Writer this]
-  (when-let [^String tws (getf :trailing-white-space)]
+(defn- write-white-space [^clotran.host.writer this]
+  (when-let [^clotran.host.string tws (getf :trailing-white-space)]
     ; (prlabel wws (str "*" tws "*"))
     (write-to-base tws)
     (dosync
@@ -331,13 +331,13 @@
 ;;; If there are newlines in the string, print the lines up until the last newline, 
 ;;; making the appropriate adjustments. Return the remainder of the string
 (defn- write-initial-lines 
-  [^Writer this ^String s] 
+  [^clotran.host.writer this ^clotran.host.string s] 
   (let [lines (.split s "\n" -1)]
     (if (= (count lines) 1)
       s
       (dosync 
-       (let [^String prefix (:per-line-prefix (first (getf :logical-blocks)))
-             ^String l (first lines)] 
+       (let [^clotran.host.string prefix (:per-line-prefix (first (getf :logical-blocks)))
+             ^clotran.host.string l (first lines)] 
          (if (= :buffering (getf :mode))
            (let [oldpos (getf :pos)
                  newpos (+ oldpos (count l))]
@@ -348,16 +348,16 @@
              (write-white-space this)
              (write-to-base l)))
          (write-to-base (int \newline))
-         (doseq [^String l (next (butlast lines))]
+         (doseq [^clotran.host.string l (next (butlast lines))]
            (write-to-base l)
-           (write-to-base ^String (pp-newline))
+           (write-to-base ^clotran.host.string (pp-newline))
            (if prefix
              (write-to-base prefix)))
          (setf :buffering :writing)
          (last lines))))))
 
 
-(defn- p-write-char [^Writer this ^Integer c]
+(defn- p-write-char [^clotran.host.writer this ^clotran.host.int4 c]
   (if (= (getf :mode) :writing)
     (do 
       (write-white-space this)
@@ -389,16 +389,16 @@
                      :miser-width miser-width
                      :trailing-white-space nil
                      :pos 0})]
-    (proxy [Writer IDeref PrettyFlush] []
+    (proxy [clotran.host.writer clotran.host.i_deref PrettyFlush] []
       (deref [] fields)
 
       (write 
        ([x]
           ;;     (prlabel write x (getf :mode))
           (condp = (class x)
-            String 
-            (let [^String s0 (write-initial-lines this x)
-                  ^String s (.replaceFirst s0 "\\s+$" "")
+            clotran.host.string 
+            (let [^clotran.host.string s0 (write-initial-lines this x)
+                  ^clotran.host.string s (.replaceFirst s0 "\\s+$" "")
                   white-space (.substring s0 (count s))
                   mode (getf :mode)]
               (dosync
@@ -412,12 +412,12 @@
                    (setf :pos newpos)
                    (add-to-buffer this (make-buffer-blob s white-space oldpos newpos))))))
 
-            Integer
+            clotran.host.int4
             (p-write-char this x)
-            Long
+            clotran.host.int8
             (p-write-char this x)))
         ([x off len]
-           (.write ^Writer this (subs (str x) off (+ off len)))))
+           (.write ^clotran.host.writer this (subs (str x) off (+ off len)))))
 
       (ppflush []
              (if (= (getf :mode) :buffering)
@@ -428,11 +428,11 @@
 
       (flush []
              (.ppflush ^PrettyFlush this)
-             (let [^Writer w (getf :base)]
+             (let [^clotran.host.writer w (getf :base)]
                (.flush w)))
 
       (close []
-             (.flush ^Writer this)))))
+             (.flush ^clotran.host.writer this)))))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -440,8 +440,8 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn- start-block 
-  [^Writer this 
-   ^String prefix ^String per-line-prefix ^String suffix]
+  [^clotran.host.writer this 
+   ^clotran.host.string prefix ^clotran.host.string per-line-prefix ^clotran.host.string suffix]
   (dosync 
    (let [lb (struct logical-block (getf :logical-blocks) nil (ref 0) (ref 0)
                     (ref false) (ref false)
@@ -461,10 +461,10 @@
          (setf :pos newpos)
          (add-to-buffer this (make-start-block-t lb oldpos newpos)))))))
 
-(defn- end-block [^Writer this]
+(defn- end-block [^clotran.host.writer this]
   (dosync
    (let [lb (getf :logical-blocks)
-         ^String suffix (:suffix lb)]
+         ^clotran.host.string suffix (:suffix lb)]
      (if (= (getf :mode) :writing)
        (do
          (write-white-space this)
@@ -477,13 +477,13 @@
          (add-to-buffer this (make-end-block-t lb oldpos newpos))))
      (setf :logical-blocks (:parent lb)))))
 
-(defn- nl [^Writer this type]
+(defn- nl [^clotran.host.writer this type]
   (dosync 
    (setf :mode :buffering)
    (let [pos (getf :pos)]
      (add-to-buffer this (make-nl-t type (getf :logical-blocks) pos pos)))))
 
-(defn- indent [^Writer this relative-to offset]
+(defn- indent [^clotran.host.writer this relative-to offset]
   (dosync 
    (let [lb (getf :logical-blocks)]
      (if (= (getf :mode) :writing)
@@ -496,11 +496,11 @@
        (let [pos (getf :pos)]
          (add-to-buffer this (make-indent-t lb relative-to offset pos pos)))))))
 
-(defn- get-miser-width [^Writer this]
+(defn- get-miser-width [^clotran.host.writer this]
   (getf :miser-width))
 
-(defn- set-miser-width [^Writer this new-miser-width]
+(defn- set-miser-width [^clotran.host.writer this new-miser-width]
   (dosync (setf :miser-width new-miser-width)))
 
-(defn- set-logical-block-callback [^Writer this f]
+(defn- set-logical-block-callback [^clotran.host.writer this f]
   (dosync (setf :logical-block-callback f)))

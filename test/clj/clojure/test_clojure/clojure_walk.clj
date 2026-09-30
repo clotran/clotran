@@ -54,8 +54,8 @@
                         (reduce + (map (comp inc val) c))))
                  (is (= (w/walk inc #(reduce + %) c)
                         (reduce + (map inc c)))))
-               (when (or (instance? clojure.lang.PersistentTreeMap c)
-                         (instance? clojure.lang.PersistentTreeSet c))
+               (when (or (instance? clotran.host.persistent_tree_map c)
+                         (instance? clotran.host.persistent_tree_set c))
                  (is (= (.comparator c) (.comparator walked))))))))
 
 (deftest walk-mapentry

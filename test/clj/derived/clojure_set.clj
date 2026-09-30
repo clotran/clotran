@@ -1,4 +1,4 @@
-;; DERIVED from test/clj/clojure/test_clojure/clojure_set.clj by scripts/derive-tests -- do not edit.
+;; DERIVED from upstream/clojure/test/clojure/test_clojure/clojure_set.clj by upstream/derive-tests -- do not edit.
 ;; Kept: tests whose symbols lie in the clojure.core/cljs.core intersection (plus concurrency).
 
 (ns clojure.test-clojure.clojure-set (:use clojure.test) (:require [clojure.set :as set]))
@@ -62,7 +62,7 @@
 ;; clojure_set.clj:65 [language]
 (deftest test-intersection
   ; at least one argument is needed
-  (is (thrown? IllegalArgumentException (set/intersection)))
+  (is (thrown? clotran.host.illegal_argument_exception (set/intersection)))
   
   (are [x y] (= x y)
       ; identity

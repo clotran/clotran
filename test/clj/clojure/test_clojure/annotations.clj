@@ -11,9 +11,9 @@
 (ns clojure.test-clojure.annotations
   (:use clojure.test))
 
-(case (System/getProperty "java.specification.version")
-      "1.8" (load "annotations/java_8")
-      "9" (load "annotations/java_9")
-      "10" (load "annotations/java_9")
+(case (clotran.host.system/getProperty "host.specification.version")
+      "1.8" (load "annotations/host_8")
+      "9" (load "annotations/host_9")
+      "10" (load "annotations/host_9")
       nil)
 

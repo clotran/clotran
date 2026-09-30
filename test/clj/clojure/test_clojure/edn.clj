@@ -23,7 +23,7 @@
             *print-level* nil]
     (try
      (-> o pr-str edn/read-string)
-     (catch Throwable t t))))
+     (catch clotran.host.throwable t t))))
 
 (defspec types-that-should-roundtrip
   roundtrip
@@ -34,5 +34,5 @@
 (defspec types-that-should-not-roundtrip
   roundtrip
   [^{:tag cgen/non-ednable} o]
-  (when-not (instance? Throwable %)
+  (when-not (instance? clotran.host.throwable %)
     (throw (ex-info "edn/read should have thrown, see ex-data" {:printed o :read %}))))

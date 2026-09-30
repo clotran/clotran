@@ -20,7 +20,7 @@
 
 (defn- throwable?
   [x]
-  (instance? Throwable x))
+  (instance? clotran.host.throwable x))
 
 (defn ->sym
   [x]
@@ -33,7 +33,7 @@
     (let [v (and (symbol? s-or-v) (resolve s-or-v))]
       (if (var? v)
         v
-        (throw (IllegalArgumentException. (str (pr-str s-or-v) " does not name a var")))))))
+        (throw (clotran.host.illegal_argument_exception. (str (pr-str s-or-v) " does not name a var")))))))
 
 (defn- collectionize
   [x]
@@ -89,7 +89,7 @@ guessing the original Clojure names. Returns a map with
 For non-Clojure fns, :scope and :local-fn will be absent."
   [[cls method file line]]
   (let [clojure? (contains? '#{invoke invokeStatic} method)
-        demunge #(clojure.lang.Compiler/demunge %)
+        demunge #(clotran.host.compiler/demunge %)
         degensym #(str/replace % #"--.*" "")
         [ns-sym name-sym local] (when clojure?
                                   (->> (str/split (str cls) #"\$" 3)
@@ -131,7 +131,7 @@ failure in instrument."
         conform! (fn [fn-name role spec data args]
                    (let [conformed (s/conform spec data)]
                      (if (= ::s/invalid conformed)
-                       (let [caller (->> (.getStackTrace (Thread/currentThread))
+                       (let [caller (->> (.getStackTrace (clotran.host.thread/currentThread))
                                          stacktrace-relevant-to-instrument
                                          first)
                              ed (merge (assoc (s/explain-data* spec [] [] [] data)
@@ -150,8 +150,8 @@ failure in instrument."
        (with-instrument-disabled
          (when (:args fn-spec) (conform! fn-name :args (:args fn-spec) args args))
          (binding [*instrument-enabled* true]
-           (.applyTo ^clojure.lang.IFn f args)))
-       (.applyTo ^clojure.lang.IFn f args)))))
+           (.applyTo ^clotran.host.i_fn f args)))
+       (.applyTo ^clotran.host.i_fn f args)))))
 
 (defn- no-fspec
   [v spec]
@@ -415,7 +415,7 @@ with explain-data + ::s/failure."
 (defn- quick-check
   [f specs {gen :gen opts ::stc/opts}]
   (let [{:keys [num-tests] :or {num-tests 1000}} opts
-        g (try (s/gen (:args specs) gen) (catch Throwable t t))]
+        g (try (s/gen (:args specs) gen) (catch clotran.host.throwable t t))]
     (if (throwable? g)
       {:result g}
       (let [prop (gen/for-all* [g] #(check-call f specs %))]

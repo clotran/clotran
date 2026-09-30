@@ -8,6 +8,6 @@
 (defprotocol Sized (size-of [x]))
 
 (extend-protocol Sized
-  String (size-of [s] (count s))
-  clojure.lang.IPersistentVector (size-of [v] (reduce + (map size-of v)))
+  clotran.host.string (size-of [s] (count s))
+  clotran.host.i_persistent_vector (size-of [v] (reduce + (map size-of v)))
   nil (size-of [_] 0))

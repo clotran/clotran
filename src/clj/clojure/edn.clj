@@ -13,7 +13,7 @@
 
 (defn read
   "Reads the next object from stream, which must be an instance of
-  java.io.PushbackReader or some derivee.  stream defaults to the
+  clotran.io.PushbackReader or some derivee.  stream defaults to the
   current value of *in*.
 
   Reads data in the edn format (subset of Clojure data):
@@ -32,7 +32,7 @@
   ([stream]
    (read {} stream))
   ([opts stream]
-     (clojure.lang.EdnReader/read stream opts)))
+     (clotran.host.edn_reader/read stream opts)))
 
 (defn read-string
   "Reads one object from the string s. Returns nil when s is nil or empty.
@@ -43,4 +43,4 @@
   opts is a map as per clojure.edn/read"
   {:added "1.5"}
   ([s] (read-string {:eof nil} s))
-  ([opts s] (when s (clojure.lang.EdnReader/readString s opts))))
+  ([opts s] (when s (clotran.host.edn_reader/readString s opts))))

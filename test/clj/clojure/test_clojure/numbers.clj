@@ -28,7 +28,7 @@
 
 
 (deftest Coerced-BigDecimal
-  (doseq [v [(bigdec 3) (bigdec (inc (bigint Long/MAX_VALUE)))]]
+  (doseq [v [(bigdec 3) (bigdec (inc (bigint clotran.host.int8/MAX_VALUE)))]]
     (are [x] (true? x)
      (instance? BigDecimal v)
      (number? v)
@@ -37,14 +37,14 @@
 
 (deftest BigInteger-conversions
   (doseq [coerce-fn [bigint biginteger]]
-    (doseq [v (map coerce-fn [ Long/MAX_VALUE
+    (doseq [v (map coerce-fn [ clotran.host.int8/MAX_VALUE
                               13178456923875639284562345789M
                               13178456923875639284562345789N
-                              Float/MAX_VALUE
-                              (- Float/MAX_VALUE)
-                              Double/MAX_VALUE
-                              (- Double/MAX_VALUE)
-                              (* 2 (bigdec Double/MAX_VALUE)) ])]
+                              clotran.host.real4/MAX_VALUE
+                              (- clotran.host.real4/MAX_VALUE)
+                              clotran.host.real8/MAX_VALUE
+                              (- clotran.host.real8/MAX_VALUE)
+                              (* 2 (bigdec clotran.host.real8/MAX_VALUE)) ])]
       (are [x] (true? x)
         (integer? v)
         (number? v)
@@ -104,12 +104,12 @@
     (are [n]
       (let [a (prim-array 1)]
         (aset a 0 (cast n)))
-      (Byte. Byte/MAX_VALUE)
-      (Short. Short/MAX_VALUE)
-      (Integer. Integer/MAX_VALUE)
-      (Long. Long/MAX_VALUE)
-      (Float. Float/MAX_VALUE)
-      (Double. Double/MAX_VALUE))
+      (clotran.host.int1. clotran.host.int1/MAX_VALUE)
+      (clotran.host.int2. clotran.host.int2/MAX_VALUE)
+      (clotran.host.int4. clotran.host.int4/MAX_VALUE)
+      (clotran.host.int8. clotran.host.int8/MAX_VALUE)
+      (clotran.host.real4. clotran.host.real4/MAX_VALUE)
+      (clotran.host.real8. clotran.host.real8/MAX_VALUE))
     byte-array
     unchecked-byte
     short-array
@@ -130,12 +130,12 @@
     (are [n]
       (let [a (prim-array 1)]
         (aset a 0 (cast n)))
-      Byte/MAX_VALUE
-      Short/MAX_VALUE
-      Integer/MAX_VALUE
-      Long/MAX_VALUE
-      Float/MAX_VALUE
-      Double/MAX_VALUE)
+      clotran.host.int1/MAX_VALUE
+      clotran.host.int2/MAX_VALUE
+      clotran.host.int4/MAX_VALUE
+      clotran.host.int8/MAX_VALUE
+      clotran.host.real4/MAX_VALUE
+      clotran.host.real8/MAX_VALUE)
     byte-array
     unchecked-byte
     short-array
@@ -158,22 +158,22 @@
 
 (def expected-casts
   [
-   [:input           [-1            0           1           Byte/MAX_VALUE  Short/MAX_VALUE  Integer/MAX_VALUE  Long/MAX_VALUE         Float/MAX_VALUE    Double/MAX_VALUE]]
+   [:input           [-1            0           1           clotran.host.int1/MAX_VALUE  clotran.host.int2/MAX_VALUE  clotran.host.int4/MAX_VALUE  clotran.host.int8/MAX_VALUE         clotran.host.real4/MAX_VALUE    clotran.host.real8/MAX_VALUE]]
    [char             [:error        (char 0)    (char 1)    (char 127)      (char 32767)     :error             :error                 :error             :error]]
    [unchecked-char   [(char 65535)  (char 0)    (char 1)    (char 127)      (char 32767)     (char 65535)       (char 65535)           (char 65535)       (char 65535)]]
-   [byte             [-1            0           1           Byte/MAX_VALUE  :error           :error             :error                 :error             :error]]
-   [unchecked-byte   [-1            0           1           Byte/MAX_VALUE  -1               -1                 -1                     -1                 -1]]
-   [short            [-1            0           1           Byte/MAX_VALUE  Short/MAX_VALUE  :error             :error                 :error             :error]]
-   [unchecked-short  [-1            0           1           Byte/MAX_VALUE  Short/MAX_VALUE  -1                 -1                     -1                 -1]] 
-   [int              [-1            0           1           Byte/MAX_VALUE  Short/MAX_VALUE  Integer/MAX_VALUE  :error                 :error             :error]]
-   [unchecked-int    [-1            0           1           Byte/MAX_VALUE  Short/MAX_VALUE  Integer/MAX_VALUE  -1                     Integer/MAX_VALUE  Integer/MAX_VALUE]]
-   [long             [-1            0           1           Byte/MAX_VALUE  Short/MAX_VALUE  Integer/MAX_VALUE  Long/MAX_VALUE         :error             :error]]
-   [unchecked-long   [-1            0           1           Byte/MAX_VALUE  Short/MAX_VALUE  Integer/MAX_VALUE  Long/MAX_VALUE         Long/MAX_VALUE     Long/MAX_VALUE]]
+   [byte             [-1            0           1           clotran.host.int1/MAX_VALUE  :error           :error             :error                 :error             :error]]
+   [unchecked-byte   [-1            0           1           clotran.host.int1/MAX_VALUE  -1               -1                 -1                     -1                 -1]]
+   [short            [-1            0           1           clotran.host.int1/MAX_VALUE  clotran.host.int2/MAX_VALUE  :error             :error                 :error             :error]]
+   [unchecked-short  [-1            0           1           clotran.host.int1/MAX_VALUE  clotran.host.int2/MAX_VALUE  -1                 -1                     -1                 -1]] 
+   [int              [-1            0           1           clotran.host.int1/MAX_VALUE  clotran.host.int2/MAX_VALUE  clotran.host.int4/MAX_VALUE  :error                 :error             :error]]
+   [unchecked-int    [-1            0           1           clotran.host.int1/MAX_VALUE  clotran.host.int2/MAX_VALUE  clotran.host.int4/MAX_VALUE  -1                     clotran.host.int4/MAX_VALUE  clotran.host.int4/MAX_VALUE]]
+   [long             [-1            0           1           clotran.host.int1/MAX_VALUE  clotran.host.int2/MAX_VALUE  clotran.host.int4/MAX_VALUE  clotran.host.int8/MAX_VALUE         :error             :error]]
+   [unchecked-long   [-1            0           1           clotran.host.int1/MAX_VALUE  clotran.host.int2/MAX_VALUE  clotran.host.int4/MAX_VALUE  clotran.host.int8/MAX_VALUE         clotran.host.int8/MAX_VALUE     clotran.host.int8/MAX_VALUE]]
                                                                                              ;; 2.14748365E9 if when float/double conversion is avoided...
-   [float            [-1.0          0.0         1.0         127.0           32767.0          2.147483648E9      9.223372036854776E18   Float/MAX_VALUE    :error]]
-   [unchecked-float  [-1.0          0.0         1.0         127.0           32767.0          2.147483648E9      9.223372036854776E18   Float/MAX_VALUE    Float/POSITIVE_INFINITY]]
-   [double           [-1.0          0.0         1.0         127.0           32767.0          2.147483647E9      9.223372036854776E18   Float/MAX_VALUE    Double/MAX_VALUE]]
-   [unchecked-double [-1.0          0.0         1.0         127.0           32767.0          2.147483647E9      9.223372036854776E18   Float/MAX_VALUE    Double/MAX_VALUE]]])
+   [float            [-1.0          0.0         1.0         127.0           32767.0          2.147483648E9      9.223372036854776E18   clotran.host.real4/MAX_VALUE    :error]]
+   [unchecked-float  [-1.0          0.0         1.0         127.0           32767.0          2.147483648E9      9.223372036854776E18   clotran.host.real4/MAX_VALUE    clotran.host.real4/POSITIVE_INFINITY]]
+   [double           [-1.0          0.0         1.0         127.0           32767.0          2.147483647E9      9.223372036854776E18   clotran.host.real4/MAX_VALUE    clotran.host.real8/MAX_VALUE]]
+   [unchecked-double [-1.0          0.0         1.0         127.0           32767.0          2.147483647E9      9.223372036854776E18   clotran.host.real4/MAX_VALUE    clotran.host.real8/MAX_VALUE]]])
 
 (deftest test-expected-casts
   (let [[[_ inputs] & expectations] expected-casts]
@@ -181,11 +181,11 @@
       (let [wrapped (fn [x]
                       (try
                        (f x)
-                       (catch RuntimeException e :error)))]
+                       (catch clotran.host.runtime_exception e :error)))]
         (is (= vals (map wrapped inputs)))))))
 
 (deftest test-prim-with-matching-hint
-  (is (= 1 (let [x 1.2] (Math/round ^double x)))))
+  (is (= 1 (let [x 1.2] (clotran.host.math/round ^double x)))))
 
 ;; *** Functions ***
 
@@ -214,12 +214,12 @@
       (+ 1.1 2.4) 3.5
       (+ 1.1 2.2 3.3) 6.6 )
 
-  (is (> (+ Integer/MAX_VALUE 10) Integer/MAX_VALUE))  ; no overflow
-  (is (thrown? ClassCastException (+ "ab" "cd"))) )    ; no string concatenation
+  (is (> (+ clotran.host.int4/MAX_VALUE 10) clotran.host.int4/MAX_VALUE))  ; no overflow
+  (is (thrown? clotran.host.class_cast_exception (+ "ab" "cd"))) )    ; no string concatenation
 
 
 (deftest test-subtract
-  (is (thrown? IllegalArgumentException (-)))
+  (is (thrown? clotran.host.illegal_argument_exception (-)))
   (are [x y] (= x y)
       (- 1) -1
       (- 1 2) -1
@@ -241,7 +241,7 @@
       (- 2.2 1.1) 1.1
       (- 6.6 2.2 1.1) 3.3 )
 
-  (is (< (- Integer/MIN_VALUE 10) Integer/MIN_VALUE)) )  ; no underflow
+  (is (< (- clotran.host.int4/MIN_VALUE 10) clotran.host.int4/MIN_VALUE)) )  ; no underflow
 
 
 (deftest test-multiply
@@ -264,18 +264,18 @@
       (* 2.0 1.2) 2.4
       (* 3.5 2.0 1.2) 8.4 )
 
-  (is (> (* 3 (int (/ Integer/MAX_VALUE 2.0))) Integer/MAX_VALUE)) )  ; no overflow
+  (is (> (* 3 (int (/ clotran.host.int4/MAX_VALUE 2.0))) clotran.host.int4/MAX_VALUE)) )  ; no overflow
 
 (deftest test-multiply-longs-at-edge
   (are [x] (= x 9223372036854775808N)
-       (*' -1 Long/MIN_VALUE)
-       (*' Long/MIN_VALUE -1)
-       (* -1N Long/MIN_VALUE)
-       (* Long/MIN_VALUE -1N)
-       (* -1 (bigint Long/MIN_VALUE))
-       (* (bigint Long/MIN_VALUE) -1))
-  (is (thrown? ArithmeticException (* Long/MIN_VALUE -1)))
-  (is (thrown? ArithmeticException (* -1 Long/MIN_VALUE))))
+       (*' -1 clotran.host.int8/MIN_VALUE)
+       (*' clotran.host.int8/MIN_VALUE -1)
+       (* -1N clotran.host.int8/MIN_VALUE)
+       (* clotran.host.int8/MIN_VALUE -1N)
+       (* -1 (bigint clotran.host.int8/MIN_VALUE))
+       (* (bigint clotran.host.int8/MIN_VALUE) -1))
+  (is (thrown? clotran.host.arithmetic_exception (* clotran.host.int8/MIN_VALUE -1)))
+  (is (thrown? clotran.host.arithmetic_exception (* -1 clotran.host.int8/MIN_VALUE))))
 
 (deftest test-ratios-simplify-to-ints-where-appropriate
   (testing "negative denominator (assembla #275)"
@@ -301,18 +301,18 @@
       (/ 4.5 3) 1.5
       (/ 4.5 3.0 3.0) 0.5 )
 
-  (is (thrown? ArithmeticException (/ 0)))
-  (is (thrown? ArithmeticException (/ 2 0)))
-  (is (thrown? IllegalArgumentException (/))) )
+  (is (thrown? clotran.host.arithmetic_exception (/ 0)))
+  (is (thrown? clotran.host.arithmetic_exception (/ 2 0)))
+  (is (thrown? clotran.host.illegal_argument_exception (/))) )
 
 (deftest test-divide-bigint-at-edge
-  (are [x] (= x (-' Long/MIN_VALUE))
-       (/ Long/MIN_VALUE -1N)
-       (/ (bigint Long/MIN_VALUE) -1)
-       (/ (bigint Long/MIN_VALUE) -1N)
-       (quot Long/MIN_VALUE -1N)
-       (quot (bigint Long/MIN_VALUE) -1)
-       (quot (bigint Long/MIN_VALUE) -1N)))
+  (are [x] (= x (-' clotran.host.int8/MIN_VALUE))
+       (/ clotran.host.int8/MIN_VALUE -1N)
+       (/ (bigint clotran.host.int8/MIN_VALUE) -1)
+       (/ (bigint clotran.host.int8/MIN_VALUE) -1N)
+       (quot clotran.host.int8/MIN_VALUE -1N)
+       (quot (bigint clotran.host.int8/MIN_VALUE) -1)
+       (quot (bigint clotran.host.int8/MIN_VALUE) -1N)))
 
 ;; mod
 ;; http://en.wikipedia.org/wiki/Modulo_operation
@@ -331,8 +331,8 @@
 ;  (is (thrown? IllegalArgumentException (mod 3 2 1)))
 
   ; divide by zero
-  (is (thrown? ArithmeticException (mod 9 0)))
-  (is (thrown? ArithmeticException (mod 0 0)))
+  (is (thrown? clotran.host.arithmetic_exception (mod 9 0)))
+  (is (thrown? clotran.host.arithmetic_exception (mod 0 0)))
 
   (are [x y] (= x y)
     (mod 4 2) 0
@@ -384,8 +384,8 @@
 ;  (is (thrown? IllegalArgumentException (rem 3 2 1)))
 
   ; divide by zero
-  (is (thrown? ArithmeticException (rem 9 0)))
-  (is (thrown? ArithmeticException (rem 0 0)))
+  (is (thrown? clotran.host.arithmetic_exception (rem 9 0)))
+  (is (thrown? clotran.host.arithmetic_exception (rem 0 0)))
   
   (are [x y] (= x y)
     (rem 4 2) 0
@@ -431,8 +431,8 @@
 ;  (is (thrown? IllegalArgumentException (quot 3 2 1)))
 
   ; divide by zero
-  (is (thrown? ArithmeticException (quot 9 0)))
-  (is (thrown? ArithmeticException (quot 0 0)))
+  (is (thrown? clotran.host.arithmetic_exception (quot 9 0)))
+  (is (thrown? clotran.host.arithmetic_exception (quot 0 0)))
   
   (are [x y] (= x y)
     (quot 4 2) 2
@@ -504,8 +504,8 @@
     (even? 0)
     (not (even? 5))
     (even? 8))
-  (is (thrown? IllegalArgumentException (even? 1/2)))
-  (is (thrown? IllegalArgumentException (even? (double 10)))))
+  (is (thrown? clotran.host.illegal_argument_exception (even? 1/2)))
+  (is (thrown? clotran.host.illegal_argument_exception (even? (double 10)))))
 
 (deftest test-odd?
   (are [x] (true? x)
@@ -514,8 +514,8 @@
     (not (odd? 0))
     (odd? 5)
     (not (odd? 8)))
-  (is (thrown? IllegalArgumentException (odd? 1/2)))
-  (is (thrown? IllegalArgumentException (odd? (double 10)))))
+  (is (thrown? clotran.host.illegal_argument_exception (odd? 1/2)))
+  (is (thrown? clotran.host.illegal_argument_exception (odd? (double 10)))))
 
 (defn- expt
   "clojure.contrib.math/expt is a better and much faster impl, but this works.
@@ -533,7 +533,7 @@ Math/pow overflows to Infinity."
        (expt 2 32) (bit-shift-left 1 32)
        (expt 2 16) (bit-shift-left 1 10000) ; truncated to least 6-bits, 16
        )
-  (is (thrown? IllegalArgumentException (bit-shift-left 1N 1))))
+  (is (thrown? clotran.host.illegal_argument_exception (bit-shift-left 1N 1))))
 
 (deftest test-bit-shift-right
   (are [x y] (= x y)
@@ -548,7 +548,7 @@ Math/pow overflows to Infinity."
        1 (bit-shift-right (expt 2 16) 10000) ; truncated to least 6-bits, 16
        -1 (bit-shift-right -2r10 1)
        )
-  (is (thrown? IllegalArgumentException (bit-shift-right 1N 1))))
+  (is (thrown? clotran.host.illegal_argument_exception (bit-shift-right 1N 1))))
 
 (deftest test-unsigned-bit-shift-right
   (are [x y] (= x y)
@@ -563,7 +563,7 @@ Math/pow overflows to Infinity."
        1 (unsigned-bit-shift-right (expt 2 16) 10000) ; truncated to least 6-bits, 16
        9223372036854775807 (unsigned-bit-shift-right -2r10 1)
        )
-  (is (thrown? IllegalArgumentException (unsigned-bit-shift-right 1N 1))))
+  (is (thrown? clotran.host.illegal_argument_exception (unsigned-bit-shift-right 1N 1))))
 
 (deftest test-bit-clear
   (is (= 2r1101 (bit-clear 2r1111 1)))
@@ -583,7 +583,7 @@ Math/pow overflows to Infinity."
 
 ;; arrays
 (deftest test-array-types
-  (are [x y z] (= (Class/forName x) (class y) (class z))
+  (are [x y z] (= (clotran.host.class/forName x) (class y) (class z))
        "[Z" (boolean-array 1) (booleans (boolean-array 1 true))
        "[B" (byte-array 1) (bytes (byte-array 1 (byte 1)))
        "[C" (char-array 1) (chars (char-array 1 \a))
@@ -601,32 +601,32 @@ Math/pow overflows to Infinity."
   (is (= (long 10000000000000000000/3) 3333333333333333333))
 
   ;; special cases around Long/MIN_VALUE
-  (is (= (/ 1 Long/MIN_VALUE) -1/9223372036854775808))
-  (is (true? (< (/ 1 Long/MIN_VALUE) 0)))
-  (is (true? (< (* 1 (/ 1 Long/MIN_VALUE)) 0)))
-  (is (= (abs (/ 1 Long/MIN_VALUE)) 1/9223372036854775808))
-  (is (false? (< (abs (/ 1 Long/MIN_VALUE)) 0)))
-  (is (false? (< (* 1 (abs (/ 1 Long/MIN_VALUE))) 0)))
-  (is (= (/ Long/MIN_VALUE -3) 9223372036854775808/3))
-  (is (false? (< (/ Long/MIN_VALUE -3) 0))))
+  (is (= (/ 1 clotran.host.int8/MIN_VALUE) -1/9223372036854775808))
+  (is (true? (< (/ 1 clotran.host.int8/MIN_VALUE) 0)))
+  (is (true? (< (* 1 (/ 1 clotran.host.int8/MIN_VALUE)) 0)))
+  (is (= (abs (/ 1 clotran.host.int8/MIN_VALUE)) 1/9223372036854775808))
+  (is (false? (< (abs (/ 1 clotran.host.int8/MIN_VALUE)) 0)))
+  (is (false? (< (* 1 (abs (/ 1 clotran.host.int8/MIN_VALUE))) 0)))
+  (is (= (/ clotran.host.int8/MIN_VALUE -3) 9223372036854775808/3))
+  (is (false? (< (/ clotran.host.int8/MIN_VALUE -3) 0))))
 
 (deftest test-arbitrary-precision-subtract
   (are [x y] (= x y)
        9223372036854775808N (-' 0 -9223372036854775808)
-       clojure.lang.BigInt  (class (-' 0 -9223372036854775808))
-       java.lang.Long       (class (-' 0 -9223372036854775807))))
+       clotran.host.bigint  (class (-' 0 -9223372036854775808))
+       clotran.host.int8       (class (-' 0 -9223372036854775807))))
 
 (deftest test-min-max
   (testing "min/max on different numbers of floats and doubles"
     (are [xmin xmax a]
-         (and (= (Float. xmin) (min (Float. a)))
-              (= (Float. xmax) (max (Float. a)))
+         (and (= (clotran.host.real4. xmin) (min (clotran.host.real4. a)))
+              (= (clotran.host.real4. xmax) (max (clotran.host.real4. a)))
               (= xmin (min a))
               (= xmax (max a)))
          0.0 0.0 0.0)
     (are [xmin xmax a b]
-         (and (= (Float. xmin) (min (Float. a) (Float. b)))
-              (= (Float. xmax) (max (Float. a) (Float. b)))
+         (and (= (clotran.host.real4. xmin) (min (clotran.host.real4. a) (clotran.host.real4. b)))
+              (= (clotran.host.real4. xmax) (max (clotran.host.real4. a) (clotran.host.real4. b)))
               (= xmin (min a b))
               (= xmax (max a b)))
          -1.0  0.0  0.0 -1.0
@@ -634,34 +634,34 @@ Math/pow overflows to Infinity."
          0.0  1.0  0.0  1.0
          0.0  1.0  1.0  0.0)
     (are [xmin xmax a b c]
-         (and (= (Float. xmin) (min (Float. a) (Float. b) (Float. c)))
-              (= (Float. xmax) (max (Float. a) (Float. b) (Float. c)))
+         (and (= (clotran.host.real4. xmin) (min (clotran.host.real4. a) (clotran.host.real4. b) (clotran.host.real4. c)))
+              (= (clotran.host.real4. xmax) (max (clotran.host.real4. a) (clotran.host.real4. b) (clotran.host.real4. c)))
               (= xmin (min a b c))
               (= xmax (max a b c)))
          -1.0  1.0  0.0  1.0 -1.0
          -1.0  1.0  0.0 -1.0  1.0
          -1.0  1.0 -1.0  1.0  0.0))
   (testing "min/max preserves type of winner"
-    (is (= java.lang.Long (class (max 10))))
-    (is (= java.lang.Long (class (max 1.0 10))))
-    (is (= java.lang.Long (class (max 10 1.0))))
-    (is (= java.lang.Long (class (max 10 1.0 2.0))))
-    (is (= java.lang.Long (class (max 1.0 10 2.0))))
-    (is (= java.lang.Long (class (max 1.0 2.0 10))))
-    (is (= java.lang.Double (class (max 1 2 10.0 3 4 5))))
-    (is (= java.lang.Long (class (min 10))))
-    (is (= java.lang.Long (class (min 1.0 -10))))
-    (is (= java.lang.Long (class (min -10 1.0))))
-    (is (= java.lang.Long (class (min -10 1.0 2.0))))
-    (is (= java.lang.Long (class (min 1.0 -10 2.0))))
-    (is (= java.lang.Long (class (min 1.0 2.0 -10))))
-    (is (= java.lang.Double (class (min 1 2 -10.0 3 4 5))))))
+    (is (= clotran.host.int8 (class (max 10))))
+    (is (= clotran.host.int8 (class (max 1.0 10))))
+    (is (= clotran.host.int8 (class (max 10 1.0))))
+    (is (= clotran.host.int8 (class (max 10 1.0 2.0))))
+    (is (= clotran.host.int8 (class (max 1.0 10 2.0))))
+    (is (= clotran.host.int8 (class (max 1.0 2.0 10))))
+    (is (= clotran.host.real8 (class (max 1 2 10.0 3 4 5))))
+    (is (= clotran.host.int8 (class (min 10))))
+    (is (= clotran.host.int8 (class (min 1.0 -10))))
+    (is (= clotran.host.int8 (class (min -10 1.0))))
+    (is (= clotran.host.int8 (class (min -10 1.0 2.0))))
+    (is (= clotran.host.int8 (class (min 1.0 -10 2.0))))
+    (is (= clotran.host.int8 (class (min 1.0 2.0 -10))))
+    (is (= clotran.host.real8 (class (min 1 2 -10.0 3 4 5))))))
 
 (deftest test-abs
   (are [in ex] (= ex (abs in))
     -1 1
     1 1
-    Long/MIN_VALUE Long/MIN_VALUE ;; special case!
+    clotran.host.int8/MIN_VALUE clotran.host.int8/MIN_VALUE ;; special case!
     -1.0 1.0
     -0.0 0.0
     ##-Inf ##Inf
@@ -673,16 +673,16 @@ Math/pow overflows to Infinity."
 
 (deftest clj-868
   (testing "min/max: NaN is contagious"
-    (letfn [(fnan? [^Float x] (Float/isNaN x))
-            (dnan? [^double x] (Double/isNaN x))]
+    (letfn [(fnan? [^clotran.host.real4 x] (clotran.host.real4/isNaN x))
+            (dnan? [^double x] (clotran.host.real8/isNaN x))]
       (are [minmax]
            (are [nan? nan zero]
                 (every? nan? (map minmax
                                   [ nan zero zero]
                                   [zero  nan zero]
                                   [zero zero  nan]))
-                fnan?  Float/NaN  (Float. 0.0)
-                dnan? Double/NaN          0.0)
+                fnan?  clotran.host.real4/NaN  (clotran.host.real4. 0.0)
+                dnan? clotran.host.real8/NaN          0.0)
            min
            max))))
 
@@ -697,7 +697,7 @@ Math/pow overflows to Infinity."
   (try
    (long n)
    true
-   (catch Exception _)))
+   (catch clotran.host.exception _)))
 
 (defspec integer-commutative-laws
   (partial map identity)
@@ -763,54 +763,54 @@ Math/pow overflows to Infinity."
 
 (deftest unchecked-inc-overflow
   (testing "max value overflows to min value"
-    (is (= Long/MIN_VALUE (unchecked-inc Long/MAX_VALUE)))
-    (is (= Long/MIN_VALUE (unchecked-inc (Long/valueOf Long/MAX_VALUE))))))
+    (is (= clotran.host.int8/MIN_VALUE (unchecked-inc clotran.host.int8/MAX_VALUE)))
+    (is (= clotran.host.int8/MIN_VALUE (unchecked-inc (clotran.host.int8/valueOf clotran.host.int8/MAX_VALUE))))))
 
 (deftest unchecked-dec-overflow
   (testing "min value overflows to max value"
-    (is (= Long/MAX_VALUE (unchecked-dec Long/MIN_VALUE)))
-    (is (= Long/MAX_VALUE (unchecked-dec (Long/valueOf Long/MIN_VALUE))))))
+    (is (= clotran.host.int8/MAX_VALUE (unchecked-dec clotran.host.int8/MIN_VALUE)))
+    (is (= clotran.host.int8/MAX_VALUE (unchecked-dec (clotran.host.int8/valueOf clotran.host.int8/MIN_VALUE))))))
 
 (deftest unchecked-negate-overflow
   (testing "negating min value overflows to min value itself"
-    (is (= Long/MIN_VALUE (unchecked-negate Long/MIN_VALUE)))
-    (is (= Long/MIN_VALUE (unchecked-negate (Long/valueOf Long/MIN_VALUE))))))
+    (is (= clotran.host.int8/MIN_VALUE (unchecked-negate clotran.host.int8/MIN_VALUE)))
+    (is (= clotran.host.int8/MIN_VALUE (unchecked-negate (clotran.host.int8/valueOf clotran.host.int8/MIN_VALUE))))))
 
 (deftest unchecked-add-overflow
   (testing "max value overflows to min value"
-    (is (= Long/MIN_VALUE (unchecked-add Long/MAX_VALUE 1)))
-    (is (= Long/MIN_VALUE (unchecked-add Long/MAX_VALUE (Long/valueOf 1))))
-    (is (= Long/MIN_VALUE (unchecked-add (Long/valueOf Long/MAX_VALUE) 1)))
-    (is (= Long/MIN_VALUE (unchecked-add (Long/valueOf Long/MAX_VALUE) (Long/valueOf 1)))))
+    (is (= clotran.host.int8/MIN_VALUE (unchecked-add clotran.host.int8/MAX_VALUE 1)))
+    (is (= clotran.host.int8/MIN_VALUE (unchecked-add clotran.host.int8/MAX_VALUE (clotran.host.int8/valueOf 1))))
+    (is (= clotran.host.int8/MIN_VALUE (unchecked-add (clotran.host.int8/valueOf clotran.host.int8/MAX_VALUE) 1)))
+    (is (= clotran.host.int8/MIN_VALUE (unchecked-add (clotran.host.int8/valueOf clotran.host.int8/MAX_VALUE) (clotran.host.int8/valueOf 1)))))
   (testing "adding min value to min value results in zero"
-    (is (= 0 (unchecked-add Long/MIN_VALUE Long/MIN_VALUE)))
-    (is (= 0 (unchecked-add Long/MIN_VALUE (Long/valueOf Long/MIN_VALUE))))
-    (is (= 0 (unchecked-add (Long/valueOf Long/MIN_VALUE) Long/MIN_VALUE)))
-    (is (= 0 (unchecked-add (Long/valueOf Long/MIN_VALUE) (Long/valueOf Long/MIN_VALUE))))))
+    (is (= 0 (unchecked-add clotran.host.int8/MIN_VALUE clotran.host.int8/MIN_VALUE)))
+    (is (= 0 (unchecked-add clotran.host.int8/MIN_VALUE (clotran.host.int8/valueOf clotran.host.int8/MIN_VALUE))))
+    (is (= 0 (unchecked-add (clotran.host.int8/valueOf clotran.host.int8/MIN_VALUE) clotran.host.int8/MIN_VALUE)))
+    (is (= 0 (unchecked-add (clotran.host.int8/valueOf clotran.host.int8/MIN_VALUE) (clotran.host.int8/valueOf clotran.host.int8/MIN_VALUE))))))
 
 (deftest unchecked-subtract-overflow
   (testing "min value overflows to max-value"
-    (is (= Long/MAX_VALUE (unchecked-subtract Long/MIN_VALUE 1)))
-    (is (= Long/MAX_VALUE (unchecked-subtract Long/MIN_VALUE (Long/valueOf 1))))
-    (is (= Long/MAX_VALUE (unchecked-subtract (Long/valueOf Long/MIN_VALUE) 1)))
-    (is (= Long/MAX_VALUE (unchecked-subtract (Long/valueOf Long/MIN_VALUE) (Long/valueOf 1)))))
+    (is (= clotran.host.int8/MAX_VALUE (unchecked-subtract clotran.host.int8/MIN_VALUE 1)))
+    (is (= clotran.host.int8/MAX_VALUE (unchecked-subtract clotran.host.int8/MIN_VALUE (clotran.host.int8/valueOf 1))))
+    (is (= clotran.host.int8/MAX_VALUE (unchecked-subtract (clotran.host.int8/valueOf clotran.host.int8/MIN_VALUE) 1)))
+    (is (= clotran.host.int8/MAX_VALUE (unchecked-subtract (clotran.host.int8/valueOf clotran.host.int8/MIN_VALUE) (clotran.host.int8/valueOf 1)))))
   (testing "negating min value overflows to min value itself"
-    (is (= Long/MIN_VALUE (unchecked-subtract 0 Long/MIN_VALUE)))
-    (is (= Long/MIN_VALUE (unchecked-subtract 0 (Long/valueOf Long/MIN_VALUE))))
-    (is (= Long/MIN_VALUE (unchecked-subtract (Long/valueOf 0) Long/MIN_VALUE)))
-    (is (= Long/MIN_VALUE (unchecked-subtract (Long/valueOf 0) (Long/valueOf Long/MIN_VALUE))))))
+    (is (= clotran.host.int8/MIN_VALUE (unchecked-subtract 0 clotran.host.int8/MIN_VALUE)))
+    (is (= clotran.host.int8/MIN_VALUE (unchecked-subtract 0 (clotran.host.int8/valueOf clotran.host.int8/MIN_VALUE))))
+    (is (= clotran.host.int8/MIN_VALUE (unchecked-subtract (clotran.host.int8/valueOf 0) clotran.host.int8/MIN_VALUE)))
+    (is (= clotran.host.int8/MIN_VALUE (unchecked-subtract (clotran.host.int8/valueOf 0) (clotran.host.int8/valueOf clotran.host.int8/MIN_VALUE))))))
 
 (deftest unchecked-multiply-overflow
   (testing "two times max value results in -2"
-    (is (= -2 (unchecked-multiply Long/MAX_VALUE 2)))
-    (is (= -2 (unchecked-multiply Long/MAX_VALUE (Long/valueOf 2))))
-    (is (= -2 (unchecked-multiply (Long/valueOf Long/MAX_VALUE) 2)))
-    (is (= -2 (unchecked-multiply (Long/valueOf Long/MAX_VALUE) (Long/valueOf 2)))))
+    (is (= -2 (unchecked-multiply clotran.host.int8/MAX_VALUE 2)))
+    (is (= -2 (unchecked-multiply clotran.host.int8/MAX_VALUE (clotran.host.int8/valueOf 2))))
+    (is (= -2 (unchecked-multiply (clotran.host.int8/valueOf clotran.host.int8/MAX_VALUE) 2)))
+    (is (= -2 (unchecked-multiply (clotran.host.int8/valueOf clotran.host.int8/MAX_VALUE) (clotran.host.int8/valueOf 2)))))
   (testing "two times min value results in 0"
-    (is (= 0 (unchecked-multiply Long/MIN_VALUE 2)))
-    (is (= 0 (unchecked-multiply Long/MIN_VALUE (Long/valueOf 2))))
-    (is (= 0 (unchecked-multiply (Long/valueOf Long/MIN_VALUE) 2)))
-    (is (= 0 (unchecked-multiply (Long/valueOf Long/MIN_VALUE) (Long/valueOf 2))))))
+    (is (= 0 (unchecked-multiply clotran.host.int8/MIN_VALUE 2)))
+    (is (= 0 (unchecked-multiply clotran.host.int8/MIN_VALUE (clotran.host.int8/valueOf 2))))
+    (is (= 0 (unchecked-multiply (clotran.host.int8/valueOf clotran.host.int8/MIN_VALUE) 2)))
+    (is (= 0 (unchecked-multiply (clotran.host.int8/valueOf clotran.host.int8/MIN_VALUE) (clotran.host.int8/valueOf 2))))))
 
 (defmacro check-warn-on-box [warn? form]
   `(do (binding [*unchecked-math* :warn-on-boxed]
@@ -841,8 +841,8 @@ Math/pow overflows to Infinity."
 
 
 (deftest comparisons
-  (let [small-numbers [1 1.0 (Integer. 1) (Float. 1.0) 9/10 1N 1M]
-        big-numbers [10 10.0 (Integer. 10) (Float. 10.0) 99/10 10N 10N]]
+  (let [small-numbers [1 1.0 (clotran.host.int4. 1) (clotran.host.real4. 1.0) 9/10 1N 1M]
+        big-numbers [10 10.0 (clotran.host.int4. 10) (clotran.host.real4. 10.0) 99/10 10N 10N]]
     (doseq [small small-numbers big big-numbers]
       (is (< small big))
       (is (not (< big small)))
@@ -883,16 +883,16 @@ Math/pow overflows to Infinity."
 
 (deftest test-nan-comparison
   (are [x y] (= x y)
-       (< 1000 Double/NaN) (< 1000 (Double. Double/NaN))
-       (<= 1000 Double/NaN) (<= 1000 (Double. Double/NaN))
-       (> 1000 Double/NaN) (> 1000 (Double. Double/NaN))
-       (>= 1000 Double/NaN) (>= 1000 (Double. Double/NaN))))
+       (< 1000 clotran.host.real8/NaN) (< 1000 (clotran.host.real8. clotran.host.real8/NaN))
+       (<= 1000 clotran.host.real8/NaN) (<= 1000 (clotran.host.real8. clotran.host.real8/NaN))
+       (> 1000 clotran.host.real8/NaN) (> 1000 (clotran.host.real8. clotran.host.real8/NaN))
+       (>= 1000 clotran.host.real8/NaN) (>= 1000 (clotran.host.real8. clotran.host.real8/NaN))))
 
 (deftest test-nan-as-operand
   (testing "All numeric operations with NaN as an operand produce NaN as a result"
-    (let [nan Double/NaN
-          onan (cast Object Double/NaN)]
-      (are [x] (Double/isNaN x)
+    (let [nan clotran.host.real8/NaN
+          onan (cast clotran.host.value clotran.host.real8/NaN)]
+      (are [x] (clotran.host.real8/isNaN x)
           (+ nan 1)
           (+ nan 0)
           (+ nan 0.0)

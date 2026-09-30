@@ -7,7 +7,7 @@
   answers in data instead, one map a line, for editor plugins and programs.
 
   clotran's own, not clojure.core.server: that one is written against
-  java.net and clojure.main, whose error reporting reads JVM stack traces.
+  clj's net and clojure.main, whose error reporting reads clj stack traces.
   The shape is the same -- start-server with :name :port :accept, stop-server
   by name -- so a program that starts one reads alike (PLAN.md step 21)."
   (:require [clotran.net :as net]
@@ -34,7 +34,7 @@
       (print (str (ns-name *ns*) "=> "))
       (flush)
       (let [form (try (read {:eof ::eof :read-cond :allow} *in*)
-                      (catch Throwable e
+                      (catch clotran.host.throwable e
                         (report "Syntax error reading source" e)
                         ;; the rest of the line is not a form to try again
                         (.readLine *in*)
@@ -45,7 +45,7 @@
               (do (try (let [v (eval form)]
                          (set! *3 *2) (set! *2 *1) (set! *1 v)
                          (prn v))
-                       (catch Throwable e
+                       (catch clotran.host.throwable e
                          (set! *e e)
                          (report "Execution error" e)))
                   (flush)
@@ -62,9 +62,9 @@
     (try
       (binding [*in* r *out* w *err* w]
         (apply accept args))
-      (catch Throwable _ nil)
+      (catch clotran.host.throwable _ nil)
       (finally
-        (try (.flush w) (catch Throwable _ nil))
+        (try (.flush w) (catch clotran.host.throwable _ nil))
         (net/close conn)
         (swap! servers update-in [name :conns] disj conn)))))
 
@@ -82,7 +82,7 @@
         (future
           (loop []
             (when @running
-              (when-let [conn (try (net/accept srv 250) (catch Throwable _ nil))]
+              (when-let [conn (try (net/accept srv 250) (catch clotran.host.throwable _ nil))]
                 (swap! servers update-in [name :conns] (fnil conj #{}) conn)
                 (future (serve name conn f args)))
               (recur))))]
@@ -116,7 +116,7 @@
 ;; -- to f. Text with no newline waits for one, or for a flush, as it does
 ;; in clj's PrintWriter-on: (print "a") alone sends no :out.
 (deftype FnWriter [f pending]
-  Object
+  clotran.host.value
   (write [this x]
     (let [s (if (integer? x) (str (char x)) (str x))]
       (swap! pending str s)
@@ -137,7 +137,7 @@
   with what each did, as data. :stdin, if given, is what *in* reads during
   an evaluation."
   [in-reader out-fn & {:keys [stdin]}]
-  (let [eof (Object.)
+  (let [eof (clotran.host.value.)
         tapfn #(out-fn {:tag :tap :val %})
         out (FnWriter. #(out-fn {:tag :out :val %}) (atom ""))
         err (FnWriter. #(out-fn {:tag :err :val %}) (atom ""))]
@@ -150,21 +150,21 @@
                   (let [[form s] (read+string {:eof eof :read-cond :allow} in-reader)]
                     (try
                       (when-not (identical? form eof)
-                        (let [start (System/nanoTime)
+                        (let [start (clotran.host.system/nanoTime)
                               ret (eval form)
-                              ms (quot (- (System/nanoTime) start) 1000000)]
+                              ms (quot (- (clotran.host.system/nanoTime) start) 1000000)]
                           (when-not (= :repl/quit ret)
                             (set! *3 *2) (set! *2 *1) (set! *1 ret)
                             (out-fn {:tag :ret
-                                     :val (if (instance? Throwable ret) (Throwable->map ret) ret)
+                                     :val (if (instance? clotran.host.throwable ret) (Throwable->map ret) ret)
                                      :ns (str (ns-name *ns*)) :ms ms :form s})
                             true)))
-                      (catch Throwable ex
+                      (catch clotran.host.throwable ex
                         (set! *e ex)
                         (out-fn {:tag :ret :val (ex->data ex (or (-> ex ex-data :clojure.error/phase) :execution))
                                  :ns (str (ns-name *ns*)) :form s :exception true})
                         true)))
-                  (catch Throwable ex
+                  (catch clotran.host.throwable ex
                     (set! *e ex)
                     (out-fn {:tag :ret :val (ex->data ex :read-source)
                              :ns (str (ns-name *ns*)) :exception true})
@@ -180,14 +180,14 @@
   [& {:keys [valf] :or {valf pr-str}}]
   (let [valf (resolve-fn valf)
         out *out*
-        lock (Object.)]
+        lock (clotran.host.value.)]
     (prepl *in*
            (fn [m]
              (binding [*out* out *print-readably* true]
                (locking lock
                  (prn (if (#{:ret :tap} (:tag m))
                         (try (assoc m :val (valf (:val m)))
-                             (catch Throwable ex
+                             (catch clotran.host.throwable ex
                                (assoc m :val (valf (ex->data ex :print-eval-result)) :exception true)))
                         m))
                  (flush)))))))

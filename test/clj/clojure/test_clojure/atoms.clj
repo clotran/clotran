@@ -45,19 +45,19 @@
 
 (deftest atoms-are-suppliers
   (let [a (atom 10)]
-    (is (instance? java.util.function.Supplier a))
-    (is (= 10 (.get ^java.util.function.Supplier a)))
+    (is (instance? clotran.host.supplier a))
+    (is (= 10 (.get ^clotran.host.supplier a)))
     (swap! a inc)
-    (is (= 11 (.get ^java.util.function.Supplier a)))
+    (is (= 11 (.get ^clotran.host.supplier a)))
 
-    (is (instance? java.util.function.IntSupplier a))
+    (is (instance? clotran.host.int_supplier a))
     (is (= 11 (.getAsInt a)))
 
-    (is (instance? java.util.function.LongSupplier a))
+    (is (instance? clotran.host.long_supplier a))
     (is (= 11 (.getAsLong a)))
 
-    (is (instance? java.util.function.BooleanSupplier a))
+    (is (instance? clotran.host.boolean_supplier a))
     (is (true? (.getAsBoolean a)))
 
-    (is (instance? java.util.function.DoubleSupplier a))
+    (is (instance? clotran.host.double_supplier a))
     (is (= 11.0 (.getAsDouble a)))))

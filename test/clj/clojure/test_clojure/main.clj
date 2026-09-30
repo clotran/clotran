@@ -30,8 +30,8 @@
   StringWriter.  Returns the string created by any nested printing
   calls."
   [& body]
-  `(let [s# (new java.io.StringWriter)
-         p# (new java.io.PrintWriter s#)]
+  `(let [s# (new clotran.host.string_writer)
+         p# (new clotran.host.print_writer s#)]
      (binding [*err* p#]
        ~@body
        (str s#))))
@@ -47,20 +47,20 @@
 ;argh - test fragility, please fix
 #_(deftest repl-exception-safety
   (testing "catches and prints exception on bad equals"
-    (is (re-matches #"java\.lang\.NullPointerException\r?\n"
+    (is (re-matches #"host\.lang\.NullPointerException\r?\n"
            (run-repl-and-return-err
             "(proxy [Object] [] (equals [o] (.toString nil)))")))))
 
 (deftest null-stack-error-reporting
-  (let [e (doto (Error. "xyz")
-            (.setStackTrace (into-array java.lang.StackTraceElement nil)))
+  (let [e (doto (clotran.host.error. "xyz")
+            (.setStackTrace (into-array clotran.host.stack_trace_element nil)))
         tr-data (-> e Throwable->map main/ex-triage)]
-    (is (= tr-data #:clojure.error{:phase :execution, :class 'java.lang.Error, :cause "xyz"}))
+    (is (= tr-data #:clojure.error{:phase :execution, :class 'clotran.host.error, :cause "xyz"}))
     (is (= (main/ex-str tr-data) (platform-newlines "Execution error (Error) at (REPL:1).\nxyz\n")))))
 
 (defn s->lpr
   [s]
-  (-> s (java.io.StringReader.) (clojure.lang.LineNumberingPushbackReader.)))
+  (-> s (clotran.io/text-reader) (clotran.io/line-numbering-reader)))
 
 (deftest renumbering-read
   (are [s line-in line-out]
@@ -69,11 +69,11 @@
     "^{:line 20 :clojure.core/eval-file \"a/b.clj\"} (let [x 1] x)" 100 20
     "^{:line 20} (let [x 1] x)" 100 20))
 
-(deftest java-loc->source
+(deftest host-loc->source
   (are [c m out]
-    (= out (#'main/java-loc->source c m))
+    (= out (#'main/host-loc->source c m))
     'user$eval1                'invokeStatic 'user/eval1
     'div$go                    'invokeStatic 'div/go
     'user$eval186$fn__187      'invoke       'user/eval186$fn
     'user$ok_fn$broken_fn__164 'invoke       'user/ok-fn$broken-fn
-    'clojure.lang.Numbers      'divide       'clojure.lang.Numbers/divide))
+    'clotran.host.numbers      'divide       'clotran.host.numbers/divide))

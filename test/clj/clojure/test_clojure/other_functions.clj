@@ -362,9 +362,9 @@
     (is (= "12" (nth matcher 1) (nth matcher 1 :foo)))
     (is (= "02" (nth matcher 2) (nth matcher 2 :foo)))
     (is (= "1975" (nth matcher 3) (nth matcher 3 :foo)))
-    (is (thrown? IndexOutOfBoundsException (nth matcher -1)))
+    (is (thrown? clotran.host.index_out_of_bounds_exception (nth matcher -1)))
     (is (= :foo (nth matcher -1 :foo)))
-    (is (thrown? IndexOutOfBoundsException (nth matcher 4)))
+    (is (thrown? clotran.host.index_out_of_bounds_exception (nth matcher 4)))
     (is (= :foo (nth matcher 4 :foo)))))
 
 ; update

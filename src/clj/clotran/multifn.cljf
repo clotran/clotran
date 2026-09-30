@@ -35,17 +35,17 @@
                 k-dom (and be (dominates k b prefer-table hierarchy))
                 b-dom (and be (dominates b k prefer-table hierarchy))
                 ;; Each dominating the other -- one preferred through a
-                ;; parent, the other by isa? -- is an answer the JVM
+                ;; parent, the other by isa? -- is an answer clj
                 ;; takes from whichever its table yields last. Here the
                 ;; more specific by isa? wins: print-dup of a map goes to
                 ;; IPersistentMap's method, as it does there, and nothing
-                ;; the JVM answers deterministically changes.
+                ;; clj answers deterministically changes.
                 be2 (cond (nil? be) e
                           (and k-dom b-dom) (if (and (isa? hierarchy b k) (not (isa? hierarchy k b))) be e)
                           k-dom e
                           :else be)]
             (when-not (or (nil? be) k-dom b-dom)
-              (throw (IllegalArgumentException.
+              (throw (clotran.host.illegal_argument_exception.
                        (str "Multiple methods in multimethod '" name "' match dispatch value: "
                             dispatch-val " -> " k " and " b ", and neither is preferred"))))
             (recur (next es) be2))
@@ -57,6 +57,6 @@
   preferred to x, through the hierarchy, which is an IllegalStateException."
   [name prefer-table hierarchy x y]
   (when (prefers* y x prefer-table hierarchy)
-    (throw (IllegalStateException.
+    (throw (clotran.host.illegal_state_exception.
              (str "Preference conflict in multimethod '" name "': " y " is already preferred to " x))))
   (assoc prefer-table x (conj (get prefer-table x #{}) y)))

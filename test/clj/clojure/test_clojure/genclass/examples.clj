@@ -31,20 +31,20 @@
 
 (declare -toString)
 
-(gen-class :name ^{Deprecated {}
-                   SuppressWarnings ["Warning1"] ; discarded
-                   java.lang.annotation.Target []}
+(gen-class :name ^{clotran.host.deprecated {}
+                   clotran.host.suppress_warnings ["Warning1"] ; discarded
+                   clotran.host.target []}
                  clojure.test_clojure.genclass.examples.ExampleAnnotationClass
            :prefix "annot-"
-           :methods [[^{Deprecated {}
-                        Override {}} ;discarded
-                      foo [^{java.lang.annotation.Retention java.lang.annotation.RetentionPolicy/SOURCE
-                             java.lang.annotation.Target    [java.lang.annotation.ElementType/TYPE
-                                                             java.lang.annotation.ElementType/PARAMETER]}
-                           String] void]])
+           :methods [[^{clotran.host.deprecated {}
+                        clotran.host.override {}} ;discarded
+                      foo [^{clotran.host.retention clotran.host.retention_policy/SOURCE
+                             clotran.host.target    [clotran.host.element_type/TYPE
+                                                             clotran.host.element_type/PARAMETER]}
+                           clotran.host.string] void]])
 
 (gen-class :name clojure.test_clojure.genclass.examples.ProtectedFinalTester
-           :extends java.lang.ClassLoader
+           :extends clotran.host.class_loader
            :main false
            :prefix "pf-"
            :exposes-methods {findSystemClass superFindSystemClass})
@@ -52,7 +52,7 @@
 (defn pf-findSystemClass
   "This function should never be called."
   [_ name]
-  clojure.lang.RT)
+  clotran.host.rt)
 
 (gen-class :name clojure.test_clojure.genclass.examples.InterfaceDefaultTest
            :implements [compilation.JDK8InterfaceMethods]

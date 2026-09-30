@@ -89,7 +89,7 @@
        1 "1"
        1.0 "1.0"
        1N "1N"
-       (java.math.BigInteger. "1") "#=(java.math.BigInteger. \"1\")"
+       (clotran.host.bigint. "1") "#=(clotran.host.bigint. \"1\")"
        1M "1M"
        "hi" "\"hi\""))
 
@@ -126,14 +126,14 @@
     (are [e] (let [e' e] ;; use same templated exception object in both cases
                (= (-> e' Throwable->map)
                   (-> e' pr-str read-string)))
-         (Exception. "heyo")
-         (Throwable. "I can a throwable"
-                     (Exception. "chain 1"
-                                 (Exception. "chan 2")))
+         (clotran.host.exception. "heyo")
+         (clotran.host.throwable. "I can a throwable"
+                     (clotran.host.exception. "chain 1"
+                                 (clotran.host.exception. "chan 2")))
          (ex-info "an ex-info" {:with "its" :data 29})
-         (Exception. "outer"
+         (clotran.host.exception. "outer"
                      (ex-info "an ex-info" {:with "data"}
-                              (Error. "less outer"
+                              (clotran.host.error. "less outer"
                                       (ex-info "the root"
                                                {:with "even" :more 'data})))))))
 
@@ -169,7 +169,7 @@
 
     (into (sorted-map-by (fn [k1 k2]
                            (when-not (every? qualified-ident? [k1 k2])
-                             (throw (RuntimeException. (str "Invalid keys:" [k1 k2]))))
+                             (throw (clotran.host.runtime_exception. (str "Invalid keys:" [k1 k2]))))
                            (compare k1 k2))
             :x.y/a {:rem 0}, :x.y/b {:rem 1}))
     "#:x.y{:a {:rem 0}, :b {:rem 1}}"
@@ -181,15 +181,15 @@
     "#:k{:i 9, :h 8, :g 7, :f 6, :e 5, :d 4, :c 3, :b 2, :a 1}\n"
     "{:k/i 9, :k/h 8, :k/g 7, :k/f 6, :k/e 5, :k/d 4, :k/c 3, :k/b 2, :k/a 1}")
 
-  (let [date-map (bean (java.util.Date. 0))]
+  (let [date-map (bean (clotran.host.date. 0))]
     (is (= (binding [*print-namespace-maps* true] (pr-str date-map))
            (binding [*print-namespace-maps* false] (pr-str date-map))))))
 
 (deftest print-symbol-values
   (are [s v] (= s (pr-str v))
-             "##Inf" Double/POSITIVE_INFINITY
-             "##-Inf" Double/NEGATIVE_INFINITY
-             "##NaN" Double/NaN
-             "##Inf" Float/POSITIVE_INFINITY
-             "##-Inf" Float/NEGATIVE_INFINITY
-             "##NaN" Float/NaN))
+             "##Inf" clotran.host.real8/POSITIVE_INFINITY
+             "##-Inf" clotran.host.real8/NEGATIVE_INFINITY
+             "##NaN" clotran.host.real8/NaN
+             "##Inf" clotran.host.real4/POSITIVE_INFINITY
+             "##-Inf" clotran.host.real4/NEGATIVE_INFINITY
+             "##NaN" clotran.host.real4/NaN))

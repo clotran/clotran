@@ -276,7 +276,7 @@ end module clotran_rt_decl
   not fit."
   [v]
   (or (nil? v) (true? v) (false? v)
-      (and (int? v) (not= v Long/MIN_VALUE))
+      (and (int? v) (not= v clotran.host.int8/MIN_VALUE))
       (and (double? v) (not (NaN? v)) (not (infinite? v)))))
 
 
@@ -376,7 +376,7 @@ end module clotran_rt_decl
 
 (def ^:private fortran-math
   "The Fortran intrinsic for each Math/ member: the same libm answers,
-  bit for bit (scripts/pure-check compares them with the JVM)."
+  bit for bit (scripts/pure-check compares them with clj)."
   '{clotran-math-sqrt "sqrt", clotran-math-sin "sin", clotran-math-cos "cos",
     clotran-math-tan "tan", clotran-math-exp "exp", clotran-math-log "log",
     clotran-math-log10 "log10", clotran-math-asin "asin", clotran-math-acos "acos",
@@ -974,7 +974,7 @@ end module clotran_rt_decl
   one, and a recur rebinds only its own loop's slots -- so these are
   fixed for the loop's whole run, and reading them every iteration
   was three runtime calls a time round for nothing. It is what the
-  JVM's JIT does by speculation; here it is known."
+  clj's JIT does by speculation; here it is known."
   [body own st]
   (let [params (:params st #{})
         slots (->> (walk-nodes body)
@@ -1153,7 +1153,7 @@ end module clotran_rt_decl
 
           ;; (new Class args...): the arguments into consecutive slots,
           ;; as a call's are, and the interpreter's constructor path --
-          ;; `lazy-seq` is (new clojure.lang.LazySeq (fn* [] ...)), so
+          ;; `lazy-seq` is (new clotran.host.lazy_seq (fn* [] ...)), so
           ;; this is what makes a lazy seq's body compiled code
           :new (let [kids (:children nd)
                      cname (str (:p1 nd))

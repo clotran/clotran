@@ -5,7 +5,7 @@
     [clojure.test.check.generators :as gen]
     [clojure.test.check.properties :as prop])
   (:import
-    [java.util UUID]))
+    ))
 
 (deftest test-parse-long
   (are [s expected]
@@ -16,9 +16,9 @@
     "+0" 0
     "-0" 0
     "-42" -42
-    "9223372036854775807" Long/MAX_VALUE
-    "+9223372036854775807" Long/MAX_VALUE
-    "-9223372036854775808" Long/MIN_VALUE
+    "9223372036854775807" clotran.host.int8/MAX_VALUE
+    "+9223372036854775807" clotran.host.int8/MAX_VALUE
+    "-9223372036854775808" clotran.host.int8/MIN_VALUE
     "077" 77) ;; leading 0s are ignored! (not octal)
 
   (are [s] ;; do not parse
@@ -49,14 +49,14 @@
     "-0.0" -0.0
     "0.0" 0.0
     "5" 5.0
-    "Infinity" Double/POSITIVE_INFINITY
-    "-Infinity" Double/NEGATIVE_INFINITY
-    "1.7976931348623157E308" Double/MAX_VALUE
-    "4.9E-324" Double/MIN_VALUE
-    "1.7976931348623157E309" Double/POSITIVE_INFINITY  ;; past max double
-    "2.5e-324" Double/MIN_VALUE  ;; past min double, above half minimum
+    "Infinity" clotran.host.real8/POSITIVE_INFINITY
+    "-Infinity" clotran.host.real8/NEGATIVE_INFINITY
+    "1.7976931348623157E308" clotran.host.real8/MAX_VALUE
+    "4.9E-324" clotran.host.real8/MIN_VALUE
+    "1.7976931348623157E309" clotran.host.real8/POSITIVE_INFINITY  ;; past max double
+    "2.5e-324" clotran.host.real8/MIN_VALUE  ;; past min double, above half minimum
     "2.4e-324" 0.0)  ;; below minimum double
-  (is (Double/isNaN (parse-double "NaN")))
+  (is (clotran.host.real8/isNaN (parse-double "NaN")))
   (are [s] ;; nil on invalid string
     (nil? (parse-double s))
     "double" ;; invalid string
@@ -68,18 +68,18 @@
               100000
               (prop/for-all* [gen/double]
                 #(let [parsed (-> % str parse-double)]
-                   (if (Double/isNaN %)
-                     (Double/isNaN parsed)
+                   (if (clotran.host.real8/isNaN %)
+                     (clotran.host.real8/isNaN parsed)
                      (= % parsed)))))]
     (if (:result res)
       (is true) ;; pass
       (is (:result res) (pr-str res)))))
 
 (deftest test-parse-uuid
-  (is (parse-uuid (.toString (UUID/randomUUID))))
+  (is (parse-uuid (.toString (clotran.uuid.UUID/randomUUID))))
   (is (nil? (parse-uuid "BOGUS"))) ;; nil on invalid uuid string
   (are [s] ;; throw on invalid type (not string)
-    (try (parse-uuid s) (is false) (catch Throwable _ (is true)))
+    (try (parse-uuid s) (is false) (catch clotran.host.throwable _ (is true)))
     123
     nil))
 
@@ -95,7 +95,7 @@
     " true ")
 
   (are [s] ;; throw on invalid type (not string)
-    (try (parse-boolean s) (is false) (catch Throwable _ (is true)))
+    (try (parse-boolean s) (is false) (catch clotran.host.throwable _ (is true)))
     nil
     false
     true

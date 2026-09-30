@@ -12,7 +12,7 @@
 
 (defn fact [n] (loop [i 1 acc 1] (if (<= i n) (recur (inc i) (* acc i)) acc)))
 
-(defn hyp [x y] (Math/sqrt (+ (* x x) (* y y))))
+(defn hyp [x y] (clotran.host.math/sqrt (+ (* x x) (* y y))))
 
 (defn clamp [x lo hi] (max lo (min hi x)))
 
@@ -59,13 +59,13 @@
 
 (defn label [n] (str "n=" n "!"))
 
-(defn first-three [^String s] (subs s 0 3))
+(defn first-three [^clotran.host.string s] (subs s 0 3))
 
-(defn tail-of [^String s] (subs s 1))
+(defn tail-of [^clotran.host.string s] (subs s 1))
 
-(defn has-fe? [^String s] (clojure.string/includes? s "fe"))
+(defn has-fe? [^clotran.host.string s] (clojure.string/includes? s "fe"))
 
-(defn same-text? [^String a ^String b] (= a b))
+(defn same-text? [^clotran.host.string a ^clotran.host.string b] (= a b))
 
 (defn describe-num [x] (println "x is" x (if (pos? x) "positive" "not positive")))
 
@@ -91,7 +91,7 @@
 
 (defrecord Particle [x y vx vy])
 
-(defn speed [p] (Math/sqrt (+ (* (:vx p) (:vx p)) (* (:vy p) (:vy p)))))
+(defn speed [p] (clotran.host.math/sqrt (+ (* (:vx p) (:vx p)) (* (:vy p) (:vy p)))))
 
 (defn step [p dt] (->Particle (+ (:x p) (* dt (:vx p))) (+ (:y p) (* dt (:vy p))) (:vx p) (:vy p)))
 

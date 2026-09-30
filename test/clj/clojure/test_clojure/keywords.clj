@@ -25,7 +25,7 @@
            nil (str absent-keyword-sym)))))
 
 (deftest arity-exceptions
-  (is (thrown-with-msg? IllegalArgumentException #"Wrong number of args \(0\) passed to: :kw" (:kw)))
-  (is (thrown-with-msg? IllegalArgumentException #"Wrong number of args \(20\) passed to: :foo/bar" (apply :foo/bar (range 20))))
-  (is (thrown-with-msg? IllegalArgumentException #"Wrong number of args \(> 20\) passed to: :foo/bar" (apply :foo/bar (range 21))))
-  (is (thrown-with-msg? IllegalArgumentException #"Wrong number of args \(> 20\) passed to: :foo/bar" (apply :foo/bar (range 22)))))
+  (is (thrown-with-msg? clotran.host.illegal_argument_exception #"Wrong number of args \(0\) passed to: :kw" (:kw)))
+  (is (thrown-with-msg? clotran.host.illegal_argument_exception #"Wrong number of args \(20\) passed to: :foo/bar" (apply :foo/bar (range 20))))
+  (is (thrown-with-msg? clotran.host.illegal_argument_exception #"Wrong number of args \(> 20\) passed to: :foo/bar" (apply :foo/bar (range 21))))
+  (is (thrown-with-msg? clotran.host.illegal_argument_exception #"Wrong number of args \(> 20\) passed to: :foo/bar" (apply :foo/bar (range 22)))))

@@ -23,7 +23,7 @@
   (let [v (p/datafy x)]
     (if (identical? v x)
       v
-      (if (instance? clojure.lang.IObj v)
+      (if (instance? clotran.host.i_obj v)
         (vary-meta v assoc ::obj x ::class (-> x class .getName symbol))
         v))))
 
@@ -40,15 +40,15 @@
   (into (sorted-map) m))
 
 (extend-protocol p/Datafiable
-  Throwable
+  clotran.host.throwable
   (datafy [x]
           (Throwable->map x))
   
-  clojure.lang.IRef
+  clotran.host.i_ref
   (datafy [r]
           (with-meta [(deref r)] (meta r)))
 
-  clojure.lang.Namespace
+  clotran.host.namespace
   (datafy [n]
           (with-meta {:name (.getName n)
                       :publics (-> n ns-publics sortmap)
@@ -56,7 +56,7 @@
                       :interns (-> n ns-interns sortmap)}
             (meta n)))
 
-  java.lang.Class
+  clotran.host.class
   (datafy [c]
           (let [{:keys [members] :as ret} ((requiring-resolve 'clojure.reflect/reflect) c)]
             (assoc ret :name (-> c .getName symbol) :members (->> members (group-by :name) sortmap)))))

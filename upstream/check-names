@@ -1,0 +1,46 @@
+#!/usr/bin/env bb
+;; No JVM name outside upstream/: a class a line of code names by the
+;; JVM's name -- String, java.io.Writer, clojure.lang.RT -- and the words
+;; java, JVM and clojure.lang anywhere, code, strings or comments.
+;; Vendored ICU (src/c/icu) and the white paper (docs/) are not clotran's
+;; code and are not read. Exit 1 on a hit. `make test` runs it.
+(require '[clojure.string :as str] '[babashka.process :as p])
+(load-file (str (.getParentFile (.getAbsoluteFile (clojure.java.io/file *file*))) "/names.clj"))
+
+(def covered
+  ;; what has been cleared so far; the rest joins as it is
+  #"\.(clj|cljf|cljc)$")
+
+(def skip #"^(upstream/|docs/|src/c/icu/)")
+(def word #"(?i)java|jvm|clojure\.lang")
+
+(def root (.getParentFile (.getParentFile (.getAbsoluteFile (clojure.java.io/file *file*)))))
+(def files (->> (file-seq root)
+                (filter #(.isFile %))
+                (map #(subs (str %) (inc (count (str root)))))
+                (remove #(re-find #"^(build|\.[^/]*)/|/\.|^\." %))
+                (remove #(re-find skip %))
+                (filter #(re-find covered %))))
+
+(def hits
+  (for [f files
+        :let [text (slurp f)
+              toks (names/lex text)
+              imports {}
+              resolve (names/resolver imports (names/defined-types toks))
+              lines (str/split-lines text)]
+        hit (concat
+             (for [[i l] (map-indexed vector lines) :when (re-find word l)]
+               (str f ":" (inc i) ": " (str/trim l)))
+             (when (re-find #"\.(clj|cljf|cljc)$" f)
+               (for [[k t] toks
+                     :when (= k :token)
+                     :when (not (re-find #"^[:.\\]" t))
+                     :let [cls (first (str/split (str/replace t #"\.$" "") #"/"))]
+                     :when (and (seq cls) (resolve cls))]
+                 (str f ": the class " cls " (" (resolve cls) ")"))))]
+    hit))
+
+(doseq [h (take 40 hits)] (println h))
+(when (> (count hits) 40) (println "..." (- (count hits) 40) "more"))
+(System/exit (if (seq hits) 1 0))

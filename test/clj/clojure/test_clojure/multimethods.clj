@@ -29,7 +29,7 @@
   "Return all tags in a derivation hierarchy"
   [h]
   (set/select
-   #(instance? clojure.lang.Named %)
+   #(instance? clotran.host.named %)
    (reduce into #{} (map keys (vals h)))))
 
 (defn transitive-closure
@@ -47,7 +47,7 @@
   "Set of descedants which are tags (i.e. Named)."
   [& args]
   (set/select
-   #(instance? clojure.lang.Named %)
+   #(instance? clotran.host.named %)
    (or (apply descendants args) #{})))
 
 (defn assert-valid-hierarchy
@@ -97,10 +97,10 @@
 
 (deftest cycles-are-forbidden
   (testing "a tag cannot be its own parent"
-    (is (thrown-with-msg? Throwable #"\(not= tag parent\)"
+    (is (thrown-with-msg? clotran.host.throwable #"\(not= tag parent\)"
           (derive family ::child ::child))))
   (testing "a tag cannot be its own ancestor"
-    (is (thrown-with-msg? Throwable #"Cyclic derivation: :clojure.test-clojure.multimethods/child has :clojure.test-clojure.multimethods/ancestor-1 as ancestor"
+    (is (thrown-with-msg? clotran.host.throwable #"Cyclic derivation: :clojure.test-clojure.multimethods/child has :clojure.test-clojure.multimethods/ancestor-1 as ancestor"
           (derive family ::ancestor-1 ::child)))))
 
 (deftest using-diamond-inheritance
@@ -121,14 +121,14 @@
     (testing "but it is still an animal, via mammal"
       (is (isa? bird-no-more ::griffin ::animal)))))
 
-(deftest derivation-world-bridges-to-java-inheritance
-  (let [h (derive (make-hierarchy) java.util.Map ::map)]
-    (testing "a Java class can be isa? a tag"
-      (is (isa? h java.util.Map ::map)))
-    (testing "if a Java class isa? a tag, so are its subclasses..."
-      (is (isa? h java.util.HashMap ::map)))
+(deftest derivation-world-bridges-to-host-inheritance
+  (let [h (derive (make-hierarchy) clotran.host.map ::map)]
+    (testing "a host class can be isa? a tag"
+      (is (isa? h clotran.host.map ::map)))
+    (testing "if a host class isa? a tag, so are its subclasses..."
+      (is (isa? h clotran.host.hash_map ::map)))
     (testing "...but not its superclasses!"
-      (is (not (isa? h java.util.Collection ::map))))))
+      (is (not (isa? h clotran.host.collection ::map))))))
 
 (deftest global-hierarchy-test
   (with-var-roots {#'clojure.core/global-hierarchy (make-hierarchy)}
@@ -177,13 +177,13 @@
 (deftest isA-multimethod-test
   (testing "Dispatch on isA"
     ;; Example from the multimethod docs.
-    (derive java.util.Map ::collection)
-    (derive java.util.Collection ::collection)
+    (derive clotran.host.map ::collection)
+    (derive clotran.host.collection ::collection)
     (defmulti foo class)
     (defmethod foo ::collection [c] :a-collection)
-    (defmethod foo String [s] :a-string)
+    (defmethod foo clotran.host.string [s] :a-string)
     (is (= :a-collection (foo [])))
-    (is (= :a-collection (foo (java.util.HashMap.))))
+    (is (= :a-collection (foo (clotran.host.hash_map.))))
     (is (= :a-string (foo "bar")))))
 
 (deftest preferences-multimethod-test
@@ -193,7 +193,7 @@
     (defmulti bar (fn [x y] [x y]))
     (defmethod bar [::rect ::shape] [x y] :rect-shape)
     (defmethod bar [::shape ::rect] [x y] :shape-rect)
-    (is (thrown? java.lang.IllegalArgumentException
+    (is (thrown? clotran.host.illegal_argument_exception
                  (bar ::rect ::rect))))
  (testing "The prefers method returns empty table w/ no prefs"
    (is (= {} (prefers bar))))

@@ -9,7 +9,7 @@
 ;; supply, because they depend on how this host represents values.
 ;;
 ;; That is exactly the type predicates. Real Clojure asks `instance?`
-;; about Java classes; clotran has no Java classes, so it answers with
+;; about clj classes; clotran has no clj classes, so it answers with
 ;; `clotran-type` and the predicates are written on top of it. Every
 ;; other function Clojure programs use -- map, filter, reduce, take,
 ;; range, merge, into, sort -- is a defn in core.clj and must come from
@@ -37,7 +37,7 @@
 ;;
 ;; One host primitive, `clotran-type`, and the predicates over it.
 ;; core.clj cannot define these: it would ask instance? about
-;; java.lang.String and clojure.lang.PersistentVector, and neither
+;; clotran.host.string and clotran.host.persistent_vector, and neither
 ;; exists here.
 
 (defn nil?     [x] (= (clotran-type x) :nil))

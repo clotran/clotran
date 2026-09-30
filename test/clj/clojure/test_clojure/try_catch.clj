@@ -16,14 +16,14 @@
 (defn- get-exception [expression]
   (try (eval expression)
     nil
-    (catch java.lang.Throwable t
+    (catch clotran.host.throwable t
       t)))
 
 (deftest catch-receives-checked-exception-from-eval
   (are [expression expected-exception] (= expected-exception
                                           (type (get-exception expression)))
     "Eh, I'm pretty safe" nil
-    '(java.io.FileReader. "CAFEBABEx0/idonotexist") java.io.FileNotFoundException))
+    '(clotran.host.file_reader. "CAFEBABEx0/idonotexist") clotran.host.file_not_found_exception))
 
 
 (defn fail [x]

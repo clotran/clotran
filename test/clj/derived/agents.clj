@@ -1,4 +1,4 @@
-;; DERIVED from test/clj/clojure/test_clojure/agents.clj by scripts/derive-tests -- do not edit.
+;; DERIVED from upstream/clojure/test/clojure/test_clojure/agents.clj by upstream/derive-tests -- do not edit.
 ;; Kept: tests whose symbols lie in the clojure.core/cljs.core intersection (plus concurrency).
 
 (ns clojure.test-clojure.agents (:use clojure.test))
@@ -21,4 +21,4 @@
     (is (= 0 @agt))
     (is (nil? (agent-error agt)))
     (is (= agt (first @err)))
-  (is (true? (instance? ArithmeticException (second @err))))))
+  (is (true? (instance? clotran.host.arithmetic_exception (second @err))))))

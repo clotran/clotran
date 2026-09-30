@@ -19,19 +19,19 @@
 
 ;;;;;;;;;;;;;; some fj stuff ;;;;;;;;;;
 
-(def pool (delay (java.util.concurrent.ForkJoinPool.)))
+(def pool (delay (clotran.host.fork_join_pool.)))
 
 (defn fjtask [^Callable f]
-  (java.util.concurrent.ForkJoinTask/adapt f))
+  (clotran.host.fork_join_task/adapt f))
 
 (defn- fjinvoke [f]
-  (if (java.util.concurrent.ForkJoinTask/inForkJoinPool)
+  (if (clotran.host.fork_join_task/inForkJoinPool)
     (f)
-    (.invoke ^java.util.concurrent.ForkJoinPool @pool ^java.util.concurrent.ForkJoinTask (fjtask f))))
+    (.invoke ^clotran.host.fork_join_pool @pool ^clotran.host.fork_join_task (fjtask f))))
 
-(defn- fjfork [task] (.fork ^java.util.concurrent.ForkJoinTask task))
+(defn- fjfork [task] (.fork ^clotran.host.fork_join_task task))
 
-(defn- fjjoin [task] (.join ^java.util.concurrent.ForkJoinTask task))
+(defn- fjjoin [task] (.join ^clotran.host.fork_join_task task))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -41,7 +41,7 @@
      Maps are reduced with reduce-kv"
   ([f coll] (reduce f (f) coll))
   ([f init coll]
-     (if (instance? java.util.Map coll)
+     (if (instance? clotran.host.map coll)
        (clojure.core.protocols/kv-reduce coll f init)
        (clojure.core.protocols/coll-reduce coll f init))))
 
@@ -228,10 +228,10 @@
 
 ;;do not construct this directly, use cat
 (deftype Cat [cnt left right]
-  clojure.lang.Counted
+  clotran.host.counted
   (count [_] cnt)
 
-  clojure.lang.Seqable
+  clotran.host.seqable
   (seq [_] (concat (seq left) (seq right)))
 
   clojure.core.protocols/CollReduce
@@ -260,7 +260,7 @@
   with the supplied identity constructor. Tests for identity
   with (zero? (count x)). See also foldcat."
   {:added "1.5"}
-  ([] (java.util.ArrayList.))
+  ([] (clotran.rt/array-list))
   ([ctor]
      (fn
        ([] (ctor))
@@ -275,7 +275,7 @@
 (defn append!
   ".adds x to acc and returns acc"
   {:added "1.5"}
-  [^java.util.Collection acc x]
+  [^clotran.host.collection acc x]
   (doto acc (.add x)))
 
 (defn foldcat
@@ -317,18 +317,18 @@
   [coll n combinef reducef]
   (combinef))
 
- Object
+ clotran.host.value
  (coll-fold
   [coll n combinef reducef]
   ;;can't fold, single reduce
   (reduce reducef (combinef) coll))
 
- clojure.lang.IPersistentVector
+ clotran.host.i_persistent_vector
  (coll-fold
   [v n combinef reducef]
   (foldvec v n combinef reducef))
 
- clojure.lang.PersistentHashMap
+ clotran.host.persistent_hash_map
  (coll-fold
   [m n combinef reducef]
   (.fold m n combinef reducef fjinvoke fjtask fjfork fjjoin)))

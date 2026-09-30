@@ -9,9 +9,9 @@
 (ns clojure.test-clojure.api
   (:require [clojure.test.generative :refer (defspec)]
             [clojure.test-clojure.generators :as cgen])
-  (:import clojure.lang.IFn
-           clojure.java.api.Clojure
-           clojure.lang.Var))
+  (:import 
+           clojure.host.api.Clojure
+           ))
 
 (set! *warn-on-reflection* true)
 
@@ -24,12 +24,12 @@
     (Clojure/read (pr-str o))))
 
 (defn api-var-str
-  [^Var v]
+  [^clotran.host.var v]
   (Clojure/var (str (.name (.ns v)))
                (str (.sym v))))
 
 (defn api-var
-  [^Var v]
+  [^clotran.host.var v]
   (Clojure/var (.name (.ns v))
                (.sym v)))
 

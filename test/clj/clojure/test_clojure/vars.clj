@@ -54,7 +54,7 @@
 (deftest test-settable-math-context
   (is (=
        (clojure.main/with-bindings
-         (set! *math-context* (java.math.MathContext. 8))
+         (set! *math-context* (clotran.host.math_context. 8))
          (+ 3.55555555555555M 1))
        4.5555556M)))
 
@@ -68,7 +68,7 @@
   (let [p (promise)]
     (with-redefs-fn {#'stub-me :temp}
       (fn []
-        (.start (Thread. #(deliver p stub-me)))
+        (.start (clotran.host.thread. #(deliver p stub-me)))
         @p))
     (is (= :temp @p))
     (is (= :original stub-me))))
@@ -76,17 +76,17 @@
 (deftest test-with-redefs
   (let [p (promise)]
     (with-redefs [stub-me :temp]
-      (.start (Thread. #(deliver p stub-me)))
+      (.start (clotran.host.thread. #(deliver p stub-me)))
       @p)
     (is (= :temp @p))
     (is (= :original stub-me))))
 
 (deftest test-with-redefs-throw
   (let [p (promise)]
-    (is (thrown? Exception
+    (is (thrown? clotran.host.exception
       (with-redefs [stub-me :temp]
         (deliver p stub-me)
-        (throw (Exception. "simulated failure in with-redefs")))))
+        (throw (clotran.host.exception. "simulated failure in with-redefs")))))
     (is (= :temp @p))
     (is (= :original stub-me))))
 

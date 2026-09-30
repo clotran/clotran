@@ -1,4 +1,4 @@
-;; DERIVED from test/clj/clojure/test_clojure/sequences.clj by scripts/derive-tests -- do not edit.
+;; DERIVED from upstream/clojure/test/clojure/test_clojure/sequences.clj by upstream/derive-tests -- do not edit.
 ;; Kept: tests whose symbols lie in the clojure.core/cljs.core intersection (plus concurrency).
 
 (ns clojure.test-clojure.sequences (:require [clojure.test :refer :all]))
@@ -25,7 +25,7 @@
 
 ;; sequences.clj:172 [language]
 (deftest test-cons
-  (is (thrown? IllegalArgumentException (cons 1 2)))
+  (is (thrown? clotran.host.illegal_argument_exception (cons 1 2)))
   (are [x y] (= x y)
     (cons 1 nil) '(1)
     (cons nil nil) '(nil)
@@ -104,13 +104,13 @@
 ;; sequences.clj:276 [language]
 (deftest test-first
   ;(is (thrown? Exception (first)))
-  (is (thrown? IllegalArgumentException (first true)))
-  (is (thrown? IllegalArgumentException (first false)))
-  (is (thrown? IllegalArgumentException (first 1)))
+  (is (thrown? clotran.host.illegal_argument_exception (first true)))
+  (is (thrown? clotran.host.illegal_argument_exception (first false)))
+  (is (thrown? clotran.host.illegal_argument_exception (first 1)))
   ;(is (thrown? IllegalArgumentException (first 1 2)))
-  (is (thrown? IllegalArgumentException (first \a)))
-  (is (thrown? IllegalArgumentException (first 's)))
-  (is (thrown? IllegalArgumentException (first :k)))
+  (is (thrown? clotran.host.illegal_argument_exception (first \a)))
+  (is (thrown? clotran.host.illegal_argument_exception (first 's)))
+  (is (thrown? clotran.host.illegal_argument_exception (first :k)))
   (are [x y] (= x y)
     (first nil) nil
 
@@ -171,13 +171,13 @@
 ;; sequences.clj:343 [language]
 (deftest test-next
  ; (is (thrown? IllegalArgumentException (next)))
-  (is (thrown? IllegalArgumentException (next true)))
-  (is (thrown? IllegalArgumentException (next false)))
-  (is (thrown? IllegalArgumentException (next 1)))
+  (is (thrown? clotran.host.illegal_argument_exception (next true)))
+  (is (thrown? clotran.host.illegal_argument_exception (next false)))
+  (is (thrown? clotran.host.illegal_argument_exception (next 1)))
   ;(is (thrown? IllegalArgumentException (next 1 2)))
-  (is (thrown? IllegalArgumentException (next \a)))
-  (is (thrown? IllegalArgumentException (next 's)))
-  (is (thrown? IllegalArgumentException (next :k)))
+  (is (thrown? clotran.host.illegal_argument_exception (next \a)))
+  (is (thrown? clotran.host.illegal_argument_exception (next 's)))
+  (is (thrown? clotran.host.illegal_argument_exception (next :k)))
   (are [x y] (= x y)
     (next nil) nil
 

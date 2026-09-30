@@ -88,7 +88,7 @@
   (is (= "foobar" (s/lower-case "FooBar"))))
 
 (deftest nil-handling
-  (are [f args] (thrown? NullPointerException (apply f args))
+  (are [f args] (thrown? clotran.host.null_pointer_exception (apply f args))
        s/reverse [nil]
        s/replace [nil #"foo" "bar"]
        s/replace-first [nil #"foo" "bar"]
@@ -104,15 +104,15 @@
        s/trim-newline [nil]))
 
 (deftest char-sequence-handling
-  (are [result f args] (let [[^CharSequence s & more] args]
-                         (= result (apply f (StringBuffer. s) more)))
+  (are [result f args] (let [[^clotran.host.char_sequence s & more] args]
+                         (= result (apply f (clotran.host.string_buffer. s) more)))
        "paz" s/reverse ["zap"]
        "foo:bar" s/replace ["foo-bar" \- \:]
        "ABC" s/replace ["abc" #"\w" s/upper-case]
-       "faa" s/replace ["foo" #"o" (StringBuffer. "a")]
+       "faa" s/replace ["foo" #"o" (clotran.host.string_buffer. "a")]
        "baz::quux" s/replace-first ["baz--quux" #"--" "::"]
-       "baz::quux" s/replace-first ["baz--quux" (StringBuffer. "--") (StringBuffer. "::")]
-       "zim-zam" s/replace-first ["zim zam" #" " (StringBuffer. "-")]
+       "baz::quux" s/replace-first ["baz--quux" (clotran.host.string_buffer. "--") (clotran.host.string_buffer. "::")]
+       "zim-zam" s/replace-first ["zim zam" #" " (clotran.host.string_buffer. "-")]
        "\\\\ \\$" s/re-quote-replacement ["\\ $"]
        "Pow" s/capitalize ["POW"]
        "BOOM" s/upper-case ["boom"]
@@ -148,7 +148,7 @@
   (is (= (list "foo") (s/split-lines "foo"))))
 
 (deftest t-index-of
-  (let [sb (StringBuffer. "tacos")]
+  (let [sb (clotran.host.string_buffer. "tacos")]
     (is (= 2  (s/index-of sb "c")))
     (is (= 2  (s/index-of sb \c)))
     (is (= 1  (s/index-of sb "ac")))
@@ -163,7 +163,7 @@
     (is (= nil (s/index-of sb "z" -10))))))
 
 (deftest t-last-index-of
-  (let [sb (StringBuffer. "banana")]
+  (let [sb (clotran.host.string_buffer. "banana")]
     (is (= 4 (s/last-index-of sb "n")))
     (is (= 4 (s/last-index-of sb \n)))
     (is (= 3 (s/last-index-of sb "an")))
@@ -178,15 +178,15 @@
     (is (= nil (s/last-index-of sb "z" -10))))))
 
 (deftest t-starts-with?
-  (is (s/starts-with? (StringBuffer. "clojure west") "clojure"))
-  (is (not (s/starts-with? (StringBuffer. "conj") "clojure"))))
+  (is (s/starts-with? (clotran.host.string_buffer. "clojure west") "clojure"))
+  (is (not (s/starts-with? (clotran.host.string_buffer. "conj") "clojure"))))
 
 (deftest t-ends-with?
-  (is (s/ends-with? (StringBuffer. "Clojure West") "West")
-  (is (not (s/ends-with? (StringBuffer. "Conj") "West")))))
+  (is (s/ends-with? (clotran.host.string_buffer. "Clojure West") "West")
+  (is (not (s/ends-with? (clotran.host.string_buffer. "Conj") "West")))))
 
 (deftest t-includes?
-  (let [sb (StringBuffer. "Clojure Applied Book")]
+  (let [sb (clotran.host.string_buffer. "Clojure Applied Book")]
     (is (s/includes? sb "Applied"))
     (is (not (s/includes? sb "Living")))))
 

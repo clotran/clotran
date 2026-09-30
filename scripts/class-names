@@ -1,5 +1,5 @@
 #!/usr/bin/env bb
-;; scripts/class-names -- clotran's class names (src/clj/clotran/class-aliases.edn):
+;; scripts/class-names -- clotran's class names (upstream/class-names.edn):
 ;; every JVM and clojure.lang class name clotran handles, mapped to the name
 ;; clotran gives it. The convention is the host's (memory: class names):
 ;; what is written in Fortran is snake_case under clotran. -- scalars by
@@ -12,9 +12,9 @@
 ;; The JVM names are INPUT only: vendored Clojure writes them and runs
 ;; unmodified, so each resolves to its clotran name (Eval.f90 canon_class).
 (require '[clojure.edn :as edn] '[clojure.string :as str])
-(def table-file "src/clj/clotran/class-aliases.edn")
+(def table-file "upstream/class-names.edn")
 (def inc-file "src/f/classalias.inc")
-(def table (into (sorted-map) (edn/read-string (slurp table-file))))
+(def table (into (sorted-map) (:classes (edn/read-string (slurp table-file)))))
 (let [targets (group-by val table)]
   (doseq [[t ns] targets :when (> (count ns) 1)
           :when (not (#{"clotran.host.bigint" "clotran.host.decimal" "clotran.host.map_entry"} t))]

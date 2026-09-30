@@ -62,13 +62,13 @@
   ([array-fn generator]
    (gen/fmap array-fn (gen/list generator))))
 
-(defn exaust-iterator-forward [^java.util.Iterator iter]
+(defn exaust-iterator-forward [^clotran.host.iterator iter]
   (loop [_ iter] (when (.hasNext iter) (recur (.next iter))))
-  (try (.next iter) nil (catch Throwable t t)))
+  (try (.next iter) nil (catch clotran.host.throwable t t)))
 
-(defn exaust-iterator-backward [^java.util.ListIterator iter]
+(defn exaust-iterator-backward [^clotran.host.list_iterator iter]
   (loop [_ iter] (when (.hasPrevious iter) (recur (.previous iter))))
-  (try (.previous iter) nil (catch Throwable t t)))
+  (try (.previous iter) nil (catch clotran.host.throwable t t)))
 
 (defspec iterator-throws-exception-on-exaustion 100
   (prop/for-all [[_ x] (gen/bind (gen/elements [['list       (gen/list gen/int)]
@@ -81,26 +81,26 @@
                                                 ['array-map  (gen-array-map gen/symbol gen/int)]
                                                 ['sorted-map (gen-sorted-map gen/symbol gen/int)]])
                                  (fn [[s g]] (gen/tuple (gen/return s) g)))]
-    (instance? java.util.NoSuchElementException (exaust-iterator-forward (.iterator x)))))
+    (instance? clotran.host.no_such_element_exception (exaust-iterator-forward (.iterator x)))))
 
 (defspec array-iterator-throws-exception-on-exaustion 100
   (prop/for-all [arr (gen-array)]
-    (let [iter (clojure.lang.ArrayIter/createFromObject arr)]
-      (instance? java.util.NoSuchElementException (exaust-iterator-forward iter)))))
+    (let [iter (clotran.host.array_iter/createFromObject arr)]
+      (instance? clotran.host.no_such_element_exception (exaust-iterator-forward iter)))))
 
 (defspec list-iterator-throws-exception-on-forward-exaustion 50
   (prop/for-all [[_ x] (gen/bind (gen/elements [['vector    (gen/vector gen/int)]
                                                 ['subvec    (gen-subvec (gen/vector gen/int))]
                                                 ['vector-of (gen-gvec)]])
                                  (fn [[s g]] (gen/tuple (gen/return s) g)))]
-    (instance? java.util.NoSuchElementException (exaust-iterator-forward (.listIterator x)))))
+    (instance? clotran.host.no_such_element_exception (exaust-iterator-forward (.listIterator x)))))
 
 (defspec list-iterator-throws-exception-on-backward-exaustion 50
   (prop/for-all [[_ x] (gen/bind (gen/elements [['vector    (gen/vector gen/int)]
                                                 ['subvec    (gen-subvec (gen/vector gen/int))]
                                                 ['vector-of (gen-gvec)]])
                                  (fn [[s g]] (gen/tuple (gen/return s) g)))]
-    (instance? java.util.NoSuchElementException (exaust-iterator-backward (.listIterator x)))))
+    (instance? clotran.host.no_such_element_exception (exaust-iterator-backward (.listIterator x)))))
 
 (defspec map-keyset-iterator-throws-exception-on-exaustion 50
   (prop/for-all [[_ m] (gen/bind (gen/elements [['hash-map   (gen/hash-map gen/symbol gen/int)
@@ -108,7 +108,7 @@
                                                  'sorted-map (gen-sorted-map gen/symbol gen/int)]])
                                  (fn [[s g]] (gen/tuple (gen/return s) g)))]
     (let [iter (.iterator (.keySet m))]
-      (instance? java.util.NoSuchElementException (exaust-iterator-forward iter)))))
+      (instance? clotran.host.no_such_element_exception (exaust-iterator-forward iter)))))
 
 (defspec map-values-iterator-throws-exception-on-exaustion 50
   (prop/for-all [[_ m] (gen/bind (gen/elements [['hash-map   (gen/hash-map gen/symbol gen/int)
@@ -116,16 +116,16 @@
                                                  'sorted-map (gen-sorted-map gen/symbol gen/int)]])
                                  (fn [[s g]] (gen/tuple (gen/return s) g)))]
     (let [iter (.iterator (.values m))]
-      (instance? java.util.NoSuchElementException (exaust-iterator-forward iter)))))
+      (instance? clotran.host.no_such_element_exception (exaust-iterator-forward iter)))))
 
 (defspec map-keys-iterator-throws-exception-on-exaustion 50
   (prop/for-all [m (gen-sorted-map gen/symbol gen/int)]
-    (instance? java.util.NoSuchElementException (exaust-iterator-forward (.keys m)))))
+    (instance? clotran.host.no_such_element_exception (exaust-iterator-forward (.keys m)))))
 
 (defspec map-vals-iterator-throws-exception-on-exaustion 50
   (prop/for-all [m (gen-sorted-map gen/symbol gen/int)]
-    (instance? java.util.NoSuchElementException (exaust-iterator-forward (.vals m)))))
+    (instance? clotran.host.no_such_element_exception (exaust-iterator-forward (.vals m)))))
 
 (defspec map-reverse-iterator-throws-exception-on-exaustion 50
   (prop/for-all [m (gen-sorted-map gen/symbol gen/int)]
-    (instance? java.util.NoSuchElementException (exaust-iterator-forward (.reverseIterator m)))))
+    (instance? clotran.host.no_such_element_exception (exaust-iterator-forward (.reverseIterator m)))))

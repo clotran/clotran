@@ -1,0 +1,351 @@
+;; What clotran calls each name the upstream Clojure sources write. Read
+;; only by upstream/derive (which writes src/clj/clojure and test/clj/clojure
+;; from the copies here) and by scripts/oracle (which compares with clj,
+;; whose answers name these classes). The runtime never sees it.
+;;
+;; :classes     a qualified name upstream writes -> clotran's class. A name
+;;              not listed takes clotran.host.<snake_case simple name>.
+;;              Written in Fortran: clotran.host, snake_case, a scalar its
+;;              Fortran kind; written in Clojure: its deftype's own name.
+;; :implicit    names every upstream file may write bare, unimported
+;; :constructors a class whose clotran type is built from its fields, not
+;;              from the arguments upstream passes: its factory instead
+;; :namespaces  upstream namespaces clotran provides under its own name
+;; :words       what is left of the host's name in prose and in symbols
+{:classes
+ {"clojure.lang.AFn" "clotran.host.a_fn",
+  "clojure.lang.AFunction" "clotran.host.a_function",
+  "clojure.lang.APersistentMap" "clotran.host.a_persistent_map",
+  "clojure.lang.APersistentMap$KeySeq"
+  "clotran.host.a_persistent_map_key_seq",
+  "clojure.lang.APersistentMap$ValSeq"
+  "clotran.host.a_persistent_map_val_seq",
+  "clojure.lang.ARef" "clotran.host.a_ref",
+  "clojure.lang.ASeq" "clotran.host.a_seq",
+  "clojure.lang.Agent" "clotran.host.agent",
+  "clojure.lang.ArityException" "clotran.host.arity_exception",
+  "clojure.lang.ArrayChunk" "clotran.host.array_chunk",
+  "clojure.lang.Associative" "clotran.host.associative",
+  "clojure.lang.Atom" "clotran.host.atom",
+  "clojure.lang.BigInt" "clotran.host.bigint",
+  "clojure.lang.ChunkBuffer" "clotran.host.chunk_buffer",
+  "clojure.lang.ChunkedCons" "clotran.host.chunked_cons",
+  "clojure.lang.Compiler" "clotran.host.compiler",
+  "clojure.lang.Compiler$CompilerException"
+  "clotran.host.compiler_compiler_exception",
+  "clojure.lang.Compiler$HostExpr" "clotran.host.compiler_host_expr",
+  "clojure.lang.Cons" "clotran.host.cons",
+  "clojure.lang.Counted" "clotran.host.counted",
+  "clojure.lang.Cycle" "clotran.host.cycle",
+  "clojure.lang.Delay" "clotran.host.delay",
+  "clojure.lang.DynamicClassLoader"
+  "clotran.host.dynamic_class_loader",
+  "clojure.lang.EdnReader" "clotran.host.edn_reader",
+  "clojure.lang.EnumerationSeq" "clotran.host.enumeration_seq",
+  "clojure.lang.ExceptionInfo" "clotran.host.exception_info",
+  "clojure.lang.Fn" "clotran.host.fn",
+  "clojure.lang.IAtom" "clotran.host.i_atom",
+  "clojure.lang.IAtom2" "clotran.host.i_atom2",
+  "clojure.lang.IBlockingDeref" "clotran.host.i_blocking_deref",
+  "clojure.lang.IChunk" "clotran.host.i_chunk",
+  "clojure.lang.IChunkedSeq" "clotran.host.i_chunked_seq",
+  "clojure.lang.IDeref" "clotran.host.i_deref",
+  "clojure.lang.IDrop" "clotran.host.i_drop",
+  "clojure.lang.IEditableCollection"
+  "clotran.host.i_editable_collection",
+  "clojure.lang.IExceptionInfo" "clotran.host.i_exception_info",
+  "clojure.lang.IFn" "clotran.host.i_fn",
+  "clojure.lang.IHashEq" "clotran.host.i_hash_eq",
+  "clojure.lang.IKVReduce" "clotran.host.ikv_reduce",
+  "clojure.lang.IKeywordLookup" "clotran.host.i_keyword_lookup",
+  "clojure.lang.ILookup" "clotran.host.i_lookup",
+  "clojure.lang.ILookupThunk" "clotran.host.i_lookup_thunk",
+  "clojure.lang.IMapEntry" "clotran.host.i_map_entry",
+  "clojure.lang.IMeta" "clotran.host.i_meta",
+  "clojure.lang.IObj" "clotran.host.i_obj",
+  "clojure.lang.IPending" "clotran.host.i_pending",
+  "clojure.lang.IPersistentCollection"
+  "clotran.host.i_persistent_collection",
+  "clojure.lang.IPersistentList" "clotran.host.i_persistent_list",
+  "clojure.lang.IPersistentMap" "clotran.host.i_persistent_map",
+  "clojure.lang.IPersistentSet" "clotran.host.i_persistent_set",
+  "clojure.lang.IPersistentStack" "clotran.host.i_persistent_stack",
+  "clojure.lang.IPersistentVector" "clotran.host.i_persistent_vector",
+  "clojure.lang.IRecord" "clotran.host.i_record",
+  "clojure.lang.IReduce" "clotran.host.i_reduce",
+  "clojure.lang.IReduceInit" "clotran.host.i_reduce_init",
+  "clojure.lang.IRef" "clotran.host.i_ref",
+  "clojure.lang.IReference" "clotran.host.i_reference",
+  "clojure.lang.ISeq" "clotran.host.i_seq",
+  "clojure.lang.ITransientAssociative"
+  "clotran.host.i_transient_associative",
+  "clojure.lang.ITransientCollection"
+  "clotran.host.i_transient_collection",
+  "clojure.lang.ITransientMap" "clotran.host.i_transient_map",
+  "clojure.lang.ITransientSet" "clotran.host.i_transient_set",
+  "clojure.lang.ITransientVector" "clotran.host.i_transient_vector",
+  "clojure.lang.IType" "clotran.host.i_type",
+  "clojure.lang.Indexed" "clotran.host.indexed",
+  "clojure.lang.Iterate" "clotran.host.iterate",
+  "clojure.lang.Keyword" "clotran.host.keyword",
+  "clojure.lang.LazilyPersistentVector"
+  "clotran.host.lazily_persistent_vector",
+  "clojure.lang.LazySeq" "clotran.host.lazy_seq",
+  "clojure.lang.LineNumberingPushbackReader"
+  "clotran.io.LineNumberingReader",
+  "clojure.lang.LispReader" "clotran.host.lisp_reader",
+  "clojure.lang.LockingTransaction" "clotran.host.locking_transaction",
+  "clojure.lang.LongRange" "clotran.host.long_range",
+  "clojure.lang.MapEntry" "clotran.host.map_entry",
+  "clojure.lang.MapEquivalence" "clotran.host.map_equivalence",
+  "clojure.lang.MethodImplCache" "clotran.host.method_impl_cache",
+  "clojure.lang.MethodImplCache$Entry"
+  "clotran.host.method_impl_cache_entry",
+  "clojure.lang.MultiFn" "clotran.host.multi_fn",
+  "clojure.lang.Murmur3" "clotran.host.murmur3",
+  "clojure.lang.Named" "clotran.host.named",
+  "clojure.lang.Namespace" "clotran.host.namespace",
+  "clojure.lang.Numbers" "clotran.host.numbers",
+  "clojure.lang.PersistentArrayMap"
+  "clotran.host.persistent_array_map",
+  "clojure.lang.PersistentArrayMap$TransientArrayMap"
+  "clotran.host.persistent_array_map_transient_array_map",
+  "clojure.lang.PersistentHashMap" "clotran.host.persistent_hash_map",
+  "clojure.lang.PersistentHashMap$TransientHashMap"
+  "clotran.host.persistent_hash_map_transient_hash_map",
+  "clojure.lang.PersistentHashSet" "clotran.host.persistent_hash_set",
+  "clojure.lang.PersistentHashSet$TransientHashSet"
+  "clotran.host.persistent_hash_set_transient_hash_set",
+  "clojure.lang.PersistentList" "clotran.host.persistent_list",
+  "clojure.lang.PersistentQueue" "clotran.host.persistent_queue",
+  "clojure.lang.PersistentStructMap"
+  "clotran.host.persistent_struct_map",
+  "clojure.lang.PersistentTreeMap" "clotran.host.persistent_tree_map",
+  "clojure.lang.PersistentTreeSet" "clotran.host.persistent_tree_set",
+  "clojure.lang.PersistentVector" "clotran.host.persistent_vector",
+  "clojure.lang.PersistentVector$ChunkedSeq"
+  "clotran.host.persistent_vector_chunked_seq",
+  "clojure.lang.PersistentVector$TransientVector"
+  "clotran.host.persistent_vector_transient_vector",
+  "clojure.lang.RT" "clotran.host.rt",
+  "clojure.lang.Range" "clotran.host.range",
+  "clojure.lang.Ratio" "clotran.host.ratio",
+  "clojure.lang.ReaderConditional" "clotran.host.reader_conditional",
+  "clojure.lang.RecordIterator" "clotran.host.record_iterator",
+  "clojure.lang.Reduced" "clotran.host.reduced",
+  "clojure.lang.Ref" "clotran.host.ref",
+  "clojure.lang.Reflector" "clotran.host.reflector",
+  "clojure.lang.Repeat" "clotran.host.repeat",
+  "clojure.lang.Repl" "clotran.host.repl",
+  "clojure.lang.RestFn" "clotran.host.rest_fn",
+  "clojure.lang.Reversible" "clotran.host.reversible",
+  "clojure.lang.Script" "clotran.host.script",
+  "clojure.lang.Seqable" "clotran.host.seqable",
+  "clojure.lang.Sequential" "clotran.host.sequential",
+  "clojure.lang.Sorted" "clotran.host.sorted",
+  "clojure.lang.StringSeq" "clotran.host.string_seq",
+  "clojure.lang.Symbol" "clotran.host.symbol",
+  "clojure.lang.TaggedLiteral" "clotran.host.tagged_literal",
+  "clojure.lang.TransformerIterator" "clotran.rt.TransformerIterator",
+  "clojure.lang.Util" "clotran.host.util",
+  "clojure.lang.Var" "clotran.host.var",
+  "clojure.lang.Var$Unbound" "clotran.host.var_unbound",
+  "clojure.lang.Volatile" "clotran.host.volatile",
+  "clojure.lang.XMLHandler" "clotran.host.xml_handler",
+  "java.io.BufferedReader" "clotran.host.buffered_reader",
+  "java.io.BufferedWriter" "clotran.host.buffered_writer",
+  "java.io.Closeable" "clotran.host.closeable",
+  "java.io.EOFException" "clotran.host.eof_exception",
+  "java.io.File" "clotran.io.File",
+  "java.io.FileNotFoundException"
+  "clotran.host.file_not_found_exception",
+  "java.io.Files" "clotran.host.files",
+  "java.io.Flushable" "clotran.host.flushable",
+  "java.io.IOException" "clotran.host.io_exception",
+  "java.io.InputStream" "clotran.host.input_stream",
+  "java.io.InputStreamReader" "clotran.host.input_stream_reader",
+  "java.io.PrintWriter" "clotran.host.print_writer",
+  "java.io.PushbackReader" "clotran.io.PushbackReader",
+  "java.io.Reader" "clotran.host.reader",
+  "java.io.Serializable" "clotran.host.serializable",
+  "java.io.StringReader" "clotran.io.TextReader",
+  "java.io.StringWriter" "clotran.host.string_writer",
+  "java.io.UnsupportedEncodingException"
+  "clotran.host.unsupported_encoding_exception",
+  "java.io.Writer" "clotran.host.writer",
+  "java.lang.ArithmeticException" "clotran.host.arithmetic_exception",
+  "java.lang.ArrayIndexOutOfBoundsException"
+  "clotran.host.array_index_out_of_bounds_exception",
+  "java.lang.AssertionError" "clotran.host.assertion_error",
+  "java.lang.BigDecimal" "clotran.host.decimal",
+  "java.lang.Boolean" "clotran.host.logical",
+  "java.lang.Byte" "clotran.host.int1",
+  "java.lang.CharSequence" "clotran.host.char_sequence",
+  "java.lang.Character" "clotran.host.char",
+  "java.lang.Class" "clotran.host.class",
+  "java.lang.ClassCastException" "clotran.host.class_cast_exception",
+  "java.lang.ClassNotFoundException"
+  "clotran.host.class_not_found_exception",
+  "java.lang.Double" "clotran.host.real8",
+  "java.lang.Enum" "clotran.host.enum",
+  "java.lang.Error" "clotran.host.error",
+  "java.lang.Exception" "clotran.host.exception",
+  "java.lang.Float" "clotran.host.real4",
+  "java.lang.IllegalAccessError" "clotran.host.illegal_access_error",
+  "java.lang.IllegalArgumentException"
+  "clotran.host.illegal_argument_exception",
+  "java.lang.IllegalStateException"
+  "clotran.host.illegal_state_exception",
+  "java.lang.IndexOutOfBoundsException"
+  "clotran.host.index_out_of_bounds_exception",
+  "java.lang.Integer" "clotran.host.int4",
+  "java.lang.Iterable" "clotran.host.iterable",
+  "java.lang.Long" "clotran.host.int8",
+  "java.lang.Math" "clotran.host.math",
+  "java.lang.NegativeArraySizeException"
+  "clotran.host.negative_array_size_exception",
+  "java.lang.NullPointerException"
+  "clotran.host.null_pointer_exception",
+  "java.lang.Number" "clotran.host.number",
+  "java.lang.NumberFormatException"
+  "clotran.host.number_format_exception",
+  "java.lang.Object" "clotran.host.value",
+  "java.lang.OutOfMemoryError" "clotran.host.out_of_memory_error",
+  "java.lang.Point" "clotran.host.point",
+  "java.lang.Runtime" "clotran.host.runtime",
+  "java.lang.RuntimeException" "clotran.host.runtime_exception",
+  "java.lang.Short" "clotran.host.int2",
+  "java.lang.StackOverflowError" "clotran.host.stack_overflow_error",
+  "java.lang.StrictMath" "clotran.host.strict_math",
+  "java.lang.String" "clotran.host.string",
+  "java.lang.StringBuffer" "clotran.host.string_buffer",
+  "java.lang.StringBuilder" "clotran.host.string_builder",
+  "java.lang.StringIndexOutOfBoundsException"
+  "clotran.host.string_index_out_of_bounds_exception",
+  "java.lang.System" "clotran.host.system",
+  "java.lang.Thread" "clotran.host.thread",
+  "java.lang.Throwable" "clotran.host.throwable",
+  "java.lang.UnsupportedOperationException"
+  "clotran.host.unsupported_operation_exception",
+  "java.lang.VirtualMachineError" "clotran.host.virtual_machine_error",
+  "java.lang.annotation.Annotation" "clotran.host.annotation",
+  "java.lang.annotation.Retention" "clotran.host.retention",
+  "java.lang.annotation.RetentionPolicy"
+  "clotran.host.retention_policy",
+  "java.lang.reflect.Array" "clotran.host.array",
+  "java.lang.reflect.Constructor" "clotran.host.constructor",
+  "java.lang.reflect.Field" "clotran.host.field",
+  "java.lang.reflect.Method" "clotran.host.method",
+  "java.math.BigDecimal" "clotran.host.decimal",
+  "java.math.BigInteger" "clotran.host.bigint",
+  "java.math.MathContext" "clotran.host.math_context",
+  "java.math.RoundingMode" "clotran.host.rounding_mode",
+  "java.net.URI" "clotran.host.uri",
+  "java.net.URL" "clotran.host.url",
+  "java.sql.ResultSet" "clotran.host.result_set",
+  "java.sql.Timestamp" "clotran.host.timestamp",
+  "java.time.Instant" "clotran.host.instant",
+  "java.util.ArrayList" "clotran.rt.ArrayList",
+  "java.util.Arrays" "clotran.host.arrays",
+  "java.util.Collection" "clotran.host.collection",
+  "java.util.Collections" "clotran.host.collections",
+  "java.util.Comparator" "clotran.host.comparator",
+  "java.util.ConcurrentModificationException"
+  "clotran.host.concurrent_modification_exception",
+  "java.util.Date" "clotran.host.date",
+  "java.util.Enumeration" "clotran.host.enumeration",
+  "java.util.Formatter" "clotran.host.formatter",
+  "java.util.HashMap" "clotran.host.hash_map",
+  "java.util.Iterator" "clotran.host.iterator",
+  "java.util.List" "clotran.host.list",
+  "java.util.Map" "clotran.host.map",
+  "java.util.Map$Entry" "clotran.host.map_entry",
+  "java.util.NoSuchElementException"
+  "clotran.host.no_such_element_exception",
+  "java.util.Properties" "clotran.host.properties",
+  "java.util.RandomAccess" "clotran.host.random_access",
+  "java.util.Set" "clotran.host.set",
+  "java.util.UUID" "clotran.uuid.UUID",
+  "java.util.concurrent.ArrayBlockingQueue"
+  "clotran.host.array_blocking_queue",
+  "java.util.concurrent.CancellationException"
+  "clotran.host.cancellation_exception",
+  "java.util.concurrent.CountDownLatch"
+  "clotran.host.count_down_latch",
+  "java.util.concurrent.ExecutionException"
+  "clotran.host.execution_exception",
+  "java.util.concurrent.ForkJoinPool" "clotran.host.fork_join_pool",
+  "java.util.concurrent.ForkJoinTask" "clotran.host.fork_join_task",
+  "java.util.concurrent.Future" "clotran.host.future",
+  "java.util.concurrent.FutureTask" "clotran.host.future_task",
+  "java.util.concurrent.LinkedBlockingQueue"
+  "clotran.host.linked_blocking_queue",
+  "java.util.concurrent.TimeUnit" "clotran.host.time_unit",
+  "java.util.concurrent.TimeoutException"
+  "clotran.host.timeout_exception",
+  "java.util.concurrent.locks.ReentrantLock"
+  "clotran.host.reentrant_lock",
+  "java.util.regex.Matcher" "clotran.host.matcher",
+  "java.util.regex.Pattern" "clotran.host.pattern",
+  "java.util.stream.BaseStream" "clotran.host.base_stream"},
+ :implicit
+ ["AbstractMethodError"
+  "ArithmeticException"
+  "AssertionError"
+  "Boolean"
+  "Byte"
+  "CharSequence"
+  "Character"
+  "Class"
+  "ClassCastException"
+  "ClassLoader"
+  "ClassNotFoundException"
+  "Deprecated"
+  "Double"
+  "Error"
+  "Exception"
+  "Float"
+  "IllegalAccessError"
+  "IllegalArgumentException"
+  "IllegalStateException"
+  "IndexOutOfBoundsException"
+  "Integer"
+  "Iterable"
+  "Long"
+  "Math"
+  "NegativeArraySizeException"
+  "NullPointerException"
+  "Number"
+  "NumberFormatException"
+  "Object"
+  "Override"
+  "Runnable"
+  "Runtime"
+  "RuntimeException"
+  "Short"
+  "StackOverflowError"
+  "StackTraceElement"
+  "String"
+  "StringBuffer"
+  "StringBuilder"
+  "StringIndexOutOfBoundsException"
+  "SuppressWarnings"
+  "System"
+  "Thread"
+  "ThreadLocal"
+  "Throwable"
+  "UnsupportedOperationException"],
+ :constructors
+ {"java.io.StringReader" "clotran.io/text-reader",
+  "java.io.PushbackReader" "clotran.io/pushback-reader",
+  "clojure.lang.LineNumberingPushbackReader" "clotran.io/line-numbering-reader",
+  "java.util.ArrayList" "clotran.rt/array-list"},
+ :namespaces
+ {"clojure.java.basis" "clotran.basis",
+  "clojure.java.browse" "clotran.browse",
+  "clojure.java.io" "clotran.files",
+  "clojure.java.javadoc" "clotran.api-docs",
+  "clojure.java.process" "clotran.process",
+  "clojure.java.shell" "clotran.shell"},
+ :words
+ [["JVM" "host"] ["Java" "host"] ["JAVA" "HOST"] ["java" "host"]]}

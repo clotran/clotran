@@ -15,7 +15,7 @@
   (:require [clojure.test-clojure.generators :as cgen]
             [clojure.data.generators :as gen]
             [clojure.string :as string])
-  (:import [java.util Collection]))
+  (:import ))
 
 
 ;; *** Helper functions ***
@@ -35,7 +35,7 @@
              (+ i (count (drop i coll))))))))
 
 (defn- transient? [x]
-  (instance? clojure.lang.ITransientCollection x))
+  (instance? clotran.host.i_transient_collection x))
 
 (defn gen-transient-set-action []
   (gen/rand-nth [[#(conj! %1 %2) #(conj %1 %2) (gen/uniform -100 100)]
@@ -81,10 +81,10 @@
   (assert (= (count a) (count b) (.size a) (.size b)))
   (assert (= a b))
   (assert (= b a))
-  (assert (.equals ^Object a b))
-  (assert (.equals ^Object b a))
+  (assert (.equals ^clotran.host.value a b))
+  (assert (.equals ^clotran.host.value b a))
   (assert (= (hash a) (hash b)))
-  (assert (= (.hashCode ^Object a) (.hashCode ^Object b)))
+  (assert (= (.hashCode ^clotran.host.value a) (.hashCode ^clotran.host.value b)))
   (assert (= a
              (into (empty a) a)
              (into (empty b) b)
@@ -118,11 +118,11 @@
   identity
   [^{:tag clojure.test-clojure.data-structures/gen-transient-map-actions} actions]
   (assert-same-collection
-   (to-persistent (apply-actions clojure.lang.PersistentArrayMap/EMPTY actions))
-   (to-persistent (apply-actions clojure.lang.PersistentArrayMap/EMPTY actions)))
+   (to-persistent (apply-actions clotran.host.persistent_array_map/EMPTY actions))
+   (to-persistent (apply-actions clotran.host.persistent_array_map/EMPTY actions)))
   (assert-same-collection
-   (to-persistent (apply-actions clojure.lang.PersistentHashMap/EMPTY actions))
-   (to-persistent (apply-actions clojure.lang.PersistentHashMap/EMPTY actions))))
+   (to-persistent (apply-actions clotran.host.persistent_hash_map/EMPTY actions))
+   (to-persistent (apply-actions clotran.host.persistent_hash_map/EMPTY actions))))
 
 ;; *** General ***
 
@@ -143,7 +143,7 @@
       (lazy-seq #{})
       (lazy-seq "")
       (lazy-seq (into-array []))
-      (new Object) )
+      (new clotran.host.value) )
 
   ; numbers equality across types (see tests below - NOT IMPLEMENTED YET)
 
@@ -219,7 +219,7 @@
 ;; *** Collections ***
 
 (deftest test-count
-  (let [EMPTY clojure.lang.PersistentQueue/EMPTY]
+  (let [EMPTY clotran.host.persistent_queue/EMPTY]
     (are [x y] (= (count x) y)
          EMPTY 0 
          (into EMPTY [:a :b]) 2
@@ -251,13 +251,13 @@
          (into-array [1]) 1
          (into-array [1 2 3]) 3
 
-         (java.util.ArrayList. []) 0
-         (java.util.ArrayList. [1]) 1
-         (java.util.ArrayList. [1 2 3]) 3
+         (clotran.rt/array-list []) 0
+         (clotran.rt/array-list [1]) 1
+         (clotran.rt/array-list [1 2 3]) 3
 
-         (java.util.HashMap. {}) 0
-         (java.util.HashMap. {:a 1}) 1
-         (java.util.HashMap. {:a 1 :b 2 :c 3}) 3 ))
+         (clotran.host.hash_map. {}) 0
+         (clotran.host.hash_map. {:a 1}) 1
+         (clotran.host.hash_map. {:a 1 :b 2 :c 3}) 3 ))
 
   ; different types
   (are [x]  (= (count [x]) 1)
@@ -268,8 +268,8 @@
 
 (deftest test-conj
   ; doesn't work on strings or arrays
-  (is (thrown? ClassCastException (conj "" \a)))
-  (is (thrown? ClassCastException (conj (into-array []) 1)))
+  (is (thrown? clotran.host.class_cast_exception (conj "" \a)))
+  (is (thrown? clotran.host.class_cast_exception (conj (into-array []) 1)))
 
   (are [x y] (= x y)
       (conj nil 1) '(1)
@@ -348,8 +348,8 @@
 
 (deftest test-peek
   ; doesn't work for sets and maps
-  (is (thrown? ClassCastException (peek #{1})))
-  (is (thrown? ClassCastException (peek {:a 1})))
+  (is (thrown? clotran.host.class_cast_exception (peek #{1})))
+  (is (thrown? clotran.host.class_cast_exception (peek {:a 1})))
 
   (are [x y] (= x y)
       (peek nil) nil
@@ -381,12 +381,12 @@
 
 (deftest test-pop
   ; doesn't work for sets and maps
-  (is (thrown? ClassCastException (pop #{1})))
-  (is (thrown? ClassCastException (pop #{:a 1})))
+  (is (thrown? clotran.host.class_cast_exception (pop #{1})))
+  (is (thrown? clotran.host.class_cast_exception (pop #{:a 1})))
 
   ; collection cannot be empty
-  (is (thrown? IllegalStateException (pop ())))
-  (is (thrown? IllegalStateException (pop [])))
+  (is (thrown? clotran.host.illegal_state_exception (pop ())))
+  (is (thrown? clotran.host.illegal_state_exception (pop [])))
 
   (are [x y] (= x y)
       (pop nil) nil
@@ -507,34 +507,34 @@
       (contains? #{1 2 3} 10) false
       (contains? #{1 2 3} nil) false)
 
-  ; contains? also works on java.util.Map and java.util.Set.
+  ; contains? also works on clotran.host.map and clotran.host.set.
   (are [x y] (= x y)
-      (contains? (java.util.HashMap. {}) :a) false
-      (contains? (java.util.HashMap. {}) nil) false
+      (contains? (clotran.host.hash_map. {}) :a) false
+      (contains? (clotran.host.hash_map. {}) nil) false
 
-      (contains? (java.util.HashMap. {:a 1}) :a) true
-      (contains? (java.util.HashMap. {:a 1}) :b) false
-      (contains? (java.util.HashMap. {:a 1}) nil) false
+      (contains? (clotran.host.hash_map. {:a 1}) :a) true
+      (contains? (clotran.host.hash_map. {:a 1}) :b) false
+      (contains? (clotran.host.hash_map. {:a 1}) nil) false
 
-      (contains? (java.util.HashMap. {:a 1 :b 2}) :a) true
-      (contains? (java.util.HashMap. {:a 1 :b 2}) :b) true
-      (contains? (java.util.HashMap. {:a 1 :b 2}) :c) false
-      (contains? (java.util.HashMap. {:a 1 :b 2}) nil) false
+      (contains? (clotran.host.hash_map. {:a 1 :b 2}) :a) true
+      (contains? (clotran.host.hash_map. {:a 1 :b 2}) :b) true
+      (contains? (clotran.host.hash_map. {:a 1 :b 2}) :c) false
+      (contains? (clotran.host.hash_map. {:a 1 :b 2}) nil) false
 
       ; sets
-      (contains? (java.util.HashSet. #{}) 1) false
-      (contains? (java.util.HashSet. #{}) nil) false
+      (contains? (clotran.host.hash_set. #{}) 1) false
+      (contains? (clotran.host.hash_set. #{}) nil) false
 
-      (contains? (java.util.HashSet. #{1}) 1) true
-      (contains? (java.util.HashSet. #{1}) 2) false
-      (contains? (java.util.HashSet. #{1}) nil) false
+      (contains? (clotran.host.hash_set. #{1}) 1) true
+      (contains? (clotran.host.hash_set. #{1}) 2) false
+      (contains? (clotran.host.hash_set. #{1}) nil) false
 
-      (contains? (java.util.HashSet. #{1 2 3}) 1) true
-      (contains? (java.util.HashSet. #{1 2 3}) 3) true
-      (contains? (java.util.HashSet. #{1 2 3}) 10) false
-      (contains? (java.util.HashSet. #{1 2 3}) nil) false)
+      (contains? (clotran.host.hash_set. #{1 2 3}) 1) true
+      (contains? (clotran.host.hash_set. #{1 2 3}) 3) true
+      (contains? (clotran.host.hash_set. #{1 2 3}) 10) false
+      (contains? (clotran.host.hash_set. #{1 2 3}) nil) false)
 
-  ; numerically indexed collections (e.g. vectors and Java arrays)
+  ; numerically indexed collections (e.g. vectors and host arrays)
   ; => test if the numeric key is WITHIN THE RANGE OF INDEXES
   (are [x y] (= x y)
       (contains? [] 0) false
@@ -565,7 +565,7 @@
       (contains? (into-array [1 2 3]) -1) false)
 
   ; 'contains?' will not operate on non-associative things
-  (are [x]  (is (thrown? Exception (contains? x 1)))
+  (are [x]  (is (thrown? clotran.host.exception (contains? x 1)))
        '(1 2 3)
        3))
 
@@ -578,18 +578,18 @@
       (keys "") nil )
 
   (are [x y] (= x y)
-      ; (class {:a 1}) => clojure.lang.PersistentArrayMap
+      ; (class {:a 1}) => clotran.host.persistent_array_map
       (keys {}) nil
       (keys {:a 1}) '(:a)
       (keys {nil 1}) '(nil)
       (diff (keys {:a 1 :b 2}) '(:a :b)) nil              ; (keys {:a 1 :b 2}) '(:a :b)
 
-      ; (class (sorted-map :a 1)) => clojure.lang.PersistentTreeMap
+      ; (class (sorted-map :a 1)) => clotran.host.persistent_tree_map
       (keys (sorted-map)) nil
       (keys (sorted-map :a 1)) '(:a)
       (diff (keys (sorted-map :a 1 :b 2)) '(:a :b)) nil   ; (keys (sorted-map :a 1 :b 2)) '(:a :b)
 
-      ; (class (hash-map :a 1)) => clojure.lang.PersistentHashMap
+      ; (class (hash-map :a 1)) => clotran.host.persistent_hash_map
       (keys (hash-map)) nil
       (keys (hash-map :a 1)) '(:a)
       (diff (keys (hash-map :a 1 :b 2)) '(:a :b)) nil )   ; (keys (hash-map :a 1 :b 2)) '(:a :b)
@@ -607,18 +607,18 @@
       (vals "") nil )
 
   (are [x y] (= x y)
-      ; (class {:a 1}) => clojure.lang.PersistentArrayMap
+      ; (class {:a 1}) => clotran.host.persistent_array_map
       (vals {}) nil
       (vals {:a 1}) '(1)
       (vals {nil 1}) '(1)
       (diff (vals {:a 1 :b 2}) '(1 2)) nil              ; (vals {:a 1 :b 2}) '(1 2)
 
-      ; (class (sorted-map :a 1)) => clojure.lang.PersistentTreeMap
+      ; (class (sorted-map :a 1)) => clotran.host.persistent_tree_map
       (vals (sorted-map)) nil
       (vals (sorted-map :a 1)) '(1)
       (diff (vals (sorted-map :a 1 :b 2)) '(1 2)) nil   ; (vals (sorted-map :a 1 :b 2)) '(1 2)
 
-      ; (class (hash-map :a 1)) => clojure.lang.PersistentHashMap
+      ; (class (hash-map :a 1)) => clotran.host.persistent_hash_map
       (vals (hash-map)) nil
       (vals (hash-map :a 1)) '(1)
       (diff (vals (hash-map :a 1 :b 2)) '(1 2)) nil )   ; (vals (hash-map :a 1 :b 2)) '(1 2)
@@ -629,13 +629,13 @@
 
 
 (deftest test-sorted-map-keys
-  (is (thrown? ClassCastException (sorted-map () 1)))
-  (is (thrown? ClassCastException (sorted-map #{} 1)))
-  (is (thrown? ClassCastException (sorted-map {} 1)))
+  (is (thrown? clotran.host.class_cast_exception (sorted-map () 1)))
+  (is (thrown? clotran.host.class_cast_exception (sorted-map #{} 1)))
+  (is (thrown? clotran.host.class_cast_exception (sorted-map {} 1)))
 
-  (is (thrown? ClassCastException (assoc (sorted-map) () 1)))
-  (is (thrown? ClassCastException (assoc (sorted-map) #{} 1)))
-  (is (thrown? ClassCastException (assoc (sorted-map) {} 1)))
+  (is (thrown? clotran.host.class_cast_exception (assoc (sorted-map) () 1)))
+  (is (thrown? clotran.host.class_cast_exception (assoc (sorted-map) #{} 1)))
+  (is (thrown? clotran.host.class_cast_exception (assoc (sorted-map) {} 1)))
 
   ;; doesn't throw
   (let [cmp #(compare (count %1) (count %2))]
@@ -681,7 +681,7 @@
 
 (deftest test-get
   (let [m {:a 1, :b 2, :c {:d 3, :e 4}, :f nil, :g false, nil {:h 5}}]
-    (is (thrown? IllegalArgumentException (get-in {:a 1} 5)))
+    (is (thrown? clotran.host.illegal_argument_exception (get-in {:a 1} 5)))
     (are [x y] (= x y)
          (get m :a) 1
          (get m :e) nil
@@ -731,7 +731,7 @@
   (testing "map-entry? = true"
     (are [entry]
       (true? (map-entry? entry))
-      (first (doto (java.util.HashMap.) (.put "x" 1))))))
+      (first (doto (clotran.host.hash_map.) (.put "x" 1))))))
 
 ;; *** Sets ***
 
@@ -783,13 +783,13 @@
       (hash-set #{}) #{#{}}
       (hash-set 1 #{}) #{1 #{}}
       (hash-set #{} 2) #{#{} 2}
-      (hash-set (Integer. -1)) (hash-set (Long. -1))))
+      (hash-set (clotran.host.int4. -1)) (hash-set (clotran.host.int8. -1))))
 
 
 (deftest test-sorted-set
   ; only compatible types can be used
-  (is (thrown? ClassCastException (sorted-set 1 "a")))
-  (is (thrown? ClassCastException (sorted-set '(1 2) [3 4])))
+  (is (thrown? clotran.host.class_cast_exception (sorted-set 1 "a")))
+  (is (thrown? clotran.host.class_cast_exception (sorted-set '(1 2) [3 4])))
 
   ; creates set?
   (are [x] (set? x)
@@ -811,13 +811,13 @@
       :kw
       [] [1 2]
   )
-  ; cannot be cast to java.lang.Comparable
-  (is (thrown? ClassCastException (sorted-set ())))
-  (is (thrown? ClassCastException (sorted-set {})))
-  (is (thrown? ClassCastException (sorted-set #{})))
-  (is (thrown? ClassCastException (sorted-set '(1 2) '(1 2))))
-  (is (thrown? ClassCastException (sorted-set {:a 1 :b 2} {:a 1 :b 2})))
-  (is (thrown? ClassCastException (sorted-set #{1 2} #{1 2})))
+  ; cannot be cast to clotran.host.comparable
+  (is (thrown? clotran.host.class_cast_exception (sorted-set ())))
+  (is (thrown? clotran.host.class_cast_exception (sorted-set {})))
+  (is (thrown? clotran.host.class_cast_exception (sorted-set #{})))
+  (is (thrown? clotran.host.class_cast_exception (sorted-set '(1 2) '(1 2))))
+  (is (thrown? clotran.host.class_cast_exception (sorted-set {:a 1 :b 2} {:a 1 :b 2})))
+  (is (thrown? clotran.host.class_cast_exception (sorted-set #{1 2} #{1 2})))
 
   (are [x y] (= x y)
       ; generating
@@ -839,8 +839,8 @@
   ; only compatible types can be used
   ; NB: not a ClassCastException, but a RuntimeException is thrown,
   ; requires discussion on whether this should be symmetric with test-sorted-set
-  (is (thrown? Exception (sorted-set-by < 1 "a")))
-  (is (thrown? Exception (sorted-set-by < '(1 2) [3 4])))
+  (is (thrown? clotran.host.exception (sorted-set-by < 1 "a")))
+  (is (thrown? clotran.host.exception (sorted-set-by < '(1 2) [3 4])))
 
   ; creates set?
   (are [x] (set? x)
@@ -865,12 +865,12 @@
       {}  ; {:a 1 :b 2}
       #{} ; #{1 2}
   )
-  ; cannot be cast to java.lang.Comparable
+  ; cannot be cast to clotran.host.comparable
   ; NB: not a ClassCastException, but a RuntimeException is thrown,
   ; requires discussion on whether this should be symmetric with test-sorted-set
-  (is (thrown? Exception (sorted-set-by compare '(1 2) '(1 2))))
-  (is (thrown? Exception (sorted-set-by compare {:a 1 :b 2} {:a 1 :b 2})))
-  (is (thrown? Exception (sorted-set-by compare #{1 2} #{1 2})))
+  (is (thrown? clotran.host.exception (sorted-set-by compare '(1 2) '(1 2))))
+  (is (thrown? clotran.host.exception (sorted-set-by compare {:a 1 :b 2} {:a 1 :b 2})))
+  (is (thrown? clotran.host.exception (sorted-set-by compare #{1 2} #{1 2})))
 
   (are [x y] (= x y)
       ; generating
@@ -938,9 +938,9 @@
 
 (deftest test-disj
   ; doesn't work on lists, vectors or maps
-  (is (thrown? ClassCastException (disj '(1 2) 1)))
-  (is (thrown? ClassCastException (disj [1 2] 1)))
-  (is (thrown? ClassCastException (disj {:a 1} :a)))
+  (is (thrown? clotran.host.class_cast_exception (disj '(1 2) 1)))
+  (is (thrown? clotran.host.class_cast_exception (disj [1 2] 1)))
+  (is (thrown? clotran.host.class_cast_exception (disj {:a 1} :a)))
 
   ; identity
   (are [x] (= (disj x) x)
@@ -997,12 +997,12 @@
 ;; *** Queues ***
 
 (deftest test-queues
-  (let [EMPTY clojure.lang.PersistentQueue/EMPTY]
+  (let [EMPTY clotran.host.persistent_queue/EMPTY]
     (are [x y] (= x y)
       EMPTY EMPTY
       (into EMPTY (range 50)) (into EMPTY (range 50))
-      (conj EMPTY (Long. -1)) (conj EMPTY (Integer. -1))
-      (hash (conj EMPTY (Long. -1))) (hash (conj EMPTY (Integer. -1)))
+      (conj EMPTY (clotran.host.int8. -1)) (conj EMPTY (clotran.host.int4. -1))
+      (hash (conj EMPTY (clotran.host.int8. -1))) (hash (conj EMPTY (clotran.host.int4. -1)))
       (hash [1 2 3]) (hash (conj EMPTY 1 2 3))
       (range 5) (into EMPTY (range 5))
       (range 1 6) (-> EMPTY
@@ -1055,7 +1055,7 @@
         w5c (with-meta [5] {:me "w5c"})]
 
     ;; Sets
-    (is (thrown? IllegalArgumentException
+    (is (thrown? clotran.host.illegal_argument_exception
                  (read-string "#{1 2 3 4 1 5}")))
     ;; If there are duplicate items when doing (conj #{} x1 x2 ...),
     ;; the behavior is that the metadata of the first item is kept.
@@ -1071,7 +1071,7 @@
       #{z3a x1} [z3a z3b x1])
 
     ;; Maps
-    (is (thrown? IllegalArgumentException
+    (is (thrown? clotran.host.illegal_argument_exception
                  (read-string "{:a 1, :b 2, :a -1, :c 3}")))
     ;; If there are duplicate keys when doing (assoc {} k1 v1 k2 v2
     ;; ...), the behavior is that the metadata of the first duplicate
@@ -1092,7 +1092,7 @@
                                         v4a z3a, y2 2, v4b z3b, w5c v4c])))
 
 (deftest test-array-map-arity
-  (is (thrown? IllegalArgumentException
+  (is (thrown? clotran.host.illegal_argument_exception
                (array-map 1 2 3))))
 
 (deftest test-assoc
@@ -1102,29 +1102,29 @@
        {:a 1} (assoc {} :a 1)
        {nil 1} (assoc {} nil 1)
        {:a 2 :b -2} (assoc {} :b -2 :a 2))
-  (is (thrown? IllegalArgumentException (assoc [] 0 5 1)))
-  (is (thrown? IllegalArgumentException (assoc {} :b -2 :a))))
+  (is (thrown? clotran.host.illegal_argument_exception (assoc [] 0 5 1)))
+  (is (thrown? clotran.host.illegal_argument_exception (assoc {} :b -2 :a))))
 
 (defn is-same-collection [a b]
   (let [msg (format "(class a)=%s (class b)=%s a=%s b=%s"
                     (.getName (class a)) (.getName (class b)) a b)]
     (is (= (count a) (count b)) msg)
-    (when (instance? Collection a)
+    (when (instance? clotran.host.collection a)
       (is (= (count a) (.size a)) msg))
-    (when (instance? Collection b)
+    (when (instance? clotran.host.collection b)
       (is (= (count b) (.size b)) msg))
     (is (= a b) msg)
     (is (= b a) msg)
-    (is (.equals ^Object a b) msg)
-    (is (.equals ^Object b a) msg)
+    (is (.equals ^clotran.host.value a b) msg)
+    (is (.equals ^clotran.host.value b a) msg)
     (is (= (hash a) (hash b)) msg)
-    (is (= (.hashCode ^Object a) (.hashCode ^Object b)) msg)))
+    (is (= (.hashCode ^clotran.host.value a) (.hashCode ^clotran.host.value b)) msg)))
 
 (deftest ordered-collection-equality-test
   (let [empty-colls [ []
                       '()
                       (lazy-seq)
-                      clojure.lang.PersistentQueue/EMPTY
+                      clotran.host.persistent_queue/EMPTY
                       (vector-of :long) ]]
     (doseq [c1 empty-colls, c2 empty-colls]
       (is-same-collection c1 c2)))
@@ -1133,7 +1133,7 @@
                  (lazy-seq (cons -3
                    (lazy-seq (cons :a
                      (lazy-seq (cons "7th" nil))))))
-                 (into clojure.lang.PersistentQueue/EMPTY
+                 (into clotran.host.persistent_queue/EMPTY
                        [-3 :a "7th"])
                  (sequence (map identity) [-3 :a "7th"]) ]]
     (doseq [c1 colls1, c2 colls1]
@@ -1217,11 +1217,11 @@
 
 (deftest ireduce-reduced
   (let [f (fn [_ a] (if (= a 5) (reduced "foo")))]
-    (is (= "foo" (.reduce ^clojure.lang.IReduce (list 1 2 3 4 5) f)))
-    (is (= "foo" (.reduce ^clojure.lang.IReduce (seq (long-array [1 2 3 4 5])) f)))))
+    (is (= "foo" (.reduce ^clotran.host.i_reduce (list 1 2 3 4 5) f)))
+    (is (= "foo" (.reduce ^clotran.host.i_reduce (seq (long-array [1 2 3 4 5])) f)))))
 
 (defn seq-iter-match
-  [^clojure.lang.Seqable seqable ^Iterable iterable]
+  [^clotran.host.seqable seqable ^clotran.host.iterable iterable]
   (if (nil? iterable)
     (when (not (nil? (seq seqable)))
       (throw (ex-info "Null iterable but seq has elements"
@@ -1274,7 +1274,7 @@
 
 (defn gen-queue
   []
-  (into clojure.lang.PersistentQueue/EMPTY
+  (into clotran.host.persistent_queue/EMPTY
         (gen/vec (rand-nth cgen/ednable-scalars))))
 
 (defspec seq-and-iter-match-for-queues

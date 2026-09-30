@@ -27,15 +27,15 @@
 ; loaded-libs
 
 (deftest test-alias
-	(is (thrown-with-msg? Exception #"No namespace: epicfail found" (alias 'bogus 'epicfail))))
+	(is (thrown-with-msg? clotran.host.exception #"No namespace: epicfail found" (alias 'bogus 'epicfail))))
 	
 (deftest test-require
-         (is (thrown? Exception (require :foo)))
-         (is (thrown? Exception (require))))
+         (is (thrown? clotran.host.exception (require :foo)))
+         (is (thrown? clotran.host.exception (require))))
 
 (deftest test-use
-         (is (thrown? Exception (use :foo)))
-         (is (thrown? Exception (use))))
+         (is (thrown? clotran.host.exception (use :foo)))
+         (is (thrown? clotran.host.exception (use))))
 
 (deftest reimporting-deftypes
   (let [inst1 (binding [*ns* *ns*]
@@ -55,7 +55,7 @@
       (is (= [:a :b] (keys inst2))))
     ;fragile tests, please fix
     #_(testing "you cannot import same local name from a different namespace"
-      (is (thrown? clojure.lang.Compiler$CompilerException
+      (is (thrown? clotran.host.compiler_compiler_exception
                   #"ReimportMe already refers to: class exporter.ReimportMe in namespace: importer"
                   (binding [*ns* *ns*]
                     (eval '(do (ns exporter-2)
@@ -66,14 +66,14 @@
 
 (deftest naming-types
   (testing "you cannot use a name already referred from another namespace"
-    (is (thrown-with-msg? IllegalStateException
-                          #"String already refers to: class java.lang.String"
+    (is (thrown-with-msg? clotran.host.illegal_state_exception
+                          #"String already refers to: class clotran.host.string"
                           (definterface String)))
-    (is (thrown-with-msg? IllegalStateException
-                          #"StringBuffer already refers to: class java.lang.StringBuffer"
+    (is (thrown-with-msg? clotran.host.illegal_state_exception
+                          #"StringBuffer already refers to: class clotran.host.string_buffer"
                           (deftype StringBuffer [])))
-    (is (thrown-with-msg? IllegalStateException
-                          #"Integer already refers to: class java.lang.Integer"
+    (is (thrown-with-msg? clotran.host.illegal_state_exception
+                          #"Integer already refers to: class clotran.host.int4"
                           (defrecord Integer [])))))
 
 (deftest resolution
@@ -90,17 +90,17 @@
       (in-ns temp-ns)
       (eval '(def ^{:private true} hidden-var)))
     (testing "referring to something that does not exist"
-      (is (thrown-with-msg? IllegalAccessError #"nonexistent-var does not exist"
+      (is (thrown-with-msg? clotran.host.illegal_access_error #"nonexistent-var does not exist"
             (refer temp-ns :only '(nonexistent-var)))))
     (testing "referring to something non-public"
-      (is (thrown-with-msg? IllegalAccessError #"hidden-var is not public"
+      (is (thrown-with-msg? clotran.host.illegal_access_error #"hidden-var is not public"
             (refer temp-ns :only '(hidden-var)))))))
 
 (deftest test-defrecord-deftype-err-msg
-  (is (thrown-with-cause-msg? clojure.lang.Compiler$CompilerException
+  (is (thrown-with-cause-msg? clotran.host.compiler_compiler_exception
                         #"defrecord and deftype fields must be symbols, user\.MyRecord had: :shutdown-fn"
                         (eval '(defrecord MyRecord [:shutdown-fn]))))
-  (is (thrown-with-cause-msg? clojure.lang.Compiler$CompilerException
+  (is (thrown-with-cause-msg? clotran.host.compiler_compiler_exception
                         #"defrecord and deftype fields must be symbols, user\.MyType had: :key1"
                         (eval '(deftype MyType [:key1])))))
 

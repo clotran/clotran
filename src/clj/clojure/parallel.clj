@@ -130,7 +130,7 @@ pvec.
                   (= op :map) (. pa withMapping (parallel/op args))
                   (= op :map-with) (. pa withMapping (binary-op (args 0)) (par (args 1)))
                   (= op :map-index) (. pa withIndexedMapping (int-and-object-to-object args))
-                  :else (throw (Exception. (str "Unsupported par op: " op)))))
+                  :else (throw (clotran.host.exception. (str "Unsupported par op: " op)))))
              (par coll) 
              (partition 2 ops))))
 
@@ -218,7 +218,7 @@ pvec.
 (refer 'parallel)
 (pdistinct [1 2 3 2 1])
 ;(pcumulate [1 2 3 2 1] + 0) ;broken, not exposed
-(def a (make-array Object 1000000))
+(def a (make-array clotran.host.value 1000000))
 (dotimes i (count a)
   (aset a i (rand-int i)))
 (time (reduce + 0 a))

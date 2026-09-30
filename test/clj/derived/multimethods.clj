@@ -1,4 +1,4 @@
-;; DERIVED from test/clj/clojure/test_clojure/multimethods.clj by scripts/derive-tests -- do not edit.
+;; DERIVED from upstream/clojure/test/clojure/test_clojure/multimethods.clj by upstream/derive-tests -- do not edit.
 ;; Kept: tests whose symbols lie in the clojure.core/cljs.core intersection (plus concurrency).
 
 (ns clojure.test-clojure.multimethods (:use clojure.test [clojure.test-helper :only (with-var-roots)]) (:require [clojure.set :as set]))
@@ -29,8 +29,8 @@
 ;; multimethods.clj:98 [language]
 (deftest cycles-are-forbidden
   (testing "a tag cannot be its own parent"
-    (is (thrown-with-msg? Throwable #"\(not= tag parent\)"
+    (is (thrown-with-msg? clotran.host.throwable #"\(not= tag parent\)"
           (derive family ::child ::child))))
   (testing "a tag cannot be its own ancestor"
-    (is (thrown-with-msg? Throwable #"Cyclic derivation: :clojure.test-clojure.multimethods/child has :clojure.test-clojure.multimethods/ancestor-1 as ancestor"
+    (is (thrown-with-msg? clotran.host.throwable #"Cyclic derivation: :clojure.test-clojure.multimethods/child has :clojure.test-clojure.multimethods/ancestor-1 as ancestor"
           (derive family ::ancestor-1 ::child)))))

@@ -17,7 +17,7 @@
 (ns ^{:doc "clojure.test extension for JUnit-compatible XML output.
 
   JUnit (http://junit.org/) is the most popular unit-testing library
-  for Java.  As such, tool support for JUnit output formats is
+  for host.  As such, tool support for JUnit output formats is
   common.  By producing compatible output from tests, this tool
   support can be exploited.
 
@@ -32,7 +32,7 @@
 
   To write the output to a file, rebind clojure.test/*test-out* to
   your own PrintWriter (perhaps opened using
-  clojure.java.io/writer)."
+  clotran.files/writer)."
   :author "Jason Sankey"}
   clojure.test.junit
   (:require [clojure.stacktrace :as stack]
@@ -134,7 +134,7 @@
   (message-el 'error
               message
               (pr-str expected)
-              (if (instance? Throwable actual)
+              (if (instance? clotran.host.throwable actual)
                 (with-out-str (stack/print-cause-trace actual t/*stack-trace-depth*))
                 (prn actual))))
 

@@ -6,11 +6,11 @@
 ;   the terms of this license.
 ;   You must not remove this notice, or any other, from this software.
 (ns clojure.tools.deps.interop
-  "Functions for invoking Java processes and invoking tools via the Clojure CLI."
+  "Functions for invoking host processes and invoking tools via the Clojure CLI."
   (:require
-   [clojure.java.process :as proc]
+   [clotran.process :as proc]
    [clojure.edn :as edn]
-   [clojure.java.io :as jio]
+   [clotran.files :as jio]
    [clojure.string :as str]))
 
 (set! *warn-on-reflection* true)
@@ -24,7 +24,7 @@
   (or @build
     (let [result (try
                    (proc/exec "clojure" "--version")
-                   (catch Exception e ""))
+                   (catch clotran.host.exception e ""))
           ;; Version string: "Clojure CLI version 1.11.3.1463"
           ;; Match MAJOR.MINOR.PATCH.BUILD and take a capture group just for the last BUILD part
           version (-> (re-find #"[0-9]+\.[0-9]+\.[0-9]+\.([0-9]+)" result) (nth 1))]
@@ -35,7 +35,7 @@
   [version]
   (if version
     (when (< version 1347)
-      (throw (RuntimeException. "Clojure CLI version is older than minimum required version, 1.11.1.1347. Please update to latest version.")))
+      (throw (clotran.host.runtime_exception. "Clojure CLI version is older than minimum required version, 1.11.1.1347. Please update to latest version.")))
     (throw (ex-info "Clojure CLI version unknown, please install the latest version." {}))))
 
 (defn ^:dynamic invoke-tool
@@ -92,7 +92,7 @@
   ;; invocation throws, should return throwable map data
   (try
     (invoke-tool {:tool-alias :deps, :fn 'clojure.core/+, :args {:fail :here}})
-    (catch clojure.lang.ExceptionInfo e (ex-data e)))
+    (catch clotran.host.exception_info e (ex-data e)))
 
   ;; capture stdout in returned envelope
   (let [resp (invoke-tool {:tool-alias :deps,

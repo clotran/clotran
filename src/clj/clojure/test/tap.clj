@@ -53,7 +53,7 @@
   string."
   {:added "1.1"}
   [data]
-  (doseq [line (.split ^String data "\n")]
+  (doseq [line (.split ^clotran.host.string data "\n")]
     (println "#" line)))
 
 (defn print-tap-pass
@@ -87,7 +87,7 @@
       (print-tap-diagnostic
        (str "  actual:"
         (with-out-str
-          (if (instance? Throwable (:actual data))
+          (if (instance? clotran.host.throwable (:actual data))
             (stack/print-cause-trace (:actual data) t/*stack-trace-depth*)
             (prn (:actual data)))))))))
 

@@ -17,8 +17,8 @@
 (ns clojure.test-clojure.evaluation
   (:use clojure.test clojure.test-helper))
 
-(import '(java.lang Boolean)
-        '(clojure.lang Compiler Compiler$CompilerException))
+(import 
+        )
 
 (defmacro test-that
   "Provides a useful way for specifying the purpose of tests. If the first-level
@@ -35,7 +35,7 @@
     `(do ~@tests)))
 
 (deftest Eval
-  (is (= (eval '(+ 1 2 3)) (Compiler/eval '(+ 1 2 3))))
+  (is (= (eval '(+ 1 2 3)) (clotran.host.compiler/eval '(+ 1 2 3))))
   (is (= (eval '(list 1 2 3)) '(1 2 3)))
   (is (= (eval '(list + 1 2 3)) (list clojure.core/+ 1 2 3)))
   (test-that "Non-closure fns are supported as code"
@@ -45,7 +45,7 @@
 ; not using Clojure's RT/classForName since a bug in it could hide a bug in
 ; eval's resolution
 (defn class-for-name [name]
-  (java.lang.Class/forName name))
+  (clotran.host.class/forName name))
 
 (defmacro in-test-ns [& body]
   `(binding [*ns* *ns*]
@@ -76,8 +76,8 @@
   (evaluates-to-itself? nil)
   (evaluates-to-itself? :test)
   ; Boolean literals should evaluate to Boolean.{TRUE|FALSE}
-  (is (identical? (eval true) Boolean/TRUE))
-  (is (identical? (eval false) Boolean/FALSE)))
+  (is (identical? (eval true) clotran.host.logical/TRUE))
+  (is (identical? (eval false) clotran.host.logical/FALSE)))
 
 ;;; Symbol resolution tests ;;;
 
@@ -90,17 +90,17 @@
 (defn a-match? [re s] (not (nil? (re-matches re s))))
 
 (defmacro throws-with-msg
-  ([re form] `(throws-with-msg ~re ~form Exception))
+  ([re form] `(throws-with-msg ~re ~form clotran.host.exception))
   ([re form x] `(throws-with-msg
                   ~re
                   ~form
-                  ~(if (instance? Exception x) x Exception)
-                  ~(if (instance? String x) x nil)))
+                  ~(if (instance? clotran.host.exception x) x clotran.host.exception)
+                  ~(if (instance? clotran.host.string x) x nil)))
   ([re form class msg]
        `(let [ex# (try
                     ~form
                     (catch ~class e# e#)
-                    (catch Exception e#
+                    (catch clotran.host.exception e#
                       (let [cause# (.getCause e#)]
                         (if (= ~class (class cause#)) cause# (throw e#)))))]
           (is (a-match? ~re (.toString ex#))
@@ -116,26 +116,26 @@
 
   (test-that
     "It is an error if there is no global var named by the symbol"
-    (is (thrown-with-cause-msg? Compiler$CompilerException
+    (is (thrown-with-cause-msg? clotran.host.compiler_compiler_exception
           #"(?s).*Unable to resolve symbol: bar.*"
           (eval 'bar))))
 
   (test-that
     "It is an error if the symbol reference is to a non-public var in a
     different namespace"
-    (is (thrown-with-cause-msg? Compiler$CompilerException
+    (is (thrown-with-cause-msg? clotran.host.compiler_compiler_exception
           #"(?s).*resolution-test/baz is not public.*"
           (eval 'resolution-test/baz))))
 
   (test-that
-    "If a symbol is package-qualified, its value is the Java class named by the
+    "If a symbol is package-qualified, its value is the host class named by the
     symbol"
-    (is (= (eval 'java.lang.Math) (class-for-name "java.lang.Math"))))
+    (is (= (eval 'clotran.host.math) (class-for-name "clotran.host.math"))))
 
   (test-that
     "If a symbol is package-qualified, it is an error if there is no Class named
     by the symbol"
-    (is (thrown? Compiler$CompilerException (eval 'java.lang.FooBar))))
+    (is (thrown? clotran.host.compiler_compiler_exception (eval 'clotran.host.foo_bar))))
 
   (test-that
     "If a symbol is not qualified, the following applies, in this order:
@@ -145,7 +145,7 @@
 
       2. A lookup is done in the current namespace to see if there is a mapping
          from the symbol to a class. If so, the symbol is considered to name a
-         Java class object.
+         host class object.
 
       3. If in a local scope (i.e. in a function definition), a lookup is done
          to see if it names a local binding (e.g. a function argument or
@@ -160,24 +160,24 @@
     ; First
     (doall (for [form '(def if do let quote var fn loop recur throw try
                          monitor-enter monitor-exit)]
-             (is (thrown? Compiler$CompilerException (eval form)))))
+             (is (thrown? clotran.host.compiler_compiler_exception (eval form)))))
     (let [if "foo"]
-      (is (thrown? Compiler$CompilerException (eval 'if)))
+      (is (thrown? clotran.host.compiler_compiler_exception (eval 'if)))
 
     ; Second
-      (is (= (eval 'Boolean) (class-for-name "java.lang.Boolean"))))
-    (let [Boolean "foo"]
-      (is (= (eval 'Boolean) (class-for-name "java.lang.Boolean"))))
+      (is (= (eval 'clotran.host.logical) (class-for-name "clotran.host.logical"))))
+    (let [clotran.host.logical "foo"]
+      (is (= (eval 'clotran.host.logical) (class-for-name "clotran.host.logical"))))
 
     ; Third
     (is (= (eval '(let [foo "bar"] foo)) "bar"))
 
     ; Fourth
     (in-test-ns (is (= (eval 'foo) "abc")))
-    (is (thrown? Compiler$CompilerException (eval 'bar))) ; not in this namespace
+    (is (thrown? clotran.host.compiler_compiler_exception (eval 'bar))) ; not in this namespace
 
     ; Fifth
-    (is (thrown? Compiler$CompilerException (eval 'foobar)))))
+    (is (thrown? clotran.host.compiler_compiler_exception (eval 'foobar)))))
 
 ;;; Metadata tests ;;;
 
@@ -201,7 +201,7 @@
       evaluated values of the objects they contain."
       (is (= (eval '[x y 3]) [1 2 3]))
       (is (= (eval '{:x x :y y :z 3}) {:x 1 :y 2 :z 3}))
-      (is (instance? clojure.lang.IPersistentMap (eval '{:x x :y y})))))
+      (is (instance? clotran.host.i_persistent_map (eval '{:x x :y y})))))
 
   (in-test-ns
     (test-that
@@ -219,7 +219,7 @@
   ;aargh, fragile tests, please fix
   #_(test-that
     "Non-empty lists are considered calls"
-    (is (thrown? Compiler$CompilerException (eval '(1 2 3))))))
+    (is (thrown? clotran.host.compiler_compiler_exception (eval '(1 2 3))))))
 
 (deftest Macros)
 

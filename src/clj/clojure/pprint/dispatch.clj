@@ -19,7 +19,7 @@
 
 (defn- use-method
   "Installs a function as a new method of multimethod associated with dispatch-value. "
-  [^clojure.lang.MultiFn multifn dispatch-val func]
+  [^clotran.host.multi_fn multifn dispatch-val func]
   (. multifn addMethod dispatch-val func))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -47,9 +47,9 @@
       'var "#'", 'clojure.core/unquote "~"})
 
 (defn- pprint-reader-macro [alis]
-  (let [^String macro-char (reader-macros (first alis))]
+  (let [^clotran.host.string macro-char (reader-macros (first alis))]
     (when (and macro-char (= 2 (count alis)))
-      (.write ^java.io.Writer *out* macro-char)
+      (.write ^clotran.host.writer *out* macro-char)
       (write-out (second alis))
       true)))
 
@@ -67,9 +67,9 @@
 (defn- pprint-meta [obj]
   (when *print-meta*
     (when-let [m (meta obj)]
-      (.write ^java.io.Writer *out* "^")
+      (.write ^clotran.host.writer *out* "^")
       (pprint-map m)
-      (.write ^java.io.Writer *out* " ")
+      (.write ^clotran.host.writer *out* " ")
       (pprint-newline :linear))))
 
 ;;; (def pprint-simple-list (formatter-out "~:<~@{~w~^ ~_~}~:>"))
@@ -80,7 +80,7 @@
       (when alis
 	(write-out (first alis))
 	(when (next alis)
-	  (.write ^java.io.Writer *out* " ")
+	  (.write ^clotran.host.writer *out* " ")
 	  (pprint-newline :linear)
 	  (recur (next alis)))))))
 
@@ -96,7 +96,7 @@
       (when aseq
 	(write-out (first aseq))
 	(when (next aseq)
-	  (.write ^java.io.Writer *out* " ")
+	  (.write ^clotran.host.writer *out* " ")
 	  (pprint-newline :linear)
 	  (recur (next aseq)))))))
 
@@ -114,12 +114,12 @@
         (when aseq
           (pprint-logical-block
             (write-out (ffirst aseq))
-            (.write ^java.io.Writer *out* " ")
+            (.write ^clotran.host.writer *out* " ")
             (pprint-newline :linear)
             (set! *current-length* 0) ; always print both parts of the [k v] pair
             (write-out (fnext (first aseq))))
           (when (next aseq)
-            (.write ^java.io.Writer *out* ", ")
+            (.write ^clotran.host.writer *out* ", ")
             (pprint-newline :linear)
             (recur (next aseq))))))))
 
@@ -131,7 +131,7 @@
       (when aseq
         (write-out (first aseq))
         (when (next aseq)
-          (.write ^java.io.Writer *out* " ")
+          (.write ^clotran.host.writer *out* " ")
           (pprint-newline :linear)
           (recur (next aseq)))))))
 
@@ -149,8 +149,8 @@
 (defn- pprint-ideref [o]
   (let [prefix (format "#<%s@%x%s: "
                        (map-ref-type (.getSimpleName (class o)))
-                       (System/identityHashCode o)
-                       (if (and (instance? clojure.lang.Agent o)
+                       (clotran.host.system/identityHashCode o)
+                       (if (and (instance? clotran.host.agent o)
                                 (agent-error o))
                          " FAILED"
                          ""))]
@@ -159,7 +159,7 @@
                            (pprint-newline :linear)
                            (write-out (cond 
                                        (and (future? o) (not (future-done? o))) :pending
-                                       (and (instance? clojure.lang.IPending o) (not (.isRealized ^clojure.lang.IPending o))) :not-delivered
+                                       (and (instance? clotran.host.i_pending o) (not (.isRealized ^clotran.host.i_pending o))) :not-delivered
                                        :else @o)))))
 
 (def ^{:private true} pprint-pqueue (formatter-out "~<<-(~;~@{~w~^ ~_~}~;)-<~:>"))
@@ -177,13 +177,13 @@
   {:added "1.2" :arglists '[[object]]} 
   class)
 
-(use-method simple-dispatch clojure.lang.ISeq pprint-list)
-(use-method simple-dispatch clojure.lang.IPersistentVector pprint-vector)
-(use-method simple-dispatch clojure.lang.IPersistentMap pprint-map)
-(use-method simple-dispatch clojure.lang.IPersistentSet pprint-set)
-(use-method simple-dispatch clojure.lang.PersistentQueue pprint-pqueue)
-(use-method simple-dispatch clojure.lang.Var pprint-simple-default)
-(use-method simple-dispatch clojure.lang.IDeref pprint-ideref)
+(use-method simple-dispatch clotran.host.i_seq pprint-list)
+(use-method simple-dispatch clotran.host.i_persistent_vector pprint-vector)
+(use-method simple-dispatch clotran.host.i_persistent_map pprint-map)
+(use-method simple-dispatch clotran.host.i_persistent_set pprint-set)
+(use-method simple-dispatch clotran.host.persistent_queue pprint-pqueue)
+(use-method simple-dispatch clotran.host.var pprint-simple-default)
+(use-method simple-dispatch clotran.host.i_deref pprint-ideref)
 (use-method simple-dispatch nil pr)
 (use-method simple-dispatch :default pprint-simple-default)
 
@@ -325,11 +325,11 @@
         (pprint-logical-block binding
           (write-out (first binding))
           (when (next binding)
-            (.write ^java.io.Writer *out* " ")
+            (.write ^clotran.host.writer *out* " ")
             (pprint-newline :miser)
             (write-out (second binding))))
         (when (next (rest binding))
-          (.write ^java.io.Writer *out* " ")
+          (.write ^clotran.host.writer *out* " ")
           (pprint-newline :linear)
           (recur (next (rest binding))))))))
 
@@ -355,18 +355,18 @@
     (pprint-indent :block 1)
     (write-out (first alis))
     (when (next alis)
-      (.write ^java.io.Writer *out* " ")
+      (.write ^clotran.host.writer *out* " ")
       (pprint-newline :linear)
      (print-length-loop [alis (next alis)]
        (when alis
          (pprint-logical-block alis
           (write-out (first alis))
           (when (next alis)
-            (.write ^java.io.Writer *out* " ")
+            (.write ^clotran.host.writer *out* " ")
             (pprint-newline :miser)
             (write-out (second alis))))
          (when (next (rest alis))
-           (.write ^java.io.Writer *out* " ")
+           (.write ^clotran.host.writer *out* " ")
            (pprint-newline :linear)
            (recur (next (rest alis)))))))))
 
@@ -380,11 +380,11 @@
           (pprint-logical-block alis
             (write-out (first alis))
             (when (next alis)
-              (.write ^java.io.Writer *out* " ")
+              (.write ^clotran.host.writer *out* " ")
               (pprint-newline :miser)
               (write-out (second alis))))
           (when (next (rest alis))
-            (.write ^java.io.Writer *out* " ")
+            (.write ^clotran.host.writer *out* " ")
             (pprint-newline :linear)
             (recur (next (rest alis)))))))
     (pprint-simple-code-list alis)))
@@ -421,7 +421,7 @@
       (when alis
 	(write-out (first alis))
 	(when (next alis)
-	  (.write ^java.io.Writer *out* " ")
+	  (.write ^clotran.host.writer *out* " ")
 	  (pprint-newline :linear)
 	  (recur (next alis)))))))
 
@@ -479,15 +479,15 @@
   {:added "1.2" :arglists '[[object]]} 
   class)
 
-(use-method code-dispatch clojure.lang.ISeq pprint-code-list)
-(use-method code-dispatch clojure.lang.Symbol pprint-code-symbol)
+(use-method code-dispatch clotran.host.i_seq pprint-code-list)
+(use-method code-dispatch clotran.host.symbol pprint-code-symbol)
 
 ;; The following are all exact copies of simple-dispatch
-(use-method code-dispatch clojure.lang.IPersistentVector pprint-vector)
-(use-method code-dispatch clojure.lang.IPersistentMap pprint-map)
-(use-method code-dispatch clojure.lang.IPersistentSet pprint-set)
-(use-method code-dispatch clojure.lang.PersistentQueue pprint-pqueue)
-(use-method code-dispatch clojure.lang.IDeref pprint-ideref)
+(use-method code-dispatch clotran.host.i_persistent_vector pprint-vector)
+(use-method code-dispatch clotran.host.i_persistent_map pprint-map)
+(use-method code-dispatch clotran.host.i_persistent_set pprint-set)
+(use-method code-dispatch clotran.host.persistent_queue pprint-pqueue)
+(use-method code-dispatch clotran.host.i_deref pprint-ideref)
 (use-method code-dispatch nil pr)
 (use-method code-dispatch :default pprint-simple-default)
 
@@ -519,7 +519,7 @@
    '(defn- -write 
       ([this x]
          (condp = (class x)
-           String 
+           clotran.host.string 
            (let [s0 (write-initial-lines this x)
                  s (.replaceFirst s0 "\\s+$" "")
                  white-space (.substring s0 (count s))
@@ -531,8 +531,8 @@
                 (setf :trailing-white-space white-space))
                (add-to-buffer this (make-buffer-blob s white-space))))
 
-           Integer
-           (let [c ^Character x]
+           clotran.host.int4
+           (let [c ^clotran.host.char x]
              (if (= (getf :mode) :writing)
                (do 
                  (write-white-space this)

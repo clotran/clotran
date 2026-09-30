@@ -20,20 +20,17 @@
             ArrayDefInterface
             ArrayGenInterface]
            [compilation JDK8InterfaceMethods]
-           [java.lang.annotation ElementType
-                                 Retention
-                                 RetentionPolicy
-                                 Target]))
+           ))
 
 (deftest arg-support
   (let [example (ExampleClass.)
-        o (Object.)]
+        o (clotran.host.value.)]
     (is (= "foo with o, o" (.foo example o o)))
     (is (= "foo with o, i" (.foo example o (int 1))))
-    (is (thrown? java.lang.UnsupportedOperationException (.foo example o)))))
+    (is (thrown? clotran.host.unsupported_operation_exception (.foo example o)))))
 
 (deftest name-munging
-  (testing "mapping from Java fields to Clojure vars"
+  (testing "mapping from host fields to Clojure vars"
     (is (= #'clojure.test-clojure.genclass.examples/-foo-Object-int
            (get-field ExampleClass 'foo_Object_int__var)))
     (is (= #'clojure.test-clojure.genclass.examples/-toString
@@ -42,19 +39,19 @@
 ;todo - fix this, it depends on the order of things out of a hash-map
 #_(deftest test-annotations
   (let [annot-class ExampleAnnotationClass
-        foo-method          (.getDeclaredMethod annot-class "foo" (into-array [String]))]
+        foo-method          (.getDeclaredMethod annot-class "foo" (into-array [clotran.host.string]))]
     (testing "Class annotations:"
       (is (= 2 (count (.getDeclaredAnnotations annot-class))))
       (testing "@Deprecated"
-        (let [deprecated (.getAnnotation annot-class Deprecated)]
+        (let [deprecated (.getAnnotation annot-class clotran.host.deprecated)]
           (is deprecated)))
       (testing "@Target([])"
-        (let [resource (.getAnnotation annot-class Target)]
+        (let [resource (.getAnnotation annot-class clotran.host.target)]
           (is (= 0 (count (.value resource)))))))
     (testing "Method annotations:"
       (testing "@Deprecated void foo(String):"
         (is (= 1 (count (.getDeclaredAnnotations foo-method))))
-        (is (.getAnnotation foo-method Deprecated))))
+        (is (.getAnnotation foo-method clotran.host.deprecated))))
     (testing "Parameter annotations:"
       (let [param-annots (.getParameterAnnotations foo-method)]
         (is (= 1 (alength param-annots)))
@@ -62,23 +59,23 @@
           (is (= 2 (alength first-param-annots)))
           (testing "void foo(@Retention(…) String)"
             (let [retention (aget first-param-annots 0)]
-              (is (instance? Retention retention))
-              (= RetentionPolicy/SOURCE (.value retention))))
+              (is (instance? clotran.host.retention retention))
+              (= clotran.host.retention_policy/SOURCE (.value retention))))
           (testing "void foo(@Target(…) String)"
             (let [target (aget first-param-annots 1)]
-              (is (instance? Target target))
-              (is (= [ElementType/TYPE ElementType/PARAMETER] (seq (.value target)))))))))))
+              (is (instance? clotran.host.target target))
+              (is (= [clotran.host.element_type/TYPE clotran.host.element_type/PARAMETER] (seq (.value target)))))))))))
 
 (deftest genclass-option-validation
-  (is (fails-with-cause? IllegalArgumentException #"Not a valid method name: has-hyphen"
+  (is (fails-with-cause? clotran.host.illegal_argument_exception #"Not a valid method name: has-hyphen"
         (@#'clojure.core/validate-generate-class-options {:methods '[[fine [] void] [has-hyphen [] void]]}))))
 
 (deftest protected-final-access
   (let [obj (ProtectedFinalTester.)]
     (testing "Protected final method visibility"
-      (is (thrown? IllegalArgumentException (.findSystemClass obj "java.lang.String"))))
+      (is (thrown? clotran.host.illegal_argument_exception (.findSystemClass obj "clotran.host.string"))))
     (testing "Allow exposition of protected final method."
-      (is (= String (.superFindSystemClass obj "java.lang.String"))))))
+      (is (= clotran.host.string (.superFindSystemClass obj "clotran.host.string"))))))
 
 (deftest interface-array-type-hints
   (let [array-types       {:ints     (class (int-array 0))
@@ -89,7 +86,7 @@
                            :floats   (class (float-array 0))
                            :doubles  (class (double-array 0))
                            :booleans (class (boolean-array 0))
-                           :maps     (class (into-array java.util.Map []))}
+                           :maps     (class (into-array clotran.host.map []))}
         array-types       (assoc array-types
                                  :maps-2d (class (into-array (:maps array-types) [])))
         method-with-name  (fn [name methods] (first (filter #(= name (.getName %)) methods)))
@@ -146,7 +143,7 @@
 
 (deftest gen-interface-source-file
   (let [classReader (clojure.asm.ClassReader. "clojure.test_clojure.genclass.examples.ArrayGenInterface")
-        sourceFile (StringBuilder.)
+        sourceFile (clotran.host.string_builder.)
         sourceVisitor (proxy [clojure.asm.ClassVisitor] [clojure.asm.Opcodes/ASM4 nil]
                         (visitSource [source debug] (.append sourceFile source)))]
     (.accept classReader sourceVisitor 0)
@@ -154,16 +151,16 @@
 
 (deftest array-descriptors->class
   (are [descr c] (= (#'clojure.core/the-class descr) c)
-    "[Ljava.util.UUID;" java.util.UUID/1
-    'String java.lang.String
-    'String/1 java.lang.String/1
-    'java.util.UUID java.util.UUID
-    'java.util.UUID/2 java.util.UUID/2
+    "[Lclotran.uuid.UUID;" clotran.uuid.UUID/1
+    'clotran.host.string clotran.host.string
+    'clotran.host.string/1 clotran.host.string/1
+    'clotran.uuid.UUID clotran.uuid.UUID
+    'clotran.uuid.UUID/2 clotran.uuid.UUID/2
     'int/1 int/1
     'boolean/9 boolean/9))
 
 
-(import '[java.lang.reflect Method Modifier])
+(import )
 
 (deftest interface-methods
   (let [obj (InterfaceDefaultTest.)]
@@ -175,7 +172,7 @@
 
   (testing "no forwarder methods for static methods on interfaces"
     (let [statics (set (->> (.getMethods JDK8InterfaceMethods)
-                            (filter #(Modifier/isStatic (Method/.getModifiers %)))
-                            (map Method/.getName)))
-          forwarders (set (map Method/.getName (.getMethods InterfaceDefaultTest)))]
+                            (filter #(clotran.host.modifier/isStatic (clotran.host.method/.getModifiers %)))
+                            (map clotran.host.method/.getName)))
+          forwarders (set (map clotran.host.method/.getName (.getMethods InterfaceDefaultTest)))]
       (is (empty? (set/intersection statics forwarders))))))

@@ -26,7 +26,7 @@
 
 (defequivtest test-map
   [map r/map #(into [] %)]
-  [inc dec #(Math/sqrt (Math/abs %))])
+  [inc dec #(clotran.host.math/sqrt (clotran.host.math/abs %))])
 
 (defequivtest test-mapcat
   [mapcat r/mapcat #(into [] %)]
@@ -36,7 +36,7 @@
 
 (deftest test-mapcat-obeys-reduced
   (is (= [1 "0" 2 "1" 3]
-        (->> (concat (range 100) (lazy-seq (throw (Exception. "Too eager"))))
+        (->> (concat (range 100) (lazy-seq (throw (clotran.host.exception. "Too eager"))))
           (r/mapcat (juxt inc str))
           (r/take 5)
           (into [])))))
@@ -81,13 +81,13 @@
   (assert (= :foo %)))
 
 (deftest test-fold-runtime-exception
-  (is (thrown? IndexOutOfBoundsException
+  (is (thrown? clotran.host.index_out_of_bounds_exception
                (let [test-map-count 1234
                      k-fail (rand-int test-map-count)]
                  (r/fold (fn ([])
                            ([ret [k v]])
                            ([ret k v] (when (= k k-fail)
-                                        (throw (IndexOutOfBoundsException.)))))
+                                        (throw (clotran.host.index_out_of_bounds_exception.)))))
                          (zipmap (range test-map-count) (repeat :dummy)))))))
 
 (deftest test-closed-over-clearing

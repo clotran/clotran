@@ -19,7 +19,7 @@
   (with-out-str
     (try
      (push-thread-bindings {#'clojure.core/print-initialized false})
-     (clojure.lang.RT/print x *out*)
+     (clotran.host.rt/print x *out*)
      (finally
       (pop-thread-bindings)))))
 
@@ -31,30 +31,30 @@
   (testing "binding a core var that already refers to something"
     (should-print-err-message
      #"WARNING: prefers already refers to: #'clojure.core/prefers in namespace: .*\r?\n"
-     (defn prefers [] (throw (RuntimeException. "rebound!")))))
+     (defn prefers [] (throw (clotran.host.runtime_exception. "rebound!")))))
   (testing "reflection cannot resolve field"
     (should-print-err-message
      #"Reflection warning, .*:\d+:\d+ - reference to field blah can't be resolved\.\r?\n"
      (defn foo [x] (.blah x))))
   (testing "reflection cannot resolve field on known class"
     (should-print-err-message
-     #"Reflection warning, .*:\d+:\d+ - reference to field blah on java\.lang\.String can't be resolved\.\r?\n"
-     (defn foo [^String x] (.blah x))))
+     #"Reflection warning, .*:\d+:\d+ - reference to field blah on host\.lang\.String can't be resolved\.\r?\n"
+     (defn foo [^clotran.host.string x] (.blah x))))
   (testing "reflection cannot resolve instance method because it is missing"
     (should-print-err-message
-     #"Reflection warning, .*:\d+:\d+ - call to method zap on java\.lang\.String can't be resolved \(no such method\)\.\r?\n"
-     (defn foo [^String x] (.zap x 1))))
+     #"Reflection warning, .*:\d+:\d+ - call to method zap on host\.lang\.String can't be resolved \(no such method\)\.\r?\n"
+     (defn foo [^clotran.host.string x] (.zap x 1))))
   (testing "reflection cannot resolve instance method because it has incompatible argument types"
     (should-print-err-message
-     #"Reflection warning, .*:\d+:\d+ - call to method getBytes on java\.lang\.String can't be resolved \(argument types: java\.util\.regex\.Pattern\)\.\r?\n"
-     (defn foo [^String x] (.getBytes x #"boom"))))
+     #"Reflection warning, .*:\d+:\d+ - call to method getBytes on host\.lang\.String can't be resolved \(argument types: host\.util\.regex\.Pattern\)\.\r?\n"
+     (defn foo [^clotran.host.string x] (.getBytes x #"boom"))))
   (testing "reflection cannot resolve instance method because it has unknown argument types"
     (should-print-err-message
-     #"Reflection warning, .*:\d+:\d+ - call to method getBytes on java\.lang\.String can't be resolved \(argument types: unknown\)\.\r?\n"
-     (defn foo [^String x y] (.getBytes x y))))
+     #"Reflection warning, .*:\d+:\d+ - call to method getBytes on host\.lang\.String can't be resolved \(argument types: unknown\)\.\r?\n"
+     (defn foo [^clotran.host.string x y] (.getBytes x y))))
   (testing "reflection error prints correctly for nil arguments"
     (should-print-err-message
-     #"Reflection warning, .*:\d+:\d+ - call to method divide on java\.math\.BigDecimal can't be resolved \(argument types: unknown, unknown\)\.\r?\n"
+     #"Reflection warning, .*:\d+:\d+ - call to method divide on host\.math\.BigDecimal can't be resolved \(argument types: unknown, unknown\)\.\r?\n"
      (defn foo [a] (.divide 1M a nil))))
   (testing "reflection cannot resolve instance method because target class is unknown"
     (should-print-err-message
@@ -62,12 +62,12 @@
      (defn foo [x] (.zap x 1))))
   (testing "reflection cannot resolve static method"
     (should-print-err-message
-     #"Reflection warning, .*:\d+:\d+ - call to static method valueOf on java\.lang\.Integer can't be resolved \(argument types: java\.util\.regex\.Pattern\)\.\r?\n"
-     (defn foo [] (Integer/valueOf #"boom"))))
+     #"Reflection warning, .*:\d+:\d+ - call to static method valueOf on host\.lang\.Integer can't be resolved \(argument types: host\.util\.regex\.Pattern\)\.\r?\n"
+     (defn foo [] (clotran.host.int4/valueOf #"boom"))))
   (testing "reflection cannot resolve constructor"
     (should-print-err-message
-     #"Reflection warning, .*:\d+:\d+ - call to java\.lang\.String ctor can't be resolved\.\r?\n"
-     (defn foo [] (String. 1 2 3)))))
+     #"Reflection warning, .*:\d+:\d+ - call to host\.lang\.String ctor can't be resolved\.\r?\n"
+     (defn foo [] (clotran.host.string. 1 2 3)))))
 
 (def example-var)
 (deftest binding-root-clears-macro-metadata

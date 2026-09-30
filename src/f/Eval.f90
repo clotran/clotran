@@ -1657,6 +1657,50 @@ contains
     call vs_leave(vst, base)
   end function rt_call_in
 
+  ! A clotran namespace loads the first time something is looked up in
+  ! it -- clotran.io/text-reader, or the type clotran.io.TextReader --
+  ! as naming a class loads it on the JVM. nsname is the namespace; true
+  ! when it was not there and has now been loaded.
+  recursive function load_clotran_ns(nsname) result(loaded)
+    type(gc_stack), pointer :: vst
+    type(eval_ctx), pointer :: tctx
+    character(len=*), intent(in) :: nsname
+    logical :: loaded
+    type(gc_value) :: fargs, r
+    character(len=:), allocatable :: rel
+    integer :: base, j
+    loaded = .false.
+    if (index(nsname, "clotran.") /= 1 .or. nsname == "clotran.host") return
+    if (gc_kind(gcn_find(nsname)) == OBJ_NS) return
+    tctx => ctx_self()
+    vst => tctx%stk
+    rel = nsname
+    do j = 1, len(rel)
+       if (rel(j:j) == ".") rel(j:j) = "/"
+       if (rel(j:j) == "-") rel(j:j) = "_"
+    end do
+    base = vs_enter(vst, 1)
+    fargs = gcv_empty([gc_nil()])
+    call vs_set(vst, base + 1, fargs)
+    fargs = gcv_conj(vs_get(vst, base + 1), gc_str(rel, [vs_get(vst, base + 1)]), [vs_get(vst, base + 1)])
+    call vs_set(vst, base + 1, fargs)
+    r = call_builtin(B_RTLOAD, vs_get(vst, base + 1))
+    call vs_leave(vst, base)
+    loaded = .not. tctx%has_error
+  end function load_clotran_ns
+
+  ! find_type, loading the clotran namespace a type is named in
+  recursive function find_type_loading(cname) result(out)
+    character(len=*), intent(in) :: cname
+    type(gc_value) :: out
+    integer :: d
+    out = find_type(cname)
+    if (gc_kind(out) == OBJ_TYPE) return
+    d = index(cname, ".", back=.true.)
+    if (d < 2) return
+    if (load_clotran_ns(cname(1:d-1))) out = find_type(cname)
+  end function find_type_loading
+
   function native(id, name, roots) result(fn)
     type(gc_stack), pointer :: vst
     integer, intent(in) :: id
@@ -3577,11 +3621,11 @@ contains
     else
        ! A type deftype* created. Last, so nothing above is shadowed
        ! by a deftype that happens to pick one of those names.
-       thunk = find_type(cname)
+       thunk = find_type_loading(cname)
        if (gc_kind(thunk) == OBJ_TYPE) then
           call vs_set(vst, base + 3, thunk)
           out = construct_type_vals(vs_get(vst, base + 3), vs_get(vst, base + 1))
-       else
+       else if (.not. gce_has_error()) then
           call fail("no such class: " // cname)
        end if
     end if
@@ -3952,7 +3996,9 @@ contains
     end block
     if (gc_kind(find_type(t)) == OBJ_TYPE) return
     if (declared_type_name(t)) return
-    if (index(t, "clotran.host.") == 1) return
+    ! clotran's own: the host's classes, and a type a clotran namespace
+    ! defines, named before that namespace is loaded
+    if (index(t, "clotran.") == 1) return
     if (index(t, "clojure.lang.") == 1) return
     if (index(t, "clojure.asm.") == 1) return
     if (index(t, "java.") == 1) return
@@ -12561,7 +12607,6 @@ contains
          if (rel == "clojure/core_proxy") rel = "clotran/core_proxy"
          ! clojure.java.io: text files over clotran-slurp and clotran-spit,
          ! which core.clj's slurp and spit are written against
-         if (rel == "clojure/java/io") rel = "clotran/files"
          ! each value on the stack before the next allocation: the path's
          ! gc_str inside the conj's arguments could collect the fresh empty
          ! vector, which only a Fortran local held (found by torture with

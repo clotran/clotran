@@ -12,5 +12,5 @@
   mentions it still compiles."
   {:added "1.0"}
   [meth & args]
-  `(throw (UnsupportedOperationException.
+  `(throw (clotran.host.unsupported_operation_exception.
            ~(str "proxy-super " meth ": clotran proxies have no superclass (DEVIATIONS.md 28)"))))

@@ -194,22 +194,22 @@ Usage: *hello*
 It is implemented with a number of custom enlive templates.\"
   {:skip-wiki true, :author \"Tom Faulhaber\"}
   (:refer-clojure :exclude [empty complement])
-  (:import [java.util.jar JarFile]
-           [java.io File FileWriter BufferedWriter StringReader
+  (:import [host.util.jar JarFile]
+           [host.io File FileWriter BufferedWriter StringReader
                     BufferedInputStream BufferedOutputStream
                     ByteArrayOutputStream FileReader FileInputStream]
-           [java.util.regex Pattern])
+           [host.util.regex Pattern])
   (:require [clojure.string :as str])
   (:use [net.cgrand.enlive-html :exclude (deftemplate)]
-        [clojure.java.io :only (as-file file writer)]
-        [clojure.java.shell :only (sh)]
+        [clotran.files :only (as-file file writer)]
+        [clotran.shell :only (sh)]
         [clojure.pprint :only (pprint cl-format pprint-ident
                                pprint-logical-block set-pprint-dispatch
                                get-pretty-writer fresh-line)]
         [clojure.data.json :only (pprint-json)]
         [autodoc.collect-info :only (contrib-info)]
         [autodoc.params :only (params expand-classpath)])
-  (:use clojure.set clojure.java.io clojure.data clojure.java.browse
+  (:use clojure.set clotran.files clojure.data clotran.browse
         clojure.inspector clojure.zip clojure.stacktrace))")
 
 (defn tst-pprint
@@ -222,7 +222,7 @@ It is implemented with a number of custom enlive templates.\"
 ;;; A bunch of predefined data to print
 (def future-filled (future-call (fn [] 100)))
 @future-filled
-(def future-unfilled (future-call (fn [] (.acquire (java.util.concurrent.Semaphore. 0)))))
+(def future-unfilled (future-call (fn [] (.acquire (clotran.host.semaphore. 0)))))
 (def promise-filled (promise))
 (deliver promise-filled '(first second third))
 (def promise-unfilled (promise))
@@ -248,9 +248,9 @@ It is implemented with a number of custom enlive templates.\"
  ;;(tst-pprint 20 delay-unforced) #"#<Delay@[0-9a-f]+: \n  :pending>"
  (tst-pprint 20 (pprint-test-rec. 'first 'second 'third)) "{:a first,\n :b second,\n :c third}"
 
- ;; basic java arrays: fails owing to assembla ticket #346
+ ;; basic host arrays: fails owing to assembla ticket #346
  ;;(tst-pprint 10 (int-array (range 7))) "[0,\n 1,\n 2,\n 3,\n 4,\n 5,\n 6]"
- (tst-pprint 15 (reduce conj clojure.lang.PersistentQueue/EMPTY (range 10)))
+ (tst-pprint 15 (reduce conj clotran.host.persistent_queue/EMPTY (range 10)))
  "<-(0\n   1\n   2\n   3\n   4\n   5\n   6\n   7\n   8\n   9)-<"
  )
 
@@ -269,7 +269,7 @@ It is implemented with a number of custom enlive templates.\"
       (when aseq
 	(write-out (first aseq))
 	(when (next aseq)
-	  (.write ^java.io.Writer *out* " ")
+	  (.write ^clotran.host.writer *out* " ")
 	  (pprint-newline :linear)
 	  (recur (next aseq)))))))
 
@@ -334,7 +334,7 @@ It is implemented with a number of custom enlive templates.\"
   [o]
   (let [flush-count-atom (atom 0)]
     [
-      (proxy [java.io.BufferedWriter] [o]
+      (proxy [clotran.host.buffered_writer] [o]
         (flush []
           (proxy-super flush)
           (swap! flush-count-atom inc)))
@@ -342,7 +342,7 @@ It is implemented with a number of custom enlive templates.\"
 
 (deftest test-flush-underlying-prn
   []
-  (let [[out flush-count-atom] (flush-alerting-writer (java.io.StringWriter.))]
+  (let [[out flush-count-atom] (flush-alerting-writer (clotran.host.string_writer.))]
     (binding [*out* out
               *flush-on-newline* true]
       (prn (range 50))
@@ -351,7 +351,7 @@ It is implemented with a number of custom enlive templates.\"
 
 (deftest test-flush-underlying-pprint
   []
-  (let [[out flush-count-atom] (flush-alerting-writer (java.io.StringWriter.))]
+  (let [[out flush-count-atom] (flush-alerting-writer (clotran.host.string_writer.))]
     (binding [*out* out
               *flush-on-newline* true]
       (pprint (range 50))
@@ -360,7 +360,7 @@ It is implemented with a number of custom enlive templates.\"
 
 (deftest test-noflush-underlying-prn
   []
-  (let [[out flush-count-atom] (flush-alerting-writer (java.io.StringWriter.))]
+  (let [[out flush-count-atom] (flush-alerting-writer (clotran.host.string_writer.))]
     (binding [*out* out
               *flush-on-newline* nil]
       (prn (range 50))
@@ -369,7 +369,7 @@ It is implemented with a number of custom enlive templates.\"
 
 (deftest test-noflush-underlying-pprint
   []
-  (let [[out flush-count-atom] (flush-alerting-writer (java.io.StringWriter.))]
+  (let [[out flush-count-atom] (flush-alerting-writer (clotran.host.string_writer.))]
     (binding [*out* out
               *flush-on-newline* nil]
       (pprint (range 50))
@@ -377,8 +377,8 @@ It is implemented with a number of custom enlive templates.\"
     (is (= @flush-count-atom 0) "pprint flushes on newline")))
 
 (deftest test-pprint-calendar
-  (let [calendar (doto (java.util.GregorianCalendar. 2014 3 29 14 0 0)
-                   (.setTimeZone (java.util.TimeZone/getTimeZone "GMT")))
+  (let [calendar (doto (clotran.host.gregorian_calendar. 2014 3 29 14 0 0)
+                   (.setTimeZone (clotran.host.time_zone/getTimeZone "GMT")))
         calendar-str (with-out-str (pprint calendar))]
     (is (= (str/split-lines calendar-str)
            ["#inst \"2014-04-29T14:00:00.000+00:00\""])

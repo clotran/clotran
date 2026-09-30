@@ -13,23 +13,23 @@
             [clojure.edn :as edn]
             [clojure.main :as m])
   (:import
-   [clojure.lang LineNumberingPushbackReader]
-   [java.net InetAddress Socket ServerSocket SocketException]
-   [java.io Reader Writer PrintWriter BufferedWriter BufferedReader InputStreamReader OutputStreamWriter]
-   [java.util Properties]
-   [java.util.concurrent.locks ReentrantLock]))
+   
+   
+   
+   
+   ))
 
 (set! *warn-on-reflection* true)
 
 (def ^:dynamic *session* nil)
 
 ;; lock protects servers
-(defonce ^:private lock (ReentrantLock.))
+(defonce ^:private lock (clotran.host.reentrant_lock.))
 (defonce ^:private servers {})
 
 (defmacro ^:private with-lock
   [lock-expr & body]
-  `(let [lockee# ~(with-meta lock-expr {:tag 'java.util.concurrent.locks.ReentrantLock})]
+  `(let [lockee# ~(with-meta lock-expr {:tag 'clotran.host.reentrant_lock})]
      (.lock lockee#)
      (try
        ~@body
@@ -37,8 +37,8 @@
          (.unlock lockee#)))))
 
 (defmacro ^:private thread
-  [^String name daemon & body]
-  `(doto (Thread. (fn [] ~@body) ~name)
+  [^clotran.host.string name daemon & body]
+  `(doto (clotran.host.thread. (fn [] ~@body) ~name)
     (.setDaemon ~daemon)
     (.start)))
 
@@ -65,7 +65,7 @@
     err - err stream
     accept - accept fn symbol to invoke
     args - to pass to accept-fn"
-  [^Socket conn name client-id in out err accept args]
+  [^clotran.host.socket conn name client-id in out err accept args]
   (try
     (binding [*in* in
               *out* out
@@ -76,7 +76,7 @@
       (require (symbol (namespace accept)))
       (let [accept-fn (resolve accept)]
         (apply accept-fn args)))
-    (catch SocketException _disconnect)
+    (catch clotran.host.socket_exception _disconnect)
     (finally
       (with-lock lock
         (alter-var-root #'servers update-in [name :sessions] dissoc client-id))
@@ -99,8 +99,8 @@
          :or {bind-err true
               server-daemon true
               client-daemon true}} opts
-         address (InetAddress/getByName address)  ;; nil returns loopback
-         socket (ServerSocket. port 0 address)]
+         address (clotran.host.inet_address/getByName address)  ;; nil returns loopback
+         socket (clotran.host.server_socket. port 0 address)]
     (with-lock lock
       (alter-var-root #'servers assoc name {:name name, :socket socket, :sessions {}}))
     (thread
@@ -110,13 +110,13 @@
           (when (not (.isClosed socket))
             (try
               (let [conn (.accept socket)
-                    in (LineNumberingPushbackReader. (InputStreamReader. (.getInputStream conn)))
-                    out (BufferedWriter. (OutputStreamWriter. (.getOutputStream conn)))
+                    in (clotran.io/line-numbering-reader (clotran.host.input_stream_reader. (.getInputStream conn)))
+                    out (clotran.host.buffered_writer. (clotran.host.output_stream_writer. (.getOutputStream conn)))
                     client-id (str client-counter)]
                 (thread
                   (str "Clojure Connection " name " " client-id) client-daemon
                   (accept-connection conn name client-id in out (if bind-err out *err*) accept args)))
-              (catch SocketException _disconnect))
+              (catch clotran.host.socket_exception _disconnect))
             (recur (inc client-counter))))
         (finally
           (with-lock lock
@@ -131,7 +131,7 @@
    (stop-server (:server *session*)))
   ([name]
    (with-lock lock
-     (let [server-socket ^ServerSocket (get-in servers [name :socket])]
+     (let [server-socket ^clotran.host.server_socket (get-in servers [name :socket])]
        (when server-socket
          (alter-var-root #'servers dissoc name)
          (.close server-socket)
@@ -146,9 +146,9 @@
 
 (defn- parse-props
   "Parse clojure.server.* from properties to produce a map of server configs."
-  [^Properties props]
+  [^clotran.host.properties props]
   (reduce
-   (fn [acc ^String k]
+   (fn [acc ^clotran.host.string k]
      (let [[k1 k2 k3] (str/split k #"\.")]
        (if (and (= k1 "clojure") (= k2 "server"))
          (let [v (get props k)]
@@ -218,7 +218,7 @@
   Alpha, subject to change."
   {:added "1.10"}
   [in-reader out-fn & {:keys [stdin]}]
-  (let [EOF (Object.)
+  (let [EOF (clotran.host.value.)
         tapfn #(out-fn {:tag :tap :val %1})]
     (m/with-bindings
       (in-ns 'user)
@@ -232,28 +232,28 @@
                     (let [[form s] (read+string {:eof EOF :read-cond :allow} in-reader)]
                       (try
                         (when-not (identical? form EOF)
-                          (let [start (System/nanoTime)
+                          (let [start (clotran.host.system/nanoTime)
                                 ret (eval form)
-                                ms (quot (- (System/nanoTime) start) 1000000)]
+                                ms (quot (- (clotran.host.system/nanoTime) start) 1000000)]
                             (when-not (= :repl/quit ret)
                               (set! *3 *2)
                               (set! *2 *1)
                               (set! *1 ret)
                               (out-fn {:tag :ret
-                                       :val (if (instance? Throwable ret)
+                                       :val (if (instance? clotran.host.throwable ret)
                                               (Throwable->map ret)
                                               ret)
                                        :ns (str (.name *ns*))
                                        :ms ms
                                        :form s})
                               true)))
-                        (catch Throwable ex
+                        (catch clotran.host.throwable ex
                           (set! *e ex)
                           (out-fn {:tag :ret :val (ex->data ex (or (-> ex ex-data :clojure.error/phase) :execution))
                                    :ns (str (.name *ns*)) :form s
                                    :exception true})
                           true)))
-                    (catch Throwable ex
+                    (catch clotran.host.throwable ex
                       (set! *e ex)
                       (out-fn {:tag :ret :val (ex->data ex :read-source)
                                :ns (str (.name *ns*))
@@ -269,7 +269,7 @@
         (when-let [nsname (namespace valf)]
           (require (symbol nsname))
           (resolve valf))
-        (throw (Exception. (str "can't resolve: " valf))))
+        (throw (clotran.host.exception. (str "can't resolve: " valf))))
     valf))
 
 (defn io-prepl
@@ -282,7 +282,7 @@
   [& {:keys [valf] :or {valf pr-str}}]
   (let [valf (resolve-fn valf)
         out *out*
-        lock (Object.)]
+        lock (clotran.host.value.)]
     (prepl *in*
            (fn [m]
              (binding [*out* out, *flush-on-newline* true, *print-readably* true]
@@ -290,7 +290,7 @@
                  (prn (if (#{:ret :tap} (:tag m))
                         (try
                           (assoc m :val (valf (:val m)))
-                          (catch Throwable ex
+                          (catch clotran.host.throwable ex
                             (assoc m :val (valf (ex->data ex :print-eval-result))
                                      :exception true)))
                         m))))))))
@@ -306,15 +306,15 @@
 
   Alpha, subject to change."
   {:added "1.10"}
-  [^String host port ^Reader
+  [^clotran.host.string host port ^clotran.host.reader
    in-reader out-fn & {:keys [valf readf] :or {valf read-string, readf #(read %1 false %2)}}]
   (let [valf (resolve-fn valf)
         readf (resolve-fn readf)
-        ^long port (if (string? port) (Integer/valueOf ^String port) port)
-        socket (Socket. host port)
-        rd (-> socket .getInputStream InputStreamReader. BufferedReader. LineNumberingPushbackReader.)
-        wr (-> socket .getOutputStream OutputStreamWriter.)
-        EOF (Object.)]
+        ^long port (if (string? port) (clotran.host.int4/valueOf ^clotran.host.string port) port)
+        socket (clotran.host.socket. host port)
+        rd (-> socket .getInputStream clotran.host.input_stream_reader. clotran.host.buffered_reader. clotran.io/line-numbering-reader)
+        wr (-> socket .getOutputStream clotran.host.output_stream_writer.)
+        EOF (clotran.host.value.)]
     (thread "clojure.core.server/remote-prepl" true
             (try (loop []
                    (let [{:keys [tag val] :as m} (readf rd EOF)]
@@ -323,7 +323,7 @@
                         (if (#{:ret :tap} tag)
                           (try
                             (assoc m :val (valf val))
-                            (catch Throwable ex
+                            (catch clotran.host.throwable ex
                               (assoc m :val (ex->data ex :read-eval-result)
                                        :exception true)))
                           m))

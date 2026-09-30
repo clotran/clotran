@@ -137,11 +137,11 @@ radix specifier is in the form #XXr where XX is the decimal value of *print-base
 (defmacro ^{:private true} binding-map [amap & body]
   (let []
     `(do
-       (. clojure.lang.Var (pushThreadBindings ~amap))
+       (. clotran.host.var (pushThreadBindings ~amap))
        (try
         ~@body
         (finally
-         (. clojure.lang.Var (popThreadBindings)))))))
+         (. clotran.host.var (popThreadBindings)))))))
 
 (defn- table-ize [t m] 
   (apply hash-map (mapcat 
@@ -150,7 +150,7 @@ radix specifier is in the form #XXr where XX is the decimal value of *print-base
 
 (defn- pretty-writer? 
   "Return true iff x is a PrettyWriter"
-  [x] (and (instance? clojure.lang.IDeref x) (:pretty-writer @@x)))
+  [x] (and (instance? clotran.host.i_deref x) (:pretty-writer @@x)))
 
 (defn- make-pretty-writer 
   "Wrap base-writer in a PrettyWriter with the specified right-margin and miser-width"
@@ -226,7 +226,7 @@ The following keyword arguments can be passed with values:
                        (:stream options)
                        true) 
               base-writer (condp = optval
-                            nil (java.io.StringWriter.)
+                            nil (clotran.host.string_writer.)
                             true *out*
                             optval)]
           (if *print-pretty*
@@ -235,7 +235,7 @@ The following keyword arguments can be passed with values:
             (binding [*out* base-writer]
               (pr object)))
           (if (nil? optval) 
-            (.toString ^java.io.StringWriter base-writer)))))))
+            (.toString ^clotran.host.string_writer base-writer)))))))
 
 
 (defn pprint 
@@ -292,7 +292,7 @@ clojure.pprint.dispatch.clj."
 (defn- check-enumerated-arg [arg choices]
   (if-not (choices arg)
           (throw
-           (IllegalArgumentException.
+           (clotran.host.illegal_argument_exception.
             ;; TODO clean up choices string
             (str "Bad argument: " arg ". It must be one of " choices)))))
 
@@ -312,7 +312,7 @@ and :suffix."
   [& args]
   (let [[options body] (parse-lb-options #{:prefix :per-line-prefix :suffix} args)]
     `(do (if (#'clojure.pprint/level-exceeded) 
-           (.write ^java.io.Writer *out* "#")
+           (.write ^clotran.host.writer *out* "#")
            (do 
              (push-thread-bindings {#'clojure.pprint/*current-level*
                                     (inc (var-get #'clojure.pprint/*current-level*))
@@ -368,7 +368,7 @@ THIS FUNCTION IS NOT YET IMPLEMENTED."
   {:added "1.2"}
   [kind colnum colinc] 
   (check-enumerated-arg kind #{:line :section :line-relative :section-relative})
-  (throw (UnsupportedOperationException. "pprint-tab is not yet implemented")))
+  (throw (clotran.host.unsupported_operation_exception. "pprint-tab is not yet implemented")))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -398,6 +398,6 @@ for use in pretty-printer dispatch functions."
     `(loop ~(apply vector count-var 0 bindings)
        (if (or (not *print-length*) (< ~count-var *print-length*))
          (do ~@mod-body)
-         (.write ^java.io.Writer *out* "...")))))
+         (.write ^clotran.host.writer *out* "...")))))
 
 nil

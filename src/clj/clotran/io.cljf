@@ -3,11 +3,11 @@
   (.read, -1 at the end), takes one back (.unread), and reads a line or the
   rest at once. A reader over text, a pushback reader over any reader, and
   a line-numbering one that counts lines and columns and can capture what
-  it read (read+string). These are clotran's own types. The JVM names that
+  it read (read+string). These are clotran's own types. The clj names that
   vendored Clojure writes -- core.clj's (clotran.io.TextReader. s) in
   with-in-str, clotran.io.LineNumberingReader, LispReader/read --
   are mapped onto them in Eval.f90 and hosttable.inc, and nothing else of
-  java.io is modelled. A deftype's fields cannot be set! (DEVIATIONS 20),
+  clj's io is modelled. A deftype's fields cannot be set! (DEVIATIONS 20),
   so each mutable one holds an atom.")
 
 (defprotocol CharReader
@@ -19,7 +19,7 @@
   "The text to the next \\n, \\r or \\r\\n, that terminator dropped; nil at
   the end."
   [r]
-  (let [sb (StringBuilder.)]
+  (let [sb (clotran.host.string_builder.)]
     (loop [c (.read r) any false]
       (cond (neg? c) (when any (str sb))
             (= c 10) (str sb)
@@ -29,14 +29,14 @@
             :else (do (.append sb (char c)) (recur (.read r) true))))))
 
 (defn- all-from [r]
-  (let [sb (StringBuilder.)]
+  (let [sb (clotran.host.string_builder.)]
     (loop [c (.read r)]
       (if (neg? c) (str sb) (do (.append sb (char c)) (recur (.read r)))))))
 
 (deftype TextReader [s pos]
   CharReader
   (read-all [_] (let [p (min @pos (count s))] (reset! pos (count s)) (subs s p)))
-  Object
+  clotran.host.value
   (read [_]
     (let [p @pos]
       (if (< p (count s)) (do (reset! pos (inc p)) (int (nth s p))) -1)))
@@ -48,7 +48,7 @@
 (deftype PushbackReader [in buf]
   CharReader
   (read-all [this] (all-from this))
-  Object
+  clotran.host.value
   (read [_] (if-let [c (peek @buf)] (do (swap! buf pop) c) (.read in)))
   (unread [_ c] (swap! buf conj (int c)) nil)
   (ready [_] (or (boolean (seq @buf)) (.ready in)))
@@ -64,7 +64,7 @@
 (deftype LineNumberingReader [in buf ahead st]
   CharReader
   (read-all [this] (all-from this))
-  Object
+  clotran.host.value
   (read [_]
     (let [c (if-let [c (peek @buf)]
               (do (swap! buf pop) c)
@@ -96,12 +96,12 @@
   (getString [_] (let [s (apply str (:capture @st))] (swap! st assoc :capture nil) s))
   (close [_] (.close in)))
 
-;; A file path as a value: what clojure.java.io/file answers, and what
-;; java.io.File, which programs write, resolves to (class-aliases.edn).
+;; A file path as a value: what clotran.files/file answers, and what
+;; clotran.io.File, which programs write, resolves to (class-aliases.edn).
 ;; clotran's own code builds its types with the factories (->File): a
-;; name written with a dot, (File. p), is the JVM's constructor, aliased.
+;; name written with a dot, (File. p), is clj's constructor, aliased.
 (deftype File [path]
-  Object
+  clotran.host.value
   (toString [_] path))
 
 (defn file? [x] (instance? File x))
@@ -131,7 +131,7 @@
 (def ^:private closers {40 41, 91 93, 123 125})
 
 (defn- eof! [what]
-  (throw (RuntimeException. (str "EOF while reading" what))))
+  (throw (clotran.host.runtime_exception. (str "EOF while reading" what))))
 
 (defn- skip-ws
   "The first character past whitespace, commas and ; comments, or -1."
@@ -142,7 +142,7 @@
           (= c 59) (recur (loop [d (.read r)] (if (or (neg? d) (= d 10)) d (recur (.read r)))))
           :else c)))
 
-(defn- token-rest [r ^StringBuilder sb]
+(defn- token-rest [r ^clotran.host.string_builder sb]
   (loop [c (.read r)]
     (cond (neg? c) nil
           (or (ws-chars c) (terminating c)) (.unread r c)
@@ -150,7 +150,7 @@
 
 (defn- quoted-rest
   "Through the closing \", a backslash taking the next character with it."
-  [r ^StringBuilder sb what]
+  [r ^clotran.host.string_builder sb what]
   (loop []
     (let [c (.read r)]
       (when (neg? c) (eof! what))
@@ -169,21 +169,21 @@
       (when (neg? c) (eof! ""))
       (when (= :discard (read-form r sb c)) (.append sb " ") (recur)))))
 
-(defn- delimited [r ^StringBuilder sb closer]
+(defn- delimited [r ^clotran.host.string_builder sb closer]
   (loop []
     (let [c (skip-ws r)]
       (cond (neg? c) (eof! "")
             (= c closer) (.append sb (char c))
-            (#{41 93 125} c) (throw (RuntimeException. (str "Unmatched delimiter: " (char c))))
+            (#{41 93 125} c) (throw (clotran.host.runtime_exception. (str "Unmatched delimiter: " (char c))))
             :else (do (read-form r sb c) (.append sb " ") (recur))))))
 
 (defn- read-form
   "Appends the form whose first character, c, is already read. :discard
   for a #_ form or a #! comment, which read on past."
-  [r ^StringBuilder sb c]
+  [r ^clotran.host.string_builder sb c]
   (cond
     (closers c) (do (.append sb (char c)) (delimited r sb (closers c)))
-    (#{41 93 125} c) (throw (RuntimeException. (str "Unmatched delimiter: " (char c))))
+    (#{41 93 125} c) (throw (clotran.host.runtime_exception. (str "Unmatched delimiter: " (char c))))
     (= c 34) (do (.append sb \") (quoted-rest r sb " string"))
     (= c 92) (let [d (.read r)]
                (when (neg? d) (eof! " character"))
@@ -206,7 +206,7 @@
         \^ (do (.append sb "#^") (form-after r sb) (.append sb " ") (form-after r sb))
         \? (let [e (.read r)
                  e (if (= e 64) (do (.append sb "#?@") (.read r)) (do (.append sb "#?") e))]
-             (when-not (= e 40) (throw (RuntimeException. "read-cond body must be a list")))
+             (when-not (= e 40) (throw (clotran.host.runtime_exception. "read-cond body must be a list")))
              (.append sb \() (delimited r sb 41))
         \: (do (.append sb "#:")
                (loop [e (.read r)]
@@ -214,7 +214,7 @@
                        (or (ws-chars e) (= e 123)) (.unread r e)
                        :else (do (.append sb (char e)) (recur (.read r)))))
                (let [e (skip-ws r)]
-                 (when-not (= e 123) (throw (RuntimeException. "Namespaced map must specify a map")))
+                 (when-not (= e 123) (throw (clotran.host.runtime_exception. "Namespaced map must specify a map")))
                  (.append sb \{) (delimited r sb 125)))
         \# (do (.append sb "##") (token-rest r sb))
         ;; a tag, then the form it tags
@@ -226,7 +226,7 @@
     (let [c (skip-ws r)]
       (if (neg? c)
         (if eof-error? (eof! "") eof-value)
-        (let [sb (StringBuilder.)]
+        (let [sb (clotran.host.string_builder.)]
           (if (= :discard (read-form r sb c))
             (recur)
             (read-string opts (str sb))))))))

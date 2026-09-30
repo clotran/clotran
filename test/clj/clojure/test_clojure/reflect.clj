@@ -1,6 +1,6 @@
 (ns clojure.test-clojure.reflect
   (:use clojure.data [clojure.reflect :as reflect] clojure.test clojure.pprint)
-  (:import [clojure.reflect AsmReflector JavaReflector]
+  (:import [clojure.reflect AsmReflector hostReflector]
            [reflector IBar$Factory]))
 
 (defn nodiff
@@ -12,27 +12,27 @@
                                        :common common}))))))
 
 #_(deftest compare-reflect-and-asm
-  (let [cl (.getContextClassLoader (Thread/currentThread))
+  (let [cl (.getContextClassLoader (clotran.host.thread/currentThread))
         asm-reflector (AsmReflector. cl)
-        java-reflector (JavaReflector. cl)]
-    (doseq [classname '[java.lang.Runnable
-                        java.lang.Object
-                        java.io.FileInputStream
-                        clojure.lang.Compiler
-                        clojure.lang.PersistentVector
-                        java.lang.SuppressWarnings]]
+        host-reflector (hostReflector. cl)]
+    (doseq [classname '[clotran.host.runnable
+                        clotran.host.value
+                        clotran.host.file_input_stream
+                        clotran.host.compiler
+                        clotran.host.persistent_vector
+                        clotran.host.suppress_warnings]]
       (nodiff (type-reflect classname :reflector asm-reflector)
-              (type-reflect classname :reflector java-reflector)))))
+              (type-reflect classname :reflector host-reflector)))))
 
 (deftest field-descriptor->class-symbol-test
   (are [s d] (= s (@#'reflect/field-descriptor->class-symbol d))
        'clojure.asm.Type<><> "[[Lclojure/asm/Type;"
        'int "I"
-       'java.lang.Object "Ljava.lang.Object;"))
+       'clotran.host.value "Lhost.lang.Object;"))
 
 (deftest internal-name->class-symbol-test
   (are [s n] (= s (@#'reflect/internal-name->class-symbol n))
-       'java.lang.Exception "java/lang/Exception"))
+       'clotran.host.exception "host/lang/Exception"))
 
 (def inst (IBar$Factory/get))
 (deftest invoking-nonpublic-super
@@ -40,7 +40,7 @@
 
 (defn- checkCLJ2066 [f]
   ;; intentionally reflective call
-  (is (not (nil? (.createXMLStreamReader f (java.io.StringReader. ""))))))
+  (is (not (nil? (.createXMLStreamReader f (clotran.io/text-reader ""))))))
 
 (defn- checkCLJ2414 [p]
   ;; intentionally reflective call
@@ -48,16 +48,16 @@
 
 (deftest invoke-checks-accessibility
   ;; CLJ-2066 - reflector finds method in private class. this is invokable, but an illegal access per modules
-  (checkCLJ2066 (javax.xml.stream.XMLInputFactory/newInstance))
+  (checkCLJ2066 (clotran.host.xml_input_factory/newInstance))
 
   ;; CLJ-2414 - find default method on interface of inaccessible class
-  (checkCLJ2414 (java.nio.file.Paths/get "src" (into-array String []))))
+  (checkCLJ2414 (clotran.host.paths/get "src" (into-array clotran.host.string []))))
 
 (defn sleep [ms]
-  ;; in Java <19, does not reflect. Java >= 19, does reflect
-  (Thread/sleep ms))
+  ;; in host <19, does not reflect. host >= 19, does reflect
+  (clotran.host.thread/sleep ms))
 
 
 (deftest check-CLJ-2843
   (sleep 1)
-  (sleep (Integer/valueOf 1)))
+  (sleep (clotran.host.int4/valueOf 1)))

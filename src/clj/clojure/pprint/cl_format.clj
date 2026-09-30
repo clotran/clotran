@@ -29,7 +29,7 @@
 arguments to an output stream or string based on the format control string given. It 
 supports sophisticated formatting of structured data.
 
-Writer is an instance of java.io.Writer, true to output to *out* or nil to output 
+Writer is an instance of clotran.host.writer, true to output to *out* or nil to output 
 to a string, format-in is the format control string and the remaining arguments 
 are the data to be formatted.
 
@@ -68,7 +68,7 @@ http://www.lispworks.com/documentation/HyperSpec/Body/22_c.htm
 (defn- format-error [message offset] 
   (let [full-message (str message \newline *format-str* \newline 
                            (apply str (repeat offset \space)) "^" \newline)]
-    (throw (RuntimeException. full-message))))
+    (throw (clotran.host.runtime_exception. full-message))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Argument navigators manage the argument list
@@ -91,7 +91,7 @@ http://www.lispworks.com/documentation/HyperSpec/Body/22_c.htm
   (let [ rst (:rest navigator) ]
     (if rst
       [(first rst) (struct arg-navigator (:seq navigator ) (next rst) (inc (:pos navigator)))]
-     (throw (new Exception  "Not enough arguments for format definition")))))
+     (throw (new clotran.host.exception  "Not enough arguments for format definition")))))
 
 (defn- next-arg-or-nil [navigator]
   (let [rst (:rest navigator)]
@@ -102,7 +102,7 @@ http://www.lispworks.com/documentation/HyperSpec/Body/22_c.htm
 ;; Get an argument off the arg list and compile it if it's not already compiled
 (defn- get-format-arg [navigator]
   (let [[raw-format navigator] (next-arg navigator)
-        compiled-format (if (instance? String raw-format) 
+        compiled-format (if (instance? clotran.host.string raw-format) 
                                (compile-format raw-format)
                                raw-format)]
     [compiled-format navigator]))
@@ -174,14 +174,14 @@ http://www.lispworks.com/documentation/HyperSpec/Body/22_c.htm
                     (opt-base-str *print-base* n)))
     (ratio? n) (str
                 (if *print-radix* (or (get special-radix-markers *print-base*) (str "#" *print-base* "r")))
-                (opt-base-str *print-base* (.numerator ^clojure.lang.Ratio n))
+                (opt-base-str *print-base* (.numerator ^clotran.host.ratio n))
                 "/"
-                (opt-base-str *print-base* (.denominator ^clojure.lang.Ratio n)))
+                (opt-base-str *print-base* (.denominator ^clotran.host.ratio n)))
     :else nil))
 
 (defn- format-ascii [print-func params arg-navigator offsets]
   (let [ [arg arg-navigator] (next-arg arg-navigator) 
-         ^String base-output (or (format-simple-number arg) (print-func arg))
+         ^clotran.host.string base-output (or (format-simple-number arg) (print-func arg))
          base-width (.length base-output)
          min-width (+ base-width (:minpad params))
          width (if (>= min-width (:mincol params)) 
@@ -208,8 +208,8 @@ http://www.lispworks.com/documentation/HyperSpec/Body/22_c.htm
   (cond
    (integer? x) true
    (decimal? x) (>= (.ulp (.stripTrailingZeros (bigdec 0))) 1) ; true iff no fractional part
-   (float? x)   (= x (Math/floor x))
-   (ratio? x)   (let [^clojure.lang.Ratio r x]
+   (float? x)   (= x (clotran.host.math/floor x))
+   (ratio? x)   (let [^clotran.host.ratio r x]
                   (= 0 (rem (.numerator r) (.denominator r))))
    :else        false))
 
@@ -231,7 +231,7 @@ http://www.lispworks.com/documentation/HyperSpec/Body/22_c.htm
     "0"
     (let [xlated-val (cond
                        (float? val) (bigdec val)
-                       (ratio? val) (let [^clojure.lang.Ratio r val] 
+                       (ratio? val) (let [^clotran.host.ratio r val] 
                                       (/ (.numerator r) (.denominator r)))
                        :else val)] 
       (apply str 
@@ -240,14 +240,14 @@ http://www.lispworks.com/documentation/HyperSpec/Body/22_c.htm
               (remainders base val))))))
 
 (def ^{:private true}
-     java-base-formats {8 "%o", 10 "%d", 16 "%x"})
+     host-base-formats {8 "%o", 10 "%d", 16 "%x"})
 
 (defn- opt-base-str
   "Return val as a string in the given base, using clojure.core/format if supported
 for improved performance"
   [base val]
-  (let [format-str (get java-base-formats base)]
-    (if (and format-str (integer? val) (not (instance? clojure.lang.BigInt val)))
+  (let [format-str (get host-base-formats base)]
+    (if (and format-str (integer? val) (not (instance? clotran.host.bigint val)))
       (clojure.core/format format-str val)
       (base-str base val))))
 
@@ -267,7 +267,7 @@ for improved performance"
                               commas (repeat (count groups) (:commachar params))]
                           (apply str (next (interleave commas groups))))
                         raw-str)
-            ^String signed-str (cond
+            ^clotran.host.string signed-str (cond
                                   neg (str "-" group-str)
                                   (:at params) (str "+" group-str)
                                   true group-str)
@@ -541,8 +541,8 @@ Note this should only be used for the last one in the sequence"
 ;; TODO - return exponent as int to eliminate double conversion
 (defn- float-parts-base
   "Produce string parts for the mantissa (normalized 1-9) and exponent"
-  [^Object f]
-  (let [^String s (.toLowerCase (.toString f))
+  [^clotran.host.value f]
+  (let [^clotran.host.string s (.toLowerCase (.toString f))
         exploc (.indexOf s (int \e))
         dotloc (.indexOf s (int \.))]
     (if (neg? exploc)
@@ -557,22 +557,22 @@ Note this should only be used for the last one in the sequence"
 (defn- float-parts
   "Take care of leading and trailing zeros in decomposed floats"
   [f]
-  (let [[m ^String e] (float-parts-base f)
+  (let [[m ^clotran.host.string e] (float-parts-base f)
         m1 (rtrim m \0)
         m2 (ltrim m1 \0)
         delta (- (count m1) (count m2))
-        ^String e (if (and (pos? (count e)) (= (nth e 0) \+)) (subs e 1) e)]
+        ^clotran.host.string e (if (and (pos? (count e)) (= (nth e 0) \+)) (subs e 1) e)]
     (if (empty? m2)
       ["0" 0]
-      [m2 (- (Integer/valueOf e) delta)])))
+      [m2 (- (clotran.host.int4/valueOf e) delta)])))
 
-(defn- ^String inc-s
+(defn- ^clotran.host.string inc-s
   "Assumption: The input string consists of one or more decimal digits,
 and no other characters.  Return a string containing one or more
 decimal digits containing a decimal number one larger than the input
 string.  The output string will always be the same length as the input
 string, or one character longer."
-  [^String s]
+  [^clotran.host.string s]
   (let [len-1 (dec (count s))]
     (loop [i (int len-1)]
       (cond
@@ -611,7 +611,7 @@ string, or one character longer."
           ["0" 0 false]
           (if (> len round-pos)
             (let [round-char (nth m1 round-pos)
-                  ^String result (subs m1 0 round-pos)]
+                  ^clotran.host.string result (subs m1 0 round-pos)]
               (if (>= (int round-char) (int \5))
                 (let [round-up-result (inc-s result)
                       expanded (> (count round-up-result) (count result))]
@@ -662,7 +662,7 @@ string, or one character longer."
         (if (not= x 0)
           (bigdec x)
           d)
-        (if (or (== d Double/POSITIVE_INFINITY) (== d Double/NEGATIVE_INFINITY))
+        (if (or (== d clotran.host.real8/POSITIVE_INFINITY) (== d clotran.host.real8/NEGATIVE_INFINITY))
           (bigdec x)
           d)))
     x))
@@ -681,7 +681,7 @@ string, or one character longer."
         append-zero (and (not d) (<= (dec (count mantissa)) scaled-exp))
         [rounded-mantissa scaled-exp expanded] (round-str mantissa scaled-exp 
                                                           d (if w (- w (if add-sign 1 0))))
-        ^String fixed-repr (get-fixed rounded-mantissa (if expanded (inc scaled-exp) scaled-exp) d)
+        ^clotran.host.string fixed-repr (get-fixed rounded-mantissa (if expanded (inc scaled-exp) scaled-exp) d)
         fixed-repr (if (and w d
                             (>= d 1)
                             (= (.charAt fixed-repr 0) \0)
@@ -728,8 +728,8 @@ string, or one character longer."
             expchar (or (:exponentchar params) \E)
             add-sign (or (:at params) (neg? arg))
             prepend-zero (<= k 0)
-            ^Integer scaled-exp (- exp (dec k))
-            scaled-exp-str (str (Math/abs scaled-exp))
+            ^clotran.host.int4 scaled-exp (- exp (dec k))
+            scaled-exp-str (str (clotran.host.math/abs scaled-exp))
             scaled-exp-str (str expchar (if (neg? scaled-exp) \- \+) 
                                 (if e (apply str 
                                              (repeat 
@@ -815,14 +815,14 @@ string, or one character longer."
 ;; the function to render ~$ directives
 ;; TODO: support rationals. Back off to ~D/~A is the appropriate cases
 (defn- dollar-float [params navigator offsets]
-  (let [[^Double arg navigator] (next-arg navigator)
-        [mantissa exp] (float-parts (Math/abs arg))
+  (let [[^clotran.host.real8 arg navigator] (next-arg navigator)
+        [mantissa exp] (float-parts (clotran.host.math/abs arg))
         d (:d params) ; digits after the decimal
         n (:n params) ; minimum digits before the decimal
         w (:w params) ; minimum field width
         add-sign (or (:at params) (neg? arg))
         [rounded-mantissa scaled-exp expanded] (round-str mantissa exp d nil)
-        ^String fixed-repr (get-fixed rounded-mantissa (if expanded (inc scaled-exp) scaled-exp) d)
+        ^clotran.host.string fixed-repr (get-fixed rounded-mantissa (if expanded (inc scaled-exp) scaled-exp) d)
         full-repr (str (apply str (repeat (- n (.indexOf fixed-repr (int \.))) \0)) fixed-repr)
         full-len (+ (count full-repr) (if add-sign 1 0))]
     (print (str
@@ -896,7 +896,7 @@ string, or one character longer."
            last-pos (num -1)]
       (if (and (not max-count) (= (:pos args) last-pos) (> count 1))
         ;; TODO get the offset in here and call format exception
-        (throw (RuntimeException. "%{ construct not consuming any arguments: Infinite loop!")))
+        (throw (clotran.host.runtime_exception. "%{ construct not consuming any arguments: Infinite loop!")))
       (if (or (and (empty? (:rest args))
                    (or (not (:colon (:right-params params))) (> count 0)))
               (and max-count (>= count max-count)))
@@ -942,7 +942,7 @@ string, or one character longer."
            last-pos (num -1)]
       (if (and (not max-count) (= (:pos navigator) last-pos) (> count 1))
         ;; TODO get the offset in here and call format exception
-        (throw (RuntimeException. "%@{ construct not consuming any arguments: Infinite loop!")))
+        (throw (clotran.host.runtime_exception. "%@{ construct not consuming any arguments: Infinite loop!")))
       (if (or (and (empty? (:rest navigator))
                    (or (not (:colon (:right-params params))) (> count 0)))
               (and max-count (>= count max-count)))
@@ -1006,7 +1006,7 @@ string, or one character longer."
     (if (empty? clauses)
       [acc navigator]
       (let [clause (first clauses)
-            [iter-result result-str] (binding [*out* (java.io.StringWriter.)]
+            [iter-result result-str] (binding [*out* (clotran.host.string_writer.)]
                                        [(execute-sub-format clause navigator base-navigator) 
                                         (.toString *out*)])]
         (if (= :up-arrow (first iter-result))
@@ -1071,47 +1071,47 @@ string, or one character longer."
 
 (defn- downcase-writer 
   "Returns a proxy that wraps writer, converting all characters to lower case"
-  [^java.io.Writer writer]
-  (proxy [java.io.Writer] []
+  [^clotran.host.writer writer]
+  (proxy [clotran.host.writer] []
     (close [] (.close writer))
     (flush [] (.flush writer))
-    (write ([^chars cbuf ^Integer off ^Integer len] 
+    (write ([^chars cbuf ^clotran.host.int4 off ^clotran.host.int4 len] 
               (.write writer cbuf off len))
            ([x]
               (condp = (class x)
-		String 
-		(let [s ^String x]
+		clotran.host.string 
+		(let [s ^clotran.host.string x]
 		  (.write writer (.toLowerCase s)))
 
-		Integer
-		(let [c ^Character x]
-		  (.write writer (int (Character/toLowerCase (char c))))))))))
+		clotran.host.int4
+		(let [c ^clotran.host.char x]
+		  (.write writer (int (clotran.host.char/toLowerCase (char c))))))))))
 
 (defn- upcase-writer 
   "Returns a proxy that wraps writer, converting all characters to upper case"
-  [^java.io.Writer writer]
-  (proxy [java.io.Writer] []
+  [^clotran.host.writer writer]
+  (proxy [clotran.host.writer] []
     (close [] (.close writer))
     (flush [] (.flush writer))
-    (write ([^chars cbuf ^Integer off ^Integer len] 
+    (write ([^chars cbuf ^clotran.host.int4 off ^clotran.host.int4 len] 
               (.write writer cbuf off len))
            ([x]
               (condp = (class x)
-		String 
-		(let [s ^String x]
+		clotran.host.string 
+		(let [s ^clotran.host.string x]
 		  (.write writer (.toUpperCase s)))
 
-		Integer
-		(let [c ^Character x]
-		  (.write writer (int (Character/toUpperCase (char c))))))))))
+		clotran.host.int4
+		(let [c ^clotran.host.char x]
+		  (.write writer (int (clotran.host.char/toUpperCase (char c))))))))))
 
 (defn- capitalize-string
   "Capitalizes the words in a string. If first? is false, don't capitalize the 
                                       first character of the string even if it's a letter."
   [s first?]
-  (let [^Character f (first s) 
-        s (if (and first? f (Character/isLetter f))
-            (str (Character/toUpperCase f) (subs s 1))
+  (let [^clotran.host.char f (first s) 
+        s (if (and first? f (clotran.host.char/isLetter f))
+            (str (clotran.host.char/toUpperCase f) (subs s 1))
             s)]
     (apply str 
            (first
@@ -1124,52 +1124,52 @@ string, or one character longer."
                        offset (and match (inc (.start m)))]
                    (if offset
                      [(str (subs s 0 offset) 
-                           (Character/toUpperCase ^Character (nth s offset)))
+                           (clotran.host.char/toUpperCase ^clotran.host.char (nth s offset)))
                       (subs s (inc offset))]
                      [s nil]))))
              s)))))
 
 (defn- capitalize-word-writer
   "Returns a proxy that wraps writer, capitalizing all words"
-  [^java.io.Writer writer]
+  [^clotran.host.writer writer]
   (let [last-was-whitespace? (ref true)] 
-    (proxy [java.io.Writer] []
+    (proxy [clotran.host.writer] []
       (close [] (.close writer))
       (flush [] (.flush writer))
       (write 
-       ([^chars cbuf ^Integer off ^Integer len] 
+       ([^chars cbuf ^clotran.host.int4 off ^clotran.host.int4 len] 
           (.write writer cbuf off len))
        ([x]
           (condp = (class x)
-            String 
-            (let [s ^String x]
+            clotran.host.string 
+            (let [s ^clotran.host.string x]
               (.write writer 
-                      ^String (capitalize-string (.toLowerCase s) @last-was-whitespace?))
+                      ^clotran.host.string (capitalize-string (.toLowerCase s) @last-was-whitespace?))
               (when (pos? (.length s))
                 (dosync 
                  (ref-set last-was-whitespace? 
-                          (Character/isWhitespace 
-                           ^Character (nth s (dec (count s))))))))
+                          (clotran.host.char/isWhitespace 
+                           ^clotran.host.char (nth s (dec (count s))))))))
 
-            Integer
+            clotran.host.int4
             (let [c (char x)]
-              (let [mod-c (if @last-was-whitespace? (Character/toUpperCase (char x)) c)]
+              (let [mod-c (if @last-was-whitespace? (clotran.host.char/toUpperCase (char x)) c)]
                 (.write writer (int mod-c))
-                (dosync (ref-set last-was-whitespace? (Character/isWhitespace (char x))))))))))))
+                (dosync (ref-set last-was-whitespace? (clotran.host.char/isWhitespace (char x))))))))))))
 
 (defn- init-cap-writer
   "Returns a proxy that wraps writer, capitalizing the first word"
-  [^java.io.Writer writer]
+  [^clotran.host.writer writer]
   (let [capped (ref false)] 
-    (proxy [java.io.Writer] []
+    (proxy [clotran.host.writer] []
       (close [] (.close writer))
       (flush [] (.flush writer))
-      (write ([^chars cbuf ^Integer off ^Integer len] 
+      (write ([^chars cbuf ^clotran.host.int4 off ^clotran.host.int4 len] 
                 (.write writer cbuf off len))
              ([x]
                 (condp = (class x)
-                 String 
-                 (let [s (.toLowerCase ^String x)]
+                 clotran.host.string 
+                 (let [s (.toLowerCase ^clotran.host.string x)]
                    (if (not @capped) 
                      (let [m (re-matcher #"\S" s)
                            match (re-find m)
@@ -1177,19 +1177,19 @@ string, or one character longer."
                        (if offset
                          (do (.write writer 
                                    (str (subs s 0 offset) 
-                                        (Character/toUpperCase ^Character (nth s offset))
-                                        (.toLowerCase ^String (subs s (inc offset)))))
+                                        (clotran.host.char/toUpperCase ^clotran.host.char (nth s offset))
+                                        (.toLowerCase ^clotran.host.string (subs s (inc offset)))))
                            (dosync (ref-set capped true)))
                          (.write writer s))) 
                      (.write writer (.toLowerCase s))))
 
-                 Integer
-                 (let [c ^Character (char x)]
-                   (if (and (not @capped) (Character/isLetter c))
+                 clotran.host.int4
+                 (let [c ^clotran.host.char (char x)]
+                   (if (and (not @capped) (clotran.host.char/isLetter c))
                      (do
                        (dosync (ref-set capped true))
-                       (.write writer (int (Character/toUpperCase c))))
-                     (.write writer (int (Character/toLowerCase c)))))))))))
+                       (.write writer (int (clotran.host.char/toUpperCase c))))
+                     (.write writer (int (clotran.host.char/toLowerCase c)))))))))))
 
 (defn- modify-case [make-writer params navigator offsets]
   (let [clause (first (:clauses params))]
@@ -1201,7 +1201,7 @@ string, or one character longer."
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn get-pretty-writer 
-  "Returns the java.io.Writer passed in wrapped in a pretty writer proxy, unless it's 
+  "Returns the clotran.host.writer passed in wrapped in a pretty writer proxy, unless it's 
 already a pretty writer. Generally, it is unnecessary to call this function, since pprint,
 write, and cl-format all call it if they need to. However if you want the state to be 
 preserved across calls, you will want to wrap them with this. 
@@ -1247,7 +1247,7 @@ It prints a table of squares and cubes for the numbers from 1 to 10:
 not a pretty writer (which keeps track of columns), this function always outputs a newline."
   {:added "1.2"}
   []
-  (if (instance? clojure.lang.IDeref *out*)
+  (if (instance? clotran.host.i_deref *out*)
     (if (not (= 0 (get-column (:base @@*out*))))
       (prn))
     (prn)))
@@ -1333,42 +1333,42 @@ not a pretty writer (which keeps track of columns), this function always outputs
 
 (defdirectives 
   (\A 
-   [ :mincol [0 Integer] :colinc [1 Integer] :minpad [0 Integer] :padchar [\space Character] ] 
+   [ :mincol [0 clotran.host.int4] :colinc [1 clotran.host.int4] :minpad [0 clotran.host.int4] :padchar [\space clotran.host.char] ] 
    #{ :at :colon :both} {}
    #(format-ascii print-str %1 %2 %3))
 
   (\S 
-   [ :mincol [0 Integer] :colinc [1 Integer] :minpad [0 Integer] :padchar [\space Character] ] 
+   [ :mincol [0 clotran.host.int4] :colinc [1 clotran.host.int4] :minpad [0 clotran.host.int4] :padchar [\space clotran.host.char] ] 
    #{ :at :colon :both} {}
    #(format-ascii pr-str %1 %2 %3))
 
   (\D
-   [ :mincol [0 Integer] :padchar [\space Character] :commachar [\, Character] 
-    :commainterval [ 3 Integer]]
+   [ :mincol [0 clotran.host.int4] :padchar [\space clotran.host.char] :commachar [\, clotran.host.char] 
+    :commainterval [ 3 clotran.host.int4]]
    #{ :at :colon :both } {}
    #(format-integer 10 %1 %2 %3))
 
   (\B
-   [ :mincol [0 Integer] :padchar [\space Character] :commachar [\, Character] 
-    :commainterval [ 3 Integer]]
+   [ :mincol [0 clotran.host.int4] :padchar [\space clotran.host.char] :commachar [\, clotran.host.char] 
+    :commainterval [ 3 clotran.host.int4]]
    #{ :at :colon :both } {}
    #(format-integer 2 %1 %2 %3))
 
   (\O
-   [ :mincol [0 Integer] :padchar [\space Character] :commachar [\, Character] 
-    :commainterval [ 3 Integer]]
+   [ :mincol [0 clotran.host.int4] :padchar [\space clotran.host.char] :commachar [\, clotran.host.char] 
+    :commainterval [ 3 clotran.host.int4]]
    #{ :at :colon :both } {}
    #(format-integer 8 %1 %2 %3))
 
   (\X
-   [ :mincol [0 Integer] :padchar [\space Character] :commachar [\, Character] 
-    :commainterval [ 3 Integer]]
+   [ :mincol [0 clotran.host.int4] :padchar [\space clotran.host.char] :commachar [\, clotran.host.char] 
+    :commainterval [ 3 clotran.host.int4]]
    #{ :at :colon :both } {}
    #(format-integer 16 %1 %2 %3))
 
   (\R
-   [:base [nil Integer] :mincol [0 Integer] :padchar [\space Character] :commachar [\, Character] 
-    :commainterval [ 3 Integer]]
+   [:base [nil clotran.host.int4] :mincol [0 clotran.host.int4] :padchar [\space clotran.host.char] :commachar [\, clotran.host.char] 
+    :commainterval [ 3 clotran.host.int4]]
    #{ :at :colon :both } {}
    (do
      (cond                          ; ~R is overloaded with bizareness
@@ -1389,7 +1389,7 @@ not a pretty writer (which keeps track of columns), this function always outputs
        navigator)))
 
   (\C
-   [:char-format [nil Character]]
+   [:char-format [nil clotran.host.char]]
    #{ :at :colon :both } {}
    (cond
      (:colon params) pretty-character
@@ -1397,32 +1397,32 @@ not a pretty writer (which keeps track of columns), this function always outputs
      :else plain-character))
 
   (\F
-   [ :w [nil Integer] :d [nil Integer] :k [0 Integer] :overflowchar [nil Character] 
-    :padchar [\space Character] ]
+   [ :w [nil clotran.host.int4] :d [nil clotran.host.int4] :k [0 clotran.host.int4] :overflowchar [nil clotran.host.char] 
+    :padchar [\space clotran.host.char] ]
    #{ :at } {}
    fixed-float)
 
   (\E
-   [ :w [nil Integer] :d [nil Integer] :e [nil Integer] :k [1 Integer] 
-    :overflowchar [nil Character] :padchar [\space Character] 
-    :exponentchar [nil Character] ]
+   [ :w [nil clotran.host.int4] :d [nil clotran.host.int4] :e [nil clotran.host.int4] :k [1 clotran.host.int4] 
+    :overflowchar [nil clotran.host.char] :padchar [\space clotran.host.char] 
+    :exponentchar [nil clotran.host.char] ]
    #{ :at } {}
    exponential-float)
 
   (\G
-   [ :w [nil Integer] :d [nil Integer] :e [nil Integer] :k [1 Integer] 
-    :overflowchar [nil Character] :padchar [\space Character] 
-    :exponentchar [nil Character] ]
+   [ :w [nil clotran.host.int4] :d [nil clotran.host.int4] :e [nil clotran.host.int4] :k [1 clotran.host.int4] 
+    :overflowchar [nil clotran.host.char] :padchar [\space clotran.host.char] 
+    :exponentchar [nil clotran.host.char] ]
    #{ :at } {}
    general-float)
 
   (\$
-   [ :d [2 Integer] :n [1 Integer] :w [0 Integer] :padchar [\space Character]]
+   [ :d [2 clotran.host.int4] :n [1 clotran.host.int4] :w [0 clotran.host.int4] :padchar [\space clotran.host.char]]
    #{ :at :colon :both} {}
    dollar-float)
 
   (\% 
-   [ :count [1 Integer] ] 
+   [ :count [1 clotran.host.int4] ] 
    #{ } {}
    (fn [params arg-navigator offsets]
      (dotimes [i (:count params)]
@@ -1430,7 +1430,7 @@ not a pretty writer (which keeps track of columns), this function always outputs
      arg-navigator))
 
   (\&
-   [ :count [1 Integer] ] 
+   [ :count [1 clotran.host.int4] ] 
    #{ :pretty } {}
    (fn [params arg-navigator offsets]
      (let [cnt (:count params)]
@@ -1440,7 +1440,7 @@ not a pretty writer (which keeps track of columns), this function always outputs
      arg-navigator))
 
   (\| 
-   [ :count [1 Integer] ] 
+   [ :count [1 clotran.host.int4] ] 
    #{ } {}
    (fn [params arg-navigator offsets]
      (dotimes [i (:count params)]
@@ -1448,7 +1448,7 @@ not a pretty writer (which keeps track of columns), this function always outputs
      arg-navigator))
 
   (\~ 
-   [ :n [1 Integer] ] 
+   [ :n [1 clotran.host.int4] ] 
    #{ } {}
    (fn [params arg-navigator offsets]
      (let [n (:n params)]
@@ -1464,14 +1464,14 @@ not a pretty writer (which keeps track of columns), this function always outputs
      arg-navigator))
 
   (\T
-   [ :colnum [1 Integer] :colinc [1 Integer] ] 
+   [ :colnum [1 clotran.host.int4] :colinc [1 clotran.host.int4] ] 
    #{ :at :pretty } {}
    (if (:at params)
      #(relative-tabulation %1 %2 %3)
      #(absolute-tabulation %1 %2 %3)))
 
   (\* 
-   [ :n [nil Integer] ] 
+   [ :n [nil clotran.host.int4] ] 
    #{ :colon :at } {}
    (if (:at params)
      (fn [params navigator offsets]
@@ -1516,7 +1516,7 @@ not a pretty writer (which keeps track of columns), this function always outputs
   (\) [] #{} {} nil) 
 
   (\[
-   [ :selector [nil Integer] ]
+   [ :selector [nil clotran.host.int4] ]
    #{ :colon :at } { :right \], :allows-separator true, :else :last }
    (cond
      (:colon params)
@@ -1528,13 +1528,13 @@ not a pretty writer (which keeps track of columns), this function always outputs
      true
      choice-conditional))
 
-  (\; [:min-remaining [nil Integer] :max-columns [nil Integer]] 
+  (\; [:min-remaining [nil clotran.host.int4] :max-columns [nil clotran.host.int4]] 
    #{ :colon } { :separator true } nil) 
    
   (\] [] #{} {} nil) 
 
   (\{
-   [ :max-iterations [nil Integer] ]
+   [ :max-iterations [nil clotran.host.int4] ]
    #{ :colon :at :both} { :right \}, :allows-separator false }
    (cond
      (and (:at params) (:colon params))
@@ -1553,14 +1553,14 @@ not a pretty writer (which keeps track of columns), this function always outputs
   (\} [] #{:colon} {} nil) 
 
   (\<
-   [:mincol [0 Integer] :colinc [1 Integer] :minpad [0 Integer] :padchar [\space Character]]
+   [:mincol [0 clotran.host.int4] :colinc [1 clotran.host.int4] :minpad [0 clotran.host.int4] :padchar [\space clotran.host.char]]
    #{:colon :at :both :pretty} { :right \>, :allows-separator true, :else :first }
    logical-block-or-justify)
 
   (\> [] #{:colon} {} nil) 
 
   ;; TODO: detect errors in cases where colon not allowed
-  (\^ [:arg1 [nil Integer] :arg2 [nil Integer] :arg3 [nil Integer]] 
+  (\^ [:arg1 [nil clotran.host.int4] :arg2 [nil clotran.host.int4] :arg3 [nil clotran.host.int4]] 
    #{:colon} {} 
    (fn [params navigator offsets]
      (let [arg1 (:arg1 params)
@@ -1607,7 +1607,7 @@ not a pretty writer (which keeps track of columns), this function always outputs
    conditional-newline)
 
   (\I
-   [:n [0 Integer]]
+   [:n [0 clotran.host.int4]]
    #{:colon} {}
    set-indent)
   )
@@ -1643,13 +1643,13 @@ not a pretty writer (which keeps track of columns), this function always outputs
 (defn- translate-param
   "Translate the string representation of a param to the internalized
                                       representation"
-  [[^String p offset]]
+  [[^clotran.host.string p offset]]
   [(cond 
     (= (.length p) 0) nil
     (and (= (.length p) 1) (contains? #{\v \V} (nth p 0))) :parameter-from-args
     (and (= (.length p) 1) (= \# (nth p 0))) :remaining-arg-count
     (and (= (.length p) 2) (= \' (nth p 0))) (nth p 1)
-    true (Integer/parseInt p))
+    true (clotran.host.int4/parseInt p))
    offset])
  
 (def ^{:private true}
@@ -1717,7 +1717,7 @@ of parameters as well."
   (let [[raw-params [rest offset]] (extract-params s offset)
         [_ [rest offset flags]] (extract-flags rest offset)
         directive (first rest)
-        def (get directive-table (Character/toUpperCase ^Character directive))
+        def (get directive-table (clotran.host.char/toUpperCase ^clotran.host.char directive))
         params (if def (map-params def (map translate-param raw-params) flags offset))]
     (if (not directive)
       (format-error "Format string ended in the middle of a directive" offset))
@@ -1852,7 +1852,7 @@ performance when you're using the same format string repeatedly"
     (process-nesting
      (first 
       (consume 
-       (fn [[^String s offset]]
+       (fn [[^clotran.host.string s offset]]
          (if (empty? s)
            [nil s]
            (let [tilde (.indexOf s (int \~))]
@@ -1880,11 +1880,11 @@ column number or pretty printing"
   "Executes the format with the arguments."
   {:skip-wiki true}
   ([stream format args]
-     (let [^java.io.Writer real-stream (cond 
-                                         (not stream) (java.io.StringWriter.)
+     (let [^clotran.host.writer real-stream (cond 
+                                         (not stream) (clotran.host.string_writer.)
                                          (true? stream) *out*
                                          :else stream)
-           ^java.io.Writer wrapped-stream (if (and (needs-pretty format) 
+           ^clotran.host.writer wrapped-stream (if (and (needs-pretty format) 
                                                     (not (pretty-writer? real-stream)))
                                              (get-pretty-writer real-stream)
                                              real-stream)]

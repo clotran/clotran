@@ -10,7 +10,7 @@
 
 
 (ns clojure.test-clojure.compilation
-  (:import (clojure.lang Compiler Compiler$CompilerException))
+  (:import )
   (:require [clojure.test.generative :refer (defspec)]
             [clojure.data.generators :as gen]
             [clojure.test-clojure.compilation.line-number-examples :as line])
@@ -46,14 +46,14 @@
 
 (deftest test-embedded-constants
   (testing "Embedded constants"
-    (is (eval `(= Boolean/TYPE ~Boolean/TYPE)))
-    (is (eval `(= Byte/TYPE ~Byte/TYPE)))
-    (is (eval `(= Character/TYPE ~Character/TYPE)))
-    (is (eval `(= Double/TYPE ~Double/TYPE)))
-    (is (eval `(= Float/TYPE ~Float/TYPE)))
-    (is (eval `(= Integer/TYPE ~Integer/TYPE)))
-    (is (eval `(= Long/TYPE ~Long/TYPE)))
-    (is (eval `(= Short/TYPE ~Short/TYPE)))))
+    (is (eval `(= clotran.host.logical/TYPE ~clotran.host.logical/TYPE)))
+    (is (eval `(= clotran.host.int1/TYPE ~clotran.host.int1/TYPE)))
+    (is (eval `(= clotran.host.char/TYPE ~clotran.host.char/TYPE)))
+    (is (eval `(= clotran.host.real8/TYPE ~clotran.host.real8/TYPE)))
+    (is (eval `(= clotran.host.real4/TYPE ~clotran.host.real4/TYPE)))
+    (is (eval `(= clotran.host.int4/TYPE ~clotran.host.int4/TYPE)))
+    (is (eval `(= clotran.host.int8/TYPE ~clotran.host.int8/TYPE)))
+    (is (eval `(= clotran.host.int2/TYPE ~clotran.host.int2/TYPE)))))
 
 (deftest test-compiler-resolution
   (testing "resolve nonexistent class create should return nil (assembla #262)"
@@ -63,38 +63,38 @@
 
 (deftest test-no-recur-across-try
   (testing "don't recur to function from inside try"
-    (is (thrown? Compiler$CompilerException
+    (is (thrown? clotran.host.compiler_compiler_exception
                  (eval '(fn [x] (try (recur 1)))))))
   (testing "don't recur to loop from inside try"
-    (is (thrown? Compiler$CompilerException
+    (is (thrown? clotran.host.compiler_compiler_exception
                  (eval '(loop [x 5]
                           (try (recur 1)))))))
   (testing "don't recur to loop from inside of catch inside of try"
-    (is (thrown? Compiler$CompilerException
+    (is (thrown? clotran.host.compiler_compiler_exception
                  (eval '(loop [x 5]
                           (try
-                            (catch Exception e
+                            (catch clotran.host.exception e
                               (recur 1))))))))
   (testing "don't recur to loop from inside of finally inside of try"
-    (is (thrown? Compiler$CompilerException
+    (is (thrown? clotran.host.compiler_compiler_exception
                  (eval '(loop [x 5]
                           (try
                             (finally
                               (recur 1))))))))
   (testing "don't get confused about what the recur is targeting"
-    (is (thrown? Compiler$CompilerException
+    (is (thrown? clotran.host.compiler_compiler_exception
                  (eval '(loop [x 5]
                           (try (fn [x]) (recur 1)))))))
   (testing "don't allow recur across binding"
-    (is (thrown? Compiler$CompilerException
+    (is (thrown? clotran.host.compiler_compiler_exception
                  (eval '(fn [x] (binding [+ *] (recur 1)))))))
   (testing "allow loop/recur inside try"
     (is (= 0 (eval '(try (loop [x 3]
                            (if (zero? x) x (recur (dec x)))))))))
   (testing "allow loop/recur fully inside catch"
     (is (= 3 (eval '(try
-                      (throw (Exception.))
-                      (catch Exception e
+                      (throw (clotran.host.exception.))
+                      (catch clotran.host.exception e
                         (loop [x 0]
                           (if (< x 3) (recur (inc x)) x))))))))
   (testing "allow loop/recur fully inside finally"
@@ -113,7 +113,7 @@
                            (recur (dec x))))
                        3)))))))
 
-;; disabled until build box can call java from mvn
+;; disabled until build box can call host from mvn
 #_(deftest test-numeric-dispatch
   (is (= "(int, int)" (TestDispatch/someMethod (int 1) (int 1))))
   (is (= "(int, long)" (TestDispatch/someMethod (int 1) (long 1))))
@@ -125,15 +125,15 @@
               (loop [x (long x) y (long y)]
                 (if (== y 0)
                   x
-                  (recur y ^Long(rem x y)))))]
+                  (recur y ^clotran.host.int8(rem x y)))))]
       (is (= 4 (gcd 8 100))))))
 
 ;; ensure proper use of hints / type decls
 
 (defn hinted
-  (^String [])
-  (^Integer [a])
-  (^java.util.List [a & args]))
+  (^clotran.host.string [])
+  (^clotran.host.int4 [a])
+  (^clotran.host.list [a & args]))
 
 ;; fn names need to be fully-qualified because should-not-reflect evals its arg in a throwaway namespace
 
@@ -144,16 +144,16 @@
 
 (deftest CLJ-1232-qualify-hints
   (let [arglists (-> #'clojure.test-clojure.compilation/hinted meta :arglists)]
-    (is (= 'java.lang.String (-> arglists first meta :tag)))
-    (is (= 'java.lang.Integer (-> arglists second meta :tag)))))
+    (is (= 'clotran.host.string (-> arglists first meta :tag)))
+    (is (= 'clotran.host.int4 (-> arglists second meta :tag)))))
 
 (deftest CLJ-1232-return-type-not-imported
-  (is (thrown-with-cause-msg? Compiler$CompilerException #"Unable to resolve classname: Closeable"
+  (is (thrown-with-cause-msg? clotran.host.compiler_compiler_exception #"Unable to resolve classname: Closeable"
                               (eval '(defn a ^Closeable []))))
-  (is (thrown-with-cause-msg? Compiler$CompilerException #"Unable to resolve classname: Closeable"
+  (is (thrown-with-cause-msg? clotran.host.compiler_compiler_exception #"Unable to resolve classname: Closeable"
                               (eval '(defn a (^Closeable []))))))
 
-(defn ^String hinting-conflict ^Integer [])
+(defn ^clotran.host.string hinting-conflict ^clotran.host.int4 [])
 
 (deftest calls-use-arg-vector-hint
   (should-not-reflect #(.floatValue (clojure.test-clojure.compilation/hinting-conflict)))
@@ -165,14 +165,14 @@
   (should-print-err-message #"(?s)Reflection warning.*"
     #(.floatValue clojure.test-clojure.compilation/hinting-conflict)))
 
-(defn ^String legacy-hinting [])
+(defn ^clotran.host.string legacy-hinting [])
 
 (deftest legacy-call-hint
   (should-not-reflect #(.substring (clojure.test-clojure.compilation/legacy-hinting) 0)))
 
 (defprotocol HintedProtocol
-  (hintedp ^String [a]
-           ^Integer [a b]))
+  (hintedp ^clotran.host.string [a]
+           ^clotran.host.int4 [a b]))
 
 (deftest hinted-protocol-arg-vector
   (should-not-reflect #(.substring (clojure.test-clojure.compilation/hintedp "") 0))
@@ -195,33 +195,33 @@
   ;; verifies the stream is still usable after compiling.
   (spit "test/dummy.clj" "(ns dummy)")
   (try
-    (let [compile-path (System/getProperty "clojure.compile.path")
-          tmp (java.io.File. "tmp")
-          new-out (java.io.OutputStreamWriter. (java.io.ByteArrayOutputStream.))]
+    (let [compile-path (clotran.host.system/getProperty "clojure.compile.path")
+          tmp (clotran.io.File. "tmp")
+          new-out (clotran.host.output_stream_writer. (clotran.host.byte_array_output_stream.))]
       (binding [clojure.core/*out* new-out]
         (try
           (.mkdir tmp)
-          (System/setProperty "clojure.compile.path" "tmp")
-          (clojure.lang.Compile/main (into-array ["dummy"]))
+          (clotran.host.system/setProperty "clojure.compile.path" "tmp")
+          (clotran.host.compile/main (into-array ["dummy"]))
           (println "this should still work without throwing an exception" )
           (finally
             (if compile-path
-              (System/setProperty "clojure.compile.path" compile-path)
-              (System/clearProperty "clojure.compile.path"))
+              (clotran.host.system/setProperty "clojure.compile.path" compile-path)
+              (clotran.host.system/clearProperty "clojure.compile.path"))
             (doseq [f (.listFiles tmp)]
               (.delete f))
             (.delete tmp)))))
     (finally
-      (doseq [f (.listFiles (java.io.File. "test"))
+      (doseq [f (.listFiles (clotran.io.File. "test"))
               :when (re-find #"dummy.clj" (str f))]
         (.delete f)))))
 
 (deftest CLJ-1184-do-in-non-list-test
   (testing "do in a vector throws an exception"
-    (is (thrown? Compiler$CompilerException
+    (is (thrown? clotran.host.compiler_compiler_exception
                  (eval '[do 1 2 3]))))
   (testing "do in a set throws an exception"
-    (is (thrown? Compiler$CompilerException
+    (is (thrown? clotran.host.compiler_compiler_exception
                  (eval '#{do}))))
 
   ;; compile uses a separate code path so we have to call it directly
@@ -232,25 +232,25 @@
              (binding [*compile-path* "test"]
                (clojure.core/compile 'clojure.bad-def-test))
              (finally
-               (doseq [f (.listFiles (java.io.File. "test/clojure"))
+               (doseq [f (.listFiles (clotran.io.File. "test/clojure"))
                        :when (re-find #"bad_def_test" (str f))]
                  (.delete f)))))]
     (testing "do in a vector throws an exception in compilation"
-      (is (thrown? Compiler$CompilerException (compile "[do 1 2 3]"))))
+      (is (thrown? clotran.host.compiler_compiler_exception (compile "[do 1 2 3]"))))
     (testing "do in a set throws an exception in compilation"
-      (is (thrown? Compiler$CompilerException (compile "#{do}"))))))
+      (is (thrown? clotran.host.compiler_compiler_exception (compile "#{do}"))))))
 
 (defn gen-name []
   ;; Not all names can be correctly demunged. Skip names that contain
   ;; a munge word as they will not properly demunge.
   (let [munge-words (remove clojure.string/blank?
                             (conj (map #(clojure.string/replace % "_" "")
-                                       (vals Compiler/CHAR_MAP)) "_"))]
+                                       (vals clotran.host.compiler/CHAR_MAP)) "_"))]
     (first (filter (fn [n] (not-any? #(>= (.indexOf n %) 0) munge-words))
                    (repeatedly #(name (gen/symbol (constantly 10))))))))
 
 (defn munge-roundtrip [n]
-  (Compiler/demunge (Compiler/munge n)))
+  (clotran.host.compiler/demunge (clotran.host.compiler/munge n)))
 
 (defspec test-munge-roundtrip
   munge-roundtrip
@@ -259,16 +259,16 @@
 
 (deftest test-fnexpr-type-hint
   (testing "CLJ-1378: FnExpr should be allowed to override its reported class with a type hint."
-    (is (thrown? Compiler$CompilerException
-                 (load-string "(.submit (java.util.concurrent.Executors/newCachedThreadPool) #())")))
-    (is (try (load-string "(.submit (java.util.concurrent.Executors/newCachedThreadPool) ^Runnable #())")
-             (catch Compiler$CompilerException e nil)))))
+    (is (thrown? clotran.host.compiler_compiler_exception
+                 (load-string "(.submit (clotran.host.executors/newCachedThreadPool) #())")))
+    (is (try (load-string "(.submit (clotran.host.executors/newCachedThreadPool) ^Runnable #())")
+             (catch clotran.host.compiler_compiler_exception e nil)))))
 
 (defn ^{:tag 'long} hinted-primfn [^long x] x)
 (defn unhinted-primfn [^long x] x)
 (deftest CLJ-1533-primitive-functions-lose-tag
-  (should-not-reflect #(Math/abs (clojure.test-clojure.compilation/hinted-primfn 1)))
-  (should-not-reflect #(Math/abs ^long (clojure.test-clojure.compilation/unhinted-primfn 1))))
+  (should-not-reflect #(clotran.host.math/abs (clojure.test-clojure.compilation/hinted-primfn 1)))
+  (should-not-reflect #(clotran.host.math/abs ^long (clojure.test-clojure.compilation/unhinted-primfn 1))))
 
 
 (defrecord Y [a])
@@ -284,13 +284,13 @@
                                  (try
                                    (function)
                                    nil
-                                   (catch Throwable t
+                                   (catch clotran.host.throwable t
                                      (let [frames (filter #(= "line_number_examples.clj" (.getFileName %))
                                                           (.getStackTrace t))
                                            _ (if (zero? (count frames))
                                                (.printStackTrace t)
                                                )
-                                           actual (.getLineNumber ^StackTraceElement (first frames))]
+                                           actual (.getLineNumber ^clotran.host.stack_trace_element (first frames))]
                                        (= expected actual)))))]
     (is (fails-on-line-number?  13 line/instance-field))
     (is (fails-on-line-number?  19 line/instance-field-reflected))
@@ -329,9 +329,9 @@
           (fn [row col source]
             (let [path (name (gensym "clj-1568.example-"))]
               (try
-                (Compiler/load (java.io.StringReader. source) path "clj-1568.example")
+                (clotran.host.compiler/load (clotran.io/text-reader source) path "clj-1568.example")
                 nil
-                (catch Compiler$CompilerException e
+                (catch clotran.host.compiler_compiler_exception e
                   (let [data (ex-data e)]
                     (= [path row col]
                       [(:clojure.error/source data) (:clojure.error/line data) (:clojure.error/column data)]))))))]
@@ -363,8 +363,8 @@
     (let [closed-over-in-catch (let [x :foo]
                                  (fn []
                                    (try
-                                     (throw (Exception. "boom"))
-                                     (catch Exception e
+                                     (throw (clotran.host.exception. "boom"))
+                                     (catch clotran.host.exception e
                                        x)))) ;; x should remain accessible to the fn
 
           a (atom nil)
@@ -379,20 +379,20 @@
   (testing "no clearing when loop not in return context"
     (let [x (atom 5)
           bad (fn []
-                (loop [] (System/getProperties))
+                (loop [] (clotran.host.system/getProperties))
                 (swap! x dec)
                 (when (pos? @x)
                   (recur)))]
       (is (nil? (bad))))))
 
 (deftest CLJ-1586-lazyseq-literals-preserve-metadata
-  (should-not-reflect (eval (list '.substring (with-meta (concat '(identity) '("foo")) {:tag 'String}) 0))))
+  (should-not-reflect (eval (list '.substring (with-meta (concat '(identity) '("foo")) {:tag 'clotran.host.string}) 0))))
 
 (deftest CLJ-1456-compiler-error-on-incorrect-number-of-parameters-to-throw
-  (is (thrown? RuntimeException (eval '(defn foo [] (throw)))))
-  (is (thrown? RuntimeException (eval '(defn foo [] (throw RuntimeException any-symbol)))))
-  (is (thrown? RuntimeException (eval '(defn foo [] (throw (RuntimeException.) any-symbol)))))
-  (is (var? (eval '(defn foo [] (throw (IllegalArgumentException.)))))))
+  (is (thrown? clotran.host.runtime_exception (eval '(defn foo [] (throw)))))
+  (is (thrown? clotran.host.runtime_exception (eval '(defn foo [] (throw clotran.host.runtime_exception any-symbol)))))
+  (is (thrown? clotran.host.runtime_exception (eval '(defn foo [] (throw (clotran.host.runtime_exception.) any-symbol)))))
+  (is (var? (eval '(defn foo [] (throw (clotran.host.illegal_argument_exception.)))))))
 
 (deftest clj-1809
   (is (eval `(fn [y#]
@@ -403,7 +403,7 @@
 ;; See CLJ-1846
 (deftest incorrect-primitive-type-hint-throws
   ;; invalid primitive type hint
-  (is (thrown-with-cause-msg? Compiler$CompilerException #"Cannot coerce long to int"
+  (is (thrown-with-cause-msg? clotran.host.compiler_compiler_exception #"Cannot coerce long to int"
         (load-string "(defn returns-long ^long [] 1) (Integer/bitCount ^int (returns-long))")))
   ;; correct casting instead
   (is (= 1 (load-string "(defn returns-long ^long [] 1) (Integer/bitCount (int (returns-long)))"))))
@@ -447,7 +447,7 @@
 (deftest CLJ-2945
   (testing "CLJ-2945 Reify form and obj meta"
     (are [m x]  (= (set (keys m)) x)
-      (meta (reify clojure.lang.ILookup)) #{}
-      (meta ^:foo (reify clojure.lang.ILookup)) #{:foo}
-      (meta (macroexpand-1 '(reify clojure.lang.ILookup))) #{:line :column}
-      (meta (macroexpand-1 '^:foo (reify clojure.lang.ILookup))) #{:line :column :foo})))
+      (meta (reify clotran.host.i_lookup)) #{}
+      (meta ^:foo (reify clotran.host.i_lookup)) #{:foo}
+      (meta (macroexpand-1 '(reify clotran.host.i_lookup))) #{:line :column}
+      (meta (macroexpand-1 '^:foo (reify clotran.host.i_lookup))) #{:line :column :foo})))

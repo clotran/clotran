@@ -1,4 +1,4 @@
-;; DERIVED from test/clj/clojure/test_clojure/parse.clj by scripts/derive-tests -- do not edit.
+;; DERIVED from upstream/clojure/test/clojure/test_clojure/parse.clj by upstream/derive-tests -- do not edit.
 ;; Kept: tests whose symbols lie in the clojure.core/cljs.core intersection (plus concurrency).
 
 (ns clojure.test-clojure.parse (:require [clojure.test :refer :all]))
@@ -15,9 +15,9 @@
     "+0" 0
     "-0" 0
     "-42" -42
-    "9223372036854775807" Long/MAX_VALUE
-    "+9223372036854775807" Long/MAX_VALUE
-    "-9223372036854775808" Long/MIN_VALUE
+    "9223372036854775807" clotran.host.int8/MAX_VALUE
+    "+9223372036854775807" clotran.host.int8/MAX_VALUE
+    "-9223372036854775808" clotran.host.int8/MIN_VALUE
     "077" 77) ;; leading 0s are ignored! (not octal)
 
   (are [s] ;; do not parse
@@ -41,7 +41,7 @@
     " true ")
 
   (are [s] ;; throw on invalid type (not string)
-    (try (parse-boolean s) (is false) (catch Throwable _ (is true)))
+    (try (parse-boolean s) (is false) (catch clotran.host.throwable _ (is true)))
     nil
     false
     true

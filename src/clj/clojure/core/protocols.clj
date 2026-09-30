@@ -32,11 +32,11 @@
 
 ;; mutates the iterator, respects reduced
 (defn iterator-reduce!
-  ([^java.util.Iterator iter f]
+  ([^clotran.host.iterator iter f]
    (if (.hasNext iter)
      (iterator-reduce! iter f (.next iter))
      (f)))
-  ([^java.util.Iterator iter f val]
+  ([^clotran.host.iterator iter f val]
    (loop [ret val]
      (if (.hasNext iter)
        (let [ret (f ret (.next iter))]
@@ -46,9 +46,9 @@
        ret))))
 
 (defn- iter-reduce
-  ([^Iterable coll f]
+  ([^clotran.host.iterable coll f]
    (iterator-reduce! (.iterator coll) f))
-  ([^Iterable coll f val]
+  ([^clotran.host.iterable coll f val]
    (iterator-reduce! (.iterator coll) f val)))
 
 (defn- naive-seq-reduce
@@ -67,8 +67,8 @@
 (defn- interface-or-naive-reduce
   "Reduces via IReduceInit if possible, else naively."
   [coll f val]
-  (if (instance? clojure.lang.IReduceInit coll)
-    (.reduce ^clojure.lang.IReduceInit coll f val)
+  (if (instance? clotran.host.i_reduce_init coll)
+    (.reduce ^clotran.host.i_reduce_init coll f val)
     (naive-seq-reduce coll f val)))
 
 (extend-protocol CollReduce
@@ -77,45 +77,45 @@
    ([coll f] (f))
    ([coll f val] val))
 
-  Object
+  clotran.host.value
   (coll-reduce
    ([coll f] (seq-reduce coll f))
    ([coll f val] (seq-reduce coll f val)))
 
-  clojure.lang.IReduceInit
+  clotran.host.i_reduce_init
   (coll-reduce
-    ([coll f] (.reduce ^clojure.lang.IReduce coll f))
+    ([coll f] (.reduce ^clotran.host.i_reduce coll f))
     ([coll f val] (.reduce coll f val)))
 
   ;;aseqs are iterable, masking internal-reducers
-  clojure.lang.ASeq
+  clotran.host.a_seq
   (coll-reduce
    ([coll f] (seq-reduce coll f))
    ([coll f val] (seq-reduce coll f val)))
 
   ;;for range
-  clojure.lang.LazySeq
+  clotran.host.lazy_seq
   (coll-reduce
    ([coll f] (seq-reduce coll f))
    ([coll f val] (seq-reduce coll f val)))
 
   ;;vector's chunked seq is faster than its iter
-  clojure.lang.PersistentVector
+  clotran.host.persistent_vector
   (coll-reduce
    ([coll f] (seq-reduce coll f))
    ([coll f val] (seq-reduce coll f val)))
   
-  Iterable
+  clotran.host.iterable
   (coll-reduce
    ([coll f] (iter-reduce coll f))
    ([coll f val] (iter-reduce coll f val)))
 
-  clojure.lang.APersistentMap$KeySeq
+  clotran.host.a_persistent_map_key_seq
   (coll-reduce
     ([coll f] (iter-reduce coll f))
     ([coll f val] (iter-reduce coll f val)))
 
-  clojure.lang.APersistentMap$ValSeq
+  clotran.host.a_persistent_map_val_seq
   (coll-reduce
     ([coll f] (iter-reduce coll f))
     ([coll f val] (iter-reduce coll f val))))
@@ -127,7 +127,7 @@
    val)
   
   ;; handles vectors and ranges
-  clojure.lang.IChunkedSeq
+  clotran.host.i_chunked_seq
   (internal-reduce
    [s f val]
    (if-let [s (seq s)]
@@ -141,7 +141,7 @@
        (interface-or-naive-reduce s f val))
      val))
  
-  clojure.lang.StringSeq
+  clotran.host.string_seq
   (internal-reduce
    [str-seq f val]
    (let [s (.s str-seq)
@@ -155,7 +155,7 @@
                   (recur (inc i) ret)))
          val))))
   
-  java.lang.Object
+  clotran.host.value
   (internal-reduce
    [s f val]
    (loop [cls (class s)
@@ -187,7 +187,7 @@
   nil
   (datafy [_] nil)
 
-  Object
+  clotran.host.value
   (datafy [x] x))
 
 (defprotocol Navigable
@@ -197,5 +197,5 @@
 defaults to returning v."))
 
 (extend-protocol Navigable
-  Object
+  clotran.host.value
   (nav [_ _ x] x))

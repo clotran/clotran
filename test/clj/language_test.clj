@@ -70,7 +70,7 @@
 ;; an error takes one too, once capture is on
 (defn brk-boom [x] (let [doubled (* x 2)] (.nosuchmember doubled)))
 (clotran-break-on! true)
-(def brk-caught (try (brk-boom 21) (catch Throwable t :caught)))
+(def brk-caught (try (brk-boom 21) (catch clotran.host.throwable t :caught)))
 (def brk-err (clotran-last-break))
 (clotran-break-on! false)
 
@@ -91,11 +91,11 @@
        (binding [*clotran-break-handler* (fn [b] :continue)] (brk-outer [1])) nil)
 (check ":abort throws at the break"
        (binding [*clotran-break-handler* (fn [b] :abort)]
-         (try (brk-outer [1]) (catch Throwable t (re-find #"aborted at break" (str t)))))
+         (try (brk-outer [1]) (catch clotran.host.throwable t (re-find #"aborted at break" (str t)))))
        "aborted at break")
 (check "a handler that throws, throws at the break"
        (binding [*clotran-break-handler* (fn [b] (throw (ex-info "from the handler" {:k 1})))]
-         (try (brk-outer [1]) (catch Throwable t (:k (ex-data t)))))
+         (try (brk-outer [1]) (catch clotran.host.throwable t (:k (ex-data t)))))
        1)
 (check "a break inside the handler is only a snapshot"
        (binding [*clotran-break-handler* (fn [b] {:continue (:reason ((fn [] (clotran-break))))})] (brk-outer [1]))
@@ -137,7 +137,7 @@
 (def eb-seen (atom nil))
 (clotran-break-on! true)
 (def eb-result (binding [*clotran-break-handler* (fn [b] (reset! eb-seen [(:reason b) (:fn (first (:frames b)))]) :step-in)]
-                 (try (brk-boom 21) (catch Throwable t :caught))))
+                 (try (brk-boom 21) (catch clotran.host.throwable t :caught))))
 (clotran-break-on! false)
 (check "an error break reaches the handler" @eb-seen [:error "user/brk-boom"])
 (check "and the error still goes on to its catch" eb-result :caught)
@@ -148,14 +148,14 @@
 ;; the :cljs one may hold #js. This file is .clj and the conditional is
 ;; still read: clotran reads #? in every file (DEVIATIONS 33).
 
-(check "reader conditional" #?(:clj :jvm :cljs #js {} :cljf :fortran) :fortran)
+(check "reader conditional" #?(:clj :clj-side :cljs #js {} :cljf :fortran) :fortran)
 (check "reader conditional splice" [1 #?@(:cljf [2 3]) 4] [1 2 3 4])
 #?(:cljs (this-form-is-never-read))
 
 ;;; ---- deftype ----------------------------------------------------
 
 (deftype Point [x y]
-  Object
+  clotran.host.value
   (toString [this] (str "Point(" x "," y ")")))
 
 (def p (->Point 3 4))
@@ -259,7 +259,7 @@
 ;;
 ;; A REAL Fortran array: contiguous, column-major, declared kind, at an
 ;; address the collector never moves -- the one thing this host has
-;; that the JVM does not, and the reason the collector is non-moving.
+;; that clj does not, and the reason the collector is non-moving.
 ;;
 ;; In a `fortran` namespace rather than clojure.core, because these are
 ;; not Clojure's array functions with a different implementation: they
@@ -282,7 +282,7 @@
 (def m2 (f/make-array "int4" 2 3))
 (check "rank-2 shape"  (f/array-shape m2) [2 3])
 ;; alength is the OUTER length, not the element count: clj says
-;; (alength (make-array Integer/TYPE 2 3)) is 2, because a Java [[I
+;; (alength (make-array Integer/TYPE 2 3)) is 2, because a clj [[I
 ;; is an array of 2 rows. Ours is one rank-2 block, so the same
 ;; answer comes from the first extent.
 (check "rank-2 length" (f/alength m2) 2)
@@ -290,8 +290,8 @@
 (check "rank-2 aset/aget" [(f/aget m2 1 2) (f/aget m2 0 0)] [7 0])
 
 ;; Loud, not silent, on the two ways to get it wrong.
-(check "out of bounds" (try (f/aget arr 9) (catch Throwable e :err)) :err)
-(check "unknown kind"  (try (f/make-array "nope" 2) (catch Throwable e :err)) :err)
+(check "out of bounds" (try (f/aget arr 9) (catch clotran.host.throwable e :err)) :err)
+(check "unknown kind"  (try (f/make-array "nope" 2) (catch clotran.host.throwable e :err)) :err)
 
 ;; A `value` array holds clotran values, so its storage is a GC run
 ;; rather than a raw buffer -- otherwise the collector would free its
@@ -302,7 +302,7 @@
 
 ;;; ---- numeric literals --------------------------------------------
 ;;
-;; Clojure's reader has three patterns (LispReader.java 70-74) and
+;; Clojure's reader has three patterns (LispReader 70-74) and
 ;; clotran had only "all digits" and "digits with a dot". Every value
 ;; below is what `clj` printed for the same literal. The two that were
 ;; SILENTLY WRONG rather than merely unsupported are 077, which read as
@@ -353,7 +353,7 @@
 
 ;;; ---- struct maps ---------------------------------------------------
 ;;
-;; A struct map IS a map. PersistentStructMap on the JVM is a storage
+;; A struct map IS a map. PersistentStructMap in clj is a storage
 ;; optimisation -- one shared key basis plus a flat value array, so N
 ;; instances do not each carry their keys -- and nothing about its
 ;; behaviour differs. So clotran's structs are its maps, and the basis
@@ -385,14 +385,14 @@
 ;; Two disagreements, both one word:
 ;;   OBJ_SEQ had NO name at all and answered "object"
 ;;   host_super said "lazy" where type_name says "lazy-seq"
-;;   host_super said "java.lang.Character" but a class literal
+;;   host_super said "clotran.host.char" but a class literal
 ;;     strips that prefix, so the method key is :Character
 ;;
 ;; Nothing about the printer itself was wrong, which is why the values
 ;; were right the whole time and only the display was not.
 
 ;; A seq view now has a type at all. The NAME is clotran's own --
-;; clj answers clojure.lang.PersistentVector$ChunkedSeq here, since
+;; clj answers clotran.host.persistent_vector_chunked_seq here, since
 ;; clotran's classes are its tags -- but it has to be the name
 ;; is_instance already expected, or the two disagree about one value.
 
@@ -402,7 +402,7 @@
 
 ;;; ---- sort, and compare underneath it ------------------------------
 ;;
-;; `sort` is (let [a (to-array coll)] (. java.util.Arrays (sort a cmp))
+;; `sort` is (let [a (to-array coll)] (. clotran.host.arrays (sort a cmp))
 ;; (seq a)) -- so it needed four things clotran did not have: a real
 ;; mutable array from to-array, arrays that seq, Arrays/sort itself,
 ;; and a `compare` that works on more than numbers.
@@ -495,15 +495,15 @@
 ;;
 ;; Not f/make-array: clojure.core's make-array/aget/aset/alength,
 ;; running unmodified over the Fortran backing. They are written
-;; against java.lang.reflect.Array and clojure.lang.RT, so making
+;; against clotran.host.array and clotran.host.rt, so making
 ;; those work is what lets core.clj's array code run rather than be
 ;; shadowed. Every expected value below is what `clj` printed for
 ;; the same forms.
 ;;
-;; aset-int, not aset: on a primitive array the JVM's Array/set
+;; aset-int, not aset: on a primitive array clj's Array/set
 ;; refuses a boxed Long, so real Clojure throws here too.
 
-(def cm (make-array Integer/TYPE 2 3))
+(def cm (make-array clotran.host.int4/TYPE 2 3))
 (do (aset-int cm 0 0 10) (aset-int cm 0 1 11) (aset-int cm 0 2 12)
     (aset-int cm 1 0 20) (aset-int cm 1 1 21) (aset-int cm 1 2 22))
 ;; The OUTER length -- 2 rows -- not 6 elements.
@@ -523,10 +523,10 @@
 
 ;; An Object array is the `value` kind: it holds clotran values, so
 ;; plain aset works and a fresh slot reads nil, not 0.
-(def cobj (make-array Object 2))
+(def cobj (make-array clotran.host.value 2))
 (do (aset cobj 0 :hello))
 
-(def cdbl (make-array Double/TYPE 2))
+(def cdbl (make-array clotran.host.real8/TYPE 2))
 (do (aset-double cdbl 1 2.5))
 
 ;;; ---- printing a function -----------------------------------------
@@ -599,15 +599,15 @@
 ;; empty rather than absent.
 
 
-;;; ---- java.lang.Math ---------------------------------------------
-;; clojure/math.clj is a thin wrapper over java.lang.Math, so the whole
+;;; ---- clotran.host.math ---------------------------------------------
+;; clojure/math.clj is a thin wrapper over clotran.host.math, so the whole
 ;; namespace rests on these. Every expectation below is `clj`'s answer,
 ;; bit for bit -- the awkward ones (ulp, next-up, IEEE-remainder,
 ;; get-exponent) come out of Fortran's spacing/nearest/exponent
 ;; intrinsics rather than a libm binding.
 ;;
 ;; Math permits up to 1 ulp of error, and exp is where clotran and the
-;; JVM use it: (m/exp 1) differs in the last bit. Nothing here asserts
+;; clj use it: (m/exp 1) differs in the last bit. Nothing here asserts
 ;; on that one.
 
 (require (quote clojure.math))
@@ -623,12 +623,12 @@
 ;; The *Exact family throws where ordinary arithmetic wraps.
 ;; Floor division, not truncation.
 
-;; Math/abs is overloaded on the JVM: a long stays a long.
+;; Math/abs is overloaded in clj: a long stays a long.
 
 
 ;;; ---- format -----------------------------------------------------
 ;; core.clj's `format` is (String/format fmt (to-array args)), so this
-;; is java.util.Formatter -- the subset Clojure's own source and suite
+;; is clotran.host.formatter -- the subset Clojure's own source and suite
 ;; actually write. Every line checked against `clj`.
 
 ;; %b is false only for nil and false -- 0 is true.
@@ -683,7 +683,7 @@
 
 
 ;;; ---- clojure.string's host members -------------------------------
-;; clojure.string is written entirely against java.util.regex's
+;; clojure.string is written entirely against clj's regex's
 ;; Pattern and Matcher plus StringBuilder, so none of split, replace
 ;; or reverse worked without them. Every expectation is `clj`'s.
 
@@ -702,10 +702,10 @@
 ;; returned or threw. Values from `clj`.
 
 (let [n (atom 0)
-      d (delay (swap! n inc) (throw (Exception. "broken")))
-      tc (fn [] (try @d (catch Exception e e)))
+      d (delay (swap! n inc) (throw (clotran.host.exception. "broken")))
+      tc (fn [] (try @d (catch clotran.host.exception e e)))
       r1 (tc)]
-  (check "a delay's exception is an exception" (instance? Exception r1) true)
+  (check "a delay's exception is an exception" (instance? clotran.host.exception r1) true)
   (check "the same exception comes back"       (identical? r1 (tc)) true)
   (check "the body ran once"                   @n 1)
   (check "the message survives"                (.getMessage r1) "broken")
@@ -808,7 +808,7 @@
 ;; core.clj's `supers` is built from .getInterfaces, and answering an
 ;; empty one sent EVERY protocol dispatch to its (impl Object)
 ;; fallback. clojure.data's equality-partition called a map an :atom
-;; even though java.util.Map was in the impls map all along.
+;; even though clotran.host.map was in the impls map all along.
 
 (require (quote [clojure.data :as ltdata]))
 
@@ -837,7 +837,7 @@
 ;; when the action has already failed -- which it had, under the gate's
 ;; load. Values from `clj`. These live here and
 
-(defn- wait-fail [a] (loop [i 0] (when (and (nil? (agent-error a)) (< i 300)) (Thread/sleep 10) (recur (inc i)))))
+(defn- wait-fail [a] (loop [i 0] (when (and (nil? (agent-error a)) (< i 300)) (clotran.host.thread/sleep 10) (recur (inc i)))))
 ;; not in oracle.clj because a `send` keeps clj's agent pool alive and
 ;; scripts/oracle would never see clj exit.
 
@@ -851,12 +851,12 @@
   (check "send with several"   @a 18))
 
 (let [b (agent 1)]
-  (send b (fn [x] (throw (Exception. "boom"))))
+  (send b (fn [x] (throw (clotran.host.exception. "boom"))))
   (wait-fail b)
   (check "a failed agent keeps its value" @b 1)
   (check "and records the error"          (.getMessage (agent-error b)) "boom")
   (check "and refuses more work"
-         (try (send b inc) :no (catch Throwable e :refused)) :refused)
+         (try (send b inc) :no (catch clotran.host.throwable e :refused)) :refused)
   (restart-agent b 5)
   (check "restart clears it"   [@b (agent-error b)] [5 nil])
   (send b inc) (await b)
@@ -866,7 +866,7 @@
 ;; carries on as if nothing happened.
 (let [c (agent 1 :error-handler (fn [ag e] nil))]
   (check "a handler means continue" (error-mode c) :continue)
-  (send c (fn [x] (throw (Exception. "oops"))))
+  (send c (fn [x] (throw (clotran.host.exception. "oops"))))
   (send c inc) (await c)
   (check "a continuing agent is not failed" (agent-error c) nil)
   (check "and takes more work"      @c 2))
@@ -897,49 +897,49 @@
 ;; Values from clj -M on the same forms, with (shutdown-agents) after.
 (let [a (agent 0) b (agent 0)]
   (send a (fn [x] (send b inc) (throw (ex-info "x" {}))))
-  (wait-fail a) (Thread/sleep 100)
+  (wait-fail a) (clotran.host.thread/sleep 100)
   (check "a send from an action that throws is dropped" [@b (some? (agent-error a))] [0 true]))
 (let [a (agent 0) b (agent 0)]
   (send a (fn [x] (send b inc) (inc x)))
   (await a) (await b)
   (check "a send from an action that succeeds goes out after it" [@a @b] [1 1]))
 (let [a (agent 0) inside (atom nil)]
-  (dosync (send a inc) (Thread/sleep 50) (reset! inside @a))
+  (dosync (send a inc) (clotran.host.thread/sleep 50) (reset! inside @a))
   (await a)
   (check "a send inside dosync waits for the commit" [@inside @a] [0 1]))
 (let [a (agent 0)]
-  (try (dosync (send a inc) (throw (ex-info "abort" {}))) (catch Exception e nil))
-  (Thread/sleep 100)
+  (try (dosync (send a inc) (throw (ex-info "abort" {}))) (catch clotran.host.exception e nil))
+  (clotran.host.thread/sleep 100)
   (check "and an aborted transaction drops it" @a 0))
 (let [a (agent 0) b (agent 0)]
   (let [c (agent 0 :error-handler (fn [ag e] (send b + 10)))]
     (send c (fn [_] (throw (ex-info "y" {}))))
-    (Thread/sleep 200) (await b)
+    (clotran.host.thread/sleep 200) (await b)
     (check "an error handler's send goes out at once" @b 10)))
 
 ;; Agent.restart: the actions queued behind a failure are kept and
 ;; resume on restart unless :clear-actions; an agent that has not
 ;; failed refuses, and the validator judges the new state first.
 (let [a (agent 0)]
-  (send a (fn [x] (Thread/sleep 200) (throw (ex-info "x" {}))))
+  (send a (fn [x] (clotran.host.thread/sleep 200) (throw (ex-info "x" {}))))
   (send a + 5)
   (wait-fail a)
   (restart-agent a 10) (await a)
   (check "restart resumes the queued actions" @a 15))
 (let [a (agent 0)]
-  (send a (fn [x] (Thread/sleep 200) (throw (ex-info "x" {}))))
+  (send a (fn [x] (clotran.host.thread/sleep 200) (throw (ex-info "x" {}))))
   (send a + 5)
   (wait-fail a)
   (restart-agent a 10 :clear-actions true) (await a)
   (check ":clear-actions drops them" @a 10))
 (check "restart of a working agent refuses"
-       (try (restart-agent (agent 0) 1) (catch RuntimeException e (.getMessage e)))
+       (try (restart-agent (agent 0) 1) (catch clotran.host.runtime_exception e (.getMessage e)))
        "Agent does not need a restart")
 (let [a (agent 1 :validator pos?)]
   (send a (fn [_] (throw (ex-info "x" {}))))
   (wait-fail a)
   (check "restart validates the new state and keeps the failure"
-         [(try (restart-agent a -1) (catch Exception e (.getMessage e))) (some? (agent-error a)) @a]
+         [(try (restart-agent a -1) (catch clotran.host.exception e (.getMessage e))) (some? (agent-error a)) @a]
          ["Invalid reference state" true 1]))
 
 ;; A latch is a counter when there is one thread.
@@ -951,9 +951,9 @@
 (let [v (atom 1)]
   (set-validator! v pos?)
   (check "the validator is remembered" (nil? (get-validator v)) false)
-  (check "reset! is refused"  (try (reset! v -1) :no (catch IllegalStateException e :invalid)) :invalid)
+  (check "reset! is refused"  (try (reset! v -1) :no (catch clotran.host.illegal_state_exception e :invalid)) :invalid)
   (check "and the value stands" @v 1)
-  (check "swap! is refused"   (try (swap! v - 5) :no (catch IllegalStateException e :invalid)) :invalid)
+  (check "swap! is refused"   (try (swap! v - 5) :no (catch clotran.host.illegal_state_exception e :invalid)) :invalid)
   (check "still stands"       @v 1)
   (check "a good value goes through" (do (reset! v 7) @v) 7))
 ;; Clojure validates the CURRENT value on the way in.
@@ -984,7 +984,7 @@
 
 
 ;;; ---- the boxing constructors -------------------------------------
-;; (Long. 1) is 1 and (String. "x") is "x": on the JVM these wrap a
+;; (Long. 1) is 1 and (String. "x") is "x": in clj these wrap a
 ;; primitive in an object, and there is no unboxed number here to wrap.
 ;; What they still have to do is CONVERT, because (Long. "12") parses.
 ;; Every line below is `clj`'s answer.
@@ -1001,7 +1001,7 @@
 ;;
 ;; Order is specific-to-general, because dispatch takes the first
 ;; match: print-dup has a method on Long and another on Number, and
-;; only Long's prints 1 rather than #=(java.lang.Long. "1").
+;; only Long's prints 1 rather than #=(clotran.host.int8. "1").
 ;; All checked against `clj`.
 
 ;; core_print registers print-dup on PersistentVector and
@@ -1089,7 +1089,7 @@
             (mapv (comp flat deref) (mapv (fn [m] (future (blas/dgemm m m))) ms))))
        true)
 (check "dgemm refuses mismatched shapes"
-       (try (blas/dgemm dgA dgA) (catch Throwable t :refused)) :refused)
+       (try (blas/dgemm dgA dgA) (catch clotran.host.throwable t :refused)) :refused)
 
 ;;; ---- stack traces --------------------------------------------------
 ;;
@@ -1099,8 +1099,8 @@
 ;; are clotran's, so real Clojure cannot answer these.
 (defn st-thrower [] (throw (ex-info "boom" {})))
 (defn st-caller [] (st-thrower))
-(def st-trace (try (st-caller) (catch Throwable t (.getStackTrace t))))
-;; As on the JVM, the top frame is ex-info's own: the exception is
+(def st-trace (try (st-caller) (catch clotran.host.throwable t (.getStackTrace t))))
+;; As in clj, the top frame is ex-info's own: the exception is
 ;; constructed inside it.
 (check "a trace has a frame per call" (>= (alength st-trace) 3) true)
 (check "the top frame is ex-info" (.getClassName (aget st-trace 0)) "clojure.core/ex-info")
@@ -1116,7 +1116,7 @@
 ;; once beside whoever made it (PLAN.md step 14f): blocked on a promise
 ;; it cannot finish, and once the promise is delivered it goes on by
 ;; itself -- when it finishes is not ours to check, as it is not on the
-;; JVM. The values are the oracle's.
+;; clj. The values are the oracle's.
 (def tk-ping (promise)) (def tk-pong (promise))
 (def tk-t1 (future (let [x 10 y @tk-ping] (deliver tk-pong (+ x y)) :t1-done)))
 (check "a future runs until it blocks, then is parked" (future-done? tk-t1) false)
@@ -1128,18 +1128,18 @@
        @(future (mapv (fn [i] (+ i @tk-t5)) [1 2])) [8 9])
 (def tk-q (promise))
 (check "pinned, it cannot wait for the main context: a deadlock, not a hang"
-       (try @(future (mapv (fn [i] (+ i @tk-q)) [1 2])) (catch Throwable e (boolean (re-find #"deadlock" (str e))))) true)
+       (try @(future (mapv (fn [i] (+ i @tk-q)) [1 2])) (catch clotran.host.throwable e (boolean (re-find #"deadlock" (str e))))) true)
 (check "so is a wait nothing can satisfy"
-       (try @(promise) (catch Throwable t (boolean (re-find #"deadlock" (str t))))) true)
+       (try @(promise) (catch clotran.host.throwable t (boolean (re-find #"deadlock" (str t))))) true)
 (def tk-p3 (promise)) (def tk-t3 (future @tk-p3))
 (check "a parked future can be cancelled"
-       [(future-cancel tk-t3) (future-cancelled? tk-t3) (try @tk-t3 (catch java.util.concurrent.CancellationException e :cancelled))]
+       [(future-cancel tk-t3) (future-cancelled? tk-t3) (try @tk-t3 (catch clotran.host.cancellation_exception e :cancelled))]
        [true true :cancelled])
 (def tk-slow (promise)) (def tk-t7 (future (deref tk-slow 20 :gave-up)))
 (clotran.thread/sleep 30)
 (check "a deadline rides on the parked future" @tk-t7 :gave-up)
 (check "the failure's text is in the ExecutionException"
-       (try @(future (throw (ex-info "boom" {}))) (catch Throwable e (boolean (re-find #"boom" (str e))))) true)
+       (try @(future (throw (ex-info "boom" {}))) (catch clotran.host.throwable e (boolean (re-find #"boom" (str e))))) true)
 (check "a thousand futures give their contexts back"
        (count (doall (map deref (doall (map #(future (* % %)) (range 1000)))))) 1000)
 
@@ -1167,7 +1167,7 @@
 (check "join with a timeout answers the timeout value" (th/join (th/spawn (fn [] @(promise))) 5 :late) :late)
 (check "cancel! stops a thread still to finish" (let [h (th/spawn (fn [] @(promise)))] [(th/cancel! h) (th/status h) (th/cancel! h)]) [true :cancelled false])
 (check "a failure is rethrown by join"
-       (try (th/join (th/spawn (fn [] (throw (ex-info "bad" {}))))) (catch java.util.concurrent.ExecutionException e :failed)) :failed)
+       (try (th/join (th/spawn (fn [] (throw (ex-info "bad" {}))))) (catch clotran.host.execution_exception e :failed)) :failed)
 ;; a worker that squares what it is sent and replies to the sender
 (def th-worker (th/spawn (fn [] (loop [] (let [[from x] (th/receive)]
                                            (if (= x :stop) :stopped (do (th/send! from (* x x)) (recur))))))))
@@ -1181,22 +1181,22 @@
 (check "the worker stops when told" (th/join th-worker) :stopped)
 (check "a thread's self is a handle to it"
        (let [p (promise)] (th/join (th/spawn (fn [] (th/send! (th/self) :note) (deliver p (th/receive)) @p)))) :note)
-(check "the main thread is not joinable" (try (th/join (th/self)) (catch Throwable e :no)) :no)
+(check "the main thread is not joinable" (try (th/join (th/self)) (catch clotran.host.throwable e :no)) :no)
 
 ;;; ---- ::keywords resolve in the reader, against *ns* and its aliases ----
 (check "::b is the current namespace's" (namespace ::b) "user")
 (check "and prints so" (pr-str ::b) ":user/b")
 (require '[clojure.string :as lt-s])
 (check "::alias/x goes through the alias" (namespace ::lt-s/x) "clojure.string")
-(check "a namespace name is not an alias" (try (read-string "::clojure.core/x") (catch Exception e :invalid)) :invalid)
-(check "an alias nobody made is an invalid token" (try (read-string "::nope/x") (catch Exception e (boolean (re-find #"Invalid token" (.getMessage e))))) true)
+(check "a namespace name is not an alias" (try (read-string "::clojure.core/x") (catch clotran.host.exception e :invalid)) :invalid)
+(check "an alias nobody made is an invalid token" (try (read-string "::nope/x") (catch clotran.host.exception e (boolean (re-find #"Invalid token" (.getMessage e))))) true)
 
 ;;; ---- an agent's error handler is handed the error itself -- an oracle
-;;; case would leave clj's agent pool running and its JVM never exiting
+;;; case would leave clj's agent pool running and its process never exiting
 (check "the handler sees the error's class"
        (let [err (atom nil) a (agent 0 :error-mode :continue :error-handler #(reset! err %&))]
          (send a /) (await-for 1000 a)
-         [(instance? ArithmeticException (second @err)) (= a (first @err)) @a (agent-error a)])
+         [(instance? clotran.host.arithmetic_exception (second @err)) (= a (first @err)) @a (agent-error a)])
        [true true 0 nil])
 
 
@@ -1206,25 +1206,25 @@
 ;; path) opens it and interns its routines as fns in the namespace the
 ;; manifest names.
 (def tp (try (fortran/load-package "build/libtestpkg.dylib")
-             (catch Exception e (fortran/load-package "build/libtestpkg.so"))))
+             (catch clotran.host.exception e (fortran/load-package "build/libtestpkg.so"))))
 (check "the manifest names the package" (:package tp) "testpkg")
 (check "an :out scalar comes back by name" (testpkg/double-it 21.0) {:y 42.0})
 (check "an array goes by pointer with its extent; a :returns value is the value"
-       (let [a (make-array Double/TYPE 3)] (aset a 0 1.5) (aset a 1 2.5) (aset a 2 3.0) (testpkg/sum-arr a)) 7.0)
+       (let [a (make-array clotran.host.real8/TYPE 3)] (aset a 0 1.5) (aset a 1 2.5) (aset a 2 3.0) (testpkg/sum-arr a)) 7.0)
 (check "an :inout array is written in place"
-       (let [a (make-array Double/TYPE 2)] (aset a 0 1.0) (aset a 1 2.0) (testpkg/scale! a 10.0) [(aget a 0) (aget a 1)]) [10.0 20.0])
+       (let [a (make-array clotran.host.real8/TYPE 2)] (aset a 0 1.0) (aset a 1 2.0) (testpkg/scale! a 10.0) [(aget a 0) (aget a 1)]) [10.0 20.0])
 (check "a string crosses null-terminated" (testpkg/count-chars "hello") 5)
 (check "two :out scalars" (testpkg/divmod 17 5) {:q 3 :r 2})
-(check "a library that is not there is an error" (try (fortran/load-package "build/nope.dylib") :loaded (catch Exception e :no)) :no)
-(check "the wrong argument count is an ArityException" (try (testpkg/double-it) (catch clojure.lang.ArityException e :arity)) :arity)
-(check "a scalar where an array is wanted is an error" (try (testpkg/sum-arr 1.0) (catch Exception e :not-array)) :not-array)
+(check "a library that is not there is an error" (try (fortran/load-package "build/nope.dylib") :loaded (catch clotran.host.exception e :no)) :no)
+(check "the wrong argument count is an ArityException" (try (testpkg/double-it) (catch clotran.host.arity_exception e :arity)) :arity)
+(check "a scalar where an array is wanted is an error" (try (testpkg/sum-arr 1.0) (catch clotran.host.exception e :not-array)) :not-array)
 (check "the fns carry arglists" (:arglists (meta #'testpkg/divmod)) '([a b]))
 
 ;;; ---- a library bound by the generator: scripts/bind-fortran -----------
 ;; test/f/samplelib.f90 has no shims and no manifest; the Makefile runs
 ;; the generator over it and builds build/libsamplelib from the two.
 (def sl (try (fortran/load-package "build/libsamplelib.dylib")
-             (catch Exception e (fortran/load-package "build/libsamplelib.so"))))
+             (catch clotran.host.exception e (fortran/load-package "build/libsamplelib.so"))))
 (check "the generator named the package" (:package sl) "samplelib.raw")
 (check "a generated :out scalar" (samplelib.raw/double-it 21.0) {:y 42.0})
 (check "a generated function over an array and its length"
@@ -1248,7 +1248,7 @@
 (check "with-precision narrows it" (with-precision 10 (/ 1M 3)) 0.3333333333M)
 (check "and nil asks for Clojure's own arithmetic back"
        (binding [*math-context* nil]
-         (try (/ 1M 3) (catch ArithmeticException e :exact-or-throw)))
+         (try (/ 1M 3) (catch clotran.host.arithmetic_exception e :exact-or-throw)))
        :exact-or-throw)
 (check "a literal keeps every digit it was written with"
        (str 1.2345678901234567890123456789012345678901M)
@@ -1351,23 +1351,23 @@
 ;;; macro spec check -- left frames that showed in later traces.
 (defprotocol LeakP (leak-m [x]))
 (deftype LeakT [] LeakP (leak-m [this] 1))
-(defn stack-depth [] (count (.getStackTrace (Exception.))))
+(defn stack-depth [] (count (.getStackTrace (clotran.host.exception.))))
 (check "a protocol call to an inline method leaves no frame"
        (let [d (stack-depth)] (dotimes [_ 5] (leak-m (LeakT.)) (leak-m (reify LeakP (leak-m [_] 2)))) (- (stack-depth) d))
        0)
 (check "a caught throw leaves no frame"
-       (let [d (stack-depth)] (dotimes [_ 5] (try (leak-m 1) (catch Exception e nil))) (- (stack-depth) d))
+       (let [d (stack-depth)] (dotimes [_ 5] (try (leak-m 1) (catch clotran.host.exception e nil))) (- (stack-depth) d))
        0)
 
 ;;; core's one-line wrappers run as their builtin but keep their entry,
-;;; as clojure.core$first is in the JVM's trace -- whichever way called
+;;; as clojure.core$first is in clj's trace -- whichever way called
 (defn wr-direct [x] (first x))
 (defn wr-local [x] (let [f first] (f x)))
 (defn wr-apply [x] (apply first [x]))
-(defn wr-trace [g] (try (g 5) (catch Exception e (boolean (some #(clojure.string/includes? (str %) "clojure.core/first") (.getStackTrace e))))))
+(defn wr-trace [g] (try (g 5) (catch clotran.host.exception e (boolean (some #(clojure.string/includes? (str %) "clojure.core/first") (.getStackTrace e))))))
 (check "an elided core wrapper is on the trace" (mapv wr-trace [wr-direct wr-local wr-apply]) [true true true])
 (check "an elided core wrapper leaves no frame"
-       (let [d (stack-depth)] (dotimes [_ 5] (first [1]) (wr-local [1]) (wr-apply [1]) (try (wr-direct 5) (catch Exception e nil))) (- (stack-depth) d))
+       (let [d (stack-depth)] (dotimes [_ 5] (first [1]) (wr-local [1]) (wr-apply [1]) (try (wr-direct 5) (catch clotran.host.exception e nil))) (- (stack-depth) d))
        0)
 
 ;;; ---- sockets and the socket REPL (PLAN step 21): loopback only, a
@@ -1388,7 +1388,7 @@
        ["15 λ" :done])
 (check "connecting to nothing is an IOException"
        (let [s (net/listen 0 {:host "127.0.0.1"}) p (:port s)] (net/close s)
-         (try (net/connect "127.0.0.1" p) :connected (catch java.io.IOException e :refused)))
+         (try (net/connect "127.0.0.1" p) :connected (catch clotran.host.io_exception e :refused)))
        :refused)
 (defn repl-says [lines]
   (let [s (srv/start-server {:name "lt" :port 0})
@@ -1418,10 +1418,10 @@
               (finally (net/close c) (net/close s))))
        [6 6 "5:λλ" -1])
 (check "an array is not text: String. refuses it rather than printing the object"
-       (mapv #(try (String. %) (catch IllegalArgumentException e :refused)) [(byte-array [97]) (char-array "ab")])
+       (mapv #(try (clotran.host.string. %) (catch clotran.host.illegal_argument_exception e :refused)) [(byte-array [97]) (char-array "ab")])
        [:refused :refused])
 (check "a read-bytes past the array is refused"
-       (try (clotran-socket-read-bytes 0 (byte-array 2) 1 5 0) (catch IndexOutOfBoundsException e :refused))
+       (try (clotran-socket-read-bytes 0 (byte-array 2) 1 5 0) (catch clotran.host.index_out_of_bounds_exception e :refused))
        :refused)
 (defn prepl-says [lines]
   (let [s (srv/start-server {:name "lt-prepl" :port 0 :accept 'clotran.server/io-prepl})
@@ -1430,7 +1430,7 @@
          (loop [acc []] (if-let [m (read {:eof nil} r)] (recur (conj acc (dissoc m :ms))) acc))
          (finally (net/close c) (srv/stop-server "lt-prepl")))))
 ;; the messages clj's own clojure.core.server/io-prepl sends for the same
-;; input, :ms and an exception's JVM frames aside (checked 2026-09-29)
+;; input, :ms and an exception's clj frames aside (checked 2026-09-29)
 (check "the prepl: a value, printed output, a failure, the namespace, a tap"
        (let [ms (prepl-says ["(+ 1 2)" "(println \"hi\")" "(/ 1 0)" "(ns lt-p)" "(tap> :t)" "(Thread/sleep 200)" ":repl/quit"])]
          ;; a tap may arrive before or after its :ret, in clj as here -- and

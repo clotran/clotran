@@ -11,14 +11,14 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;; definterface ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn namespace-munge
-  "Convert a Clojure namespace name to a legal Java package name."
+  "Convert a Clojure namespace name to a legal host package name."
   {:added "1.2"}
   [ns]
   (.replace (str ns) \- \_))
 
 ;for now, built on gen-interface
 (defmacro definterface
-  "Creates a new Java interface with the given name and method sigs.
+  "Creates a new host interface with the given name and method sigs.
   The method return types and parameter types may be specified with type hints,
   defaulting to Object if omitted.
 
@@ -27,7 +27,7 @@
     (^Bar method2 [^Baz b ^Quux q]))"
   {:added "1.2"} ;; Present since 1.2, but made public in 1.5.
   [name & sigs]
-  (let [tag (fn [x] (or (:tag (meta x)) Object))
+  (let [tag (fn [x] (or (:tag (meta x)) clotran.host.value))
         psig (fn [[name [& args]]]
                (vector name (vec (map tag args)) (tag name) (map meta args)))
         cname (with-meta (symbol (str (namespace-munge *ns*) "." name)) (meta name))]
@@ -58,13 +58,13 @@
                                %)
                             (keys impls))
                        set
-                       (disj 'Object 'java.lang.Object)
+                       (disj 'clotran.host.value 'clotran.host.value)
                        vec)
         methods (map (fn [[name params & body]]
                        (cons name (maybe-destructured params body)))
                      (apply concat (vals impls)))]
     (when-let [bad-opts (seq (remove #{:no-print :load-ns} (keys opts)))]
-      (throw (IllegalArgumentException. (apply print-str "Unsupported option(s) -" bad-opts))))
+      (throw (clotran.host.illegal_argument_exception. (apply print-str "Unsupported option(s) -" bad-opts))))
     [interfaces methods opts]))
 
 (defmacro reify
@@ -84,7 +84,7 @@
   Methods should be supplied for all methods of the desired
   protocol(s) and interface(s). You can also define overrides for
   methods of Object. Note that the first parameter must be supplied to
-  correspond to the target object ('this' in Java parlance). Thus
+  correspond to the target object ('this' in host parlance). Thus
   methods for interfaces will take one more argument than do the
   interface declarations.  Note also that recur calls to the method
   head should *not* pass the target object, it will be supplied
@@ -111,11 +111,11 @@
   == \"foo\"
 
   (seq (let [f \"foo\"] 
-         (reify clojure.lang.Seqable
+         (reify clotran.host.seqable
            (seq [this] (seq f)))))
   == (\\f \\o \\o)
   
-  reify always implements clojure.lang.IObj and transfers meta
+  reify always implements clotran.host.i_obj and transfers meta
   data of the form to the created object.
   
   (meta ^{:k :v} (reify Object (toString [this] \"foo\")))
@@ -126,24 +126,24 @@
     (with-meta `(reify* ~interfaces ~@methods) (meta &form))))
 
 (defn hash-combine [x y] 
-  (clojure.lang.Util/hashCombine x (clojure.lang.Util/hash y)))
+  (clotran.host.util/hashCombine x (clotran.host.util/hash y)))
 
 (defn munge [s]
-  ((if (symbol? s) symbol str) (clojure.lang.Compiler/munge (str s))))
+  ((if (symbol? s) symbol str) (clotran.host.compiler/munge (str s))))
 
 (defn- imap-cons
   [^IPersistentMap this o]
   (cond
    (map-entry? o)
-     (let [^java.util.Map$Entry pair o]
+     (let [^clotran.host.map_entry pair o]
        (.assoc this (.getKey pair) (.getValue pair)))
-   (instance? clojure.lang.IPersistentVector o)
-     (let [^clojure.lang.IPersistentVector vec o]
+   (instance? clotran.host.i_persistent_vector o)
+     (let [^clotran.host.i_persistent_vector vec o]
        (.assoc this (.nth vec 0) (.nth vec 1)))
    :else (loop [this this
                 o o]
       (if (seq o)
-        (let [^java.util.Map$Entry pair (first o)]
+        (let [^clotran.host.map_entry pair (first o)]
           (recur (.assoc this (.getKey pair) (.getValue pair)) (rest o)))
         this))))
 
@@ -163,34 +163,34 @@
                      '^:unsynchronized-mutable __hasheq)
         type-hash (hash classname)]
     (when (some #{:volatile-mutable :unsynchronized-mutable} (mapcat (comp keys meta) hinted-fields))
-      (throw (IllegalArgumentException. ":volatile-mutable or :unsynchronized-mutable not supported for record fields")))
+      (throw (clotran.host.illegal_argument_exception. ":volatile-mutable or :unsynchronized-mutable not supported for record fields")))
     (let [gs (gensym)]
     (letfn 
      [(irecord [[i m]]
-        [(conj i 'clojure.lang.IRecord)
+        [(conj i 'clotran.host.i_record)
          m])
       (eqhash [[i m]] 
-        [(conj i 'clojure.lang.IHashEq)
+        [(conj i 'clotran.host.i_hash_eq)
          (conj m
                `(hasheq [this#] (let [hq# ~'__hasheq]
                                   (if (zero? hq#)
-                                    (let [h# (int (bit-xor ~type-hash (clojure.lang.APersistentMap/mapHasheq this#)))]
+                                    (let [h# (int (bit-xor ~type-hash (clotran.host.a_persistent_map/mapHasheq this#)))]
                                       (set! ~'__hasheq h#)
                                       h#)
                                     hq#)))
                `(hashCode [this#] (let [hash# ~'__hash]
                                     (if (zero? hash#)
-                                      (let [h# (clojure.lang.APersistentMap/mapHash this#)]
+                                      (let [h# (clotran.host.a_persistent_map/mapHash this#)]
                                         (set! ~'__hash h#)
                                         h#)
                                       hash#)))
-               `(equals [this# ~gs] (clojure.lang.APersistentMap/mapEquals this# ~gs)))])
+               `(equals [this# ~gs] (clotran.host.a_persistent_map/mapEquals this# ~gs)))])
       (iobj [[i m]] 
-            [(conj i 'clojure.lang.IObj)
+            [(conj i 'clotran.host.i_obj)
              (conj m `(meta [this#] ~'__meta)
                    `(withMeta [this# ~gs] (new ~tagname ~@(replace {'__meta gs} fields))))])
       (ilookup [[i m]] 
-         [(conj i 'clojure.lang.ILookup 'clojure.lang.IKeywordLookup)
+         [(conj i 'clotran.host.i_lookup 'clotran.host.i_keyword_lookup)
           (conj m `(valAt [this# k#] (.valAt this# k# nil))
                 `(valAt [this# k# else#] 
                    (case k# ~@(mapcat (fn [fld] [(keyword fld) fld]) 
@@ -203,7 +203,7 @@
                                (mapcat 
                                 (fn [fld]
                                   [(keyword fld)
-                                   `(reify clojure.lang.ILookupThunk
+                                   `(reify clotran.host.i_lookup_thunk
                                            (get [~'thunk ~'gtarget]
                                                 (if (identical? (class ~'gtarget) ~'gclass)
                                                   (. ~hinted-target ~(symbol (str "-" fld)))
@@ -211,10 +211,10 @@
                                 base-fields))
                            nil))))])
       (imap [[i m]] 
-            [(conj i 'clojure.lang.IPersistentMap)
+            [(conj i 'clotran.host.i_persistent_map)
              (conj m 
                    `(count [this#] (+ ~(count base-fields) (count ~'__extmap)))
-                   `(empty [this#] (throw (UnsupportedOperationException. (str "Can't create empty: " ~(str classname)))))
+                   `(empty [this#] (throw (clotran.host.unsupported_operation_exception. (str "Can't create empty: " ~(str classname)))))
                    `(cons [this# e#] ((var imap-cons) this# e#))
                    `(equiv [this# ~gs] 
                         (boolean 
@@ -226,11 +226,11 @@
                    `(containsKey [this# k#] (not (identical? this# (.valAt this# k# this#))))
                    `(entryAt [this# k#] (let [v# (.valAt this# k# this#)]
                                             (when-not (identical? this# v#)
-                                              (clojure.lang.MapEntry/create k# v#))))
-                   `(seq [this#] (seq (concat [~@(map #(list `clojure.lang.MapEntry/create (keyword %) %) base-fields)]
+                                              (clotran.host.map_entry/create k# v#))))
+                   `(seq [this#] (seq (concat [~@(map #(list `clotran.host.map_entry/create (keyword %) %) base-fields)]
                                               ~'__extmap)))
                    `(iterator [~gs]
-                        (clojure.lang.RecordIterator. ~gs [~@(map keyword base-fields)] (RT/iter ~'__extmap)))
+                        (clotran.host.record_iterator. ~gs [~@(map keyword base-fields)] (RT/iter ~'__extmap)))
                    `(assoc [this# k# ~gs]
                      (condp identical? k#
                        ~@(mapcat (fn [fld]
@@ -241,22 +241,22 @@
                                             (dissoc (with-meta (into {} this#) ~'__meta) k#)
                                             (new ~tagname ~@(remove '#{__extmap __hash __hasheq} fields)
                                                  (not-empty (dissoc ~'__extmap k#))))))])
-      (ijavamap [[i m]]
-                [(conj i 'java.util.Map 'java.io.Serializable)
+      (ihostmap [[i m]]
+                [(conj i 'clotran.host.map 'clotran.host.serializable)
                  (conj m
                        `(size [this#] (.count this#))
                        `(isEmpty [this#] (= 0 (.count this#)))
                        `(containsValue [this# v#] (boolean (some #{v#} (vals this#))))
                        `(get [this# k#] (.valAt this# k#))
-                       `(put [this# k# v#] (throw (UnsupportedOperationException.)))
-                       `(remove [this# k#] (throw (UnsupportedOperationException.)))
-                       `(putAll [this# m#] (throw (UnsupportedOperationException.)))
-                       `(clear [this#] (throw (UnsupportedOperationException.)))
+                       `(put [this# k# v#] (throw (clotran.host.unsupported_operation_exception.)))
+                       `(remove [this# k#] (throw (clotran.host.unsupported_operation_exception.)))
+                       `(putAll [this# m#] (throw (clotran.host.unsupported_operation_exception.)))
+                       `(clear [this#] (throw (clotran.host.unsupported_operation_exception.)))
                        `(keySet [this#] (set (keys this#)))
                        `(values [this#] (vals this#))
                        `(entrySet [this#] (set this#)))])
       ]
-     (let [[i m] (-> [interfaces methods] irecord eqhash iobj ilookup imap ijavamap)]
+     (let [[i m] (-> [interfaces methods] irecord eqhash iobj ilookup imap ihostmap)]
        `(deftype* ~(symbol (name (ns-name *ns*)) (name tagname)) ~classname
           ~(conj hinted-fields '__meta '__extmap
                  '^int ^:unsynchronized-mutable __hash
@@ -289,24 +289,24 @@
                   ~@field-args
                   ~@(for [i (range 0 (count over))]
                       (list `nth 'overage i)))
-             (throw (clojure.lang.ArityException. (+ ~arg-count (count ~'overage)) (name '~fn-name))))
+             (throw (clotran.host.arity_exception. (+ ~arg-count (count ~'overage)) (name '~fn-name))))
           `(new ~classname ~@field-args)))))
 
 (defn- validate-fields
   ""
   [fields name]
   (when-not (vector? fields)
-    (throw (AssertionError. "No fields vector given.")))
+    (throw (clotran.host.assertion_error. "No fields vector given.")))
   (let [specials '#{__meta __hash __hasheq __extmap}]
     (when (some specials fields)
-      (throw (AssertionError. (str "The names in " specials " cannot be used as field names for types or records.")))))
+      (throw (clotran.host.assertion_error. (str "The names in " specials " cannot be used as field names for types or records.")))))
   (let [non-syms (remove symbol? fields)]
     (when (seq non-syms)
-      (throw (clojure.lang.Compiler$CompilerException.
+      (throw (clotran.host.compiler_compiler_exception.
               *file*
-              (.deref clojure.lang.Compiler/LINE)
-              (.deref clojure.lang.Compiler/COLUMN)
-              (AssertionError.
+              (.deref clotran.host.compiler/LINE)
+              (.deref clotran.host.compiler/COLUMN)
+              (clotran.host.assertion_error.
                (str "defrecord and deftype fields must be symbols, "
                     *ns* "." name " had: "
                     (apply str (interpose ", " non-syms)))))))))
@@ -350,7 +350,7 @@
   Methods should be supplied for all methods of the desired
   protocol(s) and interface(s). You can also define overrides for
   methods of Object. Note that a parameter must be supplied to
-  correspond to the target object ('this' in Java parlance). Thus
+  correspond to the target object ('this' in host parlance). Thus
   methods for interfaces will take one more argument than do the
   interface declarations. Note also that recur calls to the method
   head should *not* pass the target object, it will be supplied
@@ -359,13 +359,13 @@
   In the method bodies, the (unqualified) name can be used to name the
   class (for calls to new, instance? etc).
 
-  The class will have implementations of several (clojure.lang)
+  The class will have implementations of several (clotran.host)
   interfaces generated automatically: IObj (metadata support) and
   IPersistentMap, and all of their superinterfaces.
 
   In addition, defrecord will define type-and-value-based =,
-  and will defined Java .hashCode and .equals consistent with the
-  contract for java.util.Map.
+  and will defined host .hashCode and .equals consistent with the
+  contract for clotran.host.map.
 
   When AOT compiling, generates compiled bytecode for a class with the
   given name (a symbol), prepends the current ns as the package, and
@@ -401,7 +401,7 @@
        (defn ~(symbol (str 'map-> gname))
          ~(str "Factory function for class " classname ", taking a map of keywords to field values.")
          ([m#] (~(symbol (str classname "/create"))
-                (if (instance? clojure.lang.MapEquivalence m#) m# (into {} m#)))))
+                (if (instance? clotran.host.map_equivalence m#) m# (into {} m#)))))
        ~classname)))
 
 (defn record?
@@ -409,13 +409,13 @@
   {:added "1.6"
    :static true}
   [x]
-  (instance? clojure.lang.IRecord x))
+  (instance? clotran.host.i_record x))
 
 (defn- emit-deftype*
   "Do not use this directly - use deftype"
   [tagname cname fields interfaces methods opts]
   (let [classname (with-meta (symbol (str (namespace-munge *ns*) "." cname)) (meta cname))
-        interfaces (conj interfaces 'clojure.lang.IType)]
+        interfaces (conj interfaces 'clotran.host.i_type)]
     `(deftype* ~(symbol (name (ns-name *ns*)) (name tagname)) ~classname ~fields
        :implements ~interfaces 
        ~@(mapcat identity opts)
@@ -468,7 +468,7 @@
   Methods should be supplied for all methods of the desired
   protocol(s) and interface(s). You can also define overrides for
   methods of Object. Note that a parameter must be supplied to
-  correspond to the target object ('this' in Java parlance). Thus
+  correspond to the target object ('this' in host parlance). Thus
   methods for interfaces will take one more argument than do the
   interface declarations. Note also that recur calls to the method
   head should *not* pass the target object, it will be supplied
@@ -507,31 +507,31 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;; protocols ;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defn- expand-method-impl-cache [^clojure.lang.MethodImplCache cache c f]
+(defn- expand-method-impl-cache [^clotran.host.method_impl_cache cache c f]
   (if (.map cache)
-    (let [cs (assoc (.map cache) c (clojure.lang.MethodImplCache$Entry. c f))]
-      (clojure.lang.MethodImplCache. (.sym cache) (.protocol cache) (.methodk cache) cs))
+    (let [cs (assoc (.map cache) c (clotran.host.method_impl_cache_entry. c f))]
+      (clotran.host.method_impl_cache. (.sym cache) (.protocol cache) (.methodk cache) cs))
     (let [cs (into1 {} (remove (fn [[c e]] (nil? e)) (map vec (partition 2 (.table cache)))))
-          cs (assoc cs c (clojure.lang.MethodImplCache$Entry. c f))]
+          cs (assoc cs c (clotran.host.method_impl_cache_entry. c f))]
       (if-let [[shift mask] (maybe-min-hash (map hash (keys cs)))]
-        (let [table (make-array Object (* 2 (inc mask)))
+        (let [table (make-array clotran.host.value (* 2 (inc mask)))
               table (reduce1 (fn [^objects t [c e]]
                                (let [i (* 2 (int (shift-mask shift mask (hash c))))]
                                  (aset t i c)
                                  (aset t (inc i) e)
                                  t))
                              table cs)]
-          (clojure.lang.MethodImplCache. (.sym cache) (.protocol cache) (.methodk cache) shift mask table))
-        (clojure.lang.MethodImplCache. (.sym cache) (.protocol cache) (.methodk cache) cs)))))
+          (clotran.host.method_impl_cache. (.sym cache) (.protocol cache) (.methodk cache) shift mask table))
+        (clotran.host.method_impl_cache. (.sym cache) (.protocol cache) (.methodk cache) cs)))))
 
-(defn- super-chain [^Class c]
+(defn- super-chain [^clotran.host.class c]
   (when c
     (cons c (super-chain (.getSuperclass c)))))
 
 (defn- pref
   ([] nil)
   ([a] a) 
-  ([^Class a ^Class b]
+  ([^clotran.host.class a ^clotran.host.class b]
      (if (.isAssignableFrom a b) b a)))
 
 (defn find-protocol-impl [protocol x]
@@ -541,9 +541,9 @@
           impl #(get (:impls protocol) %)]
       (or (impl c)
           (and c (or (first (remove nil? (map impl (butlast (super-chain c)))))
-                     (when-let [t (reduce1 pref (filter impl (disj (supers c) Object)))]
+                     (when-let [t (reduce1 pref (filter impl (disj (supers c) clotran.host.value)))]
                        (impl t))
-                     (impl Object)))))))
+                     (impl clotran.host.value)))))))
 
 (defn find-protocol-method [protocol methodk x]
   (get (find-protocol-impl protocol x) methodk))
@@ -553,7 +553,7 @@
   (boolean (:on-interface maybe-p)))
 
 (defn- implements? [protocol atype]
-  (and atype (.isAssignableFrom ^Class (:on-interface protocol) atype)))
+  (and atype (.isAssignableFrom ^clotran.host.class (:on-interface protocol) atype)))
 
 (defn extends? 
   "Returns true if atype extends protocol"
@@ -574,13 +574,13 @@
   [protocol x]
   (boolean (find-protocol-impl protocol x)))
 
-(defn -cache-protocol-fn [^clojure.lang.AFunction pf x ^Class c ^clojure.lang.IFn interf]
+(defn -cache-protocol-fn [^clotran.host.a_function pf x ^clotran.host.class c ^clotran.host.i_fn interf]
   (let [cache  (.__methodImplCache pf)
         f (if (.isInstance c x)
             interf
             (find-protocol-method (.protocol cache) (.methodk cache) x))]
     (when-not f
-            (throw (IllegalArgumentException. (str "No implementation of method: " (.methodk cache) 
+            (throw (clotran.host.illegal_argument_exception. (str "No implementation of method: " (.methodk cache) 
                                                    " of protocol: " (:var (.protocol cache)) 
                                              " found for class: " (if (nil? x) "nil" (.getName (class x)))))))
     (set! (.__methodImplCache pf) (expand-method-impl-cache cache (class x) f))
@@ -588,7 +588,7 @@
 
 (defn- emit-method-builder [on-interface method on-method arglists extend-via-meta]
   (let [methodk (keyword method)
-        gthis (with-meta (gensym) {:tag 'clojure.lang.AFunction})
+        gthis (with-meta (gensym) {:tag 'clotran.host.a_function})
         ginterf (gensym)]
     `(fn [cache#]
        (let [~ginterf
@@ -600,7 +600,7 @@
                       `([~@gargs]
                           (. ~(with-meta target {:tag on-interface}) (~(or on-method method) ~@(rest gargs))))))
                   arglists))
-             ^clojure.lang.AFunction f#
+             ^clotran.host.a_function f#
              (fn ~gthis
                ~@(map 
                   (fn [args]
@@ -609,7 +609,7 @@
                       (if extend-via-meta
                         `([~@gargs]
                             (let [cache# (.__methodImplCache ~gthis)
-                                  f# (.fnFor cache# (clojure.lang.Util/classOf ~target))]
+                                  f# (.fnFor cache# (clotran.host.util/classOf ~target))]
                               (if (identical? f# ~ginterf)
                                 (f# ~@gargs)
                                 (if-let [meta# (when-let [m# (meta ~target)] ((.sym cache#) m#))]
@@ -619,7 +619,7 @@
                                     ((-cache-protocol-fn ~gthis ~target ~on-interface ~ginterf) ~@gargs))))))
                         `([~@gargs]
                             (let [cache# (.__methodImplCache ~gthis)
-                                  f# (.fnFor cache# (clojure.lang.Util/classOf ~target))]
+                                  f# (.fnFor cache# (clotran.host.util/classOf ~target))]
                               (if f#
                                 (f# ~@gargs)
                                 ((-cache-protocol-fn ~gthis ~target ~on-interface ~ginterf) ~@gargs)))))))
@@ -628,8 +628,8 @@
          f#))))
 
 (defn -reset-methods [protocol]
-  (doseq [[^clojure.lang.Var v build] (:method-builders protocol)]
-    (let [cache (clojure.lang.MethodImplCache. (symbol v) protocol (keyword (.sym v)))]
+  (doseq [[^clotran.host.var v build] (:method-builders protocol)]
+    (let [cache (clotran.host.method_impl_cache. (symbol v) protocol (keyword (.sym v)))]
       (.bindRoot v (build cache)))))
 
 (defn- assert-same-protocol [protocol-var method-syms]
@@ -657,8 +657,8 @@
                                 array-tag? '#{ints longs floats doubles chars shorts bytes booleans objects}
                                 resolve-class-symbol (fn [tag]
                                                        (when-not (disallowed? tag)
-                                                         (if-let [c (and (instance? clojure.lang.Symbol tag)
-                                                                         (= (.indexOf (.getName ^clojure.lang.Symbol tag) ".") -1)
+                                                         (if-let [c (and (instance? clotran.host.symbol tag)
+                                                                         (= (.indexOf (.getName ^clotran.host.symbol tag) ".") -1)
                                                                          (not (array-tag? tag))
                                                                          (resolve tag))]
                                                            (symbol (.getName c))
@@ -671,9 +671,9 @@
                                     (recur (conj as (first rs)) (next rs))
                                     [(seq as) (first rs)]))]
                             (when (some #{0} (map count arglists))
-                              (throw (IllegalArgumentException. (str "Definition of function " mname " in protocol " name " must take at least one arg."))))
+                              (throw (clotran.host.illegal_argument_exception. (str "Definition of function " mname " in protocol " name " must take at least one arg."))))
                             (when (m (keyword mname))
-                              (throw (IllegalArgumentException. (str "Function " mname " in protocol " name " was redefined. Specify all arities in single definition."))))
+                              (throw (clotran.host.illegal_argument_exception. (str "Function " mname " in protocol " name " was redefined. Specify all arities in single definition."))))
                             (assoc m (keyword mname)
                                    (merge name-meta
                                           {:name (vary-meta mname assoc :doc doc :arglists arglists)
@@ -682,7 +682,7 @@
                         {} sigs))
         meths (mapcat (fn [sig]
                         (let [m (munge (:name sig))]
-                          (map #(vector m (vec (repeat (dec (count %))'Object)) 'Object) 
+                          (map #(vector m (vec (repeat (dec (count %))'clotran.host.value)) 'clotran.host.value) 
                                (:arglists sig))))
                       (vals sigs))]
   `(do
@@ -733,7 +733,7 @@
   namespace-qualified by the ns enclosing the definition The resulting
   functions dispatch on the type of their first argument, which is
   required and corresponds to the implicit target object ('this' in 
-  Java parlance). defprotocol is dynamic, has no special compile-time 
+  host parlance). defprotocol is dynamic, has no special compile-time 
   effect, and defines no new types or classes. Implementations of 
   the protocol methods can be provided using extend.
 
@@ -798,7 +798,7 @@
   fns. This facilitates easy reuse of existing fns and fn maps, for
   code reuse/mixins without derivation or composition. You can extend
   an interface to a protocol. This is primarily to facilitate interop
-  with the host (e.g. Java) but opens the door to incidental multiple
+  with the host (e.g. host) but opens the door to incidental multiple
   inheritance of implementation since a class can inherit from more
   than one interface, both of which extend the protocol. It is TBD how
   to specify which impl to use. You can extend a protocol on nil.
@@ -816,10 +816,10 @@
   [atype & proto+mmaps]
   (doseq [[proto mmap] (partition 2 proto+mmaps)]
     (when-not (protocol? proto)
-      (throw (IllegalArgumentException.
+      (throw (clotran.host.illegal_argument_exception.
               (str proto " is not a protocol"))))
     (when (implements? proto atype)
-      (throw (IllegalArgumentException. 
+      (throw (clotran.host.illegal_argument_exception. 
               (str atype " already directly implements " (:on-interface proto) " for protocol:"  
                    (:var proto)))))
     (-reset-methods (alter-var-root (:var proto) assoc-in [:impls atype] mmap))))

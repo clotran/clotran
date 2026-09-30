@@ -10,7 +10,7 @@
        :author "Rich Hickey"}
   clojure.xml
   (:import (org.xml.sax ContentHandler Attributes SAXException)
-           (javax.xml.parsers SAXParser SAXParserFactory)))
+           ))
 
 (def ^:dynamic *stack*)
 (def ^:dynamic *current*)
@@ -28,20 +28,20 @@
                        (assoc e :content (conj (or (:content e) []) c)))
         push-chars (fn []
                      (when (and (= *state* :chars)
-                                (some (complement #(Character/isWhitespace (char %))) (str *sb*)))
+                                (some (complement #(clotran.host.char/isWhitespace (char %))) (str *sb*)))
                        (set! *current* (push-content *current* (str *sb*)))))]
-    (new clojure.lang.XMLHandler
+    (new clotran.host.xml_handler
          (proxy [ContentHandler] []
            (startElement [uri local-name q-name ^Attributes atts]
              (let [attrs (fn [ret i]
                            (if (neg? i)
                              ret
                              (recur (assoc ret
-                                           (clojure.lang.Keyword/intern (symbol (.getQName atts i)))
+                                           (clotran.host.keyword/intern (symbol (.getQName atts i)))
                                            (.getValue atts (int i)))
                                     (dec i))))
                    e (struct element
-                             (. clojure.lang.Keyword (intern (symbol q-name)))
+                             (. clotran.host.keyword (intern (symbol q-name)))
                              (when (pos? (.getLength atts))
                                (attrs {} (dec (.getLength atts)))))]
                (push-chars)
@@ -57,8 +57,8 @@
              nil)
            (characters [^chars ch start length]
              (when-not (= *state* :chars)
-               (set! *sb* (new StringBuilder)))
-             (let [^StringBuilder sb *sb*]
+               (set! *sb* (new clotran.host.string_builder)))
+             (let [^clotran.host.string_builder sb *sb*]
                (.append sb ch (int start) (int length))
                (set! *state* :chars))
              nil)
@@ -75,13 +75,13 @@
 (defn sax-parser
   "Create a new SAXParser"
   {:added "1.11"}
-  ^SAXParser []
-  (.newSAXParser (SAXParserFactory/newInstance)))
+  ^clotran.host.sax_parser []
+  (.newSAXParser (clotran.host.sax_parser_factory/newInstance)))
 
 (defn disable-external-entities
   "Modifies a SAXParser to disable external entity resolution to prevent XXE attacks"
   {:added "1.11"}
-  ^SAXParser [^SAXParser parser]
+  ^clotran.host.sax_parser [^clotran.host.sax_parser parser]
   (let [reader (.getXMLReader parser)]
     ;; as per https://cheatsheetseries.owasp.org/cheatsheets/XML_External_Entity_Prevention_Cheat_Sheet.html
     (.setFeature reader "http://apache.org/xml/features/nonvalidating/load-external-dtd" false)
@@ -125,7 +125,7 @@
       ((:content *current*) 0)))) 
 
 (defn emit-element [e]
-  (if (instance? String e)
+  (if (instance? clotran.host.string e)
     (println e)
     (do
       (print (str "<" (name (:tag e))))

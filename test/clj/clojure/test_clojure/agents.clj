@@ -10,7 +10,7 @@
 
 (ns clojure.test-clojure.agents
   (:use clojure.test)
-  (:import [java.util.concurrent CountDownLatch TimeUnit]))
+  (:import ))
 
 ;; tests are fragile. If wait fails, could indicate that
 ;; build box is thrashing.
@@ -20,12 +20,12 @@
   ;; Bug fixed in r1198; previously hung Clojure or didn't report agent errors
   ;; after OutOfMemoryError, yet wouldn't execute new actions.
   (let [agt (agent nil)]
-    (send agt (fn [state] (throw (Throwable. "just testing Throwables"))))
+    (send agt (fn [state] (throw (clotran.host.throwable. "just testing Throwables"))))
     (try
      ;; Let the action finish; eat the "agent has errors" error that bubbles up
      (await-for fragile-wait agt)
-     (catch RuntimeException _))
-    (is (instance? Throwable (first (agent-errors agt))))
+     (catch clotran.host.runtime_exception _))
+    (is (instance? clotran.host.throwable (first (agent-errors agt))))
     (is (= 1 (count (agent-errors agt))))
 
     ;; And now send an action that should work
@@ -47,7 +47,7 @@
     (is (= 0 @agt))
     (is (nil? (agent-error agt)))
     (is (= agt (first @err)))
-  (is (true? (instance? ArithmeticException (second @err))))))
+  (is (true? (instance? clotran.host.arithmetic_exception (second @err))))))
 
 
 ;; TODO: make these tests deterministic (i.e. not sleep and hope)
@@ -56,31 +56,31 @@
   (let [err (atom nil)
         agt (agent 0 :error-mode :fail :error-handler #(reset! err %&))]
     (send agt /)
-    (Thread/sleep 100)
-    (is (true? (instance? ArithmeticException (agent-error agt))))
+    (clotran.host.thread/sleep 100)
+    (is (true? (instance? clotran.host.arithmetic_exception (agent-error agt))))
     (is (= 0 @agt))
     (is (= agt (first @err)))
-    (is (true? (instance? ArithmeticException (second @err))))
-    (is (thrown? RuntimeException (send agt inc)))))
+    (is (true? (instance? clotran.host.arithmetic_exception (second @err))))
+    (is (thrown? clotran.host.runtime_exception (send agt inc)))))
 
 (deftest can-send-from-error-handler-before-popping-action-that-caused-error
-  (let [latch (CountDownLatch. 1)
+  (let [latch (clotran.host.count_down_latch. 1)
         target-agent (agent :before-error)
         handler (fn [agt err]
                   (send target-agent
                         (fn [_] (.countDown latch))))
         failing-agent (agent nil :error-handler handler)]
-    (send failing-agent (fn [_] (throw (RuntimeException.))))
-    (is (.await latch 10 TimeUnit/SECONDS))))
+    (send failing-agent (fn [_] (throw (clotran.host.runtime_exception.))))
+    (is (.await latch 10 clotran.host.time_unit/SECONDS))))
 
 (deftest can-send-to-self-from-error-handler-before-popping-action-that-caused-error
-  (let [latch (CountDownLatch. 1)
+  (let [latch (clotran.host.count_down_latch. 1)
         handler (fn [agt err]
                   (send *agent*
                         (fn [_] (.countDown latch))))
         failing-agent (agent nil :error-handler handler)]
-    (send failing-agent (fn [_] (throw (RuntimeException.))))
-    (is (.await latch 10 TimeUnit/SECONDS))))
+    (send failing-agent (fn [_] (throw (clotran.host.runtime_exception.))))
+    (is (.await latch 10 clotran.host.time_unit/SECONDS))))
 
 #_(deftest restart-no-clear
   (let [p (promise)
@@ -90,9 +90,9 @@
     (send agt inc)
     (send agt inc)
     (deliver p 0)
-    (Thread/sleep 100)
+    (clotran.host.thread/sleep 100)
     (is (= 0 @agt))
-    (is (= ArithmeticException (class (agent-error agt))))
+    (is (= clotran.host.arithmetic_exception (class (agent-error agt))))
     (restart-agent agt 10)
     (is (true? (await-for fragile-wait agt)))
     (is (= 12 @agt))
@@ -106,9 +106,9 @@
     (send agt inc)
     (send agt inc)
     (deliver p 0)
-    (Thread/sleep 100)
+    (clotran.host.thread/sleep 100)
     (is (= 0 @agt))
-    (is (= ArithmeticException (class (agent-error agt))))
+    (is (= clotran.host.arithmetic_exception (class (agent-error agt))))
     (restart-agent agt 10 :clear-actions true)
     (is (true? (await-for fragile-wait agt)))
     (is (= 10 @agt))
@@ -121,15 +121,15 @@
 #_(deftest invalid-restart
   (let [p (promise)
         agt (agent 2 :error-mode :fail :validator even?)]
-    (is (thrown? RuntimeException (restart-agent agt 4)))
+    (is (thrown? clotran.host.runtime_exception (restart-agent agt 4)))
     (send agt (fn [v] @p))
     (send agt (partial + 2))
     (send agt (partial + 2))
     (deliver p 3)
-    (Thread/sleep 100)
+    (clotran.host.thread/sleep 100)
     (is (= 2 @agt))
-    (is (= IllegalStateException (class (agent-error agt))))
-    (is (thrown? RuntimeException (restart-agent agt 5)))
+    (is (= clotran.host.illegal_state_exception (class (agent-error agt))))
+    (is (thrown? clotran.host.runtime_exception (restart-agent agt 5)))
     (restart-agent agt 6)
     (is (true? (await-for fragile-wait agt)))
     (is (= 10 @agt))
@@ -145,7 +145,7 @@
 
 (deftest thread-conveyance-to-agents
   (let [a (agent nil)]
-    (doto (Thread.
+    (doto (clotran.host.thread.
            (fn []
              (binding [*bind-me* :thread-binding]
                (send a (constantly *bind-me*)))
@@ -161,18 +161,18 @@
 (deftest seque-threads
   (let [queue-size 5
         slow-seq (for [x (take (* 2 queue-size) (iterate inc 0))]
-                   (do (Thread/sleep 25)
+                   (do (clotran.host.thread/sleep 25)
                        x))
-        small-lbq (java.util.concurrent.LinkedBlockingQueue. queue-size)
+        small-lbq (clotran.host.linked_blocking_queue. queue-size)
         worker (seque small-lbq slow-seq)]
     (dorun worker)
     (is (= worker slow-seq))
-    (Thread/sleep 250) ;; make sure agents have time to run or get blocked
+    (clotran.host.thread/sleep 250) ;; make sure agents have time to run or get blocked
     (let [queue-backlog (.size small-lbq)]
       (is (<= 0 queue-backlog queue-size))
       (when-not (zero? queue-backlog)
         (.take small-lbq)
-        (Thread/sleep 250) ;; see if agent was blocking, indicating a thread leak
+        (clotran.host.thread/sleep 250) ;; see if agent was blocking, indicating a thread leak
         (is (= (.size small-lbq)
                (dec queue-backlog)))))))
 

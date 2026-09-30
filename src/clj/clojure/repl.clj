@@ -13,11 +13,11 @@
     :doc "Utilities meant to be used interactively at the REPL"}
   clojure.repl
   (:require [clojure.spec.alpha :as spec])
-  (:import (java.io LineNumberReader InputStreamReader PushbackReader)
-           (clojure.lang RT Reflector)))
+  (:import 
+           ))
 
 (def ^:private special-doc-map
-  '{. {:url "java_interop#dot"
+  '{. {:url "host_interop#dot"
        :forms [(.instanceMember instance args*)
                (.instanceMember Classname args*)
                (Classname/staticMethod args*)
@@ -44,7 +44,7 @@
                   :doc "Synchronization primitive that should be avoided
   in user code. Use the 'locking' macro."}
     new {:forms [(Classname. args*) (new Classname args*)]
-         :url "java_interop#new"
+         :url "host_interop#new"
          :doc "The args, if any, are evaluated from left to right, and
   passed to the constructor of the class named by Classname. The
   constructed object is returned."}
@@ -58,8 +58,8 @@
                  (set! (. instance-expr instanceFieldName-symbol) expr)
                  (set! (. Classname-symbol staticFieldName-symbol) expr)]
           :url "vars#set"
-          :doc "Used to set thread-local-bound vars, Java object instance
-fields, and Java class static fields."}
+          :doc "Used to set thread-local-bound vars, host object instance
+fields, and host class static fields."}
     throw {:forms [(throw expr)]
            :doc "The expr is evaluated and thrown, therefore it should
   yield an instance of some derivee of Throwable."}
@@ -67,7 +67,7 @@ fields, and Java class static fields."}
          :doc "catch-clause => (catch classname name expr*)
   finally-clause => (finally expr*)
 
-  Catches and handles Java exceptions."}
+  Catches and handles host exceptions."}
     var {:forms [(var symbol)]
          :doc "The symbol must resolve to a var, and the Var object
 itself (not its value) is returned. The reader macro #'x expands to (var x)."}})
@@ -155,18 +155,18 @@ itself (not its value) is returned. The reader macro #'x expands to (var x)."}})
   [x]
   (when-let [v (resolve x)]
     (when-let [filepath (:file (meta v))]
-      (when-let [strm (.getResourceAsStream (RT/baseLoader) filepath)]
-        (with-open [rdr (LineNumberReader. (InputStreamReader. strm))]
+      (when-let [strm (.getResourceAsStream (clotran.host.rt/baseLoader) filepath)]
+        (with-open [rdr (clotran.host.line_number_reader. (clotran.host.input_stream_reader. strm))]
           (dotimes [_ (dec (:line (meta v)))] (.readLine rdr))
-          (let [text (StringBuilder.)
-                pbr (proxy [PushbackReader] [rdr]
+          (let [text (clotran.host.string_builder.)
+                pbr (proxy [clotran.io.PushbackReader] [rdr]
                       (read [] (let [i (proxy-super read)]
                                  (.append text (char i))
                                  i)))
-                read-opts (if (.endsWith ^String filepath "cljc") {:read-cond :allow} {})]
+                read-opts (if (.endsWith ^clotran.host.string filepath "cljc") {:read-cond :allow} {})]
             (if (= :unknown *read-eval*)
-              (throw (IllegalStateException. "Unable to read source while *read-eval* is :unknown."))
-              (read read-opts (PushbackReader. pbr)))
+              (throw (clotran.host.illegal_state_exception. "Unable to read source while *read-eval* is :unknown."))
+              (read read-opts (clotran.io/pushback-reader pbr)))
             (str text)))))))
 
 (defmacro source
@@ -183,7 +183,7 @@ itself (not its value) is returned. The reader macro #'x expands to (var x)."}})
 public definitions in all currently-loaded namespaces that match the
 str-or-pattern."
   [str-or-pattern]
-  (let [matches? (if (instance? java.util.regex.Pattern str-or-pattern)
+  (let [matches? (if (instance? clotran.host.pattern str-or-pattern)
                    #(re-find str-or-pattern (str %))
                    #(.contains (str %) (str str-or-pattern)))]
     (sort (mapcat (fn [ns]
@@ -209,16 +209,16 @@ str-or-pattern."
   as in a stack trace element, returns a readable version."
   {:added "1.3"}
   [fn-name]
-  (clojure.lang.Compiler/demunge fn-name))
+  (clotran.host.compiler/demunge fn-name))
 
 (defn root-cause
   "Returns the initial cause of an exception or error by peeling off all of
   its wrappers"
   {:added "1.3"}
-  [^Throwable t]
+  [^clotran.host.throwable t]
   (loop [cause t]
-    (if (and (instance? clojure.lang.Compiler$CompilerException cause)
-             (not= (.source ^clojure.lang.Compiler$CompilerException cause) "NO_SOURCE_FILE"))
+    (if (and (instance? clotran.host.compiler_compiler_exception cause)
+             (not= (.source ^clotran.host.compiler_compiler_exception cause) "NO_SOURCE_FILE"))
       cause
       (if-let [cause (.getCause cause)]
         (recur cause)
@@ -227,7 +227,7 @@ str-or-pattern."
 (defn stack-element-str
   "Returns a (possibly unmunged) string representation of a StackTraceElement"
   {:added "1.3"}
-  [^StackTraceElement el]
+  [^clotran.host.stack_trace_element el]
   (let [file (.getFileName el)
         clojure-fn? (and file (or (.endsWith file ".clj")
                                   (.endsWith file ".cljc")
@@ -243,11 +243,11 @@ str-or-pattern."
   {:added "1.3"}
   ([] (pst 12))
   ([e-or-depth]
-     (if (instance? Throwable e-or-depth)
+     (if (instance? clotran.host.throwable e-or-depth)
        (pst e-or-depth 12)
        (when-let [e *e]
          (pst (root-cause e) e-or-depth))))
-  ([^Throwable e depth]
+  ([^clotran.host.throwable e depth]
      (binding [*out* *err*]
        (when (#{:read-source :macro-syntax-check :macroexpansion :compile-syntax-check :compilation}
                (-> e ex-data :clojure.error/phase))
@@ -258,7 +258,7 @@ str-or-pattern."
        (let [st (.getStackTrace e)
              cause (.getCause e)]
          (doseq [el (take depth
-                          (remove #(#{"clojure.lang.RestFn" "clojure.lang.AFn"} (.getClassName %))
+                          (remove #(#{"clotran.host.rest_fn" "clotran.host.a_fn"} (.getClassName %))
                                   st))]
            (println (str \tab (stack-element-str el))))
          (when cause
@@ -273,8 +273,8 @@ str-or-pattern."
 (defn thread-stopper
   "Returns a function that takes one arg and uses that as an exception message
   to stop the given thread.  Defaults to the current thread"
-  ([] (thread-stopper (Thread/currentThread)))
-  ([thread] (fn [msg] (.stop thread (Error. msg)))))
+  ([] (thread-stopper (clotran.host.thread/currentThread)))
+  ([thread] (fn [msg] (.stop thread (clotran.host.error. msg)))))
 
 (defn set-break-handler!
   "Register INT signal handler.  After calling this, Ctrl-C will cause

@@ -8,7 +8,7 @@
 
 (ns clojure.test-clojure.clearing
   (:import
-    [java.lang.reflect Field])
+    )
   (:require
     [clojure.string :as str]
     [clojure.test :refer :all]))
@@ -20,11 +20,11 @@
   (.getDeclaredFields (class o)))
 
 (defn primitive?
-  [^Field field]
+  [^clotran.host.field field]
   (.isPrimitive (.getType field)))
 
 (defn special-fn-field?
-  [^String field-name]
+  [^clotran.host.string field-name]
   (or (= field-name "__meta")
     (str/starts-with? field-name "__cached_class__")
     (str/starts-with? field-name "const__")
@@ -34,9 +34,9 @@
   [fobj]
   (->> (fields fobj)
     (remove primitive?) ;; can't clear primitives
-    (remove #(special-fn-field? (.getName ^Field %)))))
+    (remove #(special-fn-field? (.getName ^clotran.host.field %)))))
 
-(defn private-field-value [^Object obj ^Field field]
+(defn private-field-value [^clotran.host.value obj ^clotran.host.field field]
   (. field (setAccessible true))
   (. field (get obj)))
 

@@ -1,14 +1,14 @@
 (ns clotran.uuid
   "clotran.uuid.UUID, so that clojure/uuid.clj runs verbatim: a record --
   value equality, (str u) its text -- that the name uuid.clj writes,
-  java.util.UUID, resolves to (class-aliases.edn), printed by uuid.clj's
+  clotran.uuid.UUID, resolves to (class-aliases.edn), printed by uuid.clj's
   own print-method as #uuid \"...\". UUID/fromString and
   UUID/randomUUID are rows in hosttable.inc (B_UUIDFN, uuid_call), and
   this file loads the first time one is reached, or when core.clj
   reaches (load \"uuid\"), which is before clotran.rt can load.")
 
 (defrecord UUID [s]
-  Object
+  clotran.host.value
   (toString [_] s))
 
 (defn identity-uuid
@@ -17,12 +17,12 @@
 
 (defn uuid-from-string
   "UUID.fromString: 8-4-4-4-12 hex digits in any case, kept lower-case;
-  anything else is Java's IllegalArgumentException."
+  anything else is clj's IllegalArgumentException."
   [s]
   (if (and (string? s)
            (re-matches #"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" s))
-    (clotran.uuid.UUID. (.toLowerCase ^String s))
-    (throw (IllegalArgumentException. (str "Invalid UUID string: " s)))))
+    (clotran.uuid.UUID. (.toLowerCase ^clotran.host.string s))
+    (throw (clotran.host.illegal_argument_exception. (str "Invalid UUID string: " s)))))
 
 (defn- hex-pad [n w]
   (let [h (format "%x" n)]

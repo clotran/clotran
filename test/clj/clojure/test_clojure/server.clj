@@ -9,7 +9,7 @@
 ; Author: Alex Miller
 
 (ns clojure.test-clojure.server
-    (:import java.util.Random)
+    (:import )
     (:require [clojure.test :refer :all])
     (:require [clojure.core.server :as s]))
 
@@ -18,17 +18,17 @@
   (try
     (#'clojure.core.server/validate-opts opts)
     (is nil)
-    (catch Exception e
+    (catch clotran.host.exception e
       (is (= (ex-data e) opts))
       (is (= msg (.getMessage e))))))
 
 (defn create-random-thread
   []
-  (Thread.
+  (clotran.host.thread.
     (fn []
-      (let [random (new Random)]
-      (while (not (.isInterrupted (Thread/currentThread)))
-        (System/setProperty (Integer/toString (.nextInt random)) (Integer/toString (.nextInt random))))))))
+      (let [random (new clotran.host.random)]
+      (while (not (.isInterrupted (clotran.host.thread/currentThread)))
+        (clotran.host.system/setProperty (clotran.host.int4/toString (.nextInt random)) (clotran.host.int4/toString (.nextInt random))))))))
 
 (deftest test-validate-opts
   (check-invalid-opts {} "Missing required socket server property :name")
@@ -40,8 +40,8 @@
 (deftest test-parse-props
   (let [thread (create-random-thread)]
     (.start thread)
-    (Thread/sleep 1000)
+    (clotran.host.thread/sleep 1000)
     (try
       (is (>= (count
-        (#'s/parse-props (System/getProperties))) 0))
+        (#'s/parse-props (clotran.host.system/getProperties))) 0))
       (finally (.interrupt thread)))))

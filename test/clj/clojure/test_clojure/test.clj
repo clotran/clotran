@@ -37,27 +37,27 @@
   (is (= 3 (+ 2 2)) "Should fail"))
 
 (deftest can-test-instance
-  (is (instance? Long (+ 2 2)) "Should pass")
-  (is (instance? Float (+ 1 1)) "Should fail"))
+  (is (instance? clotran.host.int8 (+ 2 2)) "Should pass")
+  (is (instance? clotran.host.real4 (+ 1 1)) "Should fail"))
 
 (deftest can-test-thrown
-  (is (thrown? ArithmeticException (/ 1 0)) "Should pass")
+  (is (thrown? clotran.host.arithmetic_exception (/ 1 0)) "Should pass")
   ;; No exception is thrown:
-  (is (thrown? Exception (+ 1 1)) "Should fail")
+  (is (thrown? clotran.host.exception (+ 1 1)) "Should fail")
   ;; Wrong class of exception is thrown:
-  (is (thrown? ArithmeticException (throw (RuntimeException.))) "Should error"))
+  (is (thrown? clotran.host.arithmetic_exception (throw (clotran.host.runtime_exception.))) "Should error"))
 
 (deftest can-test-thrown-with-msg
-  (is (thrown-with-msg? ArithmeticException #"Divide by zero" (/ 1 0)) "Should pass")
+  (is (thrown-with-msg? clotran.host.arithmetic_exception #"Divide by zero" (/ 1 0)) "Should pass")
   ;; Wrong message string:
-  (is (thrown-with-msg? ArithmeticException #"Something else" (/ 1 0)) "Should fail")
+  (is (thrown-with-msg? clotran.host.arithmetic_exception #"Something else" (/ 1 0)) "Should fail")
   ;; No exception is thrown:
-  (is (thrown? Exception (+ 1 1)) "Should fail")
+  (is (thrown? clotran.host.exception (+ 1 1)) "Should fail")
   ;; Wrong class of exception is thrown:
-  (is (thrown-with-msg? IllegalArgumentException #"Divide by zero" (/ 1 0)) "Should error"))
+  (is (thrown-with-msg? clotran.host.illegal_argument_exception #"Divide by zero" (/ 1 0)) "Should error"))
 
 (deftest can-catch-unexpected-exceptions
-  (is (= 1 (throw (Exception.))) "Should error"))
+  (is (= 1 (throw (clotran.host.exception.))) "Should error"))
 
 (deftest can-test-method-call
   (is (.startsWith "abc" "a") "Should pass")
@@ -74,9 +74,9 @@
   (is (re-find #"cd" "abbabba") "Should fail"))
 
 (deftest clj-1102-empty-stack-trace-should-not-throw-exceptions
-  (let [empty-stack (into-array (Class/forName "java.lang.StackTraceElement")
+  (let [empty-stack (into-array (clotran.host.class/forName "clotran.host.stack_trace_element")
                                 [])
-        t (doto (Exception.) (.setStackTrace empty-stack))]
+        t (doto (clotran.host.exception.) (.setStackTrace empty-stack))]
     (is (map? (#'clojure.test/file-and-line t 0)) "Should pass")
     (is (map? (#'clojure.test/stacktrace-file-and-line empty-stack)) "Should pass")
     (is (string? (with-out-str (stack/print-stack-trace t))) "Should pass")))

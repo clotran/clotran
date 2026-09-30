@@ -3,7 +3,7 @@
 
   Original source at:
     https://github.com/pjstadig/clojure-line-numbers/blob/master/src/clojure_line_numbers/core.clj"
-  (:import (clojure.lang PersistentHashMap)))
+  (:import ))
 
 (defrecord Thing [field ^long primitive])
 
@@ -45,14 +45,14 @@
   "I throw an exception in a static field assignment form."
   []
   (set!
-   PersistentHashMap/EMPTY
+   clotran.host.persistent_hash_map/EMPTY
    (identity nil)))
 
 (defn instance-method
   "I throw an exception in an instance method form."
   []
   (.without
-   ^PersistentHashMap (identity nil)
+   ^clotran.host.persistent_hash_map (identity nil)
    :key))
 
 (defn instance-method-reflected
@@ -66,25 +66,25 @@
   "I throw an exception in an instance method form."
   ^long []
   (.count
-   ^PersistentHashMap (identity nil)))
+   ^clotran.host.persistent_hash_map (identity nil)))
 
 (defn static-method
   "I throw an exception in a static method form."
   []
-  (PersistentHashMap/create
-   ^java.util.Map (identity nil)))
+  (clotran.host.persistent_hash_map/create
+   ^clotran.host.map (identity nil)))
 
 (defn static-method-reflected
   "I throw an exception in a static method form."
   []
-  (String/copyValueOf
+  (clotran.host.string/copyValueOf
    (identity nil)))
 
 (defn static-method-unboxed
   "I throw an exception in a static method form."
   ^long []
-  (Long/parseLong
-   ^String (identity nil)))
+  (clotran.host.int8/parseLong
+   ^clotran.host.string (identity nil)))
 
 (defn invoke
   "I throw an exception in an invoke form."

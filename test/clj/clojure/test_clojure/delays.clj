@@ -1,6 +1,6 @@
 (ns clojure.test-clojure.delays
   (:use clojure.test)
-  (:import [java.util.concurrent CyclicBarrier]))
+  (:import ))
 
 (deftest calls-once
   (let [a (atom 0)
@@ -14,11 +14,11 @@
   (let [a (atom 0)
         d (delay (swap! a inc))
         threads 100
-         ^CyclicBarrier barrier (CyclicBarrier. (+ threads 1))]
+         ^clotran.host.cyclic_barrier barrier (clotran.host.cyclic_barrier. (+ threads 1))]
     (is (= 0 @a))
     (dotimes [_ threads]
         (->
-            (Thread.
+            (clotran.host.thread.
                 (fn []
                     (.await barrier)
                     (dotimes [_ 10000]
@@ -32,39 +32,39 @@
     (is (= 1 @a))))
 
 (deftest saves-exceptions
-  (let [f #(do (throw (Exception. "broken"))
+  (let [f #(do (throw (clotran.host.exception. "broken"))
                1)
         d (delay (f))
         try-call #(try
                     @d
-                    (catch Exception e e))
+                    (catch clotran.host.exception e e))
         first-result (try-call)]
-    (is (instance? Exception first-result))
+    (is (instance? clotran.host.exception first-result))
     (is (identical? first-result (try-call)))))
 
 (deftest saves-exceptions-in-parallel
-  (let [f #(do (throw (Exception. "broken"))
+  (let [f #(do (throw (clotran.host.exception. "broken"))
                1)
         d (delay (f))
         try-call #(try
                     @d
-                    (catch Exception e e))
+                    (catch clotran.host.exception e e))
         threads 100
-         ^CyclicBarrier barrier (CyclicBarrier. (+ threads 1))]
+         ^clotran.host.cyclic_barrier barrier (clotran.host.cyclic_barrier. (+ threads 1))]
     (dotimes [_ threads]
         (->
-            (Thread.
+            (clotran.host.thread.
                 (fn []
                     (.await barrier)
                     (let [first-result (try-call)]
                         (dotimes [_ 10000]
-                            (is (instance? Exception (try-call)))
+                            (is (instance? clotran.host.exception (try-call)))
                             (is (identical? first-result (try-call)))))
                     (.await barrier)))
             (.start)))
     (.await barrier)
     (.await barrier)
-    (is (instance? Exception (try-call)))
+    (is (instance? clotran.host.exception (try-call)))
     (is (identical? (try-call) (try-call)))))
 
 (deftest delays-are-suppliers
@@ -73,17 +73,17 @@
         dn (delay nil)
         di (delay 100)]
 
-    (is (instance? java.util.function.Supplier dt))
-    (is (instance? java.util.function.BooleanSupplier dt))
+    (is (instance? clotran.host.supplier dt))
+    (is (instance? clotran.host.boolean_supplier dt))
     (is (true? (.get dt)))
     (is (true? (.getAsBoolean dt)))
     (is (false? (.getAsBoolean df)))
     (is (false? (.getAsBoolean dn)))
 
-    (is (instance? java.util.function.Supplier di))
-    (is (instance? java.util.function.IntSupplier di))
-    (is (instance? java.util.function.LongSupplier di))
-    (is (= 100 (.get ^java.util.function.Supplier di)))
-    (is (= 100 (.getAsInt ^java.util.function.IntSupplier di)))
-    (is (= 100 (.getAsLong ^java.util.function.LongSupplier di)))
-    (is (= 100.0 (.getAsDouble ^java.util.function.DoubleSupplier di)))))
+    (is (instance? clotran.host.supplier di))
+    (is (instance? clotran.host.int_supplier di))
+    (is (instance? clotran.host.long_supplier di))
+    (is (= 100 (.get ^clotran.host.supplier di)))
+    (is (= 100 (.getAsInt ^clotran.host.int_supplier di)))
+    (is (= 100 (.getAsLong ^clotran.host.long_supplier di)))
+    (is (= 100.0 (.getAsDouble ^clotran.host.double_supplier di)))))

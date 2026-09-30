@@ -78,25 +78,25 @@
         Diff
         {:diff-similar atom-diff})
 
-(extend Object
+(extend clotran.host.value
         Diff
-        {:diff-similar (fn [^Object a b]
+        {:diff-similar (fn [^clotran.host.value a b]
                          ((if (.. a getClass isArray) diff-sequential atom-diff) a b))}
         EqualityPartition
-        {:equality-partition (fn [^Object x]
+        {:equality-partition (fn [^clotran.host.value x]
                                (if (.. x getClass isArray) :sequential :atom))})
 
 (extend-protocol EqualityPartition
   nil
   (equality-partition [x] :atom)
   
-  java.util.Set
+  clotran.host.set
   (equality-partition [x] :set)
 
-  java.util.List
+  clotran.host.list
   (equality-partition [x] :sequential)
   
-  java.util.Map
+  clotran.host.map
   (equality-partition [x] :map))
 
 (defn- as-set-value
@@ -104,7 +104,7 @@
   (if (set? s) s (into #{} s)))
 
 (extend-protocol Diff
-  java.util.Set
+  clotran.host.set
   (diff-similar
    [a b]
    (let [aval (as-set-value a)
@@ -113,11 +113,11 @@
       (not-empty (set/difference bval aval))
       (not-empty (set/intersection aval bval))]))
   
-  java.util.List
+  clotran.host.list
   (diff-similar [a b]
     (diff-sequential a b))
   
-  java.util.Map
+  clotran.host.map
   (diff-similar [a b]
     (diff-associative a b (set/union (keys a) (keys b)))))
 

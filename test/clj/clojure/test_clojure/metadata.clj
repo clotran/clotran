@@ -23,10 +23,10 @@
     clojure.walk
     clojure.xml
     clojure.zip
-    clojure.java.io
-    clojure.java.browse
-    clojure.java.javadoc
-    clojure.java.shell
+    clotran.files
+    clotran.browse
+    clotran.api-docs
+    clotran.shell
     clojure.string
     clojure.data])
 
@@ -222,16 +222,16 @@
     (testing "CLJ-850 is fixed when this case passes."
       (is (= "foo"
              (eval-in-temp-ns
-              (defn f ^String [^String s ^long i] s)
+              (defn f ^clotran.host.string [^clotran.host.string s ^long i] s)
               (f "foo" 1)))))
     (testing "These cases should pass, even without a fix for CLJ-850."
       (is (= "foo"
              (eval-in-temp-ns
-              (defn f ^String [^String s] s)
+              (defn f ^clotran.host.string [^clotran.host.string s] s)
               (f "foo"))))
       (is (= 1
              (eval-in-temp-ns
-              (defn f ^long [^String s ^long i] i)
+              (defn f ^long [^clotran.host.string s ^long i] i)
               (f "foo" 1))))
       (is (= 1
              (eval-in-temp-ns

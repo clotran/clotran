@@ -26,9 +26,9 @@
             [clojure.test.generative :refer (defspec)]
             [clojure.test-clojure.generators :as cgen]
             [clojure.edn :as edn])
-  (:import [clojure.lang BigInt Ratio]
-           java.io.File
-           java.util.TimeZone))
+  (:import 
+           
+           ))
 
 ;; Symbols
 
@@ -40,7 +40,7 @@
   (is (= 'abc.def/ghi (symbol "abc.def" "ghi")))
   (is (= 'abc/def.ghi (symbol "abc" "def.ghi")))
   (is (= 'abc:def/ghi:jkl.mno (symbol "abc:def" "ghi:jkl.mno")))
-  (is (instance? clojure.lang.Symbol 'alphabet))
+  (is (instance? clotran.host.symbol 'alphabet))
   )
 
 ;; Literals
@@ -55,7 +55,7 @@
 
 (defn temp-file
   [prefix suffix]
-  (doto (File/createTempFile prefix suffix)
+  (doto (clotran.io.File/createTempFile prefix suffix)
     (.deleteOnExit)))
 
 (defn read-from
@@ -68,7 +68,7 @@
 
 (defn code-units
   [s]
-  (and (instance? String s) (map int s)))
+  (and (instance? clotran.host.string s) (map int s)))
 
 (deftest Strings
   (is (= "abcde" (str \a \b \c \d \e)))
@@ -103,42 +103,42 @@
       (testing (str "Errors reading string literals from " (name source))
         (are [err msg form] (thrown-with-cause-msg? err msg
                               (read-from source f (str "\"" form "\"")))
-             Exception #"EOF while reading string" "\\"
-             Exception #"Unsupported escape character: \\o" "\\o"
+             clotran.host.exception #"EOF while reading string" "\\"
+             clotran.host.exception #"Unsupported escape character: \\o" "\\o"
 
-             Exception #"Octal escape sequence must be in range \[0, 377\]" "\\400"
-             Exception #"Invalid digit: 8" "\\8"
-             Exception #"Invalid digit: 8" "\\8000"
-             Exception #"Invalid digit: 8" "\\0800"
-             Exception #"Invalid digit: 8" "\\0080"
-             Exception #"Invalid digit: a" "\\2and"
+             clotran.host.exception #"Octal escape sequence must be in range \[0, 377\]" "\\400"
+             clotran.host.exception #"Invalid digit: 8" "\\8"
+             clotran.host.exception #"Invalid digit: 8" "\\8000"
+             clotran.host.exception #"Invalid digit: 8" "\\0800"
+             clotran.host.exception #"Invalid digit: 8" "\\0080"
+             clotran.host.exception #"Invalid digit: a" "\\2and"
 
-             Exception #"Invalid unicode escape: \\u" "\\u"
-             Exception #"Invalid unicode escape: \\ug" "\\ug"
-             Exception #"Invalid unicode escape: \\ug" "\\ug000"
-             Exception #"Invalid character length: 1, should be: 4" "\\u0"
-             Exception #"Invalid character length: 3, should be: 4" "\\u004"
-             Exception #"Invalid digit: g" "\\u004g")))))
+             clotran.host.exception #"Invalid unicode escape: \\u" "\\u"
+             clotran.host.exception #"Invalid unicode escape: \\ug" "\\ug"
+             clotran.host.exception #"Invalid unicode escape: \\ug" "\\ug000"
+             clotran.host.exception #"Invalid character length: 1, should be: 4" "\\u0"
+             clotran.host.exception #"Invalid character length: 3, should be: 4" "\\u004"
+             clotran.host.exception #"Invalid digit: g" "\\u004g")))))
 
 ;; Numbers
 
 (deftest Numbers
 
   ; Read Integer
-  (is (instance? Long 2147483647))
-  (is (instance? Long +1))
-  (is (instance? Long 1))
-  (is (instance? Long +0))
-  (is (instance? Long 0))
-  (is (instance? Long -0))
-  (is (instance? Long -1))
-  (is (instance? Long -2147483648))
+  (is (instance? clotran.host.int8 2147483647))
+  (is (instance? clotran.host.int8 +1))
+  (is (instance? clotran.host.int8 1))
+  (is (instance? clotran.host.int8 +0))
+  (is (instance? clotran.host.int8 0))
+  (is (instance? clotran.host.int8 -0))
+  (is (instance? clotran.host.int8 -1))
+  (is (instance? clotran.host.int8 -2147483648))
 
   ; Read Long
-  (is (instance? Long 2147483648))
-  (is (instance? Long -2147483649))
-  (is (instance? Long 9223372036854775807))
-  (is (instance? Long -9223372036854775808))
+  (is (instance? clotran.host.int8 2147483648))
+  (is (instance? clotran.host.int8 -2147483649))
+  (is (instance? clotran.host.int8 9223372036854775807))
+  (is (instance? clotran.host.int8 -9223372036854775808))
 
   ;; Numeric constants of different types don't wash out. Regression fixed in
   ;; r1157. Previously the compiler saw 0 and 0.0 as the same constant and
@@ -149,73 +149,73 @@
                        (recur (inc i) (conj l i))
                        l))]
       (is (= [4 3 2 1 0] sequence))
-      (is (every? #(instance? Long %)
+      (is (every? #(instance? clotran.host.int8 %)
                   sequence))))
 
   ; Read BigInteger
-  (is (instance? BigInt 9223372036854775808))
-  (is (instance? BigInt -9223372036854775809))
-  (is (instance? BigInt 10000000000000000000000000000000000000000000000000))
-  (is (instance? BigInt -10000000000000000000000000000000000000000000000000))
+  (is (instance? clotran.host.bigint 9223372036854775808))
+  (is (instance? clotran.host.bigint -9223372036854775809))
+  (is (instance? clotran.host.bigint 10000000000000000000000000000000000000000000000000))
+  (is (instance? clotran.host.bigint -10000000000000000000000000000000000000000000000000))
 
   ; Read Double
-  (is (instance? Double +1.0e+1))
-  (is (instance? Double +1.e+1))
-  (is (instance? Double +1e+1))
+  (is (instance? clotran.host.real8 +1.0e+1))
+  (is (instance? clotran.host.real8 +1.e+1))
+  (is (instance? clotran.host.real8 +1e+1))
 
-  (is (instance? Double +1.0e1))
-  (is (instance? Double +1.e1))
-  (is (instance? Double +1e1))
+  (is (instance? clotran.host.real8 +1.0e1))
+  (is (instance? clotran.host.real8 +1.e1))
+  (is (instance? clotran.host.real8 +1e1))
 
-  (is (instance? Double +1.0e-1))
-  (is (instance? Double +1.e-1))
-  (is (instance? Double +1e-1))
+  (is (instance? clotran.host.real8 +1.0e-1))
+  (is (instance? clotran.host.real8 +1.e-1))
+  (is (instance? clotran.host.real8 +1e-1))
 
-  (is (instance? Double 1.0e+1))
-  (is (instance? Double 1.e+1))
-  (is (instance? Double 1e+1))
+  (is (instance? clotran.host.real8 1.0e+1))
+  (is (instance? clotran.host.real8 1.e+1))
+  (is (instance? clotran.host.real8 1e+1))
 
-  (is (instance? Double 1.0e1))
-  (is (instance? Double 1.e1))
-  (is (instance? Double 1e1))
+  (is (instance? clotran.host.real8 1.0e1))
+  (is (instance? clotran.host.real8 1.e1))
+  (is (instance? clotran.host.real8 1e1))
 
-  (is (instance? Double 1.0e-1))
-  (is (instance? Double 1.e-1))
-  (is (instance? Double 1e-1))
+  (is (instance? clotran.host.real8 1.0e-1))
+  (is (instance? clotran.host.real8 1.e-1))
+  (is (instance? clotran.host.real8 1e-1))
 
-  (is (instance? Double -1.0e+1))
-  (is (instance? Double -1.e+1))
-  (is (instance? Double -1e+1))
+  (is (instance? clotran.host.real8 -1.0e+1))
+  (is (instance? clotran.host.real8 -1.e+1))
+  (is (instance? clotran.host.real8 -1e+1))
 
-  (is (instance? Double -1.0e1))
-  (is (instance? Double -1.e1))
-  (is (instance? Double -1e1))
+  (is (instance? clotran.host.real8 -1.0e1))
+  (is (instance? clotran.host.real8 -1.e1))
+  (is (instance? clotran.host.real8 -1e1))
 
-  (is (instance? Double -1.0e-1))
-  (is (instance? Double -1.e-1))
-  (is (instance? Double -1e-1))
+  (is (instance? clotran.host.real8 -1.0e-1))
+  (is (instance? clotran.host.real8 -1.e-1))
+  (is (instance? clotran.host.real8 -1e-1))
 
-  (is (instance? Double +1.0))
-  (is (instance? Double +1.))
+  (is (instance? clotran.host.real8 +1.0))
+  (is (instance? clotran.host.real8 +1.))
 
-  (is (instance? Double 1.0))
-  (is (instance? Double 1.))
+  (is (instance? clotran.host.real8 1.0))
+  (is (instance? clotran.host.real8 1.))
 
-  (is (instance? Double +0.0))
-  (is (instance? Double +0.))
+  (is (instance? clotran.host.real8 +0.0))
+  (is (instance? clotran.host.real8 +0.))
 
-  (is (instance? Double 0.0))
-  (is (instance? Double 0.))
+  (is (instance? clotran.host.real8 0.0))
+  (is (instance? clotran.host.real8 0.))
 
-  (is (instance? Double -0.0))
-  (is (instance? Double -0.))
+  (is (instance? clotran.host.real8 -0.0))
+  (is (instance? clotran.host.real8 -0.))
 
-  (is (instance? Double -1.0))
-  (is (instance? Double -1.))
+  (is (instance? clotran.host.real8 -1.0))
+  (is (instance? clotran.host.real8 -1.))
 
-  (is (= Double/POSITIVE_INFINITY ##Inf))
-  (is (= Double/NEGATIVE_INFINITY ##-Inf))
-  (is (and (instance? Double ##NaN) (.isNaN ##NaN)))
+  (is (= clotran.host.real8/POSITIVE_INFINITY ##Inf))
+  (is (= clotran.host.real8/NEGATIVE_INFINITY ##-Inf))
+  (is (and (instance? clotran.host.real8 ##NaN) (.isNaN ##NaN)))
 
   ; Read BigDecimal
   (is (instance? BigDecimal 9223372036854775808M))
@@ -283,9 +283,9 @@
   (is (instance? BigDecimal -1.0M))
   (is (instance? BigDecimal -1.M))
 
-  (is (instance? Ratio 1/2))
-  (is (instance? Ratio -1/2))
-  (is (instance? Ratio +1/2))
+  (is (instance? clotran.host.ratio 1/2))
+  (is (instance? clotran.host.ratio -1/2))
+  (is (instance? clotran.host.ratio +1/2))
 )
 
 ;; Characters
@@ -309,24 +309,24 @@
              (char 0xffff) "\\uffff"))
       (testing (str "Errors reading char literals from " (name source))
         (are [err msg form] (thrown-with-cause-msg? err msg (read-from source f form))
-             Exception #"EOF while reading character" "\\"
-             Exception #"Unsupported character: \\00" "\\00"
-             Exception #"Unsupported character: \\0009" "\\0009"
+             clotran.host.exception #"EOF while reading character" "\\"
+             clotran.host.exception #"Unsupported character: \\00" "\\00"
+             clotran.host.exception #"Unsupported character: \\0009" "\\0009"
 
-             Exception #"Invalid digit: 8" "\\o378"
-             Exception #"Octal escape sequence must be in range \[0, 377\]" "\\o400"
-             Exception #"Invalid digit: 8" "\\o800"
-             Exception #"Invalid digit: a" "\\oand"
-             Exception #"Invalid octal escape sequence length: 4" "\\o0470"
+             clotran.host.exception #"Invalid digit: 8" "\\o378"
+             clotran.host.exception #"Octal escape sequence must be in range \[0, 377\]" "\\o400"
+             clotran.host.exception #"Invalid digit: 8" "\\o800"
+             clotran.host.exception #"Invalid digit: a" "\\oand"
+             clotran.host.exception #"Invalid octal escape sequence length: 4" "\\o0470"
 
-             Exception #"Invalid unicode character: \\u0" "\\u0"
-             Exception #"Invalid unicode character: \\ug" "\\ug"
-             Exception #"Invalid unicode character: \\u000" "\\u000"
-             Exception #"Invalid character constant: \\ud800" "\\ud800"
-             Exception #"Invalid character constant: \\udfff" "\\udfff"
-             Exception #"Invalid unicode character: \\u004" "\\u004"
-             Exception #"Invalid unicode character: \\u00041" "\\u00041"
-             Exception #"Invalid digit: g" "\\u004g")))))
+             clotran.host.exception #"Invalid unicode character: \\u0" "\\u0"
+             clotran.host.exception #"Invalid unicode character: \\ug" "\\ug"
+             clotran.host.exception #"Invalid unicode character: \\u000" "\\u000"
+             clotran.host.exception #"Invalid character constant: \\ud800" "\\ud800"
+             clotran.host.exception #"Invalid character constant: \\udfff" "\\udfff"
+             clotran.host.exception #"Invalid unicode character: \\u004" "\\u004"
+             clotran.host.exception #"Invalid unicode character: \\u00041" "\\u00041"
+             clotran.host.exception #"Invalid digit: g" "\\u004g")))))
 
 ;; nil
 
@@ -348,7 +348,7 @@
   (is (= :abc.def/ghi (keyword "abc.def" "ghi")))
   (is (= :abc/def.ghi (keyword "abc" "def.ghi")))
   (is (= :abc:def/ghi:jkl.mno (keyword "abc:def" "ghi:jkl.mno")))
-  (is (instance? clojure.lang.Keyword :alphabet))
+  (is (instance? clotran.host.keyword :alphabet))
   )
 
 (deftest reading-keywords
@@ -357,9 +357,9 @@
        :foo/bar ":foo/bar"
        :user/foo "::foo")
   (are [err msg form] (thrown-with-msg? err msg (read-string form))
-       Exception #"Invalid token: foo:" "foo:"
-       Exception #"Invalid token: :bar/" ":bar/"
-       Exception #"Invalid token: ::does.not/exist" "::does.not/exist"))
+       clotran.host.exception #"Invalid token: foo:" "foo:"
+       clotran.host.exception #"Invalid token: :bar/" ":bar/"
+       clotran.host.exception #"Invalid token: ::does.not/exist" "::does.not/exist"))
 ;; Lists
 
 (deftest t-Lists)
@@ -406,7 +406,7 @@
 
 (deftest t-line-column-numbers
   (let [code "(ns reader-metadata-test
-  (:require [clojure.java.io
+  (:require [clotran.files
              :refer (resource reader)]))
 
 (let [a 5]
@@ -414,8 +414,8 @@
   (defn add-5
     [x]
     (reduce + x (range a))))"
-        stream (clojure.lang.LineNumberingPushbackReader.
-                 (java.io.StringReader. code))
+        stream (clotran.io/line-numbering-reader
+                 (clotran.io/text-reader code))
         top-levels (take-while identity (repeatedly #(read stream false nil)))
         expected-metadata '{ns {:line 1, :column 1}
                             :require {:line 2, :column 3}
@@ -434,14 +434,14 @@
            (is (->> (meta %)
                  vals
                  (filter number?)
-                 (every? (partial instance? Integer))))
+                 (every? (partial instance? clotran.host.int4))))
            (swap! verified-forms inc))
         form))
     ;; sanity check against e.g. reading returning ()
     (is (= (count expected-metadata) @verified-forms))))
 
 (deftest set-line-number
-  (let [r (clojure.lang.LineNumberingPushbackReader. *in*)]
+  (let [r (clotran.io/line-numbering-reader *in*)]
     (.setLineNumber r 100)
     (is (= 100 (.getLineNumber r)))))
 
@@ -465,14 +465,14 @@
   (is (not (nil? (re-matches #"\(fn\* \[([\S]+) ([\S]+) & ([\S]+)] \(vector \2 \3\)\)" (pr-str (read-string "#(vector %2 %&)"))))))
 
   ;; invalid formats
-  (is (thrown? RuntimeException (read-string "#(vector %%)")))
-  (is (thrown? RuntimeException (read-string "#(vector %1/2)")))
-  (is (thrown? RuntimeException (read-string "#(vector %1.5)")))
-  (is (thrown? RuntimeException (read-string "#(vector %-0.2)")))
-  (is (thrown? RuntimeException (read-string "#(vector %3M)")))
+  (is (thrown? clotran.host.runtime_exception (read-string "#(vector %%)")))
+  (is (thrown? clotran.host.runtime_exception (read-string "#(vector %1/2)")))
+  (is (thrown? clotran.host.runtime_exception (read-string "#(vector %1.5)")))
+  (is (thrown? clotran.host.runtime_exception (read-string "#(vector %-0.2)")))
+  (is (thrown? clotran.host.runtime_exception (read-string "#(vector %3M)")))
 
   ;; check sneaking in discarded content
-  (is (thrown? RuntimeException (read-string "#(list %#_(first arg)1.00000001 %#_(secong arg)2r10 %#_(rest arg)-1.5)")))
+  (is (thrown? clotran.host.runtime_exception (read-string "#(list %#_(first arg)1.00000001 %#_(secong arg)2r10 %#_(rest arg)-1.5)")))
   )
 
 ;; Syntax-quote (`, note, the "backquote" character), Unquote (~) and
@@ -500,59 +500,59 @@
                (is (= clojure.core// bar//))))))
 
 (deftest Instants
-  (testing "Instants are read as java.util.Date by default"
-    (is (= java.util.Date (class #inst "2010-11-12T13:14:15.666"))))
+  (testing "Instants are read as clotran.host.date by default"
+    (is (= clotran.host.date (class #inst "2010-11-12T13:14:15.666"))))
   (let [s "#inst \"2010-11-12T13:14:15.666-06:00\""]
     (binding [*data-readers* {'inst read-instant-date}]
-      (testing "read-instant-date produces java.util.Date"
-        (is (= java.util.Date (class (read-string s)))))
-      (testing "java.util.Date instants round-trips"
+      (testing "read-instant-date produces clotran.host.date"
+        (is (= clotran.host.date (class (read-string s)))))
+      (testing "clotran.host.date instants round-trips"
         (is (= (-> s read-string)
                (-> s read-string pr-str read-string))))
-      (testing "java.util.Date instants round-trip throughout the year"
+      (testing "clotran.host.date instants round-trip throughout the year"
         (doseq [month (range 1 13) day (range 1 29) hour (range 1 23)]
           (let [s (format "#inst \"2010-%02d-%02dT%02d:14:15.666-06:00\"" month day hour)]
             (is (= (-> s read-string)
                    (-> s read-string pr-str read-string))))))
-      (testing "java.util.Date handling DST in time zones"
-        (let [dtz (TimeZone/getDefault)]
+      (testing "clotran.host.date handling DST in time zones"
+        (let [dtz (clotran.host.time_zone/getDefault)]
           (try
             ;; A timezone with DST in effect during 2010-11-12
-            (TimeZone/setDefault (TimeZone/getTimeZone "Australia/Sydney"))
+            (clotran.host.time_zone/setDefault (clotran.host.time_zone/getTimeZone "Australia/Sydney"))
             (is (= (-> s read-string)
                    (-> s read-string pr-str read-string)))
-            (finally (TimeZone/setDefault dtz)))))
-      (testing "java.util.Date should always print in UTC"
+            (finally (clotran.host.time_zone/setDefault dtz)))))
+      (testing "clotran.host.date should always print in UTC"
         (let [d (read-string s)
               pstr (print-str d)
               len (.length pstr)]
           (is (= (subs pstr (- len 7)) "-00:00\"")))))
     (binding [*data-readers* {'inst read-instant-calendar}]
-      (testing "read-instant-calendar produces java.util.Calendar"
-        (is (instance? java.util.Calendar (read-string s))))
-      (testing "java.util.Calendar round-trips"
+      (testing "read-instant-calendar produces clotran.host.calendar"
+        (is (instance? clotran.host.calendar (read-string s))))
+      (testing "clotran.host.calendar round-trips"
         (is (= (-> s read-string)
                (-> s read-string pr-str read-string))))
-      (testing "java.util.Calendar remembers timezone in literal"
+      (testing "clotran.host.calendar remembers timezone in literal"
         (is (= "#inst \"2010-11-12T13:14:15.666-06:00\""
                (-> s read-string pr-str)))
         (is (= (-> s read-string)
                (-> s read-string pr-str read-string))))
-      (testing "java.util.Calendar preserves milliseconds"
+      (testing "clotran.host.calendar preserves milliseconds"
         (is (= 666 (-> s read-string
-                       (.get java.util.Calendar/MILLISECOND)))))))
+                       (.get clotran.host.calendar/MILLISECOND)))))))
   (let [s "#inst \"2010-11-12T13:14:15.123456789\""
         s2 "#inst \"2010-11-12T13:14:15.123\""
         s3 "#inst \"2010-11-12T13:14:15.123456789123\""]
     (binding [*data-readers* {'inst read-instant-timestamp}]
-      (testing "read-instant-timestamp produces java.sql.Timestamp"
-        (is (= java.sql.Timestamp (class (read-string s)))))
-      (testing "java.sql.Timestamp preserves nanoseconds"
+      (testing "read-instant-timestamp produces clotran.host.timestamp"
+        (is (= clotran.host.timestamp (class (read-string s)))))
+      (testing "clotran.host.timestamp preserves nanoseconds"
         (is (= 123456789 (-> s read-string .getNanos)))
         (is (= 123456789 (-> s read-string pr-str read-string .getNanos)))
         ;; truncate at nanos for s3
         (is (= 123456789 (-> s3 read-string pr-str read-string .getNanos))))
-      (testing "java.sql.Timestamp should compare nanos"
+      (testing "clotran.host.timestamp should compare nanos"
         (is (= (read-string s) (read-string s3)))
         (is (not= (read-string s) (read-string s2)))))
     (binding [*data-readers* {'inst read-instant-date}]
@@ -574,7 +574,7 @@
 ;; #uuid "550e8400-e29b-41d4-a716-446655440000"
 
 (deftest UUID
-  (is (= java.util.UUID (class #uuid "550e8400-e29b-41d4-a716-446655440000")))
+  (is (= clotran.uuid.UUID (class #uuid "550e8400-e29b-41d4-a716-446655440000")))
   (is (.equals #uuid "550e8400-e29b-41d4-a716-446655440000"
                #uuid "550e8400-e29b-41d4-a716-446655440000"))
   (is (not (identical? #uuid "550e8400-e29b-41d4-a716-446655440000"
@@ -585,7 +585,7 @@
 
 (deftest unknown-tag
   (let [my-unknown (fn [tag val] {:unknown-tag tag :value val})
-        throw-on-unknown (fn [tag val] (throw (RuntimeException. (str "No data reader function for tag " tag))))
+        throw-on-unknown (fn [tag val] (throw (clotran.host.runtime_exception. (str "No data reader function for tag " tag))))
         my-uuid (partial my-unknown 'uuid)
         u "#uuid \"550e8400-e29b-41d4-a716-446655440000\""
         s "#never.heard.of/some-tag [1 2]" ]
@@ -603,15 +603,15 @@
     (binding [*default-data-reader-fn* throw-on-unknown]
       (testing "Unknown tag with custom throw-on-unknown"
         (are [err msg form] (thrown-with-msg? err msg (read-string form))
-             Exception #"No data reader function for tag foo" "#foo [1 2]"
-             Exception #"No data reader function for tag bar/foo" "#bar/foo [1 2]"
-             Exception #"No data reader function for tag bar.baz/foo" "#bar.baz/foo [1 2]")))
+             clotran.host.exception #"No data reader function for tag foo" "#foo [1 2]"
+             clotran.host.exception #"No data reader function for tag bar/foo" "#bar/foo [1 2]"
+             clotran.host.exception #"No data reader function for tag bar.baz/foo" "#bar.baz/foo [1 2]")))
 
     (testing "Unknown tag out-of-the-box behavior (like Clojure 1.4)"
       (are [err msg form] (thrown-with-msg? err msg (read-string form))
-           Exception #"No reader function for tag foo" "#foo [1 2]"
-           Exception #"No reader function for tag bar/foo" "#bar/foo [1 2]"
-           Exception #"No reader function for tag bar.baz/foo" "#bar.baz/foo [1 2]"))))
+           clotran.host.exception #"No reader function for tag foo" "#foo [1 2]"
+           clotran.host.exception #"No reader function for tag bar/foo" "#bar/foo [1 2]"
+           clotran.host.exception #"No reader function for tag bar.baz/foo" "#bar.baz/foo [1 2]"))))
 
 
 (defn roundtrip
@@ -623,7 +623,7 @@
             *print-level* nil]
     (try
      (-> o pr-str read-string)
-     (catch Throwable t t))))
+     (catch clotran.host.throwable t t))))
 
 (defn roundtrip-dup
   "Print an object with print-dup and read it back.
@@ -634,7 +634,7 @@
             *print-level* nil]
     (try
      (-> o pr-str read-string)
-     (catch Throwable t t))))
+     (catch clotran.host.throwable t t))))
 
 (defspec types-that-should-roundtrip
   roundtrip
@@ -663,7 +663,7 @@
        (is (= :foo (get x :no-such-key :foo)))
        (is (= (:form x) '(:clj [foo])))
        (is (= x (reader-conditional '(:clj [foo]) true))))
-  (is (thrown-with-msg? RuntimeException #"No reader function for tag"
+  (is (thrown-with-msg? clotran.host.runtime_exception #"No reader function for tag"
                         (read-string {:read-cond :preserve} "#js {:x 1 :y 2}" )))
   (let [x (read-string {:read-cond :preserve} "#?(:cljs #js {:x 1 :y 2})")
         [platform tl] (:form x)]
@@ -712,16 +712,16 @@
     (is (= [1 2 3] #?(:cljs #js [1 2 3] :clj [1 2 3])))
     (is (= :clojure #?(:foo #some.nonexistent.Record {:x 1} :clj :clojure))))
   (testing "error cases"
-    (is (thrown-with-msg? RuntimeException #"Feature should be a keyword" (read-string {:read-cond :allow} "#?((+ 1 2) :a)")))
-    (is (thrown-with-msg? RuntimeException #"even number of forms" (read-string {:read-cond :allow} "#?(:cljs :a :clj)")))
-    (is (thrown-with-msg? RuntimeException #"read-cond-splicing must implement" (read-string {:read-cond :allow} "#?@(:clj :a)")))
-    (is (thrown-with-msg? RuntimeException #"is reserved" (read-string {:read-cond :allow} "#?@(:foo :a :else :b)")))
-    (is (thrown-with-msg? RuntimeException #"must be a list" (read-string {:read-cond :allow} "#?[:foo :a :else :b]")))
-    (is (thrown-with-msg? RuntimeException #"Conditional read not allowed" (read-string {:read-cond :BOGUS} "#?[:clj :a :default nil]")))
-    (is (thrown-with-msg? RuntimeException #"Conditional read not allowed" (read-string "#?[:clj :a :default nil]")))
-    (is (thrown-with-msg? RuntimeException #"Reader conditional splicing not allowed at the top level" (read-string {:read-cond :allow} "#?@(:clj [1 2])")))
-    (is (thrown-with-msg? RuntimeException #"Reader conditional splicing not allowed at the top level" (read-string {:read-cond :allow} "#?@(:clj [1])")))
-    (is (thrown-with-msg? RuntimeException #"Reader conditional splicing not allowed at the top level" (read-string {:read-cond :allow} "#?@(:clj []) 1"))))
+    (is (thrown-with-msg? clotran.host.runtime_exception #"Feature should be a keyword" (read-string {:read-cond :allow} "#?((+ 1 2) :a)")))
+    (is (thrown-with-msg? clotran.host.runtime_exception #"even number of forms" (read-string {:read-cond :allow} "#?(:cljs :a :clj)")))
+    (is (thrown-with-msg? clotran.host.runtime_exception #"read-cond-splicing must implement" (read-string {:read-cond :allow} "#?@(:clj :a)")))
+    (is (thrown-with-msg? clotran.host.runtime_exception #"is reserved" (read-string {:read-cond :allow} "#?@(:foo :a :else :b)")))
+    (is (thrown-with-msg? clotran.host.runtime_exception #"must be a list" (read-string {:read-cond :allow} "#?[:foo :a :else :b]")))
+    (is (thrown-with-msg? clotran.host.runtime_exception #"Conditional read not allowed" (read-string {:read-cond :BOGUS} "#?[:clj :a :default nil]")))
+    (is (thrown-with-msg? clotran.host.runtime_exception #"Conditional read not allowed" (read-string "#?[:clj :a :default nil]")))
+    (is (thrown-with-msg? clotran.host.runtime_exception #"Reader conditional splicing not allowed at the top level" (read-string {:read-cond :allow} "#?@(:clj [1 2])")))
+    (is (thrown-with-msg? clotran.host.runtime_exception #"Reader conditional splicing not allowed at the top level" (read-string {:read-cond :allow} "#?@(:clj [1])")))
+    (is (thrown-with-msg? clotran.host.runtime_exception #"Reader conditional splicing not allowed at the top level" (read-string {:read-cond :allow} "#?@(:clj []) 1"))))
   (testing "clj-1698-regression"
     (let [opts {:features #{:clj} :read-cond :allow}]
       (is (= 1 (read-string opts "#?(:cljs {'a 1 'b 2} :clj 1)")))
@@ -737,8 +737,8 @@
 
 (deftest eof-option
   (is (= 23 (read-string {:eof 23} "")))
-  (is (= 23 (read {:eof 23} (clojure.lang.LineNumberingPushbackReader.
-                             (java.io.StringReader. ""))))))
+  (is (= 23 (read {:eof 23} (clotran.io/line-numbering-reader
+                             (clotran.io/text-reader ""))))))
 
 (require '[clojure.string :as s])
 (deftest namespaced-maps
@@ -757,13 +757,13 @@
 
 (deftest namespaced-map-errors
   (are [err msg form] (thrown-with-msg? err msg (read-string form))
-                      Exception #"Invalid token" "#:::"
-                      Exception #"Namespaced map literal must contain an even number of forms" "#:s{1}"
-                      Exception #"Namespaced map must specify a valid namespace" "#:s/t{1 2}"
-                      Exception #"Unknown auto-resolved namespace alias" "#::BOGUS{1 2}"
-                      Exception #"Namespaced map must specify a namespace" "#: s{:a 1}"
-                      Exception #"Duplicate key: :user/a" "#::{:a 1 :a 2}"
-                      Exception #"Duplicate key: user/a" "#::{a 1 a 2}"))
+                      clotran.host.exception #"Invalid token" "#:::"
+                      clotran.host.exception #"Namespaced map literal must contain an even number of forms" "#:s{1}"
+                      clotran.host.exception #"Namespaced map must specify a valid namespace" "#:s/t{1 2}"
+                      clotran.host.exception #"Unknown auto-resolved namespace alias" "#::BOGUS{1 2}"
+                      clotran.host.exception #"Namespaced map must specify a namespace" "#: s{:a 1}"
+                      clotran.host.exception #"Duplicate key: :user/a" "#::{:a 1 :a 2}"
+                      clotran.host.exception #"Duplicate key: user/a" "#::{a 1 a 2}"))
 
 (deftest namespaced-map-edn
   (is (= {1 1, :a/b 2, :b/c 3, :d 4}
@@ -771,14 +771,14 @@
          (edn/read-string "#:a {1 1, :b 2, :b/c 3, :_/d 4}"))))
 
 (deftest invalid-symbol-value
-  (is (thrown-with-msg? Exception #"Invalid token" (read-string "##5")))
-  (is (thrown-with-msg? Exception #"Invalid token" (edn/read-string "##5")))
-  (is (thrown-with-msg? Exception #"Unknown symbolic value" (read-string "##Foo")))
-  (is (thrown-with-msg? Exception #"Unknown symbolic value" (edn/read-string "##Foo"))))
+  (is (thrown-with-msg? clotran.host.exception #"Invalid token" (read-string "##5")))
+  (is (thrown-with-msg? clotran.host.exception #"Invalid token" (edn/read-string "##5")))
+  (is (thrown-with-msg? clotran.host.exception #"Unknown symbolic value" (read-string "##Foo")))
+  (is (thrown-with-msg? clotran.host.exception #"Unknown symbolic value" (edn/read-string "##Foo"))))
 
 (defn str->lnpr
   [s]
-  (-> s (java.io.StringReader.) (clojure.lang.LineNumberingPushbackReader.)))
+  (-> s (clotran.io/text-reader) (clotran.io/line-numbering-reader)))
 
 (deftest test-read+string
   (let [[r s] (read+string (str->lnpr "[:foo  100]"))]

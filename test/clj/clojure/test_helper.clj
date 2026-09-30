@@ -18,7 +18,7 @@
 (ns clojure.test-helper
   (:use clojure.test))
 
-(let [nl (System/getProperty "line.separator")] 
+(let [nl (clotran.host.system/getProperty "line.separator")] 
   (defn platform-newlines [s] (.replace s "\n" nl)))
 
 (defn temp-ns
@@ -37,7 +37,7 @@
       '(do ~@forms))))
 
 (defn causes
-  [^Throwable throwable]
+  [^clotran.host.throwable throwable]
   (loop [causes []
          t throwable]
     (if t (recur (conj causes t) (.getCause t)) causes)))
@@ -49,7 +49,7 @@
   `(try
    ~@body
    (report {:type :fail, :message ~msg, :expected '~form, :actual nil})
-   (catch Throwable t#
+   (catch clotran.host.throwable t#
      (if (some (fn [cause#]
                  (and
                   (= ~exception-class (class cause#))
@@ -94,14 +94,14 @@
   "Use this function to ensure that execution of a program doesn't
   reach certain point."
   []
-  (throw (new Exception "Exception which should never occur")))
+  (throw (new clotran.host.exception "Exception which should never occur")))
 
 (defmacro with-err-print-writer
   "Evaluate with err pointing to a temporary PrintWriter, and
    return err contents as a string."
   [& body]
-  `(let [s# (java.io.StringWriter.)
-         p# (java.io.PrintWriter. s#)]
+  `(let [s# (clotran.host.string_writer.)
+         p# (clotran.host.print_writer. s#)]
      (binding [*err* p#]
        ~@body
        (str s#))))
@@ -110,7 +110,7 @@
   "Evaluate with err pointing to a temporary StringWriter, and
    return err contents as a string."
   [& body]
-  `(let [s# (java.io.StringWriter.)]
+  `(let [s# (clotran.host.string_writer.)]
      (binding [*err* s#]
        ~@body
        (str s#))))

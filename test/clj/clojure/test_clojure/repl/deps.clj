@@ -8,12 +8,12 @@
   "Ensure or install a DynamicClassLoader as the current thread's
   context classloader and execute the body."
   [& body]
-  `(let [t# (Thread/currentThread)
+  `(let [t# (clotran.host.thread/currentThread)
          cl# (.getContextClassLoader t#)]
-     (if (instance? ~'clojure.lang.DynamicClassLoader cl#)
+     (if (instance? ~'clotran.host.dynamic_class_loader cl#)
        (do ~@body)
        (try
-         (.setContextClassLoader t# (clojure.lang.DynamicClassLoader. cl#))
+         (.setContextClassLoader t# (clotran.host.dynamic_class_loader. cl#))
          ~@body
          (finally
            (.setContextClassLoader t# cl#))))))

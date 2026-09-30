@@ -1,4 +1,4 @@
-;; DERIVED from test/clj/clojure/test_clojure/transients.clj by scripts/derive-tests -- do not edit.
+;; DERIVED from upstream/clojure/test/clojure/test_clojure/transients.clj by upstream/derive-tests -- do not edit.
 ;; Kept: tests whose symbols lie in the clojure.core/cljs.core intersection (plus concurrency).
 
 (ns clojure.test-clojure.transients (:use clojure.test))
@@ -13,7 +13,7 @@
         (= (subvec v 0 (- n 2)) (-> v transient pop! pop! persistent!)))
       33 (+ 32 (inc (* 32 32))) (+ 32 (inc (* 32 32 32)))))
   (testing "off the end"
-    (is (thrown-with-msg? IllegalStateException #"Can't pop empty vector"
+    (is (thrown-with-msg? clotran.host.illegal_state_exception #"Can't pop empty vector"
           (-> [] transient pop!))))
   (testing "copying array from a non-editable when put in tail position")
     (is (= 31 (let [pv (vec (range 34))]

@@ -24,7 +24,7 @@
           rdr (or (get *data-readers* tag) (get default-data-readers tag))]
       (cond rdr (rdr inner)
             *default-data-reader-fn* (*default-data-reader-fn* tag inner)
-            :else (throw (RuntimeException. (str "No reader function for tag " tag)))))
+            :else (throw (clotran.host.runtime_exception. (str "No reader function for tag " tag)))))
 
     (seq? form)
     (with-meta (apply list (map resolve-tags form)) (meta form))

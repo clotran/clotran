@@ -186,7 +186,7 @@ Three layers, each answering a different question:
   so the ledger goes red if a deviation quietly closes. `clj` is the
   oracle; bb never is.
 - **Language tests derived from Clojure's suite -- DONE.**
-  `scripts/derive-tests` computes the intersection of the public names
+  `upstream/derive-tests` computes the intersection of the public names
   of `clojure.core` (the vendored source and its siblings) and
   `cljs.core` (the pinned ClojureScript clone): 470 names, the
   language. It classifies every `deftest` in the vendored tree by the

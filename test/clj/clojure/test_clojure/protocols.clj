@@ -40,7 +40,7 @@
   ([a b] (TestRecord. a b))
   ([a b meta ext] (TestRecord. a b meta ext)))
 (defrecord MapEntry [k v]
-  java.util.Map$Entry
+  clotran.host.map_entry
   (getKey [_] k)
   (getValue [_] v))
 
@@ -52,12 +52,12 @@
                     (meta (var f)))
            {:name 'foo :arglists '([a]) :doc "method with one arg"} foo
            {:name 'bar :arglists '([a b]) :doc "method with two args"} bar
-           {:name 'baz :arglists '([a] [a b]) :doc "method with multiple arities" :tag 'java.lang.String} baz
+           {:name 'baz :arglists '([a] [a b]) :doc "method with multiple arities" :tag 'clotran.host.string} baz
            {:name 'with-quux :arglists '([a]) :doc "method name with a hyphen"} with-quux)))
   (testing "protocol fns throw IllegalArgumentException if no impl matches"
     (is (thrown-with-msg?
-          IllegalArgumentException
-          #"No implementation of method: :foo of protocol: #'clojure.test-clojure.protocols.examples/ExampleProtocol found for class: java.lang.Long"
+          clotran.host.illegal_argument_exception
+          #"No implementation of method: :foo of protocol: #'clojure.test-clojure.protocols.examples/ExampleProtocol found for class: clotran.host.int8"
           (foo 10))))
   (testing "protocols generate a corresponding interface using _ instead of - for method names"
     (is (= ["bar" "baz" "baz" "foo" "with_quux"] (method-names clojure.test_clojure.protocols.examples.ExampleProtocol))))
@@ -70,21 +70,21 @@
     (let [obj (reify ExampleProtocol
                      (baz [a b] "two-arg baz!"))]
       (is (= "two-arg baz!" (baz obj nil)))
-      (is (thrown? AbstractMethodError (baz obj)))))
+      (is (thrown? clotran.host.abstract_method_error (baz obj)))))
   (testing "error conditions checked when defining protocols"
     (is (thrown-with-cause-msg?
-         Exception
+         clotran.host.exception
          #"Definition of function m in protocol badprotdef must take at least one arg."
          (eval '(defprotocol badprotdef (m [])))))
     (is (thrown-with-cause-msg?
-         Exception
+         clotran.host.exception
          #"Function m in protocol badprotdef was redefined. Specify all arities in single definition."
          (eval '(defprotocol badprotdef (m [this arg]) (m [this arg1 arg2]))))))
   (testing "you can redefine a protocol with different methods"
     (eval '(defprotocol Elusive (old-method [x])))
     (eval '(defprotocol Elusive (new-method [x])))
     (is (= :new-method (eval '(new-method (reify Elusive (new-method [x] :new-method))))))
-    (is (fails-with-cause? IllegalArgumentException #"No method of interface: .*\.Elusive found for function: old-method of protocol: Elusive \(The protocol method may have been defined before and removed\.\)"
+    (is (fails-with-cause? clotran.host.illegal_argument_exception #"No method of interface: .*\.Elusive found for function: old-method of protocol: Elusive \(The protocol method may have been defined before and removed\.\)"
           (eval '(old-method (reify Elusive (new-method [x] :new-method))))))))
 
 (deftype HasMarkers []
@@ -115,11 +115,11 @@
   (foo [this] :inline))
 (deftest extend-test
   (testing "you can extend a protocol to a class"
-    (extend String ExampleProtocol
+    (extend clotran.host.string ExampleProtocol
             {:foo identity})
     (is (= "pow" (foo "pow"))))
   (testing "you can have two methods with the same name. Just use namespaces!"
-    (extend String other/SimpleProtocol
+    (extend clotran.host.string other/SimpleProtocol
      {:foo (fn [s] (.toUpperCase s))})
     (is (= "POW" (other/foo "pow"))))
   (testing "you can extend deftype types"
@@ -136,12 +136,12 @@
 
 (deftest illegal-extending
   (testing "you cannot extend a protocol to a type that implements the protocol inline"
-    (is (fails-with-cause? IllegalArgumentException #".*HasProtocolInline already directly implements interface"
+    (is (fails-with-cause? clotran.host.illegal_argument_exception #".*HasProtocolInline already directly implements interface"
           (eval '(extend clojure.test_clojure.protocols.HasProtocolInline
                          clojure.test-clojure.protocols.examples/ExampleProtocol
                          {:foo (fn [_] :extended)})))))
   (testing "you cannot extend to an interface"
-    (is (fails-with-cause? IllegalArgumentException #"interface clojure.test_clojure.protocols.examples.ExampleProtocol is not a protocol"
+    (is (fails-with-cause? clotran.host.illegal_argument_exception #"interface clojure.test_clojure.protocols.examples.ExampleProtocol is not a protocol"
           (eval '(extend clojure.test_clojure.protocols.HasProtocolInline
                          clojure.test_clojure.protocols.examples.ExampleProtocol
                          {:foo (fn [_] :extended)}))))))
@@ -205,7 +205,7 @@
      {:baz (fn [_] "second baz")
       :bar (fn [_ _] "second bar")})
     (let [whatzit (ReExtendingTestWidget.)]
-      (is (thrown? IllegalArgumentException (foo whatzit)))
+      (is (thrown? clotran.host.illegal_argument_exception (foo whatzit)))
       (is (= "second bar" (bar whatzit nil)))
       (is (= "second baz" (baz whatzit))))))
 
@@ -229,7 +229,7 @@
     (is (not (.containsValue empty :a)))))
 
 (deftest defrecord-interfaces-test
-  (testing "java.util.Map"
+  (testing "clotran.host.map"
     (let [rec (r 1 2)]
       (is (= 2 (.size rec)))
       (is (= 3 (.size (assoc rec :c 3))))
@@ -240,10 +240,10 @@
       (is (.containsValue rec 1))
       (is (not (.containsValue rec 3)))
       (is (= 1 (.get rec :a)))
-      (is (thrown? UnsupportedOperationException (.put rec :a 1)))
-      (is (thrown? UnsupportedOperationException (.remove rec :a)))
-      (is (thrown? UnsupportedOperationException (.putAll rec {})))
-      (is (thrown? UnsupportedOperationException (.clear rec)))
+      (is (thrown? clotran.host.unsupported_operation_exception (.put rec :a 1)))
+      (is (thrown? clotran.host.unsupported_operation_exception (.remove rec :a)))
+      (is (thrown? clotran.host.unsupported_operation_exception (.putAll rec {})))
+      (is (thrown? clotran.host.unsupported_operation_exception (.clear rec)))
       (is (= #{:a :b} (.keySet rec)))
       (is (= #{1 2} (set (.values rec))))
       (is (= #{[:a 1] [:b 2]} (.entrySet rec)))
@@ -271,10 +271,10 @@
 (defrecord RecordToTestStatics2 [a b])
 (defrecord RecordToTestStatics3 [a b c])
 (defrecord RecordToTestBasis [a b c])
-(defrecord RecordToTestBasisHinted [^String a ^Long b c])
+(defrecord RecordToTestBasisHinted [^clotran.host.string a ^clotran.host.int8 b c])
 (defrecord RecordToTestHugeBasis [a b c d e f g h i j k l m n o p q r s t u v w x y z])
 (defrecord TypeToTestBasis [a b c])
-(defrecord TypeToTestBasisHinted [^String a ^Long b c])
+(defrecord TypeToTestBasisHinted [^clotran.host.string a ^clotran.host.int8 b c])
 
 (deftest test-statics
   (testing "that a record has its generated static methods"
@@ -303,12 +303,12 @@
       (is (= '[a b c] rb))
       (is (= '[a b c d e f g h i j k l m n o p q r s t u v w x y z] rhg))
       (testing "that record basis hinting looks as we expect"
-        (is (= (:tag (meta (rbh 0))) 'String))
-        (is (= (:tag (meta (rbh 1))) 'Long))
+        (is (= (:tag (meta (rbh 0))) 'clotran.host.string))
+        (is (= (:tag (meta (rbh 1))) 'clotran.host.int8))
         (is (nil? (:tag (meta (rbh 2))))))
       (testing "that type basis hinting looks as we expect"
-        (is (= (:tag (meta (tbh 0))) 'String))
-        (is (= (:tag (meta (tbh 1))) 'Long))
+        (is (= (:tag (meta (tbh 0))) 'clotran.host.string))
+        (is (= (:tag (meta (tbh 1))) 'clotran.host.int8))
         (is (nil? (:tag (meta (tbh 2)))))))))
 
 (defrecord RecordToTestFactories [a b c])
@@ -356,7 +356,7 @@
                (map->RecordToTestA (map->RecordToTestB {:a 1 :b 2 :c 3}))))
         (is (= (map->RecordToTestA {:a 1 :d 4})
                (map->RecordToTestA (map->RecordToTestDegenerateFactories {:a 1 :d 4}))))
-        (is (= r-n (map->RecordToTestFactories (java.util.HashMap.))))
+        (is (= r-n (map->RecordToTestFactories (clotran.host.hash_map.))))
         (is (= r-a (map->RecordToTestA (into {} r-b))))
         (is (= r-a (map->RecordToTestA r-b)))
         (is (not= r-a (map->RecordToTestB r-a)))
@@ -418,17 +418,17 @@
          (TypeToTestHugeFactories.  1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26)
          (->TypeToTestHugeFactories 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26))))
   (testing "that the generated factory checks arity constraints"
-    (is (thrown? clojure.lang.ArityException (->TypeToTestHugeFactories 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25)))
-    (is (thrown? clojure.lang.ArityException (->TypeToTestHugeFactories 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27)))))
+    (is (thrown? clotran.host.arity_exception (->TypeToTestHugeFactories 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25)))
+    (is (thrown? clotran.host.arity_exception (->TypeToTestHugeFactories 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27)))))
 
 (deftest test-ctor-literals
   (testing "that constructor calls to print-dup'able classes are supported as literals"
-    (is (= "Hi" #java.lang.String["Hi"]))
-    (is (= 42 #java.lang.Long[42]))
-    (is (= 42 #java.lang.Long["42"]))
-    (is (= [:a 42] #clojure.lang.MapEntry[:a 42])))
+    (is (= "Hi" #clotran.host.string["Hi"]))
+    (is (= 42 #clotran.host.int8[42]))
+    (is (= 42 #clotran.host.int8["42"]))
+    (is (= [:a 42] #clotran.host.map_entry[:a 42])))
   (testing "that constructor literals are embeddable"
-    (is (= 42 #java.lang.Long[#java.lang.String["42"]])))
+    (is (= 42 #clotran.host.int8[#clotran.host.string["42"]])))
   (testing "that constructor literals work for deftypes too"
     (is (= (.a (TypeToTestFactory. 42)) (.a #clojure.test_clojure.protocols.TypeToTestFactory[42])))
     (is (compare-huge-types
@@ -486,9 +486,9 @@
     (is (= 42 (.a (eval #clojure.test_clojure.protocols.TypeToTestLiterals[42])))))
   
   (testing "that ctor literals only work with constants or statics"
-    (is (thrown? Exception (read-string "#java.util.Locale[(str 'en)]")))
-    (is (thrown? Exception (read-string "(let [s \"en\"] #java.util.Locale[(str 'en)])")))
-    (is (thrown? Exception (read-string "#clojure.test_clojure.protocols.RecordToTestLiterals{(keyword \"a\") 42}"))))
+    (is (thrown? clotran.host.exception (read-string "#clotran.host.locale[(str 'en)]")))
+    (is (thrown? clotran.host.exception (read-string "(let [s \"en\"] #clotran.host.locale[(str 'en)])")))
+    (is (thrown? clotran.host.exception (read-string "#clojure.test_clojure.protocols.RecordToTestLiterals{(keyword \"a\") 42}"))))
   
   (testing "that ctors can have whitespace after class name but before {"
     (is (= (RecordToTestLiterals. 42)
@@ -496,14 +496,14 @@
 
   (testing "that the correct errors are thrown with malformed literals"
     (is (thrown-with-msg?
-          Exception
+          clotran.host.exception
           #"Unreadable constructor form.*"
-          (read-string "#java.util.Locale(\"en\")")))
+          (read-string "#clotran.host.locale(\"en\")")))
     (is (thrown-with-msg?
-          Exception
+          clotran.host.exception
           #"Unexpected number of constructor arguments.*"
-          (read-string "#java.util.Locale[\"\" \"\" \"\" \"\"]")))
-    (is (thrown? Exception (read-string "#java.util.Nachos(\"en\")")))))
+          (read-string "#clotran.host.locale[\"\" \"\" \"\" \"\"]")))
+    (is (thrown? clotran.host.exception (read-string "#clotran.host.nachos(\"en\")")))))
 
 (defrecord RecordToTestPrinting [a b])
 (deftest defrecord-printing
@@ -533,7 +533,7 @@
 (defrecord RecordToTestLongHint [^long a])
 (defrecord RecordToTestByteHint [^byte a])
 (defrecord RecordToTestBoolHint [^boolean a])
-(defrecord RecordToTestCovariantHint [^String a]) ;; same for arrays also
+(defrecord RecordToTestCovariantHint [^clotran.host.string a]) ;; same for arrays also
 (deftype TypeToTestLongHint [^long a])
 (deftype TypeToTestByteHint [^byte a])
 
@@ -547,22 +547,22 @@
     (is (= (.a (TypeToTestLongHint. 42)) (.a (->TypeToTestLongHint (long 42)))))
     (testing "that invalid primitive types on hinted defrecord fields fails"
       (is (thrown?
-            ClassCastException
+            clotran.host.class_cast_exception
             (read-string "#clojure.test_clojure.protocols.RecordToTestLongHint{:a \"\"}")))
       (is (thrown?
-            IllegalArgumentException
+            clotran.host.illegal_argument_exception
             (read-string "#clojure.test_clojure.protocols.RecordToTestLongHint[\"\"]")))
       (is (thrown?
-            IllegalArgumentException
+            clotran.host.illegal_argument_exception
             (read-string "#clojure.test_clojure.protocols.TypeToTestLongHint[\"\"]")))
       (is (thrown?
-            ClassCastException
+            clotran.host.class_cast_exception
             (clojure.test_clojure.protocols.RecordToTestLongHint/create {:a ""})))
       (is (thrown?
-            ClassCastException
+            clotran.host.class_cast_exception
             (map->RecordToTestLongHint {:a ""})))
       (is (thrown?
-            ClassCastException
+            clotran.host.class_cast_exception
             (->RecordToTestLongHint "")))))
   (testing "that primitive hinting requiring coercion works as expected"
     (is (= (RecordToTestByteHint. 42) (clojure.test_clojure.protocols.RecordToTestByteHint/create {:a (byte 42)})))
@@ -581,32 +581,32 @@
   (testing "of an interface"
     (let [s :foo
           r (reify
-             java.util.List
+             clotran.host.list
              (contains [_ o] (= s o)))]
       (testing "implemented methods"
         (is (true? (.contains r :foo)))
         (is (false? (.contains r :bar))))
       (testing "unimplemented methods"
-        (is (thrown? AbstractMethodError (.add r :baz))))))
+        (is (thrown? clotran.host.abstract_method_error (.add r :baz))))))
   (testing "of two interfaces"
     (let [r (reify
-             java.util.List
+             clotran.host.list
              (contains [_ o] (= :foo o))
-             java.util.Collection
+             clotran.host.collection
              (isEmpty [_] false))]
       (is (true? (.contains r :foo)))
       (is (false? (.contains r :bar)))
       (is (false? (.isEmpty r)))))
   (testing "you can't define a method twice"
-    (is (thrown? Exception
+    (is (thrown? clotran.host.exception
          (eval '(reify
-                 java.util.List
+                 clotran.host.list
                  (size [_] 10)
-                 java.util.Collection
+                 clotran.host.collection
                  (size [_] 20))))))
   (testing "you can't define a method not on an interface/protocol/j.l.Object"
-    (is (thrown? Exception
-         (eval '(reify java.util.List (foo [_]))))))
+    (is (thrown? clotran.host.exception
+         (eval '(reify clotran.host.list (foo [_]))))))
   (testing "of a protocol"
     (let [r (reify
              ExampleProtocol
@@ -623,7 +623,7 @@
       (is (= :c (.bar r [:a :b :c])))))
   (testing "methods can recur"
     (let [r (reify
-             java.util.List
+             clotran.host.list
              (get [_ index]
                   (if (zero? index)
                     :done
@@ -632,13 +632,13 @@
       (is (= :done (.get r 1)))))
   (testing "disambiguating with type hints"
     (testing "you must hint an overloaded method"
-      (is (thrown? Exception
+      (is (thrown? clotran.host.exception
             (eval '(reify clojure.test_clojure.protocols.examples.ExampleInterface (hinted [_ o]))))))
     (testing "hinting"
       (let [r (reify
                ExampleInterface
                (hinted [_ ^int i] (inc i))
-               (hinted [_ ^String s] (str s s)))]
+               (hinted [_ ^clotran.host.string s] (str s s)))]
         (is (= 2 (.hinted r 1)))
         (is (= "xoxo" (.hinted r "xo")))))))
 
@@ -657,8 +657,8 @@
      ~c
      (sqtp [p#] p#)))
 
-(try-extend-type String)
-(try-extend-protocol clojure.lang.Keyword)
+(try-extend-type clotran.host.string)
+(try-extend-protocol clotran.host.keyword)
 
 (deftest test-no-ns-capture
   (is (= "foo" (sqtp "foo")))
@@ -693,15 +693,15 @@
 
 ;; CLJ-1180 - resolve type hints in protocol methods
 
-(import 'clojure.lang.ISeq)
+(import )
 (defprotocol P
-  (^ISeq f [_]))
+  (^clotran.host.i_seq f [_]))
 (ns clojure.test-clojure.protocols.other
   (:use clojure.test))
 (defn cf [val]
   (let [aseq (clojure.test-clojure.protocols/f val)]
     (count aseq)))
-(extend-protocol clojure.test-clojure.protocols/P String
+(extend-protocol clojure.test-clojure.protocols/P clotran.host.string
   (f [s] (seq s)))
 (deftest test-resolve-type-hints-in-protocol-methods
   (is (= 4 (clojure.test-clojure.protocols/f "test"))))
@@ -714,7 +714,7 @@
 
 (deftest test-prim-ret-hints-ignored
   (is (thrown-with-msg?
-       Exception
+       clotran.host.exception
        #"Receiver class"
        (eval '(f1 (reify PrimHinted) :foo))))
   (is (= :foo  (f1 (reify PrimHinted (f1 [_ x] x)) :foo)))

@@ -13,19 +13,19 @@
 ;; April 3, 2009
 ;; Revised to use proxy instead of gen-class April 2010
 
-;; This module implements a column-aware wrapper around an instance of java.io.Writer
+;; This module implements a column-aware wrapper around an instance of clotran.host.writer
 
 (in-ns 'clojure.pprint)
 
-(import [clojure.lang IDeref]
-        [java.io Writer])
+(import 
+        )
 
 (def ^:dynamic ^{:private true} *default-page-width* 72)
 
-(defn- get-field [^Writer this sym]
+(defn- get-field [^clotran.host.writer this sym]
   (sym @@this))
 
-(defn- set-field [^Writer this sym new-val] 
+(defn- set-field [^clotran.host.writer this sym new-val] 
   (alter @this assoc sym new-val))
 
 (defn- get-column [this]
@@ -44,30 +44,30 @@
 (defn- get-writer [this]
   (get-field this :base))
 
-(defn- c-write-char [^Writer this ^Integer c]
+(defn- c-write-char [^clotran.host.writer this ^clotran.host.int4 c]
   (dosync (if (= c (int \newline))
 	    (do
               (set-field this :cur 0)
               (set-field this :line (inc (get-field this :line))))
 	    (set-field this :cur (inc (get-field this :cur)))))
-  (.write ^Writer (get-field this :base) c))
+  (.write ^clotran.host.writer (get-field this :base) c))
 
 (defn- column-writer   
   ([writer] (column-writer writer *default-page-width*))
-  ([^Writer writer max-columns]
+  ([^clotran.host.writer writer max-columns]
      (let [fields (ref {:max max-columns, :cur 0, :line 0 :base writer})]
-       (proxy [Writer IDeref] []
+       (proxy [clotran.host.writer clotran.host.i_deref] []
          (deref [] fields)
          (flush []
            (.flush writer))
          (write
-          ([^chars cbuf ^Integer off ^Integer len] 
-             (let [^Writer writer (get-field this :base)] 
+          ([^chars cbuf ^clotran.host.int4 off ^clotran.host.int4 len] 
+             (let [^clotran.host.writer writer (get-field this :base)] 
                (.write writer cbuf off len)))
           ([x]
              (condp = (class x)
-               String 
-               (let [^String s x
+               clotran.host.string 
+               (let [^clotran.host.string s x
                      nl (.lastIndexOf s (int \newline))]
                  (dosync (if (neg? nl)
                            (set-field this :cur (+ (get-field this :cur) (count s)))
@@ -75,9 +75,9 @@
                              (set-field this :cur (- (count s) nl 1))
                              (set-field this :line (+ (get-field this :line)
                                                       (count (filter #(= % \newline) s)))))))
-                 (.write ^Writer (get-field this :base) s))
+                 (.write ^clotran.host.writer (get-field this :base) s))
 
-               Integer
+               clotran.host.int4
                (c-write-char this x)
-               Long
+               clotran.host.int8
                (c-write-char this x))))))))

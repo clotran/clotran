@@ -12,7 +12,7 @@
 
 (alias 'c 'clojure.core)
 
-(defonce ^:private dynalock (Object.))
+(defonce ^:private dynalock (clotran.host.value.))
 
 (defn- dynaload
   [s]
@@ -23,7 +23,7 @@
     (let [v (resolve s)]
       (if v
         @v
-        (throw (RuntimeException. (str "Var " s " is not on the classpath")))))))
+        (throw (clotran.host.runtime_exception. (str "Var " s " is not on the classpath")))))))
 
 (def ^:private quick-check-ref
      (c/delay (dynaload 'clojure.test.check/quick-check)))
@@ -71,7 +71,7 @@
   (let [g (dynaload s)]
     (if (generator? g)
       g
-      (throw (RuntimeException. (str "Var " s " is not a generator"))))))
+      (throw (clotran.host.runtime_exception. (str "Var " s " is not a generator"))))))
 
 (defmacro ^:skip-wiki lazy-combinator
   "Implementation macro, do not call directly."
@@ -154,10 +154,10 @@ gens, each of which should generate something sequential."
       simple-symbol? (symbol)
       qualified-symbol? (such-that qualified? (symbol-ns))
       uuid? (uuid)
-      uri? (fmap #(java.net.URI/create (str "http://" % ".com")) (uuid))
+      uri? (fmap #(clotran.host.uri/create (str "http://" % ".com")) (uuid))
       decimal? (fmap #(BigDecimal/valueOf %)
                     (double* {:infinite? false :NaN? false}))
-      inst? (fmap #(java.util.Date. %)
+      inst? (fmap #(clotran.host.date. %)
                   (large-integer))
       seqable? (one-of [(return nil)
                         (list simple)

@@ -63,7 +63,7 @@
 
 (def keyword-pool
   (delay
-   (binding [gen/*rnd* (java.util.Random. 42)]
+   (binding [gen/*rnd* (clotran.host.random. 42)]
      (into [] (repeatedly 1000 gen/keyword)))))
 
 (defn keyword-from-pool
@@ -72,7 +72,7 @@
 
 (def symbol-pool
   (delay
-   (binding [gen/*rnd* (java.util.Random. 42)]
+   (binding [gen/*rnd* (clotran.host.random. 42)]
      (into [] (repeatedly 1000 gen/symbol)))))
 
 (defn symbol-from-pool

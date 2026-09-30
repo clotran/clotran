@@ -1,4 +1,4 @@
-;; DERIVED from test/clj/clojure/test_clojure/vectors.clj by scripts/derive-tests -- do not edit.
+;; DERIVED from upstream/clojure/test/clojure/test_clojure/vectors.clj by upstream/derive-tests -- do not edit.
 ;; Kept: tests whose symbols lie in the clojure.core/cljs.core intersection (plus concurrency).
 
 (ns clojure.test-clojure.vectors (:use clojure.test))
@@ -27,8 +27,8 @@
 (deftest test-subvec
   (let [v1 (vec (range 100))
         v2 (subvec v1 50 57)]
-    (is (thrown? IndexOutOfBoundsException (v2 -1)))
-    (is (thrown? IndexOutOfBoundsException (v2 7)))
+    (is (thrown? clotran.host.index_out_of_bounds_exception (v2 -1)))
+    (is (thrown? clotran.host.index_out_of_bounds_exception (v2 7)))
     (is (= (v1 50) (v2 0)))
     (is (= (v1 56) (v2 6)))))
 

@@ -2,8 +2,9 @@
 
 Clojure, hosted on Fortran.
 
-It runs Rich Hickey's actual `clojure/core.clj` -- the file, unmodified,
-vendored from `clojure/clojure` at the `clojure-1.12.6` release. Not a Clojure-like
+It runs Rich Hickey's actual `clojure/core.clj`, vendored from
+`clojure/clojure` at the `clojure-1.12.6` release, with every class
+written in clotran's name -- a mechanical rewrite, `upstream/derive`. Not a Clojure-like
 language implemented in Fortran: the Fortran is the *host*, standing
 where the JVM stands, and the language comes from Clojure's own source.
 
@@ -69,7 +70,7 @@ want a JVM class (`Thread`, `Socket`, `SimpleDateFormat`, a SAX
 parser).
 
 `clojure.test` running means Clojure's own tests run. The suite
-clotran is measured by is DERIVED from them: `scripts/derive-tests`
+clotran is measured by is DERIVED from them: `upstream/derive-tests`
 keeps every `deftest` whose symbols lie in the intersection of
 `clojure.core` and `cljs.core` -- the language, as two implementations
 agree on it -- and leaves out the ones that name a Java class, a
@@ -412,9 +413,12 @@ native, using ClojureScript as the control group.
   persistent list/vector/map, namespaces, reader, evaluator.
 - `src/c` -- vendored ICU, built from source for regex. No Homebrew,
   no system library, no runtime dependency.
-- `src/clj` -- Clojure's own source, vendored and unmodified.
+- `upstream/` -- Clojure's own source and test suite, vendored and
+  unmodified, and `derive`, which writes them into `src/clj/clojure`
+  and `test/clj/clojure` in clotran's class names.
+- `src/clj` -- that derived source, and clotran's own (`src/clj/clotran`).
 - `test/f` -- unit tests for the Fortran host, one file per module.
-- `test/clj` -- Clojure's own test suite, vendored verbatim. The
+- `test/clj` -- Clojure's own test suite, derived the same way. The
   conformance measure; `scripts/run-clojure-tests` drives it.
 - `scripts/clotran` -- the user-facing launcher (see below).
 

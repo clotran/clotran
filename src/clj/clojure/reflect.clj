@@ -25,11 +25,11 @@ Key features:
 * Canonicalizes class names as Clojure symbols. Types can extend
   to the TypeReference protocol to indicate that they can be
   unambiguously resolved as a type name. The canonical format
-  requires one non-Java-ish convention: array brackets are <>
+  requires one non-host-ish convention: array brackets are <>
   instead of [] so they can be part of a Clojure symbol.
 
 * Pluggable Reflectors for different implementations. The default
-  JavaReflector is good when you have a class in hand, or use
+  hostReflector is good when you have a class in hand, or use
   the AsmReflector for \"hands off\" reflection without forcing
   classes to load.
 
@@ -51,7 +51,7 @@ Platform implementers must:
 
    All typerefs are normalized into symbols. If you need to
    normalize a typeref yourself, call typesym."
-  (typename [o] "Returns Java name as returned by ASM getClassName, e.g. byte[], java.lang.String[]"))
+  (typename [o] "Returns host name as returned by ASM getClassName, e.g. byte[], clotran.host.string[]"))
 
 (declare default-reflector)
 
@@ -89,7 +89,7 @@ Platform implementers must:
                     include an :ancestors key with the entire set of
                     ancestors, and add all ancestor members to
                     :members.
-     :reflector     implementation to use. Defaults to JavaReflector,
+     :reflector     implementation to use. Defaults to hostReflector,
                     AsmReflector is also an option."
   {:added "1.3"}
   [typeref & options]
@@ -120,4 +120,4 @@ Platform implementers must:
   [obj & options]
   (apply type-reflect (if (class? obj) obj (class obj)) options))
 
-(load "reflect/java")
+(load "reflect/host")

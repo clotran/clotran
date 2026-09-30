@@ -1,4 +1,4 @@
-;; DERIVED from test/clj/clojure/test_clojure/math.clj by scripts/derive-tests -- do not edit.
+;; DERIVED from upstream/clojure/test/clojure/test_clojure/math.clj by upstream/derive-tests -- do not edit.
 ;; Kept: tests whose symbols lie in the clojure.core/cljs.core intersection (plus concurrency).
 
 (ns clojure.test-clojure.math (:require [clojure.test :refer :all] [clojure.math :as m]))
@@ -78,64 +78,64 @@
 ;; math.clj:178 [language]
 (deftest test-round
   (is (= 0 (m/round ##NaN)))
-  (is (= Long/MIN_VALUE (m/round ##-Inf)))
-  (is (= Long/MIN_VALUE (m/round (- Long/MIN_VALUE 2.0))))
-  (is (= Long/MAX_VALUE (m/round ##Inf)))
-  (is (= Long/MAX_VALUE (m/round (+ Long/MAX_VALUE 2.0))))
+  (is (= clotran.host.int8/MIN_VALUE (m/round ##-Inf)))
+  (is (= clotran.host.int8/MIN_VALUE (m/round (- clotran.host.int8/MIN_VALUE 2.0))))
+  (is (= clotran.host.int8/MAX_VALUE (m/round ##Inf)))
+  (is (= clotran.host.int8/MAX_VALUE (m/round (+ clotran.host.int8/MAX_VALUE 2.0))))
   (is (= 4 (m/round 3.5))))
 
 ;; math.clj:186 [language]
 (deftest test-add-exact
   (try
-    (m/add-exact Long/MAX_VALUE 1)
+    (m/add-exact clotran.host.int8/MAX_VALUE 1)
     (is false)
-    (catch ArithmeticException _
+    (catch clotran.host.arithmetic_exception _
       (is true))))
 
 ;; math.clj:193 [language]
 (deftest test-subtract-exact
   (try
-    (m/subtract-exact Long/MIN_VALUE 1)
+    (m/subtract-exact clotran.host.int8/MIN_VALUE 1)
     (is false)
-    (catch ArithmeticException _
+    (catch clotran.host.arithmetic_exception _
       (is true))))
 
 ;; math.clj:200 [language]
 (deftest test-multiply-exact
   (try
-    (m/multiply-exact Long/MAX_VALUE 2)
+    (m/multiply-exact clotran.host.int8/MAX_VALUE 2)
     (is false)
-    (catch ArithmeticException _
+    (catch clotran.host.arithmetic_exception _
       (is true))))
 
 ;; math.clj:207 [language]
 (deftest test-increment-exact
   (try
-    (m/increment-exact Long/MAX_VALUE)
+    (m/increment-exact clotran.host.int8/MAX_VALUE)
     (is false)
-    (catch ArithmeticException _
+    (catch clotran.host.arithmetic_exception _
       (is true))))
 
 ;; math.clj:214 [language]
 (deftest test-decrement-exact
   (try
-    (m/decrement-exact Long/MIN_VALUE)
+    (m/decrement-exact clotran.host.int8/MIN_VALUE)
     (is false)
-    (catch ArithmeticException _
+    (catch clotran.host.arithmetic_exception _
       (is true))))
 
 ;; math.clj:221 [language]
 (deftest test-negate-exact
-  (is (= (inc Long/MIN_VALUE) (m/negate-exact Long/MAX_VALUE)))
+  (is (= (inc clotran.host.int8/MIN_VALUE) (m/negate-exact clotran.host.int8/MAX_VALUE)))
   (try
-    (m/negate-exact Long/MIN_VALUE)
+    (m/negate-exact clotran.host.int8/MIN_VALUE)
     (is false)
-    (catch ArithmeticException _
+    (catch clotran.host.arithmetic_exception _
       (is true))))
 
 ;; math.clj:229 [language]
 (deftest test-floor-div
-  (is (= Long/MIN_VALUE (m/floor-div Long/MIN_VALUE -1)))
+  (is (= clotran.host.int8/MIN_VALUE (m/floor-div clotran.host.int8/MIN_VALUE -1)))
   (is (= -1 (m/floor-div -2 5))))
 
 ;; math.clj:233 [language]
@@ -147,9 +147,9 @@
   (is (NaN? (m/ulp ##NaN)))
   (is (= ##Inf (m/ulp ##Inf)))
   (is (= ##Inf (m/ulp ##-Inf)))
-  (is (= Double/MIN_VALUE (m/ulp 0.0)))
-  (is (= (m/pow 2 971) (m/ulp Double/MAX_VALUE)))
-  (is (= (m/pow 2 971) (m/ulp (- Double/MAX_VALUE)))))
+  (is (= clotran.host.real8/MIN_VALUE (m/ulp 0.0)))
+  (is (= (m/pow 2 971) (m/ulp clotran.host.real8/MAX_VALUE)))
+  (is (= (m/pow 2 971) (m/ulp (- clotran.host.real8/MAX_VALUE)))))
 
 ;; math.clj:244 [language]
 (deftest test-signum
@@ -205,10 +205,10 @@
 (deftest test-next-up
   (is (NaN? (m/next-up ##NaN)))
   (is (= ##Inf (m/next-up ##Inf)))
-  (is (= Double/MIN_VALUE (m/next-up 0.0))))
+  (is (= clotran.host.real8/MIN_VALUE (m/next-up 0.0))))
 
 ;; math.clj:315 [language]
 (deftest test-next-down
   (is (NaN? (m/next-down ##NaN)))
   (is (= ##-Inf (m/next-down ##-Inf)))
-  (is (= (- Double/MIN_VALUE) (m/next-down 0.0))))
+  (is (= (- clotran.host.real8/MIN_VALUE) (m/next-down 0.0))))

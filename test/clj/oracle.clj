@@ -8,7 +8,7 @@
 ;; checks only clotran can answer (Fortran arrays, clotran-type).
 
 (deftype Point [x y]
-  Object
+  clotran.host.value
   (toString [this] (str "Point(" x "," y ")")))
 
 (def p (->Point 3 4))
@@ -26,7 +26,7 @@
 (:x p)
 
 ;; reify closes over its scope
-(str (let [f "foo"] (reify Object (toString [this] f))))
+(str (let [f "foo"] (reify clotran.host.value (toString [this] f))))
 
 (defprotocol Shape
   (area [s])
@@ -324,7 +324,7 @@
 [(quot 7.0 2) (rem 7.0 2) (mod 7.0 2)]
 
 ;; quot by zero
-(try (quot 1 0) (catch Throwable e :err))
+(try (quot 1 0) (catch clotran.host.throwable e :err))
 
 ;; = across types
 (= 1 1.0)
@@ -371,10 +371,10 @@
 ((accessor point :x) (struct point 1 2))
 
 ;; too many vals
-(try (struct point 1 2 3) (catch Throwable e :err))
+(try (struct point 1 2 3) (catch clotran.host.throwable e :err))
 
 ;; not a basis key
-(try (accessor point :q) (catch Throwable e :err))
+(try (accessor point :q) (catch clotran.host.throwable e :err))
 
 ;; kwargs
 ((fn [& {:keys [a b]}] [a b]) :a 1 :b 2)
@@ -397,36 +397,36 @@
 ;; a lazy seq
 (pr-str (map identity ["a"]))
 
-;; a seq has a type. clotran has ONE seq view where the JVM has
+;; a seq has a type. clotran has ONE seq view where clj has
 ;; ChunkedSeq, StringSeq and the rest, so the name it answers is the
 ;; commonest of them.
 (type (seq ["a"]))
 
 ;; class answers the class a literal names, so the two compare equal
-[(= (class "a") String) (= (class 1) Long) (= (class 1.5) Double) (= (class \a) Character)
- (= (class true) Boolean) (= (class :k) clojure.lang.Keyword) (= (class 'a) clojure.lang.Symbol)]
+[(= (class "a") clotran.host.string) (= (class 1) clotran.host.int8) (= (class 1.5) clotran.host.real8) (= (class \a) clotran.host.char)
+ (= (class true) clotran.host.logical) (= (class :k) clotran.host.keyword) (= (class 'a) clotran.host.symbol)]
 
-[(= (class []) clojure.lang.PersistentVector) (= (class {}) clojure.lang.PersistentArrayMap)
- (= (class #{}) clojure.lang.PersistentHashSet) (= (class '(1)) clojure.lang.PersistentList)
- (= (class (lazy-seq [1])) clojure.lang.LazySeq) (= (class (seq [1 2])) clojure.lang.PersistentVector$ChunkedSeq)]
+[(= (class []) clotran.host.persistent_vector) (= (class {}) clotran.host.persistent_array_map)
+ (= (class #{}) clotran.host.persistent_hash_set) (= (class '(1)) clotran.host.persistent_list)
+ (= (class (lazy-seq [1])) clotran.host.lazy_seq) (= (class (seq [1 2])) clotran.host.persistent_vector_chunked_seq)]
 
-[(= (class (atom 1)) clojure.lang.Atom) (= (class (delay 1)) clojure.lang.Delay) (= (class #'first) clojure.lang.Var)
- (= (class #"x") java.util.regex.Pattern) (= (class *ns*) clojure.lang.Namespace) (= (class 1/2) clojure.lang.Ratio)]
+[(= (class (atom 1)) clotran.host.atom) (= (class (delay 1)) clotran.host.delay) (= (class #'first) clotran.host.var)
+ (= (class #"x") clotran.host.pattern) (= (class *ns*) clotran.host.namespace) (= (class 1/2) clotran.host.ratio)]
 
 ;; which is what pprint's writers do
-[(condp = (class "x") String :s Long :l :other) (condp = (class 2) String :s Long :l :other) (condp = (class 2.5) String :s Long :l :other)]
+[(condp = (class "x") clotran.host.string :s clotran.host.int8 :l :other) (condp = (class 2) clotran.host.string :s clotran.host.int8 :l :other) (condp = (class 2.5) clotran.host.string :s clotran.host.int8 :l :other)]
 
 ;; nil has no class; type reads :type metadata first
-[(class nil) (type (with-meta [] {:type :mine})) (= (type "a") String)]
+[(class nil) (type (with-meta [] {:type :mine})) (= (type "a") clotran.host.string)]
 
 ;; instance? and supers agree with class
 [(instance? (class "a") "a") (instance? (class []) []) (instance? (class 1) 1)
- (contains? (supers (class [])) clojure.lang.IPersistentCollection) (contains? (supers (class "a")) CharSequence)
- (contains? (supers (class 1)) Number) (contains? (supers (class (atom 1))) clojure.lang.IDeref)]
+ (contains? (supers (class [])) clotran.host.i_persistent_collection) (contains? (supers (class "a")) clotran.host.char_sequence)
+ (contains? (supers (class 1)) clotran.host.number) (contains? (supers (class (atom 1))) clotran.host.i_deref)]
 
 ;; a thrown thing's class is the one it was made with
-[(= (class (ex-info "e" {})) clojure.lang.ExceptionInfo) (= (class (Exception. "e")) Exception)
- (= (class (try (throw (IllegalArgumentException. "x")) (catch Exception e e))) IllegalArgumentException)]
+[(= (class (ex-info "e" {})) clotran.host.exception_info) (= (class (clotran.host.exception. "e")) clotran.host.exception)
+ (= (class (try (throw (clotran.host.illegal_argument_exception. "x")) (catch clotran.host.exception e e))) clotran.host.illegal_argument_exception)]
 
 ;; char readably
 (pr-str \a)
@@ -459,7 +459,7 @@
 [(compare [1] [2]) (compare [1 2] [1]) (compare [1 2] [1 2])]
 
 ;; compare refuses
-(try (compare 1 "a") (catch Throwable e :err))
+(try (compare 1 "a") (catch clotran.host.throwable e :err))
 
 ;; sort numbers
 (vec (sort [3 1 2]))
@@ -576,7 +576,7 @@
 (/ 1 3)
 
 ;; div by zero
-(try (/ 1 0) (catch Throwable e :err))
+(try (/ 1 0) (catch clotran.host.throwable e :err))
 
 ;; ratio arith
 [(+ 1/2 1/3) (- 1/2 1/3) (* 2/3 3/4)]
@@ -629,7 +629,7 @@
 ;; ratio signs
 [(pos? 1/2) (neg? -1/2)]
 
-(def cm (make-array Integer/TYPE 2 3))
+(def cm (make-array clotran.host.int4/TYPE 2 3))
 
 ;; core alength
 (alength cm)
@@ -653,12 +653,12 @@
 ;; aclone of a row
 [(alength cclone) (aget cclone 0) (aget crow 0) (aget cclone 1)]
 
-(def cobj (make-array Object 2))
+(def cobj (make-array clotran.host.value 2))
 
 ;; object array
 [(aget cobj 0) (aget cobj 1) (alength cobj)]
 
-(def cdbl (make-array Double/TYPE 2))
+(def cdbl (make-array clotran.host.real8/TYPE 2))
 
 ;; double array
 [(aget cdbl 0) (aget cdbl 1)]
@@ -694,7 +694,7 @@
 (macroexpand-1 (quote (.foo x 1 2)))
 
 ;; macroexpand-1 ctor
-(macroexpand-1 (quote (String. "a")))
+(macroexpand-1 (quote (clotran.host.string. "a")))
 
 ;; macroexpand stops at the top
 (macroexpand (quote (when a (when b c))))
@@ -709,7 +709,7 @@
 (special-symbol? (quote foo))
 
 ;; specials count
-(count (. clojure.lang.Compiler specials))
+(count (. clotran.host.compiler specials))
 
 ;; discard in a vector
 [1 3]
@@ -824,10 +824,10 @@
 (require (quote clojure.math))
 
 ;; Math/E
-(= Math/E clojure.math/E)
+(= clotran.host.math/E clojure.math/E)
 
 ;; Math/PI
-(= Math/PI clojure.math/PI)
+(= clotran.host.math/PI clojure.math/PI)
 
 ;; sin
 (clojure.math/sin 0.5)
@@ -896,22 +896,22 @@
 (clojure.math/to-radians 180.0)
 
 ;; to-degrees
-(clojure.math/to-degrees Math/PI)
+(clojure.math/to-degrees clotran.host.math/PI)
 
 ;; exact arithmetic
 [(clojure.math/add-exact 1 2) (clojure.math/subtract-exact 5 9) (clojure.math/multiply-exact 6 7) (clojure.math/increment-exact 1) (clojure.math/decrement-exact 1) (clojure.math/negate-exact 5)]
 
 ;; add-exact overflows
-(try (clojure.math/add-exact Long/MAX_VALUE 1) :no (catch Throwable e :threw))
+(try (clojure.math/add-exact clotran.host.int8/MAX_VALUE 1) :no (catch clotran.host.throwable e :threw))
 
 ;; multiply-exact overflows
-(try (clojure.math/multiply-exact Long/MAX_VALUE 2) :no (catch Throwable e :threw))
+(try (clojure.math/multiply-exact clotran.host.int8/MAX_VALUE 2) :no (catch clotran.host.throwable e :threw))
 
 ;; floor-div/mod
 [(clojure.math/floor-div -7 2) (clojure.math/floor-mod -7 2)]
 
 ;; Math/abs
-[(Math/abs -3) (Math/abs -3.5)]
+[(clotran.host.math/abs -3) (clotran.host.math/abs -3.5)]
 
 ;; format %s
 (format "%s" "a")
@@ -1052,7 +1052,7 @@
 (pr-str 1.0E20)
 
 ;; the largest double
-(pr-str Double/MAX_VALUE)
+(pr-str clotran.host.real8/MAX_VALUE)
 
 ;; a subnormal
 (pr-str 2.2250738585072014E-308)
@@ -1073,23 +1073,23 @@
 (read-string ":kw")
 
 ;; a bad form throws
-(try (read-string "(1") :no (catch Throwable e :threw))
+(try (read-string "(1") :no (catch clotran.host.throwable e :threw))
 
 ;; Long bounds
-[Long/MAX_VALUE Long/MIN_VALUE]
+[clotran.host.int8/MAX_VALUE clotran.host.int8/MIN_VALUE]
 
 ;; Integer bounds
-[Integer/MAX_VALUE Integer/MIN_VALUE]
+[clotran.host.int4/MAX_VALUE clotran.host.int4/MIN_VALUE]
 
 ;; Double bounds
-(expect-diff "DEVIATIONS 27: the smallest subnormal prints 5.0E-324, Java prints 4.9E-324")
-[Double/MAX_VALUE Double/MIN_VALUE]
+(expect-diff "DEVIATIONS 27: the smallest subnormal prints 5.0E-324, clj prints 4.9E-324")
+[clotran.host.real8/MAX_VALUE clotran.host.real8/MIN_VALUE]
 
 ;; Double exponents
-[Double/MAX_EXPONENT Double/MIN_EXPONENT]
+[clotran.host.real8/MAX_EXPONENT clotran.host.real8/MIN_EXPONENT]
 
 ;; the non-finite constants
-[(pr-str Double/POSITIVE_INFINITY) (pr-str Double/NEGATIVE_INFINITY) (pr-str ##NaN)]
+[(pr-str clotran.host.real8/POSITIVE_INFINITY) (pr-str clotran.host.real8/NEGATIVE_INFINITY) (pr-str ##NaN)]
 
 (require (quote [clojure.string :as ltstr]))
 
@@ -1200,14 +1200,14 @@
 (alength (into-array []))
 
 ;; into-array with a type
-(vec (into-array String ["a" "b"]))
+(vec (into-array clotran.host.string ["a" "b"]))
 
 ;; an empty stack trace
 (expect-diff "DEVIATIONS 31: stack traces are empty until PLAN.md step 5 gives the evaluator frames")
-(alength (.getStackTrace (Exception. "x")))
+(alength (.getStackTrace (clotran.host.exception. "x")))
 
 ;; Throwable->map
-(:cause (Throwable->map (Exception. "boom")))
+(:cause (Throwable->map (clotran.host.exception. "boom")))
 
 ;; ex-data
 (ex-data (ex-info "m" {:a 1}))
@@ -1216,34 +1216,34 @@
 (ex-message (ex-info "m" {:a 1}))
 
 ;; instance?
-(instance? clojure.lang.ExceptionInfo (ex-info "m" {}))
+(instance? clotran.host.exception_info (ex-info "m" {}))
 
 ;; catch it by its full name
-(try (throw (ex-info "m" {:a 1})) (catch clojure.lang.ExceptionInfo e (ex-data e)))
+(try (throw (ex-info "m" {:a 1})) (catch clotran.host.exception_info e (ex-data e)))
 
 ;; a plain exception has no data
-(ex-data (Exception. "plain"))
+(ex-data (clotran.host.exception. "plain"))
 
 ;; a proxy method
-(.toString (proxy [Object] [] (toString [] "hello")))
+(.toString (proxy [clotran.host.value] [] (toString [] "hello")))
 
 ;; str goes through it
-(str (proxy [Object] [] (toString [] "world")))
+(str (proxy [clotran.host.value] [] (toString [] "world")))
 
 ;; a closure
-(let [n 5] (.toString (proxy [Object] [] (toString [] (str n)))))
+(let [n 5] (.toString (proxy [clotran.host.value] [] (toString [] (str n)))))
 
 ;; arguments
 (expect-diff "DEVIATIONS 28: proxy accepts methods no superclass declares; Clojure refuses")
-(let [q (proxy [Object] [] (greet [n] (str "hi " n)) (two [a b] (+ a b)))] [(.greet q "x") (.two q 1 2)])
+(let [q (proxy [clotran.host.value] [] (greet [n] (str "hi " n)) (two [a b] (+ a b)))] [(.greet q "x") (.two q 1 2)])
 
 ;; nested arities
 (expect-diff "DEVIATIONS 28: proxy accepts methods no superclass declares; Clojure refuses")
-(let [m (proxy [Object] [] (f ([] 0) ([a] a) ([a b] (+ a b))))] [(.f m) (.f m 7) (.f m 3 4)])
+(let [m (proxy [clotran.host.value] [] (f ([] 0) ([a] a) ([a b] (+ a b))))] [(.f m) (.f m 7) (.f m 3 4)])
 
 ;; this is implicit
 (expect-diff "DEVIATIONS 28: proxy accepts methods no superclass declares; Clojure refuses")
-(let [s (proxy [Object] [] (me [] this))] (identical? s (.me s)))
+(let [s (proxy [clotran.host.value] [] (me [] this))] (identical? s (.me s)))
 
 ;; threading
 (.. "abc" toString toString)
@@ -1267,7 +1267,7 @@
 (assoc [] 0 :x)
 
 ;; assoc past the end throws
-(try (assoc [1] 5 :x) (catch Throwable e :threw))
+(try (assoc [1] 5 :x) (catch clotran.host.throwable e :threw))
 
 ;; assoc-in through a vector
 (assoc-in [[1]] [0 0] 9)
@@ -1320,22 +1320,22 @@
 (defn ltfm ([a] 1) ([a b] 2))
 
 ;; the message says how many
-(try (ltf0 1) (catch Throwable e (boolean (re-find #"Wrong number of args \(1\) passed to" (.getMessage e)))))
+(try (ltf0 1) (catch clotran.host.throwable e (boolean (re-find #"Wrong number of args \(1\) passed to" (.getMessage e)))))
 
 ;; and which function
-(try (ltf0 1) (catch Throwable e (boolean (re-find #"ltf0" (.getMessage e)))))
+(try (ltf0 1) (catch clotran.host.throwable e (boolean (re-find #"ltf0" (.getMessage e)))))
 
 ;; too few
-(try (ltf1) (catch Throwable e (boolean (re-find #"Wrong number of args \(0\)" (.getMessage e)))))
+(try (ltf1) (catch clotran.host.throwable e (boolean (re-find #"Wrong number of args \(0\)" (.getMessage e)))))
 
 ;; a multi-arity fn
-(try (ltfm 1 2 3) (catch Throwable e (boolean (re-find #"Wrong number of args \(3\)" (.getMessage e)))))
+(try (ltfm 1 2 3) (catch clotran.host.throwable e (boolean (re-find #"Wrong number of args \(3\)" (.getMessage e)))))
 
 ;; catchable as ArityException
-(try (ltf0 1) :no (catch clojure.lang.ArityException e :arity))
+(try (ltf0 1) :no (catch clotran.host.arity_exception e :arity))
 
 ;; and as IllegalArgumentException
-(try (ltf0 1) :no (catch IllegalArgumentException e :iae))
+(try (ltf0 1) :no (catch clotran.host.illegal_argument_exception e :iae))
 
 ;; the right arities still work
 [(ltfm 1) (ltfm 1 2)]
@@ -1347,16 +1347,16 @@
 (error-mode (agent 1 :validator pos?))
 
 ;; a countdown latch
-(let [l (java.util.concurrent.CountDownLatch. 2)] (.countDown l) (.getCount l))
+(let [l (clotran.host.count_down_latch. 2)] (.countDown l) (.getCount l))
 
 ;; a validator the state already fails is refused
-(try (set-validator! (atom -1) pos?) :no (catch IllegalStateException e :refused))
+(try (set-validator! (atom -1) pos?) :no (catch clotran.host.illegal_state_exception e :refused))
 
 ;; a PrintWriter shares its writer
-(let [s (java.io.StringWriter.) p (java.io.PrintWriter. s)] (.write p "hi") (str s))
+(let [s (clotran.host.string_writer.) p (clotran.host.print_writer. s)] (.write p "hi") (str s))
 
 ;; and can stand in for *err*
-(let [s (java.io.StringWriter.) p (java.io.PrintWriter. s)] (binding [*err* p] (.write *err* "boom")) (str s))
+(let [s (clotran.host.string_writer.) p (clotran.host.print_writer. s)] (binding [*err* p] (.write *err* "boom")) (str s))
 
 ;; require it
 (require (quote clojure.core))
@@ -1395,37 +1395,37 @@
 (map str [(quote aN) (quote Nx) (quote x1N)])
 
 ;; Long.
-(Long. 1)
+(clotran.host.int8. 1)
 
 ;; String.
-(String. "x")
+(clotran.host.string. "x")
 
 ;; Integer.
-(Integer. 5)
+(clotran.host.int4. 5)
 
 ;; Double.
-(Double. 1.5)
+(clotran.host.real8. 1.5)
 
 ;; Boolean.
-(Boolean. true)
+(clotran.host.logical. true)
 
 ;; Character.
-(Character. \a)
+(clotran.host.char. \a)
 
 ;; Long. parses
-(Long. "12")
+(clotran.host.int8. "12")
 
 ;; Double. parses
-(Double. "1.5")
+(clotran.host.real8. "1.5")
 
 ;; Boolean. parses
-[(Boolean. "true") (Boolean. "no")]
+[(clotran.host.logical. "true") (clotran.host.logical. "no")]
 
 ;; a bad parse throws
-(try (Long. "zz") :no (catch Throwable e :threw))
+(try (clotran.host.int8. "zz") :no (catch clotran.host.throwable e :threw))
 
 ;; the box is the value
-[(= (Long. 1) 1) (= (String. "x") "x")]
+[(= (clotran.host.int8. 1) 1) (= (clotran.host.string. "x") "x")]
 
 ;; print-dup a double
 (binding [*print-dup* true] (pr-str 1.5))
@@ -1489,24 +1489,24 @@
 (with-out-str (clojure.pprint/pprint (quote (defn f [x] (let [y (* x 2)] (if (> y 10) :big :small))))))
 
 ;; twelve wide strings, so the block breaks (a 12-entry MAP would be a hash
-;; map on the JVM and iterate in a different order: values, not text)
+;; map in clj and iterate in a different order: values, not text)
 (with-out-str (clojure.pprint/pprint (vec (map #(apply str (repeat 8 (char (+ 97 %)))) (range 12)))))
 
 (with-out-str (clojure.pprint/print-table [{:a 1 :b 2} {:a 3 :b 4}]))
 
 ;; reduce over a range, a vector and a list goes through the host's own
 ;; .reduce (IReduceInit), as LongRange.reduce and PersistentVector.reduce
-;; do on the JVM; a reduced value stops it and is unwrapped
+;; do in clj; a reduced value stops it and is unwrapped
 [(reduce + (range 100000)) (reduce + 5 (range 3)) (reduce + (range 0)) (reduce + [])
  (reduce + 1.5 (range 0.5 3)) (reduce + (range 10 0 -3)) (reduce conj [] (quote (1 2 3)))
  (reduce (fn [a x] (if (> x 3) (reduced a) (+ a x))) (range 10)) (reduce (fn [a x] (reduced :first)) 0 [1 2])
  (reduce max [3 9 2]) (reduce + (rest (range 5))) (reduce + (next (range 5)))]
 
-[(instance? clojure.lang.IReduceInit (range 3)) (instance? clojure.lang.IReduceInit [1]) (instance? clojure.lang.IReduceInit (list 1))
- (instance? clojure.lang.IReduceInit (map inc [1])) (= (class (range 3)) clojure.lang.LongRange) (seq? (range 3)) (counted? [1])]
+[(instance? clotran.host.i_reduce_init (range 3)) (instance? clotran.host.i_reduce_init [1]) (instance? clotran.host.i_reduce_init (list 1))
+ (instance? clotran.host.i_reduce_init (map inc [1])) (= (class (range 3)) clotran.host.long_range) (seq? (range 3)) (counted? [1])]
 
 ;; chunked seqs: a vector's seq and a range hand out chunks, map and
-;; friends build ChunkedConses through a chunk buffer, as on the JVM
+;; friends build ChunkedConses through a chunk buffer, as in clj
 [(chunked-seq? (seq [1 2 3])) (chunked-seq? (range 5)) (chunked-seq? (seq (range 5))) (chunked-seq? (map inc [1 2]))
  (chunked-seq? (seq (map inc (range 100)))) (chunked-seq? (list 1 2)) (chunked-seq? (seq "ab")) (chunked-seq? nil)]
 
@@ -1531,10 +1531,10 @@
  (pr-str (map inc (range 5))) (str (seq (map inc [1 2]))) (empty (seq (map inc [1 2]))) (with-out-str (doseq [x (range 40)] (print x)))]
 
 [(count (chunk-first (seq (range 0.5 10.5)))) (map inc (range 0.5 4)) (map inc (range 10 0 -3)) (map inc (range 1/3 1 1/3))
- (sequential? (seq (map inc [1 2]))) (seq? (seq (map inc [1 2]))) (= (class (seq (map inc (range 5)))) clojure.lang.ChunkedCons)]
+ (sequential? (seq (map inc [1 2]))) (seq? (seq (map inc [1 2]))) (= (class (seq (map inc (range 5)))) clotran.host.chunked_cons)]
 
 ;; the clock exists (ClojureScript has system-time)
-(pos? (System/nanoTime))
+(pos? (clotran.host.system/nanoTime))
 
 (number? (read-string (re-find #"[0-9.]+" (with-out-str (time nil)))))
 
@@ -1562,7 +1562,7 @@
 
 (let [a (future (reduce + (range 20000)) 1) b (future 2)] (+ @a @b))
 
-(try @(future (throw (ex-info "x" {}))) (catch java.util.concurrent.ExecutionException e :ee))
+(try @(future (throw (ex-info "x" {}))) (catch clotran.host.execution_exception e :ee))
 
 ;; a timed deref: the value when it comes in time, the default when it
 ;; cannot -- each with a certain answer. It was (deref (future (reduce +
@@ -1570,7 +1570,7 @@
 ;; on the machine that day: 1 until the gate ran its halves at once.
 (deref (future 1) 10000 :t)
 
-(deref (future (Thread/sleep 5000) 1) 10 :t)
+(deref (future (clotran.host.thread/sleep 5000) 1) 10 :t)
 
 (let [p (promise) f (future @p)] (deliver p :v) @f)
 
@@ -1613,7 +1613,7 @@
 
 ;; sequence, eduction, iterator-seq, volatile! and the buffering
 ;; transducers: the RT pieces ClojureScript writes in Clojure, written
-;; in Clojure here too (clotran.rt), reached as the JVM members
+;; in Clojure here too (clotran.rt), reached as clj members
 (sequence (map inc) [1 2 3])
 
 (take 3 (sequence (map inc) (range)))
@@ -1646,7 +1646,7 @@
 
 (let [v (volatile! 1)] (vswap! v inc) [@v (volatile? v) (volatile? (atom 1)) (vreset! v 9) @v])
 
-(iterator-seq (.iterator (java.util.ArrayList. [1 2 3])))
+(iterator-seq (.iterator (clotran.rt/array-list [1 2 3])))
 
 (sort (shuffle [3 1 2 5 4]))
 
@@ -1719,7 +1719,7 @@
 
 [(keys (sorted-map 2 :b 1 :a)) (vals (sorted-map 2 :b 1 :a))]
 
-(try (sorted-set 1 "a") (catch ClassCastException e :cce))
+(try (sorted-set 1 "a") (catch clotran.host.class_cast_exception e :cce))
 
 (reduce-kv (fn [acc k v] (conj acc k)) [] (sorted-map 3 :c 1 :a))
 
@@ -1754,33 +1754,33 @@
 
 (do (def ^:private mm-priv 1) [(:private (meta #'mm-priv)) (:name (meta #'mm-priv)) (= *ns* (:ns (meta #'mm-priv)))])
 
-;; the errors arithmetic and compare raise carry the JVM's classes
-(try (quot 9 0) (catch ArithmeticException e :arith))
+;; the errors arithmetic and compare raise carry clj's classes
+(try (quot 9 0) (catch clotran.host.arithmetic_exception e :arith))
 
-(try (mod 9 0) (catch ArithmeticException e :arith))
+(try (mod 9 0) (catch clotran.host.arithmetic_exception e :arith))
 
-(try (/ 1 0) (catch ArithmeticException e :arith))
+(try (/ 1 0) (catch clotran.host.arithmetic_exception e :arith))
 
-(try (* Long/MAX_VALUE 2) (catch ArithmeticException e :arith))
+(try (* clotran.host.int8/MAX_VALUE 2) (catch clotran.host.arithmetic_exception e :arith))
 
-(try (inc Long/MAX_VALUE) (catch ArithmeticException e :arith))
+(try (inc clotran.host.int8/MAX_VALUE) (catch clotran.host.arithmetic_exception e :arith))
 
-(try (compare #{1} #{2}) (catch ClassCastException e :cce))
+(try (compare #{1} #{2}) (catch clotran.host.class_cast_exception e :cce))
 
-(try (compare {} {}) (catch ClassCastException e :cce))
+(try (compare {} {}) (catch clotran.host.class_cast_exception e :cce))
 
-(try (sort [1 :a]) (catch ClassCastException e :cce))
+(try (sort [1 :a]) (catch clotran.host.class_cast_exception e :cce))
 
-(try (compare {:a 1} {:a 1}) (catch ClassCastException e :cce))
+(try (compare {:a 1} {:a 1}) (catch clotran.host.class_cast_exception e :cce))
 
-(try (- Long/MIN_VALUE) (catch ArithmeticException e :arith))
+(try (- clotran.host.int8/MIN_VALUE) (catch clotran.host.arithmetic_exception e :arith))
 
-[(unchecked-add Long/MAX_VALUE 1) (unchecked-inc Long/MAX_VALUE) (unchecked-multiply Long/MAX_VALUE 2) (unchecked-dec Long/MIN_VALUE) (unchecked-subtract Long/MIN_VALUE 1)]
+[(unchecked-add clotran.host.int8/MAX_VALUE 1) (unchecked-inc clotran.host.int8/MAX_VALUE) (unchecked-multiply clotran.host.int8/MAX_VALUE 2) (unchecked-dec clotran.host.int8/MIN_VALUE) (unchecked-subtract clotran.host.int8/MIN_VALUE 1)]
 
 [(+ 1 2 3) (- 10 1 2) (* 2 3 4) (- 5) (inc 1) (dec 1) (+ 1.5 2) (* 2 1/3)]
 
 ;; the small members the language suite named: (Object.) as a sentinel, the bit tests, long-array and double-array
-(let [o (Object.)] [(= o o) (= o (Object.)) (instance? Object o)])
+(let [o (clotran.host.value.)] [(= o o) (= o (clotran.host.value.)) (instance? clotran.host.value o)])
 
 (get-in {:a {:b 1}} [:a :c] :nope)
 
@@ -1817,13 +1817,13 @@
 
 [(keys {}) (vals {}) (keys (sorted-map)) (keys {1 2}) (vals {1 2})]
 
-(try (first 1) (catch IllegalArgumentException e :iae))
+(try (first 1) (catch clotran.host.illegal_argument_exception e :iae))
 
-(try (next :k) (catch IllegalArgumentException e :iae))
+(try (next :k) (catch clotran.host.illegal_argument_exception e :iae))
 
-(try (cons 1 2) (catch IllegalArgumentException e :iae))
+(try (cons 1 2) (catch clotran.host.illegal_argument_exception e :iae))
 
-(try (get-in {:a 1} 5) (catch IllegalArgumentException e :iae))
+(try (get-in {:a 1} 5) (catch clotran.host.illegal_argument_exception e :iae))
 
 [(first nil) (first "ab") (seq nil) (cons 1 nil) (cons 1 "ab") (next [1])]
 
@@ -1842,53 +1842,53 @@
 ;; refusals: a stack is a vector, a list or a seq; an empty one cannot
 ;; pop; a string or an array cannot be conj'd onto; a vector called out
 ;; of range throws; a sorted collection admits only what compare orders
-(try (pop #{1}) (catch ClassCastException e :cce))
+(try (pop #{1}) (catch clotran.host.class_cast_exception e :cce))
 
-(try (peek {:a 1}) (catch ClassCastException e :cce))
+(try (peek {:a 1}) (catch clotran.host.class_cast_exception e :cce))
 
-(try (pop []) (catch IllegalStateException e :ise))
+(try (pop []) (catch clotran.host.illegal_state_exception e :ise))
 
-(try (pop ()) (catch IllegalStateException e :ise))
+(try (pop ()) (catch clotran.host.illegal_state_exception e :ise))
 
-(try (pop! (transient [])) (catch IllegalStateException e :ise))
+(try (pop! (transient [])) (catch clotran.host.illegal_state_exception e :ise))
 
 [(pop [1 2]) (pop '(1 2)) (peek [1 2]) (peek '(1 2)) (peek []) (pop nil) (peek nil)]
 
-(try (pop (seq [1 2])) (catch ClassCastException e :cce))
+(try (pop (seq [1 2])) (catch clotran.host.class_cast_exception e :cce))
 
-(try (conj "" \a) (catch ClassCastException e :cce))
+(try (conj "" \a) (catch clotran.host.class_cast_exception e :cce))
 
-(try (conj (into-array []) 1) (catch ClassCastException e :cce))
+(try (conj (into-array []) 1) (catch clotran.host.class_cast_exception e :cce))
 
-(try ([1 2] 7) (catch IndexOutOfBoundsException e :ioobe))
+(try ([1 2] 7) (catch clotran.host.index_out_of_bounds_exception e :ioobe))
 
-(try ([1 2] -1) (catch IndexOutOfBoundsException e :ioobe))
+(try ([1 2] -1) (catch clotran.host.index_out_of_bounds_exception e :ioobe))
 
 [({:a 1} :a) ({:a 1} :b 2) (#{:a} :a) ((transient #{:a}) :b 2) ({:a nil} :a 2)]
 
-(try (< 1 "a") (catch ClassCastException e :cce))
+(try (< 1 "a") (catch clotran.host.class_cast_exception e :cce))
 
-(try (+ "ab" "cd") (catch ClassCastException e :cce))
+(try (+ "ab" "cd") (catch clotran.host.class_cast_exception e :cce))
 
-(try (inc "a") (catch ClassCastException e :cce))
+(try (inc "a") (catch clotran.host.class_cast_exception e :cce))
 
-(try (max 1 "a") (catch ClassCastException e :cce))
+(try (max 1 "a") (catch clotran.host.class_cast_exception e :cce))
 
-(try (== 1 :a) (catch ClassCastException e :cce))
+(try (== 1 :a) (catch clotran.host.class_cast_exception e :cce))
 
 [(get #{:a} :b 1) (get (transient #{:a}) :b 1) ((transient #{:a}) :b 1)]
 
 [(find [1 2] 0) (find [1 2] 5) (find {:a 1} :a)]
 
-(try (sorted-set ()) (catch ClassCastException e :cce))
+(try (sorted-set ()) (catch clotran.host.class_cast_exception e :cce))
 
-(try (sorted-set {}) (catch ClassCastException e :cce))
+(try (sorted-set {}) (catch clotran.host.class_cast_exception e :cce))
 
-(try (sorted-map [1] 1 #{} 2) (catch ClassCastException e :cce))
+(try (sorted-map [1] 1 #{} 2) (catch clotran.host.class_cast_exception e :cce))
 
-(try (assoc (sorted-map) () 1) (catch ClassCastException e :cce))
+(try (assoc (sorted-map) () 1) (catch clotran.host.class_cast_exception e :cce))
 
-(try (sorted-set-by < 1 "a") (catch Exception e :ex))
+(try (sorted-set-by < 1 "a") (catch clotran.host.exception e :ex))
 
 [(sorted-set nil) (sorted-set 1.5 1) (sorted-set "b" "a") (sorted-set [2] [1])]
 
@@ -1898,30 +1898,30 @@
 
 (= "A" "A")
 
-(do (require 'clojure.string) (try (clojure.string/upper-case nil) (catch NullPointerException e :npe)))
+(do (require 'clojure.string) (try (clojure.string/upper-case nil) (catch clotran.host.null_pointer_exception e :npe)))
 
-(do (require 'clojure.string) (try (clojure.string/reverse nil) (catch NullPointerException e :npe)))
+(do (require 'clojure.string) (try (clojure.string/reverse nil) (catch clotran.host.null_pointer_exception e :npe)))
 
-(do (require 'clojure.string) (try (clojure.string/split nil #"-") (catch NullPointerException e :npe)))
+(do (require 'clojure.string) (try (clojure.string/split nil #"-") (catch clotran.host.null_pointer_exception e :npe)))
 
-(do (require 'clojure.string) (try (clojure.string/capitalize nil) (catch NullPointerException e :npe)))
+(do (require 'clojure.string) (try (clojure.string/capitalize nil) (catch clotran.host.null_pointer_exception e :npe)))
 
-(do (require 'clojure.string) (try (clojure.string/trim nil) (catch NullPointerException e :npe)))
+(do (require 'clojure.string) (try (clojure.string/trim nil) (catch clotran.host.null_pointer_exception e :npe)))
 
-(do (require 'clojure.string) (try (clojure.string/replace nil #"a" "b") (catch NullPointerException e :npe)))
+(do (require 'clojure.string) (try (clojure.string/replace nil #"a" "b") (catch clotran.host.null_pointer_exception e :npe)))
 
-(try (.toUpperCase nil) (catch NullPointerException e :npe))
+(try (.toUpperCase nil) (catch clotran.host.null_pointer_exception e :npe))
 
-(try (subs nil 0 1) (catch NullPointerException e :npe))
+(try (subs nil 0 1) (catch clotran.host.null_pointer_exception e :npe))
 
 [@(future 1) (count (pmap inc [1 2 3]))]
 
 ;; a host error is an exception with a message; a symbol is callable;
 ;; keyword arguments merge a trailing map; a keyword called with the
 ;; wrong count is an ArityException; and the small edges the suite named
-(try (first 1) (catch RuntimeException e (boolean (.getMessage e))))
+(try (first 1) (catch clotran.host.runtime_exception e (boolean (.getMessage e))))
 
-(try (get-in {:a 1} 5) (catch Exception e (boolean (re-find #"ISeq" (.getMessage e)))))
+(try (get-in {:a 1} 5) (catch clotran.host.exception e (boolean (re-find #"ISeq" (.getMessage e)))))
 
 ['b {'b 2}]
 
@@ -1931,11 +1931,11 @@
 
 (let [addn (fn [n & {:keys [a b] :or {a 0 b 0}}] (+ n a b))] [(addn 100 :a 1 {:b 2}) (addn 100 :a 1) (addn 100 {:a 5 :b 2})])
 
-(try (:kw) (catch IllegalArgumentException e (.getMessage e)))
+(try (:kw) (catch clotran.host.illegal_argument_exception e (.getMessage e)))
 
-(try (apply :foo/bar (range 20)) (catch IllegalArgumentException e (.getMessage e)))
+(try (apply :foo/bar (range 20)) (catch clotran.host.illegal_argument_exception e (.getMessage e)))
 
-(try (apply :foo/bar (range 21)) (catch IllegalArgumentException e (.getMessage e)))
+(try (apply :foo/bar (range 21)) (catch clotran.host.illegal_argument_exception e (.getMessage e)))
 
 [(parse-long "9223372036854775807") (parse-long "-9223372036854775808") (parse-long "+42") (parse-long "x")]
 
@@ -1943,9 +1943,9 @@
 
 (ex-data (ex-info "message" nil))
 
-(try (eval '(throw)) (catch RuntimeException e :rt))
+(try (eval '(throw)) (catch clotran.host.runtime_exception e :rt))
 
-(try (.jump "foo" 1) (catch Exception e (boolean (re-find #"No matching method.*taking 1 arg" (.getMessage e)))))
+(try (.jump "foo" 1) (catch clotran.host.exception e (boolean (re-find #"No matching method.*taking 1 arg" (.getMessage e)))))
 
 (reduce-kv + 10 [2 4 6])
 
@@ -1953,9 +1953,9 @@
 
 [(= [1 2 3 4 5] (eduction (map inc) (range 5))) (= (eduction (map inc) []) []) (= [1] (eduction (map inc) [5]))]
 
-[(clojure.math/floor-div Long/MIN_VALUE -1) (clojure.math/floor-div -7 2) (clojure.math/floor-div 7 -2)]
+[(clojure.math/floor-div clotran.host.int8/MIN_VALUE -1) (clojure.math/floor-div -7 2) (clojure.math/floor-div 7 -2)]
 
-[(= ##Inf (clojure.math/ulp ##Inf)) (= Double/MIN_VALUE (clojure.math/ulp 0.0)) (clojure.math/ulp 1.0)]
+[(= ##Inf (clojure.math/ulp ##Inf)) (= clotran.host.real8/MIN_VALUE (clojure.math/ulp 0.0)) (clojure.math/ulp 1.0)]
 
 (NaN? (clojure.math/IEEE-remainder 2 0.0))
 
@@ -1976,25 +1976,25 @@
 
 (require '[clojure.string :as s])
 
-(let [k (read-string "::s/x")] [(pr-str k) (namespace k) (= k :clojure.string/x) (try (read-string "::clojure.core/y") (catch Exception e :invalid))])
+(let [k (read-string "::s/x")] [(pr-str k) (namespace k) (= k :clojure.string/x) (try (read-string "::clojure.core/y") (catch clotran.host.exception e :invalid))])
 
-(try (read-string "::nope/x") (catch Exception e (boolean (re-find #"Invalid token" (.getMessage e)))))
+(try (read-string "::nope/x") (catch clotran.host.exception e (boolean (re-find #"Invalid token" (.getMessage e)))))
 
 (binding [*ns* (find-ns 'clojure.string)] (read-string "::q"))
 
-(try (derive :user/a :user/b) (derive :user/b :user/a) (catch Exception e (.getMessage e)))
+(try (derive :user/a :user/b) (derive :user/b :user/a) (catch clotran.host.exception e (.getMessage e)))
 
 ;; a namespace carries metadata
-(do (alter-meta! *ns* assoc :k 1) [(:k (meta *ns*)) (instance? clojure.lang.IMeta *ns*)])
+(do (alter-meta! *ns* assoc :k 1) [(:k (meta *ns*)) (instance? clotran.host.i_meta *ns*)])
 
-(do (def stub-me :orig) (let [p (promise)] (try (with-redefs [stub-me :temp] (deliver p stub-me) (throw (Exception. "x"))) (catch Exception e nil)) [@p stub-me]))
+(do (def stub-me :orig) (let [p (promise)] (try (with-redefs [stub-me :temp] (deliver p stub-me) (throw (clotran.host.exception. "x"))) (catch clotran.host.exception e nil)) [@p stub-me]))
 
 (let [m (into (sorted-map) '{1 a, 2 b, 3 c, 4 d})] [(reduce-kv str "" m) (reduce-kv (fn [acc k v] (reduced (+ acc k))) 0 m)])
 
-[(instance? clojure.lang.IKVReduce {}) (instance? clojure.lang.IKVReduce []) (instance? clojure.lang.IKVReduce (sorted-map))]
+[(instance? clotran.host.ikv_reduce {}) (instance? clotran.host.ikv_reduce []) (instance? clotran.host.ikv_reduce (sorted-map))]
 
 ;; a map entry keeps its type through seqs and find; conj and assoc on one make a vector
-[(map-entry? (first {1 2})) (map-entry? [1 2]) (map-entry? (find {1 2} 1)) (map-entry? (find [5 6] 1)) (map-entry? (conj (first {1 2}) 3)) (map-entry? (assoc (first {1 2}) 0 9)) (vector? (first {1 2})) (map-entry? (first (seq (sorted-map 1 2)))) (map-entry? (first (rseq (sorted-map 1 2)))) (map-entry? (first (subseq (sorted-map 1 2) > 0))) (map-entry? (nth (seq {1 2 3 4}) 1)) (map-entry? (first (reduce conj [] {1 2}))) (map-entry? (first (into [] {1 2}))) (map-entry? (first (map identity {1 2}))) (map-entry? (first (vec {1 2}))) (map-entry? (clojure.lang.MapEntry/create 1 2)) (= [1 2] (first {1 2})) (key (first {1 2})) (val (clojure.lang.MapEntry/create 1 2))]
+[(map-entry? (first {1 2})) (map-entry? [1 2]) (map-entry? (find {1 2} 1)) (map-entry? (find [5 6] 1)) (map-entry? (conj (first {1 2}) 3)) (map-entry? (assoc (first {1 2}) 0 9)) (vector? (first {1 2})) (map-entry? (first (seq (sorted-map 1 2)))) (map-entry? (first (rseq (sorted-map 1 2)))) (map-entry? (first (subseq (sorted-map 1 2) > 0))) (map-entry? (nth (seq {1 2 3 4}) 1)) (map-entry? (first (reduce conj [] {1 2}))) (map-entry? (first (into [] {1 2}))) (map-entry? (first (map identity {1 2}))) (map-entry? (first (vec {1 2}))) (map-entry? (clotran.host.map_entry/create 1 2)) (= [1 2] (first {1 2})) (key (first {1 2})) (val (clotran.host.map_entry/create 1 2))]
 
 (require 'clojure.walk)
 
@@ -2004,20 +2004,20 @@
 [(:b #{:a} 1) (:b (transient #{:a}) 1) (:a {:a nil} 1) (:b {:a 1} 1) (:b (transient {:a 1}) 1) (:a #{:a} 1)]
 
 ;; an error is an instance of its class, and of what catch would take it under
-(let [e (try (/ 1 0) (catch Exception e e))] [(instance? ArithmeticException e) (instance? RuntimeException e) (instance? IllegalArgumentException e) (instance? Exception e) (instance? Throwable e) (instance? Object e)])
+(let [e (try (/ 1 0) (catch clotran.host.exception e e))] [(instance? clotran.host.arithmetic_exception e) (instance? clotran.host.runtime_exception e) (instance? clotran.host.illegal_argument_exception e) (instance? clotran.host.exception e) (instance? clotran.host.throwable e) (instance? clotran.host.value e)])
 
 ;; isAssignableFrom, and extend's refusal of a type that implements the protocol inline
-(do (defprotocol PP (pp [x])) (deftype TT [] PP (pp [_] 1)) [(extends? PP TT) (satisfies? PP (TT.)) (try (extend TT PP {:pp (fn [_] 2)}) :extended (catch IllegalArgumentException e (boolean (re-find #"already directly implements" (.getMessage e)))))])
+(do (defprotocol PP (pp [x])) (deftype TT [] PP (pp [_] 1)) [(extends? PP TT) (satisfies? PP (TT.)) (try (extend TT PP {:pp (fn [_] 2)}) :extended (catch clotran.host.illegal_argument_exception e (boolean (re-find #"already directly implements" (.getMessage e)))))])
 
-[(.isAssignableFrom Object String) (.isAssignableFrom clojure.lang.IPersistentVector clojure.lang.PersistentVector) (.isAssignableFrom String Object) (.isAssignableFrom clojure.lang.IPersistentMap clojure.lang.PersistentTreeMap) (.isAssignableFrom clojure.lang.IPersistentMap clojure.lang.PersistentVector) (.isAssignableFrom String String)]
+[(.isAssignableFrom clotran.host.value clotran.host.string) (.isAssignableFrom clotran.host.i_persistent_vector clotran.host.persistent_vector) (.isAssignableFrom clotran.host.string clotran.host.value) (.isAssignableFrom clotran.host.i_persistent_map clotran.host.persistent_tree_map) (.isAssignableFrom clotran.host.i_persistent_map clotran.host.persistent_vector) (.isAssignableFrom clotran.host.string clotran.host.string)]
 
 ;; the root of a Var under a binding: bindRoot, alter-var-root and def reach the root, the binding shows
 (do (def ^:dynamic dv 1) [(binding [dv 2] (with-redefs [dv 3] [dv (.getRawRoot #'dv)])) dv (binding [dv 2] (alter-var-root #'dv inc) [dv (.getRawRoot #'dv)]) dv (binding [dv 5] (def dv 7) [dv (.getRawRoot #'dv)]) dv (binding [dv 8] (binding [dv 9] (with-redefs [dv 10] dv))) dv])
 
 ;; Long/valueOf with the wrong count fails in the Reflector's words
-(try (eval '(Long/valueOf)) (catch Exception e (boolean (re-find #"No matching method.*taking 0 args" (.getMessage (or (.getCause e) e))))))
+(try (eval '(clotran.host.int8/valueOf)) (catch clotran.host.exception e (boolean (re-find #"No matching method.*taking 0 args" (.getMessage (or (.getCause e) e))))))
 
-(try (eval '(Long/valueOf :a :b :c)) (catch Exception e (boolean (re-find #"No matching method.*taking 3 args" (.getMessage (or (.getCause e) e))))))
+(try (eval '(clotran.host.int8/valueOf :a :b :c)) (catch clotran.host.exception e (boolean (re-find #"No matching method.*taking 3 args" (.getMessage (or (.getCause e) e))))))
 
 ;; in-ns under a binding of *ns* changes the binding, not the root
 (binding [*ns* *ns*] (in-ns 'oracle-tmp-ns) (def in-tmp 1) [(ns-name *ns*) (some? (ns-resolve 'oracle-tmp-ns 'in-tmp))])
@@ -2025,7 +2025,7 @@
 (ns-name *ns*)
 
 ;; a qualified symbol is not a local
-[(try (eval '(let* [a/x 1] x)) (catch Exception e :threw)) (try (eval '(loop* [a/x 1] x)) (catch Exception e :threw)) (let [/ 1] /)]
+[(try (eval '(let* [a/x 1] x)) (catch clotran.host.exception e :threw)) (try (eval '(loop* [a/x 1] x)) (catch clotran.host.exception e :threw)) (let [/ 1] /)]
 
 ;; case keys its table with Util.hash, which is hashCode: 1 and
 ;; -9223372034707292159 collide and the condp under the key tells them apart
@@ -2034,16 +2034,16 @@
 ;; a cause
 (let [e (ex-info "outer" {:o 1} (ex-info "inner" {:i 2}))] [(ex-message (ex-cause e)) (ex-data (ex-cause e)) (ex-cause (ex-cause e)) (ex-message (.getCause e)) (ex-data e)])
 
-(let [{:keys [cause via]} (Throwable->map (Exception. "I am not a number" (Exception. "double two")))] [cause (mapv :message via) (count via) (vector? via)])
+(let [{:keys [cause via]} (Throwable->map (clotran.host.exception. "I am not a number" (clotran.host.exception. "double two")))] [cause (mapv :message via) (count via) (vector? via)])
 
-(let [{:keys [cause via]} (Throwable->map (Exception. "alone"))] [cause (mapv :message via)])
+(let [{:keys [cause via]} (Throwable->map (clotran.host.exception. "alone"))] [cause (mapv :message via)])
 
 ;; a macro called with the wrong count says the count the caller wrote
 (defmacro m0 [] 1)
 
 (defmacro m1 [a] a)
 
-[(try (macroexpand '(m0 1)) (catch clojure.lang.ArityException e (.getMessage e))) (try (macroexpand '(m1 1 2)) (catch clojure.lang.ArityException e (.getMessage e))) (macroexpand '(m1 5))]
+[(try (macroexpand '(m0 1)) (catch clotran.host.arity_exception e (.getMessage e))) (try (macroexpand '(m1 1 2)) (catch clotran.host.arity_exception e (.getMessage e))) (macroexpand '(m1 5))]
 
 ;; a private Var is not reachable by its qualified name from another namespace; #'ns/x still is
 (ns other-ns)
@@ -2052,12 +2052,12 @@
 
 (in-ns 'user)
 
-(try (eval 'other-ns/secret) (catch Exception e (boolean (re-find #"not public" (.getMessage (or (.getCause e) e))))))
+(try (eval 'other-ns/secret) (catch clotran.host.exception e (boolean (re-find #"not public" (.getMessage (or (.getCause e) e))))))
 
 @#'other-ns/secret
 
 ;; find-ns does not create, so the-ns and alias can refuse
-[(find-ns 'nope-ns) (try (alias 'bogus 'epicfail) (catch Exception e (.getMessage e))) (some? (find-ns 'clojure.core))]
+[(find-ns 'nope-ns) (try (alias 'bogus 'epicfail) (catch clotran.host.exception e (.getMessage e))) (some? (find-ns 'clojure.core))]
 
 ;; Math edges
 (require 'clojure.math)
@@ -2077,7 +2077,7 @@
 ;; remove-ns takes a namespace out of the registry, and refuses clojure.core
 (do (create-ns 'temp-ns) [(some? (find-ns 'temp-ns)) (some? (remove-ns 'temp-ns)) (find-ns 'temp-ns) (remove-ns 'temp-ns)])
 
-(try (remove-ns 'clojure.core) (catch IllegalArgumentException e (.getMessage e)))
+(try (remove-ns 'clojure.core) (catch clotran.host.illegal_argument_exception e (.getMessage e)))
 
 ;; seqable? is RT.canSeq
 [(seqable? nil) (seqable? 1) (seqable? "s") (seqable? [1]) (seqable? {}) (seqable? #{}) (seqable? '(1)) (seqable? (range 3)) (seqable? (->Foo 1 2 3)) (seqable? (eduction (map inc) [1])) (seqable? :k) (seqable? 'x) (seqable? (fn []))]
@@ -2092,11 +2092,11 @@
 
 (defmethod bar [:user/shape :user/rect] [x y] :shape-rect)
 
-[(try (bar :user/rect :user/rect) (catch IllegalArgumentException e (boolean (re-find #"Multiple methods in multimethod 'bar' match dispatch value" (.getMessage e))))) (prefers bar) (bar :user/rect :user/shape) (bar :user/shape :user/rect) (bar :user/rect :user/other)]
+[(try (bar :user/rect :user/rect) (catch clotran.host.illegal_argument_exception e (boolean (re-find #"Multiple methods in multimethod 'bar' match dispatch value" (.getMessage e))))) (prefers bar) (bar :user/rect :user/shape) (bar :user/shape :user/rect) (bar :user/rect :user/other)]
 
 (do (prefer-method bar [:user/rect :user/shape] [:user/shape :user/rect]) nil)
 
-[(bar :user/rect :user/rect) (prefers bar) (try (prefer-method bar [:user/shape :user/rect] [:user/rect :user/shape]) (catch IllegalStateException e (boolean (re-find #"Preference conflict" (.getMessage e)))))]
+[(bar :user/rect :user/rect) (prefers bar) (try (prefer-method bar [:user/shape :user/rect] [:user/rect :user/shape]) (catch clotran.host.illegal_state_exception e (boolean (re-find #"Preference conflict" (.getMessage e)))))]
 
 (do (derive :user/parent-1 :user/grandparent-1) (derive :user/parent-2 :user/grandparent-2) (derive :user/child :user/parent-1) (derive :user/child :user/parent-2) nil)
 
@@ -2130,7 +2130,7 @@
 
 (defmethod indirect-3 :parent-2 [_] :p2)
 
-[(indirect-3 :child) (indirect-3 :parent-2) (try (indirect-3 :nobody) (catch IllegalArgumentException e (boolean (re-find #"No method in multimethod 'indirect-3' for dispatch value: :nobody" (.getMessage e)))))]
+[(indirect-3 :child) (indirect-3 :parent-2) (try (indirect-3 :nobody) (catch clotran.host.illegal_argument_exception e (boolean (re-find #"No method in multimethod 'indirect-3' for dispatch value: :nobody" (.getMessage e)))))]
 
 ;; a method on an ancestor applies, the default when none does, and a later derive is seen
 (defmulti area :shape)
@@ -2145,15 +2145,15 @@
 
 (defmethod simple1 :a [x] :a)
 
-[(count (methods simple1)) (do (remove-all-methods simple1) (count (methods simple1))) (prefers simple1) (try (simple1 :a) (catch IllegalArgumentException e :no-method))]
+[(count (methods simple1)) (do (remove-all-methods simple1) (count (methods simple1))) (prefers simple1) (try (simple1 :a) (catch clotran.host.illegal_argument_exception e :no-method))]
 
 ;; the class keywords are classes to isa?, and an interface has parents
-[(class? (class {})) (class? :foo) (class? :user/rect) (isa? (class {}) clojure.lang.IPersistentMap) (isa? (class []) clojure.lang.IPersistentMap) (isa? (class "") Object) (contains? (supers clojure.lang.IPersistentVector) clojure.lang.IPersistentCollection) (isa? clojure.lang.IPersistentMap clojure.lang.IPersistentCollection) (isa? clojure.lang.IPersistentVector clojure.lang.Sequential)]
+[(class? (class {})) (class? :foo) (class? :user/rect) (isa? (class {}) clotran.host.i_persistent_map) (isa? (class []) clotran.host.i_persistent_map) (isa? (class "") clotran.host.value) (contains? (supers clotran.host.i_persistent_vector) clotran.host.i_persistent_collection) (isa? clotran.host.i_persistent_map clotran.host.i_persistent_collection) (isa? clotran.host.i_persistent_vector clotran.host.sequential)]
 
 (binding [*print-dup* true] (pr-str [{:a 1} [1] '(1) #{1} "s" 1.5 \c :k 'sym nil true]))
 
 ;; syntax-quote leaves a dotted symbol as written -- a class name, as Compiler.resolveSymbol takes it
-(let [x 1] [(pr-str `(clojure.core java.util.Map foo.bar/baz x)) (pr-str `clojure.string) (pr-str `String)])
+(let [x 1] [(pr-str `(clojure.core clotran.host.map foo.bar/baz x)) (pr-str `clojure.string) (pr-str `clotran.host.string)])
 
 ;; str of nested collections goes through the native printer: nothing lost between a key and a map value
 [(str {:data {:x 1}}) (str {:abcdef {:x 1}}) (str {"data" {:x 1}}) (str [{:data 1}]) (str {:a [1 {:b 2}]}) (str {"a" 1}) (str ["a" \b]) (str '("a")) (str #{"a"})]
@@ -2180,8 +2180,8 @@
 (apply (fn [& r] r) nil)
 (apply (fn [& r] r) [])
 (apply (fn [& r] (count r)) 1 2 (range 3))
-(try (apply (fn [a b] [a b]) [1]) (catch clojure.lang.ArityException e :arity))
-(try (apply (fn [a b & r] [a b]) [1]) (catch clojure.lang.ArityException e :arity))
+(try (apply (fn [a b] [a b]) [1]) (catch clotran.host.arity_exception e :arity))
+(try (apply (fn [a b & r] [a b]) [1]) (catch clotran.host.arity_exception e :arity))
 (let [a (atom 0)] (apply (fn [x & r] x) (map (fn [i] (swap! a inc) i) (range 100))) @a)
 (deref (future (apply (fn [x & r] (take 2 r)) (range))) 1000 :timeout)
 
@@ -2190,24 +2190,24 @@
 [(count "\u2002ab") (count "é") (.length "é") (subs "é" 0 1) (.charAt "\u2002x" 1) (int (.charAt "\u2002x" 0)) (int \u2002) (= "\u2002" (str \u2002)) (str \o101) (int \u00e9)]
 [(clojure.string/triml "\u2002 \tbar") (clojure.string/trimr "bar\t \u2002") (clojure.string/trim "\u2000bar\t \u2002") (clojure.string/blank? "\u2002") (clojure.string/blank? "\u00a0")]
 [(nth "aé" 1) (.indexOf "aéb" "b") (clojure.string/upper-case "éa") (clojure.string/lower-case "ÉA") (vec "aé") (seq "aé") (clojure.string/reverse "aé") (last "aé") (get "aé" 1) (contains? "aé" 1) (contains? "aé" 2) (clojure.string/capitalize "élan")]
-[(Character/isWhitespace \u2002) (Character/isWhitespace \u00a0) (Character/isLetter \é) (Character/isLetter \u2002) (Character/toUpperCase \é) (Character/isLetter \A) (Character/isWhitespace \space) (Character/isWhitespace \a) (Character/toLowerCase \É)]
+[(clotran.host.char/isWhitespace \u2002) (clotran.host.char/isWhitespace \u00a0) (clotran.host.char/isLetter \é) (clotran.host.char/isLetter \u2002) (clotran.host.char/toUpperCase \é) (clotran.host.char/isLetter \A) (clotran.host.char/isWhitespace \space) (clotran.host.char/isWhitespace \a) (clotran.host.char/toLowerCase \É)]
 [(re-find #"é" "aéb") (clojure.string/index-of "aéb" "b") (.substring "aéb" 2) (re-seq #".\d" "é1x2") (clojure.string/replace "aéb" #"é" "E") (clojure.string/replace "aébé" "é" "<$0>") (clojure.string/last-index-of "éaéb" "é") (clojure.string/index-of "éaéb" "é" 1) (clojure.string/split "éaéb" #"é") (clojure.string/split "aébéc" #"")]
-[(pr-str "é") (pr-str \é) (pr-str \u2002) (clojure.string/escape "aé" {\é "E"}) (.toUpperCase "é") (subs "aéb" 1) (subs "aéb" 1 2) (subs "aéb" 3) (try (subs "aéb" 4) (catch StringIndexOutOfBoundsException e :oob)) (try (subs "aéb" 2 1) (catch StringIndexOutOfBoundsException e :oob)) (.substring "aéb" 1 3) (map int "aé") (apply str (map char [233 65]))]
-[(re-matches #".." "aé") (re-matches #".." "aéb") (let [m (re-matcher #"é" "aébé")] (re-find m) [(.start m) (.end m)]) (clojure.string/replace-first "aébé" #"é" "E") (clojure.string/split-lines "é\nb") (clojure.string/includes? "aéb" "é") (clojure.string/starts-with? "éa" "é") (clojure.string/ends-with? "aé" "é") (let [m (re-matcher #"é" "aébé")] (re-find m) (let [sb (StringBuffer.)] (.appendReplacement m sb "E") (.appendTail m sb) (str sb)))]
-(expect-diff "DEVIATIONS 14: ICU's \\s is Unicode, java.util.regex's is ASCII")
+[(pr-str "é") (pr-str \é) (pr-str \u2002) (clojure.string/escape "aé" {\é "E"}) (.toUpperCase "é") (subs "aéb" 1) (subs "aéb" 1 2) (subs "aéb" 3) (try (subs "aéb" 4) (catch clotran.host.string_index_out_of_bounds_exception e :oob)) (try (subs "aéb" 2 1) (catch clotran.host.string_index_out_of_bounds_exception e :oob)) (.substring "aéb" 1 3) (map int "aé") (apply str (map char [233 65]))]
+[(re-matches #".." "aé") (re-matches #".." "aéb") (let [m (re-matcher #"é" "aébé")] (re-find m) [(.start m) (.end m)]) (clojure.string/replace-first "aébé" #"é" "E") (clojure.string/split-lines "é\nb") (clojure.string/includes? "aéb" "é") (clojure.string/starts-with? "éa" "é") (clojure.string/ends-with? "aé" "é") (let [m (re-matcher #"é" "aébé")] (re-find m) (let [sb (clotran.host.string_buffer.)] (.appendReplacement m sb "E") (.appendTail m sb) (str sb)))]
+(expect-diff "DEVIATIONS 14: ICU's \\s is Unicode, clj's regex's is ASCII")
 (clojure.string/split "a\u2002b" #"\s")
-(expect-diff "DEVIATIONS 14: ICU's \\w is Unicode, java.util.regex's is ASCII")
+(expect-diff "DEVIATIONS 14: ICU's \\w is Unicode, clj's regex's is ASCII")
 (re-find #"\w+" "héllo")
-(expect-diff "DEVIATIONS 14: ICU's (?i) folds Unicode, java.util.regex's folds ASCII")
+(expect-diff "DEVIATIONS 14: ICU's (?i) folds Unicode, clj's regex's folds ASCII")
 (re-find #"(?i)É" "xé")
 (expect-diff "DEVIATIONS 41: a code point off the BMP is one character here, a surrogate pair there")
 [(count "😀") (int (first "😀"))]
 
 ;; A lazy seq carried through a throw is still there in the handler:
 ;; raising an error must not force it (it would cache as empty).
-(try (throw (ex-info "b" {:s (map inc [1 2 3])})) (catch Exception e (vec (:s (ex-data e)))))
-(let [l (lazy-seq (cons 1 (lazy-seq (cons 2 nil))))] [(try (throw (ex-info "b" {:s l})) (catch Exception e (vec (:s (ex-data e))))) (vec l)])
-(try (throw (ex-info "b" {:s (filter odd? (range 6))})) (catch Exception e (count (:s (ex-data e)))))
+(try (throw (ex-info "b" {:s (map inc [1 2 3])})) (catch clotran.host.exception e (vec (:s (ex-data e)))))
+(let [l (lazy-seq (cons 1 (lazy-seq (cons 2 nil))))] [(try (throw (ex-info "b" {:s l})) (catch clotran.host.exception e (vec (:s (ex-data e))))) (vec l)])
+(try (throw (ex-info "b" {:s (filter odd? (range 6))})) (catch clotran.host.exception e (count (:s (ex-data e)))))
 [(counted? "ab") (counted? [1]) (counted? {}) (counted? (range 3)) (coll? "ab") (bounded-count 2 "abc")]
 [(resolve 'nil?) (resolve 'fn) (resolve 'if) (resolve 'no-such-name-here) (ns-resolve 'clojure.string 'join) (ns-resolve *ns* 'inc)]
 
@@ -2227,13 +2227,13 @@
 (sa/describe :user/pair)
 (sa/form :user/pair)
 [(sa/conform (sa/spec (sa/cat :a int?)) [1]) (sa/unform :user/pair (sa/conform :user/pair [1 "x"])) (sa/valid? (sa/every int?) [1 2 3]) (sa/conform (sa/merge (sa/keys :req [:user/n]) (sa/keys :opt [:user/x])) {:user/n 1}) (sa/conform (sa/conformer #(if (int? %) (inc %) :clojure.spec.alpha/invalid)) 1) (some? (sa/regex? (sa/cat))) (some? (sa/spec? (sa/spec int?))) (sa/assert int? 1)]
-(try (eval '(fn "a" a)) (catch Exception e [(instance? Exception e) (.getMessage (.getCause e)) (map (juxt :path :pred) (:clojure.spec.alpha/problems (ex-data (.getCause e))))]))
-(try (eval '(let [:a 1] a)) (catch Exception e (.getMessage (.getCause e))))
-(try (eval '(let [a/x 1, [y] [1]] x)) (catch Exception e (.getMessage (.getCause e))))
-(try (eval '(let [[:a] [1]] a)) (catch Exception e (.getMessage (.getCause e))))
-(try (eval '(defn)) (catch Exception e (.getMessage (.getCause e))))
-(try (eval '(ns foo.bar (:require [clojure.string :as]))) (catch Exception e (.getMessage (.getCause e))))
-[(instance? clojure.lang.IObj (reify)) (meta (with-meta (reify) {:a 1})) (isa? (class (reify)) Object) (ifn? #{1}) (ifn? {}) (ifn? []) (ifn? :a) (ifn? 'a) (ifn? #'first) (ifn? 1) (fn? #{1}) (fn? first) (#(identity {:a % :b #{%}}) 1) (map-entry? (clojure.lang.MapEntry. 1 2)) (key (clojure.lang.MapEntry. 1 2)) (string? (str (java.util.UUID/randomUUID))) (= (java.util.UUID/randomUUID) (java.util.UUID/randomUUID))]
+(try (eval '(fn "a" a)) (catch clotran.host.exception e [(instance? clotran.host.exception e) (.getMessage (.getCause e)) (map (juxt :path :pred) (:clojure.spec.alpha/problems (ex-data (.getCause e))))]))
+(try (eval '(let [:a 1] a)) (catch clotran.host.exception e (.getMessage (.getCause e))))
+(try (eval '(let [a/x 1, [y] [1]] x)) (catch clotran.host.exception e (.getMessage (.getCause e))))
+(try (eval '(let [[:a] [1]] a)) (catch clotran.host.exception e (.getMessage (.getCause e))))
+(try (eval '(defn)) (catch clotran.host.exception e (.getMessage (.getCause e))))
+(try (eval '(ns foo.bar (:require [clojure.string :as]))) (catch clotran.host.exception e (.getMessage (.getCause e))))
+[(instance? clotran.host.i_obj (reify)) (meta (with-meta (reify) {:a 1})) (isa? (class (reify)) clotran.host.value) (ifn? #{1}) (ifn? {}) (ifn? []) (ifn? :a) (ifn? 'a) (ifn? #'first) (ifn? 1) (fn? #{1}) (fn? first) (#(identity {:a % :b #{%}}) 1) (map-entry? (clotran.host.map_entry. 1 2)) (key (clotran.host.map_entry. 1 2)) (string? (str (clotran.uuid.UUID/randomUUID))) (= (clotran.uuid.UUID/randomUUID) (clotran.uuid.UUID/randomUUID))]
 
 ;; BigInt: 1N is its own type, exact at any size, and `+'` promotes
 ;; into it (DEVIATIONS 26, 30)
@@ -2244,22 +2244,22 @@
 [(+' 1 1) (+' 9223372036854775807 1) (*' 4611686018427387904 4) (inc' 9223372036854775807) (dec' -9223372036854775808) (-' 1 2) (reduce *' 1 (range 1 26))]
 [(bigint 1) (bigint "12") (bigint 5/2) (bigint 1N) (bigint 12345678901234567890) (long 1N) (double 1N) (int 5N) (str 1N)]
 [(quot 10N 3) (rem 10N 3) (mod -7N 3) (quot -10N 3) (rem -10N 3) (quot 18446744073709551616N 4) (rem 18446744073709551616N 7)]
-[(/ 1N 3) (/ 4N 2) (/ 10N 4) (* 2N 1/2) (+ 1/2 1N) (- 1N 1/2) (try (/ 1N 0) (catch ArithmeticException e :divide-by-zero))]
+[(/ 1N 3) (/ 4N 2) (/ 10N 4) (* 2N 1/2) (+ 1/2 1N) (- 1N 1/2) (try (/ 1N 0) (catch clotran.host.arithmetic_exception e :divide-by-zero))]
 [(pr-str 12345678901234567890) (read-string "42N") (apply + [1N 2N]) (reduce + 0N [1N 2N]) (sort [2 1N 3N]) (vec (repeat 2 1N)) (pr-str {1N 2N})]
 (let [m (into {} (map vector (range 40) (range 40)))] [(get m 1N) (contains? #{1N} 1) (count (set [1 1N])) (= {1N :a} {1 :a})])
 (loop [i 0 acc 1N] (if (< i 25) (recur (inc i) (* acc (inc i))) acc))
 (expect-diff "DEVIATIONS 26: a Ratio's parts are 64-bit, so a BigInt remainder has nowhere to go")
-(try (/ 99999999999999999999N 7) (catch ArithmeticException e :no-big-ratio))
+(try (/ 99999999999999999999N 7) (catch clotran.host.arithmetic_exception e :no-big-ratio))
 (expect-diff "DEVIATIONS 30: one big integer type, so biginteger answers a BigInt and prints 1N")
 (pr-str (biginteger 1))
 [(nth [10 20 30] 1N) (get [10 20 30] 1N) (subs "abcd" 1N 3N) (take 2N [1 2 3 4]) (repeat 2N :x) (nthrest [1 2 3] 1N) (abs -123N) (abs 5N) (= (range 1N 4N) (range 1 4))]
-[(try (bit-and 3N 1) (catch IllegalArgumentException e :not-supported)) (try (bit-shift-left 1N 2) (catch IllegalArgumentException e :not-supported)) (bit-and 3 1)]
+[(try (bit-and 3N 1) (catch clotran.host.illegal_argument_exception e :not-supported)) (try (bit-shift-left 1N 2) (catch clotran.host.illegal_argument_exception e :not-supported)) (bit-and 3 1)]
 
-;; a class is a value of its own, named and printed as the JVM names it
+;; a class is a value of its own, named and printed as clj names it
 [(class 1) (class "a") (class []) (class {}) (class :k) (class nil) (class (class 1)) (pr-str (class 1)) (str (class 1)) (class? (class 1)) (keyword? (class 1))]
-[(= (class 1) Long) (= (class "a") String) (identical? (class 1) (class 1)) (instance? Long 1) (instance? Object 1) (instance? CharSequence "a") (isa? (class 1) Object) (isa? Long Number)]
-[(resolve 'String) (resolve 'clojure.lang.PersistentVector) (resolve 'NonExistentClass.Name) (resolve 'NonExistentClass.) (pr-str {(class 1) :a}) (get {(class 1) :a} Long) (class (class Long))]
-(expect-diff "DEVIATIONS 34: supers is the short chain clotran models, not the JVM's two dozen")
+[(= (class 1) clotran.host.int8) (= (class "a") clotran.host.string) (identical? (class 1) (class 1)) (instance? clotran.host.int8 1) (instance? clotran.host.value 1) (instance? clotran.host.char_sequence "a") (isa? (class 1) clotran.host.value) (isa? clotran.host.int8 clotran.host.number)]
+[(resolve 'clotran.host.string) (resolve 'clotran.host.persistent_vector) (resolve 'NonExistentClass.Name) (resolve 'NonExistentClass.) (pr-str {(class 1) :a}) (get {(class 1) :a} clotran.host.int8) (class (class clotran.host.int8))]
+(expect-diff "DEVIATIONS 34: supers is the short chain clotran models, not clj's two dozen")
 (let [m (sort-by str (supers (class {})))] (vec m))
 (do (deftype CPoint [x y]) (defrecord CRec [a b]) [(str (class (->CRec 1 2))) (= (class (->CRec 1 2)) (class (->CRec 3 4))) (= (->CRec 1 2) (->CRec 1 2)) (resolve 'CRec)])
 
@@ -2274,8 +2274,8 @@
 [(pr-str (bigdec 1)) (pr-str (bigdec 1.5)) (pr-str (bigdec "2.50")) (pr-str (bigdec 1N)) (pr-str (bigdec 1/2)) (pr-str (bigdec 1M)) (bigint 2.5M) (long 2.5M) (double 1.5M) (int 2M)]
 [(transduce (dedupe) conj [1 1.0 1.0M 1N]) (distinct [1 1.0 1.0M 1N]) (pr-str (sort [2M 1M 1.5M]))]
 (expect-diff "DEVIATIONS 43: *math-context* is decimal128 here, so this answers rather than throwing")
-(try (/ 1M 3) (catch ArithmeticException e :non-terminating))
-(try (even? 2M) (catch IllegalArgumentException e :not-an-integer))
+(try (/ 1M 3) (catch clotran.host.arithmetic_exception e :non-terminating))
+(try (even? 2M) (catch clotran.host.illegal_argument_exception e :not-an-integer))
 [(sorted-set 0M) (sorted-set 1M 1M) (sorted-set 1N 2N) (sorted-set 1 1.5M 2N) (sorted-map 1M :a) (pr-str (sort [2M 1M 1.5M])) (pr-str (sort [2N 1N 3]))]
 [(bound? (var map)) (.isBound (var map)) (bound? (var map) (var inc))]
 
@@ -2286,19 +2286,19 @@
 [(with-precision 6 :rounding CEILING (+ 3.5555555M 1)) (with-precision 6 :rounding FLOOR (+ 3.5555555M 1)) (with-precision 6 :rounding HALF_UP (+ 3.5555555M 1)) (with-precision 6 :rounding HALF_DOWN (+ 3.5555555M 1)) (with-precision 6 :rounding HALF_EVEN (+ 3.5555555M 1)) (with-precision 6 :rounding UP (+ 3.5555555M 1)) (with-precision 6 :rounding DOWN (+ 3.5555555M 1)) (with-precision 6 :rounding UNNECESSARY (+ 3.5555M 1))]
 [(with-precision 6 :rounding CEILING (- 0M 3.5555555M)) (with-precision 6 :rounding FLOOR (- 0M 3.5555555M)) (with-precision 1 :rounding HALF_EVEN (+ 2.5M 0)) (with-precision 1 :rounding HALF_EVEN (+ 3.5M 0)) (with-precision 1 :rounding HALF_DOWN (+ 2.5M 0))]
 [(with-precision 10 (/ 1M 8)) (with-precision 10 (/ 100M 4)) (with-precision 34 (/ 1M 2))]
-(try (with-precision 3 :rounding UNNECESSARY (+ 3.5555M 1)) (catch ArithmeticException e (.getMessage e)))
-(binding [*math-context* (java.math.MathContext. 8)] (+ 3.55555555555555M 1))
-(binding [*math-context* nil] (try (/ 1M 3) (catch ArithmeticException e (.getMessage e))))
+(try (with-precision 3 :rounding UNNECESSARY (+ 3.5555M 1)) (catch clotran.host.arithmetic_exception e (.getMessage e)))
+(binding [*math-context* (clotran.host.math_context. 8)] (+ 3.55555555555555M 1))
+(binding [*math-context* nil] (try (/ 1M 3) (catch clotran.host.arithmetic_exception e (.getMessage e))))
 
 ;; and the default that makes clotran answer where Clojure raises
 (expect-diff "DEVIATIONS 43: *math-context* is decimal128 here, so a decimal division answers instead of throwing")
-(try (/ 1M 3) (catch ArithmeticException e :throws))
+(try (/ 1M 3) (catch clotran.host.arithmetic_exception e :throws))
 (expect-diff "DEVIATIONS 43: *math-context* has a value here and is nil in Clojure")
 (pr-str *math-context*)
 
-;; THE INTERSECTION, name by name. scripts/derive-tests filters Clojure's
+;; THE INTERSECTION, name by name. upstream/derive-tests filters Clojure's
 ;; own deftests; it never enumerated the intersection itself, so a name
-;; Rich only exercises from a JVM-shaped test had nothing testing it
+;; Rich only exercises from a clj-shaped test had nothing testing it
 ;; here. These are those names.
 [(any? 1) (char? \a) (double? 1.0) (ident? 'a) (ident? :a) (indexed? [1]) (inst? 1) (nat-int? 0) (neg-int? -1) (pos-int? 1) (delay? (delay 1)) (distinct? 1 2) (reduced? (reduced 1)) (tagged-literal? (tagged-literal 'x 1))]
 [(qualified-ident? 'a/b) (qualified-keyword? :a/b) (qualified-symbol? 'a/b) (simple-ident? 'a) (simple-keyword? :a) (simple-symbol? 'a) (uri? 1) (uuid? 1) (uuid? (random-uuid)) (string? (str (random-uuid))) (uuid? (parse-uuid "11111111-2222-3333-4444-555555555555"))]
@@ -2313,14 +2313,14 @@
 [(pos? (count (ns-publics 'clojure.set))) (contains? (ns-interns 'clojure.set) 'union) (map? (ns-imports 'clojure.core)) (contains? (ns-publics 'clojure.core) 'map)]
 (let [n (create-ns 'oracle-unmap-ns)] (intern n 'gone 1) [(contains? (ns-publics n) 'gone) (do (ns-unmap n 'gone) (contains? (ns-publics n) 'gone))])
 [(= (hash-ordered-coll [1 2]) (hash-ordered-coll '(1 2))) (= (hash-unordered-coll #{1 2}) (hash-unordered-coll #{2 1})) (integer? (hash-combine 1 2))]
-[((memoize inc) 1) (munge "a-b") (doto [1] count) (locking (Object.) 42) (symbol? (gensym)) (let [a (atom 1)] (reset-meta! a {:b 2}) (meta a)) (munge "a-b?") (munge 'a*b)]
+[((memoize inc) 1) (munge "a-b") (doto [1] count) (locking (clotran.host.value.) 42) (symbol? (gensym)) (let [a (atom 1)] (reset-meta! a {:b 2}) (meta a)) (munge "a-b?") (munge 'a*b)]
 [(with-out-str (pr 1 2)) (println-str 1) (prn-str 1) (with-out-str (flush)) (<= 0.0 (rand) 1.0) (<= 0 (rand-int 5) 4) (count (random-sample 1.0 [1 2 3]))]
 [(let [a (atom 0) seen (atom nil)] (add-watch a :k (fn [k r o n] (reset! seen n))) (reset! a 5) (remove-watch a :k) (reset! a 9) [@seen @a])]
 [(let [f (fn [x] x)] [(add-tap f) (tap> :hello) (remove-tap f)])]
 [(re-pattern "a+") (str (re-pattern "a+")) (vec (re-seq (re-pattern "a+") "aa b aaa"))]
 [(vector? (destructure '[[a b] [1 2]])) (reduced? (ensure-reduced 1)) (unreduced (reduced 1)) (unreduced 1)]
 [(let [t (transient [1 2])] (assoc! t 0 9) (persistent! t)) (let [t (transient {:a 1})] (dissoc! t :a) (persistent! t))]
-[(do (defprotocol OP (om [x])) (extend-type String OP (om [_] :s)) (extend-protocol OP Long (om [_] :l)) [(om "x") (om 1)])]
+[(do (defprotocol OP (om [x])) (extend-type clotran.host.string OP (om [_] :s)) (extend-protocol OP clotran.host.int8 (om [_] :l)) [(om "x") (om 1)])]
 [(let [a (double-array [1.0 2.0])] (areduce a i ret 0.0 (+ ret (aget a i))))]
 
 ;;; ---- the portable libraries, by namespace ---------------------------
@@ -2384,7 +2384,7 @@
 ;;; vector, map and set literals in a MetaExpr, so the map is evaluated
 ;;; and the collection carries it. clojure.zip is built on it.
 [(meta ^{:a 1} [1]) (meta ^{:a 1} {:k 1}) (meta ^{:a 1} #{1}) (meta ^:foo [1])
- (let [f inc] ((:a (meta ^{:a f} [1])) 5)) (meta [1]) (:tag (meta ^String [1]))]
+ (let [f inc] ((:a (meta ^{:a f} [1])) 5)) (meta [1]) (:tag (meta ^clotran.host.string [1]))]
 
 (require 'clojure.edn)
 [(clojure.edn/read-string "{:a [1 2] :b #{3}}")
@@ -2393,7 +2393,7 @@
  (clojure.edn/read-string {:default (fn [t v] [t v])} "#unknown 5")
  (clojure.edn/read-string nil)
  (clojure.edn/read-string "nil")
- (try (clojure.edn/read-string "#unknown 5") (catch Throwable e (.getMessage e)))]
+ (try (clojure.edn/read-string "#unknown 5") (catch clotran.host.throwable e (.getMessage e)))]
 [(clojure.edn/read-string {:readers {'a (fn [v] {:a v}) 'b (fn [v] [:b v])}} "#a #b 1")
  (clojure.edn/read-string {:readers {'t (fn [v] (count v))}} "[#t [1 2] #t {:x 1}]")
  (clojure.edn/read-string {:readers {'t (fn [v] (count v))}} "#{#t [1 2]}")
@@ -2409,7 +2409,7 @@
 ;;; checkcast where the value is USED as an array, so an unused or
 ;;; counted parameter never notices. Compared by exception class.
 (defn hint-t [f] (try (let [v (f)] [v (.getSimpleName (class v))])
-                      (catch Throwable e [:threw (.getSimpleName (class e))])))
+                      (catch clotran.host.throwable e [:threw (.getSimpleName (class e))])))
 [(long 1.9) (long -1.9) (long 7/2) (long \a) (double 3) (double 1/4)
  (unchecked-long 1.9) (unchecked-long 1e30) (unchecked-long -1e30) (unchecked-long ##NaN)
  (hint-t #(long "x")) (hint-t #(long nil)) (hint-t #(long 1e30)) (hint-t #(double "x")) (hint-t #(double nil))]
@@ -2417,7 +2417,7 @@
  (hint-t #((fn [^long n] n) \a)) (hint-t #((fn [^long n] n) "x")) (hint-t #((fn [^long n] n) nil))
  (hint-t #((fn ^long [x] x) 1.5)) (hint-t #((fn ^double [x] x) 2))
  (hint-t #((fn ([^long n] n) ([^long n m] m)) 1.5)) (hint-t #(((fn [^long n] (fn [] n)) 2.5)))
- (hint-t #((fn [^String s ^long n] [s n]) "x" 1.5))]
+ (hint-t #((fn [^clotran.host.string s ^long n] [s n]) "x" 1.5))]
 [(hint-t #((fn [^doubles a] :ok) [1 2])) (hint-t #((fn [^doubles a] (aget a 0)) [1 2]))
  (hint-t #((fn [^doubles a] (alength a)) [1 2])) (hint-t #((fn [^doubles a] (aset a 0 1.0)) [1 2]))
  (hint-t #((fn [^longs a] (aget a 0)) (double-array [1.5]))) (hint-t #((fn [^doubles a] (aget a 0)) (long-array [3])))
@@ -2425,9 +2425,9 @@
  (hint-t #((fn [^objects a] (aget a 0)) (long-array [3]))) (hint-t #(let [^doubles a [1 2]] (aget a 0)))
  (hint-t #((fn [^doubles a] (let [a [1]] (nth a 0))) (double-array 1)))
  (hint-t #((fn [^doubles a] (aget a 0)) (double-array [2.5])))]
-(expect-diff "DEVIATIONS 48: recur to a ^long local with a double is a compile error on the JVM, a conversion here")
+(expect-diff "DEVIATIONS 48: recur to a ^long local with a double is a compile error in clj, a conversion here")
 [(hint-t #((fn [^long n acc] (if (< n 1) acc (recur (- n 0.5) (conj acc n)))) 2 []))]
-(expect-diff "DEVIATIONS 48: a primitive hint on a let local is an UnsupportedOperationException on the JVM")
+(expect-diff "DEVIATIONS 48: a primitive hint on a let local is an UnsupportedOperationException in clj")
 [(hint-t #(let [^long x 1.5] x))]
 [(hint-t #((fn [^doubles a] (aset a 0 2)) (double-array 1)))]
 
@@ -2448,41 +2448,41 @@
 ;;; (ns ...) does not leak into the forms after it.
 [(do (load-file "test/clj/load_file_sample.clj") (str *ns*)) @(resolve 'load-file-sample/x)]
 
-;;; Arithmetic errors say what the JVM says. Long overflow is
-;;; Math.addExact's "long overflow" on every path (Numbers.java); an index
+;;; Arithmetic errors say what clj says. Long overflow is
+;;; Math.addExact's "long overflow" on every path (Numbers); an index
 ;;; out of range is ArrayIndexOutOfBoundsException naming both numbers --
 ;;; for a slice of a multi-dimensional array too, which once answered nil.
-(defn msg-of [f] (try (f) :no-throw (catch Throwable e [(.getSimpleName (class e)) (.getMessage e)])))
-[(msg-of #(+ Long/MAX_VALUE 1)) (msg-of #(* Long/MAX_VALUE 2)) (msg-of #(inc Long/MAX_VALUE))
- (msg-of #(dec Long/MIN_VALUE)) (msg-of #(- Long/MIN_VALUE)) (msg-of #(int 3000000000))
+(defn msg-of [f] (try (f) :no-throw (catch clotran.host.throwable e [(.getSimpleName (class e)) (.getMessage e)])))
+[(msg-of #(+ clotran.host.int8/MAX_VALUE 1)) (msg-of #(* clotran.host.int8/MAX_VALUE 2)) (msg-of #(inc clotran.host.int8/MAX_VALUE))
+ (msg-of #(dec clotran.host.int8/MIN_VALUE)) (msg-of #(- clotran.host.int8/MIN_VALUE)) (msg-of #(int 3000000000))
  (msg-of #(aget (long-array [5 6]) 2)) (msg-of #(aget (double-array [1.0]) -1))
  (msg-of #(aset (long-array [5 6]) 2 1)) (msg-of #(long 1.0E30))
  (let [f (fn [a b] (quot a b))] (msg-of #(f 7 0))) (let [f (fn [a b] (mod a b))] (msg-of #(f 7 0)))]
-(expect-diff "DEVIATIONS 51: literal longs compile to the JVM's primitive quot, whose zero divisor is Java's \"/ by zero\"")
+(expect-diff "DEVIATIONS 51: literal longs compile to clj's primitive quot, whose zero divisor is clj's \"/ by zero\"")
 [(msg-of #(quot 7 0)) (msg-of #(rem 7 0))]
 [(msg-of #(subs "ab" 0 3)) (msg-of #(subs "ab" 3)) (msg-of #(subs "ab" 1 0)) (msg-of #(subs "héllo" 1 3))]
 
 ;;; Arrays: an array is an instance of its array class, and a negative
-;;; size is Java's NegativeArraySizeException naming the size.
+;;; size is clj's NegativeArraySizeException naming the size.
 [(instance? (class (double-array 0)) (double-array 2)) (instance? (class (long-array 0)) (long-array 1))
  (msg-of #(double-array -1)) (msg-of #(long-array -3))]
 
-;;; An array's class is the JVM's name for it, one per element type and
+;;; An array's class is clj's name for it, one per element type and
 ;;; rank, and prints as Clojure prints it (it was one class, and printing
 ;;; it crashed).
-[(map #(str (class %)) [(double-array 1) (long-array 1) (int-array 1) (float-array 1) (boolean-array 1) (object-array 1) (make-array Integer/TYPE 2 3)])
- (pr-str (class (double-array 1))) (pr-str (class (make-array Integer/TYPE 2 3))) (pr-str (class (object-array 1)))
+[(map #(str (class %)) [(double-array 1) (long-array 1) (int-array 1) (float-array 1) (boolean-array 1) (object-array 1) (make-array clotran.host.int4/TYPE 2 3)])
+ (pr-str (class (double-array 1))) (pr-str (class (make-array clotran.host.int4/TYPE 2 3))) (pr-str (class (object-array 1)))
  (instance? (class (double-array 0)) (double-array 2)) (instance? (class (long-array 0)) (double-array 2))
  (.isArray (class (long-array 1))) (= (class (double-array 1)) (class (double-array 5)))]
 [(map #(str (class %)) [(short-array 1) (byte-array 1) (char-array 1)]) (bytes? (byte-array 1))]
 
-;;; Runtime.availableProcessors is the machine's, as the JVM's is
+;;; Runtime.availableProcessors is the machine's, as clj's is
 ;;; (sysconf through Threads.f90); pmap's look-ahead is sized by it.
-[(.availableProcessors (Runtime/getRuntime))]
+[(.availableProcessors (clotran.host.runtime/getRuntime))]
 
 ;; protocol dispatch picks the implementation Clojure picks: a chunked
 ;; seq reduces through InternalReduce's IChunkedSeq implementation
-(let [p clojure.core.protocols/InternalReduce, ic (get (:impls p) clojure.lang.IChunkedSeq)]
+(let [p clojure.core.protocols/InternalReduce, ic (get (:impls p) clotran.host.i_chunked_seq)]
   [(= ic (find-protocol-impl p (seq (map inc (range 3)))))
    (= ic (find-protocol-impl p (seq (range 3))))
    (= ic (find-protocol-impl p (cons 1 nil)))])
@@ -2496,7 +2496,7 @@
 
 ;; transient vectors (PersistentVector.f90): made in O(1) over the vector
 ;; they come from, appended to in place, built into a tree by persistent!
-[(instance? clojure.lang.IEditableCollection []) (class (transient [])) (instance? clojure.lang.ITransientVector (transient []))]
+[(instance? clotran.host.i_editable_collection []) (class (transient [])) (instance? clotran.host.i_transient_vector (transient []))]
 
 (persistent! (reduce conj! (transient []) (range 70)))
 
@@ -2504,11 +2504,11 @@
 
 (let [t (transient [1 2 3])] [(count t) (nth t 1) (get t 5 :nf) (nth t 9 :d) (count (pop! t)) (persistent! (pop! (pop! t)))])
 
-(try (let [t (transient [1])] (persistent! t) (conj! t 2)) (catch Throwable e [(.getName (class e)) (.getMessage e)]))
+(try (let [t (transient [1])] (persistent! t) (conj! t 2)) (catch clotran.host.throwable e [(.getName (class e)) (.getMessage e)]))
 
-(try (pop! (transient [])) (catch Throwable e [(.getName (class e)) (.getMessage e)]))
+(try (pop! (transient [])) (catch clotran.host.throwable e [(.getName (class e)) (.getMessage e)]))
 
-(try (assoc! (transient [1]) :k 2) (catch Throwable e [(.getName (class e)) (.getMessage e)]))
+(try (assoc! (transient [1]) :k 2) (catch clotran.host.throwable e [(.getName (class e)) (.getMessage e)]))
 
 [(into [] (map inc (range 5))) (into [1 2] [3 4]) (into (vec (range 100)) [:x]) (= (into [] (range 5000)) (range 5000))]
 
@@ -2524,7 +2524,7 @@
 
 (count (doall (for [i (range 5000)] (re-find (re-pattern (str "b \\+ " i "\\b")) (str "b + " (* 2 i))))))
 
-(let [tv (transient [1 2 3])] [(get tv 0) (get tv 4 :foo) (contains? tv 0) (contains? tv 3) (find tv 0) (find tv -1) (counted? tv) (empty? tv) (empty? (transient [])) (instance? clojure.lang.Indexed tv)])
+(let [tv (transient [1 2 3])] [(get tv 0) (get tv 4 :foo) (contains? tv 0) (contains? tv 3) (find tv 0) (find tv -1) (counted? tv) (empty? tv) (empty? (transient [])) (instance? clotran.host.indexed tv)])
 
 [(/ 3/4 5) (/ 3/4 1/5) (/ 5 3/4) (/ 3/4 5.0) (/ 1 3/4) (/ 1/2 1/2) (* 8 1/2) (+ 1/2 1/2) (- 3/2 1/2) (* 0 1/2) (/ 2 1/2) (/ 4 2) (rem 1 1/2) (quot -7/2 2)]
 
@@ -2532,61 +2532,61 @@
 
 [(nth [nil] 0 :d) (nth nil 5 :d) (nth nil 5) (nth '(1 nil) 1 :d) (nth [1] 5 :d)]
 
-(try (nth [1 2] 5) (catch IndexOutOfBoundsException e :oob))
+(try (nth [1 2] 5) (catch clotran.host.index_out_of_bounds_exception e :oob))
 
-(try (nth (range 3) 5) (catch IndexOutOfBoundsException e :oob))
+(try (nth (range 3) 5) (catch clotran.host.index_out_of_bounds_exception e :oob))
 
-(try (nth {:a 1} 0) (catch UnsupportedOperationException e :unsupported))
+(try (nth {:a 1} 0) (catch clotran.host.unsupported_operation_exception e :unsupported))
 
 [(conj {} (seq {:a 1 :b 2})) (conj {} (first {:z 9})) (conj {} nil) (conj {} ()) (into {} [[:a 1] (first {:b 2})])]
 
-(try (conj {} [:a 1 :b]) (catch IllegalArgumentException e :iae))
+(try (conj {} [:a 1 :b]) (catch clotran.host.illegal_argument_exception e :iae))
 
-(try (conj {:a 1} '(:b 2)) (catch ClassCastException e :cce))
+(try (conj {:a 1} '(:b 2)) (catch clotran.host.class_cast_exception e :cce))
 
-(try (into {} ['(:a "a")]) (catch ClassCastException e :cce))
+(try (into {} ['(:a "a")]) (catch clotran.host.class_cast_exception e :cce))
 
 [(int \a) (byte \a) (pos? 1N) (neg? -1.5M) (zero? 0/1)]
 
-(try (zero? nil) (catch NullPointerException e :npe))
+(try (zero? nil) (catch clotran.host.null_pointer_exception e :npe))
 
-(try (pos? {}) (catch ClassCastException e :cce))
+(try (pos? {}) (catch clotran.host.class_cast_exception e :cce))
 
-(try (int "1") (catch ClassCastException e :cce))
+(try (int "1") (catch clotran.host.class_cast_exception e :cce))
 
-(try (unchecked-int "1") (catch ClassCastException e :cce))
+(try (unchecked-int "1") (catch clotran.host.class_cast_exception e :cce))
 
 [(let [k (keyword "a" "b/c")] [k (namespace k) (name k) (= k :a/b/c)]) (let [s (symbol "a" "b/c")] [s (namespace s) (name s)]) (symbol :a/b) (symbol :dog) (keyword nil "x") (symbol nil "x")]
 
-(try (keyword 'user "abc") (catch ClassCastException e :cce))
+(try (keyword 'user "abc") (catch clotran.host.class_cast_exception e :cce))
 
-(try (name 2) (catch ClassCastException e :cce))
+(try (name 2) (catch clotran.host.class_cast_exception e :cce))
 
-(try (namespace "a/b") (catch ClassCastException e :cce))
+(try (namespace "a/b") (catch clotran.host.class_cast_exception e :cce))
 
 [(compare "abc" "abf") (compare "ab" "abcd") (compare "ab" (str "ab" (char 1))) (compare "é" "e") (compare :a/b :b) (compare :z/a :a/z) (compare (quote a/b) (quote a/c)) (sort ["b" "ab" "a"])]
 
 [(realized? (lazy-seq [1])) (realized? (delay 1)) (realized? (iterate inc 1))]
 
-(try (realized? [1]) (catch ClassCastException e :cce))
+(try (realized? [1]) (catch clotran.host.class_cast_exception e :cce))
 
-(try (realized? (range 5)) (catch ClassCastException e :cce))
+(try (realized? (range 5)) (catch clotran.host.class_cast_exception e :cce))
 
-(try (merge-with + 1 {:a 1}) (catch IllegalArgumentException e :iae))
+(try (merge-with + 1 {:a 1}) (catch clotran.host.illegal_argument_exception e :iae))
 
-(try (hash-map :a) (catch IllegalArgumentException e :iae))
+(try (hash-map :a) (catch clotran.host.illegal_argument_exception e :iae))
 
-(try (sorted-map :a) (catch IllegalArgumentException e :iae))
+(try (sorted-map :a) (catch clotran.host.illegal_argument_exception e :iae))
 
-(try (subseq [1 2 3 4] > 2) (catch ClassCastException e :cce))
+(try (subseq [1 2 3 4] > 2) (catch clotran.host.class_cast_exception e :cce))
 
-(try (create-ns "my-ns") (catch ClassCastException e :cce))
+(try (create-ns "my-ns") (catch clotran.host.class_cast_exception e :cce))
 
-(try (count 1) (catch UnsupportedOperationException e :uoe))
+(try (count 1) (catch clotran.host.unsupported_operation_exception e :uoe))
 
-(try (contains? 1 :a) (catch IllegalArgumentException e :iae))
+(try (contains? 1 :a) (catch clotran.host.illegal_argument_exception e :iae))
 
-[(count nil) (contains? nil :a) (contains? (to-array [1 2]) 1) (get 1 :a :d) (System/getenv "")]
+[(count nil) (contains? nil :a) (contains? (to-array [1 2]) 1) (get 1 :a :d) (clotran.host.system/getenv "")]
 
 (let [xs (map #(mod (* % 7919) 10007) (range 3000)) s (into (sorted-set) xs) s2 (reduce disj s (range 0 10007 3))] [(count s) (first s) (last s) (take 5 (rseq s)) (nth (seq s) 1234) (count s2) (take 5 s2) (take 5 (rseq s2)) (subseq s >= 100 < 110) (rsubseq s > 100 <= 110) (count (reduce disj s xs))])
 
@@ -2598,17 +2598,17 @@
 
 [(seq #{7 6 5}) (seq (set (range 10))) (keys (zipmap (range 12) (range 12))) (seq (hash-map :a 1 :b 2 :c 3)) (seq #{:a :b :c :d}) (vec (set ["x" "y" "z" "w"])) (= (hash (zipmap (range 20) (range 20))) (hash (into {} (map vector (range 20) (range 20)))))]
 
-[(boolean (re-find #"#object\[[\w.]+ 0x[0-9a-f]+ \{:status :ready, :val 1\}\]" (pr-str (reduced 1)))) (class (reduced 1)) (map? (reduced 1)) (pr-str (tagged-literal 'js [1 2])) (class (ref 1)) (class (agent 1)) (instance? clojure.lang.Atom (ref 1)) (list? (cons 1 '(2))) (list? (cons 1 nil)) (list? (conj '(2) 1)) (class (cons 1 '(2)))]
+[(boolean (re-find #"#object\[[\w.]+ 0x[0-9a-f]+ \{:status :ready, :val 1\}\]" (pr-str (reduced 1)))) (class (reduced 1)) (map? (reduced 1)) (pr-str (tagged-literal 'js [1 2])) (class (ref 1)) (class (agent 1)) (instance? clotran.host.atom (ref 1)) (list? (cons 1 '(2))) (list? (cons 1 nil)) (list? (conj '(2) 1)) (class (cons 1 '(2)))]
 
 (with-local-vars [w 0 z 5] (dotimes [_ 3] (var-set w (inc @w))) [@w @z])
 
 (do (defmacro oracle-locals [] (vec (sort (map str (keys &env))))) [(let [x 1 y 2] (oracle-locals)) ((fn [a] (let [b 2] (oracle-locals))) 1)])
 
-(try ({:a 1}) (catch clojure.lang.ArityException e :arity))
+(try ({:a 1}) (catch clotran.host.arity_exception e :arity))
 
-(try ([1] 0 1) (catch clojure.lang.ArityException e :arity))
+(try ([1] 0 1) (catch clotran.host.arity_exception e :arity))
 
-(try (transient '(1 2)) (catch ClassCastException e :cce))
+(try (transient '(1 2)) (catch clotran.host.class_cast_exception e :cce))
 
 [(unchecked-int 1e10) (unchecked-int -1e10) (unchecked-long 1e30) (unchecked-byte 1e10) (quote @x) (quote ~x) (quote ~@x) (ns-unmap *ns* 'oracle-nope)]
 
@@ -2617,21 +2617,21 @@
 ;; a file of each side's own, under this checkout's build/: the two sides
 ;; run at once (scripts/oracle), and so do make crosscheck's two halves;
 ;; the answer is the contents, never the path
-(let [p (str "build/oracle-io-" (System/getProperty "java.vm.name") ".txt")] (spit p "hello\nworld\n") (spit p "more" :append true) [(slurp p) (with-open [r (clojure.java.io/reader p)] (vec (line-seq r)))])
+(let [p (str "build/oracle-io-" (clotran.host.system/getProperty "clj's vm.name") ".txt")] (spit p "hello\nworld\n") (spit p "more" :append true) [(slurp p) (with-open [r (clotran.files/reader p)] (vec (line-seq r)))])
 
-(try (require 'oracle.no-such-lib) (catch java.io.IOException e :io))
+(try (require 'oracle.no-such-lib) (catch clotran.host.io_exception e :io))
 
-(do (def oracle-v 1) (set-validator! #'oracle-v (fn [x] (< x 3))) (alter-var-root #'oracle-v inc) (try (alter-var-root #'oracle-v inc) (catch IllegalStateException e [:invalid oracle-v])))
+(do (def oracle-v 1) (set-validator! #'oracle-v (fn [x] (< x 3))) (alter-var-root #'oracle-v inc) (try (alter-var-root #'oracle-v inc) (catch clotran.host.illegal_state_exception e [:invalid oracle-v])))
 
 [(keys (seq {:a 1 :b 2})) (vals (take 1 {:a 1})) (keys ())]
 
 [(let [a (byte-array 2)] (aset a 0 (byte 5)) (vec a)) (let [a (short-array 2)] (aset a 0 (short 5)) (vec a)) (let [a (char-array 2)] (aset a 0 \x) (vec a)) (let [a (float-array 2)] (aset a 0 (float 1.5)) (vec a))]
 
-[(try (let [a (byte-array 2)] (aset a 0 5)) (catch IllegalArgumentException e :iae)) (try (let [a (short-array 2)] (aset a 0 (byte 5))) (catch IllegalArgumentException e :iae)) (let [a (int-array 2)] (aset a 0 (short 5)) (vec a))]
+[(try (let [a (byte-array 2)] (aset a 0 5)) (catch clotran.host.illegal_argument_exception e :iae)) (try (let [a (short-array 2)] (aset a 0 (byte 5))) (catch clotran.host.illegal_argument_exception e :iae)) (let [a (int-array 2)] (aset a 0 (short 5)) (vec a))]
 
-[(let [a (byte-array 2)] (aset-byte a 0 1) (aset-byte a 1 -1) (vec a)) (vec (byte-array [1 200 -129 127 128 255 256])) (vec (short-array [1 70000 -32769])) (vec (map #(bit-and % 0xff) (byte-array [-128 -1 0 127]))) (seq (byte-array 3)) (try (byte 200) (catch IllegalArgumentException e :iae)) (unchecked-byte 200) (unchecked-short 70000) (vec (aclone (byte-array [1 -1])))]
+[(let [a (byte-array 2)] (aset-byte a 0 1) (aset-byte a 1 -1) (vec a)) (vec (byte-array [1 200 -129 127 128 255 256])) (vec (short-array [1 70000 -32769])) (vec (map #(bit-and % 0xff) (byte-array [-128 -1 0 127]))) (seq (byte-array 3)) (try (byte 200) (catch clotran.host.illegal_argument_exception e :iae)) (unchecked-byte 200) (unchecked-short 70000) (vec (aclone (byte-array [1 -1])))]
 
-[(str (class (aget (byte-array 1) 0))) (str (class (aget (short-array 1) 0))) (str (class (aget (char-array 1) 0))) (str (class (aget (float-array 1) 0))) (str (class (byte 1))) (str (class (short 1))) (str (class (int 1))) (str (class (+ (byte 1) 1))) (= (byte 1) 1) (hash (byte 1)) (instance? Byte (byte 1)) (instance? Long (byte 1)) (instance? Number (short 1)) (instance? Float (float 1))]
+[(str (class (aget (byte-array 1) 0))) (str (class (aget (short-array 1) 0))) (str (class (aget (char-array 1) 0))) (str (class (aget (float-array 1) 0))) (str (class (byte 1))) (str (class (short 1))) (str (class (int 1))) (str (class (+ (byte 1) 1))) (= (byte 1) 1) (hash (byte 1)) (instance? clotran.host.int1 (byte 1)) (instance? clotran.host.int8 (byte 1)) (instance? clotran.host.number (short 1)) (instance? clotran.host.real4 (float 1))]
 
 [(count (range 5)) (count (range 0 10 3)) (count (range 10 0 -3)) (count (range 1.0 2.0 0.3)) (count (rest (range 100))) (count (drop 40 (range 100))) (count (range 5 5)) (count (range -3)) (count (range 0 10 4)) (count (range 0 -10 -4)) (count (range 1/2 3 1/2)) (count (take 70 (range 100))) (count (range 1000000)) (bounded-count 10 (range 1000000)) (count (map inc (range 100000)))]
 
@@ -2641,25 +2641,25 @@
 
 [(format "%x" (byte -128)) (format "%x" (short -1)) (format "%X" (int -1)) (format "%o" (byte -1)) (format "%x" -1) (format "%d" (byte 5))]
 
-[(try (hash-ordered-coll 1) (catch ClassCastException e :cce)) (try (hash-unordered-coll "12") (catch ClassCastException e :cce)) (try (hash-ordered-coll nil) (catch Throwable e :npe)) (hash-ordered-coll [1 2]) (hash-unordered-coll #{1 2}) (hash-ordered-coll (list 1 2))]
+[(try (hash-ordered-coll 1) (catch clotran.host.class_cast_exception e :cce)) (try (hash-unordered-coll "12") (catch clotran.host.class_cast_exception e :cce)) (try (hash-ordered-coll nil) (catch clotran.host.throwable e :npe)) (hash-ordered-coll [1 2]) (hash-unordered-coll #{1 2}) (hash-ordered-coll (list 1 2))]
 
 [(:author (meta (find-ns 'clojure.core))) (:doc (meta (find-ns 'clojure.core)))]
 
 [(reduce (fn [a b] (+ a b)) (eduction (map inc) (range 3))) (reduce (fn [a b] (+ a b)) (eduction (map inc) [7])) (reduce (fn [a b] (if (> b 2) (reduced a) (+ a b))) (eduction (map inc) (range 10)))]
 
-[(str (parse-uuid "B6883C0A-0342-4007-9966-BC2DFA6B109E")) (uuid? (parse-uuid "b6883c0a-0342-4007-9966-bc2dfa6b109e")) (uuid? "x") (parse-uuid "foo") (parse-uuid "") (= (parse-uuid "b6883c0a-0342-4007-9966-bc2dfa6b109e") #uuid "b6883c0a-0342-4007-9966-bc2dfa6b109e") (pr-str #uuid "17392216-6ca5-491a-b38c-0000000920ba") (uuid? (random-uuid)) (count (str (random-uuid))) (instance? java.util.UUID (random-uuid))]
+[(str (parse-uuid "B6883C0A-0342-4007-9966-BC2DFA6B109E")) (uuid? (parse-uuid "b6883c0a-0342-4007-9966-bc2dfa6b109e")) (uuid? "x") (parse-uuid "foo") (parse-uuid "") (= (parse-uuid "b6883c0a-0342-4007-9966-bc2dfa6b109e") #uuid "b6883c0a-0342-4007-9966-bc2dfa6b109e") (pr-str #uuid "17392216-6ca5-491a-b38c-0000000920ba") (uuid? (random-uuid)) (count (str (random-uuid))) (instance? clotran.uuid.UUID (random-uuid))]
 
-[(read-string "#uuid \"17392216-6ca5-491a-b38c-0000000920ba\"") (binding [*data-readers* {'oracle-dbl (fn [x] (* 2 x))}] (read-string "#oracle-dbl 21")) (try (read-string "#oracle-nope [1]") (catch Throwable e :no-reader)) '[#uuid "17392216-6ca5-491a-b38c-0000000920ba" {:k #uuid "17392216-6ca5-491a-b38c-0000000920ba"}] (tagged-literal 'js [1 2]) (tagged-literal? (tagged-literal 'js [1 2]))]
+[(read-string "#uuid \"17392216-6ca5-491a-b38c-0000000920ba\"") (binding [*data-readers* {'oracle-dbl (fn [x] (* 2 x))}] (read-string "#oracle-dbl 21")) (try (read-string "#oracle-nope [1]") (catch clotran.host.throwable e :no-reader)) '[#uuid "17392216-6ca5-491a-b38c-0000000920ba" {:k #uuid "17392216-6ca5-491a-b38c-0000000920ba"}] (tagged-literal 'js [1 2]) (tagged-literal? (tagged-literal 'js [1 2]))]
 
-[(do (def oracle-unb) (str (class oracle-unb))) (str oracle-unb) (try (oracle-unb) (catch IllegalStateException e :unbound-call)) (bound? #'oracle-unb) (do (def ^:dynamic oracle-dyn) (binding [oracle-dyn 1] oracle-dyn))]
+[(do (def oracle-unb) (str (class oracle-unb))) (str oracle-unb) (try (oracle-unb) (catch clotran.host.illegal_state_exception e :unbound-call)) (bound? #'oracle-unb) (do (def ^:dynamic oracle-dyn) (binding [oracle-dyn 1] oracle-dyn))]
 
 [(load-string "(+ 1 2)") (load-string "(def oracle-ls 5) oracle-ls") (load-string "")]
 
-[(try (eval '(apply and [true])) (catch Throwable e :macro-value)) (try (eval '(map or [true] [false])) (catch Throwable e :macro-value)) (try (eval '(var user/oracle-no-such-var)) (catch Throwable e :no-var))]
+[(try (eval '(apply and [true])) (catch clotran.host.throwable e :macro-value)) (try (eval '(map or [true] [false])) (catch clotran.host.throwable e :macro-value)) (try (eval '(var user/oracle-no-such-var)) (catch clotran.host.throwable e :no-var))]
 
-[(:a (meta (with-meta (reify Object) {:a 1}))) (try (with-meta (clojure.java.io/file ".") {:a 1}) (catch ClassCastException e :cce))]
+[(:a (meta (with-meta (reify clotran.host.value) {:a 1}))) (try (with-meta (clotran.files/file ".") {:a 1}) (catch clotran.host.class_cast_exception e :cce))]
 
-(try (let [f (fn f [n] (f (inc n)))] (f 0)) (catch StackOverflowError e :so))
+(try (let [f (fn f [n] (f (inc n)))] (f 0)) (catch clotran.host.stack_overflow_error e :so))
 
 [(= (hash [1 2 3]) (hash-ordered-coll [1 2 3])) (= (hash #{1 2}) (hash-unordered-coll #{1 2})) (= (hash {:a 1}) (hash-unordered-coll {:a 1})) (hash-ordered-coll (map inc [1 2])) (hash-unordered-coll [1 1])]
 
@@ -2667,20 +2667,20 @@
 
 [(do (defmacro oracle-mac [] 1) (with-redefs [oracle-mac (constantly 2)] (oracle-mac))) (do (defn oracle-inl {:inline (fn [_] 1)} [_] 1) (with-redefs [oracle-inl (constantly 2)] (oracle-inl :foo))) (with-redefs [oracle-inl (constantly 2)] (vec (map oracle-inl [:a :b])))]
 
-[(:file (meta #'map)) (:file (meta #'clojure.string/join)) *1 *2 *3 *e (bound? #'*1) (read-string "\\\\\\\\") (map str (read-string "[\\\\\\\\ \\newline \\ ]")) (str (class (clojure.java.io/file "x"))) (instance? java.io.File (clojure.java.io/file "x"))]
+[(:file (meta #'map)) (:file (meta #'clojure.string/join)) *1 *2 *3 *e (bound? #'*1) (read-string "\\\\\\\\") (map str (read-string "[\\\\\\\\ \\newline \\ ]")) (str (class (clotran.files/file "x"))) (instance? clotran.io.File (clotran.files/file "x"))]
 
-[(try (eval 'user.OracleNoSuch) (catch Throwable e :err)) (try (eval 'no.such.Klass) (catch Throwable e :err)) (do (defrecord OracleRec [a]) (str (eval 'user.OracleRec))) (some? (eval 'clojure.core.protocols.CollReduce)) (str java.util.Date)]
+[(try (eval 'user.OracleNoSuch) (catch clotran.host.throwable e :err)) (try (eval 'no.such.Klass) (catch clotran.host.throwable e :err)) (do (defrecord OracleRec [a]) (str (eval 'user.OracleRec))) (some? (eval 'clojure.core.protocols.CollReduce)) (str clotran.host.date)]
 
-[(let [m (transient {:x 1 :y 2 :z 3})] (dissoc! m :x) (persistent! m)) (persistent! (reduce conj! (transient {}) [[:a 1] [:b 2]])) (persistent! (assoc! (transient {}) :k 7)) (persistent! (disj! (conj! (transient #{1 2}) 3) 1)) (let [t (transient #{1 2})] [(count t) (contains? t 1) (get t 2) (find (transient {:a 1}) :a) (get (transient {:a 1}) :a)]) (str (class (transient {:a 1}))) (str (class (transient (hash-map :a 1)))) (str (class (transient #{1}))) (try (let [t (transient {})] (persistent! t) (assoc! t :a 1)) (catch IllegalAccessError e :used-after)) (instance? clojure.lang.IEditableCollection {}) (instance? clojure.lang.IEditableCollection (sorted-map)) (try (transient (sorted-set)) (catch ClassCastException e :cce))]
+[(let [m (transient {:x 1 :y 2 :z 3})] (dissoc! m :x) (persistent! m)) (persistent! (reduce conj! (transient {}) [[:a 1] [:b 2]])) (persistent! (assoc! (transient {}) :k 7)) (persistent! (disj! (conj! (transient #{1 2}) 3) 1)) (let [t (transient #{1 2})] [(count t) (contains? t 1) (get t 2) (find (transient {:a 1}) :a) (get (transient {:a 1}) :a)]) (str (class (transient {:a 1}))) (str (class (transient (hash-map :a 1)))) (str (class (transient #{1}))) (try (let [t (transient {})] (persistent! t) (assoc! t :a 1)) (catch clotran.host.illegal_access_error e :used-after)) (instance? clotran.host.i_editable_collection {}) (instance? clotran.host.i_editable_collection (sorted-map)) (try (transient (sorted-set)) (catch clotran.host.class_cast_exception e :cce))]
 
 (defrecord OracleMP [a b])
 
-[(map->OracleMP {:a 1 :b 2 :z 9}) (OracleMP/create (with-meta {:a 1 :b 2} {:m 1})) (meta (with-meta {:a 1} nil)) (str (class (with-meta {:a 1} nil))) (instance? clojure.lang.MapEquivalence {}) (instance? clojure.lang.MapEquivalence (sorted-map)) (instance? clojure.lang.MapEquivalence (->OracleMP 1 2)) [((transient {:a 1}) :a) (:a (transient {:a 1})) ((transient #{:a}) :b 2) (get (transient #{:a}) :a)]]
+[(map->OracleMP {:a 1 :b 2 :z 9}) (OracleMP/create (with-meta {:a 1 :b 2} {:m 1})) (meta (with-meta {:a 1} nil)) (str (class (with-meta {:a 1} nil))) (instance? clotran.host.map_equivalence {}) (instance? clotran.host.map_equivalence (sorted-map)) (instance? clotran.host.map_equivalence (->OracleMP 1 2)) [((transient {:a 1}) :a) (:a (transient {:a 1})) ((transient #{:a}) :b 2) (get (transient #{:a}) :a)]]
 
-[(let [r (ref 0)] (dosync (alter r inc) (alter r inc)) @r) (try (alter (ref 0) inc) (catch IllegalStateException e :no-tx)) (try (ref-set (ref 0) 5) (catch IllegalStateException e :no-tx)) (try (dosync (io! 1)) (catch IllegalStateException e :io-in-tx)) (let [r (ref 1)] (try (dosync (ref-set r 5) (throw (ex-info "x" {}))) (catch Exception e @r))) (let [r (ref 1)] (dosync (ref-set r 5) [@r (ensure r)])) (let [r (ref 1) w (atom [])] (add-watch r :k (fn [k _ o n] (swap! w conj [o n]))) (dosync (alter r + 10) (commute r * 2)) [@r @w]) (let [r (ref 1 :validator pos?)] [(try (dosync (ref-set r -1)) (catch IllegalStateException e :invalid)) @r]) (let [a (ref 100) b (ref 0)] (dosync (alter a - 30) (alter b + 30)) [@a @b]) (ref-history-count (ref 1)) (ref-min-history (ref 1)) (ref-max-history (ref 1))]
+[(let [r (ref 0)] (dosync (alter r inc) (alter r inc)) @r) (try (alter (ref 0) inc) (catch clotran.host.illegal_state_exception e :no-tx)) (try (ref-set (ref 0) 5) (catch clotran.host.illegal_state_exception e :no-tx)) (try (dosync (io! 1)) (catch clotran.host.illegal_state_exception e :io-in-tx)) (let [r (ref 1)] (try (dosync (ref-set r 5) (throw (ex-info "x" {}))) (catch clotran.host.exception e @r))) (let [r (ref 1)] (dosync (ref-set r 5) [@r (ensure r)])) (let [r (ref 1) w (atom [])] (add-watch r :k (fn [k _ o n] (swap! w conj [o n]))) (dosync (alter r + 10) (commute r * 2)) [@r @w]) (let [r (ref 1 :validator pos?)] [(try (dosync (ref-set r -1)) (catch clotran.host.illegal_state_exception e :invalid)) @r]) (let [a (ref 100) b (ref 0)] (dosync (alter a - 30) (alter b + 30)) [@a @b]) (ref-history-count (ref 1)) (ref-min-history (ref 1)) (ref-max-history (ref 1))]
 
 
-[(str (class (eduction (map inc) [1 2]))) (instance? clojure.core.Eduction (eduction [1])) (pr-str (eduction (map inc) [1 2])) (try (count (eduction (map inc) [1 2])) (catch UnsupportedOperationException e (.getMessage e))) (count (reify clojure.lang.IPersistentCollection clojure.lang.Seqable (seq [_] (seq [1 2 3])))) (try (count (reify clojure.lang.Seqable (seq [_] (seq [1 2 3])))) (catch UnsupportedOperationException e :unsupported)) (count (reify clojure.lang.Counted (count [_] 7))) (reduce + (eduction (map inc) [1 2])) (reduce + 10 (eduction (map inc) [1 2])) (into [] (eduction (map inc) (filter even?) (range 10))) (seq (eduction (map inc) [1 2])) (sequential? (eduction [1 2]))]
+[(str (class (eduction (map inc) [1 2]))) (instance? clojure.core.Eduction (eduction [1])) (pr-str (eduction (map inc) [1 2])) (try (count (eduction (map inc) [1 2])) (catch clotran.host.unsupported_operation_exception e (.getMessage e))) (count (reify clotran.host.i_persistent_collection clotran.host.seqable (seq [_] (seq [1 2 3])))) (try (count (reify clotran.host.seqable (seq [_] (seq [1 2 3])))) (catch clotran.host.unsupported_operation_exception e :unsupported)) (count (reify clotran.host.counted (count [_] 7))) (reduce + (eduction (map inc) [1 2])) (reduce + 10 (eduction (map inc) [1 2])) (into [] (eduction (map inc) (filter even?) (range 10))) (seq (eduction (map inc) [1 2])) (sequential? (eduction [1 2]))]
 
 ;; the promoting operators on machine integers: a long stays a long
 ;; and the big path is for the one value that overflows (inc' went
@@ -2690,31 +2690,31 @@
 ;; core's one-line wrappers ((fn [coll] (. RT (first coll)))) are called
 ;; as their builtin when the arity matches; a wrong arity is still the
 ;; fn's error, and a wrapper passed as a value still works
-[(try (first) (catch clojure.lang.ArityException e :arity)) (try (first [1] [2]) (catch clojure.lang.ArityException e :arity)) (try (next) (catch clojure.lang.ArityException e :arity)) (map first [[1] [2 3] nil]) (apply first [[5 6]]) (reduce (fn [a x] (conj a (first x))) [] [[1] [2]]) (let [f rest] (f [1 2 3])) ((comp first rest) [1 2 3]) (apply cons 0 [[1 2]])]
+[(try (first) (catch clotran.host.arity_exception e :arity)) (try (first [1] [2]) (catch clotran.host.arity_exception e :arity)) (try (next) (catch clotran.host.arity_exception e :arity)) (map first [[1] [2 3] nil]) (apply first [[5 6]]) (reduce (fn [a x] (conj a (first x))) [] [[1] [2]]) (let [f rest] (f [1 2 3])) ((comp first rest) [1 2 3]) (apply cons 0 [[1 2]])]
 
 ;; apply over a long lazy take: the dot call's argument vector no
 ;; longer holds the head (it held every cell, 452 MB at 1e6)
 [(apply + (take 300000 (range))) (apply (fn [& more] (reduce + more)) (take 300000 (range))) (apply max (take 1000 (iterate inc 0))) (apply str (take 5 (cycle "ab")))]
 
 ;; lazy-seq's expansion (new LazySeq (fn* [] ...)) is the lazy node
-[(take 5 ((fn step [i] (lazy-seq (cons i (step (inc i))))) 0)) (realized? (lazy-seq nil)) (let [s (lazy-seq [1 2])] [(realized? s) (first s) (realized? s)]) (seq (lazy-seq (lazy-seq nil))) (let [n (atom 0) s (lazy-seq (swap! n inc) [1])] (doall s) (doall s) @n) (try (doall (lazy-seq (throw (ex-info "t" {})))) (catch Exception e (ex-message e))) (seq (clojure.lang.LazySeq. (fn [] [1 2])))]
+[(take 5 ((fn step [i] (lazy-seq (cons i (step (inc i))))) 0)) (realized? (lazy-seq nil)) (let [s (lazy-seq [1 2])] [(realized? s) (first s) (realized? s)]) (seq (lazy-seq (lazy-seq nil))) (let [n (atom 0) s (lazy-seq (swap! n inc) [1])] (doall s) (doall s) @n) (try (doall (lazy-seq (throw (ex-info "t" {})))) (catch clotran.host.exception e (ex-message e))) (seq (clotran.host.lazy_seq. (fn [] [1 2])))]
 
 ;; fn bodies run as flat instructions (flat.inc): builtin calls by
 ;; register, the integer fast path and its overflow, a three-argument
 ;; host call on locals (it was handed nil while the fast path was
 ;; being written), clearing, loops and arities
-(defn flat-rt3 [m k v] (clojure.lang.RT/assoc m k v))
+(defn flat-rt3 [m k v] (clotran.host.rt/assoc m k v))
 (defn flat-mix [x y] [(+ x y) (- x 1) (< x y) (inc x) (dec y) (* x y) (= x x) (zero? (- x x)) (pos? y) (neg? (- x y))])
-(defn flat-ovf [x] [(try (inc x) (catch ArithmeticException e :ovf)) (try (+ x 1) (catch ArithmeticException e :ovf)) (try (* x 2) (catch ArithmeticException e :ovf)) (try (- (- x) 2) (catch ArithmeticException e :ovf))])
+(defn flat-ovf [x] [(try (inc x) (catch clotran.host.arithmetic_exception e :ovf)) (try (+ x 1) (catch clotran.host.arithmetic_exception e :ovf)) (try (* x 2) (catch clotran.host.arithmetic_exception e :ovf)) (try (- (- x) 2) (catch clotran.host.arithmetic_exception e :ovf))])
 (defn flat-clear [s] [(first s) (count s) (vec (rest s))])
 (defn flat-loop [n] (loop [i 0 acc []] (if (< i n) (recur (inc i) (conj acc (* i i))) acc)))
 (defn flat-var ([] (flat-var 1)) ([a] (flat-var a 2)) ([a b & more] [a b more]))
 
-[(flat-rt3 {} :a 1) (flat-mix 3 4) (flat-mix 2.5 1) (flat-ovf Long/MAX_VALUE) (flat-ovf 5) (flat-clear (map inc [1 2 3])) (flat-loop 5) (flat-var) (flat-var 1 2 3 4)]
+[(flat-rt3 {} :a 1) (flat-mix 3 4) (flat-mix 2.5 1) (flat-ovf clotran.host.int8/MAX_VALUE) (flat-ovf 5) (flat-clear (map inc [1 2 3])) (flat-loop 5) (flat-var) (flat-var 1 2 3 4)]
 
 ;; unchecked-inc/dec wrap; the flat fast path leaves the one wrapping
 ;; value to the builtin
-[(unchecked-inc Long/MAX_VALUE) (unchecked-dec Long/MIN_VALUE) (let [x 5] (unchecked-inc x)) (let [f (fn [x] (unchecked-dec x))] (f Long/MIN_VALUE)) (let [n 3] (loop [i 0 acc []] (if (< i n) (recur (unchecked-inc i) (conj acc i)) acc)))]
+[(unchecked-inc clotran.host.int8/MAX_VALUE) (unchecked-dec clotran.host.int8/MIN_VALUE) (let [x 5] (unchecked-inc x)) (let [f (fn [x] (unchecked-dec x))] (f clotran.host.int8/MIN_VALUE)) (let [n 3] (loop [i 0 acc []] (if (< i n) (recur (unchecked-inc i) (conj acc i)) acc)))]
 
 ;; first/next/rest/seq answered inline where the slot is already there
 ;; (flat.inc flat_seq_op): nil, lists, realised, empty and delegating cells
@@ -2726,53 +2726,53 @@
 ;; one seq forced from four futures, a thunk answering a lazy seq, a
 ;; thunk run once however often it is walked
 (def flat-fibs (lazy-cat [0 1] (map + flat-fibs (rest flat-fibs))))
-(defn flat-shared [] (let [s (map (fn [x] (Thread/sleep 1) (* x x)) (range 20)) fs (doall (for [_ (range 4)] (future (reduce + s))))] (mapv deref fs)))
+(defn flat-shared [] (let [s (map (fn [x] (clotran.host.thread/sleep 1) (* x x)) (range 20)) fs (doall (for [_ (range 4)] (future (reduce + s))))] (mapv deref fs)))
 (defn flat-nested [] (let [s ((fn step [i] (lazy-seq (when (< i 5) (lazy-seq (cons i (step (inc i))))))) 0)] [(first s) (next s) (seq s) (rest (rest s))]))
 (defn flat-once [] (let [n (atom 0) s ((fn step [i] (lazy-seq (swap! n inc) (when (< i 3) (cons i (step (inc i)))))) 0)] (dorun s) (dorun s) [(vec s) @n]))
 [(take 10 flat-fibs) (flat-shared) (flat-nested) (flat-once)]
 
-(defn flat-throwing [] (let [n (atom 0) s (lazy-seq (swap! n inc) (throw (ex-info "t" {})))] [(try (first s) (catch Exception e (ex-message e))) (try (next s) (catch Exception e (ex-message e))) (try (seq s) (catch Exception e :again)) @n]))
+(defn flat-throwing [] (let [n (atom 0) s (lazy-seq (swap! n inc) (throw (ex-info "t" {})))] [(try (first s) (catch clotran.host.exception e (ex-message e))) (try (next s) (catch clotran.host.exception e (ex-message e))) (try (seq s) (catch clotran.host.exception e :again)) @n]))
 (expect-diff "DEVIATIONS 59: a lazy-seq thunk keeps its captures after it throws")
 (flat-throwing)
 
 ;; chunked-seq?, seq? and reduced? on every kind (is_instance answers
 ;; these three from the value's kind), a deftype implementing ISeq
 ;; among them
-(deftype FlatSeqT [] clojure.lang.ISeq (first [_] 1) (next [_] nil) (more [_] ()) (cons [this x] this) (seq [this] this) (count [_] 1) (empty [_] ()) (equiv [_ o] false))
+(deftype FlatSeqT [] clotran.host.i_seq (first [_] 1) (next [_] nil) (more [_] ()) (cons [this x] this) (seq [this] this) (count [_] 1) (empty [_] ()) (equiv [_ o] false))
 (for [x [nil 1 "s" [1] '(1) () (list) (lazy-seq nil) (lazy-seq [1]) (seq [1 2]) (seq (range 3)) (range 3) (map inc [1]) (seq {:a 1}) (cons 1 nil) (cons 1 [2]) (reduced 1) {:a 1} #{1} (with-meta '(1) {:m 1}) (->FlatSeqT)]] [(chunked-seq? x) (seq? x) (reduced? x)])
 
 ;; (instance? C x) with a class literal is the type test, not a call
 ;; through the Var (InstanceOfExpr): with-redefs does not reach it, and
 ;; a class in a local still calls the Var
-[(with-redefs [instance? (fn [c x] :redef)] (instance? String "a")) (with-redefs [instance? (fn [c x] :redef)] (let [c String] (instance? c "a"))) (instance? String 1) (let [f instance?] (f Number 1))]
+[(with-redefs [instance? (fn [c x] :redef)] (instance? clotran.host.string "a")) (with-redefs [instance? (fn [c x] :redef)] (let [c clotran.host.string] (instance? c "a"))) (instance? clotran.host.string 1) (let [f instance?] (f clotran.host.number 1))]
 
 ;; try/catch/finally and case compiled flat (flat.inc fc_try, fc_case):
 ;; catch order, finally on every road, a catch that throws, nesting, a
 ;; try in a loop, errors from callees and host calls, case tables
-(defn flat-try1 [x] (let [log (atom [])] [(try (swap! log conj :body) (when x (throw (ex-info "boom" {:x x}))) :ok (catch clojure.lang.ExceptionInfo e (swap! log conj :ei) [:ei (ex-message e) (ex-data e)]) (catch Exception e (swap! log conj :ex) :ex) (finally (swap! log conj :fin))) @log]))
-(defn flat-try2 [] (let [log (atom [])] [(try (try (/ 1 0) (catch ArithmeticException e (swap! log conj :inner) (throw (ex-info "again" {}))) (finally (swap! log conj :inner-fin))) (catch Exception e (swap! log conj :outer) (ex-message e))) @log]))
-(defn flat-try3 [] (let [log (atom [])] [(try (try (throw (IllegalStateException. "no")) (finally (swap! log conj :fin))) (catch IllegalStateException e (.getMessage e))) @log]))
-(defn flat-try4 [n] (loop [i 0 acc []] (if (< i n) (recur (inc i) (conj acc (try (if (odd? i) (throw (Exception. (str i))) i) (catch Exception e (keyword (.getMessage e)))))) acc)))
+(defn flat-try1 [x] (let [log (atom [])] [(try (swap! log conj :body) (when x (throw (ex-info "boom" {:x x}))) :ok (catch clotran.host.exception_info e (swap! log conj :ei) [:ei (ex-message e) (ex-data e)]) (catch clotran.host.exception e (swap! log conj :ex) :ex) (finally (swap! log conj :fin))) @log]))
+(defn flat-try2 [] (let [log (atom [])] [(try (try (/ 1 0) (catch clotran.host.arithmetic_exception e (swap! log conj :inner) (throw (ex-info "again" {}))) (finally (swap! log conj :inner-fin))) (catch clotran.host.exception e (swap! log conj :outer) (ex-message e))) @log]))
+(defn flat-try3 [] (let [log (atom [])] [(try (try (throw (clotran.host.illegal_state_exception. "no")) (finally (swap! log conj :fin))) (catch clotran.host.illegal_state_exception e (.getMessage e))) @log]))
+(defn flat-try4 [n] (loop [i 0 acc []] (if (< i n) (recur (inc i) (conj acc (try (if (odd? i) (throw (clotran.host.exception. (str i))) i) (catch clotran.host.exception e (keyword (.getMessage e)))))) acc)))
 (defn flat-thrower [x] (throw (ex-info "from callee" {:v x})))
-(defn flat-try5 [] [(try (flat-thrower 1) (catch Exception e (:v (ex-data e)))) (try (nth [1 2] 5) (catch IndexOutOfBoundsException e :oob)) (try (.substring "abc" 5) (catch Exception e :sub)) (try (first 5) (catch IllegalArgumentException e :iae))])
-(defn flat-try6 [] (try (try (throw (ex-info "kept" {:k 1})) (catch ArithmeticException e :wrong)) (catch Exception e [(ex-message e) (ex-data e)])))
-(defn flat-try7 [] (let [a (atom 0)] [(try 1 (finally (swap! a inc))) (try (try (throw (Exception. "x")) (catch Exception e (throw (Exception. "y"))) (finally (swap! a + 10))) (catch Exception e (.getMessage e))) @a]))
+(defn flat-try5 [] [(try (flat-thrower 1) (catch clotran.host.exception e (:v (ex-data e)))) (try (nth [1 2] 5) (catch clotran.host.index_out_of_bounds_exception e :oob)) (try (.substring "abc" 5) (catch clotran.host.exception e :sub)) (try (first 5) (catch clotran.host.illegal_argument_exception e :iae))])
+(defn flat-try6 [] (try (try (throw (ex-info "kept" {:k 1})) (catch clotran.host.arithmetic_exception e :wrong)) (catch clotran.host.exception e [(ex-message e) (ex-data e)])))
+(defn flat-try7 [] (let [a (atom 0)] [(try 1 (finally (swap! a inc))) (try (try (throw (clotran.host.exception. "x")) (catch clotran.host.exception e (throw (clotran.host.exception. "y"))) (finally (swap! a + 10))) (catch clotran.host.exception e (.getMessage e))) @a]))
 (defn flat-case [x] (case x 1 :one 2 :two (3 4) :three-four "s" :str :k :kw [1 2] :vec nil :nil :default))
 (defn flat-case2 [x] (case x (1 2 3) :small 100 :hundred -1 :neg))
-[(flat-try1 nil) (flat-try1 1) (flat-try2) (flat-try3) (flat-try4 6) (flat-try5) (flat-try6) (flat-try7) (mapv flat-case [1 2 3 4 "s" :k [1 2] nil 9 "t"]) (mapv flat-case2 [1 3 100 -1]) (try (flat-case2 7) (catch IllegalArgumentException e (.getMessage e)))]
+[(flat-try1 nil) (flat-try1 1) (flat-try2) (flat-try3) (flat-try4 6) (flat-try5) (flat-try6) (flat-try7) (mapv flat-case [1 2 3 4 "s" :k [1 2] nil 9 "t"]) (mapv flat-case2 [1 3 100 -1]) (try (flat-case2 7) (catch clotran.host.illegal_argument_exception e (.getMessage e)))]
 
 ;; protocol dispatch through the cache (DEVIATIONS 13, resolved): per
 ;; class, nil and Object, records and types, re-extension, via metadata
 (defprotocol FP (fp [x]) (fp2 [x y]))
-(extend-protocol FP Long (fp [x] [:long x]) (fp2 [x y] [:long2 x y]) String (fp [x] [:str x]) (fp2 [x y] :s2) nil (fp [x] :nil) (fp2 [x y] :nil2) Object (fp [x] :obj) (fp2 [x y] :obj2))
+(extend-protocol FP clotran.host.int8 (fp [x] [:long x]) (fp2 [x y] [:long2 x y]) clotran.host.string (fp [x] [:str x]) (fp2 [x y] :s2) nil (fp [x] :nil) (fp2 [x y] :nil2) clotran.host.value (fp [x] :obj) (fp2 [x y] :obj2))
 (defrecord FR [a] FP (fp [_] [:rec a]) (fp2 [_ y] [:rec2 a y]))
 (deftype FT [] FP (fp [_] :type) (fp2 [_ y] :type2))
 (defprotocol FM :extend-via-metadata true (fm [x]))
-(extend-protocol FM Long (fm [x] :long-fm))
+(extend-protocol FM clotran.host.int8 (fm [x] :long-fm))
 (def r1 (mapv fp [1 "a" nil :k 2 "b" (->FR 1) (FT.) 1.5 [1] nil 3]))
-(extend-protocol FP Long (fp [x] [:long-again x]) (fp2 [x y] [:long2-again x y]))
+(extend-protocol FP clotran.host.int8 (fp [x] [:long-again x]) (fp2 [x y] [:long2-again x y]))
 (def r2 (mapv fp [1 2 "a"]))
-(def r3 [(fp2 1 2) (fp2 "x" 1) (fp2 (->FR 5) 6) (fm 1) (fm (with-meta [1] {(quote user/fm) (fn [_] :via-meta)})) (try (fm "x") (catch IllegalArgumentException e :no-impl))])
+(def r3 [(fp2 1 2) (fp2 "x" 1) (fp2 (->FR 5) 6) (fm 1) (fm (with-meta [1] {(quote user/fm) (fn [_] :via-meta)})) (try (fm "x") (catch clotran.host.illegal_argument_exception e :no-impl))])
 [r1 r2 r3]
 
 ;; a record's declared field by keyword is read from the field (inst_lookup);
@@ -2783,26 +2783,26 @@
 ;; StringBuilder appends are buffered and joined on a read
 ;; (gc_sb_append/gc_sb_flush): reads between appends, reverse, str,
 ;; join, with-out-str, pr-str
-(defn sbt [] (let [sb (StringBuilder. "ab")] (.append sb "cd") (.append sb 1) (let [l1 (.length sb) s1 (str sb)] (.append sb \x) (.append sb [1 2]) [l1 s1 (.toString sb) (.length sb) (str (.reverse (StringBuilder. "héllo"))) (str (doto (StringBuilder.) (.append "a") (.append "b")))])))
-[(sbt) (str "a" 1 nil :k [1] "é") (clojure.string/join "," (range 12)) (clojure.string/join [1 2 3]) (with-out-str (print "x") (println "y" 1) (pr [1 "a"])) (pr-str {:a [1 2] :b "s"}) (count (pr-str (vec (range 3000)))) (apply str (repeat 40 "ab")) (format "%s-%d" "x" 3) (str (reduce (fn [sb i] (.append sb i)) (StringBuilder.) (range 20)))]
+(defn sbt [] (let [sb (clotran.host.string_builder. "ab")] (.append sb "cd") (.append sb 1) (let [l1 (.length sb) s1 (str sb)] (.append sb \x) (.append sb [1 2]) [l1 s1 (.toString sb) (.length sb) (str (.reverse (clotran.host.string_builder. "héllo"))) (str (doto (clotran.host.string_builder.) (.append "a") (.append "b")))])))
+[(sbt) (str "a" 1 nil :k [1] "é") (clojure.string/join "," (range 12)) (clojure.string/join [1 2 3]) (with-out-str (print "x") (println "y" 1) (pr [1 "a"])) (pr-str {:a [1 2] :b "s"}) (count (pr-str (vec (range 3000)))) (apply str (repeat 40 "ab")) (format "%s-%d" "x" 3) (str (reduce (fn [sb i] (.append sb i)) (clotran.host.string_builder.) (range 20)))]
 
 ;; instance? on the scalar classes, answered from tag and width; the two
 ;; big integers are one type here (DEVIATIONS: one big integer type)
-(for [x [nil 1 (int 1) (short 1) (byte 1) 1.5 (float 1.5) 1M 1/2 "s" \c :k 'sym true [1] (with-meta 'm {:a 1})]]   [(instance? Long x) (instance? Integer x) (instance? Short x) (instance? Byte x) (instance? clojure.lang.BigInt x) (instance? java.math.BigInteger x) (instance? String x) (instance? Number x) (instance? Double x) (instance? Character x) (instance? clojure.lang.Keyword x) (instance? clojure.lang.Symbol x) (integer? x) (number? x) (string? x) (int? x) (double? x)]) 
+(for [x [nil 1 (int 1) (short 1) (byte 1) 1.5 (float 1.5) 1M 1/2 "s" \c :k 'sym true [1] (with-meta 'm {:a 1})]]   [(instance? clotran.host.int8 x) (instance? clotran.host.int4 x) (instance? clotran.host.int2 x) (instance? clotran.host.int1 x) (instance? clotran.host.bigint x) (instance? clotran.host.bigint x) (instance? clotran.host.string x) (instance? clotran.host.number x) (instance? clotran.host.real8 x) (instance? clotran.host.char x) (instance? clotran.host.keyword x) (instance? clotran.host.symbol x) (integer? x) (number? x) (string? x) (int? x) (double? x)]) 
 
 ;; regex over an all-ASCII subject by byte spans (matcher_ascii): re-seq,
 ;; groups, replace with $n, split, appendReplacement; non-ASCII subjects
 ;; keep the counted road
 [(re-seq #"\d+" "a1 22 333 b") (re-seq #"(\w)(\d)" "a1 b2 c3") (re-find #"é(.)" "xxéy") (re-seq #"." "aé😀b") (re-find #"(x)?y" "y") (let [m (re-matcher #"(\d)(\d)?" "1 23")] [(re-find m) (re-find m) (re-find m)]) (re-matches #"(a)(b)" "ab") (clojure.string/replace "a1b22" #"\d+" "#") (clojure.string/split "a,b,,c" #",") (count (re-seq #"\d+" (clojure.string/join " " (range 1000))))]
-[(clojure.string/replace "a1b22c333" #"(\d)(\d)?" "<$1|$2>") (clojure.string/replace-first "aXbXc" #"X" "-") (clojure.string/replace "abc" #"" "-") (clojure.string/replace "日本語" #"本" "x") (clojure.string/split "a1b2c3" #"\d") (clojure.string/split "a1b2c3" #"\d" 2) (clojure.string/split "é,ü,,x" #",") (let [m (re-matcher #"(\d)" "a1b2") sb (StringBuffer.)] (while (.find m) (.appendReplacement m sb "<$1>")) (.appendTail m sb) (str sb)) (clojure.string/replace "x.y" #"\." "\\$")]
+[(clojure.string/replace "a1b22c333" #"(\d)(\d)?" "<$1|$2>") (clojure.string/replace-first "aXbXc" #"X" "-") (clojure.string/replace "abc" #"" "-") (clojure.string/replace "日本語" #"本" "x") (clojure.string/split "a1b2c3" #"\d") (clojure.string/split "a1b2c3" #"\d" 2) (clojure.string/split "é,ü,,x" #",") (let [m (re-matcher #"(\d)" "a1b2") sb (clotran.host.string_buffer.)] (while (.find m) (.appendReplacement m sb "<$1>")) (.appendTail m sb) (str sb)) (clojure.string/replace "x.y" #"\." "\\$")]
 
 ;; (:k x) from the register (flat.inc), and assoc! on a transient map
 ;; straight to the map's assoc (tmap_op)
 (defrecord KR [a])
-[(:a {:a 1}) (:z {:a 1}) (:a nil) (:a #{:a}) (:a (sorted-map :a 3)) (:a (->KR 5)) (:q (assoc (->KR 5) :q 6)) (:a (transient {:a 7})) (:a [1 2]) (:a "s") (:a (with-meta {:a 9} {:m 1})) (map :a [{:a 1} nil {:b 2}]) (try (:a) (catch clojure.lang.ArityException e :arity))]
-[(persistent! (assoc! (transient {}) :a 1)) (persistent! (reduce (fn [m i] (assoc! m i (* i i))) (transient {}) (range 20))) (frequencies [1 2 1 3 1]) (group-by odd? (range 6)) (let [t (transient {:a 1})] (persistent! t) (try (assoc! t :b 2) (catch Throwable e (class e)))) (persistent! (assoc! (transient {:a nil}) :a 1 :b 2))]
+[(:a {:a 1}) (:z {:a 1}) (:a nil) (:a #{:a}) (:a (sorted-map :a 3)) (:a (->KR 5)) (:q (assoc (->KR 5) :q 6)) (:a (transient {:a 7})) (:a [1 2]) (:a "s") (:a (with-meta {:a 9} {:m 1})) (map :a [{:a 1} nil {:b 2}]) (try (:a) (catch clotran.host.arity_exception e :arity))]
+[(persistent! (assoc! (transient {}) :a 1)) (persistent! (reduce (fn [m i] (assoc! m i (* i i))) (transient {}) (range 20))) (frequencies [1 2 1 3 1]) (group-by odd? (range 6)) (let [t (transient {:a 1})] (persistent! t) (try (assoc! t :b 2) (catch clotran.host.throwable e (class e)))) (persistent! (assoc! (transient {:a nil}) :a 1 :b 2))]
 
-;; records by value in maps and sets, their hash the JVM's, assoc on a
+;; records by value in maps and sets, their hash clj's, assoc on a
 ;; declared field without the method (record_field_index)
 (defrecord RA [a b])
 (def r (with-meta (->RA 1 2) {:m 1}))
@@ -2811,7 +2811,7 @@
 [(hash (->RA 7 2)) (hash (assoc (->RA 1 2) :a 7)) (hash (with-meta (->RA 7 2) {:m 1})) (.equals (->RA 7 2) (->RA 7 2))]
 
 (expect-diff "DEVIATIONS 60: a deftype's own equals and hasheq are not consulted")
-(do (deftype VP [x] Object (equals [_ o] (and (instance? VP o) (= x (.-x o)))) (hashCode [_] (hash x)) clojure.lang.IHashEq (hasheq [_] (hash x))) [(= (VP. 1) (VP. 1)) (count (set [(VP. 1) (VP. 1)]))])
+(do (deftype VP [x] clotran.host.value (equals [_ o] (and (instance? VP o) (= x (.-x o)))) (hashCode [_] (hash x)) clotran.host.i_hash_eq (hasheq [_] (hash x))) [(= (VP. 1) (VP. 1)) (count (set [(VP. 1) (VP. 1)]))])
 
 ;; a def, a swap! and a letfn beside a loop's recur (node_has_recur: only
 ;; a recur INSIDE a nested node keeps an arity a tree)
@@ -2830,14 +2830,14 @@
 (deftype TV [a] IV (f [_ x] (+ a x)) (g [_ x] (+ a x)))
 [(.f (TV. 1) 2) (.g (TV. 1) 2) (.f (reify IV (f [_ x] x) (g [_ x] x)) 3) (.f (proxy [IV] [] (f [x] x)) 4) (instance? IV (TV. 1))]
 (with-out-str (prn (clojure.pprint/pprint {:a 1})))
-(import 'java.util.Date)
-(import '[java.util Date UUID] '(java.io Writer))
+(import )
+(import  )
 
 ;; to-array answers an Object[] as itself (RT.toArray), so sort-by on
 ;; an array sorts it in place
 (let [h (to-array "Hello") x (to-array [32 -5 4 11]) y (sort-by - x)] [(identical? (to-array h) h) (seq y) (seq x) (identical? (to-array (int-array 2)) (int-array 2))])
-;; assoc on a vector throws the JVM's classes
-(mapv #(try (assoc [1 2 3] % 0) (catch Exception e (class e))) [0 3 4 -1 :a])
+;; assoc on a vector throws clj's classes
+(mapv #(try (assoc [1 2 3] % 0) (catch clotran.host.exception e (class e))) [0 3 4 -1 :a])
 
 ;; a list read from a file has {:line :column} metadata (LispReader),
 ;; merged into any ^ gave it; a vector does not, nor a read-string list
@@ -2848,14 +2848,14 @@
 (let [m (meta (eval (read-string "(def oracle-def-pos 1)")))] [(:line m) (:column m) (string? (:file m))])
 
 ;; the tokens LispReader.matchSymbol refuses, and the ones it takes
-(mapv #(try (read-string %) (catch Exception e :invalid)) ["://" ":a/" ":/a" "a/" "/a" "a//" ":a//" ":///" "///" "a///" "a/b/" "a:" ":a:" "a::b" "a:/b" "a/:b" ":1a" "a/1" ":a/1" "String/1" "/" ":/" "clojure.core//" ":a:b" "a:b:c/d" "abc/de:f" "a/b:"])
+(mapv #(try (read-string %) (catch clotran.host.exception e :invalid)) ["://" ":a/" ":/a" "a/" "/a" "a//" ":a//" ":///" "///" "a///" "a/b/" "a:" ":a:" "a::b" "a:/b" "a/:b" ":1a" "a/1" ":a/1" "String/1" "/" ":/" "clojure.core//" ":a:b" "a:b:c/d" "abc/de:f" "a/b:"])
 
-;; array classes by symbol: CLJ-2807's Sym/N, and the JVM descriptor
-(let [e (comp eval read-string)] [(mapv e ["int/1" "double/2" "String/1" "(= int/1 (class (int-array 1)))" "(instance? long/1 (long-array 2))"]) (mapv #(resolve (symbol %)) ["int/1" "[I" "[[D" "[Ljava.lang.String;" "long/3" "[Lno.Such;" "[Q"])])
-(try (resolve (symbol "no.such.Klass/1")) (catch ClassNotFoundException e (.getMessage e)))
+;; array classes by symbol: CLJ-2807's Sym/N, and clj descriptor
+(let [e (comp eval read-string)] [(mapv e ["int/1" "double/2" "String/1" "(= int/1 (class (int-array 1)))" "(instance? long/1 (long-array 2))"]) (mapv #(resolve (symbol %)) ["int/1" "[I" "[[D" "[Lclotran.host.string;" "long/3" "[Lno.Such;" "[Q"])])
+(try (resolve (symbol "no.such.Klass/1")) (catch clotran.host.class_not_found_exception e (.getMessage e)))
 
 ;; fn? answered from the value's kind (trampoline asks it every bounce)
-(mapv fn? [inc (fn []) #(identity 1) :k {} #{} [] (with-meta (fn []) {:a 1}) print-method 'x nil (var inc) (reify clojure.lang.IFn (invoke [_] 1))])
+(mapv fn? [inc (fn []) #(identity 1) :k {} #{} [] (with-meta (fn []) {:a 1}) print-method 'x nil (var inc) (reify clotran.host.i_fn (invoke [_] 1))])
 (trampoline (fn f [n] (if (pos? n) #(f (dec n)) n)) 10000)
 
 ;; & is an ordinary local in let* and loop* at 1.12.6 (LetExpr.Parser
@@ -2866,9 +2866,9 @@
 ;; lisp-read): a token stops at whitespace or a macro character, which is
 ;; pushed back; strings, regexes and collections end at their closers
 (defn forms-of [s]
-  (let [r (java.io.PushbackReader. (java.io.StringReader. s))]
+  (let [r (clotran.io/pushback-reader (clotran.io/text-reader s))]
     (loop [acc []]
-      (let [x (try (read r false :oracle-eof) (catch Exception e [:threw (.getMessage e)]))]
+      (let [x (try (read r false :oracle-eof) (catch clotran.host.exception e [:threw (.getMessage e)]))]
         (if (or (= x :oracle-eof) (and (vector? x) (= :threw (first x)))) (conj acc x) (recur (conj acc x)))))))
 [(forms-of "(+ 1 2) [3 4] {:a 1}") (forms-of "abc,def ;comment\n  :kw 12N 1.5M 3/4 ##Inf")]
 (forms-of "\"str (with) \\\" quote\" \\( \\) \\space \\a")
@@ -2876,10 +2876,10 @@
 (forms-of "'x @d ^:m [e] #'f")
 [(forms-of "#_ skipped kept #_#_ a b c [1 #_2 3]") (forms-of "#{1 2} #:ns{:a 1}") (forms-of "#! shebang line\n(x)") (forms-of "a(b)c")]
 [(forms-of "(unclosed") (forms-of ")") (forms-of "\"open string")]
-[(let [r (java.io.PushbackReader. (java.io.StringReader. "sym rest"))] [(read r) (slurp r)]) (let [r (java.io.PushbackReader. (java.io.StringReader. "(a) rest"))] [(read r) (slurp r)]) (read {:eof :done} (java.io.PushbackReader. (java.io.StringReader. "  ")))]
+[(let [r (clotran.io/pushback-reader (clotran.io/text-reader "sym rest"))] [(read r) (slurp r)]) (let [r (clotran.io/pushback-reader (clotran.io/text-reader "(a) rest"))] [(read r) (slurp r)]) (read {:eof :done} (clotran.io/pushback-reader (clotran.io/text-reader "  ")))]
 (with-in-str "1 2\n3" [(read) (read-line) (read-line)])
 (with-in-str "a\nb" [(read-line) (read-line) (read-line)])
-[(line-seq (java.io.BufferedReader. (java.io.StringReader. "x\ny"))) (slurp (java.io.StringReader. "abc")) (load-string "(+ 1 2) (* 2 3)")]
-(let [r (clojure.lang.LineNumberingPushbackReader. (java.io.StringReader. "a\r\nb\nc"))] [(read r) (.getLineNumber r) (read r) (.getLineNumber r) (read r)])
-(let [r (clojure.lang.LineNumberingPushbackReader. (java.io.StringReader. "  (+ 1\n 2) tail"))] (read+string r))
+[(line-seq (clotran.host.buffered_reader. (clotran.io/text-reader "x\ny"))) (slurp (clotran.io/text-reader "abc")) (load-string "(+ 1 2) (* 2 3)")]
+(let [r (clotran.io/line-numbering-reader (clotran.io/text-reader "a\r\nb\nc"))] [(read r) (.getLineNumber r) (read r) (.getLineNumber r) (read r)])
+(let [r (clotran.io/line-numbering-reader (clotran.io/text-reader "  (+ 1\n 2) tail"))] (read+string r))
 [(.trim "\u0001 a b \t\n") (.trim "") (.trim "   ")]

@@ -41,7 +41,7 @@
 (deftype SocketReader [h buf pos]
   io/CharReader
   (read-all [this] (#'io/all-from this))
-  Object
+  clotran.host.value
   (read [_]
     (loop []
       (let [b @buf p @pos]
@@ -58,7 +58,7 @@
 
 ;; Text gathered until flush sends it, as a buffered writer does.
 (deftype SocketWriter [h pending]
-  Object
+  clotran.host.value
   (write [_ x]
     (swap! pending conj (if (integer? x) (str (char x)) (str x)))
     nil)

@@ -1,4 +1,4 @@
-;; DERIVED from test/clj/clojure/test_clojure/control.clj by scripts/derive-tests -- do not edit.
+;; DERIVED from upstream/clojure/test/clojure/test_clojure/control.clj by upstream/derive-tests -- do not edit.
 ;; Kept: tests whose symbols lie in the clojure.core/cljs.core intersection (plus concurrency).
 
 (ns clojure.test-clojure.control (:use clojure.test clojure.test-helper))
@@ -218,10 +218,10 @@
        (condp + 1
          1 :>> #(if (= % 3) :fail :pass))
        )
-  (is (thrown? IllegalArgumentException
+  (is (thrown? clotran.host.illegal_argument_exception
                (condp = 1)
                ))
-  (is (thrown? IllegalArgumentException
+  (is (thrown? clotran.host.illegal_argument_exception
                (condp = 1
                  2 :fail)
                ))
@@ -254,7 +254,7 @@
 
 ;; control.clj:272 [language]
 (deftest test-while
-  (is (= nil (while nil (throw (Exception. "never")))))
+  (is (= nil (while nil (throw (clotran.host.exception. "never")))))
   (is (= [0 nil]
          ;; a will dec to 0
          ;; while always returns nil
@@ -262,5 +262,5 @@
                w (while (pos? @a)
                    (swap! a dec))]
            [@a w])))
-  (is (thrown? Exception (while true (throw (Exception. "expected to throw")))))
+  (is (thrown? clotran.host.exception (while true (throw (clotran.host.exception. "expected to throw")))))
   )

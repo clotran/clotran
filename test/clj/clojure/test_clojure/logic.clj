@@ -79,7 +79,7 @@
       #{1 2}
       (into-array [1 2])
 
-      (new java.util.Date) ))
+      (new clotran.host.date) ))
 
 
 (deftest test-nil-punning
@@ -200,8 +200,8 @@
       (into-array [])
       (into-array [1 2])
 
-      ; Java objects
-      (new java.util.Date) ))
+      ; host objects
+      (new clotran.host.date) ))
 
 (deftest test-some?
   (are [expected x] (= expected (some? x))

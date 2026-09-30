@@ -101,7 +101,7 @@ contains
     integer(int64) :: r
     character(len=32) :: buf
     if (.not. (x >= -9.223372036854775808d18 .and. x < 9.223372036854775808d18)) then
-       ! Fortran's own ES form, the same text from every compiler; the JVM
+       ! Fortran's own ES form, the same text from every compiler; clj
        ! writes 1.0E30 (DEVIATIONS 50)
        write(buf, '(es24.16e3)') x
        call cl_fail('Value out of range for long: ' // trim(adjustl(buf)))
@@ -117,7 +117,7 @@ contains
        call cl_fail('Index ' // trim(bi) // ' out of bounds for length ' // trim(bn))
     end if
   end subroutine cl_bounds
-  ! (double-array n), (long-array n): zeros; a negative size is Java's
+  ! (double-array n), (long-array n): zeros; a negative size is clj's
   ! NegativeArraySizeException, whose message is the size
   pure function cl_dzeros(n) result(r)
     integer(int64), intent(in) :: n
@@ -283,7 +283,7 @@ end module clotran_pure
   (cond
     (true? v) [[] ".true." :bool]
     (false? v) [[] ".false." :bool]
-    (and (int? v) (= v Long/MIN_VALUE)) [[] "(-huge(0_int64) - 1_int64)" :long]
+    (and (int? v) (= v clotran.host.int8/MIN_VALUE)) [[] "(-huge(0_int64) - 1_int64)" :long]
     (int? v) [[] (str v "_int64") :long]
     (and (double? v) (NaN? v)) (decline "a NaN literal")
     (and (double? v) (infinite? v)) (decline "an infinite literal")
@@ -468,9 +468,9 @@ end module clotran_pure
               ;; no init: the first element is the start, and an empty chain
               ;; answers (f) -- which must have the elements' type
               (let [zero (try (apply-fn f [] env st)
-                              (catch Exception e (if (::decline (ex-data e)) nil (throw e))))
+                              (catch clotran.host.exception e (if (::decline (ex-data e)) nil (throw e))))
                     ;; (f) that cannot be called is Clojure's ArityException when
-                    ;; the chain is empty -- (reduce max []) -- named as the JVM names it
+                    ;; the chain is empty -- (reduce max []) -- named as clj names it
                     fname (when (= :var (:op f)) (#'tiers/var-sym (:p1 f)))
                     _ (when-not (or zero fname)
                         (decline "reduce with no init over a function literal that takes no zero arguments"))
@@ -967,7 +967,7 @@ end module clotran_pure
                             (:i2 a)))]
     (vec (map-indexed
           (fn [i p]
-            (if-let [h ('{doubles [:doubles] longs [:longs] double [:double] long [:long] String [:string]} (:tag (meta p)))]
+            (if-let [h ('{doubles [:doubles] longs [:longs] double [:double] long [:long] clotran.host.string [:string]} (:tag (meta p)))]
               h
               (cond (callee-types (+ start i)) (vec (callee-types (+ start i)))
                     (record-cands (+ start i)) (vec (record-cands (+ start i)))
@@ -1038,7 +1038,7 @@ end module clotran_pure
                   (apply str (map #(str "       " % "\n") body-lines))
                   "    end do " label "\n"
                   (if sub? (str "  end subroutine " nm "\n") (str "  end function " nm "\n")))})
-    (catch Exception e
+    (catch clotran.host.exception e
       (if-let [why (::decline (ex-data e))]
         {:declined why}
         (throw e)))))

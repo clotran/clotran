@@ -1,4 +1,4 @@
-;; DERIVED from test/clj/clojure/test_clojure/delays.clj by scripts/derive-tests -- do not edit.
+;; DERIVED from upstream/clojure/test/clojure/test_clojure/delays.clj by upstream/derive-tests -- do not edit.
 ;; Kept: tests whose symbols lie in the clojure.core/cljs.core intersection (plus concurrency).
 
 (ns clojure.test-clojure.delays (:use clojure.test))
@@ -16,12 +16,12 @@
 
 ;; delays.clj:34 [language]
 (deftest saves-exceptions
-  (let [f #(do (throw (Exception. "broken"))
+  (let [f #(do (throw (clotran.host.exception. "broken"))
                1)
         d (delay (f))
         try-call #(try
                     @d
-                    (catch Exception e e))
+                    (catch clotran.host.exception e e))
         first-result (try-call)]
-    (is (instance? Exception first-result))
+    (is (instance? clotran.host.exception first-result))
     (is (identical? first-result (try-call)))))

@@ -1720,7 +1720,7 @@
     end if
     call sym_text(gc_slot(nd, 2), s=dlt_1)
     if (gc_i1(nd) == N_NEWTYPE) then
-       ty = find_type(dlt_1)
+       ty = find_type_loading(dlt_1)
        if (gc_kind(ty) /= OBJ_TYPE) then
           call fail("no such class: " // dlt_1)
           call vs_leave(vst, base)
@@ -1784,6 +1784,14 @@
        out = exec_setbang(nd, frame)
     case (N_LATEVAR)
        v = resolve_var(gc_slot(nd, 2), gc_nil())
+       if (.not. gcn_is_var(v)) then
+          ! clotran.io/text-reader before clotran.io is loaded
+          call sym_text(gc_slot(vs_get(vst, base + 1), 2), s=dlt_1)
+          if (index(dlt_1, "/") > 1) then
+             if (load_clotran_ns(dlt_1(1:index(dlt_1, "/") - 1))) &
+                  v = resolve_var(gc_slot(vs_get(vst, base + 1), 2), gc_nil())
+          end if
+       end if
        if (gcn_is_var(v)) then
           out = gcn_var_value(v)
        else

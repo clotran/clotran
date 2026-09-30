@@ -1,9 +1,9 @@
-;; DERIVED from test/clj/clojure/test_clojure/compilation.clj by scripts/derive-tests -- do not edit.
+;; DERIVED from upstream/clojure/test/clojure/test_clojure/compilation.clj by upstream/derive-tests -- do not edit.
 ;; Kept: tests whose symbols lie in the clojure.core/cljs.core intersection (plus concurrency).
 
 (ns clojure.test-clojure.compilation (:require [clojure.test-clojure.compilation.line-number-examples :as line]) (:use clojure.test [clojure.test-helper :only (should-not-reflect should-print-err-message)]))
 
-(defn ^String legacy-hinting [])
+(defn ^clotran.host.string legacy-hinting [])
 
 (defn primfn
   (^long [])
@@ -28,10 +28,10 @@
 
 ;; compilation.clj:391 [language]
 (deftest CLJ-1456-compiler-error-on-incorrect-number-of-parameters-to-throw
-  (is (thrown? RuntimeException (eval '(defn foo [] (throw)))))
-  (is (thrown? RuntimeException (eval '(defn foo [] (throw RuntimeException any-symbol)))))
-  (is (thrown? RuntimeException (eval '(defn foo [] (throw (RuntimeException.) any-symbol)))))
-  (is (var? (eval '(defn foo [] (throw (IllegalArgumentException.)))))))
+  (is (thrown? clotran.host.runtime_exception (eval '(defn foo [] (throw)))))
+  (is (thrown? clotran.host.runtime_exception (eval '(defn foo [] (throw clotran.host.runtime_exception any-symbol)))))
+  (is (thrown? clotran.host.runtime_exception (eval '(defn foo [] (throw (clotran.host.runtime_exception.) any-symbol)))))
+  (is (var? (eval '(defn foo [] (throw (clotran.host.illegal_argument_exception.)))))))
 
 ;; compilation.clj:397 [language]
 (deftest clj-1809

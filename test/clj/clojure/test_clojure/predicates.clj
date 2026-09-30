@@ -60,8 +60,8 @@
 
   :fn (fn [x] (* 2 x))
 
-  :class java.util.Date
-  :object (new java.util.Date)
+  :class clotran.host.date
+  :object (new clotran.host.date)
 
   :var (var myvar)
   :delay (delay (+ 1 2))
@@ -138,14 +138,14 @@
 ;;
 (deftest test-string?-more
   (are [x] (not (string? x))
-    (new java.lang.StringBuilder "abc")
-    (new java.lang.StringBuffer "xyz")))
+    (new clotran.host.string_builder "abc")
+    (new clotran.host.string_buffer "xyz")))
 
 (def pred-val-table
-  (let [now (java.util.Date.)
-        uuid (java.util.UUID/randomUUID)
+  (let [now (clotran.host.date.)
+        uuid (clotran.uuid.UUID/randomUUID)
         barray (byte-array 0)
-        uri (java.net.URI. "http://clojure.org")]
+        uri (clotran.host.uri. "http://clojure.org")]
     ['
      [identity   int?  pos-int?  neg-int?  nat-int?  double? boolean? indexed? seqable? ident? uuid? decimal? inst? uri?  bytes?]
      [0          true  false     false     true      false   false    false    false    false  false false    false false false]
@@ -177,18 +177,18 @@
 
 (deftest test-double-preds
   (is (NaN? ##NaN))
-  (is (NaN? (Double/parseDouble "NaN")))
-  (is (NaN? (Float/parseFloat "NaN")))
-  (is (NaN? Float/NaN))
+  (is (NaN? (clotran.host.real8/parseDouble "NaN")))
+  (is (NaN? (clotran.host.real4/parseFloat "NaN")))
+  (is (NaN? clotran.host.real4/NaN))
   (is (not (NaN? 5)))
-  (is (thrown? Throwable (NaN? nil)))
-  (is (thrown? Throwable (NaN? :xyz)))
+  (is (thrown? clotran.host.throwable (NaN? nil)))
+  (is (thrown? clotran.host.throwable (NaN? :xyz)))
 
   (is (infinite? ##Inf))
   (is (infinite? ##-Inf))
-  (is (infinite? Double/POSITIVE_INFINITY))
-  (is (infinite? Double/NEGATIVE_INFINITY))
-  (is (infinite? Float/POSITIVE_INFINITY))
-  (is (infinite? Float/NEGATIVE_INFINITY))
-  (is (thrown? Throwable (infinite? nil)))
-  (is (thrown? Throwable (infinite? :xyz))))
+  (is (infinite? clotran.host.real8/POSITIVE_INFINITY))
+  (is (infinite? clotran.host.real8/NEGATIVE_INFINITY))
+  (is (infinite? clotran.host.real4/POSITIVE_INFINITY))
+  (is (infinite? clotran.host.real4/NEGATIVE_INFINITY))
+  (is (thrown? clotran.host.throwable (infinite? nil)))
+  (is (thrown? clotran.host.throwable (infinite? :xyz))))

@@ -6,14 +6,14 @@
 ;; methods must be the compiled fns afterwards (clotran.loader/install-extends).
 
 (require (quote [clojure.string :as str]))
-(def src (or (System/getenv "AUTOCOMPILE_SRC") "test/clj/autocompile_demo.cljf"))
+(def src (or (clotran.host.system/getenv "AUTOCOMPILE_SRC") "test/clj/autocompile_demo.cljf"))
 (load-file src)
 (defn answers []
   [(autocompile-demo/sumsq 1000) (autocompile-demo/words "a bc d")
    (autocompile-demo/size-of ["ab" nil ["cde"]])])
 (def expect (answers))
 
-(let [st (if (= "build" (System/getenv "AUTOCOMPILE_STEP"))
+(let [st (if (= "build" (clotran.host.system/getenv "AUTOCOMPILE_STEP"))
            (clotran.loader/compile-now src)
            (get (clotran.loader/compile-status) (clotran-real-path src)))
       got (answers)

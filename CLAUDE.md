@@ -1,7 +1,8 @@
 # Working on clotran
 
-Clojure, hosted on Fortran. It runs Rich Hickey's actual `clojure/core.clj`
--- the file, unmodified. The Fortran is the HOST, standing where the JVM
+Clojure, hosted on Fortran. It runs Rich Hickey's actual `clojure/core.clj`,
+with one mechanical change: every class is written in clotran's name
+(`upstream/derive`). The Fortran is the HOST, standing where the JVM
 stands; the language comes from Clojure's own source.
 
 That premise decides most arguments. When clotran and Clojure disagree,
@@ -106,10 +107,15 @@ was Java showing through. `SEAMS.md` carries the argument.
 
 ## Never edit vendored source
 
-`src/clj/clojure/**` is Clojure's, `src/c/icu/**` is ICU's,
-`test/clj/clojure/**` is Clojure's test suite. All verbatim. If clotran
-cannot load one, that is clotran's bug -- the whole point is that these
-files run as written.
+`upstream/clojure/**` is Clojure's source and test suite, verbatim;
+`src/c/icu/**` is ICU's. `src/clj/clojure/**` and `test/clj/clojure/**`
+are GENERATED from `upstream/` by `upstream/derive`, which writes each
+class in clotran's name by `upstream/class-names.edn` -- edit the
+renaming and re-run it, never the output (`make test` checks the two
+agree). No JVM name appears anywhere else: `upstream/` is the only place
+that knows them, and `scripts/oracle` reads its table to talk to clj.
+If clotran cannot load a derived file, that is clotran's bug -- the
+whole point is that these files run as Clojure wrote them.
 
 Each vendored tree has a `PROVENANCE.md` saying where it came from, at
 what commit, and what is deliberately absent. Read it before touching
@@ -129,7 +135,7 @@ Three measures, each named with its denominator:
 | scorecard | what it is |
 |---|---|
 | **our tests** | `test/f/*_test.f90` (the Fortran host -- GC, reader, printer, evaluator), `test/clj/language_test.clj` (host checks with core.clj loaded) and `scripts/oracle` (`test/clj/oracle.clj` through `clj` AND clotran, values compared). A GATE, not a grade: 100% or do not commit. |
-| **the language suite** | `test/clj/derived/`, DERIVED from Clojure's own tests by `scripts/derive-tests`: the deftests whose symbols lie in the clojure.core/cljs.core intersection (plus concurrency). `scripts/run-clojure-tests-parallel test/clj/derived` runs it. Never edit the derived files; re-run the script. The 67 vendored namespaces still run verbatim with no argument, for reference. |
+| **the language suite** | `test/clj/derived/`, DERIVED from Clojure's own tests by `upstream/derive-tests`: the deftests whose symbols lie in the clojure.core/cljs.core intersection (plus concurrency). `scripts/run-clojure-tests-parallel test/clj/derived` runs it. Never edit the derived files; re-run the script. The 67 vendored namespaces still run verbatim with no argument, for reference. |
 | **libraries loading** | how many of Clojure's own libs `(require ...)` succeeds on. |
 
 State what the denominator excludes. A namespace that crashes before

@@ -11,16 +11,16 @@
 (ns clojure.test-clojure.vectors
   (:use clojure.test)
   (:import
-    [java.util Collection Spliterator]
-    [java.util.function Consumer]
-    [java.util.stream Collectors]))
+    
+    
+    ))
 
 (deftest test-reversed-vec
   (let [r (range 6)
         v (into (vector-of :int) r)
         reversed (.rseq v)]
     (testing "returns the right impl"
-      (is (= clojure.lang.APersistentVector$RSeq (class reversed))))
+      (is (= clotran.host.a_persistent_vector_r_seq (class reversed))))
     (testing "RSeq methods"
       (is (= [5 4 3 2 1 0] reversed))
       (is (= 5 (.index reversed)))
@@ -50,7 +50,7 @@
            vs vs-32
            vs-32 vs))
     (testing "IPersistentCollection.empty"
-      (are [a] (identical? clojure.lang.PersistentList/EMPTY (.empty (seq a)))
+      (are [a] (identical? clotran.host.persistent_list/EMPTY (.empty (seq a)))
            vs vs-1 vs-32))
     (testing "IPersistentCollection.cons"
       (are [result input] (= result (.cons input :foo))
@@ -66,9 +66,9 @@
         (is (= 200
                (.count (concat
                         (seq vs)
-                        (reify clojure.lang.ISeq
+                        (reify clotran.host.i_seq
                                (seq [this] this)
-                               clojure.lang.Counted
+                               clotran.host.counted
                                (count [_] 100))))))))
     (testing "IPersistentCollection.equiv"
       (are [a b] (true? (.equiv a b))
@@ -227,8 +227,8 @@
              (:rand-greater-3 regular-vecs))))
     (testing "Comparable.compareTo"
       (testing "incompatible"
-        (is (thrown? NullPointerException (.compareTo int-vec nil)))
-        (are [x] (thrown? ClassCastException (.compareTo int-vec x))
+        (is (thrown? clotran.host.null_pointer_exception (.compareTo int-vec nil)))
+        (are [x] (thrown? clotran.host.class_cast_exception (.compareTo int-vec x))
              '()
              {}
              #{}
@@ -304,7 +304,7 @@
       (are [x] (not (contains? empty-v x))
            0 1))
     (testing "Associative.entryAt"
-      (are [idx val] (= (clojure.lang.MapEntry. idx val)
+      (are [idx val] (= (clotran.host.map_entry. idx val)
                         (.entryAt v idx))
            0 1
            2 3
@@ -326,9 +326,9 @@
          (vector-of :double)
          (vector-of :char))
     (testing "with invalid type argument"
-      (are [x] (thrown? IllegalArgumentException x)
+      (are [x] (thrown? clotran.host.illegal_argument_exception x)
            (vector-of nil)
-           (vector-of Float/TYPE)
+           (vector-of clotran.host.real4/TYPE)
            (vector-of 'int)
            (vector-of :integer)
            (vector-of ""))))
@@ -347,7 +347,7 @@
          [1 2 3] (vector-of :int 1M 2.0 3.1)
          [97 98 99] (vector-of :int \a \b \c))
     (testing "with null values"
-      (are [x] (thrown? NullPointerException x)
+      (are [x] (thrown? clotran.host.null_pointer_exception x)
         (vector-of :int nil)
         (vector-of :int 1 nil)
         (vector-of :int 1 2 nil)
@@ -356,7 +356,7 @@
         (vector-of :int 1 2 3 4 5 nil)
         (vector-of :int 1 2 3 4 5 6 nil)))
     (testing "with unsupported values"
-      (are [x] (thrown? ClassCastException x)
+      (are [x] (thrown? clotran.host.class_cast_exception x)
            (vector-of :int true)
            (vector-of :int 1 2 3 4 5 false)
            (vector-of :int {:a 1 :b 2})
@@ -367,7 +367,7 @@
            (vector-of :int 1 2 "3")
            (vector-of :int "1" "2" "3")))
     (testing "instances of IPersistentVector"
-      (are [gvec] (instance? clojure.lang.IPersistentVector gvec)
+      (are [gvec] (instance? clotran.host.i_persistent_vector gvec)
         (vector-of :int 1 2 3)
         (vector-of :double 1 2 3)))
     (testing "fully implements IPersistentVector"
@@ -402,8 +402,8 @@
 (deftest test-subvec
   (let [v1 (vec (range 100))
         v2 (subvec v1 50 57)]
-    (is (thrown? IndexOutOfBoundsException (v2 -1)))
-    (is (thrown? IndexOutOfBoundsException (v2 7)))
+    (is (thrown? clotran.host.index_out_of_bounds_exception (v2 -1)))
+    (is (thrown? clotran.host.index_out_of_bounds_exception (v2 7)))
     (is (= (v1 50) (v2 0)))
     (is (= (v1 56) (v2 6)))))
 
@@ -417,7 +417,7 @@
   (is (= [\a \b \c \d] (vec "abcd")))
   (is (= [0 1 2 3] (vec (object-array (range 4)))))
   (is (= [1 2 3 4] (vec (eduction (map inc) (range 4)))))
-  (is (= [0 1 2 3] (vec (reify clojure.lang.IReduceInit
+  (is (= [0 1 2 3] (vec (reify clotran.host.i_reduce_init
                           (reduce [_ f start]
                             (reduce f start (range 4))))))))
 
@@ -429,7 +429,7 @@
   (is (not= (range) [0 1 2]))
   (is (not= [0 1 2] (range)))
   (is (= [0 1 2] (take 3 (range))))
-  (is (= [0 1 2] (new java.util.ArrayList [0 1 2])))
+  (is (= [0 1 2] (clotran.rt/array-list [0 1 2])))
   (is (not= [1 2] (take 1 (cycle [1 2]))))
   (is (= [1 2 3 nil 4 5 6 nil] (eduction cat [[1 2 3 nil] [4 5 6 nil]]))))
 
@@ -437,12 +437,12 @@
 
 ;; remember returns a consumer that adds to an-atom of coll
 (defn remember
-  ^Consumer [an-atom]
-  (reify Consumer (accept [_ v] (swap! an-atom conj v))))
+  ^clotran.host.consumer [an-atom]
+  (reify clotran.host.consumer (accept [_ v] (swap! an-atom conj v))))
 
 (deftest test-empty-vector-spliterator
   (let [v []
-        s (.spliterator ^Collection v)
+        s (.spliterator ^clotran.host.collection v)
         seen (atom [])]
     (is (= 0 (.estimateSize s) (.getExactSizeIfKnown s)))
     (is (nil? (.trySplit s)))
@@ -455,7 +455,7 @@
         source-vec (vec (range n))]
     (for [v (into [(vec (range n))] (map #(subvec source-vec % (+ % 33)) (range 33)))]
       (dotimes [up-to n]
-        (let [s (.spliterator ^Collection v)
+        (let [s (.spliterator ^clotran.host.collection v)
               seen (atom [])
               consumer (remember seen)]
           (loop [i 0]
@@ -471,14 +471,14 @@
     (let [v (vec (range n))
           seen (atom #{})
           consumer (remember seen)
-          splits (loop [ss [(.spliterator ^Collection v)]]
-                   (let [ss' (map #(.trySplit ^Spliterator %) ss)]
+          splits (loop [ss [(.spliterator ^clotran.host.collection v)]]
+                   (let [ss' (map #(.trySplit ^clotran.host.spliterator %) ss)]
                      (if (every? nil? ss')
                        ss
                        (recur (into ss (remove nil? ss'))))))]
       (loop [[spl & sr] splits]
         (when spl
-          (.forEachRemaining ^Spliterator spl consumer)
+          (.forEachRemaining ^clotran.host.spliterator spl consumer)
           (recur sr)))
       (is (= v (sort @seen))))))
 
@@ -486,7 +486,7 @@
   (dotimes [n 1024]
     (let [v (vec (range n))]
       (is (= n
-            (-> ^Collection v .stream (.collect (Collectors/counting)))
-            (-> ^Collection v .parallelStream (.collect (Collectors/counting)))
-            (-> v ^Collection (subvec 0 n) .stream (.collect (Collectors/counting)))
-            (-> v ^Collection (subvec 0 n) .parallelStream (.collect (Collectors/counting))))))))
+            (-> ^clotran.host.collection v .stream (.collect (clotran.host.collectors/counting)))
+            (-> ^clotran.host.collection v .parallelStream (.collect (clotran.host.collectors/counting)))
+            (-> v ^clotran.host.collection (subvec 0 n) .stream (.collect (clotran.host.collectors/counting)))
+            (-> v ^clotran.host.collection (subvec 0 n) .parallelStream (.collect (clotran.host.collectors/counting))))))))

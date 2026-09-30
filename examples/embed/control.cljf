@@ -27,10 +27,10 @@
   "With HEAT_REPL=<port> in the environment, a REPL into the running
   solver on that port (0: any free one, which is printed)."
   [^doubles u]
-  (when-let [p (System/getenv "HEAT_REPL")]
+  (when-let [p (clotran.host.system/getenv "HEAT_REPL")]
     (require 'clotran.server)
     (alter-var-root #'grid (constantly u))
-    (when-let [ms (System/getenv "HEAT_PAUSE_MS")]
+    (when-let [ms (clotran.host.system/getenv "HEAT_PAUSE_MS")]
       (swap! steer assoc :pause-ms (parse-long ms)))
     (let [s ((resolve 'clotran.server/start-server) {:name "heat" :port (parse-long p)})]
       (println "clojure  a REPL on port" (:port s))
@@ -46,5 +46,5 @@
     (println "clojure  switched a source on at cell 8"))
   (println (format "clojure  step %4d                 total %8.3f  peak %8.3f" step (total u) (peak u)))
   (let [{:keys [stop pause-ms]} @steer]
-    (when (pos? pause-ms) (flush) (Thread/sleep pause-ms))
+    (when (pos? pause-ms) (flush) (clotran.host.thread/sleep pause-ms))
     (and (not stop) (< 2.0 (peak u)))))

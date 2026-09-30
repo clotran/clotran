@@ -16,6 +16,6 @@
   (let [par (mapv deref (mapv (fn [k] (future (work k))) (range 1 9)))]
     (when (not= par serial)
       (println "THREADS HEAP FAILED: round" round "gave" par "serially" serial)
-      (System/exit 1))))
+      (clotran.host.system/exit 1))))
 
 (println "THREADS HEAP PASSED")

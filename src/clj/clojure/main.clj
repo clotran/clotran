@@ -13,11 +13,10 @@
   clojure.main
   (:refer-clojure :exclude [with-bindings])
   (:require [clojure.spec.alpha :as spec])
-  (:import (java.io StringReader BufferedWriter FileWriter)
-           (java.nio.file Files)
-           (java.nio.file.attribute FileAttribute)
-           (clojure.lang Compiler Compiler$CompilerException
-                         LineNumberingPushbackReader RT LispReader$ReaderException))
+  (:import 
+           
+           
+           )
   ;;(:use [clojure.repl :only (demunge root-cause stack-element-str)])
   )
 
@@ -30,16 +29,16 @@
   as in a stack trace element, returns a readable version."
   {:added "1.3"}
   [fn-name]
-  (clojure.lang.Compiler/demunge fn-name))
+  (clotran.host.compiler/demunge fn-name))
 
 (defn root-cause
   "Returns the initial cause of an exception or error by peeling off all of
   its wrappers"
   {:added "1.3"}
-  [^Throwable t]
+  [^clotran.host.throwable t]
   (loop [cause t]
-    (if (and (instance? clojure.lang.Compiler$CompilerException cause)
-             (not= (.source ^clojure.lang.Compiler$CompilerException cause) "NO_SOURCE_FILE"))
+    (if (and (instance? clotran.host.compiler_compiler_exception cause)
+             (not= (.source ^clotran.host.compiler_compiler_exception cause) "NO_SOURCE_FILE"))
       cause
       (if-let [cause (.getCause cause)]
         (recur cause)
@@ -49,20 +48,20 @@
 
 (def ^:private core-namespaces
   #{"clojure.core" "clojure.core.reducers" "clojure.core.protocols" "clojure.data" "clojure.datafy"
-    "clojure.edn" "clojure.instant" "clojure.java.io" "clojure.main" "clojure.pprint" "clojure.reflect"
+    "clojure.edn" "clojure.instant" "clotran.files" "clojure.main" "clojure.pprint" "clojure.reflect"
     "clojure.repl" "clojure.set" "clojure.spec.alpha" "clojure.spec.gen.alpha" "clojure.spec.test.alpha"
     "clojure.string" "clojure.template" "clojure.uuid" "clojure.walk" "clojure.xml" "clojure.zip"})
 
 (defn- core-class?
-  [^String class-name]
+  [^clotran.host.string class-name]
   (and (not (nil? class-name))
-       (or (.startsWith class-name "clojure.lang.")
+       (or (.startsWith class-name "clotran.host.")
            (contains? core-namespaces (second (re-find #"^([^$]+)\$" class-name))))))
 
 (defn stack-element-str
   "Returns a (possibly unmunged) string representation of a StackTraceElement"
   {:added "1.3"}
-  [^StackTraceElement el]
+  [^clotran.host.stack_trace_element el]
   (let [file (.getFileName el)
         clojure-fn? (and file (or (.endsWith file ".clj")
                                   (.endsWith file ".cljc")
@@ -88,7 +87,7 @@
              *print-namespace-maps* true
              *data-readers* *data-readers*
              *default-data-reader-fn* *default-data-reader-fn*
-             *compile-path* (System/getProperty "clojure.compile.path" "classes")
+             *compile-path* (clotran.host.system/getProperty "clojure.compile.path" "classes")
              *command-line-args* *command-line-args*
              *unchecked-math* *unchecked-math*
              *assert* *assert*
@@ -133,7 +132,7 @@
      (= c (int \newline)) :line-start
      (= c -1) :stream-end
      (= c (int \;)) (do (.readLine s) :line-start)
-     (or (Character/isWhitespace (char c)) (= c (int \,))) (recur (.read s))
+     (or (clotran.host.char/isWhitespace (char c)) (= c (int \,))) (recur (.read s))
      :else (do (.unread s c) :body))))
 
 (defn renumbering-read
@@ -142,11 +141,11 @@
   The line number on re-read is the passed line-number unless :line or
   :clojure.core/eval-file meta are explicitly set on the read value."
   {:added "1.10"}
-  ([opts ^LineNumberingPushbackReader reader line-number]
+  ([opts ^clotran.io.LineNumberingReader reader line-number]
    (let [pre-line (.getLineNumber reader)
          [pre-read s] (read+string opts reader)
          {:keys [clojure.core/eval-file line]} (meta pre-read)
-         re-reader (doto (LineNumberingPushbackReader. (StringReader. s))
+         re-reader (doto (clotran.io/line-numbering-reader (clotran.io/text-reader s))
                      (.setLineNumber (if (and line (or eval-file (not= pre-line line))) line line-number)))]
      (read opts re-reader))))
 
@@ -175,33 +174,33 @@
 
 (defn- file-name
   "Helper to get just the file name part of a path or nil"
-  [^String full-path]
+  [^clotran.host.string full-path]
   (when full-path
     (try
-      (.getName (java.io.File. full-path))
-      (catch Throwable t))))
+      (.getName (clotran.io.File. full-path))
+      (catch clotran.host.throwable t))))
 
 (defn- file-path
   "Helper to get the relative path to the source file or nil"
-  [^String full-path]
+  [^clotran.host.string full-path]
   (when full-path
     (try
-      (let [path (.getPath (java.io.File. full-path))
-            cd-path (str (.getAbsolutePath (java.io.File. "")) "/")]
+      (let [path (.getPath (clotran.io.File. full-path))
+            cd-path (str (.getAbsolutePath (clotran.io.File. "")) "/")]
         (if (.startsWith path cd-path)
           (subs path (count cd-path))
           path))
-      (catch Throwable t
+      (catch clotran.host.throwable t
         full-path))))
 
-(defn- java-loc->source
-  "Convert Java class name and method symbol to source symbol, either a
-  Clojure function or Java class and method."
+(defn- host-loc->source
+  "Convert host class name and method symbol to source symbol, either a
+  Clojure function or host class and method."
   [clazz method]
   (if (#{'invoke 'invokeStatic} method)
-    (let [degen #(.replaceAll ^String % "--.*$" "")
+    (let [degen #(.replaceAll ^clotran.host.string % "--.*$" "")
           [ns-name fn-name & nested] (->> (str clazz) (.split #"\$") (map demunge) (map degen))]
-      (symbol ns-name (String/join "$" ^"[Ljava.lang.String;" (into-array String (cons fn-name nested)))))
+      (symbol ns-name (clotran.host.string/join "$" ^"[Lclotran.host.string;" (into-array clotran.host.string (cons fn-name nested)))))
     (symbol (name clazz) (name method))))
 
 (defn ex-triage
@@ -249,7 +248,7 @@
           (cond-> top-data
             line (assoc :clojure.error/line line)
             file (assoc :clojure.error/source file)
-            (and source method) (assoc :clojure.error/symbol (java-loc->source source method))
+            (and source method) (assoc :clojure.error/symbol (host-loc->source source method))
             type (assoc :clojure.error/class type)
             message (assoc :clojure.error/cause message)))
 
@@ -260,7 +259,7 @@
           (cond-> {:clojure.error/class type}
             err-line (assoc :clojure.error/line err-line)
             message (assoc :clojure.error/cause message)
-            (or fn (and source method)) (assoc :clojure.error/symbol (or fn (java-loc->source source method)))
+            (or fn (and source method)) (assoc :clojure.error/symbol (or fn (host-loc->source source method)))
             file (assoc :clojure.error/source file)
             problems (assoc :clojure.error/spec data))))
       :clojure.error/phase phase)))
@@ -341,7 +340,7 @@
 
 (defn err->msg
   "Helper to return an error message string from an exception."
-  [^Throwable e]
+  [^clotran.host.throwable e]
   (-> e Throwable->map ex-triage ex-str))
 
 (defn repl-caught
@@ -354,7 +353,7 @@
 (def ^{:doc "A sequence of lib specs that are applied to `require`
 by default when a new command-line REPL is started."} repl-requires
   '[[clojure.repl :refer (source apropos dir pst doc find-doc)]
-    [clojure.java.javadoc :refer (javadoc)]
+    [clotran.api-docs :refer (hostdoc)]
     [clojure.pprint :refer (pp pprint)]
     [clojure.repl.deps :refer (add-libs add-lib sync-deps)]])
 
@@ -409,12 +408,12 @@ by default when a new command-line REPL is started."} repl-requires
        read, eval, or print throws an exception or error
        default: repl-caught"
   [& options]
-  (let [cl (.getContextClassLoader (Thread/currentThread))]
-    (.setContextClassLoader (Thread/currentThread) (clojure.lang.DynamicClassLoader. cl)))
+  (let [cl (.getContextClassLoader (clotran.host.thread/currentThread))]
+    (.setContextClassLoader (clotran.host.thread/currentThread) (clotran.host.dynamic_class_loader. cl)))
   (let [{:keys [init need-prompt prompt flush read eval print caught]
          :or {init        #()
-              need-prompt (if (instance? LineNumberingPushbackReader *in*)
-                            #(.atLineStart ^LineNumberingPushbackReader *in*)
+              need-prompt (if (instance? clotran.io.LineNumberingReader *in*)
+                            #(.atLineStart ^clotran.io.LineNumberingReader *in*)
                             #(identity true))
               prompt      repl-prompt
               flush       flush
@@ -423,8 +422,8 @@ by default when a new command-line REPL is started."} repl-requires
               print       prn
               caught      repl-caught}}
         (apply hash-map options)
-        request-prompt (Object.)
-        request-exit (Object.)
+        request-prompt (clotran.host.value.)
+        request-exit (clotran.host.value.)
         read-eval-print
         (fn []
           (try
@@ -440,16 +439,16 @@ by default when a new command-line REPL is started."} repl-requires
                    (set! *1 value)
                    (try
                      (print value)
-                     (catch Throwable e
+                     (catch clotran.host.throwable e
                        (throw (ex-info nil {:clojure.error/phase :print-eval-result} e)))))))
-           (catch Throwable e
+           (catch clotran.host.throwable e
              (caught e)
              (set! *e e))))]
     (with-bindings
      (binding [*repl* true]
        (try
         (init)
-        (catch Throwable e
+        (catch clotran.host.throwable e
           (caught e)
           (set! *e e)))
        (prompt)
@@ -457,7 +456,7 @@ by default when a new command-line REPL is started."} repl-requires
        (loop []
          (when-not
            (try (identical? (read-eval-print) request-exit)
-	    (catch Throwable e
+	    (catch clotran.host.throwable e
 	     (caught e)
 	     (set! *e e)
 	     nil))
@@ -469,11 +468,11 @@ by default when a new command-line REPL is started."} repl-requires
 (defn load-script
   "Loads Clojure source from a file or resource given its path. Paths
   beginning with @ or @/ are considered relative to classpath."
-  [^String path]
+  [^clotran.host.string path]
   (if (.startsWith path "@")
-    (RT/loadResourceScript
+    (clotran.host.rt/loadResourceScript
      (.substring path (if (.startsWith path "@/") 2 1)))
-    (Compiler/loadFile path)))
+    (clotran.host.compiler/loadFile path)))
 
 (defn- init-opt
   "Load a script"
@@ -483,8 +482,8 @@ by default when a new command-line REPL is started."} repl-requires
 (defn- eval-opt
   "Evals expressions in str, prints each non-nil result using prn"
   [str]
-  (let [eof (Object.)
-        reader (LineNumberingPushbackReader. (java.io.StringReader. str))]
+  (let [eof (clotran.host.value.)
+        reader (clotran.io/line-numbering-reader (clotran.io/text-reader str))]
       (loop [input (with-read-known (read reader false eof))]
         (when-not (= input eof)
           (let [value (eval input)]
@@ -526,7 +525,7 @@ by default when a new command-line REPL is started."} repl-requires
                 (initialize args inits)
                 (apply require repl-requires)))
   (prn)
-  (System/exit 0))
+  (clotran.host.system/exit 0))
 
 (defn- script-opt
   "Run a script from a file, resource, or standard in with args and inits"
@@ -563,22 +562,22 @@ by default when a new command-line REPL is started."} repl-requires
    script-opt))
 
 (defn- legacy-repl
-  "Called by the clojure.lang.Repl.main stub to run a repl with args
+  "Called by the clotran.host.repl.main stub to run a repl with args
   specified the old way"
   [args]
-  (println "WARNING: clojure.lang.Repl is deprecated.
+  (println "WARNING: clotran.host.repl is deprecated.
 Instead, use clojure.main like this:
-java -cp clojure.jar clojure.main -i init.clj -r args...")
+host -cp clojure.jar clojure.main -i init.clj -r args...")
   (let [[inits [sep & args]] (split-with (complement #{"--"}) args)]
     (repl-opt (concat ["-r"] args) (map vector (repeat "-i") inits))))
 
 (defn- legacy-script
-  "Called by the clojure.lang.Script.main stub to run a script with args
+  "Called by the clotran.host.script.main stub to run a script with args
   specified the old way"
   [args]
-  (println "WARNING: clojure.lang.Script is deprecated.
+  (println "WARNING: clotran.host.script is deprecated.
 Instead, use clojure.main like this:
-java -cp clojure.jar clojure.main -i init.clj script.clj args...")
+host -cp clojure.jar clojure.main -i init.clj script.clj args...")
   (let [[inits [sep & args]] (split-with (complement #{"--"}) args)]
     (null-opt args (map vector (repeat "-i") inits))))
 
@@ -589,7 +588,7 @@ java -cp clojure.jar clojure.main -i init.clj script.clj args...")
     :target - \"file\" (default), \"stderr\", \"none\"
 
   If file is specified but cannot be written, falls back to stderr."
-  [^Throwable t & {:keys [target]
+  [^clotran.host.throwable t & {:keys [target]
                    :or {target "file"} :as opts}]
   (when-not (= target "none")
     (let [trace (Throwable->map t)
@@ -604,18 +603,18 @@ java -cp clojure.jar clojure.main -i init.clj script.clj args...")
                          ((requiring-resolve 'clojure.pprint/pprint) report)))
           err-path (when (= target "file")
                      (try
-                       (let [f (.toFile (Files/createTempFile "clojure-" ".edn" (into-array FileAttribute [])))]
-                         (with-open [w (BufferedWriter. (FileWriter. f))]
+                       (let [f (.toFile (clotran.host.files/createTempFile "clojure-" ".edn" (into-array clotran.host.file_attribute [])))]
+                         (with-open [w (clotran.host.buffered_writer. (clotran.host.file_writer. f))]
                            (binding [*out* w] (println report-str)))
                          (.getAbsolutePath f))
-                       (catch Throwable _)))] ;; ignore, fallback to stderr
+                       (catch clotran.host.throwable _)))] ;; ignore, fallback to stderr
       (binding [*out* *err*]
         (if err-path
-          (println (str message (System/lineSeparator) "Full report at:" (System/lineSeparator) err-path))
-          (println (str report-str (System/lineSeparator) message)))))))
+          (println (str message (clotran.host.system/lineSeparator) "Full report at:" (clotran.host.system/lineSeparator) err-path))
+          (println (str report-str (clotran.host.system/lineSeparator) message)))))))
 
 (defn main
-  "Usage: java -cp clojure.jar clojure.main [init-opt*] [main-opt] [arg*]
+  "Usage: host -cp clojure.jar clojure.main [init-opt*] [main-opt] [arg*]
 
   With no options or args, runs an interactive Read-Eval-Print Loop
 
@@ -663,14 +662,14 @@ java -cp clojure.jar clojure.main -i init.clj script.clj args...")
          :main-opt
          (try
            ((main-dispatch opt) args inits)
-           (catch Throwable t
-             (report-error t :target (get flags "report" (System/getProperty "clojure.main.report" "file")))
-             (System/exit 1)))))
+           (catch clotran.host.throwable t
+             (report-error t :target (get flags "report" (clotran.host.system/getProperty "clojure.main.report" "file")))
+             (clotran.host.system/exit 1)))))
      (try
        (repl-opt nil nil)
-       (catch Throwable t
+       (catch clotran.host.throwable t
          (report-error t :target "file")
-         (System/exit 1))))
+         (clotran.host.system/exit 1))))
    (finally
      (flush))))
 

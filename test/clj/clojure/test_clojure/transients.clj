@@ -8,7 +8,7 @@
         (= (subvec v 0 (- n 2)) (-> v transient pop! pop! persistent!)))
       33 (+ 32 (inc (* 32 32))) (+ 32 (inc (* 32 32 32)))))
   (testing "off the end"
-    (is (thrown-with-msg? IllegalStateException #"Can't pop empty vector"
+    (is (thrown-with-msg? clotran.host.illegal_state_exception #"Can't pop empty vector"
           (-> [] transient pop!))))
   (testing "copying array from a non-editable when put in tail position")
     (is (= 31 (let [pv (vec (range 34))]
@@ -16,7 +16,7 @@
                 (nth pv 31)))))
 
 (defn- hash-obj [hash]
-  (reify Object (hashCode [this] hash)))
+  (reify clotran.host.value (hashCode [this] hash)))
 
 (deftest dissocing
   (testing "dissocing colliding keys"
@@ -34,8 +34,8 @@
 
 (deftest persistent-assoc-on-collision
   (testing "Persistent assoc on a collision node which underwent a transient dissoc"
-    (let [a (reify Object (hashCode [_] 42))
-          b (reify Object (hashCode [_] 42))]
+    (let [a (reify clotran.host.value (hashCode [_] 42))
+          b (reify clotran.host.value (hashCode [_] 42))]
       (is (= (-> #{a b} transient (disj! a) persistent! (conj a))
             (-> #{a b} transient (disj! a) persistent! (conj a)))))))
 
@@ -45,7 +45,7 @@
         t2 (conj! t 4)
         p (persistent! t2)]
     (is (= [1 2 3 4] p))
-    (is (thrown? IllegalAccessError (conj! t2 5)))))
+    (is (thrown? clotran.host.illegal_access_error (conj! t2 5)))))
 
 (deftest transient-mod-ok-across-threads
   (let [v [1 2 3]
