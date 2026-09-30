@@ -1432,8 +1432,9 @@
 ;; the messages clj's own clojure.core.server/io-prepl sends for the same
 ;; input, :ms and an exception's JVM frames aside (checked 2026-09-29)
 (check "the prepl: a value, printed output, a failure, the namespace, a tap"
-       (let [ms (prepl-says ["(+ 1 2)" "(println \"hi\")" "(/ 1 0)" "(ns lt-p)" "(tap> :t)" ":repl/quit"])]
-         ;; a tap may arrive before or after its :ret, in clj as here
+       (let [ms (prepl-says ["(+ 1 2)" "(println \"hi\")" "(/ 1 0)" "(ns lt-p)" "(tap> :t)" "(Thread/sleep 200)" ":repl/quit"])]
+         ;; a tap may arrive before or after its :ret, in clj as here -- and
+         ;; is lost if the prepl ends first, so it is given a moment
          (let [ms (mapv #(cond-> % (:exception %) (update :val (comp :cause read-string))) ms)]
            (conj (vec (remove #(= :tap (:tag %)) ms)) (first (filter #(= :tap (:tag %)) ms)))))
        [{:tag :ret :val "3" :ns "user" :form "(+ 1 2)"}
@@ -1442,6 +1443,7 @@
         {:tag :ret :val "Divide by zero" :ns "user" :form "(/ 1 0)" :exception true}
         {:tag :ret :val "nil" :ns "lt-p" :form "(ns lt-p)"}
         {:tag :ret :val "true" :ns "lt-p" :form "(tap> :t)"}
+        {:tag :ret :val "nil" :ns "lt-p" :form "(Thread/sleep 200)"}
         {:tag :tap :val ":t"}])
 
 ;;; ---- the verdict: LAST, so every check above counts. It once sat
