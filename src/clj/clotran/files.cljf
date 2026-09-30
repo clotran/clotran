@@ -14,23 +14,17 @@
 ;; form 640, before the macros clotran.io is written with exist
 (defn- io [f] (require (quote clotran.io)) (ns-resolve (quote clotran.io) (symbol f)))
 
-;; under the JVM's name, so (class (io/file "x")) is java.io.File
-(ns java.io)
-(deftype File [path]
-  Object
-  (toString [_] path))
-(in-ns 'clojure.java.io)
 
 (defn- path-of [x]
   (cond (string? x) x
-        (instance? java.io.File x) (.-path x)
+        ((io "file?") x) (.-path x)
         :else (throw (IllegalArgumentException.
                       (str "Cannot open <" (pr-str x) "> as a file")))))
 
 (defn file
   "A File for the path, or for the parent and children joined with /."
-  ([arg] (java.io.File. (path-of arg)))
-  ([parent child] (java.io.File. (str (path-of parent) "/" (path-of child))))
+  ([arg] ((io "make-file") (path-of arg)))
+  ([parent child] ((io "make-file") (str (path-of parent) "/" (path-of child))))
   ([parent child & more] (reduce file (file parent child) more)))
 
 (defn as-file [x] (when (some? x) (file x)))
@@ -54,9 +48,9 @@
 (deftype TextWriter [path append buf]
   Object
   (toString [_] (apply str @buf))
-  java.io.Closeable
+  clotran.host.closeable
   (close [this] (.flush this))
-  java.io.Flushable
+  clotran.host.flushable
   (flush [_]
     (let [text (apply str @buf)]
       (reset! buf [])
@@ -64,7 +58,7 @@
       ;; later flushes add to what this one wrote
       (reset! append true)
       nil))
-  java.io.Writer
+  clotran.host.writer
   (write [_ x] (swap! buf conj (str x)) nil)
   (append [this x] (.write this x) this))
 
@@ -83,7 +77,7 @@
   (let [text (cond (string? input) input
                    ((io "reader?") input) ((io "read-all") input)
                    :else (clotran-slurp (path-of input)))]
-    (if (or (string? output) (instance? java.io.File output))
+    (if (or (string? output) ((io "file?") output))
       (with-open [w (writer output)] (.write w text))
       (.write output text))
     nil))
@@ -103,7 +97,7 @@
     (if (and (clotran-file-exists? p)
              (zero? (clotran-sh (str "rm -f '" (clojure.string/replace p "'" "'\\''") "'"))))
       true
-      (or silently (throw (java.io.IOException. (str "Couldn't delete " p)))))))
+      (or silently (throw (clotran.host.io_exception. (str "Couldn't delete " p)))))))
 
 (defn resource
   "Classpath resources are not here: nil, as for one that is missing."

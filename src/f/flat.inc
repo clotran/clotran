@@ -1235,7 +1235,7 @@
              end if
           end do
           if (.not. done) then
-             call raise_class("IllegalStateException", "flat: case branch not compiled", [gc_value ::])
+             call raise_class("clotran.host.illegal_state_exception", "flat: case branch not compiled", [gc_value ::])
              exit
           end if
           cycle
@@ -1380,7 +1380,7 @@
           call reg_set(fr, w(2), val)
           val = gc_nil()
        case default
-          call raise_class("IllegalStateException", "flat: bad instruction", [gc_value ::])
+          call raise_class("clotran.host.illegal_state_exception", "flat: bad instruction", [gc_value ::])
           exit
        end select
        pc = pc + FW

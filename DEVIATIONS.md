@@ -1324,7 +1324,7 @@ class; `map-entry?` is what it asks, and that is answered.
 
 `clojure.java.io` joined them on 2026-09-27: skipped as JVM-only, it left
 core.clj's `slurp` and `spit` -- written against `jio/reader` and
-`jio/writer` -- unable to run at all. `src/clj/clotran/java_io.cljf`
+`jio/writer` -- unable to run at all. `src/clj/clotran/files.cljf`
 defines the namespace over clotran's whole-file primitives: `reader`
 (with `.readLine`, so `line-seq` works), `writer` (`:append`), `copy`,
 `file`, `make-parents`, `delete-file`; TEXT only, and `resource` is nil.
@@ -1910,3 +1910,42 @@ Before 2026-09-29 an array there became the text of the OBJECT,
 **Removal**: not planned; clotran does not model the JVM's constructors
 (no-JVM-emulation, SEAMS.md). If ported code needs it, map `(String. cs)`
 for a char array onto `(apply str cs)` -- a mapping, not a String class.
+
+## 67. Classes have clotran's names
+
+clj names a class for the JVM: `java.lang.Long`, `clojure.lang.PersistentVector`,
+`java.io.StringReader`. clotran has no JVM, so its classes are named for
+what they are written in:
+
+- **Written in Fortran** (the host): `clotran.host.` and a snake_case
+  name, Fortran's convention. A scalar takes its Fortran kind --
+  `clotran.host.int8`, `real8`, `int4`, `char`, `logical`, `string`;
+  `Object` is `clotran.host.value` -- and everything else is the class's
+  simple name in snake_case: `clotran.host.persistent_vector`,
+  `clotran.host.map_entry`, `clotran.host.arithmetic_exception`.
+- **Written in Clojure**: the deftype's own name in its namespace, in
+  Clojure's CamelCase -- `clotran.io.TextReader`, `clotran.io.File`,
+  `clotran.rt.ArrayList`, `clotran.uuid.UUID`.
+
+    (class 1)                      ;; clj java.lang.Long       clotran clotran.host.int8
+    (class (java.io.StringReader. "x"))
+                                   ;; clj java.io.StringReader clotran clotran.io.TextReader
+    (pr-str (class (object-array 1)))
+                                   ;; clj java.lang.Object/1   clotran clotran.host.value/1
+    Double/TYPE                    ;; clj double               clotran :real8
+
+The JVM names are still READ, because vendored Clojure writes them:
+`(instance? clojure.lang.IPersistentMap x)`, `(catch ArithmeticException e ...)`,
+`(java.util.ArrayList.)` and `(Class/forName "[Ljava.lang.Object;")` all
+work, each resolving through one table, `src/clj/clotran/class-aliases.edn`
+(generated into `src/f/classalias.inc` by `scripts/class-names`). A JVM
+name is input only; nothing clotran prints contains one. Several JVM
+classes share a clotran class where clotran has one implementation --
+`clojure.lang.BigInt` and `java.math.BigInteger` are both
+`clotran.host.bigint`.
+
+The oracle compares through the same table: clj's answer has its class
+names translated before it is compared, and is accepted as it stands
+where the name was only a symbol (`` `java.util.Map ``).
+
+**Removal**: not planned; it is the design.

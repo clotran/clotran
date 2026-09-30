@@ -4,8 +4,8 @@
   rest at once. A reader over text, a pushback reader over any reader, and
   a line-numbering one that counts lines and columns and can capture what
   it read (read+string). These are clotran's own types. The JVM names that
-  vendored Clojure writes -- core.clj's (java.io.StringReader. s) in
-  with-in-str, clojure.lang.LineNumberingPushbackReader, LispReader/read --
+  vendored Clojure writes -- core.clj's (clotran.io.TextReader. s) in
+  with-in-str, clotran.io.LineNumberingReader, LispReader/read --
   are mapped onto them in Eval.f90 and hosttable.inc, and nothing else of
   java.io is modelled. A deftype's fields cannot be set! (DEVIATIONS 20),
   so each mutable one holds an atom.")
@@ -96,10 +96,21 @@
   (getString [_] (let [s (apply str (:capture @st))] (swap! st assoc :capture nil) s))
   (close [_] (.close in)))
 
-(defn text-reader [s] (TextReader. (str s) (atom 0)))
-(defn pushback-reader ([in] (PushbackReader. in (atom []))) ([in _size] (pushback-reader in)))
+;; A file path as a value: what clojure.java.io/file answers, and what
+;; java.io.File, which programs write, resolves to (class-aliases.edn).
+;; clotran's own code builds its types with the factories (->File): a
+;; name written with a dot, (File. p), is the JVM's constructor, aliased.
+(deftype File [path]
+  Object
+  (toString [_] path))
+
+(defn file? [x] (instance? File x))
+(defn make-file [path] (->File path))
+
+(defn text-reader [s] (->TextReader (str s) (atom 0)))
+(defn pushback-reader ([in] (->PushbackReader in (atom []))) ([in _size] (pushback-reader in)))
 (defn line-numbering-reader
-  ([in] (LineNumberingReader. in (atom []) (atom nil)
+  ([in] (->LineNumberingReader in (atom []) (atom nil)
                               (atom {:line 1 :col 1 :at-start true :prev true :capture nil})))
   ([in _size] (line-numbering-reader in)))
 (defn buffered-reader

@@ -829,7 +829,7 @@
           call vs_leave(vst, base)
           return
        else if (len(dlt_2) > 0) then
-          call raise_class("ClassNotFoundException", dlt_2, &
+          call raise_class("clotran.host.class_not_found_exception", dlt_2, &
                [vs_get(vst, base + 1), vs_get(vst, base + 2)])
           call vs_leave(vst, base)
           return
@@ -1477,11 +1477,13 @@
     type(gc_value), intent(in) :: form, sc
     type(gc_value) :: nd, cls, kids, args
     integer :: base
+    logical :: aliased
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1
     tctx => ctx_self()
     vst => tctx%stk
     nd = gc_nil()
+    aliased = .false.
     base = vs_enter(vst, 5)
     call vs_set(vst, base + 1, form)
     call vs_set(vst, base + 2, sc)
@@ -1493,13 +1495,22 @@
        call vs_leave(vst, base)
        return
     end if
+    ! the class by clotran's name for it, once, here: a JVM or clojure.lang
+    ! name as written -- clojure.lang.LazySeq -- is an alias (canon_class)
+    block
+      character(len=:), allocatable :: written, canonical
+      call gc_ref_text(cls%ref, s=written)
+      call canon_class(written, c=canonical)
+      aliased = canonical /= written
+      if (aliased) cls = gc_sym(canonical, [vs_get(vst, base + 1), vs_get(vst, base + 3)])
+    end block
     call vs_set(vst, base + 4, cls)
     ! (new clojure.lang.LazySeq (fn* [] body...)) is what the lazy-seq
     ! macro writes, and it is the N_LAZY node, not a generic new: the
     ! generic path evaluated the fn outside the run loop and then found
     ! LazySeq by comparing its name down a chain of constructors --
     ! 680 ns for every lazy cell core.clj makes, against 200
-    if (gc_ref_is(cls%ref, "clojure.lang.LazySeq")) then
+    if (gc_ref_is(cls%ref, "clotran.host.lazy_seq")) then
        block
          type(gc_value) :: ctor, fhead, fparams
          ctor = gcl_rest(vs_get(vst, base + 3), [vs_get(vst, base + 1)])
@@ -1532,10 +1543,16 @@
     end if
     block
        call gc_ref_text(cls%ref, s=dlt_1)
-    if (gc_kind(find_type(dlt_1)) == OBJ_TYPE) then
+    ! a JVM name that aliases a clotran type -- java.util.ArrayList,
+    ! java.io.StringReader -- takes the JVM constructor's arguments, which
+    ! eval_new turns into the type's; only a type named as itself is
+    ! built from its fields directly
+    if (.not. aliased .and. gc_kind(find_type(dlt_1)) == OBJ_TYPE) then
        nd = mk_node(N_NEWTYPE, vs_get(vst, base + 5), vs_get(vst, base + 4), gc_nil(), 0, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
     else
-       nd = mk_node(N_NEW, vs_get(vst, base + 5), vs_get(vst, base + 4), gc_nil(), 0, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       ! i2 = 1: the class was written under a JVM name (eval_new, aliased)
+       nd = mk_node(N_NEW, vs_get(vst, base + 5), vs_get(vst, base + 4), gc_nil(), merge(1, 0, aliased), &
+            [vs_get(vst, base + 1), vs_get(vst, base + 2)])
     end if
     end block
     call vs_leave(vst, base)
@@ -2219,7 +2236,7 @@
     do i = 0, nfixed - 1
        kinds(i + 1) = prim_hint_kind(gcv_nth(params, i))
        if (kinds(i + 1) < 0) then
-          call raise_class("IllegalArgumentException", "Only long and double primitives are supported", roots)
+          call raise_class("clotran.host.illegal_argument_exception", "Only long and double primitives are supported", roots)
           return
        end if
        if (kinds(i + 1) > 0) any_prim = .true.
@@ -2228,11 +2245,11 @@
     if (ret < 0) ret = 0
     if (.not. any_prim .and. ret == 0) return
     if (variadic) then
-       call raise_class("RuntimeException", "fns taking primitives cannot be variadic", roots)
+       call raise_class("clotran.host.runtime_exception", "fns taking primitives cannot be variadic", roots)
        return
     end if
     if (nfixed > 4) then
-       call raise_class("IllegalArgumentException", "fns taking primitives support only 4 or fewer args", roots)
+       call raise_class("clotran.host.illegal_argument_exception", "fns taking primitives support only 4 or fewer args", roots)
        return
     end if
 
@@ -2826,7 +2843,7 @@
        ! NewInstanceExpr adds it, and its meta/withMeta are the
        ! instance's own slot (B_META, B_WITHMETA)
        if (gcv_is(vs_get(vst, base + 3))) then
-          spec = gc_sym("clojure.lang.IObj", [vs_get(vst, base + 3)])
+          spec = gc_sym("clotran.host.i_obj", [vs_get(vst, base + 3)])
           call vs_set(vst, base + 6, spec)
           ifaces = gcv_conj(vs_get(vst, base + 3), vs_get(vst, base + 6), [vs_get(vst, base + 3), vs_get(vst, base + 6)])
           call vs_set(vst, base + 3, ifaces)

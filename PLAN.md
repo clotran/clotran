@@ -66,6 +66,11 @@ the meantime, and its numbers are those of 2026-09-28.
    native packages built from a recipe. Its first real package is
    `clotran-nrepl` (step 21 d).
 
+Order from 2026-09-30 (James): first the JVM's names out of everything
+clotran prints (DEVIATIONS 67), then step 22, then step 24, then step
+25; step 23 waits. Windows is deferred until about v1.0: macOS and Linux
+until then.
+
 Already there, though the deck says missing: `do concurrent` is emitted
 by the pure-Fortran tier for loops of `amap`'s shape (2026-09-25).
 Scenario D's remaining work is the rest of step 13.

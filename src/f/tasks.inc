@@ -220,18 +220,18 @@
     ready = block_on(task, deadline)
     if (tctx%yield_flag .or. tctx%has_error) return
     if (.not. ready) then
-       call raise_class("java.util.concurrent.TimeoutException", "the future did not finish in time", [task])
+       call raise_class("clotran.host.timeout_exception", "the future did not finish in time", [task])
        return
     end if
     select case (gc_i1(task))
     case (TASK_DONE)
        out = gc_slot(task, 2)
     case (TASK_CANCELLED)
-       call raise_class("java.util.concurrent.CancellationException", "the future was cancelled", [task])
+       call raise_class("clotran.host.cancellation_exception", "the future was cancelled", [task])
     case default
        block
           call failure_text(gc_slot(task, 2), s=dlt_1)
-          call raise_class("java.util.concurrent.ExecutionException", dlt_1, [task])
+          call raise_class("clotran.host.execution_exception", dlt_1, [task])
        end block
     end select
   end function task_get

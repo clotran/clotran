@@ -2598,7 +2598,7 @@
 
 [(seq #{7 6 5}) (seq (set (range 10))) (keys (zipmap (range 12) (range 12))) (seq (hash-map :a 1 :b 2 :c 3)) (seq #{:a :b :c :d}) (vec (set ["x" "y" "z" "w"])) (= (hash (zipmap (range 20) (range 20))) (hash (into {} (map vector (range 20) (range 20)))))]
 
-[(boolean (re-find #"#object\[clojure.lang.Reduced 0x[0-9a-f]+ \{:status :ready, :val 1\}\]" (pr-str (reduced 1)))) (class (reduced 1)) (map? (reduced 1)) (pr-str (tagged-literal 'js [1 2])) (class (ref 1)) (class (agent 1)) (instance? clojure.lang.Atom (ref 1)) (list? (cons 1 '(2))) (list? (cons 1 nil)) (list? (conj '(2) 1)) (class (cons 1 '(2)))]
+[(boolean (re-find #"#object\[[\w.]+ 0x[0-9a-f]+ \{:status :ready, :val 1\}\]" (pr-str (reduced 1)))) (class (reduced 1)) (map? (reduced 1)) (pr-str (tagged-literal 'js [1 2])) (class (ref 1)) (class (agent 1)) (instance? clojure.lang.Atom (ref 1)) (list? (cons 1 '(2))) (list? (cons 1 nil)) (list? (conj '(2) 1)) (class (cons 1 '(2)))]
 
 (with-local-vars [w 0 z 5] (dotimes [_ 3] (var-set w (inc @w))) [@w @z])
 
@@ -2637,7 +2637,7 @@
 
 [(nth (iterate inc 0) 100000) (take 3 (iterate inc 0)) (nth (iterate #(* 2 %) 1) 62) (count (take 1000 (iterate inc 0))) (last (range 100000)) (nth (map inc (range 100000)) 99999) (nth (range 10) 3 :d) (nth (iterate inc 0) 5 :d) (nth '(1 2) 5 :d) (realized? (rest (iterate inc 0)))]
 
-[(boolean (re-find #"^clojure\.lang\.LazySeq@[0-9a-f]+$" (str (map inc [1 2])))) (str (range 3)) (str (cons 1 nil)) (boolean (re-find #"LazySeq@" (str (take 2 (iterate inc 0))))) (boolean (re-find #"LazySeq@" (str (lazy-seq [1]))))]
+[(boolean (re-find #"^[\w.]+@[0-9a-f]+$" (str (map inc [1 2])))) (str (range 3)) (str (cons 1 nil)) (boolean (re-find #"(?i)lazy_?seq@" (str (take 2 (iterate inc 0))))) (boolean (re-find #"(?i)lazy_?seq@" (str (lazy-seq [1]))))]
 
 [(format "%x" (byte -128)) (format "%x" (short -1)) (format "%X" (int -1)) (format "%o" (byte -1)) (format "%x" -1) (format "%d" (byte 5))]
 

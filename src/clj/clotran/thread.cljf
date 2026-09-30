@@ -40,15 +40,15 @@
 
 (defn- get-task
   ([task] (.get task))
-  ([task ms v] (try (.get task ms java.util.concurrent.TimeUnit/MILLISECONDS)
-                    (catch java.util.concurrent.TimeoutException e v))))
+  ([task ms v] (try (.get task ms clotran.host.time_unit/MILLISECONDS)
+                    (catch clotran.host.timeout_exception e v))))
 
 (defn- take-message!
   "The next message in mailbox mb, waiting for one; v after ms when given.
   A task switch happens only inside .await, so the take after it is not
   interleaved with another taker."
   [mb ms v]
-  (if (if ms (.await mb ms java.util.concurrent.TimeUnit/MILLISECONDS) (do (.await mb) true))
+  (if (if ms (.await mb ms clotran.host.time_unit/MILLISECONDS) (do (.await mb) true))
     (let [msgs @mb]
       (reset! mb (subvec msgs 1))
       (nth msgs 0))
@@ -61,11 +61,11 @@
   (-status [_] (task-status task))
   (-cancel [_] (.cancel task true))
   (-send [_ msg] (swap! (task-mailbox task) conj msg) nil)
-  clojure.lang.IDeref
+  clotran.host.i_deref
   (deref [_] (get-task task))
-  clojure.lang.IBlockingDeref
+  clotran.host.i_blocking_deref
   (deref [_ ms v] (get-task task ms v))
-  clojure.lang.IPending
+  clotran.host.i_pending
   (isRealized [_] (.isDone task)))
 
 (deftype MainHandle []

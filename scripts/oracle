@@ -32,6 +32,28 @@
          '[babashka.process :as p])
 
 (def repo (-> *file* io/file .getCanonicalFile .getParentFile .getParentFile))
+
+;; clj names classes as the JVM does; clotran names them its own way
+;; (src/clj/clotran/class-aliases.edn). clj's answers are read through that
+;; table before they are compared: a qualified name -- java.lang.Long -- to
+;; clotran's, and a simple one in quotes -- "Long", as .getSimpleName gives
+;; it -- to the last part of clotran's, "int8". So a case still checks
+;; the same fact on both sides, under each one's name for the class.
+(def class-names
+  (let [t (clojure.edn/read-string (slurp (io/file repo "src/clj/clotran/class-aliases.edn")))
+        simple (into {} (for [[s ks] (group-by #(last (str/split % #"\.")) (keys t))
+                              :let [ts (distinct (map t ks))] :when (= 1 (count ts))]
+                          [s (last (str/split (first ts) #"\."))]))]
+    {:full t :simple simple}))
+(defn in-clotran-names [line]
+  (-> line
+      (str/replace #"(?:(?<![\w.])|(?<=\[L))(?:java|javax|clojure\.lang)(?:\.[a-z]+)*\.[A-Z][A-Za-z0-9_$]*"
+                   #(get (:full class-names) % %))
+      (str/replace #"\\\"([A-Z][A-Za-z]*)\\\"|\"([A-Z][A-Za-z]*)\""
+                   (fn [[m esc plain]]
+                     (let [nm (or esc plain) t (get (:simple class-names) nm)]
+                       (cond (nil? t) m esc (str "\\\"" t "\\\"") :else (str "\"" t "\"")))))))
+
 (def forms-file (or (first *command-line-args*) "test/clj/oracle.clj"))
 
 (def setup-heads '#{def defn defn- defmacro deftype defrecord defprotocol defmulti
@@ -104,7 +126,8 @@
 ;; places each time. Run in a directory of its own under build/, so the
 ;; file case's build/oracle-io-*.txt is not the plain oracle's.
 (when-let [every (System/getenv "ORACLE_GC")]
-  (let [cs (cases (read-forms (slurp (io/file repo forms-file))))
+  
+(let [cs (cases (read-forms (slurp (io/file repo forms-file))))
         dir (io/file repo "build" "oracle-gc")
         _ (.mkdirs (io/file dir "build"))
         gen (io/file dir "gen.clj")
@@ -135,7 +158,8 @@
       ;; the two sides at once: neither reads what the other writes
       want-f (future (run "clj" "-Sdeps" (slurp (io/file repo "deps.edn")) "-M" (str gen)))
       got (run "./clotran-bin" "src/clj/clojure/core.clj" (str gen))
-      want @want-f
+      raw @want-f
+      want (mapv in-clotran-names raw)
       _ (when (System/getenv "ORACLE_KEEP") nil) _ (when-not (System/getenv "ORACLE_KEEP") (.delete gen))
       n (count cs)]
   (when (not= (count want) n)
@@ -143,8 +167,10 @@
     (doseq [l (take 5 want)] (println "  " l))
     (System/exit 2))
   (let [results (map-indexed (fn [i c]
+                               ;; clj's line as it is, or with its class names in clotran's:
+                               ;; a quoted java.util.Map is a symbol, not a class
                                (let [w (nth want i) g (nth got i ::missing)
-                                     same (= w g)]
+                                     same (or (= w g) (= (nth raw i) g))]
                                  (assoc c :want w :got g
                                         :ok (if (:why c) (not same) same))))
                              cs)

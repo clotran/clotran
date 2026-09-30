@@ -579,6 +579,9 @@ module Eval
   character(len=:), allocatable, save :: clotran_home
 
   include "hosttable.inc"
+  ! the JVM and clojure.lang class names taken as input, and clotran's name
+  ! for each (scripts/class-names, src/clj/clotran/class-aliases.edn)
+  include "classalias.inc"
 
 contains
 
@@ -813,7 +816,7 @@ contains
     end if
     if (k_limit == 0) call read_frame_limit()
     if (tctx%fstack_top >= k_limit) then
-       call raise_class("StackOverflowError", "stack overflow", [gc_value ::])
+       call raise_class("clotran.host.stack_overflow_error", "stack overflow", [gc_value ::])
        return
     end if
     tctx%fstack_top = tctx%fstack_top + 1
@@ -1438,7 +1441,7 @@ contains
           if (vt(1:2) == "#'") vt = vt(3:)
        end if
        call vs_set(vst, base + 3, thrown_value())
-       call vs_set(vst, base + 4, gc_sym("RuntimeException", [vs_get(vst, base + 1), vs_get(vst, base + 3)]))
+       call vs_set(vst, base + 4, gc_sym("clotran.host.runtime_exception", [vs_get(vst, base + 1), vs_get(vst, base + 3)]))
        e = gc_obj(OBJ_ERR, [vs_get(vst, base + 4), gc_str("Syntax error macroexpanding " // vt // ".", &
             [vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)]), gc_nil()], &
             [vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)])
@@ -3046,7 +3049,7 @@ contains
     if (.not. class_target) then
        tv = strip_meta(vs_get(vst, base + 1))
        if (tv%tag == GCT_NIL) then
-          call raise_class("NullPointerException", "Cannot invoke ." // mname // " on nil", [vs_get(vst, base + 1)])
+          call raise_class("clotran.host.null_pointer_exception", "Cannot invoke ." // mname // " on nil", [vs_get(vst, base + 1)])
           call vs_leave(vst, base)
           return
        end if
@@ -3091,7 +3094,7 @@ contains
          write(cbuf, '(I0)') gcv_count(vs_get(vst, base + 2))
          block
             call class_name_of(tv, s=dlt_1)
-            call raise_class("IllegalArgumentException", &
+            call raise_class("clotran.host.illegal_argument_exception", &
                  "No matching method " // mname //  " found taking " // trim(cbuf) // " args for class " // dlt_1, &
                  [vs_get(vst, base + 1)])
          end block
@@ -3212,6 +3215,12 @@ contains
        if (t(i:i) == ".") last_dot = i
     end do
     if (last_dot == len(t)) return
+    ! a class written in the host is snake_case under clotran.host --
+    ! clotran.host.time_unit -- so it has no capital to be known by
+    if (index(t, "clotran.host.") == 1 .and. len(t) > 13) then
+       is_class_name = .true.
+       return
+    end if
     is_class_name = (t(last_dot+1:last_dot+1) >= "A" .and. &
          t(last_dot+1:last_dot+1) <= "Z")
   end function is_class_name
@@ -3261,10 +3270,15 @@ contains
 
 
   ! (new cname args...) once the executor has evaluated the arguments.
-  recursive function eval_new(cname, argv) result(out)
+  ! aliased: the program wrote a JVM name for a type clotran writes in
+  ! Clojure -- (java.util.ArrayList.) -- which is the JVM's constructor and
+  ! takes the JVM's arguments; the type's own name, (clotran.rt.ArrayList.
+  ! items), is built from its fields
+  recursive function eval_new(cname, argv, aliased) result(out)
     type(gc_stack), pointer :: vst
     character(len=*), intent(in) :: cname
     type(gc_value), intent(in) :: argv
+    logical, intent(in) :: aliased
     type(gc_value) :: out, thunk
     integer :: base
 
@@ -3275,22 +3289,22 @@ contains
 
     ! LazySeq first: the constructor compiled code reaches most by far
     ! (every lazy-seq is one), and this chain is compared in order
-    if (cname == "clojure.lang.LazySeq") then
+    if (cname == "clotran.host.lazy_seq") then
        call vs_set(vst, base + 3, nth_or_nil(vs_get(vst, base + 1), 0))
        out = gc_obj(OBJ_LAZY, [vs_get(vst, base + 3), gc_nil(), gc_nil()], &
             [vs_get(vst, base + 3)])
        call gc_set_i1(out, LAZY_PENDING)
-    else if (cname == "java.util.concurrent.ArrayBlockingQueue" .or. cname == "ArrayBlockingQueue") then
+    else if (cname == "clotran.host.array_blocking_queue" .or. cname == "clotran.host.array_blocking_queue") then
        ! A queue is a task mailbox: an atom holding a vector. The
        ! capacity argument is read and ignored -- nothing here drops.
        call vs_set(vst, base + 3, gcv_empty([vs_get(vst, base + 1)]))
        out = gc_obj(OBJ_ATOM, [vs_get(vst, base + 3), gc_nil()], [vs_get(vst, base + 3)])
-    else if (cname == "Thread" .or. cname == "java.lang.Thread") then
+    else if (cname == "clotran.host.thread" .or. cname == "clotran.host.thread") then
        ! (Thread. f name): the fn, held until .start submits it as a
        ! task. A thread IS a task here (PLAN.md: a thread is an
        ! evaluator context); the name is dropped.
        out = nth_or_nil(vs_get(vst, base + 1), 0)
-    else if (cname == "MathContext" .or. cname == "java.math.MathContext") then
+    else if (cname == "clotran.host.math_context" .or. cname == "clotran.host.math_context") then
        ! (MathContext. precision) and (MathContext. precision mode) --
        ! a MAP with named fields, as MethodImplCache is, because
        ! nothing reads one but the arithmetic below. with-precision
@@ -3309,15 +3323,15 @@ contains
          out = gca_assoc(vs_get(vst, base + 3), vs_get(vst, base + 4), vs_get(vst, base + 5), &
               [vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4), vs_get(vst, base + 5)])
        end block
-    else if (cname == "BigDecimal" .or. cname == "java.math.BigDecimal") then
+    else if (cname == "clotran.host.decimal" .or. cname == "clotran.host.decimal") then
        ! (BigDecimal. x), which core.cljs bigdec falls back to for a
        ! string and uses for a Ratio numerator.
        out = call_builtin(B_TODEC, vs_get(vst, base + 1))
-    else if (cname == "BigInteger" .or. cname == "java.math.BigInteger") then
+    else if (cname == "clotran.host.bigint" .or. cname == "clotran.host.bigint") then
        ! (BigInteger. "12"), which core.clj's bigint falls back to for
        ! a string. There is one big integer type here, not two.
        out = call_builtin(B_TOBIG, vs_get(vst, base + 1))
-    else if (cname == "clojure.lang.MapEntry") then
+    else if (cname == "clotran.host.map_entry") then
        ! (MapEntry. k v): a map entry is a two-vector marked as one
        ! (DEVIATIONS 39); clojure.spec.alpha's tagged-ret builds them
        call vs_set(vst, base + 3, gcv_empty([vs_get(vst, base + 1)]))
@@ -3325,7 +3339,7 @@ contains
        call vs_set(vst, base + 3, out)
        out = gcv_conj(vs_get(vst, base + 3), nth_or_nil(vs_get(vst, base + 1), 1), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
        call mark_entry(out)
-    else if (cname == "clojure.lang.Reduced") then
+    else if (cname == "clotran.host.reduced") then
        ! (reduced x) wraps a value to say "stop reducing": a box, as
        ! an atom is, marked i1 = 3 -- so it is a clojure.lang.Reduced,
        ! derefs, and prints as one. (A one-key map printed as a map and
@@ -3333,8 +3347,8 @@ contains
        call vs_set(vst, base + 3, nth_or_nil(vs_get(vst, base + 1), 0))
        out = gc_obj(OBJ_ATOM, [vs_get(vst, base + 3), gc_nil()], [vs_get(vst, base + 3)])
        call gc_set_i1(out, 3)
-    else if (cname == "clojure.lang.MethodImplCache" .or. &
-         cname == "clojure.lang.MethodImplCache$Entry") then
+    else if (cname == "clotran.host.method_impl_cache" .or. &
+         cname == "clotran.host.method_impl_cache_entry") then
        ! The protocol dispatch cache, as a MAP with named fields:
        ! (MethodImplCache. sym protocol methodk) and its 4-argument
        ! form, read back through .sym .protocol .methodk .map.
@@ -3369,8 +3383,8 @@ contains
          end if
          out = vs_get(vst, base + 3)
        end block
-    else if (cname == "CountDownLatch" .or. &
-         cname == "java.util.concurrent.CountDownLatch") then
+    else if (cname == "clotran.host.count_down_latch" .or. &
+         cname == "clotran.host.count_down_latch") then
        ! A LATCH IS A COUNTER when there is one thread. `await`
        ! sends a count-down action to each agent and then waits
        ! on the latch -- and since dispatch here runs the action
@@ -3379,8 +3393,8 @@ contains
        ! decrements it, and .await has nothing to wait for.
        call vs_set(vst, base + 3, nth_or_nil(vs_get(vst, base + 1), 0))
        out = gc_obj(OBJ_ATOM, [vs_get(vst, base + 3), gc_nil()], [vs_get(vst, base + 3)])
-    else if (cname == "clojure.lang.Ref" .or. cname == "clojure.lang.Atom" .or. &
-         cname == "clojure.lang.Agent") then
+    else if (cname == "clotran.host.ref" .or. cname == "clotran.host.atom" .or. &
+         cname == "clotran.host.agent") then
        ! A Ref IS an atom here: a mutable box, with no transaction
        ! around it. Single-threaded that is indistinguishable; the
        ! moment threads arrive it is not. DEVIATIONS.md 9. Which of the
@@ -3388,9 +3402,9 @@ contains
        ! to its own class and prints as one.
        call vs_set(vst, base + 3, nth_or_nil(vs_get(vst, base + 1), 0))
        out = gc_obj(OBJ_ATOM, [vs_get(vst, base + 3), gc_nil()], [vs_get(vst, base + 3)])
-       if (cname == "clojure.lang.Ref") call gc_set_i1(out, 1)
-       if (cname == "clojure.lang.Agent") call gc_set_i1(out, 2)
-    else if (cname == "java.util.Properties" .or. cname == "Properties") then
+       if (cname == "clotran.host.ref") call gc_set_i1(out, 1)
+       if (cname == "clotran.host.agent") call gc_set_i1(out, 2)
+    else if (cname == "clotran.host.properties" .or. cname == "clotran.host.properties") then
        thunk = gca_empty([vs_get(vst, base + 1)])
        call vs_set(vst, base + 3, thunk)
        out = gc_obj(OBJ_ATOM, [vs_get(vst, base + 3), gc_nil()], [vs_get(vst, base + 3)])
@@ -3408,8 +3422,8 @@ contains
        end if
        call vs_set(vst, base + 3, gcv_nth(vs_get(vst, base + 1), 0))
        out = box_convert(cname, vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
-    else if (cname == "PrintWriter" .or. cname == "java.io.PrintWriter" .or. &
-         cname == "BufferedWriter" .or. cname == "java.io.BufferedWriter") then
+    else if (cname == "clotran.host.print_writer" .or. cname == "clotran.host.print_writer" .or. &
+         cname == "clotran.host.buffered_writer" .or. cname == "clotran.host.buffered_writer") then
        ! A PrintWriter over a writer IS that writer here. Java's
        ! wraps to add buffering and the print methods; clotran's
        ! writers already take text and hold it, so wrapping would
@@ -3427,9 +3441,9 @@ contains
        thunk = gc_str("", [vs_get(vst, base + 1)])
        call vs_set(vst, base + 3, thunk)
        out = gc_obj(OBJ_SB, [vs_get(vst, base + 3)], [vs_get(vst, base + 3)])
-    else if (cname == "StringBuilder" .or. cname == "java.lang.StringBuilder" .or. &
-         cname == "StringBuffer" .or. cname == "java.lang.StringBuffer" .or. &
-         cname == "java.io.StringWriter" .or. cname == "StringWriter") then
+    else if (cname == "clotran.host.string_builder" .or. cname == "clotran.host.string_builder" .or. &
+         cname == "clotran.host.string_buffer" .or. cname == "clotran.host.string_buffer" .or. &
+         cname == "clotran.host.string_writer" .or. cname == "clotran.host.string_writer") then
        ! (StringBuffer. n) is a CAPACITY, not content -- the buffer
        ! starts empty. clojure.string/replace writes
        ! (StringBuffer. (.length s)) and every replacement it built
@@ -3441,24 +3455,24 @@ contains
           if (thunk%tag == GCT_NIL) then
              ! (StringBuilder. nil) is a NullPointerException, which is
              ! how clojure.string/reverse fails on nil
-             call raise_class("NullPointerException", "StringBuilder of nil", [vs_get(vst, base + 1)])
+             call raise_class("clotran.host.null_pointer_exception", "StringBuilder of nil", [vs_get(vst, base + 1)])
              call vs_leave(vst, base)
              return
           end if
        end if
        call vs_set(vst, base + 3, thunk)
        out = gc_obj(OBJ_SB, [vs_get(vst, base + 3)], [vs_get(vst, base + 3)])
-    else if (cname == "clojure.lang.ChunkBuffer") then
+    else if (cname == "clotran.host.chunk_buffer") then
        ! (ChunkBuffer. capacity): a run to fill, count in i1
        thunk = gc_vec(max(int_of(nth_or_nil(vs_get(vst, base + 1), 0)), 1), [vs_get(vst, base + 1)])
        call vs_set(vst, base + 3, thunk)
        out = gc_obj(OBJ_CHUNKBUF, [vs_get(vst, base + 3)], [vs_get(vst, base + 3)])
        call gc_set_i1(out, 0)
-    else if (cname == "clojure.lang.ChunkedCons") then
+    else if (cname == "clotran.host.chunked_cons") then
        ! (ChunkedCons. chunk more)
        out = gc_obj(OBJ_CHUNKSEQ, [nth_or_nil(vs_get(vst, base + 1), 0), nth_or_nil(vs_get(vst, base + 1), 1), gc_nil()], &
             [vs_get(vst, base + 1)])
-    else if (cname == "clojure.lang.MultiFn") then
+    else if (cname == "clotran.host.multi_fn") then
        ! (new MultiFn name dispatch-fn default hierarchy): name, the
        ! dispatch fn, the default value and the method table in slots
        ! 1-4, and in slot 5 [hierarchy-ref prefers cache cached-hierarchy]
@@ -3478,16 +3492,16 @@ contains
             [nth_or_nil(vs_get(vst, base + 1), 0), nth_or_nil(vs_get(vst, base + 1), 1), &
              nth_or_nil(vs_get(vst, base + 1), 2), vs_get(vst, base + 4), vs_get(vst, base + 3)], &
             [vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)])
-    else if (cname == "clojure.lang.Delay") then
+    else if (cname == "clotran.host.delay") then
        ! (delay body) is (new clojure.lang.Delay (fn [] body)) in
        ! core.clj, so the argument is already a no-argument closure and
        ! nothing here needs to know about the body.
        call vs_set(vst, base + 3, nth_or_nil(vs_get(vst, base + 1), 0))
        out = gc_obj(OBJ_DELAY, [vs_get(vst, base + 3), gc_nil()], [vs_get(vst, base + 3)])
        call gc_set_i1(out, 0)
-    else if (cname == "java.util.concurrent.ArrayBlockingQueue" .or. &
-         cname == "java.util.concurrent.LinkedBlockingQueue" .or. &
-         cname == "ArrayBlockingQueue") then
+    else if (cname == "clotran.host.array_blocking_queue" .or. &
+         cname == "clotran.host.linked_blocking_queue" .or. &
+         cname == "clotran.host.array_blocking_queue") then
        ! A MUTABLE BOX HOLDING A VECTOR, which is what a queue is once
        ! the blocking is gone -- and with one thread there is nothing to
        ! block on. The capacity argument is accepted and ignored: a
@@ -3509,7 +3523,7 @@ contains
        block
          logical :: is_info
          type(gc_value) :: cause
-         is_info = (cname == "ExceptionInfo" .or. cname == "clojure.lang.ExceptionInfo")
+         is_info = (cname == "clotran.host.exception_info" .or. cname == "clotran.host.exception_info")
          ! ex-info's data, an empty map when given nil; other classes carry none
          call vs_set(vst, base + 3, gc_nil())
          if (is_info) then
@@ -3539,25 +3553,25 @@ contains
          if (gc_kind(strip_meta(cause)) == OBJ_ERR) call gc_set_slot(vs_get(vst, base + 3), 5, cause)
          out = vs_get(vst, base + 3)
        end block
-    else if (cname == "Volatile" .or. cname == "clojure.lang.Volatile") then
+    else if (cname == "clotran.host.volatile" .or. cname == "clotran.host.volatile") then
        ! volatile!: a box, deref'd and .reset, with none of an atom's
        ! validators or watches
        call vs_set(vst, base + 3, nth_or_nil(vs_get(vst, base + 1), 0))
        out = gc_obj(OBJ_VOLATILE, [vs_get(vst, base + 3)], [vs_get(vst, base + 3)])
-    else if (cname == "ArrayList" .or. cname == "java.util.ArrayList") then
+    else if (aliased .and. cname == "clotran.rt.ArrayList") then
        ! Clojure on this host: clotran.rt's ArrayList (rt_call)
        out = rt_call("array-list", vs_get(vst, base + 1))
-    else if (cname == "java.io.StringReader" .or. cname == "StringReader") then
+    else if (aliased .and. cname == "clotran.io.TextReader") then
        ! the names vendored Clojure writes for a character stream, mapped
        ! onto clotran.io's own readers (through clotran.rt)
        out = rt_call("string-reader", vs_get(vst, base + 1))
-    else if (cname == "java.io.PushbackReader" .or. cname == "PushbackReader") then
+    else if (aliased .and. cname == "clotran.io.PushbackReader") then
        out = rt_call("pushback-reader", vs_get(vst, base + 1))
-    else if (cname == "clojure.lang.LineNumberingPushbackReader" .or. cname == "LineNumberingPushbackReader") then
+    else if (aliased .and. cname == "clotran.io.LineNumberingReader") then
        out = rt_call("line-numbering-reader", vs_get(vst, base + 1))
-    else if (cname == "java.io.BufferedReader" .or. cname == "BufferedReader") then
+    else if (cname == "clotran.host.buffered_reader" .or. cname == "clotran.host.buffered_reader") then
        out = rt_call("buffered-reader", vs_get(vst, base + 1))
-    else if (cname == "Object" .or. cname == "java.lang.Object") then
+    else if (cname == "clotran.host.value" .or. cname == "clotran.host.value") then
        ! (Object.), a sentinel equal only to itself
        out = rt_call("object", vs_get(vst, base + 1))
     else
@@ -3582,21 +3596,22 @@ contains
     integer :: n
     n = len(cname)
     is_throwable_class = .false.
+    ! a host class is snake_case -- clotran.host.arithmetic_exception; a
+    ! deftype a program names FooException or FooError is CamelCase
     if (n >= 9) then
-       if (cname(n-8:n) == "Exception") is_throwable_class = .true.
+       if (cname(n-8:n) == "exception" .or. cname(n-8:n) == "clotran.host.exception") is_throwable_class = .true.
     end if
     if (n >= 5) then
-       if (cname(n-4:n) == "Error") is_throwable_class = .true.
+       if (cname(n-4:n) == "error" .or. cname(n-4:n) == "clotran.host.error") is_throwable_class = .true.
     end if
-    if (cname == "Throwable" .or. cname == "java.lang.Throwable") &
-         is_throwable_class = .true.
+    if (cname == "clotran.host.throwable") is_throwable_class = .true.
     ! ExceptionInfo does not end in "Exception", and core.clj
     ! constructs one directly -- ex-info is
     ! (ExceptionInfo. msg map cause), imported under its short
     ! name. Both spellings, for the same reason Pattern needs
     ! both.
-    if (cname == "ExceptionInfo" .or. &
-         cname == "clojure.lang.ExceptionInfo") is_throwable_class = .true.
+    if (cname == "clotran.host.exception_info" .or. &
+         cname == "clotran.host.exception_info") is_throwable_class = .true.
   end function is_throwable_class
 
   ! The java.lang boxes, whose constructors core.clj and
@@ -3604,11 +3619,9 @@ contains
   logical function is_box_class(cname)
     character(len=*), intent(in) :: cname
     select case (cname)
-    case ("Long", "java.lang.Long", "Integer", "java.lang.Integer", &
-         "Short", "java.lang.Short", "Byte", "java.lang.Byte", &
-         "Double", "java.lang.Double", "Float", "java.lang.Float", &
-         "Boolean", "java.lang.Boolean", "String", "java.lang.String", &
-         "Character", "java.lang.Character")
+    case ("clotran.host.int8", "clotran.host.int4", "clotran.host.int2", "clotran.host.int1", &
+         "clotran.host.real8", "clotran.host.real4", "clotran.host.logical", "clotran.host.string", &
+         "clotran.host.char")
        is_box_class = .true.
     case default
        is_box_class = .false.
@@ -3631,27 +3644,27 @@ contains
     v = strip_meta(v0)
     out = v
     select case (cname)
-    case ("String", "java.lang.String")
+    case ("clotran.host.string")
        ! An array is not text: an array here used to become the text of the
        ! object ("#<object>"), silently. Bytes are decoded by clotran.io.
        block
           if (gc_kind(v) == OBJ_ARRAY) then
-             call raise_class("IllegalArgumentException", "an array is not text: " // &
+             call raise_class("clotran.host.illegal_argument_exception", "an array is not text: " // &
                   "clotran.io/utf8-string decodes bytes, (apply str cs) joins chars", roots)
              return
           end if
           call text_of(v, s=dlt_1)
           out = gc_str(dlt_1, roots)
        end block
-    case ("Boolean", "java.lang.Boolean")
+    case ("clotran.host.logical")
        if (v%tag == GCT_STR) then
           out = gc_bool(gc_ref_is(v%ref, "true"))
        else
           out = gc_bool(truthy(v))
        end if
-    case ("Character", "java.lang.Character")
+    case ("clotran.host.char")
        if (v%tag == GCT_INT) out = gc_char_cp(int(v%ival, kind=4))
-    case ("Double", "java.lang.Double", "Float", "java.lang.Float")
+    case ("clotran.host.real8", "clotran.host.real4")
        if (v%tag == GCT_STR) then
           block
              call gc_ref_text(v%ref, s=dlt_1)
@@ -3719,8 +3732,8 @@ contains
   ! java.lang.BigDecimal and find no row.
   subroutine seed_default_imports()
     if (n_imports > 0) return
-    call record_import("java.math.BigDecimal")
-    call record_import("java.math.BigInteger")
+    call record_import("clotran.host.decimal")
+    call record_import("clotran.host.bigint")
   end subroutine seed_default_imports
 
   subroutine record_import(full)
@@ -3756,33 +3769,89 @@ contains
 
   ! A class name in full: a dotted name is already one, a bare name is
   ! the import it names, or java.lang's.
+  ! clotran's name for a class, from what a program wrote: a clotran name
+  ! as it is; a JVM or clojure.lang name -- which vendored Clojure writes --
+  ! as the alias table says (classalias.inc); a bare name through the
+  ! imports, then as java.lang's, which is implicitly imported on the JVM.
+  ! A bare name that is none of those stays bare: a deftype's own name.
   subroutine canon_class(name, c)
     character(len=*), intent(in) :: name
     character(len=:), allocatable, intent(out) :: c
     integer :: i
+    logical :: found
     c = name
-    if (index(name, ".") > 0) return
+    if (index(name, ".") > 0) then
+       call class_alias(name, c, found)
+       return
+    end if
     call gc_state_lock()
     do i = 1, n_imports
        if (import_short(i) == name) then
-          c = trim(import_full(i))
           call gc_state_unlock()
+          call class_alias(trim(import_full(i)), c, found)
           return
        end if
     end do
     call gc_state_unlock()
-    c = "java.lang." // name
+    call class_alias("java.lang." // name, c, found)
+    if (found) return
+    call simple_alias(name, c, found)
   end subroutine canon_class
 
-  ! The ONE spelling a class keyword has, wherever it is built: the
-  ! canonical name with java.lang stripped, so String and
-  ! java.lang.String are :String, and IDeref after (import
-  ! clojure.lang.IDeref) is :clojure.lang.IDeref like the literal
-  ! written in full. A bare name nothing imported stays bare.
+  ! A bare simple name that names exactly one clotran class (classalias.inc)
+  subroutine simple_alias(name, c, found)
+    character(len=*), intent(in) :: name
+    character(len=:), allocatable, intent(out) :: c
+    logical, intent(out) :: found
+    integer :: lo, hi, mid
+    found = .false.
+    lo = 1
+    hi = N_CLASS_SIMPLE
+    do while (lo <= hi)
+       mid = (lo + hi) / 2
+       if (trim(CLASS_SIMPLE_FROM(mid)) == name) then
+          c = trim(CLASS_SIMPLE_TO(mid))
+          found = .true.
+          return
+       else if (llt(trim(CLASS_SIMPLE_FROM(mid)), name)) then
+          lo = mid + 1
+       else
+          hi = mid - 1
+       end if
+    end do
+    c = name
+  end subroutine simple_alias
+
+  ! The clotran name an input class name aliases, by binary search of the
+  ! sorted table; the name itself, and found false, when it is not there.
+  subroutine class_alias(name, c, found)
+    character(len=*), intent(in) :: name
+    character(len=:), allocatable, intent(out) :: c
+    logical, intent(out) :: found
+    integer :: lo, hi, mid
+    character(len=len(name)) :: n
+    n = name
+    found = .false.
+    lo = 1
+    hi = N_CLASS_ALIASES
+    do while (lo <= hi)
+       mid = (lo + hi) / 2
+       if (trim(CLASS_ALIAS_FROM(mid)) == n) then
+          c = trim(CLASS_ALIAS_TO(mid))
+          found = .true.
+          return
+       else if (llt(trim(CLASS_ALIAS_FROM(mid)), n)) then
+          lo = mid + 1
+       else
+          hi = mid - 1
+       end if
+    end do
+    c = n
+  end subroutine class_alias
+
   ! The ONE spelling a class has, wherever it is built: the canonical
   ! name IN FULL, so String and java.lang.String are both
-  ! java.lang.Class's java.lang.String and (pr-str (class 1)) is
-  ! java.lang.Long, as it is on the JVM. A bare name nothing imported
+  ! clotran.host.string and (pr-str (class 1)) is clotran.host.int8. A bare name nothing imported
   ! stays bare, which is what a deftype's own name is.
   subroutine class_key(name, k)
     character(len=*), intent(in) :: name
@@ -3821,6 +3890,11 @@ contains
           ok = index("IJDFBSCZ", comp) > 0
        else if (comp(1:1) == "L" .and. comp(len(comp):) == ";" .and. len(comp) > 2) then
           ok = known_class_name(comp(2:len(comp)-1))
+          if (ok) then
+             call class_key(comp(2:len(comp)-1), k=full)
+             k = t(1:d-1) // "L" // full // ";"
+          end if
+          return
        end if
        if (ok) k = t
        return
@@ -3878,6 +3952,7 @@ contains
     end block
     if (gc_kind(find_type(t)) == OBJ_TYPE) return
     if (declared_type_name(t)) return
+    if (index(t, "clotran.host.") == 1) return
     if (index(t, "clojure.lang.") == 1) return
     if (index(t, "clojure.asm.") == 1) return
     if (index(t, "java.") == 1) return
@@ -3951,9 +4026,14 @@ contains
     case (HK_EMPTYMAP); out = gca_empty([roots])
     case (HK_SPECIALS); out = specials_map([roots])
     case (HK_TYPE)
+    ! Double/TYPE and its kin: the primitive IS a Fortran kind here, and
+    ! that is its value -- :real8, :int4 -- what make-array and the typed
+    ! arrays take (array_kind_for); a char is UTF-16, :char2
     block
-       call short_class_name(trim(row%cls), s=dlt_1)
-       out = gc_key(dlt_1 // "/TYPE", [roots])
+       dlt_1 = trim(row%cls)
+       if (index(dlt_1, "clotran.host.") == 1) dlt_1 = dlt_1(14:)
+       if (dlt_1 == "char") dlt_1 = "char2"
+       out = gc_key(dlt_1, [roots])
     end block
     case (HK_SELFKEY);  out = gc_key(trim(row%mem), [roots])
     end select
@@ -4209,7 +4289,11 @@ contains
     tctx => ctx_self()
     vst => tctx%stk
     base = vs_enter(vst, 2)
-    cls = gc_sym(class_name, roots)
+    block
+      character(len=:), allocatable :: canonical
+      call canon_class(class_name, c=canonical)
+      cls = gc_sym(canonical, roots)
+    end block
     call vs_set(vst, base + 1, cls)
     txt = gc_str(msg, [roots, vs_get(vst, base + 1)])
     call vs_set(vst, base + 2, txt)
@@ -4224,17 +4308,19 @@ contains
     call vs_leave(vst, base)
   end subroutine fail_as
 
-  function is_runtime_class(cname) result(yes)
-    character(len=*), intent(in) :: cname
+  function is_runtime_class(cname_written) result(yes)
+    character(len=*), intent(in) :: cname_written
     logical :: yes
-    integer :: dot
-    dot = index(cname, ".", back=.true.)
-    select case (cname(dot+1:))
-    case ("RuntimeException", "ArithmeticException", "ArityException", "ClassCastException", &
-          "IllegalArgumentException", "IllegalStateException", "IndexOutOfBoundsException", &
-          "NullPointerException", "NumberFormatException", "UnsupportedOperationException", &
-          "ExceptionInfo", "NoSuchElementException", "ConcurrentModificationException", &
-          "ArrayIndexOutOfBoundsException", "StringIndexOutOfBoundsException", "NegativeArraySizeException")
+    character(len=:), allocatable :: cname
+    call canon_class(cname_written, c=cname)
+    select case (cname)
+    case ("clotran.host.runtime_exception", "clotran.host.arithmetic_exception", "clotran.host.arity_exception", &
+          "clotran.host.class_cast_exception", "clotran.host.illegal_argument_exception", "clotran.host.illegal_state_exception", &
+          "clotran.host.index_out_of_bounds_exception", "clotran.host.null_pointer_exception", &
+          "clotran.host.number_format_exception", "clotran.host.unsupported_operation_exception", "clotran.host.exception_info", &
+          "clotran.host.no_such_element_exception", "clotran.host.concurrent_modification_exception", &
+          "clotran.host.array_index_out_of_bounds_exception", "clotran.host.string_index_out_of_bounds_exception", &
+          "clotran.host.negative_array_size_exception")
        yes = .true.
     case default
        yes = .false.
@@ -4246,15 +4332,19 @@ contains
   ! and Throwable and Exception take anything. Asked by catch and by
   ! instance?, so an agent's error handler can tell an
   ! ArithmeticException from the rest.
-  logical function exc_class_matches(want, exc)
-    character(len=*), intent(in) :: want
+  ! Both names by clotran's name for the class (canon_class): a catch
+  ! writes the JVM's name or a bare one -- ClassNotFoundException -- and a
+  ! throw may have too.
+  logical function exc_class_matches(want_written, exc)
+    character(len=*), intent(in) :: want_written
     type(gc_value), intent(in) :: exc
+    character(len=:), allocatable :: want
     type(gc_value) :: got
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1, dlt_2
+    call canon_class(want_written, c=want)
     exc_class_matches = .true.
-    if (want == "Throwable" .or. want == "java.lang.Throwable" .or. &
-         want == "Exception" .or. want == "java.lang.Exception") return
+    if (want == "clotran.host.throwable" .or. want == "clotran.host.exception") return
     exc_class_matches = .false.
     if (gc_kind(exc) /= OBJ_ERR) return
     got = gc_slot(exc, 1)
@@ -4262,9 +4352,10 @@ contains
     ! RuntimeException is the parent of every runtime class clotran
     ! throws, a host failure among them; only the checked classes and
     ! the Errors stand outside it.
-    if (want == "RuntimeException" .or. want == "java.lang.RuntimeException") then
+    if (want == "clotran.host.runtime_exception") then
        block
-          call gc_ref_text(got%ref, s=dlt_1)
+          call gc_ref_text(got%ref, s=dlt_2)
+          call canon_class(dlt_2, c=dlt_1)
           exc_class_matches = is_runtime_class(dlt_1)
        end block
        return
@@ -4276,9 +4367,9 @@ contains
     ! clojure.lang.ExceptionInfo. class_matches knows the rule
     ! but only in one direction, so it is asked both ways.
     block
-       call gc_ref_text(got%ref, s=dlt_1)
        call gc_ref_text(got%ref, s=dlt_2)
-       exc_class_matches = class_matches(dlt_1, want) .or.  class_matches(want, dlt_2)
+       call canon_class(dlt_2, c=dlt_1)
+       exc_class_matches = class_matches(dlt_1, want) .or.  class_matches(want, dlt_1)
     end block
     ! The other fact of hierarchy, because Clojure's own suite relies
     ! on it: ArityException extends IllegalArgumentException, so
@@ -4291,7 +4382,8 @@ contains
     if (.not. exc_class_matches) then
        block
          character(len=:), allocatable :: c, pc
-         call gc_ref_text(got%ref, s=c)
+         call gc_ref_text(got%ref, s=pc)
+         call canon_class(pc, c=c)
          do
             ! through a temporary: p is intent(out), and passing c as both
             ! would free the class name being read
@@ -4314,15 +4406,13 @@ contains
     character(len=*), intent(in) :: cls
     character(len=:), allocatable, intent(out) :: p
     character(len=:), allocatable :: short
-    integer :: d
-    d = index(cls, ".", back=.true.)
-    short = cls(d + 1:)
+    call canon_class(cls, c=short)
     select case (short)
-    case ("ArityException", "NumberFormatException"); p = "IllegalArgumentException"
-    case ("FileNotFoundException", "EOFException", "UnsupportedEncodingException"); p = "java.io.IOException"
-    case ("ArrayIndexOutOfBoundsException", "StringIndexOutOfBoundsException"); p = "IndexOutOfBoundsException"
-    case ("StackOverflowError", "OutOfMemoryError"); p = "VirtualMachineError"
-    case ("VirtualMachineError", "AssertionError"); p = "Error"
+    case ("clotran.host.arity_exception", "clotran.host.number_format_exception"); p = "clotran.host.illegal_argument_exception"
+    case ("clotran.host.file_not_found_exception", "clotran.host.eof_exception", "clotran.host.unsupported_encoding_exception"); p = "clotran.host.io_exception"
+    case ("clotran.host.array_index_out_of_bounds_exception", "clotran.host.string_index_out_of_bounds_exception"); p = "clotran.host.index_out_of_bounds_exception"
+    case ("clotran.host.stack_overflow_error", "clotran.host.out_of_memory_error"); p = "clotran.host.virtual_machine_error"
+    case ("clotran.host.virtual_machine_error", "clotran.host.assertion_error"); p = "clotran.host.error"
     case default; p = ""
     end select
   end subroutine exc_parent
@@ -4356,7 +4446,7 @@ contains
     ! error. It was {:error msg}, a map, and none of them did.
     vst => gc_my_stack()
     base = vs_enter(vst, 3)
-    k = gc_sym("RuntimeException", roots)
+    k = gc_sym("clotran.host.runtime_exception", roots)
     call vs_set(vst, base + 2, k)
     text = gc_str(msg, [roots, vs_get(vst, base + 2)])
     call vs_set(vst, base + 3, text)
@@ -4381,7 +4471,11 @@ contains
     tctx => ctx_self()
     vst => tctx%stk
     base = vs_enter(vst, 2)
-    call vs_set(vst, base + 1, gc_sym(cls, roots))
+    block
+      character(len=:), allocatable :: canonical
+      call canon_class(cls, c=canonical)
+      call vs_set(vst, base + 1, gc_sym(canonical, roots))
+    end block
     call vs_set(vst, base + 2, gc_str(msg, [roots, vs_get(vst, base + 1)]))
     e = gc_obj(OBJ_ERR, [vs_get(vst, base + 1), vs_get(vst, base + 2), gc_nil()], &
          [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
@@ -4408,7 +4502,7 @@ contains
     character(len=16) :: buf
     type(gc_value) :: none(0)
     write(buf, '(I0)') got
-    call raise_class("ArityException", "Wrong number of args (" // trim(buf) // ") passed to: " // who, none)
+    call raise_class("clotran.host.arity_exception", "Wrong number of args (" // trim(buf) // ") passed to: " // who, none)
   end subroutine gce_raise_arity_named
 
   ! Clojure's own wording, from ArityException: "Wrong number of
@@ -4434,7 +4528,7 @@ contains
           end block
        end if
     end if
-    call raise_class("ArityException", &
+    call raise_class("clotran.host.arity_exception", &
          "Wrong number of args (" // trim(buf) // ") passed to: " // who, roots)
   end subroutine raise_arity
 
@@ -4704,7 +4798,7 @@ contains
        ok = .false.
     else if (.not. truthy(res)) then
        ok = .false.
-       call raise_class("IllegalStateException", "Invalid reference state", roots)
+       call raise_class("clotran.host.illegal_state_exception", "Invalid reference state", roots)
     end if
     call vs_leave(vst, base)
     if (r%tag == GCT_NIL) return
@@ -4958,7 +5052,7 @@ contains
     if (gc_kind(e) /= OBJ_ERR) return
     cls = gc_slot(e, 1)
     if (cls%tag /= GCT_SYM) return
-    if (.not. gc_ref_is(cls%ref, "ArityException")) return
+    if (.not. gc_ref_is(cls%ref, "clotran.host.arity_exception")) return
     ns = gc_slot(mvar, 3)
     sym = gc_slot(mvar, 4)
     if (gc_kind(ns) /= OBJ_NS .or. sym%tag /= GCT_SYM) return
@@ -4981,7 +5075,7 @@ contains
     if (st /= 0) return
     write(cbuf, '(I0)') n - 2
     call gce_clear_error()
-    call raise_class("ArityException", "Wrong number of args (" // trim(cbuf) // ") passed to: " // name, [mvar])
+    call raise_class("clotran.host.arity_exception", "Wrong number of args (" // trim(cbuf) // ") passed to: " // name, [mvar])
   end subroutine macro_arity_fixup
 
   recursive function expand_macro(fn, form, env, mvar) result(out)
@@ -5906,38 +6000,38 @@ contains
        ! by range, before the add (see mul_overflows)
        if ((ib > 0 .and. ia > huge(ia) - ib) .or. &
             (ib < 0 .and. ia < -huge(ia) - 1_gc_ip - ib)) then
-          call raise_class("ArithmeticException", "long overflow", [gc_nil()])
+          call raise_class("clotran.host.arithmetic_exception", "long overflow", [gc_nil()])
        else
           out = gc_int(ia + ib)
        end if
     case (38)
        if ((ib < 0 .and. ia > huge(ia) + ib) .or. &
             (ib > 0 .and. ia < -huge(ia) - 1_gc_ip + ib)) then
-          call raise_class("ArithmeticException", "long overflow", [gc_nil()])
+          call raise_class("clotran.host.arithmetic_exception", "long overflow", [gc_nil()])
        else
           out = gc_int(ia - ib)
        end if
     case (39)
        if (mul_overflows(ia, ib)) then
-          call raise_class("ArithmeticException", "long overflow", [gc_nil()])
+          call raise_class("clotran.host.arithmetic_exception", "long overflow", [gc_nil()])
        else
           out = gc_int(ia * ib)
        end if
     case (40)
        if (ia == huge(ia)) then
-          call raise_class("ArithmeticException", "long overflow", [gc_nil()])
+          call raise_class("clotran.host.arithmetic_exception", "long overflow", [gc_nil()])
        else
           out = gc_int(ia + 1_gc_ip)
        end if
     case (41)
        if (ia == -huge(ia) - 1_gc_ip) then
-          call raise_class("ArithmeticException", "long overflow", [gc_nil()])
+          call raise_class("clotran.host.arithmetic_exception", "long overflow", [gc_nil()])
        else
           out = gc_int(ia - 1_gc_ip)
        end if
     case (42)
        if (ia == -huge(ia) - 1_gc_ip) then
-          call raise_class("ArithmeticException", "long overflow", [gc_nil()])
+          call raise_class("clotran.host.arithmetic_exception", "long overflow", [gc_nil()])
        else
           out = gc_int(-ia)
        end if
@@ -5946,7 +6040,7 @@ contains
        ! integers, so Long/MIN_VALUE by -1 wraps as Java's does rather
        ! than going through a double.
        if (ib == 0_gc_ip) then
-          call raise_class("ArithmeticException", "Divide by zero", [gc_nil()])
+          call raise_class("clotran.host.arithmetic_exception", "Divide by zero", [gc_nil()])
        else if (ib == -1_gc_ip) then
           out = gc_int(-ia)
        else
@@ -5959,7 +6053,7 @@ contains
        end if
     case (44)
        if (ib == 0_gc_ip) then
-          call raise_class("ArithmeticException", "Divide by zero", [gc_nil()])
+          call raise_class("clotran.host.arithmetic_exception", "Divide by zero", [gc_nil()])
        else
           out = gc_int(modulo(ia, ib))
        end if
@@ -7203,7 +7297,7 @@ contains
     if (tctx%has_error) return
     tctx%ev_depth = tctx%ev_depth + 1
     if (tctx%ev_depth > ev_limit) then
-       call raise_class("StackOverflowError", "stack overflow", [gc_value ::])
+       call raise_class("clotran.host.stack_overflow_error", "stack overflow", [gc_value ::])
     else
        tctx%cur_fn = fn
        call cf_call(gc_i1(fn), argbase, nargs, dst)
@@ -7445,7 +7539,7 @@ contains
             block
                call itoa(cn, s=dlt_1)
                call gc_ref_text(nmv%ref, s=dlt_2)
-               call raise_class("ArityException",  "Wrong number of args (" // dlt_1 // ") passed to: " //  dlt_2, &
+               call raise_class("clotran.host.arity_exception",  "Wrong number of args (" // dlt_1 // ") passed to: " //  dlt_2, &
                     [vs_get(vst, base + 1)])
             end block
          else
@@ -7496,7 +7590,7 @@ contains
             block
                call gcp_str(gc_slot(vs_get(vst, base + 1), 1), .false., s=dlt_1)
                call gcp_str(vs_get(vst, base + 3), .true., s=dlt_2)
-               call raise_class("IllegalArgumentException", &
+               call raise_class("clotran.host.illegal_argument_exception", &
                     "No method in multimethod '" //  dlt_1 //  "' for dispatch value: " // dlt_2, [vs_get(vst, base + 1)])
             end block
          else
@@ -7520,7 +7614,7 @@ contains
             end if
             block
                call gcp_str(fn, .true., s=dlt_1)
-               call raise_class("ArityException", "Wrong number of args (" // trim(cbuf) //  ") passed to: " // dlt_1, &
+               call raise_class("clotran.host.arity_exception", "Wrong number of args (" // trim(cbuf) //  ") passed to: " // dlt_1, &
                     [vs_get(vst, base + 1)])
             end block
           end block
@@ -7533,7 +7627,7 @@ contains
             character(len=16) :: cbuf
             write(cbuf, '(I0)') gcv_count(args)
             call class_name_of(fn, s=dlt_1)
-            call raise_class("ArityException", "Wrong number of args (" // trim(cbuf) // ") passed to: " // dlt_1, &
+            call raise_class("clotran.host.arity_exception", "Wrong number of args (" // trim(cbuf) // ") passed to: " // dlt_1, &
                  [vs_get(vst, base + 1)])
           end block
        else if (fn%tag == GCT_SYM) then
@@ -7627,9 +7721,9 @@ contains
                ! A vector index, narrow by nature; out of range throws
                ! as PersistentVector.nth does.
                if (ix%tag /= GCT_INT) then
-                  call raise_class("IllegalArgumentException", "Key must be integer", [vs_get(vst, base + 1)])
+                  call raise_class("clotran.host.illegal_argument_exception", "Key must be integer", [vs_get(vst, base + 1)])
                else if (ix%ival < 0 .or. ix%ival >= int(gcv_count(fn), gc_ip)) then
-                  call raise_class("IndexOutOfBoundsException", "index out of bounds", [vs_get(vst, base + 1)])
+                  call raise_class("clotran.host.index_out_of_bounds_exception", "index out of bounds", [vs_get(vst, base + 1)])
                else
                   out = gcv_nth(fn, int(ix%ival, kind=4))
                end if
@@ -7714,8 +7808,8 @@ contains
           ! a sorted collection throws, where it answered itself
           block
              call class_name_of(a, s=dlt_1)
-             call raise_class("ClassCastException", "class " // dlt_1 // &
-                  " cannot be cast to class clojure.lang.IEditableCollection", [vs_get(vst, base + 1)])
+             call raise_class("clotran.host.class_cast_exception", "class " // dlt_1 // &
+                  " cannot be cast to class clotran.host.i_editable_collection", [vs_get(vst, base + 1)])
           end block
        end if
     case (B_PERSISTENT)
@@ -7827,7 +7921,7 @@ contains
                if (dok) then
                   out = gc_dec(dacc, [vs_get(vst, base + 1)])
                else
-                  call raise_class("ArithmeticException", &
+                  call raise_class("clotran.host.arithmetic_exception", &
                        "Rounding necessary", [vs_get(vst, base + 1)])
                   call vs_leave(vst, base)
                   return
@@ -7847,7 +7941,7 @@ contains
                ! bits: a Ratio's parts are integers (DEVIATIONS 26).
                b = rat_operand(strip_meta(a), hit)
                if (.not. hit) then
-                  call raise_class("ArithmeticException", &
+                  call raise_class("clotran.host.arithmetic_exception", &
                        "a Ratio of BigInts is not supported (DEVIATIONS 26)", [vs_get(vst, base + 1)])
                   call vs_leave(vst, base)
                   return
@@ -7858,7 +7952,7 @@ contains
                do i = 1, n - 1
                   b = rat_operand(strip_meta(gcv_nth(args, i)), hit)
                   if (.not. hit) then
-                     call raise_class("ArithmeticException", &
+                     call raise_class("clotran.host.arithmetic_exception", &
                           "a Ratio of BigInts is not supported (DEVIATIONS 26)", [vs_get(vst, base + 1)])
                      call vs_leave(vst, base)
                      return
@@ -7950,7 +8044,7 @@ contains
                acc = a%ival
                if (n == 1 .and. op == B_SUB) then
                   if (checked .and. acc == -huge(acc) - 1_gc_ip) then
-                     call raise_class("ArithmeticException", "long overflow", [vs_get(vst, base + 1)])
+                     call raise_class("clotran.host.arithmetic_exception", "long overflow", [vs_get(vst, base + 1)])
                      call vs_leave(vst, base)
                      return
                   end if
@@ -7965,7 +8059,7 @@ contains
                      case (B_MUL); hit = mul_overflows(acc, b%ival)
                      end select
                      if (hit) then
-                        call raise_class("ArithmeticException", "long overflow", [vs_get(vst, base + 1)])
+                        call raise_class("clotran.host.arithmetic_exception", "long overflow", [vs_get(vst, base + 1)])
                         call vs_leave(vst, base)
                         return
                      end if
@@ -8062,12 +8156,12 @@ contains
        ! a Seqable or an Iterable alone -- core.clj's Eduction -- is not
        ! (clj: "count not supported on this type: Eduction"; it was 0)
        if (a%tag /= GCT_NIL .and. ((gc_kind(a) /= OBJ_INST .and. .not. seqable_quiet(a)) .or. &
-            (gc_kind(a) == OBJ_INST .and. .not. is_instance(gc_class("clojure.lang.IPersistentCollection", &
+            (gc_kind(a) == OBJ_INST .and. .not. is_instance(gc_class("clotran.host.i_persistent_collection", &
             [vs_get(vst, base + 1)]), a)))) then
           block
              call class_name_of(a, s=dlt_1)
              ! getSimpleName: the class after its package
-             call raise_class("UnsupportedOperationException", "count not supported on this type: " // &
+             call raise_class("clotran.host.unsupported_operation_exception", "count not supported on this type: " // &
                   dlt_1(index(dlt_1, '.', back=.true.) + 1:), [vs_get(vst, base + 1)])
           end block
           call vs_leave(vst, base)
@@ -8174,7 +8268,7 @@ contains
          if (gc_kind(coll) == OBJ_SET .or. gca_is(coll)) then
             block
               call class_name_of(coll, s=dlt_1)
-              call raise_class("UnsupportedOperationException", "nth not supported on this type: " // dlt_1, &
+              call raise_class("clotran.host.unsupported_operation_exception", "nth not supported on this type: " // dlt_1, &
                    [vs_get(vst, base + 1)])
             end block
             call vs_leave(vst, base)
@@ -8208,7 +8302,7 @@ contains
             if (n >= 3) then
                out = vs_get(vst, base + 3)
             else if (coll%tag /= GCT_NIL .and. .not. tctx%has_error) then
-               call raise_class("IndexOutOfBoundsException", "", [vs_get(vst, base + 1)])
+               call raise_class("clotran.host.index_out_of_bounds_exception", "", [vs_get(vst, base + 1)])
             end if
          end if
        end block
@@ -8279,14 +8373,14 @@ contains
             type(gc_value) :: ix
             ix = strip_meta(gcv_nth(vs_get(vst, base + 1), 1))
             if (ix%tag /= GCT_INT) then
-               call raise_class("IllegalArgumentException", "Key must be integer", [vs_get(vst, base + 1)])
+               call raise_class("clotran.host.illegal_argument_exception", "Key must be integer", [vs_get(vst, base + 1)])
             else if (ix%ival == int(gcv_count(a), gc_ip)) then
                out = gcv_conj(a, gcv_nth(vs_get(vst, base + 1), 2), [vs_get(vst, base + 1)])
             else if (ix%ival >= 0 .and. ix%ival < int(gcv_count(a), gc_ip)) then
                out = gcv_assoc(a, int(ix%ival), &
                     gcv_nth(vs_get(vst, base + 1), 2), [vs_get(vst, base + 1)])
             else
-               call raise_class("IndexOutOfBoundsException", "index out of bounds", [vs_get(vst, base + 1)])
+               call raise_class("clotran.host.index_out_of_bounds_exception", "index out of bounds", [vs_get(vst, base + 1)])
             end if
           end block
        else
@@ -8319,8 +8413,8 @@ contains
                if (.not. (gcv_is(e) .and. is_map_entry(e))) then
                   block
                     call class_name_of(e, s=dlt_1)
-                    call raise_class("ClassCastException", "class " // dlt_1 // &
-                         " cannot be cast to class java.util.Map$Entry", [vs_get(vst, base + 1)])
+                    call raise_class("clotran.host.class_cast_exception", "class " // dlt_1 // &
+                         " cannot be cast to class clotran.host.map_entry", [vs_get(vst, base + 1)])
                   end block
                   exit
                end if
@@ -8600,7 +8694,7 @@ contains
              ! a reify implements IObj; a deftype instance does not
              call gcp_str(gc_slot(gc_slot(a, 1), 1), .false., s=dlt_1)
              if (index(dlt_1, "clotran.reify__") /= 1) then
-                call raise_class("ClassCastException", "class " // dlt_1 // " cannot be cast to class clojure.lang.IObj", &
+                call raise_class("clotran.host.class_cast_exception", "class " // dlt_1 // " cannot be cast to class clotran.host.i_obj", &
                      [vs_get(vst, base + 1)])
                 call vs_leave(vst, base)
                 return
@@ -8641,7 +8735,7 @@ contains
           block
              call dec_of(b, s=dlt_1)
           if (dec_is_zero(dlt_1)) then
-             call raise_class("ArithmeticException", "Divide by zero", [vs_get(vst, base + 1)])
+             call raise_class("clotran.host.arithmetic_exception", "Divide by zero", [vs_get(vst, base + 1)])
           else if (id == B_QUOT) then
              block
                 call dec_of(a, s=dlt_2)
@@ -8670,7 +8764,7 @@ contains
             block
                call big_of(b, s=dlt_1)
             if (dlt_1 == "0") then
-               call raise_class("ArithmeticException", "Divide by zero", [vs_get(vst, base + 1)])
+               call raise_class("clotran.host.arithmetic_exception", "Divide by zero", [vs_get(vst, base + 1)])
             else
                block
                   call big_of(a, s=dlt_2)
@@ -8698,7 +8792,7 @@ contains
             an = gc_numerator(a); ad = gc_denominator(a)
             bn = gc_numerator(b); bd = gc_denominator(b)
             if (bn == 0) then
-               call raise_class("ArithmeticException", "Divide by zero", [gc_nil()])
+               call raise_class("clotran.host.arithmetic_exception", "Divide by zero", [gc_nil()])
             else
                qi = (an * bd) / (ad * bn)
                if (id == B_QUOT) then
@@ -8719,14 +8813,14 @@ contains
           end block
        else if (a%tag == GCT_REAL .or. b%tag == GCT_REAL) then
           if (num_dbl(b) == 0.0_gc_dp) then
-             call raise_class("ArithmeticException", "Divide by zero", [gc_nil()])
+             call raise_class("clotran.host.arithmetic_exception", "Divide by zero", [gc_nil()])
           else if (id == B_QUOT) then
              out = gc_real(aint(num_dbl(a) / num_dbl(b)))
           else
              out = gc_real(mod(num_dbl(a), num_dbl(b)))
           end if
        else if (b%ival == 0) then
-          call raise_class("ArithmeticException", "Divide by zero", [gc_nil()])
+          call raise_class("clotran.host.arithmetic_exception", "Divide by zero", [gc_nil()])
        else if (id == B_QUOT) then
           out = gc_int(a%ival / b%ival)
        else
@@ -8830,8 +8924,8 @@ contains
                   else
                      call class_name_of(q, s=dlt_1)
                   end if
-                  call raise_class("ClassCastException", "class " // dlt_1 // &
-                       " cannot be cast to class java.lang.String", [vs_get(vst, base + 1)])
+                  call raise_class("clotran.host.class_cast_exception", "class " // dlt_1 // &
+                       " cannot be cast to class clotran.host.string", [vs_get(vst, base + 1)])
                end block
                call vs_leave(vst, base)
                return
@@ -8883,7 +8977,7 @@ contains
          integer :: lo, hi
          a = gcv_nth(args, 0)
          if (a%tag == GCT_NIL) then
-            call raise_class("NullPointerException", "subs of nil", [vs_get(vst, base + 1)])
+            call raise_class("clotran.host.null_pointer_exception", "subs of nil", [vs_get(vst, base + 1)])
             call vs_leave(vst, base)
             return
          end if
@@ -8903,7 +8997,7 @@ contains
                call itoa(lo, s=dlt_1)
                call itoa(hi, s=dlt_2)
                call itoa(u8_count(t), s=dlt_3)
-               call raise_class("StringIndexOutOfBoundsException", &
+               call raise_class("clotran.host.string_index_out_of_bounds_exception", &
                     "Range [" // trim(dlt_1) // ", " // trim(dlt_2) // ") out of bounds for length " // trim(dlt_3), &
                     [vs_get(vst, base + 1)])
             end block
@@ -8966,7 +9060,7 @@ contains
        if (a%tag /= GCT_INT .or. (n >= 2 .and. b%tag /= GCT_INT)) then
           block
              call class_name_of(merge(b, a, a%tag == GCT_INT), s=dlt_1)
-             call raise_class("IllegalArgumentException", "bit operation not supported for: " //  dlt_1, [vs_get(vst, &
+             call raise_class("clotran.host.illegal_argument_exception", "bit operation not supported for: " //  dlt_1, [vs_get(vst, &
                   base + 1)])
           end block
           call vs_leave(vst, base)
@@ -9017,12 +9111,12 @@ contains
             ! and intCast of a DOUBLE -- throws IllegalArgumentException
             ! naming the value.
             if (id == B_CHKINT .and. a%tag /= GCT_REAL) then
-               call raise_class("ArithmeticException", "integer overflow", [vs_get(vst, base + 1)])
+               call raise_class("clotran.host.arithmetic_exception", "integer overflow", [vs_get(vst, base + 1)])
             else
                block
                   call cast_width_name(id, s=dlt_1)
                   call to_string_text(a, s=dlt_2)
-                  call raise_class("IllegalArgumentException", &
+                  call raise_class("clotran.host.illegal_argument_exception", &
                        "Value out of range for " // trim(dlt_1) // ": " // dlt_2,  [vs_get(vst, base + 1)])
                end block
             end if
@@ -9138,7 +9232,7 @@ contains
          else
             block
                call type_name(v, s=dlt_1)
-               call fail("Cannot cast " // dlt_1 // " to java.lang.Number")
+               call fail("Cannot cast " // dlt_1 // " to clotran.host.number")
             end block
          end if
        end block
@@ -9285,7 +9379,7 @@ contains
               else
                  block
                     call gcp_str(last, .true., s=dlt_1)
-                    call raise_class("IllegalArgumentException", "No value supplied for key: " //  dlt_1, [vs_get(vst, &
+                    call raise_class("clotran.host.illegal_argument_exception", "No value supplied for key: " //  dlt_1, [vs_get(vst, &
                          base + 1)])
                  end block
               end if
@@ -9379,7 +9473,7 @@ contains
          h = gcna_new(kname, ext, lows, err)
          if (len(err) > 9) then
             if (err(1:9) == "negative:") then
-               call raise_class("NegativeArraySizeException", err(10:), [vs_get(vst, base + 1)])
+               call raise_class("clotran.host.negative_array_size_exception", err(10:), [vs_get(vst, base + 1)])
                call vs_leave(vst, base)
                return
             end if
@@ -9417,7 +9511,7 @@ contains
          open(newunit=u, file=path, access="stream", form="unformatted", &
               status="replace", action="write", iostat=st)
          if (st /= 0) then
-            call fail_as("java.io.FileNotFoundException", path // " (cannot open for writing)", [vs_get(vst, base + 1)])
+            call fail_as("clotran.host.file_not_found_exception", path // " (cannot open for writing)", [vs_get(vst, base + 1)])
          else
             write(u) text
             close(u)
@@ -9446,7 +9540,7 @@ contains
             call sock_connect(host, int(int_of_number(gcv_nth(args, 1))), h, msg)
          end if
          if (h < 0) then
-            call fail_as("java.io.IOException", msg, [vs_get(vst, base + 1)])
+            call fail_as("clotran.host.io_exception", msg, [vs_get(vst, base + 1)])
          else
             out = gc_int(h)
          end if
@@ -9461,7 +9555,7 @@ contains
          if (c == SOCK_TIMEOUT) then
             out = gc_nil()
          else if (c < 0) then
-            call fail_as("java.io.IOException", msg, [vs_get(vst, base + 1)])
+            call fail_as("clotran.host.io_exception", msg, [vs_get(vst, base + 1)])
          else
             out = gc_int(c)
          end if
@@ -9479,7 +9573,7 @@ contains
          else if (n == SOCK_TIMEOUT) then
             out = gc_key("timeout", [vs_get(vst, base + 1)])
          else
-            call fail_as("java.io.IOException", msg, [vs_get(vst, base + 1)])
+            call fail_as("clotran.host.io_exception", msg, [vs_get(vst, base + 1)])
          end if
        end block
     case (B_SOCKWRITE)
@@ -9490,7 +9584,7 @@ contains
          call text_of(gcv_nth(args, 1), s=dlt_1)
          text = dlt_1
          call sock_write(int_of_number(gcv_nth(args, 0)), text, ok, msg)
-         if (.not. ok) call fail_as("java.io.IOException", msg, [vs_get(vst, base + 1)])
+         if (.not. ok) call fail_as("clotran.host.io_exception", msg, [vs_get(vst, base + 1)])
        end block
     case (B_REALPATH)
        ! (clotran-real-path p): the file's one absolute name -- symbolic
@@ -9571,9 +9665,9 @@ contains
          end if
          if (ok) call gcna_int1_ptr(gc_i1(arr), p, ok)
          if (.not. ok) then
-            call raise_class("IllegalArgumentException", "not a byte array", [vs_get(vst, base + 1)])
+            call raise_class("clotran.host.illegal_argument_exception", "not a byte array", [vs_get(vst, base + 1)])
          else if (off < 0 .or. ln < 0 .or. off + ln > size(p)) then
-            call raise_class("IndexOutOfBoundsException", "offset and length outside the array", [vs_get(vst, base + 1)])
+            call raise_class("clotran.host.index_out_of_bounds_exception", "offset and length outside the array", [vs_get(vst, base + 1)])
          else
             allocate(character(len=ln) :: text)
             do k = 1, ln
@@ -9605,9 +9699,9 @@ contains
          end if
          if (ok) call gcna_int1_ptr(gc_i1(arr), p, ok)
          if (.not. ok) then
-            call raise_class("IllegalArgumentException", "not a byte array", [vs_get(vst, base + 1)])
+            call raise_class("clotran.host.illegal_argument_exception", "not a byte array", [vs_get(vst, base + 1)])
          else if (off < 0 .or. ln < 0 .or. off + ln > size(p)) then
-            call raise_class("IndexOutOfBoundsException", "offset and length outside the array", [vs_get(vst, base + 1)])
+            call raise_class("clotran.host.index_out_of_bounds_exception", "offset and length outside the array", [vs_get(vst, base + 1)])
          else if (id == B_SOCKREADB) then
             call sock_read_bytes(int_of_number(gcv_nth(args, 0)), int(int_of_number(gcv_nth(args, 4))), &
                  p(off + 1:off + ln), n, msg)
@@ -9618,11 +9712,11 @@ contains
             else if (n == SOCK_TIMEOUT) then
                out = gc_key("timeout", [vs_get(vst, base + 1)])
             else
-               call fail_as("java.io.IOException", msg, [vs_get(vst, base + 1)])
+               call fail_as("clotran.host.io_exception", msg, [vs_get(vst, base + 1)])
             end if
          else
             call sock_write_bytes(int_of_number(gcv_nth(args, 0)), p(off + 1:off + ln), ok, msg)
-            if (.not. ok) call fail_as("java.io.IOException", msg, [vs_get(vst, base + 1)])
+            if (.not. ok) call fail_as("clotran.host.io_exception", msg, [vs_get(vst, base + 1)])
          end if
        end block
     case (B_SOCKCLOSE)
@@ -9648,7 +9742,7 @@ contains
          open(newunit=u, file=path, access="stream", form="unformatted", &
               status="old", action="read", iostat=st)
          if (st /= 0) then
-            call fail_as("java.io.FileNotFoundException", path // " (No such file or directory)", [vs_get(vst, base + 1)])
+            call fail_as("clotran.host.file_not_found_exception", path // " (No such file or directory)", [vs_get(vst, base + 1)])
          else
             inquire(unit=u, size=fsize)
             allocate(character(len=fsize) :: text)
@@ -9734,7 +9828,7 @@ contains
                block
                  character(len=16) :: cbuf
                  write(cbuf, '(I0)') n
-                 call raise_class("IllegalArgumentException", "No matching method aset found taking " // &
+                 call raise_class("clotran.host.illegal_argument_exception", "No matching method aset found taking " // &
                       trim(cbuf) // " args", [vs_get(vst, base + 1)])
                end block
             else
@@ -9775,7 +9869,7 @@ contains
               if (subs(k) < 0 .or. subs(k) >= ext(k)) then
                  write(bi, '(I0)') subs(k)
                  write(bn, '(I0)') ext(k)
-                 call raise_class("ArrayIndexOutOfBoundsException", "Index " // trim(bi) // &
+                 call raise_class("clotran.host.array_index_out_of_bounds_exception", "Index " // trim(bi) // &
                       " out of bounds for length " // trim(bn), [vs_get(vst, base + 1)])
                  call vs_leave(vst, base)
                  return
@@ -9829,8 +9923,8 @@ contains
             val = strip_meta(gcv_nth(args, n - 1))
             if (id == B_JASET .and. .not. aset_accepts(kn, val)) then
                ! Reflector finds no aset for this element type and value
-               call raise_class("IllegalArgumentException", "No matching method aset found taking 3 args " // &
-                    "for class clojure.lang.RT", [vs_get(vst, base + 1)])
+               call raise_class("clotran.host.illegal_argument_exception", "No matching method aset found taking 3 args " // &
+                    "for class clotran.host.rt", [vs_get(vst, base + 1)])
                call vs_leave(vst, base)
                return
             end if
@@ -9858,13 +9952,13 @@ contains
          else if (gc_kind(a0) == OBJ_LAZY .and. gc_i2(a0) /= 1) then
             out = gc_bool(gc_i1(a0) /= LAZY_PENDING)
          else if (a0%tag == GCT_NIL) then
-            call raise_class("NullPointerException", "", [vs_get(vst, base + 1)])
+            call raise_class("clotran.host.null_pointer_exception", "", [vs_get(vst, base + 1)])
          else if (gc_kind(a0) == OBJ_LAZY .or. a0%tag /= GCT_OBJ .or. gcv_is(a0) .or. gca_is(a0) &
               .or. gcl_is(a0) .or. gc_kind(a0) == OBJ_SET) then
             block
                call class_name_of(a0, s=dlt_1)
-               call raise_class("ClassCastException", "class " // dlt_1 // &
-                    " cannot be cast to class clojure.lang.IPending", [vs_get(vst, base + 1)])
+               call raise_class("clotran.host.class_cast_exception", "class " // dlt_1 // &
+                    " cannot be cast to class clotran.host.i_pending", [vs_get(vst, base + 1)])
             end block
          else
             out = gc_bool(.true.)
@@ -9896,7 +9990,7 @@ contains
             end block
             read(t, *, iostat=st) dv
             if (st /= 0) then
-               call fail_as("NumberFormatException", "valueOf: not a number: " // t, &
+               call fail_as("clotran.host.number_format_exception", "valueOf: not a number: " // t, &
                     [vs_get(vst, base + 1)])
             else
                out = gc_real(dv)
@@ -9964,11 +10058,11 @@ contains
          case ("floats");   want = "real4";   desc = "[F"
          case ("booleans"); want = "logical"; desc = "[Z"
          case ("chars");    want = "char2";   desc = "[C"
-         case default;      want = "value";   desc = "[Ljava.lang.Object;"
+         case default;      want = "value";   desc = "[Lclotran.host.value;"
          end select
          end block
          if (a%tag == GCT_NIL) then
-            call raise_class("NullPointerException", "Cannot use a null array", [vs_get(vst, base + 1)])
+            call raise_class("clotran.host.null_pointer_exception", "Cannot use a null array", [vs_get(vst, base + 1)])
          else if (gc_kind(a) == OBJ_ARRAY) then
             block
                call gcna_kind(gc_i1(a), s=dlt_1)
@@ -9986,16 +10080,16 @@ contains
                case ("char2");   have = "[C"
                case ("real4");   have = "[F"
                case ("logical"); have = "[Z"
-               case default;     have = "[Ljava.lang.Object;"
+               case default;     have = "[Lclotran.host.value;"
                end select
                if (gcna_rank(gc_i1(a)) > 1) have = repeat("[", gcna_rank(gc_i1(a)) - 1) // have
-               call raise_class("ClassCastException", "class " // have // " cannot be cast to class " // desc, &
+               call raise_class("clotran.host.class_cast_exception", "class " // have // " cannot be cast to class " // desc, &
                     [vs_get(vst, base + 1)])
             end if
          else
             block
                call class_name_of(a, s=dlt_1)
-               call raise_class("ClassCastException", "class " // dlt_1 //  " cannot be cast to class " // desc, &
+               call raise_class("clotran.host.class_cast_exception", "class " // dlt_1 //  " cannot be cast to class " // desc, &
                     [vs_get(vst, base + 1)])
             end block
          end if
@@ -10032,7 +10126,7 @@ contains
           else
              block
                 call gcp_str(a, .false., s=dlt_2)
-                call raise_class("IllegalArgumentException", "Value out of range for long: " //  dlt_2, [vs_get(vst, &
+                call raise_class("clotran.host.illegal_argument_exception", "Value out of range for long: " //  dlt_2, [vs_get(vst, &
                      base + 1)])
              end block
           end if
@@ -10048,7 +10142,7 @@ contains
             if (d < -9223372036854775808.0_gc_dp .or. d > 9223372036854775808.0_gc_dp) then
                block
                   call gcp_str(gc_real(d), .false., s=dlt_1)
-                  call raise_class("IllegalArgumentException", "Value out of range for long: " //  dlt_1, [vs_get(vst, &
+                  call raise_class("clotran.host.illegal_argument_exception", "Value out of range for long: " //  dlt_1, [vs_get(vst, &
                        base + 1)])
                end block
             else
@@ -10078,7 +10172,7 @@ contains
                .and. abs(num_dbl(a)) <= huge(1.0_gc_dp)) then
              block
                 call to_string_text(a, s=dlt_1)
-                call raise_class("IllegalArgumentException", "Value out of range for float: " // dlt_1, &
+                call raise_class("clotran.host.illegal_argument_exception", "Value out of range for float: " // dlt_1, &
                      [vs_get(vst, base + 1)])
              end block
              call vs_leave(vst, base)
@@ -10284,7 +10378,7 @@ contains
                call itoa(lo, s=dlt_1)
                call itoa(hi, s=dlt_2)
                call itoa(u8_count(t), s=dlt_3)
-               call raise_class("StringIndexOutOfBoundsException", &
+               call raise_class("clotran.host.string_index_out_of_bounds_exception", &
                     "Range [" // trim(dlt_1) // ", " // trim(dlt_2) // ") out of bounds for length " // trim(dlt_3), &
                     [vs_get(vst, base + 1)])
             end block
@@ -10571,12 +10665,12 @@ contains
             else
                block
                   call text_of(bv, s=dlt_2)
-                  call raise_class("NumberFormatException", "For input string: " // dlt_2, [vs_get(vst, base + 1)])
+                  call raise_class("clotran.host.number_format_exception", "For input string: " // dlt_2, [vs_get(vst, base + 1)])
                end block
             end if
             end block
          case default
-            call raise_class("IllegalArgumentException", "cannot convert to a BigInt", [vs_get(vst, base + 1)])
+            call raise_class("clotran.host.illegal_argument_exception", "cannot convert to a BigInt", [vs_get(vst, base + 1)])
          end select
        end block
     case (B_TODEC)
@@ -10623,11 +10717,11 @@ contains
             else
                block
                   call to_string_text(dv2, s=dlt_1)
-                  call raise_class("NumberFormatException",  "not a decimal: " // dlt_1, [vs_get(vst, base + 1)])
+                  call raise_class("clotran.host.number_format_exception",  "not a decimal: " // dlt_1, [vs_get(vst, base + 1)])
                end block
             end if
          case default
-            call raise_class("IllegalArgumentException", "cannot convert to a BigDecimal", [vs_get(vst, base + 1)])
+            call raise_class("clotran.host.illegal_argument_exception", "cannot convert to a BigDecimal", [vs_get(vst, base + 1)])
          end select
        end block
     case (B_GCTORTURE)
@@ -10853,8 +10947,8 @@ contains
           block
             character(len=16) :: cbuf
             write(cbuf, '(I0)') n
-            call raise_class("IllegalArgumentException", "No matching method found taking " // &
-                 trim(cbuf) // " args for class java.lang.Long", [vs_get(vst, base + 1)])
+            call raise_class("clotran.host.illegal_argument_exception", "No matching method found taking " // &
+                 trim(cbuf) // " args for class clotran.host.int8", [vs_get(vst, base + 1)])
           end block
           call vs_leave(vst, base)
           return
@@ -10882,7 +10976,7 @@ contains
                     .and. scan(t, "0123456789") > 0) read(t, *, iostat=st) iv
             end if
             if (st /= 0) then
-               call fail_as("NumberFormatException", "valueOf: not a number: " // t, &
+               call fail_as("clotran.host.number_format_exception", "valueOf: not a number: " // t, &
                     [vs_get(vst, base + 1)])
             else
                out = gc_int(iv)
@@ -10892,7 +10986,7 @@ contains
          ! parameters are checked with (instance? Integer p)
          if (id == B_INTEGERVALUE .and. out%tag == GCT_INT) then
             if (allocated(t) .and. (out%ival < -2147483648_gc_ip .or. out%ival > 2147483647_gc_ip)) then
-               call fail_as("NumberFormatException", "For input string: """ // t // """", &
+               call fail_as("clotran.host.number_format_exception", "For input string: """ // t // """", &
                     [vs_get(vst, base + 1)])
             else
                out%ref = W_INT
@@ -10948,7 +11042,7 @@ contains
          if (dl_install(dlt_1,  int(int_of_number(strip_meta(gcv_nth(args, 1)))), lerr)) then
             out = gc_bool(.true.)
          else
-            call raise_class("RuntimeException", lerr, [vs_get(vst, base + 1)])
+            call raise_class("clotran.host.runtime_exception", lerr, [vs_get(vst, base + 1)])
          end if
          end block
        end block
@@ -11004,7 +11098,7 @@ contains
          open(newunit=u, file=path, access="stream", form="unformatted", &
               status="old", action="read", iostat=st)
          if (st /= 0) then
-            call fail_as("java.io.FileNotFoundException", path // " (No such file or directory)", [vs_get(vst, base + 1)])
+            call fail_as("clotran.host.file_not_found_exception", path // " (No such file or directory)", [vs_get(vst, base + 1)])
          else
             inquire(unit=u, size=fsize)
             allocate(character(len=fsize) :: text)
@@ -11228,14 +11322,14 @@ contains
              if (len(dlt_1) >= 2 .and. dlt_1(1:1) == "[") then
                 dlt_2 = dlt_1(2:)
                 select case (dlt_2)
-                case ("B"); out = gc_key("Byte/TYPE", [a])
-                case ("S"); out = gc_key("Short/TYPE", [a])
-                case ("C"); out = gc_key("Character/TYPE", [a])
-                case ("I"); out = gc_key("Integer/TYPE", [a])
-                case ("J"); out = gc_key("Long/TYPE", [a])
-                case ("F"); out = gc_key("Float/TYPE", [a])
-                case ("D"); out = gc_key("Double/TYPE", [a])
-                case ("Z"); out = gc_key("Boolean/TYPE", [a])
+                case ("B"); out = gc_key("int1", [a])
+                case ("S"); out = gc_key("int2", [a])
+                case ("C"); out = gc_key("char2", [a])
+                case ("I"); out = gc_key("int4", [a])
+                case ("J"); out = gc_key("int8", [a])
+                case ("F"); out = gc_key("real4", [a])
+                case ("D"); out = gc_key("real8", [a])
+                case ("Z"); out = gc_key("logical", [a])
                 case default
                    if (dlt_2(1:1) == "L") dlt_2 = dlt_2(2:len(dlt_2) - 1)
                    out = gc_class(dlt_2, [a])
@@ -11395,7 +11489,7 @@ contains
          el = strip_meta(gcv_nth(args, 0))
          if (el%tag == GCT_NIL .or. el%tag == GCT_STR .or. gc_kind(el) == OBJ_ARRAY .or. .not. seqable_quiet(el)) then
             call class_name_of(el, s=dlt_1)
-            call raise_class("ClassCastException", "class " // dlt_1 // " cannot be cast to class java.lang.Iterable", &
+            call raise_class("clotran.host.class_cast_exception", "class " // dlt_1 // " cannot be cast to class clotran.host.iterable", &
                  [vs_get(vst, base + 1)])
             call vs_leave(vst, base)
             return
@@ -11593,6 +11687,13 @@ contains
             end block
             if (len(cn) > 0) then
                if (cn(1:1) == "[") then
+                  ! [Ljava.lang.Object; is [Lclotran.host.value;
+                  block
+                    character(len=:), allocatable :: k
+                    logical :: ok
+                    call array_class_key(cn, k, ok)
+                    if (ok) cn = k
+                  end block
                   out = gc_class(cn, [vs_get(vst, base + 1)])
                   call vs_leave(vst, base)
                   return
@@ -11608,7 +11709,7 @@ contains
        block
          type(gc_value) :: exc
          exc = gc_obj(OBJ_ERR, &
-              [gc_sym("ClassNotFoundException", [vs_get(vst, base + 1)]), &
+              [gc_sym("clotran.host.class_not_found_exception", [vs_get(vst, base + 1)]), &
                gcv_nth(args, 0), gc_nil()], [vs_get(vst, base + 1)])
          call vs_set(vst, base + 2, exc)
          call set_thrown(vs_get(vst, base + 2))
@@ -11856,7 +11957,7 @@ contains
             if (ok_arr) then
                out = gc_class(dlt_1, [vs_get(vst, base + 1)])
             else if (len(dlt_1) > 0) then
-               call raise_class("ClassNotFoundException", dlt_1, &
+               call raise_class("clotran.host.class_not_found_exception", dlt_1, &
                     [vs_get(vst, base + 1)])
             else if (slash > 1 .and. slash < len(t)) then
                tgt = alias_in(vs_get(vst, base + 2), t(1:slash-1), [vs_get(vst, base + 1)])
@@ -11904,7 +12005,7 @@ contains
             if (id == B_PEEK) then
                if (cn > 0) out = gcv_nth(coll, cn - 1)
             else if (cn == 0) then
-               call raise_class("IllegalStateException", "Can't pop empty vector", [vs_get(vst, base + 1)])
+               call raise_class("clotran.host.illegal_state_exception", "Can't pop empty vector", [vs_get(vst, base + 1)])
             else
                acc = gcv_empty([vs_get(vst, base + 1)])
                call vs_set(vst, base + 2, acc)
@@ -11920,7 +12021,7 @@ contains
             ! seq, a set or a map is refused as on the JVM
             block
                call class_name_of(coll, s=dlt_1)
-               call raise_class("ClassCastException", dlt_1 //  " cannot be cast to clojure.lang.IPersistentStack", &
+               call raise_class("clotran.host.class_cast_exception", dlt_1 //  " cannot be cast to clotran.host.i_persistent_stack", &
                     [vs_get(vst, base + 1)])
             end block
          else if (coll%tag /= GCT_NIL) then
@@ -11929,7 +12030,7 @@ contains
             else
                acc = to_seq(coll, [vs_get(vst, base + 1)])
                if (acc%tag == GCT_NIL) then
-                  call raise_class("IllegalStateException", "Can't pop empty list", [vs_get(vst, base + 1)])
+                  call raise_class("clotran.host.illegal_state_exception", "Can't pop empty list", [vs_get(vst, base + 1)])
                else
                   out = sq_rest(coll, [vs_get(vst, base + 1)])
                end if
@@ -11945,7 +12046,7 @@ contains
          a = strip_meta(gcv_nth(args, 0))
          if (a%tag == GCT_STR) then
             ! a String is not a Named
-            call raise_class("ClassCastException", "class java.lang.String cannot be cast to class clojure.lang.Named", &
+            call raise_class("clotran.host.class_cast_exception", "class clotran.host.string cannot be cast to class clotran.host.named", &
                  [vs_get(vst, base + 1)])
          else if (named_or_throw(a, [vs_get(vst, base + 1)])) then
             ! a symbol or a keyword: the part before the first slash
@@ -12026,7 +12127,7 @@ contains
        if (gc_kind(strip_meta(a)) == OBJ_ATOM .and. id == B_SETVAL) then
           if (gc_i1(strip_meta(a)) == 1) then
              if (tctx%tx_depth == 0) then
-                call raise_class("IllegalStateException", "No transaction running", [vs_get(vst, base + 1)])
+                call raise_class("clotran.host.illegal_state_exception", "No transaction running", [vs_get(vst, base + 1)])
              else
                 call tx_log(strip_meta(a), out)
              end if
@@ -12133,7 +12234,7 @@ contains
          if (gc_kind(strip_meta(ref)) == OBJ_ATOM) then
             if (gc_i1(strip_meta(ref)) == 1) then
                if (tctx%tx_depth == 0) then
-                  call raise_class("IllegalStateException", "No transaction running", [vs_get(vst, base + 1)])
+                  call raise_class("clotran.host.illegal_state_exception", "No transaction running", [vs_get(vst, base + 1)])
                   call vs_leave(vst, base)
                   return
                end if
@@ -12224,8 +12325,8 @@ contains
           ! a Symbol or it throws: a string made a namespace of it
           block
              call class_name_of(a, s=dlt_1)
-             call raise_class("ClassCastException", "class " // dlt_1 // &
-                  " cannot be cast to class clojure.lang.Symbol", [vs_get(vst, base + 1)])
+             call raise_class("clotran.host.class_cast_exception", "class " // dlt_1 // &
+                  " cannot be cast to class clotran.host.symbol", [vs_get(vst, base + 1)])
           end block
        else
           call gc_ref_text(a%ref, s=dlt_1)
@@ -12237,7 +12338,7 @@ contains
        out = gc_nil()
        if (a%tag == GCT_SYM) then
           if (gc_ref_is(a%ref, "clojure.core")) then
-             call raise_class("IllegalArgumentException", "Cannot remove clojure namespace", [vs_get(vst, base + 1)])
+             call raise_class("clotran.host.illegal_argument_exception", "Cannot remove clojure namespace", [vs_get(vst, base + 1)])
           else
              block
                 call gc_ref_text(a%ref, s=dlt_1)
@@ -12460,7 +12561,7 @@ contains
          if (rel == "clojure/core_proxy") rel = "clotran/core_proxy"
          ! clojure.java.io: text files over clotran-slurp and clotran-spit,
          ! which core.clj's slurp and spit are written against
-         if (rel == "clojure/java/io") rel = "clotran/java_io"
+         if (rel == "clojure/java/io") rel = "clotran/files"
          ! each value on the stack before the next allocation: the path's
          ! gc_str inside the conj's arguments could collect the fresh empty
          ! vector, which only a Fortran local held (found by torture with
@@ -12475,11 +12576,11 @@ contains
                ! RT.load's own words, and its class: a missing library is
                ! a FileNotFoundException, not a failure to open a path
                if (index(rel, "_") > 0) then
-                  call fail_as("java.io.FileNotFoundException", "Could not locate " // rel // "__init.class, " // rel // &
+                  call fail_as("clotran.host.file_not_found_exception", "Could not locate " // rel // "__init.class, " // rel // &
                        ".clj or " // rel // ".cljc on classpath. Please check that namespaces with dashes use " // &
                        "underscores in the Clojure file name.", [vs_get(vst, base + 1)])
                else
-                  call fail_as("java.io.FileNotFoundException", "Could not locate " // rel // "__init.class, " // rel // &
+                  call fail_as("clotran.host.file_not_found_exception", "Could not locate " // rel // "__init.class, " // rel // &
                        ".clj or " // rel // ".cljc on classpath.", [vs_get(vst, base + 1)])
                end if
                call vs_leave(vst, base)
@@ -12934,7 +13035,7 @@ contains
        out = gc_nil()
        if (gc_kind(a) == OBJ_ATOM) then
           if (tag_of(gc_slot(a, 5)) == GCT_NIL) then
-             call raise_class("RuntimeException", "Agent does not need a restart", [vs_get(vst, base + 1)])
+             call raise_class("clotran.host.runtime_exception", "Agent does not need a restart", [vs_get(vst, base + 1)])
           else if (n >= 2 .and. .not. validate_ref(a, ref_fn_get(a, "validator", [vs_get(vst, base + 1)]), &
                gcv_nth(args, 1), [vs_get(vst, base + 1)])) then
              continue   ! the validator's refusal stands and the agent stays failed
@@ -12963,7 +13064,7 @@ contains
          if (gc_kind(ag) /= OBJ_ATOM) then
             call fail("dispatch: not an agent")
          else if (prior%tag /= GCT_NIL) then
-            call raise_class("RuntimeException", &
+            call raise_class("clotran.host.runtime_exception", &
                  "Agent is failed, needs restart", [vs_get(vst, base + 1)])
          else
             call vs_set(vst, base + 2, ag)
@@ -13330,7 +13431,7 @@ contains
          pv = strip_meta(gcv_nth(args, 0))
          sv = strip_meta(gcv_nth(args, 1))
          if (sv%tag == GCT_NIL) then
-            call raise_class("NullPointerException", "split of nil", [vs_get(vst, base + 1)])
+            call raise_class("clotran.host.null_pointer_exception", "split of nil", [vs_get(vst, base + 1)])
             call vs_leave(vst, base)
             return
          end if
@@ -13623,7 +13724,7 @@ contains
             block
                call dec_of(b, s=dlt_1)
             if (dec_is_zero(dlt_1)) then
-               call raise_class("ArithmeticException", "Divide by zero", [vs_get(vst, base + 1)])
+               call raise_class("clotran.host.arithmetic_exception", "Divide by zero", [vs_get(vst, base + 1)])
             else
                ! With a precision the quotient is rounded to it; with
                ! none it is exact or it throws, which is what Java does
@@ -13645,9 +13746,9 @@ contains
                if (dok) then
                   out = gc_dec(dq, [vs_get(vst, base + 1)])
                else if (mcp > 0) then
-                  call raise_class("ArithmeticException", "Rounding necessary", [vs_get(vst, base + 1)])
+                  call raise_class("clotran.host.arithmetic_exception", "Rounding necessary", [vs_get(vst, base + 1)])
                else
-                  call raise_class("ArithmeticException", &
+                  call raise_class("clotran.host.arithmetic_exception", &
                        "Non-terminating decimal expansion; no exact representable decimal result.", &
                        [vs_get(vst, base + 1)])
                end if
@@ -13668,7 +13769,7 @@ contains
             block
                call big_of(b, s=dlt_1)
             if (dlt_1 == "0") then
-               call raise_class("ArithmeticException", "Divide by zero", [vs_get(vst, base + 1)])
+               call raise_class("clotran.host.arithmetic_exception", "Divide by zero", [vs_get(vst, base + 1)])
             else
                block
                   call big_of(a, s=dlt_2)
@@ -13684,7 +13785,7 @@ contains
                      if (big_fits_i64(dlt_2) .and. big_fits_i64(dlt_3)) then
                         out = gc_ratio(big_to_i64(dlt_2), big_to_i64(dlt_3))
                      else
-                        call raise_class("ArithmeticException", &
+                        call raise_class("clotran.host.arithmetic_exception", &
                              "a Ratio of BigInts is not supported (DEVIATIONS 26)", [vs_get(vst, base + 1)])
                      end if
                   end block
@@ -13703,7 +13804,7 @@ contains
           ! raises. Verified against clj.
           out = gc_real(num_dbl(a) / num_dbl(b))
        else if (gc_numerator(b) == 0) then
-          call raise_class("ArithmeticException", "Divide by zero", [gc_nil()])
+          call raise_class("clotran.host.arithmetic_exception", "Divide by zero", [gc_nil()])
        else
           out = gc_ratio(gc_numerator(a) * gc_denominator(b), &
                          gc_denominator(a) * gc_numerator(b))
@@ -13779,7 +13880,7 @@ contains
        if (a%tag == GCT_INT .and. checked) then
           if ((op == B_INC .and. a%ival == huge(a%ival)) .or. &
                (op == B_DEC .and. a%ival == -huge(a%ival) - 1_gc_ip)) then
-             call raise_class("ArithmeticException", "long overflow", [vs_get(vst, base + 1)])
+             call raise_class("clotran.host.arithmetic_exception", "long overflow", [vs_get(vst, base + 1)])
              call vs_leave(vst, base)
              return
           end if
@@ -13818,7 +13919,7 @@ contains
             block
                call type_name(strip_meta(gcv_nth(args, 0)), s=dlt_1)
                call type_name(strip_meta(gcv_nth(args, 1)), s=dlt_2)
-               call raise_class("ClassCastException", "compare: cannot compare " //  dlt_1 // " with " //  dlt_2, &
+               call raise_class("clotran.host.class_cast_exception", "compare: cannot compare " //  dlt_1 // " with " //  dlt_2, &
                     [vs_get(vst, base + 1)])
             end block
          end if
@@ -14510,7 +14611,7 @@ contains
          .or. gc_kind(coll) == OBJ_INST
     if (ok) return
     call class_name_of(coll, s=cn)
-    call raise_class("IllegalArgumentException", "contains? not supported on type: " // cn, roots)
+    call raise_class("clotran.host.illegal_argument_exception", "contains? not supported on type: " // cn, roots)
   end function contains_supported
 
   ! A ClassCastException for asking something unsorted a sorted
@@ -14520,7 +14621,7 @@ contains
     type(gc_value), intent(in) :: roots(:)
     character(len=:), allocatable :: cn
     call class_name_of(v, s=cn)
-    call raise_class("ClassCastException", "class " // cn // " cannot be cast to class clojure.lang.Sorted", roots)
+    call raise_class("clotran.host.class_cast_exception", "class " // cn // " cannot be cast to class clotran.host.sorted", roots)
   end subroutine not_sorted
 
   ! IllegalArgumentException for keyvals of odd count, naming the last
@@ -14530,7 +14631,7 @@ contains
     type(gc_value), intent(in) :: roots(:)
     character(len=:), allocatable :: kt
     call to_string_text(gcv_nth(items, gcv_count(items) - 1), s=kt)
-    call raise_class("IllegalArgumentException", "No value supplied for key: " // kt, roots)
+    call raise_class("clotran.host.illegal_argument_exception", "No value supplied for key: " // kt, roots)
   end subroutine no_value_for_key
 
   ! Whether v can answer `name`: a symbol, a keyword, or a string (which
@@ -14544,10 +14645,10 @@ contains
     ok = (v%tag == GCT_SYM .or. v%tag == GCT_KEY .or. v%tag == GCT_STR)
     if (ok) return
     if (v%tag == GCT_NIL) then
-       call raise_class("NullPointerException", "", roots)
+       call raise_class("clotran.host.null_pointer_exception", "", roots)
     else
        call class_name_of(v, s=cn)
-       call raise_class("ClassCastException", "class " // cn // " cannot be cast to class clojure.lang.Named", roots)
+       call raise_class("clotran.host.class_cast_exception", "class " // cn // " cannot be cast to class clotran.host.named", roots)
     end if
   end function named_or_throw
 
@@ -15615,7 +15716,7 @@ contains
     if (gc_kind(fn) == OBJ_ATOM) then
        if (gc_i1(fn) == 4) then
           call gcp_str(gc_slot(fn, 1), .true., s=t)
-          call raise_class("IllegalStateException", "Attempting to call unbound fn: " // t, [fn])
+          call raise_class("clotran.host.illegal_state_exception", "Attempting to call unbound fn: " // t, [fn])
           return
        end if
     end if
@@ -15826,7 +15927,7 @@ contains
     is_lazy_seq_class = .false.
     if (gc_kind(strip_meta(v)) /= OBJ_LAZY) return
     call class_name_of(v, s=c)
-    is_lazy_seq_class = (c == "clojure.lang.LazySeq")
+    is_lazy_seq_class = (c == "clotran.host.lazy_seq")
   end function is_lazy_seq_class
 
   subroutine to_string_text(v, s)
@@ -15860,7 +15961,7 @@ contains
          write(hb, '(Z0)') iand(int(gc_hash(v), gc_ip), 4294967295_gc_ip)
          dlt_1 = trim(hb)
          call downcase_in_place(dlt_1)
-         s = "clojure.lang.LazySeq@" // dlt_1
+         s = "clotran.host.lazy_seq@" // dlt_1
        end block
     else if (sequential_p(v) .or. gca_is(strip_meta(v)) .or. gc_kind(strip_meta(v)) == OBJ_SET) then
        ! a collection's toString is its READABLE form -- RT.printString
@@ -15904,14 +16005,16 @@ contains
        t = dlt_1
     end block
     select case (t)
-    case ("Integer/TYPE", "int");      kind = "int4"
-    case ("Long/TYPE", "long");        kind = "int8"
-    case ("Double/TYPE", "double");    kind = "real8"
-    case ("Float/TYPE", "float");      kind = "real4"
-    case ("Boolean/TYPE", "boolean");  kind = "logical"
-    case ("Short/TYPE", "short");      kind = "int2"
-    case ("Byte/TYPE", "byte");        kind = "int1"
-    case ("Character/TYPE", "char");   kind = "char2"
+    ! a primitive's value is its kind (host_value, HK_TYPE); int, long and
+    ! the rest are the names Clojure's array functions pass
+    case ("int4", "int");        kind = "int4"
+    case ("int8", "long");       kind = "int8"
+    case ("real8", "double");    kind = "real8"
+    case ("real4", "float");     kind = "real4"
+    case ("logical", "boolean"); kind = "logical"
+    case ("int2", "short");      kind = "int2"
+    case ("int1", "byte");       kind = "int1"
+    case ("char2", "char");      kind = "char2"
     end select
   end subroutine array_kind_for
 
@@ -16025,9 +16128,10 @@ contains
     end if
   end function array_own_stride
 
-  ! An array's class, as the JVM names it: [D a double[], [J a long[],
-  ! [[I an int[][] -- one [ per dimension -- and [Ljava.lang.Object; an
-  ! Object[]; [B, [S and [C the byte, short and char arrays.
+  ! An array's class, in the JVM's descriptor form: [D a double[], [J a
+  ! long[], [[I an int[][] -- one [ per dimension -- and
+  ! [Lclotran.host.value; an array of values; [B, [S and [C the byte,
+  ! short and char arrays. The component is clotran's name for the class.
   subroutine array_class_name(v, s)
     type(gc_value), intent(in) :: v
     character(len=:), allocatable, intent(out) :: s
@@ -16047,7 +16151,7 @@ contains
     case ("char2");   comp = "C"
     case ("real4");   comp = "F"
     case ("logical"); comp = "Z"
-    case default;     comp = "Ljava.lang.Object;"
+    case default;     comp = "Lclotran.host.value;"
     end select
     s = repeat("[", max(1, array_own_rank(v))) // comp
   end subroutine array_class_name
@@ -16427,7 +16531,7 @@ contains
        call gc_ref_text(bv%ref, s=dlt_1)
        b = dlt_1
     end block
-    yes = class_matches(a, b) .or. class_matches(b, a) .or. a == "Object" .or. a == "java.lang.Object"
+    yes = class_matches(a, b) .or. class_matches(b, a) .or. a == "clotran.host.value" .or. a == "clotran.host.value"
     if (yes) return
     i = 1
     do
@@ -16613,25 +16717,25 @@ contains
     character(len=*), intent(in) :: iface
     character(len=:), allocatable, intent(out) :: supers
     select case (iface)
-    case ("clojure.lang.IPersistentMap")
-       supers = " clojure.lang.Associative clojure.lang.Counted "
-    case ("clojure.lang.IPersistentVector")
-       supers = " clojure.lang.Associative clojure.lang.Sequential clojure.lang.IPersistentStack" // &
-            " clojure.lang.Reversible clojure.lang.Indexed "
-    case ("clojure.lang.IPersistentSet")
-       supers = " clojure.lang.IPersistentCollection clojure.lang.Counted "
-    case ("clojure.lang.IPersistentList")
-       supers = " clojure.lang.Sequential clojure.lang.IPersistentStack "
-    case ("clojure.lang.ISeq", "clojure.lang.IPersistentStack")
-       supers = " clojure.lang.IPersistentCollection "
-    case ("clojure.lang.Associative")
-       supers = " clojure.lang.IPersistentCollection clojure.lang.ILookup "
-    case ("clojure.lang.Indexed")
-       supers = " clojure.lang.Counted "
-    case ("clojure.lang.IPersistentCollection")
-       supers = " clojure.lang.Seqable "
-    case ("clojure.lang.IObj")
-       supers = " clojure.lang.IMeta "
+    case ("clotran.host.i_persistent_map")
+       supers = " clotran.host.associative clotran.host.counted "
+    case ("clotran.host.i_persistent_vector")
+       supers = " clotran.host.associative clotran.host.sequential clotran.host.i_persistent_stack" // &
+            " clotran.host.reversible clotran.host.indexed "
+    case ("clotran.host.i_persistent_set")
+       supers = " clotran.host.i_persistent_collection clotran.host.counted "
+    case ("clotran.host.i_persistent_list")
+       supers = " clotran.host.sequential clotran.host.i_persistent_stack "
+    case ("clotran.host.i_seq", "clotran.host.i_persistent_stack")
+       supers = " clotran.host.i_persistent_collection "
+    case ("clotran.host.associative")
+       supers = " clotran.host.i_persistent_collection clotran.host.i_lookup "
+    case ("clotran.host.indexed")
+       supers = " clotran.host.counted "
+    case ("clotran.host.i_persistent_collection")
+       supers = " clotran.host.seqable "
+    case ("clotran.host.i_obj")
+       supers = " clotran.host.i_meta "
     case default
        supers = ""
     end select
@@ -16913,7 +17017,7 @@ contains
        if (j /= ncall) then
           write(cbuf1, '(I0)') j
           write(cbuf2, '(I0)') ncall
-          call raise_class("ArityException", "Wrong number of args (" // trim(cbuf2) // ") passed to: " // rname // &
+          call raise_class("clotran.host.arity_exception", "Wrong number of args (" // trim(cbuf2) // ") passed to: " // rname // &
                ", which takes " // trim(cbuf1), [roots, vs_get(vst, base + 1)])
           exit once
        end if
@@ -16932,7 +17036,7 @@ contains
              case ("real8")
                 if (it(i) /= "out") then
                    if (.not. is_number(tv)) then
-                      call raise_class("ClassCastException", sym // ": argument " // trim(cbuf_of(i)) // " is not a number", [roots])
+                      call raise_class("clotran.host.class_cast_exception", sym // ": argument " // trim(cbuf_of(i)) // " is not a number", [roots])
                       exit once
                    end if
                    tr(i) = real(num_dbl(tv), c_double)
@@ -17129,19 +17233,19 @@ contains
     ! place and answered from the value's kind; a deftype or reify
     ! instance takes the road below, which knows what it implements.
     if (gc_kind(strip_meta(v)) /= OBJ_INST) then
-       if (gc_ref_is(cls%ref, "clojure.lang.IChunkedSeq")) then
+       if (gc_ref_is(cls%ref, "clotran.host.i_chunked_seq")) then
           yes = is_chunked_seq(strip_meta(v))
           return
-       else if (gc_ref_is(cls%ref, "clojure.lang.ISeq")) then
+       else if (gc_ref_is(cls%ref, "clotran.host.i_seq")) then
           select case (gc_kind(strip_meta(v)))
           case (OBJ_CONS, OBJ_LAZY, OBJ_SEQ, OBJ_CHUNKSEQ)
              yes = .true.
           end select
           return
-       else if (gc_ref_is(cls%ref, "clojure.lang.Reduced")) then
+       else if (gc_ref_is(cls%ref, "clotran.host.reduced")) then
           yes = is_reduced(v)
           return
-       else if (gc_ref_is(cls%ref, "clojure.lang.Fn")) then
+       else if (gc_ref_is(cls%ref, "clotran.host.fn")) then
           ! fn?, which trampoline asks at every bounce
           select case (gc_kind(strip_meta(v)))
           case (OBJ_CLOSURE, OBJ_BUILTIN, OBJ_COMPILED)
@@ -17157,38 +17261,38 @@ contains
          integer :: tg
          sv = strip_meta(v)
          tg = sv%tag
-         if (gc_ref_is(cls%ref, "java.lang.Long") .or. gc_ref_is(cls%ref, "Long")) then
+         if (gc_ref_is(cls%ref, "clotran.host.int8") .or. gc_ref_is(cls%ref, "clotran.host.int8")) then
             yes = tg == GCT_INT .and. value_width(v) == W_LONG
             return
-         else if (gc_ref_is(cls%ref, "java.lang.Integer") .or. gc_ref_is(cls%ref, "Integer")) then
+         else if (gc_ref_is(cls%ref, "clotran.host.int4") .or. gc_ref_is(cls%ref, "clotran.host.int4")) then
             yes = tg == GCT_INT .and. value_width(v) == W_INT
             return
-         else if (gc_ref_is(cls%ref, "java.lang.Short") .or. gc_ref_is(cls%ref, "Short")) then
+         else if (gc_ref_is(cls%ref, "clotran.host.int2") .or. gc_ref_is(cls%ref, "clotran.host.int2")) then
             yes = tg == GCT_INT .and. value_width(v) == W_SHORT
             return
-         else if (gc_ref_is(cls%ref, "java.lang.Byte") .or. gc_ref_is(cls%ref, "Byte")) then
+         else if (gc_ref_is(cls%ref, "clotran.host.int1") .or. gc_ref_is(cls%ref, "clotran.host.int1")) then
             yes = tg == GCT_INT .and. value_width(v) == W_BYTE
             return
-         else if (gc_ref_is(cls%ref, "clojure.lang.BigInt") .or. gc_ref_is(cls%ref, "java.math.BigInteger") &
-              .or. gc_ref_is(cls%ref, "BigInt") .or. gc_ref_is(cls%ref, "BigInteger")) then
+         else if (gc_ref_is(cls%ref, "clotran.host.bigint") .or. gc_ref_is(cls%ref, "clotran.host.bigint") &
+              .or. gc_ref_is(cls%ref, "clotran.host.bigint") .or. gc_ref_is(cls%ref, "clotran.host.bigint")) then
             yes = tg == GCT_BIG
             return
-         else if (gc_ref_is(cls%ref, "java.lang.String") .or. gc_ref_is(cls%ref, "String")) then
+         else if (gc_ref_is(cls%ref, "clotran.host.string") .or. gc_ref_is(cls%ref, "clotran.host.string")) then
             yes = tg == GCT_STR
             return
-         else if (gc_ref_is(cls%ref, "java.lang.Number") .or. gc_ref_is(cls%ref, "Number")) then
+         else if (gc_ref_is(cls%ref, "clotran.host.number") .or. gc_ref_is(cls%ref, "clotran.host.number")) then
             yes = tg == GCT_INT .or. tg == GCT_REAL .or. tg == GCT_RATIO .or. tg == GCT_BIG .or. tg == GCT_DEC
             return
-         else if (gc_ref_is(cls%ref, "java.lang.Double") .or. gc_ref_is(cls%ref, "Double")) then
+         else if (gc_ref_is(cls%ref, "clotran.host.real8") .or. gc_ref_is(cls%ref, "clotran.host.real8")) then
             yes = tg == GCT_REAL .and. value_width(v) /= W_FLOAT
             return
-         else if (gc_ref_is(cls%ref, "java.lang.Character") .or. gc_ref_is(cls%ref, "Character")) then
+         else if (gc_ref_is(cls%ref, "clotran.host.char") .or. gc_ref_is(cls%ref, "clotran.host.char")) then
             yes = tg == GCT_CHAR
             return
-         else if (gc_ref_is(cls%ref, "clojure.lang.Keyword")) then
+         else if (gc_ref_is(cls%ref, "clotran.host.keyword")) then
             yes = tg == GCT_KEY
             return
-         else if (gc_ref_is(cls%ref, "clojure.lang.Symbol")) then
+         else if (gc_ref_is(cls%ref, "clotran.host.symbol")) then
             yes = tg == GCT_SYM
             return
          end if
@@ -17231,7 +17335,7 @@ contains
        return
     end if
     if (gc_kind(strip_meta(v)) == OBJ_INST) then
-       yes = class_matches(t, c) .or. (c == "Object") .or. &
+       yes = class_matches(t, c) .or. (c == "clotran.host.value") .or. &
             key_in_vector(gc_slot(gc_slot(strip_meta(v), 1), 4), c)
        if (.not. yes) yes = iface_in_vector(gc_slot(gc_slot(strip_meta(v), 1), 4), c)
        return
@@ -17241,19 +17345,19 @@ contains
     ! an instance of it
     case ("array")
        yes = (t == "array")
-    case ("Class", "java.lang.Class")
+    case ("clotran.host.class")
        yes = (t == "class")
-    case ("clojure.lang.Symbol");   yes = (t == "symbol")
-    case ("clojure.lang.Keyword");  yes = (t == "keyword")
-    case ("clojure.lang.Var");      yes = (t == "var")
-    case ("clojure.lang.Namespace"); yes = (t == "ns")
+    case ("clotran.host.symbol");   yes = (t == "symbol")
+    case ("clotran.host.keyword");  yes = (t == "keyword")
+    case ("clotran.host.var");      yes = (t == "var")
+    case ("clotran.host.namespace"); yes = (t == "ns")
     ! ifn? is (instance? clojure.lang.IFn x): a set, a map, a vector, a
     ! keyword, a symbol and a Var all invoke; fn? is Fn, functions only.
-    case ("clojure.lang.IFn"); yes = (t == "fn" .or. t == "multifn" .or. t == "set" .or. t == "map" .or. &
+    case ("clotran.host.i_fn"); yes = (t == "fn" .or. t == "multifn" .or. t == "set" .or. t == "map" .or. &
          t == "vector" .or. t == "keyword" .or. t == "symbol" .or. t == "var")
-    case ("clojure.lang.Fn"); yes = (t == "fn")
-    case ("clojure.lang.MultiFn"); yes = (t == "multifn")
-    case ("clojure.lang.IDeref", "clojure.lang.IPending")
+    case ("clotran.host.fn"); yes = (t == "fn")
+    case ("clotran.host.multi_fn"); yes = (t == "multifn")
+    case ("clotran.host.i_deref", "clotran.host.i_pending")
        ! core.clj's deref is (if (instance? clojure.lang.IDeref ref)
        ! (.deref ref) (deref-future ref)), so a thing that derefs has
        ! to ANSWER to IDeref or it silently takes the future path --
@@ -17261,92 +17365,91 @@ contains
        yes = (t == "atom" .or. t == "delay" .or. t == "var" .or. t == "volatile")
        ! Reduced implements IDeref: @(reduced x) is x, and reduce's
        ! Clojure-side loops unwrap through deref
-       if (c == "clojure.lang.IDeref" .and. .not. yes) yes = is_reduced(v)
-    case ("clojure.lang.Delay"); yes = (t == "delay")
-    case ("clojure.lang.Volatile"); yes = (t == "volatile")
+       if (c == "clotran.host.i_deref" .and. .not. yes) yes = is_reduced(v)
+    case ("clotran.host.delay"); yes = (t == "delay")
+    case ("clotran.host.volatile"); yes = (t == "volatile")
     ! The concrete classes `class` answers (class_name_of), so that
     ! (instance? (class x) x) holds and a condp on them can ask.
-    case ("clojure.lang.PersistentVector"); yes = (t == "vector")
-    case ("clojure.lang.IEditableCollection")
+    case ("clotran.host.persistent_vector"); yes = (t == "vector")
+    case ("clotran.host.i_editable_collection")
        ! a vector, a hash map or a hash set: what has a transient
        yes = (t == "vector") .or. (t == "map" .and. .not. is_sorted_coll(v)) .or. (t == "set" .and. .not. is_sorted_coll(v))
-    case ("clojure.lang.PersistentVector$TransientVector", "clojure.lang.ITransientVector", &
-         "clojure.lang.ITransientCollection", "clojure.lang.ITransientAssociative")
-       yes = (t == "transient-vector") .or. (t == "transient-map" .and. c /= "clojure.lang.ITransientVector" &
-            .and. c /= "clojure.lang.PersistentVector$TransientVector")
-    case ("clojure.lang.PersistentArrayMap", "clojure.lang.PersistentHashMap"); yes = (t == "map")
-    case ("clojure.lang.MapEquivalence"); yes = (t == "map")
-    case ("clojure.lang.PersistentHashSet"); yes = (t == "set")
-    case ("clojure.lang.PersistentTreeMap"); yes = (t == "map") .and. is_sorted_coll(v)
-    case ("clojure.lang.PersistentTreeSet"); yes = (t == "set") .and. is_sorted_coll(v)
-    case ("clojure.lang.PersistentList"); yes = (t == "list" .and. gc_i2(strip_meta(v)) /= 1)
-    case ("clojure.lang.LazySeq"); yes = (t == "lazy-seq" .and. gc_i2(strip_meta(v)) /= 1)
-    case ("clojure.lang.LongRange", "clojure.lang.Range"); yes = (t == "lazy-seq" .and. gc_i2(strip_meta(v)) == 1)
+    case ("clotran.host.persistent_vector_transient_vector", "clotran.host.i_transient_vector", &
+         "clotran.host.i_transient_collection", "clotran.host.i_transient_associative")
+       yes = (t == "transient-vector") .or. (t == "transient-map" .and. c /= "clotran.host.i_transient_vector" &
+            .and. c /= "clotran.host.persistent_vector_transient_vector")
+    case ("clotran.host.persistent_array_map", "clotran.host.persistent_hash_map"); yes = (t == "map")
+    case ("clotran.host.map_equivalence"); yes = (t == "map")
+    case ("clotran.host.persistent_hash_set"); yes = (t == "set")
+    case ("clotran.host.persistent_tree_map"); yes = (t == "map") .and. is_sorted_coll(v)
+    case ("clotran.host.persistent_tree_set"); yes = (t == "set") .and. is_sorted_coll(v)
+    case ("clotran.host.persistent_list"); yes = (t == "list" .and. gc_i2(strip_meta(v)) /= 1)
+    case ("clotran.host.lazy_seq"); yes = (t == "lazy-seq" .and. gc_i2(strip_meta(v)) /= 1)
+    case ("clotran.host.long_range", "clotran.host.range"); yes = (t == "lazy-seq" .and. gc_i2(strip_meta(v)) == 1)
     ! What reduce hands to a host .reduce rather than walking as a seq:
     ! the JVM's LongRange, PersistentVector and PersistentList do.
-    case ("clojure.lang.IReduceInit", "clojure.lang.IReduce")
+    case ("clotran.host.i_reduce_init", "clotran.host.i_reduce")
        yes = (t == "vector" .or. t == "list" .or. (t == "lazy-seq" .and. gc_i2(strip_meta(v)) == 1))
-    case ("clojure.lang.IChunkedSeq"); yes = is_chunked_seq(strip_meta(v))
-    case ("clojure.lang.IChunk", "clojure.lang.ArrayChunk"); yes = (gc_kind(strip_meta(v)) == OBJ_CHUNK)
-    case ("clojure.lang.ChunkBuffer"); yes = (gc_kind(strip_meta(v)) == OBJ_CHUNKBUF)
-    case ("clojure.lang.ChunkedCons"); yes = (gc_kind(strip_meta(v)) == OBJ_CHUNKSEQ)
-    case ("clojure.lang.PersistentVector$ChunkedSeq", "clojure.lang.Cons"); yes = (t == "seq")
-    case ("clojure.lang.Atom"); yes = (t == "atom" .and. gc_i1(strip_meta(v)) == 0)
-    case ("clojure.lang.Ref"); yes = (t == "atom" .and. gc_i1(strip_meta(v)) == 1)
-    case ("clojure.lang.Agent"); yes = (t == "atom" .and. gc_i1(strip_meta(v)) == 2)
-    case ("clojure.lang.AFunction", "clojure.lang.AFn"); yes = (t == "fn")
-    case ("StringBuilder", "java.lang.StringBuilder"); yes = (t == "string-builder")
-    case ("java.io.PrintWriter", "java.io.Writer"); yes = (t == "writer")
+    case ("clotran.host.i_chunked_seq"); yes = is_chunked_seq(strip_meta(v))
+    case ("clotran.host.i_chunk", "clotran.host.array_chunk"); yes = (gc_kind(strip_meta(v)) == OBJ_CHUNK)
+    case ("clotran.host.chunk_buffer"); yes = (gc_kind(strip_meta(v)) == OBJ_CHUNKBUF)
+    case ("clotran.host.chunked_cons"); yes = (gc_kind(strip_meta(v)) == OBJ_CHUNKSEQ)
+    case ("clotran.host.persistent_vector_chunked_seq", "clotran.host.cons"); yes = (t == "seq")
+    case ("clotran.host.atom"); yes = (t == "atom" .and. gc_i1(strip_meta(v)) == 0)
+    case ("clotran.host.ref"); yes = (t == "atom" .and. gc_i1(strip_meta(v)) == 1)
+    case ("clotran.host.agent"); yes = (t == "atom" .and. gc_i1(strip_meta(v)) == 2)
+    case ("clotran.host.a_function", "clotran.host.a_fn"); yes = (t == "fn")
+    case ("clotran.host.string_builder"); yes = (t == "string-builder")
+    case ("clotran.host.print_writer", "clotran.host.writer"); yes = (t == "writer")
     ! Everything but nil is an Object.
-    case ("Object", "java.lang.Object"); yes = (v%tag /= GCT_NIL)
+    case ("clotran.host.value"); yes = (v%tag /= GCT_NIL)
     ! Both spellings. clojure.string imports these -- (:import
     ! (java.util.regex Pattern Matcher)) -- and then writes the
     ! SHORT name, so (instance? Pattern re) has to answer the same
     ! as the qualified form. Without it clojure.string/replace
     ! fell through every branch of its cond and threw
     ! "Invalid match arg" on a perfectly good pattern.
-    case ("java.util.regex.Pattern", "Pattern"); yes = (t == "regex")
-    case ("java.util.regex.Matcher", "Matcher"); yes = (t == "matcher")
-    case ("clojure.lang.TaggedLiteral")
+    case ("clotran.host.pattern"); yes = (t == "regex")
+    case ("clotran.host.matcher"); yes = (t == "matcher")
+    case ("clotran.host.tagged_literal")
        ! the same marker-map trick as Reduced, just below
        yes = is_tagged_literal(v)
-    case ("java.util.UUID", "UUID")
+    case ("clotran.uuid.UUID")
        ! a UUID is its text here (DEVIATIONS 12), so uuid? asks
        ! whether the string has the shape of one
        yes = is_uuid_text(v)
-    case ("clojure.lang.Reduced")
+    case ("clotran.host.reduced")
        ! A Reduced is the one-key map (reduced x) builds, so instance?
        ! asks for the key. Without this reduce returned the WRAPPER
        ! instead of unwrapping it on an early exit.
        yes = is_reduced(v)
-    case ("Throwable", "java.lang.Throwable", "Exception", "java.lang.Exception", &
-          "Error", "IExceptionInfo", "clojure.lang.IExceptionInfo", &
-          "ExceptionInfo", "clojure.lang.ExceptionInfo")
+    case ("clotran.host.throwable", "clotran.host.exception", "clotran.host.error", &
+         "clotran.host.i_exception_info", "clotran.host.exception_info")
        yes = (t == "error")
-    case ("clojure.lang.ISeq");     yes = (t == "list" .or. t == "lazy-seq" .or. t == "seq")
-    case ("clojure.lang.IPersistentList"); yes = (t == "list" .and. gc_i2(strip_meta(v)) /= 1)
-    case ("clojure.lang.IPersistentVector"); yes = (t == "vector")
+    case ("clotran.host.i_seq");     yes = (t == "list" .or. t == "lazy-seq" .or. t == "seq")
+    case ("clotran.host.i_persistent_list"); yes = (t == "list" .and. gc_i2(strip_meta(v)) /= 1)
+    case ("clotran.host.i_persistent_vector"); yes = (t == "vector")
     ! a TransientVector is Indexed and Counted too (PersistentVector.java:670)
-    case ("clojure.lang.Indexed"); yes = (t == "vector" .or. t == "transient-vector")
-    case ("clojure.lang.IPersistentMap", "java.util.Map"); yes = (t == "map")
-    case ("clojure.lang.IPersistentSet"); yes = (t == "set")
-    case ("java.util.Map$Entry", "clojure.lang.IMapEntry", "clojure.lang.MapEntry"); yes = is_map_entry(v)
-    case ("clojure.lang.IKVReduce"); yes = (t == "vector" .or. t == "map")
-    case ("clojure.lang.Sorted"); yes = is_sorted_coll(v)
-    case ("clojure.lang.Reversible"); yes = (t == "vector") .or. is_sorted_coll(v)
-    case ("clojure.lang.Associative"); yes = (t == "map" .or. t == "vector")
+    case ("clotran.host.indexed"); yes = (t == "vector" .or. t == "transient-vector")
+    case ("clotran.host.i_persistent_map", "clotran.host.map"); yes = (t == "map")
+    case ("clotran.host.i_persistent_set"); yes = (t == "set")
+    case ("clotran.host.map_entry", "clotran.host.i_map_entry"); yes = is_map_entry(v)
+    case ("clotran.host.ikv_reduce"); yes = (t == "vector" .or. t == "map")
+    case ("clotran.host.sorted"); yes = is_sorted_coll(v)
+    case ("clotran.host.reversible"); yes = (t == "vector") .or. is_sorted_coll(v)
+    case ("clotran.host.associative"); yes = (t == "map" .or. t == "vector")
     ! A String is NOT Counted on the JVM: RT.count knows how to count
     ! one, but (counted? "ab") is false there, so bounded-count walks it.
-    case ("clojure.lang.Counted"); &
+    case ("clotran.host.counted"); &
          yes = (t == "list" .or. t == "vector" .or. t == "map" .or. t == "set" .or. &
                 t == "transient-vector" .or. t == "transient-map" .or. (t == "lazy-seq" .and. gc_i2(strip_meta(v)) == 1))
-    case ("clojure.lang.Sequential"); &
+    case ("clotran.host.sequential"); &
          yes = (t == "list" .or. t == "vector" .or. t == "lazy-seq" .or. t == "seq")
-    case ("clojure.lang.IPersistentCollection", "clojure.lang.Seqable"); &
+    case ("clotran.host.i_persistent_collection", "clotran.host.seqable"); &
          yes = (t == "list" .or. t == "vector" .or. t == "map" .or. &
                 t == "set" .or. t == "lazy-seq" .or. t == "seq")
-    case ("clojure.lang.Named"); yes = (t == "symbol" .or. t == "keyword")
-    case ("clojure.lang.IMeta")
+    case ("clotran.host.named"); yes = (t == "symbol" .or. t == "keyword")
+    case ("clotran.host.i_meta")
        ! IMeta is "can report its metadata", and a function can:
        ! core.clj:210 makes `meta` itself
        !   (if (instance? clojure.lang.IMeta x) (.meta x))
@@ -17360,7 +17463,7 @@ contains
               t == "seq" .or. t == "lazy-seq" .or. t == "ns" .or. t == "atom")
        ! and anything with-meta has wrapped can report what it was given
        if (gc_kind(v) == OBJ_META) yes = .true.
-    case ("clojure.lang.IObj")
+    case ("clotran.host.i_obj")
        ! NOT "fn", and that is a deviation with a reason. print-method's
        ! :default is
        !   (if (instance? IObj o) (print-method (vary-meta o ...) w)
@@ -17387,28 +17490,28 @@ contains
        ! it too.
        yes = (t == "symbol" .or. t == "list" .or. t == "vector" .or. &
               t == "map" .or. t == "set" .or. t == "var")
-    case ("String", "java.lang.String"); yes = (t == "string")
+    case ("clotran.host.string"); yes = (t == "string")
     ! A StringBuilder is a CharSequence but NOT a String, and
     ! clojure.string tells them apart: replace takes the CharSequence
     ! branch for a match or a replacement and calls the thing as a
     ! FUNCTION otherwise -- "not a function: a".
-    case ("CharSequence"); yes = (t == "string" .or. t == "string-builder")
-    case ("Character", "java.lang.Character"); yes = (t == "char")
-    case ("Boolean", "java.lang.Boolean"); yes = (t == "boolean")
+    case ("clotran.host.char_sequence"); yes = (t == "string" .or. t == "string-builder")
+    case ("clotran.host.char"); yes = (t == "char")
+    case ("clotran.host.logical"); yes = (t == "boolean")
     ! each integer class by the width the value boxes as (W_*)
-    case ("Long", "java.lang.Long"); yes = (t == "int" .and. value_width(v) == W_LONG)
-    case ("Integer", "java.lang.Integer"); yes = (t == "int" .and. value_width(v) == W_INT)
-    case ("Short", "java.lang.Short"); yes = (t == "int" .and. value_width(v) == W_SHORT)
-    case ("Byte", "java.lang.Byte"); yes = (t == "int" .and. value_width(v) == W_BYTE)
+    case ("clotran.host.int8"); yes = (t == "int" .and. value_width(v) == W_LONG)
+    case ("clotran.host.int4"); yes = (t == "int" .and. value_width(v) == W_INT)
+    case ("clotran.host.int2"); yes = (t == "int" .and. value_width(v) == W_SHORT)
+    case ("clotran.host.int1"); yes = (t == "int" .and. value_width(v) == W_BYTE)
     ! int? is Long/Integer/Short/Byte and answers FALSE for a BigInt;
     ! integer? asks for this one as well, so (integer? 1N) is true.
-    case ("clojure.lang.BigInt", "BigInt", "BigInteger", "java.math.BigInteger"); yes = (t == "bigint")
+    case ("clotran.host.bigint"); yes = (t == "bigint")
     ! decimal? is (instance? BigDecimal x), and nothing else answers it
-    case ("BigDecimal", "java.math.BigDecimal"); yes = (t == "bigdec")
-    case ("Double", "java.lang.Double"); yes = (t == "double" .and. value_width(v) /= W_FLOAT)
-    case ("Float", "java.lang.Float"); yes = (t == "double" .and. value_width(v) == W_FLOAT)
-    case ("Ratio", "clojure.lang.Ratio"); yes = (t == "ratio")
-    case ("Number", "java.lang.Number")
+    case ("clotran.host.decimal"); yes = (t == "bigdec")
+    case ("clotran.host.real8"); yes = (t == "double" .and. value_width(v) /= W_FLOAT)
+    case ("clotran.host.real4"); yes = (t == "double" .and. value_width(v) == W_FLOAT)
+    case ("clotran.host.ratio"); yes = (t == "ratio")
+    case ("clotran.host.number")
        ! A Ratio is a Number on the JVM too, so (number? 1/2) is true.
        yes = (t == "int" .or. t == "double" .or. t == "ratio" .or. t == "bigint" &
             .or. t == "bigdec")
@@ -17781,12 +17884,12 @@ contains
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1
     if (v%tag == GCT_NIL) then
-       call raise_class("NullPointerException", &
-            'Cannot invoke "java.lang.Number.doubleValue()" because "x" is null', roots)
+       call raise_class("clotran.host.null_pointer_exception", &
+            'Cannot invoke "clotran.host.number.doubleValue()" because "x" is null', roots)
     else
        block
           call class_name_of(v, s=dlt_1)
-          call raise_class("ClassCastException", "class " // dlt_1 //  " cannot be cast to class java.lang.Number", roots)
+          call raise_class("clotran.host.class_cast_exception", "class " // dlt_1 //  " cannot be cast to class clotran.host.number", roots)
        end block
     end if
   end subroutine raise_number_cast
@@ -17897,67 +18000,67 @@ contains
       ! declare, under its own names. The java.util ones (List,
       ! RandomAccess, Map, Set, Collection) were here for core_print.clj
       ! and data.clj, which clotran no longer runs verbatim (B_RTLOAD).
-      case ("clojure.lang.PersistentVector")
-         chain(1:4) = [character(len=36) :: "clojure.lang.IPersistentVector", &
-              "clojure.lang.IKVReduce", "clojure.lang.IPersistentCollection", &
-              "clojure.lang.IEditableCollection"]
+      case ("clotran.host.persistent_vector")
+         chain(1:4) = [character(len=36) :: "clotran.host.i_persistent_vector", &
+              "clotran.host.ikv_reduce", "clotran.host.i_persistent_collection", &
+              "clotran.host.i_editable_collection"]
          cnt = 4
-      case ("clojure.lang.PersistentArrayMap")
-         chain(1:2) = [character(len=36) :: "clojure.lang.IPersistentMap", "clojure.lang.IPersistentCollection"]
+      case ("clotran.host.persistent_array_map")
+         chain(1:2) = [character(len=36) :: "clotran.host.i_persistent_map", "clotran.host.i_persistent_collection"]
          cnt = 2
-      case ("clojure.lang.PersistentHashSet")
-         chain(1:2) = [character(len=36) :: "clojure.lang.IPersistentSet", "clojure.lang.IPersistentCollection"]
+      case ("clotran.host.persistent_hash_set")
+         chain(1:2) = [character(len=36) :: "clotran.host.i_persistent_set", "clotran.host.i_persistent_collection"]
          cnt = 2
-      case ("clojure.lang.PersistentTreeMap")
-         chain(1:4) = [character(len=36) :: "clojure.lang.Sorted", "clojure.lang.Reversible", &
-              "clojure.lang.IPersistentMap", "clojure.lang.IPersistentCollection"]
+      case ("clotran.host.persistent_tree_map")
+         chain(1:4) = [character(len=36) :: "clotran.host.sorted", "clotran.host.reversible", &
+              "clotran.host.i_persistent_map", "clotran.host.i_persistent_collection"]
          cnt = 4
-      case ("clojure.lang.PersistentTreeSet")
-         chain(1:4) = [character(len=36) :: "clojure.lang.Sorted", "clojure.lang.Reversible", &
-              "clojure.lang.IPersistentSet", "clojure.lang.IPersistentCollection"]
+      case ("clotran.host.persistent_tree_set")
+         chain(1:4) = [character(len=36) :: "clotran.host.sorted", "clotran.host.reversible", &
+              "clotran.host.i_persistent_set", "clotran.host.i_persistent_collection"]
          cnt = 4
-      case ("clojure.lang.PersistentList")
-         chain(1:3) = [character(len=36) :: "clojure.lang.IPersistentList", "clojure.lang.ISeq", &
-              "clojure.lang.IPersistentCollection"]
+      case ("clotran.host.persistent_list")
+         chain(1:3) = [character(len=36) :: "clotran.host.i_persistent_list", "clotran.host.i_seq", &
+              "clotran.host.i_persistent_collection"]
          cnt = 3
       ! PersistentVector$ChunkedSeq is the class EVERY seq view answers
       ! here (DEVIATIONS 34) -- a map's and a string's too, which are not
       ! chunked -- so it may not claim IChunkedSeq: InternalReduce's
       ! IChunkedSeq body recurs on a seq that is not chunked, and the
       ! dispatch sent it straight back, forever
-      case ("clojure.lang.LazySeq", "clojure.lang.Cons", "clojure.lang.PersistentVector$ChunkedSeq")
-         chain(1:2) = [character(len=36) :: "clojure.lang.ISeq", "clojure.lang.IPersistentCollection"]
+      case ("clotran.host.lazy_seq", "clotran.host.cons", "clotran.host.persistent_vector_chunked_seq")
+         chain(1:2) = [character(len=36) :: "clotran.host.i_seq", "clotran.host.i_persistent_collection"]
          cnt = 2
       ! THE CHUNKED ONES say so, as the JVM's do: InternalReduce is
       ! extended to IChunkedSeq, and without it a reduce over (map f
       ! (range n)) dispatched to Object and walked element by element --
       ! 40 interpreted steps an element where the chunk's own .reduce
       ! does the work
-      case ("clojure.lang.LongRange", "clojure.lang.Range", "clojure.lang.ChunkedCons")
-         chain(1:3) = [character(len=36) :: "clojure.lang.IChunkedSeq", "clojure.lang.ISeq", "clojure.lang.IPersistentCollection"]
+      case ("clotran.host.long_range", "clotran.host.range", "clotran.host.chunked_cons")
+         chain(1:3) = [character(len=36) :: "clotran.host.i_chunked_seq", "clotran.host.i_seq", "clotran.host.i_persistent_collection"]
          cnt = 3
-      case ("clojure.lang.Var", "clojure.lang.Atom", "clojure.lang.Delay", "clojure.lang.Ref", "clojure.lang.Agent", &
-         "clojure.lang.Reduced")
-         chain(1) = "clojure.lang.IDeref"
+      case ("clotran.host.var", "clotran.host.atom", "clotran.host.delay", "clotran.host.ref", "clotran.host.agent", &
+         "clotran.host.reduced")
+         chain(1) = "clotran.host.i_deref"
          cnt = 1
-      case ("String")
-         chain(1) = "CharSequence"
+      case ("clotran.host.string")
+         chain(1) = "clotran.host.char_sequence"
          cnt = 1
-      case ("Long", "Double", "Byte", "Short", "Integer", "Float", "clojure.lang.Ratio")
-         chain(1) = "Number"
+      case ("clotran.host.int8", "clotran.host.real8", "clotran.host.int1", "clotran.host.int2", "clotran.host.int4", "clotran.host.real4", "clotran.host.ratio")
+         chain(1) = "clotran.host.number"
          cnt = 1
-      case ("clojure.lang.Keyword", "clojure.lang.Symbol", "Character", "Boolean", &
-            "java.util.regex.Pattern", "java.util.regex.Matcher", "clojure.lang.Namespace", &
-            "clojure.lang.MultiFn", "StringBuilder", "java.io.PrintWriter")
+      case ("clotran.host.keyword", "clotran.host.symbol", "clotran.host.char", "clotran.host.logical", &
+            "clotran.host.pattern", "clotran.host.matcher", "clotran.host.namespace", &
+            "clotran.host.multi_fn", "clotran.host.string_builder", "clotran.host.print_writer")
          continue
       case default
-         if (t == "Throwable" .or. t == "java.lang.Throwable") then
+         if (t == "clotran.host.throwable" .or. t == "clotran.host.throwable") then
             ! Throwable's own supertype is Object alone: naming itself
             ! sent `supers` round in a circle, and printing an exception
             ! never returned
             cnt = 0
          else if (is_throwable_class(t)) then
-            chain(1) = "Throwable"
+            chain(1) = "clotran.host.throwable"
             cnt = 1
          else
             known = .false.
@@ -17965,7 +18068,7 @@ contains
       end select
       if (known) then
          cnt = cnt + 1
-         chain(cnt) = "Object"
+         chain(cnt) = "clotran.host.value"
       end if
       if (i >= 1 .and. i <= cnt) then
          block
@@ -17999,55 +18102,55 @@ contains
     end if
     select case (v%tag)
     case (GCT_NIL);   s = ""
-    case (GCT_BOOL);  s = "java.lang.Boolean"
+    case (GCT_BOOL);  s = "clotran.host.logical"
     case (GCT_INT)
        select case (v%ref)
-       case (W_BYTE); s = "java.lang.Byte"
-       case (W_SHORT); s = "java.lang.Short"
-       case (W_INT); s = "java.lang.Integer"
-       case default; s = "java.lang.Long"
+       case (W_BYTE); s = "clotran.host.int1"
+       case (W_SHORT); s = "clotran.host.int2"
+       case (W_INT); s = "clotran.host.int4"
+       case default; s = "clotran.host.int8"
        end select
     case (GCT_REAL)
-       s = "java.lang.Double"
-       if (v%ref == W_FLOAT) s = "java.lang.Float"
-    case (GCT_RATIO); s = "clojure.lang.Ratio"
-    case (GCT_CHAR);  s = "java.lang.Character"
-    case (GCT_CLASS); s = "java.lang.Class"
-    case (GCT_DEC);   s = "java.math.BigDecimal"
-    case (GCT_BIG);   s = "clojure.lang.BigInt"
-    case (GCT_STR);   s = "java.lang.String"
-    case (GCT_SYM);   s = "clojure.lang.Symbol"
-    case (GCT_KEY);   s = "clojure.lang.Keyword"
+       s = "clotran.host.real8"
+       if (v%ref == W_FLOAT) s = "clotran.host.real4"
+    case (GCT_RATIO); s = "clotran.host.ratio"
+    case (GCT_CHAR);  s = "clotran.host.char"
+    case (GCT_CLASS); s = "clotran.host.class"
+    case (GCT_DEC);   s = "clotran.host.decimal"
+    case (GCT_BIG);   s = "clotran.host.bigint"
+    case (GCT_STR);   s = "clotran.host.string"
+    case (GCT_SYM);   s = "clotran.host.symbol"
+    case (GCT_KEY);   s = "clotran.host.keyword"
     case default
        select case (gc_kind(v))
        case (OBJ_CONS)
-          s = "clojure.lang.PersistentList"
-          if (gc_i2(v) == 1) s = "clojure.lang.Cons"
-       case (OBJ_VECTOR);  s = "clojure.lang.PersistentVector"
-       case (OBJ_TVECTOR); s = "clojure.lang.PersistentVector$TransientVector"
+          s = "clotran.host.persistent_list"
+          if (gc_i2(v) == 1) s = "clotran.host.cons"
+       case (OBJ_VECTOR);  s = "clotran.host.persistent_vector"
+       case (OBJ_TVECTOR); s = "clotran.host.persistent_vector_transient_vector"
        case (OBJ_TMAP)
           if (gc_i1(v) == 2) then
-             s = "clojure.lang.PersistentHashSet$TransientHashSet"
+             s = "clotran.host.persistent_hash_set_transient_hash_set"
           else if (gc_kind(gc_slot(v, 1)) == OBJ_HAMT) then
-             s = "clojure.lang.PersistentHashMap$TransientHashMap"
+             s = "clotran.host.persistent_hash_map_transient_hash_map"
           else
-             s = "clojure.lang.PersistentArrayMap$TransientArrayMap"
+             s = "clotran.host.persistent_array_map_transient_array_map"
           end if
        case (OBJ_MAP, OBJ_HAMT)
-          s = "clojure.lang.PersistentArrayMap"
-          if (gca_is_sorted(v)) s = "clojure.lang.PersistentTreeMap"
+          s = "clotran.host.persistent_array_map"
+          if (gca_is_sorted(v)) s = "clotran.host.persistent_tree_map"
           ! a tagged literal is a marked map (sorted.inc); it prints #tag form
           ! through print-method only if it says what it is
-          if (is_tagged_literal(v)) s = "clojure.lang.TaggedLiteral"
+          if (is_tagged_literal(v)) s = "clotran.host.tagged_literal"
        case (OBJ_SET)
-          s = "clojure.lang.PersistentHashSet"
-          if (gca_is_sorted(gc_slot(v, 1))) s = "clojure.lang.PersistentTreeSet"
-       case (OBJ_CLOSURE, OBJ_BUILTIN, OBJ_COMPILED); s = "clojure.lang.AFunction"
-       case (OBJ_MULTIFN); s = "clojure.lang.MultiFn"
-       case (OBJ_REGEX);   s = "java.util.regex.Pattern"
-       case (OBJ_MATCHER); s = "java.util.regex.Matcher"
-       case (OBJ_WRITER);  s = "java.io.PrintWriter"
-       case (OBJ_SB);      s = "java.lang.StringBuilder"
+          s = "clotran.host.persistent_hash_set"
+          if (gca_is_sorted(gc_slot(v, 1))) s = "clotran.host.persistent_tree_set"
+       case (OBJ_CLOSURE, OBJ_BUILTIN, OBJ_COMPILED); s = "clotran.host.a_function"
+       case (OBJ_MULTIFN); s = "clotran.host.multi_fn"
+       case (OBJ_REGEX);   s = "clotran.host.pattern"
+       case (OBJ_MATCHER); s = "clotran.host.matcher"
+       case (OBJ_WRITER);  s = "clotran.host.print_writer"
+       case (OBJ_SB);      s = "clotran.host.string_builder"
        case (OBJ_ERR)
           ! Its own class, as constructed, spelt as the literal is:
           ! core.clj writes (ExceptionInfo. ...) under an import.
@@ -18058,34 +18161,34 @@ contains
              s = dlt_2
           end block
        case (OBJ_LAZY)
-          s = "clojure.lang.LazySeq"
+          s = "clotran.host.lazy_seq"
           if (gc_i2(v) == 1) then
              ! Clojure has two range classes and picks between them on
              ! the bounds: LongRange for integers, Range for anything
              ! else. Ours is one cell either way, so the head decides.
-             s = "clojure.lang.Range"
+             s = "clotran.host.range"
              if (gc_i1(v) == LAZY_CONS) then
-                if (tag_of(gc_slot(v, 2)) == GCT_INT) s = "clojure.lang.LongRange"
+                if (tag_of(gc_slot(v, 2)) == GCT_INT) s = "clotran.host.long_range"
              else if (tag_of(gcv_nth(gc_slot(v, 1), 0)) == GCT_INT) then
-                s = "clojure.lang.LongRange"
+                s = "clotran.host.long_range"
              end if
           end if
-       case (OBJ_SEQ);     s = "clojure.lang.PersistentVector$ChunkedSeq"
-       case (OBJ_CHUNKSEQ); s = "clojure.lang.ChunkedCons"
-       case (OBJ_CHUNK);   s = "clojure.lang.ArrayChunk"
-       case (OBJ_CHUNKBUF); s = "clojure.lang.ChunkBuffer"
-       case (OBJ_VAR);     s = "clojure.lang.Var"
-       case (OBJ_NS);      s = "clojure.lang.Namespace"
-       case (OBJ_DELAY);   s = "clojure.lang.Delay"
-       case (OBJ_TASK);    s = "java.util.concurrent.FutureTask"
-       case (OBJ_VOLATILE); s = "clojure.lang.Volatile"
+       case (OBJ_SEQ);     s = "clotran.host.persistent_vector_chunked_seq"
+       case (OBJ_CHUNKSEQ); s = "clotran.host.chunked_cons"
+       case (OBJ_CHUNK);   s = "clotran.host.array_chunk"
+       case (OBJ_CHUNKBUF); s = "clotran.host.chunk_buffer"
+       case (OBJ_VAR);     s = "clotran.host.var"
+       case (OBJ_NS);      s = "clotran.host.namespace"
+       case (OBJ_DELAY);   s = "clotran.host.delay"
+       case (OBJ_TASK);    s = "clotran.host.future_task"
+       case (OBJ_VOLATILE); s = "clotran.host.volatile"
        case (OBJ_ATOM)
           select case (gc_i1(v))
-          case (1); s = "clojure.lang.Ref"
-          case (2); s = "clojure.lang.Agent"
-          case (3); s = "clojure.lang.Reduced"
-          case (4); s = "clojure.lang.Var$Unbound"
-          case default; s = "clojure.lang.Atom"
+          case (1); s = "clotran.host.ref"
+          case (2); s = "clotran.host.agent"
+          case (3); s = "clotran.host.reduced"
+          case (4); s = "clotran.host.var_unbound"
+          case default; s = "clotran.host.atom"
           end select
        case (OBJ_ARRAY)
        block
@@ -18097,8 +18200,8 @@ contains
           call class_text(v, s=dlt_1)
           s = dlt_1
        end block
-       case (OBJ_TYPE);    s = "Class"
-       case default;       s = "Object"
+       case (OBJ_TYPE);    s = "clotran.host.class"
+       case default;       s = "clotran.host.value"
        end select
     end select
   end subroutine class_name_of
@@ -18361,7 +18464,7 @@ contains
     t = gcv_nth(args, 0)
     out = gc_nil()
     if (gc_i2(t) /= 1) then
-       call raise_class("IllegalAccessError", "Transient used after persistent! call", [vs_get(vst, base + 1)])
+       call raise_class("clotran.host.illegal_access_error", "Transient used after persistent! call", [vs_get(vst, base + 1)])
        call vs_leave(vst, base)
        return
     end if
@@ -18413,7 +18516,7 @@ contains
     t = gcv_nth(args, 0)
     out = gc_nil()
     if (gc_i2(t) /= 1) then
-       call raise_class("IllegalAccessError", "Transient used after persistent! call", [vs_get(vst, base + 1)])
+       call raise_class("clotran.host.illegal_access_error", "Transient used after persistent! call", [vs_get(vst, base + 1)])
        call vs_leave(vst, base)
        return
     end if
@@ -18427,12 +18530,12 @@ contains
        do i = 1, n - 2, 2
           x = gcv_nth(vs_get(vst, base + 1), i)
           if (x%tag /= GCT_INT) then
-             call raise_class("IllegalArgumentException", "Key must be integer", [vs_get(vst, base + 1)])
+             call raise_class("clotran.host.illegal_argument_exception", "Key must be integer", [vs_get(vst, base + 1)])
              exit
           end if
           k = int(x%ival)
           if (k < 0 .or. k > gcv_tcount(gcv_nth(vs_get(vst, base + 1), 0))) then
-             call raise_class("IndexOutOfBoundsException", "", [vs_get(vst, base + 1)])
+             call raise_class("clotran.host.index_out_of_bounds_exception", "", [vs_get(vst, base + 1)])
              exit
           end if
           call gcv_tassoc(gcv_nth(vs_get(vst, base + 1), 0), k, gcv_nth(vs_get(vst, base + 1), i + 1), &
@@ -18443,7 +18546,7 @@ contains
        t = gcv_nth(vs_get(vst, base + 1), 0)
        if (.not. gcv_tdrop(t)) then
           if (gcv_count(gc_slot(t, 1)) == 0) then
-             call raise_class("IllegalStateException", "Can't pop empty vector", [vs_get(vst, base + 1)])
+             call raise_class("clotran.host.illegal_state_exception", "Can't pop empty vector", [vs_get(vst, base + 1)])
           else
              ! nothing buffered: the vector it came from, popped
              block
@@ -18469,7 +18572,7 @@ contains
        else if (n >= 3) then
           out = gcv_nth(args, 2)
        else if (id == B_NTH) then
-          call raise_class("IndexOutOfBoundsException", "", [vs_get(vst, base + 1)])
+          call raise_class("clotran.host.index_out_of_bounds_exception", "", [vs_get(vst, base + 1)])
        end if
     case (B_FIND)
        ! associative by index, as the vector it came from is
@@ -18669,7 +18772,7 @@ contains
           ! two made (conj {:a 1} [:b 2 :c 3]) quietly {:a 1, :b 2}.
           if (gcv_count(vs_get(vst, base + 2)) /= 2) then
              out = gc_nil()
-             call raise_class("IllegalArgumentException", "Vector arg to map conj must be a pair", roots)
+             call raise_class("clotran.host.illegal_argument_exception", "Vector arg to map conj must be a pair", roots)
           else
              out = gca_assoc(vs_get(vst, base + 1), gcv_nth(vs_get(vst, base + 2), 0), &
                   gcv_nth(vs_get(vst, base + 2), 1), roots)
@@ -18693,7 +18796,7 @@ contains
                if (.not. (gcv_is(e) .and. is_map_entry(e))) then
                   block
                     call class_name_of(e, s=dlt_1)
-                    call raise_class("ClassCastException", dlt_1 // " cannot be cast to java.util.Map$Entry", roots)
+                    call raise_class("clotran.host.class_cast_exception", dlt_1 // " cannot be cast to clotran.host.map_entry", roots)
                   end block
                   exit
                end if
@@ -18714,7 +18817,7 @@ contains
        out = gc_nil()
        block
           call class_name_of(coll, s=dlt_1)
-          call raise_class("ClassCastException", dlt_1 //  " cannot be cast to clojure.lang.IPersistentCollection", roots)
+          call raise_class("clotran.host.class_cast_exception", dlt_1 //  " cannot be cast to clotran.host.i_persistent_collection", roots)
        end block
     else if (gcl_is(coll) .and. gc_i2(coll) /= 1) then
        ! a LIST conses onto itself and stays one: (conj '(2) 1) is a list
@@ -19289,7 +19392,7 @@ contains
     if (okuuid) then
        out = gc_str(u, roots)
     else
-       call raise_class("IllegalArgumentException", "Invalid UUID string: " // u, roots)
+       call raise_class("clotran.host.illegal_argument_exception", "Invalid UUID string: " // u, roots)
     end if
   end function uuid_of
 
@@ -19382,7 +19485,7 @@ contains
           else
              block
                 call name_part(vs_get(vst, base + 3), s=dlt_1)
-                call raise_class("RuntimeException", "No reader function for tag " //  dlt_1, [vs_get(vst, base + 1)])
+                call raise_class("clotran.host.runtime_exception", "No reader function for tag " //  dlt_1, [vs_get(vst, base + 1)])
              end block
              out = gc_nil()
           end if
@@ -19714,7 +19817,11 @@ contains
        av = gcv_conj(vs_get(vst, b + 1), vs_get(vst, argbase + j), [vs_get(vst, b + 1)])
        call vs_set(vst, b + 1, av)
     end do
-    out = eval_new(cname, vs_get(vst, b + 1))
+    block
+      character(len=:), allocatable :: canonical
+      call canon_class(cname, c=canonical)
+      out = eval_new(canonical, vs_get(vst, b + 1), canonical /= cname)
+    end block
     call vs_leave(vst, b)
   end function gce_new_slots
 

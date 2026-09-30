@@ -1,16 +1,15 @@
 (ns clotran.uuid
-  "java.util.UUID, so that clojure/uuid.clj runs verbatim: a record under
-  the JVM's name -- value equality, (str u) its text -- printed by
-  uuid.clj's own print-method as #uuid \"...\". UUID/fromString and
+  "clotran.uuid.UUID, so that clojure/uuid.clj runs verbatim: a record --
+  value equality, (str u) its text -- that the name uuid.clj writes,
+  java.util.UUID, resolves to (class-aliases.edn), printed by uuid.clj's
+  own print-method as #uuid \"...\". UUID/fromString and
   UUID/randomUUID are rows in hosttable.inc (B_UUIDFN, uuid_call), and
   this file loads the first time one is reached, or when core.clj
   reaches (load \"uuid\"), which is before clotran.rt can load.")
 
-(ns java.util)
 (defrecord UUID [s]
   Object
   (toString [_] s))
-(in-ns 'clotran.uuid)
 
 (defn identity-uuid
   "Loads this file (uuid_call) and answers nil."
@@ -22,7 +21,7 @@
   [s]
   (if (and (string? s)
            (re-matches #"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" s))
-    (java.util.UUID. (.toLowerCase ^String s))
+    (clotran.uuid.UUID. (.toLowerCase ^String s))
     (throw (IllegalArgumentException. (str "Invalid UUID string: " s)))))
 
 (defn- hex-pad [n w]
@@ -32,7 +31,7 @@
 (defn uuid-random
   "UUID.randomUUID: version 4, variant 2, from rand."
   []
-  (java.util.UUID. (str (hex-pad (rand-int 2147483647) 8) "-"
+  (clotran.uuid.UUID. (str (hex-pad (rand-int 2147483647) 8) "-"
                         (hex-pad (rand-int 65536) 4) "-4"
                         (hex-pad (rand-int 4096) 3) "-"
                         (hex-pad (+ 32768 (rand-int 16384)) 4) "-"

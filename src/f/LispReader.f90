@@ -1144,7 +1144,7 @@ contains
                 rdx%rc_splice = .true.
              else
                 v = gc_nil()
-                call fail("Spliced form list in read-cond-splicing must implement java.util.List")
+                call fail("Spliced form list in read-cond-splicing must implement clotran.host.list")
              end if
           end if
        end if

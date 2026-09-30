@@ -26,7 +26,7 @@
        if (same_object(a, b) .and. .not. comparable_kind(a)) then
           block
              call gcp_str(a, .true., s=dlt_1)
-             call raise_class("ClassCastException",  "Default comparator requires nil, Number, or Comparable: " // dlt_1, [a])
+             call raise_class("clotran.host.class_cast_exception",  "Default comparator requires nil, Number, or Comparable: " // dlt_1, [a])
           end block
           c = huge(0)
           return
@@ -36,7 +36,7 @@
           block
              call class_name_of(a, s=dlt_1)
              call class_name_of(b, s=dlt_2)
-             call raise_class("ClassCastException",  "cannot compare " // dlt_1 // " with " // dlt_2, [a, b])
+             call raise_class("clotran.host.class_cast_exception",  "cannot compare " // dlt_1 // " with " // dlt_2, [a, b])
           end block
           c = huge(0)
        end if
@@ -73,7 +73,7 @@
     if (.not. yes) then
        block
           call class_name_of(v, s=dlt_1)
-          call raise_class("IllegalArgumentException",  "Don't know how to create ISeq from: " // dlt_1, [v])
+          call raise_class("clotran.host.illegal_argument_exception",  "Don't know how to create ISeq from: " // dlt_1, [v])
        end block
     end if
   end function seqable
@@ -168,13 +168,13 @@
        if (x%tag == GCT_NIL) then
           ! unboxing nil, as the JVM does it
           ok = .false.
-          call raise_class("NullPointerException", "", roots)
+          call raise_class("clotran.host.null_pointer_exception", "", roots)
           return
        else if (.not. is_number(x)) then
           ok = .false.
           block
              call class_name_of(x, s=dlt_1)
-             call raise_class("ClassCastException", "class " // dlt_1 //  " cannot be cast to class java.lang.Number", roots)
+             call raise_class("clotran.host.class_cast_exception", "class " // dlt_1 //  " cannot be cast to class clotran.host.number", roots)
           end block
           return
        end if

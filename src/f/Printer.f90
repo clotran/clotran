@@ -670,7 +670,7 @@ contains
           s = dlt_1
        end block
     case (OBJ_TASK)
-       s = "#object[java.util.concurrent.FutureTask]"
+       s = "#object[clotran.host.future_task]"
     case (OBJ_VOLATILE)
        block
           call gcp_str(gc_slot(v, 1), readable, s=dlt_1)

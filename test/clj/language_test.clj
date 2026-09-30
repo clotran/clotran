@@ -1398,8 +1398,8 @@
          (finally (net/close c) (srv/stop-server "lt")))))
 (check "the socket REPL: values, *1, errors, a bad read, the namespace, quit"
        (repl-says ["(+ 1 2)" "(inc *1)" "(/ 1 0)" "(oops ]" "(ns lt-other)" "(str (ns-name *ns*))" ":repl/quit" "(never)"])
-       ["user=> 3" "user=> 4" "user=> Execution error (ArithmeticException)." "Divide by zero"
-        "user=> Syntax error reading source (RuntimeException)." "Unmatched delimiter: ]"
+       ["user=> 3" "user=> 4" "user=> Execution error (arithmetic_exception)." "Divide by zero"
+        "user=> Syntax error reading source (runtime_exception)." "Unmatched delimiter: ]"
         "user=> nil" "lt-other=> \"lt-other\"" "lt-other=> "])
 (check "stopping a server that is not there" (srv/stop-server "nope") false)
 (check "text to UTF-8 bytes and back"

@@ -965,7 +965,7 @@
     end if
     if (k_limit == 0) call read_frame_limit()
     if (tctx%ksp >= k_limit) then
-       call raise_class("StackOverflowError", "stack overflow", [gc_value ::])
+       call raise_class("clotran.host.stack_overflow_error", "stack overflow", [gc_value ::])
        return
     end if
     b = vs_enter(vst, K_SLOTS)
@@ -1152,7 +1152,7 @@
     if (ev_limit == 0) call read_depth_limit()
     tctx%ev_depth = tctx%ev_depth + 1
     if (tctx%ev_depth > ev_limit) then
-       call raise_class("StackOverflowError", "stack overflow", [gc_value ::])
+       call raise_class("clotran.host.stack_overflow_error", "stack overflow", [gc_value ::])
        tctx%ev_depth = tctx%ev_depth - 1
        return
     end if
@@ -1729,9 +1729,11 @@
        call vs_set(vst, base + 3, ty)
        out = construct_type_vals(vs_get(vst, base + 3), vs_get(vst, base + 2))
     else
-       out = eval_new(dlt_1, vs_get(vst, base + 2))
+       out = eval_new(dlt_1, vs_get(vst, base + 2), gc_i2(nd) == 1)
     end if
-    if (.not. tctx%has_error) then
+    ! not for a JVM name (i2 = 1): its constructor is the JVM's, which the
+    ! instance made from its fields would skip
+    if (.not. tctx%has_error .and. gc_i2(nd) /= 1) then
        call vs_set(vst, base + 2, out)
        ty = find_type(dlt_1)
        if (gc_kind(ty) == OBJ_TYPE .and. gc_kind(vs_get(vst, base + 2)) == OBJ_INST) then
@@ -2226,7 +2228,7 @@
          if (tv2%tag == GCT_NIL) then
             block
                call sym_text(gc_slot(vs_get(vst, base + 1), 2), s=dlt_1)
-               call raise_class("NullPointerException",  "Cannot invoke ." // dlt_1 // " on nil", [vs_get(vst, base + 1)])
+               call raise_class("clotran.host.null_pointer_exception",  "Cannot invoke ." // dlt_1 // " on nil", [vs_get(vst, base + 1)])
             end block
             call vs_leave(vst, base)
             return

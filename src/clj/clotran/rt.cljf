@@ -1,10 +1,10 @@
 (ns clotran.rt
-  "The part of clojure.lang.RT and its neighbours that ClojureScript
+  "The part of clotran.host.rt and its neighbours that ClojureScript
   writes in Clojure, written in Clojure here too: the iterators behind
   sequence, iterator-seq and eduction, an ArrayList for the transducers
   that buffer, and Collections.shuffle. core.clj reaches them as the
   JVM members it names -- RT/iter, RT/chunkIteratorSeq,
-  TransformerIterator/create, (java.util.ArrayList.), (Eduction. ..) --
+  TransformerIterator/create, (clotran.rt.ArrayList.), (Eduction. ..) --
   through rows in hosttable.inc that call the vars named here (Eval.f90
   rt_call), and this file loads the first time one is reached. A
   deftype's fields cannot be set! here (DEVIATIONS 20), so each mutable
@@ -69,7 +69,7 @@
                                  ([] nil)
                                  ([acc] acc)
                                  ([acc o] (swap! st update :buffer conj o) acc))))
-    (TransformerIterator. st)))
+    (->TransformerIterator st)))
 
 (defn ti-create [xform source] (transformer-iterator xform source false))
 
@@ -101,8 +101,8 @@
 
 (defn array-list
   "(ArrayList.), (ArrayList. n) -- a capacity, ignored -- or (ArrayList. coll)."
-  ([] (ArrayList. (atom [])))
-  ([n-or-coll] (ArrayList. (atom (if (number? n-or-coll) [] (vec n-or-coll))))))
+  ([] (->ArrayList (atom [])))
+  ([n-or-coll] (->ArrayList (atom (if (number? n-or-coll) [] (vec n-or-coll))))))
 
 (defn shuffle!
   "Collections.shuffle: the list's items in a random order, in place."
