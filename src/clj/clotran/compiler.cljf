@@ -72,6 +72,16 @@
        type(c_ptr), value :: cs
        integer(c_int), value :: base
      end subroutine clotran_frame_leave
+     subroutine clotran_clear_args(cs, argbase, nargs) bind(C, name=\"clotran_clear_args\")
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
+       integer(c_int), value :: argbase, nargs
+     end subroutine clotran_clear_args
+     subroutine clotran_frame_clear(cs, fr, i) bind(C, name=\"clotran_frame_clear\")
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
+       integer(c_int), value :: fr, i
+     end subroutine clotran_frame_clear
      subroutine clotran_set_nil(cs, slot) bind(C, name=\"clotran_set_nil\")
        import :: c_int, c_ptr
        type(c_ptr), value :: cs
@@ -915,6 +925,14 @@ end module clotran_rt_decl
              err-return)
      r st]))
 
+(defn- local-read
+  "A local read into slot s; the local's LAST read clears it (the analyser
+  marks that read, :p2 true, as the interpreter's F_MOVEC does), so a
+  local never holds the head of a seq a later call is walking."
+  [s nd]
+  (cond-> [(str "call clotran_frame_get(b + " s ", b + 1, " (:i2 nd) "_c_int)")]
+    (true? (:p2 nd)) (conj (str "call clotran_frame_clear(b + 1, " (:i2 nd) "_c_int)"))))
+
 (defn- gen-into
   "Generate a node so that its value ends up in slot `dst`. A constant,
   a local and a pooled value are put there directly; anything else is
@@ -934,11 +952,16 @@ end module clotran_rt_decl
       [[(box dst t (slot-var (:i2 nd) t))] st]
 
       (= :local (:op nd))
-      [[(str "call clotran_frame_get(b + " dst ", b + 1, " (:i2 nd) "_c_int)")] st]
+      [(local-read dst nd) st]
 
       :else
       (let [[c s st] (gen nd st)]
-        [(conj (vec c) (str "call clotran_copy(b + " dst ", b + " s ")")) st]))))
+        ;; the subtree's slot is a temporary used once: cleared, so it does
+        ;; not hold what it made -- a seq's head -- while the rest runs. A
+        ;; pooled value came with no code, and its slot is the pool's.
+        [(cond-> (conj (vec c) (str "call clotran_copy(b + " dst ", b + " s ")"))
+           (seq c) (conj (str "call clotran_set_nil(b + " s ")")))
+         st]))))
 
 (defn- gen-seq
   "Generate each node in turn, answering the code and the slot the LAST
@@ -1051,7 +1074,7 @@ end module clotran_rt_decl
           :local (let [[s st] (fresh st)]
                    (if (prim? t)
                      [[(box s t (slot-var (:i2 nd) t))] s st]
-                     [[(str "call clotran_frame_get(b + " s ", b + 1, " (:i2 nd) "_c_int)")] s st]))
+                     [(local-read s nd) s st]))
 
           :do (let [[code s st] (gen-seq (:children nd) st)]
                 (if s [code s st] (gen {:op :const :p1 nil} st)))
@@ -1400,6 +1423,9 @@ end module clotran_rt_decl
     [(concat (for [i (range nfixed)]
                (str "call clotran_frame_put(b + 1, " (+ start i) "_c_int, argbase + " (inc i) ")"))
              rest-code
+             ;; the arguments are this frame's now: the caller's slots let
+             ;; go, so the caller does not hold a seq this fn walks
+             ["call clotran_clear_args(argbase, nargs)"]
              ["do" (str "   " flag " = 0") "   call clotran_poll()"]
              (map #(str "   " %) code)
              [(str "   if (" flag " == 0) exit") "end do"
@@ -1409,7 +1435,7 @@ end module clotran_rt_decl
 (def ^:private stack-entries
   "The runtime entries that take this thread's stack as their first
   argument (ClotranABI, clotran_stack)."
-  #{"arith" "array_view" "bool" "call_slots" "captures" "copy" "deref" "dot" "eval_node" "frame_done" "frame_enter" "frame_get" "frame_leave" "frame_new" "frame_put" "int" "make_closure" "new" "pool_get" "real" "rest_args" "set_bool" "set_int" "set_nil" "set_real" "set_str" "tag"})
+  #{"arith" "array_view" "bool" "call_slots" "captures" "clear_args" "copy" "deref" "dot" "eval_node" "frame_clear" "frame_done" "frame_enter" "frame_get" "frame_leave" "frame_new" "frame_put" "int" "make_closure" "new" "pool_get" "real" "rest_args" "set_bool" "set_int" "set_nil" "set_real" "set_str" "tag"})
 
 (defn- direct-slots
   "A procedure's text with the entries that only read or write one slot
@@ -1461,14 +1487,16 @@ end module clotran_rt_decl
   [high nslots text]
   (let [get-re #"call clotran_frame_get\((b \+ \d+), b \+ 1, (\d+)_c_int\)"
         put-re #"call clotran_frame_put\(b \+ 1, (\d+)_c_int, ([^)]+)\)"
+        clear-re #"call clotran_frame_clear\(b \+ 1, (\d+)_c_int\)"
         new-re #"    call clotran_frame_new\(b \+ 1, \d+_c_int\)\n"
         slot #(str "b + " (+ high 1 (parse-long %)))
-        left (-> text (str/replace get-re "") (str/replace put-re "") (str/replace new-re ""))]
+        left (-> text (str/replace get-re "") (str/replace put-re "") (str/replace clear-re "") (str/replace new-re ""))]
     (if (re-find #"b \+ 1\b" left)
       text
       (-> text
           (str/replace get-re (fn [[_ d i]] (str "call clotran_copy(" d ", " (slot i) ")")))
           (str/replace put-re (fn [[_ i src]] (str "call clotran_copy(" (slot i) ", " src ")")))
+          (str/replace clear-re (fn [[_ i]] (str "call clotran_set_nil(" (slot i) ")")))
           (str/replace new-re "")
           (str/replace (str "clotran_frame_enter(" (max 1 high) "_c_int)")
                        (str "clotran_frame_enter(" (+ (max 1 high) nslots) "_c_int)"))))))

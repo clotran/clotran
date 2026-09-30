@@ -72,6 +72,7 @@ module ClotranABI
   public :: clotran_rest_args, clotran_arity_error
   public :: clotran_native_begin, clotran_reacquire
   public :: clotran_register_proc, clotran_make_closure, clotran_captures, clotran_new, clotran_dot, clotran_arith, clotran_frame_done, clotran_poll
+  public :: clotran_frame_clear, clotran_clear_args
 
 contains
 
@@ -869,6 +870,29 @@ contains
     call vs_set(vst, int(dst), gc_vec_get(vs_get(vst, int(fr)), int(i) + 1))
   end subroutine clotran_frame_get
 
+  ! A local's last read clears it (the analyser's clearing read), so a
+  ! frame does not hold the head of a seq a later call is walking.
+  subroutine clotran_frame_clear(cs, fr, i) bind(C, name="clotran_frame_clear")
+    type(c_ptr), value :: cs
+    type(gc_stack), pointer :: vst
+    integer(c_int), value :: fr, i
+    call c_f_pointer(cs, vst)
+    call gc_vec_set(vs_get(vst, int(fr)), int(i) + 1, gc_nil())
+  end subroutine clotran_frame_clear
+
+  ! A procedure has taken its arguments into its frame: the caller's slots
+  ! are let go, as the interpreter clears its argument registers
+  subroutine clotran_clear_args(cs, argbase, nargs) bind(C, name="clotran_clear_args")
+    type(c_ptr), value :: cs
+    type(gc_stack), pointer :: vst
+    integer(c_int), value :: argbase, nargs
+    integer :: k
+    call c_f_pointer(cs, vst)
+    do k = 1, int(nargs)
+       call vs_set(vst, int(argbase) + k, gc_nil())
+    end do
+  end subroutine clotran_clear_args
+
   subroutine clotran_frame_put(cs, fr, i, src) bind(C, name="clotran_frame_put")
     type(c_ptr), value :: cs
     type(gc_stack), pointer :: vst
@@ -996,6 +1020,16 @@ contains
     type(gc_value) :: out
     call c_f_pointer(cs, vst)
     out = gce_apply_slots(vst, vs_get(vst, int(fn)), int(argbase), int(nargs))
+    ! a compiled caller's argument slots are temporaries it never reads
+    ! again: let go, whatever the callee was -- a builtin takes nothing
+    ! from them, and (class s) left s's head held by the caller for as
+    ! long as the rest of it ran
+    block
+      integer :: k
+      do k = 1, int(nargs)
+         call vs_set(vst, int(argbase) + k, gc_nil())
+      end do
+    end block
     if (gce_has_error()) then
        call vs_set(vst, int(dst), gc_nil())
        st = 1

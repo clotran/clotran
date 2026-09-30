@@ -81,8 +81,10 @@
   "The version of the runtime entries generated code calls (ClotranABI).
   A library built against another is refused rather than loaded: its
   calls would pass arguments where the entries no longer expect them.
-  Bump it with any change to those entries' arguments."
-  2)
+  Bump it with any change to those entries' arguments -- or, as at 3, when
+  what libraries do has changed enough that an old one should be rebuilt
+  (3: locals cleared at their last read, arguments taken by the callee)."
+  3)
 
 (defn defined-in?
   "Whether Var `v` was last defined by the file `src`, by its :file

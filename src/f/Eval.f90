@@ -7363,6 +7363,9 @@ contains
                   call vs_set(vst, base + 3, frame)
                   do j = 0, nargs - 1
                      call reg_set(vs_get(vst, base + 3), start + j, vs_get(vst, argbase + j + 1))
+                     ! the frame has it now: the caller's slot lets go, so a
+                     ! compiled caller does not hold a seq this body walks
+                     call vs_set(vst, argbase + j + 1, gc_nil())
                   end do
                   body = ct_body(vs_get(vst, base + 2), p)
                   call push_frame(tctx, vs_get(vst, base + 1), tctx%pending_site)
@@ -7554,6 +7557,10 @@ contains
             do j = 1, cn
                call vs_set(vst, cb + j, gcv_nth(av, j - 1))
             end do
+            ! the slots have the arguments now, and the procedure takes them
+            ! from there: the vector let go, so it does not hold a seq the
+            ! callee walks (a reduce through protocol dispatch did)
+            call vs_set(vst, base + 2, gc_nil())
             call call_compiled(vs_get(vst, base + 1), cb, cn, cb + cn + 1)
             out = vs_get(vst, cb + cn + 1)
             call vs_leave(vst, cb)
