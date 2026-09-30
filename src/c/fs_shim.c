@@ -36,3 +36,27 @@ long clotran_fs_list(const char *path, char *buf, long cap) {
   closedir(d);
   return short_of_room ? -n : n;
 }
+
+/* The running executable's own path, into buf (NUL-ended): a program
+ * `clotran build` made reads its image from itself. The length, or -1. */
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#include <stdlib.h>
+long clotran_exe_path(char *buf, long cap) {
+  uint32_t size = (uint32_t)cap;
+  char raw[4096];
+  uint32_t rs = sizeof raw;
+  if (_NSGetExecutablePath(raw, &rs) != 0) return -1;
+  if (!realpath(raw, buf)) return -1;
+  (void)size;
+  return (long)strlen(buf);
+}
+#else
+#include <unistd.h>
+long clotran_exe_path(char *buf, long cap) {
+  ssize_t n = readlink("/proc/self/exe", buf, (size_t)cap - 1);
+  if (n < 0) return -1;
+  buf[n] = '\0';
+  return (long)n;
+}
+#endif

@@ -218,6 +218,53 @@ export CLOTRAN_AUTOCOMPILE="${CLOTRAN_AUTOCOMPILE-1}"
 
 [ -n "$test_cmd" ] && exec "$bin" "$core" -m clotran.test-runner "$@"
 
+if [ "$1" = "build" ]; then
+  # `clotran build -m NS [-o out]` or `clotran build app.cljf [-o out]`: one
+  # executable -- this clotran's binary with an image of the heap once the
+  # program's namespace has loaded, and its entry, appended (main.f90,
+  # APP_MAGIC). It runs NS's -main with every argument as
+  # *command-line-args*, needing no clotran installed and no sources. A
+  # file is loaded at build time, and must be a namespace with a -main.
+  shift
+  ns="" file="" out=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -m) ns=$2; shift 2 ;;
+      -o) out=$2; shift 2 ;;
+      *) file=$1; shift ;;
+    esac
+  done
+  [ -n "$ns$file" ] || { echo "usage: clotran build -m NS [-o out] | clotran build app.cljf [-o out]" >&2; exit 2; }
+  if [ -z "$out" ]; then
+    if [ -n "$ns" ]; then out=${ns##*.}; else out=$(basename "${file%.*}"); fi
+  fi
+  case "$out" in /*) ;; *) out="$(pwd)/$out" ;; esac
+  work=$(mktemp -d) || exit 1
+  trap 'rm -rf "$work"' EXIT
+  # what clotran otherwise loads on first use, from its sources: a built
+  # program has none, so it is in the image
+  printf '(require (quote clotran.rt) (quote clotran.io) (quote clotran.files) (quote clotran.uuid) (quote clotran.reader) (quote clotran.multifn) (quote clotran.thread) (quote clotran.net) (quote clotran.data))\n' > "$work/driver.clj"
+  if [ -n "$ns" ]; then
+    printf '(require (quote %s))\n(def clotran-build-ns (quote %s))\n' "$ns" "$ns" >> "$work/driver.clj"
+  else
+    case "$file" in /*) ;; *) file="$(pwd)/$file" ;; esac
+    printf '(def clotran-build-ns (let [f (read-string (slurp "%s"))] (when (and (seq? f) (= (quote ns) (first f))) (second f))))\n(when-not clotran-build-ns (throw (ex-info "clotran build: the file must start with (ns ...)" {})))\n(load-file "%s")\n' "$file" "$file" >> "$work/driver.clj"
+  fi
+  printf '(when-not (ns-resolve clotran-build-ns (quote -main)) (throw (ex-info (str "clotran build: " clotran-build-ns " has no -main") {})))\n(clotran-spit "%s" (str "m " clotran-build-ns "\\n"))\n' "$work/entry" >> "$work/driver.clj"
+  CLOTRAN_AUTOCOMPILE=0 CLOTRAN_IMAGE_SAVE="$work/app.image" "$bin" "$core" "$work/driver.clj" </dev/null 2>&1 \
+    | grep -v '^note: skipping\|^user=>'
+  [ -s "$work/entry" ] && [ -s "$work/app.image" ] || { echo "clotran build: the program did not load" >&2; exit 1; }
+  cp "$bin" "$out.part" || exit 1
+  ioff=$(( $(wc -c < "$out.part") )); ilen=$(( $(wc -c < "$work/app.image") ))
+  cat "$work/app.image" >> "$out.part"
+  eoff=$(( $(wc -c < "$out.part") )); elen=$(( $(wc -c < "$work/entry") ))
+  cat "$work/entry" >> "$out.part"
+  printf '%-16s%020d%020d%020d%020d' "CLOTRAN APP 1" "$ioff" "$ilen" "$eoff" "$elen" >> "$out.part"
+  chmod +x "$out.part" && mv -f "$out.part" "$out" || exit 1
+  echo "wrote $out"
+  exit 0
+fi
+
 # a program: no REPL after it, and so no rlwrap around it
 case "$1" in
   -m) exec "$bin" "$core" "$@" ;;

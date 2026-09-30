@@ -31,7 +31,7 @@ Categories:
 | 9 | RESOLVED -- sorted collections | -- | `src/f/Assoc.f90` |
 | 10 | RESOLVED for refs -- transactions, serialized; `set!` of an unbound Var sets its root | temporary | `src/f/Eval.f90` |
 | 11 | RESOLVED -- transient maps and sets are boxes mutated in place; vectors are real transients | -- | `src/f/Eval.f90` |
-| 12 | Three host-bound libs are skipped by name, and not vendored | host | `src/f/Eval.f90` |
+| 12 | Host-bound libs are skipped or replaced by name | host | `src/f/Eval.f90` |
 | 13 | Protocol dispatch is uncached | host | `src/f/GC.f90` |
 | 14 | Regex is ICU under clj's regex's names; `\w` and `(?i)` are Unicode | host | `src/f/Regex.f90` |
 | 15 | `hash` values are gc_hash's, not clj's murmur3 | host | `src/f/GC.f90` |
@@ -341,12 +341,16 @@ What is NOT clj's: the box does no in-place editing of the
 structure itself, so `assoc!` costs what `assoc` costs -- the speed a
 transient buys in clj is not bought here, only the semantics.
 
-## 12. Three host-bound libs are skipped by name
+## 12. Host-bound libs are skipped or replaced by name
 
-`core_proxy`, `genclass` and `gvec`, plus Clojure's io library, which
-clotran replaces with its own, `clotran.files` (DEVIATIONS 40). The first two import
-`clojure.asm`, `ClassWriter` and `DynamicClassLoader` to emit bytecode;
-`gvec` wants clj's collection library. `uuid` was skipped until
+`gvec` is skipped: it wants clj's collection library. `core_proxy` and
+`genclass` import `clojure.asm`, `ClassWriter` and `DynamicClassLoader`
+to emit bytecode, and each is replaced by clotran's own file, loaded in
+its place: `clotran/core_proxy.cljf` (DEVIATIONS 28) and
+`clotran/genclass.cljf`, whose `gen-class` is nothing -- as clj's is
+whenever `*compile-files*` is false, which for clotran is always -- so
+`(ns app.core (:gen-class))` is an ordinary namespace. Clojure's io
+library is replaced by `clotran.files` (DEVIATIONS 40). `uuid` was skipped until
 2026-09-28; it now runs verbatim on a `UUID` that clotran.rt
 defines as a record under that name.
 

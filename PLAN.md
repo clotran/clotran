@@ -2167,6 +2167,17 @@ for the report's layout); `clotran test` runs a project's -test namespaces
 (clotran.test-runner, which needed file-seq: clotran.io.File's directory
 methods over src/c/fs_shim.c). make test's check-program. Next: build.
 
+LANDED 2026-09-30: `clotran build -m NS -o app` (or a file that is a
+namespace with -main). The executable is clotran-bin with the image of
+the heap once NS has loaded -- and the clotran namespaces otherwise
+loaded on first use from the sources -- and its entry appended, with a
+trailer main.f90 finds by reading its own file (fs_shim.c
+clotran_exe_path). Every argument is *command-line-args*. 131 MB, 0.18 s
+warm. `(:gen-class)` works (clotran/genclass.cljf). Not yet: compiled
+code in the image (the libraries named and reopened in order), so a
+built program runs interpreted; and packages opened at run time are
+untried in a built program.
+
 ### 23. `repro`: reproducible reductions
 
 Scenario C's "deterministic". PACKAGES.md has the design: binned

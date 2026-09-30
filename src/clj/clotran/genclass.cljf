@@ -1,0 +1,14 @@
+;; clotran's genclass: loaded in place of clojure/genclass.clj (Eval.f90
+;; B_RTLOAD), which writes class files ahead of time -- something clotran
+;; never does. gen-interface is the host's (Eval.f90 B_GENIFACE).
+
+(in-ns 'clojure.core)
+
+(defmacro gen-class
+  "Generates a class when compiling ahead of time, which clotran never
+  does: nothing, as it is in clj whenever *compile-files* is false. So
+  (ns app.core (:gen-class)) is an ordinary namespace, its -main run by
+  `clotran -m app.core` or a program `clotran build` made."
+  {:added "1.0"}
+  [& options]
+  nil)

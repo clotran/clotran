@@ -12564,8 +12564,7 @@ contains
          if (rel == "clojure/uuid" .and. .not. uuid_loaded) &
               out = uuid_call("identity-uuid", gcv_empty([vs_get(vst, base + 1)]))
          ! core_proxy is clotran's own, below; proxy is a special form
-         if (rel == "clojure/genclass" .or. &
-              rel == "clojure/gvec") then
+         if (rel == "clojure/gvec") then
             print '(A,A,A)', "note: skipping ", rel, &
                  " (it generates host classes)"
             ! The namespace exists, empty: require checks that a lib
@@ -12595,6 +12594,7 @@ contains
          if (rel == "clojure/core_print") rel = "clotran/core_print"
          if (rel == "clojure/data") rel = "clotran/data"
          if (rel == "clojure/core_proxy") rel = "clotran/core_proxy"
+         if (rel == "clojure/genclass") rel = "clotran/genclass"
          ! each value on the stack before the next allocation: the path's
          ! gc_str inside the conj's arguments could collect the fresh empty
          ! vector, which only a Fortran local held (found by torture with

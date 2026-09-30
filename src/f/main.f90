@@ -25,6 +25,11 @@ module clotran_main
   include 'stamp.inc'
   character(len=*), parameter :: IMAGE_MAGIC = "CLOTRAN IMAGE 1 "
   character(len=*), parameter :: IMAGE_END = "CLOTRAN IMAGE END "
+  ! A program `clotran build` made is this binary with its image and its
+  ! entry appended, and this trailer last: the magic, then the image's
+  ! offset and length and the entry's, each twenty decimal digits.
+  character(len=*), parameter :: APP_MAGIC = "CLOTRAN APP 1   "
+  integer, parameter :: APP_TRAILER = 16 + 4 * 20
   public :: main_body, main_thread
   ! address space, not memory: pages are committed as they are touched
   integer(c_size_t), parameter, public :: MAIN_STACK_BYTES = 1024_c_size_t * 1024_c_size_t * 1024_c_size_t
@@ -60,6 +65,25 @@ contains
        character(len=:), allocatable :: dlr_1
        call home_dir(d=dlr_1)
        call gce_set_home(dlr_1)
+    end block
+    ! A BUILT PROGRAM: this file carries its image and entry, and every
+    ! argument is the program's
+    block
+      character(len=:), allocatable :: exe
+      integer(8) :: ioff, ilen, eoff, elen
+      logical :: found
+      call app_payload(exe, ioff, ilen, eoff, elen, found)
+      if (found) then
+         call image_load(exe, imaged, image_id, ioff, ilen)
+         if (.not. imaged) then
+            write(0, '(A,A)') "clotran: this program's image cannot be read: ", exe
+            stop 1, quiet=.true.
+         end if
+         call run_app(exe, eoff, elen)
+         flush(6)
+         if (load_failed) stop 1, quiet=.true.
+         return
+      end if
     end block
     ! THE IMAGE (image_load below): the heap after core.clj and spec,
     ! in place of loading them; the sources when there is none
@@ -328,6 +352,88 @@ contains
     call vs_leave(lb)
   end subroutine load_text
 
+  ! This executable's path, and where its image and entry lie in it when it
+  ! is a program `clotran build` made (the trailer, APP_MAGIC); found is
+  ! false for clotran itself.
+  subroutine app_payload(exe, ioff, ilen, eoff, elen, found)
+    character(len=:), allocatable, intent(out) :: exe
+    integer(8), intent(out) :: ioff, ilen, eoff, elen
+    logical, intent(out) :: found
+    interface
+       function c_exe_path(buf, cap) bind(C, name="clotran_exe_path") result(r)
+         import :: c_char, c_long
+         character(kind=c_char), intent(out) :: buf(*)
+         integer(c_long), value :: cap
+         integer(c_long) :: r
+       end function c_exe_path
+    end interface
+    character(kind=c_char) :: buf(4096)
+    character(len=APP_TRAILER) :: tr
+    integer(c_long) :: n
+    integer :: u, st, i
+    integer(8) :: sz
+    found = .false.
+    ioff = 0; ilen = 0; eoff = 0; elen = 0
+    exe = ""
+    n = c_exe_path(buf, int(size(buf), c_long))
+    if (n <= 0) return
+    exe = repeat(" ", int(n))
+    do i = 1, int(n)
+       exe(i:i) = buf(i)
+    end do
+    open(newunit=u, file=exe, access="stream", form="unformatted", status="old", action="read", iostat=st)
+    if (st /= 0) return
+    inquire(unit=u, size=sz)
+    if (sz > APP_TRAILER) then
+       read(u, pos=sz - APP_TRAILER + 1, iostat=st) tr
+       if (st == 0 .and. tr(1:16) == APP_MAGIC) then
+          read(tr(17:36), *, iostat=st) ioff
+          if (st == 0) read(tr(37:56), *, iostat=st) ilen
+          if (st == 0) read(tr(57:76), *, iostat=st) eoff
+          if (st == 0) read(tr(77:96), *, iostat=st) elen
+          found = (st == 0)
+       end if
+    end if
+    close(u)
+  end subroutine app_payload
+
+  ! A built program's entry: "m NS" on its first line runs NS's -main;
+  ! "s NAME" runs the text after that line as the file NAME. Every
+  ! argument is *command-line-args*.
+  subroutine run_app(exe, eoff, elen)
+    character(len=*), intent(in) :: exe
+    integer(8), intent(in) :: eoff, elen
+    character(len=:), allocatable :: entry, first
+    character(len=4096), allocatable :: args(:)
+    integer, allocatable :: lens(:)
+    integer :: u, st, nl, j, nargs
+    type(gc_value) :: none(0)
+    allocate(character(len=int(elen)) :: entry)
+    open(newunit=u, file=exe, access="stream", form="unformatted", status="old", action="read", iostat=st)
+    read(u, pos=eoff + 1, iostat=st) entry
+    close(u)
+    nl = index(entry, achar(10))
+    if (st /= 0 .or. nl < 3) then
+       write(0, '(A)') "clotran: this program's entry cannot be read"
+       stop 1, quiet=.true.
+    end if
+    first = entry(1:nl - 1)
+    nargs = command_argument_count()
+    allocate(args(nargs), lens(nargs))
+    do j = 1, nargs
+       call get_command_argument(j, args(j), lens(j))
+    end do
+    err_unit = 0
+    call gcn_set_current(gcn_find_or_create("user", none))
+    call gce_set_command_line_args(args, lens)
+    if (first(1:2) == "m ") then
+       call load_text("(clojure.core/apply " // first(3:) // "/-main clojure.core/*command-line-args*)", &
+            first(3:), gce_env())
+    else
+       call load_text(entry(nl + 1:), first(3:), gce_env())
+    end if
+  end subroutine run_app
+
   ! The program: the marker at argument k, its target at k+1, and the rest
   ! *command-line-args*. `--run FILE` loads FILE; `-m NS` requires NS and
   ! applies its -main to the args, as clojure.main -m does.
@@ -495,18 +601,26 @@ contains
     end block
   end subroutine image_save
 
-  subroutine image_load(path, ok, id)
+  ! off and length: an image inside a larger file, a built program's; its
+  ! sources are not checked, since a program runs where they are not.
+  subroutine image_load(path, ok, id, off, length)
     character(len=*), intent(in) :: path
     logical, intent(out) :: ok
     integer(8), intent(out) :: id
+    integer(8), intent(in), optional :: off, length
     integer :: u, i, n, k, sz, have, st
+    integer(8) :: base0
+    logical :: app
     character(len=len(IMAGE_MAGIC)) :: magic
     character(len=:), allocatable :: stamp, nm, p
     ok = .false.
+    app = present(off)
+    base0 = 0
+    if (app) base0 = off
     open(newunit=u, file=path, access="stream", form="unformatted", &
          status="old", action="read", iostat=st)
     if (st /= 0) return
-    read(u, iostat=st) magic
+    read(u, pos=base0 + 1, iostat=st) magic
     if (st /= 0 .or. magic /= IMAGE_MAGIC) then
        print '(A,A)', "note: not an image, loading the sources: ", path
        close(u)
@@ -517,6 +631,7 @@ contains
       character(len=len(IMAGE_END)) :: tail
       integer :: here
       inquire(unit=u, size=sz, pos=here)
+      if (app) sz = int(base0 + length)
       tail = ""
       if (sz > len(IMAGE_END) + 8) read(u, pos=sz - 7 - len(IMAGE_END), iostat=st) tail
       if (st /= 0 .or. tail /= IMAGE_END) then
@@ -544,7 +659,7 @@ contains
        call source_path(nm, p)
        have = -1
        inquire(file=p, size=have)
-       if (have /= sz) then
+       if (have /= sz .and. .not. app) then
           print '(A,A,A,A)', "note: ", nm, " changed since the image was made, loading the sources: ", path
           close(u)
           return
@@ -566,6 +681,7 @@ contains
     call gce_image_read(u)
     ! the identity image_save appended: its last eight bytes
     inquire(unit=u, size=sz)
+    if (app) sz = int(base0 + length)
     id = 0
     read(u, pos=sz - 7, iostat=st) id
     close(u)

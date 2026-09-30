@@ -42,6 +42,17 @@ $ clotran -m my-app.core a b          # (my-app.core/-main "a" "b")
 $ clotran test                        # every -test namespace under test/
 ```
 
+`clotran build` makes one executable of a program: the binary, with the
+heap image of the program's namespace loaded and its entry appended. It
+needs no clotran installed and no sources where it runs, starts in about
+0.2 s, and is about 130 MB (the image is most of it). Its code runs
+interpreted; compiled code in the image is next (PLAN step 22):
+
+```
+$ clotran build -m my-app.core -o my-app
+$ ./my-app a b                        # (my-app.core/-main "a" "b")
+```
+
 To have `clotran` on your PATH:
 
 ```

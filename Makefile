@@ -416,7 +416,7 @@ check-new:
 	cd $(B)/new && $(CURDIR)/clotran new my-app >/dev/null
 	cd $(B)/new/my-app && CLOTRAN_PATH=src:test $(CURDIR)/clotran test </dev/null 2>&1 | grep -q "^0 failures, 0 errors"
 	cd $(B)/new && ! $(CURDIR)/clotran new Hello 2>/dev/null
-check-program:
+check-program: $(B)/core.image
 	@echo "--- a program: a script's *command-line-args*, -m NS's -main, status 1 on an error, clotran test's status (PLAN step 22) ---"
 	@rm -rf $(B)/program && mkdir -p $(B)/program/src/p $(B)/program/test/p
 	@printf '(prn *command-line-args*)\n' > $(B)/program/s.cljf
@@ -427,6 +427,12 @@ check-program:
 	cd $(B)/program && CLOTRAN_PATH=src $(CURDIR)/clotran -m p.core x </dev/null | grep -qx ':main ("x")'
 	cd $(B)/program && ! CLOTRAN_PATH=src $(CURDIR)/clotran -m p.core boom </dev/null >/dev/null 2>err.txt && grep -q 'Divide by zero' err.txt
 	cd $(B)/program && ! CLOTRAN_PATH=src:test $(CURDIR)/clotran test </dev/null >/dev/null 2>&1
+	@echo "--- clotran build: one executable that runs where there are no sources (PLAN step 22) ---"
+	cd $(B)/program && CLOTRAN_PATH=src $(CURDIR)/clotran build -m p.core -o prog >/dev/null
+	mkdir -p $(B)/program/elsewhere && mv $(B)/program/prog $(B)/program/elsewhere/
+	cd $(B)/program/elsewhere && env -i ./prog y </dev/null | grep -qx ':main ("y")'
+	cd $(B)/program/elsewhere && ! env -i ./prog boom </dev/null >/dev/null 2>&1
+	@rm -f $(B)/program/elsewhere/prog
 check-embed-repl:
 	@echo "--- a REPL into the running solver: read its grid, write it, stop it (PLAN step 21) ---"
 	scripts/embed-repl-check
