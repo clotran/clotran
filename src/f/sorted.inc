@@ -9,7 +9,7 @@
 
   ! Ordering, for Assoc: the map's comparator applied, or Clojure's
   ! compare when it has none. Keys compare cannot order throw
-  ! ClassCastException, as on the JVM, and the search stops on huge(0).
+  ! ClassCastException, as in clj, and the search stops on huge(0).
   recursive function compare_via(cmp, a, b) result(c)
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: cmp, a, b
@@ -82,7 +82,7 @@
   ! :form under a marker key (the probe must not reach a sorted map's
   ! comparator, which would compare the marker against its keys), so that
   ! (:tag x) and (:form x) are ordinary lookups and equality is the
-  ! map's. class_name_of answers clojure.lang.TaggedLiteral for it,
+  ! map's. class_name_of answers clotran.host.tagged_literal for it,
   ! which is what instance? and print-method dispatch on.
   ! Whether a STRING has the shape of a UUID: 8-4-4-4-12 hex
   ! digits. A UUID is text here, so this is what uuid? can ask.
@@ -125,7 +125,7 @@
     yes = gca_contains(m, gc_key("clotran/tagged-literal", [m]))
   end function is_tagged_literal
 
-  ! (reduced x): an atom-shaped box marked i1 = 3 (Eval, clojure.lang.Reduced)
+  ! (reduced x): an atom-shaped box marked i1 = 3 (Eval, clotran.host.reduced)
   function is_reduced(v) result(yes)
     type(gc_value), intent(in) :: v
     logical :: yes
@@ -137,7 +137,7 @@
 
   ! A collection operation answers with the metadata its argument had:
   ! (assoc (with-meta {} m) k v) keeps m, as every persistent
-  ! collection's does on the JVM. Metadata is a wrapper here
+  ! collection's does in clj. Metadata is a wrapper here
   ! (DEVIATIONS 5), so the result is wrapped again.
   function keep_meta(orig, v, roots) result(out)
     type(gc_value), intent(in) :: orig, v
@@ -166,7 +166,7 @@
     do i = 0, n - 1
        x = strip_meta(gcv_nth(args, i))
        if (x%tag == GCT_NIL) then
-          ! unboxing nil, as the JVM does it
+          ! unboxing nil, as clj does it
           ok = .false.
           call raise_class("clotran.host.null_pointer_exception", "", roots)
           return

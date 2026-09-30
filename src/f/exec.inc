@@ -467,7 +467,7 @@
   !   {:fn "user/f" :file "x.clj" :line 12 :col 3 :env {x 3, coll [1 2]}}
   ! A frame that is not a fn body -- an `if` waiting on its test -- is
   ! not a call and is skipped. A local already cleared after its last
-  ! read reads as nil, here as on the JVM. Only the slots this frame's
+  ! read reads as nil, here as in clj. Only the slots this frame's
   ! ARITY binds are its locals (arity_slots): one frame serves every
   ! arity, and the others' slots read nil without ever having been
   ! bound, which is not the same thing.
@@ -1353,7 +1353,7 @@
              if (v%tag == GCT_INT) site = int(v%ival, kind=4)
              fnv = vs_get(vst, b + 3)
              ! an elided wrapper (case 1) is on the call stack while its
-             ! builtin runs, as on the JVM; nfr has k_finish, or an
+             ! builtin runs, as in clj; nfr has k_finish, or an
              ! unwinding error, pop it
              if (tctx%kst(tctx%ksp)%mode /= 2 .and. tag_of(vs_get(vst, b + 6)) /= GCT_NIL) then
                 call push_frame(tctx, vs_get(vst, b + 6), site)
@@ -1695,7 +1695,7 @@
   ! -- the name no longer compared against eval_new's chain of host
   ! classes and looked up in the type table on every call (a record cost
   ! 1.7 us to make). A compiled `new` keeps the class it was compiled
-  ! against on the JVM too, so a record redefined later is not what an
+  ! against in clj too, so a record redefined later is not what an
   ! older call site makes, there as here.
   recursive function new_cached(nd, argv) result(out)
     type(gc_stack), pointer :: vst
@@ -2126,18 +2126,18 @@
        h = ival_of(vs_get(vst, base + 2))
     else
        ! the macro keyed the table with Util.hash, which is hashCode
-       h = java_hashcode(vs_get(vst, base + 2))
+       h = hash_code(vs_get(vst, base + 2))
     end if
     if (mask /= 0) h = iand(shifta(h, shift), mask)
     entry = strip_meta(gca_get(gc_slot(vs_get(vst, base + 1), 2), gc_int(h)))
     if (entry%tag == GCT_NIL) then
        ! A merged collision bucket is keyed by the hash OF ITS HASH:
        ! the macro's merged test is the int hash itself, which on the
-       ! JVM is an Integer whose hashCode is that number, while here
+       ! clj is an Integer whose hashCode is that number, while here
        ! it is a long whose hashCode differs when it is negative. So
        ! the second probe, and skip-check (below) says it was a merge.
        entry = strip_meta(gca_get(gc_slot(vs_get(vst, base + 1), 2), &
-            gc_int(int(java_hashcode(gc_int(int(h, gc_ip))), gc_ip))))
+            gc_int(int(hash_code(gc_int(int(h, gc_ip))), gc_ip))))
     end if
     call vs_set(vst, base + 3, entry)
     hit = .false.

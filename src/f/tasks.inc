@@ -5,7 +5,7 @@
   ! since step 14f the threads run AT ONCE: there is no baton. A future
   ! starts on its thread when it is made and goes on beside whoever made
   ! it. core.clj's future, promise, pmap and deref are its own
-  ! definitions, verbatim, over the Java objects they expect:
+  ! definitions, verbatim, over clj objects they expect:
   ! Agent/soloExecutor.submit answers a task, a task answers .get,
   ! .isDone and .cancel, and a CountDownLatch is an atom holding its
   ! count.
@@ -205,7 +205,7 @@
 
   ! (.get task), or (.get task timeout unit) with a deadline: the value;
   ! the failure rethrown as ExecutionException; TimeoutException at the
-  ! deadline; CancellationException if cancelled -- java.util.concurrent's
+  ! deadline; CancellationException if cancelled -- clj's concurrency's
   ! names, which core.clj's deref-future catches.
   recursive function task_get(task, deadline) result(out)
     type(eval_ctx), pointer :: tctx

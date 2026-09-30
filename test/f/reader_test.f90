@@ -181,7 +181,7 @@ contains
     call ok("7k. ...and a good number clears the error: ", .not. gcr_has_error())
   end subroutine check_invalid_numbers
 
-  ! #? and #?@. The feature is :cljf; :clj is the JVM. DEVIATIONS 33.
+  ! #? and #?@. The feature is :cljf; :clj is clj. DEVIATIONS 33.
   subroutine check_reader_conditionals()
     type(gc_value) :: v
     call gc_init(512)

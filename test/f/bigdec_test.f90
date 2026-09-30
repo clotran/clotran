@@ -1,5 +1,5 @@
 ! Exercises BigDec on its own. Every expected value here came from
-! java.math.BigDecimal through `clj` -- the scale rules are the whole
+! clotran.host.decimal through `clj` -- the scale rules are the whole
 ! point of the type, and they are not guessable.
 program bigdec_test
   use BigDec
@@ -83,7 +83,7 @@ contains
     call roundtrip("1d. zero: ", "0", "0")
     call roundtrip("1e. zero with scale: ", "0.000", "0.000")
     call roundtrip("1f. a small one: ", "0.001", "0.001")
-    ! Java's toString goes scientific when the adjusted exponent is
+    ! clj's toString goes scientific when the adjusted exponent is
     ! below -6 or the scale is negative.
     call roundtrip("1g. smaller still: ", "0.0000001", "1E-7")
     call roundtrip("1h. an exponent: ", "1e10", "1E+10")
@@ -306,7 +306,7 @@ contains
   end subroutine check_conversions
 
   ! Every expected value here is what (with-precision n :rounding MODE ...)
-  ! answers in real Clojure, which is java.math.BigDecimal.round.
+  ! answers in real Clojure, which is clotran.host.decimal.round.
   subroutine check_rounding()
     character(len=:), allocatable :: r
     logical :: ok

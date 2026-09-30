@@ -1,12 +1,12 @@
 ! BigDec -- arbitrary-precision decimals, as an unscaled integer and a
 ! scale.
 !
-! java.math.BigDecimal is a type the LANGUAGE has: `1.0M` reads as one,
+! clotran.host.decimal is a type the LANGUAGE has: `1.0M` reads as one,
 ! `(= 1.0M 1.0)` is FALSE because a decimal is its own equality
 ! category, and `bigdec` and `with-precision` exist to make them. It is
 ! reproduced here rather than approximated as a double (DEVIATIONS 30),
 ! rounding included: `with-precision` is the only way to divide 1M by 3,
-! and the eight RoundingModes Java names are at the bottom of this file.
+! and the eight RoundingModes clj names are at the bottom of this file.
 !
 ! A decimal is UNSCALED x 10^-SCALE: 1.0M is (10, 1), 1M is (1, 0),
 ! -3.50M is (-350, 2), 1.0E+3M is (10, -2). The unscaled part is a
@@ -20,7 +20,7 @@
 ! and returns that form, so the pool never holds anything else.
 !
 ! SCALE IS PART OF THE VALUE and never silently dropped: 1.0M prints as
-! 1.0M and 1M as 1M, exactly as Java's toString does, which is why
+! 1.0M and 1M as 1M, exactly as clj's toString does, which is why
 ! `(pr-str (* 1M 0.1M))` is 0.1M and not 0.10M. The two are EQUAL all
 ! the same -- Clojure compares decimals by value -- so equality and
 ! hashing here go through dec_cmp and dec_strip rather than the text.
@@ -40,8 +40,8 @@ module BigDec
 
   ! ---- rounding ---------------------------------------------------
   !
-  ! java.math.RoundingMode, as an integer code. `with-precision` is the
-  ! only thing that asks for one, and it names them exactly as Java
+  ! clotran.host.rounding_mode, as an integer code. `with-precision` is the
+  ! only thing that asks for one, and it names them exactly as clj
   ! does; dec_mode_of maps that name.
   integer, parameter, public :: DEC_UP = 1, DEC_DOWN = 2, DEC_CEILING = 3, &
        DEC_FLOOR = 4, DEC_HALF_UP = 5, DEC_HALF_DOWN = 6, DEC_HALF_EVEN = 7, &
@@ -68,7 +68,7 @@ contains
   ! Whether the digits being dropped force the kept ones up. `d` is the
   ! first dropped digit, `sticky` says whether anything nonzero follows
   ! it, `neg` is the sign of the whole value, and `last` is the final
-  ! kept digit (HALF_EVEN's tie-breaker). These are Java's eight rules
+  ! kept digit (HALF_EVEN's tie-breaker). These are clj's eight rules
   ! and nothing else; UNNECESSARY is the one that can fail, and it
   ! answers through `ok`.
   pure subroutine round_up_p(mode, d, sticky, neg, last, up, ok)
@@ -429,7 +429,7 @@ contains
 
   ! BigDecimal.toString: plain when the scale is not negative and the
   ! adjusted exponent is at least -6, scientific otherwise. The two
-  ! rules are Java's, and they are why 0.001M prints plainly and
+  ! rules are clj's, and they are why 0.001M prints plainly and
   ! 1E-7M does not.
   pure subroutine dec_to_text(v, s)
     character(len=*), intent(in) :: v
@@ -607,7 +607,7 @@ contains
   ! EXACT division, as BigDecimal.divide with no MathContext: the
   ! quotient at the smallest scale that divides evenly, and an error
   ! when there is none -- 1M/3 is a non-terminating expansion, which
-  ! Java throws on rather than rounding.
+  ! clj throws on rather than rounding.
   pure subroutine dec_div(a, b, o, ok)
     character(len=*), intent(in) :: a, b
     character(len=:), allocatable, intent(out) :: o

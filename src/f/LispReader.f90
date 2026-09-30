@@ -42,7 +42,7 @@ module LispReader
 
   ! ::x is resolved at READ time against the current namespace, and
   ! ::a/x against its aliases -- which the reader does not know. The
-  ! evaluator installs the lookup; a resolver is what LispReader.java
+  ! evaluator installs the lookup; a resolver is what LispReader
   ! reaches through Compiler.currentNS and namespaceFor.
   abstract interface
      subroutine ns_resolver_i(alias, ns)
@@ -87,7 +87,7 @@ module LispReader
      ! of space, like #_ (see skip_ignorables), and #?@ splices a
      ! collection into the enclosing one. Whoever called read_form --
      ! read_seq, read_map, the top level -- checks these two flags straight
-     ! after the call and clears them. LispReader.java hands back the
+     ! after the call and clears them. LispReader hands back the
      ! reader itself as its nothing-sentinel; a flag is the same signal
      ! without inventing a value for it.
      logical :: rc_nothing = .false., rc_splice = .false.
@@ -231,7 +231,7 @@ contains
     rdx => rd_self()
     rdx%cur_file = 0
     ! a file of the vendored tree is known by its CLASSPATH name, as the
-    ! JVM knows it: (:file (meta #'map)) is "clojure/core.clj" there, and
+    ! clj knows it: (:file (meta #'map)) is "clojure/core.clj" there, and
     ! a stack frame reads (clojure/core.clj:270:13)
     rel = name
     k = index(name, "src/clj/", back=.true.)
@@ -1052,7 +1052,7 @@ contains
   ! ---- reader conditionals ----
   !
   ! #?(:feature form ...) and #?@(...). The features claimed here are
-  ! :cljf and :default; :clj is the JVM and is not claimed, so a .cljc
+  ! :cljf and :default; :clj is clj and is not claimed, so a .cljc
   ! library ported to clotran gets a :cljf branch beside each :clj one
   ! and that is the port. Branches are read in order, the first whose
   ! feature matches is kept, and every other branch is read under
@@ -1214,7 +1214,7 @@ contains
 
   ! ##Inf, ##-Inf and ##NaN -- the symbolic values. They have no
   ! literal spelling of their own, which is the whole reason the reader
-  ! macro exists; LispReader.java maps exactly these three and rejects
+  ! macro exists; LispReader maps exactly these three and rejects
   ! anything else.
   function read_symbolic(text, pos, roots) result(v)
     character(len=*), intent(in) :: text
@@ -1670,7 +1670,7 @@ contains
     case ("formfeed");  v = gc_char(achar(12))
     case default
        ! \é is one character however many bytes; \uXXXX and \oNNN are
-       ! the code point in hex and octal, as LispReader.java reads them.
+       ! the code point in hex and octal, as LispReader reads them.
        block
          integer :: cp, ios
          if (u8_count(name) == 1) then
@@ -1802,7 +1802,7 @@ contains
 
   ! Is tok a symbol or keyword LispReader.matchSymbol accepts? Its
   ! symbolPat, [:]?([\D&&[^/]].*/)?(/|[\D&&[^/]][^/]*), tried in the
-  ! order Java's backtracking tries it -- the colon taken, then the
+  ! order clj's backtracking tries it -- the colon taken, then the
   ! longest namespace, then none -- and the first match checked for a
   ! namespace ending ":/", a name ending ":" or a "::" past the start.
   ! Failing the pattern, arraySymbolPat ([\D&&[^/:]].*)/([1-9]) is
@@ -1864,7 +1864,7 @@ contains
 
   ! ---- number recognition ----
   !
-  ! Clojure's reader decides this with three regexes -- LispReader.java
+  ! Clojure's reader decides this with three regexes -- LispReader
   ! lines 70-74 at clojure-1.12.6, the release the vendored core.clj
   ! comes from:
   !

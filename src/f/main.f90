@@ -6,7 +6,7 @@
 ! The program is run on a thread of its own with a large stack: the
 ! evaluator recurses in Fortran (a builtin calling apply calling a
 ! builtin), and under flang call_builtin's frame is about 176 KB, which
-! the main thread's 8 MB ran out of while loading the compiler. The JVM
+! the main thread's 8 MB ran out of while loading the compiler. Clj
 ! gives its main thread a stack of its choosing for the same reason.
 module clotran_main
   use iso_c_binding
@@ -79,7 +79,7 @@ contains
     end if
 
     ! The host shim -- type predicates that core.clj cannot supply,
-    ! because it would ask instance? about Java classes. NOT a core
+    ! because it would ask instance? about clj classes. NOT a core
     ! library: everything else Clojure programs use must come from
     ! the real core.clj, which is the point of the project.
     if (.not. imaged) then

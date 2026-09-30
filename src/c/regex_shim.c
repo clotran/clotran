@@ -199,10 +199,10 @@ int32_t cre_group_span_units(void *handle, int32_t idx, int32_t *start, int32_t 
 }
 
 /* --- Character ----------------------------------------------------
- * java.lang.Character's predicates and case maps over a code point,
+ * clotran.host.char's predicates and case maps over a code point,
  * answered by ICU (unicode/uchar.h). u_isWhitespace is documented as
- * Java's Character.isWhitespace: the separators less the no-break
- * spaces, plus the C0 controls Java counts. The case maps are the
+ * clj's Character.isWhitespace: the separators less the no-break
+ * spaces, plus the C0 controls clj counts. The case maps are the
  * SIMPLE ones, one code point to one. */
 #include <unicode/uchar.h>
 

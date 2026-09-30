@@ -945,7 +945,7 @@ contains
   end subroutine clotran_rest_args
 
   ! No arity takes `nargs`: Clojure's ArityException, naming the
-  ! function as the JVM does, ns/name.
+  ! function as clj does, ns/name.
   subroutine clotran_arity_error(nargs, name, n) bind(C, name="clotran_arity_error")
     integer(c_int), value :: nargs, n
     character(kind=c_char), intent(in) :: name(*)

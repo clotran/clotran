@@ -454,7 +454,7 @@ contains
     ! ...but NESTED it keeps the print form, because a
     ! collection's toString prints its elements rather than
     ! calling toString on each. Clojure shows
-    ! "[#object[clojure.lang.Namespace ...]]" here, not "[user]".
+    ! "[#object[clotran.host.namespace ...]]" here, not "[user]".
     call ev("17k. ", &
          "(str [(in-ns (quote other))])", """[#<ns other>]""")
   end subroutine check_namespaces
@@ -547,7 +547,7 @@ contains
   end subroutine check_regex
 
   subroutine check_case()
-    ! hash is gc_hash under the JVM's name. Its VALUES are ours, so
+    ! hash is gc_hash under clj's name. Its VALUES are ours, so
     ! what is checked is the only property case* relies on: equal
     ! things hash equal, unequal things generally do not.
     call ev('22a. ', '(= (clotran.host.util/hash "ab") (clotran.host.util/hash "ab"))', &
@@ -596,7 +596,7 @@ contains
     call ev('23e. ', &
          '(.getResourceAsStream (clotran.host.rt/baseLoader) "clojure/nope")', &
          'nil')
-    ! java.util.Properties is an atom over a map, because .load fills
+    ! clotran.host.properties is an atom over a map, because .load fills
     ! it in place.
     call ev('23f. ', &
          '(let* [p (new clotran.host.properties)] (.load p "version=9") ' // &
@@ -674,7 +674,7 @@ contains
 
   ! letfn* is let* with one difference that is the whole point:
   ! every name is in scope in every init, so the functions can call
-  ! each other. Compiler.java's LetFnExpr calls that pre-seeding the
+  ! each other. Compiler's LetFnExpr calls that pre-seeding the
   ! env, like Lisp labels.
   subroutine check_letfn()
     ! MUTUAL recursion -- ev? is written before od? exists.

@@ -145,7 +145,7 @@ module Eval
   integer, parameter :: B_SWAPVALS = 187, B_RESETVALS = 188
   integer, parameter :: B_METHODTABLE = 189, B_GETMETHOD = 190
   integer, parameter :: B_EMPTYMAP = 191, B_REMOVEMETHOD = 192
-  ! java.lang.Math occupies a BLOCK: B_MATH0 + k, k from hosttable.inc.
+  ! clotran.host.math occupies a BLOCK: B_MATH0 + k, k from hosttable.inc.
   integer, parameter :: B_MATH0 = 200, B_MATHN = 45
   integer, parameter :: B_FORMAT = 193, B_NUMCOMPARE = 194
   integer, parameter :: B_READSTRING = 195, B_RE_SPLIT = 196
@@ -188,7 +188,7 @@ module Eval
        B_COMPARATOR = 314, B_RSEQ = 315
   ! The unchecked arithmetic, which wraps where + - * inc dec throw
   integer, parameter :: B_UADD = 316, B_USUB = 317, B_UMUL = 318, B_UINC = 319, B_UDEC = 320
-  ! A stand-in for a JVM object clotran has no counterpart to but code
+  ! A stand-in for a clj object clotran has no counterpart to but code
   ! calls methods on -- a class loader, a thread: non-nil, so the call
   ! reaches its row instead of a NullPointerException
   integer, parameter :: B_STUB = 321
@@ -220,7 +220,7 @@ module Eval
   integer, parameter :: B_ADDWATCH = 357, B_REMWATCH = 358, B_GETWATCHES = 359
   ! TaggedLiteral/create and UUID/fromString
   integer, parameter :: B_TAGGEDLIT = 360, B_UUIDOF = 361
-  ! The tap queue: java.util.concurrent.ArrayBlockingQueue, which is
+  ! The tap queue: clotran.host.array_blocking_queue, which is
   ! a task MAILBOX here (tasks.inc) -- an atom holding a vector,
   ! ready when it holds anything -- and a Thread, which is a task.
   integer, parameter :: B_QOFFER = 362, B_QTAKE = 363, B_THREADSTART = 364
@@ -247,11 +247,11 @@ module Eval
   integer, parameter :: B_SOCKREADB = 422, B_SOCKWRITEB = 423, B_UTF8BYTES = 424, B_UTF8STRING = 425
   integer, parameter :: B_REALPATH = 426
   ! A number's WIDTH, in an integer's or a real's otherwise unused ref:
-  ! what it boxes as on the JVM. Equality and hashing never read it.
+  ! what it boxes as in clj. Equality and hashing never read it.
   integer, parameter :: W_LONG = 0, W_BYTE = 1, W_SHORT = 2, W_INT = 3, W_FLOAT = 1
 
   ! Compiler.CHAR_MAP, verbatim from the pinned clone: the characters
-  ! a Clojure name may hold that a JVM member name may not. '.' is
+  ! a Clojure name may hold that a clj member name may not. '.' is
   ! commented out there and so absent here. The two arrays are one
   ! table read in both directions; demunge tries the long escapes
   ! first, so _COLON_ is not read as the _ that stands for a hyphen.
@@ -280,20 +280,20 @@ module Eval
   ! SHAPE of their name), so there is nowhere namespace-local to put
   ! it and one global table is what `new` and `instance?` both read.
   !
-  ! Shared between threads, as the JVM's classes are (src/f/state.edn).
+  ! Shared between threads, as clj's classes are (src/f/state.edn).
   type(gc_root), save :: types_root
   ! the class names deftype* forms have DECLARED at analysis, before the
   ! type is built: a deftype's expansion names its own class in the
-  ! forms after deftype*, and on the JVM the class exists as soon as
+  ! forms after deftype*, and in clj the class exists as soon as
   ! deftype* is compiled (known_class_name, declare_type_name)
   type(gc_root), save :: declared_root
   integer, save :: reify_id = 0
   integer, save :: proxy_id = 0
   ! EVALUATION DEPTH, and the limit that turns a stack overflow into a
-  ! reportable error instead of a segfault. The JVM does the same thing
+  ! reportable error instead of a segfault. Clj does the same thing
   ! -- StackOverflowError -- and Clojure inherits it.
   !
-  ! There is no depth to copy from Clojure, because the JVM's limit is a
+  ! There is no depth to copy from Clojure, because clj's limit is a
   ! BYTE BUDGET, not a frame count: -XX:ThreadStackSize (2048 KB by
   ! default on this platform, per -XX:+PrintFlagsFinal) divided by
   ! whatever each frame happens to need. Measured on real Clojure, a
@@ -310,7 +310,7 @@ module Eval
   ! That is about twenty times shallower than Clojure per megabyte, and
   ! the reason is structural: one Clojure call costs a chain of
   ! interpreter frames -- eval, eval_call, apply, eval_body, eval back
-  ! into the arguments -- where the JVM has one JIT-compiled frame.
+  ! into the arguments -- where clj has one JIT-compiled frame.
   ! Recorded in DEVIATIONS.md; the real fix is an explicit continuation
   ! rather than a bigger number.
   !
@@ -500,7 +500,7 @@ module Eval
   ! point runs again on recur); nfr is how many call-stack entries it
   ! pops when it finishes -- one per call it stands for, since a call in
   ! tail position reuses the frame but keeps the caller on the call
-  ! stack, as the JVM does; msg is a try's saved error.
+  ! stack, as clj does; msg is a try's saved error.
   type kframe
      integer :: base = 0, pc = 0, i = 0, flags = 0, nfr = 0
      integer :: mode = 0, aux = 0, aux2 = 0   ! a call's argument mode, first slot, arity
@@ -579,8 +579,6 @@ module Eval
   character(len=:), allocatable, save :: clotran_home
 
   include "hosttable.inc"
-  ! the JVM and clojure.lang class names taken as input, and clotran's name
-  ! for each (scripts/class-names, src/clj/clotran/class-aliases.edn)
 
 contains
 
@@ -601,7 +599,7 @@ contains
   ! reason PersistentList's empty-list singleton does: gc_init clears the
   ! global-root registry but this module variable survives it.
   ! The thrown value. A Throwable that has no stack trace yet gets
-  ! the current one -- Java fills it in at construction; here that
+  ! the current one -- clj fills it in at construction; here that
   ! happens in eval_new for a (new SomeException ...) and, failing
   ! that, now, at the throw.
   subroutine set_thrown(v)
@@ -734,8 +732,8 @@ contains
   ! The call stack as text, innermost first, taken when an error is
   ! raised. Each line names the function entered and where it was
   ! called from.
-  ! The rendered trace stops at 128 frames, as the JVM's stops at
-  ! MaxJavaStackTraceDepth: a stack overflow 200000 deep is not 200000
+  ! The rendered trace stops at 128 frames, as clj's stops at
+  ! its maximum trace depth: a stack overflow 200000 deep is not 200000
   ! lines, and building them by concatenation was quadratic. The
   ! element array .getStackTrace answers is still the whole stack.
   subroutine capture_trace()
@@ -842,7 +840,6 @@ contains
     ! orphaned; this is the one place that always follows gc_init.
     vst => gc_my_stack()
     call gcna_reset()
-    call seed_default_imports()
     call gcp_set_forcer(gce_force)
     call gca_set_comparer(compare_via)
     call gcr_set_ns_resolver(kw_ns_of)
@@ -942,8 +939,8 @@ contains
       call bind_builtin(vs_get(vst, base + 3), "current-task", B_CURTASK)
       call bind_builtin(vs_get(vst, base + 3), "task-sleep", B_SLEEP)
     end block
-    ! A whole file as a string. core.clj's slurp is written over
-    ! java.io, which is not here; this is the host's reader for it.
+    ! A whole file as a string: what clotran.files reads with, for
+    ! core.clj's slurp.
     call bind_builtin(core, "clotran-slurp", B_SLURP)
     call bind_builtin(core, "clotran-spit", B_SPIT)
     call bind_builtin(core, "clotran-socket-listen", B_SOCKLISTEN)
@@ -1004,7 +1001,7 @@ contains
     call bind_builtin(core, "hash-map", B_HMAP)
     call bind_builtin(core, "disj", B_DISJ)
     ! The rest of the arithmetic primitives. core.clj defines >, <=,
-    ! inc and the others in terms of clojure.lang.Numbers, so the
+    ! inc and the others in terms of clotran.host.numbers, so the
     ! natives have to exist whether or not anything names them yet.
     call bind_builtin(core, ">", B_GT)
     call bind_builtin(core, "<=", B_LTE)
@@ -1022,13 +1019,13 @@ contains
     call bind_builtin(core, "namespace", B_NAMESPACE)
     call bind_builtin(core, "pop", B_POP)
     ! gen-interface lives in genclass.clj, which is skipped: it
-    ! declares a JVM interface, and there are none here. A macro
+    ! declares a clj interface, and there are none here. A macro
     ! evaluating to nil, so definterface is a no-op rather than an
     ! error -- core/protocols opens with one. DEVIATIONS.md 12.
     call bind_builtin(core, "gen-interface", B_GENIFACE, .true.)
     call bind_builtin(core, "definterface", B_GENIFACE, .true.)
     call bind_builtin(core, "peek", B_PEEK)
-    ! load-file is a Java-side Var in Clojure -- core.clj only decorates
+    ! load-file is made by the host in Clojure (RT) -- core.clj only decorates
     ! it with (alter-meta! #'load-file assoc :added "1.0") -- so it has
     ! to exist before core.clj loads, like *ns* and *out*.
     call bind_builtin(core, "load-file", B_LOADFILE)
@@ -1060,7 +1057,7 @@ contains
     ! Octave compute in doubles and never raise, and Julia gives
     ! BigFloat a working precision (256 bits by default, changed with
     ! setprecision) so big(1)/big(3) is a number. So the root here is
-    ! Java's own name for that default, MathContext.DECIMAL128 --
+    ! clj's own name for that default, MathContext.DECIMAL128 --
     ! 34 significant digits, HALF_EVEN, which is IEEE 754 decimal128 --
     ! and with-precision is setprecision. DEVIATIONS 43.
     !
@@ -1107,7 +1104,7 @@ contains
   ! primitive, because gcn_intern mutates the Var already there rather
   ! than adding a second binding that the first would shadow forever.
   !
-  ! `is_macro` is Var.setMacro, which RT.java calls on exactly one of
+  ! `is_macro` is Var.setMacro, which RT calls on exactly one of
   ! these -- `ns` -- before load("clojure/core").
   ! A native as a VALUE. Host members need this rather than a Var
   ! lookup: core.clj is in the middle of REDEFINING first, next, rest,
@@ -1160,7 +1157,7 @@ contains
   end function inst_seq
 
   ! The var `name` in clotran.rt, applied to `args`. clotran.rt is the
-  ! part of clojure.lang.RT and its neighbours that ClojureScript
+  ! part of clotran.host.rt and its neighbours that ClojureScript
   ! writes in Clojure -- iterators, TransformerIterator, ArrayList,
   ! Eduction -- written in Clojure here too (src/clj/clotran/rt.cljf)
   ! and loaded the first time a row with B_RTFN, or a constructor
@@ -1174,7 +1171,7 @@ contains
 
   ! clotran.multifn: the multimethod's method selection, a file of its
   ! own because it is first needed while core.clj is still loading
-  ! java.util.UUID and its two statics (clotran/uuid.cljf): its own
+  ! clotran.uuid.UUID and its two statics (clotran/uuid.cljf): its own
   ! loader because core.clj reaches (load "uuid") before clotran.rt can
   ! load, and a hosttable row (B_UUIDFN) reaches it from anywhere.
   recursive function uuid_call(name, args) result(out)
@@ -1282,7 +1279,7 @@ contains
   end function mf_call
 
   ! The libs load when checking is switched on, not at the first
-  ! macro: on the JVM clojure.main's own macros pull spec in before any
+  ! macro: in clj clojure.main's own macros pull spec in before any
   ! user code, so spec's (:require [clojure.string]) never lands in the
   ! middle of clojure.string's own load -- which is exactly where the
   ! first user (require 'clojure.string) would otherwise put it.
@@ -1658,7 +1655,7 @@ contains
 
   ! A clotran namespace loads the first time something is looked up in
   ! it -- clotran.io/text-reader, or the type clotran.io.TextReader --
-  ! as naming a class loads it on the JVM. nsname is the namespace; true
+  ! as naming a class loads it in clj. nsname is the namespace; true
   ! when it was not there and has now been loaded.
   recursive function load_clotran_ns(nsname) result(loaded)
     type(gc_stack), pointer :: vst
@@ -1818,9 +1815,9 @@ contains
   ! -- `ns` at line 5976. But core.clj's OWN first form, at line 9,
   ! is (ns clojure.core): the file needs the thing it has not
   ! defined yet. Clojure resolves that outside the .clj entirely --
-  ! the namespace exists Java-side before the file loads, and the
-  ! shipped core is AOT-compiled. clotran has no Java side, so
-  ! something must bridge that window.
+  ! the host makes the namespace before the file loads, and the
+  ! shipped core is compiled ahead of time. clotran's host makes no
+  ! namespace ahead of the file, so something must bridge that window.
   !
   ! It bridges it as a FALLBACK, not a special form. A definition
   ! in the namespace always wins, so the moment core.clj defines
@@ -2031,7 +2028,7 @@ contains
 
   ! (gen-interface :name n :methods [[m [arg-tags] ret arg-metas]*]), as
   ! definterface expands. There is no interface to generate, but a
-  ! method declared ^void answers nil on the JVM whatever its body
+  ! method declared ^void answers nil in clj whatever its body
   ! returns, so those names are recorded, under the interface's class
   ! key in the declared table, for type_spec to honour. args holds
   ! &form and &env ahead of the macro's own.
@@ -2190,7 +2187,7 @@ contains
 
   ! One clause -- (params body...) -- with the type's fields bound
   ! around the body, because a method body sees its fields as PLAIN
-  ! NAMES and not through `this`. On the JVM they are real fields on a
+  ! NAMES and not through `this`. In clj they are real fields on a
   ! real class; here the body is wrapped in a let* that reads each one
   ! off the instance.
   !
@@ -2309,7 +2306,7 @@ contains
 
   ! The type table. Keyed by the class keyword rather than the raw
   ! name so that a lookup here and an instance? test cannot disagree
-  ! about java.lang.
+  ! about how a class is spelt.
   ! A class name a deftype* is about to define, recorded at analysis.
   recursive subroutine declare_type_name(name)
     type(gc_stack), pointer :: vst
@@ -2423,9 +2420,9 @@ contains
        out = gca_get(vs_get(vst, base + 1),  gc_class(dlt_1, [vs_get(vst, base + 1)]))
     end block
     ! A deftype is registered under its own name and under the bare
-    ! last segment, and class_key qualifies a bare name with java.lang
-    ! (canon_class) -- so (Point. 3 4) looks up java.lang.Point and
-    ! must then try Point itself.
+    ! last segment, and class_key resolves a bare name through the
+    ! imports (canon_class) -- so (Point. 3 4) may look up an imported
+    ! name first and must then try Point itself.
     if (gc_kind(out) /= OBJ_TYPE) out = gca_get(vs_get(vst, base + 1), &
          gc_class(cname, [vs_get(vst, base + 1)]))
     call vs_leave(vst, base)
@@ -2436,7 +2433,7 @@ contains
 
 
   ! How many TRAILING fields are defrecord's bookkeeping, counted by
-  ! name exactly as Compiler.java counts altCtorDrops. Zero for a plain
+  ! name exactly as Compiler counts altCtorDrops. Zero for a plain
   ! deftype, which is what keeps its arity check exact.
   integer function alt_ctor_drops(fields)
     type(gc_value), intent(in) :: fields
@@ -2752,7 +2749,7 @@ contains
   end function inst_entries
 
   ! The static `create` every record class gets: (Person/create m),
-  ! which is all map->Person is. Compiler.java emits it exactly when
+  ! which is all map->Person is. Compiler emits it exactly when
   ! there are bookkeeping fields (`fields.count() > hintedFields.count()`,
   ! the same condition as altCtorDrops), so a plain deftype has none and
   ! asking for one still fails.
@@ -2872,7 +2869,7 @@ contains
   !
   ! let* with one difference, and it is the whole point: EVERY name is
   ! in scope in EVERY init, so the functions can call each other.
-  ! Compiler.java's LetFnExpr calls that "pre-seed env (like Lisp
+  ! Compiler's LetFnExpr calls that "pre-seed env (like Lisp
   ! labels)" -- it registers all the locals before analysing any init.
   !
   ! Here that is one frame, seeded with every name bound to nil before
@@ -2961,9 +2958,9 @@ contains
 
   ! (. target member) and (. target (member args...)) -- host interop.
   !
-  ! Clojure's host is the JVM, so `.` there reaches arbitrary Java.
+  ! In clj, `.` reaches any class its host has.
   ! Ours is Fortran, and the only classes that exist are clotran's own
-  ! runtime types -- so this is not a subset of Java interop, it is the
+  ! runtime types -- so this is not a subset of clj interop, it is the
   ! same door onto a different house. Anything unknown fails by MEMBER
   ! NAME, so a load report says what is missing rather than blaming
   ! `.` for all of it.
@@ -3085,7 +3082,7 @@ contains
        end if
     end if
 
-    ! A method called on nil is a NullPointerException, as on the JVM:
+    ! A method called on nil is a NullPointerException, as in clj:
     ! (.toUpperCase nil) is how clojure.string's fns fail on nil there.
     if (.not. class_target) then
        tv = strip_meta(vs_get(vst, base + 1))
@@ -3129,7 +3126,7 @@ contains
        if (.not. tctx%has_error .and. is_call) out = apply(out, vs_get(vst, base + 2))
     else
        ! Reflector's words, class and count included: "No matching
-       ! method jump found taking 1 args for class java.lang.String"
+       ! method jump found taking 1 args for class clotran.host.string"
        block
          character(len=16) :: cbuf
          write(cbuf, '(I0)') gcv_count(vs_get(vst, base + 2))
@@ -3220,8 +3217,8 @@ contains
 
   ! Whether a symbol names a host class. Compiler.maybeClass asks the
   ! classloader; there is nothing to ask here, so the shape of the name
-  ! has to answer: a dotted name, or a bare capitalised one, which is
-  ! what java.lang.* being imported into every namespace amounts to.
+  ! has to answer: a dotted name, or a bare capitalised one, which
+  ! analyze_symbol then accepts only as an import or a known type.
   !
   ! Only ever reached once a symbol has failed to resolve as a local
   ! and as a Var, so it shadows nothing.
@@ -3366,7 +3363,7 @@ contains
        call mark_entry(out)
     else if (cname == "clotran.host.reduced") then
        ! (reduced x) wraps a value to say "stop reducing": a box, as
-       ! an atom is, marked i1 = 3 -- so it is a clojure.lang.Reduced,
+       ! an atom is, marked i1 = 3 -- so it is a clotran.host.reduced,
        ! derefs, and prints as one. (A one-key map printed as a map and
        ! answered map? true.)
        call vs_set(vst, base + 3, nth_or_nil(vs_get(vst, base + 1), 0))
@@ -3435,7 +3432,7 @@ contains
        out = gc_obj(OBJ_ATOM, [vs_get(vst, base + 3), gc_nil()], [vs_get(vst, base + 3)])
     else if (is_box_class(cname)) then
        ! THE BOXING CONSTRUCTORS. (Long. 1) is 1, (String. "x") is
-       ! "x" -- on the JVM they wrap a primitive in an object, and
+       ! "x" -- in clj they wrap a primitive in an object, and
        ! there is no unboxed number here to wrap. What they do have
        ! to do is CONVERT, because (Long. "12") parses and
        ! (Double. 1) widens, so each runs the same cast its
@@ -3449,7 +3446,7 @@ contains
        out = box_convert(cname, vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
     else if (cname == "clotran.host.print_writer" .or. cname == "clotran.host.print_writer" .or. &
          cname == "clotran.host.buffered_writer" .or. cname == "clotran.host.buffered_writer") then
-       ! A PrintWriter over a writer IS that writer here. Java's
+       ! A PrintWriter over a writer IS that writer here. clj's
        ! wraps to add buffering and the print methods; clotran's
        ! writers already take text and hold it, so wrapping would
        ! only add a layer that forwards. What matters is that
@@ -3518,7 +3515,7 @@ contains
              nth_or_nil(vs_get(vst, base + 1), 2), vs_get(vst, base + 4), vs_get(vst, base + 3)], &
             [vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)])
     else if (cname == "clotran.host.delay") then
-       ! (delay body) is (new clojure.lang.Delay (fn [] body)) in
+       ! (delay body) is (new clotran.host.delay (fn [] body)) in
        ! core.clj, so the argument is already a no-argument closure and
        ! nothing here needs to know about the body.
        call vs_set(vst, base + 3, nth_or_nil(vs_get(vst, base + 1), 0))
@@ -3541,7 +3538,7 @@ contains
        out = gc_obj(OBJ_ATOM, [vs_get(vst, base + 3), gc_nil()], [vs_get(vst, base + 3)])
     else if (is_throwable_class(cname)) then
        ! Every exception class core.clj names takes a message, and
-       ! ex-info adds a data map. Anything else about a Java exception
+       ! ex-info adds a data map. Anything else about a clj exception
        ! -- its hierarchy, its stack trace -- has nothing to correspond
        ! to here, so the class name is kept as written and nothing is
        ! invented around it.
@@ -3628,7 +3625,7 @@ contains
          cname == "clotran.host.exception_info") is_throwable_class = .true.
   end function is_throwable_class
 
-  ! The java.lang boxes, whose constructors core.clj and
+  ! The number and character boxes, whose constructors core.clj and
   ! Clojure's suite both write.
   logical function is_box_class(cname)
     character(len=*), intent(in) :: cname
@@ -3723,10 +3720,10 @@ contains
 
   ! --- host members --------------------------------------------------
   !
-  ! (. target member) and Class/member -- host interop. Clojure's host
-  ! is the JVM, so `.` there reaches arbitrary Java. Ours is Fortran,
+  ! (. target member) and Class/member -- host interop. In clj, `.`
+  ! reaches any class its host has. Ours is Fortran,
   ! and the only classes that exist are clotran's own runtime types --
-  ! so this is not a subset of Java interop, it is the same door onto a
+  ! so this is not a subset of clj interop, it is the same door onto a
   ! different house. What is behind the door is DATA: hosttable.inc
   ! lists every class and member the loaded Clojure reaches for, and
   ! these three lookups read it. A member that is not a row does not
@@ -3734,21 +3731,11 @@ contains
 
   ! --- imports ---------------------------------------------------------
   !
-  ! (import* "java.util.regex.Pattern") records Pattern -> that name, so
+  ! (import* "clotran.host.pattern") records Pattern -> that name, so
   ! a class written by its short name afterwards means the imported one.
   ! One list for the whole process, not one per namespace, the same
-  ! choice DEVIATIONS 17 makes for deftype names. java.lang needs no
-  ! entry: it is implicitly imported, as on the JVM.
-  ! RT.DEFAULT_IMPORTS names java.math.BigDecimal and
-  ! java.math.BigInteger in every namespace, which is why core.clj
-  ! writes (. BigDecimal valueOf x) with no import of its own. Seeded
-  ! here rather than left to canon_class, which would answer
-  ! java.lang.BigDecimal and find no row.
-  subroutine seed_default_imports()
-    if (n_imports > 0) return
-    call record_import("clotran.host.decimal")
-    call record_import("clotran.host.bigint")
-  end subroutine seed_default_imports
+  ! choice DEVIATIONS 17 makes for deftype names. Nothing is imported
+  ! by default: every class clotran's sources name is written in full.
 
   subroutine record_import(full)
     character(len=*), intent(in) :: full
@@ -3800,7 +3787,7 @@ contains
   end subroutine canon_class
 
   ! The ONE spelling a class has, wherever it is built: the canonical
-  ! name IN FULL, so String and java.lang.String are both
+  ! name IN FULL, so String and clotran.host.string are both
   ! clotran.host.string and (pr-str (class 1)) is clotran.host.int8. A bare name nothing imported
   ! stays bare, which is what a deftype's own name is.
   subroutine class_key(name, k)
@@ -3816,7 +3803,7 @@ contains
 
 
   ! An array class written as a symbol: String/1 or int/2 (CLJ-2807's
-  ! Sym/N), or the JVM's own descriptor, [I, [[D, [Ljava.lang.String;,
+  ! Sym/N), or clj's own descriptor, [I, [[D, [Lclotran.host.string;,
   ! which maybeResolveIn hands to Class.forName. k is the class key,
   ! spelled as array_class_name spells one; ok is false for anything
   ! else. A Sym/N whose Sym is no class this runtime knows answers ok
@@ -3880,7 +3867,7 @@ contains
   ! (resolve (quote NonExistentClass.Name)) must answer nil for. A row
   ! in the host table, a deftype, or a package clotran models: the
   ! last is a compromise, since there is no loader to ask, and it
-  ! keeps (resolve (quote clojure.lang.PersistentVector)) answering a
+  ! keeps (resolve (quote clotran.host.persistent_vector)) answering a
   ! class while a made-up package answers nil.
   logical function known_class_name(t) result(yes)
     character(len=*), intent(in) :: t
@@ -3890,8 +3877,8 @@ contains
     ! By TEXT, allocating nothing: this runs inside analysis, where a
     ! fresh symbol would be a value the collector cannot see. The
     ! name is the one WRITTEN, not the canonical one -- canon_class
-    ! qualifies every bare name with java.lang, and the prefix rule
-    ! below would then accept anything at all.
+    ! answers an import's full name for a bare one, and the prefix rule
+    ! below would then accept what was never written.
     block
        call canon_class(t, c=dlt_1)
        if (any(HOST_STATICS(:)%cls == dlt_1)) return
@@ -3906,7 +3893,7 @@ contains
     ! defines, named before that namespace is loaded
     if (index(t, "clotran.") == 1) return
     ! a protocol's interface -- clojure.core.protocols.CollReduce, which
-    ! defprotocol generates as a class on the JVM -- is known by the
+    ! defprotocol generates as a class in clj -- is known by the
     ! protocol's Var: the namespace exists and holds the last segment
     block
        integer :: d
@@ -4166,10 +4153,10 @@ contains
   ! (case* expr shift mask default map<case-int [test then]> table-type
   !  test-type skip-check?)
   !
-  ! On the JVM this compiles to a tableswitch, which is the whole point
+  ! In clj this compiles to a tableswitch, which is the whole point
   ! of the shift/mask apparatus core.clj builds around it. Here it is a
   ! lookup in that same map, keyed on the case-int recomputed from the
-  ! runtime value -- so clojure.lang.Util/hash MUST be gc_hash, because
+  ! runtime value -- so clotran.host.util/hash MUST be gc_hash, because
   ! these keys were built with it at macroexpansion time. Constant time
   ! either way; only the constant differs.
 
@@ -4282,7 +4269,7 @@ contains
   ! instance?, so an agent's error handler can tell an
   ! ArithmeticException from the rest.
   ! Both names by clotran's name for the class (canon_class): a catch
-  ! writes the JVM's name or a bare one -- ClassNotFoundException -- and a
+  ! writes clj's name or a bare one -- ClassNotFoundException -- and a
   ! throw may have too.
   logical function exc_class_matches(want_written, exc)
     character(len=*), intent(in) :: want_written
@@ -4313,7 +4300,7 @@ contains
     ! code wrote it, and the catch names it however the catching
     ! code wrote it -- ex-info constructs an ExceptionInfo under
     ! its short imported name, and Clojure's own suite catches
-    ! clojure.lang.ExceptionInfo. class_matches knows the rule
+    ! clotran.host.exception_info. class_matches knows the rule
     ! but only in one direction, so it is asked both ways.
     block
        call gc_ref_text(got%ref, s=dlt_2)
@@ -4390,7 +4377,7 @@ contains
     integer :: base
 
     ! An exception object, of class RuntimeException -- what most of
-    ! the JVM's own runtime failures are -- so (.getMessage e),
+    ! clj's own runtime failures are -- so (.getMessage e),
     ! ex-message and (catch RuntimeException e) all work on a host
     ! error. It was {:error msg}, a map, and none of them did.
     vst => gc_my_stack()
@@ -5475,7 +5462,7 @@ contains
        if (gc_i2(form) >= POS_SHIFT) tctx%top_pos = gc_i2(form)
     end if
     ! a #tag literal in the form is resolved first, as the reader would
-    ! have on the JVM (clotran.reader, DEVIATIONS 46)
+    ! have in clj (clotran.reader, DEVIATIONS 46)
     if (has_unread(form)) then
        block
          type(gc_stack), pointer :: vst
@@ -5496,7 +5483,7 @@ contains
   ! it treated a metadata wrapper and a lazy seq as leaves, so whole
   ! function bodies escaped analysis and were re-expanded at call time.
   ! Both are fixed. Genuine runaway expansion now surfaces as the
-  ! evaluation depth limit, which is where the JVM would report it too.
+  ! evaluation depth limit, which is where clj would report it too.
 
 
   subroutine read_trace_macros()
@@ -5680,7 +5667,7 @@ contains
     call vs_leave(vst, base)
   end function coll_empty
 
-  ! ---- java.lang.Math ---------------------------------------------
+  ! ---- clotran.host.math ---------------------------------------------
   !
   ! clojure/math.clj is a THIN WRAPPER: every one of its functions is
   ! (Math/foo (double x)) and nothing else, so the whole namespace
@@ -5905,7 +5892,7 @@ contains
        end if
     case (27)
        ! IEEE remainder: x - y*rint(x/y), which is what ieee_rem is;
-       ! by zero it is NaN, as Java's
+       ! by zero it is NaN, as clj's
        if (y == 0.0_gc_dp) then
           out = gc_real(ieee_value(1.0_gc_dp, ieee_quiet_nan))
        else
@@ -5933,7 +5920,7 @@ contains
        ! Math.round(double) is floor(x + 0.5) and answers a long.
        out = gc_int(int(floor_dbl(x + 0.5_gc_dp), gc_ip))
     case (34)
-       ! Java's unbiased exponent has the mantissa in [1,2);
+       ! clj's unbiased exponent has the mantissa in [1,2);
        ! Fortran's has it in [0.5,1).
        ! NaN and the infinities answer MAX_EXPONENT + 1, zero and the
        ! subnormals MIN_EXPONENT - 1, as Math.getExponent does
@@ -5986,7 +5973,7 @@ contains
        end if
     case (43)
        ! Floor division, not truncation: (floorDiv -7 2) is -4. In
-       ! integers, so Long/MIN_VALUE by -1 wraps as Java's does rather
+       ! integers, so Long/MIN_VALUE by -1 wraps as clj's does rather
        ! than going through a double.
        if (ib == 0_gc_ip) then
           call raise_class("clotran.host.arithmetic_exception", "Divide by zero", [gc_nil()])
@@ -6026,7 +6013,7 @@ contains
   !
   ! core.clj's `format` is (String/format fmt (to-array args)) and
   ! nothing more, so this is the whole of it. A SUBSET of
-  ! java.util.Formatter: the conversions that appear in Clojure's own
+  ! clotran.host.formatter: the conversions that appear in Clojure's own
   ! source and suite -- s S d x X o f e E g b B c n %% -- with the
   ! '-', '0' and '+' flags, a width and a precision. Argument-index
   ! syntax (%1$s) is not here; nothing in the tree writes it.
@@ -6034,7 +6021,7 @@ contains
   ! An unknown conversion is an ERROR rather than a passthrough: a
   ! format string that silently keeps its own text is the kind of
   ! plausible wrong answer that survives for a long time.
-  subroutine java_format(fmt, argv, s)
+  subroutine format_directives(fmt, argv, s)
     type(eval_ctx), pointer :: tctx
     character(len=*), intent(in) :: fmt
     type(gc_value), intent(in) :: argv
@@ -6136,13 +6123,13 @@ contains
           end block
        end block
     end do
-  end subroutine java_format
+  end subroutine format_directives
 
   ! Pattern.split -- what clojure.string/split is, and the one regex
   ! operation the matcher API cannot already express: it walks the
   ! subject finding matches and returns the text BETWEEN them.
   !
-  ! Java's limit rule, which is not obvious: a positive limit caps the
+  ! clj's limit rule, which is not obvious: a positive limit caps the
   ! number of parts and the last part keeps the rest of the string
   ! unsplit; zero or absent means no cap AND trailing empty parts are
   ! dropped; a negative limit means no cap and keep them.
@@ -6194,7 +6181,7 @@ contains
        ok = regex_group_span(mh, 0, gs, ge, ascii=ascii)
        if (.not. ok) exit
        ! A zero-width match at the position we are already at would
-       ! loop forever and produce nothing; Java skips it too.
+       ! loop forever and produce nothing; clj skips it too.
        if (ge == gs .and. gs == from .and. from == 0) cycle
        block
           if (ascii) then
@@ -6521,7 +6508,7 @@ contains
        end if
        call upcase_in_place(p)
     case ("b", "B")
-       ! Java's %b is false for nil and false, true for EVERYTHING
+       ! clj's %b is false for nil and false, true for EVERYTHING
        ! else -- including 0 and "".
        if (truthy(a)) then
           p = "true"
@@ -6584,7 +6571,7 @@ contains
          end select
          write(buf, spec) num_dbl(a)
          p = trim(adjustl(buf))
-         ! Fortran writes .5 where Java writes 0.5.
+         ! Fortran writes .5 where clj writes 0.5.
          if (len(p) > 0) then
             if (p(1:1) == ".") then
                block
@@ -6709,7 +6696,7 @@ contains
   end function value_pair
 
   ! Compiler.specials -- the map special-symbol? asks. Its VALUES are
-  ! parser objects on the JVM and nothing reads them through this Var,
+  ! parser objects in clj and nothing reads them through this Var,
   ! so nil will do; the KEYS are the answer.
   !
   ! Clojure's list, not is_special's. The two differ: clotran has
@@ -6744,7 +6731,7 @@ contains
   ! One cell of (iterate f x): a realised head and an unrealised
   ! tail. The tail'"s thunk is an ordinary closure over a frame
   ! binding f and x, whose body is the form
-  ! (clojure.lang.Iterate/create __f (__f __x)) -- so the next cell
+  ! (clotran.host.iterate/create __f (__f __x)) -- so the next cell
   ! is built by the evaluator, the same way a lazy-seq body is,
   ! rather than by anything special-cased in the collector.
   ! (range start end step) as a LAZY cell: realised head, unrealised
@@ -6774,11 +6761,11 @@ contains
   !
   ! core.clj's map, filter, keep, for and doseq process a chunked seq
   ! 32 elements at a time through a chunk buffer, and reduce over one
-  ! reduces each chunk with the host's loop. That is where the JVM's
+  ! reduces each chunk with the host's loop. That is where clj's
   ! seq speed comes from, and the code is core.clj's; what it needs
   ! from the host is IChunk, ChunkBuffer, ChunkedCons and chunkedFirst/
   ! chunkedMore on the seqs that are chunked: a vector's seq and a
-  ! range, exactly as on the JVM.
+  ! range, exactly as in clj.
   !
   ! A chunk (OBJ_CHUNK) is a window [i1, i2) onto a backing: a raw run
   ! (from a chunk buffer or a materialised range) or a vector (a
@@ -7270,7 +7257,7 @@ contains
     ! is the callee (analyze.inc wrapper_builtin)
     av = wrapper_of(fn, nargs)
     if (av%tag /= GCT_NIL) then
-       ! the wrapper is still on the call stack, as it is on the JVM's
+       ! the wrapper is still on the call stack, as it is in clj's
        call vs_set(vst, base + 1, fn)
        call push_frame(ctx_self(), vs_get(vst, base + 1), 0)
        out = gce_apply_slots(vst, av, argbase, nargs)
@@ -7435,7 +7422,7 @@ contains
             end block
           end block
        else if (gc_i1(fn) == B_UUIDFN) then
-          ! java.util.UUID's statics: clotran.uuid's vars (uuid_call)
+          ! clotran.uuid.UUID's statics: clotran.uuid's vars (uuid_call)
           block
             type(gc_value) :: nm
             nm = gc_slot(fn, 1)
@@ -7553,7 +7540,7 @@ contains
        ! both live here rather than as builtins.
        if (fn%tag == GCT_KEY .and. (gcv_count(args) == 0 .or. gcv_count(args) > 2)) then
           ! Keyword.invoke has one and two: ArityException otherwise,
-          ! with the JVM's own count and its "(> 20)" past twenty
+          ! with clj's own count and its "(> 20)" past twenty
           block
             character(len=16) :: cbuf
             if (gcv_count(args) > 20) then
@@ -8044,7 +8031,7 @@ contains
           case (GCT_STR, GCT_SYM, GCT_KEY, GCT_CLASS, GCT_BIG)
              ! By TEXT, not by pool slot. clotran does not intern
              ! text -- gc_equal says so: the same text allocated
-             ! twice is two slots but one value -- while the JVM
+             ! twice is two slots but one value -- while clj
              ! interns keywords, symbols and literal strings, so
              ! (identical? :a :a) is true there. Comparing slots
              ! here would answer false, and a record's equiv opens
@@ -8167,7 +8154,7 @@ contains
          if (tl%tag == GCT_NIL) tl = gcl_empty([vs_get(vst, base + 1)])
          if (gcl_is(tl)) then
             out = gcl_cons(gcv_nth(vs_get(vst, base + 1), 0), tl, [vs_get(vst, base + 1), tl])
-            ! a cell cons makes is a clojure.lang.Cons, not a list: i2 = 1
+            ! a cell cons makes is a clotran.host.cons, not a list: i2 = 1
             ! says so to list? and class, and changes nothing else. Onto
             ! nil it IS a list, as RT.cons makes it.
             if (tag_of(gcv_nth(vs_get(vst, base + 1), 1)) /= GCT_NIL) call gc_set_i2(out, 1)
@@ -8546,14 +8533,14 @@ contains
        write(*, '(A)') ""
        out = gc_nil()
     case (B_NS)
-       ! The bootstrap ns, and a deliberate near-copy of RT.java's
+       ! The bootstrap ns, and a deliberate near-copy of RT's
        ! bootNamespace: find-or-create the namespace and switch to it,
        ! nothing else. core.clj's own ns macro (its line 5976) replaces
        ! this by ordinary definition once it exists.
        !
        ! A macro, so the name arrives UNEVALUATED, at index 2 -- every
        ! macro is called with &form and &env ahead of its own
-       ! arguments. RT.java writes the same signature out longhand:
+       ! arguments. RT writes the same signature out longhand:
        ! invoke(Object __form, Object __env, Object arg1).
        !
        ! It also arrives WRAPPED, since core.clj's own first form is
@@ -8575,7 +8562,7 @@ contains
           call gcn_set_current(out)
        end if
     case (B_INNS)
-       ! A FUNCTION, not a macro -- RT.java interns inNamespace without
+       ! A FUNCTION, not a macro -- RT interns inNamespace without
        ! setMacro, so (in-ns 'user) evaluates its argument.
        a = strip_meta(gcv_nth(vs_get(vst, base + 1), 0))
        if (a%tag /= GCT_SYM) then
@@ -9003,7 +8990,7 @@ contains
     case (B_BITAND, B_BITOR, B_BITXOR, B_SHL, B_SHR, B_BITANDNOT, B_USHR)
        ! A bit operation is defined on FIXED-WIDTH integers only, and
        ! Clojure says so rather than guessing: "bit operation not
-       ! supported for: class clojure.lang.BigInt". Without the check
+       ! supported for: class clotran.host.bigint". Without the check
        ! a BigInt read as its (empty) integer field and answered 0.
        a = strip_meta(gcv_nth(args, 0)); b = strip_meta(gcv_nth(args, 1))
        if (a%tag /= GCT_INT .or. (n >= 2 .and. b%tag /= GCT_INT)) then
@@ -9088,7 +9075,7 @@ contains
          integer(gc_ip) :: w, m, half
          a = strip_meta(gcv_nth(args, 0))
          w = int_of_number(a)
-         ! a DOUBLE goes through Java's (int) first, which SATURATES --
+         ! a DOUBLE goes through clj's (int) first, which SATURATES --
          ! (unchecked-int 1e10) is 2147483647, not the low 32 bits
          if (a%tag == GCT_REAL) w = max(-2147483648_gc_ip, min(2147483647_gc_ip, w))
          select case (id)
@@ -9148,7 +9135,7 @@ contains
             end block
           end block
        else if (a%tag == GCT_REAL) then
-          ! Java's (long) of a double: truncation, SATURATING at the
+          ! clj's (long) of a double: truncation, SATURATING at the
           ! ends and 0 for NaN. int() at the default kind gave
           ! 2147483647 for 1e30.
           out = gc_int(long_of_double(gc_rval(a)))
@@ -9259,7 +9246,7 @@ contains
        end block
 
     case (B_ARRSORT)
-       ! (. java.util.Arrays (sort a cmp)) -- in place, and the
+       ! (. clotran.host.arrays (sort a cmp)) -- in place, and the
        ! return value is ignored by core.clj's sort, which reads the
        ! array back with (seq a).
        block
@@ -9364,7 +9351,7 @@ contains
          end block
          ! The clone has the shape of the VIEW, not of the buffer
          ! behind it: (aclone (aget m 0)) on a 2x3 is a fresh length-3
-         ! array, the way Java's aclone of one row of a [[I is. Taking
+         ! array, the way clj's aclone of one row of a [[I is. Taking
          ! gcna_extents(h) here cloned the whole 2x3 instead. Every
          ! dimension of a fresh array is 0-based, so lows is zeros
          ! rather than the source's.
@@ -9444,8 +9431,8 @@ contains
 
     case (B_SPIT)
        ! (clotran-spit path text): the whole file replaced by the text.
-       ! core.clj's spit is written over java.io, which is not here;
-       ! this is clotran-slurp's other half.
+       ! What clotran.files writes with, for core.clj's spit; this is
+       ! clotran-slurp's other half.
        block
          character(len=:), allocatable :: path, text
          integer :: u, st
@@ -9808,7 +9795,7 @@ contains
          end if
 
          ! Out of range is ArrayIndexOutOfBoundsException naming the index
-         ! and the length, as the JVM says it -- for a slice as for an
+         ! and the length, as clj says it -- for a slice as for an
          ! element: a bad slice index once answered nil.
          block
            integer, allocatable :: ext(:)
@@ -9970,7 +9957,7 @@ contains
     case (B_SIMPLENAME)
        ! Class.getSimpleName: the name without its package, so
        ! String's is "String". It shared getName's row and answered
-       ! "java.lang.String", which every error report that names an
+       ! "clotran.host.string", which every error report that names an
        ! exception's class then carried.
        block
          character(len=:), allocatable :: nm
@@ -9990,7 +9977,7 @@ contains
        ! value comes back unchanged or it throws. nil is the
        ! NullPointerException the array operation would raise on it; the
        ! wrong thing is a ClassCastException naming both types the way
-       ! the JVM does, [D for double[] and so on.
+       ! clj does, [D for double[] and so on.
        block
          character(len=:), allocatable :: want, desc, have, kind
          type(gc_value) :: hv
@@ -10053,7 +10040,7 @@ contains
           call vs_leave(vst, base)
           return
        end if
-       ! RT.longCast, clojure.core/long. Read from RT.java at the pinned
+       ! RT.longCast, clojure.core/long. Read from RT at the pinned
        ! commit: an integer answers itself; a BigInt must fit or it is
        ! "Value out of range for long"; a ratio truncates; a character
        ! is its code; ANY OTHER number goes through its double, with the
@@ -10214,8 +10201,8 @@ contains
        end block
     case (B_LOADREADER)
        ! Compiler.load over a reader -- load-reader, and load-string
-       ! through it. A reader is the text itself (java.io.StringReader.
-       ! is its string) or clojure.java.io's TextReader, read to its end.
+       ! through it. A reader is the text itself (clotran.io.TextReader.
+       ! is its string) or clotran.io's TextReader, read to its end.
        block
          character(len=:), allocatable :: text
          a = strip_meta(gcv_nth(args, 0))
@@ -10705,7 +10692,7 @@ contains
        end block
     case (B_ISWS, B_ISLOWER, B_ISDIGIT, B_ISLETTER, B_ISALNUM)
        ! Character.isX over the code point, answered by ICU (cu_* in
-       ! regex_shim.c); u_isWhitespace is defined as Java's.
+       ! regex_shim.c); u_isWhitespace is defined as clj's.
        block
          type(gc_value) :: cv
          integer(c_int32_t) :: cp
@@ -10723,7 +10710,7 @@ contains
        ! A character or a whole string: Character/toUpperCase and
        ! String.toUpperCase, one code point at a time through ICU's
        ! SIMPLE case map -- one code point to one, so ß stays ß where
-       ! Java's String.toUpperCase writes SS.
+       ! clj's String.toUpperCase writes SS.
        block
          type(gc_value) :: v
          character(len=:), allocatable :: t, r
@@ -10810,7 +10797,7 @@ contains
           out = gc_str(dlt_1 // "/src/clj", [vs_get(vst, base + 1)])
        end block
     case (B_RESOURCE)
-       ! Java answers null for a resource that is not there, and
+       ! clj answers null for a resource that is not there, and
        ! with-open then fails on the nil -- same shape either way.
        block
          character(len=:), allocatable :: path, text
@@ -10832,7 +10819,7 @@ contains
          end if
        end block
     case (B_PROPLOAD)
-       ! java.util.Properties.load: key=value a line, # and ! comment.
+       ! clotran.host.properties.load: key=value a line, # and ! comment.
        !
        ! Its own frame, because the key and the value are two separate
        ! allocations and BOTH must be on the shadow stack before the
@@ -10962,7 +10949,7 @@ contains
             end block
          else if (gc_kind(coll) == OBJ_INST) then
             ! THE path contains? takes: core.clj's contains? is
-            ! (. clojure.lang.RT (contains coll key)), which lands
+            ! (. clotran.host.rt (contains coll key)), which lands
             ! here rather than on the contains? builtin.
             out = inst_invoke(coll, "containsKey", rest_args(args, 1), hit)
             if (.not. hit) out = gc_bool(coll_has(coll, gcv_nth(args, 1)))
@@ -11137,7 +11124,7 @@ contains
          end if
        end block
     case (B_ARRAYTYPESYM)
-       ! clojure.lang.Util/arrayTypeToSymbol: an array class as the symbol
+       ! clotran.host.util/arrayTypeToSymbol: an array class as the symbol
        ! Clojure prints it with -- component/dimensions, double/1 for [D.
        block
          character(len=:), allocatable :: cn, comp
@@ -11391,7 +11378,7 @@ contains
        end block
     case (B_UUIDOF)
        ! (parse-uuid s) and UUID/fromString. A UUID is its TEXT here
-       ! (DEVIATIONS 12: java.util.UUID is not a type clotran has), so
+       ! (DEVIATIONS 12: clotran.uuid.UUID is not a type clotran has), so
        ! this checks the shape and answers the string; a string that
        ! is not one raises, which is what parse-uuid catches to nil.
        out = uuid_of(gcv_nth(args, 0), [vs_get(vst, base + 1)])
@@ -11479,7 +11466,7 @@ contains
     case (B_RE_GROUP)
        ! (.group) is group 0 (the whole match); (.group n) is group n.
        ! A group that exists but did not participate answers nil, same
-       ! as Java's Matcher.group(n) returning null -- an optional group
+       ! as clj's Matcher.group(n) returning null -- an optional group
        ! inside an alternation that did not fire.
        block
          type(gc_value) :: mt, iv, subj
@@ -11619,7 +11606,7 @@ contains
        end block
     case (B_FORNAME)
        ! An ARRAY class is the exception, and core.clj needs it:
-       ! to-array-2d is (make-array (Class/forName "[Ljava.lang.Object;")
+       ! to-array-2d is (make-array (Class/forName "[Lclotran.host.value;")
        ! n), so throwing here made it fail on every collection, ragged
        ! or not. The name answers as a class, make-array reads it as
        ! the "value" kind (array_kind_for's default), and each row is
@@ -11636,7 +11623,7 @@ contains
             end block
             if (len(cn) > 0) then
                if (cn(1:1) == "[") then
-                  ! [Ljava.lang.Object; is [Lclotran.host.value;
+                  ! a descriptor names its component in full
                   block
                     character(len=:), allocatable :: k
                     logical :: ok
@@ -11650,10 +11637,10 @@ contains
             end if
           end block
        end if
-       ! Otherwise there are no Java classes, so Class/forName THROWS -- which
+       ! Otherwise it is no class clotran has, so Class/forName THROWS -- which
        ! is the honest answer and also the useful one: core.clj's
        ! when-class catches ClassNotFoundException and skips the
-       ! body, so (when-class "java.sql.Timestamp" (load "instant"))
+       ! body, so (when-class "clotran.host.timestamp" (load "instant"))
        ! skips itself without clotran naming instant at all.
        block
          type(gc_value) :: exc
@@ -11677,7 +11664,7 @@ contains
        ! and a persistent vector cannot be mutated.
        !
        ! An Object[] is answered as itself, not copied (RT.toArray), so
-       ! (sort-by f arr) sorts arr in place, as on the JVM.
+       ! (sort-by f arr) sorts arr in place, as in clj.
        block
          type(gc_value) :: a0
          character(len=:), allocatable :: kn
@@ -11929,7 +11916,7 @@ contains
                   out = gc_nil()
                   ! A class that EXISTS -- a row in the host table or a
                   ! deftype -- and not merely a name shaped like one:
-                  ! (resolve 'NonExistentClass.Name) is nil on the JVM.
+                  ! (resolve 'NonExistentClass.Name) is nil in clj.
                   if (is_class_name(sym2) .and. known_class_name(t)) then
                      block
                         call class_key(t, k=dlt_1)
@@ -11967,7 +11954,7 @@ contains
             end if
          else if (.not. gcl_is(coll) .and. coll%tag /= GCT_NIL) then
             ! not a stack: IPersistentStack is a vector or a list, and a
-            ! seq, a set or a map is refused as on the JVM
+            ! seq, a set or a map is refused as in clj
             block
                call class_name_of(coll, s=dlt_1)
                call raise_class("clotran.host.class_cast_exception", dlt_1 //  " cannot be cast to clotran.host.i_persistent_stack", &
@@ -12253,7 +12240,7 @@ contains
     case (B_ISASSIGN)
        out = gc_bool(class_assignable(strip_meta(gcv_nth(args, 0)), strip_meta(gcv_nth(args, 1))))
     case (B_HASHCODE)
-       out = gc_int(int(java_hashcode(gcv_nth(args, 0)), gc_ip))
+       out = gc_int(int(hash_code(gcv_nth(args, 0)), gc_ip))
     case (B_CANSEQ)
        ! RT.canSeq, behind seqable?: what seq would take without
        ! complaint -- nil, strings, the collections, and a deftype
@@ -12447,7 +12434,7 @@ contains
             call text_of(gcv_nth(args, 0), s=dlt_1)
             rel = dlt_1
          end block
-         ! The two libs that ARE the JVM are skipped BY NAME, and
+         ! The two libs that generate host classes are skipped BY NAME, and
          ! loudly. core_proxy and genclass emit bytecode through
          ! clojure.asm and DynamicClassLoader; there is nothing here
          ! for them to emit. Naming the two, rather than tolerating
@@ -12472,7 +12459,7 @@ contains
             call vs_leave(vst, base)
             return
          end if
-         ! clojure/uuid runs verbatim on clotran.rt's java.util.UUID,
+         ! clojure/uuid runs verbatim on clotran.rt's clotran.uuid.UUID,
          ! which must exist before its print-method names the class
          if (rel == "clojure/uuid" .and. .not. uuid_loaded) &
               out = uuid_call("identity-uuid", gcv_empty([vs_get(vst, base + 1)]))
@@ -12498,18 +12485,16 @@ contains
             call vs_leave(vst, base)
             return
          end if
-         ! Two of Rich's files are Clojure written against java.util --
+         ! Two of Rich's files are Clojure written against the host's collections --
          ! core_print.clj dispatches print-method on Map, Collection, List,
          ! RandomAccess and Set, data.clj extends its protocols to three
          ! of them -- and ClojureScript's answer to both is a version of
-         ! its own. So is clotran's: the same file with the JVM keys taken
+         ! its own. So is clotran's: the same file with those keys taken
          ! out, loaded in its place. The vendored file stays, unread.
          ! DEVIATIONS.md 40.
          if (rel == "clojure/core_print") rel = "clotran/core_print"
          if (rel == "clojure/data") rel = "clotran/data"
          if (rel == "clojure/core_proxy") rel = "clotran/core_proxy"
-         ! clojure.java.io: text files over clotran-slurp and clotran-spit,
-         ! which core.clj's slurp and spit are written against
          ! each value on the stack before the next allocation: the path's
          ! gc_str inside the conj's arguments could collect the fresh empty
          ! vector, which only a Fortran local held (found by torture with
@@ -12889,7 +12874,7 @@ contains
             call vs_set(vst, base + 2, av)
             block
                call gc_ref_text(fv%ref, s=dlt_1)
-               call java_format(dlt_1, vs_get(vst, base + 2), s=dlt_2)
+               call format_directives(dlt_1, vs_get(vst, base + 2), s=dlt_2)
                out = gc_str(dlt_2,  [vs_get(vst, base + 1), vs_get(vst, base + 2)])
             end block
          end if
@@ -13283,7 +13268,7 @@ contains
             end block
          else if (mt%tag == GCT_STR .and. n >= 3) then
             ! String.replaceAll(regex, replacement) and replaceFirst: the
-            ! pattern source is compiled here, as Java compiles it on
+            ! pattern source is compiled here, as clj compiles it on
             ! every call, and matched against the string.
             block
               type(gc_value) :: rx, mv
@@ -13393,7 +13378,7 @@ contains
          else if (pv%tag == GCT_STR .and. sv%tag == GCT_STR) then
             ! String.split(regex[, limit]): the string is the subject and
             ! the second argument is a pattern SOURCE, compiled here as
-            ! Java compiles it on every call.
+            ! clj compiles it on every call.
             call vs_set(vst, base + 2, pv)
             block
               type(gc_value) :: rx
@@ -13675,7 +13660,7 @@ contains
                call raise_class("clotran.host.arithmetic_exception", "Divide by zero", [vs_get(vst, base + 1)])
             else
                ! With a precision the quotient is rounded to it; with
-               ! none it is exact or it throws, which is what Java does
+               ! none it is exact or it throws, which is what clj does
                ! outside with-precision.
                call math_context(mcp, mcm)
                if (mcp > 0) then
@@ -13863,7 +13848,7 @@ contains
          if (cok) then
             out = gc_int(cv)
          else
-            ! what the JVM throws when neither is Comparable to the other
+            ! what clj throws when neither is Comparable to the other
             block
                call type_name(strip_meta(gcv_nth(args, 0)), s=dlt_1)
                call type_name(strip_meta(gcv_nth(args, 1)), s=dlt_2)
@@ -13890,14 +13875,14 @@ contains
        out = gc_bool(is_instance(gcv_nth(args, 0), gcv_nth(args, 1)))
     case (B_REDUCEINIT)
        ! (.reduce coll f) and (.reduce coll f init): IReduceInit.reduce,
-       ! the host loop the JVM runs for a LongRange, a vector or a list
+       ! the host loop clj runs for a LongRange, a vector or a list
        ! instead of walking seqs. A native range is walked by its
        ! arithmetic and allocates no cells; a reduced value ends it
-       ! and is unwrapped, as Java's reduce does.
+       ! and is unwrapped, as clj's reduce does.
        out = reduce_native(strip_meta(gcv_nth(args, 0)), gcv_nth(args, 1), n >= 3, gcv_nth(args, 2))
     case (B_CHUNK_ADD)
        ! ChunkBuffer.add: the buffer grows if asked past its capacity,
-       ! where Java's throws -- nothing in core.clj asks.
+       ! where clj's throws -- nothing in core.clj asks.
        a = strip_meta(gcv_nth(args, 0))
        if (gc_kind(a) /= OBJ_CHUNKBUF) then
           block
@@ -14401,7 +14386,7 @@ contains
           sb = dlt_1
        end block
        if (a%tag == GCT_STR) then
-          c = java_compare_to(sa, sb)
+          c = string_compare_to(sa, sb)
        else
           ! Symbol.compareTo: no namespace first, then namespace, then name
           block
@@ -14414,10 +14399,10 @@ contains
             else if (pa > 1 .and. pb <= 1) then
                c = 1
             else if (pa > 1) then
-               c = java_compare_to(sa(1:pa-1), sb(1:pb-1))
-               if (c == 0) c = java_compare_to(sa(pa+1:), sb(pb+1:))
+               c = string_compare_to(sa(1:pa-1), sb(1:pb-1))
+               if (c == 0) c = string_compare_to(sa(pa+1:), sb(pb+1:))
             else
-               c = java_compare_to(sa, sb)
+               c = string_compare_to(sa, sb)
             end if
           end block
        end if
@@ -14584,7 +14569,7 @@ contains
 
   ! Whether v can answer `name`: a symbol, a keyword, or a string (which
   ! is its own). nil is a NullPointerException, anything else a
-  ! ClassCastException, as `name` throws on the JVM -- answering ""
+  ! ClassCastException, as `name` throws in clj -- answering ""
   ! for (name 2) hid a wrong argument.
   logical function named_or_throw(v, roots) result(ok)
     type(gc_value), intent(in) :: v
@@ -14604,7 +14589,7 @@ contains
   ! differ, else of the lengths -- (compare "abc" "abf") is -3. The
   ! intrinsic < pads the shorter string with blanks, which put "ab"
   ! after "ab\u0001".
-  integer function java_compare_to(sa, sb) result(c)
+  integer function string_compare_to(sa, sb) result(c)
     character(len=*), intent(in) :: sa, sb
     integer, allocatable :: ua(:), ub(:)
     integer :: i
@@ -14617,7 +14602,7 @@ contains
        end if
     end do
     c = size(ua) - size(ub)
-  end function java_compare_to
+  end function string_compare_to
 
   subroutine utf16_units(t, u)
     character(len=*), intent(in) :: t
@@ -14641,7 +14626,7 @@ contains
     u = u(1:k)
   end subroutine utf16_units
 
-  ! One comparator call, following AFunction.compare (AFunction.java):
+  ! One comparator call, following AFunction.compare (AFunction):
   ! a function that answers a BOOLEAN is a predicate, so (sort > coll)
   ! works -- true means "less", and false asks the reverse question to
   ! tell 0 from 1. Anything else is a number and its sign is the answer.
@@ -14707,7 +14692,7 @@ contains
     call vs_leave(vst, base)
   end function comparator_call
 
-  ! java.util.Arrays/sort -- IN PLACE, and STABLE, which Clojure's sort
+  ! clotran.host.arrays/sort -- IN PLACE, and STABLE, which Clojure's sort
   ! docstring promises: "equal elements will not be reordered". A
   ! merge sort rather than a quicksort for exactly that reason; the
   ! extra array is the price of the guarantee.
@@ -14790,7 +14775,7 @@ contains
 
   ! --- struct maps --------------------------------------------------
   !
-  ! A struct map IS a map. PersistentStructMap on the JVM is a storage
+  ! A struct map IS a map. PersistentStructMap in clj is a storage
   ! optimisation -- a shared key basis plus a flat value array, so N
   ! instances of the same struct do not each carry their keys -- and
   ! nothing about its BEHAVIOUR differs from a map. Verified against
@@ -14919,7 +14904,7 @@ contains
   end function struct_create
 
   ! getAccessor: the KEY itself. Clojure returns a closure over the
-  ! value slot, which is faster than a lookup on the JVM; here the
+  ! value slot, which is faster than a lookup in clj; here the
   ! values are in a map and a keyword already looks itself up, so
   ! ((accessor point :x) p) is (:x p). What is lost is the
   ! "Accessor/struct mismatch" error for applying one struct's
@@ -15155,7 +15140,7 @@ contains
   ! finishes. (= (range) [1 2]) terminates in Clojure precisely because
   ! nothing asks it for a count.
   !
-  ! A seq VIEW over a vector could answer its count, but the JVM's
+  ! A seq VIEW over a vector could answer its count, but clj's
   ! ChunkedSeq is not Counted either, and being conservative here only
   ! ever costs a shortcut.
   function counted_p(v0) result(yes)
@@ -15638,10 +15623,10 @@ contains
   end function range_count
 
   ! A Var's value as evaluating its name gives it: the root, the thread
-  ! binding, or -- unbound -- a clojure.lang.Var$Unbound, the box an
+  ! binding, or -- unbound -- a clotran.host.var_unbound, the box an
   ! atom is with i1 = 4 and the Var in slot 1. Var.deref answers that
   ! object rather than nil; calling it is the "Attempting to call
-  ! unbound fn" error, and it prints as #object[clojure.lang.Var$Unbound
+  ! unbound fn" error, and it prints as #object[clotran.host.var_unbound
   ! ... "Unbound: #'ns/name"].
   function var_deref(v, roots) result(out)
     type(gc_value), intent(in) :: v
@@ -15826,7 +15811,7 @@ contains
        ! An atom names itself here, so the "atom" the IDeref, Atom
        ! and IMeta cases in is_instance already looked for is a name
        ! something actually answers to. Without it an atom was an
-       ! "object", which is how (instance? clojure.lang.IMeta (atom 1))
+       ! "object", which is how (instance? clotran.host.i_meta (atom 1))
        ! came back false and reset-meta! wrote a slot `meta` never read.
        case (OBJ_ATOM);    s = "atom"
        case (OBJ_DELAY);   s = "delay"
@@ -15866,7 +15851,7 @@ contains
   ! class name out of -- printing the wrapper made it
   ! "#<ns clojure.core>.Point". Clojure separates the two the same way:
   ! Namespace.toString is "user", while print-method shows
-  ! #object[clojure.lang.Namespace ...]. Doing it in the PRINTER on
+  ! #object[clotran.host.namespace ...]. Doing it in the PRINTER on
   ! *print-readably* instead got (str *ns*) right and (str [*ns*])
   ! wrong, because a collection's toString prints its elements.
   logical function is_lazy_seq_class(v)
@@ -15882,7 +15867,7 @@ contains
     type(gc_value), intent(in) :: v
     character(len=:), allocatable, intent(out) :: s
     type(gc_value) :: inner
-    ! Class.toString is "class java.lang.Long" while print-method
+    ! Class.toString is "class clotran.host.int8" while print-method
     ! writes the NAME, so (str Long) and (pr-str Long) differ.
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1
@@ -15900,8 +15885,8 @@ contains
           s = dlt_1
        end block
     else if (is_lazy_seq_class(v)) then
-       ! LazySeq has no toString of its own on the JVM -- it is not an
-       ! ASeq -- so (str (map inc [1 2])) is "clojure.lang.LazySeq@402"
+       ! LazySeq has no toString of its own in clj -- it is not an
+       ! ASeq -- so (str (map inc [1 2])) is "clotran.host.lazy_seq@402"
        ! there, Object's, with the identity hash in hex. A Cons, a range
        ! or an iterate prints its elements.
        block
@@ -15966,7 +15951,7 @@ contains
     end select
   end subroutine array_kind_for
 
-  ! (java.lang.reflect.Array/newInstance type n) and the N-dimensional
+  ! (clotran.host.array/newInstance type n) and the N-dimensional
   ! form, whose second argument is itself an int ARRAY -- core.clj's own
   ! make-array builds one with aset-int and passes it, so this has to
   ! accept both shapes.
@@ -16076,7 +16061,7 @@ contains
     end if
   end function array_own_stride
 
-  ! An array's class, in the JVM's descriptor form: [D a double[], [J a
+  ! An array's class, in clj's descriptor form: [D a double[], [J a
   ! long[], [[I an int[][] -- one [ per dimension -- and
   ! [Lclotran.host.value; an array of values; [B, [S and [C the byte,
   ! short and char arrays. The component is clotran's name for the class.
@@ -16243,7 +16228,7 @@ contains
     end if
   end subroutine array_put
 
-  ! Element `at` of registry buffer h, as the JVM boxes it: a byte[]'s
+  ! Element `at` of registry buffer h, as clj boxes it: a byte[]'s
   ! is a Byte, a short[]'s a Short, an int[]'s an Integer, a float[]'s a
   ! Float (the width in ref), a char[]'s a Character.
   subroutine array_read(h, at, kn, out, ok)
@@ -16277,7 +16262,7 @@ contains
     end select
   end subroutine array_read
 
-  ! Store v, converting as Java's casts do: into a byte[] or short[] its
+  ! Store v, converting as clj's casts do: into a byte[] or short[] its
   ! low bits (NativeArray, narrow1/2), a character by its code.
   subroutine array_write(h, at, kn, v, ok)
     integer, intent(in) :: h, at
@@ -16433,7 +16418,7 @@ contains
   end function class_matches
 
   ! A map entry is a two-element vector marked in a slot the vector
-  ! never uses. MapEntry is an APersistentVector on the JVM, so every
+  ! never uses. MapEntry is an APersistentVector in clj, so every
   ! vector operation works on one, and conj or assoc on it builds a
   ! plain vector, as there. The mark is what map-entry? reads, and
   ! it is how clojure.walk tells an entry from a vector it may rewrite.
@@ -16501,16 +16486,16 @@ contains
     if (.not. yes) yes = iface_extends(b, a)
   end function class_assignable
 
-  ! Object.hashCode as the JVM's classes define it, where clotran can
+  ! Object.hashCode as clj's classes define it, where clotran can
   ! say: an integer is (int)(v ^ (v >>> 32)), Long.hashCode, since
   ! Clojure's integers are all longs there; a double is that fold over
-  ! its bits; a string is Java's 31-polynomial over its chars; true and
+  ! its bits; a string is clj's 31-polynomial over its chars; true and
   ! false are 1231 and 1237; nil is 0. Everything else is clotran's
   ! own hash. `case` leans on the integer rule: its collision merging
   ! keys the table with Util.hash, which IS hashCode, so 1 and
   ! -9223372034707292159 both hash to 1 here as there (case_branch
   ! has the rest of that story).
-  function java_hashcode(v0) result(h)
+  function hash_code(v0) result(h)
     type(gc_value), intent(in) :: v0
     type(gc_value) :: v
     integer :: h, i, cp, nb
@@ -16573,7 +16558,7 @@ contains
       if (y > 2147483647_gc_ip) y = y - 4294967296_gc_ip
       fold_long = int(y)
     end function fold_long
-  end function java_hashcode
+  end function hash_code
 
   ! Compiler.resolveIn: a qualified symbol may not name another
   ! namespace's private Var.
@@ -16598,8 +16583,8 @@ contains
 
   ! What the interfaces a deftype declares extend: a record that says
   ! IPersistentMap is an IPersistentCollection, Associative, Counted,
-  ! Seqable and a java.util.Map too, which is what coll?, counted? and
-  ! clojure.walk ask. The JVM reads this off the interfaces; here it
+  ! Seqable and a clotran.host.map too, which is what coll?, counted? and
+  ! clojure.walk ask. Clj reads this off the interfaces; here it
   ! is a list.
   logical function iface_in_vector(vec, want)
     type(gc_value), intent(in) :: vec
@@ -16653,12 +16638,12 @@ contains
     end do
   end function iface_extends
 
-  ! The interfaces an interface DIRECTLY extends, as clojure.lang
+  ! The interfaces an interface DIRECTLY extends, as clotran.host
   ! declares them, space-delimited with a space at each end:
   ! what .getInterfaces answers for one, so `bases` and `parents` see
   ! it and `supers` takes the closure. Direct, not transitive, because
-  ! print-method prefers RandomAccess to java.util.List: a transitive
-  ! list that gave IPersistentVector a java.util.List parent let
+  ! print-method prefers RandomAccess to clotran.host.list: a transitive
+  ! list that gave IPersistentVector a clotran.host.list parent let
   ! RandomAccess's method dominate the vector's own, and print-str of a
   ! vector answered #object[..].
   subroutine iface_supers(iface, supers)
@@ -17248,8 +17233,7 @@ contains
     end if
     ! SHORTENED: a class value carries its canonical name, and the
     ! cases below are written the way a Clojure program writes the
-    ! class -- Object, String, CharSequence -- so java.lang comes off
-    ! first. Everything else keeps its package.
+    ! class, in full.
     block
        call gc_ref_text(cls%ref, s=dlt_1)
        dlt_2 = dlt_1
@@ -17299,14 +17283,14 @@ contains
     case ("clotran.host.keyword");  yes = (t == "keyword")
     case ("clotran.host.var");      yes = (t == "var")
     case ("clotran.host.namespace"); yes = (t == "ns")
-    ! ifn? is (instance? clojure.lang.IFn x): a set, a map, a vector, a
+    ! ifn? is (instance? clotran.host.i_fn x): a set, a map, a vector, a
     ! keyword, a symbol and a Var all invoke; fn? is Fn, functions only.
     case ("clotran.host.i_fn"); yes = (t == "fn" .or. t == "multifn" .or. t == "set" .or. t == "map" .or. &
          t == "vector" .or. t == "keyword" .or. t == "symbol" .or. t == "var")
     case ("clotran.host.fn"); yes = (t == "fn")
     case ("clotran.host.multi_fn"); yes = (t == "multifn")
     case ("clotran.host.i_deref", "clotran.host.i_pending")
-       ! core.clj's deref is (if (instance? clojure.lang.IDeref ref)
+       ! core.clj's deref is (if (instance? clotran.host.i_deref ref)
        ! (.deref ref) (deref-future ref)), so a thing that derefs has
        ! to ANSWER to IDeref or it silently takes the future path --
        ! which is how @(delay 1) came back as the delay itself.
@@ -17335,7 +17319,7 @@ contains
     case ("clotran.host.lazy_seq"); yes = (t == "lazy-seq" .and. gc_i2(strip_meta(v)) /= 1)
     case ("clotran.host.long_range", "clotran.host.range"); yes = (t == "lazy-seq" .and. gc_i2(strip_meta(v)) == 1)
     ! What reduce hands to a host .reduce rather than walking as a seq:
-    ! the JVM's LongRange, PersistentVector and PersistentList do.
+    ! clj's LongRange, PersistentVector and PersistentList do.
     case ("clotran.host.i_reduce_init", "clotran.host.i_reduce")
        yes = (t == "vector" .or. t == "list" .or. (t == "lazy-seq" .and. gc_i2(strip_meta(v)) == 1))
     case ("clotran.host.i_chunked_seq"); yes = is_chunked_seq(strip_meta(v))
@@ -17352,7 +17336,7 @@ contains
     ! Everything but nil is an Object.
     case ("clotran.host.value"); yes = (v%tag /= GCT_NIL)
     ! Both spellings. clojure.string imports these -- (:import
-    ! (java.util.regex Pattern Matcher)) -- and then writes the
+    ! (clj's regex Pattern Matcher)) -- and then writes the
     ! SHORT name, so (instance? Pattern re) has to answer the same
     ! as the qualified form. Without it clojure.string/replace
     ! fell through every branch of its cond and threw
@@ -17377,7 +17361,7 @@ contains
     case ("clotran.host.i_seq");     yes = (t == "list" .or. t == "lazy-seq" .or. t == "seq")
     case ("clotran.host.i_persistent_list"); yes = (t == "list" .and. gc_i2(strip_meta(v)) /= 1)
     case ("clotran.host.i_persistent_vector"); yes = (t == "vector")
-    ! a TransientVector is Indexed and Counted too (PersistentVector.java:670)
+    ! a TransientVector is Indexed and Counted too (PersistentVector:670)
     case ("clotran.host.indexed"); yes = (t == "vector" .or. t == "transient-vector")
     case ("clotran.host.i_persistent_map", "clotran.host.map"); yes = (t == "map")
     case ("clotran.host.i_persistent_set"); yes = (t == "set")
@@ -17386,7 +17370,7 @@ contains
     case ("clotran.host.sorted"); yes = is_sorted_coll(v)
     case ("clotran.host.reversible"); yes = (t == "vector") .or. is_sorted_coll(v)
     case ("clotran.host.associative"); yes = (t == "map" .or. t == "vector")
-    ! A String is NOT Counted on the JVM: RT.count knows how to count
+    ! A String is NOT Counted in clj: RT.count knows how to count
     ! one, but (counted? "ab") is false there, so bounded-count walks it.
     case ("clotran.host.counted"); &
          yes = (t == "list" .or. t == "vector" .or. t == "map" .or. t == "set" .or. &
@@ -17400,7 +17384,7 @@ contains
     case ("clotran.host.i_meta")
        ! IMeta is "can report its metadata", and a function can:
        ! core.clj:210 makes `meta` itself
-       !   (if (instance? clojure.lang.IMeta x) (.meta x))
+       !   (if (instance? clotran.host.i_meta x) (.meta x))
        ! so answering false here makes (meta (with-meta (fn [] 1) {:a 1}))
        ! nil. Split from IObj below, which a function must NOT claim.
        ! "atom" is here because an atom, ref or agent is an
@@ -17428,7 +17412,7 @@ contains
        ! here prints in.
        !
        ! IMeta is answered separately, just above, and a function DOES
-       ! claim it: `meta` is (if (instance? clojure.lang.IMeta x) ...)
+       ! claim it: `meta` is (if (instance? clotran.host.i_meta x) ...)
        ! at core.clj:210, so collapsing the two made
        ! (meta (with-meta (fn [] 1) {:a 1})) nil. They were one case
        ! here and had to stop being one.
@@ -17460,7 +17444,7 @@ contains
     case ("clotran.host.real4"); yes = (t == "double" .and. value_width(v) == W_FLOAT)
     case ("clotran.host.ratio"); yes = (t == "ratio")
     case ("clotran.host.number")
-       ! A Ratio is a Number on the JVM too, so (number? 1/2) is true.
+       ! A Ratio is a Number in clj too, so (number? 1/2) is true.
        yes = (t == "int" .or. t == "double" .or. t == "ratio" .or. t == "bigint" &
             .or. t == "bigdec")
     end select
@@ -17700,7 +17684,7 @@ contains
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1, dlt_2
     if (v%tag == GCT_REAL) then
-       ! Java's d2l: NaN is 0 and a double past the range saturates --
+       ! clj's d2l: NaN is 0 and a double past the range saturates --
        ! Fortran's int() of one is undefined
        block
          real(gc_dp) :: d
@@ -17763,7 +17747,7 @@ contains
   end subroutine dec_of
 
   ! The same, for an operand that may also be a RATIO: 1/2 is 0.5M and
-  ! (+ 1M 1/2) is 1.5M, but 1/3 has no decimal form and Java's
+  ! (+ 1M 1/2) is 1.5M, but 1/3 has no decimal form and clj's
   ! BigDecimal refuses rather than rounding. ok says which happened.
   subroutine dec_operand(v, ok, s)
     type(gc_value), intent(in) :: v
@@ -17806,7 +17790,7 @@ contains
     end if
   end subroutine big_of
 
-  ! Java's (long) of a double: truncate toward zero, saturate at the
+  ! clj's (long) of a double: truncate toward zero, saturate at the
   ! ends of the range, and 0 for NaN. Fortran's int() is undefined out
   ! of range, so the ends are handled first.
   function long_of_double(d) result(n)
@@ -17825,7 +17809,7 @@ contains
 
   ! What RT's ((Number) x) raises for something that is not a number:
   ! a NullPointerException for nil, a ClassCastException otherwise,
-  ! naming the class the way the JVM does.
+  ! naming the class the way clj does.
   subroutine raise_number_cast(v, roots)
     type(gc_value), intent(in) :: v
     type(gc_value), intent(in) :: roots(:)
@@ -17884,11 +17868,10 @@ contains
   ! through .getInterfaces, and multimethod dispatch and
   ! find-protocol-impl walk them the same way. The class is what
   ! `class` answers (class_name_of), so the keys here are CLASS NAMES,
-  ! spelt as a class literal evaluates: java.lang stripped, everything
-  ! else in full. Order is specific-to-general, because the caller
+  ! spelt as a class literal evaluates: in full. Order is specific-to-general, because the caller
   ! takes the first match: print-dup has a method on Long and another
   ! on Number, and only the Long one prints 1 rather than
-  ! #=(java.lang.Long. "1").
+  ! #=(clotran.host.int8. "1").
   function host_super(dv, i, roots) result(k)
     type(gc_value), intent(in) :: dv, roots
     integer, intent(in) :: i
@@ -17899,15 +17882,12 @@ contains
     character(len=:), allocatable :: dlt_1, dlt_2
     k = gc_nil()
     if (dv%tag /= GCT_CLASS) return
-    ! The chain table below is written in SHORT names for the java.lang
-    ! ones (Number, Object) and in full for the rest, so the class name
-    ! is shortened on the way in and canonicalised on the way out --
-    ! a class value is its canonical name, and Number must come back as
-    ! java.lang.Number or print-method Number will not match a Long.
+    ! The chain table below is written in full, as a class value is:
+    ! clotran.host.number must come back as itself or print-method on
+    ! it will not match a clotran.host.int8.
     block
        call gc_ref_text(dv%ref, s=dlt_1)
-       dlt_2 = dlt_1
-       t = dlt_2
+       t = dlt_1
     end block
 
     ! A DEFTYPE'S SUPERTYPES ARE THE INTERFACES IT DECLARED. The
@@ -17917,9 +17897,9 @@ contains
     !
     ! Without this, a multimethod registered on an interface never
     ! fires for a record: print-method has a method on
-    ! clojure.lang.IRecord, a record dispatches as :clojure.core.P,
+    ! clotran.host.i_record, a record dispatches as :clojure.core.P,
     ! and nothing connected the two -- so dispatch fell to :default,
-    ! which asks (instance? clojure.lang.IObj o), which a record IS,
+    ! which asks (instance? clotran.host.i_obj o), which a record IS,
     ! and re-entered print-method on the same object. Printing one
     ! segfaulted on a stack that never unwound.
     block
@@ -17944,8 +17924,8 @@ contains
       cnt = 0
       known = .true.
       select case (t)
-      ! The clojure.lang interfaces only: what cljs.core's types also
-      ! declare, under its own names. The java.util ones (List,
+      ! The clotran.host interfaces only: what cljs.core's types also
+      ! declare, under its own names. The host's collection ones (List,
       ! RandomAccess, Map, Set, Collection) were here for core_print.clj
       ! and data.clj, which clotran no longer runs verbatim (B_RTLOAD).
       case ("clotran.host.persistent_vector")
@@ -17979,7 +17959,7 @@ contains
       case ("clotran.host.lazy_seq", "clotran.host.cons", "clotran.host.persistent_vector_chunked_seq")
          chain(1:2) = [character(len=36) :: "clotran.host.i_seq", "clotran.host.i_persistent_collection"]
          cnt = 2
-      ! THE CHUNKED ONES say so, as the JVM's do: InternalReduce is
+      ! THE CHUNKED ONES say so, as clj's do: InternalReduce is
       ! extended to IChunkedSeq, and without it a reduce over (map f
       ! (range n)) dispatched to Object and walked element by element --
       ! 40 interpreted steps an element where the chunk's own .reduce
@@ -18028,8 +18008,8 @@ contains
   end function host_super
 
   ! What `class` answers: the canonical class of a value, spelt as a
-  ! class literal evaluates (java.lang stripped), so (= (class "a")
-  ! String) holds, (condp = (class x) String ...) takes its branch,
+  ! class literal evaluates (in full), so (= (class "a")
+  ! clotran.host.string) holds, (condp = (class x) clotran.host.string ...) takes its branch,
   ! and a protocol's :impls map keyed by the literal is hit directly.
   ! The type TAG (type_name) stays internal: host.clj's predicates
   ! read it through clotran-type, and messages use it. Where clotran
@@ -18161,7 +18141,7 @@ contains
   !
   ! Extensions, in order: .cljf is clotran's own (a file that uses the
   ! fortran namespace, say), .cljc is portable Clojure with reader
-  ! conditionals, .clj is JVM Clojure. A library that ships a .cljc
+  ! conditionals, .clj is clj's. A library that ships a .cljc
   ! beside a .clj wrote the .cljc for other hosts, so it wins here;
   ! RT.load prefers the .clj, which is right for the host the .clj was
   ! written for. DEVIATIONS 33.
@@ -18213,7 +18193,7 @@ contains
           end if
        end do
     end do
-    ! CLOTRAN_PATH: the source roots a project's packages add, as the JVM's
+    ! CLOTRAN_PATH: the source roots a project's packages add, as clj's
     ! -cp, computed by clotran-deps (PACKAGES.md). Entries are separated
     ! by : -- or by ; when there is one, as on Windows, where : is part of
     ! a drive letter.
@@ -18619,7 +18599,7 @@ contains
   end function coll_has
 
   ! What a String.indexOf needle MEANS. A string is itself, and a
-  ! character -- or an integer, which is how Java spells one
+  ! character -- or an integer, which is how clj spells one
   ! here -- is the single character it names.
   subroutine itoa(i, s)
     integer, intent(in) :: i
@@ -19308,7 +19288,7 @@ contains
   end subroutine ast_put
 
   ! UUID/fromString and parse-uuid. A UUID is its TEXT here
-  ! (DEVIATIONS 12: java.util.UUID is not a type clotran has), so
+  ! (DEVIATIONS 12: clotran.uuid.UUID is not a type clotran has), so
   ! this checks the shape and answers the string; a string that is
   ! not one raises, which is what parse-uuid catches to nil.
   function uuid_of(v, roots) result(out)
@@ -19412,7 +19392,7 @@ contains
           call vs_set(vst, base + 6, av)
           out = apply(vs_get(vst, base + 5), vs_get(vst, base + 6))
        else if (name_part_is(vs_get(vst, base + 3), "uuid")) then
-          ! EDN has uuid built in: java.util.UUID, as UUID/fromString makes it
+          ! EDN has uuid built in: clotran.uuid.UUID, as UUID/fromString makes it
           call vs_set(vst, base + 6, gcv_build(1, [roots, vs_get(vst, base + 1), vs_get(vst, base + 4)]))
           call vs_set(vst, base + 6, gcv_put(vs_get(vst, base + 6), 0, vs_get(vst, base + 4), &
                [roots, vs_get(vst, base + 1), vs_get(vst, base + 4)]))

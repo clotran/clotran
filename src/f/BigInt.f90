@@ -1,6 +1,6 @@
 ! BigInt -- arbitrary-precision integers, as decimal text.
 !
-! clojure.lang.BigInt is a real type in the language, not a JVM
+! clotran.host.bigint is a real type in the language, not a host
 ! artifact: ClojureScript has one too, `1N` reads as one, and `(+' x y)`
 ! has nowhere to promote into without it (DEVIATIONS 26, 30). So it is
 ! reproduced here rather than approximated.

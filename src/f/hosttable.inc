@@ -1,4 +1,4 @@
-! The JVM surface clotran reads, as data: every host class and member that
+! Clj surface clotran reads, as data: every host class and member that
 ! core.clj and the libs we load reach for, and what each one is here.
 ! static_member, instance_member and is_host_class in Eval.f90 look up
 ! these tables and nothing else, so a member that is not a row here does
@@ -8,8 +8,8 @@
 !
 ! A row is a class, a member name, and either a builtin id with the name
 ! the builtin prints as, or a constant kind (HK_*) with its value.
-! Classes are spelt in full; canon_class (Eval.f90) adds java.lang to a
-! bare name, or the import that named it.
+! Classes are spelt in full, in clotran's names; canon_class (Eval.f90)
+! resolves a bare name through the imports.
   type hm
      character(len=40) :: cls = ""
      character(len=28) :: mem = ""
@@ -48,7 +48,7 @@
        hm("clotran.host.array", "setByte", B_JASET, "aset"), &
        hm("clotran.host.array", "setShort", B_JASET, "aset"), &
        hm("clotran.host.array", "getLength", B_ALENGTH, "alength"), &
-  ! prepRet unboxes on the JVM; nothing is boxed here.
+  ! prepRet unboxes in clj; nothing is boxed here.
        hm("clotran.host.reflector", "prepRet", B_PREPRET, "clotran-prep-ret"), &
        hm("clotran.host.delay", "force", B_DEREF, "deref"), &
        hm("clotran.host.enumeration_seq", "create", B_SEQ, "seq"), &
@@ -125,14 +125,14 @@
        hm("clotran.host.numbers", "unchecked_int_inc", B_UINC, "unchecked-inc"), &
        hm("clotran.host.numbers", "dec", B_DEC, "dec"), &
        hm("clotran.host.numbers", "decP", B_PDEC, "dec'"), &
-       ! (bigint x) for a number is (clojure.lang.BigInt/valueOf (long x))
+       ! (bigint x) for a number is (clotran.host.bigint/valueOf (long x))
        hm("clotran.host.bigint", "valueOf", B_TOBIG, "bigint"), &
        hm("clotran.host.bigint", "fromBigInteger", B_TOBIG, "bigint"), &
        hm("clotran.host.bigint", "valueOf", B_TOBIG, "bigint"), &
        ! (bigdec x) and the BigDecimal/valueOf it goes through
        hm("clotran.host.decimal", "valueOf", B_TODEC, "bigdec"), &
        ! RoundingMode's constants, each the keyword of its own name --
-       ! with-precision writes (. java.math.RoundingMode HALF_UP) and
+       ! with-precision writes (. clotran.host.rounding_mode HALF_UP) and
        ! nothing else ever looks at one (BigDec.f90 maps the name).
        hm("clotran.host.rounding_mode", "UP", HK_SELFKEY), &
        hm("clotran.host.rounding_mode", "DOWN", HK_SELFKEY), &
@@ -290,7 +290,7 @@
   ! RT.nextID is the counter gensym counts on, shared with the auto-gensym counter.
        hm("clotran.host.rt", "nextID", B_NEXTID, "clotran-next-id"), &
        hm("clotran.host.rt", "load", B_RTLOAD, "clotran-rt-load"), &
-  ! java.util.UUID is clotran.rt's record under that name; clojure/uuid.clj runs verbatim on it
+  ! clotran.uuid.UUID is clotran.rt's record under that name; clojure/uuid.clj runs verbatim on it
        hm("clotran.uuid.UUID", "fromString", B_UUIDFN, "uuid-from-string"), &
        hm("clotran.uuid.UUID", "randomUUID", B_UUIDFN, "uuid-random"), &
   ! load-reader and load-string: Compiler.load over a reader (B_LOADREADER)
@@ -338,7 +338,7 @@
        hm("clotran.host.real8", "NEGATIVE_INFINITY", HK_NINF), &
        hm("clotran.host.real4", "POSITIVE_INFINITY", HK_PINF), &
        hm("clotran.host.real4", "NEGATIVE_INFINITY", HK_NINF), &
-  ! Number.compare is the TOTAL order Java puts on doubles: -0.0 below 0.0, NaN above everything.
+  ! Number.compare is the TOTAL order clj puts on doubles: -0.0 below 0.0, NaN above everything.
        hm("clotran.host.int4", "valueOf", B_INTEGERVALUE, "clotran-int-value"), &
        hm("clotran.host.int4", "parseInt", B_INTEGERVALUE, "clotran-int-value"), &
        hm("clotran.host.int8", "valueOf", B_INTVALUE, "clotran-int-value"), &
@@ -348,7 +348,7 @@
        hm("clotran.host.real8", "parseDouble", B_DBLVALUE, "clotran-double-value"), &
        hm("clotran.host.real8", "isNaN", B_ISNAN, "clotran-is-nan"), &
        hm("clotran.host.real8", "isInfinite", B_ISINF, "clotran-is-infinite"), &
-  ! Class/TYPE is a JVM primitive-class constant. There are no primitive
+  ! Class/TYPE is a clj primitive-class constant. There are no primitive
   ! arrays here, so each is a distinct inert keyword, enough for core_print's dispatch table.
        hm("clotran.host.logical", "TYPE", HK_TYPE), &
   ! Compiler.LINE and COLUMN are Vars the compiler binds; throw-if derefs them for a CompilerException
@@ -422,7 +422,7 @@
        hm("", "meta", B_META, "meta"), &
        hm("", "withMeta", B_WITHMETA, "with-meta"), &
        hm("", "count", B_COUNT, "count"), &
-       ! java.util.Collection.size, which core.clj's to-array-2d
+       ! clotran.host.collection.size, which core.clj's to-array-2d
        ! calls on its argument. A deftype with its own `size` is
        ! reached before this row, so rt.cljf's ArrayList keeps its.
        hm("", "size", B_COUNT, "count"), &

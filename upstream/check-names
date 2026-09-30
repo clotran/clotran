@@ -9,7 +9,7 @@
 
 (def covered
   ;; what has been cleared so far; the rest joins as it is
-  #"\.(clj|cljf|cljc)$")
+  #"^(src|test/f|examples|packages)/|^test/clj/(?!clojuredocs/)")
 
 (def skip #"^(upstream/|docs/|src/c/icu/)")
 (def word #"(?i)java|jvm|clojure\.lang")
@@ -22,8 +22,12 @@
                 (remove #(re-find skip %))
                 (filter #(re-find covered %))))
 
+(defn binary? [f] (with-open [in (clojure.java.io/input-stream f)]
+                    (let [b (byte-array 4096) n (.read in b)] (boolean (some zero? (take (max n 0) b))))))
+
 (def hits
   (for [f files
+        :when (not (binary? f))
         :let [text (slurp f)
               toks (names/lex text)
               imports {}
@@ -47,6 +51,6 @@
                  (str f ": the class " cls " (" (resolve cls) ")"))))]
     hit))
 
-(doseq [h (take 40 hits)] (println h))
+(doseq [h (take (or (some-> (System/getenv "CHECK_NAMES_ALL") parse-long) 40) hits)] (println h))
 (when (> (count hits) 40) (println "..." (- (count hits) 40) "more"))
 (System/exit (if (seq hits) 1 0))

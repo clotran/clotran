@@ -255,7 +255,7 @@
   ! the cast in front of it: (aget a i) becomes
   ! (aget (clotran-array-cast a :doubles) i). `rawargs` is the argument
   ! forms as written; core.clj's aget arrives here through its :inline
-  ! as (. clojure.lang.RT (aget a i)).
+  ! as (. clotran.host.rt (aget a i)).
   recursive function cast_array_arg(rawargs, kids, sc, roots) result(out)
     type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: rawargs, kids, sc
@@ -398,7 +398,7 @@
     flag = 0
     if (.not. gcn_is_var(var)) return
     ! only what the vendored tree defines is direct-linked, as only what
-    ! the JVM compiled into its jar is: a (ns clojure.zz) of the user's
+    ! clj compiled into its jar is: a (ns clojure.zz) of the user's
     ! stays late-bound, as it does there
     call gcr_current_file(s=nm)
     if (index(nm, "clojure/") /= 1) return
@@ -431,14 +431,14 @@
   end function mk_node
 
   ! A fn that only hands its parameters, in order, to one host builtin
-  ! -- (fn [coll] (. clojure.lang.RT (first coll))), which is what
+  ! -- (fn [coll] (. clotran.host.rt (first coll))), which is what
   ! first, rest, next, seq, cons, inc, dec, pos? and most of core's
   ! primitives are -- answers that builtin, else nil; analyze_fn keeps
   ! the answer as the template's seventh element. A call to such a fn
   ! with its fixed arity then calls the builtin itself (exec.inc's
   ! N_CALL, gce_apply_slots, apply). Measured from compiled code, the
   ! closure was an interpreter entry of 470 ns around an 80 ns builtin,
-  ! paid on every seq operation; the JVM inlines the static call to
+  ! paid on every seq operation; clj inlines the static call to
   ! nothing. The fn VALUE stays the closure, so fn?, class, meta and a
   ! wrong-arity call are exactly what they were.
   ! Per ARITY: + = < conj assoc get nth are multi-arity, and their
@@ -895,11 +895,11 @@
        ! holds then, and never goes through the Var again. The same
        ! here, at analysis: the fn goes in slot 3, the epoch in slot 5
        ! (exec.inc, N_CALL). A Var not yet bound to a fn -- a forward
-       ! declaration -- stays late-bound, as on the JVM; so does one bound
+       ! declaration -- stays late-bound, as in clj; so does one bound
        ! to a BUILTIN: the host binds Fortran builtins into clojure.core
        ! before core.clj defines the real thing (map, list, ...), and
        ! `declare`, analysed before core's `map`, must not keep the
-       ! builtin -- the JVM has no such placeholder to link to. Taking the fn
+       ! builtin -- clj has no such placeholder to link to. Taking the fn
        ! at the FIRST CALL instead was tried and is wrong: (with-redefs
        ! [first last] (first [1 2])) calls last for the first time inside
        ! the redefinition, and last's own `first` would have bound to it.
@@ -921,8 +921,8 @@
     block
        call gc_ref_text(sym%ref, s=dlt_1)
     if (index(dlt_1, "/") > 1) then
-       ! A QUALIFIED symbol that does not resolve: core.clj's slurp names
-       ! jio/reader, and clojure.java.io is skipped by name here. Clojure
+       ! A QUALIFIED symbol that does not resolve -- clotran.io/text-reader
+       ! before clotran.io is loaded, which loads it (N_LATEVAR). Clojure
        ! would fail to compile; clotran defers to run time, so the
        ! function is defined and only a CALL of it fails. Unqualified
        ! symbols are not deferred -- that is a real compile error.
@@ -1084,7 +1084,7 @@
           ! whose :inline-arities -- if any -- accepts this argument count,
           ! has that fn applied to the argument FORMS and the result
           ! analysed instead of a call. core.clj gives 129 definitions one:
-          ! (+ a b) becomes (. clojure.lang.Numbers (add a b)) and the
+          ! (+ a b) becomes (. clotran.host.numbers (add a b)) and the
           ! static call resolves to the native here, so the arithmetic
           ! in a loop costs no closure call. preserveTag is not done: a
           ! :tag on the form is a hint nothing here reads.
@@ -1172,7 +1172,7 @@
   end function analyze_call
 
   ! (instance? C x), C a class literal, is the type test itself, as the
-  ! JVM compiler makes it (Compiler.java, InvokeExpr.parse: a head that
+  ! clj compiler makes it (Compiler, InvokeExpr.parse: a head that
   ! is the Var clojure.core/instance?, two arguments, the first a Class
   ! constant -> InstanceOfExpr): the isInstance builtin becomes the
   ! head, and the Var is not called. It was two interpreted calls and a
@@ -1302,7 +1302,7 @@
   ! (. target member args...) or (. target (member args...)).
   !
   ! A static call on a host class is resolved to its native NOW, so
-  ! (clojure.lang.RT/first x) is an ordinary call of a constant --
+  ! (clotran.host.rt/first x) is an ordinary call of a constant --
   ! that is most of what core.clj does. Everything else keeps the
   ! shape and is handed to eval_dot at run time with its parts already
   ! evaluated (N_DOT), because eval_dot holds the instance rules: a
@@ -1389,7 +1389,7 @@
                 call vs_set(vst, base + 7, fnv)
                 ! (. Class member) with no arguments is a FIELD if there is
                 ! one, else the zero-argument METHOD, as the Reflector
-                ! decides: (. clojure.lang.Var create) makes a Var, where
+                ! decides: (. clotran.host.var create) makes a Var, where
                 ! it answered the builtin itself. PersistentList/creator
                 ! is the one field here whose value is a function.
                 if (.not. is_call .and. gc_kind(fnv) == OBJ_BUILTIN .and. mname /= "creator") is_call = .true.
@@ -1504,7 +1504,7 @@
       if (canonical /= written) cls = gc_sym(canonical, [vs_get(vst, base + 1), vs_get(vst, base + 3)])
     end block
     call vs_set(vst, base + 4, cls)
-    ! (new clojure.lang.LazySeq (fn* [] body...)) is what the lazy-seq
+    ! (new clotran.host.lazy_seq (fn* [] body...)) is what the lazy-seq
     ! macro writes, and it is the N_LAZY node, not a generic new: the
     ! generic path evaluated the fn outside the run loop and then found
     ! LazySeq by comparing its name down a chain of constructors --
@@ -2195,7 +2195,7 @@
   ! and given "a" throws ClassCastException -- and a ^long or ^double
   ! on the parameter VECTOR converts what the fn returns. clotran used
   ! to ignore both, so a wrong argument quietly gave a non-Clojure
-  ! answer. The JVM does this in the method it emits; here it is
+  ! answer. Clj does this in the method it emits; here it is
   !
   !   (fn [^long n acc] body)         (let* [n (long n)] body)
   !   (fn ^long [^long n acc] body)   (long (loop* [n (long n) acc acc] body))
@@ -2914,7 +2914,7 @@
                 clauses = method_clauses(dlt_1, vs_get(vst, base + 3), vs_get(vst, base + 1))
              end block
              call vs_set(vst, base + 10, clauses)
-             ! a method an interface declares ^void answers nil, as on the JVM
+             ! a method an interface declares ^void answers nil, as in clj
              if (method_is_void(vs_get(vst, base + 11), vs_get(vst, base + 9))) then
                 clauses = void_clauses(vs_get(vst, base + 10), [vs_get(vst, base + 5), vs_get(vst, base + 6), &
                      vs_get(vst, base + 7), vs_get(vst, base + 8), vs_get(vst, base + 9), vs_get(vst, base + 11)])

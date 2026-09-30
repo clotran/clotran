@@ -120,7 +120,7 @@ module GC
   ! should construct one.
   integer, parameter, public :: GCT_RATIO = 10
 
-  ! An arbitrary-precision integer: clojure.lang.BigInt, which `1N`
+  ! An arbitrary-precision integer: clotran.host.bigint, which `1N`
   ! reads as and `+'` promotes into. The VALUE is its decimal text,
   ! canonical (BigInt.f90), in the string pool -- ref is the pool
   ! index, exactly as for a string, so the collector marks it with the
@@ -132,8 +132,8 @@ module GC
   ! hashes match, so a map keyed by one finds the other.
   integer, parameter, public :: GCT_BIG = 11
 
-  ! A CLASS. Its name is the value -- the canonical spelling with
-  ! java.lang stripped -- in the string pool, so ref means what it
+  ! A CLASS. Its name is the value -- the canonical spelling, in
+  ! full -- in the string pool, so ref means what it
   ! means for a string and the collector needs no new case. A class
   ! was a KEYWORD until 2026-09-21 (DEVIATIONS 34), which made
   ! (= (class x) String) work and (pr-str (class 1)) answer :Long.
@@ -142,7 +142,7 @@ module GC
   ! a deftype's :implements list.
   integer, parameter, public :: GCT_CLASS = 12
 
-  ! An arbitrary-precision DECIMAL: java.math.BigDecimal, which `1.0M`
+  ! An arbitrary-precision DECIMAL: clotran.host.decimal, which `1.0M`
   ! reads as. The value is BigDec's "unscaled|scale" text in the string
   ! pool, so the collector marks it as it marks a string.
   !
@@ -171,7 +171,7 @@ module GC
   ! DELEGATING: the thunk returned a seq that must stay itself -- a
   ! ChunkedCons, whose chunk is lost if it is split into a head and a
   ! tail. Slot 2 holds that seq and `seq` answers it, which is what
-  ! LazySeq.seq does on the JVM (it returns `s`, it does not wrap it).
+  ! LazySeq.seq does in clj (it returns `s`, it does not wrap it).
   integer, parameter, public :: LAZY_DELEG   = 3
   ! being realized by the thread whose context id is in slot 4 (Eval's
   ! gce_force): the others wait for it, so a thunk runs once
@@ -241,7 +241,7 @@ module GC
   ! A THROWN THING: slot 1 = the class name it was constructed with,
   ! slot 2 = its message, slot 3 = its data (what ex-info carries).
   !
-  ! Clojure throws Java objects and clotran has none, so this is what
+  ! Clojure throws host exception objects and clotran has none, so this is what
   ! (IllegalArgumentException. "...") and (ex-info msg m) both build.
   ! A real kind rather than a map with a :type key, so that
   ! (instance? Throwable x) is an exact answer and not a guess about
@@ -275,7 +275,7 @@ module GC
   integer, parameter, public :: OBJ_INST      = 24 ! 1=type 2=field values 3=meta
   ! A DELAY: slot 1 = the no-argument thunk, slot 2 = what it
   ! produced, i1 = whether it has run. `delay` is literally
-  ! (new clojure.lang.Delay (fn [] ...)) in core.clj, and deref runs
+  ! (new clotran.host.delay (fn [] ...)) in core.clj, and deref runs
   ! it ONCE and caches -- which is the whole contract.
   !
   ! Distinct from OBJ_LAZY, which caches a first and a rest and whose
@@ -310,7 +310,7 @@ module GC
   ! (Eval's tasks.inc). i1 is its state, i2 the context it runs in -- 0
   ! before it starts and once it has finished.
   integer, parameter, public :: OBJ_TASK      = 34 ! 1=thunk 2=value or failure 3=awaited 4=deadline 5=mailbox
-  integer, parameter, public :: OBJ_VOLATILE  = 35 ! 1=value; clojure.lang.Volatile, a box with no validator or watches
+  integer, parameter, public :: OBJ_VOLATILE  = 35 ! 1=value; clotran.host.volatile, a box with no validator or watches
   ! A COMPILED function: slot 1 = its name (for printing and traces),
   ! i1 = its handle in CompiledFn's table, i2 = its arity, or -1 for
   ! any. The procedure pointer is NOT here, because a gc_value has no
@@ -3237,7 +3237,7 @@ contains
     case (GCT_STR)
        block
           call gc_ref_text(v%ref, s=dlt_1)
-          h = m3_hash_int(java_string_hash(dlt_1))
+          h = m3_hash_int(string_hash_code(dlt_1))
        end block
     case (GCT_SYM)
        block
@@ -3304,12 +3304,12 @@ contains
   end function mix32
 
 
-  ! ---- Clojure's hashes: Murmur3.java and Util.hasheq -----------------
+  ! ---- Clojure's hashes: Murmur3.clj and Util.hasheq -----------------
   !
   ! (hash x) and every hash map's iteration order come from these, so
   ! they are Clojure's own, bit for bit, where they were a mix of our
   ! own before: a set or a map past 8 entries iterated in another
-  ! order than clj's, and (hash "a") answered another number. Java's
+  ! order than clj's, and (hash "a") answered another number. clj's
   ! int arithmetic wraps; every step here goes through wrap32 because
   ! a signed overflow in Fortran is undefined.
 
@@ -3378,7 +3378,7 @@ contains
     r = wrap32(int(h, 8) + int(x, 8))
   end function m3_add
 
-  ! A string as Java holds it: UTF-16 code units
+  ! A string as clj holds it: UTF-16 code units
   subroutine gc_utf16(t, u, n)
     character(len=*), intent(in) :: t
     integer, allocatable, intent(out) :: u(:)
@@ -3406,7 +3406,7 @@ contains
   end subroutine gc_utf16
 
   ! String.hashCode
-  function java_string_hash(t) result(h)
+  function string_hash_code(t) result(h)
     character(len=*), intent(in) :: t
     integer :: h, n, i
     integer, allocatable :: u(:)
@@ -3415,7 +3415,7 @@ contains
     do i = 1, n
        h = m3_ordered_step(h, u(i))
     end do
-  end function java_string_hash
+  end function string_hash_code
 
   ! Murmur3.hashUnencodedChars
   function m3_hash_chars(t) result(h)
@@ -3457,7 +3457,7 @@ contains
     integer :: h, sl
     sl = index(t, "/")
     if (len(t) > 1 .and. sl > 1) then
-       h = hash_combine(m3_hash_chars(t(sl + 1:)), java_string_hash(t(1:sl - 1)))
+       h = hash_combine(m3_hash_chars(t(sl + 1:)), string_hash_code(t(1:sl - 1)))
     else
        h = hash_combine(m3_hash_chars(t), 0)
     end if
@@ -4333,7 +4333,7 @@ contains
   ! --- UTF-8 -----------------------------------------------------
   !
   ! A string is UTF-8 bytes; the language indexes it by CHARACTER
-  ! (Java: by UTF-16 unit, the same thing off the astral plane). These
+  ! (clj: by UTF-16 unit, the same thing off the astral plane). These
   ! are the two conversions and nothing else: a continuation byte is
   ! 10xxxxxx, so a character starts at every byte that is not one.
   ! Each walk is linear from the front -- ponytail: an index into a

@@ -135,8 +135,8 @@ contains
           end block
        end if
     case (GCT_CLASS)
-       ! A class prints as its NAME, readably or not: java.lang.Long,
-       ! never :Long. (class (class 1)) is java.lang.Class.
+       ! A class prints as its NAME, readably or not: clotran.host.int8,
+       ! never :Long. (class (class 1)) is clotran.host.class.
        block
           call gc_ref_text(v%ref, s=dlt_1)
           s = dlt_1
@@ -677,7 +677,7 @@ contains
           s = "#<volatile " // dlt_1 // ">"
        end block
     case (OBJ_DELAY)
-       ! Clojure shows #object[clojure.lang.Delay 0x.. {:status :pending,
+       ! Clojure shows #object[clotran.host.delay 0x.. {:status :pending,
        ! :val nil}]. Same two facts, in clotran's own #<...> shape.
        if (gc_i1(v) /= 0) then
           block
@@ -742,7 +742,7 @@ contains
        end if
     case (OBJ_NS)
        ! The PRINT form, for pr, print, prn and any namespace nested in
-       ! a collection -- Clojure shows #object[clojure.lang.Namespace
+       ! a collection -- Clojure shows #object[clotran.host.namespace
        ! 0x.. user] for all of those, including under `str`, because a
        ! collection's toString goes through the print path.
        !
@@ -775,7 +775,7 @@ contains
   end subroutine inner_of
 
   ! Double.toString: the SHORTEST decimal that reads back as this same
-  ! double, laid out the way Java lays it out.
+  ! double, laid out the way clj lays it out.
   !
   ! The old version wrote (F0.10) into a 32-character buffer, which was
   ! wrong twice over. It TRUNCATED -- 0.479425538604203 printed as
@@ -788,7 +788,7 @@ contains
   ! the same bits. Seventeen always suffices for a double, so the loop
   ! terminates; most values stop at two or three.
   !
-  ! Java's layout rule, which is not the same as Fortran's: plain
+  ! clj's layout rule, which is not the same as Fortran's: plain
   ! decimal while 1e-3 <= |d| < 1e7, scientific outside that, and
   ! always at least one digit after the point.
   subroutine real_str(r, s)

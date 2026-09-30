@@ -1,7 +1,7 @@
 ! NativeArray: a REAL Fortran array as a clotran value, on the GC heap.
 !
-! Deliberately not a port of java.lang.Object[]. Emulating the JVM's
-! array would throw away the one thing this host has that the JVM does
+! Deliberately not a port of clotran.host.value[]. Emulating clj's
+! array would throw away the one thing this host has that clj does
 ! not: the bytes ARE a Fortran array and can be handed to a Fortran
 ! library directly.
 !
@@ -162,7 +162,7 @@ contains
     total = 1
     do i = 1, size(extents)
        if (extents(i) < 0) then
-          ! the caller raises Java's NegativeArraySizeException, whose
+          ! the caller raises clj's NegativeArraySizeException, whose
           ! message is the size
           block
             character(len=24) :: nb
@@ -184,9 +184,9 @@ contains
     case ("real4");    allocate(real(4)      :: reg(handle)%buf(total))
     case ("int4");     allocate(integer(4)   :: reg(handle)%buf(total))
     case ("int8");     allocate(integer(8)   :: reg(handle)%buf(total))
-    ! REAL bytes and shorts, one and two bytes an element, as Java's
+    ! REAL bytes and shorts, one and two bytes an element, as clj's
     ! byte[] and short[] are: a buffer a binary protocol or a C library
-    ! can take as it is. char2 is Java's char[] -- unsigned 16-bit UTF-16
+    ! can take as it is. char2 is clj's char[] -- unsigned 16-bit UTF-16
     ! units -- held in the same 16 bits and read back unsigned.
     case ("int1");     allocate(integer(1)   :: reg(handle)%buf(total))
     case ("int2", "char2"); allocate(integer(2) :: reg(handle)%buf(total))
@@ -418,7 +418,7 @@ contains
   end subroutine gcna_set_int
 
   ! The low 8 or 16 bits as a signed byte or short, two's complement --
-  ! Java's (byte) and (short). int(val, 1) of a value out of range is
+  ! clj's (byte) and (short). int(val, 1) of a value out of range is
   ! processor-dependent in Fortran, so the wrap is done first.
   pure function narrow1(val) result(b)
     integer(8), intent(in) :: val

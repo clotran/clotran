@@ -12,7 +12,7 @@
 ! ~30MB of C++ source was rejected as the wrong trade against "modify
 ! our code the least": this links dynamically against a normal system
 ! install (Homebrew's icu4c) through the smallest C shim that expresses
-! Java's Matcher semantics, which is the one piece of this bridge that
+! clj's Matcher semantics, which is the one piece of this bridge that
 ! is genuinely reusable rather than reimplementable.
 module Regex
   use, intrinsic :: iso_c_binding
@@ -159,7 +159,7 @@ module Regex
        regex_release, regex_live_count, &
        regex_find_next, regex_group_count, regex_group_span, &
        regex_last_error
-  ! java.lang.Character, answered by ICU (regex_shim.c)
+  ! clotran.host.char, answered by ICU (regex_shim.c)
   public :: cu_isws, cu_isalpha, cu_isdigit, cu_isupper, cu_islower, cu_isalnum, cu_toupper, cu_tolower
 
 contains

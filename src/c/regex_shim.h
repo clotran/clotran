@@ -22,7 +22,7 @@ extern "C" {
 /* Compiles a pattern. Returns an opaque handle, or NULL on failure with
  * a short message copied into err_buf (truncated to err_cap - 1, always
  * NUL-terminated). Inline flags -- (?i), (?s), (?m) -- are parsed by
- * ICU from the pattern text itself, the same as java.util.regex, so
+ * ICU from the pattern text itself, the same as clj's regex, so
  * there is no separate flags argument. */
 void *cre_compile(const char *pattern, int32_t pattern_len,
                    char *err_buf, int32_t err_cap);
@@ -31,7 +31,7 @@ void *cre_compile(const char *pattern, int32_t pattern_len,
  * rather than sharing the Pattern's own handle is what lets two
  * Matchers over the same Pattern search two different strings at once
  * without one's position clobbering the other's -- Pattern.matcher(s)
- * in Java has exactly this independence. */
+ * in clj has exactly this independence. */
 void *cre_clone(void *handle);
 
 void cre_close(void *handle);
@@ -64,12 +64,12 @@ int32_t cre_group_count(void *handle);
 /* The span of one group (0 = the whole match) from the most recent
  * successful matches()/find(). Returns 1 and sets the start and end
  * offsets if the group participated, 0 if it exists but did not (an
- * optional group that did not match -- Java's .group(n) is null there),
+ * optional group that did not match -- clj's .group(n) is null there),
  * -1 on error or if idx is out of range. */
 int32_t cre_group_span(void *handle, int32_t idx, int32_t *start, int32_t *end);
 int32_t cre_group_span_units(void *handle, int32_t idx, int32_t *start, int32_t *end);
 
-/* java.lang.Character over a code point: 1/0 answers, and the simple
+/* clotran.host.char over a code point: 1/0 answers, and the simple
  * case maps. See the C file. */
 int32_t cu_isws(int32_t cp);
 int32_t cu_isalpha(int32_t cp);
