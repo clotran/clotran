@@ -196,7 +196,7 @@ unit-tests = gc_test persistent_vector_test persistent_list_test persistent_arra
 	bigdec_test abi_test native_array_test threads_test gc_mt_test
 test-bins = $(addprefix $(BT)/,$(unit-tests))
 
-.PHONY: all crosscheck crosscheck-here clean compiled-core embed image
+.PHONY: all crosscheck crosscheck-here clean compiled-core embed image install uninstall
 all: clotran-bin $(test-bins) $(B)/core.image
 
 $(B) $(BT):
@@ -382,7 +382,7 @@ $(B)/libsamplelib.$(SOEXT): $(T)/samplelib.f90 $(B)/samplelib_shims.f90 | $(B) $
 # after the other within its target). Plain `make test` runs them in
 # order, as before.
 TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(B)/libsamplelib.$(SOEXT) packages examples/embed/heat
-TEST_CHECKS = check-unit check-embed check-embed-repl check-path check-language check-tree check-banner check-torture check-threads \
+TEST_CHECKS = check-unit check-embed check-embed-repl check-path check-install check-language check-tree check-banner check-torture check-threads \
 	check-autocompile check-break check-libraries check-oracle check-oracle-gc check-pure check-static
 .PHONY: test $(TEST_CHECKS)
 test: $(TEST_CHECKS)
@@ -399,6 +399,14 @@ check-path:
 	@echo "(ns cpt.two) (def v :two)" > $(B)/cp2/cpt/two.cljc
 	@echo "(require (quote cpt.one) (quote cpt.two)) (println :path-says cpt.one/v cpt.two/v)" > $(B)/cpt.clj
 	CLOTRAN_PATH=$(B)/cp1:$(B)/cp2 ./clotran-bin src/clj/clojure/core.clj $(B)/cpt.clj </dev/null 2>&1 | grep -q ":path-says :one :two"
+check-install:
+	@echo "--- make install into a scratch prefix, run from outside the tree, make uninstall ---"
+	@rm -rf $(B)/inst $(B)/outside && mkdir -p $(B)/outside
+	@$(MAKE) -s install PREFIX=$(CURDIR)/$(B)/inst >/dev/null
+	@echo "(require (quote [clojure.set :as set])) (println :installed-says (set/union #{1} #{2}) (clojure-version))" > $(B)/outside/t.cljf
+	cd $(B)/outside && $(CURDIR)/$(B)/inst/bin/clotran t.cljf </dev/null 2>&1 | grep -q ":installed-says #{1 2}"
+	@$(MAKE) -s uninstall PREFIX=$(CURDIR)/$(B)/inst
+	@test -z "$$(find $(B)/inst -type f)"
 check-embed-repl:
 	@echo "--- a REPL into the running solver: read its grid, write it, stop it (PLAN step 21) ---"
 	scripts/embed-repl-check
@@ -498,6 +506,47 @@ crosscheck-here:
 $(B)/core.image: clotran-bin $(wildcard src/clj/*.clj) $(wildcard src/clj/clojure/*.clj) $(wildcard src/clj/clojure/*/*.clj) $(wildcard src/clj/clotran/*.cljf)
 	CLOTRAN_IMAGE=0 CLOTRAN_IMAGE_SAVE=$@ ./clotran-bin src/clj/clojure/core.clj </dev/null
 image: $(B)/core.image
+
+# INSTALL. clotran and nothing else, under $(PREFIX)/lib/clotran in the
+# repository's own layout -- the binary finds its home, image and sources
+# from its own path (main.f90 home_dir): the binary, the heap image
+# (rebuilt THERE, so it matches the sources beside it), src/clj -- the
+# vendored Clojure and clotran's own libraries, which load on first use
+# -- and the launcher; and $(PREFIX)/bin/clotran, which runs the launcher.
+# Packages (blas, chemsol, anything else) are not part of it: a project
+# names them in its deps.edn (PACKAGES.md).
+#
+#   make install                     ~/.local (bin/clotran on PATH on most Linux)
+#   sudo make install PREFIX=/usr/local
+#   make uninstall                   the same PREFIX
+#
+# On Windows (MSYS2 make) PREFIX defaults to %LOCALAPPDATA%\Programs\clotran;
+# the Windows build itself is untested until CI runs it (PLAN step 21).
+# Built for this machine's architecture only (uname -m), not universal.
+ifneq ($(filter MINGW% MSYS% CYGWIN%,$(UNAME_S)),)
+PREFIX ?= $(subst \,/,$(LOCALAPPDATA))/Programs/clotran
+else
+PREFIX ?= $(HOME)/.local
+endif
+CLOTRAN_LIB = $(PREFIX)/lib/clotran
+CLOTRAN_BIN = $(PREFIX)/bin
+
+install: clotran-bin
+	@echo "--- installing clotran into $(CLOTRAN_LIB), the command into $(CLOTRAN_BIN) ---"
+	rm -rf "$(CLOTRAN_LIB).new"
+	mkdir -p "$(CLOTRAN_LIB).new/src" "$(CLOTRAN_LIB).new/build" "$(CLOTRAN_BIN)"
+	cp clotran-bin clotran "$(CLOTRAN_LIB).new/"
+	cp -R src/clj "$(CLOTRAN_LIB).new/src/"
+	cd "$(CLOTRAN_LIB).new" && CLOTRAN_IMAGE=0 CLOTRAN_IMAGE_SAVE=build/core.image ./clotran-bin src/clj/clojure/core.clj </dev/null >/dev/null
+	rm -rf "$(CLOTRAN_LIB)"
+	mv "$(CLOTRAN_LIB).new" "$(CLOTRAN_LIB)"
+	printf '#!/bin/sh\n# clotran, installed by make install: the launcher in its home\nexec "%s/clotran" "$$@"\n' "$(CLOTRAN_LIB)" > "$(CLOTRAN_BIN)/clotran"
+	chmod +x "$(CLOTRAN_BIN)/clotran"
+	@case ":$$PATH:" in *":$(CLOTRAN_BIN):"*) echo "clotran is installed: $(CLOTRAN_BIN)/clotran" ;; \
+	  *) echo "clotran is installed: $(CLOTRAN_BIN)/clotran -- $(CLOTRAN_BIN) is not on your PATH; add it" ;; esac
+
+uninstall:
+	rm -rf "$(CLOTRAN_LIB)" "$(CLOTRAN_LIB).new" "$(CLOTRAN_BIN)/clotran"
 
 # clojure.core, compiled (clotran compile). Opt-in: generating it takes
 # about 100 s, and `clean` -- so the gate -- removes it. When present,

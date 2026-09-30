@@ -23,6 +23,19 @@ user=> (clojure-version)
 That version string is real: core.clj reads it off the classloader and
 parses it with a regex, and both of those had to exist for it to answer.
 
+To have `clotran` on your PATH:
+
+```
+$ make install                        # into ~/.local: ~/.local/bin/clotran
+$ sudo make install PREFIX=/usr/local # or anywhere else
+$ make uninstall                      # the same PREFIX
+```
+
+It installs clotran and nothing else -- the binary, its heap image, the
+Clojure sources it loads on first use, and the launcher -- under
+`PREFIX/lib/clotran`, built for this machine's architecture. Packages
+come from a project's `deps.edn` (`PACKAGES.md`).
+
 ## What works
 
 **All 724 of core.clj's top-level forms load.** That includes

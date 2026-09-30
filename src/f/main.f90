@@ -581,7 +581,8 @@ contains
     integer :: n, k
     d = "."
     call get_command_argument(0, exe, n)
-    k = index(exe(1:n), "/", back=.true.)
+    ! the last separator, / or -- on Windows -- \
+    k = max(index(exe(1:n), "/", back=.true.), index(exe(1:n), achar(92), back=.true.))
     if (k > 1) d = exe(1:k-1)
   end subroutine home_dir
 
