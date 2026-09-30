@@ -817,6 +817,11 @@
        call vs_leave(vst, base)
        return
     end if
+    ! clotran.rt/array-list with clotran.rt not loaded yet
+    block
+       call gc_ref_text(sym%ref, s=dlt_1)
+       call prepare_clotran_name(dlt_1)
+    end block
     ! String/1: an array class (CLJ-2807), not a static field or a Var
     block
        logical :: ok_arr
@@ -1111,6 +1116,12 @@
              return
           end if
           if (is_static_call(head)) then
+             ! clotran.rt.TransformerIterator/create with clotran.rt not loaded yet
+             block
+               character(len=:), allocatable :: ht
+               call gc_ref_text(head%ref, s=ht)
+               call prepare_clotran_name(ht)
+             end block
              nd = analyze_dot(static_to_dot(vs_get(vst, base + 1)), vs_get(vst, base + 2))
              call vs_leave(vst, base)
              return

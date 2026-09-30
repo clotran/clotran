@@ -407,6 +407,11 @@ module Eval
   ! printer, protocols -- wait for core to finish: clotran.loader is
   ! written in the Clojure core defines
   logical, save :: auto_ready = .false.
+  ! core.clj has loaded: from here a clotran namespace named in code is
+  ! loaded when the code is analysed (analyze_symbol), so a form analyses
+  ! the same in every process -- a compiled library's fingerprints are
+  ! taken in one and checked in another (clotran.loader)
+  logical, save :: core_loaded = .false.
   character(len=512), save :: auto_waiting(64)
   integer, save :: n_auto_waiting = 0
   ! The packages opened (DynLoad.f90), by handle: a package's fns carry
@@ -1333,6 +1338,7 @@ contains
     ! core.clj is loaded, which is what the autocompile loader waits
     ! for before it runs clotran.loader (gce_install_compiled)
     auto_ready = .true.
+    core_loaded = .true.
     n_auto_waiting = 0
     ! what gce_base_env installs on a fresh heap
     call gcp_set_forcer(gce_force)
@@ -1479,6 +1485,9 @@ contains
     integer :: dot, i, base, at
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1
+    if (len(path) >= 16) then
+       if (path(len(path)-15:) == "clojure/core.clj") core_loaded = .true.
+    end if
     if (no_install) return
     tctx => ctx_self()
     vst => tctx%stk
@@ -1688,6 +1697,32 @@ contains
     call vs_leave(vst, base)
     loaded = .not. tctx%has_error
   end function load_clotran_ns
+
+  ! A qualified name in code, once core has loaded (core_loaded): its
+  ! clotran namespace loaded now, so the code analyses the same in every
+  ! process -- clotran.rt/array-list, or a type in one,
+  ! clotran.rt.TransformerIterator/create. The host's clotran.host.* are no
+  ! namespace and cost no search. A namespace that does not load is left
+  ! for the call, which fails where it runs (N_LATEVAR).
+  recursive subroutine prepare_clotran_name(t)
+    character(len=*), intent(in) :: t
+    character(len=:), allocatable :: q, nsname
+    integer :: sl, d
+    logical :: loaded
+    if (.not. core_loaded) return
+    sl = index(t, "/")
+    if (sl < 2) return
+    q = t(1:sl - 1)
+    if (index(q, "clotran.") /= 1 .or. index(q, "clotran.host.") == 1) return
+    nsname = q
+    d = index(q, ".", back=.true.)
+    if (d > 1 .and. d < len(q)) then
+       if (q(d+1:d+1) >= "A" .and. q(d+1:d+1) <= "Z") nsname = q(1:d - 1)
+    end if
+    if (gc_kind(gcn_find(nsname)) == OBJ_NS) return
+    loaded = load_clotran_ns(nsname)
+    if (.not. loaded) call gce_clear_error()
+  end subroutine prepare_clotran_name
 
   ! find_type, loading the clotran namespace a type is named in
   recursive function find_type_loading(cname) result(out)
@@ -12656,15 +12691,15 @@ contains
             call classpath_find(rel, path=dlt_1)
             inquire(file=dlt_1, exist=there)
             if (.not. there) then
-               ! RT.load's own words, and its class: a missing library is
-               ! a FileNotFoundException, not a failure to open a path
+               ! RT.load's class, and its words but for what clotran looks
+               ! for: sources, never a compiled class file (DEVIATIONS 67)
                if (index(rel, "_") > 0) then
-                  call fail_as("clotran.host.file_not_found_exception", "Could not locate " // rel // "__init.class, " // rel // &
-                       ".clj or " // rel // ".cljc on classpath. Please check that namespaces with dashes use " // &
+                  call fail_as("clotran.host.file_not_found_exception", "Could not locate " // rel // ".cljf, " // rel // &
+                       ".clj or " // rel // ".cljc on the load path. Please check that namespaces with dashes use " // &
                        "underscores in the Clojure file name.", [vs_get(vst, base + 1)])
                else
-                  call fail_as("clotran.host.file_not_found_exception", "Could not locate " // rel // "__init.class, " // rel // &
-                       ".clj or " // rel // ".cljc on classpath.", [vs_get(vst, base + 1)])
+                  call fail_as("clotran.host.file_not_found_exception", "Could not locate " // rel // ".cljf, " // rel // &
+                       ".clj or " // rel // ".cljc on the load path.", [vs_get(vst, base + 1)])
                end if
                call vs_leave(vst, base)
                return

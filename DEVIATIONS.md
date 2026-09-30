@@ -1951,6 +1951,11 @@ Several clj classes share a clotran class where clotran has one
 implementation -- `BigInt` and `BigInteger` are
 both `clotran.host.bigint`.
 
+A message that would name a host artifact names clotran's instead: a
+library that cannot be found is "Could not locate app/core.cljf,
+app/core.clj or app/core.cljc on the load path", where clj's lists a
+compiled class file first and says classpath.
+
 Code ported from clj needs the same renaming; `upstream/names.clj`
 does it for any file. The oracle uses it in both directions: each case
 goes to clj in upstream's names, and clj's answer comes back in

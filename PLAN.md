@@ -2187,10 +2187,19 @@ program loads into the cache (a first pass that waits for the builds),
 takes the image from a second load that installs from the cache and
 builds nothing, and appends the libraries; the program writes them once
 under TMPDIR/clotran-app-<image hash> and opens them from there. The
-program's loop 165 -> 8.5 ms. Not yet: compiled CORE in a built program
--- the base image is interpreted, and core's library is per-path in the
-cache -- so core's functions stay interpreted there; packages opened at
-run time are untried in a built program.
+program's loop 165 -> 8.5 ms. Core is compiled into it too: the build
+loads core from its source so core's library installs (a first build
+compiles it, about a minute; the cache keeps it). That needed a form to
+analyse the same in every process: a name in a clotran namespace not yet
+loaded -- clotran.rt/array-list, clotran.rt.TransformerIterator/create --
+now loads it at analysis once core has loaded (Eval prepare_clotran_name),
+where before it was a late lookup in one process and a Var in the other,
+and core's library was refused (sequence, partition-by, partition-all,
+shuffle). MEASURED, and compiled core does not pay everywhere: reduce
+over a range 161 -> 82 ms, but (reduce + (map inc ...)) 341 -> 446 and
+into/map 345 -> 416 -- the interpreter's flat form has overtaken the
+compiled lazy-seq path, which is the next thing to look at there.
+Packages opened at run time are untried in a built program.
 
 ### 23. `repro`: reproducible reductions
 

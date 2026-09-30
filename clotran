@@ -260,14 +260,16 @@ if [ "$1" = "build" ]; then
     # starts the builds (autocompile), and this waits for them to finish
     cp "$work/driver.clj" "$work/warm.clj"
     printf '(loop [n 0] (when (and (< n 6000) (some #{:compiling} (vals (clotran.loader/compile-status)))) (clotran.host.thread/sleep 100) (recur (inc n))))\n' >> "$work/warm.clj"
-    CLOTRAN_AUTOCOMPILE=1 "$bin" "$core" "$work/warm.clj" </dev/null 2>&1 | grep -v '^note: skipping\|^user=>'
+    CLOTRAN_IMAGE=0 CLOTRAN_AUTOCOMPILE=1 "$bin" "$core" "$work/warm.clj" </dev/null 2>&1 | grep -v '^note: skipping\|^user=>'
     # then the image, from a load that installs them all from the cache
     # and builds nothing: what it installed is what the program carries
     printf '(clotran-spit "%s" (apply str (map #(str %% "\\n") (clotran-installed-libraries))))\n' "$work/libs" >> "$work/driver.clj"
   fi
   printf '(clotran-spit "%s" (str "m " clotran-build-ns "\\n"))\n' "$work/entry" >> "$work/driver.clj"
-  auto=0; [ "$compiled" = 1 ] && auto=use
-  CLOTRAN_AUTOCOMPILE=$auto CLOTRAN_IMAGE_COMPILED=$compiled CLOTRAN_IMAGE_SAVE="$work/app.image" "$bin" "$core" "$work/driver.clj" </dev/null 2>&1 \
+  # compiled, core is loaded from its source, so that its library installs
+  # too, rather than taken interpreted from the base image
+  auto=0 img="${CLOTRAN_IMAGE-}"; [ "$compiled" = 1 ] && auto=use && img=0
+  CLOTRAN_IMAGE=$img CLOTRAN_AUTOCOMPILE=$auto CLOTRAN_IMAGE_COMPILED=$compiled CLOTRAN_IMAGE_SAVE="$work/app.image" "$bin" "$core" "$work/driver.clj" </dev/null 2>&1 \
     | grep -v '^note: skipping\|^user=>'
   [ -s "$work/entry" ] && [ -s "$work/app.image" ] || { echo "clotran build: the program did not load" >&2; exit 1; }
   cp "$bin" "$out.part" || exit 1

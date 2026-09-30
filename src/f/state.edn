@@ -20,6 +20,7 @@
  "GC.f90/obj_pend_dead" {:class :shared, :note "the dead waiting in pending lists: set and cleared by the collector with the world stopped, read by the growth rule under the heap lock"}
  "GC.f90/vec_pend_dead" {:class :shared, :note "the dead waiting in pending lists: set and cleared by the collector with the world stopped, read by the growth rule under the heap lock"}
  "GC.f90/str_pend_dead" {:class :shared, :note "the dead waiting in pending lists: set and cleared by the collector with the world stopped, read by the growth rule under the heap lock"}
+ "Eval.f90/core_loaded" {:class :fixed, :note "set once core.clj has loaded (or the image is read), on the main thread before any other"}
  "Eval.f90/autocompile" {:class :fixed, :note "read once from the environment (lazily: the same value from any thread)"}
  "Eval.f90/auto_ready" {:class :shared, :note "the files that loaded before core.clj finished, recorded and replayed on the main thread during startup (gce_install_compiled)"}
  "Eval.f90/auto_waiting" {:class :shared, :note "the files that loaded before core.clj finished, recorded and replayed on the main thread during startup (gce_install_compiled)"}
