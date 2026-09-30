@@ -245,6 +245,7 @@ module Eval
   integer, parameter :: B_SOCKLISTEN = 414, B_SOCKPORT = 415, B_SOCKACCEPT = 416, B_SOCKCONNECT = 417
   integer, parameter :: B_SOCKREAD = 418, B_SOCKWRITE = 419, B_SOCKCLOSE = 420, B_EXIT = 421
   integer, parameter :: B_SOCKREADB = 422, B_SOCKWRITEB = 423, B_UTF8BYTES = 424, B_UTF8STRING = 425
+  integer, parameter :: B_REALPATH = 426
   ! A number's WIDTH, in an integer's or a real's otherwise unused ref:
   ! what it boxes as on the JVM. Equality and hashing never read it.
   integer, parameter :: W_LONG = 0, W_BYTE = 1, W_SHORT = 2, W_INT = 3, W_FLOAT = 1
@@ -955,6 +956,7 @@ contains
     call bind_builtin(core, "clotran-socket-write-bytes", B_SOCKWRITEB)
     call bind_builtin(core, "clotran-utf8-bytes", B_UTF8BYTES)
     call bind_builtin(core, "clotran-utf8-string", B_UTF8STRING)
+    call bind_builtin(core, "clotran-real-path", B_REALPATH)
     call bind_builtin(core, "count", B_COUNT)
     call bind_builtin(core, "first", B_FIRST)
     ! an agent's queue, drained on its own thread by clotran.rt/agent-drain
@@ -9489,6 +9491,43 @@ contains
          text = dlt_1
          call sock_write(int_of_number(gcv_nth(args, 0)), text, ok, msg)
          if (.not. ok) call fail_as("java.io.IOException", msg, [vs_get(vst, base + 1)])
+       end block
+    case (B_REALPATH)
+       ! (clotran-real-path p): the file's one absolute name -- symbolic
+       ! links resolved, . and .. gone -- or nil when there is no such file.
+       ! The C library's realpath, POSIX; Windows (_fullpath) waits for v1.0.
+       block
+         interface
+            function c_realpath(path, resolved) bind(C, name="realpath") result(r)
+              import :: c_char, c_ptr
+              character(kind=c_char), intent(in) :: path(*)
+              character(kind=c_char), intent(out) :: resolved(*)
+              type(c_ptr) :: r
+            end function c_realpath
+         end interface
+         character(kind=c_char) :: buf(4096)
+         character(len=:), allocatable :: p
+         type(c_ptr) :: r
+         integer :: k
+         call text_of(gcv_nth(args, 0), s=dlt_1)
+         p = dlt_1 // c_null_char
+         r = c_realpath(p, buf)
+         out = gc_nil()
+         if (c_associated(r)) then
+            k = 0
+            do while (k < size(buf))
+               if (buf(k + 1) == c_null_char) exit
+               k = k + 1
+            end do
+            block
+              character(len=k) :: s
+              integer :: i
+              do i = 1, k
+                 s(i:i) = buf(i)
+              end do
+              out = gc_str(s, [vs_get(vst, base + 1)])
+            end block
+         end if
        end block
     case (B_UTF8BYTES)
        ! A string's UTF-8 bytes as a fresh byte array: a clotran string is

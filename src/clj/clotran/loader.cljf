@@ -217,12 +217,19 @@
     (clotran-sh cmd (boolean wait?))
     lib))
 
+(defn- one-name
+  "The file's one absolute name: src/a.cljf, ./src/a.cljf and the
+  absolute path are one build, not three."
+  [src]
+  (or (clotran-real-path src) src))
+
 (defn auto
   "After `src` loads with no library beside it: install the cached
   library for this text, or start building one."
   [src]
   (when (#{"1" "use"} (mode))
-    (let [h (hash-of src)
+    (let [src (one-name src)
+          h (hash-of src)
           lib (current src h)]
       (cond
         (= :none lib) nil
@@ -263,7 +270,8 @@
   "Build `src` now and install it, waiting for it -- for a benchmark, or
   after a library was refused."
   [src]
-  (let [h (hash-of src)
+  (let [src (one-name src)
+        h (hash-of src)
         {:keys [state lib] bh :hash} (@builds src)]
     ;; a build of this very text already running -- the one a load started
     ;; -- is waited for: a second build shares its file names, and each
@@ -275,7 +283,7 @@
           (recur (inc n))))
       (start! src h true)))
   (poll)
-  (:state (@builds src)))
+  (:state (@builds (one-name src))))
 
 (defn compile-status
   "Each file this session loaded or built: :compiling, :installed,

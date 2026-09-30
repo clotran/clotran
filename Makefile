@@ -442,6 +442,9 @@ check-autocompile:
 	  ./clotran-bin src/clj/clojure/core.clj test/clj/autocompile_test.clj </dev/null > $(B)/autocompile1.out 2>&1; grep -q "^AUTOCOMPILE PASSED" $(B)/autocompile1.out
 	AUTOCOMPILE_STEP=cached CLOTRAN_AUTOCOMPILE=use CLOTRAN_CACHE=$(B)/autocache \
 	  ./clotran-bin src/clj/clojure/core.clj test/clj/autocompile_test.clj </dev/null > $(B)/autocompile2.out 2>&1; grep -q "^AUTOCOMPILE PASSED" $(B)/autocompile2.out
+	@echo "--- the same file by another path finds the same build ---"
+	AUTOCOMPILE_SRC=./test/clj/../clj/autocompile_demo.cljf AUTOCOMPILE_STEP=cached CLOTRAN_AUTOCOMPILE=use CLOTRAN_CACHE=$(B)/autocache \
+	  ./clotran-bin src/clj/clojure/core.clj test/clj/autocompile_test.clj </dev/null > $(B)/autocompile2b.out 2>&1; grep -q "^AUTOCOMPILE PASSED" $(B)/autocompile2b.out
 	@echo "--- compile-now while the load's own background build of the file is running: it waits for that build ---"
 	rm -rf $(B)/autocache
 	AUTOCOMPILE_STEP=build CLOTRAN_AUTOCOMPILE=1 CLOTRAN_CACHE=$(B)/autocache \
