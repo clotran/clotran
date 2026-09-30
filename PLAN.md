@@ -67,8 +67,9 @@ the meantime, and its numbers are those of 2026-09-28.
    `clotran-nrepl` (step 21 d).
 
 Order from 2026-09-30 (James): first clj's names out of everything
-clotran prints (DEVIATIONS 67), then step 22, then step 24, then step
-25; step 23 waits. Windows is deferred until about v1.0: macOS and Linux
+clotran prints (DEVIATIONS 67), then step 22, then step 26 (one machine for bytecode and compiled
+code: the speed James found missing), then step 24, then step 25; step 23
+waits. Windows is deferred until about v1.0: macOS and Linux
 until then.
 
 Already there, though the deck says missing: `do concurrent` is emitted
@@ -2253,6 +2254,202 @@ Looked at, not started. What was found, so it is not re-derived:
 - An atom holding a program's control state is the opt-in variant:
   consistent snapshots, watches, validators, but the program must be
   written for it. Arrays already work this way (examples/embed).
+
+### 26. One machine: a stack of frames shared by bytecode and compiled code (planned 2026-09-30)
+
+James, 2026-09-30, on `(time (apply + (take 1000000 (range))))` taking
+seconds: "I feel like we are doing something fundamentally wrong." We
+are. This step is the fix, and it comes before steps 24 and 25.
+
+**What was measured.** The same job -- sum the first 10^6 elements of
+an infinite lazy sequence -- in six runtimes on this machine, each the
+idiomatic way and as a hand-built memoized stream (a thunk cell per
+element, which is what a Clojure `lazy-seq` is). ms:
+
+| runtime | the step runs as | idiomatic | hand-built stream |
+|---|---|---|---|
+| GHC -O2 | compiled, fused | 2.3 | 12.9 |
+| CPython 3.14 | C library (itertools) | 9.5 | -- |
+| GHC -O0 | compiled, no fusion | 17.8 | 37.5 |
+| clj | JIT | 61 | 73 |
+| SBCL 2.4.9 | compiled | -- | 65 |
+| CPython 3.14 | generators | 78 | -- |
+| CHICKEN 6 csc -O3 | compiled | -- | 302 |
+| GHCi 9.4 | bytecode | 12 | 576 |
+| CPython 3.14 | interpreted | -- | 675 |
+| **clotran** | flat interpreter | **1752** | **2604** |
+| CHICKEN 6 csi | interpreter | -- | 2800 |
+| SBCL sb-eval | tree walker | -- | 10126 |
+
+Per element, clotran against clj: an empty loop 61 ns against 4.8, a
+function call +140 ns against +0.7, a cons +200 against +0.6. The
+fast rows share one property: the per-element step is compiled
+(GHC, SBCL, CHICKEN), JIT-compiled (clj) or native library code
+(CPython's C itertools). The interpreters -- clotran among them -- all
+pay a thunk per element, and clotran pays four times what GHCi and
+CPython pay.
+
+**What was found** (macOS `sample`, the collector's own statistics, and
+reading the call path):
+
+1. A call costs ~110 ns interpreted. `F_CALL` (flat.inc) copies each
+   argument into a new frame and nils the caller's register -- two
+   write-barrier stores per argument, because a frame is a GC heap
+   vector (`gc_reg_set`, 14% of a call loop); reads the callee's
+   layout from heap vectors (`call_table_of`, `ct_int`, `ct_body`);
+   and keeps three stacks: the shadow value stack, a trace stack
+   (`push_frame`) and a continuation stack (`k_push`, `flat_top`,
+   `k_finish`). The dispatch loop alone is 46% of a call loop.
+2. Thread-local lookups (`pthread_getspecific`) are 7-9% of samples:
+   `ctx_self()` and `gc_my_stack()` in every procedure.
+3. Allocation doubles Clojure's: a closure is two objects (the closure
+   and a vector of its captures), a `lazy-seq` three, `take` six an
+   element where clj allocates three. An unrealised range allocates
+   nine per `next` (`range_cell` builds a 3-element persistent vector
+   per element), so `(seq (range n))` is not chunked in practice
+   although `chunked-seq?` says it is.
+4. Compiled code borrowed the interpreter's heap frames and so its
+   costs: compiled `map`/`into` were SLOWER than interpreted (446
+   against 341 ms). A compiled call to a compiled fn is 30 ns and a
+   compiled empty loop 2.7 ns, so the compiler itself is not the
+   problem -- the frames and calling convention under it are.
+5. Compiled code held the heads of seqs: temporaries were never
+   cleared, a local's last read was not a clearing read, arguments
+   stayed in the caller's slots, and `apply` held its argument vector
+   through a compiled call. Fixed 2026-09-30 (the analyser's clearing
+   reads honoured, arguments taken by the callee, ABI 3) -- a
+   compiled `(reduce + (take n (range)))` went from 5.5 million
+   objects marked per run to 23 thousand. One retention remains on
+   compiled core's `reduce` path (protocols' `internal-reduce`):
+   the heap still grows with n there.
+6. Not the problem, measured: the collector (68 of 1750 ms), the
+   allocation lock (removing it bought nothing), the lazy cell's lock
+   and broadcast (2%), `malloc` on this form.
+
+**The model, and why.** clj's host's bytecode and Hack's (HHBC) are stack
+machines built to be JIT-compiled: interpreted, every operand is a
+push and a pop, and we have no JIT. SBCL compiles everything and its
+interpreter is an afterthought. GHC compiles everything too -- and
+GHCi's bytecode interpreter runs on the SAME stack and heap as the
+compiled code, calling it and being called with no conversion, so one
+module can be bytecode while the rest is native. That is clotran's
+situation exactly (compiled namespaces from the cache; the REPL, eval
+and a namespace being edited interpreted), so it is the model:
+
+- ONE machine per thread: a stack of frames over the heap we have, and
+  one calling convention. Compiled Fortran and bytecode are two ways
+  of running a frame on it.
+- Compiled code is the main path (SBCL, GHC): core and every loaded
+  namespace, ahead of time, through the cache that exists.
+- REGISTER bytecode (Lua, Dalvik, our flat form) for everything not
+  compiled yet: with no JIT, register bytecode is the one that is
+  fast to interpret.
+- Laziness as GHC does it: a thunk is one object, its captures inline,
+  updated in place when forced, no lock while one thread runs.
+- No JIT (PLAN, "Should we JIT?"), no C beyond small shims, no
+  change to what a value is.
+
+**The machine.**
+
+1. THE STACK. Per thread, the value stack that exists (fixed, never
+   moves, scanned as roots) holds every frame's registers: a frame is
+   slots `base+1 .. base+nregs`. Pushing one bumps a pointer; there is
+   no heap frame and no write barrier on a register, because the
+   collector scans the live stack instead. A parallel array of FRAME
+   RECORDS -- fn, code handle, pc, base, caller, kind (bytecode,
+   compiled, builtin, native Fortran) -- replaces the trace stack and
+   the continuation stack: a stack trace, a break's view of the
+   locals and the debugger all read this one chain.
+2. CODE OBJECTS. An arity's code is a native integer array of
+   instructions plus a rooted array of constants and its layout
+   (nregs, nparams, capture slots), in a registry by handle, as
+   CompiledFn's table is. Nothing at run time reads a persistent
+   vector to find out how to call a function.
+3. CALLS. Arguments are in consecutive registers at the top of the
+   caller's frame, and the callee's frame BEGINS there (Lua): no copy.
+   A CALL instruction caches its callee (identity, or the Var's
+   epoch) and the callee's entry, so a call is a check, a push and a
+   jump. A compiled procedure is entered with the same frame --
+   `subroutine f(ctx, base)` -- and calls bytecode, and is called by
+   it, the same way; an unknown callable (keyword, map, multimethod)
+   takes the general road.
+4. CLEARING. The analyser's clearing reads become CLEAR/MOVE in the
+   bytecode and in compiled code; a callee owns its arguments. A frame
+   that returns is simply popped. Holding a seq's head becomes
+   something code has to do on purpose.
+5. CLOSURES AND THUNKS. A closure is one object: code handle and up to
+   OBJ_SLOTS captures inline (a vector only beyond that). A lazy-seq
+   is one object the same way; forcing it runs its code on the stack
+   and overwrites it with the result, blackholed by owner id; the
+   state lock only when more than one thread runs.
+6. THE CONTEXT. The thread's context is passed down every call (as
+   compiled code already passes its stack), not looked up.
+7. SUSPENSION. A thread (an evaluator context, NOTES: threads are
+   contexts) may yield only at a bytecode frame, as today's flat form
+   does; compiled frames run to completion or call back. Checked
+   against step 14's contexts before step 24 builds on it.
+8. INTEROP. Values keep their tags; native arrays stay in the registry
+   BLAS and a solver see. A call into a Fortran package pushes a
+   frame of kind native, so the debugger's chain shows it with the
+   package's names; a Fortran derived type may become a value kind of
+   its own later -- a tagged handle, as an array is.
+9. THE DEBUGGER. Every frame has a pc and its registers on the stack:
+   a breakpoint is a pc, stepping is running to the next pc, and
+   inspecting a frame is reading its slots -- the same for bytecode,
+   compiled code (whose call sites record their pc) and native frames.
+
+**The migration, each step gated, measured, and committed on its own.**
+
+- 26.0 The yardstick: `scripts/bench-langs` runs the table above
+  (GHC, SBCL, CHICKEN, CPython, clj, clotran), and `scripts/bench`
+  gains the per-element rows (loop, call, cons, lazy step, range
+  walk). Every later step cites both.
+- 26.1 Code objects in native arrays: the flat form's code and
+  constants move out of persistent vectors. No behaviour changes.
+- 26.2 Frames on the stack: a flat body's registers become value-stack
+  slots; the heap frame and its barrier go. Closures already copy
+  what they capture, so no frame outlives its call.
+- 26.3 One frame record: flat-to-flat calls push a record instead of a
+  trace entry plus a continuation; traces, `break` and the step
+  debugger read the chain.
+- 26.4 The calling convention: overlapping frames and per-instruction
+  call caches.
+- 26.5 Compiled code on the same frames: the generator emits against
+  stack registers and the record chain; the `clotran_frame_*` heap
+  frame entries go (ABI 4). Compiled and bytecode frames call each
+  other directly.
+- 26.6 One-object closures and thunks; forcing without a lock while
+  one thread runs.
+- 26.7 Seqs: a range walks in real chunks; then allocation (a
+  per-thread bump nursery, SBCL's shape) only if a profile then says
+  so.
+- 26.8 The tree evaluator (exec.inc) retires once the flat form covers
+  every node kind -- or stays as the fallback for what it does not,
+  with that list written down.
+
+**Targets**, against the table: an interpreted call from ~110 ns to
+under 30; your form from 1752 ms to under 300 as bytecode and under
+100 compiled; the hand-built stream from 2604 ms to GHCi's and
+CPython's 600. The oracle, the language suite, the library tests and
+the torture pass stay green at every step.
+
+**Risks.** GC rooting while registers move from heap vectors to the
+stack (the torture pass and oracle-gc exist for exactly this); the
+suspension rule meeting step 24's thread pool; the break protocol and
+nREPL's debugger reading the new chain; ABI churn for cached
+libraries (the loader already refuses a stale ABI).
+
+**Sources.** The runtimes as installed (GHC 9.4.8, SBCL 2.4.9, CHICKEN
+6.0.0 by brew, CPython 3.14, clj 1.12) and their sources, cloned
+shallow under `~/github`: GHC's `rts/Updates.h` (thunks, blackholes and
+indirections) and `libraries/ghc-internal/src/GHC/Internal/List.hs`
+(take's fusion RULES); CPython's `Python/bytecodes.c`
+(`_INIT_CALL_PY_EXACT_ARGS`, `_PUSH_FRAME`) and `Python/pystate.c`
+(`_PyThreadState_PushFrame`); SBCL's
+`src/runtime/gencgc-alloc-region.h`; CHICKEN's `chicken.h` (`C_alloc`).
+Also Baker's Cheney-on-the-MTA as CHICKEN describes it
+(more-magic.net, "CHICKEN internals: the garbage collector") and
+Coutts et al., "Stream Fusion".
 
 ## Decisions that still hold
 
