@@ -4,6 +4,10 @@
 # rlwrap when there is a terminal to edit in -- the same flags clj
 # itself uses: -m multi-line, -r remember words, -q/-b tuned for Lisp.
 #
+# rlwrap edits lines only on a real terminal: not in a pipe, and not
+# where TERM is dumb, as Emacs sets it for a subprocess, whose zero-width
+# "terminal" rlwrap refuses.
+#
 # Files named on the command line load after core.clj, in order, so
 # `clotran some.cljf` runs a program and `clotran` alone is the REPL.
 # CLOTRAN_PATH adds source roots (: separated, ; on Windows), searched
@@ -140,7 +144,7 @@ fi
 # off; CLOTRAN_CACHE moves the cache (default ~/.cache/clotran).
 export CLOTRAN_AUTOCOMPILE="${CLOTRAN_AUTOCOMPILE-1}"
 
-if [ -t 0 ] && type rlwrap >/dev/null 2>&1; then
+if [ -t 0 ] && [ "${TERM:-dumb}" != dumb ] && type rlwrap >/dev/null 2>&1; then
   exec rlwrap -m -r -q '"' -b "(){}[],^%#@\";:'" "$bin" "$core" "$@"
 else
   [ -t 0 ] && echo "note: install rlwrap for line editing and history" >&2

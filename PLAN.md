@@ -2133,6 +2133,12 @@ d. *nREPL, as a package* (serving 2026-09-29, `~/jborden/clotran-nrepl`:
    the eleven ops below, tested against its own client and the reference
    client nrepl/nrepl 1.3.0; CIDER itself not yet tried): what CIDER speaks (bencode, eval, load-file,
    describe, completions), on the model of babashka's compact server.
+e. *CIDER's debugger, queued (2026-09-29)*: CIDER's debugger UI is its
+   Emacs side (`cider-debug.el`); the instrumenting is the JVM middleware
+   cider-nrepl. clotran-nrepl answering that protocol from clotran's own
+   break protocol (`clotran-break`, frames with locals) puts CIDER's
+   debugger over clotran with no fork. Emacs support is its own tool,
+   `~/jborden/clotran-mode` (`.cljf` in clojure-mode, `clotran-jack-in`).
 
 Windows is built with a mingw-w64 cross toolchain and run under Wine for
 quick checks; a real Windows runner is the authority, as flang is for
