@@ -197,7 +197,7 @@ unit-tests = gc_test persistent_vector_test persistent_list_test persistent_arra
 test-bins = $(addprefix $(BT)/,$(unit-tests))
 
 .PHONY: all crosscheck crosscheck-here clean compiled-core embed image install uninstall
-all: clotran-bin $(test-bins) $(B)/core.image
+all: clotran-bin $(test-bins) $(B)/core.image $(B)/fc
 
 $(B) $(BT):
 	mkdir -p $@
@@ -542,12 +542,18 @@ endif
 CLOTRAN_LIB = $(PREFIX)/lib/clotran
 CLOTRAN_BIN = $(PREFIX)/bin
 
-install: clotran-bin
+# the Fortran compiler this build uses, by absolute path: `clotran compile`
+# falls back to it where gfortran is not on PATH (an Emacs from the Dock)
+$(B)/fc: Makefile | $(B)
+	command -v $(FC) > $@
+
+install: clotran-bin $(B)/fc
 	@echo "--- installing clotran into $(CLOTRAN_LIB), the command into $(CLOTRAN_BIN) ---"
 	rm -rf "$(CLOTRAN_LIB).new"
 	mkdir -p "$(CLOTRAN_LIB).new/src" "$(CLOTRAN_LIB).new/build" "$(CLOTRAN_BIN)"
 	cp clotran-bin clotran "$(CLOTRAN_LIB).new/"
 	cp -R src/clj "$(CLOTRAN_LIB).new/src/"
+	cp $(B)/fc "$(CLOTRAN_LIB).new/build/fc"
 	cd "$(CLOTRAN_LIB).new" && CLOTRAN_IMAGE=0 CLOTRAN_IMAGE_SAVE=build/core.image ./clotran-bin src/clj/clojure/core.clj </dev/null >/dev/null
 	rm -rf "$(CLOTRAN_LIB)"
 	mv "$(CLOTRAN_LIB).new" "$(CLOTRAN_LIB)"

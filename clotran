@@ -155,7 +155,14 @@ if [ "$1" = "compile" ]; then
   # (clotran.loader) looks for the library, and must never find half of one
   # gfortran limits a free-form line to 132 columns unless told otherwise;
   # flang has no such limit, and refuses the flag
-  fc=${FC:-gfortran}
+  # FC if set; else gfortran on PATH; else the compiler this clotran was
+  # built with, by absolute path (build/fc) -- a PATH without Homebrew's
+  # directory, as an Emacs started from the Dock has, finds no gfortran
+  if [ -n "$FC" ]; then fc=$FC
+  elif command -v gfortran >/dev/null 2>&1; then fc=gfortran
+  elif [ -x "$(cat "$root/build/fc" 2>/dev/null)" ]; then fc=$(cat "$root/build/fc")
+  else fc=gfortran
+  fi
   case "$(basename "$fc")" in flang*) long="" ;; *) long="-ffree-line-length-none" ;; esac
   (cd "$work" && $fc -O2 -shared -fPIC $long $undef \
     -o "$out.part" out.f90) || exit 1
