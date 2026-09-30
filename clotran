@@ -20,6 +20,8 @@
 # and ClojureScript releases the language is pinned to, the compiler,
 # the machine and the image.
 #
+# `clotran new NAME` makes a project in ./NAME: deps.edn, src and test.
+#
 # `clotran compile foo.cljf` compiles the namespace to foo.dylib (foo.so
 # on Linux) beside it. Loading foo.cljf afterwards installs the library
 # over the functions it compiled (clotran.loader); editing the source
@@ -29,6 +31,54 @@ root=$(cd "$(dirname "$0")" && pwd)
 bin="$root/clotran-bin"
 core="$root/src/clj/clojure/core.clj"
 [ -x "$bin" ] || { echo "build first: make" >&2; exit 1; }
+
+if [ "$1" = "new" ]; then
+  # `clotran new NAME`: a project in ./NAME -- deps.edn, src/NAME/core.cljf,
+  # test/NAME/core_test.cljf, a README and a .gitignore. The namespace is
+  # NAME.core; a dash in NAME is an underscore in the directory, as
+  # Clojure maps namespaces to files.
+  [ $# -eq 2 ] || { echo "usage: clotran new NAME" >&2; exit 2; }
+  name=$2
+  case "$name" in
+    [abcdefghijklmnopqrstuvwxyz]*) ;;
+    *) echo "clotran new: a name starts with a lower-case letter: $name" >&2; exit 2 ;;
+  esac
+  case "$name" in
+    *[!abcdefghijklmnopqrstuvwxyz0123456789-]*) echo "clotran new: a name is lower-case letters, digits and dashes: $name" >&2; exit 2 ;;
+  esac
+  [ -e "$name" ] && { echo "clotran new: $name is there already" >&2; exit 1; }
+  dir=$(printf '%s' "$name" | tr '-' '_')
+  mkdir -p "$name/src/$dir" "$name/test/$dir" || exit 1
+  cat > "$name/deps.edn" <<EDN
+;; clotran reads this as tools.deps does (clotran-deps): :paths, :deps and
+;; :aliases. Name a library with :local/root or :git/url + :git/sha.
+{:paths ["src"]
+ :deps {}
+ :aliases {:test {:extra-paths ["test"]}}}
+EDN
+  cat > "$name/src/$dir/core.cljf" <<CLJF
+(ns $name.core
+  "$name, on clotran.")
+
+(defn greet
+  "A greeting for who."
+  [who]
+  (str "hello, " who))
+CLJF
+  cat > "$name/test/$dir/core_test.cljf" <<CLJF
+(ns $name.core-test
+  (:require [clojure.test :refer [deftest is]]
+            [$name.core :as core]))
+
+(deftest greet-test
+  (is (= "hello, world" (core/greet "world"))))
+CLJF
+  printf '.clotran-cache/\n' > "$name/.gitignore"
+  printf '# %s\n\nA clotran project: Clojure, hosted on Fortran.\n\n    clotran                       # a REPL with src on the path\n    clotran -A:test               # with test too\n\nIn Emacs with clotran-mode, open src/%s/core.cljf and M-x cider-jack-in.\n' \
+    "$name" "$dir" > "$name/README.md"
+  echo "made $name: src/$dir/core.cljf, test/$dir/core_test.cljf, deps.edn"
+  exit 0
+fi
 
 if [ "$1" = "explain" ]; then
   # `clotran explain B001`: what a --report code means (clotran.tiers/codes)

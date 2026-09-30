@@ -382,7 +382,7 @@ $(B)/libsamplelib.$(SOEXT): $(T)/samplelib.f90 $(B)/samplelib_shims.f90 | $(B) $
 # after the other within its target). Plain `make test` runs them in
 # order, as before.
 TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(B)/libsamplelib.$(SOEXT) packages examples/embed/heat
-TEST_CHECKS = check-unit check-embed check-embed-repl check-path check-install check-language check-tree check-banner check-torture check-threads \
+TEST_CHECKS = check-unit check-embed check-embed-repl check-path check-install check-new check-language check-tree check-banner check-torture check-threads \
 	check-autocompile check-break check-libraries check-oracle check-oracle-gc check-pure check-static
 .PHONY: test $(TEST_CHECKS)
 test: $(TEST_CHECKS)
@@ -407,6 +407,13 @@ check-install:
 	cd $(B)/outside && $(CURDIR)/$(B)/inst/bin/clotran t.cljf </dev/null 2>&1 | grep -q ":installed-says #{1 2}"
 	@$(MAKE) -s uninstall PREFIX=$(CURDIR)/$(B)/inst
 	@test -z "$$(find $(B)/inst -type f)"
+check-new:
+	@echo "--- clotran new: a project whose own test passes, and a name refused ---"
+	@rm -rf $(B)/new && mkdir -p $(B)/new
+	cd $(B)/new && $(CURDIR)/clotran new my-app >/dev/null
+	@printf "(require (quote my-app.core-test))\\n(clojure.test/run-tests (quote my-app.core-test))\\n" > $(B)/new/run.clj
+	cd $(B)/new/my-app && CLOTRAN_PATH=src:test $(CURDIR)/clotran ../run.clj </dev/null 2>&1 | grep -q "^0 failures, 0 errors"
+	cd $(B)/new && ! $(CURDIR)/clotran new Hello 2>/dev/null
 check-embed-repl:
 	@echo "--- a REPL into the running solver: read its grid, write it, stop it (PLAN step 21) ---"
 	scripts/embed-repl-check

@@ -23,6 +23,12 @@ user=> (clojure-version)
 That version string is real: core.clj reads it off the classloader and
 parses it with a regex, and both of those had to exist for it to answer.
 
+A new project -- `deps.edn`, `src/NAME/core.cljf`, a test, a README:
+
+```
+$ clotran new my-app
+```
+
 To have `clotran` on your PATH:
 
 ```
