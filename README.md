@@ -36,6 +36,10 @@ Clojure sources it loads on first use, and the launcher -- under
 `PREFIX/lib/clotran`, built for this machine's architecture. Packages
 come from a project's `deps.edn` (`PACKAGES.md`).
 
+In Emacs, `.cljf` files open in clojure-mode, and so work with CIDER, once
+your init file loads `editors/emacs/clotran.el`. CIDER connects to
+clotran through the nREPL server in `~/jborden/clotran-nrepl`.
+
 ## What works
 
 **All 724 of core.clj's top-level forms load.** That includes
