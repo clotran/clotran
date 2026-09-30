@@ -245,7 +245,7 @@ module Eval
   integer, parameter :: B_SOCKLISTEN = 414, B_SOCKPORT = 415, B_SOCKACCEPT = 416, B_SOCKCONNECT = 417
   integer, parameter :: B_SOCKREAD = 418, B_SOCKWRITE = 419, B_SOCKCLOSE = 420, B_EXIT = 421
   integer, parameter :: B_SOCKREADB = 422, B_SOCKWRITEB = 423, B_UTF8BYTES = 424, B_UTF8STRING = 425
-  integer, parameter :: B_REALPATH = 426
+  integer, parameter :: B_REALPATH = 426, B_FSKIND = 427, B_FSLIST = 428
   ! A number's WIDTH, in an integer's or a real's otherwise unused ref:
   ! what it boxes as in clj. Equality and hashing never read it.
   integer, parameter :: W_LONG = 0, W_BYTE = 1, W_SHORT = 2, W_INT = 3, W_FLOAT = 1
@@ -427,7 +427,7 @@ module Eval
        TASK_DONE = 3, TASK_FAILED = 4, TASK_CANCELLED = 5
 
   public :: gce_eval, gce_base_env, gce_has_error, gce_error, gce_clear_error, gce_set_spec_check
-  public :: gce_bind_repl_vars
+  public :: gce_bind_repl_vars, gce_set_command_line_args
   public :: gce_main_bindings, gce_install_compiled, gce_raise_arity_named
   public :: gce_native_begin, gce_native_end
   public :: gce_analyze, gce_trace
@@ -956,6 +956,8 @@ contains
     call bind_builtin(core, "clotran-utf8-bytes", B_UTF8BYTES)
     call bind_builtin(core, "clotran-utf8-string", B_UTF8STRING)
     call bind_builtin(core, "clotran-real-path", B_REALPATH)
+    call bind_builtin(core, "clotran-file-kind", B_FSKIND)
+    call bind_builtin(core, "clotran-list-dir", B_FSLIST)
     call bind_builtin(core, "count", B_COUNT)
     call bind_builtin(core, "first", B_FIRST)
     ! an agent's queue, drained on its own thread by clotran.rt/agent-drain
@@ -1727,6 +1729,35 @@ contains
     call bind_var(core, "*3", gc_nil())
     call bind_var(core, "*e", gc_nil())
   end subroutine gce_bind_repl_vars
+
+  ! *command-line-args*: the arguments after the program, a seq of
+  ! strings, or nil when there are none -- as clojure.main binds it.
+  subroutine gce_set_command_line_args(args, lens)
+    type(gc_stack), pointer :: vst
+    character(len=*), intent(in) :: args(:)
+    integer, intent(in) :: lens(:)
+    type(gc_value) :: core, lst, s
+    integer :: base, i
+    vst => gc_my_stack()
+    core = gcn_find("clojure.core")
+    if (gc_kind(core) /= OBJ_NS) return
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, core)
+    call vs_set(vst, base + 2, gc_nil())
+    if (size(args) > 0) then
+       lst = gcl_empty([vs_get(vst, base + 1)])
+       call vs_set(vst, base + 2, lst)
+       do i = size(args), 1, -1
+          s = gc_str(args(i)(1:lens(i)), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+          call vs_set(vst, base + 3, s)
+          lst = gcl_cons(vs_get(vst, base + 3), vs_get(vst, base + 2), &
+               [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+          call vs_set(vst, base + 2, lst)
+       end do
+    end if
+    call bind_var(vs_get(vst, base + 1), "*command-line-args*", vs_get(vst, base + 2))
+    call vs_leave(vst, base)
+  end subroutine gce_set_command_line_args
 
   subroutine bind_var(ns, name, val, var_out)
     type(gc_stack), pointer :: vst
@@ -9557,6 +9588,75 @@ contains
               end do
               out = gc_str(s, [vs_get(vst, base + 1)])
             end block
+         end if
+       end block
+    case (B_FSKIND)
+       ! (clotran-file-kind p): :directory, :file, or nil when there is no
+       ! such path (fs_shim.c)
+       block
+         interface
+            function c_fs_kind(path) bind(C, name="clotran_fs_kind") result(r)
+              import :: c_char, c_int
+              character(kind=c_char), intent(in) :: path(*)
+              integer(c_int) :: r
+            end function c_fs_kind
+         end interface
+         integer(c_int) :: k
+         call text_of(gcv_nth(args, 0), s=dlt_1)
+         k = c_fs_kind(dlt_1 // c_null_char)
+         out = gc_nil()
+         if (k == 1) out = gc_key("directory", [vs_get(vst, base + 1)])
+         if (k == 0) out = gc_key("file", [vs_get(vst, base + 1)])
+       end block
+    case (B_FSLIST)
+       ! (clotran-list-dir p): the names in a directory as a vector of
+       ! strings, in the order the system gives them, or nil when it cannot
+       ! be read (fs_shim.c)
+       block
+         interface
+            function c_fs_list(path, buf, cap) bind(C, name="clotran_fs_list") result(r)
+              import :: c_char, c_long
+              character(kind=c_char), intent(in) :: path(*)
+              character(kind=c_char), intent(out) :: buf(*)
+              integer(c_long), value :: cap
+              integer(c_long) :: r
+            end function c_fs_list
+         end interface
+         character(kind=c_char), allocatable :: buf(:)
+         character(len=:), allocatable :: p
+         integer(c_long) :: n
+         integer :: i, start
+         call text_of(gcv_nth(args, 0), s=dlt_1)
+         p = dlt_1 // c_null_char
+         allocate(buf(65536))
+         n = c_fs_list(p, buf, int(size(buf), c_long))
+         if (n < -1) then
+            deallocate(buf)
+            allocate(buf(-n))
+            n = c_fs_list(p, buf, -n)
+         end if
+         out = gc_nil()
+         if (n >= 0) then
+            out = gcv_empty([vs_get(vst, base + 1)])
+            call vs_set(vst, base + 2, out)
+            start = 1
+            do i = 1, int(n)
+               if (buf(i) == achar(10)) then
+                  block
+                    character(len=i - start) :: nm
+                    integer :: j
+                    do j = start, i - 1
+                       nm(j - start + 1:j - start + 1) = buf(j)
+                    end do
+                    call vs_set(vst, base + 3, gc_str(nm, [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+                  end block
+                  out = gcv_conj(vs_get(vst, base + 2), vs_get(vst, base + 3), &
+                       [vs_get(vst, base + 1), vs_get(vst, base + 3)])
+                  call vs_set(vst, base + 2, out)
+                  start = i + 1
+               end if
+            end do
+            out = vs_get(vst, base + 2)
          end if
        end block
     case (B_UTF8BYTES)

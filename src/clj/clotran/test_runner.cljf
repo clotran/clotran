@@ -1,0 +1,39 @@
+(ns clotran.test-runner
+  "`clotran test [dir ...]`: every namespace under the directories (test/
+  by default) whose name ends in -test, required and run by clojure.test;
+  the process ends with status 0 when nothing failed or threw, 1
+  otherwise -- as Cognitect's test-runner does for clj."
+  (:require [clojure.test :as t]
+            [clotran.files :as files]))
+
+(defn- ns-of
+  "The namespace a source file declares, by its first form, or nil."
+  [f]
+  (let [form (try (read-string {:read-cond :allow :features #{:cljf}} (slurp f))
+                  (catch clotran.host.throwable _ nil))]
+    (when (and (seq? form) (= 'ns (first form)) (symbol? (second form)))
+      (second form))))
+
+(defn test-namespaces
+  "The -test namespaces of the .cljf, .cljc and .clj files under dirs,
+  sorted."
+  [dirs]
+  (->> (for [d dirs
+             f (file-seq (files/file d))
+             :when (.isFile f)
+             :when (re-find #"\.(cljf|cljc|clj)$" (.getName f))
+             :let [n (ns-of f)]
+             :when (and n (re-find #"-test$" (name n)))]
+         n)
+       distinct
+       sort))
+
+(defn -main [& dirs]
+  (let [dirs (or (seq dirs) ["test"])
+        nss (test-namespaces dirs)]
+    (when (empty? nss)
+      (println "clotran test: no -test namespaces under" (apply str (interpose ", " dirs)))
+      (clotran.host.system/exit 1))
+    (apply require nss)
+    (let [{:keys [fail error]} (apply t/run-tests nss)]
+      (clotran.host.system/exit (if (zero? (+ fail error)) 0 1)))))

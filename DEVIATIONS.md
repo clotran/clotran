@@ -1955,3 +1955,25 @@ clotran's, accepted as it stands where a name was only a symbol
 everything else.
 
 **Removal**: not planned; it is the design.
+
+## 68. An uncaught error in a program is reported as a load failure
+
+`clj -M -m app.core` ends an uncaught exception with its own report:
+
+    Execution error (ArithmeticException) at app.core/-main (core.clj:2).
+    Divide by zero
+
+clotran's (`clotran -m app.core`, `clotran app.cljf`) is the one a load
+prints when a form fails -- the message, where, and the form -- on stderr:
+
+      Divide by zero  at -m app.core:2:1
+        in: (clojure.core/apply app.core/-main clojure.core/*command-line-args*)
+    load -m app.core: stopped at form 2
+
+The status is 1 in both. The value and the message are the same; the
+layout is not, and clj's names the frame that threw where clotran's names
+the form that was running.
+
+**Removal**: print clojure.main's `ex-str` layout in program mode, which
+needs the throwing frame's var and file (the trace has them, DEVIATIONS
+on traces).

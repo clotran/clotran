@@ -5003,7 +5003,7 @@
      (walk root)))
 
 (defn file-seq
-  "A tree seq on clotran.host.files"
+  "A tree seq on clotran.io.File values"
   {:added "1.0"
    :static true}
   [dir]

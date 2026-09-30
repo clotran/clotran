@@ -182,6 +182,9 @@ $(B)/seqlock.o: src/c/seqlock.c | $(B) $(FCSTAMP)
 $(B)/socket_shim.o: src/c/socket_shim.c src/c/socket_shim.h | $(B) $(FCSTAMP)
 	$(CC) -O2 -c $< -o $@
 
+$(B)/fs_shim.o: src/c/fs_shim.c | $(B) $(FCSTAMP)
+	$(CC) -O2 -c $< -o $@
+
 $(B)/regex_shim.o: src/c/regex_shim.c src/c/regex_shim.h | $(B) $(FCSTAMP)
 	$(CC) -c $(ICU_INC) $< -o $@
 
@@ -283,7 +286,7 @@ $(B)/Regex.o: $(B)/Threads.o
 compiled-objects = $(B)/CompiledFn.o
 $(B)/CompiledFn.o: $(B)/GC.o $(B)/PersistentVector.o
 # TCP sockets: the shim holds what differs between POSIX and Winsock
-socket-objects = $(B)/Socket.o $(B)/socket_shim.o
+socket-objects = $(B)/Socket.o $(B)/socket_shim.o $(B)/fs_shim.o
 $(B)/Socket.o: $(B)/GC.o
 eval-objects = $(data-objects) $(B)/Env.o $(B)/Namespace.o $(reader-objects) $(B)/DynLoad.o $(compiled-objects) $(socket-objects) $(B)/Eval.o \
 	$(B)/ClotranABI.o
@@ -382,7 +385,7 @@ $(B)/libsamplelib.$(SOEXT): $(T)/samplelib.f90 $(B)/samplelib_shims.f90 | $(B) $
 # after the other within its target). Plain `make test` runs them in
 # order, as before.
 TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(B)/libsamplelib.$(SOEXT) packages examples/embed/heat
-TEST_CHECKS = check-unit check-embed check-embed-repl check-path check-install check-new check-language check-tree check-banner check-torture check-threads \
+TEST_CHECKS = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-tree check-banner check-torture check-threads \
 	check-autocompile check-break check-libraries check-oracle check-oracle-gc check-pure check-static
 .PHONY: test $(TEST_CHECKS)
 test: $(TEST_CHECKS)
@@ -411,9 +414,19 @@ check-new:
 	@echo "--- clotran new: a project whose own test passes, and a name refused ---"
 	@rm -rf $(B)/new && mkdir -p $(B)/new
 	cd $(B)/new && $(CURDIR)/clotran new my-app >/dev/null
-	@printf "(require (quote my-app.core-test))\\n(clojure.test/run-tests (quote my-app.core-test))\\n" > $(B)/new/run.clj
-	cd $(B)/new/my-app && CLOTRAN_PATH=src:test $(CURDIR)/clotran ../run.clj </dev/null 2>&1 | grep -q "^0 failures, 0 errors"
+	cd $(B)/new/my-app && CLOTRAN_PATH=src:test $(CURDIR)/clotran test </dev/null 2>&1 | grep -q "^0 failures, 0 errors"
 	cd $(B)/new && ! $(CURDIR)/clotran new Hello 2>/dev/null
+check-program:
+	@echo "--- a program: a script's *command-line-args*, -m NS's -main, status 1 on an error, clotran test's status (PLAN step 22) ---"
+	@rm -rf $(B)/program && mkdir -p $(B)/program/src/p $(B)/program/test/p
+	@printf '(prn *command-line-args*)\n' > $(B)/program/s.cljf
+	@printf '(ns p.core)\n(defn -main [& args] (prn :main args) (when (= "boom" (first args)) (/ 1 0)))\n' > $(B)/program/src/p/core.cljf
+	@printf '(ns p.core-test (:require [clojure.test :refer [deftest is]]))\n(deftest t (is (= 1 2)))\n' > $(B)/program/test/p/core_test.cljf
+	cd $(B)/program && $(CURDIR)/clotran s.cljf a "b c" </dev/null | grep -qx '("a" "b c")'
+	cd $(B)/program && $(CURDIR)/clotran s.cljf </dev/null | grep -qx 'nil'
+	cd $(B)/program && CLOTRAN_PATH=src $(CURDIR)/clotran -m p.core x </dev/null | grep -qx ':main ("x")'
+	cd $(B)/program && ! CLOTRAN_PATH=src $(CURDIR)/clotran -m p.core boom </dev/null >/dev/null 2>err.txt && grep -q 'Divide by zero' err.txt
+	cd $(B)/program && ! CLOTRAN_PATH=src:test $(CURDIR)/clotran test </dev/null >/dev/null 2>&1
 check-embed-repl:
 	@echo "--- a REPL into the running solver: read its grid, write it, stop it (PLAN step 21) ---"
 	scripts/embed-repl-check

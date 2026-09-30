@@ -52,6 +52,7 @@
       (str/replace (re-pattern (str "\n\\s*See: " host-doc-link)) "")
       (str/replace (re-pattern (str "\n\n\\s*For more complete information, see:\\s*" host-doc-link)) "")
       (str/replace host-doc-link "the host's documentation")
+      (as-> t (reduce (fn [t [a b]] (str/replace t a b)) t (:text table)))
       (str/replace qualified-in-text #(class-name %))
       ;; the JVM's internal spelling, Ljava/lang/Object;
       (str/replace #"(?:(?<![\w/$])|(?<=L))(?:java|javax|clojure/lang|clojure/asm)(?:/[a-z_][a-z0-9_]*)*/[A-Z][A-Za-z0-9_$]*"

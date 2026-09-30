@@ -8,8 +8,11 @@
 # where TERM is dumb, as Emacs sets it for a subprocess, whose zero-width
 # "terminal" rlwrap refuses.
 #
-# Files named on the command line load after core.clj, in order, so
-# `clotran some.cljf` runs a program and `clotran` alone is the REPL.
+# `clotran` alone is the REPL. `clotran app.cljf a b` runs the file as a
+# program, as `clj -M app.clj a b` does: *command-line-args* is ("a" "b"),
+# and it ends when the file does, with status 1 on an uncaught error.
+# `clotran -m app.core a b` requires app.core and calls its -main with
+# the args, as `clj -M -m app.core a b` does.
 # CLOTRAN_PATH adds source roots (: separated, ; on Windows), searched
 # after clotran's own for require and load: what clotran-deps computes
 # from a project's deps.edn (PACKAGES.md).
@@ -181,8 +184,20 @@ fi
 # deps.edn naming nothing to fetch -- no :local/root, no :git/url, no
 # :paths -- needs no clotran-deps, so its absence is not worth a word
 # there. clotran-deps is found on PATH, else beside this checkout.
+# `clotran test [dir ...]`: the project's -test namespaces through
+# clojure.test (clotran.test-runner), with deps.edn's :test alias -- or,
+# with no deps.edn, src and test on the path; status 1 on a failure.
+test_cmd=""
+if [ "$1" = "test" ]; then test_cmd=1; shift; fi
 deps_aliases=""
 case "$1" in -A*) deps_aliases="$1"; shift ;; esac
+if [ -n "$test_cmd" ] && [ -z "$deps_aliases" ] && [ -f deps.edn ] && grep -q ':test' deps.edn; then
+  deps_aliases="-A:test"
+fi
+if [ -n "$test_cmd" ] && [ -z "$CLOTRAN_PATH" ] && [ ! -f deps.edn ]; then
+  CLOTRAN_PATH=src:test
+  export CLOTRAN_PATH
+fi
 if [ -z "$CLOTRAN_PATH" ] && [ -f deps.edn ] && [ ! -f src/clj/clotran/rt.cljf ]; then
   deps=$(command -v clotran-deps 2>/dev/null)
   [ -n "$deps" ] || deps="$root/../clotran-deps/bin/clotran-deps"
@@ -200,6 +215,15 @@ fi
 # CLOTRAN_AUTOCOMPILE_VERBOSE=1. CLOTRAN_AUTOCOMPILE=0 turns it
 # off; CLOTRAN_CACHE moves the cache (default ~/.cache/clotran).
 export CLOTRAN_AUTOCOMPILE="${CLOTRAN_AUTOCOMPILE-1}"
+
+[ -n "$test_cmd" ] && exec "$bin" "$core" -m clotran.test-runner "$@"
+
+# a program: no REPL after it, and so no rlwrap around it
+case "$1" in
+  -m) exec "$bin" "$core" "$@" ;;
+  -*) echo "clotran: unknown option $1 (a file, -m NS, or new/compile/test/build)" >&2; exit 2 ;;
+  ?*) exec "$bin" "$core" --run "$@" ;;
+esac
 
 if [ -t 0 ] && [ "${TERM:-dumb}" != dumb ] && type rlwrap >/dev/null 2>&1; then
   exec rlwrap -m -r -q '"' -b "(){}[],^%#@\";:'" "$bin" "$core" "$@"

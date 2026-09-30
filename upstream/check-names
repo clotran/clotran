@@ -12,7 +12,11 @@
 (def skip #"^(upstream/|docs/|src/c/icu/)")
 (def word #"(?i)java(?!script)|jvm|clojure\.lang")
 
-(def root (.getParentFile (.getParentFile (.getAbsoluteFile (clojure.java.io/file *file*)))))
+(def root
+  ;; a directory to check, as `upstream/check-names ../clotran-deps`; clotran by default
+  (if-let [d (first *command-line-args*)]
+    (.getCanonicalFile (clojure.java.io/file d))
+    (.getParentFile (.getParentFile (.getAbsoluteFile (clojure.java.io/file *file*))))))
 (def files (->> (file-seq root)
                 (filter #(.isFile %))
                 (map #(subs (str %) (inc (count (str root)))))
@@ -25,8 +29,9 @@
 
 (def hits
   (for [f files
-        :when (not (binary? f))
-        :let [text (slurp f)
+        :let [path (clojure.java.io/file root f)]
+        :when (not (binary? path))
+        :let [text (slurp path)
               toks (names/lex text)
               imports {}
               resolve (names/resolver imports (names/defined-types toks))

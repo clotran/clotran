@@ -2890,3 +2890,9 @@
 
 ;; a catch of a class there is not is a compile error, not a clause that never matches
 (try (eval '(try 5 (catch Nonexistent e 1))) (catch clotran.host.throwable e :unresolved))
+
+;; a directory walked as file-seq walks it: the directory first, then what it holds
+(let [fs (file-seq (clotran.files/file "test/clj/derived"))]
+  [(.isDirectory (first fs)) (count (filter #(.isFile %) fs))
+   (take 3 (sort (map #(.getName %) (filter #(.isFile %) fs))))
+   (.getName (clotran.files/file "a/b.cljf")) (.exists (clotran.files/file "no/such")) (.isFile (clotran.files/file "Makefile"))])

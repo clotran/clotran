@@ -30,6 +30,18 @@ A new project -- `deps.edn`, `src/NAME/core.cljf`, a test, a README:
 $ clotran new my-app
 ```
 
+Running a program is as with `clj -M`: a file with arguments, or a
+namespace's `-main`. Either ends when the program does, with status 1 on
+an uncaught error. `clotran test` runs the project's `-test` namespaces
+through `clojure.test`, with `deps.edn`'s `:test` alias, and ends with
+status 1 on a failure:
+
+```
+$ clotran app.cljf a "b c"            # *command-line-args* is ("a" "b c")
+$ clotran -m my-app.core a b          # (my-app.core/-main "a" "b")
+$ clotran test                        # every -test namespace under test/
+```
+
 To have `clotran` on your PATH:
 
 ```

@@ -11,6 +11,7 @@
 ;;              unimported (clj's (ns-imports 'user))
 ;; :constructors a class whose clotran type is built from its fields, not
 ;;              from the arguments upstream passes: its factory instead
+;; :text        prose that names no one class, renamed as written (a plural)
 ;; :namespaces  upstream namespaces clotran provides under its own name
 ;; :words       what is left of the host's name in prose and in symbols
 {:classes
@@ -160,7 +161,6 @@
   "java.io.File" "clotran.io.File",
   "java.io.FileNotFoundException"
   "clotran.host.file_not_found_exception",
-  "java.io.Files" "clotran.host.files",
   "java.io.Flushable" "clotran.host.flushable",
   "java.io.IOException" "clotran.host.io_exception",
   "java.io.InputStream" "clotran.host.input_stream",
@@ -399,6 +399,8 @@
   "java.io.PushbackReader" "clotran.io/pushback-reader",
   "clojure.lang.LineNumberingPushbackReader" "clotran.io/line-numbering-reader",
   "java.util.ArrayList" "clotran.rt/array-list"},
+ :text
+ {"java.io.Files" "clotran.io.File values"},
  :namespaces
  {"clojure.java.basis" "clotran.basis",
   "clojure.java.browse" "clotran.browse",

@@ -96,13 +96,21 @@
   (getString [_] (let [s (apply str (:capture @st))] (swap! st assoc :capture nil) s))
   (close [_] (.close in)))
 
-;; A file path as a value: what clotran.files/file answers, and what
-;; clotran.io.File, which programs write, resolves to (class-aliases.edn).
-;; clotran's own code builds its types with the factories (->File): a
-;; name written with a dot, (File. p), is clj's constructor, aliased.
+;; A file path as a value: what clotran.files/file answers. Built from its
+;; one field, (clotran.io.File. path) or (make-file path), and asked what
+;; it names through the file system (clotran-file-kind, clotran-list-dir).
 (deftype File [path]
   clotran.host.value
-  (toString [_] path))
+  (toString [_] path)
+  (getPath [_] path)
+  (getName [_] (or (re-find #"[^/]+$" path) path))
+  (exists [_] (some? (clotran-file-kind path)))
+  (isDirectory [_] (= :directory (clotran-file-kind path)))
+  (isFile [_] (= :file (clotran-file-kind path)))
+  ;; the entries, as clj's listFiles: each a File under this one, nil if
+  ;; this is not a directory
+  (listFiles [_] (when-let [names (clotran-list-dir path)]
+                   (mapv #(clotran.io/make-file (str path (when-not (= \/ (last path)) "/") %)) names))))
 
 (defn file? [x] (instance? File x))
 (defn make-file [path] (->File path))

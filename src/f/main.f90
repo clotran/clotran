@@ -32,6 +32,9 @@ module clotran_main
   ! status 1, as clj's does on an uncaught exception, after every file has
   ! had its turn (split-forms reads every failure in one pass).
   logical :: load_failed = .false.
+  ! Where a load's error goes: the terminal's stream for the REPL and the
+  ! harnesses, stderr for a program (--run, -m), as clj reports one.
+  integer :: err_unit = 6
 
 contains
 
@@ -46,7 +49,7 @@ contains
 
     type(gc_value) :: env
     type(gc_value) :: none(0)
-    integer :: base, i, arglen, st
+    integer :: base, i, arglen, st, nargs, first_prog
     logical :: imaged
     integer(8) :: image_id
     character(len=1024) :: argbuf
@@ -95,7 +98,19 @@ contains
     ! that `clotran some.clj` is how a file gets tried against
     ! this evaluator. Loading real core.clj is the point: the first
     ! error it reports IS the next thing to build.
-    do i = 1, command_argument_count()
+    ! A PROGRAM: `--run FILE args...` or `-m NS args...` after the files,
+    ! as clj -M runs one -- the args are *command-line-args*, and there is
+    ! no REPL after it. Files before the marker load first, as always.
+    nargs = command_argument_count()
+    first_prog = nargs + 1
+    do i = 2, nargs
+       call get_command_argument(i, argbuf, arglen)
+       if (argbuf(1:arglen) == "--run" .or. argbuf(1:arglen) == "-m") then
+          first_prog = i
+          exit
+       end if
+    end do
+    do i = 1, first_prog - 1
        call get_command_argument(i, argbuf, arglen)
        ! Every file after core.clj starts in user, as a script run by
        ! clojure.main does. Inheriting core.clj's own (ns clojure.core)
@@ -135,6 +150,13 @@ contains
           call gce_set_spec_check(st /= 0)
        end if
     end do
+
+    if (first_prog <= nargs) then
+       call run_program(first_prog, nargs, vs_get(base + 1))
+       flush(6)
+       if (load_failed) stop 1, quiet=.true.
+       return
+    end if
 
     ! `make image`: the heap as it now stands, and no REPL
     call get_environment_variable("CLOTRAN_IMAGE_SAVE", argbuf, arglen, st)
@@ -207,23 +229,17 @@ contains
     character(len=*), intent(in) :: path
     type(gc_value), intent(in) :: env
     character(len=:), allocatable :: text
-    type(gc_value) :: forms, r
-    integer :: u, st, lb, i, fsize, pos, fid
-    logical :: eof
-    character(len=8) :: envbuf
-    logical :: trace
+    integer :: u, st, fsize
 
     ! Read in ONE allocation, via stream access, rather than
     ! appending line by line. Appending is O(n^2) -- each // builds a
     ! whole new string -- and on an 8000-line file that is not slow,
     ! it is indistinguishable from a hang. An earlier reader carried the
     ! same warning for the same reason; this repeated the mistake.
-    ! temporaries for the deferred-length calls below (share.clj)
-    character(len=:), allocatable :: dlt_1, dlt_2
     open(newunit=u, file=path, access="stream", form="unformatted", &
          status="old", action="read", iostat=st)
     if (st /= 0) then
-       print '(A,A)', "load: cannot open ", path
+       write(err_unit, '(A,A)') "load: cannot open ", path
        load_failed = .true.
        return
     end if
@@ -231,7 +247,22 @@ contains
     allocate(character(len=fsize) :: text)
     read(u, iostat=st) text
     close(u)
+    call load_text(text, path, env)
+    ! not after a failed load: a library over half a namespace
+    if (.not. gcr_has_error() .and. .not. gce_has_error()) call gce_install_compiled(path)
+  end subroutine load_file
 
+  ! Every form of text, in order, as load_file does a file's; path names
+  ! it in reports. -m hands it the form that runs a namespace's -main.
+  subroutine load_text(text, path, env)
+    character(len=*), intent(in) :: text, path
+    type(gc_value), intent(in) :: env
+    type(gc_value) :: forms, r
+    integer :: lb, i, pos, fid
+    logical :: eof
+    character(len=8) :: envbuf
+    logical :: trace
+    character(len=:), allocatable :: dlt_1, dlt_2
     lb = vs_enter(3)
     call vs_set(lb + 1, env)
     ! CLOTRAN_LOAD_TRACE=1 names each form before evaluating it. An
@@ -251,7 +282,7 @@ contains
        if (gcr_has_error()) then
           block
              call gcr_error(s=dlt_1)
-             print '(A,A,A,A)', "load ", path, ": reader error: ", dlt_1
+             write(err_unit, '(A,A,A,A)') "load ", path, ": reader error: ", dlt_1
              load_failed = .true.
           end block
           exit
@@ -274,29 +305,65 @@ contains
        if (gce_has_error()) then
           block
              call gce_error(s=dlt_1)
-             print '(A,A)', "  ", dlt_1
+             write(err_unit, '(A,A)') "  ", dlt_1
           end block
           block
              call gce_trace(s=dlt_1)
              if (len(dlt_1) > 0) then
                 call gce_trace(s=dlt_2)
-                write(*, '(A)', advance='no') dlt_2
+                write(err_unit, '(A)', advance='no') dlt_2
              end if
           end block
           block
              call gcp_str(vs_get(lb + 2), .true., s=dlt_1)
              call first_line(dlt_1, out=dlt_2)
-             print '(A,A)', "    in: ", dlt_2
+             write(err_unit, '(A,A)') "    in: ", dlt_2
           end block
-          print '(A,A,A,I0)', "load ", path, ": stopped at form ", i
+          write(err_unit, '(A,A,A,I0)') "load ", path, ": stopped at form ", i
           load_failed = .true.
           call vs_leave(lb)
           return
        end if
     end do
     call vs_leave(lb)
-    if (.not. gcr_has_error()) call gce_install_compiled(path)
-  end subroutine load_file
+  end subroutine load_text
+
+  ! The program: the marker at argument k, its target at k+1, and the rest
+  ! *command-line-args*. `--run FILE` loads FILE; `-m NS` requires NS and
+  ! applies its -main to the args, as clojure.main -m does.
+  subroutine run_program(k, nargs, env)
+    integer, intent(in) :: k, nargs
+    type(gc_value), intent(in) :: env
+    character(len=4096), allocatable :: args(:)
+    integer, allocatable :: lens(:)
+    character(len=1024) :: marker, target
+    integer :: ml, tl, j
+    type(gc_value) :: none(0)
+    call get_command_argument(k, marker, ml)
+    if (k + 1 > nargs) then
+       write(0, '(A,A,A)') "clotran: ", marker(1:ml), " needs a file or a namespace"
+       stop 2, quiet=.true.
+    end if
+    call get_command_argument(k + 1, target, tl)
+    allocate(args(nargs - k - 1), lens(nargs - k - 1))
+    do j = k + 2, nargs
+       call get_command_argument(j, args(j - k - 1), lens(j - k - 1))
+    end do
+    err_unit = 0
+    call gcn_set_current(gcn_find_or_create("user", none))
+    call gce_set_command_line_args(args, lens)
+    if (marker(1:ml) == "--run") then
+       call load_file(target(1:tl), env)
+    else
+       if (verify(target(1:tl), "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_*+!?<>=") /= 0) then
+          write(0, '(A,A)') "clotran: not a namespace name: ", target(1:tl)
+          stop 2, quiet=.true.
+       end if
+       call load_text("(clojure.core/require (quote " // target(1:tl) // "))" // achar(10) // &
+            "(clojure.core/apply " // target(1:tl) // "/-main clojure.core/*command-line-args*)", &
+            "-m " // target(1:tl), env)
+    end if
+  end subroutine run_program
 
   ! Just enough of a form to identify it in a report.
   subroutine first_line(t, out)

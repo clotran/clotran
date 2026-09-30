@@ -2160,6 +2160,13 @@ Missing first: an image that holds compiled core (a compiled procedure
 is a pointer into a library, so the image has to name the libraries
 and reopen them in the same order).
 
+LANDED 2026-09-30: programs. `clotran app.cljf a b` runs a file with
+*command-line-args* and `clotran -m NS a b` a namespace's -main, as clj -M
+does, with no REPL after and status 1 on an uncaught error (DEVIATIONS 68
+for the report's layout); `clotran test` runs a project's -test namespaces
+(clotran.test-runner, which needed file-seq: clotran.io.File's directory
+methods over src/c/fs_shim.c). make test's check-program. Next: build.
+
 ### 23. `repro`: reproducible reductions
 
 Scenario C's "deterministic". PACKAGES.md has the design: binned
