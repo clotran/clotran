@@ -116,18 +116,20 @@ fi
 # is cached beside the deps.edn, so an unchanged project costs a checksum.
 # A leading -A:alias[:alias] goes to it. Not when CLOTRAN_PATH is already
 # set (clotran-deps' own run sets it, which is also what stops a loop), and
-# not in this checkout, whose deps.edn pins the oracle's clj. clotran-deps
-# is found on PATH, else beside this checkout.
+# not in a clotran source tree, whose deps.edn pins the oracle's clj. A
+# deps.edn naming nothing to fetch -- no :local/root, no :git/url, no
+# :paths -- needs no clotran-deps, so its absence is not worth a word
+# there. clotran-deps is found on PATH, else beside this checkout.
 deps_aliases=""
 case "$1" in -A*) deps_aliases="$1"; shift ;; esac
-if [ -z "$CLOTRAN_PATH" ] && [ -f deps.edn ] && [ "$(pwd)" != "$root" ]; then
+if [ -z "$CLOTRAN_PATH" ] && [ -f deps.edn ] && [ ! -f src/clj/clotran/rt.cljf ]; then
   deps=$(command -v clotran-deps 2>/dev/null)
   [ -n "$deps" ] || deps="$root/../clotran-deps/bin/clotran-deps"
   if [ -x "$deps" ]; then
     CLOTRAN_PATH=$("$deps" $deps_aliases) || exit 1
     export CLOTRAN_PATH
-  else
-    echo "clotran: there is a deps.edn here, but no clotran-deps to read it (PACKAGES.md)" >&2
+  elif grep -q ':local/root\|:git/url\|:paths\|:extra-paths' deps.edn; then
+    echo "clotran: this deps.edn names sources, but there is no clotran-deps to read it (PACKAGES.md)" >&2
   fi
 fi
 
