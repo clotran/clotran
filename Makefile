@@ -477,7 +477,7 @@ check-static:
 	scripts/state-inventory
 	@echo "--- the builtins that may reuse an argument vector (argsafe.inc) are current ---"
 	scripts/argsafe --check
-	@echo "--- src/clj/clojure and test/clj/clojure are what upstream/derive writes; no JVM name outside upstream/ ---"
+	@echo "--- src/clj/clojure and test/clj/clojure are what upstream/derive writes; upstream's class names stay in upstream/ ---"
 	upstream/derive --check
 	upstream/check-names
 	@echo "--- every procedure given roots passes them to what it allocates (PLAN step 20) ---"

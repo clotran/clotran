@@ -10,7 +10,7 @@
 # THE DENOMINATOR. Five namespaces, every assertion in them. What is
 # deliberately NOT here:
 #   clojure.test-clojure.data     one deftest, and it imports
-#                                 java.util.HashSet (DEVIATIONS 12)
+#                                 the host's HashSet (DEVIATIONS 12)
 #   clojure.test-clojure.clojure-zip
 #   clojure.test-clojure.reducers no deftest in Clojure's own file
 #   clojure.test-clojure.edn      written with clojure.test.generative,

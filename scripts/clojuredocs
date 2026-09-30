@@ -5,14 +5,18 @@
 ;; code nobody here wrote.
 ;;
 ;;   scripts/clojuredocs fetch        download the export, print its sha256
-;;   scripts/clojuredocs extract      export -> test/clj/clojuredocs/examples.edn
+;;   scripts/clojuredocs extract      export -> upstream/clojuredocs/examples.edn
 ;;   scripts/clojuredocs expect       run every example through clj, keep the answers
 ;;   scripts/clojuredocs run [var..]  run through clotran, compare, report
 ;;   scripts/clojuredocs time [var..] the same through clj AND clotran, every case clocked
 ;;
-;; The site renders its examples with JavaScript, so a page fetch has
+;; The site renders its examples in the browser, so a page fetch has
 ;; none; the export (clojuredocs-export.json) has them all. The pinned
 ;; sha256 is below; `fetch` refuses another.
+;;
+;; The examples are kept as the site has them, in upstream/ with clj's
+;; answers: clotran runs each one renamed (upstream/names.clj), and clj's
+;; answers are read back in clotran's names.
 ;;
 ;; A CASE is one example (or one note's code): its forms, read by the
 ;; HOST's own reader and evaluated in a namespace of their own, in
@@ -22,36 +26,36 @@
 ;;
 ;; Tags, so the scorecard can say what kind of code fails:
 ;;   :portable  the var is in the clojure.core/cljs.core intersection
-;;              (scripts/derive-tests' rule) and the code names no Java
-;;   :interop   the code names a Java class, a static, a method or a
+;;              (upstream/derive-tests' rule) and the code names no host class
+;;   :interop   the code names a host class, a static, a method or a
 ;;              constructor -- counted apart, not chased
 ;;   :nondet    rand, shuffle, gensym, time, ... -- only whether it
 ;;              throws is compared
 (require '[clojure.string :as str]
-         '[clojure.java.io :as io]
+         '[babashka.fs :as fs]
          '[clojure.edn :as edn]
          '[cheshire.core :as json]
          '[edamame.core :as e]
          '[babashka.process :as p])
 
-(def repo (-> *file* io/file .getCanonicalFile .getParentFile .getParentFile))
+(def repo (-> *file* fs/file .getCanonicalFile .getParentFile .getParentFile))
 (def home (System/getProperty "user.home"))
 (def export-url "https://clojuredocs.org/clojuredocs-export.json")
 (def export-sha "20f8a78aa6a7c2637eaa19a89ca784c48523563199aa0b0f4cf10a1b56ae75a9")
-(def cache (io/file (or (System/getenv "CLOTRAN_CACHE") (str home "/.cache/clotran")) "clojuredocs-export.json"))
-(def cd-dir (io/file repo "test/clj/clojuredocs"))
-(def examples-file (io/file cd-dir "examples.edn"))
-(def expected-dir (io/file cd-dir "expected"))
-(def work (io/file repo "build/clojuredocs"))
+(def cache (fs/file (or (System/getenv "CLOTRAN_CACHE") (str home "/.cache/clotran")) "clojuredocs-export.json"))
+(def cd-dir (fs/file repo "upstream/clojuredocs"))
+(load-file (str (fs/file repo "upstream" "names.clj")))
+(def examples-file (fs/file cd-dir "examples.edn"))
+(def expected-dir (fs/file cd-dir "expected"))
+(def work (fs/file repo "build/clojuredocs"))
 
 (defn sha256 [f]
-  (let [md (java.security.MessageDigest/getInstance "SHA-256")]
-    (apply str (map #(format "%02x" %) (.digest md (java.nio.file.Files/readAllBytes (.toPath f)))))))
+  (first (str/split (:out (p/shell {:out :string} "shasum" "-a" "256" (str f))) #"\s")))
 
 ;;; ---- fetch --------------------------------------------------------------
 
 (defn fetch []
-  (io/make-parents cache)
+  (fs/create-dirs (fs/parent cache))
   (p/shell "curl" "-sSL" "-o" (str cache) export-url)
   (let [h (sha256 cache)]
     (println (str cache) h)
@@ -78,8 +82,8 @@
                                           (and (seq? f) (= 'import-macros (first f)))
                                           (map name (filter symbol? (nth f 2 nil)))))
                               forms)))]
-    (into (names (read (io/file home "jborden/clojurescript/src/main/cljs/cljs/core.cljs")))
-          (names (read (io/file home "jborden/clojurescript/src/main/clojure/cljs/core.cljc"))))))
+    (into (names (read (fs/file home "jborden/clojurescript/src/main/cljs/cljs/core.cljs")))
+          (names (read (fs/file home "jborden/clojurescript/src/main/clojure/cljs/core.cljc"))))))
 
 (defn form-end
   "The index just past the first complete form in s from i, or nil:
@@ -133,8 +137,8 @@
   '#{rand rand-int rand-nth shuffle random-sample random-uuid gensym time System/currentTimeMillis
      System/nanoTime Thread/sleep hash-ordinal repeatedly pmap pcalls pvalues future})
 
-;; What asks the JVM about itself: the class of a value, its supertypes
-;; and the names the compiler gives -- JVM class names are not the
+;; What asks the host about itself: the class of a value, its supertypes
+;; and the names the compiler gives -- host class names are not the
 ;; language, and are counted apart (:host) rather than chased.
 (def host-syms '#{class type bases supers ancestors munge instance? ns-imports ns-interns})
 
@@ -147,11 +151,11 @@
       #{:unreadable}
       (let [interop? (some (fn [s]
                              (let [n (name s) ns (namespace s)]
-                               (or (and ns (Character/isUpperCase (.charAt ^String ns 0)))
+                               (or (and ns (re-find #"^[A-Z]" ns))
                                    (and ns (str/includes? ns "."))
                                    (and (str/starts-with? n ".") (> (count n) 1) (not= n ".."))
                                    (and (str/ends-with? n ".") (> (count n) 1) (not= n ".."))
-                                   (and (nil? ns) (Character/isUpperCase (.charAt n 0))))))
+                                   (and (nil? ns) (re-find #"^[A-Z]" n)))))
                            syms)
             nondet? (some nondet-syms syms)
             host? (some host-syms syms)]
@@ -176,7 +180,7 @@
                          :when (seq code)]
                      {:var (:name v) :source src :n i :code code
                       :tags (tags (:name v) (contains? cljs (:name v)) code)}))]
-    (io/make-parents examples-file)
+    (fs/create-dirs (fs/parent examples-file))
     (spit examples-file
           (str ";; GENERATED by scripts/clojuredocs extract from " export-url "\n"
                ";; sha256 " export-sha " -- do not edit; re-extract.\n"
@@ -202,15 +206,14 @@
           (fn? x) \"#fn\"
           :else (pr-str x))))
 (defn run-case [id nondet text]
-  (let [forms (try (read-string {:read-cond :allow} (str \"[\" text \"\\n]\")) (catch Throwable t ::unread))]
+  (let [forms (try (read-string {:read-cond :allow} (str \"[\" text \"\\n]\")) (catch clotran.host.throwable t ::unread))]
     (if (= ::unread forms)
       (println (str \"@@\" id \" 0 !unreadable\"))
       (doseq [[i f] (map-indexed vector forms)]
-        (let [out (java.io.StringWriter.)
-              r (try (binding [*out* out] (canon (eval f) 0))
-                     (catch Throwable t \"!error\"))
-              r (if (and nondet (not= r \"!error\")) \"ok\" r)
-              printed (str out)]
+        (let [res (atom nil)
+              printed (with-out-str (reset! res (try (canon (eval f) 0)
+                                                     (catch clotran.host.throwable t \"!error\"))))
+              r (if (and nondet (not= @res \"!error\")) \"ok\" @res)]
           (println (str \"@@\" id \" \" i \" \" r (when (and (not nondet) (seq printed)) (str \" ;;out \" (pr-str printed))))))))))
 ")
 
@@ -221,10 +224,11 @@
 
 (declare timed-prelude)
 (defn script-for
-  ([cases] (script-for cases false))
-  ([cases timed?]
-  (str prelude
-       (when timed? timed-prelude)
+  "The cases as a script for one side: :clotran runs them renamed, :clj
+  as the site has them, and the harness in clj's names."
+  ([side cases] (script-for side cases false))
+  ([side cases timed?]
+  (str ((if (= side :clj) names/to-upstream identity) (str prelude (when timed? timed-prelude)))
        (str/join "\n"
                  (map-indexed
                   (fn [k c]
@@ -232,7 +236,7 @@
                          "(clojure.core/require '[clojure.string :as str] '[clojure.set :as set])\n"
                          (if timed? "(clotran.cd/timed-case " "(clotran.cd/run-case ")
                          (pr-str (case-id c)) " " (boolean (:nondet (:tags c))) " "
-                         (pr-str (:code c)) ")\n"))
+                         (pr-str (cond-> (:code c) (= side :clotran) names/rename-source)) ")\n"))
                   cases))
        ;; clj does not exit while the agent pool lives: every agent example
        ;; timed out there, and went unjudged
@@ -249,7 +253,7 @@
           {} (str/split-lines s)))
 
 ;; In a scratch directory: examples spit files (foo.clj, hi.txt, ...)
-(def sandbox (io/file work "sandbox"))
+(def sandbox (fs/file work "sandbox"))
 
 (defn run-file [cmd f timeout-s]
   (.mkdirs sandbox)
@@ -259,10 +263,15 @@
       (do (p/destroy-tree r) {:timeout true :out (str (:out @r))})
       {:out (:out done)})))
 
-(defn pmap-n [n f xs]
-  (let [pool (java.util.concurrent.Executors/newFixedThreadPool n)]
-    (try (mapv deref (mapv #(.submit pool ^Callable (fn [] (f %))) xs))
-         (finally (.shutdown pool)))))
+(defn pmap-n
+  "f over xs, n at a time, in order: each of n futures takes the next
+  item until none is left."
+  [n f xs]
+  (let [xs (vec xs) next-i (atom -1) out (atom {})
+        work (fn [] (loop [] (let [i (swap! next-i inc)]
+                               (when (< i (count xs)) (swap! out assoc i (f (xs i))) (recur)))))]
+    (run! deref (doall (repeatedly n #(future (work)))))
+    (mapv @out (range (count xs)))))
 
 (defn by-var [cases] (sort-by key (group-by :var cases)))
 
@@ -273,9 +282,9 @@
   the rest of its var unanswered, counted as clotran stopping -- and
   rerunning the answered ones too cost more than the hang itself (a
   30 s budget lost a slow-but-right case; the budget stays 120)."
-  [cmd v cs]
-  (let [f (io/file work "cases" (str (munge-var v) ".clj"))
-        _ (spit f (script-for cs))
+  [side cmd v cs]
+  (let [f (fs/file work "cases" (str (munge-var v) ".clj"))
+        _ (spit f (script-for side cs))
         {:keys [out timeout]} (run-file cmd f 120)
         got (parse-out out)]
     (if-not timeout
@@ -284,31 +293,31 @@
        :lines (apply merge got
                      (for [[k c] (map-indexed vector cs)
                            :when (not (contains? got (case-id c)))]
-                       (let [g (io/file work "cases" (str (munge-var v) "--" k ".clj"))]
-                         (spit g (script-for [c]))
+                       (let [g (fs/file work "cases" (str (munge-var v) "--" k ".clj"))]
+                         (spit g (script-for side [c]))
                          (parse-out (:out (run-file cmd g 120))))))})))
 
 (defn expect [only]
-  (.mkdirs expected-dir) (.mkdirs (io/file work "cases"))
+  (.mkdirs expected-dir) (.mkdirs (fs/file work "cases"))
   (pmap-n 6 (fn [[v cs]]
-              (spit (io/file expected-dir (str (munge-var v) ".edn"))
-                    (pr-str (answers-for ["clj" "-Sdeps" (slurp (io/file repo "deps.edn")) "-M"] v cs)))
+              (spit (fs/file expected-dir (str (munge-var v) ".edn"))
+                    (pr-str (answers-for :clj ["clj" "-Sdeps" (slurp (fs/file repo "deps.edn")) "-M"] v cs)))
               (print ".") (flush))
           (cond->> (by-var (load-cases)) (seq only) (filter #(contains? only (key %)))))
   (println))
 
-(def got-dir (io/file work "got"))
+(def got-dir (fs/file work "got"))
 
 (defn run
   "Every var's cases through clotran, each var's answers saved as it
   finishes (build/clojuredocs/got), then scored."
   [only]
-  (.mkdirs got-dir) (.mkdirs (io/file work "cases"))
+  (.mkdirs got-dir) (.mkdirs (fs/file work "cases"))
   (let [groups (cond->> (by-var (load-cases)) (seq only) (filter #(contains? only (key %))))]
     (pmap-n (parse-long (or (System/getenv "CLOTRAN_TEST_JOBS") "6"))
             (fn [[v cs]]
-              (spit (io/file got-dir (str (munge-var v) ".edn"))
-                    (pr-str (answers-for [(str repo "/clotran-bin") (str repo "/src/clj/clojure/core.clj")] v cs))))
+              (spit (fs/file got-dir (str (munge-var v) ".edn"))
+                    (pr-str (answers-for :clotran [(str repo "/clotran-bin") (str repo "/src/clj/clojure/core.clj")] v cs))))
             groups)))
 
 ;; `time`: the same scripts through clj and through clotran with a clock
@@ -319,14 +328,14 @@
 (def timed-prelude "
 (in-ns 'clotran.cd)
 (defn timed-case [id nondet text]
-  (let [t0 (System/nanoTime)]
+  (let [t0 (clotran.host.system/nanoTime)]
     (run-case id nondet text)
-    (println (str \"@@t \" id \" \" (quot (- (System/nanoTime) t0) 1000)))))
+    (println (str \"@@t \" id \" \" (quot (- (clotran.host.system/nanoTime) t0) 1000)))))
 ")
 
-(defn time-side [cmd v cs]
-  (let [f (io/file work "cases" (str (munge-var v) "-timed.clj"))
-        _ (spit f (script-for cs true))
+(defn time-side [side cmd v cs]
+  (let [f (fs/file work "cases" (str (munge-var v) "-timed." (name side) ".clj"))
+        _ (spit f (script-for side cs true))
         t0 (System/nanoTime)
         {:keys [out timeout]} (run-file cmd f 120)
         wall (quot (- (System/nanoTime) t0) 1000)]
@@ -337,14 +346,14 @@
                        [id (parse-long us)]))}))
 
 (defn time-suite [only]
-  (.mkdirs (io/file work "cases"))
+  (.mkdirs (fs/file work "cases"))
   (let [jobs (parse-long (or (System/getenv "CLOTRAN_TEST_JOBS") "4"))
         groups (cond->> (by-var (load-cases)) (seq only) (filter #(contains? only (key %))))
-        clj-cmd ["clj" "-Sdeps" (slurp (io/file repo "deps.edn")) "-M"]
+        clj-cmd ["clj" "-Sdeps" (slurp (fs/file repo "deps.edn")) "-M"]
         ct-cmd [(str repo "/clotran-bin") (str repo "/src/clj/clojure/core.clj")]
         rows (pmap-n jobs (fn [[v cs]]
                             (let [r {:var v :ids (mapv case-id cs)
-                                     :clj (time-side clj-cmd v cs) :clotran (time-side ct-cmd v cs)}]
+                                     :clj (time-side :clj clj-cmd v cs) :clotran (time-side :clotran ct-cmd v cs)}]
                               (print ".") (flush) r))
                      groups)
         ms (fn [us] (format "%9.1f" (/ us 1000.0)))
@@ -379,8 +388,8 @@
             (println (format "  %s %s %8.1fx  %s" (ms (:clj c)) (ms (:clotran c)) (:ratio c) (:id c)))))]
     (println)
     (print summary)
-    (with-open [w (io/writer (io/file work "TIMING.txt"))]
-      (binding [*out* w]
+    (spit (fs/file work "TIMING.txt")
+      (with-out-str
         (print summary)
         (println)
         (println "every var (ms: clj wall, clotran wall; T = timed out):")
@@ -390,7 +399,7 @@
                            (:var r))))
         (println)
         (println "every case (ms: clj, clotran, ratio; - = no time):")
-        (doseq [c (sort-by #(- (or (:clotran %) Long/MAX_VALUE)) cases)]
+        (doseq [c (sort-by #(- (or (:clotran %) ##Inf)) cases)]
           (println (format "  %s %s %s  %s"
                            (if (:clj c) (ms (:clj c)) "        -") (if (:clotran c) (ms (:clotran c)) "        -")
                            (if (:ratio c) (format "%8.1fx" (:ratio c)) "        -") (:id c))))))
@@ -398,14 +407,14 @@
 
 (defn norm
   "What is compared of an answer line: an object's identity hash and its
-  host toString (`clojure.lang.MultiFn@5710768a`, `[D@53cdecf6`) are not
+  host toString (`clotran.host.multi_fn@5710768a`, `[D@53cdecf6`) are not
   the language; its class and any value it shows (an atom's) are."
   [l]
   (some-> l
           (str/replace #"(#object\[\S+) 0x[0-9a-f]+" "$1")
           (str/replace #"(#object\[\S+) \"(?:[^\"\\\\]|\\\\.)*\"\]" "$1]")
           ;; Object.toString inside a string -- (str (map inc [1 2])) is
-          ;; "clojure.lang.LazySeq@1b554e1" -- carries an identity hash too
+          ;; "clotran.host.lazy_seq@1b554e1" -- carries an identity hash too
           (str/replace #"([A-Za-z][A-Za-z0-9_.$]*)@[0-9a-f]{4,8}\b" "$1@")))
 
 (defn judge
@@ -413,14 +422,15 @@
   judged (:clj-failed -- clj gave no answer)."
   []
   (for [[v cs] (by-var (load-cases))
-        :let [rd (fn [d] (let [x (io/file d (str (munge-var v) ".edn"))]
+        :let [rd (fn [d] (let [x (fs/file d (str (munge-var v) ".edn"))]
                            (when (.exists x) (edn/read-string (slurp x)))))
               want (rd expected-dir) got (rd got-dir)]
         :when got
         c cs
         :let [id (case-id c)
-              nm (fn [m] (when m (into (sorted-map) (map (fn [[k v]] [k (norm v)])) m)))
-              w (nm (get (:lines want) id)) g (nm (get (:lines got) id))]]
+              nm (fn [m tr] (when m (into (sorted-map) (map (fn [[k v]] [k (norm (tr v))])) m)))
+              ;; clj's answers in clotran's names
+              w (nm (get (:lines want) id) names/from-clj) g (nm (get (:lines got) id) identity)]]
     (assoc c :id id :want w :got g :timeout (:timeout got)
            :status (cond (nil? w) :clj-failed
                          (= w g) :agree
@@ -435,8 +445,8 @@
                  (println (format "  %-30s %5d / %5d  %5.1f%%" label ok (count xs)
                                   (if (seq xs) (* 100.0 (/ ok (count xs))) 0.0)))))
         bad (remove #(= :agree (:status %)) judged)]
-    (with-open [w (io/writer (io/file work "REPORT.txt"))]
-      (binding [*out* w]
+    (spit (fs/file work "REPORT.txt")
+      (with-out-str
         (doseq [c (sort-by :id bad)]
           (println "====" (:id c) (:status c) (sort (:tags c)))
           (println (:code c))
@@ -448,8 +458,8 @@
     (line "all" identity)
     (line "portable (cljs intersection)" #(and (:portable (:tags %)) (not (:reader-cond (:tags %)))))
     (line "uses #? (clotran reads :cljf)" #(:reader-cond (:tags %)))
-    (line "host (asks the JVM's classes)" #(and (:host (:tags %)) (not (:interop (:tags %)))))
-    (line "interop (names Java)" #(:interop (:tags %)))
+    (line "host (asks the host's classes)" #(and (:host (:tags %)) (not (:interop (:tags %)))))
+    (line "interop (names host classes)" #(:interop (:tags %)))
     (line "other clojure-only" #(not (or (:portable (:tags %)) (:interop (:tags %)) (:host (:tags %)))))
     (println (format "  not judged: %d cases clj gave no answer for" (- (count results) (count judged))))
     (println (format "  of the failures, clotran stopped before answering: %d"

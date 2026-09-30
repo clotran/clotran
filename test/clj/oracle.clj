@@ -2887,3 +2887,6 @@
 ;; a capitalized name that is no class and no Var is unresolved, not a class
 [(try (eval '(instance? Nonexistent 1)) (catch clotran.host.throwable e :unresolved))
  (try (eval 'Nonexistent) (catch clotran.host.throwable e :unresolved))]
+
+;; a catch of a class there is not is a compile error, not a clause that never matches
+(try (eval '(try 5 (catch Nonexistent e 1))) (catch clotran.host.throwable e :unresolved))

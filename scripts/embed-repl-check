@@ -5,39 +5,38 @@
 ;; into it, and stops the run, then checks the solver saw all three.
 ;; Port 0, so the gate's two halves at once cannot collide.
 (require '[babashka.process :as p]
-         '[clojure.java.io :as io]
+         '[babashka.fs :as fs]
          '[clojure.string :as str])
 
+(def log (str (fs/create-temp-file {:prefix "embed-repl-"})))
 (def proc (p/process ["examples/embed/heat"]
-                     {:extra-env {"HEAT_REPL" "0" "HEAT_PAUSE_MS" "200"} :err :string}))
-(def out (io/reader (:out proc)))
+                     {:extra-env {"HEAT_REPL" "0" "HEAT_PAUSE_MS" "200"} :err :string :out (fs/file log)}))
+(defn lines [] (str/split-lines (slurp log)))
 
 (defn fail [& msg]
   (binding [*out* *err*] (apply println "embed-repl-check:" msg))
   (p/destroy-tree proc)
   (System/exit 1))
 
-(def seen (atom []))
 (def port
-  (loop []
-    (if-let [l (.readLine out)]
-      (do (swap! seen conj l)
-          (if-let [[_ n] (re-find #"a REPL on port (\d+)" l)] (parse-long n) (recur)))
-      (fail "the solver ended without serving:" (pr-str @seen)))))
+  (loop [waited 0]
+    (if-let [[_ n] (some #(re-find #"a REPL on port (\d+)" %) (lines))]
+      (parse-long n)
+      (if (or (> waited 600) (not (p/alive? proc)))
+        (fail "the solver ended without serving:" (pr-str (lines)))
+        (do (p/shell "sleep" "0.05") (recur (inc waited)))))))
 
+;; the REPL, through nc: a client that is not the solver's
 (def replies
-  (with-open [s (java.net.Socket. "127.0.0.1" (int port))]
-    (let [w (io/writer (.getOutputStream s))
-          r (io/reader (.getInputStream s))]
-      (.write w (str "(embed.control/peak embed.control/grid)\n"
-                     "(aset embed.control/grid 20 500.0)\n"
-                     "(swap! embed.control/steer assoc :stop true)\n"
-                     ":repl/quit\n"))
-      (.flush w)
-      (vec (line-seq r)))))
+  (str/split-lines
+   (:out (p/shell {:out :string :in (str "(embed.control/peak embed.control/grid)\n"
+                                         "(aset embed.control/grid 20 500.0)\n"
+                                         "(swap! embed.control/steer assoc :stop true)\n"
+                                         ":repl/quit\n")}
+                  "nc" "127.0.0.1" (str port)))))
 
-(def rest-out (vec (concat @seen (line-seq out))))
 (def exit (:exit @proc))
+(def rest-out (lines))
 (def stopped (some #(re-find #"fortran  stopped at step +(\d+) +total +([\d.]+)" %) rest-out))
 
 (when-not (zero? exit) (fail "the solver exited" exit (:err @proc)))

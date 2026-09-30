@@ -8,13 +8,13 @@
 ;; futures. The host returns deferred-length text through an intent(out)
 ;; argument of a SUBROUTINE instead, which has no such static. This fails
 ;; if one has come back, and names it. flang never makes them.
-(require '[clojure.java.shell :refer [sh]]
+(require '[babashka.process :as p]
          '[clojure.string :as str])
 
 (def bins (or (seq *command-line-args*) ["clotran-bin"]))
 (def bad (for [bin bins
                :let [n (count (filter #(re-find #"(?<![A-Za-z])slen\.\d+" %)
-                                      (str/split-lines (:out (sh "nm" bin)))))]
+                                      (str/split-lines (:out (p/shell {:out :string} "nm" bin)))))]
                :when (pos? n)]
            [bin n]))
 (doseq [[bin n] bad]

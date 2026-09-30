@@ -1,12 +1,13 @@
 #!/usr/bin/env bb
-;; The same forms timed on the JVM (clj, warmed) and on clotran, and the
+;; The same forms timed in clj (warmed) and on clotran, and the
 ;; ratio. Absolute numbers on their own flatter or damn depending on the
 ;; machine; the ratio is what "two orders slower" has to be measured as.
 ;;
 ;;   scripts/bench            all forms below
 ;;   scripts/bench '(form)'   one form
-(require '[babashka.process :as p] '[clojure.string :as str])
-(def repo (-> *file* java.io.File. .getAbsoluteFile .getParentFile .getParentFile str))
+(require '[babashka.process :as p] '[babashka.fs :as fs] '[clojure.string :as str])
+(def repo (-> *file* fs/file .getAbsoluteFile .getParentFile .getParentFile str))
+(load-file (str repo "/upstream/names.clj"))
 (def forms
   (or (seq *command-line-args*)
       ["(reduce + (range 100000))"
@@ -21,7 +22,7 @@
   (str "(in-ns 'user)\n"
        (str/join "\n" (for [f forms]
                         (str (when warm? (str "(dotimes [_ 3] " f ")\n"))
-                             "(let [t0 (System/nanoTime) v " f " t1 (System/nanoTime)] (println (/ (- t1 t0) 1e6)))")))
+                             "(let [t0 (clotran.host.system/nanoTime) v " f " t1 (clotran.host.system/nanoTime)] (println (/ (- t1 t0) 1e6)))")))
        "\n"))
 (defn run-lines [& cmd]
   (let [r (apply p/shell {:dir repo :in "" :out :string :err :string :continue true} cmd)]
@@ -29,13 +30,13 @@
          (remove #(or (str/starts-with? % "note:") (str/starts-with? % "user=>") (str/blank? %)))
          (map #(Double/parseDouble (str/trim (str/replace % "user=> " ""))))
          vec)))
-(let [jvm-file (str repo "/test/clj/.bench-jvm.clj")
+(let [clj-file (str repo "/test/clj/.bench-clj.clj")
       cl-file (str repo "/test/clj/.bench-clotran.clj")]
-  (spit jvm-file (timed-script true))
+  (spit clj-file (names/to-upstream (timed-script true)))
   (spit cl-file (timed-script false))
-  (let [jvm (run-lines "clj" "-Sdeps" (slurp (str repo "/deps.edn")) "-M" jvm-file)
+  (let [clj-ms (run-lines "clj" "-Sdeps" (slurp (str repo "/deps.edn")) "-M" clj-file)
         cl (run-lines "./clotran-bin" "src/clj/clojure/core.clj" cl-file)]
-    (.delete (java.io.File. jvm-file)) (.delete (java.io.File. cl-file))
-    (println (format "%-72s %10s %10s %8s" "form" "jvm ms" "clotran ms" "ratio"))
-    (doseq [[f j c] (map vector forms jvm cl)]
+    (.delete (fs/file clj-file)) (.delete (fs/file cl-file))
+    (println (format "%-72s %10s %10s %8s" "form" "clj ms" "clotran ms" "ratio"))
+    (doseq [[f j c] (map vector forms clj-ms cl)]
       (println (format "%-72s %10.2f %10.1f %8.0fx" (subs f 0 (min 72 (count f))) j c (/ c j))))))

@@ -7,9 +7,9 @@
 ;; a [..] root list closing a call without `roots` in it, inside a
 ;; procedure with a `roots` argument -- so it can miss a case, but not
 ;; that one. Prints each suspect; exits 1 if there are any.
-(require '[clojure.string :as str])
+(require '[clojure.string :as str] '[babashka.fs :as fs])
 
-(def files (->> (file-seq (java.io.File. "src/f"))
+(def files (->> (file-seq (fs/file "src/f"))
                 (map str)
                 (filter #(re-find #"\.(f90|inc)$" %))
                 sort))

@@ -13,11 +13,11 @@
 ;; variable is classified and that nothing classified has gone away;
 ;; --seed writes new ones in as :unclassified, for a person to decide.
 (require '[clojure.string :as str]
-         '[clojure.java.io :as io]
+         '[babashka.fs :as fs]
          '[clojure.edn :as edn])
 
-(def repo (-> *file* io/file .getCanonicalFile .getParentFile .getParentFile))
-(def state-file (io/file repo "src/f/state.edn"))
+(def repo (-> *file* fs/file .getCanonicalFile .getParentFile .getParentFile))
+(def state-file (fs/file repo "src/f/state.edn"))
 
 (defn spec-part
   "A module file's lines before its first `contains`, less derived-type
@@ -52,7 +52,7 @@
       [(str (.getName f) "/" nm)])))
 
 (def found (sort (distinct (map first (mapcat variables (filter #(and (str/ends-with? (.getName %) ".f90") (not= "main.f90" (.getName %)))
-                                                                (.listFiles (io/file repo "src/f"))))))))
+                                                                (.listFiles (fs/file repo "src/f"))))))))
 (def known (if (.exists state-file) (edn/read-string (slurp state-file)) {}))
 
 (if (= "--seed" (first *command-line-args*))

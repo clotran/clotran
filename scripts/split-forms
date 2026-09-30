@@ -21,7 +21,7 @@
 ;; Forms are copied VERBATIM by line span rather than printed back from
 ;; the reader, so #"..." patterns, metadata and comments survive intact.
 
-(require '[clojure.string :as str])
+(require '[clojure.string :as str] '[babashka.fs :as fs] '[edamame.core :as e])
 
 (let [[src outdir from] *command-line-args*]
   (when-not src
@@ -30,20 +30,17 @@
   (let [outdir (or outdir "/tmp/forms")
         from (if from (parse-long from) 0)
         lines (vec (str/split-lines (slurp src)))
-        rdr (clojure.lang.LineNumberingPushbackReader.
-             (java.io.StringReader. (str/join "\n" lines)))
-        spans (binding [*read-eval* false]
-                (loop [acc [] start 0]
-                  (let [f (try (read {:eof ::eof :read-cond :allow} rdr)
-                               (catch Exception _ ::eof))]
-                    (if (= f ::eof)
-                      acc
-                      (recur (conj acc [start (.getLineNumber rdr) (first f) (second f)])
-                             (.getLineNumber rdr))))))]
-    (.mkdirs (java.io.File. outdir))
+        ;; each top-level form's last line, from the reader's positions
+        forms (e/parse-string-all (str/join "\n" lines) {:all true :read-cond :allow :features #{:clj}})
+        spans (loop [acc [] start 0 fs forms]
+                (if-let [f (first fs)]
+                  (let [end (or (:end-row (meta f)) start)]
+                    (recur (conj acc [start end (when (seq? f) (first f)) (when (seq? f) (second f))]) end (rest fs)))
+                  acc))]
+    (.mkdirs (fs/file outdir))
     ;; Stale files from an earlier run would be evaluated again and
     ;; reported as live failures, so clear them.
-    (run! #(.delete %) (.listFiles (java.io.File. outdir)))
+    (run! #(.delete %) (.listFiles (fs/file outdir)))
     (doseq [[i [s e h n]] (map-indexed vector (drop from spans))]
       (spit (format "%s/%04d-%s-%s.clj" outdir (+ from i 1)
                     (str/replace (str h) #"[^A-Za-z0-9*?!<>=+-]" "_")

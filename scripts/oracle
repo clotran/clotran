@@ -27,17 +27,17 @@
 ;; Non-zero exit on any unexpected difference. `make test` runs this.
 (require '[clojure.string :as str]
          '[clojure.walk :as walk]
-         '[clojure.java.io :as io]
+         '[babashka.fs :as fs]
          '[edamame.core :as e]
          '[babashka.process :as p])
 
-(def repo (-> *file* io/file .getCanonicalFile .getParentFile .getParentFile))
+(def repo (-> *file* fs/file .getCanonicalFile .getParentFile .getParentFile))
 
 ;; clj names classes as its host does, clotran its own way. Each form
 ;; goes to clj in upstream's names (upstream/names.clj to-upstream) and
 ;; clj's answer comes back in clotran's (from-clj), so a case checks the
 ;; same fact on both sides, under each one's name for the class.
-(load-file (str (io/file repo "upstream" "names.clj")))
+(load-file (str (fs/file repo "upstream" "names.clj")))
 
 (def forms-file (or (first *command-line-args*) "test/clj/oracle.clj"))
 
@@ -52,7 +52,7 @@
 (defn read-forms [text] (e/parse-string-all text {:all true}))
 
 (defn strip-positions [form]
-  (walk/postwalk (fn [x] (if-let [m (and (instance? clojure.lang.IObj x) (meta x))]
+  (walk/postwalk (fn [x] (if-let [m (and (meta x) (meta x))]
                            (let [m (dissoc m :row :col :end-row :end-col :line :column :end-line :end-column :source)]
                              (with-meta x (when (seq m) m)))
                            x))
@@ -93,7 +93,7 @@
                         (str (if (:setup? c) "(user/clotran-oracle-setup " "(user/clotran-oracle-case ")
                              (pr-str ((or translate identity) (:text c))) ")")))
        ;; clj's agent pool is non-daemon: without this a case that sends
-       ;; keeps the JVM alive and the oracle waits forever
+       ;; keeps clj's process alive and the oracle waits forever
        "\n(shutdown-agents)\n"))
 
 (defn run [& cmd]
@@ -112,10 +112,10 @@
 ;; file case's build/oracle-io-*.txt is not the plain oracle's.
 (when-let [every (System/getenv "ORACLE_GC")]
   
-(let [cs (cases (read-forms (slurp (io/file repo forms-file))))
-        dir (io/file repo "build" "oracle-gc")
-        _ (.mkdirs (io/file dir "build"))
-        gen (io/file dir "gen.clj")
+(let [cs (cases (read-forms (slurp (fs/file repo forms-file))))
+        dir (fs/file repo "build" "oracle-gc")
+        _ (.mkdirs (fs/file dir "build"))
+        gen (fs/file dir "gen.clj")
         _ (spit gen (script cs))
         bin (str repo "/clotran-bin")
         core (str repo "/src/clj/clojure/core.clj")
@@ -137,13 +137,13 @@
                   (count diffs) " differ from the plain run"))
     (System/exit (if (seq diffs) 1 0))))
 
-(let [cs (cases (read-forms (slurp (io/file repo forms-file))))
-      gen (io/file repo "test/clj/.oracle-gen.clj")
+(let [cs (cases (read-forms (slurp (fs/file repo forms-file))))
+      gen (fs/file repo "test/clj/.oracle-gen.clj")
       _ (spit gen (script cs))
-      clj-gen (io/file repo "test/clj/.oracle-gen-clj.clj")
+      clj-gen (fs/file repo "test/clj/.oracle-gen-clj.clj")
       _ (spit clj-gen (script cs names/to-upstream))
       ;; the two sides at once: neither reads what the other writes
-      want-f (future (run "clj" "-Sdeps" (slurp (io/file repo "deps.edn")) "-M" (str clj-gen)))
+      want-f (future (run "clj" "-Sdeps" (slurp (fs/file repo "deps.edn")) "-M" (str clj-gen)))
       got (run "./clotran-bin" "src/clj/clojure/core.clj" (str gen))
       raw @want-f
       want (mapv names/from-clj raw)
@@ -155,7 +155,7 @@
     (System/exit 2))
   (let [results (map-indexed (fn [i c]
                                ;; clj's line as it is, or with its class names in clotran's:
-                               ;; a quoted java.util.Map is a symbol, not a class
+                               ;; a quoted class name is a symbol, not a class
                                (let [w (nth want i) g (nth got i ::missing)
                                      same (or (= w g) (= (nth raw i) g))]
                                  (assoc c :want w :got g

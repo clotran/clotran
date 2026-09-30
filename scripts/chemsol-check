@@ -11,12 +11,12 @@
 ;; non-zero if any of the three differs; the first differing lines are
 ;; printed.
 (require '[clojure.string :as str]
-         '[clojure.java.io :as io]
+         '[babashka.fs :as fs]
          '[babashka.process :as p]
          '[babashka.fs :as fs])
 
-(def repo (-> *file* io/file .getCanonicalFile .getParentFile .getParentFile))
-(def tests (io/file (or (first *command-line-args*)
+(def repo (-> *file* fs/file .getCanonicalFile .getParentFile .getParentFile))
+(def tests (fs/file (or (first *command-line-args*)
                         (str (System/getProperty "user.home") "/jborden/chemsol/tests"))))
 
 (defn run-one [n]
@@ -31,9 +31,9 @@
                  (remove #(or (str/starts-with? % "note:") (str/starts-with? % "user=>")))
                  vec)
         got (if (and (seq got) (str/blank? (peek got))) (pop got) got)
-        want (vec (str/split-lines (slurp (io/file tests (str "test" n "_main.out")))))]
+        want (vec (str/split-lines (slurp (fs/file tests (str "test" n "_main.out")))))]
     (fs/delete driver)
-    (fs/delete-if-exists (io/file repo "cs.arc"))
+    (fs/delete-if-exists (fs/file repo "cs.arc"))
     {:n n :got got :want want :err (:err r) :same (= got want)}))
 
 (let [results (mapv run-one [1 2 3])]

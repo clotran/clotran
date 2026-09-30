@@ -3,7 +3,7 @@
 ;; every Class/member and .member reference in the Clojure we load
 ;; The Clojure that JUSTIFIES a row: the vendored language and libraries,
 ;; clotran's own .cljf files, and the examples. Not the tests -- a test
-;; naming a JVM member is not the language asking for it.
+;; naming a host member is not the language asking for it.
 (def files (concat (fs/glob "src/clj" "**.{clj,cljf}") (fs/glob "examples" "**.{clj,cljf}")))
 (def statics (atom {})) (def instances (atom {})) (def dotforms (atom {}))
 (defn strip-comments [s] (str/replace s #"(?m);.*$" ""))

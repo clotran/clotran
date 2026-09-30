@@ -9,7 +9,7 @@
 
 (def covered
   ;; what has been cleared so far; the rest joins as it is
-  #"^(src|test/f|examples|packages)/|^test/clj/(?!clojuredocs/)")
+  #"^(src|test/f|examples|packages|scripts)/|^test/clj/(?!clojuredocs/)|^(Makefile|clotran|deps.edn)$")
 
 (def skip #"^(upstream/|docs/|src/c/icu/)")
 (def word #"(?i)java|jvm|clojure\.lang")

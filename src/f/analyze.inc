@@ -2615,6 +2615,21 @@
           if (gcl_count(item) < 3) cycle
           cname = strip_meta(nth_of(vs_get(vst, base + 4), 1))
           call vs_set(vst, base + 7, cname)
+          ! the class must be one there is: a catch of an unknown class is
+          ! Compiler's "Unable to resolve classname", not a clause that
+          ! quietly never matches
+          if (cname%tag == GCT_SYM) then
+             block
+               character(len=:), allocatable :: written, full
+               call gc_ref_text(cname%ref, s=written)
+               call class_key(written, k=full)
+               if (.not. known_class_name(full)) then
+                  call fail("Unable to resolve classname: " // written)
+                  call vs_leave(vst, base)
+                  return
+               end if
+             end block
+          end if
           blk = child_scope(vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 5), vs_get(vst, base + 7)])
           call vs_set(vst, base + 8, blk)
           slot = declare_local(vs_get(vst, base + 8), strip_meta(nth_of(vs_get(vst, base + 4), 2)), [vs_get(vst, base + 1)])
