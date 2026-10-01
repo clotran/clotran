@@ -1,0 +1,11 @@
+;; Cases scripts/fuzz found clotran getting wrong, kept so they stay
+;; fixed: each runs through clj and clotran's flat, tree and compiled
+;; modes (make test, check-fuzz). Add a shrunk form here with each fix.
+[
+ ;; two literals whose product overflows: the compiled form was a
+ ;; constant gfortran folded, and refused the whole library over
+ (* 19 4611686018427387904)
+ (+ 9223372036854775807 1)
+ (- -9223372036854775807 1)
+ (* 3 4)
+]

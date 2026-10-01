@@ -387,7 +387,7 @@ $(B)/libsamplelib.$(SOEXT): $(T)/samplelib.f90 $(B)/samplelib_shims.f90 | $(B) $
 # order, as before.
 TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(B)/libsamplelib.$(SOEXT) packages examples/embed/heat
 TEST_CHECKS = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-tree check-banner check-torture check-threads \
-	check-autocompile check-break check-libraries check-oracle check-oracle-gc check-pure check-static check-costs
+	check-autocompile check-break check-libraries check-oracle check-oracle-gc check-pure check-static check-costs check-fuzz
 .PHONY: test $(TEST_CHECKS)
 test: $(TEST_CHECKS)
 $(TEST_CHECKS): $(TEST_DEPS)
@@ -493,6 +493,9 @@ endif
 check-pure:
 	@echo "--- pure Fortran (tier A through gfortran and flang, against clj) ---"
 	scripts/pure-check
+check-fuzz:
+	@echo "--- the fuzzer (PLAN 26.9): what it found, then 300 generated cases, each through clj and clotran's flat, tree and compiled modes ---"
+	scripts/fuzz -f test/clj/fuzz-regressions.edn > $(B)/fuzz.out 2>&1 && scripts/fuzz -n 300 -s 1 >> $(B)/fuzz.out 2>&1; s=$$?; cat $(B)/fuzz.out; exit $$s
 check-costs:
 	@echo "--- the cost model: objects allocated per element, against test/costs.edn (PLAN step 26) ---"
 	scripts/cost-model > $(B)/costs.out 2>&1; s=$$?; cat $(B)/costs.out; exit $$s

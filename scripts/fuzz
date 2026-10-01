@@ -1,0 +1,338 @@
+#!/usr/bin/env bb
+;; The differential fuzzer (PLAN 26.9). Random closed programs -- let,
+;; loop/recur, closures, lazy-seq, try/throw, the seq functions -- built
+;; from a typed grammar, run through clj (the oracle) and through
+;; clotran's three ways of running code: the flat bytecode, the tree
+;; evaluator (CLOTRAN_FLAT=0) and compiled (each case a defn in a
+;; namespace built by `clotran compile`). Any value that differs from
+;; clj's is a bug; --shrink cuts a failing case down to a small one.
+;;
+;; spec states what a case is (::case) and test.check -- the generator
+;; layer spec generates through -- builds them; a generated case that
+;; does not conform is a bug in this script, and it says so.
+;;
+;;   scripts/fuzz                      200 cases, seed 1, every mode
+;;   scripts/fuzz -n 500 -s 7          500 cases, seed 7
+;;   scripts/fuzz -m flat,tree         only those modes
+;;   scripts/fuzz --shrink             shrink each failure (slow: a run per try)
+;;   scripts/fuzz -f cases.edn         these cases (a vector of forms) instead:
+;;                                     what the fuzzer found, kept (make test)
+;;
+;; Exit 1 on any difference.
+(require '[clojure.spec.alpha :as s]
+         '[clojure.test.check.generators :as g]
+         '[clojure.test.check.rose-tree :as rose]
+         '[clojure.test.check.random :as random]
+         '[clojure.string :as str]
+         '[babashka.fs :as fs]
+         '[babashka.process :as p]
+         '[clojure.edn :as edn])
+
+(def repo (str (fs/parent (fs/parent (fs/absolutize *file*)))))
+(load-file (str repo "/upstream/names.clj"))
+;; Clojure's own specs for its macros, as vendored: the shapes of let,
+;; fn, if-let and when-let the grammar below follows, and every form it
+;; emits is checked against
+(load-file (str repo "/src/clj/clojure/core/specs/alpha.clj"))
+
+;;; ---- options --------------------------------------------------------
+
+(def opts
+  (loop [a *command-line-args* o {:n 200 :seed 1 :modes ["flat" "tree" "compiled"] :shrink false}]
+    (case (first a)
+      nil o
+      "-n" (recur (drop 2 a) (assoc o :n (parse-long (second a))))
+      "-s" (recur (drop 2 a) (assoc o :seed (parse-long (second a))))
+      "-m" (recur (drop 2 a) (assoc o :modes (str/split (second a) #",")))
+      "--shrink" (recur (rest a) (assoc o :shrink true))
+      "-f" (recur (drop 2 a) (assoc o :file (second a)))
+      (do (println "unknown option" (first a)) (System/exit 2)))))
+
+;;; ---- the grammar ----------------------------------------------------
+;;
+;; Typed, so most cases compute something rather than throw: an :int
+;; expression, a :seq of ints (always finite once evaluated), a :bool,
+;; a :fn from int to int. env holds the locals in scope by type. Every
+;; infinite seq is under a take, every loop bound is a small constant.
+
+(def small (g/choose -9 20))
+(def pos-small (g/choose 1 7))
+
+(defn fresh [env] (symbol (str "x" (:n env 0))))
+(defn bind [env t sym] (-> env (update t (fnil conj []) sym) (update :n (fnil inc 0))))
+
+(declare g-int g-seq g-bool g-fn)
+
+;; a generator built when it is drawn from, not when its parent is: the
+;; grammar's branches each hold a deeper generator, and built eagerly
+;; they are ~20^depth objects before one case is drawn
+(defn lazy [thunk] (g/bind (g/return nil) (fn [_] (thunk))))
+
+(defn leaf [env t base]
+  (if-let [ls (seq (get env t))]
+    (g/frequency [[3 base] [2 (g/elements ls)]])
+    base))
+
+(defn g-let [env d body-gen]
+  ;; (let [x <int or seq>] body), body able to read x
+  (g/bind (g/elements [:int :seq])
+          (fn [bt]
+            (let [x (fresh env) env2 (bind env bt x)]
+              (g/let [v (lazy #(if (= bt :int) (g-int env (dec d)) (g-seq env (dec d))))
+                      b (lazy #(body-gen env2 (dec d)))]
+                (list 'let [x v] b))))))
+
+(defn g-int [env d]
+  (if (<= d 0)
+    (leaf env :int small)
+    (let [i #(lazy (fn [] (g-int env (dec d)))) sq #(lazy (fn [] (g-seq env (dec d))))
+          b #(lazy (fn [] (g-bool env (dec d)))) f #(lazy (fn [] (g-fn env (dec d))))]
+      (g/frequency
+       [[3 (leaf env :int small)]
+        [3 (g/let [op (g/elements '[+ - max min]) x (i) y (i)] (list op x y))]
+        [1 (g/let [x (i) y (i)] (list '* x y))]
+        [2 (g/let [op (g/elements '[inc dec]) x (i)] (list op x))]
+        [1 (g/let [op (g/elements '[quot rem mod]) x (i) y pos-small] (list op x y))]
+        [2 (g/let [s (sq)] (list 'count s))]
+        [2 (g/let [s (sq) k small] (list 'or (list 'first s) k))]
+        [2 (g/let [s (sq) k small] (list 'reduce '+ k s))]
+        [1 (g/let [s (sq)] (list 'apply '+ s))]
+        [1 (g/let [s (sq) k (g/choose 0 6)] (list 'nth s k -1))]
+        [2 (g/let [c (b) x (i) y (i)] (list 'if c x y))]
+        [2 (g-let env d g-int)]
+        [2 (g/let [fn (f) x (i)] (list fn x))]
+        [1 (g/let [s (sq) fn (f)] (list 'reduce (list 'fn '[a b] (list '+ 'a (list fn 'b))) 0 s))]
+        [1 (let [i0 (symbol (str "i" (:n env 0))) a0 (symbol (str "acc" (:n env 0)))
+                 env2 (-> env (bind :int i0) (bind :int a0))]
+             (g/let [n pos-small x (i) step (lazy #(g-int env2 (dec d)))]
+               (list 'loop [i0 0 a0 x] (list 'if (list '< i0 n) (list 'recur (list 'inc i0) step) a0))))]
+        [1 (g/let [x (i) y (i)]
+             (list 'try (list 'if (list 'even? x) (list 'throw (list 'ex-info "fz" {:v x})) x)
+                   (list 'catch 'clotran.host.exception_info 'e (list '+ y (list ':v (list 'ex-data 'e))))))]
+        [1 (g/let [x (i) y (i)] (list 'try (list 'quot x 0) (list 'catch 'clotran.host.arithmetic_exception 'e y)))]
+        ;; ones that may throw: both sides throwing is agreement, one
+        ;; throwing is a difference
+        [1 (g/let [s (sq) k (g/choose 0 6)] (list 'nth s k))]
+        [1 (g/let [x (i)] (list '* x 4611686018427387904))]
+        [1 (g/let [x (i) c (b)] (list '+ x (list 'when c 1)))]
+        [1 (g/let [x (i)] (list 'first x))]
+        ;; ::seq-binding-form: forms, & rest, :as
+        [2 (g/let [s (sq) k small]
+             (list 'let ['[a b & r :as all] s] (list '+ (list 'or 'a k) '(or b 0) '(count r) '(count all))))]
+        ;; ::map-binding-form: :keys with :or
+        [1 (g/let [x (i) y (i) m (g/elements [:pq :p :none])]
+             (list 'let [{:keys '[p q] :or {'p y}} (case m :pq {:p x :q y} :p {:p x} :none {})]
+                   '(+ p (or q 0))))]
+        ;; ::param-list with var-params
+        [1 (g/let [x (i) y (i) z (i)]
+             (list (list 'fn '[u & vs] '(+ u (count vs) (apply + vs))) x y z))]
+        ;; fn :arity-n
+        [1 (g/let [x (i) y (i) two g/boolean]
+             (concat [(list 'fn '([u] (inc u)) '([u v] (- u v)))] (if two [x y] [x])))]
+        ;; if-let, when-let
+        [1 (g/let [s (sq) k small] (list 'if-let ['[a] (list 'seq s)] 'a k))]
+        [1 (g/let [s (sq) k small] (list 'or (list 'when-let ['y (list 'first s)] '(* y 2)) k))]
+        ;; a named fn calling itself, and letfn
+        [1 (g/let [x (i)] (list (list 'fn 'self '[n] '(if (pos? n) (+ n (self (dec n))) 0)) (list 'mod x 8)))]
+        [1 (g/let [x (i)] (list 'letfn '[(ev? [n] (if (zero? n) true (od? (dec n)))) (od? [n] (if (zero? n) false (ev? (dec n))))]
+                                (list 'if (list 'ev? (list 'mod x 9)) 1 0)))]]))))
+
+(defn g-seq [env d]
+  (if (<= d 0)
+    (leaf env :seq (g/one-of [(g/let [n (g/choose 0 8)] (list 'range n))
+                              (g/let [xs (g/vector small 0 5)] xs)
+                              (g/let [xs (g/vector small 0 4)] (cons 'list xs))]))
+    (let [i #(lazy (fn [] (g-int env (dec d)))) sq #(lazy (fn [] (g-seq env (dec d))))
+          f #(lazy (fn [] (g-fn env (dec d)))) k (g/choose 0 6)]
+      (g/frequency
+       [[3 (g-seq env 0)]
+        [2 (g/let [n k s (sq)] (list 'take n s))]
+        [1 (g/let [n k x (i)] (list 'take n (list 'iterate 'inc x)))]
+        [1 (g/let [n k] (list 'take n '(range)))]
+        [1 (g/let [n k x (i)] (list 'take n (list 'repeat x)))]
+        [2 (g/let [n k s (sq)] (list 'drop n s))]
+        [3 (g/let [fn (f) s (sq)] (list 'map fn s))]
+        [1 (g/let [s (sq) t (sq)] (list 'map '+ s t))]
+        [2 (g/let [p (g/elements '[even? odd? pos? neg? zero?]) s (sq)] (list 'filter p s))]
+        [1 (g/let [p (g/elements '[even? odd? pos?]) s (sq)] (list 'remove p s))]
+        [2 (g/let [s (sq) t (sq)] (list 'concat s t))]
+        [2 (g/let [x (i) s (sq)] (list 'cons x s))]
+        [1 (g/let [s (sq)] (list 'rest s))]
+        [1 (g/let [x (i) s (sq)] (list 'lazy-seq (list 'cons x s)))]
+        [1 (g/let [s (sq)] (list 'reverse s))]
+        [1 (g/let [s (sq)] (list 'sort s))]
+        [1 (g/let [s (sq)] (list 'distinct s))]
+        [1 (g/let [s (sq)] (list 'vec s))]
+        [1 (g/let [s (sq) t (sq)] (list 'interleave s t))]
+        [1 (g/let [s (sq)] (list 'mapcat (list 'fn '[y] '[y y]) s))]
+        [1 (g/let [p (g/elements '[pos? even? odd?]) s (sq)] (list 'take-while p s))]
+        [1 (g/let [s (sq)] (list 'for ['y s :when '(odd? y)] '(* y 2)))]
+        [1 (g/let [s (sq) x (i)] (list 'conj (list 'vec s) x))]
+        [1 (g/let [s (sq)] (list 'map-indexed '+ s))]
+        [1 (g/let [s (sq)] (list 'reductions '+ s))]
+        [1 (g/let [s (sq)] (list 'into '() s))]
+        [2 (g-let env d g-seq)]]))))
+
+(defn g-bool [env d]
+  (let [i #(lazy (fn [] (g-int env (max 0 (dec d))))) sq #(lazy (fn [] (g-seq env (max 0 (dec d)))))
+        base [[3 (g/let [op (g/elements '[< > <= = not=]) x (i) y (i)] (list op x y))]
+              [2 (g/let [p (g/elements '[even? odd? pos? zero?]) x (i)] (list p x))]
+              [1 (g/let [s (sq)] (list 'empty? s))]
+              [1 (g/let [s (sq)] (list 'boolean (list 'some 'even? s)))]]]
+    ;; generators are built eagerly: and/or only while depth is left
+    (g/frequency
+     (if (<= d 0)
+       base
+       (into base [[1 (g/let [x (lazy #(g-bool env (dec d))) y (lazy #(g-bool env (dec d)))] (list 'and x y))]
+                   [1 (g/let [x (lazy #(g-bool env (dec d))) y (lazy #(g-bool env (dec d)))] (list 'or x y))]])))))
+
+(defn g-fn [env d]
+  (let [x (fresh env) env2 (bind env :int x)]
+    (g/frequency
+     [[2 (g/elements '[inc dec -])]
+      [3 (g/let [b (lazy #(g-int env2 (max 0 (dec d))))] (list 'fn [x] b))]
+      [1 (g/let [k small] (list 'partial '+ k))]
+      [1 (g/return '(comp inc inc))]
+      [1 (g/let [k (g/choose 1 3)] (list 'fn [x] (list '* x k)))]])))
+
+(s/def ::case (s/or :int int? :vector vector? :form (s/and seq? seq)))
+
+;; Every let, loop, fn, if-let and when-let in a form, checked against the
+;; :args spec Clojure gives it (loop's bindings are let's): what does
+;; not conform, as [head form]
+(def macro-args
+  (into {} (for [m '[let fn if-let when-let]] [m (:args (s/get-spec (symbol "clojure.core" (str m))))])))
+(defn nonconforming [form]
+  (for [x (tree-seq coll? seq form)
+        :when (and (seq? x) (symbol? (first x)))
+        :let [h (first x) sp (get macro-args (if (= 'loop h) 'let h))]
+        :when (and sp (not (s/valid? sp (rest x))))]
+    [h x]))
+(def g-case (g/sized (fn [size] (let [d (min 5 (+ 1 (quot size 20)))]
+                                   (g/frequency [[3 (g-int {} d)] [2 (g-seq {} d)]])))))
+
+;; One rose tree per case, from the seed: the case is its root, its
+;; shrinks are its children (--shrink walks them).
+(defn generate-roses [n seed]
+  (loop [r (random/make-random seed) i 0 acc []]
+    (if (= i n)
+      acc
+      (let [[r1 r2] (random/split r)
+            tree (g/call-gen g-case r1 (mod (* 7 i) 100))]
+        (recur r2 (inc i) (conj acc tree))))))
+
+;;; ---- running ------------------------------------------------------
+
+(def prelude "
+(defn fz-canon [x]
+  (cond (map? x) (str \"{\" (clojure.string/join \", \" (sort (map (fn [e] (str (fz-canon (key e)) \" \" (fz-canon (val e)))) x))) \"}\")
+        (set? x) (str \"#{\" (clojure.string/join \" \" (sort (map fz-canon x))) \"}\")
+        (vector? x) (str \"[\" (clojure.string/join \" \" (map fz-canon x)) \"]\")
+        (sequential? x) (str \"(\" (clojure.string/join \" \" (map fz-canon x)) \")\")
+        :else (pr-str x)))
+(defn fz-out [i f] (println (str \"FZ \" i \" \" (try (fz-canon (f)) (catch clotran.host.throwable t \"!error\")))))
+")
+
+(defn case-script [forms]
+  (str "(in-ns 'user)\n(require 'clojure.string)\n" prelude
+       (apply str (map-indexed (fn [i f] (str "(fz-out " i " (fn [] " (pr-str f) "))\n")) forms))
+       "(shutdown-agents)\n"))
+
+(defn outputs [text]
+  (into {} (for [l (str/split-lines (or text ""))
+                 :let [[_ i v] (re-find #"^FZ (\d+) (.*)$" l)] :when i]
+             [(parse-long i) v])))
+
+(def work (str (fs/create-temp-dir {:prefix "fuzz-"})))
+
+(defn sh [env & cmd]
+  (apply p/shell {:dir repo :in "" :out :string :err :string :continue true :extra-env env} cmd))
+
+(defn run-clj [forms]
+  (let [f (str work "/cases.clj")]
+    (spit f (names/to-upstream (case-script forms)))
+    (let [r (sh {} "clj" "-Sdeps" (slurp (str repo "/deps.edn")) "-M" f)
+          out (update-vals (outputs (:out r)) names/from-clj)]
+      ;; a case clj does not answer is not compared: say why it stopped
+      (when (< (count out) (count forms))
+        (println "clj stopped after" (count out) "of" (count forms) "cases:")
+        (println (str/join "\n" (take 6 (str/split-lines (str (:err r)))))))
+      out)))
+
+(defn run-clotran [mode forms]
+  (let [core (str repo "/src/clj/clojure/core.clj") bin (str repo "/clotran-bin")]
+    (case mode
+      "flat" (let [f (str work "/cases.cljf")] (spit f (case-script forms)) (outputs (:out (sh {} bin core f))))
+      "tree" (let [f (str work "/cases.cljf")] (spit f (case-script forms))
+               (outputs (:out (sh {"CLOTRAN_FLAT" "0"} bin core f))))
+      "compiled"
+      ;; each case a fn of a namespace, compiled; a fn the generator
+      ;; declines stays interpreted, and the run says how many compiled
+      (let [nsf (str work "/fz/cases.cljf") lib (str work "/fz.dylib") drv (str work "/drive.cljf")]
+        (fs/create-dirs (str work "/fz"))
+        (spit nsf (str "(ns fz.cases)\n"
+                       (apply str (map-indexed (fn [i f] (str "(defn c" i " [] " (pr-str f) ")\n")) forms))))
+        (let [c (sh {"CLOTRAN_CACHE" (str work "/cache")} (str repo "/clotran") "compile" nsf lib)]
+          (when-not (fs/exists? lib)
+            (println "compiled mode: no library:")
+            (println (str/join "\n" (take-last 25 (str/split-lines (str (:out c) (:err c))))))))
+        (spit drv (str "(in-ns 'user)\n(require 'clojure.string)\n" prelude
+                       "(load-file " (pr-str nsf) ")\n(require 'clotran.loader)\n"
+                       "(clotran.loader/install " (pr-str lib) " " (pr-str nsf) ")\n"
+                       "(println \"FZCOMPILED\" (count (filter #(clojure.string/starts-with? (str (deref %)) \"#<compiled\") (vals (ns-interns 'fz.cases)))))\n"
+                       (apply str (for [i (range (count forms))] (str "(fz-out " i " fz.cases/c" i ")\n")))))
+        (let [r (sh {"CLOTRAN_IMAGE" "0"} bin core drv)]
+          (when-let [[_ k] (re-find #"FZCOMPILED (\d+)" (:out r))]
+            (println (str "compiled mode: " k " of " (count forms) " cases compiled")))
+          (outputs (:out r)))))))
+
+(defn differs [want got] (and (some? want) (not= want got)))
+
+;;; ---- shrinking ------------------------------------------------------
+
+(defn fails? [mode form]
+  (let [w (get (run-clj [form]) 0) g (get (run-clotran mode [form]) 0)]
+    (and (some? w) (differs w g))))
+
+(defn shrink [mode tree]
+  ;; greedy: the first child that still fails, until none does
+  (loop [t tree tries 0]
+    (let [kid (when (< tries 60)
+                (some #(when (fails? mode (rose/root %)) %) (take 8 (rose/children t))))]
+      (if kid (recur kid (inc tries)) (rose/root t)))))
+
+;;; ---- main -----------------------------------------------------------
+
+(let [{:keys [n seed modes]} opts
+      fixed (some-> (:file opts) slurp edn/read-string vec)
+      n (if fixed (count fixed) n)
+      roses (when-not fixed (generate-roses n seed))
+      forms (or fixed (mapv rose/root roses))
+      _ (doseq [f forms]
+          (when-not (s/valid? ::case f) (println "fuzz: a generated case does not conform:" (pr-str f)))
+          (doseq [[h x] (nonconforming f)] (println "fuzz: a generated" h "does not conform to its spec:" (pr-str x))))
+      want (run-clj forms)
+      _ (when (< (count want) n) (println "clj answered" (count want) "of" n "cases"))
+      ;; what was tested: a case both sides throw on agrees, and says little
+      _ (println (format "%d cases, %.0f forms a case on average; clj threw on %d"
+                         n (double (/ (reduce + (map #(count (tree-seq coll? seq %)) forms)) (max n 1)))
+                         (count (filter #(= "!error" %) (vals want)))))
+      bad (atom [])]
+  (doseq [m modes]
+    (let [got (run-clotran m forms)
+          diffs (filter #(differs (get want %) (get got %)) (range n))]
+      (println (format "%-9s %d cases, %d differ from clj" m n (count diffs)))
+      (doseq [i diffs] (swap! bad conj [m i]))))
+  (doseq [[m i] (take 12 @bad)]
+    (let [f (nth forms i)]
+      (println "---" m "case" i)
+      (println "  form:   " (pr-str f))
+      (println "  clj:    " (get want i))
+      (println "  clotran:" (get (run-clotran m [f]) 0))
+      (when (and (:shrink opts) roses)
+        (let [small (shrink m (nth roses i))]
+          (println "  shrunk: " (pr-str small))
+          (println "    clj:    " (get (run-clj [small]) 0))
+          (println "    clotran:" (get (run-clotran m [small]) 0))))))
+  (fs/delete-tree work)
+  (System/exit (if (seq @bad) 1 0)))

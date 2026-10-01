@@ -2426,6 +2426,18 @@ and a namespace being edited interpreted), so it is the model:
 - 26.8 The tree evaluator (exec.inc) retires once the flat form covers
   every node kind -- or stays as the fallback for what it does not,
   with that list written down.
+- 26.9 The differential fuzzer (James, 2026-10-01: "add it now, it
+  might help you understand things better and not run into so many
+  bugs"). `scripts/fuzz` builds random closed programs from a typed
+  grammar whose let, fn, if-let and when-let follow -- and are checked
+  against -- Clojure's own specs (the vendored
+  clojure/core/specs/alpha.clj), through test.check; runs them through
+  clj and through clotran flat, tree and compiled; any difference is a
+  bug, and --shrink cuts a failure down. What it finds goes into
+  test/clj/fuzz-regressions.edn, which make test runs with 300
+  generated cases (check-fuzz). Its first find: two long literals
+  whose product overflows compiled to a constant gfortran folds and
+  rejects, failing a whole namespace's library.
 
 **The order changed, 2026-09-30.** After 26.2, compiled core ran the
 yardstick 2.5x SLOWER than the interpreter (3.7 s against 1.5) -- at
