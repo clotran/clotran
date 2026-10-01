@@ -4892,9 +4892,32 @@ contains
     call vs_set(vst, base + 1, v)
     select case (gc_i2(vs_get(vst, base + 1)))
     case (1)
-       ! a native range tail: slots 1-3 = lo hi step (range_cell)
-       r = range_cell(gc_slot(vs_get(vst, base + 1), 1), gc_slot(vs_get(vst, base + 1), 2), &
-            gc_slot(vs_get(vst, base + 1), 3), [vs_get(vst, base + 1)])
+       ! a native range tail: slots 1-3 = lo hi step (range_cell). The
+       ! cell BECOMES the element -- head lo, tail a fresh pending range --
+       ! rather than copying one range_cell made and dropped at once
+       block
+         type(gc_value) :: lo, hi, st, tl
+         real(gc_dp) :: sd
+         lo = gc_slot(vs_get(vst, base + 1), 1)
+         hi = gc_slot(vs_get(vst, base + 1), 2)
+         st = gc_slot(vs_get(vst, base + 1), 3)
+         sd = num_dbl(st)
+         if ((sd > 0.0_gc_dp .and. .not. num_lt(lo, hi)) .or. (sd < 0.0_gc_dp .and. .not. num_lt(hi, lo))) then
+            r = range_cell(lo, hi, st, [vs_get(vst, base + 1)])
+         else
+            call vs_set(vst, base + 2, num_add2(lo, st, [vs_get(vst, base + 1)]))
+            tl = gc_obj(OBJ_LAZY, [vs_get(vst, base + 2), hi, st], [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+            call gc_set_i1(tl, LAZY_PENDING)
+            call gc_set_i2(tl, 1)
+            call gc_set_slot(vs_get(vst, base + 1), 3, tl)
+            call gc_set_slot(vs_get(vst, base + 1), 2, gc_slot(vs_get(vst, base + 1), 1))
+            call gc_set_slot(vs_get(vst, base + 1), 1, gc_nil())
+            call gc_set_slot(vs_get(vst, base + 1), 5, gc_nil())
+            call gc_set_i1(vs_get(vst, base + 1), LAZY_CONS)
+            call vs_leave(vst, base)
+            return
+         end if
+       end block
     case (2)
        ! a native iterate tail: f in slot 1 (the thunk's slot; slot 4
        ! is the owner's while running) and x in slot 5 -- not a [f x]
@@ -4905,8 +4928,23 @@ contains
        call vs_set(vst, base + 2, gc_slot(vs_get(vst, base + 1), 5))
        r = gce_apply_slots(vst, gc_slot(vs_get(vst, base + 1), 1), base + 1, 1)
        if (.not. tctx%has_error) then
+          ! the cell becomes the element, head (f x) and tail a fresh
+          ! pending iterate, as range's does
           call vs_set(vst, base + 2, r)
-          r = iterate_cell(gc_slot(vs_get(vst, base + 1), 1), vs_get(vst, base + 2), [vs_get(vst, base + 1)])
+          block
+            type(gc_value) :: tl
+            tl = gc_obj(OBJ_LAZY, [gc_slot(vs_get(vst, base + 1), 1), gc_nil(), gc_nil(), gc_nil(), vs_get(vst, base + 2)], &
+                 [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+            call gc_set_i1(tl, LAZY_PENDING)
+            call gc_set_i2(tl, 2)
+            call gc_set_slot(vs_get(vst, base + 1), 3, tl)
+          end block
+          call gc_set_slot(vs_get(vst, base + 1), 2, vs_get(vst, base + 2))
+          call gc_set_slot(vs_get(vst, base + 1), 1, gc_nil())
+          call gc_set_slot(vs_get(vst, base + 1), 5, gc_nil())
+          call gc_set_i1(vs_get(vst, base + 1), LAZY_CONS)
+          call vs_leave(vst, base)
+          return
        end if
     case default
        r = apply(gc_slot(vs_get(vst, base + 1), 1), no_args())
