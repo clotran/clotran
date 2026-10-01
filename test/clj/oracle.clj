@@ -2902,3 +2902,9 @@
   [(.isDirectory (first fs)) (count (filter #(.isFile %) fs))
    (take 3 (sort (map #(.getName %) (filter #(.isFile %) fs))))
    (.getName (clotran.files/file "a/b.cljf")) (.exists (clotran.files/file "no/such")) (.isFile (clotran.files/file "Makefile"))])
+
+;; a shift by 64 or more follows clotran's host, Fortran (all bits out), where clj's takes the count mod 64
+(expect-diff "DEVIATIONS 69: shifts follow Fortran past 63")
+[(bit-shift-left 1 64) (bit-shift-right -8 65)]
+;; and below 64 they agree
+[(bit-shift-left 1 63) (bit-shift-right -1 63) (unsigned-bit-shift-right -1 60) (bit-shift-left 3 62)]

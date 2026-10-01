@@ -1986,3 +1986,23 @@ the form that was running.
 **Removal**: print clojure.main's `ex-str` layout in program mode, which
 needs the throwing frame's var and file (the trace has them, DEVIATIONS
 on traces).
+
+## 69. A shift by 64 or more follows clotran's host, Fortran
+
+`(bit-shift-left 1 64)` is 0 here and 1 in clj; `(bit-shift-right -8
+65)` is -1 here and -4 there. clj's `Numbers.shiftLeft` is its host's
+`x << n`, which takes only the low six bits of a long's shift count,
+so a shift by 64 is a shift by 0. That is the host, not the
+language: ClojureScript's `bit-shift-left` is the host's own `<<`
+(cljs/core.cljc, `(js* "(~{} << ~{})")`), which takes five bits of a
+32-bit count -- the two hosts already disagree. clotran's host is
+Fortran, and its shifts are Fortran's `shiftl`, `shifta` and `shiftr`:
+every bit shifted out, so a count of 64 or more leaves 0 (or -1 for an
+arithmetic right shift of a negative number). James, 2026-10-01: keep
+Fortran's conventions, do not replace them with clj's host's.
+
+Counts from 0 to 63 agree. A negative count is outside Fortran's range
+for these intrinsics, and is not relied on.
+
+**Removal**: none intended. Masking the count (`iand(n, 63)`) would
+match clj's host at one line per shift, and was written and reverted.
