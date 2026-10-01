@@ -15733,7 +15733,7 @@ contains
              call vs_set(vst, base + 1, strip_meta(gc_slot(v, 2)))
              cycle
           end if
-          ! a pending range cell holds lo hi step: its count is arithmetic,
+          ! a pending range of longs holds lo hi step: its count is arithmetic,
           ! as LongRange.count is, not a realisation of 10^6 cells
           if (gc_i1(v) == LAZY_PENDING .and. gc_i2(v) == 1) then
              if (range_count(v, n)) exit
@@ -15825,7 +15825,6 @@ contains
     logical :: ok
     type(gc_value) :: lo, hi, st
     integer(gc_ip) :: a, b, c
-    real(gc_dp) :: d
     lo = gc_slot(cell, 1); hi = gc_slot(cell, 2); st = gc_slot(cell, 3)
     ok = .false.
     if (lo%tag == GCT_INT .and. hi%tag == GCT_INT .and. st%tag == GCT_INT) then
@@ -15834,9 +15833,10 @@ contains
        if (c > 0 .and. b > a) n = n + int((b - a + c - 1) / c)
        if (c < 0 .and. b < a) n = n + int((a - b - c - 1) / (-c))
     else
-       if (num_dbl(st) == 0.0_gc_dp) return
-       d = (num_dbl(hi) - num_dbl(lo)) / num_dbl(st)
-       if (d > 0.0_gc_dp) n = n + ceiling(d)
+       ! anything but three longs is Range, not LongRange, and Range is
+       ! not Counted: count walks it, adding step to step, and (range 0.0
+       ! 1.0 0.1) has 11 elements where (1.0 - 0.0) / 0.1 says 10
+       return
     end if
     ok = .true.
   end function range_count

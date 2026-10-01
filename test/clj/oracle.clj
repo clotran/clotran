@@ -970,6 +970,9 @@
 ;; double range
 (count (range 0.0 360.0 5.0))
 
+;; a double range counts as it walks, step added to step: 11, not 10
+[(count (range 0.0 1.0 0.1)) (count (range 1 0 -0.1)) (count (range 0.5 3))]
+
 ;; double range head
 (take 5 (range 0.0 360.0 5.0))
 
