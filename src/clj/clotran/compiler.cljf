@@ -799,11 +799,26 @@ end module clotran_rt_decl
             [r st] (tmp st t)]
         (if (= t :double)
           [(concat c1 c2 [(str r " = " a " " fop " " b)]) r st]
-          (let [[slow st] (slow-call nd [[a :long] [b :long]] r :long st)]
-            [(concat c1 c2 [(str "if (" (ovf sym a b) ") then")]
-                     (map #(str "   " %) slow)
-                     ["else" (str "   " r " = " a " " fop " " b) "end if"])
-             r st])))
+          (let [[slow st] (slow-call nd [[a :long] [b :long]] r :long st)
+                ka (lit-long a) kb (lit-long b)
+                ;; two literals: answered here, exactly -- gfortran folds
+                ;; a constant product and refuses the whole file when it
+                ;; overflows, even under a guard (scripts/fuzz found it)
+                exact (when (and ka kb ('#{+ - *} sym))
+                        (({'+ +' '- -' '* *'} sym) (bigint ka) (bigint kb)))]
+            (cond
+              (and exact (<= clotran.host.int8/MIN_VALUE exact clotran.host.int8/MAX_VALUE))
+              [(concat c1 c2 [(str r " = " (if (= exact clotran.host.int8/MIN_VALUE)
+                                              "(-huge(0_c_int64_t) - 1_c_int64_t)"
+                                              (str "(" (long exact) "_c_int64_t)")))])
+               r st]
+              ;; out of range: the generic call, which throws as Clojure does
+              exact [(concat c1 c2 slow) r st]
+              :else
+              [(concat c1 c2 [(str "if (" (ovf sym a b) ") then")]
+                       (map #(str "   " %) slow)
+                       ["else" (str "   " r " = " a " " fop " " b) "end if"])
+               r st]))))
 
       :div
       (let [[c1 a st] (gp (args 0) :double st)
