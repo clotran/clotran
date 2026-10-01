@@ -61,7 +61,7 @@
 (defn fresh [env] (symbol (str "x" (:n env 0))))
 (defn bind [env t sym] (-> env (update t (fnil conj []) sym) (update :n (fnil inc 0))))
 
-(declare g-int g-seq g-bool g-fn)
+(declare g-int g-seq g-bool g-fn g-map g-str)
 
 ;; a generator built when it is drawn from, not when its parent is: the
 ;; grammar's branches each hold a deeper generator, and built eagerly
@@ -135,7 +135,23 @@
         ;; a named fn calling itself, and letfn
         [1 (g/let [x (i)] (list (list 'fn 'self '[n] '(if (pos? n) (+ n (self (dec n))) 0)) (list 'mod x 8)))]
         [1 (g/let [x (i)] (list 'letfn '[(ev? [n] (if (zero? n) true (od? (dec n)))) (od? [n] (if (zero? n) false (ev? (dec n))))]
-                                (list 'if (list 'ev? (list 'mod x 9)) 1 0)))]]))))
+                                (list 'if (list 'ev? (list 'mod x 9)) 1 0)))]
+        ;; maps
+        [2 (g/let [m (lazy #(g-map env (dec d))) k (g/elements [:a :b :c :z]) x (i)] (list 'get m k x))]
+        [1 (g/let [m (lazy #(g-map env (dec d)))] (list 'count m))]
+        [1 (g/let [m (lazy #(g-map env (dec d)))] (list 'reduce '+ 0 (list 'vals m)))]
+        [1 (g/let [m (lazy #(g-map env (dec d))) k (g/elements [:a :b :c])] (list k m 0))]
+        ;; strings
+        [1 (g/let [st (lazy #(g-str env (dec d)))] (list 'count st))]
+        ;; transducers and reduced
+        [1 (g/let [s (sq) fn (f)] (list 'transduce (list 'map fn) '+ 0 s))]
+        [1 (g/let [s (sq) p (g/elements '[even? odd? pos?])] (list 'transduce (list 'comp (list 'filter p) '(map inc)) '+ s))]
+        [1 (g/let [s (sq) k pos-small] (list 'reduce (list 'fn '[a b] (list 'if (list '> 'a k) (list 'reduced 'a) '(+ a b))) 0 s))]
+        ;; case, cond, atoms
+        [1 (g/let [x (i) y (i) z (i)] (list 'case (list 'mod x 3) 0 y 1 z (list '- y z)))]
+        [1 (g/let [x (i) y (i) z (i)] (list 'cond (list '< x 0) y (list '> x 10) z :else (list '+ y z)))]
+        [1 (g/let [s (sq)] (list 'let '[at (atom 0)] (list 'doseq ['v s] '(swap! at + v)) '@at))]
+        [1 (g/let [s (sq)] (list 'let '[vt (volatile! 1)] (list 'run! '(fn [v] (vswap! vt * (if (zero? v) 1 (min 3 (max -3 v))))) s) '@vt))]]))))
 
 (defn g-seq [env d]
   (if (<= d 0)
@@ -171,7 +187,19 @@
         [1 (g/let [s (sq)] (list 'map-indexed '+ s))]
         [1 (g/let [s (sq)] (list 'reductions '+ s))]
         [1 (g/let [s (sq)] (list 'into '() s))]
-        [2 (g-let env d g-seq)]]))))
+        [2 (g-let env d g-seq)]
+        [1 (g/let [s (sq) fn (f)] (list 'into [] (list 'map fn) s))]
+        [1 (g/let [s (sq) p (g/elements '[even? odd?])] (list 'sequence (list 'comp (list 'remove p) '(map dec)) s))]
+        [1 (g/let [s (sq) n pos-small] (list 'map (list 'fn '[p] '(reduce + p)) (list 'partition n s)))]
+        [1 (g/let [s (sq) n pos-small] (list 'map 'count (list 'partition-all n s)))]
+        [1 (g/let [s (sq)] (list 'sort-by '- s))]
+        [1 (g/let [m (lazy #(g-map env (dec d)))] (list 'sort (list 'vals m)))]
+        [1 (g/let [s (sq)] (list 'sort (list 'map 'count (list 'vals (list 'group-by 'even? s)))))]
+        [1 (g/let [s (sq)] (list 'map 'second (list 'sort (list 'frequencies s))))]
+        [1 (g/let [s (sq) n k] (list 'take n (list 'cycle (list 'cons 1 s))))]
+        [1 (g/let [s (sq) n k] (list 'take n (list 'distinct (list 'concat s s))))]
+        [1 (g/let [s (sq)] (list 'keep (list 'fn '[v] '(when (odd? v) (* v v))) s))]
+        [1 (g/let [s (sq)] (list 'map-indexed (list 'fn '[i v] '(- v i)) s))]]))))
 
 (defn g-bool [env d]
   (let [i #(lazy (fn [] (g-int env (max 0 (dec d))))) sq #(lazy (fn [] (g-seq env (max 0 (dec d)))))
@@ -195,7 +223,37 @@
       [1 (g/return '(comp inc inc))]
       [1 (g/let [k (g/choose 1 3)] (list 'fn [x] (list '* x k)))]])))
 
-(s/def ::case (s/or :int int? :vector vector? :form (s/and seq? seq)))
+;; a map of keyword to int
+(defn g-map [env d]
+  (let [i #(lazy (fn [] (g-int env (max 0 (dec d))))) sq #(lazy (fn [] (g-seq env (max 0 (dec d)))))
+        kw (g/elements [:a :b :c :d])
+        base [[2 (g/let [ks (g/vector kw 0 4) vs (g/vector small 4)] (zipmap ks vs))]
+              [1 (g/let [s (sq)] (list 'zipmap [:a :b :c] s))]]]
+    (g/frequency
+     (if (<= d 0)
+       base
+       (into base
+             [[2 (g/let [m (lazy #(g-map env (dec d))) k kw x (i)] (list 'assoc m k x))]
+              [2 (g/let [m (lazy #(g-map env (dec d))) k kw] (list 'update m k '(fnil inc 0)))]
+              [1 (g/let [m (lazy #(g-map env (dec d))) n (lazy #(g-map env (dec d)))] (list 'merge m n))]
+              [1 (g/let [m (lazy #(g-map env (dec d))) n (lazy #(g-map env (dec d)))] (list 'merge-with '+ m n))]
+              [1 (g/let [m (lazy #(g-map env (dec d))) k kw] (list 'dissoc m k))]
+              [1 (g/let [m (lazy #(g-map env (dec d)))] (list 'select-keys m [:a :c]))]
+              [1 (g/let [m (lazy #(g-map env (dec d)))] (list 'update-vals m 'inc))]
+              [1 (g/let [m (lazy #(g-map env (dec d)))] (list 'into {} (list 'filter '(fn [[k v]] (even? v)) m)))]
+              [1 (g/let [s (sq)] (list 'reduce (list 'fn '[m v] '(update m (if (even? v) :a :b) (fnil + 0) v)) {} s))]])))))
+
+;; a string
+(defn g-str [env d]
+  (let [i #(lazy (fn [] (g-int env (max 0 (dec d))))) sq #(lazy (fn [] (g-seq env (max 0 (dec d)))))]
+    (g/frequency
+     [[2 (g/let [x (i) y (i)] (list 'str x "-" y))]
+      [1 (g/let [s (sq)] (list 'apply 'str s))]
+      [1 (g/let [s (sq)] (list 'pr-str (list 'vec s)))]
+      [1 (g/let [x (i) n (g/choose 0 2)] (list 'subs (list 'str "abcdef" x) n))]
+      [1 (g/let [m (lazy #(g-map env (dec d)))] (list 'pr-str (list 'into (sorted-map) m)))]])))
+
+(s/def ::case (s/or :int int? :vector vector? :map map? :form (s/and seq? seq)))
 
 ;; Every let, loop, fn, if-let and when-let in a form, checked against the
 ;; :args spec Clojure gives it (loop's bindings are let's): what does
@@ -209,7 +267,7 @@
         :when (and sp (not (s/valid? sp (rest x))))]
     [h x]))
 (def g-case (g/sized (fn [size] (let [d (min 5 (+ 1 (quot size 20)))]
-                                   (g/frequency [[3 (g-int {} d)] [2 (g-seq {} d)]])))))
+                                   (g/frequency [[3 (g-int {} d)] [2 (g-seq {} d)] [1 (g-map {} d)] [1 (g-str {} d)]])))))
 
 ;; One rose tree per case, from the seed: the case is its root, its
 ;; shrinks are its children (--shrink walks them).
