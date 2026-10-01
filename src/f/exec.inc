@@ -192,6 +192,19 @@
     wb = gc_nil()
     ! a pending step stops at every call, core's wrappers included
     if (step_at /= 0) return
+    if (gc_kind(fn) /= OBJ_CLOSURE) return
+    ! the call table has it, one raw read: the template walk below was
+    ! eight gcv_nth a call, on every first/next/seq compiled code made
+    block
+      type(gc_value) :: ct
+      ct = call_table_of(fn)
+      if (ct%tag == GCT_VEC) then
+         if (n <= ct_int(ct, 4)) then
+            if (ct_int(ct, 5 + 4 * n) >= 0) wb = gc_vec_get(ct, 5 + 4 * n + 3)
+         end if
+         return
+      end if
+    end block
     if (.not. is_node_closure(fn)) return
     tmpl = gc_slot(fn, 1)
     if (gcv_count(tmpl) < 7) return
