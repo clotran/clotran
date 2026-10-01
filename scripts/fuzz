@@ -15,6 +15,9 @@
 ;;   scripts/fuzz -n 500 -s 7          500 cases, seed 7
 ;;   scripts/fuzz -m flat,tree         only those modes
 ;;   scripts/fuzz --shrink             shrink each failure (slow: a run per try)
+;;   scripts/fuzz --fns 20             20 calls of each function spec'd in
+;;                                     scripts/fuzz_specs.clj, from its :args spec;
+;;                                     clj's answer checked against its :ret
 ;;   scripts/fuzz -f cases.edn         these cases (a vector of forms) instead:
 ;;                                     what the fuzzer found, kept (make test)
 ;;
@@ -46,6 +49,7 @@
       "-m" (recur (drop 2 a) (assoc o :modes (str/split (second a) #",")))
       "--shrink" (recur (rest a) (assoc o :shrink true))
       "-f" (recur (drop 2 a) (assoc o :file (second a)))
+      "--fns" (recur (drop 2 a) (assoc o :fns (parse-long (second a))))
       (do (println "unknown option" (first a)) (System/exit 2)))))
 
 ;;; ---- the grammar ----------------------------------------------------
@@ -279,6 +283,42 @@
             tree (g/call-gen g-case r1 (mod (* 7 i) 100))]
         (recur r2 (inc i) (conj acc tree))))))
 
+;;; ---- calls from the function specs (--fns) --------------------------
+
+(load-file (str repo "/scripts/fuzz_specs.clj"))
+
+(defn arg-form
+  "A generated argument as the program writes it: a FnRef's form, any
+  other value quoted."
+  [v]
+  (if (fuzz.specs/fnref? v) (:form v) (list 'quote v)))
+
+(defn fn-roses
+  "k rose trees of calls to each spec'd function: [fn-symbol tree], the
+  tree's root a form."
+  [k seed]
+  (loop [r (random/make-random seed) fs fuzz.specs/fuzz-fns i 0 acc []]
+    (if-let [fsym (first fs)]
+      (if (= i k)
+        (recur r (rest fs) 0 acc)
+        (let [[r1 r2] (random/split r)
+              args-gen (s/gen (:args (s/get-spec fsym)))
+              tree (rose/fmap (fn [args] (cons (symbol (name fsym)) (map arg-form args)))
+                              (g/call-gen args-gen r1 (mod (* 13 i) 30)))]
+          (recur r2 fs (inc i) (conj acc [fsym tree]))))
+      acc)))
+
+(defn ret-check
+  "Each call whose clj answer does not conform to its function's :ret:
+  the spec is wrong, or clj is not what its docstring says."
+  [fsyms want]
+  (for [[i fsym] (map-indexed vector fsyms)
+        :let [w (get want i) rs (:ret (s/get-spec fsym))]
+        :when (and rs w (not= w "!error"))
+        :let [v (try (read-string w) (catch Exception _ ::unread))]
+        :when (and (not= v ::unread) (not (s/valid? rs v)))]
+    [fsym i w]))
+
 ;;; ---- running ------------------------------------------------------
 
 (def prelude "
@@ -363,8 +403,10 @@
 
 (let [{:keys [n seed modes]} opts
       fixed (some-> (:file opts) slurp edn/read-string vec)
-      n (if fixed (count fixed) n)
-      roses (when-not fixed (generate-roses n seed))
+      fn-pairs (when (:fns opts) (fn-roses (:fns opts) seed))
+      fsyms (mapv first fn-pairs)
+      n (cond fixed (count fixed) fn-pairs (count fn-pairs) :else n)
+      roses (cond fixed nil fn-pairs (mapv second fn-pairs) :else (generate-roses n seed))
       forms (or fixed (mapv rose/root roses))
       _ (doseq [f forms]
           (when-not (s/valid? ::case f) (println "fuzz: a generated case does not conform:" (pr-str f)))
@@ -375,6 +417,14 @@
       _ (println (format "%d cases, %.0f forms a case on average; clj threw on %d"
                          n (double (/ (reduce + (map #(count (tree-seq coll? seq %)) forms)) (max n 1)))
                          (count (filter #(= "!error" %) (vals want)))))
+      _ (when fn-pairs
+          (println (count fuzz.specs/fuzz-fns) "functions spec'd")
+          (doseq [[fsym i w] (ret-check fsyms want)]
+            (println "SPEC:" fsym "answered" w "in clj, which its :ret refuses --" (pr-str (nth forms i))))
+          ;; an :args spec clj throws on often is too loose: it tests errors, not answers
+          (doseq [[fsym k] (frequencies (keep (fn [i] (when (= "!error" (get want i)) (nth fsyms i))) (range n)))
+                  :when (> k (quot (:fns opts) 2))]
+            (println "LOOSE:" fsym "threw in clj on" k "of" (:fns opts) "calls")))
       bad (atom [])]
   (doseq [m modes]
     (let [got (run-clotran m forms)

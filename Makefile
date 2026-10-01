@@ -501,8 +501,8 @@ check-pure:
 	@echo "--- pure Fortran (tier A through gfortran and flang, against clj) ---"
 	scripts/pure-check
 check-fuzz:
-	@echo "--- the fuzzer (PLAN 26.9): what it found, then 300 generated cases, each through clj and clotran's flat, tree and compiled modes ---"
-	scripts/fuzz -f test/clj/fuzz-regressions.edn > $(B)/fuzz.out 2>&1 && scripts/fuzz -n 300 -s 1 >> $(B)/fuzz.out 2>&1; s=$$?; cat $(B)/fuzz.out; exit $$s
+	@echo "--- the fuzzer (PLAN 26.9): what it found, 300 generated programs and 4 calls of each spec'd function, each through clj and clotran's flat, tree and compiled modes ---"
+	scripts/fuzz -f test/clj/fuzz-regressions.edn > $(B)/fuzz.out 2>&1 && scripts/fuzz -n 300 -s 1 >> $(B)/fuzz.out 2>&1 && scripts/fuzz --fns 4 -s 1 >> $(B)/fuzz.out 2>&1; s=$$?; cat $(B)/fuzz.out; exit $$s
 check-costs:
 	@echo "--- the cost model: objects allocated per element, against test/costs.edn (PLAN step 26) ---"
 	scripts/cost-model > $(B)/costs.out 2>&1; s=$$?; cat $(B)/costs.out; exit $$s

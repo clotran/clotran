@@ -25,6 +25,19 @@
  (* 1.0e308 10.0)
  (+ 1.7976931348623157e308 1.7976931348623157e308)
  (inc 1.0e308)
+ ;; scripts/fuzz --fns: assoc on what is not associative throws, as
+ ;; RT.assoc's cast does -- it answered nil and assoc-in lost the key
+ (assoc 5 :c 12)
+ (assoc-in {:d 7 :b -5} [:b :c] 12)
+ ;; subvec checks its range, as RT.subvec does
+ (subvec [] 5)
+ (subvec [6 3 9 -1] 5)
+ (subvec [1 2] 1 0)
+ (subvec [1 2] -1 1)
+ (subvec [1 2 3] 1 3)
+ ;; two constants that are = but not the same kind keep their own slots
+ (into '(9) '[9])
+ [(quote (1 2)) (quote [1 2]) (quote 1N) 1 (quote "a") (quote a)]
  ;; dissoc on an array map keeps the order (PersistentArrayMap.without);
  ;; dissoc! on a transient one moves the last entry into the hole
  ;; (TransientArrayMap.doWithout)
