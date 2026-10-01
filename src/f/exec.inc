@@ -147,6 +147,19 @@
     call vs_set(vst, base + 2, frame)
     capv = gcv_nth(tmpl, 2)
     ncap = gcv_count(capv) / 2
+    if (ncap <= 2) then
+       ! ONE OBJECT (PLAN 26.6): up to two captures in the closure's own
+       ! slots 2 and 4 (cap_of); the values are the frame's, rooted there
+       block
+         type(gc_value) :: c0, c1
+         c0 = gc_nil(); c1 = gc_nil()
+         if (ncap >= 1) c0 = frame_get(vs_get(vst, base + 2), int_of(gcv_nth(capv, 0)))
+         if (ncap >= 2) c1 = frame_get(vs_get(vst, base + 2), int_of(gcv_nth(capv, 2)))
+         fn = gc_obj(OBJ_CLOSURE, [vs_get(vst, base + 1), c0, gc_nil(), c1, gc_nil()], roots)
+       end block
+       call vs_leave(vst, base)
+       return
+    end if
     ! roots as they are: tmpl and frame are on the stack, and a
     ! [roots, ...] list is a heap temporary on every closure made
     caps = gc_vec(ncap, roots)
@@ -166,13 +179,40 @@
     type(gc_value) :: tmpl, caps, capv
     integer :: i, ncap
     tmpl = gc_slot(fn, 1)
-    caps = gc_slot(fn, 2)
     capv = gcv_nth(tmpl, 2)
     ncap = gcv_count(capv) / 2
     do i = 0, ncap - 1
-       call gc_vec_set(caps, i + 1, frame_get(frame, int_of(gcv_nth(capv, 2 * i))))
+       call cap_put(fn, i, ncap, frame_get(frame, int_of(gcv_nth(capv, 2 * i))))
     end do
   end subroutine refresh_captures
+
+  ! Capture i (0-based) of a template closure that has ncap of them:
+  ! one or two live in the closure's slots 2 and 4, more in a vector
+  ! in slot 2 (make_closure_from)
+  function cap_of(fn, i, ncap) result(v)
+    type(gc_value), intent(in) :: fn
+    integer, intent(in) :: i, ncap
+    type(gc_value) :: v
+    if (ncap > 2) then
+       v = gc_vec_get(gc_slot(fn, 2), i + 1)
+    else if (i == 0) then
+       v = gc_slot(fn, 2)
+    else
+       v = gc_slot(fn, 4)
+    end if
+  end function cap_of
+
+  subroutine cap_put(fn, i, ncap, v)
+    type(gc_value), intent(in) :: fn, v
+    integer, intent(in) :: i, ncap
+    if (ncap > 2) then
+       call gc_vec_set(gc_slot(fn, 2), i + 1, v)
+    else if (i == 0) then
+       call gc_set_slot(fn, 2, v)
+    else
+       call gc_set_slot(fn, 4, v)
+    end if
+  end subroutine cap_put
 
   logical function is_node_closure(fn)
     type(gc_value), intent(in) :: fn
@@ -265,11 +305,10 @@
     type(gc_value) :: tmpl, caps, capv
     integer :: i, ncap, self
     tmpl = gc_slot(fn, 1)
-    caps = gc_slot(fn, 2)
     capv = gcv_nth(tmpl, 2)
     ncap = gcv_count(capv) / 2
     do i = 0, ncap - 1
-       call frame_set(frame, int_of(gcv_nth(capv, 2 * i + 1)), gc_vec_get(caps, i + 1))
+       call frame_set(frame, int_of(gcv_nth(capv, 2 * i + 1)), cap_of(fn, i, ncap))
     end do
     self = int_of(gcv_nth(tmpl, 4))
     if (self >= 0) call frame_set(frame, self, fn)

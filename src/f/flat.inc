@@ -770,10 +770,9 @@
     fr = new_frame(ct_int(ct, 1), roots)
     ncap = ct_int(ct, 3)
     if (ncap > 0) then
-       caps = gc_slot(fn, 2)
        cb = 5 + 4 * (ct_int(ct, 4) + 1)
        do i = 0, ncap - 1
-          call reg_set(fr, ct_int(ct, cb + i), gc_reg(caps, i + 1))
+          call reg_set(fr, ct_int(ct, cb + i), cap_of(fn, i, ncap))
        end do
     end if
     self = ct_int(ct, 2)
@@ -790,10 +789,9 @@
     integer :: i, ncap, cb, self
     ncap = ct_int(ct, 3)
     if (ncap > 0) then
-       caps = gc_slot(fn, 2)
        cb = 5 + 4 * (ct_int(ct, 4) + 1)
        do i = 0, ncap - 1
-          vst%vstack(rb + ct_int(ct, cb + i) + 1) = gc_reg(caps, i + 1)
+          vst%vstack(rb + ct_int(ct, cb + i) + 1) = cap_of(fn, i, ncap)
        end do
     end if
     self = ct_int(ct, 2)
