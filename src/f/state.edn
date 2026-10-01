@@ -6,6 +6,11 @@
 ;;   :fixed   shared, set at startup and read-only after
 ;;   :shared  shared and mutable -- what the note says it needs
 {
+ "Threads.f90/tls_cache" {:class :shared, :note "the single-thread cache of thread-local slots (Threads.f90, th_key_get): written only by the owner thread, or at a th_start/th_spawn before the new thread exists; read only while no other thread runs clotran"}
+ "Threads.f90/tls_multi" {:class :shared, :note "the single-thread cache of thread-local slots (Threads.f90, th_key_get): written only by the owner thread, or at a th_start/th_spawn before the new thread exists; read only while no other thread runs clotran"}
+ "Threads.f90/tls_next" {:class :shared, :note "the single-thread cache of thread-local slots (Threads.f90, th_key_get): written only by the owner thread, or at a th_start/th_spawn before the new thread exists; read only while no other thread runs clotran"}
+ "Threads.f90/tls_owned" {:class :shared, :note "the single-thread cache of thread-local slots (Threads.f90, th_key_get): written only by the owner thread, or at a th_start/th_spawn before the new thread exists; read only while no other thread runs clotran"}
+ "Threads.f90/tls_owner" {:class :shared, :note "the single-thread cache of thread-local slots (Threads.f90, th_key_get): written only by the owner thread, or at a th_start/th_spawn before the new thread exists; read only while no other thread runs clotran"}
  "Eval.f90/blocked_dl" {:class :shared, :note "progress counting for deadlock detection (tasks.inc, block_on): under the state lock"}
  "Eval.f90/blocked_nodl" {:class :shared, :note "progress counting for deadlock detection (tasks.inc, block_on): under the state lock"}
  "Eval.f90/live_threads" {:class :shared, :note "progress counting for deadlock detection (tasks.inc, block_on): under the state lock"}

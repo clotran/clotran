@@ -51,7 +51,23 @@ module Threads
   ! on macOS and an unsigned int in glibc and musl: PTHREAD_KEY_KIND.
   type :: th_key
      integer(PTHREAD_KEY_KIND) :: k = 0
+     integer :: slot = 0
   end type th_key
+
+  ! WHILE ONE THREAD RUNS CLOTRAN, its slots are plain variables: a
+  ! lookup per runtime entry was 15% of a compiled loop's samples. The
+  ! OWNER is the first thread to set a key (the evaluator's, main.f90);
+  ! its values are kept here on every set. th_start and th_spawn turn
+  ! the cache off for good before the new thread exists, and so does a
+  ! set from any other thread (an embedder's own); from then on every
+  ! lookup is pthread's, the owner's included -- the cache still agrees
+  ! with it, as the owner keeps updating it.
+  integer, parameter :: TLS_SLOTS = 16
+  type(c_ptr), save :: tls_cache(TLS_SLOTS) = c_null_ptr
+  logical, save :: tls_multi = .false.
+  logical, save :: tls_owned = .false.
+  integer(c_intptr_t), save :: tls_owner = 0
+  integer, save :: tls_next = 0
 
   interface
      function pthread_create(t, attr, fn, arg) bind(C, name="pthread_create") result(r)
@@ -73,6 +89,10 @@ module Threads
        type(c_ptr), value :: v
        integer(c_int) :: r
      end function pthread_setspecific
+     function pthread_self() bind(C, name="pthread_self") result(t)
+       import :: c_intptr_t
+       integer(c_intptr_t) :: t
+     end function pthread_self
      function pthread_getspecific(k) bind(C, name="pthread_getspecific") result(v)
        import :: c_ptr, PTHREAD_KEY_KIND
        integer(PTHREAD_KEY_KIND), value :: k
@@ -210,6 +230,7 @@ contains
     type(th_thread), intent(inout) :: t
     type(c_funptr), intent(in) :: fn
     type(c_ptr), intent(in) :: arg
+    tls_multi = .true.
     th_start = pthread_create(t%handle, c_null_ptr, fn, arg) == 0
   end function th_start
 
@@ -245,6 +266,7 @@ contains
     attr = 0
     if (pthread_attr_init(c_loc(attr)) /= 0) return
     if (pthread_attr_setstacksize(c_loc(attr), bytes) /= 0) return
+    tls_multi = .true.
     if (pthread_create(t, c_loc(attr), fn, arg) /= 0) return
     if (pthread_attr_destroy(c_loc(attr)) /= 0) return
     th_spawn = pthread_detach(t) == 0
@@ -265,18 +287,36 @@ contains
   logical function th_key_create(key)
     type(th_key), intent(inout) :: key
     th_key_create = pthread_key_create(key%k, c_null_funptr) == 0
+    tls_next = tls_next + 1
+    if (tls_next > TLS_SLOTS) error stop "clotran: more thread keys than TLS_SLOTS"
+    key%slot = tls_next
   end function th_key_create
 
   ! This thread's slot under key -- no other thread's changes.
   logical function th_key_set(key, p)
     type(th_key), intent(in) :: key
     type(c_ptr), intent(in) :: p
+    integer(c_intptr_t) :: me
     th_key_set = pthread_setspecific(key%k, p) == 0
+    me = pthread_self()
+    if (.not. tls_owned) then
+       tls_owner = me
+       tls_owned = .true.
+    end if
+    if (me == tls_owner) then
+       tls_cache(key%slot) = p
+    else
+       tls_multi = .true.
+    end if
   end function th_key_set
 
   ! This thread's slot under key: null until this thread sets it.
   type(c_ptr) function th_key_get(key)
     type(th_key), intent(in) :: key
+    if (.not. tls_multi) then
+       th_key_get = tls_cache(key%slot)
+       return
+    end if
     th_key_get = pthread_getspecific(key%k)
   end function th_key_get
 
