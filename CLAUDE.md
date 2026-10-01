@@ -105,6 +105,25 @@ it in Clojure either, it is a real seam. And if ClojureScript does not
 have it at all -- `re-matcher`, `re-groups` -- it was never Clojure, it
 was the host showing through. `SEAMS.md` carries the argument.
 
+## The formal model moves with the design
+
+`model/` is the design, in ACL2 (8.7, built on SBCL at
+`~/jborden/acl2/saved_acl2`; `make model` certifies every book). The
+boundary is there now (PLAN step 27); the VM -- instruction set,
+frames, and the data structures with their big-O bounds proved by step
+counting -- follows (step 28). James, 2026-10-01: a new VM is
+designed in ACL2, not improvised in Fortran.
+
+**Every change to a design decision updates the model in the same
+commit**, before or with the code that implements it: a new boundary
+rule, an instruction, a frame field, a data structure or its cost. A
+decision recorded in PLAN with no definition and theorem in `model/`
+is unfinished, as a deviation with no DEVIATIONS entry is a bug. Code
+that does something the model does not say is a bug in one of them --
+find out which. Run `make model` before committing anything that
+touches the model; a book that does not certify means nothing gets
+staged, as a red crosscheck does.
+
 ## Never edit vendored source
 
 `upstream/clojure/**` is Clojure's source and test suite, verbatim;
