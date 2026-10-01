@@ -1015,6 +1015,9 @@
 ;; count a long iterate
 (count (take 8000 (iterate inc 0)))
 
+;; iterate is Iterate, head and tail, to class and instance?
+[(class (iterate inc 0)) (class (next (iterate inc 0))) (class (range)) (instance? clotran.host.iterate (iterate inc 0)) (instance? clotran.host.iterate (range 3))]
+
 ;; walk a long range
 (do (dorun (range 8000)) :ok)
 

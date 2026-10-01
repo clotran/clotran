@@ -7298,6 +7298,9 @@ contains
     call vs_set(vst, base + 3, tail)
     out = gc_obj(OBJ_LAZY, [gc_nil(), vs_get(vst, base + 2), vs_get(vst, base + 3)], roots)
     call gc_set_i1(out, LAZY_CONS)
+    ! an iterate cell, realised: Iterate to `class` (its tails keep the
+    ! 2 they are made with)
+    call gc_set_i2(out, 2)
     call vs_leave(vst, base)
   end function iterate_cell
 
@@ -17575,6 +17578,7 @@ contains
     case ("clotran.host.persistent_list"); yes = (t == "list" .and. gc_i2(strip_meta(v)) /= 1)
     case ("clotran.host.lazy_seq"); yes = (t == "lazy-seq" .and. gc_i2(strip_meta(v)) /= 1)
     case ("clotran.host.long_range", "clotran.host.range"); yes = (t == "lazy-seq" .and. gc_i2(strip_meta(v)) == 1)
+    case ("clotran.host.iterate"); yes = (t == "lazy-seq" .and. gc_i2(strip_meta(v)) == 2)
     ! What reduce hands to a host .reduce rather than walking as a seq:
     ! clj's LongRange, PersistentVector and PersistentList do.
     case ("clotran.host.i_reduce_init", "clotran.host.i_reduce")
@@ -18358,6 +18362,8 @@ contains
                 s = "clotran.host.long_range"
              end if
           end if
+          ! iterate's cells, head and every tail, are Iterate
+          if (gc_i2(v) == 2) s = "clotran.host.iterate"
        case (OBJ_SEQ);     s = "clotran.host.persistent_vector_chunked_seq"
        case (OBJ_CHUNKSEQ); s = "clotran.host.chunked_cons"
        case (OBJ_CHUNK);   s = "clotran.host.array_chunk"
