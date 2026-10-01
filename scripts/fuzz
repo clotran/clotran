@@ -181,7 +181,44 @@
         [1 (g/let [x (i) y (i)] (list 'apply '+ x [y 3]))]
         [1 (g/let [x (i)] (list 'if (list (list 'every-pred 'even? 'pos?) x) 1 0))]
         [1 (g/let [x (i)] (list 'if (list (list 'some-fn 'neg? 'zero?) x) 1 0))]
-        [1 (g/let [x (i)] (list 'if (list (list 'complement 'even?) x) 1 0))]]))))
+        [1 (g/let [x (i)] (list 'if (list (list 'complement 'even?) x) 1 0))]
+        ;; DESTRUCTURING beyond the basics, as ::binding-form allows:
+        ;; nested sequential forms, map forms with :keys :strs :syms,
+        ;; namespaced keys, :or and :as, and the same in fn parameters
+        [1 (g/let [x (i) y (i) s (sq)]
+             (list 'let [['p ['q 'r] '& 'more :as 'all] (list 'vector x (list 'vector y x) s)]
+                   '(+ p (or q 0) (or r 0) (count more) (count all))))]
+        [1 (g/let [x (i) y (i) z (i)]
+             (list 'let [{:keys '[a b] {:keys '[c]} :n :or {'a 7 'b 8} :as 'm} {:a x :n {:c y} :z z}]
+                   '(+ a b (or c 0) (count m))))]
+        [1 (g/let [x (i) y (i)]
+             (list 'let [{:strs '[a b] :or {'b 1}} {"a" x "b" y}] '(+ a b)))]
+        [1 (g/let [x (i) y (i)]
+             (list 'let [{:syms '[a b]} {'(quote a) x '(quote b) y}] '(- a b)))]
+        [1 (g/let [x (i) y (i)]
+             (list 'let [{:fz/keys '[a b] :or {'b 2}} {:fz/a x :fz/b y}] '(* a b)))]
+        [1 (g/let [x (i) y (i) s (sq)]
+             (list (list 'fn '[[u v] {:keys [w] :or {w 3}} & more] '(+ (or u 0) (or v 0) w (count more)))
+                   (list 'vector x y) {:w y} s x))]
+        [1 (g/let [x (i) s (sq)]
+             (list 'reduce (list 'fn '[acc [k v]] '(+ acc (* k v))) 0 (list 'map-indexed 'vector (list 'take 5 (list 'concat s (list 'list x))))))]
+        [1 (g/let [s (sq)] (list 'count (list 'for [['i 'v] (list 'map-indexed 'vector s) :let '[w (* i v)] :when '(even? w)] 'w)))]
+        ;; RECURSION THAT IS NOT A LOOP: about 2000 frames deep
+        [1 (g/let [x (i)] (list (list 'fn 'f '[n] '(if (zero? n) 0 (inc (f (dec n))))) (list '+ 1500 (list 'mod x 500))))]
+        [1 (g/let [x (i)] (list 'letfn '[(f [n] (if (pos? n) (g (dec n)) 0)) (g [n] (if (pos? n) (+ 1 (f (dec n))) 1))] (list 'f (list '+ 1000 (list 'mod x 900)))))]
+        ;; try / catch / finally, nested, with a side effect in finally
+        [1 (g/let [x (i) y (i)]
+             (list 'let '[at (atom 0)]
+                   (list '+ (list 'try (list 'try (list 'if (list 'odd? x) (list 'throw (list 'ex-info "in" {:v y})) x)
+                                             (list 'finally '(swap! at inc)))
+                                  (list 'catch 'clotran.host.exception_info 'e (list '+ 100 (list ':v (list 'ex-data 'e)))))
+                         '@at)))]
+        [1 (g/let [x (i)]
+             (list 'try (list 'nth [] x) (list 'catch 'clotran.host.index_out_of_bounds_exception 'e -1) (list 'catch 'clotran.host.exception 'e -2)))]
+        ;; interop on strings, as Clojure writes it
+        [1 (g/let [st (lazy #(g-str env (dec d)))] (list '.length st))]
+        [1 (g/let [st (lazy #(g-str env (dec d)))] (list '.indexOf st "a"))]
+        [1 (g/let [x (i)] (list 'clotran.host.math/abs x))]]))))
 
 (defn g-seq [env d]
   (if (<= d 0)
@@ -229,7 +266,19 @@
         [1 (g/let [s (sq) n k] (list 'take n (list 'cycle (list 'cons 1 s))))]
         [1 (g/let [s (sq) n k] (list 'take n (list 'distinct (list 'concat s s))))]
         [1 (g/let [s (sq)] (list 'keep (list 'fn '[v] '(when (odd? v) (* v v))) s))]
-        [1 (g/let [s (sq)] (list 'map-indexed (list 'fn '[i v] '(- v i)) s))]]))))
+        [1 (g/let [s (sq)] (list 'map-indexed (list 'fn '[i v] '(- v i)) s))]
+        ;; LAZY EDGES: lazy-cat, empty lazy seqs, cycle of nothing, iterate
+        ;; under take-while, repeatedly, nested lazy maps, rest of rest
+        [1 (g/let [s (sq) t (sq)] (list 'lazy-cat s t))]
+        [1 (g/let [s (sq)] (list 'concat (list 'lazy-seq nil) s (list 'lazy-seq (list 'seq []))))]
+        [1 (g/let [n k] (list 'take n (list 'cycle [])))]
+        [1 (g/let [x (i)] (list 'take-while '(fn [v] (< v 30)) (list 'iterate '(fn [v] (+ v 3)) x)))]
+        [1 (g/let [n k x (i)] (list 'repeatedly n (list 'constantly x)))]
+        [1 (g/let [s (sq)] (list 'map 'inc (list 'map 'dec (list 'map 'inc s))))]
+        [1 (g/let [s (sq)] (list 'rest (list 'rest (list 'rest s))))]
+        [1 (g/let [s (sq)] (list 'take 3 (list 'drop 1 (list 'cycle (list 'cons 0 s)))))]
+        [1 (g/let [s (sq)] (list 'seq (list 'doall (list 'filter 'odd? s))))]
+        [1 (g/let [s (sq)] (list 'sequence (list 'map-indexed 'vector s)))]]))))
 
 (defn g-bool [env d]
   (let [i #(lazy (fn [] (g-int env (max 0 (dec d))))) sq #(lazy (fn [] (g-seq env (max 0 (dec d)))))
