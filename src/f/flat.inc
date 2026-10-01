@@ -780,6 +780,26 @@
     if (self >= 0) call reg_set(fr, self, fn)
   end function ct_frame
 
+  ! ct_frame's work onto registers on the stack, slots rb+1..: the
+  ! captures and the fn's own name; the parameters are the caller's
+  subroutine ct_stack_frame(vst, fn, ct, rb)
+    type(gc_stack), pointer, intent(in) :: vst
+    type(gc_value), intent(in) :: fn, ct
+    integer, intent(in) :: rb
+    type(gc_value) :: caps
+    integer :: i, ncap, cb, self
+    ncap = ct_int(ct, 3)
+    if (ncap > 0) then
+       caps = gc_slot(fn, 2)
+       cb = 5 + 4 * (ct_int(ct, 4) + 1)
+       do i = 0, ncap - 1
+          vst%vstack(rb + ct_int(ct, cb + i) + 1) = gc_reg(caps, i + 1)
+       end do
+    end if
+    self = ct_int(ct, 2)
+    if (self >= 0) vst%vstack(rb + self + 1) = fn
+  end subroutine ct_stack_frame
+
   ! The body table position p runs: flat unless CLOTRAN_FLAT=0
   function ct_body(ct, p) result(body)
     type(gc_value), intent(in) :: ct
@@ -796,12 +816,26 @@
     type(gc_value), intent(in) :: fr
     integer, intent(in) :: r
     type(gc_value) :: v
+    type(gc_stack), pointer :: vst
+    if (fr%tag == GCT_SFRAME) then
+       ! the stack of the context running the body (flat_run's tctx%stk)
+       vst => ctx_self_stack()
+       v = vst%vstack(fr%ref + r + 1)
+       return
+    end if
     v = vec_store(vec_pool(fr%ref)%off + r)
   end function reg_get
 
   subroutine reg_set(fr, r, v)
     type(gc_value), intent(in) :: fr, v
     integer, intent(in) :: r
+    type(gc_stack), pointer :: vst
+    if (fr%tag == GCT_SFRAME) then
+       ! the stack of the context running the body (flat_run's tctx%stk)
+       vst => ctx_self_stack()
+       vst%vstack(fr%ref + r + 1) = v
+       return
+    end if
     vec_store(vec_pool(fr%ref)%off + r) = v
     if (v%ref /= 0) then
        if (vec_mark(fr%ref) .and. .not. vec_rem(fr%ref)) call gc_reg_barrier(fr, v)
@@ -823,7 +857,7 @@
     type(gc_value), intent(inout) :: val
     type(gc_stack), pointer :: vst
     type(gc_value) :: nd, code, consts, fr, v, fnv, argv, body, newframe, wb, ar
-    integer :: b, ks, pc, j, n, start, w(FW), id, cb, kb
+    integer :: b, ks, pc, j, n, start, w(FW), id, cb, kb, rb
     logical :: ok, spare, scalar, done
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1
@@ -850,6 +884,14 @@
     cb = vec_pool(code%ref)%off - 1
     kb = vec_pool(consts%ref)%off - 1
     fr = vs_get(vst, b + 2)
+    ! THE REGISTERS ON THE STACK (PLAN 26.2): a frame made on the heap --
+    ! by a caller that is not this executor -- is copied onto the value
+    ! stack once, on the body's first entry, and the frame that stays in
+    ! slot 2 says where; they go when the frame finishes (k_finish)
+    ! (k_push did it: there the registers go right above the record, so
+    ! they leave with it and take nothing of the caller's with them)
+    if (fr%tag /= GCT_SFRAME) error stop "clotran: a flat body entered with its frame not on the stack"
+    rb = fr%ref
     ! a fresh entry: k_push does not reset aux
     if (tctx%kst(ks)%pc == 0) tctx%kst(ks)%aux = 0
     if (tctx%kst(ks)%aux == -1) then
@@ -868,7 +910,7 @@
        ! an interpreted callee answered
        call give_frame(vs_get(vst, b + 4))
        call vs_set(vst, b + 4, gc_nil())
-       call reg_set(fr, tctx%kst(ks)%aux - 1, val)
+       vst%vstack(rb + tctx%kst(ks)%aux - 1 + 1) = val
        tctx%kst(ks)%aux = 0
     end if
     ! the loop's value slot held that answer; a builtin walking a seq
@@ -882,17 +924,17 @@
        w = int(vec_store(cb + pc : cb + pc + FW - 1)%ival)
        select case (w(1))
        case (F_CONST)
-          call reg_set(fr, w(2), vec_store(kb + w(3) + 1))
+          vst%vstack(rb + w(2) + 1) = vec_store(kb + w(3) + 1)
        case (F_NIL)
-          call reg_set(fr, w(2), gc_nil())
+          vst%vstack(rb + w(2) + 1) = gc_nil()
        case (F_MOVE)
-          call reg_set(fr, w(2), reg_get(fr, w(3)))
+          vst%vstack(rb + w(2) + 1) = vst%vstack(rb + w(3) + 1)
        case (F_MOVEC)
-          call reg_set(fr, w(2), reg_get(fr, w(3)))
-          call reg_set(fr, w(3), gc_nil())
+          vst%vstack(rb + w(2) + 1) = vst%vstack(rb + w(3) + 1)
+          vst%vstack(rb + w(3) + 1) = gc_nil()
        case (F_VAR)
           v = var_deref(vec_store(kb + w(3) + 1), [consts])
-          call reg_set(fr, w(2), v)
+          vst%vstack(rb + w(2) + 1) = v
        case (F_DLVAR)
           ! a direct-linked head, as exec.inc's N_CALL reads one
           v = vec_store(kb + w(3) + 1)
@@ -903,14 +945,14 @@
                 if (gc_kind(fnv) == OBJ_COMPILED) call gc_set_slot(v, 3, fnv)
                 call gc_set_slot(v, 5, gc_int(int(link_epoch, gc_ip)))
              end if
-             call reg_set(fr, w(2), gc_slot(v, 3))
+             vst%vstack(rb + w(2) + 1) = gc_slot(v, 3)
           else
              fnv = var_deref(gc_slot(v, 2), [consts])
-             call reg_set(fr, w(2), fnv)
+             vst%vstack(rb + w(2) + 1) = fnv
           end if
        case (F_JMPF)
-          v = reg_get(fr, w(2))
-          call reg_set(fr, w(2), gc_nil())
+          v = vst%vstack(rb + w(2) + 1)
+          vst%vstack(rb + w(2) + 1) = gc_nil()
           if (.not. truthy(v)) then
              pc = w(3)
              cycle
@@ -919,8 +961,8 @@
           pc = w(2)
           cycle
        case (F_RET)
-          val = reg_get(fr, w(2))
-          call reg_set(fr, w(2), gc_nil())
+          val = vst%vstack(rb + w(2) + 1)
+          vst%vstack(rb + w(2) + 1) = gc_nil()
           call k_finish(val, tctx)
           ! a flat caller waiting on this answer takes it here
           if (flat_top(tctx, kbot)) then
@@ -929,8 +971,8 @@
           return
        case (F_RECUR)
           do j = 0, w(3) - 1
-             call reg_set(fr, w(2) + j, reg_get(fr, w(4) + j))
-             call reg_set(fr, w(4) + j, gc_nil())
+             vst%vstack(rb + w(2) + j + 1) = vst%vstack(rb + w(4) + j + 1)
+             vst%vstack(rb + w(4) + j + 1) = gc_nil()
           end do
           ! a SAFEPOINT per turn, as the run loop has per step: a loop
           ! that allocates nothing still stops for a collection
@@ -939,22 +981,22 @@
           cycle
        case (F_FN)
           v = make_closure_from(vec_store(kb + w(3) + 1), fr, [nd])
-          call reg_set(fr, w(2), v)
+          vst%vstack(rb + w(2) + 1) = v
        case (F_LAZY)
           v = make_closure_from(vec_store(kb + w(3) + 1), fr, [nd])
           call vs_set(vst, b + 3, v)
           v = gc_obj(OBJ_LAZY, [vs_get(vst, b + 3), gc_nil(), gc_nil()], [vs_get(vst, b + 3)])
           call gc_set_i1(v, LAZY_PENDING)
           call vs_set(vst, b + 3, gc_nil())
-          call reg_set(fr, w(2), v)
+          vst%vstack(rb + w(2) + 1) = v
        case (F_COLL)
           n = w(4)
           argv = gcv_build(n, [nd])
           call vs_set(vst, b + 6, argv)
           do j = 0, n - 1
-             argv = gcv_put(vs_get(vst, b + 6), j, reg_get(fr, w(3) + j), [nd])
+             argv = gcv_put(vs_get(vst, b + 6), j, vst%vstack(rb + w(3) + j + 1), [nd])
              call vs_set(vst, b + 6, argv)
-             call reg_set(fr, w(3) + j, gc_nil())
+             vst%vstack(rb + w(3) + j + 1) = gc_nil()
           end do
           select case (w(5))
           case (N_VECTOR); v = vs_get(vst, b + 6)
@@ -963,10 +1005,10 @@
           end select
           call vs_set(vst, b + 6, gc_nil())
           if (tctx%has_error) exit
-          call reg_set(fr, w(2), v)
+          vst%vstack(rb + w(2) + 1) = v
        case (F_THROW)
-          v = reg_get(fr, w(2))
-          call reg_set(fr, w(2), gc_nil())
+          v = vst%vstack(rb + w(2) + 1)
+          vst%vstack(rb + w(2) + 1) = gc_nil()
           call set_thrown(v)
           tctx%has_error = .true.
           block
@@ -978,7 +1020,7 @@
        case (F_EVAL)
           v = exec(vec_store(kb + w(3) + 1), fr)
           if (tctx%has_error) exit
-          call reg_set(fr, w(2), v)
+          vst%vstack(rb + w(2) + 1) = v
        case (F_CALL)
           ! w: F_CALL d f a n site
           n = w(5)
@@ -1000,12 +1042,12 @@
              end if
              call vs_set(vst, b + 3, gc_nil())
              if (tctx%has_error) exit
-             call reg_set(fr, w(2), v)
+             vst%vstack(rb + w(2) + 1) = v
              pc = pc + FW
              cycle
           end if
-          v = reg_get(fr, w(3))
-          call reg_set(fr, w(3), gc_nil())
+          v = vst%vstack(rb + w(3) + 1)
+          vst%vstack(rb + w(3) + 1) = gc_nil()
           fnv = strip_meta(v)
           if (gcn_is_var(fnv)) fnv = gcn_var_value(fnv)
           call vs_set(vst, b + 3, fnv)
@@ -1013,17 +1055,17 @@
           ! lookup, else coll_get -- from the register, where the road
           ! through apply built an argument vector first
           if (fnv%tag == GCT_KEY .and. n == 1) then
-             v = reg_get(fr, w(4))
+             v = vst%vstack(rb + w(4) + 1)
              argv = strip_meta(v)
              ok = .false.
              if (gc_kind(argv) == OBJ_INST) then
                 newframe = inst_lookup(argv, fnv, .false., gc_nil(), ok)
              end if
              if (.not. ok) newframe = coll_get(v, fnv)
-             call reg_set(fr, w(4), gc_nil())
+             vst%vstack(rb + w(4) + 1) = gc_nil()
              call vs_set(vst, b + 3, gc_nil())
              if (tctx%has_error) exit
-             call reg_set(fr, w(2), newframe)
+             vst%vstack(rb + w(2) + 1) = newframe
              pc = pc + FW
              cycle
           end if
@@ -1044,38 +1086,38 @@
                          ! builtin head's are (F_CALLB): nothing to fail
                          if (n >= 1 .and. n <= 2) then
                             argv = gc_nil()
-                            if (n == 2) argv = reg_get(fr, w(4) + 1)
-                            if (flat_int_op(gc_i1(wb), n, reg_get(fr, w(4)), argv, newframe)) then
-                               call reg_set(fr, w(4), gc_nil())
-                               if (n == 2) call reg_set(fr, w(4) + 1, gc_nil())
+                            if (n == 2) argv = vst%vstack(rb + w(4) + 1 + 1)
+                            if (flat_int_op(gc_i1(wb), n, vst%vstack(rb + w(4) + 1), argv, newframe)) then
+                               vst%vstack(rb + w(4) + 1) = gc_nil()
+                               if (n == 2) vst%vstack(rb + w(4) + 1 + 1) = gc_nil()
                                call vs_set(vst, b + 3, gc_nil())
-                               call reg_set(fr, w(2), newframe)
+                               vst%vstack(rb + w(2) + 1) = newframe
                                pc = pc + FW
                                cycle
                             end if
                          end if
                          if (n == 1) then
-                            if (flat_seq_op(gc_i1(wb), reg_get(fr, w(4)), newframe)) then
-                               call reg_set(fr, w(4), gc_nil())
+                            if (flat_seq_op(gc_i1(wb), vst%vstack(rb + w(4) + 1), newframe)) then
+                               vst%vstack(rb + w(4) + 1) = gc_nil()
                                call vs_set(vst, b + 3, gc_nil())
-                               call reg_set(fr, w(2), newframe)
+                               vst%vstack(rb + w(2) + 1) = newframe
                                pc = pc + FW
                                cycle
                             end if
-                            newframe = flat_force_target(gc_i1(wb), reg_get(fr, w(4)))
+                            newframe = flat_force_target(gc_i1(wb), vst%vstack(rb + w(4) + 1))
                             if (newframe%tag /= GCT_NIL) then
                                ! the call runs again once the cell is
                                ! settled: its argument register is still
                                ! set, and its head goes back into its own
                                fnv = vs_get(vst, b + 3)
-                               call reg_set(fr, w(3), fnv)
+                               vst%vstack(rb + w(3) + 1) = fnv
                                if (flat_force(newframe, w(6))) then
                                   if (tctx%has_error) exit
                                   if (step_at /= 0) call step_check()
                                   if (flat_top(tctx, kbot)) cycle outer
                                   return
                                end if
-                               call reg_set(fr, w(3), gc_nil())
+                               vst%vstack(rb + w(3) + 1) = gc_nil()
                             end if
                          end if
                          fnv = wb
@@ -1083,23 +1125,34 @@
                          pc = pc + FW
                          cycle
                       end if
+                      ! THE CALLEE'S REGISTERS ON THE STACK (PLAN 26.2): no heap
+                      ! frame -- pushed, filled with its captures, its own name
+                      ! and the arguments, which leave this frame's registers
                       call vs_set(vst, b + 6, ar)
-                      newframe = ct_frame(vs_get(vst, b + 3), ar, [vs_get(vst, b + 6)])
-                      call vs_set(vst, b + 4, newframe)
-                      do id = 0, n - 1
-                         call reg_set(newframe, start + id, reg_get(fr, w(4) + id))
-                         call reg_set(fr, w(4) + id, gc_nil())
-                      end do
-                      body = ct_body(vs_get(vst, b + 6), j)
-                      call vs_set(vst, b + 6, gc_nil())
+                      body = ct_body(ar, j)
                       call push_frame(tctx, vs_get(vst, b + 3), w(6))
                       if (tctx%has_error) exit
                       tctx%kst(ks)%pc = pc + FW
                       tctx%kst(ks)%aux = w(2) + 1
                       fnv = vs_get(vst, b + 3)
                       call vs_set(vst, b + 3, gc_nil())
-                      call k_push(body, vs_get(vst, b + 4), ior(KF_FNBODY, KF_RESTART), body, tctx)
+                      call vs_set(vst, b + 4, gc_nil())
+                      call k_push(body, gc_nil(), ior(KF_FNBODY, KF_RESTART), body, tctx)
+                      if (tctx%has_error) exit
                       call vs_set(vst, tctx%kst(tctx%ksp)%base + 7, fnv)
+                      block
+                        integer :: rb2, nr
+                        ar = vs_get(vst, b + 6)
+                        nr = ct_int(ar, 1)
+                        rb2 = vs_enter(vst, nr)
+                        call ct_stack_frame(vst, fnv, ar, rb2)
+                        do id = 0, n - 1
+                           vst%vstack(rb2 + start + id + 1) = vst%vstack(rb + w(4) + id + 1)
+                           vst%vstack(rb + w(4) + id + 1) = gc_nil()
+                        end do
+                        call vs_set(vst, tctx%kst(tctx%ksp)%base + 2, gc_value(GCT_SFRAME, rb2, int(nr, gc_ip)))
+                      end block
+                      call vs_set(vst, b + 6, gc_nil())
                       if (step_at /= 0) call step_check()
                       if (flat_top(tctx, kbot)) cycle outer
                       return
@@ -1124,8 +1177,8 @@
                 newframe = new_frame(int_of(gcv_nth(gc_slot(fnv, 1), 3)), [vs_get(vst, b + 3)])
                 call vs_set(vst, b + 4, newframe)
                 do j = 0, n - 1
-                   call frame_set(newframe, start + j, reg_get(fr, w(4) + j))
-                   call reg_set(fr, w(4) + j, gc_nil())
+                   call frame_set(newframe, start + j, vst%vstack(rb + w(4) + j + 1))
+                   vst%vstack(rb + w(4) + j + 1) = gc_nil()
                 end do
                 call push_frame(tctx, vs_get(vst, b + 3), w(6))
                 if (tctx%has_error) exit
@@ -1134,7 +1187,7 @@
              else
                 argv = flat_args(fr, w(4), n, b)
                 do j = 0, n - 1
-                   call reg_set(fr, w(4) + j, gc_nil())
+                   vst%vstack(rb + w(4) + j + 1) = gc_nil()
                 end do
                 call push_frame(tctx, vs_get(vst, b + 3), w(6))
                 if (tctx%has_error) exit
@@ -1159,7 +1212,7 @@
              ! a multimethod -- through apply, which may yield
              argv = flat_args(fr, w(4), n, b)
              do j = 0, n - 1
-                call reg_set(fr, w(4) + j, gc_nil())
+                vst%vstack(rb + w(4) + j + 1) = gc_nil()
              end do
              tctx%pending_site = w(6)
              v = apply(vs_get(vst, b + 3), argv)
@@ -1170,7 +1223,7 @@
              end if
              call vs_set(vst, b + 3, gc_nil())
              if (tctx%has_error) exit
-             call reg_set(fr, w(2), v)
+             vst%vstack(rb + w(2) + 1) = v
           end if
        case (F_CALLB)
           ! w: F_CALLB d k a n site -- the head a builtin constant, known
@@ -1181,17 +1234,17 @@
           tctx%kst(ks)%pc = pc
           fnv = vec_store(kb + w(3) + 1)
           if (n >= 1 .and. n <= 2) then
-             v = reg_get(fr, w(7))
+             v = vst%vstack(rb + w(7) + 1)
              argv = gc_nil()
-             if (n == 2) argv = reg_get(fr, w(8))
+             if (n == 2) argv = vst%vstack(rb + w(8) + 1)
              done = .false.
              if (n == 1) done = flat_seq_op(gc_i1(fnv), v, newframe)
              if (.not. done) done = flat_int_op(gc_i1(fnv), n, v, argv, newframe)
              if (done) then
                 ! a temporary is cleared; a local read in place is not
-                if (w(7) == w(4)) call reg_set(fr, w(4), gc_nil())
-                if (n == 2 .and. w(8) == w(4) + 1) call reg_set(fr, w(4) + 1, gc_nil())
-                call reg_set(fr, w(2), newframe)
+                if (w(7) == w(4)) vst%vstack(rb + w(4) + 1) = gc_nil()
+                if (n == 2 .and. w(8) == w(4) + 1) vst%vstack(rb + w(4) + 1 + 1) = gc_nil()
+                vst%vstack(rb + w(2) + 1) = newframe
                 pc = pc + FW
                 cycle
              end if
@@ -1208,8 +1261,8 @@
                 end if
              end if
              ! the general road wants its arguments in a row
-             if (w(7) /= w(4)) call reg_set(fr, w(4), v)
-             if (n == 2 .and. w(8) /= w(4) + 1) call reg_set(fr, w(4) + 1, argv)
+             if (w(7) /= w(4)) vst%vstack(rb + w(4) + 1) = v
+             if (n == 2 .and. w(8) /= w(4) + 1) vst%vstack(rb + w(4) + 1 + 1) = argv
           end if
           wb = gc_nil()
           call vs_set(vst, b + 3, fnv)
@@ -1219,16 +1272,16 @@
           argv = flat_args(fr, w(4), w(5), b)
           call vs_set(vst, b + 6, argv)
           do j = 0, w(5) - 1
-             call reg_set(fr, w(4) + j, gc_nil())
+             vst%vstack(rb + w(4) + j + 1) = gc_nil()
           end do
           v = new_cached(vec_store(kb + w(3) + 1), vs_get(vst, b + 6))
           call vs_set(vst, b + 6, gc_nil())
           if (tctx%has_error) exit
-          call reg_set(fr, w(2), v)
+          vst%vstack(rb + w(2) + 1) = v
        case (F_CASE)
           ! w: F_CASE t k kb m kl
-          v = reg_get(fr, w(2))
-          call reg_set(fr, w(2), gc_nil())
+          v = vst%vstack(rb + w(2) + 1)
+          vst%vstack(rb + w(2) + 1) = gc_nil()
           body = case_branch(vec_store(kb + w(3) + 1), v)
           if (tctx%has_error) exit
           done = .false.
@@ -1248,33 +1301,33 @@
           cycle
        case (F_TRY)
           ! w: F_TRY sv L
-          call reg_set(fr, w(2), gc_int(int(tctx%kst(ks)%mode, gc_ip)))
-          call reg_set(fr, w(2) + 1, gc_int(int(tctx%fstack_top, gc_ip)))
+          vst%vstack(rb + w(2) + 1) = gc_int(int(tctx%kst(ks)%mode, gc_ip))
+          vst%vstack(rb + w(2) + 1 + 1) = gc_int(int(tctx%fstack_top, gc_ip))
           tctx%kst(ks)%mode = w(3)
        case (F_ENDTRY)
-          v = reg_get(fr, w(2))
+          v = vst%vstack(rb + w(2) + 1)
           tctx%kst(ks)%mode = int(v%ival)
-          call reg_set(fr, w(2), gc_nil())
-          call reg_set(fr, w(2) + 1, gc_nil())
+          vst%vstack(rb + w(2) + 1) = gc_nil()
+          vst%vstack(rb + w(2) + 1 + 1) = gc_nil()
        case (F_HANDLER)
           ! landed here by flat_catch, which did the work
        case (F_CATCH)
           ! w: F_CATCH ex kcls slot Lnext
-          if (.not. catch_matches(vec_store(kb + w(3) + 1), reg_get(fr, w(2)), gc_nil())) then
+          if (.not. catch_matches(vec_store(kb + w(3) + 1), vst%vstack(rb + w(2) + 1), gc_nil())) then
              if (tctx%has_error) exit
              pc = w(5)
              cycle
           end if
-          call reg_set(fr, w(4), reg_get(fr, w(2)))
-          call reg_set(fr, w(2), gc_nil())
-          call reg_set(fr, w(2) + 1, gc_nil())
+          vst%vstack(rb + w(4) + 1) = vst%vstack(rb + w(2) + 1)
+          vst%vstack(rb + w(2) + 1) = gc_nil()
+          vst%vstack(rb + w(2) + 1 + 1) = gc_nil()
        case (F_RETHROW)
           ! the exception no catch took, on its way as it was: its
           ! message and trace are the ones it was raised with
-          v = reg_get(fr, w(2))
-          argv = reg_get(fr, w(3))
-          call reg_set(fr, w(2), gc_nil())
-          call reg_set(fr, w(3), gc_nil())
+          v = vst%vstack(rb + w(2) + 1)
+          argv = vst%vstack(rb + w(3) + 1)
+          vst%vstack(rb + w(2) + 1) = gc_nil()
+          vst%vstack(rb + w(3) + 1) = gc_nil()
           call set_thrown(v)
           tctx%has_error = .true.
           tctx%last_error = ""
@@ -1308,7 +1361,7 @@
              end if
              call vs_set(vst, b + 3, gc_nil())
              if (tctx%has_error) exit
-             call reg_set(fr, w(2), v)
+             vst%vstack(rb + w(2) + 1) = v
              pc = pc + FW
              cycle
           end if
@@ -1319,7 +1372,7 @@
           ! a Var take dispatch's road.
           if (tctx%kst(ks)%i /= -1 .and. w(6) == 1) then
              fnv = gc_slot(v, 3)
-             argv = strip_meta(reg_get(fr, w(4)))
+             argv = strip_meta(vst%vstack(rb + w(4) + 1))
              if (gc_kind(fnv) == OBJ_BUILTIN .and. argv%tag /= GCT_NIL) then
                 if (gc_i1(fnv) /= B_RTFN .and. gc_i1(fnv) /= B_UUIDFN .and. &
                      gc_kind(argv) /= OBJ_INST .and. .not. gcn_is_var(argv)) then
@@ -1340,14 +1393,14 @@
              argv = vs_get(vst, b + 6)
           else
              if (w(6) == 1) then
-                call vs_set(vst, b + 3, reg_get(fr, w(4)))
-                call reg_set(fr, w(4), gc_nil())
+                call vs_set(vst, b + 3, vst%vstack(rb + w(4) + 1))
+                vst%vstack(rb + w(4) + 1) = gc_nil()
              else
                 call vs_set(vst, b + 3, gc_slot(v, 3))
              end if
              argv = flat_args(fr, w(4) + w(6), w(5), b)
              do j = 0, w(5) - 1
-                call reg_set(fr, w(4) + w(6) + j, gc_nil())
+                vst%vstack(rb + w(4) + w(6) + j + 1) = gc_nil()
              end do
           end if
           call vs_set(vst, b + 6, gc_nil())
@@ -1384,7 +1437,7 @@
              if (flat_top(tctx, kbot)) cycle outer
              return
           end if
-          call reg_set(fr, w(2), val)
+          vst%vstack(rb + w(2) + 1) = val
           val = gc_nil()
        case default
           call raise_class("clotran.host.illegal_state_exception", "flat: bad instruction", [gc_value ::])
@@ -1412,18 +1465,18 @@
       if (scalar) then
          argv = scratch_args(n)
          do j = 1, n
-            call gc_vec_set(gc_slot(argv, 1), j, reg_get(fr, w(4) + j - 1))
+            call gc_vec_set(gc_slot(argv, 1), j, vst%vstack(rb + w(4) + j - 1 + 1))
          end do
       else if (spare) then
          argv = args_take(n, [nd])
          do j = 1, n
-            call gc_vec_set(gc_slot(argv, 1), j, reg_get(fr, w(4) + j - 1))
+            call gc_vec_set(gc_slot(argv, 1), j, vst%vstack(rb + w(4) + j - 1 + 1))
          end do
       else
          argv = flat_args(fr, w(4), n, b)
       end if
       do j = 0, n - 1
-         call reg_set(fr, w(4) + j, gc_nil())
+         vst%vstack(rb + w(4) + j + 1) = gc_nil()
       end do
       if (wb%tag /= GCT_NIL) then
          call push_frame(tctx, vs_get(vst, b + 3), site)
@@ -1449,7 +1502,7 @@
       if (wb%tag /= GCT_NIL) call pop_frame(tctx)
       call vs_set(vst, b + 3, gc_nil())
       if (tctx%has_error) return
-      call reg_set(fr, w(2), v)
+      vst%vstack(rb + w(2) + 1) = v
       go = .true.
     end function flat_builtin
 

@@ -65,12 +65,36 @@
     type(gc_value), intent(in) :: fr
     integer, intent(in) :: slot
     type(gc_value) :: v
+    type(gc_stack), pointer :: vst
+    if (fr%tag == GCT_SFRAME) then
+       ! the stack of the context running the body (flat_run's tctx%stk)
+       vst => ctx_self_stack()
+       v = vst%vstack(fr%ref + slot + 1)
+       return
+    end if
     v = gc_vec_get(fr, slot + 1)
   end function frame_get
+
+  ! How many slots a frame has, on the heap or on the stack
+  integer function frame_len(fr)
+    type(gc_value), intent(in) :: fr
+    if (fr%tag == GCT_SFRAME) then
+       frame_len = int(fr%ival)
+    else
+       frame_len = gc_vec_len(fr)
+    end if
+  end function frame_len
 
   subroutine frame_set(fr, slot, v)
     type(gc_value), intent(in) :: fr, v
     integer, intent(in) :: slot
+    type(gc_stack), pointer :: vst
+    if (fr%tag == GCT_SFRAME) then
+       ! the stack of the context running the body (flat_run's tctx%stk)
+       vst => ctx_self_stack()
+       vst%vstack(fr%ref + slot + 1) = v
+       return
+    end if
     call gc_vec_set(fr, slot + 1, v)
   end subroutine frame_set
 
@@ -199,7 +223,7 @@
     tctx => ctx_self()
     vst => tctx%stk
     out = gc_nil()
-    base = vs_enter(vst, 1)
+    base = vs_enter(vst, 2)
     call vs_set(vst, base + 1, fn)
     call push_frame(tctx, fn, tctx%pending_site)
     tctx%pending_site = 0
@@ -209,8 +233,12 @@
        ok = bind_closure(vs_get(vst, base + 1), argv, frame, body)
     end if
     if (ok) then
+       ! rooted here: the body runs on a copy of it on the stack (k_push),
+       ! and an unrooted frame collected under the call would go back to
+       ! the pool still in use by whatever reused it
+       call vs_set(vst, base + 2, frame)
        out = run(body, frame, ior(KF_FNBODY, KF_RESTART), body, vs_get(vst, base + 1))
-       call give_frame(frame)
+       call give_frame(vs_get(vst, base + 2))
     else
        call pop_frame(tctx)
     end if
@@ -556,7 +584,7 @@
                 if (slot < lo .or. slot >= hi) then
                    if (slot /= int_of(gcv_nth(tmpl, 4)) .and. .not. captured_slot(tmpl, slot)) cycle
                 end if
-                if (slot >= 0 .and. slot < gc_vec_len(vs_get(vst, b + 2))) then
+                if (slot >= 0 .and. slot < frame_len(vs_get(vst, b + 2))) then
                    env = gca_assoc(vs_get(vst, base + 3), vls(j), frame_get(vs_get(vst, b + 2), slot), &
                         [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
                    call vs_set(vst, base + 3, env)
@@ -949,7 +977,7 @@
     integer, intent(in) :: flags
     type(eval_ctx), pointer, intent(in), optional :: ctx
     type(kframe), allocatable :: bigger(:)
-    integer :: n, b
+    integer :: n, b, nr, j
     if (present(ctx)) then
        tctx => ctx
     else
@@ -966,6 +994,45 @@
     if (k_limit == 0) call read_frame_limit()
     if (tctx%ksp >= k_limit) then
        call raise_class("clotran.host.stack_overflow_error", "stack overflow", [gc_value ::])
+       return
+    end if
+    ! A FLAT BODY's registers live on the stack right above its record
+    ! (PLAN 26.2): a frame made on the heap is copied there now, and the
+    ! record's frame slot names them; they leave with the record. A
+    ! top-level form's too: its record is the first a run pushes, below
+    ! the run loop's own slot, so its registers go here or nowhere.
+    nr = -1
+    if (gc_kind(nd) == OBJ_AST) then
+       if (gc_i1(nd) == N_TOP) then
+          ! a fresh frame of its own, whatever it was handed, as before
+          nr = gc_i2(nd)
+       else if (gc_i1(nd) == N_FLAT .and. frame%tag == GCT_VEC) then
+          nr = gc_vec_len(frame)
+       end if
+    end if
+    if (nr >= 0) then
+       b = vs_enter(vst, K_SLOTS + nr)
+       if (frame%tag == GCT_VEC .and. gc_i1(nd) == N_FLAT) then
+          ! moved, not copied: the heap frame stays rooted by whoever
+          ! made it until it goes back to the pool, and must not hold
+          ! the arguments -- a seq's head -- while the body runs
+          do j = 1, min(nr, gc_vec_len(frame))
+             vst%vstack(b + K_SLOTS + j) = gc_vec_get(frame, j)
+             vec_store(vec_pool(frame%ref)%off + j - 1) = gc_nil()
+          end do
+       end if
+       tctx%ksp = tctx%ksp + 1
+       tctx%kst(tctx%ksp)%base = b
+       tctx%kst(tctx%ksp)%pc = 0
+       tctx%kst(tctx%ksp)%i = 0
+       tctx%kst(tctx%ksp)%flags = flags
+       tctx%kst(tctx%ksp)%nfr = 0
+       tctx%kst(tctx%ksp)%mode = 0
+       if (iand(flags, KF_FNBODY) /= 0) tctx%kst(tctx%ksp)%nfr = 1
+       call vs_set(vst, b + 1, nd)
+       call vs_set(vst, b + 2, gc_value(GCT_SFRAME, b + K_SLOTS, int(nr, gc_ip)))
+       call vs_set(vst, b + 5, restart)
+       gce_evals = gce_evals + 1
        return
     end if
     b = vs_enter(vst, K_SLOTS)
@@ -1550,8 +1617,12 @@
           call gc_set_i1(val, LAZY_PENDING)
           call k_finish(val, tctx)
        case (N_TOP)
-          v = new_frame(gc_i2(nd), [vs_get(vst, b + 1)])
-          call vs_set(vst, b + 2, v)
+          ! its frame is on the stack, made when it was pushed (k_push)
+          v = vs_get(vst, b + 2)
+          if (v%tag /= GCT_SFRAME) then
+             v = new_frame(gc_i2(nd), [vs_get(vst, b + 1)])
+             call vs_set(vst, b + 2, v)
+          end if
           ! its flat form when it has one (analyze_top)
           v = gc_slot(vs_get(vst, b + 1), 3)
           if (v%tag == GCT_NIL .or. .not. flat_enabled()) v = gc_slot(vs_get(vst, b + 1), 2)

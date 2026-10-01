@@ -19868,6 +19868,15 @@ contains
 
   ! This thread's context. The first call, on the main thread, makes the
   ! main context; a thread clotran did not start has none.
+  ! The running context's value stack: where a flat body's registers are
+  ! (GCT_SFRAME), which the OS thread's own stack need not be
+  function ctx_self_stack() result(s)
+    type(gc_stack), pointer :: s
+    type(eval_ctx), pointer :: c
+    c => ctx_self()
+    s => c%stk
+  end function ctx_self_stack
+
   function ctx_self() result(c)
     type(eval_ctx), pointer :: c
     type(c_ptr) :: p

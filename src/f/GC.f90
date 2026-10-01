@@ -154,6 +154,11 @@ module GC
   ! A run of values. Internal -- reached from objects, not normally
   ! held by user code directly.
   integer, parameter, public :: GCT_VEC  = 9
+  ! A FRAME ON THE STACK: a flat body's registers in the value stack of the
+  ! context running it, slots ref+1 .. ref+ival (exec.inc frame_get). An
+  ! immediate to the collector -- the stack is scanned as roots already --
+  ! and never stored anywhere that outlives its call.
+  integer, parameter, public :: GCT_SFRAME = 14
 
   ! Object kinds. Each comment says what that kind's slots hold.
   integer, parameter, public :: OBJ_CONS    = 1  ! 1=car 2=cdr
