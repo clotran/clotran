@@ -2631,8 +2631,48 @@ stays in Fortran memory, as an array does; clotran holds a handle and
 sees it as a live map -- nested objects and array components
 navigable in place, every array element inspectable; changes written
 in place by an explicit setter, as `aset` is; methods called with dot
-syntax. Ownership (who frees an object a library hands back) is the
-question this leaves.
+syntax. **Decided** (James, 2026-10-01: "that's right").
+
+8. OWNERSHIP comes from the Fortran declarations, which bind-fortran
+   reads into the manifest: a plain dummy is BORROWED for the call
+   (a pointer to a non-TARGET dummy becomes undefined on return,
+   F2018 15.5.2.4); an `allocatable, intent(out)` dummy or an
+   allocatable result is TRANSFERRED to clotran, whose collector frees
+   it; a TARGET or POINTER dummy is RETAINED -- kept alive by a
+   keep-alive link to the object that holds it (pybind11's keep_alive);
+   a pointer result is LIBRARY-OWNED: clotran holds the pointer, never
+   copies, and calls the library's destroy routine when the manifest
+   names one. Against the "Fortran lake": a registry of every object
+   that has crossed (owner, creation site, size), which the debugger
+   lists; a conservative source analysis that marks a routine that may
+   deallocate what it was given; and an AddressSanitizer debug build,
+   in which using a freed object names the routine that freed it.
+   Copying is the escape hatch for a may-free routine a library
+   documents nothing better about.
+9. EQUALITY follows Fortran's meaning in Clojure's spelling, so that
+   neither a mathematician nor a Fortran programmer meets a different
+   idea of it:
+
+   | question | Fortran | MATLAB | clotran |
+   |---|---|---|---|
+   | element by element, an array of answers | `a == b` | `a == b` | `fortran/==` |
+   | the same values, one answer | `all(a == b)`, equal shapes | `isequal` | `=` |
+   | the same object | `associated(p, q)` | `==` on handles | `identical?` |
+
+   `=` on Fortran arrays and objects compares VALUES -- a deliberate
+   departure from Clojure, whose `=` on an array is identity in clj
+   and in cljs (`extend-type default IEquiv`); a DEVIATIONS entry when
+   it lands. A derived type, which Fortran gives no `==`, is equal
+   component by component. NaN equals nothing, itself included, as
+   IEEE and Fortran say (`x == x` is false for one NaN variable; clj's
+   `(= x x)` is true only because it checks identity first). Cycles
+   through pointer components are detected. Past 10^6 elements `=`
+   warns once per call site per run ("use identical? to compare by
+   identity") and can be aborted; compiled code calls the same
+   routine. A Fortran array or object HASHES BY TYPE AND SHAPE, which
+   do not change when Fortran writes in place: as a Clojure map key it
+   is never lost (a content hash answered nil after a write), and the
+   hash costs O(rank), not O(n).
 
 Each decision becomes a definition and theorems in the model before
 the door changes, and the door's checks are then tested against the
