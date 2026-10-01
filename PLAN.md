@@ -2427,6 +2427,56 @@ and a namespace being edited interpreted), so it is the model:
   every node kind -- or stays as the fallback for what it does not,
   with that list written down.
 
+**The order changed, 2026-09-30.** After 26.2, compiled core ran the
+yardstick 2.5x SLOWER than the interpreter (3.7 s against 1.5) -- at
+HEAD too, so not 26.2's doing. Compiled code is meant to be the main
+path, so its retention and 26.5 went ahead of 26.3 and 26.4. What
+compiled core had been paying, each found by bisecting forms and
+reading the generated Fortran:
+
+- the head of the seq, held: a loop's or let's binding temporary, an
+  `if`'s test slot (`if-let` in `seq-reduce`: the whole reduce), a
+  variadic rest's temporary, never cleared; arguments left in the
+  caller's slots by an interop call (compiled `apply`'s
+  `(. f (applyTo (seq args)))`) and by the generic call path; and
+  `apply` realising the whole rest for a compiled variadic fn, where
+  `RestFn.applyTo` hands it over unrealised. Peak heap for
+  `(apply + (take 1e6 (range)))`: 4*10^6 objects, now 2.6*10^5.
+- a generational chain: a full collection promoted the cell a lazy
+  walk was on, its realisation remembered the young tail, and every
+  young collection then kept the walk's whole window alive -- 5*10^4
+  objects marked each, against 7. A full collection now ages the young
+  it finds alive.
+- `lazy-seq` bodies handed to the interpreter one element at a time
+  (the generator did not compile N_LAZY).
+
+**No formal VM; a cost model instead (2026-09-30).** Asked whether to
+define the VM formally and know its structures' costs in O-notation:
+the structures are Clojure's and their orders are known; what clotran
+pays is constant factors and allocation, which O-notation hides. So
+`scripts/cost-model` counts the objects each operation allocates per
+element -- exactly, where a time is noisy -- and `make test` fails
+when a row of `test/costs.edn` goes up (check-costs). An executable
+model of the instruction set (ACL2) can come once the machine settles.
+
+**Measured** (ms for 10^6 elements; allocations per element from the
+cost model; 26.2 is aaafe46):
+
+| | 26.2 | now |
+|---|---|---|
+| `(apply + (take n (range)))`, interpreted | 1580 | 1497 |
+| the same, compiled core | 3741 | 2024 |
+| `(dorun (range n))`, interpreted | 1300 | 432 |
+| `(dorun (range n))`, allocations | 9 | 2 |
+| `(reduce + (map inc (range n)))`, allocations | 3.25 | 2.91 |
+
+(5b92194's message says range went 8 -> 1 allocations: an integer
+division; the cost model says 9 -> 2.)
+
+What is left, by the table: a closure is 2 objects (clj: 1), a
+`lazy-seq` 3 (clj: 2), and a `take` step 6 -- 26.6's work; compiled
+calls still go through the general `gce_apply_slots` -- 26.4's.
+
 **Targets**, against the table: an interpreted call from ~110 ns to
 under 30; your form from 1752 ms to under 300 as bytecode and under
 100 compiled; the hand-built stream from 2604 ms to GHCi's and
