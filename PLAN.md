@@ -2577,18 +2577,62 @@ host behaviour and inconsistent -- `(Integer/toString 2.0)` truncates,
 `(float 1e40)` throws -- and ClojureScript has no typed parameters,
 so the language gives no rule here):
 
-1. Integer kinds: exact or throw -- an integral value in the kind's
-   range crosses; out of range throws, as `(int x)` does; a double
-   throws rather than truncating.
-2. Real kinds: an integer widens to `real64` (IEEE-rounded past 2^53);
-   `real32` rounds, and a finite value that would overflow throws.
+**Decided (James, 2026-10-01).**
+
+1. NUMBERS NEVER MIX. An integer crosses only into an integer kind,
+   and only if it lies in the kind's window (int8 -128..127, int16
+   -2^15..2^15-1, int32 -2^31..2^31-1, int64 -2^63..2^63-1, as both
+   compilers report); otherwise it throws. A real crosses only into a
+   real kind; a double into `real64` is the same bits. `1` where a
+   routine wants a real throws, saying to write `1.0` or `(double n)`
+   -- a double is exact only up to 2^53, and rounding silently is the
+   mixing rule 1 forbids. `real32` rounds; a finite value past
+   3.40282347e38 throws.
+2. No unsigned kinds: the standard has none (both compilers have one
+   behind `-funsigned`, an extension), and neither has Clojure.
 3. Logical: `true` or `false` only.
-4. Text: UTF-8 bytes, length in bytes; `character(kind=ucs4)` where a
-   manifest asks for it.
-5. Records: `defrecord` with typed fields as a `bind(C)` derived type,
-   by reference.
-6. Callbacks: a tier-A function crosses as a procedure; a VM function
-   only through a ClotranABI trampoline, which makes the caller tier B.
+4. TEXT is UTF-8 everywhere in clotran; converting is the boundary's
+   job, by the kind the manifest declares: plain `character` gets the
+   UTF-8 bytes (`len` counts bytes), `character(kind=ucs4)` one code
+   point per position. Lossless both ways for any clotran string; both
+   compilers print an emoji either way (verified).
+5. A record's field types come from BOTH the Fortran type definition
+   (bind-fortran reads it) and, where given, the Clojure hints --
+   checked against each other.
+6. DEBUGGING IS A REQUIREMENT OF THE BOUNDARY, not an add-on: every
+   frame, whatever its kind (bytecode, compiled, tier A, native), reads
+   as names to values, and that is an invariant of the VM model (step
+   28). A call through the door pushes a native frame named after the
+   routine with its arguments by name -- `pkg_call` pushes none today,
+   so a package call is missing from every trace. A tier-A debug build
+   records its locals in the same records. Fortran libraries compiled
+   with debug information are acceptable where their internals must be
+   seen. Every element of every array is inspectable on its own, under
+   the array's own subscripts.
+7. Callbacks: a tier-A function crosses as a plain procedure; any
+   other function through a trampoline, which makes its caller tier B.
+   The trampoline catches every throw (Fortran frames cannot be
+   unwound), answers the library until it returns -- through the
+   routine's abort flag where it has one -- and rethrows in Clojure.
+   Measured (2026-10-01, an embedder calling f(t,y) 10^6 times): 2.6 ns
+   per call as Fortran, 362 ns through clotran; negligible when f does
+   microseconds of work, decisive when it does a few flops, so the
+   compiler says which.
+
+**Open: records are objects.** Fortran's derived types are not
+Clojure's records: since F2003 they have type-bound procedures,
+inheritance (`extends`), polymorphism (`class(...)`) and finalizers,
+and are assigned in place -- objects. Large codes nest them, mostly
+through pointer and allocatable components (MOM6's `ocean_grid_type`,
+CP2K's `qs_environment_type`), which `bind(C)` forbids. So a copy into
+an immutable `defrecord` cannot carry real codes. The direction James
+leans (clotran is a convenience on top of Fortran): a Fortran object
+stays in Fortran memory, as an array does; clotran holds a handle and
+sees it as a live map -- nested objects and array components
+navigable in place, every array element inspectable; changes written
+in place by an explicit setter, as `aset` is; methods called with dot
+syntax. Ownership (who frees an object a library hands back) is the
+question this leaves.
 
 Each decision becomes a definition and theorems in the model before
 the door changes, and the door's checks are then tested against the
