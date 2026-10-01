@@ -51,6 +51,7 @@ module Eval
   use PersistentList
   use PersistentVector
   use Assoc
+  use PersistentArrayMap, only: gcm_is, gcm_dissoc
   use Env
   use Namespace
   use Printer
@@ -18709,6 +18710,24 @@ contains
              call gc_set_slot(gcv_nth(vs_get(vst, base + 1), 0), 1, out)
              out = gcv_nth(vs_get(vst, base + 1), 0)
           end if
+          call vs_leave(vst, base)
+          return
+       end if
+    end if
+    ! (dissoc! m k ...) on an ARRAY map: the last entry into each hole,
+    ! as TransientArrayMap.doWithout does -- not the persistent dissoc,
+    ! which keeps the order
+    if (id == B_DISSOC .and. gc_i1(t) == 1) then
+       if (gcm_is(gc_slot(t, 1))) then
+          block
+            integer :: j
+            do j = 1, n - 1
+               out = gcm_dissoc(gc_slot(gcv_nth(vs_get(vst, base + 1), 0), 1), gcv_nth(vs_get(vst, base + 1), j), &
+                    [vs_get(vst, base + 1)], swap=.true.)
+               call gc_set_slot(gcv_nth(vs_get(vst, base + 1), 0), 1, out)
+            end do
+          end block
+          out = gcv_nth(vs_get(vst, base + 1), 0)
           call vs_leave(vst, base)
           return
        end if

@@ -160,9 +160,13 @@ contains
   ! Removing the LAST entry into the hole left by the removed one,
   ! rather than shifting the tail down: a map is unordered, so the
   ! cheap move is the correct one. Clojure's own array map does this.
-  function gcm_dissoc(m, k, roots) result(out)
+  ! swap: the last entry fills the hole, as a TRANSIENT's dissoc! does
+  ! (TransientArrayMap.doWithout); without it the entries after the hole
+  ! close it up in order, as PersistentArrayMap.without does
+  function gcm_dissoc(m, k, roots, swap) result(out)
     type(gc_value), intent(in) :: m, k
     type(gc_value), intent(in) :: roots(:)
+    logical, intent(in), optional :: swap
     type(gc_value) :: out, keys, vals
     type(gc_value), allocatable :: r2(:)
     integer :: n, at
@@ -180,10 +184,26 @@ contains
 
     keys = copy_run(gc_slot(m, 1), n, n - 1, r2)
     vals = copy_run(gc_slot(m, 2), n, n - 1, append_root(r2, keys))
-    if (at /= n) then
-       call gc_vec_set(keys, at, gc_vec_get(gc_slot(m, 1), n))
-       call gc_vec_set(vals, at, gc_vec_get(gc_slot(m, 2), n))
-    end if
+    ! the entries after the hole close it up, in order, as
+    ! PersistentArrayMap.without's arraycopy does: moving the last entry
+    ! into the hole changed the map's seq order (scripts/fuzz found it)
+    block
+      integer :: i
+      logical :: sw
+      sw = .false.
+      if (present(swap)) sw = swap
+      if (sw) then
+         if (at /= n) then
+            call gc_vec_set(keys, at, gc_vec_get(gc_slot(m, 1), n))
+            call gc_vec_set(vals, at, gc_vec_get(gc_slot(m, 2), n))
+         end if
+      else
+         do i = at, n - 1
+            call gc_vec_set(keys, i, gc_vec_get(gc_slot(m, 1), i + 1))
+            call gc_vec_set(vals, i, gc_vec_get(gc_slot(m, 2), i + 1))
+         end do
+      end if
+    end block
 
     block
       type(gc_value), allocatable :: r3(:)

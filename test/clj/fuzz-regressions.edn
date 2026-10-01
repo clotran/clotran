@@ -8,4 +8,12 @@
  (+ 9223372036854775807 1)
  (- -9223372036854775807 1)
  (* 3 4)
+ ;; dissoc on an array map keeps the order (PersistentArrayMap.without);
+ ;; dissoc! on a transient one moves the last entry into the hole
+ ;; (TransientArrayMap.doWithout)
+ (pr-str (dissoc {:c 1 :b 2 :a 3 :d 4} :b))
+ (pr-str (dissoc (array-map :c 1 :b 2 :a 3 :d 4) :c :a))
+ (pr-str (keys (dissoc {:x 1 :y 2 :z 3} :x)))
+ (pr-str (persistent! (dissoc! (transient {:c 1 :b 2 :a 3 :d 4}) :b)))
+ (pr-str (persistent! (dissoc! (transient {:c 1 :b 2 :a 3 :d 4 :e 5}) :c :a)))
 ]
