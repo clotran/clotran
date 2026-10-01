@@ -12708,6 +12708,14 @@ contains
             call needle_text(gcv_nth(args, 1), s=dlt_1)
             ned = dlt_1
          end block
+         ! the empty string is found at the end, or at the from-index when
+         ! that comes first -- clj's host and ClojureScript's agree, so
+         ! (clojure.string/last-index-of "abc" "") is 3, as String.lastIndexOf
+         if (len(ned) == 0) then
+            j = u8_cpidx(hay, len(hay) + 1)
+            if (n >= 3) j = min(j, int(strip_int(gcv_nth(args, 2))))
+            out = gc_int(max(j, -1))
+         else
          hit = 0
          if (len(ned) > 0 .and. len(ned) <= len(hay)) then
             do j = 1, len(hay) - len(ned) + 1
