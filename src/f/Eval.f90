@@ -19120,6 +19120,16 @@ contains
             type(eval_ctx), pointer :: cx
             integer :: wb
             cx => ctx_self()
+            ! RT.seq of what is not seqable throws: (into {} [4]) answered {}
+            ! (scripts/fuzz found it)
+            if (.not. seqable_quiet(vs_get(vst, base + 2))) then
+               call class_name_of(vs_get(vst, base + 2), s=dlt_1)
+               call raise_class("clotran.host.illegal_argument_exception", &
+                    "Don't know how to create ISeq from: " // dlt_1, roots)
+               out = gc_nil()
+               call vs_leave(vst, base)
+               return
+            end if
             wb = vs_enter(vst, 2)
             call vs_set(vst, wb + 1, vs_get(vst, base + 1))
             walk = to_seq(vs_get(vst, base + 2), [roots, vs_get(vst, wb + 1)])
