@@ -642,7 +642,7 @@ contains
     integer(c_int), value :: dst, h, arity, namen, fr, npairs, selfslot
     character(kind=c_char), intent(in) :: name(*)
     integer(c_int), intent(in) :: pairs(*)
-    type(gc_value) :: v, none(0)
+    type(gc_value) :: v, w, none(0)
     integer :: base, k
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1
@@ -653,16 +653,25 @@ contains
     do k = 1, npairs
        call gc_vec_set(vs_get(vst, base + 1), k, fr_get(vst, vs_get(vst, int(fr)), int(pairs(2 * k - 1))))
     end do
-    v = gc_vec(int(npairs), [vs_get(vst, base + 1)])
-    call vs_set(vst, base + 2, v)
-    do k = 1, npairs
-       call gc_vec_set(vs_get(vst, base + 2), k, gc_int(int(pairs(2 * k), gc_ip)))
-    end do
-    block
-       call c_text(name, namen, s=dlt_1)
-       v = gc_str(dlt_1, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
-    end block
+    ! the name and the captures' inner slots are the procedure's, made
+    ! once and shared (CompiledFn, cf_shape_get): two allocations a
+    ! closure, and a lazy-seq step makes one
+    call cf_shape_get(int(h), v, w)
+    call vs_set(vst, base + 2, w)
     call vs_set(vst, base + 3, v)
+    if (v%tag == GCT_NIL) then
+       v = gc_vec(int(npairs), [vs_get(vst, base + 1)])
+       call vs_set(vst, base + 2, v)
+       do k = 1, npairs
+          call gc_vec_set(vs_get(vst, base + 2), k, gc_int(int(pairs(2 * k), gc_ip)))
+       end do
+       block
+          call c_text(name, namen, s=dlt_1)
+          v = gc_str(dlt_1, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       end block
+       call vs_set(vst, base + 3, v)
+       call cf_shape_keep(int(h), vs_get(vst, base + 3), vs_get(vst, base + 2))
+    end if
     v = gc_obj(OBJ_COMPILED, [vs_get(vst, base + 3), vs_get(vst, base + 1), vs_get(vst, base + 2), &
          gc_int(int(selfslot, gc_ip))], [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
     call gc_set_i1(v, int(h))

@@ -39,7 +39,7 @@ module CompiledFn
   private
   public :: compiled_i, cf_register, cf_call, cf_count, cf_name, cf_valid
   public :: cf_set_library_paths
-  public :: cf_pool_add, cf_pool_get
+  public :: cf_pool_add, cf_pool_get, cf_shape_get, cf_shape_keep
   public :: cf_image_write, cf_image_read
 
   abstract interface
@@ -56,6 +56,11 @@ module CompiledFn
   type :: cf_entry
      type(c_funptr) :: fp = c_null_funptr
      character(len=:), allocatable :: name
+     ! a closure's SHAPE, the same for every closure the procedure makes:
+     ! its name as a string and its captures' frame slots, made once
+     ! (clotran_make_closure) rather than per closure; stale after an
+     ! image load, and then made again
+     type(gc_root) :: name_r, inner_r
   end type cf_entry
 
   type(cf_entry), allocatable, save :: tbl(:)
@@ -117,6 +122,21 @@ contains
     h = used
     call gc_state_unlock()
   end function cf_register
+
+  ! procedure h's closure shape, nil and nil until cf_shape_keep
+  subroutine cf_shape_get(h, nm, inner)
+    integer, intent(in) :: h
+    type(gc_value), intent(out) :: nm, inner
+    nm = gc_root_get(tbl(h)%name_r)
+    inner = gc_root_get(tbl(h)%inner_r)
+  end subroutine cf_shape_get
+
+  subroutine cf_shape_keep(h, nm, inner)
+    integer, intent(in) :: h
+    type(gc_value), intent(in) :: nm, inner
+    call gc_global_keep(tbl(h)%inner_r, inner)
+    call gc_global_keep(tbl(h)%name_r, nm)
+  end subroutine cf_shape_keep
 
   logical function cf_valid(h)
     integer, intent(in) :: h
