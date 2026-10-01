@@ -8,6 +8,23 @@
  (+ 9223372036854775807 1)
  (- -9223372036854775807 1)
  (* 3 4)
+ ;; ONE literal is enough: (inc Long/MAX_VALUE) compiled to huge + 1, a
+ ;; constant gfortran refused even under its guard -- literals now go
+ ;; into a variable first; doubles likewise
+ (inc 9223372036854775807)
+ (dec -9223372036854775808)
+ (- -9223372036854775808)
+ (* -1 -9223372036854775808)
+ (quot -9223372036854775808 -1)
+ (- 0 -9223372036854775808)
+ (abs -9223372036854775808)
+ (unchecked-inc 9223372036854775807)
+ (unchecked-multiply 19 4611686018427387904)
+ (* 1.5 4611686018427387904)
+ (inc' 9223372036854775807)
+ (* 1.0e308 10.0)
+ (+ 1.7976931348623157e308 1.7976931348623157e308)
+ (inc 1.0e308)
  ;; dissoc on an array map keeps the order (PersistentArrayMap.without);
  ;; dissoc! on a transient one moves the last entry into the hole
  ;; (TransientArrayMap.doWithout)
