@@ -8470,6 +8470,15 @@ contains
                call raise_class("clotran.host.index_out_of_bounds_exception", "index out of bounds", [vs_get(vst, base + 1)])
             end if
           end block
+       else if (.not. gca_is(a)) then
+          ! not associative: RT.assoc casts to Associative and throws -- it
+          ! answered nil, and (assoc-in {:b 1} [:b :c] 2) quietly lost :b
+          ! (scripts/fuzz --fns found it)
+          block
+             call class_name_of(a, dlt_1)
+             call raise_class("clotran.host.class_cast_exception", "class " // dlt_1 // &
+                  " cannot be cast to class clotran.host.associative", [vs_get(vst, base + 1)])
+          end block
        else
           out = gca_assoc(a, &
                gcv_nth(vs_get(vst, base + 1), 1), &
@@ -12870,6 +12879,14 @@ contains
          if (n >= 3) then
             ix = gcv_nth(args, 2)
             hi = int(ix%ival)
+         end if
+         ! RT.subvec's range check: 0 <= start <= end <= count, or
+         ! IndexOutOfBoundsException -- out of range had answered [] or
+         ! read past the vector (scripts/fuzz --fns found it)
+         if (hi < lo .or. lo < 0 .or. hi > gcv_count(src)) then
+            call raise_class("clotran.host.index_out_of_bounds_exception", "", [vs_get(vst, base + 1)])
+            call vs_leave(vst, base)
+            return
          end if
          acc = gcv_empty([vs_get(vst, base + 1)])
          call vs_set(vst, base + 2, acc)
