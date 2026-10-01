@@ -484,7 +484,7 @@ module Eval
        F_DLVAR = 6, F_JMPF = 7, F_JMP = 8, F_CALL = 9, F_RET = 10, F_RECUR = 11, &
        F_FN = 12, F_LAZY = 13, F_COLL = 14, F_THROW = 15, F_EVAL = 16, F_CALLB = 17, &
        F_DOT = 18, F_CASE = 19, F_TRY = 20, F_ENDTRY = 21, F_HANDLER = 22, F_CATCH = 23, &
-       F_RETHROW = 24, F_NEW = 25
+       F_RETHROW = 24, F_NEW = 25, F_CALLW = 26
   ! the largest fixed arity a fn's call table covers (flat.inc)
   integer, parameter :: CT_MAXFIX = 31
   ! CLOTRAN_FLAT: 0 unread, 1 compile fn bodies flat, 2 trees only

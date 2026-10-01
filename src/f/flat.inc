@@ -289,14 +289,28 @@
              end if
           end if
        end if
-       if (gc_kind(v) == OBJ_AST .and. gc_i1(v) == N_VAR .and. gc_i2(v) == 1) then
+       if (gc_kind(v) == OBJ_AST .and. gc_i1(v) == N_VAR .and. gc_i2(v) == 1 .and. (n == 1 .or. n == 2)) then
+          ! A DIRECT-LINKED HEAD OF ONE OR TWO ARGUMENTS: F_CALLW answers a
+          ! core wrapper's in-place cases (flat_seq_op, flat_int_op) and
+          ! skips the call; anything else puts the head in f and falls
+          ! into the F_CALL after it. Its last constant caches the wrapped
+          ! builtin by link epoch.
+          j1 = fb_const(fb, v)
+          do i = 0, n - 1
+             call fc(fb, gcv_nth(kids, i + 1), a + i)
+          end do
+          call fb_emit(fb, F_CALLW, d, j1, a, n, f, fb_const(fb, gc_int(-1_gc_ip)))
+       else if (gc_kind(v) == OBJ_AST .and. gc_i1(v) == N_VAR .and. gc_i2(v) == 1) then
           call fb_emit(fb, F_DLVAR, f, fb_const(fb, v), 0, 0, 0)
+          do i = 0, n - 1
+             call fc(fb, gcv_nth(kids, i + 1), a + i)
+          end do
        else
           call fc(fb, v, f)
+          do i = 0, n - 1
+             call fc(fb, gcv_nth(kids, i + 1), a + i)
+          end do
        end if
-       do i = 0, n - 1
-          call fc(fb, gcv_nth(kids, i + 1), a + i)
-       end do
        v = gc_slot(nd, 4)
        site = 0
        if (v%tag == GCT_INT) site = int(v%ival, kind=4)
@@ -947,6 +961,61 @@
           else
              fnv = var_deref(gc_slot(v, 2), [consts])
              vst%vstack(rb + w(2) + 1) = fnv
+          end if
+       case (F_CALLW)
+          ! w: F_CALLW d k a n f c -- k the head's N_VAR node, c the cache:
+          ! link_epoch * 65536 + the wrapped builtin's id + 1 (0: none),
+          ! one word, so no thread reads half of an update
+          v = vec_store(kb + w(3) + 1)
+          block
+            integer(gc_ip) :: cache, bid1
+            type(gc_value) :: hv
+            cache = vec_store(kb + w(7) + 1)%ival
+            if (cache < 0 .or. cache / 65536_gc_ip /= int(link_epoch, gc_ip)) then
+               bid1 = 0
+               fnv = gc_slot(v, 5)
+               if (fnv%tag == GCT_INT) then
+                  if (fnv%ival /= link_epoch) then
+                     fnv = gcn_var_value(gc_slot(v, 2))
+                     if (gc_kind(fnv) == OBJ_COMPILED) call gc_set_slot(v, 3, fnv)
+                     call gc_set_slot(v, 5, gc_int(int(link_epoch, gc_ip)))
+                  end if
+                  hv = wrapper_of(gc_slot(v, 3), w(5))
+                  if (hv%tag /= GCT_NIL) then
+                     if (gc_i1(hv) /= B_RTFN .and. gc_i1(hv) /= B_UUIDFN) bid1 = gc_i1(hv) + 1
+                  end if
+               end if
+               cache = int(link_epoch, gc_ip) * 65536_gc_ip + bid1
+               vec_store(kb + w(7) + 1)%ival = cache
+            end if
+            bid1 = mod(cache, 65536_gc_ip)
+            if (bid1 > 0 .and. step_at == 0) then
+               n = w(5)
+               argv = gc_nil()
+               if (n == 2) argv = vst%vstack(rb + w(4) + 1 + 1)
+               done = .false.
+               if (n == 1) done = flat_seq_op(int(bid1) - 1, vst%vstack(rb + w(4) + 1), newframe)
+               if (.not. done) done = flat_int_op(int(bid1) - 1, n, vst%vstack(rb + w(4) + 1), argv, newframe)
+               if (done) then
+                  vst%vstack(rb + w(4) + 1) = gc_nil()
+                  if (n == 2) vst%vstack(rb + w(4) + 1 + 1) = gc_nil()
+                  vst%vstack(rb + w(2) + 1) = newframe
+                  pc = pc + 2 * FW
+                  cycle
+               end if
+            end if
+          end block
+          ! the head, as F_DLVAR reads it, for the F_CALL that follows
+          fnv = gc_slot(v, 5)
+          if (fnv%tag == GCT_INT) then
+             if (fnv%ival /= link_epoch) then
+                fnv = gcn_var_value(gc_slot(v, 2))
+                if (gc_kind(fnv) == OBJ_COMPILED) call gc_set_slot(v, 3, fnv)
+                call gc_set_slot(v, 5, gc_int(int(link_epoch, gc_ip)))
+             end if
+             vst%vstack(rb + w(6) + 1) = gc_slot(v, 3)
+          else
+             vst%vstack(rb + w(6) + 1) = var_deref(gc_slot(v, 2), [consts])
           end if
        case (F_JMPF)
           v = vst%vstack(rb + w(2) + 1)
