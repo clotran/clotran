@@ -2254,7 +2254,7 @@
 [(pr-str 12345678901234567890) (read-string "42N") (apply + [1N 2N]) (reduce + 0N [1N 2N]) (sort [2 1N 3N]) (vec (repeat 2 1N)) (pr-str {1N 2N})]
 (let [m (into {} (map vector (range 40) (range 40)))] [(get m 1N) (contains? #{1N} 1) (count (set [1 1N])) (= {1N :a} {1 :a})])
 (loop [i 0 acc 1N] (if (< i 25) (recur (inc i) (* acc (inc i))) acc))
-(expect-diff "DEVIATIONS 26: a Ratio's parts are 64-bit, so a BigInt remainder has nowhere to go")
+;; a BigInt remainder makes a Ratio of BigInts (DEVIATIONS 26, closed 2026-10-01)
 (try (/ 99999999999999999999N 7) (catch clotran.host.arithmetic_exception e :no-big-ratio))
 (expect-diff "DEVIATIONS 30: one big integer type, so biginteger answers a BigInt and prints 1N")
 (pr-str (biginteger 1))

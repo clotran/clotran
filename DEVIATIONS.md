@@ -879,12 +879,15 @@ throwing. `(* 99999999999999999999N 99999999999999999999N)` is exact.
 
 What is NOT closed, and is the rest of this entry:
 
-- **A Ratio's numerator and denominator are still 64-bit.** So a
-  division that leaves a remainder outside that range --
-  `(/ 99999999999999999999N 7)` -- raises "a Ratio of BigInts is not
-  supported" rather than answering an exact ratio. Clojure's Ratio
-  holds two BigIntegers. Removing it is the same change again, one
-  level up: a Ratio whose parts are big integers.
+- ~~A Ratio's numerator and denominator are still 64-bit.~~ **Closed
+  2026-10-01.** A Ratio's parts are any size (Eval.f90 rational.inc):
+  one that fits is immediate, any other is its `n/d` text, and every
+  operation is exact. Before, the denominator lived in 32 bits and the
+  numerator overflowed unchecked -- `(/ 1 3000000000)` was
+  `1/-1294967296` and `(+ 9223372036854775807 1/2)` was `-1/2`, wrong
+  answers rather than the error this entry promised (scripts/fuzz
+  --fns found them). `rationalize`, missing until then, is
+  Numbers.rationalize's.
 - **`1.5M` is still a double** (deviation 30), so there is no
   BigDecimal and `(bigint 2.5)` fails where Clojure routes it through
   `BigDecimal/valueOf`.
@@ -2006,3 +2009,19 @@ for these intrinsics, and is not relied on.
 
 **Removal**: none intended. Masking the count (`iand(n, 63)`) would
 match clj's host at one line per shift, and was written and reverted.
+
+## 70. A Ratio becomes a double by Fortran's quotient
+
+`(double 2/3)` is 0.6666666666666666 here and 0.6666666666666667 in
+clj, and so is a ratio's part in mixed arithmetic: `(+ 2/3 -2.25)` is
+-1.5833333333333335 here, -1.5833333333333333 there. clj's
+`Ratio.doubleValue` rounds the ratio to 16 significant decimal digits
+(`MathContext.DECIMAL64`) and converts that decimal; clotran divides
+the two parts as IEEE doubles, which is the correctly rounded quotient
+for parts up to 2^53 -- what a Fortran program computing n/d gets.
+James, 2026-10-01: keep Fortran's conventions. The two differ by at
+most a unit in the last place; scripts/fuzz allows exactly that when a
+ratio is in the form.
+
+**Removal**: round through a 16-digit decimal (BigDec.f90 has the
+division) -- if it is decided that clj's answer is the language's.

@@ -248,7 +248,12 @@ contains
     do i = 1, precision
        limit = limit // "0"
     end do
-    k = 0
+    ! from where the answer must start: ua * 10^k / ub has at least
+    ! precision + 1 digits once k is the digit-count difference plus the
+    ! precision -- a step or two at most from here. Counting up from 0
+    ! with a cap of 2*precision+64 made a quotient below about 1e-100
+    ! round to 0: pprint's tiny ratios were 0E-133M (scripts/run-library-tests)
+    k = max(0, len(ub) - len(ua) + precision - 1)
     do
        block
           call shift_up(ua, k, o=dlt_1)
@@ -256,7 +261,6 @@ contains
        end block
        if (big_cmp(q, limit) >= 0) exit
        k = k + 1
-       if (k > 2 * precision + 64) exit
     end do
     call round_mag(q, precision, mode, neg, r /= "0", kept, extra, ok)
     if (.not. ok) return

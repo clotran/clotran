@@ -119,6 +119,9 @@ contains
              s = dlt_1
           end block
        end if
+    case (GCT_BIGRATIO)
+       ! n/d, already in lowest terms (Eval.f90 rational.inc)
+       call gc_ref_text(v%ref, s)
     case (GCT_DEC)
        ! 1.0M readably, 1.0 as text -- and the SCALE is part of it, so
        ! 1M and 1.0M print apart however equal they are.

@@ -1747,7 +1747,7 @@ contains
           end if
        end if
        call parse_int(tok, ival, iok, iclaim)
-       if (.not. iclaim) call parse_ratio(tok, rval, rok, rclaim)
+       if (.not. iclaim) call parse_ratio(tok, rval, rok, rclaim, roots)
        if (iok) then
           v = gc_int(ival)
        else if (.not. iclaim .and. rok) then
@@ -2000,13 +2000,13 @@ contains
   ! ratioPat: ([-+]?[0-9]+)/([0-9]+). A denominator of zero is an
   ! error, the same as (/ 1 0) -- Clojure raises rather than reading
   ! it, and gc_ratio would answer nil.
-  subroutine parse_ratio(s, val, ok, claim)
+  subroutine parse_ratio(s, val, ok, claim, roots)
     character(len=*), intent(in) :: s
     type(gc_value), intent(out) :: val
     logical, intent(out) :: ok, claim
+    type(gc_value), intent(in) :: roots(:)
+    character(len=:), allocatable :: nt, dt
     integer :: n, start, k, slash
-    integer(gc_ip) :: num, den
-    logical :: nok, dok
     logical :: neg
     ok = .false.
     claim = .false.
@@ -2031,11 +2031,15 @@ contains
     if (.not. all_decimal(s(start:slash - 1))) return
     if (.not. all_decimal(s(slash + 1:n))) return
     claim = .true.
-    call digits_radix(s(start:slash - 1), 10, num, nok)
-    call digits_radix(s(slash + 1:n), 10, den, dok)
-    if (.not. nok .or. .not. dok .or. den == 0) return
-    if (neg) num = -num
-    val = gc_ratio(num, den)
+    ! parts of any size, reduced to the one form a value has (gc_rat_make):
+    ! 4/2 reads as 2 and 99999999999999999999/7 as itself, as clj's
+    ! reader reduces them; a ratio's parts had been 64-bit, the
+    ! denominator 32 (DEVIATIONS 26)
+    call big_norm(s(start:slash - 1), o=nt)
+    call big_norm(s(slash + 1:n), o=dt)
+    if (dt == "0") return
+    if (neg) nt = "-" // nt
+    val = gc_rat_make(nt, dt, .false., roots)
     ok = .true.
   end subroutine parse_ratio
 

@@ -37,6 +37,11 @@
  (subvec [1 2 3] 1 3)
  ;; two constants that are = but not the same kind keep their own slots
  (into '(9) '[9])
+ ;; the empty string is found at the end (both hosts' lastIndexOf)
+ (clojure.string/last-index-of "abc" "")
+ (clojure.string/last-index-of "a" "")
+ (clojure.string/last-index-of "abc" "" 1)
+ (clojure.string/last-index-of "" "")
  [(quote (1 2)) (quote [1 2]) (quote 1N) 1 (quote "a") (quote a)]
  ;; dissoc on an array map keeps the order (PersistentArrayMap.without);
  ;; dissoc! on a transient one moves the last entry into the hole
@@ -46,4 +51,14 @@
  (pr-str (keys (dissoc {:x 1 :y 2 :z 3} :x)))
  (pr-str (persistent! (dissoc! (transient {:c 1 :b 2 :a 3 :d 4}) :b)))
  (pr-str (persistent! (dissoc! (transient {:c 1 :b 2 :a 3 :d 4 :e 5}) :c :a)))
+ ;; a Ratio of any size (DEVIATIONS 26, closed): the denominator had
+ ;; been 32-bit and the numerator unchecked; rationalize was missing
+ (/ 1 3000000000) (/ 1 2147483648) (/ 3 5000000007) (* 1/3 1/5000000000) (+ 1/9223372036854775807 1/2)
+ (/ -9223372036854775808 5) (+ 9223372036854775807 1/2) (* 4611686018427387904/3 2) (denominator (/ 1 3000000000))
+ 99999999999999999999/7 4/2 (* 99999999999999999999/7 7) (class (* 99999999999999999999/7 7))
+ (< 1/3000000000 1/2999999999) (= (/ 2 6000000000) 1/3000000000) (zero? (- 1/3000000000 1/3000000000))
+ (quot 99999999999999999999/7 3) (rem 99999999999999999999/7 3) (abs -99999999999999999999/7) (inc 99999999999999999999/7)
+ (range 1/2 3 1/2) (/ 99999999999999999999N 7) (sort [1/3000000000 -1/2 99999999999999999999/7 0])
+ (bigint 99999999999999999999/7) (/ 99999999999999999999/7 99999999999999999999/7)
+ (rationalize 0.5) (rationalize 1.0) (rationalize 0.1) (rationalize 1.0e300) (rationalize 1.234e-20) (rationalize 1.5M) (rationalize 3)
 ]

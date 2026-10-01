@@ -247,6 +247,7 @@ module Eval
   integer, parameter :: B_SOCKREAD = 418, B_SOCKWRITE = 419, B_SOCKCLOSE = 420, B_EXIT = 421
   integer, parameter :: B_SOCKREADB = 422, B_SOCKWRITEB = 423, B_UTF8BYTES = 424, B_UTF8STRING = 425
   integer, parameter :: B_REALPATH = 426, B_FSKIND = 427, B_FSLIST = 428, B_INSTALLED = 429, B_LIBMANIFEST = 430
+  integer, parameter :: B_RATIONALIZE = 431
   ! A number's WIDTH, in an integer's or a real's otherwise unused ref:
   ! what it boxes as in clj. Equality and hashing never read it.
   integer, parameter :: W_LONG = 0, W_BYTE = 1, W_SHORT = 2, W_INT = 3, W_FLOAT = 1
@@ -481,6 +482,9 @@ module Eval
   end type flat_buf
   ! a flat instruction: FW integers, the opcode first (flat.inc)
   integer, parameter :: FW = 8
+  ! exact rationals (rational.inc): 128-bit intermediates, and the operations
+  integer, parameter :: i16k = selected_int_kind(30)
+  integer, parameter :: RAT_ADD = 1, RAT_SUB = 2, RAT_MUL = 3, RAT_DIV = 4
   integer, parameter :: F_CONST = 1, F_NIL = 2, F_MOVE = 3, F_MOVEC = 4, F_VAR = 5, &
        F_DLVAR = 6, F_JMPF = 7, F_JMP = 8, F_CALL = 9, F_RET = 10, F_RECUR = 11, &
        F_FN = 12, F_LAZY = 13, F_COLL = 14, F_THROW = 15, F_EVAL = 16, F_CALLB = 17, &
@@ -4032,6 +4036,12 @@ contains
     case (HK_LINEBOX);  out = gc_obj(OBJ_ATOM, [gc_int(0_gc_ip), gc_nil()], [roots])
     case (HK_NIL);      out = gc_nil()
     case (HK_EMPTYMAP); out = gca_empty([roots])
+    case (HK_MATHCTX)
+       if (row%ival > 0) then
+          out = make_math_context(int(row%ival), "HALF_EVEN", [roots])
+       else
+          out = make_math_context(0, "HALF_UP", [roots])
+       end if
     case (HK_SPECIALS); out = specials_map([roots])
     case (HK_TYPE)
     ! Double/TYPE and its kin: the primitive IS a Fortran kind here, and
@@ -7268,10 +7278,10 @@ contains
 
     if (a%tag == GCT_REAL .or. b%tag == GCT_REAL) then
        out = gc_real(num_dbl(a) + num_dbl(b))
-    else if (a%tag == GCT_RATIO .or. b%tag == GCT_RATIO) then
-       out = gc_ratio(gc_numerator(a) * gc_denominator(b) + &
-            gc_numerator(b) * gc_denominator(a), &
-            gc_denominator(a) * gc_denominator(b))
+    else if (is_ratio(a) .or. is_ratio(b)) then
+       ! exact, an integral step a BigInt, as Numbers.add: (range 1/2 3 1/2)
+       ! is (1/2 1N 3/2 2N 5/2)
+       out = rat_op(RAT_ADD, a, b, .true., roots)
     else
        out = gc_int(a%ival + b%ival)
     end if
@@ -7951,7 +7961,7 @@ contains
             do i = 0, n - 1
                b = strip_meta(gcv_nth(args, i))
                if (b%tag == GCT_REAL) any_real = .true.
-               if (b%tag == GCT_RATIO) any_ratio = .true.
+               if (is_ratio(b)) any_ratio = .true.
                if (b%tag == GCT_BIG) any_big = .true.
                if (b%tag == GCT_DEC) any_dec = .true.
             end do
@@ -8024,53 +8034,25 @@ contains
                ! overflowing a 32-bit integer sooner than it must:
                ! summing halves would otherwise square the
                ! denominator on each term.
-               ! A BigInt here is exact only while it fits in 64
-               ! bits: a Ratio's parts are integers (DEVIATIONS 26).
-               b = rat_operand(strip_meta(a), hit)
-               if (.not. hit) then
-                  call raise_class("clotran.host.arithmetic_exception", &
-                       "a Ratio of BigInts is not supported (DEVIATIONS 26)", [vs_get(vst, base + 1)])
-                  call vs_leave(vst, base)
-                  return
-               end if
-               qn = gc_numerator(b)
-               qd = gc_denominator(b)
-               if (n == 1 .and. op == B_SUB) qn = -qn
-               do i = 1, n - 1
-                  b = rat_operand(strip_meta(gcv_nth(args, i)), hit)
-                  if (.not. hit) then
-                     call raise_class("clotran.host.arithmetic_exception", &
-                          "a Ratio of BigInts is not supported (DEVIATIONS 26)", [vs_get(vst, base + 1)])
-                     call vs_leave(vst, base)
-                     return
-                  end if
-                  bn = gc_numerator(b)
-                  bd = gc_denominator(b)
-                  select case (op)
-                  case (B_ADD)
-                     qn = qn * bd + bn * qd
-                     qd = qd * bd
-                  case (B_SUB)
-                     qn = qn * bd - bn * qd
-                     qd = qd * bd
-                  case (B_MUL)
-                     qn = qn * bn
-                     qd = qd * bd
-                  end select
-                  g = gc_gcd(qn, qd)
-                  qn = qn / g
-                  qd = qd / g
-               end do
-               out = gc_ratio(qn, qd)
-               ! A Ratio's arithmetic answers a BigInt when it comes out
-               ! integral -- (* 8 1/2) is 4N, (+ 1/2 1/2) is 1N -- as
-               ! Numbers' RatioOps do (checked against clj).
-               if (out%tag == GCT_INT) then
-                  block
-                     call big_from_i64(out%ival, o=dlt_1)
-                     out = gc_big(dlt_1, [vs_get(vst, base + 1)])
-                  end block
-               end if
+               ! Parts of any size (rational.inc). A Ratio's arithmetic
+               ! answers a BigInt when it comes out integral -- (* 8 1/2)
+               ! is 4N, (+ 1/2 1/2) is 1N -- as Numbers' RatioOps do.
+               block
+                 integer :: rb, rop
+                 rb = vs_enter(vst, 1)
+                 call vs_set(vst, rb + 1, strip_meta(a))
+                 if (n == 1 .and. op == B_SUB) &
+                      call vs_set(vst, rb + 1, rat_op(RAT_SUB, gc_int(0), vs_get(vst, rb + 1), .true., [vs_get(vst, base + 1)]))
+                 rop = RAT_ADD
+                 if (op == B_SUB) rop = RAT_SUB
+                 if (op == B_MUL) rop = RAT_MUL
+                 do i = 1, n - 1
+                    call vs_set(vst, rb + 1, rat_op(rop, vs_get(vst, rb + 1), strip_meta(gcv_nth(args, i)), .true., &
+                         [vs_get(vst, base + 1), vs_get(vst, rb + 1)]))
+                 end do
+                 out = vs_get(vst, rb + 1)
+                 call vs_leave(vst, rb)
+               end block
             else if (any_real) then
                racc = num_dbl(a)
                if (n == 1 .and. op == B_SUB) racc = -racc
@@ -8908,30 +8890,27 @@ contains
           ! as its numerator: (quot 7/2 1) would answer 7, not 3.
           ! a/b is (an*bd)/(ad*bn), and quot truncates that toward
           ! zero -- which is what Fortran's integer division does.
-          block
-            integer(gc_ip) :: an, ad, bn, bd, qi
-            an = gc_numerator(a); ad = gc_denominator(a)
-            bn = gc_numerator(b); bd = gc_denominator(b)
-            if (bn == 0) then
-               call raise_class("clotran.host.arithmetic_exception", "Divide by zero", [gc_nil()])
-            else
-               qi = (an * bd) / (ad * bn)
+          ! a Ratio's quotient, and an integral remainder, are BigInts:
+          ! (quot 7/2 1) is 3N (RatioOps, checked against clj); rem is
+          ! a - b*quot, kept exact
+          if (rat_cmp(b, gc_int(0)) == 0) then
+             call raise_class("clotran.host.arithmetic_exception", "Divide by zero", [gc_nil()])
+          else
+             block
+               integer :: rb
+               rb = vs_enter(vst, 2)
+               call vs_set(vst, rb + 1, rat_op(RAT_DIV, a, b, .true., [vs_get(vst, base + 1)]))
+               call rat_trunc(vs_get(vst, rb + 1), dlt_1)
+               call vs_set(vst, rb + 2, gc_big(dlt_1, [vs_get(vst, base + 1)]))
                if (id == B_QUOT) then
-                  out = gc_int(qi)
+                  out = vs_get(vst, rb + 2)
                else
-                  ! rem is a - b*quot, kept exact.
-                  out = gc_ratio(an * bd - qi * bn * ad, ad * bd)
+                  call vs_set(vst, rb + 1, rat_op(RAT_MUL, b, vs_get(vst, rb + 2), .true., [vs_get(vst, base + 1), vs_get(vst, rb + 2)]))
+                  out = rat_op(RAT_SUB, a, vs_get(vst, rb + 1), .true., [vs_get(vst, base + 1), vs_get(vst, rb + 1)])
                end if
-               ! a Ratio's quotient, and an integral remainder, are BigInts:
-               ! (quot 7/2 1) is 3N (RatioOps, checked against clj)
-               if (out%tag == GCT_INT) then
-                  block
-                     call big_from_i64(out%ival, o=dlt_1)
-                     out = gc_big(dlt_1, [vs_get(vst, base + 1)])
-                  end block
-               end if
-            end if
-          end block
+               call vs_leave(vst, rb)
+             end block
+          end if
        else if (a%tag == GCT_REAL .or. b%tag == GCT_REAL) then
           if (num_dbl(b) == 0.0_gc_dp) then
              call raise_class("clotran.host.arithmetic_exception", "Divide by zero", [gc_nil()])
@@ -9328,7 +9307,8 @@ contains
           ! (int 1/2) is 0 -- truncation toward zero, the same as for
           ! a double. The else branch would have handed the ratio
           ! straight back, unconverted.
-          out = gc_int(gc_numerator(a) / gc_denominator(a))
+          call rat_trunc(a, dlt_1)
+          out = gc_int(big_to_i64(dlt_1))
        else if (a%tag == GCT_CHAR) then
           out = gc_int(a%ival)
        else if (a%tag == GCT_INT) then
@@ -9382,7 +9362,11 @@ contains
                   same = .false.
                   exit
                end if
-               if (num_dbl(x) /= num_dbl(y)) same = .false.
+               if (rat_exact(x) .and. rat_exact(y)) then
+                  if (rat_cmp(x, y) /= 0) same = .false.
+               else if (num_dbl(x) /= num_dbl(y)) then
+                  same = .false.
+               end if
             end do
             if (.not. tctx%has_error) out = gc_bool(same)
          end if
@@ -9395,7 +9379,11 @@ contains
          if (x%tag == GCT_REAL) then
             out = gc_real(abs(gc_rval(x)))
          else if (is_ratio(x)) then
-            out = gc_ratio(abs(gc_numerator(x)), gc_denominator(x))
+            if (rat_cmp(x, gc_int(0)) < 0) then
+               out = rat_op(RAT_SUB, gc_int(0), x, .true., [vs_get(vst, base + 1)])
+            else
+               out = x
+            end if
          else if (x%tag == GCT_BIG) then
             block
                call gc_big_text(x, s=dlt_1)
@@ -9423,10 +9411,17 @@ contains
          x = strip_meta(gcv_nth(args, 0))
          if (.not. is_number(x)) then
             call fail("numerator/denominator: not a number")
-         else if (id == B_NUMER) then
-            out = gc_int(gc_numerator(x))
          else
-            out = gc_int(gc_denominator(x))
+            ! either part of any size: an integer when it fits
+            block
+              character(len=:), allocatable :: pn, pd
+              call rat_parts(x, pn, pd)
+              if (id == B_NUMER) then
+                 out = rat_make(pn, "1", .false., [vs_get(vst, base + 1)])
+              else
+                 out = rat_make(pd, "1", .false., [vs_get(vst, base + 1)])
+              end if
+            end block
          end if
        end block
 
@@ -9744,6 +9739,55 @@ contains
             end block
          end if
        end block
+    case (B_RATIONALIZE)
+       ! Numbers.rationalize: a double as BigDecimal.valueOf reads it -- its
+       ! shortest decimal, the text it prints as -- then exactly, so 0.1 is
+       ! 1/10; a decimal exactly; anything else is rational already. It
+       ! was missing: every call threw (scripts/fuzz --fns found it).
+       a = strip_meta(gcv_nth(args, 0))
+       if (a%tag == GCT_REAL .or. a%tag == GCT_DEC) then
+          block
+            character(len=:), allocatable :: t, num, den
+            integer :: k, e, sc, dot
+            logical :: neg
+            if (a%tag == GCT_REAL) then
+               call to_string_text(a, s=t)
+            else
+               call gc_dec_text(a, s=dlt_1)
+               call dec_to_text(dlt_1, s=t)
+            end if
+            if (verify(t(1:1), "+-0123456789.") /= 0) then
+               call raise_class("clotran.host.number_format_exception", "Infinite or NaN", [vs_get(vst, base + 1)])
+            else
+               e = 0
+               k = scan(t, "Ee")
+               if (k > 0) then
+                  read(t(k + 1:), *) e
+                  t = t(1:k - 1)
+               end if
+               neg = t(1:1) == "-"
+               if (neg .or. t(1:1) == "+") t = t(2:)
+               dot = index(t, ".")
+               sc = 0
+               if (dot > 0) then
+                  sc = len(t) - dot
+                  t = t(1:dot - 1) // t(dot + 1:)
+               end if
+               sc = sc - e
+               if (sc >= 0) then
+                  den = "1" // repeat("0", sc)
+               else
+                  t = t // repeat("0", -sc)
+                  den = "1"
+               end if
+               call big_norm(t, o=num)
+               if (neg) num = "-" // num
+               out = rat_make(num, den, .true., [vs_get(vst, base + 1)])
+            end if
+          end block
+       else
+          out = a
+       end if
     case (B_LIBMANIFEST)
        ! (clotran-library-manifest path): a compiled library's manifest,
        ! read as data. The library is opened -- it will be installed next --
@@ -10370,7 +10414,8 @@ contains
           end if
           end block
        else if (is_ratio(a)) then
-          out = gc_int(gc_numerator(a) / gc_denominator(a))
+          call rat_trunc(a, dlt_1)
+          out = gc_int(big_to_i64(dlt_1))
        else if (a%tag == GCT_REAL .or. a%tag == GCT_DEC) then
           block
             real(gc_dp) :: d
@@ -10876,9 +10921,9 @@ contains
                call big_from_i64(bv%ival, o=dlt_1)
                out = gc_big(dlt_1, [vs_get(vst, base + 1)])
             end block
-         case (GCT_RATIO)
+         case (GCT_RATIO, GCT_BIGRATIO)
             block
-               call big_from_i64(gc_numerator(bv) / gc_denominator(bv), o=dlt_1)
+               call rat_trunc(bv, dlt_1)
                out = gc_big(dlt_1, [vs_get(vst, base + 1)])
             end block
          case (GCT_REAL)
@@ -10935,12 +10980,11 @@ contains
                call dec_from_big(dlt_1, o=dlt_2)
                out = gc_dec(dlt_2, [vs_get(vst, base + 1)])
             end block
-         case (GCT_REAL, GCT_STR, GCT_RATIO)
-            if (dv2%tag == GCT_RATIO) then
+         case (GCT_REAL, GCT_STR, GCT_RATIO, GCT_BIGRATIO)
+            if (is_ratio(dv2)) then
                block
-                  call big_from_i64(gc_numerator(dv2), o=dlt_1)
+                  call rat_parts(dv2, dlt_1, dlt_3)
                   call dec_from_big(dlt_1, o=dlt_2)
-                  call big_from_i64(gc_denominator(dv2), o=dlt_3)
                   call dec_from_big(dlt_3, o=dlt_4)
                   call dec_div(dlt_2,  dlt_4, dt, dok2)
                end block
@@ -12732,6 +12776,7 @@ contains
          else
             out = gc_int(-1)
          end if
+         end if
        end block
     case (B_RTLOAD)
        ! RT.load takes a CLASSPATH-relative name without its extension:
@@ -14033,12 +14078,7 @@ contains
                   block
                      call big_of(a, s=dlt_2)
                      call big_of(b, s=dlt_3)
-                     if (big_fits_i64(dlt_2) .and. big_fits_i64(dlt_3)) then
-                        out = gc_ratio(big_to_i64(dlt_2), big_to_i64(dlt_3))
-                     else
-                        call raise_class("clotran.host.arithmetic_exception", &
-                             "a Ratio of BigInts is not supported (DEVIATIONS 26)", [vs_get(vst, base + 1)])
-                     end if
+                     out = rat_make(dlt_2, dlt_3, .true., [vs_get(vst, base + 1)])
                   end block
                end if
             end if
@@ -14054,19 +14094,12 @@ contains
           ! (/ 1.0 0) is ##Inf, NOT an error -- only the exact path
           ! raises. Verified against clj.
           out = gc_real(num_dbl(a) / num_dbl(b))
-       else if (gc_numerator(b) == 0) then
+       else if (rat_cmp(b, gc_int(0)) == 0) then
           call raise_class("clotran.host.arithmetic_exception", "Divide by zero", [gc_nil()])
        else
-          out = gc_ratio(gc_numerator(a) * gc_denominator(b), &
-                         gc_denominator(a) * gc_numerator(b))
-          ! with a Ratio in it, an integral answer is a BigInt: (/ 1/2
-          ! 1/2) is 1N, where (/ 4 2) of two longs is 2
-          if ((is_ratio(a) .or. is_ratio(b)) .and. out%tag == GCT_INT) then
-             block
-                call big_from_i64(out%ival, o=dlt_1)
-                out = gc_big(dlt_1, [vs_get(vst, base + 1)])
-             end block
-          end if
+          ! exact, parts of any size; an integral answer is a BigInt unless
+          ! both were longs: (/ 1/2 1/2) is 1N, (/ 4 2) is 2
+          out = rat_op(RAT_DIV, a, b, .not. (a%tag == GCT_INT .and. b%tag == GCT_INT), [vs_get(vst, base + 1)])
        end if
     case (B_INC, B_DEC, B_UINC, B_UDEC, B_PINC, B_PDEC)
        checked = (id == B_INC .or. id == B_DEC)
@@ -14141,9 +14174,9 @@ contains
           ! everything that is not an integer through num_dbl, which
           ! would silently drop a ratio to a double.
           if (op == B_INC) then
-             out = gc_ratio(gc_numerator(a) + gc_denominator(a), gc_denominator(a))
+             out = rat_op(RAT_ADD, a, gc_int(1), .true., [vs_get(vst, base + 1)])
           else
-             out = gc_ratio(gc_numerator(a) - gc_denominator(a), gc_denominator(a))
+             out = rat_op(RAT_SUB, a, gc_int(1), .true., [vs_get(vst, base + 1)])
           end if
        else if (a%tag == GCT_INT) then
           if (op == B_INC) then
@@ -16083,7 +16116,7 @@ contains
     case (GCT_BOOL); s = "boolean"
     case (GCT_INT);  s = "int"
     case (GCT_REAL); s = "double"
-    case (GCT_RATIO); s = "ratio"
+    case (GCT_RATIO, GCT_BIGRATIO); s = "ratio"
     case (GCT_CHAR); s = "char"
     case (GCT_CLASS); s = "class"
     case (GCT_DEC);  s = "bigdec"
@@ -17532,7 +17565,7 @@ contains
             yes = tg == GCT_STR
             return
          else if (gc_ref_is(cls%ref, "clotran.host.number") .or. gc_ref_is(cls%ref, "clotran.host.number")) then
-            yes = tg == GCT_INT .or. tg == GCT_REAL .or. tg == GCT_RATIO .or. tg == GCT_BIG .or. tg == GCT_DEC
+            yes = tg == GCT_INT .or. tg == GCT_REAL .or. tg == GCT_RATIO .or. tg == GCT_BIGRATIO .or. tg == GCT_BIG .or. tg == GCT_DEC
             return
          else if (gc_ref_is(cls%ref, "clotran.host.real8") .or. gc_ref_is(cls%ref, "clotran.host.real8")) then
             yes = tg == GCT_REAL .and. value_width(v) /= W_FLOAT
@@ -17852,6 +17885,10 @@ contains
           call big_of(b, s=dlt_2)
           num_lt = (big_cmp(dlt_1, dlt_2) < 0)
        end block
+    else if (rat_exact(a) .and. rat_exact(b)) then
+       ! a ratio compares EXACTLY: as doubles, two ratios a hair apart
+       ! were equal, and a big one under- or overflowed
+       num_lt = (rat_cmp(a, b) < 0)
     else if (exact_num(a) .and. exact_num(b) .and. &
              (a%tag == GCT_DEC .or. b%tag == GCT_DEC)) then
        ! A decimal compares EXACTLY against another decimal, an
@@ -17905,35 +17942,25 @@ contains
     o = strip_meta(v0)
     if (o%tag == GCT_INT) return
     if (o%tag == GCT_REAL .or. o%tag == GCT_BIG .or. o%tag == GCT_DEC &
-         .or. o%tag == GCT_RATIO) o = gc_int(int_of_number(o))
+         .or. o%tag == GCT_RATIO .or. o%tag == GCT_BIGRATIO) o = gc_int(int_of_number(o))
   end function as_index
 
-  function rat_operand(v, ok) result(o)
-    type(gc_value), intent(in) :: v
-    logical, intent(out) :: ok
-    type(gc_value) :: o
-    ! temporaries for the deferred-length calls below (share.clj)
-    character(len=:), allocatable :: dlt_1
-    ok = .true.
-    o = v
-    if (v%tag /= GCT_BIG) return
-    block
-       call gc_big_text(v, s=dlt_1)
-       ok = big_fits_i64(dlt_1)
-    end block
-    if (ok) then
-       block
-          call gc_big_text(v, s=dlt_1)
-          o = gc_int(big_to_i64(dlt_1))
-       end block
-    end if
-  end function rat_operand
 
   ! MathContext.DECIMAL128 as the map (MathContext. p mode) builds:
   ! 34 significant digits, rounding half to even. It is what
   ! *math-context* holds until something binds it.
+  ! *math-context*'s default: MathContext.DECIMAL128
   function default_math_context(roots) result(mc)
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: mc
+    mc = make_math_context(34, "HALF_EVEN", roots)
+  end function default_math_context
+
+  ! a math context as with-precision makes one: {:precision p :rounding :MODE}
+  function make_math_context(prec, mode, roots) result(mc)
     type(gc_stack), pointer :: vst
+    integer, intent(in) :: prec
+    character(len=*), intent(in) :: mode
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: mc, k, v
     integer :: base
@@ -17943,17 +17970,17 @@ contains
     call vs_set(vst, base + 1, mc)
     k = gc_key("precision", [roots, vs_get(vst, base + 1)])
     call vs_set(vst, base + 2, k)
-    mc = gca_assoc(vs_get(vst, base + 1), vs_get(vst, base + 2), gc_int(34_gc_ip), &
+    mc = gca_assoc(vs_get(vst, base + 1), vs_get(vst, base + 2), gc_int(int(prec, gc_ip)), &
          [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
     call vs_set(vst, base + 1, mc)
     k = gc_key("rounding", [roots, vs_get(vst, base + 1)])
     call vs_set(vst, base + 2, k)
-    v = gc_key("HALF_EVEN", [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    v = gc_key(mode, [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
     call vs_set(vst, base + 3, v)
     mc = gca_assoc(vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), &
          [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
     call vs_leave(vst, base)
-  end function default_math_context
+  end function make_math_context
 
   ! What with-precision bound, if anything: the precision (0 when
   ! there is no context, which every operation reads as "exact or
@@ -18029,8 +18056,12 @@ contains
           call dec_to_big(dlt_1, o=dlt_2)
           i = big_to_i64(dlt_2)
        end block
-    else if (v%tag == GCT_RATIO) then
-       i = gc_numerator(v) / gc_denominator(v)
+    else if (is_ratio(v)) then
+       block
+          character(len=:), allocatable :: tq
+          call rat_trunc(v, tq)
+          i = big_to_i64(tq)
+       end block
     else
        i = v%ival
     end if
@@ -18075,13 +18106,22 @@ contains
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1, dlt_2, dlt_3, dlt_4
     ok = .true.
-    if (v%tag == GCT_RATIO) then
+    if (is_ratio(v)) then
        block
-          call big_from_i64(gc_numerator(v), o=dlt_1)
+          call rat_parts(v, dlt_1, dlt_3)
           call dec_from_big(dlt_1, o=dlt_2)
-          call big_from_i64(gc_denominator(v), o=dlt_3)
           call dec_from_big(dlt_3, o=dlt_4)
-          call dec_div(dlt_2,  dlt_4, s, ok)
+          ! Numbers.toBigDecimal divides, and so rounds under a math
+          ! context: (with-precision 5 (+ 1M 1/3)) is 1.3333M, not a throw
+          block
+            integer :: mcp, mcm
+            call math_context(mcp, mcm)
+            if (mcp > 0) then
+               call dec_div_mc(dlt_2, dlt_4, mcp, mcm, s, ok)
+            else
+               call dec_div(dlt_2, dlt_4, s, ok)
+            end if
+          end block
        end block
     else
        block
@@ -18162,10 +18202,9 @@ contains
           call gc_dec_text(v, s=dlt_1)
           d = dec_to_dbl(dlt_1)
        end block
-    else if (v%tag == GCT_RATIO) then
-       ! Every comparison goes through here, so without this a ratio
-       ! would compare as its NUMERATOR: (< 1/3 1/2) would be 1 < 1.
-       d = real(gc_numerator(v), gc_dp) / real(gc_denominator(v), gc_dp)
+    else if (is_ratio(v)) then
+       ! without this a ratio would compare as its NUMERATOR
+       d = rat_dbl(v)
     else
        d = real(v%ival, gc_dp)
     end if
@@ -18173,13 +18212,13 @@ contains
 
   logical function is_ratio(v)
     type(gc_value), intent(in) :: v
-    is_ratio = (v%tag == GCT_RATIO)
+    is_ratio = (v%tag == GCT_RATIO .or. v%tag == GCT_BIGRATIO)
   end function is_ratio
 
   ! Whether a value is any of clotran's numbers.
   logical function is_number(v)
     type(gc_value), intent(in) :: v
-    is_number = (v%tag == GCT_INT .or. v%tag == GCT_REAL .or. v%tag == GCT_RATIO &
+    is_number = (v%tag == GCT_INT .or. v%tag == GCT_REAL .or. v%tag == GCT_RATIO .or. v%tag == GCT_BIGRATIO &
          .or. v%tag == GCT_BIG .or. v%tag == GCT_DEC)
   end function is_number
 
@@ -18360,7 +18399,7 @@ contains
     case (GCT_REAL)
        s = "clotran.host.real8"
        if (v%ref == W_FLOAT) s = "clotran.host.real4"
-    case (GCT_RATIO); s = "clotran.host.ratio"
+    case (GCT_RATIO, GCT_BIGRATIO); s = "clotran.host.ratio"
     case (GCT_CHAR);  s = "clotran.host.char"
     case (GCT_CLASS); s = "clotran.host.class"
     case (GCT_DEC);   s = "clotran.host.decimal"
@@ -20283,6 +20322,7 @@ contains
 
   include "analyze.inc"
   include "exec.inc"
+  include "rational.inc"
   include "flat.inc"
   include "repl.inc"
   include "tasks.inc"

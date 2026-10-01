@@ -159,6 +159,9 @@ module GC
   ! immediate to the collector -- the stack is scanned as roots already --
   ! and never stored anywhere that outlives its call.
   integer, parameter, public :: GCT_SFRAME = 14
+  ! A RATIO TOO BIG TO BE IMMEDIATE: its "n/d" text in the string pool,
+  ! in lowest terms (Eval.f90 rational.inc, rat_make)
+  integer, parameter, public :: GCT_BIGRATIO = 15
 
   ! Object kinds. Each comment says what that kind's slots hold.
   integer, parameter, public :: OBJ_CONS    = 1  ! 1=car 2=cdr
@@ -742,7 +745,7 @@ module GC
      module procedure gc_int4, gc_int8
   end interface gc_int
   public :: gc_ratio, gc_numerator, gc_denominator, gc_gcd
-  public :: gc_big, gc_big_text, gc_is_big
+  public :: gc_big, gc_big_text, gc_is_big, gc_bigratio, gc_bigratio_text, gc_rat_make, big_gcd
   public :: gc_class, gc_class_text
   public :: gc_dec, gc_dec_text
   public :: gc_set_coll_ops
@@ -1428,18 +1431,25 @@ contains
 
   ! The greatest common divisor, by Euclid. Both arguments are taken
   ! as magnitudes; sign is the caller's business.
+  ! in 128 bits: abs(Long/MIN_VALUE) overflows a long, and (/ MIN 5)
+  ! answered -9223372036854775808/-5
   pure function gc_gcd(a0, b0) result(g)
     integer(gc_ip), intent(in) :: a0, b0
-    integer(gc_ip) :: g, a, b, t
-    a = abs(a0)
-    b = abs(b0)
+    integer(gc_ip) :: g
+    integer, parameter :: w = selected_int_kind(30)
+    integer(w) :: a, b, t
+    a = abs(int(a0, w))
+    b = abs(int(b0, w))
     do while (b /= 0)
        t = b
        b = mod(a, b)
        a = t
     end do
-    g = a
-    if (g == 0) g = 1
+    if (a == 0) a = 1
+    ! a gcd of 2^63 (both parts MIN) cannot be a long; 1 leaves them as
+    ! they are, which rat_make never asks of it
+    if (a > int(huge(0_gc_ip), w)) a = 1
+    g = int(a, gc_ip)
   end function gc_gcd
 
   ! The ONLY way to make a ratio, because a ratio that is not in
@@ -1537,6 +1547,74 @@ contains
        end block
     end if
   end subroutine gc_big_text
+
+  ! a ratio's "n/d" text, already in lowest terms (rat_make makes it)
+  function gc_bigratio(text, roots) result(v)
+    character(len=*), intent(in) :: text
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: v
+    v = new_text(text, roots, GCT_BIGRATIO)
+  end function gc_bigratio
+
+  subroutine gc_bigratio_text(v, s)
+    type(gc_value), intent(in) :: v
+    character(len=:), allocatable, intent(out) :: s
+    s = "0/1"
+    if (v%tag == GCT_BIGRATIO) call gc_ref_text(v%ref, s=s)
+  end subroutine gc_bigratio_text
+
+  ! gcd of two non-negative integers, as text: Euclid
+  subroutine big_gcd(a0, b0, g)
+    character(len=*), intent(in) :: a0, b0
+    character(len=:), allocatable, intent(out) :: g
+    character(len=:), allocatable :: a, b, q, r
+    a = a0
+    b = b0
+    do while (b /= "0")
+       call big_divmod(a, b, q, r)
+       a = b
+       b = r
+    end do
+    g = a
+  end subroutine big_gcd
+
+  ! n/d in its one form; d is not zero. An integral result is a BigInt
+  ! when int_big -- a Ratio's arithmetic answers 4N, not 4 -- and the
+  ! smallest integer that holds it otherwise.
+  function gc_rat_make(n0, d0, int_big, roots) result(v)
+    character(len=*), intent(in) :: n0, d0
+    logical, intent(in) :: int_big
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: v
+    character(len=:), allocatable :: n, d, g, an, q, r
+    n = n0
+    d = d0
+    if (big_is_neg(d)) then
+       call big_neg(n, o=an); n = an
+       call big_neg(d, o=an); d = an
+    end if
+    call big_abs(n, o=an)
+    call big_gcd(an, d, g)
+    if (g /= "1" .and. g /= "0") then
+       call big_divmod(n, g, q, r); n = q
+       call big_divmod(d, g, q, r); d = q
+    end if
+    if (d == "1") then
+       if (.not. int_big .and. big_fits_i64(n)) then
+          v = gc_int(big_to_i64(n))
+       else
+          v = gc_big(n, roots)
+       end if
+    else if (big_fits_i64(n) .and. big_fits_i64(d)) then
+       if (big_to_i64(d) <= 2147483647_gc_ip) then
+          v = gc_ratio(big_to_i64(n), big_to_i64(d))
+       else
+          v = gc_bigratio(n // "/" // d, roots)
+       end if
+    else
+       v = gc_bigratio(n // "/" // d, roots)
+    end if
+  end function gc_rat_make
 
   function gc_ratio(num0, den0) result(v)
     integer(gc_ip), intent(in) :: num0, den0
@@ -2524,7 +2602,7 @@ contains
        is_young = .not. obj_mark(x%ref)
     case (GCT_VEC)
        is_young = .not. vec_mark(x%ref)
-    case (GCT_STR, GCT_SYM, GCT_KEY, GCT_BIG, GCT_CLASS, GCT_DEC)
+    case (GCT_STR, GCT_SYM, GCT_KEY, GCT_BIG, GCT_CLASS, GCT_DEC, GCT_BIGRATIO)
        is_young = .not. str_mark(x%ref)
     end select
   end function is_young
@@ -3207,7 +3285,7 @@ contains
        ! cross-multiplying, and the default branch below would have
        ! compared the denominators alone.
        eq = (a%ival == b%ival .and. a%ref == b%ref)
-    case (GCT_BIG, GCT_CLASS)
+    case (GCT_BIG, GCT_CLASS, GCT_BIGRATIO)
        ! Canonical text, so this is exact.
        block
           call gc_ref_text(b%ref, s=dlt_1)
@@ -3286,6 +3364,12 @@ contains
        h = double_hasheq(gc_rval(v))
     case (GCT_RATIO)
        h = ieor(big_hash_i64(gc_numerator(v)), big_hash_i64(gc_denominator(v)))
+    case (GCT_BIGRATIO)
+       ! one form per value (rat_make), so its text decides
+       block
+          call gc_ref_text(v%ref, s=dlt_1)
+          h = big_hash_text(dlt_1)
+       end block
     case (GCT_BIG)
        ! the value it equals when it fits a long, as BigInt.hasheq
        block
@@ -4142,7 +4226,7 @@ contains
     integer :: n
     if (v%ref == 0) return
     select case (v%tag)
-    case (GCT_OBJ, GCT_VEC, GCT_STR, GCT_SYM, GCT_KEY, GCT_BIG, GCT_CLASS, GCT_DEC)
+    case (GCT_OBJ, GCT_VEC, GCT_STR, GCT_SYM, GCT_KEY, GCT_BIG, GCT_CLASS, GCT_DEC, GCT_BIGRATIO)
        continue
     case default
        return ! an immediate holds nothing
@@ -4184,7 +4268,7 @@ contains
           do i = 1, n
              call push_mark(vec_store(vec_pool(v%ref)%off + i - 1))
           end do
-       case (GCT_STR, GCT_SYM, GCT_KEY, GCT_BIG, GCT_CLASS, GCT_DEC)
+       case (GCT_STR, GCT_SYM, GCT_KEY, GCT_BIG, GCT_CLASS, GCT_DEC, GCT_BIGRATIO)
           str_mark(v%ref) = .true. ! a leaf: holds no references
           gc_marked = gc_marked + 1
           str_marked = str_marked + 1

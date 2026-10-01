@@ -20,9 +20,9 @@
   end type hm
   integer, parameter :: HK_INT = -1, HK_REAL = -2, HK_PINF = -3, HK_NINF = -4, &
        HK_NAN = -5, HK_NIL = -6, HK_EMPTYMAP = -7, HK_SPECIALS = -8, HK_TYPE = -9, &
-       HK_TRUE = -10, HK_FALSE = -11, HK_LINEBOX = -12, HK_SELFKEY = -13
+       HK_TRUE = -10, HK_FALSE = -11, HK_LINEBOX = -12, HK_SELFKEY = -13, HK_MATHCTX = -14
 
-  type(hm), parameter :: HOST_STATICS_1(95) = [ &
+  type(hm), parameter :: HOST_STATICS_1(96) = [ &
   ! PersistentList.creator is a static IFn that builds a list from its arguments.
        hm("clotran.host.persistent_list", "creator", B_LIST, "list"), &
   ! core.clj's own make-array, aget, aset and the aset-int family are
@@ -98,6 +98,7 @@
        hm("clotran.host.thread", "sleep", B_SLEEP, "clotran-sleep"), &
        hm("clotran.host.system", "identityHashCode", B_IDHASH, "clotran-identity-hash"), &
        hm("clotran.host.numbers", "add", B_ADD, "+"), &
+       hm("clotran.host.numbers", "rationalize", B_RATIONALIZE, "rationalize"), &
        hm("clotran.host.numbers", "addP", B_PADD, "+'"), &
        hm("clotran.host.numbers", "unchecked_add", B_UADD, "unchecked-add"), &
        hm("clotran.host.numbers", "unchecked_int_add", B_UADD, "unchecked-add"), &
@@ -236,7 +237,13 @@
        hm("clotran.host.math", "subtractExact", B_MATH0 + 38, "clotran-math-subtractExact"), &
        hm("clotran.host.math", "multiplyExact", B_MATH0 + 39, "clotran-math-multiplyExact"), &
        hm("clotran.host.math", "incrementExact", B_MATH0 + 40, "clotran-math-incrementExact") ]
-  type(hm), parameter :: HOST_STATICS_3(75) = [ &
+  type(hm), parameter :: HOST_STATICS_3(79) = [ &
+  ! MathContext's own contexts, as with-precision makes them: a precision
+  ! (ival) and HALF_EVEN, or for UNLIMITED (0) HALF_UP
+       hm("clotran.host.math_context", "DECIMAL32", HK_MATHCTX, "", 7_gc_ip), &
+       hm("clotran.host.math_context", "DECIMAL64", HK_MATHCTX, "", 16_gc_ip), &
+       hm("clotran.host.math_context", "DECIMAL128", HK_MATHCTX, "", 34_gc_ip), &
+       hm("clotran.host.math_context", "UNLIMITED", HK_MATHCTX, "", 0_gc_ip), &
        hm("clotran.host.math", "decrementExact", B_MATH0 + 41, "clotran-math-decrementExact"), &
        hm("clotran.host.math", "negateExact", B_MATH0 + 42, "clotran-math-negateExact"), &
        hm("clotran.host.math", "floorDiv", B_MATH0 + 43, "clotran-math-floorDiv"), &
@@ -414,7 +421,7 @@
        hm("clotran.host.numbers", "longs", B_IDENTITY, "identity"), &
        hm("clotran.host.numbers", "doubles", B_IDENTITY, "identity"), &
        hm("clotran.host.util", "arrayTypeToSymbol", B_ARRAYTYPESYM, "clotran-array-type-symbol") ]
-  type(hm), parameter :: HOST_STATICS(319) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
+  type(hm), parameter :: HOST_STATICS(324) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
   type(hm), parameter :: HOST_METHODS_1(98) = [ &
   ! Instance members. The target becomes the first argument, which is all
