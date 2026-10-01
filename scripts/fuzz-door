@@ -1,0 +1,151 @@
+#!/usr/bin/env bb
+;; fuzz-door: the package door against the formal model (PLAN step 27).
+;;
+;;   scripts/fuzz-door [-n N] [-s SEED]
+;;
+;; Generates scalar values of every shape -- integers on both sides of
+;; every window's edge, BigInts, reals with IEEE's specials, logicals,
+;; and things that are none of these -- and for each scalar kind the
+;; door carries asks two judges whether the value crosses:
+;;
+;;   the MODEL: model/boundary.lisp's `cross`, run by ACL2 (its
+;;     functions execute), so no expected answer is typed by hand;
+;;   the DOOR: clotran calling test/f/samplelib.f90's echo_kinds, which
+;;     hands every argument back.
+;;
+;; They must agree on every value, and a value that crosses must come
+;; back unchanged -- the same integer, the same real down to its sign
+;; and NaN-ness. Any disagreement is printed and the exit status is 1.
+;; Needs ACL2 (make model) and build/libsamplelib (make test builds it).
+(require '[clojure.string :as str]
+         '[clojure.math :as math]
+         '[babashka.process :as p])
+
+(def opts (loop [as *command-line-args* o {:n 200 :seed 1}]
+            (if (empty? as) o
+                (case (first as)
+                  "-n" (recur (drop 2 as) (assoc o :n (parse-long (second as))))
+                  "-s" (recur (drop 2 as) (assoc o :seed (parse-long (second as))))
+                  (do (println "usage: scripts/fuzz-door [-n N] [-s SEED]") (System/exit 2))))))
+
+;; splitmix64, seeded: the same values for the same seed, on any host
+(def state (atom (long (:seed opts))))
+(defn rand-long []
+  (let [z (swap! state #(unchecked-add % -7046029254386353131))
+        z (unchecked-multiply (bit-xor z (unsigned-bit-shift-right z 30)) -4658895280553007687)
+        z (unchecked-multiply (bit-xor z (unsigned-bit-shift-right z 27)) -7723592293110705685)]
+    (bit-xor z (unsigned-bit-shift-right z 31))))
+(defn rand-in [lo hi] (+ lo (mod (bigint (rand-long)) (- hi lo))))
+(defn pow2 [k] (reduce * 1N (repeat k 2N)))
+
+;; a double's EXACT value as a rational: halving and doubling by two are
+;; exact, so x = m * 2^up / 2^down with m a long below 2^53
+(defn exact [x]
+  (if (zero? x) 0
+      (let [sign (if (neg? x) -1 1)]
+        (loop [x (abs x) up 0]
+          (if (>= x 9007199254740992.0)
+            (recur (/ x 2.0) (inc up))
+            (loop [x x down 0]
+              (if (== x (math/floor x))
+                (/ (* sign (bigint (long x)) (pow2 up)) (pow2 down))
+                (recur (* x 2.0) (inc down)))))))))
+
+;; a double with random mantissa and binary exponent in [lo, hi)
+(defn rand-double [lo hi]
+  (let [m (/ (double (rand-in 0 4503599627370496)) 4503599627370496.0)
+        x (math/scalb (+ 1.0 m) (int (rand-in lo hi)))]
+    (if (neg? (rand-long)) (- x) x)))
+
+;; ---- the values ------------------------------------------------------
+;;
+;; Each is {:src clotran source text, :model the ACL2 term}. An integer
+;; of either representation is (:int n) to the model; a real is the
+;; exact rational it denotes, or IEEE's special.
+
+(defn int-case [n] {:src (str n) :model (str "(:int " n ")")})
+(defn big-case [n] {:src (str n "N") :model (str "(:int " n ")")})
+(defn real-case [x]
+  (cond (NaN? x) {:src "##NaN" :model "(:real :nan)"}
+        (= x ##Inf) {:src "##Inf" :model "(:real :pinf)"}
+        (= x ##-Inf) {:src "##-Inf" :model "(:real :ninf)"}
+        :else {:src (pr-str x) :model (str "(:real " (exact x) ")")}))
+(def other-cases
+  [{:src "true" :model "(:bool t)"} {:src "false" :model "(:bool nil)"}
+   {:src "nil" :model "(:other)"} {:src "\"7\"" :model "(:other)"} {:src "1/2" :model "(:other)"}
+   {:src ":k" :model "(:other)"} {:src "\\a" :model "(:other)"} {:src "[1]" :model "(:other)"}])
+
+(def edges
+  (let [w (fn [b] [(- (pow2 (dec b))) (dec (pow2 (dec b)))])]
+    (for [b [8 16 32 64] e (w b) d [-1 0 1]] (+ e d))))
+
+(def cases
+  (vec (concat
+        (for [n edges]
+          (if (<= -9223372036854775808 n 9223372036854775807) (int-case (long n)) (big-case n)))
+        (map big-case [5 -5 2147483648 (bigint 9223372036854775807)])
+        (map real-case [0.0 -0.0 1.0 2.0 0.1 -2.5 1e40 -1e40 3.4028234663852886E38 1e-320
+                        ##NaN ##Inf ##-Inf])
+        other-cases
+        (repeatedly (:n opts)
+                    #(case (rand-in 0 4)
+                       0 (int-case (rand-long))
+                       1 (int-case (rand-in -3000000000 3000000000))
+                       2 (real-case (rand-double -1074 1024))
+                       3 (real-case (rand-double -20 140)))))))
+
+;; the door's scalar kinds, and the model's names for them
+(def kinds [["int4" ":int32" 0] ["int8" ":int64" 1] ["real8" ":real64" 2] ["logical" ":logical" 3]])
+
+;; ---- the model's verdicts ----------------------------------------------
+
+(def acl2 (or (System/getenv "ACL2") (str (System/getenv "HOME") "/jborden/acl2/saved_acl2")))
+
+(defn model-verdicts []
+  (let [forms (str "(include-book \"boundary\")\n"
+                   (str/join "\n" (for [[i c] (map-indexed vector cases) [_ mk _] kinds]
+                                    (str "(cw \"VERDICT ~x0 ~x1 ~x2~%\" " i " " mk " (car (cross " mk " '" (:model c) ")))")))
+                   "\n(good-bye)\n")
+        out (:out (p/shell {:dir (or (System/getenv "MODEL_DIR") "model") :in forms :out :string :err :string} acl2))]
+    (into {} (for [[_ i k v] (re-seq #"VERDICT (\d+) :(\S+) :(\S+)" out)]
+               [[(parse-long i) (str ":" (str/lower-case k))] (= v "OK")]))))
+
+;; ---- the door's -----------------------------------------------------------
+
+(defn door-verdicts []
+  (let [src (str "(fortran/load-package \"build/libsamplelib.dylib\")\n"
+                 "(defn same? [a b] (if (and (number? a) (number? b) (not= a a)) (not= b b) (and (= a b) (= (str a) (str b)))))\n"
+                 "(defn door [i k slot v]\n"
+                 "  (let [args (assoc [0 0 0.0 false] slot v)\n"
+                 "        r (try (apply samplelib.raw/echo-kinds args) (catch :default e :refused))]\n"
+                 "    (if (= r :refused) (println \"DOOR\" i k \"REFUSED\")\n"
+                 "        (let [e (get r ([:oi4 :oi8 :or8 :ol] slot))]\n"
+                 "          (println \"DOOR\" i k (if (same? e v) \"SAME\" (str \"CHANGED \" (pr-str v) \" -> \" (pr-str e))))))))\n"
+                 (str/join "\n" (for [[i c] (map-indexed vector cases) [_ mk slot] kinds]
+                                  (str "(door " i " \"" mk "\" " slot " " (:src c) ")")))
+                 "\n")
+        f (str (System/getenv "TMPDIR") "/fuzz-door-cases.cljf")]
+    (spit f src)
+    (let [out (:out (p/shell {:out :string :err :string :in ""} "./clotran-bin" "src/clj/clojure/core.clj" f))]
+      (into {} (for [[_ i k v] (re-seq #"DOOR (\d+) (\S+) (.*)" out)]
+                 [[(parse-long i) k] v])))))
+
+;; ---- compare --------------------------------------------------------------
+
+(let [m (model-verdicts) d (door-verdicts)
+      keys (for [i (range (count cases)) [_ mk _] kinds] [i mk])
+      bad (for [[i mk :as k] keys
+                :let [mv (get m k) dv (get d k)
+                      problem (cond (nil? mv) "the model gave no verdict"
+                                    (nil? dv) "the door gave no verdict"
+                                    (and mv (= dv "REFUSED")) "the model crosses it, the door refuses"
+                                    (and (not mv) (not= dv "REFUSED")) "the model refuses it, the door crosses"
+                                    (and mv (not= dv "SAME")) (str "crossed but " dv))]
+                :when problem]
+            (str "  " mk " " (:src (cases i)) ": " problem))]
+  (println (str "fuzz-door: " (count cases) " values x " (count kinds) " kinds, "
+                (count (filter #(get m %) keys)) " cross, "
+                (count (remove #(get m %) keys)) " refused, "
+                (count bad) " disagree with the model"))
+  (doseq [b (take 40 bad)] (println b))
+  (System/exit (if (empty? bad) 0 1)))

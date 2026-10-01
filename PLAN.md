@@ -2568,8 +2568,27 @@ door today gives three silent wrong answers --
 - the same array as an input and the output (`c` for `a`) is
   accepted, which the standard forbids: `[3 8 3 8]` for `[3 3 3 3]`.
 
-Also: extents cross as `c_int` unchecked, and only `real8` and `int4`
-arrays are accepted though NativeArray holds every kind.
+Fixed (2026-10-01): 7ec6198 the numbers, 36419a4 the aliasing. (An
+earlier line here said extents cross as `c_int` unchecked; they cannot
+overflow -- NativeArray holds extents as default 32-bit integers, which
+is its own limit, 2^31-1 per dimension.) Still: only `real8` and
+`int4` arrays cross, though NativeArray holds every kind.
+
+Building a routine with one argument of each scalar kind
+(test/f/samplelib.f90 `echo_kinds`) found two more: the generated shim
+passed a one-byte `logical(c_bool)` to a routine's four-byte default
+`logical` -- a compile error, so no package with a plain logical
+argument could build -- and int8 crossed as `c_long`, four bytes on
+Windows; and the door refused `5N`, though a BigInt is an integer and
+`(int 5N)` is 5. A BigInt inside the window now crosses.
+
+`scripts/fuzz-door` (`make fuzz-door`) runs the model as the oracle:
+ACL2 executes `cross` on every generated value -- both sides of every
+window's edge, BigInts, IEEE's specials, exact doubles, and things that
+are not numbers -- the door judges the same values through
+`echo_kinds`, and the two must agree, a crossing value arriving
+unchanged. 0 disagreements in 2392 pairs; a model mutated to widen
+int4 by one is caught at once (2^31, as a long and as a BigInt).
 
 **Decisions for James** (recommendations first; clj's own interop is
 host behaviour and inconsistent -- `(Integer/toString 2.0)` truncates,

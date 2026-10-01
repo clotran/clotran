@@ -630,6 +630,13 @@ model:
 	cd model && printf '(certify-book "boundary")\n(good-bye)\n' | "$(ACL2)" > ../$(B)/model.log 2>&1 || true
 	@test -f model/boundary.cert || { grep -E "ACL2 Error|FAILED" $(B)/model.log; exit 1; }
 	@echo "model: boundary certified"
+
+# The package door against the model: every scalar value the fuzzer
+# makes must cross or be refused exactly as model/boundary.lisp's
+# `cross` says, and cross unchanged. Needs ACL2, as `model` does.
+.PHONY: fuzz-door
+fuzz-door: model clotran-bin $(B)/libsamplelib.$(SOEXT)
+	scripts/fuzz-door -n 500 -s 1
 # pandoc writes HTML; a headless Chrome or Chromium prints it to PDF. No
 # LaTeX. CHROME=/path/to/it overrides the browser found here.
 CHROME ?= $(shell for c in "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" google-chrome chromium chromium-browser chrome; do \
