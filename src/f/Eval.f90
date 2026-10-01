@@ -17351,23 +17351,51 @@ contains
           slot = slot + 1
           if (rk(i) == 0) then
              select case (trim(ty(i)))
+             ! NUMBERS NEVER MIX (PLAN step 27; model/boundary.lisp,
+             ! `cross`): a real crosses only into a real kind, an
+             ! integer only into an integer kind and only inside its
+             ! window, a logical only from true or false. The door used
+             ! to pass an integer's ival whatever the value was -- a
+             ! double's IEEE bits went in as m, and 2^32+2 wrapped to 2.
              case ("real8")
                 if (it(i) /= "out") then
-                   if (.not. is_number(tv)) then
-                      call raise_class("clotran.host.class_cast_exception", sym // ": argument " // trim(cbuf_of(i)) // " is not a number", [roots])
+                   if (tv%tag /= GCT_REAL) then
+                      call refuse(i, "is a real8: pass a real, not ", tv)
                       exit once
                    end if
-                   tr(i) = real(num_dbl(tv), c_double)
+                   tr(i) = real(gc_rval(tv), c_double)
                 end if
                 argv(slot) = c_loc(tr(i))
              case ("int4")
-                if (it(i) /= "out") ti(i) = int(tv%ival, c_int)
+                if (it(i) /= "out") then
+                   if (tv%tag /= GCT_INT) then
+                      call refuse(i, "is an int4: pass an integer, not ", tv)
+                      exit once
+                   end if
+                   if (tv%ival < -2147483648_gc_ip .or. tv%ival > 2147483647_gc_ip) then
+                      call refuse(i, "is an int4, -2147483648..2147483647: out of range, ", tv)
+                      exit once
+                   end if
+                   ti(i) = int(tv%ival, c_int)
+                end if
                 argv(slot) = c_loc(ti(i))
              case ("int8")
-                if (it(i) /= "out") tl(i) = int(tv%ival, c_long)
+                if (it(i) /= "out") then
+                   if (tv%tag /= GCT_INT) then
+                      call refuse(i, "is an int8: pass an integer, not ", tv)
+                      exit once
+                   end if
+                   tl(i) = int(tv%ival, c_long)
+                end if
                 argv(slot) = c_loc(tl(i))
              case ("logical")
-                if (it(i) /= "out") tb(i) = logical(truthy(tv), c_bool)
+                if (it(i) /= "out") then
+                   if (tv%tag /= GCT_BOOL) then
+                      call refuse(i, "is a logical: pass true or false, not ", tv)
+                      exit once
+                   end if
+                   tb(i) = logical(truthy(tv), c_bool)
+                end if
                 argv(slot) = c_loc(tb(i))
              case ("string")
                 if (it(i) == "out") then
@@ -17511,6 +17539,22 @@ contains
       character(len=16) :: s
       write(s, '(I0)') i
     end function cbuf_of
+    ! A value refused at the door: the routine, the argument by its
+    ! manifest name, what it needs, and what it was given
+    subroutine refuse(i, what, given)
+      integer, intent(in) :: i
+      character(len=*), intent(in) :: what
+      type(gc_value), intent(in) :: given
+      type(gc_value) :: a, nm
+      character(len=:), allocatable :: an, cn, shown
+      a = strip_meta(gcv_nth(vs_get(vst, base + 3), i - 1))
+      nm = strip_meta(gca_get(a, gc_key("name", [roots, a, given])))
+      call text_of(nm, s=an)
+      call class_name_of(given, s=cn)
+      call gcp_str(given, .true., s=shown)
+      call raise_class("clotran.host.illegal_argument_exception", &
+           rname // ": argument " // an // " " // what // shown // " (" // cn // ")", [roots, given])
+    end subroutine refuse
   end function pkg_call
 
   ! Whether a vector of class keywords names this class.

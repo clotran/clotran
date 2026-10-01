@@ -1090,6 +1090,24 @@
        true)
 (check "dgemm refuses mismatched shapes"
        (try (blas/dgemm dgA dgA) (catch clotran.host.throwable t :refused)) :refused)
+;; NUMBERS NEVER MIX at the door (PLAN step 27; model/boundary.lisp
+;; `cross`). Each of these once crossed silently: 2.0 as m went in as
+;; its IEEE bits and dgemm answered zeros; 2^32+2 wrapped to 2.
+(defn door-refusal [f]
+  (try (f) :crossed (catch clotran.host.illegal_argument_exception e (ex-message e))))
+(let [a (fb/make-array "real8" 2 2) b (fb/make-array "real8" 2 2) c (fb/make-array "real8" 2 2)]
+  (check "a real is refused as an int4"
+         (door-refusal #(blas.raw/dgemm "N" "N" 2.0 2 2 1.0 a 2 b 2 0.0 c 2))
+         "dgemm: argument m is an int4: pass an integer, not 2.0 (clotran.host.real8)")
+  (check "an integer outside int4's window is refused"
+         (door-refusal #(blas.raw/dgemm "N" "N" 4294967298 2 2 1.0 a 2 b 2 0.0 c 2))
+         "dgemm: argument m is an int4, -2147483648..2147483647: out of range, 4294967298 (clotran.host.int8)")
+  (check "the window's edge crosses"
+         (door-refusal #(blas.raw/dgemm "N" "N" 2147483647 0 0 1.0 a 2147483647 b 2 0.0 c 2147483647))
+         :crossed)
+  (check "an integer is refused as a real8"
+         (door-refusal #(blas.raw/dgemm "N" "N" 2 2 2 1 a 2 b 2 0.0 c 2))
+         "dgemm: argument alpha is a real8: pass a real, not 1 (clotran.host.int8)"))
 
 ;;; ---- stack traces --------------------------------------------------
 ;;
