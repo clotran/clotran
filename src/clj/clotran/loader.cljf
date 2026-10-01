@@ -49,11 +49,20 @@
   [form]
   (binding [*print-meta* true] (pr-str form)))
 
+(defn const-shape
+  "What tells two pooled constants apart beyond =: '(9) and [9] are =, and
+  sharing one slot gave (into '(9) '[9]) a vector (scripts/fuzz found it).
+  The printed form, metadata and all, separates a list from a vector, 1
+  from 1N and 1.0, a string from a symbol."
+  [v]
+  (binding [*print-meta* true] (pr-str v)))
+
 (defn- entries
   "The host's pool as the compiler keys it: [kind value] pairs, one per
-  entry the generated code reads (Eval.f90, compiled_pool)."
+  entry the generated code reads (Eval.f90, compiled_pool); a constant's
+  key carries its shape (const-shape)."
   [pool]
-  (mapv (fn [[k v]] {:kind k :value v}) pool))
+  (mapv (fn [[k v]] (cond-> {:kind k :value v} (= :const k) (assoc :shape (const-shape v)))) pool))
 
 (defn analyse
   "The analysed (fn ...) `form`, in the current namespace, as the

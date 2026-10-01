@@ -318,7 +318,7 @@ end module clotran_rt_decl
   [nd]
   (cond
     (= :var (:op nd)) {:kind :var :value (:p1 nd)}
-    (and (= :const (:op nd)) (not (spellable? (:p1 nd)))) {:kind :const :value (:p1 nd)}
+    (and (= :const (:op nd)) (not (spellable? (:p1 nd)))) {:kind :const :value (:p1 nd) :shape (loader/const-shape (:p1 nd))}
     ;; a kind we do not emit: the pool holds the NODE and the
     ;; interpreter runs it
     (not (compiled-ops (:op nd))) {:kind :node :value (:node nd)}

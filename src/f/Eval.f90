@@ -19293,7 +19293,9 @@ contains
        end block
        e = gcv_nth(e, 1)
        if (kind == "const") then
-          if (gc_equal(e, v)) at = i
+          ! the SAME constant, not an equal one: '(9) and [9] are =, and
+          ! one entry for both gave a list's slot a vector
+          if (e%tag == v%tag .and. e%ref == v%ref .and. e%ival == v%ival) at = i
        else if (e%tag == v%tag .and. e%ref == v%ref) then
           at = i
        end if
