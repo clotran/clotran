@@ -2908,3 +2908,7 @@
 [(bit-shift-left 1 64) (bit-shift-right -8 65)]
 ;; and below 64 they agree
 [(bit-shift-left 1 63) (bit-shift-right -1 63) (unsigned-bit-shift-right -1 60) (bit-shift-left 3 62)]
+
+;; count answers clotran's one integer, not clj's host's boxed int
+(expect-diff "DEVIATIONS 71: count and int answer a long")
+[(class (count [1])) (class (int 1))]

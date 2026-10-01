@@ -299,6 +299,20 @@
 (s/fdef clojure.core/seq :args (s/alt :coll (s/cat :coll ::ints) :str (s/cat :s ::text) :map (s/cat :m ::map)) :ret (s/nilable seq?))
 (s/fdef clojure.core/reverse :args (s/alt :coll (s/cat :coll ::ints) :str (s/cat :s ::text)) :ret seq?)
 
+
+;;; ---- third batch: clojure.walk -----------------------------------------
+
+(def g-nested (g/elements [[1 [2 [3 {:a 4}]]] {:a 1 :b [2 3] :c {:d 4}} '(1 (2 3) #{4}) [] {} [nil {:x [1 2]}] {:a {:b {:c 1}}}]))
+(s/def ::nested (s/with-gen any? (constantly g-nested)))
+(s/def ::wf (s/with-gen fnref? (constantly (fns '(fn [x] (if (number? x) (inc x) x)) '(fn [x] (if (map? x) (assoc x :w 1) x)) 'identity
+                                                '(fn [x] (if (vector? x) (vec (reverse x)) x))))))
+(s/fdef clojure.walk/postwalk :args (s/cat :f ::wf :form ::nested))
+(s/fdef clojure.walk/prewalk :args (s/cat :f ::wf :form ::nested))
+(s/fdef clojure.walk/keywordize-keys :args (s/cat :m (s/with-gen any? (constantly (g/elements [{"a" 1 "b" {"c" 2}} {} [{"x" 1}] {:k {"n" 2}}])))))
+(s/fdef clojure.walk/stringify-keys :args (s/cat :m (s/with-gen any? (constantly (g/elements [{:a 1 :b {:c 2}} {} [{:x 1}] {"s" {:n 2}}])))))
+(s/fdef clojure.walk/postwalk-replace :args (s/cat :smap (s/with-gen map? (constantly (g/elements [{1 :one} {:a :z 2 3} {}]))) :form ::nested))
+(s/fdef clojure.walk/prewalk-replace :args (s/cat :smap (s/with-gen map? (constantly (g/elements [{1 :one} {[2 3] :pair} {}]))) :form ::nested))
+
 (def fuzz-fns
   "Every function spec'd above, by name."
-  (->> (s/registry) keys (remove before) (filter symbol?) (filter #(#{"clojure.core" "clojure.string" "clojure.set"} (namespace %))) sort vec))
+  (->> (s/registry) keys (remove before) (filter symbol?) (filter #(#{"clojure.core" "clojure.string" "clojure.set" "clojure.walk"} (namespace %))) sort vec))

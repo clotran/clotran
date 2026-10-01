@@ -28,8 +28,7 @@
          '[clojure.test.check.random :as random]
          '[clojure.string :as str]
          '[babashka.fs :as fs]
-         '[babashka.process :as p]
-         '[clojure.edn :as edn])
+         '[babashka.process :as p])
 
 (def repo (str (fs/parent (fs/parent (fs/absolutize *file*)))))
 (load-file (str repo "/upstream/names.clj"))
@@ -155,7 +154,34 @@
         [1 (g/let [x (i) y (i) z (i)] (list 'case (list 'mod x 3) 0 y 1 z (list '- y z)))]
         [1 (g/let [x (i) y (i) z (i)] (list 'cond (list '< x 0) y (list '> x 10) z :else (list '+ y z)))]
         [1 (g/let [s (sq)] (list 'let '[at (atom 0)] (list 'doseq ['v s] '(swap! at + v)) '@at))]
-        [1 (g/let [s (sq)] (list 'let '[vt (volatile! 1)] (list 'run! '(fn [v] (vswap! vt * (if (zero? v) 1 (min 3 (max -3 v))))) s) '@vt))]]))))
+        [1 (g/let [s (sq)] (list 'let '[vt (volatile! 1)] (list 'run! '(fn [v] (vswap! vt * (if (zero? v) 1 (min 3 (max -3 v))))) s) '@vt))]
+        ;; the fixture: protocol dispatch on a type, a record, a long, nil;
+        ;; record fields and assoc; multimethods; binding
+        [2 (g/let [x (i)] (list 'fz-m (list '->FzT x)))]
+        [1 (g/let [x (i) y (i)] (list 'fz-m2 (list '->FzT x) y))]
+        [2 (g/let [x (i) y (i)] (list 'fz-m (list '->FzR x y)))]
+        [1 (g/let [x (i) y (i) z (i)] (list 'fz-m2 (list 'map->FzR {:a x :b y}) z))]
+        [1 (g/let [x (i)] (list 'fz-m (list 'long x)))]
+        [1 (g/let [x (i)] (list 'fz-m2 nil x))]
+        [1 (g/let [x (i) y (i)] (list ':a (list '->FzR x y)))]
+        [1 (g/let [x (i) y (i) z (i)] (list 'get (list 'assoc (list '->FzR x y) :c z) :c 0))]
+        [1 (g/let [x (i) y (i) z (i)] (list ':a (list 'assoc (list '->FzR x y) :a z)))]
+        [1 (g/let [x (i) y (i)] (list 'count (list 'dissoc (list '->FzR x y) :a)))]
+        [1 (g/let [x (i) y (i)] (list 'reduce '+ (list 'vals (list '->FzR x y))))]
+        [1 (g/let [x (i)] (list 'fz-mm (list 'abs (list 'mod x 50))))]
+        [1 (g/let [x (i) y (i) sh (g/elements [:sq :rect :tri])] (list 'fz-area {:shape sh :s x :w x :h y}))]
+        [1 (g/let [x (i) y (i)] (list 'binding ['*fz-d* x] (list '+ '(fz-read-d) y)))]
+        [1 (g/let [x (i)] (list '+ '(fz-read-d) x))]
+        [1 (g/let [x (i) y (i)] (list 'binding ['*fz-d* x] (list 'binding ['*fz-d* y] '(fz-read-d))))]
+        ;; higher-order functions, applied
+        [1 (g/let [fa (f) fb (f) x (i)] (list (list 'comp fa fb) x))]
+        [1 (g/let [k small x (i)] (list (list 'partial '+ k) x))]
+        [1 (g/let [fa (f) x (i)] (list 'apply 'max (list (list 'juxt fa 'inc 'dec) x)))]
+        [1 (g/let [x (i) y (i)] (list (list 'fnil '+ 0) (list 'when (list 'even? x) x) y))]
+        [1 (g/let [x (i) y (i)] (list 'apply '+ x [y 3]))]
+        [1 (g/let [x (i)] (list 'if (list (list 'every-pred 'even? 'pos?) x) 1 0))]
+        [1 (g/let [x (i)] (list 'if (list (list 'some-fn 'neg? 'zero?) x) 1 0))]
+        [1 (g/let [x (i)] (list 'if (list (list 'complement 'even?) x) 1 0))]]))))
 
 (defn g-seq [env d]
   (if (<= d 0)
@@ -210,7 +236,13 @@
         base [[3 (g/let [op (g/elements '[< > <= = not=]) x (i) y (i)] (list op x y))]
               [2 (g/let [p (g/elements '[even? odd? pos? zero?]) x (i)] (list p x))]
               [1 (g/let [s (sq)] (list 'empty? s))]
-              [1 (g/let [s (sq)] (list 'boolean (list 'some 'even? s)))]]]
+              [1 (g/let [s (sq)] (list 'boolean (list 'some 'even? s)))]
+              [1 (g/let [x (i)] (list 'satisfies? 'FzP (list 'long x)))]
+              [1 (g/let [x (i) y (i)] (list 'satisfies? 'FzP (list '->FzR x y)))]
+              [1 (g/let [x (i) y (i)] (list '= (list '->FzR x y) (list '->FzR x y)))]
+              [1 (g/let [x (i) y (i)] (list '= (list '->FzR x y) {:a x :b y}))]
+              [1 (g/let [x (i) y (i)] (list 'record? (list '->FzR x y)))]
+              [1 (g/let [x (i)] (list 'map? (list '->FzT x)))]]]
     ;; generators are built eagerly: and/or only while depth is left
     (g/frequency
      (if (<= d 0)
@@ -321,6 +353,27 @@
 
 ;;; ---- running ------------------------------------------------------
 
+;; THE FIXTURE: what a case may use beyond clojure.core -- a protocol, a
+;; deftype and a defrecord implementing it, the protocol extended to longs
+;; and nil, two multimethods (one on a function, one on a keyword, with a
+;; :default), a dynamic var -- defined the same on every side: in user for
+;; clj and the interpreted modes, in the compiled namespace for compiled
+(def fixture "
+(defprotocol FzP (fz-m [x]) (fz-m2 [x y]))
+(deftype FzT [a] FzP (fz-m [_] (* a 2)) (fz-m2 [_ y] (+ a y)))
+(defrecord FzR [a b] FzP (fz-m [_] (+ a b)) (fz-m2 [_ y] (* a y)))
+(extend-protocol FzP clotran.host.int8 (fz-m [x] (- x)) (fz-m2 [x y] (- x y)) nil (fz-m [_] 0) (fz-m2 [_ y] y))
+(defmulti fz-mm (fn [x] (if (even? x) :even :odd)))
+(defmethod fz-mm :even [x] (quot x 2))
+(defmethod fz-mm :odd [x] (inc (* 3 x)))
+(defmulti fz-area :shape)
+(defmethod fz-area :sq [{:keys [s]}] (* s s))
+(defmethod fz-area :rect [{:keys [w h] :or {h 1}}] (* w h))
+(defmethod fz-area :default [_] -1)
+(def ^:dynamic *fz-d* 10)
+(defn fz-read-d [] *fz-d*)
+")
+
 (def prelude "
 (defn fz-canon [x]
   (cond (map? x) (str \"{\" (clojure.string/join \", \" (sort (map (fn [e] (str (fz-canon (key e)) \" \" (fz-canon (val e)))) x))) \"}\")
@@ -332,7 +385,7 @@
 ")
 
 (defn case-script [forms]
-  (str "(in-ns 'user)\n(require 'clojure.string 'clojure.set 'clojure.walk)\n" prelude
+  (str "(in-ns 'user)\n(require 'clojure.string 'clojure.set 'clojure.walk)\n" prelude fixture
        (apply str (map-indexed (fn [i f] (str "(fz-out " i " (fn [] " (pr-str f) "))\n")) forms))
        "(shutdown-agents)\n"))
 
@@ -368,7 +421,7 @@
       ;; declines stays interpreted, and the run says how many compiled
       (let [nsf (str work "/fz/cases.cljf") lib (str work "/fz.dylib") drv (str work "/drive.cljf")]
         (fs/create-dirs (str work "/fz"))
-        (spit nsf (str "(ns fz.cases (:require [clojure.string] [clojure.set] [clojure.walk]))\n"
+        (spit nsf (str "(ns fz.cases (:require [clojure.string] [clojure.set] [clojure.walk]))\n" fixture
                        (apply str (map-indexed (fn [i f] (str "(defn c" i " [] " (pr-str f) ")\n")) forms))))
         (let [c (sh {"CLOTRAN_CACHE" (str work "/cache")} (str repo "/clotran") "compile" nsf lib)]
           (when-not (fs/exists? lib)
@@ -413,7 +466,7 @@
 ;;; ---- main -----------------------------------------------------------
 
 (let [{:keys [n seed modes]} opts
-      fixed (some-> (:file opts) slurp edn/read-string vec)
+      fixed (some-> (:file opts) slurp read-string vec)   ; the reader, not edn: a case may hold #"regex"
       fn-pairs (when (:fns opts) (fn-roses (:fns opts) seed))
       fsyms (mapv first fn-pairs)
       n (cond fixed (count fixed) fn-pairs (count fn-pairs) :else n)

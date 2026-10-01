@@ -2023,5 +2023,21 @@ James, 2026-10-01: keep Fortran's conventions. The two differ by at
 most a unit in the last place; scripts/fuzz allows exactly that when a
 ratio is in the form.
 
-**Removal**: round through a 16-digit decimal (BigDec.f90 has the
-division) -- if it is decided that clj's answer is the language's.
+**Removal**: none. James, 2026-10-01: "Definitely keep the Fortran
+version, it is more accurate" -- the IEEE quotient is the correctly
+rounded double, the 16-digit detour is not.
+
+## 71. `count` and `int` answer clotran's one integer
+
+In clj, `(class (count [1]))` and `(class (int 1))` are
+`Integer`, the host's boxed 32-bit int; everything else
+integral is a `Long`. clotran has one integer, 64-bit
+(`clotran.host.int8`), so both answer that. It is seen where the class
+is: a protocol extended to longs dispatches on `(count xs)` here and
+finds no method in clj, and `(satisfies? P (count xs))` is true here
+and false there. ClojureScript answers a JavaScript number for both --
+the type is the host's, not the language's. James, 2026-10-01: keep
+Fortran's conventions.
+
+**Removal**: none intended; a 32-bit integer kind would have to exist
+first, and arithmetic on it widen as Numbers does.
