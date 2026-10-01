@@ -1,9 +1,12 @@
 ;; Per-element costs (PLAN step 26), each printed as `label  N ns`.
 ;; Written in clotran's names; scripts/bench-langs --micro gives it to clj
 ;; in upstream's.
-(defn per [label n f]
+(defn per
+  "The best of five runs, after one to warm: a busy machine only ever adds."
+  [label n f]
   (f)
-  (let [t0 (clotran.host.system/nanoTime) _ (f) t (- (clotran.host.system/nanoTime) t0)]
+  (let [t (apply min (for [_ (range 5)]
+                       (let [t0 (clotran.host.system/nanoTime) _ (f)] (- (clotran.host.system/nanoTime) t0))))]
     (println (format "%-44s %8.1f ns" label (/ (double t) n)))))
 (def n 1000000)
 (defn id [x] x)

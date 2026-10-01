@@ -796,13 +796,16 @@
     type(gc_value), intent(in) :: fr
     integer, intent(in) :: r
     type(gc_value) :: v
-    v = gc_reg(fr, r + 1)
+    v = vec_store(vec_pool(fr%ref)%off + r)
   end function reg_get
 
   subroutine reg_set(fr, r, v)
     type(gc_value), intent(in) :: fr, v
     integer, intent(in) :: r
-    call gc_reg_set(fr, r + 1, v)
+    vec_store(vec_pool(fr%ref)%off + r) = v
+    if (v%ref /= 0) then
+       if (vec_mark(fr%ref) .and. .not. vec_rem(fr%ref)) call gc_reg_barrier(fr, v)
+    end if
   end subroutine reg_set
 
   ! Runs the flat body on top of the continuation stack until it
@@ -820,7 +823,7 @@
     type(gc_value), intent(inout) :: val
     type(gc_stack), pointer :: vst
     type(gc_value) :: nd, code, consts, fr, v, fnv, argv, body, newframe, wb, ar
-    integer :: b, ks, pc, j, n, start, w(FW), id
+    integer :: b, ks, pc, j, n, start, w(FW), id, cb, kb
     logical :: ok, spare, scalar, done
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1
@@ -842,6 +845,10 @@
     nd = vs_get(vst, b + 1)
     code = gc_slot(nd, 2)
     consts = gc_slot(nd, 3)
+    ! where the code and the constants lie in the vector store, read in
+    ! place below: a live vector's payload never moves
+    cb = vec_pool(code%ref)%off - 1
+    kb = vec_pool(consts%ref)%off - 1
     fr = vs_get(vst, b + 2)
     ! a fresh entry: k_push does not reset aux
     if (tctx%kst(ks)%pc == 0) tctx%kst(ks)%aux = 0
@@ -872,10 +879,10 @@
     if (pc == 0) pc = 1
 
     do
-       call gc_vec_word(code, pc, w)
+       w = int(vec_store(cb + pc : cb + pc + FW - 1)%ival)
        select case (w(1))
        case (F_CONST)
-          call reg_set(fr, w(2), gc_vec_get(consts, w(3) + 1))
+          call reg_set(fr, w(2), vec_store(kb + w(3) + 1))
        case (F_NIL)
           call reg_set(fr, w(2), gc_nil())
        case (F_MOVE)
@@ -884,11 +891,11 @@
           call reg_set(fr, w(2), reg_get(fr, w(3)))
           call reg_set(fr, w(3), gc_nil())
        case (F_VAR)
-          v = var_deref(gc_vec_get(consts, w(3) + 1), [consts])
+          v = var_deref(vec_store(kb + w(3) + 1), [consts])
           call reg_set(fr, w(2), v)
        case (F_DLVAR)
           ! a direct-linked head, as exec.inc's N_CALL reads one
-          v = gc_vec_get(consts, w(3) + 1)
+          v = vec_store(kb + w(3) + 1)
           fnv = gc_slot(v, 5)
           if (fnv%tag == GCT_INT) then
              if (fnv%ival /= link_epoch) then
@@ -931,10 +938,10 @@
           pc = w(5)
           cycle
        case (F_FN)
-          v = make_closure_from(gc_vec_get(consts, w(3) + 1), fr, [nd])
+          v = make_closure_from(vec_store(kb + w(3) + 1), fr, [nd])
           call reg_set(fr, w(2), v)
        case (F_LAZY)
-          v = make_closure_from(gc_vec_get(consts, w(3) + 1), fr, [nd])
+          v = make_closure_from(vec_store(kb + w(3) + 1), fr, [nd])
           call vs_set(vst, b + 3, v)
           v = gc_obj(OBJ_LAZY, [vs_get(vst, b + 3), gc_nil(), gc_nil()], [vs_get(vst, b + 3)])
           call gc_set_i1(v, LAZY_PENDING)
@@ -969,7 +976,7 @@
           call capture_trace()
           exit
        case (F_EVAL)
-          v = exec(gc_vec_get(consts, w(3) + 1), fr)
+          v = exec(vec_store(kb + w(3) + 1), fr)
           if (tctx%has_error) exit
           call reg_set(fr, w(2), v)
        case (F_CALL)
@@ -1172,7 +1179,7 @@
           n = w(5)
           tctx%kst(ks)%aux2 = w(6)
           tctx%kst(ks)%pc = pc
-          fnv = gc_vec_get(consts, w(3) + 1)
+          fnv = vec_store(kb + w(3) + 1)
           if (n >= 1 .and. n <= 2) then
              v = reg_get(fr, w(7))
              argv = gc_nil()
@@ -1214,7 +1221,7 @@
           do j = 0, w(5) - 1
              call reg_set(fr, w(4) + j, gc_nil())
           end do
-          v = new_cached(gc_vec_get(consts, w(3) + 1), vs_get(vst, b + 6))
+          v = new_cached(vec_store(kb + w(3) + 1), vs_get(vst, b + 6))
           call vs_set(vst, b + 6, gc_nil())
           if (tctx%has_error) exit
           call reg_set(fr, w(2), v)
@@ -1222,7 +1229,7 @@
           ! w: F_CASE t k kb m kl
           v = reg_get(fr, w(2))
           call reg_set(fr, w(2), gc_nil())
-          body = case_branch(gc_vec_get(consts, w(3) + 1), v)
+          body = case_branch(vec_store(kb + w(3) + 1), v)
           if (tctx%has_error) exit
           done = .false.
           do j = 0, w(5) - 1
@@ -1253,7 +1260,7 @@
           ! landed here by flat_catch, which did the work
        case (F_CATCH)
           ! w: F_CATCH ex kcls slot Lnext
-          if (.not. catch_matches(gc_vec_get(consts, w(3) + 1), reg_get(fr, w(2)), gc_nil())) then
+          if (.not. catch_matches(vec_store(kb + w(3) + 1), reg_get(fr, w(2)), gc_nil())) then
              if (tctx%has_error) exit
              pc = w(5)
              cycle
@@ -1285,7 +1292,7 @@
           ! again as it was
           tctx%kst(ks)%aux2 = w(7)
           tctx%kst(ks)%pc = pc
-          v = gc_vec_get(consts, w(3) + 1)
+          v = vec_store(kb + w(3) + 1)
           if (tctx%kst(ks)%i == -2) then
              ! a native call below parked: its builtin again, on the
              ! same vector (the target first)

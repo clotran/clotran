@@ -748,6 +748,9 @@ module GC
   public :: gc_text, gc_slot, gc_set_slot, gc_kind
   public :: gc_i1, gc_i2, gc_set_i1, gc_set_i2
   public :: gc_vec_len, gc_vec_get, gc_vec_set, gc_vec_word, gc_reg, gc_reg_set, gc_vec_clone
+  ! the vector store itself, for the executor's register reads and writes
+  ! inline (flat.inc reg_get, reg_set): a call each was a tenth of a call
+  public :: vec_pool, vec_store, vec_mark, vec_rem, gc_reg_barrier
   public :: gc_car, gc_cdr, gc_set_car, gc_set_cdr
   public :: gc_live_count, gc_obj_capacity, gc_check_heap
   public :: gc_global_new, gc_global_set, gc_global_get, gc_global_count
@@ -2657,6 +2660,13 @@ contains
        end if
     end if
   end subroutine gc_reg_set
+
+  ! the barrier's slow half: a register write that stored a young value
+  ! into a vector the collector has marked old
+  subroutine gc_reg_barrier(v, x)
+    type(gc_value), intent(in) :: v, x
+    if (is_young(x)) call remember_vec(v)
+  end subroutine gc_reg_barrier
 
   subroutine gc_vec_set(v, i, x)
     type(gc_value), intent(in) :: v, x
