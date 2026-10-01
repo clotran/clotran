@@ -61,4 +61,10 @@
  (range 1/2 3 1/2) (/ 99999999999999999999N 7) (sort [1/3000000000 -1/2 99999999999999999999/7 0])
  (bigint 99999999999999999999/7) (/ 99999999999999999999/7 99999999999999999999/7)
  (rationalize 0.5) (rationalize 1.0) (rationalize 0.1) (rationalize 1.0e300) (rationalize 1.234e-20) (rationalize 1.5M) (rationalize 3)
+ ;; an empty subject splits to [""] and an empty target is replaced
+ ;; between every character, as both hosts do; (/ MIN 1) is a BigInt
+ ;; (LongOps.divide)
+ (clojure.string/split "" #",") (clojure.string/split-lines "") (clojure.string/split ",a,," #",")
+ (clojure.string/replace "xnynz" "" "ab") (clojure.string/replace "" "" "-") (clojure.string/replace "héé" "" "|")
+ (/ -9223372036854775808 1) (/ -9223372036854775808 -1) (/ 4 -9223372036854775808)
 ]

@@ -10593,6 +10593,20 @@ contains
             too = dlt_1
          end block
          acc = ""
+         ! an EMPTY target matches before every character and at the end,
+         ! as both hosts' replace do: (replace "xy" "" "-") is "-x-y-"
+         if (len(frm) == 0) then
+            acc = too
+            do at = 1, len(t)
+               acc = acc // t(at:at)
+               if (at == len(t)) then
+                  acc = acc // too
+               else if (iand(ichar(t(at + 1:at + 1)), 192) /= 128) then
+                  acc = acc // too
+               end if
+            end do
+            t = ""
+         end if
          do
             if (len(frm) == 0) exit
             at = index(t, frm)
@@ -13736,6 +13750,17 @@ contains
             lv = strip_meta(gcv_nth(args, 2))
             lim = int(lv%ival)
          end if
+         ! an EMPTY subject is [""]: Pattern.split answers the input when
+         ! nothing matches, and the trailing-empty rule does not take it
+         ! (both hosts' split agree) -- (split "" #",") and (split-lines "")
+         if (gc_kind(pv) == OBJ_REGEX .and. sv%tag == GCT_STR) then
+            call text_of(sv, s=dlt_1)
+            if (len(dlt_1) == 0) then
+               out = gcv_conj(gcv_empty([vs_get(vst, base + 1)]), sv, [vs_get(vst, base + 1)])
+               call vs_leave(vst, base)
+               return
+            end if
+         end if
          if (gc_kind(pv) == OBJ_REGEX) then
             out = regex_split(pv, sv, lim, [vs_get(vst, base + 1)])
          else if (pv%tag == GCT_STR .and. sv%tag == GCT_STR) then
@@ -14099,7 +14124,10 @@ contains
        else
           ! exact, parts of any size; an integral answer is a BigInt unless
           ! both were longs: (/ 1/2 1/2) is 1N, (/ 4 2) is 2
-          out = rat_op(RAT_DIV, a, b, .not. (a%tag == GCT_INT .and. b%tag == GCT_INT), [vs_get(vst, base + 1)])
+          ! LongOps.divide hands Long/MIN_VALUE to the BigInt ops, so its
+          ! integral answers are BigInts too: (/ Long/MIN_VALUE 1) is ...N
+          out = rat_op(RAT_DIV, a, b, .not. (a%tag == GCT_INT .and. b%tag == GCT_INT) &
+               .or. a%ival == -huge(a%ival) - 1_gc_ip .or. b%ival == -huge(b%ival) - 1_gc_ip, [vs_get(vst, base + 1)])
        end if
     case (B_INC, B_DEC, B_UINC, B_UDEC, B_PINC, B_PDEC)
        checked = (id == B_INC .or. id == B_DEC)
