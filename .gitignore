@@ -18,3 +18,8 @@
 /examples/embed/heat.dSYM/
 .cpcache/
 .clotran-cache/
+# ACL2's certificates and compiled books (model/; `make model` makes them)
+/model/*.cert
+/model/*.cert.out
+/model/*.fasl
+/model/*.port

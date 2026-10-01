@@ -617,6 +617,19 @@ clean:
 	rm -rf $(B) clotran-bin clotran-bin.dSYM examples/embed/heat examples/embed/heat.dSYM
 
 # --- docs: the north star, generated from markdown ---------------------
+
+# The formal model (PLAN steps 27-28): ACL2 certifies each book, and a
+# book that does not certify fails. ACL2 is built on SBCL outside the
+# tree (its arithmetic-5 book certified once); ACL2=/path overrides.
+# Not in the gate yet: ACL2 is not on every machine the gate runs on.
+ACL2 ?= $(HOME)/jborden/acl2/saved_acl2
+.PHONY: model
+model:
+	@mkdir -p $(B)
+	rm -f model/boundary.cert
+	cd model && printf '(certify-book "boundary")\n(good-bye)\n' | "$(ACL2)" > ../$(B)/model.log 2>&1 || true
+	@test -f model/boundary.cert || { grep -E "ACL2 Error|FAILED" $(B)/model.log; exit 1; }
+	@echo "model: boundary certified"
 # pandoc writes HTML; a headless Chrome or Chromium prints it to PDF. No
 # LaTeX. CHROME=/path/to/it overrides the browser found here.
 CHROME ?= $(shell for c in "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" google-chrome chromium chromium-browser chrome; do \

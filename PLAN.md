@@ -2513,6 +2513,88 @@ Also Baker's Cheney-on-the-MTA as CHICKEN describes it
 (more-magic.net, "CHICKEN internals: the garbage collector") and
 Coutts et al., "Stream Fusion".
 
+**Where step 26 stopped (2026-10-01).** Tuning the existing flat
+executor bought 8% on calls (b64aaab: lean flat-to-flat frames) and 3%
+on seq walks (76950bb: `class` interned); the compact code store and
+computed GO TO measured no better and were reverted. A profile puts a
+call's ~93 ns in many 3-5 ns pieces and a `take` step's 1.4 us in
+interpretation (the flat loop 31%, builtin dispatch 13%), not
+allocation: a closure is 1 object and a `lazy-seq` 2, as clj's are.
+26.6's allocation target was already met. Closing the rest is a new
+calling convention and frame layout -- a VM design -- which James
+decided is designed formally first, in ACL2 on SBCL (2026-10-01:
+"we would need to design that in ACL2"). The boundary comes first
+(step 27), then the instruction set (step 28).
+
+### 27. The boundary, formally (begun 2026-10-01)
+
+Interoperability is the first priority (James, 2026-10-01), and both
+halves of the system stand on one boundary: the VM that runs dynamic
+Clojure, and tier A (step 13), which compiles a typed subset to plain
+Fortran with no runtime at all. A value crosses in one of FOUR shapes
+and nothing else does:
+
+| shape | Clojure side | Fortran side |
+|---|---|---|
+| number | integral, real | `integer(int8..int64)`, `real(real32/64)` |
+| array | `fortran/make-array`, `^doubles` | contiguous, column-major, any rank (DEVIATIONS 24) |
+| text | a string, UTF-8 by code point (DEVIATIONS 41) | `character` |
+| record | `defrecord` with typed fields (planned) | a derived type |
+
+Closures, lazy seqs, open maps, persistent collections, Vars and
+exceptions never cross: they are fused away into loops (tier A, B001)
+or stay in the VM.
+
+**The model.** `model/boundary.lisp`, certified by ACL2 8.7
+(`~/jborden/acl2`, built on SBCL 2.4.9), proves what is not a choice:
+
+- the column-major layout is a bijection -- every in-bounds subscript
+  of any rank lands inside the buffer (`cm-offset-in-buffer`) and no
+  two share an element (`cm-offset-injective`);
+- the aliasing check the door must make (F2018 15.5.2.13: an argument
+  a routine may modify is associated with no other argument) implies
+  every written buffer is bound exactly once
+  (`alias-ok-means-written-buffers-unshared`);
+- marshalling costs one unit per argument plus one per dimension,
+  whatever the extents: crossing copies no array
+  (`marshal-cost-ignores-extents`).
+
+**Found by examining it** (verified on packages/blas, 2026-10-01): the
+door today gives three silent wrong answers --
+
+- a double where the manifest says `int4` crosses as its IEEE BITS:
+  `(blas.raw/dgemm "N" "N" 2.0 ...)` answers `[0 0 0 0]`, no error;
+- an integer past 32 bits wraps: m = 2^32+2 crosses as 2;
+- the same array as an input and the output (`c` for `a`) is
+  accepted, which the standard forbids: `[3 8 3 8]` for `[3 3 3 3]`.
+
+Also: extents cross as `c_int` unchecked, and only `real8` and `int4`
+arrays are accepted though NativeArray holds every kind.
+
+**Decisions for James** (recommendations first; clj's own interop is
+host behaviour and inconsistent -- `(Integer/toString 2.0)` truncates,
+3000000000 throws, a float parameter takes 1e40 as Infinity while
+`(float 1e40)` throws -- and ClojureScript has no typed parameters,
+so the language gives no rule here):
+
+1. Integer kinds: exact or throw -- an integral value in the kind's
+   range crosses; out of range throws, as `(int x)` does; a double
+   throws rather than truncating.
+2. Real kinds: an integer widens to `real64` (IEEE-rounded past 2^53);
+   `real32` rounds, and a finite value that would overflow throws.
+3. Logical: `true` or `false` only.
+4. Text: UTF-8 bytes, length in bytes; `character(kind=ucs4)` where a
+   manifest asks for it.
+5. Records: `defrecord` with typed fields as a `bind(C)` derived type,
+   by reference.
+6. Callbacks: a tier-A function crosses as a procedure; a VM function
+   only through a ClotranABI trampoline, which makes the caller tier B.
+
+Each decision becomes a definition and theorems in the model before
+the door changes, and the door's checks are then tested against the
+model's -- the fuzzer generates calls, the model says accept or
+refuse, the door must agree.
+
 ## Decisions that still hold
 
 **The value type has no `FINAL`.** Copying a `cons_value` (nine
