@@ -11,7 +11,7 @@
 ;; The arguments are VALUES. A function argument is a FnRef: a small form
 ;; (inc, even?, (fn [x] ...)) the call is written with, since a function
 ;; value cannot be printed into a program. Every other value is quoted.
-(ns fuzz.specs
+(ns fuzz-specs
   (:require [clojure.spec.alpha :as s]
             [clojure.test.check.generators :as g]))
 
@@ -19,7 +19,9 @@
   "What the registry held before this file: the macro specs, among others"
   (set (keys (s/registry))))
 
-(defrecord FnRef [form])
+;; a deftype, not a record: a record is a map, and an s/alt trying a
+;; collection branch on one asked it for empty
+(deftype FnRef [form])
 (defn fnref? [x] (instance? FnRef x))
 (defn fns [& forms] (g/elements (mapv ->FnRef forms)))
 
@@ -162,6 +164,141 @@
 (s/fdef clojure.core/empty :args (s/cat :x ::any))
 (s/fdef clojure.core/not-empty :args (s/cat :x ::any))
 
+
+;;; ---- second batch ---------------------------------------------------
+
+(def g-text (g/elements ["" "a" "abc" "Hello World" "a,b,,c" "  pad  " "x\ny\nz" "Ab Cd" "aaa" "ÄÖü é" "tab\tsep" "-1,2;3"]))
+(s/def ::text (s/with-gen string? (constantly g-text)))
+(s/def ::sep (s/with-gen string? (constantly (g/elements ["," ", " "" "-" "ab"]))))
+;; a regex: any? -- the class it is belongs to the host
+(s/def ::re (s/with-gen any? (constantly (g/elements [#"," #"\s+" #"a" #"[,;]" #"(?i)A"]))))
+(s/def ::char (s/with-gen char? (constantly (g/elements [\a \, \space \Z \1]))))
+;; numbers: the long boundaries, doubles, ratios
+(def g-num (g/one-of [g-small (g/elements [9223372036854775807 -9223372036854775808 4611686018427387904 -4611686018427387905
+                                         1.5 -2.25 0.0 -0.0 1.0e300 7.0 2/3 -7/2 1/3])]))
+(s/def ::num (s/with-gen number? (constantly g-num)))
+(s/def ::nz (s/with-gen (s/and number? (complement zero?)) (constantly (g/one-of [(g/elements [1 -1 2 3 -7 1.5 2/3]) (g/choose 1 9)]))))
+(s/def ::bit (s/with-gen (s/int-in 0 64) (constantly (g/choose 0 63))))
+(s/def ::set (s/with-gen set? (constantly (g/fmap set (g/vector g-small 0 5)))))
+(s/def ::nvec (s/with-gen (s/and vector? seq) (constantly (g/vector g-small 1 5))))
+(s/def ::nlist (s/with-gen (s/and list? seq) (constantly (g/fmap #(apply list %) (g/vector g-small 1 5)))))
+(s/def ::cmp (s/with-gen fnref? (constantly (fns '< '> 'compare '(fn [a b] (compare b a))))))
+(s/def ::f3 (s/with-gen fnref? (constantly (fns '(fn [a k v] (+ a v)) '(fn [a k v] (if (= k :a) a (- a v)))))))
+(s/def ::xf (s/with-gen fnref? (constantly (fns '(map inc) '(filter even?) '(comp (map inc) (filter odd?)) '(take 2) '(drop 1) '(partition-all 2) '(dedupe) '(distinct) '(mapcat (fn [x] [x x])) '(keep (fn [x] (when (pos? x) x))) '(take-while pos?)))))
+(s/def ::kw-path (s/with-gen vector? (constantly (g/vector g-kw 1 3))))
+(s/def ::name-str (s/with-gen string? (constantly (g/elements ["a" "b/c" "x.y/z" "k"]))))
+
+;; clojure.string -- every docstring promises a string, a vector, a boolean or an index
+(s/fdef clojure.string/join :args (s/alt :one (s/cat :coll ::ints) :two (s/cat :sep ::sep :coll ::ints)) :ret string?)
+(s/fdef clojure.string/split :args (s/cat :s ::text :re ::re) :ret vector?)
+(s/fdef clojure.string/split-lines :args (s/cat :s ::text) :ret vector?)
+(s/fdef clojure.string/upper-case :args (s/cat :s ::text) :ret string?)
+(s/fdef clojure.string/lower-case :args (s/cat :s ::text) :ret string?)
+(s/fdef clojure.string/capitalize :args (s/cat :s ::text) :ret string?)
+(s/fdef clojure.string/trim :args (s/cat :s ::text) :ret string?)
+(s/fdef clojure.string/triml :args (s/cat :s ::text) :ret string?)
+(s/fdef clojure.string/trimr :args (s/cat :s ::text) :ret string?)
+(s/fdef clojure.string/trim-newline :args (s/cat :s ::text) :ret string?)
+(s/fdef clojure.string/blank? :args (s/cat :s ::text) :ret boolean?)
+(s/fdef clojure.string/reverse :args (s/cat :s ::text) :ret string?)
+(s/fdef clojure.string/includes? :args (s/cat :s ::text :sub ::sep) :ret boolean?)
+(s/fdef clojure.string/starts-with? :args (s/cat :s ::text :sub ::sep) :ret boolean?)
+(s/fdef clojure.string/ends-with? :args (s/cat :s ::text :sub ::sep) :ret boolean?)
+(s/fdef clojure.string/index-of :args (s/cat :s ::text :sub ::sep) :ret (s/nilable nat-int?))
+(s/fdef clojure.string/last-index-of :args (s/cat :s ::text :sub ::sep) :ret (s/nilable nat-int?))
+(s/fdef clojure.string/replace :args (s/alt :str (s/cat :s ::text :m ::sep :r ::sep) :re (s/cat :s ::text :m ::re :r ::sep)) :ret string?)
+(s/fdef clojure.string/replace-first :args (s/cat :s ::text :m ::re :r ::sep) :ret string?)
+(s/fdef clojure.string/escape :args (s/cat :s ::text :m (s/with-gen map? (constantly (g/elements [{\a "A"} {\, "\\,"} {}])))) :ret string?)
+
+;; clojure.set
+(s/fdef clojure.set/union :args (s/cat :a ::set :b ::set) :ret set?)
+(s/fdef clojure.set/intersection :args (s/cat :a ::set :b ::set) :ret set?)
+(s/fdef clojure.set/difference :args (s/cat :a ::set :b ::set) :ret set?)
+(s/fdef clojure.set/subset? :args (s/cat :a ::set :b ::set) :ret boolean?)
+(s/fdef clojure.set/superset? :args (s/cat :a ::set :b ::set) :ret boolean?)
+(s/fdef clojure.set/select :args (s/cat :p ::pred :s ::set) :ret set?)
+(s/fdef clojure.set/map-invert :args (s/cat :m ::map) :ret map?)
+(s/fdef clojure.set/rename-keys :args (s/cat :m ::map :k (s/with-gen map? (constantly (g/elements [{:a :z} {:a :b :b :a} {}])))) :ret map?)
+
+;; numbers
+(s/fdef clojure.core/+ :args (s/cat :x ::num :y ::num) :ret number?)
+(s/fdef clojure.core/- :args (s/alt :neg (s/cat :x ::num) :sub (s/cat :x ::num :y ::num)) :ret number?)
+(s/fdef clojure.core/* :args (s/cat :x ::num :y ::num) :ret number?)
+(s/fdef clojure.core// :args (s/alt :inv (s/cat :x ::nz) :div (s/cat :x ::num :y ::nz)) :ret number?)
+(s/fdef clojure.core/inc :args (s/cat :x ::num) :ret number?)
+(s/fdef clojure.core/dec :args (s/cat :x ::num) :ret number?)
+(s/fdef clojure.core/+' :args (s/cat :x ::num :y ::num) :ret number?)
+(s/fdef clojure.core/*' :args (s/cat :x ::num :y ::num) :ret number?)
+(s/fdef clojure.core/inc' :args (s/cat :x ::num) :ret number?)
+(s/fdef clojure.core/== :args (s/cat :x ::num :y ::num) :ret boolean?)
+(s/fdef clojure.core/< :args (s/cat :x ::num :y ::num) :ret boolean?)
+(s/fdef clojure.core/<= :args (s/cat :x ::num :y ::num :z ::num) :ret boolean?)
+(s/fdef clojure.core/zero? :args (s/cat :x ::num) :ret boolean?)
+(s/fdef clojure.core/pos? :args (s/cat :x ::num) :ret boolean?)
+(s/fdef clojure.core/neg? :args (s/cat :x ::num) :ret boolean?)
+(s/fdef clojure.core/double :args (s/cat :x ::num) :ret double?)
+(s/fdef clojure.core/long :args (s/cat :x (s/with-gen number? (constantly (g/one-of [g-small (g/elements [1.5 -2.75 2/3 1e10])])))) :ret int?)
+(s/fdef clojure.core/int? :args (s/cat :x ::num) :ret boolean?)
+(s/fdef clojure.core/double? :args (s/cat :x ::num) :ret boolean?)
+(s/fdef clojure.core/rational? :args (s/cat :x ::num) :ret boolean?)
+(s/fdef clojure.core/numerator :args (s/cat :x (s/with-gen ratio? (constantly (g/elements [2/3 -7/2 1/3])))) :ret integer?)
+(s/fdef clojure.core/denominator :args (s/cat :x (s/with-gen ratio? (constantly (g/elements [2/3 -7/2 1/3])))) :ret integer?)
+(s/fdef clojure.core/rationalize :args (s/cat :x (s/with-gen number? (constantly (g/elements [0.5 0.25 1.0 3 2/3])))) :ret rational?)
+(s/fdef clojure.core/even? :args (s/cat :x ::int) :ret boolean?)
+(s/fdef clojure.core/odd? :args (s/cat :x ::int) :ret boolean?)
+;; bits, inside 0..63 (DEVIATIONS 69 is the rest)
+(s/fdef clojure.core/bit-and :args (s/cat :x ::int :y ::int) :ret int?)
+(s/fdef clojure.core/bit-or :args (s/cat :x ::int :y ::int) :ret int?)
+(s/fdef clojure.core/bit-xor :args (s/cat :x ::int :y ::int) :ret int?)
+(s/fdef clojure.core/bit-not :args (s/cat :x ::int) :ret int?)
+(s/fdef clojure.core/bit-and-not :args (s/cat :x ::int :y ::int) :ret int?)
+(s/fdef clojure.core/bit-test :args (s/cat :x ::int :n ::bit) :ret boolean?)
+(s/fdef clojure.core/bit-set :args (s/cat :x ::int :n ::bit) :ret int?)
+(s/fdef clojure.core/bit-clear :args (s/cat :x ::int :n ::bit) :ret int?)
+(s/fdef clojure.core/bit-flip :args (s/cat :x ::int :n ::bit) :ret int?)
+(s/fdef clojure.core/bit-shift-left :args (s/cat :x ::int :n ::bit) :ret int?)
+(s/fdef clojure.core/bit-shift-right :args (s/cat :x ::int :n ::bit) :ret int?)
+(s/fdef clojure.core/unsigned-bit-shift-right :args (s/cat :x ::int :n ::bit) :ret int?)
+
+;; more arities and collection functions
+(s/fdef clojure.core/sort :args (s/alt :one (s/cat :coll ::ints) :cmp (s/cat :c ::cmp :coll ::ints)) :ret seq?)
+(s/fdef clojure.core/sort-by :args (s/alt :one (s/cat :f ::f1 :coll ::ints) :cmp (s/cat :f ::f1 :c ::cmp :coll ::ints)) :ret seq?)
+(s/fdef clojure.core/range :args (s/alt :end (s/cat :end ::int) :two (s/cat :start ::int :end ::int)
+                                        :three (s/cat :start ::int :end ::int :step (s/with-gen int? (constantly (g/elements [1 2 3 -1 -2])))))
+  :ret seq?)
+(s/fdef clojure.core/partition :args (s/alt :n (s/cat :n (s/with-gen pos-int? (constantly (g/choose 1 4))) :coll ::ints)
+                                            :step (s/cat :n (s/with-gen pos-int? (constantly (g/choose 1 4))) :step (s/with-gen pos-int? (constantly (g/choose 1 3))) :coll ::ints)
+                                            :pad (s/cat :n (s/with-gen pos-int? (constantly (g/choose 1 4))) :step (s/with-gen pos-int? (constantly (g/choose 1 3))) :pad ::ints :coll ::ints))
+  :ret seq?)
+(s/fdef clojure.core/reduce :args (s/alt :two (s/cat :f ::f2 :coll ::ints) :three (s/cat :f ::f2 :init ::int :coll ::ints)))
+(s/fdef clojure.core/max-key :args (s/cat :f ::f1 :x ::int :y ::int :z ::int) :ret int?)
+(s/fdef clojure.core/min-key :args (s/cat :f ::f1 :x ::int :y ::int) :ret int?)
+(s/fdef clojure.core/reduce-kv :args (s/cat :f ::f3 :init ::int :m ::map))
+(s/fdef clojure.core/update-in :args (s/cat :m ::map :ks ::kw-path :f (s/with-gen fnref? (constantly (fns '(fnil inc 0) '(fn [x] [x]))))) :ret map?)
+(s/fdef clojure.core/rseq :args (s/cat :v ::vec) :ret (s/nilable seq?))
+(s/fdef clojure.core/pop :args (s/alt :v (s/cat :v ::nvec) :l (s/cat :l ::nlist)) :ret coll?)
+(s/fdef clojure.core/peek :args (s/alt :v (s/cat :v ::vec) :l (s/cat :l ::nlist)))
+(s/fdef clojure.core/disj :args (s/cat :s ::set :x ::int) :ret set?)
+(s/fdef clojure.core/sorted-set :args (s/cat :xs (s/* ::int)) :ret set?)
+(s/fdef clojure.core/sorted-map :args (s/cat :kvs (s/* (s/cat :k ::kw :v ::int))) :ret map?)
+(s/fdef clojure.core/hash-set :args (s/cat :xs (s/* ::int)) :ret set?)
+(s/fdef clojure.core/into :args (s/alt :two (s/cat :to (s/with-gen coll? (constantly (g/elements [[] () #{} [9] '(9) {}]))) :from ::ints)
+                                       :xf (s/cat :to (s/with-gen coll? (constantly (g/elements [[] #{} '(9)]))) :xf ::xf :from ::ints))
+  :ret coll?)
+(s/fdef clojure.core/transduce :args (s/cat :xf ::xf :f (s/with-gen fnref? (constantly (fns '+ 'conj 'max))) :init (s/with-gen any? (constantly (g/elements [0 [] 7]))) :coll ::ints))
+(s/fdef clojure.core/sequence :args (s/cat :xf ::xf :coll ::ints) :ret seq?)
+(s/fdef clojure.core/distinct? :args (s/cat :x ::int :y ::int :z ::int) :ret boolean?)
+(s/fdef clojure.core/tree-seq :args (s/cat :b (s/with-gen fnref? (constantly (fns 'coll? 'vector?))) :c (s/with-gen fnref? (constantly (fns 'seq)))
+                                           :root (s/with-gen any? (constantly (g/elements [[1 [2 [3]]] [] '(1 (2)) 5])))) :ret seq?)
+(s/fdef clojure.core/keyword :args (s/alt :one (s/cat :s ::name-str) :two (s/cat :ns (s/with-gen string? (constantly (g/elements ["n" "a.b"]))) :n ::name-str)) :ret keyword?)
+(s/fdef clojure.core/symbol :args (s/cat :s ::name-str) :ret symbol?)
+(s/fdef clojure.core/namespace :args (s/cat :k (s/with-gen keyword? (constantly (g/elements [:a :n/b :a.b/c])))) :ret (s/nilable string?))
+(s/fdef clojure.core/char? :args (s/cat :x (s/with-gen any? (constantly (g/one-of [g-scalar (g/elements [\a \space])])))) :ret boolean?)
+(s/fdef clojure.core/str :args (s/cat :xs (s/* (s/with-gen any? (constantly (g/one-of [g-scalar g-num (g/elements [\a nil true :k/w])])))))  :ret string?)
+(s/fdef clojure.core/count :args (s/alt :coll (s/cat :coll ::ints) :str (s/cat :s ::text) :map (s/cat :m ::map)) :ret nat-int?)
+(s/fdef clojure.core/seq :args (s/alt :coll (s/cat :coll ::ints) :str (s/cat :s ::text) :map (s/cat :m ::map)) :ret (s/nilable seq?))
+(s/fdef clojure.core/reverse :args (s/alt :coll (s/cat :coll ::ints) :str (s/cat :s ::text)) :ret seq?)
+
 (def fuzz-fns
   "Every function spec'd above, by name."
-  (->> (s/registry) keys (remove before) (filter symbol?) (filter #(= "clojure.core" (namespace %))) sort vec))
+  (->> (s/registry) keys (remove before) (filter symbol?) (filter #(#{"clojure.core" "clojure.string" "clojure.set"} (namespace %))) sort vec))

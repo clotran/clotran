@@ -291,19 +291,19 @@
   "A generated argument as the program writes it: a FnRef's form, any
   other value quoted."
   [v]
-  (if (fuzz.specs/fnref? v) (:form v) (list 'quote v)))
+  (if (fuzz-specs/fnref? v) (.-form v) (list 'quote v)))
 
 (defn fn-roses
   "k rose trees of calls to each spec'd function: [fn-symbol tree], the
   tree's root a form."
   [k seed]
-  (loop [r (random/make-random seed) fs fuzz.specs/fuzz-fns i 0 acc []]
+  (loop [r (random/make-random seed) fs fuzz-specs/fuzz-fns i 0 acc []]
     (if-let [fsym (first fs)]
       (if (= i k)
         (recur r (rest fs) 0 acc)
         (let [[r1 r2] (random/split r)
               args-gen (s/gen (:args (s/get-spec fsym)))
-              tree (rose/fmap (fn [args] (cons (symbol (name fsym)) (map arg-form args)))
+              tree (rose/fmap (fn [args] (cons (if (= "clojure.core" (namespace fsym)) (symbol (name fsym)) fsym) (map arg-form args)))
                               (g/call-gen args-gen r1 (mod (* 13 i) 30)))]
           (recur r2 fs (inc i) (conj acc [fsym tree]))))
       acc)))
@@ -332,7 +332,7 @@
 ")
 
 (defn case-script [forms]
-  (str "(in-ns 'user)\n(require 'clojure.string)\n" prelude
+  (str "(in-ns 'user)\n(require 'clojure.string 'clojure.set 'clojure.walk)\n" prelude
        (apply str (map-indexed (fn [i f] (str "(fz-out " i " (fn [] " (pr-str f) "))\n")) forms))
        "(shutdown-agents)\n"))
 
@@ -368,13 +368,13 @@
       ;; declines stays interpreted, and the run says how many compiled
       (let [nsf (str work "/fz/cases.cljf") lib (str work "/fz.dylib") drv (str work "/drive.cljf")]
         (fs/create-dirs (str work "/fz"))
-        (spit nsf (str "(ns fz.cases)\n"
+        (spit nsf (str "(ns fz.cases (:require [clojure.string] [clojure.set] [clojure.walk]))\n"
                        (apply str (map-indexed (fn [i f] (str "(defn c" i " [] " (pr-str f) ")\n")) forms))))
         (let [c (sh {"CLOTRAN_CACHE" (str work "/cache")} (str repo "/clotran") "compile" nsf lib)]
           (when-not (fs/exists? lib)
             (println "compiled mode: no library:")
             (println (str/join "\n" (take-last 25 (str/split-lines (str (:out c) (:err c))))))))
-        (spit drv (str "(in-ns 'user)\n(require 'clojure.string)\n" prelude
+        (spit drv (str "(in-ns 'user)\n(require 'clojure.string 'clojure.set 'clojure.walk)\n" prelude
                        "(load-file " (pr-str nsf) ")\n(require 'clotran.loader)\n"
                        "(clotran.loader/install " (pr-str lib) " " (pr-str nsf) ")\n"
                        "(println \"FZCOMPILED\" (count (filter #(clojure.string/starts-with? (str (deref %)) \"#<compiled\") (vals (ns-interns 'fz.cases)))))\n"
@@ -384,7 +384,18 @@
             (println (str "compiled mode: " k " of " (count forms) " cases compiled")))
           (outputs (:out r)))))))
 
-(defn differs [want got] (and (some? want) (not= want got)))
+(defn- dbl [s] (when (and s (re-matches #"-?\d+\.\d+(E-?\d+)?" s)) (parse-double s)))
+
+(defn differs
+  "Whether clotran's answer is not clj's. One allowance, DEVIATIONS 70: a
+  ratio becomes a double by Fortran's IEEE quotient, clj's by a 16-digit
+  decimal first, so with a ratio in the form two doubles a unit in the
+  last place apart agree."
+  ([want got] (differs want got nil))
+  ([want got form]
+   (and (some? want) (not= want got)
+        (not (and form (str/includes? (pr-str form) "/")
+                  (when-let [a (dbl want)] (when-let [b (dbl got)] (<= (abs (- a b)) (Math/ulp (double a))))))))))
 
 ;;; ---- shrinking ------------------------------------------------------
 
@@ -418,7 +429,7 @@
                          n (double (/ (reduce + (map #(count (tree-seq coll? seq %)) forms)) (max n 1)))
                          (count (filter #(= "!error" %) (vals want)))))
       _ (when fn-pairs
-          (println (count fuzz.specs/fuzz-fns) "functions spec'd")
+          (println (count fuzz-specs/fuzz-fns) "functions spec'd")
           (doseq [[fsym i w] (ret-check fsyms want)]
             (println "SPEC:" fsym "answered" w "in clj, which its :ret refuses --" (pr-str (nth forms i))))
           ;; an :args spec clj throws on often is too loose: it tests errors, not answers
@@ -428,10 +439,10 @@
       bad (atom [])]
   (doseq [m modes]
     (let [got (run-clotran m forms)
-          diffs (filter #(differs (get want %) (get got %)) (range n))]
+          diffs (filter #(differs (get want %) (get got %) (nth forms %)) (range n))]
       (println (format "%-9s %d cases, %d differ from clj" m n (count diffs)))
       (doseq [i diffs] (swap! bad conj [m i]))))
-  (doseq [[m i] (take 12 @bad)]
+  (doseq [[m i] (take 40 @bad)]
     (let [f (nth forms i)]
       (println "---" m "case" i)
       (println "  form:   " (pr-str f))
