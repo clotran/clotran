@@ -184,6 +184,36 @@
   :hints (("Goal" :use ((:instance alias-ok-1-member (rest args)))
                   :in-theory (disable alias-ok-1))))
 
+; The door checks the MANIFEST's intents, which bind-fortran infers
+; conservatively: an array is :in only when the body provably never
+; writes it (scripts/bind-fortran never-written?), so every argument
+; the routine really writes is a writer in the manifest too. Checking
+; the conservative intents is enough: the true ones pass as well, and
+; with them every buffer the routine really writes is unshared.
+(defun weaker-intents (xs ys)
+  ; ys is xs with some writers turned into readers, handles unchanged
+  (if (endp xs)
+      (endp ys)
+    (and (consp ys)
+         (equal (car (car xs)) (car (car ys)))
+         (equal (arg-handle (car xs)) (arg-handle (car ys)))
+         (or (equal (caddr (car xs)) (caddr (car ys)))
+             (eq (caddr (car ys)) :in))
+         (weaker-intents (cdr xs) (cdr ys)))))
+
+(defthm binds-of-weaker
+  (implies (weaker-intents xs ys)
+           (equal (binds-of h ys) (binds-of h xs))))
+
+(defthm alias-ok-1-weaker
+  (implies (and (weaker-intents rest1 rest2) (alias-ok-1 rest1 args1)
+                (weaker-intents args1 args2))
+           (alias-ok-1 rest2 args2)))
+
+(defthm alias-ok-conservative-suffices
+  (implies (and (alias-ok args) (weaker-intents args true-args))
+           (alias-ok true-args)))
+
 ; ---- 3. cost -----------------------------------------------------------
 ;
 ; Marshalling an argument: one unit for its pointer, and for an array

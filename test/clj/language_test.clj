@@ -1107,7 +1107,17 @@
          :crossed)
   (check "an integer is refused as a real8"
          (door-refusal #(blas.raw/dgemm "N" "N" 2 2 2 1 a 2 b 2 0.0 c 2))
-         "dgemm: argument alpha is a real8: pass a real, not 1 (clotran.host.int8)"))
+         "dgemm: argument alpha is a real8: pass a real, not 1 (clotran.host.int8)")
+  ;; ALIASING (F2018 15.5.2.13; model `alias-ok`): c is written, so it
+  ;; may not also be a or b -- it crossed, and dgemm answered [3 8 3 8]
+  ;; for [3 3 3 3]. a and b are only read (bind-fortran infers :in for
+  ;; an array the F77 body never writes), so A x A crosses.
+  (check "an array written and bound twice is refused"
+         (door-refusal #(blas.raw/dgemm "N" "N" 2 2 2 1.0 c 2 b 2 1.0 c 2))
+         "dgemm: argument c may be written, and the same array is also argument a; Fortran forbids the aliasing -- pass a copy")
+  (check "the same array twice, only read, crosses"
+         (door-refusal #(blas.raw/dgemm "N" "N" 2 2 2 1.0 a 2 a 2 0.0 c 2))
+         :crossed))
 
 ;;; ---- stack traces --------------------------------------------------
 ;;

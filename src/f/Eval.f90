@@ -17252,6 +17252,8 @@ contains
     character(len=:), allocatable :: sym, rname, text, rty
     character(len=8), allocatable :: ty(:), it(:)
     integer, allocatable :: rk(:), ext(:)
+    ! each argument's array registry handle, 0 for a scalar (the alias check)
+    integer, allocatable :: hnd(:)
     type(c_funptr) :: fp
     real(c_double), pointer, contiguous :: pr(:)
     integer, pointer, contiguous :: pi(:)
@@ -17326,6 +17328,8 @@ contains
        end do
        if (has_ret) nargv = nargv + 1
        allocate(ti(nspec + 1), tl(nspec + 1), tr(nspec + 1), tb(nspec + 1), ts(nspec + 1), argv(nargv), td(max(1, nargv)))
+       allocate(hnd(nspec))
+       hnd = 0
        ti = 0; tl = 0; tr = 0.0_c_double; tb = .false.; td = 0
        ! the call's arguments are the manifest's, less the :out ones
        j = 0
@@ -17448,6 +17452,7 @@ contains
                 end block
                 exit once
              end if
+             hnd(i) = gc_i1(tv)
              do d = 1, rk(i)
                 dslot = dslot + 1
                 td(dslot) = int(ext(d), c_int)
@@ -17455,6 +17460,26 @@ contains
                 argv(slot) = c_loc(td(dslot))
              end do
           end if
+       end do
+       ! ALIASING (F2018 15.5.2.13; model/boundary.lisp `alias-ok`): an
+       ! array the routine may write is bound to that argument and no
+       ! other. The door used to pass the same buffer as dgemm's a and
+       ! c, which the standard forbids: [3 8 3 8] for [3 3 3 3].
+       do i = 1, nspec
+          if (hnd(i) == 0 .or. it(i) == "in") cycle
+          if (count(hnd == hnd(i)) == 1) cycle
+          do j = 1, nspec
+             if (j /= i .and. hnd(j) == hnd(i)) exit
+          end do
+          block
+            character(len=:), allocatable :: ni, nj
+            call arg_name(i, ni)
+            call arg_name(j, nj)
+            call raise_class("clotran.host.illegal_argument_exception", rname // ": argument " // ni // &
+                 " may be written, and the same array is also argument " // nj // &
+                 "; Fortran forbids the aliasing -- pass a copy", [roots])
+          end block
+          exit once
        end do
        if (has_ret) then
           slot = slot + 1
@@ -17539,6 +17564,15 @@ contains
       character(len=16) :: s
       write(s, '(I0)') i
     end function cbuf_of
+    ! argument i's name, as the manifest gives it
+    subroutine arg_name(i, an)
+      integer, intent(in) :: i
+      character(len=:), allocatable, intent(out) :: an
+      type(gc_value) :: a, nm
+      a = strip_meta(gcv_nth(vs_get(vst, base + 3), i - 1))
+      nm = strip_meta(gca_get(a, gc_key("name", [roots, a])))
+      call text_of(nm, s=an)
+    end subroutine arg_name
     ! A value refused at the door: the routine, the argument by its
     ! manifest name, what it needs, and what it was given
     subroutine refuse(i, what, given)

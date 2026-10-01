@@ -13,7 +13,11 @@
 ;; extent, a string null-terminated) and unpacking them to the routine's
 ;; positional arguments, plus one clotran_manifest function answering the
 ;; EDN that names them all. An intent the source does not declare is
-;; taken as :inout, which is safe and costs a key in the answer map.
+;; taken as :inout, which is safe and costs a key in the answer map --
+;; except for an ARRAY the body provably never writes (`never-written?`),
+;; which is :in: the door's alias check (PLAN step 27) refuses an array
+;; that may be written and is bound twice, and BLAS's dgemm(a, a) must
+;; not be refused because F77 has no intent statement.
 ;;
 ;; What it does not bind, it lists in a comment at the top of the output
 ;; rather than guessing: derived types, optional, pointer and allocatable
@@ -100,6 +104,47 @@
 
 (defn bare-name [n] (str/replace n #"\(.*$" ""))
 
+;; Calls that read their arguments and write none of them: Fortran's
+;; intrinsics, and the statements that look like calls.
+(def reads-only
+  #{"if" "while" "abs" "dabs" "max" "min" "dmax1" "dmin1" "sqrt" "dsqrt" "dble" "real" "int"
+    "nint" "mod" "sign" "dsign" "exp" "dexp" "log" "dlog" "sin" "cos" "tan" "atan" "atan2"
+    "size" "len" "len_trim" "lbound" "ubound" "sum" "product" "maxval" "minval" "dot_product"})
+
+(defn- enclosing-call
+  "The name before the parenthesis that encloses position i of l, or nil
+  at the top level."
+  [l i]
+  (loop [j (dec i) depth 0]
+    (cond (neg? j) nil
+          (= \) (.charAt l j)) (recur (dec j) (inc depth))
+          (= \( (.charAt l j)) (if (zero? depth)
+                                  (second (re-find #"(\w+)\s*$" (subs l 0 j)))
+                                  (recur (dec j) (dec depth)))
+          :else (recur (dec j) depth))))
+
+(defn never-written?
+  "True only when the routine's executable lines cannot write array p:
+  every use is subscripted, none is assigned, read, passed in a CALL, or
+  passed to anything but an intrinsic or another array of this routine.
+  Conservative: what it cannot prove read-only it calls written."
+  [p lines arrays]
+  (let [word (re-pattern (str "\\b" p "\\b"))]
+    (every?
+     (fn [l]
+       (or (not (re-find word l))
+           (and (not (re-find #"^(\d+\s+)?(call|read)\b" l))
+                (not (re-find (re-pattern (str "(^|[^\\w%])" p "\\s*(\\([^=]*\\))?\\s*=(?!=)")) l))
+                (let [m (re-matcher word l)]
+                  (loop []
+                    (if-not (.find m) true
+                      (let [i (.start m) after (subs l (.end m))
+                            enc (enclosing-call l i)]
+                        (and (re-find #"^\s*\(" after)
+                             (or (nil? enc) (contains? reads-only enc) (contains? arrays enc))
+                             (recur)))))))))
+     lines)))
+
 ;; the routines of one module: [{:module m :name n :kind :subroutine/:function :args [..] :result r} ..]
 (defn routines [src & [path]]
   (let [ls (vec (strip src path))
@@ -121,7 +166,12 @@
                   rspec (when (= :function (:kind m))
                           (or (get info (:result m))
                               (when-let [[spec _] (and (:rtype-spec m) (parse-decl (str (:rtype-spec m) " :: " (:result m))))] (assoc spec :rank 0))))
-                  args (mapv (fn [p] (merge {:name p :rank 0} (get info p {:unbindable "undeclared"}))) (:params m))]
+                  args (mapv (fn [p] (merge {:name p :rank 0} (get info p {:unbindable "undeclared"}))) (:params m))
+                  body (remove parse-decl (subvec ls (inc i) (min end (count ls))))
+                  arrays (set (map :name (filter #(pos? (:rank %)) args)))
+                  args (mapv (fn [a] (if (and (nil? (:intent a)) (pos? (:rank a)) (never-written? (:name a) body arrays))
+                                       (assoc a :intent "in") a))
+                             args)]
               (recur end (conj out (assoc m :module module :args args :rspec rspec))))))))))
 
 (defn bindable? [r]
