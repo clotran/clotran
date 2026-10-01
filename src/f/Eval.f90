@@ -7361,6 +7361,38 @@ contains
     ! a fn that only wraps a builtin, called with its arity: the builtin
     ! is the callee (analyze.inc wrapper_builtin)
     av = wrapper_of(fn, nargs)
+    ! FIRST, NEXT, REST, SEQ on what is already there, and machine-integer
+    ! arithmetic, answered in place as the flat executor answers them
+    ! (flat_seq_op, flat_int_op): no frame for the wrapper, no argument
+    ! vector, no dispatch -- they cannot fail. Compiled code calls these
+    ! for every element of every seq it walks.
+    if (nargs == 1 .or. nargs == 2) then
+       block
+         integer :: bid
+         bid = -1
+         if (av%tag /= GCT_NIL) then
+            bid = gc_i1(av)
+         else if (gc_kind(fn) == OBJ_BUILTIN) then
+            bid = gc_i1(fn)
+         end if
+         if (bid >= 0) then
+            if (nargs == 1) then
+               if (flat_seq_op(bid, vs_get(vst, argbase + 1), out)) then
+                  call vs_set(vst, argbase + 1, gc_nil())
+                  call vs_leave(vst, base)
+                  return
+               end if
+               if (flat_int_op(bid, 1, vs_get(vst, argbase + 1), vs_get(vst, argbase + 1), out)) then
+                  call vs_leave(vst, base)
+                  return
+               end if
+            else if (flat_int_op(bid, 2, vs_get(vst, argbase + 1), vs_get(vst, argbase + 2), out)) then
+               call vs_leave(vst, base)
+               return
+            end if
+         end if
+       end block
+    end if
     if (av%tag /= GCT_NIL) then
        ! the wrapper is still on the call stack, as it is in clj's
        call vs_set(vst, base + 1, fn)
