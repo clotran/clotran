@@ -25,7 +25,16 @@
 ;; is not read; packages/blas shows that shim written by hand.
 (require '[clojure.string :as str])
 
-(def kinds {"real8" "real(c_double)" "int4" "integer(c_int)" "int8" "integer(c_long)" "logical" "logical(c_bool)"})
+;; the C kind each type crosses as (DynLoad's pointers point at these);
+;; int8 is c_int64_t, not c_long, which is 4 bytes on Windows
+(def kinds {"real8" "real(c_double)" "int4" "integer(c_int)" "int8" "integer(c_int64_t)" "logical" "logical(c_bool)"})
+
+;; A scalar logical crosses as one C byte, logical(c_bool), but a
+;; routine declares its own kind -- default logical is 4 bytes -- so the
+;; shim copies through a temporary of the DECLARED kind, back again
+;; unless the intent is in. Passing the byte straight on was a type
+;; mismatch the compiler refused (test/f/samplelib echo_kinds).
+(defn copied-logical? [a] (and (= "logical" (:type a)) (zero? (:rank a))))
 
 (defn fixed-form? [path] (boolean (re-find #"(?i)\.(f|for|f77)$" path)))
 
@@ -216,14 +225,17 @@
         ;; argv slots: a scalar one, an array one plus its rank, then the result
         slots (loop [as args k 1 out []] (if (empty? as) out (let [a (first as)] (recur (rest as) (+ k 1 (:rank a)) (conj out (assoc a :slot k))))))
         rslot (inc (reduce + (count args) (map :rank args)))
-        decl (fn [a] (case (:type a)
-                       "string" nil
-                       (str "    " (kinds (:type a)) ", pointer :: " (:name a) (when (pos? (:rank a)) (str "(" (str/join "," (repeat (:rank a) ":")) ")")))))
+        decl (fn [a] (cond
+                       (= "string" (:type a)) nil
+                       (copied-logical? a) (str "    logical(c_bool), pointer :: " (:name a) "_c\n    " (:ftype a) " :: " (:name a))
+                       :else (str "    " (kinds (:type a)) ", pointer :: " (:name a) (when (pos? (:rank a)) (str "(" (str/join "," (repeat (:rank a) ":")) ")")))))
         ext-decl (fn [a] (when (pos? (:rank a)) (str "    integer(c_int), pointer :: " (str/join ", " (for [d (range (:rank a))] (str "n" (:name a) "_" (inc d)))))))
         unpack (fn [a] (if (= "string" (:type a))
                          (str "    call cstr(argv(" (:slot a) "), s_" (:name a) ")")
                          (if (zero? (:rank a))
-                           (str "    call c_f_pointer(argv(" (:slot a) "), " (:name a) ")")
+                           (if (copied-logical? a)
+                             (str "    call c_f_pointer(argv(" (:slot a) "), " (:name a) "_c)\n    " (:name a) " = " (:name a) "_c")
+                             (str "    call c_f_pointer(argv(" (:slot a) "), " (:name a) ")"))
                            (str (str/join "\n" (for [d (range (:rank a))] (str "    call c_f_pointer(argv(" (+ (:slot a) 1 d) "), n" (:name a) "_" (inc d) ")")))
                                 "\n    call c_f_pointer(argv(" (:slot a) "), " (:name a) ", [" (str/join ", " (for [d (range (:rank a))] (str "n" (:name a) "_" (inc d)))) "])"))))
         call-args (str/join ", " (for [a args] (if (= "string" (:type a)) (str "s_" (:name a)) (:name a))))
@@ -237,6 +249,8 @@
          (if (:rspec r)
            (str "\n    call c_f_pointer(argv(" rslot "), result_)\n    result_ = " (:name r) "(" call-args ")")
            (str "\n    call " (:name r) "(" call-args ")"))
+         (str/join (for [a args :when (and (copied-logical? a) (not= "in" (:intent a)))]
+                     (str "\n    " (:name a) "_c = " (:name a))))
          "\n  end subroutine " pkg "_" (:name r) "_shim\n")))
 
 (defn generate [pkg srcs]

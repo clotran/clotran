@@ -1261,6 +1261,23 @@
 (check "generated intents from the source" (samplelib.raw/divmod 17 5) {:q 3 :r 2})
 (check "a generated rank-2 argument" (let [m (fortran/make-array "real8" 2 2)] (fortran/aset m 0 0 1.0) (fortran/aset m 1 1 5.0) (samplelib.raw/trace m 2)) {:t 6.0})
 (check "a generated :inout array, in place" (let [a (fortran/make-array "real8" 2)] (fortran/aset a 0 1.0) (fortran/aset a 1 2.0) (samplelib.raw/scale a 2 10.0) [(fortran/aget a 0) (fortran/aget a 1)]) [10.0 20.0])
+;; Every scalar kind crosses unchanged (scripts/fuzz-door checks the
+;; same routine against the ACL2 model; these are its edges, kept in
+;; the gate, which has no ACL2). A logical crosses through a temporary
+;; of the routine's own kind -- the shim passed a one-byte C logical to
+;; a four-byte dummy, which the compiler refused.
+(check "each scalar kind crosses unchanged"
+       (samplelib.raw/echo-kinds -2147483648 9223372036854775807 -0.0 true)
+       {:oi4 -2147483648 :oi8 9223372036854775807 :or8 -0.0 :ol true})
+(check "a BigInt is an integer: inside the window it crosses"
+       (samplelib.raw/echo-kinds 5N -9223372036854775808N 2.5 false)
+       {:oi4 5 :oi8 -9223372036854775808 :or8 2.5 :ol false})
+(check "a BigInt past int8's window is refused"
+       (door-refusal #(samplelib.raw/echo-kinds 0 9223372036854775808N 0.0 false))
+       "echo-kinds: argument i8 is an int8, -9223372036854775808..9223372036854775807: out of range, 9223372036854775808N (clotran.host.bigint)")
+(check "nil is not a logical"
+       (door-refusal #(samplelib.raw/echo-kinds 0 0 0.0 nil))
+       "echo-kinds: argument l is a logical: pass true or false, not nil")
 
 ;; The decimal's working precision. The oracle compares with-precision
 ;; against real Clojure form by form; what it cannot check is the part

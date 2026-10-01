@@ -37,6 +37,24 @@ contains
     n = len(s)
   end function count_chars
 
+  ! one argument of each scalar kind the door carries, echoed back:
+  ! scripts/fuzz-door checks that what crosses is what the model's
+  ! `cross` accepts, and that it arrives unchanged
+  subroutine echo_kinds(i4, i8, r8, l, oi4, oi8, or8, ol)
+    integer(4), intent(in) :: i4
+    integer(8), intent(in) :: i8
+    real(8), intent(in) :: r8
+    logical, intent(in) :: l
+    integer(4), intent(out) :: oi4
+    integer(8), intent(out) :: oi8
+    real(8), intent(out) :: or8
+    logical, intent(out) :: ol
+    oi4 = i4
+    oi8 = i8
+    or8 = r8
+    ol = l
+  end subroutine echo_kinds
+
   subroutine trace(m, n, t)
     integer, intent(in) :: n
     real(8), intent(in) :: m(n, n)

@@ -17244,7 +17244,7 @@ contains
     integer :: hi, nspec, ncall, nargv, slot, dslot, i, j, r, d, nout, base, nme
     logical :: nrel
     integer(c_int), allocatable, target :: ti(:), td(:)
-    integer(c_long), allocatable, target :: tl(:)
+    integer(c_int64_t), allocatable, target :: tl(:)
     real(c_double), allocatable, target :: tr(:)
     logical(c_bool), allocatable, target :: tb(:)
     type(cbuf), allocatable, target :: ts(:)
@@ -17254,6 +17254,7 @@ contains
     integer, allocatable :: rk(:), ext(:)
     ! each argument's array registry handle, 0 for a scalar (the alias check)
     integer, allocatable :: hnd(:)
+    integer(gc_ip) :: iv
     type(c_funptr) :: fp
     real(c_double), pointer, contiguous :: pr(:)
     integer, pointer, contiguous :: pi(:)
@@ -17372,24 +17373,30 @@ contains
                 argv(slot) = c_loc(tr(i))
              case ("int4")
                 if (it(i) /= "out") then
-                   if (tv%tag /= GCT_INT) then
+                   if (.not. (tv%tag == GCT_INT .or. tv%tag == GCT_BIG)) then
                       call refuse(i, "is an int4: pass an integer, not ", tv)
                       exit once
                    end if
-                   if (tv%ival < -2147483648_gc_ip .or. tv%ival > 2147483647_gc_ip) then
+                   call door_integer(tv, iv, ok)
+                   if (.not. ok .or. iv < -2147483648_gc_ip .or. iv > 2147483647_gc_ip) then
                       call refuse(i, "is an int4, -2147483648..2147483647: out of range, ", tv)
                       exit once
                    end if
-                   ti(i) = int(tv%ival, c_int)
+                   ti(i) = int(iv, c_int)
                 end if
                 argv(slot) = c_loc(ti(i))
              case ("int8")
                 if (it(i) /= "out") then
-                   if (tv%tag /= GCT_INT) then
+                   if (.not. (tv%tag == GCT_INT .or. tv%tag == GCT_BIG)) then
                       call refuse(i, "is an int8: pass an integer, not ", tv)
                       exit once
                    end if
-                   tl(i) = int(tv%ival, c_long)
+                   call door_integer(tv, iv, ok)
+                   if (.not. ok) then
+                      call refuse(i, "is an int8, -9223372036854775808..9223372036854775807: out of range, ", tv)
+                      exit once
+                   end if
+                   tl(i) = int(iv, c_int64_t)
                 end if
                 argv(slot) = c_loc(tl(i))
              case ("logical")
@@ -17564,6 +17571,26 @@ contains
       character(len=16) :: s
       write(s, '(I0)') i
     end function cbuf_of
+    ! An integer of either representation -- a long, or a BigInt such
+    ! as 5N, which is an integer too, as (int 5N) is 5 -- as a 64-bit
+    ! value; ok false when it lies outside 64 bits
+    subroutine door_integer(v, n, ok)
+      type(gc_value), intent(in) :: v
+      integer(gc_ip), intent(out) :: n
+      logical, intent(out) :: ok
+      character(len=:), allocatable :: t
+      integer :: e
+      n = 0
+      ok = .true.
+      if (v%tag == GCT_INT) then
+         n = v%ival
+         return
+      end if
+      call gc_big_text(v, s=t)
+      ok = big_cmp(t, "-9223372036854775808") >= 0 .and. big_cmp(t, "9223372036854775807") <= 0
+      if (ok) read(t, *, iostat=e) n
+      if (ok) ok = (e == 0)
+    end subroutine door_integer
     ! argument i's name, as the manifest gives it
     subroutine arg_name(i, an)
       integer, intent(in) :: i
@@ -17586,8 +17613,9 @@ contains
       call text_of(nm, s=an)
       call class_name_of(given, s=cn)
       call gcp_str(given, .true., s=shown)
+      if (len(cn) > 0) shown = shown // " (" // cn // ")"
       call raise_class("clotran.host.illegal_argument_exception", &
-           rname // ": argument " // an // " " // what // shown // " (" // cn // ")", [roots, given])
+           rname // ": argument " // an // " " // what // shown, [roots, given])
     end subroutine refuse
   end function pkg_call
 
