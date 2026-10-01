@@ -69,7 +69,14 @@ TESTLDFLAGS = $(TESTLDFLAGS_$(notdir $(FC)))
 # temporaries, grown element by element with malloc and realloc and
 # freed after, on every call: malloc, realloc and free were a tenth of
 # a lazy walk's time, and a lazy cell cost 287 ns to make, now 134.
-FCFLAGS_gfortran = -frecursive -flto=auto -ffat-lto-objects -O3 -fstack-arrays
+#
+# The --param limits, because even with LTO those accessors stayed out of
+# line in flat_run: GCC stops inlining into a function past
+# large-function-insns, and the executor is one very large function.
+# Measured 2026-10-01: the lazy sum 1272 -> 1167 ms, a call 146 -> 139
+# ns; a full build 12 s longer.
+FCFLAGS_gfortran = -frecursive -flto=auto -ffat-lto-objects -O3 -fstack-arrays \
+	--param large-function-insns=200000 --param large-function-growth=2000 --param inline-unit-growth=400
 FCFLAGS_flang =
 # -fno-lto, not merely no -flto: gfortran sees the optimiser's code in a
 # fat object and runs it anyway -- 12 s an abi_test link, 0.1 s without
