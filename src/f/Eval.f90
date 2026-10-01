@@ -542,6 +542,12 @@ module Eval
      logical :: has_error = .false.
      character(len=:), allocatable :: last_error, last_trace
      type(gc_root) :: thrown_root
+     ! (class x)'s answers, one value per class name (class_interned):
+     ! the names here, the values rooted by one vector in cls_root
+     character(len=96) :: cls_name(32)
+     integer :: cls_len(32) = 0, cls_n = 0
+     type(gc_value) :: cls_val(32)
+     type(gc_root) :: cls_root
      ! the rest of what was one module variable each, now one per thread
      integer :: id = 0, qq_depth = 0, task_loop_depth = 0
      logical :: analyzing_method = .false., yield_flag = .false.
@@ -14387,7 +14393,7 @@ contains
        else
           block
              call class_name_of(a, s=dlt_1)
-             out = gc_class(dlt_1, [vs_get(vst, base + 1)])
+             out = class_interned(tctx, dlt_1, [vs_get(vst, base + 1)])
           end block
        end if
     case (B_TYPE)
@@ -18401,6 +18407,42 @@ contains
   ! read it through clotran-type, and messages use it. Where clotran
   ! has one type for several of Clojure's classes -- one map, one
   ! seq view -- the most common class stands for it.
+  ! The class named s, as this thread made it the first time: Clojure's
+  ! Object internal-reduce asks (class s) at every step of a seq
+  ! (core/protocols.clj), where a class is a field read, and here each
+  ! was a new text. Up to 32 names a thread; the values are kept alive
+  ! by one vector in a root slot that a miss rewrites, and a stale slot
+  ! (the heap begun again) empties the cache.
+  function class_interned(tctx, s, roots) result(v)
+    type(eval_ctx), pointer, intent(in) :: tctx
+    character(len=*), intent(in) :: s
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: v, keep
+    integer :: i, n
+    if (.not. gc_root_live(tctx%cls_root)) tctx%cls_n = 0
+    do i = 1, tctx%cls_n
+       if (tctx%cls_len(i) == len(s)) then
+          if (tctx%cls_name(i)(1:len(s)) == s) then
+             v = tctx%cls_val(i)
+             return
+          end if
+       end if
+    end do
+    v = gc_class(s, roots)
+    n = tctx%cls_n
+    if (n >= size(tctx%cls_val) .or. len(s) > len(tctx%cls_name)) return
+    keep = gc_vec(n + 1, [roots, v])
+    do i = 1, n
+       call gc_vec_set(keep, i, tctx%cls_val(i))
+    end do
+    call gc_vec_set(keep, n + 1, v)
+    call gc_global_keep(tctx%cls_root, keep)
+    tctx%cls_name(n + 1) = s
+    tctx%cls_len(n + 1) = len(s)
+    tctx%cls_val(n + 1) = v
+    tctx%cls_n = n + 1
+  end function class_interned
+
   recursive subroutine class_name_of(v, s)
     type(gc_value), intent(in) :: v
     character(len=:), allocatable, intent(out) :: s
