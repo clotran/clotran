@@ -2713,7 +2713,7 @@ contains
   subroutine gc_collect(roots)
     type(gc_value), intent(in) :: roots(:)
     gc_collections = gc_collections + 1
-    call collect_full(roots)
+    call collect_full(roots, .false.)
     arena_alloc_since = 0
     arena_live = arena_live_now
   end subroutine gc_collect
@@ -2742,7 +2742,7 @@ contains
     if (gc_torture) full = .not. gen_mode .or. mod(gc_collections, 2) == 0
     call system_clock(t0, rate)
     if (full) then
-       call collect_full(roots)
+       call collect_full(roots, .true.)
        call system_clock(t1)
        dt = real(t1 - t0, 8) * 1000d0 / real(rate, 8)
        gc_full_ms = gc_full_ms + dt
@@ -2792,8 +2792,12 @@ contains
     end do
   end subroutine push_roots
 
-  subroutine collect_full(roots)
+  ! `age`: the young survivors stay young (age_full_survivors) -- only an
+  ! automatic collection; an explicit one (gc_collect: the heap image,
+  ! a regex handle wanted back) leaves every survivor old and no set aged
+  subroutine collect_full(roots, age)
     type(gc_value), intent(in) :: roots(:)
+    logical, intent(in) :: age
     call finish_pending()
     call merge_batches(.true.)
     last_marked = gc_marked
@@ -2808,6 +2812,7 @@ contains
     call census()
     call sweep()
     call unage_all()
+    if (age) call age_full_survivors()
     call forget_young()
     old_at_full = obj_live + vec_live + str_live
     promoted_since_full = 0
@@ -3040,6 +3045,53 @@ contains
     if (x%tag == GCT_OBJ) aged_ref = obj_aged(x%ref)
     if (x%tag == GCT_VEC) aged_ref = vec_aged(x%ref)
   end function aged_ref
+
+  ! A full collection ages the young it finds alive rather than promoting
+  ! them, as a young collection does. Promoted, the cell a lazy walk was
+  ! on became old, its realisation put the next cell in the remembered
+  ! set, and from then each young collection kept the whole window behind
+  ! the walk alive through the dead old cell -- a chain no young
+  ! collection breaks, which made full collections that started it again:
+  ! compiled core's (dorun (range n)) marked 5*10^4 objects a young
+  ! collection, an interpreted one 7. The old that point at an aged object
+  ! are remembered, from one pass over the old.
+  subroutine age_full_survivors()
+    integer :: i, j, na
+    type(gc_value) :: pv
+    na = 0
+    do i = 1, n_obj_young
+       j = obj_young(i)
+       if (obj_free(j) .or. .not. obj_mark(j)) cycle
+       call age_obj(j)
+       na = na + 1
+    end do
+    do i = 1, n_vec_young
+       j = vec_young(i)
+       if (vec_free(j) .or. .not. vec_mark(j)) cycle
+       call age_vec(j)
+       na = na + 1
+    end do
+    do i = 1, n_rem
+       if (rem_set(i)%tag == GCT_OBJ) obj_rem(rem_set(i)%ref) = .false.
+       if (rem_set(i)%tag == GCT_VEC) vec_rem(rem_set(i)%ref) = .false.
+    end do
+    n_rem = 0
+    if (na == 0) return
+    do j = 1, obj_used
+       if (.not. obj_mark(j) .or. obj_free(j)) cycle
+       if (any_aged_slot(j)) then
+          pv%tag = GCT_OBJ; pv%ref = j
+          call remember_obj(pv)
+       end if
+    end do
+    do j = 1, vec_used
+       if (.not. vec_mark(j) .or. vec_free(j)) cycle
+       if (any_aged_run(j)) then
+          pv%tag = GCT_VEC; pv%ref = j
+          call remember_vec(pv)
+       end if
+    end do
+  end subroutine age_full_survivors
 
   ! After a full collection every survivor is marked, so nothing is aged.
   subroutine unage_all()
