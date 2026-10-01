@@ -66,7 +66,7 @@ module ClotranABI
   public :: clotran_var, clotran_deref, clotran_call, clotran_call_slots, clotran_def_fn
   public :: clotran_has_error, clotran_error_len, clotran_error_copy, clotran_clear_error
   public :: clotran_collect, clotran_live_count, clotran_set_torture
-  public :: clotran_frame_new, clotran_frame_get, clotran_frame_put
+  public :: clotran_frame_new, clotran_frame_get, clotran_frame_put, clotran_frame_stack
   public :: clotran_eval_node, clotran_pool_register, clotran_pool_get
   public :: clotran_load_compiled, clotran_array_view
   public :: clotran_rest_args, clotran_arity_error
@@ -651,7 +651,7 @@ contains
     v = gc_vec(int(npairs), none)
     call vs_set(vst, base + 1, v)
     do k = 1, npairs
-       call gc_vec_set(vs_get(vst, base + 1), k, gc_vec_get(vs_get(vst, int(fr)), int(pairs(2 * k - 1)) + 1))
+       call gc_vec_set(vs_get(vst, base + 1), k, fr_get(vst, vs_get(vst, int(fr)), int(pairs(2 * k - 1))))
     end do
     v = gc_vec(int(npairs), [vs_get(vst, base + 1)])
     call vs_set(vst, base + 2, v)
@@ -687,12 +687,12 @@ contains
     if (vals%tag == GCT_VEC) then
        do k = 1, gc_vec_len(vals)
           self = gc_vec_get(inner, k)
-          call gc_vec_set(vs_get(vst, int(fr)), int(self%ival) + 1, gc_vec_get(vals, k))
+          call fr_set(vst, vs_get(vst, int(fr)), int(self%ival), gc_vec_get(vals, k))
        end do
     end if
     self = gc_slot(fn, 4)
     if (self%tag == GCT_INT) then
-       if (self%ival >= 0) call gc_vec_set(vs_get(vst, int(fr)), int(self%ival) + 1, fn)
+       if (self%ival >= 0) call fr_set(vst, vs_get(vst, int(fr)), int(self%ival), fn)
     end if
   end subroutine clotran_captures
 
@@ -862,12 +862,48 @@ contains
     call vs_set(vst, int(dst), v)
   end subroutine clotran_frame_new
 
+  ! A procedure's locals frame ON THE STACK (PLAN 26.5): slot dst names
+  ! the n slots base+1 .. base+n, which the procedure reads and writes
+  ! directly; the interpreter (a fallback node, a closure's captures)
+  ! reads the same slots through the name, as it reads a flat body's.
+  subroutine clotran_frame_stack(cs, dst, base, n) bind(C, name="clotran_frame_stack")
+    type(c_ptr), value :: cs
+    type(gc_stack), pointer :: vst
+    integer(c_int), value :: dst, base, n
+    call c_f_pointer(cs, vst)
+    call vs_set(vst, int(dst), gc_value(GCT_SFRAME, int(base), int(n, gc_ip)))
+  end subroutine clotran_frame_stack
+
+  ! Local i (0-based) of a frame on the heap or on the stack
+  function fr_get(vst, fr, i) result(v)
+    type(gc_stack), pointer, intent(in) :: vst
+    type(gc_value), intent(in) :: fr
+    integer, intent(in) :: i
+    type(gc_value) :: v
+    if (fr%tag == GCT_SFRAME) then
+       v = vst%vstack(fr%ref + i + 1)
+    else
+       v = gc_vec_get(fr, i + 1)
+    end if
+  end function fr_get
+
+  subroutine fr_set(vst, fr, i, v)
+    type(gc_stack), pointer, intent(in) :: vst
+    type(gc_value), intent(in) :: fr, v
+    integer, intent(in) :: i
+    if (fr%tag == GCT_SFRAME) then
+       vst%vstack(fr%ref + i + 1) = v
+    else
+       call gc_vec_set(fr, i + 1, v)
+    end if
+  end subroutine fr_set
+
   subroutine clotran_frame_get(cs, dst, fr, i) bind(C, name="clotran_frame_get")
     type(c_ptr), value :: cs
     type(gc_stack), pointer :: vst
     integer(c_int), value :: dst, fr, i
     call c_f_pointer(cs, vst)
-    call vs_set(vst, int(dst), gc_vec_get(vs_get(vst, int(fr)), int(i) + 1))
+    call vs_set(vst, int(dst), fr_get(vst, vs_get(vst, int(fr)), int(i)))
   end subroutine clotran_frame_get
 
   ! A local's last read clears it (the analyser's clearing read), so a
@@ -877,7 +913,7 @@ contains
     type(gc_stack), pointer :: vst
     integer(c_int), value :: fr, i
     call c_f_pointer(cs, vst)
-    call gc_vec_set(vs_get(vst, int(fr)), int(i) + 1, gc_nil())
+    call fr_set(vst, vs_get(vst, int(fr)), int(i), gc_nil())
   end subroutine clotran_frame_clear
 
   ! A procedure has taken its arguments into its frame: the caller's slots
@@ -898,7 +934,7 @@ contains
     type(gc_stack), pointer :: vst
     integer(c_int), value :: fr, i, src
     call c_f_pointer(cs, vst)
-    call gc_vec_set(vs_get(vst, int(fr)), int(i) + 1, vs_get(vst, int(src)))
+    call fr_set(vst, vs_get(vst, int(fr)), int(i), vs_get(vst, int(src)))
   end subroutine clotran_frame_put
 
   ! THE ESCAPE HATCH. Runs an already-analysed node in a frame, which is
@@ -967,6 +1003,15 @@ contains
     call c_f_pointer(cs, vst)
     call vs_set(vst, int(dst), gc_nil())
     if (nargs <= from) return
+    ! a rest seq apply handed over unrealised (gce_take_rest): the rest
+    ! is that seq, as RestFn.applyTo hands doInvoke its tail
+    if (nargs == from + 1) then
+       if (gce_take_rest(int(argbase + nargs))) then
+          call vs_set(vst, int(dst), vs_get(vst, int(argbase + nargs)))
+          call vs_set(vst, int(argbase + nargs), gc_nil())
+          return
+       end if
+    end if
     rest = gcl_empty([vs_get(vst, int(dst))])
     call vs_set(vst, int(dst), rest)
     do i = int(nargs), int(from) + 1, -1

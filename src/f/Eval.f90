@@ -436,7 +436,7 @@ module Eval
   public :: gce_main_bindings, gce_install_compiled, gce_raise_arity_named
   public :: gce_native_begin, gce_native_end
   public :: gce_analyze, gce_trace
-  public :: gce_ctx_new, gce_ctx_switch, gce_ctx_current, gce_current_fn, gce_new_slots, gce_dot_slots
+  public :: gce_ctx_new, gce_ctx_switch, gce_ctx_current, gce_current_fn, gce_new_slots, gce_dot_slots, gce_take_rest
   public :: gce_repl
   public :: gce_set_home, gce_home
   public :: gce_image_write, gce_image_read, gce_set_no_install
@@ -564,6 +564,9 @@ module Eval
      type(gc_root) :: nested_root, tx_sends_root
      ! its value stack, the collector's: one lookup finds both
      type(gc_stack), pointer :: stk => null()
+     ! the slot holding a REST SEQ apply handed a compiled variadic fn
+     ! unrealised, for its prologue's clotran_rest_args; 0 when none
+     integer :: rest_slot = 0
   end type eval_ctx
   ! Each context is allocated on its own and never moves: a thread holds
   ! its context's address (PLAN.md step 14b), so growing the table copies
@@ -7404,6 +7407,9 @@ contains
           av = args_take(nargs, [vs_get(vst, base + 1)])
           do j = 1, nargs
              call gc_vec_set(gc_slot(av, 1), j, vs_get(vst, argbase + j))
+             ! taken: a builtin that walks a seq is not walking one its
+             ! caller still holds the head of
+             call vs_set(vst, argbase + j, gc_nil())
           end do
           out = call_builtin(gc_i1(vs_get(vst, base + 1)), av)
           call args_give(av, nargs)
@@ -7421,6 +7427,8 @@ contains
           av = gcv_put(vs_get(vst, base + 2), j - 1, vs_get(vst, argbase + j), &
                [vs_get(vst, base + 1), vs_get(vst, base + 2)])
           call vs_set(vst, base + 2, av)
+          ! the argument vector has it: the caller's slot lets go
+          call vs_set(vst, argbase + j, gc_nil())
        end do
     else
        av = gcv_empty([vs_get(vst, base + 1)])
@@ -7429,6 +7437,7 @@ contains
           av = gcv_conj(vs_get(vst, base + 2), vs_get(vst, argbase + j), &
                [vs_get(vst, base + 1), vs_get(vst, base + 2)])
           call vs_set(vst, base + 2, av)
+          call vs_set(vst, argbase + j, gc_nil())
        end do
     end if
     out = apply(vs_get(vst, base + 1), vs_get(vst, base + 2))
@@ -8534,6 +8543,11 @@ contains
                if (truthy(gcv_nth(ar, 1))) req = int_of(gcv_nth(ar, 0))
             end do
          end if
+         ! a compiled variadic fn records its required arity as -(req + 2)
+         ! (clotran.compiler), and takes its rest the same way
+         if (gc_kind(f) == OBJ_COMPILED) then
+            if (gc_i2(f) <= -2) req = -gc_i2(f) - 2
+         end if
          if (req >= 0) then
             s = to_seq(gcv_nth(vs_get(vst, base + 1), n - 1), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
             call vs_set(vst, base + 3, s)
@@ -8570,7 +8584,27 @@ contains
                s = vs_get(vst, base + 3)
                v = vs_get(vst, base + 4)
                call let_go_apply(vs_get(vst, base + 1), n, base)
-               out = invoke_closure(f, v, s)
+               if (gc_kind(f) == OBJ_COMPILED) then
+                  ! the fixed arguments in slots and the rest seq in the one
+                  ! after, called with req + 1 -- which only the variadic
+                  ! arity takes -- and its prologue takes the seq as it is
+                  block
+                    integer :: cb
+                    cb = vs_enter(vst, req + 3)
+                    call vs_set(vst, cb + req + 1, s)
+                    call vs_set(vst, cb + req + 3, f)
+                    do j = 1, req
+                       call vs_set(vst, cb + j, gcv_nth(v, j - 1))
+                    end do
+                    tctx%rest_slot = cb + req + 1
+                    call call_compiled(vs_get(vst, cb + req + 3), cb, req + 1, cb + req + 2)
+                    tctx%rest_slot = 0
+                    out = vs_get(vst, cb + req + 2)
+                    call vs_leave(vst, cb)
+                  end block
+               else
+                  out = invoke_closure(f, v, s)
+               end if
             else
                ! too few for the variadic arity: spread, and a fixed arity may match
                fargs = vs_get(vst, base + 2)
@@ -19037,8 +19071,9 @@ contains
   logical function pool_compiled_kind(k)
     integer, intent(in) :: k
     ! N_FN since compiled closures (PLAN.md step 10, a): its bodies are
-    ! walked, and its constants are the enclosing fn's
-    pool_compiled_kind = any(k == [N_CONST, N_LOCAL, N_IF, N_DO, N_CALL, N_VAR, N_LET, N_LOOP, N_RECUR, N_FN, N_NEW, N_DOT])
+    ! walked, and its constants are the enclosing fn's; N_LAZY's body is
+    ! one too, a closure the lazy seq is made around
+    pool_compiled_kind = any(k == [N_CONST, N_LOCAL, N_IF, N_DO, N_CALL, N_VAR, N_LET, N_LOOP, N_RECUR, N_FN, N_LAZY, N_NEW, N_DOT])
   end function pool_compiled_kind
 
   ! A constant the generated code writes into its own source (the
@@ -19218,7 +19253,7 @@ contains
     call fp_mix(h, int(k, gc_ip))
     if (.not. pool_compiled_kind(k)) then
        call pool_add(pb, "node", vs_get(vst, b + 1), h)
-    else if (k == N_FN) then
+    else if (k == N_FN .or. k == N_LAZY) then
        ! a closure: its template's shape, then every arity's body
        block
          type(gc_value) :: tmpl, arity
@@ -19985,6 +20020,7 @@ contains
                call gc_vec_set(gc_slot(av, 1), 1, vs_get(vst, b + 2))
                do j = 1, nargs
                   call gc_vec_set(gc_slot(av, 1), j + 1, vs_get(vst, argbase + j))
+                  call vs_set(vst, argbase + j, gc_nil())
                end do
                out = call_builtin(gc_i1(gc_slot(vs_get(vst, b + 1), 3)), av)
                call args_give(av, nargs + 1)
@@ -20000,6 +20036,9 @@ contains
        call vs_set(vst, b + 3, av)
        do j = 1, nargs
           call gc_vec_set(gc_slot(vs_get(vst, b + 3), 1), j, vs_get(vst, argbase + j))
+          ! taken, as a callee takes its arguments: compiled apply's
+          ! (. f (applyTo (seq args))) held the seq's head for the call
+          call vs_set(vst, argbase + j, gc_nil())
        end do
     else
        av = gcv_empty(none)
@@ -20007,9 +20046,15 @@ contains
        do j = 1, nargs
           av = gcv_conj(vs_get(vst, b + 3), vs_get(vst, argbase + j), [vs_get(vst, b + 1), vs_get(vst, b + 2), vs_get(vst, b + 3)])
           call vs_set(vst, b + 3, av)
+          call vs_set(vst, argbase + j, gc_nil())
        end do
     end if
-    out = dot_dispatch(vs_get(vst, b + 1), vs_get(vst, b + 2), vs_get(vst, b + 3), from)
+    ! the vector goes to dot_dispatch, which roots it before it allocates
+    ! and lets it go once it has consed the target on; held here too, it
+    ! kept the arguments for the whole call
+    av = vs_get(vst, b + 3)
+    call vs_set(vst, b + 3, gc_nil())
+    out = dot_dispatch(vs_get(vst, b + 1), vs_get(vst, b + 2), av, from)
     ! A method may answer a CALL REQUEST -- "call this fn" -- which the
     ! interpreter's loop enters in place (exec.inc, enter_call); a
     ! future's and a promise's deref do. Compiled code applies it: a
@@ -20020,6 +20065,16 @@ contains
     end if
     call vs_leave(vst, b)
   end function gce_dot_slots
+
+  ! Whether `slot` holds a rest seq apply handed over (eval_ctx%rest_slot);
+  ! taken once, by the prologue it was handed to
+  logical function gce_take_rest(slot) result(yes)
+    integer, intent(in) :: slot
+    type(eval_ctx), pointer :: c
+    c => ctx_self()
+    yes = c%rest_slot /= 0 .and. c%rest_slot == slot
+    if (yes) c%rest_slot = 0
+  end function gce_take_rest
 
   ! The compiled fn being entered on this thread (see eval_ctx%cur_fn).
   function gce_current_fn() result(fn)

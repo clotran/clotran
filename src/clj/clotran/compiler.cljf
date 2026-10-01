@@ -153,6 +153,11 @@
        type(c_ptr), value :: cs
        integer(c_int), value :: dst, n
      end subroutine clotran_frame_new
+     subroutine clotran_frame_stack(cs, dst, base, n) bind(C, name=\"clotran_frame_stack\")
+       import :: c_int, c_ptr
+       type(c_ptr), value :: cs
+       integer(c_int), value :: dst, base, n
+     end subroutine clotran_frame_stack
      subroutine clotran_frame_get(cs, dst, fr, i) bind(C, name=\"clotran_frame_get\")
        import :: c_int, c_ptr
        type(c_ptr), value :: cs
@@ -299,7 +304,7 @@ end module clotran_rt_decl
 (def ^:private compiled-ops
   "The node kinds the generator emits code for. Everything else goes
   through the escape hatch, which is slower and still correct."
-  #{:const :local :if :do :call :var :let :loop :recur :fn :new :dot})
+  #{:const :local :if :do :call :var :let :loop :recur :fn :lazy :new :dot})
 
 
 (defn- pooled
@@ -986,7 +991,11 @@ end module clotran_rt_decl
                   [(into code (conj (vec c) (str v " = " e)))
                    (-> st (declare-var v t) (assoc-in [:env :slots slot] t))])
                 (let [[c s st] (gen (nth kids i) st)]
-                  [(into code (conj (vec c) (str "call clotran_frame_put(b + 1, " slot "_c_int, b + " s ")")))
+                  ;; the temporary is cleared once the local has it (as
+                  ;; gen-into's), or a loop's first binding held the head
+                  ;; of the seq the loop walks: protocols' internal-reduce
+                  [(into code (cond-> (conj (vec c) (str "call clotran_frame_put(b + 1, " slot "_c_int, b + " s ")"))
+                                (seq c) (conj (str "call clotran_set_nil(b + " s ")"))))
                    (assoc-in st [:env :slots slot] :any)]))))
           [[] st] (range n)))
 
@@ -1081,10 +1090,14 @@ end module clotran_rt_decl
 
           :if (let [[test th el] (:children nd)
                     tt (infer test (:env st))
-                    [tc cond st] (if (= :bool tt)
-                                   (gp test :bool st)
-                                   (let [[c s st] (gen test st)]
-                                     [c (str "clotran_bool(b + " s ") /= 0") st]))
+                    ;; ts: the test's own slot, let go once a branch is
+                    ;; taken -- (if-let [s (seq coll)] ...) otherwise held
+                    ;; the seq's head through the branch, all of seq-reduce
+                    [tc cond st ts] (if (= :bool tt)
+                                      (gp test :bool st)
+                                      (let [[c s st] (gen test st)]
+                                        [c (str "clotran_bool(b + " s ") /= 0") st (when (seq c) s)]))
+                    let-go (when ts [(str "   call clotran_set_nil(b + " ts ")")])
                     [r st] (fresh st)
                     [thc ths st] (gen th st)
                     [elc els st] (if el (gen el st) (gen {:op :const :p1 nil} st))
@@ -1093,9 +1106,11 @@ end module clotran_rt_decl
                                       [(str "   call clotran_copy(b + " r ", b + " s ")")]))]
                 [(concat tc
                          [(str "if (" cond ") then")]
+                         let-go
                          (map #(str "   " %) thc)
                          (copy th ths)
                          ["else"]
+                         let-go
                          (map #(str "   " %) elc)
                          (copy (or el {:op :const}) els)
                          ["end if"])
@@ -1173,6 +1188,19 @@ end module clotran_rt_decl
                                (fort-str who) "), " (count who) "_c_int, b + 1, " arr ", "
                                (quot (count caps) 2) "_c_int, " selfslot "_c_int)")])
                  r st])
+
+          ;; (lazy-seq body...): the analyser's N_LAZY carries the template a
+          ;; (fn* [] body...) would, so its body is a compiled closure, and
+          ;; the seq is made around it as (new clotran.host.lazy_seq f) is
+          ;; (clotran_new takes the slot BEFORE its arguments)
+          :lazy (let [[c f st] (gen (assoc nd :op :fn) st)
+                      cname "clotran.host.lazy_seq"
+                      [r st] (fresh st)]
+                  [(concat c
+                           [(str "st = clotran_new(b + " r ", ctext(" (fort-str cname) "), " (count cname)
+                                 "_c_int, b + " (dec f) ", 1_c_int)")]
+                           err-return)
+                   r st])
 
           ;; (new Class args...): the arguments into consecutive slots,
           ;; as a call's are, and the interpreter's constructor path --
@@ -1274,8 +1302,9 @@ end module clotran_rt_decl
                                         st])
                                      (let [[c s st] (gen k st)]
                                        [(into code c)
-                                        (conj vs (str "call clotran_frame_put(b + 1, " slot
-                                                      "_c_int, b + " s ")"))
+                                        (cond-> (conj vs (str "call clotran_frame_put(b + 1, " slot
+                                                              "_c_int, b + " s ")"))
+                                          (seq c) (conj (str "call clotran_set_nil(b + " s ")")))
                                         st]))))
                                [[] [] st] (map-indexed vector (:children nd)))
                        [r st] (fresh st)]
@@ -1320,7 +1349,7 @@ end module clotran_rt_decl
   aset or alength -- and that carry no hint. Nested fns are skipped:
   their slots are their own frame's."
   [body params hints]
-  (let [nodes (tree-seq #(and (coll? %) (not= :fn (:op %))) seq body)]
+  (let [nodes (tree-seq #(and (coll? %) (not (#{:fn :lazy} (:op %)))) seq body)]
     (into (sorted-set)
           (for [nd nodes
                 :when (and (map? nd) (= :call (:op nd)))
@@ -1394,7 +1423,9 @@ end module clotran_rt_decl
         [rest-code st] (if variadic
                          (let [[s st] (fresh st)]
                            [[(str "call clotran_rest_args(b + " s ", argbase, " nfixed "_c_int, nargs)")
-                             (str "call clotran_frame_put(b + 1, " (+ start nfixed) "_c_int, b + " s ")")]
+                             (str "call clotran_frame_put(b + 1, " (+ start nfixed) "_c_int, b + " s ")")
+                             ;; the local has it: (apply + (take n (range))) walks it
+                             (str "call clotran_set_nil(b + " s ")")]
                             st])
                          [[] st])
         [code res st]
@@ -1435,7 +1466,7 @@ end module clotran_rt_decl
 (def ^:private stack-entries
   "The runtime entries that take this thread's stack as their first
   argument (ClotranABI, clotran_stack)."
-  #{"arith" "array_view" "bool" "call_slots" "captures" "clear_args" "copy" "deref" "dot" "eval_node" "frame_clear" "frame_done" "frame_enter" "frame_get" "frame_leave" "frame_new" "frame_put" "int" "make_closure" "new" "pool_get" "real" "rest_args" "set_bool" "set_int" "set_nil" "set_real" "set_str" "tag"})
+  #{"arith" "array_view" "bool" "call_slots" "captures" "clear_args" "copy" "deref" "dot" "eval_node" "frame_clear" "frame_done" "frame_enter" "frame_get" "frame_leave" "frame_new" "frame_put" "frame_stack" "int" "make_closure" "new" "pool_get" "real" "rest_args" "set_bool" "set_int" "set_nil" "set_real" "set_str" "tag"})
 
 (defn- direct-slots
   "A procedure's text with the entries that only read or write one slot
@@ -1480,10 +1511,12 @@ end module clotran_rt_decl
 
 (defn- frameless
   "A procedure's text with its locals in stack slots rather than a heap
-  frame, when nothing but frame_get and frame_put reads the frame at b+1:
-  no closure made or entered, no node handed to the interpreter. Local i
-  is then slot b+high+1+i, and a read or write is a copy between slots --
-  no frame allocated per call, no vector touched per local."
+  frame. Local i is slot b+high+1+i, and a read or write is a copy
+  between slots -- no frame allocated per call, no vector touched per
+  local. When something else still takes the frame at b+1 -- a closure
+  made or entered, a node handed to the interpreter -- b+1 NAMES those
+  slots (clotran_frame_stack, PLAN 26.5) and they read and write the
+  same ones."
   [high nslots text]
   (let [get-re #"call clotran_frame_get\((b \+ \d+), b \+ 1, (\d+)_c_int\)"
         put-re #"call clotran_frame_put\(b \+ 1, (\d+)_c_int, ([^)]+)\)"
@@ -1491,13 +1524,14 @@ end module clotran_rt_decl
         new-re #"    call clotran_frame_new\(b \+ 1, \d+_c_int\)\n"
         slot #(str "b + " (+ high 1 (parse-long %)))
         left (-> text (str/replace get-re "") (str/replace put-re "") (str/replace clear-re "") (str/replace new-re ""))]
-    (if (re-find #"b \+ 1\b" left)
-      text
+    (let [named? (re-find #"b \+ 1\b" left)]
       (-> text
           (str/replace get-re (fn [[_ d i]] (str "call clotran_copy(" d ", " (slot i) ")")))
           (str/replace put-re (fn [[_ i src]] (str "call clotran_copy(" (slot i) ", " src ")")))
           (str/replace clear-re (fn [[_ i]] (str "call clotran_set_nil(" (slot i) ")")))
-          (str/replace new-re "")
+          (str/replace new-re (if named?
+                                (str "    call clotran_frame_stack(b + 1, b + " high ", " nslots "_c_int)\n")
+                                ""))
           (str/replace (str "clotran_frame_enter(" (max 1 high) "_c_int)")
                        (str "clotran_frame_enter(" (+ (max 1 high) nslots) "_c_int)"))))))
 
@@ -1542,7 +1576,12 @@ end module clotran_rt_decl
                 ["else"
                  (str "   call clotran_arity_error(nargs, ctext(" (fort-str who) "), " (count who) "_c_int)")
                  "end if"]))]
-    {:arity (if single? (first (first arities)) -1)
+    ;; a variadic fn's required arity rides along as -(req + 2), so apply
+    ;; can hand it the rest unrealised (Eval.f90, B_APPLY); -1 is several
+    ;; fixed arities, checked here
+    {:arity (if single?
+              (first (first arities))
+              (if-let [req (some #(when (nth % 1) (first %)) arities)] (- (+ req 2)) -1))
      :inners (:inners st [])
      :who who
      :symbol sym

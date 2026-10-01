@@ -83,8 +83,9 @@
   calls would pass arguments where the entries no longer expect them.
   Bump it with any change to those entries' arguments -- or, as at 3, when
   what libraries do has changed enough that an old one should be rebuilt
-  (3: locals cleared at their last read, arguments taken by the callee)."
-  3)
+  (3: locals cleared at their last read, arguments taken by the callee;
+  4: a lazy-seq's body compiled, its constants in the enclosing pool)."
+  4)
 
 (defn defined-in?
   "Whether Var `v` was last defined by the file `src`, by its :file
