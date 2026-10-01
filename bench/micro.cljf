@@ -1,0 +1,19 @@
+;; Per-element costs (PLAN step 26), each printed as `label  N ns`.
+;; Written in clotran's names; scripts/bench-langs --micro gives it to clj
+;; in upstream's.
+(defn per [label n f]
+  (f)
+  (let [t0 (clotran.host.system/nanoTime) _ (f) t (- (clotran.host.system/nanoTime) t0)]
+    (println (format "%-44s %8.1f ns" label (/ (double t) n)))))
+(def n 1000000)
+(defn id [x] x)
+(per "empty loop" n #(loop [i 0] (when (< i n) (recur (inc i)))))
+(per "loop + a fn call" n #(loop [i 0] (when (< i n) (id i) (recur (inc i)))))
+(per "loop + a cons" n #(loop [i 0] (when (< i n) (cons i nil) (recur (inc i)))))
+(per "loop + a closure" n #(loop [i 0] (when (< i n) (fn [] i) (recur (inc i)))))
+(per "loop + a lazy-seq" n #(loop [i 0] (when (< i n) (lazy-seq nil) (recur (inc i)))))
+(per "reduce + over a range" n #(reduce + (range n)))
+(per "walk (seq (range n)) by next" n #(loop [s (seq (range n))] (when s (recur (next s)))))
+(per "walk a lazy-seq by next" n #(loop [s (take n (iterate inc 0))] (when s (recur (next s)))))
+(per "reduce + over (map inc (range n))" n #(reduce + (map inc (range n))))
+(per "transduce (map inc) +" n #(transduce (map inc) + (range n)))

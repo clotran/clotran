@@ -1,0 +1,80 @@
+#!/usr/bin/env bb
+;; The yardstick of PLAN step 26: one job -- sum the first 10^6 elements
+;; of an infinite lazy sequence -- in each runtime installed here, the
+;; idiomatic way and over a hand-built stream of memoized thunk cells (what
+;; a Clojure lazy-seq is), every way each runs code: compiled, interpreted,
+;; bytecode. bench/langs holds the programs. A runtime that is not
+;; installed is skipped and says so.
+;;
+;;   scripts/bench-langs              every runtime
+;;   scripts/bench-langs clotran      only the rows whose runtime matches
+;;   scripts/bench-langs --micro      per-element costs (bench/micro.cljf), clj and clotran
+(require '[babashka.process :as p] '[babashka.fs :as fs] '[clojure.string :as str])
+
+(def repo (str (fs/parent (fs/parent (fs/absolutize *file*)))))
+(def src (str repo "/bench/langs"))
+(def work (str (fs/create-temp-dir {:prefix "bench-langs-"})))
+(load-file (str repo "/upstream/names.clj"))
+
+(defn have? [cmd] (or (fs/exists? cmd) (some? (fs/which cmd))))
+(defn sh [& args] (apply p/shell {:dir work :out :string :err :string :continue true :in ""} args))
+(defn rows
+  "Each `label  N ms` line a run printed."
+  [out]
+  (for [l (str/split-lines (or out ""))
+        :let [[_ label ms] (re-find #"^\s*(\S.*?)\s+([0-9.]+) ms" l)]
+        :when label]
+    [label (parse-double ms)]))
+
+(def csi (if (fs/exists? "/opt/homebrew/bin/csi") "/opt/homebrew/bin/csi" "csi"))
+(def csc (if (fs/exists? "/opt/homebrew/bin/csc") "/opt/homebrew/bin/csc" "csc"))
+
+(def runtimes
+  [["GHC -O2" "ghc" "compiled, fused"
+    #(do (sh "ghc" "-O2" (str src "/lazy.hs") "-o" "hs2" "-outputdir" "o2") (:out (sh "./hs2")))]
+   ["GHC -O0" "ghc" "compiled"
+    #(do (sh "ghc" "-O0" (str src "/lazy.hs") "-o" "hs0" "-outputdir" "o0") (:out (sh "./hs0")))]
+   ["GHCi" "runghc" "bytecode" #(:out (sh "runghc" (str src "/lazy.hs")))]
+   ["SBCL" "sbcl" "compiled" #(:out (sh "sbcl" "--script" (str src "/lazy.lisp")))]
+   ["SBCL sb-eval" "sbcl" "interpreted"
+    #(:out (sh "sbcl" "--noinform" "--non-interactive" "--eval" "(setf sb-ext:*evaluator-mode* :interpret)"
+               "--load" (str src "/lazy.lisp")))]
+   ["CHICKEN csc -O3" csc "compiled"
+    #(do (sh csc "-O3" (str src "/lazy.scm") "-o" "scm3") (:out (sh "./scm3")))]
+   ["CHICKEN csi" csi "interpreted" #(:out (sh csi "-s" (str src "/lazy.scm")))]
+   ["CPython" "python3" "interpreted" #(:out (sh "python3" (str src "/lazy.py")))]
+   ["clj" "clj" "compiled as it runs (JIT)"
+    #(do (spit (str work "/lazy.clj") (names/to-upstream (slurp (str src "/lazy.cljf"))))
+         (:out (sh "clj" "-M" "lazy.clj")))]
+   ["clotran" (str repo "/clotran-bin") "interpreted"
+    #(:out (sh (str repo "/clotran-bin") (str repo "/src/clj/clojure/core.clj") (str src "/lazy.cljf")))]
+   ["clotran, compiled core" (str repo "/clotran-bin") "compiled (from the cache)"
+    #(:out (p/shell {:dir work :out :string :err :string :continue true :in ""
+                     :extra-env {"CLOTRAN_IMAGE" "0" "CLOTRAN_AUTOCOMPILE" "use"}}
+                    (str repo "/clotran-bin") (str repo "/src/clj/clojure/core.clj") (str src "/lazy.cljf")))]])
+
+(when (= "--micro" (first *command-line-args*))
+  (spit (str work "/micro.clj") (names/to-upstream (slurp (str src "/../micro.cljf"))))
+  (let [run (fn [env & cmd] (:out (apply p/shell {:dir work :out :string :err :string :continue true :in "" :extra-env env} cmd)))
+        micro-rows (fn [out] (for [l (str/split-lines (or out ""))
+                                   :let [[_ label ns] (re-find #"^(\S.*?)\s+([0-9.]+) ns" l)] :when label]
+                               [label (parse-double ns)]))
+        clj (into {} (micro-rows (run {} "clj" "-M" "micro.clj")))
+        bin (str repo "/clotran-bin") core (str repo "/src/clj/clojure/core.clj") m (str src "/../micro.cljf")
+        ct (micro-rows (run {} bin core m))
+        cc (into {} (micro-rows (run {"CLOTRAN_IMAGE" "0" "CLOTRAN_AUTOCOMPILE" "use"} bin core m)))]
+    (println (format "%-44s %10s %12s %16s" "ns per element" "clj" "clotran" "compiled core"))
+    (doseq [[label v] ct]
+      (println (format "%-44s %10.1f %12.1f %16.1f" label (double (get clj label -1)) v (double (get cc label -1))))))
+  (fs/delete-tree work)
+  (System/exit 0))
+
+(def only (first *command-line-args*))
+(println (format "%-24s %-26s %-46s %10s" "runtime" "runs as" "form" "ms"))
+(doseq [[nm cmd how run] runtimes
+        :when (or (nil? only) (str/includes? (str/lower-case nm) (str/lower-case only)))]
+  (if-not (have? cmd)
+    (println (format "%-24s %s" nm "(not installed)"))
+    (doseq [[label ms] (rows (run))]
+      (println (format "%-24s %-26s %-46s %10.1f" nm how label ms)))))
+(fs/delete-tree work)

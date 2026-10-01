@@ -1,0 +1,11 @@
+;; The lazy-sum benchmark (PLAN step 26): the first 10^6 elements of an
+;; infinite lazy sequence, summed -- the idiomatic way, and over a
+;; hand-built stream of lazy-seq cells. Written in clotran's names;
+;; scripts/bench-langs gives it to clj in upstream's.
+(defn from [n] (lazy-seq (cons n (from (inc n)))))
+(defn bench [label f]
+  (f)
+  (let [t0 (clotran.host.system/nanoTime) r (f)]
+    (println (format "%-44s %8.1f ms  (%s)" label (/ (- (clotran.host.system/nanoTime) t0) 1e6) r))))
+(bench "(apply + (take n (range)))" #(apply + (take 1000000 (range))))
+(bench "(reduce + (take n (from 0)))  (hand stream)" #(reduce + (take 1000000 (from 0))))
