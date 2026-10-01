@@ -4892,9 +4892,9 @@ contains
     call vs_set(vst, base + 1, v)
     select case (gc_i2(vs_get(vst, base + 1)))
     case (1)
-       ! a native range tail: slot 1 = [lo hi step]
-       args = gc_slot(vs_get(vst, base + 1), 1)
-       r = range_cell(gcv_nth(args, 0), gcv_nth(args, 1), gcv_nth(args, 2), [vs_get(vst, base + 1)])
+       ! a native range tail: slots 1-3 = lo hi step (range_cell)
+       r = range_cell(gc_slot(vs_get(vst, base + 1), 1), gc_slot(vs_get(vst, base + 1), 2), &
+            gc_slot(vs_get(vst, base + 1), 3), [vs_get(vst, base + 1)])
     case (2)
        ! a native iterate tail: f in slot 1 (the thunk's slot; slot 4
        ! is the owner's while running) and x in slot 5 -- not a [f x]
@@ -6940,10 +6940,9 @@ contains
              cycle
           end if
           if (gc_i1(cell) == LAZY_PENDING .and. gc_i2(cell) == 1) then
-             spec = gc_slot(cell, 1)
-             call vs_set(vst, base + 4, gcv_nth(spec, 0))   ! cursor
-             call vs_set(vst, base + 5, gcv_nth(spec, 1))   ! hi
-             call vs_set(vst, base + 6, gcv_nth(spec, 2))   ! step
+             call vs_set(vst, base + 4, gc_slot(cell, 1))   ! cursor
+             call vs_set(vst, base + 5, gc_slot(cell, 2))   ! hi
+             call vs_set(vst, base + 6, gc_slot(cell, 3))   ! step
              sd = num_dbl(vs_get(vst, base + 6))
              do while (cnt < 32)
                 if (sd > 0.0_gc_dp .and. .not. num_lt(vs_get(vst, base + 4), vs_get(vst, base + 5))) exit
@@ -6955,12 +6954,8 @@ contains
              ! what is left of the range, as a fresh pending tail
              if ((sd > 0.0_gc_dp .and. num_lt(vs_get(vst, base + 4), vs_get(vst, base + 5))) .or. &
                   (sd < 0.0_gc_dp .and. num_lt(vs_get(vst, base + 5), vs_get(vst, base + 4))) .or. sd == 0.0_gc_dp) then
-                spec = gcv_build(3, [roots, vs_get(vst, base + 2)])
-                call vs_set(vst, base + 3, spec)
-                call gc_vec_set(gc_slot(spec, 1), 1, vs_get(vst, base + 4))
-                call gc_vec_set(gc_slot(spec, 1), 2, vs_get(vst, base + 5))
-                call gc_vec_set(gc_slot(spec, 1), 3, vs_get(vst, base + 6))
-                nxt = gc_obj(OBJ_LAZY, [vs_get(vst, base + 3), gc_nil(), gc_nil()], [roots, vs_get(vst, base + 2), vs_get(vst, base + 3)])
+                nxt = gc_obj(OBJ_LAZY, [vs_get(vst, base + 4), vs_get(vst, base + 5), vs_get(vst, base + 6)], &
+                     [roots, vs_get(vst, base + 2), vs_get(vst, base + 4), vs_get(vst, base + 5), vs_get(vst, base + 6)])
                 call gc_set_i1(nxt, LAZY_PENDING)
                 call gc_set_i2(nxt, 1)
                 call vs_set(vst, base + 3, nxt)
@@ -7091,10 +7086,9 @@ contains
           cell = vs_get(vst, base + 1)
           if (gc_i1(cell) == LAZY_PENDING .and. gc_i2(cell) == 1) then
              ! the rest of a range: walk the arithmetic, no cells
-             spec = gc_slot(cell, 1)
-             call vs_set(vst, base + 4, gcv_nth(spec, 0))
-             call vs_set(vst, base + 5, gcv_nth(spec, 1))
-             call vs_set(vst, base + 6, gcv_nth(spec, 2))
+             call vs_set(vst, base + 4, gc_slot(cell, 1))
+             call vs_set(vst, base + 5, gc_slot(cell, 2))
+             call vs_set(vst, base + 6, gc_slot(cell, 3))
              sd = num_dbl(vs_get(vst, base + 6))
              do
                 if (sd > 0.0_gc_dp .and. .not. num_lt(vs_get(vst, base + 4), vs_get(vst, base + 5))) exit
@@ -7209,12 +7203,11 @@ contains
     call vs_set(vst, base + 3, stp)
     nxt = num_add2(vs_get(vst, base + 1), vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
     call vs_set(vst, base + 4, nxt)
-    spec = gcv_empty([roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 4)])
-    spec = gcv_conj(spec, vs_get(vst, base + 4), [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), spec])
-    spec = gcv_conj(spec, vs_get(vst, base + 2), [roots, vs_get(vst, base + 1), vs_get(vst, base + 3), spec])
-    spec = gcv_conj(spec, vs_get(vst, base + 3), [roots, vs_get(vst, base + 1), spec])
-    call vs_set(vst, base + 4, spec)
-    tail = gc_obj(OBJ_LAZY, [vs_get(vst, base + 4), gc_nil(), gc_nil()], [roots, vs_get(vst, base + 1), vs_get(vst, base + 4)])
+    ! a PENDING RANGE TAIL holds [next hi step] in its own slots 1-3,
+    ! which a pending cell does not use until force_settle fills 2 and 3
+    ! -- not in a persistent vector, four allocations an element
+    tail = gc_obj(OBJ_LAZY, [vs_get(vst, base + 4), vs_get(vst, base + 2), vs_get(vst, base + 3)], &
+         [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 4)])
     call gc_set_i1(tail, LAZY_PENDING)
     call gc_set_i2(tail, 1)
     call vs_set(vst, base + 4, tail)
@@ -15740,10 +15733,10 @@ contains
              call vs_set(vst, base + 1, strip_meta(gc_slot(v, 2)))
              cycle
           end if
-          ! a pending range cell is [lo hi step]: its count is arithmetic,
+          ! a pending range cell holds lo hi step: its count is arithmetic,
           ! as LongRange.count is, not a realisation of 10^6 cells
           if (gc_i1(v) == LAZY_PENDING .and. gc_i2(v) == 1) then
-             if (range_count(gc_slot(v, 1), n)) exit
+             if (range_count(v, n)) exit
           end if
        case default
           n = n + seq_len(v)
@@ -15826,14 +15819,14 @@ contains
   ! How many elements a pending range [lo hi step] has left, added to
   ! n; false when the step is 0 (Clojure's infinite range), so the
   ! caller walks -- and hangs -- as Clojure would.
-  function range_count(spec, n) result(ok)
-    type(gc_value), intent(in) :: spec
+  function range_count(cell, n) result(ok)
+    type(gc_value), intent(in) :: cell
     integer, intent(inout) :: n
     logical :: ok
     type(gc_value) :: lo, hi, st
     integer(gc_ip) :: a, b, c
     real(gc_dp) :: d
-    lo = gcv_nth(spec, 0); hi = gcv_nth(spec, 1); st = gcv_nth(spec, 2)
+    lo = gc_slot(cell, 1); hi = gc_slot(cell, 2); st = gc_slot(cell, 3)
     ok = .false.
     if (lo%tag == GCT_INT .and. hi%tag == GCT_INT .and. st%tag == GCT_INT) then
        a = lo%ival; b = hi%ival; c = st%ival
@@ -18323,7 +18316,7 @@ contains
              s = "clotran.host.range"
              if (gc_i1(v) == LAZY_CONS) then
                 if (tag_of(gc_slot(v, 2)) == GCT_INT) s = "clotran.host.long_range"
-             else if (tag_of(gcv_nth(gc_slot(v, 1), 0)) == GCT_INT) then
+             else if (tag_of(gc_slot(v, 1)) == GCT_INT) then
                 s = "clotran.host.long_range"
              end if
           end if
