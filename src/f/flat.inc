@@ -1030,6 +1030,22 @@
        case (F_RET)
           val = vst%vstack(rb + w(2) + 1)
           vst%vstack(rb + w(2) + 1) = gc_nil()
+          if (iand(tctx%kst(ks)%flags, KF_LEAN) /= 0 .and. ks - 1 > kbot) then
+             if (gc_kind(val) /= OBJ_RECUR) then
+                ! THE LEAN RETURN (PLAN 26.4): the frame a lean call made
+                ! goes, and its answer lands in the register the caller
+                ! below waits on -- k_finish's work for this one case
+                if (tctx%fstack_top > 0) tctx%fstack_top = tctx%fstack_top - 1
+                call vs_leave(vst, b)
+                ks = ks - 1
+                tctx%ksp = ks
+                b = tctx%kst(ks)%base
+                fr = vst%vstack(b + 2)
+                vst%vstack(fr%ref + tctx%kst(ks)%aux) = val
+                tctx%kst(ks)%aux = 0
+                cycle outer
+             end if
+          end if
           call k_finish(val, tctx)
           ! a flat caller waiting on this answer takes it here
           if (flat_top(tctx, kbot)) then
@@ -1204,6 +1220,24 @@
                       fnv = vs_get(vst, b + 3)
                       call vs_set(vst, b + 3, gc_nil())
                       call vs_set(vst, b + 4, gc_nil())
+                      if (gc_i1(body) == N_FLAT .and. step_at == 0) then
+                         ! THE LEAN CALL (PLAN 26.4): a flat body, run
+                         ! here next -- record and registers in one
+                         ! enter, no generic push and no flat_top
+                         block
+                           integer :: b2, nr
+                           nr = ct_int(ar, 1)
+                           b2 = k_push_flat(body, nr, fnv, tctx)
+                           if (tctx%has_error) exit
+                           call ct_stack_frame(vst, fnv, ar, b2 + K_SLOTS)
+                           do id = 0, n - 1
+                              vst%vstack(b2 + K_SLOTS + start + id + 1) = vst%vstack(rb + w(4) + id + 1)
+                              vst%vstack(rb + w(4) + id + 1) = gc_nil()
+                           end do
+                         end block
+                         call vs_set(vst, b + 6, gc_nil())
+                         cycle outer
+                      end if
                       call k_push(body, gc_nil(), ior(KF_FNBODY, KF_RESTART), body, tctx)
                       if (tctx%has_error) exit
                       call vs_set(vst, tctx%kst(tctx%ksp)%base + 7, fnv)

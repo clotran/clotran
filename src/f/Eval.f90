@@ -517,7 +517,7 @@ module Eval
      integer :: ftop = 0   ! a try's call-stack depth, restored when it catches
      character(len=:), allocatable :: msg
   end type kframe
-  integer, parameter :: KF_FNBODY = 1, KF_RESTART = 2, K_SLOTS = 7   ! slot 6: a scalar call's first argument; slot 7: the closure whose body this is
+  integer, parameter :: KF_FNBODY = 1, KF_RESTART = 2, KF_LEAN = 4, K_SLOTS = 7   ! slot 6: a scalar call's first argument; slot 7: the closure whose body this is
   integer, save :: k_limit = 0
 
   ! --- evaluation contexts ---------------------------------------------

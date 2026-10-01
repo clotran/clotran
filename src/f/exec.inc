@@ -1102,6 +1102,45 @@
     gce_evals = gce_evals + 1
   end subroutine k_push
 
+  ! k_push for a flat fn body called from a flat body (PLAN 26.4): its
+  ! record and its nr registers in one stretch of the value stack, the
+  ! frame slot naming them, and KF_LEAN, so its F_RET hands the answer
+  ! straight to the caller waiting below. Returns the record's base.
+  integer function k_push_flat(body, nr, fn, tctx) result(b)
+    type(gc_value), intent(in) :: body, fn
+    integer, intent(in) :: nr
+    type(eval_ctx), pointer, intent(in) :: tctx
+    type(gc_stack), pointer :: vst
+    type(kframe), allocatable :: bigger(:)
+    integer :: n
+    vst => tctx%stk
+    b = -1
+    if (tctx%ksp >= size(tctx%kst)) then
+       n = size(tctx%kst)
+       allocate(bigger(2 * n))
+       bigger(1:n) = tctx%kst(1:n)
+       call move_alloc(bigger, tctx%kst)
+    end if
+    if (tctx%ksp >= k_limit) then
+       call raise_class("clotran.host.stack_overflow_error", "stack overflow", [gc_value ::])
+       return
+    end if
+    b = vs_enter(vst, K_SLOTS + nr)
+    tctx%ksp = tctx%ksp + 1
+    tctx%kst(tctx%ksp)%base = b
+    tctx%kst(tctx%ksp)%pc = 0
+    tctx%kst(tctx%ksp)%i = 0
+    tctx%kst(tctx%ksp)%flags = ior(ior(KF_FNBODY, KF_RESTART), KF_LEAN)
+    tctx%kst(tctx%ksp)%nfr = 1
+    tctx%kst(tctx%ksp)%mode = 0
+    tctx%kst(tctx%ksp)%aux = 0
+    vst%vstack(b + 1) = body
+    vst%vstack(b + 2) = gc_value(GCT_SFRAME, b + K_SLOTS, int(nr, gc_ip))
+    vst%vstack(b + 5) = body
+    vst%vstack(b + 7) = fn
+    gce_evals = gce_evals + 1
+  end function k_push_flat
+
   ! The top frame becomes `nd`, keeping its locals, flags and restart
   ! point: a child in tail position.
   subroutine k_tail(nd, ctx)
