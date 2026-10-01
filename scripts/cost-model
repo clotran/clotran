@@ -1,0 +1,56 @@
+#!/usr/bin/env bb
+;; The cost model (PLAN step 26): how many objects each operation
+;; allocates per element, exactly, checked against test/costs.edn. A
+;; count is deterministic where a time is not, so this can gate: an
+;; operation that starts allocating more fails the build, and one that
+;; allocates less says to lower its row.
+;;
+;; Each form runs at two sizes in its own clotran-bin (CLOTRAN_STATS=1,
+;; interpreted); the difference in allocations over the difference in n
+;; is the per-element cost, startup cancelled out.
+;;
+;;   scripts/cost-model           check against test/costs.edn
+;;   scripts/cost-model --write   rewrite the table with what it measures
+(require '[babashka.process :as p] '[babashka.fs :as fs] '[clojure.edn :as edn] '[clojure.string :as str])
+
+(def repo (str (fs/parent (fs/parent (fs/absolutize *file*)))))
+(def table-file (str repo "/test/costs.edn"))
+(def n1 100000)
+(def n2 300000)
+(def slack 0.05)
+
+(defn allocs [form n]
+  (let [f (str (fs/create-temp-file {:prefix "cost-" :suffix ".cljf"}))]
+    (spit f (str "(def n " n ")\n" form "\n"))
+    (let [r (p/shell {:dir repo :out :string :err :string :continue true :in ""
+                      :extra-env {"CLOTRAN_STATS" "1"}}
+                     (str repo "/clotran-bin") (str repo "/src/clj/clojure/core.clj") f)
+          [_ a] (re-find #"stats: .*allocs=(\d+)" (:err r))]
+      (fs/delete f)
+      (when-not a (throw (ex-info (str "no statistics from " form) {:out (:out r) :err (:err r)})))
+      (parse-long a))))
+
+(defn per-element [form]
+  (/ (Math/round (* 100.0 (/ (- (allocs form n2) (allocs form n1)) (double (- n2 n1))))) 100.0))
+
+(def rows (edn/read-string (slurp table-file)))
+(def measured (mapv #(assoc % :now (per-element (:form %))) rows))
+
+(if (= "--write" (first *command-line-args*))
+  (spit table-file
+        (str ";; Objects allocated per element, interpreted (scripts/cost-model).\n"
+             ";; A row is lowered when an operation gets cheaper; a run that\n"
+             ";; measures more than its row fails the build.\n[\n"
+             (str/join "\n" (for [{:keys [label form now]} measured]
+                              (str " {:label " (pr-str label) " :form " (pr-str form) " :allocs " now "}")))
+             "\n]\n"))
+  (let [bad (filter #(> (:now %) (+ (:allocs %) slack)) measured)
+        better (filter #(< (:now %) (- (:allocs %) slack)) measured)]
+    (doseq [{:keys [label allocs now]} measured]
+      (println (format "%-44s %6.2f  (table %.2f)" label now (double allocs))))
+    (doseq [{:keys [label]} better] (println "cheaper now, lower its row (--write):" label))
+    (if (seq bad)
+      (do (doseq [{:keys [label allocs now]} bad]
+            (println (format "COSTS MORE: %s allocates %.2f an element, the table says %.2f" label now (double allocs))))
+          (System/exit 1))
+      (println "COST MODEL PASSED"))))

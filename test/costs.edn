@@ -1,0 +1,20 @@
+;; Objects allocated per element, interpreted (scripts/cost-model).
+;; A row is lowered when an operation gets cheaper; a run that
+;; measures more than its row fails the build.
+[
+ {:label "empty loop" :form "(loop [i 0] (when (< i n) (recur (inc i))))" :allocs 0.0}
+ {:label "loop + a fn call" :form "(defn id [x] x) (loop [i 0] (when (< i n) (id i) (recur (inc i))))" :allocs 0.0}
+ {:label "loop + a cons" :form "(loop [i 0] (when (< i n) (cons i nil) (recur (inc i))))" :allocs 1.0}
+ {:label "loop + a closure" :form "(loop [i 0] (when (< i n) (fn [] i) (recur (inc i))))" :allocs 2.0}
+ {:label "loop + a lazy-seq" :form "(loop [i 0] (when (< i n) (lazy-seq nil) (recur (inc i))))" :allocs 3.0}
+ {:label "dorun (range n)" :form "(dorun (range n))" :allocs 2.0}
+ {:label "reduce + (range n)" :form "(reduce + (range n))" :allocs 0.0}
+ {:label "walk (seq (range n)) by next" :form "(loop [s (seq (range n))] (when s (recur (next s))))" :allocs 2.0}
+ {:label "walk (take n (iterate inc 0)) by next" :form "(loop [s (take n (iterate inc 0))] (when s (recur (next s))))" :allocs 6.0}
+ {:label "apply + (take n (range))" :form "(apply + (take n (range)))" :allocs 6.0}
+ {:label "reduce + (take n (range))" :form "(reduce + (take n (range)))" :allocs 7.0}
+ {:label "reduce + (map inc (range n))" :form "(reduce + (map inc (range n)))" :allocs 2.91}
+ {:label "transduce (map inc) + (range n)" :form "(transduce (map inc) + (range n))" :allocs 0.0}
+ {:label "into [] (range n)" :form "(count (into [] (range n)))" :allocs 0.03}
+ {:label "dorun (filter even? (range n))" :form "(dorun (filter even? (range n)))" :allocs 3.84}
+]
