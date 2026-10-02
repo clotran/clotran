@@ -100,7 +100,8 @@ contains
           end if
        else
           block
-             call real_str(gc_rval(v), s=dlt_1)
+             ! a float is a real tagged ref 1 (Eval.f90 W_FLOAT)
+             call real_str(gc_rval(v), s=dlt_1, single=(v%ref == 1))
              s = dlt_1
           end block
        end if
@@ -794,15 +795,24 @@ contains
   ! clj's layout rule, which is not the same as Fortran's: plain
   ! decimal while 1e-3 <= |d| < 1e7, scientific outside that, and
   ! always at least one digit after the point.
-  subroutine real_str(r, s)
+  !
+  ! `single`: r is a float (Eval.f90's W_FLOAT), and the shortest is the
+  ! fewest digits that read back as the same FLOAT -- Float.toString,
+  ! (float 1/3) is 0.33333334, not the double it is held in; nine digits
+  ! always suffice.
+  subroutine real_str(r, s, single)
     real(gc_dp), intent(in) :: r
     character(len=:), allocatable, intent(out) :: s
+    logical, intent(in), optional :: single
     character(len=:), allocatable :: digits
     character(len=40) :: buf
     character(len=16) :: fmt
     real(gc_dp) :: back
-    integer :: p, st, e10, i, dp_at
-    logical :: neg
+    integer :: p, st, e10, i, dp_at, pmax
+    logical :: neg, sgl
+    sgl = .false.
+    if (present(single)) sgl = single
+    pmax = merge(9, 17, sgl)
 
     if (r == 0.0_gc_dp) then
        s = "0.0"
@@ -810,13 +820,19 @@ contains
        return
     end if
 
-    do p = 1, 17
+    do p = 1, pmax
        write(fmt, '(A,I0,A)') "(ES0.", p - 1, "E3)"
        write(buf, fmt) r
        read(buf, *, iostat=st) back
-       if (st == 0 .and. back == r) exit
+       if (st == 0) then
+          if (sgl) then
+             if (real(back, kind(1.0)) == real(r, kind(1.0))) exit
+          else
+             if (back == r) exit
+          end if
+       end if
     end do
-    if (p > 17) p = 17
+    if (p > pmax) p = pmax
 
     ! buf is now [-]d.ddddE[+-]nnn -- split it into the digit string
     ! and the power of ten the first digit carries.
