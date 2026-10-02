@@ -38,3 +38,18 @@ void clotran_seq_read16(const int64_t *src, int64_t *dst) {
     }
   }
 }
+
+/* The collector's HOLD: how many threads are in data-structure code that
+ * has called back into the evaluator -- a key's equality or hash, a
+ * sorted map's comparator -- while holding values in Fortran locals no
+ * root list names. A collection then would free them (GC.f90,
+ * gc_hold_begin). Changed atomically, read with the world stopped. */
+static _Atomic int64_t clotran_gc_holds = 0;
+
+void clotran_gc_hold(int64_t delta) {
+  atomic_fetch_add_explicit(&clotran_gc_holds, delta, memory_order_acq_rel);
+}
+
+int64_t clotran_gc_holding(void) {
+  return atomic_load_explicit(&clotran_gc_holds, memory_order_acquire);
+}

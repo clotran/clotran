@@ -69,7 +69,7 @@ module GC
   use Threads, only: th_key, th_key_create, th_key_set, th_key_get, th_lock, th_cond, &
        th_lock_init, th_lock_acquire, th_lock_release, th_cond_init, th_cond_wait, th_cond_broadcast, &
        th_cond_timedwait
-  use iso_c_binding, only: c_ptr, c_loc, c_f_pointer, c_associated, c_size_t
+  use iso_c_binding, only: c_ptr, c_loc, c_f_pointer, c_associated, c_size_t, c_int64_t
   use BigInt
   use BigDec
   implicit none
@@ -742,7 +742,7 @@ module GC
   ! rooted them; kept because gc_test still exercises it.
   logical, public :: gc_no_collect = .false.
 
-  public :: gc_init, gc_collect
+  public :: gc_init, gc_collect, gc_hold_begin, gc_hold_end
   public :: gc_image_write, gc_image_read, gc_obj_kind_at
   integer, parameter, public :: GC_IMAGE_VERSION = 1
   public :: gc_nil, gc_bool, gc_int, gc_real, gc_char, gc_str, gc_sym, gc_key
@@ -800,6 +800,14 @@ module GC
   interface
      subroutine clotran_seq_begin() bind(C, name="clotran_seq_begin")
      end subroutine clotran_seq_begin
+     subroutine clotran_gc_hold(delta) bind(C, name="clotran_gc_hold")
+       import :: c_int64_t
+       integer(c_int64_t), value :: delta
+     end subroutine clotran_gc_hold
+     function clotran_gc_holding() bind(C, name="clotran_gc_holding") result(n)
+       import :: c_int64_t
+       integer(c_int64_t) :: n
+     end function clotran_gc_holding
      subroutine clotran_seq_end() bind(C, name="clotran_seq_end")
      end subroutine clotran_seq_end
      subroutine clotran_seq_read16(src, dst) bind(C, name="clotran_seq_read16")
@@ -2826,6 +2834,10 @@ contains
        gen_verify = trim(e) == "1"
        gen_env_read = .true.
     end if
+    ! held: some thread is in data-structure code that called back into
+    ! the evaluator (gc_hold_begin); the allocation goes on, the pools
+    ! growing, and the next one after the hold collects
+    if (clotran_gc_holding() > 0) return
     gc_collections = gc_collections + 1
     full = .not. gen_mode .or. promoted_since_full > max(old_at_full, 65536)
     ! torture: every allocation collects; alternate, so both kinds are
@@ -3329,7 +3341,9 @@ contains
        if (associated(obj_coll_equal) .and. &
             ((is_structural_kind(gc_kind(a)) .and. is_structural_kind(gc_kind(b))) .or. &
              (gc_kind(a) == OBJ_INST .and. gc_kind(b) == OBJ_INST))) then
+          call gc_hold_begin()
           eq = obj_coll_equal(a, b)
+          call gc_hold_end()
        else
           eq = (a%ref == b%ref)
        end if
@@ -3424,7 +3438,9 @@ contains
        ! an instance too: a RECORD hashes by value (Eval's gce_coll_hash),
        ! anything else by identity there
        if (associated(obj_coll_hash) .and. (is_structural_kind(gc_kind(v)) .or. gc_kind(v) == OBJ_INST)) then
+          call gc_hold_begin()
           h = obj_coll_hash(v)
+          call gc_hold_end()
        else
           h = mix32(ieor(mix32(v%ref), tag_salt(v%tag)))
        end if
@@ -3873,6 +3889,24 @@ contains
   integer function gc_notify_gen()
     gc_notify_gen = notify_gen
   end function gc_notify_gen
+
+  ! THE HOLD. Data-structure code -- an array map's index_of, a trie's
+  ! insert, a sorted map's search -- keeps the map it is in, and the key,
+  ! in Fortran locals, and roots only what it passes to its own
+  ! allocations. When it asks the evaluator about a key -- equality of
+  ! two vectors (obj_coll_equal), a key's hash (obj_coll_hash), a
+  ! comparator fn -- the evaluator allocates with roots of its own, and a
+  ! collection there freed the map being searched: (destructure) read a
+  ! nil key out of a map literal under torture, one read in two
+  ! (scripts/fuzz-gc). No collection runs while any thread holds;
+  ! allocation still does, the pools growing until the hold ends.
+  subroutine gc_hold_begin()
+    call clotran_gc_hold(1_c_int64_t)
+  end subroutine gc_hold_begin
+
+  subroutine gc_hold_end()
+    call clotran_gc_hold(-1_c_int64_t)
+  end subroutine gc_hold_end
 
   subroutine gc_state_lock()
     type(gc_stack), pointer :: s

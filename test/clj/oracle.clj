@@ -3033,3 +3033,10 @@
 (count (filter neg? (take 5000000 (iterate inc 0))))
 (let [e (filter #(if (= % 5) (throw (ex-info "five" {})) false) (take 10 (iterate inc 0)))]
   [(try (seq e) (catch clotran.host.throwable x (.getMessage x))) (try (seq e) (catch clotran.host.throwable x (.getMessage x)))])
+
+;; a map literal whose key is a vector, destructured: under the collector
+;; (check-oracle-gc) the reader's map lost that key -- an array map's
+;; index_of compared keys through the evaluator, whose allocations did
+;; not root the map being searched (GC.f90, the hold)
+(let [src "{[p0 & pr :as ps] :ps, [k0 & kr :as ks] :ks, :keys [::op p1 p2 ret splice forms amp] :as p}"]
+  (frequencies (for [_ (range 20)] (count (destructure [(read-string src) 'm])))))

@@ -401,7 +401,9 @@ contains
   integer function st_cmp(cmpv, key, k) result(c)
     type(gc_value), intent(in) :: cmpv, key, k
     integer :: c2
+    call gc_hold_begin()
     c2 = comparer(cmpv, k, key)
+    call gc_hold_end()
     if (c2 == huge(0)) then
        c = huge(0)
     else if (c2 < 0) then
@@ -836,7 +838,7 @@ contains
     type(gc_value), intent(in) :: m, k, v
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, nroot, sib, top
-    integer :: base, h
+    integer :: base, h, c0
     logical :: added, fail
     out = m
     base = vs_enter(5)
@@ -846,7 +848,10 @@ contains
     ! (sorted-set (atom 1)) throws in clj; a comparator fn is not called
     ! for a first key, which its side effects would show
     if (gc_i1(m) == 0 .and. tag_of_nil(gc_slot(m, 3))) then
-       if (comparer(gc_slot(m, 3), k, k) == huge(0)) then
+       call gc_hold_begin()
+       c0 = comparer(gc_slot(m, 3), k, k)
+       call gc_hold_end()
+       if (c0 == huge(0)) then
           call vs_leave(base)
           return
        end if
