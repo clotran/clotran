@@ -1285,60 +1285,67 @@ contains
     out = rt_call_in("clotran/reader", "clotran.reader", rdr_loaded, name, args)
   end function reader_call
 
-  ! Whether a form the reader made holds a #tag marker anywhere: the
-  ! scan that decides whether clotran.reader/resolve-tags runs on it.
+  ! Whether a form holds a reader-made #tag marker anywhere -- the scan
+  ! that decides whether clotran.reader/resolve-tags runs on it. The walk
+  ! over a map or a set goes through a SEQ this function makes, and
+  ! each element's own walk allocates (a keyword, a seq of its own):
+  ! the value, the seq and the element are on the shadow stack for the
+  ! whole of it. In locals, a collection in the middle freed the seq and
+  ! the walk read whatever reused it -- under GC torture, a #uuid in a
+  ! map in a set was left unread, one read in ten (scripts/fuzz-print).
   recursive function has_unread(v0) result(yes)
+    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: v0
     type(gc_value) :: v, s, k, r
     logical :: yes
-    integer :: i
+    integer :: i, base
     yes = .false.
     v = strip_meta(v0)
     if (v%tag /= GCT_OBJ) return
+    vst => gc_my_stack()
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, v)
     if (gcl_is(v)) then
-       s = v
-       do while (gcl_count(s) > 0)
-          if (has_unread(gcl_first(s))) then
+       call vs_set(vst, base + 2, v)
+       do while (gcl_count(vs_get(vst, base + 2)) > 0)
+          if (has_unread(gcl_first(vs_get(vst, base + 2)))) then
              yes = .true.
-             return
+             exit
           end if
-          s = gcl_rest(s, [gc_value ::])
+          s = gcl_rest(vs_get(vst, base + 2), [vs_get(vst, base + 1)])
+          call vs_set(vst, base + 2, s)
        end do
     else if (gcv_is(v)) then
-       do i = 0, gcv_count(v) - 1
-          if (has_unread(gcv_nth(v, i))) then
+       do i = 0, gcv_count(vs_get(vst, base + 1)) - 1
+          if (has_unread(gcv_nth(vs_get(vst, base + 1), i))) then
+             yes = .true.
+             exit
+          end if
+       end do
+    else if (gca_is(v) .or. gc_kind(v) == OBJ_SET .or. gc_kind(v) == OBJ_HAMT) then
+       if (gca_is(v)) then
+          k = gc_key("clotran/unread", [vs_get(vst, base + 1)])
+          if (truthy(gca_get(vs_get(vst, base + 1), k))) then
+             call vs_leave(vst, base)
              yes = .true.
              return
           end if
-       end do
-    else if (gca_is(v)) then
-       k = gc_key("clotran/unread", [v])
-       if (truthy(gca_get(v, k))) then
-          yes = .true.
-          return
        end if
-       s = to_seq(v, [v])
-       do while (s%tag /= GCT_NIL)
-          if (has_unread(sq_first(s, [v, s]))) then
+       s = to_seq(vs_get(vst, base + 1), [vs_get(vst, base + 1)])
+       call vs_set(vst, base + 2, s)
+       do while (tag_of(vs_get(vst, base + 2)) /= GCT_NIL)
+          call vs_set(vst, base + 3, sq_first(vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+          if (has_unread(vs_get(vst, base + 3))) then
              yes = .true.
-             return
+             exit
           end if
-          ! two allocations in one argument list: the rest is rooted
-          ! before the seq over it is made
-          r = sq_rest(s, [v, s])
-          s = to_seq(r, [v, r])
-       end do
-    else if (gc_kind(v) == OBJ_SET .or. gc_kind(v) == OBJ_HAMT) then
-       s = to_seq(v, [v])
-       do while (s%tag /= GCT_NIL)
-          if (has_unread(sq_first(s, [v, s]))) then
-             yes = .true.
-             return
-          end if
-          r = sq_rest(s, [v, s])
-          s = to_seq(r, [v, r])
+          r = sq_rest(vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+          call vs_set(vst, base + 3, r)
+          s = to_seq(vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
+          call vs_set(vst, base + 2, s)
        end do
     end if
+    call vs_leave(vst, base)
   end function has_unread
 
   ! The form with the reader's #tag markers resolved (clotran.reader),
