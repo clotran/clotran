@@ -2698,6 +2698,61 @@ the door changes, and the door's checks are then tested against the
 model's -- the fuzzer generates calls, the model says accept or
 refuse, the door must agree.
 
+### 28. The VM, formally (begun 2026-10-01)
+
+**First, the data structures** (James, 2026-10-01: "I don't expect
+ANY deviation between the clojure and theoretical Big O"). Measured
+against clj's own bounds (test/bigo.edn, scripts/bigo: 56 operations
+in clj, clotran interpreted and clotran compiled), clotran deviated on
+12: vector pop, subvec and rseq; the first of a seq over a hash map,
+hash set, sorted map, sorted set or string; a string's count, nth and
+subs; and, found while modelling, a sorted map's height after
+deletion. One flaw, repeated: an operation rebuilt or copied the
+structure instead of using it. Fixed one structure a commit, each with
+its book: model/vector.lisp (our trie: nth after every operation,
+depth the least that holds it), model/string.lisp (the index finds
+what the walk did), model/hashseq.lisp (the cursor walks exactly the
+trie's entries, in order), model/btree.lisp (16..32 per node, height
+at most log16(n/2), a walk's leaves at most n/16). All 56 now meet
+the theory in all three (2026-10-02). The speed-ups at n = 10^5 run
+from 26x (string count) to 10^5x (rseq).
+
+**What it did not move:** `(apply + (take 1000000 (range)))` is
+1200 ms against clj's 50-75 (it was 1497): a `take` step is five
+interpreted calls and ten builtins, which is the interpreter, not a
+data structure. James, 2026-10-02: past the data structures, design
+the bytecode VM in ACL2.
+
+**The design.** `model/vm.lisp` is the machine before any Fortran.
+Its parts, each a definition with theorems, built up a stage at a
+time:
+
+1. THE LANGUAGE the analyser hands it (analyze.inc's nodes): const,
+   local, if, let, loop/recur, call, fn (closure), var, do, try,
+   throw -- and a REFERENCE MEANING, a direct evaluator, the tree
+   executor's semantics in miniature.
+2. THE MACHINE: a register VM. A code object holds its instructions,
+   its constants, its register count, and a NAME TABLE (register ->
+   the local it holds, pc -> source position). A frame is a small
+   fixed header -- code, return pc, the caller's result register --
+   then its registers, contiguous on the thread's frame stack; no
+   per-frame heap object, no generic continuation record. Operands are
+   registers; a builtin reads its arguments from registers, never
+   from an argument vector built for it.
+3. THE COMPILER from the language to the machine.
+4. THE THEOREMS: running the compiled code answers what the meaning
+   does (correctness); every value the rest of the computation reads
+   is in a register of a frame on the stack (what the collector
+   roots: no hidden temporary); every frame reads as names to values
+   (the debugging requirement of step 27, decision 6); a tail call or
+   recur does not grow the stack; each instruction is O(1) but a call
+   (O(arguments)) and what a builtin does.
+
+Stage 1 is the core without functions: const, local, if, let, a
+builtin. Then loop/recur, then calls and frames, then closures, then
+try/throw, then vars with per-call-site caches -- each stage keeping
+every theorem of the ones before.
+
 ## Decisions that still hold
 
 **The value type has no `FINAL`.** Copying a `cons_value` (nine
