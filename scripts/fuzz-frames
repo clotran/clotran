@@ -1,0 +1,222 @@
+#!/usr/bin/env bb
+;; fuzz-frames: stack frames and traces, generated (PLAN step 28: the VM
+;; changes frames, so what they show is pinned first).
+;;
+;;   scripts/fuzz-frames [-n N] [-s SEED] [--modes flat,tree,compiled] [--show K]
+;;
+;; Each case is a chain of functions f0 -> f1 -> ... -> fk, each with
+;; known arguments and locals, linked by a random CALL SHAPE -- a direct
+;; call, a let-bound closure, a named fn, apply, a loop's exit, a
+;; try/finally, a mapv or reduce callback -- ending in a THROW or a BREAK.
+;;
+;;   a throw   the chain of user frames in (.getStackTrace e), against
+;;             clj's own, both normalised: clj's munged names demunged
+;;             (fzf$f1$g__12 -> fzf/f1/g), invoke/invokeStatic pairs and
+;;             eval frames dropped
+;;   a break   (clotran-break)'s frames, against what the generator built:
+;;             each pending call's function, innermost first, and each
+;;             frame's locals by name and value
+;;
+;; and every clotran mode against the others. A disagreement is counted
+;; by KIND -- a frame missing, a name, a local missing, a local read nil
+;; where it held a value (cleared), a value, a mode -- and the first few
+;; of each are shown.
+(require '[clojure.string :as str]
+         '[babashka.fs :as fs]
+         '[babashka.process :as p])
+
+(def opts (loop [as *command-line-args* o {:n 100 :seed 1 :modes ["flat" "tree" "compiled"] :show 3}]
+            (if (empty? as) o
+                (case (first as)
+                  "-n" (recur (drop 2 as) (assoc o :n (parse-long (second as))))
+                  "-s" (recur (drop 2 as) (assoc o :seed (parse-long (second as))))
+                  "--modes" (recur (drop 2 as) (assoc o :modes (str/split (second as) #",")))
+                  "--show" (recur (drop 2 as) (assoc o :show (parse-long (second as))))
+                  (do (println "usage: scripts/fuzz-frames [-n N] [-s SEED] [--modes a,b] [--show K]") (System/exit 2))))))
+
+(def repo (str (fs/canonicalize ".")))
+(def work (str (fs/create-temp-dir {:prefix "fzframes"})))
+
+;; splitmix64, seeded
+(def state (atom (long (:seed opts))))
+(defn rnd []
+  (let [z (swap! state #(unchecked-add % -7046029254386353131))
+        z (unchecked-multiply (bit-xor z (unsigned-bit-shift-right z 30)) -4658895280553007687)
+        z (unchecked-multiply (bit-xor z (unsigned-bit-shift-right z 27)) -7723592293110705685)]
+    (bit-xor z (unsigned-bit-shift-right z 31))))
+(defn pick [xs] (nth xs (mod (rnd) (count xs))))
+(defn rint [lo hi] (+ lo (mod (rnd) (- hi lo))))
+
+;; ---- the generator ---------------------------------------------------
+;;
+;; Function i of case c is fzf/c<c>f<i>, takes the one argument a with a
+;; known value, binds locals l0.. from it, and calls the next by a shape.
+;; Each shape says the frames it adds above the callee's, and their names
+;; as clj names them (the oracle for the names clotran should give).
+
+(def shapes [:direct :closure :named :apply :loop :try :mapv :reduce])
+
+(defn fname [c i] (str "c" c "f" i))
+
+(defn gen-case [c]
+  (let [k (rint 2 6)
+        leaf (pick [:throw :break])
+        fns (vec (for [i (range k)]
+                   (let [a (rint 1 100)
+                         nl (rint 0 3)
+                         locals (vec (for [j (range nl)] [(str "l" j) (+ a j 1)]))]
+                     {:i i :arg a :locals locals :shape (when (< i (dec k)) (pick shapes))})))
+        ;; the next function's argument is this one's argument plus 1000
+        fns (vec (map-indexed (fn [i f] (assoc f :arg (+ 1000 i (:arg (first fns))))) fns))]
+    {:c c :k k :leaf leaf :fns fns}))
+
+(defn call-of [c {:keys [i shape]} next-arg]
+  (let [callee (fname c (inc i))]
+    (case shape
+      :direct (str "(" callee " " next-arg ")")
+      :closure (str "(let [g (fn [p] (" callee " p))] (g " next-arg "))")
+      :named (str "((fn hop [p] (" callee " p)) " next-arg ")")
+      :apply (str "(apply " callee " [" next-arg "])")
+      :loop (str "(loop [j 0] (if (< j 2) (recur (inc j)) (" callee " " next-arg ")))")
+      :try (str "(try (" callee " " next-arg ") (finally nil))")
+      :mapv (str "(first (mapv (fn [p] (" callee " p)) [" next-arg "]))")
+      :reduce (str "(reduce (fn [_ p] (" callee " p)) nil [" next-arg "])"))))
+
+;; the frames a shape adds above its callee, as clj names them
+(defn shape-frames [c {:keys [i shape]}]
+  (let [me (str "fzf/" (fname c i))]
+    (case shape
+      :closure [(str me "/g")]
+      :named [(str me "/hop")]
+      (:mapv :reduce) [(str me "/fn")]
+      [])))
+
+(defn fn-src [c {:keys [i locals] :as f} leaf fns]
+  (let [body (if (= i (dec (count fns)))
+               (if (= leaf :throw) "(throw (ex-info \"fz\" {}))" "(clotran-break)")
+               (call-of c f (:arg (nth fns (inc i)))))
+        ;; every local is read after the call or break, so none is dead
+        ;; there: what a frame shows is what the program still holds
+        uses (str/join " " (concat ["a"] (map first locals)))]
+    (str "(defn " (fname c i) " [a] (let [" (str/join " " (mapcat (fn [[n v]] [n (str "(+ a " (- v (:arg f)) ")")]) locals)) "]"
+         " (let [r " body "] (vector r " uses "))))")))
+
+(defn case-src [{:keys [c fns leaf]}]
+  (str/join "\n" (map #(fn-src c % leaf fns) (reverse fns))))
+
+;; what a break must show, innermost first: per function, its frame and
+;; the frames its call shape adds below it
+(defn expected-break [{:keys [c fns]}]
+  (vec (reverse
+        (mapcat (fn [f]
+                  (let [me {:fn (str "fzf/" (fname c (:i f)))
+                            :env (into {"a" (:arg f)} (:locals f))}]
+                    (cons me (map (fn [n] {:fn n}) (shape-frames c f)))))
+                fns))))
+
+;; ---- running -----------------------------------------------------------
+
+(def cases (vec (for [c (range (:n opts))] (gen-case c))))
+
+(def prelude
+  "(ns fzf)
+(defn fz-chain [t] (->> (.getStackTrace t) (map #(.getClassName %)) vec))
+")
+
+(defn drive [catch-class]
+  (str/join "\n"
+            (for [{:keys [c leaf]} cases]
+              (if (= leaf :throw)
+                (str "(println \"FZF\" " c " (pr-str (try (" (fname c 0) " " (:arg (first (:fns (cases c)))) ") nil (catch " catch-class " t (fz-chain t)))))")
+                (str "(println \"FZF\" " c " (pr-str (let [b (" (fname c 0) " " (:arg (first (:fns (cases c)))) ")"
+                     " b (some #(when (and (map? %) (contains? % :frames)) %) (tree-seq vector? seq b))] (mapv (fn [f] {:fn (:fn f) :env (into {} (map (fn [[k v]] [(str k) (if (or (nil? v) (number? v)) v :other)]) (:env f)))}) (:frames b)))))")))))
+
+(defn outputs [out]
+  (into {} (for [[_ c v] (re-seq #"FZF (\d+) (.*)" out)] [(parse-long c) (read-string v)])))
+
+(defn sh [env & args] (apply p/shell {:out :string :err :string :in "" :continue true :extra-env env} args))
+
+(def src (str prelude (str/join "\n" (map case-src cases)) "\n"))
+
+(defn run-clj []
+  (let [f (str work "/clj.clj")]
+    ;; clj has no break: a stub, the break cases' answers unread
+    (spit f (str (str/replace src "(ns fzf)" "(ns fzf)\n(defn clotran-break [] nil)") (drive "Throwable") "\n"))
+    (outputs (:out (sh {} "clj" "-M" f)))))
+
+(defn run-clotran [mode]
+  (let [core (str repo "/src/clj/clojure/core.clj") bin (str repo "/clotran-bin")]
+    (case mode
+      ("flat" "tree")
+      (let [f (str work "/" mode ".cljf")]
+        (spit f (str src (drive "clotran.host.throwable") "\n"))
+        (outputs (:out (sh (if (= mode "tree") {"CLOTRAN_FLAT" "0"} {}) bin core f))))
+      "compiled"
+      (let [nsf (str work "/fzf.cljf") lib (str work "/fzf.dylib") drv (str work "/drive.cljf")]
+        (spit nsf src)
+        (sh {"CLOTRAN_CACHE" (str work "/cache")} (str repo "/clotran") "compile" nsf lib)
+        (spit drv (str "(load-file " (pr-str nsf) ")\n(require 'clotran.loader)\n"
+                       (when (fs/exists? lib) (str "(clotran.loader/install " (pr-str lib) " " (pr-str nsf) ")\n"))
+                       "(in-ns 'fzf)\n" (drive "clotran.host.throwable") "\n"))
+        (outputs (:out (sh {"CLOTRAN_IMAGE" "0"} bin core drv)))))))
+
+;; ---- comparing -----------------------------------------------------------
+
+;; clj's class names as fzf/fn/inner: munged dashes back, the counters off
+(defn demunge [s] (-> s (str/replace "_" "-") (str/replace #"--\d+" "") (str/replace "$" "/")))
+
+(defn user-chain [names clj?]
+  (->> names
+       (filter #(str/starts-with? % (if clj? "fzf$" "fzf/")))
+       (map #(if clj? (demunge %) %))
+       (remove #(re-find #"/eval\d*" %))
+       (partition-by identity) (map first) vec))
+
+;; the program's own frames: its namespace's, and anonymous ones (a
+;; closure named "fn" is the program's, not core's); clojure.core's own
+;; -- apply, mapv's walk -- are not the program's to check
+(defn own-frames [got]
+  (filterv #(let [n (str (:fn %))] (or (str/starts-with? n "fzf/") (= n "fn"))) got))
+
+(defn break-diffs [want got0]
+  (let [got (own-frames got0)]
+  (concat
+   (when (not= (map :fn want) (map :fn got))
+     [[:frames (str "want " (pr-str (map :fn want)) " got " (pr-str (map :fn got)))]])
+   (for [[w g] (map vector want got)
+         :when (= (:fn w) (:fn g))
+         [k v] (:env w)
+         :let [gv (get (:env g) k ::absent)]
+         :when (not= gv v)]
+     (cond (= gv ::absent) [:local-missing (str (:fn w) " " k)]
+           (nil? gv) [:local-cleared (str (:fn w) " " k " read nil, held " v)]
+           :else [:local-value (str (:fn w) " " k " " gv " not " v)])))))
+
+(let [modes (:modes opts)
+      clj (run-clj)
+      got (into {} (for [m modes] [m (run-clotran m)]))
+      problems
+      (for [{:keys [c leaf] :as cs} cases
+            m modes
+            :let [g (get-in got [m c])]
+            d (cond
+                (nil? g) [[:no-answer (str m)]]
+                (= leaf :throw)
+                (let [w (user-chain (get clj c) true) h (user-chain g false)]
+                  (when (not= w h) [[:trace (str "clj " (pr-str w) " clotran " (pr-str h))]]))
+                :else (break-diffs (expected-break cs) g))]
+        (assoc (zipmap [:kind :detail] d) :case c :mode m))
+      mode-diffs (for [{:keys [c]} cases
+                       :let [vs (distinct (map #(get-in got [% c]) modes))]
+                       :when (> (count vs) 1)]
+                   c)]
+  (println (str "fuzz-frames: " (count cases) " cases ("
+                (count (filter #(= :throw (:leaf %)) cases)) " throw, "
+                (count (filter #(= :break (:leaf %)) cases)) " break) x " (count modes) " modes"))
+  (doseq [[kind ps] (sort-by key (group-by :kind problems))]
+    (println (format "  %-14s %4d" (name kind) (count ps)))
+    (doseq [p (take (:show opts) ps)]
+      (println (str "      case " (:case p) " " (:mode p) ": " (:detail p)))))
+  (println (str "  modes disagree on " (count mode-diffs) " cases"))
+  (doseq [c (take (:show opts) mode-diffs)] (println (str "      case " c)))
+  (System/exit (if (and (empty? problems) (empty? mode-diffs)) 0 1)))
