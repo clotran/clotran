@@ -2991,3 +2991,12 @@
 (let [a #uuid "8e0fb45a-eeb5-4a87-a9ff-cc5db1da66a0" b #uuid "0e0fb45a-eeb5-4a87-a9ff-cc5db1da66a0"]
   [(hash a) (hash b) (compare a b) (sort [a b]) (map? a) (record? a) (coll? a) (uuid? a)
    (= a (parse-uuid (str a))) (get {a 1} (parse-uuid (str a))) (str a)])
+
+;; a collection's str is pr's text: print-method for what is inside, and
+;; *print-namespace-maps* (RT.printString; scripts/fuzz-print)
+[(str [#uuid "868251a8-16ad-4b97-a908-35edc4322e81"]) (str #{{(quote zbc/t) -78272966N}}) (str {:a "x"}) (str [1N 1.5M 1/2 \b "a"])]
+
+;; a #tag inside a map inside a set is read every time: the scan for one
+;; walked a seq it had not rooted, and under GC lost it (check-oracle-gc)
+(let [s "#{#{-0.34521484375 :x+_M/_k \\r} {iGC7*-/U #uuid \"c88db98e-a03a-46b0-9a05-261c339effc7\"}}"]
+  (frequencies (for [_ (range 40)] (= (read-string s) (read-string s)))))

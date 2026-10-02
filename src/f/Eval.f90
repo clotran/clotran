@@ -16585,7 +16585,47 @@ contains
     is_lazy_seq_class = (c == "clotran.host.lazy_seq")
   end function is_lazy_seq_class
 
-  subroutine to_string_text(v, s)
+  ! (pr-str v) through core's own printer, as RT.print does once
+  ! print-initialized is true; done is false before then (core.clj
+  ! still loading) and the caller prints for itself
+  recursive subroutine core_pr_str(v, s, done)
+    type(gc_stack), pointer :: vst
+    type(gc_value), intent(in) :: v
+    character(len=:), allocatable, intent(out) :: s
+    logical, intent(out) :: done
+    type(gc_value) :: core, var, r
+    integer :: base
+    done = .false.
+    s = ""
+    core = gcn_find("clojure.core")
+    if (gc_kind(core) /= OBJ_NS) return
+    vst => gc_my_stack()
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, v)
+    call vs_set(vst, base + 2, core)
+    call vs_set(vst, base + 3, gc_sym("print-initialized", [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+    var = gcn_lookup(vs_get(vst, base + 2), vs_get(vst, base + 3))
+    if (gcn_is_var(var)) then
+       if (truthy(gcn_var_value(var))) then
+          call vs_set(vst, base + 3, gc_sym("pr-str", [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+          var = gcn_lookup(vs_get(vst, base + 2), vs_get(vst, base + 3))
+          if (gcn_is_var(var)) then
+             call vs_set(vst, base + 3, gcn_var_value(var))
+             call vs_set(vst, base + 2, gcv_build(1, [vs_get(vst, base + 1), vs_get(vst, base + 3)]))
+             call vs_set(vst, base + 2, gcv_put(vs_get(vst, base + 2), 0, vs_get(vst, base + 1), &
+                  [vs_get(vst, base + 1), vs_get(vst, base + 3)]))
+             r = apply(vs_get(vst, base + 3), vs_get(vst, base + 2))
+             if (r%tag == GCT_STR) then
+                call gc_ref_text(r%ref, s=s)
+                done = .true.
+             end if
+          end if
+       end if
+    end if
+    call vs_leave(vst, base)
+  end subroutine core_pr_str
+
+  recursive subroutine to_string_text(v, s)
     type(gc_value), intent(in) :: v
     character(len=:), allocatable, intent(out) :: s
     type(gc_value) :: inner
@@ -16620,9 +16660,14 @@ contains
        end block
     else if (sequential_p(v) .or. gca_is(strip_meta(v)) .or. gc_kind(strip_meta(v)) == OBJ_SET) then
        ! a collection's toString is its READABLE form -- RT.printString
-       ! -- so (str ["a" \b]) is ["a" \b], not [a b]
+       ! -- so (str ["a" \b]) is ["a" \b], not [a b]; and once core_print
+       ! has loaded, printed as pr prints it, print-method and the
+       ! *print-* bindings and all: a UUID inside is #uuid "...", a map
+       ! of one namespace #:ns{...} (scripts/fuzz-print)
        block
-          call gcp_str(v, .true., s=dlt_1)
+          logical :: done
+          call core_pr_str(v, dlt_1, done)
+          if (.not. done) call gcp_str(v, .true., s=dlt_1)
           s = dlt_1
        end block
     else
