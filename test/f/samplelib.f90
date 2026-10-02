@@ -24,6 +24,14 @@ contains
     a = a * k
   end subroutine scale
 
+  ! an integer(8) array, in place: the door carried none until
+  ! scripts/fuzz-bind found it refused
+  subroutine bump8(a, n)
+    integer, intent(in) :: n
+    integer(8), intent(inout) :: a(n)
+    a = a * 2 + 1
+  end subroutine bump8
+
   subroutine divmod(a, b, q, r)
     integer, intent(in) :: a, b
     integer, intent(out) :: q, r

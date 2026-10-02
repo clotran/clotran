@@ -17781,6 +17781,7 @@ contains
     type(c_funptr) :: fp
     real(c_double), pointer, contiguous :: pr(:)
     integer, pointer, contiguous :: pi(:)
+    integer(8), pointer, contiguous :: pl(:)
     logical :: ok, has_ret
     character(len=16) :: cbuf1, cbuf2
 
@@ -17973,6 +17974,12 @@ contains
              case ("int4")
                 call gcna_int4_ptr(gc_i1(tv), pi, ok)
                 if (ok) argv(slot) = c_loc(pi)
+             ! an integer(8) array: bind-fortran binds them and the manifest
+             ! says int8, but the door carried none, and refused one as "not
+             ! a int8 array (it is a int8 array)" (scripts/fuzz-bind)
+             case ("int8")
+                call gcna_int8_ptr(gc_i1(tv), pl, ok)
+                if (ok) argv(slot) = c_loc(pl)
              end select
              if (.not. ok) then
                 block

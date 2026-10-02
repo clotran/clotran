@@ -1258,6 +1258,7 @@
 (check "a generated function over an array and its length"
        (let [a (fortran/make-array "real8" 3)] (fortran/aset a 0 1.5) (fortran/aset a 1 2.5) (fortran/aset a 2 3.0) (samplelib.raw/sum-arr a 3)) 7.0)
 (check "a generated character(len=*) argument" (samplelib.raw/count-chars "hello") 5)
+(check "a generated :inout int8 array, in place" (let [a (fortran/make-array "int8" 2)] (fortran/aset a 0 3) (fortran/aset a 1 -4) (samplelib.raw/bump8 a 2) [(fortran/aget a 0) (fortran/aget a 1)]) [7 -7])
 (check "generated intents from the source" (samplelib.raw/divmod 17 5) {:q 3 :r 2})
 (check "a generated rank-2 argument" (let [m (fortran/make-array "real8" 2 2)] (fortran/aset m 0 0 1.0) (fortran/aset m 1 1 5.0) (samplelib.raw/trace m 2)) {:t 6.0})
 (check "a generated :inout array, in place" (let [a (fortran/make-array "real8" 2)] (fortran/aset a 0 1.0) (fortran/aset a 1 2.0) (samplelib.raw/scale a 2 10.0) [(fortran/aget a 0) (fortran/aget a 1)]) [10.0 20.0])
