@@ -2,6 +2,10 @@
 ;; fixed: each runs through clj and clotran's flat, tree and compiled
 ;; modes (make test, check-fuzz). Add a shrunk form here with each fix.
 [
+ ;; compiled, (int x) boxed as a long: the class differs from the
+ ;; interpreted int (scripts/fuzz-num)
+ (class (int 9.75))
+ (let [r (int -3)] [r (class r)])
  ;; (empty m) of a map past eight entries answered nil, so into built a
  ;; list of its entries (scripts/fuzz-spec)
  (into (empty (zipmap (range 10) (range 10))) {:a 1})

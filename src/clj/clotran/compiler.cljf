@@ -572,11 +572,20 @@ end module clotran_rt_decl
         nm (str (case t :long "ti" :double "td" :bool "tl") k)]
     [nm (-> st (assoc :ntmp (inc k)) (declare-var nm t))]))
 
+(def ^:dynamic *int-temps*
+  "The temporaries of the procedure being generated that hold an (int x):
+  a long here, but boxed as clj's int is -- the width the interpreter's
+  intCast gives it (Eval.f90 W_INT), so (class (int 9.75)) is the same
+  compiled (scripts/fuzz-num)."
+  nil)
+
 (defn- box
   "The statement that puts a primitive expression into a slot as a value."
   [slot t expr]
   (case t
-    :long (str "call clotran_set_int(b + " slot ", " expr ")")
+    :long (if (and *int-temps* (contains? @*int-temps* expr))
+            (str "sv(b + " slot ") = clotran_val(2, 3, int(" expr ", c_int64_t))")
+            (str "call clotran_set_int(b + " slot ", " expr ")"))
     :double (str "call clotran_set_real(b + " slot ", " expr ")")
     :bool (str "call clotran_set_bool(b + " slot ", merge(1_c_int, 0_c_int, " expr "))")))
 
@@ -758,6 +767,7 @@ end module clotran_rt_decl
       (let [at (ats 0)
             [c a st] (gp (args 0) at st)
             [r st] (tmp st :long)
+            _ (when (and (= kind :to-int) *int-temps*) (swap! *int-temps* conj r))
             in-range (cond
                        (and (= at :long) (= kind :to-long)) nil
                        (= at :long) (str a " >= -2147483648_c_int64_t .and. " a " <= 2147483647_c_int64_t")
@@ -1013,7 +1023,11 @@ end module clotran_rt_decl
                   t (or (get types slot) (infer (nth kids i) (:env st)))]
               (if (prim? t)
                 (let [[c e st] (gp (nth kids i) t st)
-                      v (slot-var slot t)]
+                      v (slot-var slot t)
+                      ;; a let of an (int x) holds an int (*int-temps*); a
+                      ;; loop's slot does not, a recur may rebind it a long
+                      _ (when (and *int-temps* (nil? (get types slot)) (contains? @*int-temps* e))
+                          (swap! *int-temps* conj v))]
                   [(into code (conj (vec c) (str v " = " e)))
                    (-> st (declare-var v t) (assoc-in [:env :slots slot] t))])
                 (let [[c s st] (gen (nth kids i) st)]
@@ -1587,9 +1601,10 @@ end module clotran_rt_decl
              :who who :offset offset :pool-list pool :counter (or counter (atom 0))
              :prefix (or prefix (str "cc_" sym))}
         [branches st]
-        (reduce (fn [[bs st] [ar pv]]
-                  (let [[c st] (arity-code ar pv st)] [(conj bs [ar c]) st]))
-                [[] st0] (map vector arities pvecs))
+        (binding [*int-temps* (atom #{})]
+          (reduce (fn [[bs st] [ar pv]]
+                    (let [[c st] (arity-code ar pv st)] [(conj bs [ar c]) st]))
+                  [[] st0] (map vector arities pvecs)))
         single? (and (= 1 (count arities)) (not (nth (first arities) 1)))
         fixed (remove (fn [[ar _]] (nth ar 1)) branches)
         varg (first (filter (fn [[ar _]] (nth ar 1)) branches))
