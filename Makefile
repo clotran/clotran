@@ -624,7 +624,7 @@ clean:
 # Not in the gate yet: ACL2 is not on every machine the gate runs on.
 ACL2 ?= $(HOME)/jborden/acl2/saved_acl2
 .PHONY: model
-MODEL_BOOKS = boundary vector string hashseq btree vm
+MODEL_BOOKS = boundary vector string hashseq btree vm vm-loop
 model:
 	@mkdir -p $(B)
 	@for b in $(MODEL_BOOKS); do \
