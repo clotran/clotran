@@ -124,6 +124,35 @@ find out which. Run `make model` before committing anything that
 touches the model; a book that does not certify means nothing gets
 staged, as a red crosscheck does.
 
+## Every feature gets a fuzzer
+
+James, 2026-10-02: fuzz everything, and from now on design a fuzzer
+for every feature we make. Hand-written tests check the cases someone
+thought of. `scripts/fuzz-frames` found four bugs on its first run in
+code those tests had passed for weeks, and `scripts/fuzz-door` found
+three in the package door.
+
+**A feature is not done without its fuzzer.** Ship it in the same
+commit as the feature, or in the commit before it. It must have:
+
+- **a generator.** Random inputs from a seed, so every failure
+  reproduces with `-s N`. Where spec can state what an input is, it
+  does, and test.check builds the inputs (`scripts/fuzz`). A generated
+  input that does not conform to its spec is a bug in the fuzzer.
+- **an oracle that decides.** Use `clj` for anything Clojure does.
+  Use the model (`model/`) or what the generator built for anything
+  host-side. Compare clotran's modes against each other (flat, tree,
+  compiled). A fuzzer that only checks for crashes is not done.
+- **a count by kind**, with the first few cases of each kind shown, and
+  exit 1 on any finding.
+- **a place in the build.** A `make` target. Once the fuzzer is green,
+  a seeded run joins `make test`. Every case it ever found joins a
+  regressions file that runs every time (`test/clj/fuzz-regressions.edn`).
+
+The fuzzers have specs too. When a fuzzer's input language is itself
+a spec, as with `scripts/fuzz_specs.clj` and spec's own forms, that
+spec is generated and fuzzed like anything else.
+
 ## Never edit vendored source
 
 `upstream/clojure/**` is Clojure's source and test suite, verbatim;

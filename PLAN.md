@@ -2753,6 +2753,47 @@ builtin. Then loop/recur, then calls and frames, then closures, then
 try/throw, then vars with per-call-site caches -- each stage keeping
 every theorem of the ones before.
 
+**Paused behind step 29** (James, 2026-10-02): fuzz everything before
+designing more of the model. The fuzzers may turn up every bug in the
+current executor, and then the answer could be to make that executor
+fast rather than build a new VM. Stages 1 and 2 (model/vm.lisp,
+model/vm-loop.lisp) stay certified, and the VM work resumes from them
+if it is still wanted.
+
+### 29. Fuzz everything (begun 2026-10-02)
+
+James: "fuzz everything at this point and going forward". The rule
+is in CLAUDE.md ("Every feature gets a fuzzer"). This step covers the
+features that came before the rule. Each row of the table gets a
+generator, an oracle that decides, and a `make` target. Each row is
+done when its fuzzer is green and its seeded run is in `make test`.
+
+| feature | fuzzer | oracle | state |
+|---|---|---|---|
+| evaluation: let, loop, closures, try, seqs | scripts/fuzz | clj, 3 modes | green, in make test |
+| core functions, by spec | scripts/fuzz --fns | clj, :ret | green, in make test |
+| frames: breaks and traces | scripts/fuzz-frames | clj, the generator, 3 modes | fixing its findings |
+| frames: file and line | scripts/fuzz-frames | clj's trace elements, the generator | to add: every frame's file:line, and after a reload or a recompile with the lines shifted, the new lines (James, 2026-10-02) |
+| the package door | scripts/fuzz-door | model/boundary.lisp | green |
+| data-structure costs | scripts/bigo | clj's bounds, model/ | green (measures, does not generate) |
+| the reader | -- | clj: read-string of printed values | |
+| the printer | -- | clj: pr-str, read back | |
+| numbers: the tower, overflow, ratios | -- | clj | |
+| strings and regex | -- | clj | |
+| collections under random op sequences | -- | clj, model/ | |
+| GC: random allocation under torture | -- | the same program without torture | |
+| spec itself: generated spec forms | -- | clj: conform, explain | |
+| the specs of fuzz_specs.clj | -- | clj | |
+| macros: destructuring, ns forms | -- | clj, core.specs | |
+| threads, agents, STM | -- | invariants (sums kept, no lost update) | |
+| the compiler (tiers, purefort) | -- | the interpreter | |
+| the heap image | -- | a run from source | |
+| sockets, REPL, network, packages | -- | per protocol | |
+
+Spec under GC torture is the first lead: `s/cat` answers wrong under
+torture when core is loaded from source (found 2026-10-01). Finding it
+is a target for the "spec itself" and GC rows.
+
 ## Decisions that still hold
 
 **The value type has no `FINAL`.** Copying a `cons_value` (nine
