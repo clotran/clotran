@@ -5080,7 +5080,90 @@ contains
   ! answer comes to when forced in turn. force_run's second half, and
   ! flat.inc's, whose thunk ran in the loop rather than in a nested
   ! run. With an error in flight the cell is left as it is.
+  ! A thunk's answer r made the cell v's state. When r is itself a lazy
+  ! seq still to run -- filter's (filter pred r) for an element it
+  ! skips -- its thunk is run HERE, in a loop, as LazySeq.sval's while
+  ! loop unwraps: going through gce_force settled each inner seq by
+  ! calling back into this, a Fortran frame and value-stack slots per
+  ! skipped element, and (count (filter neg? (take 5000000 (iterate inc
+  ! 0)))) filled the value stack where clj answers 0 (scripts/fuzz).
+  ! Every cell unwrapped on the way is settled from the same answer.
   recursive subroutine force_settle(v, r0)
+    type(gc_stack), pointer :: vst
+    type(eval_ctx), pointer :: tctx
+    type(gc_value), intent(in) :: v, r0
+    type(gc_value) :: r, chain, c
+    integer :: base, i, st
+    logical :: claimed
+    tctx => ctx_self()
+    vst => tctx%stk
+    base = vs_enter(vst, 4)
+    call vs_set(vst, base + 1, v)
+    call vs_set(vst, base + 2, r0)
+    ! the chain is made only when there is one: a thunk's answer is
+    ! almost never a pending lazy seq, and a vector each time was an
+    ! object an element (test/costs.edn)
+    call vs_set(vst, base + 3, gc_nil())
+    do while (.not. tctx%has_error)
+       r = vs_get(vst, base + 2)
+       if (gc_kind(r) /= OBJ_LAZY) exit
+       if (gc_i2(r) /= 0) exit                  ! a native range or iterate cell
+       ! claimed as gce_force claims a cell: pending, and now this thread's
+       call gc_state_lock()
+       st = gc_i1(r)
+       claimed = (st == LAZY_PENDING)
+       if (claimed) then
+          call gc_set_i1(r, LAZY_RUNNING)
+          call gc_set_slot(r, 4, gc_int(int(tctx%id, gc_ip)))
+       end if
+       call gc_state_unlock()
+       if (.not. claimed) exit
+       if (tag_of(vs_get(vst, base + 3)) == GCT_NIL) &
+            call vs_set(vst, base + 3, gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+       chain = gcv_conj(vs_get(vst, base + 3), r, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       call vs_set(vst, base + 3, chain)
+       call vs_set(vst, base + 4, apply(gc_slot(r, 1), no_args()))
+       call vs_set(vst, base + 2, vs_get(vst, base + 4))
+    end do
+    ! A thunk threw. With nothing unwrapped, v's own threw: it stays
+    ! pending with its thunk, as LazySeq keeps its fn (force_settle_one).
+    ! Past that, v's thunk had answered, and LazySeq.seq empties its sv
+    ! before it unwraps: v is empty from now on, (seq s) nil the second
+    ! time as in clj. The cells claimed on the way go back to pending with
+    ! their thunks, the one that threw to throw again.
+    if (tctx%has_error .and. tag_of(vs_get(vst, base + 3)) /= GCT_NIL) then
+       call gc_set_slot(vs_get(vst, base + 1), 1, gc_nil())
+       call gc_set_slot(vs_get(vst, base + 1), 5, gc_nil())
+       call gc_set_i1(vs_get(vst, base + 1), LAZY_EMPTY)
+    end if
+    if (tctx%has_error) then
+       call gc_state_lock()
+       chain = vs_get(vst, base + 3)
+       if (chain%tag /= GCT_NIL) then
+          do i = 0, gcv_count(chain) - 1
+             c = gcv_nth(chain, i)
+             if (gc_i1(c) == LAZY_RUNNING) call gc_set_i1(c, LAZY_PENDING)
+          end do
+       end if
+       call gc_state_unlock()
+       call gc_state_notify()
+       call force_settle_one(vs_get(vst, base + 1), vs_get(vst, base + 2))
+       call vs_leave(vst, base)
+       return
+    end if
+    call force_settle_one(vs_get(vst, base + 1), vs_get(vst, base + 2))
+    chain = vs_get(vst, base + 3)
+    if (chain%tag /= GCT_NIL) then
+       do i = 0, gcv_count(vs_get(vst, base + 3)) - 1
+          call force_settle_one(gcv_nth(vs_get(vst, base + 3), i), vs_get(vst, base + 2))
+       end do
+       call gc_state_notify()
+    end if
+    call vs_leave(vst, base)
+  end subroutine force_settle
+
+  ! one cell from one answer (force_settle)
+  recursive subroutine force_settle_one(v, r0)
     type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: v, r0
@@ -5178,7 +5261,7 @@ contains
        end block
     end if
     call vs_leave(vst, base)
-  end subroutine force_settle
+  end subroutine force_settle_one
 
   ! Everything but the first element of a vector, as a list.
   function as_list_rest(v, roots) result(out)

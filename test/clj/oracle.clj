@@ -3025,3 +3025,11 @@
  (into #{1} [1N]) (some #(when (= % 1) %) (persistent! (conj! (transient (into #{1N} (range 2 20))) 1)))
  (some #(when (= % 1) %) (keys (persistent! (assoc! (transient (zipmap (cons 1N (range 2 20)) (range))) 1 :x))))]
 
+;; a lazy seq whose thunk answers a lazy seq, five million deep: filter
+;; skipping on a seq that is not chunked filled the value stack, a frame
+;; per skipped element, where clj's LazySeq unwraps in a loop
+;; (scripts/fuzz); and after a throw in the unwrapping, the outer seq is
+;; empty, as LazySeq.seq leaves it
+(count (filter neg? (take 5000000 (iterate inc 0))))
+(let [e (filter #(if (= % 5) (throw (ex-info "five" {})) false) (take 10 (iterate inc 0)))]
+  [(try (seq e) (catch clotran.host.throwable x (.getMessage x))) (try (seq e) (catch clotran.host.throwable x (.getMessage x)))])
