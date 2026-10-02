@@ -1,0 +1,58 @@
+#!/usr/bin/env bb
+;; fuzz-threads: atoms, refs, agents and futures under contention,
+;; generated (PLAN step 29).
+;;
+;;   scripts/fuzz-threads [-n N] [-s SEED] [-m modes] [-o cases.edn]
+;;
+;; Each case starts K futures, each running a random list of operations
+;; on shared state: swap! on an atom, a compare-and-set! retry loop,
+;; transfers between two refs in dosync -- with other transactions
+;; checking that the refs' total never changes -- and sends to an agent.
+;; The order the threads interleave is not fixed, so what is compared is
+;; what must come out the same whatever it was: the final atom, the refs'
+;; total and each ref's final value, the agent after await, and the
+;; number of times an invariant was seen broken (zero). Through clj and
+;; every mode by scripts/fuzz -f, under its deadline: a deadlock is a
+;; TIMEOUT.
+(require '[clojure.test.check.generators :as g]
+         '[clojure.string :as str]
+         '[babashka.fs :as fs]
+         '[babashka.process :as p])
+
+(def opts (loop [as *command-line-args* o {:n 60 :seed 1 :modes "flat,tree,compiled"}]
+            (if (empty? as) o
+                (case (first as)
+                  "-n" (recur (drop 2 as) (assoc o :n (parse-long (second as))))
+                  "-s" (recur (drop 2 as) (assoc o :seed (parse-long (second as))))
+                  "-m" (recur (drop 2 as) (assoc o :modes (second as)))
+                  "-o" (recur (drop 2 as) (assoc o :out (second as)))
+                  (do (println "usage: scripts/fuzz-threads [-n N] [-s SEED] [-m modes] [-o cases.edn]")
+                      (System/exit 2))))))
+
+;; one operation of a thread; a, r1, r2, ag, bad are the case's state
+(def g-op
+  (g/one-of [(g/fmap (fn [k] `(swap! ~'a + ~k)) (g/choose 1 9))
+             (g/fmap (fn [k] `(loop [] (let [v# @~'a] (when-not (compare-and-set! ~'a v# (+ v# ~k)) (recur)))))
+                     (g/choose 1 9))
+             (g/fmap (fn [k] `(dosync (alter ~'r1 - ~k) (alter ~'r2 + ~k))) (g/choose 1 9))
+             (g/return `(dosync (when-not (= 1000 (+ @~'r1 @~'r2)) (swap! ~'bad inc))))
+             (g/fmap (fn [k] `(send ~'ag + ~k)) (g/choose 1 9))
+             (g/return `(dosync (commute ~'r1 + 0)))]))
+
+(def g-case
+  (g/let [threads (g/vector (g/vector g-op 1 30) 2 6)]
+    (g/return
+     `(let [~'a (atom 0) ~'r1 (ref 600) ~'r2 (ref 400) ~'ag (agent 0) ~'bad (atom 0)
+            fs# (mapv (fn [f#] (future (f#)))
+                      [~@(for [ops threads] `(fn [] ~@ops nil))])]
+        (run! deref fs#)
+        (await ~'ag)
+        [@~'a (+ @~'r1 @~'r2) @~'r1 @~'r2 @~'ag @~'bad]))))
+
+(let [{:keys [n seed]} opts
+      forms (vec (for [i (range n)] (g/generate g-case 10 (+ seed i))))
+      out (or (:out opts) (str (fs/create-temp-file {:prefix "fuzz-threads" :suffix ".edn"})))]
+  (spit out (str "[" (str/join "\n" (map pr-str forms)) "]"))
+  (println (str "fuzz-threads: " n " cases -> " out))
+  (let [r (p/shell {:continue true} (str (fs/parent *file*) "/fuzz") "-f" out "-m" (:modes opts) "--timeout" "300")]
+    (System/exit (:exit r))))

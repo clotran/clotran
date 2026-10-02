@@ -151,9 +151,11 @@
 ;; called on a double alone, so its long version is gone and it is not public
 (let [pruned (some #(when (str/starts-with? % "PRUNED ") (edn/read-string (subs % 7))) (str/split-lines out))
       text (slurp f90)]
-  (when-not (and (= (get pruned "sq") [[:long]])
+  ;; the sample's own: a generated namespace (fuzz-pure) has no sq
+  (when-not (or (not= src "test/clj/pure_sample.cljf")
+               (and (= (get pruned "sq") [[:long]])
                  (not (str/includes? text "public :: sq\n"))
-                 (str/includes? text "public :: circle_area"))
+                 (str/includes? text "public :: circle_area")))
     (println "pure-check: private pruning is wrong:" (pr-str pruned))
     (System/exit 1)))
 (defn parse-cases [out]
@@ -324,7 +326,8 @@
    ["flang" "pure_fp" ["-fopenmp" "-fdo-concurrent-to-openmp=host"]]
    ["gfortran" "pure_gp" ["-fopenmp" "-ftree-parallelize-loops=4"]]])
 (doseq [[fc exe flags] compilers] (build fc exe flags))
-(when-not (re-find #"(?m)^\s*do concurrent \(" (slurp f90))
+(def sample? (= src "test/clj/pure_sample.cljf"))
+(when-not (or (not sample?) (re-find #"(?m)^\s*do concurrent \(" (slurp f90)))
   (println "pure-check: no amap came out as do concurrent")
   (System/exit 1))
 
@@ -335,8 +338,11 @@
   (if-not (ret-type c)
     (swap! not-emitted conj c)
     (let [want (clj-side i)]
+      ;; the interpreter is clotran too: on generated code (fuzz-pure) a
+      ;; difference from clj is a failure, not a note
       (when-not (same? want (interp i))
-        (println "NOTE interpreter differs from clj:" (pr-str c) (pr-str (interp i)) "vs" (pr-str want)))
+        (when-not sample? (swap! fails inc))
+        (println (if sample? "NOTE" "DIFFER") "interpreter differs from clj:" (pr-str c) (pr-str (interp i)) "vs" (pr-str want)))
       (doseq [[fc exe _] compilers]
         (swap! ran inc)
         (let [got (run-case exe i)]

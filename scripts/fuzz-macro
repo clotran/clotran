@@ -1,0 +1,130 @@
+#!/usr/bin/env bb
+;; fuzz-macro: core's macros, generated (PLAN step 29).
+;;
+;;   scripts/fuzz-macro [-n N] [-s SEED] [-m modes] [-o cases.edn]
+;;
+;; DESTRUCTURING: random binding patterns -- vectors with & and :as,
+;; maps with :keys, :strs, :syms, :or, :as, namespaced keys, nested both
+;; ways -- bound against random values in a let, a fn's parameters and a
+;; loop, answering every symbol the pattern binds. And the THREADING and
+;; CONDITIONAL macros -- ->, ->>, some->, cond->, as->, condp, case, for
+;; with :let/:when/:while -- on random steps. Each form is also checked
+;; against Clojure's own specs for the macros it uses (core.specs, loaded
+;; as fuzz does), so a generated binding form that is not a binding form
+;; is a bug in this script. Through clj and every mode by scripts/fuzz -f.
+(require '[clojure.test.check.generators :as g]
+         '[clojure.spec.alpha :as s]
+         '[clojure.string :as str]
+         '[babashka.fs :as fs]
+         '[babashka.process :as p])
+
+(load-file (str (fs/parent (fs/parent (fs/absolutize *file*))) "/src/clj/clojure/core/specs/alpha.clj"))
+
+(def opts (loop [as *command-line-args* o {:n 300 :seed 1 :modes "flat,tree,compiled"}]
+            (if (empty? as) o
+                (case (first as)
+                  "-n" (recur (drop 2 as) (assoc o :n (parse-long (second as))))
+                  "-s" (recur (drop 2 as) (assoc o :seed (parse-long (second as))))
+                  "-m" (recur (drop 2 as) (assoc o :modes (second as)))
+                  "-o" (recur (drop 2 as) (assoc o :out (second as)))
+                  (do (println "usage: scripts/fuzz-macro [-n N] [-s SEED] [-m modes] [-o cases.edn]")
+                      (System/exit 2))))))
+
+;; ---- patterns: built with the names they bind, fresh each time ---------
+
+(def counter (atom 0))
+(defn fresh [] (symbol (str "v" (swap! counter inc))))
+
+(defn names-of [pat]
+  (cond (symbol? pat) (if (= '& pat) [] [pat])
+        (vector? pat) (vec (mapcat names-of (remove #{:as} pat)))
+        (map? pat) (vec (concat (mapcat (fn [[k v]]
+                                          (cond (= k :as) [v]
+                                                (= k :or) []
+                                                (#{:keys :strs :syms} k) (map #(symbol (name %)) v)
+                                                (and (keyword? k) (= "keys" (name k))) (map #(symbol (name %)) v)
+                                                :else (names-of k)))
+                                        pat)))
+        :else []))
+
+(def key-names ['a 'b 'c 'd])
+
+(def g-pattern
+  (g/recursive-gen
+   (fn [inner]
+     (g/one-of
+      [;; [p1 p2 & rest :as all]
+       (g/let [ps (g/vector inner 0 3) rest? g/boolean as? g/boolean]
+         (g/return (vec (concat ps (when rest? ['& (fresh)]) (when as? [:as (fresh)])))))
+       ;; {:keys [...] :or {...} :as m} and friends, and {p :k}
+       (g/let [kind (g/elements [:keys :strs :syms :ns-keys])
+               ks (g/fmap distinct (g/vector (g/elements key-names) 1 3))
+               or? g/boolean as? g/boolean
+               extra (g/vector (g/tuple inner (g/elements [:a :b :x 0 1 "a"])) 0 2)]
+         (g/return
+          (let [;; the names a :keys binds must be fresh too: rename by prefix
+                pre (str "k" (swap! counter inc))
+                syms (mapv #(symbol (str pre (name %))) ks)
+                base (case kind
+                       :ns-keys {:fz/keys syms}
+                       {kind syms})]
+            (cond-> (into base extra)
+              or? (assoc :or {(first syms) :dflt})
+              as? (assoc :as (fresh))))))]))
+   (g/fmap (fn [_] (fresh)) (g/return nil))))
+
+;; values: shaped like patterns, often not matching them
+(def g-value
+  (g/recursive-gen
+   (fn [inner]
+     (g/one-of [(g/vector inner 0 4)
+                (g/fmap #(apply list %) (g/vector inner 0 3))
+                (g/fmap (fn [kvs] (into {} kvs))
+                        (g/vector (g/tuple (g/elements [:a :b :x 0 1 "a" 'a :fz/a :fz/b]) inner) 0 4))]))
+   (g/one-of [(g/choose -3 9) (g/elements [nil :k "s" true])])))
+
+;; the keys a map pattern reads, so the value has some of them
+(defn binding-case [where pat v]
+  (let [ns (names-of pat) out (vec ns)]
+    (case where
+      :let `(let [~pat '~v] ~out)
+      :fn `((fn [~pat] ~out) '~v)
+      :loop `(loop [~pat '~v n# 0] (if (< n# 1) (recur '~v (inc n#)) ~out)))))
+
+;; ---- the threading and conditional macros ------------------------------
+
+(def g-step (g/elements ['inc 'dec '(* 2) '(- 3) 'str 'vector '(conj 1) 'count 'identity]))
+(def g-macro-case
+  (g/let [x (g/choose -5 9) steps (g/vector g-step 1 4) tests (g/vector g/boolean 1 3)
+          which (g/elements [:-> :->> :some-> :cond-> :as-> :condp :case :for])]
+    (let [safe (filterv #(contains? #{'inc 'dec '(* 2) '(- 3) 'identity} %) steps)
+          safe (if (seq safe) safe ['inc])]
+      (case which
+        :-> `(-> ~x ~@safe)
+        :->> `(->> ~x ~@(map #(if (seq? %) (list (first %) (second %)) %) safe))
+        :some-> `(some-> ~x ~@safe)
+        :cond-> `(cond-> ~x ~@(mapcat vector tests (cycle safe)))
+        :as-> `(as-> ~x v# ~@(map (fn [s] (if (seq? s) (list (first s) 'v# (second s)) (list s 'v#))) safe))
+        :condp `(condp = (mod ~x 3) 0 :zero 1 :one :else)
+        :case `(case (mod ~x 4) 0 :a (1 2) :b :c)
+        :for `(for [i# (range ~(mod x 5)) :let [j# (* i# i#)] :when (even? j#) :while (< i# 4)] [i# j#])))))
+
+(def g-case
+  (g/frequency [[3 (g/let [pat g-pattern v g-value where (g/elements [:let :fn :loop])]
+                     (g/return (binding-case where pat v)))]
+                [1 g-macro-case]]))
+
+;; a binding form that core.specs refuses is this script's bug
+(defn spec-bad? [form]
+  (let [lets (filter #(and (seq? %) (= 'clojure.core/let (first %))) (tree-seq coll? seq form))]
+    (some #(not (s/valid? :clojure.core.specs.alpha/bindings (second %))) lets)))
+
+(let [{:keys [n seed]} opts
+      forms (vec (for [i (range n)] (g/generate g-case 6 (+ seed i))))
+      bad (filter spec-bad? forms)
+      out (or (:out opts) (str (fs/create-temp-file {:prefix "fuzz-macro" :suffix ".edn"})))]
+  (doseq [b bad] (println "BUG in fuzz-macro: not a binding form by core.specs:" (pr-str b)))
+  (spit out (str "[" (str/join "\n" (map pr-str (remove spec-bad? forms))) "]"))
+  (println (str "fuzz-macro: " (count forms) " cases -> " out))
+  (let [r (p/shell {:continue true} (str (fs/parent *file*) "/fuzz") "-f" out "-m" (:modes opts))]
+    (System/exit (if (and (empty? bad) (zero? (:exit r))) 0 1))))

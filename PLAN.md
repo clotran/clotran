@@ -2780,13 +2780,13 @@ done when its fuzzer is green and its seeded run is in `make test`.
 | numbers: the tower, overflow, ratios | scripts/fuzz-num | clj: value and class of one op on any two kinds | green, in make test (check-fuzz-num); documented deviations (26, 27, 43, 69, 70, 71) not generated. Found: a float printed as its double; (int hugeN) answered 0 and unchecked-int lost the low bits; bit-not took a BigInt; quot and rem of doubles were not clj's formulas, and gfortran fused n - q*d (now -ffp-contract=off everywhere); a ratio with a double took the ratio path; a decimal quotient lost its scale; compiled (int x) boxed as a long |
 | strings and regex | scripts/fuzz-str | clj | green, in make test (check-fuzz-str); DEVIATIONS 14 and 41 not generated. Found: ICU loops forever on a lazy *? or +? over what can match empty (regex_shim.c compiles {0,}? and {1,}?) |
 | collections under random op sequences | scripts/fuzz-coll | clj: value, count, seq order, hash | green, in make test (check-fuzz-coll). Found: a hash map or set replaced the key it held with an equal new one; a nil key walks out of clj's order (DEVIATIONS 74); a lazy seq of lazy seqs was unwrapped recursively, a frame per element; a library's manifest was built by 10^4 concatenations, half an hour in gfortran |
-| GC: random allocation under torture | -- | the same program without torture | |
+| GC and the heap image | scripts/fuzz-gc (every generator collecting every 3, 17, 1009 allocations, and noimage) | clj | green, in make test (check-fuzz-gc). Found: data-structure code calling back into the evaluator (key equality, hash, a comparator) held its map unrooted -- under GC the reader lost keys, destructure, ns and spec failed, and spec loaded 42 definitions short, which was then marked loaded |
 | spec itself: generated spec forms | scripts/fuzz-spec (its forms checked by a spec of spec forms) | clj: valid?, conform, unform, explain-data, form; 4 modes with torture | green, in make test (check-fuzz-spec). Found: a fn's class name carried no name (spec's fn-sym); (empty m) of a HAMT was nil; a deftype could not name itself in its methods, and its equals, hashCode and compareTo were not consulted; UUID was a record, so a map; scripts/fuzz showed a failing case's answer from a solo rerun. Spec's own nested quantifiers are exponential, in clj too |
-| the specs of fuzz_specs.clj | -- | clj | |
-| macros: destructuring, ns forms | -- | clj, core.specs | |
-| threads, agents, STM | -- | invariants (sums kept, no lost update) | |
-| the compiler (tiers, purefort) | -- | the interpreter | |
-| the heap image | -- | a run from source | |
+| the specs of fuzz_specs.clj | scripts/fuzz --fns | each :args generator conforms to its :args; every fdef has a :ret | green, in make test (check-fuzz) |
+| macros: destructuring, threading, conditionals | scripts/fuzz-macro | clj, core.specs | green, in make test (check-fuzz-macro). Found: nth took a keyword, so (let [[a b] :k] ...) answered nil nil. ns forms not generated yet |
+| threads, agents, STM | scripts/fuzz-threads | clj: final values; invariants (the refs' total kept) | green, in make test (check-fuzz-threads); a deadlock is a TIMEOUT |
+| the compiler (tier A, purefort) | scripts/fuzz-pure through scripts/pure-check | clj and the interpreter, gfortran and flang | green, in make test (check-fuzz-pure). The full compiler (clotran compile) is fuzzed by every generator's compiled mode |
+| the heap image | scripts/fuzz-gc's noimage mode | clj | green, with GC above |
 | sockets, REPL, network, packages | -- | per protocol | |
 
 Spec under GC torture is the first lead: `s/cat` answers wrong under

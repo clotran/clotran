@@ -1,0 +1,77 @@
+#!/usr/bin/env bb
+;; fuzz-pure: the tier-A compiler (clotran.purefort), generated (PLAN 29).
+;;
+;;   scripts/fuzz-pure [-n N] [-s SEED]
+;;
+;; A namespace of N random tier-A functions -- arithmetic on longs and
+;; doubles (+ - * quot rem mod min max abs sqrt), comparisons and if,
+;; let, and loops over long and double arrays -- each called on a few
+;; random arguments, run by scripts/pure-check: interpreted, as pure
+;; Fortran through gfortran and flang, and in clj, answers compared
+;; (longs exactly, doubles bit for bit, errors by message). sqrt only of
+;; the transcendentals: sin and its kin may differ in the last bit
+;; between Fortran's libm and clj's host, which is neither one's bug.
+(require '[clojure.test.check.generators :as g]
+         '[clojure.string :as str]
+         '[babashka.fs :as fs]
+         '[babashka.process :as p])
+
+(def opts (loop [as *command-line-args* o {:n 30 :seed 1}]
+            (if (empty? as) o
+                (case (first as)
+                  "-n" (recur (drop 2 as) (assoc o :n (parse-long (second as))))
+                  "-s" (recur (drop 2 as) (assoc o :seed (parse-long (second as))))
+                  (do (println "usage: scripts/fuzz-pure [-n N] [-s SEED]") (System/exit 2))))))
+
+;; an expression over the parameters `vars`
+(defn g-expr [vars]
+  (g/recursive-gen
+   (fn [inner]
+     (g/one-of [(g/fmap (fn [[o a b]] (list o a b)) (g/tuple (g/elements '[+ - * min max]) inner inner))
+                (g/fmap (fn [[o a b]] (list o a (list 'max 1 (list 'abs b)))) (g/tuple (g/elements '[quot rem mod]) inner inner))
+                (g/fmap (fn [a] (list 'abs a)) inner)
+                (g/fmap (fn [a] (list 'clotran.host.math/sqrt (list 'abs a))) inner)
+                (g/fmap (fn [[c a b x y]] (list 'if (list c a b) x y)) (g/tuple (g/elements '[< > <= = ]) inner inner inner inner))
+                (g/fmap (fn [[a b]] (list 'let ['t a] (list '+ 't b))) (g/tuple inner inner))]))
+   (g/one-of [(g/elements vars) (g/choose -9 9) (g/elements [0.5 -1.25 2.0 1e3])])))
+
+(def g-scalar-fn
+  (g/let [arity (g/choose 1 3)
+          body (g-expr (vec (take arity '[x y z])))]
+    (g/return {:kind :scalar :arity arity :params (vec (take arity '[x y z])) :body body})))
+
+(def g-array-fn
+  (g/let [init (g/elements [0 0.0 1])
+          op (g/elements '[+ * max min])
+          ;; the element written in place: a fn literal per element is tier B
+          f (g/elements ["(aget a i)" "(* (aget a i) (aget a i))" "(- (aget a i) 1)"])]
+    (g/return {:kind :array :init init :op op :f f})))
+
+(defn fn-src [i {:keys [kind params body init op f]}]
+  (case kind
+    :scalar (str "(defn f" i " " (pr-str params) " " (pr-str body) ")")
+    :array (str "(defn f" i " [a] (let [n (alength a)] (loop [i 0 s " init "] (if (< i n) (recur (inc i) ("
+                op " s " f ")) s))))")))
+
+(def g-num (g/one-of [(g/choose -20 20) (g/elements [0.25 -3.5 1e6 2.0 9223372036854775807 -7])]))
+(def g-arr (g/one-of [(g/fmap (fn [xs] (list 'long-array (vec xs))) (g/vector (g/choose -9 9) 0 5))
+                      (g/fmap (fn [xs] (list 'double-array (vec xs))) (g/vector (g/elements [0.5 -1.0 2.25 3.0]) 0 5))]))
+
+(defn calls [i {:keys [kind arity]}]
+  (g/vector (case kind
+              :scalar (g/fmap #(apply list (symbol (str "f" i)) %) (g/vector g-num arity))
+              :array (g/fmap #(list (symbol (str "f" i)) %) g-arr))
+            3))
+
+(let [{:keys [n seed]} opts
+      fns (vec (for [i (range n)] (g/generate (g/frequency [[2 g-scalar-fn] [1 g-array-fn]]) 6 (+ seed i))))
+      cs (vec (mapcat (fn [[i f]] (g/generate (calls i f) 6 (+ seed 7919 i))) (map-indexed vector fns)))
+      dir (str (fs/create-temp-dir {:prefix "fuzz-pure"}))
+      src (str dir "/fuzz_pure.cljf")
+      cases (str dir "/cases.edn")]
+  (spit src (str "(ns fuzz-pure)\n" (str/join "\n" (map-indexed fn-src fns)) "\n"))
+  (spit cases (pr-str cs))
+  (println (str "fuzz-pure: " n " functions, " (count cs) " calls -> " src))
+  (let [r (deref (p/process {:inherit true} (str (fs/parent *file*) "/pure-check") src cases) (* 1000 900) ::timeout)]
+    (System/exit (cond (= r ::timeout) (do (println "TIMEOUT: pure-check took over 900 s") 1)
+                       :else (:exit r)))))
