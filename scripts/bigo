@@ -1,0 +1,124 @@
+#!/usr/bin/env bb
+;; bigo: every operation in test/bigo.edn, at growing sizes, in clj and
+;; in clotran (interpreted, and compiled), each judged against the
+;; theory the table cites (PLAN step 28).
+;;
+;;   scripts/bigo [--impl clj,flat,compiled] [--only REGEX] [--sizes 1000,4000,16000]
+;;
+;; Per operation and size: the time per call, with an empty operation's
+;; time taken off, the best of three runs of enough calls to take tens
+;; of milliseconds. The growth is the slope of log time against log n
+;; across the sizes: under 0.5 is SUBLINEAR (constant or logarithmic,
+;; which no affordable range of sizes can tell apart -- the model proves
+;; which), 0.6 to 1.4 LINEAR. A row whose class is not the theory's, in
+;; any implementation, is a deviation: printed, and the exit status is 1.
+(require '[clojure.string :as str]
+         '[clojure.edn :as edn]
+         '[clojure.math :as math]
+         '[babashka.fs :as fs]
+         '[babashka.process :as p])
+
+(def repo (str (fs/canonicalize ".")))
+(def opts (loop [as *command-line-args* o {:impls ["clj" "flat" "compiled"] :only nil :sizes [1000 4000 16000]}]
+            (if (empty? as) o
+                (case (first as)
+                  "--impl" (recur (drop 2 as) (assoc o :impls (str/split (second as) #",")))
+                  "--only" (recur (drop 2 as) (assoc o :only (re-pattern (second as))))
+                  "--sizes" (recur (drop 2 as) (assoc o :sizes (mapv parse-long (str/split (second as) #","))))
+                  (do (println "usage: scripts/bigo [--impl clj,flat,compiled] [--only REGEX] [--sizes a,b,c]") (System/exit 2))))))
+
+(def table (cond->> (edn/read-string (slurp "test/bigo.edn"))
+             (:only opts) (filter #(re-find (:only opts) (:id %)))))
+(def work (str (fs/create-temp-dir {:prefix "bigo"})))
+
+;; ---- the driver: the same text for every implementation ---------------
+
+(def measure-fns
+  "(defn bigo-ms [f c n k]
+     (let [s (volatile! nil)
+           out (with-out-str (time (dotimes [i k] (vreset! s (f c i n)))))]
+       (parse-double (second (re-find #\"Elapsed time: ([0-9.]+)\" out)))))
+   (defn bigo-per-call [f c n]
+     (loop [k 16]
+       (let [ms (bigo-ms f c n k)]
+         (if (or (> ms 30.0) (> k 4000000)) (/ ms k) (recur (* k 4))))))
+   (defn bigo-best [f c n] (apply min (repeatedly 3 #(bigo-per-call f c n))))
+   (defn bigo-empty [c i n] c)
+   (defn bigo-run [id f setup sizes]
+     (doseq [n sizes]
+       (let [c (setup n)
+             base (bigo-best bigo-empty c n)
+             t (bigo-best f c n)]
+         (println \"BIGO\" id n (* 1.0e6 (max (- t base) 1.0e-7))))))\n")
+
+(defn op-defs []
+  (apply str (map-indexed (fn [i e] (str "(defn bigo-op" i " [c i n] " (:op e) ")\n")) table)))
+
+(defn runs []
+  (apply str (map-indexed (fn [i e] (str "(bigo-run " (pr-str (:id e)) " bigo-op" i " (fn [n] " (:setup e) ") "
+                                         (pr-str (or (:sizes e) (:sizes opts))) ")\n"))
+                          table)))
+
+(defn sh [env & args]
+  (apply p/shell {:out :string :err :string :in "" :continue true :extra-env env} args))
+
+(defn parse [out]
+  (reduce (fn [m [_ id n ns]] (assoc-in m [id (parse-long n)] (parse-double ns)))
+          {} (re-seq #"BIGO (\S+) (\d+) (\S+)" out)))
+
+(defn run-impl [impl]
+  (case impl
+    "clj" (let [f (str work "/clj.clj")]
+            (spit f (str measure-fns (op-defs) (runs)))
+            (parse (:out (sh {} "clj" "-M" f))))
+    "flat" (let [f (str work "/flat.cljf")]
+             (spit f (str measure-fns (op-defs) (runs)))
+             (parse (:out (sh {} (str repo "/clotran-bin") (str repo "/src/clj/clojure/core.clj") f))))
+    "compiled"
+    ;; the operations a namespace of their own, compiled; the measuring
+    ;; and the setups stay interpreted, as a caller's would
+    (let [nsf (str work "/bigo/ops.cljf") lib (str work "/bigo.dylib") drv (str work "/drive.cljf")]
+      (fs/create-dirs (str work "/bigo"))
+      (spit nsf (str "(ns bigo.ops)\n" (op-defs)))
+      (sh {"CLOTRAN_CACHE" (str work "/cache")} (str repo "/clotran") "compile" nsf lib)
+      (when-not (fs/exists? lib) (println "compiled: no library built; the operations run interpreted"))
+      (spit drv (str "(load-file " (pr-str nsf) ")\n(require 'clotran.loader)\n"
+                     (when (fs/exists? lib) (str "(clotran.loader/install " (pr-str lib) " " (pr-str nsf) ")\n"))
+                     "(println \"BIGOCOMPILED\" (count (filter #(clojure.string/starts-with? (str (deref %)) \"#<compiled\") (vals (ns-interns 'bigo.ops)))))\n"
+                     measure-fns
+                     (str/replace (runs) #"bigo-op(\d+)" "bigo.ops/bigo-op$1")))
+      (let [r (sh {"CLOTRAN_IMAGE" "0"} (str repo "/clotran-bin") (str repo "/src/clj/clojure/core.clj") drv)]
+        (when-let [[_ k] (re-find #"BIGOCOMPILED (\d+)" (:out r))]
+          (println (str "compiled: " k " of " (count table) " operations compiled")))
+        (parse (:out r))))))
+
+;; ---- judging ------------------------------------------------------------
+
+(defn slope [pts]
+  (let [xs (map #(math/log (double (key %))) pts) ys (map #(math/log (max (val %) 1e-3)) pts)
+        mx (/ (reduce + xs) (count xs)) my (/ (reduce + ys) (count ys))]
+    (/ (reduce + (map #(* (- %1 mx) (- %2 my)) xs ys))
+       (reduce + (map #(let [d (- % mx)] (* d d)) xs)))))
+
+(defn klass [s] (cond (nil? s) :missing (< s 0.5) :sublinear (<= 0.6 s 1.4) :linear (> s 1.4) :superlinear :else :unclear))
+(defn expect [theory] (if (= theory :linear) :linear :sublinear))
+
+(let [impls (:impls opts)
+      results (into {} (for [impl impls] [impl (run-impl impl)]))
+      rows (for [e table
+                 :let [want (expect (:theory e))
+                       got (into {} (for [impl impls
+                                          :let [pts (get-in results [impl (:id e)])]]
+                                      [impl (when (= (count pts) (count (or (:sizes e) (:sizes opts)))) (slope (sort pts)))]))]]
+             {:e e :want want :got got
+              :bad (for [[impl s] got :when (not= (klass s) want)] impl)})
+      bad (filter #(seq (:bad %)) rows)]
+  (println (format "%-24s %-8s %s" "operation" "theory" (str/join "" (map #(format "%-22s" %) impls))))
+  (doseq [{:keys [e want got bad]} rows]
+    (println (format "%-24s %-8s %s%s" (:id e) (name (:theory e))
+                     (str/join "" (for [impl impls :let [s (get got impl)]]
+                                    (format "%-22s" (if s (format "%s %.2f" (name (klass s)) s) "missing"))))
+                     (if (seq bad) (str "  DEVIATES: " (str/join "," bad)) ""))))
+  (println (str "bigo: " (count rows) " operations x " (count impls) " implementations; "
+                (count bad) " deviate from the theory"))
+  (System/exit (if (empty? bad) 0 1)))

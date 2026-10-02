@@ -1,8 +1,9 @@
   ! ---- sorted maps and sets ---------------------------------------------
   !
-  ! A sorted map is the array map with its keys kept in comparator
-  ! order (Assoc.f90: a flag, a comparator slot, binary search, and no
-  ! promotion), and a sorted set is a set over one. core.clj's subseq
+  ! A sorted map is a counted B+-tree in comparator order, 32 wide
+  ! (Assoc.f90, "sorted maps": a flag, a comparator slot, never
+  ! promoted) -- O(log n) to find, insert and remove, as clj's
+  ! red-black tree is -- and a sorted set is a set over one. core.clj's subseq
   ! and rsubseq ask a Sorted for seqFrom, entryKey, comparator and a
   ! seq with a direction; those are here, with rseq, and the ordering
   ! hook Assoc calls.

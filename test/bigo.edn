@@ -1,0 +1,124 @@
+;; What each operation on each data structure costs, in theory, and where
+;; Clojure says so -- the table scripts/bigo measures clj and clotran
+;; (interpreted and compiled) against, and model/ proves (PLAN step 28).
+;;
+;; Each entry:
+;;   :id      structure/operation
+;;   :setup   a form of n making the collection c
+;;   :op      a form of c, i (the iteration) and n, timed many times
+;;   :theory  :const, :log (log base 32 or 2: one node per level), or
+;;            :linear -- WORST case unless :amortized says otherwise
+;;   :why     the clj source that gives the bound, by class and method
+;;   :sizes   (optional) the sizes for this one: an operation whose
+;;            linear work is fast per element needs larger n before it
+;;            outweighs the cost of a call
+;;
+;; Measured, :const and :log cannot be told apart over sizes a run can
+;; afford (a 32-way trie is 2 to 3 levels deep across them), so the
+;; measurement checks the CLASS -- sublinear or linear -- and the model
+;; proves the exact bound.
+[
+ ;; ---- vector: a 32-way trie with a tail -------------------------------
+ {:id "vector/nth" :setup "(vec (range n))" :op "(nth c (mod (* i 7919) n))" :theory :log
+  :why "PersistentVector.arrayFor: one node per 5 bits of shift"}
+ {:id "vector/assoc" :setup "(vec (range n))" :op "(assoc c (mod (* i 7919) n) i)" :theory :log
+  :why "PersistentVector.assocN, doAssoc: one node copied per level"}
+ {:id "vector/conj" :setup "(vec (range n))" :op "(conj c i)" :theory :log :amortized :const
+  :why "PersistentVector.cons: into the tail; pushTail, one node per level, every 32nd"}
+ {:id "vector/pop" :setup "(vec (range n))" :op "(pop c)" :theory :log
+  :why "PersistentVector.pop: from the tail; popTail, one node per level, every 32nd"}
+ {:id "vector/peek" :setup "(vec (range n))" :op "(peek c)" :theory :log
+  :why "APersistentVector.peek: nth of count-1, the tail"}
+ {:id "vector/count" :setup "(vec (range n))" :op "(count c)" :theory :const
+  :why "PersistentVector.count: a field"}
+ {:id "vector/subvec" :setup "(vec (range n))" :op "(subvec c 1 (dec n))" :theory :const
+  :why "APersistentVector.SubVector: a view, the vector and two bounds"}
+ {:id "vector/rseq" :setup "(vec (range n))" :op "(first (rseq c))" :theory :log
+  :why "APersistentVector.RSeq: an index into the vector, nth of it"}
+ {:id "vector/contains" :setup "(vec (range n))" :op "(contains? c (mod (* i 7919) n))" :theory :const
+  :why "APersistentVector.containsKey: a bounds check"}
+
+ ;; ---- list: cons cells with a cached count -----------------------------
+ {:id "list/first" :setup "(apply list (range n))" :op "(first c)" :theory :const
+  :why "PersistentList.first: a field"}
+ {:id "list/next" :setup "(apply list (range n))" :op "(next c)" :theory :const
+  :why "PersistentList.next: a field"}
+ {:id "list/conj" :setup "(apply list (range n))" :op "(conj c i)" :theory :const
+  :why "PersistentList.cons: one cell"}
+ {:id "list/count" :setup "(apply list (range n))" :op "(count c)" :theory :const
+  :why "PersistentList.count: a field"}
+ {:id "list/nth" :setup "(apply list (range n))" :op "(nth c (dec n))" :theory :linear
+  :why "RT.nthFrom: a Sequential is walked"}
+
+ ;; ---- hash map: an array map up to 8 entries, then a 32-way HAMT -----
+ {:id "hash-map/get" :setup "(zipmap (range n) (range n))" :op "(get c (mod (* i 7919) n))" :theory :log
+  :why "PersistentHashMap.BitmapIndexedNode.find: one node per 5 bits of hash"}
+ {:id "hash-map/assoc-new" :setup "(zipmap (range n) (range n))" :op "(assoc c (+ n i) i)" :theory :log
+  :why "PersistentHashMap.assoc: one node copied per level"}
+ {:id "hash-map/assoc-old" :setup "(zipmap (range n) (range n))" :op "(assoc c (mod (* i 7919) n) -1)" :theory :log
+  :why "PersistentHashMap.assoc: one node copied per level"}
+ {:id "hash-map/dissoc" :setup "(zipmap (range n) (range n))" :op "(dissoc c (mod (* i 7919) n))" :theory :log
+  :why "PersistentHashMap.without: one node copied per level"}
+ {:id "hash-map/count" :setup "(zipmap (range n) (range n))" :op "(count c)" :theory :const
+  :why "PersistentHashMap.count: a field"}
+ {:id "hash-map/contains" :setup "(zipmap (range n) (range n))" :op "(contains? c (mod (* i 7919) n))" :theory :log
+  :why "PersistentHashMap.containsKey: find"}
+
+ ;; ---- hash set: a hash map's keys --------------------------------------
+ {:id "hash-set/contains" :setup "(set (range n))" :op "(contains? c (mod (* i 7919) n))" :theory :log
+  :why "APersistentSet.contains: the map's containsKey"}
+ {:id "hash-set/conj" :setup "(set (range n))" :op "(conj c (+ n i))" :theory :log
+  :why "PersistentHashSet.cons: the map's assoc"}
+ {:id "hash-set/disj" :setup "(set (range n))" :op "(disj c (mod (* i 7919) n))" :theory :log
+  :why "PersistentHashSet.disjoin: the map's without"}
+
+ ;; ---- sorted map and set: a red-black tree -------------------------
+ {:id "sorted-map/get" :setup "(into (sorted-map) (map vector (range n) (range n)))" :op "(get c (mod (* i 7919) n))" :theory :log
+  :why "PersistentTreeMap.entryAt: one node per level of a balanced tree"}
+ {:id "sorted-map/assoc-new" :setup "(into (sorted-map) (map vector (range n) (range n)))" :op "(assoc c (+ n i) i)" :theory :log
+  :why "PersistentTreeMap.assoc, add: one path copied and rebalanced"}
+ {:id "sorted-map/assoc-old" :setup "(into (sorted-map) (map vector (range n) (range n)))" :op "(assoc c (mod (* i 7919) n) -1)" :theory :log
+  :why "PersistentTreeMap.assoc, replace: one path copied"}
+ {:id "sorted-map/dissoc" :setup "(into (sorted-map) (map vector (range n) (range n)))" :op "(dissoc c (mod (* i 7919) n))" :theory :log
+  :why "PersistentTreeMap.without, remove: one path copied and rebalanced"}
+ {:id "sorted-map/count" :setup "(into (sorted-map) (map vector (range n) (range n)))" :op "(count c)" :theory :const
+  :why "PersistentTreeMap.count: a field"}
+ {:id "sorted-map/first" :setup "(into (sorted-map) (map vector (range n) (range n)))" :op "(first c)" :theory :log
+  :why "PersistentTreeMap.seq: the path to the leftmost node"}
+ {:id "sorted-set/conj" :setup "(into (sorted-set) (range n))" :op "(conj c (+ n i))" :theory :log
+  :why "PersistentTreeSet.cons: the map's assoc"}
+ {:id "sorted-set/contains" :setup "(into (sorted-set) (range n))" :op "(contains? c (mod (* i 7919) n))" :theory :log
+  :why "PersistentTreeSet.contains: the map's containsKey"}
+
+ ;; ---- string --------------------------------------------------------
+ {:id "string/count" :setup "(apply str (repeat n \"a\"))" :op "(count c)" :theory :const
+  :why "RT.count of a CharSequence: its length, a field"}
+ {:id "string/nth" :setup "(apply str (repeat n \"a\"))" :op "(nth c (mod (* i 7919) n))" :theory :const
+  :why "RT.nthFrom of a CharSequence: charAt"}
+ {:id "string/subs" :setup "(apply str (repeat n \"a\"))" :op "(subs c (quot n 2) (+ (quot n 2) 10))" :theory :const
+  :why "subs, substring: the ten characters copied, whatever the length"}
+ {:id "string/str" :setup "(apply str (repeat n \"a\"))" :op "(str c \"x\")" :theory :linear :sizes [16000 64000 256000]
+  :why "str: a new string, every character copied"}
+
+ ;; ---- range -----------------------------------------------------------
+ {:id "range/count" :setup "(range n)" :op "(count c)" :theory :const
+  :why "LongRange.count: a field"}
+ {:id "range/nth" :setup "(range n)" :op "(nth c (dec n))" :theory :linear
+  :why "RT.nthFrom: a range is not Indexed; its seq is walked"}
+
+ ;; ---- transients ------------------------------------------------------
+ {:id "transient-vector/conj!" :setup "(transient (vec (range n)))" :op "(conj! c i)" :theory :log :amortized :const
+  :why "PersistentVector.TransientVector.conj: the tail, a level per 32"}
+ {:id "transient-vector/nth" :setup "(transient (vec (range n)))" :op "(nth c (mod (* i 7919) n))" :theory :log
+  :why "PersistentVector.TransientVector.nth: arrayFor"}
+ {:id "transient-map/assoc!" :setup "(transient (zipmap (range n) (range n)))" :op "(assoc! c (mod (* i 7919) n) i)" :theory :log
+  :why "PersistentHashMap.TransientHashMap.doAssoc: one node per level, in place"}
+
+ ;; ---- Fortran arrays ----------------------------------------------------
+ {:id "array/aget" :setup "(double-array n)" :op "(aget c (mod (* i 7919) n))" :theory :const
+  :why "an array element: an offset"}
+ {:id "array/aset" :setup "(double-array n)" :op "(aset c (mod (* i 7919) n) 1.0)" :theory :const
+  :why "an array element: an offset"}
+ {:id "array/alength" :setup "(double-array n)" :op "(alength c)" :theory :const
+  :why "an array's length: a field"}
+]
