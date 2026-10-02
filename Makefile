@@ -19,7 +19,11 @@ FC = gfortran
 # lldb finds it there.
 B = build
 .DEFAULT_GOAL := all
-FCFLAGS = -g -O2 -I$(B) -Isrc/f -J$(B) $(FCFLAGS_$(notdir $(FC)))
+# -ffp-contract=off: no fused multiply-add. clj's arithmetic rounds each
+# multiply and each add, as clj does, and (rem -46 0.1) is 0.0 there;
+# gfortran at -O3 on arm64 fused n - q*d and answered the exact residual,
+# 2.55E-15 (scripts/fuzz-num). Both compilers, and clotran compile too.
+FCFLAGS = -g -O2 -ffp-contract=off -I$(B) -Isrc/f -J$(B) $(FCFLAGS_$(notdir $(FC)))
 LDFLAGS = $(FCFLAGS_$(notdir $(FC)))
 TESTLDFLAGS = $(TESTLDFLAGS_$(notdir $(FC)))
 

@@ -243,7 +243,7 @@
 
 (defn build [fc exe flags]
   (let [r (apply shell {:out :string :err :string :continue true :dir (str work)}
-                 fc "-O2" (concat (when (= fc "gfortran") ["-ffree-line-length-none"]) flags
+                 fc "-O2" "-ffp-contract=off" (concat (when (= fc "gfortran") ["-ffree-line-length-none"]) flags
                                   ["pure.f90" "driver.f90" "-o" exe]))]
     (when-not (zero? (:exit r))
       (println "BUILD FAILED with" fc) (println (:err r)) (System/exit 1))))

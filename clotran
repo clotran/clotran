@@ -167,7 +167,7 @@ if [ "$1" = "compile" ]; then
   else fc=gfortran
   fi
   case "$(basename "$fc")" in flang*) long="" ;; *) long="-ffree-line-length-none" ;; esac
-  (cd "$work" && $fc -O2 -shared -fPIC $long $undef \
+  (cd "$work" && $fc -O2 -ffp-contract=off -shared -fPIC $long $undef \
     -o "$out.part" out.f90) || exit 1
   mv -f "$out.part" "$out" || exit 1
   echo "wrote $lib"
