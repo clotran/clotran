@@ -69,13 +69,15 @@
   compiler needs it: {:tmpl the fn's template, or nil when the form is
   not a fn; :pool; :fingerprint}. The pool and the fingerprint come from
   the host, which is also where `pool-of` below gets them, so the two
-  cannot disagree."
-  [form]
-  (let [top (clotran-ast form)
+  cannot disagree. `nm`, when given, is the name a def binds it to, the
+  name its fn is analysed under."
+  ([form] (analyse form nil))
+  ([form nm]
+  (let [top (if nm (clotran-ast form nm) (clotran-ast form))
         fnode (:p1 top)]
     {:tmpl (when (= :fn (:op fnode)) (:p1 fnode))
      :pool (entries (:pool top))
-     :fingerprint (:fingerprint top)}))
+     :fingerprint (:fingerprint top)})))
 
 (defn pool-of
   "The pool and fingerprint of `form` without exporting its tree: what

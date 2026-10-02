@@ -5579,9 +5579,12 @@ contains
   ! would have done.
   ! Analysis: a form to a node tree, symbols resolved, macros expanded,
   ! locals as slots. `env` is unused and kept for the callers' sake.
-  recursive function gce_analyze(form, env) result(out)
+  ! `name`: what a def would bind the form to, the name its fn is
+  ! analysed under (Compiler.analyze's third argument)
+  recursive function gce_analyze(form, env, name) result(out)
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: form, env
+    character(len=*), intent(in), optional :: name
     type(gc_value) :: out
     tctx => ctx_self()
     tctx%ev_depth = 0
@@ -5597,11 +5600,13 @@ contains
          vst => gc_my_stack()
          base = vs_enter(vst, 1)
          call vs_set(vst, base + 1, resolve_unread(form))
+         if (present(name)) tctx%fn_hint = name
          if (.not. tctx%has_error) out = analyze_top(vs_get(vst, base + 1))
          call vs_leave(vst, base)
        end block
        return
     end if
+    if (present(name)) tctx%fn_hint = name
     out = analyze_top(form)
   end function gce_analyze
 
@@ -11374,11 +11379,18 @@ contains
        ! kind, so a generator reading this never has to resolve
        ! anything. It is the SAME analysis the executor runs; there is
        ! no second front end to disagree with the first.
+       ! (clotran-ast 'form 'name): as (def name form) would analyse it
        block
-         type(gc_value) :: genv, node
+         type(gc_value) :: genv, node, nmv
+         character(len=:), allocatable :: nmt
          genv = gce_env()
          call vs_set(vst, base + 2, genv)
-         node = gce_analyze(strip_meta(gcv_nth(args, 0)), vs_get(vst, base + 2))
+         nmt = ""
+         if (gcv_count(args) > 1) then
+            nmv = gcv_nth(args, 1)
+            if (nmv%tag == GCT_SYM .or. nmv%tag == GCT_STR) call gc_ref_text(nmv%ref, s=nmt)
+         end if
+         node = gce_analyze(strip_meta(gcv_nth(args, 0)), vs_get(vst, base + 2), nmt)
          if (.not. tctx%has_error) then
             call vs_set(vst, base + 3, node)
             out = ast_data(vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 2)])

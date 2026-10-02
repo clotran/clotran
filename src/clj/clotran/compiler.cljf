@@ -1187,7 +1187,8 @@ end module clotran_rt_decl
           :fn (let [[nm _ caps _ selfslot] (:p1 nd)
                     n (swap! (:counter st) inc)
                     isym (str (:prefix st) "_" n)
-                    who (str (:who st) "/" (or nm (str "fn" n)))
+                    ;; the analyser's display name, as the interpreter's frames show it
+                    who (or (get (:p1 nd) 8) (str (:who st) "/" (or nm (str "fn" n))))
                     proc (fn-procedure isym who (:p1 nd) nil (:offset st) (:pool-list st)
                                        {:closure? true :counter (:counter st) :prefix (:prefix st)})
                     [fc st] (flush-typed st)
@@ -1632,7 +1633,7 @@ end module clotran_rt_decl
   hands the handle to the library at install time."
   ([ns-name fn-name form] (compile-fn ns-name fn-name form 0 nil))
   ([ns-name fn-name form offset idx]
-   (let [{:keys [tmpl fingerprint pool]} (loader/analyse form)]
+   (let [{:keys [tmpl fingerprint pool]} (loader/analyse form fn-name)]
      (if (nil? tmpl)
        {:declined "not a fn form"}
        (if-let [why (decline-reason tmpl)]
