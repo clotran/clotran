@@ -3,6 +3,7 @@
 ;; changes frames, so what they show is pinned first).
 ;;
 ;;   scripts/fuzz-frames [-n N] [-s SEED] [--modes flat,tree,compiled] [--show K]
+;;                       [--leaves throw|break]   every case ending so
 ;;
 ;; Each case is a chain of functions f0 -> f1 -> ... -> fk, each with
 ;; known arguments and locals, linked by a random CALL SHAPE -- a direct
@@ -40,7 +41,8 @@
                   "-s" (recur (drop 2 as) (assoc o :seed (parse-long (second as))))
                   "--modes" (recur (drop 2 as) (assoc o :modes (str/split (second as) #",")))
                   "--show" (recur (drop 2 as) (assoc o :show (parse-long (second as))))
-                  (do (println "usage: scripts/fuzz-frames [-n N] [-s SEED] [--modes a,b] [--show K]") (System/exit 2))))))
+                  "--leaves" (recur (drop 2 as) (assoc o :leaf (keyword (second as))))
+                  (do (println "usage: scripts/fuzz-frames [-n N] [-s SEED] [--modes a,b] [--show K] [--leaves throw|break]") (System/exit 2))))))
 
 (def repo (str (fs/canonicalize ".")))
 (def work (str (fs/create-temp-dir {:prefix "fzframes"})))
@@ -68,7 +70,8 @@
 
 (defn gen-case [c]
   (let [k (rint 2 6)
-        leaf (pick [:throw :break])
+        ;; drawn either way, so a seed builds the same chains with --leaves
+        leaf (let [l (pick [:throw :break])] (or (:leaf opts) l))
         fns (vec (for [i (range k)]
                    (let [a (rint 1 100)
                          nl (rint 0 3)

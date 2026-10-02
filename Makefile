@@ -394,7 +394,7 @@ $(B)/libsamplelib.$(SOEXT): $(T)/samplelib.f90 $(B)/samplelib_shims.f90 | $(B) $
 # order, as before.
 TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(B)/libsamplelib.$(SOEXT) packages examples/embed/heat
 TEST_CHECKS = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-tree check-banner check-torture check-threads \
-	check-autocompile check-break check-libraries check-oracle check-oracle-gc check-pure check-static check-costs check-fuzz
+	check-autocompile check-break check-libraries check-oracle check-oracle-gc check-pure check-static check-costs check-fuzz check-frames
 .PHONY: test $(TEST_CHECKS)
 test: $(TEST_CHECKS)
 $(TEST_CHECKS): $(TEST_DEPS)
@@ -503,6 +503,9 @@ check-pure:
 check-fuzz:
 	@echo "--- the fuzzer (PLAN 26.9): what it found, 300 generated programs and 4 calls of each spec'd function, each through clj and clotran's flat, tree and compiled modes ---"
 	scripts/fuzz -f test/clj/fuzz-regressions.edn > $(B)/fuzz.out 2>&1 && scripts/fuzz -n 300 -s 1 >> $(B)/fuzz.out 2>&1 && scripts/fuzz --fns 4 -s 1 >> $(B)/fuzz.out 2>&1; s=$$?; cat $(B)/fuzz.out; exit $$s
+check-frames:
+	@echo "--- frames (PLAN 29): names, locals and lines of breaks and traces, generated, against clj and the generator, through a reload and a recompile; compiled breaks wait for the debug build ---"
+	scripts/fuzz-frames -n 40 -s 1 --modes flat,tree > $(B)/frames.out 2>&1 && scripts/fuzz-frames -n 40 -s 1 --modes compiled --leaves throw >> $(B)/frames.out 2>&1; s=$$?; cat $(B)/frames.out; exit $$s
 check-costs:
 	@echo "--- the cost model: objects allocated per element, against test/costs.edn (PLAN step 26) ---"
 	scripts/cost-model > $(B)/costs.out 2>&1; s=$$?; cat $(B)/costs.out; exit $$s

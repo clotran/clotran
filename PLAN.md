@@ -2772,8 +2772,8 @@ done when its fuzzer is green and its seeded run is in `make test`.
 |---|---|---|---|
 | evaluation: let, loop, closures, try, seqs | scripts/fuzz | clj, 3 modes | green, in make test |
 | core functions, by spec | scripts/fuzz --fns | clj, :ret | green, in make test |
-| frames: breaks and traces | scripts/fuzz-frames | clj, the generator, 3 modes | fixing its findings |
-| frames: file and line | scripts/fuzz-frames | clj's trace elements, the generator | to add: every frame's file:line, and after a reload or a recompile with the lines shifted, the new lines (James, 2026-10-02) |
+| frames: breaks and traces | scripts/fuzz-frames | clj, the generator, 3 modes | green in flat and tree, and compiled traces, in make test (check-frames); compiled BREAKS show no frames until the debug build (step 10's decision) exists |
+| frames: file and line | scripts/fuzz-frames | clj's trace elements, the generator | green, same scope (James, 2026-10-02). Found: a trace element gave the line its frame was called FROM; compiled frames had no lines, and install read each fn from a string, at line 1 |
 | the package door | scripts/fuzz-door | model/boundary.lisp | green |
 | data-structure costs | scripts/bigo | clj's bounds, model/ | green (measures, does not generate) |
 | the reader | -- | clj: read-string of printed values | |
