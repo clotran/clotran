@@ -16,10 +16,12 @@
 ;; under this checkout's build/, not the shared temp directory: make
 ;; crosscheck runs two checkouts at once
 (def work (fs/file repo "build" "pure-check"))
-(def src "test/clj/pure_sample.cljf")
-(def ns-name "pure-sample")
+;;   scripts/pure-check [SRC CASES.edn]   another namespace and its cases
+;;                                       (scripts/fuzz-pure), a vector of calls
+(def src (or (first *command-line-args*) "test/clj/pure_sample.cljf"))
+(def ns-name (str (second (read-string (slurp src)))))
 
-(def cases
+(def sample-cases
   '[(total (double-array [1.5 2.5 3.0]))
     (total (long-array [1 2 3]))
     (total (double-array []))
@@ -109,6 +111,8 @@
     (bump (->Tally 9223372036854775807 0.0) 1.0)
     (lerp 1.0 3.0) (lerp 1 3) (lerp 0.0 10.0 0.25)
     (add-down 10) (add-down 100 5)])
+
+(def cases (if-let [c (second *command-line-args*)] (read-string (slurp c)) sample-cases))
 
 (defn arg-type [a]
   (cond (int? a) :long (double? a) :double (string? a) :string

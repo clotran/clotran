@@ -24,7 +24,11 @@
 ;;                                     are analysed (scripts/fuzz-spec), repeatable
 ;;   -m torture                        a fourth mode: flat, core loaded from
 ;;                                     source, the collector run every 97
-;;                                     allocations (as check-oracle-gc)
+;;                                     allocations (as check-oracle-gc);
+;;                                     torture-N every N allocations instead
+;;   -m noimage                        flat with core loaded from source, not
+;;                                     the heap image: what the image holds
+;;                                     must be what loading makes
 ;;
 ;; Exit 1 on any difference.
 (require '[clojure.spec.alpha :as s]
@@ -54,6 +58,7 @@
       "--shrink" (recur (rest a) (assoc o :shrink true))
       "-f" (recur (drop 2 a) (assoc o :file (second a)))
       "--timeout" (recur (drop 2 a) (assoc o :timeout (parse-long (second a))))
+      "--keep" (recur (rest a) (assoc o :keep true))
       "--probe-timeout" (recur (drop 2 a) (assoc o :probe-timeout (parse-long (second a))))
       "-r" (recur (drop 2 a) (update o :requires (fnil conj []) (second a)))
       "--fns" (recur (drop 2 a) (assoc o :fns (parse-long (second a))))
@@ -382,6 +387,8 @@
   [v]
   (if (fuzz-specs/fnref? v) (.-form v) (list 'quote v)))
 
+(def spec-bugs (atom #{}))
+
 (defn fn-roses
   "k rose trees of calls to each spec'd function: [fn-symbol tree], the
   tree's root a form."
@@ -391,9 +398,17 @@
       (if (= i k)
         (recur r (rest fs) 0 acc)
         (let [[r1 r2] (random/split r)
-              args-gen (s/gen (:args (s/get-spec fsym)))
+              args-spec (:args (s/get-spec fsym))
+              args-gen (s/gen args-spec)
+              t0 (g/call-gen args-gen r1 (mod (* 13 i) 30))
+              ;; THE SPECS' OWN CHECK: what an :args generator makes must
+              ;; conform to that :args -- a with-gen that strays is a bug
+              ;; in fuzz_specs.clj, not in clotran
+              _ (when-not (s/valid? args-spec (vec (rose/root t0)))
+                  (swap! spec-bugs conj fsym)
+                  (println "SPEC-GEN:" fsym "generated" (pr-str (rose/root t0)) "which its :args refuses"))
               tree (rose/fmap (fn [args] (cons (if (= "clojure.core" (namespace fsym)) (symbol (name fsym)) fsym) (map arg-form args)))
-                              (g/call-gen args-gen r1 (mod (* 13 i) 30)))]
+                              t0)]
           (recur r2 fs (inc i) (conj acc [fsym tree]))))
       acc)))
 
@@ -493,8 +508,8 @@
       "flat" (let [f (str work "/cases.cljf")] (spit f (case-script forms)) (outputs (:out (sh {} bin core f))))
       "tree" (let [f (str work "/cases.cljf")] (spit f (case-script forms))
                (outputs (:out (sh {"CLOTRAN_FLAT" "0"} bin core f))))
-      "torture" (let [f (str work "/cases.cljf")] (spit f (case-script forms))
-                  (outputs (:out (sh {"CLOTRAN_GC_EVERY" "97" "CLOTRAN_IMAGE" "0"} bin core f))))
+      "noimage" (let [f (str work "/cases.cljf")] (spit f (case-script forms))
+                  (outputs (:out (sh {"CLOTRAN_IMAGE" "0"} bin core f))))
       "compiled"
       ;; each case a fn of a namespace, compiled; a fn the generator
       ;; declines stays interpreted, and the run says how many compiled
@@ -515,7 +530,15 @@
         (let [r (sh {"CLOTRAN_IMAGE" "0"} bin core drv)]
           (when-let [[_ k] (re-find #"FZCOMPILED (\d+)" (:out r))]
             (println (str "compiled mode: " k " of " (count forms) " cases compiled")))
-          (outputs (:out r)))))))
+          (outputs (:out r))))
+      ;; torture, or torture-N: the collector every N allocations
+      (if (str/starts-with? mode "torture")
+        (let [f (str work "/cases.cljf")
+              every (or (second (re-find #"^torture-(\d+)$" mode)) "97")]
+          (spit f (case-script forms))
+          (outputs (:out (sh {"CLOTRAN_GC_EVERY" every "CLOTRAN_IMAGE" "0"} bin core f))))
+        (throw (ex-info (str "no mode " mode) {}))))))
+
 
 (defn- dbl [s] (when (and s (re-matches #"-?\d+\.\d+(E-?\d+)?" s)) (parse-double s)))
 
@@ -587,6 +610,10 @@
                          (count (filter #(= "!error" %) (vals want)))))
       _ (when fn-pairs
           (println (count fuzz-specs/fuzz-fns) "functions spec'd")
+          ;; every spec'd function says what it returns, or its answers go unchecked
+          (doseq [fsym fuzz-specs/fuzz-fns :when (nil? (:ret (s/get-spec fsym)))]
+            (swap! spec-bugs conj fsym)
+            (println "SPEC:" fsym "has no :ret"))
           (doseq [[fsym i w] (ret-check fsyms want)]
             (println "SPEC:" fsym "answered" w "in clj, which its :ret refuses --" (pr-str (nth forms i))))
           ;; an :args spec clj throws on often is too loose: it tests errors, not answers
@@ -622,6 +649,7 @@
           (println "  shrunk: " (pr-str small))
           (println "    clj:    " (get (run-clj [small]) 0))
           (println "    clotran:" (get (run-clotran m [small]) 0))))))
-  (fs/delete-tree work)
+  (if (:keep opts) (println "kept:" work) (fs/delete-tree work))
   (when (seq @hangs) (println "TIMEOUTS AND CRASHES:" (count @hangs) "-- cases clj answers and clotran does not, in time or at all"))
-  (System/exit (if (or (seq @bad) (seq @hangs)) 1 0)))
+  (when (seq @spec-bugs) (println "SPEC BUGS:" (count @spec-bugs) "functions' specs are wrong"))
+  (System/exit (if (or (seq @bad) (seq @hangs) (seq @spec-bugs)) 1 0)))
