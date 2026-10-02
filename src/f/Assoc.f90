@@ -43,7 +43,7 @@ module Assoc
   procedure(cmp_i), pointer, save :: comparer => null()
   ! the most entries in a leaf, and children under an internal node
   integer, parameter :: ST_MAX = 32
-  public :: gca_find_key
+  public :: gca_find_key, gca_leaf_of
   public :: gca_set_comparer, gca_sorted_empty, gca_is_sorted, gca_comparator, &
        gca_key_at, gca_val_at, gca_sorted_from
 
@@ -532,6 +532,32 @@ contains
        x = gc_vec_get(node, 2 * i)
     end if
   end function st_at
+
+  ! The leaf holding position pos (1-based) of a sorted map, and the
+  ! position of its first entry: what a seq over the map keeps, so that
+  ! a step within a leaf is O(1) and a new leaf O(log n) once per leaf --
+  ! a whole walk O(n), as clj's PersistentTreeMap.Seq, where reading
+  ! each position from the root was O(n log n).
+  subroutine gca_leaf_of(m, pos, leaf, start)
+    type(gc_value), intent(in) :: m
+    integer, intent(in) :: pos
+    type(gc_value), intent(out) :: leaf
+    integer, intent(out) :: start
+    integer :: h, i, j
+    leaf = gc_nil()
+    start = 0
+    if (pos < 1 .or. pos > gc_i1(m)) return
+    i = pos
+    leaf = gc_slot(m, 1)
+    do h = st_height(m), 1, -1
+       do j = 1, gc_vec_len(leaf) / 3
+          if (i <= st_cnt(leaf, j)) exit
+          i = i - st_cnt(leaf, j)
+       end do
+       leaf = gc_vec_get(leaf, 3 * j - 2)
+    end do
+    start = pos - i + 1
+  end subroutine gca_leaf_of
 
   ! An internal node from `n` triples of children (child, its height
   ! below), counted and keyed from the children themselves.

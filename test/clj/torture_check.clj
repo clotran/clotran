@@ -18,10 +18,21 @@
 ;; read around it, and (def p #"a") read as nothing (2026-09-29: the
 ;; oracle's one-run-in-a-hundred flake, PLAN step 20)
 (def rx1 [#"a(b)" {:k #"c+"} (list #"d")])
+;; the cursors over maps and sets, and the vector's pop and view, each
+;; allocate while holding a node, a leaf or a frame of the walk (PLAN
+;; step 28, 2026-10-01): a collection there must not free it
+(def hm (zipmap (range 60) (range 60)))
+(def sm (into (sorted-map) (map vector (range 70) (range 70))))
+(def walks [(sort (map key (seq hm))) (= (keys hm) (map key (seq hm))) (take 3 (rseq sm))
+            (subseq sm >= 40 < 43) (reduce + (map val sm)) (sort (seq (set (range 0 90 3))))
+            (pop (vec (range 70))) (vec (subvec (vec (range 50)) 10 14)) (vec (rseq (vec (range 5))))
+            (nth "héllo wörld" 7) (subs "héllo wörld ß" 3 9)])
 
 (if (and (= r1 '[{:a 1, :b [2 3]} (f {:c 4}) #{5} {:d {:e 6}}])
          (= r2 {:x [1 {:y 2}]})
          (= (map str [(first rx1) (:k (second rx1)) (first (nth rx1 2))]) ["a(b)" "c+" "d"])
-         (= (re-find (first rx1) "xab") ["ab" "b"]))
+         (= (re-find (first rx1) "xab") ["ab" "b"])
+         (= walks [(range 60) true '([69 69] [68 68] [67 67]) '([40 40] [41 41] [42 42]) 2415 (range 0 90 3)
+                   (vec (range 69)) [10 11 12 13] [4 3 2 1 0] \ö "lo wör"]))
   (println "TORTURE CHECK PASSED")
-  (println "FAIL - read-string under torture:" (pr-str r1) (pr-str r2)))
+  (println "FAIL - under torture:" (pr-str r1) (pr-str r2) (pr-str walks)))

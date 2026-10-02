@@ -288,51 +288,24 @@
   ! position `from` (1-based) forward or backward, as a seq; nil when
   ! there are none.
   function sorted_entries(coll, from, ascending, roots) result(out)
-    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: coll
     integer, intent(in) :: from
     logical, intent(in) :: ascending
     type(gc_value), intent(in) :: roots(:)
-    type(gc_value) :: out, m, acc, e
-    integer :: base, i, n, step, last
-    logical :: is_set
-    vst => gc_my_stack()
+    type(gc_value) :: out, m
+    integer :: n
+    ! a CURSOR from position `from` (cursor_seq), O(log n) to make and
+    ! O(1) a step: it built the list of every entry from there first
     out = gc_nil()
-    is_set = (gc_kind(strip_meta(coll)) == OBJ_SET)
     m = sorted_backing(coll)
     if (m%tag == GCT_NIL) return
     n = gca_count(m)
     if (from < 1 .or. from > n) return
     if (ascending) then
-       step = 1
-       last = n
+       out = cursor_seq(strip_meta(coll), from - 1, 3, gc_nil(), roots)
     else
-       step = -1
-       last = 1
+       out = cursor_seq(strip_meta(coll), n - from, 4, gc_nil(), roots)
     end if
-    base = vs_enter(vst, 3)
-    call vs_set(vst, base + 1, m)
-    acc = gcv_empty([roots, vs_get(vst, base + 1)])
-    call vs_set(vst, base + 2, acc)
-    do i = from, last, step
-       if (is_set) then
-          e = gca_key_at(vs_get(vst, base + 1), i)
-       else
-          e = gcv_build(2, [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
-          call vs_set(vst, base + 3, e)
-          e = gcv_put(vs_get(vst, base + 3), 0, gca_key_at(vs_get(vst, base + 1), i), &
-               [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
-          e = gcv_put(vs_get(vst, base + 3), 1, gca_val_at(vs_get(vst, base + 1), i), &
-               [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
-          call mark_entry(e)
-       end if
-       call vs_set(vst, base + 3, e)
-       acc = gcv_conj(vs_get(vst, base + 2), vs_get(vst, base + 3), &
-            [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
-       call vs_set(vst, base + 2, acc)
-    end do
-    out = to_seq(vs_get(vst, base + 2), [roots, vs_get(vst, base + 2)])
-    call vs_leave(vst, base)
   end function sorted_entries
 
   ! (rseq coll): a vector or a sorted collection, last first.

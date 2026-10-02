@@ -32,6 +32,7 @@ module PersistentHashMap
 
   public :: gch_empty, gch_count, gch_is, gch_get, gch_contains, gch_assoc, gch_dissoc, gch_find_key
   public :: gch_entries
+  public :: gch_cursor_first, gch_cursor_next, gch_cursor_key, gch_cursor_val
 
 contains
 
@@ -382,6 +383,129 @@ contains
        end select
     end do
   end subroutine walk
+
+  ! --- the cursor (model/hashmap.lisp) ---------------------------------
+  !
+  ! A seq over the trie, in the order gch_entries walks it, made one
+  ! entry at a time where seq_snapshot copied every entry first: (first
+  ! m) was O(n). A cursor is a FRAME, a vec run [node, slot, parent]:
+  ! node a trie node with the entry in its slot, or a collision bucket
+  ! (OBJ_MAP) with the slot its entry's position; parent the frame of
+  ! the slot that led here, nil at the root. Frames are never changed,
+  ! only made, so a seq that has moved on shares its parents. Each node
+  ! is entered once and left once in a walk: next is O(1) amortized and
+  ! first O(log32 n), as clj's NodeSeq.
+
+  function mk_frame(node, slot, parent, roots) result(f)
+    type(gc_value), intent(in) :: node, parent
+    integer, intent(in) :: slot
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: f
+    f = gc_vec(3, [roots, node, parent])
+    call gc_vec_set(f, 1, node)
+    call gc_vec_set(f, 2, gc_int(int(slot, gc_ip)))
+    call gc_vec_set(f, 3, parent)
+  end function mk_frame
+
+  integer function frame_slot(f)
+    type(gc_value), intent(in) :: f
+    type(gc_value) :: s
+    s = gc_vec_get(f, 2)
+    frame_slot = int(s%ival)
+  end function frame_slot
+
+  ! the first entry of node at slot `from` or after, under parent; nil
+  ! when the rest of the node holds none
+  recursive function scan(node, from, parent, roots) result(f)
+    type(gc_value), intent(in) :: node, parent
+    integer, intent(in) :: from
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: f, slot, here
+    integer :: i, base
+    f = gc_nil()
+    base = vs_enter(3)
+    call vs_set(base + 1, node)
+    call vs_set(base + 2, parent)
+    do i = from, HBRANCH
+       slot = gc_vec_get(vs_get(base + 1), i)
+       select case (gc_kind(slot))
+       case (OBJ_HAMT_LEAF)
+          f = mk_frame(vs_get(base + 1), i, vs_get(base + 2), roots)
+          exit
+       case (OBJ_MAP)
+          if (gcm_count(slot) > 0) then
+             here = mk_frame(vs_get(base + 1), i, vs_get(base + 2), roots)
+             call vs_set(base + 3, here)
+             f = mk_frame(gc_vec_get(gc_vec_get(vs_get(base + 3), 1), i), 1, vs_get(base + 3), roots)
+             exit
+          end if
+       case default
+          if (slot%tag == GCT_VEC) then
+             here = mk_frame(vs_get(base + 1), i, vs_get(base + 2), roots)
+             call vs_set(base + 3, here)
+             f = scan(gc_vec_get(gc_vec_get(vs_get(base + 3), 1), i), 1, vs_get(base + 3), roots)
+             if (f%tag /= GCT_NIL) exit
+          end if
+       end select
+    end do
+    call vs_leave(base)
+  end function scan
+
+  ! the cursor at the trie's first entry, nil when it has none
+  function gch_cursor_first(t, roots) result(f)
+    type(gc_value), intent(in) :: t
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: f
+    f = gc_nil()
+    if (gch_is(t)) f = scan(gc_slot(t, 1), 1, gc_nil(), [roots, t])
+  end function gch_cursor_first
+
+  ! the cursor at the entry after f's, nil after the last
+  recursive function gch_cursor_next(f0, roots) result(f)
+    type(gc_value), intent(in) :: f0
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: f, node, par
+    integer :: base
+    f = gc_nil()
+    base = vs_enter(1)
+    call vs_set(base + 1, f0)
+    node = gc_vec_get(f0, 1)
+    if (gc_kind(node) == OBJ_MAP) then
+       ! a collision bucket: its next entry, else on past its slot
+       if (frame_slot(f0) < gcm_count(node)) then
+          f = mk_frame(node, frame_slot(f0) + 1, gc_vec_get(f0, 3), roots)
+       else
+          f = gch_cursor_next(gc_vec_get(vs_get(base + 1), 3), roots)
+       end if
+    else
+       f = scan(node, frame_slot(f0) + 1, gc_vec_get(f0, 3), roots)
+       par = gc_vec_get(vs_get(base + 1), 3)
+       if (f%tag == GCT_NIL .and. par%tag /= GCT_NIL) f = gch_cursor_next(par, roots)
+    end if
+    call vs_leave(base)
+  end function gch_cursor_next
+
+  function gch_cursor_key(f) result(k)
+    type(gc_value), intent(in) :: f
+    type(gc_value) :: k, node
+    node = gc_vec_get(f, 1)
+    if (gc_kind(node) == OBJ_MAP) then
+       k = gcm_key_at(node, frame_slot(f))
+    else
+       k = gc_slot(gc_vec_get(node, frame_slot(f)), 1)
+    end if
+  end function gch_cursor_key
+
+  function gch_cursor_val(f) result(v)
+    type(gc_value), intent(in) :: f
+    type(gc_value) :: v, node
+    node = gc_vec_get(f, 1)
+    if (gc_kind(node) == OBJ_MAP) then
+       v = gcm_val_at(node, frame_slot(f))
+    else
+       v = gc_slot(gc_vec_get(node, frame_slot(f)), 2)
+    end if
+  end function gch_cursor_val
 
   ! --- helpers ---
 

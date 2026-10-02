@@ -52,6 +52,7 @@ module Eval
   use PersistentVector
   use Assoc
   use PersistentArrayMap, only: gcm_is, gcm_dissoc
+  use PersistentHashMap, only: gch_is, gch_cursor_first, gch_cursor_next, gch_cursor_key, gch_cursor_val
   use Env
   use Namespace
   use Printer
@@ -7084,6 +7085,10 @@ contains
           end do
           return
        case (OBJ_SEQ)
+          if (gc_i2(cur) >= 3) then
+             call cursor_hash(cur, h, n)
+             return
+          end if
           do i = gc_i1(cur), seq_len(gc_slot(cur, 1)) - 1
              h = m3_ordered_step(h, gc_hash(seqv_elem(cur, i, [cur]))); n = n + 1
           end do
@@ -14622,10 +14627,15 @@ contains
        h = m3_mix_coll(h, n)
     case (OBJ_SEQ)
        ! over the view's own elements: slot 1 plus the offset in i1
-       n = sq_count(v, [v])
-       do i = 0, n - 1
-          h = m3_ordered_step(h, gc_hash(seqv_elem(v, gc_i1(v) + i, [v])))
-       end do
+       if (gc_i2(v) >= 3) then
+          n = 0
+          call cursor_hash(v, h, n)
+       else
+          n = sq_count(v, [v])
+          do i = 0, n - 1
+             h = m3_ordered_step(h, gc_hash(seqv_elem(v, gc_i1(v) + i, [v])))
+          end do
+       end if
        h = m3_mix_coll(h, n)
     case (OBJ_CHUNKSEQ)
        if (seq_realised_p(v)) then
@@ -15643,9 +15653,13 @@ contains
     ! element, so walking one was quadratic -- a third of startup.
     ! (a string reads its characters in place, O(1) each -- GC.f90
     ! str_index -- so its seq is an index into it, as clj's StringSeq)
+    ! A map or a set: a CURSOR over it (cursor_elem), the first entry
+    ! found and no other -- a snapshot of every entry made (first m)
+    ! O(n), as clj's NodeSeq and PersistentTreeMap.Seq are not
     if (gca_is(v) .or. gc_kind(v) == OBJ_SET) then
-       out = seq_snapshot(vs_get(vst, base + 1), roots)
-       call vs_set(vst, base + 1, out)
+       out = map_cursor_seq(vs_get(vst, base + 1), roots)
+       call vs_leave(vst, base)
+       return
     end if
     out = gc_obj(OBJ_SEQ, [vs_get(vst, base + 1)], roots)
     call gc_set_i1(out, 0)
@@ -15747,12 +15761,177 @@ contains
     integer, intent(in) :: i
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out
-    if (gc_i2(s) == 2) then
+    if (gc_i2(s) >= 3) then
+       ! a cursor reads only where it stands: i is its position
+       out = cursor_elem(s, roots)
+    else if (gc_i2(s) == 2) then
        out = seq_elem(gc_slot(s, 1), seq_len(gc_slot(s, 1)) - 1 - i, roots)
     else
        out = seq_elem(gc_slot(s, 1), i, roots)
     end if
   end function seqv_elem
+
+  ! ---- seqs over maps and sets: cursors (model/hashmap.lisp) ---------
+  !
+  ! An OBJ_SEQ with i2 >= 3 stands on one entry of the map or set in
+  ! slot 1, which seq_len counts; i1 is how far along it is, so the
+  ! entries left are seq_len - i1, as for every OBJ_SEQ. By kind:
+  !   3, 4  a sorted map or set, ascending or descending: the entry at
+  !         position i1+1, or count-i1, with slot 2 the B+-tree leaf
+  !         holding it and slot 3 that leaf's first position
+  !   5     a hash map or set: slot 2 a trie cursor (gch_cursor_*)
+  !   6     an array map or set of one: the entry at position i1+1
+  ! Each reads its entry where it stands and steps to the next in O(1)
+  ! amortized, as clj's PersistentTreeMap.Seq and NodeSeq do.
+
+  function seq_map(src) result(m)
+    type(gc_value), intent(in) :: src
+    type(gc_value) :: m
+    m = strip_meta(src)
+    if (gc_kind(m) == OBJ_SET) m = gc_slot(m, 1)
+  end function seq_map
+
+  ! the cursor seq of kind k over src, i1 along; the sorted leaf or the
+  ! trie cursor found here, so that reading it is O(1)
+  recursive function cursor_seq(src, i1, k, prev, roots) result(out)
+    type(gc_stack), pointer :: vst
+    type(gc_value), intent(in) :: src, prev
+    integer, intent(in) :: i1, k
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, m, leaf, cur
+    integer :: base, pos, start, n
+    vst => gc_my_stack()
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, src)
+    call vs_set(vst, base + 2, prev)
+    m = seq_map(src)
+    n = gca_count(m)
+    leaf = gc_nil()
+    start = 0
+    select case (k)
+    case (3, 4)
+       if (k == 3) then
+          pos = i1 + 1
+       else
+          pos = n - i1
+       end if
+       ! the leaf already at hand when pos is in it, else found
+       if (prev%tag /= GCT_NIL) then
+          if (gc_kind(prev) == OBJ_SEQ) then
+             cur = gc_slot(prev, 3)
+             start = int(cur%ival)
+             leaf = gc_slot(prev, 2)
+             if (leaf%tag /= GCT_NIL) then
+                if (pos < start .or. pos >= start + gc_vec_len(leaf) / 2) leaf = gc_nil()
+             end if
+          end if
+       end if
+       if (leaf%tag == GCT_NIL .and. pos >= 1 .and. pos <= n) call gca_leaf_of(m, pos, leaf, start)
+    case (5)
+       if (prev%tag == GCT_NIL) then
+          leaf = gch_cursor_first(m, [roots, vs_get(vst, base + 1)])
+       else if (i1 < n) then
+          leaf = gch_cursor_next(gc_slot(prev, 2), [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       end if
+    end select
+    call vs_set(vst, base + 3, leaf)
+    out = gc_obj(OBJ_SEQ, [vs_get(vst, base + 1), vs_get(vst, base + 3), gc_int(int(start, gc_ip))], &
+         [roots, vs_get(vst, base + 1), vs_get(vst, base + 3)])
+    call gc_set_i1(out, i1)
+    call gc_set_i2(out, k)
+    call vs_leave(vst, base)
+  end function cursor_seq
+
+  ! the seq of a map or a set, nil when empty
+  function map_cursor_seq(src, roots) result(out)
+    type(gc_value), intent(in) :: src
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, m
+    out = gc_nil()
+    m = seq_map(src)
+    if (gca_count(m) == 0) return
+    if (gca_is_sorted(m)) then
+       out = cursor_seq(src, 0, 3, gc_nil(), roots)
+    else if (gch_is(m)) then
+       out = cursor_seq(src, 0, 5, gc_nil(), roots)
+    else
+       out = cursor_seq(src, 0, 6, gc_nil(), roots)
+    end if
+  end function map_cursor_seq
+
+  ! one step along
+  function cursor_rest(s, roots) result(out)
+    type(gc_value), intent(in) :: s
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out
+    out = cursor_seq(gc_slot(s, 1), gc_i1(s) + 1, gc_i2(s), s, roots)
+  end function cursor_rest
+
+  ! the entry where s stands -- a [key value] entry for a map, the
+  ! member for a set
+  function cursor_elem(s, roots) result(out)
+    type(gc_stack), pointer :: vst
+    type(gc_value), intent(in) :: s
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, m, k, v, leaf, st
+    integer :: pos, base, n
+    vst => gc_my_stack()
+    out = gc_nil()
+    m = seq_map(gc_slot(s, 1))
+    n = gca_count(m)
+    if (gc_i1(s) >= n) return
+    select case (gc_i2(s))
+    case (3, 4)
+       if (gc_i2(s) == 3) then
+          pos = gc_i1(s) + 1
+       else
+          pos = n - gc_i1(s)
+       end if
+       leaf = gc_slot(s, 2)
+       st = gc_slot(s, 3)
+       pos = pos - int(st%ival) + 1
+       k = gc_vec_get(leaf, 2 * pos - 1)
+       v = gc_vec_get(leaf, 2 * pos)
+    case (5)
+       k = gch_cursor_key(gc_slot(s, 2))
+       v = gch_cursor_val(gc_slot(s, 2))
+    case default
+       k = gca_key_at(m, gc_i1(s) + 1)
+       v = gca_val_at(m, gc_i1(s) + 1)
+    end select
+    if (gc_kind(strip_meta(gc_slot(s, 1))) == OBJ_SET) then
+       out = k
+       return
+    end if
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, k)
+    call vs_set(vst, base + 2, v)
+    out = gcv_build(2, [roots, s, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 3, out)
+    out = gcv_put(vs_get(vst, base + 3), 0, vs_get(vst, base + 1), [roots, s, vs_get(vst, base + 3)])
+    out = gcv_put(vs_get(vst, base + 3), 1, vs_get(vst, base + 2), [roots, s, vs_get(vst, base + 3)])
+    call mark_entry(out)
+    call vs_leave(vst, base)
+  end function cursor_elem
+
+  ! hash's fold over what a cursor seq has left
+  subroutine cursor_hash(s0, h, n)
+    type(gc_stack), pointer :: vst
+    type(gc_value), intent(in) :: s0
+    integer, intent(inout) :: h, n
+    type(gc_value) :: s
+    integer :: base
+    vst => gc_my_stack()
+    base = vs_enter(vst, 1)
+    call vs_set(vst, base + 1, s0)
+    do while (gc_i1(vs_get(vst, base + 1)) < seq_len(gc_slot(vs_get(vst, base + 1), 1)))
+       h = m3_ordered_step(h, gc_hash(cursor_elem(vs_get(vst, base + 1), [vs_get(vst, base + 1)])))
+       n = n + 1
+       s = cursor_rest(vs_get(vst, base + 1), [vs_get(vst, base + 1)])
+       call vs_set(vst, base + 1, s)
+    end do
+    call vs_leave(vst, base)
+  end subroutine cursor_hash
 
   ! The i-th element of an indexable value (0-based). A map yields
   ! its entries as two-element vectors, which is what makes
@@ -15850,6 +16029,8 @@ contains
        out = gcl_rest(vs_get(vst, base + 1), roots)
     else if (gc_kind(vs_get(vst, base + 1)) == OBJ_LAZY) then
        out = gc_slot(vs_get(vst, base + 1), 3)
+    else if (gc_kind(vs_get(vst, base + 1)) == OBJ_SEQ .and. gc_i2(vs_get(vst, base + 1)) >= 3) then
+       out = cursor_rest(vs_get(vst, base + 1), roots)
     else if (gc_kind(vs_get(vst, base + 1)) == OBJ_SEQ) then
        out = gc_obj(OBJ_SEQ, [gc_slot(vs_get(vst, base + 1), 1)], &
             [roots, vs_get(vst, base + 1)])

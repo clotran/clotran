@@ -2931,3 +2931,17 @@
   [(count u) (count a) (nth u 0) (nth u 1) (nth u 12) (nth u 33) (nth u 86) (subs u 5) (subs u 10 20) (subs u 13 14) (subs u 50) (subs u 32 33) (subs u 31 65) (subs a 63 65)
    (.length u) (.charAt u 13) (.substring u 2 9) (get u 13) (get u 999) (contains? u 13) (contains? u 87) (first u) (rest "abc") (count (seq u)) (nth (seq u) 40)
    (reverse "aéß") (apply str (seq u)) (frequencies "héé") (subs "" 0 0) (last u) (nth a 199) (subs a 199) (seq "") (vec "éü")])
+
+;; seqs over maps and sets are cursors (Eval.f90 cursor_seq): first is O(log n)
+;; where a snapshot of every entry made it O(n); keys, vals and seq walk one order
+(let [hm (zipmap (range 1000) (map #(* 2 %) (range 1000))) hs (set (range 0 3000 3)) sm (into (sorted-map) (map vector (range 500) (range 500))) ss (into (sorted-set) (range 0 1000 7)) am {:a 1 :b 2 :c 3}]
+  [(sort (map key (seq hm))) (= (keys hm) (map key (seq hm))) (= (vals hm) (map val (seq hm))) (count (seq hm)) (count (rest (seq hm)))
+      (sort (seq hs)) (count (seq hs)) (= (seq hs) (seq hs))
+      (first sm) (take 5 sm) (take 3 (rseq sm)) (count (seq sm)) (last sm) (nth (seq sm) 250) (subseq sm >= 100 < 105) (rsubseq sm > 100 <= 105)
+      (first ss) (take 4 (rseq ss)) (subseq ss > 500) (count (rsubseq ss < 500)) (reduce + (map val sm)) (reduce + ss)
+      (seq am) (first am) (rest am) (count (seq am)) (seq {}) (seq #{}) (seq (sorted-map)) (rseq (sorted-map))
+      (= (seq sm) (map vector (range 500) (range 500))) (hash (seq sm)) (hash (seq ss)) (hash (seq am))
+      (map-entry? (first sm)) (map-entry? (first hm)) (vec (seq (sorted-map :b 2 :a 1))) (into [] (rseq (sorted-set 3 1 2)))
+      (seq (dissoc sm 0)) (count (seq (into (sorted-map) (map vector (range 100) (range 100)))))
+      (let [m (reduce dissoc hm (range 0 1000 2))] [(count (seq m)) (sort (keys m)) (= (keys m) (map key (seq m)))])
+      (sort-by str (seq (hash-map nil 1 false 2 "a" 3)))])
