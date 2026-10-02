@@ -2956,3 +2956,10 @@
    (count s2) (take 10 s2) (take 10 (rseq s2)) (= (seq s2) (sort (remove (set (take-nth 3 xs)) xs)))
    (let [m3 (reduce dissoc m xs)] [(count m3) (seq m3) (assoc m3 1 2)])
    (reduce + (vals (reduce (fn [a k] (if (even? k) (dissoc a k) (assoc a (- k) k))) m xs)))])
+
+;; a ratio less the smallest long is the exact ratio here; clj's host
+;; negates the long first and overflows
+(expect-diff "DEVIATIONS 72: a ratio less the smallest long is exact")
+[(- -7/2 -9223372036854775808) (- 1/2 -9223372036854775808)]
+;; and two longs overflow in both, as the docstring says
+(try (- 0 -9223372036854775808) (catch clotran.host.arithmetic_exception e :overflow))

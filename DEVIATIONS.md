@@ -2041,3 +2041,20 @@ Fortran's conventions.
 
 **Removal**: none intended; a 32-bit integer kind would have to exist
 first, and arithmetic on it widen as Numbers does.
+
+## 72. A ratio less the smallest long is exact
+
+In clj, `(- -7/2 Long/MIN_VALUE)` throws "long overflow", as does
+`(- 1/2 Long/MIN_VALUE)`, though the answer -- `18446744073709551609/2`
+-- is a ratio, nowhere near a long. The throw is how the host computes
+it: `Numbers.minus` is `x + (-y)`, and negating the smallest long
+overflows before the ratio arithmetic starts (`-'`, which negates
+with promotion, answers the ratio). `-`'s docstring promises a throw
+when longs overflow; this result is not a long, so the throw is clj's
+host, not the language, and ClojureScript has no ratios to say
+otherwise. clotran subtracts exactly. Two longs still throw, as the
+docstring says: `(- 0 Long/MIN_VALUE)` overflows in both. Found by
+`scripts/fuzz --fns`.
+
+**Removal**: none intended -- it would mean overflowing on purpose
+where the exact answer is at hand.
