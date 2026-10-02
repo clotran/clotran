@@ -95,8 +95,9 @@
   Bump it with any change to those entries' arguments -- or, as at 3, when
   what libraries do has changed enough that an old one should be rebuilt
   (3: locals cleared at their last read, arguments taken by the callee;
-  4: a lazy-seq's body compiled, its constants in the enclosing pool)."
-  4)
+  4: a lazy-seq's body compiled, its constants in the enclosing pool;
+  5: each call names its site, clotran_site)."
+  5)
 
 (defn defined-in?
   "Whether Var `v` was last defined by the file `src`, by its :file
@@ -140,8 +141,21 @@
       (not= source-hash (hash (clotran-slurp src)))
       (note (str src " has changed since it was compiled; recompile it"))
       :else
-      (let [built (binding [*ns* (the-ns (symbol ns))]
-                    (mapv #(pool-of (read-string (:form %))) all))
+      (let [;; each fn analysed from the file as it is now, read as load-file
+            ;; reads it, so its call sites carry this file's lines
+            ;; (clotran_site); the printed form, whose positions are
+            ;; a string's, where the two analyse differently
+            here (delay (binding [*ns* (the-ns (symbol ns))] (clotran-read-forms src)))
+            from-file (fn [nm] (some #(when (and (seq? %) (#{'defn 'defn-} (first %)) (= nm (str (second %))))
+                                        (fn-form %))
+                                     @here))
+            built (binding [*ns* (the-ns (symbol ns))]
+                    (mapv (fn [f]
+                            (let [p (when (some #{f} fns) (some-> (from-file (:name f)) pool-of))]
+                              (if (and p (= (:fingerprint p) (:fingerprint f)))
+                                p
+                                (pool-of (read-string (:form f))))))
+                          all))
             stale (keep (fn [[f b]] (when (not= (:fingerprint f) (:fingerprint b)) (:name f)))
                         (map vector all built))]
         (if (seq stale)

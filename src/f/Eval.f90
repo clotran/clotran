@@ -438,7 +438,7 @@ module Eval
   public :: gce_bind_repl_vars, gce_set_command_line_args
   public :: gce_main_bindings, gce_install_compiled, gce_raise_arity_named
   public :: gce_native_begin, gce_native_end
-  public :: gce_analyze, gce_trace
+  public :: gce_analyze, gce_trace, gce_set_site
   public :: gce_ctx_new, gce_ctx_switch, gce_ctx_current, gce_current_fn, gce_new_slots, gce_dot_slots, gce_take_rest
   public :: gce_repl
   public :: gce_set_home, gce_home
@@ -823,6 +823,19 @@ contains
        frame_site = tctx%pending_site
     end if
   end function frame_site
+
+  ! The site of the call about to be made, from the node that makes
+  ! it (compiled code's clotran_site and clotran_dot)
+  subroutine gce_set_site(nd)
+    type(gc_value), intent(in) :: nd
+    type(gc_value) :: p
+    type(eval_ctx), pointer :: tctx
+    tctx => ctx_self()
+    tctx%pending_site = 0
+    if (gc_kind(nd) /= OBJ_AST) return
+    p = gc_slot(nd, 4)
+    if (p%tag == GCT_INT) tctx%pending_site = int(p%ival, kind=4)
+  end subroutine gce_set_site
 
   ! tctx passed, not fetched: a thread-key lookup per call, and every
   ! call makes one of these and a pop_frame
@@ -19749,6 +19762,10 @@ contains
     end do
     call fp_mix_text(h, kind)
     select case (kind)
+    case ("site")
+       ! a call's position: not what the code is, so a library compiled
+       ! before the lines moved still matches; the tree's shape, which
+       ! the fingerprint has, decides where the sites are
     case ("var")
        block
           call gcp_str(v, .true., s=dlt_1)
@@ -19858,6 +19875,12 @@ contains
        end if
     end if
     if (k == N_LOCAL) call fp_mix(h, int(gc_i2(vs_get(vst, b + 1)), gc_ip))
+    ! a call's site, which compiled code names before it calls
+    ! (clotran_site) so the frames show where it is: the node from
+    ! THIS analysis, so a reload or a recompile moves it with the
+    ! source. Every call has one, positioned or not, so the pool's
+    ! layout is the tree's whatever the reader recorded.
+    if (k == N_CALL) call pool_add(pb, "site", vs_get(vst, b + 1), h)
     call vs_leave(vst, b)
   end subroutine pool_walk
 

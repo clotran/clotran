@@ -226,6 +226,10 @@
        integer(c_int), value :: dst, node, fr
        integer(c_int) :: st
      end function clotran_eval_node
+     subroutine clotran_site(h, i) bind(C, name=\"clotran_site\")
+       import :: c_int
+       integer(c_int), value :: h, i
+     end subroutine clotran_site
      subroutine clotran_pool_get(cs, dst, h, i) bind(C, name=\"clotran_pool_get\")
        import :: c_int, c_ptr
        type(c_ptr), value :: cs
@@ -649,6 +653,14 @@ end module clotran_rt_decl
             (map #(str "   " %) slow)
             ["end if"])))
 
+(defn- site
+  "The line naming this call's site before it is made (Eval.f90 pool_walk's
+  :site entries, clotran_site), so a frame of compiled code shows where it
+  is, as an interpreted one does; nothing for a call with no position."
+  [nd st]
+  (when-let [i (get (:pidx st) {:kind :site :value (:node nd)})]
+    [(str "call clotran_site(cf_pool, " (+ (:offset st) i) "_c_int)")]))
+
 (defn- slow-call
   "The GENERIC call, for when the fast path cannot answer: an overflow
   about to happen, or an operand whose tag is not a number. It is the
@@ -670,6 +682,7 @@ end module clotran_rt_decl
                       (str "call clotran_copy(b + " s ", b + " e ")")
                       (box s t e)))
                   blk operands)
+             (site nd st)
              [(str "st = clotran_call_slots(b + " res ", b + " hs ", b + "
                    (dec (first blk)) ", " n "_c_int)")]
              err-return
@@ -1148,7 +1161,7 @@ end module clotran_rt_decl
                           [hc hs st] (if p (let [[t st] (fresh st)] [nil t st]) (gen (first kids) st))
                           fetch (when p
                                   (cond-> [(str "call clotran_pool_get(b + " hs ", cf_pool, "
-                                                (+ (:offset st) (- (get (:pool st) p) 2)) "_c_int)")]
+                                                (+ (:offset st) (get (:pidx st) p)) "_c_int)")]
                                     (= :var (:kind p)) (conj (str "call clotran_deref(b + " hs ", b + " hs ")"))))
                           n (count (rest kids))
                           [blk st] (reduce (fn [[bl st] _] (let [[s st'] (fresh st)] [(conj bl s) st'])) [[] st] (range n))
@@ -1174,6 +1187,7 @@ end module clotran_rt_decl
                                         [[] st] (map vector (rest kids) blk))
                         [r st] (fresh st)]
                     [(concat hc ac
+                             (site nd st)
                              [(str "st = clotran_call_slots(b + " r ", b + " hs ", b + "
                                    (if (zero? n) 1 (dec (first blk))) ", " n "_c_int)")]
                              err-return)
@@ -1562,10 +1576,14 @@ end module clotran_rt_decl
         ;; an inner fn has no form of its own: no hints, boxed parameters
         pvecs (if form (param-vectors form) (repeat []))
         ;; b+1 is the locals frame, b+2 .. b+1+P hold what the pool
-        ;; supplies, and temporaries start after them
-        pslots (into {} (map-indexed (fn [i p] [p (+ 2 i)]) pool))
-        first-temp (+ 2 (count pool))
-        st0 {:next first-temp :high (dec first-temp) :pool pslots :flags []
+        ;; supplies, and temporaries start after them; a call's :site is
+        ;; read from the pool where it is used and takes no slot
+        pidx (into {} (map-indexed (fn [i p] [p i]) pool))
+        held (remove #(= :site (:kind %)) pool)
+        pslots (into {} (map-indexed (fn [i p] [p (+ 2 i)]) held))
+        ;; counted from the list: two = entries, '(9) and [9], are one key
+        first-temp (+ 2 (count held))
+        st0 {:next first-temp :high (dec first-temp) :pool pslots :pidx pidx :flags []
              :who who :offset offset :pool-list pool :counter (or counter (atom 0))
              :prefix (or prefix (str "cc_" sym))}
         [branches st]
@@ -1616,7 +1634,7 @@ end module clotran_rt_decl
           (apply str (for [[p s] (sort-by val pslots)
                            :when (some #(re-find (re-pattern (str "b \\+ " s "\\b")) %) body)]
                        (str "    call clotran_pool_get(b + " s ", cf_pool, "
-                            (+ offset (- s 2)) "_c_int)\n"
+                            (+ offset (pidx p)) "_c_int)\n"
                             (when (= :var (:kind p))
                               (str "    call clotran_deref(b + " s ", b + " s ")\n")))))
           (apply str (map #(str "    " % "\n") body))

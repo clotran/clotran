@@ -63,7 +63,7 @@ module ClotranABI
   public :: clotran_tag, clotran_int, clotran_real, clotran_bool
   public :: clotran_str_len, clotran_str_copy
   public :: clotran_vec_empty, clotran_vec_conj, clotran_vec_count, clotran_vec_nth
-  public :: clotran_var, clotran_deref, clotran_call, clotran_call_slots, clotran_def_fn
+  public :: clotran_var, clotran_deref, clotran_call, clotran_call_slots, clotran_site, clotran_def_fn
   public :: clotran_has_error, clotran_error_len, clotran_error_copy, clotran_clear_error
   public :: clotran_collect, clotran_live_count, clotran_set_torture
   public :: clotran_frame_new, clotran_frame_get, clotran_frame_put, clotran_frame_stack
@@ -740,6 +740,7 @@ contains
     integer(c_int) :: st
     type(gc_value) :: out
     call c_f_pointer(cs, vst)
+    call gce_set_site(vs_get(vst, int(node)))
     out = gce_dot_slots(vs_get(vst, int(node)), vs_get(vst, int(tv)), int(argbase), int(nargs), int(from))
     if (gce_has_error()) then
        call vs_set(vst, int(dst), gc_nil())
@@ -1061,6 +1062,14 @@ contains
     call c_f_pointer(cs, vst)
     call vs_set(vst, int(dst), cf_pool_get(int(h), int(i)))
   end subroutine clotran_pool_get
+
+  ! The site of the call compiled code is about to make: pool entry i
+  ! of library h, a call node (Eval.f90 pool_walk's "site"), so the
+  ! frames show where each compiled frame is.
+  subroutine clotran_site(h, i) bind(C, name="clotran_site")
+    integer(c_int), value :: h, i
+    call gce_set_site(cf_pool_get(int(h), int(i)))
+  end subroutine clotran_site
 
   ! A call with the arguments already in consecutive slots
   ! argbase+1 .. argbase+nargs. This is the call a compiled site makes;
