@@ -9271,7 +9271,7 @@ contains
          end do
          out = gc_obj(OBJ_SET, [vs_get(vst, base + 3)], [vs_get(vst, base + 3)])
        end block
-    case (B_BITAND, B_BITOR, B_BITXOR, B_SHL, B_SHR, B_BITANDNOT, B_USHR)
+    case (B_BITAND, B_BITOR, B_BITXOR, B_SHL, B_SHR, B_BITANDNOT, B_USHR, B_BITNOT)
        ! A bit operation is defined on FIXED-WIDTH integers only, and
        ! Clojure says so rather than guessing: "bit operation not
        ! supported for: class clotran.host.bigint". Without the check
@@ -9280,7 +9280,7 @@ contains
        if (a%tag /= GCT_INT .or. (n >= 2 .and. b%tag /= GCT_INT)) then
           block
              call class_name_of(merge(b, a, a%tag == GCT_INT), s=dlt_1)
-             call raise_class("clotran.host.illegal_argument_exception", "bit operation not supported for: " //  dlt_1, [vs_get(vst, &
+             call raise_class("clotran.host.illegal_argument_exception", "bit operation not supported for: class " //  dlt_1, [vs_get(vst, &
                   base + 1)])
           end block
           call vs_leave(vst, base)
@@ -9297,10 +9297,8 @@ contains
        ! LOGICAL, not arithmetic: the sign bit is shifted in as a
        ! zero, so (unsigned-bit-shift-right -1 60) is 15 and not -1.
        case (B_USHR);   out = gc_int(shiftr(a%ival, int(b%ival)))
+       case (B_BITNOT); out = gc_int(not(a%ival))
        end select
-    case (B_BITNOT)
-       a = gcv_nth(args, 0)
-       out = gc_int(not(a%ival))
     case (B_CHKSHORT, B_CHKBYTE, B_CHKINT)
        ! a number or a character, or it throws: (int \"1\") answered 0
        a = strip_meta(gcv_nth(args, 0))
@@ -9314,6 +9312,19 @@ contains
        ! RT.intCast checks the range and throws. The unchecked- ones
        ! below truncate, and pointing both at the same builtin made
        ! the checked ones answer the whole 64 bits.
+       ! RT.intCast(Object) and its kin cast to a long first, so a BigInt
+       ! past a long is longCast's "Value out of range for long"
+       a = strip_meta(gcv_nth(args, 0))
+       if (a%tag == GCT_BIG) then
+          call gc_big_text(a, s=dlt_1)
+          if (.not. big_fits_i64(dlt_1)) then
+             call gcp_str(a, .false., s=dlt_2)
+             call raise_class("clotran.host.illegal_argument_exception", "Value out of range for long: " // dlt_2, &
+                  [vs_get(vst, base + 1)])
+             call vs_leave(vst, base)
+             return
+          end if
+       end if
        block
          integer(gc_ip) :: w, lo, hi
          character(len=32) :: wbuf
@@ -9359,6 +9370,15 @@ contains
          integer(gc_ip) :: w, m, half
          a = strip_meta(gcv_nth(args, 0))
          w = int_of_number(a)
+         ! a BigInt past a long: its low 64 bits, as uncheckedLongCast
+         ! takes them (BigInt.intValue keeps the low bits too)
+         if (a%tag == GCT_BIG) then
+            block
+              type(gc_value) :: lw
+              lw = call_builtin(B_LONGCAST, vs_get(vst, base + 1))
+              w = lw%ival
+            end block
+         end if
          ! a DOUBLE goes through clj's (int) first, which SATURATES --
          ! (unchecked-int 1e10) is 2147483647, not the low 32 bits
          if (a%tag == GCT_REAL) w = max(-2147483648_gc_ip, min(2147483647_gc_ip, w))
