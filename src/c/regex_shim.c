@@ -39,6 +39,42 @@ static UChar *widen(const char *bytes, int32_t len, int32_t *ulen) {
   return out;
 }
 
+/* ICU's lazy *? and +? loop forever when the loop's body can match
+ * empty and the match has to backtrack through it -- (?:a?)+? matched
+ * against "b", in RegexMatcher::MatchChunkAt (found by scripts/fuzz-str;
+ * clj answers nil). The counted form, {0,}? and {1,}?, has the
+ * zero-length check and means the same, so the pattern is compiled in
+ * that spelling. Outside a quantifier nothing changes: an escaped
+ * character, a \Q..\E run and a [set] are copied as they are. The
+ * caller frees what this returns. */
+static UChar *lazy_counted(const UChar *in, int32_t n, int32_t *outn) {
+  UChar *out = (UChar *)malloc((size_t)(3 * n + 1) * sizeof(UChar));
+  int32_t i = 0, k = 0, depth = 0;
+  if (!out) return NULL;
+  while (i < n) {
+    UChar c = in[i];
+    if (c == '\\' && i + 1 < n) {
+      if (in[i + 1] == 'Q') {               /* \Q ... \E, all literal */
+        out[k++] = in[i++]; out[k++] = in[i++];
+        while (i < n && !(in[i] == '\\' && i + 1 < n && in[i + 1] == 'E')) out[k++] = in[i++];
+        continue;
+      }
+      out[k++] = in[i++]; out[k++] = in[i++];
+      continue;
+    }
+    if (c == '[') depth++;
+    else if (c == ']' && depth > 0) depth--;
+    else if (depth == 0 && (c == '*' || c == '+') && i + 1 < n && in[i + 1] == '?') {
+      out[k++] = '{'; out[k++] = (c == '*') ? '0' : '1'; out[k++] = ','; out[k++] = '}'; out[k++] = '?';
+      i += 2;
+      continue;
+    }
+    out[k++] = in[i++];
+  }
+  *outn = k;
+  return out;
+}
+
 void *cre_compile(const char *pattern, int32_t pattern_len,
                    char *err_buf, int32_t err_cap) {
   UErrorCode status = U_ZERO_ERROR;
@@ -54,6 +90,11 @@ void *cre_compile(const char *pattern, int32_t pattern_len,
   if (!upattern) {
     if (err_cap > 0) strncpy(err_buf, "out of memory", (size_t)err_cap - 1);
     return NULL;
+  }
+  {
+    int32_t clen;
+    UChar *counted = lazy_counted(upattern, ulen, &clen);
+    if (counted) { free(upattern); upattern = counted; ulen = clen; }
   }
   re = uregex_open(upattern, ulen, 0, &pe, &status);
   free(upattern);

@@ -3011,3 +3011,8 @@
    (unchecked-int -9223372036854775809N) (t #(bit-not 7N)) (t #(bit-and 7N 1)) (t #(quot ##NaN 2.0))])
 [(quot 0.1 -5.0) (quot -0.0 2.0) (rem -46 0.1) (quot 7/2 1.5) (rem 7/2 1.5) (rem 1.0 14/19) (quot -1.0E-308 17/14)]
 [(quot 100M 2.5M) (quot 7M 2.5M) (quot 0M 1.5M) (rem 0N 52939.488M) (/ 0 1.5M) (/ 0 36789.854M) (quot 5.00M 0.5M)]
+
+;; a lazy *? or +? over what can match empty: ICU looped forever on it
+;; (regex_shim.c compiles it as {0,}? / {1,}?; scripts/fuzz-str)
+[(re-matches #"(?:a?)+?" "b") (re-matches #"(λ)|(?: ?)+?" "Ω\n\t1A_") (re-find #"(?:ab)*?c" "ababc") (re-seq #"a+?" "aaa")
+ (re-matches #"(a?)+?" "aa") (re-find #"[*?]+" "x*?y") (re-find #"\*?a" "*a") (re-find #"\Qa+?\E" "a+?") (str #"a+?b*?")]
