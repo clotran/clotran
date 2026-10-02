@@ -41,8 +41,10 @@ module Assoc
      end function cmp_i
   end interface
   procedure(cmp_i), pointer, save :: comparer => null()
-  ! the most entries in a leaf, and children under an internal node
-  integer, parameter :: ST_MAX = 32
+  ! the most entries in a leaf, and children under an internal node;
+  ! and the fewest in any node but the root (model/btree.lisp), kept by
+  ! st_del's rebalance -- what bounds the height by log16 n
+  integer, parameter :: ST_MAX = 32, ST_MIN = 16
   public :: gca_find_key, gca_leaf_of
   public :: gca_set_comparer, gca_sorted_empty, gca_is_sorted, gca_comparator, &
        gca_key_at, gca_val_at, gca_sorted_from
@@ -731,6 +733,32 @@ contains
           j = j + 1; kids(j) = gc_vec_get(node, 3 * pos - 2)
        end if
     end do
+    ! THE CHILD LEFT UNDER HALF FULL takes a neighbour with it: the two
+    ! as one node when they fit, else shared evenly between two -- each
+    ! then at least ST_MIN. Without this a node thinned to one entry and
+    ! the tree kept the height of its largest size: after deleting most
+    ! of a map, get was O(log of what it had been), not O(log n), and a
+    ! walk O(n log n), where clj's red-black tree is O(log n) and O(n).
+    if (.not. c_empty .and. j >= 2) then
+       if (st_len(c_out, h - 1) < ST_MIN) then
+          pos = i
+          if (pos > j) pos = j
+          if (pos == 1) pos = 2
+          ! kids(pos-1) and kids(pos): the underfull child and the one beside it
+          block
+            type(gc_value) :: a1, a2
+            integer :: got
+            call st_rebalance(kids(pos - 1), kids(pos), h - 1, a1, a2, got, [roots, node, c_out])
+            kids(pos - 1) = a1
+            if (got == 2) then
+               kids(pos) = a2
+            else
+               kids(pos:j - 1) = kids(pos + 1:j)
+               j = j - 1
+            end if
+          end block
+       end if
+    end if
     emptied = (j == 0)
     if (emptied) then
        out = gc_vec(0, [roots, node])
@@ -739,6 +767,70 @@ contains
     end if
     call vs_leave(base)
   end subroutine st_del
+
+  ! Two neighbouring nodes of height h, left then right, as one node
+  ! (got = 1) when their entries fit in ST_MAX, else as two sharing
+  ! them evenly (got = 2): with one at ST_MIN - 1 and the other at
+  ! least ST_MIN, every node made has at least ST_MIN (model/btree.lisp).
+  subroutine st_rebalance(left, right, h, a1, a2, got, roots)
+    type(gc_value), intent(in) :: left, right
+    integer, intent(in) :: h
+    type(gc_value), intent(out) :: a1, a2
+    integer, intent(out) :: got
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value), allocatable :: kids(:)
+    integer :: nl, nr, u, half, w, i, base
+    base = vs_enter(3)
+    call vs_set(base + 1, left)
+    call vs_set(base + 2, right)
+    nl = st_len(left, h)
+    nr = st_len(right, h)
+    u = nl + nr
+    got = 1
+    half = u
+    if (u > ST_MAX) then
+       got = 2
+       half = u / 2
+    end if
+    a2 = gc_nil()
+    if (h == 0) then
+       ! leaves: entries k1 v1 k2 v2 ... copied into one run or two
+       a1 = gc_vec(2 * half, [roots, vs_get(base + 1), vs_get(base + 2)])
+       call vs_set(base + 3, a1)
+       if (got == 2) a2 = gc_vec(2 * (u - half), [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+       do i = 1, u
+          block
+            type(gc_value) :: ek, ev
+            if (i <= nl) then
+               ek = gc_vec_get(vs_get(base + 1), 2 * i - 1); ev = gc_vec_get(vs_get(base + 1), 2 * i)
+            else
+               ek = gc_vec_get(vs_get(base + 2), 2 * (i - nl) - 1); ev = gc_vec_get(vs_get(base + 2), 2 * (i - nl))
+            end if
+            if (i <= half) then
+               call gc_vec_set(vs_get(base + 3), 2 * i - 1, ek); call gc_vec_set(vs_get(base + 3), 2 * i, ev)
+            else
+               call gc_vec_set(a2, 2 * (i - half) - 1, ek); call gc_vec_set(a2, 2 * (i - half), ev)
+            end if
+          end block
+       end do
+       a1 = vs_get(base + 3)
+    else
+       ! internal nodes: their children, re-counted under one or two
+       allocate(kids(u))
+       do w = 1, nl
+          kids(w) = gc_vec_get(vs_get(base + 1), 3 * w - 2)
+       end do
+       do w = 1, nr
+          kids(nl + w) = gc_vec_get(vs_get(base + 2), 3 * w - 2)
+       end do
+       a1 = st_internal(kids(1:half), half, h, [roots, vs_get(base + 1), vs_get(base + 2)])
+       call vs_set(base + 3, a1)
+       if (got == 2) a2 = st_internal(kids(half + 1:u), u - half, h, &
+            [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+       a1 = vs_get(base + 3)
+    end if
+    call vs_leave(base)
+  end subroutine st_rebalance
 
   function st_assoc(m, k, v, roots) result(out)
     type(gc_value), intent(in) :: m, k, v

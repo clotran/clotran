@@ -2945,3 +2945,14 @@
       (seq (dissoc sm 0)) (count (seq (into (sorted-map) (map vector (range 100) (range 100)))))
       (let [m (reduce dissoc hm (range 0 1000 2))] [(count (seq m)) (sort (keys m)) (= (keys m) (map key (seq m)))])
       (sort-by str (seq (hash-map nil 1 false 2 "a" 3)))])
+
+;; a sorted map thinned by dissoc is rebalanced (Assoc.f90 st_rebalance,
+;; model/btree.lisp): every node but the root half full, so its height
+;; follows what it holds now, not what it once held
+(let [xs (map #(mod (* % 7919) 100003) (range 20000))
+      m (into (sorted-map) (map vector xs xs)) m2 (reduce dissoc m (take 19950 xs))
+      s (into (sorted-set) xs) s2 (reduce disj s (take-nth 3 xs))]
+  [(count m2) (seq m2) (first m2) (last m2) (subseq m2 > 50000) (rseq m2) (get m2 (nth xs 19990)) (get m2 (nth xs 5))
+   (count s2) (take 10 s2) (take 10 (rseq s2)) (= (seq s2) (sort (remove (set (take-nth 3 xs)) xs)))
+   (let [m3 (reduce dissoc m xs)] [(count m3) (seq m3) (assoc m3 1 2)])
+   (reduce + (vals (reduce (fn [a k] (if (even? k) (dissoc a k) (assoc a (- k) k))) m xs)))])
