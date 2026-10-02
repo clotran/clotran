@@ -614,14 +614,7 @@
           col = pcol
        end if
        have_pos = .false.
-       who = "fn"
-       nm = gc_slot(vs_get(vst, base + 2), 5)
-       if (nm%tag == GCT_SYM) then
-          block
-             call gc_ref_text(nm%ref, s=dlt_1)
-             who = dlt_1
-          end block
-       end if
+       call fn_who(vs_get(vst, base + 2), who)
 
        env = gca_empty([roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
        call vs_set(vst, base + 3, env)

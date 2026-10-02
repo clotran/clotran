@@ -618,6 +618,7 @@
     type(gc_value), intent(in) :: form0, sc
     type(gc_value) :: nd, form, head, kids, expanded, mvar
     integer :: base, slot
+    character(len=:), allocatable :: hint
 
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1
@@ -627,6 +628,11 @@
     if (tctx%has_error) return
     base = vs_enter(vst, 6)
     call vs_set(vst, base + 2, sc)
+    ! the name a let or def gave this form reaches a fn* only through
+    ! macroexpansion, as Compiler.analyze passes it; any other form drops it
+    hint = ""
+    if (allocated(tctx%fn_hint)) hint = tctx%fn_hint
+    tctx%fn_hint = ""
     form = form0
     ! Metadata on a form is information about it, not part of what it
     ! means; only def looks at it (and does so from the raw form).
@@ -661,6 +667,7 @@
           if (gcl_count(form) == 0) then
              nd = const_node(vs_get(vst, base + 1), [vs_get(vst, base + 2)])
           else
+             tctx%fn_hint = hint
              nd = analyze_seq(vs_get(vst, base + 1), vs_get(vst, base + 2))
              if (tctx%has_error) then
                 call trace_analysis_failure(vs_get(vst, base + 1))
@@ -1034,10 +1041,13 @@
     type(gc_value), intent(in) :: form, sc
     type(gc_value) :: nd, head, mvar, expanded
     integer :: base
+    character(len=:), allocatable :: hint
 
     tctx => ctx_self()
     vst => tctx%stk
     nd = gc_nil()
+    hint = tctx%fn_hint
+    tctx%fn_hint = ""
     base = vs_enter(vst, 4)
     call vs_set(vst, base + 1, form)
     call vs_set(vst, base + 2, sc)
@@ -1052,6 +1062,7 @@
           ! what lets clojure.spec.alpha define a macro named `def` and
           ! still write (defn ...) in the same file.
           if (is_special(head)) then
+             if (gc_ref_is(head%ref, "fn*")) tctx%fn_hint = hint
              nd = analyze_special(head, vs_get(vst, base + 1), vs_get(vst, base + 2))
              call vs_leave(vst, base)
              return
@@ -1080,6 +1091,7 @@
                 return
              end if
              call vs_set(vst, base + 4, expanded)
+             tctx%fn_hint = hint
              nd = analyze(vs_get(vst, base + 4), vs_get(vst, base + 2))
              call vs_leave(vst, base)
              return
@@ -1846,6 +1858,9 @@
     call vs_set(vst, base + 6, kids)
     if (gcl_count(vs_get(vst, base + 7)) > 0) then
        flags = flags + 1
+       ! DefExpr.Parser: analyze(init, v.sym.name)
+       call gc_ref_text(nm%ref, s=dlt_1)
+       tctx%fn_hint = dlt_1(index(dlt_1, "/", back=.true.) + 1:)
        c = analyze(gcl_first(vs_get(vst, base + 7)), vs_get(vst, base + 2))
        if (tctx%has_error) then
           call vs_leave(vst, base)
@@ -1911,6 +1926,12 @@
     kids = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 4)])
     call vs_set(vst, base + 5, kids)
     do i = 0, n - 1
+       ! Compiler.LetExpr.Parser: analyze(init, sym.name)
+       k = strip_meta(gcv_nth(vs_get(vst, base + 3), 2 * i))
+       if (k%tag == GCT_SYM) then
+          call gc_ref_text(k%ref, s=dlt_1)
+          tctx%fn_hint = dlt_1
+       end if
        c = analyze(gcv_nth(vs_get(vst, base + 3), 2 * i + 1), vs_get(vst, base + 4))
        if (tctx%has_error) then
           call vs_leave(vst, base)
@@ -2057,6 +2078,7 @@
     type(gc_value) :: nd, head, name, fsc, arities, clauses, clause, ar, tmpl, walk
     integer :: base, self_slot, nfixed, i, nflat
     logical :: hints
+    character(len=:), allocatable :: own, outer, saved
 
     ! captured ONCE: a method's own clauses are exempt from fn hint
     ! rules, and any fn* nested in its body is not
@@ -2076,6 +2098,20 @@
        call vs_set(vst, base + 3, gcl_rest(vs_get(vst, base + 1), [vs_get(vst, base + 1)]))
     end if
     call vs_set(vst, base + 4, name)
+    ! its display name, as clj names its class: the enclosing fn's, or
+    ! the namespace's, then its own name, or what a let or def bound it
+    ! to, or fn (Compiler FnExpr.parse)
+    own = "fn"
+    if (allocated(tctx%fn_hint)) then
+       if (len(tctx%fn_hint) > 0) own = tctx%fn_hint
+    end if
+    tctx%fn_hint = ""
+    if (name%tag == GCT_SYM) call gc_ref_text(name%ref, s=own)
+    saved = ""
+    if (allocated(tctx%fn_path)) saved = tctx%fn_path
+    outer = saved
+    if (len(outer) == 0) call gcn_name(gcn_current([vs_get(vst, base + 1), vs_get(vst, base + 4)]), s=outer)
+    tctx%fn_path = outer // "/" // own
     fsc = new_fn_scope(vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 4)])
     call vs_set(vst, base + 5, fsc)
     self_slot = -1
@@ -2100,6 +2136,7 @@
        clause = norm_form(strip_meta(gcl_first(vs_get(vst, base + 8))), [vs_get(vst, base + 7), vs_get(vst, base + 8)])
        ar = analyze_arity(clause, vs_get(vst, base + 5), hints)
        if (tctx%has_error) then
+          tctx%fn_path = saved
           call vs_leave(vst, base)
           return
        end if
@@ -2170,6 +2207,11 @@
       tmpl = gcv_conj(vs_get(vst, base + 8), ct, [vs_get(vst, base + 5), ct])
       call vs_set(vst, base + 8, tmpl)
     end block
+    ! and the display name, for frames and traces (fn_display)
+    call vs_set(vst, base + 6, gc_str(tctx%fn_path, [vs_get(vst, base + 5), vs_get(vst, base + 8)]))
+    tmpl = gcv_conj(vs_get(vst, base + 8), vs_get(vst, base + 6), [vs_get(vst, base + 5)])
+    call vs_set(vst, base + 8, tmpl)
+    tctx%fn_path = saved
     nd = mk_node(N_FN, gc_nil(), vs_get(vst, base + 8), gc_nil(), 0, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
     call vs_leave(vst, base)
   end function analyze_fn

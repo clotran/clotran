@@ -552,6 +552,10 @@ module Eval
      ! the rest of what was one module variable each, now one per thread
      integer :: id = 0, qq_depth = 0, task_loop_depth = 0
      logical :: analyzing_method = .false., yield_flag = .false.
+     ! a fn's display name as clj gives its class: the enclosing fns'
+     ! path, and the name a let or def binds the next fn* to (Compiler
+     ! FnExpr.parse's basename and name)
+     character(len=:), allocatable :: fn_path, fn_hint
      type(gc_value) :: cur_task
      type(gc_root) :: scratch1_root, scratch2_root, recur_root, noargs_root
      ! the scheduler's, per context: who stepped it, whether it is to end,
@@ -668,22 +672,7 @@ contains
     out = gcv_empty(roots)
     call vs_set(vst, base + 1, out)
     do i = tctx%fstack_top, 1, -1
-       who = "fn"
-       if (gc_kind(tctx%fstack_fn(i)) == OBJ_CLOSURE) then
-          nm = gc_slot(tctx%fstack_fn(i), 5)
-          if (nm%tag == GCT_SYM) then
-             block
-                call gc_ref_text(nm%ref, s=dlt_1)
-                who = dlt_1
-             end block
-          end if
-       else if (gc_kind(tctx%fstack_fn(i)) == OBJ_COMPILED) then
-          nm = gc_slot(tctx%fstack_fn(i), 1)
-          block
-             call gc_ref_text(nm%ref, s=dlt_1)
-             who = dlt_1
-          end block
-       end if
+       call fn_who(tctx%fstack_fn(i), who)
        fname = ""
        line = 0
        if (tctx%fstack_site(i) /= 0) call gcr_position_parts(tctx%fstack_site(i), fname, line, col)
@@ -756,6 +745,32 @@ contains
   ! its maximum trace depth: a stack overflow 200000 deep is not 200000
   ! lines, and building them by concatenation was quadratic. The
   ! element array .getStackTrace answers is still the whole stack.
+  ! A frame's function by name: the var a def gave it, else the name
+  ! its fn* was analysed under (analyze_fn's display name, clj's class
+  ! name demunged: ns/outer/inner), else fn.
+  subroutine fn_who(fn, who)
+    type(gc_value), intent(in) :: fn
+    character(len=:), allocatable, intent(out) :: who
+    type(gc_value) :: nm, tm
+    who = "fn"
+    select case (gc_kind(fn))
+    case (OBJ_CLOSURE)
+       nm = gc_slot(fn, 5)
+       tm = gc_slot(fn, 1)
+       if (nm%tag == GCT_SYM) then
+          call gc_ref_text(nm%ref, s=who)
+       else if (gcv_is(tm)) then
+          if (gcv_count(tm) >= 9) then
+             nm = gcv_nth(tm, 8)
+             if (nm%tag == GCT_STR) call gc_ref_text(nm%ref, s=who)
+          end if
+       end if
+    case (OBJ_COMPILED)
+       nm = gc_slot(fn, 1)
+       call gc_ref_text(nm%ref, s=who)
+    end select
+  end subroutine fn_who
+
   subroutine capture_trace()
     type(eval_ctx), pointer :: tctx
     integer :: i
@@ -769,22 +784,7 @@ contains
     tctx%last_trace = ""
     if (tctx%fstack_top > 128) write(more, '(I0)') tctx%fstack_top - 128
     do i = tctx%fstack_top, max(1, tctx%fstack_top - 127), -1
-       who = "fn"
-       if (gc_kind(tctx%fstack_fn(i)) == OBJ_CLOSURE) then
-          nm = gc_slot(tctx%fstack_fn(i), 5)
-          if (nm%tag == GCT_SYM) then
-             block
-                call gc_ref_text(nm%ref, s=dlt_1)
-                who = dlt_1
-             end block
-          end if
-       else if (gc_kind(tctx%fstack_fn(i)) == OBJ_COMPILED) then
-          nm = gc_slot(tctx%fstack_fn(i), 1)
-          block
-             call gc_ref_text(nm%ref, s=dlt_1)
-             who = dlt_1
-          end block
-       end if
+       call fn_who(tctx%fstack_fn(i), who)
        if (tctx%fstack_site(i) /= 0) then
           block
              call gcr_position(tctx%fstack_site(i), s=dlt_1)
