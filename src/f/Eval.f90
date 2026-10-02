@@ -5845,7 +5845,9 @@ contains
     select case (gc_kind(vs_get(vst, base + 1)))
     case (OBJ_VECTOR)
        out = gcv_empty([roots, vs_get(vst, base + 1)])
-    case (OBJ_MAP)
+    ! a map past eight entries is a HAMT: it answered nil, and
+    ! (into (empty m) ...) built a list of its entries (scripts/fuzz-spec)
+    case (OBJ_MAP, OBJ_HAMT)
        ! a sorted map's empty keeps its order and comparator
        if (gca_is_sorted(vs_get(vst, base + 1))) then
           out = gca_sorted_empty(gca_comparator(vs_get(vst, base + 1)), [roots, vs_get(vst, base + 1)])

@@ -759,6 +759,11 @@
 ;; empty a map
 (empty {:a 1})
 
+;; empty a map past eight entries (a HAMT here), and what into builds
+;; on it -- it answered nil, and into a list (scripts/fuzz-spec)
+[(empty (zipmap (range 10) (range 10))) (map? (into (empty (zipmap (range 10) (range 10))) {:a 1}))
+ (meta (empty (with-meta (zipmap (range 10) (range 10)) {:m 1})))]
+
 ;; empty a set
 (empty #{1})
 

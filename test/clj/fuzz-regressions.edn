@@ -2,6 +2,12 @@
 ;; fixed: each runs through clj and clotran's flat, tree and compiled
 ;; modes (make test, check-fuzz). Add a shrunk form here with each fix.
 [
+ ;; (empty m) of a map past eight entries answered nil, so into built a
+ ;; list of its entries (scripts/fuzz-spec)
+ (into (empty (zipmap (range 10) (range 10))) {:a 1})
+ (map? (empty (zipmap (range 10) (range 10))))
+ ;; a function's class is named as clj names it, which spec reads back
+ (.getName (class int?))
  ;; two literals whose product overflows: the compiled form was a
  ;; constant gfortran folded, and refused the whole library over
  (* 19 4611686018427387904)
