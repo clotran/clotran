@@ -1,0 +1,216 @@
+#!/usr/bin/env bb
+;; fuzz-deps: the package manager, clotran-deps, on generated projects
+;; (PLAN step 29).
+;;
+;;   scripts/fuzz-deps [-n N] [-s SEED]
+;;
+;; Each case builds a project and a random acyclic graph of libraries
+;; under a scratch directory: :local/root and pinned :git/url + :git/sha
+;; coordinates (git repositories made here, over file://), a library
+;; reached at two places -- a conflict, which the project sometimes
+;; settles by naming it -- the provided Clojure jar, a refused Maven jar,
+;; and an alias with an extra path. A MODEL of the documented rules
+;; (PACKAGES.md: breadth first, the project's own :deps win, a conflict
+;; nobody settled is an error naming the library, any other jar refused)
+;; says what clotran-deps must answer -- the path, or the error -- and
+;; then clotran, run on that path, must load every library's namespace
+;; from the place chosen: each answers its own directory's name.
+;;
+;; At most one kind of error per case, so which one comes first is not a
+;; question. HOME is a scratch directory, as clotran-deps' own test sets
+;; it, so the real git cache is not touched. Needs ~/jborden/clotran-deps
+;; (or CLOTRAN_DEPS); without it, says so and passes.
+(require '[clojure.test.check.generators :as g]
+         '[clojure.string :as str]
+         '[babashka.fs :as fs]
+         '[babashka.process :as p])
+
+(def opts (loop [as *command-line-args* o {:n 20 :seed 1}]
+            (if (empty? as) o
+                (case (first as)
+                  "-n" (recur (drop 2 as) (assoc o :n (parse-long (second as))))
+                  "-s" (recur (drop 2 as) (assoc o :seed (parse-long (second as))))
+                  (do (println "usage: scripts/fuzz-deps [-n N] [-s SEED]") (System/exit 2))))))
+
+(def repo (str (fs/parent (fs/parent (fs/absolutize *file*)))))
+(def deps-home (or (System/getenv "CLOTRAN_DEPS") (str (fs/home) "/jborden/clotran-deps")))
+(def deps-bin (str deps-home "/bin/clotran-deps"))
+
+(when-not (fs/exists? deps-bin)
+  (println "fuzz-deps: no clotran-deps at" deps-home "-- skipped")
+  (System/exit 0))
+
+(def problems (atom []))
+(def kinds (atom {}))   ; what the cases expected, so a run says what it covered
+(defn problem [& xs] (let [m (str/join " " xs)] (swap! problems conj m) (println m)))
+
+;; ---- the generated case ---------------------------------------------------
+;;
+;; libs: [{:name "f/l3" :copies 1|2 :git? bool :deps [i ...] :paths [...]}]
+;; deps point only at higher indices: acyclic. The project depends on a
+;; few. :error is :none, :conflict or :mvn.
+
+(def g-case
+  (g/let [k (g/choose 2 7)
+          edges (g/vector (g/vector g/boolean 7) 7)
+          roots (g/fmap distinct (g/vector (g/choose 0 6) 1 3))
+          gits (g/vector (g/frequency [[3 (g/return false)] [1 (g/return true)]]) 7)
+          extra (g/vector g/boolean 7)
+          error (g/frequency [[3 (g/return :none)] [2 (g/return :conflict)] [1 (g/return :mvn)]])
+          settle g/boolean
+          clj? g/boolean
+          alias? g/boolean
+          pick (g/choose 0 6)]
+    (g/return {:k k :edges edges :roots (vec (filter #(< % k) roots)) :gits gits :extra extra
+               :error error :settle settle :clj? clj? :alias? alias? :pick pick})))
+
+(defn lib-name [i] (str "f/l" i))
+(defn ns-of [i copy] (str "fzd" i))
+
+;; write the case out; answer {:project dir :expect {:path [...] | :error re} :loads {ns dir-name}}
+(defn build! [dir {:keys [k edges roots gits extra error settle clj? alias? pick]}]
+  (let [;; a conflict: the last library, reached at two copies -- library
+        ;; 0 names its own, library 1 names the second, "c-b" -- and the
+        ;; project names both parents
+        k (if (= error :conflict) (max k 3) k)
+        conflict (when (= error :conflict) (dec k))
+        deps-of (fn [i] (vec (for [j (range (inc i) k)
+                                   :when (if conflict
+                                           (cond (= j conflict) (= i 0)
+                                                 :else (get-in edges [i j]))
+                                           (get-in edges [i j]))]
+                               j)))
+        roots (cond-> (if (seq roots) roots [0]) conflict (into [0 1]))
+        roots (vec (distinct roots))
+        lib-dir (fn [i copy] (str dir "/lib" i (when (= copy :b) "-b")))
+        git-sha (atom {})
+        coord (fn [i copy]
+                (if (and (get gits i) (not= copy :b))
+                  {:git/url (str "file://" (lib-dir i :a)) :git/sha (get @git-sha i)}
+                  {:local/root (lib-dir i copy)}))
+        ;; which copy of c each parent names: the project's roots and the
+        ;; first parent of c take :a, a second route takes :b
+        b-parent (when conflict 1)
+        deps-of* (fn [i] (cond-> (mapv (fn [j] [j :a]) (deps-of i))
+                           (and conflict (= i b-parent)) (conj [conflict :b])))]
+    ;; the libraries, highest first so a git sha exists before it is named
+    (doseq [i (reverse (range k)) copy (if (= i conflict) [:a :b] [:a])]
+      (let [d (lib-dir i copy)
+            nsn (ns-of i copy)]
+        (fs/create-dirs (str d "/src/" nsn))
+        (spit (str d "/src/" nsn "/core.cljf")
+              (str "(ns " nsn ".core)\n(defn where [] " (pr-str (fs/file-name d)) ")\n"))
+        (when (get extra i) (fs/create-dirs (str d "/res")))
+        (spit (str d "/deps.edn")
+              (pr-str (cond-> {:deps (into (array-map) (for [[j c] (deps-of* i)] [(symbol (lib-name j)) (coord j c)]))}
+                        (get extra i) (assoc :paths ["src" "res"]))))
+        (when (and (get gits i) (= copy :a))
+          (p/shell {:dir d :out :string :err :string} "git" "init" "-q")
+          (p/shell {:dir d :out :string :err :string} "git" "add" "-A")
+          (p/shell {:dir d :out :string :err :string} "git" "-c" "user.name=t" "-c" "user.email=t@t" "commit" "-q" "-m" "one")
+          (swap! git-sha assoc i (str/trim (:out (p/shell {:dir d :out :string} "git" "rev-parse" "HEAD")))))))
+    ;; the project
+    (let [pd (str dir "/project")
+          settled? (and conflict settle)
+          proj-deps (cond-> (into (array-map) (for [r roots] [(symbol (lib-name r)) (coord r :a)]))
+                      settled? (assoc (symbol (lib-name conflict)) (coord conflict :b))
+                      clj? (assoc 'org.clojure/clojure {:mvn/version "1.12.6"})
+                      (= error :mvn) (assoc 'cheshire/cheshire {:mvn/version "5.12.0"}))
+          ;; a conflict must be reachable from the project at both copies:
+          ;; the project names both parents
+          proj-deps (if conflict
+                      (cond-> proj-deps
+                        b-parent (assoc (symbol (lib-name b-parent)) (coord b-parent :a)))
+                      proj-deps)]
+      (fs/create-dirs (str pd "/src/fzmain"))
+      (when alias? (fs/create-dirs (str pd "/dev")))
+      (spit (str pd "/deps.edn")
+            (pr-str (cond-> {:deps proj-deps}
+                      alias? (assoc :aliases {:dev {:extra-paths ["dev"]}}))))
+      ;; THE MODEL: breadth first; the project's own :deps chosen first
+      (let [proj-named (set (keys proj-deps))
+            dir-of (fn [lib c] (if-let [sha (:git/sha c)]
+                                 (str (fs/home) "/.cache/clotran/gitlibs/" lib "/" sha)
+                                 (str (fs/canonicalize (:local/root c)))))
+            result
+            (loop [q (vec (for [[l c] proj-deps] [l c "project"])) chosen [] where {} err nil]
+              (if (or err (empty? q))
+                {:chosen chosen :where where :err err}
+                (let [[[l c by] & more] q
+                      lib (str l)]
+                  (cond
+                    (contains? #{"org.clojure/clojure"} lib) (recur (vec more) chosen where err)
+                    (:mvn/version c) (recur [] chosen where :mvn)
+                    (contains? where lib)
+                    (if (and (not= (:dir (where lib)) (dir-of lib c)) (not (proj-named l)))
+                      (recur [] chosen where :conflict)
+                      (recur (vec more) chosen where err))
+                    :else
+                    (let [i (parse-long (subs lib 3))
+                          copy (if (= (dir-of lib c) (dir-of lib (coord i :b))) :b :a)
+                          d (dir-of lib c)
+                          sub (for [[j cc] (deps-of* i)] [(symbol (lib-name j)) (coord j cc) lib])]
+                      (recur (into (vec more) sub) (conj chosen lib)
+                             (assoc where lib {:dir d :i i :copy copy :extra (get extra i)}) err))))))
+            expect (if-let [e (:err result)]
+                     {:error e}
+                     {:path (vec (concat [(str (fs/canonicalize pd) "/src")]
+                                         (when alias? [(str (fs/canonicalize pd) "/dev")])
+                                         (mapcat (fn [lib] (let [{:keys [dir extra]} ((:where result) lib)]
+                                                             (cond-> [(str dir "/src")] extra (conj (str dir "/res")))))
+                                                 (:chosen result))))})]
+        (spit (str pd "/src/fzmain/core.cljf")
+              (str "(ns fzmain.core (:require "
+                   (str/join " " (for [lib (:chosen result)] (str "[" (ns-of (:i ((:where result) lib)) nil) ".core]")))
+                   "))\n"
+                   (str/join "\n" (for [lib (:chosen result) :let [{:keys [i]} ((:where result) lib)]]
+                                    (str "(println \"WHERE " i "\" (fzd" i ".core/where))")))
+                   "\n"))
+        {:project pd :alias? alias? :expect expect
+         :loads (into {} (for [lib (:chosen result) :let [{:keys [i copy]} ((:where result) lib)]]
+                           [i (str "lib" i (when (= copy :b) "-b"))]))}))))
+
+;; ---- running a case -----------------------------------------------------------
+
+(defn run [cmd env secs]
+  (let [proc (apply p/process {:out :string :err :string :extra-env env :in ""} cmd)
+        r (deref proc (* 1000 secs) ::timeout)]
+    (if (= r ::timeout) (do (p/destroy-tree proc) {:timeout true}) r)))
+
+(let [{:keys [n seed]} opts
+      top (str (fs/create-temp-dir {:prefix "fuzz-deps"}))
+      home (str top "/home")]
+  (fs/create-dirs home)
+  (doseq [c (range n)]
+    (let [dir (str top "/case" c)
+          cs (g/generate g-case 10 (+ seed c))
+          _ (fs/create-dirs dir)
+          {:keys [project alias? expect loads]} (with-redefs [fs/home (constantly home)] (build! dir cs))
+          _ (swap! kinds update (or (:error expect) (if (some #(str/includes? % ".cache/clotran/gitlibs") (:path expect)) :path-with-git :path)) (fnil inc 0))
+          r (run (cond-> [deps-bin] alias? (conj "-A:dev") true (conj project)) {"HOME" home "CLOTRAN" repo} 300)]
+      (cond
+        (:timeout r) (problem "TIMEOUT case" c ": clotran-deps did not answer in 300 s")
+        (:error expect)
+        (let [msg (str/trim (:err r))
+              ok (and (= 1 (:exit r))
+                      (case (:error expect)
+                        :conflict (str/includes? msg "is wanted at two places")
+                        :mvn (str/includes? msg "is a Maven jar")))]
+          (when-not ok (problem "case" c ": wanted a" (name (:error expect)) "error; got exit" (:exit r) (pr-str msg) "path" (str/trim (:out r)))))
+        (not= 0 (:exit r)) (problem "case" c ": clotran-deps failed:" (str/trim (:err r)))
+        :else
+        (let [got (vec (map #(str (fs/canonicalize %)) (str/split (str/trim (:out r)) #":")))
+              want (mapv #(str (fs/canonicalize %)) (:path expect))]
+          (if (not= (set got) (set want))
+            (problem "case" c ": path\n   want:" (pr-str want) "\n   got: " (pr-str got))
+            ;; and clotran loads each library from where it was chosen
+            (let [l (run [(str repo "/clotran-bin") (str repo "/src/clj/clojure/core.clj") (str project "/src/fzmain/core.cljf")]
+                         {"CLOTRAN_PATH" (str/join ":" got) "HOME" home} 120)
+                  seen (into {} (for [[_ i w] (re-seq #"WHERE (\d+) \"?([^\"\n]+)\"?" (:out l))] [(parse-long i) w]))]
+              (when (not= seen loads)
+                (problem "case" c ": loaded" (pr-str seen) "want" (pr-str loads) (str/trim (str (:out l) (:err l))))))))))
+    (print ".") (flush))
+  (println)
+  (fs/delete-tree top)
+  (println (str "fuzz-deps: " n " projects " (pr-str @kinds) ", " (count @problems) " problems"))
+  (System/exit (if (empty? @problems) 0 1)))

@@ -8,7 +8,12 @@
 ;; ways -- bound against random values in a let, a fn's parameters and a
 ;; loop, answering every symbol the pattern binds. And the THREADING and
 ;; CONDITIONAL macros -- ->, ->>, some->, cond->, as->, condp, case, for
-;; with :let/:when/:while -- on random steps. Each form is also checked
+;; with :let/:when/:while -- on random steps. And NS FORMS: :require with
+;; :as, :refer (a list or :all) and :rename, and :refer-clojure :exclude,
+;; evaluated into a fresh namespace, answering its aliases, what each
+;; chosen name refers to, and a call made through them. (:import is not
+;; generated: its classes are host names, which the oracle cannot
+;; translate inside (:import (package Class)).) Each form is also checked
 ;; against Clojure's own specs for the macros it uses (core.specs, loaded
 ;; as fuzz does), so a generated binding form that is not a binding form
 ;; is a bug in this script. Through clj and every mode by scripts/fuzz -f.
@@ -84,8 +89,11 @@
    (g/one-of [(g/choose -3 9) (g/elements [nil :k "s" true])])))
 
 ;; the keys a map pattern reads, so the value has some of them
-(defn binding-case [where pat v]
-  (let [ns (names-of pat) out (vec ns)]
+(defn binding-case [where pat v0]
+  (let [ns (names-of pat) out (vec ns)
+        ;; a map pattern over a bare number: clj's COMPILER refuses it (Can't
+        ;; type hint a primitive local) -- its host, not the language
+        v (if (and (map? pat) (number? v0)) [v0] v0)]
     (case where
       :let `(let [~pat '~v] ~out)
       :fn `((fn [~pat] ~out) '~v)
@@ -104,15 +112,65 @@
         :->> `(->> ~x ~@(map #(if (seq? %) (list (first %) (second %)) %) safe))
         :some-> `(some-> ~x ~@safe)
         :cond-> `(cond-> ~x ~@(mapcat vector tests (cycle safe)))
-        :as-> `(as-> ~x v# ~@(map (fn [s] (if (seq? s) (list (first s) 'v# (second s)) (list s 'v#))) safe))
+        :as-> (list* 'as-> x 'av (map (fn [s] (if (seq? s) (list (first s) 'av (second s)) (list s 'av))) safe))
         :condp `(condp = (mod ~x 3) 0 :zero 1 :one :else)
         :case `(case (mod ~x 4) 0 :a (1 2) :b :c)
         :for `(for [i# (range ~(mod x 5)) :let [j# (* i# i#)] :when (even? j#) :while (< i# 4)] [i# j#])))))
 
+;; ---- ns forms -------------------------------------------------------------
+
+;; a library, the functions it is called through here, and a call of each
+(def libs
+  {'clojure.string {'join '("-" [1 2]) 'upper-case '("ab") 'reverse '("abc")}
+   'clojure.set {'union '(#{1} #{2}) 'difference '(#{1 2} #{2}) 'map-invert '({:a 1})}
+   'clojure.walk {'keywordize-keys '({"a" 1}) 'stringify-keys '({:a 1})}
+   'clojure.edn {'read-string '("[1 :a]")}})
+
+(def ns-counter (atom 0))
+
+(def g-ns-case
+  (g/let [chosen (g/fmap distinct (g/vector (g/elements (vec (keys libs))) 1 3))
+          specs (g/return nil)
+          picks (g/vector (g/tuple g/boolean (g/elements [:list :all :none]) g/boolean) 3)
+          exclude (g/vector (g/elements '[map filter reverse first]) 0 2)]
+    (let [nsym (symbol (str "fzn" (swap! ns-counter inc)))
+          reqs (for [[[as? refer rename?] lib] (map vector picks chosen)
+                     :let [fns (vec (keys (libs lib)))
+                           alias (symbol (str "a" (swap! ns-counter inc)))
+                           refer-list (vec (take 2 fns))]]
+                 {:lib lib :alias (when as? alias)
+                  :refer refer :refer-list refer-list
+                  :rename (when (and rename? (= refer :list)) {(first refer-list) (symbol (str (first refer-list) "-r"))})})
+          req-form (vec (for [{:keys [lib alias refer refer-list rename]} reqs]
+                          (cond-> [lib]
+                            alias (conj :as alias)
+                            (= refer :list) (conj :refer refer-list)
+                            (= refer :all) (conj :refer :all)
+                            rename (conj :rename rename))))
+          ns-form (cond-> (list 'ns nsym (cons :require req-form))
+                    (seq exclude) (concat [(list :refer-clojure :exclude (vec (distinct exclude)))]))
+          ;; a call through each library: its alias if it has one, else a
+          ;; referred name, else the full name
+          calls (vec (for [{:keys [lib alias refer refer-list rename]} reqs
+                           :let [[f args] (first (libs lib))
+                                 head (cond alias (symbol (str alias) (str f))
+                                            (and (= refer :list) (some #{f} refer-list)) (get rename f f)
+                                            (= refer :all) f
+                                            :else (symbol (str lib) (str f)))]]
+                       (cons head args)))
+          names (vec (distinct (concat exclude (mapcat (fn [{:keys [refer-list rename]}] (concat refer-list (vals rename))) reqs))))]
+      (g/return
+       `(binding [*ns* *ns*]
+          (eval '~(apply list ns-form))
+          [(sort (map str (keys (ns-aliases '~nsym))))
+           (mapv (fn [s#] (str (get (ns-refers '~nsym) s#))) '~names)
+           (eval '~calls)])))))
+
 (def g-case
   (g/frequency [[3 (g/let [pat g-pattern v g-value where (g/elements [:let :fn :loop])]
                      (g/return (binding-case where pat v)))]
-                [1 g-macro-case]]))
+                [1 g-macro-case]
+                [1 g-ns-case]]))
 
 ;; a binding form that core.specs refuses is this script's bug
 (defn spec-bad? [form]

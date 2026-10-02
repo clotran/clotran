@@ -2783,12 +2783,15 @@ done when its fuzzer is green and its seeded run is in `make test`.
 | GC and the heap image | scripts/fuzz-gc (every generator collecting every 3, 17, 1009 allocations, and noimage) | clj | green, in make test (check-fuzz-gc). Found: data-structure code calling back into the evaluator (key equality, hash, a comparator) held its map unrooted -- under GC the reader lost keys, destructure, ns and spec failed, and spec loaded 42 definitions short, which was then marked loaded |
 | spec itself: generated spec forms | scripts/fuzz-spec (its forms checked by a spec of spec forms) | clj: valid?, conform, unform, explain-data, form; 4 modes with torture | green, in make test (check-fuzz-spec). Found: a fn's class name carried no name (spec's fn-sym); (empty m) of a HAMT was nil; a deftype could not name itself in its methods, and its equals, hashCode and compareTo were not consulted; UUID was a record, so a map; scripts/fuzz showed a failing case's answer from a solo rerun. Spec's own nested quantifiers are exponential, in clj too |
 | the specs of fuzz_specs.clj | scripts/fuzz --fns | each :args generator conforms to its :args; every fdef has a :ret | green, in make test (check-fuzz) |
-| macros: destructuring, threading, conditionals | scripts/fuzz-macro | clj, core.specs | green, in make test (check-fuzz-macro). Found: nth took a keyword, so (let [[a b] :k] ...) answered nil nil. ns forms not generated yet |
+| macros: destructuring, threading, conditionals, ns forms | scripts/fuzz-macro | clj, core.specs | green, in make test (check-fuzz-macro). Found: nth took a keyword, so (let [[a b] :k] ...) answered nil nil. ns forms: :require with :as, :refer and :rename, :refer-clojure :exclude; not :import, whose host names the oracle cannot translate inside (package Class) |
 | threads, agents, STM | scripts/fuzz-threads | clj: final values; invariants (the refs' total kept) | green, in make test (check-fuzz-threads); a deadlock is a TIMEOUT |
 | the compiler (tier A, purefort) | scripts/fuzz-pure through scripts/pure-check | clj and the interpreter, gfortran and flang | green, in make test (check-fuzz-pure). The full compiler (clotran compile) is fuzzed by every generator's compiled mode |
 | the heap image | scripts/fuzz-gc's noimage mode | clj | green, with GC above |
-| sockets and the REPL over one | scripts/fuzz-net (through nc, as embed-repl-check) | byte equality; clj for each form through io-prepl | green, in make test (check-fuzz-net). Needs nc: on Windows, a client is still to choose |
-| the package door | scripts/fuzz-door | model/boundary.lisp | green; building and resolving packages is not generated yet |
+| sockets and the REPL over one | scripts/fuzz-net (through nc, as embed-repl-check) | byte equality; clj for each form through io-prepl | green, in make test (check-fuzz-net) |
+| the package door | scripts/fuzz-door | model/boundary.lisp | green |
+| packages from generated Fortran | scripts/fuzz-bind (bind-fortran, gfortran and flang) | what the generator computed | green, in make test (check-fuzz-bind). Found: the door carried no integer(8) array, though bind-fortran binds them |
+| the package manager | scripts/fuzz-deps (clotran-deps on generated graphs, local and git) | a model of PACKAGES.md's rules; each library loaded from where it was chosen | green, in make test (check-fuzz-deps) |
+| all of the above | scripts/fuzz-all (make fuzz-all: full size, hours) | each fuzzer's own | a scorecard: pass, FAIL, TIMEOUT, SKIP |
 
 Spec under GC torture is the first lead: `s/cat` answers wrong under
 torture when core is loaded from source (found 2026-10-01). Finding it

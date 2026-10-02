@@ -398,7 +398,7 @@ $(B)/libsamplelib.$(SOEXT): $(T)/samplelib.f90 $(B)/samplelib_shims.f90 | $(B) $
 # order, as before.
 TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(B)/libsamplelib.$(SOEXT) packages examples/embed/heat
 TEST_CHECKS = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-tree check-banner check-torture check-threads \
-	check-autocompile check-break check-libraries check-oracle check-oracle-gc check-pure check-static check-costs check-fuzz check-frames check-fuzz-spec check-fuzz-print check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net
+	check-autocompile check-break check-libraries check-oracle check-oracle-gc check-pure check-static check-costs check-fuzz check-frames check-fuzz-spec check-fuzz-print check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind
 .PHONY: test $(TEST_CHECKS)
 test: $(TEST_CHECKS)
 $(TEST_CHECKS): $(TEST_DEPS)
@@ -519,6 +519,12 @@ check-fuzz-pure:
 check-fuzz-gc:
 	@echo "--- the collector and the image (PLAN 29): every generator collecting every 3, 17 and 1009 allocations, and from source ---"
 	scripts/fuzz-gc -n 10 -s 1 > $(B)/fuzz-gc.out 2>&1; s=$$?; cat $(B)/fuzz-gc.out; exit $$s
+check-fuzz-deps:
+	@echo "--- the package manager (PLAN 29): generated dependency graphs, local and git, conflicts and jars, through clotran-deps against a model of its rules, and loaded ---"
+	scripts/fuzz-deps -n 20 -s 1 > $(B)/fuzz-deps.out 2>&1; s=$$?; cat $(B)/fuzz-deps.out; exit $$s
+check-fuzz-bind:
+	@echo "--- packages from generated Fortran (PLAN 29): bind-fortran, gfortran and flang, every routine called through the door ---"
+	scripts/fuzz-bind -n 12 -s 1 > $(B)/fuzz-bind.out 2>&1; s=$$?; cat $(B)/fuzz-bind.out; exit $$s
 check-fuzz-net:
 	@echo "--- sockets and the REPL over one (PLAN 29): random payloads echoed, generated forms through io-prepl against clj ---"
 	scripts/fuzz-net -n 20 -s 1 > $(B)/fuzz-net.out 2>&1; s=$$?; cat $(B)/fuzz-net.out; exit $$s
@@ -674,6 +680,12 @@ model:
 # The package door against the model: every scalar value the fuzzer
 # makes must cross or be refused exactly as model/boundary.lisp's
 # `cross` says, and cross unchanged. Needs ACL2, as `model` does.
+.PHONY: fuzz-all
+# Every fuzzer, many times make test's sizes, one after another with a
+# deadline each, and a scorecard (PLAN step 29). Hours, not minutes.
+fuzz-all: clotran-bin $(B)/libsamplelib.$(SOEXT)
+	scripts/fuzz-all --size full
+
 .PHONY: fuzz-door
 fuzz-door: model clotran-bin $(B)/libsamplelib.$(SOEXT)
 	scripts/fuzz-door -n 500 -s 1

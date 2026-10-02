@@ -1,0 +1,170 @@
+#!/usr/bin/env bb
+;; fuzz-bind: packages built from generated Fortran (PLAN step 29).
+;;
+;;   scripts/fuzz-bind [-n N] [-s SEED]
+;;
+;; A module of N random routines -- arguments integer, integer(8),
+;; real(8) and logical, scalars with intent in, out or inout, and
+;; explicit-shape arrays with their length -- whose bodies compute
+;; something fixed from their inputs: each out or inout scalar a sum of
+;; the inputs and a constant, each inout array doubled plus one, a
+;; function's result a sum. scripts/bind-fortran writes the shims and
+;; manifest, gfortran and flang each build the library, and clotran
+;; calls every routine through the door (fortran/load-package). The
+;; answers -- the map of out and inout scalars, and every array as the
+;; call left it -- must be what this script computed for the same
+;; inputs, exactly: small integers and halves, so the arithmetic is.
+(require '[clojure.test.check.generators :as g]
+         '[clojure.string :as str]
+         '[babashka.fs :as fs]
+         '[babashka.process :as p])
+
+(def opts (loop [as *command-line-args* o {:n 12 :seed 1}]
+            (if (empty? as) o
+                (case (first as)
+                  "-n" (recur (drop 2 as) (assoc o :n (parse-long (second as))))
+                  "-s" (recur (drop 2 as) (assoc o :seed (parse-long (second as))))
+                  (do (println "usage: scripts/fuzz-bind [-n N] [-s SEED]") (System/exit 2))))))
+
+(def repo (str (fs/parent (fs/parent (fs/absolutize *file*)))))
+(def ext (if (= "Darwin" (str/trim (:out (p/shell {:out :string} "uname" "-s")))) "dylib" "so"))
+
+;; ---- the routines -------------------------------------------------------------
+
+(def kinds {:i4 "integer" :i8 "integer(8)" :r8 "real(8)" :l "logical"})
+(def g-scalar (g/tuple (g/elements [:i4 :i8 :r8 :l]) (g/elements [:in :in :out :inout])))
+(def g-routine
+  (g/let [scalars (g/vector g-scalar 1 4)
+          arrays (g/vector (g/tuple (g/elements [:r8 :i8]) (g/elements [:in :inout])) 0 2)
+          fn? g/boolean
+          c (g/choose 1 9)]
+    (g/return {:scalars scalars :arrays arrays :fn? (and fn? (every? (fn [[_ i]] (= i :in)) scalars) (every? (fn [[_ i]] (= i :in)) arrays)) :c c})))
+
+(defn arg-names [{:keys [scalars arrays]}]
+  {:scalars (vec (map-indexed (fn [i [k intent]] {:name (str "s" i) :kind k :intent intent}) scalars))
+   :arrays (vec (map-indexed (fn [i [k intent]] {:name (str "a" i) :kind k :intent intent}) arrays))})
+
+;; the value of the inputs, as the body computes it: integers and reals
+;; summed (an array by its sum), a logical counted as 1 when true
+(defn fortran-src [rn {:keys [fn? c] :as r}]
+  (let [{:keys [scalars arrays]} (arg-names r)
+        has-n (seq arrays)
+        params (concat (map :name scalars) (map :name arrays) (when has-n ["n"]))
+        ins (concat (filter #(#{:in :inout} (:intent %)) scalars) (filter #(#{:in :inout} (:intent %)) arrays))
+        total (str/join " + " (cons "0.0d0"
+                                    (for [{:keys [name kind]} ins
+                                          :let [arr (str/starts-with? name "a")]]
+                                      (cond (= kind :l) (str "merge(1.0d0, 0.0d0, " name ")")
+                                            arr (str "dble(sum(" name "))")
+                                            :else (str "dble(" name ")")))))
+        decl (fn [{:keys [name kind intent]} arr]
+               (str "    " (kinds kind) ", intent(" (clojure.core/name intent) ") :: " name (when arr "(n)") "\n"))]
+    (str "  " (if fn? "function " "subroutine ") rn "(" (str/join ", " params) ")"
+         (when fn? " result(res)") "\n"
+         (when has-n "    integer, intent(in) :: n\n")
+         (apply str (map #(decl % false) scalars))
+         (apply str (map #(decl % true) arrays))
+         "    real(8) :: t\n"
+         (when fn? "    real(8) :: res\n")
+         "    t = " total "\n"
+         (apply str (for [{:keys [name kind intent]} scalars :when (#{:out :inout} intent)]
+                      (str "    " name " = "
+                           (case kind
+                             :l (str "(t > " c ")")
+                             :r8 (str "t * 0.5d0 + " c)
+                             (:i4 :i8) (str "int(t, kind(" name ")) + " c)) "\n")))
+         (apply str (for [{:keys [name kind intent]} arrays :when (= intent :inout)]
+                      (str "    " name " = " name " * 2 + 1\n")))
+         (when fn? (str "    res = t + " c "\n"))
+         "  end " (if fn? "function " "subroutine ") rn "\n")))
+
+;; the same, in bb: what the call must answer
+(defn expected [{:keys [fn? c] :as r} args]
+  (let [{:keys [scalars arrays]} (arg-names r)
+        val-of (fn [{:keys [name kind]}] (get args name))
+        t (reduce + 0.0 (concat (for [s scalars :when (#{:in :inout} (:intent s)) :let [v (val-of s)]]
+                                  (if (= :l (:kind s)) (if v 1.0 0.0) (double v)))
+                                (for [a arrays :when (#{:in :inout} (:intent a))] (double (reduce + 0 (val-of a))))))
+        outs (into {} (for [{:keys [name kind intent]} scalars :when (#{:out :inout} intent)]
+                        [(keyword name) (case kind :l (> t c) :r8 (+ (* t 0.5) c) (+ (long t) c))]))
+        arrs (into {} (for [{:keys [name kind intent] :as a} arrays]
+                        [name (if (= intent :inout)
+                                (mapv #(+ (* 2 %) 1) (val-of a))
+                                (vec (val-of a)))]))]
+    ;; a subroutine with no out or inout scalar answers nil, as the
+    ;; language test's (samplelib.raw/scale ...) does
+    {:ret (cond fn? (+ t c) (empty? outs) nil :else outs) :arrays arrs}))
+
+(def g-r8 (g/fmap #(/ % 2.0) (g/choose -20 20)))
+(def g-int (g/choose -50 50))
+
+(defn g-args [r len]
+  (let [{:keys [scalars arrays]} (arg-names r)]
+    (apply g/tuple
+           (concat (for [{:keys [kind]} scalars] (case kind :l g/boolean :r8 g-r8 g-int))
+                   (for [{:keys [kind]} arrays] (g/vector (if (= kind :r8) g-r8 g-int) len))))))
+
+;; ---- a run --------------------------------------------------------------------
+
+(defn run [cmd env secs dir]
+  (let [proc (apply p/process {:dir dir :out :string :err :string :extra-env env :in ""} cmd)
+        r (deref proc (* 1000 secs) ::timeout)]
+    (if (= r ::timeout) (do (p/destroy-tree proc) {:timeout true :exit -1 :out "" :err "timeout"}) r)))
+
+(let [{:keys [n seed]} opts
+      work (str (fs/create-temp-dir {:prefix "fuzz-bind"}))
+      routines (vec (for [i (range n)] (g/generate g-routine 6 (+ seed i))))
+      len 3
+      calls (vec (for [[i r] (map-indexed vector routines)
+                       :let [args (g/generate (g-args r len) 6 (+ seed 7919 i))
+                             {:keys [scalars arrays]} (arg-names r)
+                             argmap (zipmap (concat (map :name scalars) (map :name arrays)) args)]]
+                   {:i i :r r :argmap argmap :want (expected r argmap)}))
+      src (str work "/fzbind.f90")
+      problems (atom [])]
+  (spit src (str "! generated by scripts/fuzz-bind\nmodule fzbind\n  implicit none\ncontains\n"
+                 (str/join "\n" (map-indexed (fn [i r] (fortran-src (str "r" i) r)) routines))
+                 "end module fzbind\n"))
+  (let [b (run [(str repo "/scripts/bind-fortran") "--package" "fzbind" "--out" (str work "/shims.f90") src] {} 120 repo)]
+    (when-not (zero? (:exit b)) (println "bind-fortran failed:" (:err b) (:out b)) (System/exit 1)))
+  ;; the driver: each call's answer and its arrays after, one line each
+  (spit (str work "/drive.cljf")
+        (str "(def p (fortran/load-package \"LIB\"))\n"
+             (str/join "\n"
+                       (for [{:keys [i r argmap]} calls
+                             :let [{:keys [scalars arrays]} (arg-names r)
+                                   arr-syms (for [a arrays] (symbol (:name a)))
+                                   mk (for [{:keys [name kind]} arrays]
+                                        (str name " (let [x (fortran/make-array \"" (if (= kind :r8) "real8" "int8") "\" " len ")] "
+                                             (str/join " " (map-indexed (fn [j v] (str "(fortran/aset x " j " " (pr-str v) ")")) (get argmap name)))
+                                             " x)"))
+                                   call-args (concat (for [s scalars :when (#{:in :inout} (:intent s))] (pr-str (get argmap (:name s))))
+                                                     (map :name arrays)
+                                                     (when (seq arrays) [(str len)]))]]
+                         (str "(println \"FZB " i "\" (pr-str (try (let [" (str/join " " mk) "] "
+                              "[(fzbind.raw/r" i " " (str/join " " call-args) ") "
+                              "{" (str/join " " (for [a arrays] (str (pr-str (:name a)) " (vec (for [j (range " len ")] (fortran/aget " (:name a) " j)))"))) "}])"
+                              " (catch clotran.host.throwable e [:threw (.getMessage e)]))))")))
+             "\n"))
+  (doseq [fc ["gfortran" "flang"]]
+    (let [lib (str work "/libfzbind-" fc "." ext)
+          bld (run [fc "-O2" "-ffp-contract=off" "-shared" "-fPIC" "-o" lib src (str work "/shims.f90")] {} 300 work)]
+      (if-not (zero? (:exit bld))
+        (swap! problems conj (str fc " could not build the library: " (:err bld)))
+        (let [d (str work "/drive-" fc ".cljf")
+              _ (spit d (str/replace (slurp (str work "/drive.cljf")) "LIB" lib))
+              r (run [(str repo "/clotran-bin") (str repo "/src/clj/clojure/core.clj") d] {} 300 repo)
+              got (into {} (for [[_ i v] (re-seq #"FZB (\d+) (.*)" (:out r))] [(parse-long i) (read-string v)]))]
+          (when (:timeout r) (swap! problems conj (str fc ": TIMEOUT")))
+          (doseq [{:keys [i r want argmap]} calls
+                  :let [[ret arrs] (get got i)
+                        want-ret (:ret want)
+                        ok (and (= arrs (:arrays want))
+                                (if (number? want-ret) (and (number? ret) (== ret want-ret)) (= ret want-ret)))]]
+            (when-not ok
+              (swap! problems conj (str fc " r" i " " (pr-str argmap) "\n   want " (pr-str [want-ret (:arrays want)])
+                                        "\n   got  " (pr-str (get got i (str/trim (str (:err r)))))))))))))
+  (doseq [x @problems] (println x))
+  (println (str "fuzz-bind: " n " routines x 2 compilers, " (count @problems) " problems"))
+  (if (System/getenv "FUZZ_KEEP") (println "kept:" work) (fs/delete-tree work))
+  (System/exit (if (empty? @problems) 0 1)))
