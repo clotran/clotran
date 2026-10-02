@@ -1,0 +1,91 @@
+#!/usr/bin/env bb
+;; fuzz-str: strings and regex, generated (PLAN step 29).
+;;
+;;   scripts/fuzz-str [-n N] [-s SEED] [-m modes] [-o cases.edn]
+;;
+;; N cases, each a string operation -- counting, subs, case, trimming,
+;; searching, splitting, replacing, re-find/re-seq/re-matches with group
+;; references -- on generated strings and regexes, through clj and every
+;; clotran mode by scripts/fuzz -f.
+;;
+;; Not generated, as DEVIATIONS records them: characters off the Basic
+;; Multilingual Plane (41, clj counts UTF-16 units), \w \d \s \b and (?i)
+;; (14, ICU's classes are Unicode), and characters whose case map is
+;; more than one character, like the sharp s (41).
+(require '[clojure.test.check.generators :as g]
+         '[clojure.string :as str]
+         '[babashka.fs :as fs]
+         '[babashka.process :as p])
+
+(def opts (loop [as *command-line-args* o {:n 400 :seed 1 :modes "flat,tree,compiled"}]
+            (if (empty? as) o
+                (case (first as)
+                  "-n" (recur (drop 2 as) (assoc o :n (parse-long (second as))))
+                  "-s" (recur (drop 2 as) (assoc o :seed (parse-long (second as))))
+                  "-m" (recur (drop 2 as) (assoc o :modes (second as)))
+                  "-o" (recur (drop 2 as) (assoc o :out (second as)))
+                  (do (println "usage: scripts/fuzz-str [-n N] [-s SEED] [-m modes] [-o cases.edn]")
+                      (System/exit 2))))))
+
+(def alphabet (vec (concat "abcAB01 -_.,$\\\t\n" "éñüΩλЖж—")))
+(def g-char (g/elements alphabet))
+(def g-s (g/fmap str/join (g/vector g-char 0 12)))
+(def g-short (g/fmap str/join (g/vector (g/elements (vec "abA0 .")) 0 3)))
+
+;; a regex as text, from what both engines read alike
+(def g-atom (g/one-of [(g/elements ["a" "b" "A" "0" " " "\\." "\\$" "é" "λ" "-"])
+                       (g/elements ["." "[ab]" "[^a ]" "[a-c]" "[0-9]" "[éñ]"])]))
+(def g-re
+  (g/recursive-gen
+   (fn [inner]
+     (g/one-of [(g/fmap str/join (g/vector inner 1 3))
+                (g/fmap (fn [[x q]] (str "(?:" x ")" q)) (g/tuple inner (g/elements ["*" "+" "?" "{1,2}" "*?" "+?"])))
+                (g/fmap (fn [x] (str "(" x ")")) inner)
+                (g/fmap (fn [[x y]] (str x "|" y)) (g/tuple inner inner))
+                (g/fmap (fn [[a x q]] (str a x q)) (g/tuple (g/elements ["" "^"]) inner (g/elements ["" "$"])))]))
+   (g/fmap (fn [[a q]] (str a q)) (g/tuple g-atom (g/elements ["" "*" "+" "?"])))))
+
+(defrecord Re [text])
+(defmethod print-method Re [r w] (.write w (str "#\"" (:text r) "\"")))
+
+(def g-case
+  (g/let [s g-s t g-short re (g/fmap ->Re g-re) i (g/choose 0 14) j (g/choose 0 14) lim (g/choose -1 3)
+          op (g/elements [:count :subs :upper :lower :cap :trim :triml :trimr :blank :rev :split :split-lim
+                          :replace :replace1 :replace-group :replace-fn :find :seq :matches :index :lindex
+                          :includes :starts :ends :join :escape :chars])]
+    (case op
+      :count `(count ~s)
+      :subs `(subs ~s ~(min i (count s)) ~(min (max i j) (count s)))
+      :upper `(clojure.string/upper-case ~s)
+      :lower `(clojure.string/lower-case ~s)
+      :cap `(clojure.string/capitalize ~s)
+      :trim `(clojure.string/trim ~s)
+      :triml `(clojure.string/triml ~s)
+      :trimr `(clojure.string/trimr ~s)
+      :blank `(clojure.string/blank? ~s)
+      :rev `(clojure.string/reverse ~s)
+      :split `(clojure.string/split ~s ~re)
+      :split-lim `(clojure.string/split ~s ~re ~lim)
+      :replace `(clojure.string/replace ~s ~re ~t)
+      :replace1 `(clojure.string/replace-first ~s ~re ~t)
+      :replace-group `(clojure.string/replace ~s ~(->Re (str "(" (:text re) ")")) "<$1>")
+      :replace-fn `(clojure.string/replace ~s ~re (fn [m#] (str "[" (if (string? m#) m# (first m#)) "]")))
+      :find `(re-find ~re ~s)
+      :seq `(re-seq ~re ~s)
+      :matches `(re-matches ~re ~s)
+      :index `(clojure.string/index-of ~s ~t)
+      :lindex `(clojure.string/last-index-of ~s ~t)
+      :includes `(clojure.string/includes? ~s ~t)
+      :starts `(clojure.string/starts-with? ~s ~t)
+      :ends `(clojure.string/ends-with? ~s ~t)
+      :join `(clojure.string/join ~t (clojure.string/split ~s ~re))
+      :escape `(clojure.string/escape ~s {\a "<A>" \é "e" \space "_"})
+      :chars `(mapv int ~s))))
+
+(let [{:keys [n seed]} opts
+      forms (for [i (range n)] (g/generate g-case 10 (+ seed i)))
+      out (or (:out opts) (str (fs/create-temp-file {:prefix "fuzz-str" :suffix ".edn"})))]
+  (spit out (str "[" (str/join "\n" (map pr-str forms)) "]"))
+  (println (str "fuzz-str: " n " cases -> " out))
+  (let [r (p/shell {:continue true} (str (fs/parent *file*) "/fuzz") "-f" out "-m" (:modes opts))]
+    (System/exit (:exit r))))
