@@ -1754,6 +1754,10 @@
              ! dot_dispatch roots it first thing, and this frame kept
              ! (. f (applyTo s)) -- core's apply -- holding the head of s
              ! for the whole call, every cell of (apply + (take n (range)))
+             ! a fn the method calls back was called from here
+             val = gc_slot(nd, 4)
+             tctx%pending_site = 0
+             if (val%tag == GCT_INT) tctx%pending_site = int(val%ival, kind=4)
              v = vs_get(vst, b + 4)
              call vs_set(vst, b + 4, gc_nil())
              val = dot_dispatch(nd, vs_get(vst, b + 3), v, tctx%kst(tctx%ksp)%aux)

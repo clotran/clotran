@@ -675,7 +675,7 @@ contains
        call fn_who(tctx%fstack_fn(i), who)
        fname = ""
        line = 0
-       if (tctx%fstack_site(i) /= 0) call gcr_position_parts(tctx%fstack_site(i), fname, line, col)
+       if (frame_site(tctx, i) /= 0) call gcr_position_parts(frame_site(tctx, i), fname, line, col)
        m = gca_empty([roots, vs_get(vst, base + 1)])
        call vs_set(vst, base + 2, m)
        call frame_put(base, roots, "class", gc_str(who, [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)]))
@@ -739,8 +739,8 @@ contains
   end subroutine fail
 
   ! The call stack as text, innermost first, taken when an error is
-  ! raised. Each line names the function entered and where it was
-  ! called from.
+  ! raised. Each line names a function and where in it execution is
+  ! (frame_site).
   ! The rendered trace stops at 128 frames, as clj's stops at
   ! its maximum trace depth: a stack overflow 200000 deep is not 200000
   ! lines, and building them by concatenation was quadratic. The
@@ -785,9 +785,9 @@ contains
     if (tctx%fstack_top > 128) write(more, '(I0)') tctx%fstack_top - 128
     do i = tctx%fstack_top, max(1, tctx%fstack_top - 127), -1
        call fn_who(tctx%fstack_fn(i), who)
-       if (tctx%fstack_site(i) /= 0) then
+       if (frame_site(tctx, i) /= 0) then
           block
-             call gcr_position(tctx%fstack_site(i), s=dlt_1)
+             call gcr_position(frame_site(tctx, i), s=dlt_1)
              tctx%last_trace = tctx%last_trace // "  at " // who // " (" // dlt_1 // ")" // achar(10)
           end block
        else
@@ -809,6 +809,20 @@ contains
     s = ""
     if (allocated(tctx%last_trace)) s = tctx%last_trace
   end subroutine gce_trace
+
+  ! Where frame i is now, as a stack trace element says: the call it
+  ! is waiting on, which is where the frame above it was called from;
+  ! the innermost, the call in progress if one is pending. Each frame
+  ! records where it was CALLED from, so this is the next one's site.
+  integer function frame_site(tctx, i)
+    type(eval_ctx), pointer, intent(in) :: tctx
+    integer, intent(in) :: i
+    if (i < tctx%fstack_top) then
+       frame_site = tctx%fstack_site(i + 1)
+    else
+       frame_site = tctx%pending_site
+    end if
+  end function frame_site
 
   ! tctx passed, not fetched: a thread-key lookup per call, and every
   ! call makes one of these and a pop_frame

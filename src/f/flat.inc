@@ -1506,6 +1506,8 @@
           end if
           call vs_set(vst, b + 6, gc_nil())
           call vs_set(vst, vbase + 1, gc_nil())
+          ! a fn the method calls back was called from here
+          tctx%pending_site = w(7)
           val = dot_dispatch(v, vs_get(vst, b + 3), argv, w(6))
           if (tctx%yield_flag) then
              call vs_set(vst, b + 6, argv)
