@@ -202,8 +202,10 @@ contains
     select case (gc_kind(slot))
     case (OBJ_HAMT_LEAF)
        if (gc_equal(gc_slot(slot, 1), k)) then
-          ! Same key: replace the value, count unchanged.
-          leaf = gc_obj(OBJ_HAMT_LEAF, [k, v], roots)
+          ! Same key: replace the value, count unchanged -- and KEEP the
+          ! key that was there, as BitmapIndexedNode.assoc does: (conj #{1N}
+          ! 1) is #{1N}, (assoc {1N :a} 1 :b) is {1N :b} (scripts/fuzz-coll)
+          leaf = gc_obj(OBJ_HAMT_LEAF, [gc_slot(slot, 1), v], roots)
           call gc_vec_set(out, idx, leaf)
        else
           sub = split(slot, h, shift, k, v, roots)

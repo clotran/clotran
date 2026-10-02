@@ -3016,3 +3016,12 @@
 ;; (regex_shim.c compiles it as {0,}? / {1,}?; scripts/fuzz-str)
 [(re-matches #"(?:a?)+?" "b") (re-matches #"(λ)|(?: ?)+?" "Ω\n\t1A_") (re-find #"(?:ab)*?c" "ababc") (re-seq #"a+?" "aaa")
  (re-matches #"(a?)+?" "aa") (re-find #"[*?]+" "x*?y") (re-find #"\*?a" "*a") (re-find #"\Qa+?\E" "a+?") (str #"a+?b*?")]
+
+;; an equal key already in a hash map or set stays: (conj #{1N ...} 1)
+;; keeps 1N, and assoc replaces only the value (BitmapIndexedNode.assoc;
+;; scripts/fuzz-coll)
+[(some #{2N} (conj (into #{2N} (range 20)) 2))
+ (some #(when (= % 1) %) (keys (assoc (zipmap (cons 1N (range 2 20)) (range)) 1 :b)))
+ (into #{1} [1N]) (some #(when (= % 1) %) (persistent! (conj! (transient (into #{1N} (range 2 20))) 1)))
+ (some #(when (= % 1) %) (keys (persistent! (assoc! (transient (zipmap (cons 1N (range 2 20)) (range))) 1 :x))))]
+
