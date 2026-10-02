@@ -172,6 +172,12 @@
        (remove #(re-find #"/eval\d*" %))
        (partition-by identity) (map first) vec))
 
+;; the frames clj's compiler adds: a loop or try in expression position
+;; runs as ((fn* [] form)), a call the program did not write
+;; (DEVIATIONS 73)
+(defn hoisted [{:keys [c fns]}]
+  (set (for [f fns :when (#{:loop :try} (:shape f))] (str "fzf/" (fname c (:i f)) "/fn"))))
+
 ;; the program's own frames: its namespace's, and anonymous ones (a
 ;; closure named "fn" is the program's, not core's); clojure.core's own
 ;; -- apply, mapv's walk -- are not the program's to check
@@ -202,7 +208,7 @@
             d (cond
                 (nil? g) [[:no-answer (str m)]]
                 (= leaf :throw)
-                (let [w (user-chain (get clj c) true) h (user-chain g false)]
+                (let [w (remove (hoisted cs) (user-chain (get clj c) true)) h (user-chain g false)]
                   (when (not= w h) [[:trace (str "clj " (pr-str w) " clotran " (pr-str h))]]))
                 :else (break-diffs (expected-break cs) g))]
         (assoc (zipmap [:kind :detail] d) :case c :mode m))

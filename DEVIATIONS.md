@@ -2058,3 +2058,19 @@ docstring says: `(- 0 Long/MIN_VALUE)` overflows in both. Found by
 
 **Removal**: none intended -- it would mean overflowing on purpose
 where the exact answer is at hand.
+
+## 73. A loop or try in an expression adds no frame
+
+In clj, `(let [r (loop ...)] ...)` and `(let [r (try ...)] ...)` show
+an extra `ns/outer/fn` frame in a stack trace. The compiler wraps a
+loop, let or try that sits in expression position (not a return or a
+statement) as `((fn* [] form))` and calls it, so the trace shows the
+call (Compiler.java: `analyze(context, RT.list(RT.list(FNONCE,
+PersistentVector.EMPTY, form)))`, in TryExpr, LetExpr and the loop
+parser). That is how clj's bytecode compiler gets an empty operand
+stack, not something the language says. clotran evaluates the form in
+place, so a trace shows only the frames the program wrote.
+`scripts/fuzz-frames` removes these frames from clj's chain before it
+compares.
+
+**Removal**: none intended -- the frame is not the program's.
