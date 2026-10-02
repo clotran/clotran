@@ -2782,7 +2782,7 @@ done when its fuzzer is green and its seeded run is in `make test`.
 | strings and regex | -- | clj | |
 | collections under random op sequences | -- | clj, model/ | |
 | GC: random allocation under torture | -- | the same program without torture | |
-| spec itself: generated spec forms | -- | clj: conform, explain | |
+| spec itself: generated spec forms | scripts/fuzz-spec (its forms checked by a spec of spec forms) | clj: valid?, conform, unform, explain-data, form; 4 modes with torture | green, in make test (check-fuzz-spec). Found: a fn's class name carried no name (spec's fn-sym); (empty m) of a HAMT was nil; a deftype could not name itself in its methods, and its equals, hashCode and compareTo were not consulted; UUID was a record, so a map; scripts/fuzz showed a failing case's answer from a solo rerun. Spec's own nested quantifiers are exponential, in clj too |
 | the specs of fuzz_specs.clj | -- | clj | |
 | macros: destructuring, ns forms | -- | clj, core.specs | |
 | threads, agents, STM | -- | invariants (sums kept, no lost update) | |
