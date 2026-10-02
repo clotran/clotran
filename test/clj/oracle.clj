@@ -2821,7 +2821,7 @@
 (let [big (into {} (map (fn [i] [(->RA i 0) i]) (range 20))) small {(->RA 5 0) 5} s (set (map #(->RA % 0) (range 20)))] [(get big (->RA 5 0)) (get small (->RA 5 0)) (contains? s (->RA 7 0)) (count (set [(->RA 1 1) (->RA 1 1)])) (count (into #{} (map (fn [_] (->RA 1 1)) (range 20))))])
 [(hash (->RA 7 2)) (hash (assoc (->RA 1 2) :a 7)) (hash (with-meta (->RA 7 2) {:m 1})) (.equals (->RA 7 2) (->RA 7 2))]
 
-(expect-diff "DEVIATIONS 60: a deftype's own equals and hasheq are not consulted")
+;; a deftype's equals and hasheq are its = and hash (DEVIATIONS 60)
 (do (deftype VP [x] clotran.host.value (equals [_ o] (and (instance? VP o) (= x (.-x o)))) (hashCode [_] (hash x)) clotran.host.i_hash_eq (hasheq [_] (hash x))) [(= (VP. 1) (VP. 1)) (count (set [(VP. 1) (VP. 1)]))])
 
 ;; a def, a swap! and a letfn beside a loop's recur (node_has_recur: only
@@ -2968,3 +2968,26 @@
 [(- -7/2 -9223372036854775808) (- 1/2 -9223372036854775808)]
 ;; and two longs overflow in both, as the docstring says
 (try (- 0 -9223372036854775808) (catch clotran.host.arithmetic_exception e :overflow))
+
+;; a deftype names itself inside its own methods, as clj's compile stub
+;; lets it (scripts/fuzz-spec found UUID could not)
+(do (deftype OrU [s] clotran.host.value (toString [_] (str (instance? OrU 1) (instance? OrU (OrU. 2)))))
+    (str (OrU. "a")))
+
+;; a deftype's equals and hashCode are its = and hash, as a map key and
+;; in a set too (Util.equiv, Util.hasheq)
+(do (deftype OrE [s] clotran.host.value
+      (equals [_ o] (and (instance? OrE o) (= s (.-s ^OrE o))))
+      (hashCode [_] (hash s)))
+    [(= (OrE. 1) (OrE. 1)) (= (OrE. 1) (OrE. 2)) (= (hash (OrE. 1)) (hash (OrE. 1))) (hash (OrE. 7))
+     (get {(OrE. 1) :v} (OrE. 1)) (count (set [(OrE. 1) (OrE. 1) (OrE. 2)]))])
+
+;; and its compareTo is its compare, and sort's order
+(do (deftype OrC [n] clotran.host.comparable (compareTo [_ o] (compare n (.-n ^OrC o))))
+    [(compare (OrC. 1) (OrC. 2)) (map #(.-n ^OrC %) (sort [(OrC. 3) (OrC. 1) (OrC. 2)]))])
+
+;; a UUID is not a map, and hashes and orders as clj's does: by its two
+;; halves, signed
+(let [a #uuid "8e0fb45a-eeb5-4a87-a9ff-cc5db1da66a0" b #uuid "0e0fb45a-eeb5-4a87-a9ff-cc5db1da66a0"]
+  [(hash a) (hash b) (compare a b) (sort [a b]) (map? a) (record? a) (coll? a) (uuid? a)
+   (= a (parse-uuid (str a))) (get {a 1} (parse-uuid (str a))) (str a)])

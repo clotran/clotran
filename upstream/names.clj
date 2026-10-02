@@ -249,7 +249,12 @@
 (def back
   "clotran's name -> the upstream name clj knows it by: the first listed
   wins where several upstream classes are one clotran class."
-  (reduce (fn [m [q c]] (if (m c) m (assoc m c q))) {} (sort-by key (:classes table))))
+  (reduce (fn [m [q c]] (if (m c) m (assoc m c q))) {}
+          ;; the listed ones first, then every class every namespace
+          ;; imports under the name the default rule gives it:
+          ;; java.lang.Comparable is clotran.host.comparable, listed or not
+          (concat (sort-by key (:classes table))
+                  (sort (map (fn [q] [q (class-name q)]) (vals implicit))))))
 
 (defn to-upstream
   "A form's text written in clotran's names, as clj must read it."

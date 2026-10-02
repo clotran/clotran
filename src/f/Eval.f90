@@ -2842,10 +2842,13 @@ contains
   end function inst_lookup
 
   ! (= inst other) through the instance's own equiv.
-  recursive function inst_equiv(inst, other, found) result(out)
+  ! `how`: the method asked, equiv unless given -- equals for a
+  ! deftype that declares no equiv, as Util.equiv asks k1.equals(k2)
+  recursive function inst_equiv(inst, other, found, how) result(out)
     type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: inst, other
     logical, intent(out) :: found
+    character(len=*), intent(in), optional :: how
     type(gc_value) :: out, tmp
     integer :: base
     vst => gc_my_stack()
@@ -2857,9 +2860,30 @@ contains
     tmp = gcv_conj(vs_get(vst, base + 3), vs_get(vst, base + 2), &
          [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
     call vs_set(vst, base + 3, tmp)
-    out = inst_invoke(vs_get(vst, base + 1), "equiv", vs_get(vst, base + 3), found)
+    if (present(how)) then
+       out = inst_invoke(vs_get(vst, base + 1), how, vs_get(vst, base + 3), found)
+    else
+       out = inst_invoke(vs_get(vst, base + 1), "equiv", vs_get(vst, base + 3), found)
+    end if
     call vs_leave(vst, base)
   end function inst_equiv
+
+  ! A deftype's own hash, asked once when the instance is made and kept
+  ! in slot 4: hasheq, else hashCode, as Util.hasheq asks. Hashing runs
+  ! inside a map insert, where calling Clojure could collect what the
+  ! insert holds (gce_coll_hash), so it is not asked there. A record
+  ! hashes by its fields (gce_coll_hash); an instance whose type has
+  ! neither hashes by identity. DEVIATIONS 74.
+  recursive subroutine inst_cache_hash(inst)
+    type(gc_value), intent(in) :: inst
+    type(gc_value) :: h
+    logical :: found
+    if (gc_kind(inst) /= OBJ_INST) return
+    if (record_meta_index(inst) >= 0) return
+    h = inst_invoke0(inst, "hasheq", found)
+    if (.not. found) h = inst_invoke0(inst, "hashCode", found)
+    if (found .and. h%tag == GCT_INT) call gc_set_slot(inst, 4, h)
+  end subroutine inst_cache_hash
 
   ! (keys inst) / (vals inst), built from the instance's own seq --
   ! which hands back map entries, so the key is each entry's first and
@@ -14326,6 +14350,14 @@ contains
          logical :: cok
          integer :: cv
          cv = compare_values(gcv_nth(args, 0), gcv_nth(args, 1), cok)
+         if (.not. cok .and. gc_kind(strip_meta(gcv_nth(args, 0))) == OBJ_INST) then
+            ! a deftype that is Comparable answers by its compareTo
+            out = inst_invoke(strip_meta(gcv_nth(args, 0)), "compareTo", rest_args(vs_get(vst, base + 1), 1), cok)
+            if (cok) then
+               call vs_leave(vst, base)
+               return
+            end if
+         end if
          if (cok) then
             out = gc_int(cv)
          else
@@ -14636,7 +14668,18 @@ contains
          tb = gc_slot(b, 1)
          if (ta%ref /= tb%ref) return
          m = record_meta_index(a)
-         if (m < 0) return
+         if (m < 0) then
+            ! a deftype that declares equiv or equals is equal by it, as
+            ! a map key too (Util.equiv); one that declares neither is itself
+            block
+              type(gc_value) :: r
+              logical :: hit
+              r = inst_equiv(a, b, hit)
+              if (.not. hit) r = inst_equiv(a, b, hit, "equals")
+              if (hit) eq = truthy(r)
+            end block
+            return
+         end if
          do i = 0, m - 1
             if (.not. deep_equal(gcv_nth(gc_slot(a, 2), i), gcv_nth(gc_slot(b, 2), i), [a, b])) return
          end do
@@ -14760,7 +14803,13 @@ contains
          character(len=:), allocatable :: nm
          m = record_meta_index(v)
          if (m < 0) then
-            h = mix32(ieor(v%ref, v%tag))
+            ! the hash its type answered when it was made (inst_cache_hash)
+            f = gc_slot(v, 4)
+            if (f%tag == GCT_INT) then
+               h = int(f%ival)
+            else
+               h = mix32(ieor(v%ref, v%tag))
+            end if
          else
             fields = gc_slot(gc_slot(v, 1), 2)
             h = 0
@@ -15440,6 +15489,7 @@ contains
     ! (= (->P 1 2) (->P 1 2)) false.
     if (gc_kind(a) == OBJ_INST) then
        r = inst_equiv(a, b, hit)
+       if (.not. hit) r = inst_equiv(a, b, hit, "equals")
        if (hit) then
           eq = truthy(r)
           return

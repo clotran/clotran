@@ -1771,30 +1771,30 @@ behaviour is an optimisation leaking through (the retry's error is an
 NPE about the compiler's own field), so matching it buys nothing a
 program could want; not done.
 
-## 60. A deftype's own equals and hasheq are not consulted
+## 60. A deftype's hash is asked once, when it is made
 
-A deftype that defines `equals` (Object) or `hasheq` (IHashEq) is still
-compared and hashed by identity: `=` does not call its `equals`, and a
-map or set does not call its `hasheq`.
+A deftype's own `equals` (and `equiv`) is its `=`, and its `hasheq`, else
+`hashCode`, is its `hash`, as a map key and in a set too -- as clj's
+`Util.equiv` and `Util.hasheq` ask them (scripts/fuzz-spec found that
+they were not, when UUID became a deftype, 2026-10-02). Its
+`compareTo` is its `compare`.
 
-    (deftype VP [x] Object (equals [_ o] (and (instance? VP o) (= x (.-x o))))
-                    IHashEq (hasheq [_] (hash x)))
-    [(= (VP. 1) (VP. 1)) (count (set [(VP. 1) (VP. 1)]))]
-    ;; clj: [true 1]    clotran: [false 2]
+What differs: clotran calls the hash method ONCE, when the instance is
+constructed, and keeps the answer (Eval.f90 `inst_cache_hash`). Hashing
+happens inside a map insert, where running Clojure code could collect
+what the insert holds, so the method is not called there. So a
+`hashCode` with a side effect has it at construction, not at each
+`hash`, and a type whose hash reads a `^:volatile-mutable` field keeps
+the hash it had when made.
 
-Records are NOT affected (2026-09-29): a record is equal by type and
-values and hashes as emit-defrecord's hasheq does -- the class symbol's
-hash xor the unordered hash of its map view -- computed in Fortran from
-the field names (Eval.f90 `gce_coll_hash`, `gce_coll_equal`). Before
-that, records were identity-hashed and identity-compared inside maps
-and sets: a set of twenty equal records had twenty members, and a map
-keyed by a record could not find it again.
+Records are equal by type and values and hash as emit-defrecord's
+hasheq does, computed in Fortran from the field names (Eval.f90
+`gce_coll_hash`, `gce_coll_equal`). A type that declares no hash
+method hashes by identity, as in clj.
 
-**Removal**: call the instance's own methods from gce_coll_equal and
-gce_coll_hash. They run inside a map insert, where an allocation was
-unsafe while a callee could drop its caller's roots; with
-scripts/root-check in the gate that is now checkable, but every caller
-of gc_hash and gc_equal would have to be audited first. Not done.
+**Removal**: hashing that can call out safely -- the insert's operands
+rooted across the call, which scripts/root-check can now check -- and
+then the method called at each hash.
 
 ## 61. A vector key past 32 bits is out of range, not wrapped
 

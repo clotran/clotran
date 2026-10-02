@@ -2828,6 +2828,10 @@
           cn = nsn // "." // cn
        end if
        call declare_type_name(cn)
+       ! and by its short name inside its own methods, as clj's compile
+       ! stub is (Compiler.COMPILE_STUB_SYM, HostExpr.maybeClass); the
+       ! (import ...) deftype expands to after this records the same
+       call record_import(cn)
     end block
     w = gcl_rest(vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 4)])
     call vs_set(vst, base + 3, w)
