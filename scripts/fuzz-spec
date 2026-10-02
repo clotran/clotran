@@ -1,0 +1,128 @@
+#!/usr/bin/env bb
+;; fuzz-spec: clojure.spec.alpha itself, generated (PLAN step 29).
+;;
+;;   scripts/fuzz-spec [-n SPECS] [-k VALUES] [-s SEED] [-m modes] [-o cases.edn]
+;;
+;; Random SPEC FORMS -- the regex ops (cat, alt, *, +, ?, &), or, and,
+;; nilable, coll-of, map-of, tuple, keys over three registered specs,
+;; nested -- and for each, VALUES: K drawn from the spec's own generator
+;; (s/gen, so most conform) and K arbitrary ones (so most do not). Each
+;; pair is one case,
+;;
+;;   [(s/valid? sp v) (s/conform sp v) the unform of that conform
+;;    the explain-data problems (path, pred, val, in) (s/form sp)]
+;;
+;; run through clj and clotran by scripts/fuzz -f, which compares values.
+;;
+;; THE SPECS HAVE SPECS: ::spec-form below says what a generated spec
+;; form is, and a form that does not conform to it is a bug in this
+;; script, reported and not run. The values come from s/gen with the
+;; seed, so a run is reproducible; what they mean is clj's to say.
+(require '[clojure.spec.alpha :as s]
+         '[clojure.test.check.generators :as g]
+         '[babashka.fs :as fs]
+         '[babashka.process :as p])
+
+(def opts (loop [as *command-line-args* o {:n 40 :k 3 :seed 1 :modes "flat,tree,compiled,torture"}]
+            (if (empty? as) o
+                (case (first as)
+                  "-n" (recur (drop 2 as) (assoc o :n (parse-long (second as))))
+                  "-k" (recur (drop 2 as) (assoc o :k (parse-long (second as))))
+                  "-s" (recur (drop 2 as) (assoc o :seed (parse-long (second as))))
+                  "-m" (recur (drop 2 as) (assoc o :modes (second as)))
+                  "-o" (recur (drop 2 as) (assoc o :out (second as)))
+                  (do (println "usage: scripts/fuzz-spec [-n SPECS] [-k VALUES] [-s SEED] [-m modes] [-o cases.edn]")
+                      (System/exit 2))))))
+
+;; ---- the spec of a spec form -------------------------------------------
+
+(def preds '#{int? keyword? string? nil? even? pos? boolean? symbol? number? any?})
+(def tags [:a :b :c :d])
+;; a form headed by one of these ops; a predicate, not an s/or, since
+;; s/and hands the next predicate what the s/or CONFORMED to
+(defn op? [& os] (fn [x] (and (seq? x) (contains? (set os) (first x)))))
+(defn sa [o] (symbol "clojure.spec.alpha" (name o)))
+
+(s/def ::spec-form
+  (s/or :pred preds
+        :tagged (s/and (op? (sa 'cat) (sa 'alt) (sa 'or))
+                       (fn [[_ & kvs]] (and (even? (count kvs)) (seq kvs)
+                                            (every? keyword? (take-nth 2 kvs))
+                                            (apply distinct? (take-nth 2 kvs))
+                                            (every? #(s/valid? ::spec-form %) (take-nth 2 (rest kvs))))))
+        :one (s/and (op? (sa '*) (sa '+) (sa '?) (sa 'nilable) (sa 'coll-of))
+                    #(= 2 (count %)) #(s/valid? ::spec-form (second %)))
+        :pair (s/and (op? (sa 'and) (sa '&))
+                     #(= 3 (count %)) #(s/valid? ::spec-form (second %)) #(contains? preds (nth % 2)))
+        :map-of (s/and (op? (sa 'map-of)) #(= 3 (count %)) #(= 'keyword? (second %)) #(s/valid? ::spec-form (nth % 2)))
+        :tuple (s/and (op? (sa 'tuple)) #(<= 2 (count %) 4) #(every? (fn [x] (s/valid? ::spec-form x)) (rest %)))
+        :keys (s/and (op? (sa 'keys)) #(= 5 (count %)))))
+
+;; ---- generating ----------------------------------------------------------
+
+(def g-pred (g/elements (vec (sort preds))))
+
+(defn tagged [o inner]
+  (g/fmap (fn [xs] (cons (sa o) (mapcat vector tags xs))) (g/vector inner 1 3)))
+
+(def g-spec-form
+  (g/recursive-gen
+   (fn [inner]
+     (g/one-of [(tagged 'cat inner) (tagged 'alt inner) (tagged 'or inner)
+                (g/fmap #(list (sa '*) %) inner) (g/fmap #(list (sa '+) %) inner) (g/fmap #(list (sa '?) %) inner)
+                (g/fmap #(list (sa 'nilable) %) inner) (g/fmap #(list (sa 'coll-of) %) inner)
+                (g/fmap (fn [[x p]] (list (sa 'and) x p)) (g/tuple inner g-pred))
+                (g/fmap (fn [[x p]] (list (sa '&) x p)) (g/tuple inner g-pred))
+                (g/fmap #(list (sa 'map-of) 'keyword? %) inner)
+                (g/fmap #(cons (sa 'tuple) %) (g/vector inner 1 3))]))
+   (g/one-of [g-pred (g/return (list (sa 'keys) :req-un [:fz/a] :opt-un [:fz/b :fz/c]))])))
+
+(def g-any
+  (g/recursive-gen
+   (fn [inner] (g/one-of [(g/vector inner 0 4) (g/fmap #(apply list %) (g/vector inner 0 4))
+                          (g/map (g/elements [:a :b :c :k]) inner {:max-elements 3})]))
+   (g/one-of [(g/choose -3 6) (g/elements [:a :b :k]) (g/elements ["" "s"]) (g/return nil)
+              (g/elements [true false]) (g/elements ['x 'y])])))
+
+(s/def :fz/a int?)
+(s/def :fz/b keyword?)
+(s/def :fz/c string?)
+
+(defn draw [gen size seed] (g/generate gen size seed))
+
+;; values the spec's own generator makes; none when it cannot make one
+;; (an & whose predicate the generator gives up on). Size 3: spec's own
+;; regex matching is exponential in nested quantifiers -- clj takes 2.6 s
+;; on (s/+ (s/+ ...)) over 20 elements and runs out of memory at 40 --
+;; and a longer draw measures that, not clotran
+(defn conforming [form k seed]
+  (try (let [sp (eval form)] (vec (for [i (range k)] (draw (s/gen sp) 3 (+ seed i)))))
+       (catch Throwable _ [])))
+
+(defn case-form [form v]
+  (let [sp 'sp]
+    `(let [~sp ~form v# '~v ok# (clojure.spec.alpha/valid? ~sp v#) c# (clojure.spec.alpha/conform ~sp v#)]
+       [ok# c# (when ok# (clojure.spec.alpha/unform ~sp c#))
+        (mapv (fn [p#] (select-keys p# [:path :pred :val :in]))
+              (:clojure.spec.alpha/problems (clojure.spec.alpha/explain-data ~sp v#)))
+        (clojure.spec.alpha/form ~sp)])))
+
+(def fixture
+  '(do (clojure.spec.alpha/def :fz/a int?) (clojure.spec.alpha/def :fz/b keyword?)
+       (clojure.spec.alpha/def :fz/c string?) nil))
+
+(let [{:keys [n k seed]} opts
+      forms (for [i (range n)] (draw g-spec-form (+ 2 (mod i 4)) (+ seed (* 1000 i))))
+      bad (remove #(s/valid? ::spec-form %) forms)
+      cases (vec (cons fixture
+                       (for [[i f] (map-indexed vector forms)
+                             :when (s/valid? ::spec-form f)
+                             v (concat (conforming f k (+ seed (* 1000 i)))
+                                       (for [j (range k)] (draw g-any 4 (+ seed (* 1000 i) 500 j))))]
+                         (case-form f v))))
+      out (or (:out opts) (str (fs/create-temp-file {:prefix "fuzz-spec" :suffix ".edn"})))]
+  (doseq [b bad] (println "BUG in fuzz-spec: a generated form is not a ::spec-form:" (pr-str b)))
+  (spit out (binding [*print-namespace-maps* false] (pr-str cases)))
+  (println (str "fuzz-spec: " (count forms) " spec forms, " (dec (count cases)) " cases -> " out))
+  (let [r (p/shell {:continue true} (str (fs/parent *file*) "/fuzz") "-f" out "-r" "clojure.spec.alpha" "-m" (:modes opts))]
+    (System/exit (if (and (empty? bad) (zero? (:exit r))) 0 1))))

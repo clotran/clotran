@@ -20,6 +20,11 @@
 ;;                                     clj's answer checked against its :ret
 ;;   scripts/fuzz -f cases.edn         these cases (a vector of forms) instead:
 ;;                                     what the fuzzer found, kept (make test)
+;;   scripts/fuzz -r clojure.spec.alpha  that namespace required before the cases
+;;                                     are analysed (scripts/fuzz-spec), repeatable
+;;   -m torture                        a fourth mode: flat, core loaded from
+;;                                     source, the collector run every 97
+;;                                     allocations (as check-oracle-gc)
 ;;
 ;; Exit 1 on any difference.
 (require '[clojure.spec.alpha :as s]
@@ -48,6 +53,7 @@
       "-m" (recur (drop 2 a) (assoc o :modes (str/split (second a) #",")))
       "--shrink" (recur (rest a) (assoc o :shrink true))
       "-f" (recur (drop 2 a) (assoc o :file (second a)))
+      "-r" (recur (drop 2 a) (update o :requires (fnil conj []) (second a)))
       "--fns" (recur (drop 2 a) (assoc o :fns (parse-long (second a))))
       (do (println "unknown option" (first a)) (System/exit 2)))))
 
@@ -433,8 +439,10 @@
 (defn fz-out [i f] (println (str \"FZ \" i \" \" (try (fz-canon (f)) (catch clotran.host.throwable t \"!error\")))))
 ")
 
+(def requires (str/join " " (map #(str "'" %) (into ["clojure.string" "clojure.set" "clojure.walk"] (:requires opts)))))
+
 (defn case-script [forms]
-  (str "(in-ns 'user)\n(require 'clojure.string 'clojure.set 'clojure.walk)\n" prelude fixture
+  (str "(in-ns 'user)\n(require " requires ")\n" prelude fixture
        (apply str (map-indexed (fn [i f] (str "(fz-out " i " (fn [] " (pr-str f) "))\n")) forms))
        "(shutdown-agents)\n"))
 
@@ -465,18 +473,21 @@
       "flat" (let [f (str work "/cases.cljf")] (spit f (case-script forms)) (outputs (:out (sh {} bin core f))))
       "tree" (let [f (str work "/cases.cljf")] (spit f (case-script forms))
                (outputs (:out (sh {"CLOTRAN_FLAT" "0"} bin core f))))
+      "torture" (let [f (str work "/cases.cljf")] (spit f (case-script forms))
+                  (outputs (:out (sh {"CLOTRAN_GC_EVERY" "97" "CLOTRAN_IMAGE" "0"} bin core f))))
       "compiled"
       ;; each case a fn of a namespace, compiled; a fn the generator
       ;; declines stays interpreted, and the run says how many compiled
       (let [nsf (str work "/fz/cases.cljf") lib (str work "/fz.dylib") drv (str work "/drive.cljf")]
         (fs/create-dirs (str work "/fz"))
-        (spit nsf (str "(ns fz.cases (:require [clojure.string] [clojure.set] [clojure.walk]))\n" fixture
+        (spit nsf (str "(ns fz.cases (:require [clojure.string] [clojure.set] [clojure.walk]"
+                       (apply str (map #(str " [" % "]") (:requires opts))) "))\n" fixture
                        (apply str (map-indexed (fn [i f] (str "(defn c" i " [] " (pr-str f) ")\n")) forms))))
         (let [c (sh {"CLOTRAN_CACHE" (str work "/cache")} (str repo "/clotran") "compile" nsf lib)]
           (when-not (fs/exists? lib)
             (println "compiled mode: no library:")
             (println (str/join "\n" (take-last 25 (str/split-lines (str (:out c) (:err c))))))))
-        (spit drv (str "(in-ns 'user)\n(require 'clojure.string 'clojure.set 'clojure.walk)\n" prelude
+        (spit drv (str "(in-ns 'user)\n(require " requires ")\n" prelude
                        "(load-file " (pr-str nsf) ")\n(require 'clotran.loader)\n"
                        "(clotran.loader/install " (pr-str lib) " " (pr-str nsf) ")\n"
                        "(println \"FZCOMPILED\" (count (filter #(clojure.string/starts-with? (str (deref %)) \"#<compiled\") (vals (ns-interns 'fz.cases)))))\n"
@@ -543,13 +554,18 @@
     (let [got (run-clotran m forms)
           diffs (filter #(differs (get want %) (get got %) (nth forms %)) (range n))]
       (println (format "%-9s %d cases, %d differ from clj" m n (count diffs)))
-      (doseq [i diffs] (swap! bad conj [m i]))))
-  (doseq [[m i] (take 40 @bad)]
+      (doseq [i diffs] (swap! bad conj [m i (get got i)]))))
+  (doseq [[m i batch] (take 40 @bad)]
     (let [f (nth forms i)]
       (println "---" m "case" i)
       (println "  form:   " (pr-str f))
       (println "  clj:    " (get want i))
-      (println "  clotran:" (get (run-clotran m [f]) 0))
+      ;; the answer the run gave, beside the case's alone: a case that
+      ;; passes alone fails because of its neighbours, and showing only
+      ;; the alone answer hid that
+      (println "  clotran:" batch)
+      (let [alone (get (run-clotran m [f]) 0)]
+        (when (not= alone batch) (println "  alone:  " alone)))
       (when (and (:shrink opts) roses)
         (let [small (shrink m (nth roses i))]
           (println "  shrunk: " (pr-str small))
