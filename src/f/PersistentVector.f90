@@ -13,7 +13,9 @@
 !
 ! Shape, matching GC.f90's own comment on OBJ_VECTOR:
 !
-!   vector   an object: slot 1 = root node, i1 = count, i2 = shift
+!   vector   an object: slot 1 = root node, i1 = count, i2 = shift;
+!            slot 2 = offset and slot 3 = the trie's length when it is
+!            a VIEW (subvec), both nil for a plain vector
 !   node     a vec-pool run of BRANCH values -- child nodes at any
 !            shift above 0, elements at shift 0
 !
@@ -31,6 +33,7 @@ module PersistentVector
   integer, parameter :: VMASK = 31
 
   public :: gcv_empty, gcv_count, gcv_nth, gcv_conj, gcv_assoc, gcv_is, gcv_build, gcv_put
+  public :: gcv_pop, gcv_subvec
   public :: gcv_transient, gcv_tcount, gcv_tnth, gcv_tconj, gcv_tassoc, gcv_tdrop, gcv_persistent
 
 contains
@@ -57,6 +60,42 @@ contains
     if (gcv_is(v)) n = gc_i1(v)
   end function gcv_count
 
+  ! A VIEW (model/vector.lisp): subvec shares the trie and keeps where
+  ! it starts and how long the trie is, as clj's SubVector keeps the
+  ! vector and two bounds -- O(1) to make, where copying the slice was
+  ! O(n). A plain vector has offset 0 and its count as the trie's length.
+  integer function v_off(v)
+    type(gc_value), intent(in) :: v
+    type(gc_value) :: o
+    o = gc_slot(v, 2)
+    v_off = 0
+    if (o%tag == GCT_INT) v_off = int(o%ival)
+  end function v_off
+
+  integer function v_tlen(v)
+    type(gc_value), intent(in) :: v
+    type(gc_value) :: o
+    o = gc_slot(v, 3)
+    v_tlen = gc_i1(v)
+    if (o%tag == GCT_INT) v_tlen = int(o%ival)
+  end function v_tlen
+
+  ! a vector object over root: plain when it starts at 0 and covers the
+  ! whole trie, a view otherwise
+  function v_make(root, n, shift, off, tlen, roots) result(out)
+    type(gc_value), intent(in) :: root
+    integer, intent(in) :: n, shift, off, tlen
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out
+    if (off == 0 .and. n == tlen) then
+       out = gc_obj(OBJ_VECTOR, [root], [roots, root])
+    else
+       out = gc_obj(OBJ_VECTOR, [root, gc_int(int(off, gc_ip)), gc_int(int(tlen, gc_ip))], [roots, root])
+    end if
+    call gc_set_i1(out, n)
+    call gc_set_i2(out, shift)
+  end function v_make
+
   ! 0-based, to match Clojure's nth and the refcounted implementation.
   ! Out of range gives nil rather than an error; callers that care test
   ! the count first, exactly as they do today.
@@ -64,18 +103,19 @@ contains
     type(gc_value), intent(in) :: v
     integer, intent(in) :: i
     type(gc_value) :: out, node
-    integer :: shift, idx
+    integer :: shift, idx, j
     out = gc_nil()
     if (.not. gcv_is(v)) return
     if (i < 0 .or. i >= gc_i1(v)) return
+    j = i + v_off(v)
     node = gc_slot(v, 1)
     shift = gc_i2(v)
     do while (shift > 0)
-       idx = iand(ishft(i, -shift), VMASK) + 1
+       idx = iand(ishft(j, -shift), VMASK) + 1
        node = gc_vec_get(node, idx)
        shift = shift - VBITS
     end do
-    out = gc_vec_get(node, iand(i, VMASK) + 1)
+    out = gc_vec_get(node, iand(j, VMASK) + 1)
   end function gcv_nth
 
   ! Rebuilds the nodes along the path to i and shares everything else.
@@ -309,7 +349,7 @@ contains
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, new_root, old_root
     type(gc_value), allocatable :: r2(:)
-    integer :: n, shift, capacity
+    integer :: n, shift, capacity, j, tl
 
     if (.not. gcv_is(v)) then
        out = gc_nil()
@@ -318,6 +358,11 @@ contains
 
     n = gc_i1(v)
     shift = gc_i2(v)
+    ! where the new element goes: past the end of a plain vector; on a
+    ! view, the slot after its last, as clj's SubVector.cons assocs at
+    ! its end -- appending when that is the trie's end, replacing else
+    j = v_off(v) + n
+    tl = max(v_tlen(v), j + 1)
 
     allocate(r2(size(roots) + 2))
     r2(1:size(roots)) = roots
@@ -325,7 +370,7 @@ contains
     r2(size(roots) + 2) = x
 
     capacity = ishft(1, shift + VBITS)
-    if (n >= capacity) then
+    if (j >= capacity) then
        ! Full: push a new level whose first child is the old root.
        old_root = gc_slot(v, 1)
        new_root = gc_vec(VBRANCH, r2)
@@ -336,21 +381,12 @@ contains
          allocate(r3(size(r2) + 1))
          r3(1:size(r2)) = r2
          r3(size(r2) + 1) = new_root
-         new_root = node_assoc(new_root, shift, n, x, r3)
+         new_root = node_assoc(new_root, shift, j, x, r3)
        end block
     else
-       new_root = node_assoc(gc_slot(v, 1), shift, n, x, r2)
+       new_root = node_assoc(gc_slot(v, 1), shift, j, x, r2)
     end if
-
-    block
-      type(gc_value), allocatable :: r4(:)
-      allocate(r4(size(r2) + 1))
-      r4(1:size(r2)) = r2
-      r4(size(r2) + 1) = new_root
-      out = gc_obj(OBJ_VECTOR, [new_root], r4)
-    end block
-    call gc_set_i1(out, n + 1)
-    call gc_set_i2(out, shift)
+    out = v_make(new_root, n + 1, shift, v_off(v), tl, r2)
   end function gcv_conj
 
   ! Replaces element i. Out of range returns the vector unchanged,
@@ -371,16 +407,84 @@ contains
     r2(size(roots) + 1) = v
     r2(size(roots) + 2) = x
 
-    new_root = node_assoc(gc_slot(v, 1), gc_i2(v), i, x, r2)
-    block
-      type(gc_value), allocatable :: r3(:)
-      allocate(r3(size(r2) + 1))
-      r3(1:size(r2)) = r2
-      r3(size(r2) + 1) = new_root
-      out = gc_obj(OBJ_VECTOR, [new_root], r3)
-    end block
-    call gc_set_i1(out, gc_i1(v))
-    call gc_set_i2(out, gc_i2(v))
+    new_root = node_assoc(gc_slot(v, 1), gc_i2(v), i + v_off(v), x, r2)
+    out = v_make(new_root, gc_i1(v), gc_i2(v), v_off(v), v_tlen(v), r2)
   end function gcv_assoc
+
+  ! The vector less its last element. A plain vector's trie is popped
+  ! in place of the old rebuild (n-1 conjs, O(n)): one path copied, the
+  ! slot let go -- nothing popped stays reachable -- and a level dropped
+  ! when the root is left with one child, as clj's popTail; O(log32 n).
+  ! A view shrinks by one and keeps sharing, as SubVector.pop does.
+  ! The caller refuses an empty vector.
+  function gcv_pop(v, roots) result(out)
+    type(gc_value), intent(in) :: v
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, root
+    integer :: n, shift, base
+    n = gc_i1(v)
+    if (n <= 1) then
+       out = gcv_empty(roots)
+       return
+    end if
+    if (v_off(v) /= 0 .or. n /= v_tlen(v)) then
+       out = v_make(gc_slot(v, 1), n - 1, gc_i2(v), v_off(v), v_tlen(v), [roots, v])
+       return
+    end if
+    base = vs_enter(1)
+    shift = gc_i2(v)
+    root = node_pop(gc_slot(v, 1), shift, n - 1, [roots, v])
+    call vs_set(base + 1, root)
+    ! the remaining n-1 fit under the root's first child: a level less
+    do while (shift > 0)
+       if (n - 1 > ishft(1, shift)) exit
+       root = gc_vec_get(vs_get(base + 1), 1)
+       call vs_set(base + 1, root)
+       shift = shift - VBITS
+    end do
+    out = v_make(vs_get(base + 1), n - 1, shift, 0, n - 1, roots)
+    call vs_leave(base)
+  end function gcv_pop
+
+  ! node with element i let go: nil when i was the first in it, so a
+  ! subtree left empty goes too
+  recursive function node_pop(node, shift, i, roots) result(out)
+    type(gc_value), intent(in) :: node
+    integer, intent(in) :: shift, i
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, sub
+    integer :: idx, base
+    out = gc_nil()
+    if (shift == 0) then
+       if (iand(i, VMASK) == 0) return
+       out = gc_vec_clone(node, roots)
+       call gc_vec_set(out, iand(i, VMASK) + 1, gc_nil())
+       return
+    end if
+    idx = iand(ishft(i, -shift), VMASK) + 1
+    base = vs_enter(2)
+    call vs_set(base + 1, node)
+    sub = node_pop(gc_vec_get(node, idx), shift - VBITS, i, roots)
+    call vs_set(base + 2, sub)
+    if (.not. (sub%tag == GCT_NIL .and. idx == 1)) then
+       out = gc_vec_clone(vs_get(base + 1), [roots, vs_get(base + 2)])
+       call gc_vec_set(out, idx, vs_get(base + 2))
+    end if
+    call vs_leave(base)
+  end function node_pop
+
+  ! (subvec v lo hi), 0 <= lo <= hi <= count checked by the caller: a
+  ! view sharing v's trie, O(1)
+  function gcv_subvec(v, lo, hi, roots) result(out)
+    type(gc_value), intent(in) :: v
+    integer, intent(in) :: lo, hi
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out
+    if (hi <= lo) then
+       out = gcv_empty(roots)
+    else
+       out = v_make(gc_slot(v, 1), hi - lo, gc_i2(v), v_off(v) + lo, v_tlen(v), [roots, v])
+    end if
+  end function gcv_subvec
 
 end module PersistentVector

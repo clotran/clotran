@@ -121,4 +121,32 @@
   :why "an array element: an offset"}
  {:id "array/alength" :setup "(double-array n)" :op "(alength c)" :theory :const
   :why "an array's length: a field"}
+
+ ;; ---- seqs: the first element, and a whole walk ------------------------
+ {:id "vector/first" :setup "(vec (range n))" :op "(first c)" :theory :log
+  :why "PersistentVector.seq, ChunkedSeq: arrayFor of the first leaf"}
+ {:id "vector/reduce" :setup "(vec (range n))" :op "(reduce + c)" :theory :linear
+  :why "PersistentVector.reduce: each leaf once, each element once"}
+ {:id "vector/seq-count" :setup "(vec (range n))" :op "(count (seq c))" :theory :const
+  :why "PersistentVector.ChunkedSeq.count: Counted, i - offset"}
+ {:id "list/reduce" :setup "(apply list (range n))" :op "(reduce + c)" :theory :linear
+  :why "PersistentList.reduce: each cell once"}
+ {:id "hash-map/first" :setup "(zipmap (range n) (range n))" :op "(first c)" :theory :log
+  :why "PersistentHashMap.seq, NodeSeq.create: down to the first entry"}
+ {:id "hash-map/reduce" :setup "(zipmap (range n) (range n))" :op "(reduce (fn [a e] (+ a (val e))) 0 c)" :theory :linear
+  :why "PersistentHashMap.kvreduce, fold over the nodes: each entry once"}
+ {:id "hash-set/first" :setup "(set (range n))" :op "(first c)" :theory :log
+  :why "APersistentSet.seq: the map's keys, NodeSeq.create"}
+ {:id "sorted-set/first" :setup "(into (sorted-set) (range n))" :op "(first c)" :theory :log
+  :why "PersistentTreeSet.seq: the tree's leftmost path"}
+ {:id "sorted-map/reduce" :setup "(into (sorted-map) (map vector (range n) (range n)))" :op "(reduce (fn [a e] (+ a (val e))) 0 c)" :theory :linear
+  :why "PersistentTreeMap.Seq: a stack of the path, each node pushed and popped once"}
+ {:id "string/first" :setup "(apply str (repeat n \"a\"))" :op "(first c)" :theory :const
+  :why "StringSeq: an index into the string, charAt"}
+ {:id "string/reduce" :setup "(apply str (repeat n \"a\"))" :op "(reduce (fn [a ch] (inc a)) 0 c)" :theory :linear
+  :why "StringSeq.reduce: each character once"}
+ {:id "range/first" :setup "(range n)" :op "(first c)" :theory :const
+  :why "LongRange.first: the start"}
+ {:id "lazy-seq/first" :setup "(doall (map inc (range n)))" :op "(first c)" :theory :const
+  :why "LazySeq.first: realised, its first cell"}
 ]

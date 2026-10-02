@@ -347,17 +347,12 @@
     vst => gc_my_stack()
     out = gc_nil()
     if (gcv_is(a)) then
+       ! an index counting down from the end (seqv_elem), O(1) -- it
+       ! copied the vector reversed
        if (gcv_count(a) == 0) return
-       base = vs_enter(vst, 2)
-       call vs_set(vst, base + 1, a)
-       acc = gcv_empty([roots, vs_get(vst, base + 1)])
-       call vs_set(vst, base + 2, acc)
-       do i = gcv_count(vs_get(vst, base + 1)) - 1, 0, -1
-          acc = gcv_conj(vs_get(vst, base + 2), gcv_nth(vs_get(vst, base + 1), i), [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
-          call vs_set(vst, base + 2, acc)
-       end do
-       out = to_seq(vs_get(vst, base + 2), [roots, vs_get(vst, base + 2)])
-       call vs_leave(vst, base)
+       out = gc_obj(OBJ_SEQ, [a], [roots, a])
+       call gc_set_i1(out, 0)
+       call gc_set_i2(out, 2)
        return
     end if
     m = sorted_backing(a)

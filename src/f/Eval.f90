@@ -6937,7 +6937,7 @@ contains
     case (OBJ_SEQ)
        ! i2 = 1: a snapshot of a map, set or string (to_seq), whose seq
        ! is not chunked in Clojure
-       is_chunked_seq = gcv_is(gc_slot(v, 1)) .and. gc_i2(v) /= 1
+       is_chunked_seq = gcv_is(gc_slot(v, 1)) .and. gc_i2(v) == 0
     case (OBJ_LAZY)
        is_chunked_seq = (gc_i2(v) == 1 .and. gc_i1(v) == LAZY_CONS)
     end select
@@ -7085,7 +7085,7 @@ contains
           return
        case (OBJ_SEQ)
           do i = gc_i1(cur), seq_len(gc_slot(cur, 1)) - 1
-             h = m3_ordered_step(h, gc_hash(seq_elem(gc_slot(cur, 1), i, [cur]))); n = n + 1
+             h = m3_ordered_step(h, gc_hash(seqv_elem(cur, i, [cur]))); n = n + 1
           end do
           return
        case (OBJ_LAZY)
@@ -12309,13 +12309,10 @@ contains
             else if (cn == 0) then
                call raise_class("clotran.host.illegal_state_exception", "Can't pop empty vector", [vs_get(vst, base + 1)])
             else
-               acc = gcv_empty([vs_get(vst, base + 1)])
+               ! the trie's own pop, O(log32 n) (PersistentVector gcv_pop);
+               ! this rebuilt the vector by n-1 conjs
+               acc = gcv_pop(coll, [vs_get(vst, base + 1)])
                call vs_set(vst, base + 2, acc)
-               do j = 0, cn - 2
-                  acc = gcv_conj(vs_get(vst, base + 2), gcv_nth(coll, j), &
-                       [vs_get(vst, base + 1), vs_get(vst, base + 2)])
-                  call vs_set(vst, base + 2, acc)
-               end do
                out = keep_meta(gcv_nth(args, 0), vs_get(vst, base + 2), [vs_get(vst, base + 1)])
             end if
          else if (.not. gcl_is(coll) .and. coll%tag /= GCT_NIL) then
@@ -12939,9 +12936,9 @@ contains
          end if
        end block
     case (B_SUBVEC)
-       ! (subvec v start) and (subvec v start end). A copy rather than a
-       ! view: Clojure's APersistentVector$SubVector shares the source,
-       ! which matters for a big vector and not at all yet.
+       ! (subvec v start) and (subvec v start end): a VIEW sharing the
+       ! source, O(1), as clj's SubVector is (PersistentVector
+       ! gcv_subvec). It was a copy, O(n).
        block
          type(gc_value) :: src, acc, ix
          integer :: lo, hi, j
@@ -12961,13 +12958,7 @@ contains
             call vs_leave(vst, base)
             return
          end if
-         acc = gcv_empty([vs_get(vst, base + 1)])
-         call vs_set(vst, base + 2, acc)
-         do j = lo, hi - 1
-            acc = gcv_conj(vs_get(vst, base + 2), gcv_nth(src, j), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
-            call vs_set(vst, base + 2, acc)
-         end do
-         out = vs_get(vst, base + 2)
+         out = gcv_subvec(src, lo, hi, [vs_get(vst, base + 1)])
        end block
     case (B_NEXTID)
        out = gc_int(gc_next(gensym_id))
@@ -14619,7 +14610,7 @@ contains
        ! over the view's own elements: slot 1 plus the offset in i1
        n = sq_count(v, [v])
        do i = 0, n - 1
-          h = m3_ordered_step(h, gc_hash(seq_elem(gc_slot(v, 1), gc_i1(v) + i, [v])))
+          h = m3_ordered_step(h, gc_hash(seqv_elem(v, gc_i1(v) + i, [v])))
        end do
        h = m3_mix_coll(h, n)
     case (OBJ_CHUNKSEQ)
@@ -15734,6 +15725,22 @@ contains
     end if
   end function seq_len
 
+  ! The element at position i of an indexed seq s (OBJ_SEQ): its
+  ! source's i-th, or for a REVERSED one (i2 = 2, rseq of a vector) its
+  ! (count-1-i)-th -- clj's APersistentVector.RSeq, an index counting
+  ! down, O(1) to make where rseq copied the vector reversed.
+  function seqv_elem(s, i, roots) result(out)
+    type(gc_value), intent(in) :: s
+    integer, intent(in) :: i
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out
+    if (gc_i2(s) == 2) then
+       out = seq_elem(gc_slot(s, 1), seq_len(gc_slot(s, 1)) - 1 - i, roots)
+    else
+       out = seq_elem(gc_slot(s, 1), i, roots)
+    end if
+  end function seqv_elem
+
   ! The i-th element of an indexable value (0-based). A map yields
   ! its entries as two-element vectors, which is what makes
   ! (first {:a 1}) an entry and lets destructuring walk a map.
@@ -15810,7 +15817,7 @@ contains
     else if (gc_kind(vs_get(vst, base + 1)) == OBJ_LAZY) then
        out = gc_slot(vs_get(vst, base + 1), 2)
     else if (gc_kind(vs_get(vst, base + 1)) == OBJ_SEQ) then
-       out = seq_elem(gc_slot(vs_get(vst, base + 1), 1), gc_i1(vs_get(vst, base + 1)), roots)
+       out = seqv_elem(vs_get(vst, base + 1), gc_i1(vs_get(vst, base + 1)), roots)
     else if (gc_kind(vs_get(vst, base + 1)) == OBJ_CHUNKSEQ) then
        out = chunk_nth(gc_slot(vs_get(vst, base + 1), 1), 0)
     end if

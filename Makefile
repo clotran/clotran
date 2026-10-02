@@ -624,12 +624,15 @@ clean:
 # Not in the gate yet: ACL2 is not on every machine the gate runs on.
 ACL2 ?= $(HOME)/jborden/acl2/saved_acl2
 .PHONY: model
+MODEL_BOOKS = boundary vector
 model:
 	@mkdir -p $(B)
-	rm -f model/boundary.cert
-	cd model && printf '(certify-book "boundary")\n(good-bye)\n' | "$(ACL2)" > ../$(B)/model.log 2>&1 || true
-	@test -f model/boundary.cert || { grep -E "ACL2 Error|FAILED" $(B)/model.log; exit 1; }
-	@echo "model: boundary certified"
+	@for b in $(MODEL_BOOKS); do \
+	  rm -f model/$$b.cert; \
+	  (cd model && printf '(certify-book "%s")\n(good-bye)\n' $$b | "$(ACL2)" > ../$(B)/model-$$b.log 2>&1); \
+	  test -f model/$$b.cert || { echo "model: $$b did not certify"; grep -E "ACL2 Error|FAILED" $(B)/model-$$b.log; exit 1; }; \
+	  echo "model: $$b certified"; \
+	done
 
 # The package door against the model: every scalar value the fuzzer
 # makes must cross or be refused exactly as model/boundary.lisp's

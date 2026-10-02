@@ -2912,3 +2912,14 @@
 ;; count answers clotran's one integer, not clj's host's boxed int
 (expect-diff "DEVIATIONS 71: count and int answer a long")
 [(class (count [1])) (class (int 1))]
+
+;; the vector's own pop (a path copied, a level collapsed), subvec as a
+;; view and rseq as an index counting down (model/vector.lisp): each was
+;; a rebuild, O(n)
+(let [v (vec (range 100)) w (vec (range 1025))]
+  [(pop v) (pop [1]) (pop (vec (range 33))) (count (pop w)) (nth (pop w) 1023) (conj (pop w) :x) (pop (pop (vec (range 1057))))
+   (subvec v 10 20) (subvec v 0 0) (subvec v 99) (conj (subvec v 10 20) :a) (assoc (subvec v 10 20) 0 :z) (pop (subvec v 10 20))
+   (subvec (subvec v 10 50) 5 10) (conj (subvec v 0 100) :end) (hash (subvec v 2 5)) (reduce + (subvec v 10 20)) (seq (subvec v 95))
+   (conj (subvec (conj (vec (range 31)) 31) 30) :q) (reduce conj (subvec v 90) (range 5)) (subvec (pop (vec (range 70))) 60)
+   (rseq [1 2 3]) (take 3 (rseq v)) (count (rseq v)) (hash (rseq [1 2 3])) (into [] (rseq (vec (range 40)))) (vec (rseq (subvec v 0 5)))
+   (meta (pop (with-meta [1 2] {:m 1}))) (= (rseq [1 2 3]) '(3 2 1)) (chunked-seq? (rseq v)) (chunked-seq? (seq v))])
