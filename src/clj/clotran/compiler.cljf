@@ -1684,26 +1684,43 @@ end module clotran_rt_decl
 
 (defn- manifest-text
   "clotran_manifest, the symbol every package answers its EDN through
-  (DynLoad.f90). Built up at the first call in short pieces: a manifest
-  carries each function's source, and one long literal would run into
-  Fortran's limits on line length and continuation lines."
+  (DynLoad.f90). The text is DATA: 60-character pieces of one static
+  array, one data statement each, copied out at the first call. A
+  manifest carries each function's source, so it runs to megabytes; it
+  was built by `s = s // piece`, one statement a piece -- 10^4 for 400
+  functions -- which was quadratic at run time and took gfortran over
+  half an hour, its size tracking following s through every
+  reassignment (scripts/fuzz-coll). Statements of their own, as no one
+  literal could be: Fortran limits line length and continuations."
   [edn]
-  (str "  function clotran_manifest() bind(C, name=\"clotran_manifest\") result(p)\n"
-       "    type(c_ptr) :: p\n"
-       "    character(len=:), allocatable :: s\n"
-       "    integer :: i\n"
-       "    if (.not. allocated(manifest_buf)) then\n"
-       "       s = \"\"\n"
-       (apply str (for [piece (map #(apply str %) (partition-all 60 edn))]
-                    (str "       s = s // " (fort-str piece) "\n")))
-       "       s = s // c_null_char\n"
-       "       allocate(manifest_buf(len(s)))\n"
-       "       do i = 1, len(s)\n"
-       "          manifest_buf(i) = s(i:i)\n"
-       "       end do\n"
-       "    end if\n"
-       "    p = c_loc(manifest_buf)\n"
-       "  end function clotran_manifest\n\n"))
+  (let [;; up to 60 BYTES a piece, as a character(len=60) holds bytes,
+        ;; never splitting a character's UTF-8
+        nbytes (fn [c] (let [cp (int c)] (cond (< cp 0x80) 1 (< cp 0x800) 2 (and (>= cp 0xD800) (<= cp 0xDBFF)) 2 (and (>= cp 0xDC00) (<= cp 0xDFFF)) 2 :else 3)))
+        pieces (loop [cs (seq edn) cur [] w 0 acc []]
+                 (cond (empty? cs) (if (seq cur) (conj acc [(apply str cur) w]) acc)
+                       (> (+ w (nbytes (first cs))) 60) (recur cs [] 0 (conj acc [(apply str cur) w]))
+                       :else (recur (rest cs) (conj cur (first cs)) (+ w (nbytes (first cs))) acc)))
+        n (max 1 (count pieces))
+        total (reduce + 0 (map second pieces))]
+    (str "  function clotran_manifest() bind(C, name=\"clotran_manifest\") result(p)\n"
+         "    type(c_ptr) :: p\n"
+         "    character(len=60), save :: mpart(" n ")\n"
+         "    integer, save :: mlen(" n ")\n"
+         "    integer :: i, j, k\n"
+         (apply str (map-indexed (fn [i [piece w]] (str "    data mpart(" (inc i) ") / " (fort-str piece) " /, mlen(" (inc i) ") / " w " /\n")) pieces))
+         "    if (.not. allocated(manifest_buf)) then\n"
+         "       allocate(manifest_buf(" (inc total) "))\n"
+         "       k = 0\n"
+         "       do i = 1, " n "\n"
+         "          do j = 1, mlen(i)\n"
+         "             k = k + 1\n"
+         "             manifest_buf(k) = mpart(i)(j:j)\n"
+         "          end do\n"
+         "       end do\n"
+         "       manifest_buf(" (inc total) ") = c_null_char\n"
+         "    end if\n"
+         "    p = c_loc(manifest_buf)\n"
+         "  end function clotran_manifest\n\n")))
 
 (defn module-text
   "A whole generated file: the declarations, the procedures, and the one
