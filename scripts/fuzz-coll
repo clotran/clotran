@@ -1,0 +1,86 @@
+#!/usr/bin/env bb
+;; fuzz-coll: the persistent collections under random sequences of
+;; operations (PLAN step 29).
+;;
+;;   scripts/fuzz-coll [-n N] [-s SEED] [-m modes] [-o cases.edn]
+;;
+;; Each case starts from an empty collection of one kind -- vector,
+;; list, hash or sorted map, hash or sorted set, or a transient of one --
+;; and threads 3 to 25 operations through it: single ones (conj, assoc,
+;; dissoc, disj, pop, update) and bulk ones (into, reduce dissoc, subvec)
+;; that cross the boundaries -- an array map's eight, a trie's 32, a
+;; B-tree node's 16 -- on keys that are equal across types (1 and 1N,
+;; [1 2] and '(1 2)). Then [coll (count coll) (seq coll) (hash coll)
+;; (= coll (into (empty coll) coll))], through clj and every mode.
+(require '[clojure.test.check.generators :as g]
+         '[clojure.string :as str]
+         '[babashka.fs :as fs]
+         '[babashka.process :as p])
+
+(def opts (loop [as *command-line-args* o {:n 300 :seed 1 :modes "flat,tree,compiled"}]
+            (if (empty? as) o
+                (case (first as)
+                  "-n" (recur (drop 2 as) (assoc o :n (parse-long (second as))))
+                  "-s" (recur (drop 2 as) (assoc o :seed (parse-long (second as))))
+                  "-m" (recur (drop 2 as) (assoc o :modes (second as)))
+                  "-o" (recur (drop 2 as) (assoc o :out (second as)))
+                  (do (println "usage: scripts/fuzz-coll [-n N] [-s SEED] [-m modes] [-o cases.edn]")
+                      (System/exit 2))))))
+
+;; keys: small longs (sorted kinds compare them), and for the hashed
+;; kinds equal-across-types ones too
+(def g-num-key (g/choose -40 80))
+;; no nil: a hash map walks its nil key where its hash puts it, not
+;; first as clj's does (DEVIATIONS 74), and leaving it out keeps the
+;; order of everything else checked
+(def g-any-key (g/one-of [g-num-key (g/elements [:a :b "s" 1N 2N 'x [1 2] '(1 2) true])]))
+(def g-val (g/one-of [(g/choose -5 5) (g/elements [:v nil "x" [0]])]))
+
+(def kinds
+  {:vector {:empty '[] :key g-num-key :ops [:conj :pop :assoc-idx :into :subvec :update-idx]}
+   :list {:empty '() :key g-any-key :ops [:conj :pop :into]}
+   :hash-map {:empty '{} :key g-any-key :ops [:assoc :dissoc :into-map :dissoc-all :update :merge]}
+   :sorted-map {:empty '(sorted-map) :key g-num-key :ops [:assoc :dissoc :into-map :dissoc-all :update :merge]}
+   :hash-set {:empty '#{} :key g-any-key :ops [:conj :disj :into :disj-all]}
+   :sorted-set {:empty '(sorted-set) :key g-num-key :ops [:conj :disj :into :disj-all]}
+   :tvector {:empty '(transient []) :key g-num-key :ops [:conj! :pop! :assoc-idx!] :end 'persistent!}
+   :tmap {:empty '(transient {}) :key g-any-key :ops [:assoc! :dissoc!] :end 'persistent!}
+   :tset {:empty '(transient #{}) :key g-any-key :ops [:conj! :disj!] :end 'persistent!}})
+
+(defn g-op [kind]
+  (let [{:keys [key ops]} (kinds kind)]
+    (g/let [op (g/elements ops) k (g/fmap (fn [x] (list (quote quote) x)) key) v (g/fmap (fn [x] (list (quote quote) x)) g-val) n (g/choose 0 120) a (g/choose 0 40) b (g/choose 0 40)]
+      (case op
+        :conj `(conj ~k) :conj! `(conj! ~k)
+        :pop `((fn [c#] (if (seq c#) (pop c#) c#)))
+        :pop! `((fn [c#] (if (pos? (count c#)) (pop! c#) c#)))
+        :assoc `(assoc ~k ~v) :assoc! `(assoc! ~k ~v)
+        :dissoc `(dissoc ~k) :dissoc! `(dissoc! ~k)
+        :disj `(disj ~k) :disj! `(disj! ~k)
+        :assoc-idx `((fn [c#] (if (seq c#) (assoc c# (mod ~a (count c#)) ~v) c#)))
+        :assoc-idx! `((fn [c#] (if (pos? (count c#)) (assoc! c# (mod ~a (count c#)) ~v) c#)))
+        :update-idx `((fn [c#] (if (seq c#) (update c# (mod ~a (count c#)) vector) c#)))
+        :update `(update ~k vector)
+        :into `(into (range ~n))
+        :into-map `(into (map (fn [i#] [i# (- i#)]) (range ~(- n) ~n)))
+        :merge `(merge (zipmap (range ~a ~(+ a n)) (repeat ~v)))
+        :dissoc-all `((fn [c#] (reduce dissoc c# (range ~a ~(+ a n)))))
+        :disj-all `((fn [c#] (reduce disj c# (range ~a ~(+ a n)))))
+        :subvec `((fn [c#] (let [i# (min ~a (count c#)) j# (min (max i# ~b) (count c#))] (subvec c# i# j#))))))))
+
+(def g-case
+  (g/let [kind (g/elements (vec (keys kinds)))
+          ops (g/vector (g-op kind) 3 25)]
+    (let [{:keys [empty end]} (kinds kind)
+          built `(-> ~empty ~@ops ~@(when end [end]))]
+      `(let [c# ~built]
+         [c# (count c#) (seq c#) (hash c#) (= c# (into (empty c#) c#))
+          (if (map? c#) (into {} c#) (vec c#))]))))
+
+(let [{:keys [n seed]} opts
+      forms (for [i (range n)] (g/generate g-case 20 (+ seed i)))
+      out (or (:out opts) (str (fs/create-temp-file {:prefix "fuzz-coll" :suffix ".edn"})))]
+  (spit out (str "[" (str/join "\n" (map pr-str forms)) "]"))
+  (println (str "fuzz-coll: " n " cases -> " out))
+  (let [r (p/shell {:continue true} (str (fs/parent *file*) "/fuzz") "-f" out "-m" (:modes opts))]
+    (System/exit (:exit r))))

@@ -2083,3 +2083,20 @@ place, so a trace shows only the frames the program wrote.
 compares.
 
 **Removal**: none intended -- the frame is not the program's.
+
+## 74. A hash map's nil key is walked where its hash puts it
+
+clj keeps a hash map's nil key out of the trie (`PersistentHashMap`'s
+`hasNull`), and its seq puts that entry first:
+`(seq (assoc (zipmap (range 10) (range 10)) nil :n))` starts `[nil :n]`.
+clotran stores nil in the trie with the rest, so the entry comes where
+its hash places it, beside 0, whose hash is the same. Hash order is not
+part of the language, and every other key is walked in clj's order
+because the hashes are the same; only nil is placed differently. Sets
+too. Equality, hashing and lookup are not affected (found by
+`scripts/fuzz-coll`, which leaves nil out of the hashed kinds' keys so
+the order of everything else stays checked).
+
+**Removal**: keep nil out of the trie as clj does, with the seq putting
+its entry first. The cursor's walk and model/hashseq.lisp's theorem
+change with it.
