@@ -1193,12 +1193,19 @@ nil; a made-up class under `clotran.host` would not.
 
 What still differs from a `Class`:
 
-- clotran has one map, one set, one seq view and one function class
-  where clj has many, so the most common clj class stands for
-  each: every map is a `clotran.host.persistent_array_map`, every `seq` a
-  `clotran.host.persistent_vector_chunked_seq`, every function a
-  `clotran.host.a_function`. An array's class is its element kind and
-  rank, `int/1`.
+- clotran has one map, one set and one seq view where clj has many, so
+  the most common clj class stands for each: every map is a
+  `clotran.host.persistent_array_map`, every `seq` a
+  `clotran.host.persistent_vector_chunked_seq`. An array's class is its
+  element kind and rank, `int/1`.
+- a function's class is named as clj's compiler names it,
+  `clojure.core$int_QMARK_`, `user$foo_bar$hop` (and as cljs names its
+  fns), since spec reads a function's name back out of it (`fn-sym`;
+  found by `scripts/fuzz-spec`). Without clj's `__N` counters: two
+  anonymous fns written in the same place share a class name, where
+  in clj each `fn*` form has its own. Its supers are `AFunction`'s,
+  less the host's `Runnable`, `Callable`, `Comparator` and
+  `Serializable`.
 - `supers` answers the short chain `host_super` lists -- the
   interfaces `core_print` and `core_deftype` dispatch on -- not the
   two dozen a clj class implements. It must include every interface a

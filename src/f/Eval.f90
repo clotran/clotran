@@ -738,6 +738,51 @@ contains
     call capture_trace()
   end subroutine fail
 
+  ! What (class f) names a function: the class clj's compiler gives
+  ! it, ns$outer$inner with each part munged (Compiler FnExpr.parse,
+  ! munge; cljs names its fns the same way), from the name its frames
+  ! show (fn_who). spec reads a fn's name back out of this (fn-sym).
+  ! Without clj's __N counters, so two anonymous fns written in one place
+  ! share a class (DEVIATIONS 34); a fn with no name at all is
+  ! clotran.host.a_function.
+  subroutine fn_class_name(fn, s)
+    type(gc_value), intent(in) :: fn
+    character(len=:), allocatable, intent(out) :: s
+    character(len=:), allocatable :: who, rest, seg, m
+    integer :: sl
+    if (gc_kind(fn) == OBJ_BUILTIN) then
+       call text_of(gc_slot(fn, 1), s=who)
+       who = "clojure.core/" // who
+    else
+       call fn_who(fn, who)
+    end if
+    sl = index(who, "/")
+    if (sl <= 1 .or. sl == len(who)) then
+       s = "clotran.host.a_function"
+       return
+    end if
+    call munge_text(who(1:sl-1), s)
+    rest = who(sl+1:)
+    do
+       ! the fn named / is one part, not two empty ones
+       sl = index(rest, "/")
+       if (sl <= 1 .or. rest == "/") then
+          seg = rest
+          rest = ""
+       else
+          seg = rest(1:sl-1)
+          rest = rest(sl+1:)
+       end if
+       call munge_text(seg, m)
+       do while (index(m, ".") > 0)
+          sl = index(m, ".")
+          m = m(1:sl-1) // "_DOT_" // m(sl+1:)
+       end do
+       s = s // "$" // m
+       if (len(rest) == 0) exit
+    end do
+  end subroutine fn_class_name
+
   ! The call stack as text, innermost first, taken when an error is
   ! raised. Each line names a function and where in it execution is
   ! (frame_site).
@@ -18708,6 +18753,13 @@ contains
       case ("clotran.host.int8", "clotran.host.real8", "clotran.host.int1", "clotran.host.int2", "clotran.host.int4", "clotran.host.real4", "clotran.host.ratio")
          chain(1) = "clotran.host.number"
          cnt = 1
+      ! A FUNCTION'S CLASS, the one class or each fn's own (fn_class_name):
+      ! clj's AFunction chain, less the host's Runnable, Callable,
+      ! Comparator and Serializable
+      case ("clotran.host.a_function")
+         chain(1:5) = [character(len=36) :: "clotran.host.a_fn", "clotran.host.fn", "clotran.host.i_fn", &
+              "clotran.host.i_obj", "clotran.host.i_meta"]
+         cnt = 5
       case ("clotran.host.keyword", "clotran.host.symbol", "clotran.host.char", "clotran.host.logical", &
             "clotran.host.pattern", "clotran.host.matcher", "clotran.host.namespace", &
             "clotran.host.multi_fn", "clotran.host.string_builder", "clotran.host.print_writer")
@@ -18721,6 +18773,10 @@ contains
          else if (is_throwable_class(t)) then
             chain(1) = "clotran.host.throwable"
             cnt = 1
+         else if (index(t, "$") > 0) then
+            chain(1:6) = [character(len=36) :: "clotran.host.a_function", "clotran.host.a_fn", "clotran.host.fn", &
+                 "clotran.host.i_fn", "clotran.host.i_obj", "clotran.host.i_meta"]
+            cnt = 6
          else
             known = .false.
          end if
@@ -18840,7 +18896,7 @@ contains
        case (OBJ_SET)
           s = "clotran.host.persistent_hash_set"
           if (gca_is_sorted(gc_slot(v, 1))) s = "clotran.host.persistent_tree_set"
-       case (OBJ_CLOSURE, OBJ_BUILTIN, OBJ_COMPILED); s = "clotran.host.a_function"
+       case (OBJ_CLOSURE, OBJ_BUILTIN, OBJ_COMPILED); call fn_class_name(v, s)
        case (OBJ_MULTIFN); s = "clotran.host.multi_fn"
        case (OBJ_REGEX);   s = "clotran.host.pattern"
        case (OBJ_MATCHER); s = "clotran.host.matcher"
