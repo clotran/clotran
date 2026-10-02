@@ -45,7 +45,7 @@
 ;;; ---- options --------------------------------------------------------
 
 (def opts
-  (loop [a *command-line-args* o {:n 200 :seed 1 :modes ["flat" "tree" "compiled"] :shrink false}]
+  (loop [a *command-line-args* o {:n 200 :seed 1 :modes ["flat" "tree" "compiled"] :shrink false :timeout 600 :probe-timeout 120}]
     (case (first a)
       nil o
       "-n" (recur (drop 2 a) (assoc o :n (parse-long (second a))))
@@ -53,6 +53,8 @@
       "-m" (recur (drop 2 a) (assoc o :modes (str/split (second a) #",")))
       "--shrink" (recur (rest a) (assoc o :shrink true))
       "-f" (recur (drop 2 a) (assoc o :file (second a)))
+      "--timeout" (recur (drop 2 a) (assoc o :timeout (parse-long (second a))))
+      "--probe-timeout" (recur (drop 2 a) (assoc o :probe-timeout (parse-long (second a))))
       "-r" (recur (drop 2 a) (update o :requires (fnil conj []) (second a)))
       "--fns" (recur (drop 2 a) (assoc o :fns (parse-long (second a))))
       (do (println "unknown option" (first a)) (System/exit 2)))))
@@ -453,8 +455,26 @@
 
 (def work (str (fs/create-temp-dir {:prefix "fuzz-"})))
 
+;; Every process has a DEADLINE (--timeout, seconds): a run that
+;; hangs -- ICU looping on a regex, gfortran on a huge file -- is killed
+;; with everything it started and counted as a finding, not waited on
+;; for an hour.
+(def timeouts (atom []))
+(def last-run (atom nil))   ; the last process's {:exit :err}
+
+(def ^:dynamic *deadline* nil)
+
 (defn sh [env & cmd]
-  (apply p/shell {:dir repo :in "" :out :string :err :string :continue true :extra-env env} cmd))
+  (let [proc (apply p/process {:dir repo :in "" :out :string :err :string :extra-env env} cmd)
+        secs (or *deadline* (:timeout opts))
+        r (deref proc (* 1000 secs) ::timeout)]
+    (if (= r ::timeout)
+      (do (p/destroy-tree proc)
+          (swap! timeouts conj (str/join " " (take 3 cmd)))
+          (println "TIMEOUT after" secs "s:" (str/join " " (map #(if (> (count %) 80) (str (subs % 0 77) "...") %) cmd)))
+          (reset! last-run {:exit :timeout :err ""})
+          {:out "" :err "" :exit -1})
+      (do (reset! last-run {:exit (:exit r) :err (:err r)}) r))))
 
 (defn run-clj [forms]
   (let [f (str work "/cases.clj")]
@@ -525,6 +545,28 @@
 
 ;;; ---- main -----------------------------------------------------------
 
+;; A run over cases i.. -- (run forms) -> {position answer} -- that
+;; also says which cases never ANSWER: every case prints a line, even a
+;; throw, so a case without one means the process hung (the deadline) or
+;; died (a crash: ERROR STOP, a signal), and every case after it lost its
+;; answer too. Then the batch is halved and each half run again, under
+;; the shorter probe deadline, until each such case stands alone, and is
+;; named a :hang or a :crash. Answers come back by the cases' own indices.
+(defn run-finding-hangs [run forms idxs]
+  (let [out (binding [*deadline* (if (< (count idxs) (count forms)) (:probe-timeout opts) *deadline*)]
+              (run (mapv forms idxs)))
+        how @last-run
+        by-idx (into {} (map (fn [[j v]] [(nth idxs j) v]) out))]
+    (cond (every? #(contains? by-idx %) idxs) {:out by-idx :hangs []}
+          (= 1 (count idxs)) {:out {} :hangs [[(first idxs) (if (= :timeout (:exit how)) :timeout :crash)
+                                                  (let [ls (some->> (:err how) str/split-lines (remove str/blank?))] (or (first (filter #(re-find #"(?i)error" %) ls)) (last ls)))]]}
+          :else (let [[a b] (split-at (quot (count idxs) 2) idxs)
+                      ra (run-finding-hangs run forms (vec a))
+                      rb (run-finding-hangs run forms (vec b))]
+                  {:out (merge (:out ra) (:out rb)) :hangs (into (:hangs ra) (:hangs rb))}))))
+
+(def hangs (atom []))
+
 (let [{:keys [n seed modes]} opts
       fixed (some-> (:file opts) slurp read-string vec)   ; the reader, not edn: a case may hold #"regex"
       fn-pairs (when (:fns opts) (fn-roses (:fns opts) seed))
@@ -535,7 +577,9 @@
       _ (doseq [f forms]
           (when-not (s/valid? ::case f) (println "fuzz: a generated case does not conform:" (pr-str f)))
           (doseq [[h x] (nonconforming f)] (println "fuzz: a generated" h "does not conform to its spec:" (pr-str x))))
-      want (run-clj forms)
+      want (let [{:keys [out] h :hangs} (run-finding-hangs run-clj forms (vec (range (count forms))))]
+             (doseq [[i k] h] (println "clj" (name k) "on case" i "(not compared):" (pr-str (nth forms i))))
+             out)
       _ (when (< (count want) n) (println "clj answered" (count want) "of" n "cases"))
       ;; what was tested: a case both sides throw on agrees, and says little
       _ (println (format "%d cases, %.0f forms a case on average; clj threw on %d"
@@ -551,8 +595,15 @@
             (println "LOOSE:" fsym "threw in clj on" k "of" (:fns opts) "calls")))
       bad (atom [])]
   (doseq [m modes]
-    (let [got (run-clotran m forms)
-          diffs (filter #(differs (get want %) (get got %) (nth forms %)) (range n))]
+    (let [{got :out h :hangs} (run-finding-hangs (partial run-clotran m) forms (vec (range n)))
+          _ (doseq [[i k err] h :when (contains? want i)]
+              (swap! hangs conj [m i k])
+              (println (str/upper-case (name k)) m "case" i
+                       (if (= k :timeout) (str "(no answer in " (:probe-timeout opts) " s)") "(the process died)")
+                       "-- clj answers" (get want i) ":" (pr-str (nth forms i)))
+              (when (seq err) (println "   " err)))
+          hung (set (map first h))
+          diffs (filter #(and (not (hung %)) (differs (get want %) (get got %) (nth forms %))) (range n))]
       (println (format "%-9s %d cases, %d differ from clj" m n (count diffs)))
       (doseq [i diffs] (swap! bad conj [m i (get got i)]))))
   (doseq [[m i batch] (take 40 @bad)]
@@ -572,4 +623,5 @@
           (println "    clj:    " (get (run-clj [small]) 0))
           (println "    clotran:" (get (run-clotran m [small]) 0))))))
   (fs/delete-tree work)
-  (System/exit (if (seq @bad) 1 0)))
+  (when (seq @hangs) (println "TIMEOUTS AND CRASHES:" (count @hangs) "-- cases clj answers and clotran does not, in time or at all"))
+  (System/exit (if (or (seq @bad) (seq @hangs)) 1 0)))
