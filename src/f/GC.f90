@@ -411,6 +411,13 @@ module GC
   ! so it cannot own a deferred-length character of its own.
   type :: str_node
      character(len=:), allocatable :: text
+     ! THE TEXT'S INDEX (model/string.lisp), made with it by str_index:
+     ! how many code points it holds, and for text that is not all ASCII
+     ! the byte where every 32nd starts -- so count is O(1) and the
+     ! character at i, or a slice, is found in at most 31 steps, where
+     ! each walked the bytes from the start (and copied them first)
+     integer :: ncp = 0
+     integer, allocatable :: ck(:)
   end type str_node
 
   type(str_node), allocatable :: str_pool(:)
@@ -740,6 +747,7 @@ module GC
   integer, parameter, public :: GC_IMAGE_VERSION = 1
   public :: gc_nil, gc_bool, gc_int, gc_real, gc_char, gc_str, gc_sym, gc_key
   public :: gc_char_cp, u8_count, u8_off, u8_cpidx, u8_slice, u8_dec, u8_at, u8_enc
+  public :: gc_str_count, gc_str_at, gc_str_slice
 
   interface gc_int
      module procedure gc_int4, gc_int8
@@ -1113,6 +1121,7 @@ contains
        if (k >= 0) then
           allocate(character(len=k) :: str_pool(i)%text)
           if (k > 0) read(u) str_pool(i)%text
+          call str_index(i)
        end if
     end do
     read(u) n, global_count, global_gen
@@ -1729,6 +1738,7 @@ contains
           s%d_allocs = s%d_allocs + 1
           call y_add(s%y_str, s%n_y_str, idx)
           str_pool(idx)%text = text
+          call str_index(idx)
           v%tag = tag
           v%ref = idx
           return
@@ -1761,6 +1771,7 @@ contains
     str_live = str_live + 1
     call young_add(str_young, n_str_young, idx)
     str_pool(idx)%text = text
+    call str_index(idx)
     v%tag = tag
     v%ref = idx
     gc_allocs = gc_allocs + 1   ! statistics: shared, and counted under the lock
@@ -2542,7 +2553,9 @@ contains
     n = size(str_pool)
     allocate(bigger(2 * n), bmark(2 * n), bfree(2 * n), bnext(2 * n))
     do i = 1, n
-       if (allocated(str_pool(i)%text)) bigger(i)%text = str_pool(i)%text
+       if (allocated(str_pool(i)%text)) call move_alloc(str_pool(i)%text, bigger(i)%text)
+       bigger(i)%ncp = str_pool(i)%ncp
+       if (allocated(str_pool(i)%ck)) call move_alloc(str_pool(i)%ck, bigger(i)%ck)
     end do
     bmark = .false.; bfree = .false.; bnext = 0
     bmark(1:n) = str_mark(1:n)
@@ -4339,6 +4352,7 @@ contains
     ! place a finalizer genuinely belongs, run once per object by
     ! sweep instead of once per copy.
     if (allocated(str_pool(i)%text)) deallocate(str_pool(i)%text)
+    if (allocated(str_pool(i)%ck)) deallocate(str_pool(i)%ck)
     str_swept = str_swept + 1
     str_free(i) = .true.
     str_free_next(i) = str_free_head
@@ -4520,6 +4534,75 @@ contains
     end do
     p = len(t) + 1
   end function u8_off
+
+  ! The index of pool text idx, as it is made (str_node): one pass to
+  ! count, and one more to mark every 32nd character when any is not
+  ! ASCII. Made with the text, never on first use, so no two threads
+  ! ever fill it at once.
+  subroutine str_index(idx)
+    integer, intent(in) :: idx
+    integer :: p, n
+    n = u8_count(str_pool(idx)%text)
+    str_pool(idx)%ncp = n
+    if (allocated(str_pool(idx)%ck)) deallocate(str_pool(idx)%ck)
+    if (n == len(str_pool(idx)%text)) return
+    allocate(str_pool(idx)%ck(0:(n - 1) / 32))
+    n = 0
+    do p = 1, len(str_pool(idx)%text)
+       if (u8_lead(str_pool(idx)%text(p:p))) then
+          if (mod(n, 32) == 0) str_pool(idx)%ck(n / 32) = p
+          n = n + 1
+       end if
+    end do
+  end subroutine str_index
+
+  ! The 1-based byte where character i (0-based) of pool text ref
+  ! starts, len+1 at or past the end: direct for ASCII, else the mark at
+  ! or before it and at most 31 lead bytes on
+  function str_byte(ref, i) result(p)
+    integer, intent(in) :: ref, i
+    integer :: p, k, nb
+    nb = len(str_pool(ref)%text)
+    if (i >= str_pool(ref)%ncp) then
+       p = nb + 1
+    else if (str_pool(ref)%ncp == nb) then
+       p = i + 1
+    else
+       p = str_pool(ref)%ck(i / 32)
+       k = mod(i, 32)
+       do while (k > 0)
+          p = p + 1
+          if (u8_lead(str_pool(ref)%text(p:p))) k = k - 1
+       end do
+    end if
+  end function str_byte
+
+  ! how many characters pool text ref holds, O(1)
+  integer function gc_str_count(ref)
+    integer, intent(in) :: ref
+    gc_str_count = 0
+    if (ref_ok(ref)) gc_str_count = str_pool(ref)%ncp
+  end function gc_str_count
+
+  ! the code point of character i (0-based), -1 out of range; read in place
+  integer function gc_str_at(ref, i) result(cp)
+    integer, intent(in) :: ref, i
+    integer :: p, nb
+    cp = -1
+    if (.not. ref_ok(ref) .or. i < 0) return
+    p = str_byte(ref, i)
+    if (p <= len(str_pool(ref)%text)) call u8_dec(str_pool(ref)%text, p, cp, nb)
+  end function gc_str_at
+
+  ! characters cs (inclusive) to ce (exclusive) as their bytes: only
+  ! those bytes copied, the caller checking 0 <= cs <= ce <= count
+  subroutine gc_str_slice(ref, cs, ce, s)
+    integer, intent(in) :: ref, cs, ce
+    character(len=:), allocatable, intent(out) :: s
+    s = ""
+    if (.not. ref_ok(ref)) return
+    s = str_pool(ref)%text(str_byte(ref, cs):str_byte(ref, ce) - 1)
+  end subroutine gc_str_slice
 
   ! The character index (0-based) of byte position p (1-based).
   pure function u8_cpidx(t, p) result(i)

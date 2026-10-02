@@ -9087,29 +9087,28 @@ contains
             call vs_leave(vst, base)
             return
          end if
-         block
-            call gc_ref_text(a%ref, s=dlt_1)
-            t = dlt_1
-         end block
+         ! the count and the slice read in place, O(1) and O(length of
+         ! the slice) (GC.f90 str_index); the whole text was copied and
+         ! walked from its start
          b = as_index(gcv_nth(args, 1))
          lo = int(b%ival)
-         hi = u8_count(t)
+         hi = gc_str_count(a%ref)
          if (n >= 3) then
             b = as_index(gcv_nth(args, 2))
             hi = int(b%ival)
          end if
-         if (lo < 0 .or. hi > u8_count(t) .or. lo > hi) then
+         if (lo < 0 .or. hi > gc_str_count(a%ref) .or. lo > hi) then
             block
                call itoa(lo, s=dlt_1)
                call itoa(hi, s=dlt_2)
-               call itoa(u8_count(t), s=dlt_3)
+               call itoa(gc_str_count(a%ref), s=dlt_3)
                call raise_class("clotran.host.string_index_out_of_bounds_exception", &
                     "Range [" // trim(dlt_1) // ", " // trim(dlt_2) // ") out of bounds for length " // trim(dlt_3), &
                     [vs_get(vst, base + 1)])
             end block
          else
             block
-               call u8_slice(t, lo, hi, s=dlt_1)
+               call gc_str_slice(a%ref, lo, hi, s=dlt_1)
                out = gc_str(dlt_1, [vs_get(vst, base + 1)])
             end block
          end if
@@ -10644,10 +10643,7 @@ contains
          type(gc_value) :: cv
          cv = strip_meta(gcv_nth(args, 0))
          if (cv%tag == GCT_STR) then
-            block
-               call gc_ref_text(cv%ref, s=dlt_1)
-               out = gc_int(u8_count(dlt_1))
-            end block
+            out = gc_int(int(gc_str_count(cv%ref), gc_ip))
          else if (gc_kind(cv) == OBJ_SB) then
             ! A StringBuilder IS a CharSequence, so .length is its
             ! text's. Answering the seq count (0) made clojure.string's
@@ -10665,29 +10661,41 @@ contains
          character(len=:), allocatable :: t
          type(gc_value) :: iv
          integer :: lo, hi
-         block
-            call text_of(gcv_nth(args, 0), s=dlt_1)
-            t = dlt_1
-         end block
+         type(gc_value) :: sv
+         integer :: cnt
+         sv = strip_meta(gcv_nth(args, 0))
+         if (sv%tag == GCT_STR) then
+            cnt = gc_str_count(sv%ref)
+         else
+            block
+               call text_of(sv, s=dlt_1)
+               t = dlt_1
+            end block
+            cnt = u8_count(t)
+         end if
          iv = as_index(gcv_nth(args, 1))
          lo = int(iv%ival)
-         hi = u8_count(t)
+         hi = cnt
          if (n >= 3) then
             iv = as_index(gcv_nth(args, 2))
             hi = int(iv%ival)
          end if
-         if (lo < 0 .or. hi > u8_count(t) .or. lo > hi) then
+         if (lo < 0 .or. hi > cnt .or. lo > hi) then
             block
                call itoa(lo, s=dlt_1)
                call itoa(hi, s=dlt_2)
-               call itoa(u8_count(t), s=dlt_3)
+               call itoa(cnt, s=dlt_3)
                call raise_class("clotran.host.string_index_out_of_bounds_exception", &
                     "Range [" // trim(dlt_1) // ", " // trim(dlt_2) // ") out of bounds for length " // trim(dlt_3), &
                     [vs_get(vst, base + 1)])
             end block
          else
             block
-               call u8_slice(t, lo, hi, s=dlt_1)
+               if (sv%tag == GCT_STR) then
+                  call gc_str_slice(sv%ref, lo, hi, s=dlt_1)
+               else
+                  call u8_slice(t, lo, hi, s=dlt_1)
+               end if
                out = gc_str(dlt_1, [vs_get(vst, base + 1)])
             end block
          end if
@@ -11113,12 +11121,18 @@ contains
          sv = strip_meta(gcv_nth(args, 0))
          iv = strip_meta(gcv_nth(args, 1))
          out = gc_nil()
-         block
-            call text_of(sv, s=dlt_1)
-            t = dlt_1
-         end block
-         if (iv%tag == GCT_INT) then
-            if (iv%ival >= 0 .and. iv%ival < u8_count(t)) out = gc_char_cp(u8_at(t, int(iv%ival)))
+         if (sv%tag == GCT_STR) then
+            if (iv%tag == GCT_INT) then
+               if (iv%ival >= 0 .and. iv%ival < gc_str_count(sv%ref)) out = gc_char_cp(gc_str_at(sv%ref, int(iv%ival)))
+            end if
+         else
+            block
+               call text_of(sv, s=dlt_1)
+               t = dlt_1
+            end block
+            if (iv%tag == GCT_INT) then
+               if (iv%ival >= 0 .and. iv%ival < u8_count(t)) out = gc_char_cp(u8_at(t, int(iv%ival)))
+            end if
          end if
        end block
     case (B_WRITE)
@@ -15627,7 +15641,9 @@ contains
     ! elements, made once here: seq_elem reads by position, and for
     ! these that built every entry (decoded the whole string) per
     ! element, so walking one was quadratic -- a third of startup.
-    if (gca_is(v) .or. gc_kind(v) == OBJ_SET .or. v%tag == GCT_STR) then
+    ! (a string reads its characters in place, O(1) each -- GC.f90
+    ! str_index -- so its seq is an index into it, as clj's StringSeq)
+    if (gca_is(v) .or. gc_kind(v) == OBJ_SET) then
        out = seq_snapshot(vs_get(vst, base + 1), roots)
        call vs_set(vst, base + 1, out)
     end if
@@ -15709,10 +15725,7 @@ contains
     else if (gca_is(v)) then
        n = gca_count(v)
     else if (v%tag == GCT_STR) then
-       block
-          call gc_ref_text(v%ref, s=dlt_1)
-          n = u8_count(dlt_1)
-       end block
+       n = gc_str_count(v%ref)
     else if (gc_kind(v) == OBJ_ARRAY) then
        ! An array seqs as its elements, so `sort` can hand the array
        ! it just sorted back to `seq`. The length is the FIRST extent,
@@ -15775,14 +15788,7 @@ contains
          if (i >= 0 .and. i < size(sks)) out = sks(i+1)
        end block
     else if (v%tag == GCT_STR) then
-       block
-         character(len=:), allocatable :: t
-         block
-            call gc_ref_text(v%ref, s=dlt_1)
-            t = dlt_1
-         end block
-         if (i >= 0 .and. i < u8_count(t)) out = gc_char_cp(u8_at(t, i))
-       end block
+       if (i >= 0 .and. i < gc_str_count(v%ref)) out = gc_char_cp(gc_str_at(v%ref, i))
     else if (gca_is(v)) then
        call gca_entries(v, ks, vls)
        if (i >= 0 .and. i < size(ks)) then
@@ -19111,12 +19117,8 @@ contains
             out = gcv_nth(coll, int(kk%ival))
     else if (coll%tag == GCT_STR .and. kk%tag == GCT_INT) then
        out = gc_nil()
-       block
-          call gc_ref_text(coll%ref, s=dlt_1)
-          t = dlt_1
-       end block
-       if (kk%ival >= 0 .and. kk%ival < int(u8_count(t), gc_ip)) &
-            out = gc_char_cp(u8_at(t, int(kk%ival)))
+       if (kk%ival >= 0 .and. kk%ival < int(gc_str_count(coll%ref), gc_ip)) &
+            out = gc_char_cp(gc_str_at(coll%ref, int(kk%ival)))
     else
        out = gca_get(coll, k)
     end if
@@ -19149,10 +19151,7 @@ contains
     else if (coll%tag == GCT_STR) then
        yes = (kk%tag == GCT_INT)
        if (yes) then
-          block
-             call gc_ref_text(coll%ref, s=dlt_1)
-             yes = (kk%ival >= 0 .and.  kk%ival < int(u8_count(dlt_1), gc_ip))
-          end block
+          yes = (kk%ival >= 0 .and.  kk%ival < int(gc_str_count(coll%ref), gc_ip))
        end if
     else
        yes = gca_contains(coll, k)

@@ -2923,3 +2923,11 @@
    (conj (subvec (conj (vec (range 31)) 31) 30) :q) (reduce conj (subvec v 90) (range 5)) (subvec (pop (vec (range 70))) 60)
    (rseq [1 2 3]) (take 3 (rseq v)) (count (rseq v)) (hash (rseq [1 2 3])) (into [] (rseq (vec (range 40)))) (vec (rseq (subvec v 0 5)))
    (meta (pop (with-meta [1 2] {:m 1}))) (= (rseq [1 2 3]) '(3 2 1)) (chunked-seq? (rseq v)) (chunked-seq? (seq v))])
+
+;; a string's count, characters and slices read in place through its
+;; index (GC.f90 str_index, model/string.lisp): non-ASCII text, indices
+;; on both sides of the every-32nd marks
+(let [u (str "héllo wörld ß " (apply str (repeat 70 "ü")) "end") a (apply str (repeat 100 "ab"))]
+  [(count u) (count a) (nth u 0) (nth u 1) (nth u 12) (nth u 33) (nth u 86) (subs u 5) (subs u 10 20) (subs u 13 14) (subs u 50) (subs u 32 33) (subs u 31 65) (subs a 63 65)
+   (.length u) (.charAt u 13) (.substring u 2 9) (get u 13) (get u 999) (contains? u 13) (contains? u 87) (first u) (rest "abc") (count (seq u)) (nth (seq u) 40)
+   (reverse "aéß") (apply str (seq u)) (frequencies "héé") (subs "" 0 0) (last u) (nth a 199) (subs a 199) (seq "") (vec "éü")])
