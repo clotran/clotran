@@ -8538,7 +8538,13 @@ contains
          found = .false.
          ! the default, kept apart: the walk below lets the args go
          if (n >= 3) call vs_set(vst, base + 3, gcv_nth(vs_get(vst, base + 1), 2))
-         if (gc_kind(coll) == OBJ_SET .or. gca_is(coll)) then
+         ! RT.nthFrom refuses what is not indexed or sequential, default or
+         ! not: a keyword, a number, a symbol -- (let [[a b] :k] ...) read
+         ! nil twice where clj throws (scripts/fuzz-macro)
+         if (gc_kind(coll) == OBJ_SET .or. gca_is(coll) .or. coll%tag == GCT_KEY .or. coll%tag == GCT_SYM &
+              .or. coll%tag == GCT_INT .or. coll%tag == GCT_REAL .or. coll%tag == GCT_BOOL .or. coll%tag == GCT_RATIO &
+              .or. coll%tag == GCT_BIG .or. coll%tag == GCT_DEC .or. coll%tag == GCT_BIGRATIO .or. coll%tag == GCT_CLASS &
+              .or. coll%tag == GCT_CHAR) then
             block
               call class_name_of(coll, s=dlt_1)
               call raise_class("clotran.host.unsupported_operation_exception", "nth not supported on this type: " // dlt_1, &

@@ -3034,6 +3034,11 @@
 (let [e (filter #(if (= % 5) (throw (ex-info "five" {})) false) (take 10 (iterate inc 0)))]
   [(try (seq e) (catch clotran.host.throwable x (.getMessage x))) (try (seq e) (catch clotran.host.throwable x (.getMessage x)))])
 
+;; nth refuses what is neither indexed nor sequential, with a default too:
+;; (let [[a b] :k] ...) answered nil nil (scripts/fuzz-macro)
+(letfn [(t [x] (try (nth x 0 :d) (catch clotran.host.throwable e :refused)))]
+  [(t :k) (t 5) (t 'x) (t \a) (t 1.5) (t nil) (t "ab") (t {:a 1}) (t #{1}) (t (first {:a 1}))])
+
 ;; a map literal whose key is a vector, destructured: under the collector
 ;; (check-oracle-gc) the reader's map lost that key -- an array map's
 ;; index_of compared keys through the evaluator, whose allocations did
