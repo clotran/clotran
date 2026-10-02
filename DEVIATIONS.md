@@ -2034,12 +2034,14 @@ ratio is in the form.
 version, it is more accurate" -- the IEEE quotient is the correctly
 rounded double, the 16-digit detour is not.
 
-## 71. `count` and `int` answer clotran's one integer
+## 71. `count`, `compare` and `hash` answer clotran's one integer
 
-In clj, `(class (count [1]))` and `(class (int 1))` are
-`Integer`, the host's boxed 32-bit int; everything else
-integral is a `Long`. clotran has one integer, 64-bit
-(`clotran.host.int8`), so both answer that. It is seen where the class
+In clj, `(class (count [1]))`, `(class (compare 1 2))` and `(class
+(hash 1))` are `Integer`, the host's boxed 32-bit int; everything else
+integral is a `Long`. clotran answers its 64-bit integer
+(`clotran.host.int8`) for these. `(int x)` itself is an int
+(`clotran.host.int4`), as an int array's element is, interpreted and
+compiled. It is seen where the class
 is: a protocol extended to longs dispatches on `(count xs)` here and
 finds no method in clj, and `(satisfies? P (count xs))` is true here
 and false there. ClojureScript answers a JavaScript number for both --

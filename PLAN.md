@@ -2777,7 +2777,7 @@ done when its fuzzer is green and its seeded run is in `make test`.
 | the package door | scripts/fuzz-door | model/boundary.lisp | green |
 | data-structure costs | scripts/bigo | clj's bounds, model/ | green (measures, does not generate) |
 | the reader and the printer | scripts/fuzz-print (test.check any-printable-equatable) | clj: the literal read, pr-str, print-str, str, read back | green, in make test (check-fuzz-print). Found: a collection's str did not print through print-method or *print-namespace-maps*; the #tag scan lost its seq under GC |
-| numbers: the tower, overflow, ratios | -- | clj | |
+| numbers: the tower, overflow, ratios | scripts/fuzz-num | clj: value and class of one op on any two kinds | green, in make test (check-fuzz-num); documented deviations (26, 27, 43, 69, 70, 71) not generated. Found: a float printed as its double; (int hugeN) answered 0 and unchecked-int lost the low bits; bit-not took a BigInt; quot and rem of doubles were not clj's formulas, and gfortran fused n - q*d (now -ffp-contract=off everywhere); a ratio with a double took the ratio path; a decimal quotient lost its scale; compiled (int x) boxed as a long |
 | strings and regex | -- | clj | |
 | collections under random op sequences | -- | clj, model/ | |
 | GC: random allocation under torture | -- | the same program without torture | |

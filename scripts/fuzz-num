@@ -1,0 +1,88 @@
+#!/usr/bin/env bb
+;; fuzz-num: the numeric tower, generated (PLAN step 29).
+;;
+;;   scripts/fuzz-num [-n N] [-s SEED] [-m modes] [-o cases.edn]
+;;
+;; N cases, each one operation on operands drawn from every kind of
+;; number -- longs anywhere (the boundaries weighted), doubles with
+;; -0.0, ##Inf and ##NaN, ratios, BigInts, BigDecimals -- written as
+;; literals, answering [result (class result)] or what clj throws, so
+;; promotion is checked with the value. Through clj and every clotran
+;; mode by scripts/fuzz -f.
+;;
+;; What DEVIATIONS already records is not generated: a BigDecimal with a
+;; ratio, or divided (43, a working precision where clj throws); a shift
+;; past 63 (69, Fortran's shifts); the class of compare's and hash's int
+;; (71, one integer); biginteger (26, one big integer type); a ratio
+;; with a double (70, the quotient Fortran takes); the smallest
+;; subnormal (27, its printing); a BigDecimal with a 30-digit BigInt, or
+;; bigdec of a ratio (43 again).
+(require '[clojure.test.check.generators :as g]
+         '[clojure.string :as str]
+         '[babashka.fs :as fs]
+         '[babashka.process :as p])
+
+(def opts (loop [as *command-line-args* o {:n 400 :seed 1 :modes "flat,tree,compiled"}]
+            (if (empty? as) o
+                (case (first as)
+                  "-n" (recur (drop 2 as) (assoc o :n (parse-long (second as))))
+                  "-s" (recur (drop 2 as) (assoc o :seed (parse-long (second as))))
+                  "-m" (recur (drop 2 as) (assoc o :modes (second as)))
+                  "-o" (recur (drop 2 as) (assoc o :out (second as)))
+                  (do (println "usage: scripts/fuzz-num [-n N] [-s SEED] [-m modes] [-o cases.edn]")
+                      (System/exit 2))))))
+
+(def binary '[+ - * / quot rem mod +' -' *' min max compare = == < <= > >= not=
+              unchecked-add unchecked-subtract unchecked-multiply])
+(def binary-int '[bit-and bit-or bit-xor bit-and-not bit-shift-left bit-shift-right unsigned-bit-shift-right
+                  bit-test bit-set bit-clear bit-flip])
+(def unary '[inc dec inc' dec' - abs zero? pos? neg? num double long int float bigint bigdec
+             rationalize hash str pr-str integer? ratio? rational? decimal? float? double? number? NaN? infinite?
+             unchecked-inc unchecked-dec unchecked-negate])
+(def unary-int '[even? odd? bit-not unchecked-int unchecked-long])
+
+;; a literal for each kind, as source text: the reader is tested too
+(defrecord Lit [text])
+(defmethod print-method Lit [l w] (.write w (str (:text l))))
+
+(def g-long (g/one-of [(g/choose -10 10) g/large-integer
+                       (g/elements [9223372036854775807 -9223372036854775808 4611686018427387904
+                                    -4611686018427387905 2147483647 -2147483648 4294967296])]))
+(def g-double (g/one-of [(g/double* {:infinite? true :NaN? true})
+                         (g/elements [0.0 -0.0 1.0 -1.5 0.1 1e308 -1e-308 9.223372036854776E18])]))
+(def g-ratio (g/fmap (fn [[a b]] (Lit. (str a "/" b)))
+                     (g/tuple (g/such-that #(not (zero? %)) (g/choose -40 40)) (g/choose 2 40))))
+(def g-bigint (g/fmap #(Lit. (str % "N")) (g/one-of [(g/choose -10 10) g/large-integer
+                                                     (g/elements ["9223372036854775808" "-9223372036854775809" "123456789012345678901234567890"])])))
+(def g-bigdec (g/fmap (fn [[u s]] (Lit. (str (if (zero? s) (str u) (str (quot u 1) "." (abs s))) "M")))
+                      (g/tuple (g/choose -100000 100000) (g/choose 0 999))))
+(def g-num (g/frequency [[4 g-long] [3 g-double] [2 g-ratio] [2 g-bigint] [2 g-bigdec]]))
+(def g-int-num (g/frequency [[4 g-long] [1 g-bigint]]))
+
+(def g-case
+  (g/one-of [(g/fmap (fn [[o a b]] (list o a b))
+                     (g/such-that (fn [[o a b]] (let [dec? #(str/ends-with? (str (:text %)) "M")
+                                                      ratio? #(str/includes? (str (:text %)) "/")
+                                                      dbl? double?
+                                                      wide? #(str/includes? (str (:text %)) "123456789012345678901234567890")]
+                                                  (not (or (and (dec? a) (ratio? b)) (and (ratio? a) (dec? b))
+                                                           (and (dbl? a) (ratio? b)) (and (ratio? a) (dbl? b))
+                                                           (and (dec? a) (wide? b)) (and (wide? a) (dec? b))
+                                                           (and (= o '/) (or (dec? a) (dec? b)))))))
+                                  (g/tuple (g/elements binary) g-num g-num) 100))
+             (g/fmap (fn [[o a b]] (list o a b)) (g/tuple (g/elements binary-int) g-int-num (g/choose 0 63)))
+             (g/fmap (fn [[o a]] (list o a))
+                     (g/such-that (fn [[o a]] (not (and (#{'bigdec 'double 'float} o) (str/includes? (str (:text a)) "/"))))
+                                  (g/tuple (g/elements unary) g-num) 100))
+             (g/fmap (fn [[o a]] (list o a)) (g/tuple (g/elements unary-int) g-int-num))]))
+
+(defn case-form [f]
+  (str "(let [r " (pr-str f) "] [r " (if (#{'compare 'hash} (first f)) "(integer? r)" "(class r)") "])"))
+
+(let [{:keys [n seed]} opts
+      forms (for [i (range n)] (g/generate g-case 20 (+ seed i)))
+      out (or (:out opts) (str (fs/create-temp-file {:prefix "fuzz-num" :suffix ".edn"})))]
+  (spit out (str "[" (apply str (interpose "\n" (map case-form forms))) "]"))
+  (println (str "fuzz-num: " n " cases -> " out))
+  (let [r (p/shell {:continue true} (str (fs/parent *file*) "/fuzz") "-f" out "-m" (:modes opts))]
+    (System/exit (:exit r))))
