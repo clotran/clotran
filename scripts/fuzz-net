@@ -1,0 +1,175 @@
+#!/usr/bin/env bb
+;; fuzz-net: sockets and the REPL over one, generated (PLAN step 29).
+;;
+;;   scripts/fuzz-net [-n N] [-s SEED]
+;;
+;; ECHO: clotran serves on a free port (clotran.net), echoing bytes; this
+;; sends N random payloads -- every byte value, UTF-8 characters, sizes
+;; to 256 KB, so a character or a buffer's worth splits across reads --
+;; through nc, as embed-repl-check talks to a REPL, and each must come
+;; back exactly.
+;;
+;; PREPL: clotran serves clotran.server/io-prepl; the forms of the number,
+;; string and collection generators are sent over the socket, one per
+;; line, and each :ret is compared with clj evaluating the same form,
+;; through the same canonical printer (maps and sets sorted).
+;;
+;; Every wait has a deadline: a server that stops answering is a TIMEOUT.
+(require '[clojure.test.check.generators :as g]
+         '[clojure.string :as str]
+         '[clojure.edn :as edn]
+         '[babashka.fs :as fs]
+         '[babashka.process :as p])
+
+(def opts (loop [as *command-line-args* o {:n 40 :seed 1}]
+            (if (empty? as) o
+                (case (first as)
+                  "-n" (recur (drop 2 as) (assoc o :n (parse-long (second as))))
+                  "-s" (recur (drop 2 as) (assoc o :seed (parse-long (second as))))
+                  (do (println "usage: scripts/fuzz-net [-n N] [-s SEED]") (System/exit 2))))))
+
+(def repo (str (fs/parent (fs/parent (fs/absolutize *file*)))))
+(def work (str (fs/create-temp-dir {:prefix "fuzz-net"})))
+(def problems (atom []))
+(defn problem [kind detail] (swap! problems conj [kind detail]) (println (name kind) detail))
+
+;; start clotran on a script that prints PORT n to a log; nil if it never does
+(defn serve [script]
+  (let [f (str work "/" (gensym "srv") ".cljf")
+        log (str f ".log")
+        _ (spit f script)
+        proc (p/process {:dir repo :out (fs/file log) :err :string} (str repo "/clotran-bin") (str repo "/src/clj/clojure/core.clj") f)
+        port (loop [waited 0]
+               (if-let [[_ n] (re-find #"(?m)^PORT (\d+)" (if (fs/exists? log) (slurp log) ""))]
+                 (parse-long n)
+                 (when (< waited 600) (p/shell "sleep" "0.1") (recur (inc waited)))))]
+    (when-not port (problem :no-server "the server did not start in 60 s"))
+    {:proc proc :port port}))
+
+;; nc to the port with `in` (a file) as what it sends; its output, or
+;; ::timeout past the deadline
+(defn nc [port in-file out-file secs]
+  (let [proc (p/process {:in (fs/file in-file) :out (fs/file out-file) :err :string} "nc" "-w" "10" "127.0.0.1" (str port))
+        r (deref proc (* 1000 secs) ::timeout)]
+    (if (= r ::timeout) (do (p/destroy-tree proc) ::timeout) out-file)))
+
+;; ---- echo -----------------------------------------------------------------
+
+(def echo-server
+  "(require '[clotran.net :as net])
+(let [srv (net/listen 0)]
+  (println \"PORT\" (:port srv)) (flush)
+  (loop []
+    (when-let [c (net/accept srv)]
+      (future (let [buf (byte-array 65536)]
+                (loop [] (let [n (net/read-bytes c buf)]
+                           (when (and n (pos? n)) (net/write-bytes c buf 0 n) (recur))))
+                (net/close c)))
+      (recur))))
+")
+
+(def g-payload
+  (g/let [kind (g/elements [:bytes :utf8 :empty :big])
+          bs (g/vector (g/choose -128 127) 0 300)
+          s (g/fmap str/join (g/vector (g/elements (vec "aZ0 \n\t{é}λЖ—😀")) 0 200))
+          big (g/choose 1000 262144)]
+    (g/return (case kind
+                :bytes (byte-array bs)
+                :utf8 (.getBytes ^String s "UTF-8")
+                :empty (byte-array 0)
+                :big (byte-array (map #(unchecked-byte (* 7 %)) (range big)))))))
+
+(defn echo-case [port payload i]
+  (let [in (str work "/echo-" i ".in") out (str work "/echo-" i ".out")]
+    (fs/write-bytes in payload)
+    (if (= ::timeout (nc port in out 60))
+      :timeout
+      (= (seq payload) (seq (fs/read-all-bytes out))))))
+
+;; ---- prepl ----------------------------------------------------------------
+
+(def prepl-server
+  "(require 'clotran.server)
+(let [srv (clotran.server/start-server {:name \"fz\" :port 0 :accept 'clotran.server/io-prepl})]
+  (println \"PORT\" (:port srv)) (flush)
+  @(promise))
+")
+
+(def canon
+  "(defn fz-canon [x]
+  (cond (map? x) (str \"{\" (clojure.string/join \", \" (sort (map (fn [e] (str (fz-canon (key e)) \" \" (fz-canon (val e)))) x))) \"}\")
+        (set? x) (str \"#{\" (clojure.string/join \" \" (sort (map fz-canon x))) \"}\")
+        (vector? x) (str \"[\" (clojure.string/join \" \" (map fz-canon x)) \"]\")
+        (sequential? x) (str \"(\" (clojure.string/join \" \" (map fz-canon x)) \")\")
+        :else (pr-str x)))")
+
+(defn wrap [form] (str "(try (fz-canon " form ") (catch Throwable e \"!error\"))"))
+
+(defn generated-forms
+  "Forms from the other generators, as text: what they would run."
+  [n seed]
+  (let [forms (atom [])]
+    (doseq [gen ["fuzz-num" "fuzz-str" "fuzz-coll"]]
+      (let [out (str work "/" gen ".edn")]
+        ;; their generators, run for the cases alone (-m with no mode: none run)
+        (p/shell {:continue true :out :string :err :string} (str repo "/scripts/" gen) "-n" (str n) "-s" (str seed) "-m" "" "-o" out)
+        (when (fs/exists? out)
+          (swap! forms into (map pr-str (read-string (slurp out)))))))
+    @forms))
+
+(defn clj-answers [forms]
+  (let [f (str work "/clj.clj")]
+    (load-file (str repo "/upstream/names.clj"))
+    (spit f ((resolve 'names/to-upstream)
+             (str "(require 'clojure.string)\n" canon "\n"
+                  (str/join "\n" (map-indexed (fn [i x] (str "(println \"FZ\" " i " (pr-str " (wrap x) "))")) forms)) "\n")))
+    (let [r (deref (p/process {:dir repo :out :string :err :string} "clj" "-Sdeps" (slurp (str repo "/deps.edn")) "-M" f) 600000 ::timeout)]
+      (if (= r ::timeout) {}
+          (into {} (for [[_ i v] (re-seq #"FZ (\d+) (.*)" (:out r))] [(parse-long i) (edn/read-string ((resolve 'names/from-clj) v))]))))))
+
+;; every form in one session, :repl/quit last; the :ret lines in order,
+;; the first two being the require and the printer
+(defn prepl-answers [port forms]
+  (let [in (str work "/prepl.in") out (str work "/prepl.out")]
+    (spit in (str "(require 'clojure.string)\n" (str/replace canon "Throwable" "clotran.host.throwable") "\n"
+                  (str/join "\n" (map #(str/replace (wrap %) "Throwable" "clotran.host.throwable") forms))
+                  "\n:repl/quit\n"))
+    (if (= ::timeout (nc port in out 600))
+      ::timeout
+      (let [rets (->> (str/split-lines (slurp out))
+                      (keep #(try (edn/read-string {:default (fn [_ v] v)} %) (catch Exception _ nil)))
+                      (filter #(= :ret (:tag %)))
+                      (drop 2))]
+        (into {} (map-indexed (fn [i m] [i (try (edn/read-string (:val m)) (catch Exception _ (:val m)))]) rets))))))
+
+;; ---- the run ----------------------------------------------------------------
+
+(let [{:keys [n seed]} opts
+      echo (serve echo-server)]
+  (try
+    (when-let [port (:port echo)]
+      (doseq [i (range n)]
+        (let [payload (g/generate g-payload 30 (+ seed i))
+              r (echo-case port payload i)]
+          (when-not (true? r)
+            (problem (if (= r :timeout) :echo-timeout :echo-differs)
+                     (str "case " i ": " (count payload) " bytes"))))))
+    (finally (p/destroy-tree (:proc echo))))
+  (println "fuzz-net echo:" n "payloads")
+  (let [forms (generated-forms (max 10 (quot n 2)) seed)
+        want (clj-answers forms)
+        repl (serve prepl-server)]
+    (try
+      (when-let [port (:port repl)]
+        (let [got (prepl-answers port forms)]
+          (if (= got ::timeout)
+            (problem :prepl-timeout "the prepl stopped answering")
+            (doseq [[i x] (map-indexed vector forms)
+                    :let [w (get want i) gv (get got i)]
+                    :when (and w (not= w gv))]
+              (problem :prepl-differs (str "case " i ": " (subs x 0 (min 200 (count x))) "\n   clj:     " w "\n   clotran: " gv))))))
+      (finally (p/destroy-tree (:proc repl))))
+    (println "fuzz-net prepl:" (count forms) "forms over the socket"))
+  (fs/delete-tree work)
+  (println (str "fuzz-net: " (count @problems) " problems"))
+  (System/exit (if (empty? @problems) 0 1)))

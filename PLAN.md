@@ -2787,7 +2787,8 @@ done when its fuzzer is green and its seeded run is in `make test`.
 | threads, agents, STM | scripts/fuzz-threads | clj: final values; invariants (the refs' total kept) | green, in make test (check-fuzz-threads); a deadlock is a TIMEOUT |
 | the compiler (tier A, purefort) | scripts/fuzz-pure through scripts/pure-check | clj and the interpreter, gfortran and flang | green, in make test (check-fuzz-pure). The full compiler (clotran compile) is fuzzed by every generator's compiled mode |
 | the heap image | scripts/fuzz-gc's noimage mode | clj | green, with GC above |
-| sockets, REPL, network, packages | -- | per protocol | |
+| sockets and the REPL over one | scripts/fuzz-net (through nc, as embed-repl-check) | byte equality; clj for each form through io-prepl | green, in make test (check-fuzz-net). Needs nc: on Windows, a client is still to choose |
+| the package door | scripts/fuzz-door | model/boundary.lisp | green; building and resolving packages is not generated yet |
 
 Spec under GC torture is the first lead: `s/cat` answers wrong under
 torture when core is loaded from source (found 2026-10-01). Finding it

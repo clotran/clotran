@@ -54,7 +54,7 @@
       nil o
       "-n" (recur (drop 2 a) (assoc o :n (parse-long (second a))))
       "-s" (recur (drop 2 a) (assoc o :seed (parse-long (second a))))
-      "-m" (recur (drop 2 a) (assoc o :modes (str/split (second a) #",")))
+      "-m" (recur (drop 2 a) (assoc o :modes (vec (remove str/blank? (str/split (second a) #",")))))
       "--shrink" (recur (rest a) (assoc o :shrink true))
       "-f" (recur (drop 2 a) (assoc o :file (second a)))
       "--timeout" (recur (drop 2 a) (assoc o :timeout (parse-long (second a))))
@@ -600,6 +600,8 @@
       _ (doseq [f forms]
           (when-not (s/valid? ::case f) (println "fuzz: a generated case does not conform:" (pr-str f)))
           (doseq [[h x] (nonconforming f)] (println "fuzz: a generated" h "does not conform to its spec:" (pr-str x))))
+      ;; -m "": no mode, the cases only (scripts/fuzz-net takes them)
+      _ (when (empty? modes) (System/exit 0))
       want (let [{:keys [out] h :hangs} (run-finding-hangs run-clj forms (vec (range (count forms))))]
              (doseq [[i k] h] (println "clj" (name k) "on case" i "(not compared):" (pr-str (nth forms i))))
              out)

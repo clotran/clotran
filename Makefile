@@ -398,7 +398,7 @@ $(B)/libsamplelib.$(SOEXT): $(T)/samplelib.f90 $(B)/samplelib_shims.f90 | $(B) $
 # order, as before.
 TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(B)/libsamplelib.$(SOEXT) packages examples/embed/heat
 TEST_CHECKS = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-tree check-banner check-torture check-threads \
-	check-autocompile check-break check-libraries check-oracle check-oracle-gc check-pure check-static check-costs check-fuzz check-frames check-fuzz-spec check-fuzz-print check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-threads check-fuzz-pure check-fuzz-gc
+	check-autocompile check-break check-libraries check-oracle check-oracle-gc check-pure check-static check-costs check-fuzz check-frames check-fuzz-spec check-fuzz-print check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net
 .PHONY: test $(TEST_CHECKS)
 test: $(TEST_CHECKS)
 $(TEST_CHECKS): $(TEST_DEPS)
@@ -519,6 +519,9 @@ check-fuzz-pure:
 check-fuzz-gc:
 	@echo "--- the collector and the image (PLAN 29): every generator collecting every 3, 17 and 1009 allocations, and from source ---"
 	scripts/fuzz-gc -n 10 -s 1 > $(B)/fuzz-gc.out 2>&1; s=$$?; cat $(B)/fuzz-gc.out; exit $$s
+check-fuzz-net:
+	@echo "--- sockets and the REPL over one (PLAN 29): random payloads echoed, generated forms through io-prepl against clj ---"
+	scripts/fuzz-net -n 20 -s 1 > $(B)/fuzz-net.out 2>&1; s=$$?; cat $(B)/fuzz-net.out; exit $$s
 check-fuzz-coll:
 	@echo "--- the collections (PLAN 29): random operation sequences on every kind, across the size boundaries, through clj and every mode, GC torture too ---"
 	scripts/fuzz-coll -n 120 -s 1 -m flat,tree,compiled,torture -o $(B)/fuzz-coll.edn > $(B)/fuzz-coll.out 2>&1; s=$$?; cat $(B)/fuzz-coll.out; exit $$s
