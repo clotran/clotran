@@ -383,14 +383,34 @@
            (good e d f cenv s env prog))
   :hints (("Goal" :in-theory (disable nth update-nth))))
 
+; an if is two lemmas, one path through its code each: one proof over
+; both paths at once took eight minutes of case splitting
+(defthm good-if-true
+  (implies (and (equal (car e) :if)
+                (truthy (meaning (cadr e) env))
+                (good (cadr e) f (1+ f) cenv s env prog)
+                (good (caddr e) d f cenv (vm-step prog (vm-run prog s (vm-clock (cadr e) env))) env prog))
+           (good e d f cenv s env prog))
+  :hints (("Goal" :in-theory (disable nth update-nth)
+                  :expand ((vm-compile e d f cenv (car s))))))
+
+(defthm good-if-false
+  (implies (and (equal (car e) :if)
+                (not (truthy (meaning (cadr e) env)))
+                (good (cadr e) f (1+ f) cenv s env prog)
+                (good (cadddr e) d f cenv (vm-step prog (vm-run prog s (vm-clock (cadr e) env))) env prog))
+           (good e d f cenv s env prog))
+  :hints (("Goal" :in-theory (disable nth update-nth)
+                  :expand ((vm-compile e d f cenv (car s))))))
+
 (defthm good-if
   (implies (and (equal (car e) :if)
                 (good (cadr e) f (1+ f) cenv s env prog)
                 (good (caddr e) d f cenv (vm-step prog (vm-run prog s (vm-clock (cadr e) env))) env prog)
                 (good (cadddr e) d f cenv (vm-step prog (vm-run prog s (vm-clock (cadr e) env))) env prog))
            (good e d f cenv s env prog))
-  :hints (("Goal" :in-theory (disable nth update-nth)
-                  :expand ((vm-compile e d f cenv (car s))))))
+  :hints (("Goal" :cases ((truthy (meaning (cadr e) env)))
+                  :in-theory (disable good))))
 
 (defthm good-other
   (implies (not (member-equal (car e) '(:const :local :if :let :add :lt)))
@@ -413,4 +433,6 @@
 (defthm vm-compile-correct
   (good e d f cenv s env prog)
   :hints (("Goal" :induct (vm-ind e d f cenv s env prog)
-                  :in-theory (disable good))))
+                  :in-theory (union-theories (quote (good-if good-let good-binop good-leaf good-unnatural
+                                                     member-equal car-cons cdr-cons nfix natp (:induction vm-ind)))
+                                             (theory (quote minimal-theory))))))
