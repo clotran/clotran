@@ -2776,8 +2776,7 @@ done when its fuzzer is green and its seeded run is in `make test`.
 | frames: file and line | scripts/fuzz-frames | clj's trace elements, the generator | green, same scope (James, 2026-10-02). Found: a trace element gave the line its frame was called FROM; compiled frames had no lines, and install read each fn from a string, at line 1 |
 | the package door | scripts/fuzz-door | model/boundary.lisp | green |
 | data-structure costs | scripts/bigo | clj's bounds, model/ | green (measures, does not generate) |
-| the reader | -- | clj: read-string of printed values | |
-| the printer | -- | clj: pr-str, read back | |
+| the reader and the printer | scripts/fuzz-print (test.check any-printable-equatable) | clj: the literal read, pr-str, print-str, str, read back | green, in make test (check-fuzz-print). Found: a collection's str did not print through print-method or *print-namespace-maps*; the #tag scan lost its seq under GC |
 | numbers: the tower, overflow, ratios | -- | clj | |
 | strings and regex | -- | clj | |
 | collections under random op sequences | -- | clj, model/ | |

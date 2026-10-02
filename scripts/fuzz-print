@@ -1,0 +1,49 @@
+#!/usr/bin/env bb
+;; fuzz-print: the reader and the printer, generated (PLAN step 29).
+;;
+;;   scripts/fuzz-print [-n N] [-s SEED] [-m modes] [-o cases.edn]
+;;
+;; N values from test.check's any-printable-equatable -- symbols and
+;; keywords with odd characters, ratios, BigInts, UUIDs, strings in any
+;; script, chars, nested collections -- each written into a case as a
+;; LITERAL, so clotran's reader parses it while loading the case, and
+;; then
+;;
+;;   [v (pr-str v) (print-str v) (str v) (= v (read-string (pr-str v)))
+;;    (read-string (pr-str v))]
+;;
+;; through clj and every clotran mode by scripts/fuzz -f, which compares
+;; values. A map's printed order is not compared: the case prints
+;; through fz-canon, which sorts.
+(require '[clojure.test.check.generators :as g]
+         '[babashka.fs :as fs]
+         '[babashka.process :as p])
+
+(def opts (loop [as *command-line-args* o {:n 200 :seed 1 :modes "flat,tree,compiled,torture"}]
+            (if (empty? as) o
+                (case (first as)
+                  "-n" (recur (drop 2 as) (assoc o :n (parse-long (second as))))
+                  "-s" (recur (drop 2 as) (assoc o :seed (parse-long (second as))))
+                  "-m" (recur (drop 2 as) (assoc o :modes (second as)))
+                  "-o" (recur (drop 2 as) (assoc o :out (second as)))
+                  (do (println "usage: scripts/fuzz-print [-n N] [-s SEED] [-m modes] [-o cases.edn]")
+                      (System/exit 2))))))
+
+;; a string's or a map's printed text varies in ways clj does not fix
+;; (map order); everything compared is a value or a string clj makes
+;; the same way every time, so maps print canonically here
+(defn case-form [v]
+  `(let [v# '~v s# (pr-str v#)]
+     [v# (if (or (map? v#) (set? v#) (coll? v#)) (count s#) s#)
+      (if (coll? v#) (count (print-str v#)) (print-str v#))
+      (if (coll? v#) (count (str v#)) (str v#))
+      (= v# (read-string s#)) (read-string s#)]))
+
+(let [{:keys [n seed]} opts
+      vs (for [i (range n)] (g/generate g/any-printable-equatable (+ 2 (mod i 20)) (+ seed i)))
+      cases (vec (map case-form vs))
+      out (or (:out opts) (str (fs/create-temp-file {:prefix "fuzz-print" :suffix ".edn"})))]
+  (spit out (binding [*print-namespace-maps* false] (pr-str cases)))
+  (println (str "fuzz-print: " (count cases) " values -> " out))
+  (let [r (p/shell {:continue true} (str (fs/parent *file*) "/fuzz") "-f" out "-m" (:modes opts))]
+    (System/exit (:exit r))))
