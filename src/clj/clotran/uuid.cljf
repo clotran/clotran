@@ -1,15 +1,35 @@
 (ns clotran.uuid
-  "clotran.uuid.UUID, so that clojure/uuid.clj runs verbatim: a record --
-  value equality, (str u) its text -- that the name uuid.clj writes,
+  "clotran.uuid.UUID, so that clojure/uuid.clj runs verbatim: a type --
+  equal, hashed and ordered as clj's UUID is, (str u) its text, and not
+  a map (it was a record, and map? said true) -- that the name uuid.clj writes,
   clotran.uuid.UUID, resolves to (class-aliases.edn), printed by uuid.clj's
   own print-method as #uuid \"...\". UUID/fromString and
   UUID/randomUUID are rows in hosttable.inc (B_UUIDFN, uuid_call), and
   this file loads the first time one is reached, or when core.clj
   reaches (load \"uuid\"), which is before clotran.rt can load.")
 
-(defrecord UUID [s]
+(defn- halves
+  "The UUID's two 64-bit halves, most significant first, as the signed
+  longs clj's UUID holds."
+  [s]
+  (let [h (apply str (remove #{\-} s))
+        digit (fn [c] (let [i (int c)] (cond (<= 48 i 57) (- i 48) (<= 97 i 102) (- i 87) :else (- i 55))))
+        ;; a loop: core.clj loads this before it defines reduce
+        word (fn [t] (loop [acc 0 i 0] (if (< i (count t)) (recur (unchecked-add (unchecked-multiply acc 16) (digit (nth t i))) (inc i)) acc)))]
+    [(word (subs h 0 16)) (word (subs h 16))]))
+
+;; as cljs writes its UUID (cljs.core, deftype UUID): equal by its text,
+;; hashed and ordered as clj's UUID.hashCode and compareTo are, by the
+;; two halves
+(deftype UUID [s]
   clotran.host.value
-  (toString [_] s))
+  (toString [_] s)
+  (equals [_ o] (and (instance? UUID o) (= s (.toString ^clotran.host.value o))))
+  (hashCode [_] (let [[hi lo] (halves s) x (bit-xor hi lo)]
+                  (unchecked-int (bit-xor (bit-shift-right x 32) x))))
+  clotran.host.comparable
+  (compareTo [_ o] (let [[a b] (halves s) [c d] (halves (.toString ^clotran.host.value o))]
+                     (if (= a c) (compare b d) (compare a c)))))
 
 (defn identity-uuid
   "Loads this file (uuid_call) and answers nil."
