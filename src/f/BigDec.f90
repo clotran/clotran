@@ -221,9 +221,11 @@ contains
        call dec_unscaled(b, u=dlt_2)
        neg = (big_is_neg(dlt_1) .neqv. big_is_neg(dlt_2))
     end block
+    ! a zero dividend: zero at the preferred scale, the dividend's less
+    ! the divisor's, as BigDecimal.divide answers it -- (/ 0 1.5M) is 0E+1M
     if (ua == "0") then
        block
-          call dec_make("0", 0, o=dlt_1)
+          call dec_make("0", dec_scale(a) - dec_scale(b), o=dlt_1)
           o = dlt_1
        end block
        ok = .true.
@@ -685,6 +687,25 @@ contains
        ub = dlt_1
     end block
     call big_divmod(ua, ub, q, r)
+    ! BigDecimal.divideToIntegralValue: the integer quotient at the
+    ! preferred scale sa - sb -- below zero, as many of its trailing
+    ! zeros dropped as that allows: (quot 100M 2.5M) is 4E+1M, (quot 7M
+    ! 2.5M) 2M, (quot 0M 1.5M) 0E+1M
+    if (sa - sb < 0) then
+       s = 0
+       do while (s < sb - sa)
+          if (q == "0") then
+             s = sb - sa
+             exit
+          end if
+          if (q(len(q):len(q)) /= "0") exit
+          q = q(1:len(q)-1)
+          s = s + 1
+       end do
+       call dec_make(q, -s, o=dlt_2)
+       o = dlt_2
+       return
+    end if
     block
        call shift_up(q, s, o=dlt_1)
        call dec_make(dlt_1, s, o=dlt_2)
