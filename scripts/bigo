@@ -49,7 +49,7 @@
        (let [c (setup n)
              base (bigo-best bigo-empty c n)
              t (bigo-best f c n)]
-         (println \"BIGO\" id n (* 1.0e6 (max (- t base) 1.0e-7))))))\n")
+         (println \"BIGO\" id n (* 1.0e6 (max (- t base) 1.0e-7)) (* 1.0e6 t) (* 1.0e6 base)))))\n")
 
 (defn op-defs []
   (apply str (map-indexed (fn [i e] (str "(defn bigo-op" i " [c i n] " (:op e) ")\n")) table)))
