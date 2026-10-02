@@ -1491,7 +1491,10 @@ contains
        out = call_builtin(B_RTLOAD, vs_get(vst, base + 1))
     end if
     spec_loading = .false.
-    spec_loaded = .true.
+    ! loaded only if it loaded: a load that failed partway marked it done,
+    ! and every macro after checked against a spec missing 42 of its
+    ! definitions, silently; failed, the next macro tries again and says so
+    spec_loaded = .not. tctx%has_error
     call vs_leave(vst, base)
   end subroutine ensure_specs
 
