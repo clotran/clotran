@@ -9006,7 +9006,9 @@ contains
           call vs_leave(vst, base)
           return
        end if
-       if (is_ratio(a) .or. is_ratio(b)) then
+       ! a double with a ratio is a double operation, as Numbers' ops
+       ! category makes it: (quot 7/2 1.5) is 2.0, not a ratio's quot
+       if ((is_ratio(a) .or. is_ratio(b)) .and. a%tag /= GCT_REAL .and. b%tag /= GCT_REAL) then
           ! Exact, and the integer arm below would have read a ratio
           ! as its numerator: (quot 7/2 1) would answer 7, not 3.
           ! a/b is (an*bd)/(ad*bn), and quot truncates that toward
@@ -9036,9 +9038,36 @@ contains
           if (num_dbl(b) == 0.0_gc_dp) then
              call raise_class("clotran.host.arithmetic_exception", "Divide by zero", [gc_nil()])
           else if (id == B_QUOT) then
-             out = gc_real(aint(num_dbl(a) / num_dbl(b)))
+             ! Numbers.quotient(double, double): (double)(long)q in a long's
+             ! range -- so never -0.0 -- else BigDecimal(q)'s integer part,
+             ! which refuses an infinity or a NaN
+             block
+               real(gc_dp) :: q
+               q = num_dbl(a) / num_dbl(b)
+               if (q /= q .or. abs(q) > huge(q)) then
+                  call raise_class("clotran.host.number_format_exception", "Infinite or NaN", [gc_nil()])
+               else if (abs(q) < 9223372036854775808.0_gc_dp) then
+                  out = gc_real(real(int(q, gc_ip), gc_dp))
+               else
+                  out = gc_real(aint(q))
+               end if
+             end block
           else
-             out = gc_real(mod(num_dbl(a), num_dbl(b)))
+             ! Numbers.remainder(double, double): n - (long)(n/d) * d, not
+             ! the exact remainder -- (rem -46 0.1) is 0.0 there
+             block
+               real(gc_dp) :: q, nn, dd
+               nn = num_dbl(a)
+               dd = num_dbl(b)
+               q = nn / dd
+               if (q /= q .or. abs(q) > huge(q)) then
+                  call raise_class("clotran.host.number_format_exception", "Infinite or NaN", [gc_nil()])
+               else if (abs(q) < 9223372036854775808.0_gc_dp) then
+                  out = gc_real(nn - real(int(q, gc_ip), gc_dp) * dd)
+               else
+                  out = gc_real(nn - aint(q) * dd)
+               end if
+             end block
           end if
        else if (b%ival == 0) then
           call raise_class("clotran.host.arithmetic_exception", "Divide by zero", [gc_nil()])
