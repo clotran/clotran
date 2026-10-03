@@ -3071,3 +3071,8 @@
 ;; map with "No value supplied for key" (scripts/fuzz-macro)
 (mapv #(try (let [{:keys [a b]} %] [a b]) (catch clotran.host.throwable e (class e)))
       ['(:a 1 {:b 2}) '(:a 1 [:b 3]) '(:a 1 nil) '(:a 1 :b) '(:a 1 {:a 9})])
+
+;; (+ x) with one argument casts x to a number, as Class.cast does: a
+;; ClassCastException naming the class, and nil passing as nil
+;; (scripts/fuzz --fns; it was a RuntimeException, and refused nil)
+(mapv #(try (+ %) (catch clotran.host.throwable e [(class e) (.getMessage e)])) [[] :k "s" nil (list 1) {:a 1}])

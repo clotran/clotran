@@ -9602,12 +9602,14 @@ contains
        block
          type(gc_value) :: v
          v = strip_meta(gcv_nth(args, 0))
-         if (is_number(v)) then
+         ! nil passes, as Class.cast passes null: (+ nil) is nil
+         if (is_number(v) .or. v%tag == GCT_NIL) then
             out = gcv_nth(args, 0)
          else
             block
-               call type_name(v, s=dlt_1)
-               call fail("Cannot cast " // dlt_1 // " to clotran.host.number")
+               ! by its class, as Class.cast says it (scripts/fuzz --fns)
+               call class_name_of(v, s=dlt_1)
+               call raise_class("clotran.host.class_cast_exception", "Cannot cast " // dlt_1 // " to clotran.host.number", [vs_get(vst, base + 1)])
             end block
          end if
        end block
