@@ -11299,7 +11299,12 @@ contains
             else
                block
                   call to_string_text(dv2, s=dlt_1)
-                  call raise_class("clotran.host.number_format_exception",  "not a decimal: " // dlt_1, [vs_get(vst, base + 1)])
+                  ! a double with no decimal value says so as BigDecimal(double) does
+                  if (dv2%tag == GCT_REAL) then
+                     call raise_class("clotran.host.number_format_exception", "Infinite or NaN", [vs_get(vst, base + 1)])
+                  else
+                     call raise_class("clotran.host.number_format_exception",  "not a decimal: " // dlt_1, [vs_get(vst, base + 1)])
+                  end if
                end block
             end if
          case default
