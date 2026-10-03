@@ -16,6 +16,13 @@
 ;; then clotran, run on that path, must load every library's namespace
 ;; from the place chosen: each answers its own directory's name.
 ;;
+;; MALFORMED deps.edn: fixed shapes tools.deps refuses -- not a map, :deps
+;; not a map, a coordinate that is not one, a root that is not there,
+;; :paths not a vector of strings, text after the map -- and a valid file
+;; with characters mutated, beside one real library. clj decides
+;; (`clj -Srepro -Spath`): clotran-deps must refuse what it refuses, with
+;; status 1 and its reason, and answer the same directories for the rest.
+;;
 ;; At most one kind of error per case, so which one comes first is not a
 ;; question. HOME is a scratch directory, as clotran-deps' own test sets
 ;; it, so the real git cache is not touched. Needs ~/jborden/clotran-deps
@@ -177,6 +184,78 @@
         r (deref proc (* 1000 secs) ::timeout)]
     (if (= r ::timeout) (do (p/destroy-tree proc) {:timeout true}) r)))
 
+;; ---- malformed deps.edn ---------------------------------------------------------
+;;
+;; A project beside one real local library, its deps.edn either a shape
+;; tools.deps refuses -- not a map, :deps not a map, a coordinate not a
+;; map or with a :local/root that is not a string or not there, :paths
+;; not a vector of strings, a git coordinate with no sha, not EDN at all,
+;; a key twice -- or a VALID one with characters mutated. clj is the
+;; oracle (`clj -Srepro -Spath`: "Error building classpath" is a refusal),
+;; and clotran-deps must agree: refuse, with status 1 and its reason
+;; ("clotran-deps: ..."), or answer the same source directories. Never a
+;; crash, another status, or a hang. The fixed shapes run every time.
+
+(def valid-deps "{:deps {fz/lib {:local/root \"../lib\"}} :paths [\"src\"] :aliases {:dev {:extra-paths [\"dev\"]}}}")
+
+(def shapes
+  ["{:deps []}" "{:deps {fz/lib 1}}" "{:deps {fz/lib {}}}" "{:deps {fz/lib {:local/root 5}}}"
+   "{:deps {fz/lib {:local/root \"../nowhere\"}}}" "{:paths \"src\"}" "{:paths [1]}" "{:aliases {:dev 5}}"
+   "{:deps {fz/lib {:git/url \"x\"}}}" "[1 2]" "" "   " "{:deps {fz/lib {:local/root \"../lib\"}}" "{:deps nil}"
+   "{:a 1 :a 2}" "nil" "{:deps {fz/lib {:local/root \"../lib\"}} :paths [\"src\" \"src\"]}" "{\"deps\" {}}"])
+
+(def edn-alphabet (vec "{}[]()\"\\#:;/. 0123456789abs-_\n"))
+
+(def g-malformed
+  (g/one-of [(g/elements shapes)
+             (g/let [ms (g/vector (g/tuple (g/elements [:delete :insert :swap :cut])
+                                           (g/choose 0 500) (g/elements edn-alphabet)) 1 3)]
+               (g/return (reduce (fn [s [k i c]]
+                                   (let [n (count s) i (if (pos? n) (mod i n) 0)]
+                                     (case k
+                                       :delete (if (pos? n) (str (subs s 0 i) (subs s (inc i))) s)
+                                       :insert (str (subs s 0 i) c (subs s i))
+                                       :swap (if (> n 1) (let [i (min i (- n 2))] (str (subs s 0 i) (subs s (inc i) (+ i 2)) (subs s i (inc i)) (subs s (+ i 2)))) s)
+                                       :cut (subs s 0 i))))
+                                 valid-deps ms)))]))
+
+(defn dirs-of
+  "The directories of a path, canonical, a relative one taken from base
+  (clj prints the project's own paths relative); jars and what is not
+  there dropped."
+  [path base]
+  (set (for [e (str/split (str/trim path) #":") :when (seq e)
+             :let [a (if (fs/absolute? e) e (str base "/" e))] :when (fs/directory? a)]
+         (str (fs/canonicalize a)))))
+
+(defn malformed-case [top home c text]
+  (let [dir (str top "/bad" c) pd (str dir "/project") ld (str dir "/lib")]
+    (fs/create-dirs (str pd "/src")) (fs/create-dirs (str pd "/dev")) (fs/create-dirs (str ld "/src"))
+    (spit (str ld "/deps.edn") "{:paths [\"src\"]}")
+    (spit (str pd "/deps.edn") text)
+    (let [cj (let [proc (p/process {:dir pd :out :string :err :string :in ""} "clj" "-Srepro" "-Spath" "-Sforce")
+                   r (deref proc 120000 ::timeout)]
+               (if (= r ::timeout) (do (p/destroy-tree proc) nil) r))
+          cd (run [deps-bin pd] {"HOME" home "CLOTRAN" repo} 300)
+          clj-refuses (or (nil? cj) (not= 0 (:exit cj)) (str/includes? (str (:err cj)) "Error building classpath"))
+          ours-refuses (= 1 (:exit cd))
+          msg (str/trim (str (:err cd)))]
+      (swap! kinds update (if clj-refuses :malformed-refused :malformed-accepted) (fnil inc 0))
+      (cond
+        (nil? cj) (println "  (clj did not answer for" (pr-str text) "-- not compared)")
+        (:timeout cd) (problem "TIMEOUT malformed" c (pr-str text))
+        (not (#{0 1} (:exit cd))) (problem "malformed" c (pr-str text) ": clotran-deps exited" (:exit cd) msg)
+        (not= clj-refuses ours-refuses)
+        (problem "malformed" c (pr-str text) ": clj" (if clj-refuses "refuses" "accepts") "it, clotran-deps"
+                 (if ours-refuses (str "refuses: " msg) (str "answers " (str/trim (:out cd)))))
+        ours-refuses
+        (when-not (str/starts-with? msg "clotran-deps:")
+          (problem "malformed" c (pr-str text) ": refused without its reason:" (pr-str msg)))
+        :else
+        (let [want (dirs-of (:out cj) pd) got (dirs-of (:out cd) pd)]
+          (when (not= want got)
+            (problem "malformed" c (pr-str text) ": path\n   clj:  " (pr-str (sort want)) "\n   ours: " (pr-str (sort got)))))))))
+
 (let [{:keys [n seed]} opts
       top (str (fs/create-temp-dir {:prefix "fuzz-deps"}))
       home (str top "/home")]
@@ -211,6 +290,10 @@
                 (problem "case" c ": loaded" (pr-str seen) "want" (pr-str loads) (str/trim (str (:out l) (:err l))))))))))
     (print ".") (flush))
   (println)
+  (doseq [[c text] (map-indexed vector (concat shapes (for [i (range n)] (g/generate g-malformed 10 (+ seed 104729 i)))))]
+    (malformed-case top home c text)
+    (print "!") (flush))
+  (println)
   (fs/delete-tree top)
-  (println (str "fuzz-deps: " n " projects " (pr-str @kinds) ", " (count @problems) " problems"))
+  (println (str "fuzz-deps: " n " projects and " (+ (count shapes) n) " malformed deps.edn " (pr-str @kinds) ", " (count @problems) " problems"))
   (System/exit (if (empty? @problems) 0 1)))
