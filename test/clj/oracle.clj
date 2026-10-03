@@ -1530,10 +1530,12 @@
 [(reduce + (map inc (range 100))) (count (concat (range 40) [1 2])) (last (map inc (range 100))) (nth (map inc (range)) 100)
  (take 3 (map inc (range))) (first (filter #(> % 40) (range))) (rest (seq (map inc [1 2 3]))) (next (seq (map inc [1])))]
 
-;; a seq whose tail is not realised hashes by identity, and map's own
-;; chunk-cons is handed an unrealised rest, so this is the common case
-(expect-diff "DEVIATIONS 35: an unrealised seq hashes by identity")
+;; a seq whose tail is not realised is realised to hash it, as ASeq.hasheq
+;; does: it hashed by identity (DEVIATIONS 35), so equal seqs had two
+;; hashes and a lazy seq was never found as a key or set element
 (= (hash (seq (map inc [1 2 3]))) (hash [2 3 4]))
+[(contains? #{(map inc [1 2])} [2 3]) (get {(range 3) :x} [0 1 2]) (get {[0 1 2] :x} (range 3))
+ (count (set [(range 3) [0 1 2] (quote (0 1 2)) (map identity [0 1 2])])) (= (hash (range 3)) (hash [0 1 2]))]
 
 ;; ...while one that IS realised to the end hashes as the sequence
 [(= (hash (doall (seq (map inc [1 2 3])))) (hash [2 3 4])) (= (hash (seq [2 3 4])) (hash (list 2 3 4)))]

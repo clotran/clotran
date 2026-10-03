@@ -1224,7 +1224,19 @@ The internal type TAG -- `:string`, `:vector`, `:int` -- is what
 `clotran-type` answers and what `host.clj`'s predicates are written
 on; it is not `class`, and never was meant to leak.
 
-## 35. An unrealised seq hashes by identity, so it is not found as a map key
+## 35. RESOLVED -- an unrealised seq hashed by identity, so it was not found as a map key
+
+**RESOLVED 2026-10-02.** A lazy seq, and a ChunkedCons whose rest is
+not yet realised, is realised to hash it (`walk_seq_hash`) and compared
+by its elements inside a map or set (`gc_equal`, `is_seq_kind`), as
+`ASeq.hasheq` and `Util.equiv` do: `(contains? #{(map inc [1 2])} [2
+3])` is true and `(hash (range 3))` is `(hash [0 1 2])`. What made it
+safe is the GC hold (`gc_hold_begin`): nothing is collected while
+`gc_hash` runs, so what realising allocates cannot take the half-built
+trie with it, and no root set had to be threaded through. Found when
+clotran's compiler looked a pooled constant up by value -- a lazy seq
+stored, a list asked for, equal but hashed apart -- and wrote `sv(b + )`
+(scripts/fuzz-spec, compiled). The original text follows.
 
 `(= (map inc [1 2 3]) [2 3 4])` is true here, as it is in Clojure. But
 `(hash (map inc [1 2 3]))` is an identity hash, not the sequence hash,

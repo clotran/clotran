@@ -3339,7 +3339,8 @@ contains
        ! and it made (get {[1] 2} [1]) nil: the lookup key is a
        ! different object from the stored one, however equal.
        if (associated(obj_coll_equal) .and. &
-            ((is_structural_kind(gc_kind(a)) .and. is_structural_kind(gc_kind(b))) .or. &
+            (((is_structural_kind(gc_kind(a)) .or. gc_kind(a) == OBJ_LAZY) .and. &
+              (is_structural_kind(gc_kind(b)) .or. gc_kind(b) == OBJ_LAZY)) .or. &
              (gc_kind(a) == OBJ_INST .and. gc_kind(b) == OBJ_INST))) then
           call gc_hold_begin()
           eq = obj_coll_equal(a, b)
@@ -3437,7 +3438,9 @@ contains
        ! stores the same key twice and loses lookups.
        ! an instance too: a RECORD hashes by value (Eval's gce_coll_hash),
        ! anything else by identity there
-       if (associated(obj_coll_hash) .and. (is_structural_kind(gc_kind(v)) .or. gc_kind(v) == OBJ_INST)) then
+       ! a lazy seq too, realised (Eval's gce_coll_hash, under the hold)
+       if (associated(obj_coll_hash) .and. (is_structural_kind(gc_kind(v)) .or. gc_kind(v) == OBJ_INST &
+            .or. gc_kind(v) == OBJ_LAZY)) then
           call gc_hold_begin()
           h = obj_coll_hash(v)
           call gc_hold_end()
@@ -4203,12 +4206,9 @@ contains
   ! identity is their CONTENTS.
   pure logical function is_structural_kind(k)
     integer, intent(in) :: k
-    ! OBJ_LAZY is deliberately absent. Hashing one means REALIZING
-    ! it, and gc_hash runs inside map inserts and lookups, where an
-    ! allocation can collect the very structure being built. A lazy
-    ! seq used as a key keeps the old identity behaviour; equality
-    ! only consults the hook when BOTH sides are structural, so the
-    ! two stay in step.
+    ! OBJ_LAZY is not here but beside it, in gc_hash and gc_equal: a
+    ! lazy seq is REALISED to hash or compare it, which the GC hold makes
+    ! safe inside a map insert (DEVIATIONS 35, resolved).
     ! A ChunkedCons IS here: its own chunk is already realised, and the
     ! hook checks whether the rest is before folding (DEVIATIONS 35).
     ! OBJ_HAMT too: a map past 8 entries is one, and hashing it by

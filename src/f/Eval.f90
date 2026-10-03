@@ -7261,6 +7261,27 @@ contains
   ! The unmixed fold of a seq's elements into h, for the hash of a
   ! ChunkedCons: it must equal a list's. No allocation. An unrealised
   ! tail stops the fold, as an unrealised lazy seq is not hashable here.
+  ! The ordered hash of any seq, realising it through the seq interface.
+  ! Under the GC hold: nothing is collected while it runs -- the caller
+  ! may be in the middle of a map insert, holding the half-built trie in
+  ! locals -- so what it allocates needs no roots.
+  recursive subroutine walk_seq_hash(v, h, n)
+    type(eval_ctx), pointer :: tctx
+    type(gc_value), intent(in) :: v
+    integer, intent(inout) :: h, n
+    type(gc_value) :: cur, item
+    tctx => ctx_self()
+    call gc_hold_begin()
+    cur = to_seq(v, [v])
+    do while (cur%tag /= GCT_NIL .and. .not. tctx%has_error)
+       item = sq_first(cur, [cur])
+       h = m3_ordered_step(h, gc_hash(item))
+       n = n + 1
+       cur = to_seq(sq_rest(cur, [cur]), [cur])
+    end do
+    call gc_hold_end()
+  end subroutine walk_seq_hash
+
   recursive subroutine fold_seq(v, h, n)
     type(gc_value), intent(in) :: v
     integer, intent(inout) :: h, n
@@ -14860,12 +14881,14 @@ contains
   ! which breaks the guarantee a map relies on.
   pure logical function is_seq_kind(k)
     integer, intent(in) :: k
-    is_seq_kind = (k == OBJ_CONS .or. k == OBJ_VECTOR .or. k == OBJ_SEQ .or. k == OBJ_CHUNKSEQ)
+    ! a lazy seq is one, realised by deep_equal (DEVIATIONS 35)
+    is_seq_kind = (k == OBJ_CONS .or. k == OBJ_VECTOR .or. k == OBJ_SEQ .or. k == OBJ_CHUNKSEQ &
+         .or. k == OBJ_LAZY)
   end function is_seq_kind
 
-  ! Hash for the same kinds, and it must NOT allocate: gc_hash runs in
-  ! the middle of a map insert, where a collection could take the
-  ! half-built structure with it.
+  ! Hash for the same kinds. gc_hash runs in the middle of a map insert,
+  ! where a collection could take the half-built structure with it: it
+  ! calls this under the GC hold, so a lazy seq may be realised here.
   !
   !   sequential  ordered, 31*h + hash(element) -- and the SAME scheme
   !               for a list and a vector, because they can be equal.
@@ -14927,10 +14950,16 @@ contains
           call fold_seq(v, h, n)
           h = m3_mix_coll(h, n)
        else
-          ! not realised to the end: identity, as an unrealised lazy seq
-          ! gets (DEVIATIONS 35)
-          h = mix32(ieor(mix32(v%ref), OBJ_CHUNKSEQ))
+          ! not realised to the end: realised, as an unrealised lazy seq is
+          call walk_seq_hash(v, h, n)
+          h = m3_mix_coll(h, n)
        end if
+    case (OBJ_LAZY)
+       ! A LAZY SEQ hashes as the sequence it is, realised, as
+       ! ASeq.hasheq does -- by identity, equal seqs had two hashes and
+       ! (contains? #{(map inc [1 2])} [2 3]) was false (DEVIATIONS 35)
+       call walk_seq_hash(v, h, n)
+       h = m3_mix_coll(h, n)
     case (OBJ_MAP, OBJ_HAMT)
        call gca_entries(v, ks, vs_)
        h = 0
