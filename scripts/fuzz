@@ -351,7 +351,7 @@
       [1 (g/let [x (i) n (g/choose 0 2)] (list 'subs (list 'str "abcdef" x) n))]
       [1 (g/let [m (lazy #(g-map env (dec d)))] (list 'pr-str (list 'into (sorted-map) m)))]])))
 
-(s/def ::case (s/or :int int? :vector vector? :map map? :form (s/and seq? seq)))
+(s/def ::case (s/or :number number? :vector vector? :map map? :form (s/and seq? seq)))
 
 ;; Every let, loop, fn, if-let and when-let in a form, checked against the
 ;; :args spec Clojure gives it (loop's bindings are let's): what does
@@ -418,7 +418,7 @@
   [fsyms want]
   (for [[i fsym] (map-indexed vector fsyms)
         :let [w (get want i) rs (:ret (s/get-spec fsym))]
-        :when (and rs w (not= w "!error"))
+        :when (and rs w (not (str/starts-with? (str w) "!error")))
         :let [v (try (read-string w) (catch Exception _ ::unread))]
         :when (and (not= v ::unread) (not (s/valid? rs v)))]
     [fsym i w]))
@@ -453,7 +453,13 @@
         (vector? x) (str \"[\" (clojure.string/join \" \" (map fz-canon x)) \"]\")
         (sequential? x) (str \"(\" (clojure.string/join \" \" (map fz-canon x)) \")\")
         :else (pr-str x)))
-(defn fz-out [i f] (println (str \"FZ \" i \" \" (try (fz-canon (f)) (catch clotran.host.throwable t \"!error\")))))
+;; an error as its class and message, compared as a value is: the
+;; message without what follows two spaces and \"at \" (clotran adds where)
+(defn fz-err [t]
+  (let [m (str (.getMessage t))
+        i (.indexOf m \"  at \")]
+    (str \"!error \" (.getName (class t)) \": \" (if (neg? i) m (subs m 0 i)))))
+(defn fz-out [i f] (println (str \"FZ \" i \" \" (try (fz-canon (f)) (catch clotran.host.throwable t (fz-err t))))))
 ")
 
 (def requires (str/join " " (map #(str "'" %) (into ["clojure.string" "clojure.set" "clojure.walk"] (:requires opts)))))
@@ -542,16 +548,46 @@
 
 (defn- dbl [s] (when (and s (re-matches #"-?\d+\.\d+(E-?\d+)?" s)) (parse-double s)))
 
+;; An error's message, less what only clj's host says: the module and
+;; loader a ClassCastException names, and the word "class" before each
+;; name in it, the method call a NullPointerException
+;; describes, and "/ by zero", which is what its host's integer division
+;; says where the boxed path says "Divide by zero" -- which one clj answers
+;; depends on whether its compiler saw primitive longs
+(defn error-text [s]
+  (if-not (and (string? s) (str/starts-with? s "!error"))
+    s
+    (-> s
+        (str/replace #" \([^()]*\bmodule\b[^()]*\)$" "")
+        (str/replace #"\bclass (\S+) cannot be cast to class (\S+)" "$1 cannot be cast to $2")
+        ;; the fn an arity error names, by its own name: clj's path has its
+        ;; class counters (fn--134, eval2108; DEVIATIONS 34), and a case's
+        ;; enclosing fn is the harness's (a defn in compiled mode); the
+        ;; path itself is the oracle's to check
+        (str/replace #"passed to: \S*/(\S+)$" (fn [[_ w]] (str "passed to: " (str/replace w #"--\d+$" ""))))
+        (str/replace #"^(!error \S*null_pointer_exception):.*$" "$1:")
+        (str/replace "/ by zero" "Divide by zero")
+        ;; count, compare and hash answer clj's Integer, clotran's one
+        ;; integer (DEVIATIONS 71), and a message names the class
+        (str/replace "clotran.host.int4" "clotran.host.int8"))))
+
 (defn differs
   "Whether clotran's answer is not clj's. One allowance, DEVIATIONS 70: a
   ratio becomes a double by Fortran's IEEE quotient, clj's by a 16-digit
   decimal first, so with a ratio in the form two doubles a unit in the
-  last place apart agree."
+  last place apart agree. And DEVIATIONS 72: a ratio less the smallest
+  long is exact here, where clj's host overflows negating it -- so with
+  both in the form, clj's long overflow and a ratio here agree. Errors
+  compare by class and message (error-text)."
   ([want got] (differs want got nil))
   ([want got form]
-   (and (some? want) (not= want got)
+   (and (some? want) (not= (error-text want) (error-text got))
         (not (and form (str/includes? (pr-str form) "/")
-                  (when-let [a (dbl want)] (when-let [b (dbl got)] (<= (abs (- a b)) (Math/ulp (double a))))))))))
+                  (when-let [a (dbl want)] (when-let [b (dbl got)] (<= (abs (- a b)) (Math/ulp (double a)))))))
+        (not (and form (str/includes? (pr-str form) "-9223372036854775808")
+                  (re-find #"\d/\d" (pr-str form))
+                  (str/ends-with? (str want) "arithmetic_exception: long overflow")
+                  (re-find #"^\[?-?\d+/\d+" (str got)))))))
 
 ;;; ---- shrinking ------------------------------------------------------
 
@@ -585,8 +621,18 @@
                                                   (let [ls (some->> (:err how) str/split-lines (remove str/blank?))] (or (first (filter #(re-find #"(?i)error" %) ls)) (last ls)))]]}
           :else (let [[a b] (split-at (quot (count idxs) 2) idxs)
                       ra (run-finding-hangs run forms (vec a))
-                      rb (run-finding-hangs run forms (vec b))]
-                  {:out (merge (:out ra) (:out rb)) :hangs (into (:hangs ra) (:hangs rb))}))))
+                      rb (run-finding-hangs run forms (vec b))
+                      found (into (:hangs ra) (:hangs rb))]
+                  ;; the batch failed and neither half does: the failure needs
+                  ;; them together -- a deadlock between threads one case
+                  ;; started and another's, say. A finding, not a pass: the
+                  ;; one this search once hid ran every threads batch into
+                  ;; its deadline, and fuzz-threads passed
+                  {:out (merge (:out ra) (:out rb))
+                   :hangs (if (seq found)
+                            found
+                            [[(first idxs) (if (= :timeout (:exit how)) :batch-timeout :batch-crash)
+                              (str "cases " (first idxs) ".." (last idxs) " fail together and finish apart")]])}))))
 
 (def hangs (atom []))
 
@@ -609,7 +655,7 @@
       ;; what was tested: a case both sides throw on agrees, and says little
       _ (println (format "%d cases, %.0f forms a case on average; clj threw on %d"
                          n (double (/ (reduce + (map #(count (tree-seq coll? seq %)) forms)) (max n 1)))
-                         (count (filter #(= "!error" %) (vals want)))))
+                         (count (filter #(str/starts-with? (str %) "!error") (vals want)))))
       _ (when fn-pairs
           (println (count fuzz-specs/fuzz-fns) "functions spec'd")
           ;; every spec'd function says what it returns, or its answers go unchecked
@@ -619,7 +665,7 @@
           (doseq [[fsym i w] (ret-check fsyms want)]
             (println "SPEC:" fsym "answered" w "in clj, which its :ret refuses --" (pr-str (nth forms i))))
           ;; an :args spec clj throws on often is too loose: it tests errors, not answers
-          (doseq [[fsym k] (frequencies (keep (fn [i] (when (= "!error" (get want i)) (nth fsyms i))) (range n)))
+          (doseq [[fsym k] (frequencies (keep (fn [i] (when (str/starts-with? (str (get want i)) "!error") (nth fsyms i))) (range n)))
                   :when (> k (quot (:fns opts) 2))]
             (println "LOOSE:" fsym "threw in clj on" k "of" (:fns opts) "calls")))
       bad (atom [])]
@@ -628,7 +674,10 @@
           _ (doseq [[i k err] h :when (contains? want i)]
               (swap! hangs conj [m i k])
               (println (str/upper-case (name k)) m "case" i
-                       (if (= k :timeout) (str "(no answer in " (:probe-timeout opts) " s)") "(the process died)")
+                       (case k
+                         :timeout (str "(no answer in " (:probe-timeout opts) " s)")
+                         :crash "(the process died)"
+                         (:batch-timeout :batch-crash) "(only with the cases run beside it)")
                        "-- clj answers" (get want i) ":" (pr-str (nth forms i)))
               (when (seq err) (println "   " err)))
           hung (set (map first h))
