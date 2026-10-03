@@ -3097,3 +3097,13 @@
 
 ;; bigdec of a double with no decimal value, as BigDecimal(double) says it
 (mapv #(try (bigdec %) (catch clotran.host.throwable e [(class e) (.getMessage e)])) [##Inf ##-Inf ##NaN 0.5])
+
+;; the reader on malformed text, as LispReader reads it (scripts/fuzz-read):
+;; a backslash or any macro character ends a number, \NNN is an octal
+;; escape, ^meta wants an IMeta, a key twice is refused, #() does not nest,
+;; and each error is LispReader's own, by class and message
+(mapv #(try (binding [*read-eval* false] (read-string (str "[" % "\n]")))
+            (catch clotran.host.throwable e [(class e) (.getMessage e)]))
+      ["31.95\\M" "x\\u0041" "3'0x5" "8#" "\"\\101\\n\\\\\"" "\"\\q\"" "\"\\400\"" "\"\\u12\"" "\\o101" "\\u12" "\\abc"
+       "^:a 1" "^:a \"s\"" "^1 x" "^:a nil" "{:a 1 :a 2}" "{::a 1 ::a 2}" "#{1 1}" "#{6e10 6e10}" "(1" "[1 2" "#)" "#[1]"
+       "{:a}" "#(%1%&)" "#(#(%))" "##x" "##5&" "1.5.5" "#:a 1" "#_\\space6 1"])

@@ -29,13 +29,14 @@ module LispReader
   use PersistentVector
   use Assoc
   use Regex
+  use Printer, only: gcp_str
   use, intrinsic :: ieee_arithmetic
   use Threads, only: th_key, th_key_create, th_key_set, th_key_get
   use iso_c_binding, only: c_ptr, c_loc, c_f_pointer, c_associated
   implicit none
   private
 
-  public :: gcr_read, gcr_read_all, gcr_error, gcr_has_error
+  public :: gcr_read, gcr_read_all, gcr_error, gcr_has_error, gcr_error_class
   public :: gcr_begin_file, gcr_read_next, gcr_position, gcr_position_parts, POS_SHIFT
   public :: gcr_set_ns_resolver, gcr_set_tag_markers, gcr_current_file
   public :: gcr_image_write, gcr_image_read, gcr_file_count, gcr_file_name
@@ -81,6 +82,10 @@ module LispReader
   ! (PLAN.md step 14b), made the first time its thread reads.
   type :: rd_state
      character(len=:), allocatable :: last_error
+     ! the class clj's LispReader throws, when it is not RuntimeException:
+     ! an IllegalArgumentException for a bad digit or metadata, a
+     ! NumberFormatException for a bad number (gcr_error_class)
+     character(len=:), allocatable :: last_class
      logical :: has_error = .false.
      integer :: cur_file = 0   ! the file being read; 0 is the REPL
      ! Reader conditionals. A #?(...) that selects nothing is another kind
@@ -105,6 +110,10 @@ module LispReader
      logical :: tag_markers = .true.   ! #tag form is a marker, resolved before analysis (clotran.reader)
      ! the #(...) being read: its suffix, from the shared anon_seq
      integer :: anon_cur = 0
+     ! inside a #(...)'s body: another is refused (FnReader)
+     logical :: in_anon = .false.
+     ! the map read next is a #:ns map's: its odd count says so
+     logical :: ns_map = .false.
   end type rd_state
   type(th_key), save :: rd_key
   logical, save :: rd_key_made = .false.
@@ -163,13 +172,28 @@ contains
     if (allocated(rdx%last_error)) s = rdx%last_error
   end subroutine gcr_error
 
-  subroutine fail(msg)
+  subroutine fail(msg, cls)
     type(rd_state), pointer :: rdx
     character(len=*), intent(in) :: msg
+    character(len=*), intent(in), optional :: cls
     rdx => rd_self()
+    ! the FIRST error stands: one after it is its cascade -- #_\space6
+    ! read on and blamed the ] it never reached (scripts/fuzz-read)
+    if (rdx%has_error) return
     rdx%has_error = .true.
     rdx%last_error = msg
+    rdx%last_class = ""
+    if (present(cls)) rdx%last_class = cls
   end subroutine fail
+
+  ! The last error's class, or "" for clotran.host.runtime_exception
+  subroutine gcr_error_class(s)
+    type(rd_state), pointer :: rdx
+    character(len=:), allocatable, intent(out) :: s
+    rdx => rd_self()
+    s = ""
+    if (allocated(rdx%last_class)) s = rdx%last_class
+  end subroutine gcr_error_class
 
   ! Names a file and indexes its lines; answers its id, which the
   ! loader hands back to every gcr_read_next for that file. It must:
@@ -279,6 +303,7 @@ contains
     rdx => rd_self()
     rdx%cur_file = fid
     rdx%has_error = .false.
+    rdx%in_anon = .false.
     rdx%last_error = ""
     eof = .false.
     v = gc_nil()
@@ -359,6 +384,7 @@ contains
     integer :: pos
     rdx => rd_self()
     rdx%has_error = .false.
+    rdx%in_anon = .false.
     rdx%last_error = ""
     rdx%cur_file = 0
     pos = 1
@@ -394,6 +420,7 @@ contains
 
     rdx => rd_self()
     rdx%has_error = .false.
+    rdx%in_anon = .false.
     rdx%last_error = ""
     pos = 1
     base = vs_enter(1)
@@ -435,20 +462,116 @@ contains
   ! symbols in Clojure rather than a symbol followed by a quote form.
   ! Treating the quote as a delimiter here made every prime-suffixed
   ! name a reader error, and one reader error aborts the whole file
-  ! (DEVIATIONS.md 1).
+  ! (DEVIATIONS.md 1). The backslash is one: x\u0041 is x and \A,
+  ! 31.95\M a number and \M (scripts/fuzz-read).
   pure function is_delim(c) result(yes)
     character, intent(in) :: c
     logical :: yes
     yes = (c == "(" .or. c == ")" .or. c == "[" .or. c == "]" .or. &
            c == "{" .or. c == "}" .or. c == '"' .or. c == ";" .or. &
-           c == "`" .or. c == "~" .or. c == "@" .or. c == "^")
+           c == "`" .or. c == "~" .or. c == "@" .or. c == "^" .or. c == "\")
   end function is_delim
+
+  ! LispReader.isMacro: the characters with a reader of their own
+  pure function is_macro(c) result(yes)
+    character, intent(in) :: c
+    logical :: yes
+    yes = index('";''@^`~()[]{}%#', c) > 0 .or. c == achar(92)
+  end function is_macro
+
+  logical function rd_self_in_anon()
+    type(rd_state), pointer :: r
+    r => rd_self()
+    rd_self_in_anon = r%in_anon
+  end function rd_self_in_anon
+
+  ! intPat's radix shape, NNrDIGITS -- one or two digits, the first not
+  ! 0 -- with NN outside 2..36: "Radix out of range", as the BigInteger
+  ! matchNumber makes it from says
+  pure logical function radix_out_of_range(t) result(yes)
+    character(len=*), intent(in) :: t
+    integer :: s0, rp, r
+    yes = .false.
+    s0 = 1
+    if (len(t) > 0) then
+       if (t(1:1) == "-" .or. t(1:1) == "+") s0 = 2
+    end if
+    rp = scan(t, "rR")
+    if (rp < s0 + 1 .or. rp > s0 + 2 .or. rp == len(t)) return
+    if (verify(t(s0:rp-1), "0123456789") /= 0 .or. t(s0:s0) == "0") return
+    if (verify(t(rp+1:), "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ") /= 0) return
+    read(t(s0:rp-1), *) r
+    yes = r < 2 .or. r > 36
+  end function radix_out_of_range
+
+  ! How many bytes the UTF-8 character led by c takes
+  pure function u8_len(c) result(n)
+    character, intent(in) :: c
+    integer :: n
+    select case (iachar(c))
+    case (240:247); n = 4
+    case (224:239); n = 3
+    case (192:223); n = 2
+    case default; n = 1
+    end select
+  end function u8_len
+
+  ! Character.digit for ASCII: c's value in base, or -1
+  pure function digit_of(c, base) result(d)
+    character, intent(in) :: c
+    integer, intent(in) :: base
+    integer :: d
+    select case (c)
+    case ("0":"9"); d = iachar(c) - iachar("0")
+    case ("a":"z"); d = iachar(c) - iachar("a") + 10
+    case ("A":"Z"); d = iachar(c) - iachar("A") + 10
+    case default; d = -1
+    end select
+    if (d >= base) d = -1
+  end function digit_of
+
+  ! LispReader.readUnicodeChar over the text: the digit at pos and up to
+  ! length - 1 more, stopping at whitespace, a macro character or the
+  ! end; pos is left on the last digit taken. exact: fewer is an error.
+  function read_code_unit(text, pos, base, length, exact) result(uc)
+    character(len=*), intent(in) :: text
+    integer, intent(inout) :: pos
+    integer, intent(in) :: base, length
+    logical, intent(in) :: exact
+    integer :: uc, i, d
+    character(len=16) :: b1, b2
+    uc = digit_of(text(pos:pos), base)
+    if (uc < 0) then
+       call fail("Invalid digit: " // text(pos:min(len(text), pos + u8_len(text(pos:pos)) - 1)), "clotran.host.illegal_argument_exception")
+       return
+    end if
+    i = 1
+    do while (i < length)
+       if (pos + 1 > len(text)) exit
+       if (is_space(text(pos+1:pos+1)) .or. is_macro(text(pos+1:pos+1))) exit
+       d = digit_of(text(pos+1:pos+1), base)
+       if (d < 0) then
+          call fail("Invalid digit: " // text(pos+1:min(len(text), pos + u8_len(text(pos+1:pos+1)))), "clotran.host.illegal_argument_exception")
+          return
+       end if
+       uc = uc * base + d
+       pos = pos + 1
+       i = i + 1
+    end do
+    if (i /= length .and. exact) then
+       write(b1, '(I0)') i
+       write(b2, '(I0)') length
+       call fail("Invalid character length: " // trim(b1) // ", should be: " // trim(b2), &
+            "clotran.host.illegal_argument_exception")
+    end if
+  end function read_code_unit
 
   subroutine skip_space(text, pos)
     character(len=*), intent(in) :: text
     integer, intent(inout) :: pos
     do while (pos <= len(text))
-       if (text(pos:pos) == ";") then
+       ! ; and #! are comments to the end of the line (CommentReader)
+       if (text(pos:pos) == ";" .or. text(pos:min(pos + 1, len(text))) == "#!") then
           do while (pos <= len(text))
              if (text(pos:pos) == achar(10)) exit
              pos = pos + 1
@@ -532,7 +655,7 @@ contains
        pos = pos + 1
        v = read_map(text, pos, roots)
     case (")", "]", "}")
-       call fail("unexpected '" // c // "'")
+       call fail("Unmatched delimiter: " // c)
     case ('"')
        v = read_string(text, pos, roots)
     case ("^")
@@ -589,7 +712,7 @@ contains
     start = pos
     do
        if (pos > len(text)) then
-          call fail("EOF while reading a regex literal")
+          call fail("EOF while reading regex")
           return
        end if
        if (text(pos:pos) == achar(34)) exit
@@ -598,7 +721,7 @@ contains
     end do
     handle = regex_compile(text(start:pos - 1), rerr)
     if (handle == 0) then
-       call fail("regex: " // rerr)
+       call fail("regex: " // rerr, "clotran.host.pattern_syntax_exception")
        return
     end if
     src = gc_str(text(start:pos - 1), roots)
@@ -639,8 +762,14 @@ contains
 
     rdx => rd_self()
     v = gc_nil()
+    if (rdx%in_anon) then
+       call fail("Nested #()s are not allowed", "clotran.host.illegal_state_exception")
+       return
+    end if
     base = vs_enter(4)
+    rdx%in_anon = .true.
     body = read_seq(text, pos, ")", .false., roots)
+    rdx%in_anon = .false.
     if (rdx%has_error) then
        call vs_leave(base); return
     end if
@@ -649,6 +778,9 @@ contains
     maxn = 0
     has_rest = .false.
     call scan_percent(vs_get(base + 1), maxn, has_rest)
+    if (gcr_has_error()) then
+       call vs_leave(base); return
+    end if
 
     ! `roots` in every allocation -- the caller's values are plain
     ! locals reachable only through it, and reading #(...) inside a
@@ -716,9 +848,12 @@ contains
                 maxn = max(maxn, 1)
              else if (t == "%&") then
                 has_rest = .true.
-             else
+             else if (verify(t(2:), "0123456789") == 0) then
                 read(t(2:), *, iostat=ios) num
                 if (ios == 0) maxn = max(maxn, num)
+             else
+                ! ArgReader: what follows % must be & or an integer
+                call fail("arg literal must be %, %& or %integer", "clotran.host.illegal_state_exception")
              end if
           end if
        end if
@@ -728,6 +863,9 @@ contains
     ! wrapped in metadata; the walk looks through the wrapper.
     if (gc_kind(form) == OBJ_META) then
        call scan_percent(gc_slot(form, 1), maxn, has_rest)
+       ! and in the metadata: ^% x registers %, as ArgReader does
+       ! wherever it reads one
+       call scan_percent(gc_slot(form, 2), maxn, has_rest)
        return
     end if
     if (gcl_is(form)) then
@@ -852,8 +990,36 @@ contains
     call vs_leave(base)
   end function rewrite_percent
 
+  ! A key as clj's "Duplicate key" message names it (toString): a
+  ! keyword resolved, a string's text, a symbol or integer as itself,
+  ! anything else as it was written (src)
+  subroutine key_text(k, src, t)
+    type(gc_value), intent(in) :: k
+    character(len=*), intent(in) :: src
+    character(len=:), allocatable, intent(out) :: t
+    character(len=24) :: b
+    select case (k%tag)
+    case (GCT_KEY)
+       call gc_ref_text(k%ref, s=t)
+       t = ":" // t
+    case (GCT_STR, GCT_SYM)
+       call gc_ref_text(k%ref, s=t)
+    case (GCT_INT)
+       write(b, '(I0)') k%ival
+       t = trim(b)
+    case (GCT_CHAR)
+       call gcp_str(k, .false., s=t)
+    case default
+       ! printed, as toString prints it: a BigInt without its N, a
+       ! BigDecimal without its M
+       call gcp_str(k, .true., s=t)
+       if ((k%tag == GCT_BIG .or. k%tag == GCT_DEC) .and. len(t) > 1) t = t(1:len(t) - 1)
+       if (len(t) == 0) t = trim(adjustl(src))
+    end select
+  end subroutine key_text
+
   ! #{...} -- elements read like a vector's, then each maps to
-  ! itself. Duplicates collapse, as they must.
+  ! itself; an element twice is an error, as in clj.
   recursive function read_set(text, pos, roots) result(v)
     type(rd_state), pointer :: rdx
     character(len=*), intent(in) :: text
@@ -884,6 +1050,15 @@ contains
     do i = 0, gcv_count(vs_get(base + 1)) - 1
        item = gcv_nth(vs_get(base + 1), i)
        call vs_set(base + 3, item)
+       ! PersistentHashSet.createWithCheck: an element twice is an error
+       if (gca_contains(vs_get(base + 2), vs_get(base + 3))) then
+          block
+            character(len=:), allocatable :: kt
+            call key_text(vs_get(base + 3), "", kt)
+            call fail("Duplicate key: " // kt, "clotran.host.illegal_argument_exception")
+          end block
+          call vs_leave(base); return
+       end if
        m = gca_assoc(vs_get(base + 2), vs_get(base + 3), vs_get(base + 3), roots)
        call vs_set(base + 2, m)
     end do
@@ -908,11 +1083,12 @@ contains
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: v
     character :: c
+    integer :: p0
 
     rdx => rd_self()
     v = gc_nil()
     if (pos + 1 > len(text)) then
-       call fail("EOF after #")
+       call fail("EOF while reading character")
        return
     end if
     c = text(pos + 1:pos + 1)
@@ -947,6 +1123,9 @@ contains
        v = read_cond(text, pos, roots)
     case (":")
        v = read_ns_map(text, pos, roots)
+    case ("<")
+       ! #<...> is how an unreadable object prints (UnreadableReader)
+       call fail("Unreadable form")
     case default
        if (rdx%suppress_read .and. ((c >= "a" .and. c <= "z") .or. (c >= "A" .and. c <= "Z"))) then
           ! #tag form in a branch nobody selected: read past the tag and
@@ -962,7 +1141,37 @@ contains
           pos = pos + 1
           v = read_tagged(text, pos, roots)
        else
-          call fail("reader: no dispatch for #" // c)
+          ! CtorReader: the tag is read as a form, and must be a symbol
+          pos = pos + 1
+          call skip_space(text, pos)
+          if (pos > len(text)) then
+             call fail("EOF while reading")
+          else
+             p0 = pos
+             v = read_form(text, pos, roots)
+             if (.not. rdx%has_error) then
+                if (v%tag == GCT_SYM .and. rdx%tag_markers) then
+                   ! a symbol tag however spelled -- # uuid, #.x -- is a tagged
+                   ! literal as #uuid is, resolved by its data reader or as a
+                   ! record class (clotran.reader)
+                   pos = p0
+                   v = read_tagged(text, pos, roots)
+                   return
+                else if (v%tag == GCT_SYM) then
+                   ! the tagged form is read first: an error in it wins
+                   block
+                     character(len=:), allocatable :: tn
+                     type(gc_value) :: tf
+                     call gc_ref_text(v%ref, s=tn)
+                     tf = read_form(text, pos, roots)
+                     if (.not. rdx%has_error) call fail("No reader function for tag " // tn)
+                   end block
+                else
+                   call fail("Reader tag must be a symbol")
+                end if
+                v = gc_nil()
+             end if
+          end if
        end if
     end select
   end function read_dispatch
@@ -986,7 +1195,7 @@ contains
     end if
     call vs_set(base + 1, tag)
     if (tag%tag /= GCT_SYM) then
-       call fail("reader: a tag must be a symbol")
+       call fail("Reader tag must be a symbol")
        call vs_leave(base); return
     end if
     form = read_form(text, pos, [roots, [vs_get(base + 1)]])
@@ -1096,7 +1305,7 @@ contains
        call skip_ignorables(text, pos, [roots, vs_get(base + 1)])
        if (rdx%has_error) exit
        if (pos > len(text)) then
-          call fail("EOF while reading, expected ')'")
+          call fail("EOF while reading")
           exit
        end if
        if (text(pos:pos) == ")") then
@@ -1112,7 +1321,7 @@ contains
        call skip_ignorables(text, pos, [roots, vs_get(base + 1)])
        if (rdx%has_error) exit
        if (pos > len(text)) then
-          call fail("EOF while reading, expected ')'")
+          call fail("EOF while reading")
           exit
        end if
        if (text(pos:pos) == ")") then
@@ -1187,7 +1396,7 @@ contains
     items = splice_into(gcv_empty(roots), coll, [roots, vs_get(base + 1)])
     call vs_set(base + 2, items)
     if (mod(gcv_count(vs_get(base + 2)), 2) /= 0) then
-       call fail("map literal has an odd number of forms")
+       call fail("Map literal must contain an even number of forms")
     else
        do i = 0, gcv_count(vs_get(base + 2)) - 1, 2
           call vs_set(base + 1, gca_assoc(vs_get(base + 1), gcv_nth(vs_get(base + 2), i), &
@@ -1239,7 +1448,42 @@ contains
     case ("NaN")
        v = gc_real(ieee_value(1.0d0, ieee_quiet_nan))
     case default
-       call fail("Invalid token: ##" // tok)
+       ! SymbolicValueReader reads a FORM, and its own errors come first
+       ! (##_/ is "Invalid token: _/"): a symbol it does not know, or
+       ! anything else, by its text
+       pos = start
+       if (pos > len(text)) then
+          call fail("EOF while reading")
+          return
+       end if
+       block
+         type(gc_value) :: o
+         character(len=:), allocatable :: ot
+         o = read_form(text, pos, roots)
+         if (gcr_has_error()) return
+         if (o%tag == GCT_SYM) then
+            call gc_ref_text(o%ref, s=ot)
+            call fail("Unknown symbolic value: ##" // ot)
+         else if (o%tag == GCT_STR .or. o%tag == GCT_CHAR) then
+            ! toString: a string's text, a character itself
+            call gcp_str(o, .false., s=ot)
+            call fail("Invalid token: ##" // ot)
+         else if (o%tag == GCT_REAL .and. .not. ieee_is_finite(gc_rval(o))) then
+            ! a double's toString: Infinity, -Infinity, NaN
+            if (ieee_is_nan(gc_rval(o))) then
+               ot = "NaN"
+            else if (gc_rval(o) > 0) then
+               ot = "Infinity"
+            else
+               ot = "-Infinity"
+            end if
+            call fail("Invalid token: ##" // ot)
+         else
+            call gcp_str(o, .true., s=ot)
+            call fail("Invalid token: ##" // ot)
+         end if
+         v = gc_nil()
+       end block
     end select
   end function read_symbolic
 
@@ -1273,6 +1517,11 @@ contains
     if (cond_leaked()) then
        call vs_leave(base); return
     end if
+    ! metadata on the metadata (^^:a x y) is the inner form's own: x is
+    ! still a symbol, so a :tag
+    do while (gc_kind(m) == OBJ_META)
+       m = gc_slot(m, 1)
+    end do
     call vs_set(base + 1, m)
 
     ! Normalise the shorthands into a map.
@@ -1302,7 +1551,7 @@ contains
        m = gca_assoc(vs_get(base + 2), vs_get(base + 3), vs_get(base + 1), roots)
        call vs_set(base + 1, m)
     else
-       call fail("Metadata must be Symbol,Keyword,String,Vector or Map")
+       call fail("Metadata must be Symbol,Keyword,String,Vector or Map", "clotran.host.illegal_argument_exception")
        call vs_leave(base); return
     end if
 
@@ -1314,6 +1563,19 @@ contains
        call vs_leave(base); return
     end if
     call vs_set(base + 2, form)
+    ! only what can hold metadata takes it (MetaReader: IMeta) -- a
+    ! symbol or a collection, not a string, number, char, keyword,
+    ! boolean, nil or pattern (scripts/fuzz-read)
+    select case (form%tag)
+    case (GCT_NIL, GCT_BOOL, GCT_INT, GCT_REAL, GCT_CHAR, GCT_STR, GCT_KEY, &
+          GCT_RATIO, GCT_BIG, GCT_DEC, GCT_BIGRATIO)
+       call fail("Metadata can only be applied to IMetas", "clotran.host.illegal_argument_exception")
+       call vs_leave(base); return
+    end select
+    if (gc_kind(form) == OBJ_REGEX) then
+       call fail("Metadata can only be applied to IMetas", "clotran.host.illegal_argument_exception")
+       call vs_leave(base); return
+    end if
     ! On a list read from a file, MetaReader adds the ^'s own line and
     ! column to the map, over any the map gave.
     if (gcl_is(vs_get(base + 2)) .and. rdx%cur_file /= 0) then
@@ -1380,7 +1642,7 @@ contains
        r2 = with(roots, acc)
        call skip_ignorables(text, pos, r2)
        if (pos > len(text)) then
-          call fail("EOF while reading, expected '" // closer // "'")
+          call fail("EOF while reading")
           return
        end if
        if (text(pos:pos) == closer) then
@@ -1420,22 +1682,36 @@ contains
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: v, k, val
     type(gc_value), allocatable :: r2(:)
+    integer :: kp, ke
+    character(len=:), allocatable :: odd, dup
+    logical :: has_dup
 
     rdx => rd_self()
+    odd = "Map literal must contain an even number of forms"
+    if (rdx%ns_map) odd = "Namespaced map literal must contain an even number of forms"
+    rdx%ns_map = .false.
+    dup = ""
+    has_dup = .false.
     v = gca_empty(roots)
     do
        r2 = with(roots, v)
        call skip_ignorables(text, pos, r2)
        if (pos > len(text)) then
-          call fail("EOF while reading, expected '}'")
+          call fail("EOF while reading")
           return
        end if
        if (text(pos:pos) == "}") then
           pos = pos + 1
+          ! a key twice is refused once the map is read through, as clj
+          ! reads every form before createWithCheck: an error after it
+          ! in the map comes first
+          if (has_dup) call fail("Duplicate key: " // dup, "clotran.host.illegal_argument_exception")
           return
        end if
+       kp = pos
        k = read_form(text, pos, r2)
        if (rdx%has_error) return
+       ke = pos - 1
        if (rdx%rc_nothing) then
           rdx%rc_nothing = .false.
           cycle
@@ -1448,11 +1724,12 @@ contains
        end if
        call skip_ignorables(text, pos, r2)
        if (pos > len(text)) then
-          call fail("map literal has an odd number of forms")
+          ! the end before the } is the end, not an odd count
+          call fail("EOF while reading")
           return
        end if
        if (text(pos:pos) == "}") then
-          call fail("map literal has an odd number of forms")
+          call fail(odd)
           return
        end if
        val = read_form(text, pos, with(r2, k))
@@ -1460,8 +1737,13 @@ contains
        if (rdx%rc_nothing .or. rdx%rc_splice) then
           rdx%rc_nothing = .false.
           rdx%rc_splice = .false.
-          call fail("map literal has an odd number of forms")
+          call fail(odd)
           return
+       end if
+       ! PersistentArrayMap.createWithCheck: a key twice is an error
+       if (gca_contains(v, k)) then
+          if (.not. has_dup) call key_text(k, text(kp:ke), dup)
+          has_dup = .true.
        end if
        v = gca_assoc(v, k, val, with(with(r2, k), val))
     end do
@@ -1481,44 +1763,92 @@ contains
     type(gc_value) :: v, m, k2
     type(gc_value), allocatable :: ks(:), vls(:)
     character(len=:), allocatable :: tok, ns
-    integer :: start, base, i
+    integer :: base, i
+    logical :: auto, have_sym
+    type(gc_value) :: sym
 
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1
     rdx => rd_self()
     v = gc_nil()
-    pos = pos + 1            ! past the #, now at the :
-    start = pos
-    do while (pos <= len(text))
-       if (is_space(text(pos:pos)) .or. text(pos:pos) == "{") exit
-       pos = pos + 1
-    end do
-    tok = text(start:pos-1)
-    if (len(tok) >= 2 .and. tok(1:min(2,len(tok))) == "::") then
+    ! LispReader.NamespaceMapReader, check for check: #: or #:: (auto),
+    ! then whitespace only before { when auto, else a FORM -- the
+    ! namespace -- read as any form, so its own errors come first
+    pos = pos + 2            ! past the # and the :
+    auto = .false.
+    if (pos <= len(text)) then
+       if (text(pos:pos) == ":") then
+          auto = .true.
+          pos = pos + 1
+       end if
+    end if
+    have_sym = .false.
+    sym = gc_nil()
+    base = vs_enter(3)
+    if (pos <= len(text) .and. is_space(text(min(pos, len(text)):min(pos, len(text))))) then
+       if (.not. auto) then
+          call fail("Namespaced map must specify a namespace")
+          call vs_leave(base); return
+       end if
+       do while (pos <= len(text))
+          if (.not. is_space(text(pos:pos))) exit
+          pos = pos + 1
+       end do
+       if (pos > len(text) .or. text(min(pos, len(text)):min(pos, len(text))) /= "{") then
+          call fail("Namespaced map must specify a namespace")
+          call vs_leave(base); return
+       end if
+    else if (pos > len(text) .or. text(min(pos, len(text)):min(pos, len(text))) /= "{") then
+       sym = read_form(text, pos, roots)
+       if (rdx%has_error) then
+          call vs_leave(base); return
+       end if
+       call vs_set(base + 1, sym)
+       have_sym = .true.
+       do while (pos <= len(text))
+          if (.not. is_space(text(pos:pos))) exit
+          pos = pos + 1
+       end do
+    end if
+    if (pos > len(text) .or. text(min(pos, len(text)):min(pos, len(text))) /= "{") then
+       call fail("Namespaced map must specify a map")
+       call vs_leave(base); return
+    end if
+    tok = ""
+    if (have_sym) then
+       if (sym%tag == GCT_SYM) then
+          call gc_ref_text(sym%ref, s=tok)
+       else
+          call gcp_str(sym, .true., s=tok)
+       end if
+       if (sym%tag /= GCT_SYM .or. (index(tok, "/") > 0 .and. tok /= "/")) then
+          call fail("Namespaced map must specify a valid namespace: " // tok)
+          call vs_leave(base); return
+       end if
+    end if
+    if (auto) then
        if (.not. associated(ns_resolver)) then
-          call fail("reader: no namespace resolver for " // tok)
-          return
+          call fail("reader: no namespace resolver for ::" // tok)
+          call vs_leave(base); return
        end if
        block
-          call ns_resolver(tok(3:), ns=dlt_1)
+          call ns_resolver(tok, ns=dlt_1)
           ns = dlt_1
        end block
        if (len(ns) == 0) then
-          call fail("Invalid token: " // tok)
-          return
+          call fail("Unknown auto-resolved namespace alias: " // tok)
+          call vs_leave(base); return
        end if
-    else if (len(tok) >= 2) then
-       ns = tok(2:)
+    else if (.not. have_sym) then
+       ! #:{ -- clj names the missing namespace "null"
+       call fail("Namespaced map must specify a namespace")
+       call vs_leave(base); return
     else
-       call fail("reader: a namespaced map needs a namespace")
-       return
+       ns = tok
     end if
-    call skip_ignorables(text, pos, roots)
-    if (pos > len(text) .or. text(min(pos,len(text)):min(pos,len(text))) /= "{") then
-       call fail("reader: #" // tok // " must be followed by a map")
-       return
-    end if
+    call vs_leave(base)
     pos = pos + 1
+    rdx%ns_map = .true.
     m = read_map(text, pos, roots)
     if (rdx%has_error) return
 
@@ -1583,7 +1913,7 @@ contains
     acc = ""
     do
        if (pos > len(text)) then
-          call fail("EOF while reading a string")
+          call fail("EOF while reading string")
           return
        end if
        c = text(pos:pos)
@@ -1594,9 +1924,10 @@ contains
        if (c == achar(92)) then
           pos = pos + 1
           if (pos > len(text)) then
-             call fail("EOF in a string escape")
+             call fail("EOF while reading string")
              return
           end if
+          ! LispReader.StringReader's escapes, and its refusals
           select case (text(pos:pos))
           case ("n"); acc = acc // achar(10)
           case ("t"); acc = acc // achar(9)
@@ -1604,27 +1935,42 @@ contains
           case ("b"); acc = acc // achar(8)
           case ("f"); acc = acc // achar(12)
           case ('"'); acc = acc // '"'
+          case (achar(92)); acc = acc // achar(92)
           case ("u")
-             ! \uXXXX: four hex digits, the code point, as UTF-8 bytes --
-             ! a string is bytes here, so "é" is the two of e-acute
-             if (pos + 4 > len(text)) then
-                call fail("EOF in a \u escape")
+             ! \uXXXX: exactly four hex digits, the code point, as UTF-8
+             ! bytes -- a string is bytes here, so "é" is the two of e-acute
+             pos = pos + 1
+             if (pos > len(text)) then
+                call fail("EOF while reading string")
+                return
+             end if
+             if (digit_of(text(pos:pos), 16) < 0) then
+                call fail("Invalid unicode escape: \u" // text(pos:pos))
                 return
              end if
              block
-               integer :: cp, ios
-               read(text(pos+1:pos+4), '(Z4)', iostat=ios) cp
-               if (ios /= 0) then
-                  call fail("Invalid unicode escape: \u" // text(pos+1:pos+4))
+               integer :: cp
+               cp = read_code_unit(text, pos, 16, 4, .true.)
+               if (gcr_has_error()) return
+               call u8_enc(cp, s=dlt_1)
+               acc = acc // dlt_1
+             end block
+          case ("0":"9")
+             ! \NNN: up to three octal digits, at most 377
+             block
+               integer :: cp
+               cp = read_code_unit(text, pos, 8, 3, .false.)
+               if (gcr_has_error()) return
+               if (cp > 255) then
+                  call fail("Octal escape sequence must be in range [0, 377].")
                   return
                end if
-               block
-                  call u8_enc(cp, s=dlt_1)
-                  acc = acc // dlt_1
-               end block
-               pos = pos + 4
+               call u8_enc(cp, s=dlt_1)
+               acc = acc // dlt_1
              end block
-          case default; acc = acc // text(pos:pos)
+          case default
+             call fail("Unsupported escape character: \" // text(pos:min(len(text), pos + u8_len(text(pos:pos)) - 1)))
+             return
           end select
        else
           acc = acc // c
@@ -1649,7 +1995,7 @@ contains
     start = pos
     pos = pos + 2
     if (start + 1 > len(text)) then
-       call fail("EOF after a backslash")
+       call fail("EOF while reading character")
        return
     end if
     ! the token runs to whitespace or a MACRO-TERMINATING character, as
@@ -1669,23 +2015,66 @@ contains
     case ("backspace"); v = gc_char(achar(8))
     case ("formfeed");  v = gc_char(achar(12))
     case default
-       ! \é is one character however many bytes; \uXXXX and \oNNN are
-       ! the code point in hex and octal, as LispReader reads them.
+       ! LispReader.CharacterReader: one character however many bytes;
+       ! \uXXXX exactly four hex digits, not a surrogate; \oNNN at most
+       ! three octal digits, at most 377; anything else refused
        block
-         integer :: cp, ios
+         integer :: cp, i, d
+         character(len=16) :: b
          if (u8_count(name) == 1) then
             v = gc_char_cp(u8_at(name, 0))
             return
          end if
-         ios = 1
-         if (len(name) == 5 .and. name(1:1) == "u") read(name(2:5), '(Z4)', iostat=ios) cp
-         if (len(name) >= 2 .and. len(name) <= 4 .and. name(1:1) == "o") read(name(2:), '(O3)', iostat=ios) cp
-         if (ios == 0) then
+         if (name(1:1) == "u") then
+            if (len(name) /= 5) then
+               call fail("Invalid unicode character: " // achar(92) // name, "clotran.host.illegal_argument_exception")
+               return
+            end if
+            cp = 0
+            do i = 2, 5
+               d = digit_of(name(i:i), 16)
+               if (d < 0) then
+                  call fail("Invalid digit: " // name(i:i), "clotran.host.illegal_argument_exception")
+                  return
+               end if
+               cp = cp * 16 + d
+            end do
+            if (cp >= 55296 .and. cp <= 57343) then
+               write(b, '(Z0)') cp
+               do i = 1, len_trim(b)
+                  if (b(i:i) >= "A" .and. b(i:i) <= "F") b(i:i) = achar(iachar(b(i:i)) + 32)
+               end do
+               call fail("Invalid character constant: " // achar(92) // "u" // trim(b))
+               return
+            end if
+            v = gc_char_cp(cp)
+            return
+         end if
+         if (name(1:1) == "o") then
+            ! in characters, as the token's length is
+            if (u8_count(name) - 1 > 3) then
+               write(b, '(I0)') u8_count(name) - 1
+               call fail("Invalid octal escape sequence length: " // trim(b))
+               return
+            end if
+            cp = 0
+            do i = 2, len(name)
+               d = digit_of(name(i:i), 8)
+               if (d < 0) then
+                  call fail("Invalid digit: " // name(i:i), "clotran.host.illegal_argument_exception")
+                  return
+               end if
+               cp = cp * 8 + d
+            end do
+            if (cp > 255) then
+               call fail("Octal escape sequence must be in range [0, 377].")
+               return
+            end if
             v = gc_char_cp(cp)
             return
          end if
        end block
-       call fail("unsupported character literal: " // achar(92) // name)
+       call fail("Unsupported character: " // achar(92) // name)
     end select
   end function read_char
 
@@ -1700,15 +2089,34 @@ contains
     logical :: rok, rclaim
     type(gc_value) :: rval
     character(len=:), allocatable :: tok
+    logical :: numeric
 
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1
     start = pos
+    ! a NUMBER -- a digit first, or a sign and then one -- ends at any
+    ! macro character, # ' and % too (LispReader.readNumber's isMacro):
+    ! 3'x is 3 and 'x, 8# is 8 and a # (scripts/fuzz-read); a symbol
+    ! only at a terminating one
+    numeric = index("0123456789", text(pos:pos)) > 0
+    if (.not. numeric .and. pos < len(text) .and. index("+-", text(pos:pos)) > 0) &
+         numeric = index("0123456789", text(pos+1:pos+1)) > 0
     do while (pos <= len(text))
        if (is_space(text(pos:pos)) .or. is_delim(text(pos:pos))) exit
+       if (numeric .and. pos > start .and. is_macro(text(pos:pos))) exit
        pos = pos + 1
     end do
     tok = text(start:pos - 1)
+
+    ! inside #(...), a % token is checked as it is read, as ArgReader
+    ! does: before anything after it can fail first
+    if (len(tok) >= 2) then
+       if (rd_self_in_anon() .and. tok(1:1) == "%" .and. tok /= "%&" .and. verify(tok(2:), "0123456789") /= 0) then
+          call fail("arg literal must be %, %& or %integer", "clotran.host.illegal_state_exception")
+          v = gc_nil()
+          return
+       end if
+    end if
 
     ! A token can only be empty if pos did not move, which means
     ! the character here is one read_form has no case for -- ^ and
@@ -1757,7 +2165,11 @@ contains
        else if (suffixed_number(tok, v, roots)) then
           continue
        else
-          call fail("Invalid number: " // tok)
+          if (radix_out_of_range(tok)) then
+             call fail("Radix out of range", "clotran.host.number_format_exception")
+          else
+             call fail("Invalid number: " // tok, "clotran.host.number_format_exception")
+          end if
           v = gc_nil()
        end if
     else if (.not. symbol_token_ok(tok)) then
@@ -1958,6 +2370,16 @@ contains
     if (s(1:1) == "-" .or. s(1:1) == "+") start = 2
     if (start > n) return
     if (n <= start) return
+    ! NNrDIGITS: the digits run to the end, N among them (intPat's
+    ! [0-9A-Za-z]+ is greedy), so 9r81N is not 9r81 and a suffix but a
+    ! base-9 number with an N in it -- refused (36rZZN is 46643)
+    block
+      integer :: rp
+      rp = scan(s(start:n), "rR")
+      if (rp >= 2 .and. rp <= 3) then
+         if (verify(s(start:start + rp - 2), "0123456789") == 0) return
+      end if
+    end block
     if (s(n:n) == "N") then
        ! 42N is a BigInt, of any size. A plain decimal keeps its own
        ! text; a radix or hex literal goes through parse_int first,
@@ -2037,7 +2459,11 @@ contains
     ! denominator 32 (DEVIATIONS 26)
     call big_norm(s(start:slash - 1), o=nt)
     call big_norm(s(slash + 1:n), o=dt)
-    if (dt == "0") return
+    if (dt == "0") then
+       ! the reader divides the parts, as matchNumber does: 1/0 throws
+       call fail("Divide by zero", "clotran.host.arithmetic_exception")
+       return
+    end if
     if (neg) nt = "-" // nt
     val = gc_rat_make(nt, dt, .false., roots)
     ok = .true.

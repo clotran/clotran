@@ -1,0 +1,193 @@
+#!/usr/bin/env bb
+;; fuzz-read: the reader on MALFORMED text (PLAN step 29).
+;;
+;;   scripts/fuzz-read [-n N] [-s SEED]
+;;
+;; Valid source text is generated -- numbers in every syntax (radix, hex,
+;; ratio, exponent, M and N), strings and characters with escapes,
+;; keywords (:: too), symbols with namespaces, collections, metadata,
+;; quote, deref, #_, #{}, #"", #(), ##Inf, #uuid, comments --
+;; and then mutated: a character deleted, inserted (a delimiter, a quote,
+;; a backslash, a digit, a letter), a span duplicated, two swapped, the
+;; text cut short. Each text is read as clj reads it and as clotran does,
+;; with *read-eval* off, the whole text inside [ ] so every form in it is
+;; read: the same value, or the same error by class and message. A text
+;; that hangs or crashes the reader is a finding of its own.
+;;
+;; Not compared: gensym numbers (#() and foo#, renumbered on both sides);
+;; the regex engine's own message for a pattern it refuses (the class
+;; is compared; the wording is ICU's or clj's host's); a #uuid either side
+;; refuses (DEVIATIONS 75: clj's host pads a short group). Not generated:
+;; #inst, which wants a date type (DEVIATIONS 46).
+(require '[clojure.test.check.generators :as g]
+         '[clojure.string :as str]
+         '[babashka.fs :as fs]
+         '[babashka.process :as p])
+
+(def opts (loop [as *command-line-args* o {:n 400 :seed 1}]
+            (if (empty? as) o
+                (case (first as)
+                  "-n" (recur (drop 2 as) (assoc o :n (parse-long (second as))))
+                  "-s" (recur (drop 2 as) (assoc o :seed (parse-long (second as))))
+                  (do (println "usage: scripts/fuzz-read [-n N] [-s SEED]") (System/exit 2))))))
+
+(def repo (str (fs/parent (fs/parent (fs/absolutize *file*)))))
+(load-file (str repo "/upstream/names.clj"))
+
+;; ---- valid text -------------------------------------------------------------
+
+(def g-number
+  (g/one-of [(g/fmap str (g/choose -99999 99999))
+             (g/fmap #(str % "N") (g/choose -999 999))
+             (g/fmap (fn [[a b]] (str a "/" b)) (g/tuple (g/choose -20 20) (g/choose 1 12)))
+             (g/fmap (fn [[a b]] (str a "." b)) (g/tuple (g/choose -99 99) (g/choose 0 999)))
+             (g/fmap (fn [[a e]] (str a "e" e)) (g/tuple (g/choose 1 9) (g/choose -30 30)))
+             (g/fmap (fn [[a b]] (str a "." b "M")) (g/tuple (g/choose -99 99) (g/choose 0 99)))
+             (g/fmap #(str "0x" (Long/toHexString %)) (g/choose 0 99999))
+             (g/fmap (fn [[r n]] (str r "r" (Long/toString n r))) (g/tuple (g/choose 2 36) (g/choose 0 9999)))
+             (g/fmap #(str "0" (Long/toOctalString %)) (g/choose 1 999))
+             (g/elements ["##Inf" "##-Inf" "##NaN" "-0.0" "+5" "1e400" "9223372036854775808" "-9223372036854775809"])]))
+
+(def g-name (g/fmap str/join (g/vector (g/elements (vec "abxyz-*+!?<>=_")) 1 5)))
+(def g-sym (g/one-of [g-name (g/fmap (fn [[a b]] (str a "/" b)) (g/tuple g-name g-name))
+                      (g/elements ["/" "clojure.core//" "a.b/c" "nil" "true" "false"])]))
+(def g-kw (g/one-of [(g/fmap #(str ":" %) g-sym) (g/fmap #(str "::" %) g-name)]))
+(def g-str (g/fmap #(str "\"" (str/join %) "\"")
+                   (g/vector (g/one-of [(g/elements (vec "abc xyzé λ"))
+                                        (g/elements ["\\n" "\\t" "\\\"" "\\\\" "\\u0041" "\\u00e9" "\\101" "\\r" "\\b" "\\f"])]) 0 6)))
+(def g-char (g/elements ["\\a" "\\Z" "\\newline" "\\space" "\\tab" "\\u0041" "\\o101" "\\(" "\\\\" "\\λ" "\\return" "\\backspace" "\\formfeed"]))
+(def g-regex (g/elements ["#\"a+\"" "#\"[0-9]{2,3}\"" "#\"(a|b)*c\"" "#\"\\d+\\.\\d*\"" "#\"\\\\\"" "#\"\"" "#\"[^\\s]\""]))
+
+(def g-atom (g/one-of [g-number g-sym g-kw g-str g-char g-regex (g/elements ["nil" "true" "false"])]))
+
+(def g-form
+  (g/recursive-gen
+   (fn [inner]
+     (let [items (g/fmap #(str/join " " %) (g/vector inner 0 4))]
+       (g/one-of [(g/fmap #(str "(" % ")") items)
+                  (g/fmap #(str "[" % "]") items)
+                  (g/fmap #(str "{" % "}") (g/fmap #(str/join " " (mapcat identity %)) (g/vector (g/tuple g-kw inner) 0 3)))
+                  (g/fmap #(str "#{" (str/join " " (distinct %)) "}") (g/vector g-number 0 3))
+                  (g/fmap #(str "'" %) inner)
+                  (g/fmap #(str "@" %) inner)
+                  (g/fmap #(str "#_" % " ") inner)
+                  (g/fmap (fn [[m x]] (str "^" m " " x)) (g/tuple (g/one-of [g-kw g-sym (g/return "{:a 1}")]) inner))
+                  (g/fmap #(str "#(" % " %1 %&)") items)
+                  (g/fmap #(str "#uuid \"" % "\"") (g/elements ["6a2f41a3-c54c-fce8-32d2-0324e1c32e22" "zz"]))
+                  (g/fmap #(str % " ; a comment\n") inner)])))
+   g-atom))
+
+;; ---- mutations ----------------------------------------------------------------
+
+;; no backquote: syntax-quote expands at analysis here, not at read
+;; (DEVIATIONS 6), so read-string's answers for it differ by design
+(def alphabet (vec "()[]{}\"\\#^'~@:/;.,0123456789eExMNr+-_%&ab λ\n"))
+
+(defn mutate [s [kind i j c]]
+  (let [n (count s) i (if (pos? n) (mod i n) 0) j (if (pos? n) (mod j n) 0)]
+    (case kind
+      :delete (if (pos? n) (str (subs s 0 i) (subs s (inc i))) s)
+      :insert (str (subs s 0 i) c (subs s i))
+      :dup (let [[a b] (sort [i j])] (str (subs s 0 b) (subs s a b) (subs s b)))
+      :swap (if (> n 1) (let [i (min i (- n 2))] (str (subs s 0 i) (subs s (inc i) (+ i 2)) (subs s i (inc i)) (subs s (+ i 2)))) s)
+      :cut (subs s 0 i)
+      :none s)))
+
+(def g-mutation (g/tuple (g/elements [:delete :insert :insert :dup :swap :cut :none])
+                         (g/choose 0 1000) (g/choose 0 1000) (g/elements alphabet)))
+
+(def g-text (g/let [f g-form ms (g/vector g-mutation 0 3)] (g/return (reduce mutate f ms))))
+
+;; ---- reading them ---------------------------------------------------------------
+
+(def canon "(defn fz-canon [x]
+  (cond (map? x) (str \"{\" (clojure.string/join \", \" (sort (map (fn [e] (str (fz-canon (key e)) \" \" (fz-canon (val e)))) x))) \"}\")
+        (set? x) (str \"#{\" (clojure.string/join \" \" (sort (map fz-canon x))) \"}\")
+        (vector? x) (str \"[\" (clojure.string/join \" \" (map fz-canon x)) \"]\")
+        (sequential? x) (str \"(\" (clojure.string/join \" \" (map fz-canon x)) \")\")
+        :else (pr-str x)))
+(defn fz-read [i s]
+  (println (str \"FZ \" i \" \"
+    (try (fz-canon (binding [*read-eval* false] (read-string (str \"[\" s \"\\n]\"))))
+         (catch Throwable t
+           (let [m (str (.getMessage t)) k (.indexOf m \"  at \")]
+             (str \"!error \" (.getName (class t)) \": \" (if (neg? k) m (subs m 0 k)))))))))
+")
+
+(defn script [texts]
+  (str "(require 'clojure.string)\n" canon
+       (str/join "\n" (map-indexed (fn [i s] (str "(fz-read " i " " (pr-str s) ")")) texts))
+       "\n"))
+
+(defn answers [out]
+  (into {} (for [[_ i v] (re-seq #"(?m)^FZ (\d+) (.*)$" (or out ""))] [(parse-long i) v])))
+
+(defn run [cmd secs]
+  (let [proc (apply p/process {:dir repo :out :string :err :string :in ""} cmd)
+        r (deref proc (* 1000 secs) ::timeout)]
+    (if (= r ::timeout) (do (p/destroy-tree proc) {:timeout true :out "" :err "" :exit -1}) r)))
+
+;; what may differ and is not the reader's: gensym numbers; a regex
+;; engine's message
+(defn norm [s]
+  (when s
+    (-> s
+        (str/replace #"(p\d+|rest)__\d+#" "$1__N#")
+        (str/replace #"__\d+__auto__" "__N__auto__")
+        (str/replace #"^(!error clotran\.host\.pattern_syntax_exception):.*" "$1")
+        ;; the host's words for a bad digit under a radix, and for #:{
+        (str/replace #"^(!error clotran\.host\.number_format_exception): For input string: .*" "$1: Invalid number")
+        (str/replace #"^(!error clotran\.host\.number_format_exception): Invalid number: \d+r.*" "$1: Invalid number")
+        (str/replace "must specify a valid namespace: null" "must specify a namespace")
+        ;; what the host names when a class is not found
+        (str/replace #"^(!error clotran\.host\.class_not_found_exception):.*" "$1"))))
+
+(let [{:keys [n seed]} opts
+      texts (vec (for [i (range n)] (g/generate g-text 10 (+ seed i))))
+      work (str (fs/create-temp-dir {:prefix "fuzz-read"}))
+      clj-f (str work "/read.clj") ct-f (str work "/read.cljf")]
+  (spit clj-f (names/to-upstream (script texts)))
+  (spit ct-f (str/replace (script texts) "Throwable" "clotran.host.throwable"))
+  (let [c (run ["clj" "-Sdeps" (slurp (str repo "/deps.edn")) "-M" clj-f] 600)
+        want (update-vals (answers (:out c)) (comp norm names/from-clj))
+        ;; clotran in pieces, so a text that kills the reader is found
+        ;; by itself: bisect a run that dies or hangs
+        got (atom {}) problems (atom [])
+        go (fn go [idxs]
+             (let [f (str work "/part.cljf")]
+               (spit f (str "(require 'clojure.string)\n" (str/replace canon "Throwable" "clotran.host.throwable")
+                            (str/join "\n" (for [i idxs] (str "(fz-read " i " " (pr-str (nth texts i)) ")"))) "\n"))
+               (let [r (run [(str repo "/clotran-bin") (str repo "/src/clj/clojure/core.clj") f] 300)
+                     a (answers (:out r))]
+                 (if (and (not (:timeout r)) (= (count a) (count idxs)))
+                   (swap! got merge a)
+                   (if (= 1 (count idxs))
+                     (swap! problems conj (str (if (:timeout r) "TIMEOUT" "CRASH") " reading " (pr-str (nth texts (first idxs)))
+                                               "\n   " (str/join " | " (take 3 (str/split-lines (str (:err r)))))))
+                     (let [h (quot (count idxs) 2)] (go (subvec idxs 0 h)) (go (subvec idxs h))))))))]
+    (when (< (count want) n)
+      (println "clj answered" (count want) "of" n ":" (str/join " | " (take 3 (str/split-lines (str (:err c)))))))
+    (go (vec (range n)))
+    (let [uuid-refused? (fn [i w gv] (or (and (re-find #"#\s*uuid" (nth texts i))
+                                              (some #(str/starts-with? (str %) "!error") [w gv]))
+                                         ;; DEVIATIONS 6: syntax-quote, from a mutation
+                                         (str/includes? (nth texts i) "`")
+                                         ;; DEVIATIONS 14: ICU's dialect refuses or takes
+                                         ;; a pattern clj's host does not
+                                         (some #(str/includes? (str %) "pattern_syntax_exception") [w gv])
+                                         ;; DEVIATIONS 46: a tag resolves after the whole
+                                         ;; read, so an error after it comes first here
+                                         (some #(str/includes? (str w) %) ["No reader function for tag" "Record construction syntax"
+                                                                           "Unreadable constructor form" "constructor arguments"
+                                                                           "Unreadable defrecord form"])
+                                         ;; clj indexes its dispatch table by the character:
+                                         ;; #λ is ITS bug, an index out of bounds
+                                         (str/includes? (str w) "array_index_out_of_bounds")))
+          diffs (for [i (range n) :let [w (get want i) gv (norm (get @got i))]
+                      :when (and w gv (not= w gv) (not (uuid-refused? i w gv)))]
+                  (str "--- text " (pr-str (nth texts i)) "\n   clj:     " w "\n   clotran: " gv))]
+      (doseq [x (concat @problems diffs)] (println x))
+      (println (str "fuzz-read: " n " texts, " (count (filter #(str/starts-with? (str %) "!error") (vals want))) " refused by clj, "
+                    (count diffs) " differ, " (count @problems) " hang or crash"))
+      (fs/delete-tree work)
+      (System/exit (if (and (empty? diffs) (empty? @problems)) 0 1)))))

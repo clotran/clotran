@@ -4591,6 +4591,19 @@ contains
   ! internal {:error "..."} map, which no (catch SomeClass e)
   ! can match -- so an error clotran raises itself was
   ! uncatchable by name however well the message read.
+  ! A reader error, raised as the class LispReader throws it
+  subroutine fail_read()
+    character(len=:), allocatable :: msg, cls
+    type(gc_value) :: none(0)
+    call gcr_error(s=msg)
+    call gcr_error_class(s=cls)
+    if (len(cls) > 0) then
+       call raise_class(cls, msg, none)
+    else
+       call fail(msg)
+    end if
+  end subroutine fail_read
+
   subroutine raise_class(cls, msg, roots)
     type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
@@ -11883,8 +11896,7 @@ contains
             was = gcr_set_tag_markers(was)
             if (gcr_has_error()) then
                block
-                  call gcr_error(s=dlt_1)
-                  call fail(dlt_1)
+                  call fail_read()
                end block
             else
                call vs_set(vst, base + 3, form)
@@ -14136,8 +14148,7 @@ contains
             end block
             if (gcr_has_error()) then
                block
-                  call gcr_error(s=dlt_1)
-                  call fail(dlt_1)
+                  call fail_read()
                end block
             else
                ! a #tag literal resolved, as LispReader would have at

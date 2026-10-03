@@ -2122,3 +2122,22 @@ the order of everything else stays checked).
 **Removal**: keep nil out of the trie as clj does, with the seq putting
 its entry first. The cursor's walk and model/hashseq.lisp's theorem
 change with it.
+
+## 75. A UUID's text is the canonical one
+
+clj's `#uuid` and `parse-uuid` hand the string to its host's
+`UUID.fromString`, which takes any five dash-separated groups of up to
+sixteen hex digits and pads them: `#uuid "1-2-3-4-5"` reads as
+`#uuid "00000001-0002-0003-0004-000000000005"`, and a group one digit
+short reads padded. clotran's `UUID/fromString` (`clotran.uuid`) takes
+only the canonical 8-4-4-4-12 form and refuses the rest with "Invalid
+UUID string", where clj refuses only a string with the wrong number of
+groups or one over 36 characters ("UUID string too large").
+ClojureScript's compile-time `#uuid` is the same host call
+(`cljs.tagged_literals/read-uuid`), and its runtime `uuid` checks
+nothing at all: the leniency is the host's, not the language's.
+`scripts/fuzz-read` does not compare a text whose `#uuid` either side
+refuses.
+
+**Removal**: write the host's padding rules into `clotran.uuid`, if a
+program is found that relies on them.
