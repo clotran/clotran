@@ -29,6 +29,9 @@
 ;;   -m noimage                        flat with core loaded from source, not
 ;;                                     the heap image: what the image holds
 ;;                                     must be what loading makes
+;;   --fixture defs.clj                these definitions too, after the fixture's:
+;;                                     in user, and in the compiled namespace,
+;;                                     where they are compiled (scripts/fuzz-fn)
 ;;
 ;; Exit 1 on any difference.
 (require '[clojure.spec.alpha :as s]
@@ -62,6 +65,7 @@
       "--probe-timeout" (recur (drop 2 a) (assoc o :probe-timeout (parse-long (second a))))
       "-r" (recur (drop 2 a) (update o :requires (fnil conj []) (second a)))
       "--fns" (recur (drop 2 a) (assoc o :fns (parse-long (second a))))
+      "--fixture" (recur (drop 2 a) (assoc o :fixture (second a)))
       (do (println "unknown option" (first a)) (System/exit 2)))))
 
 ;;; ---- the grammar ----------------------------------------------------
@@ -429,8 +433,9 @@
 ;; deftype and a defrecord implementing it, the protocol extended to longs
 ;; and nil, two multimethods (one on a function, one on a keyword, with a
 ;; :default), a dynamic var -- defined the same on every side: in user for
-;; clj and the interpreted modes, in the compiled namespace for compiled
-(def fixture "
+;; clj and the interpreted modes, in the compiled namespace for compiled;
+;; --fixture's definitions follow it
+(def fixture (str "
 (defprotocol FzP (fz-m [x]) (fz-m2 [x y]))
 (deftype FzT [a] FzP (fz-m [_] (* a 2)) (fz-m2 [_ y] (+ a y)))
 (defrecord FzR [a b] FzP (fz-m [_] (+ a b)) (fz-m2 [_ y] (* a y)))
@@ -444,7 +449,7 @@
 (defmethod fz-area :default [_] -1)
 (def ^:dynamic *fz-d* 10)
 (defn fz-read-d [] *fz-d*)
-")
+" (some-> (:fixture opts) slurp)))
 
 (def prelude "
 (defn fz-canon [x]

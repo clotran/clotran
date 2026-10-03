@@ -407,7 +407,7 @@ export SEED
 
 TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(B)/libsamplelib.$(SOEXT) packages examples/embed/heat
 TEST_CHECKS = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-tree check-banner check-torture check-threads \
-	check-autocompile check-break check-libraries check-oracle check-oracle-gc check-pure check-static check-costs check-seed check-fuzz check-frames check-fuzz-spec check-fuzz-print check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind
+	check-autocompile check-break check-libraries check-oracle check-oracle-gc check-pure check-static check-costs check-seed check-fuzz check-frames check-fuzz-spec check-fuzz-print check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-fn check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind
 .PHONY: test $(TEST_CHECKS)
 test: $(TEST_CHECKS)
 $(TEST_CHECKS): $(TEST_DEPS)
@@ -521,6 +521,9 @@ check-fuzz:
 check-fuzz-macro:
 	@echo "--- core macros (PLAN 29): generated destructuring, checked against core.specs, and threading and conditional macros, through clj and every mode ---"
 	scripts/fuzz-macro -n 150 -s $(SEED) -o $(B)/fuzz-macro.edn > $(B)/fuzz-macro.out 2>&1; s=$$?; cat $(B)/fuzz-macro.out; exit $$s
+check-fuzz-fn:
+	@echo "--- typed functions (PLAN 29): generated defns with ^long and ^double parameters, primitive locals and loops, compiled in compiled mode, called with arguments directly and through apply ---"
+	scripts/fuzz-fn -n 30 -k 4 -s $(SEED) -o $(B)/fuzz-fn.edn > $(B)/fuzz-fn.out 2>&1; s=$$?; cat $(B)/fuzz-fn.out; exit $$s
 check-fuzz-threads:
 	@echo "--- threads (PLAN 29): futures contending on an atom, two refs and an agent; final values and invariants against clj ---"
 	scripts/fuzz-threads -n 20 -s $(SEED) -o $(B)/fuzz-threads.edn > $(B)/fuzz-threads.out 2>&1; s=$$?; cat $(B)/fuzz-threads.out; exit $$s
