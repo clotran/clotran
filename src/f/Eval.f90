@@ -9751,27 +9751,28 @@ contains
                  [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
             call vs_set(vst, base + 3, acc)
          end do
-         ! an odd count ends in a map, merged: keyword arguments with a
-         ! trailing map, as createAsIfByAssoc takes since 1.11
+         ! an odd count ends in a trailing element, CONJ'D onto {} and its
+         ! entries assoc'd in: keyword arguments with a trailing map, as
+         ! createAsIfByAssocComplexPath takes them since 1.11 -- so a pair
+         ! vector is an entry, nil is nothing, and anything else fails as
+         ! (conj {} x) does (scripts/fuzz-macro)
          if (mod(n2, 2) == 1) then
             block
               type(gc_value) :: last
               type(gc_value), allocatable :: kk(:), vv(:)
               integer :: j
-              last = strip_meta(gcv_nth(vs_get(vst, base + 2), n2 - 1))
-              if (gca_is(last)) then
+              last = gca_empty([vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+              last = conj1(last, gcv_nth(vs_get(vst, base + 2), n2 - 1), &
+                   [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), last])
+              if (tctx%has_error) then
+                 continue
+              else if (gca_is(last)) then
                  call gca_entries(last, kk, vv)
                  do j = 1, size(kk)
                     acc = gca_assoc(vs_get(vst, base + 3), kk(j), vv(j), &
                          [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
                     call vs_set(vst, base + 3, acc)
                  end do
-              else
-                 block
-                    call gcp_str(last, .true., s=dlt_1)
-                    call raise_class("clotran.host.illegal_argument_exception", "No value supplied for key: " //  dlt_1, [vs_get(vst, &
-                         base + 1)])
-                 end block
               end if
             end block
          end if

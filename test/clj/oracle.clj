@@ -3064,3 +3064,10 @@
 (defn fz-arity-named [] (fn inner [x] x))
 (mapv #(clojure.string/replace (try (%) (catch clotran.host.throwable e (.getMessage e))) #"--\d+" "")
       [(fz-arity-outer) (fz-arity-named) #(fz-arity-outer 1)])
+
+;; a seq destructured as a map with a trailing element: conj'd onto {}
+;; (createAsIfByAssocComplexPath) -- a pair vector an entry, nil nothing,
+;; anything else refused as conj refuses it; clotran refused all but a
+;; map with "No value supplied for key" (scripts/fuzz-macro)
+(mapv #(try (let [{:keys [a b]} %] [a b]) (catch clotran.host.throwable e (class e)))
+      ['(:a 1 {:b 2}) '(:a 1 [:b 3]) '(:a 1 nil) '(:a 1 :b) '(:a 1 {:a 9})])
