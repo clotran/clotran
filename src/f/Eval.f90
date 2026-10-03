@@ -12415,7 +12415,13 @@ contains
          logical :: ok
          if (tctx%tx_depth == 0) then
             call tx_lock_init()
+            ! waited for OUT of the running mutators, as monitor-enter waits:
+            ! the holder, inside its transaction, may stop for a collection,
+            ! and the collection waits for every running thread -- this one
+            ! too, blocked here -- forever (scripts/fuzz-threads under GC)
+            call gc_mutator_leave()
             ok = th_lock_acquire(tx_lk)
+            call gc_mutator_enter()
             call gc_global_keep(tctx%tx_root, gca_empty([vs_get(vst, base + 1)]))
             call gc_global_keep(tctx%tx_sends_root, gc_nil())
          end if
