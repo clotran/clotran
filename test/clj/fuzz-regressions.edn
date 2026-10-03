@@ -79,4 +79,7 @@
  (/ -9223372036854775808 1) (/ -9223372036854775808 -1) (/ 4 -9223372036854775808)
  ;; conj onto a map of what is not seqable throws (RT.seq), it answered {}
  (conj {} 4) (into {} [4]) (conj (sorted-map) 4) (conj {} nil) (conj {:a 1} (quote ([:b 2])))
+ ;; a NaN constant, alone or in a collection: compiled mode looked its pool
+ ;; slot up by value, NaN equals nothing, and the Fortran did not build
+ (let [r (- -447.145M ##NaN)] [r (class r)]) (str [1 ##NaN]) (- 1 ##NaN) (count #{##NaN 1})
 ]

@@ -25,6 +25,7 @@
   and compares values, so a generator bug is a difference rather than a
   silent wrong answer."
   (:require [clojure.string :as str]
+            [clojure.walk]
             [clotran.loader :as loader]))
 
 ;;; ---- the declarations a generated file needs ------------------------
@@ -297,6 +298,17 @@ end module clotran_rt_decl
   (or (nil? v) (true? v) (false? v)
       (and (int? v) (not= v clotran.host.int8/MIN_VALUE))
       (and (double? v) (not (NaN? v)) (not (infinite? v)))))
+
+
+(defn- pkey
+  "A pool entry as a KEY: a constant's NaNs -- ##NaN, or one inside a
+  collection -- replaced by a marker, since NaN equals nothing, itself
+  included, and a lookup by the entry found no slot: (- 1M ##NaN)
+  compiled to sv(b + ), Fortran that does not build (scripts/fuzz-num)."
+  [p]
+  (if (= :const (:kind p))
+    (update p :value (fn [v] (clojure.walk/postwalk #(if (and (double? %) (NaN? %)) ::nan %) v)))
+    p))
 
 
 (defn- walk-nodes
@@ -681,7 +693,7 @@ end module clotran_rt_decl
   expression is already a slot holding a value."
   [nd operands r rt st]
   (let [head (first (:children nd))
-        hs (get (:pool st) (pooled head))
+        hs (get (:pool st) (pkey (pooled head)))
         n (count operands)
         [blk st] (reduce (fn [[bl st] _] (let [[s st'] (fresh st)] [(conj bl s) st']))
                          [[] st] (range n))
@@ -962,7 +974,7 @@ end module clotran_rt_decl
         [fc st] (flush-typed st)
         [r st] (fresh st)]
     [(concat fc
-             [(str "st = clotran_eval_node(b + " r ", b + " (get (:pool st) p) ", b + 1)")]
+             [(str "st = clotran_eval_node(b + " r ", b + " (get (:pool st) (pkey p)) ", b + 1)")]
              err-return)
      r st]))
 
@@ -984,7 +996,7 @@ end module clotran_rt_decl
       ;; a :var or :const entry IS the value; a :node entry is a subtree
       ;; and has to be run
       (#{:var :const} (:kind (pooled nd)))
-      [[(str "call clotran_copy(b + " dst ", b + " (get (:pool st) (pooled nd)) ")")] st]
+      [[(str "call clotran_copy(b + " dst ", b + " (get (:pool st) (pkey (pooled nd))) ")")] st]
 
       (= :const (:op nd))
       [(emit-const (str "b + " dst) (:p1 nd)) st]
@@ -1114,7 +1126,7 @@ end module clotran_rt_decl
     (fallback nd st)
     (if-let [p (pooled nd)]
       ;; already in its slot from the top of the procedure
-      [[] (get (:pool st) p) st]
+      [[] (get (:pool st) (pkey p)) st]
       (let [t (infer nd (:env st))]
         (case (:op nd)
           :const (let [[s st] (fresh st)]
@@ -1175,7 +1187,7 @@ end module clotran_rt_decl
                           [hc hs st] (if p (let [[t st] (fresh st)] [nil t st]) (gen (first kids) st))
                           fetch (when p
                                   (cond-> [(str "call clotran_pool_get(b + " hs ", cf_pool, "
-                                                (+ (:offset st) (get (:pidx st) p)) "_c_int)")]
+                                                (+ (:offset st) (get (:pidx st) (pkey p))) "_c_int)")]
                                     (= :var (:kind p)) (conj (str "call clotran_deref(b + " hs ", b + " hs ")"))))
                           n (count (rest kids))
                           [blk st] (reduce (fn [[bl st] _] (let [[s st'] (fresh st)] [(conj bl s) st'])) [[] st] (range n))
@@ -1592,9 +1604,9 @@ end module clotran_rt_decl
         ;; b+1 is the locals frame, b+2 .. b+1+P hold what the pool
         ;; supplies, and temporaries start after them; a call's :site is
         ;; read from the pool where it is used and takes no slot
-        pidx (into {} (map-indexed (fn [i p] [p i]) pool))
+        pidx (into {} (map-indexed (fn [i p] [(pkey p) i]) pool))
         held (remove #(= :site (:kind %)) pool)
-        pslots (into {} (map-indexed (fn [i p] [p (+ 2 i)]) held))
+        pslots (into {} (map-indexed (fn [i p] [(pkey p) (+ 2 i)]) held))
         ;; counted from the list: two = entries, '(9) and [9], are one key
         first-temp (+ 2 (count held))
         st0 {:next first-temp :high (dec first-temp) :pool pslots :pidx pidx :flags []
