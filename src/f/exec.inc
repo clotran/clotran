@@ -352,9 +352,13 @@
     ok = .false.
     frame = gc_nil()
     body = gc_nil()
-    base = vs_enter(vst, 5)
+    base = vs_enter(vst, 6)
     call vs_set(vst, base + 1, fn)
     call vs_set(vst, base + 2, argv)
+    ! the rest seq apply handed over is held by nothing else: unrooted,
+    ! new_frame's collection freed it and the fn saw whatever took its
+    ! slot (scripts/fuzz-threads, under GC every 17 with a thread beside)
+    if (present(restseq)) call vs_set(vst, base + 6, restseq)
     ! a fixed arity through the fn's call table (flat.inc): what a
     ! lazy seq's thunk, forced from Fortran, is called by
     if (.not. present(restseq)) then
@@ -423,7 +427,7 @@
        call frame_set(vs_get(vst, base + 5), start + i, gcv_nth(vs_get(vst, base + 2), i))
     end do
     if (variadic .and. present(restseq)) then
-       call frame_set(vs_get(vst, base + 5), start + nfixed, restseq)
+       call frame_set(vs_get(vst, base + 5), start + nfixed, vs_get(vst, base + 6))
     else if (variadic) then
        ! nil when nothing is left, not the empty list (if-let asserts it)
        if (argc <= nfixed) then

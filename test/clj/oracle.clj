@@ -3045,3 +3045,13 @@
 ;; not root the map being searched (GC.f90, the hold)
 (let [src "{[p0 & pr :as ps] :ps, [k0 & kr :as ks] :ks, :keys [::op p1 p2 ret splice forms amp] :as p}"]
   (frequencies (for [_ (range 20)] (count (destructure [(read-string src) 'm])))))
+
+;; apply handing a variadic fn its rest seq, with another thread
+;; allocating: bind_closure did not root the seq, and under the collector
+;; (check-oracle-gc) the fn saw nil, {} or a stranger's vector in its
+;; place -- agents lost sends that way (scripts/fuzz-threads in fuzz-gc)
+(let [stop (atom false)
+      noise (future (loop [v []] (if @stop nil (recur (if (> (count v) 200) [] (conj v (str (count v))))))))
+      f (fn [x a & more] more)]
+  (try (count (remove (fn [j] (= (list j 1 2) (apply f [:x :a j 1 2]))) (range 5000)))
+       (finally (reset! stop true) @noise)))
