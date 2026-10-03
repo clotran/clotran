@@ -1203,7 +1203,10 @@ What still differs from a `Class`:
   fns), since spec reads a function's name back out of it (`fn-sym`;
   found by `scripts/fuzz-spec`). Without clj's `__N` counters: two
   anonymous fns written in the same place share a class name, where
-  in clj each `fn*` form has its own. Its supers are `AFunction`'s,
+  in clj each `fn*` form has its own. An arity error names the fn the
+  same way, demunged: `passed to: user/bar/fn` where clj says
+  `user/bar/fn--134` (scripts/fuzz drops the counters before
+  comparing). Its supers are `AFunction`'s,
   less the host's `Runnable`, `Callable`, `Comparator` and
   `Serializable`.
 - `supers` answers the short chain `host_super` lists -- the

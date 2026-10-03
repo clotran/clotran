@@ -3057,3 +3057,10 @@
       f (fn [x a & more] more)]
   (try (count (remove (fn [j] (= (list j 1 2) (apply f [:x :a j 1 2]))) (range 5000)))
        (finally (reset! stop true) @noise)))
+
+;; an arity error names the fn by its path, as clj's demunged class does
+;; (less clj's counters: DEVIATIONS 34)
+(defn fz-arity-outer [] (fn [x] x))
+(defn fz-arity-named [] (fn inner [x] x))
+(mapv #(clojure.string/replace (try (%) (catch clotran.host.throwable e (.getMessage e))) #"--\d+" "")
+      [(fz-arity-outer) (fz-arity-named) #(fz-arity-outer 1)])

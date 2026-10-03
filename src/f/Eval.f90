@@ -4643,22 +4643,12 @@ contains
     integer, intent(in) :: got
     type(gc_value), intent(in) :: fn
     type(gc_value), intent(in) :: roots(:)
-    type(gc_value) :: nm
     character(len=16) :: buf
     character(len=:), allocatable :: who
-    ! temporaries for the deferred-length calls below (share.clj)
-    character(len=:), allocatable :: dlt_1
     write(buf, '(I0)') got
-    who = "fn"
-    if (gc_kind(fn) == OBJ_CLOSURE) then
-       nm = gc_slot(fn, 5)
-       if (nm%tag == GCT_SYM) then
-          block
-             call gc_ref_text(nm%ref, s=dlt_1)
-             who = dlt_1
-          end block
-       end if
-    end if
+    ! the fn as clj's message names it, its class demunged -- user/bar/fn
+    ! where clj says user/bar/fn--134 (its counters, DEVIATIONS 34)
+    call fn_who(fn, who)
     call raise_class("clotran.host.arity_exception", &
          "Wrong number of args (" // trim(buf) // ") passed to: " // who, roots)
   end subroutine raise_arity
