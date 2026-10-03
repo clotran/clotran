@@ -396,9 +396,18 @@ $(B)/libsamplelib.$(SOEXT): $(T)/samplelib.f90 $(B)/samplelib_shims.f90 | $(B) $
 # pure-check under build/, the autocompile pair in build/autocache, one
 # after the other within its target). Plain `make test` runs them in
 # order, as before.
+# The fuzz checks draw from SEED, a new one each make (PLAN 29: the
+# same seed every run tests the same cases every run). A failure prints
+# the seed; `make test SEED=n` runs those cases again. crosscheck hands
+# one seed to both halves, so the two compilers judge the same cases.
+ifndef SEED
+SEED := $(shell od -An -N4 -tu4 /dev/urandom | tr -d ' \n')
+endif
+export SEED
+
 TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(B)/libsamplelib.$(SOEXT) packages examples/embed/heat
 TEST_CHECKS = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-tree check-banner check-torture check-threads \
-	check-autocompile check-break check-libraries check-oracle check-oracle-gc check-pure check-static check-costs check-fuzz check-frames check-fuzz-spec check-fuzz-print check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind
+	check-autocompile check-break check-libraries check-oracle check-oracle-gc check-pure check-static check-costs check-seed check-fuzz check-frames check-fuzz-spec check-fuzz-print check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind
 .PHONY: test $(TEST_CHECKS)
 test: $(TEST_CHECKS)
 $(TEST_CHECKS): $(TEST_DEPS)
@@ -504,48 +513,50 @@ endif
 check-pure:
 	@echo "--- pure Fortran (tier A through gfortran and flang, against clj) ---"
 	scripts/pure-check
+check-seed:
+	@echo "--- the fuzz checks' seed: $(SEED) (make test SEED=$(SEED) runs the same cases) ---"
 check-fuzz:
 	@echo "--- the fuzzer (PLAN 26.9): what it found, 300 generated programs and 4 calls of each spec'd function, each through clj and clotran's flat, tree and compiled modes ---"
-	scripts/fuzz -f test/clj/fuzz-regressions.edn > $(B)/fuzz.out 2>&1 && scripts/fuzz -n 300 -s 1 >> $(B)/fuzz.out 2>&1 && scripts/fuzz --fns 4 -s 1 >> $(B)/fuzz.out 2>&1; s=$$?; cat $(B)/fuzz.out; exit $$s
+	scripts/fuzz -f test/clj/fuzz-regressions.edn > $(B)/fuzz.out 2>&1 && scripts/fuzz -n 300 -s $(SEED) >> $(B)/fuzz.out 2>&1 && scripts/fuzz --fns 4 -s $(SEED) >> $(B)/fuzz.out 2>&1; s=$$?; cat $(B)/fuzz.out; exit $$s
 check-fuzz-macro:
 	@echo "--- core macros (PLAN 29): generated destructuring, checked against core.specs, and threading and conditional macros, through clj and every mode ---"
-	scripts/fuzz-macro -n 150 -s 1 -o $(B)/fuzz-macro.edn > $(B)/fuzz-macro.out 2>&1; s=$$?; cat $(B)/fuzz-macro.out; exit $$s
+	scripts/fuzz-macro -n 150 -s $(SEED) -o $(B)/fuzz-macro.edn > $(B)/fuzz-macro.out 2>&1; s=$$?; cat $(B)/fuzz-macro.out; exit $$s
 check-fuzz-threads:
 	@echo "--- threads (PLAN 29): futures contending on an atom, two refs and an agent; final values and invariants against clj ---"
-	scripts/fuzz-threads -n 20 -s 1 -o $(B)/fuzz-threads.edn > $(B)/fuzz-threads.out 2>&1; s=$$?; cat $(B)/fuzz-threads.out; exit $$s
+	scripts/fuzz-threads -n 20 -s $(SEED) -o $(B)/fuzz-threads.edn > $(B)/fuzz-threads.out 2>&1; s=$$?; cat $(B)/fuzz-threads.out; exit $$s
 check-fuzz-pure:
 	@echo "--- the tier-A compiler (PLAN 29): generated functions as pure Fortran, gfortran and flang, against the interpreter and clj ---"
-	scripts/fuzz-pure -n 30 -s 1 > $(B)/fuzz-pure.out 2>&1; s=$$?; cat $(B)/fuzz-pure.out; exit $$s
+	scripts/fuzz-pure -n 30 -s $(SEED) > $(B)/fuzz-pure.out 2>&1; s=$$?; cat $(B)/fuzz-pure.out; exit $$s
 check-fuzz-gc:
 	@echo "--- the collector and the image (PLAN 29): every generator collecting every 3, 17 and 1009 allocations, and from source ---"
-	scripts/fuzz-gc -n 10 -s 1 > $(B)/fuzz-gc.out 2>&1; s=$$?; cat $(B)/fuzz-gc.out; exit $$s
+	scripts/fuzz-gc -n 10 -s $(SEED) > $(B)/fuzz-gc.out 2>&1; s=$$?; cat $(B)/fuzz-gc.out; exit $$s
 check-fuzz-deps:
 	@echo "--- the package manager (PLAN 29): generated dependency graphs, local and git, conflicts and jars, through clotran-deps against a model of its rules, and loaded ---"
-	scripts/fuzz-deps -n 20 -s 1 > $(B)/fuzz-deps.out 2>&1; s=$$?; cat $(B)/fuzz-deps.out; exit $$s
+	scripts/fuzz-deps -n 20 -s $(SEED) > $(B)/fuzz-deps.out 2>&1; s=$$?; cat $(B)/fuzz-deps.out; exit $$s
 check-fuzz-bind:
 	@echo "--- packages from generated Fortran (PLAN 29): bind-fortran, gfortran and flang, every routine called through the door ---"
-	scripts/fuzz-bind -n 12 -s 1 > $(B)/fuzz-bind.out 2>&1; s=$$?; cat $(B)/fuzz-bind.out; exit $$s
+	scripts/fuzz-bind -n 12 -s $(SEED) > $(B)/fuzz-bind.out 2>&1; s=$$?; cat $(B)/fuzz-bind.out; exit $$s
 check-fuzz-net:
 	@echo "--- sockets and the REPL over one (PLAN 29): random payloads echoed, generated forms through io-prepl against clj ---"
-	scripts/fuzz-net -n 20 -s 1 > $(B)/fuzz-net.out 2>&1; s=$$?; cat $(B)/fuzz-net.out; exit $$s
+	scripts/fuzz-net -n 20 -s $(SEED) > $(B)/fuzz-net.out 2>&1; s=$$?; cat $(B)/fuzz-net.out; exit $$s
 check-fuzz-coll:
 	@echo "--- the collections (PLAN 29): random operation sequences on every kind, across the size boundaries, through clj and every mode, GC torture too ---"
-	scripts/fuzz-coll -n 120 -s 1 -m flat,tree,compiled,torture -o $(B)/fuzz-coll.edn > $(B)/fuzz-coll.out 2>&1; s=$$?; cat $(B)/fuzz-coll.out; exit $$s
+	scripts/fuzz-coll -n 120 -s $(SEED) -m flat,tree,compiled,torture -o $(B)/fuzz-coll.edn > $(B)/fuzz-coll.out 2>&1; s=$$?; cat $(B)/fuzz-coll.out; exit $$s
 check-fuzz-str:
 	@echo "--- strings and regex (PLAN 29): generated strings and patterns, case, trim, search, split, replace, re-find/re-seq/re-matches, through clj and every mode, GC torture too ---"
-	scripts/fuzz-str -n 300 -s 1 -m flat,tree,compiled,torture -o $(B)/fuzz-str.edn > $(B)/fuzz-str.out 2>&1; s=$$?; cat $(B)/fuzz-str.out; exit $$s
+	scripts/fuzz-str -n 300 -s $(SEED) -m flat,tree,compiled,torture -o $(B)/fuzz-str.edn > $(B)/fuzz-str.out 2>&1; s=$$?; cat $(B)/fuzz-str.out; exit $$s
 check-fuzz-num:
 	@echo "--- the numeric tower (PLAN 29): one operation on generated longs, doubles, ratios, BigInts and BigDecimals, value and class, through clj and every mode, GC torture too ---"
-	scripts/fuzz-num -n 300 -s 1 -m flat,tree,compiled,torture -o $(B)/fuzz-num.edn > $(B)/fuzz-num.out 2>&1; s=$$?; cat $(B)/fuzz-num.out; exit $$s
+	scripts/fuzz-num -n 300 -s $(SEED) -m flat,tree,compiled,torture -o $(B)/fuzz-num.edn > $(B)/fuzz-num.out 2>&1; s=$$?; cat $(B)/fuzz-num.out; exit $$s
 check-fuzz-print:
 	@echo "--- the reader and the printer (PLAN 29): generated values read as literals, printed, read back, through clj and every mode, GC torture too ---"
-	scripts/fuzz-print -n 60 -s 1 -o $(B)/fuzz-print.edn > $(B)/fuzz-print.out 2>&1; s=$$?; cat $(B)/fuzz-print.out; exit $$s
+	scripts/fuzz-print -n 60 -s $(SEED) -o $(B)/fuzz-print.edn > $(B)/fuzz-print.out 2>&1; s=$$?; cat $(B)/fuzz-print.out; exit $$s
 check-fuzz-spec:
 	@echo "--- spec itself (PLAN 29): generated spec forms and values, valid?/conform/unform/explain-data/form, through clj and every mode, GC torture too ---"
-	scripts/fuzz-spec -n 20 -k 2 -s 1 -o $(B)/fuzz-spec.edn > $(B)/fuzz-spec.out 2>&1; s=$$?; cat $(B)/fuzz-spec.out; exit $$s
+	scripts/fuzz-spec -n 20 -k 2 -s $(SEED) -o $(B)/fuzz-spec.edn > $(B)/fuzz-spec.out 2>&1; s=$$?; cat $(B)/fuzz-spec.out; exit $$s
 check-frames:
 	@echo "--- frames (PLAN 29): names, locals and lines of breaks and traces, generated, against clj and the generator, through a reload and a recompile; compiled breaks wait for the debug build ---"
-	scripts/fuzz-frames -n 40 -s 1 --modes flat,tree > $(B)/frames.out 2>&1 && scripts/fuzz-frames -n 40 -s 1 --modes compiled --leaves throw >> $(B)/frames.out 2>&1; s=$$?; cat $(B)/frames.out; exit $$s
+	scripts/fuzz-frames -n 40 -s $(SEED) --modes flat,tree > $(B)/frames.out 2>&1 && scripts/fuzz-frames -n 40 -s $(SEED) --modes compiled --leaves throw >> $(B)/frames.out 2>&1; s=$$?; cat $(B)/frames.out; exit $$s
 check-costs:
 	@echo "--- the cost model: objects allocated per element, against test/costs.edn (PLAN step 26) ---"
 	scripts/cost-model > $(B)/costs.out 2>&1; s=$$?; cat $(B)/costs.out; exit $$s
@@ -583,8 +594,9 @@ crosscheck:
 	mkdir -p $(XC_DIR)/flang $(XC_DIR)/gfortran
 	$(XC_SYNC) $(XC_DIR)/flang/
 	$(XC_SYNC) $(XC_DIR)/gfortran/
-	( $(MAKE) -C $(XC_DIR)/flang crosscheck-here FC=flang > $(XC_DIR)/flang.log 2>&1; echo $$? > $(XC_DIR)/flang.rc ) & \
-	( $(MAKE) -C $(XC_DIR)/gfortran crosscheck-here FC=gfortran > $(XC_DIR)/gfortran.log 2>&1; echo $$? > $(XC_DIR)/gfortran.rc ) & \
+	echo "crosscheck: fuzz seed $(SEED) (make crosscheck SEED=$(SEED) repeats it)"; \
+	( $(MAKE) -C $(XC_DIR)/flang crosscheck-here FC=flang SEED=$(SEED) > $(XC_DIR)/flang.log 2>&1; echo $$? > $(XC_DIR)/flang.rc ) & \
+	( $(MAKE) -C $(XC_DIR)/gfortran crosscheck-here FC=gfortran SEED=$(SEED) > $(XC_DIR)/gfortran.log 2>&1; echo $$? > $(XC_DIR)/gfortran.rc ) & \
 	wait; \
 	echo "======== flang ========"; cat $(XC_DIR)/flang.log; \
 	echo "======== gfortran ========"; cat $(XC_DIR)/gfortran.log; \
