@@ -900,6 +900,10 @@ contains
        case (achar(92)); s = s // achar(92) // achar(92)
        case (achar(10)); s = s // achar(92) // "n"
        case (achar(9));  s = s // achar(92) // "t"
+       ! the rest of char-escape-string: return, backspace, formfeed
+       case (achar(13)); s = s // achar(92) // "r"
+       case (achar(8));  s = s // achar(92) // "b"
+       case (achar(12)); s = s // achar(92) // "f"
        case default;     s = s // t(i:i)
        end select
     end do
