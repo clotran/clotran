@@ -3094,3 +3094,6 @@
  (mapv #(try (binding [*read-eval* (not= % "#user.FzRec{:a 1}")] (read-string %))
              (catch clotran.host.throwable e [(class e) (.getMessage e)]))
        ["#user.FzRec{:a 1}" "#user.FzRec[1 2]" "#user.FzRec(1)" "#user.FzRec{\"a\" 1}" "#nope.Zz[1]"])]
+
+;; bigdec of a double with no decimal value, as BigDecimal(double) says it
+(mapv #(try (bigdec %) (catch clotran.host.throwable e [(class e) (.getMessage e)])) [##Inf ##-Inf ##NaN 0.5])
