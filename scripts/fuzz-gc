@@ -5,8 +5,8 @@
 ;;   scripts/fuzz-gc [-n N] [-s SEED]
 ;;
 ;; The generated programs (scripts/fuzz), collections (fuzz-coll), values
-;; printed and read back (fuzz-print), numbers (fuzz-num) and spec forms
-;; (fuzz-spec) run with the collector forced every 3, 17 and 1009
+;; printed and read back (fuzz-print), numbers (fuzz-num), spec forms
+;; (fuzz-spec) and threads (fuzz-threads, every 17 and 1009 only) run with the collector forced every 3, 17 and 1009
 ;; allocations -- a rooting bug shows only when a collection lands
 ;; between two allocations, and where it lands depends on the interval --
 ;; and with core loaded from source instead of the heap image (noimage):
@@ -32,6 +32,9 @@
             [(str scripts "/fuzz-coll") "-n" (str n) "-s" (str seed) "-m" modes "-o" (str out "/coll.edn")]
             [(str scripts "/fuzz-print") "-n" (str n) "-s" (str seed) "-m" modes "-o" (str out "/print.edn")]
             [(str scripts "/fuzz-num") "-n" (str n) "-s" (str seed) "-m" modes "-o" (str out "/num.edn")]
+            ;; threads under the collector: a mutator blocked on a lock while
+            ;; another collects (torture-3 is too slow for futures)
+            [(str scripts "/fuzz-threads") "-n" (str (max 4 (quot n 2))) "-s" (str seed) "-m" "torture-17,torture-1009" "-o" (str out "/threads.edn")]
             [(str scripts "/fuzz-spec") "-n" (str (max 4 (quot n 6))) "-k" "2" "-s" (str seed) "-m" modes "-o" (str out "/spec.edn")]]
       results (doall (for [cmd runs]
                        (do (println "===" (fs/file-name (first cmd)))
