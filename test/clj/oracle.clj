@@ -3076,3 +3076,11 @@
 ;; ClassCastException naming the class, and nil passing as nil
 ;; (scripts/fuzz --fns; it was a RuntimeException, and refused nil)
 (mapv #(try (+ %) (catch clotran.host.throwable e [(class e) (.getMessage e)])) [[] :k "s" nil (list 1) {:a 1}])
+
+;; a long less the smallest long: the difference when it fits, overflow
+;; when it does not -- asked without negating Long/MIN_VALUE, which
+;; Fortran leaves undefined: flang's build answered "long overflow" for
+;; all of these (scripts/fuzz-fn, the crosscheck)
+[(- -5 -9223372036854775808) (- -1 -9223372036854775808)
+ (try (- 0 -9223372036854775808) (catch clotran.host.throwable e (.getMessage e)))
+ (try (- 9223372036854775807 -1) (catch clotran.host.throwable e (.getMessage e))) (- -9223372036854775807 1)]

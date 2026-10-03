@@ -6062,7 +6062,7 @@ contains
        b = strip_meta(gcv_nth(args, i))
        select case (op)
        case (B_ADD); bad = add_overflows(acc, b%ival)
-       case (B_SUB); bad = add_overflows(acc, -b%ival) .or. b%ival == -huge(acc) - 1_gc_ip
+       case (B_SUB); bad = sub_overflows(acc, b%ival)
        case (B_MUL); bad = mul_overflows(acc, b%ival)
        end select
        if (bad) return
@@ -8342,7 +8342,7 @@ contains
                   if (checked) then
                      select case (op)
                      case (B_ADD); hit = add_overflows(acc, b%ival)
-                     case (B_SUB); hit = add_overflows(acc, -b%ival) .or. b%ival == -huge(acc) - 1_gc_ip
+                     case (B_SUB); hit = sub_overflows(acc, b%ival)
                      case (B_MUL); hit = mul_overflows(acc, b%ival)
                      end select
                      if (hit) then
@@ -15180,6 +15180,17 @@ contains
     logical :: bad
     bad = (b > 0 .and. a > huge(a) - b) .or. (b < 0 .and. a < -huge(a) - 1_gc_ip - b)
   end function add_overflows
+
+  ! Whether a - b leaves int64, asked WITHOUT negating b: -b of the
+  ! smallest long is itself an overflow, which Fortran leaves undefined,
+  ! and gfortran and flang answered (- -1 Long/MIN_VALUE) differently --
+  ! flang "long overflow" where the difference is Long/MAX_VALUE
+  ! (scripts/fuzz-fn, the crosscheck)
+  function sub_overflows(a, b) result(bad)
+    integer(gc_ip), intent(in) :: a, b
+    logical :: bad
+    bad = (b < 0 .and. a > huge(a) + b) .or. (b > 0 .and. a < -huge(a) - 1_gc_ip + b)
+  end function sub_overflows
 
   ! A `value`-kind array holding a collection's elements. This is what
   ! to-array answers, because `sort` mutates the array it gets.

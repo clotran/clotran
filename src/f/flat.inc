@@ -1795,8 +1795,7 @@
           if (add_overflows(a, c)) return
           out = gc_int(a + c)
        case (B_SUB)
-          if (c == -huge(c) - 1_gc_ip) return
-          if (add_overflows(a, -c)) return
+          if (sub_overflows(a, c)) return
           out = gc_int(a - c)
        case (B_MUL)
           if (mul_overflows(a, c)) return

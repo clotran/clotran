@@ -2080,6 +2080,13 @@ otherwise. clotran subtracts exactly. Two longs still throw, as the
 docstring says: `(- 0 Long/MIN_VALUE)` overflows in both. Found by
 `scripts/fuzz --fns`.
 
+The same negation reaches two BOXED longs: in clj, `(- x y)` with y
+the smallest long overflows whenever the longs arrive boxed, though
+`(- -5 Long/MIN_VALUE)` is 9223372036854775803 -- which is what clj
+answers when its compiler sees primitive longs. clotran answers the
+difference either way, overflowing only when it does not fit, as clj's
+primitive path does.
+
 **Removal**: none intended -- it would mean overflowing on purpose
 where the exact answer is at hand.
 
