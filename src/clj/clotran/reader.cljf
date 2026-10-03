@@ -12,6 +12,41 @@
 (defn- unread? [x]
   (and (map? x) (:clotran/unread x)))
 
+(defn- read-record
+  "#ns.Rec{...} and #ns.Rec[...], as LispReader.CtorReader.readRecord: a
+  tag whose name has a dot names a class, not a data reader. A map goes
+  through the record's map->Rec (its create), a vector through ->Rec,
+  its count checked; refused when *read-eval* is false. clotran printed
+  records this way and could not read them back (scripts/fuzz-read)."
+  [tag form]
+  (when-not *read-eval*
+    (throw (clotran.host.runtime_exception. "Record construction syntax can only be used when *read-eval* == true")))
+  (let [s (str tag)
+        i (.lastIndexOf s ".")
+        ctor (fn [prefix] (when-let [n (find-ns (symbol (subs s 0 i)))]
+                            (ns-resolve n (symbol (str prefix (subs s (inc i)))))))
+        positional (ctor "->")]
+    (when-not positional
+      (throw (clotran.host.class_not_found_exception. s)))
+    (cond
+      (map? form)
+      (do (doseq [k (keys form) :when (not (keyword? k))]
+            (throw (clotran.host.runtime_exception.
+                    (str "Unreadable defrecord form: key must be of type clotran.host.keyword, got " k))))
+          (if-let [m (ctor "map->")]
+            (m form)
+            (throw (clotran.host.illegal_argument_exception. (str "No matching method create found taking 1 args for class " s)))))
+
+      (vector? form)
+      (let [n (count (first (:arglists (meta positional))))]
+        (when (not= n (count form))
+          (throw (clotran.host.runtime_exception.
+                  (str "Unexpected number of constructor arguments to class " s ": got " (count form)))))
+        (apply positional form))
+
+      :else
+      (throw (clotran.host.runtime_exception. (str "Unreadable constructor form starting with \"#" s "\""))))))
+
 (defn resolve-tags
   "The form with every reader-made tagged literal in it replaced by what
   its data reader answers, innermost first; collections rebuilt only on
@@ -22,7 +57,8 @@
     (let [tag (:tag form)
           inner (resolve-tags (:form form))
           rdr (or (get *data-readers* tag) (get default-data-readers tag))]
-      (cond rdr (rdr inner)
+      (cond (and (symbol? tag) (not (neg? (.indexOf (name tag) ".")))) (read-record tag inner)
+            rdr (rdr inner)
             *default-data-reader-fn* (*default-data-reader-fn* tag inner)
             :else (throw (clotran.host.runtime_exception. (str "No reader function for tag " tag)))))
 

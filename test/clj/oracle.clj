@@ -3084,3 +3084,13 @@
 [(- -5 -9223372036854775808) (- -1 -9223372036854775808)
  (try (- 0 -9223372036854775808) (catch clotran.host.throwable e (.getMessage e)))
  (try (- 9223372036854775807 -1) (catch clotran.host.throwable e (.getMessage e))) (- -9223372036854775807 1)]
+
+;; record literals, as CtorReader reads them: a tag whose name has a dot
+;; is a class -- a map through the record's create, a vector through its
+;; constructor -- refused when *read-eval* is false. clotran printed
+;; #user.FzRec{:a 1} and could not read it back (scripts/fuzz-read)
+(defrecord FzRec [a])
+[(read-string "#user.FzRec{:a 1}") (read-string "#user.FzRec[2]") (:b (read-string "#user.FzRec{:a 1 :b 3}"))
+ (mapv #(try (binding [*read-eval* (not= % "#user.FzRec{:a 1}")] (read-string %))
+             (catch clotran.host.throwable e [(class e) (.getMessage e)]))
+       ["#user.FzRec{:a 1}" "#user.FzRec[1 2]" "#user.FzRec(1)" "#user.FzRec{\"a\" 1}" "#nope.Zz[1]"])]
