@@ -8550,6 +8550,8 @@ contains
               .or. coll%tag == GCT_CHAR) then
             block
               call class_name_of(coll, s=dlt_1)
+              ! the simple name, as RT.nthFrom gives it: the last part
+              dlt_1 = dlt_1(index(dlt_1, ".", back=.true.) + 1:)
               call raise_class("clotran.host.unsupported_operation_exception", "nth not supported on this type: " // dlt_1, &
                    [vs_get(vst, base + 1)])
             end block

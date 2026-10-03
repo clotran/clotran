@@ -282,4 +282,8 @@
       (str/replace #"\\\"([A-Z][A-Za-z]*)\\\"|\"([A-Z][A-Za-z]*)\""
                    (fn [[m esc plain]]
                      (let [t (simple-back (or esc plain))]
-                       (cond (nil? t) m esc (str "\\\"" t "\\\"") :else (str "\"" t "\"")))))))
+                       (cond (nil? t) m esc (str "\\\"" t "\\\"") :else (str "\"" t "\"")))))
+      ;; and after "type: ", as RT's nth and count name a class by its
+      ;; simple name: nth not supported on this type: PersistentHashSet
+      (str/replace #"(type: )([A-Z][A-Za-z]*)"
+                   (fn [[m pre nm]] (if-let [t (simple-back nm)] (str pre t) m)))))
