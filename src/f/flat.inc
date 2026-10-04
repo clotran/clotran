@@ -1425,19 +1425,20 @@
        case (F_RETHROW)
           ! the exception no catch took, on its way as it was: its
           ! message and trace are the ones it was raised with
+          ! the message's text read while its register still holds it:
+          ! set_thrown allocates (the trace's frames), and a collection
+          ! there freed a message held only in a local -- under the
+          ! collector every 97 allocations, a try with a finally that
+          ! rethrew read a freed string and aborted (check-oracle-gc)
           v = vst%vstack(rb + w(2) + 1)
           argv = vst%vstack(rb + w(3) + 1)
+          dlt_1 = ""
+          if (argv%tag == GCT_STR) call gc_ref_text(argv%ref, s=dlt_1)
           vst%vstack(rb + w(2) + 1) = gc_nil()
           vst%vstack(rb + w(3) + 1) = gc_nil()
           call set_thrown(v)
           tctx%has_error = .true.
-          tctx%last_error = ""
-          if (argv%tag == GCT_STR) then
-             block
-                call gc_ref_text(argv%ref, s=dlt_1)
-                tctx%last_error = dlt_1
-             end block
-          end if
+          tctx%last_error = dlt_1
           exit
        case (F_DOT)
           ! w: F_DOT d k a n from site -- dispatched as exec.inc's N_DOT;
