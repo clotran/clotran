@@ -592,7 +592,13 @@
                   (when-let [a (dbl want)] (when-let [b (dbl got)] (<= (abs (- a b)) (Math/ulp (double a)))))))
         (not (and form (str/includes? (pr-str form) "-9223372036854775808")
                   (str/ends-with? (str want) "arithmetic_exception: long overflow")
-                  (re-find #"^\[?-?\d+(/\d+)?" (str got)))))))
+                  (re-find #"^\[?-?\d+(/\d+)?" (str got))))
+        ;; ...and a BigInt less it: clj's wrapped negation answers the
+        ;; BigInt PLUS the smallest long, 2^64 from the exact difference
+        (not (and form (str/includes? (pr-str form) "-9223372036854775808")
+                  (let [lead #(some-> (re-find #"^\[?(-?\d+)N?[ \]]" (str %)) second bigint)
+                        a (lead want) b (lead got)]
+                    (and a b (= (abs (- a b)) 18446744073709551616N))))))))
 
 ;;; ---- shrinking ------------------------------------------------------
 

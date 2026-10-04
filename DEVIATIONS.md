@@ -2085,7 +2085,11 @@ the smallest long overflows whenever the longs arrive boxed, though
 `(- -5 Long/MIN_VALUE)` is 9223372036854775803 -- which is what clj
 answers when its compiler sees primitive longs. clotran answers the
 difference either way, overflowing only when it does not fit, as clj's
-primitive path does.
+primitive path does. A BigInt less the smallest long shows the same
+negation without the throw: clj's `(unchecked-subtract 123456789012345678901234567890N
+Long/MIN_VALUE)` wraps the negation, so it adds the smallest long and
+answers the BigInt less 2^63 -- 2^64 short of the exact difference, the
+BigInt plus 2^63, which clotran answers (`scripts/fuzz-num`).
 
 **Removal**: none intended -- it would mean overflowing on purpose
 where the exact answer is at hand.
