@@ -81,7 +81,9 @@ TESTLDFLAGS = $(TESTLDFLAGS_$(notdir $(FC)))
 # ns; a full build 12 s longer.
 FCFLAGS_gfortran = -frecursive -flto=auto -ffat-lto-objects -O3 -fstack-arrays \
 	--param large-function-insns=200000 --param large-function-growth=2000 --param inline-unit-growth=400
-FCFLAGS_flang =
+# flang is the correctness oracle, and optimised it checks the same code
+# in half the time (measured 2026-10-03: the oracle 71 s unoptimised)
+FCFLAGS_flang = -O2
 # -fno-lto, not merely no -flto: gfortran sees the optimiser's code in a
 # fat object and runs it anyway -- 12 s an abi_test link, 0.1 s without
 TESTLDFLAGS_gfortran = -frecursive -fno-lto
@@ -406,11 +408,27 @@ endif
 export SEED
 
 TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(B)/libsamplelib.$(SOEXT) packages examples/embed/heat
-TEST_CHECKS = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-tree check-banner check-torture check-threads \
-	check-autocompile check-break check-libraries check-oracle check-oracle-gc check-pure check-static check-costs check-seed check-fuzz check-frames check-fuzz-spec check-fuzz-print check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-fn check-fuzz-read check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind
-.PHONY: test $(TEST_CHECKS)
+# THE GATE'S CHECKS, in three groups (James, 2026-10-03: the gate had
+# grown to 15 minutes, every fuzzer run under both compilers):
+#   FIXED   the same every run -- unit, language, oracle, every regression
+#           a fuzzer ever found -- under BOTH compilers, every commit
+#   FUZZ    the language core's fuzzers at a fresh seed, under gfortran
+#           only: a random case finds the same bug under either
+#   NIGHTLY the slow and specialised fuzzers, make test-nightly; and
+#           make fuzz-all, every fuzzer at full size, for a release
+TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-tree check-banner check-torture check-threads \
+	check-autocompile check-break check-libraries check-oracle check-oracle-gc check-pure check-static check-costs check-seed check-fuzz-regressions
+TEST_FUZZ = check-fuzz check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-fn check-fuzz-read check-fuzz-print
+TEST_NIGHTLY = check-frames check-fuzz-spec check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind
+ifeq ($(notdir $(FC)),gfortran)
+TEST_CHECKS = $(TEST_FIXED) $(TEST_FUZZ)
+else
+TEST_CHECKS = $(TEST_FIXED)
+endif
+.PHONY: test test-nightly $(TEST_FIXED) $(TEST_FUZZ) $(TEST_NIGHTLY)
 test: $(TEST_CHECKS)
-$(TEST_CHECKS): $(TEST_DEPS)
+test-nightly: $(TEST_FIXED) $(TEST_FUZZ) $(TEST_NIGHTLY)
+$(TEST_FIXED) $(TEST_FUZZ) $(TEST_NIGHTLY): $(TEST_DEPS)
 check-unit:
 	for t in $(unit-tests); do echo "--- $$t ---"; $(BT)/$$t || exit 1; done
 check-embed:
@@ -515,9 +533,12 @@ check-pure:
 	scripts/pure-check
 check-seed:
 	@echo "--- the fuzz checks' seed: $(SEED) (make test SEED=$(SEED) runs the same cases) ---"
+check-fuzz-regressions:
+	@echo "--- every case a fuzzer has found (test/clj/fuzz-regressions.edn), through clj and clotran's flat, tree and compiled modes ---"
+	scripts/fuzz -f test/clj/fuzz-regressions.edn > $(B)/fuzz-regressions.out 2>&1; s=$$?; cat $(B)/fuzz-regressions.out; exit $$s
 check-fuzz:
-	@echo "--- the fuzzer (PLAN 26.9): what it found, 300 generated programs and 4 calls of each spec'd function, each through clj and clotran's flat, tree and compiled modes ---"
-	scripts/fuzz -f test/clj/fuzz-regressions.edn > $(B)/fuzz.out 2>&1 && scripts/fuzz -n 300 -s $(SEED) >> $(B)/fuzz.out 2>&1 && scripts/fuzz --fns 4 -s $(SEED) >> $(B)/fuzz.out 2>&1; s=$$?; cat $(B)/fuzz.out; exit $$s
+	@echo "--- the fuzzer (PLAN 26.9): 300 generated programs and 4 calls of each spec'd function, each through clj and clotran's flat, tree and compiled modes ---"
+	scripts/fuzz -n 300 -s $(SEED) > $(B)/fuzz.out 2>&1 && scripts/fuzz --fns 4 -s $(SEED) >> $(B)/fuzz.out 2>&1; s=$$?; cat $(B)/fuzz.out; exit $$s
 check-fuzz-macro:
 	@echo "--- core macros (PLAN 29): generated destructuring, checked against core.specs, and threading and conditional macros, through clj and every mode ---"
 	scripts/fuzz-macro -n 150 -s $(SEED) -o $(B)/fuzz-macro.edn > $(B)/fuzz-macro.out 2>&1; s=$$?; cat $(B)/fuzz-macro.out; exit $$s

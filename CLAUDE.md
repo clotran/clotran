@@ -146,8 +146,11 @@ commit as the feature, or in the commit before it. It must have:
 - **a count by kind**, with the first few cases of each kind shown, and
   exit 1 on any finding.
 - **a place in the build.** A `make` target. Once the fuzzer is green,
-  a seeded run joins `make test`. Every case it ever found joins a
-  regressions file that runs every time (`test/clj/fuzz-regressions.edn`).
+  a seeded run joins the gate: `TEST_FUZZ` (every commit, gfortran) if
+  it fuzzes the language core, else `TEST_NIGHTLY` (`make test-nightly`).
+  Every case it ever found joins a regressions file that runs every
+  commit under both compilers (`test/clj/fuzz-regressions.edn`); `make
+  fuzz-all` runs every fuzzer at full size, for a release candidate.
 
 The fuzzers have specs too. When a fuzzer's input language is itself
 a spec, as with `scripts/fuzz_specs.clj` and spec's own forms, that
