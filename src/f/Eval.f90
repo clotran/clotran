@@ -2709,14 +2709,20 @@ contains
     vst => gc_my_stack()
     out = gc_nil()
     found = .false.
-    m = inst_method(inst, name)
-    if (gc_kind(m) /= OBJ_CLOSURE) return
-    found = .true.
-
+    ! the arguments on the stack BEFORE the method is looked up: finding
+    ! it makes the name's text, an allocation, and a caller's rest_args
+    ! is often a fresh vector nothing else holds -- (compare a b) of a
+    ! deftype handed compareTo a freed vector's reuse
     base = vs_enter(vst, 4)
     call vs_set(vst, base + 1, inst)
-    call vs_set(vst, base + 2, m)
     call vs_set(vst, base + 3, rest_args)
+    m = inst_method(vs_get(vst, base + 1), name)
+    if (gc_kind(m) /= OBJ_CLOSURE) then
+       call vs_leave(vst, base)
+       return
+    end if
+    found = .true.
+    call vs_set(vst, base + 2, m)
     tmp = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
     call vs_set(vst, base + 4, tmp)
     tmp = gcv_conj(vs_get(vst, base + 4), vs_get(vst, base + 1), &

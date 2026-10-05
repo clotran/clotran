@@ -38,6 +38,11 @@
 (dotimes [i 10] (send ag assoc i (str "w" i)))
 (await ag)
 (def refs [@at @ag])
+;; a deftype's compareTo through compare: inst_invoke found the method --
+;; making its name's text -- before rooting the arguments compare had
+;; just built, and compareTo was handed the freed vector's reuse
+(deftype TorC [n] clotran.host.comparable (compareTo [_ o] (compare n (.-n ^TorC o))))
+(def cmps [(compare (TorC. 1) (TorC. 2)) (mapv #(.-n %) (sort [(TorC. 3) (TorC. 1) (TorC. 2)]))])
 
 (if (and (= r1 '[{:a 1, :b [2 3]} (f {:c 4}) #{5} {:d {:e 6}}])
          (= r2 {:x [1 {:y 2}]})
@@ -45,7 +50,8 @@
          (= (re-find (first rx1) "xab") ["ab" "b"])
          (= walks [(range 60) true '([69 69] [68 68] [67 67]) '([40 40] [41 41] [42 42]) 2415 (range 0 90 3)
                    (vec (range 69)) [10 11 12 13] [4 3 2 1 0] \ö "lo wör"])
+         (= cmps [-1 [1 2 3]])
          (= refs [(into {} (map (fn [i] [i (str "v" i)]) (range 30))) (into {} (map (fn [i] [i (str "w" i)]) (range 10)))]))
   (println "TORTURE CHECK PASSED")
-  (println "FAIL - under torture:" (pr-str r1) (pr-str r2) (pr-str walks) (pr-str refs)))
+  (println "FAIL - under torture:" (pr-str r1) (pr-str r2) (pr-str walks) (pr-str refs) (pr-str cmps)))
 (shutdown-agents)
