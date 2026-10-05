@@ -5074,7 +5074,11 @@ contains
           return
        end if
     case default
-       r = apply(gc_slot(vs_get(vst, base + 1), 1), no_args())
+       ! the thunk through its call table, its frame filled from no
+       ! slots: what apply would do, without the empty argument vector
+       ! and bind_closure -- once for every element of every lazy seq
+       ! clojure.core writes (take, map, filter...)
+       r = gce_apply_slots(vst, gc_slot(vs_get(vst, base + 1), 1), base + 1, 0)
     end select
     ! the answer settled into the cell (force_settle), rooted there
     call force_settle(vs_get(vst, base + 1), r)
