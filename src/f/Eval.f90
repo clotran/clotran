@@ -7643,6 +7643,11 @@ contains
             else if (flat_int_op(bid, 2, vs_get(vst, argbase + 1), vs_get(vst, argbase + 2), out)) then
                call vs_leave(vst, base)
                return
+            else if (flat_cons_op(bid, 2, vs_get(vst, argbase + 1), vs_get(vst, argbase + 2), out)) then
+               ! cons onto nil, a list or a lazy seq: the arguments are the
+               ! caller's slots, rooted where they lie while it allocates
+               call vs_leave(vst, base)
+               return
             end if
          end if
        end block
