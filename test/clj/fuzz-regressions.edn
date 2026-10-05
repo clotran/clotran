@@ -92,4 +92,7 @@
  ;; conj onto a map of a seq holding nil: clj's host reads the nil's key
  ;; and throws NullPointerException, not a cast error (scripts/fuzz-macro)
  (conj {} (quote (nil))) (into {} [(quote (nil))]) ((fn [{:keys [a]}] a) (quote ({:a 1} {:b 2} (nil))))
+ ;; keys and vals of what is not seqable throw, as RT.seq does; they
+ ;; answered nil (scripts/fuzz-macro: clojure.set/join on a string)
+ (keys 1) (vals 1) (keys \a) (clojure.set/join "-" [1 2])
 ]

@@ -8738,6 +8738,15 @@ contains
           block
             type(gc_value) :: w, e
             integer :: kb
+            ! RT.seq of what is not seqable throws: (keys 1) and (keys \c)
+            ! answered nil (scripts/fuzz-macro, clojure.set/join on a string)
+            if (.not. seqable_quiet(a)) then
+               call class_name_of(a, s=dlt_1)
+               call raise_class("clotran.host.illegal_argument_exception", &
+                    "Don't know how to create ISeq from: " // dlt_1, [vs_get(vst, base + 1)])
+               call vs_leave(vst, base)
+               return
+            end if
             kb = vs_enter(vst, 2)
             w = to_seq(a, [vs_get(vst, base + 1)])
             call vs_set(vst, kb + 1, w)
