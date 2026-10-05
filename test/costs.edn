@@ -12,9 +12,9 @@
  {:label "walk (seq (range n)) by next" :form "(loop [s (seq (range n))] (when s (recur (next s))))" :allocs 1.0}
  {:label "walk (take n (iterate inc 0)) by next" :form "(loop [s (take n (iterate inc 0))] (when s (recur (next s))))" :allocs 4.0}
  {:label "apply + (take n (range))" :form "(apply + (take n (range)))" :allocs 4.0}
- {:label "reduce + (take n (range))" :form "(reduce + (take n (range)))" :allocs 5.0}
- {:label "reduce + (map inc (range n))" :form "(reduce + (map inc (range n)))" :allocs 2.84}
+ {:label "reduce + (take n (range))" :form "(reduce + (take n (range)))" :allocs 4.0}
+ {:label "reduce + (map inc (range n))" :form "(reduce + (map inc (range n)))" :allocs 0.72}
  {:label "transduce (map inc) + (range n)" :form "(transduce (map inc) + (range n))" :allocs 0.0}
  {:label "into [] (range n)" :form "(count (into [] (range n)))" :allocs 0.03}
- {:label "dorun (filter even? (range n))" :form "(dorun (filter even? (range n)))" :allocs 3.78}
+ {:label "dorun (filter even? (range n))" :form "(dorun (filter even? (range n)))" :allocs 1.66}
 ]

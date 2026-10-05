@@ -1040,6 +1040,7 @@
                if (n == 1) done = flat_seq_op(int(bid1) - 1, vst%vstack(rb + w(4) + 1), newframe)
                if (.not. done) done = flat_int_op(int(bid1) - 1, n, vst%vstack(rb + w(4) + 1), argv, newframe)
                if (.not. done) done = flat_cons_op(int(bid1) - 1, n, vst%vstack(rb + w(4) + 1), argv, newframe)
+               if (.not. done) done = flat_coll_op(int(bid1) - 1, n, vst%vstack(rb + w(4) + 1), argv, newframe)
                if (done) then
                   vst%vstack(rb + w(4) + 1) = gc_nil()
                   if (n == 2) vst%vstack(rb + w(4) + 1 + 1) = gc_nil()
@@ -1215,7 +1216,8 @@
                             argv = gc_nil()
                             if (n == 2) argv = vst%vstack(rb + w(4) + 1 + 1)
                             if (flat_int_op(gc_i1(wb), n, vst%vstack(rb + w(4) + 1), argv, newframe) .or. &
-                                flat_cons_op(gc_i1(wb), n, vst%vstack(rb + w(4) + 1), argv, newframe)) then
+                                flat_cons_op(gc_i1(wb), n, vst%vstack(rb + w(4) + 1), argv, newframe) .or. &
+                                flat_coll_op(gc_i1(wb), n, vst%vstack(rb + w(4) + 1), argv, newframe)) then
                                vst%vstack(rb + w(4) + 1) = gc_nil()
                                if (n == 2) vst%vstack(rb + w(4) + 1 + 1) = gc_nil()
                                call vs_set(vst, b + 3, gc_nil())
@@ -1387,6 +1389,7 @@
              if (n == 1) done = flat_seq_op(gc_i1(fnv), v, newframe)
              if (.not. done) done = flat_int_op(gc_i1(fnv), n, v, argv, newframe)
              if (.not. done) done = flat_cons_op(gc_i1(fnv), n, v, argv, newframe)
+             if (.not. done) done = flat_coll_op(gc_i1(fnv), n, v, argv, newframe)
              if (done) then
                 ! a temporary is cleared; a local read in place is not
                 if (w(7) == w(4)) vst%vstack(rb + w(4) + 1) = gc_nil()
@@ -1525,6 +1528,18 @@
                 if (gc_i1(fnv) /= B_RTFN .and. gc_i1(fnv) /= B_UUIDFN .and. &
                      gc_kind(argv) /= OBJ_INST .and. .not. gcn_is_var(argv)) then
                    n = w(5) + 1
+                   ! (.nth chunk i), (.add buffer x): a chunk loop's two,
+                   ! with no argument vector
+                   if (n == 2) then
+                      if (flat_coll_op(gc_i1(fnv), n, vst%vstack(rb + w(4) + 1), &
+                           vst%vstack(rb + w(4) + 2), newframe)) then
+                         vst%vstack(rb + w(4) + 1) = gc_nil()
+                         vst%vstack(rb + w(4) + 2) = gc_nil()
+                         vst%vstack(rb + w(2) + 1) = newframe
+                         pc = pc + FW
+                         cycle
+                      end if
+                   end if
                    wb = gc_nil()
                    call vs_set(vst, b + 3, fnv)
                    if (.not. flat_builtin(w(7))) then
@@ -1725,6 +1740,38 @@
        end select
        return
     end if
+    ! a vector's seq view (i2 0): an index into the vector, so first
+    ! reads it, next is the view one on, and seq is itself while any is
+    ! left -- sq_first, sq_rest and to_seq's answers
+    if (gc_kind(x) == OBJ_SEQ) then
+       t = gc_slot(x, 1)
+       if (gc_i2(x) /= 0 .or. .not. gcv_is(t)) return
+       select case (id)
+       case (B_FIRST)
+          out = gc_nil()
+          if (gc_i1(x) < gcv_count(t)) out = gcv_nth(t, gc_i1(x))
+       case (B_SEQ)
+          out = gc_nil()
+          if (gc_i1(x) < gcv_count(t)) out = x
+       case (B_NEXT)
+          out = gc_nil()
+          if (gc_i1(x) + 1 < gcv_count(t)) then
+             out = gc_obj(OBJ_SEQ, [t], [x])
+             call gc_set_i1(out, gc_i1(x) + 1)
+          end if
+       case default
+          return
+       end select
+       done = .true.
+       return
+    end if
+    ! a chunked cons's first is its chunk's
+    if (gc_kind(x) == OBJ_CHUNKSEQ) then
+       if (id /= B_FIRST) return
+       out = chunk_nth(gc_slot(x, 1), 0)
+       done = .true.
+       return
+    end if
     if (gc_kind(x) /= OBJ_LAZY) return
     st = gc_i1(x)
     select case (id)
@@ -1845,6 +1892,57 @@
     end if
     done = .true.
   end function flat_cons_op
+
+  ! (nth chunk-or-vector i) with i a machine integer in range,
+  ! (.add chunk-buffer x) with room, (instance? C x), and bit-and, -or
+  ! and -xor of two machine integers: what call_builtin answers there.
+  ! False for anything else -- out of range, which throws, a seq to
+  ! walk, a full buffer, a BigInt -- and the builtin decides.
+  logical function flat_coll_op(id, n, x, y, out) result(done)
+    integer, intent(in) :: id, n
+    type(gc_value), intent(in) :: x, y
+    type(gc_value), intent(inout) :: out
+    type(gc_value) :: c, run
+    integer :: cnt
+    done = .false.
+    if (n /= 2) return
+    if (id == B_NTH) then
+       if (y%tag /= GCT_INT) return
+       c = strip_meta(x)
+       if (gc_kind(c) == OBJ_CHUNK) then
+          if (y%ival < 0 .or. y%ival >= chunk_count(c)) return
+          out = chunk_nth(c, int(y%ival))
+       else if (gcv_is(c)) then
+          if (y%ival < 0 .or. y%ival >= gcv_count(c)) return
+          out = gcv_nth(c, int(y%ival))
+       else
+          return
+       end if
+       done = .true.
+    else if (id == B_INSTANCE) then
+       if (x%tag /= GCT_CLASS) return
+       out = gc_bool(is_instance(x, y))
+       done = .true.
+    else if (id == B_BITAND .or. id == B_BITOR .or. id == B_BITXOR) then
+       if (x%tag /= GCT_INT .or. y%tag /= GCT_INT) return
+       select case (id)
+       case (B_BITAND); out = gc_int(iand(x%ival, y%ival))
+       case (B_BITOR);  out = gc_int(ior(x%ival, y%ival))
+       case default;    out = gc_int(ieor(x%ival, y%ival))
+       end select
+       done = .true.
+    else if (id == B_CHUNK_ADD) then
+       c = strip_meta(x)
+       if (gc_kind(c) /= OBJ_CHUNKBUF) return
+       run = gc_slot(c, 1)
+       cnt = gc_i1(c)
+       if (cnt >= gc_vec_len(run)) return
+       call gc_vec_set(run, cnt + 1, y)
+       call gc_set_i1(c, cnt + 1)
+       out = gc_nil()
+       done = .true.
+    end if
+  end function flat_coll_op
 
   logical function flat_int_op(id, n, x, y, out) result(done)
     integer, intent(in) :: id, n
