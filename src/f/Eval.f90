@@ -3513,6 +3513,17 @@ contains
        out = gc_obj(OBJ_LAZY, [vs_get(vst, base + 3), gc_nil(), gc_nil()], &
             [vs_get(vst, base + 3)])
        call gc_set_i1(out, LAZY_PENDING)
+    ! then a chunked seq's two, once a chunk of every map and filter
+    else if (cname == "clotran.host.chunk_buffer") then
+       ! (ChunkBuffer. capacity): a run to fill, count in i1
+       thunk = gc_vec(max(int_of(nth_or_nil(vs_get(vst, base + 1), 0)), 1), [vs_get(vst, base + 1)])
+       call vs_set(vst, base + 3, thunk)
+       out = gc_obj(OBJ_CHUNKBUF, [vs_get(vst, base + 3)], [vs_get(vst, base + 3)])
+       call gc_set_i1(out, 0)
+    else if (cname == "clotran.host.chunked_cons") then
+       ! (ChunkedCons. chunk more)
+       out = gc_obj(OBJ_CHUNKSEQ, [nth_or_nil(vs_get(vst, base + 1), 0), nth_or_nil(vs_get(vst, base + 1), 1), gc_nil()], &
+            [vs_get(vst, base + 1)])
     else if (cname == "clotran.host.array_blocking_queue" .or. cname == "clotran.host.array_blocking_queue") then
        ! A queue is a task mailbox: an atom holding a vector. The
        ! capacity argument is read and ignored -- nothing here drops.
@@ -3681,16 +3692,6 @@ contains
        end if
        call vs_set(vst, base + 3, thunk)
        out = gc_obj(OBJ_SB, [vs_get(vst, base + 3)], [vs_get(vst, base + 3)])
-    else if (cname == "clotran.host.chunk_buffer") then
-       ! (ChunkBuffer. capacity): a run to fill, count in i1
-       thunk = gc_vec(max(int_of(nth_or_nil(vs_get(vst, base + 1), 0)), 1), [vs_get(vst, base + 1)])
-       call vs_set(vst, base + 3, thunk)
-       out = gc_obj(OBJ_CHUNKBUF, [vs_get(vst, base + 3)], [vs_get(vst, base + 3)])
-       call gc_set_i1(out, 0)
-    else if (cname == "clotran.host.chunked_cons") then
-       ! (ChunkedCons. chunk more)
-       out = gc_obj(OBJ_CHUNKSEQ, [nth_or_nil(vs_get(vst, base + 1), 0), nth_or_nil(vs_get(vst, base + 1), 1), gc_nil()], &
-            [vs_get(vst, base + 1)])
     else if (cname == "clotran.host.multi_fn") then
        ! (new MultiFn name dispatch-fn default hierarchy): name, the
        ! dispatch fn, the default value and the method table in slots
@@ -18431,7 +18432,8 @@ contains
     case ("clotran.host.i_chunk", "clotran.host.array_chunk"); yes = (gc_kind(strip_meta(v)) == OBJ_CHUNK)
     case ("clotran.host.chunk_buffer"); yes = (gc_kind(strip_meta(v)) == OBJ_CHUNKBUF)
     case ("clotran.host.chunked_cons"); yes = (gc_kind(strip_meta(v)) == OBJ_CHUNKSEQ)
-    case ("clotran.host.persistent_vector_chunked_seq", "clotran.host.cons"); yes = (t == "seq")
+    case ("clotran.host.cons", "clotran.host.a_seq"); yes = (t == "seq")
+    case ("clotran.host.persistent_vector_chunked_seq"); yes = (t == "seq") .and. is_chunked_seq(strip_meta(v))
     case ("clotran.host.atom"); yes = (t == "atom" .and. gc_i1(strip_meta(v)) == 0)
     case ("clotran.host.ref"); yes = (t == "atom" .and. gc_i1(strip_meta(v)) == 1)
     case ("clotran.host.agent"); yes = (t == "atom" .and. gc_i1(strip_meta(v)) == 2)
@@ -18562,22 +18564,41 @@ contains
     type(gc_value), intent(in) :: coll
     type(gc_value), intent(in) :: roots(:)
     integer, intent(in), optional :: limit   ! more elements than this is an error, not a hang
-    type(gc_value) :: out, walk, item
-    integer :: base, k
+    type(gc_value) :: out, walk, item, ch, mo
+    type(gc_value) :: none(0)
+    integer :: base, k, i, n
     character(len=16) :: buf
 
     vst => gc_my_stack()
-    base = vs_enter(vst, 2)
+    ! the caller's roots on the stack once, so no call below is handed
+    ! an array built for it -- a heap temporary each, several an element
+    n = size(roots)
+    base = vs_enter(vst, 4 + n)
+    do i = 1, n
+       call vs_set(vst, base + 4 + i, roots(i))
+    end do
     ! appended into a transient (PersistentVector.f90) and built once:
     ! conj per element copied a path of the tree every time
-    out = gcv_empty(roots)
+    out = gcv_empty(none)
     call vs_set(vst, base + 1, out)
-    out = gcv_transient(vs_get(vst, base + 1), roots)
+    out = gcv_transient(vs_get(vst, base + 1), none)
     call vs_set(vst, base + 1, out)
-    walk = to_seq(coll, [roots, vs_get(vst, base + 1)])
+    walk = to_seq(coll, none)
     call vs_set(vst, base + 2, walk)
     k = 0
     do while (walk%tag /= GCT_NIL)
+       ! a chunked seq a chunk at a time, as clj's reduce over one
+       if (.not. present(limit) .and. is_chunked_seq(strip_meta(walk))) then
+          call chunked_parts(walk, ch, mo, none)
+          call vs_set(vst, base + 3, ch)
+          call vs_set(vst, base + 4, mo)
+          do i = 0, chunk_count(vs_get(vst, base + 3)) - 1
+             call gcv_tconj(vs_get(vst, base + 1), chunk_nth(vs_get(vst, base + 3), i), none)
+          end do
+          walk = to_seq(vs_get(vst, base + 4), none)
+          call vs_set(vst, base + 2, walk)
+          cycle
+       end if
        if (present(limit)) then
           k = k + 1
           if (k > limit) then
@@ -18586,12 +18607,14 @@ contains
              exit
           end if
        end if
-       item = sq_first(vs_get(vst, base + 2), [roots, vs_get(vst, base + 1)])
-       call gcv_tconj(vs_get(vst, base + 1), item, [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
-       walk = to_seq(sq_rest(vs_get(vst, base + 2), [roots, vs_get(vst, base + 1)]), [roots, vs_get(vst, base + 1)])
+       item = sq_first(vs_get(vst, base + 2), none)
+       call gcv_tconj(vs_get(vst, base + 1), item, none)
+       walk = sq_rest(vs_get(vst, base + 2), none)
+       call vs_set(vst, base + 3, walk)
+       walk = to_seq(vs_get(vst, base + 3), none)
        call vs_set(vst, base + 2, walk)
     end do
-    out = gcv_persistent(vs_get(vst, base + 1), [roots, vs_get(vst, base + 1)])
+    out = gcv_persistent(vs_get(vst, base + 1), none)
     call vs_leave(vst, base)
   end function coll_to_vector
 
@@ -19062,12 +19085,11 @@ contains
          chain(1:3) = [character(len=36) :: "clotran.host.i_persistent_list", "clotran.host.i_seq", &
               "clotran.host.i_persistent_collection"]
          cnt = 3
-      ! PersistentVector$ChunkedSeq is the class EVERY seq view answers
-      ! here (DEVIATIONS 34) -- a map's and a string's too, which are not
-      ! chunked -- so it may not claim IChunkedSeq: InternalReduce's
-      ! IChunkedSeq body recurs on a seq that is not chunked, and the
-      ! dispatch sent it straight back, forever
-      case ("clotran.host.lazy_seq", "clotran.host.cons", "clotran.host.persistent_vector_chunked_seq")
+      ! a map's, set's or string's seq is not chunked, and is an ASeq
+      ! (class_name_of); only a vector's claims IChunkedSeq, below --
+      ! InternalReduce's IChunkedSeq body recurs on what it is handed,
+      ! and an unchunked seq dispatched there came straight back, forever
+      case ("clotran.host.lazy_seq", "clotran.host.cons", "clotran.host.a_seq")
          chain(1:2) = [character(len=36) :: "clotran.host.i_seq", "clotran.host.i_persistent_collection"]
          cnt = 2
       ! THE CHUNKED ONES say so, as clj's do: InternalReduce is
@@ -19075,7 +19097,8 @@ contains
       ! (range n)) dispatched to Object and walked element by element --
       ! 40 interpreted steps an element where the chunk's own .reduce
       ! does the work
-      case ("clotran.host.long_range", "clotran.host.range", "clotran.host.chunked_cons")
+      case ("clotran.host.long_range", "clotran.host.range", "clotran.host.chunked_cons", &
+            "clotran.host.persistent_vector_chunked_seq")
          chain(1:3) = [character(len=36) :: "clotran.host.i_chunked_seq", "clotran.host.i_seq", "clotran.host.i_persistent_collection"]
          cnt = 3
       case ("clotran.host.var", "clotran.host.atom", "clotran.host.delay", "clotran.host.ref", "clotran.host.agent", &
@@ -19261,7 +19284,11 @@ contains
           end if
           ! iterate's cells, head and every tail, are Iterate
           if (gc_i2(v) == 2) s = "clotran.host.iterate"
-       case (OBJ_SEQ);     s = "clotran.host.persistent_vector_chunked_seq"
+       ! a vector's seq is chunked, as clj's is; a snapshot of a map, set
+       ! or string is not, and answers the ASeq all of clj's are
+       case (OBJ_SEQ)
+          s = "clotran.host.a_seq"
+          if (is_chunked_seq(v)) s = "clotran.host.persistent_vector_chunked_seq"
        case (OBJ_CHUNKSEQ); s = "clotran.host.chunked_cons"
        case (OBJ_CHUNK);   s = "clotran.host.array_chunk"
        case (OBJ_CHUNKBUF); s = "clotran.host.chunk_buffer"

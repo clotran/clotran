@@ -2498,7 +2498,10 @@
 (let [p clojure.core.protocols/InternalReduce, ic (get (:impls p) clotran.host.i_chunked_seq)]
   [(= ic (find-protocol-impl p (seq (map inc (range 3)))))
    (= ic (find-protocol-impl p (seq (range 3))))
-   (= ic (find-protocol-impl p (cons 1 nil)))])
+   (= ic (find-protocol-impl p (cons 1 nil)))
+   (= ic (find-protocol-impl p (seq [1 2 3])))
+   (= ic (find-protocol-impl p (seq {1 2})))
+   (= ic (find-protocol-impl p (seq "ab")))])
 (reduce + (map inc (range 1000)))
 ;; a seq that is NOT chunked reduces too (it once looped forever)
 [(reduce conj [:init] (seq {1 1 2 2})) (reduce conj [:init] (seq "ab")) (reduce conj [:init] (seq (sorted-map 1 1)))]

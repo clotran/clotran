@@ -1195,8 +1195,11 @@ What still differs from a `Class`:
 
 - clotran has one map, one set and one seq view where clj has many, so
   the most common clj class stands for each: every map is a
-  `clotran.host.persistent_array_map`, every `seq` a
-  `clotran.host.persistent_vector_chunked_seq`. An array's class is its
+  `clotran.host.persistent_array_map`. A vector's `seq` is a
+  `clotran.host.persistent_vector_chunked_seq`, as in clj; a map's, a
+  set's and a string's are each a `clotran.host.a_seq`, the superclass
+  of clj's `PersistentArrayMap$Seq`, `APersistentMap$KeySeq` and
+  `StringSeq`. An array's class is its
   element kind and rank, `int/1`.
 - a function's class is named as clj's compiler names it,
   `clojure.core$int_QMARK_`, `user$foo_bar$hop` (and as cljs names its
@@ -1218,7 +1221,10 @@ What still differs from a `Class`:
   over `(map f (range n))` walked element by element (the oracle now
   checks the pick). With no superclass chain (below), CollReduce picks
   Object where Clojure picks ASeq for a ChunkedCons -- the same body,
-  `(seq-reduce coll f val)`, so the same answer.
+  `(seq-reduce coll f val)`, so the same answer. Until 2026-10-05 a
+  vector's seq could not claim `IChunkedSeq` either, because every seq
+  view shared its class, and `(reduce + (seq v))` walked element by
+  element, 985 ms a 10^6 where the chunks take 81.
 - there is no `Class` object graph: no `getSuperclass`, no
   `getDeclaredMethods`, nothing reflective. A class here is a NAME
   with the runtime's own answers behind it.

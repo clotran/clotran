@@ -1910,7 +1910,9 @@
     else
        out = eval_new(dlt_1, vs_get(vst, base + 2))
     end if
-    if (.not. tctx%has_error) then
+    ! only a deftype's instance is cached: a host class (a chunk
+    ! buffer, once a chunk) has no type to look up by name
+    if (.not. tctx%has_error .and. gc_kind(out) == OBJ_INST) then
        call vs_set(vst, base + 2, out)
        ty = find_type(dlt_1)
        if (gc_kind(ty) == OBJ_TYPE .and. gc_kind(vs_get(vst, base + 2)) == OBJ_INST) then
