@@ -1749,6 +1749,7 @@ contains
     logical :: entered, stopped
     type(gc_value) :: none(0)
     type(gc_stack), pointer :: s
+    if (gc_every > 0 .and. .not. gc_no_collect) call every_tick(roots, none)
     if (batching()) then
        s => my_stack()
        if (fast_ok(s) .and. s%n_str_b == 0 .and. s%cp_str < s%np_str) call pend_refill_str(s)
@@ -1801,6 +1802,25 @@ contains
     call heap_leave(entered)
   end function new_text
 
+  ! CLOTRAN_GC_EVERY=N: a collection at every Nth allocation of ANY kind
+  ! -- an object, a vector or a text. Objects alone left a value held
+  ! across a string's allocation unseen: swap! kept f's answer in a local
+  ! while the validator's key was made, and a collection there freed it
+  ! (spec's registry atom then held whatever reused the slot), and every
+  ! torture run passed. `held` are the caller's roots and `extra` what it
+  ! is about to store.
+  subroutine every_tick(held, extra)
+    type(gc_value), intent(in) :: held(:), extra(:)
+    logical :: entered, stopped
+    every_count = every_count + 1
+    if (mod(every_count, gc_every) /= 0) return
+    call heap_enter(held, extra, entered)
+    call world_stop(stopped)
+    call collect_auto(held)
+    call world_start(stopped)
+    call heap_leave(entered)
+  end subroutine every_tick
+
   ! An object of the given kind, with up to OBJ_SLOTS initial slots.
   function gc_obj(kind, slots, roots) result(v)
     integer, intent(in) :: kind
@@ -1812,18 +1832,11 @@ contains
     type(gc_stack), pointer :: s
 
     if (gc_every > 0 .and. .not. gc_no_collect) then
-       every_count = every_count + 1
-       if (mod(every_count, gc_every) == 0) then
-          call heap_enter(roots, slots, entered)
-          call world_stop(stopped)
-          allocate(all_roots(size(roots) + size(slots)))
-          all_roots(1:size(roots)) = roots
-          all_roots(size(roots) + 1:) = slots
-          call collect_auto(all_roots)
-          deallocate(all_roots)
-          call world_start(stopped)
-          call heap_leave(entered)
-       end if
+       allocate(all_roots(size(roots) + size(slots)))
+       all_roots(1:size(roots)) = roots
+       all_roots(size(roots) + 1:) = slots
+       call every_tick(all_roots, slots)
+       deallocate(all_roots)
     end if
     if (batching()) then
        s => my_stack()
@@ -1902,6 +1915,7 @@ contains
     logical :: entered, stopped
     type(gc_value) :: none(0)
     type(gc_stack), pointer :: s
+    if (gc_every > 0 .and. .not. gc_no_collect) call every_tick(roots, none)
 
     if (batching()) then
        s => my_stack()

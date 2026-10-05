@@ -12827,16 +12827,21 @@ contains
             end if
             out = apply(gcv_nth(args, 1), vs_get(vst, lb + 2))
             if (tctx%has_error) exit
+            ! f's answer on the stack before the validator is looked up:
+            ! ref_fn_get makes its key, an allocation, and a collection
+            ! there freed the new value and the atom took the freed slot
+            ! -- spec's registry became whatever reused it
+            call vs_set(vst, lb + 3, out)
             if (.not. validate_ref(vs_get(vst, lb + 1), &
-                 ref_fn_get(vs_get(vst, lb + 1), "validator", [vs_get(vst, lb + 1)]), &
-                 out, [vs_get(vst, lb + 1), vs_get(vst, lb + 4)])) then
+                 ref_fn_get(vs_get(vst, lb + 1), "validator", [vs_get(vst, lb + 1), vs_get(vst, lb + 3)]), &
+                 vs_get(vst, lb + 3), [vs_get(vst, lb + 1), vs_get(vst, lb + 3), vs_get(vst, lb + 4)])) then
                call vs_leave(vst, lb)
                call vs_leave(vst, base)
                return
             end if
+            out = vs_get(vst, lb + 3)
             if (gc_cell_cas(vs_get(vst, lb + 1), 1, vs_get(vst, lb + 4), out)) then
                call gc_state_notify()   ! a message sent, say: a wait may be over
-               call vs_set(vst, lb + 3, out)
                call notify_watches(vs_get(vst, lb + 1), vs_get(vst, lb + 4), vs_get(vst, lb + 3), &
                     [vs_get(vst, lb + 2), vs_get(vst, lb + 3)])
                out = vs_get(vst, lb + 3)
@@ -13819,6 +13824,9 @@ contains
             ! the error handler's own sends go out at once
             call gc_global_keep(tctx%nested_root, gcv_empty([vs_get(vst, base + 1)]))
             res = apply(gcv_nth(args, 1), vs_get(vst, base + 3))
+            ! the new state on the stack: the validator's lookup below
+            ! allocates (as swap!'s, above)
+            call vs_set(vst, base + 3, res)
             if (tctx%has_error) then
                call gc_global_keep(tctx%nested_root, gc_nil())
                ! The error is held HERE while the handler runs, and is the
@@ -13850,8 +13858,8 @@ contains
                  call vs_leave(vst, eb)
                end block
             else if (.not. validate_ref(vs_get(vst, base + 2), &
-                 ref_fn_get(vs_get(vst, base + 2), "validator", [vs_get(vst, base + 1)]), &
-                 res, [vs_get(vst, base + 1)])) then
+                 ref_fn_get(vs_get(vst, base + 2), "validator", [vs_get(vst, base + 1), vs_get(vst, base + 3)]), &
+                 vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 3)])) then
                ! A REJECTED STATE IS AN AGENT ERROR, handled the
                ! same way a thrown action is.
                call gc_global_keep(tctx%nested_root, gc_nil())
@@ -13869,6 +13877,7 @@ contains
             else
                ! the new state, and the agent's watches, as Agent.setState
                ! notifies them
+               res = vs_get(vst, base + 3)
                call vs_set(vst, base + 3, gc_slot(vs_get(vst, base + 2), 1))
                call gc_set_slot(vs_get(vst, base + 2), 1, res)
                call notify_watches(vs_get(vst, base + 2), vs_get(vst, base + 3), res, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
