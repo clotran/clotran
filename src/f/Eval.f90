@@ -444,6 +444,7 @@ module Eval
   public :: gce_set_home, gce_home
   public :: gce_image_write, gce_image_read, gce_set_no_install
   public :: gce_apply, gce_env, gce_exec_node, gce_apply_slots
+  public :: flat_stats_print
 
   ! THE CALL STACK. One entry per closure invocation in progress: the
   ! closure and the position of the call that entered it (set by the
@@ -480,7 +481,14 @@ module Eval
      integer :: cslot = 0        ! the value-stack slot holding the constants
      logical :: ok = .true.
      logical :: has_eval = .false., has_recur = .false.
+     integer :: refused = -1           ! the node kind that stopped it (flat_stats_print)
+     integer :: evals(0:40) = 0        ! the node kinds it runs through the tree (F_EVAL)
   end type flat_buf
+  ! How much of what was analysed the bytecode covers (CLOTRAN_STATS):
+  ! bodies compiled, bodies refused by the node kind that refused them,
+  ! and the tree islands the compiled ones run, by kind. Statistics: a
+  ! race between threads miscounts, nothing more.
+  integer(8), save :: flat_n_ok = 0, flat_n_refused(0:40) = 0, flat_n_eval(0:40) = 0
   ! a flat instruction: FW integers, the opcode first (flat.inc)
   integer, parameter :: FW = 8
   ! exact rationals (rational.inc): 128-bit intermediates, and the operations

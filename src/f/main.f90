@@ -220,6 +220,7 @@ contains
     if (trim(statbuf) == "1") then
        write(0, '(A,I0,A,I0,A,I0,A,I0,A,I0)') "stats: evals=", gce_evals, " allocs=", gc_allocs, &
             " collections=", gc_collections, " marked=", gc_marked, " obj_capacity=", gc_obj_capacity()
+       call flat_stats_print(0)
        block
          integer :: cap, used, live
          call gc_arena_stats(cap, used, live)

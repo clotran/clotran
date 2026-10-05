@@ -62,9 +62,12 @@
     ! (a recur out of a node the tree runs nested is refused where that
     ! node is compiled: node_has_recur)
     if (.not. fb%ok) then
+       if (fb%refused >= 0 .and. fb%refused <= 40) flat_n_refused(fb%refused) = flat_n_refused(fb%refused) + 1
        call vs_leave(vst, base)
        return
     end if
+    flat_n_ok = flat_n_ok + 1
+    flat_n_eval = flat_n_eval + fb%evals
     n = fb%n
     code = gc_vec(n, [roots, vs_get(vst, base + 1), vs_get(vst, base + 3)])
     call vs_set(vst, base + 4, code)
@@ -123,6 +126,36 @@
   end subroutine fb_emit
 
   ! the next temporary register
+  ! the body cannot be compiled: k, the node kind that refused it,
+  ! kept for flat_stats_print (the innermost refusal, the first one)
+  subroutine fb_refuse(fb, k)
+    type(flat_buf), intent(inout) :: fb
+    integer, intent(in) :: k
+    if (fb%ok) fb%refused = k
+    fb%ok = .false.
+  end subroutine fb_refuse
+
+  ! CLOTRAN_STATS: how much the bytecode covers. A refused body runs as
+  ! a tree, mixed into the bytecode's calls; a tree island runs one node
+  ! through the tree from inside a compiled body (PLAN 30: bytecode only)
+  subroutine flat_stats_print(u)
+    integer, intent(in) :: u
+    character(len=12), parameter :: names(0:29) = [character(len=12) :: 'not-a-node', &
+         'const', 'local', 'var', 'if', 'do', 'call', 'vector', 'map', 'set', 'def', 'let', &
+         'loop', 'letfn', 'fn', 'lazy', 'recur', 'throw', 'try', 'case', 'deftype', 'dot', &
+         'new', 'newtype', 'set!', 'fail', 'top', 'topdo', 'latevar', 'flat']
+    integer :: k
+    write(u, '(A,I0,A,I0,A)') 'stats: bytecode bodies=', flat_n_ok, ' tree bodies=', sum(flat_n_refused), &
+         ' (refused by:'
+    do k = 0, 29
+       if (flat_n_refused(k) > 0) write(u, '(A,A,A,I0)') '    ', trim(names(k)), ' ', flat_n_refused(k)
+    end do
+    write(u, '(A)') 'stats: tree islands in bytecode bodies, by kind:'
+    do k = 0, 29
+       if (flat_n_eval(k) > 0) write(u, '(A,A,A,I0)') '    ', trim(names(k)), ' ', flat_n_eval(k)
+    end do
+  end subroutine flat_stats_print
+
   integer function fb_temp(fb) result(r)
     type(flat_buf), intent(inout) :: fb
     r = fb%tbase + fb%ntemp
@@ -152,7 +185,7 @@
 
     if (.not. fb%ok) return
     if (gc_kind(nd) /= OBJ_AST) then
-       fb%ok = .false.
+       call fb_refuse(fb, 0)
        return
     end if
     kind = gc_i1(nd)
@@ -211,7 +244,7 @@
        end do
        if (kind == N_LOOP) then
           if (fb%nloop >= size(fb%loops)) then
-             fb%ok = .false.
+             call fb_refuse(fb, N_LOOP)
              return
           end if
           fb%nloop = fb%nloop + 1
@@ -234,18 +267,18 @@
        start = int_of(gcv_nth(rinfo, 1))
        if (int_of(gcv_nth(rinfo, 0)) == 0) then
           if (fb%nloop == 0) then
-             fb%ok = .false.
+             call fb_refuse(fb, N_RECUR)
              return
           end if
           ! a jump out of a try would leave its handler installed
           if (fb%looptry(fb%nloop) /= fb%ntry) then
-             fb%ok = .false.
+             call fb_refuse(fb, N_RECUR)
              return
           end if
           lbl = fb%loops(fb%nloop)
        else
           if (fb%ntry /= 0) then
-             fb%ok = .false.
+             call fb_refuse(fb, N_RECUR)
              return
           end if
           lbl = 1   ! the fn's own recur: its parameters, then the body again
@@ -375,13 +408,14 @@
        ! unless a recur of this body is inside it (node_has_recur)
        fb%has_eval = .true.
        if (node_has_recur(nd)) then
-          fb%ok = .false.
+          call fb_refuse(fb, kind)
           return
        end if
        call fb_emit(fb, F_EVAL, d, fb_const(fb, nd), 0, 0, 0)
+       if (kind >= 0 .and. kind <= 40) fb%evals(kind) = fb%evals(kind) + 1
     case default
        ! what is left: the top-level forms, which are not in a body
-       fb%ok = .false.
+       call fb_refuse(fb, kind)
     end select
     fb%ntemp = mark
   end subroutine fc
@@ -463,7 +497,7 @@
        if (j == kb + m) m = m + 1
     end do
     if (m > size(ends)) then
-       fb%ok = .false.
+       call fb_refuse(fb, N_CASE)
        return
     end if
     kl = fb%n   ! placeholder: the label constants follow
@@ -510,7 +544,7 @@
     catches = gc_slot(nd, 2)
     nc = gcv_count(catches)
     if (nc + 2 > size(ends)) then
-       fb%ok = .false.
+       call fb_refuse(fb, N_TRY)
        return
     end if
     sv = fb_temp(fb)
