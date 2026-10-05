@@ -4956,52 +4956,48 @@ contains
   ! so walk down to something concrete, realising as it goes. Each is
   ! memoised in its own node, so this never repeats work.
   ! ONCE, whatever the threads (PLAN.md step 14f): LazySeq.sval is
-  ! synchronized, so its fn runs once. The state is read under the state
-  ! lock -- which is also what makes the realizing thread's writes, made
-  ! before its own unlock, visible to a reader. A cell another thread is
-  ! realizing is waited for; this thread's own (a thunk forcing its own
-  ! seq) is run again, as before. A thunk that throws leaves the cell
-  ! pending: Clojure keeps the fn, and the next access throws again.
+  ! synchronized, so its fn runs once. model/lazy-cell.lisp is the
+  ! protocol: the state word goes from pending to LAZY_RUNNING + this
+  ! thread's id in one compare-and-swap, so a cell nobody else is
+  ! forcing is forced with no lock. A cell another thread is realizing
+  ! is waited for under the state lock, counted as a waiter so the owner
+  ! knows to wake it (gc_lazy_wake); this thread's own (a thunk forcing
+  ! its own seq) is run again, as before. A thunk that throws leaves the
+  ! cell pending: Clojure keeps the fn, and the next access throws again.
   recursive subroutine gce_force(v)
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: v
-    type(gc_value) :: owner
-    integer :: st
+    integer :: st, me
     tctx => ctx_self()
     if (gc_kind(v) /= OBJ_LAZY) return
-    ! realised already: no lock to say so. The lock below is for two
-    ! threads reaching one pending cell; a realised cell's state is
-    ! read once and never changes back
+    ! realised already: a realised cell's state never changes back
     st = gc_i1(v)
-    if (st /= LAZY_PENDING .and. st /= LAZY_RUNNING) return
-    call gc_state_lock()
-    do
-       st = gc_i1(v)
-       if (st /= LAZY_PENDING .and. st /= LAZY_RUNNING) then
-          call gc_state_unlock()
-          return
-       end if
-       if (st == LAZY_RUNNING) then
-          owner = gc_slot(v, 4)
-          if (owner%ival == tctx%id) exit
-          call gc_state_wait(-1_8)
-          cycle
-       end if
-       exit
-    end do
+    if (st /= LAZY_PENDING .and. st < LAZY_RUNNING) return
     ! not while an error is in flight: see force_run
-    if (tctx%has_error) then
-       call gc_state_unlock()
-       return
+    if (tctx%has_error) return
+    me = LAZY_RUNNING + tctx%id
+    if (st /= me) then
+       if (.not. gc_cas_i1(v, LAZY_PENDING, me)) then
+          call gc_lazy_wait_add(1)
+          call gc_state_lock()
+          do
+             st = gc_i1(v)
+             if (st /= LAZY_PENDING .and. st < LAZY_RUNNING) exit
+             if (st == LAZY_PENDING) then
+                if (gc_cas_i1(v, LAZY_PENDING, me)) exit
+                cycle
+             end if
+             call gc_state_wait(-1_8)
+          end do
+          call gc_state_unlock()
+          call gc_lazy_wait_add(-1)
+          if (gc_i1(v) /= me) return
+       end if
     end if
-    call gc_set_i1(v, LAZY_RUNNING)
-    call gc_set_slot(v, 4, gc_int(int(tctx%id, gc_ip)))
-    call gc_state_unlock()
     call force_run(v)
-    call gc_state_lock()
-    if (gc_i1(v) == LAZY_RUNNING) call gc_set_i1(v, LAZY_PENDING)
-    call gc_state_unlock()
-    call gc_state_notify()
+    ! still ours: it threw, and goes back to pending (the owner's store)
+    if (gc_i1(v) == me) call gc_set_i1(v, LAZY_PENDING)
+    call gc_lazy_wake()
   end subroutine gce_force
 
   recursive subroutine force_run(v)
@@ -5127,14 +5123,7 @@ contains
        if (gc_kind(r) /= OBJ_LAZY) exit
        if (gc_i2(r) /= 0) exit                  ! a native range or iterate cell
        ! claimed as gce_force claims a cell: pending, and now this thread's
-       call gc_state_lock()
-       st = gc_i1(r)
-       claimed = (st == LAZY_PENDING)
-       if (claimed) then
-          call gc_set_i1(r, LAZY_RUNNING)
-          call gc_set_slot(r, 4, gc_int(int(tctx%id, gc_ip)))
-       end if
-       call gc_state_unlock()
+       claimed = gc_cas_i1(r, LAZY_PENDING, LAZY_RUNNING + tctx%id)
        if (.not. claimed) exit
        if (tag_of(vs_get(vst, base + 3)) == GCT_NIL) &
             call vs_set(vst, base + 3, gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)]))
@@ -5155,16 +5144,14 @@ contains
        call gc_set_i1(vs_get(vst, base + 1), LAZY_EMPTY)
     end if
     if (tctx%has_error) then
-       call gc_state_lock()
        chain = vs_get(vst, base + 3)
        if (chain%tag /= GCT_NIL) then
           do i = 0, gcv_count(chain) - 1
              c = gcv_nth(chain, i)
-             if (gc_i1(c) == LAZY_RUNNING) call gc_set_i1(c, LAZY_PENDING)
+             if (gc_i1(c) == LAZY_RUNNING + tctx%id) call gc_set_i1(c, LAZY_PENDING)
           end do
        end if
-       call gc_state_unlock()
-       call gc_state_notify()
+       call gc_lazy_wake()
        call force_settle_one(vs_get(vst, base + 1), vs_get(vst, base + 2))
        call vs_leave(vst, base)
        return
@@ -5175,7 +5162,7 @@ contains
        do i = 0, gcv_count(vs_get(vst, base + 3)) - 1
           call force_settle_one(gcv_nth(vs_get(vst, base + 3), i), vs_get(vst, base + 2))
        end do
-       call gc_state_notify()
+       call gc_lazy_wake()
     end if
     call vs_leave(vst, base)
   end subroutine force_settle

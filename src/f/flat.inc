@@ -1665,18 +1665,8 @@
     logical function flat_force(c, site) result(started)
       type(gc_value), intent(in) :: c
       integer, intent(in) :: site
-      type(gc_value) :: owner
-      started = .false.
-      call gc_state_lock()
-      if (gc_i1(c) /= LAZY_PENDING) then
-         call gc_state_unlock()
-         return
-      end if
-      owner = gc_int(int(tctx%id, gc_ip))
-      call gc_set_i1(c, LAZY_RUNNING)
-      call gc_set_slot(c, 4, owner)
-      call gc_state_unlock()
-      started = .true.
+      started = gc_cas_i1(c, LAZY_PENDING, LAZY_RUNNING + tctx%id)
+      if (.not. started) return
       call vs_set(vst, b + 6, c)
       call vs_set(vst, b + 3, gc_slot(c, 1))
       call vs_set(vst, b + 4, call_table_of(vs_get(vst, b + 3)))
@@ -1816,11 +1806,11 @@
   ! anyone waiting for it woken -- gce_force's closing steps.
   subroutine flat_release(c)
     type(gc_value), intent(in) :: c
+    type(eval_ctx), pointer :: tctx
     if (gc_kind(c) /= OBJ_LAZY) return
-    call gc_state_lock()
-    if (gc_i1(c) == LAZY_RUNNING) call gc_set_i1(c, LAZY_PENDING)
-    call gc_state_unlock()
-    call gc_state_notify()
+    tctx => ctx_self()
+    if (gc_i1(c) == LAZY_RUNNING + tctx%id) call gc_set_i1(c, LAZY_PENDING)
+    call gc_lazy_wake()
   end subroutine flat_release
 
   ! One or two machine integers through the commonest builtins, as

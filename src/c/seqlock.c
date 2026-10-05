@@ -53,3 +53,29 @@ void clotran_gc_hold(int64_t delta) {
 int64_t clotran_gc_holding(void) {
   return atomic_load_explicit(&clotran_gc_holds, memory_order_acquire);
 }
+
+/* A LAZY CELL's claim (model/lazy-cell.lisp): its state word goes from
+ * pending to running-by-this-thread in one compare-and-swap, so forcing a
+ * cell nobody else is forcing takes no lock. A thread that finds the cell
+ * running counts itself a waiter BEFORE it looks again, under the state
+ * lock; the owner settles, fences, and wakes the waiters only when the
+ * count says there are some. The fence on one side and the
+ * read-modify-write on the other are both sequentially consistent, so
+ * either the owner sees the waiter and wakes it, or the waiter sees the
+ * settled cell: no wakeup is lost. */
+static _Atomic int64_t clotran_lazy_waiters = 0;
+
+int clotran_cas_i32(int32_t *p, int32_t expected, int32_t desired) {
+  return __atomic_compare_exchange_n(p, &expected, desired, 0,
+                                     __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+}
+
+void clotran_lazy_waiters_add(int64_t d) {
+  atomic_fetch_add_explicit(&clotran_lazy_waiters, d, memory_order_seq_cst);
+  atomic_thread_fence(memory_order_seq_cst);
+}
+
+int64_t clotran_lazy_waiters_fenced(void) {
+  atomic_thread_fence(memory_order_seq_cst);
+  return atomic_load_explicit(&clotran_lazy_waiters, memory_order_seq_cst);
+}

@@ -1170,6 +1170,13 @@
        (try @(future (throw (ex-info "boom" {}))) (catch clotran.host.throwable e (boolean (re-find #"boom" (str e))))) true)
 (check "a thousand futures give their contexts back"
        (count (doall (map deref (doall (map #(future (* % %)) (range 1000)))))) 1000)
+(check "eight threads forcing one lazy seq run each thunk once (model/lazy-cell.lisp)"
+       (let [runs (atom 0)]
+         (dotimes [_ 50]
+           (let [s (map (fn [x] (swap! runs inc) x) (range 50))]
+             (run! deref (doall (for [_ (range 8)] (future (reduce + s)))))))
+         @runs)
+       2500)
 
 ;;; ---- clotran.rt: host members written in Clojure, loaded on use ----
 (check "sequence reaches clotran.rt" (sequence (map inc) [1 2]) [2 3])

@@ -2966,6 +2966,22 @@ paths that reach malloc (memmove and free in the profile), and the
 collection cost per million young objects. Measured and fixed apart
 from the VM, so each change's effect is its own.
 
+**Lazy cells claimed lock-free, done (2026-10-05).** Every forced
+element of a lazy seq took the global state lock twice, to claim and
+to give back. `model/lazy-cell.lisp` is the protocol: the state word
+goes from pending to `LAZY_RUNNING + thread id` in one compare-and-swap.
+Under every schedule it proves one runner (`one-runner`), that a thread
+that finished forcing read the cell's value (`done-reads-realised`),
+and that a realised cell stays realised (`realised-stays`). The owner
+settles with a plain store. Only a thread that found the cell running
+takes the lock, and it counts itself a waiter, so the owner wakes
+waiters only when there are some. Measured: `(apply + (take 1e6
+(range)))` 1060 -> 956 ms, `count` of the same 806 -> 747, `reduce`
+over `map` 721 -> 691; `filter` unchanged. That is about 10%, which is
+what removing two uncontended lock round trips per element was worth.
+The rest of a forced element's cost is the thunk call and the cell's
+allocation, the next items.
+
 ### 29. Fuzz everything (begun 2026-10-02)
 
 James: "fuzz everything at this point and going forward". The rule

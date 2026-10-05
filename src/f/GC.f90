@@ -69,7 +69,7 @@ module GC
   use Threads, only: th_key, th_key_create, th_key_set, th_key_get, th_lock, th_cond, &
        th_lock_init, th_lock_acquire, th_lock_release, th_cond_init, th_cond_wait, th_cond_broadcast, &
        th_cond_timedwait
-  use iso_c_binding, only: c_ptr, c_loc, c_f_pointer, c_associated, c_size_t, c_int64_t
+  use iso_c_binding, only: c_ptr, c_loc, c_f_pointer, c_associated, c_size_t, c_int64_t, c_int, c_int32_t
   use BigInt
   use BigDec
   implicit none
@@ -796,6 +796,7 @@ module GC
   public :: gc_state_lock, gc_state_unlock, gc_cell_get, gc_cell_set, gc_cell_cas, gc_identical
   public :: gc_grow_begin, gc_grow_end, gc_next, gc_root_cas
   public :: gc_poll, gc_state_wait, gc_state_notify, gc_notify_gen, gc_stop_pending
+  public :: gc_cas_i1, gc_lazy_wait_add, gc_lazy_wake
 
   interface
      subroutine clotran_seq_begin() bind(C, name="clotran_seq_begin")
@@ -810,6 +811,20 @@ module GC
      end function clotran_gc_holding
      subroutine clotran_seq_end() bind(C, name="clotran_seq_end")
      end subroutine clotran_seq_end
+     function clotran_cas_i32(p, e, d) bind(C, name="clotran_cas_i32") result(ok)
+       import :: c_ptr, c_int, c_int32_t
+       type(c_ptr), value :: p
+       integer(c_int32_t), value :: e, d
+       integer(c_int) :: ok
+     end function clotran_cas_i32
+     subroutine clotran_lazy_waiters_add(d) bind(C, name="clotran_lazy_waiters_add")
+       import :: c_int64_t
+       integer(c_int64_t), value :: d
+     end subroutine clotran_lazy_waiters_add
+     function clotran_lazy_waiters_fenced() bind(C, name="clotran_lazy_waiters_fenced") result(n)
+       import :: c_int64_t
+       integer(c_int64_t) :: n
+     end function clotran_lazy_waiters_fenced
      subroutine clotran_seq_read16(src, dst) bind(C, name="clotran_seq_read16")
        import :: c_ptr
        type(c_ptr), value :: src, dst
@@ -3960,6 +3975,28 @@ contains
     call world_start(s%grow_stopped)
     call heap_leave(s%grow_entered)
   end subroutine gc_grow_end
+
+  ! A lazy cell's state word (i1) from `from` to `to` in one atomic
+  ! step, true when it was `from` (model/lazy-cell.lisp's claim). The
+  ! pool does not move under it: it grows only with the world stopped.
+  logical function gc_cas_i1(v, from, to)
+    type(gc_value), intent(in) :: v
+    integer, intent(in) :: from, to
+    gc_cas_i1 = .false.
+    if (v%tag /= GCT_OBJ) return
+    gc_cas_i1 = clotran_cas_i32(c_loc(obj_pool(v%ref)%i1), int(from, c_int32_t), int(to, c_int32_t)) /= 0
+  end function gc_cas_i1
+
+  ! a thread waits for a cell another is realising (d 1), or stops (d -1)
+  subroutine gc_lazy_wait_add(d)
+    integer, intent(in) :: d
+    call clotran_lazy_waiters_add(int(d, c_int64_t))
+  end subroutine gc_lazy_wait_add
+
+  ! a cell settled or given back: its waiters woken, when there are any
+  subroutine gc_lazy_wake()
+    if (clotran_lazy_waiters_fenced() > 0) call gc_state_notify()
+  end subroutine gc_lazy_wake
 
   ! A SAFEPOINT that allocates nothing: the interpreter's loop and a
   ! compiled loop's back-edge call it, so a thread computing without
