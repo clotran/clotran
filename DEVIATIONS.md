@@ -964,33 +964,24 @@ wraps. The intermediate of a sum is the product of the denominators,
 and reducing at every step rather than once at the end keeps that as
 small as it can be without removing the ceiling.
 
-## 27. The two smallest subnormal doubles print with one digit too few
+## 27. RESOLVED -- the two smallest subnormal doubles printed with one digit too few
 
-`Double.toString` is specified as the shortest decimal that reads back
-as the same double, and clotran's printer finds exactly that -- by
-writing the value with one significant digit, then two, then three,
-reading each back and stopping at the first that returns the same bits.
-It agrees with Clojure on every value tried except two, at the very
-bottom of the subnormal range:
+**RESOLVED 2026-10-05.** `(pr-str Double/MIN_VALUE)` is `4.9E-324` and
+`(pr-str 9.9E-324)` is `9.9E-324`, as in clj. The entry said the JDK's
+second digit was more than its specification requires; it is not.
+`Double.toString` writes at least one digit after the point, so never
+fewer than two, and when one digit would read back it writes the two
+nearest the value. The printer does the same now (Printer.f90,
+`real_str`).
 
-| | clotran | clj |
-|---|---|---|
-| `(pr-str Double/MIN_VALUE)` | `5.0E-324` | `4.9E-324` |
-| `(pr-str 9.9E-324)` | `1.0E-323` | `9.9E-324` |
-
-Both of clotran's answers read back as the same double -- `5E-324` and
-`1E-323` are unambiguous, because at that magnitude the neighbouring
-representable values are a factor of two apart. They are genuinely
-shorter than the JDK's, so this is not a rounding error; the JDK emits
-a second digit here that its own specification does not require.
-
-`(= (read-string (pr-str x)) x)` holds for both, which is the property
-that matters. What differs is the text, and only for the two smallest
-positive doubles there are.
-
-Removing it means reproducing `Double.toString`'s exact digit choice
-rather than the shortest round trip -- worth doing only if something
-starts comparing printed doubles as strings.
+The same change fixed a real shortest-round-trip bug the entry did not
+know of. The nearest p-digit decimal need not read back when another
+p-digit decimal does: 2^122 is `5.316911983139664E36`, whose nearest 16
+digits end `...663`, the next double down, so clotran printed 17 digits.
+98 of the 4196 signed powers of two printed a digit longer than clj
+(scripts/fuzz-fn found one); the printer now also asks the two
+neighbours one unit in the last digit away. The oracle prints every
+power of two against clj.
 
 ## 28. `proxy` is a special form, and accepts methods no superclass declares
 

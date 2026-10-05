@@ -1093,7 +1093,6 @@
 [clotran.host.int4/MAX_VALUE clotran.host.int4/MIN_VALUE]
 
 ;; Double bounds
-(expect-diff "DEVIATIONS 27: the smallest subnormal prints 5.0E-324, clj prints 4.9E-324")
 [clotran.host.real8/MAX_VALUE clotran.host.real8/MIN_VALUE]
 
 ;; Double exponents
@@ -3122,3 +3121,11 @@
    (bit-and 12 10) (bit-or 12 10) (bit-xor 12 10) (e #(bit-and 1N 3)) (bit-and -1 7)
    (instance? clotran.host.int8 1) (instance? clotran.host.string 1) (e #(instance? :k 1)) (e #(instance? nil 1))
    (mapv #(loop [i 0 a 0] (if (< i %) (recur (inc i) (+ a (bit-xor i (.nth c (rem i 3))))) a)) [0 1 7])])
+
+;; a double printed as the fewest digits that read back as it, which for
+;; a power of two is often not the nearest p digits: 2^122 is
+;; 5.316911983139664E36, whose nearest 16 digits end ...663, another
+;; double (scripts/fuzz-fn found it; 98 of the 4196 signed powers of
+;; two printed a digit longer than clj)
+(let [ups (take 1024 (iterate #(* 2.0 %) 1.0)) downs (take 1075 (iterate #(/ % 2.0) 1.0))]
+  (mapv pr-str (concat ups downs (map - ups))))

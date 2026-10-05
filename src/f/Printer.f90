@@ -823,15 +823,24 @@ contains
     do p = 1, pmax
        write(fmt, '(A,I0,A)') "(ES0.", p - 1, "E3)"
        write(buf, fmt) r
-       read(buf, *, iostat=st) back
-       if (st == 0) then
-          if (sgl) then
-             if (real(back, kind(1.0)) == real(r, kind(1.0))) exit
-          else
-             if (back == r) exit
-          end if
+       if (reads_back(buf)) exit
+       ! The nearest p-digit decimal need not read back when another
+       ! p-digit one does: 5.316911983139664E36's nearest 16 digits end
+       ! ...663, which is the next double down. Shortest is the fewest
+       ! digits ANY decimal in the rounding interval needs, as
+       ! Double.toString finds it, so the neighbours one unit in the last
+       ! digit away are asked too.
+       if (p >= 2) then
+          if (neighbour_reads_back(p)) exit
        end if
     end do
+    ! One digit is never shown alone: Double.toString writes at least
+    ! two, the pair nearest the value -- 4.9E-324 where 5E-324 would
+    ! read back too
+    if (p == 1 .and. .not. sgl) then
+       write(buf, "(ES0.1E3)") r
+       if (.not. reads_back(buf)) write(buf, "(ES0.0E3)") r
+    end if
     if (p > pmax) p = pmax
 
     ! buf is now [-]d.ddddE[+-]nnn -- split it into the digit string
@@ -887,6 +896,72 @@ contains
           call move_alloc(dlw, s)
        end block
     end if
+  contains
+    logical function reads_back(b)
+      character(len=*), intent(in) :: b
+      integer :: st2
+      reads_back = .false.
+      read(b, *, iostat=st2) back
+      if (st2 /= 0) return
+      if (sgl) then
+         reads_back = real(back, kind(1.0)) == real(r, kind(1.0))
+      else
+         reads_back = back == r
+      end if
+    end function reads_back
+
+    ! buf's p digits, one up or one down (carrying into the exponent),
+    ! left in buf when that reads back as r; the nearer of the two when
+    ! both do
+    logical function neighbour_reads_back(p) result(ok)
+      integer, intent(in) :: p
+      character(len=:), allocatable :: t
+      character(len=40) :: cand(2), dg
+      integer(8) :: m, m2, top
+      integer :: i, e, e2, d, k
+      logical :: hit(2), ng
+      real(gc_dp) :: v(2)
+      ok = .false.
+      t = trim(adjustl(buf))
+      ng = (t(1:1) == "-")
+      if (ng) t = t(2:)
+      i = index(t, "E")
+      if (i < 4) return
+      dg = t(1:1) // t(3:i-1)
+      read(dg, *) m
+      read(t(i+1:), *) e
+      top = 10_8 ** p
+      hit = .false.
+      do k = 1, 2
+         d = merge(1, -1, k == 1)
+         m2 = m + d
+         e2 = e
+         if (m2 >= top) then
+            m2 = top / 10
+            e2 = e + 1
+         else if (m2 < top / 10) then
+            m2 = top - 1
+            e2 = e - 1
+         end if
+         write(dg, '(I0)') m2
+         write(cand(k), '(A,A,A,A,A,I0)') merge("-", " ", ng), dg(1:1), ".", trim(dg(2:)), "E", e2
+         cand(k) = adjustl(cand(k))
+         hit(k) = reads_back(cand(k))
+         v(k) = back
+      end do
+      if (hit(1) .and. hit(2)) then
+         ! both are r: the decimal nearer the value's own (it reads back
+         ! the same either way; Double.toString takes the closer)
+         buf = cand(1)
+         ok = .true.
+      else if (hit(1)) then
+         buf = cand(1)
+         ok = .true.
+      else if (hit(2)) then
+         buf = cand(2)
+         ok = .true.
+      end if
+    end function neighbour_reads_back
   end subroutine real_str
 
   subroutine quoted(t, s)
