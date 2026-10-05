@@ -19889,6 +19889,15 @@ contains
             do while (walk%tag /= GCT_NIL)
                e = sq_first(vs_get(vst, wb + 2), [roots, vs_get(vst, wb + 1)])
                if (cx%has_error) exit
+               if (e%tag == GCT_NIL) then
+                  ! APersistentMap.cons reads a nil element's key: clj's
+                  ! host throws NullPointerException there, not a cast error
+                  ! (scripts/fuzz-macro: a seq ending (nil) destructured as
+                  ! a map)
+                  call raise_class("clotran.host.null_pointer_exception", &
+                       "conj on a map: a nil where a map entry belongs", roots)
+                  exit
+               end if
                if (.not. (gcv_is(e) .and. is_map_entry(e))) then
                   block
                     call class_name_of(e, s=dlt_1)

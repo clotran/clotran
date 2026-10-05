@@ -89,4 +89,7 @@
  ;; a tie answers the second argument (scripts/fuzz-fn: -0.0 for 0.0)
  (let [f (fn [a b] [(min a b) (max a b)])] [(f 1.0 ##NaN) (f ##NaN 1.0) (f -0.0 0.0) (f 0.0 -0.0) (f 1 1.0) (f 1.0 1)])
  (let [f (fn [& xs] (apply min xs))] [(f 2 1 ##NaN 0) (f 3 -0.0 0.0) (f 0.0 1 -0.0)])
+ ;; conj onto a map of a seq holding nil: clj's host reads the nil's key
+ ;; and throws NullPointerException, not a cast error (scripts/fuzz-macro)
+ (conj {} (quote (nil))) (into {} [(quote (nil))]) ((fn [{:keys [a]}] a) (quote ({:a 1} {:b 2} (nil))))
 ]
