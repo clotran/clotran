@@ -157,6 +157,7 @@
          if (ncap >= 2) c1 = frame_get(vs_get(vst, base + 2), int_of(gcv_nth(capv, 2)))
          fn = gc_obj(OBJ_CLOSURE, [vs_get(vst, base + 1), c0, gc_nil(), c1, gc_nil()], roots)
        end block
+       call closure_note_table(fn)
        call vs_leave(vst, base)
        return
     end if
@@ -169,8 +170,23 @@
             frame_get(vs_get(vst, base + 2), int_of(gcv_nth(gcv_nth(vs_get(vst, base + 1), 2), 2 * i))))
     end do
     fn = gc_obj(OBJ_CLOSURE, [vs_get(vst, base + 1), vs_get(vst, base + 3), gc_nil(), gc_nil(), gc_nil()], roots)
+    call closure_note_table(fn)
     call vs_leave(vst, base)
   end function make_closure_from
+
+  ! The call table's vector, noted in the closure's i2 once at birth so a
+  ! call reads it in one step (call_table_of): the template, which the
+  ! closure holds in slot 1, keeps the vector alive, and a vector never
+  ! moves -- an image keeps the pools as they are. 0: none.
+  subroutine closure_note_table(fn)
+    type(gc_value), intent(in) :: fn
+    type(gc_value) :: tm, ct
+    tm = gc_slot(fn, 1)
+    if (.not. gcv_is(tm)) return
+    if (gcv_count(tm) < 8) return
+    ct = gcv_nth(tm, 7)
+    if (ct%tag == GCT_VEC) call gc_set_i2(fn, ct%ref)
+  end subroutine closure_note_table
 
   ! Re-copies a closure's captures from `frame`: letfn's second pass,
   ! after every function of the group exists.

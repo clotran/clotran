@@ -790,6 +790,15 @@
     type(gc_value), intent(in) :: fn
     type(gc_value) :: ct, tm
     ct = gc_nil()
+    ! noted at birth (closure_note_table): one read. A closure whose env is
+    ! in slot 3 -- an interpreted fn made the old way -- has none
+    if (gc_kind(fn) == OBJ_CLOSURE) then
+       if (gc_i2(fn) > 0) then
+          if (gc_kind(gc_slot(fn, 3)) == OBJ_ENV) return
+          ct = gc_value(GCT_VEC, gc_i2(fn), 0_gc_ip)
+          return
+       end if
+    end if
     tm = gc_slot(fn, 1)
     if (.not. gcv_is(tm)) return
     if (gcv_count(tm) < 8) return
