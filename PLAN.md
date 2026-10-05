@@ -2867,6 +2867,105 @@ The decision is James's. The evidence so far: about 20% fewer steps for
 registers, at the cost of a harder proof and a compiler that must use
 operands in place; a simpler proof and simpler bytecode for the stack.
 
+### 30. The stack VM: the interpreter's next executor (begun 2026-10-05)
+
+James, 2026-10-05: many commits tuning the flat executor have not made
+it fast, so build the stack machine step 28 modelled. This is the
+INTERPRETER: the bytecode clotran runs when it is not compiled. The
+compiled mode (Clojure ahead of time to Fortran) is a separate path and
+stays as it is. No JIT is in scope; when one is, step 28's comparison
+says either bytecode suits it.
+
+**What the time is, measured** (2026-10-05; flat mode against a warmed
+clj, ms for 10^6 iterations):
+
+| benchmark | clj | flat | ratio | flat per iteration |
+|---|---|---|---|---|
+| tight loop/recur | 0.5 | 36 | 72x | 36 ns: about 6 ns an instruction |
+| one fn call an iteration | 7.1 | 131 | 18x | +95 ns a call |
+| one cons an iteration | 13.6 | 191 | 14x | +155 ns |
+| (count (take 1e6 (range))) | 86 | 946 | 11x | |
+| (apply + (take 1e6 (range))) | 47 | 1174 | 25x | |
+
+The cons case is ONE allocation per iteration (CLOTRAN_STATS). Its 155
+ns is mostly not the allocator. Most of it is the generic builtin call
+-- the arguments packed into a heap vector and unpacked again
+(flat_builtin, call_builtin, gcv_nth, gc_vec_set, args_give) -- and the
+Fortran temporaries that call malloc and free. gc_obj and gcl_cons are
+about a fifth of it. Letting a single-threaded program allocate from
+the per-thread batches (batching() with one thread running) changed
+nothing measurable. The allocator's lock is not the cost.
+
+**The design** (vm-stack.lisp, proved):
+- one value stack; a frame is a base, its locals and its operands on
+  it, and a return record (pc, base, the closure). No continuation
+  object per call, and no heap frame.
+- a builtin is called with its operands where they lie on the stack,
+  with no argument vector. This is the measured cost above, and the
+  stack shape makes it natural.
+- variable-length instructions in an int32 vector: one opcode word and
+  its operands, with no fixed eight-word record copied per instruction.
+- the collector scans the stack below the top and nothing else (the
+  rooting theorem, vm-stack-rooted).
+- the depth limit is a byte budget on the stack, calibrated near clj's
+  overflow depth (about 61,600 frames of a one-argument fn), with a
+  DEVIATIONS entry for the difference. Flat's fixed 200,000 frames lets
+  a non-tail recursion pass that overflows in clj.
+
+**Milestones**, each measured by scripts/bench against clj and flat,
+and each fuzzed against clj through scripts/fuzz's new mode:
+1. constants, locals, if, let, loop/recur, the integer and seq
+   builtins as instructions. Gate: the tight loop at least 3x faster
+   than flat.
+2. calls to interpreted fns and builtins with operands on the stack.
+   Gate: the call benchmark at least 3x faster than flat. **Kill
+   criterion: if it is not, stop and rethink before going further.**
+3. closures and captures (the model's next stage first).
+4. try/throw and finally (modelled first).
+5. vars with per-call-site caches, then everything flat does, and flat
+   goes.
+Until 5, the stack VM runs behind CLOTRAN_VM=stack and falls back to
+flat or the tree for any body it does not compile. Flat stays the
+oracle the VM is fuzzed against.
+
+**Milestone 1, done and measured (2026-10-05): no gain.** The stack
+machine ran inside flat_run's frames and protocol: S_* instructions,
+variable-length, a runtime sp, flat instructions for the rest. It
+loaded core.clj and agreed with flat. Then it was measured, flat
+against stack, back to back on a quiet machine (run to run noise is
+about 20%):
+
+| tight loop/recur, ms | flat | stack in flat_run | stack, hot loop its own small function |
+|---|---|---|---|
+| < inc recur | 28-34 | 32-42 | 32 |
+
+A counter showed the loop running wholly on the stack machine: about 9
+stack instructions an iteration, at about 3.3 ns each -- already what
+a select-case interpreter in Fortran costs, which has no threaded
+dispatch to make one cheaper. The stack form takes 9 dispatches where
+flat takes 5 or 6, so a cheaper dispatch only broke even. In this
+host what costs is the NUMBER of dispatches, which is step 28's
+register-or-stack comparison from the other side. The answer is
+fewer, larger instructions: a register form with operands in place,
+or a stack form with superinstructions. James, 2026-10-05: keep the
+stack machine on a branch (feat/svm-stack), the base for the
+superinstruction experiment.
+
+**What costs instead, the same in any VM, and next:**
+1. A builtin call: its arguments written into a heap vector and read
+   back (cons, about 155 ns, mostly this; the allocation a fifth of it).
+   The hottest builtins -- cons, first, next, seq, conj, get, nth --
+   called with their operands directly, no vector.
+2. A call to a Clojure fn, about 95 ns: the continuation frame, the
+   call stack and the call table, against the model's frame (a base
+   and a return record). The kill criterion moves here: the call
+   benchmark at least 3x faster, or rethink.
+
+**The allocator**, a separate item: the Fortran temporaries in the hot
+paths that reach malloc (memmove and free in the profile), and the
+collection cost per million young objects. Measured and fixed apart
+from the VM, so each change's effect is its own.
+
 ### 29. Fuzz everything (begun 2026-10-02)
 
 James: "fuzz everything at this point and going forward". The rule
