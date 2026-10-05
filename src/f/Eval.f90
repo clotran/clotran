@@ -14613,7 +14613,20 @@ contains
          end if
        end block
     case (B_INSTANCE)
-       out = gc_bool(is_instance(gcv_nth(args, 0), gcv_nth(args, 1)))
+       ! Class.isInstance: what is not a class cannot be cast to one,
+       ! and nil has no method to call -- not false, which hid the slip
+       a = strip_meta(gcv_nth(args, 0))
+       if (a%tag == GCT_NIL) then
+          call raise_class("clotran.host.null_pointer_exception", "Cannot invoke .isInstance on nil", [vs_get(vst, base + 1)])
+       else if (a%tag /= GCT_CLASS) then
+          block
+             call class_name_of(a, s=dlt_1)
+             call raise_class("clotran.host.class_cast_exception", "class " // dlt_1 // &
+                  " cannot be cast to class clotran.host.class", [vs_get(vst, base + 1)])
+          end block
+       else
+          out = gc_bool(is_instance(a, gcv_nth(args, 1)))
+       end if
     case (B_REDUCEINIT)
        ! (.reduce coll f) and (.reduce coll f init): IReduceInit.reduce,
        ! the host loop clj runs for a LongRange, a vector or a list

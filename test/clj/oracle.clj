@@ -3110,3 +3110,15 @@
       ["31.95\\M" "x\\u0041" "3'0x5" "8#" "\"\\101\\n\\\\\"" "\"\\q\"" "\"\\400\"" "\"\\u12\"" "\\o101" "\\u12" "\\abc"
        "^:a 1" "^:a \"s\"" "^1 x" "^:a nil" "{:a 1 :a 2}" "{::a 1 ::a 2}" "#{1 1}" "#{6e10 6e10}" "(1" "[1 2" "#)" "#[1]"
        "{:a}" "#(%1%&)" "#(#(%))" "##x" "##5&" "1.5.5" "#:a 1" "#_\\space6 1"])
+
+;; the interpreter's direct roads for a chunk loop's members (flat_coll_op):
+;; in range, out of range, a negative index, a BigInt, a value that is
+;; not a class -- each as the builtin answers it
+(let [c (chunk-first (seq [10 20 30])), v [1 2 3]
+      e (fn [f] (try (f) (catch clotran.host.throwable x (class x))))]
+  [(.nth c 0) (.nth c 2) (.nth c 5 :d)
+   (nth v 2) (e #(nth v 3)) (nth v -1 :d) (e #(nth v 1.5))
+   (let [b (chunk-buffer 3)] (.add b 1) (.add b 2) (.add b 3) (count (.chunk b)))
+   (bit-and 12 10) (bit-or 12 10) (bit-xor 12 10) (e #(bit-and 1N 3)) (bit-and -1 7)
+   (instance? clotran.host.int8 1) (instance? clotran.host.string 1) (e #(instance? :k 1)) (e #(instance? nil 1))
+   (mapv #(loop [i 0 a 0] (if (< i %) (recur (inc i) (+ a (bit-xor i (.nth c (rem i 3))))) a)) [0 1 7])])
