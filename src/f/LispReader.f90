@@ -848,11 +848,12 @@ contains
                 maxn = max(maxn, 1)
              else if (t == "%&") then
                 has_rest = .true.
-             else if (verify(t(2:), "0123456789") == 0) then
+             else if (verify(t(2:), "0123456789") == 0 .and. t(2:2) /= "0") then
                 read(t(2:), *, iostat=ios) num
                 if (ios == 0) maxn = max(maxn, num)
              else
-                ! ArgReader: what follows % must be & or an integer
+                ! ArgReader: what follows % must be & or an integer, its
+                ! first digit not 0 (argPat's [1-9][0-9]*)
                 call fail("arg literal must be %, %& or %integer", "clotran.host.illegal_state_exception")
              end if
           end if
@@ -2109,9 +2110,11 @@ contains
     tok = text(start:pos - 1)
 
     ! inside #(...), a % token is checked as it is read, as ArgReader
-    ! does: before anything after it can fail first
+    ! does: before anything after it can fail first. argPat is
+    ! %(?:(&)|([1-9][0-9]*))?, so %0 and %0363 are refused too
     if (len(tok) >= 2) then
-       if (rd_self_in_anon() .and. tok(1:1) == "%" .and. tok /= "%&" .and. verify(tok(2:), "0123456789") /= 0) then
+       if (rd_self_in_anon() .and. tok(1:1) == "%" .and. tok /= "%&" .and. &
+           (verify(tok(2:), "0123456789") /= 0 .or. tok(2:2) == "0")) then
           call fail("arg literal must be %, %& or %integer", "clotran.host.illegal_state_exception")
           v = gc_nil()
           return
