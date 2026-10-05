@@ -996,6 +996,7 @@
                done = .false.
                if (n == 1) done = flat_seq_op(int(bid1) - 1, vst%vstack(rb + w(4) + 1), newframe)
                if (.not. done) done = flat_int_op(int(bid1) - 1, n, vst%vstack(rb + w(4) + 1), argv, newframe)
+               if (.not. done) done = flat_cons_op(int(bid1) - 1, n, vst%vstack(rb + w(4) + 1), argv, newframe)
                if (done) then
                   vst%vstack(rb + w(4) + 1) = gc_nil()
                   if (n == 2) vst%vstack(rb + w(4) + 1 + 1) = gc_nil()
@@ -1170,7 +1171,8 @@
                          if (n >= 1 .and. n <= 2) then
                             argv = gc_nil()
                             if (n == 2) argv = vst%vstack(rb + w(4) + 1 + 1)
-                            if (flat_int_op(gc_i1(wb), n, vst%vstack(rb + w(4) + 1), argv, newframe)) then
+                            if (flat_int_op(gc_i1(wb), n, vst%vstack(rb + w(4) + 1), argv, newframe) .or. &
+                                flat_cons_op(gc_i1(wb), n, vst%vstack(rb + w(4) + 1), argv, newframe)) then
                                vst%vstack(rb + w(4) + 1) = gc_nil()
                                if (n == 2) vst%vstack(rb + w(4) + 1 + 1) = gc_nil()
                                call vs_set(vst, b + 3, gc_nil())
@@ -1341,6 +1343,7 @@
              done = .false.
              if (n == 1) done = flat_seq_op(gc_i1(fnv), v, newframe)
              if (.not. done) done = flat_int_op(gc_i1(fnv), n, v, argv, newframe)
+             if (.not. done) done = flat_cons_op(gc_i1(fnv), n, v, argv, newframe)
              if (done) then
                 ! a temporary is cleared; a local read in place is not
                 if (w(7) == w(4)) vst%vstack(rb + w(4) + 1) = gc_nil()
@@ -1780,6 +1783,36 @@
   ! One or two machine integers through the commonest builtins, as
   ! call_builtin answers them. False for anything else -- a real, a
   ! big number, an overflow, which throws -- and the builtin decides.
+  ! (cons x nil), (cons x a-list) and (cons x a-lazy-seq): what
+  ! call_builtin's B_CONS answers there -- one list cell, a cons cell
+  ! (i2 1) onto a list, a list onto nil, a realised lazy cell onto a lazy
+  ! tail -- without its argument vector or its dispatch. It allocates:
+  ! x and y are the caller's registers, rooted where they lie. Nothing
+  ! here can fail; any other tail is the builtin's.
+  logical function flat_cons_op(id, n, x, y, out) result(done)
+    integer, intent(in) :: id, n
+    type(gc_value), intent(in) :: x, y
+    type(gc_value), intent(inout) :: out
+    type(gc_value) :: tl
+    done = .false.
+    if (id /= B_CONS .or. n /= 2) return
+    if (y%tag == GCT_NIL) then
+       tl = gcl_empty([x])
+       out = gcl_cons(x, tl, [x, tl])
+    else if (gcl_is(y)) then
+       out = gcl_cons(x, y, [x, y])
+       call gc_set_i2(out, 1)
+    else if (gc_kind(y) == OBJ_LAZY) then
+       ! a lazy tail, taken as it is and never forced: a realised cell
+       ! holding the head and that tail, as the builtin makes it
+       out = gc_obj(OBJ_LAZY, [gc_nil(), x, y], [x, y])
+       call gc_set_i1(out, LAZY_CONS)
+    else
+       return
+    end if
+    done = .true.
+  end function flat_cons_op
+
   logical function flat_int_op(id, n, x, y, out) result(done)
     integer, intent(in) :: id, n
     type(gc_value), intent(in) :: x, y
