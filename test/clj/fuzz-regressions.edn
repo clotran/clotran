@@ -85,4 +85,8 @@
  ;; an arg literal's number has no leading 0 (argPat's [1-9][0-9]*): %0363
  ;; read as a 243-argument fn (scripts/fuzz-read)
  (read-string "#(%0363)") (read-string "#(%0)") (read-string "#(%010)") (count (second (read-string "#(%10)")))
+ ;; min and max as Numbers' boxed overload: a NaN on either side wins,
+ ;; a tie answers the second argument (scripts/fuzz-fn: -0.0 for 0.0)
+ (let [f (fn [a b] [(min a b) (max a b)])] [(f 1.0 ##NaN) (f ##NaN 1.0) (f -0.0 0.0) (f 0.0 -0.0) (f 1 1.0) (f 1.0 1)])
+ (let [f (fn [& xs] (apply min xs))] [(f 2 1 ##NaN 0) (f 3 -0.0 0.0) (f 0.0 1 -0.0)])
 ]

@@ -2145,3 +2145,24 @@ refuses.
 
 **Removal**: write the host's padding rules into `clotran.uuid`, if a
 program is found that relies on them.
+
+## 76. min and max order 0.0 and -0.0 by position, always
+
+clj's `min` and `max` are `Numbers.min/max`, overloaded by the
+arguments' static types. The boxed overload (any value that came
+through a fn, a collection or an un-hinted local) is `NaN` first, then
+`x < y ? x : y` (`max`: `x > y ? x : y`), so a tie answers `y`:
+`(min -0.0 0.0)` is `0.0`. When both arguments are statically
+doubles (two double literals, or `^double` locals), the compiler picks
+the primitive overload, which is the host's `Math.min`. That orders
+`-0.0` below `0.0`, so the same call written with literals answers
+`-0.0`. clotran's `min` and `max` are one builtin with no static types,
+and always answer as the boxed overload does. ClojureScript writes
+exactly that in Clojure (`cljs.core/min`: `NaN?`, then `<`), so the
+boxed path is the language and the primitive ordering is the host.
+They differ only on a tie between `0.0` and `-0.0`, both statically
+doubles.
+
+**Removal**: give the compiled mode's `^double` arithmetic its own
+`min`/`max` that orders signed zeros, if a program is found that
+relies on the difference.

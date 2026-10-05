@@ -44,7 +44,7 @@
 ! allocation, the evaluator still computes the right answers.
 module Eval
   use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_copy_sign, &
-       ieee_positive_inf, ieee_negative_inf, ieee_quiet_nan
+       ieee_positive_inf, ieee_negative_inf, ieee_quiet_nan, ieee_is_nan
   use GC
   use BigInt
   use BigDec
@@ -13309,13 +13309,26 @@ contains
           call vs_leave(vst, base)
           return
        end if
+       ! Numbers.min/max(Object,Object), folded left as reduce1 does: a
+       ! NaN on either side wins, the first one first; then x < y ? x : y
+       ! (max: x > y ? x : y), so a tie answers y -- 0.0 and -0.0 too,
+       ! where clj's primitive overload orders them (DEVIATIONS 76)
        out = gcv_nth(args, 0)
        do i = 1, n - 1
           b = gcv_nth(args, i)
+          if (out%tag == GCT_REAL) then
+             if (ieee_is_nan(gc_rval(out))) cycle
+          end if
+          if (b%tag == GCT_REAL) then
+             if (ieee_is_nan(gc_rval(b))) then
+                out = b
+                cycle
+             end if
+          end if
           if (id == B_MAX) then
-             if (num_lt(out, b)) out = b
+             if (.not. num_lt(b, out)) out = b
           else
-             if (num_lt(b, out)) out = b
+             if (.not. num_lt(out, b)) out = b
           end if
        end do
     case (B_APPEND)
