@@ -2753,12 +2753,119 @@ builtin. Then loop/recur, then calls and frames, then closures, then
 try/throw, then vars with per-call-site caches -- each stage keeping
 every theorem of the ones before.
 
-**Paused behind step 29** (James, 2026-10-02): fuzz everything before
-designing more of the model. The fuzzers may turn up every bug in the
-current executor, and then the answer could be to make that executor
-fast rather than build a new VM. Stages 1 and 2 (model/vm.lisp,
-model/vm-loop.lisp) stay certified, and the VM work resumes from them
-if it is still wanted.
+**Paused behind step 29** (James, 2026-10-02), **resumed 2026-10-04**
+once the gate was fast enough to run per commit. Stages 1 and 2
+(model/vm.lisp, model/vm-loop.lisp) are certified.
+
+**Stage 3, calls and frames (2026-10-04).** model/vm-call.lisp is the
+design: one flat value stack, a frame being a base index into it, a
+call copying its arguments to the callee's base above the caller's live
+registers and pushing a return record (pc, base, destination). Its
+checks run the machine against the meaning. model/vm-call-proof.lisp
+proves it: vm-call-correct (a compiled program, recursion included,
+answers its meaning) and vm-call-rooted (wiping every register from the
+caller's frame top up at each return changes no answer, for any top
+the compiler's call sites fit under, which `top-ok` states). Both are
+one proof: the wiping machine with top nil IS the plain one. The
+rooting theorem is the collector's contract; F_RETHROW's freed
+message (2026-10-04) was a value outside it.
+
+**Registers or a stack: both, then compare** (James, 2026-10-04). James
+prefers a stack machine, the Hack VM's shape, as easier to reason
+about and debug. The register form was step 26's choice, for fewer
+dispatches per expression. Next is a stack-machine model of the same
+language in its own book, with the same theorems. The choice is then
+made on evidence: the proof effort, code size, and a scripts/bench
+prototype. Neither shape is settled until then.
+
+**The stack machine, proved (2026-10-04).** model/vm-stack.lisp is the
+design: each frame has a locals vector and an operand stack, a call
+saves the caller's (pc, locals, operands) on the control stack, and a
+let stores into the next local slot. It shares vm-call's meaning and
+examples. model/vm-stack-proof.lisp proves vm-stack-correct and
+vm-stack-rooted, the same two theorems, with wiping applied to local
+slots above the caller's scope.
+
+**The comparison (2026-10-04, overnight).** Every book below is in
+`make model`:
+
+| | register machine | register, operands in place | stack machine |
+|---|---|---|---|
+| design | vm-call.lisp | vm-call-opt.lisp (the same machine) | vm-stack.lisp |
+| correct, recursion included | vm-call-correct | vm-opt-correct | vm-stack-correct |
+| rooted: the collector's contract | vm-call-rooted (registers above the frame's top wiped at each return) | vm-opt-rooted | vm-stack-rooted (local slots above the caller's scope wiped) |
+| running is linear (vm-cost.lisp) | clk <= 2 evals | clk-o <= clk (vm-opt-faster) | s-clk <= 2 evals |
+| compiling is linear (vm-cost.lisp) | code <= 3 size, a program <= 3 (size + bodies) + 1 | no longer than the plain compiler's | the same |
+| proof certifies in | 174 s | 586 s | 112 s |
+
+`evals` counts the expressions the meaning itself evaluates, every call
+included. So on both machines a compiled program takes at most a
+constant factor more steps than the language says it must. Each step
+is O(1) except a call, which copies its n arguments.
+
+**Measured on the same programs** (vm-call-opt.lisp, `compare-three`):
+instructions in the program, then steps to the answer.
+
+| program | register | register, operands in place | stack |
+|---|---|---|---|
+| fib(15) | 47 / 20715 | 36 / **16770** | 48 / 20715 |
+| fib(10) | 47 / 1857 | 36 / **1504** | 48 / 1857 |
+| tri(50) | 47 / 559 | 36 / **408** | 48 / 559 |
+| the eight vm-call/vm-stack examples | 47-53 / 6-119 | 36-42 / 4-88 | 48-54 / 6-119 |
+
+- **Compiled plainly, the two machines are the same.** Every leaf gets
+  its own instruction (a register move, a stack load), so they take the
+  same steps within one.
+- **The register machine wins only through its compiler.** vm-call-opt
+  is a second compiler for the SAME machine: an operator or a test reads
+  a local in its own register instead of moving it first. It cuts
+  19-27% of the steps and about 23% of the instructions. That is the
+  published register-machine advantage, and a stack machine cannot have
+  it without new instructions (a superinstruction such as
+  load-load-add). vm-call-opt-proof.lisp proves it correct and rooted on
+  the same machine, and never slower than the plain compiler
+  (vm-opt-faster).
+- **Instructions are counted, not bytes.** A register instruction
+  carries three operands where a stack one carries none, so the
+  register machine's programs are wider than these counts show. For an
+  interpreter in Fortran the dispatch count is what costs, since each
+  instruction is a `select case` iteration.
+- **The proofs.** The stack proof was easier to write, because a return
+  restores the caller's locals exactly. The register machine's caller
+  only agrees below a bound, a relation every case carries. The stack
+  proof also reused the register book's general lemmas. The in-place
+  compiler was the hardest of the three by far. Each operand is in
+  place or computed, so an operator has four shapes. A proof stating
+  them directly split into tens of thousands of cases, until one
+  operand lemma (good-op, with closed pre- and postconditions) covered
+  both shapes. That cost is the price of the 20%: a production
+  register compiler would carry more such cases (constants in place,
+  superinstructions), and each needs this treatment.
+- **Debugging.** A register frame names every value by slot ("r2 =
+  …"), which the debugger needs (step 27, decision 6). A stack frame
+  names locals the same way, but its operands have only a depth.
+
+**The models' fuzzer** (`scripts/fuzz-vm-model`, `make fuzz-model`).
+It generates random well-formed programs over the examples' functions
+from a seed, compiles each for all three machines, and runs them in
+ACL2 against the meaning. 600 programs at two seeds: 0 disagree. As a
+negative control, a planted bug (a test read in place jumping on the
+stale temporary instead) still CERTIFIED, because vm-call-opt's own
+examples never exercise it. The fuzzer found it in 2 of 300 programs,
+on the in-place machine only, and exited 1.
+
+**The models' fuzzer** (`scripts/fuzz-vm-model`, `make fuzz-model`).
+It generates random well-formed programs over the examples' functions
+from a seed, compiles each for all three machines, and runs them in
+ACL2 against the meaning. 600 programs at two seeds: 0 disagree. As a
+negative control, a planted bug (a test read in place jumping on the
+stale temporary instead) still CERTIFIED, because vm-call-opt's own
+examples never exercise it. The fuzzer found it in 1 of 300 programs,
+on the in-place machine only, and exited 1.
+
+The decision is James's. The evidence so far: about 20% fewer steps for
+registers, at the cost of a harder proof and a compiler that must use
+operands in place; a simpler proof and simpler bytecode for the stack.
 
 ### 29. Fuzz everything (begun 2026-10-02)
 

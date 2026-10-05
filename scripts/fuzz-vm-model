@@ -1,0 +1,97 @@
+#!/usr/bin/env bb
+;; Fuzz the VM models (PLAN step 28): random well-formed programs over
+;; model/vm-call-opt.lisp's *bench-defs*, each compiled for the three
+;; machines -- the register machine compiled plainly, the same machine
+;; with operands in place, the stack machine -- and run in ACL2 against
+;; the meaning, m. The oracle is the model's own meaning; the generator
+;; builds only what wf3 accepts, so a generated program the theorems do
+;; not cover is a bug here.
+;;
+;;   scripts/fuzz-vm-model [-n COUNT] [-s SEED]
+;;
+;; Needs the books certified (make model). Exit 1 on any disagreement.
+
+(require '[clojure.string :as str]
+         '[babashka.process :as p])
+
+(def args (apply hash-map *command-line-args*))
+(def n (parse-long (get args "-n" "200")))
+(def seed (parse-long (get args "-s" (str (mod (System/nanoTime) 2147483647)))))
+;; a seeded generator of our own (Knuth's MMIX LCG), so a seed repeats
+;; the same programs
+(def state (atom seed))
+(defn rnd [k]
+  (let [x (swap! state #(unchecked-add (unchecked-multiply % 6364136223846793005) 1442695040888963407))]
+    (mod (unsigned-bit-shift-right x 33) k)))
+
+;; the functions a call may name, by arity; tri and fib recurse on their
+;; argument, so they are called only on a small constant
+(def calls {'double 1 'sum3 3 'twice 1})
+
+(defn gen [depth nlocals]
+  (let [leaf? (or (zero? depth) (< (rnd 10) 3))]
+    (if leaf?
+      (case (rnd (if (pos? nlocals) 3 2))
+        0 (list :const (- (rnd 21) 10))
+        1 (list :const ([true :false nil 0] (rnd 4)))
+        2 (list :local (rnd nlocals)))
+      (case (rnd 6)
+        0 (list :if (gen (dec depth) nlocals) (gen (dec depth) nlocals) (gen (dec depth) nlocals))
+        1 (list :let (gen (dec depth) nlocals) (gen (dec depth) (inc nlocals)))
+        2 (list :add (gen (dec depth) nlocals) (gen (dec depth) nlocals))
+        3 (list :lt (gen (dec depth) nlocals) (gen (dec depth) nlocals))
+        4 (let [[f k] (nth (vec calls) (rnd (count calls)))]
+            (list* :call f (repeatedly k #(gen (dec depth) nlocals))))
+        5 (list :call ('[tri fib] (rnd 2)) (list :const (rnd 8)))))))
+
+(defn lisp [x]
+  (cond (seq? x) (str "(" (str/join " " (map lisp x)) ")")
+        (keyword? x) (str ":" (name x))
+        (true? x) "t"
+        (nil? x) "nil"
+        :else (str x)))
+
+(def exprs (vec (repeatedly n #(gen 5 0))))
+
+(def driver
+  (str "(include-book \"vm-call-opt\")\n"
+       "(defun fuzz-one (e)\n"
+       "  (declare (xargs :mode :program))\n"
+       "  (let ((r (m e nil *bench-defs* 1000)))\n"
+       "    (if (not (valp r)) :out\n"
+       "      (list (equal (answer (vm-run (compile-program e *bench-defs*) (list 0 0 nil nil) 200000)) (val r))\n"
+       "            (equal (answer (vm-run (compile-program-o e *bench-defs*) (list 0 0 nil nil) 200000)) (val r))\n"
+       "            (equal (s-answer (s-run (s-compile-program e *bench-defs*) (list 0 nil nil nil) 200000)) (val r))))))\n"
+       "(defun fuzz-all (es i)\n"
+       "  (declare (xargs :mode :program))\n"
+       "  (if (atom es) nil\n"
+       "    (prog2$ (cw \"FUZZ ~x0 ~x1~%\" i (fuzz-one (car es))) (fuzz-all (cdr es) (1+ i)))))\n"
+       "(fuzz-all '(" (str/join "\n" (map lisp exprs)) ") 0)\n"
+       "(good-bye)\n"))
+
+(def acl2 (str (System/getProperty "user.home") "/jborden/acl2/saved_acl2"))
+(def out (:out (p/shell {:dir "model" :in driver :out :string :err :string} acl2)))
+(def results (into {} (for [[_ i r] (re-seq #"FUZZ (\d+) (.*)" out)] [(parse-long i) r])))
+
+(def kinds ["register" "register, in place" "stack"])
+(def failures
+  (for [[i r] results
+        :when (not= r ":OUT")
+        :let [vs (re-seq #"T|NIL" r)]
+        [k v] (map vector kinds vs)
+        :when (= v "NIL")]
+    [k i]))
+
+(println (str "fuzz-vm-model: " n " programs, seed " seed ", "
+              (count (filter #(= ":OUT" (val %)) results)) " out of fuel, "
+              (count results) " run"))
+(when (not= n (count results))
+  (println "  ACL2 did not report every program; the tail of its output:")
+  (println (subs out (max 0 (- (count out) 2000))))
+  (System/exit 1))
+(doseq [k kinds]
+  (let [fs (filter #(= k (first %)) failures)]
+    (println (format "%-20s %d disagree with the meaning" k (count fs)))
+    (doseq [[_ i] (take 3 fs)]
+      (println "   " (lisp (exprs i))))))
+(System/exit (if (seq failures) 1 0))
