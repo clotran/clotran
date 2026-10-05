@@ -2982,6 +2982,54 @@ what removing two uncontended lock round trips per element was worth.
 The rest of a forced element's cost is the thunk call and the cell's
 allocation, the next items.
 
+**The runtime, measured (2026-10-05).** scripts/bench, clotran ms, the
+session's start and its end:
+
+| form | before | after | clj |
+|---|---|---|---|
+| (apply + (take 1e6 (range))) | 1060 | 918 | 60 |
+| (count (take 1e6 (range))) | 806 | 721 | 42 |
+| cons loop, 1e6 | 290 | 199 | 16 |
+| (reduce + (map inc (range 1e6))) | 721 | 367 | 16 |
+| (reduce + (filter even? (range 1e6))) | 1089 | 629 | 7 |
+| (reduce + (seq (vec (range 1e6)))) | 985 | 147 | 19 |
+| (count (vec (range 1e6))) | 340 | 89 | 11 |
+
+What moved them: the lazy cell's lock-free claim; a vector's seq
+claiming IChunkedSeq (its reduce had walked element by element); vec
+of a chunked seq a chunk at a time with no Fortran array temporaries;
+and the flat interpreter answering a chunk loop's members (.nth, .add,
+instance?, the bit operations, first/next/seq of a vector's seq) with
+no argument vector. The profiles also found two GC rooting bugs and a
+printer bug, each fixed apart (swap!'s new value, inst_invoke's
+arguments, 2^122's digits), and CLOTRAN_GC_EVERY now collects at every
+allocation kind, which is why it had missed the first two.
+
+What is left is the CALL: a closure call is 80-100 ns, and even? is
+two of them and five builtins (355 ns), so filter is still 93x. A
+profile of a loop of calls is 78% flat_run itself -- the call and
+return instructions, not a helper -- so the next measurement is per
+line of F_CALL's closure road.
+
+That measurement (gcov, a coverage build, 2e6 calls of (fn [x] x)
+less a loop without them): 213 lines a call. The callee's own work is
+4 of them. The rest is the protocol: the outer loop's re-entry twice
+(44), copying each instruction's words (36), F_CALL's closure road
+(40), the frame and record pushes (30), the call table read through
+ct_int five times. Lines are not time, though. Skipping the outer
+loop on a lean call and return removed 44 lines and moved nothing
+(98 ns to 100). Doing it through a contained subroutine made the call
+10% SLOWER (108 ns): a procedure contained in flat_run that touches
+its locals keeps them in memory, and the dispatch loop's pc, rb, cb
+and kb were among them. flat_builtin, flat_force and the rest already
+reach w, rb and pc that way. Measured too: passing pc, rb, ks and w's
+words to them as arguments instead moved nothing (98 ns to 100). So
+no one part of the call is the cost; it is spread over the whole
+protocol, and trimming lines does not find it. What would is the call
+the model already describes (model/vm-call-opt.lisp: operands in
+place, a frame that is a base and a return record), built as one
+road rather than patched into this one.
+
 ### 29. Fuzz everything (begun 2026-10-02)
 
 James: "fuzz everything at this point and going forward". The rule
