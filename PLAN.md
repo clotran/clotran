@@ -3114,12 +3114,22 @@ shape, with the call taken in four stages: the arguments, the callee,
 the call and return, and the combination. In one lemma it outgrew
 the prover.
 
+PROVED, for the one-stack machine (model/vm-closure-stack-proof.lisp
+and vm-closure-stack-correct.lisp, 2026-10-06): `vcs-correct`, the
+same theorem. The arguments are pushed where the callee's frame
+begins, so the call moves no value here either.
+
+PROVED, the cost (model/vm-closure-cost.lisp): on both machines the
+clock is at most 2 `cevals`, the number of expressions the meaning
+itself evaluates, recursion included (`cclk-linear`, `sclk-linear`).
+Every step is O(1): a `:callv` is one step whatever its arity
+(`callv-moves-no-value`, `vcs-callv-moves-no-value`). The one step
+that is not is `:mkclo`, which copies k captures that k counted
+expressions just computed.
+
 Still owed before the implementation:
-- the same theorem for the one-stack machine (fuzzed against the
-  meaning today, scripts/fuzz-vm-closure);
 - rooting: wiping above the live top changes no answer, with the
-  closure live in its frame;
-- the cost: a call is O(1) steps whatever its arity.
+  closure live in its frame.
 
 Measured in passing, for the implementation: 25-30% of flat_run is
 instruction fetch and dispatch. Each instruction word is a 16-byte
