@@ -620,3 +620,165 @@
                   (obs (nth r (st-roots st)) path st)))
   :hints (("Goal" :in-theory (disable live-set gc-invisible)
                   :use ((:instance gc-invisible (l (live-set st)))))))
+
+; ---- THE ALGORITHM AND ITS COST ---------------------------------------------------
+;
+; young-gc above is the specification: it forwards every old object. The
+; collector fixes up only the remembered ones -- the barrier's whole
+; point -- and young-gc-alg does exactly that. It computes the same heap
+; (alg-is-spec), so gc-invisible is about the algorithm; and its work is
+; the roots, the remembered objects' fields and the live young objects'
+; fields (alg-cost), so a young collection's cost is the live data's and
+; not the old space's or the garbage's.
+
+; forwarding twice is forwarding once: an old reference stays put
+(defthm fwd-fwd (implies (natp nold) (equal (fwd (fwd v nold l) nold l) (fwd v nold l)))
+  :hints (("Goal" :in-theory (enable fwd))))
+(defthm fwd-vals-idem
+  (implies (natp nold) (equal (fwd-vals (fwd-vals vs nold l) nold l) (fwd-vals vs nold l))))
+
+; fix up the remembered objects only, in place
+(defun fix-rem (rem old nold l)
+  (if (atom rem)
+      old
+    (fix-rem (cdr rem) (update-nth (car rem) (fwd-vals (nth (car rem) old) nold l) old) nold l)))
+
+(defthm len-fix-rem
+  (implies (all-below rem (len old)) (equal (len (fix-rem rem old nold l)) (len old))))
+
+(defthm nth-fix-rem
+  (implies (and (natp i) (natp nold) (all-below rem n))
+           (equal (nth i (fix-rem rem old nold l))
+                  (if (member-equal i rem) (fwd-vals (nth i old) nold l) (nth i old))))
+  :hints (("Goal" :induct (fix-rem rem old nold l))))
+
+(defun young-gc-alg (l st)
+  (let ((nold (len (st-old st))))
+    (mk-st (append (fix-rem (st-rem st) (st-old st) nold l) (copies l l (st-young st) nold))
+           nil nil
+           (fwd-vals (st-roots st) nold l))))
+
+; two true lists of one length that agree at every index are equal
+(defun-sk nth-agree (a b) (forall i (implies (natp i) (equal (nth i a) (nth i b)))))
+(defun nae-ind (a b) (if (or (atom a) (atom b)) (list a b) (nae-ind (cdr a) (cdr b))))
+(defthm nth-agree-cdr
+  (implies (nth-agree a b) (nth-agree (cdr a) (cdr b)))
+  :hints (("Goal" :expand ((nth-agree (cdr a) (cdr b)))
+                  :use ((:instance nth-agree-necc (i (1+ (nth-agree-witness (cdr a) (cdr b)))))))))
+(defthm nth-agree-equal
+  (implies (and (true-listp a) (true-listp b) (equal (len a) (len b)) (nth-agree a b))
+           (equal a b))
+  :rule-classes nil
+  :hints (("Goal" :induct (nae-ind a b))
+          ("Subgoal *1/2" :use ((:instance nth-agree-necc (i 0))))))
+
+; THE ALGORITHM IS THE SPECIFICATION: with the barrier's invariant, fixing
+; up the remembered objects forwards the whole old space. Pointwise first:
+; a remembered object is forwarded; an unremembered one holds no young
+; reference, so forwarding leaves it alone (fwd-no-young); past the end
+; both are nil.
+(defthm nth-fix-rem-is-fwd
+  (implies (and (barrier2 old rem) (all-below rem (len old))
+                (objs-ok old no ny) (natp nold) (natp i))
+           (equal (nth i (fix-rem rem old nold l)) (fwd-vals (nth i old) nold l)))
+  :hints (("Goal" :cases ((< i (len old)))
+                  :use ((:instance barrier2-necc) (:instance objs-ok-nth (objs old))))))
+
+(defthm nth-agree-fix-rem
+  (implies (and (barrier2 old rem) (all-below rem (len old))
+                (objs-ok old no ny) (natp nold))
+           (nth-agree (fix-rem rem old nold l) (fwd-objs old nold l)))
+  :hints (("Goal" :in-theory (disable fix-rem))))
+
+(defthm true-listp-fix-rem
+  (implies (true-listp old) (true-listp (fix-rem rem old nold l))))
+(defthm true-listp-fwd-objs (true-listp (fwd-objs objs nold l)))
+
+(defthm fix-rem-is-fwd-objs
+  (implies (and (barrier2 old rem) (all-below rem (len old)) (true-listp old)
+                (objs-ok old no ny) (natp nold))
+           (equal (fix-rem rem old nold l) (fwd-objs old nold l)))
+  :hints (("Goal" :in-theory (disable fix-rem fwd-objs nth-agree)
+                  :use ((:instance nth-agree-equal (a (fix-rem rem old nold l)) (b (fwd-objs old nold l)))))))
+
+; the remembered set names old objects: the barrier records only the
+; object it stored into, which a root named
+(defun rem-ok (st) (all-below (st-rem st) (len (st-old st))))
+
+(defthm write-keeps-rem-ok
+  (implies (and (heap-ok st) (rem-ok st)) (rem-ok (write-field r k v st)))
+  :hints (("Goal" :in-theory (e/d (write-field heap-ok) (nth-in-bounds))
+                  :use ((:instance nth-in-bounds (vs (st-roots st)) (k r)
+                                   (no (len (st-old st))) (ny (len (st-young st))))))))
+(defthm alloc-keeps-rem-ok
+  (implies (rem-ok st) (rem-ok (alloc fields st))))
+(defthm young-gc-rem-ok (rem-ok (young-gc l st)) :hints (("Goal" :in-theory (enable young-gc))))
+
+; THE ALGORITHM IS THE COLLECTION: so gc-invisible and collection-invisible
+; are about the collector that touches only the remembered objects
+(defthm alg-is-spec
+  (implies (and (heap-ok st) (rem-ok st))
+           (equal (young-gc-alg l st) (young-gc l st)))
+  :hints (("Goal" :in-theory (e/d (heap-ok young-gc) (fix-rem))
+                  :use ((:instance fix-rem-is-fwd-objs (old (st-old st)) (rem (st-rem st))
+                                   (nold (len (st-old st))) (no (len (st-old st)))
+                                   (ny (len (st-young st))))))))
+
+; ---- ITS COST ---------------------------------------------------------------------
+;
+; Counted in steps of O(1) each: a field read and forwarded, an object
+; visited. The worklist's "already in L?" is one step -- the collector
+; asks the object's forwarding word, not a list. A remembered entry was
+; paid for by the write that made it; the set empties at every collection.
+
+; the worklist's steps: one per entry taken
+(defun reach-steps (todo l young fuel)
+  (declare (xargs :measure (nfix fuel)))
+  (cond ((zp fuel) 0)
+        ((atom todo) 0)
+        ((member-equal (car todo) l) (1+ (reach-steps (cdr todo) l young (1- fuel))))
+        (t (1+ (reach-steps (append (young-refs (nth (car todo) young)) (cdr todo))
+                            (cons (car todo) l) young (1- fuel))))))
+
+; the young references the members of l hold
+(defun yr-sum (l young)
+  (if (atom l) 0 (+ (len (young-refs (nth (car l) young))) (yr-sum (cdr l) young))))
+
+(defthm len-append-sum (equal (len (append a b)) (+ (len a) (len b))))
+
+; THE WORKLIST'S WORK: its starts and the young fields of what it added
+; -- the live young objects, never the garbage
+(defthm reach-steps-exact
+  (implies (mv-nth 0 (reach todo l young fuel))
+           (equal (reach-steps todo l young fuel)
+                  (+ (len todo) (- (yr-sum (mv-nth 1 (reach todo l young fuel)) young) (yr-sum l young))))))
+
+; an object's fields, one step for the object itself
+(defun fields-of (is objs)
+  (if (atom is) 0 (+ 1 (len (nth (car is) objs)) (fields-of (cdr is) objs))))
+
+; the collection's steps: the trace, the remembered objects fixed up,
+; the copies, the roots forwarded
+(defun gc-steps (st)
+  (let ((start (append (young-refs (st-roots st)) (rem-refs (st-rem st) (st-old st)))))
+    (+ (reach-steps start nil (st-young st) (live-fuel st))
+       (fields-of (st-rem st) (st-old st))
+       (fields-of (live-set st) (st-young st))
+       (len (st-roots st)))))
+
+(defthm len-young-refs (<= (len (young-refs vs)) (len vs)) :rule-classes :linear)
+(defthm len-rem-refs (<= (len (rem-refs rem old)) (fields-of rem old)) :rule-classes :linear)
+(defthm yr-sum-fields (<= (yr-sum l young) (fields-of l young)) :rule-classes :linear)
+(defthm yr-sum-natp (<= 0 (yr-sum l young)) :rule-classes :linear)
+
+; THE COST: when the worklist finishes, a young collection is linear in
+; the roots, the remembered objects' fields and the live young objects'
+; fields. The old space's size and the nursery's garbage do not appear.
+(defthm alg-cost
+  (implies (mv-nth 0 (reach (append (young-refs (st-roots st)) (rem-refs (st-rem st) (st-old st)))
+                            nil (st-young st) (live-fuel st)))
+           (<= (gc-steps st)
+               (* 2 (+ (len (st-roots st))
+                       (fields-of (st-rem st) (st-old st))
+                       (fields-of (live-set st) (st-young st))))))
+  :hints (("Goal" :in-theory (disable reach live-fuel))))

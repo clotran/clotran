@@ -3,7 +3,8 @@
 ;; mutator programs -- allocations, writes of immediates and of other
 ;; roots' references, roots forgotten (a local dropped), young
 ;; collections -- run twice in ACL2: on the
-;; model with its collections, and on a reference heap that never
+;; model with its collections (young-gc-alg, which fixes up only the
+;; remembered objects), and on a reference heap that never
 ;; collects. After every operation, observations along random paths from
 ;; every root must agree, and after every collection the barrier's
 ;; invariant and L's closure are checked executably. L is the model's own
@@ -102,7 +103,7 @@
                                  (write-field (cadr op) (caddr op) (val-of (cadddr op) ref) ref)))
                    (:forget (cons (mk-st (st-old st) (st-young st) (st-rem st) (update-nth (cadr op) nil (st-roots st)))
                                   (mk-st (st-old ref) (st-young ref) (st-rem ref) (update-nth (cadr op) nil (st-roots ref)))))
-                   (t (cons (young-gc (live-set st) st) ref))))
+                   (t (cons (young-gc-alg (live-set st) st) ref))))
            (st2 (car pair)) (ref2 (cdr pair)))
       (cond ((and (eq (car op) :gc) (not (l-exec (live-set st) st))) :l-not-closed)
             ((and (eq (car op) :gc) (not (barrier-exec (st-old st2) (st-rem st2) 0))) :barrier-broken)

@@ -3006,11 +3006,32 @@ a slip until the slot was reused. A moving one does not forgive it at
 all, so the implementation goes with CLOTRAN_GC_EVERY counting every
 allocation kind, as it now does.
 
+Proved since (2026-10-06):
+- `live-set-ok`: L computed. A worklist from the roots' and the
+  remembered objects' young references, with fuel; when the fuel runs
+  out the whole nursery is L. Either is a good L, so
+  `collection-invisible` holds for the collector's own L. That L holds
+  ONLY what is reachable is not proved; it is what makes the cost
+  theorem below about live data, and it is how `reach` is written.
+- `alg-is-spec`: the collector that fixes up only the remembered
+  objects (`young-gc-alg`) builds the same heap as the specification
+  that forwards the whole old space, given the barrier's invariant and
+  a remembered set inside the old space (`rem-ok`, kept by every
+  operation). gc-invisible is therefore about the algorithm.
+- `alg-cost`: when the worklist finishes, a young collection takes at
+  most 2 (roots + remembered objects' fields + L's objects' fields)
+  steps, each O(1). The worklist's own steps are exactly its starts
+  plus the young references L's objects hold (`reach-steps-exact`).
+  The old space's size and the nursery's garbage do not appear. The
+  "already in L?" test counts one step: in the Fortran it is the
+  object's forwarding word, not a list search. A remembered entry is
+  paid for by the write that made it, and the set empties at every
+  collection.
+
+scripts/fuzz-alloc runs `young-gc-alg` now, so the fuzzer checks the
+algorithm and `alg-is-spec` connects it to the proof.
+
 Owed in the model, in order:
-- L computed: the worklist's result is closed and contains only what
-  is reachable.
-- The collection's cost: O(live young + remembered + roots), over
-  the algorithmic copy.
 - Several threads' nurseries: a reference published from one nursery
   to another thread.
 - The old space's own collection.
