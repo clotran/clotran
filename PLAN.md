@@ -2966,6 +2966,55 @@ paths that reach malloc (memmove and free in the profile), and the
 collection cost per million young objects. Measured and fixed apart
 from the VM, so each change's effect is its own.
 
+**The allocator, modelled (model/alloc.lisp, 2026-10-06; James: "we
+definitely want to also model our allocator").** It is designed before
+the Fortran, as the VM was:
+- A nursery filled by bumping, and an old space.
+- A MOVING young collector. It copies a set L of nursery objects to
+  the end of the old space, rewrites every reference through the
+  forwarding map, and empties the nursery.
+- A write barrier with a remembered set. Its invariant is that every
+  old object holding a young reference is remembered.
+
+What is proved:
+- `gc-invisible`: a young collection changes nothing the program can
+  observe. Every path of fields from every root reads the same after
+  as before. It holds for ANY L that holds the young objects the roots
+  and the remembered objects reference and is closed under young
+  fields.
+- `fwd-unremembered`: the barrier is what limits a young collection
+  to the remembered objects. An old object the barrier never recorded
+  has no young reference, and forwarding leaves it alone.
+- The operations keep the invariant: a write
+  (`write-keeps-barrier`, through `barrier2-write`), an allocation
+  (`alloc-keeps-barrier`), and the collection itself
+  (`young-gc-barrier`).
+
+scripts/fuzz-alloc (make fuzz-model) runs random mutator programs on
+the collecting model and on a heap that never collects: allocations,
+writes, forgotten roots, collections with L from a worklist over the
+roots and the remembered set. After every operation the observations
+from every root agree. After every collection the barrier and L's
+closure are checked executably. Its negative control, a barrier that
+records nothing, is caught.
+
+What it means for the Fortran: the moving collector needs every
+reference the program holds to be in a root it scans. That is the
+rooting property model/vm-call-proof.lisp states, and the one the two
+rooting bugs of 2026-10-05 broke. A non-moving collector forgave such
+a slip until the slot was reused. A moving one does not forgive it at
+all, so the implementation goes with CLOTRAN_GC_EVERY counting every
+allocation kind, as it now does.
+
+Owed in the model, in order:
+- L computed: the worklist's result is closed and contains only what
+  is reachable.
+- The collection's cost: O(live young + remembered + roots), over
+  the algorithmic copy.
+- Several threads' nurseries: a reference published from one nursery
+  to another thread.
+- The old space's own collection.
+
 **Lazy cells claimed lock-free, done (2026-10-05).** Every forced
 element of a lazy seq took the global state lock twice, to claim and
 to give back. `model/lazy-cell.lisp` is the protocol: the state word

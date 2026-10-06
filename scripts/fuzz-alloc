@@ -1,0 +1,145 @@
+#!/usr/bin/env bb
+;; Fuzz the allocator model (model/alloc.lisp, PLAN step 30): random
+;; mutator programs -- allocations, writes of immediates and of other
+;; roots' references, roots forgotten (a local dropped), young
+;; collections -- run twice in ACL2: on the
+;; model with its collections, and on a reference heap that never
+;; collects. After every operation, observations along random paths from
+;; every root must agree, and after every collection the barrier's
+;; invariant and L's closure are checked executably. The oracle is the
+;; heap that never moved; gc-invisible proves the collection over any
+;; good L, and this checks the operations around it and the L the
+;; worklist computes.
+;;
+;;   scripts/fuzz-alloc [-n COUNT] [-s SEED] [-k]
+;;
+;; -k is the NEGATIVE CONTROL: the write barrier records nothing, so a
+;; young object reachable only through an old one is lost at the next
+;; collection -- the run must find disagreements.
+;;
+;; Needs model/alloc.lisp certified (make model). Exit 1 on any finding.
+
+(require '[clojure.string :as str]
+         '[babashka.process :as p])
+
+(def broken (some #{"-k"} *command-line-args*))
+(def args (apply hash-map (remove #{"-k"} *command-line-args*)))
+(def n (parse-long (get args "-n" "100")))
+(def seed (parse-long (get args "-s" (str (mod (System/nanoTime) 2147483647)))))
+(def state (atom seed))
+(defn rnd [k]
+  (let [x (swap! state #(unchecked-add (unchecked-multiply % 6364136223846793005) 1442695040888963407))]
+    (mod (unsigned-bit-shift-right x 33) k)))
+
+;; a program: ops over the roots that exist when they run. A value is
+;; (:imm i) or (:root r); a root index always names an existing root
+;; because every alloc adds one and nothing removes any.
+(defn value [nroots]
+  (if (or (zero? nroots) (< (rnd 3) 1)) (list :imm (- (rnd 21) 10)) (list :root (rnd nroots))))
+
+(defn program []
+  (loop [ops [] nroots 0 i 0]
+    (if (>= i (+ 10 (rnd 30)))
+      ops
+      (let [k (rnd 10)]
+        (cond
+          (or (zero? nroots) (< k 4))
+          (recur (conj ops (list* :alloc (repeatedly (rnd 4) #(value nroots)))) (inc nroots) (inc i))
+          (< k 7)
+          (recur (conj ops (list :write (rnd nroots) (rnd 3) (value nroots))) nroots (inc i))
+          (< k 8)
+          (recur (conj ops (list :forget (rnd nroots))) nroots (inc i))
+          :else
+          (recur (conj ops (list :gc)) nroots (inc i)))))))
+
+(defn lisp [x]
+  (cond (seq? x) (str "(" (str/join " " (map lisp x)) ")")
+        (keyword? x) (str ":" (name x))
+        (nil? x) "nil"
+        :else (str x)))
+
+(def progs (vec (repeatedly n program)))
+
+(def driver
+  (str "(include-book \"alloc\")
+(set-guard-checking :none)
+(defun young-refs (vs) (declare (xargs :mode :program))
+  (cond ((atom vs) nil) ((yrefp (car vs)) (cons (cdr (car vs)) (young-refs (cdr vs)))) (t (young-refs (cdr vs)))))
+(defun rem-refs (rem old) (declare (xargs :mode :program))
+  (if (atom rem) nil (append (young-refs (nth (car rem) old)) (rem-refs (cdr rem) old))))
+; THE LIVE YOUNG OBJECTS: a worklist from the roots and the remembered objects
+(defun reach (todo l young) (declare (xargs :mode :program))
+  (cond ((atom todo) l)
+        ((member-equal (car todo) l) (reach (cdr todo) l young))
+        (t (reach (append (young-refs (nth (car todo) young)) (cdr todo)) (cons (car todo) l) young))))
+(defun live-young (st) (declare (xargs :mode :program))
+  (reach (append (young-refs (st-roots st)) (rem-refs (st-rem st) (st-old st))) nil (st-young st)))
+; the checks, executable
+(defun barrier-exec (old rem i) (declare (xargs :mode :program))
+  (cond ((atom old) t) ((and (has-young (car old)) (not (member-equal i rem))) nil)
+        (t (barrier-exec (cdr old) rem (1+ i)))))
+(defun young-in-all (ls objs l) (declare (xargs :mode :program))
+  (if (atom ls) t (and (young-in (nth (car ls) objs) l) (young-in-all (cdr ls) objs l))))
+(defun l-exec (l st) (declare (xargs :mode :program))
+  (and (all-below l (len (st-young st))) (young-in (st-roots st) l)
+       (young-in-all (st-rem st) (st-old st) l) (young-in-all l (st-young st) l)))
+"
+       (if broken
+         "(defun write-op (r k v st) (declare (xargs :mode :program))
+  (let ((x (nth r (st-roots st))))
+    (cond ((orefp x) (mk-st (update-nth (cdr x) (update-nth k v (nth (cdr x) (st-old st))) (st-old st))
+                            (st-young st) (st-rem st) (st-roots st)))
+          (t (write-field r k v st)))))\n"
+         "(defun write-op (r k v st) (declare (xargs :mode :program)) (write-field r k v st))\n")
+       "(defun val-of (x st) (declare (xargs :mode :program))
+  (if (eq (car x) :imm) (cadr x) (nth (cadr x) (st-roots st))))
+(defun vals-of (xs st) (declare (xargs :mode :program))
+  (if (atom xs) nil (cons (val-of (car xs) st) (vals-of (cdr xs) st))))
+; every root's observations along the paths, at one moment
+(defun obs-paths (v paths st) (declare (xargs :mode :program))
+  (if (atom paths) nil (cons (obs v (car paths) st) (obs-paths v (cdr paths) st))))
+(defun obs-roots (r st paths) (declare (xargs :mode :program))
+  (if (zp r) nil
+    (cons (obs-paths (nth (1- r) (st-roots st)) paths st) (obs-roots (1- r) st paths))))
+(defconst *paths* '(nil (0) (1) (2) (0 0) (0 1) (1 0) (2 2) (0 0 0) (1 1 1) (0 1 2) (2 0 1)))
+; run a program on the collecting heap and on the reference; :ok, or why not
+(defun run-ops (ops st ref) (declare (xargs :mode :program))
+  (if (atom ops) :ok
+    (let* ((op (car ops))
+           (pair (case (car op)
+                   (:alloc (cons (alloc (vals-of (cdr op) st) st) (alloc (vals-of (cdr op) ref) ref)))
+                   (:write (cons (write-op (cadr op) (caddr op) (val-of (cadddr op) st) st)
+                                 (write-field (cadr op) (caddr op) (val-of (cadddr op) ref) ref)))
+                   (:forget (cons (mk-st (st-old st) (st-young st) (st-rem st) (update-nth (cadr op) nil (st-roots st)))
+                                  (mk-st (st-old ref) (st-young ref) (st-rem ref) (update-nth (cadr op) nil (st-roots ref)))))
+                   (t (cons (young-gc (live-young st) st) ref))))
+           (st2 (car pair)) (ref2 (cdr pair)))
+      (cond ((and (eq (car op) :gc) (not (l-exec (live-young st) st))) :l-not-closed)
+            ((and (eq (car op) :gc) (not (barrier-exec (st-old st2) (st-rem st2) 0))) :barrier-broken)
+            ((not (equal (obs-roots (len (st-roots st2)) st2 *paths*)
+                         (obs-roots (len (st-roots ref2)) ref2 *paths*))) :differ)
+            (t (run-ops (cdr ops) st2 ref2))))))
+(defun fuzz-all (ps i) (declare (xargs :mode :program))
+  (if (atom ps) nil
+    (prog2$ (cw \"FUZZ ~x0 ~x1~%\" i (run-ops (car ps) (mk-st nil nil nil nil) (mk-st nil nil nil nil)))
+            (fuzz-all (cdr ps) (1+ i)))))
+(fuzz-all '(" (str/join "\n" (map #(lisp (apply list %)) progs)) ") 0)
+(good-bye)
+"))
+
+(def acl2 (str (System/getProperty "user.home") "/jborden/acl2/saved_acl2"))
+(def out (:out (p/shell {:dir "model" :in driver :out :string :err :string} acl2)))
+(def results (into {} (for [[_ i r] (re-seq #"FUZZ (\d+) (\S+)" out)] [(parse-long i) r])))
+(def kinds (frequencies (vals results)))
+(println (str "fuzz-alloc: " n " programs, seed " seed ", " (count results) " run: "
+              (str/join ", " (for [[k c] (sort kinds)] (str c " " (str/lower-case (str/replace k ":" "")))))))
+(when (not= n (count results))
+  (println "  ACL2 did not report every program; the tail of its output:")
+  (println (subs out (max 0 (- (count out) 2000))))
+  (System/exit 1))
+(def bad (for [[i r] results :when (not= r ":OK")] i))
+(doseq [i (take 3 bad)] (println "   " (results i) (lisp (apply list (progs i)))))
+(if broken
+  (do (println (if (seq bad) "negative control: the broken barrier was caught" "NEGATIVE CONTROL FAILED: a broken barrier went unseen"))
+      (System/exit (if (seq bad) 0 1)))
+  (System/exit (if (seq bad) 1 0)))
