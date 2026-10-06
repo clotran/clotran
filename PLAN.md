@@ -3321,6 +3321,53 @@ whole difference is the run-time stack-top adjustments (`:addsp`).
 Stage 2's static depth removes those. Under a template JIT, the shapes
 differ only in that bookkeeping.
 
+**Stage 2a, static depth, proved (2026-10-06).** model/jit2.lisp is
+the design:
+- `dinfer` infers the stack depth at every pc with a worklist (each pc
+  set once, so linear).
+- `dcheck` checks the inferred depths, as a bytecode verifier does.
+  Each instruction's successors get the depth it leaves. What it reads
+  (operands, a `:load`'s or `:capt`'s slot) is below the top. Each
+  function's entry is at arity + 1, and main starts at 0.
+- Code that passes is translated with every slot addressed as
+  `FB + depth`: no stack-top register, no `:addsp`. Calls, returns and
+  closure-making carry the depth as an operand (`:calld`, `:retd`,
+  `:mkclod`).
+- Code that fails is translated by stage 1.
+
+model/jit2-proof.lisp:
+- `dinv-step`, THE CHECK IS SOUND. When `dcheck` passes, every step
+  keeps the stack top at `FB + depth[pc]`, and keeps each return
+  record where its caller's depth says. This holds for ANY bytecode
+  that passes, with one more case: a program halted by its last
+  `:ret`.
+- `jit2-sim`: from any state the invariant holds in, the machine code
+  is the bytecode block for block. Nothing about the run is assumed,
+  where stage 1 needed every step to have its operands.
+- `jit2-clock-bound`: at most 4 machine instructions per bytecode.
+
+model/jit2-correct.lisp: `jit2-correct`, a compiled closure program
+answers its meaning through the stage-2 JIT, by its own code when the
+check passes and by stage 1's when it does not. `jit2-linear` bounds
+it by 10 instructions per expression the meaning evaluates.
+
+| program | stage 1 | stage 2a | register shape (template) |
+|---|---|---|---|
+| fib(15) | 64,114 | **48,332** | 48,332 |
+| tri(50) | 1,824 | **1,368** | 1,368 |
+| down(30) | 1,104 | **828** | 828 |
+
+Once the depth is known, stack bytecode compiles to EXACTLY the
+register machine's instruction count; memory traffic is unchanged
+(30,576 for fib(15)). What is left is memory traffic: every slot is
+still loaded and stored. Stage 2b keeps the top slots in machine
+registers, spilled at calls and at the collector's safepoints by a
+stack map.
+
+scripts/fuzz-vm-closure runs every program through stage 2 as a fifth
+machine and reports how many pass the depth check. Its `-d` control
+breaks stage 2's `:add` and is caught by the stage-2 runs alone.
+
 ### 29. Fuzz everything (begun 2026-10-02)
 
 James: "fuzz everything at this point and going forward". The rule

@@ -31,6 +31,14 @@
 ;   (:call n)          the runtime: call the closure on top, n arguments
 ;   (:ret)             the runtime: return the top to the frame's base
 ;
+; and for stage 2 (model/jit2.lisp), where the stack depth at every
+; instruction is known when translating and SP is not kept:
+;
+;   (:mov d s)         x[d] := x[s]
+;   (:mkclod f k d)    :mkclo with the top at FB + d
+;   (:calld n d)       :call with the top at FB + d
+;   (:retd d)          :ret with the top at FB + d
+;
 ; A machine state is (pc fb sp mem ctl x): x the scratch registers.
 
 (in-package "ACL2")
@@ -80,6 +88,26 @@
                        (if (or (not (consp ent)) (not (equal n (nfix (cadr ent)))))
                            (list :err fb sp stk ctl x)
                          (list (nfix (car ent)) (- sp (1+ n)) sp stk (cons (list (1+ pc) fb) ctl) x))))))
+          (:mov (list (1+ pc) fb sp stk ctl (xset (cadr ins) (xr (caddr ins) x) x)))
+          (:mkclod (let ((k (nfix (caddr ins))) (d (nfix (cadddr ins))))
+                     (if (< d k) ns
+                       (list (1+ pc) fb sp
+                             (ssetreg (+ fb (- d k)) (clo (cadr ins) (stk-from (+ fb (- d k)) k stk)) stk) ctl x))))
+          (:calld (let ((n (nfix (cadr ins))) (d (nfix (caddr ins))))
+                    (if (< d (1+ n))
+                        ns
+                      (let* ((c (sreg (+ fb (1- d)) stk))
+                             (ent (and (clop c) (cdr (assoc-equal (clo-f c) fntab)))))
+                        (if (or (not (consp ent)) (not (equal n (nfix (cadr ent)))))
+                            (list :err fb sp stk ctl x)
+                          (list (nfix (car ent)) (+ fb (- d (1+ n))) sp stk (cons (list (1+ pc) fb) ctl) x))))))
+          (:retd (let ((d (nfix (cadr ins))))
+                   (if (zp d) ns
+                     (let ((v (sreg (+ fb (1- d)) stk)))
+                       (if (atom ctl)
+                           (list pc fb sp (ssetreg 0 v stk) ctl x)
+                         (let ((rec (car ctl)))
+                           (list (nfix (car rec)) (nfix (cadr rec)) sp (ssetreg fb v stk) (cdr ctl) x)))))))
           (:ret (if (zp sp) ns
                   (let ((v (sreg (1- sp) stk)))
                     (if (atom ctl)
