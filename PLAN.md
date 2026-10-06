@@ -3056,11 +3056,21 @@ capture, wrong arities, non-closures called) through both machines
 against the meaning, with a negative control that must catch a
 broken machine.
 
+PROVED, for the register machine (model/vm-closure-proof.lisp and
+vm-closure-correct.lisp): `vc-correct`, every compiled program answers
+what its meaning does. The callee's locals are the caller's argument
+registers, read in place, and its captures are read through the
+closure in its frame (`cself-ok`). The proof is vm-call-proof.lisp's
+shape, with the call taken in four stages: the arguments, the callee,
+the call and return, and the combination. In one lemma it outgrew
+the prover.
+
 Still owed before the implementation:
-- the correctness theorem, both machines against the meaning, for
-  every program (vm-call-proof.lisp's shape);
-- rooting: the closure stays live in its frame;
-- the cost: a call is O(1) steps.
+- the same theorem for the one-stack machine (fuzzed against the
+  meaning today, scripts/fuzz-vm-closure);
+- rooting: wiping above the live top changes no answer, with the
+  closure live in its frame;
+- the cost: a call is O(1) steps whatever its arity.
 
 Measured in passing, for the implementation: 25-30% of flat_run is
 instruction fetch and dispatch. Each instruction word is a 16-byte
