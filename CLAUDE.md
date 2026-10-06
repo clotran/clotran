@@ -108,8 +108,9 @@ was the host showing through. `SEAMS.md` carries the argument.
 ## The formal model moves with the design
 
 `model/` is the design, in ACL2 (8.7, built on SBCL at
-`~/jborden/acl2/saved_acl2`; `make model` certifies every book). The
-boundary is there now (PLAN step 27); the VM -- instruction set,
+`~/jborden/acl2/saved_acl2`; `make model` brings every book's
+certificate up to date, re-proving only what changed, and `make
+model-full` re-proves them all). The boundary is there now (PLAN step 27); the VM -- instruction set,
 frames, and the data structures with their big-O bounds proved by step
 counting -- follows (step 28). James, 2026-10-01: a new VM is
 designed in ACL2, not improvised in Fortran.

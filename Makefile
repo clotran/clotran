@@ -704,17 +704,37 @@ clean:
 # book that does not certify fails. ACL2 is built on SBCL outside the
 # tree (its arithmetic-5 book certified once); ACL2=/path overrides.
 # Not in the gate yet: ACL2 is not on every machine the gate runs on.
+#
+# Each book's certificate is a target after the certificates of the
+# books it includes ($(B)/model-deps.mk, read from its include-book
+# lines), so only what changed re-proves and `make -j model` certifies
+# independent books side by side. ACL2 checks an included book's
+# certificate against its source too, so a stale one fails rather than
+# passes. `make model-full` re-proves every book from nothing.
 ACL2 ?= $(HOME)/jborden/acl2/saved_acl2
-.PHONY: model
+.PHONY: model model-full
 MODEL_BOOKS = boundary vector string hashseq btree vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell vm-closure vm-closure-proof vm-closure-correct vm-closure-stack-proof vm-closure-stack-correct vm-closure-cost vm-closure-rooted jit jit-proof jit-correct alloc alloc-old
-model:
+MODEL_CERTS = $(MODEL_BOOKS:%=model/%.cert)
+model: $(MODEL_CERTS)
+model/%.cert: model/%.lisp
+	@mkdir -p $(B)
+	@rm -f $@
+	@(cd model && printf '(certify-book "%s")\n(good-bye)\n' $* | "$(ACL2)" > ../$(B)/model-$*.log 2>&1); \
+	  test -f $@ || { echo "model: $* did not certify"; grep -E "ACL2 Error|FAILED" $(B)/model-$*.log; exit 1; }; \
+	  echo "model: $* certified"
+$(B)/model-deps.mk: $(MODEL_BOOKS:%=model/%.lisp)
 	@mkdir -p $(B)
 	@for b in $(MODEL_BOOKS); do \
-	  rm -f model/$$b.cert; \
-	  (cd model && printf '(certify-book "%s")\n(good-bye)\n' $$b | "$(ACL2)" > ../$(B)/model-$$b.log 2>&1); \
-	  test -f model/$$b.cert || { echo "model: $$b did not certify"; grep -E "ACL2 Error|FAILED" $(B)/model-$$b.log; exit 1; }; \
-	  echo "model: $$b certified"; \
-	done
+	  for d in $$(sed -n 's/^(include-book "\([^"]*\)")$$/\1/p' model/$$b.lisp); do \
+	    echo "model/$$b.cert: model/$$d.cert"; \
+	  done; \
+	done > $@
+ifneq ($(wildcard model/vm.lisp),)
+-include $(B)/model-deps.mk
+endif
+model-full:
+	rm -f $(MODEL_CERTS)
+	$(MAKE) model
 
 # The package door against the model: every scalar value the fuzzer
 # makes must cross or be refused exactly as model/boundary.lisp's
