@@ -6,7 +6,8 @@
 ;; model with its collections, and on a reference heap that never
 ;; collects. After every operation, observations along random paths from
 ;; every root must agree, and after every collection the barrier's
-;; invariant and L's closure are checked executably. The oracle is the
+;; invariant and L's closure are checked executably. L is the model's own
+;; live-set, the one live-set-ok proves good. The oracle is the
 ;; heap that never moved; gc-invisible proves the collection over any
 ;; good L, and this checks the operations around it and the L the
 ;; worklist computes.
@@ -63,17 +64,6 @@
 (def driver
   (str "(include-book \"alloc\")
 (set-guard-checking :none)
-(defun young-refs (vs) (declare (xargs :mode :program))
-  (cond ((atom vs) nil) ((yrefp (car vs)) (cons (cdr (car vs)) (young-refs (cdr vs)))) (t (young-refs (cdr vs)))))
-(defun rem-refs (rem old) (declare (xargs :mode :program))
-  (if (atom rem) nil (append (young-refs (nth (car rem) old)) (rem-refs (cdr rem) old))))
-; THE LIVE YOUNG OBJECTS: a worklist from the roots and the remembered objects
-(defun reach (todo l young) (declare (xargs :mode :program))
-  (cond ((atom todo) l)
-        ((member-equal (car todo) l) (reach (cdr todo) l young))
-        (t (reach (append (young-refs (nth (car todo) young)) (cdr todo)) (cons (car todo) l) young))))
-(defun live-young (st) (declare (xargs :mode :program))
-  (reach (append (young-refs (st-roots st)) (rem-refs (st-rem st) (st-old st))) nil (st-young st)))
 ; the checks, executable
 (defun barrier-exec (old rem i) (declare (xargs :mode :program))
   (cond ((atom old) t) ((and (has-young (car old)) (not (member-equal i rem))) nil)
@@ -112,9 +102,9 @@
                                  (write-field (cadr op) (caddr op) (val-of (cadddr op) ref) ref)))
                    (:forget (cons (mk-st (st-old st) (st-young st) (st-rem st) (update-nth (cadr op) nil (st-roots st)))
                                   (mk-st (st-old ref) (st-young ref) (st-rem ref) (update-nth (cadr op) nil (st-roots ref)))))
-                   (t (cons (young-gc (live-young st) st) ref))))
+                   (t (cons (young-gc (live-set st) st) ref))))
            (st2 (car pair)) (ref2 (cdr pair)))
-      (cond ((and (eq (car op) :gc) (not (l-exec (live-young st) st))) :l-not-closed)
+      (cond ((and (eq (car op) :gc) (not (l-exec (live-set st) st))) :l-not-closed)
             ((and (eq (car op) :gc) (not (barrier-exec (st-old st2) (st-rem st2) 0))) :barrier-broken)
             ((not (equal (obs-roots (len (st-roots st2)) st2 *paths*)
                          (obs-roots (len (st-roots ref2)) ref2 *paths*))) :differ)

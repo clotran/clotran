@@ -449,3 +449,174 @@
   :hints (("Goal" :in-theory (enable barrier2)
                   :use ((:instance young-gc-no-young
                                    (i (barrier2-witness (st-old (young-gc l st)) (st-rem (young-gc l st)))))))))
+
+; ---- THE LIVE SET, computed -----------------------------------------------------
+;
+; L from a worklist: the young objects the roots and the remembered
+; objects reference, then every young object a member references. With
+; fuel, so it is a function of the logic; when the fuel runs out first
+; the whole nursery is copied instead -- every collection is safe
+; either way (live-set-ok), and a finished worklist copies only what is
+; reachable, which is the point of it.
+
+(defun young-refs (vs)
+  (cond ((atom vs) nil)
+        ((yrefp (car vs)) (cons (cdr (car vs)) (young-refs (cdr vs))))
+        (t (young-refs (cdr vs)))))
+
+(defun rem-refs (rem old)
+  (if (atom rem) nil (append (young-refs (nth (car rem) old)) (rem-refs (cdr rem) old))))
+
+; (mv done L)
+(defun reach (todo l young fuel)
+  (declare (xargs :measure (nfix fuel)))
+  (cond ((zp fuel) (mv nil l))
+        ((atom todo) (mv t l))
+        ((member-equal (car todo) l) (reach (cdr todo) l young (1- fuel)))
+        (t (reach (append (young-refs (nth (car todo) young)) (cdr todo))
+                  (cons (car todo) l) young (1- fuel)))))
+
+(defun count-to (n) (if (zp n) nil (cons (1- n) (count-to (1- n)))))
+
+(defun live-fuel (st) (* 4 (1+ (len (st-young st))) (1+ (len (st-old st)))))
+
+(defun live-set (st)
+  (mv-let (done l)
+    (reach (append (young-refs (st-roots st)) (rem-refs (st-rem st) (st-old st))) nil (st-young st) (live-fuel st))
+    (if done l (count-to (len (st-young st))))))
+
+; ---- young-in, as a subset ------------------------------------------------------
+
+(defthm young-in-is-subset
+  (equal (young-in vs l) (subsetp-equal (young-refs vs) l)))
+
+(defthm subsetp-append-right
+  (implies (subsetp-equal a b) (subsetp-equal a (append b c))))
+(defthm subsetp-append-left
+  (implies (subsetp-equal a c) (subsetp-equal a (append b c))))
+(defthm subsetp-cons-more (implies (subsetp-equal a b) (subsetp-equal a (cons x b))))
+(defthm subsetp-refl (subsetp-equal a a))
+(defthm subsetp-append-both
+  (equal (subsetp-equal (append a b) c) (and (subsetp-equal a c) (subsetp-equal b c))))
+
+(defthm member-subsetp
+  (implies (and (subsetp-equal a b) (member-equal x a)) (member-equal x b)))
+(defthm subsetp-trans
+  (implies (and (subsetp-equal a b) (subsetp-equal b c)) (subsetp-equal a c)))
+
+(defthm member-append-iff
+  (iff (member-equal x (append a b)) (or (member-equal x a) (member-equal x b))))
+(defthm subsetp-consp
+  (implies (and (consp a) (member-equal (car a) b) (subsetp-equal (cdr a) b)) (subsetp-equal a b)))
+
+; ---- the worklist's invariant -----------------------------------------------------
+
+; every member's young references are in L or still to do
+(defun members-closed (ls l todo young)
+  (if (atom ls)
+      t
+    (and (subsetp-equal (young-refs (nth (car ls) young)) (append l todo))
+         (members-closed (cdr ls) l todo young))))
+
+(defthm members-closed-more
+  (implies (and (members-closed ls l todo young) (subsetp-equal (append l todo) (append l2 todo2)))
+           (members-closed ls l2 todo2 young))
+  :hints (("Goal" :induct (members-closed ls l todo young))))
+
+(defthm members-closed-member
+  (implies (and (members-closed ls l todo young) (member-equal j ls))
+           (subsetp-equal (young-refs (nth j young)) (append l todo))))
+
+(defthm append-nil-right (implies (true-listp l) (equal (append l nil) l)))
+
+; what the worklist ends with: closed, and holding every start
+(defthm reach-closed
+  (implies (and (members-closed l l todo young) (subsetp-equal start (append l todo)) (true-listp l)
+                (mv-nth 0 (reach todo l young fuel)))
+           (and (members-closed (mv-nth 1 (reach todo l young fuel)) (mv-nth 1 (reach todo l young fuel)) nil young)
+                (subsetp-equal start (mv-nth 1 (reach todo l young fuel)))
+                (true-listp (mv-nth 1 (reach todo l young fuel)))))
+  :hints (("Goal" :induct (reach todo l young fuel))))
+
+; ---- THE LIVE SET IS A GOOD L ----------------------------------------------------
+
+(defthm all-below-append
+  (equal (all-below (append a b) n) (and (all-below a n) (all-below b n))))
+(defthm refs-young-below
+  (implies (refs-in-bounds vs no ny) (all-below (young-refs vs) ny)))
+(defthm objs-young-below
+  (implies (objs-ok objs no ny) (all-below (young-refs (nth j objs)) ny))
+  :hints (("Goal" :cases ((< (nfix j) (len objs))))
+          ("Subgoal 1" :in-theory (disable objs-ok-nth) :use ((:instance objs-ok-nth (i (nfix j)))))))
+(defthm rem-refs-below
+  (implies (objs-ok old no ny) (all-below (rem-refs rem old) ny)))
+
+; the worklist adds only nursery objects
+(defthm reach-below
+  (implies (and (all-below l n) (all-below todo n) (objs-ok young no n))
+           (all-below (mv-nth 1 (reach todo l young fuel)) n))
+  :hints (("Goal" :induct (reach todo l young fuel))))
+
+(defthm rem-refs-cover
+  (implies (member-equal i rem) (subsetp-equal (young-refs (nth i old)) (rem-refs rem old))))
+
+(defthm member-count-to
+  (implies (and (natp j) (natp n) (< j n)) (member-equal j (count-to n))))
+(defthm all-below-count-to-gen
+  (implies (and (natp n) (<= (nfix m) n)) (all-below (count-to m) n)))
+(defthm all-below-count-to
+  (implies (natp n) (all-below (count-to n) n)))
+(defthm below-subset-count-to
+  (implies (and (all-below l n) (natp n)) (subsetp-equal l (count-to n))))
+(defthm true-listp-count-to (true-listp (count-to n)))
+
+(defmacro ls-start ()
+  '(append (young-refs (st-roots st)) (rem-refs (st-rem st) (st-old st))))
+
+; a list closed over its members, holding the roots' and the remembered
+; objects' young references, of nursery objects, is a good L
+(defthm l-ok-from-members
+  (implies (and (members-closed l l nil (st-young st)) (subsetp-equal (young-refs (st-roots st)) l)
+                (subsetp-equal (rem-refs (st-rem st) (st-old st)) l) (true-listp l)
+                (all-below l (len (st-young st))))
+           (l-ok l st))
+  :hints (("Goal" :in-theory (enable l-ok)
+                  :expand ((closed-ok l st))
+                  :use ((:instance members-closed-member (ls l) (todo nil) (young (st-young st))
+                                   (j (closed-ok-witness l st)))
+                        (:instance rem-refs-cover (rem (st-rem st)) (old (st-old st)) (i (closed-ok-witness l st)))))))
+
+; the finished worklist: closed, holding every start, all nursery objects
+(defthm live-set-finished
+  (implies (and (heap-ok st) (mv-nth 0 (reach (ls-start) nil (st-young st) (live-fuel st))))
+           (l-ok (mv-nth 1 (reach (ls-start) nil (st-young st) (live-fuel st))) st))
+  :hints (("Goal" :in-theory (e/d (heap-ok) (reach-closed reach-below l-ok l-ok-from-members live-fuel))
+                  :use ((:instance reach-closed (l nil) (todo (ls-start)) (start (ls-start)) (young (st-young st))
+                                   (fuel (live-fuel st)))
+                        (:instance reach-below (l nil) (todo (ls-start)) (young (st-young st)) (fuel (live-fuel st))
+                                   (n (len (st-young st))) (no (len (st-old st))))
+                        (:instance l-ok-from-members (l (mv-nth 1 (reach (ls-start) nil (st-young st) (live-fuel st)))))))))
+
+; the fallback: the whole nursery
+(defthm live-set-fallback
+  (implies (heap-ok st) (l-ok (count-to (len (st-young st))) st))
+  :hints (("Goal" :in-theory (enable heap-ok l-ok)
+                  :expand ((closed-ok (count-to (len (st-young st))) st))
+                  :use ((:instance objs-young-below (objs (st-old st)) (no (len (st-old st))) (ny (len (st-young st)))
+                                   (j (closed-ok-witness (count-to (len (st-young st))) st)))
+                        (:instance objs-young-below (objs (st-young st)) (no (len (st-old st))) (ny (len (st-young st)))
+                                   (j (closed-ok-witness (count-to (len (st-young st))) st)))))))
+
+; THE LIVE SET IS ALWAYS A GOOD L: so a young collection over it is
+; invisible (gc-invisible), whether the worklist finished or not
+(defthm live-set-ok
+  (implies (heap-ok st) (l-ok (live-set st) st))
+  :hints (("Goal" :in-theory (disable live-set-finished live-set-fallback l-ok)
+                  :use (live-set-finished live-set-fallback))))
+
+(defthm collection-invisible
+  (implies (heap-ok st)
+           (equal (obs (nth r (st-roots (young-gc (live-set st) st))) path (young-gc (live-set st) st))
+                  (obs (nth r (st-roots st)) path st)))
+  :hints (("Goal" :in-theory (disable live-set gc-invisible)
+                  :use ((:instance gc-invisible (l (live-set st)))))))
