@@ -85,9 +85,10 @@
 
 ; ---- what a step reads ---------------------------------------------------------
 ;
-; The machine checks its operands' count itself: an :add with one value
-; on the stack does nothing. It does not check the slot a :load or a
-; :capt names, nor that a :ret's frame base is below the top. A run that
+; A step reads only slots that exist: its operands (the bytecode machine
+; checks their count and does nothing when one is short; the JIT's
+; machine code checks nothing, model/jit-proof.lisp), the slot a :load
+; or a :capt names, and a :ret's frame base below the top. A run that
 ; never reads at or above its top keeps nothing a computation needs in
 ; a dead slot -- model/vm-closure-rooted.lisp's wiped-run-agrees -- and
 ; every compiled run is one (sgood carries it).
@@ -97,6 +98,8 @@
     (case (car ins)
       ((:load :capt) (< (+ fb (nfix (cadr ins))) sp))
       (:ret (or (atom (s-ctl s)) (< fb sp)))
+      ((:add :lt :slide) (<= 2 sp))
+      (:jmpf (<= 1 sp))
       (otherwise t))))
 
 (defun run-reads-ok (prog s n)
@@ -172,7 +175,13 @@
 
 ; reads-ok is opened only where a step reads a slot it names
 (defthm reads-ok-plain
-  (implies (not (member-equal (car (nth (car s) (car prog))) '(:load :capt :ret)))
+  (implies (not (member-equal (car (nth (car s) (car prog))) '(:load :capt :ret :add :lt :slide :jmpf)))
+           (reads-ok prog s)))
+(defthm reads-ok-two
+  (implies (and (member-equal (car (nth (car s) (car prog))) '(:add :lt :slide)) (<= 2 (nfix (caddr s))))
+           (reads-ok prog s)))
+(defthm reads-ok-one
+  (implies (and (equal (car (nth (car s) (car prog))) :jmpf) (<= 1 (nfix (caddr s))))
            (reads-ok prog s)))
 (in-theory (disable reads-ok))
 

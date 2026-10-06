@@ -9,18 +9,21 @@
 ;; or a capture names one that exists), so a disagreement is a bug in
 ;; the machine, the compiler or here.
 ;;
-;;   scripts/fuzz-vm-closure [-n COUNT] [-s SEED] [-k | -w]
+;;   scripts/fuzz-vm-closure [-n COUNT] [-s SEED] [-k | -w | -j]
 ;;
-;; Each program runs three ways: the register machine, the one-stack
-;; machine, and the one-stack machine with every slot at or above its
-;; top wiped after every step (vcs-run-wiping) -- the rooting check: a
-;; machine that kept a live value above its top would answer otherwise.
+;; Each program runs four ways: the register machine, the one-stack
+;; machine, the one-stack machine with every slot at or above its top
+;; wiped after every step (vcs-run-wiping) -- the rooting check: a
+;; machine that kept a live value above its top would answer otherwise
+;; -- and the stack machine's bytecode through the baseline JIT
+;; (model/jit.lisp) on the machine-code model.
 ;;
 ;; -k is the NEGATIVE CONTROL: the machine's closure captures each value
 ;; one register late, and the run must find disagreements, or the
 ;; fuzzer could not see a broken machine. -w is the rooting's: the wipe
 ;; takes the top slot too, a value still live, and the wiped runs must
-;; disagree.
+;; disagree. -j is the JIT's: :add's block reads its second operand from
+;; the first's slot, and only the JIT's runs must disagree.
 ;;
 ;; Needs the books certified (make model). Exit 1 on any disagreement.
 
@@ -29,7 +32,8 @@
 
 (def broken (some #{"-k"} *command-line-args*))
 (def broken-wipe (some #{"-w"} *command-line-args*))
-(def args (apply hash-map (remove #{"-k" "-w"} *command-line-args*)))
+(def broken-jit (some #{"-j"} *command-line-args*))
+(def args (apply hash-map (remove #{"-k" "-w" "-j"} *command-line-args*)))
 (def n (parse-long (get args "-n" "200")))
 (def seed (parse-long (get args "-s" (str (mod (System/nanoTime) 2147483647)))))
 ;; a seeded generator of our own (Knuth's MMIX LCG), so a seed repeats
@@ -92,13 +96,23 @@
 (def exprs (vec (rep n #(gen 5 0 0))))
 
 (def driver
-  (str "(include-book \"vm-closure\")\n"
+  (str "(include-book \"jit\")\n"
+       ";; the machine code run to its halt: jit-run-program runs every step it is given\n"
+       "(defun jrun (np ns n)\n"
+       "  (declare (xargs :mode :program))\n"
+       "  (if (zp n) ns\n"
+       "    (let ((ins (and (natp (car ns)) (nth (car ns) (car np)))))\n"
+       "      (cond ((or (not (natp (car ns))) (atom ins) (eq (car ins) :stuck)) ns)\n"
+       "            ((< 10000 (nfix (caddr ns))) ns) ; deeper than fuel 1000 lets any run go\n"
+       "            ((and (eq (car ins) :ret) (atom (car (cddddr ns)))) (nstep np ns))\n"
+       "            (t (jrun np (nstep np ns) (1- n)))))))\n"
        "(defun fuzz-one (e)\n"
        "  (declare (xargs :mode :program))\n"
        "  (let ((r (mc e nil nil *clo-defs* 1000)))\n"
        "    (if (eq (car r) :out) :out\n"
        "      (list (equal (vc-run-program e *clo-defs* 400000) r) (equal (vcs-run-program e *clo-defs* 400000) r)\n"
-       "            (equal (vcs-run-program-wiping e *clo-defs* 400000) r)))))\n"
+       "            (equal (vcs-run-program-wiping e *clo-defs* 400000) r)\n"
+       "            (equal (vcs-answer (nview (jrun (jit (vcs-program e *clo-defs*)) (list 0 0 0 nil nil nil) 2000000))) r)))))\n"
        "(defun fuzz-all (es i)\n"
        "  (declare (xargs :mode :program))\n"
        "  (if (atom es) nil\n"
@@ -107,6 +121,9 @@
        "(set-guard-checking :none)\n"
        (if broken
          "(redef!)\n(defun regs-from (fb a k regs) (declare (xargs :mode :program)) (if (zp k) nil (cons (reg fb (1+ (nfix a)) regs) (regs-from fb (1+ (nfix a)) (1- k) regs))))\n(defun stk-from (a k stk) (declare (xargs :mode :program)) (if (zp k) nil (cons (sreg (1+ (nfix a)) stk) (stk-from (1+ (nfix a)) (1- k) stk))))\n"
+         "")
+       (if broken-jit
+         "(redef!)\n(defun jblock (ins tgt) (declare (xargs :mode :program)) (case (car ins) (:push (list (list :movi 0 (cadr ins)) (list :str 0 :sp 0) (list :addsp 1))) (:load (list (list :ldr 0 :fb (nfix (cadr ins))) (list :str 0 :sp 0) (list :addsp 1))) (:add (list (list :ldr 0 :sp -2) (list :ldr 1 :sp -2) (list :add 0 0 1) (list :str 0 :sp -2) (list :addsp -1))) (:lt (list (list :ldr 0 :sp -2) (list :ldr 1 :sp -1) (list :lt 0 0 1) (list :str 0 :sp -2) (list :addsp -1))) (:slide (list (list :ldr 0 :sp -1) (list :str 0 :sp -2) (list :addsp -1))) (:jmpf (list (list :ldr 0 :sp -1) (list :addsp -1) (list :cbf 0 tgt))) (:jmp (list (list :b tgt))) (:mkclo (list (list :mkclo (cadr ins) (nfix (caddr ins))))) (:capt (list (list :ldr 0 :fb (nfix (cadr ins))) (list :capt 0 (nfix (caddr ins))) (list :str 0 :sp 0) (list :addsp 1))) (:callv (list (list :call (nfix (cadr ins))))) (:ret (list (list :ret))) (otherwise (list (list :stuck)))))\n"
          "")
        (if broken-wipe
          "(redef!)\n(defun wstep (prog s) (declare (xargs :mode :program)) (let ((s2 (vcs-step prog s))) (list (car s2) (cadr s2) (caddr s2) (swipe (1- (nfix (caddr s2))) (cadddr s2)) (car (cddddr s2)))))\n"
@@ -119,7 +136,7 @@
 (def results (into {} (for [[_ i r k] (re-seq #"FUZZ (\d+) (:OUT|\([^)]*\)) (\S+)" out)] [(parse-long i) [r k]])))
 
 ;; each program's verdicts: the register machine's, the stack machine's, the wiped stack machine's
-(def kinds-of ["register" "stack" "wiped"])
+(def kinds-of ["register" "stack" "wiped" "jit"])
 (def failures (for [[i [r _]] results :when (not= r ":OUT")
                     [k v] (map vector kinds-of (re-seq #"T|NIL" r)) :when (= v "NIL")] [k i]))
 (def fails (distinct (map second failures)))
@@ -144,5 +161,12 @@
     (println (if (and caught (empty? others))
                "negative control: the wipe of a live slot was caught, by the wiped runs alone"
                "NEGATIVE CONTROL FAILED: the wipe of a live slot went unseen, or was seen where it does not run"))
+    (System/exit (if (and caught (empty? others)) 0 1)))
+  broken-jit
+  (let [caught (some #(= "jit" (first %)) failures)
+        others (remove #(= "jit" (first %)) failures)]
+    (println (if (and caught (empty? others))
+               "negative control: the broken JIT block was caught, by the JIT's runs alone"
+               "NEGATIVE CONTROL FAILED: the broken JIT block went unseen, or was seen where it does not run"))
     (System/exit (if (and caught (empty? others)) 0 1)))
   :else (System/exit (if (seq fails) 1 0)))

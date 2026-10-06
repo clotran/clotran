@@ -2343,11 +2343,13 @@ and a namespace being edited interpreted), so it is the model:
   namespace, ahead of time, through the cache that exists.
 - REGISTER bytecode (Lua, Dalvik, our flat form) for everything not
   compiled yet: with no JIT, register bytecode is the one that is
-  fast to interpret.
+  fast to interpret. SUPERSEDED 2026-10-06 by step 31: stack bytecode
+  and a JIT.
 - Laziness as GHC does it: a thunk is one object, its captures inline,
   updated in place when forced, no lock while one thread runs.
 - No JIT (PLAN, "Should we JIT?"), no C beyond small shims, no
-  change to what a value is.
+  change to what a value is. The "no JIT" is SUPERSEDED 2026-10-06
+  by step 31.
 
 **The machine.**
 
@@ -3229,6 +3231,95 @@ through a chain of compares. Compact integer code is a representation
 the implementation needs whichever machine it runs. A cache keyed by
 code-vector slot was tried and is wrong: slots are reused after a
 collection.
+
+### 31. A stack bytecode VM and a JIT (decided 2026-10-06)
+
+James, 2026-10-06: "let's build a byte code stack machine then a JIT
+compiler for clotran. model it, then let's see if we can get the
+(time (apply + (take 1000000 (range)))) down in time." Targets:
+"I can't foresee us ever needing to support other archs other than
+arm64 and x86-64."
+
+**What it reverses.** Step 26 chose register bytecode, and its
+"no JIT" line rested on interpreting being the fast path for code
+not compiled ahead of time. A register machine's advantage is fewer
+dispatches when interpreting: Lua 5.0 and Dalvik switched to registers
+for it, and the VM showdown (Shi, Casey, Ertl, Gregg 2008) measured
+47% fewer instructions executed and 32% less time. A JIT removes
+dispatch for both shapes, since it compiles each instruction to
+machine code once. So with a JIT, stack bytecode is the simpler
+format: it is easiest to compile to, compact, and its rooting is
+proved for every step (`vcs-rooted`). clj's host, .NET and WebAssembly
+are stack machines for this reason.
+
+**The emitter is ours.** arm64 first, then x86-64. A small C shim
+provides executable memory (`MAP_JIT` with write protection toggled
+per thread on macOS, `mmap`/`mprotect` on Linux, `VirtualAlloc` on
+Windows) and flushes the instruction cache. Fortran remains the host;
+LLVM ORC is not adopted. The CPU model in ACL2 is the instructions we
+emit and no more.
+
+**Modelled first, in stages** (model/jit*.lisp):
+1. A baseline JIT. Each bytecode becomes a fixed block of machine
+   instructions. Stack slots stay in memory, and the frame base and
+   stack top live in two machine registers. Theorem: for ANY program,
+   a run that reads only below its top is simulated block for block.
+   Compiled programs then answer what their meaning does
+   (`vcs-correct`, `vcs-program-reads`). It removes dispatch, the
+   fetch/decode/jump of every instruction, and nothing else.
+2. Static stack depth. The depth is known at every bytecode pc, so the
+   stack top's arithmetic disappears and the top slots become machine
+   registers, spilled at calls and safepoints with a stack map. This
+   is the stage at which stack and register bytecode should compile to
+   the same machine code; the model will show whether they do. It
+   extends `vcs-rooted` to compiled code.
+3. Calls and inlining for core's own functions. The benchmark's time
+   (sampled 2026-10-06, clotran ~920 ms, clj ~60 ms) is the
+   interpreter loop 37% (dispatch about 10% of the total), calls,
+   frames and closures 24%, allocation and GC 11%, and lazy forcing 8%.
+   Removing dispatch alone is worth about 10%. Getting near clj needs
+   the modelled one-road call, cheaper allocation, and compiled
+   `range`/`take`/`+`.
+
+**Measured at every step** with the same form and a profile, so that
+each gain is attributed to its stage.
+
+**Stage 1, proved (2026-10-06).** model/jit.lisp is the design: the
+CPU model, the translation (`jblock` per bytecode, `npc` for where each
+block begins, and branch targets and the function table moved to their
+blocks), and ten executable checks. model/jit-proof.lisp proves
+`jit-sim`: for ANY bytecode program, a run whose every step has its
+operands is simulated block for block. The machine's frame base, top,
+stack and return records equal the bytecode's after each block, and
+its pc is at the block of the bytecode's pc. One lemma per opcode
+(`block-add`, `block-callv`, ...) does the work.
+`jit-clock-bound`: at most 5 machine instructions per bytecode, none of
+them a dispatch. model/jit-correct.lisp: `jit-correct`, a compiled
+closure program answers its meaning on the machine code, and
+`jit-linear`, in at most 10 instructions per expression the meaning
+evaluates. To make compiled runs qualify, `reads-ok` now also requires
+a step's operands to exist (`sp` >= 2 for :add, :lt and :slide, >= 1
+for :jmpf). The stack proof certified unchanged with it.
+
+scripts/fuzz-vm-closure runs every program through the JIT as a fourth
+machine. Its `-j` control breaks :add's block (the second operand read
+from the first's slot) and is caught by the JIT's runs alone.
+
+**Register or stack bytecode under the baseline JIT** (model/jit.lisp,
+`compare-jit`). Each entry is bytecodes executed / machine instructions
+/ memory operations:
+
+| program | stack | register |
+|---|---|---|
+| fib(15) | 22,688 / 64,114 / 30,576 | 22,688 / 48,332 / 30,576 |
+| tri(50) | 610 / 1,824 / 909 | 610 / 1,368 / 909 |
+| down(30) | 370 / 1,104 / 519 | 370 / 828 / 519 |
+
+Both shapes execute the same bytecodes and make the same memory
+traffic. The stack form costs 33% more machine instructions, and the
+whole difference is the run-time stack-top adjustments (`:addsp`).
+Stage 2's static depth removes those. Under a template JIT, the shapes
+differ only in that bookkeeping.
 
 ### 29. Fuzz everything (begun 2026-10-02)
 
