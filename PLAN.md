@@ -3031,10 +3031,43 @@ Proved since (2026-10-06):
 scripts/fuzz-alloc runs `young-gc-alg` now, so the fuzzer checks the
 algorithm and `alg-is-spec` connects it to the proof.
 
-Owed in the model, in order:
+**The old space's own collection, modelled (model/alloc-old.lisp,
+2026-10-06).** A mark and a sweep, NOT moving: an old object keeps its
+place, so a reference to it stays valid as long as the object lives,
+and collecting the old space rewrites no reference. It runs right
+after a young collection, when the nursery is empty. What is proved:
+- `young-gc-heap-ok`: a young collection over a good L leaves a
+  well-formed heap. Every reference is in bounds in the new old space,
+  and no young reference is left anywhere. Until now only the barrier
+  was proved kept; the shapes and bounds were assumed.
+- `old-gc-invisible`: the mark and sweep changes nothing observable,
+  for any marked set that holds the roots' objects and is closed under
+  fields. Underneath it is `obs-agree`: two heaps that agree on such a
+  set read the same along every path.
+- `free-reuse-invisible`: storing anything into a freed slot changes
+  nothing observable. That is what reusing the slot for a new object
+  does, so the free list is safe to allocate from.
+- `mark-set-ok`: the mark the collector computes, a worklist from the
+  roots with fuel and all objects as the fallback, is such a set.
+- `full-gc-invisible`: a young collection followed by the mark and
+  sweep changes nothing observable.
+- `old-gc-cost`: the roots, plus the marked objects' fields, plus one
+  step per old object for the sweep. The sweep is linear in the old
+  space, live or not. That is why the young collection exists: it runs
+  often and never pays that cost.
+
+scripts/fuzz-alloc now runs full collections too. Its second negative
+control (`-m`) is a mark that takes the roots' objects but not what
+they reference, and it is caught.
+
+Owed in the model:
 - Several threads' nurseries: a reference published from one nursery
-  to another thread.
-- The old space's own collection.
+  to another thread. This needs a design decision before it can be
+  modelled. Either publishing promotes the object (a barrier on
+  publication), or a young collection stops every thread.
+- Promotion into freed slots. The copy now goes to the end of the old
+  space. `free-reuse-invisible` says a freed slot may take it, but the
+  forwarding map would then be a slot list rather than an offset.
 
 **Lazy cells claimed lock-free, done (2026-10-05).** Every forced
 element of a lazy seq took the global state lock twice, to claim and

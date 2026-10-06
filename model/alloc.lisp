@@ -28,9 +28,10 @@
 ; remembered object references and is closed under young fields;
 ; everything else in the nursery is garbage and goes with it.
 ;
-; Owed, in order: L computed (the least such set: the live young), the
-; collection's cost over the algorithmic copy, several threads'
-; nurseries, the old space's own collection.
+; Below: L computed (live-set-ok), the collector that touches only the
+; remembered objects (alg-is-spec) and its cost (alg-cost).
+; model/alloc-old.lisp: the heap stays well formed, and the old space's
+; own collection. Owed: several threads' nurseries.
 
 (in-package "ACL2")
 

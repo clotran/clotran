@@ -2,7 +2,8 @@
 ;; Fuzz the allocator model (model/alloc.lisp, PLAN step 30): random
 ;; mutator programs -- allocations, writes of immediates and of other
 ;; roots' references, roots forgotten (a local dropped), young
-;; collections -- run twice in ACL2: on the
+;; collections and full ones (model/alloc-old.lisp: a young collection,
+;; then the old space's mark and sweep) -- run twice in ACL2: on the
 ;; model with its collections (young-gc-alg, which fixes up only the
 ;; remembered objects), and on a reference heap that never
 ;; collects. After every operation, observations along random paths from
@@ -13,11 +14,13 @@
 ;; good L, and this checks the operations around it and the L the
 ;; worklist computes.
 ;;
-;;   scripts/fuzz-alloc [-n COUNT] [-s SEED] [-k]
+;;   scripts/fuzz-alloc [-n COUNT] [-s SEED] [-k | -m]
 ;;
 ;; -k is the NEGATIVE CONTROL: the write barrier records nothing, so a
 ;; young object reachable only through an old one is lost at the next
-;; collection -- the run must find disagreements.
+;; collection -- the run must find disagreements. -m is the old space's:
+;; the mark takes the roots' objects and not what they reference, so an
+;; object reachable only through another is swept.
 ;;
 ;; Needs model/alloc.lisp certified (make model). Exit 1 on any finding.
 
@@ -25,7 +28,8 @@
          '[babashka.process :as p])
 
 (def broken (some #{"-k"} *command-line-args*))
-(def args (apply hash-map (remove #{"-k"} *command-line-args*)))
+(def broken-mark (some #{"-m"} *command-line-args*))
+(def args (apply hash-map (remove #{"-k" "-m"} *command-line-args*)))
 (def n (parse-long (get args "-n" "100")))
 (def seed (parse-long (get args "-s" (str (mod (System/nanoTime) 2147483647)))))
 (def state (atom seed))
@@ -51,8 +55,10 @@
           (recur (conj ops (list :write (rnd nroots) (rnd 3) (value nroots))) nroots (inc i))
           (< k 8)
           (recur (conj ops (list :forget (rnd nroots))) nroots (inc i))
+          (< k 9)
+          (recur (conj ops (list :gc)) nroots (inc i))
           :else
-          (recur (conj ops (list :gc)) nroots (inc i)))))))
+          (recur (conj ops (list :full)) nroots (inc i)))))))
 
 (defn lisp [x]
   (cond (seq? x) (str "(" (str/join " " (map lisp x)) ")")
@@ -63,7 +69,7 @@
 (def progs (vec (repeatedly n program)))
 
 (def driver
-  (str "(include-book \"alloc\")
+  (str "(include-book \"alloc-old\")
 (set-guard-checking :none)
 ; the checks, executable
 (defun barrier-exec (old rem i) (declare (xargs :mode :program))
@@ -82,6 +88,9 @@
                             (st-young st) (st-rem st) (st-roots st)))
           (t (write-field r k v st)))))\n"
          "(defun write-op (r k v st) (declare (xargs :mode :program)) (write-field r k v st))\n")
+       (if broken-mark
+         "(redef!)\n(defun mark-set (st) (declare (xargs :mode :program)) (old-refs (st-roots st)))\n"
+         "")
        "(defun val-of (x st) (declare (xargs :mode :program))
   (if (eq (car x) :imm) (cadr x) (nth (cadr x) (st-roots st))))
 (defun vals-of (xs st) (declare (xargs :mode :program))
@@ -103,6 +112,7 @@
                                  (write-field (cadr op) (caddr op) (val-of (cadddr op) ref) ref)))
                    (:forget (cons (mk-st (st-old st) (st-young st) (st-rem st) (update-nth (cadr op) nil (st-roots st)))
                                   (mk-st (st-old ref) (st-young ref) (st-rem ref) (update-nth (cadr op) nil (st-roots ref)))))
+                   (:full (cons (full-gc st) ref))
                    (t (cons (young-gc-alg (live-set st) st) ref))))
            (st2 (car pair)) (ref2 (cdr pair)))
       (cond ((and (eq (car op) :gc) (not (l-exec (live-set st) st))) :l-not-closed)
@@ -130,7 +140,11 @@
   (System/exit 1))
 (def bad (for [[i r] results :when (not= r ":OK")] i))
 (doseq [i (take 3 bad)] (println "   " (results i) (lisp (apply list (progs i)))))
-(if broken
+(cond
+  broken
   (do (println (if (seq bad) "negative control: the broken barrier was caught" "NEGATIVE CONTROL FAILED: a broken barrier went unseen"))
       (System/exit (if (seq bad) 0 1)))
-  (System/exit (if (seq bad) 1 0)))
+  broken-mark
+  (do (println (if (seq bad) "negative control: the broken mark was caught" "NEGATIVE CONTROL FAILED: a broken mark went unseen"))
+      (System/exit (if (seq bad) 0 1)))
+  :else (System/exit (if (seq bad) 1 0)))
