@@ -3030,6 +3030,46 @@ the model already describes (model/vm-call-opt.lisp: operands in
 place, a frame that is a base and a return record), built as one
 road rather than patched into this one.
 
+**The call, modelled for both machines (2026-10-05, James: build the
+modelled call, and nothing that bars the stack VM).**
+model/vm-closure.lisp:
+- A function is a value: a closure, its code and the values it
+  captured. The callee is read from a register at run time, and a
+  call of what is not a closure, or of the wrong arity, is an error.
+- A body reads its captures THROUGH its closure, which the call
+  leaves in the callee's frame: nothing is copied in per call.
+  Clotran's ct_stack_frame copied every capture, every call.
+- The arguments are evaluated into the slots the callee's frame
+  begins at, and the closure into the next. So the call moves NO
+  value, whatever the number of arguments: it is a return record, a
+  base and a jump. `callv-moves-no-value` proves it of the register
+  machine and `vcs-callv-moves-no-value` of the stack machine.
+- The stack machine here is the one clotran would run, ONE value
+  stack with the operands above the locals, not vm-stack.lisp's
+  frames of separate lists. Its call is the same protocol: the frame
+  begins at the first pushed argument, the answer returns to where
+  the frame began. The call protocol bars neither machine.
+
+scripts/fuzz-vm-closure (make fuzz-model) runs random closure
+programs (captures, closures passed and kept, recursion through a
+capture, wrong arities, non-closures called) through both machines
+against the meaning, with a negative control that must catch a
+broken machine.
+
+Still owed before the implementation:
+- the correctness theorem, both machines against the meaning, for
+  every program (vm-call-proof.lisp's shape);
+- rooting: the closure stays live in its frame;
+- the cost: a call is O(1) steps.
+
+Measured in passing, for the implementation: 25-30% of flat_run is
+instruction fetch and dispatch. Each instruction word is a 16-byte
+gc_value, eight strided loads into a buffer in memory, dispatched
+through a chain of compares. Compact integer code is a representation
+the implementation needs whichever machine it runs. A cache keyed by
+code-vector slot was tried and is wrong: slots are reused after a
+collection.
+
 ### 29. Fuzz everything (begun 2026-10-02)
 
 James: "fuzz everything at this point and going forward". The rule

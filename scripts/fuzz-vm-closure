@@ -1,0 +1,128 @@
+#!/usr/bin/env bb
+;; Fuzz the closure call (model/vm-closure.lisp, PLAN step 30): random
+;; programs in its language -- closures made over captured values,
+;; called through a register, nested, passed to other functions,
+;; recursive through a capture of themselves, and called wrongly (the
+;; wrong arity, what is not a closure) -- compiled and run on the
+;; machine in ACL2 against the meaning, mc. The oracle is the model's
+;; own meaning; the generator builds only well-formed programs (a local
+;; or a capture names one that exists), so a disagreement is a bug in
+;; the machine, the compiler or here.
+;;
+;;   scripts/fuzz-vm-closure [-n COUNT] [-s SEED] [-k]
+;;
+;; -k is the NEGATIVE CONTROL: the machine's closure captures each value
+;; one register late, and the run must find disagreements, or the
+;; fuzzer could not see a broken machine.
+;;
+;; Needs the books certified (make model). Exit 1 on any disagreement.
+
+(require '[clojure.string :as str]
+         '[babashka.process :as p])
+
+(def broken (some #{"-k"} *command-line-args*))
+(def args (apply hash-map (remove #{"-k"} *command-line-args*)))
+(def n (parse-long (get args "-n" "200")))
+(def seed (parse-long (get args "-s" (str (mod (System/nanoTime) 2147483647)))))
+;; a seeded generator of our own (Knuth's MMIX LCG), so a seed repeats
+(def state (atom seed))
+(defn rnd [k]
+  (let [x (swap! state #(unchecked-add (unchecked-multiply % 6364136223846793005) 1442695040888963407))]
+    (mod (unsigned-bit-shift-right x 33) k)))
+
+;; *clo-defs*'s functions: arity and how many values each one's body
+;; reads as captures. down recurses on its argument, so it is called on
+;; a small constant only.
+(def fns {'inc1 [1 0] 'adder [1 1] 'apply1 [2 0] 'mk [2 0]})
+
+(declare gen)
+;; eager: a lazy seq of lazy seqs overflowed the stack when printed
+(defn rep [k f] (doall (repeatedly k f)))
+(defn closure [depth nl nc & [arity]]
+  (let [cands (vec (if arity (filter #(= arity (first (val %))) fns) fns))
+        [f [_ k]] (nth cands (rnd (count cands)))]
+    (list* :mkclo f (rep k #(gen (dec depth) nl nc)))))
+
+(defn gen [depth nl nc]
+  (if (or (<= depth 0) (< (rnd 10) 3))
+    (case (rnd (+ 2 (if (pos? nl) 1 0) (if (pos? nc) 1 0)))
+      0 (list :const (- (rnd 21) 10))
+      1 (list :const ([true :false nil 0] (rnd 4)))
+      2 (if (pos? nl) (list :local (rnd nl)) (list :capt (rnd nc)))
+      3 (list :capt (rnd nc)))
+    (case (min 7 (rnd 9))
+      0 (list :if (gen (dec depth) nl nc) (gen (dec depth) nl nc) (gen (dec depth) nl nc))
+      1 (list :let (gen (dec depth) nl nc) (gen (dec depth) (inc nl) nc))
+      2 (list :add (gen (dec depth) nl nc) (gen (dec depth) nl nc))
+      3 (list :lt (gen (dec depth) nl nc) (gen (dec depth) nl nc))
+      ;; a call of a fresh closure, its arity right, or now and then not
+      4 (let [[f [a k]] (nth (vec fns) (rnd (count fns)))
+              a (if (zero? (rnd 12)) (inc a) a)]
+          (list* :callv (list* :mkclo f (rep k #(gen (dec depth) nl nc)))
+                 (if (= f 'apply1)
+                   (cons (closure (dec depth) nl nc 1) (rep (dec a) #(gen (dec depth) nl nc)))
+                   (rep a #(gen (dec depth) nl nc)))))
+      ;; a closure kept in a local and called twice
+      5 (list :let (closure (dec depth) nl nc)
+              (list :add (list :callv (list :local nl) (gen (dec depth) (inc nl) nc))
+                    (list :callv (list :local nl) (gen (dec depth) (inc nl) nc))))
+      ;; recursion through a closure of itself
+      6 (list :callv '(:mkclo down) (list :const (rnd 8)))
+      ;; what is not a closure, called, now and then; else another
+      ;; fresh closure's call
+      7 (if (zero? (rnd 4))
+          (list :callv (gen (dec depth) nl nc) (gen (dec depth) nl nc))
+          (list :callv (closure (dec depth) nl nc 1) (gen (dec depth) nl nc))))))
+
+(defn lisp [x]
+  (cond (seq? x) (str "(" (str/join " " (map lisp x)) ")")
+        (keyword? x) (str ":" (name x))
+        (true? x) "t"
+        (nil? x) "nil"
+        :else (str x)))
+
+(def exprs (vec (rep n #(gen 5 0 0))))
+
+(def driver
+  (str "(include-book \"vm-closure\")\n"
+       "(defun fuzz-one (e)\n"
+       "  (declare (xargs :mode :program))\n"
+       "  (let ((r (mc e nil nil *clo-defs* 1000)))\n"
+       "    (if (eq (car r) :out) :out\n"
+       "      (list (equal (vc-run-program e *clo-defs* 400000) r) (equal (vcs-run-program e *clo-defs* 400000) r)))))\n"
+       "(defun fuzz-all (es i)\n"
+       "  (declare (xargs :mode :program))\n"
+       "  (if (atom es) nil\n"
+       "    (prog2$ (cw \"FUZZ ~x0 ~x1 ~x2~%\" i (fuzz-one (car es)) (car (mc (car es) nil nil *clo-defs* 1000)))\n"
+       "            (fuzz-all (cdr es) (1+ i)))))\n"
+       "(set-guard-checking :none)\n"
+       (if broken
+         "(redef!)\n(defun regs-from (fb a k regs) (declare (xargs :mode :program)) (if (zp k) nil (cons (reg fb (1+ (nfix a)) regs) (regs-from fb (1+ (nfix a)) (1- k) regs))))\n(defun stk-from (a k stk) (declare (xargs :mode :program)) (if (zp k) nil (cons (sreg (1+ (nfix a)) stk) (stk-from (1+ (nfix a)) (1- k) stk))))\n"
+         "")
+       "(fuzz-all '(" (str/join "\n" (map lisp exprs)) ") 0)\n"
+       "(good-bye)\n"))
+
+(def acl2 (str (System/getProperty "user.home") "/jborden/acl2/saved_acl2"))
+(def out (:out (p/shell {:dir "model" :in driver :out :string :err :string} acl2)))
+(def results (into {} (for [[_ i r k] (re-seq #"FUZZ (\d+) (:OUT|\([^)]*\)) (\S+)" out)] [(parse-long i) [r k]])))
+
+;; each program's verdicts, the register machine's then the stack machine's
+(def kinds-of ["register" "stack"])
+(def failures (for [[i [r _]] results :when (not= r ":OUT")
+                    [k v] (map vector kinds-of (re-seq #"T|NIL" r)) :when (= v "NIL")] [k i]))
+(def fails (distinct (map second failures)))
+(def kinds (frequencies (map (comp second val) results)))
+(println (str "fuzz-vm-closure: " n " programs, seed " seed ", " (count results) " run; the meaning answered "
+              (str/join ", " (for [[k c] (sort kinds)] (str c " " (str/lower-case (str/replace k ":" ""))))) ))
+(when (not= n (count results))
+  (println "  ACL2 did not report every program; the tail of its output:")
+  (println (subs out (max 0 (- (count out) 2000))))
+  (System/exit 1))
+(doseq [k kinds-of]
+  (let [fs (map second (filter #(= k (first %)) failures))]
+    (println (format "%-9s machine against the meaning: %d disagree" k (count fs)))
+    (doseq [i (take 3 fs)] (println "   " (lisp (exprs i))))))
+(if broken
+  (do (println (if (seq fails) "negative control: the broken machine was caught" "NEGATIVE CONTROL FAILED: a broken machine went unseen"))
+      (System/exit (if (seq fails) 0 1)))
+  (System/exit (if (seq fails) 1 0)))

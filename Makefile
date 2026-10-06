@@ -706,7 +706,7 @@ clean:
 # Not in the gate yet: ACL2 is not on every machine the gate runs on.
 ACL2 ?= $(HOME)/jborden/acl2/saved_acl2
 .PHONY: model
-MODEL_BOOKS = boundary vector string hashseq btree vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell
+MODEL_BOOKS = boundary vector string hashseq btree vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell vm-closure
 model:
 	@mkdir -p $(B)
 	@for b in $(MODEL_BOOKS); do \
@@ -730,10 +730,14 @@ fuzz-door: model clotran-bin $(B)/libsamplelib.$(SOEXT)
 	scripts/fuzz-door -n 500 -s 1
 
 # The VM models against their meaning: random programs through the three
-# machines (PLAN step 28). Needs ACL2, as `model` does.
+# machines (PLAN step 28), and through the closure call (PLAN step 30),
+# whose negative control must catch a broken machine. Needs ACL2, as
+# `model` does.
 .PHONY: fuzz-model
 fuzz-model: model
 	scripts/fuzz-vm-model -n 300 -s 1
+	scripts/fuzz-vm-closure -n 300 -s 1
+	scripts/fuzz-vm-closure -n 100 -s 2 -k
 # pandoc writes HTML; a headless Chrome or Chromium prints it to PDF. No
 # LaTeX. CHROME=/path/to/it overrides the browser found here.
 CHROME ?= $(shell for c in "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" google-chrome chromium chromium-browser chrome; do \
