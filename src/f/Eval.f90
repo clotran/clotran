@@ -14368,8 +14368,10 @@ contains
             b = gcv_nth(args, j + 1)
             select case (id)
             case (B_GT);  ok = ok .and. num_lt(b, a)
-            case (B_LTE); ok = ok .and. (.not. num_lt(b, a))
-            case (B_GTE); ok = ok .and. (.not. num_lt(a, b))
+            ! not-greater is not <=: a NaN is neither, and (<= 1 ##NaN)
+            ! is false in Clojure as every comparison with NaN is
+            case (B_LTE); ok = ok .and. (.not. num_lt(b, a)) .and. .not. (real_nan(a) .or. real_nan(b))
+            case (B_GTE); ok = ok .and. (.not. num_lt(a, b)) .and. .not. (real_nan(a) .or. real_nan(b))
             end select
          end do
          out = gc_bool(ok)
@@ -16923,6 +16925,16 @@ contains
           if (.not. done) call gcp_str(v, .true., s=dlt_1)
           s = dlt_1
        end block
+    else if (v%tag == GCT_REAL .and. (ieee_is_nan(gc_rval(v)) .or. abs(gc_rval(v)) > huge(1.0_gc_dp))) then
+       ! a double's toString, not its printed form: (str ##-Inf) is
+       ! "-Infinity" where (pr-str ##-Inf) is "##-Inf"
+       if (ieee_is_nan(gc_rval(v))) then
+          s = "NaN"
+       else if (gc_rval(v) > 0.0_gc_dp) then
+          s = "Infinity"
+       else
+          s = "-Infinity"
+       end if
     else
        block
           call gcp_str(v, .false., s=dlt_1)
@@ -16930,6 +16942,12 @@ contains
        end block
     end if
   end subroutine to_string_text
+
+  logical function real_nan(x)
+    type(gc_value), intent(in) :: x
+    real_nan = .false.
+    if (x%tag == GCT_REAL) real_nan = ieee_is_nan(gc_rval(x))
+  end function real_nan
 
   ! The Fortran element kind a Clojure type argument asks for.
   !

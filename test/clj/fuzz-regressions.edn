@@ -95,4 +95,11 @@
  ;; keys and vals of what is not seqable throw, as RT.seq does; they
  ;; answered nil (scripts/fuzz-macro: clojure.set/join on a string)
  (keys 1) (vals 1) (keys \a) (clojure.set/join "-" [1 2])
+ ;; <= and >= were not-greater and not-less, true against a NaN; and a
+ ;; double in a string or a range error was its printed ##-Inf, not
+ ;; -Infinity (scripts/fuzz-num, seed 3948490669)
+ (let [r (>= 123456789012345678901234567890N ##NaN)] [r (class r)])
+ (let [r (int ##-Inf)] [r (class r)])
+ (mapv (fn [f] [(f 5 ##NaN) (f ##NaN 1/2) (f 1.5M ##NaN) (f 2 2.0)]) [< <= > >= ==])
+ [(str ##-Inf) (str ##Inf) (str ##NaN) (str [##NaN])]
 ]
