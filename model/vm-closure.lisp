@@ -402,9 +402,37 @@
 (defun vcs-run-program (e defs steps)
   (vcs-answer (vcs-run (vcs-program e defs) (list 0 0 0 nil nil) steps)))
 
+; ---- ROOTING, as a check -----------------------------------------------------
+;
+; The return records hold a pc and a frame base and no value, so the
+; stack below its top holds everything a computation can still read.
+; vcs-run-wiping: as vcs-run, but after every step every slot at or
+; above the top is wiped to nil. A machine that kept a value it still
+; needed above its top would answer differently.
+; model/vm-closure-rooted.lisp proves it does not (vcs-rooted).
+
+; every slot from h up, nil
+(defun swipe (h stk)
+  (if (atom stk)
+      stk
+    (if (zp h) (cons nil (swipe 0 (cdr stk))) (cons (car stk) (swipe (1- h) (cdr stk))))))
+
+; one step, then everything at or above the new top wiped
+(defun wstep (prog s)
+  (let ((s2 (vcs-step prog s)))
+    (list (car s2) (cadr s2) (caddr s2) (swipe (nfix (caddr s2)) (cadddr s2)) (car (cddddr s2)))))
+
+(defun vcs-run-wiping (prog s n)
+  (if (zp n) s (vcs-run-wiping prog (wstep prog s) (1- n))))
+
+(defun vcs-run-program-wiping (e defs steps)
+  (vcs-answer (vcs-run-wiping (vcs-program e defs) (list 0 0 0 nil nil) steps)))
+
 (defmacro check-vcs (e)
-  `(assert-event (equal (vcs-run-program ',e *clo-defs* 100000)
-                        (mc ',e nil nil *clo-defs* 1000))))
+  `(assert-event (and (equal (vcs-run-program ',e *clo-defs* 100000)
+                             (mc ',e nil nil *clo-defs* 1000))
+                      (equal (vcs-run-program-wiping ',e *clo-defs* 100000)
+                             (mc ',e nil nil *clo-defs* 1000)))))
 
 (check-vcs (:callv (:mkclo inc1) (:const 41)))
 (check-vcs (:callv (:mkclo adder (:const 10)) (:const 5)))

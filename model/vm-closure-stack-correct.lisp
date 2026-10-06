@@ -123,7 +123,8 @@
                 (equal (cadr (sc-s4)) sp)
                 (equal (caddr (sc-s4)) (+ sp n 2))
                 (equal (s-ctl (sc-s4)) (cons (list (1+ (car s2)) (cadr s2)) (s-ctl s2)))
-                (cagree (cadddr (sc-s4)) (update-nth (+ sp n 1) (sc-v) (cadddr s2)) (+ sp n 2))))
+                (cagree (cadddr (sc-s4)) (update-nth (+ sp n 1) (sc-v) (cadddr s2)) (+ sp n 2))
+                (run-reads-ok prog (sc-s3) (sclk (cadr def) vs (clo-caps c) defs fuel2))))
   :rule-classes nil
   :hints (("Goal" :in-theory (sc-thy) :do-not-induct t
                   :expand ((vcs-body def (car ent)))
@@ -147,6 +148,20 @@
                   :use ((:instance scall-body)
                         (:instance sstep-ret (s (sc-s4)))))))
 
+; the :ret reads its own frame: the base is below the top
+(defthm reads-ok-ret
+  (implies (and (equal (car (nth (car s) (car prog))) :ret) (< (nfix (cadr s)) (nfix (caddr s))))
+           (reads-ok prog s))
+  :hints (("Goal" :in-theory (enable reads-ok))))
+
+(defthm scall-ret-reads
+  (implies (sc-hyps) (reads-ok prog (sc-s4)))
+  :rule-classes nil
+  :hints (("Goal" :in-theory (sc-thy)
+                  :expand ((vcs-body def (car ent)))
+                  :use ((:instance scall-body)
+                        (:instance reads-ok-ret (s (sc-s4)))))))
+
 (defthm scallv-abstract
   (implies (sc-hyps)
            (let ((s5 (vcs-step prog (sc-s4))))
@@ -155,11 +170,14 @@
                   (equal (caddr s5) (1+ sp))
                   (equal (s-ctl s5) (s-ctl s2))
                   (cagree (cadddr s5) (update-nth sp (sc-v) (cadddr s2)) sp)
-                  (equal (nth sp (cadddr s5)) (sc-v)))))
+                  (equal (nth sp (cadddr s5)) (sc-v))
+                  (run-reads-ok prog (sc-s3) (sclk (cadr def) vs (clo-caps c) defs fuel2))
+                  (reads-ok prog (sc-s4)))))
   :rule-classes nil
   :hints (("Goal" :in-theory (sc-thy)
                   :use ((:instance scall-body)
                         (:instance scall-return)
+                        (:instance scall-ret-reads)
                         (:instance cagree-nth (a (cadddr (sc-s4))) (b (update-nth (+ sp n 1) (sc-v) (cadddr s2)))
                                    (h (+ sp n 2)) (r (+ sp n 1)))
                         (:instance cagree-past-write (a (cadddr (sc-s4))) (b (cadddr s2)) (g (+ sp n 1)) (w (sc-v))
@@ -214,7 +232,8 @@
                 (equal (caddr (sv-s1)) (+ (caddr s) (sv-n)))
                 (equal (s-ctl (sv-s1)) (s-ctl s))
                 (cagree (cadddr (sv-s1)) (cadddr s) (caddr s))
-                (cvals-at (caddr s) (cv-vs) (cadddr (sv-s1)))))
+                (cvals-at (caddr s) (cv-vs) (cadddr (sv-s1)))
+                (run-reads-ok prog s (sclk-args (cddr e) env caps defs fuel))))
   :rule-classes nil
   :hints (("Goal" :in-theory (sv-thy)
                   :use ((:instance (:definition sgood-args) (es (cddr e)))
@@ -231,7 +250,9 @@
                 (equal (caddr (sv-s2)) (+ (caddr s) (sv-n) 1))
                 (equal (s-ctl (sv-s2)) (s-ctl s))
                 (cagree (cadddr (sv-s2)) (update-nth (+ (caddr s) (sv-n)) (sv-c) (cadddr (sv-s1)))
-                        (+ (caddr s) (sv-n) 1))))
+                        (+ (caddr s) (sv-n) 1))
+                (run-reads-ok prog (sv-s1) (sclk (cadr e) env caps defs fuel))
+                (reads-ok prog (sv-s2))))
   :rule-classes nil
   :hints (("Goal" :in-theory (sv-thy)
                   :use ((:instance scallv-stage-args)
@@ -256,7 +277,11 @@
                 (equal (caddr (sv-s5)) (1+ (caddr s)))
                 (equal (s-ctl (sv-s5)) (s-ctl s))
                 (cagree (cadddr (sv-s5)) (update-nth (caddr s) (sv-v) (cadddr (sv-s2))) (caddr s))
-                (equal (nth (caddr s) (cadddr (sv-s5))) (sv-v))))
+                (equal (nth (caddr s) (cadddr (sv-s5))) (sv-v))
+                (run-reads-ok prog (vcs-step prog (sv-s2))
+                              (sclk (cadr (cv-def)) (cv-vs) (clo-caps (sv-c)) defs (1- fuel)))
+                (reads-ok prog (vcs-run prog (vcs-step prog (sv-s2))
+                                        (sclk (cadr (cv-def)) (cv-vs) (clo-caps (sv-c)) defs (1- fuel))))))
   :rule-classes nil
   :hints (("Goal" :in-theory (sv-thy)
                   :use ((:instance scallv-stage-args)
@@ -298,6 +323,36 @@
                                    (s0 (cadddr s)) (sp (caddr s)) (v (sv-v))
                                    (g (+ (caddr s) (sv-n))) (w (sv-c)) (h2 (+ (caddr s) (sv-n) 1)))))))
 
+; the call's reads: the arguments', the callee's, the body's, and the
+; :callv and the :ret themselves
+(defthm scallv-reads-clock
+  (implies (and (equal (car e) :callv) (not (zp fuel)))
+           (equal (run-reads-ok prog s (sclk e env caps defs fuel))
+                  (and (run-reads-ok prog s (sclk-args (cddr e) env caps defs fuel))
+                       (run-reads-ok prog (sv-s1) (sclk (cadr e) env caps defs fuel))
+                       (reads-ok prog (sv-s2))
+                       (run-reads-ok prog (vcs-step prog (sv-s2))
+                                     (sclk (cadr (cv-def)) (cv-vs) (clo-caps (sv-c)) defs (1- fuel)))
+                       (reads-ok prog (vcs-run prog (vcs-step prog (sv-s2))
+                                               (sclk (cadr (cv-def)) (cv-vs) (clo-caps (sv-c)) defs (1- fuel)))))))
+  :rule-classes nil
+  :hints (("Goal" :expand ((sclk e env caps defs fuel)) :in-theory (disable reads-ok))))
+
+(defthm scallv-stage-reads
+  (implies (and (sv-hyps) (sgood-args (cddr e) depth cenv self caps s env defs fuel prog)
+                (sgood (cadr e) (+ depth (sv-n)) cenv self caps (sv-s1) env defs fuel prog)
+                (sgood (cadr (cv-def)) (1+ (nfix (car (cv-def))))
+                       (count-from 0 (nfix (car (cv-def)))) (nfix (car (cv-def))) (clo-caps (sv-c))
+                       (vcs-step prog (sv-s2)) (cv-vs) defs (1- fuel) prog))
+           (run-reads-ok prog s (sclk e env caps defs fuel)))
+  :rule-classes nil
+  :hints (("Goal" :in-theory (theory 'minimal-theory)
+                  :use ((:instance scallv-stage-args)
+                        (:instance scallv-stage-callee)
+                        (:instance scallv-stage-call)
+                        (:instance callv-val-facts)
+                        (:instance scallv-reads-clock)))))
+
 (defthm sgood-callv
   (implies (and (equal (car e) :callv)
                 (sgood-args (cddr e) depth cenv self caps s env defs fuel prog)
@@ -307,7 +362,7 @@
                        (vcs-step prog (sv-s2)) (cv-vs) defs (1- fuel) prog))
            (sgood e depth cenv self caps s env defs fuel prog))
   :hints (("Goal" :in-theory (union-theories '(sgood) (theory 'minimal-theory))
-                  :use ((:instance scallv-stage-whole)))))
+                  :use ((:instance scallv-stage-whole) (:instance scallv-stage-reads)))))
 
 (defthm sgood-callv-no-fuel
   (implies (and (equal (car e) :callv) (zp fuel))

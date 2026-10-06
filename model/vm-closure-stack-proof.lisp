@@ -83,6 +83,27 @@
 
 (defmacro s-ctl (s) `(car (cddddr ,s)))
 
+; ---- what a step reads ---------------------------------------------------------
+;
+; The machine checks its operands' count itself: an :add with one value
+; on the stack does nothing. It does not check the slot a :load or a
+; :capt names, nor that a :ret's frame base is below the top. A run that
+; never reads at or above its top keeps nothing a computation needs in
+; a dead slot -- model/vm-closure-rooted.lisp's wiped-run-agrees -- and
+; every compiled run is one (sgood carries it).
+
+(defun reads-ok (prog s)
+  (let* ((ins (nth (car s) (car prog))) (fb (nfix (cadr s))) (sp (nfix (caddr s))))
+    (case (car ins)
+      ((:load :capt) (< (+ fb (nfix (cadr ins))) sp))
+      (:ret (or (atom (s-ctl s)) (< fb sp)))
+      (otherwise t))))
+
+(defun run-reads-ok (prog s n)
+  (declare (xargs :measure (nfix n)))
+  (if (zp n) t (and (reads-ok prog s) (run-reads-ok prog (vcs-step prog s) (1- n)))))
+
+
 ; THE PROPERTY
 (defun sgood (e depth cenv self caps s env defs fuel prog)
   (implies (and (sstatep s) (natp depth) (equal (caddr s) (+ (cadr s) depth))
@@ -97,7 +118,8 @@
                            (equal (cadr s2) (cadr s))
                            (equal (caddr s2) (1+ (caddr s)))
                            (equal (s-ctl s2) (s-ctl s))
-                           (cagree (cadddr s2) (update-nth (caddr s) (val r) (cadddr s)) (1+ (caddr s))))))))
+                           (cagree (cadddr s2) (update-nth (caddr s) (val r) (cadddr s)) (1+ (caddr s)))
+                           (run-reads-ok prog s (sclk e env caps defs fuel)))))))
 
 ; a call's arguments: pushed, one after another
 (defun sgood-args (es depth cenv self caps s env defs fuel prog)
@@ -114,7 +136,8 @@
                            (equal (caddr s2) (+ (caddr s) (len es)))
                            (equal (s-ctl s2) (s-ctl s))
                            (cagree (cadddr s2) (cadddr s) (caddr s))
-                           (cvals-at (caddr s) (val r) (cadddr s2)))))))
+                           (cvals-at (caddr s) (val r) (cadddr s2))
+                           (run-reads-ok prog s (sclk-args es env caps defs fuel)))))))
 
 ; ---- the machine's runs -------------------------------------------------------
 
@@ -131,7 +154,27 @@
 
 (defthm vcs-run-0 (equal (vcs-run prog s 0) s))
 (defthm vcs-run-1 (equal (vcs-run prog s 1) (vcs-step prog s)))
-(in-theory (disable vcs-run))
+
+(defthm run-reads-ok-plus
+  (implies (and (natp a) (natp b))
+           (equal (run-reads-ok prog s (+ a b))
+                  (and (run-reads-ok prog s a) (run-reads-ok prog (vcs-run prog s a) b))))
+  :hints (("Goal" :induct (vcs-run prog s a) :in-theory (enable vcs-run))))
+
+(defthm run-reads-ok-c+
+  (equal (run-reads-ok prog s (c+ a b))
+         (and (run-reads-ok prog s (nfix a)) (run-reads-ok prog (vcs-run prog s (nfix a)) (nfix b))))
+  :hints (("Goal" :in-theory (enable c+) :use ((:instance run-reads-ok-plus (a (nfix a)) (b (nfix b)))))))
+
+(defthm run-reads-ok-0 (equal (run-reads-ok prog s 0) t))
+(defthm run-reads-ok-1 (equal (run-reads-ok prog s 1) (reads-ok prog s)))
+(in-theory (disable vcs-run run-reads-ok))
+
+; reads-ok is opened only where a step reads a slot it names
+(defthm reads-ok-plain
+  (implies (not (member-equal (car (nth (car s) (car prog))) '(:load :capt :ret)))
+           (reads-ok prog s)))
+(in-theory (disable reads-ok))
 
 (defun svc-ind (flg e depth cenv self pc)
   (declare (xargs :measure (acl2-count e)))
@@ -292,11 +335,12 @@
 
 (defthm sgood-local
   (implies (equal (car e) :local) (sgood e depth cenv self caps s env defs fuel prog))
-  :hints (("Goal" :in-theory (disable nth update-nth))))
+  :hints (("Goal" :in-theory (e/d (reads-ok) (nth update-nth))
+                  :use ((:instance cenv-ok-local-cenv (i (cadr e)) (regs (cadddr s)) (fb (cadr s)) (f depth))))))
 
 (defthm sgood-capt
   (implies (equal (car e) :capt) (sgood e depth cenv self caps s env defs fuel prog))
-  :hints (("Goal" :in-theory (disable nth update-nth) :cases ((natp self)))))
+  :hints (("Goal" :in-theory (e/d (reads-ok) (nth update-nth)) :cases ((natp self)))))
 
 (defthm sgood-other
   (implies (not (member-equal (car e) '(:const :local :capt :if :let :add :lt :mkclo :callv)))
@@ -383,8 +427,8 @@
                        (vcs-run prog s (sclk (cadr e) env caps defs fuel))
                        (append env (list (cdr (mc (cadr e) env caps defs fuel)))) defs fuel prog))
            (sgood e depth cenv self caps s env defs fuel prog))
-  :hints (("Goal" :in-theory (disable nth update-nth)
-                  :expand ((vcs-compile e depth cenv self (car s))))))
+  :hints (("Goal" :in-theory (disable nth update-nth mc cself-ok)
+                  :expand ((vcs-compile e depth cenv self (car s)) (mc e env caps defs fuel)))))
 
 ; a value pushed, popped, and another pushed in its place: below the
 ; top as before, at it the second

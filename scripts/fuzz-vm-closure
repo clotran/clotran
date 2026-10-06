@@ -9,11 +9,18 @@
 ;; or a capture names one that exists), so a disagreement is a bug in
 ;; the machine, the compiler or here.
 ;;
-;;   scripts/fuzz-vm-closure [-n COUNT] [-s SEED] [-k]
+;;   scripts/fuzz-vm-closure [-n COUNT] [-s SEED] [-k | -w]
+;;
+;; Each program runs three ways: the register machine, the one-stack
+;; machine, and the one-stack machine with every slot at or above its
+;; top wiped after every step (vcs-run-wiping) -- the rooting check: a
+;; machine that kept a live value above its top would answer otherwise.
 ;;
 ;; -k is the NEGATIVE CONTROL: the machine's closure captures each value
 ;; one register late, and the run must find disagreements, or the
-;; fuzzer could not see a broken machine.
+;; fuzzer could not see a broken machine. -w is the rooting's: the wipe
+;; takes the top slot too, a value still live, and the wiped runs must
+;; disagree.
 ;;
 ;; Needs the books certified (make model). Exit 1 on any disagreement.
 
@@ -21,7 +28,8 @@
          '[babashka.process :as p])
 
 (def broken (some #{"-k"} *command-line-args*))
-(def args (apply hash-map (remove #{"-k"} *command-line-args*)))
+(def broken-wipe (some #{"-w"} *command-line-args*))
+(def args (apply hash-map (remove #{"-k" "-w"} *command-line-args*)))
 (def n (parse-long (get args "-n" "200")))
 (def seed (parse-long (get args "-s" (str (mod (System/nanoTime) 2147483647)))))
 ;; a seeded generator of our own (Knuth's MMIX LCG), so a seed repeats
@@ -89,7 +97,8 @@
        "  (declare (xargs :mode :program))\n"
        "  (let ((r (mc e nil nil *clo-defs* 1000)))\n"
        "    (if (eq (car r) :out) :out\n"
-       "      (list (equal (vc-run-program e *clo-defs* 400000) r) (equal (vcs-run-program e *clo-defs* 400000) r)))))\n"
+       "      (list (equal (vc-run-program e *clo-defs* 400000) r) (equal (vcs-run-program e *clo-defs* 400000) r)\n"
+       "            (equal (vcs-run-program-wiping e *clo-defs* 400000) r)))))\n"
        "(defun fuzz-all (es i)\n"
        "  (declare (xargs :mode :program))\n"
        "  (if (atom es) nil\n"
@@ -99,6 +108,9 @@
        (if broken
          "(redef!)\n(defun regs-from (fb a k regs) (declare (xargs :mode :program)) (if (zp k) nil (cons (reg fb (1+ (nfix a)) regs) (regs-from fb (1+ (nfix a)) (1- k) regs))))\n(defun stk-from (a k stk) (declare (xargs :mode :program)) (if (zp k) nil (cons (sreg (1+ (nfix a)) stk) (stk-from (1+ (nfix a)) (1- k) stk))))\n"
          "")
+       (if broken-wipe
+         "(redef!)\n(defun wstep (prog s) (declare (xargs :mode :program)) (let ((s2 (vcs-step prog s))) (list (car s2) (cadr s2) (caddr s2) (swipe (1- (nfix (caddr s2))) (cadddr s2)) (car (cddddr s2)))))\n"
+         "")
        "(fuzz-all '(" (str/join "\n" (map lisp exprs)) ") 0)\n"
        "(good-bye)\n"))
 
@@ -106,8 +118,8 @@
 (def out (:out (p/shell {:dir "model" :in driver :out :string :err :string} acl2)))
 (def results (into {} (for [[_ i r k] (re-seq #"FUZZ (\d+) (:OUT|\([^)]*\)) (\S+)" out)] [(parse-long i) [r k]])))
 
-;; each program's verdicts, the register machine's then the stack machine's
-(def kinds-of ["register" "stack"])
+;; each program's verdicts: the register machine's, the stack machine's, the wiped stack machine's
+(def kinds-of ["register" "stack" "wiped"])
 (def failures (for [[i [r _]] results :when (not= r ":OUT")
                     [k v] (map vector kinds-of (re-seq #"T|NIL" r)) :when (= v "NIL")] [k i]))
 (def fails (distinct (map second failures)))
@@ -122,7 +134,15 @@
   (let [fs (map second (filter #(= k (first %)) failures))]
     (println (format "%-9s machine against the meaning: %d disagree" k (count fs)))
     (doseq [i (take 3 fs)] (println "   " (lisp (exprs i))))))
-(if broken
+(cond
+  broken
   (do (println (if (seq fails) "negative control: the broken machine was caught" "NEGATIVE CONTROL FAILED: a broken machine went unseen"))
       (System/exit (if (seq fails) 0 1)))
-  (System/exit (if (seq fails) 1 0)))
+  broken-wipe
+  (let [caught (some #(= "wiped" (first %)) failures)
+        others (remove #(= "wiped" (first %)) failures)]
+    (println (if (and caught (empty? others))
+               "negative control: the wipe of a live slot was caught, by the wiped runs alone"
+               "NEGATIVE CONTROL FAILED: the wipe of a live slot went unseen, or was seen where it does not run"))
+    (System/exit (if (and caught (empty? others)) 0 1)))
+  :else (System/exit (if (seq fails) 1 0)))

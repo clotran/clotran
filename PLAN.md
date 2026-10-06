@@ -3148,9 +3148,28 @@ Every step is O(1): a `:callv` is one step whatever its arity
 that is not is `:mkclo`, which copies k captures that k counted
 expressions just computed.
 
+PROVED, rooting for the one-stack machine (model/vm-closure-rooted.lisp,
+2026-10-06): `vcs-rooted`, a compiled program answers what its meaning
+does with every slot at or above the stack top wiped after EVERY
+step, so a collector may run at any instruction and scan only the
+stack below its top. The return records hold a pc and a frame base,
+no value, so that stack is all the roots there are; the closure being
+called sits in its frame below the top. Two halves:
+- `wiped-run-agrees`, for any program: a run that never reads at or
+  above its top ends where its wiped run does. The machine checks its
+  operands' count itself; what it does not check is the slot a
+  `:load` or `:capt` names and that a `:ret`'s base is below its top
+  (`reads-ok`).
+- `vcs-program-reads`: a compiled program never does. `sgood` carries
+  it as a fifth conjunct, so the correctness proof proves it.
+scripts/fuzz-vm-closure runs every program wiped as well. Its new
+negative control (`-w`) wipes the top slot too, and only the wiped
+runs disagree.
+
 Still owed before the implementation:
-- rooting: wiping above the live top changes no answer, with the
-  closure live in its frame.
+- rooting for the register machine, if it is kept: it has no stack
+  top, so its wipe needs vm-call.lisp's bound on the registers a frame
+  holds live across a call.
 
 Measured in passing, for the implementation: 25-30% of flat_run is
 instruction fetch and dispatch. Each instruction word is a 16-byte
