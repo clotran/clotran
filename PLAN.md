@@ -2845,6 +2845,24 @@ instructions in the program, then steps to the answer.
   …"), which the debugger needs (step 27, decision 6). A stack frame
   names locals the same way, but its operands have only a depth.
 
+**With closures (2026-10-06).** The closure call (model/vm-closure*.lisp,
+step 30) was built for both machines. Each was proved correct, and each
+has the same bound of 2 `cevals` steps (`cclk-linear`, `sclk-linear`).
+Neither moves a value on a call. What separated them was rooting:
+- On the stack machine it is a theorem about every step:
+  `vcs-rooted`, with every slot at or above the stack top wiped after
+  each instruction. A collector may run anywhere and scan below the
+  top. That top is in the machine state, so the proof needs no bound
+  from the compiler. It took one conjunct carried through `sgood` plus
+  a 7 s book.
+- On the register machine there is no top. Its rooting would need
+  vm-call's bound on the registers a frame holds live across a call,
+  threaded through the whole proof as vm-call-proof does. That is
+  still owed.
+- Certification: register 521 + 59 s, stack 401 + 290 s. The stack
+  figure includes the reads conjunct, which cost about 20% over the
+  proof without it.
+
 **The models' fuzzer** (`scripts/fuzz-vm-model`, `make fuzz-model`).
 It generates random well-formed programs over the examples' functions
 from a seed, compiles each for all three machines, and runs them in
