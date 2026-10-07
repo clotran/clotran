@@ -3303,6 +3303,59 @@ the implementation needs whichever machine it runs. A cache keyed by
 code-vector slot was tried and is wrong: slots are reused after a
 collection.
 
+**The VM model extended: loop and recur (2026-10-07).** The first of
+the extensions the Fortran stack VM needs before it is written; the
+model comes first.
+
+Books: model/vmx.lisp, vmx-proof.lisp, vmx-cost.lisp.
+
+The language gains:
+- `(:loop (i1 .. ik) body)`: k new locals;
+- `(:recur e1 .. ek)`: only in a loop body's tail, with the loop's arity.
+
+The machine gains one instruction, `(:recur k b L)`. It copies the top
+k values into slots b .. b+k-1, puts the stack top at fb+b+k, and jumps
+to the loop's head L. So a loop runs in constant stack, and its head is
+reached at one fixed depth, as stage 2a's depth check requires.
+
+Every old instruction is handed to vm-closure.lisp's vcs-step
+unchanged, so the books on vcs-step (the stack proof, rooting, cost,
+every JIT stage) stand as they are. The JIT will need the instruction
+when it is extended.
+
+Proved:
+- `vcsx-good`: an expression's code pushes its value, or, in a loop
+  body's tail, arrives at the loop's head with the recur's values in
+  place and nothing below the loop's first slot changed. That covers
+  loops, nested loops, calls of functions that loop, and closures made
+  in a loop.
+- `vcsx-correct`: a whole compiled program answers its meaning.
+- `sxclk-linear`: at most 2 machine steps per expression the meaning
+  evaluates, every iteration counted. A loop's k slides are paid for by
+  its k inits, through the stronger statement clock + 1 <= 2 evals.
+
+The method that made it tractable:
+- the property's two outcomes (a value, a recur) named apart;
+- each case proved one path at a time from a handful of facts, in
+  ACL2's minimal theory;
+- joins split by outcome.
+
+The first try, one lemma per case with everything enabled, timed out
+at 15 minutes on a binary operator; the paths take seconds.
+
+scripts/fuzz-vmx is its fuzzer (make fuzz-model):
+- programs with counting loops, recur in either branch or under a let,
+  nested loops, and calls into looping functions, each checked
+  well-formed by xwf;
+- the extended machine against the extended meaning, 300 programs;
+- `-x`, a recur that copies one slot too high, must be caught: 46 of
+  100.
+
+Still to model before the Fortran:
+- multi-arity and variadic functions;
+- calls into the runtime (builtins and interop);
+- try/catch/finally and throw.
+
 ### 31. A stack bytecode VM and a JIT (decided 2026-10-06)
 
 James, 2026-10-06: "let's build a byte code stack machine then a JIT

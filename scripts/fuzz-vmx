@@ -1,0 +1,129 @@
+#!/usr/bin/env bb
+;; Fuzz the extended stack machine (model/vmx.lisp, PLAN step 30): random
+;; programs of the closure language with loop and recur -- counting loops
+;; whose recur stands in the body's tail, lets and ifs inside the body,
+;; loops nested in loops, calls of functions that loop, closures made in
+;; a loop -- compiled and run on vcsx-step in ACL2 against the extended
+;; meaning, mx. The generator builds only well-formed programs, and each
+;; is checked with xwf: one that is not is a bug here.
+;;
+;;   scripts/fuzz-vmx [-n COUNT] [-s SEED] [-x]
+;;
+;; -x is the NEGATIVE CONTROL: the machine's :recur copies its values one
+;; slot too high, and the run must find disagreements, or the fuzzer could
+;; not see a broken recur.
+;;
+;; Needs model/vmx certified (make model). Exit 1 on any disagreement.
+(require '[babashka.process :as p] '[clojure.string :as str])
+
+(def broken (some #{"-x"} *command-line-args*))
+(def args (apply hash-map (remove #{"-x"} *command-line-args*)))
+(def n (parse-long (get args "-n" "200")))
+(def seed (parse-long (get args "-s" (str (mod (System/nanoTime) 2147483647)))))
+(def state (atom seed))
+(defn rnd [k]
+  (let [x (swap! state #(unchecked-add (unchecked-multiply % 6364136223846793005) 1442695040888963407))]
+    (mod (unsigned-bit-shift-right x 33) k)))
+(defn rep [k f] (doall (repeatedly k f)))
+
+;; *x-defs* (model/vmx.lisp): name -> [arity captures]; each one's
+;; argument is a small count, so the loops in them end
+(def fns {'sum [1 0] 'tri [1 0] 'sumsums [1 0] 'adders [1 0] 'addc [1 1]})
+
+(declare gen)
+
+(defn leaf [nl nc]
+  (case (rnd (+ 2 (if (pos? nl) 2 0) (if (pos? nc) 1 0)))
+    0 (list :const (- (rnd 11) 5))
+    1 (list :const ([true :false nil 0] (rnd 4)))
+    (2 3) (if (pos? nl) (list :local (rnd nl)) (list :capt (rnd nc)))
+    4 (list :capt (rnd nc))))
+
+;; a counting loop: local i from 0 below a small bound, k-1 more locals
+;; each recurred with an expression of the loop's locals; the body's tail
+;; is a recur, or a let or an if around one
+(defn counting-loop [depth nl nc]
+  (let [k (inc (rnd 3)) i nl bound (inc (rnd 5))
+        inits (cons (list :const 0) (rep (dec k) #(gen (dec depth) nl nc nil)))
+        nl2 (+ nl k)
+        step (fn [nl3] (cons (list :add (list :local i) (list :const 1))
+                             (rep (dec k) #(gen (dec depth) nl3 nc nil))))
+        result (fn [nl3] (gen (dec depth) nl3 nc nil))
+        body (case (rnd 3)
+               0 (list :if (list :lt (list :local i) (list :const bound))
+                       (cons :recur (step nl2)) (result nl2))
+               ;; a let under the recur: its local is under the recur's values
+               1 (list :let (gen (dec depth) nl2 nc nil)
+                       (list :if (list :lt (list :local i) (list :const bound))
+                             (cons :recur (step (inc nl2))) (result (inc nl2))))
+               ;; the recur in the else branch
+               2 (list :if (list :lt (list :const (dec bound)) (list :local i))
+                       (result nl2) (cons :recur (step nl2))))]
+    (list :loop inits body)))
+
+;; _tail: unused -- a recur is generated only inside counting-loop, in its body's tail
+(defn gen [depth nl nc _tail]
+  (if (or (<= depth 0) (< (rnd 10) 3))
+    (leaf nl nc)
+    (case (rnd 9)
+      0 (list :if (gen (dec depth) nl nc nil) (gen (dec depth) nl nc nil) (gen (dec depth) nl nc nil))
+      1 (list :let (gen (dec depth) nl nc nil) (gen (dec depth) (inc nl) nc nil))
+      2 (list :add (gen (dec depth) nl nc nil) (gen (dec depth) nl nc nil))
+      3 (list :lt (gen (dec depth) nl nc nil) (gen (dec depth) nl nc nil))
+      (4 5) (counting-loop depth nl nc)
+      6 (let [[f [a c]] (nth (vec fns) (rnd (count fns)))]
+          (list* :callv (list* :mkclo f (rep c #(gen (dec depth) nl nc nil)))
+                 (rep a #(list :const (rnd 6)))))
+      ;; a closure made of the locals, called
+      7 (list :callv (list :mkclo 'addc (gen (dec depth) nl nc nil)) (gen (dec depth) nl nc nil))
+      8 (leaf nl nc))))
+
+(defn lisp [x]
+  (cond (seq? x) (str "(" (str/join " " (map lisp x)) ")")
+        (keyword? x) (str ":" (name x))
+        (true? x) "t"
+        (nil? x) "nil"
+        :else (str x)))
+
+(def exprs (vec (rep n #(gen 5 0 0 nil))))
+
+(def driver
+  (str "(include-book \"vmx\")\n"
+       "(defun fuzz-one (e)\n"
+       "  (declare (xargs :mode :program))\n"
+       "  (let ((r (mx e nil nil *x-defs* 1000)))\n"
+       "    (list (xwf e 0 nil) (if (eq (car r) :out) :out (equal (vcsx-run-program e *x-defs* 400000) r)) (car r))))\n"
+       "(defun fuzz-all (es i)\n"
+       "  (declare (xargs :mode :program))\n"
+       "  (if (atom es) nil (prog2$ (cw \"FUZZ ~x0 ~x1~%\" i (fuzz-one (car es))) (fuzz-all (cdr es) (1+ i)))))\n"
+       "(set-guard-checking :none)\n"
+       (if broken
+         "(redef!)\n(defun vcsx-step (prog s) (declare (xargs :mode :program)) (let ((ins (nth (car s) (car prog)))) (if (and (natp (car s)) (eq (car ins) :recur)) (let ((k (nfix (cadr ins))) (b (nfix (caddr ins))) (fb (nfix (cadr s))) (sp (nfix (caddr s)))) (if (< sp (+ fb b k)) s (list (nfix (cadddr ins)) fb (+ fb b k) (copy-down (- sp k) (+ fb b 1) k (cadddr s)) (car (cddddr s))))) (vcs-step prog s))))\n"
+         "")
+       "(fuzz-all '(" (str/join "\n" (map lisp exprs)) ") 0)\n"
+       "(good-bye)\n"))
+
+(def acl2 (str (System/getProperty "user.home") "/jborden/acl2/saved_acl2"))
+(def out (:out (p/shell {:dir "model" :in driver :out :string :err :string} acl2)))
+(def results (into {} (for [[_ i wf ok kind] (re-seq #"FUZZ (\d+) \((T|NIL) (T|NIL|:OUT) (\S+)\)" out)]
+                        [(parse-long i) {:wf wf :ok ok :kind kind}])))
+
+(when (not= n (count results))
+  (println "fuzz-vmx: ACL2 did not report every program; the tail of its output:")
+  (println (subs out (max 0 (- (count out) 2000))))
+  (System/exit 1))
+
+(def not-wf (sort (keep (fn [[i r]] (when (= "NIL" (:wf r)) i)) results)))
+(def disagree (sort (keep (fn [[i r]] (when (= "NIL" (:ok r)) i)) results)))
+(def loops (count (filter #(str/includes? (lisp %) ":recur") exprs)))
+(println (str "fuzz-vmx: " n " programs, seed " seed ", " loops " with a loop; the meaning answered "
+              (str/join ", " (for [[k c] (sort (frequencies (map :kind (vals results))))]
+                               (str c " " (str/lower-case (str/replace k ":" "")))))))
+(println (format "not well formed (a generator bug): %d" (count not-wf)))
+(doseq [i (take 3 not-wf)] (println "   " (lisp (exprs i))))
+(println (format "extended machine against the meaning: %d disagree" (count disagree)))
+(doseq [i (take 3 disagree)] (println "   " (lisp (exprs i))))
+(if broken
+  (do (println (if (seq disagree) "negative control: the broken recur was caught" "NEGATIVE CONTROL FAILED: a broken recur went unseen"))
+      (System/exit (if (and (seq disagree) (empty? not-wf)) 0 1)))
+  (System/exit (if (or (seq disagree) (seq not-wf)) 1 0)))
