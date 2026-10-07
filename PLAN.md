@@ -3438,6 +3438,128 @@ sixth machine. Its `-r` control is an allocator that never loads (it
 takes a slot to be in its register already), and it is caught by the
 stage-2b runs alone.
 
+### 31a. The unified debugger (decided 2026-10-06)
+
+James, 2026-10-06: no Python. Make one debugger, with our own UX,
+where the native backend is transparent to the user.
+
+**The shape.** clotran's debugger is a Debug Adapter Protocol (DAP)
+server written in clotran. Every editor talks to it the same way:
+VS Code natively, Emacs through `dap-mode` or `dape`, Neovim through
+`nvim-dap`, and the REPL and the terminal through its own front end.
+It in turn drives a native debugger over DAP:
+- macOS: `lldb-dap` (ships with Xcode and LLVM; present here under
+  Xcode).
+- Linux: `gdb -i dap` (gdb 14 and later), or `lldb-dap`.
+- Windows, natively with no Cygwin or WSL: `lldb-dap`, `codelldb`
+  (CodeLLDB's own DAP adapter over liblldb), or MinGW's `gdb -i dap`,
+  found on `PATH` and launched with `CreateProcessW` and pipes.
+
+It reports the backend once (`using lldb` / `using gdb`) as a field an
+IDE can read. The repo ships a `.vscode/launch.json`; Emacs and Neovim
+get a documented two-line configuration.
+
+**What clotran does itself, so the view is identical on every backend:**
+- One stack. clotran's frame records (Clojure, JIT'd and native
+  frames) are read through DAP `readMemory` and merged with the native
+  frames the backend reports.
+- Values. A `gc_value` prints as Clojure text, either decoded from the
+  heap or by calling clotran's printer through DAP `evaluate`.
+- Fortran values too. lldb has no Fortran support, so descriptors and
+  derived types are decoded by clotran from the type knowledge
+  `scripts/bind-fortran` already has, rather than left to the backend.
+
+**What the JIT's emitter must provide:**
+- frame pointers, so native unwinding works through JIT'd code;
+- registration of each compiled function through the GDB JIT interface
+  (a C-level struct and hook, which lldb also reads), so backends name
+  JIT'd frames;
+- the pc map (machine pc to bytecode pc) and the slot map (where each
+  local lives at each pc), both of which the model already computes
+  and proves.
+
+The first version debugs a JIT'd function by running it interpreted.
+
+**Open:**
+- Check the license of cpptools' `cppvsdbg`. It is believed to be
+  usable only from Microsoft's products, so it is not a backend we
+  depend on.
+- Find which Windows LLVM builds ship `lldb-dap.exe`.
+- Debug-info formats: flang targeting MSVC emits CodeView/PDB, which
+  needs lldb; MinGW gfortran emits DWARF.
+- The real prerequisite is a native Windows build of clotran: make, a
+  POSIX shell and `dlopen` stand in the way today. The debugger can
+  only be as native as the build.
+- First step, a spike: drive `lldb-dap` from a bb script, stop inside a
+  Fortran package call, and read the stack and the locals.
+
+**Fuzzing, decided with it:**
+- The gate shrinks the first failure of each kind (about 60 s bound),
+  printing the original seed with the shrunk form.
+- `make repro CASE=...` writes the case to a fixture, builds the debug
+  binary, and opens it in the unified debugger with a breakpoint on
+  the error path. Hangs and crashes become an immediate attach target.
+
+### 32. Execution contexts: one pool over local, SSH, Slurm and Kubernetes (decided 2026-10-06)
+
+James, 2026-10-06: the practical worry is that a scientist must learn
+Clojure, and that clotran must make their workflow better in fact.
+The driving case is a 2-D free-energy surface: an N x M grid of
+umbrella-sampling windows, each run by an MD engine (GROMACS, OpenMM,
+LAMMPS) with a restraint at (d1, d2), then WHAM/MBAR over the outputs.
+
+**Order.** Step 31 pauses once stage 2b's proof lands
+(`model/jit3-proof.lisp`). Then the fuzzing items from 31a (gate
+shrinking; the case-to-debugger target, named `fuzz-repro` so it does
+not clash with step 23's `repro`). Then this step, then the rest of 31.
+
+**What a task is.** Data: a program to run (an MD engine, or clotran
+code), its inputs, the files it needs, and the outputs it gives back.
+The heavy compute happens in the engine, not in our VM, so what
+clotran adds is distribution, transport, retry and the gather, not
+JIT speed.
+
+**One protocol, several kinds** (as in "threads are contexts", step 24):
+- an execution context dispatches a task and reports its outcome;
+- kinds: local threads, SSH hosts, Slurm (array jobs), Kubernetes pods;
+- a mixed pool is a context over several of them.
+
+**Failure is task-level retry.** A window is idempotent: a killed job is
+re-queued on another context. Resuming mid-run means carrying the
+engine's own checkpoint (.cpt, .chk) with the retried task; our VM's
+state is not the state that matters. Over a network nothing is
+zero-copy; only the final gather into one Fortran or NumPy array is.
+
+**The surface scientists see.** Data in, data out. `libclotran` exports
+`bind(C)` entry points (the embed example is the start), and a thin
+Python client over ctypes calls them: `pool.map(window, grid)` returns
+a NumPy array. This is a client for users; our own tooling stays bb,
+with no Python. No Python-like syntax over Clojure: it would look like
+Python and behave like Clojure (no `a[i] = x`, no NumPy semantics), and
+the FES case needs no language at all.
+
+**What we offer that Parsl, Dask and Ray do not:**
+- legacy Fortran solvers called in-process, with no wrapper layer;
+- one self-contained binary with pinned packages on every node, so
+  there is no conda environment to rebuild per cluster;
+- the scheduler's behaviour stated in the model.
+
+**Model and fuzzer.**
+- Model: the pool in ACL2 -- tasks, contexts that may drop a task, and
+  retry -- with the theorem that a run over any mixed pool, under any
+  pattern of failures that eventually lets each task finish, gives the
+  local run's results.
+- Fuzzer: random grids, pools and failure schedules from a seed, with
+  the local run as the oracle.
+
+**First, the baseline.** Write down, step by step, what a scientist does
+today for the 2-D surface: scripts, `.sbatch` files, rsync, by-hand
+gathering. That count is what this step must shrink, and the README
+example is the same workflow done through clotran.
+
+Build order: local plus SSH first, then Slurm, then Kubernetes; then
+`libclotran` and the Python client.
+
 ### 29. Fuzz everything (begun 2026-10-02)
 
 James: "fuzz everything at this point and going forward". The rule
