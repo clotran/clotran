@@ -1,0 +1,148 @@
+#!/usr/bin/env bb
+;; Clojure's own tests as a speed census: every deftest of the derived
+;; language suite timed through clj and through clotran, and the ratio.
+;;
+;; scripts/bench measures a handful of chosen forms; this measures the
+;; ~300 deftests nobody here chose, to find the OUTLIERS -- a function
+;; a thousand times slower than our typical ratio is a bug, as the
+;; quadratic (reduce + (range n)) once was, not a tuning question.
+;;
+;; A deftest's body runs in microseconds, and a cold run measures clj's
+;; JIT warming up, so each test runs once untimed (that run also says
+;; whether it passed), then again and again until BUDGET ms have
+;; accumulated, and the time per run is the total over the runs.
+;; Loading -- core.clj, the test file -- is outside every clock. A test
+;; counts only if it passes on both sides; the report says how many
+;; did not and why.
+;;
+;;   scripts/bench-suite [ns-file ...]   default every file in test/clj/derived
+;;   CLOTRAN_BENCH_BUDGET_MS   per test and side (default 50)
+;;   CLOTRAN_TEST_JOBS         namespaces at once (default 2: keep the machine usable)
+;;   CLOTRAN_TEST_TIMEOUT      seconds per namespace and side (default 600)
+;;
+;; Results go to build/bench-suite/<timestamp>.edn; the report compares
+;; with the newest earlier file there and lists the tests whose clotran
+;; time grew most. Timing is noisy, so this is a census, never a gate.
+(require '[babashka.process :as p] '[babashka.fs :as fs] '[clojure.string :as str] '[clojure.edn :as edn])
+
+(def repo (-> *file* fs/file .getCanonicalFile .getParentFile .getParentFile str))
+(load-file (str repo "/upstream/names.clj"))
+(def budget-ms (parse-long (or (System/getenv "CLOTRAN_BENCH_BUDGET_MS") "50")))
+(def jobs (parse-long (or (System/getenv "CLOTRAN_TEST_JOBS") "2")))
+(def timeout-ms (* 1000 (parse-long (or (System/getenv "CLOTRAN_TEST_TIMEOUT") "600"))))
+(def out-dir (fs/file repo "build" "bench-suite"))
+
+(defn ns-of [f] (second (re-find #"(?m)^\(ns ([a-zA-Z0-9._-]+)" (slurp f))))
+
+;; The driver, written in clotran's names; clj gets it through
+;; names/to-upstream, as scripts/bench does. Each test prints
+;;   @@b <name> <ok?> <runs> <microseconds over the runs>
+(defn driver [helper file n]
+  (str "(require 'clojure.test)\n"
+       "(load-file \"" helper "\")\n"
+       "(load-file \"" file "\")\n"
+       "(in-ns 'user)\n"
+       "(defn bench-run1 [v]
+  (binding [clojure.test/*report-counters* (ref clojure.test/*initial-report-counters*)]
+    (with-out-str (binding [clojure.test/*test-out* *out*] (clojure.test/test-vars [v])))
+    (let [c @clojure.test/*report-counters*] (zero? (+ (:fail c 0) (:error c 0))))))
+(defn bench-var [v budget-ns]
+  (let [t0 (clotran.host.system/nanoTime)
+        ok (bench-run1 v)
+        first-ns (- (clotran.host.system/nanoTime) t0)]
+    (if (or (not ok) (> first-ns 1000000000))
+      [ok 1 first-ns]
+      (loop [runs 0 total 0]
+        (if (or (>= total budget-ns) (>= runs 10000))
+          [ok runs total]
+          (let [t (clotran.host.system/nanoTime)]
+            (bench-run1 v)
+            (recur (inc runs) (+ total (- (clotran.host.system/nanoTime) t)))))))))
+(doseq [[s v] (sort-by (comp str key) (ns-interns '" n "))
+        :when (:test (meta v))]
+  (let [[ok runs total] (bench-var v " (* budget-ms 1000000) ")]
+    (println (str \"@@b \" s \" \" ok \" \" runs \" \" (quot total 1000)))
+    (flush)))\n"))
+
+(defn run-side [side f n]
+  (let [script (fs/file out-dir "work" (str n "." (name side) ".clj"))
+        text (if (= side :clj)
+               (names/to-upstream (driver (str repo "/upstream/clojure/test/clojure/test_helper.clj")
+                                          (str repo "/build/bench-suite/work/" n ".upstream.clj") n))
+               (driver (str repo "/test/clj/clojure/test_helper.clj") (str repo "/" f) n))
+        _ (when (= side :clj)
+            (spit (fs/file out-dir "work" (str n ".upstream.clj")) (names/to-upstream (slurp (fs/file repo f)))))
+        _ (spit script text)
+        cmd (if (= side :clj)
+              ["clj" "-Sdeps" (slurp (str repo "/deps.edn")) "-M" (str script)]
+              [(str repo "/clotran-bin") (str repo "/src/clj/clojure/core.clj") (str script)])
+        proc (p/process cmd {:dir repo :in "" :out :string :err :string})
+        done (deref proc timeout-ms ::timeout)
+        out (if (= done ::timeout) (do (p/destroy-tree proc) (str (:out @proc))) (:out done))]
+    {:timeout (= done ::timeout)
+     :tests (into {} (for [l (str/split-lines (or out ""))
+                           :let [[_ t ok runs us] (re-matches #"@@b (\S+) (true|false) (\d+) (\d+)" l)]
+                           :when t]
+                       [t {:ok (= ok "true") :runs (parse-long runs)
+                           :us (/ (double (parse-long us)) (max 1 (parse-long runs)))}]))}))
+
+(defn pmap-n [n f xs]
+  (let [xs (vec xs) i (atom -1) out (atom {})
+        work (fn [] (loop [] (let [k (swap! i inc)] (when (< k (count xs)) (swap! out assoc k (f (xs k))) (recur)))))]
+    (run! deref (doall (repeatedly n #(future (work)))))
+    (mapv @out (range (count xs)))))
+
+(defn pct [xs q] (when (seq xs) (nth (vec (sort xs)) (min (dec (count xs)) (long (* q (count xs)))))))
+(defn geo [xs] (when (seq xs) (Math/exp (/ (reduce + (map #(Math/log %) xs)) (count xs)))))
+
+(fs/create-dirs (fs/file out-dir "work"))
+(let [files (or (seq *command-line-args*)
+                (map #(str (fs/relativize repo %)) (sort (fs/glob (fs/file repo "test/clj/derived") "*.clj"))))
+      rows (pmap-n jobs (fn [f] (let [n (ns-of (fs/file repo f))
+                                      r {:ns n :clj (run-side :clj f n) :clotran (run-side :clotran f n)}]
+                                  (binding [*out* *err*] (print ".") (flush)) r))
+                   files)
+      tests (for [r rows
+                  t (sort (into (set (keys (get-in r [:clj :tests]))) (keys (get-in r [:clotran :tests]))))
+                  :let [a (get-in r [:clj :tests t]) b (get-in r [:clotran :tests t])]]
+              {:id (str (:ns r) "/" t) :clj a :clotran b})
+      both (filter #(and (get-in % [:clj :ok]) (get-in % [:clotran :ok])) tests)
+      ratio (fn [t] (/ (get-in t [:clotran :us]) (max 1.0 (get-in t [:clj :us]))))
+      rs (map ratio both)
+      stamp (str/trim (:out (p/shell {:out :string} "date" "+%Y-%m-%dT%H%M%S")))
+      result {:stamp stamp :budget-ms budget-ms
+              :tests (into (sorted-map) (for [t both] [(:id t) {:clj (get-in t [:clj :us]) :clotran (get-in t [:clotran :us])}]))}
+      prev (some->> (fs/glob out-dir "*.edn") (map str) sort last slurp edn/read-string)
+      ms #(format "%9.3f" (/ % 1000.0))]
+  (spit (fs/file out-dir (str stamp ".edn")) (pr-str result))
+  (println)
+  (println (format "%d namespaces, %d deftests seen; %d pass on both sides and are timed (budget %d ms a test a side)"
+                   (count rows) (count tests) (count both) budget-ms))
+  (println (format "  not timed: %d fail or error on clotran, %d on clj, %d not reached on clotran, %d not reached on clj"
+                   (count (filter #(and (:clotran %) (not (get-in % [:clotran :ok]))) tests))
+                   (count (filter #(and (:clj %) (not (get-in % [:clj :ok]))) tests))
+                   (count (filter #(nil? (:clotran %)) tests))
+                   (count (filter #(nil? (:clj %)) tests))))
+  (println (format "  namespaces timed out: clotran %d, clj %d"
+                   (count (filter #(get-in % [:clotran :timeout]) rows)) (count (filter #(get-in % [:clj :timeout]) rows))))
+  (when (seq rs)
+    (println (format "  clotran/clj per test: geometric mean %.1fx, median %.1fx, 90th percentile %.1fx, worst %.0fx"
+                     (geo rs) (pct rs 0.5) (pct rs 0.9) (apply max rs))))
+  (println)
+  (println "worst 25 ratios (ms a run: clj, clotran):")
+  (doseq [t (take 25 (sort-by (comp - ratio) both))]
+    (println (format "  %s %s %8.0fx  %s" (ms (get-in t [:clj :us])) (ms (get-in t [:clotran :us])) (ratio t) (:id t))))
+  (println)
+  (println "slowest 15 on clotran:")
+  (doseq [t (take 15 (sort-by #(- (get-in % [:clotran :us])) both))]
+    (println (format "  %s %s %8.0fx  %s" (ms (get-in t [:clj :us])) (ms (get-in t [:clotran :us])) (ratio t) (:id t))))
+  (when prev
+    (let [grew (for [[id {:keys [clotran]}] (:tests result)
+                     :let [old (get-in prev [:tests id :clotran])]
+                     :when (and old (pos? old))]
+                 [id (/ clotran old) old clotran])]
+      (println)
+      (println (str "against " (:stamp prev) ": " (count grew) " tests in both; grew most on clotran (old ms, new ms):"))
+      (doseq [[id g old new] (take 10 (sort-by (comp - second) grew))]
+        (println (format "  %s %s %6.1fx  %s" (ms old) (ms new) g id)))))
+  (println (str "\nall results: build/bench-suite/" stamp ".edn")))

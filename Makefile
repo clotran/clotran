@@ -745,6 +745,13 @@ model-full:
 fuzz-all: clotran-bin $(B)/libsamplelib.$(SOEXT)
 	scripts/fuzz-all --size full
 
+# Clojure's own tests as a speed census: every derived deftest timed
+# warm through clj and clotran, the ratio, and what grew since the last
+# run (build/bench-suite/). Timing is noisy: a census, never a gate.
+.PHONY: bench-suite
+bench-suite: clotran-bin
+	scripts/bench-suite
+
 .PHONY: fuzz-door
 fuzz-door: model clotran-bin $(B)/libsamplelib.$(SOEXT)
 	scripts/fuzz-door -n 500 -s 1
