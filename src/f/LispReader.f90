@@ -2020,25 +2020,31 @@ contains
        ! \uXXXX exactly four hex digits, not a surrogate; \oNNN at most
        ! three octal digits, at most 377; anything else refused
        block
-         integer :: cp, i, d
+         integer :: cp, i, d, w
          character(len=16) :: b
          if (u8_count(name) == 1) then
             v = gc_char_cp(u8_at(name, 0))
             return
          end if
          if (name(1:1) == "u") then
-            if (len(name) /= 5) then
+            ! the length in characters, as clj's token is; a digit that is
+            ! not one is named whole, a UTF-8 character and not its first byte
+            if (u8_count(name) /= 5) then
                call fail("Invalid unicode character: " // achar(92) // name, "clotran.host.illegal_argument_exception")
                return
             end if
             cp = 0
-            do i = 2, 5
-               d = digit_of(name(i:i), 16)
+            i = 2
+            do while (i <= len(name))
+               w = u8_len(name(i:i))
+               d = -1
+               if (w == 1) d = digit_of(name(i:i), 16)
                if (d < 0) then
-                  call fail("Invalid digit: " // name(i:i), "clotran.host.illegal_argument_exception")
+                  call fail("Invalid digit: " // name(i:min(len(name), i + w - 1)), "clotran.host.illegal_argument_exception")
                   return
                end if
                cp = cp * 16 + d
+               i = i + w
             end do
             if (cp >= 55296 .and. cp <= 57343) then
                write(b, '(Z0)') cp
@@ -2059,13 +2065,17 @@ contains
                return
             end if
             cp = 0
-            do i = 2, len(name)
-               d = digit_of(name(i:i), 8)
+            i = 2
+            do while (i <= len(name))
+               w = u8_len(name(i:i))
+               d = -1
+               if (w == 1) d = digit_of(name(i:i), 8)
                if (d < 0) then
-                  call fail("Invalid digit: " // name(i:i), "clotran.host.illegal_argument_exception")
+                  call fail("Invalid digit: " // name(i:min(len(name), i + w - 1)), "clotran.host.illegal_argument_exception")
                   return
                end if
                cp = cp * 8 + d
+               i = i + w
             end do
             if (cp > 255) then
                call fail("Octal escape sequence must be in range [0, 377].")

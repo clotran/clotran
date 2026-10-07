@@ -102,4 +102,8 @@
  (let [r (int ##-Inf)] [r (class r)])
  (mapv (fn [f] [(f 5 ##NaN) (f ##NaN 1/2) (f 1.5M ##NaN) (f 2 2.0)]) [< <= > >= ==])
  [(str ##-Inf) (str ##Inf) (str ##NaN) (str [##NaN])]
+ ;; a character escape with a non-ASCII digit named its first byte, and
+ ;; \u measured its length in bytes (scripts/fuzz-read, seed 2362644560)
+ (read-string "\\oλ1") (read-string "\\o1λ") (read-string "\\uλ12a")
+ (read-string "\\u12λa") (read-string "\\u12λ") (read-string "\\oλ")
 ]
