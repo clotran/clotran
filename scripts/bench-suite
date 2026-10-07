@@ -20,6 +20,9 @@
 ;;   CLOTRAN_TEST_JOBS         namespaces at once (default 2: keep the machine usable)
 ;;   CLOTRAN_TEST_TIMEOUT      seconds per namespace and side (default 600)
 ;;
+;; clj runs with upstream's test tree on its classpath, where the helper
+;; namespaces some tests require live (compilation/line_number_examples).
+;;
 ;; Results go to build/bench-suite/<timestamp>.edn; the report compares
 ;; with the newest earlier file there and lists the tests whose clotran
 ;; time grew most. Timing is noisy, so this is a census, never a gate.
@@ -42,13 +45,13 @@
        "(load-file \"" helper "\")\n"
        "(load-file \"" file "\")\n"
        "(in-ns 'user)\n"
-       "(defn bench-run1 [v]
+       "(defn bench-run1 [run]
   (binding [clojure.test/*report-counters* (ref clojure.test/*initial-report-counters*)]
-    (with-out-str (binding [clojure.test/*test-out* *out*] (clojure.test/test-vars [v])))
+    (with-out-str (binding [clojure.test/*test-out* *out*] (run)))
     (let [c @clojure.test/*report-counters*] (zero? (+ (:fail c 0) (:error c 0))))))
-(defn bench-var [v budget-ns]
+(defn bench-var [run budget-ns]
   (let [t0 (clotran.host.system/nanoTime)
-        ok (bench-run1 v)
+        ok (bench-run1 run)
         first-ns (- (clotran.host.system/nanoTime) t0)]
     (if (or (not ok) (> first-ns 1000000000))
       [ok 1 first-ns]
@@ -56,13 +59,19 @@
         (if (or (>= total budget-ns) (>= runs 10000))
           [ok runs total]
           (let [t (clotran.host.system/nanoTime)]
-            (bench-run1 v)
+            (bench-run1 run)
             (recur (inc runs) (+ total (- (clotran.host.system/nanoTime) t)))))))))
-(doseq [[s v] (sort-by (comp str key) (ns-interns '" n "))
-        :when (:test (meta v))]
-  (let [[ok runs total] (bench-var v " (* budget-ms 1000000) ")]
-    (println (str \"@@b \" s \" \" ok \" \" runs \" \" (quot total 1000)))
-    (flush)))\n"))
+(defn bench-report [s [ok runs total]]
+  (println (str \"@@b \" s \" \" ok \" \" runs \" \" (quot total 1000)))
+  (flush))
+;; a namespace with a test-ns-hook runs only through it (clojure.test's
+;; own tests install their reporter there): the hook is timed as one test
+(if-let [hook (ns-resolve '" n " 'test-ns-hook)]
+  (bench-report 'test-ns-hook (bench-var hook " (* budget-ms 1000000) "))
+  (doseq [[s v] (sort-by (comp str key) (ns-interns '" n "))
+          :when (:test (meta v))]
+    (bench-report s (bench-var #(clojure.test/test-vars [v]) " (* budget-ms 1000000) "))))
+(shutdown-agents)\n"))
 
 (defn run-side [side f n]
   (let [script (fs/file out-dir "work" (str n "." (name side) ".clj"))
@@ -74,7 +83,7 @@
             (spit (fs/file out-dir "work" (str n ".upstream.clj")) (names/to-upstream (slurp (fs/file repo f)))))
         _ (spit script text)
         cmd (if (= side :clj)
-              ["clj" "-Sdeps" (slurp (str repo "/deps.edn")) "-M" (str script)]
+              ["clj" "-Sdeps" (pr-str (assoc (edn/read-string (slurp (str repo "/deps.edn"))) :paths [(str repo "/upstream/clojure/test")])) "-M" (str script)]
               [(str repo "/clotran-bin") (str repo "/src/clj/clojure/core.clj") (str script)])
         proc (p/process cmd {:dir repo :in "" :out :string :err :string})
         done (deref proc timeout-ms ::timeout)
