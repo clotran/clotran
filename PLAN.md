@@ -3422,7 +3422,57 @@ seconds, and the return is one abstract lemma over plain states.
 
 The VM model is now the whole language the Fortran stack VM (step 30)
 must run: closures, loops and recur, arities and variadic packing,
-runtime calls, try and throw. The Fortran comes next, against this.
+runtime calls, try and throw.
+
+**The Fortran is GENERATED from the model (decided, James,
+2026-10-07: "let's write the generator for everything").** A Fortran
+written by hand against the model can only be tested against it, and
+the proof would be about a description, not the code that ships. So
+the proved ACL2 definitions are translated mechanically into Fortran,
+as CompCert extracts the compiler it proves. What is trusted is the
+translator and gfortran/flang, which already check each other. Nobody
+edits generated Fortran. A change goes into the model, is proved, and
+is generated again. A speed trick such as a superinstruction is
+modelled first.
+
+What it needs:
+- **An implementation-level model per component.** Today's books prove
+  things about lists and unbounded integers. Generated code needs
+  64-bit integers, arrays (ACL2 stobjs, updated in place) and the real
+  data layout. Each component gets that model, proved equal to the
+  abstract one it refines.
+- **A translator** from that ACL2 subset to Fortran, in bb. It is
+  checked by running the generated Fortran and the ACL2 definitions on
+  the same inputs, for identical bytecode and step-by-step identical
+  machine states, with a negative control.
+
+What it covers, in order:
+1. the VM's step loop and the bytecode compiler (vmx2);
+2. the analyzer from Clojure's special forms to the core language,
+   modelled first (macros stay Clojure, run by core.clj);
+3. the allocator and both collectors (alloc, alloc-old);
+4. the persistent data structures (vector, hashseq, string);
+5. the JIT's emitter (jit, jit2, jit3, extended to vmx2's
+   instructions).
+
+What stays hand-written: the builtins' results (checked against clj,
+as now), I/O, the OS calls, ICU, and the glue between routines.
+
+**Threads, later** (after the allocator). Their logic -- the
+stop-all-threads safepoint handshake, agent queues, the STM's retries
+-- can be modelled and generated too. The proof must hold for every
+interleaving of the threads' steps, and for the hardware's memory
+ordering: arm64 reorders memory operations more than x86-64 does. The
+model's primitives will be the atomics and locks of Fortran 2018
+(atomic_define, atomic_cas) or OpenMP, whose memory orderings the
+compilers implement for each architecture. So the generator writes no
+per-architecture code. Today's threads call pthreads through bind(C)
+(src/f/Threads.f90), and data shared under a mutex is already ordered
+correctly on both. OpenMP would also give Windows, which pthreads does
+not. nvfortran (CUDA Fortran, OpenACC) and OpenMP's parallel loops are
+data parallelism -- an array kernel across cores or a GPU -- a
+separate feature for clotran's numeric users, not the runtime's
+threads.
 
 ### 31. A stack bytecode VM and a JIT (decided 2026-10-06)
 
