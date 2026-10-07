@@ -3500,6 +3500,29 @@ The first version debugs a JIT'd function by running it interpreted.
   binary, and opens it in the unified debugger with a breakpoint on
   the error path. Hangs and crashes become an immediate attach target.
 
+LANDED 2026-10-07, both:
+- **Shrinking.** `scripts/fuzz --shrink-budget N` shrinks every failure
+  greedily within N seconds of wall time, all failures together, and
+  marks a case the budget cut short. Each failure prints its seed and
+  the command that reproduces it. The gate's check-fuzz runs with 60.
+  Its negative control, `--control-shrink`, plants a bug (flat mode
+  reads every 7 as 8). The run must find it and shrink every case to
+  one no larger that still fails, at least one strictly smaller:
+  12 planted failures, 6 smaller, all still failing, on seed 2. One
+  300-character case came down to `(pr-str (vec (range 8)))`. That
+  control is check-fuzz-shrink, in test-nightly. The other fuzzers
+  keep their own reports for now; scripts/fuzz is the one with rose
+  trees to shrink.
+- **`make fuzz-repro CASE='(form)' [MODE=tree] [DEBUG=1]`**
+  (scripts/fuzz-repro). This is `fuzz-repro`, not `repro`, which is
+  step 23's. It prints clj's answer and clotran's for the form, writes
+  it to build/repro/case.cljf, and with DEBUG=1 runs clotran under
+  lldb (gdb where there is none), stopped at set_thrown, which every
+  throw goes through. `--batch` prints that throw's backtrace instead,
+  for a log. It is lldb and gdb directly until the unified debugger
+  exists, and the binary is the ordinary -g -O2 build. Hangs are not
+  handled yet: interrupting a running case is the next piece.
+
 ### 32. Execution contexts: one pool over local, SSH, Slurm and Kubernetes (decided 2026-10-06)
 
 James, 2026-10-06: the practical worry is that a scientist must learn

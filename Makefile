@@ -419,7 +419,7 @@ TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(
 TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-tree check-banner check-torture check-threads \
 	check-autocompile check-break check-libraries check-oracle check-oracle-gc check-pure check-static check-costs check-seed check-fuzz-regressions
 TEST_FUZZ = check-fuzz check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-fn check-fuzz-read check-fuzz-print
-TEST_NIGHTLY = check-frames check-fuzz-spec check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind
+TEST_NIGHTLY = check-fuzz-shrink check-frames check-fuzz-spec check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind
 ifeq ($(notdir $(FC)),gfortran)
 TEST_CHECKS = $(TEST_FIXED) $(TEST_FUZZ)
 else
@@ -538,7 +538,10 @@ check-fuzz-regressions:
 	scripts/fuzz -f test/clj/fuzz-regressions.edn > $(B)/fuzz-regressions.out 2>&1; s=$$?; cat $(B)/fuzz-regressions.out; exit $$s
 check-fuzz:
 	@echo "--- the fuzzer (PLAN 26.9): 300 generated programs and 4 calls of each spec'd function, each through clj and clotran's flat, tree and compiled modes ---"
-	scripts/fuzz -n 300 -s $(SEED) > $(B)/fuzz.out 2>&1 && scripts/fuzz --fns 4 -s $(SEED) >> $(B)/fuzz.out 2>&1; s=$$?; cat $(B)/fuzz.out; exit $$s
+	scripts/fuzz -n 300 -s $(SEED) --shrink-budget 60 > $(B)/fuzz.out 2>&1 && scripts/fuzz --fns 4 -s $(SEED) >> $(B)/fuzz.out 2>&1; s=$$?; cat $(B)/fuzz.out; exit $$s
+check-fuzz-shrink:
+	@echo "--- the fuzzer's shrinker (PLAN 31a): a planted bug, found, every case shrunk no larger and still failing, one strictly smaller ---"
+	scripts/fuzz -n 150 -s 2 --control-shrink > $(B)/fuzz-shrink.out 2>&1; s=$$?; tail -1 $(B)/fuzz-shrink.out; exit $$s
 check-fuzz-macro:
 	@echo "--- core macros (PLAN 29): generated destructuring, checked against core.specs, and threading and conditional macros, through clj and every mode ---"
 	scripts/fuzz-macro -n 150 -s $(SEED) -o $(B)/fuzz-macro.edn > $(B)/fuzz-macro.out 2>&1; s=$$?; cat $(B)/fuzz-macro.out; exit $$s
@@ -744,6 +747,14 @@ model-full:
 # deadline each, and a scorecard (PLAN step 29). Hours, not minutes.
 fuzz-all: clotran-bin $(B)/libsamplelib.$(SOEXT)
 	scripts/fuzz-all --size full
+
+# A fuzzer's case to the debugger (PLAN 31a): clj's answer and clotran's,
+# and with DEBUG=1 clotran under lldb or gdb stopped at the first throw.
+#   make fuzz-repro CASE='(form)' [MODE=tree] [DEBUG=1]
+.PHONY: fuzz-repro
+fuzz-repro: export CASE := $(CASE)
+fuzz-repro: clotran-bin
+	scripts/fuzz-repro $(if $(MODE),-m $(MODE)) $(if $(DEBUG),--debug) "$$CASE"
 
 # Clojure's own tests as a speed census: every derived deftest timed
 # warm through clj and clotran, the ratio, and what grew since the last

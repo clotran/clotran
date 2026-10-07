@@ -1,0 +1,79 @@
+#!/usr/bin/env bb
+;; A fuzzer's case, from its form to the debugger (PLAN 31a).
+;;
+;;   scripts/fuzz-repro '(form)'               clj's answer and clotran's, side by side
+;;   scripts/fuzz-repro -f case.clj            the form in a file
+;;   scripts/fuzz-repro -m tree '(form)'       through the tree evaluator (flat is the default)
+;;   scripts/fuzz-repro --debug '(form)'       then clotran under lldb (gdb where there is
+;;                                             no lldb), stopped at the first throw
+;;   scripts/fuzz-repro --batch '(form)'       the same, but print that throw's backtrace
+;;                                             and exit, for a log rather than a terminal
+;;   make fuzz-repro CASE='(form)' [MODE=tree] [DEBUG=1]
+;;
+;; The case runs as the fuzzer runs it -- the value printed through
+;; pr-str, a throw as its class and message -- in a file under
+;; build/repro/ that stays behind, so the debugger session and any
+;; later one open the same thing. Every throw goes through set_thrown
+;; (src/f/Eval.f90), so that is the breakpoint: a wrong answer that
+;; throws stops where it was thrown, and a wrong answer that does not
+;; runs to the end with both answers printed.
+(require '[babashka.process :as p] '[babashka.fs :as fs] '[clojure.string :as str])
+
+(def repo (-> *file* fs/file .getCanonicalFile .getParentFile .getParentFile str))
+(load-file (str repo "/upstream/names.clj"))
+
+(def opts
+  (loop [a *command-line-args* o {:mode "flat"}]
+    (case (first a)
+      nil o
+      "-f" (recur (drop 2 a) (assoc o :form (slurp (second a))))
+      "-m" (recur (drop 2 a) (assoc o :mode (second a)))
+      "--debug" (recur (rest a) (assoc o :debug true))
+      "--batch" (recur (rest a) (assoc o :debug true :batch true))
+      (recur (rest a) (assoc o :form (first a))))))
+
+(when (str/blank? (:form opts))
+  (println "usage: scripts/fuzz-repro [-m flat|tree] [--debug|--batch] '(form)' | -f file")
+  (System/exit 2))
+
+(def repro-dir (str repo "/build/repro"))
+(fs/create-dirs repro-dir)
+
+(defn script [form]
+  (str "(in-ns 'user)\n(require 'clojure.string 'clojure.set 'clojure.walk)\n"
+       "(println (str \"=> \" (try (pr-str (do " form "))"
+       " (catch clotran.host.throwable t (str \"!error \" (.getName (class t)) \": \" (.getMessage t))))))\n"
+       "(shutdown-agents)\n"))
+
+(defn run [cmd env]
+  (let [r (p/process cmd {:dir repo :in "" :out :string :err :string :extra-env env})
+        done (deref r 120000 ::timeout)]
+    (if (= done ::timeout)
+      (do (p/destroy-tree r) "TIMED OUT after 120 s")
+      (or (some #(when (str/starts-with? % "=> ") (subs % 3)) (str/split-lines (:out done)))
+          (str "no answer; exit " (:exit done) "\n" (str/join "\n" (take-last 8 (str/split-lines (:err done)))))))))
+
+(let [form (str/trim (:form opts))
+      cf (str repro-dir "/case.clj") tf (str repro-dir "/case.cljf")
+      bin (str repo "/clotran-bin") core (str repo "/src/clj/clojure/core.clj")
+      env (if (= "tree" (:mode opts)) {"CLOTRAN_FLAT" "0"} {})]
+  (spit cf (names/to-upstream (script form)))
+  (spit tf (script form))
+  (println "form:   " form)
+  (println "clj:    " (names/from-clj (run ["clj" "-Sdeps" (slurp (str repo "/deps.edn")) "-M" cf] {})))
+  (println (str "clotran (" (:mode opts) "): ") (run [bin core tf] env))
+  (println "case:   " tf)
+  (when (:debug opts)
+    (let [lldb? (some? (fs/which "lldb"))
+          dbg (cond lldb? (concat ["lldb"] (when (:batch opts) ["-b"])
+                                  ["-o" "breakpoint set -r set_thrown" "-o" "run"]
+                                  (when (:batch opts) ["-o" "bt 25" "-o" "kill"])
+                                  ["--" bin core tf])
+                    (fs/which "gdb") (concat ["gdb"] (when (:batch opts) ["-batch"])
+                                             ["-ex" "rbreak set_thrown" "-ex" "run"]
+                                             (when (:batch opts) ["-ex" "bt 25" "-ex" "kill"])
+                                             ["--args" bin core tf])
+                    :else (do (println "no lldb or gdb on PATH") (System/exit 2)))]
+      (println (str "using " (if lldb? "lldb" "gdb") ", stopped at the first throw (set_thrown)"))
+      (let [r @(p/process (vec dbg) {:dir repo :in :inherit :out :inherit :err :inherit :extra-env env})]
+        (System/exit (:exit r))))))

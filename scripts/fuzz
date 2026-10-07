@@ -15,6 +15,14 @@
 ;;   scripts/fuzz -n 500 -s 7          500 cases, seed 7
 ;;   scripts/fuzz -m flat,tree         only those modes
 ;;   scripts/fuzz --shrink             shrink each failure (slow: a run per try)
+;;   --shrink-budget 60                shrink, all failures together in at most 60 s
+;;                                     of wall time (the gate's: a red run shows a
+;;                                     small case, and its seed reproduces the original)
+;;   --control-shrink                  the shrinker's negative control: flat mode's answers
+;;                                     read every 7 as 8, a planted bug; the run must find
+;;                                     it and shrink each case to one no larger that still
+;;                                     fails, at least one strictly smaller, and exits 0
+;;                                     only then
 ;;   scripts/fuzz --fns 20             20 calls of each function spec'd in
 ;;                                     scripts/fuzz_specs.clj, from its :args spec;
 ;;                                     clj's answer checked against its :ret
@@ -59,6 +67,8 @@
       "-s" (recur (drop 2 a) (assoc o :seed (parse-long (second a))))
       "-m" (recur (drop 2 a) (assoc o :modes (vec (remove str/blank? (str/split (second a) #",")))))
       "--shrink" (recur (rest a) (assoc o :shrink true))
+      "--control-shrink" (recur (rest a) (assoc o :control-shrink true :shrink true :shrink-budget 120 :modes ["flat"]))
+      "--shrink-budget" (recur (drop 2 a) (assoc o :shrink true :shrink-budget (parse-long (second a))))
       "-f" (recur (drop 2 a) (assoc o :file (second a)))
       "--timeout" (recur (drop 2 a) (assoc o :timeout (parse-long (second a))))
       "--keep" (recur (rest a) (assoc o :keep true))
@@ -516,7 +526,10 @@
 (defn run-clotran [mode forms]
   (let [core (str repo "/src/clj/clojure/core.clj") bin (str repo "/clotran-bin")]
     (case mode
-      "flat" (let [f (str work "/cases.cljf")] (spit f (case-script forms)) (outputs (:out (sh {} bin core f))))
+      "flat" (let [f (str work "/cases.cljf")] (spit f (case-script forms))
+               (cond->> (outputs (:out (sh {} bin core f)))
+                 ;; --control-shrink's planted bug
+                 (:control-shrink opts) (into {} (map (fn [[k v]] [k (str/replace v "7" "8")])))))
       "tree" (let [f (str work "/cases.cljf")] (spit f (case-script forms))
                (outputs (:out (sh {"CLOTRAN_FLAT" "0"} bin core f))))
       "noimage" (let [f (str work "/cases.cljf")] (spit f (case-script forms))
@@ -606,12 +619,21 @@
   (let [w (get (run-clj [form]) 0) g (get (run-clotran mode [form]) 0)]
     (and (some? w) (differs w g))))
 
-(defn shrink [mode tree]
+(def shrunk (atom []))   ; --control-shrink's record of what shrinking did
+
+(def shrink-until
+  "when --shrink-budget's wall time runs out, for every failure together"
+  (delay (some->> (:shrink-budget opts) (* 1000) (+ (System/currentTimeMillis)))))
+
+(defn shrink
+  "[smallest form found, whether the budget cut it short]"
+  [mode tree]
   ;; greedy: the first child that still fails, until none does
   (loop [t tree tries 0]
-    (let [kid (when (< tries 60)
+    (let [out? (some-> @shrink-until (< (System/currentTimeMillis)))
+          kid (when (and (< tries 60) (not out?))
                 (some #(when (fails? mode (rose/root %)) %) (take 8 (rose/children t))))]
-      (if kid (recur kid (inc tries)) (rose/root t)))))
+      (if kid (recur kid (inc tries)) [(rose/root t) (boolean out?)]))))
 
 ;;; ---- main -----------------------------------------------------------
 
@@ -698,6 +720,8 @@
   (doseq [[m i batch] (take 40 @bad)]
     (let [f (nth forms i)]
       (println "---" m "case" i)
+      (when-not (:file opts)
+        (println (str "  seed:    " seed " -- scripts/fuzz " (if (:fns opts) (str "--fns " (:fns opts)) (str "-n " n)) " -s " seed " -m " m " reproduces it")))
       (println "  form:   " (pr-str f))
       (println "  clj:    " (get want i))
       ;; the answer the run gave, beside the case's alone: a case that
@@ -707,11 +731,20 @@
       (let [alone (get (run-clotran m [f]) 0)]
         (when (not= alone batch) (println "  alone:  " alone)))
       (when (and (:shrink opts) roses)
-        (let [small (shrink m (nth roses i))]
-          (println "  shrunk: " (pr-str small))
+        (let [[small cut] (shrink m (nth roses i))]
+          (swap! shrunk conj {:small small :orig f :still (fails? m small)})
+          (println (str "  shrunk: " (pr-str small) (when cut "   (the shrink budget ran out first)")))
           (println "    clj:    " (get (run-clj [small]) 0))
           (println "    clotran:" (get (run-clotran m [small]) 0))))))
   (if (:keep opts) (println "kept:" work) (fs/delete-tree work))
   (when (seq @hangs) (println "TIMEOUTS AND CRASHES:" (count @hangs) "-- cases clj answers and clotran does not, in time or at all"))
   (when (seq @spec-bugs) (println "SPEC BUGS:" (count @spec-bugs) "functions' specs are wrong"))
+  (when (:control-shrink opts)
+    (let [ok (and (seq @shrunk)
+                  (some #(< (count (pr-str (:small %))) (count (pr-str (:orig %)))) @shrunk)
+                  (every? #(and (:still %) (<= (count (pr-str (:small %))) (count (pr-str (:orig %))))) @shrunk))]
+      (println (format "CONTROL: %d planted failures shrunk, %d smaller than found, all still failing: %s"
+                       (count @shrunk) (count (filter #(< (count (pr-str (:small %))) (count (pr-str (:orig %)))) @shrunk))
+                       (if ok "yes" "NO")))
+      (System/exit (if ok 0 1))))
   (System/exit (if (or (seq @bad) (seq @hangs) (seq @spec-bugs)) 1 0)))
