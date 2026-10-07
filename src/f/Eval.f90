@@ -10734,7 +10734,9 @@ contains
             ! MAX_VALUE become in RT's comparison
             if (d < -9223372036854775808.0_gc_dp .or. d > 9223372036854775808.0_gc_dp) then
                block
-                  call gcp_str(gc_real(d), .false., s=dlt_1)
+                  ! the double's toString, as RT.longCast concatenates
+                  ! it: -Infinity, not the printed ##-Inf
+                  call to_string_text(gc_real(d), dlt_1)
                   call raise_class("clotran.host.illegal_argument_exception", "Value out of range for long: " //  dlt_1, [vs_get(vst, &
                        base + 1)])
                end block

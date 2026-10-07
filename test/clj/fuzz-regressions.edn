@@ -102,6 +102,10 @@
  (let [r (int ##-Inf)] [r (class r)])
  (mapv (fn [f] [(f 5 ##NaN) (f ##NaN 1/2) (f 1.5M ##NaN) (f 2 2.0)]) [< <= > >= ==])
  [(str ##-Inf) (str ##Inf) (str ##NaN) (str [##NaN])]
+ ;; long's range error still printed ##-Inf: int's was fixed, long's
+ ;; path was not (scripts/fuzz-num in the gate, 2026-10-07)
+ (let [r (long ##-Inf)] [r (class r)])
+ (let [r (long ##Inf)] [r (class r)])
  ;; a character escape with a non-ASCII digit named its first byte, and
  ;; \u measured its length in bytes (scripts/fuzz-read, seed 2362644560)
  (read-string "\\oλ1") (read-string "\\o1λ") (read-string "\\uλ12a")
