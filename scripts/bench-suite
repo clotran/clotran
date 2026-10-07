@@ -110,7 +110,12 @@
       ratio (fn [t] (/ (get-in t [:clotran :us]) (max 1.0 (get-in t [:clj :us]))))
       rs (map ratio both)
       stamp (str/trim (:out (p/shell {:out :string} "date" "+%Y-%m-%dT%H%M%S")))
+      not-ok (fn [side] (sort (for [t tests :let [r (get t side)] :when (or (nil? r) (not (:ok r)))]
+                               (str (:id t) (if r "" " (not reached)")))))
       result {:stamp stamp :budget-ms budget-ms
+              :not-ok {:clj (vec (not-ok :clj)) :clotran (vec (not-ok :clotran))}
+              :timed-out {:clj (vec (sort (keep #(when (get-in % [:clj :timeout]) (:ns %)) rows)))
+                          :clotran (vec (sort (keep #(when (get-in % [:clotran :timeout]) (:ns %)) rows)))}
               :tests (into (sorted-map) (for [t both] [(:id t) {:clj (get-in t [:clj :us]) :clotran (get-in t [:clotran :us])}]))}
       prev (some->> (fs/glob out-dir "*.edn") (map str) sort last slurp edn/read-string)
       ms #(format "%9.3f" (/ % 1000.0))]
@@ -125,6 +130,11 @@
                    (count (filter #(nil? (:clj %)) tests))))
   (println (format "  namespaces timed out: clotran %d, clj %d"
                    (count (filter #(get-in % [:clotran :timeout]) rows)) (count (filter #(get-in % [:clj :timeout]) rows))))
+  (doseq [side [:clotran :clj] :let [xs (get-in result [:not-ok side]) to (get-in result [:timed-out side])]
+          :when (or (seq xs) (seq to))]
+    (println (str "  not timed on " (name side) ":"))
+    (doseq [x xs] (println "     " x))
+    (doseq [n to] (println "      namespace timed out:" n)))
   (when (seq rs)
     (println (format "  clotran/clj per test: geometric mean %.1fx, median %.1fx, 90th percentile %.1fx, worst %.0fx"
                      (geo rs) (pct rs 0.5) (pct rs 0.9) (apply max rs))))
