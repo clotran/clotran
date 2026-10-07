@@ -66,7 +66,7 @@
 (defn gen [depth nl nc _tail]
   (if (or (<= depth 0) (< (rnd 10) 3))
     (leaf nl nc)
-    (case (rnd 9)
+    (case (rnd 10)
       0 (list :if (gen (dec depth) nl nc nil) (gen (dec depth) nl nc nil) (gen (dec depth) nl nc nil))
       1 (list :let (gen (dec depth) nl nc nil) (gen (dec depth) (inc nl) nc nil))
       2 (list :add (gen (dec depth) nl nc nil) (gen (dec depth) nl nc nil))
@@ -77,7 +77,7 @@
                  (rep a #(list :const (rnd 6)))))
       ;; a closure made of the locals, called
       7 (list :callv (list :mkclo 'addc (gen (dec depth) nl nc nil)) (gen (dec depth) nl nc nil))
-      8 (case (rnd 6)
+      (8 9) (case (rnd 8)
           0 (list :throw (gen (dec depth) nl nc nil))
           1 (list :try (gen (dec depth) nl nc nil) (gen (dec depth) (inc nl) nc nil))
           2 (list :prim :div (gen (dec depth) nl nc nil) (list :const (rnd 3)))
@@ -86,7 +86,13 @@
           4 (list :try (let [[f as] (nth (vec fns2) (rnd (count fns2)))]
                          (list* :callv (list :mkclo f) (rep (nth as (rnd (count as))) #(list :const (rnd 5)))))
                   (list :local nl))
-          5 (list :prim :count (list :const (rnd 3)))))))
+          5 (list :prim :count (list :const (rnd 3)))
+          ;; a throw caught, the handler answering what it caught, the
+          ;; body having pushed something else first: where the machine
+          ;; puts a caught value is seen directly
+          6 (list :try (list :add (list :const 7) (list :throw (gen (dec depth) nl nc nil))) (list :local nl))
+          7 (list :try (list :add (list :const 1) (list :prim :div (gen (dec depth) nl nc nil) (list :const 0)))
+                  (list :local nl))))))
 
 (defn lisp [x]
   (cond (seq? x) (str "(" (str/join " " (map lisp x)) ")")

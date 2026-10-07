@@ -3381,12 +3381,48 @@ clause.
 answers: variadic sums, arity picked and thrown, throws out of calls,
 loops and builtins, the finally desugaring.
 
-scripts/fuzz-vmx2 (make fuzz-model) runs 300 programs, 53 of them
-ending in a throw, and agrees on all. Its control, a throw's value one
-slot high, is caught in 4 of 100. That is weak: few generated handlers
-read their local. To strengthen.
+scripts/fuzz-vmx2 (make fuzz-model) runs 300 programs, 61 of them
+ending in a throw, and agrees on all. Its control puts a throw's value
+one slot high. At first it was caught in 4 of 100, because in
+`(try (throw x) h)` the slot the broken machine skips already holds x:
+the body pushed it there. The generator now pushes something else
+first, and throws a division by zero under an add. The control is now
+caught in 7 of 100.
 
-The proof, as vmx-proof.lisp's but for the whole language, is next.
+**The whole language, proved (model/vmx2-proof.lisp, vmx2-cost.lisp,
+2026-10-07).**
+- `vcs2-good`: every expression in every frame does what its meaning
+  answers. The property gains a third outcome beside a value pushed and
+  a recur at its loop's head: a throw arrives where unwinding the
+  starting control stack lands. That is the nearest handler's pc and
+  frame, with the thrown value in the handler's local and nothing
+  below it changed; with no handler, the machine stops at `:thrown`.
+  The invariant that makes "nothing below it changed" true: every
+  handler record's slot is at or below the stack top where the
+  expression starts.
+  - A throw out of a call passes over the call records: `thrown-at`
+    reads only the nearest handler.
+  - A loop's later iteration throws from a head whose slots were
+    rewritten, so the transfer is stated against a bound, the loop's
+    base, rather than the head's stack top.
+- `vcs2-correct`: a whole compiled program answers its meaning, its
+  value or the value of a throw nothing caught.
+- `s2clk-linear`: at most 2 steps per expression the meaning
+  evaluates. A try counts twice: its record pushed, and popped with
+  the jump. A throw is one step however deep, and **the Fortran owes
+  that**: it keeps the nearest handler's index, so a throw truncates
+  the control stack instead of walking it.
+
+The method is vmx-proof's, path by path, and its one new lesson is a
+call's frame. Fixed and variadic frames differ, and opened in the
+hints the `if` between them was copied into every instance. The
+prover then spent ten minutes before starting a proof. Named and kept
+closed (`call-frame`, `call-nl`, `call-benv`), each path takes
+seconds, and the return is one abstract lemma over plain states.
+
+The VM model is now the whole language the Fortran stack VM (step 30)
+must run: closures, loops and recur, arities and variadic packing,
+runtime calls, try and throw. The Fortran comes next, against this.
 
 ### 31. A stack bytecode VM and a JIT (decided 2026-10-06)
 
