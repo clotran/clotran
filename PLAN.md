@@ -3125,11 +3125,37 @@ scripts/fuzz-alloc now runs full collections too. Its second negative
 control (`-m`) is a mark that takes the roots' objects but not what
 they reference, and it is caught.
 
+**Placed (James, 2026-10-07):** the allocator in Fortran comes after
+the Fortran stack VM and everything else the VM needs. That is when
+allocation becomes a larger share of what is left; the profiles so far
+put allocation and the collector near 11%, and 26.7 already said a
+nursery waits for a profile to ask for it.
+
+Several threads' young collection, DECIDED (James, 2026-10-07: "we
+can use stop all threads"):
+- stop every thread at a safepoint and collect all nurseries at once,
+  in parallel. This is HotSpot's, .NET's, SBCL's, GHC's and OCaml 5's
+  choice, and GHC and OCaml tried thread-local young heaps first and
+  turned them down.
+- A thread inside a Fortran call counts as stopped.
+- Arrays that cross the boundary never live in the moving nursery.
+
+The alternative is promote-on-publish (Erlang's per-process heaps, in
+the extreme). It needs no global pause, and Clojure's few publish
+points make it unusually cheap here. But it is a barrier at every
+publish point, and missing one corrupts memory. It stays open in case
+measured pauses with many threads call for it.
+
+The model owes this next, before any Fortran: per-thread nurseries;
+a collection that starts only once every thread is stopped or in a
+native call; and the theorem that a thread in a native call, holding
+only boundary arrays (never in the nursery), observes nothing of the
+collection. That is `gc-invisible` with threads.
+
 Owed in the model:
-- Several threads' nurseries: a reference published from one nursery
-  to another thread. This needs a design decision before it can be
-  modelled. Either publishing promotes the object (a barrier on
-  publication), or a young collection stops every thread.
+- Several threads' nurseries, stop-the-world as decided above: the
+  safepoint, the in-native rule, and boundary arrays outside the
+  nursery.
 - Promotion into freed slots. The copy now goes to the end of the old
   space. `free-reuse-invisible` says a freed slot may take it, but the
   forwarding map would then be a slot list rather than an offset.
