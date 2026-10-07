@@ -5,6 +5,14 @@
 ;;
 ;;   scripts/bench            all forms below
 ;;   scripts/bench '(form)'   one form
+;;
+;; A third column times compiled core: clotran with CLOTRAN_AUTOCOMPILE=use,
+;; core installed from the compile cache (~/.cache/clotran, which
+;; CLOTRAN_AUTOCOMPILE=1 ./clotran fills). When core is not in the
+;; cache the column is "-" and says so, rather than timing the
+;; interpreter under another name. Compiled core was slower than the
+;; interpreter on seq code (2026-10-07), which is why ./clotran has it
+;; off; this column is how that gets watched.
 (require '[babashka.process :as p] '[babashka.fs :as fs] '[clojure.string :as str])
 (def repo (-> *file* fs/file .getAbsoluteFile .getParentFile .getParentFile str))
 (load-file (str repo "/upstream/names.clj"))
@@ -20,23 +28,36 @@
        "(reduce (fn [m i] (assoc m i (* i i))) {} (range 20000))"]))
 (defn timed-script [warm?]
   (str "(in-ns 'user)\n"
+       (when (= warm? :compiled)
+         "(println (str \"@@core \" (some (fn [[k v]] (when (.endsWith k \"/src/clj/clojure/core.clj\") v)) (clotran.loader/compile-status))))\n")
        (str/join "\n" (for [f forms]
                         (str (when warm? (str "(dotimes [_ 3] " f ")\n"))
                              "(let [t0 (clotran.host.system/nanoTime) v " f " t1 (clotran.host.system/nanoTime)] (println (/ (- t1 t0) 1e6)))")))
        "\n"))
-(defn run-lines [& cmd]
-  (let [r (apply p/shell {:dir repo :in "" :out :string :err :string :continue true} cmd)]
+(def core-status (atom nil))
+(defn run-lines [env & cmd]
+  (let [r (apply p/shell {:dir repo :in "" :out :string :err :string :continue true :extra-env env} cmd)]
+    (some->> (re-find #"@@core (\S+)" (:out r)) second (reset! core-status))
     (->> (str/split-lines (:out r))
-         (remove #(or (str/starts-with? % "note:") (str/starts-with? % "user=>") (str/blank? %)))
+         (remove #(or (str/starts-with? % "note:") (str/starts-with? % "user=>") (str/starts-with? % "@@core") (str/blank? %)))
          (map #(Double/parseDouble (str/trim (str/replace % "user=> " ""))))
          vec)))
 (let [clj-file (str repo "/test/clj/.bench-clj.clj")
       cl-file (str repo "/test/clj/.bench-clotran.clj")]
   (spit clj-file (names/to-upstream (timed-script true)))
   (spit cl-file (timed-script false))
-  (let [clj-ms (run-lines "clj" "-Sdeps" (slurp (str repo "/deps.edn")) "-M" clj-file)
-        cl (run-lines "./clotran-bin" "src/clj/clojure/core.clj" cl-file)]
+  (let [clj-ms (run-lines {} "clj" "-Sdeps" (slurp (str repo "/deps.edn")) "-M" clj-file)
+        cl (run-lines {"CLOTRAN_AUTOCOMPILE" "0"} "./clotran-bin" "src/clj/clojure/core.clj" cl-file)
+        cc-file (str repo "/test/clj/.bench-compiled.clj")
+        _ (spit cc-file (timed-script :compiled))
+        cc (run-lines {"CLOTRAN_AUTOCOMPILE" "use"} "./clotran-bin" "src/clj/clojure/core.clj" cc-file)
+        cc (if (= ":installed" @core-status) cc (vec (repeat (count forms) nil)))]
+    (.delete (fs/file cc-file))
     (.delete (fs/file clj-file)) (.delete (fs/file cl-file))
-    (println (format "%-72s %10s %10s %8s" "form" "clj ms" "clotran ms" "ratio"))
-    (doseq [[f j c] (map vector forms clj-ms cl)]
-      (println (format "%-72s %10.2f %10.1f %8.0fx" (subs f 0 (min 72 (count f))) j c (/ c j))))))
+    (println (format "%-72s %10s %10s %8s %12s" "form" "clj ms" "clotran ms" "ratio" "compiled ms"))
+    (doseq [[f j c k] (map vector forms clj-ms cl cc)]
+      (println (format "%-72s %10.2f %10.1f %8.0fx %12s" (subs f 0 (min 72 (count f))) j c (/ c j)
+                       (if k (format "%.1f" k) "-"))))
+    (when-not (= ":installed" @core-status)
+      (println "compiled core is not in the cache (core.clj:" (or @core-status "not loaded")
+               ") -- CLOTRAN_AUTOCOMPILE=1 ./clotran builds it"))))

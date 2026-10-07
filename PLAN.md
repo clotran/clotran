@@ -2464,6 +2464,51 @@ reading the generated Fortran:
 - `lazy-seq` bodies handed to the interpreter one element at a time
   (the generator did not compile N_LAZY).
 
+**Compiled core is still slower, and ./clotran no longer turns it on
+(2026-10-07).** James saw `(time (apply + (take 1e6 (range))))` take
+1461 ms at a `./clotran` prompt, against the 920 ms in this plan.
+
+What it was not:
+- not a regression in the code: from source, from a fresh image, and
+  through scripts/bench it was 914-932 ms;
+- not the stale image in the working tree: that was refused ("from
+  another build"), and the sources loaded.
+
+What it was: the launcher's CLOTRAN_AUTOCOMPILE=1, on since 09-26,
+which installs compiled core from ~/.cache/clotran once a build has
+filled it. Before the cache is warm a run is interpreted; after, it is
+compiled.
+
+scripts/bench, ms, interpreted core against compiled core (the same
+run, the third column now in scripts/bench):
+
+| form | interpreted | compiled |
+|---|---|---|
+| (apply + (take 1e6 (range))) | 915 | 1440 |
+| (reduce + (range 1e5)) | 3.3 | 8.4 |
+| (count (into [] (map inc ...))) | 56 | 89 |
+| (count (str (vec (range 2e4)))) | 74 | 79 |
+| (count (sort (map ...))) | 74 | 181 |
+| (reduce (fn [m i] (assoc ...)) {} ...) | 39 | 21 |
+| loop, fib, deep recursion | the same | the same |
+
+The cause is 26.5's, still not done. Compiled code calls through
+heap frames (the `clotran_frame_*` entries of ClotranABI.f90), so
+every crossing between compiled and interpreted code -- which seq
+code makes at every lazy step -- pays for a frame on the heap. The
+fix is the one frame stack steps 30-31 design for bytecode, JIT'd and
+compiled code alike.
+
+Until then ./clotran has CLOTRAN_AUTOCOMPILE=0 by default;
+CLOTRAN_AUTOCOMPILE=1 turns it on, and numeric namespaces still gain
+from it (the README's sumsq: 716 ms to 1). A better default for
+later: compile user namespaces but leave core interpreted, which the
+loader cannot yet tell apart.
+
+Also found on the way: an image older than the binary is refused
+correctly. But `make clotran-bin` alone leaves build/core.image stale,
+so every start loads the sources until `make` or `make image` runs.
+
 **No formal VM; a cost model instead (2026-09-30).** Asked whether to
 define the VM formally and know its structures' costs in O-notation:
 the structures are Clojure's and their orders are known; what clotran

@@ -172,7 +172,7 @@
 
 ;;; ---- compiling what is loaded: a cache, and background builds ------
 ;;
-;; With CLOTRAN_AUTOCOMPILE=1 (the ./clotran launcher sets it) every
+;; With CLOTRAN_AUTOCOMPILE=1 (off in the ./clotran launcher unless set) every
 ;; file that loads is also compiled, in a separate process, into a cache;
 ;; the next load of the same text installs the library, and so does the
 ;; running session when the build finishes (poll, at each REPL prompt

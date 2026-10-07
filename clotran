@@ -209,12 +209,15 @@ if [ -z "$CLOTRAN_PATH" ] && [ -f deps.edn ] && [ ! -f src/clj/clotran/rt.cljf ]
   fi
 fi
 
-# What loads is compiled in the background and cached, and installed
-# from the cache on later loads -- and mid-session, at a REPL prompt,
-# when a build finishes (clotran.loader), quietly unless
-# CLOTRAN_AUTOCOMPILE_VERBOSE=1. CLOTRAN_AUTOCOMPILE=0 turns it
-# off; CLOTRAN_CACHE moves the cache (default ~/.cache/clotran).
-export CLOTRAN_AUTOCOMPILE="${CLOTRAN_AUTOCOMPILE-1}"
+# CLOTRAN_AUTOCOMPILE=1 compiles what loads in the background into a
+# cache, and installs it from the cache on later loads -- and
+# mid-session, at a REPL prompt, when a build finishes (clotran.loader),
+# quietly unless CLOTRAN_AUTOCOMPILE_VERBOSE=1. CLOTRAN_CACHE moves the
+# cache (default ~/.cache/clotran). OFF by default since 2026-10-07:
+# compiled core still calls through heap frames (PLAN 26.5, now the
+# one frame stack of steps 30-31), and seq code ran slower compiled
+# than interpreted -- (apply + (take 1e6 (range))) 1440 ms against 915.
+export CLOTRAN_AUTOCOMPILE="${CLOTRAN_AUTOCOMPILE-0}"
 
 [ -n "$test_cmd" ] && exec "$bin" "$core" -m clotran.test-runner "$@"
 

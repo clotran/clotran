@@ -351,9 +351,14 @@ source and the library is reported stale and not used until it is
 recompiled. `scripts/compiler-check` runs every case both ways and
 compares the answers.
 
-You rarely need to ask. `./clotran` compiles what it loads, in the
+With `CLOTRAN_AUTOCOMPILE=1`, `./clotran` compiles what it loads, in the
 background, into a cache (`~/.cache/clotran`, or `$CLOTRAN_CACHE`), and
 installs a namespace from the cache whenever the same text loads again.
+It is off by default for now: compiled core still calls through heap
+frames, and seq code runs slower compiled than interpreted --
+`(apply + (take 1e6 (range)))` takes 1440 ms with it and 915 without.
+Numeric code like the example below still gains, so turn it on for
+that.
 A namespace you are working on goes around the loop by itself: edit it,
 reload it, and it runs interpreted while its new build compiles; at a
 later prompt the REPL says so and the compiled version is in place, with
@@ -369,7 +374,7 @@ no restart:
     "Elapsed time: 1.033984 msecs"
 
 `(clotran.loader/compile-now "file.cljf")` builds and installs at once,
-waiting for it; `CLOTRAN_AUTOCOMPILE=0` turns all of this off. What you
+waiting for it; `CLOTRAN_AUTOCOMPILE=0`, the default, turns all of this off. What you
 type at the prompt stays interpreted: a build takes seconds, and the
 form you typed takes microseconds -- the time is spent in the
 namespaces it calls, and those are the ones that get compiled.
