@@ -70,15 +70,18 @@
          (equal (nth (car (car pairs)) dmap) (cdr (car pairs)))
          (succs-ok (cdr pairs) dmap ncode))))
 
-; one instruction at depth d: what it reads is below the top, and its
-; successors have the depth it leaves
+; one instruction at depth d: its operands well formed, what it reads
+; below the top, and its successors at the depth it leaves
 (defun dok (pc ins d dmap ncode)
   (and (case (car ins)
-         ((:load :capt) (< (nfix (cadr ins)) d))
+         (:load (and (natp (cadr ins)) (< (cadr ins) d)))
+         (:capt (and (natp (cadr ins)) (< (cadr ins) d) (natp (caddr ins))))
          ((:add :lt :slide) (<= 2 d))
-         ((:jmpf :ret) (<= 1 d))
-         (:mkclo (<= (nfix (caddr ins)) d))
-         (:callv (<= (1+ (nfix (cadr ins))) d))
+         (:jmpf (and (<= 1 d) (natp (cadr ins))))
+         (:jmp (natp (cadr ins)))
+         (:ret (<= 1 d))
+         (:mkclo (and (natp (caddr ins)) (<= (caddr ins) d)))
+         (:callv (and (natp (cadr ins)) (<= (1+ (cadr ins)) d)))
          (otherwise t))
        (succs-ok (dsuccs pc ins d) dmap ncode)))
 

@@ -3368,6 +3368,51 @@ scripts/fuzz-vm-closure runs every program through stage 2 as a fifth
 machine and reports how many pass the depth check. Its `-d` control
 breaks stage 2's `:add` and is caught by the stage-2 runs alone.
 
+**Stage 2b, slots in registers (model/jit3.lisp, 2026-10-06).** The
+frame's first K slots (K = 8 in the model) live in machine registers;
+the rest stay in memory. The allocator is LAZY, and each cached slot's
+state is tracked while translating: in memory only, in its register
+only (dirty), or both.
+- A slot is loaded only when first read.
+- It is stored only when dirty, and only where something needs it in
+  memory: the runtime (calls, closure-making, returns) and boundaries.
+- Popped slots are dropped and never stored.
+
+Boundaries are branch targets, function entries, main's start and
+every `:ret`. At a boundary every slot is in memory, the state that
+code joining from anywhere can agree on. Spilling everything before a
+runtime call is also the collector's contract at its safepoints: all
+that is live is below the stack top in memory.
+
+| program | stage 2a (instr / mem ops) | stage 2b, lazy | change |
+|---|---|---|---|
+| fib(15) | 48,332 / 30,576 | 33,538 / 10,850 | -31% / -65% |
+| tri(50) | 1,368 / 909 | 963 / 353 | -30% / -61% |
+| down(30) | 828 / 519 | 583 / 213 | -30% / -59% |
+| straight-line lets | 32 / 27 | 13 / 0 | |
+
+An EAGER cache, which spills every slot at every call and refills
+after, was slower than stage 2a on fib (53,262 instructions), because
+calls come every few instructions. Laziness is what makes caching pay.
+
+Making `:ret` a boundary (so a return finds its frame in memory) cost
+nothing on these programs. Its purpose is the proof: a halted return
+then re-executes in place.
+
+The proof (model/jit3-proof.lisp) is in progress. It already found a
+real bug. `:capt` took the capture in the closure's own register, and
+that register may be a live cached slot, so a function reading its
+capture twice answered 11 instead of 21. The translation now copies
+the closure into the result register first. *jit3-defs* carries the
+case as a permanent check, and the fuzzer's generator now calls a
+function that reads its capture twice. Rerun with the old translation
+swapped in, the fuzzer catches it in 17 of 300 programs.
+
+scripts/fuzz-vm-closure runs every program through stage 2b as a
+sixth machine. Its `-r` control is an allocator that never loads (it
+takes a slot to be in its register already), and it is caught by the
+stage-2b runs alone.
+
 ### 29. Fuzz everything (begun 2026-10-02)
 
 James: "fuzz everything at this point and going forward". The rule

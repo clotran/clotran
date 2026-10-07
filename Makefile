@@ -713,7 +713,7 @@ clean:
 # passes. `make model-full` re-proves every book from nothing.
 ACL2 ?= $(HOME)/jborden/acl2/saved_acl2
 .PHONY: model model-full
-MODEL_BOOKS = boundary vector string hashseq btree vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell vm-closure vm-closure-proof vm-closure-correct vm-closure-stack-proof vm-closure-stack-correct vm-closure-cost vm-closure-rooted jit jit-proof jit-correct jit2 jit2-proof jit2-correct alloc alloc-old
+MODEL_BOOKS = boundary vector string hashseq btree vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell vm-closure vm-closure-proof vm-closure-correct vm-closure-stack-proof vm-closure-stack-correct vm-closure-cost vm-closure-rooted jit jit-proof jit-correct jit2 jit2-proof jit2-correct jit3 alloc alloc-old
 MODEL_CERTS = $(MODEL_BOOKS:%=model/%.cert)
 model: $(MODEL_CERTS)
 model/%.cert: model/%.lisp
@@ -761,6 +761,7 @@ fuzz-model: model
 	scripts/fuzz-vm-closure -n 100 -s 3 -w
 	scripts/fuzz-vm-closure -n 40 -s 5 -j
 	scripts/fuzz-vm-closure -n 40 -s 6 -d
+	scripts/fuzz-vm-closure -n 40 -s 7 -r
 	scripts/fuzz-alloc -n 300 -s 1
 	scripts/fuzz-alloc -n 400 -s 2 -k
 	scripts/fuzz-alloc -n 300 -s 4 -m
