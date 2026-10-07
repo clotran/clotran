@@ -83,8 +83,8 @@
 ; a function's entry is at its arity and its closure
 (defthm dcheck-entries-at
   (implies (and (dcheck-entries ft dmap) (consp (assoc-equal name ft)))
-           (and (natp (cadr (assoc-equal name ft)))
-                (equal (nth (cadr (assoc-equal name ft)) dmap) (1+ (nfix (caddr (assoc-equal name ft)))))
+           (and (natp (cadr (assoc-equal name ft))) (natp (caddr (assoc-equal name ft)))
+                (equal (nth (cadr (assoc-equal name ft)) dmap) (1+ (caddr (assoc-equal name ft))))
                 (consp (cddr (assoc-equal name ft))))))
 
 (defthm dcheck-entries-jfntab-ok

@@ -3399,8 +3399,33 @@ Making `:ret` a boundary (so a return finds its frame in memory) cost
 nothing on these programs. Its purpose is the proof: a halted return
 then re-executes in place.
 
-The proof (model/jit3-proof.lisp) is in progress. It already found a
-real bug. `:capt` took the capture in the closure's own register, and
+**Stage 2b proved (2026-10-06).** model/jit3-proof.lisp's `jit3-sim`:
+from any state the invariant holds in, the register-allocated code is
+the bytecode, block for block. Memory below the frame's base is the
+bytecode's stack, and each slot of the frame is where the allocator's
+state says: its register, memory, or both. This holds for any bytecode
+the depth check passes. model/jit3-correct.lisp's `jit3-correct`: a
+compiled closure program answers its meaning through the stage-2b JIT
+(through stage 1 when the check fails). `jit3-linear`: in at most 18
+machine instructions per bytecode -- the spills before a runtime op, its
+block, and the spills into a boundary -- so 36 per expression the
+meaning evaluates. A bound, not the measured cost: the table above has
+what the programs actually take.
+
+The method that made the runtime steps go through, after a call step
+had failed at 892 s with 14,817 subgoals:
+- state each block's run as an equation over plain variables (what the
+  call reads, where it lands), proved once;
+- prove the concrete step in ACL2's `ground-zero` theory, with every
+  fact passed in by `:use` and no rewriting of the translation's
+  terms.
+
+After this, the call steps take about a second each, mkclo and ret a
+few seconds. The other cost of the proof was a stricter check:
+`dcheck-entries` now requires each entry's arity to be a natural and
+its depth to be the arity plus one, which `jit2` shares.
+
+The proof found a real bug. `:capt` took the capture in the closure's own register, and
 that register may be a live cached slot, so a function reading its
 capture twice answered 11 instead of 21. The translation now copies
 the closure into the result register first. *jit3-defs* carries the

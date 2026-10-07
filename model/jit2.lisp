@@ -95,8 +95,8 @@
   (if (atom fntab)
       t
     (and (consp (car fntab)) (consp (cdar fntab)) (consp (cddar fntab))
-         (natp (cadar fntab))
-         (equal (nth (cadar fntab) dmap) (1+ (nfix (caddar fntab))))
+         (natp (cadar fntab)) (natp (caddar fntab))
+         (equal (nth (cadar fntab) dmap) (1+ (caddar fntab)))
          (dcheck-entries (cdr fntab) dmap))))
 
 ; no depth past the code
