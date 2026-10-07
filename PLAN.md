@@ -3356,6 +3356,38 @@ Still to model before the Fortran:
 - calls into the runtime (builtins and interop);
 - try/catch/finally and throw.
 
+**The rest of the VM's language, defined (model/vmx2.lisp,
+2026-10-07).** On top of loop and recur, the design James agreed to:
+- Multi-arity and variadic functions. A function is a list of clauses,
+  `(n body)` or `(n body :rest)`. A call takes the clause of its arity,
+  or else the variadic one, its extra values packed into one list in
+  place.
+- Calls into the runtime, `(:prim op ...)`. The runtime `prim` is
+  constrained by nothing, so the theorems hold whatever the builtins
+  compute. Its answer `(:throw . v)` throws.
+- `throw` and `try`. A handler record on the control stack, beside the
+  call records. A throw unwinds to the nearest handler, and its value
+  becomes the handler's local. A bad call (`:not-fn`, `:arity`)
+  throws, so a try catches it, as clj's ClassCastException and
+  ArityException are caught.
+- No recur across a try, as clj's compiler refuses one.
+- `finally` desugared:
+  `(try B (finally F))` = `(let [r (try B (catch t (do F (throw t))))] (do F r))`.
+
+New instructions: `:prim`, `:throw`, `:try`, `:endtry`, and `:callv` by
+clause.
+
+19 checks run the machine against the meaning and against the expected
+answers: variadic sums, arity picked and thrown, throws out of calls,
+loops and builtins, the finally desugaring.
+
+scripts/fuzz-vmx2 (make fuzz-model) runs 300 programs, 53 of them
+ending in a throw, and agrees on all. Its control, a throw's value one
+slot high, is caught in 4 of 100. That is weak: few generated handlers
+read their local. To strengthen.
+
+The proof, as vmx-proof.lisp's but for the whole language, is next.
+
 ### 31. A stack bytecode VM and a JIT (decided 2026-10-06)
 
 James, 2026-10-06: "let's build a byte code stack machine then a JIT
