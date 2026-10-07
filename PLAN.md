@@ -3575,6 +3575,42 @@ the FES case needs no language at all.
 - Fuzzer: random grids, pools and failure schedules from a seed, with
   the local run as the oracle.
 
+**The model, 2026-10-07: model/pool.lisp.** Tasks are data, their work
+a pure function. A context is a named slot that runs one task at a
+time. Events come in any order and any mix of contexts:
+- dispatch: a free context takes the next pending task;
+- done: its value is recorded;
+- lost: the task is queued again (a node died, a job was killed, a
+  heartbeat timed out);
+- late: a task thought lost answers anyway, so a value can arrive
+  twice.
+
+Proved for every schedule:
+- `pool-sound`: every recorded value is the task's work.
+- `pool-keeps`: no task is dropped. Each is pending, running or done,
+  whatever is lost. This needed the invariant that a context holds at
+  most one task, which the model found: `free` removes a context's
+  every entry, so two at once would lose one.
+- `pool-correct`: a run that empties the queue and the contexts answers
+  the local map.
+
+The round-robin scheduler, against any sequence of outcomes the world
+chooses:
+- `drive-finishes`: with as many successes as tasks, it finishes;
+- `drive-cost`: in two events an outcome, so 2(n + f) for n tasks and
+  f losses;
+- `drive-correct`: what it finishes is the local map.
+
+An `assert-event` runs four windows over a laptop thread and a Slurm
+job, with a loss and a late duplicate, and gets the squares.
+
+What it does not model yet:
+- the files a task carries (inputs, checkpoints, outputs), and
+  their transport;
+- several tasks to one context at once, for a multi-slot node, which
+  is several contexts today;
+- time: heartbeats and timeouts are just the world choosing `lost`.
+
 **First, the baseline.** Write down, step by step, what a scientist does
 today for the 2-D surface: scripts, `.sbatch` files, rsync, by-hand
 gathering. That count is what this step must shrink, and the README
