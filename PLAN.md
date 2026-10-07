@@ -3570,16 +3570,36 @@ LANDED 2026-10-07, both:
 
 ### 32. Execution contexts: one pool over local, SSH, Slurm and Kubernetes (decided 2026-10-06)
 
+**Moved out of clotran (James, 2026-10-07): "threads over ssh or
+whatever machinery should be a separate library we write."** The pool
+-- contexts over SSH, Slurm and Kubernetes, mixed pools, retry, file
+transport -- is its own library, local-only like clotran-deps and
+named jborden/<repo>, not part of clotran's core and not on clotran's
+critical path.
+
+What clotran itself owes that library is only what any program would
+need from the core: threads as contexts (step 24), spawning a process
+with pipes, and the embedding C entry points (libclotran).
+model/pool.lisp stays here as the library's design until its repository
+exists, then moves with it. The rest of this step is that library's
+design, kept as it was written.
+
 James, 2026-10-06: the practical worry is that a scientist must learn
 Clojure, and that clotran must make their workflow better in fact.
 The driving case is a 2-D free-energy surface: an N x M grid of
 umbrella-sampling windows, each run by an MD engine (GROMACS, OpenMM,
 LAMMPS) with a restraint at (d1, d2), then WHAM/MBAR over the outputs.
 
-**Order.** Step 31 pauses once stage 2b's proof lands
-(`model/jit3-proof.lisp`). Then the fuzzing items from 31a (gate
-shrinking; the case-to-debugger target, named `fuzz-repro` so it does
-not clash with step 23's `repro`). Then this step, then the rest of 31.
+**Order.** As written 2026-10-06: step 31 pauses once stage 2b's proof
+lands (`model/jit3-proof.lisp`), then the fuzzing items from 31a, then
+this step, then the rest of 31. The proof and the fuzzing items landed
+2026-10-07, and this step then moved out of clotran (above). So clotran's
+next work is the VM's again:
+- the VM model extended to what real Clojure needs (loop/recur on the
+  stack machine, try/catch/finally and unwinding, variadic and
+  multi-arity fns, calls into the runtime);
+- then the Fortran stack VM and its bytecode compiler (step 30);
+- then the JIT's emitter (step 31).
 
 **What a task is.** Data: a program to run (an MD engine, or clotran
 code), its inputs, the files it needs, and the outputs it gives back.
