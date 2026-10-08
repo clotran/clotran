@@ -32,7 +32,11 @@
 ;;   if                           an if statement, into a temporary where
 ;;                                it is an expression: only the branch
 ;;                                taken is evaluated, as in ACL2
-;;   rt-*, vmg-stk-from           the runtime's hand-written routines
+;;   rt-*, vmg-stk-from           the runtime's hand-written routines; a
+;;                                prim on a list of one or two values
+;;                                written out is rt_prim1/rt_prim2, which
+;;                                the runtime answers as rt_prim on that
+;;                                list without building it
 ;;   resize-X                     the runtime's rt_resize_int/_val, which
 ;;                                keep the elements as ACL2's resize does
 ;;   the-check, hide              nothing: the guard proof discharged it
@@ -51,9 +55,10 @@
            vmg-push vmg-load vmg-add vmg-lt vmg-slide vmg-jmpf vmg-jmp vmg-mkclo vmg-capt vmg-callv
            vmg-ret vmg-recur vmg-prim vmg-throw vmg-try vmg-endtry vmg-step vmg-run
            ;; the superinstructions (model/vmfg.lisp)
-           vmg-f17 vmg-f18 vmg-f19 vmg-xstep vmg-xrun vmg-tag vmg-fuse vmg-fuse-prog]
+           vmg-f17 vmg-f18 vmg-f19 vmg-f20-ok vmg-fk-ok vmg-f20 vmg-f21 vmg-f22 vmg-f23
+           vmg-xstep vmg-xrun vmg-tag vmg-fuse vmg-fuse-prog]
      ;; formals that hold a value, not an integer
-     :value-formals {vmg-sset #{v} vmg-unwind #{v}}
+     :value-formals {vmg-sset #{v} vmg-unwind #{v} vmg-f20-ok #{r} vmg-fk-ok #{r}}
      ;; functions answering a value, not an integer
      :value-fns #{vmg-poolv vmg-sreg}
      ;; functions answering true or false: the bounds, which a run checks before it starts
@@ -284,6 +289,16 @@
                             (throw (ex-info "rt-is with other than a keyword" {:x x})))
                           (let [[f _ t] (rt op) rs (map #(expr ctx %) xs)]
                             {:stmts (vec (mapcat :stmts rs)) :code (str f "(" (str/join ", " (map :code rs)) ")") :type t}))
+        ;; (rt-prim op (cons a 'nil)) and (rt-prim op (cons a (cons b 'nil)))
+        (and (= op 'rt-prim) (seq? (second xs)) (= 'cons (first (second xs))))
+        (let [items (loop [l (second xs) acc []]
+                      (cond (and (seq? l) (= 'cons (first l))) (recur (nth l 2) (conj acc (second l)))
+                            (= l '(quote nil)) acc
+                            :else (throw (ex-info "a prim's list not written out" {:x x}))))
+              _ (when-not (#{1 2} (count items)) (throw (ex-info "a prim of other than one or two" {:x x})))
+              rs (map #(expr ctx %) (cons (first xs) items))]
+          {:stmts (vec (mapcat :stmts rs)) :type :val
+           :code (str "rt_prim" (count items) "(" (str/join ", " (map (comp :code #(coerce % :val)) rs)) ")")})
         (rt op) (let [[f _ t] (rt op) rs (map #(expr ctx %) xs)]
                   {:stmts (vec (mapcat :stmts rs)) :code (str f "(" (str/join ", " (map :code rs)) ")") :type t})
         (= op 'vmg-stk-from) (let [rs (map #(expr ctx %) (butlast xs))]

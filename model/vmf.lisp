@@ -13,6 +13,10 @@
 ;   17  load a; push k; lt; jmpf t     a loop's test against a constant
 ;   18  load a; push k; add            a local plus a constant
 ;   19  load a; load b; add            a local plus a local
+;   20  load a; push k; prim op 2; jmpf t   a test by the runtime
+;   21  load a; prim op 1             the runtime's op on a local
+;   22  load a; load b; prim op 2      ... on two locals
+;   23  load a; push k; prim op 2      ... on a local and a constant
 ;
 ; The opcode stays 2 and nothing else changes, so a fused program reads
 ; back as the same program (vmi-ins ignores a load's words 2 and 3) and
@@ -68,6 +72,72 @@
          (vmi (update-v-sp (+ sp 1) vmi)))
     (update-v-pc (+ p 3) vmi)))
 
+; THE RUNTIME'S OPERATIONS, fused. Clojure's arithmetic and tests are
+; prims (the runtime's, unconstrained in the model), so the hot runs are
+; these. A prim may throw: then the run stops where the prim's own step
+; would, at the prim with its arguments pushed, and unwinds.
+
+; 20: load a; push k; prim op 2; jmpf t
+(defun vmi-f20 (vmi)
+  (declare (xargs :stobjs vmi :verify-guards nil))
+  (let* ((p (nfix (v-pc vmi))) (sp (nfix (v-sp vmi)))
+         (x (vmi-sreg (+ (nfix (v-fb vmi)) (nfix (vmi-w p 1 vmi))) vmi))
+         (y (vmi-poolv (vmi-w (+ p 1) 1 vmi) vmi))
+         (r (prim (vmi-poolv (vmi-w (+ p 2) 1 vmi) vmi) (list x y)))
+         (vmi (update-v-stki sp x vmi))
+         (vmi (update-v-stki (+ sp 1) y vmi)))
+    (if (throwp r)
+        (let* ((vmi (update-v-sp (+ sp 2) vmi)) (vmi (update-v-pc (+ p 2) vmi)))
+          (vmi-unwind (cdr r) vmi))
+      (let* ((vmi (update-v-stki sp r vmi)) (vmi (update-v-sp sp vmi)))
+        (if (truthy r)
+            (update-v-pc (+ p 4) vmi)
+          (update-v-pc (nfix (vmi-w (+ p 3) 1 vmi)) vmi))))))
+
+; 21: load a; prim op 1
+(defun vmi-f21 (vmi)
+  (declare (xargs :stobjs vmi :verify-guards nil))
+  (let* ((p (nfix (v-pc vmi))) (sp (nfix (v-sp vmi)))
+         (x (vmi-sreg (+ (nfix (v-fb vmi)) (nfix (vmi-w p 1 vmi))) vmi))
+         (r (prim (vmi-poolv (vmi-w (+ p 1) 1 vmi) vmi) (list x)))
+         (vmi (update-v-stki sp x vmi)))
+    (if (throwp r)
+        (let* ((vmi (update-v-sp (+ sp 1) vmi)) (vmi (update-v-pc (+ p 1) vmi)))
+          (vmi-unwind (cdr r) vmi))
+      (let* ((vmi (update-v-stki sp r vmi)) (vmi (update-v-sp (+ sp 1) vmi)))
+        (update-v-pc (+ p 2) vmi)))))
+
+; 22: load a; load b; prim op 2 -- the second load reads the stack after
+; the first has written it
+(defun vmi-f22 (vmi)
+  (declare (xargs :stobjs vmi :verify-guards nil))
+  (let* ((p (nfix (v-pc vmi))) (sp (nfix (v-sp vmi))) (fb (nfix (v-fb vmi)))
+         (x (vmi-sreg (+ fb (nfix (vmi-w p 1 vmi))) vmi))
+         (vmi (update-v-stki sp x vmi))
+         (y (vmi-sreg (+ fb (nfix (vmi-w (+ p 1) 1 vmi))) vmi))
+         (vmi (update-v-stki (+ sp 1) y vmi))
+         (r (prim (vmi-poolv (vmi-w (+ p 2) 1 vmi) vmi) (list x y))))
+    (if (throwp r)
+        (let* ((vmi (update-v-sp (+ sp 2) vmi)) (vmi (update-v-pc (+ p 2) vmi)))
+          (vmi-unwind (cdr r) vmi))
+      (let* ((vmi (update-v-stki sp r vmi)) (vmi (update-v-sp (+ sp 1) vmi)))
+        (update-v-pc (+ p 3) vmi)))))
+
+; 23: load a; push k; prim op 2
+(defun vmi-f23 (vmi)
+  (declare (xargs :stobjs vmi :verify-guards nil))
+  (let* ((p (nfix (v-pc vmi))) (sp (nfix (v-sp vmi)))
+         (x (vmi-sreg (+ (nfix (v-fb vmi)) (nfix (vmi-w p 1 vmi))) vmi))
+         (y (vmi-poolv (vmi-w (+ p 1) 1 vmi) vmi))
+         (r (prim (vmi-poolv (vmi-w (+ p 2) 1 vmi) vmi) (list x y)))
+         (vmi (update-v-stki sp x vmi))
+         (vmi (update-v-stki (+ sp 1) y vmi)))
+    (if (throwp r)
+        (let* ((vmi (update-v-sp (+ sp 2) vmi)) (vmi (update-v-pc (+ p 2) vmi)))
+          (vmi-unwind (cdr r) vmi))
+      (let* ((vmi (update-v-stki sp r vmi)) (vmi (update-v-sp (+ sp 1) vmi)))
+        (update-v-pc (+ p 3) vmi)))))
+
 ; ONE STEP, fused where the tag and the code say so: the run inside the
 ; code, its instructions there, the stack with room
 (defun vmi-xstep (vmi)
@@ -82,6 +152,14 @@
                  (vmi-f18 vmi))
                 ((and (equal tag 19) (equal (vmi-w (+ p 1) 0 vmi) 2) (equal (vmi-w (+ p 2) 0 vmi) 3))
                  (vmi-f19 vmi))
+                ((and (equal tag 20) (equal (vmi-w (+ p 1) 0 vmi) 1) (equal (vmi-w (+ p 2) 0 vmi) 13) (equal (vmi-w (+ p 2) 2 vmi) 2) (equal (vmi-w (+ p 3) 0 vmi) 6))
+                 (vmi-f20 vmi))
+                ((and (equal tag 21) (equal (vmi-w (+ p 1) 0 vmi) 13) (equal (vmi-w (+ p 1) 2 vmi) 1))
+                 (vmi-f21 vmi))
+                ((and (equal tag 22) (equal (vmi-w (+ p 1) 0 vmi) 2) (equal (vmi-w (+ p 2) 0 vmi) 13) (equal (vmi-w (+ p 2) 2 vmi) 2))
+                 (vmi-f22 vmi))
+                ((and (equal tag 23) (equal (vmi-w (+ p 1) 0 vmi) 1) (equal (vmi-w (+ p 2) 0 vmi) 13) (equal (vmi-w (+ p 2) 2 vmi) 2))
+                 (vmi-f23 vmi))
                 (t (vmi-step vmi))))
       (vmi-step vmi))))
 
@@ -93,8 +171,13 @@
 
 (defun vmf-tag (i vmi)
   (declare (xargs :stobjs vmi :verify-guards nil))
-  (let ((o1 (vmi-w (+ i 1) 0 vmi)) (o2 (vmi-w (+ i 2) 0 vmi)) (o3 (vmi-w (+ i 3) 0 vmi)))
+  (let ((o1 (vmi-w (+ i 1) 0 vmi)) (o2 (vmi-w (+ i 2) 0 vmi)) (o3 (vmi-w (+ i 3) 0 vmi))
+        (n1 (vmi-w (+ i 1) 2 vmi)) (n2 (vmi-w (+ i 2) 2 vmi)))
     (cond ((and (equal o1 1) (equal o2 4) (equal o3 6)) 17)
+          ((and (equal o1 1) (equal o2 13) (equal n2 2) (equal o3 6)) 20)
+          ((and (equal o1 13) (equal n1 1)) 21)
+          ((and (equal o1 2) (equal o2 13) (equal n2 2)) 22)
+          ((and (equal o1 1) (equal o2 13) (equal n2 2)) 23)
           ((and (equal o1 1) (equal o2 3)) 18)
           ((and (equal o1 2) (equal o2 3)) 19)
           (t 0))))

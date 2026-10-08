@@ -251,6 +251,20 @@ contains
     end if
   end function rt_prim
 
+  ! rt_prim on the list (a) and (a b), as the generated superinstructions
+  ! call it; clotran's runtime answers these without building the list
+  function rt_prim1(op, a) result(r)
+    type(value), intent(in) :: op, a
+    type(value) :: r
+    r = rt_prim(op, cons(a, value(VT_NIL, 0)))
+  end function rt_prim1
+
+  function rt_prim2(op, a, b) result(r)
+    type(value), intent(in) :: op, a, b
+    type(value) :: r
+    r = rt_prim(op, cons(a, cons(b, value(VT_NIL, 0))))
+  end function rt_prim2
+
   logical function rt_throwp(a)
     type(value), intent(in) :: a
     rt_throwp = consp(a)

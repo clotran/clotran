@@ -3718,6 +3718,21 @@ same machine and session; flat re-measured):
 | generated VM | 47 | 11 |
 | generated VM, fused | 31 | 4 |
 
+**The runtime's operations, fused (2026-10-08).** Clojure's `+` and `<`
+are not vmx2's :add and :lt -- they throw on overflow, compare doubles
+and ratios -- so clotran will compile them to :prim, which the model
+leaves unconstrained: every theorem holds whatever the runtime's
+operation does, throws included. Four more superinstructions fuse the
+prims a loop runs: 20 (load a; push k; prim op 2; jmpf t), 21 (load a;
+prim op 1), 22 (load a; load b; prim op 2), 23 (load a; push k; prim op
+2). A prim that throws stops the run where its own step would and
+unwinds. Proved as before (`vmi-f20-steps` .., three steps for 20 when
+it throws, four otherwise), their guarded twins generated; a prim on
+one or two values written out is `rt_prim1`/`rt_prim2`, which the
+runtime answers without building the argument list. `fuzz-vm-gen -f`
+agrees, and its `-xp` control (the fused prims' stack top one too high)
+is caught in 7 of 100 -- fuzz-vmx2's programs call few prims.
+
 The fused VM is the first generated machine faster than flat on this
 loop. The comparison flatters it slightly: the test runtime's values
 are simpler than clotran's, and the number that will count is the one

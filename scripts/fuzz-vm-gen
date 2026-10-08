@@ -21,12 +21,14 @@
 ;; the loaded program with their fusion pass and print the tags, then step
 ;; it with the fused step, ACL2's vmi-xstep against the generated
 ;; vmg_xstep. With -x the control breaks the generated fused test instead:
-;; a loop's test that holds goes one instruction too far.
+;; a loop's test that holds goes one instruction too far; with -xp it breaks
+;; the runtime's fused operations (21-23): their stack top one too high.
 (require '[babashka.process :as p] '[clojure.string :as str] '[clojure.edn :as edn] '[babashka.fs :as fs])
 
-(def broken (some #{"-x"} *command-line-args*))
+(def broken (some #{"-x" "-xp"} *command-line-args*))
+(def broken-prim (some #{"-xp"} *command-line-args*))
 (def fused (some #{"-f"} *command-line-args*))
-(def args (apply hash-map (remove #{"-x" "-f"} *command-line-args*)))
+(def args (apply hash-map (remove #{"-x" "-xp" "-f"} *command-line-args*)))
 (def n (parse-long (get args "-n" "100")))
 (def seed (parse-long (get args "-s" (str (mod (System/nanoTime) 2147483647)))))
 (def fc (get args "--fc" "gfortran"))
@@ -122,7 +124,11 @@
 (spit gen-src
       (cond-> (slurp "src/f/gen/vm_gen.f90")
         ;; the negative control: an uncaught throw's stack two slots, not one
-        (and broken fused) ((fn [s] (let [a (str/index-of s "subroutine vmg_f17")
+        broken-prim ((fn [s] (let [a (str/index-of s "subroutine vmg_fk_ok")
+                                   b (str/index-of s "(sp_2 + 1_int64)" a)]
+                               (when-not b (println "fuzz-vm-gen: the control's slip has no place") (System/exit 1))
+                               (str (subs s 0 b) "(sp_2 + 2_int64)" (subs s (+ b (count "(sp_2 + 1_int64)")))))))
+        (and broken fused (not broken-prim)) ((fn [s] (let [a (str/index-of s "subroutine vmg_f17")
                                           b (str/index-of s "+ 4_int64)" a)]
                                       (when-not b (println "fuzz-vm-gen: the control's slip has no place") (System/exit 1))
                                       (str (subs s 0 b) "+ 5_int64)" (subs s (+ b (count "+ 4_int64)")))))))
@@ -173,6 +179,6 @@
   (println (str "      fortran: " (:got b)))
   (when-not (str/blank? (:err b)) (println (str "      " (first (str/split-lines (:err b)))))))
 (if broken
-  (do (println (if (seq bad) (str "negative control: the broken generated " (if fused "fused test" "unwind") " was caught") (str "NEGATIVE CONTROL FAILED: a broken generated " (if fused "fused test" "unwind") " went unseen")))
+  (do (println (if (seq bad) (str "negative control: the broken generated " (cond broken-prim "fused prim" fused "fused test" :else "unwind") " was caught") (str "NEGATIVE CONTROL FAILED: a broken generated " (cond broken-prim "fused prim" fused "fused test" :else "unwind") " went unseen")))
       (System/exit (if (seq bad) 0 1)))
   (System/exit (if (or (seq bad) (pos? not-encodable) (seq unbounded) (not check-caught)) 1 0)))

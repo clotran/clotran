@@ -1187,6 +1187,192 @@ contains
     st%pc = var_17
   end subroutine vmg_f19
 
+  subroutine vmg_f20_ok(st, r_)
+    type(vm_state), intent(inout) :: st
+    type(value), value :: r_
+    integer(int64) :: i_3
+    integer(int64) :: p_1
+    integer(int64) :: sp_2
+    type(value) :: v_4
+    integer(int64) :: var_5
+    integer(int64) :: var_6
+    p_1 = max(0_int64, st%pc)
+    sp_2 = max(0_int64, st%sp)
+    i_3 = sp_2
+    v_4 = r_
+    st%stk(i_3) = v_4
+    st%sp = sp_2
+    if (rt_truthy(r_)) then
+      var_5 = (p_1 + 4_int64)
+      st%pc = var_5
+    else
+      var_6 = (p_1 + 3_int64)
+      st%pc = max(0_int64, vmg_w(st, var_6, 1_int64))
+    end if
+  end subroutine vmg_f20_ok
+
+  subroutine vmg_fk_ok(st, r_, k_)
+    type(vm_state), intent(inout) :: st
+    type(value), value :: r_
+    integer(int64), value :: k_
+    integer(int64) :: i_3
+    integer(int64) :: p_1
+    integer(int64) :: sp_2
+    type(value) :: v_4
+    integer(int64) :: var_5
+    integer(int64) :: var_6
+    p_1 = max(0_int64, st%pc)
+    sp_2 = max(0_int64, st%sp)
+    i_3 = sp_2
+    v_4 = r_
+    st%stk(i_3) = v_4
+    var_5 = (sp_2 + 1_int64)
+    st%sp = var_5
+    var_6 = (p_1 + max(0_int64, k_))
+    st%pc = var_6
+  end subroutine vmg_fk_ok
+
+  subroutine vmg_f20(st)
+    type(vm_state), intent(inout) :: st
+    integer(int64) :: i_12
+    integer(int64) :: i_9
+    integer(int64) :: p_1
+    type(value) :: r_8
+    integer(int64) :: sp_2
+    type(value) :: v_10
+    type(value) :: v_13
+    integer(int64) :: var_11
+    integer(int64) :: var_3
+    integer(int64) :: var_5
+    integer(int64) :: var_7
+    type(value) :: x_4
+    type(value) :: y_6
+    p_1 = max(0_int64, st%pc)
+    sp_2 = max(0_int64, st%sp)
+    var_3 = (max(0_int64, st%fb) + max(0_int64, vmg_w(st, p_1, 1_int64)))
+    x_4 = vmg_sreg(st, var_3)
+    var_5 = (p_1 + 1_int64)
+    y_6 = vmg_poolv(st, vmg_w(st, var_5, 1_int64))
+    var_7 = (p_1 + 2_int64)
+    r_8 = rt_prim2(vmg_poolv(st, vmg_w(st, var_7, 1_int64)), x_4, y_6)
+    i_9 = sp_2
+    v_10 = x_4
+    st%stk(i_9) = v_10
+    var_11 = (sp_2 + 1_int64)
+    i_12 = var_11
+    v_13 = y_6
+    st%stk(i_12) = v_13
+    if (rt_throwp(r_8)) then
+      call vmg_unwind(st, rt_thrown(r_8))
+    else
+      call vmg_f20_ok(st, r_8)
+    end if
+  end subroutine vmg_f20
+
+  subroutine vmg_f21(st)
+    type(vm_state), intent(inout) :: st
+    integer(int64) :: i_7
+    integer(int64) :: p_1
+    type(value) :: r_6
+    integer(int64) :: sp_2
+    type(value) :: v_8
+    integer(int64) :: var_3
+    integer(int64) :: var_5
+    type(value) :: x_4
+    p_1 = max(0_int64, st%pc)
+    sp_2 = max(0_int64, st%sp)
+    var_3 = (max(0_int64, st%fb) + max(0_int64, vmg_w(st, p_1, 1_int64)))
+    x_4 = vmg_sreg(st, var_3)
+    var_5 = (p_1 + 1_int64)
+    r_6 = rt_prim1(vmg_poolv(st, vmg_w(st, var_5, 1_int64)), x_4)
+    i_7 = sp_2
+    v_8 = x_4
+    st%stk(i_7) = v_8
+    if (rt_throwp(r_6)) then
+      call vmg_unwind(st, rt_thrown(r_6))
+    else
+      call vmg_fk_ok(st, r_6, 2_int64)
+    end if
+  end subroutine vmg_f21
+
+  subroutine vmg_f22(st)
+    type(vm_state), intent(inout) :: st
+    integer(int64) :: fb_3
+    integer(int64) :: i_12
+    integer(int64) :: i_6
+    integer(int64) :: p_1
+    type(value) :: r_15
+    integer(int64) :: sp_2
+    type(value) :: v_13
+    type(value) :: v_7
+    integer(int64) :: var_11
+    integer(int64) :: var_14
+    integer(int64) :: var_4
+    integer(int64) :: var_8
+    integer(int64) :: var_9
+    type(value) :: x_5
+    type(value) :: y_10
+    p_1 = max(0_int64, st%pc)
+    sp_2 = max(0_int64, st%sp)
+    fb_3 = max(0_int64, st%fb)
+    var_4 = (fb_3 + max(0_int64, vmg_w(st, p_1, 1_int64)))
+    x_5 = vmg_sreg(st, var_4)
+    i_6 = sp_2
+    v_7 = x_5
+    st%stk(i_6) = v_7
+    var_8 = (p_1 + 1_int64)
+    var_9 = (fb_3 + max(0_int64, vmg_w(st, var_8, 1_int64)))
+    y_10 = vmg_sreg(st, var_9)
+    var_11 = (sp_2 + 1_int64)
+    i_12 = var_11
+    v_13 = y_10
+    st%stk(i_12) = v_13
+    var_14 = (p_1 + 2_int64)
+    r_15 = rt_prim2(vmg_poolv(st, vmg_w(st, var_14, 1_int64)), x_5, y_10)
+    if (rt_throwp(r_15)) then
+      call vmg_unwind(st, rt_thrown(r_15))
+    else
+      call vmg_fk_ok(st, r_15, 3_int64)
+    end if
+  end subroutine vmg_f22
+
+  subroutine vmg_f23(st)
+    type(vm_state), intent(inout) :: st
+    integer(int64) :: i_12
+    integer(int64) :: i_9
+    integer(int64) :: p_1
+    type(value) :: r_8
+    integer(int64) :: sp_2
+    type(value) :: v_10
+    type(value) :: v_13
+    integer(int64) :: var_11
+    integer(int64) :: var_3
+    integer(int64) :: var_5
+    integer(int64) :: var_7
+    type(value) :: x_4
+    type(value) :: y_6
+    p_1 = max(0_int64, st%pc)
+    sp_2 = max(0_int64, st%sp)
+    var_3 = (max(0_int64, st%fb) + max(0_int64, vmg_w(st, p_1, 1_int64)))
+    x_4 = vmg_sreg(st, var_3)
+    var_5 = (p_1 + 1_int64)
+    y_6 = vmg_poolv(st, vmg_w(st, var_5, 1_int64))
+    var_7 = (p_1 + 2_int64)
+    r_8 = rt_prim2(vmg_poolv(st, vmg_w(st, var_7, 1_int64)), x_4, y_6)
+    i_9 = sp_2
+    v_10 = x_4
+    st%stk(i_9) = v_10
+    var_11 = (sp_2 + 1_int64)
+    i_12 = var_11
+    v_13 = y_6
+    st%stk(i_12) = v_13
+    if (rt_throwp(r_8)) then
+      call vmg_unwind(st, rt_thrown(r_8))
+    else
+      call vmg_fk_ok(st, r_8, 3_int64)
+    end if
+  end subroutine vmg_f23
+
   subroutine vmg_xstep(st)
     type(vm_state), intent(inout) :: st
     integer(int64) :: p_1
@@ -1197,6 +1383,18 @@ contains
     logical :: t_18
     logical :: t_21
     logical :: t_22
+    logical :: t_27
+    logical :: t_28
+    logical :: t_29
+    logical :: t_30
+    logical :: t_33
+    logical :: t_34
+    logical :: t_38
+    logical :: t_39
+    logical :: t_40
+    logical :: t_44
+    logical :: t_45
+    logical :: t_46
     logical :: t_5
     logical :: t_6
     logical :: t_7
@@ -1208,8 +1406,20 @@ contains
     integer(int64) :: var_19
     integer(int64) :: var_2
     integer(int64) :: var_20
+    integer(int64) :: var_23
+    integer(int64) :: var_24
+    integer(int64) :: var_25
+    integer(int64) :: var_26
     integer(int64) :: var_3
+    integer(int64) :: var_31
+    integer(int64) :: var_32
+    integer(int64) :: var_35
+    integer(int64) :: var_36
+    integer(int64) :: var_37
     integer(int64) :: var_4
+    integer(int64) :: var_41
+    integer(int64) :: var_42
+    integer(int64) :: var_43
     integer(int64) :: var_9
     p_1 = max(0_int64, st%pc)
     if ((st%status == 0_int64)) then
@@ -1283,7 +1493,95 @@ contains
           if (t_22) then
             call vmg_f19(st)
           else
-            call vmg_step(st)
+            if ((tag_8 == 20_int64)) then
+              var_23 = (p_1 + 1_int64)
+              if ((vmg_w(st, var_23, 0_int64) == 1_int64)) then
+                var_24 = (p_1 + 2_int64)
+                if ((vmg_w(st, var_24, 0_int64) == 13_int64)) then
+                  var_25 = (p_1 + 2_int64)
+                  if ((vmg_w(st, var_25, 2_int64) == 2_int64)) then
+                    var_26 = (p_1 + 3_int64)
+                    t_27 = (vmg_w(st, var_26, 0_int64) == 6_int64)
+                  else
+                    t_27 = .false.
+                  end if
+                  t_28 = t_27
+                else
+                  t_28 = .false.
+                end if
+                t_29 = t_28
+              else
+                t_29 = .false.
+              end if
+              t_30 = t_29
+            else
+              t_30 = .false.
+            end if
+            if (t_30) then
+              call vmg_f20(st)
+            else
+              if ((tag_8 == 21_int64)) then
+                var_31 = (p_1 + 1_int64)
+                if ((vmg_w(st, var_31, 0_int64) == 13_int64)) then
+                  var_32 = (p_1 + 1_int64)
+                  t_33 = (vmg_w(st, var_32, 2_int64) == 1_int64)
+                else
+                  t_33 = .false.
+                end if
+                t_34 = t_33
+              else
+                t_34 = .false.
+              end if
+              if (t_34) then
+                call vmg_f21(st)
+              else
+                if ((tag_8 == 22_int64)) then
+                  var_35 = (p_1 + 1_int64)
+                  if ((vmg_w(st, var_35, 0_int64) == 2_int64)) then
+                    var_36 = (p_1 + 2_int64)
+                    if ((vmg_w(st, var_36, 0_int64) == 13_int64)) then
+                      var_37 = (p_1 + 2_int64)
+                      t_38 = (vmg_w(st, var_37, 2_int64) == 2_int64)
+                    else
+                      t_38 = .false.
+                    end if
+                    t_39 = t_38
+                  else
+                    t_39 = .false.
+                  end if
+                  t_40 = t_39
+                else
+                  t_40 = .false.
+                end if
+                if (t_40) then
+                  call vmg_f22(st)
+                else
+                  if ((tag_8 == 23_int64)) then
+                    var_41 = (p_1 + 1_int64)
+                    if ((vmg_w(st, var_41, 0_int64) == 1_int64)) then
+                      var_42 = (p_1 + 2_int64)
+                      if ((vmg_w(st, var_42, 0_int64) == 13_int64)) then
+                        var_43 = (p_1 + 2_int64)
+                        t_44 = (vmg_w(st, var_43, 2_int64) == 2_int64)
+                      else
+                        t_44 = .false.
+                      end if
+                      t_45 = t_44
+                    else
+                      t_45 = .false.
+                    end if
+                    t_46 = t_45
+                  else
+                    t_46 = .false.
+                  end if
+                  if (t_46) then
+                    call vmg_f23(st)
+                  else
+                    call vmg_step(st)
+                  end if
+                end if
+              end if
+            end if
           end if
         end if
       end if
@@ -1312,61 +1610,141 @@ contains
     type(vm_state), intent(in) :: st
     integer(int64), value :: i_
     integer(int64) :: r
+    integer(int64) :: n1_8
+    integer(int64) :: n2_10
     integer(int64) :: o1_2
     integer(int64) :: o2_4
     integer(int64) :: o3_6
-    logical :: t_10
-    integer(int64) :: t_11
-    integer(int64) :: t_12
-    integer(int64) :: t_13
-    logical :: t_7
-    logical :: t_8
-    logical :: t_9
+    logical :: t_11
+    logical :: t_12
+    logical :: t_13
+    logical :: t_14
+    logical :: t_15
+    logical :: t_16
+    logical :: t_17
+    logical :: t_18
+    logical :: t_19
+    logical :: t_20
+    logical :: t_21
+    logical :: t_22
+    integer(int64) :: t_23
+    integer(int64) :: t_24
+    integer(int64) :: t_25
+    integer(int64) :: t_26
+    integer(int64) :: t_27
+    integer(int64) :: t_28
+    integer(int64) :: t_29
     integer(int64) :: var_1
     integer(int64) :: var_3
     integer(int64) :: var_5
+    integer(int64) :: var_7
+    integer(int64) :: var_9
     var_1 = (i_ + 1_int64)
     o1_2 = vmg_w(st, var_1, 0_int64)
     var_3 = (i_ + 2_int64)
     o2_4 = vmg_w(st, var_3, 0_int64)
     var_5 = (i_ + 3_int64)
     o3_6 = vmg_w(st, var_5, 0_int64)
+    var_7 = (i_ + 1_int64)
+    n1_8 = vmg_w(st, var_7, 2_int64)
+    var_9 = (i_ + 2_int64)
+    n2_10 = vmg_w(st, var_9, 2_int64)
     if ((o1_2 == 1_int64)) then
       if ((o2_4 == 4_int64)) then
-        t_7 = (o3_6 == 6_int64)
+        t_11 = (o3_6 == 6_int64)
       else
-        t_7 = .false.
+        t_11 = .false.
       end if
-      t_8 = t_7
+      t_12 = t_11
     else
-      t_8 = .false.
+      t_12 = .false.
     end if
-    if (t_8) then
-      t_13 = 17_int64
+    if (t_12) then
+      t_29 = 17_int64
     else
       if ((o1_2 == 1_int64)) then
-        t_9 = (o2_4 == 3_int64)
-      else
-        t_9 = .false.
-      end if
-      if (t_9) then
-        t_12 = 18_int64
-      else
-        if ((o1_2 == 2_int64)) then
-          t_10 = (o2_4 == 3_int64)
+        if ((o2_4 == 13_int64)) then
+          if ((n2_10 == 2_int64)) then
+            t_13 = (o3_6 == 6_int64)
+          else
+            t_13 = .false.
+          end if
+          t_14 = t_13
         else
-          t_10 = .false.
+          t_14 = .false.
         end if
-        if (t_10) then
-          t_11 = 19_int64
-        else
-          t_11 = 0_int64
-        end if
-        t_12 = t_11
+        t_15 = t_14
+      else
+        t_15 = .false.
       end if
-      t_13 = t_12
+      if (t_15) then
+        t_28 = 20_int64
+      else
+        if ((o1_2 == 13_int64)) then
+          t_16 = (n1_8 == 1_int64)
+        else
+          t_16 = .false.
+        end if
+        if (t_16) then
+          t_27 = 21_int64
+        else
+          if ((o1_2 == 2_int64)) then
+            if ((o2_4 == 13_int64)) then
+              t_17 = (n2_10 == 2_int64)
+            else
+              t_17 = .false.
+            end if
+            t_18 = t_17
+          else
+            t_18 = .false.
+          end if
+          if (t_18) then
+            t_26 = 22_int64
+          else
+            if ((o1_2 == 1_int64)) then
+              if ((o2_4 == 13_int64)) then
+                t_19 = (n2_10 == 2_int64)
+              else
+                t_19 = .false.
+              end if
+              t_20 = t_19
+            else
+              t_20 = .false.
+            end if
+            if (t_20) then
+              t_25 = 23_int64
+            else
+              if ((o1_2 == 1_int64)) then
+                t_21 = (o2_4 == 3_int64)
+              else
+                t_21 = .false.
+              end if
+              if (t_21) then
+                t_24 = 18_int64
+              else
+                if ((o1_2 == 2_int64)) then
+                  t_22 = (o2_4 == 3_int64)
+                else
+                  t_22 = .false.
+                end if
+                if (t_22) then
+                  t_23 = 19_int64
+                else
+                  t_23 = 0_int64
+                end if
+                t_24 = t_23
+              end if
+              t_25 = t_24
+            end if
+            t_26 = t_25
+          end if
+          t_27 = t_26
+        end if
+        t_28 = t_27
+      end if
+      t_29 = t_28
     end if
-    r = t_13
+    r = t_29
     return
   end function vmg_tag
 

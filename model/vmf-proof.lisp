@@ -27,6 +27,7 @@
 (step-is 3 vmi-add)
 (step-is 4 vmi-lt)
 (step-is 6 vmi-jmpf)
+(step-is 13 vmi-prim)
 
 (in-theory (disable vmi-step))
 
@@ -50,7 +51,48 @@
            (equal (vmi-f19 vmi) (vmi-step (vmi-step (vmi-step vmi)))))
   :hints (("Goal" :in-theory (disable vmi-callv vmi-ret vmi-recur vmi-prim vmi-mkclo vmi-capt vmi-throw vmi-try vmi-endtry))))
 
-(in-theory (disable vmi-f17 vmi-f18 vmi-f19))
+(defmacro f-hyps (&rest ats)
+  `(and (vmi-shape vmi) (natp (v-pc vmi)) (natp (v-sp vmi)) (natp (v-fb vmi)) (equal (v-status vmi) 0)
+        (vmf-room vmi) ,@ats))
+
+(defmacro f-theory ()
+  '(disable vmi-callv vmi-ret vmi-recur vmi-mkclo vmi-capt vmi-throw vmi-try vmi-endtry vmi-unwind))
+
+; the prim's answer, as the fused step computes it
+(defmacro f20-r ()
+  '(prim (vmi-poolv (vmi-w (+ 2 (v-pc vmi)) 1 vmi) vmi)
+         (list (vmi-sreg (+ (v-fb vmi) (nfix (vmi-w (v-pc vmi) 1 vmi))) vmi) (vmi-poolv (vmi-w (+ 1 (v-pc vmi)) 1 vmi) vmi))))
+
+(defthm stk-from-1 (equal (stk-from a 1 l) (list (sreg a l))) :hints (("Goal" :expand ((stk-from a 1 l)))))
+(defthm stk-from-2 (implies (natp a) (equal (stk-from a 2 l) (list (sreg a l) (sreg (+ 1 a) l)))) :hints (("Goal" :expand ((stk-from a 2 l) (stk-from (+ 1 a) 1 l)))))
+
+(defthm vmi-f20-steps
+  (implies (f-hyps (vmf-at (v-pc vmi) 2) (vmf-at (+ 1 (v-pc vmi)) 1) (vmf-at (+ 2 (v-pc vmi)) 13)
+                   (equal (vmi-w (+ 2 (v-pc vmi)) 2 vmi) 2) (vmf-at (+ 3 (v-pc vmi)) 6))
+           (equal (vmi-f20 vmi)
+                  (if (throwp (f20-r))
+                      (vmi-step (vmi-step (vmi-step vmi)))
+                    (vmi-step (vmi-step (vmi-step (vmi-step vmi)))))))
+  :hints (("Goal" :in-theory (f-theory))))
+
+(defthm vmi-f21-steps
+  (implies (f-hyps (vmf-at (v-pc vmi) 2) (vmf-at (+ 1 (v-pc vmi)) 13) (equal (vmi-w (+ 1 (v-pc vmi)) 2 vmi) 1))
+           (equal (vmi-f21 vmi) (vmi-step (vmi-step vmi))))
+  :hints (("Goal" :in-theory (f-theory))))
+
+(defthm vmi-f22-steps
+  (implies (f-hyps (vmf-at (v-pc vmi) 2) (vmf-at (+ 1 (v-pc vmi)) 2) (vmf-at (+ 2 (v-pc vmi)) 13)
+                   (equal (vmi-w (+ 2 (v-pc vmi)) 2 vmi) 2))
+           (equal (vmi-f22 vmi) (vmi-step (vmi-step (vmi-step vmi)))))
+  :hints (("Goal" :in-theory (f-theory))))
+
+(defthm vmi-f23-steps
+  (implies (f-hyps (vmf-at (v-pc vmi) 2) (vmf-at (+ 1 (v-pc vmi)) 1) (vmf-at (+ 2 (v-pc vmi)) 13)
+                   (equal (vmi-w (+ 2 (v-pc vmi)) 2 vmi) 2))
+           (equal (vmi-f23 vmi) (vmi-step (vmi-step (vmi-step vmi)))))
+  :hints (("Goal" :in-theory (f-theory))))
+
+(in-theory (disable vmi-f17 vmi-f18 vmi-f19 vmi-f20 vmi-f21 vmi-f22 vmi-f23))
 
 ; ---- A FUSED STEP IS ONE TO FOUR STEPS ---------------------------------------------------------
 
@@ -64,13 +106,21 @@
                  4)
                 ((and (equal tag 18) (equal (vmi-w (+ p 1) 0 vmi) 1) (equal (vmi-w (+ p 2) 0 vmi) 3)) 3)
                 ((and (equal tag 19) (equal (vmi-w (+ p 1) 0 vmi) 2) (equal (vmi-w (+ p 2) 0 vmi) 3)) 3)
+                ((and (equal tag 20) (equal (vmi-w (+ p 1) 0 vmi) 1) (equal (vmi-w (+ p 2) 0 vmi) 13) (equal (vmi-w (+ p 2) 2 vmi) 2)
+                      (equal (vmi-w (+ p 3) 0 vmi) 6))
+                 (if (throwp (prim (vmi-poolv (vmi-w (+ p 2) 1 vmi) vmi)
+                                   (list (vmi-sreg (+ (nfix (v-fb vmi)) (nfix (vmi-w p 1 vmi))) vmi) (vmi-poolv (vmi-w (+ p 1) 1 vmi) vmi))))
+                     3 4))
+                ((and (equal tag 21) (equal (vmi-w (+ p 1) 0 vmi) 13) (equal (vmi-w (+ p 1) 2 vmi) 1)) 2)
+                ((and (equal tag 22) (equal (vmi-w (+ p 1) 0 vmi) 2) (equal (vmi-w (+ p 2) 0 vmi) 13) (equal (vmi-w (+ p 2) 2 vmi) 2)) 3)
+                ((and (equal tag 23) (equal (vmi-w (+ p 1) 0 vmi) 1) (equal (vmi-w (+ p 2) 0 vmi) 13) (equal (vmi-w (+ p 2) 2 vmi) 2)) 3)
                 (t 1)))
       1)))
 
 (defthm vmi-xstep-is
   (implies (and (vmi-shape vmi) (natp (v-pc vmi)) (natp (v-sp vmi)) (natp (v-fb vmi)))
            (equal (vmi-xstep vmi) (vmi-run (vmi-xcount vmi) vmi)))
-  :hints (("Goal" :in-theory (e/d (vmi-run) (vmi-load vmi-push vmi-lt vmi-add vmi-jmpf)))))
+  :hints (("Goal" :in-theory (e/d (vmi-run) (vmi-load vmi-push vmi-lt vmi-add vmi-jmpf vmi-prim)))))
 
 (defthm vmi-xstep-stopped (implies (not (equal (v-status vmi) 0)) (equal (vmi-xstep vmi) vmi))
   :hints (("Goal" :in-theory (enable vmi-step))))

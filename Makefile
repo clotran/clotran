@@ -813,6 +813,7 @@ check-vm-gen: model | $(B)
 	scripts/fuzz-vm-gen -n 300 -s 1 -f
 	scripts/fuzz-vm-gen -n 100 -s 2 -f --fc flang
 	scripts/fuzz-vm-gen -n 100 -s 2 -f -x
+	scripts/fuzz-vm-gen -n 100 -s 2 -f -xp
 	scripts/fuzz-vmc-gen -n 300 -s 1
 	scripts/fuzz-vmc-gen -n 100 -s 2 --fc flang
 	scripts/fuzz-vmc-gen -n 100 -s 2 -x

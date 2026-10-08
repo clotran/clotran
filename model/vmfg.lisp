@@ -56,6 +56,71 @@
          (vmi (update-v-sp (i64 (+ sp 1)) vmi)))
     (update-v-pc (i64 (+ p 3)) vmi)))
 
+; the runtime's operations, fused: a throw unwinds where the prim's own
+; step would, at the prim with its arguments pushed -- the stack slots;
+; the pc and the stack top it would have are the unwind's to overwrite,
+; and it reads neither (vmi-unwind-pc-sp)
+; a prim's answer that is not a throw: in the run's first slot, the run done
+(defun vmg-f20-ok (r vmi)
+  (declare (xargs :stobjs vmi :guard (vmg-fast vmi) :verify-guards nil))
+  (let* ((p (nfix (v-pc vmi))) (sp (nfix (v-sp vmi)))
+         (vmi (update-v-stki sp r vmi)) (vmi (update-v-sp sp vmi)))
+    (if (rt-truthy r)
+        (update-v-pc (i64 (+ p 4)) vmi)
+      (update-v-pc (nfix (vmg-w (i64 (+ p 3)) 1 vmi)) vmi))))
+
+(defun vmg-fk-ok (r k vmi)
+  (declare (xargs :stobjs vmi :guard (and (vmg-fast vmi) (member k '(2 3))) :verify-guards nil))
+  (let* ((p (nfix (v-pc vmi))) (sp (nfix (v-sp vmi)))
+         (vmi (update-v-stki sp r vmi)) (vmi (update-v-sp (i64 (+ sp 1)) vmi)))
+    (update-v-pc (i64 (+ p (nfix k))) vmi)))
+
+(defun vmg-f20 (vmi)
+  (declare (xargs :stobjs vmi :guard (vmg-fast vmi) :verify-guards nil))
+  (let* ((p (nfix (v-pc vmi))) (sp (nfix (v-sp vmi)))
+         (x (vmg-sreg (i64 (+ (nfix (v-fb vmi)) (nfix (vmg-w p 1 vmi)))) vmi))
+         (y (vmg-poolv (vmg-w (i64 (+ p 1)) 1 vmi) vmi))
+         (r (rt-prim (vmg-poolv (vmg-w (i64 (+ p 2)) 1 vmi) vmi) (list x y)))
+         (vmi (update-v-stki sp x vmi))
+         (vmi (update-v-stki (i64 (+ sp 1)) y vmi)))
+    (if (rt-throwp r)
+        (vmg-unwind (rt-thrown r) vmi)
+      (vmg-f20-ok r vmi))))
+
+(defun vmg-f21 (vmi)
+  (declare (xargs :stobjs vmi :guard (vmg-fast vmi) :verify-guards nil))
+  (let* ((p (nfix (v-pc vmi))) (sp (nfix (v-sp vmi)))
+         (x (vmg-sreg (i64 (+ (nfix (v-fb vmi)) (nfix (vmg-w p 1 vmi)))) vmi))
+         (r (rt-prim (vmg-poolv (vmg-w (i64 (+ p 1)) 1 vmi) vmi) (list x)))
+         (vmi (update-v-stki sp x vmi)))
+    (if (rt-throwp r)
+        (vmg-unwind (rt-thrown r) vmi)
+      (vmg-fk-ok r 2 vmi))))
+
+(defun vmg-f22 (vmi)
+  (declare (xargs :stobjs vmi :guard (vmg-fast vmi) :verify-guards nil))
+  (let* ((p (nfix (v-pc vmi))) (sp (nfix (v-sp vmi))) (fb (nfix (v-fb vmi)))
+         (x (vmg-sreg (i64 (+ fb (nfix (vmg-w p 1 vmi)))) vmi))
+         (vmi (update-v-stki sp x vmi))
+         (y (vmg-sreg (i64 (+ fb (nfix (vmg-w (i64 (+ p 1)) 1 vmi)))) vmi))
+         (vmi (update-v-stki (i64 (+ sp 1)) y vmi))
+         (r (rt-prim (vmg-poolv (vmg-w (i64 (+ p 2)) 1 vmi) vmi) (list x y))))
+    (if (rt-throwp r)
+        (vmg-unwind (rt-thrown r) vmi)
+      (vmg-fk-ok r 3 vmi))))
+
+(defun vmg-f23 (vmi)
+  (declare (xargs :stobjs vmi :guard (vmg-fast vmi) :verify-guards nil))
+  (let* ((p (nfix (v-pc vmi))) (sp (nfix (v-sp vmi)))
+         (x (vmg-sreg (i64 (+ (nfix (v-fb vmi)) (nfix (vmg-w p 1 vmi)))) vmi))
+         (y (vmg-poolv (vmg-w (i64 (+ p 1)) 1 vmi) vmi))
+         (r (rt-prim (vmg-poolv (vmg-w (i64 (+ p 2)) 1 vmi) vmi) (list x y)))
+         (vmi (update-v-stki sp x vmi))
+         (vmi (update-v-stki (i64 (+ sp 1)) y vmi)))
+    (if (rt-throwp r)
+        (vmg-unwind (rt-thrown r) vmi)
+      (vmg-fk-ok r 3 vmi))))
+
 (defun vmg-xstep (vmi)
   (declare (xargs :stobjs vmi :guard (vmg-good vmi) :verify-guards nil))
   (let ((p (nfix (v-pc vmi))))
@@ -69,6 +134,14 @@
                  (vmg-f18 vmi))
                 ((and (equal tag 19) (equal (vmg-w (i64 (+ p 1)) 0 vmi) 2) (equal (vmg-w (i64 (+ p 2)) 0 vmi) 3))
                  (vmg-f19 vmi))
+                ((and (equal tag 20) (equal (vmg-w (i64 (+ p 1)) 0 vmi) 1) (equal (vmg-w (i64 (+ p 2)) 0 vmi) 13) (equal (vmg-w (i64 (+ p 2)) 2 vmi) 2) (equal (vmg-w (i64 (+ p 3)) 0 vmi) 6))
+                 (vmg-f20 vmi))
+                ((and (equal tag 21) (equal (vmg-w (i64 (+ p 1)) 0 vmi) 13) (equal (vmg-w (i64 (+ p 1)) 2 vmi) 1))
+                 (vmg-f21 vmi))
+                ((and (equal tag 22) (equal (vmg-w (i64 (+ p 1)) 0 vmi) 2) (equal (vmg-w (i64 (+ p 2)) 0 vmi) 13) (equal (vmg-w (i64 (+ p 2)) 2 vmi) 2))
+                 (vmg-f22 vmi))
+                ((and (equal tag 23) (equal (vmg-w (i64 (+ p 1)) 0 vmi) 1) (equal (vmg-w (i64 (+ p 2)) 0 vmi) 13) (equal (vmg-w (i64 (+ p 2)) 2 vmi) 2))
+                 (vmg-f23 vmi))
                 (t (vmg-step vmi))))
       (vmg-step vmi))))
 
@@ -76,8 +149,13 @@
 
 (defun vmg-tag (i vmi)
   (declare (xargs :stobjs vmi :guard (and (natp i) (<= (+ 3 i) *b40*))))
-  (let ((o1 (vmg-w (i64 (+ i 1)) 0 vmi)) (o2 (vmg-w (i64 (+ i 2)) 0 vmi)) (o3 (vmg-w (i64 (+ i 3)) 0 vmi)))
+  (let ((o1 (vmg-w (i64 (+ i 1)) 0 vmi)) (o2 (vmg-w (i64 (+ i 2)) 0 vmi)) (o3 (vmg-w (i64 (+ i 3)) 0 vmi))
+        (n1 (vmg-w (i64 (+ i 1)) 2 vmi)) (n2 (vmg-w (i64 (+ i 2)) 2 vmi)))
     (cond ((and (equal o1 1) (equal o2 4) (equal o3 6)) 17)
+          ((and (equal o1 1) (equal o2 13) (equal n2 2) (equal o3 6)) 20)
+          ((and (equal o1 13) (equal n1 1)) 21)
+          ((and (equal o1 2) (equal o2 13) (equal n2 2)) 22)
+          ((and (equal o1 1) (equal o2 13) (equal n2 2)) 23)
           ((and (equal o1 1) (equal o2 3)) 18)
           ((and (equal o1 2) (equal o2 3)) 19)
           (t 0))))
@@ -98,14 +176,26 @@
 
 ; ==== EACH IS ITS vmf TWIN ======================================================================
 
+(defthm vmi-unwind-pc-sp
+  (equal (vmi-unwind v (update-nth *v-pc* a (update-nth *v-sp* b vmi))) (vmi-unwind v vmi))
+  :hints (("Goal" :in-theory (e/d (vmi-unwind vmi-sset) (nth update-nth)))))
+
 (defthm vmg-f17-is (equal (vmg-f17 vmi) (vmi-f17 vmi))
   :hints (("Goal" :in-theory (enable vmi-f17 vmg-w-is vmg-sreg-is vmg-poolv-is))))
 (defthm vmg-f18-is (equal (vmg-f18 vmi) (vmi-f18 vmi))
   :hints (("Goal" :in-theory (enable vmi-f18 vmg-w-is vmg-sreg-is vmg-poolv-is))))
 (defthm vmg-f19-is (equal (vmg-f19 vmi) (vmi-f19 vmi))
   :hints (("Goal" :in-theory (enable vmi-f19 vmg-w-is vmg-sreg-is vmg-poolv-is))))
+(defthm vmg-f20-is (equal (vmg-f20 vmi) (vmi-f20 vmi))
+  :hints (("Goal" :in-theory (enable vmi-f20 vmg-f20-ok vmg-w-is vmg-sreg-is vmg-poolv-is vmg-unwind-is))))
+(defthm vmg-f21-is (equal (vmg-f21 vmi) (vmi-f21 vmi))
+  :hints (("Goal" :in-theory (enable vmi-f21 vmg-fk-ok vmg-w-is vmg-sreg-is vmg-poolv-is vmg-unwind-is))))
+(defthm vmg-f22-is (equal (vmg-f22 vmi) (vmi-f22 vmi))
+  :hints (("Goal" :in-theory (enable vmi-f22 vmg-fk-ok vmg-w-is vmg-sreg-is vmg-poolv-is vmg-unwind-is))))
+(defthm vmg-f23-is (equal (vmg-f23 vmi) (vmi-f23 vmi))
+  :hints (("Goal" :in-theory (enable vmi-f23 vmg-fk-ok vmg-w-is vmg-sreg-is vmg-poolv-is vmg-unwind-is))))
 (defthm vmg-xstep-is (equal (vmg-xstep vmi) (vmi-xstep vmi))
-  :hints (("Goal" :in-theory (e/d (vmi-xstep vmg-w-is vmg-step-is) (vmg-f17 vmg-f18 vmg-f19 vmi-f17 vmi-f18 vmi-f19 vmg-step vmi-step)))))
+  :hints (("Goal" :in-theory (e/d (vmi-xstep vmg-w-is vmg-step-is) (vmg-f17 vmg-f18 vmg-f19 vmg-f20 vmg-f21 vmg-f22 vmg-f23 vmi-f17 vmi-f18 vmi-f19 vmi-f20 vmi-f21 vmi-f22 vmi-f23 vmg-step vmi-step)))))
 (defthm vmg-tag-is (equal (vmg-tag i vmi) (vmf-tag i vmi)) :hints (("Goal" :in-theory (enable vmg-w-is))))
 (defthm vmg-fuse-is (equal (vmg-fuse i n vmi) (vmi-fuse i n vmi))
   :hints (("Goal" :induct (vmg-fuse i n vmi) :in-theory (e/d (vmg-w-is) (vmg-tag vmf-tag)))))
@@ -123,7 +213,53 @@
 (def-fbnd vmg-f18-bnd vmg-f18)
 (def-fbnd vmg-f19-bnd vmg-f19)
 
-(in-theory (disable vmg-f17-is vmg-f18-is vmg-f19-is))
+; the prims': a throw unwinds from the machine with the arguments pushed,
+; itself in bounds and a stobj
+(defthm vmip-stk-true-listp (implies (vmip vmi) (true-listp (nth *v-stki* vmi))) :hints (("Goal" :in-theory (enable vmip))))
+
+(defthm v-stkp-of-true-listp (implies (true-listp l) (v-stkp l)))
+
+(defthm vmg-stk-write-ok
+  (implies (and (vmip vmi) (vmg-bnd vmi) (true-listp l) (equal (len l) (len (nth *v-stki* vmi))))
+           (and (vmip (update-nth *v-stki* l vmi)) (vmg-bnd (update-nth *v-stki* l vmi))))
+  :hints (("Goal" :in-theory (e/d (vmip vmg-bnd) (nth update-nth words-ok cls-ok fns-ok recs-ok vmg-lens)))))
+
+(defthm vmg-unwind-stk-bnd
+  (implies (and (vmip vmi) (vmg-bnd vmi) (true-listp l) (equal (len l) (len (nth *v-stki* vmi)))
+                (equal (v-status (vmg-unwind v (update-nth *v-stki* l vmi))) 0))
+           (vmg-bnd (vmg-unwind v (update-nth *v-stki* l vmi))))
+  :hints (("Goal" :in-theory (disable vmg-unwind-bnd vmg-stk-write-ok vmip vmg-bnd vmg-unwind-is)
+                  :use (vmg-stk-write-ok (:instance vmg-unwind-bnd (vmi (update-nth *v-stki* l vmi)))))))
+
+(defmacro def-pbnd (name f)
+  `(defthm ,name
+     (implies (and (vmip vmi) (equal (v-status vmi) 0) (vmg-fast vmi) (equal (v-status (,f vmi)) 0))
+              (vmg-bnd (,f vmi)))
+     :hints (("Goal" :do-not-induct t
+                     :in-theory (e/d (,f) (vmg-bnd nth words-ok cls-ok fns-ok recs-ok vmg-lens vmg-w rok-nth
+                                                         vmip vmg-unwind-bnd vmg-unwind-is vmg-unwind
+                                                         vmg-f20-is vmg-f21-is vmg-f22-is vmg-f23-is))))))
+(defthm vmg-f20-ok-bnd
+  (implies (and (vmip vmi) (equal (v-status vmi) 0) (vmg-fast vmi)) (vmg-bnd (vmg-f20-ok r vmi)))
+  :hints (("Goal" :do-not-induct t :in-theory (e/d (vmg-f20-ok vmg-bnd bnd40p) (nth update-nth words-ok cls-ok fns-ok recs-ok vmg-lens vmg-w rok-nth)))))
+(defthm vmg-fk-ok-bnd
+  (implies (and (vmip vmi) (equal (v-status vmi) 0) (vmg-fast vmi) (member k '(2 3))) (vmg-bnd (vmg-fk-ok r k vmi)))
+  :hints (("Goal" :do-not-induct t :in-theory (e/d (vmg-fk-ok vmg-bnd bnd40p) (nth update-nth words-ok cls-ok fns-ok recs-ok vmg-lens vmg-w rok-nth)))))
+(defthm vmg-fok-status (and (equal (nth *v-status* (vmg-f20-ok r vmi)) (nth *v-status* vmi))
+                            (equal (nth *v-status* (vmg-fk-ok r k vmi)) (nth *v-status* vmi)))
+  :hints (("Goal" :in-theory (enable vmg-f20-ok vmg-fk-ok))))
+(defthm vmg-stk-write-fast
+  (implies (and (vmip vmi) (vmg-fast vmi) (true-listp l) (equal (len l) (len (nth *v-stki* vmi))))
+           (vmg-fast (update-nth *v-stki* l vmi)))
+  :hints (("Goal" :in-theory (disable vmg-bnd vmip) :use vmg-stk-write-ok)))
+(in-theory (disable vmg-f20-ok vmg-fk-ok))
+
+(def-pbnd vmg-f20-bnd vmg-f20)
+(def-pbnd vmg-f21-bnd vmg-f21)
+(def-pbnd vmg-f22-bnd vmg-f22)
+(def-pbnd vmg-f23-bnd vmg-f23)
+
+(in-theory (disable vmg-f17-is vmg-f18-is vmg-f19-is vmg-f20-is vmg-f21-is vmg-f22-is vmg-f23-is))
 
 (defthm vmg-f-status
   (and (equal (v-status (vmg-f17 vmi)) (v-status vmi))
@@ -134,12 +270,18 @@
 (verify-guards vmg-f17 :hints (("Goal" :in-theory (disable nth update-nth words-ok cls-ok fns-ok recs-ok))))
 (verify-guards vmg-f18 :hints (("Goal" :in-theory (disable nth update-nth words-ok cls-ok fns-ok recs-ok))))
 (verify-guards vmg-f19 :hints (("Goal" :in-theory (disable nth update-nth words-ok cls-ok fns-ok recs-ok))))
+(verify-guards vmg-f20-ok :hints (("Goal" :in-theory (e/d (vmg-bnd bnd40p) (nth update-nth words-ok cls-ok fns-ok recs-ok vmg-lens vmg-w rok-nth)))))
+(verify-guards vmg-fk-ok :hints (("Goal" :in-theory (e/d (vmg-bnd bnd40p) (nth update-nth words-ok cls-ok fns-ok recs-ok vmg-lens vmg-w rok-nth)))))
+(verify-guards vmg-f20 :hints (("Goal" :in-theory (disable vmg-bnd nth words-ok cls-ok fns-ok recs-ok vmg-lens vmg-w rok-nth vmip vmg-unwind vmg-unwind-is vmg-f20-ok vmg-fk-ok))))
+(verify-guards vmg-f21 :hints (("Goal" :in-theory (disable vmg-bnd nth words-ok cls-ok fns-ok recs-ok vmg-lens vmg-w rok-nth vmip vmg-unwind vmg-unwind-is vmg-f20-ok vmg-fk-ok))))
+(verify-guards vmg-f22 :hints (("Goal" :in-theory (disable vmg-bnd nth words-ok cls-ok fns-ok recs-ok vmg-lens vmg-w rok-nth vmip vmg-unwind vmg-unwind-is vmg-f20-ok vmg-fk-ok))))
+(verify-guards vmg-f23 :hints (("Goal" :in-theory (disable vmg-bnd nth words-ok cls-ok fns-ok recs-ok vmg-lens vmg-w rok-nth vmip vmg-unwind vmg-unwind-is vmg-f20-ok vmg-fk-ok))))
 (verify-guards vmg-xstep
-  :hints (("Goal" :in-theory (disable nth update-nth words-ok cls-ok fns-ok recs-ok vmg-f17 vmg-f18 vmg-f19 vmg-step))))
+  :hints (("Goal" :in-theory (disable nth update-nth words-ok cls-ok fns-ok recs-ok vmg-f17 vmg-f18 vmg-f19 vmg-f20 vmg-f21 vmg-f22 vmg-f23 vmg-step))))
 
 (defthm vmg-xstep-good
   (implies (and (vmip vmi) (vmg-good vmi)) (vmg-good (vmg-xstep vmi)))
-  :hints (("Goal" :in-theory (e/d (vmg-xstep vmg-good) (vmg-f17 vmg-f18 vmg-f19 vmg-step vmg-bnd vmg-xstep-is))
+  :hints (("Goal" :in-theory (e/d (vmg-xstep vmg-good) (vmg-f17 vmg-f18 vmg-f19 vmg-f20 vmg-f21 vmg-f22 vmg-f23 vmg-step vmg-bnd vmg-xstep-is))
                   :use (vmg-step-good))))
 
 (in-theory (disable vmg-xstep))
