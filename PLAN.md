@@ -3600,6 +3600,24 @@ yet. That needs clotran's own values behind `rt_*` (gc_value, the
 builtins, rooting for a moving collector), and the analyzer from
 Clojure to the core language -- the next components, modelled first.
 
+**The compiler at the implementation level (model/vmic.lisp,
+2026-10-08).** vcs2-compile builds lists of instruction lists;
+vmic writes the code words straight into vmi's arrays at a cursor,
+in one pass. A jump's target is written once it is known (the
+condition's jump after its branches, the try's handler after its
+body). The locals' slots are an array (stobj `vce`) grown and cut
+back with each scope, the loop three integers, and the expression is
+read through `rt-` operations (car, cdr, a keyword test, a small
+natural), so the generated Fortran will walk clotran's own lists.
+`vmic-program` sizes the arrays by a first pass and fills the
+function table. Checked: vmi's 15 programs in the book, and
+`fuzz-vmx2 -i` compiles every program both ways and compares the
+arrays (300 agree; the `-xc` control, a condition's jump one past
+its else, caught 100 of 100). Next: `vmic-proof.lisp` proving the
+arrays read back as vcs2-program for every program, then guards and
+generation; the translator needs `mv` results and recursive
+subroutines for it.
+
 **Threads, later** (after the allocator). Their logic -- the
 stop-all-threads safepoint handshake, agent queues, the STM's retries
 -- can be modelled and generated too. The proof must hold for every

@@ -7,7 +7,7 @@
 ;; on vcs2-step in ACL2 against the extended meaning, mx2. The generator
 ;; builds only well-formed programs, each checked with x2wf.
 ;;
-;;   scripts/fuzz-vmx2 [-n COUNT] [-s SEED] [-x] [-i] [-xi] [--emit FILE]
+;;   scripts/fuzz-vmx2 [-n COUNT] [-s SEED] [-x] [-i] [-xi] [-xc] [--emit FILE]
 ;;
 ;; -x is the NEGATIVE CONTROL: a throw's value goes one slot above the
 ;; handler's local, and the run must find disagreements.
@@ -18,14 +18,19 @@
 ;; meaning. -xi is its negative control: the arrays' unwind puts the
 ;; caught value one slot high.
 ;;
-;; Needs model/vmx2 (and for -i model/vmi) certified (make model). Exit 1
+;; -i also compiles each program with THE IMPLEMENTATION-LEVEL COMPILER
+;; (model/vmic.lisp), whose arrays must read back as vcs2-program. -xc
+;; is its negative control: a condition's jump lands one past the else.
+;;
+;; Needs model/vmx2 (and for -i model/vmic) certified (make model). Exit 1
 ;; on any disagreement.
 (require '[babashka.process :as p] '[clojure.string :as str])
 
 (def broken (some #{"-x"} *command-line-args*))
 (def broken-i (some #{"-xi"} *command-line-args*))
-(def arrays (or broken-i (some #{"-i"} *command-line-args*)))
-(def args (apply hash-map (remove #{"-x" "-i" "-xi"} *command-line-args*)))
+(def broken-c (some #{"-xc"} *command-line-args*))
+(def arrays (or broken-i broken-c (some #{"-i"} *command-line-args*)))
+(def args (apply hash-map (remove #{"-x" "-i" "-xi" "-xc"} *command-line-args*)))
 ;; --emit FILE: write the generated programs as EDN and stop (scripts/fuzz-vm-gen runs them)
 (def emit (get args "--emit"))
 (def n (parse-long (get args "-n" "200")))
@@ -119,7 +124,7 @@
   (System/exit 0))
 
 (def driver
-  (str (if arrays "(include-book \"vmi\")\n" "(include-book \"vmx2\")\n")
+  (str (if arrays "(include-book \"vmic\")\n" "(include-book \"vmx2\")\n")
        ";; fuzz-vmx's functions, each one clause, and vmx2's\n"
        "(defun strip-to-clauses (ds) (if (atom ds) nil (cons (list (caar ds) (list (cadar ds) (caddar ds))) (strip-to-clauses (cdr ds)))))\n"
        "(defconst *xall-defs* (append (strip-to-clauses *x-defs*) *x2-defs*))\n"
@@ -143,17 +148,24 @@
               "         (let ((vmi (vmi-step vmi))) (lockstep-fast 0 prog (vcs2-step prog s) vmi)))\n"
               "        (t (let ((vmi (vmi-step vmi)))\n"
               "             (if (equal (v-status vmi) 2) (mv :overflow vmi) (lockstep-fast (1- n) prog (vcs2-step prog s) vmi))))))\n"
+              ";; the implementation-level compiler (vmic.lisp): its arrays read back as vcs2-program\n"
+              "(defun vmic-fz (e prog vmi vce) (declare (xargs :stobjs (vmi vce) :mode :program))\n"
+              "  (mv-let (vmi vce) (vmic-program e *xalli-defs* 1024 256 vmi vce)\n"
+              "    (mv (and (equal (ce-err vce) 0) (equal (v-status vmi) 0) (equal (vmi-prog vmi) prog)) vmi vce)))\n"
+              "(defun vmic-fuzz-one (e prog) (declare (xargs :mode :program))\n"
+              "  (with-local-stobj vmi (mv-let (ok vmi) (with-local-stobj vce (mv-let (ok vmi vce) (vmic-fz e prog vmi vce) (mv ok vmi))) ok)))\n"
               "(defun vmi-check-g (e vmi)\n"
               "  (declare (xargs :stobjs vmi :mode :program))\n"
               "  (let* ((e (ren-e e *xall-names*)) (prog (vcs2-program e *xalli-defs*)))\n"
               "    (if (not (enc-ok prog)) (mv :not-encodable vmi)\n"
               "      (let ((vmi (vmi-load-prog prog 1024 256 vmi)))\n"
               "        (if (not (equal (vmi-prog vmi) prog)) (mv :decodes-differently vmi)\n"
+              "        (if (not (eq (vmic-fuzz-one e prog) t)) (mv :compiler vmi)\n"
               "          (mv-let (ok vmi) (lockstep-fast 400000 prog (list 0 0 0 nil nil) vmi)\n"
               "            (mv (cond ((not (eq ok t)) (if (eq ok :overflow) :overflow :lockstep))\n"
               "                      ((equal (vcs2-answer (vmi-abs vmi)) (mx2 e nil nil *xalli-defs* 1000)) t)\n"
               "                      (t :answer))\n"
-              "                vmi)))))))\n"
+              "                vmi))))))))\n"
               "(defun vmi-fuzz-one (e) (declare (xargs :mode :program)) (with-local-stobj vmi (mv-let (ok vmi) (vmi-check-g e vmi) ok)))\n")
          "")
        "(defun fuzz-one (e)\n"
@@ -171,10 +183,15 @@
        (if broken-i
          "(redef!)\n(defun vmi-unwind (v vmi) (declare (xargs :stobjs vmi :mode :program)) (let ((j (v-hidx vmi))) (if (or (not (integerp j)) (< j 0)) (let* ((vmi (vmi-sset 0 v vmi)) (vmi (if (equal (v-status vmi) 2) vmi (update-v-status 1 vmi))) (vmi (update-v-pc 0 vmi)) (vmi (update-v-fb 0 vmi)) (vmi (update-v-sp 1 vmi)) (vmi (update-v-ctop 0 vmi))) (update-v-hidx -1 vmi)) (let* ((h (nfix (v-cai j vmi))) (hfb (nfix (v-cbi j vmi))) (hd (nfix (v-cci j vmi))) (vmi (vmi-sset (+ hfb hd 1) v vmi)) (vmi (update-v-pc h vmi)) (vmi (update-v-fb hfb vmi)) (vmi (update-v-sp (+ hfb hd 1) vmi)) (vmi (update-v-ctop j vmi))) (update-v-hidx (v-cprevi j vmi) vmi)))))\n"
          "")
+       (if broken-c
+         ;; the compiler's control: a condition's jump lands one past its else branch's start
+         "(redef!)\n(defun vmic-put (pc op a b c k vmi) (declare (xargs :stobjs vmi :mode :program)) (let ((i (* 4 (nfix pc))) (a (if (equal op 6) (1+ a) a))) (if (and (< (+ i 3) (v-code-length vmi)) (< (nfix pc) (v-pool-length vmi))) (let* ((vmi (update-v-codei i op vmi)) (vmi (update-v-codei (+ i 1) a vmi)) (vmi (update-v-codei (+ i 2) b vmi)) (vmi (update-v-codei (+ i 3) c vmi))) (update-v-pooli (nfix pc) k vmi)) (update-v-status 2 vmi))))\n"
+         "")
        "(fuzz-all '(" (str/join "\n" (map lisp exprs)) ") 0)\n"
        "(good-bye)\n"))
 
 (def acl2 (str (System/getProperty "user.home") "/jborden/acl2/saved_acl2"))
+(when (System/getenv "FUZZ_DUMP") (spit (System/getenv "FUZZ_DUMP") driver))
 (def out (:out (p/shell {:dir "model" :in driver :out :string :err :string} acl2)))
 (def results (into {} (for [[_ i wf ok kind vi] (re-seq #"FUZZ (\d+) \((T|NIL) (T|NIL|:OUT) (\S+)\s+(\S+)\)" out)]
                         [(parse-long i) {:wf wf :ok ok :kind kind :vmi vi}])))
@@ -200,6 +217,9 @@
                    (if (seq vmi-bad) (str " " (frequencies (map #(:vmi (results %)) vmi-bad))) "")))
   (doseq [i (take 3 vmi-bad)] (println "   " (:vmi (results i)) (lisp (exprs i)))))
 (cond
+  broken-c
+  (do (println (if (seq vmi-bad) "negative control: the compiler's broken jump was caught" "NEGATIVE CONTROL FAILED: the compiler's broken jump went unseen"))
+      (System/exit (if (and (seq vmi-bad) (every? #(= ":COMPILER" (:vmi (results %))) vmi-bad)) 0 1)))
   broken-i
   (do (println (if (seq vmi-bad) "negative control: the arrays' broken unwind was caught" "NEGATIVE CONTROL FAILED: the arrays' broken unwind went unseen"))
       (System/exit (if (and (seq vmi-bad) (empty? not-wf) (empty? disagree)) 0 1)))
