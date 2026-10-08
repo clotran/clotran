@@ -2745,6 +2745,36 @@ the door changes, and the door's checks are then tested against the
 model's -- the fuzzer generates calls, the model says accept or
 refuse, the door must agree.
 
+**Mutation across the door (James, 2026-10-07: "let's put that in
+plan").** Clojure's promise covers Clojure's values, and none of them
+crosses by reference. A number crosses as the native value the routine
+declares; an `out` or `inout` scalar's new value comes back as a key in
+the call's answer map, and the number passed in is untouched. Text
+crosses converted. A vector, map, list or string cannot cross at all.
+What crosses by reference is mutable on purpose: a Fortran array, the
+same buffer with no copy, and a Fortran object, a handle. clj's host
+arrays are the same: `aset` writes in place, and a `let` binding names
+the same array afterwards with different contents. What the door
+already does: the aliasing rule (a buffer a routine may write is not
+bound twice in one call, proved in boundary.lisp), and declared intent
+read by bind-fortran, `:inout` where F77 declares none. Two more:
+
+1. **`intent(in)` honoured, checked.** gfortran refuses a routine that
+   assigns to an `intent(in)` dummy, but a library can still write one
+   through C, EQUIVALENCE or COMMON. In the debug build (PLAN 31a's
+   build flag), the door hashes every `intent(in)` array before the
+   call and compares after, and names the routine that wrote it.
+2. **Copy-in, by choice.** An option on an array argument, or on a
+   call, that copies the array on the way into an `out` or `inout`
+   dummy and leaves the caller's array as it was. Writing into your
+   array becomes something the call site asks for or declines, not a
+   surprise.
+
+Both are boundary decisions, so each goes into model/boundary.lisp
+first, with the door's fuzzer: the hash check catches a write to an
+`intent(in)` buffer, and the copy-in leaves the caller's buffer equal
+to what it was.
+
 ### 28. The VM, formally (begun 2026-10-01)
 
 **First, the data structures** (James, 2026-10-01: "I don't expect
