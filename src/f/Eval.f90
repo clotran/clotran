@@ -8570,7 +8570,24 @@ contains
          integer :: want, k
          logical :: found
          coll = strip_meta(gcv_nth(vs_get(vst, base + 1), 0))
-         idx = as_index(gcv_nth(vs_get(vst, base + 1), 1))
+         ! the index as RT.nth takes it, an int of a long: RT.longCast,
+         ! then Math.toIntExact -- past an int is "integer overflow",
+         ! not the index wrapped (4294967296 read element 0)
+         walk = strip_meta(gcv_nth(vs_get(vst, base + 1), 1))
+         if (is_number(walk) .and. walk%tag /= GCT_INT) then
+            call long_cast(walk, idx, [vs_get(vst, base + 1)])
+            if (tctx%has_error) then
+               call vs_leave(vst, base)
+               return
+            end if
+         else
+            idx = as_index(walk)
+         end if
+         if (idx%tag == GCT_INT .and. (idx%ival > 2147483647_gc_ip .or. idx%ival < -2147483648_gc_ip)) then
+            call raise_class("clotran.host.arithmetic_exception", "integer overflow", [vs_get(vst, base + 1)])
+            call vs_leave(vst, base)
+            return
+         end if
          want = int(idx%ival)
          out = gc_nil()
          found = .false.
@@ -10704,49 +10721,7 @@ contains
        ! a NullPointerException, because RT casts to Number. Sharing
        ! uncheckedLongCast's row made (long "a") answer "a" and
        ! (long 1e30) answer 2147483647.
-       a = strip_meta(gcv_nth(args, 0))
-       if (a%tag == GCT_INT .or. a%tag == GCT_CHAR) then
-          out = gc_int(a%ival)
-       else if (a%tag == GCT_BIG) then
-          block
-             call gc_big_text(a, s=dlt_1)
-          if (big_fits_i64(dlt_1)) then
-             block
-                call gc_big_text(a, s=dlt_2)
-                out = gc_int(big_to_i64(dlt_2))
-             end block
-          else
-             block
-                call gcp_str(a, .false., s=dlt_2)
-                call raise_class("clotran.host.illegal_argument_exception", "Value out of range for long: " //  dlt_2, [vs_get(vst, &
-                     base + 1)])
-             end block
-          end if
-          end block
-       else if (is_ratio(a)) then
-          call rat_trunc(a, dlt_1)
-          out = gc_int(big_to_i64(dlt_1))
-       else if (a%tag == GCT_REAL .or. a%tag == GCT_DEC) then
-          block
-            real(gc_dp) :: d
-            d = num_dbl(a)
-            ! -2^63 and 2^63 as doubles are what Long.MIN_VALUE and
-            ! MAX_VALUE become in RT's comparison
-            if (d < -9223372036854775808.0_gc_dp .or. d > 9223372036854775808.0_gc_dp) then
-               block
-                  ! the double's toString, as RT.longCast concatenates
-                  ! it: -Infinity, not the printed ##-Inf
-                  call to_string_text(gc_real(d), dlt_1)
-                  call raise_class("clotran.host.illegal_argument_exception", "Value out of range for long: " //  dlt_1, [vs_get(vst, &
-                       base + 1)])
-               end block
-            else
-               out = gc_int(long_of_double(d))
-            end if
-          end block
-       else
-          call raise_number_cast(a, [vs_get(vst, base + 1)])
-       end if
+       call long_cast(gcv_nth(args, 0), out, [vs_get(vst, base + 1)])
     case (B_DBLCAST)
        ! ((Number) x).doubleValue(), checked and unchecked alike: a
        ! number converts, nil and anything else raise. It answered
@@ -18987,6 +18962,58 @@ contains
   ! What RT's ((Number) x) raises for something that is not a number:
   ! a NullPointerException for nil, a ClassCastException otherwise,
   ! naming the class the way clj does.
+  ! RT.longCast, clojure.core/long: see B_LONGCAST_CHECKED. nth's index
+  ! goes through it too, as clj's (RT.nth coll (int n)) does.
+  subroutine long_cast(a0, out, roots)
+    type(gc_value), intent(in) :: a0
+    type(gc_value), intent(out) :: out
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: a
+    character(len=:), allocatable :: dlt_1, dlt_2
+    a = strip_meta(a0)
+    out = gc_nil()
+    if (a%tag == GCT_INT .or. a%tag == GCT_CHAR) then
+       out = gc_int(a%ival)
+    else if (a%tag == GCT_BIG) then
+       block
+          call gc_big_text(a, s=dlt_1)
+       if (big_fits_i64(dlt_1)) then
+          block
+             call gc_big_text(a, s=dlt_2)
+             out = gc_int(big_to_i64(dlt_2))
+          end block
+       else
+          block
+             call gcp_str(a, .false., s=dlt_2)
+             call raise_class("clotran.host.illegal_argument_exception", "Value out of range for long: " //  dlt_2, roots)
+          end block
+       end if
+       end block
+    else if (is_ratio(a)) then
+       call rat_trunc(a, dlt_1)
+       out = gc_int(big_to_i64(dlt_1))
+    else if (a%tag == GCT_REAL .or. a%tag == GCT_DEC) then
+       block
+         real(gc_dp) :: d
+         d = num_dbl(a)
+         ! -2^63 and 2^63 as doubles are what Long.MIN_VALUE and
+         ! MAX_VALUE become in RT's comparison
+         if (d < -9223372036854775808.0_gc_dp .or. d > 9223372036854775808.0_gc_dp) then
+            block
+               ! the double's toString, as RT.longCast concatenates
+               ! it: -Infinity, not the printed ##-Inf
+               call to_string_text(gc_real(d), dlt_1)
+               call raise_class("clotran.host.illegal_argument_exception", "Value out of range for long: " //  dlt_1, roots)
+            end block
+         else
+            out = gc_int(long_of_double(d))
+         end if
+       end block
+    else
+       call raise_number_cast(a, roots)
+    end if
+  end subroutine long_cast
+
   subroutine raise_number_cast(v, roots)
     type(gc_value), intent(in) :: v
     type(gc_value), intent(in) :: roots(:)
@@ -19772,9 +19799,29 @@ contains
     case (B_COUNT)
        out = gc_int(int(gcv_tcount(t), gc_ip))
     case (B_NTH, B_GET)
-       x = gcv_nth(args, 1)
+       x = strip_meta(gcv_nth(args, 1))
+       ! nth's index as the persistent nth takes it (B_NTH): a long, then
+       ! an int or "integer overflow"; get's an integer or nothing
+       if (id == B_NTH .and. is_number(x) .and. x%tag /= GCT_INT) then
+          block
+            type(gc_value) :: lx
+            call long_cast(x, lx, [vs_get(vst, base + 1)])
+            if (gce_has_error()) then
+               call vs_leave(vst, base)
+               return
+            end if
+            x = lx
+          end block
+       end if
+       if (id == B_NTH .and. x%tag == GCT_INT .and. (x%ival > 2147483647_gc_ip .or. x%ival < -2147483648_gc_ip)) then
+          call raise_class("clotran.host.arithmetic_exception", "integer overflow", [vs_get(vst, base + 1)])
+          call vs_leave(vst, base)
+          return
+       end if
        k = -1
-       if (x%tag == GCT_INT) k = int(x%ival)
+       if (x%tag == GCT_INT) then
+          if (x%ival >= 0 .and. x%ival < int(gcv_tcount(t), gc_ip)) k = int(x%ival)
+       end if
        if (k >= 0 .and. k < gcv_tcount(t)) then
           out = gcv_tnth(t, k)
        else if (n >= 3) then
